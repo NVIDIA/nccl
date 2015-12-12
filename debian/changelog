@@ -1,0 +1,5 @@
+nccl (1.0.1) trusty; urgency=medium
+
+  * Initial release.
+
+ -- Boris Fomitchev <bfomitchev@nvidia.com>  Mon, 14 Dec 2015 09:52:01 -0800

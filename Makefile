@@ -31,6 +31,7 @@ PREFIX ?= /usr/local
 VERBOSE ?= 0
 
 CUDACODE := -gencode=arch=compute_35,code=sm_35 \
+            -gencode=arch=compute_50,code=sm_50 \
             -gencode=arch=compute_52,code=sm_52
 
 BUILDDIR := build
@@ -55,7 +56,7 @@ MPIFLAGS   := -I$(MPI_HOME)/include -L$(MPI_HOME)/lib -lmpi
 INCEXPORTS  := nccl.h
 LIBSRCFILES := libwrap.cu core.cu all_gather.cu all_reduce.cu broadcast.cu reduce.cu reduce_scatter.cu
 LIBNAME     := libnccl.so
-APIVER      := 0
+APIVER      := 1
 TESTS       := all_gather_test all_reduce_test broadcast_test reduce_test reduce_scatter_test
 MPITESTS    := mpi_test
 
@@ -128,6 +129,5 @@ $(MPITSTDIR)/% : src/%.cu lib
 install : lib
 	@mkdir -p $(PREFIX)/lib
 	@mkdir -p $(PREFIX)/include
-	@cp -P -v build/lib/* $(PREFIX)/lib/
-	@cp -v build/include/* $(PREFIX)/include/
-
+	cp -P -v build/lib/* $(PREFIX)/lib/
+	cp -v build/include/* $(PREFIX)/include/

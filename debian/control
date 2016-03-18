@@ -2,15 +2,15 @@ Source: nccl
 Section: universe/libs
 Maintainer: Boris Fomitchev <bfomitchev@nvidia.com>
 Priority: optional
-Build-depends: debhelper(>=9), cuda-core-7-5, cuda-toolkit-7-5,
-               cuda-curand-dev-7-5, cuda-cublas-dev-7-5, cuda-cudart-dev-7-5, cuda-ld-conf-7-5
+Build-depends: debhelper(>=9), cuda-core-8-0, cuda-toolkit-8-0,
+               cuda-curand-dev-8-0, cuda-cublas-dev-8-0, cuda-cudart-dev-8-0
 Standards-Version: 3.9.5
 
 Package: libnccl1
 Section: universe/libs
 Architecture: amd64
 Depends: ${misc:Depends}, ${shlibs:Depends},
-               cuda-curand-7-5, cuda-cublas-7-5, cuda-cudart-7-5, cuda-ld-conf-7-5
+               cuda-curand-8-0, cuda-cublas-8-0, cuda-cudart-8-0
 Description: NVIDIA Communication Collectives Library (NCCL) Runtime
  NCCL (pronounced "Nickel") is a stand-alone library of standard collective
  communication routines,such as all-gather, reduce, broadcast, etc., that have

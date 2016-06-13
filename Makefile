@@ -39,7 +39,9 @@ NVCC ?= $(CUDA_HOME)/bin/nvcc
 NVCC_GENCODE ?= -gencode=arch=compute_35,code=sm_35 \
                 -gencode=arch=compute_50,code=sm_50 \
                 -gencode=arch=compute_52,code=sm_52 \
-                -gencode=arch=compute_52,code=compute_52
+                -gencode=arch=compute_60,code=sm_60 \
+                -gencode=arch=compute_61,code=sm_61 \
+                -gencode=arch=compute_61,code=compute_61
 
 CXXFLAGS   := -I$(CUDA_INC) -fPIC -fvisibility=hidden
 NVCUFLAGS  := -ccbin $(CXX) $(NVCC_GENCODE) -lineinfo -std=c++11 -maxrregcount 96

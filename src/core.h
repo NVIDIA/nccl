@@ -128,7 +128,15 @@ extern DebugLevel ncclDebugLevel;
   }                                                              \
 } while(0)
 
+#ifdef _MSC_VER
+#define DSOGLOBAL _declspec(dllexport)
+#else
 #define DSOGLOBAL __attribute__((visibility("default")))
+#endif
+
+#if defined(_MSC_VER) && (_MSC_VER < 1900) /* Visual Studio 2013 and prior */
+#define alignof __alignof
+#endif
 
 #endif // end include guard
 

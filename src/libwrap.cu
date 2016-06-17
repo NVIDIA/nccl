@@ -27,8 +27,18 @@
  ************************************************************************/
 
 #include "libwrap.h"
-#include <dlfcn.h>
 #include "core.h"
+
+#ifndef _WIN32
+#include <dlfcn.h>
+typedef void *HMODULE;
+#else
+#include <windows.h>
+
+#define dlsym(handle, sym) GetProcAddress((handle), (sym))
+#define dlclose(handle) CloseHandle((handle))
+inline const char *dlerror() { return "N/A"; }
+#endif
 
 typedef enum { SUCCESS = 0 } RetCode;
 int symbolsLoaded = 0;
@@ -46,11 +56,21 @@ ncclResult_t wrapSymbols(void) {
   if (symbolsLoaded)
     return ncclSuccess;
 
-  static void* nvmlhandle = NULL;
-  static void* cuhandle = NULL;
+  static HMODULE nvmlhandle = NULL;
+  static HMODULE cuhandle = NULL;
   void* tmp;
   void** cast;
 
+#ifdef _WIN32
+  nvmlhandle=LoadLibraryA("nvml.dll");
+  if(!nvmlhandle) {
+      nvmlhandle=LoadLibraryA("C:\\Program Files\\NVIDIA Corporation\\NVSMI\\nvml.dll");
+      if(!nvmlhandle) {
+          WARN("Failed to open nvml.dll");
+          goto teardown;
+      }
+  }
+#else
   nvmlhandle=dlopen("libnvidia-ml.so", RTLD_NOW);
   if (!nvmlhandle) {
     nvmlhandle=dlopen("libnvidia-ml.so.1", RTLD_NOW);
@@ -68,6 +88,7 @@ ncclResult_t wrapSymbols(void) {
       goto teardown;
     }
   }
+#endif
 
   #define LOAD_SYM(handle, symbol, funcptr) do {         \
     cast = (void**)&funcptr;                             \

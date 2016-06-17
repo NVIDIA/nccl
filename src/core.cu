@@ -26,27 +26,42 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  ************************************************************************/
 
+#include <atomic>
+#include <thread>
 #include <stdio.h>
 #include <stdlib.h>
 #include "core.h"
 #include "libwrap.h"
+#ifndef _WIN32
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sched.h>
 #include <fcntl.h>
 #include <unistd.h>
+#else
+#include <windows.h>
+#include <process.h>
+#endif
 #include <cuda_runtime.h>
 #include <string.h>
 #include <errno.h>
+
+#ifdef _WIN32
+typedef int pid_t;
+#define getpid _getpid
+#define snprintf _snprintf
+
+#define __sync_synchronize MemoryBarrier
+#endif
 
 DebugLevel ncclDebugLevel;
 
 extern "C" DSOGLOBAL
 ncclResult_t ncclGetUniqueId(ncclUniqueId* out) {
   pid_t pid = getpid();
-  static int count = 0;
-  int commId = __sync_fetch_and_add(&count, 1);
+  static std::atomic<int> count(0);
+  int commId = count++;
   int len = snprintf(out->internal, NCCL_UNIQUE_ID_BYTES, "nccl-%d-%d", pid, commId);
   if(strlen(out->internal) < len) {
     WARN("ncclUniqueId truncated");
@@ -57,6 +72,26 @@ ncclResult_t ncclGetUniqueId(ncclUniqueId* out) {
 
 
 static ncclResult_t shmOpen(const char* shmname, size_t bytes, void** ptr) {
+#ifdef _WIN32
+    HANDLE hMapFile;
+    
+    hMapFile = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
+                                 (DWORD)(bytes >> 32), (DWORD)bytes, shmname);
+    if (hMapFile == NULL) {
+        WARN("shm_open failed to open %s", shmname);
+        return ncclSystemError;
+    }
+    
+    *ptr = MapViewOfFile(hMapFile, FILE_MAP_ALL_ACCESS, 0, 0, bytes);
+    if (*ptr == NULL)
+    {
+        WARN("failure in mmap");
+        CloseHandle(hMapFile);
+        return ncclSystemError;
+    }
+
+    return ncclSuccess;
+#else
   int fd = shm_open(shmname, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
   if (fd == -1) {
     WARN("shm_open failed to open %s", shmname);
@@ -80,24 +115,38 @@ static ncclResult_t shmOpen(const char* shmname, size_t bytes, void** ptr) {
 
   close(fd);
   return ncclSuccess;
+#endif
 }
 
 static ncclResult_t shmUnlink(const char* shmname) {
+#ifdef _WIN32
+    return ncclSuccess;
+#else
   if(shm_unlink(shmname) == -1) {
     WARN("smh_unlink failed");
     return ncclSystemError;
   } else {
     return ncclSuccess;
   }
+#endif
 }
 
 static ncclResult_t shmUnmap(void* ptr, size_t bytes) {
+#ifdef _WIN32
+    if(!UnmapViewOfFile(ptr)) {
+        WARN("munmap failed");
+        return ncclSystemError;
+    } else {
+        return ncclSuccess;
+    }
+#else
   if(munmap(ptr, bytes) == -1) {
     WARN("munmap failed");
     return ncclSystemError;
   } else {
     return ncclSuccess;
   }
+#endif
 }
 
 
@@ -131,7 +180,7 @@ static void orderRanks(RankEntry* ranks, int count) {
 typedef struct {
   union {
     struct {
-      volatile int bar;
+      volatile std::atomic<int> bar;
       int ringDirectFail;
     };
     char pad[16];
@@ -153,7 +202,7 @@ static ncclResult_t initGather(RankGather** gather, ncclUniqueId commId,
 
   tmp->ranks[rank] = myInfo;
 
-  bar_tmp = tmp->bar - 1;
+  bar_tmp = tmp->bar.load() - 1;
   bool swapped;
   do {
     bar_tmp += 1;
@@ -167,11 +216,11 @@ static ncclResult_t initGather(RankGather** gather, ncclUniqueId commId,
 
       orderRanks(tmp->ranks, ndev);
     }
-    swapped = __sync_bool_compare_and_swap(&tmp->bar, bar_tmp, bar_tmp+1);
+    swapped = tmp->bar.compare_exchange_weak(bar_tmp, bar_tmp + 1);
   } while(!swapped);
 
-  while (tmp->bar < ndev)
-    sched_yield();
+  while (tmp->bar.load() < ndev)
+    std::this_thread::yield();
   __sync_synchronize();
 
   *gather = tmp;
@@ -179,31 +228,31 @@ static ncclResult_t initGather(RankGather** gather, ncclUniqueId commId,
 }
 
 static void syncRingDirect(RankGather* gather, int* ringDirectOk) {
-  int bar_tmp = gather->bar - 1;
+  int bar_tmp = gather->bar.load() - 1;
   int ndev = gather->ranks[0].ndev;
   bool swapped;
   do {
     bar_tmp += 1;
-    swapped = __sync_bool_compare_and_swap(&gather->bar, bar_tmp, bar_tmp+1);
+    swapped = gather->bar.compare_exchange_weak(bar_tmp, bar_tmp+1);
   } while(!swapped);
 
   while (gather->bar < 2*ndev) // Wait for all ranks to arrive at this second barrier
-    sched_yield();
+      std::this_thread::yield();
   __sync_synchronize();
 
   *ringDirectOk = gather->ringDirectFail ? 0 : 1;
 }
 
 static ncclResult_t closeGather(RankGather* gather, int ndev) {
-  int bar_tmp = gather->bar - 1;
+  int bar_tmp = gather->bar.load() - 1;
   bool swapped;
   do {
     bar_tmp += 1;
-    swapped = __sync_bool_compare_and_swap(&gather->bar, bar_tmp, bar_tmp+1);
+    swapped = gather->bar.compare_exchange_weak(bar_tmp, bar_tmp + 1);
   } while(!swapped);
 
   while (gather->bar < 3*ndev) // Wait for all ranks to arrive at this third barrier
-    sched_yield();
+      std::this_thread::yield();
   __sync_synchronize();
 
   size_t bytes = offsetof(RankGather, ranks) + ndev*sizeof(RankEntry);
@@ -298,10 +347,14 @@ static ncclResult_t populateRankInfo(RankEntry* info, int rank, ncclComm_t comm)
   info->buffSize = comm->buffSize;
   info->hostptr = comm->hostMem;
   info->devptr = comm->devMem;
+#ifdef _WIN32
+  INFO("skipping IPC handle for Windows");
+#else
   if (cudaIpcGetMemHandle(&info->devipc, (void*)comm->devMem) != cudaSuccess) {
     WARN("rank %d failed to open CUDA IPC handle", rank);
     return ncclUnhandledCudaError;
   }
+#endif
 
   return ncclSuccess;
 }

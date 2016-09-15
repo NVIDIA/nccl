@@ -49,6 +49,7 @@ public :: ncclCommCuDevice
 public :: ncclCommUserRank
 public :: ncclCommCount
 public :: ncclReduce
+public :: ncclAllReduce
 public :: ncclBCast
 public :: ncclAllGather
 public :: ncclCommDestroy
@@ -199,6 +200,22 @@ type(c_ptr), value :: comm
 integer(cuda_stream_kind), value :: stream
 end function ncclReduce
 !End ncclReduce
+
+!Start ncclAllReduce
+type(ncclResult) function ncclAllReduce(sendbuff, recvbuff, count, datatype, op, comm, stream) bind(c, name = 'ncclAllReduce')
+import :: c_devptr, c_int, c_ptr
+import :: ncclDataType, ncclRedOp
+import :: cuda_stream_kind
+implicit none
+type(c_devptr), value :: sendbuff
+type(c_devptr), value :: recvbuff
+integer(c_int), value :: count
+type(ncclDataType), value :: datatype
+type(ncclRedOp), value :: op
+type(c_ptr), value :: comm
+integer(cuda_stream_kind), value :: stream
+end function ncclAllReduce
+!End ncclAllReduce
 
 !Start ncclBCast
 type(ncclResult) function ncclBCast(buff, count, datatype, root, comm, stream) bind(c, name = 'ncclBcast')

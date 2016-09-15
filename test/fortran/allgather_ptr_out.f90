@@ -1,0 +1,157 @@
+program test
+use iso_c_binding
+use iso_fortran_env
+use cudaFor
+use ncclFor
+implicit none
+integer(int32) :: stat, i
+real(real32) :: err
+integer(int32) :: nEl, nDev
+type(ncclDataType) :: dataType
+type(ncclComm), allocatable :: comm(:)
+type(c_ptr), allocatable :: commPtr(:)
+integer(int32), allocatable :: devList(:)
+type(ncclResult) :: res
+integer(int32) :: cudaDev, rank
+integer(cuda_stream_kind), allocatable :: stream(:)
+real(real32), allocatable :: hostBuff(:, :)
+type(c_ptr), allocatable :: hostBuffPtr(:)
+type(c_devptr), allocatable :: sendBuffPtr(:)
+type(c_devptr), allocatable :: recvBuffPtr(:)
+
+  nEl = 2621440
+
+!  nDev = 2
+  stat = cudaGetDeviceCount(nDev)
+
+  dataType = ncclFloat
+
+  allocate(comm(nDev))
+  allocate(commPtr(nDev))
+  allocate(devList(nDev))
+
+  do i = 1, nDev
+    commPtr(i) = c_loc(comm(i))
+    devList(i) = i - 1
+  end do
+
+  res = ncclCommInitAll(commPtr, nDev, devList)
+
+  do i = 1, nDev
+    res = ncclCommCuDevice(commPtr(i), cudaDev)
+    res = ncclCommUserRank(commPtr(i), rank)
+  end do
+
+  allocate(stream(nDev))
+
+  do i = 1, nDev
+    stat = cudaSetDevice(devList(i))
+    stat = cudaStreamCreate(stream(i))
+  end do
+
+  allocate(hostBuff(nEl * nDev, nDev + 1))
+
+  call random_number(hostBuff)
+
+  print "(a)", "before allgather:"
+  do i = 1, nDev
+    err = maxval(abs(hostBuff(:, i) / hostBuff(:, nDev + 1) - 1.0_real32))
+    print "(a, i2.2, a, e10.4e2)", "maximum error of rank ", i - 1, " vs sendbuff = ", err
+  end do
+
+  allocate(hostBuffPtr(nDev))
+
+  do i = 1, nDev
+    hostBuffPtr(i) = c_loc(hostBuff((i - 1) * nEl + 1, nDev + 1))
+  end do
+
+  allocate(sendBuffPtr(nDev))
+
+  do i = 1, nDev
+    stat = cudaSetDevice(devList(i))
+    stat = cudaMAlloc(sendBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)))
+    stat = cudaMemCpy(sendBuffPtr(i), hostBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)), cudaMemCpyHostToDevice)
+  end do
+
+  do i = 1, nDev
+    hostBuffPtr(i) = c_loc(hostBuff(1, i))
+  end do
+
+  allocate(recvBuffPtr(nDev))
+
+  do i = 1, nDev
+    stat = cudaSetDevice(devList(i))
+    stat = cudaMAlloc(recvBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)) * nDev)
+    stat = cudaMemCpy(recvBuffPtr(i), hostBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)) * nDev, cudaMemCpyHostToDevice)
+  end do
+
+  do i = 1, nDev
+    stat = cudaSetDevice(devList(i))
+    res = ncclAllGather(sendBuffPtr(i), nEl, dataType, recvBuffPtr(i), commPtr(i), stream(i))
+  end do
+
+  do i = 1, nDev
+    stat = cudaSetDevice(devList(i))
+    stat = cudaStreamSynchronize(stream(i))
+  end do
+
+  do i = 1, nDev
+    stat = cudaSetDevice(devList(i))
+    stat = cudaMemCpy(hostBuffPtr(i), recvBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)) * nDev, cudaMemCpyDeviceToHost)
+  end do
+
+  print "(a)", ""
+  print "(a)", "after allgather:"
+  do i = 1, nDev
+    err = maxval(abs(hostBuff(:, i) / hostBuff(:, nDev + 1) - 1.0_real32))
+    print "(a, i2.2, a, e10.4e2)", "maximum error of rank ", i - 1, " vs sendbuff = ", err
+  end do
+
+  do i = 1, nDev
+    hostBuffPtr(i) = c_loc(hostBuff((i - 1) * nEl + 1, 1))
+  end do
+
+  do i = 1, nDev
+    stat = cudaSetDevice(devList(i))
+    stat = cudaMemCpy(hostBuffPtr(i), sendBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)), cudaMemCpyDeviceToHost)
+  end do
+
+  err = maxval(abs(hostBuff(:, 1) / hostBuff(:, nDev + 1) - 1.0_real32))
+  print "(a)", ""
+  print "(a, e10.4e2)", "maximum error in sendbuff = ", err
+  print "(a)", ""
+
+  do i = 1, nDev
+    stat = cudaSetDevice(devList(i))
+    stat = cudaFree(recvBuffPtr(i))
+  end do
+
+  deallocate(recvBuffPtr)
+
+  do i = 1, nDev
+    stat = cudaSetDevice(devList(i))
+    stat = cudaFree(sendBuffPtr(i))
+  end do
+
+  deallocate(sendBuffPtr)
+
+  do i = 1, nDev
+    stat = cudaSetDevice(devList(i))
+    stat = cudaStreamDestroy(stream(i))
+  end do
+
+  deallocate(stream)
+
+  do i = 1, nDev
+    call ncclCommDestroy(commPtr(i))
+  end do
+
+  deallocate(hostBuffPtr)
+
+  deallocate(hostBuff)
+
+  deallocate(devList)
+  deallocate(commPtr)
+  deallocate(comm)
+
+end program test

@@ -13,6 +13,7 @@ BUILDDIR ?= build
 CUDA_LIB ?= $(CUDA_HOME)/lib64
 CUDA_INC ?= $(CUDA_HOME)/include
 NVCC ?= $(CUDA_HOME)/bin/nvcc
+FC := pgfortran
 
 NVCC_GENCODE ?= -gencode=arch=compute_35,code=sm_35 \
                 -gencode=arch=compute_50,code=sm_50 \
@@ -21,6 +22,7 @@ NVCC_GENCODE ?= -gencode=arch=compute_35,code=sm_35 \
 
 CXXFLAGS   := -I$(CUDA_INC) -fPIC -fvisibility=hidden
 NVCUFLAGS  := -ccbin $(CXX) $(NVCC_GENCODE) -lineinfo -std=c++11 -maxrregcount 96
+NVFCFLAGS  := -fast -O3
 # Use addprefix so that we can specify more than one path
 LDFLAGS    := $(addprefix -L,${CUDA_LIB}) -lcudart
 
@@ -49,6 +51,7 @@ CUDA_VERSION ?= $(shell ls $(CUDA_LIB)/libcudart.so.* | head -1 | rev | cut -d "
 CUDA_MAJOR = $(shell echo $(CUDA_VERSION) | cut -d "." -f 1)
 CUDA_MINOR = $(shell echo $(CUDA_VERSION) | cut -d "." -f 2)
 CXXFLAGS  += -DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR)
+NVFCFLAGS := -Mcuda,cuda$(CUDA_MAJOR).$(CUDA_MINOR) $(NVFCFLAGS)
 
 .PHONY : lib clean debclean test mpitest install
 .DEFAULT : lib
@@ -56,6 +59,7 @@ CXXFLAGS  += -DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR)
 INCEXPORTS  := nccl.h
 LIBSRCFILES := libwrap.cu core.cu all_gather.cu all_reduce.cu broadcast.cu reduce.cu reduce_scatter.cu
 LIBNAME     := libnccl.so
+LIBFORNAME  := libncclfor.so
 
 INCDIR := $(BUILDDIR)/include
 LIBDIR := $(BUILDDIR)/lib
@@ -67,6 +71,9 @@ LIBTARGET  := $(patsubst %,%.$(NCCL_MAJOR).$(NCCL_MINOR).$(NCCL_PATCH),$(LIBNAME
 LIBLINK    := $(patsubst lib%.so, -l%, $(LIBNAME))
 LIBOBJ     := $(patsubst %.cu, $(OBJDIR)/%.o, $(filter %.cu, $(LIBSRCFILES)))
 DEPFILES   := $(patsubst %.o, %.d, $(LIBOBJ)) $(patsubst %, %.d, $(TESTBINS)) $(patsubst %, %.d, $(MPITESTBINS))
+LIBFORSONAME := $(patsubst %,%.$(NCCL_MAJOR),$(LIBFORNAME))
+LIBFORTARGET := $(patsubst %,%.$(NCCL_MAJOR).$(NCCL_MINOR).$(NCCL_PATCH),$(LIBFORNAME))
+LIBFORLINK := $(patsubst lib%.so, -l%, $(LIBFORNAME))
 
 lib : $(INCTARGETS) $(LIBDIR)/$(LIBTARGET)
 
@@ -93,6 +100,12 @@ $(OBJDIR)/%.o : src/%.cu
 	@sed -e 's/.*://' -e 's/\\$$//' < $(@:%.o=%.d.tmp) | fmt -1 | \
                 sed -e 's/^ *//' -e 's/$$/:/' >> $(@:%.o=%.d)
 	@rm -f $(@:%.o=%.d.tmp)
+
+libfor : lib
+	$(FC) -c -module $(INCDIR) -Mpreprocess -fPIC $(NVFCFLAGS) src/ncclfor.f90 -o $(OBJDIR)/ncclfor.o
+	$(FC) -shared --no-as-needed -soname $(LIBFORSONAME) $(OBJDIR)/ncclfor.o -o $(LIBDIR)/$(LIBFORTARGET)
+	ln -sf $(LIBFORSONAME) $(LIBDIR)/$(LIBFORNAME)
+	ln -sf $(LIBFORTARGET) $(LIBDIR)/$(LIBFORSONAME)
 
 clean :
 	rm -rf $(BUILDDIR)
@@ -122,13 +135,16 @@ MPIFLAGS   := -I$(MPI_INC) -L$(MPI_LIB) -lmpi
 
 TESTS       := all_gather_test all_reduce_test broadcast_test reduce_test reduce_scatter_test
 MPITESTS    := mpi_test
+FORTESTS    := reduce_arr_out reduce_ptr_out broadcast_arr broadcast_ptr allgather_arr_out allgather_ptr_out
 
 TSTINC     := -I$(NCCL_INC) -Itest/include
 TSTLIB     := -L$(NCCL_LIB) $(LIBLINK) $(LDFLAGS)
 TSTDIR     := $(BUILDDIR)/test/single
 MPITSTDIR  := $(BUILDDIR)/test/mpi
+FORTESTDIR := $(BUILDDIR)/test/fortran
 TESTBINS   := $(patsubst %, $(TSTDIR)/%, $(TESTS))
 MPITESTBINS:= $(patsubst %, $(MPITSTDIR)/%, $(MPITESTS))
+FORTESTBINS:= $(patsubst %, $(FORTESTDIR)/%, $(FORTESTS))
 
 test : $(TESTBINS)
 
@@ -153,6 +169,13 @@ $(MPITSTDIR)/% : test/mpi/%.cu $(TSTDEP)
 	@sed -e 's/.*://' -e 's/\\$$//' < $(@:%=%.d.tmp) | fmt -1 | \
                 sed -e 's/^ *//' -e 's/$$/:/' >> $(@:%=%.d)
 	@rm -f $(@:%=%.d.tmp)
+
+fortest : libfor $(FORTESTBINS)
+
+$(FORTESTDIR)/% : test/fortran/%.f90
+	@printf "Building  %-25s > %-24s\n" $< $@
+	mkdir -p $(FORTESTDIR)
+	$(FC) $(NVFCFLAGS) $< -I$(INCDIR) -L$(LIBDIR) $(LIBLINK) $(LIBFORLINK) -o $@
 
 #### PACKAGING ####
 

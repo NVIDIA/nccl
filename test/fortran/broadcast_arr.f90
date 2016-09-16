@@ -14,6 +14,8 @@ integer(int32), allocatable :: devList(:)
 type(ncclResult) :: res
 integer(int32) :: cudaDev, rank
 integer(cuda_stream_kind), allocatable :: stream(:)
+integer(int32) :: time(8)
+integer(int32), allocatable :: seed(:)
 real(real32), allocatable :: hostBuff(:, :)
 real(real32), allocatable, device :: devBuff(:)
 type(c_devptr), allocatable :: devBuffPtr(:)
@@ -49,6 +51,13 @@ type(c_devptr), allocatable :: devBuffPtr(:)
     stat = cudaSetDevice(devList(i))
     stat = cudaStreamCreate(stream(i))
   end do
+
+  call date_and_time(values = time)
+  call random_seed(size = i)
+  allocate(seed(i))
+  call random_seed(get = seed)
+  seed = 60 * 60 * 1000 * time(5) + 60 * 1000 * time(6) + 1000 * time(7) + time(8) - seed
+  call random_seed(put = seed)
 
   allocate(hostBuff(nEl, nDev + 1))
 
@@ -103,6 +112,10 @@ type(c_devptr), allocatable :: devBuffPtr(:)
 
   deallocate(devBuffPtr)
 
+  deallocate(hostBuff)
+
+  deallocate(seed)
+
   do i = 1, nDev
     stat = cudaSetDevice(devList(i))
     stat = cudaStreamDestroy(stream(i))
@@ -113,8 +126,6 @@ type(c_devptr), allocatable :: devBuffPtr(:)
   do i = 1, nDev
     call ncclCommDestroy(commPtr(i))
   end do
-
-  deallocate(hostBuff)
 
   deallocate(devList)
   deallocate(commPtr)

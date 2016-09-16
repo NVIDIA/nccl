@@ -135,7 +135,7 @@ MPIFLAGS   := -I$(MPI_INC) -L$(MPI_LIB) -lmpi
 
 TESTS       := all_gather_test all_reduce_test broadcast_test reduce_test reduce_scatter_test
 MPITESTS    := mpi_test
-FORTESTS    := reduce_arr_out reduce_ptr_out broadcast_arr broadcast_ptr allgather_arr_out allgather_ptr_out allreduce_arr_out allreduce_ptr_out
+FORTESTS    := reduce_arr_out reduce_ptr_out allreduce_arr_out allreduce_ptr_out reducescatter_arr_out reducescatter_ptr_out broadcast_arr broadcast_ptr allgather_arr_out allgather_ptr_out
 
 TSTINC     := -I$(NCCL_INC) -Itest/include
 TSTLIB     := -L$(NCCL_LIB) $(LIBLINK) $(LDFLAGS)

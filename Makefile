@@ -7,7 +7,9 @@
 CUDA_HOME ?= /usr/local/cuda
 PREFIX ?= /usr/local
 VERBOSE ?= 0
+KEEP ?= 0
 DEBUG ?= 0
+PROFAPI ?= 0
 BUILDDIR ?= build
 
 CUDA_LIB ?= $(CUDA_HOME)/lib64
@@ -20,11 +22,11 @@ NVCC_GENCODE ?= -gencode=arch=compute_35,code=sm_35 \
                 -gencode=arch=compute_52,code=sm_52 \
                 -gencode=arch=compute_52,code=compute_52
 
-CXXFLAGS   := -I$(CUDA_INC) -fPIC -fvisibility=hidden
+CXXFLAGS   := -I$(CUDA_INC) -fPIC -fvisibility=hidden 
 NVCUFLAGS  := -ccbin $(CXX) $(NVCC_GENCODE) -lineinfo -std=c++11 -maxrregcount 96
 NVFCFLAGS  := -fast -O3
 # Use addprefix so that we can specify more than one path
-LDFLAGS    := $(addprefix -L,${CUDA_LIB}) -lcudart
+LDFLAGS    := $(addprefix -L,${CUDA_LIB}) -lcudart -lrt
 
 ifeq ($(DEBUG), 0)
 NVCUFLAGS += -O3
@@ -41,10 +43,17 @@ else
 .SILENT:
 endif
 
+ifneq ($(KEEP), 0)
+NVCUFLAGS += -keep
+endif
+
+ifneq ($(PROFAPI), 0)
+CXXFLAGS += -DPROFAPI
+endif
 
 NCCL_MAJOR   := 1
-NCCL_MINOR   := 2
-NCCL_PATCH   := 3
+NCCL_MINOR   := 3
+NCCL_PATCH   := 1
 CXXFLAGS  += -DNCCL_MAJOR=$(NCCL_MAJOR) -DNCCL_MINOR=$(NCCL_MINOR) -DNCCL_PATCH=$(NCCL_PATCH)
 
 CUDA_VERSION ?= $(shell ls $(CUDA_LIB)/libcudart.so.* | head -1 | rev | cut -d "." -f -2 | rev)
@@ -53,7 +62,7 @@ CUDA_MINOR = $(shell echo $(CUDA_VERSION) | cut -d "." -f 2)
 CXXFLAGS  += -DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR)
 NVFCFLAGS := -Mcuda,cuda$(CUDA_MAJOR).$(CUDA_MINOR) $(NVFCFLAGS)
 
-.PHONY : lib clean debclean test mpitest install
+.PHONY : lib clean test mpitest install deb debian debclean
 .DEFAULT : lib
 
 INCEXPORTS  := nccl.h
@@ -116,6 +125,7 @@ install : lib
 	cp -P -v $(BUILDDIR)/lib/* $(PREFIX)/lib/
 	cp -v $(BUILDDIR)/include/* $(PREFIX)/include/
 
+
 #### TESTS ####
 
 TEST_ONLY ?= 0
@@ -133,7 +143,11 @@ MPI_INC ?= $(MPI_HOME)/include
 MPI_LIB ?= $(MPI_HOME)/lib
 MPIFLAGS   := -I$(MPI_INC) -L$(MPI_LIB) -lmpi
 
-TESTS       := all_gather_test all_reduce_test broadcast_test reduce_test reduce_scatter_test
+TESTS       := all_gather_test     all_gather_scan \
+               all_reduce_test     all_reduce_scan \
+               broadcast_test      broadcast_scan \
+               reduce_test         reduce_scan \
+               reduce_scatter_test reduce_scatter_scan
 MPITESTS    := mpi_test
 FORTESTS    := reduce_arr_out reduce_ptr_out allreduce_arr_out allreduce_ptr_out reducescatter_arr_out reducescatter_ptr_out broadcast_arr broadcast_ptr allgather_arr_out allgather_ptr_out
 
@@ -148,7 +162,7 @@ FORTESTBINS:= $(patsubst %, $(FORTESTDIR)/%, $(FORTESTS))
 
 test : $(TESTBINS)
 
-$(TSTDIR)/% : test/single/%.cu $(TSTDEP)
+$(TSTDIR)/% : test/single/%.cu test/include/*.h $(TSTDEP)
 	@printf "Building  %-25s > %-24s\n" $< $@
 	mkdir -p $(TSTDIR)
 	$(NVCC) $(TSTINC) $(NVCUFLAGS) --compiler-options "$(CXXFLAGS)" -o $@ $< $(TSTLIB) -lcuda -lcurand -lnvToolsExt

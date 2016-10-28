@@ -1,6 +1,4 @@
 !Start defines
-!Maximum number of queued collectives per communicator.
-#define MAXQUEUE 4
 !End defines
 
 !Start nccl module
@@ -58,36 +56,45 @@ public :: ncclCommDestroy
 !Start types
 
 !Start ncclComm
-!Start eventQueue
-type, bind(c) :: eventQueue
-type(cudaEvent) :: isDone(MAXQUEUE)
-integer(c_int) :: back
-end type eventQueue
-!End eventQueue
+!Start nodeRefTypeMem
+type nodeRefTypeMem
+integer(c_int) :: member
+end type nodeRefTypeMem
 
-!Start ncclNodeRef
-type, bind(c) :: ncclNodeRef
+type(nodeRefTypeMem), parameter :: DEVICE = nodeRefTypeMem(0), &
+                                   HOST   = nodeRefTypeMem(1)
+!End nodeRefTypeMem
+
+!Start nodeRef
+type, bind(c) :: nodeRef
 type(c_devptr) :: remote
 type(c_devptr) :: local
-integer(c_int) :: remoteCleanup
-type(c_ptr) :: cleanupHandle
-end type ncclNodeRef
-!End ncclNodeRef
+type(nodeRefTypeMem) :: type
+type(c_devptr) :: devCleanup
+type(c_ptr) :: hostCleanup
+type(c_devptr) :: opCounter
+end type nodeRef
+!End nodeRef
 
 type, bind(c) :: ncclComm
-integer(c_int) :: nDev
+integer(c_int) :: rank
+integer(c_int) :: nRanks
 integer(c_int) :: cudaDev
-integer(c_int) :: ncclId
 type(c_devptr) :: devMem
 type(c_ptr) :: hostMem
 integer(c_int) :: hostMemState
-type(eventQueue) :: events
+integer(c_int) :: opSched
+type(c_devptr) :: opCounter
+integer(cuda_stream_kind) :: prevStream
+type(cudaEvent) :: doneEvent
 type(c_ptr) :: userFromRing
 type(c_devptr) :: devUserFromRing
-type(c_ptr) :: ringFromUser
+type(c_ptr) :: ncclFromRing
 integer(c_size_t) :: buffSize
-integer(c_int) :: useRemoteRecv
-type(ncclNodeRef) :: ptrs(1)
+integer(c_int) :: globalMemSpace
+type(c_devptr) :: devComm
+type(c_devptr) :: devRing
+type(nodeRef) :: ptrs(1)
 end type ncclComm
 !End ncclComm
 

@@ -60,7 +60,7 @@ public :: ncclAllGather
 
 !Start ncclUniqueId
 type, bind(c) :: ncclUniqueId
-type(c_char) :: internal(NCCL_UNIQUE_ID_BYTES)
+character(c_char) :: internal(NCCL_UNIQUE_ID_BYTES)
 end type ncclUniqueId
 !End ncclUniqueId
 

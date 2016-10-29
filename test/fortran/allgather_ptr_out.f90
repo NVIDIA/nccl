@@ -8,8 +8,7 @@ integer(int32) :: stat, i
 real(real32) :: err
 integer(int32) :: nEl, nDev
 type(ncclDataType) :: dataType
-type(ncclComm), allocatable :: comm(:)
-type(c_ptr), allocatable :: commPtr(:)
+type(c_ptr), allocatable :: comm(:)
 integer(int32), allocatable :: devList(:)
 type(ncclResult) :: res
 integer(int32) :: cudaDev, rank
@@ -29,19 +28,17 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
   dataType = ncclFloat
 
   allocate(comm(nDev))
-  allocate(commPtr(nDev))
   allocate(devList(nDev))
 
   do i = 1, nDev
-    commPtr(i) = c_loc(comm(i))
     devList(i) = i - 1
   end do
 
-  res = ncclCommInitAll(commPtr, nDev, devList)
+  res = ncclCommInitAll(comm, nDev, devList)
 
   do i = 1, nDev
-    res = ncclCommCuDevice(commPtr(i), cudaDev)
-    res = ncclCommUserRank(commPtr(i), rank)
+    res = ncclCommCuDevice(comm(i), cudaDev)
+    res = ncclCommUserRank(comm(i), rank)
   end do
 
   allocate(stream(nDev))
@@ -96,7 +93,7 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
 
   do i = 1, nDev
     stat = cudaSetDevice(devList(i))
-    res = ncclAllGather(sendBuffPtr(i), nEl, dataType, recvBuffPtr(i), commPtr(i), stream(i))
+    res = ncclAllGather(sendBuffPtr(i), nEl, dataType, recvBuffPtr(i), comm(i), stream(i))
   end do
 
   do i = 1, nDev
@@ -158,11 +155,10 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
   deallocate(stream)
 
   do i = 1, nDev
-    call ncclCommDestroy(commPtr(i))
+    call ncclCommDestroy(comm(i))
   end do
 
   deallocate(devList)
-  deallocate(commPtr)
   deallocate(comm)
 
 end program test

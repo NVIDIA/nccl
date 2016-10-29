@@ -7,7 +7,6 @@ use iso_c_binding
 use cudaFor
 implicit none
 private
-public :: ncclComm
 public :: ncclResult,                 &
           ncclSuccess,                &
           ncclUnhandledCudaError,     &
@@ -54,49 +53,6 @@ public :: ncclAllGather
 public :: ncclCommDestroy
 
 !Start types
-
-!Start ncclComm
-!Start nodeRefTypeMem
-type nodeRefTypeMem
-integer(c_int) :: member
-end type nodeRefTypeMem
-
-type(nodeRefTypeMem), parameter :: DEVICE = nodeRefTypeMem(0), &
-                                   HOST   = nodeRefTypeMem(1)
-!End nodeRefTypeMem
-
-!Start nodeRef
-type, bind(c) :: nodeRef
-type(c_devptr) :: remote
-type(c_devptr) :: local
-type(nodeRefTypeMem) :: type
-type(c_devptr) :: devCleanup
-type(c_ptr) :: hostCleanup
-type(c_devptr) :: opCounter
-end type nodeRef
-!End nodeRef
-
-type, bind(c) :: ncclComm
-integer(c_int) :: rank
-integer(c_int) :: nRanks
-integer(c_int) :: cudaDev
-type(c_devptr) :: devMem
-type(c_ptr) :: hostMem
-integer(c_int) :: hostMemState
-integer(c_int) :: opSched
-type(c_devptr) :: opCounter
-integer(cuda_stream_kind) :: prevStream
-type(cudaEvent) :: doneEvent
-type(c_ptr) :: userFromRing
-type(c_devptr) :: devUserFromRing
-type(c_ptr) :: ncclFromRing
-integer(c_size_t) :: buffSize
-integer(c_int) :: globalMemSpace
-type(c_devptr) :: devComm
-type(c_devptr) :: devRing
-type(nodeRef) :: ptrs(1)
-end type ncclComm
-!End ncclComm
 
 !Start ncclResult
 type ncclResult

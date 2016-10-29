@@ -9,7 +9,7 @@ real(real32) :: err
 integer(int32) :: nEl, nDev
 type(ncclDataType) :: dataType
 type(ncclRedOp) :: redOp
-type(c_ptr), allocatable :: comm(:)
+type(ncclComm), allocatable :: comm(:)
 integer(int32), allocatable :: devList(:)
 type(ncclResult) :: res
 integer(int32) :: cudaDev, rank

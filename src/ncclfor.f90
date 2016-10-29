@@ -9,6 +9,7 @@ use cudaFor
 implicit none
 private
 public :: ncclUniqueId
+public :: ncclComm
 public :: ncclResult,                 &
           ncclSuccess,                &
           ncclUnhandledCudaError,     &
@@ -43,9 +44,9 @@ public :: ncclRedOp, &
           ncclMax,   &
           ncclMin,   &
           nccl_NUM_OPS
-public :: ncclCommInitAll
 public :: ncclGetUniqueId
 public :: ncclCommInitRank
+public :: ncclCommInitAll
 public :: ncclCommCuDevice
 public :: ncclCommUserRank
 public :: ncclCommCount
@@ -63,6 +64,12 @@ type, bind(c) :: ncclUniqueId
 character(c_char) :: internal(NCCL_UNIQUE_ID_BYTES)
 end type ncclUniqueId
 !End ncclUniqueId
+
+!Start ncclComm
+type ncclComm
+type(c_ptr) :: member
+end type ncclComm
+!End ncclComm
 
 !Start ncclResult
 type ncclResult
@@ -131,10 +138,10 @@ end function ncclGetUniqueId
 
 !Start ncclCommInitRank
 type(ncclResult) function ncclCommInitRank(comm, ndev, commId, rank) bind(c, name = 'ncclCommInitRank')
-import :: c_ptr, c_int
-import :: ncclUniqueId
+import :: c_int
+import :: ncclUniqueId, ncclComm
 implicit none
-type(c_ptr) :: comm(*)
+type(ncclComm) :: comm(*)
 integer(c_int), value :: ndev
 type(ncclUniqueId), value :: commId
 integer(c_int), value :: rank
@@ -143,9 +150,10 @@ end function ncclCommInitRank
 
 !Start ncclCommInitAll
 type(ncclResult) function ncclCommInitAll(comm, ndev, devlist) bind(c, name = 'ncclCommInitAll')
-import :: c_ptr, c_int
+import :: c_int
+import :: ncclComm
 implicit none
-type(c_ptr) :: comm(*)
+type(ncclComm) :: comm(*)
 integer(c_int), value :: ndev
 integer(c_int) :: devlist(*)
 end function ncclCommInitAll
@@ -153,43 +161,46 @@ end function ncclCommInitAll
 
 !Start ncclCommCuDevice
 type(ncclResult) function ncclCommCuDevice(comm, devid) bind(c, name = 'ncclCommCuDevice')
-import :: c_ptr, c_int
+import :: c_int
+import :: ncclComm
 implicit none
-type(c_ptr), value :: comm
+type(ncclComm), value :: comm
 integer(c_int) :: devid
 end function ncclCommCuDevice
 !End ncclCommCuDevice
 
 !Start ncclCommUserRank
 type(ncclResult) function ncclCommUserRank(comm, rank) bind(c, name = 'ncclCommUserRank')
-import :: c_ptr, c_int
+import :: c_int
+import :: ncclComm
 implicit none
-type(c_ptr), value :: comm
+type(ncclComm), value :: comm
 integer(c_int) :: rank
 end function ncclCommUserRank
 !End ncclCommUserRank
 
 !Start ncclCommCount
 type(ncclResult) function ncclCommCount(comm, count) bind(c, name = 'ncclCommCount')
-import :: c_ptr, c_int
+import :: c_int
+import :: ncclComm
 implicit none
-type(c_ptr), value :: comm
+type(ncclComm), value :: comm
 integer(c_int) :: count
 end function ncclCommCount
 !End ncclCommCount
 
 !Start ncclCommDestroy
 subroutine ncclCommDestroy(comm) bind(c, name = 'ncclCommDestroy')
-import :: c_ptr
+import :: ncclComm
 implicit none
-type(c_ptr), value :: comm
+type(ncclComm), value :: comm
 end subroutine ncclCommDestroy
 !End ncclCommDestroy
 
 !Start ncclReduce
 type(ncclResult) function ncclReduce(sendbuff, recvbuff, count, datatype, op, root, comm, stream) bind(c, name = 'ncclReduce')
-import :: c_devptr, c_int, c_ptr
-import :: ncclDataType, ncclRedOp
+import :: c_devptr, c_int
+import :: ncclComm, ncclDataType, ncclRedOp
 import :: cuda_stream_kind
 implicit none
 type(c_devptr), value :: sendbuff
@@ -198,15 +209,15 @@ integer(c_int), value :: count
 type(ncclDataType), value :: datatype
 type(ncclRedOp), value :: op
 integer(c_int), value :: root
-type(c_ptr), value :: comm
+type(ncclComm), value :: comm
 integer(cuda_stream_kind), value :: stream
 end function ncclReduce
 !End ncclReduce
 
 !Start ncclAllReduce
 type(ncclResult) function ncclAllReduce(sendbuff, recvbuff, count, datatype, op, comm, stream) bind(c, name = 'ncclAllReduce')
-import :: c_devptr, c_int, c_ptr
-import :: ncclDataType, ncclRedOp
+import :: c_devptr, c_int
+import :: ncclComm, ncclDataType, ncclRedOp
 import :: cuda_stream_kind
 implicit none
 type(c_devptr), value :: sendbuff
@@ -214,15 +225,15 @@ type(c_devptr), value :: recvbuff
 integer(c_int), value :: count
 type(ncclDataType), value :: datatype
 type(ncclRedOp), value :: op
-type(c_ptr), value :: comm
+type(ncclComm), value :: comm
 integer(cuda_stream_kind), value :: stream
 end function ncclAllReduce
 !End ncclAllReduce
 
 !Start ncclReduceScatter
 type(ncclResult) function ncclReduceScatter(sendbuff, recvbuff, recvcount, datatype, op, comm, stream) bind(c, name = 'ncclReduceScatter')
-import :: c_devptr, c_int, c_ptr
-import :: ncclDataType, ncclRedOp
+import :: c_devptr, c_int
+import :: ncclComm, ncclDataType, ncclRedOp
 import :: cuda_stream_kind
 implicit none
 type(c_devptr), value :: sendbuff
@@ -230,37 +241,37 @@ type(c_devptr), value :: recvbuff
 integer(c_int), value :: recvcount
 type(ncclDataType), value :: datatype
 type(ncclRedOp), value :: op
-type(c_ptr), value :: comm
+type(ncclComm), value :: comm
 integer(cuda_stream_kind), value :: stream
 end function ncclReduceScatter
 !End ncclReduceScatter
 
 !Start ncclBCast
 type(ncclResult) function ncclBCast(buff, count, datatype, root, comm, stream) bind(c, name = 'ncclBcast')
-import :: c_devptr, c_int, c_ptr
-import :: ncclDataType
+import :: c_devptr, c_int
+import :: ncclComm, ncclDataType
 import :: cuda_stream_kind
 implicit none
 type(c_devptr), value :: buff
 integer(c_int), value :: count
 type(ncclDataType), value :: datatype
 integer(c_int), value :: root
-type(c_ptr), value :: comm
+type(ncclComm), value :: comm
 integer(cuda_stream_kind), value :: stream
 end function ncclBCast
 !End ncclBCast
 
 !Start ncclAllGather
 type(ncclResult) function ncclAllGather(sendbuff, count, datatype, recvbuff, comm, stream) bind(c, name = 'ncclAllGather')
-import :: c_devptr, c_int, c_ptr
-import :: ncclDataType
+import :: c_devptr, c_int
+import :: ncclComm, ncclDataType
 import :: cuda_stream_kind
 implicit none
 type(c_devptr), value :: sendbuff
 integer(c_int), value :: count
 type(ncclDataType), value :: datatype
 type(c_devptr), value :: recvbuff
-type(c_ptr), value :: comm
+type(ncclComm), value :: comm
 integer(cuda_stream_kind), value :: stream
 end function ncclAllGather
 !End ncclAllGather

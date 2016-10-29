@@ -1,4 +1,5 @@
 !Start defines
+#define NCCL_UNIQUE_ID_BYTES 128
 !End defines
 
 !Start nccl module
@@ -7,6 +8,7 @@ use iso_c_binding
 use cudaFor
 implicit none
 private
+public :: ncclUniqueId
 public :: ncclResult,                 &
           ncclSuccess,                &
           ncclUnhandledCudaError,     &
@@ -42,6 +44,8 @@ public :: ncclRedOp, &
           ncclMin,   &
           nccl_NUM_OPS
 public :: ncclCommInitAll
+public :: ncclGetUniqueId
+public :: ncclCommInitRank
 public :: ncclCommCuDevice
 public :: ncclCommUserRank
 public :: ncclCommCount
@@ -53,6 +57,12 @@ public :: ncclBCast
 public :: ncclAllGather
 
 !Start types
+
+!Start ncclUniqueId
+type, bind(c) :: ncclUniqueId
+type(c_char) :: internal(NCCL_UNIQUE_ID_BYTES)
+end type ncclUniqueId
+!End ncclUniqueId
 
 !Start ncclResult
 type ncclResult
@@ -110,6 +120,26 @@ type(ncclRedOp), parameter :: ncclSum      = ncclRedOp(0), &
 
 !Start interfaces
 interface
+
+!Start ncclGetUniqueId
+type(ncclResult) function ncclGetUniqueId(uniqueId) bind(c, name = 'ncclGetUniqueId')
+import :: ncclUniqueId
+implicit none
+type(ncclUniqueId) :: uniqueId
+end function ncclGetUniqueId
+!End ncclGetUniqueId
+
+!Start ncclCommInitRank
+type(ncclResult) function ncclCommInitRank(comm, ndev, commId, rank) bind(c, name = 'ncclCommInitRank')
+import :: c_ptr, c_int
+import :: ncclUniqueId
+implicit none
+type(c_ptr) :: comm(*)
+integer(c_int), value :: ndev
+type(ncclUniqueId), value :: commId
+integer(c_int), value :: rank
+end function ncclCommInitRank
+!End ncclCommInitRank
 
 !Start ncclCommInitAll
 type(ncclResult) function ncclCommInitAll(comm, ndev, devlist) bind(c, name = 'ncclCommInitAll')

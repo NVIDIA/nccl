@@ -24,12 +24,6 @@ public :: ncclResult,                 &
           ncclInvalidType,            &
           ncclInvalidOperation,       &
           nccl_NUM_RESULTS
-public :: ncclRedOp, &
-          ncclSum,   &
-          ncclProd,  &
-          ncclMax,   &
-          ncclMin,   &
-          nccl_NUM_OPS
 public :: ncclDataType, &
           ncclChar,     &
           ncclInt,      &
@@ -41,16 +35,22 @@ public :: ncclDataType, &
           ncclInt64,    &
           ncclUInt64,   &
           nccl_NUM_TYPES
+public :: ncclRedOp, &
+          ncclSum,   &
+          ncclProd,  &
+          ncclMax,   &
+          ncclMin,   &
+          nccl_NUM_OPS
 public :: ncclCommInitAll
 public :: ncclCommCuDevice
 public :: ncclCommUserRank
 public :: ncclCommCount
+public :: ncclCommDestroy
 public :: ncclReduce
 public :: ncclAllReduce
 public :: ncclReduceScatter
 public :: ncclBCast
 public :: ncclAllGather
-public :: ncclCommDestroy
 
 !Start types
 
@@ -77,18 +77,6 @@ type(ncclResult), parameter :: ncclSuccess                = ncclResult( 0), &
                                nccl_NUM_RESULTS           = ncclResult(15)
 !End ncclResult
 
-!Start ncclRedOp
-type ncclRedOp
-integer(c_int) :: member
-end type ncclRedOp
-
-type(ncclRedOp), parameter :: ncclSum      = ncclRedOp(0), &
-                              ncclProd     = ncclRedOp(1), &
-                              ncclMax      = ncclRedOp(2), &
-                              ncclMin      = ncclRedOp(3), &
-                              nccl_NUM_OPS = ncclRedOp(4)
-!End ncclRedOp
-
 !Start ncclDataType
 type ncclDataType
 integer(c_int) :: member
@@ -105,6 +93,18 @@ type(ncclDataType), parameter :: ncclChar       = ncclDataType(0), &
                                  ncclUInt64     = ncclDataType(6), &
                                  nccl_NUM_TYPES = ncclDataType(7)
 !End ncclDataType
+
+!Start ncclRedOp
+type ncclRedOp
+integer(c_int) :: member
+end type ncclRedOp
+
+type(ncclRedOp), parameter :: ncclSum      = ncclRedOp(0), &
+                              ncclProd     = ncclRedOp(1), &
+                              ncclMax      = ncclRedOp(2), &
+                              ncclMin      = ncclRedOp(3), &
+                              nccl_NUM_OPS = ncclRedOp(4)
+!End ncclRedOp
 
 !End types
 
@@ -147,6 +147,14 @@ type(c_ptr), value :: comm
 integer(c_int) :: count
 end function ncclCommCount
 !End ncclCommCount
+
+!Start ncclCommDestroy
+subroutine ncclCommDestroy(comm) bind(c, name = 'ncclCommDestroy')
+import :: c_ptr
+implicit none
+type(c_ptr), value :: comm
+end subroutine ncclCommDestroy
+!End ncclCommDestroy
 
 !Start ncclReduce
 type(ncclResult) function ncclReduce(sendbuff, recvbuff, count, datatype, op, root, comm, stream) bind(c, name = 'ncclReduce')
@@ -226,14 +234,6 @@ type(c_ptr), value :: comm
 integer(cuda_stream_kind), value :: stream
 end function ncclAllGather
 !End ncclAllGather
-
-!Start ncclCommDestroy
-subroutine ncclCommDestroy(comm) bind(c, name = 'ncclCommDestroy')
-import :: c_ptr
-implicit none
-type(c_ptr), value :: comm
-end subroutine ncclCommDestroy
-!End ncclCommDestroy
 
 end interface
 !End interfaces

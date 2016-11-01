@@ -15,7 +15,7 @@ integer(int32) :: cudaDev, rank
 integer(cuda_stream_kind), allocatable :: stream(:)
 integer(int32) :: time(8)
 integer(int32), allocatable :: seed(:)
-real(real32), allocatable :: hostBuff(:, :)
+real(real32), allocatable, target :: hostBuff(:, :)
 type(c_ptr), allocatable :: hostBuffPtr(:)
 type(c_devptr), allocatable :: sendBuffPtr(:)
 type(c_devptr), allocatable :: recvBuffPtr(:)
@@ -62,7 +62,7 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
   print "(a)", "before allgather:"
   do i = 1, nDev
     err = maxval(abs(hostBuff(:, i) / hostBuff(:, nDev + 1) - 1.0_real32))
-    print "(a, i2.2, a, e10.4e2)", "maximum error of rank ", i - 1, " vs sendbuff = ", err
+    print "(a, i2.2, a, e11.4e2)", "maximum error of rank ", i - 1, " vs sendbuff = ", err
   end do
 
   allocate(hostBuffPtr(nDev))
@@ -110,7 +110,7 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
   print "(a)", "after allgather:"
   do i = 1, nDev
     err = maxval(abs(hostBuff(:, i) / hostBuff(:, nDev + 1) - 1.0_real32))
-    print "(a, i2.2, a, e10.4e2)", "maximum error of rank ", i - 1, " vs sendbuff = ", err
+    print "(a, i2.2, a, e11.4e2)", "maximum error of rank ", i - 1, " vs sendbuff = ", err
   end do
 
   do i = 1, nDev
@@ -124,7 +124,7 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
 
   err = maxval(abs(hostBuff(:, 1) / hostBuff(:, nDev + 1) - 1.0_real32))
   print "(a)", ""
-  print "(a, e10.4e2)", "maximum error in sendbuff = ", err
+  print "(a, e11.4e2)", "maximum error in sendbuff = ", err
   print "(a)", ""
 
   do i = 1, nDev

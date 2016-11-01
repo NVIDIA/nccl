@@ -2,7 +2,7 @@
 #define NCCL_UNIQUE_ID_BYTES 128
 !End defines
 
-!Start nccl module
+!Start ncclFor module
 module ncclFor
 use iso_c_binding
 use cudaFor
@@ -66,13 +66,13 @@ end type ncclUniqueId
 !End ncclUniqueId
 
 !Start ncclComm
-type ncclComm
+type, bind(c) :: ncclComm
 type(c_ptr) :: member
 end type ncclComm
 !End ncclComm
 
 !Start ncclResult
-type ncclResult
+type, bind(c) :: ncclResult
 integer(c_int) :: member
 end type ncclResult
 
@@ -95,7 +95,7 @@ type(ncclResult), parameter :: ncclSuccess                = ncclResult( 0), &
 !End ncclResult
 
 !Start ncclDataType
-type ncclDataType
+type, bind(c) :: ncclDataType
 integer(c_int) :: member
 end type ncclDataType
 
@@ -112,7 +112,7 @@ type(ncclDataType), parameter :: ncclChar       = ncclDataType(0), &
 !End ncclDataType
 
 !Start ncclRedOp
-type ncclRedOp
+type, bind(c) :: ncclRedOp
 integer(c_int) :: member
 end type ncclRedOp
 
@@ -126,82 +126,96 @@ type(ncclRedOp), parameter :: ncclSum      = ncclRedOp(0), &
 !End types
 
 !Start interfaces
-interface
 
 !Start ncclGetUniqueId
+interface ncclGetUniqueId
 type(ncclResult) function ncclGetUniqueId(uniqueId) bind(c, name = 'ncclGetUniqueId')
-import :: ncclUniqueId
+import :: ncclResult, ncclUniqueId
 implicit none
 type(ncclUniqueId) :: uniqueId
 end function ncclGetUniqueId
+end interface ncclGetUniqueId
 !End ncclGetUniqueId
 
 !Start ncclCommInitRank
+interface ncclCommInitRank
 type(ncclResult) function ncclCommInitRank(comm, ndev, commId, rank) bind(c, name = 'ncclCommInitRank')
 import :: c_int
-import :: ncclUniqueId, ncclComm
+import :: ncclResult, ncclUniqueId, ncclComm
 implicit none
 type(ncclComm) :: comm(*)
 integer(c_int), value :: ndev
 type(ncclUniqueId), value :: commId
 integer(c_int), value :: rank
 end function ncclCommInitRank
+end interface ncclCommInitRank
 !End ncclCommInitRank
 
 !Start ncclCommInitAll
+interface ncclCommInitAll
 type(ncclResult) function ncclCommInitAll(comm, ndev, devlist) bind(c, name = 'ncclCommInitAll')
 import :: c_int
-import :: ncclComm
+import :: ncclResult, ncclComm
 implicit none
 type(ncclComm) :: comm(*)
 integer(c_int), value :: ndev
 integer(c_int) :: devlist(*)
 end function ncclCommInitAll
+end interface ncclCommInitAll
 !End ncclCommInitAll
 
 !Start ncclCommCuDevice
+interface ncclCommCuDevice
 type(ncclResult) function ncclCommCuDevice(comm, devid) bind(c, name = 'ncclCommCuDevice')
 import :: c_int
-import :: ncclComm
+import :: ncclResult, ncclComm
 implicit none
 type(ncclComm), value :: comm
 integer(c_int) :: devid
 end function ncclCommCuDevice
+end interface ncclCommCuDevice
 !End ncclCommCuDevice
 
 !Start ncclCommUserRank
+interface ncclCommUserRank
 type(ncclResult) function ncclCommUserRank(comm, rank) bind(c, name = 'ncclCommUserRank')
 import :: c_int
-import :: ncclComm
+import :: ncclResult, ncclComm
 implicit none
 type(ncclComm), value :: comm
 integer(c_int) :: rank
 end function ncclCommUserRank
+end interface ncclCommUserRank
 !End ncclCommUserRank
 
 !Start ncclCommCount
+interface ncclCommCount
 type(ncclResult) function ncclCommCount(comm, count) bind(c, name = 'ncclCommCount')
 import :: c_int
-import :: ncclComm
+import :: ncclResult, ncclComm
 implicit none
 type(ncclComm), value :: comm
 integer(c_int) :: count
 end function ncclCommCount
+end interface ncclCommCount
 !End ncclCommCount
 
 !Start ncclCommDestroy
+interface ncclCommDestroy
 subroutine ncclCommDestroy(comm) bind(c, name = 'ncclCommDestroy')
 import :: ncclComm
 implicit none
 type(ncclComm), value :: comm
 end subroutine ncclCommDestroy
+end interface ncclCommDestroy
 !End ncclCommDestroy
 
 !Start ncclReduce
+interface ncclReduce
 type(ncclResult) function ncclReduce(sendbuff, recvbuff, count, datatype, op, root, comm, stream) bind(c, name = 'ncclReduce')
-import :: c_devptr, c_int
-import :: ncclComm, ncclDataType, ncclRedOp
-import :: cuda_stream_kind
+import :: c_int
+import :: c_devptr, cuda_stream_kind
+import :: ncclResult, ncclComm, ncclDataType, ncclRedOp
 implicit none
 type(c_devptr), value :: sendbuff
 type(c_devptr), value :: recvbuff
@@ -212,13 +226,15 @@ integer(c_int), value :: root
 type(ncclComm), value :: comm
 integer(cuda_stream_kind), value :: stream
 end function ncclReduce
+end interface ncclReduce
 !End ncclReduce
 
 !Start ncclAllReduce
+interface ncclAllReduce
 type(ncclResult) function ncclAllReduce(sendbuff, recvbuff, count, datatype, op, comm, stream) bind(c, name = 'ncclAllReduce')
-import :: c_devptr, c_int
-import :: ncclComm, ncclDataType, ncclRedOp
-import :: cuda_stream_kind
+import :: c_int
+import :: c_devptr, cuda_stream_kind
+import :: ncclResult, ncclComm, ncclDataType, ncclRedOp
 implicit none
 type(c_devptr), value :: sendbuff
 type(c_devptr), value :: recvbuff
@@ -228,13 +244,15 @@ type(ncclRedOp), value :: op
 type(ncclComm), value :: comm
 integer(cuda_stream_kind), value :: stream
 end function ncclAllReduce
+end interface ncclAllReduce
 !End ncclAllReduce
 
 !Start ncclReduceScatter
+interface ncclReduceScatter
 type(ncclResult) function ncclReduceScatter(sendbuff, recvbuff, recvcount, datatype, op, comm, stream) bind(c, name = 'ncclReduceScatter')
-import :: c_devptr, c_int
-import :: ncclComm, ncclDataType, ncclRedOp
-import :: cuda_stream_kind
+import :: c_int
+import :: c_devptr, cuda_stream_kind
+import :: ncclResult, ncclComm, ncclDataType, ncclRedOp
 implicit none
 type(c_devptr), value :: sendbuff
 type(c_devptr), value :: recvbuff
@@ -244,13 +262,15 @@ type(ncclRedOp), value :: op
 type(ncclComm), value :: comm
 integer(cuda_stream_kind), value :: stream
 end function ncclReduceScatter
+end interface ncclReduceScatter
 !End ncclReduceScatter
 
 !Start ncclBCast
+interface ncclBCast
 type(ncclResult) function ncclBCast(buff, count, datatype, root, comm, stream) bind(c, name = 'ncclBcast')
-import :: c_devptr, c_int
-import :: ncclComm, ncclDataType
-import :: cuda_stream_kind
+import :: c_int
+import :: c_devptr, cuda_stream_kind
+import :: ncclResult, ncclComm, ncclDataType
 implicit none
 type(c_devptr), value :: buff
 integer(c_int), value :: count
@@ -259,13 +279,15 @@ integer(c_int), value :: root
 type(ncclComm), value :: comm
 integer(cuda_stream_kind), value :: stream
 end function ncclBCast
+end interface ncclBCast
 !End ncclBCast
 
 !Start ncclAllGather
+interface ncclAllGather
 type(ncclResult) function ncclAllGather(sendbuff, count, datatype, recvbuff, comm, stream) bind(c, name = 'ncclAllGather')
-import :: c_devptr, c_int
-import :: ncclComm, ncclDataType
-import :: cuda_stream_kind
+import :: c_int
+import :: c_devptr, cuda_stream_kind
+import :: ncclResult, ncclComm, ncclDataType
 implicit none
 type(c_devptr), value :: sendbuff
 integer(c_int), value :: count
@@ -274,9 +296,9 @@ type(c_devptr), value :: recvbuff
 type(ncclComm), value :: comm
 integer(cuda_stream_kind), value :: stream
 end function ncclAllGather
+end interface ncclAllGather
 !End ncclAllGather
 
-end interface
 !End interfaces
 
 end module ncclFor

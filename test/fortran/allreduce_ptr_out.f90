@@ -16,7 +16,7 @@ integer(int32) :: cudaDev, rank
 integer(cuda_stream_kind), allocatable :: stream(:)
 integer(int32) :: time(8)
 integer(int32), allocatable :: seed(:)
-real(real32), allocatable :: hostBuff(:, :)
+real(real32), allocatable, target :: hostBuff(:, :)
 type(c_ptr), allocatable :: hostBuffPtr(:)
 type(c_devptr), allocatable :: sendBuffPtr(:)
 type(c_devptr), allocatable :: recvBuffPtr(:)
@@ -69,7 +69,7 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
   print "(a)", "before allreduce:"
   do i = 1, nDev
     err = maxval(abs(hostBuff(:, i) / hostBuff(:, nDev + 2) - 1.0_real32))
-    print "(a, i2.2, a, e10.4e2)", "maximum error in recvbuff from rank ", i - 1," = ", err
+    print "(a, i2.2, a, e11.4e2)", "maximum error in recvbuff from rank ", i - 1," = ", err
   end do
 
   allocate(hostBuffPtr(nDev + 1))
@@ -110,7 +110,7 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
     stat = cudaSetDevice(devList(i))
     stat = cudaMemCpy(hostBuffPtr(nDev + 1), recvBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)), cudaMemCpyDeviceToHost)
     err = maxval(abs(hostBuff(:, nDev + 1) / hostBuff(:, nDev + 2) - 1.0_real32))
-    print "(a, i2.2, a, e10.4e2)", "maximum error in recvbuff from rank ", i - 1," = ", err
+    print "(a, i2.2, a, e11.4e2)", "maximum error in recvbuff from rank ", i - 1," = ", err
   end do
 
   print "(a)", ""
@@ -118,7 +118,7 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
     stat = cudaSetDevice(devList(i))
     stat = cudaMemCpy(hostBuffPtr(nDev + 1), sendBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)), cudaMemCpyDeviceToHost)
     err = maxval(abs(hostBuff(:, nDev + 1) / hostBuff(:, i) - 1.0_real32))
-    print "(a, i2.2, a, e10.4e2)", "maximum error in sendbuff of rank ", i - 1," = ", err
+    print "(a, i2.2, a, e11.4e2)", "maximum error in sendbuff of rank ", i - 1," = ", err
   end do
   print "(a)", ""
 

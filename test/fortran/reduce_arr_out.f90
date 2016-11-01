@@ -71,7 +71,7 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
 
   print "(a)", "before reduce:"
   err = maxval(abs(hostBuff(:, nDev + 1) / hostBuff(:, nDev + 2) - 1.0_real32))
-  print "(a, i2.2, a, e10.4e2)", "maximum error in recvbuff from root (rank ", root,") = ", err
+  print "(a, i2.2, a, e11.4e2)", "maximum error in recvbuff from root (rank ", root,") = ", err
 
   allocate(sendBuffPtr(nDev))
 
@@ -108,7 +108,7 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
   print "(a)", ""
   print "(a)", "after reduce:"
   err = maxval(abs(hostBuff(:, nDev + 1) / hostBuff(:, nDev + 2) - 1.0_real32))
-  print "(a, i2.2, a, e10.4e2)", "maximum error in recvbuff from root (rank ", root,") = ", err
+  print "(a, i2.2, a, e11.4e2)", "maximum error in recvbuff from root (rank ", root,") = ", err
 
   print "(a)", ""
   do i = 1, nDev
@@ -116,7 +116,7 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
     call c_f_pointer(sendBuffPtr(i), sendBuff, [nEl])
     hostBuff(:, nDev + 1) = sendBuff
     err = maxval(abs(hostBuff(:, nDev + 1) / hostBuff(:, i) - 1.0_real32))
-    print "(a, i2.2, a, e10.4e2)", "maximum error in sendbuff of rank ", i - 1," = ", err
+    print "(a, i2.2, a, e11.4e2)", "maximum error in sendbuff of rank ", i - 1," = ", err
   end do
 
   print "(a)", ""
@@ -126,7 +126,7 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
       call c_f_pointer(recvBuffPtr(i), recvBuff, [nEl])
       hostBuff(:, nDev + 1) = recvBuff
       err = maxval(abs(hostBuff(:, nDev + 1) / hostBuff(:, i) - 1.0_real32))
-      print "(a, i2.2, a, e10.4e2)", "maximum error in recvbuff of rank ", i - 1," = ", err
+      print "(a, i2.2, a, e11.4e2)", "maximum error in recvbuff of rank ", i - 1," = ", err
     end if
   end do
   print "(a)", ""

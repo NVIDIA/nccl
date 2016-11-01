@@ -63,7 +63,7 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
   print "(a)", "before allgather:"
   do i = 1, nDev
     err = maxval(abs(hostBuff(:, i) / hostBuff(:, nDev + 1) - 1.0_real32))
-    print "(a, i2.2, a, e10.4e2)", "maximum error of rank ", i - 1, " vs sendbuff = ", err
+    print "(a, i2.2, a, e11.4e2)", "maximum error of rank ", i - 1, " vs sendbuff = ", err
   end do
 
   allocate(sendBuffPtr(nDev))
@@ -104,7 +104,7 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
   print "(a)", "after allgather:"
   do i = 1, nDev
     err = maxval(abs(hostBuff(:, i) / hostBuff(:, nDev + 1) - 1.0_real32))
-    print "(a, i2.2, a, e10.4e2)", "maximum error of rank ", i - 1, " vs sendbuff = ", err
+    print "(a, i2.2, a, e11.4e2)", "maximum error of rank ", i - 1, " vs sendbuff = ", err
   end do
 
   do i = 1, nDev
@@ -115,7 +115,7 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
 
   err = maxval(abs(hostBuff(:, 1) / hostBuff(:, nDev + 1) - 1.0_real32))
   print "(a)", ""
-  print "(a, e10.4e2)", "maximum error in sendbuff = ", err
+  print "(a, e11.4e2)", "maximum error in sendbuff = ", err
   print "(a)", ""
 
   do i = 1, nDev

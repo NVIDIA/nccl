@@ -15,7 +15,7 @@ BUILDDIR ?= build
 CUDA_LIB ?= $(CUDA_HOME)/lib64
 CUDA_INC ?= $(CUDA_HOME)/include
 NVCC ?= $(CUDA_HOME)/bin/nvcc
-FC := pgfortran
+FC := gfortran
 
 NVCC_GENCODE ?= -gencode=arch=compute_35,code=sm_35 \
                 -gencode=arch=compute_50,code=sm_50 \
@@ -24,7 +24,6 @@ NVCC_GENCODE ?= -gencode=arch=compute_35,code=sm_35 \
 
 CXXFLAGS   := -I$(CUDA_INC) -fPIC -fvisibility=hidden 
 NVCUFLAGS  := -ccbin $(CXX) $(NVCC_GENCODE) -lineinfo -std=c++11 -maxrregcount 96
-NVFCFLAGS  := -fast -O3
 # Use addprefix so that we can specify more than one path
 LDFLAGS    := $(addprefix -L,${CUDA_LIB}) -lcudart -lrt
 
@@ -60,9 +59,8 @@ CUDA_VERSION ?= $(shell ls $(CUDA_LIB)/libcudart.so.* | head -1 | rev | cut -d "
 CUDA_MAJOR = $(shell echo $(CUDA_VERSION) | cut -d "." -f 1)
 CUDA_MINOR = $(shell echo $(CUDA_VERSION) | cut -d "." -f 2)
 CXXFLAGS  += -DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR)
-NVFCFLAGS := -Mcuda,cuda$(CUDA_MAJOR).$(CUDA_MINOR) $(NVFCFLAGS)
 
-.PHONY : lib clean test mpitest install deb debian debclean
+.PHONY : lib clean test mpitest install deb debian debclean libfor cleanfor fortest
 .DEFAULT : lib
 
 INCEXPORTS  := nccl.h
@@ -83,6 +81,29 @@ DEPFILES   := $(patsubst %.o, %.d, $(LIBOBJ)) $(patsubst %, %.d, $(TESTBINS)) $(
 LIBFORSONAME := $(patsubst %,%.$(NCCL_MAJOR),$(LIBFORNAME))
 LIBFORTARGET := $(patsubst %,%.$(NCCL_MAJOR).$(NCCL_MINOR).$(NCCL_PATCH),$(LIBFORNAME))
 LIBFORLINK := $(patsubst lib%.so, -l%, $(LIBFORNAME))
+
+ifeq ($(FC), gfortran)
+FCMODFLAGS  := -J$(INCDIR)
+FCPREFLAGS  := -cpp
+FCNVCFLAGS  := -ffree-line-length-none
+CUDALINK    := -L$(CUDA_LIB) -lcudart
+CUDAFORLINK := -lcudafor
+CUDAFORDEP  := libcudafor
+else ifeq ($(FC), ifort)
+FCMODFLAGS  := -module $(INCDIR)
+FCPREFLAGS  := -fpp
+FCNVCFLAGS  :=
+CUDALINK    := -L$(CUDA_LIB) -lcudart
+CUDAFORLINK := -lcudafor
+CUDAFORDEP  := libcudafor
+else
+FCMODFLAGS  := -module $(INCDIR)
+FCPREFLAGS  := -Mpreprocess
+FCNVCFLAGS  := -Mcuda,cuda$(CUDA_MAJOR).$(CUDA_MINOR) -fast -O3
+CUDALINK    :=
+CUDAFORLINK :=
+CUDAFORDEP  :=
+endif
 
 lib : $(INCTARGETS) $(LIBDIR)/$(LIBTARGET)
 
@@ -110,14 +131,26 @@ $(OBJDIR)/%.o : src/%.cu
                 sed -e 's/^ *//' -e 's/$$/:/' >> $(@:%.o=%.d)
 	@rm -f $(@:%.o=%.d.tmp)
 
-libfor : lib
-	$(FC) -c -module $(INCDIR) -Mpreprocess -fPIC $(NVFCFLAGS) src/ncclfor.f90 -o $(OBJDIR)/ncclfor.o
-	$(FC) -shared --no-as-needed -soname $(LIBFORSONAME) $(OBJDIR)/ncclfor.o -o $(LIBDIR)/$(LIBFORTARGET)
+libcudafor:
+	$(FC) -c $(FCMODFLAGS) $(FCPREFLAGS) -fPIC $(FCNVCFLAGS) src/cudafor.f90 -o $(OBJDIR)/cudafor.o
+	$(FC) -shared -Wl,--no-as-needed -Wl,-soname,libcudafor.so.1 $(OBJDIR)/cudafor.o -o $(LIBDIR)/libcudafor.so.1
+	ln -sf libcudafor.so.1 $(LIBDIR)/libcudafor.so
+
+libfor : lib $(CUDAFORDEP)
+	$(FC) -c $(FCMODFLAGS) $(FCPREFLAGS) -fPIC $(FCNVCFLAGS) src/ncclfor.f90 -o $(OBJDIR)/ncclfor.o
+	$(FC) -shared -Wl,--no-as-needed -Wl,-soname,$(LIBFORSONAME) $(OBJDIR)/ncclfor.o -o $(LIBDIR)/$(LIBFORTARGET)
 	ln -sf $(LIBFORSONAME) $(LIBDIR)/$(LIBFORNAME)
 	ln -sf $(LIBFORTARGET) $(LIBDIR)/$(LIBFORSONAME)
 
 clean :
 	rm -rf $(BUILDDIR)
+
+cleanfor :
+	rm -rf $(INCDIR)/*.mod
+	rm -rf $(LIBDIR)/lib*for.so*
+	rm -rf $(OBJDIR)/*for.o
+	rm -rf $(OBJDIR)/*for.o
+	rm -rf $(BUILDDIR)/test/fortran
 
 install : lib
 	mkdir -p $(PREFIX)/lib
@@ -149,7 +182,12 @@ TESTS       := all_gather_test     all_gather_scan \
                reduce_test         reduce_scan \
                reduce_scatter_test reduce_scatter_scan
 MPITESTS    := mpi_test
-FORTESTS    := reduce_arr_out reduce_ptr_out allreduce_arr_out allreduce_ptr_out reducescatter_arr_out reducescatter_ptr_out broadcast_arr broadcast_ptr allgather_arr_out allgather_ptr_out
+FORTESTS    := reduce_ptr_out allreduce_ptr_out reducescatter_ptr_out broadcast_ptr allgather_ptr_out
+ifneq ($(FC), gfortran)
+ifneq ($(FC), ifort)
+FORTESTS := reduce_arr_out allreduce_arr_out reducescatter_arr_out broadcast_arr allgather_arr_out $(FORTESTS)
+endif
+endif
 
 TSTINC     := -I$(NCCL_INC) -Itest/include
 TSTLIB     := -L$(NCCL_LIB) $(LIBLINK) $(LDFLAGS)
@@ -189,7 +227,7 @@ fortest : libfor $(FORTESTBINS)
 $(FORTESTDIR)/% : test/fortran/%.f90
 	@printf "Building  %-25s > %-24s\n" $< $@
 	mkdir -p $(FORTESTDIR)
-	$(FC) $(NVFCFLAGS) $< -I$(INCDIR) -L$(LIBDIR) $(LIBLINK) $(LIBFORLINK) -o $@
+	$(FC) $(FCNVCFLAGS) $< $(CUDALINK) -I$(INCDIR) -L$(LIBDIR) $(CUDAFORLINK) $(LIBLINK) $(LIBFORLINK) -o $@
 
 #### PACKAGING ####
 

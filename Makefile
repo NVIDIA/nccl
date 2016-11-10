@@ -132,12 +132,12 @@ $(OBJDIR)/%.o : src/%.cu
 	@rm -f $(@:%.o=%.d.tmp)
 
 libcudafor:
-	$(FC) -c $(FCMODFLAGS) $(FCPREFLAGS) -fPIC $(FCNVCFLAGS) src/cudafor.f90 -o $(OBJDIR)/cudafor.o
+	$(FC) -c $(FCMODFLAGS) $(FCPREFLAGS) -fPIC $(FCNVCFLAGS) cudafor/cudafor.f90 -o $(OBJDIR)/cudafor.o
 	$(FC) -shared -Wl,--no-as-needed -Wl,-soname,libcudafor.so.1 $(OBJDIR)/cudafor.o -o $(LIBDIR)/libcudafor.so.1
 	ln -sf libcudafor.so.1 $(LIBDIR)/libcudafor.so
 
 libfor : lib $(CUDAFORDEP)
-	$(FC) -c $(FCMODFLAGS) $(FCPREFLAGS) -fPIC $(FCNVCFLAGS) src/ncclfor.f90 -o $(OBJDIR)/ncclfor.o
+	$(FC) -c $(FCMODFLAGS) $(FCPREFLAGS) -fPIC $(FCNVCFLAGS) forsrc/ncclfor.f90 -o $(OBJDIR)/ncclfor.o
 	$(FC) -shared -Wl,--no-as-needed -Wl,-soname,$(LIBFORSONAME) $(OBJDIR)/ncclfor.o -o $(LIBDIR)/$(LIBFORTARGET)
 	ln -sf $(LIBFORSONAME) $(LIBDIR)/$(LIBFORNAME)
 	ln -sf $(LIBFORTARGET) $(LIBDIR)/$(LIBFORSONAME)

@@ -132,12 +132,12 @@ $(OBJDIR)/%.o : src/%.cu
 	@rm -f $(@:%.o=%.d.tmp)
 
 libcudafor:
-	$(FC) -c $(FCMODFLAGS) $(FCPREFLAGS) -fPIC $(FCNVCFLAGS) cudafor/cudafor.f90 -o $(OBJDIR)/cudafor.o
+	$(FC) -c $(FCMODFLAGS) $(FCPREFLAGS) -fPIC $(FCNVCFLAGS) fortran/cudafor/src/cudafor.f90 -o $(OBJDIR)/cudafor.o
 	$(FC) -shared -Wl,--no-as-needed -Wl,-soname,libcudafor.so.1 $(OBJDIR)/cudafor.o -o $(LIBDIR)/libcudafor.so.1
 	ln -sf libcudafor.so.1 $(LIBDIR)/libcudafor.so
 
 libfor : lib $(CUDAFORDEP)
-	$(FC) -c $(FCMODFLAGS) $(FCPREFLAGS) -fPIC $(FCNVCFLAGS) forsrc/ncclfor.f90 -o $(OBJDIR)/ncclfor.o
+	$(FC) -c $(FCMODFLAGS) $(FCPREFLAGS) -fPIC $(FCNVCFLAGS) fortran/src/ncclfor.f90 -o $(OBJDIR)/ncclfor.o
 	$(FC) -shared -Wl,--no-as-needed -Wl,-soname,$(LIBFORSONAME) $(OBJDIR)/ncclfor.o -o $(LIBDIR)/$(LIBFORTARGET)
 	ln -sf $(LIBFORSONAME) $(LIBDIR)/$(LIBFORNAME)
 	ln -sf $(LIBFORTARGET) $(LIBDIR)/$(LIBFORSONAME)
@@ -150,7 +150,7 @@ cleanfor :
 	rm -rf $(LIBDIR)/lib*for.so*
 	rm -rf $(OBJDIR)/*for.o
 	rm -rf $(OBJDIR)/*for.o
-	rm -rf $(BUILDDIR)/test/fortran
+	rm -rf $(BUILDDIR)/test/fortran/
 
 install : lib
 	mkdir -p $(PREFIX)/lib
@@ -224,7 +224,7 @@ $(MPITSTDIR)/% : test/mpi/%.cu $(TSTDEP)
 
 fortest : libfor $(FORTESTBINS)
 
-$(FORTESTDIR)/% : test/fortran/%.f90
+$(FORTESTDIR)/% : fortran/test/%.f90
 	@printf "Building  %-25s > %-24s\n" $< $@
 	mkdir -p $(FORTESTDIR)
 	$(FC) $(FCNVCFLAGS) $< $(CUDALINK) -I$(INCDIR) -L$(LIBDIR) $(CUDAFORLINK) $(LIBLINK) $(LIBFORLINK) -o $@

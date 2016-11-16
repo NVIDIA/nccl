@@ -11,7 +11,6 @@ KEEP ?= 0
 DEBUG ?= 0
 PROFAPI ?= 0
 BUILDDIR ?= build
-BUILDDIR := $(abspath $(BUILDDIR))
 
 CUDA_LIB ?= $(CUDA_HOME)/lib64
 CUDA_INC ?= $(CUDA_HOME)/include
@@ -60,7 +59,7 @@ CUDA_MAJOR = $(shell echo $(CUDA_VERSION) | cut -d "." -f 1)
 CUDA_MINOR = $(shell echo $(CUDA_VERSION) | cut -d "." -f 2)
 CXXFLAGS  += -DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR)
 
-.PHONY : lib clean test mpitest install deb debian debclean libfor cleanfor fortest
+.PHONY : lib clean test mpitest install deb debian debclean forlib fortest forclean
 .DEFAULT : lib
 
 INCEXPORTS  := nccl.h
@@ -106,14 +105,6 @@ $(OBJDIR)/%.o : src/%.cu
 
 clean :
 	rm -rf $(BUILDDIR)
-
-export
-
-libfor : lib
-	$(MAKE) -C fortran lib
-
-cleanfor :
-	$(MAKE) -C fortran clean
 
 install : lib
 	mkdir -p $(PREFIX)/lib
@@ -177,9 +168,6 @@ $(MPITSTDIR)/% : test/mpi/%.cu $(TSTDEP)
                 sed -e 's/^ *//' -e 's/$$/:/' >> $(@:%=%.d)
 	@rm -f $(@:%=%.d.tmp)
 
-fortest : libfor
-	$(MAKE) -C fortran test
-
 #### PACKAGING ####
 
 DEBIANDIR  := $(BUILDDIR)/debian
@@ -220,4 +208,15 @@ $(DEBIANDIR)/% : debian/%
 	@printf "Grabbing  %-25s > %-25s\n" $< $@
 	mkdir -p $(DEBIANDIR)
 	cp -f $< $@
+
+#### FORTRAN BINDINGS ####
+
+export NCCL_MAJOR NCCL_MINOR NCCL_PATCH CUDA_MAJOR CUDA_MINOR LIBLINK
+
+forlib : lib
+	$(MAKE) -C fortran lib BUILDDIR=../$(BUILDDIR)
+fortest :
+	$(MAKE) -C fortran test BUILDDIR=../$(BUILDDIR)
+forclean :
+	$(MAKE) -C fortran clean BUILDDIR=../$(BUILDDIR)
 

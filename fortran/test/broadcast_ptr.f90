@@ -78,7 +78,7 @@ type(c_devptr), allocatable :: devBuffPtr(:)
 
   do i = 1, nDev
     stat = cudaSetDevice(devList(i))
-    stat = cudaMAlloc(devBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)))
+    stat = cudaMalloc(devBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)))
     stat = cudaMemCpy(devBuffPtr(i), hostBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)), cudaMemCpyHostToDevice)
   end do
 

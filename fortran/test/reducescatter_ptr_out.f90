@@ -82,7 +82,7 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
 
   do i = 1, nDev
     stat = cudaSetDevice(devList(i))
-    stat = cudaMAlloc(sendBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)) * nDev)
+    stat = cudaMalloc(sendBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)) * nDev)
     stat = cudaMemCpy(sendBuffPtr(i), hostBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)) * nDev, cudaMemCpyHostToDevice)
   end do
 
@@ -94,7 +94,7 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
 
   do i = 1, nDev
     stat = cudaSetDevice(devList(i))
-    stat = cudaMAlloc(recvBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)))
+    stat = cudaMalloc(recvBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)))
     stat = cudaMemCpy(recvBuffPtr(i), hostBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)), cudaMemCpyHostToDevice)
   end do
 

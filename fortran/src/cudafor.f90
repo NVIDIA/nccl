@@ -15,7 +15,7 @@ public :: cudaMemCpyKind,           &
 public :: cuda_stream_kind
 public :: cudaGetDeviceCount
 public :: cudaSetDevice
-public :: cudaMAlloc
+public :: cudaMalloc
 public :: cudaMemCpy
 public :: cudaFree
 public :: cudaStreamCreate
@@ -70,23 +70,21 @@ end function cudaSetDevice
 end interface cudaSetDevice
 !End cudaSetDevice
 
-!Start cudaMAlloc
-interface cudaMAlloc
-integer(c_int) function cudaMAlloc(devPtr, size) bind(c, name = "cudaMalloc")
+!Start cudaMalloc
+interface cudaMalloc
+integer(c_int) function cudaMalloc(devPtr, size) bind(c, name = "cudaMalloc")
 import :: c_int, c_size_t
 import :: c_devptr
 implicit none
 type(c_devptr) :: devPtr
 integer(c_size_t), value :: size
-end function cudaMAlloc
-end interface cudaMAlloc
-!End cudaMAlloc
+end function cudaMalloc
+end interface cudaMalloc
+!End cudaMalloc
 
 !Start cudaMemCpy
 interface cudaMemCpy
-
-!Start cudaMemCpyH2D
-integer(c_int) function cudaMemCpyH2D(dst, src, count, kind) bind(c, name = "cudaMemcpy")
+integer(c_int) function cudaMemCpy(dst, src, count, kind) bind(c, name = "cudaMemcpy")
 import :: c_ptr, c_int, c_size_t
 import :: c_devptr, cudaMemCpyKind
 implicit none
@@ -94,21 +92,7 @@ type(c_devptr), value :: dst
 type(c_ptr), value :: src
 integer(c_size_t), value :: count
 type(cudaMemCpyKind), value :: kind
-end function cudaMemCpyH2D
-!End cudaMemCpyH2D
-
-!Start cudaMemCpyD2H
-integer(c_int) function cudaMemCpyD2H(dst, src, count, kind) bind(c, name = "cudaMemcpy")
-import :: c_ptr, c_int, c_size_t
-import :: c_devptr, cudaMemCpyKind
-implicit none
-type(c_ptr), value :: dst
-type(c_devptr), value :: src
-integer(c_size_t), value :: count
-type(cudaMemCpyKind), value :: kind
-end function cudaMemCpyD2H
-!End cudaMemCpyD2H
-
+end function cudaMemCpy
 end interface cudaMemCpy
 !End cudaMemCpy
 

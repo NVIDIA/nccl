@@ -82,16 +82,16 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
 
   do i = 1, nDev
     stat = cudaSetDevice(devList(i))
-    stat = cudaMAlloc(sendBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)))
-    stat = cudaMemCpy(sendBuffPtr(i), hostBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)), cudaMemCpyHostToDevice)
+    stat = cudaMalloc(sendBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)))
+    stat = cudaMemcpy(sendBuffPtr(i), hostBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)), cudaMemcpyHostToDevice)
   end do
 
   allocate(recvBuffPtr(nDev))
 
   do i = 1, nDev
     stat = cudaSetDevice(devList(i))
-    stat = cudaMAlloc(recvBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)))
-    stat = cudaMemCpy(recvBuffPtr(i), hostBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)), cudaMemCpyHostToDevice)
+    stat = cudaMalloc(recvBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)))
+    stat = cudaMemcpy(recvBuffPtr(i), hostBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)), cudaMemcpyHostToDevice)
   end do
 
   do i = 1, nDev
@@ -105,7 +105,7 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
   end do
 
   stat = cudaSetDevice(devList(root + 1))
-  stat = cudaMemCpy(hostBuffPtr(nDev + 1), recvBuffPtr(root + 1), nEl * c_sizeof(hostBuff(1, 1)), cudaMemCpyDeviceToHost)
+  stat = cudaMemcpy(hostBuffPtr(nDev + 1), recvBuffPtr(root + 1), nEl * c_sizeof(hostBuff(1, 1)), cudaMemcpyDeviceToHost)
 
   print "(a)", ""
   print "(a)", "after reduce:"
@@ -115,7 +115,7 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
   print "(a)", ""
   do i = 1, nDev
     stat = cudaSetDevice(devList(i))
-    stat = cudaMemCpy(hostBuffPtr(nDev + 1), sendBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)), cudaMemCpyDeviceToHost)
+    stat = cudaMemcpy(hostBuffPtr(nDev + 1), sendBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)), cudaMemcpyDeviceToHost)
     err = maxval(abs(hostBuff(:, nDev + 1) / hostBuff(:, i) - 1.0_real32))
     print "(a, i2.2, a, e11.4e2)", "maximum error in sendbuff of rank ", i - 1," = ", err
   end do
@@ -124,7 +124,7 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
   do i = 1, nDev
     if (i - 1 /= root) then
       stat = cudaSetDevice(devList(i))
-      stat = cudaMemCpy(hostBuffPtr(nDev + 1), recvBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)), cudaMemCpyDeviceToHost)
+      stat = cudaMemcpy(hostBuffPtr(nDev + 1), recvBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)), cudaMemcpyDeviceToHost)
       err = maxval(abs(hostBuff(:, nDev + 1) / hostBuff(:, i) - 1.0_real32))
       print "(a, i2.2, a, e11.4e2)", "maximum error in recvbuff of rank ", i - 1," = ", err
     end if

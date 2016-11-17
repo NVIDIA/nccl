@@ -21,7 +21,7 @@ FCCUDAFLAGS := -Mcuda,cuda$(CUDA_MAJOR).$(CUDA_MINOR)
 FCFLAGS     := -fast -O3
 else
 # non-PGI compilers do not have CUDA support, compile our own CUDA lib
-CUDAFORDEP  := $(LIBDIR)/$(LIBCUDAFOR) 
+CUDAFORDEP  := $(LIBDIR)/$(LIBCUDAFOR)
 CUDALINK    := -L$(CUDA_LIB) -lcudart
 CUDAFORLINK := -lcudafor
 ifeq ($(FCNAME), gfortran)
@@ -39,7 +39,7 @@ ifeq ($(VERBOSE), 0)
 endif
 
 lib: $(CUDAFORDEP)
-	make $(LIBDIR)/$(LIBTARGET)
+	$(MAKE) $(LIBDIR)/$(LIBTARGET)
 
 $(LIBDIR)/$(LIBTARGET): $(OBJDIR)/ncclfor.o
 	@printf "Linking   %-35s > %s\n" $(LIBTARGET) $@
@@ -51,9 +51,9 @@ $(LIBDIR)/$(LIBTARGET): $(OBJDIR)/ncclfor.o
 $(LIBDIR)/$(LIBCUDAFOR): $(OBJDIR)/cudafor.o
 	@printf "Linking   %-35s > %s\n" $(LIBCUDAFOR) $@
 	mkdir -p $(LIBDIR)
-	$(FC) -shared -Wl,--no-as-needed -Wl,-soname,libcudafor.so $< -o $(LIBDIR)/$(LIBCUDAFOR)
+	$(FC) -shared -Wl,--no-as-needed -Wl,-soname,$(LIBCUDAFOR) $< -o $(LIBDIR)/$(LIBCUDAFOR)
 
-$(OBJDIR)/%.o: src/%.f90 
+$(OBJDIR)/%.o: src/%.f90
 	@printf "Building  %-35s > %s\n" $< $@
 	mkdir -p $(OBJDIR)
 	mkdir -p $(INCDIR)

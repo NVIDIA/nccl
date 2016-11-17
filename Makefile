@@ -11,7 +11,7 @@ KEEP ?= 0
 DEBUG ?= 0
 PROFAPI ?= 0
 BUILDDIR ?= build
-BUILDDIR :=$(abspath $(BUILDDIR))
+BUILDDIR := $(abspath $(BUILDDIR))
 
 CUDA_LIB ?= $(CUDA_HOME)/lib64
 CUDA_INC ?= $(CUDA_HOME)/include

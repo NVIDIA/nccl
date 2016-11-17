@@ -83,7 +83,7 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
   do i = 1, nDev
     stat = cudaSetDevice(devList(i))
     stat = cudaMalloc(sendBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)) * nDev)
-    stat = cudaMemCpy(sendBuffPtr(i), hostBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)) * nDev, cudaMemCpyHostToDevice)
+    stat = cudaMemcpy(sendBuffPtr(i), hostBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)) * nDev, cudaMemcpyHostToDevice)
   end do
 
   do i = 1, nDev
@@ -95,7 +95,7 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
   do i = 1, nDev
     stat = cudaSetDevice(devList(i))
     stat = cudaMalloc(recvBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)))
-    stat = cudaMemCpy(recvBuffPtr(i), hostBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)), cudaMemCpyHostToDevice)
+    stat = cudaMemcpy(recvBuffPtr(i), hostBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)), cudaMemcpyHostToDevice)
   end do
 
   do i = 1, nDev
@@ -112,7 +112,7 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
   print "(a)", "after reduceScatter:"
   do i = 1, nDev
     stat = cudaSetDevice(devList(i))
-    stat = cudaMemCpy(hostBuffPtr(i), recvBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)), cudaMemCpyDeviceToHost)
+    stat = cudaMemcpy(hostBuffPtr(i), recvBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)), cudaMemcpyDeviceToHost)
     err = maxval(abs(hostBuff((i - 1) * nEl + 1:i * nEl, nDev + 1) / hostBuff((i - 1) * nEl + 1:i * nEl, nDev + 2) - 1.0_real32))
     print "(a, i2.2, a, e11.4e2)", "maximum error in recvbuff from rank ", i - 1," = ", err
   end do
@@ -124,7 +124,7 @@ type(c_devptr), allocatable :: recvBuffPtr(:)
   print "(a)", ""
   do i = 1, nDev
     stat = cudaSetDevice(devList(i))
-    stat = cudaMemCpy(hostBuffPtr(i), sendBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)) * nDev, cudaMemCpyDeviceToHost)
+    stat = cudaMemcpy(hostBuffPtr(i), sendBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)) * nDev, cudaMemcpyDeviceToHost)
     err = maxval(abs(hostBuff(:, nDev + 1) / hostBuff(:, i) - 1.0_real32))
     print "(a, i2.2, a, e11.4e2)", "maximum error in sendbuff of rank ", i - 1," = ", err
   end do

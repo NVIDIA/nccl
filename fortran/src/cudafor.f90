@@ -6,17 +6,17 @@ use iso_c_binding
 implicit none
 private
 public :: c_devptr
-public :: cudaMemCpyKind,           &
-          cudaMemCpyHostToHost,     &
-          cudaMemCpyHostToDevice,   &
-          cudaMemCpyDeviceToHost,   &
-          cudaMemCpyDeviceToDevice, &
-          cudaMemCpyDefault
+public :: cudaMemcpyKind,           &
+          cudaMemcpyHostToHost,     &
+          cudaMemcpyHostToDevice,   &
+          cudaMemcpyDeviceToHost,   &
+          cudaMemcpyDeviceToDevice, &
+          cudaMemcpyDefault
 public :: cuda_stream_kind
 public :: cudaGetDeviceCount
 public :: cudaSetDevice
 public :: cudaMalloc
-public :: cudaMemCpy
+public :: cudaMemcpy
 public :: cudaFree
 public :: cudaStreamCreate
 public :: cudaStreamSynchronize
@@ -30,17 +30,17 @@ type(c_ptr) :: member
 end type c_devptr
 !End c_devptr
 
-!Start cudaMemCpyKind
-type, bind(c) :: cudaMemCpyKind
+!Start cudaMemcpyKind
+type, bind(c) :: cudaMemcpyKind
 integer(c_int) :: member
-end type cudaMemCpyKind
+end type cudaMemcpyKind
 
-type(cudaMemCpyKind), parameter :: cudaMemCpyHostToHost     = cudaMemCpyKind(0), &
-                                   cudaMemCpyHostToDevice   = cudaMemCpyKind(1), &
-                                   cudaMemCpyDeviceToHost   = cudaMemCpyKind(2), &
-                                   cudaMemCpyDeviceToDevice = cudaMemCpyKind(3), &
-                                   cudaMemCpyDefault        = cudaMemCpyKind(4)
-!End cudaMemCpyKind
+type(cudaMemcpyKind), parameter :: cudaMemcpyHostToHost     = cudaMemcpyKind(0), &
+                                   cudaMemcpyHostToDevice   = cudaMemcpyKind(1), &
+                                   cudaMemcpyDeviceToHost   = cudaMemcpyKind(2), &
+                                   cudaMemcpyDeviceToDevice = cudaMemcpyKind(3), &
+                                   cudaMemcpyDefault        = cudaMemcpyKind(4)
+!End cudaMemcpyKind
 
 !Start cuda_stream_kind
 integer(c_intptr_t), parameter :: cuda_stream_kind = c_intptr_t
@@ -82,19 +82,19 @@ end function cudaMalloc
 end interface cudaMalloc
 !End cudaMalloc
 
-!Start cudaMemCpy
-interface cudaMemCpy
-integer(c_int) function cudaMemCpy(dst, src, count, kind) bind(c, name = "cudaMemcpy")
+!Start cudaMemcpy
+interface cudaMemcpy
+integer(c_int) function cudaMemcpy(dst, src, count, kind) bind(c, name = "cudaMemcpy")
 import :: c_ptr, c_int, c_size_t
-import :: c_devptr, cudaMemCpyKind
+import :: c_devptr, cudaMemcpyKind
 implicit none
 type(c_devptr), value :: dst
 type(c_ptr), value :: src
 integer(c_size_t), value :: count
-type(cudaMemCpyKind), value :: kind
-end function cudaMemCpy
-end interface cudaMemCpy
-!End cudaMemCpy
+type(cudaMemcpyKind), value :: kind
+end function cudaMemcpy
+end interface cudaMemcpy
+!End cudaMemcpy
 
 !Start cudaFree
 interface cudaFree

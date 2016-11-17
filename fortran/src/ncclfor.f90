@@ -54,7 +54,7 @@ public :: ncclCommDestroy
 public :: ncclReduce
 public :: ncclAllReduce
 public :: ncclReduceScatter
-public :: ncclBCast
+public :: ncclBcast
 public :: ncclAllGather
 
 !Start types
@@ -265,9 +265,9 @@ end function ncclReduceScatter
 end interface ncclReduceScatter
 !End ncclReduceScatter
 
-!Start ncclBCast
-interface ncclBCast
-type(ncclResult) function ncclBCast(buff, count, datatype, root, comm, stream) bind(c, name = 'ncclBcast')
+!Start ncclBcast
+interface ncclBcast
+type(ncclResult) function ncclBcast(buff, count, datatype, root, comm, stream) bind(c, name = 'ncclBcast')
 import :: c_int
 import :: c_devptr, cuda_stream_kind
 import :: ncclResult, ncclComm, ncclDataType
@@ -278,9 +278,9 @@ type(ncclDataType), value :: datatype
 integer(c_int), value :: root
 type(ncclComm), value :: comm
 integer(cuda_stream_kind), value :: stream
-end function ncclBCast
-end interface ncclBCast
-!End ncclBCast
+end function ncclBcast
+end interface ncclBcast
+!End ncclBcast
 
 !Start ncclAllGather
 interface ncclAllGather

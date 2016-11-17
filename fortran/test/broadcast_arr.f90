@@ -79,7 +79,7 @@ type(c_devptr), allocatable :: devBuffPtr(:)
 
   do i = 1, nDev
     stat = cudaSetDevice(devList(i))
-    res = ncclBCast(devBuffPtr(i), nEl, dataType, root, comm(i), stream(i))
+    res = ncclBcast(devBuffPtr(i), nEl, dataType, root, comm(i), stream(i))
   end do
 
   do i = 1, nDev

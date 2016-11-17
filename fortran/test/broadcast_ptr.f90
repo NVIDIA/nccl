@@ -79,12 +79,12 @@ type(c_devptr), allocatable :: devBuffPtr(:)
   do i = 1, nDev
     stat = cudaSetDevice(devList(i))
     stat = cudaMalloc(devBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)))
-    stat = cudaMemCpy(devBuffPtr(i), hostBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)), cudaMemCpyHostToDevice)
+    stat = cudaMemcpy(devBuffPtr(i), hostBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)), cudaMemcpyHostToDevice)
   end do
 
   do i = 1, nDev
     stat = cudaSetDevice(devList(i))
-    res = ncclBCast(devBuffPtr(i), nEl, dataType, root, comm(i), stream(i))
+    res = ncclBcast(devBuffPtr(i), nEl, dataType, root, comm(i), stream(i))
   end do
 
   do i = 1, nDev
@@ -94,7 +94,7 @@ type(c_devptr), allocatable :: devBuffPtr(:)
 
   do i = 1, nDev
     stat = cudaSetDevice(devList(i))
-    stat = cudaMemCpy(hostBuffPtr(i), devBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)), cudaMemCpyDeviceToHost)
+    stat = cudaMemcpy(hostBuffPtr(i), devBuffPtr(i), nEl * c_sizeof(hostBuff(1, 1)), cudaMemcpyDeviceToHost)
   end do
 
   print "(a)", ""

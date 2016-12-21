@@ -17,6 +17,12 @@ CUDA_LIB ?= $(CUDA_HOME)/lib64
 CUDA_INC ?= $(CUDA_HOME)/include
 NVCC ?= $(CUDA_HOME)/bin/nvcc
 
+UNAME := $(shell uname)
+
+ifeq ($(UNAME), Darwin)
+	CUDA_LIB = $(CUDA_HOME)/lib
+endif
+
 NVCC_GENCODE ?= -gencode=arch=compute_35,code=sm_35 \
                 -gencode=arch=compute_50,code=sm_50 \
                 -gencode=arch=compute_52,code=sm_52 \
@@ -25,7 +31,11 @@ NVCC_GENCODE ?= -gencode=arch=compute_35,code=sm_35 \
 CXXFLAGS   := -I$(CUDA_INC) -fPIC -fvisibility=hidden
 NVCUFLAGS  := -ccbin $(CXX) $(NVCC_GENCODE) -lineinfo -std=c++11 -maxrregcount 96
 # Use addprefix so that we can specify more than one path
-LDFLAGS    := $(addprefix -L,${CUDA_LIB}) -lcudart -lrt
+LDFLAGS    := $(addprefix -L,${CUDA_LIB}) -lcudart
+
+ifeq ($(UNAME), Linux)
+	LDFLAGS += -lrt
+endif
 
 ifeq ($(DEBUG), 0)
 NVCUFLAGS += -O3
@@ -56,6 +66,11 @@ NCCL_PATCH   := 2
 CXXFLAGS  += -DNCCL_MAJOR=$(NCCL_MAJOR) -DNCCL_MINOR=$(NCCL_MINOR) -DNCCL_PATCH=$(NCCL_PATCH)
 
 CUDA_VERSION ?= $(shell ls $(CUDA_LIB)/libcudart.so.* | head -1 | rev | cut -d "." -f -2 | rev)
+
+ifeq ($(UNAME), Darwin)
+CUDA_VERSION = $(shell $(NVCC) --version | tail -1 | sed "s/.*, V//")
+endif
+
 CUDA_MAJOR = $(shell echo $(CUDA_VERSION) | cut -d "." -f 1)
 CUDA_MINOR = $(shell echo $(CUDA_VERSION) | cut -d "." -f 2)
 CXXFLAGS  += -DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR)
@@ -80,6 +95,13 @@ LIBLINK    := $(patsubst lib%.so, -l%, $(LIBNAME))
 LIBOBJ     := $(patsubst %.cu, $(OBJDIR)/%.o, $(filter %.cu, $(LIBSRCFILES)))
 DEPFILES   := $(patsubst %.o, %.d, $(LIBOBJ)) $(patsubst %, %.d, $(TESTBINS)) $(patsubst %, %.d, $(MPITESTBINS))
 
+CXX_IS_CLANG = $(shell $(CXX) --version | grep "clang" | wc -l)
+ifneq ($(strip $(CXX_IS_CLANG)), 0)
+	LINK_SHARED_STRING = 
+else
+	LINK_SHARED_STRING = -Wl,--no-as-needed -Wl,-soname,$(LIBSONAME)
+endif
+
 all : lib staticlib
 
 lib : $(INCTARGETS) $(LIBDIR)/$(LIBTARGET)
@@ -91,7 +113,7 @@ staticlib : $(INCTARGETS) $(LIBDIR)/$(STATICLIBTARGET)
 $(LIBDIR)/$(LIBTARGET) : $(LIBOBJ)
 	@printf "Linking   %-35s > %s\n" $(LIBTARGET) $@
 	mkdir -p $(LIBDIR)
-	$(CXX) $(CXXFLAGS) -shared -Wl,--no-as-needed -Wl,-soname,$(LIBSONAME) -o $@ $(LDFLAGS) $(LIBOBJ)
+	$(CXX) $(CXXFLAGS) -shared $(LINK_SHARED_STRING) -o $@ $(LDFLAGS) $(LIBOBJ)
 	ln -sf $(LIBSONAME) $(LIBDIR)/$(LIBNAME)
 	ln -sf $(LIBTARGET) $(LIBDIR)/$(LIBSONAME)
 

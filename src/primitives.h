@@ -8,9 +8,17 @@
 #define PRIMITIVES_H_
 
 #include <type_traits>
+#include <cstddef>  // for nullptr_t
 #include "copy_kernel.h" // for FuncPassA
 #include "reduce_kernel.h" // for reduction funcs
 
+#ifdef __APPLE__
+// Workaround for Mac OS: when tested on Apple clang 8.0.0 and Mac OSX 10.12
+// with cuda 8.0, the host compiler did not correctly declare nullptr_t
+// although it is specified by the C++11 standard. We thus explicitly declare
+// it here.
+typedef decltype(nullptr) nullptr_t;
+#endif  // __APPLE__
 
 /* Defines primitive operations: Copy, Reduce, DoubleCopy, and ReduceCopy.
  *

@@ -19,7 +19,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <CudaCompile Include="..\..\..\test\single\all_reduce_test.cu" />
+    <CudaCompile Include="..\..\..\test\single\all_reduce_scan.cu" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\nccl.vcxproj">
@@ -27,8 +27,8 @@
     </ProjectReference>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{4A36BFC9-207C-4475-AE88-57F9D3D6486B}</ProjectGuid>
-    <RootNamespace>all_reduce_test</RootNamespace>
+    <ProjectGuid>{328A4E82-15C3-4D61-9CFF-16B680BAA8F2}</ProjectGuid>
+    <RootNamespace>all_reduce_scan</RootNamespace>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">

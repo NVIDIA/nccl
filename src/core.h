@@ -16,6 +16,11 @@
 #define DEFAULT_BUFFER_SIZE_BYTES (1UL << 21)
 #define NCCL_MEM_PAD_ALIGN 65536
 
+#if defined(_MSC_VER) && (_MSC_VER < 1900) /* Visual Studio 2013 and prior */
+#define alignof __alignof
+#define alignas(x) /* This doesn't work: _declspec(align(__alignof((x)))) */
+#endif
+
 
 struct ncclMem {
   union { // Pad this block so that devBuff is correctly aligned
@@ -144,24 +149,22 @@ extern DebugLevel ncclDebugLevel;
 // Visual Studio-specific definitions
 #ifdef _MSC_VER
 
-#if (_MSC_VER < 1900) /* Visual Studio 2013 and prior */
-#define alignof __alignof
-#endif
-
 #ifdef PROFAPI
-#define NCCL_API(ret, func, args...)        \
+#define NCCL_API(ret, func, ...)            \
     _declspec(dllexport)                    \
-    ret p##func (args);                     \
+    ret p##func (__VA_ARGS__);              \
     extern "C"                              \
     _declspec(dllexport)                    \
-    ret func(args);                         \
-    ret p##func(args) { return func(args); }
+    ret func(__VA_ARGS__);                  \
+    ret p##func(__VA_ARGS__) {              \
+        return func(__VA_ARGS__);           \
+    }
 
 #else
-#define NCCL_API(ret, func, args...)        \
+#define NCCL_API(ret, func, ...)            \
     extern "C"                              \
     _declspec(dllexport)                    \
-    ret func(args)
+    ret func(__VA_ARGS__)
 #endif // end PROFAPI
 
 #else

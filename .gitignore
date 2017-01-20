@@ -8,3 +8,4 @@ x64/
 *.pdb
 *.suo
 windows/test/test/
+*.VC.db

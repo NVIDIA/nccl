@@ -41,10 +41,14 @@ ncclResult_t wrapSymbols(void) {
 #ifdef _WIN32
   nvmlhandle=LoadLibraryA("nvml.dll");
   if(!nvmlhandle) {
-      nvmlhandle=LoadLibraryA("%ProgramFiles%\\NVIDIA Corporation\\NVSMI\\nvml.dll");
-      if(!nvmlhandle) {
-          WARN("Failed to open nvml.dll");
-          goto teardown;
+      char parent_dir[MAX_PATH] = { 0 }, path[MAX_PATH] = { 0 };
+      if (GetEnvironmentVariableA("ProgramFiles", parent_dir, MAX_PATH)) {
+          sprintf(path, "%s\\NVIDIA Corporation\\NVSMI\\nvml.dll", parent_dir);
+          nvmlhandle = LoadLibraryA(path);
+          if (!nvmlhandle) {
+              WARN("Failed to open nvml.dll");
+              goto teardown;
+          }
       }
   }
 #else

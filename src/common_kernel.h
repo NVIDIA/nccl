@@ -1,29 +1,7 @@
 /*************************************************************************
  * Copyright (c) 2015-2016, NVIDIA CORPORATION. All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *  * Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *  * Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *  * Neither the name of NVIDIA CORPORATION nor the names of its
- *    contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
- * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
- * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * See LICENSE.txt for license information
  ************************************************************************/
 
 
@@ -39,6 +17,8 @@
 #define WARP_SIZE 32
 #define ROUNDUP(x, y)                                                           \
     (((((x) + (y) - 1) / (y))) * (y))
+#define DIVUP(x, y) \
+    (((x)+(y)-1)/(y))
 #define BAR_EXEC(type, barid, nthreads) \
     asm("bar." #type " " #barid ", " #nthreads ";\n\t")
 #define BAR_EXPAND(type, barid, nthreads) \
@@ -194,32 +174,46 @@ struct MULTI<FUNC, long long> {
   }
 };
 
-template<typename T, bool FETCHTWO>
-__device__ inline void FetchOneOrTwo64b(PackType& s0,
-    const volatile T * __restrict__ const src0, PackType& s1,
-    const volatile T * __restrict__ const src1, const int idx) {
-  s0 = (reinterpret_cast<const volatile PackType *>(src0))[idx];
-  if (FETCHTWO) {
-    s1 = (reinterpret_cast<const volatile PackType *>(src1))[idx];
+template<class FUNC, typename T, bool TWO_INPUTS, bool TWO_OUTPUTS>
+__device__ inline void ReduceCopy(
+    const volatile T * __restrict__ const src0,
+    const volatile T * __restrict__ const src1,
+    volatile T * __restrict__ const dest0,
+    volatile T * __restrict__ const dest1, const int idx) {
+  T val = vFetch(src0+idx);
+  if (TWO_INPUTS) {
+    val = FUNC()(val, vFetch(src1+idx));
+  }
+  vStore(dest0+idx, val);
+  if (TWO_OUTPUTS) {
+    vStore(dest1+idx, val);
   }
 }
 
-template<typename T, bool STORETWO>
-__device__ inline void StoreOneOrTwo64b(volatile T * __restrict__ const dest0,
-    volatile T * __restrict__ const dest1, PackType val, const int idx) {
-  (reinterpret_cast<volatile PackType *>(dest0))[idx] = val;
-  if (STORETWO) {
-    (reinterpret_cast<volatile PackType *>(dest1))[idx] = val;
+template<class FUNC, typename T, bool TWO_INPUTS, bool TWO_OUTPUTS, int UNROLL, int THREADS>
+__device__ inline void ReduceCopy64b(
+    const volatile T * __restrict__ const src0,
+    const volatile T * __restrict__ const src1,
+    volatile T * __restrict__ const dest0,
+    volatile T * __restrict__ const dest1, const int offset) {
+  PackType t0[UNROLL];
+  PackType t1[UNROLL];
+  #pragma unroll
+  for (int u = 0; u < UNROLL; ++u) {
+    int idx = offset + u*THREADS;
+    t0[u] = (reinterpret_cast<const volatile PackType *>(src0))[idx];
+    if (TWO_INPUTS) {
+      t1[u] = (reinterpret_cast<const volatile PackType *>(src1))[idx];
+    }
   }
-}
-
-template<class FUNC, typename T, bool ISREDUCE>
-__device__ inline PackType ReduceOrCopy64b(const PackType s0,
-    const PackType s1) {
-  if (ISREDUCE) {
-    return MULTI<FUNC, T>()(s0, s1);
-  } else {
-    return s0;
+  #pragma unroll
+  for (int u = 0; u < UNROLL; ++u) {
+    int idx = offset + u*THREADS;
+    PackType val = TWO_INPUTS ? MULTI<FUNC, T>()(t0[u], t1[u]) : t0[u];
+    (reinterpret_cast<volatile PackType *>(dest0))[idx] = val;
+    if (TWO_OUTPUTS) {
+      (reinterpret_cast<volatile PackType *>(dest1))[idx] = val;
+    }
   }
 }
 
@@ -267,12 +261,9 @@ __device__ inline void ReduceOrCopy(const int tid,
     volatile T * __restrict__ dest0, volatile T * __restrict__ dest1,
     const volatile T * __restrict__ src0, const volatile T * __restrict__ src1,
     int N) {
-  if (N==0) {
+  if (N<=0) {
     return;
   }
-
-  const int UNROLL2 = (UNROLL >= 2) ? (UNROLL / 2) : 1;
-  const bool NOUNROLL2 = ((UNROLL / 2) == 0);
 
   int Npreamble = (N<alignof(PackType)) ? N : AlignUp(dest0, alignof(PackType)) - dest0;
 
@@ -286,195 +277,79 @@ __device__ inline void ReduceOrCopy(const int tid,
     Npreamble = N;
   }
 
-/*
-  if (threadIdx.x == 0) {
-    printf("** alignable: %s", (alignable ? "YES" : " NO"));
-    printf(", dest0 = 0x%08X", dest0);
-    printf(", src0 = 0x%08X", src0);
-    if (HAS_DEST1) printf(", dest1 = 0x%08X", dest1);
-    if (HAS_SRC1) printf(", src1 = 0x%08X", src1);
-    printf("\n");
-  }
-*/
-
   // stage 1: preamble: handle any elements up to the point of everything coming
   // into alignment
   for (int idx = tid; idx < Npreamble; idx += THREADS) {
     // ought to be no way this is ever more than one iteration, except when
     // alignable is false
-    T val = vFetch(src0+idx);
-    if (HAS_SRC1) {
-      val = FUNC()(val, vFetch(src1+idx));
-    }
-
-    vStore(dest0+idx, val);
-    if (HAS_DEST1) {
-      vStore(dest1+idx, val);
-    }
+    ReduceCopy<FUNC, T, HAS_SRC1, HAS_DEST1>(src0, src1, dest0, dest1, idx);
   }
-
-  // reduce N by however many elements we've handled already
-  int Ndone = Npreamble;
-  int Nrem = N - Ndone;
 
   // stage 2: fast path: use 64b loads/stores to do the bulk of the work,
   // assuming the pointers we have are all 64-bit alignable.
   if (alignable) {
-    if (Ndone > 0) {
-      // align up pointers
-      dest0 += Ndone; if (HAS_DEST1) { dest1 += Ndone; }
-      src0  += Ndone; if (HAS_SRC1)  { src1  += Ndone; }
-    }
+    const int PackFactor = sizeof(PackType) / sizeof(T);
+    int Nrem = N - Npreamble;
+    dest0 += Npreamble; if (HAS_DEST1) { dest1 += Npreamble; }
+    src0  += Npreamble; if (HAS_SRC1)  { src1  += Npreamble; }
 
     // stage 2a: main loop
-    int Nalign = (Nrem / (sizeof(PackType) / sizeof(T)) / (UNROLL * THREADS))
+    int Nalign2a = (Nrem / (PackFactor * UNROLL * THREADS))
         * (UNROLL * THREADS); // round down
 
     #pragma unroll 1 // don't unroll this loop
-    for (int idx = tid; idx < Nalign; idx += UNROLL * THREADS) {
-      PackType t0[UNROLL2];
-      PackType t1[UNROLL2];
-      PackType t2[UNROLL2];
-
-      #pragma unroll
-      for (int j = 0; j < UNROLL2; ++j)
-        FetchOneOrTwo64b<T, HAS_SRC1>(t0[j], src0, t1[j], src1,
-            idx + j * THREADS);
-
-      #pragma unroll
-      for (int j = 0; j < UNROLL2; ++j)
-        t2[j] = ReduceOrCopy64b<FUNC, T, HAS_SRC1>(t0[j], t1[j]);
-
-      if (!NOUNROLL2) {
-        #pragma unroll
-        for (int j = 0; j < UNROLL2; ++j)
-          FetchOneOrTwo64b<T, HAS_SRC1>(t0[j], src0, t1[j], src1,
-              idx + (UNROLL2 + j) * THREADS);
-      }
-
-      #pragma unroll
-      for (int j = 0; j < UNROLL2; ++j)
-        StoreOneOrTwo64b<T, HAS_DEST1>(dest0, dest1, t2[j], idx + j * THREADS);
-
-      if (!NOUNROLL2) {
-        #pragma unroll
-        for (int j = 0; j < UNROLL2; ++j)
-          t2[j] = ReduceOrCopy64b<FUNC, T, HAS_SRC1>(t0[j], t1[j]);
-
-        #pragma unroll
-        for (int j = 0; j < UNROLL2; ++j)
-          StoreOneOrTwo64b<T, HAS_DEST1>(dest0, dest1, t2[j],
-              idx + (UNROLL2 + j) * THREADS);
-      }
+    for (int idx = tid; idx < Nalign2a; idx += UNROLL * THREADS) {
+      ReduceCopy64b<FUNC, T, HAS_SRC1, HAS_DEST1, UNROLL, THREADS>(src0, src1, dest0, dest1, idx);
     }
+
+    int Ndone2a = Nalign2a * PackFactor;
+    Nrem -= Ndone2a;
 
     // stage 2b: slightly less optimized for section when we don't have full
     // UNROLLs
-    int Ndone2a = Nalign * (sizeof(PackType)/sizeof(T));
-    Ndone += Ndone2a;
-    Nrem = N - Ndone;
 
-    // TODO: This kind of pointer update arithmetic is expensive.  Should
-    // probably find a better way.
-    if (Nrem > 0) {
-      dest0 += Ndone2a; if (HAS_DEST1) { dest1 += Ndone2a; }
-      src0  += Ndone2a; if (HAS_SRC1)  { src1  += Ndone2a; }
-    }
-
-    Nalign = Nrem / (sizeof(PackType)/sizeof(T));
+    int Nalign2b = Nrem / PackFactor;
 
     #pragma unroll 4
-    for (int idx = tid; idx < Nalign; idx += THREADS) {
-      PackType t0, t1, t2;
-
-      FetchOneOrTwo64b<T, HAS_SRC1>(t0, src0, t1, src1, idx);
-      t2 = ReduceOrCopy64b<FUNC, T, HAS_SRC1>(t0, t1);
-      StoreOneOrTwo64b<T, HAS_DEST1>(dest0, dest1, t2, idx);
+    for (int idx = Nalign2a + tid; idx < Nalign2a + Nalign2b; idx += THREADS) {
+      ReduceCopy64b<FUNC, T, HAS_SRC1, HAS_DEST1, 1, 0>(src0, src1, dest0, dest1, idx);
     }
+
+    int Ndone2b = Nalign2b * PackFactor;
+    Nrem -= Ndone2b;
+    int Ndone2 = Ndone2a + Ndone2b;
+    dest0 += Ndone2; if (HAS_DEST1) { dest1 += Ndone2; }
+    src0  += Ndone2; if (HAS_SRC1)  { src1  += Ndone2; }
 
     // stage 2c: tail
-    int Ndone2b = Nalign * (sizeof(PackType)/sizeof(T));
-    Ndone += Nalign * (sizeof(PackType)/sizeof(T));
-    Nrem = N - Ndone;
-
-    if (Nrem > 0) {
-      dest0 += Ndone2b; if (HAS_DEST1) { dest1 += Ndone2b; }
-      src0  += Ndone2b; if (HAS_SRC1)  { src1  += Ndone2b; }
-    }
 
     for (int idx = tid; idx < Nrem; idx += THREADS) {
       // never ought to make it more than one time through this loop.  only a
       // few threads should even participate
-      T val = vFetch(src0+idx);
-      if (HAS_SRC1) {
-        val = FUNC()(val, vFetch(src1+idx));
-      }
-
-      vStore(dest0+idx, val);
-      if (HAS_DEST1) {
-        vStore(dest1+idx, val);
-      }
+      ReduceCopy<FUNC, T, HAS_SRC1, HAS_DEST1>(src0, src1, dest0, dest1, idx);
     }
   } // done fast path
 }
 
-template<int THREADS, int UNROLL, typename T>
-__device__ inline void CalcLastChunk(int * const bigSliceN,
-    int * const smallSliceN, int * const lastSliceN, int * const numSlices,
-    int * const numBigSlices, int * const numSmallSlices, const int N,
-    const int numChunks, const int chunkSize) {
-  int Nleft = N - ((numChunks - 1) * chunkSize);
-  // semi-equally split up the remaining work into numslices slices.
-  // it's "semi"-equal because we want the divisions to land as neatly as we
-  // can on alignable boundaries
-  int NperTile = UNROLL * THREADS * (sizeof(PackType)/sizeof(T));
-  int numTiles = (Nleft + NperTile - 1) / NperTile;
-  int numTilesPerBigSlice = (numTiles + *numSlices - 1)
-      / *numSlices;
-  int numTilesPerSmallSlice = numTiles / *numSlices;
+template <typename T>
+__device__ inline void incrementOpCounter(const KernelArgs<T> *args) {
+  // increment comm's operation counts
+  __threadfence_system(); // Technically need to ensure that cleared flags
+  // are visible before incrementing op counter.
+  *args->opCounter = args->opIndex+1;
+}
 
-  *bigSliceN   = NperTile * numTilesPerBigSlice;
-  *smallSliceN = NperTile * numTilesPerSmallSlice;
-  *numBigSlices = numTiles % *numSlices;
-  *numSmallSlices = (*smallSliceN > 0) ?
-      *numSlices - *numBigSlices : 0;
-
-  // the lastSlice will take the place of one of the small slices unless
-  // there are no small slices (because this is a very small reduction), in
-  // which case we replace one of the big slices and leave the small slices
-  // as 0.
-  if (*numSmallSlices > 0) {
-    --*numSmallSlices;
-    if (*numSmallSlices == 0)
-      *smallSliceN = 0;
+template <int THREADS, typename T> __device__ __forceinline__
+void LoadRing(const DevRing<char>* src, DevRing<T>* dst) {
+  enum { NUM_WORDS = sizeof(DevRing<char>) / sizeof(long long) };
+  static_assert(sizeof(DevRing<char>) % sizeof(long long) == 0, "Bad alignment");
+  static_assert(THREADS >= NUM_WORDS, "Not enough threads to load DevRing");
+  static_assert(sizeof(DevRing<char>) == sizeof(DevRing<T>), "DevRing size mismatch");
+  long long* lldst = reinterpret_cast<long long*>(dst);
+  const long long* llsrc = reinterpret_cast<const long long*>(src);
+  if (threadIdx.x < NUM_WORDS) {
+    lldst[threadIdx.x] = llsrc[threadIdx.x];
   }
-  else {
-    --*numBigSlices;
-    if (*numBigSlices == 0)
-      *bigSliceN = 0;
-  }
-
-  *lastSliceN = Nleft -
-      (*numBigSlices * *bigSliceN
-          + *numSmallSlices * *smallSliceN);
-
-  // in cases where args.N % numSlices is pretty small, we'd rather have one
-  // slightly big last slice than one big slice, a bunch of small slices,
-  // and one smaller last slice
-  if ((*numBigSlices == 1) &&
-      (*numSmallSlices == *numSlices - 2) &&
-      (*lastSliceN < *smallSliceN)) {
-    *numBigSlices += *numSmallSlices;
-    *numSmallSlices = 0;
-    *bigSliceN = *smallSliceN;
-    *smallSliceN = 0;
-    *lastSliceN = Nleft -
-        *numBigSlices * *bigSliceN;
-  }
-
-  // done recalculating
-  *numSlices = *numBigSlices +
-      *numSmallSlices + 1;
 }
 
 

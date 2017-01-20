@@ -1,29 +1,7 @@
 /*************************************************************************
  * Copyright (c) 2015-2016, NVIDIA CORPORATION. All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *  * Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *  * Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *  * Neither the name of NVIDIA CORPORATION nor the names of its
- *    contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
- * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
- * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * See LICENSE.txt for license information
  ************************************************************************/
 
 
@@ -32,6 +10,13 @@
 
 #include "common_kernel.h"
 #include <limits>
+
+template<typename T>
+struct FuncNull {
+  __device__ T operator()(const T x, const T y) const {
+    return 0;
+  }
+};
 
 template<typename T>
 struct FuncSum {
@@ -214,30 +199,46 @@ struct FuncMin<char> {
 template<>
 struct FuncSum<half> {
   __device__ half2 operator()(const half2 x, const half2 y) const {
+#if __CUDA_ARCH__ >= 530
+    return __hadd2(x, y);
+#else
     float2 fx, fy, fr;
     fx = __half22float2(x);
     fy = __half22float2(y);
     fr.x = fx.x + fy.x;
     fr.y = fx.y + fy.y;
     return __float22half2_rn(fr);
+#endif
   }
   __device__ half operator()(const half x, const half y) const {
+#if __CUDA_ARCH__ >= 530
+    return __hadd(x, y);
+#else
     return __float2half( __half2float(x) + __half2float(y) );
+#endif
   }
 };
 
 template<>
 struct FuncProd<half> {
   __device__ half2 operator()(const half2 x, const half2 y) const {
+#if __CUDA_ARCH__ >= 530
+    return __hmul2(x, y);
+#else
     float2 fx, fy, fr;
     fx = __half22float2(x);
     fy = __half22float2(y);
     fr.x = fx.x * fy.x;
     fr.y = fx.y * fy.y;
     return __float22half2_rn(fr);
+#endif
   }
   __device__ half operator()(const half x, const half y) const {
+#if __CUDA_ARCH__ >= 530
+    return __hmul(x, y);
+#else
     return __float2half( __half2float(x) * __half2float(y) );
+#endif
   }
 };
 
@@ -247,15 +248,15 @@ struct FuncMax<half> {
     float2 fx, fy, fr;
     fx = __half22float2(x);
     fy = __half22float2(y);
-    fr.x = fx.x > fy.x ? fx.x : fy.x;
-    fr.y = fx.y > fy.y ? fx.y : fy.y;
+    fr.x = fmaxf(fx.x, fy.x);
+    fr.y = fmaxf(fx.y, fy.y);
     return __float22half2_rn(fr);
   }
   __device__ half operator()(const half x, const half y) const {
     float fx, fy, fm;
     fx = __half2float(x);
     fy = __half2float(y);
-    fm = fx > fy ? fx : fy;
+    fm = fmaxf(fx, fy);
     return __float2half(fm);
   }
 };
@@ -266,15 +267,15 @@ struct FuncMin<half> {
     float2 fx, fy, fr;
     fx = __half22float2(x);
     fy = __half22float2(y);
-    fr.x = fx.x < fy.x ? fx.x : fy.x;
-    fr.y = fx.y < fy.y ? fx.y : fy.y;
+    fr.x = fminf(fx.x, fy.x);
+    fr.y = fminf(fx.y, fy.y);
     return __float22half2_rn(fr);
   }
   __device__ half operator()(const half x, const half y) const {
     float fx, fy, fm;
     fx = __half2float(x);
     fy = __half2float(y);
-    fm = fx < fy ? fx : fy;
+    fm = fminf(fx, fy);
     return __float2half(fm);
   }
 };

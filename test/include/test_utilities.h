@@ -1,29 +1,7 @@
 /*************************************************************************
  * Copyright (c) 2015-2016, NVIDIA CORPORATION. All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *  * Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *  * Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *  * Neither the name of NVIDIA CORPORATION nor the names of its
- *    contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
- * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
- * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * See LICENCE.txt for license information
  ************************************************************************/
 
 
@@ -31,6 +9,7 @@
 #define SRC_TEST_UTILITIES_H_
 
 #include <curand.h>
+#include <cerrno>
 #include <string>
 
 #define CUDACHECK(cmd) do {                         \
@@ -157,6 +136,27 @@ void Randomize<half>(half* const dest, const int N, const int randomSeed) {
 }
 #endif
 
+void makeRandom(void* ptr, int n, ncclDataType_t type, int seed) {
+  if (type == ncclChar)
+    Randomize<char>((char*)ptr, n, seed);
+  else if (type == ncclInt)
+    Randomize<int>((int*)ptr, n, seed);
+#ifdef CUDA_HAS_HALF
+  else if (type == ncclHalf)
+    Randomize<half>((half*)ptr, n, seed);
+#endif
+  else if (type == ncclFloat)
+    Randomize<float>((float*)ptr, n, seed);
+  else if (type == ncclDouble)
+    Randomize<double>((double*)ptr, n, seed);
+  else if (type == ncclInt64)
+    Randomize<long long>((long long*)ptr, n, seed);
+  else if (type == ncclUint64)
+    Randomize<unsigned long long>((unsigned long long*)ptr, n, seed);
+
+  return;
+}
+
 template<typename T, int OP> __global__ static
 void accumKern(T* acum, const T* contrib, int N) {
   int tid = threadIdx.x + blockIdx.x*blockDim.x;
@@ -223,21 +223,43 @@ void accumKern<half, ncclMin>(half* acum, const half* contrib, int N) {
 #endif
 
 template<typename T>
+void accVecType(void* out, void* in, int n, ncclRedOp_t op) {
+  switch(op) {
+    case ncclSum:  accumKern<T, ncclSum> <<<256,256>>>((T*)out, (T*)in, n); break;
+    case ncclProd: accumKern<T, ncclProd><<<256,256>>>((T*)out, (T*)in, n); break;
+    case ncclMax:  accumKern<T, ncclMax> <<<256,256>>>((T*)out, (T*)in, n); break;
+    case ncclMin:  accumKern<T, ncclMin> <<<256,256>>>((T*)out, (T*)in, n); break;
+    default:
+      printf("Unknown reduction operation.\n");
+      exit(EXIT_FAILURE);
+  }
+}
+
+template<typename T>
 void Accumulate(T* dest, const T* contrib, int N, ncclRedOp_t op) {
 
   T* devdest;
   CUDACHECK(cudaHostRegister(dest, N*sizeof(T), 0));
   CUDACHECK(cudaHostGetDevicePointer(&devdest, dest, 0));
-  switch(op) {
-    case ncclSum:  accumKern<T, ncclSum> <<<256,256>>>(devdest, contrib, N); break;
-    case ncclProd: accumKern<T, ncclProd><<<256,256>>>(devdest, contrib, N); break;
-    case ncclMax:  accumKern<T, ncclMax> <<<256,256>>>(devdest, contrib, N); break;
-    case ncclMin:  accumKern<T, ncclMin> <<<256,256>>>(devdest, contrib, N); break;
+  accVecType<T>((void*)devdest, (void*)contrib, N, op);
+  CUDACHECK(cudaHostUnregister(dest));
+}
+
+void accVec(void* out, void* in, int n, ncclDataType_t type, ncclRedOp_t op) {
+  switch (type) {
+    case ncclChar:   accVecType<char>               (out, in, n, op); break;
+    case ncclInt:    accVecType<int>                (out, in, n, op); break;
+#ifdef CUDA_HAS_HALF
+    case ncclHalf:   accVecType<half>               (out, in, n, op); break;
+#endif
+    case ncclFloat:  accVecType<float>              (out, in, n, op); break;
+    case ncclDouble: accVecType<double>             (out, in, n, op); break;
+    case ncclInt64:  accVecType<long long>          (out, in, n, op); break;
+    case ncclUint64: accVecType<unsigned long long> (out, in, n, op); break;
     default:
-      printf("Unknown reduction operation.\n");
+      printf("Unknown reduction type.\n");
       exit(EXIT_FAILURE);
   }
-  CUDACHECK(cudaHostUnregister(dest));
 }
 
 template<typename T> __device__
@@ -292,6 +314,22 @@ double CheckDelta(const T* results, const T* expected, int N) {
   return maxerr;
 }
 
+void maxDiff(double* max, void* first, void* second, int n, ncclDataType_t type, cudaStream_t s) {
+  switch (type) {
+    case ncclChar:   deltaKern<char, 512>              <<<1,512,0,s>>>((char*)first, (char*)second, n, max); break;
+    case ncclInt:    deltaKern<int, 512>               <<<1,512,0,s>>>((int*)first, (int*)second, n, max); break;
+#ifdef CUDA_HAS_HALF
+    case ncclHalf:   deltaKern<half, 512>              <<<1,512,0,s>>>((half*)first, (half*)second, n, max); break;
+#endif
+    case ncclFloat:  deltaKern<float, 512>             <<<1,512,0,s>>>((float*)first, (float*)second, n, max); break;
+    case ncclDouble: deltaKern<double, 512>            <<<1,512,0,s>>>((double*)first, (double*)second, n, max); break;
+    case ncclInt64:  deltaKern<long long, 512>         <<<1,512,0,s>>>((long long*)first, (long long*)second, n, max); break;
+    case ncclUint64: deltaKern<unsigned long long, 512><<<1,512,0,s>>>((unsigned long long*)first, (unsigned long long*)second, n, max); break;
+    default:
+      printf("Unknown reduction type.\n");
+      exit(EXIT_FAILURE);
+  }
+}
 
 std::string TypeName(const ncclDataType_t type) {
   switch (type) {
@@ -318,5 +356,83 @@ std::string OperationName(const ncclRedOp_t op) {
   }
 }
 
+ncclDataType_t strToType(const char* s) {
+  if (strcmp(s, "char") == 0)
+    return ncclChar;
+  if (strcmp(s, "int") == 0)
+    return ncclInt;
+#ifdef CUDA_HAS_HALF
+  if (strcmp(s, "half") == 0)
+    return ncclHalf;
+#endif
+  if (strcmp(s, "float") == 0)
+    return ncclFloat;
+  if (strcmp(s, "double") == 0)
+    return ncclDouble;
+  if (strcmp(s, "int64") == 0)
+    return ncclInt64;
+  if (strcmp(s, "uint64") == 0)
+    return ncclUint64;
+
+  return nccl_NUM_TYPES;
+}
+
+size_t wordSize(ncclDataType_t type) {
+  switch(type) {
+    case ncclChar:   return sizeof(char);
+    case ncclInt:    return sizeof(int);
+#ifdef CUDA_HAS_HALF
+    case ncclHalf:   return sizeof(short);
+#endif
+    case ncclFloat:  return sizeof(float);
+    case ncclDouble: return sizeof(double);
+    case ncclInt64:  return sizeof(long long);
+    case ncclUint64: return sizeof(unsigned long long);
+  }
+
+  return 0;
+}
+
+double deltaMaxValue(ncclDataType_t type, bool is_reduction) {
+  if (is_reduction) {
+    switch(type) {
+#ifdef CUDA_HAS_HALF
+      case ncclHalf:   return 5e-2;
+#endif
+      case ncclFloat:  return 1e-5;
+      case ncclDouble: return 1e-12;
+    }
+  }
+  return 1e-200;
+}
+
+ncclRedOp_t strToOp(const char* s) {
+  if (strcmp(s, "sum") == 0)
+    return ncclSum;
+  if (strcmp(s, "prod") == 0)
+    return ncclProd;
+  if (strcmp(s, "max") == 0)
+    return ncclMax;
+  if (strcmp(s, "min") == 0)
+    return ncclMin;
+
+  return nccl_NUM_OPS;
+}
+
+int strToPosInt(const char* s) {
+  errno = 0;
+  long temp = strtol(s, NULL, 10);
+  if (errno != 0 || temp > INT_MAX || temp < 0)
+    return 0;
+  return (int)temp;
+}
+
+int strToNonNeg(const char* s) {
+  errno = 0;
+  long temp = strtol(s, NULL, 10);
+  if (errno != 0 || temp > INT_MAX || temp < 0)
+    return -1;
+  return (int)temp;
+}
 
 #endif // SRC_TEST_UTILITIES_H_

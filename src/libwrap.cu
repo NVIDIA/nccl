@@ -1,29 +1,7 @@
 /*************************************************************************
  * Copyright (c) 2015-2016, NVIDIA CORPORATION. All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *  * Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *  * Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *  * Neither the name of NVIDIA CORPORATION nor the names of its
- *    contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
- * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
- * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * See LICENSE.txt for license information
  ************************************************************************/
 
 #include "libwrap.h"
@@ -31,40 +9,39 @@
 
 #ifndef _WIN32
 #include <dlfcn.h>
-typedef void *HMODULE;
+typedef void *nvmlHandle_t;
 #else
 #include <windows.h>
+typedef HMODULE nvmlHandle_t;
 
 #define dlsym(handle, sym) GetProcAddress((handle), (sym))
 #define dlclose(handle) CloseHandle((handle))
 inline const char *dlerror() { return "N/A"; }
 #endif
 
-typedef enum { SUCCESS = 0 } RetCode;
 int symbolsLoaded = 0;
 
-static RetCode (*nvmlInternalInit)(void);
-static RetCode (*nvmlInternalShutdown)(void);
-static RetCode (*nvmlInternalDeviceGetHandleByPciBusId)(const char* pciBusId, nvmlDevice_t* device);
-static RetCode (*nvmlInternalDeviceGetIndex)(nvmlDevice_t device, unsigned* index);
-static RetCode (*nvmlInternalDeviceSetCpuAffinity)(nvmlDevice_t device);
-static RetCode (*nvmlInternalDeviceClearCpuAffinity)(nvmlDevice_t device);
-static const char* (*nvmlInternalErrorString)(RetCode r);
+static nvmlReturn_t (*nvmlInternalInit)(void);
+static nvmlReturn_t (*nvmlInternalShutdown)(void);
+static nvmlReturn_t (*nvmlInternalDeviceGetHandleByPciBusId)(const char* pciBusId, nvmlDevice_t* device);
+static nvmlReturn_t (*nvmlInternalDeviceGetIndex)(nvmlDevice_t device, unsigned* index);
+static nvmlReturn_t (*nvmlInternalDeviceSetCpuAffinity)(nvmlDevice_t device);
+static nvmlReturn_t (*nvmlInternalDeviceClearCpuAffinity)(nvmlDevice_t device);
+static const char* (*nvmlInternalErrorString)(nvmlReturn_t r);
 
 ncclResult_t wrapSymbols(void) {
 
   if (symbolsLoaded)
     return ncclSuccess;
 
-  static HMODULE nvmlhandle = NULL;
-  static HMODULE cuhandle = NULL;
+  static nvmlHandle_t nvmlhandle = NULL;
   void* tmp;
   void** cast;
 
 #ifdef _WIN32
   nvmlhandle=LoadLibraryA("nvml.dll");
   if(!nvmlhandle) {
-      nvmlhandle=LoadLibraryA("C:\\Program Files\\NVIDIA Corporation\\NVSMI\\nvml.dll");
+      nvmlhandle=LoadLibraryA("%ProgramFiles%\\NVIDIA Corporation\\NVSMI\\nvml.dll");
       if(!nvmlhandle) {
           WARN("Failed to open nvml.dll");
           goto teardown;
@@ -80,21 +57,12 @@ ncclResult_t wrapSymbols(void) {
     }
   }
 
-  cuhandle = dlopen("libcuda.so", RTLD_NOW);
-  if (!cuhandle) {
-    cuhandle = dlopen("libcuda.so.1", RTLD_NOW);
-    if (!cuhandle) {
-      WARN("Failed to open libcuda.so[.1]");
-      goto teardown;
-    }
-  }
 #endif
-
   #define LOAD_SYM(handle, symbol, funcptr) do {         \
     cast = (void**)&funcptr;                             \
     tmp = dlsym(handle, symbol);                         \
     if (tmp == NULL) {                                   \
-      WARN("dlsym failed on %s - %s", symbol, dlerror()); \
+      WARN("dlsym failed on %s - %s", symbol, dlerror());\
       goto teardown;                                     \
     }                                                    \
     *cast = tmp;                                         \
@@ -119,7 +87,6 @@ ncclResult_t wrapSymbols(void) {
   nvmlInternalDeviceSetCpuAffinity = NULL;
   nvmlInternalDeviceClearCpuAffinity = NULL;
 
-  if (cuhandle   != NULL) dlclose(cuhandle);
   if (nvmlhandle != NULL) dlclose(nvmlhandle);
   return ncclSystemError;
 }
@@ -127,11 +94,11 @@ ncclResult_t wrapSymbols(void) {
 
 ncclResult_t wrapNvmlInit(void) {
   if (nvmlInternalInit == NULL) {
-    WARN("lib wrapper not initilaized.");
+    WARN("lib wrapper not initialized.");
     return ncclLibWrapperNotSet;
   }
-  RetCode ret = nvmlInternalInit();
-  if (ret != SUCCESS) {
+  nvmlReturn_t ret = nvmlInternalInit();
+  if (ret != NVML_SUCCESS) {
     WARN("nvmlInit() failed: %s",
       nvmlInternalErrorString(ret));
     return ncclSystemError;
@@ -141,11 +108,11 @@ ncclResult_t wrapNvmlInit(void) {
 
 ncclResult_t wrapNvmlShutdown(void) {
   if (nvmlInternalShutdown == NULL) {
-    WARN("lib wrapper not initilaized.");
+    WARN("lib wrapper not initialized.");
     return ncclLibWrapperNotSet;
   }
-  RetCode ret = nvmlInternalShutdown();
-  if (ret != SUCCESS) {
+  nvmlReturn_t ret = nvmlInternalShutdown();
+  if (ret != NVML_SUCCESS) {
     WARN("nvmlShutdown() failed: %s ",
       nvmlInternalErrorString(ret));
     return ncclSystemError;
@@ -155,11 +122,11 @@ ncclResult_t wrapNvmlShutdown(void) {
 
 ncclResult_t wrapNvmlDeviceGetHandleByPciBusId(const char* pciBusId, nvmlDevice_t* device) {
   if (nvmlInternalDeviceGetHandleByPciBusId == NULL) {
-    WARN("lib wrapper not initilaized.");
+    WARN("lib wrapper not initialized.");
     return ncclLibWrapperNotSet;
   }
-  RetCode ret = nvmlInternalDeviceGetHandleByPciBusId(pciBusId, device);
-  if (ret != SUCCESS) {
+  nvmlReturn_t ret = nvmlInternalDeviceGetHandleByPciBusId(pciBusId, device);
+  if (ret != NVML_SUCCESS) {
     WARN("nvmlDeviceGetHandleByPciBusId() failed: %s ",
       nvmlInternalErrorString(ret));
     return ncclSystemError;
@@ -169,11 +136,11 @@ ncclResult_t wrapNvmlDeviceGetHandleByPciBusId(const char* pciBusId, nvmlDevice_
 
 ncclResult_t wrapNvmlDeviceGetIndex(nvmlDevice_t device, unsigned* index) {
   if (nvmlInternalDeviceGetIndex == NULL) {
-    WARN("lib wrapper not initilaized.");
+    WARN("lib wrapper not initialized.");
     return ncclLibWrapperNotSet;
   }
-  RetCode ret = nvmlInternalDeviceGetIndex(device, index);
-  if (ret != SUCCESS) {
+  nvmlReturn_t ret = nvmlInternalDeviceGetIndex(device, index);
+  if (ret != NVML_SUCCESS) {
     WARN("nvmlDeviceGetIndex() failed: %s ",
       nvmlInternalErrorString(ret));
     return ncclSystemError;
@@ -183,11 +150,11 @@ ncclResult_t wrapNvmlDeviceGetIndex(nvmlDevice_t device, unsigned* index) {
 
 ncclResult_t wrapNvmlDeviceSetCpuAffinity(nvmlDevice_t device) {
   if (nvmlInternalDeviceSetCpuAffinity == NULL) {
-    WARN("lib wrapper not initilaized.");
+    WARN("lib wrapper not initialized.");
     return ncclLibWrapperNotSet;
   }
-  RetCode ret = nvmlInternalDeviceSetCpuAffinity(device);
-  if (ret != SUCCESS) {
+  nvmlReturn_t ret = nvmlInternalDeviceSetCpuAffinity(device);
+  if (ret != NVML_SUCCESS) {
     WARN("nvmlDeviceSetCpuAffinity() failed: %s ",
       nvmlInternalErrorString(ret));
     return ncclSystemError;
@@ -197,11 +164,11 @@ ncclResult_t wrapNvmlDeviceSetCpuAffinity(nvmlDevice_t device) {
 
 ncclResult_t wrapNvmlDeviceClearCpuAffinity(nvmlDevice_t device) {
   if (nvmlInternalInit == NULL) {
-    WARN("lib wrapper not initilaized.");
+    WARN("lib wrapper not initialized.");
     return ncclLibWrapperNotSet;
   }
-  RetCode ret = nvmlInternalDeviceClearCpuAffinity(device);
-  if (ret != SUCCESS) {
+  nvmlReturn_t ret = nvmlInternalDeviceClearCpuAffinity(device);
+  if (ret != NVML_SUCCESS) {
     WARN("nvmlDeviceClearCpuAffinity() failed: %s ",
       nvmlInternalErrorString(ret));
     return ncclSystemError;

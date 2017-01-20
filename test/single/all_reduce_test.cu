@@ -1,29 +1,7 @@
 /*************************************************************************
  * Copyright (c) 2015-2016, NVIDIA CORPORATION. All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *  * Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *  * Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *  * Neither the name of NVIDIA CORPORATION nor the names of its
- *    contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
- * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
- * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * See LICENCE.txt for license information
  ************************************************************************/
 
 #include <algorithm>
@@ -38,6 +16,10 @@
 #include <nvToolsExt.h>
 
 int csv = false;
+int errors = 0;
+double avg_bw = 0.0;
+int avg_count = 0;
+bool is_reduction = true;
 
 template<typename T>
 void RunTest(T** sendbuff, T** recvbuff, const int N, const ncclDataType_t type,
@@ -118,6 +100,10 @@ void RunTest(T** sendbuff, T** recvbuff, const int N, const ncclDataType_t type,
     printf((csv)?"%f,%f,%f,%le,":"  %7.3f  %5.2f  %5.2f  %7.0le",
         elapsedSec * 1.0E3, algbw, busbw, maxDelta);
 
+    if (maxDelta > deltaMaxValue(type, is_reduction)) errors++;
+    avg_bw += busbw;
+    avg_count++;
+
     nvtxRangePop();
   }
 
@@ -160,6 +146,10 @@ void RunTest(T** sendbuff, T** recvbuff, const int N, const ncclDataType_t type,
 
     printf((csv)?"%f,%f,%f,%le,":"  %7.3f  %5.2f  %5.2f  %7.0le\n",
         elapsedSec * 1.0E3, algbw, busbw, maxDelta);
+
+    if (maxDelta > deltaMaxValue(type, is_reduction)) errors++;
+    avg_bw += busbw;
+    avg_count++;
 
     nvtxRangePop();
   }
@@ -283,7 +273,7 @@ int main(int argc, char* argv[]) {
 
   RunTests<char>(N / sizeof(char), ncclChar, comms, dList);
   RunTests<int>(N / sizeof(int), ncclInt, comms, dList);
-#if CUDART_VERSION >= 7050
+#ifdef CUDA_HAS_HALF
   RunTests<half>(N / sizeof(half), ncclHalf, comms, dList);
 #endif
   RunTests<float>(N / sizeof(float), ncclFloat, comms, dList);
@@ -297,6 +287,16 @@ int main(int argc, char* argv[]) {
     ncclCommDestroy(comms[i]);
   free(comms);
 
-  exit(EXIT_SUCCESS);
+  char* str = getenv("NCCL_TESTS_MIN_BW");
+  double check_avg_bw = str ? atof(str) : -1;
+  avg_bw /= avg_count;
+
+  printf(" Out of bounds values : %d %s\n", errors, errors ? "FAILED" : "OK");
+  printf(" Avg bus bandwidth    : %g %s\n", avg_bw, check_avg_bw == -1 ? "" : (avg_bw < check_avg_bw ? "FAILED" : "OK"));
+  printf("\n");
+  if (errors || avg_bw < check_avg_bw)
+    exit(EXIT_FAILURE);
+  else 
+    exit(EXIT_SUCCESS);
 }
 

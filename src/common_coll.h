@@ -102,14 +102,26 @@ void ArgsSetup(KernelArgs<T> *args, const void* sendbuff, void* recvbuff,
   args->pushrecv = comm->globalMemSpace;
 }
 
+#ifdef _WIN32 
 #define LAUNCH_KERNEL(K, THREADS, UNROLL, FUNC, T, \
 		args, stream) do { \
   dim3 grid(1, 1, 1); \
   dim3 block(THREADS+1, 1, 1); \
   void* argptrs[] = {&args}; \
   CUDACHECK(cudaLaunchKernel( \
-            (void*)K<THREADS, UNROLL, FUNC, T>, \
+                             (K<THREADS, UNROLL, FUNC, T>), \
             grid, block, argptrs, 0, stream), ncclUnhandledCudaError); \
 } while (0)
+#else 
+#define LAUNCH_KERNEL(K, THREADS, UNROLL, FUNC, T, \
+		args, stream) do { \
+  dim3 grid(1, 1, 1); \
+  dim3 block(THREADS+1, 1, 1); \
+  void* argptrs[] = {&args}; \
+  CUDACHECK(cudaLaunchKernel( \
+                             reinterpret_cast<void*>(K<THREADS, UNROLL, FUNC, T>), \
+            grid, block, argptrs, 0, stream), ncclUnhandledCudaError); \
+} while (0)
+#endif 
 
 #endif

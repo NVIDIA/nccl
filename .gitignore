@@ -1,2 +1,11 @@
 # Copyright (c) 2015-2016, NVIDIA CORPORATION. All rights reserved.
 /build
+Win32/
+x64/
+*.sdf
+*.user
+*.opensdf
+*.pdb
+*.suo
+windows/test/test/
+*.VC.db

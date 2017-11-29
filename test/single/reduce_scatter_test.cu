@@ -4,6 +4,7 @@
  * See LICENCE.txt for license information
  ************************************************************************/
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>

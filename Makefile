@@ -62,7 +62,7 @@ CUDA_MAJOR = $(shell echo $(CUDA_VERSION) | cut -d "." -f 1)
 CUDA_MINOR = $(shell echo $(CUDA_VERSION) | cut -d "." -f 2)
 CXXFLAGS  += -DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR)
 
-.PHONY : all lib staticlib clean test mpitest install deb debian debclean forlib fortest forclean
+.PHONY : all lib staticlib clean test mpitest install deb debian debclean forall forlib forstaticlib fortest forclean
 .DEFAULT : all
 
 INCEXPORTS  := nccl.h
@@ -227,8 +227,12 @@ $(DEBIANDIR)/% : debian/%
 
 export NCCL_MAJOR NCCL_MINOR NCCL_PATCH CUDA_MAJOR CUDA_MINOR LIBLINK CUDA_LIB BUILDDIR
 
+forall : all
+	$(MAKE) -C fortran all
 forlib : lib
 	$(MAKE) -C fortran lib
+forstaticlib : staticlib
+	$(MAKE) -C fortran staticlib
 fortest : forlib
 	$(MAKE) -C fortran test
 forclean :

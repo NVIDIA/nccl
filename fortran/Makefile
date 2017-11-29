@@ -7,11 +7,14 @@ LIBDIR := $(BUILDDIR)/lib
 OBJDIR := $(BUILDDIR)/obj
 
 LIBNAME    := libncclfor.so
+STATICLIBNAME    := libncclfor_static.a
 LIBSONAME  := $(patsubst %,%.$(NCCL_MAJOR),$(LIBNAME))
 LIBTARGET  := $(patsubst %,%.$(NCCL_MAJOR).$(NCCL_MINOR).$(NCCL_PATCH),$(LIBNAME))
+STATICLIBTARGET := $(STATICLIBNAME)
 LIBLINK    += $(patsubst lib%.so,-l%,$(LIBNAME))
 
 LIBCUDAFOR := libcudafor.so
+STATICLIBCUDAFOR := libcudafor_static.a
 
 ifneq ($(filter pgf%, $(FCNAME)), )
 # PGI compiler (pgfortran, pgf90, pgf95)
@@ -22,6 +25,7 @@ FCFLAGS     := -fast -O3
 else
 # non-PGI compilers do not have CUDA support, compile our own CUDA lib
 CUDAFORDEP  := $(LIBDIR)/$(LIBCUDAFOR)
+STATICCUDAFORDEP  := $(LIBDIR)/$(STATICLIBCUDAFOR)
 CUDALINK    := -L$(CUDA_LIB) -lcudart
 CUDAFORLINK := -lcudafor
 ifeq ($(FCNAME), gfortran)
@@ -38,8 +42,13 @@ ifeq ($(VERBOSE), 0)
 .SILENT:
 endif
 
+all: lib staticlib
+
 lib: $(CUDAFORDEP)
 	$(MAKE) $(LIBDIR)/$(LIBTARGET)
+
+staticlib: $(STATICCUDAFORDEP)
+	$(MAKE) $(LIBDIR)/$(STATICLIBTARGET)
 
 $(LIBDIR)/$(LIBTARGET): $(OBJDIR)/ncclfor.o
 	@printf "Linking   %-35s > %s\n" $(LIBTARGET) $@
@@ -48,10 +57,20 @@ $(LIBDIR)/$(LIBTARGET): $(OBJDIR)/ncclfor.o
 	ln -sf $(LIBSONAME) $(LIBDIR)/$(LIBNAME)
 	ln -sf $(LIBTARGET) $(LIBDIR)/$(LIBSONAME)
 
+$(LIBDIR)/$(STATICLIBTARGET): $(OBJDIR)/ncclfor.o
+	@printf "Archiving %-35s > %s\n" $(STATICLIBTARGET) $@
+	mkdir -p $(LIBDIR)
+	ar cr $@ $<
+
 $(LIBDIR)/$(LIBCUDAFOR): $(OBJDIR)/cudafor.o
 	@printf "Linking   %-35s > %s\n" $(LIBCUDAFOR) $@
 	mkdir -p $(LIBDIR)
 	$(FC) -shared -Wl,--no-as-needed -Wl,-soname,$(LIBCUDAFOR) $< -o $(LIBDIR)/$(LIBCUDAFOR)
+
+$(LIBDIR)/$(STATICLIBCUDAFOR): $(OBJDIR)/cudafor.o
+	@printf "Archiving %-35s > %s\n" $(STATICLIBCUDAFOR) $@
+	mkdir -p $(LIBDIR)
+	ar cr $@ $<
 
 $(OBJDIR)/%.o: src/%.f90
 	@printf "Building  %-35s > %s\n" $< $@

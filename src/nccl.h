@@ -16,6 +16,16 @@
 #undef CUDA_HAS_HALF
 #endif
 
+#ifdef _WIN32
+    #ifdef COMPILING_NCCL
+        #define NCCL_EXPORTED _declspec(dllexport)
+    #else
+        #define NCCL_EXPORTED _declspec(dllimport)
+    #endif
+#else
+    #define NCCL_EXPORTED
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -47,7 +57,7 @@ typedef enum { ncclSuccess                 =  0,
 /* Generates a unique Id with each call. Used to generate commId for
  * ncclCommInitAll. uniqueId will be created in such a way that it is
  * guaranteed to be unique accross the host. */
-ncclResult_t  ncclGetUniqueId(ncclUniqueId* uniqueId);
+NCCL_EXPORTED ncclResult_t  ncclGetUniqueId(ncclUniqueId* uniqueId);
 ncclResult_t pncclGetUniqueId(ncclUniqueId* uniqueId);
 
 /* Creates a new communicator (multi process version).
@@ -56,7 +66,7 @@ ncclResult_t pncclGetUniqueId(ncclUniqueId* uniqueId);
  * The communicator is created on the current CUDA device.
  * ncclCommInitRank implicitly syncronizes with other ranks, so INIT OF EACH RANK MUST
  * BE CALLED IN A SEPARATE HOST THREADS to avoid deadlock. */
-ncclResult_t  ncclCommInitRank(ncclComm_t* comm, int ndev, ncclUniqueId commId, int rank);
+NCCL_EXPORTED ncclResult_t  ncclCommInitRank(ncclComm_t* comm, int ndev, ncclUniqueId commId, int rank);
 ncclResult_t pncclCommInitRank(ncclComm_t* comm, int ndev, ncclUniqueId commId, int rank);
 
 /* Creates a clique of communicators.
@@ -65,27 +75,27 @@ ncclResult_t pncclCommInitRank(ncclComm_t* comm, int ndev, ncclUniqueId commId, 
  * comm should be pre-allocated with size at least ndev*sizeof(ncclComm_t).
  * If devlist is NULL, the first ndev CUDA devices are used.
  * Order of devlist defines user-order of processors within the communicator. */
-ncclResult_t  ncclCommInitAll(ncclComm_t* comm, int ndev, const int* devlist);
+NCCL_EXPORTED ncclResult_t  ncclCommInitAll(ncclComm_t* comm, int ndev, const int* devlist);
 ncclResult_t pncclCommInitAll(ncclComm_t* comm, int ndev, const int* devlist);
 
 /* Frees resources associated with communicator object. */
-void  ncclCommDestroy(ncclComm_t comm);
+NCCL_EXPORTED void  ncclCommDestroy(ncclComm_t comm);
 void pncclCommDestroy(ncclComm_t comm);
 
 /* Returns nice error message. */
-const char*  ncclGetErrorString(ncclResult_t result);
+NCCL_EXPORTED const char*  ncclGetErrorString(ncclResult_t result);
 const char* pncclGetErrorString(ncclResult_t result);
 
 /* Sets count to number of devices in the communicator clique. */
-ncclResult_t  ncclCommCount(const ncclComm_t comm, int* count);
+NCCL_EXPORTED ncclResult_t  ncclCommCount(const ncclComm_t comm, int* count);
 ncclResult_t pncclCommCount(const ncclComm_t comm, int* count);
 
 /* Returns cuda device number associated with communicator. */
-ncclResult_t ncclCommCuDevice(const ncclComm_t comm, int* device);
+NCCL_EXPORTED ncclResult_t ncclCommCuDevice(const ncclComm_t comm, int* device);
 ncclResult_t pncclCommCuDevice(const ncclComm_t comm, int* device);
 
 /* Returns user-ordered "rank" assocaiated with communicator. */
-ncclResult_t  ncclCommUserRank(const ncclComm_t comm, int* rank);
+NCCL_EXPORTED ncclResult_t  ncclCommUserRank(const ncclComm_t comm, int* rank);
 ncclResult_t pncclCommUserRank(const ncclComm_t comm, int* rank);
 
 /* Reduction opperation selector */
@@ -113,7 +123,7 @@ typedef enum { ncclChar       = 0,
  * the same device.
  * Must be called separately for each communicator in communicator clique.
 */
-ncclResult_t  ncclReduce(const void* sendbuff, void* recvbuf, int count, ncclDataType_t datatype,
+NCCL_EXPORTED ncclResult_t  ncclReduce(const void* sendbuff, void* recvbuf, int count, ncclDataType_t datatype,
     ncclRedOp_t op, int root, ncclComm_t comm, cudaStream_t stream);
 ncclResult_t pncclReduce(const void* sendbuff, void* recvbuf, int count, ncclDataType_t datatype,
     ncclRedOp_t op, int root, ncclComm_t comm, cudaStream_t stream);
@@ -122,7 +132,7 @@ ncclResult_t pncclReduce(const void* sendbuff, void* recvbuf, int count, ncclDat
  * identical copies of result on each GPUs recvbuff.
  * Sendbuff and recvbuff are assumed to reside on the same device.
  * Must be called separately for each communicator in communicator clique. */
-ncclResult_t  ncclAllReduce(const void* sendbuff, void* recvbuff, int count,
+NCCL_EXPORTED ncclResult_t  ncclAllReduce(const void* sendbuff, void* recvbuff, int count,
     ncclDataType_t datatype, ncclRedOp_t op, ncclComm_t comm, cudaStream_t stream);
 ncclResult_t pncclAllReduce(const void* sendbuff, void* recvbuff, int count,
     ncclDataType_t datatype, ncclRedOp_t op, ncclComm_t comm, cudaStream_t stream);
@@ -133,7 +143,7 @@ ncclResult_t pncclAllReduce(const void* sendbuff, void* recvbuff, int count,
  * sendbuff has size at least ndev*recvcount elements, where ndev is number of
  * communicators in communicator clique
  * Must be called separately for each communicator in communicator clique.*/
-ncclResult_t  ncclReduceScatter(const void* sendbuff, void* recvbuff,
+NCCL_EXPORTED ncclResult_t  ncclReduceScatter(const void* sendbuff, void* recvbuff,
     int recvcount, ncclDataType_t datatype, ncclRedOp_t op, ncclComm_t comm,
     cudaStream_t stream);
 ncclResult_t pncclReduceScatter(const void* sendbuff, void* recvbuff,
@@ -144,7 +154,7 @@ ncclResult_t pncclReduceScatter(const void* sendbuff, void* recvbuff,
  * Root specifies the source device in user-order
  * (see ncclCommInit).
  * Must be called separately for each communicator in communicator clique. */
-ncclResult_t  ncclBcast(void* buff, int count, ncclDataType_t datatype, int root,
+NCCL_EXPORTED ncclResult_t  ncclBcast(void* buff, int count, ncclDataType_t datatype, int root,
     ncclComm_t comm, cudaStream_t stream);
 ncclResult_t pncclBcast(void* buff, int count, ncclDataType_t datatype, int root,
     ncclComm_t comm, cudaStream_t stream);
@@ -156,7 +166,7 @@ ncclResult_t pncclBcast(void* buff, int count, ncclDataType_t datatype, int root
  * in communicator clique.
  * Sendbuff and recvbuff are assumed to reside on same device.
  * Must be called separately for each communicator in communicator clique. */
-ncclResult_t  ncclAllGather(const void* sendbuff, int count, ncclDataType_t datatype,
+NCCL_EXPORTED ncclResult_t  ncclAllGather(const void* sendbuff, int count, ncclDataType_t datatype,
     void* recvbuff, ncclComm_t comm, cudaStream_t stream);
 ncclResult_t pncclAllGather(const void* sendbuff, int count, ncclDataType_t datatype,
     void* recvbuff, ncclComm_t comm, cudaStream_t stream);
@@ -169,7 +179,7 @@ ncclResult_t pncclAllGather(const void* sendbuff, int count, ncclDataType_t data
 // * On the root device, sendbuff and recvbuff are assumed to reside on the same device.
 // * Must be called separately for each communicator in communicator clique. */
 // * All GPUs, including root, perform copies into recvbuff.
-//ncclResult_t  ncclGather(const void* sendbuff, int count, ncclDataType_t datatype,
+//NCCL_EXPORTED ncclResult_t  ncclGather(const void* sendbuff, int count, ncclDataType_t datatype,
 //    void* recvbuff, int root, ncclComm_t comm, cudaStream_t stream);
 //ncclResult_t pncclGather(const void* sendbuff, int count, ncclDataType_t datatype,
 //                        void* recvbuff, int root, ncclComm_t comm, cudaStream_t stream);
@@ -180,7 +190,7 @@ ncclResult_t pncclAllGather(const void* sendbuff, int count, ncclDataType_t data
 // * recvbuff allocated on each gpu, including root, size=count.
 // * Result is ordered by comm's logical device order.
 // * Called separately for each device in the ncclComm. */
-//ncclResult_t  ncclScatter(void* sendbuff, ncclDataType_t datatype, void* recvbuff,
+//NCCL_EXPORTED ncclResult_t  ncclScatter(void* sendbuff, ncclDataType_t datatype, void* recvbuff,
 //    int count, int root, ncclComm_t comm, cudaStream_t stream);
 //ncclResult_t pncclScatter(void* sendbuff, ncclDataType_t datatype, void* recvbuff,
 //    int count, int root, ncclComm_t comm, cudaStream_t stream);
@@ -190,7 +200,7 @@ ncclResult_t pncclAllGather(const void* sendbuff, int count, ncclDataType_t data
 // * sendbuff and recvbuff assumed to reside on same device and
 // * have size at least nGPUs*count.
 // * Called separately for each device in the ncclComm. */
-//ncclResult_t  ncclAllToAll(void* sendbuff, int count, ncclDataType_t datatype,
+//NCCL_EXPORTED ncclResult_t  ncclAllToAll(void* sendbuff, int count, ncclDataType_t datatype,
 //    void* recvbuff, ncclComm_t comm, cudaStream_t stream);
 //ncclResult_t pncclAllToAll(void* sendbuff, int count, ncclDataType_t datatype,
 //    void* recvbuff, ncclComm_t comm, cudaStream_t stream);

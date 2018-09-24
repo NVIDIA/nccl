@@ -1,0 +1,73 @@
+Name:           libnccl
+Version:        ${nccl:Major}.${nccl:Minor}.${nccl:Patch}
+Release:        ${pkg:Revision}
+Summary:        NVIDIA Collectives Communication Library (NCCL) Runtime
+
+Group:          Development/Libraries
+License:        BSD
+URL:            http://developer.nvidia.com/nccl
+Source0:        nccl_${nccl:Major}.${nccl:Minor}.${nccl:Patch}${nccl:Suffix}-${pkg:Revision}+cuda${cuda:Major}.${cuda:Minor}_${pkg:Arch}.txz
+
+%description
+NCCL (pronounced "Nickel") is a stand-alone library of standard collective
+communication routines for GPUs, implementing all-reduce, all-gather, reduce,
+broadcast, and reduce-scatter.
+It has been optimized to achieve high bandwidth on any platform using PCIe,
+NVLink, NVswitch, as well as networking using InfiniBand Verbs or TCP/IP
+sockets.
+
+%package devel
+Summary:        NVIDIA Collectives Communication Library (NCCL) Runtime
+Group:          Development/Libraries
+%description devel
+NCCL development files
+
+%package static
+Summary:        NVIDIA Collectives Communication Library (NCCL) Runtime
+Group:          Development/Libraries
+%description static
+NCCL static library
+
+%define debug_package %{nil}
+
+%prep
+%setup -n nccl_${nccl:Major}.${nccl:Minor}.${nccl:Patch}${nccl:Suffix}-${pkg:Revision}+cuda${cuda:Major}.${cuda:Minor}_${pkg:Arch} -q
+
+%build
+
+%install
+rm -rf $RPM_BUILD_ROOT
+install -m 755 -d $RPM_BUILD_ROOT
+install -m 755 -d $RPM_BUILD_ROOT/%{_libdir}
+install -m 755 lib/libnccl.so.${nccl:Major}.${nccl:Minor}.${nccl:Patch} $RPM_BUILD_ROOT/%{_libdir}
+ln -s libnccl.so.${nccl:Major}.${nccl:Minor}.${nccl:Patch} $RPM_BUILD_ROOT/%{_libdir}/libnccl.so.${nccl:Major}
+
+# devel
+install -m 755 -d $RPM_BUILD_ROOT/%{_includedir}
+install -m 644 include/nccl.h $RPM_BUILD_ROOT/%{_includedir}
+ln -s libnccl.so.${nccl:Major} $RPM_BUILD_ROOT/%{_libdir}/libnccl.so
+
+# static
+install -m 644 lib/libnccl_static.a $RPM_BUILD_ROOT/%{_libdir}
+
+%clean
+rm -rf $RPM_BUILD_ROOT
+
+%files devel
+%doc LICENSE.txt
+%defattr(-,root,root,-)
+%{_includedir}/nccl.h
+%{_libdir}/libnccl.so
+
+%files static
+%doc LICENSE.txt
+%defattr(-,root,root,-)
+%{_libdir}/libnccl_static.a
+
+%files
+%doc LICENSE.txt
+%defattr(-,root,root,-)
+%{_libdir}/libnccl.so.${nccl:Major}
+%{_libdir}/libnccl.so.${nccl:Major}.${nccl:Minor}.${nccl:Patch}
+
+%changelog

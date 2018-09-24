@@ -1,0 +1,24 @@
+#!/bin/bash
+#
+# Copyright (c) 2017-2018, NVIDIA CORPORATION. All rights reserved.
+#
+# See LICENSE.txt for license information
+#
+
+# To run from $BUILDDIR/
+
+BUILDDIR=`basename $PWD`
+
+cd ..
+NCCL_MAJOR=${nccl:Major}
+NCCL_MINOR=${nccl:Minor}
+NCCL_PATCH=${nccl:Patch}
+NCCL_SUFFIX=${nccl:Suffix}
+CUDA_MAJOR=${cuda:Major}
+CUDA_MINOR=${cuda:Minor}
+PKG_REVISION=${pkg:Revision}
+PKG_ARCH=${pkg:Arch}
+
+NCCLNAME="nccl_${NCCL_MAJOR}.${NCCL_MINOR}.${NCCL_PATCH}${NCCL_SUFFIX}-${PKG_REVISION}+cuda${CUDA_MAJOR}.${CUDA_MINOR}_${PKG_ARCH}"
+
+tar --transform "s/^$BUILDDIR/$NCCLNAME/" -Jcf $NCCLNAME.txz --owner=0 --group=0 $BUILDDIR/include $BUILDDIR/lib $BUILDDIR/*.txt

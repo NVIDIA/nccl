@@ -1,0 +1,34 @@
+#!/bin/bash
+#
+# Copyright (c) 2017-2018, NVIDIA CORPORATION. All rights reserved.
+#
+# See LICENSE.txt for license information
+#
+
+# To run from $BUILDDIR/
+
+cd ..
+NCCLDIR=`basename $PWD`
+
+echo "Checking for unclean directory ..."
+git clean -x -i
+echo "Clean done."
+echo "Checking for uncommited files ..."
+if [ "`git status -s | wc -l`" != "0" ]; then
+  git status -s
+  echo "Some changes are not committed yet. Continue ? (Ctrl-C to abort)"
+  read
+fi
+
+cd ..
+NCCL_MAJOR=${nccl:Major}
+NCCL_MINOR=${nccl:Minor}
+NCCL_PATCH=${nccl:Patch}
+NCCL_SUFFIX=${nccl:Suffix}
+
+NCCLNAME="nccl-src_${NCCL_MAJOR}.${NCCL_MINOR}.${NCCL_PATCH}${NCCL_SUFFIX}"
+
+tar --exclude build \
+    --exclude ".git*" \
+    --exclude pkg/srctxz \
+    --transform "s/^$NCCLDIR/$NCCLNAME/" -Jcf $NCCLNAME.txz --owner=0 --group=0 $NCCLDIR

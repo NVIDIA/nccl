@@ -28,6 +28,7 @@
 #include <string.h>
 #include <errno.h>
 #include <assert.h>
+#include <dlfcn.h>
 
 DebugLevel ncclDebugLevel;
 uint64_t ncclDebugMask = INIT; // Default debug sub-system mask is INIT
@@ -69,13 +70,60 @@ int ncclCudaFullCompCap() {
   return ccMajor*10+ccMinor;
 }
 
-void initNet() {
-  if (ncclNet != NULL) {
-    INFO(INIT,"Using external Network %s", ncclNetName());
-  } else {
-    ncclNet = ncclIbSupport() ? &ncclNetIb : &ncclNetSocket;
-    INFO(INIT,"Using internal Network %s", ncclNetName());
+class extNetShutdownGuard_t {
+  void *lib_handle_;
+public:
+  void setLibHandle(void *lib_handle) { lib_handle_ = lib_handle; }
+  extNetShutdownGuard_t() : lib_handle_(NULL) {}
+  ~extNetShutdownGuard_t() {
+    if (ncclNet->netFini) {
+      ncclNet->netFini();
+    }
+    if (lib_handle_) {
+      dlclose(lib_handle_);
+    }
   }
+} extNetShutdownGuard;
+
+ncclResult_t initNet() {
+  int major = NCCL_NET_MAJOR;
+  int minor = NCCL_NET_MINOR;
+  void *net_lib;
+  ncclNetPluginGetVersion_t net_get_version;
+  ncclNetPluginInit_t net_init;
+  ncclResult_t res;
+  ncclNetParams_t params;
+
+  net_lib = dlopen("libnccl-net.so", RTLD_NOW | RTLD_LOCAL);
+  if (net_lib == NULL) { goto fail; }
+  net_get_version = (ncclNetPluginGetVersion_t) dlsym(net_lib, "ncclNetPluginGetVersion");
+  net_init = (ncclNetPluginInit_t) dlsym(net_lib, "ncclNetPluginInit");
+  if (net_get_version == NULL || net_init == NULL) { goto fail; }
+
+  res = net_get_version(&major, &minor);
+  /* As an example, support all plugin versions prior to and including the
+   * latest version we're aware of. This policy is subject to change. */
+  if (res != ncclSuccess || major > NCCL_NET_MAJOR
+      || (major == NCCL_NET_MAJOR && minor > NCCL_NET_MINOR)) { goto fail; }
+  params.loggerFunction = NULL; // TODO rework debug.h and introduce a logger function
+
+  NCCLCHECK(ncclCalloc(&ncclNet, 1));
+  res = net_init(&params, (void *)ncclNet);
+  if (res != ncclSuccess) { goto fail; }
+  extNetShutdownGuard.setLibHandle(net_lib);
+
+  INFO(INIT, "Using external Network %s", ncclNetName());
+
+  return ncclSuccess;
+
+fail:
+  if (net_lib != NULL) {
+    dlclose(net_lib);
+  }
+  free(ncclNet);
+  ncclNet = ncclIbSupport() ? &ncclNetIb : &ncclNetSocket;
+  INFO(INIT,"Using internal Network %s", ncclNetName());
+  return ncclSuccess;
 }
 
 NCCL_PARAM(LlThreshold, "LL_THRESHOLD", -2);

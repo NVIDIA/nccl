@@ -9,6 +9,10 @@
 
 #include "nccl.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define NCCL_NET_MAJOR 1
 #define NCCL_NET_MINOR 0
 
@@ -53,12 +57,41 @@ typedef struct {
   ncclResult_t (*closeSend)(void* sendComm);
   ncclResult_t (*closeRecv)(void* recvComm);
   ncclResult_t (*closeListen)(void* listenComm);
-} ncclNet_t;
+  // Called by NCCL when the net will no longer be in use
+  ncclResult_t (*netFini)();
+} ncclNet_1_0_t;
+typedef ncclNet_1_0_t ncclNet_t;
 
-extern
+typedef enum {
+  NCCL_DEBUG_NONE,
+  NCCL_DEBUG_VERSION,
+  NCCL_DEBUG_WARN,
+  NCCL_DEBUG_INFO,
+  NCCL_DEBUG_ABORT,
+  NCCL_DEBUG_TRACE} ncclDebugLevel_t;
+typedef int (*ncclLoggerFunction_t)(ncclDebugLevel_t debugLevel, const char *format, ...);
+typedef struct {
+  ncclLoggerFunction_t loggerFunction;
+} ncclNetParams_1_0_t;
+typedef ncclNetParams_1_0_t ncclNetParams_t;
+
+/* NCCL passes in its current net API version. The plugin returns
+ * the API version it can support. NCCL will refuse to use a plugin
+ * that uses a newer API version that it was built with.
+ * Otherwise, NCCL will use the net plugin's API version. */
+ncclResult_t ncclNetPluginGetVersion(int *major, int *minor);
+typedef ncclResult_t (*ncclNetPluginGetVersion_t)(int *, int *);
+
+/* NCCL passes in the parameters structure (ncclNetParams). The plugin
+ * should fill out the structure pointed to by ncclNet */
+ncclResult_t ncclNetPluginInit(void *ncclNetParams, void *ncclNet);
+typedef ncclResult_t (*ncclNetPluginInit_t)(void *, void *);
+
+/* TODO remove this */
+extern ncclNet_t* ncclNet;
+
 #ifdef __cplusplus
-"C"
+} // extern "C"
 #endif
-ncclNet_t* ncclNet;
 
 #endif // end include guard

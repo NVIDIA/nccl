@@ -7,10 +7,32 @@
 #ifndef NCCL_LL_KERNEL_H_
 #define NCCL_LL_KERNEL_H_
 
-static __device__ uint64_t readLL(union ncclLLFifoLine* src, uint32_t flag) {
+#define LL_SPINS_BEFORE_CHECK_ABORT 100000
+
+// Each thread sets a predicate to true if val == 1
+// nthreads threads enter the barrier and do a popc on their predicates being True
+// If any of the thread's predicate was True, all the threads call exit()
+inline __device__ void exitIfAbortBarrier(uint32_t abortFlag, int nthreads) {
+  uint32_t popc;
+  asm ("{");
+  asm volatile ("   .reg .pred barr_pred;");
+  asm volatile ("   setp.eq.u32 barr_pred,%0,1;" :: "r"(abortFlag));
+  asm volatile ("   bar.red.popc.u32 %0, 14, %1, barr_pred;" : "=r"(popc) : "r"(nthreads));
+  asm ("}");
+  if (popc) { asm volatile ("exit;"); }
+}
+
+static __device__ uint64_t readLL(volatile uint32_t *abortFlag, union ncclLLFifoLine* src, uint32_t flag) {
   uint32_t data1, flag1, data2, flag2;
+  size_t spins = 0;
   do {
     asm volatile("ld.volatile.global.v4.u32 {%0,%1,%2,%3}, [%4];" : "=r"(data1), "=r"(flag1), "=r"(data2), "=r"(flag2) : "l"(&src->i4));
+    if (++spins == LL_SPINS_BEFORE_CHECK_ABORT) {
+      if (*abortFlag != 0) {
+        asm volatile ("exit;");
+      }
+      spins = 0;
+    }
   } while ((flag1 != flag) || (flag2 != flag));
   uint64_t val64 = data1 + (((uint64_t)data2) << 32);
   return val64;
@@ -34,7 +56,7 @@ template <typename T, class FUNC>
 class LLPrimitives {
  private:
   template <int HAS_SRC1, int HAS_SRC2, int HAS_DST1, int HAS_DST2>
-  static __device__ void ReduceCopyGeneric(const T* src1, union ncclLLFifoLine* src2, T* dst1, union ncclLLFifoLine* dst2, int size, uint32_t iflag, uint32_t oflag, int nthreads) {
+  static __device__ void ReduceCopyGeneric(volatile uint32_t *abortFlag, const T* src1, union ncclLLFifoLine* src2, T* dst1, union ncclLLFifoLine* dst2, int size, uint32_t iflag, uint32_t oflag, int nthreads) {
     if (size <= 0) return;
     size_t size64 = size * sizeof(T) / sizeof(uint64_t);
     uint64_t* src1A = (uint64_t*)src1;
@@ -46,9 +68,9 @@ class LLPrimitives {
       uint64_t val;
       if (HAS_SRC1) {
         val = readAL(src1A+offset);
-        if (HAS_SRC2) val = MULTI<FUNC, T>()(readLL(src2+offset, iflag), val);
+        if (HAS_SRC2) val = MULTI<FUNC, T>()(readLL(abortFlag, src2+offset, iflag), val);
       } else if (HAS_SRC2) {
-        val = readLL(src2+offset, iflag);
+        val = readLL(abortFlag, src2+offset, iflag);
       }
       if (HAS_DST1) storeAL(dst1A+offset, val);
       if (HAS_DST2) storeLL(dst2+offset, val, oflag);
@@ -64,7 +86,7 @@ class LLPrimitives {
       T* vals = (T*)&lastVal;
 
       if (HAS_SRC2) {
-        uint64_t lastVal2 = readLL(src2+size64, iflag);
+        uint64_t lastVal2 = readLL(abortFlag, src2+size64, iflag);
         T* src2B = (T*)&lastVal2;
         for (int offset = 0; offset < sizeRem; offset++) {
           vals[offset] = HAS_SRC1 ? FUNC()(src2B[offset], src1B[offset]) : src2B[offset];
@@ -83,32 +105,32 @@ class LLPrimitives {
     }
   }
  public:
-  static __device__ void ReduceCopy(const T* src, union ncclLLFifoLine* dst, int size, uint32_t oflag, int nthreads) {
-    return ReduceCopyGeneric<1, 0, 0, 1>(src, NULL, NULL, dst, size, 0, oflag, nthreads);
+  static __device__ void ReduceCopy(volatile uint32_t *abortFlag, const T* src, union ncclLLFifoLine* dst, int size, uint32_t oflag, int nthreads) {
+    return ReduceCopyGeneric<1, 0, 0, 1>(abortFlag, src, NULL, NULL, dst, size, 0, oflag, nthreads);
   }
 
-  static __device__ void ReduceCopy(union ncclLLFifoLine* src, T* dst, int size, uint32_t iflag, int nthreads) {
-    return ReduceCopyGeneric<0, 1, 1, 0>(NULL, src, dst, NULL, size, iflag, 0, nthreads);
+  static __device__ void ReduceCopy(volatile uint32_t *abortFlag, union ncclLLFifoLine* src, T* dst, int size, uint32_t iflag, int nthreads) {
+    return ReduceCopyGeneric<0, 1, 1, 0>(abortFlag, NULL, src, dst, NULL, size, iflag, 0, nthreads);
   }
 
-  static __device__ void ReduceCopy(const T* src1, union ncclLLFifoLine* src2, union ncclLLFifoLine* dst, int size, uint32_t iflag, uint32_t oflag, int nthreads) {
-    return ReduceCopyGeneric<1, 1, 0, 1>(src1, src2, NULL, dst, size, iflag, oflag, nthreads);
+  static __device__ void ReduceCopy(volatile uint32_t *abortFlag, const T* src1, union ncclLLFifoLine* src2, union ncclLLFifoLine* dst, int size, uint32_t iflag, uint32_t oflag, int nthreads) {
+    return ReduceCopyGeneric<1, 1, 0, 1>(abortFlag, src1, src2, NULL, dst, size, iflag, oflag, nthreads);
   }
 
-  static __device__ void ReduceCopy(const T* src1, union ncclLLFifoLine* src2, T* dst, int size, uint32_t iflag, int nthreads) {
-    return ReduceCopyGeneric<1, 1, 1, 0>(src1, src2, dst, NULL, size, iflag, 0, nthreads);
+  static __device__ void ReduceCopy(volatile uint32_t *abortFlag, const T* src1, union ncclLLFifoLine* src2, T* dst, int size, uint32_t iflag, int nthreads) {
+    return ReduceCopyGeneric<1, 1, 1, 0>(abortFlag, src1, src2, dst, NULL, size, iflag, 0, nthreads);
   }
 
-  static __device__ void ReduceCopy(const T* src, T* dst1, union ncclLLFifoLine* dst2, int size, uint32_t oflag, int nthreads) {
-    return ReduceCopyGeneric<1, 0, 1, 1>(src, NULL, dst1, dst2, size, 0, oflag, nthreads);
+  static __device__ void ReduceCopy(volatile uint32_t *abortFlag, const T* src, T* dst1, union ncclLLFifoLine* dst2, int size, uint32_t oflag, int nthreads) {
+    return ReduceCopyGeneric<1, 0, 1, 1>(abortFlag, src, NULL, dst1, dst2, size, 0, oflag, nthreads);
   }
 
-  static __device__ void ReduceCopy(union ncclLLFifoLine* src, T* dst1, union ncclLLFifoLine* dst2, int size, uint32_t iflag, uint32_t oflag, int nthreads) {
-    return ReduceCopyGeneric<0, 1, 1, 1>(NULL, src, dst1, dst2, size, iflag, oflag, nthreads);
+  static __device__ void ReduceCopy(volatile uint32_t *abortFlag, union ncclLLFifoLine* src, T* dst1, union ncclLLFifoLine* dst2, int size, uint32_t iflag, uint32_t oflag, int nthreads) {
+    return ReduceCopyGeneric<0, 1, 1, 1>(abortFlag, NULL, src, dst1, dst2, size, iflag, oflag, nthreads);
   }
 
-  static __device__ void ReduceCopy(const T* src1, union ncclLLFifoLine* src2, T* dst1, union ncclLLFifoLine* dst2, int size, uint32_t iflag, uint32_t oflag, int nthreads) {
-    return ReduceCopyGeneric<1, 1, 1, 1>(src1, src2, dst1, dst2, size, iflag, oflag, nthreads);
+  static __device__ void ReduceCopy(volatile uint32_t *abortFlag, const T* src1, union ncclLLFifoLine* src2, T* dst1, union ncclLLFifoLine* dst2, int size, uint32_t iflag, uint32_t oflag, int nthreads) {
+    return ReduceCopyGeneric<1, 1, 1, 1>(abortFlag, src1, src2, dst1, dst2, size, iflag, oflag, nthreads);
   }
 };
 
@@ -118,12 +140,22 @@ class LLPrimitives {
   (step % NCCL_LL_CHUNKS)
 
 #define WAIT_NEXT \
-  if (tid == 0) { \
+  { \
+    uint32_t abortFlag = 0; \
+    size_t spins = 0; \
     while (sendHead + NCCL_LL_CHUNKS <= step) { \
       sendHead = sendHeadPtr[0]; \
+      ++spins; \
+      if (spins == LL_SPINS_BEFORE_CHECK_ABORT) { \
+        abortFlag = *args->comm->abortFlag; \
+        if (abortFlag != 0) { \
+          break; \
+        } \
+        spins = 0; \
+      } \
     } \
-  } \
-  asm volatile ("bar.sync 1, %0;" :: "r"(llNthreads));
+    exitIfAbortBarrier(abortFlag, llNthreads); \
+  }
 
 #define POST_SIZE \
   if (tid == 0 && sizesFifo) sizesFifo[step % NCCL_LL_CHUNKS] = (maxOffset <= 0) ? -1 : (maxOffset*2*(int)sizeof(T));

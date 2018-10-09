@@ -219,6 +219,9 @@ ncclResult_t ncclEnqueueCheck(ncclFunc_t func, const char* primName, const void*
     void* recvbuff, size_t count, ncclDataType_t type, ncclRedOp_t op, int root,
     ncclComm_t comm, cudaStream_t stream) {
   if (comm == NULL) return ncclInvalidArgument;
+  if (comm->fatalError != ncclSuccess) {
+    return ncclInvalidUsage;
+  }
   // Launch asynchronously if needed
   if (ncclAsyncMode()) {
     ncclResult_t ret = ncclSuccess;

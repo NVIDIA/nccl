@@ -124,6 +124,18 @@ ncclResult_t ncclGroupEnd() {
   ncclResult_t ret = ncclGroupError;
   if (ret != ncclSuccess) goto group_cleanup;
 
+  // check if any of the communicators used in this group has
+  // encountered a fatal error.
+  for (int i=0; i<ncclGroupIndex; i++) {
+    struct ncclAsyncArgs* args = ncclGroupArgs+i;
+    if (args->funcType == ASYNC_FUNC_COLL) {
+      if (args->coll.comm->fatalError != ncclSuccess) {
+        ret = ncclInvalidUsage;
+        goto group_cleanup;
+      }
+    }
+  }
+
   /* Collectives are done in three steps :
    * 1. Barrier Check In. Only the last call may call cudaLaunchKernel[cooperative]
    * 2. Barrier Wait. No CUDA call is permitted

@@ -25,8 +25,8 @@ __device__ void ncclBroadcastKernel(struct CollectiveArgs* args) {
   int prevdirect = ring->recv.conn.direct;
   int nextdirect = ring->send.conn.direct;
 
-  WaitFlag waitDoneFromNext(ring->send.conn.head, (BROADCAST_BUFCHUNKS-1)*BROADCAST_SUBSTEPS);
-  WaitFlag waitReadyFromPrev(ring->recv.conn.tail, 0);
+  WaitFlag waitDoneFromNext(comm->abortFlag, ring->send.conn.head, (BROADCAST_BUFCHUNKS-1)*BROADCAST_SUBSTEPS);
+  WaitFlag waitReadyFromPrev(comm->abortFlag, ring->recv.conn.tail, 0);
   PostFlag postDoneToPrev(ring->recv.conn.head, 0, NULL, 0);
   PostFlag postReadyToNext(ring->send.conn.tail, 0, ring->send.conn.fifo, BROADCAST_BUFCHUNKS*BROADCAST_SUBSTEPS);
 
@@ -39,14 +39,15 @@ __device__ void ncclBroadcastKernel(struct CollectiveArgs* args) {
   const int rank = ring->devUserRanks[0];
   const int nextRank = ring->devUserRanks[1];
   const int root = args->root;
+  uint32_t shouldExit = 0;
 
   if (tid == 0) {
     // Update in case we skipped some collectives
     *ring->recv.conn.opCount = args->opCount;
     if (nextRank != root) {
       // Wait for next to be ready
-      WaitFlag waitOpCountNext(ring->send.conn.opCount, 0);
-      waitOpCountNext.wait(args->opCount);
+      WaitFlag waitOpCountNext(comm->abortFlag, ring->send.conn.opCount, 0);
+      waitOpCountNext.wait(&shouldExit, args->opCount);
     }
     if (rank != root && prevdirect) {
       *ring->recv.conn.ptrExchange = args->ThisOutput;
@@ -58,7 +59,7 @@ __device__ void ncclBroadcastKernel(struct CollectiveArgs* args) {
       *ptr = nullptr;
     }
   }
-  __syncthreads();
+  exitIfAbortBarrier(shouldExit);
 
   uint64_t step = 0ULL;
   int boffset = 0;
@@ -129,13 +130,14 @@ __device__ void ncclBroadcastKernel(struct CollectiveArgs* args) {
   if (tid == 0) {
     if (nextRank != root) {
       // Wait for next to have consumed data before resetting the flag
-      waitDoneFromNext.wait(BROADCAST_SUBSTEPS*(step + BROADCAST_BUFCHUNKS - 1));
+      waitDoneFromNext.wait(&shouldExit, BROADCAST_SUBSTEPS*(step + BROADCAST_BUFCHUNKS - 1));
       *ring->send.conn.head = 0ULL;
     }
     *ring->recv.conn.tail = 0ULL;
     __threadfence_system();
     *ring->recv.conn.opCount = args->opCount+1;
   }
+  exitIfAbortBarrier(shouldExit);
 }
 
 #include "ll_kernel.h"
@@ -188,11 +190,13 @@ __device__ void ncclBroadcastLLKernel(struct CollectiveArgs* args) {
       WAIT_NEXT;
       if (thisInput == thisOutput) {
         LL::ReduceCopy(
+            comm->abortFlag,
             thisInput + offset,
             nextOutput + boffset,
             maxOffset, flag, llNthreads);
       } else {
         LL::ReduceCopy(
+            comm->abortFlag,
             thisInput + offset,
             thisOutput + offset,
             nextOutput + boffset,
@@ -202,6 +206,7 @@ __device__ void ncclBroadcastLLKernel(struct CollectiveArgs* args) {
       NEXT_STEP_LL;
     } else if (nextRank == root) {
       LL::ReduceCopy(
+          comm->abortFlag,
           prevInput + boffset,
           thisOutput + offset,
           maxOffset, flag, llNthreads);
@@ -210,6 +215,7 @@ __device__ void ncclBroadcastLLKernel(struct CollectiveArgs* args) {
     } else {
       WAIT_NEXT;
       LL::ReduceCopy(
+          comm->abortFlag,
           prevInput + boffset,
           thisOutput + offset,
           nextOutput + boffset,

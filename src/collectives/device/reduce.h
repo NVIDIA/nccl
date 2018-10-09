@@ -22,8 +22,8 @@ __device__ void ncclReduceKernel(struct CollectiveArgs* args) {
   struct ncclComm* comm = args->comm;
   struct ncclRing* ring = comm->rings+blockIdx.x;
 
-  WaitFlag waitDoneFromNext(ring->send.conn.head, (REDUCE_BUFCHUNKS-1)*REDUCE_SUBSTEPS);
-  WaitFlag waitReadyFromPrev(ring->recv.conn.tail, 0);
+  WaitFlag waitDoneFromNext(comm->abortFlag, ring->send.conn.head, (REDUCE_BUFCHUNKS-1)*REDUCE_SUBSTEPS);
+  WaitFlag waitReadyFromPrev(comm->abortFlag, ring->recv.conn.tail, 0);
   PostFlag postDoneToPrev(ring->recv.conn.head, 0, NULL, 0);
   PostFlag postReadyToNext(ring->send.conn.tail, 0, ring->send.conn.fifo, REDUCE_BUFCHUNKS*REDUCE_SUBSTEPS);
 
@@ -37,6 +37,7 @@ __device__ void ncclReduceKernel(struct CollectiveArgs* args) {
   const int rank = ring->devUserRanks[0];
   const int prevRank = ring->devUserRanks[nranks-1];
   const int root = args->root;
+  uint32_t shouldExit = 0;
 
   if (tid == 0) {
     // Update in case we skipped some collectives
@@ -44,11 +45,11 @@ __device__ void ncclReduceKernel(struct CollectiveArgs* args) {
 
     if (rank != root) {
       // Wait for next to be ready
-      WaitFlag waitOpCountNext(ring->send.conn.opCount, 0);
-      waitOpCountNext.wait(args->opCount);
+      WaitFlag waitOpCountNext(comm->abortFlag, ring->send.conn.opCount, 0);
+      waitOpCountNext.wait(&shouldExit, args->opCount);
     }
   }
-  __syncthreads();
+  exitIfAbortBarrier(shouldExit);
 
   uint64_t step = 0ULL;
   int boffset = 0;
@@ -97,13 +98,14 @@ __device__ void ncclReduceKernel(struct CollectiveArgs* args) {
   if (tid == 0) {
     if (rank != root) {
       // Wait for next to have consumed data before resetting the flag
-      waitDoneFromNext.wait(REDUCE_SUBSTEPS*(step + REDUCE_BUFCHUNKS - 1));
+      waitDoneFromNext.wait(&shouldExit, REDUCE_SUBSTEPS*(step + REDUCE_BUFCHUNKS - 1));
       *ring->send.conn.head = 0ULL;
     }
     *ring->recv.conn.tail = 0ULL;
     __threadfence_system();
     *ring->recv.conn.opCount = args->opCount+1;
   }
+  exitIfAbortBarrier(shouldExit);
 }
 
 #include "ll_kernel.h"
@@ -156,6 +158,7 @@ __device__ void ncclReduceLLKernel(struct CollectiveArgs* args) {
     if (prevRank == root) {
       WAIT_NEXT;
       LL::ReduceCopy(
+          comm->abortFlag,
           thisInput + offset,
           nextOutput + boffset,
           maxOffset, flag, llNthreads);
@@ -163,6 +166,7 @@ __device__ void ncclReduceLLKernel(struct CollectiveArgs* args) {
       NEXT_STEP_LL;
     } else if (rank == root) {
       LL::ReduceCopy(
+          comm->abortFlag,
           thisInput + offset,
           prevInput  + boffset,
           thisOutput + offset,
@@ -172,6 +176,7 @@ __device__ void ncclReduceLLKernel(struct CollectiveArgs* args) {
     } else {
       WAIT_NEXT;
       LL::ReduceCopy(
+          comm->abortFlag,
           thisInput + offset,
           prevInput + boffset,
           nextOutput + boffset,

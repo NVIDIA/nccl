@@ -226,6 +226,14 @@ struct ncclComm {
   int groupCudaStream;
   cudaStream_t groupStream;
 
+  // Whether there has been a fatal error on the communicator
+  ncclResult_t fatalError;
+
+  // Whether the operations enqueued on this communicator should abort
+  // On host: this pointer has been obtained from cudaHostAlloc(cudaHostAllocMapped)
+  // On device:  this pointer has been obtained from cudaHostGetDevicePointer()
+  volatile uint32_t *abortFlag;
+
   // Device copy of the communicator
   struct ncclComm *devComm;
 

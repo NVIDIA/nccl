@@ -136,6 +136,7 @@ static ncclResult_t commFree(ncclComm_t comm) {
     free(comm->intraCGMode);
     free(comm->intraCC);
   }
+  CUDACHECK(cudaFreeHost((void *)comm->abortFlag));
 
   free(comm);
   return ncclSuccess;
@@ -173,6 +174,10 @@ static ncclResult_t commAlloc(ncclComm_t* comret, int ndev, int rank) {
   // Don't allow the user to overload the default setting in older CUDA builds
   comm->groupCudaStream = NCCL_GROUP_CUDA_STREAM;
 #endif
+  comm->fatalError = ncclSuccess;
+
+  CUDACHECK(cudaHostAlloc((void**) &comm->abortFlag, sizeof(uint32_t), cudaHostAllocMapped));
+  *comm->abortFlag = 0;
 
   comm->argsptr = &comm->args;
 
@@ -189,6 +194,10 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
   for (int r=0; r<comm->nRings; r++) {
     NCCLCHECK(ncclCudaMemcpy(comm->rings[r].devUserRanks, comm->rings[r].userRanks, comm->nRanks));
   }
+  // Copy the device-accessible pointer to comm->abortFlag
+  void *devAbortFlag;
+  CUDACHECK(cudaHostGetDevicePointer(&devAbortFlag, (uint32_t *)comm->abortFlag, 0));
+  CUDACHECK(cudaMemcpy(&comm->devComm->abortFlag, &devAbortFlag, sizeof(uint32_t *), cudaMemcpyHostToDevice));
   return ncclSuccess;
 }
 
@@ -769,6 +778,10 @@ ncclResult_t ncclCommDestroy(ncclComm_t comm) {
     CUDACHECK(cudaSetDevice(commDevice));
   }
 
+  // Ask anything that might still be running on the device to quit
+  *comm->abortFlag = 1;
+  CUDACHECK(cudaStreamSynchronize(comm->groupStream));
+
   NCCLCHECK(commFree(comm));
 
   if (savedDevice != commDevice)
@@ -788,6 +801,14 @@ const char* ncclGetErrorString(ncclResult_t code) {
     case ncclInvalidUsage           : return "invalid usage";
     default                         : return "unknown result code";
   }
+}
+
+NCCL_API(ncclResult_t, ncclCommGetAsyncError, ncclComm_t comm, ncclResult_t *asyncError);
+ncclResult_t ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t *asyncError) {
+  NCCLCHECK(PtrCheck(comm, "ncclGetAsyncError", "comm"));
+  NCCLCHECK(PtrCheck(asyncError, "ncclGetAsyncError", "asyncError"));
+  *asyncError = comm->fatalError;
+  return ncclSuccess;
 }
 
 NCCL_API(ncclResult_t, ncclCommCount, const ncclComm_t comm, int* count);

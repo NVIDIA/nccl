@@ -26,8 +26,8 @@ __device__ void ncclAllGatherKernel(struct CollectiveArgs* args) {
   int prevdirect = ring->recv.conn.direct;
   int nextdirect = ring->send.conn.direct;
 
-  WaitFlag waitDoneFromNext(ring->send.conn.head, ALLGATHER_BUFCHUNKS*ALLGATHER_SUBSTEPS);
-  WaitFlag waitReadyFromPrev(ring->recv.conn.tail, ALLGATHER_SUBSTEPS);
+  WaitFlag waitDoneFromNext(comm->abortFlag, ring->send.conn.head, ALLGATHER_BUFCHUNKS*ALLGATHER_SUBSTEPS);
+  WaitFlag waitReadyFromPrev(comm->abortFlag, ring->recv.conn.tail, ALLGATHER_SUBSTEPS);
   PostFlag postDoneToPrev(ring->recv.conn.head, ALLGATHER_SUBSTEPS, NULL, 0);
   PostFlag postReadyToNext(ring->send.conn.tail, 0, ring->send.conn.fifo, ALLGATHER_BUFCHUNKS*ALLGATHER_SUBSTEPS);
 
@@ -38,13 +38,14 @@ __device__ void ncclAllGatherKernel(struct CollectiveArgs* args) {
   const int buffSize = ring->buffSize / sizeof(T);
   const int sliceSize = buffSize / ALLGATHER_BUFCHUNKS;
   const ssize_t loopSize = args->nRings*(ssize_t)sliceSize;
+  uint32_t shouldExit = 0;
 
   if (tid == 0) {
     // Update in case we skipped some collectives
     *ring->recv.conn.opCount = args->opCount;
     // Wait for next to be ready
-    WaitFlag waitOpCountNext(ring->send.conn.opCount, 0);
-    waitOpCountNext.wait(args->opCount);
+    WaitFlag waitOpCountNext(comm->abortFlag, ring->send.conn.opCount, 0);
+    waitOpCountNext.wait(&shouldExit, args->opCount);
     if (prevdirect) {
       *ring->recv.conn.ptrExchange = args->ThisOutput;
     }
@@ -55,7 +56,7 @@ __device__ void ncclAllGatherKernel(struct CollectiveArgs* args) {
       *ptr = nullptr;
     }
   }
-  __syncthreads();
+  exitIfAbortBarrier(shouldExit);
 
   uint64_t step = 0ULL;
   int poffset, noffset = 0;
@@ -157,12 +158,13 @@ __device__ void ncclAllGatherKernel(struct CollectiveArgs* args) {
   }
 
   if (tid == 0) {
-    waitDoneFromNext.wait(ALLGATHER_SUBSTEPS*(step + ALLGATHER_BUFCHUNKS));
+    waitDoneFromNext.wait(&shouldExit, ALLGATHER_SUBSTEPS*(step + ALLGATHER_BUFCHUNKS));
     *ring->send.conn.head = 0ULL;
     *ring->recv.conn.tail = 0ULL;
     __threadfence_system();
     *ring->recv.conn.opCount = args->opCount+1;
   }
+  exitIfAbortBarrier(shouldExit);
 }
 
 #include "ll_kernel.h"
@@ -223,11 +225,13 @@ __device__ void ncclAllGatherLLKernel(struct CollectiveArgs* args) {
     WAIT_NEXT;
     if (thisInput + chunkOffset == thisOutput + offset) { // In place
       LL::ReduceCopy(
+          comm->abortFlag,
           thisInput  + chunkOffset,
           nextOutput + noffset,
           maxOffset, nflag, llNthreads);
     } else {
       LL::ReduceCopy(
+          comm->abortFlag,
           thisInput  + chunkOffset,
           thisOutput + offset,
           nextOutput + noffset,
@@ -244,6 +248,7 @@ __device__ void ncclAllGatherLLKernel(struct CollectiveArgs* args) {
 
       WAIT_NEXT;
       LL::ReduceCopy(
+          comm->abortFlag,
           prevInput  + poffset,
           thisOutput + offset,
           nextOutput + noffset,
@@ -259,6 +264,7 @@ __device__ void ncclAllGatherLLKernel(struct CollectiveArgs* args) {
     offset = chunkOffset + rankDest * size;
 
     LL::ReduceCopy(
+        comm->abortFlag,
         prevInput  + poffset,
         thisOutput + offset,
         maxOffset, pflag, llNthreads);

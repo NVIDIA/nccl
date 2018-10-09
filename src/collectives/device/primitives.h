@@ -24,17 +24,39 @@
  * corresponding substep by previous step) before executing the transfer.
  * After each substep is transfered, all PostFlag arguments get updated to
  * the value SUBSTEPS*step+substep+1.
+ *
+ * The wait operation will read the abortFlag after spinning for
+ * SPINS_BEFORE_CHECK_ABORT iterations. If it reads the abort flag and the
+ * flag is non-zero, it will leave without waiting for the wait condition
+ * to be achieved. The output abortFlag argument will be updated in case
+ * the abort flag is read.
  */
 
+#define SPINS_BEFORE_CHECK_ABORT 100000
 
 class WaitFlag {
+  volatile uint32_t * abortFlag;
   volatile uint64_t * const flag;
   const int shift;
  public:
   __device__ __forceinline__
-  WaitFlag(volatile uint64_t * const flag, const int shift) : flag(flag), shift(shift) { }
+  WaitFlag(volatile uint32_t *abortFlag, volatile uint64_t * const flag, const int shift)
+    : abortFlag(abortFlag), flag(flag), shift(shift) { }
   __device__ __forceinline__
-  void wait(uint64_t val) { while ((*flag + shift) < val) /*SPIN*/; }
+  void wait(uint32_t *outAbortFlag, uint64_t val) {
+    size_t spins = 0;
+    while ((*flag + shift) < val) {
+      /*SPIN*/
+      ++spins;
+      if (spins == SPINS_BEFORE_CHECK_ABORT) {
+        *outAbortFlag = *abortFlag;
+        if (*outAbortFlag != 0) {
+          return;
+        }
+        spins = 0;
+      }
+    }
+  }
 };
 
 
@@ -67,17 +89,17 @@ bool AnyAre(FIRST_T first, TAIL_Ts... tail) {
 
 // Wait on all WaitFlags, ignore PostFlags
 __device__ __forceinline__
-void WaitOnFlags(uint64_t val) { }
+void WaitOnFlags(uint32_t *outAbortFlag, uint64_t val) { }
 
 template <typename... TAIL_Ts> __device__ __forceinline__
-void WaitOnFlags(uint64_t val, WaitFlag flag, TAIL_Ts... tail) {
-  flag.wait(val);
-  WaitOnFlags(val, tail...);
+void WaitOnFlags(uint32_t *outAbortFlag, uint64_t val, WaitFlag flag, TAIL_Ts... tail) {
+  flag.wait(outAbortFlag, val);
+  WaitOnFlags(outAbortFlag, val, tail...);
 }
 
 template <typename... TAIL_Ts> __device__ __forceinline__
-void WaitOnFlags(uint64_t val, PostFlag, TAIL_Ts... tail) {
-  WaitOnFlags(val, tail...);
+void WaitOnFlags(uint32_t *outAbortFlag, uint64_t val, PostFlag, TAIL_Ts... tail) {
+  WaitOnFlags(outAbortFlag, val, tail...);
 }
 
 
@@ -125,6 +147,20 @@ nullptr_t ptradd(nullptr_t ptr, int i) {
 }
 
 
+// Each thread sets a predicate to true if val == 1
+// all CTA's threads enter the barrier and do a popc on their predicates being True
+// If any of the thread's predicate was True, all the threads call exit()
+static inline __device__
+void exitIfAbortBarrier(uint32_t val) {
+  uint32_t popc;
+  asm ("{");
+  asm volatile ("   .reg .pred barr_pred;");
+  asm volatile ("   setp.eq.u32 barr_pred,%0,1;" :: "r"(val));
+  asm volatile ("   bar.red.popc.u32 %0, 14, barr_pred;" : "=r"(popc));
+  asm ("}");
+  if (popc) { asm volatile ("exit;"); }
+}
+
 // Implementation of primitive types
 template <int UNROLL, int SUBSTEPS, typename T, typename REDOP=FuncSum<T> >
 class Primitives {
@@ -139,6 +175,8 @@ class Primitives {
       T*     dst1,
       DST2_T dst2,
       int len, int maxoffset, uint64_t step, SYNC_Ts... flags) {
+
+    uint32_t abort = 0;
 
     enum { noSrc2 = std::is_same<SRC2_T, nullptr_t>::value };
     enum { noDst2 = std::is_same<DST2_T, nullptr_t>::value };
@@ -158,7 +196,7 @@ class Primitives {
       if (tid < nthreads) {
         if (AnyAre<WaitFlag>(flags...)) {
           if (tid == 0) {
-            WaitOnFlags(SUBSTEPS*step + sub + 1, flags...);
+            WaitOnFlags(&abort, SUBSTEPS*step + sub + 1, flags...);
           }
           asm volatile ("bar.sync 1, %0;" :: "r"(nthreads));
         }
@@ -178,12 +216,10 @@ class Primitives {
             ptradd(src2, sliceOffset),
             realSize
         );
-        if (AnyAre<PostFlag>(flags...)) {
-          __syncthreads();
-        }
+        exitIfAbortBarrier(abort);
       } else {
+        exitIfAbortBarrier(abort);
         if (AnyAre<PostFlag>(flags...)) {
-          __syncthreads();
           PostSizeToFlags(SUBSTEPS*step+sub, realSize*sizeof(T), flags...);
           __threadfence_system();
           PostToFlags(SUBSTEPS*step + sub + 1, flags...);

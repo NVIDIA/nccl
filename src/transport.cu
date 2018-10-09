@@ -150,6 +150,7 @@ void* persistentThread(void *opaqueInfo) {
     }
     ncclResult_t res = info->func(&args);
     if (res != ncclSuccess) {
+      info->comm->fatalError = res;
       WARN("%s:%d -> %d [Proxy thread error]", __FILE__, __LINE__, res);
     }
   }

@@ -76,7 +76,7 @@ Tests for NCCL are maintained separately at https://github.com/nvidia/nccl-tests
 $ git clone https://github.com/NVIDIA/nccl-tests.git
 $ cd nccl-tests
 $ make
-$ ./build/allreduce_perf -b 8 -e 256M -f 2 -g <ngpus>
+$ ./build/all_reduce_perf -b 8 -e 256M -f 2 -g <ngpus>
 ```
 
 ## Copyright

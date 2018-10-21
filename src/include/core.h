@@ -243,6 +243,8 @@ struct ncclComm {
   int* intraCC; // Only to check all have the same ComputeCap and disable CGMode if not
   struct ncclColl args;
   void* argsptr;
+  struct ncclComm *nodeComm;
+  struct ncclComm *netComm;
 };
 
 // Check CUDA calls

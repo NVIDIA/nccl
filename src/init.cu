@@ -566,6 +566,7 @@ cleanup:
   return res;
 }
 
+#include <inttypes.h>
 NCCL_API(ncclResult_t, ncclCommInitRank, ncclComm_t* newcomm, int ndev, ncclUniqueId commId, int myrank);
 ncclResult_t ncclCommInitRank(ncclComm_t* newcomm, int nranks, ncclUniqueId commId, int myrank) {
   char* env = getenv("NCCL_COMM_ID");
@@ -592,8 +593,105 @@ ncclResult_t ncclCommInitRank(ncclComm_t* newcomm, int nranks, ncclUniqueId comm
     CUDACHECK(cudaGetDevice(&cudaDev));
     return ncclAsyncInit(ncclCommInitRankSync, cudaDev, newcomm, nranks, commId, myrank);
   } else {
-    return ncclCommInitRankSync(newcomm, nranks, commId, myrank);
+      NCCLCHECK(ncclCommInitRankSync(newcomm, nranks, commId, myrank));
   }
+  {
+      char *hostname;
+      CUDACHECK(cudaMallocManaged(&hostname, 256));
+      gethostname(hostname, sizeof(hostname));
+      int hostlen = strlen(hostname);
+      cudaStream_t s;
+      int *buf;
+      CUDACHECK(cudaMallocManaged(&buf, 2*sizeof(int)));
+      buf[0] = hostlen;
+      CUDACHECK(cudaStreamCreate(&s));
+      NCCLCHECK(ncclAllReduce(&buf[0], &buf[1], 1, ncclInt, ncclMax, *newcomm, s));
+      CUDACHECK(cudaStreamSynchronize(s));
+      int i;
+
+      char *hosts;
+      CUDACHECK(cudaMallocManaged(&hosts, buf[1]*sizeof(char)*nranks));
+      int max_hostlen = buf[1]+1;
+      NCCLCHECK(ncclAllGather(hostname, hosts, max_hostlen, ncclChar, *newcomm, s));
+      CUDACHECK(cudaStreamSynchronize(s));
+      int node_local_rank = -1;
+      int local_ranks = 0;
+      int node_leader_rank = -1;
+      int is_single_node = 1;
+      for (i=0; i<nranks; i++) {
+          char *host = hosts + max_hostlen*i;
+          if (0 == strcmp(hostname, host)) {
+              if (node_leader_rank == -1) {
+                  node_leader_rank = i;
+              }
+              if (i == myrank) {
+                  node_local_rank = local_ranks;
+              }
+              local_ranks++;
+          } else {
+              is_single_node = 0;
+          }
+      }
+      // fprintf(stderr, "node_local_rank %d, local_ranks %d, node_leader_rank %d\n",
+              // node_local_rank, local_ranks, node_leader_rank);
+
+      if (!is_single_node) {
+          ncclUniqueId *uids;
+          CUDACHECK(cudaMallocManaged(&uids, 2*sizeof(ncclUniqueId)*(nranks+1)));
+
+
+          uids[0] = uids[1] = commId;
+          if (myrank == node_leader_rank) {
+              NCCLCHECK(ncclGetUniqueId(&uids[0]));
+              fprintf(stderr, "UID: %" PRIx64 ":%" PRIx64 "\n", ((uint64_t*)&uids[0])[0], ((uint64_t*)&uids[0])[1]);
+          }
+          if (0 == myrank) {
+              NCCLCHECK(ncclGetUniqueId(&uids[1]));
+              fprintf(stderr, "UID: %" PRIx64 ":%" PRIx64 "\n", ((uint64_t*)&uids[1])[0], ((uint64_t*)&uids[1])[1]);
+          }
+          NCCLCHECK(ncclAllGather(uids, uids+2, 2*sizeof(ncclUniqueId), ncclChar,
+                                  *newcomm, s));
+          CUDACHECK(cudaStreamSynchronize(s));
+
+          (*newcomm)->nodeComm = NULL;
+          (*newcomm)->netComm  = NULL;
+          if (local_ranks > 1) {
+              ncclUniqueId node_comm_uid = (uids + 2 + node_leader_rank*2)[0];
+              fprintf(stderr,"NODE: rank %d, host %s, local_rank %d, local_size %d, node_leader %d, uid %" PRIx64 ":%" PRIx64 "\n",
+                      myrank, hostname, node_local_rank, local_ranks, node_leader_rank, ((uint64_t*)&node_comm_uid)[0],
+                      ((uint64_t*)&node_comm_uid)[1]);
+              NCCLCHECK(ncclCommInitRankSync(&((*newcomm)->nodeComm), local_ranks,
+                                             node_comm_uid, node_local_rank));
+          }
+          int netLocalRank = -1;
+          if (node_leader_rank == myrank) {
+              ncclUniqueId net_comm_uid = (uids + 2)[1];
+              int nnodes = 0;
+              for (i=0; i<nranks; i++) {
+                  if (!memcmp(&(uids+2+2*i)[0],&uids[0],sizeof(ncclUniqueId))) {
+                      netLocalRank = nnodes;
+                      if (local_ranks == 1) {
+                          //TODO release node_comm_uid - no node level was created
+                      }
+                  }
+                  if (memcmp(&(uids+2+2*i)[0], &commId, sizeof(ncclUniqueId))) {
+                      nnodes++;
+                  }
+              }
+              fprintf(stderr,"NET: rank %d, host %s, net_rank %d, net_size %d, uid %" PRIx64 ":%" PRIx64 "\n",
+                      myrank, hostname, netLocalRank, nnodes, ((uint64_t*)&net_comm_uid)[0],
+                      ((uint64_t*)&net_comm_uid)[1]);
+              NCCLCHECK(ncclCommInitRankSync(&((*newcomm)->netComm), nnodes,
+                                             net_comm_uid, netLocalRank));
+          }
+          CUDACHECK(cudaFree(uids));
+      }
+      CUDACHECK(cudaFree(buf));
+      CUDACHECK(cudaFree(hosts));
+      CUDACHECK(cudaFree(hostname));
+      CUDACHECK(cudaStreamDestroy(s));
+  }
+  return ncclSuccess;
 }
 
 static ncclResult_t initTransportsAll(struct ncclComm** comms, const int* devs, int nranks) {

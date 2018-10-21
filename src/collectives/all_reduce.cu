@@ -25,8 +25,31 @@ ncclResult_t ncclAllReduceFunc(const void* sendbuff, void* recvbuff, size_t coun
 
 NCCL_API(ncclResult_t, ncclAllReduce, const void* sendbuff, void* recvbuff, size_t count,
     ncclDataType_t datatype, ncclRedOp_t op, ncclComm_t comm, cudaStream_t stream);
+
+extern ncclResult_t ncclReduceFunc(const void* sendbuff, void* recvbuff, const size_t count,
+                                   ncclDataType_t datatype, ncclRedOp_t op, int root, ncclComm_t comm, cudaStream_t stream);
+extern ncclResult_t ncclBroadcastFunc(const void* sendbuff, void* recvbuff, const size_t count,
+                                      ncclDataType_t datatype, ncclRedOp_t op, int root, ncclComm_t comm, cudaStream_t stream);
 ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
     ncclDataType_t datatype, ncclRedOp_t op, ncclComm_t comm, cudaStream_t stream) {
-  return ncclEnqueueCheck(ncclAllReduceFunc, "AllReduce", sendbuff, recvbuff, count, datatype,
-          op, 0, comm, stream);
+    if (comm->nodeComm || comm->netComm) {
+        fprintf(stderr,"NodeCOMM Reduce\n");
+
+        ncclEnqueueCheck(ncclReduceFunc, "Reduce", sendbuff, recvbuff, count, datatype,
+                         op, 0, comm->nodeComm, stream);
+//        cudaStreamSynchronize(stream);
+
+        if (comm->netComm) {
+            fprintf(stderr,"NET COMM ALLREDUCE\n");
+            ncclEnqueueCheck(ncclAllReduceFunc, "AllReduce", recvbuff, recvbuff, count, datatype,
+                             op, 0, comm->netComm, stream);
+//        cudaStreamSynchronize(stream);
+        }
+        fprintf(stderr,"NODE COMM BCAST\n");
+        return ncclEnqueueCheck(ncclBroadcastFunc, "Broadcast", recvbuff, recvbuff, count, datatype,
+                                ncclSum, 0, comm->nodeComm, stream);
+    } else {
+        return ncclEnqueueCheck(ncclAllReduceFunc, "AllReduce", sendbuff, recvbuff, count, datatype,
+                                op, 0, comm, stream);
+    }
 }

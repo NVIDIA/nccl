@@ -256,6 +256,34 @@ static ncclResult_t setupRing(struct ncclComm* comm, int ringid, int rank, int n
   return ncclSuccess;
 }
 
+
+static ncclResult_t setupSharp(struct ncclComm* comm, int ringid, int rank, int nranks, int* ringRanks, struct ncclInfo* allInfo, struct ncclConnect* connect) {
+  NCCLCHECK(initRing(comm, ringid));
+
+  struct ncclRing* ring = comm->rings+ringid;
+  // Reorganize ranks to start with rank.
+  int shift;
+  for (shift = 0; shift<nranks; shift++) {
+    if (ringRanks[shift] == rank) {
+      break;
+    }
+  }
+  for (int i=0; i<nranks; i++) {
+    ring->userRanks[i] = ringRanks[(i+shift)%nranks];
+  }
+  int prev = ring->userRanks[nranks-1];
+  int next = ring->userRanks[1];
+
+  NCCLCHECK(selectTransport<0>(allInfo+rank, allInfo+prev, connect+0, &ring->recv.transport, ring));
+  NCCLCHECK(selectTransport<1>(allInfo+rank, allInfo+next, connect+1, &ring->send.transport, ring));
+  NCCLCHECK(transportCreateProxy(0, ring, comm));
+  NCCLCHECK(transportCreateProxy(1, ring, comm));
+  return ncclSuccess;
+}
+
+
+
+
 static ncclResult_t fillConnect(struct ncclInfo* allInfo, int nranks, int rank, int* connectTransport, ncclTvalue_t* connectValue) {
   for (int r=0; r<nranks; r++) {
     connectTransport[r] = -1;
@@ -413,7 +441,7 @@ ncclResult_t ncclCommSetIntra(struct ncclComm* comm, int rank, int ranks, struct
   return ncclSuccess;
 }
 
-static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* commId) {
+static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* commId, bool initSharp, bool initRing) {
   int rank = comm->rank;
   int nranks = comm->nRanks;
   void* commState;
@@ -539,7 +567,7 @@ bool SetCpuAffinity(int cudaDev, nvmlDevice_t* nvmlDevice) {
   return true;
 }
 
-ncclResult_t ncclCommInitRankSync(ncclComm_t* newcomm, int ndev, ncclUniqueId commId, int myrank) {
+ncclResult_t ncclCommInitRankSync(ncclComm_t* newcomm, int ndev, ncclUniqueId commId, int myrank, bool initSharp, bool initRing ) {
   cpu_set_t affinitySave;
   sched_getaffinity(0, sizeof(cpu_set_t), &affinitySave);
 
@@ -554,7 +582,7 @@ ncclResult_t ncclCommInitRankSync(ncclComm_t* newcomm, int ndev, ncclUniqueId co
   ncclResult_t res;
 
   NCCLCHECKGOTO(commAlloc(newcomm, ndev, myrank), res, cleanup);
-  NCCLCHECKGOTO(initTransportsRank(*newcomm, &commId), res, cleanup);
+  NCCLCHECKGOTO(initTransportsRank(*newcomm, &commId , initSharp, initRing ), res, cleanup);
   NCCLCHECKGOTO(devCommSetup(*newcomm), res, cleanup);
 
   sched_setaffinity(0, sizeof(cpu_set_t), &affinitySave);
@@ -591,9 +619,9 @@ ncclResult_t ncclCommInitRank(ncclComm_t* newcomm, int nranks, ncclUniqueId comm
   if (ncclAsyncMode()) {
     int cudaDev;
     CUDACHECK(cudaGetDevice(&cudaDev));
-    return ncclAsyncInit(ncclCommInitRankSync, cudaDev, newcomm, nranks, commId, myrank);
+    return ncclAsyncInit(ncclCommInitRankSync, cudaDev, newcomm, nranks, commId, myrank, false, true);
   } else {
-      NCCLCHECK(ncclCommInitRankSync(newcomm, nranks, commId, myrank));
+      NCCLCHECK(ncclCommInitRankSync(newcomm, nranks, commId, myrank, false, true));
   }
   {
       char *hostname;
@@ -661,7 +689,7 @@ ncclResult_t ncclCommInitRank(ncclComm_t* newcomm, int nranks, ncclUniqueId comm
                       myrank, hostname, node_local_rank, local_ranks, node_leader_rank, ((uint64_t*)&node_comm_uid)[0],
                       ((uint64_t*)&node_comm_uid)[1]);
               NCCLCHECK(ncclCommInitRankSync(&((*newcomm)->nodeComm), local_ranks,
-                                             node_comm_uid, node_local_rank));
+                                             node_comm_uid, node_local_rank, true , false  ) );
           }
           int netLocalRank = -1;
           if (node_leader_rank == myrank) {
@@ -682,7 +710,7 @@ ncclResult_t ncclCommInitRank(ncclComm_t* newcomm, int nranks, ncclUniqueId comm
                       myrank, hostname, netLocalRank, nnodes, ((uint64_t*)&net_comm_uid)[0],
                       ((uint64_t*)&net_comm_uid)[1]);
               NCCLCHECK(ncclCommInitRankSync(&((*newcomm)->netComm), nnodes,
-                                             net_comm_uid, netLocalRank));
+                                             net_comm_uid, netLocalRank, false, true ));
           }
           CUDACHECK(cudaFree(uids));
       }

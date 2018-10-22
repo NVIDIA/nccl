@@ -30,6 +30,8 @@ struct ncclInitArgs {
   int ndev;
   ncclUniqueId commId;
   int myrank;
+  bool initSharp;
+  bool initRing;
 };
 struct ncclCollArgs {
   ncclComm_t comm;
@@ -66,11 +68,11 @@ ncclResult_t ncclSetDevice(int cudaDev) {
 void* ncclAsyncThreadMain(void* args_) {
   struct ncclAsyncArgs* args = (struct ncclAsyncArgs*)args_;
   CHECK(ncclSetDevice(args->init.cudaDev));
-  CHECK(args->init.func(args->init.newcomm, args->init.ndev, args->init.commId, args->init.myrank));
+  CHECK(args->init.func(args->init.newcomm, args->init.ndev, args->init.commId, args->init.myrank, args->init.initSharp, args->init.initRing ));
   return args;
 }
 
-ncclResult_t ncclAsyncInit(ncclInitFunc_t func, int cudaDev, ncclComm_t* newcomm, int ndev, ncclUniqueId commId, int myrank) {
+ncclResult_t ncclAsyncInit(ncclInitFunc_t func, int cudaDev, ncclComm_t* newcomm, int ndev, ncclUniqueId commId, int myrank, bool initSharp, bool initRing) {
   if (ncclGroupIndex >= MAX_ASYNC_OPS) {
     WARN("Too many async operations in progress, max is %d", MAX_ASYNC_OPS);
     return ncclAsyncErrCheck(ncclInternalError);
@@ -82,6 +84,8 @@ ncclResult_t ncclAsyncInit(ncclInitFunc_t func, int cudaDev, ncclComm_t* newcomm
   args->init.cudaDev = cudaDev;
   args->init.newcomm = newcomm;
   args->init.ndev = ndev;
+  args->init.initSharp = initSharp;
+  args->init.initRing = initRing;
   memcpy(&args->init.commId, &commId, sizeof(commId));
   args->init.myrank = myrank;
   // We need to use threads for Init

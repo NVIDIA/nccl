@@ -21,7 +21,7 @@ __device__ void ncclSharpAllReduceKernel(struct CollectiveArgs* args) {
   const int nthreads = blockDim.x - 1;
   const int bid = args->bid;
   __shared__ T* sharedNextOutput;
-  struct ncclComm* comm = args->comm;
+  struct ncclComm* comm = args->comm->netComm;
   struct ncclRing* ring = comm->rings+blockIdx.x;
   int prevdirect = ring->recv.conn.direct;
   int nextdirect = ring->send.conn.direct;
@@ -30,6 +30,9 @@ __device__ void ncclSharpAllReduceKernel(struct CollectiveArgs* args) {
   WaitFlag waitReadyFromPrev(ring->recv.conn.tail, ALLREDUCE_SUBSTEPS);
   PostFlag postDoneToPrev(ring->recv.conn.head, ALLREDUCE_SUBSTEPS, NULL, 0);
   PostFlag postReadyToNext(ring->send.conn.tail, 0, ring->send.conn.fifo, ALLREDUCE_BUFCHUNKS*ALLREDUCE_SUBSTEPS);
+
+  WaitFlag waitSharp(ring->sharp.tail, 1);
+  PostFlag postSharp(ring->sharp.head, 1, ring->sharp.fifo, ALLREDUCE_SUBSTEPS);
 
   typedef Primitives<UNROLL, ALLREDUCE_SUBSTEPS, T, FUNC> Prims;
 
@@ -128,6 +131,12 @@ __device__ void ncclSharpAllReduceKernel(struct CollectiveArgs* args) {
 
     NEXT_STEP;
 
+    __syncthreads();
+    postSharp.postSize(0,sliceSize);
+    __threadfence_system(); 
+    postSharp.post(0);
+    waitSharp.wait(0);
+
     // k-2 steps: copy to next GPU
     if (prevdirect) {
       for (int j=1; j<nranks-1; ++j) {
@@ -195,6 +204,7 @@ __device__ void ncclSharpAllReduceKernel(struct CollectiveArgs* args) {
     *ring->recv.conn.opCount = args->opCount+1;
   }
 }
+
 
 template<int UNROLL, class FUNC, typename T>
 __device__ void ncclAllReduceKernel(struct CollectiveArgs* args) {

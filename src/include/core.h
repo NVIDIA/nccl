@@ -82,6 +82,20 @@ struct ncclConnInfo {
   uint64_t llLastCleaning;
 };
 
+struct ncclSharpConnector {
+  // Regular Sharp Comm Context
+
+  /////////////////////////////  
+  char *buff;         // Local for recv, remote for send
+  uint64_t *tail;     // Local for recv, remote for send
+  uint64_t *head;     // Local for send, remote for recv
+  uint64_t *opCount;  // Local for recv, remote for send
+  int *fifo;          // Size fifo for proxy
+
+
+
+};
+
 struct ncclConnector {
   struct transportProxyInfo* proxyInfo;
   struct ncclTransport* transport;
@@ -143,6 +157,7 @@ struct ncclRing {
       int devMemRecvSize;    // Keep the size for IPCs
       struct ncclConnector send;
       struct ncclConnector recv;
+      struct ncclSharpConnector sharp;
 
       // Maps an internal nccl index to user-specified rank order. This is necessary
       // since we need to know how the user expects data to be ordered across

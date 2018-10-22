@@ -248,6 +248,20 @@ ncclResult_t bootstrapAllGather(void* commState, void* allData, int size) {
   return ncclSuccess;
 }
 
+ncclResult_t bootstrapBcast(void* commState, void* buf, int size, int root) {
+    struct extState* state = (struct extState*)commState;
+    void *tmp_buf = malloc(size*state->nranks);
+    if (state->rank == root) {
+        memcpy((void*)((ptrdiff_t)tmp_buf+size*state->rank), buf, size);
+    }
+    bootstrapAllGather(commState, tmp_buf, size);
+    if (state->rank != root) {
+        memcpy(buf, (void*)((ptrdiff_t)tmp_buf+size*root), size);
+    }
+    free(tmp_buf);
+    return ncclSuccess;
+}
+
 ncclResult_t bootstrapRingExchange(void* commState, void* prevNextData, int prev, int next, int size) {
   struct extState* state = (struct extState*)commState;
   char* mydata = (char*)prevNextData;

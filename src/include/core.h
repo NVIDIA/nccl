@@ -35,7 +35,8 @@ struct cudaLaunchParams {
 
 // Rings / LL tuning
 #define NCCL_LL_RING_THRESHOLD 8 // Per thread size before we start increasing nrings
-#define NCCL_THREAD_THRESHOLD 32  // Per thread size before we switch to non-LL
+#define NCCL_THREAD_THRESHOLD 64 // Per thread size before we switch to non-LL for Volta and above
+#define NCCL_THREAD_THRESHOLD_PREVOLTA 32 // Per thread size before we switch to non-LL for pre-Volta archs
 #define NCCL_LL_MAX_NTHREADS 256
 #define NCCL_LL_MIN_NTHREADS 64
 
@@ -95,8 +96,8 @@ struct ncclConnector {
 #define CUDA_IPC_MIN 2097152UL /* 2MiB - not currently used */
 
 #define NCCL_LL_CHUNKS 8
-#define NUM_LINES_PER_THREAD 2
-#define NCCL_LL_BUFF_SIZE (NUM_LINES_PER_THREAD*NCCL_LL_MAX_NTHREADS*NCCL_LL_CHUNKS*sizeof(union ncclLLFifoLine)) // 64K
+#define NUM_LINES_PER_THREAD 8
+#define NCCL_LL_BUFF_SIZE (NUM_LINES_PER_THREAD*NCCL_LL_MAX_NTHREADS*NCCL_LL_CHUNKS*sizeof(union ncclLLFifoLine)) // 256K
 #define NCCL_LL_BUFF_LINES (NCCL_LL_BUFF_SIZE / (2*sizeof(uint64_t)))
 #define NCCL_LL_SLICE_LINES (NCCL_LL_BUFF_LINES / NCCL_LL_CHUNKS)
 #define NCCL_LL_CLEAN_FREQ 0x10000000

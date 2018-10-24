@@ -16,6 +16,7 @@
 #include <net/if.h>
 #include "utils.h"
 
+#define MAX_IFS 16
 #define MAX_IF_NAME_SIZE 16
 #define SLEEP_INT     1000  // sleep interval in usec
 #define RETRY_TIMES   2e4   // retry times before reporting a timeout (20 sec)
@@ -40,6 +41,10 @@ static inline const char *socketToString(struct sockaddr *saddr, char *buf) {
   return buf;
 }
 
+static inline short socketToPort(struct sockaddr *saddr) {
+  return ntohs(saddr->sa_family == AF_INET ? ((struct sockaddr_in*)saddr)->sin_port : ((struct sockaddr_in6*)saddr)->sin6_port);
+}
+
 /* Allow the user to force the IPv4/IPv6 interface selection */
 static inline int envSocketFamily(void) {
   int family = -1; // Family selection is not forced, will use first one found
@@ -56,9 +61,9 @@ static inline int envSocketFamily(void) {
 
 static int findInterfaces(const char* prefixList, char* names, union socketAddress *addrs, int sock_family, int maxIfNameSize, int maxIfs) {
   char line[1024];
-  struct netIf userIfs[maxIfs];
+  struct netIf userIfs[MAX_IFS];
   bool searchNot = prefixList && prefixList[0] == '^';
-  int nUserIfs = parseStringList(prefixList, userIfs, maxIfs);
+  int nUserIfs = parseStringList(prefixList, userIfs, MAX_IFS);
 
   int found = 0;
   struct ifaddrs *interfaces, *interface;
@@ -313,8 +318,11 @@ static ncclResult_t createListenSocket(int *fd, union socketAddress *localAddr) 
     return ncclSystemError;
   }
 
-  int opt = 1;
-  SYSCHECK(setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt)), "setsockopt");
+  if (socketToPort(&localAddr->sa)) {
+    // Port is forced by env. Make sure we get the port.
+    int opt = 1;
+    SYSCHECK(setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt)), "setsockopt");
+  }
 
   // localAddr port should be 0 (Any port)
   SYSCHECK(bind(sockfd, &localAddr->sa, salen), "bind");

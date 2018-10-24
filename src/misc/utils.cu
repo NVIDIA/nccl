@@ -99,7 +99,7 @@ int parseStringList(const char* string, struct netIf* ifList, int maxList) {
       ifC++;
     }
     ptr++;
-  } while (c);
+  } while (ifNum < maxList && c);
   return ifNum;
 }
 

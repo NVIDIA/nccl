@@ -52,12 +52,18 @@ To install NCCL on the system, create a package then install it as root.
 
 Debian/Ubuntu :
 ```shell
+$ # Install tools to create debian packages
+$ sudo apt install build-essential devscripts debhelper
+$ # Build NCCL deb package
 $ make pkg.debian.build
 $ ls build/pkg/deb/
 ```
 
 RedHat/CentOS :
 ```shell
+$ # Install tools to create rpm packages
+$ sudo yum install rpm-build rpmdevtools
+$ # Build NCCL rpm package
 $ make pkg.redhat.build
 $ ls build/pkg/rpm/
 ```

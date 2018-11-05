@@ -62,7 +62,7 @@ $ ls build/pkg/deb/
 RedHat/CentOS :
 ```shell
 $ # Install tools to create rpm packages
-$ yum install rpm-build rpmdevtools
+$ sudo yum install rpm-build rpmdevtools
 $ # Build NCCL rpm package
 $ make pkg.redhat.build
 $ ls build/pkg/rpm/

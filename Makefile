@@ -6,6 +6,7 @@
 .PHONY : all clean
 
 default : src.build
+install : src.install
 BUILDDIR ?= $(abspath ./build)
 ABSBUILDDIR := $(abspath $(BUILDDIR))
 TARGETS := src pkg

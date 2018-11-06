@@ -366,8 +366,19 @@ static ncclResult_t connectAddress(int* fd, union socketAddress* remoteAddr) {
   TRACE(NCCL_INIT|NCCL_NET,"Connecting to socket %s", socketToString(&remoteAddr->sa, line));
 #endif
 
-  SYSCHECKNTIMES(connect(*fd, &remoteAddr->sa, salen), "connect", RETRY_TIMES, SLEEP_INT, ECONNREFUSED);
-  return ncclSuccess;
+  int ret;
+  int retries = 0;
+retry:
+  SYSCHECKSYNC(connect(*fd, &remoteAddr->sa, salen), "connect", ret);
+  if (ret == 0) return ncclSuccess;
+  if (errno == ECONNREFUSED && ++retries < RETRY_TIMES) {
+    INFO(ALL,"Call to connect returned %s, retrying", strerror(errno)); \
+    usleep(SLEEP_INT);
+    goto retry;
+  }
+  char line[1024];
+  WARN("Connect to %s failed : %s", socketToString(&remoteAddr->sa, line), strerror(errno));
+  return ncclSystemError;
 }
 
 #define NCCL_SOCKET_SEND 0

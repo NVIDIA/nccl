@@ -267,46 +267,26 @@ struct ncclComm {
 #include <errno.h>
 // Check system calls
 #define SYSCHECK(call, name) do { \
-  int ret = -1; \
-  while (ret == -1) { \
-    SYSCHECKVAL(call, name, ret); \
-    if (ret == -1) { \
-      INFO(NCCL_ALL,"Got %s, retrying", strerror(errno));   \
-    }\
-  } \
-} while (0);
+  int retval; \
+  SYSCHECKVAL(call, name, retval); \
+} while (false)
 
 #define SYSCHECKVAL(call, name, retval) do { \
-  retval = call; \
-  if (retval == -1 && errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) { \
+  SYSCHECKSYNC(call, name, retval); \
+  if (retval == -1) { \
     WARN("Call to " name " failed : %s", strerror(errno)); \
     return ncclSystemError; \
   } \
-} while (0);
+} while (false)
 
-#define SYSCHECKNTIMES(call, name, times, usec, exptype) do { \
-  int ret = -1; \
-  int count = 0; \
-  while (ret == -1 && count < times) { \
-    SYSCHECKVALEXP(call, name, ret, exptype); \
-    count++; \
-    if (ret == -1) { \
-      usleep(usec); \
-    }\
-  } \
-  if (ret == -1) { \
-    WARN("Call to " name " timeout : %s", strerror(errno)); \
-    return ncclSystemError; \
-  } \
-} while (0);
-
-#define SYSCHECKVALEXP(call, name, retval, exptype) do { \
+#define SYSCHECKSYNC(call, name, retval) do { \
   retval = call; \
-  if (retval == -1 && errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN && errno != exptype) { \
-    WARN("Call to " name " failed : %s", strerror(errno)); \
-    return ncclSystemError; \
+  if (retval == -1 && (errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN)) { \
+    INFO(NCCL_ALL,"Call to " name " returned %s, retrying", strerror(errno)); \
+  } else { \
+    break; \
   } \
-} while (0);
+} while(true)
 
 // Propagate errors up
 #define NCCLCHECK(call) do { \

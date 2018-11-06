@@ -12,51 +12,46 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
+// Change functions behavior to match other SYS functions
+static int shm_allocate(int fd, const int shmsize) {
+  int err = posix_fallocate(fd, 0, shmsize);
+  if (err) { errno = err; return -1; }
+  return 0;
+}
+static int shm_map(int fd, const int shmsize, void** ptr) {
+  *ptr = mmap(NULL, shmsize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  return (*ptr == MAP_FAILED) ? -1 : 0;
+}
+
+static ncclResult_t shmSetup(const char* shmname, const int shmsize, int* fd, void** ptr, int create) {
+  SYSCHECKVAL(shm_open(shmname, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR), "shm_open", *fd);
+  if (create) SYSCHECK(shm_allocate(*fd, shmsize), "posix_fallocate");
+  SYSCHECK(shm_map(*fd, shmsize, ptr), "mmap");
+  close(*fd);
+  *fd = -1;
+  if (create) memset(*ptr, 0, shmsize);
+  return ncclSuccess;
+}
+
 static ncclResult_t shmOpen(const char* shmname, const int shmsize, void** shmPtr, void** devShmPtr, int create) {
-  *shmPtr = NULL;
-  int fd = shm_open(shmname, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
-  if (fd == -1) {
-    WARN("shm_open failed to open %s : %s", shmname, strerror(errno));
-    return ncclSystemError;
-  }
+  int fd = -1;
+  void* ptr = MAP_FAILED;
+  ncclResult_t res = ncclSuccess;
 
-  if (create) {
-    int res = posix_fallocate(fd, 0, shmsize);
-    if (res != 0) {
-      WARN("Unable to allocate shared memory (%d bytes) : %s", shmsize, strerror(res));
-      shm_unlink(shmname);
-      close(fd);
-      return ncclSystemError;
-    }
-  }
+  NCCLCHECKGOTO(shmSetup(shmname, shmsize, &fd, &ptr, create), res, sysError);
+  CUDACHECKGOTO(cudaHostRegister(ptr, shmsize, cudaHostRegisterMapped), res, cudaError);
+  CUDACHECKGOTO(cudaHostGetDevicePointer(devShmPtr, ptr, 0), res, cudaError);
 
-  void *ptr = mmap(NULL, shmsize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-  close(fd);
-  if (ptr == MAP_FAILED) {
-    WARN("failure in mmap of %s (size %d) : %s", shmname, shmsize, strerror(errno));
-    shm_unlink(shmname);
-    return ncclSystemError;
-  }
-  if (create) {
-    memset(ptr, 0, shmsize);
-  }
-
-  cudaError_t e;
-  if ((e=cudaHostRegister(ptr, shmsize, cudaHostRegisterMapped)) != cudaSuccess) {
-    WARN("failed to register host buffer %p : %s", ptr, cudaGetErrorString(e));
-    if (create) shm_unlink(shmname);
-    munmap(ptr, shmsize);
-    return ncclUnhandledCudaError;
-  }
-
-  if ((e=cudaHostGetDevicePointer(devShmPtr, ptr, 0)) != cudaSuccess) {
-    WARN("failed to get device pointer for local shmem %p : %s", ptr, cudaGetErrorString(e));
-    if (create) shm_unlink(shmname);
-    munmap(ptr, shmsize);
-    return ncclUnhandledCudaError;
-  }
   *shmPtr = ptr;
   return ncclSuccess;
+sysError:
+  WARN("Error while %s shared memory segment %s (size %d)\n", create ? "creating" : "attaching to", shmname, shmsize);
+cudaError:
+  if (fd != -1) close(fd);
+  if (create) shm_unlink(shmname);
+  if (ptr != MAP_FAILED) munmap(ptr, shmsize);
+  *shmPtr = NULL;
+  return res;
 }
 
 static ncclResult_t shmUnlink(const char* shmname) {

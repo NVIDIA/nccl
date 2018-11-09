@@ -41,15 +41,16 @@ lib : $(INCTARGETS) $(LIBDIR)/$(LIBTARGET)
 
 staticlib : $(LIBDIR)/$(STATICLIBTARGET)
 
-devicelib: nccl.h
+devicelib: $(INCDIR)/nccl.h
 	$(MAKE) -C collectives/device
 
 -include $(DEPFILES)
 $(LIBDIR)/$(LIBTARGET) $(LIBDIR)/$(STATICLIBTARGET) : $(LIBOBJ)
 
-nccl.h : nccl.h.in
+$(INCDIR)/nccl.h : nccl.h.in
 # NCCL_VERSION(X,Y,Z) ((X) * 1000 + (Y) * 100 + (Z))
 	@$(eval NCCL_VERSION := $(shell printf "%d%d%02d" $(NCCL_MAJOR) $(NCCL_MINOR) $(NCCL_PATCH)))
+	mkdir -p $(INCDIR)
 	printf "Generating %-35s > %s\n" $< $@
 	sed -e "s/\$${nccl:Major}/$(NCCL_MAJOR)/g" \
 	    -e "s/\$${nccl:Minor}/$(NCCL_MINOR)/g" \
@@ -82,15 +83,15 @@ $(INCDIR)/%.h : %.h
 $(OBJDIR)/%.o : %.cu
 	@printf "Compiling  %-35s > %s\n" $< $@
 	mkdir -p `dirname $@`
-	$(NVCC) -I. -Iinclude -c $(NVCUFLAGS) --compiler-options "$(CXXFLAGS)" $< -o $@
-	@$(NVCC) -I. -Iinclude -M $(NVCUFLAGS) --compiler-options "$(CXXFLAGS)" $< > $(@:%.o=%.d.tmp)
+	$(NVCC) -I. -I$(INCDIR) -Iinclude -c $(NVCUFLAGS) --compiler-options "$(CXXFLAGS)" $< -o $@
+	@$(NVCC) -I. -I$(INCDIR) -Iinclude -M $(NVCUFLAGS) --compiler-options "$(CXXFLAGS)" $< > $(@:%.o=%.d.tmp)
 	@sed "0,/^.*:/s//$(subst /,\/,$@):/" $(@:%.o=%.d.tmp) > $(@:%.o=%.d)
 	@sed -e 's/.*://' -e 's/\\$$//' < $(@:%.o=%.d.tmp) | fmt -1 | \
                 sed -e 's/^ *//' -e 's/$$/:/' >> $(@:%.o=%.d)
 	@rm -f $(@:%.o=%.d.tmp)
 
 clean :
-	rm -rf ${INCDIR} ${LIBDIR} ${OBJDIR} nccl.h
+	rm -rf ${INCDIR} ${LIBDIR} ${OBJDIR}
 	$(MAKE) -C collectives/device clean
 
 install : lib

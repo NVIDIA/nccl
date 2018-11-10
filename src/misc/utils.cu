@@ -8,6 +8,8 @@
 #include "debug.h"
 #include <unistd.h>
 #include <string.h>
+#include <sys/types.h>
+#include <dirent.h>
 
 ncclResult_t getHostName(char* hostname, int maxlen) {
   if (gethostname(hostname, maxlen) != 0) {
@@ -33,17 +35,31 @@ uint64_t getHash(const char* string) {
  * that will be unique for both bare-metal and container instances
  * Equivalent of a hash of;
  *
- * $(hostname) $(readlink /proc/self/ns/uts)
+ * $(hostname) $(readlink /proc/self/ns/\*)
  */
 uint64_t getHostHash(void) {
   char uname[1024];
   // Start off with the hostname
   (void) getHostName(uname, sizeof(uname));
-  int hlen = strlen(uname);
-  int len = readlink("/proc/self/ns/uts", uname+hlen, sizeof(uname)-1-hlen);
-  if (len < 0) len = 0;
+  int offset = strlen(uname);
 
-  uname[hlen+len]='\0';
+  DIR *dp = opendir("/proc/self/ns");
+  if (dp != NULL) {
+    struct dirent *ep;
+    while (ep = readdir(dp)) {
+      if (offset >= sizeof(uname) - 1) {
+        break;
+      }
+      char ns_path[1024];
+      sprintf(ns_path, "/proc/self/ns/%s", ep->d_name);
+      int len = readlink(ns_path, uname+offset, sizeof(uname)-1-offset);
+      if (len < 0) len = 0;
+      offset += len;
+    }
+    (void) closedir(dp);
+  }
+
+  uname[offset]='\0';
   TRACE(INIT,"unique hostname '%s'", uname);
 
   return getHash(uname);

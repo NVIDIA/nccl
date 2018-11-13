@@ -175,7 +175,7 @@ ncclResult_t ncclBarrierEnqueueWait(ncclComm_t comm) {
   // We can't print the CG mode before the first barrier happened.
   if (comm->rank == 0 && *comm->intraCGMode & 0x10) {
     *comm->intraCGMode ^= 0x10;
-    INFO(INIT,"Launch mode %s%s%s",
+    INFO(NCCL_INIT,"Launch mode %s%s%s",
         comm->launchMode == ncclComm::GROUP ? "Group" : "Parallel",
         *comm->intraCGMode ? "/CGMD" : "",
         (comm->launchMode == ncclComm::GROUP && comm->groupCudaStream) ? "/Stream" : "");

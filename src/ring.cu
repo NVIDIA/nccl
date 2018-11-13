@@ -26,7 +26,7 @@ ncclResult_t initRing(struct ncclComm* comm, int ringid) {
   NCCLCHECK(ncclCudaCalloc((char**)&recvMem, recvSize));
   ring->devMemRecv = recvMem;
 
-  TRACE(INIT,"sendMem %p size %d recvMem %p size %d", sendMem, sendSize, recvMem, recvSize);
+  TRACE(NCCL_INIT,"sendMem %p size %d recvMem %p size %d", sendMem, sendSize, recvMem, recvSize);
 
   // Pre-configure send/recv pointers. Those are the default, they may change later.
   ring->recv.conn.buff = recvMem->buff;

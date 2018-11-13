@@ -217,7 +217,7 @@ ncclResult_t bootstrapAllGather(void* commState, void* allData, int size) {
   int rank = state->rank;
   int nranks = state->nranks;
 
-  TRACE(INIT, "rank %d nranks %d size %d", rank, nranks, size);
+  TRACE(NCCL_INIT, "rank %d nranks %d size %d", rank, nranks, size);
 
   /* Simple ring based AllGather
    * At each step i receive data from (rank-i-1) from left
@@ -233,7 +233,7 @@ ncclResult_t bootstrapAllGather(void* commState, void* allData, int size) {
     NCCLCHECK(bootstrapRecv(state->extBstrapRingRecvComm, data+rslice*size, size));
   }
 
-  TRACE(INIT, "rank %d nranks %d size %d - DONE", rank, nranks, size);
+  TRACE(NCCL_INIT, "rank %d nranks %d size %d - DONE", rank, nranks, size);
   return ncclSuccess;
 }
 

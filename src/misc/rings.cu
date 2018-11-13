@@ -5,8 +5,9 @@
  ************************************************************************/
 
 #include "core.h"
-#include "net.h"
 #include "param.h"
+
+#define NCCL_MAX_SCORE 7
 
 /* Parse user defined rings. Format is like :
  * "0 1|1 0|0 1 2 3|3 2 1 0|0 2 3 1|1 3 2 0|0 1 2 3 4 5 6 7|7 6 5 4 3 2 1 0"
@@ -188,11 +189,11 @@ ncclResult_t ncclGetRings(int* nrings, int* nthreads, int rank, int nranks, int*
   if (str && strlen(str)>0) {
     int ret = parseRings(str, nrings, nranks, prev, next);
     if (ret == ncclSuccess && *nrings > 0) {
-      if (rank == 0) INFO(INIT,"%d ring(s) set by environment", *nrings);
+      if (rank == 0) INFO(NCCL_INIT,"%d ring(s) set by environment", *nrings);
       NCCLCHECK(getEnvThreads(nthreads));
       return ncclSuccess;
     }
-    if (rank == 0) INFO(INIT,"No valid ring found in environment, ignoring");
+    if (rank == 0) INFO(NCCL_INIT,"No valid ring found in environment, ignoring");
     *nrings = 0;
   }
 
@@ -333,13 +334,13 @@ ncclResult_t ncclGetRings(int* nrings, int* nthreads, int rank, int nranks, int*
     minNrings = MAXRINGS;
   }
   if (maxNrings > 0 && maxNrings <= *nrings) {
-    if (rank == 0) INFO(INIT,"Limiting to %d rings per user request.", maxNrings);
+    if (rank == 0) INFO(NCCL_INIT,"Limiting to %d rings per user request.", maxNrings);
     *nrings = maxNrings;
   } else {
     int defaultMinNrings = ncclCudaCompCap() == 3 ? 2 : 1;
     if (minNrings < defaultMinNrings) minNrings = defaultMinNrings;
     if (minNrings > 0 && minNrings > *nrings) {
-      if (rank == 0 && minNrings > defaultMinNrings) INFO(INIT,"Duplicating rings to %d per user request.", minNrings);
+      if (rank == 0 && minNrings > defaultMinNrings) INFO(NCCL_INIT,"Duplicating rings to %d per user request.", minNrings);
       for (int r=*nrings; r<MAXRINGS && r <minNrings; r++) {
         for (int i=0; i<nranks; i++) {
           prev[r*nranks+i] = prev[(r-*nrings)*nranks+i];

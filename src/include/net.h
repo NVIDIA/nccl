@@ -10,6 +10,7 @@
 #include "nccl.h"
 #include "nccl_net.h"
 
+extern ncclNet_t* ncclNet;
 typedef char ncclNetHandle_t[NCCL_NET_HANDLE_MAXSIZE];
 
 /* Socket Interface Selection type */
@@ -19,7 +20,8 @@ typedef enum { findSubnetIf   = -1,
 
 // Translation to external API
 static const char* ncclNetName() { return ncclNet->name; }
-static ncclResult_t ncclNetDevices(int* ndev, int** scores) { NCCLCHECK(ncclNet->devices(ndev, scores)); return ncclSuccess; }
+static ncclResult_t ncclNetDevices(int* ndev) { NCCLCHECK(ncclNet->devices(ndev)); return ncclSuccess; }
+static ncclResult_t ncclNetPciPath(int dev, char** path) { NCCLCHECK(ncclNet->pciPath(dev, path)); return ncclSuccess; }
 static ncclResult_t ncclNetPtrSupport(int dev, int* supportedTypes) { NCCLCHECK(ncclNet->ptrSupport(dev, supportedTypes)); return ncclSuccess; }
 static ncclResult_t ncclNetListen(int dev, void* handle, void** listenComm) { NCCLCHECK(ncclNet->listen(dev, handle, listenComm)); return ncclSuccess; }
 static ncclResult_t ncclNetConnect(int dev, void* handle, void** sendComm) { NCCLCHECK(ncclNet->connect(dev, handle, sendComm)); return ncclSuccess; }
@@ -32,7 +34,6 @@ static ncclResult_t ncclNetCloseSend(void* sendComm) { NCCLCHECK(ncclNet->closeS
 static ncclResult_t ncclNetCloseRecv(void* recvComm) { NCCLCHECK(ncclNet->closeRecv(recvComm)); return ncclSuccess; }
 static ncclResult_t ncclNetCloseListen(void* listenComm) { NCCLCHECK(ncclNet->closeListen(listenComm)); return ncclSuccess; }
 
-extern bool ncclIbSupport();
 extern ncclResult_t ncclSocketCreateHandle(void* opaqueHandle, const char* str);
 extern ncclNet_t ncclNetIb;
 extern ncclNet_t ncclNetSocket;

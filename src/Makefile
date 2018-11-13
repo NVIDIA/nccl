@@ -8,7 +8,7 @@ include ../makefiles/common.mk
 include ../makefiles/version.mk
 
 ##### src files
-INCEXPORTS  := nccl.h
+INCEXPORTS  := nccl.h nccl_net.h
 LIBSRCFILES := init.cu ring.cu bootstrap.cu transport.cu misc/group.cu \
 		misc/nvmlwrap.cu misc/ibvwrap.cu misc/rings.cu misc/utils.cu misc/enqueue.cu \
 		transport/p2p.cu transport/shm.cu transport/net.cu transport/net_socket.cu transport/net_ib.cu \
@@ -76,6 +76,11 @@ $(LIBDIR)/$(STATICLIBTARGET): $(LIBOBJ) devicelib
 	rm -Rf $(TMP)
 
 $(INCDIR)/%.h : %.h
+	@printf "Grabbing   %-35s > %s\n" $< $@
+	mkdir -p $(INCDIR)
+	cp -f $< $@
+
+$(INCDIR)/nccl_%.h : include/nccl_%.h
 	@printf "Grabbing   %-35s > %s\n" $< $@
 	mkdir -p $(INCDIR)
 	cp -f $< $@

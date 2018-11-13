@@ -19,11 +19,21 @@
 #define NET_BITS_PER_IF 3
 #define NET_BITS_PER_IF_MASK ((1<<NET_BITS_PER_IF)-1)
 static_assert(sizeof(ncclTvalue_t)*8 >= NET_MAX_IFS*NET_BITS_PER_IF, "NET_MAX_IFS*NET_BITS_PER_IF must fit in a ncclTvalue_t");
+static ncclTvalue_t getTvalue(short* distances, int ndev) {
+  ncclTvalue_t tvalue = 0;
+  for (int d=0; d<ndev; d++) {
+    int score = 1 + PATH_SOC - distances[d];
+    // Keep 3 bits of score info per dev
+    tvalue |= ((score & NET_BITS_PER_IF_MASK)<<(NET_BITS_PER_IF*d));
+  }
+  return tvalue;
+}
 
 struct netInfo {
   int rank;
   int ndev;
-  short scores[NET_MAX_IFS];
+  ncclTvalue_t tValue;
+  short distances[NET_MAX_IFS];
 };
 
 struct netConnectInfo {
@@ -38,7 +48,7 @@ struct netSendResources {
   struct ncclRecvMem* devHostRecvMem;
   struct ncclSendMem* hostDevMem;
   int netDev;
-  bool cudaSupport;
+  int useGdr;
   struct ncclRecvMem* devNetMem;
   uint64_t llStep;
   uint64_t llLastCleaning;
@@ -53,7 +63,7 @@ struct netRecvResources {
   struct ncclRecvMem* devHostRecvMem;
   struct ncclRecvMem* hostDevMem;
   int netDev;
-  bool cudaSupport;
+  int useGdr;
   uint64_t llStep;
   uint64_t llLastCleaning;
 };
@@ -64,26 +74,37 @@ ncclResult_t netFillInfo(ncclTinfo_t* opaqueInfo, int rank) {
   struct netInfo* info = (struct netInfo*)opaqueInfo;
   static_assert(sizeof(struct netInfo) <= sizeof(ncclTinfo_t), "NET Info too large");
   info->rank = rank;
-  int *scores;
-  NCCLCHECK(ncclNetDevices(&info->ndev, &scores));
+  NCCLCHECK(ncclNetDevices(&info->ndev));
   if (info->ndev == 0) {
     WARN("Error : Network returned 0 device");
     return ncclSystemError;
   }
   if (info->ndev > NET_MAX_IFS) info->ndev = NET_MAX_IFS;
-  for (int d=0; d<info->ndev; d++) info->scores[d] = scores[d];
-  free(scores);
+
+  // Find distance with current GPU
+  int cudaDev;
+  cudaGetDevice(&cudaDev);
+  char* cudaPath;
+  NCCLCHECK(getCudaPath(cudaDev, &cudaPath));
+
+  char line[1024];
+  sprintf(line, "CUDA Dev %d, %s NIC distance : ", cudaDev, ncclNetName());
+  for (int d=0; d<info->ndev; d++) {
+    char* nicPath;
+    ncclResult_t err = ncclNetPciPath(d, &nicPath);
+    info->distances[d] = (err != ncclSuccess || nicPath == NULL || cudaPath == NULL) ? PATH_SOC : pciDistance(nicPath, cudaPath);
+    sprintf(line+strlen(line), " %s", pathDists[info->distances[d]]);
+    if (err == ncclSuccess) free(nicPath);
+  }
+  INFO(NCCL_INIT|NCCL_NET, "%s", line);
+  free(cudaPath);
   return ncclSuccess;
 }
 
 /* Determine if we can communicate with the peer */
 ncclResult_t netCanConnect(ncclTvalue_t* ret, ncclTinfo_t* myOpaqueInfo, ncclTinfo_t* peerOpaqueInfo) {
-  ret[0] = 0;
   struct netInfo* myInfo = (struct netInfo*)myOpaqueInfo;
-  for (int d=0; d<myInfo->ndev; d++) {
-    // Keep 3 bits of score info per dev
-    ret[0] |= ((myInfo->scores[d] & NET_BITS_PER_IF_MASK)<<(NET_BITS_PER_IF*d));
-  }
+  ret[0] = getTvalue(myInfo->distances, myInfo->ndev);
   return ncclSuccess;
 }
 
@@ -175,13 +196,13 @@ ncclResult_t netGetRings(int nranks, int* groups, int* subgroups, ncclTvalue_t* 
   return ncclSuccess;
 }
 
-int getDev(int ringId, int nDev, short* scores) {
-  int maxScore = 0;
-  for (int d=0; d<nDev; d++) if (scores[d] > maxScore) maxScore = scores[d];
+int getDev(int ringId, int nDev, short* distances) {
+  int minDistance = PATH_SOC;
+  for (int d=0; d<nDev; d++) if (distances[d] < minDistance) minDistance = distances[d];
   int skip = ringId+1;
   while (skip) {
     for (int d=0; d<nDev; d++) {
-      if (scores[d] == maxScore) {
+      if (distances[d] == minDistance) {
         skip--;
         if (skip == 0) return d;
       }
@@ -191,6 +212,40 @@ int getDev(int ringId, int nDev, short* scores) {
 }
 
 NCCL_PARAM(NetGdrRead, "NET_GDR_READ", -2);
+NCCL_PARAM(NetGdrLevel, "NET_GDR_LEVEL", PATH_PHB);
+
+static ncclResult_t netGetGdrSupport(int dev, int distance, int read, int* useGdr) {
+  *useGdr = 0;
+
+  int cudaDev;
+  CUDACHECK(cudaGetDevice(&cudaDev));
+
+  if (read) { // For reads (sends) only enable under certain conditions
+    int gdrReadParam = ncclParamNetGdrRead();
+    if (gdrReadParam == 0) return ncclSuccess;
+    else if (gdrReadParam < 0) { // default : enable only on DGX2
+      char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE];
+      CUDACHECK(cudaDeviceGetPCIBusId(busId, NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE, cudaDev));
+      int nvlinks = getNumNvlinks(busId);
+      if (nvlinks < CONNECT_NVSWITCH || ncclCudaCompCap() < 7) return ncclSuccess;
+    }
+  }
+
+  // Check if we are close enough that it makes sense to enable GDR
+  int netGdrLevel = ncclParamNetGdrLevel();
+  if (distance >= netGdrLevel) {
+    INFO(NCCL_INIT|NCCL_NET,"NET/%s : GPU Direct RDMA Disabled for GPU %d / HCA %d (distance %d >= %d)", ncclNetName(), cudaDev, dev, distance, netGdrLevel);
+    return ncclSuccess;
+  }
+
+  // Finally, check if the NIC supports it
+  int flags;
+  NCCLCHECK(ncclNetPtrSupport(dev, &flags));
+  if (flags & NCCL_PTR_CUDA == 0) return ncclSuccess;
+  *useGdr = 1;
+  INFO(NCCL_INIT|NCCL_NET,"NET/%s : GPU Direct RDMA Enabled for GPU %d / HCA %d (distance %d >= %d), read %d", ncclNetName(), cudaDev, dev, distance, netGdrLevel, read);
+  return ncclSuccess;
+}
 
 /* Determine if we will use this transport for this peer and return connect
  * information for this peer */
@@ -200,34 +255,11 @@ ncclResult_t netSendSetup(ncclTinfo_t* myOpaqueInfo, ncclTinfo_t* peerOpaqueInfo
   ring->send.transportResources = resources;
 
   struct netInfo* myInfo = (struct netInfo*)myOpaqueInfo;
-  resources->netDev = getDev(ring->id, myInfo->ndev, myInfo->scores);
-  resources->cudaSupport = false;
-
-  // Get user's GDR READ setting
-  int gdrReadParam = ncclParamNetGdrRead();
-
-  // Determine whether the GPU has NVLink
-  int cudaDev;
-  CUDACHECK(cudaGetDevice(&cudaDev));
-  char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE];
-  CUDACHECK(cudaDeviceGetPCIBusId(busId, NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE, cudaDev));
-  int nvlinks = getNumNvlinks(busId);
-
-  // Enable GDR read when:
-  // 1) user sets it, or
-  // 2) we are on a NVSwitch platform (i.e. no P2P traffic over PCI-E switch) AND the GPU is Volta
-  bool enableGdrRead = (gdrReadParam > 0) || (nvlinks >= CONNECT_NVSWITCH && ncclCudaCompCap() > 6 && gdrReadParam != 0);
-  if (enableGdrRead) {
-    int flags;
-    NCCLCHECK(ncclNetPtrSupport(resources->netDev, &flags));
-    if (flags & NCCL_PTR_CUDA)
-      resources->cudaSupport = true;
-  }
-  if (resources->cudaSupport)
-    INFO(INIT|NET, "Net: enabling net device %d to read from rank %d", resources->netDev, myInfo->rank);
+  resources->netDev = getDev(ring->id, myInfo->ndev, myInfo->distances);
+  NCCLCHECK(netGetGdrSupport(resources->netDev, myInfo->distances[resources->netDev], 1, &resources->useGdr));
 
   int size = offsetof(struct ncclRecvMem, buff)+ring->buffSize;
-  if (resources->cudaSupport) {
+  if (resources->useGdr) {
     NCCLCHECK(ncclCudaCalloc((char**)(&resources->devNetMem), size));
   }
 
@@ -243,10 +275,8 @@ ncclResult_t netRecvSetup(ncclTinfo_t* myOpaqueInfo, ncclTinfo_t* peerOpaqueInfo
   ring->recv.transportResources = resources;
 
   struct netInfo* myInfo = (struct netInfo*)myOpaqueInfo;
-  resources->netDev = getDev(ring->id, myInfo->ndev, myInfo->scores);
-  int flags;
-  NCCLCHECK(ncclNetPtrSupport(resources->netDev, &flags));
-  resources->cudaSupport = (flags & NCCL_PTR_CUDA) ? true : false;
+  resources->netDev = getDev(ring->id, myInfo->ndev, myInfo->distances);
+  NCCLCHECK(netGetGdrSupport(resources->netDev, myInfo->distances[resources->netDev], 0, &resources->useGdr));
 
   int sendSize = sizeof(struct ncclSendMem);
   NCCLCHECK(ncclCudaHostAlloc((void**)&resources->hostSendMem, (void**)&resources->devHostSendMem, sendSize));
@@ -255,8 +285,8 @@ ncclResult_t netRecvSetup(ncclTinfo_t* myOpaqueInfo, ncclTinfo_t* peerOpaqueInfo
   NCCLCHECK(ncclCudaHostAlloc((void**)&resources->hostRecvMem, (void**)&resources->devHostRecvMem, recvSize));
 
   struct netInfo* peerInfo = (struct netInfo*)peerOpaqueInfo;
-  INFO(INIT|NET,"Ring %02d : %d -> %d via NET/%s/%d%s%s", ring->id, peerInfo->rank, myInfo->rank, ncclNetName(), resources->netDev,
-      resources->cudaSupport ? "/GDRDMA" : "",
+  INFO(NCCL_INIT|NCCL_NET,"Ring %02d : %d -> %d via NET/%s/%d%s%s", ring->id, peerInfo->rank, myInfo->rank, ncclNetName(), resources->netDev,
+      resources->useGdr ? "/GDRDMA" : "",
       (resources->hostDevMem != NULL) ? "/GDCopy" : "");
   struct netConnectInfo* info = (struct netConnectInfo*) connectInfo;
   NCCLCHECK(ncclNetListen(resources->netDev, &info->netHandle, &resources->netListenComm));
@@ -267,7 +297,7 @@ ncclResult_t netSendConnect(struct ncclConnect* connectInfo, struct ncclConnecto
   // Setup device pointers
   struct netSendResources* resources = (struct netSendResources*)send->transportResources;
 
-  if (resources->cudaSupport) {
+  if (resources->useGdr) {
     send->conn.buff = resources->devNetMem->buff;
     // We don't use devMem for llMode because the CPU has to read the data
     send->conn.llBuff = resources->devHostRecvMem->llBuff;
@@ -299,7 +329,7 @@ ncclResult_t netRecvConnect(struct ncclConnect* connectInfo, struct ncclConnecto
   recv->conn.head = &resources->devHostSendMem->head;
   recv->conn.llHead = &resources->devHostSendMem->llHead;
 
-  if (resources->cudaSupport == false) {
+  if (resources->useGdr == 0) {
     recv->conn.buff = resources->devHostRecvMem->buff;
     recv->conn.llBuff = resources->devHostRecvMem->llBuff;
   }
@@ -320,7 +350,7 @@ ncclResult_t netSendFree(void* transportResources) {
   struct netSendResources* resources = (struct netSendResources*)transportResources;
   NCCLCHECK(ncclCudaHostFree(resources->hostSendMem));
   NCCLCHECK(ncclCudaHostFree(resources->hostRecvMem));
-  if (resources->cudaSupport)
+  if (resources->useGdr)
     CUDACHECK(cudaFree(resources->devNetMem));
   NCCLCHECK(ncclNetCloseSend(resources->netSendComm));
   free(resources);
@@ -344,9 +374,9 @@ ncclResult_t netSendProxy(struct ncclProxyArgs* args) {
   volatile uint64_t* prevTail = &resources->hostRecvMem->tail;
   struct ncclSendMem* prevMem = resources->hostDevMem ? resources->hostDevMem : resources->hostSendMem;
   uint64_t* prevHead = llMode ? &prevMem->llHead : &prevMem->head;
-  struct ncclRecvMem* localMem = resources->cudaSupport ? resources->devNetMem : resources->hostRecvMem;
+  struct ncclRecvMem* localMem = resources->useGdr ? resources->devNetMem : resources->hostRecvMem;
   char* localBuff = llMode ? resources->hostRecvMem->llBuff : localMem->buff;
-  int ptrType = resources->cudaSupport ? NCCL_PTR_CUDA : NCCL_PTR_HOST;
+  int ptrType = resources->useGdr ? NCCL_PTR_CUDA : NCCL_PTR_HOST;
   volatile int* sizesFifo = llMode ? resources->hostRecvMem->llSizesFifo : resources->hostRecvMem->sizesFifo;
   int buffSize = llMode ? NCCL_LL_BUFF_SIZE : ring->buffSize;
   int sliceSize = buffSize / args->substeps;
@@ -362,8 +392,8 @@ ncclResult_t netSendProxy(struct ncclProxyArgs* args) {
 
   if (!args->needProxy) goto nextColl;
 
-  TRACE(NET,"opCount %lx head %lx tail %lx end %lx nsteps %d llMode %d", args->opCount, head, tail, end, args->nsteps, llMode);
-  TRACE(NET,"opCount %lx buffSize %d sliceSize %d ptrType %d", args->opCount, buffSize, sliceSize, ptrType);
+  TRACE(NCCL_NET,"opCount %lx head %lx tail %lx end %lx nsteps %d llMode %d", args->opCount, head, tail, end, args->nsteps, llMode);
+  TRACE(NCCL_NET,"opCount %lx buffSize %d sliceSize %d ptrType %d", args->opCount, buffSize, sliceSize, ptrType);
 
   // Update in case we skipped some collectives
   if (llMode == 0) resources->hostRecvMem->opCount = args->opCount;
@@ -440,10 +470,10 @@ ncclResult_t netRecvProxy(struct ncclProxyArgs* args) {
   int llMode = args->llMode;
 
   volatile uint64_t* nextHead = llMode ? &resources->hostSendMem->llHead : &resources->hostSendMem->head;
-  struct ncclRecvMem* localMem = resources->cudaSupport ? ring->devMemRecv : resources->hostRecvMem;
+  struct ncclRecvMem* localMem = resources->useGdr ? ring->devMemRecv : resources->hostRecvMem;
   char* localBuff = llMode ? localMem->llBuff : localMem->buff;
-  char* nextBuff = (resources->cudaSupport == false && resources->hostDevMem) ? resources->hostDevMem->buff : NULL;
-  int ptrType = resources->cudaSupport ? NCCL_PTR_CUDA : NCCL_PTR_HOST;
+  char* nextBuff = (resources->useGdr == 0 && resources->hostDevMem) ? resources->hostDevMem->buff : NULL;
+  int ptrType = resources->useGdr ? NCCL_PTR_CUDA : NCCL_PTR_HOST;
   uint64_t* nextTail = resources->hostDevMem ? &resources->hostDevMem->tail : &resources->hostRecvMem->tail;
 
   int buffSize = llMode ? NCCL_LL_BUFF_SIZE : ring->buffSize;
@@ -458,8 +488,8 @@ ncclResult_t netRecvProxy(struct ncclProxyArgs* args) {
 
   if (!args->needProxy) goto nextColl;
 
-  TRACE(NET,"opCount %lx head %lx tail %lx end %lx nsteps %d llMode %d", args->opCount, head, tail, end, args->nsteps, llMode);
-  TRACE(NET,"opCount %lx buffSize %d sliceSize %d ptrType %d", args->opCount, buffSize, sliceSize, ptrType);
+  TRACE(NCCL_NET,"opCount %lx head %lx tail %lx end %lx nsteps %d llMode %d", args->opCount, head, tail, end, args->nsteps, llMode);
+  TRACE(NCCL_NET,"opCount %lx buffSize %d sliceSize %d ptrType %d", args->opCount, buffSize, sliceSize, ptrType);
 
   if (llMode == 0) {
     // Waiting for next opCount is only needed before writing nextTail.

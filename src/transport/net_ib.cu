@@ -82,8 +82,12 @@ static void* ncclIbAsyncThreadMain(void* args) {
   return NULL;
 }
 
-static void initDevices() {
-  if(wrap_ibv_symbols() != ncclSuccess) { return; }
+NCCL_PARAM(IbDisable, "IB_DISABLE", 0);
+
+ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction) {
+  if(wrap_ibv_symbols() != ncclSuccess) { return ncclInternalError; }
+  if (ncclParamIbDisable()) return ncclInternalError;
+
   if (ncclNIbDevs == -1) {
     pthread_mutex_lock(&ncclIbLock);
     wrap_ibv_fork_init();
@@ -91,9 +95,9 @@ static void initDevices() {
       ncclNIbDevs = 0;
       if (findInterfaces(ncclIbIfName, &ncclIbIfAddr, MAX_IF_NAME_SIZE, 1) != 1) {
         WARN("NET/IB : No IP interface found.");
-        return;
+        return ncclInternalError;
       }
-      INFO(INIT|NET,"NET/IB : Using interface %s for sideband communication", ncclIbIfName);
+      INFO(NCCL_INIT|NCCL_NET,"NET/IB : Using interface %s for sideband communication", ncclIbIfName);
 
       // Detect IB cards
       int nIbDevs;
@@ -105,7 +109,7 @@ static void initDevices() {
       bool searchNot = userIbEnv && userIbEnv[0] == '^';
       int nUserIfs = parseStringList(userIbEnv, userIfs, MAX_IB_DEVS);
 
-      if (ncclSuccess != wrap_ibv_get_device_list(&devices, &nIbDevs)) return;
+      if (ncclSuccess != wrap_ibv_get_device_list(&devices, &nIbDevs)) return ncclInternalError;
 
       for (int d=0; d<nIbDevs; d++) {
         struct ibv_context * context;
@@ -134,7 +138,7 @@ static void initDevices() {
             if (! (matchIfList(devices[d]->name, port, userIfs, nUserIfs) ^ searchNot)) {
               continue;
             }
-            INFO(INIT|NET,"NET/IB: [%d] %s:%d/%s ", d, devices[d]->name, port,
+            INFO(NCCL_INIT|NCCL_NET,"NET/IB: [%d] %s:%d/%s ", d, devices[d]->name, port,
                 portAttr.link_layer == IBV_LINK_LAYER_INFINIBAND ? "IB" : "RoCE");
             ncclIbDevs[ncclNIbDevs].device = d;
             ncclIbDevs[ncclNIbDevs].port = port;
@@ -145,38 +149,29 @@ static void initDevices() {
             pthread_create(&ncclIbAsyncThread, NULL, ncclIbAsyncThreadMain, context);
           }
 
-          if (found == 0) { if (ncclSuccess != wrap_ibv_close_device(context)) { return; } }
+          if (found == 0) { if (ncclSuccess != wrap_ibv_close_device(context)) { return ncclInternalError; } }
         }
       }
-      if (nIbDevs && (ncclSuccess != wrap_ibv_free_device_list(devices))) { return; };
+      if (nIbDevs && (ncclSuccess != wrap_ibv_free_device_list(devices))) { return ncclInternalError; };
     }
-
     pthread_mutex_unlock(&ncclIbLock);
   }
+  return ncclSuccess;
 }
 
-ncclResult_t ncclIbDevices(int* ndev, int** scores) {
-  initDevices();
+ncclResult_t ncclIbDevices(int* ndev) {
   *ndev = ncclNIbDevs;
-  int cudaDev;
-  cudaGetDevice(&cudaDev);
-  char* cudaPath;
-  ncclResult_t err1 = getCudaPath(cudaDev, &cudaPath);
-  int* sc;
-  NCCLCHECK(ncclCalloc(&sc, ncclNIbDevs));
-  char line[1024];
-  sprintf(line, "CUDA Dev %d, IB Ports : ", cudaDev);
-  for (int d=0; d<ncclNIbDevs; d++) {
-    char* mlxPath;
-    ncclResult_t err2 = getMlxPath(ncclIbDevs[d].devName, &mlxPath);
-    int distance = (err1 != ncclSuccess || err2 != ncclSuccess || mlxPath == NULL || cudaPath == NULL) ? PATH_SOC : pciDistance(mlxPath, cudaPath);
-    sprintf(line+strlen(line), "%s/%d(%s) ", ncclIbDevs[d].devName, ncclIbDevs[d].port, pathDists[distance]);
-    sc[d] = 1+PATH_SOC-distance;
-    if (err2 == ncclSuccess) free(mlxPath);
+  return ncclSuccess;
+}
+
+ncclResult_t ncclIbPciPath(int dev, char** path) {
+  char devicepath[PATH_MAX];
+  snprintf(devicepath, PATH_MAX, "/sys/class/infiniband/%s/device", ncclIbDevs[dev].devName);
+  *path = realpath(devicepath, NULL);
+  if (*path == NULL) {
+    WARN("Could not find real path of %s", devicepath);
+    return ncclSystemError;
   }
-  INFO(INIT|NET,"%s", line);
-  if (err1 == ncclSuccess) free(cudaPath);
-  *scores = sc;
   return ncclSuccess;
 }
 
@@ -207,45 +202,21 @@ ncclResult_t ncclIbGdrSupport(int ibDev) {
   return ret;
 }
 
-NCCL_PARAM(IbGdrLevel, "IB_GDR_LEVEL", -2);
-NCCL_PARAM(IbCudaSupport, "IB_CUDA_SUPPORT", -2);
-
 ncclResult_t ncclIbPtrSupport(int dev, int* supportedTypes) {
-  initDevices();
   *supportedTypes = NCCL_PTR_HOST;
 
   int cudaDev;
-  if (cudaGetDevice(&cudaDev) != cudaSuccess) return ncclSuccess;
+  CUDACHECK(cudaGetDevice(&cudaDev));
 
-  int ibGdrLevel = PATH_PHB;
-  if (ncclParamIbCudaSupport() != -2) ibGdrLevel = ncclParamIbCudaSupport() ? PATH_SOC + 1 : 0;
-  if (ncclParamIbGdrLevel() != -2) ibGdrLevel = ncclParamIbGdrLevel();
-  if (ibGdrLevel > 0) {
-    int gdrSupport = ncclIbGdrSupport(dev);
-    if (gdrSupport > 0) {
-      INFO(INIT|NET,"NET/IB : GPU Direct RDMA Disabled for GPU %d / HCA %s (%s)", cudaDev, ncclIbDevs[dev].devName, gdrSupport == 1 ? "no module" : "not supported by GPU");
-      ibGdrLevel = 0;
-    }
+  if (ncclIbGdrSupport(dev) != ncclSuccess) {
+    INFO(NCCL_INIT|NCCL_NET,"NET/IB : GPU Direct RDMA Disabled for GPU %d / HCA %s (no module or not supported by GPU)", cudaDev, ncclIbDevs[dev].devName);
+    return ncclSuccess;
   }
-
-  if (ibGdrLevel <= 0) return ncclSuccess;
-
-  char* cudaPath;
-  if (getCudaPath(cudaDev, &cudaPath) != ncclSuccess) return ncclSuccess;
-  char* mlxPath;
-  if (getMlxPath(ncclIbDevs[dev].devName, &mlxPath) != ncclSuccess) { free(cudaPath); return ncclSuccess; }
-  int distance = (mlxPath == NULL || cudaPath == NULL) ? PATH_SOC : pciDistance(mlxPath, cudaPath);
-  free(mlxPath); free(cudaPath);
-  if (distance < ibGdrLevel) {
-    *supportedTypes |= NCCL_PTR_CUDA;
-  } else {
-    INFO(INIT|NET,"NET/IB : GPU Direct RDMA Disabled for GPU %d / HCA %s (distance %d >= %d)", cudaDev, ncclIbDevs[dev].devName, distance, ibGdrLevel);
-  }
+  *supportedTypes |= NCCL_PTR_CUDA;
   return ncclSuccess;
 }
 
 static ncclResult_t GetSocketAddr(union socketAddress* addr) {
-  if (ncclNIbDevs == -1) initDevices();
   memcpy(addr, &ncclIbIfAddr, sizeof(*addr));
   return ncclSuccess;
 }
@@ -442,7 +413,6 @@ ncclResult_t ncclIbConnect(int dev, void* opaqueHandle, void** sendComm) {
   *sendComm = comm;
 
   // IB Setup
-  initDevices(); /*NOTE: We need to do this for ncclNet unit test that bypasses nccl initialization*/
   ibv_context* ctx = ncclIbDevs[dev].context;
   NCCLCHECK(ncclIbInitVerbs(ctx, &comm->verbs));
   uint8_t ib_port = ncclIbDevs[dev].port;
@@ -464,13 +434,13 @@ ncclResult_t ncclIbConnect(int dev, void* opaqueHandle, void** sendComm) {
   // RoCE support
   qpInfo.lid = portAttr.lid;
   if (qpInfo.lid) { // IB
-    INFO(INIT|NET,"NET/IB: Dev %d Port %d qpn %d mtu %d LID %d", dev, ib_port, qpInfo.qpn, qpInfo.mtu, qpInfo.lid);
+    INFO(NCCL_INIT|NCCL_NET,"NET/IB: Dev %d Port %d qpn %d mtu %d LID %d", dev, ib_port, qpInfo.qpn, qpInfo.mtu, qpInfo.lid);
   } else { // RoCE
     union ibv_gid gid;
     NCCLCHECK(wrap_ibv_query_gid(ctx, ib_port, ncclParamIbGidIndex(), &gid));
     qpInfo.spn = gid.global.subnet_prefix;
     qpInfo.iid = gid.global.interface_id;
-    INFO(INIT|NET,"NET/IB: Dev %d Port %d qpn %d mtu %d GID %ld (%lX/%lX)", dev, ib_port, qpInfo.qpn, qpInfo.mtu, ncclParamIbGidIndex(), qpInfo.spn, qpInfo.iid);
+    INFO(NCCL_INIT|NCCL_NET,"NET/IB: Dev %d Port %d qpn %d mtu %d GID %ld (%lX/%lX)", dev, ib_port, qpInfo.qpn, qpInfo.mtu, ncclParamIbGidIndex(), qpInfo.spn, qpInfo.iid);
   }
 
   NCCLCHECK(socketSend(comm->fd, &qpInfo, sizeof(qpInfo)));
@@ -649,7 +619,7 @@ ncclResult_t ncclIbGetMr(struct ncclIbVerbs* verbs, void* data, int size, struct
   NCCLCHECK(wrap_ibv_reg_mr(&verbs->mrPool[elem].mr, verbs->pd, (void*)regAddr, regSize, IBV_ACCESS_LOCAL_WRITE|IBV_ACCESS_REMOTE_WRITE|IBV_ACCESS_REMOTE_READ));
   *mrRet = verbs->mrPool+elem;
   verbs->mrPool[elem].refcnt++;
-  TRACE(INIT,"elem %d regAddr %lx size %ld rkey %x", elem, regAddr, regSize, (verbs->mrPool+elem)->mr->rkey);
+  TRACE(NCCL_INIT,"elem %d regAddr %lx size %ld rkey %x", elem, regAddr, regSize, (verbs->mrPool+elem)->mr->rkey);
   return ncclSuccess;
 }
 
@@ -903,7 +873,9 @@ ncclResult_t ncclIbCloseListen(void* listenComm) {
 
 ncclNet_t ncclNetIb = {
   "IB",
+  ncclIbInit,
   ncclIbDevices,
+  ncclIbPciPath,
   ncclIbPtrSupport,
   ncclIbListen,
   ncclIbConnect,
@@ -917,10 +889,3 @@ ncclNet_t ncclNetIb = {
   ncclIbCloseListen
 };
 
-NCCL_PARAM(IbDisable, "IB_DISABLE", 0);
-
-bool ncclIbSupport() {
-  if (ncclParamIbDisable()) return 0;
-  initDevices();
-  return ncclNIbDevs > 0;
-}

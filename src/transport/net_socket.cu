@@ -8,67 +8,58 @@
 #include "core.h"
 #include "socket.h"
 #include "net.h"
-#include "topo.h"
 
 #include <assert.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <poll.h>
+#include <limits.h>
 
 /* Init functions */
+static char ncclNetIfNames[MAX_IF_NAME_SIZE*MAX_IFS];
+static union socketAddress ncclNetIfAddrs[MAX_IFS];
+static int ncclNetIfs = -1;
+pthread_mutex_t ncclSocketLock = PTHREAD_MUTEX_INITIALIZER;
+
+ncclResult_t ncclSocketInit(ncclDebugLogger_t logFunction) {
+  if (ncclNetIfs == -1) {
+    pthread_mutex_lock(&ncclSocketLock);
+    if (ncclNetIfs == -1) {
+      ncclNetIfs = findInterfaces(ncclNetIfNames, ncclNetIfAddrs, MAX_IF_NAME_SIZE, MAX_IFS);
+      INFO(NCCL_INIT|NCCL_NET,"NET/Socket : %d interfaces found", ncclNetIfs);
+      if (ncclNetIfs <= 0) {
+        WARN("NET/Socket : no interface found");
+        return ncclInternalError;
+      }
+    }
+    pthread_mutex_unlock(&ncclSocketLock);
+  }
+  return ncclSuccess;
+}
 
 ncclResult_t ncclSocketPtrSupport(int dev, int* supportedTypes) {
   *supportedTypes = NCCL_PTR_HOST;
   return ncclSuccess;
 }
 
-static char ncclNetIfNames[MAX_IF_NAME_SIZE*MAX_IFS];
-static union socketAddress ncclNetIfAddrs[MAX_IFS];
-static int ncclNetIfs = -1;
-pthread_mutex_t ncclSocketLock = PTHREAD_MUTEX_INITIALIZER;
-
-static void initDevices() {
-  if (ncclNetIfs == -1) {
-    pthread_mutex_lock(&ncclSocketLock);
-    if (ncclNetIfs == -1) {
-      ncclNetIfs = findInterfaces(ncclNetIfNames, ncclNetIfAddrs, MAX_IF_NAME_SIZE, MAX_IFS);
-      INFO(INIT|NET,"NET/Socket : %d interfaces found", ncclNetIfs);
-      if (ncclNetIfs <= 0) {
-        WARN("NET/Socket : no interface found");
-      }
-    }
-    pthread_mutex_unlock(&ncclSocketLock);
-  }
+ncclResult_t ncclSocketDevices(int* ndev) {
+  *ndev = ncclNetIfs;
+  return ncclSuccess;
 }
 
-ncclResult_t ncclSocketDevices(int* ndev, int** scores) {
-  initDevices();
-  *ndev = ncclNetIfs;
-  int cudaDev;
-  cudaGetDevice(&cudaDev);
-  char* cudaPath;
-  ncclResult_t err1 = getCudaPath(cudaDev, &cudaPath);
-  int* sc;
-  NCCLCHECK(ncclCalloc(&sc, ncclNetIfs));
-  char line[1024];
-  sprintf(line, "CUDA Dev %d, IP Interfaces : ", cudaDev);
-  for (int i=0; i<ncclNetIfs; i++) {
-    char* sockPath;
-    ncclResult_t err2 = getSockPath(ncclNetIfNames+i*MAX_IF_NAME_SIZE, &sockPath);
-    int distance = (err1 != ncclSuccess || err2 != ncclSuccess || sockPath == NULL || cudaPath == NULL) ? PATH_SOC : pciDistance(sockPath, cudaPath);
-    sprintf(line+strlen(line), "%s(%s) ", ncclNetIfNames+i*MAX_IF_NAME_SIZE, pathDists[distance]);
-    sc[i] = 1+PATH_SOC-distance;
-    if (err2 == ncclSuccess) free(sockPath);
+ncclResult_t ncclSocketPciPath(int dev, char** path) {
+  char devicepath[PATH_MAX];
+  snprintf(devicepath, PATH_MAX, "/sys/class/net/%s/device", ncclNetIfNames+dev*MAX_IF_NAME_SIZE);
+  *path = realpath(devicepath, NULL);
+  if (*path == NULL) {
+    INFO(NCCL_NET|NCCL_INIT, "Could not find real path of %s", devicepath);
+    return ncclSystemError;
   }
-  INFO(INIT|NET,"%s", line);
-  if (err1 == ncclSuccess) free(cudaPath);
-  *scores = sc;
   return ncclSuccess;
 }
 
 static ncclResult_t GetSocketAddr(int dev, union socketAddress* addr) {
-  if (ncclNetIfs == -1) initDevices();
   if (dev >= ncclNetIfs) return ncclInternalError;
   memcpy(addr, ncclNetIfAddrs+dev, sizeof(*addr));
   return ncclSuccess;
@@ -223,7 +214,9 @@ ncclResult_t ncclSocketClose(void* opaqueComm) {
 
 ncclNet_t ncclNetSocket = {
   "Socket",
+  ncclSocketInit,
   ncclSocketDevices,
+  ncclSocketPciPath,
   ncclSocketPtrSupport,
   ncclSocketListen,
   ncclSocketConnect,

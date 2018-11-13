@@ -6,8 +6,10 @@
 
 #include "utils.h"
 #include "debug.h"
+#include "nccl_net.h"
 #include <unistd.h>
 #include <string.h>
+#include <stdarg.h>
 
 ncclResult_t getHostName(char* hostname, int maxlen) {
   if (gethostname(hostname, maxlen) != 0) {
@@ -18,6 +20,53 @@ ncclResult_t getHostName(char* hostname, int maxlen) {
   while ((hostname[i] != '.') && (hostname[i] != '\0') && (i < maxlen-1)) i++;
   hostname[i] = '\0';
   return ncclSuccess;
+}
+
+/* Common logging function used by the INFO, WARN and TRACE macros
+ * Also exported to the dynamically loadable Net transport modules so
+ * they can share the debugging mechanisms and output files
+ */
+void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *filefunc, int line, const char *fmt, ...) {
+  if (ncclDebugLevel <= NCCL_LOG_NONE) return;
+
+  char hostname[1024];
+  getHostName(hostname, 1024);
+  int cudaDev;
+  cudaGetDevice(&cudaDev);
+
+  char buffer[1024];
+  size_t len = 0;
+  pthread_mutex_lock(&ncclDebugOutputLock);
+  if (level == NCCL_LOG_WARN && ncclDebugLevel >= NCCL_LOG_WARN)
+    len = snprintf(buffer, sizeof(buffer),
+                   "\n%s:%d:%d [%d] %s:%d NCCL WARN ", hostname, getpid(), gettid(), cudaDev, filefunc, line);
+  else if (level == NCCL_LOG_INFO && ncclDebugLevel >= NCCL_LOG_INFO && (flags & ncclDebugMask))
+    len = snprintf(buffer, sizeof(buffer),
+                   "%s:%d:%d [%d] NCCL INFO ", hostname, getpid(), gettid(), cudaDev);
+#ifdef ENABLE_TRACE
+  else if (level == NCCL_LOG_TRACE && ncclDebugLevel >= NCCL_LOG_TRACE && (flags & ncclDebugMask)) {
+    auto delta = std::chrono::high_resolution_clock::now() - ncclEpoch;
+    double timestamp = std::chrono::duration_cast<std::chrono::duration<double>>(delta).count()*1000;
+    len = snprintf(buffer, sizeof(buffer),
+                   "%s:%d:%d [%d] %f %s:%d NCCL TRACE ", hostname, getpid(), gettid(), cudaDev, timestamp, filefunc, line);
+  }
+#endif
+  if (len) {
+    va_list vargs;
+    va_start(vargs, fmt);
+    (void) vsnprintf(buffer+len, sizeof(buffer)-len, fmt, vargs);
+    va_end(vargs);
+    fprintf(ncclDebugFile,"%s\n", buffer);
+    fflush(ncclDebugFile);
+  }
+  pthread_mutex_unlock(&ncclDebugOutputLock);
+
+  // If ncclDebugLevel == NCCL_LOG_ABORT then WARN() will also call abort()
+  if (level == NCCL_LOG_WARN && ncclDebugLevel == NCCL_LOG_ABORT) {
+    fprintf(stderr,"\n%s:%d:%d [%d] %s:%d NCCL ABORT\n",
+            hostname, getpid(), gettid(), cudaDev, filefunc, line);
+    abort();
+  }
 }
 
 uint64_t getHash(const char* string) {
@@ -51,7 +100,7 @@ uint64_t getHostHash(void) {
   offset += len;
   // Trailing '\0'
   uname[offset]='\0';
-  TRACE(INIT,"unique hostname '%s'", uname);
+  TRACE(NCCL_INIT,"unique hostname '%s'", uname);
 
   return getHash(uname);
 }
@@ -71,7 +120,7 @@ uint64_t getPidHash(void) {
   if (len < 0) len = 0;
 
   pname[plen+len]='\0';
-  TRACE(INIT,"unique PID '%s'", pname);
+  TRACE(NCCL_INIT,"unique PID '%s'", pname);
 
   return getHash(pname);
 }

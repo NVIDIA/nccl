@@ -9,25 +9,25 @@
 
 #include "nccl.h"
 
-#define NCCL_NET_MAJOR 1
-#define NCCL_NET_MINOR 0
-
 #define NCCL_NET_HANDLE_MAXSIZE 64
 
 #define NCCL_PTR_HOST 0x1
 #define NCCL_PTR_CUDA 0x2
 
-#define NCCL_MAX_SCORE 0x7
+typedef enum {NCCL_LOG_NONE=0, NCCL_LOG_VERSION=1, NCCL_LOG_WARN=2, NCCL_LOG_INFO=3, NCCL_LOG_ABORT=4, NCCL_LOG_TRACE=5} ncclDebugLogLevel;
+typedef enum {NCCL_INIT=1, NCCL_COLL=2, NCCL_P2P=4, NCCL_SHM=8, NCCL_NET=16, NCCL_ALL=~0} ncclDebugLogSubSys;
+
+typedef void (*ncclDebugLogger_t)(ncclDebugLogLevel level, unsigned long flags, const char *file, int line, const char *fmt, ...);
 
 typedef struct {
   // Name of the network (mainly for logs)
   const char* name;
-  // Return the number of network devices along with their scores relative to the
-  // current CUDA device. The per device score should be a value from 1-7 with a
-  // higher score representing a better choice for performance.
-  // This call should allocate the 'scores' array using malloc(3), and it
-  // will then be freed automatically by NCCL.
-  ncclResult_t (*devices)(int* ndev, int** scores);
+  // Initialize the network.
+  ncclResult_t (*init)(ncclDebugLogger_t logFunction);
+  // Return the number of adapters.
+  ncclResult_t (*devices)(int* ndev);
+  // Return the device path in /sys. NCCL will call free on this path.
+  ncclResult_t (*pciPath)(int dev, char** path);
   // Return whether this device supports host pointers and/or CUDA pointers
   // as data from the current GPU. Supported types should be composed with
   // NCCL_PTR_HOST and NCCL_PTR_CUDA.
@@ -53,12 +53,10 @@ typedef struct {
   ncclResult_t (*closeSend)(void* sendComm);
   ncclResult_t (*closeRecv)(void* recvComm);
   ncclResult_t (*closeListen)(void* listenComm);
-} ncclNet_t;
+} ncclNet_v1_t;
 
-extern
-#ifdef __cplusplus
-"C"
-#endif
-ncclNet_t* ncclNet;
+typedef ncclNet_v1_t ncclNet_t;
+
+#define NCCL_PLUGIN_SYMBOL ncclNetPlugin_v1
 
 #endif // end include guard

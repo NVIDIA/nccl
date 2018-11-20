@@ -41,8 +41,10 @@ typedef struct {
   // Finalize connection establishment after remote peer has called connectHandle
   ncclResult_t (*accept)(void* listenComm, void** recvComm);
   // Asynchronous send to a peer. Type is either NCCL_PTR_HOST or NCCL_PTR_CUDA.
+  // May return request == NULL if the call cannot be performed (or would block)
   ncclResult_t (*isend)(void* sendComm, void* data, int size, int type, void** request);
   // Asynchronous recv from a peer. Type is either NCCL_PTR_HOST or NCCL_PTR_CUDA.
+  // May return request == NULL if the call cannot be performed (or would block)
   ncclResult_t (*irecv)(void* recvComm, void* data, int size, int type, void** request);
   // Perform a flush/fence to make sure all data received with NCCL_PTR_CUDA is
   // visible to the GPU

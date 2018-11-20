@@ -72,8 +72,12 @@ struct ncclSocketHandle {
 };
 
 struct ncclSocketRequest {
-  int used;
+  int op;
+  void* data;
   int size;
+  int fd;
+  int offset;
+  int used;
 };
 
 struct ncclSocketReqs {
@@ -144,15 +148,19 @@ ncclResult_t ncclSocketAccept(void* listenComm, void** recvComm) {
 
 #define MAX_REQUESTS 128
 
-ncclResult_t ncclSocketGetRequest(struct ncclSocketReqs* reqs, struct ncclSocketRequest** req) {
+ncclResult_t ncclSocketGetRequest(struct ncclSocketReqs* reqs, int op, void* data, int size, int fd, struct ncclSocketRequest** req) {
   if (reqs->requests == NULL) {
     NCCLCHECK(ncclCalloc(&reqs->requests, MAX_REQUESTS));
   }
   for (int i=0; i<MAX_REQUESTS; i++) {
     struct ncclSocketRequest* r = reqs->requests+i;
     if (r->used == 0) {
+      r->op = op;
+      r->data = data;
+      r->size = size;
+      r->fd = fd;
+      r->offset = -1;
       r->used = 1;
-      r->size = -1;
       *req = r;
       return ncclSuccess;
     }
@@ -161,45 +169,59 @@ ncclResult_t ncclSocketGetRequest(struct ncclSocketReqs* reqs, struct ncclSocket
   return ncclInternalError;
 }
 
+ncclResult_t ncclSocketTest(void* request, int* done, int* size) {
+  *done = 0;
+  struct ncclSocketRequest *r = (struct ncclSocketRequest*)request;
+  if (r == NULL) {
+    WARN("NET/Socket : test called with NULL request");
+    return ncclInternalError;
+  }
+  if (r->offset == -1) { /* try to send/recv size */
+    int data = r->size;
+    int offset = 0;
+    NCCLCHECK(socketProgress(r->op, r->fd, &data, sizeof(int), &offset));
+
+    if (offset == 0) return ncclSuccess; /* Not ready -- retry later */
+
+    // Not sure we could ever receive less than 4 bytes, but just in case ...
+    if (offset < sizeof(int)) NCCLCHECK(socketWait(r->op, r->fd, &data, sizeof(int), &offset));
+
+    // Check size is less or equal to the size provided by the user
+    if (r->op == NCCL_SOCKET_RECV && data > r->size) {
+      WARN("NET/Socket : message truncated : receiving %d bytes instead of %d", data, r->size);
+      return ncclInternalError;
+    }
+    r->size = data;
+    r->offset = 0;
+  }
+  if (r->offset < r->size) {
+    NCCLCHECK(socketProgress(r->op, r->fd, r->data, r->size, &r->offset));
+  }
+  if (r->offset == r->size) {
+    if (size) *size = r->size;
+    *done = 1;
+    r->used = 0;
+  }
+  return ncclSuccess;
+}
+
 ncclResult_t ncclSocketIsend(void* sendComm, void* data, int size, int type, void** request) {
   if (type != NCCL_PTR_HOST) return ncclInternalError;
   struct ncclSocketComm* comm = (struct ncclSocketComm*)sendComm;
-  *request = NULL;
-  NCCLCHECK(socketSend(comm->fd, &size, sizeof(int)));
-  NCCLCHECK(socketSend(comm->fd, data, size));
+  NCCLCHECK(ncclSocketGetRequest(&comm->reqs, NCCL_SOCKET_SEND, data, size, comm->fd, (struct ncclSocketRequest**)request));
   return ncclSuccess;
 }
 
 ncclResult_t ncclSocketIrecv(void* recvComm, void* data, int size, int type, void** request) {
   if (type != NCCL_PTR_HOST) return ncclInternalError;
   struct ncclSocketComm* comm = (struct ncclSocketComm*)recvComm;
-  int recvSize;
-  NCCLCHECK(socketReceive(comm->fd, &recvSize, sizeof(int)));
-  if (recvSize > size) {
-    WARN("Message truncated : received %d bytes instead of %d", recvSize, size);
-    return ncclInternalError;
-  }
-  NCCLCHECK(socketReceive(comm->fd, data, std::min(recvSize, size)));
-  struct ncclSocketRequest* recvReq = NULL;
-  NCCLCHECK(ncclSocketGetRequest(&comm->reqs, &recvReq));
-  recvReq->size = recvSize;
-  *request = recvReq;
+  NCCLCHECK(ncclSocketGetRequest(&comm->reqs, NCCL_SOCKET_RECV, data, size, comm->fd, (struct ncclSocketRequest**)request));
   return ncclSuccess;
 }
 
 ncclResult_t ncclSocketFlush(void* recvComm, void* data, int size) {
   // We don't support CUDA pointers, so we don't need a flush operation
   return ncclInternalError;
-}
-
-ncclResult_t ncclSocketTest(void* request, int* done, int* size) {
-  *done = 1;
-  struct ncclSocketRequest *r = (struct ncclSocketRequest*)request;
-  if (r) {
-    if (size) *size = r->size;
-    r->used = 0;
-  }
-  return ncclSuccess;
 }
 
 ncclResult_t ncclSocketClose(void* opaqueComm) {

@@ -416,17 +416,21 @@ ncclResult_t netSendProxy(struct ncclProxyArgs* args) {
             while (f1[0] != flag || f2[0] != flag);
           }
           NCCLCHECK(ncclNetIsend(resources->netSendComm, lines, size, ptrType, requests+slot));
-          sizesFifo[slot] = size;
-          tail++;
-          idle = 0;
+          if (requests[slot] != NULL) {
+            sizesFifo[slot] = size;
+            tail++;
+            idle = 0;
+          }
         }
       }
     } else while (tail < *prevTail) {
         // Send through network
         int slot = tail%args->substeps;
         NCCLCHECK(ncclNetIsend(resources->netSendComm, localBuff+slot*sliceSize, sizesFifo[slot], ptrType, requests+slot));
-        tail++;
-        idle = 0;
+        if (requests[slot] != NULL) {
+          tail++;
+          idle = 0;
+        }
       }
     if (head < tail) {
       int done;
@@ -502,8 +506,10 @@ ncclResult_t netRecvProxy(struct ncclProxyArgs* args) {
     if ((tail < head + args->substeps) && (tail < *nextHead + args->substeps) && (tail < end)) {
       int slot = tail%args->substeps;
       NCCLCHECK(ncclNetIrecv(resources->netRecvComm, localBuff+slot*sliceSize, sliceSize, ptrType, requests+slot));
-      tail++;
-      idle = 0;
+      if (requests[slot] != NULL) {
+        tail++;
+        idle = 0;
+      }
     }
     if (tail > head) {
       int done;

@@ -551,25 +551,31 @@ ncclResult_t ncclIbGetRequest(struct ncclIbRequest* reqs, struct ncclIbRequest**
 }
 
 ncclResult_t ncclSendCheck(struct ncclIbSendComm* comm) {
-  if (comm->ready == 0) {
-    struct ncclIbQpInfo remQpInfo;
-    struct ibv_qp* qp = comm->qp;
-    NCCLCHECK(socketReceive(comm->fd, &remQpInfo, sizeof(remQpInfo)));
-    NCCLCHECK(ncclIbRtrQp(qp, &remQpInfo));
-    NCCLCHECK(ncclIbRtsQp(qp));
-    int go = 1;
-    NCCLCHECK(socketSend(comm->fd, &go, sizeof(go)));
-    comm->ready = 1;
-  }
+  struct ncclIbQpInfo remQpInfo;
+  struct ibv_qp* qp = comm->qp;
+
+  // Do not block on this receive, return if not ready.
+  int bytes = 0;
+  NCCLCHECK(socketProgress(NCCL_SOCKET_RECV, comm->fd, &remQpInfo, sizeof(remQpInfo), &bytes));
+  if (bytes == 0) return ncclSuccess; // Try again later
+  NCCLCHECK(socketWait(NCCL_SOCKET_RECV, comm->fd, &remQpInfo, sizeof(remQpInfo), &bytes));
+
+  NCCLCHECK(ncclIbRtrQp(qp, &remQpInfo));
+  NCCLCHECK(ncclIbRtsQp(qp));
+  comm->ready = 1;
+
+  // Block until this is done. It *should* not block indefinitely.
+  NCCLCHECK(socketSend(comm->fd, &comm->ready, sizeof(int)));
+
   return ncclSuccess;
 }
 
 ncclResult_t ncclRecvCheck(struct ncclIbRecvComm* comm) {
-  if (comm->ready == 0) {
-    int go;
-    NCCLCHECK(socketReceive(comm->fd, &go, sizeof(go)));
-    comm->ready = 1;
-  }
+  // Do not block on this receive, return if not ready.
+  int bytes = 0;
+  NCCLCHECK(socketProgress(NCCL_SOCKET_RECV, comm->fd, &comm->ready, sizeof(int), &bytes));
+  if (bytes == 0) return ncclSuccess; // Try again later
+  NCCLCHECK(socketWait(NCCL_SOCKET_RECV, comm->fd, &comm->ready, sizeof(int), &bytes));
   return ncclSuccess;
 }
 
@@ -625,7 +631,13 @@ ncclResult_t ncclIbGetMr(struct ncclIbVerbs* verbs, void* data, int size, struct
 
 ncclResult_t ncclIbIsend(void* sendComm, void* data, int size, int type, void** request) {
   struct ncclIbSendComm* comm = (struct ncclIbSendComm*)sendComm;
-  NCCLCHECK(ncclSendCheck(comm));
+  if (comm->ready == 0) NCCLCHECK(ncclSendCheck(comm));
+  if (comm->ready == 0) { *request = NULL; return ncclSuccess; }
+
+  // Wait for the receiver to have posted the corresponding receive
+  volatile struct ncclIbSendFifo* slot = comm->fifo + (comm->fifoHead%MAX_REQUESTS);
+  volatile uint32_t * readyPtr = &slot->ready;
+  if (*readyPtr == 0) { *request = NULL; return ncclSuccess; }
 
   struct ncclIbRequest* req;
   NCCLCHECK(ncclIbGetRequest(comm->reqs, &req));
@@ -650,10 +662,6 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, int size, int type, void** 
   wr.opcode = IBV_WR_SEND;
   wr.send_flags = IBV_SEND_SIGNALED;
 
-  // Wait for receiver to have posted the recv
-  volatile struct ncclIbSendFifo* slot = comm->fifo + (comm->fifoHead%MAX_REQUESTS);
-  volatile uint32_t * readyPtr = &slot->ready;
-  while (*readyPtr == 0) sched_yield();
 #if USE_RDMA_WRITE
   __sync_synchronize(); // order the readyPtr load against rkey load below
   // Sanity checks to catch user collective call count/size mismatches
@@ -714,7 +722,8 @@ ncclResult_t ncclIbPostFifo(struct ncclIbRecvComm* comm, uint32_t rkey, uint64_t
 
 ncclResult_t ncclIbIrecv(void* recvComm, void* data, int size, int type, void** request) {
   struct ncclIbRecvComm* comm = (struct ncclIbRecvComm*)recvComm;
-  NCCLCHECK(ncclRecvCheck(comm));
+  if (comm->ready == 0) NCCLCHECK(ncclRecvCheck(comm));
+  if (comm->ready == 0) { *request = NULL; return ncclSuccess; }
 
   struct ncclIbRequest* req;
   NCCLCHECK(ncclIbGetRequest(comm->reqs, &req));

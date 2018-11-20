@@ -370,39 +370,46 @@ static ncclResult_t connectAddress(int* fd, union socketAddress* remoteAddr) {
   return ncclSuccess;
 }
 
-static ncclResult_t socketReceive(int fd, void* ptr, int size) {
+#define NCCL_SOCKET_SEND 0
+#define NCCL_SOCKET_RECV 1
+static ncclResult_t socketProgress(int op, int fd, void* ptr, int size, int* offset) {
+  int bytes = 0;
   char* data = (char*)ptr;
-  int offset = 0;
-  while (offset < size) {
-    int recvsize;
-    SYSCHECKVAL(recv(fd, data, size-offset, 0), "recv", recvsize);
-    if (recvsize == 0) {
+  do {
+    if (op == NCCL_SOCKET_RECV) bytes = recv(fd, data+(*offset), size-(*offset), MSG_DONTWAIT);
+    if (op == NCCL_SOCKET_SEND) bytes = send(fd, data+(*offset), size-(*offset), MSG_DONTWAIT);
+    if (op == NCCL_SOCKET_RECV && bytes == 0) {
       WARN("Net : Connection closed by remote peer");
       return ncclSystemError;
     }
-    if (recvsize == -1) {
-      INFO(NCCL_NET,"Recv : got retcode %d, retrying", errno);
-      continue;
+    if (bytes == -1) {
+      if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
+        WARN("Call to recv failed : %s", strerror(errno));
+        return ncclSystemError;
+      } else {
+        bytes = 0;
+      }
     }
-    data += recvsize;
-    offset += recvsize;
-  }
+    (*offset) += bytes;
+  } while (bytes > 0 && (*offset) < size);
+  return ncclSuccess;
+}
+
+static ncclResult_t socketWait(int op, int fd, void* ptr, int size, int* offset) {
+  while (*offset < size)
+    NCCLCHECK(socketProgress(op, fd, ptr, size, offset));
   return ncclSuccess;
 }
 
 static ncclResult_t socketSend(int fd, void* ptr, int size) {
-  char* data = (char*)ptr;
   int offset = 0;
-  while (offset < size) {
-    int sendsize;
-    SYSCHECKVAL(write(fd, data, size-offset), "write", sendsize);
-    if (sendsize == -1) {
-      INFO(NCCL_NET,"Send : got retcode %d, retrying", errno);
-      continue;
-    }
-    data += sendsize;
-    offset += sendsize;
-  }
+  NCCLCHECK(socketWait(NCCL_SOCKET_SEND, fd, ptr, size, &offset));
+  return ncclSuccess;
+}
+
+static ncclResult_t socketReceive(int fd, void* ptr, int size) {
+  int offset = 0;
+  NCCLCHECK(socketWait(NCCL_SOCKET_RECV, fd, ptr, size, &offset));
   return ncclSuccess;
 }
 

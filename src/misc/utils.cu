@@ -33,17 +33,24 @@ uint64_t getHash(const char* string) {
  * that will be unique for both bare-metal and container instances
  * Equivalent of a hash of;
  *
- * $(hostname) $(readlink /proc/self/ns/uts)
+ * $(hostname) $(readlink /proc/self/ns/uts) $(readlink /proc/self/ns/mnt)
  */
 uint64_t getHostHash(void) {
   char uname[1024];
   // Start off with the hostname
   (void) getHostName(uname, sizeof(uname));
-  int hlen = strlen(uname);
-  int len = readlink("/proc/self/ns/uts", uname+hlen, sizeof(uname)-1-hlen);
+  int offset = strlen(uname);
+  int len;
+  // $(readlink /proc/self/ns/uts)
+  len = readlink("/proc/self/ns/uts", uname+offset, sizeof(uname)-1-offset);
   if (len < 0) len = 0;
-
-  uname[hlen+len]='\0';
+  offset += len;
+  // $(readlink /proc/self/ns/mnt)
+  len = readlink("/proc/self/ns/mnt", uname+offset, sizeof(uname)-1-offset);
+  if (len < 0) len = 0;
+  offset += len;
+  // Trailing '\0'
+  uname[offset]='\0';
   TRACE(INIT,"unique hostname '%s'", uname);
 
   return getHash(uname);

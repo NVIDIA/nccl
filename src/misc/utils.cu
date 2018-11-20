@@ -8,8 +8,6 @@
 #include "debug.h"
 #include <unistd.h>
 #include <string.h>
-#include <sys/types.h>
-#include <dirent.h>
 
 ncclResult_t getHostName(char* hostname, int maxlen) {
   if (gethostname(hostname, maxlen) != 0) {
@@ -35,30 +33,23 @@ uint64_t getHash(const char* string) {
  * that will be unique for both bare-metal and container instances
  * Equivalent of a hash of;
  *
- * $(hostname) $(readlink /proc/self/ns/\*)
+ * $(hostname) $(readlink /proc/self/ns/uts) $(readlink /proc/self/ns/mnt)
  */
 uint64_t getHostHash(void) {
   char uname[1024];
   // Start off with the hostname
   (void) getHostName(uname, sizeof(uname));
   int offset = strlen(uname);
-
-  DIR *dp = opendir("/proc/self/ns");
-  if (dp != NULL) {
-    struct dirent *ep;
-    while (ep = readdir(dp)) {
-      if (offset >= sizeof(uname) - 1) {
-        break;
-      }
-      char ns_path[1024];
-      sprintf(ns_path, "/proc/self/ns/%s", ep->d_name);
-      int len = readlink(ns_path, uname+offset, sizeof(uname)-1-offset);
-      if (len < 0) len = 0;
-      offset += len;
-    }
-    (void) closedir(dp);
-  }
-
+  int len;
+  // $(readlink /proc/self/ns/uts)
+  len = readlink("/proc/self/ns/uts", uname+offset, sizeof(uname)-1-offset);
+  if (len < 0) len = 0;
+  offset += len;
+  // $(readlink /proc/self/ns/mnt)
+  len = readlink("/proc/self/ns/mnt", uname+offset, sizeof(uname)-1-offset);
+  if (len < 0) len = 0;
+  offset += len;
+  // Trailing '\0'
   uname[offset]='\0';
   TRACE(INIT,"unique hostname '%s'", uname);
 

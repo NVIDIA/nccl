@@ -361,8 +361,8 @@ static ncclResult_t connectAddress(int* fd, union socketAddress* remoteAddr) {
     SYSCHECK(setsockopt(*fd, SOL_SOCKET, SO_SNDBUF, (char*)&bufsize, sizeof(int)), "setsockopt");
     SYSCHECK(setsockopt(*fd, SOL_SOCKET, SO_RCVBUF, (char*)&bufsize, sizeof(int)), "setsockopt");*/
 
-#ifdef ENABLE_TRACE
   char line[1024];
+#ifdef ENABLE_TRACE
   TRACE(NCCL_INIT|NCCL_NET,"Connecting to socket %s", socketToString(&remoteAddr->sa, line));
 #endif
 
@@ -372,11 +372,10 @@ retry:
   SYSCHECKSYNC(connect(*fd, &remoteAddr->sa, salen), "connect", ret);
   if (ret == 0) return ncclSuccess;
   if (errno == ECONNREFUSED && ++retries < RETRY_TIMES) {
-    INFO(ALL,"Call to connect returned %s, retrying", strerror(errno)); \
+    INFO(NCCL_ALL,"Call to connect returned %s, retrying", strerror(errno)); \
     usleep(SLEEP_INT);
     goto retry;
   }
-  char line[1024];
   WARN("Connect to %s failed : %s", socketToString(&remoteAddr->sa, line), strerror(errno));
   return ncclSystemError;
 }

@@ -12,13 +12,16 @@
 #include <stdlib.h>
 #include <ctype.h>
 
+#define BUSID_SIZE (sizeof("0000:00:00.0"))
+#define BUSID_REDUCED_SIZE (sizeof("0000:00"))
+
 static ncclResult_t getCudaPath(int cudaDev, char** path) {
-  char busId[16];
-  CUDACHECK(cudaDeviceGetPCIBusId(busId, 16, cudaDev));
-  for (int i=0; i<16; i++) busId[i] = tolower(busId[i]);
+  char busId[BUSID_SIZE];
+  CUDACHECK(cudaDeviceGetPCIBusId(busId, BUSID_SIZE, cudaDev));
+  for (int i=0; i<BUSID_SIZE; i++) busId[i] = tolower(busId[i]);
   char busPath[] = "/sys/class/pci_bus/0000:00/../../0000:00:00.0";
-  memcpy(busPath+sizeof("/sys/class/pci_bus/")-1, busId, sizeof("0000:00")-1);
-  memcpy(busPath+sizeof("/sys/class/pci_bus/0000:00/../../")-1, busId, sizeof("0000:00:00.0")-1);
+  memcpy(busPath+sizeof("/sys/class/pci_bus/")-1, busId, BUSID_REDUCED_SIZE-1);
+  memcpy(busPath+sizeof("/sys/class/pci_bus/0000:00/../../")-1, busId, BUSID_SIZE-1);
   *path = realpath(busPath, NULL);
   if (*path == NULL) {
     WARN("Could not find real path of %s", busPath);

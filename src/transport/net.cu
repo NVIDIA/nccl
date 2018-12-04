@@ -241,7 +241,7 @@ static ncclResult_t netGetGdrSupport(int dev, int distance, int read, int* useGd
   // Finally, check if the NIC supports it
   int flags;
   NCCLCHECK(ncclNetPtrSupport(dev, &flags));
-  if (flags & NCCL_PTR_CUDA == 0) return ncclSuccess;
+  if ((flags & NCCL_PTR_CUDA) == 0) return ncclSuccess;
   *useGdr = 1;
   INFO(NCCL_INIT|NCCL_NET,"NET/%s : GPU Direct RDMA Enabled for GPU %d / HCA %d (distance %d >= %d), read %d", ncclNetName(), cudaDev, dev, distance, netGdrLevel, read);
   return ncclSuccess;

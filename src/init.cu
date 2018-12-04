@@ -72,10 +72,11 @@ int ncclCudaFullCompCap() {
   return ccMajor*10+ccMinor;
 }
 
+// Returns ncclInternalError if anything fails, causing that network to be ignored.
 ncclResult_t initNet(ncclNet_t* net) {
   int ndev;
-  NCCLCHECK(net->init(ncclDebugLog));
-  NCCLCHECK(net->devices(&ndev));
+  if (net->init(ncclDebugLog) != ncclSuccess) return ncclInternalError;
+  if (net->devices(&ndev) != ncclSuccess) return ncclInternalError;
   if (ndev <= 0) {
     INFO(NCCL_INIT|NCCL_NET, "Net/%s: call to devices() returned 0 devices.", net->name);
     return ncclSystemError;

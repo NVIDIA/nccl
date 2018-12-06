@@ -4,13 +4,12 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
-#include <stdio.h>
 #include <nccl.h>
 #include <nccl_net.h>
 
 #define __hidden __attribute__ ((visibility("hidden")))
 
-__hidden ncclResult_t pluginInit() { return ncclSuccess; }
+__hidden ncclResult_t pluginInit(ncclDebugLogger_t logFunction) { return ncclSuccess; }
 __hidden ncclResult_t pluginDevices(int* ndev) { *ndev = 0; return ncclSuccess; }
 __hidden ncclResult_t pluginPciPath(int dev, char** path) { return ncclInternalError; }
 __hidden ncclResult_t pluginPtrSupport(int dev, int* supportedTypes) { return ncclInternalError; }

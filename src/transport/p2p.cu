@@ -14,6 +14,7 @@
 #include "nvmlwrap.h"
 #include <ctype.h>
 #include "nvlink.h"
+#include <memory>
 
 struct p2pInfo {
   int rank;
@@ -325,7 +326,7 @@ int p2pComputeRingsPci(ncclTvalue_t* values, int nranks, int* rings, int nrings,
     int start = findConnect(nranks, prev+r*nranks);
     int end = findConnect(nranks, next+r*nranks);
 
-    int inRing[nranks];
+    std::unique_ptr<int[]> inRing(new int[nranks]);
     for (int i=0; i<nranks; i++) inRing[i] = 0;
 
     if (start == -1 && end == -1) {
@@ -335,7 +336,7 @@ int p2pComputeRingsPci(ncclTvalue_t* values, int nranks, int* rings, int nrings,
       }
       end = 0;
       inRing[end] = 1;
-      start = findClosestPci(values, inRing, end, -1, nranks, minScore);
+      start = findClosestPci(values, inRing.get(), end, -1, nranks, minScore);
       if (start == -1) return r;
     } else if (start == -1 || end == -1) {
       WARN("Connecting ring %d : inconsistent start/end. Disabling other rings.", r);
@@ -348,7 +349,7 @@ int p2pComputeRingsPci(ncclTvalue_t* values, int nranks, int* rings, int nrings,
     inRing[start] = inRing[end] = 1;
     int cur = start;
     for (int i=2; i<nranks; i++) {
-      int next = findClosestPci(values, inRing, cur, end, nranks, minScore);
+      int next = findClosestPci(values, inRing.get(), cur, end, nranks, minScore);
       if (next == -1) return r;
 
       inRing[next] = 1;
@@ -357,7 +358,7 @@ int p2pComputeRingsPci(ncclTvalue_t* values, int nranks, int* rings, int nrings,
     }
     // Check the loop is closing
     inRing[end] = 0;
-    if (findClosestPci(values, inRing, cur, end, nranks, minScore) != end) return r;
+    if (findClosestPci(values, inRing.get(), cur, end, nranks, minScore) != end) return r;
 
     if (connect == 0) return 1;
   }

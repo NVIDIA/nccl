@@ -12,6 +12,7 @@
 #include "nvlink.h"
 #include <cuda_runtime.h>
 #include <assert.h>
+#include <memory>
 
 #define NET_MAX_IFS 16
 
@@ -152,12 +153,12 @@ static inline int groupBestEnd(int nranks, int* groups, int group, int* subgroup
 
 ncclResult_t netGetRings(int nranks, int* groups, int* subgroups, ncclTvalue_t* values, int* nringsRet, int* prev, int* next, int minScore, int* nthreads) {
   int nGroups = groups[nranks-1] + 1;
-  int cardUsed[NET_MAX_IFS*nGroups];
+  std::unique_ptr<int[]> cardUsed(new int[NET_MAX_IFS*nGroups]);
   for (int c=0; c<NET_MAX_IFS*nGroups; c++) cardUsed[c] = 0;
 
   for (int ring = 0; ring<*nringsRet; ring++) {
-    int starts[nGroups];
-    int ends[nGroups];
+    std::unique_ptr<int[]> starts(new int[nGroups]);
+    std::unique_ptr<int[]> ends(new int[nGroups]);
     for (int group = 0; group<nGroups; group++) {
       int nranksInGroup = 0;
       int nsubGroups = 0;
@@ -388,7 +389,7 @@ ncclResult_t netSendProxy(struct ncclProxyArgs* args) {
   uint64_t end = head + args->nsteps;
 
   int idle = 0;
-  void* requests[args->substeps];
+  std::unique_ptr<void*[]> requests(new void*[args->substeps]);
 
   if (!args->needProxy) goto nextColl;
 
@@ -415,7 +416,7 @@ ncclResult_t netSendProxy(struct ncclProxyArgs* args) {
             volatile uint32_t *f2 = &lines[i].flag2;
             while (f1[0] != flag || f2[0] != flag);
           }
-          NCCLCHECK(ncclNetIsend(resources->netSendComm, lines, size, ptrType, requests+slot));
+          NCCLCHECK(ncclNetIsend(resources->netSendComm, lines, size, ptrType, requests.get()+slot));
           if (requests[slot] != NULL) {
             sizesFifo[slot] = size;
             tail++;
@@ -426,7 +427,7 @@ ncclResult_t netSendProxy(struct ncclProxyArgs* args) {
     } else while (tail < *prevTail) {
         // Send through network
         int slot = tail%args->substeps;
-        NCCLCHECK(ncclNetIsend(resources->netSendComm, localBuff+slot*sliceSize, sizesFifo[slot], ptrType, requests+slot));
+        NCCLCHECK(ncclNetIsend(resources->netSendComm, localBuff+slot*sliceSize, sizesFifo[slot], ptrType, requests.get()+slot));
         if (requests[slot] != NULL) {
           tail++;
           idle = 0;

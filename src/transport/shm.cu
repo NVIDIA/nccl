@@ -11,6 +11,7 @@
 #include "shm.h"
 #include <unistd.h>
 #include <cuda_runtime.h>
+#include <memory>
 
 struct shmInfo {
   int rank;
@@ -90,8 +91,8 @@ static inline int groupLast(int nranks, int* groups, int group, int rankToAvoid)
 ncclResult_t shmGetRings(int nranks, int* groups, int* subgroups, ncclTvalue_t* values, int* nringsRet, int* prev, int* next, int minScore, int* nthreads) {
   if (*nringsRet == MAXRINGS) *nringsRet = 1;
   int nGroups = groups[nranks-1] + 1;
-  int starts[nGroups];
-  int ends[nGroups];
+  std::unique_ptr<int[]> starts(new int[nGroups]);
+  std::unique_ptr<int[]> ends(new int[nGroups]);
   for (int ring = 0; ring<*nringsRet; ring++) {
     int startGroup = -1, endGroup = -1;
     for (int group = 0; group<nGroups; group++) {

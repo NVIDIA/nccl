@@ -7,6 +7,7 @@
 #include "group.h"
 #include "debug.h"
 #include "enqueue.h"
+#include <memory>
 
 #define MAX_ASYNC_OPS 128
 thread_local pthread_t ncclGroupThreads[MAX_ASYNC_OPS];
@@ -118,7 +119,7 @@ ncclResult_t ncclGroupEnd() {
   int savedDev;
   CUDACHECK(cudaGetDevice(&savedDev));
   int done = ncclGroupIndex;
-  int doneArray[ncclGroupIndex];
+  std::unique_ptr<int[]> doneArray(new int[ncclGroupIndex]);
   for (int i=0; i<ncclGroupIndex; i++) doneArray[i] = 0;
 
   ncclResult_t ret = ncclGroupError;

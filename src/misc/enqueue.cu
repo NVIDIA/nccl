@@ -58,7 +58,7 @@ static void* const ncclKerns[ncclCollCount*ncclNumOps*ncclNumTypes*2] = {
 };
 
 ncclResult_t ncclLaunchCooperativeKernelMultiDevice(struct cudaLaunchParams *paramsList, int* cudaDevs, int numDevices, int cgMode) {
-#if __CUDACC_VER_MAJOR__ >= 9
+#if CUDA_VERSION >= 9000
   if (cgMode & 0x01) {
     CUDACHECK(cudaLaunchCooperativeKernelMultiDevice(paramsList, numDevices,
             // These flags are to reduce the latency of using this API

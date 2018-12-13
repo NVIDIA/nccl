@@ -16,14 +16,14 @@ static nvmlReturn_t (*nvmlInternalInit)(void);
 static nvmlReturn_t (*nvmlInternalShutdown)(void);
 static nvmlReturn_t (*nvmlInternalDeviceGetHandleByPciBusId)(const char* pciBusId, nvmlDevice_t* device);
 static nvmlReturn_t (*nvmlInternalDeviceGetIndex)(nvmlDevice_t device, unsigned* index);
-static nvmlReturn_t (*nvmlInternalDeviceSetCpuAffinity)(nvmlDevice_t device);
-static nvmlReturn_t (*nvmlInternalDeviceClearCpuAffinity)(nvmlDevice_t device);
 static const char* (*nvmlInternalErrorString)(nvmlReturn_t r);
 static nvmlReturn_t (*nvmlInternalDeviceGetNvLinkState)(nvmlDevice_t device, unsigned int link, nvmlEnableState_t *isActive);
 static nvmlReturn_t (*nvmlInternalDeviceGetPciInfo)(nvmlDevice_t device, nvmlPciInfo_t* pci);
 static nvmlReturn_t (*nvmlInternalDeviceGetNvLinkRemotePciInfo)(nvmlDevice_t device, unsigned int link, nvmlPciInfo_t *pci);
 static nvmlReturn_t (*nvmlInternalDeviceGetNvLinkCapability)(nvmlDevice_t device, unsigned int link,
     nvmlNvLinkCapability_t capability, unsigned int *capResult);
+static nvmlReturn_t (*nvmlInternalDeviceGetMinorNumber)(nvmlDevice_t device, unsigned int* minorNumber);
+
 
 ncclResult_t wrapNvmlSymbols(void) {
   if (nvmlState == nvmlInitialized)
@@ -70,10 +70,9 @@ ncclResult_t wrapNvmlSymbols(void) {
   LOAD_SYM(nvmlhandle, "nvmlShutdown", nvmlInternalShutdown);
   LOAD_SYM(nvmlhandle, "nvmlDeviceGetHandleByPciBusId", nvmlInternalDeviceGetHandleByPciBusId);
   LOAD_SYM(nvmlhandle, "nvmlDeviceGetIndex", nvmlInternalDeviceGetIndex);
-  LOAD_SYM(nvmlhandle, "nvmlDeviceSetCpuAffinity", nvmlInternalDeviceSetCpuAffinity);
-  LOAD_SYM(nvmlhandle, "nvmlDeviceClearCpuAffinity", nvmlInternalDeviceClearCpuAffinity);
   LOAD_SYM(nvmlhandle, "nvmlErrorString", nvmlInternalErrorString);
   LOAD_SYM(nvmlhandle, "nvmlDeviceGetPciInfo", nvmlInternalDeviceGetPciInfo);
+  LOAD_SYM(nvmlhandle, "nvmlDeviceGetMinorNumber", nvmlInternalDeviceGetMinorNumber);
   LOAD_SYM_OPTIONAL(nvmlhandle, "nvmlDeviceGetNvLinkState", nvmlInternalDeviceGetNvLinkState);
   LOAD_SYM_OPTIONAL(nvmlhandle, "nvmlDeviceGetNvLinkRemotePciInfo", nvmlInternalDeviceGetNvLinkRemotePciInfo);
   LOAD_SYM_OPTIONAL(nvmlhandle, "nvmlDeviceGetNvLinkCapability", nvmlInternalDeviceGetNvLinkCapability);
@@ -86,9 +85,8 @@ teardown:
   nvmlInternalShutdown = NULL;
   nvmlInternalDeviceGetHandleByPciBusId = NULL;
   nvmlInternalDeviceGetIndex = NULL;
-  nvmlInternalDeviceSetCpuAffinity = NULL;
-  nvmlInternalDeviceClearCpuAffinity = NULL;
   nvmlInternalDeviceGetPciInfo = NULL;
+  nvmlInternalDeviceGetMinorNumber = NULL;
   nvmlInternalDeviceGetNvLinkState = NULL;
   nvmlInternalDeviceGetNvLinkRemotePciInfo = NULL;
   nvmlInternalDeviceGetNvLinkCapability = NULL;
@@ -155,38 +153,6 @@ ncclResult_t wrapNvmlDeviceGetIndex(nvmlDevice_t device, unsigned* index) {
   return ncclSuccess;
 }
 
-ncclResult_t wrapNvmlDeviceSetCpuAffinity(nvmlDevice_t device) {
-  if (nvmlInternalDeviceSetCpuAffinity == NULL) {
-    WARN("lib wrapper not initialized.");
-    return ncclInternalError;
-  }
-  // Workaround : it seems SetCpuAffinity is not thread safe.
-  static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
-  pthread_mutex_lock(&lock);
-  nvmlReturn_t ret = nvmlInternalDeviceSetCpuAffinity(device);
-  pthread_mutex_unlock(&lock);
-  if (ret != NVML_SUCCESS) {
-    WARN("nvmlDeviceSetCpuAffinity() failed: %s ",
-        nvmlInternalErrorString(ret));
-    return ncclSystemError;
-  }
-  return ncclSuccess;
-}
-
-ncclResult_t wrapNvmlDeviceClearCpuAffinity(nvmlDevice_t device) {
-  if (nvmlInternalInit == NULL) {
-    WARN("lib wrapper not initialized.");
-    return ncclInternalError;
-  }
-  nvmlReturn_t ret = nvmlInternalDeviceClearCpuAffinity(device);
-  if (ret != NVML_SUCCESS) {
-    WARN("nvmlDeviceClearCpuAffinity() failed: %s ",
-        nvmlInternalErrorString(ret));
-    return ncclSystemError;
-  }
-  return ncclSuccess;
-}
-
 ncclResult_t wrapNvmlDeviceGetPciInfo(nvmlDevice_t device, nvmlPciInfo_t* pci) {
   if (nvmlInternalDeviceGetPciInfo == NULL) {
     WARN("lib wrapper not initialized.");
@@ -201,6 +167,20 @@ ncclResult_t wrapNvmlDeviceGetPciInfo(nvmlDevice_t device, nvmlPciInfo_t* pci) {
   return ncclSuccess;
 }
 
+ncclResult_t wrapNvmlDeviceGetMinorNumber(nvmlDevice_t device, unsigned int* minorNumber) {
+  if (nvmlInternalDeviceGetMinorNumber == NULL) {
+    WARN("lib wrapper not initialized.");
+    return ncclInternalError;
+  }
+  nvmlReturn_t ret = nvmlInternalDeviceGetMinorNumber(device, minorNumber);
+  if (ret != NVML_SUCCESS) {
+    WARN("nvmlDeviceGetMinorNumber() failed: %s ",
+        nvmlInternalErrorString(ret));
+    return ncclSystemError;
+  }
+  return ncclSuccess;
+}
+
 ncclResult_t wrapNvmlDeviceGetNvLinkState(nvmlDevice_t device, unsigned int link, nvmlEnableState_t *isActive) {
   if (nvmlInternalDeviceGetNvLinkState == NULL) {
     /* Do not warn, this symbol is optional. */
@@ -208,8 +188,9 @@ ncclResult_t wrapNvmlDeviceGetNvLinkState(nvmlDevice_t device, unsigned int link
   }
   nvmlReturn_t ret = nvmlInternalDeviceGetNvLinkState(device, link, isActive);
   if (ret != NVML_SUCCESS) {
-    INFO(NCCL_INIT,"nvmlDeviceGetNvLinkState() failed: %s ",
-        nvmlInternalErrorString(ret));
+    if (ret != NVML_ERROR_NOT_SUPPORTED)
+      INFO(NCCL_INIT,"nvmlDeviceGetNvLinkState() failed: %s ",
+          nvmlInternalErrorString(ret));
     return ncclSystemError;
   }
   return ncclSuccess;

@@ -60,7 +60,9 @@ static inline int envSocketFamily(void) {
 }
 
 static int findInterfaces(const char* prefixList, char* names, union socketAddress *addrs, int sock_family, int maxIfNameSize, int maxIfs) {
+#ifdef ENABLE_TRACE
   char line[1024];
+#endif
   struct netIf userIfs[MAX_IFS];
   bool searchNot = prefixList && prefixList[0] == '^';
   int nUserIfs = parseStringList(prefixList, userIfs, MAX_IFS);
@@ -106,7 +108,6 @@ static int findInterfaces(const char* prefixList, char* names, union socketAddre
       // Store the IP address
       int salen = (family == AF_INET) ? sizeof(sockaddr_in) : sizeof(sockaddr_in6);
       memcpy(addrs+found, interface->ifa_addr, salen);
-      INFO(NCCL_INIT|NCCL_NET,"NET : Using interface %s:%s", interface->ifa_name, socketToString(interface->ifa_addr, line));
       found++;
     }
   }
@@ -336,8 +337,10 @@ static ncclResult_t createListenSocket(int *fd, union socketAddress *localAddr) 
   TRACE(NCCL_INIT|NCCL_NET,"Listening on socket %s", socketToString(&localAddr->sa, line));
 #endif
 
-  /* Put the socket in listen mode */
-  SYSCHECK(listen(sockfd, 128), "listen");
+  /* Put the socket in listen mode
+   * NB: The backlog will be silently truncated to the value in /proc/sys/net/core/somaxconn
+   */
+  SYSCHECK(listen(sockfd, 16384), "listen");
   *fd = sockfd;
   return ncclSuccess;
 }

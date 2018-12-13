@@ -4,8 +4,11 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
-#include "reduce_scatter.h"
-#include "common.h"
-#include "collectives.h"
+#ifndef NCCL_CHANNEL_H_
+#define NCCL_CHANNEL_H_
+#include "core.h"
 
-IMPL_COLL_R(ncclReduceScatter, ncclCollReduceScatter);
+ncclResult_t initChannel(struct ncclComm* comm, int channelid);
+ncclResult_t freeChannel(struct ncclChannel* channel, int nRanks);
+
+#endif

@@ -12,18 +12,13 @@ OBJDIR := $(BUILDDIR)/obj/collectives/device
 
 LIBSRCFILES := all_reduce.cu broadcast.cu reduce.cu all_gather.cu reduce_scatter.cu
 
-LIBOBJ     := $(patsubst %.cu,$(OBJDIR)/%_sum.o, $(LIBSRCFILES)) \
-              $(patsubst %.cu,$(OBJDIR)/%_prod.o, $(LIBSRCFILES)) \
-              $(patsubst %.cu,$(OBJDIR)/%_min.o, $(LIBSRCFILES)) \
-              $(patsubst %.cu,$(OBJDIR)/%_max.o, $(LIBSRCFILES)) \
-              $(OBJDIR)/functions.o
-
 LIBSRCFILES += functions.cu
 
 DEPFILES   := $(patsubst %.cu, $(OBJDIR)/%.d, $(LIBSRCFILES))
-DEPENDFILES := $(DEPFILES:%.d=%.dep)
+DEPENDFILES:= $(DEPFILES:%.d=%.dep)
 STATICLIB  := $(OBJDIR)/colldevice.a
 DEVOBJ     := $(OBJDIR)/devlink.o
+RULESFILE  := $(OBJDIR)/Makefile.rules
 
 NVCUFLAGS  += -I. -I.. -I$(BUILDDIR)/include -I../../include --compiler-options "-fPIC -fvisibility=hidden"
 
@@ -32,6 +27,16 @@ all: $(STATICLIB)
 
 # Dummy rule so that the extra dependency (%.dep) files are preserved by make
 all_deps: $(DEPENDFILES)
+
+# Auto-generating the rules per op/reduction/datatype/algorithm
+$(RULESFILE) :
+	@printf "Generating %-35s > %s\n" rules $@
+	@mkdir -p $(OBJDIR)
+	@./gen_rules.sh $(OBJDIR) > $@
+
+-include $(RULESFILE)
+
+LIBOBJ     := $(GENOBJS) $(OBJDIR)/functions.o
 
 -include $(DEPFILES)
 
@@ -57,26 +62,6 @@ $(OBJDIR)/functions.o : functions.cu $(OBJDIR)/functions.dep
 	@printf "Compiling  %-35s > %s\n" $< $@
 	mkdir -p `dirname $@`
 	$(NVCC) $(NVCUFLAGS) -dc $< -o $@
-
-$(OBJDIR)/%_sum.o : %.cu $(OBJDIR)/%.dep
-	@printf "Compiling  %-35s > %s\n" $< $@
-	mkdir -p `dirname $@`
-	$(NVCC) -DNCCL_OP=0 $(NVCUFLAGS) -dc $< -o $@
-
-$(OBJDIR)/%_prod.o : %.cu $(OBJDIR)/%.dep
-	@printf "Compiling  %-35s > %s\n" $< $@
-	mkdir -p `dirname $@`
-	$(NVCC) -DNCCL_OP=1 $(NVCUFLAGS) -dc $< -o $@
-
-$(OBJDIR)/%_min.o : %.cu $(OBJDIR)/%.dep
-	@printf "Compiling  %-35s > %s\n" $< $@
-	mkdir -p `dirname $@`
-	$(NVCC) -DNCCL_OP=2 $(NVCUFLAGS) -dc $< -o $@
-
-$(OBJDIR)/%_max.o : %.cu $(OBJDIR)/%.dep
-	@printf "Compiling  %-35s > %s\n" $< $@
-	mkdir -p `dirname $@`
-	$(NVCC) -DNCCL_OP=3 $(NVCUFLAGS) -dc $< -o $@
 
 # ... and create the device-side linked object with all those.
 $(DEVOBJ) : $(LIBOBJ)

@@ -36,4 +36,5 @@ $(TXZPREPDIR)/% : %.in
 	    -e "s/\$${nccl:Minor}/$(NCCL_MINOR)/g" \
 	    -e "s/\$${nccl:Patch}/$(NCCL_PATCH)/g" \
 	    -e "s/\$${nccl:Suffix}/$(NCCL_SUFFIX)/g" \
+	    -e "s/\$${pkg:Revision}/$(PKG_REVISION)/g" \
 	    $< > $@

@@ -113,14 +113,14 @@ void PostSizeToFlags(uint64_t step, int size, PostFlag flag, TAIL_Ts... tail) {
 }
 
 
-// Create pointer arithmetic syntax that doesn't break for nullptr_t
+// Create pointer arithmetic syntax that doesn't break for std::nullptr_t
 template <typename Tptr> __device__ __forceinline__
 Tptr ptradd(Tptr ptr, int i) {
   return ptr + i;
 }
 
 __device__ __forceinline__
-nullptr_t ptradd(nullptr_t ptr, int i) {
+std::nullptr_t ptradd(std::nullptr_t ptr, int i) {
   return nullptr;
 }
 
@@ -129,8 +129,8 @@ nullptr_t ptradd(nullptr_t ptr, int i) {
 template <int UNROLL, int SUBSTEPS, typename T, typename REDOP=FuncSum<T> >
 class Primitives {
  private:
-  template <typename SRC2_T, // either T* or nullptr_t
-      typename DST2_T, // either T* or nullptr_t
+  template <typename SRC2_T, // either T* or std::nullptr_t
+      typename DST2_T, // either T* or std::nullptr_t
       typename... SYNC_Ts> // either WaitFunc or PostFunc
   static __device__ __forceinline__ void
   GenericOp(const int tid, const int nthreads,
@@ -140,12 +140,12 @@ class Primitives {
       DST2_T dst2,
       int len, int maxoffset, uint64_t step, SYNC_Ts... flags) {
 
-    enum { noSrc2 = std::is_same<SRC2_T, nullptr_t>::value };
-    enum { noDst2 = std::is_same<DST2_T, nullptr_t>::value };
+    enum { noSrc2 = std::is_same<SRC2_T, std::nullptr_t>::value };
+    enum { noDst2 = std::is_same<DST2_T, std::nullptr_t>::value };
     static_assert(noSrc2 || std::is_same<SRC2_T, const T*>::value,
-        "src2 must be of type T* or nullptr_t");
+        "src2 must be of type T* or std::nullptr_t");
     static_assert(noDst2 || std::is_same<DST2_T, T*>::value,
-        "dst2 must be of type T* or nullptr_t");
+        "dst2 must be of type T* or std::nullptr_t");
 
     using OpType = typename std::conditional<noSrc2, FuncSum<T>, REDOP>::type;
 
@@ -167,8 +167,8 @@ class Primitives {
         UNROLL,
         OpType,
         T,
-        !std::is_same<DST2_T, nullptr_t>::value, // HAS_DEST1
-        !std::is_same<SRC2_T, nullptr_t>::value  // HAS_SRC1
+        !std::is_same<DST2_T, std::nullptr_t>::value, // HAS_DEST1
+        !std::is_same<SRC2_T, std::nullptr_t>::value  // HAS_SRC1
         >
         (
             tid, nthreads,

@@ -11,7 +11,6 @@
 #include "shm.h"
 #include <unistd.h>
 #include <cuda_runtime.h>
-#include <memory>
 
 struct shmInfo {
   int rank;
@@ -91,8 +90,10 @@ static inline int groupLast(int nranks, int* groups, int group, int rankToAvoid)
 ncclResult_t shmGetRings(int nranks, int* groups, int* subgroups, ncclTvalue_t* values, int* nringsRet, int* prev, int* next, int minScore, int* nthreads) {
   if (*nringsRet == MAXRINGS) *nringsRet = 1;
   int nGroups = groups[nranks-1] + 1;
-  std::unique_ptr<int[]> starts(new int[nGroups]);
-  std::unique_ptr<int[]> ends(new int[nGroups]);
+  int* starts;
+  NCCLCHECK(ncclCalloc(&starts, nGroups));
+  int* ends;
+  NCCLCHECK(ncclCalloc(&ends, nGroups));
   for (int ring = 0; ring<*nringsRet; ring++) {
     int startGroup = -1, endGroup = -1;
     for (int group = 0; group<nGroups; group++) {
@@ -127,6 +128,8 @@ ncclResult_t shmGetRings(int nranks, int* groups, int* subgroups, ncclTvalue_t* 
       }
       if (start == -1 || end == -1) {
         *nringsRet = ring;
+        free(starts);
+        free(ends);
         return ncclSuccess;
       }
       starts[group] = start;
@@ -151,6 +154,8 @@ ncclResult_t shmGetRings(int nranks, int* groups, int* subgroups, ncclTvalue_t* 
     next[ring*nranks+ends[group]] = starts[endGroup];
     prev[ring*nranks+starts[endGroup]] = ends[group];
   }
+  free(starts);
+  free(ends);
   return ncclSuccess;
 }
 

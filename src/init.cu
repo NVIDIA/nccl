@@ -42,7 +42,7 @@ FILE *ncclDebugFile = stdout;
 std::chrono::high_resolution_clock::time_point ncclEpoch;
 #endif
 
-#if CUDA_VERSION >= 9200
+#if CUDART_VERSION >= 9200
 #define NCCL_GROUP_CUDA_STREAM 0 // CGMD: CUDA 9.2,10.X Don't need to use an internal CUDA stream
 #else
 #define NCCL_GROUP_CUDA_STREAM 1 // CGMD: CUDA 9.0,9.1 Need to use an internal CUDA stream
@@ -229,7 +229,7 @@ static ncclResult_t commAlloc(ncclComm_t* comret, int ndev, int rank) {
   comm->doneEvent = doneEvent;
   comm->llThreshold = ncclParamLlThreshold();
   comm->checkPointers = ncclParamCheckPointers() == 1 ? true : false;
-#if CUDA_VERSION >= 9200
+#if CUDART_VERSION >= 9200
   comm->groupCudaStream = ncclParamGroupCudaStream();
 #else
   // Don't allow the user to overload the default setting in older CUDA builds
@@ -473,7 +473,7 @@ ncclResult_t ncclCommSetIntra(struct ncclComm* comm, int rank, int ranks, struct
   }
   if (comm->launchMode == ncclComm::GROUP) {
     CUDACHECK(cudaStreamCreateWithFlags(&comm->groupStream, cudaStreamNonBlocking));
-#if CUDA_VERSION >= 9000
+#if CUDART_VERSION >= 9000
     if (*comm->intraCC && (ncclCudaFullCompCap() == *comm->intraCC)) {
       // Check whether the GPU supports Cooperative Group Multi Device Launch
       (void) cudaDeviceGetAttribute(&cgMdLaunch, cudaDevAttrCooperativeMultiDeviceLaunch, comm->cudaDev);

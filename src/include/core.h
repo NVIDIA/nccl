@@ -18,7 +18,7 @@
 #include <stdlib.h>
 #include <cuda_runtime.h>
 
-#if __CUDACC_VER_MAJOR__ < 9
+#if CUDA_VERSION < 9000
 struct cudaLaunchParams {
   void *func;
   dim3 gridDim;

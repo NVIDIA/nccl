@@ -320,32 +320,28 @@ static int findClosestPci(ncclTvalue_t* values, int* inRing, int rank, int end, 
 }
 
 int p2pComputeRingsPci(ncclTvalue_t* values, int nranks, int* rings, int nrings, int* prev, int* next, int minScore) {
+  int* inRing;
+  NCCLCHECK(ncclCalloc(&inRing, nranks));
+  for (int i=0; i<nranks; i++) inRing[i] = 0;
+
   int connect = 0;
-  for (int r=0; r<nrings; r++) {
+  int r = 0;
+  for (; r<nrings; r++) {
     int start = findConnect(nranks, prev+r*nranks);
     int end = findConnect(nranks, next+r*nranks);
-
-    int* inRing;
-    NCCLCHECK(ncclCalloc(&inRing, nranks));
-    for (int i=0; i<nranks; i++) inRing[i] = 0;
 
     if (start == -1 && end == -1) {
       if (connect == 1 && r > 0) {
         WARN("Connecting ring %d : did not find start/end. Disabling other rings.", r);
-        free(inRing);
-        return r;
+        goto final;
       }
       end = 0;
       inRing[end] = 1;
       start = findClosestPci(values, inRing, end, -1, nranks, minScore);
-      if (start == -1) {
-        free(inRing);
-        return r;
-      }
+      if (start == -1) goto final;
     } else if (start == -1 || end == -1) {
       WARN("Connecting ring %d : inconsistent start/end. Disabling other rings.", r);
-      free(inRing);
-      return r;
+      goto final;
     } else {
       connect = 1;
     }
@@ -355,10 +351,7 @@ int p2pComputeRingsPci(ncclTvalue_t* values, int nranks, int* rings, int nrings,
     int cur = start;
     for (int i=2; i<nranks; i++) {
       int next = findClosestPci(values, inRing, cur, end, nranks, minScore);
-      if (next == -1) {
-        free(inRing);
-        return r;
-      }
+      if (next == -1) goto final;
 
       inRing[next] = 1;
       rings[r*nranks+i] = next;
@@ -366,15 +359,16 @@ int p2pComputeRingsPci(ncclTvalue_t* values, int nranks, int* rings, int nrings,
     }
     // Check the loop is closing
     inRing[end] = 0;
-    if (findClosestPci(values, inRing, cur, end, nranks, minScore) != end) {
-      free(inRing);
-      return r;
-    }
+    if (findClosestPci(values, inRing, cur, end, nranks, minScore) != end) goto final;
 
-    free(inRing);
-    if (connect == 0) return 1;
+    if (connect == 0) {
+      r = 1;
+      goto final;
+    }
   }
-  return nrings;
+final:
+  free(inRing);
+  return r;
 }
 
 ncclResult_t p2pGetRings(int nranks, int* groups, int* subgroups, ncclTvalue_t* values, int* nringsRet, int* prev, int* next, int minScore, int* nthreads) {

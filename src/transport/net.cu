@@ -155,12 +155,12 @@ ncclResult_t netGetRings(int nranks, int* groups, int* subgroups, ncclTvalue_t* 
   int* cardUsed;
   NCCLCHECK(ncclCalloc(&cardUsed, NET_MAX_IFS*nGroups));
   for (int c=0; c<NET_MAX_IFS*nGroups; c++) cardUsed[c] = 0;
+  int* starts;
+  NCCLCHECK(ncclCalloc(&starts, nGroups));
+  int* ends;
+  NCCLCHECK(ncclCalloc(&ends, nGroups));
 
   for (int ring = 0; ring<*nringsRet; ring++) {
-    int* starts;
-    NCCLCHECK(ncclCalloc(&starts, nGroups));
-    int* ends;
-    NCCLCHECK(ncclCalloc(&ends, nGroups));
     for (int group = 0; group<nGroups; group++) {
       int nranksInGroup = 0;
       int nsubGroups = 0;
@@ -186,10 +186,7 @@ ncclResult_t netGetRings(int nranks, int* groups, int* subgroups, ncclTvalue_t* 
       }
       if (starts[group] == -1 || ends[group] == -1) {
         *nringsRet = ring;
-        free(starts);
-        free(ends);
-        free(cardUsed);
-        return ncclSuccess;
+        goto final;
       }
     }
     // Link groups together
@@ -198,9 +195,10 @@ ncclResult_t netGetRings(int nranks, int* groups, int* subgroups, ncclTvalue_t* 
       next[ring*nranks+ends[group]] = starts[nextGroup];
       prev[ring*nranks+starts[nextGroup]] = ends[group];
     }
-    free(starts);
-    free(ends);
   }
+final:
+  free(ends);
+  free(starts);
   free(cardUsed);
   return ncclSuccess;
 }

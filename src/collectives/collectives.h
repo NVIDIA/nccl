@@ -7,9 +7,7 @@
 #ifndef NCCL_COLLECTIVES_H_
 #define NCCL_COLLECTIVES_H_
 
-typedef enum { ncclCollBroadcast, ncclCollReduce, ncclCollAllGather, ncclCollReduceScatter, ncclCollAllReduce, ncclCollCount } ncclColl_t;
-
-#define FUNC_INDEX(coll, redop, dtype, ll) ((((coll*ncclNumOps + redop)*ncclNumTypes) + dtype)*2+ll)
+#define FUNC_INDEX(coll, redop, dtype, ll, al) ((((((coll)*ncclNumOps + (redop))*ncclNumTypes) + (dtype))*2+(al))*2+(ll))
 
 #define NCCL_COLL_NAME(coll, op, dtype) \
   coll##_##op##_##dtype
@@ -18,13 +16,17 @@ typedef enum { ncclCollBroadcast, ncclCollReduce, ncclCollAllGather, ncclCollRed
   coll##Kernel_##op##_##dtype
 
 /* Declare all collective operations */
-#define DECL_COLL4(coll, op, dtype) \
+#define DECL_COLL5(coll, op, dtype) \
   extern __device__ void NCCL_COLL_NAME(coll, op, dtype)(struct CollectiveArgs* args); \
-  extern __global__ void NCCL_KERN_NAME(coll, op, dtype)(struct ncclColl coll); \
+  extern __global__ void NCCL_KERN_NAME(coll, op, dtype)(struct ncclColl c); \
+
+#define DECL_COLL4(coll, op, dtype) \
+  DECL_COLL5(coll, op, dtype) \
+  DECL_COLL5(coll##LL, op, dtype)
 
 #define DECL_COLL3(coll, op, dtype) \
-  DECL_COLL4(coll##LL, op, dtype) \
-  DECL_COLL4(coll, op, dtype)
+  DECL_COLL4(coll##Ring, op, dtype) \
+  DECL_COLL4(coll##Tree, op, dtype)
 
 #define DECL_COLL2(coll, op) \
   DECL_COLL3(coll, op, i8) \
@@ -52,15 +54,16 @@ typedef enum { ncclCollBroadcast, ncclCollReduce, ncclCollAllGather, ncclCollRed
 
 DECL_ALL_COLLS
 
-#define ALLREDUCE_SUBSTEPS 2
-#define ALLREDUCE_BUFCHUNKS 2
-#define ALLGATHER_SUBSTEPS 2
-#define ALLGATHER_BUFCHUNKS 2
-#define REDUCESCATTER_SUBSTEPS 2
-#define REDUCESCATTER_BUFCHUNKS 2
-#define BROADCAST_SUBSTEPS 8
-#define BROADCAST_BUFCHUNKS 2
-#define REDUCE_SUBSTEPS 8
-#define REDUCE_BUFCHUNKS 2
+// CHUNKSIZE must be a multiple of SLICESIZE
+#define ALLREDUCE_SLICESTEPS (NCCL_STEPS/4)
+#define ALLREDUCE_CHUNKSTEPS (NCCL_STEPS/2)
+#define ALLGATHER_SLICESTEPS (NCCL_STEPS/4)
+#define ALLGATHER_CHUNKSTEPS (NCCL_STEPS/2)
+#define REDUCESCATTER_SLICESTEPS (NCCL_STEPS/4)
+#define REDUCESCATTER_CHUNKSTEPS (NCCL_STEPS/2)
+#define BROADCAST_SLICESTEPS 1
+#define BROADCAST_CHUNKSTEPS 1
+#define REDUCE_SLICESTEPS 1
+#define REDUCE_CHUNKSTEPS 1
 
 #endif

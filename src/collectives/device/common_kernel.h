@@ -192,14 +192,6 @@ struct MULTI<FUNC, int64_t> {
   }
 };
 
-#define ALIGNUP(x, a)   ((((x)-1) & ~((a)-1)) + (a))
-
-template<typename T>
-__device__ inline volatile T* AlignUp(volatile T * ptr, size_t align) {
-  size_t ptrval = reinterpret_cast<size_t>(ptr);
-  return reinterpret_cast<volatile T*>(ALIGNUP(ptrval, align));
-}
-
 template<typename T> inline __device__
 T vFetch(const volatile T* ptr) {
   return *ptr;
@@ -236,25 +228,6 @@ void vStore<half>(volatile half* ptr, const half val) {
 }
 #endif
 
-template<class FUNC, typename T, bool TWO_INPUTS, bool TWO_OUTPUTS>
-__device__ inline void ReduceCopy(
-    const int tid, const int nthreads,
-    const volatile T * __restrict__ const src0,
-    const volatile T * __restrict__ const src1,
-    volatile T * __restrict__ const dest0,
-    volatile T * __restrict__ const dest1, const int N) {
-  for (int idx = tid; idx < N; idx += nthreads) {
-    T val = vFetch(src0+idx);
-    if (TWO_INPUTS) {
-      val = FUNC()(val, vFetch(src1+idx));
-    }
-    vStore(dest0+idx, val);
-    if (TWO_OUTPUTS) {
-      vStore(dest1+idx, val);
-    }
-  }
-}
-
 typedef ulong2 Pack128;
 
 template<class FUNC, typename T>
@@ -265,72 +238,111 @@ struct MULTI128 {
   }
 };
 
-inline __device__ void Fetch128(Pack128& v, Pack128* p) {
+inline __device__ void Fetch128(Pack128& v, const Pack128* p) {
   asm volatile("ld.volatile.global.v2.u64 {%0,%1}, [%2];" : "=l"(v.x), "=l"(v.y) : "l"(p) : "memory");
 }
 inline __device__ void Store128(Pack128* p, Pack128& v) {
   asm volatile("st.volatile.global.v2.u64 [%0], {%1,%2};" :: "l"(p), "l"(v.x), "l"(v.y) : "memory");
 }
 
-#define WARP_SIZE 32
-template<class FUNC, typename T, bool TWO_INPUTS, bool TWO_OUTPUTS, int UNROLL>
-__device__ inline void ReduceCopy128b( const int w, const int nw, const int t,
-    Pack128 * src0, Pack128 * src1, Pack128 * dest0, Pack128 * dest1,
-    const int N) {
-  Pack128 t0[UNROLL];
-  Pack128 t1[UNROLL];
-  const Pack128* src0_end = src0 + N;
-  const int inc = nw * UNROLL * WARP_SIZE;
-  const int offset = w * UNROLL * WARP_SIZE + t;
-  src0 += offset;  if (TWO_INPUTS)  src1 += offset;
-  dest0 += offset; if (TWO_OUTPUTS) dest1 += offset;
+template<class FUNC, typename T, int MINSRCS, int MAXSRCS, int MINDSTS, int MAXDSTS>
+__device__ __forceinline__ void ReduceCopyMulti(const int tid, const int nthreads,
+    int nsrcs, const T* srcs[MAXSRCS], int ndsts, T* dsts[MAXDSTS],
+    const int offset, const int N) {
+  for (int idx = offset+tid; idx < offset+N; idx += nthreads) {
+    T val = vFetch(srcs[0]+idx);
+    #pragma unroll
+    for (int i=1; i<MINSRCS; i++) val = FUNC()(val, vFetch(srcs[i]+idx));
+    #pragma unroll 1
+    for (int i=MINSRCS; i<MAXSRCS && i<nsrcs; i++) val = FUNC()(val, vFetch(srcs[i]+idx));
 
-  while (src0 < src0_end) {
-#pragma unroll
-    for (int u = 0; u < UNROLL; ++u) {
-      Fetch128(t0[u], src0+u*WARP_SIZE);
-      if (TWO_INPUTS) Fetch128(t1[u], src1+u*WARP_SIZE);
-    }
-#pragma unroll
-    for (int u = 0; u < UNROLL; ++u) {
-      if (TWO_INPUTS) MULTI128<FUNC, T>()(t0[u], t1[u]);
-      Store128(dest0+u*WARP_SIZE, t0[u]);
-      if (TWO_OUTPUTS) Store128(dest1+u*WARP_SIZE, t0[u]);
-    }
-    src0 += inc;  if (TWO_INPUTS)  src1 += inc;
-    dest0 += inc; if (TWO_OUTPUTS) dest1 += inc;
+    #pragma unroll
+    for (int i=0; i<MINDSTS; i++) vStore(dsts[i]+idx, val);
+    #pragma unroll 1
+    for (int i=MINDSTS; i<MAXDSTS && i<ndsts; i++) vStore(dsts[i]+idx, val);
   }
 }
 
-template<int UNROLL, class FUNC, typename T, bool HAS_DEST1, bool HAS_SRC1>
-__device__ inline void ReduceOrCopy(const int tid, const int nthreads,
-    volatile T * __restrict__ dest0, volatile T * __restrict__ dest1,
-    const volatile T * __restrict__ src0, const volatile T * __restrict__ src1,
+#define WARP_SIZE 32
+
+template<class FUNC, typename T, int UNROLL, int MINSRCS, int MAXSRCS, int MINDSTS, int MAXDSTS>
+__device__ __forceinline__ void ReduceCopy128bMulti( const int w, const int nw, const int t,
+    int nsrcs, const T* s[MAXSRCS], int ndsts, T* d[MAXDSTS],
+    const int elemOffset, const int Npack) {
+  const int inc = nw * UNROLL * WARP_SIZE;
+  int offset = w * UNROLL * WARP_SIZE + t;
+
+  const Pack128* srcs[MAXSRCS];
+  for (int i=0; i<MAXSRCS; i++) srcs[i] = ((const Pack128*)(s[i]+elemOffset))+offset;
+  Pack128* dsts[MAXDSTS];
+  for (int i=0; i<MAXDSTS; i++) dsts[i] = ((Pack128*)(d[i]+elemOffset))+offset;
+
+  while (offset < Npack) {
+    Pack128 vals[UNROLL];
+    // Load and reduce
+    for (int u = 0; u < UNROLL; ++u) Fetch128(vals[u], srcs[0]+u*WARP_SIZE);
+
+    for (int i=1; i<MINSRCS; i++) {
+      Pack128 vals2[UNROLL];
+      for (int u = 0; u < UNROLL; ++u) Fetch128(vals2[u], srcs[i]+u*WARP_SIZE);
+      for (int u = 0; u < UNROLL; ++u) MULTI128<FUNC, T>()(vals[u], vals2[u]);
+    }
+    #pragma unroll 1
+    for (int i=MINSRCS; i<MAXSRCS && i<nsrcs; i++) {
+      Pack128 vals2[UNROLL];
+      for (int u = 0; u < UNROLL; ++u) Fetch128(vals2[u], srcs[i]+u*WARP_SIZE);
+      for (int u = 0; u < UNROLL; ++u) MULTI128<FUNC, T>()(vals[u], vals2[u]);
+    }
+
+    // Store
+    for (int i = 0; i < MINDSTS; i++) {
+      for (int u = 0; u < UNROLL; ++u) Store128(dsts[i]+u*WARP_SIZE, vals[u]);
+    }
+    #pragma unroll 1
+    for (int i=MINDSTS; i<MAXDSTS && i<ndsts; i++) {
+      for (int u = 0; u < UNROLL; ++u) Store128(dsts[i]+u*WARP_SIZE, vals[u]);
+    }
+    for (int i=0; i<MAXSRCS; i++) srcs[i] += inc;
+    for (int i=0; i<MAXDSTS; i++) dsts[i] += inc;
+    offset += inc;
+  }
+}
+
+template <typename T>
+__device__ int ptrAlign128(T* ptr) { return (uint64_t)ptr % alignof(Pack128); }
+
+// Try to limit consecutive load/stores to 8.
+// Use UNROLL 8 when we have a single source and a single destination, 4 otherwise
+#define AUTOUNROLL (UNROLL*(4/(MINDSTS+MINSRCS)))
+
+template<int UNROLL, class FUNC, typename T, int MINSRCS, int MAXSRCS, int MINDSTS, int MAXDSTS>
+__device__ __forceinline__ void ReduceOrCopyMulti(const int tid, const int nthreads,
+    int nsrcs, const T* srcs[MAXSRCS], int ndsts, T* dsts[MAXDSTS],
     int N) {
   int Nrem = N;
   if (Nrem <= 0) return;
 
-  int Npreamble = (Nrem<alignof(Pack128)) ? Nrem : AlignUp(dest0, alignof(Pack128)) - dest0;
+  int alignDiff = 0;
+  int align = ptrAlign128(srcs[0]);
+  #pragma unroll
+  for (int i=1; i<MINSRCS; i++) alignDiff |= (align ^ ptrAlign128(srcs[i]));
+  for (int i=MINSRCS; i<MAXSRCS && i<nsrcs; i++) alignDiff |= (align ^ ptrAlign128(srcs[i]));
+  #pragma unroll
+  for (int i=0; i<MINDSTS; i++) alignDiff |= (align ^ ptrAlign128(dsts[i]));
+  for (int i=MINDSTS; i<MAXDSTS && i<ndsts; i++) alignDiff |= (align ^ ptrAlign128(dsts[i]));
 
-  // stage 0: check if we'll be able to use the fast, 128-bit aligned path.
-  // If not, we'll just use the slow preamble path for the whole operation
-  bool alignable = (((AlignUp(src0,  alignof(Pack128)) == src0  + Npreamble)) &&
-          (!HAS_DEST1 || (AlignUp(dest1, alignof(Pack128)) == dest1 + Npreamble)) &&
-          (!HAS_SRC1  || (AlignUp(src1,  alignof(Pack128)) == src1  + Npreamble)));
-
-  if (!alignable) {
-    Npreamble = Nrem;
-  }
+  int Npreamble = alignDiff ? Nrem :
+    N < alignof(Pack128) ? N :
+    (alignof(Pack128) - align) % alignof(Pack128);
 
   // stage 1: preamble: handle any elements up to the point of everything coming
   // into alignment
-  ReduceCopy<FUNC, T, HAS_SRC1, HAS_DEST1>(tid, nthreads, src0, src1, dest0, dest1, Npreamble);
-
-  Nrem -= Npreamble;
-  if (Nrem == 0) return;
-
-  dest0 += Npreamble; if (HAS_DEST1) { dest1 += Npreamble; }
-  src0  += Npreamble; if (HAS_SRC1)  { src1  += Npreamble; }
+  if (Npreamble) {
+    ReduceCopyMulti<FUNC, T, MINSRCS, MAXSRCS, MINDSTS, MAXDSTS>(tid, nthreads, nsrcs, srcs, ndsts, dsts, 0, Npreamble);
+    Nrem -= Npreamble;
+    if (Nrem == 0) return;
+  }
+  int offset = Npreamble;
 
   // stage 2: fast path: use 128b loads/stores to do the bulk of the work,
   // assuming the pointers we have are all 128-bit alignable.
@@ -338,35 +350,33 @@ __device__ inline void ReduceOrCopy(const int tid, const int nthreads,
   int nw = nthreads / WARP_SIZE; // Number of warps
   int t = tid % WARP_SIZE;       // Thread (inside the warp)
 
-  const int PackFactor = sizeof(Pack128) / sizeof(T);
+  const int packFactor = sizeof(Pack128) / sizeof(T);
 
   // stage 2a: main loop
-  int Nalign2a = (Nrem / (PackFactor * UNROLL * nthreads))
-      * (UNROLL * nthreads); // round down
+  int Npack2a = (Nrem / (packFactor * AUTOUNROLL * WARP_SIZE))
+      * (AUTOUNROLL * WARP_SIZE); // round down
+  int Nelem2a = Npack2a * packFactor;
 
-  ReduceCopy128b<FUNC, T, HAS_SRC1, HAS_DEST1, UNROLL>(w, nw, t, (Pack128*)src0, (Pack128*)src1, (Pack128*)dest0, (Pack128*)dest1, Nalign2a);
+  ReduceCopy128bMulti<FUNC, T, AUTOUNROLL, MINSRCS, MAXSRCS, MINDSTS, MAXDSTS>(w, nw, t, nsrcs, srcs, ndsts, dsts, offset, Npack2a);
 
-  int Ndone2a = Nalign2a * PackFactor;
-  Nrem -= Ndone2a;
+  Nrem -= Nelem2a;
   if (Nrem == 0) return;
-  dest0 += Ndone2a; if (HAS_DEST1) { dest1 += Ndone2a; }
-  src0  += Ndone2a; if (HAS_SRC1)  { src1  += Ndone2a; }
+  offset += Nelem2a;
 
   // stage 2b: slightly less optimized for section when we don't have full
-  // UNROLLs
+  // unrolling
 
-  int Nalign2b = Nrem / PackFactor;
+  int Npack2b = Nrem / packFactor;
+  int Nelem2b = Npack2b * packFactor;
 
-  ReduceCopy128b<FUNC, T, HAS_SRC1, HAS_DEST1, 1>(w, nw, t, (Pack128*)src0, (Pack128*)src1, (Pack128*)dest0, (Pack128*)dest1, Nalign2b);
+  ReduceCopy128bMulti<FUNC, T, 1, MINSRCS, MAXSRCS, MINDSTS, MAXDSTS>(w, nw, t, nsrcs, srcs, ndsts, dsts, offset, Npack2b);
 
-  int Ndone2b = Nalign2b * PackFactor;
-  Nrem -= Ndone2b;
+  Nrem -= Nelem2b;
   if (Nrem == 0) return;
-  dest0 += Ndone2b; if (HAS_DEST1) { dest1 += Ndone2b; }
-  src0  += Ndone2b; if (HAS_SRC1)  { src1  += Ndone2b; }
+  offset += Nelem2b;
 
   // stage 2c: tail
-  ReduceCopy<FUNC, T, HAS_SRC1, HAS_DEST1>(tid, nthreads, src0, src1, dest0, dest1, Nrem);
+  ReduceCopyMulti<FUNC, T, MINSRCS, MAXSRCS, MINDSTS, MAXDSTS>(tid, nthreads, nsrcs, srcs, ndsts, dsts, offset, Nrem);
 }
 
 #endif // COMMON_KERNEL_H_

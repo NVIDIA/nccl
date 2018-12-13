@@ -7,7 +7,7 @@
 #ifndef NCCL_NVMLWRAP_H_
 #define NCCL_NVMLWRAP_H_
 
-#include "core.h"
+#include "nccl.h"
 
 //#define NVML_DIRECT 1
 #ifdef NVML_DIRECT
@@ -32,14 +32,6 @@ static ncclResult_t wrapNvmlDeviceGetIndex(nvmlDevice_t device, unsigned* index)
   NVMLCHECK(nvmlDeviceGetIndex(device, index));
   return ncclSuccess;
 }
-static ncclResult_t wrapNvmlDeviceSetCpuAffinity(nvmlDevice_t device) {
-  NVMLCHECK(nvmlDeviceSetCpuAffinity(device));
-  return ncclSuccess;
-}
-static ncclResult_t wrapNvmlDeviceClearCpuAffinity(nvmlDevice_t device) {
-  NVMLCHECK(nvmlDeviceClearCpuAffinity(device));
-  return ncclSuccess;
-}
 static ncclResult_t wrapNvmlDeviceGetHandleByIndex(unsigned int index, nvmlDevice_t *device) {
   NVMLCHECK(nvmlDeviceGetHandleByIndex(index,device));
   return ncclSuccess;
@@ -59,6 +51,10 @@ static ncclResult_t wrapNvmlDeviceGetNvLinkRemotePciInfo(nvmlDevice_t device, un
 static ncclResult_t wrapNvmlDeviceGetNvLinkCapability(nvmlDevice_t device, unsigned int link,
                                                    nvmlNvLinkCapability_t capability, unsigned int *capResult) {
   NVMLCHECK(nvmlDeviceGetNvLinkCapability(device, link, capability, capResult));
+  return ncclSuccess;
+}
+static ncclResult_t wrapNvmlDeviceGetMinorNumber(nvmlDevice_t device, unsigned int* minorNumber) {
+  NVMLCHECK(nvmlDeviceGetMinorNumber(device, minorNumber));
   return ncclSuccess;
 }
 #else
@@ -136,14 +132,14 @@ ncclResult_t wrapNvmlInit(void);
 ncclResult_t wrapNvmlShutdown(void);
 ncclResult_t wrapNvmlDeviceGetHandleByPciBusId(const char* pciBusId, nvmlDevice_t* device);
 ncclResult_t wrapNvmlDeviceGetIndex(nvmlDevice_t device, unsigned* index);
-ncclResult_t wrapNvmlDeviceSetCpuAffinity(nvmlDevice_t device);
-ncclResult_t wrapNvmlDeviceClearCpuAffinity(nvmlDevice_t device);
 ncclResult_t wrapNvmlDeviceGetHandleByIndex(unsigned int index, nvmlDevice_t *device);
 ncclResult_t wrapNvmlDeviceGetPciInfo(nvmlDevice_t device, nvmlPciInfo_t* pci);
 ncclResult_t wrapNvmlDeviceGetNvLinkState(nvmlDevice_t device, unsigned int link, nvmlEnableState_t *isActive);
 ncclResult_t wrapNvmlDeviceGetNvLinkRemotePciInfo(nvmlDevice_t device, unsigned int link, nvmlPciInfo_t *pci);
 ncclResult_t wrapNvmlDeviceGetNvLinkCapability(nvmlDevice_t device, unsigned int link,
                                                    nvmlNvLinkCapability_t capability, unsigned int *capResult);
+ncclResult_t wrapNvmlDeviceGetMinorNumber(nvmlDevice_t device, unsigned int* minorNumber);
+
 #endif // NVML_DIRECT
 
 #endif // End include guard

@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2018, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2019, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -68,13 +68,23 @@ ncclResult_t pncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId commId
 ncclResult_t  ncclCommInitAll(ncclComm_t* comm, int ndev, const int* devlist);
 ncclResult_t pncclCommInitAll(ncclComm_t* comm, int ndev, const int* devlist);
 
-/* Frees resources associated with communicator object. */
+/* Frees resources associated with communicator object, but waits for any operations
+ * that might still be running on the device. */
 ncclResult_t  ncclCommDestroy(ncclComm_t comm);
 ncclResult_t pncclCommDestroy(ncclComm_t comm);
+
+/* Frees resources associated with communicator object and aborts any operations
+ * that might still be running on the device. */
+ncclResult_t  ncclCommAbort(ncclComm_t comm);
+ncclResult_t pncclCommAbort(ncclComm_t comm);
 
 /* Returns a human-readable error message. */
 const char*  ncclGetErrorString(ncclResult_t result);
 const char* pncclGetErrorString(ncclResult_t result);
+
+/* Checks whether the comm has encountered any asynchronous errors */
+ncclResult_t  ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t *asyncError);
+ncclResult_t pncclCommGetAsyncError(ncclComm_t comm, ncclResult_t *asyncError);
 
 /* Gets the number of ranks in the communicator clique. */
 ncclResult_t  ncclCommCount(const ncclComm_t comm, int* count);

@@ -179,13 +179,13 @@ group_cleanup:
   // an atomic operation, we need to cancel all operations.
   for (int i=0; i<ncclGroupIndex; i++) {
     struct ncclComm* comm = ncclGroupArgs[i].coll.comm;
-    for (int r=0; r<comm->nRings; r++) {
-      struct ncclRing* ring = comm->rings+r;
-      for (int i=0; i<ring->collCount; i++) {
-        ring->collectives[(ring->collStart + i)%NCCL_MAX_OPS].active = 0;
+    for (int c=0; c<comm->nChannels; c++) {
+      struct ncclChannel* channel = comm->channels+c;
+      for (int i=0; i<channel->collCount; i++) {
+        channel->collectives[(channel->collStart + i)%NCCL_MAX_OPS].active = 0;
       }
-      ring->collFifoTail = ring->collStart;
-      ring->collCount = 0;
+      channel->collFifoTail = channel->collStart;
+      channel->collCount = 0;
     }
     comm->myParams->gridDim.x = comm->myParams->blockDim.x = 0;
     comm->userStreamSet = false;

@@ -160,7 +160,10 @@ static ncclResult_t fillCoords(int nranks, int* matrix, int* coords, int* rankTo
     while ((rank = findConnected(curRank, matrix, nranks, transport, coords)) == -1) {
       current[transport] = 0;
       transport++;
-      if (transport == NTRANSPORTS) { free(p2pConnected); return ncclInternalError; }
+      if (transport == NTRANSPORTS) {
+        WARN("Error : Could not find transport to connect next group\n");
+        free(p2pConnected);
+        return ncclInternalError; }
     }
     curRank = rank;
     current[transport]++;
@@ -179,8 +182,20 @@ ncclResult_t getEnvThreads(int* nthreads) {
   return ncclSuccess;
 }
 
+static inline int copyRings(int nrings, int newNrings, int nranks, int* a, int* b, int* c, int* d) {
+  if (newNrings > MAXCHANNELS) newNrings = MAXCHANNELS;
+  for (int r=nrings; r<newNrings; r++) {
+    for (int i=0; i<nranks; i++) {
+      a[r*nranks+i] = a[(r-nrings)*nranks+i];
+      b[r*nranks+i] = b[(r-nrings)*nranks+i];
+      c[r*nranks+i] = c[(r-nrings)*nranks+i];
+      d[r*nranks+i] = d[(r-nrings)*nranks+i];
+    }
+  }
+  return newNrings;
+}
 /* Main ring creation function */
-ncclResult_t ncclGetRings(int* nrings, int* nthreads, int rank, int nranks, int* transports, ncclTvalue_t* values, int* prev, int* next) {
+ncclResult_t ncclGetRings(int* nrings, int* nthreads, int rank, int nranks, int* transports, ncclTvalue_t* values, int* prev, int* next, int* treeIn, int* treeOut) {
   *nrings = 0;
 
   if (nranks == 1) return ncclSuccess;
@@ -191,6 +206,12 @@ ncclResult_t ncclGetRings(int* nrings, int* nthreads, int rank, int nranks, int*
     if (ret == ncclSuccess && *nrings > 0) {
       if (rank == 0) INFO(NCCL_INIT,"%d ring(s) set by environment", *nrings);
       NCCLCHECK(getEnvThreads(nthreads));
+      for (int r = 0; r<*nrings; r++) {
+        for (int i = 0; i<nranks; i++) {
+          if (transports[i*nranks+prev[i]] == 2) treeIn[i] = 1;
+          if (transports[i*nranks+next[i]] == 2) treeOut[i] = 1;
+        }
+      }
       return ncclSuccess;
     }
     if (rank == 0) INFO(NCCL_INIT,"No valid ring found in environment, ignoring");
@@ -210,8 +231,8 @@ ncclResult_t ncclGetRings(int* nrings, int* nthreads, int rank, int nranks, int*
   int minScore = NCCL_MAX_SCORE;
   int nringsTmp;
   int *prevTmp, *nextTmp, *idxToRank, *rankToIdx, *groups, *subgroups;
-  NCCLCHECK(ncclCalloc(&prevTmp, nranks*MAXRINGS));
-  NCCLCHECK(ncclCalloc(&nextTmp, nranks*MAXRINGS));
+  NCCLCHECK(ncclCalloc(&prevTmp, nranks*MAXCHANNELS));
+  NCCLCHECK(ncclCalloc(&nextTmp, nranks*MAXCHANNELS));
   NCCLCHECK(ncclCalloc(&idxToRank, nranks));
   NCCLCHECK(ncclCalloc(&rankToIdx, nranks));
   NCCLCHECK(ncclCalloc(&groups, nranks));
@@ -220,8 +241,8 @@ ncclResult_t ncclGetRings(int* nrings, int* nthreads, int rank, int nranks, int*
   int nThreads;
   do {
     nThreads = *nthreads;
-    for (int i=0; i<nranks*MAXRINGS; i++) prevTmp[i] = nextTmp[i] = -1;
-    nringsTmp = MAXRINGS;
+    for (int i=0; i<nranks*MAXCHANNELS; i++) prevTmp[i] = nextTmp[i] = -1;
+    nringsTmp = MAXCHANNELS;
     // Loop over transports to connect groups
     for (int t=NTRANSPORTS-1; t>=0; t--) {
       for (int i=0; i<nranks; i++) idxToRank[i] = rankToIdx[i] = -1;
@@ -282,6 +303,11 @@ ncclResult_t ncclGetRings(int* nrings, int* nthreads, int rank, int nranks, int*
           for (int i=0; i<nidx; i++) {
             if ((prevTmp[r*nranks+idxToRank[i]] == -1) && (subprev[r*nidx+i] != -1)) prevTmp[r*nranks+idxToRank[i]] = idxToRank[subprev[r*nidx+i]];
             if ((nextTmp[r*nranks+idxToRank[i]] == -1) && (subnext[r*nidx+i] != -1)) nextTmp[r*nranks+idxToRank[i]] = idxToRank[subnext[r*nidx+i]];
+            if (t == NTRANSPORTS-1) {
+              // Save node-level masters for trees
+              treeIn[r*nranks+idxToRank[i]] = prevTmp[r*nranks+idxToRank[i]] == -1 ? 0 : 1;
+              treeOut[r*nranks+idxToRank[i]] = nextTmp[r*nranks+idxToRank[i]] == -1 ? 0 : 1;
+            }
           }
         }
         //for (int r=0; r<nringsTmp; r++) {
@@ -316,6 +342,15 @@ ncclResult_t ncclGetRings(int* nrings, int* nthreads, int rank, int nranks, int*
 
   *nthreads = nThreads;
 
+  /* Duplicate the rings in case of multinode+NVLink */
+  int nnodes = 0;
+  for (int r=0; r<nranks; r++) nnodes += treeIn[r];
+  int nvlink;
+  NCCLCHECK(ncclNvlinkGpu(&nvlink));
+  if (nnodes > 1 && nvlink) {
+    *nrings = copyRings(*nrings, *nrings*2, nranks, prev, next, treeIn, treeOut);
+  }
+
   if (*nrings == 0) {
     WARN("Could not create rings, falling back on simple ring");
     *nrings = 1;
@@ -329,9 +364,9 @@ ncclResult_t ncclGetRings(int* nrings, int* nthreads, int rank, int nranks, int*
     if (rank == 0) WARN("NCCL_MIN_NRINGS set to a value greater than NCCL_MAX_NRINGS, ignoring NCCL_MIN_NRINGS");
     minNrings = 0;
   }
-  if (minNrings > MAXRINGS) {
-    if (rank == 0) WARN("NCCL_MIN_NRINGS set to a value greater than the maximum number of rings supported (%d), limiting it to %d", MAXRINGS, MAXRINGS);
-    minNrings = MAXRINGS;
+  if (minNrings > MAXCHANNELS) {
+    if (rank == 0) WARN("NCCL_MIN_NRINGS set to a value greater than the maximum number of rings supported (%d), limiting it to %d", MAXCHANNELS, MAXCHANNELS);
+    minNrings = MAXCHANNELS;
   }
   if (maxNrings > 0 && maxNrings <= *nrings) {
     if (rank == 0) INFO(NCCL_INIT,"Limiting to %d rings per user request.", maxNrings);
@@ -341,13 +376,7 @@ ncclResult_t ncclGetRings(int* nrings, int* nthreads, int rank, int nranks, int*
     if (minNrings < defaultMinNrings) minNrings = defaultMinNrings;
     if (minNrings > 0 && minNrings > *nrings) {
       if (rank == 0 && minNrings > defaultMinNrings) INFO(NCCL_INIT,"Duplicating rings to %d per user request.", minNrings);
-      for (int r=*nrings; r<MAXRINGS && r <minNrings; r++) {
-        for (int i=0; i<nranks; i++) {
-          prev[r*nranks+i] = prev[(r-*nrings)*nranks+i];
-          next[r*nranks+i] = next[(r-*nrings)*nranks+i];
-        }
-      }
-      *nrings = minNrings;
+      *nrings = copyRings(*nrings, minNrings, nranks, prev, next, treeIn, treeOut);
     }
   }
 

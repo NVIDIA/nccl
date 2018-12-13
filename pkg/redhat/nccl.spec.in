@@ -1,6 +1,6 @@
 Name:           libnccl
-Version:        ${nccl:Major}.${nccl:Minor}.${nccl:Patch}
-Release:        ${pkg:Revision}
+Version:        ${nccl:Major}.${nccl:Minor}.${nccl:Patch}${nccl:Suffix}
+Release:        ${pkg:Revision}+cuda${cuda:Major}.${cuda:Minor}
 Summary:        NVIDIA Collectives Communication Library (NCCL) Runtime
 
 Group:          Development/Libraries

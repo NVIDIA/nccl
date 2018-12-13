@@ -12,13 +12,6 @@
 #include <unistd.h>
 #include <cuda_runtime.h>
 
-struct shmInfo {
-  int rank;
-  int cudaDev;
-  uint64_t hostHash;
-  uint64_t pidHash;
-};
-
 struct shmSendConnectInfo {
   uint64_t pidHash;
   int id;
@@ -51,24 +44,10 @@ struct shmRecvResources {
   struct ncclRecvMem* devHostMem;
 };
 
-/* Fill information necessary to exchange between ranks to choose whether or not
- * to use this transport */
-ncclResult_t shmFillInfo(ncclTinfo_t* opaqueInfo, int rank) {
-  struct shmInfo* info = (struct shmInfo*)opaqueInfo;
-  static_assert(sizeof(struct shmInfo) <= sizeof(ncclTinfo_t), "shm Info too large");
-  info->rank = rank;
-  CUDACHECK(cudaGetDevice(&info->cudaDev));
-  info->hostHash=getHostHash();
-  info->pidHash=getPidHash();
-  return ncclSuccess;
-}
-
 NCCL_PARAM(ShmDisable, "SHM_DISABLE", 0);
 
 /* Determine if we can communicate with the peer */
-ncclResult_t shmCanConnect(ncclTvalue_t* ret, ncclTinfo_t* myOpaqueInfo, ncclTinfo_t* peerOpaqueInfo) {
-  struct shmInfo* myInfo = (struct shmInfo*)myOpaqueInfo;
-  struct shmInfo* peerInfo = (struct shmInfo*)peerOpaqueInfo;
+ncclResult_t shmCanConnect(ncclTvalue_t* ret, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo) {
   *ret = ((ncclParamShmDisable() == 1) || (myInfo->hostHash != peerInfo->hostHash)) ? 0 : 1;
   return ncclSuccess;
 }
@@ -88,7 +67,7 @@ static inline int groupLast(int nranks, int* groups, int group, int rankToAvoid)
 }
 
 ncclResult_t shmGetRings(int nranks, int* groups, int* subgroups, ncclTvalue_t* values, int* nringsRet, int* prev, int* next, int minScore, int* nthreads) {
-  if (*nringsRet == MAXRINGS) *nringsRet = 1;
+  if (*nringsRet == MAXCHANNELS) *nringsRet = 1;
   int nGroups = groups[nranks-1] + 1;
   int starts[nGroups];
   int ends[nGroups];
@@ -156,43 +135,40 @@ ncclResult_t shmGetRings(int nranks, int* groups, int* subgroups, ncclTvalue_t* 
 #define MAX_SHM_NAME_LEN 1024
 
 /* Create and return connect structures for this peer to connect to me */
-ncclResult_t shmSendSetup(ncclTinfo_t* myOpaqueInfo, ncclTinfo_t* peerOpaqueInfo, struct ncclConnect* connectInfo, struct ncclRing* ring) {
-  struct shmInfo* myInfo = (struct shmInfo*)myOpaqueInfo;
-  struct shmInfo* peerInfo = (struct shmInfo*)peerOpaqueInfo;
+ncclResult_t shmSendSetup(struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo, struct ncclConnect* connectInfo, struct ncclConnector* send, int buffSize, int channelId) {
 
   struct shmSendResources* resources;
   NCCLCHECK(ncclCalloc(&resources, 1));
-  ring->send.transportResources = resources;
+  send->transportResources = resources;
 
   struct shmRecvConnectInfo info;
   char shmName[MAX_SHM_NAME_LEN];
-  sprintf(shmName, "nccl-shm-send-%lx-%d-%d", myInfo->pidHash, ring->id, myInfo->rank);
+  sprintf(shmName, "nccl-shm-send-%lx-%d-%d", myInfo->pidHash, channelId, myInfo->rank);
   info.shmSize = resources->shmSize = sizeof(struct ncclSendMem);
   TRACE(NCCL_SHM,"Open shmName %s shmSize %d", shmName, info.shmSize);
   NCCLCHECK(shmOpen(shmName, resources->shmSize, (void**)&resources->hostMem, (void**)&resources->devHostMem, 1));
 
-  INFO(NCCL_INIT|NCCL_SHM,"Ring %02d : %d[%d] -> %d[%d] via direct shared memory", ring->id, myInfo->rank, myInfo->cudaDev, peerInfo->rank, peerInfo->cudaDev);
-  info.id = ring->id; info.rank = myInfo->rank; info.pidHash = myInfo->pidHash;
+  INFO(NCCL_INIT|NCCL_SHM,"Ring %02d : %d[%d] -> %d[%d] via direct shared memory", channelId, myInfo->rank, myInfo->cudaDev, peerInfo->rank, peerInfo->cudaDev);
+  info.id = channelId; info.rank = myInfo->rank; info.pidHash = myInfo->pidHash;
   static_assert(sizeof(struct shmRecvConnectInfo) <= sizeof(struct ncclConnect), "shm Connect Recv Info is too big");
   memcpy(connectInfo, &info, sizeof(struct shmRecvConnectInfo));
   return ncclSuccess;
 }
 
-ncclResult_t shmRecvSetup(ncclTinfo_t* myOpaqueInfo, ncclTinfo_t* peerOpaqueInfo, struct ncclConnect* connectInfo, struct ncclRing* ring) {
-  struct shmInfo* myInfo = (struct shmInfo*)myOpaqueInfo;
+ncclResult_t shmRecvSetup(struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo, struct ncclConnect* connectInfo, struct ncclConnector* recv, int buffSize, int channelId) {
   struct shmRecvResources* resources;
   NCCLCHECK(ncclCalloc(&resources, 1));
-  ring->recv.transportResources = resources;
+  recv->transportResources = resources;
 
   struct shmSendConnectInfo info;
 
   char shmName[MAX_SHM_NAME_LEN];
-  sprintf(shmName, "nccl-shm-recv-%lx-%d-%d", myInfo->pidHash, ring->id, myInfo->rank);
-  info.shmSize = resources->shmSize = offsetof(struct ncclRecvMem, buff)+ring->buffSize;
+  sprintf(shmName, "nccl-shm-recv-%lx-%d-%d", myInfo->pidHash, channelId, myInfo->rank);
+  info.shmSize = resources->shmSize = offsetof(struct ncclRecvMem, buff)+buffSize;
   TRACE(NCCL_SHM,"Open shmName %s shmSize %d", shmName, info.shmSize);
   NCCLCHECK(shmOpen(shmName, resources->shmSize, (void**)&resources->hostMem, (void**)&resources->devHostMem, 1));
 
-  info.id = ring->id; info.rank = myInfo->rank; info.pidHash = myInfo->pidHash;
+  info.id = channelId; info.rank = myInfo->rank; info.pidHash = myInfo->pidHash;
   static_assert(sizeof(struct shmRecvConnectInfo) <= sizeof(struct ncclConnect), "shm Connect Send Info is too big");
   memcpy(connectInfo, &info, sizeof(struct shmSendConnectInfo));
   return ncclSuccess;
@@ -216,10 +192,10 @@ ncclResult_t shmSendConnect(struct ncclConnect* connectInfo, struct ncclConnecto
   send->conn.buff = resources->devRemHostMem->buff;
   send->conn.llBuff = resources->devRemHostMem->llBuff;
   send->conn.tail = &resources->devRemHostMem->tail;
-  send->conn.opCount = &resources->devRemHostMem->opCount;
+  send->conn.opCountRem = &resources->devRemHostMem->opCount;
 
   send->conn.head = &resources->devHostMem->head;
-  send->conn.llHead = &resources->devHostMem->llHead;
+  send->conn.opCountLoc = &resources->devHostMem->opCount;
   return ncclSuccess;
 }
 
@@ -235,12 +211,12 @@ ncclResult_t shmRecvConnect(struct ncclConnect* connectInfo, struct ncclConnecto
   NCCLCHECK(shmOpen(shmName, resources->remShmSize, (void**)&resources->remHostMem, (void**)&resources->devRemHostMem, 0));
   NCCLCHECK(shmUnlink(shmName));
   recv->conn.head = &resources->devRemHostMem->head;
-  recv->conn.llHead = &resources->devRemHostMem->llHead;
+  recv->conn.opCountRem = &resources->devRemHostMem->opCount;
 
   recv->conn.buff = resources->devHostMem->buff;
   recv->conn.llBuff = resources->devHostMem->llBuff;
   recv->conn.tail = &resources->devHostMem->tail;
-  recv->conn.opCount = &resources->devHostMem->opCount;
+  recv->conn.opCountLoc = &resources->devHostMem->opCount;
   return ncclSuccess;
 }
 
@@ -262,7 +238,6 @@ ncclResult_t shmRecvFree(void* transportResources) {
 
 struct ncclTransport shmTransport = {
   "SHM",
-  shmFillInfo,
   shmCanConnect,
   shmGetRings,
   { shmSendSetup, shmSendConnect, shmSendFree, NULL },

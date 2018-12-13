@@ -4,8 +4,10 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
-#include "reduce_scatter.h"
-#include "common.h"
-#include "collectives.h"
+#ifndef NCCL_TREES_H_
+#define NCCL_TREES_H_
 
-IMPL_COLL_R(ncclReduceScatter, ncclCollReduceScatter);
+ncclResult_t ncclGetBtree(int nranks, int rank, int* u0, int* d1, int* d0);
+ncclResult_t ncclGetDtree(int nranks, int rank, int* u0, int* d0_0, int* d0_1, int* u1, int* d1_0, int* d1_1);
+
+#endif

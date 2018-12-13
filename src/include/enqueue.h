@@ -10,12 +10,7 @@
 #include "core.h"
 #include "group.h"
 
-typedef ncclResult_t(*ncclFunc_t)(const void* sendbuff, void* recvbuff, size_t count,
-    ncclDataType_t type, ncclRedOp_t op, int root, ncclComm_t comm, cudaStream_t stream);
-
-ncclResult_t ncclEnqueueCheck(ncclFunc_t func, const char* primName, const void* sendbuff,
-    void* recvbuff, size_t count, ncclDataType_t type, ncclRedOp_t op, int root,
-    ncclComm_t comm, cudaStream_t stream);
+ncclResult_t ncclEnqueueCheck(struct ncclInfo* info);
 ncclResult_t ncclCpuBarrierIn(ncclComm_t comm, int* isLast);
 ncclResult_t ncclCpuBarrierLast(ncclComm_t comm);
 ncclResult_t ncclCpuBarrierOut(ncclComm_t comm);

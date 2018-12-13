@@ -12,6 +12,6 @@ static int getDefaultThreads() {
   return ncclCudaCompCap() == 3 ? 128 : 256;
 }
 
-ncclResult_t ncclGetRings(int* nrings, int* nthreads, int rank, int nranks, int* transports, ncclTvalue_t* values, int* prev, int* next);
+ncclResult_t ncclGetRings(int* nrings, int* nthreads, int rank, int nranks, int* transports, ncclTvalue_t* values, int* prev, int* next, int* treeIn, int* treeOut);
 
 #endif

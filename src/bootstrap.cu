@@ -72,7 +72,6 @@ static void *bootstrapRoot(void* commId) {
   ncclNetHandle_t *extHandleRing = NULL; // for bootstrap ring creation
   ncclNetHandle_t zero = { 0 }; // for sanity checking
   void* tmpComm;
-  char* data = NULL;
   ncclResult_t res;
   setFilesLimit();
 
@@ -123,7 +122,8 @@ static void *bootstrapRoot(void* commId) {
 out:
   bootstrapCloseListen(id->extListenComm);
   free(commId);
-  if (data) free(data);
+  free(extHandleBstrap);
+  free(extHandleRing);
   return NULL;
 }
 

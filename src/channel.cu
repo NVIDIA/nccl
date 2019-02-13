@@ -47,5 +47,10 @@ ncclResult_t freeChannel(struct ncclChannel* channel, int nRanks) {
     if (peer->send.transportResources) NCCLCHECK(peer->send.transportComm->free(peer->send.transportResources));
     if (peer->recv.transportResources) NCCLCHECK(peer->recv.transportComm->free(peer->recv.transportResources));
   }
+
+  // Free the peer structures.
+  CUDACHECK(cudaFree(channel->devPeers));
+  free(channel->peers);
+
   return ncclSuccess;
 }

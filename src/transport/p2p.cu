@@ -600,6 +600,7 @@ ncclResult_t p2pSendFree(void* resources) {
   if (sendRes->ipcPtr)
     CUDACHECK(cudaIpcCloseMemHandle(sendRes->ipcPtr));
   CUDACHECK(cudaFree(sendRes->devMem));
+  free(sendRes);
   return ncclSuccess;
 }
 
@@ -608,6 +609,7 @@ ncclResult_t p2pRecvFree(void* resources) {
   if (recvRes->ipcPtr)
     CUDACHECK(cudaIpcCloseMemHandle(recvRes->ipcPtr));
   CUDACHECK(cudaFree(recvRes->devMem));
+  free(recvRes);
   return ncclSuccess;
 }
 

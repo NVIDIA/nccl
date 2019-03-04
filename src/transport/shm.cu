@@ -12,17 +12,11 @@
 #include <unistd.h>
 #include <cuda_runtime.h>
 
-struct shmSendConnectInfo {
+struct shmConnectInfo {
   uint64_t pidHash;
   int id;
-  int rank;
-  int shmSize;
-};
-
-struct shmRecvConnectInfo {
-  uint64_t pidHash;
-  int id;
-  int rank;
+  int sendRank;
+  int recvRank;
   int shmSize;
 };
 
@@ -141,17 +135,21 @@ ncclResult_t shmSendSetup(struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peer
   NCCLCHECK(ncclCalloc(&resources, 1));
   send->transportResources = resources;
 
-  struct shmRecvConnectInfo info;
+  struct shmConnectInfo info;
+  info.id = channelId;
+  info.pidHash = myInfo->pidHash;
+  info.sendRank = myInfo->rank;
+  info.recvRank = peerInfo->rank;
+
   char shmName[MAX_SHM_NAME_LEN];
-  sprintf(shmName, "nccl-shm-send-%lx-%d-%d", myInfo->pidHash, channelId, myInfo->rank);
+  sprintf(shmName, "nccl-shm-send-%lx-%d-%d-%d", info.pidHash, info.id, info.sendRank, info.recvRank);
   info.shmSize = resources->shmSize = sizeof(struct ncclSendMem);
   TRACE(NCCL_SHM,"Open shmName %s shmSize %d", shmName, info.shmSize);
   NCCLCHECK(shmOpen(shmName, resources->shmSize, (void**)&resources->hostMem, (void**)&resources->devHostMem, 1));
 
   INFO(NCCL_INIT|NCCL_SHM,"Ring %02d : %d[%d] -> %d[%d] via direct shared memory", channelId, myInfo->rank, myInfo->cudaDev, peerInfo->rank, peerInfo->cudaDev);
-  info.id = channelId; info.rank = myInfo->rank; info.pidHash = myInfo->pidHash;
-  static_assert(sizeof(struct shmRecvConnectInfo) <= sizeof(struct ncclConnect), "shm Connect Recv Info is too big");
-  memcpy(connectInfo, &info, sizeof(struct shmRecvConnectInfo));
+  static_assert(sizeof(struct shmConnectInfo) <= sizeof(struct ncclConnect), "shm Connect Recv Info is too big");
+  memcpy(connectInfo, &info, sizeof(struct shmConnectInfo));
   return ncclSuccess;
 }
 
@@ -160,28 +158,31 @@ ncclResult_t shmRecvSetup(struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peer
   NCCLCHECK(ncclCalloc(&resources, 1));
   recv->transportResources = resources;
 
-  struct shmSendConnectInfo info;
+  struct shmConnectInfo info;
+  info.id = channelId;
+  info.pidHash = myInfo->pidHash;
+  info.sendRank = peerInfo->rank;
+  info.recvRank = myInfo->rank;
 
   char shmName[MAX_SHM_NAME_LEN];
-  sprintf(shmName, "nccl-shm-recv-%lx-%d-%d", myInfo->pidHash, channelId, myInfo->rank);
+  sprintf(shmName, "nccl-shm-recv-%lx-%d-%d-%d", info.pidHash, info.id, info.sendRank, info.recvRank);
   info.shmSize = resources->shmSize = offsetof(struct ncclRecvMem, buff)+buffSize;
   TRACE(NCCL_SHM,"Open shmName %s shmSize %d", shmName, info.shmSize);
   NCCLCHECK(shmOpen(shmName, resources->shmSize, (void**)&resources->hostMem, (void**)&resources->devHostMem, 1));
 
-  info.id = channelId; info.rank = myInfo->rank; info.pidHash = myInfo->pidHash;
-  static_assert(sizeof(struct shmRecvConnectInfo) <= sizeof(struct ncclConnect), "shm Connect Send Info is too big");
-  memcpy(connectInfo, &info, sizeof(struct shmSendConnectInfo));
+  static_assert(sizeof(struct shmConnectInfo) <= sizeof(struct ncclConnect), "shm Connect Send Info is too big");
+  memcpy(connectInfo, &info, sizeof(struct shmConnectInfo));
   return ncclSuccess;
 }
 
 /* Connect to this peer */
 ncclResult_t shmSendConnect(struct ncclConnect* connectInfo, struct ncclConnector* send) {
   // Setup device pointers
-  struct shmSendConnectInfo* info = (struct shmSendConnectInfo*)connectInfo;
+  struct shmConnectInfo* info = (struct shmConnectInfo*)connectInfo;
   struct shmSendResources* resources = (struct shmSendResources*)send->transportResources;
 
   char shmName[MAX_SHM_NAME_LEN];
-  sprintf(shmName, "nccl-shm-recv-%lx-%d-%d", info->pidHash, info->id, info->rank);
+  sprintf(shmName, "nccl-shm-recv-%lx-%d-%d-%d", info->pidHash, info->id, info->sendRank, info->recvRank);
   resources->remShmSize = info->shmSize;
   TRACE(NCCL_SHM,"Open shmName %s shmSize %d", shmName, info->shmSize);
   NCCLCHECK(shmOpen(shmName, resources->remShmSize, (void**)&resources->remHostMem, (void**)&resources->devRemHostMem, 0));
@@ -202,10 +203,10 @@ ncclResult_t shmSendConnect(struct ncclConnect* connectInfo, struct ncclConnecto
 ncclResult_t shmRecvConnect(struct ncclConnect* connectInfo, struct ncclConnector* recv) {
   // Setup device pointers
   struct shmRecvResources* resources = (struct shmRecvResources*)recv->transportResources;
-  struct shmRecvConnectInfo* info = (struct shmRecvConnectInfo*)connectInfo;
+  struct shmConnectInfo* info = (struct shmConnectInfo*)connectInfo;
 
   char shmName[MAX_SHM_NAME_LEN];
-  sprintf(shmName, "nccl-shm-send-%lx-%d-%d", info->pidHash, info->id, info->rank);
+  sprintf(shmName, "nccl-shm-send-%lx-%d-%d-%d", info->pidHash, info->id, info->sendRank, info->recvRank);
   resources->remShmSize = info->shmSize;
   TRACE(NCCL_SHM,"Open shmName %s shmSize %d", shmName, info->shmSize);
   NCCLCHECK(shmOpen(shmName, resources->remShmSize, (void**)&resources->remHostMem, (void**)&resources->devRemHostMem, 0));

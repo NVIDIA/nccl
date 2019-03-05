@@ -17,16 +17,20 @@ LIBSRCFILES := init.cu channel.cu bootstrap.cu transport.cu enqueue.cu \
 ##### lib files
 LIBNAME     := libnccl.so
 STATICLIBNAME := libnccl_static.a
+##### pkgconfig files
+PKGCONFIGFILE := nccl.pc
 ##### dirs
 BUILDDIR ?= $(abspath ../build)
 INCDIR := $(BUILDDIR)/include
 LIBDIR := $(BUILDDIR)/lib
 OBJDIR := $(BUILDDIR)/obj
+PKGDIR := $(BUILDDIR)/lib/pkgconfig
 ##### target files
 INCTARGETS := $(INCEXPORTS:%=$(INCDIR)/%)
 LIBSONAME  := $(LIBNAME:%=%.$(NCCL_MAJOR))
 LIBTARGET  := $(LIBNAME:%=%.$(NCCL_MAJOR).$(NCCL_MINOR).$(NCCL_PATCH))
 STATICLIBTARGET := $(STATICLIBNAME)
+PKGTARGET  := $(PKGCONFIGFILE)
 LIBOBJ     := $(LIBSRCFILES:%.cu=$(OBJDIR)/%.o)
 DEPFILES   := $(LIBOBJ:%.o=%.d)
 LDFLAGS    += -L${CUDA_LIB} -lcudart_static -lpthread -lrt -ldl
@@ -36,7 +40,7 @@ DEVICELIB  := $(BUILDDIR)/obj/collectives/device/colldevice.a
 ##### rules
 build : lib staticlib
 
-lib : $(INCTARGETS) $(LIBDIR)/$(LIBTARGET)
+lib : $(INCTARGETS) $(LIBDIR)/$(LIBTARGET) $(PKGDIR)/$(PKGTARGET)
 
 staticlib : $(LIBDIR)/$(STATICLIBTARGET)
 
@@ -77,6 +81,16 @@ $(LIBDIR)/$(STATICLIBTARGET): $(LIBOBJ) $(DEVICELIB)
 	ar cr $@ $(LIBOBJ) $(TMP)/*.o
 	rm -Rf $(TMP)
 
+$(PKGDIR)/nccl.pc : nccl.pc.in
+	@mkdir -p $(PKGDIR)
+	printf "Generating %-35s > %s\n" $< $@
+	printf $(PREFIX)
+	sed -e 's|$${nccl:Prefix}|\$(PREFIX)|g' \
+	    -e "s/\$${nccl:Major}/$(NCCL_MAJOR)/g" \
+	    -e "s/\$${nccl:Minor}/$(NCCL_MINOR)/g" \
+	    -e "s/\$${nccl:Patch}/$(NCCL_PATCH)/g" \
+	    $< > $@
+
 $(INCDIR)/%.h : %.h
 	@printf "Grabbing   %-35s > %s\n" $< $@
 	mkdir -p $(INCDIR)
@@ -85,6 +99,11 @@ $(INCDIR)/%.h : %.h
 $(INCDIR)/nccl_%.h : include/nccl_%.h
 	@printf "Grabbing   %-35s > %s\n" $< $@
 	mkdir -p $(INCDIR)
+	cp -f $< $@
+
+$(PKGDIR)/%.pc : %.pc
+	@printf "Grabbing   %-35s > %s\n" $< $@
+	mkdir -p $(PKGDIR)
 	cp -f $< $@
 
 $(OBJDIR)/%.o : %.cu
@@ -98,13 +117,15 @@ $(OBJDIR)/%.o : %.cu
 	@rm -f $(@:%.o=%.d.tmp)
 
 clean :
-	rm -rf ${INCDIR} ${LIBDIR} ${OBJDIR}
+	rm -rf ${INCDIR} ${LIBDIR} ${PKGDIR} ${OBJDIR}
 	$(MAKE) -C collectives/device clean
 
 install : lib
 	mkdir -p $(PREFIX)/lib
+	mkdir -p $(PREFIX)/lib/pkgconfig
 	mkdir -p $(PREFIX)/include
-	cp -P -v $(BUILDDIR)/lib/* $(PREFIX)/lib/
+	cp -P -v $(BUILDDIR)/lib/*.so* $(PREFIX)/lib/
+	cp -P -v $(BUILDDIR)/lib/pkgconfig/* $(PREFIX)/lib/pkgconfig/
 	cp -v $(BUILDDIR)/include/* $(PREFIX)/include/
 
 FILESTOFORMAT := $(shell find . -name ".\#*" -prune -o \( -name "*.cu" -o -name "*.h" \) -print | grep -v -E 'ibvwrap.h|nvmlwrap.h|nccl.h')

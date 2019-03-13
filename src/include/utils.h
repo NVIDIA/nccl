@@ -11,6 +11,7 @@
 #include <stdint.h>
 
 ncclResult_t getHostName(char* hostname, int maxlen);
+uint64_t getnHash(const char* string, int n);
 uint64_t getHostHash();
 uint64_t getPidHash();
 

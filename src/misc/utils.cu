@@ -96,6 +96,15 @@ uint64_t getHash(const char* string) {
   return result;
 }
 
+uint64_t getnHash(const char* string, int n) {
+  // Based on DJB2, result = result * 33 + char
+  uint64_t result = 9527;
+  for (int c = 0; c < n; c++) {
+    result = ((result << 5) + result) + string[c];
+  }
+  return result;
+}
+
 /* Generate a hash of the unique identifying string for this host
  * that will be unique for both bare-metal and container instances
  * Equivalent of a hash of;

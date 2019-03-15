@@ -54,6 +54,9 @@ NCCL_PARAM(IbRetryCnt, "IB_RETRY_CNT", 7);
 NCCL_PARAM(IbSl, "IB_SL", 0);
 NCCL_PARAM(IbTc, "IB_TC", 0);
 
+#define MAX_IB_GPUS 32
+static void* ncclGdrTestBuf[MAX_IB_GPUS];
+
 // Allocate memory to be potentially ibv_reg_mr'd. This needs to be
 // allocated on separate pages as those pages will be marked DONTFORK
 // and if they are shared, that could cause a crash in a child process
@@ -110,6 +113,7 @@ ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction) {
       int nUserIfs = parseStringList(userIbEnv, userIfs, MAX_IB_DEVS);
 
       if (ncclSuccess != wrap_ibv_get_device_list(&devices, &nIbDevs)) return ncclInternalError;
+      for (int d=0; d<MAX_IB_GPUS; d++) ncclGdrTestBuf[d] = NULL;
 
       for (int d=0; d<nIbDevs; d++) {
         struct ibv_context * context;
@@ -191,26 +195,27 @@ ncclResult_t ncclIbPciPath(int dev, char** path) {
 // Returns :
 // ncclSuccess : GDR works
 // ncclSystemError : no module or module loaded but not supported by GPU
-ncclResult_t ncclIbGdrSupport(int ibDev) {
+ncclResult_t ncclIbGdrSupport(int ibDev, int cudaDev) {
   static int moduleLoaded = -1;
   if (moduleLoaded == -1) {
     moduleLoaded = (access("/sys/kernel/mm/memory_peers/nv_mem/version", F_OK) == -1) ? 0 : 1;
   }
   if (moduleLoaded == 0) return ncclSystemError;
   ncclResult_t ret = ncclSystemError;
-  void* ptr;
-  if (cudaMalloc(&ptr, sizeof(int)) == cudaSuccess) {
+  pthread_mutex_lock(&ncclIbLock);
+  void** ptr = ncclGdrTestBuf+cudaDev;
+  if (*ptr || cudaMalloc(ptr, sizeof(int)) == cudaSuccess) {
     struct ibv_mr* mr;
     struct ibv_pd* pd;
     if (wrap_ibv_alloc_pd(&pd, ncclIbDevs[ibDev].context) == ncclSuccess) {
-      if ((mr = wrap_direct_ibv_reg_mr(pd, ptr, sizeof(int), IBV_ACCESS_LOCAL_WRITE|IBV_ACCESS_REMOTE_WRITE|IBV_ACCESS_REMOTE_READ)) != NULL) {
+      if ((mr = wrap_direct_ibv_reg_mr(pd, *ptr, sizeof(int), IBV_ACCESS_LOCAL_WRITE|IBV_ACCESS_REMOTE_WRITE|IBV_ACCESS_REMOTE_READ)) != NULL) {
         ret = ncclSuccess;
         wrap_ibv_dereg_mr(mr);
       }
       wrap_ibv_dealloc_pd(pd);
     }
-    cudaFree(ptr);
   }
+  pthread_mutex_unlock(&ncclIbLock);
   return ret;
 }
 
@@ -221,7 +226,7 @@ ncclResult_t ncclIbPtrSupport(int dev, int* supportedTypes) {
   CUDACHECK(cudaGetDevice(&cudaDev));
   NCCLCHECK(getNvmlDevice(cudaDev, &nvmlDev))
 
-  if (ncclIbGdrSupport(dev) != ncclSuccess) {
+  if (ncclIbGdrSupport(dev, cudaDev) != ncclSuccess) {
     INFO(NCCL_NET,"NET/IB : GPU Direct RDMA Disabled for GPU %d[%d] / HCA %d '%s' (no module or not supported by GPU)", cudaDev, nvmlDev, dev, ncclIbDevs[dev].devName);
     return ncclSuccess;
   }
@@ -501,7 +506,9 @@ ncclResult_t ncclIbAccept(void* listenComm, void** recvComm) {
 #endif
 
   // Allocate Flush dummy buffer for GPU Direct RDMA
-  rComm->gpuFlush.enabled = (ncclIbGdrSupport(lComm->dev) == 0) && (ncclParamIbGdrFlushDisable() == 0) ? 1 : 0;
+  int cudaDev;
+  CUDACHECK(cudaGetDevice(&cudaDev));
+  rComm->gpuFlush.enabled = (ncclIbGdrSupport(lComm->dev, cudaDev) == 0) && (ncclParamIbGdrFlushDisable() == 0) ? 1 : 0;
   if (rComm->gpuFlush.enabled) {
     NCCLCHECK(wrap_ibv_reg_mr(&rComm->gpuFlush.hostMr, rComm->verbs.pd, &rComm->gpuFlush.hostMem, sizeof(int), IBV_ACCESS_LOCAL_WRITE));
     rComm->gpuFlush.sge.addr = (uint64_t)&rComm->gpuFlush.hostMem;

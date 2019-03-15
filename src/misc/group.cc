@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2018, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2019, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -118,7 +118,7 @@ ncclResult_t ncclGroupEnd() {
   int savedDev;
   CUDACHECK(cudaGetDevice(&savedDev));
   int done = ncclGroupIndex;
-  int doneArray[ncclGroupIndex];
+  int doneArray[MAX_ASYNC_OPS];
   for (int i=0; i<ncclGroupIndex; i++) doneArray[i] = 0;
 
   ncclResult_t ret = ncclGroupError;

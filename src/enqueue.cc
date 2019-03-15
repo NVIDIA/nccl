@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2017-2018, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2017-2019, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -87,7 +87,7 @@ ncclResult_t ncclLaunchCooperativeKernelMultiDevice(struct cudaLaunchParams *par
 }
 
 ncclResult_t setupLaunch(struct ncclComm* comm, struct cudaLaunchParams* params) {
-  params->gridDim.x = std::min((int) params->gridDim.x, comm->nChannels);
+  params->gridDim.x = std::min<unsigned>(params->gridDim.x, comm->nChannels);
 
   // Set active = 2 for the last operation
   for (int r=0; r<params->gridDim.x; r++) {
@@ -266,7 +266,7 @@ static ncclResult_t getLoopInfo(struct ncclInfo* info) {
 
 static void getKernelInfo(struct ncclInfo* info, uint8_t* nChannels, uint16_t* nThreads, int* llMode) {
   // Compute thresholds and limits that users can override
-  int perThreadLLThreshold = std::min(info->comm->threadThreshold, (ssize_t)NCCL_LL_CHANNEL_THRESHOLD);
+  ssize_t perThreadLLThreshold = std::min<ssize_t>(info->comm->threadThreshold, NCCL_LL_CHANNEL_THRESHOLD);
   int maxLLNthreads = std::min(NCCL_LL_MAX_NTHREADS, info->comm->nThreads);
 
   // First compute nThreads
@@ -365,7 +365,7 @@ static ncclResult_t saveKernel(struct ncclInfo* info) {
   memset(&proxyArgs, 0, sizeof(struct ncclProxyArgs));
   NCCLCHECK(computeColl(info, &coll, &proxyArgs));
 
-  info->comm->myParams->blockDim.x = max(info->comm->myParams->blockDim.x, coll.args.nThreads);
+  info->comm->myParams->blockDim.x = std::max<unsigned>(info->comm->myParams->blockDim.x, coll.args.nThreads);
   if (info->comm->userStreamSet == false) {
     info->comm->userStream = info->stream;
     info->comm->userStreamSet = true;

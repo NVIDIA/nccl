@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2017-2018, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2017-2019, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -8,7 +8,7 @@
 #define NCCL_DEVICE_COMMON_H_
 
 #include "../collectives.h"
-#include "core.h"
+#include "devcomm.h"
 #include "nccl.h"
 
 // Exit If Abort Barrier across CTA: make sure all threads exit consistently
@@ -57,7 +57,7 @@ __global__ void NCCL_KERN_NAME(coll, op, dtype)(struct ncclColl firstColl) { \
   int bid = blockIdx.x; \
   __shared__ struct ncclColl localColl; \
  \
-  struct ncclComm* comm = firstColl.args.comm; \
+  struct ncclDevComm* comm = firstColl.args.comm; \
   struct ncclChannel* channel = comm->channels+bid; \
   struct ncclColl* c; \
   if (bid == 0) { \

@@ -47,7 +47,7 @@ FILE *ncclDebugFile = stdout;
 std::chrono::high_resolution_clock::time_point ncclEpoch;
 #endif
 
-#if CUDART_VERSION >= 9200
+#if CUDART_VERSION >= 9020
 #define NCCL_GROUP_CUDA_STREAM 0 // CGMD: CUDA 9.2,10.X Don't need to use an internal CUDA stream
 #else
 #define NCCL_GROUP_CUDA_STREAM 1 // CGMD: CUDA 9.0,9.1 Need to use an internal CUDA stream
@@ -182,6 +182,11 @@ ncclResult_t ncclGetUniqueId(ncclUniqueId* out) {
   return bootstrapGetUniqueId(out);
 }
 
+// Prevent compiler from optimizing out these operations
+void __attribute__((optimize("O0"))) commPoison(ncclComm_t comm) {
+  comm->rank = comm->cudaDev = comm->nvmlDev = comm->nRanks = -1;
+}
+
 static ncclResult_t commFree(ncclComm_t comm) {
   if (comm == NULL)
     return ncclSuccess;
@@ -191,6 +196,7 @@ static ncclResult_t commFree(ncclComm_t comm) {
   if (comm->bootstrap)
     NCCLCHECK(bootstrapClose(comm->bootstrap));
 
+  CUDACHECK(cudaFree(comm->hostDevComm.channels));
   CUDACHECK(cudaFree(comm->devComm));
 
   for (int channel=0; channel<comm->nChannels; channel++)
@@ -216,6 +222,9 @@ static ncclResult_t commFree(ncclComm_t comm) {
   CUDACHECK(cudaFreeHost((void *)comm->abortFlag));
   CUDACHECK(cudaFreeHost((void *)comm->fatalDevError));
 
+  // Poison comm to try and catch a double free
+  commPoison(comm);
+
   free(comm);
   return ncclSuccess;
 }
@@ -238,17 +247,17 @@ static ncclResult_t commAlloc(ncclComm_t* comret, int ndev, int rank) {
   struct ncclComm* comm;
   NCCLCHECK(ncclCalloc(&comm, 1));
 
-  comm->rank = rank;
-  comm->nRanks = ndev;
+  comm->rank = comm->hostDevComm.rank =rank;
+  comm->nRanks = comm->hostDevComm.nRanks = ndev;
   cudaGetDevice(&comm->cudaDev);
   getNvmlDevice(comm->cudaDev, &comm->nvmlDev);
-  INFO(NCCL_INIT,"comm %p rank %d nranks %d cudaDev %d nvmlDev %d", comm, rank, ndev, comm->cudaDev, comm->nvmlDev);
+  TRACE(NCCL_INIT,"comm %p rank %d nranks %d cudaDev %d nvmlDev %d", comm, rank, ndev, comm->cudaDev, comm->nvmlDev);
 
   comm->doneEvent = doneEvent;
   comm->llThreshold = ncclParamLlThreshold();
   comm->treeThreshold = ncclParamTreeThreshold();
   comm->checkPointers = ncclParamCheckPointers() == 1 ? true : false;
-#if CUDART_VERSION >= 9200
+#if CUDART_VERSION >= 9020
   comm->groupCudaStream = ncclParamGroupCudaStream();
 #else
   // Don't allow the user to overload the default setting in older CUDA builds
@@ -256,10 +265,10 @@ static ncclResult_t commAlloc(ncclComm_t* comret, int ndev, int rank) {
 #endif
   comm->fatalError = ncclSuccess;
 
-  CUDACHECK(cudaHostAlloc((void**) &comm->fatalDevError, sizeof(ncclDevError_t), cudaHostAllocMapped));
+  NCCLCHECK(ncclCudaHostAlloc((void**) &comm->fatalDevError, (void**) &comm->hostDevComm.fatalDevError, sizeof(ncclDevError_t)));
   *comm->fatalDevError = ncclDevSuccess;
 
-  CUDACHECK(cudaHostAlloc((void**) &comm->abortFlag, sizeof(uint32_t), cudaHostAllocMapped));
+  NCCLCHECK(ncclCudaHostAlloc((void**) &comm->abortFlag, (void**) &comm->hostDevComm.abortFlag, sizeof(uint32_t)));
   *comm->abortFlag = 0;
 
   comm->argsptr = &comm->args;
@@ -269,23 +278,19 @@ static ncclResult_t commAlloc(ncclComm_t* comret, int ndev, int rank) {
 }
 
 static ncclResult_t devCommSetup(ncclComm_t comm) {
-  // Fully duplicate the comm on the device
-  NCCLCHECK(ncclCudaCalloc(&comm->devComm, 1));
-  // Copy the comm on the device
-  NCCLCHECK(ncclCudaMemcpy(comm->devComm, comm, 1));
-  // Copy userRanks
+  // Duplicate the channels on the device
+  NCCLCHECK(ncclCudaCalloc(&comm->hostDevComm.channels, comm->nChannels));
+  NCCLCHECK(ncclCudaMemcpy(comm->hostDevComm.channels, comm->channels, comm->nChannels));
+
+  // Copy userRanks and peers
   for (int r=0; r<comm->nChannels; r++) {
     NCCLCHECK(ncclCudaMemcpy(comm->channels[r].ring.devUserRanks, comm->channels[r].ring.userRanks, comm->nRanks));
     NCCLCHECK(ncclCudaMemcpy(comm->channels[r].devPeers, comm->channels[r].peers, comm->nRanks));
   }
-  // Copy the device-accessible pointer to comm->abortFlag
-  void *devAbortFlag;
-  CUDACHECK(cudaHostGetDevicePointer(&devAbortFlag, (uint32_t *)comm->abortFlag, 0));
-  CUDACHECK(cudaMemcpy(&comm->devComm->abortFlag, &devAbortFlag, sizeof(int *), cudaMemcpyHostToDevice));
-  // Copy the device-accessible pointer to comm->fatalDevError
-  void *devFatalError;
-  CUDACHECK(cudaHostGetDevicePointer(&devFatalError, (ncclDevError_t *)comm->fatalDevError, 0));
-  CUDACHECK(cudaMemcpy(&comm->devComm->fatalDevError, &devFatalError, sizeof(ncclDevError_t *), cudaMemcpyHostToDevice));
+
+  // Duplicate the dev comm on the device
+  NCCLCHECK(ncclCudaCalloc(&comm->devComm, 1));
+  NCCLCHECK(ncclCudaMemcpy(comm->devComm, &comm->hostDevComm, 1));
   return ncclSuccess;
 }
 
@@ -423,7 +428,8 @@ static ncclResult_t setupChannel(struct ncclComm* comm, int channelId, int rank,
       }
     }
 
-    int ranks[nMasters];
+    int* ranks;
+    NCCLCHECK(ncclCalloc(&ranks, nMasters));
     int i = 0, masterIndex = -1;
     // Build binary tree
     for (int r=0; r<nranks; r++) {
@@ -455,6 +461,7 @@ static ncclResult_t setupChannel(struct ncclComm* comm, int channelId, int rank,
       tree->up = prev;
       if (treeMasters[next] == 0) tree->down[0] = next;
     }
+    free(ranks);
   }
 
   TRACE(NCCL_INIT, "rank %d nranks %d - DONE", rank, nranks);
@@ -638,6 +645,7 @@ static ncclResult_t p2pSetup(struct ncclComm* comm, struct ncclChannel* channel,
     if (peer == -1) continue;
     conn = &channel->peers[peer].recv;
     if (conn->connected) { ++nSkippedRecv; continue; }
+    memset(&connect, 0, sizeof(connect));
     NCCLCHECK(selectTransport<0>(comm->peerInfo+comm->rank, comm->peerInfo+peer, &connect, conn, channel->buffSize, channel->id));
     NCCLCHECK(bootstrapSend(comm->bootstrap, peer, &connect, sizeof(struct ncclConnect)));
   }
@@ -646,6 +654,7 @@ static ncclResult_t p2pSetup(struct ncclComm* comm, struct ncclChannel* channel,
     if (peer == -1) continue;
     conn = &channel->peers[peer].send;
     if (conn->connected) { ++nSkippedSend; continue; }
+    memset(&connect, 0, sizeof(connect));
     NCCLCHECK(selectTransport<1>(comm->peerInfo+comm->rank, comm->peerInfo+peer, &connect, conn, channel->buffSize, channel->id));
     NCCLCHECK(bootstrapSend(comm->bootstrap, peer, &connect, sizeof(struct ncclConnect)));
   }
@@ -654,6 +663,7 @@ static ncclResult_t p2pSetup(struct ncclComm* comm, struct ncclChannel* channel,
     if (peer == -1) continue;
     conn = &channel->peers[peer].send;
     if (conn->connected) {++nSkippedSend; continue; }
+    memset(&connect, 0, sizeof(connect));
     NCCLCHECK(bootstrapRecv(comm->bootstrap, peer, &connect, sizeof(struct ncclConnect)));
     NCCLCHECK(conn->transportComm->connect(&connect, conn));
     conn->connected = 1;
@@ -663,6 +673,7 @@ static ncclResult_t p2pSetup(struct ncclComm* comm, struct ncclChannel* channel,
     if (peer == -1) continue;
     conn = &channel->peers[peer].recv;
     if (conn->connected) {++nSkippedRecv; continue; }
+    memset(&connect, 0, sizeof(connect));
     NCCLCHECK(bootstrapRecv(comm->bootstrap, peer, &connect, sizeof(struct ncclConnect)));
     NCCLCHECK(conn->transportComm->connect(&connect, conn));
     conn->connected = 1;
@@ -877,18 +888,42 @@ static ncclResult_t getCpuGpuAffinity(int cudaDev, cpu_set_t* mask) {
   return ncclSuccess;
 }
 
+NCCL_PARAM(IgnoreCpuAffinity, "IGNORE_CPU_AFFINITY", 0);
+
 static ncclResult_t setCpuAffinity(int cudaDev) {
-  // Work within the enveloppe we were provided
+  // Query the CPU affinity set we were provided
   cpu_set_t mask;
   SYSCHECK(sched_getaffinity(0, sizeof(cpu_set_t), &mask), "sched_getaffinity");
 
-  // Find the subpart that is local to our GPU
+#ifdef ENABLE_TRACE
+  {
+    char affinityStr[sizeof(cpu_set_t)*2];
+    NCCLCHECK(ncclCpusetToStr(&mask, affinityStr));
+    TRACE(NCCL_INIT, "Current affinity for GPU %d is %s", cudaDev, affinityStr);
+  }
+#endif
+
+  // Find the CPUs that are local to the supplied GPU
   cpu_set_t gpuMask;
   NCCLCHECK(getCpuGpuAffinity(cudaDev, &gpuMask));
-  cpu_set_t finalMask;
-  CPU_AND(&finalMask, &mask, &gpuMask);
 
-  // If those are not disjoint, try to stay local
+#ifdef ENABLE_TRACE
+  {
+    char affinityStr[sizeof(cpu_set_t)*2];
+    NCCLCHECK(ncclCpusetToStr(&gpuMask, affinityStr));
+    TRACE(NCCL_INIT, "CPU GPU affinity for GPU %d is %s", cudaDev, affinityStr);
+  }
+#endif
+
+  cpu_set_t finalMask;
+  if (ncclParamIgnoreCpuAffinity())
+    // Ignore the CPU affinity set and use the GPU one instead
+    finalMask = gpuMask;
+  else
+    // Use a subset of the GPU affinity set
+    CPU_AND(&finalMask, &mask, &gpuMask);
+
+  // If there is a non empty set, use it to set affinity
   if (CPU_COUNT(&finalMask)) {
     char affinityStr[sizeof(cpu_set_t)*2];
     NCCLCHECK(ncclCpusetToStr(&finalMask, affinityStr));
@@ -1018,8 +1053,9 @@ static ncclResult_t initTransportsAll(struct ncclComm** comms, const int* devs, 
     comms[rank]->threadThreshold = threadThreshold;
   }
 
+  struct ncclConnect* connect;
+  NCCLCHECK(ncclCalloc(&connect, 2*nranks));
   for (int r=0; r<nrings; r++) {
-    struct ncclConnect connect[2*nranks];
     int* ringRanks = rings+r*nranks;
     for (int rank=0; rank<nranks; rank++) {
       CUDACHECK(cudaSetDevice(devs[rank]));
@@ -1045,6 +1081,7 @@ static ncclResult_t initTransportsAll(struct ncclComm** comms, const int* devs, 
       NCCLCHECK(send->transportComm->connect(connect+ring->next*2+0, send));
     }
   }
+  free(connect);
   free(allInfo);
   free(rings);
   free(treeIn);
@@ -1072,12 +1109,13 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev, const int* devlist) {
   int savedDevice;
   int rank, cudaDev;
   ncclComm_t comm = NULL;
-  int ncclDevList[ndev];
+  int* ncclDevList = NULL;
+  NCCLCHECK(ncclCalloc(&ncclDevList, ndev));
   for (int i=0; i<ndev; i++) {
     ncclDevList[i] = devlist ? devlist[i] : i;
   }
 
-  cudaGetDevice(&savedDevice);
+  CUDACHECKGOTO(cudaGetDevice(&savedDevice), res, cleanup);
 
   for(rank=0; rank<ndev; ++rank)
     comms[rank] = NULL;
@@ -1118,6 +1156,7 @@ cleanup:
   }
 
 final:
+  free(ncclDevList);
   if(wrapNvmlShutdown() != ncclSuccess)
     INFO(NCCL_INIT,"NCCL did not shutdown nvml properly");
   cudaSetDevice(savedDevice);
@@ -1128,9 +1167,11 @@ final:
 
 static ncclResult_t commDestroy(ncclComm_t comm) {
   int savedDevice;
+#ifdef ENABLE_TRACE
+  int rank = comm->rank;
+#endif
   CUDACHECK(cudaGetDevice(&savedDevice));
   int commDevice = comm->cudaDev;
-  int rank = comm->rank;
 
   if (savedDevice != commDevice) {
     CUDACHECK(cudaSetDevice(commDevice));
@@ -1145,7 +1186,7 @@ static ncclResult_t commDestroy(ncclComm_t comm) {
   if (savedDevice != commDevice)
     CUDACHECK(cudaSetDevice(savedDevice));
 
-  INFO(NCCL_INIT, "Destroyed comm %p rank %d", comm, rank);
+  TRACE(NCCL_INIT, "Destroyed comm %p rank %d", comm, rank);
 
   return ncclSuccess;
 }
@@ -1154,6 +1195,14 @@ NCCL_API(ncclResult_t, ncclCommDestroy, ncclComm_t comm);
 ncclResult_t ncclCommDestroy(ncclComm_t comm) {
   if (comm == NULL)
     return ncclSuccess;
+
+  TRACE(NCCL_INIT, "comm %p rank %d nRanks %d cudaDev %d nvmlDev %d", comm, comm->rank, comm->nRanks, comm->cudaDev, comm->nvmlDev);
+
+  // Try and prevent a double free of the comm struct (user error)
+  if (comm->rank == -1 || comm->nRanks <= 0 || comm->cudaDev == -1 || comm->nvmlDev == -1) {
+    WARN("comm %p has already been destroyed", comm);
+    return ncclInvalidArgument;
+  }
 
   return commDestroy(comm);
 }

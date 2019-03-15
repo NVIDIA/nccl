@@ -8,6 +8,7 @@
 #define NCCL_TRANSPORT_H_
 
 #include "nccl.h"
+#include "devcomm.h"
 #include <stdint.h>
 #include "nvmlwrap.h"
 
@@ -37,7 +38,7 @@ struct ncclConnect {
   char data[CONNECT_SIZE];
 };
 
-enum ncclProxyOpState { ncclProxyOpNone, ncclProxyOpReady, ncclProxyOpProgress, ncclProxyOpDone };
+enum ncclProxyOpState { ncclProxyOpNone, ncclProxyOpReady, ncclProxyOpProgress };
 
 struct ncclProxyArgs;
 typedef ncclResult_t (*proxyProgressFunc_t)(struct ncclProxyArgs*);
@@ -115,10 +116,6 @@ inline void transportProxyWait(const FUNC& func) {
   while (!func()) {
     sched_yield();
   }
-}
-
-inline void transportProxyIdle(int idle) {
-  sched_yield();
 }
 
 #endif

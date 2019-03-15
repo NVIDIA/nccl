@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2018, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2019, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -47,5 +47,10 @@ ncclResult_t freeChannel(struct ncclChannel* channel, int nRanks) {
     if (peer->send.transportResources) NCCLCHECK(peer->send.transportComm->free(peer->send.transportResources));
     if (peer->recv.transportResources) NCCLCHECK(peer->recv.transportComm->free(peer->recv.transportResources));
   }
+
+  // Free the peer structures.
+  CUDACHECK(cudaFree(channel->devPeers));
+  free(channel->peers);
+
   return ncclSuccess;
 }

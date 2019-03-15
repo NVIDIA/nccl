@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2018, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2019, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -29,13 +29,13 @@ ncclResult_t getNvmlDevice(int cudaDev, int *nvmlDev) {
   return ncclSuccess;
 }
 
-ncclResult_t getHostName(char* hostname, int maxlen) {
+ncclResult_t getHostName(char* hostname, int maxlen, const char delim) {
   if (gethostname(hostname, maxlen) != 0) {
     strncpy(hostname, "unknown", maxlen);
     return ncclSystemError;
   }
   int i = 0;
-  while ((hostname[i] != '.') && (hostname[i] != '\0') && (i < maxlen-1)) i++;
+  while ((hostname[i] != delim) && (hostname[i] != '\0') && (i < maxlen-1)) i++;
   hostname[i] = '\0';
   return ncclSuccess;
 }
@@ -48,7 +48,7 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
   if (ncclDebugLevel <= NCCL_LOG_NONE) return;
 
   char hostname[1024];
-  getHostName(hostname, 1024);
+  getHostName(hostname, 1024, '.');
   int cudaDev;
   cudaGetDevice(&cudaDev);
 
@@ -104,8 +104,8 @@ uint64_t getHash(const char* string) {
  */
 uint64_t getHostHash(void) {
   char uname[1024];
-  // Start off with the hostname
-  (void) getHostName(uname, sizeof(uname));
+  // Start off with the full hostname
+  (void) getHostName(uname, sizeof(uname), '\0');
   int offset = strlen(uname);
   int len;
   // $(readlink /proc/self/ns/uts)

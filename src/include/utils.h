@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2018, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2019, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -10,7 +10,7 @@
 #include "nccl.h"
 #include <stdint.h>
 
-ncclResult_t getHostName(char* hostname, int maxlen);
+ncclResult_t getHostName(char* hostname, int maxlen, const char delim);
 uint64_t getHostHash();
 uint64_t getPidHash();
 

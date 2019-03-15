@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2017-2018, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2017-2019, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -80,12 +80,13 @@ typedef struct {
   // Finalize connection establishment after remote peer has called connectHandle
   ncclResult_t (*accept)(void* listenComm, void** recvComm);
   // Register/Deregister memory. Comm can be either a sendComm or a recvComm.
+  // Type is either NCCL_PTR_HOST or NCCL_PTR_CUDA.
   ncclResult_t (*regMr)(void* comm, void* data, int size, int type, void** mhandle);
   ncclResult_t (*deregMr)(void* comm, void* mhandle);
-  // Asynchronous send to a peer. Type is either NCCL_PTR_HOST or NCCL_PTR_CUDA.
+  // Asynchronous send to a peer.
   // May return request == NULL if the call cannot be performed (or would block)
   ncclResult_t (*isend)(void* sendComm, void* data, int size, void* mhandle, void** request);
-  // Asynchronous recv from a peer. Type is either NCCL_PTR_HOST or NCCL_PTR_CUDA.
+  // Asynchronous recv from a peer.
   // May return request == NULL if the call cannot be performed (or would block)
   ncclResult_t (*irecv)(void* recvComm, void* data, int size, void* mhandle, void** request);
   // Perform a flush/fence to make sure all data received with NCCL_PTR_CUDA is

@@ -35,7 +35,7 @@ ncclResult_t getHostName(char* hostname, int maxlen) {
     return ncclSystemError;
   }
   int i = 0;
-  while ((hostname[i] != '.') && (hostname[i] != '\0') && (i < maxlen-1)) i++;
+  while ((hostname[i] != '\0') && (i < maxlen-1)) i++;
   hostname[i] = '\0';
   return ncclSuccess;
 }

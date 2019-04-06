@@ -1,10 +1,10 @@
 /*************************************************************************
- * Copyright (c) 2018, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2019, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
 
-#include "checks.h"
+#include "argcheck.h"
 
 static ncclResult_t CudaPtrCheck(const void* pointer, struct ncclComm* comm, const char* ptrname, const char* opname) {
   cudaPointerAttributes attr;

@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2018, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2019, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -24,7 +24,7 @@ extern int ncclDebugLevel;
 extern uint64_t ncclDebugMask;
 extern pthread_mutex_t ncclDebugOutputLock;
 extern FILE *ncclDebugFile;
-extern ncclResult_t getHostName(char* hostname, int maxlen);
+extern ncclResult_t getHostName(char* hostname, int maxlen, const char delim);
 extern ncclResult_t getNvmlDevice(int cudaDev, int *nvmlDev);
 
 extern void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *filefunc, int line, const char *fmt, ...);
@@ -108,7 +108,7 @@ static inline void initDebug() {
           break;
         case 'h': // %h = hostname
           char hostname[1024];
-          getHostName(hostname, 1024);
+          getHostName(hostname, 1024, '.');
           dfn += snprintf(dfn, PATH_MAX, "%s", hostname);
           break;
         case 'p': // %p = pid

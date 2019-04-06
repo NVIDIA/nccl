@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2018, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2019, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -7,7 +7,7 @@
 #ifndef NCCL_COMMON_KERNEL_H_
 #define NCCL_COMMON_KERNEL_H_
 
-#include "core.h"
+#include "devcomm.h"
 #include <cstdio>
 #include <cstdint>
 

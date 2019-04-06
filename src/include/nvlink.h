@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2018, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2019, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -18,6 +18,7 @@
 enum ncclNvLinkDeviceType {
   ncclNvLinkDeviceGpu,
   ncclNvLinkDeviceSwitch,
+  ncclNvLinkDeviceBridge, // IBM/Power NVLink bridge (Device 04ea)
 };
 
 static ncclResult_t ncclDeviceType(const char* busId, enum ncclNvLinkDeviceType* type) {
@@ -25,7 +26,13 @@ static ncclResult_t ncclDeviceType(const char* busId, enum ncclNvLinkDeviceType*
   memcpy(classPath+sizeof("/sys/bus/pci/devices/")-1, busId, sizeof("0000:00:00.0")-1);
   char* rPath = realpath(classPath, NULL);
   int fd;
-  SYSCHECKVAL(open(rPath, O_RDONLY), "open", fd);
+  if ((fd = open(rPath, O_RDONLY)) == -1) {
+    // Could not find device. It might be because we're in a VM and
+    // we don't see the whole machine. This is handled silently so
+    // we don't want to print an INFO error.
+    TRACE(NCCL_INIT, "Open of %s failed : %s\n", rPath, strerror(errno));
+    return ncclSystemError;
+  }
   free(rPath);
   char pciClass[9];
   strncpy(pciClass, "0x000000", 9);
@@ -35,6 +42,9 @@ static ncclResult_t ncclDeviceType(const char* busId, enum ncclNvLinkDeviceType*
   if (strcmp(pciClass, "0x068000") == 0) {
     // PCI device is of type "Bridge / Other Bridge Device" (NVswitch)
     *type = ncclNvLinkDeviceSwitch;
+  } else if (strcmp(pciClass, "0x068001") == 0) {
+    // PCI device is of type "Bridge: IBM Device 04ea"
+    *type = ncclNvLinkDeviceBridge;
   } else if (strcmp(pciClass, "0x030200") == 0 // "3D Controller" (Tesla)
       || strcmp(pciClass, "0x030000") == 0) {  // "VGA Controller" (GeForce)
     *type = ncclNvLinkDeviceGpu;

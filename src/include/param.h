@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2017-2018, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2017-2019, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -36,7 +36,6 @@ static void setEnvFile(const char* fileName) {
     s++;
     strncpy(envValue, line+s, 1024);
     setenv(envVar, envValue, 0);
-    char *str = getenv(envVar);
   }
   if (line) free(line);
   fclose(file);

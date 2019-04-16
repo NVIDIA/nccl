@@ -170,7 +170,13 @@ static ncclResult_t fillCoords(int nranks, int* matrix, int* coords, int* rankTo
   }
 }
 
-NCCL_PARAM(MinNrings, "MIN_NRINGS", 0);
+#ifdef __PPC__
+// Make the default NCCL_MIN_NRINGS=4 for IBM/Power nodes
+#define DEFAULT_MIN_NRINGS 4
+#else
+#define DEFAULT_MIN_NRINGS 0
+#endif
+NCCL_PARAM(MinNrings, "MIN_NRINGS", DEFAULT_MIN_NRINGS);
 NCCL_PARAM(MaxNrings, "MAX_NRINGS", 0);
 
 /* Users can force the number of threads with an environment variable */

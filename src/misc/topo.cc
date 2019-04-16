@@ -39,11 +39,17 @@ int pciDistance(char* path1, char* path2) {
     }
   }
   if (score <= 3) {
+#ifdef __PPC__
+    // NUMA distance detection and PATH_SYS not supported on IBM/Power nodes
+    // nodes currently
+    return PATH_NODE;
+#else
     /* Split the former PATH_SOC distance into PATH_NODE and PATH_SYS based on numaId */
     int numaId1 = getNumaId(path1);
     int numaId2 = getNumaId(path2);
     TRACE(NCCL_INIT, "depth %d score %d path1 %s numaId %d path2 %s numaId %d", depth, score, path1, numaId1, path2, numaId2);
     return ((numaId1 == numaId2) ? PATH_NODE : PATH_SYS);
+#endif
   }
   if (score == 4) return PATH_PHB;
   if (score == depth-1) return PATH_PIX;

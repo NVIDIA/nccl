@@ -42,6 +42,7 @@ struct ncclProxyArgs {
   int llMode;
   bool needProxy;
   int active;   // add component before this line -- it is left out during initialization
+  ncclProf_t* nccl_prof;
 };
 
 struct ncclTransportComm {
@@ -93,7 +94,7 @@ static inline int proxyPatternTo(int root) { return -1-root; }
 static inline enum proxyMode proxyPatternMode(int pattern) { return (pattern == 0) ? proxyRing : ((pattern > 0) ? proxyFrom : proxyTo); }
 static inline int proxyPatternRoot(int pattern) { return (pattern > 0) ? pattern-1 : -pattern-1; }
 
-ncclResult_t transportSaveProxies(int substeps, int subchunks, int nstepsPerRound, int nblocksPerRound, size_t size, int pattern, struct ncclComm* comm);
+ncclResult_t transportSaveProxies(int substeps, int subchunks, int nstepsPerRound, int nblocksPerRound, size_t size, int pattern, struct ncclComm* comm, ncclProf_t* nccl_prof);
 ncclResult_t transportStartProxies(struct ncclComm* comm);
 
 #include <unistd.h>

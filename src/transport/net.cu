@@ -4,14 +4,17 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
+#include "stat_collector.h"
 #include "core.h"
 #include "transport.h"
 #include "nvmlwrap.h"
 #include "net.h"
 #include "param.h"
 #include "nvlink.h"
+#include "utils.h"
 #include <cuda_runtime.h>
 #include <assert.h>
+#include <iostream>
 
 #define NET_MAX_IFS 16
 
@@ -385,7 +388,13 @@ ncclResult_t netSendProxy(struct ncclProxyArgs* args) {
             volatile uint32_t *f2 = &lines[i].flag2;
             while (f1[0] != flag || f2[0] != flag);
           }
+          uint64_t start_micros = now_micros();
           NCCLCHECK(ncclNetIsend(resources->netSendComm, lines, size, ptrType, requests+slot));
+          uint64_t end_micros = now_micros();
+          if (args->nccl_prof->do_profile) {
+            commStat_t* comm_stat = create_comm_stat(NET_SEND, start_micros, end_micros, sliceSize);
+            enqueue_stat(args->nccl_prof, comm_stat);
+          }
           sizesFifo[slot] = size;
           tail++;
           idle = 0;
@@ -394,7 +403,13 @@ ncclResult_t netSendProxy(struct ncclProxyArgs* args) {
     } else while (tail < *prevTail) {
         // Send through network
         int slot = tail%args->substeps;
+        uint64_t start_micros = now_micros();
         NCCLCHECK(ncclNetIsend(resources->netSendComm, localBuff+slot*sliceSize, sizesFifo[slot], ptrType, requests+slot));
+        uint64_t end_micros = now_micros();
+        if (args->nccl_prof->do_profile) {
+          commStat_t* comm_stat = create_comm_stat(NET_SEND, start_micros, end_micros, sliceSize);
+          enqueue_stat(args->nccl_prof, comm_stat);
+        }
         tail++;
         idle = 0;
       }
@@ -414,6 +429,15 @@ ncclResult_t netSendProxy(struct ncclProxyArgs* args) {
       }
     }
     if (idle) transportProxyIdle(idle);
+  }
+  // TODO(HJ): For now, we set saved nccl profiling data manually.
+  if (args->nccl_prof->step > 30) {
+    StatCollector* stat_collector = GetStatCollector();
+    stat_collector->set_saved_in_file();
+  }
+  if (args->nccl_prof->do_profile) {
+    StatCollector* stat_collector = GetStatCollector();
+    stat_collector->save(args->nccl_prof);
   }
 
   // Reset
@@ -471,7 +495,13 @@ ncclResult_t netRecvProxy(struct ncclProxyArgs* args) {
     idle++;
     if ((tail < head + args->substeps) && (tail < *nextHead + args->substeps) && (tail < end)) {
       int slot = tail%args->substeps;
+      uint64_t start_micros = now_micros();
       NCCLCHECK(ncclNetIrecv(resources->netRecvComm, localBuff+slot*sliceSize, sliceSize, ptrType, requests+slot));
+      uint64_t end_micros = now_micros();
+      if (args->nccl_prof->do_profile) {
+        commStat_t* comm_stat = create_comm_stat(NET_RECV, start_micros, end_micros, sliceSize);
+        enqueue_stat(args->nccl_prof, comm_stat);
+      }
       tail++;
       idle = 0;
     }
@@ -491,6 +521,15 @@ ncclResult_t netRecvProxy(struct ncclProxyArgs* args) {
       }
     }
     if (idle) transportProxyIdle(idle);
+  }
+  // TODO(HJ): For now, we set saved nccl profiling data manually.
+  if (args->nccl_prof->step > 30) {
+    StatCollector* stat_collector = GetStatCollector();
+    stat_collector->set_saved_in_file();
+  }
+  if (args->nccl_prof->do_profile) {
+    StatCollector* stat_collector = GetStatCollector();
+    stat_collector->save(args->nccl_prof);
   }
 
   // Wait for last ack and reset

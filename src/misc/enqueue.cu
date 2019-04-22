@@ -4,6 +4,7 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
+#include "nccl.h"
 #include "enqueue.h"
 #include "common_coll.h"
 #include "param.h"
@@ -217,7 +218,7 @@ ncclResult_t ncclEnqueueEvents(ncclComm_t comm) {
 
 ncclResult_t ncclEnqueueCheck(ncclFunc_t func, const char* primName, const void* sendbuff,
     void* recvbuff, size_t count, ncclDataType_t type, ncclRedOp_t op, int root,
-    ncclComm_t comm, cudaStream_t stream) {
+    ncclComm_t comm, cudaStream_t stream, ncclProf_t* nccl_prof) {
   if (comm == NULL) return ncclInvalidArgument;
   // Launch asynchronously if needed
   if (ncclAsyncMode()) {
@@ -232,14 +233,14 @@ ncclResult_t ncclEnqueueCheck(ncclFunc_t func, const char* primName, const void*
     // Always register comm even in case of error to make sure ncclGroupEnd
     // cleans it up.
     NCCLCHECK(ncclAsyncColl(comm));
-    NCCLCHECKGOTO(func(sendbuff, recvbuff, count, type, op, root, comm, stream), ret, end);
+    NCCLCHECKGOTO(func(sendbuff, recvbuff, count, type, op, root, comm, stream, nccl_prof), ret, end);
 end:
     if (savedDev != -1) CUDACHECK(cudaSetDevice(savedDev));
     ncclAsyncErrCheck(ret);
     return ret;
   } else {
     NCCLCHECK(ArgsCheck(sendbuff, recvbuff, count, type, op, root, comm, primName));
-    NCCLCHECK(func(sendbuff, recvbuff, count, type, op, root, comm, stream));
+    NCCLCHECK(func(sendbuff, recvbuff, count, type, op, root, comm, stream, nccl_prof));
     NCCLCHECK(ncclBarrierEnqueue(comm));
     NCCLCHECK(ncclBarrierEnqueueWait(comm));
     NCCLCHECK(ncclEnqueueEvents(comm));

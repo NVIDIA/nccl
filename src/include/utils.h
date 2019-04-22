@@ -9,6 +9,7 @@
 
 #include "nccl.h"
 #include <stdint.h>
+#include <chrono>
 
 ncclResult_t getHostName(char* hostname, int maxlen);
 uint64_t getHostHash();
@@ -21,5 +22,7 @@ struct netIf {
 
 int parseStringList(const char* string, struct netIf* ifList, int maxList);
 bool matchIfList(const char* string, int port, struct netIf* ifList, int listSize);
+
+uint64_t now_micros();
 
 #endif

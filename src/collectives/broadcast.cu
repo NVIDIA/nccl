@@ -4,20 +4,21 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
+#include "nccl.h"
 #include "core.h"
 #include "common_coll.h"
 #include "enqueue.h"
 #include "collectives.h"
 
 ncclResult_t ncclBroadcastFunc(const void* sendbuff, void* recvbuff, const size_t count,
-    ncclDataType_t datatype, ncclRedOp_t op, int root, ncclComm_t comm, cudaStream_t stream) {
+    ncclDataType_t datatype, ncclRedOp_t op, int root, ncclComm_t comm, cudaStream_t stream, ncclProf_t* nccl_prof) {
   size_t nbytes = count*ncclTypeSize(datatype);
   INFO(COLL,"Broadcast: opCount %lx sendbuff %p recvbuff %p count %zi datatype %d op %d root %d comm %p [nranks=%d] stream %p", comm->opCount, sendbuff, recvbuff, count, datatype, op, root, comm, comm->nRanks, stream);
   if (comm->nRanks == 1) {
     if (sendbuff != recvbuff)
       CUDACHECK(cudaMemcpyAsync(recvbuff, sendbuff, nbytes, cudaMemcpyDeviceToDevice, stream));
   } else {
-    NCCLCHECK(transportSaveProxies(BROADCAST_SUBSTEPS, BROADCAST_BUFCHUNKS, 1, 1, nbytes, proxyPatternFrom(root), comm));
+    NCCLCHECK(transportSaveProxies(BROADCAST_SUBSTEPS, BROADCAST_BUFCHUNKS, 1, 1, nbytes, proxyPatternFrom(root), comm, nccl_prof));
     NCCLCHECK(saveKernel(ncclCollBroadcast, sendbuff, recvbuff, nbytes, ncclInt8, op, root, comm, stream, nbytes, 1));
   }
 
@@ -26,17 +27,17 @@ ncclResult_t ncclBroadcastFunc(const void* sendbuff, void* recvbuff, const size_
 
 /* Deprecated original "in place" function, similar to MPI */
 NCCL_API(ncclResult_t, ncclBcast, void* buff, size_t count, ncclDataType_t datatype, int root,
-    ncclComm_t comm, cudaStream_t stream);
+    ncclComm_t comm, cudaStream_t stream, ncclProf_t* nccl_prof);
 ncclResult_t ncclBcast(void* buff, size_t count, ncclDataType_t datatype, int root,
-    ncclComm_t comm, cudaStream_t stream) {
+    ncclComm_t comm, cudaStream_t stream, ncclProf_t* nccl_prof) {
   return ncclEnqueueCheck(ncclBroadcastFunc, "Bcast", buff, buff, count, datatype,
-          ncclSum, root, comm, stream);
+          ncclSum, root, comm, stream, nccl_prof);
 }
 
 NCCL_API(ncclResult_t, ncclBroadcast, const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype, int root,
-    ncclComm_t comm, cudaStream_t stream);
+    ncclComm_t comm, cudaStream_t stream, ncclProf_t* nccl_prof);
 ncclResult_t ncclBroadcast(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype, int root,
-    ncclComm_t comm, cudaStream_t stream) {
+    ncclComm_t comm, cudaStream_t stream, ncclProf_t* nccl_prof) {
   return ncclEnqueueCheck(ncclBroadcastFunc, "Broadcast", sendbuff, recvbuff, count, datatype,
-          ncclSum, root, comm, stream);
+          ncclSum, root, comm, stream, nccl_prof);
 }

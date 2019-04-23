@@ -9,7 +9,6 @@
 
 #include "nccl.h"
 #include <stdint.h>
-#include <chrono>
 
 ncclResult_t getHostName(char* hostname, int maxlen);
 uint64_t getHostHash();

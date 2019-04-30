@@ -39,6 +39,8 @@ typedef enum { P2P_SEND = 0,
 
 typedef struct commStat {
   commType_t comm_type;
+  int from_rank;
+  int to_rank;
   uint64_t start_micros;
   uint64_t end_micros;
   int comm_bytes;

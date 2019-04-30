@@ -103,7 +103,7 @@ static void SaveProxy(struct ncclConnector* connector, struct ncclProxyArgs* arg
   fifoArgs->active = 1;
 }
 
-ncclResult_t transportSaveProxies(int substeps, int subchunks, int nstepsPerRound, int nblocksPerRound, size_t nbytes, int pattern, struct ncclComm* comm) {
+ncclResult_t transportSaveProxies(int substeps, int subchunks, int nstepsPerRound, int nblocksPerRound, size_t nbytes, int pattern, struct ncclComm* comm, ncclProf_t* nccl_prof) {
   int llMode, nrings, nthreads;
   ncclGetCollResource(comm, nbytes, &nrings, &nthreads, &llMode);
   nbytes       = llMode ? nbytes * 2    : nbytes;
@@ -118,6 +118,8 @@ ncclResult_t transportSaveProxies(int substeps, int subchunks, int nstepsPerRoun
   for (int r=0; r<nrings; r++) {
     struct ncclRing* ring = comm->rings+((comm->myParams->gridDim.x+r)%comm->nRings);
     struct ncclProxyArgs args = { ring, substeps*subchunks, nsteps, comm->opCount, llMode, 0 };
+    args.nccl_prof = nccl_prof;
+    args.nccl_prof->mu_ = PTHREAD_MUTEX_INITIALIZER;
     SaveProxy(&ring->recv, &args, NeedProxy(RECV, pattern, ring, comm->nRanks));
     SaveProxy(&ring->send, &args, NeedProxy(SEND, pattern, ring, comm->nRanks));
   }

@@ -4,8 +4,8 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
-#include "nccl.h"
 #include "core.h"
+#include "stat_collector.h"
 #include "ring.h"
 #include "param.h"
 #include "nvmlwrap.h"
@@ -625,6 +625,8 @@ ncclResult_t ncclCommInitRank(ncclComm_t* newcomm, int nranks, ncclUniqueId comm
     WARN("Invalid rank requested : %d/%d", myrank, nranks);
     return ncclInvalidArgument;
   }
+
+  NCCLCHECK(StartStatCollector());
 
   if (ncclAsyncMode()) {
     int cudaDev;

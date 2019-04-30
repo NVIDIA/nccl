@@ -127,3 +127,9 @@ bool matchIfList(const char* string, int port, struct netIf* ifList, int listSiz
   }
   return false;
 }
+
+uint64_t now_micros() {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+                   std::chrono::system_clock::now().time_since_epoch())
+    .count();
+}

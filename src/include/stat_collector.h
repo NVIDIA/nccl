@@ -51,21 +51,21 @@ inline void enqueue_stat(ncclProf_t* nccl_prof, commStat_t* comm_stat) {
 inline const std::string ncclprof_tostring(ncclProf_t* nccl_prof) {
   std::string ret = "";
   std::string tensor_name(nccl_prof->tensor_name);
-  ret += std::string("{\n  \"Step\": ") + std::to_string(nccl_prof->step) + std::string(",\n  \"Tensor\": ") + tensor_name + std::string(",\n  \"Worker_ID\": ") + std::to_string(nccl_prof->worker_id);
-  ret += std::string(",\n  CommStat List: {\n");
+  ret += std::string("{\n  \"Step\": ") + std::to_string(nccl_prof->step) + std::string(",\n  \"Tensor\": \"") + tensor_name + std::string("\",\n  \"WorkerID\": ") + std::to_string(nccl_prof->worker_id);
+  ret += std::string(",\n  \"CommStatList\": [\n");
   std::vector<commStat_t*>::iterator iter;
   for (iter = nccl_prof->stat_vector->begin(); iter != nccl_prof->stat_vector->end(); iter++) {
     if (iter != nccl_prof->stat_vector->begin()) {
       ret += std::string(",\n");
     }
-    ret += std::string("    { CommType: ") + CommTypeToString((*iter)->comm_type);
-    ret += std::string(", From Rank: ") + std::to_string((*iter)->from_rank);
-    ret += std::string(", To Rank: ") + std::to_string((*iter)->to_rank);
-    ret += std::string(", StartMicros: ") + std::to_string((*iter)->start_micros);
-    ret += std::string(", EndMicros: ") + std::to_string((*iter)->end_micros);
-    ret += std::string(", CommBytes: ") + std::to_string((*iter)->comm_bytes) + std::string(" }");
+    ret += std::string("    { \"CommType\": \"") + CommTypeToString((*iter)->comm_type) + std::string("\"");
+    ret += std::string(", \"FromRank\": ") + std::to_string((*iter)->from_rank);
+    ret += std::string(", \"ToRank\": ") + std::to_string((*iter)->to_rank);
+    ret += std::string(", \"StartMicros\": ") + std::to_string((*iter)->start_micros);
+    ret += std::string(", \"EndMicros\": ") + std::to_string((*iter)->end_micros);
+    ret += std::string(", \"CommBytes\": ") + std::to_string((*iter)->comm_bytes) + std::string(" }");
   }
-  ret += std::string("\n  }\n");
+  ret += std::string("\n  ]\n");
   ret += std::string("},\n");
   return ret;
 }

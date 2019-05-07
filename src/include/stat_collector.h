@@ -66,7 +66,7 @@ inline const std::string ncclprof_tostring(ncclProf_t* nccl_prof) {
     ret += std::string(", CommBytes: ") + std::to_string((*iter)->comm_bytes) + std::string(" }");
   }
   ret += std::string("\n  }\n");
-  ret += std::string("}\n");
+  ret += std::string("},\n");
   return ret;
 }
 
@@ -130,10 +130,12 @@ public:
         return ncclSystemError;
       }
       NcclProfVector::iterator iter_;
+      fputs("[\n", fp);
       for (iter_ = iter->second->begin(); iter_ != iter->second->end(); iter_++) {
         const std::string ncclprof_str = ncclprof_tostring(*iter_);
         fputs(ncclprof_str.c_str(), fp);
       }
+      fputs("]\n", fp);
       fclose(fp);
     }
     return ncclSuccess;

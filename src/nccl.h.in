@@ -47,13 +47,9 @@ typedef struct commStat {
 } commStat_t;
 
 typedef struct ncclProf {
-  int do_profile;
-  int64_t step;
-  int worker_id;
-  const char* tensor_name;
+  char* tensor_name;
   pthread_mutex_t mu_;
-  std::vector<commStat_t*>* stat_vector;
-  int saved; // Flag indicates whether it is saved in StatCollector
+  std::vector<commStat_t> stat_vector;
 } ncclProf_t;
 
 #define NCCL_UNIQUE_ID_BYTES 128

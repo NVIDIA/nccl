@@ -9,37 +9,110 @@
 #include "utils.h"
 #include "bootstrap.h"
 #include "net.h"
+#include "socket.h"
 #include <unistd.h>
 #include <sys/types.h>
 
-// Always use sockets for bootstrap
-ncclNet_t* ncclBootstrapNet = &ncclNetSocket;
+struct bootstrapNetHandle {
+  union socketAddress connectAddr;
+};
 
-static ncclResult_t bootstrapNetListen(int dev, void* handle, void** listenComm) { NCCLCHECK(ncclBootstrapNet->listen(dev, handle, listenComm)); return ncclSuccess; }
-static ncclResult_t bootstrapNetConnect(int dev, void* handle, void** sendComm) { NCCLCHECK(ncclBootstrapNet->connect(dev, handle, sendComm)); return ncclSuccess; }
-static ncclResult_t bootstrapNetAccept(void* listenComm, void** recvComm) { NCCLCHECK(ncclBootstrapNet->accept(listenComm, recvComm)); return ncclSuccess; }
-static ncclResult_t bootstrapNetTest(void* request, int* done, int* size) { NCCLCHECK(ncclBootstrapNet->test(request, done, size)); return ncclSuccess; }
-static ncclResult_t bootstrapNetCloseSend(void* sendComm) { NCCLCHECK(ncclBootstrapNet->closeSend(sendComm)); return ncclSuccess; }
-static ncclResult_t bootstrapNetCloseRecv(void* recvComm) { NCCLCHECK(ncclBootstrapNet->closeRecv(recvComm)); return ncclSuccess; }
-static ncclResult_t bootstrapNetCloseListen(void* listenComm) { NCCLCHECK(ncclBootstrapNet->closeListen(listenComm)); return ncclSuccess; }
+struct bootstrapNetComm {
+  int fd;
+};
 
-// Additional sync functions based on async + test for bootstrap, using host ptrs.
+static ncclResult_t bootstrapNetNewComm(struct bootstrapNetComm** comm) {
+  NCCLCHECK(ncclCalloc(comm, 1));
+  (*comm)->fd = -1;
+  return ncclSuccess;
+}
+
+// Just declaration
+ncclResult_t GetSocketAddr(int dev, union socketAddress* addr);
+
+/* Socket Interface Selection type */
+enum ncclSocketIfSl_t { findSubnetIf = -1, dontCareIf = -2 };
+
+static ncclResult_t bootstrapNetListen(int dev, void* opaqueHandle, void** listenComm) {
+  struct bootstrapNetHandle* handle = (struct bootstrapNetHandle*) opaqueHandle;
+  static_assert(sizeof(struct bootstrapNetHandle) < NCCL_NET_HANDLE_MAXSIZE, "bootstrapNetHandle size too large");
+  // if dev >= 0, listen based on dev
+  if (dev >= 0) {
+    NCCLCHECK(GetSocketAddr(dev, &(handle->connectAddr)));
+  } else if (dev == findSubnetIf) {
+    // handle stores a remote address
+    // need to find a local addr that is in the same network as the remote addr
+    union socketAddress localAddr;
+    char ifName[MAX_IF_NAME_SIZE];
+    if (findInterfaceMatchSubnet(ifName, &localAddr, handle->connectAddr, MAX_IF_NAME_SIZE, 1) <= 0) {
+      WARN("NET/Socket : No usable listening interface found");
+      return ncclSystemError;
+    }
+    // pass the local address back
+    memcpy(&handle->connectAddr, &localAddr, sizeof(handle->connectAddr));
+  } // Otherwise, handle stores a local address
+  struct bootstrapNetComm* comm;
+  NCCLCHECK(bootstrapNetNewComm(&comm));
+  NCCLCHECK(createListenSocket(&comm->fd, &handle->connectAddr));
+  *listenComm = comm;
+  return ncclSuccess;
+}
+
+static ncclResult_t bootstrapNetConnect(int dev, void* opaqueHandle, void** sendComm) {
+  struct bootstrapNetComm* comm;
+  NCCLCHECK(bootstrapNetNewComm(&comm));
+  struct bootstrapNetHandle* handle = (struct bootstrapNetHandle*) opaqueHandle;
+  NCCLCHECK(connectAddress(&comm->fd, &handle->connectAddr));
+  *sendComm = comm;
+  return ncclSuccess;
+}
+
+static ncclResult_t bootstrapNetAccept(void* listenComm, void** recvComm) {
+  struct bootstrapNetComm* lComm = (struct bootstrapNetComm*)listenComm;
+  struct bootstrapNetComm* rComm;
+  NCCLCHECK(bootstrapNetNewComm(&rComm));
+  struct sockaddr_in sockaddr;
+  socklen_t socklen = sizeof(struct sockaddr_in);
+  SYSCHECKVAL(accept(lComm->fd, (struct sockaddr*)&sockaddr, &socklen), "accept", rComm->fd);
+  *recvComm = rComm;
+  return ncclSuccess;
+}
+
+static ncclResult_t bootstrapNetClose(void* opaqueComm) {
+  struct bootstrapNetComm* comm = (struct bootstrapNetComm*)opaqueComm;
+  if (comm) {
+    close(comm->fd);
+    free(comm);
+  }
+  return ncclSuccess;
+}
+
+static ncclResult_t bootstrapNetCloseSend(void* sendComm) { NCCLCHECK(bootstrapNetClose(sendComm)); return ncclSuccess; }
+static ncclResult_t bootstrapNetCloseRecv(void* recvComm) { NCCLCHECK(bootstrapNetClose(recvComm)); return ncclSuccess; }
+static ncclResult_t bootstrapNetCloseListen(void* listenComm) { NCCLCHECK(bootstrapNetClose(listenComm)); return ncclSuccess; }
+
+// Additional sync functions
 static ncclResult_t bootstrapNetSend(void* sendComm, void* data, int size) {
-  void* request, *mhandle;
-  NCCLCHECK(ncclBootstrapNet->regMr(sendComm, data, size, NCCL_PTR_HOST, &mhandle));
-  NCCLCHECK(ncclBootstrapNet->isend(sendComm, data, size, mhandle, &request));
-  NCCLCHECK(ncclBootstrapNet->deregMr(sendComm, mhandle));
-  int done = 0;
-  while (!done) NCCLCHECK(bootstrapNetTest(request, &done, NULL));
+  struct bootstrapNetComm* comm = (struct bootstrapNetComm*)sendComm;
+  NCCLCHECK(socketSend(comm->fd, &size, sizeof(int)));
+  NCCLCHECK(socketSend(comm->fd, data, size));
   return ncclSuccess;
 }
 static ncclResult_t bootstrapNetRecv(void* recvComm, void* data, int size) {
-  void* request, *mhandle;
-  NCCLCHECK(ncclBootstrapNet->regMr(recvComm, data, size, NCCL_PTR_HOST, &mhandle));
-  NCCLCHECK(ncclBootstrapNet->irecv(recvComm, data, size, mhandle, &request));
-  NCCLCHECK(ncclBootstrapNet->deregMr(recvComm, mhandle));
-  int done = 0;
-  while (!done) NCCLCHECK(bootstrapNetTest(request, &done, NULL));
+  struct bootstrapNetComm* comm = (struct bootstrapNetComm*)recvComm;
+  int recvSize;
+  NCCLCHECK(socketReceive(comm->fd, &recvSize, sizeof(int)));
+  if (recvSize > size) {
+    WARN("Message truncated : received %d bytes instead of %d\n", recvSize, size);
+    return ncclInternalError;
+  }
+  NCCLCHECK(socketReceive(comm->fd, data, std::min(recvSize, size)));
+  return ncclSuccess;
+}
+
+ncclResult_t bootstrapNetCreateHandle(void* opaqueHandle, const char* str) {
+  struct bootstrapNetHandle* handle = (struct bootstrapNetHandle*) opaqueHandle;
+  NCCLCHECK(GetSocketAddrFromString(&handle->connectAddr, str));
   return ncclSuccess;
 }
 
@@ -148,7 +221,7 @@ ncclResult_t bootstrapGetUniqueId(ncclUniqueId* out) {
 
   char* env = getenv("NCCL_COMM_ID");
   if (env) {
-    if (ncclSocketCreateHandle(&id->extHandleRoot, env) != 0) {
+    if (bootstrapNetCreateHandle(&id->extHandleRoot, env) != 0) {
       WARN("Invalid NCCL_COMM_ID, please use format: <ipv4>:<port> or [<ipv6>]:<port> or <hostname>:<port>");
       return ncclInvalidArgument;
     }

@@ -119,7 +119,6 @@ ncclResult_t transportSaveProxies(int substeps, int subchunks, int nstepsPerRoun
     struct ncclRing* ring = comm->rings+((comm->myParams->gridDim.x+r)%comm->nRings);
     struct ncclProxyArgs args = { ring, substeps*subchunks, nsteps, comm->opCount, llMode, 0 };
     args.nccl_prof = nccl_prof;
-    args.nccl_prof->mu_ = PTHREAD_MUTEX_INITIALIZER;
     SaveProxy(&ring->recv, &args, NeedProxy(RECV, pattern, ring, comm->nRanks));
     SaveProxy(&ring->send, &args, NeedProxy(SEND, pattern, ring, comm->nRanks));
   }

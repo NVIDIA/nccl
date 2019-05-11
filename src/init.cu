@@ -626,8 +626,6 @@ ncclResult_t ncclCommInitRank(ncclComm_t* newcomm, int nranks, ncclUniqueId comm
     return ncclInvalidArgument;
   }
 
-  NCCLCHECK(StartStatCollector());
-
   if (ncclAsyncMode()) {
     int cudaDev;
     CUDACHECK(cudaGetDevice(&cudaDev));

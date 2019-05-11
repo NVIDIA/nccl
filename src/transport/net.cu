@@ -393,9 +393,8 @@ ncclResult_t netSendProxy(struct ncclProxyArgs* args) {
           uint64_t start_micros = now_micros();
           NCCLCHECK(ncclNetIsend(resources->netSendComm, lines, size, ptrType, requests+slot));
           uint64_t end_micros = now_micros();
-          if (args->nccl_prof->do_profile) {
-            commStat_t* comm_stat = create_comm_stat(NET_SEND, from, to, start_micros, end_micros, sliceSize);
-            enqueue_stat(args->nccl_prof, comm_stat);
+          if (args->nccl_prof != nullptr) {
+            create_comm_stat(args->nccl_prof, NET_SEND, from, to, start_micros, end_micros, sliceSize);
           }
           sizesFifo[slot] = size;
           tail++;
@@ -408,9 +407,8 @@ ncclResult_t netSendProxy(struct ncclProxyArgs* args) {
         uint64_t start_micros = now_micros();
         NCCLCHECK(ncclNetIsend(resources->netSendComm, localBuff+slot*sliceSize, sizesFifo[slot], ptrType, requests+slot));
         uint64_t end_micros = now_micros();
-        if (args->nccl_prof->do_profile) {          
-          commStat_t* comm_stat = create_comm_stat(NET_SEND, from, to, start_micros, end_micros, sliceSize);
-          enqueue_stat(args->nccl_prof, comm_stat);
+        if (args->nccl_prof != nullptr) {          
+          create_comm_stat(args->nccl_prof, NET_SEND, from, to, start_micros, end_micros, sliceSize);
         }
         tail++;
         idle = 0;
@@ -431,15 +429,6 @@ ncclResult_t netSendProxy(struct ncclProxyArgs* args) {
       }
     }
     if (idle) transportProxyIdle(idle);
-  }
-  // TODO(HJ): For now, we set saved nccl profiling data manually.
-  if (args->nccl_prof->step > 30) {
-    StatCollector* stat_collector = GetStatCollector();
-    stat_collector->set_saved_in_file();
-  }
-  if (args->nccl_prof->do_profile) {
-    StatCollector* stat_collector = GetStatCollector();
-    stat_collector->save(args->nccl_prof);
   }
 
   // Reset
@@ -504,9 +493,9 @@ ncclResult_t netRecvProxy(struct ncclProxyArgs* args) {
       uint64_t start_micros = now_micros();
       NCCLCHECK(ncclNetIrecv(resources->netRecvComm, localBuff+slot*sliceSize, sliceSize, ptrType, requests+slot));
       uint64_t end_micros = now_micros();
-      if (args->nccl_prof->do_profile) {
-        commStat_t* comm_stat = create_comm_stat(NET_RECV, from, to, start_micros, end_micros, sliceSize);
-        enqueue_stat(args->nccl_prof, comm_stat);
+
+      if (args->nccl_prof != nullptr) {
+        create_comm_stat(args->nccl_prof, NET_RECV, from, to, start_micros, end_micros, sliceSize);
       }
       tail++;
       idle = 0;
@@ -527,15 +516,6 @@ ncclResult_t netRecvProxy(struct ncclProxyArgs* args) {
       }
     }
     if (idle) transportProxyIdle(idle);
-  }
-  // TODO(HJ): For now, we set saved nccl profiling data manually.
-  if (args->nccl_prof->step > 30) {
-    StatCollector* stat_collector = GetStatCollector();
-    stat_collector->set_saved_in_file();
-  }
-  if (args->nccl_prof->do_profile) {
-    StatCollector* stat_collector = GetStatCollector();
-    stat_collector->save(args->nccl_prof);
   }
 
   // Wait for last ack and reset

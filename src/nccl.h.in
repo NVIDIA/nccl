@@ -30,12 +30,8 @@ extern "C" {
 typedef struct ncclComm* ncclComm_t;
 
 /* Profiling support for DL Frameworks (supports only TF now) */
-typedef enum { P2P_SEND = 0,
-               P2P_RECV = 1,
-               SHM_SEND = 2,
-               SHM_RECV = 3,
-               NET_SEND = 4,
-               NET_RECV = 5 } commType_t;
+typedef enum { NET_SEND = 0,
+               NET_RECV = 1} commType_t;
 
 typedef struct commStat {
   commType_t comm_type;
@@ -47,13 +43,9 @@ typedef struct commStat {
 } commStat_t;
 
 typedef struct ncclProf {
-  int do_profile;
-  int64_t step;
-  int worker_id;
-  const char* tensor_name;
+  char* tensor_name;
   pthread_mutex_t mu_;
   std::vector<commStat_t*>* stat_vector;
-  int saved; // Flag indicates whether it is saved in StatCollector
 } ncclProf_t;
 
 #define NCCL_UNIQUE_ID_BYTES 128

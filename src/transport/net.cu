@@ -14,7 +14,6 @@
 #include "utils.h"
 #include <cuda_runtime.h>
 #include <assert.h>
-#include <iostream>
 
 #define NET_MAX_IFS 16
 

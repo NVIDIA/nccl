@@ -14,6 +14,7 @@
 #include "utils.h"
 #include <cuda_runtime.h>
 #include <assert.h>
+#include <iostream>
 
 #define NET_MAX_IFS 16
 
@@ -365,6 +366,9 @@ ncclResult_t netSendProxy(struct ncclProxyArgs* args) {
   int from = ring->send.proxyInfo->comm->rank;
   int to = ring->userRanks[1];
 
+  uint64_t start_micros, end_micros;
+  int sendSize = 0;
+
   if (!args->needProxy) goto nextColl;
 
   TRACE(NET,"opCount %lx head %lx tail %lx end %lx nsteps %d llMode %d", args->opCount, head, tail, end, args->nsteps, llMode);
@@ -373,6 +377,7 @@ ncclResult_t netSendProxy(struct ncclProxyArgs* args) {
   // Update in case we skipped some collectives
   if (llMode == 0) resources->hostRecvMem->opCount = args->opCount;
 
+  start_micros = now_micros();
   while (head < end) {
     idle++;
     if (llMode) {
@@ -390,29 +395,21 @@ ncclResult_t netSendProxy(struct ncclProxyArgs* args) {
             volatile uint32_t *f2 = &lines[i].flag2;
             while (f1[0] != flag || f2[0] != flag);
           }
-          uint64_t start_micros = now_micros();
           NCCLCHECK(ncclNetIsend(resources->netSendComm, lines, size, ptrType, requests+slot));
-          uint64_t end_micros = now_micros();
-          if (args->nccl_prof != nullptr) {
-            create_comm_stat(args->nccl_prof, NET_SEND, from, to, start_micros, end_micros, sliceSize);
-          }
+          sendSize += size;
           sizesFifo[slot] = size;
           tail++;
           idle = 0;
         }
       }
     } else while (tail < *prevTail) {
-        // Send through network
-        int slot = tail%args->substeps;
-        uint64_t start_micros = now_micros();
-        NCCLCHECK(ncclNetIsend(resources->netSendComm, localBuff+slot*sliceSize, sizesFifo[slot], ptrType, requests+slot));
-        uint64_t end_micros = now_micros();
-        if (args->nccl_prof != nullptr) {          
-          create_comm_stat(args->nccl_prof, NET_SEND, from, to, start_micros, end_micros, sliceSize);
-        }
-        tail++;
-        idle = 0;
-      }
+      // Send through network
+      int slot = tail%args->substeps;
+      NCCLCHECK(ncclNetIsend(resources->netSendComm, localBuff+slot*sliceSize, sizesFifo[slot], ptrType, requests+slot));
+      sendSize += sizesFifo[slot];
+      tail++;
+      idle = 0;
+    }
     if (head < tail) {
       int done;
       int slot = head%args->substeps;
@@ -429,6 +426,10 @@ ncclResult_t netSendProxy(struct ncclProxyArgs* args) {
       }
     }
     if (idle) transportProxyIdle(idle);
+  }
+  end_micros = now_micros();
+  if (args->nccl_prof != nullptr) {
+    create_comm_stat(args->nccl_prof, NET_SEND, from, to, start_micros, end_micros, sendSize);
   }
 
   // Reset
@@ -475,6 +476,9 @@ ncclResult_t netRecvProxy(struct ncclProxyArgs* args) {
   int from = ring->userRanks[nranks-1];
   int to = ring->recv.proxyInfo->comm->rank;
 
+  uint64_t start_micros, end_micros;
+  int sendSize = 0;
+
   if (!args->needProxy) goto nextColl;
 
   TRACE(NET,"opCount %lx head %lx tail %lx end %lx nsteps %d llMode %d", args->opCount, head, tail, end, args->nsteps, llMode);
@@ -486,17 +490,13 @@ ncclResult_t netRecvProxy(struct ncclProxyArgs* args) {
     transportProxyWait([=] { return *nextOpCount >= args->opCount; });
   }
 
+  start_micros = now_micros();
   while (head < end) {
     idle++;
     if ((tail < head + args->substeps) && (tail < *nextHead + args->substeps) && (tail < end)) {
       int slot = tail%args->substeps;
-      uint64_t start_micros = now_micros();
       NCCLCHECK(ncclNetIrecv(resources->netRecvComm, localBuff+slot*sliceSize, sliceSize, ptrType, requests+slot));
-      uint64_t end_micros = now_micros();
-
-      if (args->nccl_prof != nullptr) {
-        create_comm_stat(args->nccl_prof, NET_RECV, from, to, start_micros, end_micros, sliceSize);
-      }
+      sendSize += sliceSize;
       tail++;
       idle = 0;
     }
@@ -516,6 +516,10 @@ ncclResult_t netRecvProxy(struct ncclProxyArgs* args) {
       }
     }
     if (idle) transportProxyIdle(idle);
+  }
+  end_micros = now_micros();
+  if (args->nccl_prof != nullptr) {
+    create_comm_stat(args->nccl_prof, NET_RECV, from, to, start_micros, end_micros, sendSize);
   }
 
   // Wait for last ack and reset

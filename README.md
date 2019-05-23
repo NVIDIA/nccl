@@ -55,7 +55,7 @@ To install NCCL on the system, create a package then install it as root.
 Debian/Ubuntu :
 ```shell
 $ # Install tools to create debian packages
-$ sudo apt install build-essential devscripts debhelper
+$ sudo apt install build-essential devscripts debhelper fakeroot
 $ # Build NCCL deb package
 $ make pkg.debian.build
 $ ls build/pkg/deb/

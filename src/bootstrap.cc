@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 
+// Always use sockets for bootstrap
 struct bootstrapNetHandle {
   union socketAddress connectAddr;
 };
@@ -21,24 +22,58 @@ struct bootstrapNetComm {
   int fd;
 };
 
+/* Init functions */
+static char bootstrapNetIfNames[MAX_IF_NAME_SIZE*MAX_IFS];
+static union socketAddress bootstrapNetIfAddrs[MAX_IFS];
+static int bootstrapNetIfs = -1;
+pthread_mutex_t bootstrapNetLock = PTHREAD_MUTEX_INITIALIZER;
+
+ncclResult_t bootstrapNetInit() {
+  if (bootstrapNetIfs == -1) {
+    pthread_mutex_lock(&bootstrapNetLock);
+    if (bootstrapNetIfs == -1) {
+      bootstrapNetIfs = findInterfaces(bootstrapNetIfNames, bootstrapNetIfAddrs, MAX_IF_NAME_SIZE, MAX_IFS);
+      if (bootstrapNetIfs <= 0) {
+        WARN("Bootstrap : no socket interface found");
+        return ncclInternalError;
+      } else {
+        char line[1024];
+        char addrline[1024];
+        line[0] = '\0';
+        for (int i=0; i<bootstrapNetIfs; i++) {
+          snprintf(line+strlen(line), 1023-strlen(line), " [%d]%s:%s", i, bootstrapNetIfNames+i*MAX_IF_NAME_SIZE,
+              socketToString(&bootstrapNetIfAddrs[i].sa, addrline));
+        }
+        line[1023] = '\0';
+        INFO(NCCL_INIT, "Bootstrap : Using%s", line);
+      }
+    }
+    pthread_mutex_unlock(&bootstrapNetLock);
+  }
+  return ncclSuccess;
+}
+
 static ncclResult_t bootstrapNetNewComm(struct bootstrapNetComm** comm) {
   NCCLCHECK(ncclCalloc(comm, 1));
   (*comm)->fd = -1;
   return ncclSuccess;
 }
 
-// Just declaration
-ncclResult_t GetSocketAddr(int dev, union socketAddress* addr);
+static ncclResult_t bootstrapNetGetSocketAddr(int dev, union socketAddress* addr) {
+  if (dev >= bootstrapNetIfs) return ncclInternalError;
+  memcpy(addr, bootstrapNetIfAddrs+dev, sizeof(*addr));
+  return ncclSuccess;
+}
 
 /* Socket Interface Selection type */
-enum ncclSocketIfSl_t { findSubnetIf = -1, dontCareIf = -2 };
+enum bootstrapInterface_t { findSubnetIf = -1, dontCareIf = -2 };
 
 static ncclResult_t bootstrapNetListen(int dev, void* opaqueHandle, void** listenComm) {
   struct bootstrapNetHandle* handle = (struct bootstrapNetHandle*) opaqueHandle;
   static_assert(sizeof(struct bootstrapNetHandle) < NCCL_NET_HANDLE_MAXSIZE, "bootstrapNetHandle size too large");
   // if dev >= 0, listen based on dev
   if (dev >= 0) {
-    NCCLCHECK(GetSocketAddr(dev, &(handle->connectAddr)));
+    NCCLCHECK(bootstrapNetGetSocketAddr(dev, &(handle->connectAddr)));
   } else if (dev == findSubnetIf) {
     // handle stores a remote address
     // need to find a local addr that is in the same network as the remote addr

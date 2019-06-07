@@ -124,14 +124,15 @@ cleanup:
 }
 
 ncclResult_t initNet() {
-  // Always initialize sockets as we use it for bootstrap
-  NCCLCHECK(initNet(&ncclNetSocket));
+  // Always initialize bootstrap network
+  NCCLCHECK(bootstrapNetInit());
 
   NCCLCHECK(initNetPlugin(&ncclNet));
   if (ncclNet != NULL) return ncclSuccess;
   if (initNet(&ncclNetIb) == ncclSuccess) {
     ncclNet = &ncclNetIb;
   } else {
+    NCCLCHECK(initNet(&ncclNetSocket));
     ncclNet = &ncclNetSocket;
   }
   return ncclSuccess;

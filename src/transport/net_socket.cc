@@ -130,7 +130,7 @@ struct ncclSocketThreadResources {
 
 struct ncclSocketComm {
   int ctrlFd;
-  int fd[MAX_SOCKETS];
+  int fds[MAX_SOCKETS];
   int nSocks;
   int nThreads;
   int nextFd;
@@ -227,7 +227,7 @@ ncclResult_t ncclSocketNewComm(struct ncclSocketComm** comm, int dev) {
   NCCLCHECK(ncclCalloc(comm, 1));
   (*comm)->ctrlFd = -1;
   for (int i=0; i < MAX_SOCKETS; i++) {
-    (*comm)->fd[i] = -1;
+    (*comm)->fds[i] = -1;
   }
   (*comm)->nextFd = 0;
   NCCLCHECK(ncclSocketGetNsockNthread(dev, &((*comm)->nSocks), &((*comm)->nThreads)));
@@ -238,7 +238,7 @@ ncclResult_t ncclSocketNewComm(struct ncclSocketComm** comm, struct ncclSocketCo
   NCCLCHECK(ncclCalloc(comm, 1));
   (*comm)->ctrlFd = -1;
   for (int i=0; i < MAX_SOCKETS; i++) {
-    (*comm)->fd[i] = -1;
+    (*comm)->fds[i] = -1;
   }
   (*comm)->nSocks = lComm->nSocks;
   (*comm)->nThreads = lComm->nThreads;
@@ -280,7 +280,7 @@ ncclResult_t ncclSocketConnect(int dev, void* opaqueHandle, void** sendComm) {
     NCCLCHECK(connectAddress(&tmpFd, &handle->connectAddr));
     NCCLCHECK(socketWait(NCCL_SOCKET_SEND, tmpFd, &i, sizeof(int), &offset));
     if (i == comm->nSocks) comm->ctrlFd = tmpFd;
-    else comm->fd[i] = tmpFd;
+    else comm->fds[i] = tmpFd;
   }
   *sendComm = comm;
   return ncclSuccess;
@@ -297,7 +297,7 @@ ncclResult_t ncclSocketAccept(void* listenComm, void** recvComm) {
     SYSCHECKVAL(accept(lComm->ctrlFd, (struct sockaddr*)&sockaddr, &socklen), "accept", tmpFd);
     NCCLCHECK(socketWait(NCCL_SOCKET_RECV, tmpFd, &sendSockIdx, sizeof(int), &offset));
     if (sendSockIdx == rComm->nSocks) rComm->ctrlFd = tmpFd;
-    else rComm->fd[sendSockIdx] = tmpFd;
+    else rComm->fds[sendSockIdx] = tmpFd;
   }
   *recvComm = rComm;
   return ncclSuccess;
@@ -340,7 +340,7 @@ ncclResult_t ncclSocketGetTask(struct ncclSocketComm* comm, int op, void* data, 
     r->op = op;
     r->data = data;
     r->size = size;
-    r->fd = comm->fd[comm->nextFd];
+    r->fd = comm->fds[comm->nextFd];
     r->offset = 0;
     r->result = ncclSuccess;
     comm->nextFd = (comm->nextFd + 1) % comm->nSocks;
@@ -449,7 +449,7 @@ ncclResult_t ncclSocketClose(void* opaqueComm) {
     }
     if (comm->ctrlFd != -1) close(comm->ctrlFd);
     for (int i=0; i<comm->nSocks; i++) {
-      if (comm->fd[i] != -1) close(comm->fd[i]);
+      if (comm->fds[i] != -1) close(comm->fds[i]);
     }
     free(comm);
   }

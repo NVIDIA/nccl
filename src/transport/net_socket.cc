@@ -113,10 +113,6 @@ struct ncclSocketRequest {
   int nSubs;
 };
 
-struct ncclSocketReqs {
-  struct ncclSocketRequest* requests;
-};
-
 struct ncclSocketTaskQueue {
   int next;
   struct ncclSocketTask* tasks;
@@ -138,7 +134,7 @@ struct ncclSocketComm {
   int nSocks;
   int nThreads;
   int nextFd;
-  struct ncclSocketReqs reqs;
+  struct ncclSocketRequest requests[MAX_REQUESTS];
   pthread_t helperThread[MAX_THREADS];
   struct ncclSocketThreadResources threadResources[MAX_THREADS];
 };
@@ -308,12 +304,8 @@ ncclResult_t ncclSocketAccept(void* listenComm, void** recvComm) {
 }
 
 ncclResult_t ncclSocketGetRequest(struct ncclSocketComm* comm, int op, void* data, int size, struct ncclSocketRequest** req) {
-  struct ncclSocketReqs* reqs = &comm->reqs;
-  if (reqs->requests == NULL) {
-    NCCLCHECK(ncclCalloc(&reqs->requests, MAX_REQUESTS));
-  }
   for (int i=0; i<MAX_REQUESTS; i++) {
-    struct ncclSocketRequest* r = reqs->requests+i;
+    struct ncclSocketRequest* r = comm->requests+i;
     if (r->used == 0) {
       r->op = op;
       r->data = data;
@@ -455,7 +447,6 @@ ncclResult_t ncclSocketClose(void* opaqueComm) {
       }
       free(res->threadTaskQueue.tasks);
     }
-    free(comm->reqs.requests);
     if (comm->ctrlFd != -1) close(comm->ctrlFd);
     for (int i=0; i<comm->nSocks; i++) {
       if (comm->fd[i] != -1) close(comm->fd[i]);

@@ -90,6 +90,7 @@ NCCL_PARAM(SocketNthreads, "SOCKET_NTHREADS", -2);
 struct ncclSocketHandle {
   union socketAddress connectAddr;
   int nSocks;
+  int nThreads;
 };
 
 struct ncclSocketTask {
@@ -126,6 +127,12 @@ struct ncclSocketThreadResources {
   struct ncclSocketComm* comm;
   pthread_mutex_t threadLock;
   pthread_cond_t  threadCond;
+};
+
+struct ncclSocketListenComm {
+  int fd;
+  int nSocks;
+  int nThreads;
 };
 
 struct ncclSocketComm {
@@ -223,25 +230,18 @@ end:
   return ncclSuccess;
 }
 
-ncclResult_t ncclSocketNewComm(struct ncclSocketComm** comm, int dev) {
+ncclResult_t ncclSocketNewListenComm(struct ncclSocketListenComm** comm) {
   NCCLCHECK(ncclCalloc(comm, 1));
-  (*comm)->ctrlFd = -1;
-  for (int i=0; i < MAX_SOCKETS; i++) {
-    (*comm)->fds[i] = -1;
-  }
-  (*comm)->nextFd = 0;
-  NCCLCHECK(ncclSocketGetNsockNthread(dev, &((*comm)->nSocks), &((*comm)->nThreads)));
+  (*comm)->fd = -1;
   return ncclSuccess;
 }
 
-ncclResult_t ncclSocketNewComm(struct ncclSocketComm** comm, struct ncclSocketComm* lComm) {
+ncclResult_t ncclSocketNewComm(struct ncclSocketComm** comm) {
   NCCLCHECK(ncclCalloc(comm, 1));
   (*comm)->ctrlFd = -1;
   for (int i=0; i < MAX_SOCKETS; i++) {
     (*comm)->fds[i] = -1;
   }
-  (*comm)->nSocks = lComm->nSocks;
-  (*comm)->nThreads = lComm->nThreads;
   (*comm)->nextFd = 0;
   return ncclSuccess;
 }
@@ -252,11 +252,13 @@ ncclResult_t ncclSocketListen(int dev, void* opaqueHandle, void** listenComm) {
   }
   struct ncclSocketHandle* handle = (struct ncclSocketHandle*) opaqueHandle;
   static_assert(sizeof(struct ncclSocketHandle) < NCCL_NET_HANDLE_MAXSIZE, "ncclSocketHandle size too large");
-  struct ncclSocketComm* comm;
-  NCCLCHECK(ncclSocketNewComm(&comm, dev));
+  struct ncclSocketListenComm* comm;
+  NCCLCHECK(ncclSocketNewListenComm(&comm));
   NCCLCHECK(GetSocketAddr(dev, &handle->connectAddr));
-  NCCLCHECK(createListenSocket(&comm->ctrlFd, &handle->connectAddr));
+  NCCLCHECK(createListenSocket(&comm->fd, &handle->connectAddr));
+  NCCLCHECK(ncclSocketGetNsockNthread(dev, &comm->nSocks, &comm->nThreads));
   handle->nSocks = comm->nSocks;
+  handle->nThreads = comm->nThreads;
   *listenComm = comm;
   return ncclSuccess;
 }
@@ -266,15 +268,10 @@ ncclResult_t ncclSocketConnect(int dev, void* opaqueHandle, void** sendComm) {
     return ncclInternalError;
   }
   struct ncclSocketComm* comm;
-  NCCLCHECK(ncclSocketNewComm(&comm, dev));
+  NCCLCHECK(ncclSocketNewComm(&comm));
   struct ncclSocketHandle* handle = (struct ncclSocketHandle*) opaqueHandle;
-  // adjust nSocks and nThreads based on those at the listener
-  if (comm->nSocks != handle->nSocks) {
-    WARN("NET/Socket : send side and recv side have different number of sockets: %d vs %d, making send side equal to recv side",
-        comm->nSocks, handle->nSocks);
-    while (handle->nSocks % comm->nThreads != 0) comm->nThreads--;
-    comm->nSocks = handle->nSocks;
-  }
+  comm->nSocks = handle->nSocks;
+  comm->nThreads = handle->nThreads;
   for (int i=0; i<comm->nSocks+1; i++) {
     int tmpFd, offset=0;
     NCCLCHECK(connectAddress(&tmpFd, &handle->connectAddr));
@@ -287,14 +284,16 @@ ncclResult_t ncclSocketConnect(int dev, void* opaqueHandle, void** sendComm) {
 }
 
 ncclResult_t ncclSocketAccept(void* listenComm, void** recvComm) {
-  struct ncclSocketComm* lComm = (struct ncclSocketComm*)listenComm;
+  struct ncclSocketListenComm* lComm = (struct ncclSocketListenComm*)listenComm;
   struct ncclSocketComm* rComm;
-  NCCLCHECK(ncclSocketNewComm(&rComm, lComm));
+  NCCLCHECK(ncclSocketNewComm(&rComm));
+  rComm->nSocks = lComm->nSocks;
+  rComm->nThreads = lComm->nThreads;
   for (int i=0; i<rComm->nSocks+1; i++) {
     int tmpFd, sendSockIdx, offset=0;
     struct sockaddr_in sockaddr;
     socklen_t socklen = sizeof(struct sockaddr_in);
-    SYSCHECKVAL(accept(lComm->ctrlFd, (struct sockaddr*)&sockaddr, &socklen), "accept", tmpFd);
+    SYSCHECKVAL(accept(lComm->fd, (struct sockaddr*)&sockaddr, &socklen), "accept", tmpFd);
     NCCLCHECK(socketWait(NCCL_SOCKET_RECV, tmpFd, &sendSockIdx, sizeof(int), &offset));
     if (sendSockIdx == rComm->nSocks) rComm->ctrlFd = tmpFd;
     else rComm->fds[sendSockIdx] = tmpFd;
@@ -433,6 +432,15 @@ ncclResult_t ncclSocketFlush(void* recvComm, void* data, int size, void* mhandle
   return ncclInternalError;
 }
 
+ncclResult_t ncclSocketCloseListen(void* opaqueComm) {
+  struct ncclSocketListenComm* comm = (struct ncclSocketListenComm*)opaqueComm;
+  if (comm) {
+    if (comm->fd != -1) close(comm->fd);
+    free(comm);
+  }
+  return ncclSuccess;
+}
+
 ncclResult_t ncclSocketClose(void* opaqueComm) {
   struct ncclSocketComm* comm = (struct ncclSocketComm*)opaqueComm;
   if (comm) {
@@ -473,5 +481,5 @@ ncclNet_t ncclNetSocket = {
   ncclSocketTest,
   ncclSocketClose,
   ncclSocketClose,
-  ncclSocketClose
+  ncclSocketCloseListen
 };

@@ -393,12 +393,12 @@ retry:
 
 #define NCCL_SOCKET_SEND 0
 #define NCCL_SOCKET_RECV 1
-static ncclResult_t socketProgress(int op, int fd, void* ptr, int size, int* offset) {
+static ncclResult_t socketProgressOpt(int op, int fd, void* ptr, int size, int* offset, int block) {
   int bytes = 0;
   char* data = (char*)ptr;
   do {
-    if (op == NCCL_SOCKET_RECV) bytes = recv(fd, data+(*offset), size-(*offset), MSG_DONTWAIT);
-    if (op == NCCL_SOCKET_SEND) bytes = send(fd, data+(*offset), size-(*offset), MSG_DONTWAIT);
+    if (op == NCCL_SOCKET_RECV) bytes = recv(fd, data+(*offset), size-(*offset), block ? 0 : MSG_DONTWAIT);
+    if (op == NCCL_SOCKET_SEND) bytes = send(fd, data+(*offset), size-(*offset), block ? 0 : MSG_DONTWAIT);
     if (op == NCCL_SOCKET_RECV && bytes == 0) {
       WARN("Net : Connection closed by remote peer");
       return ncclSystemError;
@@ -416,9 +416,13 @@ static ncclResult_t socketProgress(int op, int fd, void* ptr, int size, int* off
   return ncclSuccess;
 }
 
+static ncclResult_t socketProgress(int op, int fd, void* ptr, int size, int* offset) {
+  return socketProgressOpt(op, fd, ptr, size, offset, 0);
+}
+
 static ncclResult_t socketWait(int op, int fd, void* ptr, int size, int* offset) {
   while (*offset < size)
-    NCCLCHECK(socketProgress(op, fd, ptr, size, offset));
+    NCCLCHECK(socketProgressOpt(op, fd, ptr, size, offset, 1));
   return ncclSuccess;
 }
 

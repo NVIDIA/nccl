@@ -879,10 +879,12 @@ static ncclResult_t getCpuGpuAffinity(int cudaDev, cpu_set_t* mask) {
   path[PATH_MAX-1] = '\0';
   int fd;
   SYSCHECKVAL(open(path, O_RDONLY), "open", fd);
-  char affinityStr[sizeof(cpu_set_t)*2];
+  char affinityStr[sizeof(cpu_set_t)*2 + 1];
   int r = read(fd, affinityStr, sizeof(cpu_set_t)*2);
-  if (r > 0)
+  if (r > 0) {
+    affinityStr[r] = '\0';
     NCCLCHECK(ncclStrToCpuset(affinityStr, mask));
+  }
   close(fd);
   free(cudaPath);
   return ncclSuccess;

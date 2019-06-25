@@ -13,11 +13,6 @@
 extern ncclNet_t* ncclNet;
 typedef char ncclNetHandle_t[NCCL_NET_HANDLE_MAXSIZE];
 
-/* Socket Interface Selection type */
-typedef enum { findSubnetIf   = -1,
-    dontCareIf     = -2
-} ncclSocketIfSl_t;
-
 // Translation to external API
 static const char* ncclNetName() { return ncclNet->name; }
 static ncclResult_t ncclNetDevices(int* ndev) { NCCLCHECK(ncclNet->devices(ndev)); return ncclSuccess; }
@@ -36,7 +31,6 @@ static ncclResult_t ncclNetCloseSend(void* sendComm) { NCCLCHECK(ncclNet->closeS
 static ncclResult_t ncclNetCloseRecv(void* recvComm) { NCCLCHECK(ncclNet->closeRecv(recvComm)); return ncclSuccess; }
 static ncclResult_t ncclNetCloseListen(void* listenComm) { NCCLCHECK(ncclNet->closeListen(listenComm)); return ncclSuccess; }
 
-extern ncclResult_t ncclSocketCreateHandle(void* opaqueHandle, const char* str);
 extern ncclNet_t ncclNetIb;
 extern ncclNet_t ncclNetSocket;
 

@@ -9,6 +9,7 @@
 
 #include "nccl.h"
 
+ncclResult_t bootstrapNetInit();
 ncclResult_t bootstrapCreateRoot(ncclUniqueId* commId, bool idFromEnv);
 ncclResult_t bootstrapGetUniqueId(ncclUniqueId* out);
 ncclResult_t bootstrapInit(ncclUniqueId* id, int rank, int nranks, void** commState);

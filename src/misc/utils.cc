@@ -178,7 +178,9 @@ int parseStringList(const char* string, struct netIf* ifList, int maxList) {
 }
 
 static bool matchIf(const char* string, const char* ref, bool matchExact) {
-  return (strncmp(string, ref, matchExact ? strlen(string) : strlen(ref)) == 0);
+  // Make sure to include '\0' in the exact case
+  int matchLen = matchExact ? strlen(string) + 1 : strlen(ref);
+  return strncmp(string, ref, matchLen) == 0;
 }
 
 static bool matchPort(const int port1, const int port2) {

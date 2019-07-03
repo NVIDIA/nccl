@@ -177,12 +177,10 @@ int parseStringList(const char* string, struct netIf* ifList, int maxList) {
   return ifNum;
 }
 
-static bool matchIf(const char* string, const char* prefix) {
-  return (strcmp(string, prefix) == 0);
-}
-
-static bool matchPrefix(const char* string, const char* prefix) {
-  return (strncmp(string, prefix, strlen(prefix)) == 0);
+static bool matchIf(const char* string, const char* ref, bool matchExact) {
+  // Make sure to include '\0' in the exact case
+  int matchLen = matchExact ? strlen(string) + 1 : strlen(ref);
+  return strncmp(string, ref, matchLen) == 0;
 }
 
 static bool matchPort(const int port1, const int port2) {
@@ -198,18 +196,9 @@ bool matchIfList(const char* string, int port, struct netIf* ifList, int listSiz
   if (listSize == 0) return true;
 
   for (int i=0; i<listSize; i++) {
-    if ( matchExact ) {
-      // Exact matching
-      if (matchIf(string, ifList[i].prefix)
-          && matchPort(port, ifList[i].port)) {
-        return true;
-      }
-    } else {
-      // Prefix matching
-      if (matchPrefix(string, ifList[i].prefix)
-          && matchPort(port, ifList[i].port)) {
-        return true;
-      }
+    if (matchIf(string, ifList[i].prefix, matchExact)
+        && matchPort(port, ifList[i].port)) {
+      return true;
     }
   }
   return false;

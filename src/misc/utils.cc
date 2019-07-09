@@ -147,8 +147,8 @@ int parseStringList(const char* string, struct netIf* ifList, int maxList) {
   if (!string) return 0;
 
   const char* ptr = string;
-  // Ignore "^" prefix, will be detected outside of this function
-  if (ptr[0] == '^') ptr++;
+  // Ignore "^" or "=" prefix, will be detected outside of this function
+  if (ptr[0] == '^' || ptr[0] == '=') ptr++;
 
   int ifNum = 0;
   int ifC = 0;
@@ -177,8 +177,10 @@ int parseStringList(const char* string, struct netIf* ifList, int maxList) {
   return ifNum;
 }
 
-static bool matchPrefix(const char* string, const char* prefix) {
-  return (strncmp(string, prefix, strlen(prefix)) == 0);
+static bool matchIf(const char* string, const char* ref, bool matchExact) {
+  // Make sure to include '\0' in the exact case
+  int matchLen = matchExact ? strlen(string) + 1 : strlen(ref);
+  return strncmp(string, ref, matchLen) == 0;
 }
 
 static bool matchPort(const int port1, const int port2) {
@@ -189,12 +191,12 @@ static bool matchPort(const int port1, const int port2) {
 }
 
 
-bool matchIfList(const char* string, int port, struct netIf* ifList, int listSize) {
+bool matchIfList(const char* string, int port, struct netIf* ifList, int listSize, bool matchExact) {
   // Make an exception for the case where no user list is defined
   if (listSize == 0) return true;
 
   for (int i=0; i<listSize; i++) {
-    if (matchPrefix(string, ifList[i].prefix)
+    if (matchIf(string, ifList[i].prefix, matchExact)
         && matchPort(port, ifList[i].port)) {
       return true;
     }

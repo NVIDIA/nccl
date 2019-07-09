@@ -66,6 +66,7 @@ static int findInterfaces(const char* prefixList, char* names, union socketAddre
 #endif
   struct netIf userIfs[MAX_IFS];
   bool searchNot = prefixList && prefixList[0] == '^';
+  bool searchExact = prefixList && prefixList[0] == '=';
   int nUserIfs = parseStringList(prefixList, userIfs, MAX_IFS);
 
   int found = 0;
@@ -92,7 +93,7 @@ static int findInterfaces(const char* prefixList, char* names, union socketAddre
     }
 
     // check against user specified interfaces
-    if (!(matchIfList(interface->ifa_name, -1, userIfs, nUserIfs) ^ searchNot)) {
+    if (!(matchIfList(interface->ifa_name, -1, userIfs, nUserIfs, searchExact) ^ searchNot)) {
       continue;
     }
 

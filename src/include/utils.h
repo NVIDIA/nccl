@@ -20,6 +20,6 @@ struct netIf {
 };
 
 int parseStringList(const char* string, struct netIf* ifList, int maxList);
-bool matchIfList(const char* string, int port, struct netIf* ifList, int listSize);
+bool matchIfList(const char* string, int port, struct netIf* ifList, int listSize, bool matchExact);
 
 #endif

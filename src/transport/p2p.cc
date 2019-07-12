@@ -468,7 +468,8 @@ ncclResult_t p2pSendSetup(struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peer
   struct p2pSendResources* resources;
   NCCLCHECK(ncclCalloc(&resources, 1));
   send->transportResources = resources;
-  const int sendSize = sizeof(struct ncclSendMem);
+  int sendSize = sizeof(struct ncclSendMem);
+  ALIGN_SIZE(sendSize, CUDA_IPC_MIN);
   NCCLCHECK(ncclCudaCalloc((char**)&resources->devMem, sendSize));
 
   struct p2pConnectInfo info;
@@ -517,7 +518,8 @@ ncclResult_t p2pRecvSetup(struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peer
   struct p2pRecvResources* resources;
   NCCLCHECK(ncclCalloc(&resources, 1));
   recv->transportResources = resources;
-  const int recvSize = offsetof(struct ncclRecvMem, buff)+buffSize;
+  int recvSize = offsetof(struct ncclRecvMem, buff)+buffSize;
+  ALIGN_SIZE(recvSize, CUDA_IPC_MIN);
   NCCLCHECK(ncclCudaCalloc((char**)&resources->devMem, recvSize));
 
   struct p2pConnectInfo info;

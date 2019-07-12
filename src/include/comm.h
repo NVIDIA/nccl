@@ -23,7 +23,7 @@ struct cudaLaunchParams {
 
 #define CACHE_LINE_SIZE 128
 #define MEM_ALIGN 4096
-#define CUDA_IPC_MIN 2097152UL /* 2MiB - not currently used */
+#define CUDA_IPC_MIN 2097152UL
 
 struct ncclSendMem {
   union {

@@ -38,17 +38,22 @@
   DECL_COLL3(coll, op, f16) \
   DECL_COLL3(coll, op, f32) \
   DECL_COLL3(coll, op, f64)
+#define DECL_COLL2A(coll, op) \
+  DECL_COLL3(coll, op, i8)
 
 #define DECL_COLL(coll) \
   DECL_COLL2(coll, sum) \
   DECL_COLL2(coll, prod) \
+  DECL_COLL2(coll, max) \
   DECL_COLL2(coll, min) \
-  DECL_COLL2(coll, max)
+  DECL_COLL2A(coll, band) \
+  DECL_COLL2A(coll, bor) \
+  DECL_COLL2A(coll, bxor)
 
 #define DECL_ALL_COLLS \
-  DECL_COLL2(ncclBroadcast, copy) \
+  DECL_COLL2A(ncclBroadcast, copy) \
   DECL_COLL(ncclReduce) \
-  DECL_COLL2(ncclAllGather, copy) \
+  DECL_COLL2A(ncclAllGather, copy) \
   DECL_COLL(ncclReduceScatter) \
   DECL_COLL(ncclAllReduce) \
 

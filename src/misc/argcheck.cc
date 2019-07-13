@@ -43,9 +43,10 @@ ncclResult_t ArgsCheck(struct ncclInfo* info) {
     WARN("%s : invalid type %d", info->opName, info->datatype);
     return ncclInvalidArgument;
   }
-  // Type is OK, compute nbytes. Convert Allgather/Broadcast calls to chars.
+  // Type is OK, compute nbytes. Convert Allgather/Broadcast/BitRedOp calls to chars.
   info->nBytes = info->count * ncclTypeSize(info->datatype);
-  if (info->coll == ncclCollAllGather || info->coll == ncclCollBroadcast) {
+  if (info->coll == ncclCollAllGather || info->coll == ncclCollBroadcast ||
+      info->op == ncclBitAnd || info->op == ncclBitOr || info->op == ncclBitXor) {
     info->count = info->nBytes;
     info->datatype = ncclInt8;
   }

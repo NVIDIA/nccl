@@ -46,6 +46,30 @@ struct FuncMin {
   }
 };
 
+template<typename T>
+struct FuncBitAnd {
+  template<typename U>
+  __device__ U operator()(const U x, const U y) const {
+    return x & y;
+  }
+};
+
+template<typename T>
+struct FuncBitOr {
+  template<typename U>
+  __device__ U operator()(const U x, const U y) const {
+    return x | y;
+  }
+};
+
+template<typename T>
+struct FuncBitXor {
+  template<typename U>
+  __device__ U operator()(const U x, const U y) const {
+    return x ^ y;
+  }
+};
+
 #define MASK0 0x00ff00ff
 #define MASK1 0xff00ff00
 static __device__ uint32_t addChar4(const uint32_t x, const uint32_t y) {
@@ -299,4 +323,5 @@ struct FuncMin<half> {
     return __float2half(fm);
   }
 };
+
 #endif // REDUCE_KERNEL_H_

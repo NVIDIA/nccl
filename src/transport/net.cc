@@ -28,7 +28,7 @@ static_assert(sizeof(ncclTvalue_t)*8 >= NET_MAX_IFS*NET_BITS_PER_IF, "NET_MAX_IF
 static ncclTvalue_t getTvalue(short* distances, int ndev) {
   ncclTvalue_t tvalue = 0;
   for (int d=0; d<ndev; d++) {
-    int score = 1 + PATH_SYS - distances[d];
+    ncclTvalue_t score = 1 + PATH_SYS - distances[d];
     // Keep 3 bits of score info per dev
     tvalue |= ((score & NET_BITS_PER_IF_MASK)<<(NET_BITS_PER_IF*d));
   }

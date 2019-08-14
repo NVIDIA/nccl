@@ -308,12 +308,12 @@ static void showVersion() {
   }
 }
 
-static ncclResult_t fillInfo(struct ncclPeerInfo* info, int rank) {
+static ncclResult_t fillInfo(struct ncclPeerInfo* info, int rank, uint64_t commHash) {
   info->rank = rank;
   CUDACHECK(cudaGetDevice(&info->cudaDev));
   NCCLCHECK(getNvmlDevice(info->cudaDev, &info->nvmlDev))
-  info->hostHash=getHostHash();
-  info->pidHash=getPidHash();
+  info->hostHash=getHostHash()+commHash;
+  info->pidHash=getPidHash()+commHash;
 
   // Get PCI Bus Id. We need to get the bus ID through CUDA first, since the
   // cudaDev is a CUDA runtime dev number which could be different from the
@@ -691,7 +691,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
 
   int rank = comm->rank;
   int nranks = comm->nRanks;
-  TRACE(NCCL_INIT, "rank %d nranks %d - BEGIN", rank, nranks);
+  uint64_t commHash = getHash(commId->internal, NCCL_UNIQUE_ID_BYTES);
+  TRACE(NCCL_INIT, "comm %p, commHash %lx, rank %d nranks %d - BEGIN", comm, commHash, rank, nranks);
   NCCLCHECK(bootstrapInit(commId, rank, nranks, &comm->bootstrap));
 
   // AllGather1 - begin
@@ -702,7 +703,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
 
   NCCLCHECK(ncclCalloc(&allGather1Data, nranks));
   allGather1Data[rank].comm = comm;
-  NCCLCHECK(fillInfo(&allGather1Data[rank].peerInfo, rank));
+  NCCLCHECK(fillInfo(&allGather1Data[rank].peerInfo, rank, commHash));
   NCCLCHECK(bootstrapAllGather(comm->bootstrap, allGather1Data, sizeof(*allGather1Data)));
 
   NCCLCHECK(ncclCalloc(&comm->peerInfo, nranks));
@@ -998,7 +999,7 @@ static ncclResult_t initTransportsAll(struct ncclComm** comms, const int* devs, 
   NCCLCHECK(ncclCalloc(&allInfo, nranks));
   for (int rank=0; rank<nranks; rank++) {
     CUDACHECK(cudaSetDevice(devs[rank]));
-    NCCLCHECK(fillInfo(allInfo+rank, rank));
+    NCCLCHECK(fillInfo(allInfo+rank, rank, 0));
   }
 
   int* connectTransport;

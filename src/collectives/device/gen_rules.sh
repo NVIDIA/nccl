@@ -11,7 +11,7 @@ targets="GENOBJS := \\\\\n"
 
 for base in all_reduce all_gather broadcast reduce reduce_scatter; do
   opn=0
-  for op in sum prod min max; do
+  for op in sum prod max min band bor bxor; do
     dtn=0
     for dt in i8 u8 i32 u32 i64 u64 f16 f32 f64; do
       echo "${dir}/${base}_${op}_${dt}.o : ${base}.cu ${dir}/${base}.dep"

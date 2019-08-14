@@ -139,10 +139,22 @@ __global__ void NCCL_KERN_NAME(coll, op, dtype)(struct ncclColl firstColl) { \
   IMPL_COLL2(collf, prod, FuncProd, colln, ncclProd);
 #elif NCCL_OP == 2
 #define IMPL_COLL_R(collf, colln) \
-  IMPL_COLL2(collf, min,  FuncMin,  colln, ncclMin);
+  IMPL_COLL2(collf, max,  FuncMax,  colln, ncclMax);
 #elif NCCL_OP == 3
 #define IMPL_COLL_R(collf, colln) \
-  IMPL_COLL2(collf, max,  FuncMax,  colln, ncclMax);
+  IMPL_COLL2(collf, min,  FuncMin,  colln, ncclMin);
+// Bit RedOp only use i8
+#elif NCCL_OP == 4 && NCCL_TYPE == 0
+#define IMPL_COLL_R(collf, colln) \
+  IMPL_COLL3(collf, band, FuncBitAnd, i8, int8_t, colln, ncclBitAnd, ncclInt8);
+#elif NCCL_OP == 5 && NCCL_TYPE == 0
+#define IMPL_COLL_R(collf, colln) \
+  IMPL_COLL3(collf, bor,  FuncBitOr,  i8, int8_t, colln, ncclBitOr,  ncclInt8);
+#elif NCCL_OP == 6 && NCCL_TYPE == 0
+#define IMPL_COLL_R(collf, colln) \
+  IMPL_COLL3(collf, bxor, FuncBitXor, i8, int8_t, colln, ncclBitXor, ncclInt8);
+#else
+#define IMPL_COLL_R(collf, colln)
 #endif
 
 // Copy primitives only define one

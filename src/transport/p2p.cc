@@ -61,6 +61,7 @@ ncclResult_t p2pCanConnect(ncclTvalue_t* ret, struct ncclPeerInfo* myInfo, struc
   if (ncclParamP2pDisable() == 1) p2pLevel = 0;
   if (ncclParamP2pLevel() != -2) p2pLevel = ncclParamP2pLevel();
 
+  // Disable P2P
   *ret = 0;
 
   if (p2pLevel == 0) return ncclSuccess;

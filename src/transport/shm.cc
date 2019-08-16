@@ -42,7 +42,20 @@ NCCL_PARAM(ShmDisable, "SHM_DISABLE", 0);
 
 /* Determine if we can communicate with the peer */
 ncclResult_t shmCanConnect(ncclTvalue_t* ret, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo) {
-  *ret = ((ncclParamShmDisable() == 1) || (myInfo->hostHash != peerInfo->hostHash)) ? 0 : 1;
+  *ret = 0;
+
+  if (ncclParamShmDisable() == 1) return ncclSuccess;
+
+  // Same host?
+  TRACE(NCCL_INIT|NCCL_SHM, "myInfo hostHash %lx peer hostHash %lx", myInfo->hostHash, peerInfo->hostHash);
+  if (myInfo->hostHash != peerInfo->hostHash) return ncclSuccess;
+
+  // Common /dev/shm (between containers) ?
+  TRACE(NCCL_INIT|NCCL_SHM, "myInfo shmDev %lx peer shmDev %lx", myInfo->shmDev, peerInfo->shmDev);
+  if (myInfo->shmDev != peerInfo->shmDev) return ncclSuccess;
+
+  *ret = 1;
+
   return ncclSuccess;
 }
 

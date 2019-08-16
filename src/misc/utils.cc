@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <stdarg.h>
+#include <stdlib.h>
 
 #include "nvmlwrap.h"
 #include "core.h"
@@ -98,29 +99,44 @@ uint64_t getHash(const char* string, int n) {
 
 /* Generate a hash of the unique identifying string for this host
  * that will be unique for both bare-metal and container instances
- * Equivalent of a hash of;
  *
- * $(hostname) $(readlink /proc/self/ns/uts) $(readlink /proc/self/ns/mnt)
+ * Reads a host ID string from /proc/sys/kernel/random/boot_id
+ *
+ * This string can be overridden by using the NCCL_HOSTID env var.
+ * Code falls back to the full hostname if there is an error
  */
+#define HOSTID_FILE "/proc/sys/kernel/random/boot_id"
 uint64_t getHostHash(void) {
-  char uname[1024];
-  // Start off with the full hostname
-  (void) getHostName(uname, sizeof(uname), '\0');
-  int offset = strlen(uname);
-  int len;
-  // $(readlink /proc/self/ns/uts)
-  len = readlink("/proc/self/ns/uts", uname+offset, sizeof(uname)-1-offset);
-  if (len < 0) len = 0;
-  offset += len;
-  // $(readlink /proc/self/ns/mnt)
-  len = readlink("/proc/self/ns/mnt", uname+offset, sizeof(uname)-1-offset);
-  if (len < 0) len = 0;
-  offset += len;
-  // Trailing '\0'
-  uname[offset]='\0';
-  TRACE(NCCL_INIT,"unique hostname '%s'", uname);
+  char hostHash[1024];
+  char *hostId;
 
-  return getHash(uname, strlen(uname));
+  hostHash[0] = '\0';
+
+  if ((hostId = getenv("NCCL_HOSTID")) != NULL) {
+    strncpy(hostHash, hostId, sizeof(hostHash));
+  } else {
+    FILE *file = fopen(HOSTID_FILE, "r");
+    if (file != NULL) {
+      char *p;
+      if (fscanf(file, "%ms", &p) == 1) {
+        strncpy(hostHash, p, sizeof(hostHash)-1);
+        free(p);
+      }
+    }
+    fclose(file);
+  }
+
+  // Make sure the string is terminated
+  hostHash[sizeof(hostHash)-1]='\0';
+
+  // Fall back is the full hostname if something failed
+  if (strlen(hostHash) == 0) {
+    (void) getHostName(hostHash, sizeof(hostHash), '\0');
+  }
+
+  TRACE(NCCL_INIT,"unique hostname '%s'", hostHash);
+
+  return getHash(hostHash, strlen(hostHash));
 }
 
 /* Generate a hash of the unique identifying string for this process

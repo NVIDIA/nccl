@@ -315,6 +315,13 @@ static ncclResult_t fillInfo(struct ncclPeerInfo* info, int rank, uint64_t commH
   info->hostHash=getHostHash()+commHash;
   info->pidHash=getPidHash()+commHash;
 
+  // Get the device MAJOR:MINOR of /dev/shm so we can use that
+  // information to decide whether we can use SHM for inter-process
+  // communication in a container environment
+  struct stat statbuf;
+  SYSCHECK(stat("/dev/shm", &statbuf), "stat");
+  info->shmDev = statbuf.st_dev;
+
   // Get PCI Bus Id. We need to get the bus ID through CUDA first, since the
   // cudaDev is a CUDA runtime dev number which could be different from the
   // NVML device number. Then we get the busID from NVML to be sure it is

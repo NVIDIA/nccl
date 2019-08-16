@@ -27,6 +27,7 @@ struct ncclPeerInfo {
   int nvmlDev;
   uint64_t hostHash;
   uint64_t pidHash;
+  dev_t shmDev;
   char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE];
 };
 

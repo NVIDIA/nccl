@@ -25,6 +25,7 @@ CUDA_MINOR = $(shell echo $(CUDA_VERSION) | cut -d "." -f 2)
 
 # Better define NVCC_GENCODE in your environment to the minimal set
 # of archs to reduce compile time.
+# Note: CUDA 10 gencodes are the same as CUDA 9 gencodes.
 CUDA8_GENCODE = -gencode=arch=compute_30,code=sm_30 \
                 -gencode=arch=compute_35,code=sm_35 \
                 -gencode=arch=compute_50,code=sm_50 \

@@ -8,19 +8,11 @@
 #define NCCL_CORE_H_
 
 #include <pthread.h>
-#include <algorithm>
-#include "nccl.h"
-#include "debug.h"
-#include "checks.h"
-#include "alloc.h"
-#include "transport.h"
-#include "devcomm.h"
-#include "comm.h"
-#include "info.h"
-#include "argcheck.h"
-#include <cstdio>
 #include <unistd.h>
 #include <stdlib.h>
+#include <stdint.h>
+#include <algorithm> // For std::min/std::max
+#include "nccl.h"
 
 #ifdef PROFAPI
 #define NCCL_API(ret, func, args...)        \
@@ -37,10 +29,6 @@
     __attribute__ ((visibility("default"))) \
     ret func(args)
 #endif // end PROFAPI
-
-int ncclCudaCompCap();
-ncclResult_t ncclNvlinkGpu(int* nvlink);
-int64_t ncclTreeThreshold();
 
 static __inline__ int ncclTypeSize(ncclDataType_t type) {
   switch (type) {
@@ -61,5 +49,23 @@ static __inline__ int ncclTypeSize(ncclDataType_t type) {
       return -1;
   }
 }
+
+#define NCCL_NUM_FUNCTIONS 5
+typedef enum { ncclCollBroadcast, ncclCollReduce, ncclCollAllGather, ncclCollReduceScatter, ncclCollAllReduce } ncclFunc_t;
+
+#define NCCL_NUM_ALGORITHMS 2 // Tree/Ring
+#define NCCL_ALGO_TREE 0
+#define NCCL_ALGO_RING 1
+
+#define NCCL_NUM_PROTOCOLS 3 // Simple/LL/LL128
+#define NCCL_PROTO_LL 0
+#define NCCL_PROTO_LL128 1
+#define NCCL_PROTO_SIMPLE 2
+
+#include "debug.h"
+#include "checks.h"
+#include "alloc.h"
+#include "utils.h"
+#include "param.h"
 
 #endif // end include guard

@@ -4,9 +4,7 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
-#include "core.h"
-#include "net.h"
-#include "param.h"
+#include "nccl.h"
 
 #define RANK_TO_INDEX(r) (rank > root ? rank-1 : rank)
 

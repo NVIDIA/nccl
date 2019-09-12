@@ -9,17 +9,30 @@
 
 #include "nccl.h"
 
-//#define NVML_DIRECT 1
-#ifdef NVML_DIRECT
-#include "nvml.h"
+// The NVML library doesn't appear to be thread safe
+#include <pthread.h>
+extern pthread_mutex_t nvmlLock;
+#define NVMLLOCK() pthread_mutex_lock(&nvmlLock)
+#define NVMLUNLOCK() pthread_mutex_unlock(&nvmlLock)
+
+#define NVMLLOCKCALL(cmd, ret) do {                      \
+    NVMLLOCK();                                          \
+    ret = cmd;                                           \
+    NVMLUNLOCK();                                        \
+} while(false)
 
 #define NVMLCHECK(cmd) do {                              \
-    nvmlReturn_t e = cmd;                                \
+    nvmlReturn_t e;                                      \
+    NVMLLOCKCALL(cmd, e);                                \
     if( e != NVML_SUCCESS ) {                            \
       WARN("NVML failure '%s'", nvmlErrorString(e));     \
       return ncclSystemError;                            \
     }                                                    \
 } while(false)
+
+//#define NVML_DIRECT 1
+#ifdef NVML_DIRECT
+#include "nvml.h"
 
 static ncclResult_t wrapNvmlSymbols(void) { return ncclSuccess; }
 static ncclResult_t wrapNvmlInit(void) { NVMLCHECK(nvmlInit()); return ncclSuccess; }
@@ -55,6 +68,10 @@ static ncclResult_t wrapNvmlDeviceGetNvLinkCapability(nvmlDevice_t device, unsig
 }
 static ncclResult_t wrapNvmlDeviceGetMinorNumber(nvmlDevice_t device, unsigned int* minorNumber) {
   NVMLCHECK(nvmlDeviceGetMinorNumber(device, minorNumber));
+  return ncclSuccess;
+}
+static ncclResult_t wrapNvmlDeviceGetCudaComputeCapability(nvmlDevice_t device, int* major, int* minor) {
+  NVMLCHECK(nvmlDeviceGetCudaComputeCapability(device, major, minor));
   return ncclSuccess;
 }
 #else
@@ -139,6 +156,7 @@ ncclResult_t wrapNvmlDeviceGetNvLinkRemotePciInfo(nvmlDevice_t device, unsigned 
 ncclResult_t wrapNvmlDeviceGetNvLinkCapability(nvmlDevice_t device, unsigned int link,
                                                    nvmlNvLinkCapability_t capability, unsigned int *capResult);
 ncclResult_t wrapNvmlDeviceGetMinorNumber(nvmlDevice_t device, unsigned int* minorNumber);
+ncclResult_t wrapNvmlDeviceGetCudaComputeCapability(nvmlDevice_t device, int* major, int* minor);
 
 #endif // NVML_DIRECT
 

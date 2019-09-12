@@ -7,7 +7,10 @@
 #ifndef NCCL_COLLECTIVES_H_
 #define NCCL_COLLECTIVES_H_
 
-#define FUNC_INDEX(coll, redop, dtype, ll, al) ((((((coll)*ncclNumOps + (redop))*ncclNumTypes) + (dtype))*2+(al))*2+(ll))
+#include "core.h"
+#include "info.h"
+
+#define FUNC_INDEX(coll, redop, dtype, al, pr) ((((((coll)*ncclNumOps + (redop))*ncclNumTypes) + (dtype))*NCCL_NUM_ALGORITHMS+(al))*NCCL_NUM_PROTOCOLS+(pr))
 
 #define NCCL_COLL_NAME(coll, op, dtype) \
   coll##_##op##_##dtype
@@ -22,7 +25,8 @@
 
 #define DECL_COLL4(coll, op, dtype) \
   DECL_COLL5(coll, op, dtype) \
-  DECL_COLL5(coll##LL, op, dtype)
+  DECL_COLL5(coll##LL, op, dtype) \
+  DECL_COLL5(coll##LL128, op, dtype)
 
 #define DECL_COLL3(coll, op, dtype) \
   DECL_COLL4(coll##Ring, op, dtype) \

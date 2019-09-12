@@ -13,8 +13,6 @@
 #define NCCL_MAX_OPS 2048
 #define NCCL_STEPS 8
 
-typedef enum { ncclCollBroadcast, ncclCollReduce, ncclCollAllGather, ncclCollReduceScatter, ncclCollAllReduce, ncclCollCount } ncclColl_t;
-
 #define DIVUP(x, y) \
     (((x)+(y)-1)/(y))
 #define ROUNDUP(x, y) \
@@ -38,22 +36,42 @@ union ncclLLFifoLine {
   int4 i4;
 };
 
-#define MAXTHREADS 256
-#define NCCL_LL_MAX_NTHREADS MAXTHREADS
-#define NUM_LINES_PER_THREAD 8
-#define NCCL_LL_SLICE_LINES (NUM_LINES_PER_THREAD*NCCL_LL_MAX_NTHREADS)
+#define WARP_SIZE 32
+#define MAXCHANNELS 32
+#define NCCL_MAX_NTHREADS 512
+#define NCCL_LL_MAX_NTHREADS NCCL_MAX_NTHREADS
+#define NCCL_LL_LINES_PER_THREAD 8
+#define NCCL_LL_SLICE_LINES (NCCL_LL_LINES_PER_THREAD*NCCL_LL_MAX_NTHREADS)
 #define NCCL_LL_BUFF_LINES (NCCL_LL_SLICE_LINES*NCCL_STEPS)
 #define NCCL_LL_BUFF_SIZE (NCCL_LL_BUFF_LINES*sizeof(union ncclLLFifoLine))
-#ifdef DEBUG_LL
-#define NCCL_LL_CLEAN_MASK 0x00000ff8
-#define NCCL_LL_FLAG_MAX   0x00001000
-#define NCCL_LL_FLAG(a) ((uint32_t)(a % NCCL_LL_FLAG_MAX))
+#ifdef TEST_LL_CLEANUP
+#define NCCL_LL_CLEAN_MASK 0x078 // Set to 0x100 to disable cleanup
+#define NCCL_LL_FLAG_MAX   0x100
+#define NCCL_LL_FLAG(a) ((uint32_t)((a) % NCCL_LL_FLAG_MAX))
 #else
 #define NCCL_LL_CLEAN_MASK 0x7ffffff8
 #define NCCL_LL_FLAG(a) ((uint32_t)(a))
 #endif
 // Make sure the clean mask will last for at least NCCL_NSTEPS
 static_assert(NCCL_LL_CLEAN_MASK % NCCL_STEPS == 0, "Invalid NCCL_LL_CLEAN_MASK value");
+
+#define NCCL_LL128_LINESIZE 128
+#define NCCL_LL128_LINEELEMS (NCCL_LL128_LINESIZE/sizeof(uint64_t))
+#define NCCL_LL128_DATAELEMS (NCCL_LL128_LINEELEMS-1)
+
+#define NCCL_LL128_MAX_NTHREADS 640
+#define NCCL_LL128_ELEMS_PER_THREAD 120
+
+// Receiving from up to 3 sources is more compute intensive than sending
+// to 3 dests. Use 70% for reduce and 30% for bcast.
+#define NCCL_LL128_SPLIT(nt) ((nt*7/(10*32))*32)
+
+#define NCCL_LL128_SLICE_ELEMS (NCCL_LL128_ELEMS_PER_THREAD*NCCL_LL128_MAX_NTHREADS)
+#define NCCL_LL128_BUFF_ELEMS (NCCL_LL128_SLICE_ELEMS*NCCL_STEPS)
+#define NCCL_LL128_BUFF_SIZE (NCCL_LL128_BUFF_ELEMS*sizeof(uint64_t))
+
+#define NCCL_LL128_SHMEM_ELEMS_PER_THREAD 8
+#define NCCL_LL128_SHMEM_SIZE (NCCL_LL128_SHMEM_ELEMS_PER_THREAD*NCCL_LL128_MAX_NTHREADS)
 
 struct ncclConnInfo {
   // Regular comm mechanism
@@ -73,6 +91,9 @@ struct ncclConnInfo {
   // Low latency mechanism
   union ncclLLFifoLine *llBuff; // Local for recv, remote for send
   uint64_t llLastCleaning;
+
+  // High bandwidth, low latency protocol
+  uint64_t* ll128Buff; // Local for recv, remote for send
 };
 
 struct ncclConnector {
@@ -148,7 +169,8 @@ struct ncclChannel {
   union {
     struct {
       struct ncclRing ring;
-      struct ncclTree tree;
+      struct ncclTree treeUp;
+      struct ncclTree treeDn;
 
       int id;
       int nthreads;
@@ -170,8 +192,6 @@ struct ncclChannel {
   };
 };
 static_assert(sizeof(struct ncclChannel) == 0x80*sizeof(int), "ncclChannel must have a pow2 size");
-
-#define MAXCHANNELS 16
 
 typedef enum {
   ncclDevSuccess,

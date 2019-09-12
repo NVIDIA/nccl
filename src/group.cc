@@ -51,11 +51,6 @@ struct ncclAsyncArgs {
 
 thread_local struct ncclAsyncArgs ncclGroupArgs[MAX_ASYNC_OPS];
 
-ncclResult_t ncclSetDevice(int cudaDev) {
-  CUDACHECK(cudaSetDevice(cudaDev));
-  return ncclSuccess;
-}
-
 #define CHECK(a) do { \
   if ((args->ret = (a)) != ncclSuccess) { \
     INFO(NCCL_INIT,"%s:%d -> %d [Async thread]", __FILE__, __LINE__, args->ret); \
@@ -65,15 +60,14 @@ ncclResult_t ncclSetDevice(int cudaDev) {
 
 void* ncclAsyncThreadMain(void* args_) {
   struct ncclAsyncArgs* args = (struct ncclAsyncArgs*)args_;
-  CHECK(ncclSetDevice(args->init.cudaDev));
-  CHECK(args->init.func(args->init.newcomm, args->init.ndev, args->init.commId, args->init.myrank));
+  CHECK(args->init.func(args->init.newcomm, args->init.ndev, args->init.commId, args->init.myrank, args->init.cudaDev));
   return args;
 }
 
-ncclResult_t ncclAsyncInit(ncclInitFunc_t func, int cudaDev, ncclComm_t* newcomm, int ndev, ncclUniqueId commId, int myrank) {
+ncclResult_t ncclAsyncInit(ncclInitFunc_t func, ncclComm_t* newcomm, int ndev, ncclUniqueId commId, int myrank, int cudaDev) {
   if (ncclGroupIndex >= MAX_ASYNC_OPS) {
     WARN("Too many async operations in progress, max is %d", MAX_ASYNC_OPS);
-    return ncclAsyncErrCheck(ncclInternalError);
+    return ncclAsyncErrCheck(ncclInvalidUsage);
   }
   int index = ncclGroupIndex++;
   struct ncclAsyncArgs* args = ncclGroupArgs+index;
@@ -84,8 +78,6 @@ ncclResult_t ncclAsyncInit(ncclInitFunc_t func, int cudaDev, ncclComm_t* newcomm
   args->init.ndev = ndev;
   memcpy(&args->init.commId, &commId, sizeof(commId));
   args->init.myrank = myrank;
-  // We need to use threads for Init
-  pthread_create(ncclGroupThreads+index, NULL, ncclAsyncThreadMain, args);
   return ncclSuccess;
 }
 
@@ -97,7 +89,7 @@ ncclResult_t ncclAsyncColl(ncclComm_t comm) {
   }
   if (ncclGroupIndex >= MAX_ASYNC_OPS) {
     WARN("Too many async operations in progress, max is %d", MAX_ASYNC_OPS);
-    return ncclAsyncErrCheck(ncclInternalError);
+    return ncclAsyncErrCheck(ncclInvalidUsage);
   }
   ncclGroupIndex++;
   args->funcType = ASYNC_FUNC_COLL;
@@ -123,6 +115,14 @@ ncclResult_t ncclGroupEnd() {
 
   ncclResult_t ret = ncclGroupError;
   if (ret != ncclSuccess) goto group_cleanup;
+
+  /* Launch async ncclCommInitRank */
+  for (int i=0; i<ncclGroupIndex; i++) {
+    struct ncclAsyncArgs* args = ncclGroupArgs+i;
+    if (args->funcType == ASYNC_FUNC_INIT) {
+      pthread_create(ncclGroupThreads+i, NULL, ncclAsyncThreadMain, args);
+    }
+  }
 
   /* Collectives are done in three steps :
    * 1. Barrier Check In. Only the last call may call cudaLaunchKernel[cooperative]
@@ -166,8 +166,8 @@ ncclResult_t ncclGroupEnd() {
       if (args->funcType == ASYNC_FUNC_INIT && doneArray[i] == 0) {
         int err = pthread_tryjoin_np(ncclGroupThreads[i], NULL);
         if (err == EBUSY) continue;
-        if (err != 0) { ret = ncclSystemError; goto end; }
-        if (args->ret != ncclSuccess) { ret = args->ret; goto end; }
+        if (err != 0) ret = ncclSystemError;
+        if (args->ret != ncclSuccess) ret = args->ret;
         doneArray[i] = 1;
         done--;
       }
@@ -175,20 +175,47 @@ ncclResult_t ncclGroupEnd() {
   }
   goto end;
 group_cleanup:
-  // At least one call in the group failed. Since we want to make that group
-  // an atomic operation, we need to cancel all operations.
-  for (int i=0; i<ncclGroupIndex; i++) {
-    struct ncclComm* comm = ncclGroupArgs[i].coll.comm;
-    for (int c=0; c<comm->nChannels; c++) {
-      struct ncclChannel* channel = comm->channels+c;
-      for (int i=0; i<channel->collCount; i++) {
-        channel->collectives[(channel->collStart + i)%NCCL_MAX_OPS].active = 0;
+  if (ret != ncclSuccess) {
+    // At least one call in the group failed. Since we want to make that group
+    // an atomic operation, we need to cancel all operations.
+    for (int i=0; i<ncclGroupIndex; i++) {
+      struct ncclAsyncArgs* args = ncclGroupArgs+i;
+      if (args->funcType == ASYNC_FUNC_INIT && doneArray[i] == 0) {
+        if (args->init.newcomm) NCCLCHECK(ncclCommDestroy(*args->init.newcomm));
+        *args->init.newcomm = NULL;
+      } else {
+        struct ncclComm* comm = args->coll.comm;
+        for (int c=0; c<comm->nChannels; c++) {
+          struct ncclChannel* channel = comm->channels+c;
+          for (int i=0; i<channel->collCount; i++) {
+            channel->collectives[(channel->collStart + i)%NCCL_MAX_OPS].active = 0;
+          }
+          channel->collFifoTail = channel->collStart;
+          channel->collCount = 0;
+        }
+        /* Cancel all proxy ops : mark them as ncclProxyOpNone and they should be freed later on */
+        struct ncclProxyState* state = &comm->proxyState;
+        struct ncclProxyArgs *op, *start;
+        pthread_mutex_lock(&state->mutex);
+        op = start = state->ops;
+        while (op) {
+          if (op->opCount >= comm->lastOpCount) op->state = ncclProxyOpNone;
+          struct ncclProxyArgs* peerOp = op->nextPeer;
+          while (peerOp) {
+            if (peerOp->opCount >= comm->lastOpCount) peerOp->state = ncclProxyOpNone;
+            peerOp = peerOp->nextPeer;
+          }
+          op = op->next;
+          if (op == start) break;
+        }
+        comm->opCount = comm->lastOpCount;
+        pthread_cond_signal(&state->cond);
+        pthread_mutex_unlock(&state->mutex);
+
+        comm->myParams->gridDim.x = comm->myParams->blockDim.x = 0;
+        comm->userStreamSet = false;
       }
-      channel->collFifoTail = channel->collStart;
-      channel->collCount = 0;
     }
-    comm->myParams->gridDim.x = comm->myParams->blockDim.x = 0;
-    comm->userStreamSet = false;
   }
 end:
   ncclGroupError = ncclSuccess;

@@ -7,9 +7,8 @@
 #ifndef NCCL_DEVICE_COMMON_H_
 #define NCCL_DEVICE_COMMON_H_
 
-#include "../collectives.h"
+#include "collectives.h"
 #include "devcomm.h"
-#include "nccl.h"
 
 // Exit If Abort Barrier across CTA: make sure all threads exit consistently
 // Each thread sets a predicate to true if abort == 1
@@ -31,16 +30,18 @@ extern __device__ ncclKern_t ncclFuncs[];
 static __device__ void load_parallel(void* dst, void* src, size_t size, int tid) {
   int* d = (int*)dst;
   int* s = (int*)src;
-  // When aggregation is effective, if some threads have aborted inside the LL kernel,
-  // make sure the rest of the threads abort as well
-  exitIfAbortBarrier(0);
   for (int o = tid; o < (size/sizeof(int)); o += blockDim.x) d[o] = s[o];
-  __syncthreads();
 }
-static __device__ void load_coll(struct ncclColl* localColl, struct ncclColl* hostColl, int tid) {
+static __device__ void load_coll(struct ncclColl* localColl, struct ncclColl* hostColl, int tid, struct ncclDevComm* comm) {
+  // Check whether the last operation was aborted and make sure all threads exit
+  int abort = tid == 0 ? *(comm->abortFlag) : 0;
+  exitIfAbortBarrier(abort);
   load_parallel(localColl, hostColl, sizeof(struct ncclColl), tid);
+  __syncthreads();
   if (tid == 0) hostColl->active = 0;
 }
+
+extern __device__ volatile uint64_t* ncclShmem;
 
 /* Functions for aggregation case */
 #define IMPL_COLL_FUNC(coll, op, ncclFunc, dtype, ctype) \
@@ -51,10 +52,11 @@ __device__ void NCCL_COLL_NAME(coll, op, dtype)(struct CollectiveArgs* args) { \
 #if NCCL_OP == 0
 /* Kernels with the first operation inlined */
 #define IMPL_COLL_KERN(coll, op, ncclFunc, dtype, ctype, fIndex) \
-__launch_bounds__(MAXTHREADS+WARP_SIZE, 1) \
 __global__ void NCCL_KERN_NAME(coll, op, dtype)(struct ncclColl firstColl) { \
   int tid = threadIdx.x; \
   int bid = blockIdx.x; \
+  __shared__ volatile uint64_t shmem[NCCL_LL128_SHMEM_SIZE]; \
+  ncclShmem = shmem; \
   __shared__ struct ncclColl localColl; \
  \
   struct ncclDevComm* comm = firstColl.args.comm; \
@@ -65,7 +67,7 @@ __global__ void NCCL_KERN_NAME(coll, op, dtype)(struct ncclColl firstColl) { \
     c = &firstColl; \
   } else { \
     c = &localColl; \
-    load_coll(c, channel->devCollectives+channel->collFifoHead, tid); \
+    load_coll(c, channel->devCollectives+channel->collFifoHead, tid, comm); \
   } \
   while (1) { \
     if (tid < c->args.nThreads) { \
@@ -84,7 +86,7 @@ __global__ void NCCL_KERN_NAME(coll, op, dtype)(struct ncclColl firstColl) { \
  \
     /* Load next collective operation*/ \
     c = &localColl; /* for bid 0 */ \
-    load_coll(c, channel->devCollectives+nextIndex, tid); \
+    load_coll(c, channel->devCollectives+nextIndex, tid, comm); \
   } \
 }
 #else
@@ -93,13 +95,14 @@ __global__ void NCCL_KERN_NAME(coll, op, dtype)(struct ncclColl firstColl) { \
 
 // Only generate inline kernels for LL
 #define IMPL_COLL4(coll, op, ncclFunc, dtype, ctype, ncclColl, ncclOp, ncclType, al) \
-  IMPL_COLL_FUNC(coll, op, ncclFunc, dtype, ctype) \
   IMPL_COLL_FUNC(coll##LL, op, ncclFunc, dtype, ctype) \
-  IMPL_COLL_KERN(coll##LL, op, ncclFunc, dtype, ctype, FUNC_INDEX(ncclColl, ncclOp, ncclType, 1, al)) \
+  IMPL_COLL_FUNC(coll##LL128, op, ncclFunc, dtype, ctype) \
+  IMPL_COLL_FUNC(coll, op, ncclFunc, dtype, ctype) \
+  IMPL_COLL_KERN(coll##LL, op, ncclFunc, dtype, ctype, FUNC_INDEX(ncclColl, ncclOp, ncclType, al, NCCL_PROTO_LL)) \
 
 #define IMPL_COLL3(coll, op, ncclFunc, dtype, ctype, ncclColl, ncclOp, ncclType) \
-  IMPL_COLL4(coll##Ring, op, ncclFunc, dtype, ctype, ncclColl, ncclOp, ncclType, 0) \
-  IMPL_COLL4(coll##Tree, op, ncclFunc, dtype, ctype, ncclColl, ncclOp, ncclType, 1)
+  IMPL_COLL4(coll##Tree, op, ncclFunc, dtype, ctype, ncclColl, ncclOp, ncclType, NCCL_ALGO_TREE) \
+  IMPL_COLL4(coll##Ring, op, ncclFunc, dtype, ctype, ncclColl, ncclOp, ncclType, NCCL_ALGO_RING)
 
 #if NCCL_TYPE == 0
 #define IMPL_COLL2(coll, op, ncclFunc, ncclColl, ncclOp) \

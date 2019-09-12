@@ -13,11 +13,6 @@
 #include <unistd.h>
 #include <sys/types.h>
 
-// Always use sockets for bootstrap
-struct bootstrapNetHandle {
-  union socketAddress connectAddr;
-};
-
 struct bootstrapNetComm {
   int fd;
 };
@@ -68,36 +63,36 @@ static ncclResult_t bootstrapNetGetSocketAddr(int dev, union socketAddress* addr
 /* Socket Interface Selection type */
 enum bootstrapInterface_t { findSubnetIf = -1, dontCareIf = -2 };
 
-static ncclResult_t bootstrapNetListen(int dev, void* opaqueHandle, void** listenComm) {
-  struct bootstrapNetHandle* handle = (struct bootstrapNetHandle*) opaqueHandle;
-  static_assert(sizeof(struct bootstrapNetHandle) < NCCL_NET_HANDLE_MAXSIZE, "bootstrapNetHandle size too large");
+static ncclResult_t bootstrapNetListen(int dev, ncclNetHandle_t* netHandle, void** listenComm) {
+  union socketAddress* connectAddr = (union socketAddress*) netHandle;
+  static_assert(sizeof(union socketAddress) < NCCL_NET_HANDLE_MAXSIZE, "union socketAddress size is too large");
   // if dev >= 0, listen based on dev
   if (dev >= 0) {
-    NCCLCHECK(bootstrapNetGetSocketAddr(dev, &(handle->connectAddr)));
+    NCCLCHECK(bootstrapNetGetSocketAddr(dev, connectAddr));
   } else if (dev == findSubnetIf) {
     // handle stores a remote address
     // need to find a local addr that is in the same network as the remote addr
     union socketAddress localAddr;
     char ifName[MAX_IF_NAME_SIZE];
-    if (findInterfaceMatchSubnet(ifName, &localAddr, handle->connectAddr, MAX_IF_NAME_SIZE, 1) <= 0) {
+    if (findInterfaceMatchSubnet(ifName, &localAddr, connectAddr, MAX_IF_NAME_SIZE, 1) <= 0) {
       WARN("NET/Socket : No usable listening interface found");
       return ncclSystemError;
     }
     // pass the local address back
-    memcpy(&handle->connectAddr, &localAddr, sizeof(handle->connectAddr));
+    memcpy(connectAddr, &localAddr, sizeof(localAddr));
   } // Otherwise, handle stores a local address
   struct bootstrapNetComm* comm;
   NCCLCHECK(bootstrapNetNewComm(&comm));
-  NCCLCHECK(createListenSocket(&comm->fd, &handle->connectAddr));
+  NCCLCHECK(createListenSocket(&comm->fd, connectAddr));
   *listenComm = comm;
   return ncclSuccess;
 }
 
-static ncclResult_t bootstrapNetConnect(int dev, void* opaqueHandle, void** sendComm) {
+static ncclResult_t bootstrapNetConnect(int dev, ncclNetHandle_t* netHandle, void** sendComm) {
+  union socketAddress* connectAddr = (union socketAddress*) netHandle;
   struct bootstrapNetComm* comm;
   NCCLCHECK(bootstrapNetNewComm(&comm));
-  struct bootstrapNetHandle* handle = (struct bootstrapNetHandle*) opaqueHandle;
-  NCCLCHECK(connectAddress(&comm->fd, &handle->connectAddr));
+  NCCLCHECK(connectAddress(&comm->fd, connectAddr));
   *sendComm = comm;
   return ncclSuccess;
 }
@@ -145,20 +140,11 @@ static ncclResult_t bootstrapNetRecv(void* recvComm, void* data, int size) {
   return ncclSuccess;
 }
 
-ncclResult_t bootstrapNetCreateHandle(void* opaqueHandle, const char* str) {
-  struct bootstrapNetHandle* handle = (struct bootstrapNetHandle*) opaqueHandle;
-  NCCLCHECK(GetSocketAddrFromString(&handle->connectAddr, str));
+ncclResult_t bootstrapNetCreateHandle(ncclNetHandle_t* netHandle, const char* str) {
+  union socketAddress* connectAddr = (union socketAddress*) netHandle;
+  NCCLCHECK(GetSocketAddrFromString(connectAddr, str));
   return ncclSuccess;
 }
-
-struct extId {
-  ncclNetHandle_t extHandleRoot;
-  void* extListenComm;
-  uint64_t hostHash;
-  pid_t pid;
-  int fd;
-  pthread_t boostrapThread;
-};
 
 struct extInfo {
   int rank;
@@ -177,9 +163,8 @@ static ncclResult_t setFilesLimit() {
   return ncclSuccess;
 }
 
-static void *bootstrapRoot(void* commId) {
+static void *bootstrapRoot(void* listenComm) {
   struct extInfo info;
-  struct extId* id = (struct extId*)commId;
   ncclNetHandle_t *rankHandles = NULL;
   ncclNetHandle_t *rankHandlesRoot = NULL; // for initial rank <-> root information exchange
   ncclNetHandle_t zero = { 0 }; // for sanity checking
@@ -191,7 +176,7 @@ static void *bootstrapRoot(void* commId) {
   /* Receive addresses from all ranks */
   int nranks = 0, c = 0;
   do {
-    NCCLCHECKGOTO(bootstrapNetAccept(id->extListenComm, &tmpComm), res, out);
+    NCCLCHECKGOTO(bootstrapNetAccept(listenComm, &tmpComm), res, out);
     NCCLCHECKGOTO(bootstrapNetRecv(tmpComm, &info, sizeof(info)), res, out);
     NCCLCHECKGOTO(bootstrapNetCloseRecv(tmpComm), res, out);
 
@@ -216,22 +201,22 @@ static void *bootstrapRoot(void* commId) {
     memcpy(rankHandles+info.rank, info.extHandleListen, sizeof(ncclNetHandle_t));
 
     ++c;
+    TRACE(NCCL_INIT, "Received connect from rank %d total %d/%d",  info.rank, c, nranks);
   } while (c < nranks);
-  TRACE(NCCL_INIT, "COLLECTED HANDLES");
+  TRACE(NCCL_INIT, "COLLECTED ALL %d HANDLES", nranks);
 
   // Send the connect handle for the next rank in the AllGather ring
   for (int r=0; r<nranks; ++r) {
     int next = (r+1) % nranks;
     void *tmpSendComm;
-    NCCLCHECKGOTO(bootstrapNetConnect(0, rankHandlesRoot[r], &tmpSendComm), res, out);
+    NCCLCHECKGOTO(bootstrapNetConnect(0, rankHandlesRoot+r, &tmpSendComm), res, out);
     NCCLCHECKGOTO(bootstrapNetSend(tmpSendComm, rankHandles+next, sizeof(ncclNetHandle_t)), res, out);
     NCCLCHECKGOTO(bootstrapNetCloseSend(tmpSendComm), res, out);
   }
-  TRACE(NCCL_INIT, "SENT OUT HANDLES");
+  TRACE(NCCL_INIT, "SENT OUT ALL %d HANDLES", nranks);
 
 out:
-  bootstrapNetCloseListen(id->extListenComm);
-  free(commId);
+  bootstrapNetCloseListen(listenComm);
   if (rankHandles) free(rankHandles);
   if (rankHandlesRoot) free(rankHandlesRoot);
 
@@ -239,31 +224,28 @@ out:
   return NULL;
 }
 
-ncclResult_t bootstrapCreateRoot(ncclUniqueId* commId, bool idFromEnv) {
-  struct extId* id = (struct extId*)commId;
-  id->hostHash = getHostHash();
-  NCCLCHECK(bootstrapNetListen(idFromEnv ? dontCareIf : 0, &id->extHandleRoot, &id->extListenComm));
-  ncclUniqueId* threadIdCopy;
-  NCCLCHECK(ncclCalloc(&threadIdCopy, 1));
-  memcpy(threadIdCopy, id, sizeof(ncclUniqueId));
-  pthread_create(&id->boostrapThread, NULL, bootstrapRoot, (void *)threadIdCopy);
+ncclResult_t bootstrapCreateRoot(ncclUniqueId* id, bool idFromEnv) {
+  ncclNetHandle_t* netHandle = (ncclNetHandle_t*) id;
+  void* listenComm;
+  NCCLCHECK(bootstrapNetListen(idFromEnv ? dontCareIf : 0, netHandle, &listenComm));
+  pthread_t thread;
+  pthread_create(&thread, NULL, bootstrapRoot, listenComm);
   return ncclSuccess;
 }
 
-ncclResult_t bootstrapGetUniqueId(ncclUniqueId* out) {
-  static_assert(sizeof(extId) < sizeof(ncclUniqueId), "NetId does not fit inside ncclUniqueId");
-  extId* id = (extId*)out;
+ncclResult_t bootstrapGetUniqueId(ncclUniqueId* id) {
+  static_assert(sizeof(ncclNetHandle_t) < sizeof(ncclUniqueId), "NetId does not fit inside ncclUniqueId");
+  memset(id, 0, sizeof(ncclUniqueId));
+  ncclNetHandle_t* netHandle = (ncclNetHandle_t*) id;
 
   char* env = getenv("NCCL_COMM_ID");
   if (env) {
-    if (bootstrapNetCreateHandle(&id->extHandleRoot, env) != 0) {
+    if (bootstrapNetCreateHandle(netHandle, env) != 0) {
       WARN("Invalid NCCL_COMM_ID, please use format: <ipv4>:<port> or [<ipv6>]:<port> or <hostname>:<port>");
       return ncclInvalidArgument;
     }
-    id->pid = -1;
   } else {
-    id->pid = getpid();
-    NCCLCHECK(bootstrapCreateRoot(out, false));
+    NCCLCHECK(bootstrapCreateRoot(id, false));
   }
 
   return ncclSuccess;
@@ -286,9 +268,9 @@ struct extState {
   int dev;
 };
 
-ncclResult_t bootstrapInit(ncclUniqueId* commId, int rank, int nranks, void** commState) {
-  struct extId* id = (struct extId*)commId;
-  bool idFromEnv = id->pid < 0;
+ncclResult_t bootstrapInit(ncclUniqueId * id, int rank, int nranks, void** commState) {
+  ncclNetHandle_t* netHandle = (ncclNetHandle_t*) id;
+  bool idFromEnv = getenv("NCCL_COMM_ID") != NULL;
   struct extState* state;
   NCCLCHECK(ncclCalloc(&state, 1));
   state->rank = rank;
@@ -303,8 +285,8 @@ ncclResult_t bootstrapInit(ncclUniqueId* commId, int rank, int nranks, void** co
   void *tmpSendComm, *tmpRecvComm;
   // Pass the remote address to listen via info
   if (idFromEnv) {
-    memcpy(&info.extHandleListen, &id->extHandleRoot, sizeof(ncclNetHandle_t));
-    memcpy(&info.extHandleListenRoot, &id->extHandleRoot, sizeof(ncclNetHandle_t));
+    memcpy(&info.extHandleListen, netHandle, sizeof(ncclNetHandle_t));
+    memcpy(&info.extHandleListenRoot, netHandle, sizeof(ncclNetHandle_t));
   }
   // listen will return the local address via info (specify interface type 'findSubnetIf')
   state->dev = idFromEnv ? findSubnetIf : 0;
@@ -323,7 +305,7 @@ ncclResult_t bootstrapInit(ncclUniqueId* commId, int rank, int nranks, void** co
   }
 
   // send info on my listening socket to root
-  NCCLCHECK(bootstrapNetConnect(state->dev, id->extHandleRoot, &tmpSendComm));
+  NCCLCHECK(bootstrapNetConnect(state->dev, netHandle, &tmpSendComm));
   NCCLCHECK(bootstrapNetSend(tmpSendComm, &info, sizeof(info)));
   NCCLCHECK(bootstrapNetCloseSend(tmpSendComm));
 
@@ -334,7 +316,7 @@ ncclResult_t bootstrapInit(ncclUniqueId* commId, int rank, int nranks, void** co
   NCCLCHECK(bootstrapNetCloseRecv(tmpRecvComm));
   NCCLCHECK(bootstrapNetCloseListen(extBstrapListenCommRoot));
 
-  NCCLCHECK(bootstrapNetConnect(state->dev, extHandleNext, &state->extBstrapRingSendComm));
+  NCCLCHECK(bootstrapNetConnect(state->dev, &extHandleNext, &state->extBstrapRingSendComm));
   // Accept the connect request from the previous rank in the AllGather ring
   NCCLCHECK(bootstrapNetAccept(state->extBstrapListenComm, &state->extBstrapRingRecvComm));
 
@@ -377,7 +359,7 @@ ncclResult_t bootstrapAllGather(void* commState, void* allData, int size) {
 ncclResult_t bootstrapSend(void* commState, int peer, void* data, int size) {
   struct extState* state = (struct extState*)commState;
   void* tmpSendComm;
-  NCCLCHECK(bootstrapNetConnect(state->dev, state->peerBstrapHandles[peer], &tmpSendComm));
+  NCCLCHECK(bootstrapNetConnect(state->dev, state->peerBstrapHandles+peer, &tmpSendComm));
   NCCLCHECK(bootstrapNetSend(tmpSendComm, &state->rank, sizeof(int)));
   NCCLCHECK(bootstrapNetSend(tmpSendComm, data, size));
   NCCLCHECK(bootstrapNetCloseSend(tmpSendComm));
@@ -463,5 +445,15 @@ ncclResult_t bootstrapClose(void* commState) {
   free(state->peerBstrapHandles);
   free(state);
 
+  return ncclSuccess;
+}
+
+ncclResult_t bootstrapAbort(void* commState) {
+  struct extState* state = (struct extState*)commState;
+  bootstrapNetCloseListen(state->extBstrapListenComm);
+  bootstrapNetCloseSend(state->extBstrapRingSendComm);
+  bootstrapNetCloseRecv(state->extBstrapRingRecvComm);
+  free(state->peerBstrapHandles);
+  free(state);
   return ncclSuccess;
 }

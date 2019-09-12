@@ -263,8 +263,6 @@ __device__ __forceinline__ void ReduceCopyMulti(const int tid, const int nthread
   }
 }
 
-#define WARP_SIZE 32
-
 template<class FUNC, typename T, int UNROLL, int MINSRCS, int MAXSRCS, int MINDSTS, int MAXDSTS>
 __device__ __forceinline__ void ReduceCopy128bMulti( const int w, const int nw, const int t,
     int nsrcs, const T* s[MAXSRCS], int ndsts, T* d[MAXDSTS],

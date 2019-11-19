@@ -7,12 +7,15 @@
 #ifndef NCCL_TRANSPORT_H_
 #define NCCL_TRANSPORT_H_
 
-#include "nccl.h"
 #include "devcomm.h"
-#include <stdint.h>
+#include "graph.h"
 #include "nvmlwrap.h"
+#include "core.h"
 
 #define NTRANSPORTS 3
+#define TRANSPORT_P2P 0
+#define TRANSPORT_SHM 1
+#define TRANSPORT_NET 2
 
 extern struct ncclTransport ncclTransports[];
 
@@ -24,14 +27,12 @@ struct ncclComm;
 struct ncclPeerInfo {
   int rank;
   int cudaDev;
-  int nvmlDev;
+  int gdrSupport;
   uint64_t hostHash;
   uint64_t pidHash;
-  char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE];
+  dev_t shmDev;
+  int64_t busId;
 };
-
-// Used to hold the transport connection values
-typedef int64_t ncclTvalue_t;
 
 #define CONNECT_SIZE 128
 struct ncclConnect {
@@ -51,7 +52,7 @@ struct ncclProxyArgs {
   int chunkSteps;
   int nsteps;
   uint64_t opCount;
-  int llMode;
+  int protocol;
   int state;   // add component before this line -- it is left out during initialization
 
   // Internal state
@@ -78,7 +79,7 @@ struct ncclProxyState {
 };
 
 struct ncclTransportComm {
-  ncclResult_t (*setup)(struct ncclPeerInfo*, struct ncclPeerInfo*, struct ncclConnect*, struct ncclConnector*, int buffSize, int channelId);
+  ncclResult_t (*setup)(struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo*, struct ncclPeerInfo*, struct ncclConnect*, struct ncclConnector*, int buffSize, int channelId);
   ncclResult_t (*connect)(struct ncclConnect*, struct ncclConnector*);
   ncclResult_t (*free)(void*);
   ncclResult_t (*proxy)(struct ncclProxyArgs*);
@@ -86,8 +87,7 @@ struct ncclTransportComm {
 
 struct ncclTransport {
   const char name[4];
-  ncclResult_t (*canConnect)(ncclTvalue_t*, struct ncclPeerInfo*, struct ncclPeerInfo*);
-  ncclResult_t (*getRings)(int, int*, int*, ncclTvalue_t*, int*, int*, int*, int, int*);
+  ncclResult_t (*canConnect)(int*, struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo*, struct ncclPeerInfo*);
   struct ncclTransportComm send;
   struct ncclTransportComm recv;
 };

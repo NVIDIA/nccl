@@ -4,13 +4,4 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
-#ifndef NCCL_ARGCHECK_H_
-#define NCCL_ARGCHECK_H_
-
-#include "core.h"
-#include "info.h"
-
-ncclResult_t PtrCheck(void* ptr, const char* opname, const char* ptrname);
-ncclResult_t ArgsCheck(struct ncclInfo* info);
-
-#endif
+ncclResult_t ncclBuildRings(int nrings, int* rings, int rank, int nranks, int* prev, int* next);

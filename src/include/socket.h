@@ -66,7 +66,9 @@ static int findInterfaces(const char* prefixList, char* names, union socketAddre
 #endif
   struct netIf userIfs[MAX_IFS];
   bool searchNot = prefixList && prefixList[0] == '^';
+  if (searchNot) prefixList++;
   bool searchExact = prefixList && prefixList[0] == '=';
+  if (searchExact) prefixList++;
   int nUserIfs = parseStringList(prefixList, userIfs, MAX_IFS);
 
   int found = 0;
@@ -118,17 +120,17 @@ static int findInterfaces(const char* prefixList, char* names, union socketAddre
   return found;
 }
 
-static bool matchSubnet(struct ifaddrs local_if, union socketAddress remote) {
+static bool matchSubnet(struct ifaddrs local_if, union socketAddress* remote) {
   /* Check family first */
   int family = local_if.ifa_addr->sa_family;
-  if (family != remote.sa.sa_family) {
+  if (family != remote->sa.sa_family) {
     return false;
   }
 
   if (family == AF_INET) {
     struct sockaddr_in* local_addr = (struct sockaddr_in*)(local_if.ifa_addr);
     struct sockaddr_in* mask = (struct sockaddr_in*)(local_if.ifa_netmask);
-    struct sockaddr_in& remote_addr = remote.sin;
+    struct sockaddr_in& remote_addr = remote->sin;
     struct in_addr local_subnet, remote_subnet;
     local_subnet.s_addr = local_addr->sin_addr.s_addr & mask->sin_addr.s_addr;
     remote_subnet.s_addr = remote_addr.sin_addr.s_addr & mask->sin_addr.s_addr;
@@ -136,7 +138,7 @@ static bool matchSubnet(struct ifaddrs local_if, union socketAddress remote) {
   } else if (family == AF_INET6) {
     struct sockaddr_in6* local_addr = (struct sockaddr_in6*)(local_if.ifa_addr);
     struct sockaddr_in6* mask = (struct sockaddr_in6*)(local_if.ifa_netmask);
-    struct sockaddr_in6& remote_addr = remote.sin6;
+    struct sockaddr_in6& remote_addr = remote->sin6;
     struct in6_addr& local_in6 = local_addr->sin6_addr;
     struct in6_addr& mask_in6 = mask->sin6_addr;
     struct in6_addr& remote_in6 = remote_addr.sin6_addr;
@@ -161,7 +163,7 @@ static bool matchSubnet(struct ifaddrs local_if, union socketAddress remote) {
   }
 }
 
-static int findInterfaceMatchSubnet(char* ifNames, union socketAddress* localAddrs, union socketAddress remoteAddr, int ifNameMaxSize, int maxIfs) {
+static int findInterfaceMatchSubnet(char* ifNames, union socketAddress* localAddrs, union socketAddress* remoteAddr, int ifNameMaxSize, int maxIfs) {
 #ifdef ENABLE_TRACE
   char line[1024];
 #endif
@@ -189,13 +191,13 @@ static int findInterfaceMatchSubnet(char* ifNames, union socketAddress* localAdd
     // Store the interface name
     strncpy(ifNames+found*ifNameMaxSize, interface->ifa_name, ifNameMaxSize);
 
-    TRACE(NCCL_INIT|NCCL_NET,"NET : Found interface %s:%s in the same subnet as remote address %s", interface->ifa_name, socketToString(&(localAddrs[found].sa), line), socketToString(&(remoteAddr.sa), line_a));
+    TRACE(NCCL_INIT|NCCL_NET,"NET : Found interface %s:%s in the same subnet as remote address %s", interface->ifa_name, socketToString(&(localAddrs[found].sa), line), socketToString(&(remoteAddr->sa), line_a));
     found++;
     if (found == maxIfs) break;
   }
 
   if (found == 0) {
-    WARN("Net : No interface found in the same subnet as remote address %s", socketToString(&(remoteAddr.sa), line_a));
+    WARN("Net : No interface found in the same subnet as remote address %s", socketToString(&(remoteAddr->sa), line_a));
   }
   freeifaddrs(interfaces);
   return found;
@@ -300,7 +302,7 @@ static int findInterfaces(char* ifNames, union socketAddress *ifAddrs, int ifNam
         // Try to find interface that is in the same subnet as the IP in comm id
         union socketAddress idAddr;
         GetSocketAddrFromString(&idAddr, commId);
-        nIfs = findInterfaceMatchSubnet(ifNames, ifAddrs, idAddr, ifNameMaxSize, maxIfs);
+        nIfs = findInterfaceMatchSubnet(ifNames, ifAddrs, &idAddr, ifNameMaxSize, maxIfs);
       }
     }
     // Then look for anything else (but not docker or lo)
@@ -387,7 +389,7 @@ retry:
   if ((errno == ECONNREFUSED || errno == ETIMEDOUT)) {
     if ((errno == ECONNREFUSED && ++refused_retries < RETRY_REFUSED_TIMES) ||
         (errno == ETIMEDOUT && ++timedout_retries < RETRY_TIMEDOUT_TIMES)) {
-      INFO(NCCL_ALL,"Call to connect returned %s, retrying", strerror(errno));
+      if (refused_retries % 1000 == 0) INFO(NCCL_ALL,"Call to connect returned %s, retrying", strerror(errno));
       usleep(SLEEP_INT);
       goto retry;
     }

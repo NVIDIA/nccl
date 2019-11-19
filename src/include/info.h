@@ -8,6 +8,7 @@
 #define NCCL_INFO_H_
 
 #include "nccl.h"
+#include "core.h"
 
 typedef enum {
   ncclPatternRing,
@@ -21,7 +22,7 @@ typedef enum {
 
 // Used to pass NCCL call information between functions
 struct ncclInfo {
-  ncclColl_t coll;
+  ncclFunc_t coll;
   const char* opName;
   // NCCL Coll Args
   const void* sendbuff;
@@ -36,7 +37,11 @@ struct ncclInfo {
   int chunkSteps;
   int sliceSteps;
   // Computed later
+  int algorithm;
+  int protocol;
   ncclPattern_t pattern;
+  int nChannels;
+  int nThreads;
   size_t nBytes;
   int nstepsPerLoop;
   int nchunksPerLoop;

@@ -4,7 +4,7 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
-#include "nccl.h"
+#include "comm.h"
 #include "core.h"
 #include "socket.h"
 #include "net.h"
@@ -108,6 +108,7 @@ struct ncclSocketRequest {
   void* data;
   int size;
   int ctrlFd;
+  int offset;
   int used;
   struct ncclSocketComm* comm;
   struct ncclSocketTask* tasks[MAX_SOCKETS];
@@ -193,7 +194,7 @@ ncclResult_t ncclSocketGetNsockNthread(int dev, int* ns, int* nt) {
   }
   if (nThreads == -2 || nSocksPerThread == -2) {
     // Auto-detection
-    int autoNt=1, autoNs=1;
+    int autoNt=0, autoNs=1; // By default, we only use the main thread and do not spawn extra threads
     char vendorPath[PATH_MAX];
     snprintf(vendorPath, PATH_MAX, "/sys/class/net/%s/device/vendor", ncclNetIfNames+dev*MAX_IF_NAME_SIZE);
     char* rPath = realpath(vendorPath, NULL);
@@ -213,6 +214,9 @@ ncclResult_t ncclSocketGetNsockNthread(int dev, int* ns, int* nt) {
     if (strcmp(vendor, "0x1d0f") == 0) { // AWS
       autoNt = 2;
       autoNs = 8;
+    } else if (strcmp(vendor, "0x1ae0") == 0) { // GCP
+      autoNt = 4;
+      autoNs = 1;
     }
 end:
     if (nThreads == -2) nThreads = autoNt;
@@ -226,7 +230,7 @@ end:
   }
   *ns = nSocks;
   *nt = nThreads;
-  INFO(NCCL_INIT, "NET/Socket: Using %d threads and %d sockets per thread", nThreads, nSocksPerThread);
+  if (nSocks > 0) INFO(NCCL_INIT, "NET/Socket: Using %d threads and %d sockets per thread", nThreads, nSocksPerThread);
   return ncclSuccess;
 }
 
@@ -379,31 +383,45 @@ ncclResult_t ncclSocketTest(void* request, int* done, int* size) {
       return ncclInternalError;
     }
     r->size = data;
+    r->offset = 0;
     r->used = 2; // done exchanging size
     // divide into subtasks
-    int taskSize = std::max(MIN_CHUNKSIZE, DIVUP(r->size, r->comm->nSocks));
     int chunkOffset = 0, i = 0;
-    while (chunkOffset < r->size) {
-      int chunkSize = std::min(taskSize, r->size-chunkOffset);
-      NCCLCHECK(ncclSocketGetTask(r->comm, r->op, (char*)(r->data)+chunkOffset, chunkSize, r->tasks+i++));
-      chunkOffset += chunkSize;
+    if (r->comm->nSocks > 0) {
+      int taskSize = std::max(MIN_CHUNKSIZE, DIVUP(r->size, r->comm->nSocks));
+      while (chunkOffset < r->size) {
+        int chunkSize = std::min(taskSize, r->size-chunkOffset);
+        NCCLCHECK(ncclSocketGetTask(r->comm, r->op, (char*)(r->data)+chunkOffset, chunkSize, r->tasks+i++));
+        chunkOffset += chunkSize;
+      }
     }
     r->nSubs = i;
   }
   if (r->used == 2) { // already exchanged size
-    int nCompleted = 0;
-    for (int i=0; i<r->nSubs; i++) {
-      struct ncclSocketTask* sub = r->tasks[i];
-      if (sub->result != ncclSuccess) return sub->result;
-      if (sub->offset == sub->size) nCompleted++;
-    }
-    if (nCompleted == r->nSubs) {
-      if (size) *size = r->size;
-      *done = 1;
-      r->used = 0;
+    if (r->nSubs > 0) {
+      int nCompleted = 0;
       for (int i=0; i<r->nSubs; i++) {
         struct ncclSocketTask* sub = r->tasks[i];
-        sub->used = 0;
+        if (sub->result != ncclSuccess) return sub->result;
+        if (sub->offset == sub->size) nCompleted++;
+      }
+      if (nCompleted == r->nSubs) {
+        if (size) *size = r->size;
+        *done = 1;
+        r->used = 0;
+        for (int i=0; i<r->nSubs; i++) {
+          struct ncclSocketTask* sub = r->tasks[i];
+          sub->used = 0;
+        }
+      }
+    } else { // progress request using main thread
+      if (r->offset < r->size) {
+        NCCLCHECK(socketProgress(r->op, r->ctrlFd, r->data, r->size, &r->offset));
+      }
+      if (r->offset == r->size) {
+        if (size) *size = r->size;
+        *done = 1;
+        r->used = 0;
       }
     }
   }

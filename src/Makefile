@@ -9,10 +9,11 @@ include ../makefiles/version.mk
 
 ##### src files
 INCEXPORTS  := nccl.h nccl_net.h
-LIBSRCFILES := init.cc channel.cc bootstrap.cc transport.cc enqueue.cc \
-                misc/group.cc misc/nvmlwrap.cc misc/ibvwrap.cc misc/rings.cc misc/utils.cc misc/argcheck.cc misc/trees.cc misc/topo.cc \
+LIBSRCFILES := init.cc channel.cc bootstrap.cc transport.cc enqueue.cc group.cc debug.cc \
+                misc/nvmlwrap.cc misc/ibvwrap.cc misc/utils.cc misc/argcheck.cc \
 		transport/p2p.cc transport/shm.cc transport/net.cc transport/net_socket.cc transport/net_ib.cc \
-                collectives/all_reduce.cc collectives/all_gather.cc collectives/broadcast.cc collectives/reduce.cc collectives/reduce_scatter.cc
+                collectives/all_reduce.cc collectives/all_gather.cc collectives/broadcast.cc collectives/reduce.cc collectives/reduce_scatter.cc \
+                graph/topo.cc graph/paths.cc graph/search.cc graph/connect.cc graph/rings.cc graph/trees.cc graph/tuning.cc
 
 ##### lib files
 LIBNAME     := libnccl.so
@@ -94,17 +95,17 @@ $(PKGDIR)/nccl.pc : nccl.pc.in
 $(INCDIR)/%.h : %.h
 	@printf "Grabbing   %-35s > %s\n" $< $@
 	mkdir -p $(INCDIR)
-	cp -f $< $@
+	install -m 644 $< $@
 
 $(INCDIR)/nccl_%.h : include/nccl_%.h
 	@printf "Grabbing   %-35s > %s\n" $< $@
 	mkdir -p $(INCDIR)
-	cp -f $< $@
+	install -m 644 $< $@
 
 $(PKGDIR)/%.pc : %.pc
 	@printf "Grabbing   %-35s > %s\n" $< $@
 	mkdir -p $(PKGDIR)
-	cp -f $< $@
+	install -m 644 $< $@
 
 $(OBJDIR)/%.o : %.cc
 	@printf "Compiling  %-35s > %s\n" $< $@
@@ -117,8 +118,8 @@ $(OBJDIR)/%.o : %.cc
 	@rm -f $(@:%.o=%.d.tmp)
 
 clean :
-	rm -rf ${INCDIR} ${LIBDIR} ${PKGDIR} ${OBJDIR}
 	$(MAKE) -C collectives/device clean
+	rm -rf ${INCDIR} ${LIBDIR} ${PKGDIR} ${OBJDIR}
 
 install : lib
 	mkdir -p $(PREFIX)/lib

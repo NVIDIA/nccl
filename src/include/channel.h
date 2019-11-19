@@ -6,7 +6,7 @@
 
 #ifndef NCCL_CHANNEL_H_
 #define NCCL_CHANNEL_H_
-#include "core.h"
+#include "comm.h"
 
 ncclResult_t initChannel(struct ncclComm* comm, int channelid);
 ncclResult_t freeChannel(struct ncclChannel* channel, int nRanks);

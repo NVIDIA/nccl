@@ -16,13 +16,8 @@ DEBFILES   := compat copyright libnccl-dev.install rules $(DEBGEN)
 DEBTARGETS := $(patsubst %, $(DEBPREPDIR)/%, $(DEBFILES))
 
 PKG_TIMESTAMP  := $(shell date -R)
-ARCH           := $(shell uname -m)
-PKG_ARCH       ?= $(shell uname -m | sed -e "s/x86_64/amd64/g" | sed -e "s/ppc64le/ppc64el/g"| sed -e "s/aarch64/arm64/g")
-PKG_MULTIARCH  ?= $(shell $(CXX) -print-multiarch)
-ifeq ($(PKG_MULTIARCH),)
-# Hardwire the PKG_MULTIARCH directory as the RHEL6 distribution agnostic compiler (gcc 4.8.3) doesn't set it
-PKG_MULTIARCH  := $(ARCH)-linux-gnu
-endif
+PKG_ARCH       ?= $(shell dpkg-architecture -qDEB_HOST_ARCH)
+PKG_MULTIARCH  ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
 
 prep : $(DEBTARGETS)
 	$(MAKE) -C ../.. lic BUILDDIR=$(BUILDDIR)

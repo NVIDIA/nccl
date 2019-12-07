@@ -124,9 +124,17 @@ ncclResult_t ncclGetUniqueId(ncclUniqueId* out) {
 }
 
 // Prevent compiler from optimizing out these operations
-void __attribute__((optimize("O0"))) commPoison(ncclComm_t comm) {
+#ifdef __clang__
+#define NCCL_NO_OPTIMIZE __attribute__((noopt))
+#else
+#define NCCL_NO_OPTIMIZE __attribute__((optimize("O0")))
+#endif
+
+void NCCL_NO_OPTIMIZE commPoison(ncclComm_t comm) {
   comm->rank = comm->cudaDev = comm->busId = comm->nRanks = -1;
 }
+
+#undef NCCL_NO_OPTIMIZE
 
 static ncclResult_t commFree(ncclComm_t comm) {
   if (comm == NULL)

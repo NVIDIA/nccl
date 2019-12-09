@@ -125,7 +125,7 @@ ncclResult_t ncclGetUniqueId(ncclUniqueId* out) {
 
 // Prevent compiler from optimizing out these operations
 #ifdef __clang__
-#define NCCL_NO_OPTIMIZE __attribute__((noopt))
+#define NCCL_NO_OPTIMIZE __attribute__((optnone))
 #else
 #define NCCL_NO_OPTIMIZE __attribute__((optimize("O0")))
 #endif

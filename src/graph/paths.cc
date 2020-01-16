@@ -179,10 +179,17 @@ static ncclResult_t addCpuStep(struct ncclTopoSystem* system, int c, int t1, int
 // Remove/free paths for a given type
 static void ncclTopoRemovePathType(struct ncclTopoSystem* system, int nodeType) {
   for (int t=0; t<NCCL_TOPO_NODE_TYPES; t++) {
+    // Remove links _to_ the given type
     for (int n=0; n<system->nodes[t].count; n++) {
       struct ncclTopoNode* node = system->nodes[t].nodes+n;
       free(node->paths[nodeType]);
       node->paths[nodeType] = NULL;
+    }
+    // Remove links _from_ the given type
+    for (int n=0; n<system->nodes[nodeType].count; n++) {
+      struct ncclTopoNode* node = system->nodes[nodeType].nodes+n;
+      free(node->paths[t]);
+      node->paths[t] = NULL;
     }
   }
 }
@@ -309,6 +316,22 @@ ncclResult_t ncclTopoTrimSystem(struct ncclTopoSystem* system, struct ncclComm* 
     // Trim network
     ncclTopoRemovePathType(system, NET);
     system->nodes[NET].count = 0;
+    for (int t=0; t<NCCL_TOPO_NODE_TYPES; t++) {
+      for (int n=0; n<system->nodes[t].count; n++) {
+        struct ncclTopoNode* node = system->nodes[t].nodes+n;
+        for (int l=0; l<node->nlinks; l++) {
+          struct ncclTopoLink* link = &(node->links[l]);
+          if (link->remNode->type == NET) {
+            // Remove the link
+            for (int i=l; i<(node->nlinks-1); i++) {
+              memcpy(&(node->links[i]), &(node->links[i+1]), sizeof(ncclTopoLink));
+            }
+            node->nlinks--;
+            l--;  // revisit the same value of "l" for the next iteration, since we edited the list in the middle of the loop
+          }
+        }
+      }
+    }
   }
   free(domains);
   free(ids);

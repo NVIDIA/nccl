@@ -29,11 +29,6 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
 
 // Let code temporarily downgrade WARN into INFO
 extern thread_local int ncclDebugNoWarn;
-#define NOWARN(a, ret) do { \
-  ncclDebugNoWarn = 1; \
-  ret = a; \
-  ncclDebugNoWarn = 0; \
-} while (0)
 
 #define WARN(...) ncclDebugLog(NCCL_LOG_WARN, NCCL_ALL, __FILE__, __LINE__, __VA_ARGS__)
 #define INFO(FLAGS, ...) ncclDebugLog(NCCL_LOG_INFO, (FLAGS), __func__, __LINE__, __VA_ARGS__)

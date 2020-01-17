@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2018-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2018-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -19,7 +19,7 @@ static int hexToInt(char c) {
 
 #define CPU_SET_N_U32 (sizeof(cpu_set_t)/sizeof(uint32_t))
 
-ncclResult_t ncclStrToCpuset(char* str, cpu_set_t* mask) {
+ncclResult_t ncclStrToCpuset(const char* str, cpu_set_t* mask) {
   uint32_t cpumasks[CPU_SET_N_U32];
   int m = CPU_SET_N_U32-1;
   cpumasks[m] = 0;

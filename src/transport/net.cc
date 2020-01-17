@@ -53,40 +53,6 @@ ncclResult_t netCanConnect(int* ret, struct ncclTopoSystem* topo, struct ncclTop
   return ncclSuccess;
 }
 
-NCCL_PARAM(NetGdrRead, "NET_GDR_READ", -2);
-NCCL_PARAM(NetGdrLevel, "NET_GDR_LEVEL", PATH_PHB);
-
-static ncclResult_t netGetGdrSupport(struct ncclTopoSystem* topo, int64_t busId, int netDev, int read, int* useGdr) {
-  *useGdr = 0;
-
-  if (read) { // For reads (sends) only enable under certain conditions
-    int gdrReadParam = ncclParamNetGdrRead();
-    if (gdrReadParam == 0) return ncclSuccess;
-    if (gdrReadParam < 0) {
-       int nvlink;
-       NCCLCHECK(ncclTopoHasNvlink(topo, busId, &nvlink));
-       if (!nvlink) return ncclSuccess;
-    }
-  }
-
-  // Check if we are close enough that it makes sense to enable GDR
-  int netGdrLevel = ncclParamNetGdrLevel();
-  int distance;
-  NCCLCHECK(ncclTopoNetDistance(topo, busId, netDev, &distance));
-  if (distance >= netGdrLevel) {
-    INFO(NCCL_NET,"NET/%s : GPU Direct RDMA Disabled for GPU %lx / HCA %d (distance %d >= %d)", ncclNetName(), busId, netDev, distance, netGdrLevel);
-    return ncclSuccess;
-  }
-
-  // Finally, check if the NIC supports it
-  int flags;
-  NCCLCHECK(ncclNetPtrSupport(netDev, &flags));
-  if ((flags & NCCL_PTR_CUDA) == 0) return ncclSuccess;
-  *useGdr = 1;
-  INFO(NCCL_NET,"NET/%s : GPU Direct RDMA Enabled for GPU %lx / HCA %d (distance %d < %d), read %d", ncclNetName(), busId, netDev, distance, netGdrLevel, read);
-  return ncclSuccess;
-}
-
 /* Determine if we will use this transport for this peer and return connect
  * information for this peer */
 ncclResult_t netSendSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo, struct ncclConnect* connectInfo, struct ncclConnector* send, int buffSize, int channelId) {
@@ -95,7 +61,7 @@ ncclResult_t netSendSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
   send->transportResources = resources;
 
   NCCLCHECK(ncclTopoGetNetDev(graph, 1, channelId, &resources->netDev));
-  NCCLCHECK(netGetGdrSupport(topo, myInfo->busId, resources->netDev, 1, &resources->useGdr));
+  NCCLCHECK(ncclTopoCheckGdr(topo, myInfo->busId, resources->netDev, 1, &resources->useGdr));
 
   int sendSize = sizeof(struct ncclSendMem);
   NCCLCHECK(ncclCudaHostAlloc((void**)&resources->hostSendMem, (void**)&resources->devHostSendMem, sendSize));
@@ -118,7 +84,7 @@ ncclResult_t netRecvSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
   recv->transportResources = resources;
 
   NCCLCHECK(ncclTopoGetNetDev(graph, 0, channelId, &resources->netDev));
-  NCCLCHECK(netGetGdrSupport(topo, myInfo->busId, resources->netDev, 0, &resources->useGdr));
+  NCCLCHECK(ncclTopoCheckGdr(topo, myInfo->busId, resources->netDev, 0, &resources->useGdr));
 
   int sendSize = sizeof(struct ncclSendMem);
   NCCLCHECK(ncclCudaHostAlloc((void**)&resources->hostSendMem, (void**)&resources->devHostSendMem, sendSize));
@@ -137,7 +103,7 @@ ncclResult_t netRecvSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
   return ncclSuccess;
 }
 
-ncclResult_t netSendConnect(struct ncclConnect* connectInfo, struct ncclConnector* send) {
+ncclResult_t netSendConnect(struct ncclConnect* connectInfo, int nranks, int rank, struct ncclConnector* send) {
   // Setup device pointers
   struct netSendResources* resources = (struct netSendResources*)send->transportResources;
 
@@ -146,6 +112,7 @@ ncclResult_t netSendConnect(struct ncclConnect* connectInfo, struct ncclConnecto
   send->conn.buff = recvMem->buff;
   send->conn.llBuff = resources->devHostRecvMem->llBuff;
   send->conn.ll128Buff = recvMem->ll128Buff;
+  send->conn.direct |= resources->useGdr ? NCCL_DIRECT_NIC : 0;
 
   // Head/Tail/Opcount/Fifos are always on host
   send->conn.tail = &resources->devHostRecvMem->tail;
@@ -170,7 +137,7 @@ ncclResult_t netSendConnect(struct ncclConnect* connectInfo, struct ncclConnecto
 }
 
 /* Connect to this peer */
-ncclResult_t netRecvConnect(struct ncclConnect* connectInfo, struct ncclConnector* recv) {
+ncclResult_t netRecvConnect(struct ncclConnect* connectInfo, int nranks, int rank, struct ncclConnector* recv) {
   // Setup device pointers
   struct netRecvResources* resources = (struct netRecvResources*)recv->transportResources;
 
@@ -179,6 +146,7 @@ ncclResult_t netRecvConnect(struct ncclConnect* connectInfo, struct ncclConnecto
   recv->conn.buff = recvMem->buff;
   recv->conn.llBuff = recvMem->llBuff;
   recv->conn.ll128Buff = recvMem->ll128Buff;
+  recv->conn.direct |= resources->useGdr ? NCCL_DIRECT_NIC : 0;
 
   // Head/Tail/Opcount are always on host
   recv->conn.tail = &resources->devHostRecvMem->tail;

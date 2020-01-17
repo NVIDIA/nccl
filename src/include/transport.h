@@ -53,6 +53,8 @@ struct ncclProxyArgs {
   int nsteps;
   uint64_t opCount;
   int protocol;
+  ncclDataType_t dtype;
+  ncclRedOp_t redOp;
   int state;   // add component before this line -- it is left out during initialization
 
   // Internal state
@@ -80,7 +82,7 @@ struct ncclProxyState {
 
 struct ncclTransportComm {
   ncclResult_t (*setup)(struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo*, struct ncclPeerInfo*, struct ncclConnect*, struct ncclConnector*, int buffSize, int channelId);
-  ncclResult_t (*connect)(struct ncclConnect*, struct ncclConnector*);
+  ncclResult_t (*connect)(struct ncclConnect*, int nranks, int rank, struct ncclConnector*);
   ncclResult_t (*free)(void*);
   ncclResult_t (*proxy)(struct ncclProxyArgs*);
 };

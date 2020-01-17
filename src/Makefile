@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2015-2019, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2015-2020, NVIDIA CORPORATION. All rights reserved.
 #
 # See LICENSE.txt for license information
 #
@@ -11,9 +11,9 @@ include ../makefiles/version.mk
 INCEXPORTS  := nccl.h nccl_net.h
 LIBSRCFILES := init.cc channel.cc bootstrap.cc transport.cc enqueue.cc group.cc debug.cc \
                 misc/nvmlwrap.cc misc/ibvwrap.cc misc/utils.cc misc/argcheck.cc \
-		transport/p2p.cc transport/shm.cc transport/net.cc transport/net_socket.cc transport/net_ib.cc \
+		transport/p2p.cc transport/shm.cc transport/net.cc transport/net_socket.cc transport/net_ib.cc transport/coll_net.cc \
                 collectives/all_reduce.cc collectives/all_gather.cc collectives/broadcast.cc collectives/reduce.cc collectives/reduce_scatter.cc \
-                graph/topo.cc graph/paths.cc graph/search.cc graph/connect.cc graph/rings.cc graph/trees.cc graph/tuning.cc
+                graph/topo.cc graph/paths.cc graph/search.cc graph/connect.cc graph/rings.cc graph/trees.cc graph/tuning.cc graph/xml.cc
 
 ##### lib files
 LIBNAME     := libnccl.so

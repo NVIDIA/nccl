@@ -17,7 +17,8 @@ __device__ volatile uint64_t* ncclShmem;
 
 #define NCCL_FUNC4(coll, op, dtype) \
   NCCL_FUNC5(coll##Tree, op, dtype), \
-  NCCL_FUNC5(coll##Ring, op, dtype)
+  NCCL_FUNC5(coll##Ring, op, dtype), \
+  NCCL_FUNC5(coll##CollNet, op, dtype)
 
 // Must be consistent with ncclDataType_t
 #define NCCL_FUNCS3A(coll, op) \

@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -107,7 +107,6 @@ void ncclDebugInit() {
     if (debugFn[0] != '\0') {
       FILE *file = fopen(debugFn, "w");
       if (file != NULL) {
-        INFO(NCCL_ALL,"DEBUG file is '%s'", debugFn);
         ncclDebugFile = file;
       }
     }
@@ -125,7 +124,7 @@ void ncclDebugInit() {
  */
 void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *filefunc, int line, const char *fmt, ...) {
   if (ncclDebugLevel == -1) ncclDebugInit();
-  if (ncclDebugNoWarn == 1 && level == NCCL_LOG_WARN) level = NCCL_LOG_INFO;
+  if (ncclDebugNoWarn != 0 && level == NCCL_LOG_WARN) { level = NCCL_LOG_INFO; flags = ncclDebugNoWarn; }
 
   char hostname[1024];
   getHostName(hostname, 1024, '.');
@@ -135,7 +134,6 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
   char buffer[1024];
   size_t len = 0;
   pthread_mutex_lock(&ncclDebugLock);
-  if (ncclDebugNoWarn && ncclDebugLevel == NCCL_LOG_WARN) printf("WARN -> INFO\n");
   if (level == NCCL_LOG_WARN && ncclDebugLevel >= NCCL_LOG_WARN)
     len = snprintf(buffer, sizeof(buffer),
                    "\n%s:%d:%d [%d] %s:%d NCCL WARN ", hostname, getpid(), gettid(), cudaDev, filefunc, line);

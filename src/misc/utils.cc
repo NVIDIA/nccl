@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -24,7 +24,7 @@ ncclResult_t int64ToBusId(int64_t id, char* busId) {
   return ncclSuccess;
 }
 
-ncclResult_t busIdToInt64(char* busId, int64_t* id) {
+ncclResult_t busIdToInt64(const char* busId, int64_t* id) {
   const int size = strlen(busId);
   char* hexStr;
   NCCLCHECK(ncclCalloc(&hexStr, size));

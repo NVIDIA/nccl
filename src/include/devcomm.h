@@ -8,18 +8,11 @@
 #define NCCL_DEVICE_H_
 
 #include "nccl.h"
+#include "align.h"
 #include <stdint.h>
 
 #define NCCL_MAX_OPS 2048
 #define NCCL_STEPS 8
-
-#define DIVUP(x, y) \
-    (((x)+(y)-1)/(y))
-#define ROUNDUP(x, y) \
-    (DIVUP((x), (y))*(y))
-
-#define ALIGN_SIZE(size, align) \
-  size = ((size + (align) - 1) / (align)) * (align);
 
 union ncclLLFifoLine {
   /* Flags have to be *after* data, because otherwise, an incomplete receive
@@ -72,6 +65,9 @@ static_assert(NCCL_LL_CLEAN_MASK % NCCL_STEPS == 0, "Invalid NCCL_LL_CLEAN_MASK 
 
 #define NCCL_LL128_SHMEM_ELEMS_PER_THREAD 8
 #define NCCL_LL128_SHMEM_SIZE (NCCL_LL128_SHMEM_ELEMS_PER_THREAD*NCCL_LL128_MAX_NTHREADS)
+
+#define NCCL_DIRECT_GPU 0x01
+#define NCCL_DIRECT_NIC 0x10
 
 struct ncclConnInfo {
   // Regular comm mechanism
@@ -171,6 +167,8 @@ struct ncclChannel {
       struct ncclRing ring;
       struct ncclTree treeUp;
       struct ncclTree treeDn;
+      struct ncclTree collTreeUp;
+      struct ncclTree collTreeDn;
 
       int id;
       int nthreads;

@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -143,12 +143,12 @@ class ncclPrimitives {
   }
 
   template <int DIRECTRECV>
-  inline __device__ const T* directRecvPtr(int i, int directOffset) {
+  inline __device__ const T* directRecvPtr(int i, ssize_t directOffset) {
     return DIRECTRECV && recvDirectBuff[i] ? recvDirectBuff[i]+directOffset : recvPtr(i);
   }
 
   template <int DIRECTSEND>
-  inline __device__ T* directSendPtr(int i, int directOffset) {
+  inline __device__ T* directSendPtr(int i, ssize_t directOffset) {
     return DIRECTSEND && sendDirectBuff[i] ? sendDirectBuff[i]+directOffset : sendPtr(i);
   }
 
@@ -164,7 +164,7 @@ class ncclPrimitives {
 
   template <int DIRECTRECV, int DIRECTSEND, int RECV, int SEND, int SRC, int DST>
   inline __device__ void
-  GenericOp(const T* srcPtr, T* dstPtr, int nelem, int directOffset) {
+  GenericOp(const T* srcPtr, T* dstPtr, int nelem, ssize_t directOffset) {
     int offset = 0;
     int sliceSize = stepSize*SLICESTEPS;
     int dataSize = max(DIVUP(nelem, 16*SLICESPERCHUNK)*16, sliceSize/32);
@@ -310,7 +310,7 @@ class ncclPrimitives {
     GenericOp<0, 0, 0, 1, 1, 0>(src, NULL, nelem, 0);
   }
   __device__ __forceinline__ void
-  directSend(const T* src, int directOffset, int nelem) {
+  directSend(const T* src, ssize_t directOffset, int nelem) {
     GenericOp<0, 1, 0, 1, 1, 0>(src, NULL, nelem, directOffset);
   }
 
@@ -319,7 +319,7 @@ class ncclPrimitives {
     GenericOp<0, 0, 1, 0, 0, 1>(NULL, dst, nelem, 0);
   }
   __device__ __forceinline__ void
-  directRecv(T* dst, int directOffset, int nelem) {
+  directRecv(T* dst, ssize_t directOffset, int nelem) {
     GenericOp<1, 0, 1, 0, 0, 1>(NULL, dst, nelem, directOffset);
   }
 
@@ -328,7 +328,7 @@ class ncclPrimitives {
     GenericOp<0, 0, 0, 1, 1, 1>(src, dst, nelem, 0);
   }
   __device__ __forceinline__ void
-  directCopySend(const T* src, T* dst, int directOffset, int nelem) {
+  directCopySend(const T* src, T* dst, ssize_t directOffset, int nelem) {
     GenericOp<0, 1, 0, 1, 1, 1>(src, dst, nelem, directOffset);
   }
 
@@ -337,7 +337,7 @@ class ncclPrimitives {
     GenericOp<0, 0, 1, 1, 0, 1>(NULL, dst, nelem, 0);
   }
   __device__ __forceinline__ void
-  directRecvCopySend(T* dst, int directOffset, int nelem) {
+  directRecvCopySend(T* dst, ssize_t directOffset, int nelem) {
     GenericOp<1, 1, 1, 1, 0, 1>(NULL, dst, nelem, directOffset);
   }
 
@@ -356,7 +356,7 @@ class ncclPrimitives {
     GenericOp<0, 0, 1, 1, 1, 1>(src, dst, nelem, 0);
   }
   __device__ __forceinline__ void
-  directRecvReduceCopySend(const T* src, T* dst, int directOffset, int nelem) {
+  directRecvReduceCopySend(const T* src, T* dst, ssize_t directOffset, int nelem) {
     // Direct is only for the send part
     GenericOp<0, 1, 1, 1, 1, 1>(src, dst, nelem, directOffset);
   }

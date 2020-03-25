@@ -9,113 +9,11 @@
 
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
-
-#define NCCL_MAJOR ${nccl:Major}
-#define NCCL_MINOR ${nccl:Minor}
-#define NCCL_PATCH ${nccl:Patch}
-#define NCCL_SUFFIX "${nccl:Suffix}"
-
-#define NCCL_VERSION_CODE ${nccl:Version}
-#define NCCL_VERSION(X,Y,Z) ((X) * 1000 + (Y) * 100 + (Z))
+#include <nccl_types.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/* Opaque handle to communicator */
-typedef struct ncclComm* ncclComm_t;
-
-#define NCCL_UNIQUE_ID_BYTES 128
-typedef struct { char internal[NCCL_UNIQUE_ID_BYTES]; } ncclUniqueId;
-
-/* Error type */
-typedef enum { ncclSuccess                 =  0,
-               ncclUnhandledCudaError      =  1,
-               ncclSystemError             =  2,
-               ncclInternalError           =  3,
-               ncclInvalidArgument         =  4,
-               ncclInvalidUsage            =  5,
-               ncclNumResults              =  6 } ncclResult_t;
-
-/* Return the NCCL_VERSION_CODE of the NCCL library in the supplied integer.
- * This integer is coded with the MAJOR, MINOR and PATCH level of the
- * NCCL library
- */
-ncclResult_t  ncclGetVersion(int *version);
-ncclResult_t pncclGetVersion(int *version);
-
-/* Generates an Id to be used in ncclCommInitRank. ncclGetUniqueId should be
- * called once and the Id should be distributed to all ranks in the
- * communicator before calling ncclCommInitRank. */
-ncclResult_t  ncclGetUniqueId(ncclUniqueId* uniqueId);
-ncclResult_t pncclGetUniqueId(ncclUniqueId* uniqueId);
-
-/* Creates a new communicator (multi thread/process version).
- * rank must be between 0 and nranks-1 and unique within a communicator clique.
- * Each rank is associated to a CUDA device, which has to be set before calling
- * ncclCommInitRank.
- * ncclCommInitRank implicitly syncronizes with other ranks, so it must be
- * called by different threads/processes or use ncclGroupStart/ncclGroupEnd. */
-ncclResult_t  ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId commId, int rank);
-ncclResult_t pncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId commId, int rank);
-
-/* Creates a clique of communicators (single process version).
- * This is a convenience function to create a single-process communicator clique.
- * Returns an array of ndev newly initialized communicators in comm.
- * comm should be pre-allocated with size at least ndev*sizeof(ncclComm_t).
- * If devlist is NULL, the first ndev CUDA devices are used.
- * Order of devlist defines user-order of processors within the communicator. */
-ncclResult_t  ncclCommInitAll(ncclComm_t* comm, int ndev, const int* devlist);
-ncclResult_t pncclCommInitAll(ncclComm_t* comm, int ndev, const int* devlist);
-
-/* Frees resources associated with communicator object, but waits for any operations
- * that might still be running on the device. */
-ncclResult_t  ncclCommDestroy(ncclComm_t comm);
-ncclResult_t pncclCommDestroy(ncclComm_t comm);
-
-/* Frees resources associated with communicator object and aborts any operations
- * that might still be running on the device. */
-ncclResult_t  ncclCommAbort(ncclComm_t comm);
-ncclResult_t pncclCommAbort(ncclComm_t comm);
-
-/* Returns a human-readable error message. */
-const char*  ncclGetErrorString(ncclResult_t result);
-const char* pncclGetErrorString(ncclResult_t result);
-
-/* Checks whether the comm has encountered any asynchronous errors */
-ncclResult_t  ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t *asyncError);
-ncclResult_t pncclCommGetAsyncError(ncclComm_t comm, ncclResult_t *asyncError);
-
-/* Gets the number of ranks in the communicator clique. */
-ncclResult_t  ncclCommCount(const ncclComm_t comm, int* count);
-ncclResult_t pncclCommCount(const ncclComm_t comm, int* count);
-
-/* Returns the cuda device number associated with the communicator. */
-ncclResult_t  ncclCommCuDevice(const ncclComm_t comm, int* device);
-ncclResult_t pncclCommCuDevice(const ncclComm_t comm, int* device);
-
-/* Returns the user-ordered "rank" associated with the communicator. */
-ncclResult_t  ncclCommUserRank(const ncclComm_t comm, int* rank);
-ncclResult_t pncclCommUserRank(const ncclComm_t comm, int* rank);
-
-/* Reduction operation selector */
-typedef enum { ncclSum        = 0,
-               ncclProd       = 1,
-               ncclMax        = 2,
-               ncclMin        = 3,
-               ncclNumOps     = 4 } ncclRedOp_t;
-
-/* Data types */
-typedef enum { ncclInt8       = 0, ncclChar       = 0,
-               ncclUint8      = 1,
-               ncclInt32      = 2, ncclInt        = 2,
-               ncclUint32     = 3,
-               ncclInt64      = 4,
-               ncclUint64     = 5,
-               ncclFloat16    = 6, ncclHalf       = 6,
-               ncclFloat32    = 7, ncclFloat      = 7,
-               ncclFloat64    = 8, ncclDouble     = 8,
-               ncclNumTypes   = 9 } ncclDataType_t;
 
 /*
  * Collective communication operations

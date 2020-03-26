@@ -77,4 +77,24 @@ int64_t ncclParam##name() { \
   return value; \
 }
 
+
+// Returns a pointer to NULL-terminated static string.
+#define NCCL_STR_PARAM(name, env, default_value) \
+pthread_mutex_t ncclParamMutex##name = PTHREAD_MUTEX_INITIALIZER; \
+char* ncclParam##name() { \
+  static_assert(default_value != NULL, "default value cannot be NULL"); \
+  static char* value = NULL; \
+  pthread_mutex_lock(&ncclParamMutex##name); \
+  if (value == NULL) { \
+    value = default_value; \
+    char* str = secure_getenv("NCCL_" env); \
+    if (str != NULL) { \
+      value = str; \
+      INFO(NCCL_ALL,"%s set by environment to %lu.", "NCCL_" env, value);  \
+    } \
+  } \
+  pthread_mutex_unlock(&ncclParamMutex##name); \
+  return value; \
+}
+
 #endif

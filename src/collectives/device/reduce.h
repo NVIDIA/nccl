@@ -50,6 +50,9 @@ __device__ void ncclReduceRingKernel(struct CollectiveArgs* args) {
 template<int UNROLL, class FUNC, typename T>
 __device__ void ncclReduceTreeKernel(struct CollectiveArgs* args) { }
 
+template<int UNROLL, class FUNC, typename T>
+__device__ void ncclReduceCollNetKernel(struct CollectiveArgs* args) { }
+
 template<int UNUSED, class FUNC, typename T>
 __device__ void ncclReduceRingLLKernel(struct CollectiveArgs* args) {
   const int tid = threadIdx.x;
@@ -93,6 +96,9 @@ __device__ void ncclReduceRingLLKernel(struct CollectiveArgs* args) {
 
 template<int UNUSED, class FUNC, typename T>
 __device__ void ncclReduceTreeLLKernel(struct CollectiveArgs* args) { }
+
+template<int UNUSED, class FUNC, typename T>
+__device__ void ncclReduceCollNetLLKernel(struct CollectiveArgs* args) { }
 
 #include "prims_ll128.h"
 template<int UNUSED, class FUNC, typename T>
@@ -138,3 +144,6 @@ __device__ void ncclReduceRingLL128Kernel(struct CollectiveArgs* args) {
 
 template<int UNUSED, class FUNC, typename T>
 __device__ void ncclReduceTreeLL128Kernel(struct CollectiveArgs* args) { }
+
+template<int UNUSED, class FUNC, typename T>
+__device__ void ncclReduceCollNetLL128Kernel(struct CollectiveArgs* args) { }

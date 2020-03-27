@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -19,16 +19,31 @@
 #include <fcntl.h>
 
 /* Init functions */
-static char ncclNetIfNames[MAX_IF_NAME_SIZE*MAX_IFS];
-static union socketAddress ncclNetIfAddrs[MAX_IFS];
 static int ncclNetIfs = -1;
+struct ncclSocketDev {
+  union socketAddress addr;
+  char devName[MAX_IF_NAME_SIZE];
+  char* pciPath;
+};
+static struct ncclSocketDev ncclSocketDevs[MAX_IFS];
+
 pthread_mutex_t ncclSocketLock = PTHREAD_MUTEX_INITIALIZER;
+
+static ncclResult_t ncclSocketGetPciPath(char* devName, char** pciPath) {
+  char devicePath[PATH_MAX];
+  snprintf(devicePath, PATH_MAX, "/sys/class/net/%s/device", devName);
+  // May return NULL if the file doesn't exist.
+  *pciPath = realpath(devicePath, NULL);
+  return ncclSuccess;
+}
 
 ncclResult_t ncclSocketInit(ncclDebugLogger_t logFunction) {
   if (ncclNetIfs == -1) {
     pthread_mutex_lock(&ncclSocketLock);
     if (ncclNetIfs == -1) {
-      ncclNetIfs = findInterfaces(ncclNetIfNames, ncclNetIfAddrs, MAX_IF_NAME_SIZE, MAX_IFS);
+      char names[MAX_IF_NAME_SIZE*MAX_IFS];
+      union socketAddress addrs[MAX_IFS];
+      ncclNetIfs = findInterfaces(names, addrs, MAX_IF_NAME_SIZE, MAX_IFS);
       if (ncclNetIfs <= 0) {
         WARN("NET/Socket : no interface found");
         return ncclInternalError;
@@ -37,8 +52,11 @@ ncclResult_t ncclSocketInit(ncclDebugLogger_t logFunction) {
         char addrline[1024];
         line[0] = '\0';
         for (int i=0; i<ncclNetIfs; i++) {
-          snprintf(line+strlen(line), 1023-strlen(line), " [%d]%s:%s", i, ncclNetIfNames+i*MAX_IF_NAME_SIZE,
-              socketToString(&ncclNetIfAddrs[i].sa, addrline));
+          strcpy(ncclSocketDevs[i].devName, names+i*MAX_IF_NAME_SIZE);
+          memcpy(&ncclSocketDevs[i].addr, addrs+i, sizeof(union socketAddress));
+          NCCLCHECK(ncclSocketGetPciPath(ncclSocketDevs[i].devName, &ncclSocketDevs[i].pciPath));
+          snprintf(line+strlen(line), 1023-strlen(line), " [%d]%s:%s", i, names+i*MAX_IF_NAME_SIZE,
+              socketToString(&addrs[i].sa, addrline));
         }
         line[1023] = '\0';
         INFO(NCCL_INIT|NCCL_NET,"NET/Socket : Using%s", line);
@@ -49,30 +67,44 @@ ncclResult_t ncclSocketInit(ncclDebugLogger_t logFunction) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclSocketPtrSupport(int dev, int* supportedTypes) {
-  *supportedTypes = NCCL_PTR_HOST;
-  return ncclSuccess;
-}
-
 ncclResult_t ncclSocketDevices(int* ndev) {
   *ndev = ncclNetIfs;
   return ncclSuccess;
 }
 
-ncclResult_t ncclSocketPciPath(int dev, char** path) {
-  char devicepath[PATH_MAX];
-  snprintf(devicepath, PATH_MAX, "/sys/class/net/%s/device", ncclNetIfNames+dev*MAX_IF_NAME_SIZE);
-  *path = realpath(devicepath, NULL);
-  if (*path == NULL) {
-    INFO(NCCL_NET|NCCL_INIT, "Could not find real path of %s", devicepath);
-    return ncclSystemError;
+static ncclResult_t ncclSocketGetSpeed(char* devName, int* speed) {
+  *speed = 0;
+  char speedPath[PATH_MAX];
+  sprintf(speedPath, "/sys/class/net/%s/speed", devName);
+  int fd = open(speedPath, O_RDONLY);
+  if (fd != -1) {
+    char speedStr[] = "        ";
+    if (read(fd, speedStr, sizeof(speedStr)-1) > 0) {
+      *speed = strtol(speedStr, NULL, 0);
+    }
+    close(fd);
   }
+  if (*speed <= 0) {
+    INFO(NCCL_NET, "Could not get speed from %s. Defaulting to 10 Gbps.", speedPath);
+    *speed = 10000;
+  }
+  return ncclSuccess;
+}
+
+ncclResult_t ncclSocketGetProperties(int dev, ncclNetProperties_t* props) {
+  props->name = ncclSocketDevs[dev].devName;
+  props->pciPath = ncclSocketDevs[dev].pciPath;
+  props->guid = dev;
+  props->ptrSupport = NCCL_PTR_HOST;
+  NCCLCHECK(ncclSocketGetSpeed(props->name, &props->speed));
+  props->port = 0;
+  props->maxComms = 65536;
   return ncclSuccess;
 }
 
 ncclResult_t GetSocketAddr(int dev, union socketAddress* addr) {
   if (dev >= ncclNetIfs) return ncclInternalError;
-  memcpy(addr, ncclNetIfAddrs+dev, sizeof(*addr));
+  memcpy(addr, &ncclSocketDevs[dev].addr, sizeof(*addr));
   return ncclSuccess;
 }
 
@@ -196,7 +228,7 @@ ncclResult_t ncclSocketGetNsockNthread(int dev, int* ns, int* nt) {
     // Auto-detection
     int autoNt=0, autoNs=1; // By default, we only use the main thread and do not spawn extra threads
     char vendorPath[PATH_MAX];
-    snprintf(vendorPath, PATH_MAX, "/sys/class/net/%s/device/vendor", ncclNetIfNames+dev*MAX_IF_NAME_SIZE);
+    snprintf(vendorPath, PATH_MAX, "/sys/class/net/%s/device/vendor", ncclSocketDevs[dev].devName);
     char* rPath = realpath(vendorPath, NULL);
     int fd = open(rPath, O_RDONLY);
     free(rPath);
@@ -486,8 +518,7 @@ ncclNet_t ncclNetSocket = {
   "Socket",
   ncclSocketInit,
   ncclSocketDevices,
-  ncclSocketPciPath,
-  ncclSocketPtrSupport,
+  ncclSocketGetProperties,
   ncclSocketListen,
   ncclSocketConnect,
   ncclSocketAccept,

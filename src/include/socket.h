@@ -283,6 +283,7 @@ static ncclResult_t GetSocketAddrFromString(union socketAddress* ua, const char*
 }
 
 static int findInterfaces(char* ifNames, union socketAddress *ifAddrs, int ifNameMaxSize, int maxIfs) {
+  static int shownIfName = 0;
   int nIfs = 0;
   // Allow user to force the INET socket family selection
   int sock_family = envSocketFamily();
@@ -290,6 +291,7 @@ static int findInterfaces(char* ifNames, union socketAddress *ifAddrs, int ifNam
   char* env = getenv("NCCL_SOCKET_IFNAME");
   if (env && strlen(env) > 1) {
     // Specified by user : find or fail
+    if (shownIfName++ == 0) INFO(NCCL_NET, "NCCL_SOCKET_IFNAME set to %s", env);
     nIfs = findInterfaces(env, ifNames, ifAddrs, sock_family, ifNameMaxSize, maxIfs);
   } else {
     // Try to automatically pick the right one

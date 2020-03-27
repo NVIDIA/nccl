@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -19,8 +19,6 @@ struct cudaLaunchParams {
   cudaStream_t stream;
 };
 #endif
-
-#define DEFAULT_BUFFER_SIZE_BYTES (1LL << 22) /* 4MiB */
 
 #define CACHE_LINE_SIZE 128
 #define MEM_ALIGN 4096
@@ -91,14 +89,11 @@ struct ncclComm {
   // Channels for collectives
   int nChannels;
 
-  // Only nvlink is used for inter-GPU communication
-  int nvlink;
-
   // Algorithm/Protocols thresholds
   ssize_t threadThresholds[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
   float latencies[NCCL_NUM_FUNCTIONS][NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
   float bandwidths[NCCL_NUM_FUNCTIONS][NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
-  int maxThreads[NCCL_NUM_PROTOCOLS];
+  int maxThreads[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
 
   // An internal CUDA stream for NCCL kernel CGMD launches
   int groupCudaStream;
@@ -136,6 +131,9 @@ struct ncclComm {
   // Global proxy thread
   pthread_t proxyThread;
   struct ncclProxyState proxyState;
+
+  // Whether this communicator uses collNet
+  int collNetSupport;
 };
 
 #endif

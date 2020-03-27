@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -14,7 +14,7 @@ int ncclCudaCompCap();
 
 // PCI Bus ID <-> int64 conversion functions
 ncclResult_t int64ToBusId(int64_t id, char* busId);
-ncclResult_t busIdToInt64(char* busId, int64_t* id);
+ncclResult_t busIdToInt64(const char* busId, int64_t* id);
 
 ncclResult_t getBusId(int cudaDev, int64_t *busId);
 

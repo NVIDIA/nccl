@@ -227,7 +227,7 @@ class ncclPrimitives {
     recvStep[i] = conn->step;
     recvStep[i] = ROUNDUP(recvStep[i], SLICESPERCHUNK*SLICESTEPS);
     recvDirectBuff[i] = NULL;
-    if (directBuff && conn->direct) {
+    if (directBuff && (conn->direct & NCCL_DIRECT_GPU)) {
       recvDirectBuff[i] = directBuff;
       if (tid == 0) *conn->ptrExchange = directBuff;
     }
@@ -254,7 +254,7 @@ class ncclPrimitives {
     sendStep[i] = conn->step;
     sendStep[i] = ROUNDUP(sendStep[i], SLICESPERCHUNK*SLICESTEPS);
     sendDirectBuff[i] = NULL;
-    if (directBuff && conn->direct) {
+    if (directBuff && (conn->direct & NCCL_DIRECT_GPU)) {
       void* volatile* ptr = conn->ptrExchange;
       while ((sendDirectBuff[i] = (T*)(*ptr)) == NULL);
       barrier();

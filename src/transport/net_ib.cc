@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -28,13 +28,19 @@
 #define MAXNAMESIZE 64
 static char ncclIbIfName[MAX_IF_NAME_SIZE];
 static union socketAddress ncclIbIfAddr;
+
 static int ncclNIbDevs = -1;
 struct ncclIbDev {
   int device;
+  uint64_t guid;
   uint8_t port;
   uint8_t link;
+  int speed;
   ibv_context* context;
   char devName[MAXNAMESIZE];
+  char* pciPath;
+  int realPort;
+  int maxQp;
 };
 
 #define MAX_IB_PORT 15
@@ -53,20 +59,7 @@ NCCL_PARAM(IbTimeout, "IB_TIMEOUT", 14);
 NCCL_PARAM(IbRetryCnt, "IB_RETRY_CNT", 7);
 NCCL_PARAM(IbSl, "IB_SL", 0);
 NCCL_PARAM(IbTc, "IB_TC", 0);
-
-// Allocate memory to be potentially ibv_reg_mr'd. This needs to be
-// allocated on separate pages as those pages will be marked DONTFORK
-// and if they are shared, that could cause a crash in a child process
-static ncclResult_t ncclIbMalloc(void** ptr, size_t size) {
-  size_t page_size = sysconf(_SC_PAGESIZE);
-  void* p;
-  int size_aligned = ROUNDUP(size, page_size);
-  int ret = posix_memalign(&p, page_size, size_aligned);
-  if (ret != 0) return ncclSystemError;
-  memset(p, 0, size);
-  *ptr = p;
-  return ncclSuccess;
-}
+NCCL_PARAM(IbArThreshold, "IB_AR_THRESHOLD", 8192);
 
 pthread_t ncclIbAsyncThread;
 static void* ncclIbAsyncThreadMain(void* args) {
@@ -84,6 +77,39 @@ static void* ncclIbAsyncThreadMain(void* args) {
 }
 
 NCCL_PARAM(IbDisable, "IB_DISABLE", 0);
+
+static ncclResult_t ncclIbGetPciPath(char* devName, char** path, int* realPort) {
+  char devicePath[PATH_MAX];
+  snprintf(devicePath, PATH_MAX, "/sys/class/infiniband/%s/device", devName);
+  char* p = realpath(devicePath, NULL);
+  if (p == NULL) {
+    WARN("Could not find real path of %s", *devicePath);
+  } else {
+    // Merge multi-port NICs into the same PCI device
+    p[strlen(p)-1] = '0';
+    // And keep the real port aside (the ibv port is always 1 on recent cards)
+    *realPort = 0;
+    for (int d=0; d<ncclNIbDevs; d++) {
+      if (strcmp(p, ncclIbDevs[d].pciPath) == 0) (*realPort)++;
+    }
+  }
+  *path = p;
+  return ncclSuccess;
+}
+
+static int ibvWidths[] = { 1, 4, 8, 12 };
+static int ibvSpeeds[] = { 2500, 5000, 10000, 10000, 14000, 25000, 50000 };
+static int firstBitSet(int val, int max) {
+  int i = 0;
+  while (i<max && ((val & (1<<i)) == 0)) i++;
+  return i;
+}
+static int ncclIbWidth(int width) {
+  return ibvWidths[firstBitSet(width, sizeof(ibvWidths)/sizeof(int)-1)];
+}
+static int ncclIbSpeed(int speed) {
+  return ibvSpeeds[firstBitSet(speed, sizeof(ibvSpeeds)/sizeof(int)-1)];
+}
 
 ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction) {
   if(wrap_ibv_symbols() != ncclSuccess) { return ncclInternalError; }
@@ -145,10 +171,14 @@ ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction) {
           TRACE(NCCL_INIT|NCCL_NET,"NET/IB: [%d] %s:%d/%s ", d, devices[d]->name, port,
               portAttr.link_layer == IBV_LINK_LAYER_INFINIBAND ? "IB" : "RoCE");
           ncclIbDevs[ncclNIbDevs].device = d;
+          ncclIbDevs[ncclNIbDevs].guid = devAttr.sys_image_guid;
           ncclIbDevs[ncclNIbDevs].port = port;
           ncclIbDevs[ncclNIbDevs].link = portAttr.link_layer;
+          ncclIbDevs[ncclNIbDevs].speed = ncclIbSpeed(portAttr.active_speed) * ncclIbWidth(portAttr.active_width);
           ncclIbDevs[ncclNIbDevs].context = context;
           strncpy(ncclIbDevs[ncclNIbDevs].devName, devices[d]->name, MAXNAMESIZE);
+          NCCLCHECK(ncclIbGetPciPath(ncclIbDevs[ncclNIbDevs].devName, &ncclIbDevs[ncclNIbDevs].pciPath, &ncclIbDevs[ncclNIbDevs].realPort));
+          ncclIbDevs[ncclNIbDevs].maxQp = devAttr.max_qp;
           ncclNIbDevs++;
           nPorts++;
           pthread_create(&ncclIbAsyncThread, NULL, ncclIbAsyncThreadMain, context);
@@ -180,17 +210,6 @@ ncclResult_t ncclIbDevices(int* ndev) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclIbPciPath(int dev, char** path) {
-  char devicepath[PATH_MAX];
-  snprintf(devicepath, PATH_MAX, "/sys/class/infiniband/%s/device", ncclIbDevs[dev].devName);
-  *path = realpath(devicepath, NULL);
-  if (*path == NULL) {
-    WARN("Could not find real path of %s", devicepath);
-    return ncclSystemError;
-  }
-  return ncclSuccess;
-}
-
 // Detect whether GDR can work on a given NIC with the current CUDA device
 // Returns :
 // ncclSuccess : GDR works
@@ -204,19 +223,24 @@ ncclResult_t ncclIbGdrSupport(int ibDev) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclIbPtrSupport(int dev, int* supportedTypes) {
-  *supportedTypes = NCCL_PTR_HOST;
-
-  if (ncclIbGdrSupport(dev) != ncclSuccess) {
-    INFO(NCCL_NET,"NET/IB : GPU Direct RDMA Disabled for HCA %d '%s' (no module)", dev, ncclIbDevs[dev].devName);
-    return ncclSuccess;
-  }
-  *supportedTypes |= NCCL_PTR_CUDA;
+static ncclResult_t GetSocketAddr(union socketAddress* addr) {
+  memcpy(addr, &ncclIbIfAddr, sizeof(*addr));
   return ncclSuccess;
 }
 
-static ncclResult_t GetSocketAddr(union socketAddress* addr) {
-  memcpy(addr, &ncclIbIfAddr, sizeof(*addr));
+ncclResult_t ncclIbGetProperties(int dev, ncclNetProperties_t* props) {
+  props->name = ncclIbDevs[dev].devName;
+  props->pciPath = ncclIbDevs[dev].pciPath;
+  props->guid = ncclIbDevs[dev].guid;
+  props->ptrSupport = NCCL_PTR_HOST;
+  if (ncclIbGdrSupport(dev) != ncclSuccess) {
+    INFO(NCCL_NET,"NET/IB : GPU Direct RDMA Disabled for HCA %d '%s' (no module)", dev, ncclIbDevs[dev].devName);
+  } else {
+    props->ptrSupport |= NCCL_PTR_CUDA;
+  }
+  props->speed = ncclIbDevs[dev].speed;
+  props->port = ncclIbDevs[dev].port + ncclIbDevs[dev].realPort;
+  props->maxComms = ncclIbDevs[dev].maxQp;
   return ncclSuccess;
 }
 
@@ -325,7 +349,8 @@ ncclResult_t ncclIbCreateQp(uint8_t ib_port, struct ncclIbVerbs* verbs, int acce
   qpInitAttr.send_cq = verbs->cq;
   qpInitAttr.recv_cq = verbs->cq;
   qpInitAttr.qp_type = IBV_QPT_RC;
-  qpInitAttr.cap.max_send_wr = MAX_REQUESTS;
+  // We might send 2 requests per send (RDMA_WRITE+RDMA_WRITE_WITH_IMM)
+  qpInitAttr.cap.max_send_wr = 2*MAX_REQUESTS;
   qpInitAttr.cap.max_recv_wr = MAX_REQUESTS;
   qpInitAttr.cap.max_send_sge = 1;
   qpInitAttr.cap.max_recv_sge = 1;
@@ -627,6 +652,10 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, int size, void* mhandle, vo
   wr.opcode = IBV_WR_SEND;
   wr.send_flags = IBV_SEND_SIGNALED;
 
+  int useAr = 0;
+  if (size > ncclParamIbArThreshold()) {
+    useAr = 1;
+  }
 #if USE_RDMA_WRITE
   __sync_synchronize(); // order the readyPtr load against rkey load below
   // Sanity checks to catch user collective call count/size mismatches
@@ -636,7 +665,7 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, int size, void* mhandle, vo
         size, slot->size, slot->addr, slot->rkey, slot->seq, comm->fifoHead);
     return ncclInternalError;
   }
-  wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+  wr.opcode = useAr ? IBV_WR_RDMA_WRITE : IBV_WR_RDMA_WRITE_WITH_IMM;
   wr.wr.rdma.remote_addr = slot->addr;
   wr.wr.rdma.rkey = slot->rkey;
   wr.imm_data = size; // Send the message size via imm_data
@@ -651,6 +680,19 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, int size, void* mhandle, vo
 
   struct ibv_send_wr* bad_wr;
   NCCLCHECK(wrap_ibv_post_send(comm->qp, &wr, &bad_wr));
+
+#if USE_RDMA_WRITE
+  // When using adaptive routing, send the bulk of the data first as an
+  // RDMA_WRITE, then a 0-byte RDMA_WRITE_WITH_IMM to trigger a remote
+  // completion.
+  if (useAr) {
+    wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+    wr.sg_list = NULL;
+    wr.num_sge = 0;
+    wr.send_flags &= ~IBV_SEND_SIGNALED;
+    NCCLCHECK(wrap_ibv_post_send(comm->qp, &wr, &bad_wr));
+  }
+#endif
   *request = req;
   return ncclSuccess;
 }
@@ -835,8 +877,7 @@ ncclNet_t ncclNetIb = {
   "IB",
   ncclIbInit,
   ncclIbDevices,
-  ncclIbPciPath,
-  ncclIbPtrSupport,
+  ncclIbGetProperties,
   ncclIbListen,
   ncclIbConnect,
   ncclIbAccept,

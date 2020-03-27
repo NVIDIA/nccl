@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -28,9 +28,6 @@ struct p2pRecvResources {
 
 #include <sys/types.h>
 
-NCCL_PARAM(P2pLevel, "P2P_LEVEL", -2);
-NCCL_PARAM(P2pDisable, "P2P_DISABLE", -2);
-
 /* Convert a PCI busId string into a local cudaDev device index (cf. CUDA_VISIBLE_DEVICES) */
 static int busIdToCudaDev(int64_t busId) {
   int ndev;
@@ -50,72 +47,43 @@ static int busIdToCudaDev(int64_t busId) {
 
 /* Determine if two peers can communicate through p2p */
 ncclResult_t p2pCanConnect(int* ret, struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo* info1, struct ncclPeerInfo* info2) {
-  int cpuCount;
-  NCCLCHECK(ncclTopoCpuCount(topo, &cpuCount));
-  // Do not use P2P across sockets by default (provided CUDA permits it).
-  // When we are on a single socket, don't even use P2P through the CPU as
-  // it should be able to sustain two flows to sysmem faster than PCI P2P.
-  int p2pLevel = cpuCount == 1 ? PATH_PHB : PATH_NODE;
-  if (ncclParamP2pDisable() == 1) p2pLevel = 0;
-  if (ncclParamP2pLevel() != -2) p2pLevel = ncclParamP2pLevel();
-
-  // Disable P2P
-  *ret = 0;
-
-  if (p2pLevel == 0) return ncclSuccess;
-
   // Rule out different nodes
-  if (info1->hostHash != info2->hostHash) return ncclSuccess;
+  if (info1->hostHash != info2->hostHash) {
+    *ret = 0;
+    return ncclSuccess;
+  }
+
+  // Check topology / p2p level.
+  NCCLCHECK(ncclTopoCheckP2p(topo, info1->busId, info2->busId, ret));
+  if (*ret == 0) return ncclSuccess;
 
   // Convert the peer's busId into a local cudaDev index (cf. CUDA_VISIBLE_DEVICES)
   int cudaDev1 = busIdToCudaDev(info1->busId);
   int cudaDev2 = busIdToCudaDev(info2->busId);
   if (cudaDev1 == -1 || cudaDev2 == -1) {
-    // Peer's CUDA device is not visible in this process
 #if CUDART_VERSION >= 10010
-    // But in CUDA 10.1 we can still communicate with 'invisible' devices
-    TRACE(NCCL_INIT|NCCL_P2P, "Checking P2P connection between %lx and %lx", info1->busId, info2->busId);
-    // Check for NVLink/NVswitch including P2P access
-    int nvlink;
-    NCCLCHECK(ncclTopoGetNvlink(topo, info1->busId, info2->busId, &nvlink));
-    if (nvlink > 0) {
-      *ret = 1;
-      return ncclSuccess;
-    }
+    // CUDA 10.1 and later can use P2P with invisible devices.
+    return ncclSuccess;
+#else
+    // Peer's CUDA device is not visible in this process : we can't communicate with it.
+    *ret = 0;
+    return ncclSuccess;
 #endif
-    return ncclSuccess;
   }
 
-  TRACE(NCCL_INIT|NCCL_P2P, "Checking P2P connection between [%d=%lx] and [%d=%lx]", cudaDev1, info1->busId, cudaDev2, info2->busId);
-
-  // Do not detect topology if we're on the same GPU. Note this is not really supported.
-  if (cudaDev1 == cudaDev2) {
-    *ret = 1;
-    return ncclSuccess;
-  }
-
-  // See if CUDA can do P2P
+  // Check that CUDA can do P2P
   int p2p;
   if (cudaDeviceCanAccessPeer(&p2p, cudaDev1, cudaDev2) != cudaSuccess) {
     INFO(NCCL_INIT|NCCL_P2P,"peer query failed between dev %d(=%lx) and dev %d(=%lx)",
          cudaDev1, info1->busId, cudaDev2, info2->busId);
+    *ret = 0;
     return ncclSuccess;
   }
-  if (p2p == 0) return ncclSuccess;
-
-  // Check for NVLink/NVswitch
-  int nvlink;
-  NCCLCHECK(ncclTopoGetNvlink(topo, info1->busId, info2->busId, &nvlink));
-  if (nvlink > 0) {
-    *ret = 1;
+  if (p2p == 0) {
+    INFO(NCCL_INIT|NCCL_P2P,"Could not enable P2P between dev %d(=%lx) and dev %d(=%lx)",
+         cudaDev1, info1->busId, cudaDev2, info2->busId);
+    *ret = 0;
     return ncclSuccess;
-  }
-
-  // Finally compute the PCI distance and compare with the p2pLevel.
-  int distance;
-  NCCLCHECK(ncclTopoGpuDistance(topo, info1->busId, info2->busId, &distance));
-  if (distance < p2pLevel) {
-    *ret = 1;
   }
   return ncclSuccess;
 }
@@ -227,13 +195,13 @@ ncclResult_t p2pRecvSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
 }
 
 /* Connect/Send to this peer */
-static ncclResult_t p2pSendConnect(struct ncclConnect* connectInfo, struct ncclConnector* send) {
+static ncclResult_t p2pSendConnect(struct ncclConnect* connectInfo, int nranks, int rank, struct ncclConnector* send) {
   struct p2pSendResources* resources = (struct p2pSendResources*)send->transportResources;
   struct ncclRecvMem* remDevMem;
   struct p2pConnectInfo* info = (struct p2pConnectInfo*)connectInfo;
   if (info->direct) {
     remDevMem = (struct ncclRecvMem*)(info->directPtr);
-    send->conn.direct = 1;
+    send->conn.direct |= NCCL_DIRECT_GPU;
   } else {
     //TRACE_DUMP_IPC(&info->devIpc);
     cudaError_t err = cudaIpcOpenMemHandle(&resources->ipcPtr, info->devIpc, cudaIpcMemLazyEnablePeerAccess);
@@ -257,13 +225,13 @@ static ncclResult_t p2pSendConnect(struct ncclConnect* connectInfo, struct ncclC
 }
 
 /* Connect/Recv from this peer */
-ncclResult_t p2pRecvConnect(struct ncclConnect* connectInfo, struct ncclConnector* recv) {
+ncclResult_t p2pRecvConnect(struct ncclConnect* connectInfo, int nranks, int rank, struct ncclConnector* recv) {
   struct p2pRecvResources* resources = (struct p2pRecvResources*)recv->transportResources;
   struct ncclSendMem* remDevMem;
   struct p2pConnectInfo* info = (struct p2pConnectInfo*)connectInfo;
   if (info->direct) {
     remDevMem = (struct ncclSendMem*)(info->directPtr);
-    recv->conn.direct = 1;
+    recv->conn.direct |= NCCL_DIRECT_GPU;
     recv->conn.ptrExchange = &remDevMem->ptrExchange;
   } else {
     //TRACE_DUMP_IPC(&info->devIpc);

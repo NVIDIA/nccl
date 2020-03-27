@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -10,6 +10,20 @@
 #include "nccl.h"
 #include "align.h"
 #include <stdint.h>
+
+#define NCCL_NUM_FUNCTIONS 5 //p2p not including as of now
+typedef enum { ncclCollBroadcast, ncclCollReduce, ncclCollAllGather, ncclCollReduceScatter, ncclCollAllReduce ,ncclCollSendRecv} ncclFunc_t;
+
+#define NCCL_NUM_ALGORITHMS 3 // Tree/Ring/CollNet
+#define NCCL_ALGO_TREE 0
+#define NCCL_ALGO_RING 1
+#define NCCL_ALGO_COLLNET 2
+
+#define NCCL_NUM_PROTOCOLS 3 // Simple/LL/LL128
+#define NCCL_PROTO_LL 0
+#define NCCL_PROTO_LL128 1
+#define NCCL_PROTO_SIMPLE 2
+
 
 #define NCCL_MAX_OPS 2048
 #define NCCL_STEPS 8
@@ -34,9 +48,6 @@ union ncclLLFifoLine {
 #define NCCL_MAX_NTHREADS 512
 #define NCCL_LL_MAX_NTHREADS NCCL_MAX_NTHREADS
 #define NCCL_LL_LINES_PER_THREAD 8
-#define NCCL_LL_SLICE_LINES (NCCL_LL_LINES_PER_THREAD*NCCL_LL_MAX_NTHREADS)
-#define NCCL_LL_BUFF_LINES (NCCL_LL_SLICE_LINES*NCCL_STEPS)
-#define NCCL_LL_BUFF_SIZE (NCCL_LL_BUFF_LINES*sizeof(union ncclLLFifoLine))
 #ifdef TEST_LL_CLEANUP
 #define NCCL_LL_CLEAN_MASK 0x078 // Set to 0x100 to disable cleanup
 #define NCCL_LL_FLAG_MAX   0x100
@@ -59,10 +70,6 @@ static_assert(NCCL_LL_CLEAN_MASK % NCCL_STEPS == 0, "Invalid NCCL_LL_CLEAN_MASK 
 // to 3 dests. Use 70% for reduce and 30% for bcast.
 #define NCCL_LL128_SPLIT(nt) ((nt*7/(10*32))*32)
 
-#define NCCL_LL128_SLICE_ELEMS (NCCL_LL128_ELEMS_PER_THREAD*NCCL_LL128_MAX_NTHREADS)
-#define NCCL_LL128_BUFF_ELEMS (NCCL_LL128_SLICE_ELEMS*NCCL_STEPS)
-#define NCCL_LL128_BUFF_SIZE (NCCL_LL128_BUFF_ELEMS*sizeof(uint64_t))
-
 #define NCCL_LL128_SHMEM_ELEMS_PER_THREAD 8
 #define NCCL_LL128_SHMEM_SIZE (NCCL_LL128_SHMEM_ELEMS_PER_THREAD*NCCL_LL128_MAX_NTHREADS)
 
@@ -71,7 +78,7 @@ static_assert(NCCL_LL_CLEAN_MASK % NCCL_STEPS == 0, "Invalid NCCL_LL_CLEAN_MASK 
 
 struct ncclConnInfo {
   // Regular comm mechanism
-  char *buff;         // Local for recv, remote for send
+  char *buffs[NCCL_NUM_PROTOCOLS]; // Local for recv, remote for send
   uint64_t *tail;     // Local for recv, remote for send
   uint64_t *head;     // Local for send, remote for recv
   uint64_t *opCountLoc; // opCount of local rank
@@ -83,13 +90,7 @@ struct ncclConnInfo {
   int *fifo;          // Size fifo for proxy
 
   uint64_t step;      // Keep where we are
-
-  // Low latency mechanism
-  union ncclLLFifoLine *llBuff; // Local for recv, remote for send
   uint64_t llLastCleaning;
-
-  // High bandwidth, low latency protocol
-  uint64_t* ll128Buff; // Local for recv, remote for send
 };
 
 struct ncclConnector {
@@ -136,17 +137,31 @@ struct CollectiveArgs {
   uint64_t opCount;
 
   // local and remote input, output, and buffer
-  const void * ThisInput;
-  void * ThisOutput;
+  const void * sendbuff;
+  void * recvbuff;
 
-  // general parameters
-  size_t N;
-  uint32_t root;
-  uint8_t bid;
-  uint8_t nChannels;
-  uint16_t nThreads;
-
-  int lastChunkSize;
+  // Op-specific fields. Make sure the common part stays the
+  // same on all structs of the union
+  union {
+    struct {
+      uint16_t nThreads;
+    } common;
+    struct {
+      uint16_t nThreads;
+      uint8_t bid;
+      uint8_t nChannels;
+      uint32_t root;
+      size_t count;
+      size_t lastChunkSize;
+    } coll;
+    struct {
+      uint16_t nThreads;
+      uint16_t unused;
+      int32_t delta;
+      size_t sendCount;
+      size_t recvCount;
+    } p2p;
+  };
 };
 struct ncclColl {
   union {
@@ -171,8 +186,6 @@ struct ncclChannel {
       struct ncclTree collTreeDn;
 
       int id;
-      int nthreads;
-      int buffSize;
 
       // Communication structures
       struct ncclPeer* peers;
@@ -180,7 +193,6 @@ struct ncclChannel {
 
       // Operation list for aggregation
       struct ncclColl* collectives;
-      struct ncclColl* devCollectives;
       int collStart;
       int collCount;
       int collFifoHead; // Only used by GPU
@@ -200,6 +212,7 @@ typedef enum {
 struct ncclDevComm {
   int rank;
   int nRanks;
+  int buffSizes[NCCL_NUM_PROTOCOLS];
 
   // Flag to ask NCCL kernels to abort
   volatile uint32_t *abortFlag;

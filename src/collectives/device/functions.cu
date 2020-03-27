@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -56,6 +56,7 @@ __device__ volatile uint64_t* ncclShmem;
 
 // Must be consistent with ncclFunc_t
 #define NCCL_FUNCS() { \
+  NCCL_COLL_NAME(ncclSendRecv, copy, i8),\
   NCCL_FUNCS2B(ncclBroadcast), \
   NCCL_FUNCS2A(ncclReduce), \
   NCCL_FUNCS2B(ncclAllGather), \
@@ -63,11 +64,12 @@ __device__ volatile uint64_t* ncclShmem;
   NCCL_FUNCS2A(ncclAllReduce) }
 
 // Must be consistent with the ncclFuncSet enum
-__device__ ncclKern_t ncclFuncs[NCCL_NUM_FUNCTIONS*ncclNumOps*ncclNumTypes*NCCL_NUM_ALGORITHMS*NCCL_NUM_PROTOCOLS] = {
+__device__ ncclKern_t ncclFuncs[1+NCCL_NUM_FUNCTIONS*ncclNumOps*ncclNumTypes*NCCL_NUM_ALGORITHMS*NCCL_NUM_PROTOCOLS] = {
 // Don't try to initialize the host shadow copy of this device-side global
 // variable. There is no host pointer to a device-side function, which
 // confuses clang. This will be fixed in the next clang release.
 #if __CUDA_ARCH__
+  NCCL_COLL_NAME(ncclSendRecv, copy, i8),
   NCCL_FUNCS2B(ncclBroadcast),
   NCCL_FUNCS2A(ncclReduce),
   NCCL_FUNCS2B(ncclAllGather),

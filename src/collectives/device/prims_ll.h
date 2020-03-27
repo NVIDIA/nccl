@@ -1,9 +1,16 @@
+/*************************************************************************
+ * Copyright (c) 2016-2020, NVIDIA CORPORATION. All rights reserved.
+ *
+ * See LICENSE.txt for license information
+ ************************************************************************/
+
 template <typename T, class FUNC, int NRECV, int NSEND>
 class ncclLLPrimitives {
  private:
   const int tid;
   const int nthreads;
   const int wid;
+  const int stepLines;
   int nrecv = 0;
   int nsend = 0;
   struct ncclConnInfo* recvConn = NULL;
@@ -22,8 +29,8 @@ class ncclLLPrimitives {
   union ncclLLFifoLine* sendBuff[NSEND];
   struct ncclDevComm* comm;
 
-  inline __device__ int recvOffset(int i) { return (recvStep[i]%NCCL_STEPS)*NCCL_LL_SLICE_LINES; }
-  inline __device__ int sendOffset(int i) { return (sendStep[i]%NCCL_STEPS)*NCCL_LL_SLICE_LINES; }
+  inline __device__ int recvOffset(int i) { return (recvStep[i]%NCCL_STEPS)*stepLines; }
+  inline __device__ int sendOffset(int i) { return (sendStep[i]%NCCL_STEPS)*stepLines; }
   inline __device__ union ncclLLFifoLine* recvPtr(int i) { return recvBuff[i]+recvOffset(i); }
   inline __device__ union ncclLLFifoLine* sendPtr(int i) { return sendBuff[i]+sendOffset(i); }
   inline __device__ uint32_t recvFlag(int i) { return NCCL_LL_FLAG(recvStep[i]+1); }
@@ -68,7 +75,7 @@ class ncclLLPrimitives {
         if (checkAbort(wid, 1)) break;
       }
       if (sendConnFifoPtr) {
-        int size = ((sendConnHead & NCCL_LL_CLEAN_MASK) == NCCL_LL_CLEAN_MASK) ? NCCL_LL_SLICE_LINES*sizeof(union ncclLLFifoLine) : nbytes;
+        int size = ((sendConnHead & NCCL_LL_CLEAN_MASK) == NCCL_LL_CLEAN_MASK) ? stepLines*sizeof(union ncclLLFifoLine) : nbytes;
         sendConnFifoPtr[sendConnHead%NCCL_STEPS] = size;
       }
       sendConnHead += 1;
@@ -88,7 +95,7 @@ class ncclLLPrimitives {
     // LL Cleanup : write all flags in the slice to make sure we don't have
     // data corruption when flag loops over.
     if ((sendStep[i] & NCCL_LL_CLEAN_MASK) == NCCL_LL_CLEAN_MASK) {
-      for (int o = offset; o<NCCL_LL_SLICE_LINES; o+=nthreads) storeLL(sendPtr(i)+o, 0, sendFlag(i));
+      for (int o = offset; o<stepLines; o+=nthreads) storeLL(sendPtr(i)+o, 0, sendFlag(i));
     }
     sendStep[i]++;
   }
@@ -164,7 +171,7 @@ class ncclLLPrimitives {
   }
 
   __device__ __forceinline__ void loadRecvConn(struct ncclConnInfo* conn, int i) {
-    recvBuff[i] = conn->llBuff;
+    recvBuff[i] = (union ncclLLFifoLine*)conn->buffs[NCCL_PROTO_LL];
     recvStep[i] = conn->step;
     if (wid == i) recvConn = conn;
     nrecv++;
@@ -179,7 +186,7 @@ class ncclLLPrimitives {
   }
 
   __device__ __forceinline__ void loadSendConn(struct ncclConnInfo* conn, int i) {
-    sendBuff[i] = conn->llBuff;
+    sendBuff[i] = (union ncclLLFifoLine*)conn->buffs[NCCL_PROTO_LL];
     sendStep[i] = conn->step;
     if (wid == i) sendConn = conn;
     nsend++;
@@ -212,8 +219,8 @@ class ncclLLPrimitives {
 
  public:
   __device__ __forceinline__
-  ncclLLPrimitives(const int tid, const int nthreads, int* recvPeers, int* sendPeers, struct ncclChannel* channel, struct ncclDevComm* comm, const uint64_t opCount)
-    : comm(comm), tid(tid), nthreads(nthreads), wid(tid%WARP_SIZE), opCount(opCount) {
+  ncclLLPrimitives(const int tid, const int nthreads, int* recvPeers, int* sendPeers, int stepLines, struct ncclChannel* channel, struct ncclDevComm* comm, const uint64_t opCount)
+    : comm(comm), tid(tid), nthreads(nthreads), wid(tid%WARP_SIZE), stepLines(stepLines), opCount(opCount) {
     // Make sure step is updated before we read it.
     barrier();
 

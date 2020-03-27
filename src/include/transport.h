@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -11,6 +11,7 @@
 #include "graph.h"
 #include "nvmlwrap.h"
 #include "core.h"
+#include "proxy.h"
 
 #define NTRANSPORTS 3
 #define TRANSPORT_P2P 0
@@ -39,49 +40,8 @@ struct ncclConnect {
   char data[CONNECT_SIZE];
 };
 
-enum ncclProxyOpState { ncclProxyOpNone, ncclProxyOpReady, ncclProxyOpProgress };
-
-struct ncclProxyArgs;
-typedef ncclResult_t (*proxyProgressFunc_t)(struct ncclProxyArgs*);
-
-struct ncclProxyArgs {
-  proxyProgressFunc_t progress;
-  struct ncclChannel* channel;
-  struct ncclConnector* connector;
-  int sliceSteps;
-  int chunkSteps;
-  int nsteps;
-  uint64_t opCount;
-  int protocol;
-  ncclDataType_t dtype;
-  ncclRedOp_t redOp;
-  int state;   // add component before this line -- it is left out during initialization
-
-  // Internal state
-  uint64_t head;
-  uint64_t tail;
-  uint64_t end;
-  void* requests[NCCL_STEPS];
-  int idle;
-
-  // Element linking
-  pthread_mutex_t mutex;
-  struct ncclProxyArgs* next;
-  struct ncclProxyArgs* nextPeer;
-};
-
-struct ncclProxyPool;
-struct ncclProxyState {
-  pthread_cond_t cond;
-  pthread_mutex_t mutex;
-  bool stop;
-  struct ncclProxyArgs* ops;
-  struct ncclProxyArgs* pool;
-  struct ncclProxyPool* pools;
-};
-
 struct ncclTransportComm {
-  ncclResult_t (*setup)(struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo*, struct ncclPeerInfo*, struct ncclConnect*, struct ncclConnector*, int buffSize, int channelId);
+  ncclResult_t (*setup)(struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo*, struct ncclPeerInfo*, struct ncclConnect*, struct ncclConnector*, int channelId);
   ncclResult_t (*connect)(struct ncclConnect*, int nranks, int rank, struct ncclConnector*);
   ncclResult_t (*free)(void*);
   ncclResult_t (*proxy)(struct ncclProxyArgs*);
@@ -94,30 +54,6 @@ struct ncclTransport {
   struct ncclTransportComm recv;
 };
 
-#include <pthread.h>
-
-typedef ncclResult_t (*threadFunc_t)(struct ncclProxyArgs*);
-
-enum proxyMode {
-  proxyRing = 0,
-  proxyFrom = 1,
-  proxyTo = 2
-};
-
-ncclResult_t transportAllocateProxyArgs(struct ncclComm* comm, struct ncclProxyArgs** argsptr);
-ncclResult_t transportSaveProxies(struct ncclProxyArgs* args, int pattern, int root, int nranks);
-ncclResult_t transportStartProxy(struct ncclComm* comm);
-ncclResult_t transportCreateProxy(struct ncclComm* comm);
-ncclResult_t transportDestroyProxy(struct ncclComm* comm);
-
-#include <unistd.h>
-
-// Spin wait until func evaluates to true
-template<typename FUNC>
-inline void transportProxyWait(const FUNC& func) {
-  while (!func()) {
-    sched_yield();
-  }
-}
+ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclChannel* channel, int nrecv, int* peerRecv, int nsend, int* peerSend);
 
 #endif

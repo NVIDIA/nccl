@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2015-2019, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2015-2020, NVIDIA CORPORATION. All rights reserved.
 #
 # See LICENSE.txt for license information
 #
@@ -10,7 +10,7 @@ include ../../../makefiles/version.mk
 BUILDDIR ?= $(abspath ../../../build)
 OBJDIR := $(BUILDDIR)/obj/collectives/device
 
-LIBSRCFILES := all_reduce.cu broadcast.cu reduce.cu all_gather.cu reduce_scatter.cu
+LIBSRCFILES := all_reduce.cu broadcast.cu reduce.cu all_gather.cu reduce_scatter.cu sendrecv.cu
 
 LIBSRCFILES += functions.cu
 

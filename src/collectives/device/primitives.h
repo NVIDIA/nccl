@@ -70,10 +70,10 @@ class ncclPrimitives {
   inline __device__ T* sendPtr(int i) { return ((T*)sendBuff[i])+sendOffset(i); }
 
   inline __device__ void barrier() {
-    asm volatile ("bar.sync 1, %0;" :: "r"(nthreads));
+    asm volatile ("bar.sync 1, %0;" :: "r"(nthreads+WARP_SIZE));
   }
   inline __device__ void subBarrier() {
-    asm volatile ("bar.sync 2, %0;" :: "r"(nthreads-WARP_SIZE));
+    asm volatile ("bar.sync 2, %0;" :: "r"(nthreads));
   }
 
   uint32_t mismatch = 0;
@@ -183,7 +183,7 @@ class ncclPrimitives {
       for (int i=1; i<NSEND && i<nsend; i++) dsts[DST+i] = directSendPtr<DIRECTSEND>(i, directOffset);
     }
 
-    bool syncThread = tid >= nthreads-WARP_SIZE;
+    bool syncThread = tid >= nthreads;
 
     #pragma unroll
     for (int slice=0; slice<SLICESPERCHUNK; ++slice) {
@@ -196,10 +196,10 @@ class ncclPrimitives {
           if (DIRECTRECV && recvDirectBuff[0]) {
             // We can only have one direct receive. Since srcs[0] == dstPtr+offset, skip one copy
             if (SEND) {
-              ReduceOrCopyMulti<UNROLL, FUNC, T, 1, 1, 1, NSEND>(tid, nthreads-WARP_SIZE, 1, srcs, nsend, dsts+1, realSize);
+              ReduceOrCopyMulti<UNROLL, FUNC, T, 1, 1, 1, NSEND>(tid, nthreads, 1, srcs, nsend, dsts+1, realSize);
             }
           } else {
-            ReduceOrCopyMulti<UNROLL, FUNC, T, RECV+SRC, RECV*NRECV+SRC, SEND+DST, SEND*NSEND+DST>(tid, nthreads-WARP_SIZE, RECV*nrecv+SRC, srcs, SEND*nsend+DST, dsts, realSize);
+            ReduceOrCopyMulti<UNROLL, FUNC, T, RECV+SRC, RECV*NRECV+SRC, SEND+DST, SEND*NSEND+DST>(tid, nthreads, RECV*nrecv+SRC, srcs, SEND*nsend+DST, dsts, realSize);
           }
         }
       }
@@ -223,7 +223,7 @@ class ncclPrimitives {
   }
 
   __device__ __forceinline__ void loadRecvConn(struct ncclConnInfo* conn, int i, T* directBuff) {
-    recvBuff[i] = (const T*)conn->buff;
+    recvBuff[i] = (const T*)conn->buffs[NCCL_PROTO_SIMPLE];
     recvStep[i] = conn->step;
     recvStep[i] = ROUNDUP(recvStep[i], SLICESPERCHUNK*SLICESTEPS);
     recvDirectBuff[i] = NULL;
@@ -240,7 +240,7 @@ class ncclPrimitives {
       recvConnTailPtr = recvConn->tail;
       recvConnTailCache = *recvConnTailPtr;
     }
-    if (tid >= nthreads-WARP_SIZE && wid < nrecv) {
+    if (tid >= nthreads && wid < nrecv) {
       recvConnHeadPtr = recvConn->head;
       // Return credits in case we rounded up.
       *recvConnHeadPtr = recvConnHead;
@@ -250,7 +250,7 @@ class ncclPrimitives {
   }
 
   __device__ __forceinline__ void loadSendConn(struct ncclConnInfo* conn, int i, T* directBuff) {
-    sendBuff[i] = (T*)conn->buff;
+    sendBuff[i] = (T*)conn->buffs[NCCL_PROTO_SIMPLE];
     sendStep[i] = conn->step;
     sendStep[i] = ROUNDUP(sendStep[i], SLICESPERCHUNK*SLICESTEPS);
     sendDirectBuff[i] = NULL;
@@ -271,13 +271,13 @@ class ncclPrimitives {
       sendConnFifoPtr = sendConn->fifo;
       *(sendConn->opCountLoc) = opCount;
     }
-    if (tid >= nthreads-WARP_SIZE && wid<nsend) {
+    if (tid >= nthreads && wid<nsend) {
       sendConnTailPtr = sendConn->tail;
     }
   }
 
   __device__ __forceinline__ void saveRecvSync() {
-    if (tid >= nthreads-WARP_SIZE && wid < nrecv) {
+    if (tid >= nthreads && wid < nrecv) {
       recvConn->step = recvConnHead;
       *(recvConn->opCountLoc) = opCount+1;
       __threadfence_system();

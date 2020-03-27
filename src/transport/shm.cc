@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -57,7 +57,7 @@ ncclResult_t shmCanConnect(int* ret, struct ncclTopoSystem* topo, struct ncclTop
 #define MAX_SHM_NAME_LEN 1024
 
 /* Create and return connect structures for this peer to connect to me */
-ncclResult_t shmSendSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo, struct ncclConnect* connectInfo, struct ncclConnector* send, int buffSize, int channelId) {
+ncclResult_t shmSendSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo, struct ncclConnect* connectInfo, struct ncclConnector* send, int channelId) {
 
   struct shmSendResources* resources;
   NCCLCHECK(ncclCalloc(&resources, 1));
@@ -75,13 +75,13 @@ ncclResult_t shmSendSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
   TRACE(NCCL_SHM,"Open shmName %s shmSize %d", shmName, info.shmSize);
   NCCLCHECK(shmOpen(shmName, resources->shmSize, (void**)&resources->hostMem, (void**)&resources->devHostMem, 1));
 
-  INFO(NCCL_INIT|NCCL_SHM,"Ring %02d : %d[%lx] -> %d[%lx] via direct shared memory", channelId, myInfo->rank, myInfo->busId, peerInfo->rank, peerInfo->busId);
+  INFO(NCCL_INIT|NCCL_SHM,"Channel %02d : %d[%lx] -> %d[%lx] via direct shared memory", channelId, myInfo->rank, myInfo->busId, peerInfo->rank, peerInfo->busId);
   static_assert(sizeof(struct shmConnectInfo) <= sizeof(struct ncclConnect), "shm Connect Recv Info is too big");
   memcpy(connectInfo, &info, sizeof(struct shmConnectInfo));
   return ncclSuccess;
 }
 
-ncclResult_t shmRecvSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo, struct ncclConnect* connectInfo, struct ncclConnector* recv, int buffSize, int channelId) {
+ncclResult_t shmRecvSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo, struct ncclConnect* connectInfo, struct ncclConnector* recv, int channelId) {
   struct shmRecvResources* resources;
   NCCLCHECK(ncclCalloc(&resources, 1));
   recv->transportResources = resources;
@@ -94,7 +94,9 @@ ncclResult_t shmRecvSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
 
   char shmName[MAX_SHM_NAME_LEN];
   sprintf(shmName, "nccl-shm-recv-%lx-%d-%d-%d", info.pidHash, info.id, info.sendRank, info.recvRank);
-  info.shmSize = resources->shmSize = offsetof(struct ncclRecvMem, buff)+buffSize;
+  int shmSize = offsetof(struct ncclRecvMem, buff);
+  for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) shmSize += recv->comm->buffSizes[p];
+  info.shmSize = resources->shmSize = shmSize;
   TRACE(NCCL_SHM,"Open shmName %s shmSize %d", shmName, info.shmSize);
   NCCLCHECK(shmOpen(shmName, resources->shmSize, (void**)&resources->hostMem, (void**)&resources->devHostMem, 1));
 
@@ -118,9 +120,11 @@ ncclResult_t shmSendConnect(struct ncclConnect* connectInfo, int nranks, int ran
   NCCLCHECK(shmUnlink(shmName));
 
   send->transportResources = resources;
-  send->conn.buff = resources->devRemHostMem->buff;
-  send->conn.llBuff = resources->devRemHostMem->llBuff;
-  send->conn.ll128Buff = resources->devRemHostMem->ll128Buff;
+  int offset = 0;
+  for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) {
+    send->conn.buffs[p] = resources->devRemHostMem->buff + offset;
+    offset += send->comm->buffSizes[p];
+  }
   send->conn.tail = &resources->devRemHostMem->tail;
   send->conn.opCountRem = &resources->devRemHostMem->opCount;
 
@@ -143,9 +147,11 @@ ncclResult_t shmRecvConnect(struct ncclConnect* connectInfo, int nranks, int ran
   recv->conn.head = &resources->devRemHostMem->head;
   recv->conn.opCountRem = &resources->devRemHostMem->opCount;
 
-  recv->conn.buff = resources->devHostMem->buff;
-  recv->conn.llBuff = resources->devHostMem->llBuff;
-  recv->conn.ll128Buff = resources->devHostMem->ll128Buff;
+  int offset = 0;
+  for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) {
+    recv->conn.buffs[p] = resources->devHostMem->buff + offset;
+    offset += recv->comm->buffSizes[p];
+  }
   recv->conn.tail = &resources->devHostMem->tail;
   recv->conn.opCountLoc = &resources->devHostMem->opCount;
   return ncclSuccess;

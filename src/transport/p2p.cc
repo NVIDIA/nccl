@@ -97,7 +97,7 @@ ncclResult_t p2pCanConnect(int* ret, struct ncclTopoSystem* topo, struct ncclTop
 
 /* Send: Create and return connect structures for this peer to connect to me */
 ncclResult_t p2pSendSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo,
-    struct ncclConnect* connectInfo, struct ncclConnector* send, int buffSize, int channelId) {
+    struct ncclConnect* connectInfo, struct ncclConnector* send, int channelId) {
 
   struct p2pSendResources* resources;
   NCCLCHECK(ncclCalloc(&resources, 1));
@@ -111,7 +111,7 @@ ncclResult_t p2pSendSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
     info.direct = 1;
     info.directPtr = resources->devMem;
     if (myInfo->cudaDev == peerInfo->cudaDev) {
-      INFO(NCCL_INIT|NCCL_P2P,"Ring %02d : %d[%d] -> %d[%d] via P2P/common device", channelId, myInfo->rank, myInfo->cudaDev, peerInfo->rank, peerInfo->cudaDev);
+      INFO(NCCL_INIT|NCCL_P2P,"Channel %02d : %d[%d] -> %d[%d] via P2P/common device", channelId, myInfo->rank, myInfo->cudaDev, peerInfo->rank, peerInfo->cudaDev);
       return ncclInternalError;
     } else {
       // Enable P2P access
@@ -123,7 +123,7 @@ ncclResult_t p2pSendSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
              peerInfo->cudaDev, peerInfo->busId, err, cudaGetErrorString(err));
         return ncclInternalError;
       }
-      INFO(NCCL_INIT|NCCL_P2P,"Ring %02d : %d[%lx] -> %d[%lx] via P2P/direct pointer",
+      INFO(NCCL_INIT|NCCL_P2P,"Channel %02d : %d[%lx] -> %d[%lx] via P2P/direct pointer",
           channelId, myInfo->rank, myInfo->busId, peerInfo->rank, peerInfo->busId);
     }
   } else {
@@ -137,7 +137,7 @@ ncclResult_t p2pSendSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
            myInfo->rank, peerCudaDev, peerInfo->busId, err, cudaGetErrorString(err));
       return ncclInternalError;
     }
-    INFO(NCCL_INIT|NCCL_P2P,"Ring %02d : %d[%lx] -> %d[%lx] via P2P/IPC",
+    INFO(NCCL_INIT|NCCL_P2P,"Channel %02d : %d[%lx] -> %d[%lx] via P2P/IPC",
         channelId, myInfo->rank, myInfo->busId, peerInfo->rank, peerInfo->busId);
     //TRACE_DUMP_IPC(&info.devIpc);
   }
@@ -148,12 +148,13 @@ ncclResult_t p2pSendSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
 
 /* Create and return connect structures for this peer to connect to me */
 ncclResult_t p2pRecvSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo,
-    struct ncclConnect* connectInfo, struct ncclConnector * recv, int buffSize, int channelId) {
+    struct ncclConnect* connectInfo, struct ncclConnector * recv, int channelId) {
 
   struct p2pRecvResources* resources;
   NCCLCHECK(ncclCalloc(&resources, 1));
   recv->transportResources = resources;
-  int recvSize = offsetof(struct ncclRecvMem, buff)+buffSize;
+  int recvSize = offsetof(struct ncclRecvMem, buff);
+  for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) recvSize += recv->comm->buffSizes[p];
   ALIGN_SIZE(recvSize, CUDA_IPC_MIN);
   NCCLCHECK(ncclCudaCalloc((char**)&resources->devMem, recvSize));
 
@@ -173,7 +174,7 @@ ncclResult_t p2pRecvSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
              peerInfo->cudaDev, peerInfo->busId, err, cudaGetErrorString(err));
         return ncclInternalError;
       }
-      TRACE(NCCL_INIT|NCCL_P2P,"Ring %02d : %d[%lx] <- %d[%lx] via P2P/direct pointer", channelId, myInfo->rank, myInfo->busId, peerInfo->rank, peerInfo->busId);
+      TRACE(NCCL_INIT|NCCL_P2P,"Channel %02d : %d[%lx] <- %d[%lx] via P2P/direct pointer", channelId, myInfo->rank, myInfo->busId, peerInfo->rank, peerInfo->busId);
     }
   } else {
     // Convert the peer's busId into a local cudaDev index (cf. CUDA_VISIBLE_DEVICES)
@@ -186,7 +187,7 @@ ncclResult_t p2pRecvSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
            myInfo->rank, peerCudaDev, peerInfo->busId, err, cudaGetErrorString(err));
       return ncclInternalError;
     }
-    TRACE(NCCL_INIT|NCCL_P2P,"Ring %02d : %d[%lx] <- %d[%lx] via P2P/IPC", channelId, myInfo->rank, myInfo->busId, peerInfo->rank, peerInfo->busId);
+    TRACE(NCCL_INIT|NCCL_P2P,"Channel %02d : %d[%lx] <- %d[%lx] via P2P/IPC", channelId, myInfo->rank, myInfo->busId, peerInfo->rank, peerInfo->busId);
     //TRACE_DUMP_IPC(&info.devIpc);
   }
   static_assert(sizeof(struct p2pConnectInfo) <= sizeof(struct ncclConnect), "p2p Connect Info is too big");
@@ -213,9 +214,11 @@ static ncclResult_t p2pSendConnect(struct ncclConnect* connectInfo, int nranks, 
     }
   }
 
-  send->conn.buff = remDevMem->buff;
-  send->conn.llBuff = remDevMem->llBuff;
-  send->conn.ll128Buff = remDevMem->ll128Buff;
+  int offset = 0;
+  for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) {
+    send->conn.buffs[p] = remDevMem->buff + offset;
+    offset += send->comm->buffSizes[p];
+  }
   send->conn.tail = &remDevMem->tail;
   send->conn.opCountRem = &remDevMem->opCount;
   send->conn.head = &resources->devMem->head;
@@ -244,9 +247,11 @@ ncclResult_t p2pRecvConnect(struct ncclConnect* connectInfo, int nranks, int ran
     }
   }
 
-  recv->conn.buff = resources->devMem->buff;
-  recv->conn.llBuff = resources->devMem->llBuff;
-  recv->conn.ll128Buff = resources->devMem->ll128Buff;
+  int offset = 0;
+  for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) {
+    recv->conn.buffs[p] = resources->devMem->buff + offset;
+    offset += recv->comm->buffSizes[p];
+  }
   recv->conn.tail = &resources->devMem->tail;
   recv->conn.opCountLoc = &resources->devMem->opCount;
   recv->conn.head = &remDevMem->head;

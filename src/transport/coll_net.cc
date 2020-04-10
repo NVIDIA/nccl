@@ -84,7 +84,7 @@ ncclResult_t collNetSendSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph*
   NCCLCHECK(ncclCalloc(&sendResources, 1));
   send->transportResources = sendResources;
 
-  NCCLCHECK(ncclTopoGetNetDev(graph, 1, channelId, &sendResources->netDev));
+  NCCLCHECK(ncclTopoGetNetDev(topo, graph, myInfo->rank, channelId, &sendResources->netDev));
   NCCLCHECK(ncclTopoCheckGdr(topo, myInfo->busId, sendResources->netDev, 1, &sendResources->useGdr));
 
   int sendSize = sizeof(struct ncclSendMem);
@@ -110,7 +110,7 @@ ncclResult_t collNetRecvSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph*
   NCCLCHECK(ncclCalloc(&recvResources, 1));
   recv->transportResources = recvResources;
 
-  NCCLCHECK(ncclTopoGetNetDev(graph, 0, channelId, &recvResources->netDev));
+  NCCLCHECK(ncclTopoGetNetDev(topo, graph, myInfo->rank, channelId, &recvResources->netDev));
   NCCLCHECK(ncclTopoCheckGdr(topo, myInfo->busId, recvResources->netDev, 0, &recvResources->useGdr));
 
   int sendSize = sizeof(struct ncclSendMem);

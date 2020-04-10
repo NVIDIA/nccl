@@ -804,7 +804,10 @@ ncclResult_t ncclTopoDumpGraphs(struct ncclTopoSystem* system, int ngraphs, stru
   return ncclSuccess;
 }
 
-ncclResult_t ncclTopoGetNetDev(struct ncclTopoGraph* graph, int dir, int channelId, int* dev) {
-  *dev = graph->inter[(channelId%graph->nChannels)*2+dir];
+ncclResult_t ncclTopoGetNetDev(struct ncclTopoSystem* system, struct ncclTopoGraph* graph, int rank, int channelId, int* dev) {
+  int channel = channelId%graph->nChannels;
+  int ngpus = system->nodes[GPU].count;
+  int index = graph->intra[channel*ngpus] == rank ? 0 : 1;
+  *dev = graph->inter[channel*2+index];
   return ncclSuccess;
 }

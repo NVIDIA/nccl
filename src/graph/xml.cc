@@ -460,20 +460,21 @@ int checkBDFFormat(char* bdf) {
   return 1;
 }
 
-ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* xml) {
+ncclResult_t ncclTopoGetXmlNodeFromSys(struct ncclXmlNode* pciNode,
+                                       struct ncclXml* xml,
+                                       struct ncclXmlNode** return_parent) {
   // Fill info, then parent
   const char* busId;
   NCCLCHECK(xmlGetAttr(pciNode, "busid", &busId));
   char path[PATH_MAX+1];
+  NCCLCHECK(getPciPath(busId, path));
   int index;
   NCCLCHECK(xmlGetAttrIndex(pciNode, "class", &index));
   if (index == -1) {
-    NCCLCHECK(getPciPath(busId, path));
     NCCLCHECK(ncclTopoSetAttrFromSys(pciNode, path, "class", "class"));
   }
   NCCLCHECK(xmlGetAttrIndex(pciNode, "link_speed", &index));
   if (index == -1) {
-    NCCLCHECK(getPciPath(busId, path));
     char deviceSpeedStr[MAX_STR_LEN];
     float deviceSpeed;
     NCCLCHECK(ncclTopoGetStrFromSys(path, "max_link_speed", deviceSpeedStr));
@@ -486,7 +487,6 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
   }
   NCCLCHECK(xmlGetAttrIndex(pciNode, "link_width", &index));
   if (index == -1) {
-    NCCLCHECK(getPciPath(busId, path));
     char strValue[MAX_STR_LEN];
     NCCLCHECK(ncclTopoGetStrFromSys(path, "max_link_width", strValue));
     int deviceWidth = strtol(strValue, NULL, 0);
@@ -496,8 +496,6 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
   }
   struct ncclXmlNode* parent = pciNode->parent;
   if (parent == NULL) {
-    NCCLCHECK(getPciPath(busId, path));
-
     // Save that for later in case next step is a CPU
     char numaIdStr[MAX_STR_LEN];
     NCCLCHECK(ncclTopoGetStrFromSys(path, "numa_node", numaIdStr));
@@ -541,6 +539,13 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
     pciNode->parent = parent;
     parent->subs[parent->nSubs++] = pciNode;
   }
+  *return_parent = parent;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* xml) {
+  struct ncclXmlNode* parent;
+  ncclTopoGetXmlNodeFromSys(pciNode, xml, &parent);
   if (strcmp(parent->name, "pci") == 0) {
     NCCLCHECK(ncclTopoGetXmlFromSys(parent, xml));
   } else if (strcmp(parent->name, "cpu") == 0) {

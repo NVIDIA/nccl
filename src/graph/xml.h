@@ -218,8 +218,9 @@ static ncclResult_t kvConvertToInt(const char* str, int* value, struct kvDict* d
     }
     d++;
   }
-  WARN("KV Convert to int : could not find value of '%s' in dictionary", str);
-  return ncclInternalError;
+  INFO(NCCL_GRAPH, "KV Convert to int : could not find value of '%s' in dictionary, falling back to %d", str, d->value);
+  *value = d->value;
+  return ncclSuccess;
 }
 static ncclResult_t kvConvertToStr(int value, const char** str, struct kvDict* dict) {
   struct kvDict* d = dict;

@@ -10,12 +10,21 @@
 #include "nccl.h"
 #include "checks.h"
 #include "align.h"
+#include "net.h"
 #include <sys/mman.h>
 
 static inline ncclResult_t ncclCudaHostAlloc(void** ptr, void** devPtr, size_t size) {
   CUDACHECK(cudaHostAlloc(ptr, size, cudaHostAllocMapped));
   memset(*ptr, 0, size);
   *devPtr = *ptr;
+  return ncclSuccess;
+}
+
+static inline ncclResult_t ncclNetworkAlloc(
+    void* comm, int size, int type, void** data, void** devPtr, void** mhandle) {
+  NCCLCHECK(ncclNetAlloc(comm, data, size, type, mhandle));
+  memset(*data, 0, size);
+  if (*devPtr != nullptr) *devPtr = *data;
   return ncclSuccess;
 }
 

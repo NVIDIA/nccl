@@ -63,14 +63,6 @@ ncclResult_t netSendSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
   NCCLCHECK(ncclTopoGetNetDev(topo, graph, myInfo->rank, channelId, &resources->netDev));
   NCCLCHECK(ncclTopoCheckGdr(topo, myInfo->busId, resources->netDev, 1, &resources->useGdr));
 
-  int sendSize = sizeof(struct ncclSendMem);
-  NCCLCHECK(ncclCudaHostAlloc((void**)&resources->hostSendMem, (void**)&resources->devHostSendMem, sendSize));
-
-  int recvSize = offsetof(struct ncclRecvMem, buff)+buffSize;
-  if (resources->useGdr) {
-    NCCLCHECK(ncclCudaCalloc((char**)(&resources->devRecvMem), recvSize));
-  }
-  NCCLCHECK(ncclCudaHostAlloc((void**)&resources->hostRecvMem, (void**)&resources->devHostRecvMem, recvSize));
   resources->buffSize = buffSize;
 
   INFO(NCCL_INIT|NCCL_NET,"Ring %02d : %d[%lx] -> %d[%lx] [send] via NET/%s/%d%s", channelId, myInfo->rank, myInfo->busId, peerInfo->rank, peerInfo->busId, ncclNetName(), resources->netDev,
@@ -86,14 +78,6 @@ ncclResult_t netRecvSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
   NCCLCHECK(ncclTopoGetNetDev(topo, graph, myInfo->rank, channelId, &resources->netDev));
   NCCLCHECK(ncclTopoCheckGdr(topo, myInfo->busId, resources->netDev, 0, &resources->useGdr));
 
-  int sendSize = sizeof(struct ncclSendMem);
-  NCCLCHECK(ncclCudaHostAlloc((void**)&resources->hostSendMem, (void**)&resources->devHostSendMem, sendSize));
-
-  int recvSize = offsetof(struct ncclRecvMem, buff)+buffSize;
-  if (resources->useGdr) {
-    NCCLCHECK(ncclCudaCalloc((char**)(&resources->devRecvMem), recvSize));
-  }
-  NCCLCHECK(ncclCudaHostAlloc((void**)&resources->hostRecvMem, (void**)&resources->devHostRecvMem, recvSize));
   resources->buffSize = buffSize;
 
   INFO(NCCL_INIT|NCCL_NET,"Ring %02d : %d[%lx] -> %d[%lx] [receive] via NET/%s/%d%s", channelId, peerInfo->rank, peerInfo->busId, myInfo->rank, myInfo->busId, ncclNetName(), resources->netDev,
@@ -106,6 +90,42 @@ ncclResult_t netRecvSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
 ncclResult_t netSendConnect(struct ncclConnect* connectInfo, int nranks, int rank, struct ncclConnector* send) {
   // Setup device pointers
   struct netSendResources* resources = (struct netSendResources*)send->transportResources;
+  // Connect to remote peer
+  struct netConnectInfo* info = (struct netConnectInfo*)connectInfo;
+  NCCLCHECK(ncclNetConnect(resources->netDev, info->netHandle, &resources->netSendComm));
+
+  const int sendSize = sizeof(struct ncclSendMem);
+  const int recvSize = offsetof(struct ncclRecvMem, buff) + resources->buffSize;
+  // The hostSendMem is not registered for RMA by the network device, so we can
+  // just allocate the memory on the host.
+  NCCLCHECK(ncclCudaHostAlloc((void**)&resources->hostSendMem,
+                              (void**)&resources->devHostSendMem,
+                              sendSize));
+  if (!ncclUsePluginAlloc()){
+    if (resources->useGdr) {
+      NCCLCHECK(ncclCudaCalloc((char**)(&resources->devRecvMem), recvSize));
+    }
+    NCCLCHECK(ncclCudaHostAlloc((void**)&resources->hostRecvMem,
+                                (void**)&resources->devHostRecvMem,
+                                recvSize));
+  } else {
+    if (resources->useGdr) {
+      NCCLCHECK(ncclNetworkAlloc(resources->netSendComm,
+                                 recvSize,
+                                 NCCL_PTR_CUDA,
+                                 (void**)&resources->devRecvMem,
+                                 nullptr,
+                                 &resources->mhandle));
+    }
+    // We store the LL buffer in devHostRecvMem, so we'll use the llMHandle to
+    // store the information about this allocation.
+    NCCLCHECK(ncclNetworkAlloc(resources->netSendComm,
+                               recvSize,
+                               NCCL_PTR_HOST,
+                               (void**)&resources->hostRecvMem,
+                               (void**)&resources->devHostRecvMem,
+                               &resources->llMhandle));
+  }
 
   // Intermediate buffering on GPU for GPU Direct RDMA, but LL buffer is always on host
   struct ncclRecvMem* recvMem = resources->useGdr ? resources->devRecvMem : resources->devHostRecvMem;
@@ -122,16 +142,14 @@ ncclResult_t netSendConnect(struct ncclConnect* connectInfo, int nranks, int ran
   send->conn.opCountLoc = &resources->devHostSendMem->opCount;
   for (int i=0; i<NCCL_STEPS; i++) send->conn.fifo[i] = -1;
 
-  // Connect to remote peer
-  struct netConnectInfo* info = (struct netConnectInfo*)connectInfo;
-  NCCLCHECK(ncclNetConnect(resources->netDev, info->netHandle, &resources->netSendComm));
-
-  NCCLCHECK(ncclNetRegMr(resources->netSendComm, recvMem->buff, resources->buffSize,
-        resources->useGdr ? NCCL_PTR_CUDA : NCCL_PTR_HOST, &resources->mhandle));
-  NCCLCHECK(ncclNetRegMr(resources->netSendComm, resources->devHostRecvMem->llBuff,
-        NCCL_LL_BUFF_SIZE, NCCL_PTR_HOST, &resources->llMhandle));
-  NCCLCHECK(ncclNetRegMr(resources->netSendComm, recvMem->ll128Buff, NCCL_LL128_BUFF_SIZE,
-        resources->useGdr ? NCCL_PTR_CUDA : NCCL_PTR_HOST, &resources->ll128Mhandle));
+  if (!ncclUsePluginAlloc()){
+    NCCLCHECK(ncclNetRegMr(resources->netSendComm, recvMem->buff, resources->buffSize,
+          resources->useGdr ? NCCL_PTR_CUDA : NCCL_PTR_HOST, &resources->mhandle));
+    NCCLCHECK(ncclNetRegMr(resources->netSendComm, resources->devHostRecvMem->llBuff,
+          NCCL_LL_BUFF_SIZE, NCCL_PTR_HOST, &resources->llMhandle));
+    NCCLCHECK(ncclNetRegMr(resources->netSendComm, recvMem->ll128Buff, NCCL_LL128_BUFF_SIZE,
+          resources->useGdr ? NCCL_PTR_CUDA : NCCL_PTR_HOST, &resources->ll128Mhandle));
+  }
 
   return ncclSuccess;
 }
@@ -140,6 +158,48 @@ ncclResult_t netSendConnect(struct ncclConnect* connectInfo, int nranks, int ran
 ncclResult_t netRecvConnect(struct ncclConnect* connectInfo, int nranks, int rank, struct ncclConnector* recv) {
   // Setup device pointers
   struct netRecvResources* resources = (struct netRecvResources*)recv->transportResources;
+
+  // Finish connection establishment from remote peer
+  NCCLCHECK(ncclNetAccept(resources->netListenComm, &resources->netRecvComm));
+
+  int sendSize = sizeof(struct ncclSendMem);
+  int recvSize = offsetof(struct ncclRecvMem, buff) + resources->buffSize;
+
+  // The hostSendMem is not registered for RMA by the network device, so we can
+  // just allocate the memory on the host.
+  NCCLCHECK(ncclCudaHostAlloc((void**)&resources->hostSendMem,
+                              (void**)&resources->devHostSendMem,
+                              sendSize));
+  if (!ncclUsePluginAlloc()){
+    if (resources->useGdr) {
+      NCCLCHECK(ncclCudaCalloc((char**)(&resources->devRecvMem), recvSize));
+    }
+    NCCLCHECK(ncclCudaHostAlloc((void**)&resources->hostRecvMem,
+                                (void**)&resources->devHostRecvMem,
+                                recvSize));
+  } else {
+    // If we're using GPU Direct, we only need GPU memory to be registerd with
+    // the network card.
+    if (resources->useGdr) {
+      NCCLCHECK(ncclNetworkAlloc(resources->netRecvComm,
+                                 recvSize,
+                                 NCCL_PTR_CUDA,
+                                 (void**)&resources->devRecvMem,
+                                 nullptr,
+                                 &resources->mhandle));
+      NCCLCHECK(ncclCudaHostAlloc((void**)&resources->hostSendMem,
+                                  (void**)&resources->devHostSendMem,
+                                  sendSize));
+    } else {
+      // If we're not using GPU Direct, register host memory.
+      NCCLCHECK(ncclNetworkAlloc(resources->netRecvComm,
+                                 recvSize,
+                                 NCCL_PTR_HOST,
+                                 (void**)&resources->hostRecvMem,
+                                 (void**)&resources->devHostRecvMem,
+                                 &resources->mhandle));
+    }
+  }
 
   // Intermediate buffering on GPU for GPU Direct RDMA
   struct ncclRecvMem* recvMem = resources->useGdr ? resources->devRecvMem : resources->devHostRecvMem;
@@ -154,16 +214,16 @@ ncclResult_t netRecvConnect(struct ncclConnect* connectInfo, int nranks, int ran
   recv->conn.head = &resources->devHostSendMem->head;
   recv->conn.opCountRem = &resources->devHostSendMem->opCount;
 
-  // Finish connection establishment from remote peer
-  NCCLCHECK(ncclNetAccept(resources->netListenComm, &resources->netRecvComm));
   NCCLCHECK(ncclNetCloseListen(resources->netListenComm));
 
-  NCCLCHECK(ncclNetRegMr(resources->netRecvComm, recvMem->buff, resources->buffSize,
-        resources->useGdr ? NCCL_PTR_CUDA : NCCL_PTR_HOST, &resources->mhandle));
-  NCCLCHECK(ncclNetRegMr(resources->netRecvComm, recvMem->llBuff, NCCL_LL_BUFF_SIZE,
-        resources->useGdr ? NCCL_PTR_CUDA : NCCL_PTR_HOST, &resources->llMhandle));
-  NCCLCHECK(ncclNetRegMr(resources->netRecvComm, recvMem->ll128Buff, NCCL_LL128_BUFF_SIZE,
-        resources->useGdr ? NCCL_PTR_CUDA : NCCL_PTR_HOST, &resources->ll128Mhandle));
+  if (!ncclUsePluginAlloc()){
+    NCCLCHECK(ncclNetRegMr(resources->netRecvComm, recvMem->buff, resources->buffSize,
+          resources->useGdr ? NCCL_PTR_CUDA : NCCL_PTR_HOST, &resources->mhandle));
+    NCCLCHECK(ncclNetRegMr(resources->netRecvComm, recvMem->llBuff, NCCL_LL_BUFF_SIZE,
+          resources->useGdr ? NCCL_PTR_CUDA : NCCL_PTR_HOST, &resources->llMhandle));
+    NCCLCHECK(ncclNetRegMr(resources->netRecvComm, recvMem->ll128Buff, NCCL_LL128_BUFF_SIZE,
+          resources->useGdr ? NCCL_PTR_CUDA : NCCL_PTR_HOST, &resources->ll128Mhandle));
+  }
 
   return ncclSuccess;
 }
@@ -171,12 +231,18 @@ ncclResult_t netRecvConnect(struct ncclConnect* connectInfo, int nranks, int ran
 ncclResult_t netSendFree(void* transportResources) {
   struct netSendResources* resources = (struct netSendResources*)transportResources;
   NCCLCHECK(ncclCudaHostFree(resources->hostSendMem));
-  NCCLCHECK(ncclNetDeregMr(resources->netSendComm, resources->mhandle));
-  NCCLCHECK(ncclNetDeregMr(resources->netSendComm, resources->llMhandle));
-  NCCLCHECK(ncclNetDeregMr(resources->netSendComm, resources->ll128Mhandle));
-  NCCLCHECK(ncclCudaHostFree(resources->hostRecvMem));
-  if (resources->useGdr)
-    CUDACHECK(cudaFree(resources->devRecvMem));
+  if (!ncclUsePluginAlloc()){
+    NCCLCHECK(ncclNetDeregMr(resources->netSendComm, resources->mhandle));
+    NCCLCHECK(ncclNetDeregMr(resources->netSendComm, resources->llMhandle));
+    NCCLCHECK(ncclNetDeregMr(resources->netSendComm, resources->ll128Mhandle));
+    NCCLCHECK(ncclCudaHostFree(resources->hostRecvMem));
+    if (resources->useGdr)
+      CUDACHECK(cudaFree(resources->devRecvMem));
+  } else {
+    NCCLCHECK(ncclNetFree(resources->netSendComm, resources->llMhandle));
+    if (resources->useGdr)
+      NCCLCHECK(ncclNetFree(resources->netSendComm, resources->mhandle));
+  }
   NCCLCHECK(ncclNetCloseSend(resources->netSendComm));
   free(resources);
   return ncclSuccess;
@@ -185,12 +251,21 @@ ncclResult_t netSendFree(void* transportResources) {
 ncclResult_t netRecvFree(void* transportResources) {
   struct netRecvResources* resources = (struct netRecvResources*)transportResources;
   NCCLCHECK(ncclCudaHostFree(resources->hostSendMem));
-  NCCLCHECK(ncclNetDeregMr(resources->netRecvComm, resources->mhandle));
-  NCCLCHECK(ncclNetDeregMr(resources->netRecvComm, resources->llMhandle));
-  NCCLCHECK(ncclNetDeregMr(resources->netRecvComm, resources->ll128Mhandle));
-  NCCLCHECK(ncclCudaHostFree(resources->hostRecvMem));
-  if (resources->useGdr)
-    CUDACHECK(cudaFree(resources->devRecvMem));
+  if (!ncclUsePluginAlloc()){
+    NCCLCHECK(ncclNetDeregMr(resources->netRecvComm, resources->mhandle));
+    NCCLCHECK(ncclNetDeregMr(resources->netRecvComm, resources->llMhandle));
+    NCCLCHECK(ncclNetDeregMr(resources->netRecvComm, resources->ll128Mhandle));
+    NCCLCHECK(ncclCudaHostFree(resources->hostRecvMem));
+    if (resources->useGdr)
+      CUDACHECK(cudaFree(resources->devRecvMem));
+  } else {
+    // The memory free'd here might be either GPU or Host memory, depending on
+    // whether we're using GPU direct or not.
+    NCCLCHECK(ncclNetFree(resources->netRecvComm, resources->mhandle));
+    // If we're using GPU direct, we need to free the host memory buffer.
+    if (resources->useGdr)
+      NCCLCHECK(ncclCudaHostFree(resources->hostRecvMem));
+  }
   NCCLCHECK(ncclNetCloseRecv(resources->netRecvComm));
   free(resources);
   return ncclSuccess;

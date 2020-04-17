@@ -569,7 +569,7 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
     NCCLCHECK(xmlSetAttrInt(gpuNode, "dev", dev));
   }
   NCCLCHECK(xmlGetAttrInt(gpuNode, "dev", &dev));
-  if (dev == -1) return ncclSuccess;
+  if (dev == -1) { *gpuNodeRet = NULL; return ncclSuccess; }
 
   NCCLCHECK(xmlGetAttrIndex(gpuNode, "sm", &index));
   if (index == -1) {

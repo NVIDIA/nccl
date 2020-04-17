@@ -520,6 +520,7 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
       NCCLCHECK(int64ToBusId(comm->peerInfo[r].busId, busId));
       struct ncclXmlNode* node;
       NCCLCHECK(ncclTopoFillGpu(xml, busId, &node));
+      if (node == NULL) continue;
       NCCLCHECK(xmlSetAttrInt(node, "rank", r));
       NCCLCHECK(xmlInitAttrInt(node, "gdr", comm->peerInfo[r].gdrSupport));
     }

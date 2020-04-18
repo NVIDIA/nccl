@@ -70,6 +70,14 @@ typedef struct {
   ncclResult_t (*closeSend)(void* sendComm);
   ncclResult_t (*closeRecv)(void* recvComm);
   ncclResult_t (*closeListen)(void* listenComm);
+  // Allocates a host buffer to the used by the net subsystem, either allocated
+  // or registed through CUDA for host memory - For more details, refer to
+  // cudaHostRegister(). The plugin can keep track of allocation-related
+  // information by via mhandle.
+  // If this is is being used, regMR and deregMr must be set to NULL.
+  ncclResult_t (*alloc)(void* comm, int size, int type, void** data, void** mhandle);
+  // Frees the buffer identified by mhandle.
+  ncclResult_t (*free)(void* comm,  void* mhandle);
 } ncclNet_v3_t;
 
 typedef ncclNet_v3_t ncclNet_t;

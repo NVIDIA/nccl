@@ -575,7 +575,7 @@ ncclResult_t ncclTopoGetLocalNet(struct ncclTopoSystem* system, int rank, int64_
   int g;
   NCCLCHECK(ncclTopoRankToIndex(system, rank, &g));
   int minType = PATH_SYS;
-  int maxWidth = 0;
+  float maxWidth = 0.0;
   int count = 0;
   int* nets;
   NCCLCHECK(ncclCalloc(&nets, system->nodes[NET].count));

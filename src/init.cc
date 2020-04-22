@@ -379,9 +379,14 @@ ncclResult_t ncclCommSetIntra(struct ncclComm* comm, int rank, int ranks, struct
   // Set CG Mode
   comm->launchMode = ncclComm::GROUP;
   char* str = getenv("NCCL_LAUNCH_MODE");
-  if (comm->intraRanks == 1 || (str && strcmp(str, "PARALLEL") == 0)) {
-    comm->launchMode = ncclComm::PARALLEL;
+  if (str != NULL){
+     comm->launchMode = strcmp(str, "PARALLEL") == 0 ? ncclComm::PARALLEL : ncclComm::GROUP;
+     TRACE(NCCL_INIT,"set launchMode to %s by envionment NCCL_LAUNCH_MODE=%s",
+                     (comm->launchMode==ncclComm::GROUP ? "GROUP" : "PARALLEL"), str);
+  } else if(comm->intraRanks == 1) {
+     comm->launchMode = ncclComm::PARALLEL;
   }
+
   if (comm->launchMode == ncclComm::GROUP) {
     CUDACHECK(cudaStreamCreateWithFlags(&comm->groupStream, cudaStreamNonBlocking));
 #if CUDART_VERSION >= 9000

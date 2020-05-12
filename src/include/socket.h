@@ -53,6 +53,8 @@ static inline int envSocketFamily(void) {
   if (env == NULL)
     return family;
 
+  INFO(NCCL_ENV, "NCCL_SOCKET_FAMILY set by environment to %s", env);
+
   if (strcmp(env, "AF_INET") == 0)
     family = AF_INET;  // IPv4
   else if (strcmp(env, "AF_INET6") == 0)
@@ -290,6 +292,7 @@ static int findInterfaces(char* ifNames, union socketAddress *ifAddrs, int ifNam
   // User specified interface
   char* env = getenv("NCCL_SOCKET_IFNAME");
   if (env && strlen(env) > 1) {
+    INFO(NCCL_ENV, "NCCL_SOCKET_IFNAME set by environment to %s", env);
     // Specified by user : find or fail
     if (shownIfName++ == 0) INFO(NCCL_NET, "NCCL_SOCKET_IFNAME set to %s", env);
     nIfs = findInterfaces(env, ifNames, ifAddrs, sock_family, ifNameMaxSize, maxIfs);
@@ -301,7 +304,8 @@ static int findInterfaces(char* ifNames, union socketAddress *ifAddrs, int ifNam
     if (nIfs == 0) {
       char* commId = getenv("NCCL_COMM_ID");
       if (commId && strlen(commId) > 1) {
-        // Try to find interface that is in the same subnet as the IP in comm id
+	INFO(NCCL_ENV, "NCCL_COMM_ID set by environment to %s", commId);
+	// Try to find interface that is in the same subnet as the IP in comm id
         union socketAddress idAddr;
         GetSocketAddrFromString(&idAddr, commId);
         nIfs = findInterfaceMatchSubnet(ifNames, ifAddrs, &idAddr, ifNameMaxSize, maxIfs);

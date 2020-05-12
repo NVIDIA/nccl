@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2017-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2017-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -67,10 +67,10 @@ __global__ void NCCL_KERN_NAME(coll, op, dtype)(struct ncclColl firstColl) { \
     c = &firstColl; \
   } else { \
     c = &localColl; \
-    load_coll(c, channel->devCollectives+channel->collFifoHead, tid, comm); \
+    load_coll(c, channel->collectives+channel->collFifoHead, tid, comm); \
   } \
   while (1) { \
-    if (tid < c->args.nThreads) { \
+    if (tid < c->args.common.nThreads) { \
       if (c->funcIndex == fIndex) { \
         coll##Kernel<COLL_UNROLL, ncclFunc<ctype>, ctype>(&c->args); \
       } else { \
@@ -86,7 +86,7 @@ __global__ void NCCL_KERN_NAME(coll, op, dtype)(struct ncclColl firstColl) { \
  \
     /* Load next collective operation*/ \
     c = &localColl; /* for bid 0 */ \
-    load_coll(c, channel->devCollectives+nextIndex, tid, comm); \
+    load_coll(c, channel->collectives+nextIndex, tid, comm); \
   } \
 }
 #else

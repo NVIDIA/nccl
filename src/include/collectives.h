@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2017-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2017-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -7,10 +7,8 @@
 #ifndef NCCL_COLLECTIVES_H_
 #define NCCL_COLLECTIVES_H_
 
-#include "core.h"
-#include "info.h"
-
-#define FUNC_INDEX(coll, redop, dtype, al, pr) ((((((coll)*ncclNumOps + (redop))*ncclNumTypes) + (dtype))*NCCL_NUM_ALGORITHMS+(al))*NCCL_NUM_PROTOCOLS+(pr))
+#define FUNC_INDEX_P2P 0
+#define FUNC_INDEX(coll, redop, dtype, al, pr) (1+(((((coll)*ncclNumOps + (redop))*ncclNumTypes) + (dtype))*NCCL_NUM_ALGORITHMS+(al))*NCCL_NUM_PROTOCOLS+(pr))
 
 #define NCCL_COLL_NAME(coll, op, dtype) \
   coll##_##op##_##dtype
@@ -56,6 +54,7 @@
   DECL_COLL2(ncclAllGather, copy) \
   DECL_COLL(ncclReduceScatter) \
   DECL_COLL(ncclAllReduce) \
+  DECL_COLL5(ncclSendRecv,copy,i8) \
 
 DECL_ALL_COLLS
 
@@ -70,5 +69,6 @@ DECL_ALL_COLLS
 #define BROADCAST_CHUNKSTEPS 1
 #define REDUCE_SLICESTEPS 1
 #define REDUCE_CHUNKSTEPS 1
+#define SENDRECV_SLICEFACTOR 4
 
 #endif

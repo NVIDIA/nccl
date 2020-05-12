@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -240,6 +240,7 @@ ncclResult_t bootstrapGetUniqueId(ncclUniqueId* id) {
 
   char* env = getenv("NCCL_COMM_ID");
   if (env) {
+    INFO(NCCL_ENV, "NCCL_COMM_ID set by environment to %s", env);
     if (bootstrapNetCreateHandle(netHandle, env) != 0) {
       WARN("Invalid NCCL_COMM_ID, please use format: <ipv4>:<port> or [<ipv6>]:<port> or <hostname>:<port>");
       return ncclInvalidArgument;

@@ -8,6 +8,7 @@
 #define NCCL_COMM_H_
 
 #include "transport.h"
+#include "p2p.h"
 
 #if CUDART_VERSION < 9000
 struct cudaLaunchParams {
@@ -40,6 +41,7 @@ struct ncclSendMem {
     };
     char pad3[MEM_ALIGN];
   };
+  char buff[1]; // Actually larger than that
 };
 
 struct ncclRecvMem {
@@ -53,8 +55,6 @@ struct ncclRecvMem {
     };
     char pad4[MEM_ALIGN];
   };
-  ncclLLFifoLine llBuff[NCCL_LL_BUFF_LINES];
-  uint64_t ll128Buff[NCCL_LL128_BUFF_ELEMS];
   char buff[1]; // Actually larger than that
 };
 
@@ -88,6 +88,13 @@ struct ncclComm {
 
   // Channels for collectives
   int nChannels;
+  // Channels (per peer) for p2p
+  int p2pnChannels;
+  int p2pnChannelsPerPeer;
+  int p2pChannels[MAXCHANNELS];
+
+  // Buffer sizes
+  int buffSizes[NCCL_NUM_PROTOCOLS];
 
   // Algorithm/Protocols thresholds
   ssize_t threadThresholds[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
@@ -134,6 +141,8 @@ struct ncclComm {
 
   // Whether this communicator uses collNet
   int collNetSupport;
+  //list of async p2p operation queued in a group semantics
+  struct ncclP2Plist p2plist;
 };
 
 #endif

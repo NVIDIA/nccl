@@ -17,7 +17,7 @@ pthread_mutex_t ncclDebugLock = PTHREAD_MUTEX_INITIALIZER;
 
 void ncclDebugInit() {
   pthread_mutex_lock(&ncclDebugLock);
-  if (ncclDebugLevel != -1) return;
+  if (ncclDebugLevel != -1) { pthread_mutex_unlock(&ncclDebugLock); return; }
   const char* nccl_debug = getenv("NCCL_DEBUG");
   if (nccl_debug == NULL) {
     ncclDebugLevel = NCCL_LOG_NONE;
@@ -60,6 +60,8 @@ void ncclDebugInit() {
         mask = NCCL_GRAPH;
       } else if (strcasecmp(subsys, "TUNING") == 0) {
         mask = NCCL_TUNING;
+      } else if (strcasecmp(subsys, "ENV") == 0) {
+        mask = NCCL_ENV;
       } else if (strcasecmp(subsys, "ALL") == 0) {
         mask = NCCL_ALL;
       }
@@ -125,27 +127,32 @@ void ncclDebugInit() {
 void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *filefunc, int line, const char *fmt, ...) {
   if (ncclDebugLevel == -1) ncclDebugInit();
   if (ncclDebugNoWarn != 0 && level == NCCL_LOG_WARN) { level = NCCL_LOG_INFO; flags = ncclDebugNoWarn; }
+  if (ncclDebugLevel < level) return;
 
+  // Gather the rank information. This can take > 1us so we want to make sure
+  // we only do it when needed.
   char hostname[1024];
   getHostName(hostname, 1024, '.');
   int cudaDev;
   cudaGetDevice(&cudaDev);
+  int pid = getpid();
+  int tid = gettid();
 
   char buffer[1024];
   size_t len = 0;
   pthread_mutex_lock(&ncclDebugLock);
-  if (level == NCCL_LOG_WARN && ncclDebugLevel >= NCCL_LOG_WARN)
+  if (level == NCCL_LOG_WARN)
     len = snprintf(buffer, sizeof(buffer),
-                   "\n%s:%d:%d [%d] %s:%d NCCL WARN ", hostname, getpid(), gettid(), cudaDev, filefunc, line);
-  else if (level == NCCL_LOG_INFO && ncclDebugLevel >= NCCL_LOG_INFO && (flags & ncclDebugMask))
+        "\n%s:%d:%d [%d] %s:%d NCCL WARN ", hostname, pid, tid, cudaDev, filefunc, line);
+  else if (level == NCCL_LOG_INFO && (flags & ncclDebugMask))
     len = snprintf(buffer, sizeof(buffer),
-                   "%s:%d:%d [%d] NCCL INFO ", hostname, getpid(), gettid(), cudaDev);
+        "%s:%d:%d [%d] NCCL INFO ", hostname, pid, tid, cudaDev);
 #ifdef ENABLE_TRACE
-  else if (level == NCCL_LOG_TRACE && ncclDebugLevel >= NCCL_LOG_TRACE && (flags & ncclDebugMask)) {
+  else if (level == NCCL_LOG_TRACE && (flags & ncclDebugMask)) {
     auto delta = std::chrono::high_resolution_clock::now() - ncclEpoch;
     double timestamp = std::chrono::duration_cast<std::chrono::duration<double>>(delta).count()*1000;
     len = snprintf(buffer, sizeof(buffer),
-                   "%s:%d:%d [%d] %f %s:%d NCCL TRACE ", hostname, getpid(), gettid(), cudaDev, timestamp, filefunc, line);
+        "%s:%d:%d [%d] %f %s:%d NCCL TRACE ", hostname, pid, tid, cudaDev, timestamp, filefunc, line);
   }
 #endif
   if (len) {
@@ -157,11 +164,4 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
     fflush(ncclDebugFile);
   }
   pthread_mutex_unlock(&ncclDebugLock);
-
-  // If ncclDebugLevel == NCCL_LOG_ABORT then WARN() will also call abort()
-  if (level == NCCL_LOG_WARN && ncclDebugLevel == NCCL_LOG_ABORT) {
-    fprintf(stderr,"\n%s:%d:%d [%d] %s:%d NCCL ABORT\n",
-            hostname, getpid(), gettid(), cudaDev, filefunc, line);
-    abort();
-  }
 }

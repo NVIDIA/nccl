@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -12,11 +12,12 @@
 #include "collectives.h"
 
 ncclResult_t ncclEnqueueCheck(struct ncclInfo* info);
-ncclResult_t ncclCpuBarrierIn(ncclComm_t comm, int* isLast);
-ncclResult_t ncclCpuBarrierLast(ncclComm_t comm);
-ncclResult_t ncclCpuBarrierOut(ncclComm_t comm);
-ncclResult_t ncclBarrierEnqueue(ncclComm_t comm);
-ncclResult_t ncclBarrierEnqueueWait(ncclComm_t comm);
-ncclResult_t ncclEnqueueEvents(ncclComm_t comm);
+ncclResult_t ncclCpuBarrierIn(struct ncclComm* comm, int* isLast);
+ncclResult_t ncclCpuBarrierLast(struct ncclComm* comm);
+ncclResult_t ncclCpuBarrierOut(struct ncclComm* comm);
+ncclResult_t ncclBarrierEnqueue(struct ncclComm* comm);
+ncclResult_t ncclBarrierEnqueueWait(struct ncclComm* comm);
+ncclResult_t ncclEnqueueEvents(struct ncclComm* comm);
+ncclResult_t ncclSaveKernel(struct ncclInfo* info);
 
 #endif // End include guard

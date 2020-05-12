@@ -504,6 +504,7 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   NCCLCHECK(ncclCalloc(&xml, 1));
   char* xmlTopoFile = getenv("NCCL_TOPO_FILE");
   if (xmlTopoFile) {
+    INFO(NCCL_ENV, "NCCL_TOPO_FILE set by environment to %s", xmlTopoFile);
     NCCLCHECK(ncclTopoGetXmlFromFile(xmlTopoFile, xml));
   }
   if (xml->maxIndex == 0) {
@@ -562,11 +563,34 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
 
   xmlTopoFile = getenv("NCCL_TOPO_DUMP_FILE");
   if (xmlTopoFile && comm->rank == ncclParamTopoDumpFileRank()) {
+    INFO(NCCL_ENV, "NCCL_TOPO_DUMP_FILE set by environment to %s", xmlTopoFile);
     NCCLCHECK(ncclTopoDumpXmlToFile(xmlTopoFile, xml));
   }
 
   NCCLCHECK(ncclTopoGetSystemFromXml(xml, system));
   free(xml);
+  return ncclSuccess;
+}
+
+ncclResult_t ncclTopoGetLocalNet(struct ncclTopoSystem* system, int rank, int64_t* id, int rr) {
+  int g;
+  NCCLCHECK(ncclTopoRankToIndex(system, rank, &g));
+  int minType = PATH_SYS;
+  float maxWidth = 0;
+  int count = 0;
+  int* nets;
+  NCCLCHECK(ncclCalloc(&nets, system->nodes[NET].count));
+  for (int n=0; n<system->nodes[NET].count; n++) {
+    struct ncclTopoLinkList* path = system->nodes[NET].nodes[n].paths[GPU]+g;
+    if (path->width > maxWidth || (path->width == maxWidth && path->type < minType)) {
+      maxWidth = path->width;
+      minType = path->type;
+      count = 0;
+    }
+    if (path->width == maxWidth && path->type == minType) nets[count++] = system->nodes[NET].nodes[n].id;
+  }
+  *id = nets[rr % count];
+  free(nets);
   return ncclSuccess;
 }
 

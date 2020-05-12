@@ -9,6 +9,7 @@
 #include "topo.h"
 #include "comm.h"
 #include "net.h"
+#include "channel.h"
 
 // Pre-compute GPU->NIC, GPU->GPU and NIC->GPU paths
 
@@ -231,15 +232,16 @@ ncclResult_t ncclGetLevel(int* level, const char* disableEnv, const char* levelE
         }
       }
     }
-    if (l >= 0) INFO(NCCL_GRAPH, "%s set from environment to %s", levelEnv, topoPathTypeStr[l]);
+    if (l >= 0) INFO(NCCL_ALL, "%s set by environment to %s", levelEnv, topoPathTypeStr[l]);
     *level = l >= 0 ? l : -2;
   }
   return ncclSuccess;
 }
 
 int ncclTopoUserP2pLevel = -1;
-ncclResult_t ncclTopoCheckP2p(struct ncclTopoSystem* system, int64_t id1, int64_t id2, int* p2p) {
+ncclResult_t ncclTopoCheckP2p(struct ncclTopoSystem* system, int64_t id1, int64_t id2, int* p2p, int *read) {
   *p2p = 0;
+  *read = 0;
 
   // Get GPUs from topology
   int g1, g2;
@@ -254,20 +256,32 @@ ncclResult_t ncclTopoCheckP2p(struct ncclTopoSystem* system, int64_t id1, int64_
   // In general, use P2P whenever we can.
   int p2pLevel = PATH_SYS;
 
+  // User override
+  if (ncclTopoUserP2pLevel == -1)
+    NCCLCHECK(ncclGetLevel(&ncclTopoUserP2pLevel, "NCCL_P2P_DISABLE", "NCCL_P2P_LEVEL"));
+  if (ncclTopoUserP2pLevel != -2) {
+    p2pLevel = ncclTopoUserP2pLevel;
+    goto compare;
+  }
+
   // Don't use P2P through ARM CPUs
   int arch, vendor, model;
   NCCLCHECK(ncclTopoCpuType(system, &arch, &vendor, &model));
   if (arch == NCCL_TOPO_CPU_ARCH_ARM) p2pLevel = PATH_PXB;
-  if (arch == NCCL_TOPO_CPU_ARCH_X86 &&
-      vendor == NCCL_TOPO_CPU_VENDOR_INTEL &&
-      model == NCCL_TOPO_CPU_TYPE_BDW) p2pLevel = PATH_PXB;
+  if (arch == NCCL_TOPO_CPU_ARCH_X86 && vendor == NCCL_TOPO_CPU_VENDOR_INTEL) {
+    if (model == NCCL_TOPO_CPU_TYPE_BDW) p2pLevel = PATH_PXB;
+    else p2pLevel = PATH_PHB;
+  }
 
-  // User override
-  NCCLCHECK(ncclGetLevel(&ncclTopoUserP2pLevel, "NCCL_P2P_DISABLE", "NCCL_P2P_LEVEL"));
-  if (ncclTopoUserP2pLevel != -2) p2pLevel = ncclTopoUserP2pLevel;
-
+compare:
   // Compute the PCI distance and compare with the p2pLevel.
   if (path->type <= p2pLevel) *p2p = 1;
+
+  if (path->type == PATH_NVL) {
+    struct ncclTopoNode* gpu2 = system->nodes[GPU].nodes+g2;
+    // Enable P2P Read for Ampere/NVLink only
+    if ((gpu1->gpu.cudaCompCap == gpu2->gpu.cudaCompCap) && (gpu1->gpu.cudaCompCap == 80)) *read = 1;
+  }
 
   return ncclSuccess;
 }
@@ -341,8 +355,8 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclPeer
 
     // Update path when we don't want to / can't use GPU Direct P2P
     for (int p=0; p<system->nodes[GPU].count; p++) {
-      int p2p;
-      NCCLCHECK(ncclTopoCheckP2p(system, system->nodes[GPU].nodes[p].id, system->nodes[GPU].nodes[g].id, &p2p));
+      int p2p, read;
+      NCCLCHECK(ncclTopoCheckP2p(system, system->nodes[GPU].nodes[p].id, system->nodes[GPU].nodes[g].id, &p2p, &read));
       if (p2p == 0) {
         // Divert all traffic through the CPU
         int cpu;
@@ -436,4 +450,70 @@ ncclResult_t ncclTopoTrimSystem(struct ncclTopoSystem* system, struct ncclComm* 
 void ncclTopoFree(struct ncclTopoSystem* system) {
   for (int t=0; t<NCCL_TOPO_NODE_TYPES; t++) ncclTopoRemovePathType(system, t);
   free(system);
+}
+
+static ncclResult_t ncclTopoGetNchannels(struct ncclTopoSystem* system, int g /*local gpu index*/, int peerRank, int* nChannels) {
+  int peer;
+  struct ncclTopoLinkList* path = NULL;
+  if (ncclTopoRankToIndex(system, peerRank, &peer) == ncclSuccess) {
+    // Same rank
+    if (g == peer) {
+      *nChannels = -1;
+      return ncclSuccess;
+    }
+    // Local rank
+    path = system->nodes[GPU].nodes[peer].paths[GPU]+g;
+    if (path->type == PATH_NVL) {
+      int sm = system->nodes[GPU].nodes[g].gpu.cudaCompCap;
+      double nvlWidth = sm < 70 ? PASCAL_NVLINK_WIDTH : VOLTA_NVLINK_WIDTH;
+      *nChannels = 2*std::max(1, (int)(path->width / nvlWidth));
+    } else {
+      *nChannels = 2;
+    }
+  } else {
+    // Remote rank, use network
+    *nChannels = 1;
+  }
+  return ncclSuccess;
+}
+
+NCCL_PARAM(MinP2pNChannels, "MIN_P2P_NCHANNELS", 1);
+NCCL_PARAM(MaxP2pNChannels, "MAX_P2P_NCHANNELS", MAXCHANNELS);
+
+static int nextPow2(int v) {
+  int pow2 = 1;
+  while (pow2 < v) pow2 <<= 1;
+  return pow2;
+}
+
+ncclResult_t ncclTopoComputeP2pChannels(struct ncclComm* comm) {
+  comm->p2pnChannels = std::min(comm->nChannels, (int)ncclParamMaxP2pNChannels());
+  comm->p2pnChannels = std::max(comm->p2pnChannels, (int)ncclParamMinP2pNChannels());
+  int minChannels = comm->p2pnChannels;
+  // We need to loop through all local GPUs to have a global picture
+  for (int g=0; g<comm->topo->nodes[GPU].count; g++) {
+    for (int r=0; r<comm->nRanks; r++) {
+      int nChannels;
+      NCCLCHECK(ncclTopoGetNchannels(comm->topo, g, r, &nChannels));
+      if (nChannels >= 0) minChannels = std::min(minChannels, nChannels);
+    }
+  }
+
+  // Round to next pow2 nChannelsPerPeer and nChannels
+  comm->p2pnChannelsPerPeer = nextPow2(minChannels);
+  comm->p2pnChannels = nextPow2(comm->p2pnChannels);
+
+  // Init channels that weren't used so far
+  for (int c=comm->nChannels; c<comm->p2pnChannels; c++) NCCLCHECK(initChannel(comm, c));
+
+  // We want to spread channels used when there aren't many and progressively
+  // fill the whole space of nChannels. To do so we mirror the bits in the
+  // nChannels space.
+  for (int c=0; c<comm->p2pnChannelsPerPeer; c++) {
+    int mirror = 0;
+    for (int b=1, mb=(comm->p2pnChannels>>1); b<comm->p2pnChannels; b<<=1, mb>>=1) if (c & b) mirror |= mb;
+    comm->p2pChannels[c] = mirror;
+  }
+  INFO(NCCL_INIT, "%d coll channels, %d p2p channels, %d p2p channels per peer", comm->nChannels, comm->p2pnChannels, comm->p2pnChannelsPerPeer);
+  return ncclSuccess;
 }

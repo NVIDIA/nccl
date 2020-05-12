@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2019-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -8,7 +8,7 @@
 #define NCCL_INFO_H_
 
 #include "nccl.h"
-#include "core.h"
+#include "devcomm.h"
 
 typedef enum {
   ncclPatternRing,
@@ -47,6 +47,10 @@ struct ncclInfo {
   size_t nBytes;
   int nstepsPerLoop;
   int nchunksPerLoop;
+  ssize_t sendbytes;
+  ssize_t recvbytes;
+  uint32_t delta;
+  int channelId;
 };
 
 #endif

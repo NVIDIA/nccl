@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Copyright (c) 2018-2019, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2018-2020, NVIDIA CORPORATION. All rights reserved.
 #
 # See LICENSE.txt for license information
 #
@@ -9,7 +9,7 @@ dir=$1
 
 targets="GENOBJS := \\\\\n"
 
-for base in all_reduce all_gather broadcast reduce reduce_scatter; do
+for base in sendrecv all_reduce all_gather broadcast reduce reduce_scatter; do
   opn=0
   for op in sum prod min max; do
     dtn=0

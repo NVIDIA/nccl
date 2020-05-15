@@ -8,7 +8,7 @@ include ../makefiles/common.mk
 include ../makefiles/version.mk
 
 ##### src files
-INCEXPORTS  := nccl.h nccl_net.h
+INCEXPORTS  := nccl.h nccl_net.h nccl_types.h
 LIBSRCFILES := init.cc channel.cc bootstrap.cc transport.cc enqueue.cc group.cc debug.cc \
                 misc/nvmlwrap.cc misc/ibvwrap.cc misc/utils.cc misc/argcheck.cc \
 		transport/p2p.cc transport/shm.cc transport/net.cc transport/net_socket.cc transport/net_ib.cc transport/coll_net.cc \
@@ -55,7 +55,7 @@ ALWAYS_REBUILD:
 -include $(DEPFILES)
 $(LIBDIR)/$(LIBTARGET) $(LIBDIR)/$(STATICLIBTARGET) : $(LIBOBJ)
 
-$(INCDIR)/nccl.h : nccl.h.in
+$(INCDIR)/nccl_types.h : nccl_types.h.in
 # NCCL_VERSION(X,Y,Z) ((X) * 1000 + (Y) * 100 + (Z))
 	@$(eval NCCL_VERSION := $(shell printf "%d%d%02d" $(NCCL_MAJOR) $(NCCL_MINOR) $(NCCL_PATCH)))
 	mkdir -p $(INCDIR)

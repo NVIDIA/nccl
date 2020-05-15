@@ -9,33 +9,11 @@
 
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
-
-#define NCCL_MAJOR ${nccl:Major}
-#define NCCL_MINOR ${nccl:Minor}
-#define NCCL_PATCH ${nccl:Patch}
-#define NCCL_SUFFIX "${nccl:Suffix}"
-
-#define NCCL_VERSION_CODE ${nccl:Version}
-#define NCCL_VERSION(X,Y,Z) ((X) * 1000 + (Y) * 100 + (Z))
+#include <nccl_types.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/* Opaque handle to communicator */
-typedef struct ncclComm* ncclComm_t;
-
-#define NCCL_UNIQUE_ID_BYTES 128
-typedef struct { char internal[NCCL_UNIQUE_ID_BYTES]; } ncclUniqueId;
-
-/* Error type */
-typedef enum { ncclSuccess                 =  0,
-               ncclUnhandledCudaError      =  1,
-               ncclSystemError             =  2,
-               ncclInternalError           =  3,
-               ncclInvalidArgument         =  4,
-               ncclInvalidUsage            =  5,
-               ncclNumResults              =  6 } ncclResult_t;
 
 /* Return the NCCL_VERSION_CODE of the NCCL library in the supplied integer.
  * This integer is coded with the MAJOR, MINOR and PATCH level of the
@@ -97,25 +75,6 @@ ncclResult_t pncclCommCuDevice(const ncclComm_t comm, int* device);
 /* Returns the user-ordered "rank" associated with the communicator. */
 ncclResult_t  ncclCommUserRank(const ncclComm_t comm, int* rank);
 ncclResult_t pncclCommUserRank(const ncclComm_t comm, int* rank);
-
-/* Reduction operation selector */
-typedef enum { ncclSum        = 0,
-               ncclProd       = 1,
-               ncclMax        = 2,
-               ncclMin        = 3,
-               ncclNumOps     = 4 } ncclRedOp_t;
-
-/* Data types */
-typedef enum { ncclInt8       = 0, ncclChar       = 0,
-               ncclUint8      = 1,
-               ncclInt32      = 2, ncclInt        = 2,
-               ncclUint32     = 3,
-               ncclInt64      = 4,
-               ncclUint64     = 5,
-               ncclFloat16    = 6, ncclHalf       = 6,
-               ncclFloat32    = 7, ncclFloat      = 7,
-               ncclFloat64    = 8, ncclDouble     = 8,
-               ncclNumTypes   = 9 } ncclDataType_t;
 
 /*
  * Collective communication operations

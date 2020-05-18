@@ -105,6 +105,10 @@ ncclResult_t ncclGroupStart() {
 
 NCCL_API(ncclResult_t, ncclGroupEnd);
 ncclResult_t ncclGroupEnd() {
+  if (ncclGroupMode == 0) {
+    WARN("No ncclGroupStart() before ncclGroupEnd()");
+    return ncclSuccess;
+  }
   ncclGroupMode--;
   if (ncclGroupMode > 0) return ncclSuccess;
   int savedDev;

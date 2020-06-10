@@ -323,12 +323,14 @@ ncclResult_t ncclTopoGetXmlFromFile(const char* xmlTopoFile, struct ncclXml* xml
 static void memcpylower(char* dst, const char* src, const size_t size) {
   for (int i=0; i<size; i++) dst[i] = tolower(src[i]);
 }
-static ncclResult_t getPciPath(const char* busId, char** path) {
+
+static ncclResult_t getPciPath(const char* busId, char path[PATH_MAX+1]) {
   char busPath[] = "/sys/class/pci_bus/0000:00/../../0000:00:00.0";
   memcpylower(busPath+sizeof("/sys/class/pci_bus/")-1, busId, BUSID_REDUCED_SIZE-1);
   memcpylower(busPath+sizeof("/sys/class/pci_bus/0000:00/../../")-1, busId, BUSID_SIZE-1);
-  *path = realpath(busPath, NULL);
-  if (*path == NULL) {
+  // Ensure that the returned string will always be null-terminated;
+  path[PATH_MAX] = 0;
+  if (realpath(busPath, path) == NULL) {
     WARN("Could not find real path of %s", busPath);
     return ncclSystemError;
   }
@@ -458,20 +460,21 @@ int checkBDFFormat(char* bdf) {
   return 1;
 }
 
-ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* xml) {
+ncclResult_t ncclTopoGetXmlNodeFromSys(struct ncclXmlNode* pciNode,
+                                       struct ncclXml* xml,
+                                       struct ncclXmlNode** return_parent) {
   // Fill info, then parent
   const char* busId;
   NCCLCHECK(xmlGetAttr(pciNode, "busid", &busId));
-  char* path = NULL;
+  char path[PATH_MAX+1];
+  NCCLCHECK(getPciPath(busId, path));
   int index;
   NCCLCHECK(xmlGetAttrIndex(pciNode, "class", &index));
   if (index == -1) {
-    if (path == NULL) NCCLCHECK(getPciPath(busId, &path));
     NCCLCHECK(ncclTopoSetAttrFromSys(pciNode, path, "class", "class"));
   }
   NCCLCHECK(xmlGetAttrIndex(pciNode, "link_speed", &index));
   if (index == -1) {
-    if (path == NULL) NCCLCHECK(getPciPath(busId, &path));
     char deviceSpeedStr[MAX_STR_LEN];
     float deviceSpeed;
     NCCLCHECK(ncclTopoGetStrFromSys(path, "max_link_speed", deviceSpeedStr));
@@ -484,7 +487,6 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
   }
   NCCLCHECK(xmlGetAttrIndex(pciNode, "link_width", &index));
   if (index == -1) {
-    if (path == NULL) NCCLCHECK(getPciPath(busId, &path));
     char strValue[MAX_STR_LEN];
     NCCLCHECK(ncclTopoGetStrFromSys(path, "max_link_width", strValue));
     int deviceWidth = strtol(strValue, NULL, 0);
@@ -494,8 +496,6 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
   }
   struct ncclXmlNode* parent = pciNode->parent;
   if (parent == NULL) {
-    if (path == NULL) NCCLCHECK(getPciPath(busId, &path));
-
     // Save that for later in case next step is a CPU
     char numaIdStr[MAX_STR_LEN];
     NCCLCHECK(ncclTopoGetStrFromSys(path, "numa_node", numaIdStr));
@@ -539,12 +539,18 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
     pciNode->parent = parent;
     parent->subs[parent->nSubs++] = pciNode;
   }
+  *return_parent = parent;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* xml) {
+  struct ncclXmlNode* parent;
+  ncclTopoGetXmlNodeFromSys(pciNode, xml, &parent);
   if (strcmp(parent->name, "pci") == 0) {
     NCCLCHECK(ncclTopoGetXmlFromSys(parent, xml));
   } else if (strcmp(parent->name, "cpu") == 0) {
     NCCLCHECK(ncclTopoGetXmlFromCpu(parent, xml));
   }
-  free(path);
   return ncclSuccess;
 }
 
@@ -640,8 +646,8 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
     if (index == -1) {
       const char* busId;
       NCCLCHECK(xmlGetAttr(sub, "target", &busId));
-      char* path;
-      NCCLCHECK(getPciPath(busId, &path));
+      char path[PATH_MAX+1];
+      NCCLCHECK(getPciPath(busId, path));
       NCCLCHECK(ncclTopoSetAttrFromSys(sub, path, "class", "tclass"));
     }
   }

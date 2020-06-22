@@ -774,8 +774,8 @@ done:
     int dupChannels = std::min(graph->nChannels*2, graph->maxChannels);
     memcpy(graph->intra+graph->nChannels*ngpus, graph->intra, (dupChannels-graph->nChannels)*ngpus*sizeof(int));
     memcpy(graph->inter+graph->nChannels*2,graph->inter, (dupChannels-graph->nChannels)*2*sizeof(int));
-    graph->speedIntra /= 2;
-    graph->speedInter /= 2;
+    graph->speedIntra /= DIVUP(dupChannels, graph->nChannels);
+    graph->speedInter /= DIVUP(dupChannels, graph->nChannels);
     graph->nChannels = dupChannels;
   }
   return ncclSuccess;

@@ -145,7 +145,10 @@ void* ncclAsyncThreadPreconnect(void* args_) {
 
 NCCL_API(ncclResult_t, ncclGroupEnd);
 ncclResult_t ncclGroupEnd() {
-  if (ncclGroupMode == 0) return ncclInvalidUsage;
+  if (ncclGroupMode == 0) {
+    WARN("ncclGroupEnd: not in a group call.");
+    return ncclInvalidUsage;
+  }
   ncclGroupMode--;
   if (ncclGroupMode > 0) return ncclSuccess;
   int savedDev;

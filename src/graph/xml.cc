@@ -640,9 +640,14 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
     if (index == -1) {
       const char* busId;
       NCCLCHECK(xmlGetAttr(sub, "target", &busId));
-      char* path;
-      NCCLCHECK(getPciPath(busId, &path));
-      NCCLCHECK(ncclTopoSetAttrFromSys(sub, path, "class", "tclass"));
+      if (strcmp(busId, "fffffff:ffff:ff") == 0) {
+        // Remote NVLink device is not visible inside this VM. Assume NVSwitch.
+        NCCLCHECK(xmlSetAttr(sub, "tclass", "0x068000"));
+      } else {
+        char* path;
+        NCCLCHECK(getPciPath(busId, &path));
+        NCCLCHECK(ncclTopoSetAttrFromSys(sub, path, "class", "tclass"));
+      }
     }
   }
   *gpuNodeRet = gpuNode;

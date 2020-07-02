@@ -46,7 +46,7 @@ lib : $(INCTARGETS) $(LIBDIR)/$(LIBTARGET) $(PKGDIR)/$(PKGTARGET)
 
 staticlib : $(LIBDIR)/$(STATICLIBTARGET)
 
-$(DEVICELIB): ALWAYS_REBUILD
+$(DEVICELIB): ALWAYS_REBUILD $(INCTARGETS)
 	$(MAKE) -C collectives/device
 
 # Empty target to force rebuild
@@ -107,7 +107,7 @@ $(PKGDIR)/%.pc : %.pc
 	mkdir -p $(PKGDIR)
 	install -m 644 $< $@
 
-$(OBJDIR)/%.o : %.cc
+$(OBJDIR)/%.o : %.cc $(INCTARGETS)
 	@printf "Compiling  %-35s > %s\n" $< $@
 	mkdir -p `dirname $@`
 	$(CXX) -I. -I$(INCDIR) $(CXXFLAGS) -Iinclude -c $< -o $@

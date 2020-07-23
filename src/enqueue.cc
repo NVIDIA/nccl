@@ -337,7 +337,6 @@ static ncclResult_t computeColl(struct ncclInfo* info /* input */, struct ncclCo
   coll->args.sendbuff = info->sendbuff;
   coll->args.recvbuff = info->recvbuff;
   coll->args.comm = info->comm->devComm;
-  coll->args.opCount = info->comm->opCount;
 
   if (info->coll == ncclCollSendRecv) {
     coll->args.p2p.sendCount = info->sendbytes;

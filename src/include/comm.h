@@ -37,7 +37,6 @@ struct ncclSendMem {
       char pad1[CACHE_LINE_SIZE-sizeof(uint64_t)];
       void* ptrExchange;
       char pad2[CACHE_LINE_SIZE-sizeof(void*)];
-      uint64_t opCount;
     };
     char pad3[MEM_ALIGN];
   };
@@ -49,7 +48,6 @@ struct ncclRecvMem {
     struct {
       uint64_t tail;
       char pad1[CACHE_LINE_SIZE-sizeof(uint64_t)];
-      uint64_t opCount;
       char pad2[CACHE_LINE_SIZE-sizeof(uint64_t)];
       int sizesFifo[NCCL_STEPS];
     };
@@ -108,9 +106,6 @@ struct ncclComm {
 
   // Whether there has been a fatal error in this communicator.
   ncclResult_t fatalError;
-
-  // Error reported by GPU
-  volatile ncclDevError_t* fatalDevError;
 
   // Flag to ask NCCL kernels to abort
   volatile uint32_t *abortFlag;

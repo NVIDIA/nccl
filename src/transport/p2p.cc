@@ -251,10 +251,8 @@ static ncclResult_t p2pSendConnect(struct ncclConnect* connectInfo, int nranks, 
     }
   }
   send->conn.tail = &remDevMem->tail;
-  send->conn.opCountRem = &remDevMem->opCount;
   send->conn.head = &resources->devMem->head;
   send->conn.ptrExchange = &resources->devMem->ptrExchange;
-  send->conn.opCountLoc = &resources->devMem->opCount;
   return ncclSuccess;
 }
 
@@ -291,9 +289,7 @@ ncclResult_t p2pRecvConnect(struct ncclConnect* connectInfo, int nranks, int ran
     }
   }
   recv->conn.tail = &resources->devMem->tail;
-  recv->conn.opCountLoc = &resources->devMem->opCount;
   recv->conn.head = &remDevMem->head;
-  recv->conn.opCountRem = &remDevMem->opCount;
   return ncclSuccess;
 }
 

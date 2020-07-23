@@ -126,10 +126,8 @@ ncclResult_t shmSendConnect(struct ncclConnect* connectInfo, int nranks, int ran
     offset += send->comm->buffSizes[p];
   }
   send->conn.tail = &resources->devRemHostMem->tail;
-  send->conn.opCountRem = &resources->devRemHostMem->opCount;
 
   send->conn.head = &resources->devHostMem->head;
-  send->conn.opCountLoc = &resources->devHostMem->opCount;
   return ncclSuccess;
 }
 
@@ -145,7 +143,6 @@ ncclResult_t shmRecvConnect(struct ncclConnect* connectInfo, int nranks, int ran
   NCCLCHECK(shmOpen(shmName, resources->remShmSize, (void**)&resources->remHostMem, (void**)&resources->devRemHostMem, 0));
   NCCLCHECK(shmUnlink(shmName));
   recv->conn.head = &resources->devRemHostMem->head;
-  recv->conn.opCountRem = &resources->devRemHostMem->opCount;
 
   int offset = 0;
   for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) {
@@ -153,7 +150,6 @@ ncclResult_t shmRecvConnect(struct ncclConnect* connectInfo, int nranks, int ran
     offset += recv->comm->buffSizes[p];
   }
   recv->conn.tail = &resources->devHostMem->tail;
-  recv->conn.opCountLoc = &resources->devHostMem->opCount;
   return ncclSuccess;
 }
 

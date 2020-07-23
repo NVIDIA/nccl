@@ -31,7 +31,7 @@ __device__ void ncclReduceRingKernel(struct CollectiveArgs* args) {
   T * __restrict__ thisOutput = (T*)args->recvbuff;
 
   ncclPrimitives<UNROLL, REDUCE_CHUNKSTEPS/REDUCE_SLICESTEPS, REDUCE_SLICESTEPS, T, 1, 1, 0, FUNC>
-    prims(tid, nthreads, &ring->prev, &ring->next, NULL, stepSize, channel, comm, args->opCount);
+    prims(tid, nthreads, &ring->prev, &ring->next, NULL, stepSize, channel, comm);
 
   for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
     int realChunkSize = min(chunkSize, DIVUP(size-gridOffset,nChannels));
@@ -72,7 +72,7 @@ __device__ void ncclReduceRingLLKernel(struct CollectiveArgs* args) {
   const int prevRank = ring->devUserRanks[nranks-1];
   const int root = args->coll.root;
 
-  ncclLLPrimitives<T, FUNC, 1, 1> LLprims(tid, nthreads, &ring->prev, &ring->next, stepLines, channel, comm, args->opCount);
+  ncclLLPrimitives<T, FUNC, 1, 1> LLprims(tid, nthreads, &ring->prev, &ring->next, stepLines, channel, comm);
 
   // Compute pointers
   const T * __restrict__ thisInput = (const T*)args->sendbuff;
@@ -121,7 +121,7 @@ __device__ void ncclReduceRingLL128Kernel(struct CollectiveArgs* args) {
   const int prevRank = ring->devUserRanks[nranks-1];
   const int root = args->coll.root;
 
-  ncclLL128Primitives<T, FUNC, 1, 1> LLprims(tid, nthreads, &ring->prev, &ring->next, stepSize, channel, comm, args->opCount);
+  ncclLL128Primitives<T, FUNC, 1, 1> LLprims(tid, nthreads, &ring->prev, &ring->next, stepSize, channel, comm);
 
   // Compute pointers
   const T * __restrict__ thisInput = (const T*)args->sendbuff;

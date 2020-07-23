@@ -83,8 +83,6 @@ struct ncclConnInfo {
   char *buffs[NCCL_NUM_PROTOCOLS]; // Local for recv, remote for send
   uint64_t *tail;     // Local for recv, remote for send
   uint64_t *head;     // Local for send, remote for recv
-  uint64_t *opCountLoc; // opCount of local rank
-  uint64_t *opCountRem; // opCount of remote rank
 
   int direct;         // Direct communication
   void **ptrExchange; // Pointer exchange for direct communication
@@ -136,7 +134,6 @@ struct ncclDevComm;
 /* Make sure to adjust padding at the end of ncclColl. */
 struct CollectiveArgs {
   struct ncclDevComm* comm;
-  uint64_t opCount;
 
   // local and remote input, output, and buffer
   const void * sendbuff;
@@ -205,12 +202,6 @@ struct ncclChannel {
 };
 static_assert(sizeof(struct ncclChannel) == 0x80*sizeof(int), "ncclChannel must have a pow2 size");
 
-typedef enum {
-  ncclDevSuccess,
-  ncclDevAssertedMismatch,
-  ncclDevSuspectedMismatch
-} ncclDevError_t;
-
 struct ncclDevComm {
   int rank;
   int nRanks;
@@ -218,7 +209,6 @@ struct ncclDevComm {
 
   // Flag to ask NCCL kernels to abort
   volatile uint32_t *abortFlag;
-  volatile ncclDevError_t *fatalDevError;
 
   // Channels, device side
   struct ncclChannel* channels;

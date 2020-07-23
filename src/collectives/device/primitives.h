@@ -84,18 +84,6 @@ class ncclPrimitives {
     }
   }
 
-  uint32_t mismatch = 0;
-  const uint64_t opCount;
-
-  inline __device__ void checkMismatch(struct ncclConnInfo* conn) {
-    if (mismatch) {
-      // In non-LL, we use _threadfence_system before incrementing opCount, yet we are still waiting for credits here, so there must be a size mismatch
-      *(comm->fatalDevError) = ncclDevAssertedMismatch;
-    } else if (conn && *conn->opCountRem > opCount) {
-      mismatch += 1;
-    }
-  }
-
   uint32_t spins = 0;
   uint32_t abort = 0;
 
@@ -103,7 +91,6 @@ class ncclPrimitives {
     spins++;
     if (abort == 0 && spins == SPINS_BEFORE_CHECK_ABORT) {
       abort = *(comm->abortFlag);
-      if (wid == i) checkMismatch(send ? sendConn : recvConn);
       spins = 0;
     }
     return abort;
@@ -111,7 +98,6 @@ class ncclPrimitives {
 
   inline __device__ void waitSend(int nbytes) {
     spins = 0;
-    mismatch = 0;
     if (sendConnHeadPtr) {
       while (sendConnHeadCache + NCCL_STEPS < sendConnHead + SLICESTEPS) {
         sendConnHeadCache = *sendConnHeadPtr;
@@ -126,7 +112,6 @@ class ncclPrimitives {
 
   inline __device__ void waitRecv() {
     spins = 0;
-    mismatch = 0;
     if (recvConnTailPtr) {
       while (recvConnTailCache < recvConnTail + SLICESTEPS) {
         recvConnTailCache = *recvConnTailPtr;
@@ -252,8 +237,6 @@ class ncclPrimitives {
       recvConnHeadPtr = recvConn->head;
       // Return credits in case we rounded up.
       *recvConnHeadPtr = recvConnHead;
-      // Update opCount in case we skipped some operations
-      *(recvConn->opCountLoc) = opCount;
     }
   }
 
@@ -277,7 +260,6 @@ class ncclPrimitives {
       sendConnHeadPtr = sendConn->head;
       sendConnHeadCache = *sendConnHeadPtr;
       sendConnFifoPtr = sendConn->fifo;
-      *(sendConn->opCountLoc) = opCount;
     }
     if (tid >= nthreads && wid<nsend) {
       sendConnTailPtr = sendConn->tail;
@@ -287,7 +269,6 @@ class ncclPrimitives {
   __device__ __forceinline__ void saveRecvSync() {
     if (tid >= nthreads && wid < nrecv) {
       recvConn->step = recvConnHead;
-      *(recvConn->opCountLoc) = opCount+1;
       __threadfence_system();
     }
   }
@@ -295,15 +276,14 @@ class ncclPrimitives {
   __device__ __forceinline__ void saveSendSync() {
     if (tid < nsend) {
       sendConn->step = sendConnHead;
-      *(sendConn->opCountLoc) = opCount+1;
       __threadfence_system();
     }
   }
 
  public:
   __device__ __forceinline__
-  ncclPrimitives(const int tid, const int nthreads, int* recvPeers, int* sendPeers, T* directBuff, int stepSize, struct ncclChannel* channel, struct ncclDevComm* comm, const uint64_t opCount)
-    : comm(comm), tid(tid), nthreads(nthreads), wid(tid%WARP_SIZE), stepSize(stepSize), opCount(opCount) {
+  ncclPrimitives(const int tid, const int nthreads, int* recvPeers, int* sendPeers, T* directBuff, int stepSize, struct ncclChannel* channel, struct ncclDevComm* comm)
+    : comm(comm), tid(tid), nthreads(nthreads), wid(tid%WARP_SIZE), stepSize(stepSize) {
     // Make sure step is updated before we read it.
     barrier();
 

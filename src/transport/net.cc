@@ -66,10 +66,8 @@ ncclResult_t netSendSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
 
   send->conn.direct |= resources->useGdr ? NCCL_DIRECT_NIC : 0;
   send->conn.tail = &resources->recvMem->tail;
-  send->conn.opCountRem = &resources->recvMem->opCount;
   send->conn.fifo = resources->recvMem->sizesFifo;
   send->conn.head = &resources->sendMem->head;
-  send->conn.opCountLoc = &resources->sendMem->opCount;
   for (int i=0; i<NCCL_STEPS; i++) send->conn.fifo[i] = -1;
 
   int protoLoc[NCCL_NUM_PROTOCOLS];
@@ -117,9 +115,7 @@ ncclResult_t netRecvSetup(struct ncclTopoSystem* topo, struct ncclTopoGraph* gra
 
   recv->conn.direct |= resources->useGdr ? NCCL_DIRECT_NIC : 0;
   recv->conn.tail = &resources->recvMem->tail;
-  recv->conn.opCountLoc = &resources->recvMem->opCount;
   recv->conn.head = &resources->sendMem->head;
-  recv->conn.opCountRem = &resources->sendMem->opCount;
 
   int protoLoc[NCCL_NUM_PROTOCOLS];
   for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) {
@@ -224,9 +220,6 @@ ncclResult_t netRecvFree(void* transportResources) {
 ncclResult_t netSendProxy(struct ncclProxyArgs* args) {
   struct netSendResources* resources = (struct netSendResources*) (args->connector->transportResources);
   if (args->state == ncclProxyOpReady) {
-    // Update opCount
-    resources->recvMem->opCount = args->opCount;
-
     // Round to next multiple of sliceSteps
     resources->step = ROUNDUP(resources->step, args->chunkSteps);
     args->head = resources->step;
@@ -334,9 +327,6 @@ ncclResult_t netSendProxy(struct ncclProxyArgs* args) {
 ncclResult_t netRecvProxy(struct ncclProxyArgs* args) {
   struct netRecvResources* resources = (struct netRecvResources*) (args->connector->transportResources);
   if (args->state == ncclProxyOpReady) {
-    // Update opCount
-    resources->sendMem->opCount = args->opCount;
-
     // Round to next multiple of sliceSteps
     resources->step = ROUNDUP(resources->step, args->chunkSteps);
     args->head = resources->step;

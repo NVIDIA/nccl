@@ -317,21 +317,19 @@ ncclResult_t ncclTopoAddPci(struct ncclXmlNode* xmlPci, struct ncclTopoSystem* s
   NCCLCHECK(busIdToInt64(str, &busId));
 
   struct ncclTopoNode* node = NULL;
-  if (type == GPU) {
-    struct ncclXmlNode* xmlGpu;
-    NCCLCHECK(xmlGetSub(xmlPci, "gpu", &xmlGpu));
-    if (xmlGpu == NULL) return ncclSuccess;
+  struct ncclXmlNode* xmlGpu = NULL;
+  NCCLCHECK(xmlGetSub(xmlPci, "gpu", &xmlGpu));
+  if (xmlGpu != NULL) {
     int index;
     NCCLCHECK(xmlGetAttrIndex(xmlGpu, "rank", &index));
     if (index == -1) return ncclSuccess;
     NCCLCHECK(ncclTopoCreateNode(system, &node, type, busId));
     NCCLCHECK(ncclTopoAddGpu(xmlGpu, system, node));
   }
-  if (type == NIC) {
-    struct ncclXmlNode* xmlNic;
-    NCCLCHECK(xmlGetSub(xmlPci, "nic", &xmlNic));
-    if (xmlNic == NULL) return ncclSuccess;
-
+  struct ncclXmlNode* xmlNic = NULL;
+  NCCLCHECK(xmlGetSub(xmlPci, "nic", &xmlNic));
+  if (xmlNic != NULL) {
+    type = NIC;
     // Ignore sub device ID and merge multi-port NICs into one PCI device.
     busId &= 0xfffffffffffffff0;
     struct ncclTopoNode* nicNode = NULL;

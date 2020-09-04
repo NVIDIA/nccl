@@ -24,9 +24,8 @@
 #include "ibvwrap.h"
 
 #define USE_RDMA_WRITE 1
-#define USE_RDMA_SEND_INLINE 0
 #define MAXNAMESIZE 64
-static char ncclIbIfName[MAX_IF_NAME_SIZE];
+static char ncclIbIfName[MAX_IF_NAME_SIZE+1];
 static union socketAddress ncclIbIfAddr;
 
 static int ncclNIbDevs = -1;
@@ -57,6 +56,8 @@ pthread_mutex_t ncclIbLock = PTHREAD_MUTEX_INITIALIZER;
 NCCL_PARAM(IbGidIndex, "IB_GID_INDEX", 0);
 NCCL_PARAM(IbTimeout, "IB_TIMEOUT", 14);
 NCCL_PARAM(IbRetryCnt, "IB_RETRY_CNT", 7);
+NCCL_PARAM(IbPkey, "IB_PKEY", 0);
+NCCL_PARAM(IbUseInline, "IB_USE_INLINE", 0);
 NCCL_PARAM(IbSl, "IB_SL", 0);
 NCCL_PARAM(IbTc, "IB_TC", 0);
 NCCL_PARAM(IbArThreshold, "IB_AR_THRESHOLD", 8192);
@@ -199,7 +200,7 @@ ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction) {
             ncclIbDevs[d].port, ncclIbDevs[d].link == IBV_LINK_LAYER_INFINIBAND ? "IB" : "RoCE");
       }
       line[1023] = '\0';
-      char addrline[1024];
+      char addrline[SOCKET_NAME_MAXLEN+1];
       INFO(NCCL_INIT|NCCL_NET, "NET/IB : Using%s ; OOB %s:%s", line, ncclIbIfName, socketToString(&ncclIbIfAddr.sa, addrline));
     }
     pthread_mutex_unlock(&ncclIbLock);
@@ -246,7 +247,7 @@ ncclResult_t ncclIbGetProperties(int dev, ncclNetProperties_t* props) {
   return ncclSuccess;
 }
 
-#define MAX_REQUESTS 128
+#define MAX_REQUESTS NCCL_NET_MAX_REQUESTS
 
 struct ncclIbQpInfo {
   uint32_t lid;
@@ -267,18 +268,19 @@ struct ncclIbHandle {
   union socketAddress connectAddr;
 };
 
-struct ncclIbVerbs {
-  struct ibv_pd* pd;
-  struct ibv_cq* cq;
-};
-
 struct ncclIbRequest {
   int used;
   int type;
   struct ncclIbVerbs* verbs;
-  int done;
+  int events;
   int size;
-  int free;
+};
+
+struct ncclIbVerbs {
+  struct ibv_pd* pd;
+  struct ibv_cq* cq;
+  uint64_t pad[2];
+  struct ncclIbRequest reqs[MAX_REQUESTS];
 };
 
 struct ncclIbListenComm {
@@ -292,18 +294,23 @@ struct ncclIbSendFifo {
   uint32_t seq;
   uint32_t rkey;
   uint32_t ready;
+  uint64_t pad[1]; // Pad FIFO element size to be 32-bytes
 };
 
 struct ncclIbSendComm {
   struct ncclIbVerbs verbs;
   struct ncclIbSendFifo fifo[MAX_REQUESTS];
-  struct ncclIbRequest reqs[MAX_REQUESTS];
   uint32_t fifoHead;
   int fd;
   int ready;
   struct ibv_qp* qp;
   struct ibv_mr* fifoMr;
 };
+// The SendFifo needs to be 32-byte aligned and each element needs
+// to be a 32-byte multiple, so that an entry does not get split and
+// written out of order when IB Relaxed Ordering is enabled
+static_assert((offsetof(struct ncclIbSendComm, fifo) % 32) == 0, "ncclIbSendComm fifo must be 32-byte aligned");
+static_assert((sizeof(struct ncclIbSendFifo) % 32) == 0, "ncclIbSendFifo element size must be 32-byte multiples");
 
 struct ncclIbGpuFlush {
   int enabled;
@@ -326,16 +333,17 @@ struct ncclIbRemFifo {
 struct ncclIbRecvComm {
   struct ncclIbVerbs verbs;
   struct ncclIbRemFifo remFifo;
-  struct ncclIbRequest reqs[MAX_REQUESTS];
   int fd;
   int ready;
   struct ibv_qp* qp;
   struct ncclIbGpuFlush gpuFlush;
 };
+static_assert((offsetof(struct ncclIbRecvComm, remFifo) % 32) == 0, "ncclIbSendComm fifo must be 32-byte aligned");
 
 ncclResult_t ncclIbInitVerbs(ibv_context* ctx, struct ncclIbVerbs* verbs) {
   NCCLCHECK(wrap_ibv_alloc_pd(&verbs->pd, ctx));
-  NCCLCHECK(wrap_ibv_create_cq(&verbs->cq, ctx, MAX_REQUESTS, NULL, NULL, 0));
+  // Recv requests can generate 2 completions (one for the post FIFO, one for the Recv).
+  NCCLCHECK(wrap_ibv_create_cq(&verbs->cq, ctx, 2*MAX_REQUESTS, NULL, NULL, 0));
   return ncclSuccess;
 }
 
@@ -351,17 +359,17 @@ ncclResult_t ncclIbCreateQp(uint8_t ib_port, struct ncclIbVerbs* verbs, int acce
   qpInitAttr.send_cq = verbs->cq;
   qpInitAttr.recv_cq = verbs->cq;
   qpInitAttr.qp_type = IBV_QPT_RC;
-  // We might send 2 requests per send (RDMA_WRITE+RDMA_WRITE_WITH_IMM)
+  // We might send 2 messages per send (RDMA and RDMA_WITH_IMM)
   qpInitAttr.cap.max_send_wr = 2*MAX_REQUESTS;
   qpInitAttr.cap.max_recv_wr = MAX_REQUESTS;
   qpInitAttr.cap.max_send_sge = 1;
   qpInitAttr.cap.max_recv_sge = 1;
-  qpInitAttr.cap.max_inline_data = 0;
+  qpInitAttr.cap.max_inline_data = ncclParamIbUseInline() ? sizeof(struct ncclIbSendFifo) : 0;
   NCCLCHECK(wrap_ibv_create_qp(qp, verbs->pd, &qpInitAttr));
   struct ibv_qp_attr qpAttr;
   memset(&qpAttr, 0, sizeof(struct ibv_qp_attr));
   qpAttr.qp_state = IBV_QPS_INIT;
-  qpAttr.pkey_index = 0;
+  qpAttr.pkey_index = ncclParamIbPkey();
   qpAttr.port_num = ib_port;
   qpAttr.qp_access_flags = access_flags;
   NCCLCHECK(wrap_ibv_modify_qp(*qp, &qpAttr, IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS));
@@ -476,7 +484,7 @@ ncclResult_t ncclIbAccept(void* listenComm, void** recvComm) {
   socklen_t socklen = sizeof(struct sockaddr_in);
   SYSCHECKVAL(accept(lComm->fd, (struct sockaddr*)&sockaddr, &socklen), "accept", rComm->fd);
   struct ncclIbQpInfo remQpInfo;
-  NCCLCHECK(socketReceive(rComm->fd, &remQpInfo, sizeof(remQpInfo)));
+  NCCLCHECK(socketRecv(rComm->fd, &remQpInfo, sizeof(remQpInfo)));
 
   // IB setup
   ibv_context* ctx = ncclIbDevs[lComm->dev].context;
@@ -504,14 +512,7 @@ ncclResult_t ncclIbAccept(void* listenComm, void** recvComm) {
   NCCLCHECK(wrap_ibv_reg_mr(&rComm->remFifo.mr, rComm->verbs.pd, &rComm->remFifo.elems, sizeof(struct ncclIbSendFifo)*MAX_REQUESTS, IBV_ACCESS_REMOTE_WRITE|IBV_ACCESS_LOCAL_WRITE|IBV_ACCESS_REMOTE_READ));
   rComm->remFifo.sge.length = sizeof(struct ncclIbSendFifo);
   rComm->remFifo.sge.lkey = rComm->remFifo.mr->lkey;
-
-#if USE_RDMA_SEND_INLINE
-  // Determine whether the remFifo element data can be sent INLINE
-  struct ibv_qp_attr attr;
-  struct ibv_qp_init_attr init_attr;
-  NCCLCHECK(wrap_ibv_query_qp(qp, &attr, IBV_QP_CAP, &init_attr));
-  if (init_attr.cap.max_inline_data >= rComm->remFifo.sge.length) rComm->remFifo.flags = IBV_SEND_INLINE;
-#endif
+  if (ncclParamIbUseInline()) rComm->remFifo.flags = IBV_SEND_INLINE;
 
   // Allocate Flush dummy buffer for GPU Direct RDMA
   rComm->gpuFlush.enabled = (ncclIbGdrSupport(lComm->dev) == 0) && (ncclParamIbGdrFlushDisable() == 0) ? 1 : 0;
@@ -548,16 +549,15 @@ ncclResult_t ncclIbAccept(void* listenComm, void** recvComm) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclIbGetRequest(struct ncclIbRequest* reqs, struct ncclIbRequest** req) {
+ncclResult_t ncclIbGetRequest(struct ncclIbVerbs* verbs, struct ncclIbRequest** req) {
   for (int i=0; i<MAX_REQUESTS; i++) {
-    struct ncclIbRequest* r = reqs+i;
+    struct ncclIbRequest* r = verbs->reqs+i;
     if (r->used == 0) {
       r->used = 1;
       r->type = 0;
-      r->verbs = NULL;
-      r->done = 0;
+      r->verbs = verbs;
+      r->events = 1;
       r->size = -1;
-      r->free = 0;
       *req = r;
       return ncclSuccess;
     }
@@ -565,6 +565,10 @@ ncclResult_t ncclIbGetRequest(struct ncclIbRequest* reqs, struct ncclIbRequest**
   WARN("NET/IB : unable to allocate requests");
   *req = NULL;
   return ncclInternalError;
+}
+ncclResult_t ncclIbFreeRequest(struct ncclIbRequest* r) {
+  r->used = 0;
+  return ncclSuccess;
 }
 
 ncclResult_t ncclSendCheck(struct ncclIbSendComm* comm) {
@@ -580,7 +584,6 @@ ncclResult_t ncclSendCheck(struct ncclIbSendComm* comm) {
   NCCLCHECK(ncclIbRtrQp(qp, &remQpInfo));
   NCCLCHECK(ncclIbRtsQp(qp));
   comm->ready = 1;
-
   // Block until this is done. It *should* not block indefinitely.
   NCCLCHECK(socketSend(comm->fd, &comm->ready, sizeof(int)));
 
@@ -601,6 +604,7 @@ ncclResult_t ncclIbTest(void* request, int* done, int* size);
 #define REG_ALIGN (4096)
 
 ncclResult_t ncclIbRegMr(void* comm, void* data, int size, int type, void** mhandle) {
+  static_assert(offsetof(struct ncclIbSendComm, verbs) == offsetof(struct ncclIbRecvComm, verbs), "Send and recv comms must have verbs at the same offset");
   struct ncclIbVerbs* verbs = (struct ncclIbVerbs*)comm;
   uint64_t addr = (uint64_t)data;
   assert(size > 0);
@@ -634,8 +638,7 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, int size, void* mhandle, vo
   if (*readyPtr == 0) { *request = NULL; return ncclSuccess; }
 
   struct ncclIbRequest* req;
-  NCCLCHECK(ncclIbGetRequest(comm->reqs, &req));
-  req->verbs = &comm->verbs;
+  NCCLCHECK(ncclIbGetRequest(&comm->verbs, &req));
   req->size = size;
 
   struct ibv_send_wr wr;
@@ -651,23 +654,24 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, int size, void* mhandle, vo
     wr.sg_list = &sge;
     wr.num_sge = 1;
   }
+#if USE_RDMA_WRITE == 0
   wr.opcode = IBV_WR_SEND;
   wr.send_flags = IBV_SEND_SIGNALED;
-
-  int useAr = 0;
-  if (size > ncclParamIbArThreshold()) {
-    useAr = 1;
-  }
-#if USE_RDMA_WRITE
+#else
   __sync_synchronize(); // order the readyPtr load against rkey load below
   // Sanity checks to catch user collective call count/size mismatches
   // plus any potential programming errors
-  if (size > slot->size || slot->size <= 0 || slot->addr == 0 || slot->rkey == 0 || slot->seq != comm->fifoHead) {
+  if (size > slot->size || slot->size < 0 || slot->addr == 0 || slot->rkey == 0 || slot->seq != comm->fifoHead) {
     WARN("NET/IB : collective mismatch error local size %d remote %d addr %lx rkey %x seq %x/%x",
         size, slot->size, slot->addr, slot->rkey, slot->seq, comm->fifoHead);
     return ncclInternalError;
   }
+  int useAr = 0;
+  if (size > ncclParamIbArThreshold()) {
+    useAr = 1;
+  }
   wr.opcode = useAr ? IBV_WR_RDMA_WRITE : IBV_WR_RDMA_WRITE_WITH_IMM;
+  wr.send_flags = useAr ? 0 : IBV_SEND_SIGNALED;
   wr.wr.rdma.remote_addr = slot->addr;
   wr.wr.rdma.rkey = slot->rkey;
   wr.imm_data = size; // Send the message size via imm_data
@@ -691,7 +695,7 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, int size, void* mhandle, vo
     wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
     wr.sg_list = NULL;
     wr.num_sge = 0;
-    wr.send_flags &= ~IBV_SEND_SIGNALED;
+    wr.send_flags |= IBV_SEND_SIGNALED;
     NCCLCHECK(wrap_ibv_post_send(comm->qp, &wr, &bad_wr));
   }
 #endif
@@ -699,28 +703,51 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, int size, void* mhandle, vo
   return ncclSuccess;
 }
 
-ncclResult_t ncclIbPostFifo(struct ncclIbRecvComm* comm, uint32_t rkey, uint64_t addr, int size) {
+ncclResult_t ncclIbPostFifo(struct ncclIbRecvComm* comm, uint32_t rkey, uint64_t addr, int size, struct ncclIbRequest* req) {
   struct ibv_send_wr wr;
   memset(&wr, 0, sizeof(wr));
-  struct ncclIbRequest* req;
-  NCCLCHECK(ncclIbGetRequest(comm->reqs, &req));
-  req->verbs = &comm->verbs;
-  req->free = 1; // Not a user req ; free as soon as it is complete.
-  wr.wr_id = (uint64_t)req;
 
-  struct ncclIbSendFifo* localElem = comm->remFifo.elems + (comm->remFifo.tail % MAX_REQUESTS);
+  int slot = comm->remFifo.tail%MAX_REQUESTS;
+  struct ncclIbSendFifo* localElem = comm->remFifo.elems + slot;
   localElem->addr = addr;
   localElem->rkey = rkey;
   localElem->ready = 1;
   localElem->size = size; // Sanity/Debugging
   localElem->seq = comm->remFifo.tail; // Sanity/Debugging
-  wr.wr.rdma.remote_addr = comm->remFifo.addr + (comm->remFifo.tail % MAX_REQUESTS) * sizeof(struct ncclIbSendFifo);
+  wr.wr.rdma.remote_addr = comm->remFifo.addr + slot*sizeof(struct ncclIbSendFifo);
   wr.wr.rdma.rkey = comm->remFifo.rkey;
   comm->remFifo.sge.addr = (uint64_t)localElem;
   wr.sg_list = &comm->remFifo.sge;
   wr.num_sge = 1;
   wr.opcode = IBV_WR_RDMA_WRITE;
-  wr.send_flags = IBV_SEND_SIGNALED | comm->remFifo.flags; // IBV_SEND_INLINE
+  wr.send_flags = comm->remFifo.flags; // IBV_SEND_INLINE
+
+  // We need to occasionally post a request with the IBV_SEND_SIGNALED flag, otherwise
+  // the send queue will never empty.
+  //
+  // From https://www.rdmamojo.com/2014/06/30/working-unsignaled-completions/
+  // "How to use Unsignaled Completion?" / "Gotchas and Pitfalls"
+  // All posted Send Requested, Signaled and Unsignaled, are considered outstanding until
+  // a Work Completion that they, or Send Requests that were posted after them, was polled
+  // from the Completion Queue associated with the Send Queue. This means if one works with
+  // a Queue Pair that was configured to work with Unsignaled Completions, he must make
+  // sure that occasionally (before the Send Queue is full with outstanding Send Requests)
+  // a Send Request that generate Work Completion will be posted.
+  //
+  // Not following this rule may lead to a case that the Send Queue is full with Send
+  // Requests that won't generate Work Completion:
+  //
+  //  - The Send Queue is full, so no new Send Requests can be posted to it
+  //  - The Send Queue can't be emptied, since no Work Completion can be generated anymore
+  //    (the reason is that no Work Completion, that can generate Work Completion that
+  //    polling it will empty the Send Queue, can be posted)
+  //  - The status of all posted Send Request is considered unknown
+  //
+  if (slot == 0) {
+    wr.send_flags |= IBV_SEND_SIGNALED;
+    wr.wr_id = (uint64_t)req;
+    req->events++;
+  }
 
   struct ibv_send_wr* bad_wr;
   NCCLCHECK(wrap_ibv_post_send(comm->qp, &wr, &bad_wr));
@@ -737,8 +764,7 @@ ncclResult_t ncclIbIrecv(void* recvComm, void* data, int size, void* mhandle, vo
   struct ibv_mr* mr = (struct ibv_mr*)mhandle;
 
   struct ncclIbRequest* req;
-  NCCLCHECK(ncclIbGetRequest(comm->reqs, &req));
-  req->verbs = &comm->verbs;
+  NCCLCHECK(ncclIbGetRequest(&comm->verbs, &req));
   req->size = size;
 
   struct ibv_recv_wr wr;
@@ -760,17 +786,16 @@ ncclResult_t ncclIbIrecv(void* recvComm, void* data, int size, void* mhandle, vo
   *request = req;
 
   // Post to FIFO to notify sender
-  NCCLCHECK(ncclIbPostFifo(comm, mr->rkey, (uint64_t)data, size));
+  NCCLCHECK(ncclIbPostFifo(comm, mr->rkey, (uint64_t)data, size, req));
   return ncclSuccess;
 }
 
-ncclResult_t ncclIbFlush(void* recvComm, void* data, int size, void* mhandle) {
+ncclResult_t ncclIbIflush(void* recvComm, void* data, int size, void* mhandle, void** request) {
   struct ncclIbRecvComm* comm = (struct ncclIbRecvComm*)recvComm;
   if (comm->gpuFlush.enabled == 0 || size == 0) return ncclSuccess;
 
   struct ncclIbRequest* req;
-  NCCLCHECK(ncclIbGetRequest(comm->reqs, &req));
-  req->verbs = &comm->verbs;
+  NCCLCHECK(ncclIbGetRequest(&comm->verbs, &req));
   struct ibv_mr* mr = (struct ibv_mr*)mhandle;
 
   struct ibv_send_wr wr;
@@ -787,11 +812,7 @@ ncclResult_t ncclIbFlush(void* recvComm, void* data, int size, void* mhandle) {
   struct ibv_send_wr* bad_wr;
   NCCLCHECK(wrap_ibv_post_send(comm->gpuFlush.qp, &wr, &bad_wr));
 
-  int done = 0;
-  while (done == 0) {
-    NCCLCHECK((ncclResult_t)ncclIbTest(req, &done, NULL));
-  }
-
+  *request = req;
   return ncclSuccess;
 }
 
@@ -800,10 +821,10 @@ ncclResult_t ncclIbTest(void* request, int* done, int* size) {
   *done = 0;
 
   while (1) {
-    if (r->done == 1) {
+    if (r->events == 0) {
       *done = 1;
       if (size) *size = r->size;
-      r->used = 0;
+      NCCLCHECK(ncclIbFreeRequest(r));
       return ncclSuccess;
     }
 
@@ -828,11 +849,7 @@ ncclResult_t ncclIbTest(void* request, int* done, int* size) {
           doneReq->size = wc->imm_data;
 #endif
         }
-        doneReq->done = 1;
-        if (doneReq->free == 1) {
-          // This is an internal (FIFO post) req. Free it immediately.
-          doneReq->used = 0;
-        }
+        doneReq->events--;
       }
     }
   }
@@ -887,7 +904,7 @@ ncclNet_t ncclNetIb = {
   ncclIbDeregMr,
   ncclIbIsend,
   ncclIbIrecv,
-  ncclIbFlush,
+  ncclIbIflush,
   ncclIbTest,
   ncclIbCloseSend,
   ncclIbCloseRecv,

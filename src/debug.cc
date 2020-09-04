@@ -127,7 +127,7 @@ void ncclDebugInit() {
 void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *filefunc, int line, const char *fmt, ...) {
   if (ncclDebugLevel == -1) ncclDebugInit();
   if (ncclDebugNoWarn != 0 && level == NCCL_LOG_WARN) { level = NCCL_LOG_INFO; flags = ncclDebugNoWarn; }
-  if (ncclDebugLevel < level) return;
+  if (ncclDebugLevel < level || ((flags & ncclDebugMask) == 0)) return;
 
   // Gather the rank information. This can take > 1us so we want to make sure
   // we only do it when needed.
@@ -144,11 +144,11 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
   if (level == NCCL_LOG_WARN)
     len = snprintf(buffer, sizeof(buffer),
         "\n%s:%d:%d [%d] %s:%d NCCL WARN ", hostname, pid, tid, cudaDev, filefunc, line);
-  else if (level == NCCL_LOG_INFO && (flags & ncclDebugMask))
+  else if (level == NCCL_LOG_INFO)
     len = snprintf(buffer, sizeof(buffer),
         "%s:%d:%d [%d] NCCL INFO ", hostname, pid, tid, cudaDev);
 #ifdef ENABLE_TRACE
-  else if (level == NCCL_LOG_TRACE && (flags & ncclDebugMask)) {
+  else if (level == NCCL_LOG_TRACE) {
     auto delta = std::chrono::high_resolution_clock::now() - ncclEpoch;
     double timestamp = std::chrono::duration_cast<std::chrono::duration<double>>(delta).count()*1000;
     len = snprintf(buffer, sizeof(buffer),

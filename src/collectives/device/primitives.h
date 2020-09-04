@@ -31,63 +31,57 @@
   } \
 } while (0)
 
+#define ROLE_SRC       0x01
+#define ROLE_DST       0x02
+#define ROLE_WAIT_RECV 0x04
+#define ROLE_WAIT_SEND 0x08
+#define ROLE_POST_SEND 0x10
+#define ROLE_POST_RECV 0x20
+
 // Implementation of primitive types
 template <int UNROLL, int SLICESPERCHUNK, int SLICESTEPS, typename T, int NRECV, int NSEND, int DIRECT, class FUNC>
 class ncclPrimitives {
  private:
   const int tid;
-  const int nthreads;
-  const int wid;
+  int nthreads;
+  int nworkers;
   const int stepSize;
   int nrecv = 0;
   int nsend = 0;
-  struct ncclConnInfo* recvConn = NULL;
-  volatile uint64_t* recvConnHeadPtr = NULL;
-  uint64_t recvConnHead;
-  volatile uint64_t* recvConnTailPtr = NULL;
-  uint64_t recvConnTail;
-  uint64_t recvConnTailCache; // Cache last seen value
+  struct ncclConnInfo* conn = NULL;
+  volatile int* connSizesFifoPtr = NULL;
+  void** connPtrsFifoPtr = NULL;
+  volatile uint64_t* connHeadPtr = NULL;
+  volatile uint64_t* connTailPtr = NULL;
+  uint64_t connTailCache; // Cache last seen value
+  uint64_t connHeadCache; // Cache last seen value
 
-  struct ncclConnInfo* sendConn = NULL;
-  volatile int* sendConnFifoPtr = NULL;
-  volatile uint64_t* sendConnTailPtr = NULL;
-  uint64_t sendConnTail;
-  volatile uint64_t* sendConnHeadPtr = NULL;
-  uint64_t sendConnHead;
-  uint64_t sendConnHeadCache; // Cache last seen value
-
-  uint64_t recvStep[NRECV];
-  uint64_t sendStep[NSEND];
-  const T* recvDirectBuff[NRECV];
-  T* sendDirectBuff[NSEND];
-  const T* recvBuff[NRECV];
-  T* sendBuff[NSEND];
+  int index; // Peer index I'm responsible for
+  int peer = -1;
+  int role = 0;
+  int group;
+  uint64_t step;
+  T* direct = NULL;
+  T* buff;
   struct ncclDevComm* comm;
 
-  inline __device__ int recvOffset(int i) { return (recvStep[i]%NCCL_STEPS)*stepSize; }
-  inline __device__ int sendOffset(int i) { return (sendStep[i]%NCCL_STEPS)*stepSize; }
-  inline __device__ const T* recvPtr(int i) { return ((const T*)recvBuff[i])+recvOffset(i); }
-  inline __device__ T* sendPtr(int i) { return ((T*)sendBuff[i])+sendOffset(i); }
+  const T** srcs;
+  T** dsts;
 
+  // Don't use barrier 0 as it's used by the final sync
   inline __device__ void barrier() {
-    if (NSEND>NRECV) {
-      asm volatile ("bar.sync 1, %0;" :: "r"(nthreads+WARP_SIZE));
-    } else {
-      asm volatile ("bar.sync 2, %0;" :: "r"(nthreads+WARP_SIZE));
-    }
+    if (nthreads == WARP_SIZE) __syncwarp();
+    else asm volatile ("bar.sync %0, %1;" :: "r"(group+1), "r"(nthreads));
   }
   inline __device__ void subBarrier() {
-    if (NSEND>NRECV) {
-      asm volatile ("bar.sync 3, %0;" :: "r"(nthreads));
-    } else {
-      asm volatile ("bar.sync 4, %0;" :: "r"(nthreads));
-    }
+    if (nworkers == nthreads) barrier();
+    else asm volatile ("bar.sync %0, %1;" :: "r"(group+2), "r"(nworkers));
   }
 
   uint32_t spins = 0;
   uint32_t abort = 0;
 
-  inline __device__ int checkAbort(int i, int send) {
+  inline __device__ int checkAbort() {
     spins++;
     if (abort == 0 && spins == SPINS_BEFORE_CHECK_ABORT) {
       abort = *(comm->abortFlag);
@@ -96,63 +90,45 @@ class ncclPrimitives {
     return abort;
   }
 
-  inline __device__ void waitSend(int nbytes) {
-    spins = 0;
-    if (sendConnHeadPtr) {
-      while (sendConnHeadCache + NCCL_STEPS < sendConnHead + SLICESTEPS) {
-        sendConnHeadCache = *sendConnHeadPtr;
-        if (checkAbort(wid, 1)) break;
-      }
-      if (sendConnFifoPtr) {
-        sendConnFifoPtr[sendConnHead%NCCL_STEPS] = nbytes;
-      }
-      sendConnHead += SLICESTEPS;
-    }
+  template <int DIRECTPTR>
+  inline __device__ T* directPtr(ssize_t directOffset) {
+    return DIRECTPTR && direct ? direct+directOffset : buff+(step%NCCL_STEPS)*stepSize;
   }
 
-  inline __device__ void waitRecv() {
+  template <int DST, int DIRECTSEND>
+  inline __device__ void waitSend(ssize_t directOffset, int nbytes) {
     spins = 0;
-    if (recvConnTailPtr) {
-      while (recvConnTailCache < recvConnTail + SLICESTEPS) {
-        recvConnTailCache = *recvConnTailPtr;
-        if (checkAbort(wid, 0)) break;
-      }
-      recvConnTail += SLICESTEPS;
+    while (connHeadCache + NCCL_STEPS < step + SLICESTEPS) {
+      connHeadCache = *connHeadPtr;
+      if (checkAbort()) break;
     }
+    if (connSizesFifoPtr) {
+      connSizesFifoPtr[step%NCCL_STEPS] = nbytes;
+    }
+
+    if (connPtrsFifoPtr) loadPtr(connPtrsFifoPtr+step%NCCL_STEPS, dsts[DST+index]);
+    else dsts[DST+index] = directPtr<DIRECTSEND>(directOffset);
+    step += SLICESTEPS;
   }
 
-  inline __device__ void incRecv(int i) {
-    recvStep[i] += SLICESTEPS;
+  template <int SRC, int DIRECTRECV>
+  inline __device__ void waitRecv(ssize_t directOffset) {
+    spins = 0;
+    while (connTailCache < step + SLICESTEPS) {
+      connTailCache = *connTailPtr;
+      if (checkAbort()) break;
+    }
+    if (connPtrsFifoPtr) loadPtr(connPtrsFifoPtr+step%NCCL_STEPS, srcs[SRC+index]);
+    else srcs[SRC+index] = directPtr<DIRECTRECV>(directOffset);
+    step += SLICESTEPS;
   }
+
   inline __device__ void postRecv() {
-    if (recvConnHeadPtr) *recvConnHeadPtr = recvConnHead += SLICESTEPS;
+    *connHeadPtr = step += SLICESTEPS;
   }
 
-  inline __device__ void incSend(int i) {
-    sendStep[i] += SLICESTEPS;
-  }
   inline __device__ void postSend() {
-    if (sendConnTailPtr) *sendConnTailPtr = sendConnTail += SLICESTEPS;
-  }
-
-  template <int DIRECTRECV>
-  inline __device__ const T* directRecvPtr(int i, ssize_t directOffset) {
-    return DIRECTRECV && recvDirectBuff[i] ? recvDirectBuff[i]+directOffset : recvPtr(i);
-  }
-
-  template <int DIRECTSEND>
-  inline __device__ T* directSendPtr(int i, ssize_t directOffset) {
-    return DIRECTSEND && sendDirectBuff[i] ? sendDirectBuff[i]+directOffset : sendPtr(i);
-  }
-
-  template <int DIRECTRECV>
-  inline __device__ int directRecvInc(int i, int directInc, int sliceInc) {
-    return DIRECTRECV && recvDirectBuff[i] ? directInc : sliceInc;
-  }
-
-  template <int DIRECTSEND>
-  inline __device__ int directSendInc(int i, int directInc, int sliceInc) {
-    return DIRECTSEND && sendDirectBuff[i] ? directInc : sliceInc;
+    *connTailPtr = step += SLICESTEPS;
   }
 
   template <int DIRECTRECV, int DIRECTSEND, int RECV, int SEND, int SRC, int DST>
@@ -162,135 +138,128 @@ class ncclPrimitives {
     int sliceSize = stepSize*SLICESTEPS;
     int dataSize = max(DIVUP(nelem, 16*SLICESPERCHUNK)*16, sliceSize/32);
 
-    const T* srcs[RECV*NRECV+SRC];
-    srcs[0] = SRC ? srcPtr : directRecvPtr<DIRECTRECV>(0, directOffset);
-    if (RECV) {
-      if (SRC) srcs[1] = recvPtr(0);
-      for (int i=1; i<NRECV && i<nrecv; i++) srcs[SRC+i] = recvPtr(i);
-    }
-
-    T* dsts[SEND*NSEND+DST];
-    dsts[0] = DST ? dstPtr : directSendPtr<DIRECTSEND>(0, directOffset);
-    if (SEND) {
-      if (DST) dsts[1] = directSendPtr<DIRECTSEND>(0, directOffset);
-      for (int i=1; i<NSEND && i<nsend; i++) dsts[DST+i] = directSendPtr<DIRECTSEND>(i, directOffset);
-    }
-
-    bool syncThread = tid >= nthreads;
-
     #pragma unroll
     for (int slice=0; slice<SLICESPERCHUNK; ++slice) {
       int realSize = max(0, min(dataSize, nelem-offset));
-      if (!syncThread) {
-        if (SEND) waitSend(realSize*sizeof(T));
-        if (RECV) waitRecv();
+      if (tid < nworkers) {
+        if (SRC && (role & ROLE_SRC)) srcs[0] = srcPtr+offset;
+        if (RECV && (role & ROLE_WAIT_RECV)) waitRecv<SRC, DIRECTRECV>(directOffset+offset);
+        if (DST && (role & ROLE_DST)) dsts[0] = dstPtr+offset;
+        if (SEND && (role & ROLE_WAIT_SEND)) waitSend<DST, DIRECTSEND>(directOffset+offset, realSize*sizeof(T));
         if (realSize > 0) {
           subBarrier();
-          if (DIRECTRECV && recvDirectBuff[0]) {
+          if (DIRECTRECV && srcs[0] == dsts[0]) {
             // We can only have one direct receive. Since srcs[0] == dstPtr+offset, skip one copy
             if (SEND) {
-              ReduceOrCopyMulti<UNROLL, FUNC, T, 1, 1, 1, NSEND>(tid, nthreads, 1, srcs, nsend, dsts+1, realSize);
+              // (1-SEND) is only there to avoid compilation errors in case NSEND=0 (and SEND=0).
+              ReduceOrCopyMulti<UNROLL, FUNC, T, 1, 1, 1, (1-SEND)+NSEND>(tid, nworkers, 1, srcs, nsend, dsts+1, realSize);
             }
           } else {
-            ReduceOrCopyMulti<UNROLL, FUNC, T, RECV+SRC, RECV*NRECV+SRC, SEND+DST, SEND*NSEND+DST>(tid, nthreads, RECV*nrecv+SRC, srcs, SEND*nsend+DST, dsts, realSize);
+            ReduceOrCopyMulti<UNROLL, FUNC, T, RECV+SRC, RECV*NRECV+SRC, SEND+DST, SEND*NSEND+DST>(tid, nworkers, RECV*nrecv+SRC, srcs, SEND*nsend+DST, dsts, realSize);
           }
         }
       }
       barrier();
-      FOR_SEND(incSend);
-      FOR_RECV(incRecv);
-      if (syncThread) {
-        if (SEND) {
-          if (realSize > 0 && wid == 0) __threadfence_system();
-          __syncwarp();
-          postSend();
-        }
-        if (RECV) postRecv();
-      }
-      srcs[0] += SRC ? realSize : directRecvInc<DIRECTRECV>(0, realSize, sliceSize);
-      for (int i=1-SRC; i<RECV*NRECV; i++) srcs[SRC+i] += sliceSize;
-      dsts[0] += DST ? realSize : directSendInc<DIRECTSEND>(0, realSize, sliceSize);
-      for (int i=1-DST; i<SEND*NSEND; i++) dsts[DST+i] += directSendInc<DIRECTSEND>(i, realSize, sliceSize);
+      if (SEND && (role & ROLE_POST_SEND) && realSize > 0 && index == 0) __threadfence_system();
+      __syncwarp();
+      if (SEND && (role & ROLE_POST_SEND)) postSend();
+      if (RECV && (role & ROLE_POST_RECV)) postRecv();
       offset += realSize;
     }
   }
 
-  __device__ __forceinline__ void loadRecvConn(struct ncclConnInfo* conn, int i, T* directBuff) {
-    recvBuff[i] = (const T*)conn->buffs[NCCL_PROTO_SIMPLE];
-    recvStep[i] = conn->step;
-    recvStep[i] = ROUNDUP(recvStep[i], SLICESPERCHUNK*SLICESTEPS);
-    recvDirectBuff[i] = NULL;
-    if (DIRECT && (conn->direct & NCCL_DIRECT_GPU)) {
-      recvDirectBuff[i] = directBuff;
-      if (tid == 0) *conn->ptrExchange = directBuff;
-    }
-    if (wid == i) recvConn = conn;
-    if (wid == i) recvConnTail = recvConnHead = recvStep[i]; // Make sure we set this after rounding up
-    nrecv++;
-  }
-  __device__ __forceinline__ void loadRecvSync() {
-    if (tid >= WARP_SIZE && tid < 2*WARP_SIZE && wid<nrecv) {
-      recvConnTailPtr = recvConn->tail;
-      recvConnTailCache = *recvConnTailPtr;
-    }
-    if (tid >= nthreads && wid < nrecv) {
-      recvConnHeadPtr = recvConn->head;
-      // Return credits in case we rounded up.
-      *recvConnHeadPtr = recvConnHead;
+  __device__ __forceinline__ void loadRecvConn(struct ncclChannel* channel, T* directBuff) {
+    if (role & (ROLE_WAIT_RECV|ROLE_POST_RECV)) {
+      conn = &channel->devPeers[peer].recv.conn;
+      step = conn->step;
+      step = ROUNDUP(step, SLICESPERCHUNK*SLICESTEPS);
+      if (role & ROLE_POST_RECV) {
+        connHeadPtr = conn->head;
+        // Return credits in case we rounded up.
+        *connHeadPtr = step;
+      }
+      if (role & ROLE_WAIT_RECV) {
+        buff = (T*)conn->buffs[NCCL_PROTO_SIMPLE];
+        if (DIRECT && (conn->direct & NCCL_DIRECT_GPU)) {
+          direct = directBuff;
+          *conn->ptrExchange = directBuff;
+        }
+        connTailPtr = conn->tail;
+        connTailCache = *connTailPtr;
+        connPtrsFifoPtr = conn->ptrsFifo;
+      }
     }
   }
 
-  __device__ __forceinline__ void loadSendConn(struct ncclConnInfo* conn, int i) {
-    sendBuff[i] = (T*)conn->buffs[NCCL_PROTO_SIMPLE];
-    sendStep[i] = conn->step;
-    sendStep[i] = ROUNDUP(sendStep[i], SLICESPERCHUNK*SLICESTEPS);
-    sendDirectBuff[i] = NULL;
-    if (DIRECT && (conn->direct & NCCL_DIRECT_GPU)) {
-      void* volatile* ptr = conn->ptrExchange;
-      while ((sendDirectBuff[i] = (T*)(*ptr)) == NULL);
-      barrier();
-      if (tid == 0) *ptr = NULL;
-    }
-    if (wid == i) sendConn = conn;
-    if (wid == i) sendConnTail = sendConnHead = sendStep[i]; // Make sure we set this after rounding up
-    nsend++;
-  }
-  __device__ __forceinline__ void loadSendSync() {
-    if (tid < nsend) {
-      sendConnHeadPtr = sendConn->head;
-      sendConnHeadCache = *sendConnHeadPtr;
-      sendConnFifoPtr = sendConn->fifo;
-    }
-    if (tid >= nthreads && wid<nsend) {
-      sendConnTailPtr = sendConn->tail;
+  __device__ __forceinline__ void loadSendConn(struct ncclChannel* channel) {
+    if (role & (ROLE_WAIT_SEND|ROLE_POST_SEND)) {
+      conn = &channel->devPeers[peer].send.conn;
+      step = conn->step;
+      step = ROUNDUP(step, SLICESPERCHUNK*SLICESTEPS);
+      if (role & ROLE_POST_SEND) {
+        connTailPtr = conn->tail;
+      }
+      if (role & ROLE_WAIT_SEND) {
+        buff = (T*)conn->buffs[NCCL_PROTO_SIMPLE];
+        if (DIRECT && (conn->direct & NCCL_DIRECT_GPU)) {
+          void* volatile* ptr = conn->ptrExchange;
+          while ((direct = (T*)(*ptr)) == NULL);
+          *ptr = NULL;
+        }
+        connHeadPtr = conn->head;
+        connHeadCache = *connHeadPtr;
+        connSizesFifoPtr = conn->sizesFifo;
+        connPtrsFifoPtr = conn->ptrsFifo;
+      }
     }
   }
 
-  __device__ __forceinline__ void saveRecvSync() {
-    if (tid >= nthreads && wid < nrecv) {
-      recvConn->step = recvConnHead;
-      __threadfence_system();
-    }
-  }
-
-  __device__ __forceinline__ void saveSendSync() {
-    if (tid < nsend) {
-      sendConn->step = sendConnHead;
+  __device__ __forceinline__ void saveSync() {
+    if (role & (ROLE_POST_SEND|ROLE_POST_RECV)) {
+      conn->step = step;
       __threadfence_system();
     }
   }
 
  public:
   __device__ __forceinline__
-  ncclPrimitives(const int tid, const int nthreads, int* recvPeers, int* sendPeers, T* directBuff, int stepSize, struct ncclChannel* channel, struct ncclDevComm* comm)
-    : comm(comm), tid(tid), nthreads(nthreads), wid(tid%WARP_SIZE), stepSize(stepSize) {
+  ncclPrimitives(const int tid, const int nworkers, int* recvPeers, int* sendPeers, T* directBuff, int stepSize, struct ncclChannel* channel, struct ncclDevComm* comm, struct ncclShmemPtrs* ptrs, int group)
+    : comm(comm), tid(tid), nworkers(nworkers), stepSize(stepSize), srcs((const T**)ptrs[group].srcs), dsts((T**)ptrs[group].dsts), group(group) {
+    nthreads = nworkers;
+    // For send operations, we need an extra warp to overlap the threadfence and the copy
+    int postThreads = NSEND && nworkers >= 64 ? WARP_SIZE : 0;
+    nthreads += postThreads;
+
     // Make sure step is updated before we read it.
     barrier();
 
-    for (int i=0; i<NRECV && recvPeers[i] >= 0; i++) loadRecvConn(&channel->devPeers[recvPeers[i]].recv.conn, i, directBuff);
-    for (int i=0; i<NSEND && sendPeers[i] >= 0; i++) loadSendConn(&channel->devPeers[sendPeers[i]].send.conn, i);
-    loadRecvSync();
-    loadSendSync();
+    for (int i=0; i<NRECV; i++) if (recvPeers[i] != -1) nrecv++;
+    for (int i=0; i<NSEND; i++) if (sendPeers[i] != -1) nsend++;
+
+    #define SYNC_GROUP 8
+    static_assert(NSEND < SYNC_GROUP && NRECV < SYNC_GROUP, "Not enough threads to cover all peers");
+
+    int g = tid / SYNC_GROUP;
+    int ng = nthreads / SYNC_GROUP;
+    index = tid % SYNC_GROUP;
+
+    if (g == 0) {
+      if (index < nrecv) role |= ROLE_WAIT_RECV;
+      if (index == nrecv) role |= ROLE_SRC;
+    } else if (g == 1) {
+      if (index < nsend) role |= ROLE_WAIT_SEND;
+      if (index == nsend) role |= ROLE_DST;
+    } else if (g == ng - 2) {
+      if (index < nrecv) role |= ROLE_POST_RECV;
+    } else if (g == ng - 1) {
+      if (index < nsend) role |= ROLE_POST_SEND;
+    }
+
+    if (role & (ROLE_WAIT_RECV|ROLE_POST_RECV)) peer = recvPeers[index];
+    if (role & (ROLE_WAIT_SEND|ROLE_POST_SEND)) peer = sendPeers[index];
+
+    loadRecvConn(channel, directBuff);
+    loadSendConn(channel);
   }
 
   __device__ __forceinline__ void
@@ -351,8 +320,7 @@ class ncclPrimitives {
 
   __device__ __forceinline__ ~ncclPrimitives() {
     // Save steps for the next operation
-    saveRecvSync();
-    saveSendSync();
+    saveSync();
   }
 };
 

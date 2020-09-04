@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -16,6 +16,8 @@ ncclResult_t bootstrapInit(ncclUniqueId* id, int rank, int nranks, void** commSt
 ncclResult_t bootstrapAllGather(void* commState, void* allData, int size);
 ncclResult_t bootstrapSend(void* commState, int peer, void* data, int size);
 ncclResult_t bootstrapRecv(void* commState, int peer, void* data, int size);
+ncclResult_t bootstrapRemAlloc(size_t size, int rank, void* commState, int* id, cudaIpcMemHandle_t* ipc, void** ptr);
+ncclResult_t bootstrapRemFree(int id, int rank, void* commState);
 ncclResult_t bootstrapClose(void* commState);
 ncclResult_t bootstrapAbort(void* commState);
 #endif

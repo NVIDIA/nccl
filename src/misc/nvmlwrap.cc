@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -16,14 +16,11 @@ static nvmlReturn_t (*nvmlInternalInit)(void);
 static nvmlReturn_t (*nvmlInternalShutdown)(void);
 static nvmlReturn_t (*nvmlInternalDeviceGetHandleByPciBusId)(const char* pciBusId, nvmlDevice_t* device);
 static nvmlReturn_t (*nvmlInternalDeviceGetIndex)(nvmlDevice_t device, unsigned* index);
-static nvmlReturn_t (*nvmlInternalDeviceGetHandleByIndex)(unsigned int index, nvmlDevice_t* device);
 static const char* (*nvmlInternalErrorString)(nvmlReturn_t r);
 static nvmlReturn_t (*nvmlInternalDeviceGetNvLinkState)(nvmlDevice_t device, unsigned int link, nvmlEnableState_t *isActive);
-static nvmlReturn_t (*nvmlInternalDeviceGetPciInfo)(nvmlDevice_t device, nvmlPciInfo_t* pci);
 static nvmlReturn_t (*nvmlInternalDeviceGetNvLinkRemotePciInfo)(nvmlDevice_t device, unsigned int link, nvmlPciInfo_t *pci);
 static nvmlReturn_t (*nvmlInternalDeviceGetNvLinkCapability)(nvmlDevice_t device, unsigned int link,
     nvmlNvLinkCapability_t capability, unsigned int *capResult);
-static nvmlReturn_t (*nvmlInternalDeviceGetMinorNumber)(nvmlDevice_t device, unsigned int* minorNumber);
 static nvmlReturn_t (*nvmlInternalDeviceGetCudaComputeCapability)(nvmlDevice_t device, int* major, int* minor);
 
 // Used to make the NVML library calls thread safe
@@ -74,10 +71,7 @@ ncclResult_t wrapNvmlSymbols(void) {
   LOAD_SYM(nvmlhandle, "nvmlShutdown", nvmlInternalShutdown);
   LOAD_SYM(nvmlhandle, "nvmlDeviceGetHandleByPciBusId", nvmlInternalDeviceGetHandleByPciBusId);
   LOAD_SYM(nvmlhandle, "nvmlDeviceGetIndex", nvmlInternalDeviceGetIndex);
-  LOAD_SYM(nvmlhandle, "nvmlDeviceGetHandleByIndex", nvmlInternalDeviceGetHandleByIndex);
   LOAD_SYM(nvmlhandle, "nvmlErrorString", nvmlInternalErrorString);
-  LOAD_SYM(nvmlhandle, "nvmlDeviceGetPciInfo", nvmlInternalDeviceGetPciInfo);
-  LOAD_SYM(nvmlhandle, "nvmlDeviceGetMinorNumber", nvmlInternalDeviceGetMinorNumber);
   LOAD_SYM_OPTIONAL(nvmlhandle, "nvmlDeviceGetNvLinkState", nvmlInternalDeviceGetNvLinkState);
   LOAD_SYM_OPTIONAL(nvmlhandle, "nvmlDeviceGetNvLinkRemotePciInfo", nvmlInternalDeviceGetNvLinkRemotePciInfo);
   LOAD_SYM_OPTIONAL(nvmlhandle, "nvmlDeviceGetNvLinkCapability", nvmlInternalDeviceGetNvLinkCapability);
@@ -91,9 +85,6 @@ teardown:
   nvmlInternalShutdown = NULL;
   nvmlInternalDeviceGetHandleByPciBusId = NULL;
   nvmlInternalDeviceGetIndex = NULL;
-  nvmlInternalDeviceGetHandleByIndex = NULL;
-  nvmlInternalDeviceGetPciInfo = NULL;
-  nvmlInternalDeviceGetMinorNumber = NULL;
   nvmlInternalDeviceGetNvLinkState = NULL;
   nvmlInternalDeviceGetNvLinkRemotePciInfo = NULL;
   nvmlInternalDeviceGetNvLinkCapability = NULL;
@@ -156,51 +147,6 @@ ncclResult_t wrapNvmlDeviceGetIndex(nvmlDevice_t device, unsigned* index) {
   NVMLLOCKCALL(nvmlInternalDeviceGetIndex(device, index), ret);
   if (ret != NVML_SUCCESS) {
     WARN("nvmlDeviceGetIndex() failed: %s ",
-        nvmlInternalErrorString(ret));
-    return ncclSystemError;
-  }
-  return ncclSuccess;
-}
-
-ncclResult_t wrapNvmlDeviceGetHandleByIndex(unsigned int index, nvmlDevice_t* device) {
-  if (nvmlInternalDeviceGetHandleByIndex == NULL) {
-    WARN("lib wrapper not initialized.");
-    return ncclInternalError;
-  }
-  nvmlReturn_t ret;
-  NVMLLOCKCALL(nvmlInternalDeviceGetHandleByIndex(index, device), ret);
-  if (ret != NVML_SUCCESS) {
-    WARN("nvmlDeviceGetHandleByIndex() failed: %s ",
-        nvmlInternalErrorString(ret));
-    return ncclSystemError;
-  }
-  return ncclSuccess;
-}
-
-ncclResult_t wrapNvmlDeviceGetPciInfo(nvmlDevice_t device, nvmlPciInfo_t* pci) {
-  if (nvmlInternalDeviceGetPciInfo == NULL) {
-    WARN("lib wrapper not initialized.");
-    return ncclInternalError;
-  }
-  nvmlReturn_t ret;
-  NVMLLOCKCALL(nvmlInternalDeviceGetPciInfo(device, pci), ret);
-  if (ret != NVML_SUCCESS) {
-    WARN("nvmlDeviceGetPciInfo() failed: %s ",
-        nvmlInternalErrorString(ret));
-    return ncclSystemError;
-  }
-  return ncclSuccess;
-}
-
-ncclResult_t wrapNvmlDeviceGetMinorNumber(nvmlDevice_t device, unsigned int* minorNumber) {
-  if (nvmlInternalDeviceGetMinorNumber == NULL) {
-    WARN("lib wrapper not initialized.");
-    return ncclInternalError;
-  }
-  nvmlReturn_t ret;
-  NVMLLOCKCALL(nvmlInternalDeviceGetMinorNumber(device, minorNumber), ret);
-  if (ret != NVML_SUCCESS) {
-    WARN("nvmlDeviceGetMinorNumber() failed: %s ",
         nvmlInternalErrorString(ret));
     return ncclSystemError;
   }

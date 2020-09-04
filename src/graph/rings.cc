@@ -21,7 +21,7 @@ void dumpLine(int* values, int nranks, const char* prefix) {
 
 ncclResult_t ncclBuildRings(int nrings, int* rings, int rank, int nranks, int* prev, int* next) {
   for (int r=0; r<nrings; r++) {
-    char prefix[30];
+    char prefix[40];
     /*sprintf(prefix, "[%d] Channel %d Prev : ", rank, r);
     dumpLine(prev+r*nranks, nranks, prefix);
     sprintf(prefix, "[%d] Channel %d Next : ", rank, r);

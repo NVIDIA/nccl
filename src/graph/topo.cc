@@ -20,8 +20,8 @@
 #define BUSID_REDUCED_SIZE (sizeof("0000:00"))
 
 const char* topoNodeTypeStr[] = { "GPU", "PCI", "NVS", "CPU", "NIC", "NET" };
-const char* topoLinkTypeStr[] = { "LOC", "NVL", "PCI", "",    "",    "SYS", "NET" };
-const char* topoPathTypeStr[] = { "LOC", "NVL", "PIX", "PXB", "PHB", "SYS", "NET" };
+const char* topoLinkTypeStr[] = { "LOC", "NVL", "",    "PCI", "",    "",    "SYS", "NET" };
+const char* topoPathTypeStr[] = { "LOC", "NVL", "NVB", "PIX", "PXB", "PHB", "SYS" };
 
 /******************************************************************/
 /******************* Graph Creation Functions *********************/
@@ -215,7 +215,7 @@ static ncclResult_t ncclTopoPrintRec(struct ncclTopoNode* node, struct ncclTopoN
 }
 
 ncclResult_t ncclTopoPrint(struct ncclTopoSystem* s) {
-  INFO(NCCL_GRAPH, "=== System : maxWidth %2.1f ===", s->maxWidth);
+  INFO(NCCL_GRAPH, "=== System : maxWidth %2.1f totalWidth %2.1f ===", s->maxWidth, s->totalWidth);
   char line[1024];
   for (int n=0; n<s->nodes[CPU].count; n++) NCCLCHECK(ncclTopoPrintRec(s->nodes[CPU].nodes+n, NULL, line, 0));
   INFO(NCCL_GRAPH, "==========================================");
@@ -441,7 +441,7 @@ ncclResult_t ncclTopoAddNvLinks(struct ncclXmlNode* node, struct ncclTopoSystem*
       }
     }
     if (remote) {
-      int nvlSpeed = gpu->gpu.cudaCompCap == 60 ? PASCAL_NVLINK_WIDTH : VOLTA_NVLINK_WIDTH;
+      float nvlSpeed = ncclTopoNVLinkSpeed(gpu->gpu.cudaCompCap);
       NCCLCHECK(ncclTopoConnectNodes(gpu, remote, LINK_NVL, count*nvlSpeed));
       if (remote->type != GPU) {
         NCCLCHECK(ncclTopoConnectNodes(remote, gpu, LINK_NVL, count*nvlSpeed));
@@ -521,6 +521,7 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
       struct ncclXmlNode* node;
       NCCLCHECK(ncclTopoFillGpu(xml, busId, &node));
       if (node == NULL) continue;
+      NCCLCHECK(xmlSetAttrInt(node, "keep", 1));
       NCCLCHECK(xmlSetAttrInt(node, "rank", r));
       NCCLCHECK(xmlInitAttrInt(node, "gdr", comm->peerInfo[r].gdrSupport));
     }
@@ -535,6 +536,7 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
       NCCLCHECK(collNetGetProperties(n, &props));
       struct ncclXmlNode* netNode;
       NCCLCHECK(ncclTopoFillNet(xml, props.pciPath, props.name, &netNode));
+      NCCLCHECK(xmlSetAttrInt(netNode, "keep", 1));
       NCCLCHECK(xmlSetAttrInt(netNode, "dev", n));
       NCCLCHECK(xmlInitAttrInt(netNode, "speed", props.speed));
       NCCLCHECK(xmlInitAttrInt(netNode, "port", props.port));
@@ -552,6 +554,7 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
     NCCLCHECK(ncclNetGetProperties(n, &props));
     struct ncclXmlNode* netNode;
     NCCLCHECK(ncclTopoFillNet(xml, props.pciPath, props.name, &netNode));
+    NCCLCHECK(xmlSetAttrInt(netNode, "keep", 1));
     NCCLCHECK(xmlSetAttrInt(netNode, "dev", n));
     NCCLCHECK(xmlInitAttrInt(netNode, "speed", props.speed));
     NCCLCHECK(xmlInitAttrInt(netNode, "port", props.port));
@@ -559,6 +562,9 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
     NCCLCHECK(xmlInitAttrInt(netNode, "maxconn", props.maxComms));
     NCCLCHECK(xmlInitAttrInt(netNode, "gdr", props.ptrSupport & NCCL_PTR_CUDA ? 1 : 0));
   }
+
+  // Remove XML branches which don't have a node with keep="1" (typically when importing a topology)
+  NCCLCHECK(ncclTopoTrimXml(xml));
 
   xmlTopoFile = getenv("NCCL_TOPO_DUMP_FILE");
   if (xmlTopoFile && comm->rank == ncclParamTopoDumpFileRank()) {
@@ -666,5 +672,23 @@ ncclResult_t ncclTopoSetAffinity(struct ncclTopoSystem* system, int rank) {
     INFO(NCCL_INIT, "Setting affinity for GPU %d to %s", gpu->gpu.dev, affinityStr);
     SYSCHECK(sched_setaffinity(0, sizeof(cpu_set_t), &finalMask), "sched_setaffinity");
   }
+  return ncclSuccess;
+}
+
+ncclResult_t ncclTopoGetNetCount(struct ncclTopoSystem* system, int* count) {
+  *count = system->nodes[NET].count;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclTopoGetCompCap(struct ncclTopoSystem* system, int* ccMin, int* ccMax) {
+  if (system->nodes[GPU].count == 0) return ncclInternalError;
+  int min, max;
+  min = max = system->nodes[GPU].nodes[0].gpu.cudaCompCap;
+  for (int g=1; g<system->nodes[GPU].count; g++) {
+    min = std::min(min, system->nodes[GPU].nodes[g].gpu.cudaCompCap);
+    max = std::max(max, system->nodes[GPU].nodes[g].gpu.cudaCompCap);
+  }
+  if (ccMin) *ccMin = min;
+  if (ccMax) *ccMax = max;
   return ncclSuccess;
 }

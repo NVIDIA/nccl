@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -45,14 +45,6 @@ static ncclResult_t wrapNvmlDeviceGetIndex(nvmlDevice_t device, unsigned* index)
   NVMLCHECK(nvmlDeviceGetIndex(device, index));
   return ncclSuccess;
 }
-static ncclResult_t wrapNvmlDeviceGetHandleByIndex(unsigned int index, nvmlDevice_t *device) {
-  NVMLCHECK(nvmlDeviceGetHandleByIndex(index,device));
-  return ncclSuccess;
-}
-static ncclResult_t wrapNvmlDeviceGetHandleByPciInfo(nvmlDevice_t device, nvmlPciInfo_t* pci) {
-  NVMLCHECK(nvmlDeviceGetPciInfo(device, pci));
-  return ncclSuccess;
-}
 static ncclResult_t wrapNvmlDeviceGetNvLinkState(nvmlDevice_t device, unsigned int link, nvmlEnableState_t *isActive) {
   NVMLCHECK(nvmlDeviceGetNvLinkState(device, link, isActive));
   return ncclSuccess;
@@ -64,10 +56,6 @@ static ncclResult_t wrapNvmlDeviceGetNvLinkRemotePciInfo(nvmlDevice_t device, un
 static ncclResult_t wrapNvmlDeviceGetNvLinkCapability(nvmlDevice_t device, unsigned int link,
                                                    nvmlNvLinkCapability_t capability, unsigned int *capResult) {
   NVMLCHECK(nvmlDeviceGetNvLinkCapability(device, link, capability, capResult));
-  return ncclSuccess;
-}
-static ncclResult_t wrapNvmlDeviceGetMinorNumber(nvmlDevice_t device, unsigned int* minorNumber) {
-  NVMLCHECK(nvmlDeviceGetMinorNumber(device, minorNumber));
   return ncclSuccess;
 }
 static ncclResult_t wrapNvmlDeviceGetCudaComputeCapability(nvmlDevice_t device, int* major, int* minor) {
@@ -150,12 +138,10 @@ ncclResult_t wrapNvmlShutdown(void);
 ncclResult_t wrapNvmlDeviceGetHandleByPciBusId(const char* pciBusId, nvmlDevice_t* device);
 ncclResult_t wrapNvmlDeviceGetIndex(nvmlDevice_t device, unsigned* index);
 ncclResult_t wrapNvmlDeviceGetHandleByIndex(unsigned int index, nvmlDevice_t *device);
-ncclResult_t wrapNvmlDeviceGetPciInfo(nvmlDevice_t device, nvmlPciInfo_t* pci);
 ncclResult_t wrapNvmlDeviceGetNvLinkState(nvmlDevice_t device, unsigned int link, nvmlEnableState_t *isActive);
 ncclResult_t wrapNvmlDeviceGetNvLinkRemotePciInfo(nvmlDevice_t device, unsigned int link, nvmlPciInfo_t *pci);
 ncclResult_t wrapNvmlDeviceGetNvLinkCapability(nvmlDevice_t device, unsigned int link,
                                                    nvmlNvLinkCapability_t capability, unsigned int *capResult);
-ncclResult_t wrapNvmlDeviceGetMinorNumber(nvmlDevice_t device, unsigned int* minorNumber);
 ncclResult_t wrapNvmlDeviceGetCudaComputeCapability(nvmlDevice_t device, int* major, int* minor);
 
 #endif // NVML_DIRECT

@@ -10,23 +10,34 @@
 #define NCCL_P2P_H_
 
 struct ncclP2Pinfo {
- const void* sendbuff;
-  void* recvbuff;
-  ssize_t sendbytes;
-  ssize_t recvbytes;
-};
-
-struct ncclP2PConnect {
-  int nrecv[MAXCHANNELS];
-  int nsend[MAXCHANNELS];
-  int* recv;
-  int* send;
+  void* buff;
+  ssize_t nbytes;
+  struct ncclP2Pinfo* next;
 };
 
 struct ncclP2Plist {
-  struct ncclP2Pinfo *peerlist;
-  int count;
-  struct ncclP2PConnect connect;
+  struct ncclP2Pinfo *head;
+  struct ncclP2Pinfo *tail;
 };
 
+static ncclResult_t enqueueP2pInfo(ncclP2Plist* p2p, void* buff, ssize_t nBytes) {
+  if (p2p == NULL) return ncclInternalError;
+  struct ncclP2Pinfo* next;
+  NCCLCHECK(ncclCalloc(&next, 1));
+  next->buff = buff;
+  next->nbytes = nBytes;
+  if (p2p->tail != NULL) p2p->tail->next = next;
+  p2p->tail = next;
+  if (p2p->head == NULL) p2p->head = next;
+  return ncclSuccess;
+}
+
+static ncclResult_t dequeueP2pInfo(ncclP2Plist* p2p) {
+  if (p2p == NULL) return ncclInternalError;
+  struct ncclP2Pinfo* temp = p2p->head;
+  p2p->head = p2p->head->next;
+  if (p2p->tail == temp) p2p->tail = NULL;
+  free(temp);
+  return ncclSuccess;
+}
 #endif

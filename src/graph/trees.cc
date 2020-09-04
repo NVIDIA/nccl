@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -28,7 +28,7 @@
  *    / \     / \     /  \     \
  *   1   3   5   7   9   11    13
  */
-ncclResult_t ncclGetBtree(int nranks, int rank, int* u, int* d0, int* d1) {
+ncclResult_t ncclGetBtree(int nranks, int rank, int* u, int* d0, int* d1, int* parentChildType) {
   int up, down0, down1;
   int bit;
   for (bit=1; bit<nranks; bit<<=1) {
@@ -37,13 +37,16 @@ ncclResult_t ncclGetBtree(int nranks, int rank, int* u, int* d0, int* d1) {
 
   if (rank == 0) {
     *u = -1;
-    *d0 = nranks > 1 ? bit >> 1 : -1;
-    *d1 = -1;
+    *d0 = -1;
+    // Child rank is > 0 so it has to be our child 1, not 0.
+    *d1 = nranks > 1 ? bit >> 1 : -1;
     return ncclSuccess;
   }
 
   up = (rank ^ bit) | (bit << 1);
+  // if smaller than the parent, we are his first child, otherwise we're his second
   if (up >= nranks) up = (rank ^ bit);
+  *parentChildType = (rank < up) ? 0 : 1;
   *u = up;
 
   int lowbit = bit >> 1;
@@ -62,42 +65,42 @@ ncclResult_t ncclGetBtree(int nranks, int rank, int* u, int* d0, int* d1) {
 }
 
 /* Build a double binary tree. Take the previous tree for the first tree.
- * For the second tree, we use a mirror tree (if nranks is odd)
+ * For the second tree, we use a mirror tree (if nranks is even)
  *
- *                 8---------0---------5
- *          ______/ \______      _____/ \______
- *         4               12   1              9
- *       /   \            /      \           /   \
- *     2       6       10          3       7      10
- *    / \     / \     /  \        / \     / \    /  \
- *   1   3   5   7   9   11      2   4   6   8  11  12
+ * 0---------------8                   3----------------11
+ *          ______/ \                 / \______
+ *         4         \               /         7
+ *       /   \        \             /        /   \
+ *     2       6       10         1        5      9
+ *    / \     / \     /  \       / \      / \    / \
+ *   1   3   5   7   9   11     0   2    4   6  8   10
  *
- * or shift it by one rank (if nranks is even)
+ * or shift it by one rank (if nranks is odd).
  *
- *                 8---------0--------------9
- *          ______/ \                ______/ \
- *         4         \              5         \
- *       /   \        \           /   \        \
- *     2       6       10       3       7       11
- *    / \     / \     /  \     / \     / \     /  \
- *   1   3   5   7   9   11   2   4   6   8   10   1
+ * 0---------------8            1---------------9
+ *          ______/ \______              ______/ \______
+ *         4               12           5                0
+ *       /   \            /           /   \            /
+ *     2       6       10           3       7       11
+ *    / \     / \     /  \         / \     / \     /  \
+ *   1   3   5   7   9   11       2   4   6   8  10   12
  */
-ncclResult_t ncclGetDtree(int nranks, int rank, int* s0, int* d0_0, int* d0_1, int* s1, int* d1_0, int* d1_1) {
+ncclResult_t ncclGetDtree(int nranks, int rank, int* s0, int* d0_0, int* d0_1, int* parentChildType0, int* s1, int* d1_0, int* d1_1, int* parentChildType1) {
   // First tree ... use a btree
-  ncclGetBtree(nranks, rank, s0, d0_0, d0_1);
+  ncclGetBtree(nranks, rank, s0, d0_0, d0_1, parentChildType0);
   // Second tree ... mirror or shift
-  if (nranks % 2 == 0) {
+  if (nranks % 2 == 1) {
     // shift
     int shiftrank = (rank-1+nranks) % nranks;
     int u, d0, d1;
-    ncclGetBtree(nranks, shiftrank, &u, &d0, &d1);
+    ncclGetBtree(nranks, shiftrank, &u, &d0, &d1, parentChildType1);
     *s1 = u == -1 ? -1 : (u+1) % nranks;
     *d1_0 = d0 == -1 ? -1 : (d0+1) % nranks;
     *d1_1 = d1 == -1 ? -1 : (d1+1) % nranks;
   } else {
     // mirror
     int u, d0, d1;
-    ncclGetBtree(nranks, nranks-1-rank, &u, &d0, &d1);
+    ncclGetBtree(nranks, nranks-1-rank, &u, &d0, &d1, parentChildType1);
     *s1 = u == -1 ? -1 : nranks-1-u;
     *d1_0 = d0 == -1 ? -1 : nranks-1-d0;
     *d1_1 = d1 == -1 ? -1 : nranks-1-d1;

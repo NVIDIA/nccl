@@ -55,5 +55,6 @@ static __inline__ int ncclTypeSize(ncclDataType_t type) {
 #include "alloc.h"
 #include "utils.h"
 #include "param.h"
+#include "nvtx.h"
 
 #endif // end include guard

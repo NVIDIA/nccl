@@ -15,6 +15,9 @@
 #define NCCL_PTR_HOST 0x1
 #define NCCL_PTR_CUDA 0x2
 
+// Maximum number of requests per comm object
+#define NCCL_NET_MAX_REQUESTS 8
+
 typedef enum {NCCL_LOG_NONE=0, NCCL_LOG_VERSION=1, NCCL_LOG_WARN=2, NCCL_LOG_INFO=3, NCCL_LOG_ABORT=4, NCCL_LOG_TRACE=5} ncclDebugLogLevel;
 typedef enum {NCCL_INIT=1, NCCL_COLL=2, NCCL_P2P=4, NCCL_SHM=8, NCCL_NET=16, NCCL_GRAPH=32, NCCL_TUNING=64, NCCL_ENV=128, NCCL_ALL=~0} ncclDebugLogSubSys;
 
@@ -29,9 +32,9 @@ typedef struct {
   int speed;      // Port speed in Mbps.
   int port;       // Port number.
   int maxComms;   // Maximum number of comms we can create
-}ncclNetProperties_v3_t;
+}ncclNetProperties_v4_t;
 
-typedef ncclNetProperties_v3_t ncclNetProperties_t;
+typedef ncclNetProperties_v4_t ncclNetProperties_t;
 
 typedef struct {
   // Name of the network (mainly for logs)
@@ -41,7 +44,7 @@ typedef struct {
   // Return the number of adapters.
   ncclResult_t (*devices)(int* ndev);
   // Get various device properties.
-  ncclResult_t (*getProperties)(int dev, ncclNetProperties_v3_t* props);
+  ncclResult_t (*getProperties)(int dev, ncclNetProperties_v4_t* props);
   // Create a receiving object and provide a handle to connect to it. The
   // handle can be up to NCCL_NET_HANDLE_MAXSIZE bytes and will be exchanged
   // between ranks to create a connection.
@@ -62,7 +65,7 @@ typedef struct {
   ncclResult_t (*irecv)(void* recvComm, void* data, int size, void* mhandle, void** request);
   // Perform a flush/fence to make sure all data received with NCCL_PTR_CUDA is
   // visible to the GPU
-  ncclResult_t (*flush)(void* recvComm, void* data, int size, void* mhandle);
+  ncclResult_t (*iflush)(void* recvComm, void* data, int size, void* mhandle, void** request);
   // Test whether a request is complete. If size is not NULL, it returns the
   // number of bytes sent/received.
   ncclResult_t (*test)(void* request, int* done, int* size);
@@ -70,11 +73,11 @@ typedef struct {
   ncclResult_t (*closeSend)(void* sendComm);
   ncclResult_t (*closeRecv)(void* recvComm);
   ncclResult_t (*closeListen)(void* listenComm);
-} ncclNet_v3_t;
+} ncclNet_v4_t;
 
-typedef ncclNet_v3_t ncclNet_t;
+typedef ncclNet_v4_t ncclNet_t;
 
-#define NCCL_PLUGIN_SYMBOL ncclNetPlugin_v3
+#define NCCL_PLUGIN_SYMBOL ncclNetPlugin_v4
 
 typedef struct {
   // Name of the collective network (mainly for logs)
@@ -85,7 +88,7 @@ typedef struct {
   // If ndev returns 0, all other functions might be set to NULL.
   ncclResult_t (*devices)(int* ndev);
   // Get various device properties.
-  ncclResult_t (*getProperties)(int dev, ncclNetProperties_v3_t* props);
+  ncclResult_t (*getProperties)(int dev, ncclNetProperties_v4_t* props);
   // Create a receiving object and provide a handle to connect to it. The
   // handle can be up to NCCL_NET_HANDLE_MAXSIZE bytes and will be exchanged
   // between ranks to create connections.
@@ -105,17 +108,17 @@ typedef struct {
       ncclDataType_t dataType, ncclRedOp_t redOp, void* sendMhandle, void* recvMhandle, void** request);
   // Perform a flush/fence to make sure all data received with NCCL_PTR_CUDA is
   // visible to the GPU
-  ncclResult_t (*flush)(void* collComm, void* data, int size, void* mhandle);
+  ncclResult_t (*iflush)(void* collComm, void* data, int size, void* mhandle, void** request);
   // Test whether a request is complete. If size is not NULL, it returns the
   // number of bytes sent/received.
   ncclResult_t (*test)(void* request, int* done, int* size);
   // Close and free collective comm objects
   ncclResult_t (*closeColl)(void* collComm);
   ncclResult_t (*closeListen)(void* listenComm);
-} ncclCollNet_v3_t;
+} ncclCollNet_v4_t;
 
-typedef ncclCollNet_v3_t ncclCollNet_t;
+typedef ncclCollNet_v4_t ncclCollNet_t;
 
-#define NCCL_COLLNET_PLUGIN_SYMBOL ncclCollNetPlugin_v3
+#define NCCL_COLLNET_PLUGIN_SYMBOL ncclCollNetPlugin_v4
 
 #endif // end include guard

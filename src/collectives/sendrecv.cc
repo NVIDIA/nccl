@@ -12,7 +12,8 @@ NCCL_API(ncclResult_t, ncclSend, const void* sendbuff, size_t count, ncclDataTyp
     ncclComm_t comm, cudaStream_t stream);
 ncclResult_t ncclSend(const void* sendbuff, size_t count, ncclDataType_t datatype, int peer,
     ncclComm_t comm, cudaStream_t stream) {
-  struct ncclInfo info = { ncclCollSendRecv, "Send",
+  NVTX3_FUNC_RANGE_IN(nccl_domain);
+  struct ncclInfo info = { ncclFuncSendRecv, "Send",
     sendbuff, NULL, count, datatype, ncclSum, peer, comm, stream, /* Args */
     1, 1 };
   ncclResult_t ret;
@@ -26,7 +27,8 @@ NCCL_API(ncclResult_t, ncclRecv, void* recvbuff, size_t count, ncclDataType_t da
     ncclComm_t comm, cudaStream_t stream);
 ncclResult_t ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype, int peer,
     ncclComm_t comm, cudaStream_t stream) {
-  struct ncclInfo info = { ncclCollSendRecv, "Recv",
+  NVTX3_FUNC_RANGE_IN(nccl_domain);
+  struct ncclInfo info = { ncclFuncSendRecv, "Recv",
     NULL, recvbuff, count, datatype, ncclSum, peer, comm, stream, /* Args */
     1, 1 };
   ncclResult_t ret;

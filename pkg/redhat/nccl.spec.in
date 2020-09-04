@@ -1,7 +1,7 @@
 Name:           libnccl
 Version:        ${nccl:Major}.${nccl:Minor}.${nccl:Patch}${nccl:Suffix}
 Release:        ${pkg:Revision}+cuda${cuda:Major}.${cuda:Minor}
-Summary:        NVIDIA Collectives Communication Library (NCCL) Runtime
+Summary:        NVIDIA Collective Communication Library (NCCL) Runtime
 
 Group:          Development/Libraries
 License:        BSD
@@ -18,13 +18,13 @@ NVLink, NVswitch, as well as networking using InfiniBand Verbs or TCP/IP
 sockets.
 
 %package devel
-Summary:        NVIDIA Collectives Communication Library (NCCL) Runtime
+Summary:        NVIDIA Collective Communication Library (NCCL) Runtime
 Group:          Development/Libraries
 %description devel
 NCCL development files
 
 %package static
-Summary:        NVIDIA Collectives Communication Library (NCCL) Runtime
+Summary:        NVIDIA Collective Communication Library (NCCL) Runtime
 Group:          Development/Libraries
 %description static
 NCCL static library

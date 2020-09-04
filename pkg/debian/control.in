@@ -9,7 +9,7 @@ Package: libnccl${nccl:Major}
 Section: libs
 Architecture: ${pkg:Arch}
 Depends: ${misc:Depends}, ${shlibs:Depends}
-Description: NVIDIA Collectives Communication Library (NCCL) Runtime
+Description: NVIDIA Collective Communication Library (NCCL) Runtime
  NCCL (pronounced "Nickel") is a stand-alone library of standard collective
  communication routines for GPUs, implementing all-reduce, all-gather, reduce,
  broadcast, and reduce-scatter.
@@ -21,7 +21,7 @@ Package: libnccl-dev
 Section: libdevel
 Architecture: ${pkg:Arch}
 Depends: ${misc:Depends}, ${shlibs:Depends}, libnccl${nccl:Major} (= ${binary:Version})
-Description: NVIDIA Collectives Communication Library (NCCL) Development Files
+Description: NVIDIA Collective Communication Library (NCCL) Development Files
  NCCL (pronounced "Nickel") is a stand-alone library of standard collective
  communication routines for GPUs, implementing all-reduce, all-gather, reduce,
  broadcast, and reduce-scatter.

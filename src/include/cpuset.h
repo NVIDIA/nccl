@@ -19,7 +19,7 @@ static int hexToInt(char c) {
 
 #define CPU_SET_N_U32 (sizeof(cpu_set_t)/sizeof(uint32_t))
 
-ncclResult_t ncclStrToCpuset(const char* str, cpu_set_t* mask) {
+static ncclResult_t ncclStrToCpuset(const char* str, cpu_set_t* mask) {
   uint32_t cpumasks[CPU_SET_N_U32];
   int m = CPU_SET_N_U32-1;
   cpumasks[m] = 0;
@@ -42,7 +42,7 @@ ncclResult_t ncclStrToCpuset(const char* str, cpu_set_t* mask) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclCpusetToStr(cpu_set_t* mask, char* str) {
+static ncclResult_t ncclCpusetToStr(cpu_set_t* mask, char* str) {
   int c = 0;
   uint8_t* m8 = (uint8_t*)mask;
   for (int o=sizeof(cpu_set_t)-1; o>=0; o--) {

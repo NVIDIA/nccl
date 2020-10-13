@@ -798,12 +798,6 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
   // Compute nChannels per peer for p2p
   NCCLCHECK(ncclTopoComputeP2pChannels(comm));
 
-  // We should have allocated all buffers, collective fifos, ... we can
-  // restore the affinity.
-affinity_restore:
-  sched_setaffinity(0, sizeof(cpu_set_t), &affinitySave);
-  if (ret != ncclSuccess) return ret;
-
   // Compute intra ranks (using AllGather1 data)
   int intraRank0 = -1, intraRank = -1, intraRanks = 0;
   for (int i = 0; i < nranks; i++) {
@@ -827,6 +821,12 @@ affinity_restore:
   free(allGather1Data);
 
   if (comm->nNodes) NCCLCHECK(ncclProxyCreate(comm));
+
+  // We should have allocated all buffers, collective fifos, ... we can
+  // restore the affinity.
+affinity_restore:
+  sched_setaffinity(0, sizeof(cpu_set_t), &affinitySave);
+  if (ret != ncclSuccess) return ret;
 
   TRACE(NCCL_INIT, "rank %d nranks %d - DONE", rank, nranks);
   return ncclSuccess;

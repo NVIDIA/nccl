@@ -19,6 +19,8 @@
 #define PCI_WIDTH 12.0           // PCI Gen3 x16
 #define QPI_WIDTH 6.0
 #define SKL_QPI_WIDTH 9.0
+#define ZPI_WIDTH 6.0
+#define YONGFENG_ZPI_WIDTH 9.0
 #define P9_WIDTH 32.0
 #define ARM_WIDTH 6.0
 #define NET_WIDTH 12.0           // 100Gbit

@@ -110,8 +110,11 @@ static ncclResult_t getNextOp(struct ncclChannel* channel, struct ncclWork** wor
 
 static ncclResult_t setupLaunch(struct ncclComm* comm, struct cudaLaunchParams* params) {
   // Only launch blocks where we have work to do.
-  for (int c=0; c<comm->p2pnChannels; c++) {
-    if (comm->channels[c].workCount) params->gridDim.x = c+1;
+  for (int c=comm->p2pnChannels-1; c>=0; c--) {
+    if (comm->channels[c].workCount) {
+      params->gridDim.x = c+1;
+      break;
+    }
   }
 
   // Set active = 2 for the last operation and add a no-op on empty channels (p2p case).

@@ -25,7 +25,7 @@ extern pthread_mutex_t ncclDebugOutputLock;
 extern FILE *ncclDebugFile;
 extern ncclResult_t getHostName(char* hostname, int maxlen, const char delim);
 
-void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *filefunc, int line, const char *fmt, ...);
+void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *filefunc, int line, const char *fmt, ...) __attribute__ ((format (printf, 5, 6)));
 
 // Let code temporarily downgrade WARN into INFO
 extern thread_local int ncclDebugNoWarn;

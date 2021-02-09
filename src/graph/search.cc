@@ -55,7 +55,7 @@ static ncclResult_t findRevLink(struct ncclTopoNode* node1, struct ncclTopoNode*
       return ncclSuccess;
     }
   }
-  WARN("Could not find rev link for %d/%d -> %d/%d\n", node1->type, node1->id, node2->type, node2->id);
+  WARN("Could not find rev link for %d/%ld -> %d/%ld", node1->type, node1->id, node2->type, node2->id);
   return ncclInternalError;
 }
 
@@ -188,7 +188,7 @@ static ncclResult_t getGpuIndex(struct ncclTopoSystem* system, int rank, int* in
       return ncclSuccess;
     }
   }
-  WARN("Could not find gpu rank %d\n", rank);
+  WARN("Could not find gpu rank %d", rank);
   return ncclInternalError;
 }
 
@@ -199,7 +199,7 @@ static ncclResult_t getNetIndex(struct ncclTopoSystem* system, int64_t id, int* 
       return ncclSuccess;
     }
   }
-  WARN("Could not find net id %lx\n", id);
+  WARN("Could not find net id %lx", id);
   return ncclInternalError;
 }
 
@@ -788,7 +788,7 @@ done:
   }
 
   if (graph->nChannels == 0 && graph->collNet == 0) {
-    WARN("Could not find a path for pattern %d, falling back to simple order\n", graph->pattern);
+    WARN("Could not find a path for pattern %d, falling back to simple order", graph->pattern);
     for (int i=0; i<ngpus; i++) graph->intra[i] = system->nodes[GPU].nodes[i].gpu.rank;
     graph->inter[0] = graph->inter[1] = 0;
     graph->speedIntra = graph->speedInter = 0.1;

@@ -367,7 +367,7 @@ static ncclResult_t connectAddress(int* fd, union socketAddress* remoteAddr) {
   /* IPv4/IPv6 support */
   int family = remoteAddr->sa.sa_family;
   if (family != AF_INET && family != AF_INET6) {
-    WARN("Error : connecting to address with family %d is neither AF_INET(%d) nor AF_INET6(%d)\n", family, AF_INET, AF_INET6);
+    WARN("Error : connecting to address with family %d is neither AF_INET(%d) nor AF_INET6(%d)", family, AF_INET, AF_INET6);
     return ncclInternalError;
   }
   int salen = (family == AF_INET) ? sizeof(sockaddr_in) : sizeof(sockaddr_in6);

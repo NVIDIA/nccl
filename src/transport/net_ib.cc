@@ -84,7 +84,7 @@ static ncclResult_t ncclIbGetPciPath(char* devName, char** path, int* realPort) 
   snprintf(devicePath, PATH_MAX, "/sys/class/infiniband/%s/device", devName);
   char* p = realpath(devicePath, NULL);
   if (p == NULL) {
-    WARN("Could not find real path of %s", *devicePath);
+    WARN("Could not find real path of %s (%s)", devName, devicePath);
   } else {
     // Merge multi-port NICs into the same PCI device
     p[strlen(p)-1] = '0';

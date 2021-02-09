@@ -97,7 +97,7 @@ ncclResult_t ncclTopoGetNode(struct ncclTopoSystem* system, struct ncclTopoNode*
 
 ncclResult_t ncclTopoCreateNode(struct ncclTopoSystem* system, struct ncclTopoNode** node, int type, uint64_t id) {
   if (system->nodes[type].count == NCCL_TOPO_MAX_NODES) {
-    WARN("Error : tried to create too many nodes of type %d\n", type);
+    WARN("Error : tried to create too many nodes of type %d", type);
     return ncclInternalError;
   }
   struct ncclTopoNode* n = system->nodes[type].nodes+system->nodes[type].count;
@@ -421,7 +421,7 @@ ncclResult_t ncclTopoAddNvLinks(struct ncclXmlNode* node, struct ncclTopoSystem*
     NCCLCHECK(busIdToInt64(parentBusId, &pBusId));
     NCCLCHECK(ncclTopoGetNode(system, &gpu, GPU, pBusId));
     if (gpu == NULL) {
-      WARN("Add NVLink error : could not find GPU %lx\n", pBusId);
+      WARN("Add NVLink error : could not find GPU %lx", pBusId);
       return ncclInternalError;
     }
     int count;

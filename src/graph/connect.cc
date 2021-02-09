@@ -115,7 +115,7 @@ static ncclResult_t setTreeDown(struct ncclTree* tree, int* indexes, int d) {
   int x = 0;
   while (x < NCCL_MAX_TREE_ARITY && tree->down[x] >= 0) x++;
   if (x == NCCL_MAX_TREE_ARITY) {
-    WARN("Internal error : tree already has %d children (%d %d %d)\n", x, tree->down[0], tree->down[1], tree->down[2]);
+    WARN("Internal error : tree already has %d children (%d %d %d)", x, tree->down[0], tree->down[1], tree->down[2]);
     return ncclInternalError;
   }
   tree->down[x] = indexes[d];
@@ -213,7 +213,7 @@ int ncclMinNchannels() {
   if (ncclParamMinNrings() != -2) minNchannels = ncclParamMinNrings();
   if (ncclParamMinNchannels() != -2) minNchannels = ncclParamMinNchannels();
   if (minNchannels > MAXCHANNELS) {
-    WARN("User asked for a minimum of %d channels, limiting to %d\n", minNchannels, MAXCHANNELS);
+    WARN("User asked for a minimum of %d channels, limiting to %d", minNchannels, MAXCHANNELS);
     minNchannels = MAXCHANNELS;
   }
   if (minNchannels < 0) minNchannels = 0;
@@ -225,7 +225,7 @@ int ncclMaxNchannels() {
   if (ncclParamMaxNchannels() != -2) maxNchannels = ncclParamMaxNchannels();
   if (maxNchannels > MAXCHANNELS) maxNchannels = MAXCHANNELS;
   if (maxNchannels < 1) {
-    WARN("User asked for a maximum of %d channels, setting it to 1\n", maxNchannels);
+    WARN("User asked for a maximum of %d channels, setting it to 1", maxNchannels);
     maxNchannels = 1;
   }
   return maxNchannels;

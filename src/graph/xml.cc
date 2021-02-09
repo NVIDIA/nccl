@@ -62,7 +62,7 @@ ncclResult_t xmlGetToken(FILE* file, char* name, char* value, char* last) {
     if (c == '=') {
       ptr[o] = '\0';
       if (value == NULL) {
-        WARN("XML Parse : Unexpected value with name %s\n", ptr);
+        WARN("XML Parse : Unexpected value with name %s", ptr);
         return ncclInternalError;
       }
       return xmlGetValue(file, value, last);
@@ -128,7 +128,7 @@ ncclResult_t xmlGetNode(FILE* file, struct ncclXmlNode* node) {
     // Re-read the name, we got '/' in the first call
     NCCLCHECK(xmlGetToken(file, node->name, NULL, &c));
     if (c != '>') {
-      WARN("XML Parse error : unexpected trailing %c in closing tag %s\n", c, node->name);
+      WARN("XML Parse error : unexpected trailing %c in closing tag %s", c, node->name);
       return ncclInternalError;
     }
     return ncclSuccess;
@@ -141,7 +141,7 @@ ncclResult_t xmlGetNode(FILE* file, struct ncclXmlNode* node) {
   while (c == ' ') {
     NCCLCHECK(xmlGetToken(file, node->attrs[a].key, node->attrs[a].value, &c));
     if (a == MAX_ATTR_COUNT) {
-      INFO(NCCL_GRAPH, "XML Parse : Ignoring extra attributes (max %d)\n", MAX_ATTR_COUNT);
+      INFO(NCCL_GRAPH, "XML Parse : Ignoring extra attributes (max %d)", MAX_ATTR_COUNT);
       // Actually we need to still consume the extra attributes so we have an extra one.
     } else a++;
   }
@@ -169,7 +169,7 @@ ncclResult_t xmlLoadSub(FILE* file, struct ncclXml* xml, struct ncclXmlNode* hea
   if (head && head->type == NODE_TYPE_SINGLE) return ncclSuccess;
   while (1) {
     if (xml->maxIndex == MAX_NODES) {
-      WARN("Error : XML parser is limited to 1024 nodes\n");
+      WARN("Error : XML parser is limited to 1024 nodes");
       return ncclInternalError;
     }
     struct ncclXmlNode* node = xml->nodes+xml->maxIndex;
@@ -360,7 +360,7 @@ ncclResult_t ncclTopoSetAttrFromSys(struct ncclXmlNode* pciNode, const char* pat
   char strValue[MAX_STR_LEN];
   NCCLCHECK(ncclTopoGetStrFromSys(path, fileName, strValue));
   if (strValue[0] != '\0') { NCCLCHECK(xmlSetAttr(pciNode, attrName, strValue)); }
-  TRACE(NCCL_GRAPH, "Read from sys %s/%s -> %s=%s\n", path, fileName, attrName, strValue);
+  TRACE(NCCL_GRAPH, "Read from sys %s/%s -> %s=%s", path, fileName, attrName, strValue);
   return ncclSuccess;
 }
 
@@ -592,7 +592,7 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
     int maxNvLinks = (sm < 60) ? 0 : (sm < 70) ? 4 : (sm < 80) ? 6 : 12;
 
     if (maxNvLinks > 0 && nvmlDev == NULL) {
-      WARN("No NVML device handle. Skipping nvlink detection.\n");
+      WARN("No NVML device handle. Skipping nvlink detection.");
       maxNvLinks = 0;
     }
 

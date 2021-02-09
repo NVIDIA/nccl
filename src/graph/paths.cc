@@ -25,7 +25,7 @@ static ncclResult_t getPath(struct ncclTopoSystem* system, struct ncclTopoNode* 
       return ncclSuccess;
     }
   }
-  WARN("Could not find node of type %d id %lx\n", t, id);
+  WARN("Could not find node of type %d id %lx", t, id);
   return ncclInternalError;
 }
 

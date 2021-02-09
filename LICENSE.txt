@@ -1,5 +1,5 @@
 
- Copyright (c) 2015-2019, NVIDIA CORPORATION. All rights reserved.
+ Copyright (c) 2015-2020, NVIDIA CORPORATION. All rights reserved.
 
  Redistribution and use in source and binary forms, with or without
  modification, are permitted provided that the following conditions
@@ -29,3 +29,11 @@
  The U.S. Department of Energy funded the development of this software
  under subcontract 7078610 with Lawrence Berkeley National Laboratory.
 
+
+This code also includes files from the NVIDIA Tools Extension SDK project.
+
+See:
+
+   https://github.com/NVIDIA/NVTX
+
+for more information and license details.

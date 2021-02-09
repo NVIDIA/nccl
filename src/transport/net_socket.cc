@@ -237,7 +237,7 @@ ncclResult_t ncclSocketGetNsockNthread(int dev, int* ns, int* nt) {
     if (fd == -1) {
       // Could not find device vendor. This is handled silently so
       // we don't want to print an INFO error.
-      TRACE(NCCL_NET, "Open of %s failed : %s\n", vendorPath, strerror(errno));
+      TRACE(NCCL_NET, "Open of %s failed : %s", vendorPath, strerror(errno));
       goto end;
     }
     char vendor[7];

@@ -72,7 +72,7 @@ ncclResult_t dumpProxyState(struct ncclProxyState* state) {
   struct ncclProxyArgs* op = state->ops;
   while (op) {
     if (op->idle & OP_SEEN) {
-      WARN("Active list loop at element %ld\n", OP_INDEX(op));
+      WARN("Active list loop at element %ld", OP_INDEX(op));
     }
     op->idle |= OP_SEEN;
     printf("[%ld]", OP_INDEX(op));
@@ -98,7 +98,7 @@ ncclResult_t dumpProxyState(struct ncclProxyState* state) {
   struct ncclProxyArgs* free = state->pool;
   while (free) {
     if (free->idle & OP_SEEN) {
-      WARN("Free list loop at element %ld\n", OP_INDEX(free));
+      WARN("Free list loop at element %ld", OP_INDEX(free));
     }
     free->idle |= OP_SEEN;
     free = free->next;
@@ -109,7 +109,7 @@ ncclResult_t dumpProxyState(struct ncclProxyState* state) {
   while (p) {
     for (int e=0; e<PROXYARGS_ALLOCATE_SIZE; e++) {
       if ((p->elems[e].idle & OP_SEEN) == 0) {
-        WARN("Element %d of pool %d has been lost\n", e, i);
+        WARN("Element %d of pool %d has been lost", e, i);
         struct ncclProxyArgs* free = state->pool;
         printf("Free list ");
         while (free) {
@@ -164,7 +164,7 @@ static ncclResult_t SaveProxy(int type, int peer, struct ncclProxyArgs* args) {
   struct ncclPeer* peerComm = args->channel->peers+peer;
   struct ncclConnector* connector = type == proxyRecv ? &peerComm->recv : &peerComm->send;
   if (connector->transportComm == NULL) {
-    WARN("[%d] Error no transport for %s peer %d on channel %d\n", connector->comm->rank,
+    WARN("[%d] Error no transport for %s peer %d on channel %d", connector->comm->rank,
         type == proxyRecv ? "recv" : "send", peer, args->channel->id);
     return ncclInternalError;
   }
@@ -480,7 +480,7 @@ ncclResult_t ncclProxySharedBuffersFree(struct ncclComm* comm, int cuda, int typ
   while (nslots*state->slotSize < size) nslots *= 2;
   int s = (ptr-buff)/state->slotSize;
   if (s < 0 || s+nslots > state->nslots) {
-    WARN("Error freeing shared buffer : freeing ptr %p size %d (start %p slot size %d nslots %d)\n", ptr, size, buff, state->slotSize, state->nslots);
+    WARN("Error freeing shared buffer : freeing ptr %p size %d (start %p slot size %d nslots %d)", ptr, size, buff, state->slotSize, state->nslots);
     return ncclInternalError;
   }
   for (int i=0; i<nslots; i++) used[s+i] = 0;

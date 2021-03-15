@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2017-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2017-2021, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -19,6 +19,31 @@
   (void*)NCCL_FUNC5(func, RING,    redop, type), \
   (void*)NCCL_FUNC5(func, COLLNET, redop, type)
 
+#if defined(__CUDA_BF16_TYPES_EXIST__)
+// Must be consistent with ncclDataType_t
+#define NCCL_FUNCS3A(func, redop) \
+  (void*)NCCL_FUNC4(func, redop, int8_t), \
+  (void*)NCCL_FUNC4(func, redop, uint8_t), \
+  (void*)NCCL_FUNC4(func, redop, int32_t), \
+  (void*)NCCL_FUNC4(func, redop, uint32_t), \
+  (void*)NCCL_FUNC4(func, redop, int64_t), \
+  (void*)NCCL_FUNC4(func, redop, uint64_t), \
+  (void*)NCCL_FUNC4(func, redop, half), \
+  (void*)NCCL_FUNC4(func, redop, float), \
+  (void*)NCCL_FUNC4(func, redop, double), \
+  (void*)NCCL_FUNC4(func, redop, __nv_bfloat16)
+#define NCCL_FUNCS3B(func, redop) \
+  (void*)NCCL_FUNC4(func, redop, int8_t), \
+  (void*)NCCL_FUNC4(func, redop, int8_t), \
+  (void*)NCCL_FUNC4(func, redop, int8_t), \
+  (void*)NCCL_FUNC4(func, redop, int8_t), \
+  (void*)NCCL_FUNC4(func, redop, int8_t), \
+  (void*)NCCL_FUNC4(func, redop, int8_t), \
+  (void*)NCCL_FUNC4(func, redop, int8_t), \
+  (void*)NCCL_FUNC4(func, redop, int8_t), \
+  (void*)NCCL_FUNC4(func, redop, int8_t), \
+  (void*)NCCL_FUNC4(func, redop, int8_t)
+#else
 // Must be consistent with ncclDataType_t
 #define NCCL_FUNCS3A(func, redop) \
   (void*)NCCL_FUNC4(func, redop, int8_t), \
@@ -40,6 +65,7 @@
   (void*)NCCL_FUNC4(func, redop, int8_t), \
   (void*)NCCL_FUNC4(func, redop, int8_t), \
   (void*)NCCL_FUNC4(func, redop, int8_t)
+#endif
 
 // Must be consistent with ncclRedOp_t -- but we only generate kernel for sums.
 #define NCCL_FUNCS2A(func) \

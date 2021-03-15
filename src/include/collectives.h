@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2017-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2017-2021, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -34,6 +34,19 @@
   DECL4(func, TREE,    redop, type) \
   DECL4(func, COLLNET, redop, type)
 
+#if defined(__CUDA_BF16_TYPES_EXIST__)
+#define DECL2(func, redop) \
+  DECL3(func, redop, int8_t) \
+  DECL3(func, redop, uint8_t) \
+  DECL3(func, redop, int32_t) \
+  DECL3(func, redop, uint32_t) \
+  DECL3(func, redop, int64_t) \
+  DECL3(func, redop, uint64_t) \
+  DECL3(func, redop, half) \
+  DECL3(func, redop, float) \
+  DECL3(func, redop, double) \
+  DECL3(func, redop, __nv_bfloat16)
+#else
 #define DECL2(func, redop) \
   DECL3(func, redop, int8_t) \
   DECL3(func, redop, uint8_t) \
@@ -44,6 +57,7 @@
   DECL3(func, redop, half) \
   DECL3(func, redop, float) \
   DECL3(func, redop, double)
+#endif
 
 #define DECL(func) \
   DECL2(func, Sum) \

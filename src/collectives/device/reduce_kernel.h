@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2021, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -239,6 +239,31 @@ struct FuncSum<half> {
   }
 };
 
+#if defined(__CUDA_BF16_TYPES_EXIST__)
+template<>
+struct FuncSum<__nv_bfloat16> {
+  __device__ __nv_bfloat162 operator()(const __nv_bfloat162 x, const __nv_bfloat162 y) const {
+#if __CUDA_ARCH__ >= 800
+    return __hadd2(x, y);
+#else
+    float fxl, fxh, fyl, fyh;
+    fxl = __low2float(x);
+    fxh = __high2float(x);
+    fyl = __low2float(y);
+    fyh = __high2float(y);
+    return __floats2bfloat162_rn(fxl + fyl, fxh + fyh);
+#endif
+   }
+  __device__ __nv_bfloat16 operator()(const __nv_bfloat16 x, const __nv_bfloat16 y) const {
+#if __CUDA_ARCH__ >= 800
+    return __hadd(x, y);
+#else
+    return __float2bfloat16( __bfloat162float(x) + __bfloat162float(y) );
+#endif
+  }
+};
+#endif
+
 template<>
 struct FuncProd<half> {
   __device__ half2 operator()(const half2 x, const half2 y) const {
@@ -262,6 +287,31 @@ struct FuncProd<half> {
   }
 };
 
+#if defined(__CUDA_BF16_TYPES_EXIST__)
+template<>
+struct FuncProd<__nv_bfloat16> {
+  __device__ __nv_bfloat162 operator()(const __nv_bfloat162 x, const __nv_bfloat162 y) const {
+#if __CUDA_ARCH__ >= 800
+    return __hmul2(x, y);
+#else
+    float fxl, fxh, fyl, fyh;
+    fxl = __low2float(x);
+    fxh = __high2float(x);
+    fyl = __low2float(y);
+    fyh = __high2float(y);
+    return __floats2bfloat162_rn(fxl * fyl, fxh * fyh);
+#endif
+  }
+  __device__ __nv_bfloat16 operator()(const __nv_bfloat16 x, const __nv_bfloat16 y) const {
+#if __CUDA_ARCH__ >= 800
+    return __hmul(x, y);
+#else
+    return __float2bfloat16( __bfloat162float(x) * __bfloat162float(y) );
+#endif
+  }
+};
+#endif
+
 template<>
 struct FuncMax<half> {
   __device__ half2 operator()(const half2 x, const half2 y) const {
@@ -281,6 +331,34 @@ struct FuncMax<half> {
   }
 };
 
+#if defined(__CUDA_BF16_TYPES_EXIST__)
+template<>
+struct FuncMax<__nv_bfloat16> {
+  __device__ __nv_bfloat162 operator()(const __nv_bfloat162 x, const __nv_bfloat162 y) const {
+#if __CUDA_ARCH__ >= 800
+    return __hmax2(x, y);
+#else
+    float fxl, fxh, fyl, fyh;
+    fxl = __low2float(x);
+    fxh = __high2float(x);
+    fyl = __low2float(y);
+    fyh = __high2float(y);
+    return __floats2bfloat162_rn(fmaxf(fxl, fyl), fmaxf(fxh, fyh));
+#endif
+  }
+  __device__ __nv_bfloat16 operator()(const __nv_bfloat16 x, const __nv_bfloat16 y) const {
+#if __CUDA_ARCH__ >= 800
+    return __hmax(x, y);
+#else
+    float fx, fy;
+    fx = __bfloat162float(x);
+    fy = __bfloat162float(y);
+    return __float2bfloat16(fmaxf(fx, fy));
+#endif
+  }
+};
+#endif
+
 template<>
 struct FuncMin<half> {
   __device__ half2 operator()(const half2 x, const half2 y) const {
@@ -299,4 +377,33 @@ struct FuncMin<half> {
     return __float2half(fm);
   }
 };
+
+#if defined(__CUDA_BF16_TYPES_EXIST__)
+template<>
+struct FuncMin<__nv_bfloat16> {
+   __device__ __nv_bfloat162 operator()(const __nv_bfloat162 x, const __nv_bfloat162 y) const {
+#if __CUDA_ARCH__ >= 800
+    return __hmin2(x, y);
+#else
+    float fxl, fxh, fyl, fyh;
+    fxl = __low2float(x);
+    fxh = __high2float(x);
+    fyl = __low2float(y);
+    fyh = __high2float(y);
+    return __floats2bfloat162_rn(fminf(fxl, fyl), fminf(fxh, fyh));
+#endif
+  }
+  __device__ __nv_bfloat16 operator()(const __nv_bfloat16 x, const __nv_bfloat16 y) const {
+#if __CUDA_ARCH__ >= 800
+    return __hmin(x, y);
+#else
+    float fx, fy;
+    fx = __bfloat162float(x);
+    fy = __bfloat162float(y);
+    return __float2bfloat16(fminf(fx, fy));
+#endif
+  }
+};
+#endif
+
 #endif // REDUCE_KERNEL_H_

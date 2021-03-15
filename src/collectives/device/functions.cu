@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2021, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -20,6 +20,31 @@ __device__ struct ncclShmemData* ncclShmem;
   NCCL_FUNC5(func, RING,    redop, type), \
   NCCL_FUNC5(func, COLLNET, redop, type)
 
+#if defined(__CUDA_BF16_TYPES_EXIST__)
+// Must be consistent with ncclDataType_t
+#define NCCL_FUNCS3A(func, redop) \
+  NCCL_FUNC4(func, redop, int8_t), \
+  NCCL_FUNC4(func, redop, uint8_t), \
+  NCCL_FUNC4(func, redop, int32_t), \
+  NCCL_FUNC4(func, redop, uint32_t), \
+  NCCL_FUNC4(func, redop, int64_t), \
+  NCCL_FUNC4(func, redop, uint64_t), \
+  NCCL_FUNC4(func, redop, half), \
+  NCCL_FUNC4(func, redop, float), \
+  NCCL_FUNC4(func, redop, double), \
+  NCCL_FUNC4(func, redop, __nv_bfloat16)
+#define NCCL_FUNCS3B(func, redop) \
+  NCCL_FUNC4(func, redop, int8_t), \
+  NCCL_FUNC4(func, redop, int8_t), \
+  NCCL_FUNC4(func, redop, int8_t), \
+  NCCL_FUNC4(func, redop, int8_t), \
+  NCCL_FUNC4(func, redop, int8_t), \
+  NCCL_FUNC4(func, redop, int8_t), \
+  NCCL_FUNC4(func, redop, int8_t), \
+  NCCL_FUNC4(func, redop, int8_t), \
+  NCCL_FUNC4(func, redop, int8_t), \
+  NCCL_FUNC4(func, redop, int8_t)
+#else
 // Must be consistent with ncclDataType_t
 #define NCCL_FUNCS3A(func, redop) \
   NCCL_FUNC4(func, redop, int8_t), \
@@ -41,6 +66,7 @@ __device__ struct ncclShmemData* ncclShmem;
   NCCL_FUNC4(func, redop, int8_t), \
   NCCL_FUNC4(func, redop, int8_t), \
   NCCL_FUNC4(func, redop, int8_t)
+#endif
 
 // Must be consistent with ncclRedOp_t
 #define NCCL_FUNCS2A(func) \

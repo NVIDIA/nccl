@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2021, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -36,6 +36,9 @@ static __inline__ int ncclTypeSize(ncclDataType_t type) {
     case ncclUint8:
       return 1;
     case ncclFloat16:
+#if defined(__CUDA_BF16_TYPES_EXIST__)
+    case ncclBfloat16:
+#endif
       return 2;
     case ncclInt32:
     case ncclUint32:

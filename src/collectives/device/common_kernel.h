@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2021, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -145,6 +145,29 @@ struct MULTI<FUNC, half> {
   }
 };
 
+#if defined(__CUDA_BF16_TYPES_EXIST__)
+template<class FUNC>
+struct MULTI<FUNC, __nv_bfloat16> {
+  static_assert(sizeof(PackType) == 4 * sizeof(__nv_bfloat16),
+      "PackType must be four times the size of __nv_bfloat16.");
+
+  struct PackBfloat162 {
+    __nv_bfloat162 a, b;
+  };
+
+  __device__ PackType operator()(const PackType x, const PackType y) const {
+    struct PackBfloat162 cx, cy, cr;
+    cx = *(reinterpret_cast<const struct PackBfloat162*>(&x));
+    cy = *(reinterpret_cast<const struct PackBfloat162*>(&y));
+
+    cr.a = FUNC()(cx.a, cy.a);
+    cr.b = FUNC()(cx.b, cy.b);
+
+    return *(reinterpret_cast<PackType*>(&cr));
+  }
+};
+#endif
+
 template<class FUNC>
 struct MULTI<FUNC, float> {
   static_assert(sizeof(PackType) == 2 * sizeof(float),
@@ -231,6 +254,20 @@ half vFetch<half>(const volatile half* ptr) {
 template<> inline __device__
 void vStore<half>(volatile half* ptr, const half val) {
   ((half*)ptr)[0] = val;
+}
+#endif
+
+#if defined(__CUDA_BF16_TYPES_EXIST__)
+template<> inline __device__
+__nv_bfloat16 vFetch<__nv_bfloat16>(const volatile __nv_bfloat16* ptr) {
+  __nv_bfloat16 r;
+  r = ((__nv_bfloat16*)ptr)[0];
+  return r;
+}
+
+template<> inline __device__
+void vStore<__nv_bfloat16>(volatile __nv_bfloat16* ptr, const __nv_bfloat16 val) {
+  ((__nv_bfloat16*)ptr)[0] = val;
 }
 #endif
 

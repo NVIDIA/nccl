@@ -41,6 +41,7 @@ __device__ struct ncclShmemData* ncclShmem;
   NCCL_FUNC4(func, redop, int8_t), \
   NCCL_FUNC4(func, redop, int8_t), \
   NCCL_FUNC4(func, redop, int8_t), \
+  NCCL_FUNC4(func, redop, int8_t), \
   NCCL_FUNC4(func, redop, int8_t)
 
 // Must be consistent with ncclRedOp_t

@@ -40,6 +40,7 @@
   (void*)NCCL_FUNC4(func, redop, int8_t), \
   (void*)NCCL_FUNC4(func, redop, int8_t), \
   (void*)NCCL_FUNC4(func, redop, int8_t), \
+  (void*)NCCL_FUNC4(func, redop, int8_t), \
   (void*)NCCL_FUNC4(func, redop, int8_t)
 
 // Must be consistent with ncclRedOp_t -- but we only generate kernel for sums.

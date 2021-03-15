@@ -137,23 +137,25 @@ __device__ void NCCL_FUNC_NAME(func, algo, proto, redop, type)(struct ncclWorkEl
   IMPL_COLL4(func, COLLNET, redop, type, ncclType)
 
 #if NCCL_TYPE == 0
-#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, int8_t,   ncclInt8)
+#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, int8_t,      ncclInt8)
 #elif NCCL_TYPE == 1
-#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, uint8_t,  ncclUint8)
+#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, uint8_t,     ncclUint8)
 #elif NCCL_TYPE == 2
-#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, int32_t,  ncclInt32)
+#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, int32_t,     ncclInt32)
 #elif NCCL_TYPE == 3
-#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, uint32_t, ncclUint32)
+#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, uint32_t,    ncclUint32)
 #elif NCCL_TYPE == 4
-#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, int64_t,  ncclInt64)
+#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, int64_t,     ncclInt64)
 #elif NCCL_TYPE == 5
-#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, uint64_t, ncclUint64)
+#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, uint64_t,    ncclUint64)
 #elif NCCL_TYPE == 6
-#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, half,     ncclFloat16)
+#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, half,        ncclFloat16)
 #elif NCCL_TYPE == 7
-#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, float,    ncclFloat32)
+#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, float,       ncclFloat32)
 #elif NCCL_TYPE == 8
-#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, double,   ncclFloat64)
+#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, double,      ncclFloat64)
+#elif NCCL_TYPE == 9
+#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, nv_bfloat16, ncclBfloat16)
 #endif
 
 // Reduction define all functions

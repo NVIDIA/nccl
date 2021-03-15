@@ -9,6 +9,7 @@
 
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#include <cuda_bf16.h>
 
 #define NCCL_MAJOR ${nccl:Major}
 #define NCCL_MINOR ${nccl:Minor}
@@ -115,7 +116,8 @@ typedef enum { ncclInt8       = 0, ncclChar       = 0,
                ncclFloat16    = 6, ncclHalf       = 6,
                ncclFloat32    = 7, ncclFloat      = 7,
                ncclFloat64    = 8, ncclDouble     = 8,
-               ncclNumTypes   = 9 } ncclDataType_t;
+               ncclBfloat16   = 9,
+               ncclNumTypes   = 10} ncclDataType_t;
 
 /*
  * Collective communication operations

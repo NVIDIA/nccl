@@ -36,6 +36,7 @@ static __inline__ int ncclTypeSize(ncclDataType_t type) {
     case ncclUint8:
       return 1;
     case ncclFloat16:
+    case ncclBfloat16:
       return 2;
     case ncclInt32:
     case ncclUint32:

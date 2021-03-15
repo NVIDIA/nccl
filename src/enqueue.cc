@@ -29,7 +29,8 @@
   (void*)NCCL_FUNC4(func, redop, uint64_t), \
   (void*)NCCL_FUNC4(func, redop, half), \
   (void*)NCCL_FUNC4(func, redop, float), \
-  (void*)NCCL_FUNC4(func, redop, double)
+  (void*)NCCL_FUNC4(func, redop, double), \
+  (void*)NCCL_FUNC4(func, redop, nv_bfloat16)
 #define NCCL_FUNCS3B(func, redop) \
   (void*)NCCL_FUNC4(func, redop, int8_t), \
   (void*)NCCL_FUNC4(func, redop, int8_t), \

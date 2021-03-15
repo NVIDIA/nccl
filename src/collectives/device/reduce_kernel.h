@@ -299,4 +299,105 @@ struct FuncMin<half> {
     return __float2half(fm);
   }
 };
+
+template<>
+struct FuncSum<nv_bfloat16> {
+  __device__ nv_bfloat162 operator()(const nv_bfloat162 x, const nv_bfloat162 y) const {
+#if __CUDA_ARCH__ >= 800
+    return __hadd2(x, y);
+#else
+    float fxa, fxb, fya, fyb;
+    fxa = __low2float(x);
+    fxb = __high2float(x);
+    fya = __low2float(y);
+    fyb = __high2float(y);
+    return __floats2bfloat162_rn(fxa + fya, fxb + fyb);
+#endif
+  }
+  __device__ nv_bfloat16 operator()(const nv_bfloat16 x, const nv_bfloat16 y) const {
+#if __CUDA_ARCH__ >= 800
+    return __hadd(x, y);
+#else
+    return __float2bfloat16( __bfloat162float(x) + __bfloat162float(y) );
+#endif
+  }
+};
+
+template<>
+struct FuncProd<nv_bfloat16> {
+  __device__ nv_bfloat162 operator()(const nv_bfloat162 x, const nv_bfloat162 y) const {
+#if __CUDA_ARCH__ >= 800
+    return __hmul2(x, y);
+#else
+    float fxa, fxb, fya, fyb;
+    fxa = __low2float(x);
+    fxb = __high2float(x);
+    fya = __low2float(y);
+    fyb = __high2float(y);
+    return __floats2bfloat162_rn(fxa * fya, fxb * fyb);
+#endif
+  }
+  __device__ nv_bfloat16 operator()(const nv_bfloat16 x, const nv_bfloat16 y) const {
+#if __CUDA_ARCH__ >= 800
+    return __hmul(x, y);
+#else
+    return __float2bfloat16( __bfloat162float(x) * __bfloat162float(y) );
+#endif
+  }
+};
+
+template<>
+struct FuncMax<nv_bfloat16> {
+  __device__ nv_bfloat162 operator()(const nv_bfloat162 x, const nv_bfloat162 y) const {
+#if __CUDA_ARCH__ >= 800
+    return __hmax2(x, y);
+#else
+    float fxa, fxb, fya, fyb;
+    fxa = __low2float(x);
+    fxb = __high2float(x);
+    fya = __low2float(y);
+    fyb = __high2float(y);
+    return __floats2bfloat162_rn(fmaxf(fxa, fya), fmaxf(fxb, fyb));
+#endif
+  }
+  __device__ nv_bfloat16 operator()(const nv_bfloat16 x, const nv_bfloat16 y) const {
+#if __CUDA_ARCH__ >= 800
+    return __hmax(x, y);
+#else
+    float fx, fy, fm;
+    fx = __bfloat162float(x);
+    fy = __bfloat162float(y);
+    fm = fmaxf(fx, fy);
+    return __float2bfloat16(fm);
+#endif
+  }
+};
+
+template<>
+struct FuncMin<nv_bfloat16> {
+  __device__ nv_bfloat162 operator()(const nv_bfloat162 x, const nv_bfloat162 y) const {
+#if __CUDA_ARCH__ >= 800
+    return __hmin2(x, y);
+#else
+    float fxa, fxb, fya, fyb;
+    fxa = __low2float(x);
+    fxb = __high2float(x);
+    fya = __low2float(y);
+    fyb = __high2float(y);
+    return __floats2bfloat162_rn(fmaxf(fxa, fya), fmaxf(fxb, fyb));
+#endif
+  }
+  __device__ nv_bfloat16 operator()(const nv_bfloat16 x, const nv_bfloat16 y) const {
+#if __CUDA_ARCH__ >= 800
+    return __hmin(x, y);
+#else
+    float fx, fy, fm;
+    fx = __bfloat162float(x);
+    fy = __bfloat162float(y);
+    fm = fminf(fx, fy);
+    return __float2bfloat16(fm);
+#endif
+  }
+};
+
 #endif // REDUCE_KERNEL_H_

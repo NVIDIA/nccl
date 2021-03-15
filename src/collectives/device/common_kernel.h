@@ -146,6 +146,27 @@ struct MULTI<FUNC, half> {
 };
 
 template<class FUNC>
+struct MULTI<FUNC, nv_bfloat16> {
+  static_assert(sizeof(PackType) == 4 * sizeof(nv_bfloat16),
+      "PackType must be four times the size of nv_bfloat16.");
+
+  struct PackNvBfloat162 {
+    nv_bfloat162 a, b;
+  };
+
+  __device__ PackType operator()(const PackType x, const PackType y) const {
+    struct PackNvBfloat162 cx, cy, cr;
+    cx = *(reinterpret_cast<const struct PackNvBfloat162*>(&x));
+    cy = *(reinterpret_cast<const struct PackNvBfloat162*>(&y));
+
+    cr.a = FUNC()(cx.a, cy.a);
+    cr.b = FUNC()(cx.b, cy.b);
+
+    return *(reinterpret_cast<PackType*>(&cr));
+  }
+};
+
+template<class FUNC>
 struct MULTI<FUNC, float> {
   static_assert(sizeof(PackType) == 2 * sizeof(float),
       "PackType must be twice the size of float.");
@@ -220,6 +241,17 @@ template<> inline __device__
 void vStore<half>(volatile half* ptr, const half val) {
   ptr->x = val.x;
 }
+
+nv_bfloat16 vFetch<nv_bfloat16>(const volatile nv_bfloat16* ptr) {
+  nv_bfloat16 r;
+  r.x = ptr->x;
+  return r;
+}
+
+template<> inline __device__
+void vStore<nv_bfloat16>(volatile nv_bfloat16* ptr, const nv_bfloat16 val) {
+  ptr->x = val.x;
+}
 #else
 template<> inline __device__
 half vFetch<half>(const volatile half* ptr) {
@@ -231,6 +263,18 @@ half vFetch<half>(const volatile half* ptr) {
 template<> inline __device__
 void vStore<half>(volatile half* ptr, const half val) {
   ((half*)ptr)[0] = val;
+}
+
+template<> inline __device__
+nv_bfloat16 vFetch<nv_bfloat16>(const volatile nv_bfloat16* ptr) {
+  nv_bfloat16 r;
+  r = ((nv_bfloat16*)ptr)[0];
+  return r;
+}
+
+template<> inline __device__
+void vStore<nv_bfloat16>(volatile nv_bfloat16* ptr, const nv_bfloat16 val) {
+  ((nv_bfloat16*)ptr)[0] = val;
 }
 #endif
 

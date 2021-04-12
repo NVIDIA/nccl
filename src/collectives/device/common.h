@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2017-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2017-2021, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -41,9 +41,9 @@ static __device__ void load_parallel(void* dst, void* src, size_t size, int tid)
   int* s = (int*)src;
   for (int o = tid; o < (size/sizeof(int)); o += blockDim.x) d[o] = s[o];
 }
-static __device__ void load_coll(struct ncclWork* localWork, struct ncclWork* hostWork, int tid, struct ncclDevComm* comm) {
-  __syncthreads();
-  load_parallel(localWork, hostWork, sizeof(struct ncclWork), tid);
+
+static __device__ void load_coll(struct ncclWork* localWork, struct ncclWork *hostWork, struct ncclWork* workFifo, int tid, struct ncclDevComm* comm) {
+  load_parallel(localWork, workFifo, sizeof(struct ncclWork), tid);
   // Check whether the last operation was aborted and make sure all threads exit
   int abort = tid == 0 ? *(comm->abortFlag) : 0;
   exitIfAbortBarrier(abort);
@@ -57,8 +57,8 @@ class ncclFunction {
 };
 
 struct ncclShmemPtrs {
-  void* srcs[NCCL_MAX_DEV_ARITY+1];
-  void* dsts[NCCL_MAX_DEV_ARITY+1];
+  void* srcs[NCCL_MAX_DIRECT_ARITY+1];
+  void* dsts[NCCL_MAX_DIRECT_ARITY+1];
 };
 
 struct ncclShmemData {
@@ -82,7 +82,6 @@ __device__ void ncclKernel(struct ncclWorkElem first)  {
   struct ncclDevComm* comm = first.comm;
   struct ncclChannel* channel = comm->channels+bid;
   struct ncclWorkElem* w = NULL;
-  uint16_t index = first.index;
 
   /* To optimize for latency, (only) the first operation is passed as argument.*/
   if (bid == 0 && first.funcIndex != FUNC_INDEX_P2P) w = &first;
@@ -90,7 +89,8 @@ __device__ void ncclKernel(struct ncclWorkElem first)  {
   while (1) {
     if (w == NULL) {
       w = shmem.localWork.elems;
-      load_coll(&shmem.localWork, channel->workFifo+index, tid, comm);
+      __syncthreads();
+      load_coll(&shmem.localWork, channel->workFifo+channel->index, channel->workFifoDev+channel->index, tid, comm);
     }
     if (tid < w->nThreads) {
       if (w->funcIndex == FINDEX) {
@@ -99,7 +99,7 @@ __device__ void ncclKernel(struct ncclWorkElem first)  {
         ncclFuncs[w->funcIndex](w);
       }
     }
-    index = (index+1) % NCCL_MAX_OPS;
+    if (tid == 0) channel->index = (channel->index+1) % NCCL_MAX_OPS;
     if (w->active == 2) {
       return;
     }

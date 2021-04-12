@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2021, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -57,8 +57,7 @@ ncclResult_t shmCanConnect(int* ret, struct ncclTopoSystem* topo, struct ncclTop
 #define MAX_SHM_NAME_LEN 1024
 
 /* Create and return connect structures for this peer to connect to me */
-ncclResult_t shmSendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo, struct ncclConnect* connectInfo, struct ncclConnector* send, int channelId) {
-
+ncclResult_t shmSendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo, struct ncclConnect* connectInfo, struct ncclConnector* send, int channelId, int connIndex) {
   struct shmSendResources* resources;
   NCCLCHECK(ncclCalloc(&resources, 1));
   send->transportResources = resources;
@@ -81,7 +80,7 @@ ncclResult_t shmSendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, st
   return ncclSuccess;
 }
 
-ncclResult_t shmRecvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo, struct ncclConnect* connectInfo, struct ncclConnector* recv, int channelId) {
+ncclResult_t shmRecvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo, struct ncclConnect* connectInfo, struct ncclConnector* recv, int channelId, int connIndex) {
   struct shmRecvResources* resources;
   NCCLCHECK(ncclCalloc(&resources, 1));
   recv->transportResources = resources;

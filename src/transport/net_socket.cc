@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2021, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -10,9 +10,7 @@
 #include "net.h"
 #include "param.h"
 
-#include <assert.h>
 #include <pthread.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <poll.h>
 #include <limits.h>

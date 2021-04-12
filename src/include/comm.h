@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2021, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -77,16 +77,17 @@ struct ncclComm {
   int nNodes;
   int localRanks;
 
-  enum { GROUP, PARALLEL } launchMode;
+  enum { GROUP, PARALLEL, GROUP_GRAPH } launchMode;
   cudaStream_t userStream;
   bool userStreamSet;
   cudaEvent_t doneEvent;
+  cudaEvent_t intDoneEvent;
   bool checkPointers;
 
-  // Counter to make sure collectives match (needed for bcast/reduce
-  // where syncs are not symmetric).
+  // Counter for tracking CUDA launches (P2P and collectives included)
   uint64_t opCount;
-  uint64_t lastOpCount;
+  // Collective operation counter
+  uint64_t collOpCount;
 
   // Channels for collectives
   int nChannels;
@@ -145,12 +146,19 @@ struct ncclComm {
   struct ncclInfo* asyncOps;
   int asyncOpCount;
   size_t asyncTotalSize;
+  int lastChannel;
 
   //list of async p2p operation queued in a group semantics
   struct ncclP2Plist* p2pSends;
   struct ncclP2Plist* p2pRecvs;
   int p2pSendCount;
   int p2pRecvCount;
+
+  // Store info for cudaGraph
+  int usingCudaGraph; // Only use it during capture time, not launch time
+  struct ncclQueueInfo* enqueueInfo;
+  cudaGraphNode_t lastSetupNode;
+  unsigned long long lastCudaGraphId;
 };
 
 #endif

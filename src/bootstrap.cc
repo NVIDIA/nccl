@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2021, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -191,6 +191,7 @@ ncclResult_t bootstrapGetUniqueId(ncclUniqueId* id) {
 
 struct unexConn {
   int peer;
+  int tag;
   int fd;
   struct unexConn* next;
 };
@@ -411,21 +412,23 @@ ncclResult_t bootstrapAllGather(void* commState, void* allData, int size) {
   return ncclSuccess;
 }
 
-ncclResult_t bootstrapSend(void* commState, int peer, void* data, int size) {
+ncclResult_t bootstrapSend(void* commState, int peer, int tag, void* data, int size) {
   struct extState* state = (struct extState*)commState;
   int tmpSendFd;
   NCCLCHECK(connectAddress(&tmpSendFd, state->peerCommAddresses+peer));
   NCCLCHECK(bootstrapNetSend(tmpSendFd, &state->rank, sizeof(int)));
+  NCCLCHECK(bootstrapNetSend(tmpSendFd, &tag, sizeof(int)));
   NCCLCHECK(bootstrapNetSend(tmpSendFd, data, size));
   close(tmpSendFd);
   return ncclSuccess;
 }
 
-ncclResult_t unexpectedEnqueue(struct extState* state, int peer, int fd) {
+ncclResult_t unexpectedEnqueue(struct extState* state, int peer, int tag, int fd) {
   // New unex
   struct unexConn* unex;
   NCCLCHECK(ncclCalloc(&unex, 1));
   unex->peer = peer;
+  unex->tag = tag;
   unex->fd = fd;
 
   // Enqueue
@@ -439,11 +442,11 @@ ncclResult_t unexpectedEnqueue(struct extState* state, int peer, int fd) {
   return ncclSuccess;
 }
 
-int unexpectedDequeue(struct extState* state, int peer) {
+int unexpectedDequeue(struct extState* state, int peer, int tag) {
   struct unexConn* elem = state->unexpectedConnections;
   struct unexConn* prev = NULL;
   while (elem) {
-    if (elem->peer == peer) {
+    if (elem->peer == peer && elem->tag == tag) {
       if (prev == NULL) {
         state->unexpectedConnections = elem->next;
       } else {
@@ -460,13 +463,13 @@ int unexpectedDequeue(struct extState* state, int peer) {
 }
 
 // We can't know who we'll receive from, so we need to receive everything at once
-ncclResult_t bootstrapRecv(void* commState, int peer, void* data, int size) {
+ncclResult_t bootstrapRecv(void* commState, int peer, int tag, void* data, int size) {
   struct extState* state = (struct extState*)commState;
 
   int tmpRecvFd;
 
   // Search unexpected connections first
-  if ((tmpRecvFd = unexpectedDequeue(state, peer)) != -1) {
+  if ((tmpRecvFd = unexpectedDequeue(state, peer, tag)) != -1) {
     NCCLCHECK(bootstrapNetRecv(tmpRecvFd, ((char*)data), size));
     close(tmpRecvFd);
     return ncclSuccess;
@@ -475,15 +478,16 @@ ncclResult_t bootstrapRecv(void* commState, int peer, void* data, int size) {
   // Then look for new connections
   while (1) {
     NCCLCHECK(bootstrapNetAccept(state->extListenFd, &tmpRecvFd));
-    int newPeer;
+    int newPeer, newTag;
     NCCLCHECK(bootstrapNetRecv(tmpRecvFd, &newPeer, sizeof(int)));
-    if (newPeer == peer) {
+    NCCLCHECK(bootstrapNetRecv(tmpRecvFd, &newTag, sizeof(int)));
+    if (newPeer == peer && newTag == tag) {
       NCCLCHECK(bootstrapNetRecv(tmpRecvFd, ((char*)data), size));
       close(tmpRecvFd);
       return ncclSuccess;
     }
     // Unexpected connection. Save for later.
-    NCCLCHECK(unexpectedEnqueue(state, newPeer, tmpRecvFd));
+    NCCLCHECK(unexpectedEnqueue(state, newPeer, newTag, tmpRecvFd));
   }
 }
 

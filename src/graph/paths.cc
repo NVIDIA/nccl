@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2018-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2018-2021, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -280,8 +280,7 @@ ncclResult_t ncclTopoCheckP2p(struct ncclTopoSystem* system, int64_t id1, int64_
   NCCLCHECK(ncclTopoCpuType(system, &arch, &vendor, &model));
   if (arch == NCCL_TOPO_CPU_ARCH_ARM) p2pLevel = PATH_PXB;
   if (arch == NCCL_TOPO_CPU_ARCH_X86 && vendor == NCCL_TOPO_CPU_VENDOR_INTEL) {
-    if (model == NCCL_TOPO_CPU_TYPE_BDW) p2pLevel = PATH_PXB;
-    else p2pLevel = PATH_PHB;
+    p2pLevel = PATH_PXB;
   }
   if (arch == NCCL_TOPO_CPU_ARCH_X86 && vendor == NCCL_TOPO_CPU_VENDOR_ZHAOXIN) {
     p2pLevel = PATH_PXB;

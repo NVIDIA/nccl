@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2021, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -27,8 +27,7 @@
 
 // Intel CPU convert GPU P2P traffic into 64B PCI TLPs, so GPU
 // to GPU traffic consumes more PCI bandwidth.
-#define INTEL_P2P(speed) (speed*9/12)
-#define INTEL_P2P_OVERHEAD(speed) (speed*12/9)
+#define INTEL_P2P_OVERHEAD(speed) (speed*6/5)
 
 #define NCCL_TOPO_NODE_TYPES 7
 #define GPU 0
@@ -105,6 +104,9 @@ struct ncclTopoNode {
       int model;
       cpu_set_t affinity;
     }cpu;
+    struct {
+      uint64_t device;
+    }pci;
   };
   int nlinks;
   struct ncclTopoLink links[NCCL_TOPO_MAX_LINKS];

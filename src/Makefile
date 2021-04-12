@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2015-2020, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2015-2021, NVIDIA CORPORATION. All rights reserved.
 #
 # See LICENSE.txt for license information
 #
@@ -10,7 +10,7 @@ include ../makefiles/version.mk
 ##### src files
 INCEXPORTS  := nccl.h nccl_net.h
 LIBSRCFILES := init.cc channel.cc bootstrap.cc transport.cc enqueue.cc group.cc debug.cc proxy.cc \
-                misc/nvmlwrap.cc misc/ibvwrap.cc misc/utils.cc misc/argcheck.cc \
+		misc/nvmlwrap.cc misc/ibvwrap.cc misc/gdrwrap.cc misc/utils.cc misc/argcheck.cc \
 		transport/p2p.cc transport/shm.cc transport/net.cc transport/net_socket.cc transport/net_ib.cc transport/coll_net.cc \
                 collectives/sendrecv.cc collectives/all_reduce.cc collectives/all_gather.cc collectives/broadcast.cc collectives/reduce.cc collectives/reduce_scatter.cc \
                 graph/topo.cc graph/paths.cc graph/search.cc graph/connect.cc graph/rings.cc graph/trees.cc graph/tuning.cc graph/xml.cc
@@ -56,8 +56,8 @@ ALWAYS_REBUILD:
 $(LIBDIR)/$(LIBTARGET) $(LIBDIR)/$(STATICLIBTARGET) : $(LIBOBJ)
 
 $(INCDIR)/nccl.h : nccl.h.in
-# NCCL_VERSION(X,Y,Z) ((X) * 1000 + (Y) * 100 + (Z))
-	@$(eval NCCL_VERSION := $(shell printf "%d%d%02d" $(NCCL_MAJOR) $(NCCL_MINOR) $(NCCL_PATCH)))
+# NCCL_VERSION(X,Y,Z) ((X) * 10000 + (Y) * 100 + (Z))
+	@$(eval NCCL_VERSION := $(shell printf "%d%02d%02d" $(NCCL_MAJOR) $(NCCL_MINOR) $(NCCL_PATCH)))
 	mkdir -p $(INCDIR)
 	@printf "Generating %-35s > %s\n" $< $@
 	sed -e "s/\$${nccl:Major}/$(NCCL_MAJOR)/g" \
@@ -129,7 +129,7 @@ install : lib
 	cp -P -v $(BUILDDIR)/lib/pkgconfig/* $(PREFIX)/lib/pkgconfig/
 	cp -v $(BUILDDIR)/include/* $(PREFIX)/include/
 
-FILESTOFORMAT := $(shell find . -name ".\#*" -prune -o \( -name "*.cc" -o -name "*.h" \) -print | grep -v -E 'ibvwrap.h|nvmlwrap.h|nccl.h')
+FILESTOFORMAT := $(shell find . -name ".\#*" -prune -o \( -name "*.cc" -o -name "*.h" \) -print | grep -v -E 'ibvwrap.h|nvmlwrap.h|gdrwrap.h|nccl.h')
 # Note that formatting.mk defines a new target so in order to not overwrite the default target,
 # it shouldn't be included at the top. Also, it uses the above definition of FILESTOFORMAT as well
 # as the BUILDDIR variable.

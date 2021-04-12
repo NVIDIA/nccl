@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2021, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -168,9 +168,58 @@ class ncclPrimitives {
     }
   }
 
+  // Scatter and gather do not support DIRECT
+  template <int RECV, int SEND>
+  inline __device__ void
+  ScatterGatherOp(const T* srcPtr, T* dstPtr, int totalElem, int peerElem, int skip, int shift) {
+    int offset = 0; // slice offset
+    int sliceSize = stepSize*SLICESTEPS;
+    int dataSize = max(DIVUP(peerElem, 16*SLICESPERCHUNK)*16, sliceSize/32);  // per-peer slice size
+
+    #pragma unroll
+    for (int slice=0; slice<SLICESPERCHUNK; ++slice) {
+      int realSize = max(0, min(dataSize, peerElem-offset));
+      if (tid < nworkers) {
+        if (RECV && (role & ROLE_WAIT_RECV)) waitRecv<0, 0>(0);
+        // realSize is not accurate here; but intra-node does not rely on sizes FIFO
+        if (SEND && (role & ROLE_WAIT_SEND)) waitSend<0, 0>(0, realSize*sizeof(T));
+        subBarrier();
+        if (SEND) {
+          #pragma unroll
+          for (int j=0; j<nsend; j++) {
+            int i = (j+shift)%nsend;
+            int peerOffset = i*peerElem + offset;
+            if (skip >=0 && i >= skip) peerOffset += peerElem;
+            const T* src0 = srcPtr + peerOffset;
+            int realPeerSize = min(realSize, totalElem-peerOffset);
+            if (realPeerSize > 0) ReduceOrCopyMulti<UNROLL, FUNC, T, 1, 1, 1, 1>(tid, nworkers, 1, &src0, 1, dsts+i, realPeerSize);
+          }
+        } else if (RECV) {
+          #pragma unroll
+          for (int j=0; j<nrecv; j++) {
+            int i = (j+shift)%nrecv;
+            int peerOffset = i*peerElem + offset;
+            if (skip >= 0 && i >= skip) peerOffset += peerElem;
+            T* dst0 = dstPtr + peerOffset;
+            int realPeerSize = min(realSize, totalElem-peerOffset);
+            if (realPeerSize > 0) ReduceOrCopyMulti<UNROLL, FUNC, T, 1, 1, 1, 1>(tid, nworkers, 1, srcs+i, 1, &dst0, realPeerSize);
+          }
+        }
+      }
+      barrier();
+      if (SEND && (role & ROLE_POST_SEND) && realSize > 0 && index == 0) __threadfence_system();
+      __syncwarp();
+      if (SEND && (role & ROLE_POST_SEND)) postSend();
+      if (RECV && (role & ROLE_POST_RECV)) postRecv();
+      offset += realSize;
+    }
+  }
+
   __device__ __forceinline__ void loadRecvConn(struct ncclChannel* channel, T* directBuff) {
     if (role & (ROLE_WAIT_RECV|ROLE_POST_RECV)) {
-      conn = &channel->devPeers[peer].recv.conn;
+      // For oneshot: groups 0,2 use conn 0, groups 4,6 use conn 1
+      const int connIndex = (NSEND == NCCL_MAX_DIRECT_ARITY || NRECV == NCCL_MAX_DIRECT_ARITY) ? group/4 : 0;
+      conn = &channel->devPeers[peer].recv[connIndex].conn;
       step = conn->step;
       step = ROUNDUP(step, SLICESPERCHUNK*SLICESTEPS);
       if (role & ROLE_POST_RECV) {
@@ -193,7 +242,9 @@ class ncclPrimitives {
 
   __device__ __forceinline__ void loadSendConn(struct ncclChannel* channel) {
     if (role & (ROLE_WAIT_SEND|ROLE_POST_SEND)) {
-      conn = &channel->devPeers[peer].send.conn;
+      // For oneshot: groups 0,2 use conn 0, groups 4,6 use conn 1
+      const int connIndex = (NSEND == NCCL_MAX_DIRECT_ARITY || NRECV == NCCL_MAX_DIRECT_ARITY) ? group/4 : 0;
+      conn = &channel->devPeers[peer].send[connIndex].conn;
       step = conn->step;
       step = ROUNDUP(step, SLICESPERCHUNK*SLICESTEPS);
       if (role & ROLE_POST_SEND) {
@@ -203,7 +254,7 @@ class ncclPrimitives {
         buff = (T*)conn->buffs[NCCL_PROTO_SIMPLE];
         if (DIRECT && (conn->direct & NCCL_DIRECT_GPU)) {
           void* volatile* ptr = conn->ptrExchange;
-          while ((direct = (T*)(*ptr)) == NULL);
+          while ((direct = (T*)(*ptr)) == NULL) { if (checkAbort()) break; }
           *ptr = NULL;
         }
         connHeadPtr = conn->head;
@@ -316,6 +367,16 @@ class ncclPrimitives {
   directRecvReduceCopySend(const T* src, T* dst, ssize_t directOffset, int nelem) {
     // Direct is only for the send part
     GenericOp<0, 1, 1, 1, 1, 1>(src, dst, nelem, directOffset);
+  }
+
+  __device__ __forceinline__ void
+  scatter(const T* src, int totalElem, int peerElem, int skip, int shift) {
+    ScatterGatherOp<0, 1>(src, NULL, totalElem, peerElem, skip, shift);
+  }
+
+  __device__ __forceinline__ void
+  gather(T* dst, int totalElem, int peerElem, int skip, int shift) {
+    ScatterGatherOp<1, 0>(NULL, dst, totalElem, peerElem, skip, shift);
   }
 
   __device__ __forceinline__ ~ncclPrimitives() {

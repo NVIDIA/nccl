@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2019-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2019-2021, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -25,6 +25,15 @@
         res = ncclUnhandledCudaError;                       \
         goto label;                                         \
     }                                                       \
+} while(false)
+
+// Report failure but clear error and continue
+#define CUDACHECKIGNORE(cmd) do {  \
+    cudaError_t err = cmd;         \
+    if( err != cudaSuccess ) {     \
+        INFO(NCCL_ALL,"%s:%d Cuda failure '%s'", __FILE__, __LINE__, cudaGetErrorString(err)); \
+        (void) cudaGetLastError(); \
+    }                              \
 } while(false)
 
 #include <errno.h>

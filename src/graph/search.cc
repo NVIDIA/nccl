@@ -764,7 +764,7 @@ search:
     for (int g=0; g<ngpus; g++) {
       printf("%d ", graph->intra[c*ngpus+g]);
     }
-    printf("[%d %d]", graph->inter[0], graph->inter[1]);
+    printf("[%d %d]", graph->inter[c*2+0], graph->inter[c*2+1]);
     printf("\n");
   }
 #endif

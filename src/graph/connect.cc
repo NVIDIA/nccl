@@ -212,6 +212,7 @@ static ncclResult_t connectCollNet(struct ncclComm* comm, struct ncclTopoGraph* 
     sprintf(line+strlen(line), "headRank %d out %d shift %d", channel->collTree.headRank, channel->collTree.out, channel->collTree.shift);
     INFO(NCCL_GRAPH, "%s", line);
   }
+  free(heads);
   return ncclSuccess;
 }
 

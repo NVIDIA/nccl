@@ -241,10 +241,16 @@ ncclResult_t ncclTransportCollNetCheck(struct ncclComm* comm, int collNetSetupFa
     for (int r=0; r<comm->nChannels; r++) {
       struct ncclChannel* channel = comm->channels+r;
       struct ncclPeer* peer = channel->peers+nranks;
-      if (peer->send->transportResources && peer->send->transportComm) NCCLCHECK(peer->send->transportComm->free(peer->send->transportResources));
-      if (peer->recv->transportResources && peer->recv->transportComm) NCCLCHECK(peer->recv->transportComm->free(peer->recv->transportResources));
-      peer->send->transportResources = NULL; // avoid double free
-      peer->recv->transportResources = NULL; // avoid double free
+      for (int b=0; b<NCCL_MAX_CONNS; b++) {
+        struct ncclConnector* send = peer->send + b;
+        if (send->transportResources && send->transportComm) NCCLCHECK(send->transportComm->free(send->transportResources));
+        send->transportResources = NULL; // avoid double free
+      }
+      for (int b=0; b<NCCL_MAX_CONNS; b++) {
+        struct ncclConnector* recv = peer->recv + b;
+        if (recv->transportResources && recv->transportComm) NCCLCHECK(recv->transportComm->free(recv->transportResources));
+        recv->transportResources = NULL; // avoid double free
+      }
     }
     // Set support to 0
     comm->collNetSupport = 0;

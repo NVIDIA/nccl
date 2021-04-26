@@ -515,10 +515,11 @@ ncclResult_t bootstrapClose(void* commState) {
 
 ncclResult_t bootstrapAbort(void* commState) {
   struct extState* state = (struct extState*)commState;
-  close(state->extListenFd);
-  close(state->extRingSendFd);
-  close(state->extRingRecvFd);
-  state->allocState->stop = 2;
+  if (commState == NULL) return ncclSuccess;
+  if (state->extListenFd) close(state->extListenFd);
+  if (state->extRingSendFd) close(state->extRingSendFd);
+  if (state->extRingRecvFd) close(state->extRingRecvFd);
+  if (state->allocState) state->allocState->stop = 2;
   free(state->peerCommAddresses);
   free(state->peerAllocAddresses);
   free(state);

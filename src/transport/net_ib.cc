@@ -220,7 +220,10 @@ ncclResult_t ncclIbDevices(int* ndev) {
 ncclResult_t ncclIbGdrSupport(int ibDev) {
   static int moduleLoaded = -1;
   if (moduleLoaded == -1) {
-    moduleLoaded = (access("/sys/kernel/mm/memory_peers/nv_mem/version", F_OK) == -1) ? 0 : 1;
+    // Check for the nv_peer_mem module being loaded
+    moduleLoaded = ((access("/sys/kernel/mm/memory_peers/nv_mem/version", F_OK) == -1) &&
+                    // Also support the new nvidia-peermem module
+                    (access("/sys/kernel/mm/memory_peers/nvidia-peermem/version", F_OK) == -1)) ? 0 : 1;
   }
   if (moduleLoaded == 0) return ncclSystemError;
   return ncclSuccess;

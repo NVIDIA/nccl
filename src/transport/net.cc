@@ -371,7 +371,7 @@ ncclResult_t netSendProxy(struct ncclProxyArgs* args) {
             // Data is ready, try to send.
             NCCLCHECK(ncclNetIsend(resources->netSendComm, buff, size, mhandle, sub->requests+buffSlot));
             if (sub->requests[buffSlot] != NULL) {
-              TRACE(NCCL_NET, "sendProxy [%d/%d] Isend (LL) posted, req %p", sub->transmitted, buffSlot, sub->requests[buffSlot]);
+              TRACE(NCCL_NET, "sendProxy [%ld/%d] Isend (LL) posted, req %p", sub->transmitted, buffSlot, sub->requests[buffSlot]);
               sizesFifo[buffSlot] = -1;
               // Make sure size is reset to zero before we update the head.
               __sync_synchronize();
@@ -388,7 +388,7 @@ ncclResult_t netSendProxy(struct ncclProxyArgs* args) {
         int buffSlot = (sub->base+sub->done)%NCCL_STEPS;
         NCCLCHECK(ncclNetTest(sub->requests[buffSlot], &done, NULL));
         if (done) {
-          TRACE(NCCL_NET, "sendProxy [%d/%d] request %p done, size %d", sub->done, buffSlot, sub->requests[buffSlot]);
+          TRACE(NCCL_NET, "sendProxy [%ld/%d] request %p done", sub->done, buffSlot, sub->requests[buffSlot]);
           sub->done += args->sliceSteps;
 
           if (resources->shared == 0) {
@@ -447,7 +447,7 @@ ncclResult_t netRecvProxy(struct ncclProxyArgs* args) {
         }
         NCCLCHECK(ncclNetIrecv(resources->netRecvComm, ptr, buffSize, mhandle, sub->requests+buffSlot));
         if (sub->requests[buffSlot] != NULL) {
-          TRACE(NCCL_NET, "recvProxy [%d/%d] posted recv request %p", sub->posted, buffSlot, sub->requests[buffSlot]);
+          TRACE(NCCL_NET, "recvProxy [%ld/%d] posted recv request %p", sub->posted, buffSlot, sub->requests[buffSlot]);
           sub->posted += args->sliceSteps;
           args->idle = 0;
           continue;

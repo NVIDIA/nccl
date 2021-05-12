@@ -248,7 +248,7 @@ static ncclResult_t commAlloc(ncclComm_t* comret, int ndev, int rank) {
   comm->nRanks = comm->hostDevComm.nRanks = ndev;
   cudaGetDevice(&comm->cudaDev);
   NCCLCHECK(getBusId(comm->cudaDev, &comm->busId));
-  TRACE(NCCL_INIT,"comm %p rank %d nranks %d cudaDev %d busId %x", comm, rank, ndev, comm->cudaDev, comm->busId);
+  TRACE(NCCL_INIT,"comm %p rank %d nranks %d cudaDev %d busId %lx", comm, rank, ndev, comm->cudaDev, comm->busId);
 
   comm->doneEvent = doneEvent;
   comm->intDoneEvent = intDoneEvent;
@@ -277,6 +277,8 @@ static ncclResult_t commAlloc(ncclComm_t* comret, int ndev, int rank) {
   comm->lastSetupNode = NULL;
   comm->lastCudaGraphId = -1;
 
+  CUDACHECK(cudaDriverGetVersion(&comm->driverVersion));
+
   static_assert(MAXCHANNELS <= sizeof(*comm->connectSend)*8, "comm->connectSend must have enough bits for all channels");
   static_assert(MAXCHANNELS <= sizeof(*comm->connectRecv)*8, "comm->connectRecv must have enough bits for all channels");
   NCCLCHECK(ncclCalloc(&comm->connectSend, comm->nRanks));
@@ -295,11 +297,12 @@ static ncclResult_t commAlloc(ncclComm_t* comret, int ndev, int rank) {
 
 static ncclResult_t devCommSetup(ncclComm_t comm) {
   // Duplicate the channels on the device
-  NCCLCHECK(ncclCudaCalloc(&comm->hostDevComm.channels, comm->p2pnChannels));
-  NCCLCHECK(ncclCudaMemcpy(comm->hostDevComm.channels, comm->channels, comm->p2pnChannels));
+  int nChannels = std::max(comm->nChannels, comm->p2pnChannels);
+  NCCLCHECK(ncclCudaCalloc(&comm->hostDevComm.channels, nChannels));
+  NCCLCHECK(ncclCudaMemcpy(comm->hostDevComm.channels, comm->channels, nChannels));
 
   // Copy userRanks and peers
-  for (int r=0; r<comm->p2pnChannels; r++) {
+  for (int r=0; r<comm->nChannels; r++) {
     NCCLCHECK(ncclCudaMemcpy(comm->channels[r].ring.devUserRanks, comm->channels[r].ring.userRanks, comm->nRanks));
   }
 
@@ -459,6 +462,8 @@ static ncclResult_t computeBuffSizes(struct ncclComm* comm) {
 
 NCCL_PARAM(CrossNic, "CROSS_NIC", 2);
 NCCL_PARAM(GraphDumpFileRank, "GRAPH_DUMP_FILE_RANK", 0);
+NCCL_PARAM(CollNetNodeThreshold, "COLLNET_NODE_THRESHOLD", 2);
+NCCL_PARAM(NvbPreconnect, "NVB_PRECONNECT", 1);
 
 static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* commId) {
   // We use 2 AllGathers
@@ -579,7 +584,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
     NCCLCHECK(ncclTopoDumpGraphs(comm->topo, 3, graphs));
   }
 
-  // Determine CollNet support
+  // Determine local CollNet support before all-gather
   if (tmpNnodes > 1 && ncclParamCollNetEnable() == 1 && collNetSupport() == 1 && collNetGraph.nChannels > 0) comm->collNetSupport = 1;
   if (intraRanks > 8) {
     if (comm->collNetSupport == 1) WARN("CollNet currently only supports up to 8 GPUs per node");
@@ -687,6 +692,14 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
     for (int i=0; i<comm->nChannels; i++) memcpy(comm->channels+comm->nChannels+i, comm->channels+nChannelsOrig+i, sizeof(struct ncclChannel));
   }
 
+  // Determine CollNet support after all-gather now that we know nNodes
+  int collNetNodeThreshold = ncclParamCollNetNodeThreshold();
+  if (comm->nNodes < collNetNodeThreshold) {
+    if (comm->collNetSupport == 1)
+      INFO(NCCL_INIT, "Communicator has %d nodes which is less than CollNet node threshold %d, disabling CollNet", comm->nNodes, collNetNodeThreshold);
+    comm->collNetSupport = 0;
+  }
+
   int *rings;
   NCCLCHECK(ncclCalloc(&rings, nranks*MAXCHANNELS));
   NCCLCHECK(ncclTopoPostset(comm, nodesFirstRank, nodesTreePatterns, allTopoRanks, rings, &collNetGraph));
@@ -727,6 +740,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
     NCCLCHECKGOTO(ncclTransportP2pConnect(comm, channel, 1, &channel->ring.prev, 1, &channel->ring.next, 0), ret, affinity_restore);
   }
   NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &ringGraph, 0), ret, affinity_restore);
+  free(rings);
   INFO(NCCL_INIT, "Connected all rings");
 
   // Connect Trees
@@ -759,33 +773,69 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
         else if (ncclTransportCollNetSetup(comm, &collNetGraph, channel, head, head, h, collNetSend) != 1)
           collNetSetupFail = 1;
       }
+      // Verify CollNet setup across ranks after trying the first channel
+      if (c == 0) {
+        NCCLCHECKGOTO(ncclTransportCollNetCheck(comm, collNetSetupFail), ret, collnet_cleanup);
+      }
     }
+    // Verify CollNet setup across ranks after trying all channels
+    NCCLCHECKGOTO(ncclTransportCollNetCheck(comm, collNetSetupFail), ret, collnet_cleanup);
+    TRACE(NCCL_INIT, "rank %d Connected inter-node CollNet", rank);
+
+    // Connect intra-node CollNet
+    for (int c=0; c<comm->nChannels; c++) {
+      struct ncclChannel* channelRecv = comm->channels+c;
+      NCCLCHECKGOTO(ncclTransportP2pConnect(comm, channelRecv, NCCL_MAX_DIRECT_ARITY, channelRecv->collTree.up, NCCL_MAX_DIRECT_ARITY, channelRecv->collTree.down, 0), ret, collnet_cleanup);
+    }
+    NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &collNetGraph, 0), ret, collnet_cleanup);
+    for (int c=0; c<comm->nChannels; c++) {
+      struct ncclChannel* channelSend = comm->channels+c;
+      NCCLCHECKGOTO(ncclTransportP2pConnect(comm, channelSend, NCCL_MAX_DIRECT_ARITY, channelSend->collTree.down, NCCL_MAX_DIRECT_ARITY, channelSend->collTree.up, 1), ret, collnet_cleanup);
+    }
+    NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &collNetGraph, 1), ret, collnet_cleanup);
+    INFO(NCCL_INIT, "rank %d Connected CollNet", rank);
+
+collnet_cleanup:
     free(heads);
-    // Verify CollNet setup across ranks
-    NCCLCHECK(ncclTransportCollNetCheck(comm, collNetSetupFail));
-    if (comm->collNetSupport) {
-      TRACE(NCCL_INIT, "rank %d Connected inter-node CollNet", rank);
-      for (int c=0; c<comm->nChannels; c++) {
-        struct ncclChannel* channelRecv = comm->channels+c;
-        NCCLCHECK(ncclTransportP2pConnect(comm, channelRecv, NCCL_MAX_DIRECT_ARITY, channelRecv->collTree.up, NCCL_MAX_DIRECT_ARITY, channelRecv->collTree.down, 0));
-      }
-      NCCLCHECK(ncclTransportP2pSetup(comm, &collNetGraph, 0));
-      for (int c=0; c<comm->nChannels; c++) {
-        struct ncclChannel* channelSend = comm->channels+c;
-        NCCLCHECK(ncclTransportP2pConnect(comm, channelSend, NCCL_MAX_DIRECT_ARITY, channelSend->collTree.down, NCCL_MAX_DIRECT_ARITY, channelSend->collTree.up, 1));
-      }
-      NCCLCHECK(ncclTransportP2pSetup(comm, &collNetGraph, 1));
-      INFO(NCCL_INIT, "rank %d Connected CollNet", rank);
+    if (ret != ncclSuccess) {
+      NCCLCHECK(ncclTransportCollNetFree(comm));
+      comm->collNetSupport = 0;
+      ret = ncclSuccess;
     }
   }
   TRACE(NCCL_INIT, "rank %d nranks %d - CONNECTED %d RINGS AND TREES", rank, nranks, comm->nChannels);
-  free(rings);
 
   // Compute time models for algorithm and protocol combinations
   NCCLCHECK(ncclTopoTuneModel(comm, minCompCap, maxCompCap, &treeGraph, &ringGraph, &collNetGraph));
 
   // Compute nChannels per peer for p2p
   NCCLCHECK(ncclTopoComputeP2pChannels(comm));
+
+  if (ncclParamNvbPreconnect()) {
+    // Connect p2p when using NVB path
+    int nvbNpeers;
+    int* nvbPeers;
+    NCCLCHECK(ncclTopoGetNvbGpus(comm->topo, comm->rank, &nvbNpeers, &nvbPeers));
+    for (int r=0; r<nvbNpeers; r++) {
+      int peer = nvbPeers[r];
+      int delta = (comm->nRanks + (comm->rank-peer)) % comm->nRanks;
+      for (int c=0; c<comm->p2pnChannelsPerPeer; c++) {
+        int channelId = (delta+comm->p2pChannels[c]) % comm->p2pnChannels;
+        if (comm->channels[channelId].peers[peer].recv[0].connected == 0) { // P2P uses only 1 connector
+          comm->connectRecv[peer] |= (1<<channelId);
+        }
+      }
+      delta = (comm->nRanks - (comm->rank-peer)) % comm->nRanks;
+      for (int c=0; c<comm->p2pnChannelsPerPeer; c++) {
+        int channelId = (delta+comm->p2pChannels[c]) % comm->p2pnChannels;
+        if (comm->channels[channelId].peers[peer].send[0].connected == 0) { // P2P uses only 1 connector
+          comm->connectSend[peer] |= (1<<channelId);
+        }
+      }
+    }
+    NCCLCHECK(ncclTransportP2pSetup(comm, NULL, 0));
+    free(nvbPeers);
+  }
 
   NCCLCHECK(ncclCommSetIntra(comm, intraRank, intraRanks, intraRank0Comm));
 
@@ -916,7 +966,7 @@ ncclResult_t ncclCommDestroy(ncclComm_t comm) {
   if (comm == NULL)
     return ncclSuccess;
 
-  TRACE(NCCL_INIT, "comm %p rank %d nRanks %d cudaDev %d busId %x", comm, comm->rank, comm->nRanks, comm->cudaDev, comm->busId);
+  TRACE(NCCL_INIT, "comm %p rank %d nRanks %d cudaDev %d busId %lx", comm, comm->rank, comm->nRanks, comm->cudaDev, comm->busId);
 
   // Try and prevent a double free of the comm struct (user error)
   if (comm->rank == -1 || comm->nRanks <= 0 || comm->cudaDev == -1 || comm->busId == -1) {

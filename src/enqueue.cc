@@ -133,7 +133,8 @@ static ncclResult_t setupLaunch(struct ncclQueueInfo* eqInfo, int usingCudaGraph
   // Because in cudaGraph mode the launch param needs to be determined
   // at capture time instead of launch time.
   if (!usingCudaGraph) {
-    for (int c=0; c<comm->p2pnChannels; c++) {
+    int nChannels = std::max(comm->nChannels, comm->p2pnChannels);
+    for (int c=0; c<nChannels; c++) {
       if (comm->channels[c].workCount) params->gridDim.x = c+1;
     }
     eqInfo->maxChannels = params->gridDim.x;
@@ -169,8 +170,8 @@ static ncclResult_t setupLaunch(struct ncclQueueInfo* eqInfo, int usingCudaGraph
       // GDRCOPY support
       uint64_t first = (channel->workFifoTail-channel->workCount)%NCCL_MAX_OPS;
       uint64_t nelems = channel->workCount;
-      TRACE(NCCL_INIT, "GDRCOPY : copy workFifo %p to %p first %ld last %ld nelems %zi",
-            channel->workFifo, channel->workFifoGdr, first, last, nelems);
+      TRACE(NCCL_INIT, "GDRCOPY : copy workFifo %p to %p first %ld nelems %zi",
+            channel->workFifo, channel->workFifoGdr, first, nelems);
 
       for (int i = 0; i < nelems; i++) {
         int elem = (first+i) % NCCL_MAX_OPS;
@@ -799,6 +800,14 @@ ncclResult_t ncclGetCudaGraph(ncclComm_t comm, cudaGraph_t* graph) {
 #if CUDART_VERSION >= 11030
   cudaStreamCaptureStatus captureStatus;
   unsigned long long cudaGraphId;
+  if (comm->driverVersion < 11030) {
+    CUDACHECK(cudaStreamIsCapturing(comm->userStream, &captureStatus));
+    if (captureStatus != cudaStreamCaptureStatusNone) {
+      WARN("The installed CUDA driver is older than the minimum version (R465) required for NCCL's CUDA Graphs support");
+      return ncclInvalidUsage;
+    }
+    return ncclSuccess;
+  }
   CUDACHECK(cudaStreamGetCaptureInfo_v2(comm->userStream, &captureStatus, &cudaGraphId, graph, NULL, NULL));
   if (captureStatus == cudaStreamCaptureStatusActive) {
     if (cudaGraphId != comm->lastCudaGraphId) {

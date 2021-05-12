@@ -469,7 +469,7 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
     if (path == NULL) NCCLCHECK(getPciPath(busId, &path));
     NCCLCHECK(ncclTopoSetAttrFromSys(pciNode, path, "class", "class"));
   }
-  ncclDebugNoWarn = 1;
+  ncclDebugNoWarn = NCCL_GRAPH;
   NCCLCHECK(xmlGetAttrIndex(pciNode, "vendor", &index));
   if (index == -1) {
     if (path == NULL) getPciPath(busId, &path);

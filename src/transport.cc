@@ -237,23 +237,26 @@ ncclResult_t ncclTransportCollNetCheck(struct ncclComm* comm, int collNetSetupFa
   free(allGatherFailures);
   if (collNetSetupFail) {
     if (rank == 0) WARN("Cannot initialize CollNet, using point-to-point network instead");
-    // Free collNet resources
-    for (int r=0; r<comm->nChannels; r++) {
-      struct ncclChannel* channel = comm->channels+r;
-      struct ncclPeer* peer = channel->peers+nranks;
-      for (int b=0; b<NCCL_MAX_CONNS; b++) {
-        struct ncclConnector* send = peer->send + b;
-        if (send->transportResources && send->transportComm) NCCLCHECK(send->transportComm->free(send->transportResources));
-        send->transportResources = NULL; // avoid double free
-      }
-      for (int b=0; b<NCCL_MAX_CONNS; b++) {
-        struct ncclConnector* recv = peer->recv + b;
-        if (recv->transportResources && recv->transportComm) NCCLCHECK(recv->transportComm->free(recv->transportResources));
-        recv->transportResources = NULL; // avoid double free
-      }
+    return ncclSystemError;
+  }
+  return ncclSuccess;
+}
+
+ncclResult_t ncclTransportCollNetFree(struct ncclComm* comm) {
+  // Free collNet resources
+  for (int r=0; r<comm->nChannels; r++) {
+    struct ncclChannel* channel = comm->channels+r;
+    struct ncclPeer* peer = channel->peers+comm->nRanks;
+    for (int b=0; b<NCCL_MAX_CONNS; b++) {
+      struct ncclConnector* send = peer->send + b;
+      if (send->transportResources && send->transportComm) NCCLCHECK(send->transportComm->free(send->transportResources));
+      send->transportResources = NULL; // avoid double free
     }
-    // Set support to 0
-    comm->collNetSupport = 0;
+    for (int b=0; b<NCCL_MAX_CONNS; b++) {
+      struct ncclConnector* recv = peer->recv + b;
+      if (recv->transportResources && recv->transportComm) NCCLCHECK(recv->transportComm->free(recv->transportResources));
+      recv->transportResources = NULL; // avoid double free
+    }
   }
   return ncclSuccess;
 }

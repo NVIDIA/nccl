@@ -60,4 +60,5 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
 enum { collNetRecv=0, collNetSend=1 };
 int ncclTransportCollNetSetup(struct ncclComm* comm, struct ncclTopoGraph* collNetGraph, struct ncclChannel* channel, int masterRank, int masterPeer, int collNetGraphChannelId, int type);
 ncclResult_t ncclTransportCollNetCheck(struct ncclComm* comm, int collNetSetupFail);
+ncclResult_t ncclTransportCollNetFree(struct ncclComm* comm);
 #endif

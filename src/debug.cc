@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2021, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -62,6 +62,8 @@ void ncclDebugInit() {
         mask = NCCL_TUNING;
       } else if (strcasecmp(subsys, "ENV") == 0) {
         mask = NCCL_ENV;
+      } else if (strcasecmp(subsys, "ALLOC") == 0) {
+        mask = NCCL_ALLOC;
       } else if (strcasecmp(subsys, "ALL") == 0) {
         mask = NCCL_ALL;
       }

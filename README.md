@@ -25,6 +25,12 @@ If CUDA is not installed in the default /usr/local/cuda path, you can define the
 $ make src.build CUDA_HOME=<path to cuda install>
 ```
 
+If you wish to use a different host C++ compiler, you can define it with:
+
+```shell
+$ make src.build CUDAHOSTCXX=<path to c++ compiler binary>
+```
+
 NCCL will be compiled and installed in `build/` unless `BUILDDIR` is set.
 
 By default, NCCL is compiled for all supported architectures. To accelerate the compilation and reduce the binary size, consider redefining `NVCC_GENCODE` (defined in `makefiles/common.mk`) to only include the architecture of the target platform :

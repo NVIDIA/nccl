@@ -707,8 +707,10 @@ ncclResult_t ncclTopoGetXmlFromGraphs(int ngraphs, struct ncclTopoGraph** graphs
   return ncclSuccess;
 }
 
-float speedArray[] = { 42.0, 30.0, 24.0, 21.0, 18.0, 15.0, 12.0, 10.0, 9.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.4, 1.2, 0.24, 0.12 };
-#define NSPEEDS (sizeof(speedArray)/sizeof(float))
+float speedArrayIntra[] = { 44.0, 30.0, 22.0, 18.0, 15.0, 12.0, 10.0, 9.0, 7.0, 6.0, 5.0, 4.0, 3.0 };
+float speedArrayInter[] = { 48.0, 30.0, 24.0, 22.0, 18.0, 15.0, 12.0, 10.0, 9.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.4, 1.2, 0.24, 0.12 };
+#define NSPEEDSINTRA (sizeof(speedArrayIntra)/sizeof(float))
+#define NSPEEDSINTER (sizeof(speedArrayInter)/sizeof(float))
 
 ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph) {
   int ngpus = system->nodes[GPU].count;
@@ -738,15 +740,23 @@ ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph
   // SPLIT_TREE works better on older archs.
   int ccMin;
   NCCLCHECK(ncclTopoGetCompCap(system, &ccMin, NULL));
-  if (ccMin < 80 && graph->pattern == NCCL_TOPO_PATTERN_BALANCED_TREE) graph->pattern = NCCL_TOPO_PATTERN_SPLIT_TREE;
 
   struct ncclTopoGraph tmpGraph;
   memcpy(&tmpGraph, graph, sizeof(struct ncclTopoGraph));
 
   // First try crossnic, then decrease speed and finally increase speedIntra.
+  int nspeeds = 0;
+  float* speedArray = NULL;
+  if (system->nodes[NET].count == 0) {
+    nspeeds = NSPEEDSINTRA;
+    speedArray = speedArrayIntra;
+  } else {
+    nspeeds = NSPEEDSINTER;
+    speedArray = speedArrayInter;
+  }
   int pass = 1;
   int speedIndex = 0;
-  while (speedArray[speedIndex] > system->maxWidth && speedIndex < NSPEEDS-1) speedIndex++;
+  while (speedArray[speedIndex] > system->maxWidth && speedIndex < nspeeds-1) speedIndex++;
   tmpGraph.speedIntra = tmpGraph.speedInter = speedArray[speedIndex];
   int64_t globalTimeout = NCCL_SEARCH_GLOBAL_TIMEOUT;
 
@@ -813,12 +823,12 @@ search:
     tmpGraph.crossNic = 0;
 
     // Decrease speed until we find a solution
-    if ((speedIndex < NSPEEDS-1) && (graph->nChannels == 0 || (speedArray[speedIndex+1]/graph->speedInter > .49))) {
+    if ((speedIndex < nspeeds-1) && (graph->nChannels == 0 || (speedArray[speedIndex+1]/graph->speedInter > .49))) {
       tmpGraph.speedInter = tmpGraph.speedIntra = speedArray[++speedIndex];
       goto search;
     }
     speedIndex = 0;
-    while (speedArray[speedIndex] > system->maxWidth && speedIndex < NSPEEDS-1) speedIndex++;
+    while (speedArray[speedIndex] > system->maxWidth && speedIndex < nspeeds-1) speedIndex++;
     tmpGraph.speedIntra = tmpGraph.speedInter = speedArray[speedIndex];
 
   }
@@ -829,7 +839,7 @@ done:
     time = -1;
     memcpy(&tmpGraph, graph, sizeof(tmpGraph));
     speedIndex = 0;
-    while (speedArray[speedIndex] > graph->speedInter && speedIndex < NSPEEDS-1) speedIndex++;
+    while (speedArray[speedIndex] > graph->speedInter && speedIndex < nspeeds-1) speedIndex++;
     tmpGraph.speedIntra = tmpGraph.speedInter = speedArray[speedIndex];
     tmpGraph.minChannels = graph->nChannels;
     pass = 2;

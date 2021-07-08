@@ -56,7 +56,7 @@ ncclResult_t ncclSocketInit(ncclDebugLogger_t logFunction) {
           memcpy(&ncclSocketDevs[i].addr, addrs+i, sizeof(union socketAddress));
           NCCLCHECK(ncclSocketGetPciPath(ncclSocketDevs[i].devName, &ncclSocketDevs[i].pciPath));
           snprintf(line+strlen(line), MAX_LINE_LEN-strlen(line), " [%d]%s:%s", i, names+i*MAX_IF_NAME_SIZE,
-              socketToString(&addrs[i].sa, addrline));
+              socketToString(&addrs[i], addrline));
         }
         line[MAX_LINE_LEN] = '\0';
         INFO(NCCL_INIT|NCCL_NET,"NET/Socket : Using%s", line);
@@ -129,6 +129,7 @@ struct ncclSocketTask {
   void* data;
   int size;
   int fd;
+  union socketAddress *addr;
   int offset;
   int used;
   ncclResult_t result;
@@ -139,6 +140,7 @@ struct ncclSocketRequest {
   void* data;
   int size;
   int ctrlFd;
+  union socketAddress *addr;
   int offset;
   int used;
   struct ncclSocketComm* comm;
@@ -170,6 +172,7 @@ struct ncclSocketListenComm {
 
 struct ncclSocketComm {
   int ctrlFd;
+  union socketAddress addr;
   int fds[MAX_SOCKETS];
   int nSocks;
   int nThreads;
@@ -195,7 +198,7 @@ void* persistentSocketThread(void *args_) {
         for (int j=0; j<nSocksPerThread; j++) {
           struct ncclSocketTask* r = myQueue->tasks+i+j;
           if (r != NULL && r->used == 1 && r->offset < r->size) {
-            r->result = socketProgress(r->op, r->fd, r->data, r->size, &r->offset);
+            r->result = socketProgress(r->op, r->fd, r->addr, r->data, r->size, &r->offset);
             if (r->result != ncclSuccess) {
               WARN("NET/Socket : socket progress error");
               return NULL;
@@ -311,11 +314,12 @@ ncclResult_t ncclSocketConnect(int dev, void* opaqueHandle, void** sendComm) {
   for (int i=0; i<comm->nSocks+1; i++) {
     int tmpFd, offset=0;
     NCCLCHECK(connectAddress(&tmpFd, &handle->connectAddr));
-    NCCLCHECK(socketWait(NCCL_SOCKET_SEND, tmpFd, &i, sizeof(int), &offset));
+    NCCLCHECK(socketWait(NCCL_SOCKET_SEND, tmpFd, &handle->connectAddr, &i, sizeof(int), &offset));
     if (i == comm->nSocks) comm->ctrlFd = tmpFd;
     else comm->fds[i] = tmpFd;
   }
   *sendComm = comm;
+  comm->addr = handle->connectAddr;
   return ncclSuccess;
 }
 
@@ -327,10 +331,9 @@ ncclResult_t ncclSocketAccept(void* listenComm, void** recvComm) {
   rComm->nThreads = lComm->nThreads;
   for (int i=0; i<rComm->nSocks+1; i++) {
     int tmpFd, sendSockIdx, offset=0;
-    struct sockaddr_in sockaddr;
-    socklen_t socklen = sizeof(struct sockaddr_in);
-    SYSCHECKVAL(accept(lComm->fd, (struct sockaddr*)&sockaddr, &socklen), "accept", tmpFd);
-    NCCLCHECK(socketWait(NCCL_SOCKET_RECV, tmpFd, &sendSockIdx, sizeof(int), &offset));
+    socklen_t socklen = sizeof(union socketAddress);
+    SYSCHECKVAL(accept(lComm->fd, &rComm->addr.sa, &socklen), "accept", tmpFd);
+    NCCLCHECK(socketWait(NCCL_SOCKET_RECV, tmpFd, &rComm->addr, &sendSockIdx, sizeof(int), &offset));
     if (sendSockIdx == rComm->nSocks) rComm->ctrlFd = tmpFd;
     else rComm->fds[sendSockIdx] = tmpFd;
   }
@@ -346,6 +349,7 @@ ncclResult_t ncclSocketGetRequest(struct ncclSocketComm* comm, int op, void* dat
       r->data = data;
       r->size = size;
       r->ctrlFd = comm->ctrlFd;
+      r->addr = &comm->addr;
       r->used = 1;
       r->comm = comm;
       r->nSubs = 0;
@@ -380,6 +384,7 @@ ncclResult_t ncclSocketGetTask(struct ncclSocketComm* comm, int op, void* data, 
     r->data = data;
     r->size = size;
     r->fd = comm->fds[comm->nextFd];
+    r->addr = &comm->addr;
     r->offset = 0;
     r->result = ncclSuccess;
     comm->nextFd = (comm->nextFd + 1) % comm->nSocks;
@@ -406,16 +411,17 @@ ncclResult_t ncclSocketTest(void* request, int* done, int* size) {
   if (r->used == 1) { /* try to send/recv size */
     int data = r->size;
     int offset = 0;
-    NCCLCHECK(socketProgress(r->op, r->ctrlFd, &data, sizeof(int), &offset));
+    NCCLCHECK(socketProgress(r->op, r->ctrlFd, r->addr, &data, sizeof(int), &offset));
 
     if (offset == 0) return ncclSuccess; /* Not ready -- retry later */
 
     // Not sure we could ever receive less than 4 bytes, but just in case ...
-    if (offset < sizeof(int)) NCCLCHECK(socketWait(r->op, r->ctrlFd, &data, sizeof(int), &offset));
+    if (offset < sizeof(int)) NCCLCHECK(socketWait(r->op, r->ctrlFd, r->addr, &data, sizeof(int), &offset));
 
     // Check size is less or equal to the size provided by the user
     if (r->op == NCCL_SOCKET_RECV && data > r->size) {
-      WARN("NET/Socket : message truncated : receiving %d bytes instead of %d", data, r->size);
+      char line[SOCKET_NAME_MAXLEN+1];
+      WARN("NET/Socket : peer %s message truncated : receiving %d bytes instead of %d", socketToString(r->addr, line), data, r->size);
       return ncclInternalError;
     }
     r->size = data;
@@ -453,7 +459,7 @@ ncclResult_t ncclSocketTest(void* request, int* done, int* size) {
       }
     } else { // progress request using main thread
       if (r->offset < r->size) {
-        NCCLCHECK(socketProgress(r->op, r->ctrlFd, r->data, r->size, &r->offset));
+        NCCLCHECK(socketProgress(r->op, r->ctrlFd, r->addr, r->data, r->size, &r->offset));
       }
       if (r->offset == r->size) {
         if (size) *size = r->size;

@@ -38,7 +38,7 @@ struct ncclXml {
 
 /* File functions */
 #define NCCL_TOPO_XML_VERSION 1
-ncclResult_t ncclTopoGetXmlFromFile(const char* xmlTopoFile, struct ncclXml* xml);
+ncclResult_t ncclTopoGetXmlFromFile(const char* xmlTopoFile, struct ncclXml* xml, int warn);
 ncclResult_t ncclTopoDumpXmlToFile(const char* xmlTopoFile, struct ncclXml* xml);
 #define NCCL_GRAPH_XML_VERSION 1
 ncclResult_t ncclTopoGetXmlGraphFromFile(const char* xmlGraphFile, struct ncclXml* xml);
@@ -132,6 +132,18 @@ static ncclResult_t xmlSetAttr(struct ncclXmlNode* node, const char* attrName, c
     strncpy(node->attrs[index].key, attrName, MAX_STR_LEN);
     node->attrs[index].key[MAX_STR_LEN] = '\0';
   }
+  strncpy(node->attrs[index].value, value, MAX_STR_LEN);
+  node->attrs[index].value[MAX_STR_LEN] = '\0';
+  return ncclSuccess;
+}
+
+static ncclResult_t xmlSetAttrIfUnset(struct ncclXmlNode* node, const char* attrName, const char* value) {
+  int index;
+  NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
+  if (index != -1) return ncclSuccess;
+  index = node->nAttrs++;
+  strncpy(node->attrs[index].key, attrName, MAX_STR_LEN);
+  node->attrs[index].key[MAX_STR_LEN] = '\0';
   strncpy(node->attrs[index].value, value, MAX_STR_LEN);
   node->attrs[index].value[MAX_STR_LEN] = '\0';
   return ncclSuccess;

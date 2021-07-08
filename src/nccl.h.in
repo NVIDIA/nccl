@@ -9,6 +9,9 @@
 
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#if CUDART_VERSION >= 11000
+#include <cuda_bf16.h>
+#endif
 
 #define NCCL_MAJOR ${nccl:Major}
 #define NCCL_MINOR ${nccl:Minor}
@@ -103,7 +106,8 @@ typedef enum { ncclSum        = 0,
                ncclProd       = 1,
                ncclMax        = 2,
                ncclMin        = 3,
-               ncclNumOps     = 4 } ncclRedOp_t;
+               ncclAvg        = 4,
+               ncclNumOps     = 5 } ncclRedOp_t;
 
 /* Data types */
 typedef enum { ncclInt8       = 0, ncclChar       = 0,
@@ -115,7 +119,13 @@ typedef enum { ncclInt8       = 0, ncclChar       = 0,
                ncclFloat16    = 6, ncclHalf       = 6,
                ncclFloat32    = 7, ncclFloat      = 7,
                ncclFloat64    = 8, ncclDouble     = 8,
-               ncclNumTypes   = 9 } ncclDataType_t;
+#if defined(__CUDA_BF16_TYPES_EXIST__)
+               ncclBfloat16   = 9,
+               ncclNumTypes   = 10
+#else
+               ncclNumTypes   = 9
+#endif
+} ncclDataType_t;
 
 /*
  * Collective communication operations

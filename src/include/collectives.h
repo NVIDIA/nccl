@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2017-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2017-2021, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -21,8 +21,8 @@
 
 /* Declare all collective operations */
 #define DECL5(func, algo, proto, redop, type) \
-  extern __device__ void NCCL_FUNC_NAME(func, algo, proto, redop, type)(struct ncclWorkElem* args); \
-  extern __global__ void NCCL_KERN_NAME(func, algo, proto, redop, type)(struct ncclWorkElem c); \
+  extern __device__ void NCCL_FUNC_NAME(func, algo, proto, redop, type)(); \
+  extern __global__ void NCCL_KERN_NAME(func, algo, proto, redop, type)(ncclWorkElem c); \
 
 #define DECL4(func, algo, redop, type) \
   DECL5(func, algo, SIMPLE, redop, type) \
@@ -34,6 +34,19 @@
   DECL4(func, TREE,    redop, type) \
   DECL4(func, COLLNET, redop, type)
 
+#if defined(__CUDA_BF16_TYPES_EXIST__)
+#define DECL2(func, redop) \
+  DECL3(func, redop, int8_t) \
+  DECL3(func, redop, uint8_t) \
+  DECL3(func, redop, int32_t) \
+  DECL3(func, redop, uint32_t) \
+  DECL3(func, redop, int64_t) \
+  DECL3(func, redop, uint64_t) \
+  DECL3(func, redop, half) \
+  DECL3(func, redop, float) \
+  DECL3(func, redop, double) \
+  DECL3(func, redop, __nv_bfloat16)
+#else
 #define DECL2(func, redop) \
   DECL3(func, redop, int8_t) \
   DECL3(func, redop, uint8_t) \
@@ -44,12 +57,14 @@
   DECL3(func, redop, half) \
   DECL3(func, redop, float) \
   DECL3(func, redop, double)
+#endif
 
 #define DECL(func) \
   DECL2(func, Sum) \
   DECL2(func, Prod) \
   DECL2(func, Min) \
-  DECL2(func, Max)
+  DECL2(func, Max) \
+  DECL2(func, Avg)
 
 #define DECL_ALL \
   DECL2(Broadcast, Sum) \

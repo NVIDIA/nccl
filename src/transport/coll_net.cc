@@ -459,10 +459,9 @@ ncclResult_t collNetRecvProxy(struct ncclProxyArgs* args) {
         int buffSlot = (sub->base+sub->posted)%NCCL_STEPS;
         char* ptr;
         int sharedBuffSlot = sub->posted%NCCL_STEPS;
-        NCCLCHECK(ncclProxySharedBuffersGetCollNet(sub->connector->comm, p == NCCL_PROTO_SIMPLE ? resources->useGdr : 0, 1, sharedBuffSlot, 0, &ptr));
-        args->sharedBuff[sharedBuffSlot] = ptr;
-        int slotSize = sub->connector->comm->buffSizes[NCCL_PROTO_SIMPLE] / NCCL_STEPS;
-        reqFifo[group][buffSlot].recvBuff = args->sharedBuff[sharedBuffSlot] + group*COLLNET_GROUP_NSUBS*slotSize;
+        int startChannel = group*COLLNET_GROUP_NSUBS;
+        NCCLCHECK(ncclProxySharedBuffersGetCollNet(sub->connector->comm, p == NCCL_PROTO_SIMPLE ? resources->useGdr : 0, 1, sharedBuffSlot, startChannel, &ptr));
+        reqFifo[group][buffSlot].recvBuff = ptr;
         TRACE(NCCL_NET, "recvProxy [%d/%d/%d] posted buffer %p", sub->posted, group, buffSlot, reqFifo[group][buffSlot].recvBuff);
         sub->posted += args->sliceSteps;
         args->idle = 0;
@@ -478,9 +477,10 @@ ncclResult_t collNetRecvProxy(struct ncclProxyArgs* args) {
           TRACE(NCCL_NET, "recvProxy [%d/%d/%d] received, size %d", sub->received, group, buffSlot, totalSize);
           sub->received += args->sliceSteps;
           if (reqFifo[group][buffSlot].size > 0 && p == NCCL_PROTO_SIMPLE && resources->useGdr) {
-            int slotSize = sub->connector->comm->buffSizes[NCCL_PROTO_SIMPLE] / NCCL_STEPS;
-            char* recvAddress = (char*)args->sharedBuff[sharedBuffSlot] + group*COLLNET_GROUP_NSUBS*slotSize;
-            NCCLCHECK(collNetIflush(resources->collNetComm, recvAddress, totalSize, mhandle, sub->requests+buffSlot));
+            int startChannel = group*COLLNET_GROUP_NSUBS;
+            char* groupRecvAddress;
+            NCCLCHECK(ncclProxySharedBuffersGetCollNet(sub->connector->comm, 1, 1, sharedBuffSlot, startChannel, &groupRecvAddress));
+            NCCLCHECK(collNetIflush(resources->collNetComm, groupRecvAddress, totalSize, mhandle, sub->requests+buffSlot));
           } else {
             for (int i=group*COLLNET_GROUP_NSUBS; i<=s; i++) args->subs[i].flushed += args->sliceSteps;
           }
@@ -505,8 +505,10 @@ ncclResult_t collNetRecvProxy(struct ncclProxyArgs* args) {
         int group = s / COLLNET_GROUP_NSUBS;
         int buffSlot = (sub->base + sub->transmitted)%NCCL_STEPS;
         int sharedBuffSlot = sub->transmitted%NCCL_STEPS;
-        int slotSize = sub->connector->comm->buffSizes[NCCL_PROTO_SIMPLE] / NCCL_STEPS;
-        char* ptr = args->sharedBuff[sharedBuffSlot] + group*COLLNET_GROUP_NSUBS*slotSize + (s%COLLNET_GROUP_NSUBS)*args->sharedSize[sharedBuffSlot];
+        int startChannel = group*COLLNET_GROUP_NSUBS;
+        char* groupRecvAddress;
+        NCCLCHECK(ncclProxySharedBuffersGetCollNet(sub->connector->comm, 1, 1, sharedBuffSlot, startChannel, &groupRecvAddress));
+        char* ptr = groupRecvAddress + (s%COLLNET_GROUP_NSUBS)*args->sharedSize[sharedBuffSlot];
         if (p == NCCL_PROTO_SIMPLE) {
           volatile void** ptrsFifo = (volatile void**)resources->recvMem->ptrsFifo;
           ptrsFifo[buffSlot] = ptr;

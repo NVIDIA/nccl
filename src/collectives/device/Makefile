@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2015-2020, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2015-2021, NVIDIA CORPORATION. All rights reserved.
 #
 # See LICENSE.txt for license information
 #
@@ -32,7 +32,7 @@ all_deps: $(DEPENDFILES)
 $(RULESFILE) :
 	@printf "Generating %-35s > %s\n" rules $@
 	@mkdir -p $(OBJDIR)
-	@./gen_rules.sh $(OBJDIR) > $@
+	@CUDA_MAJOR=${CUDA_MAJOR} CUDA_MINOR=${CUDA_MINOR} ./gen_rules.sh $(OBJDIR) > $@
 
 -include $(RULESFILE)
 

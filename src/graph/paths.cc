@@ -388,7 +388,9 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclPeer
       struct ncclPeerInfo* srcInfo = peerInfos+system->nodes[GPU].nodes[p].gpu.rank;
       int shm;
       NCCLCHECK(ncclTransports[TRANSPORT_SHM].canConnect(&shm, system, NULL, srcInfo, dstInfo));
-      if (shm == 0) {
+      int p2p;
+      NCCLCHECK(ncclTransports[TRANSPORT_P2P].canConnect(&p2p, system, NULL, srcInfo, dstInfo));
+      if (shm == 0 && p2p == 0) {
         // Mark this peer as inaccessible. We'll trim it later.
         system->nodes[GPU].nodes[p].paths[GPU][g].count = 0;
       }

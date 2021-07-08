@@ -583,7 +583,10 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   char* xmlTopoFile = getenv("NCCL_TOPO_FILE");
   if (xmlTopoFile) {
     INFO(NCCL_ENV, "NCCL_TOPO_FILE set by environment to %s", xmlTopoFile);
-    NCCLCHECK(ncclTopoGetXmlFromFile(xmlTopoFile, xml));
+    NCCLCHECK(ncclTopoGetXmlFromFile(xmlTopoFile, xml, 1));
+  } else {
+    // Try default XML topology location
+    NCCLCHECK(ncclTopoGetXmlFromFile("/var/run/nvidia-topologyd/virtualTopology.xml", xml, 0));
   }
   if (xml->maxIndex == 0) {
     // Create top tag
@@ -691,7 +694,7 @@ ncclResult_t ncclTopoCpuType(struct ncclTopoSystem* system, int* arch, int* vend
 
 NCCL_PARAM(IgnoreCpuAffinity, "IGNORE_CPU_AFFINITY", 0);
 
-ncclResult_t ncclTopoSetAffinity(struct ncclTopoSystem* system, int rank) {
+ncclResult_t ncclTopoGetCpuAffinity(struct ncclTopoSystem* system, int rank, cpu_set_t* affinity) {
   struct ncclTopoNode* cpu = NULL, *gpu = NULL;
   for (int g=0; g<system->nodes[GPU].count; g++) {
     if (system->nodes[GPU].nodes[g].gpu.rank == rank) {
@@ -744,12 +747,13 @@ ncclResult_t ncclTopoSetAffinity(struct ncclTopoSystem* system, int rank) {
     // Use a subset of the GPU affinity set
     CPU_AND(&finalMask, &mask, &cpuMask);
 
+  memcpy(affinity, &finalMask, sizeof(cpu_set_t));
+
   // If there is a non empty set, use it to set affinity
   if (CPU_COUNT(&finalMask)) {
     char affinityStr[sizeof(cpu_set_t)*2];
     NCCLCHECK(ncclCpusetToStr(&finalMask, affinityStr));
     INFO(NCCL_INIT, "Setting affinity for GPU %d to %s", gpu->gpu.dev, affinityStr);
-    SYSCHECK(sched_setaffinity(0, sizeof(cpu_set_t), &finalMask), "sched_setaffinity");
   }
   return ncclSuccess;
 }

@@ -7,7 +7,7 @@ Group:          Development/Libraries
 License:        BSD
 URL:            http://developer.nvidia.com/nccl
 Source0:        nccl_${nccl:Major}.${nccl:Minor}.${nccl:Patch}${nccl:Suffix}-${pkg:Revision}+cuda${cuda:Major}.${cuda:Minor}_${pkg:Arch}.txz
-Prereq:         /sbin/ldconfig
+Requires(pre,preun): /sbin/ldconfig
 
 %description
 NCCL (pronounced "Nickel") is a stand-alone library of standard collective
@@ -46,6 +46,7 @@ ln -s libnccl.so.${nccl:Major}.${nccl:Minor}.${nccl:Patch} $RPM_BUILD_ROOT/%{_li
 # devel
 install -m 755 -d $RPM_BUILD_ROOT/%{_includedir}
 install -m 644 include/nccl.h $RPM_BUILD_ROOT/%{_includedir}
+install -m 644 include/nccl_net.h $RPM_BUILD_ROOT/%{_includedir}
 ln -s libnccl.so.${nccl:Major} $RPM_BUILD_ROOT/%{_libdir}/libnccl.so
 
 # static
@@ -64,6 +65,7 @@ rm -rf $RPM_BUILD_ROOT
 %doc LICENSE.txt
 %defattr(-,root,root,-)
 %{_includedir}/nccl.h
+%{_includedir}/nccl_net.h
 %{_libdir}/libnccl.so
 
 %files static

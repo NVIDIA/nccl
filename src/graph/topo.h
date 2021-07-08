@@ -9,12 +9,11 @@
 
 #include "graph.h"
 #include "core.h"
-#include <sched.h>
 
 #define LOC_WIDTH 5000.0
 #define SM60_NVLINK_WIDTH 18.0
-#define SM70_NVLINK_WIDTH 21.0
-#define SM80_NVLINK_WIDTH 21.0
+#define SM70_NVLINK_WIDTH 22.0
+#define SM80_NVLINK_WIDTH 22.0
 #define SM86_NVLINK_WIDTH 12.0
 #define PCI_WIDTH 12.0           // PCI Gen3 x16
 #define QPI_WIDTH 6.0

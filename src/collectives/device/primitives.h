@@ -11,381 +11,132 @@
 #include "reduce_kernel.h" // for reduction funcs
 #include "common.h"
 
-#define SPINS_BEFORE_CHECK_ABORT 1000000
+#define NCCL_SPINS_BEFORE_CHECK_ABORT 1000000
 
-// Unroll unconditionally the first send/recv since nsend/nrecv should be at
-// least 1 if SEND/RECV is set.
-#define FOR_SEND(func, ...) do { \
-  if (SEND) { \
-    /* Send to far first, then close */ \
-    for (int i=1; i<NSEND && i<nsend; i++) func(i, ##__VA_ARGS__); \
-    func(0, ##__VA_ARGS__); \
-  } \
-} while (0)
+/* Protocol classes: ProtoSimple, ProtoLL, ProtoLL128
+ * We use these as template args to the Primtiives class instead of integral
+ * enums (e.g. NCCL_PROTO_LL) because for SIMPLE we need to carry a few extra
+ * numbers. Also these types hold methods which let us compute numbers important
+ * to how that protocol operates with a consistent interface so that our
+ * algorithm code can operate protocol parametrically.
+ */
+template<int SlicePerChunk_1, int StepPerSlice_1, int Unroll_1 = COLL_UNROLL>
+struct ProtoSimple {
+  static constexpr int Id = NCCL_PROTO_SIMPLE;
+  static constexpr int SlicePerChunk = SlicePerChunk_1;
+  static constexpr int StepPerSlice = StepPerSlice_1;
+  static constexpr int Unroll = Unroll_1;
 
-#define FOR_RECV(func, ...) do { \
-  if (RECV) { \
-    /* Recv from close first, then far */ \
-    func(0, ##__VA_ARGS__); \
-    for (int i=1; i<NRECV && i<nrecv; i++) func(i, ##__VA_ARGS__); \
-  } \
-} while (0)
-
-#define ROLE_SRC       0x01
-#define ROLE_DST       0x02
-#define ROLE_WAIT_RECV 0x04
-#define ROLE_WAIT_SEND 0x08
-#define ROLE_POST_SEND 0x10
-#define ROLE_POST_RECV 0x20
-
-// Implementation of primitive types
-template <int UNROLL, int SLICESPERCHUNK, int SLICESTEPS, typename T, int NRECV, int NSEND, int DIRECT, class FUNC>
-class ncclPrimitives {
- private:
-  const int tid;
-  int nthreads;
-  int nworkers;
-  const int stepSize;
-  int nrecv = 0;
-  int nsend = 0;
-  struct ncclConnInfo* conn = NULL;
-  volatile int* connSizesFifoPtr = NULL;
-  void** connPtrsFifoPtr = NULL;
-  volatile uint64_t* connHeadPtr = NULL;
-  volatile uint64_t* connTailPtr = NULL;
-  uint64_t connTailCache; // Cache last seen value
-  uint64_t connHeadCache; // Cache last seen value
-
-  int index; // Peer index I'm responsible for
-  int peer = -1;
-  int role = 0;
-  int group;
-  uint64_t step;
-  T* direct = NULL;
-  T* buff;
-  struct ncclDevComm* comm;
-
-  const T** srcs;
-  T** dsts;
-
-  // Don't use barrier 0 as it's used by the final sync
-  inline __device__ void barrier() {
-    if (nthreads == WARP_SIZE) __syncwarp();
-    else asm volatile ("bar.sync %0, %1;" :: "r"(group+1), "r"(nthreads));
+  // Data bytes (no flags etc) in one step of the fifo queue.
+  __device__ static int calcBytePerStep() {
+    return ncclShmem.comm.buffSizes[NCCL_PROTO_SIMPLE]/NCCL_STEPS;
   }
-  inline __device__ void subBarrier() {
-    if (nworkers == nthreads) barrier();
-    else asm volatile ("bar.sync %0, %1;" :: "r"(group+2), "r"(nworkers));
+  // Granularity of data bytes transferred per thread.
+  __device__ static int calcBytePerGrain() {
+    return sizeof(uint64_t); // Bogus value? Nobody queries this metric for simple.
   }
-
-  uint32_t spins = 0;
-  uint32_t abort = 0;
-
-  inline __device__ int checkAbort() {
-    spins++;
-    if (abort == 0 && spins == SPINS_BEFORE_CHECK_ABORT) {
-      abort = *(comm->abortFlag);
-      spins = 0;
-    }
-    return abort;
-  }
-
-  template <int DIRECTPTR>
-  inline __device__ T* directPtr(ssize_t directOffset) {
-    return DIRECTPTR && direct ? direct+directOffset : buff+(step%NCCL_STEPS)*stepSize;
-  }
-
-  template <int DST, int DIRECTSEND>
-  inline __device__ void waitSend(ssize_t directOffset, int nbytes) {
-    spins = 0;
-    while (connHeadCache + NCCL_STEPS < step + SLICESTEPS) {
-      connHeadCache = *connHeadPtr;
-      if (checkAbort()) break;
-    }
-    if (connSizesFifoPtr) {
-      connSizesFifoPtr[step%NCCL_STEPS] = nbytes;
-    }
-
-    if (connPtrsFifoPtr) loadPtr(connPtrsFifoPtr+step%NCCL_STEPS, dsts[DST+index]);
-    else dsts[DST+index] = directPtr<DIRECTSEND>(directOffset);
-    step += SLICESTEPS;
-  }
-
-  template <int SRC, int DIRECTRECV>
-  inline __device__ void waitRecv(ssize_t directOffset) {
-    spins = 0;
-    while (connTailCache < step + SLICESTEPS) {
-      connTailCache = *connTailPtr;
-      if (checkAbort()) break;
-    }
-    if (connPtrsFifoPtr) loadPtr(connPtrsFifoPtr+step%NCCL_STEPS, srcs[SRC+index]);
-    else srcs[SRC+index] = directPtr<DIRECTRECV>(directOffset);
-    step += SLICESTEPS;
-  }
-
-  inline __device__ void postRecv() {
-    *connHeadPtr = step += SLICESTEPS;
-  }
-
-  inline __device__ void postSend() {
-    *connTailPtr = step += SLICESTEPS;
-  }
-
-  template <int DIRECTRECV, int DIRECTSEND, int RECV, int SEND, int SRC, int DST>
-  inline __device__ void
-  GenericOp(const T* srcPtr, T* dstPtr, int nelem, ssize_t directOffset) {
-    int offset = 0;
-    int sliceSize = stepSize*SLICESTEPS;
-    int dataSize = max(DIVUP(nelem, 16*SLICESPERCHUNK)*16, sliceSize/32);
-
-    #pragma unroll
-    for (int slice=0; slice<SLICESPERCHUNK; ++slice) {
-      int realSize = max(0, min(dataSize, nelem-offset));
-      if (tid < nworkers) {
-        if (SRC && (role & ROLE_SRC)) srcs[0] = srcPtr+offset;
-        if (RECV && (role & ROLE_WAIT_RECV)) waitRecv<SRC, DIRECTRECV>(directOffset+offset);
-        if (DST && (role & ROLE_DST)) dsts[0] = dstPtr+offset;
-        if (SEND && (role & ROLE_WAIT_SEND)) waitSend<DST, DIRECTSEND>(directOffset+offset, realSize*sizeof(T));
-        if (realSize > 0) {
-          subBarrier();
-          if (DIRECTRECV && srcs[0] == dsts[0]) {
-            // We can only have one direct receive. Since srcs[0] == dstPtr+offset, skip one copy
-            if (SEND) {
-              // (1-SEND) is only there to avoid compilation errors in case NSEND=0 (and SEND=0).
-              ReduceOrCopyMulti<UNROLL, FUNC, T, 1, 1, 1, (1-SEND)+NSEND>(tid, nworkers, 1, srcs, nsend, dsts+1, realSize);
-            }
-          } else {
-            ReduceOrCopyMulti<UNROLL, FUNC, T, RECV+SRC, RECV*NRECV+SRC, SEND+DST, SEND*NSEND+DST>(tid, nworkers, RECV*nrecv+SRC, srcs, SEND*nsend+DST, dsts, realSize);
-          }
-        }
-      }
-      barrier();
-      if (SEND && (role & ROLE_POST_SEND) && realSize > 0 && index == 0) __threadfence_system();
-      __syncwarp();
-      if (SEND && (role & ROLE_POST_SEND)) postSend();
-      if (RECV && (role & ROLE_POST_RECV)) postRecv();
-      offset += realSize;
-    }
-  }
-
-  // Scatter and gather do not support DIRECT
-  template <int RECV, int SEND>
-  inline __device__ void
-  ScatterGatherOp(const T* srcPtr, T* dstPtr, int totalElem, int peerElem, int skip, int shift) {
-    int offset = 0; // slice offset
-    int sliceSize = stepSize*SLICESTEPS;
-    int dataSize = max(DIVUP(peerElem, 16*SLICESPERCHUNK)*16, sliceSize/32);  // per-peer slice size
-
-    #pragma unroll
-    for (int slice=0; slice<SLICESPERCHUNK; ++slice) {
-      int realSize = max(0, min(dataSize, peerElem-offset));
-      if (tid < nworkers) {
-        if (RECV && (role & ROLE_WAIT_RECV)) waitRecv<0, 0>(0);
-        // realSize is not accurate here; but intra-node does not rely on sizes FIFO
-        if (SEND && (role & ROLE_WAIT_SEND)) waitSend<0, 0>(0, realSize*sizeof(T));
-        subBarrier();
-        if (SEND) {
-          #pragma unroll
-          for (int j=0; j<nsend; j++) {
-            int i = (j+shift)%nsend;
-            int peerOffset = i*peerElem + offset;
-            if (skip >=0 && i >= skip) peerOffset += peerElem;
-            const T* src0 = srcPtr + peerOffset;
-            int realPeerSize = min(realSize, totalElem-peerOffset);
-            if (realPeerSize > 0) ReduceOrCopyMulti<UNROLL, FUNC, T, 1, 1, 1, 1>(tid, nworkers, 1, &src0, 1, dsts+i, realPeerSize);
-          }
-        } else if (RECV) {
-          #pragma unroll
-          for (int j=0; j<nrecv; j++) {
-            int i = (j+shift)%nrecv;
-            int peerOffset = i*peerElem + offset;
-            if (skip >= 0 && i >= skip) peerOffset += peerElem;
-            T* dst0 = dstPtr + peerOffset;
-            int realPeerSize = min(realSize, totalElem-peerOffset);
-            if (realPeerSize > 0) ReduceOrCopyMulti<UNROLL, FUNC, T, 1, 1, 1, 1>(tid, nworkers, 1, srcs+i, 1, &dst0, realPeerSize);
-          }
-        }
-      }
-      barrier();
-      if (SEND && (role & ROLE_POST_SEND) && realSize > 0 && index == 0) __threadfence_system();
-      __syncwarp();
-      if (SEND && (role & ROLE_POST_SEND)) postSend();
-      if (RECV && (role & ROLE_POST_RECV)) postRecv();
-      offset += realSize;
-    }
-  }
-
-  __device__ __forceinline__ void loadRecvConn(struct ncclChannel* channel, T* directBuff) {
-    if (role & (ROLE_WAIT_RECV|ROLE_POST_RECV)) {
-      // For oneshot: groups 0,2 use conn 0, groups 4,6 use conn 1
-      const int connIndex = (NSEND == NCCL_MAX_DIRECT_ARITY || NRECV == NCCL_MAX_DIRECT_ARITY) ? group/4 : 0;
-      conn = &channel->devPeers[peer].recv[connIndex].conn;
-      step = conn->step;
-      step = ROUNDUP(step, SLICESPERCHUNK*SLICESTEPS);
-      if (role & ROLE_POST_RECV) {
-        connHeadPtr = conn->head;
-        // Return credits in case we rounded up.
-        *connHeadPtr = step;
-      }
-      if (role & ROLE_WAIT_RECV) {
-        buff = (T*)conn->buffs[NCCL_PROTO_SIMPLE];
-        if (DIRECT && (conn->direct & NCCL_DIRECT_GPU)) {
-          direct = directBuff;
-          *conn->ptrExchange = directBuff;
-        }
-        connTailPtr = conn->tail;
-        connTailCache = *connTailPtr;
-        connPtrsFifoPtr = conn->ptrsFifo;
-      }
-    }
-  }
-
-  __device__ __forceinline__ void loadSendConn(struct ncclChannel* channel) {
-    if (role & (ROLE_WAIT_SEND|ROLE_POST_SEND)) {
-      // For oneshot: groups 0,2 use conn 0, groups 4,6 use conn 1
-      const int connIndex = (NSEND == NCCL_MAX_DIRECT_ARITY || NRECV == NCCL_MAX_DIRECT_ARITY) ? group/4 : 0;
-      conn = &channel->devPeers[peer].send[connIndex].conn;
-      step = conn->step;
-      step = ROUNDUP(step, SLICESPERCHUNK*SLICESTEPS);
-      if (role & ROLE_POST_SEND) {
-        connTailPtr = conn->tail;
-      }
-      if (role & ROLE_WAIT_SEND) {
-        buff = (T*)conn->buffs[NCCL_PROTO_SIMPLE];
-        if (DIRECT && (conn->direct & NCCL_DIRECT_GPU)) {
-          void* volatile* ptr = conn->ptrExchange;
-          while ((direct = (T*)(*ptr)) == NULL) { if (checkAbort()) break; }
-          *ptr = NULL;
-        }
-        connHeadPtr = conn->head;
-        connHeadCache = *connHeadPtr;
-        connSizesFifoPtr = conn->sizesFifo;
-        connPtrsFifoPtr = conn->ptrsFifo;
-      }
-    }
-  }
-
-  __device__ __forceinline__ void saveSync() {
-    if (role & (ROLE_POST_SEND|ROLE_POST_RECV)) {
-      conn->step = step;
-      __threadfence_system();
-    }
-  }
-
- public:
-  __device__ __forceinline__
-  ncclPrimitives(const int tid, const int nworkers, int* recvPeers, int* sendPeers, T* directBuff, int stepSize, struct ncclChannel* channel, struct ncclDevComm* comm, struct ncclShmemPtrs* ptrs, int group)
-    : comm(comm), tid(tid), nworkers(nworkers), stepSize(stepSize), srcs((const T**)ptrs[group].srcs), dsts((T**)ptrs[group].dsts), group(group) {
-    nthreads = nworkers;
-    // For send operations, we need an extra warp to overlap the threadfence and the copy
-    int postThreads = NSEND && nworkers >= 64 ? WARP_SIZE : 0;
-    nthreads += postThreads;
-
-    // Make sure step is updated before we read it.
-    barrier();
-
-    for (int i=0; i<NRECV; i++) if (recvPeers[i] != -1) nrecv++;
-    for (int i=0; i<NSEND; i++) if (sendPeers[i] != -1) nsend++;
-
-    #define SYNC_GROUP 8
-    static_assert(NSEND < SYNC_GROUP && NRECV < SYNC_GROUP, "Not enough threads to cover all peers");
-
-    int g = tid / SYNC_GROUP;
-    int ng = nthreads / SYNC_GROUP;
-    index = tid % SYNC_GROUP;
-
-    if (g == 0) {
-      if (index < nrecv) role |= ROLE_WAIT_RECV;
-      if (index == nrecv) role |= ROLE_SRC;
-    } else if (g == 1) {
-      if (index < nsend) role |= ROLE_WAIT_SEND;
-      if (index == nsend) role |= ROLE_DST;
-    } else if (g == ng - 2) {
-      if (index < nrecv) role |= ROLE_POST_RECV;
-    } else if (g == ng - 1) {
-      if (index < nsend) role |= ROLE_POST_SEND;
-    }
-
-    if (role & (ROLE_WAIT_RECV|ROLE_POST_RECV)) peer = recvPeers[index];
-    if (role & (ROLE_WAIT_SEND|ROLE_POST_SEND)) peer = sendPeers[index];
-
-    loadRecvConn(channel, directBuff);
-    loadSendConn(channel);
-  }
-
-  __device__ __forceinline__ void
-  send(const T* src, int nelem) {
-    GenericOp<0, 0, 0, 1, 1, 0>(src, NULL, nelem, 0);
-  }
-  __device__ __forceinline__ void
-  directSend(const T* src, ssize_t directOffset, int nelem) {
-    GenericOp<0, 1, 0, 1, 1, 0>(src, NULL, nelem, directOffset);
-  }
-
-  __device__ __forceinline__ void
-  recv(T* dst, int nelem) {
-    GenericOp<0, 0, 1, 0, 0, 1>(NULL, dst, nelem, 0);
-  }
-  __device__ __forceinline__ void
-  directRecv(T* dst, ssize_t directOffset, int nelem) {
-    GenericOp<1, 0, 1, 0, 0, 1>(NULL, dst, nelem, directOffset);
-  }
-
-  __device__ __forceinline__ void
-  copySend(const T* src, T* dst, int nelem) {
-    GenericOp<0, 0, 0, 1, 1, 1>(src, dst, nelem, 0);
-  }
-  __device__ __forceinline__ void
-  directCopySend(const T* src, T* dst, ssize_t directOffset, int nelem) {
-    GenericOp<0, 1, 0, 1, 1, 1>(src, dst, nelem, directOffset);
-  }
-
-  __device__ __forceinline__ void
-  recvCopySend(T* dst, int nelem) {
-    GenericOp<0, 0, 1, 1, 0, 1>(NULL, dst, nelem, 0);
-  }
-  __device__ __forceinline__ void
-  directRecvCopySend(T* dst, ssize_t directOffset, int nelem) {
-    GenericOp<1, 1, 1, 1, 0, 1>(NULL, dst, nelem, directOffset);
-  }
-
-  __device__ __forceinline__ void
-  recvReduceCopy(const T* src, T* dst, int nelem) {
-    GenericOp<0, 0, 1, 0, 1, 1>(src, dst, nelem, 0);
-  }
-
-  __device__ __forceinline__ void
-  recvReduceSend(const T* src, int nelem) {
-    GenericOp<0, 0, 1, 1, 1, 0>(src, NULL, nelem, 0);
-  }
-
-  __device__ __forceinline__ void
-  recvReduceCopySend(const T* src, T* dst, int nelem) {
-    GenericOp<0, 0, 1, 1, 1, 1>(src, dst, nelem, 0);
-  }
-  __device__ __forceinline__ void
-  directRecvReduceCopySend(const T* src, T* dst, ssize_t directOffset, int nelem) {
-    // Direct is only for the send part
-    GenericOp<0, 1, 1, 1, 1, 1>(src, dst, nelem, directOffset);
-  }
-
-  __device__ __forceinline__ void
-  scatter(const T* src, int totalElem, int peerElem, int skip, int shift) {
-    ScatterGatherOp<0, 1>(src, NULL, totalElem, peerElem, skip, shift);
-  }
-
-  __device__ __forceinline__ void
-  gather(T* dst, int totalElem, int peerElem, int skip, int shift) {
-    ScatterGatherOp<1, 0>(NULL, dst, totalElem, peerElem, skip, shift);
-  }
-
-  __device__ __forceinline__ ~ncclPrimitives() {
-    // Save steps for the next operation
-    saveSync();
+  // Group width is how many consecutive group values a subchannel occupies.
+  static constexpr int MaxGroupWidth = 2;
+  __device__ static int calcGroupWidth(bool send, int nthreads) {
+    return send && nthreads-WARP_SIZE >= 64 ? 2 : 1;
   }
 };
 
-#include "prims_ll.h"
-//#include "prims_ll128.h"
+struct ProtoLL {
+  static constexpr int Id = NCCL_PROTO_LL;
 
+  // Data bytes (no flags etc) in one step of the fifo queue.
+  __device__ static int calcBytePerStep() {
+    return ncclShmem.comm.buffSizes[NCCL_PROTO_LL]/NCCL_STEPS/2; // Half is data
+  }
+  // Granularity of data bytes transferred per thread.
+  __device__ static int calcBytePerGrain() {
+    return sizeof(uint64_t); // One 16-byte line has 8-bytes of data
+  }
+  // Group width is how many consecutive group values a subchannel occupies.
+  static constexpr int MaxGroupWidth = 1;
+  __device__ static int calcGroupWidth(bool send, int nthreads) {
+    return 1;
+  }
+};
+
+struct ProtoLL128 {
+  static constexpr int Id = NCCL_PROTO_LL128;
+
+  // Data bytes (no flags etc) in one step of the fifo queue.
+  __device__ static int calcBytePerStep() {
+    return (ncclShmem.comm.buffSizes[NCCL_PROTO_LL128]/NCCL_STEPS)*NCCL_LL128_DATAELEMS/NCCL_LL128_LINEELEMS;
+  }
+  // Granularity of data bytes transferred per thread.
+  __device__ static int calcBytePerGrain() {
+    return NCCL_LL128_SHMEM_ELEMS_PER_THREAD*NCCL_LL128_DATAELEMS*sizeof(uint64_t)/NCCL_LL128_LINEELEMS;
+  }
+  // Group width is how many consecutive group values a subchannel occupies.
+  static constexpr int MaxGroupWidth = 1;
+  __device__ static int calcGroupWidth(bool send, int nthreads) {
+    return 1;
+  }
+};
+
+/* Fan (as in fan-in & fan-out) classes hold recv and send counts. The template
+ * arguments are static bounds on the maximum values. Asymmetric counts are
+ * independent. Symmetric is a static guarantee that nrecv==nsend, so it only
+ * stores one value at runtime. This optimization save 32-bit register, but more
+ * importantly uses fewer predicate registers when unrolling loops.
+ */
+template<int MaxRecv_, int MaxSend_>
+struct FanAsymmetric {
+  static constexpr int MaxRecv = MaxRecv_, MaxSend = MaxSend_;
+  int nr, ns;
+  FanAsymmetric() = default;
+  __device__ FanAsymmetric(int nrecv, int nsend): nr(nrecv), ns(nsend) {
+    // assert(nrecv <= MaxRecv && nsend <= MaxSend);
+  }
+  __device__ int nrecv() const { return MaxRecv ? nr : 0; }
+  __device__ int nsend() const { return MaxSend ? ns : 0; }
+};
+
+template<int MaxArity>
+struct FanSymmetric {
+  static constexpr int MaxRecv = MaxArity, MaxSend = MaxArity;
+  int n;
+  FanSymmetric() = default;
+  __device__ FanSymmetric(int nrecv, int nsend): n(nrecv) {
+    // assert(nrecv == nsend && nrecv <= MaxArity);
+  }
+  __device__ int nrecv() const { return n; }
+  __device__ int nsend() const { return n; }
+};
+
+// The primitives class. Specialized per protocol in the other headers.
+template<typename T, typename RedOp, typename Fan, int Direct, typename Proto>
+class Primitives;
+
+// Used by LL & LL128 to implement direct members in the naive way.
+template<typename RealPrimitives>
+struct PrimitivesWithoutDirect {
+  __device__ void directSend(intptr_t inpIx, intptr_t remoteOutIx, int eltN) {
+    static_cast<RealPrimitives*>(this)->send(inpIx, eltN);
+  }
+  __device__ void directSendFromOutput(intptr_t outIx, intptr_t remoteOutIx, int eltN) {
+    static_cast<RealPrimitives*>(this)->sendFromOutput(outIx, eltN);
+  }
+  __device__ void directRecv(intptr_t outIx, int eltN) {
+    static_cast<RealPrimitives*>(this)->recv(outIx, eltN, /*postOp=*/false);
+  }
+  __device__ void directCopySend(intptr_t inpIx, intptr_t outIx, intptr_t remoteOutIx, int eltN, bool postOp=false) {
+    static_cast<RealPrimitives*>(this)->copySend(inpIx, outIx, eltN, postOp);
+  }
+  __device__ void directRecvCopySend(intptr_t outIx, intptr_t remoteOutIx, int eltN) {
+    static_cast<RealPrimitives*>(this)->recvCopySend(outIx, eltN, /*postOp=*/false);
+  }
+  __device__ void directRecvReduceCopySend(intptr_t inpIx, intptr_t outIx, intptr_t remoteOutIx, int eltN, bool postOp=false) {
+    // Direct is only for the send part
+    static_cast<RealPrimitives*>(this)->recvReduceCopySend(inpIx, outIx, eltN, postOp);
+  }
+};
+
+#include "prims_simple.h"
+#include "prims_ll.h"
+#include "prims_ll128.h"
 #endif

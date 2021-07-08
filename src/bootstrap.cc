@@ -43,7 +43,7 @@ ncclResult_t bootstrapNetInit() {
       }
       char line[SOCKET_NAME_MAXLEN+MAX_IF_NAME_SIZE+2];
       sprintf(line, " %s:", bootstrapNetIfName);
-      socketToString(&bootstrapNetIfAddr.sa, line+strlen(line));
+      socketToString(&bootstrapNetIfAddr, line+strlen(line));
       INFO(NCCL_INIT, "Bootstrap : Using%s", line);
       bootstrapNetInitDone = 1;
     }
@@ -55,27 +55,27 @@ ncclResult_t bootstrapNetInit() {
 /* Socket Interface Selection type */
 enum bootstrapInterface_t { findSubnetIf = -1, dontCareIf = -2 };
 
-static ncclResult_t bootstrapNetAccept(int listenFd, int* recvFd) {
-  struct sockaddr_in sockaddr;
-  socklen_t socklen = sizeof(struct sockaddr_in);
-  SYSCHECKVAL(accept(listenFd, (struct sockaddr*)&sockaddr, &socklen), "accept", *recvFd);
+static ncclResult_t bootstrapNetAccept(int listenFd, int* recvFd, union socketAddress *addr) {
+  struct sockaddr *saddr = &addr->sa;
+  socklen_t socklen = sizeof(union socketAddress);
+  SYSCHECKVAL(accept(listenFd, saddr, &socklen), "accept", *recvFd);
   return ncclSuccess;
 }
 
 // Additional sync functions
-static ncclResult_t bootstrapNetSend(int fd, void* data, int size) {
-  NCCLCHECK(socketSend(fd, &size, sizeof(int)));
-  NCCLCHECK(socketSend(fd, data, size));
+static ncclResult_t bootstrapNetSend(int fd, union socketAddress *addr, void* data, int size) {
+  NCCLCHECK(socketSend(fd, addr, &size, sizeof(int)));
+  NCCLCHECK(socketSend(fd, addr, data, size));
   return ncclSuccess;
 }
-static ncclResult_t bootstrapNetRecv(int fd, void* data, int size) {
+static ncclResult_t bootstrapNetRecv(int fd, union socketAddress *addr, void* data, int size) {
   int recvSize;
-  NCCLCHECK(socketRecv(fd, &recvSize, sizeof(int)));
+  NCCLCHECK(socketRecv(fd, addr, &recvSize, sizeof(int)));
   if (recvSize > size) {
     WARN("Message truncated : received %d bytes instead of %d", recvSize, size);
     return ncclInternalError;
   }
-  NCCLCHECK(socketRecv(fd, data, std::min(recvSize, size)));
+  NCCLCHECK(socketRecv(fd, addr, data, std::min(recvSize, size)));
   return ncclSuccess;
 }
 
@@ -111,8 +111,9 @@ static void *bootstrapRoot(void* args) {
   /* Receive addresses from all ranks */
   do {
     int tmpFd;
-    NCCLCHECKGOTO(bootstrapNetAccept(listenFd, &tmpFd), res, out);
-    NCCLCHECKGOTO(bootstrapNetRecv(tmpFd, &info, sizeof(info)), res, out);
+    union socketAddress addr;
+    NCCLCHECKGOTO(bootstrapNetAccept(listenFd, &tmpFd, &addr), res, out);
+    NCCLCHECKGOTO(bootstrapNetRecv(tmpFd, &addr, &info, sizeof(info)), res, out);
     close(tmpFd);
 
     if (c == 0) {
@@ -145,7 +146,7 @@ static void *bootstrapRoot(void* args) {
     int next = (r+1) % nranks;
     int tmpSendFd;
     NCCLCHECKGOTO(connectAddress(&tmpSendFd, rankAddressesRoot+r), res, out);
-    NCCLCHECKGOTO(bootstrapNetSend(tmpSendFd, rankAddresses+next, sizeof(union socketAddress)), res, out);
+    NCCLCHECKGOTO(bootstrapNetSend(tmpSendFd, rankAddressesRoot+r, rankAddresses+next, sizeof(union socketAddress)), res, out);
     close(tmpSendFd);
   }
   TRACE(NCCL_INIT, "SENT OUT ALL %d HANDLES", nranks);
@@ -193,6 +194,7 @@ struct unexConn {
   int peer;
   int tag;
   int fd;
+  union socketAddress addr;
   struct unexConn* next;
 };
 
@@ -207,6 +209,7 @@ struct extState {
   int extListenFd;
   int extRingRecvFd;
   int extRingSendFd;
+  union socketAddress extRingRecvAddr, extRingSendAddr;
   union socketAddress* peerCommAddresses;
   union socketAddress* peerAllocAddresses;
   struct unexConn* unexpectedConnections;
@@ -221,9 +224,9 @@ struct extState {
 
 #define MAX_SEGMENTS 128
 
-static ncclResult_t remoteAlloc(void** ptr, int fd) {
+static ncclResult_t remoteAlloc(void** ptr, int fd, union socketAddress *addr) {
   size_t size;
-  NCCLCHECK(socketRecv(fd, &size, sizeof(size_t)));
+  NCCLCHECK(socketRecv(fd, addr, &size, sizeof(size_t)));
   cudaIpcMemHandle_t devIpc;
   NCCLCHECK(ncclCudaCalloc((char**)ptr, size));
   cudaError_t res = cudaIpcGetMemHandle(&devIpc, *ptr);
@@ -233,9 +236,9 @@ static ncclResult_t remoteAlloc(void** ptr, int fd) {
     CUDACHECK(res);
   }
   // The CUDA IPC
-  NCCLCHECK(socketSend(fd, &devIpc, sizeof(cudaIpcMemHandle_t)));
+  NCCLCHECK(socketSend(fd, addr, &devIpc, sizeof(cudaIpcMemHandle_t)));
   // And the direct pointer
-  NCCLCHECK(socketSend(fd, ptr, sizeof(void*)));
+  NCCLCHECK(socketSend(fd, addr, ptr, sizeof(void*)));
   return ncclSuccess;
 }
 
@@ -267,11 +270,12 @@ void* ncclRemoteMemAllocationService(void* args) {
     }
     if (pollfds[MAX_SEGMENTS].revents) {
       int s = 0;
+      union socketAddress addr;
       while (segments[s] != NULL && s < MAX_SEGMENTS) s++;
-      if (bootstrapNetAccept(pollfds[MAX_SEGMENTS].fd, &pollfds[s].fd) != ncclSuccess) {
+      if (bootstrapNetAccept(pollfds[MAX_SEGMENTS].fd, &pollfds[s].fd, &addr) != ncclSuccess) {
         pollfds[s].fd = -1;
       } else {
-        if (s == MAX_SEGMENTS || (remoteAlloc(segments+s, pollfds[s].fd) != ncclSuccess)) {
+        if (s == MAX_SEGMENTS || (remoteAlloc(segments+s, pollfds[s].fd, &addr) != ncclSuccess)) {
           WARN("[Rem Allocator] Allocation failed (segment %d, fd %d)", s, pollfds[s].fd);
           close(pollfds[s].fd);
           pollfds[s].fd = -1;
@@ -306,10 +310,11 @@ ncclResult_t bootstrapRemAlloc(size_t size, int rank, void* commState, int* id, 
   int fd;
   ncclResult_t res;
   *id = -1;
-  NCCLCHECK(connectAddress(&fd, state->peerAllocAddresses+rank));
-  NCCLCHECKGOTO(socketSend(fd, &size, sizeof(size_t)), res, end);
-  NCCLCHECKGOTO(socketRecv(fd, ipc, sizeof(cudaIpcMemHandle_t)), res, end);
-  NCCLCHECKGOTO(socketRecv(fd, ptr, sizeof(void*)), res, end);
+  union socketAddress *addr = state->peerAllocAddresses+rank;
+  NCCLCHECK(connectAddress(&fd, addr));
+  NCCLCHECKGOTO(socketSend(fd, addr, &size, sizeof(size_t)), res, end);
+  NCCLCHECKGOTO(socketRecv(fd, addr, ipc, sizeof(cudaIpcMemHandle_t)), res, end);
+  NCCLCHECKGOTO(socketRecv(fd, addr, ptr, sizeof(void*)), res, end);
   *id = fd;
 end:
   return res;
@@ -353,19 +358,19 @@ ncclResult_t bootstrapInit(ncclUniqueId * id, int rank, int nranks, void** commS
   // send info on my listening socket to root
   union socketAddress* rootAddr = (union socketAddress*)id;
   NCCLCHECK(connectAddress(&tmpSendFd, rootAddr));
-  NCCLCHECK(bootstrapNetSend(tmpSendFd, &info, sizeof(info)));
+  NCCLCHECK(bootstrapNetSend(tmpSendFd, rootAddr,  &info, sizeof(info)));
   close(tmpSendFd);
 
   // get info on my "next" rank in the bootstrap ring from root
-  union socketAddress extAddressNext;
-  NCCLCHECK(bootstrapNetAccept(extListenFdRoot, &tmpRecvFd));
-  NCCLCHECK(bootstrapNetRecv(tmpRecvFd, &extAddressNext, sizeof(extAddressNext)));
+  union socketAddress addr;
+  NCCLCHECK(bootstrapNetAccept(extListenFdRoot, &tmpRecvFd, &addr));
+  NCCLCHECK(bootstrapNetRecv(tmpRecvFd, &addr, &state->extRingSendAddr, sizeof(state->extRingSendAddr)));
   close(tmpRecvFd);
   close(extListenFdRoot);
 
-  NCCLCHECK(connectAddress(&state->extRingSendFd, &extAddressNext));
+  NCCLCHECK(connectAddress(&state->extRingSendFd, &state->extRingSendAddr));
   // Accept the connect request from the previous rank in the AllGather ring
-  NCCLCHECK(bootstrapNetAccept(state->extListenFd, &state->extRingRecvFd));
+  NCCLCHECK(bootstrapNetAccept(state->extListenFd, &state->extRingRecvFd, &state->extRingRecvAddr));
 
   // AllGather all listen handlers
   NCCLCHECK(ncclCalloc(&state->peerCommAddresses, nranks));
@@ -403,9 +408,9 @@ ncclResult_t bootstrapAllGather(void* commState, void* allData, int size) {
     size_t sslice = (rank - i + nranks) % nranks;
 
     // Send slice to the right
-    NCCLCHECK(bootstrapNetSend(state->extRingSendFd, data+sslice*size, size));
+    NCCLCHECK(bootstrapNetSend(state->extRingSendFd, &state->extRingSendAddr, data+sslice*size, size));
     // Recv slice from the left
-    NCCLCHECK(bootstrapNetRecv(state->extRingRecvFd, data+rslice*size, size));
+    NCCLCHECK(bootstrapNetRecv(state->extRingRecvFd, &state->extRingRecvAddr, data+rslice*size, size));
   }
 
   TRACE(NCCL_INIT, "rank %d nranks %d size %d - DONE", rank, nranks, size);
@@ -415,21 +420,44 @@ ncclResult_t bootstrapAllGather(void* commState, void* allData, int size) {
 ncclResult_t bootstrapSend(void* commState, int peer, int tag, void* data, int size) {
   struct extState* state = (struct extState*)commState;
   int tmpSendFd;
-  NCCLCHECK(connectAddress(&tmpSendFd, state->peerCommAddresses+peer));
-  NCCLCHECK(bootstrapNetSend(tmpSendFd, &state->rank, sizeof(int)));
-  NCCLCHECK(bootstrapNetSend(tmpSendFd, &tag, sizeof(int)));
-  NCCLCHECK(bootstrapNetSend(tmpSendFd, data, size));
+  union socketAddress *addr = state->peerCommAddresses+peer;
+  NCCLCHECK(connectAddress(&tmpSendFd, addr));
+  NCCLCHECK(bootstrapNetSend(tmpSendFd, addr, &state->rank, sizeof(int)));
+  NCCLCHECK(bootstrapNetSend(tmpSendFd, addr, &tag, sizeof(int)));
+  NCCLCHECK(bootstrapNetSend(tmpSendFd, addr, data, size));
   close(tmpSendFd);
   return ncclSuccess;
 }
 
-ncclResult_t unexpectedEnqueue(struct extState* state, int peer, int tag, int fd) {
+ncclResult_t bootstrapBarrier(void* commState, int *ranks, int tag, int rank, int nranks) {
+  if (nranks == 1) return ncclSuccess;
+  TRACE(NCCL_INIT, "rank %d nranks %d tag %x - ENTER", rank, nranks, tag);
+
+  /* Simple intra process barrier
+   *
+   * Based on the dissemination algorithm by Debra Hensgen, Raphael Finkel, and Udi Manbet,
+   * "Two Algorithms for Barrier Synchronization," International Journal of Parallel Programming, 17(1):1-17, 1988"
+   */
+  int data[1];
+  for (int mask=1; mask<nranks; mask<<=1) {
+    int src = (rank - mask + nranks) % nranks;
+    int dst = (rank + mask) % nranks;
+    NCCLCHECK(bootstrapSend(commState, ranks[dst], tag, data, sizeof(data)));
+    NCCLCHECK(bootstrapRecv(commState, ranks[src], tag, data, sizeof(data)));
+  }
+
+  TRACE(NCCL_INIT, "rank %d nranks %d tag %x - DONE", rank, nranks, tag);
+  return ncclSuccess;
+}
+
+ncclResult_t unexpectedEnqueue(struct extState* state, int peer, int tag, int fd, union socketAddress *addr) {
   // New unex
   struct unexConn* unex;
   NCCLCHECK(ncclCalloc(&unex, 1));
   unex->peer = peer;
   unex->tag = tag;
   unex->fd = fd;
+  unex->addr = *addr;
 
   // Enqueue
   struct unexConn* list = state->unexpectedConnections;
@@ -442,7 +470,7 @@ ncclResult_t unexpectedEnqueue(struct extState* state, int peer, int tag, int fd
   return ncclSuccess;
 }
 
-int unexpectedDequeue(struct extState* state, int peer, int tag) {
+int unexpectedDequeue(struct extState* state, int peer, int tag, union socketAddress *addr) {
   struct unexConn* elem = state->unexpectedConnections;
   struct unexConn* prev = NULL;
   while (elem) {
@@ -453,6 +481,7 @@ int unexpectedDequeue(struct extState* state, int peer, int tag) {
         prev->next = elem->next;
       }
       int fd = elem->fd;
+      *addr = elem->addr;
       free(elem);
       return fd;
     }
@@ -467,27 +496,29 @@ ncclResult_t bootstrapRecv(void* commState, int peer, int tag, void* data, int s
   struct extState* state = (struct extState*)commState;
 
   int tmpRecvFd;
+  union socketAddress addr;
 
   // Search unexpected connections first
-  if ((tmpRecvFd = unexpectedDequeue(state, peer, tag)) != -1) {
-    NCCLCHECK(bootstrapNetRecv(tmpRecvFd, ((char*)data), size));
+  if ((tmpRecvFd = unexpectedDequeue(state, peer, tag, &addr)) != -1) {
+    NCCLCHECK(bootstrapNetRecv(tmpRecvFd, &addr, ((char*)data), size));
     close(tmpRecvFd);
     return ncclSuccess;
   }
 
   // Then look for new connections
   while (1) {
-    NCCLCHECK(bootstrapNetAccept(state->extListenFd, &tmpRecvFd));
+    union socketAddress addr;
+    NCCLCHECK(bootstrapNetAccept(state->extListenFd, &tmpRecvFd, &addr));
     int newPeer, newTag;
-    NCCLCHECK(bootstrapNetRecv(tmpRecvFd, &newPeer, sizeof(int)));
-    NCCLCHECK(bootstrapNetRecv(tmpRecvFd, &newTag, sizeof(int)));
+    NCCLCHECK(bootstrapNetRecv(tmpRecvFd, &addr, &newPeer, sizeof(int)));
+    NCCLCHECK(bootstrapNetRecv(tmpRecvFd, &addr, &newTag, sizeof(int)));
     if (newPeer == peer && newTag == tag) {
-      NCCLCHECK(bootstrapNetRecv(tmpRecvFd, ((char*)data), size));
+      NCCLCHECK(bootstrapNetRecv(tmpRecvFd, &addr, ((char*)data), size));
       close(tmpRecvFd);
       return ncclSuccess;
     }
     // Unexpected connection. Save for later.
-    NCCLCHECK(unexpectedEnqueue(state, newPeer, newTag, tmpRecvFd));
+    NCCLCHECK(unexpectedEnqueue(state, newPeer, newTag, tmpRecvFd, &addr));
   }
 }
 

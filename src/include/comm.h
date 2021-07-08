@@ -72,6 +72,7 @@ struct ncclComm {
   int nRanks;  // number of GPUs in communicator
   int cudaDev; // my cuda device index
   int64_t busId;   // my PCI bus ID in int format
+  cpu_set_t cpuAffinity; // CPU affinity of the GPU
 
   int node;
   int nNodes;
@@ -146,11 +147,13 @@ struct ncclComm {
   struct ncclInfo* asyncOps;
   int asyncOpCount;
   size_t asyncTotalSize;
+  ssize_t channelSize;
   int lastChannel;
+  enum { ROUND_ROBIN, SHORTEST_QUEUE } asyncAllocMode;
 
   //list of async p2p operation queued in a group semantics
-  struct ncclP2Plist* p2pSends;
-  struct ncclP2Plist* p2pRecvs;
+  ncclP2Plist** p2pSends;
+  ncclP2Plist** p2pRecvs;
   int p2pSendCount;
   int p2pRecvCount;
 

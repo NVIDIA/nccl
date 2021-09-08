@@ -81,6 +81,11 @@ ncclResult_t pncclCommDestroy(ncclComm_t comm);
 ncclResult_t  ncclCommAbort(ncclComm_t comm);
 ncclResult_t pncclCommAbort(ncclComm_t comm);
 
+/* Mark communicator object as abort and thus related operations will as well be
+   aborted. Should later call ncclCommDestroy or ncclCommAbort to free resources. */
+ncclResult_t ncclCommMarkAbort(ncclComm_t comm);
+ncclResult_t pncclCommMarkAbort(ncclComm_t comm);
+
 /* Returns a human-readable error message. */
 const char*  ncclGetErrorString(ncclResult_t result);
 const char* pncclGetErrorString(ncclResult_t result);

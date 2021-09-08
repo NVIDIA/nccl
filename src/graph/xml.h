@@ -7,6 +7,11 @@
 #ifndef XML_H_
 #define XML_H_
 
+#include "nccl.h"
+#include "debug.h"
+#include "checks.h"
+#include <stdlib.h>
+
 // A few constraints to make the implementation easy
 #define MAX_STR_LEN 255
 #define MAX_ATTR_COUNT 16

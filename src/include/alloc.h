@@ -11,6 +11,9 @@
 #include "checks.h"
 #include "align.h"
 #include <sys/mman.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <string.h>
 
 template <typename T>
 static ncclResult_t ncclCudaHostCallocDebug(T** ptr, size_t nelem, const char *filefunc, int line) {
@@ -27,7 +30,7 @@ static inline ncclResult_t ncclCudaHostFree(void* ptr) {
 }
 
 template <typename T>
-static ncclResult_t ncclCallocDebug(T** ptr, size_t nelem, const char *filefunc, int line) {
+static ncclResult_t ncclCalloc(T** ptr, size_t nelem) {
   void* p = malloc(nelem*sizeof(T));
   if (p == NULL) {
     WARN("Failed to malloc %ld bytes", nelem*sizeof(T));
@@ -35,10 +38,8 @@ static ncclResult_t ncclCallocDebug(T** ptr, size_t nelem, const char *filefunc,
   }
   memset(p, 0, nelem*sizeof(T));
   *ptr = (T*)p;
-  INFO(NCCL_ALLOC, "%s:%d Mem Alloc Size %ld pointer %p", filefunc, line, nelem*sizeof(T), *ptr);
   return ncclSuccess;
 }
-#define ncclCalloc(...) ncclCallocDebug(__VA_ARGS__, __FILE__, __LINE__)
 
 template <typename T>
 static ncclResult_t ncclCudaCallocDebug(T** ptr, size_t nelem, const char *filefunc, int line) {

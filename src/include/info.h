@@ -9,6 +9,7 @@
 
 #include "nccl.h"
 #include "devcomm.h"
+#include "collectives.h"
 
 typedef enum {
   ncclPatternRing,
@@ -38,6 +39,7 @@ struct ncclInfo {
   int chunkSteps;
   int sliceSteps;
   // Computed later
+  ncclDevRedOpFull opFull;
   int algorithm;
   int protocol;
   ncclPattern_t pattern;

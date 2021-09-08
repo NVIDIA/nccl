@@ -67,9 +67,18 @@ struct RunWorkElement {
   }
 };
 
+#if CUDART_VERSION >= 11030
+__device__ constexpr int ncclWorkElemFactors[NCCL_NUM_ALGORITHMS] =
+#else
+static __device__ __constant__ int ncclWorkElemFactors[NCCL_NUM_ALGORITHMS] =
+#endif
+{/*Tree*/1, /*Ring and P2P*/1, /*CollNet*/NCCL_REG_ELEM_FACTOR};
+
 template<ncclFunc_t Fn, typename T, typename RedOp, int Algo, int Proto>
 struct RunWork {
-  __device__ void run(ncclWork *w) {
+  // This __forceinline__ is necessary. The compiler was inserting a function call
+  // here from the LL ncclKernel.
+  __device__ __forceinline__ void run(ncclWork *w) {
     int tid = threadIdx.x;
     /* Some invariants that must hold:
      * 1. All elems[] have same funcIndex.
@@ -78,23 +87,21 @@ struct RunWork {
      *    for all elems[].
      *
      * If (1) isn't true then we might be in the wrong function since dispatch
-     * on ncclFuncs[w->elems[0].funcIndex] is how we got here.
+     * on ncclFuncs[w->funcIndex] is how we got here.
      *
      * If (2) or (3) aren't true, then threads from different work elements
      * could race for barrier resources (barrier numbers 0...15) which is fatal.
      *
-     * Important, to ensure (3), implementations of
-     * `RunWorkElement<Fn,T,RedOp,Algo,Proto>::run()` may only use values which
-     * are the same for all elems[] when deciding how to map threads to groups,
-     * such as  the following:
+     * IMPORTANT!!! To ensure (3), implementations of
+     * `RunWorkElement<Fn,T,RedOp,Algo,Proto>::run()` may only use the following
+     * when deciding how to map threads to groups:
      *    Fn, T, RedOp, Algo, Proto, nThreads
      *
-     * This last one is difficult to enforce and diagnosing it is a headeache.
-     * Device-side developers, consider yourselves warned.
+     * This last one is difficult to enforce so I hope everyone reads this.
      */
     if (tid < w->elems[0].nThreads) {
       #pragma unroll 1
-      for(int e=0; e < NCCL_MAX_WORK_ELEMENTS && w->elems[e].active != 0; e++)
+      for(int e=0; e < NCCL_MAX_WORK_ELEMENTS && w->elems[e].active != 0; e+=ncclWorkElemFactors[Algo])
         RunWorkElement<Fn, T, RedOp, Algo, Proto>().run(&w->elems[e]);
     }
   }
@@ -108,6 +115,7 @@ struct ncclShmemGroup {
   ncclConnInfo *sendConns[NCCL_MAX_DIRECT_ARITY];
   void* srcs[NCCL_MAX_DIRECT_ARITY+1];
   void* dsts[NCCL_MAX_DIRECT_ARITY+1];
+  int totalSendSize[NCCL_MAX_SLICE_PER_CHUNK];
 };
 
 struct ncclShmemData {
@@ -115,6 +123,7 @@ struct ncclShmemData {
     uint64_t ll128warp[NCCL_LL128_MAX_NTHREADS/WARP_SIZE][NCCL_LL128_SHMEM_ELEMS_PER_THREAD*WARP_SIZE];
     struct ncclShmemGroup groups[NCCL_MAX_GROUPS];
   };
+  uint64_t redOpArgs[NCCL_MAX_DIRECT_ARITY+1];
   ncclDevComm comm;
   ncclChannel channel;
   ncclWork work;
@@ -135,7 +144,10 @@ __device__ void ncclKernel(ncclWorkElem first)  {
   // To optimize for latency, (only) the first operation is passed as argument.
   if (bid == 0 && first.active != 0) {
     turn = copyToShmem(&ncclShmem.work.elems[0], &first, turn);
-    if (tid == 0) ncclShmem.work.elems[1].active = 0;
+    if (1 <= tid && tid < NCCL_MAX_WORK_ELEMENTS && tid % ncclWorkElemFactors[Algo] == 0) {
+      ncclShmem.work.elems[tid].active = 0;
+      ncclShmem.work.elems[tid].redOpArgIsPtr = 0;
+    }
   }
   __syncthreads(); // publish ncclShmem
 
@@ -161,6 +173,29 @@ __device__ void ncclKernel(ncclWorkElem first)  {
     if (tid == 0)
       channel->index = workFifoIx; // write back to real channel, not shmem shadow
 
+    if (tid < NCCL_MAX_WORK_ELEMENTS && tid % ncclWorkElemFactors[Algo] == 0) {
+      ncclWorkElem *we = &ncclShmem.work.elems[tid];
+      if (we->redOpArgIsPtr && we->active != 0) {
+        /* redOpArg is a pointer to the scalar value, so we'll dereference it
+         * here so that redOpArg holds the bits of the scalar going forward.
+         * The tricky thing is we don't know its type T since that's encoded in
+         * the funcIndex. Because it would be difficult to get sizeof(T) from
+         * funcIndex, we'll cheat and just dereference the largest possible size
+         * given the alignment of the pointer. We might be reading in more bytes
+         * than we need but that's harmless.
+         */
+        if (we->coll.redOpArg%2 != 0)
+          we->coll.redOpArg = *reinterpret_cast<uint8_t*>(we->coll.redOpArg);
+        else if (we->coll.redOpArg%4 != 0)
+          we->coll.redOpArg = *reinterpret_cast<uint16_t*>(we->coll.redOpArg);
+        else if (we->coll.redOpArg%8 != 0)
+          we->coll.redOpArg = *reinterpret_cast<uint32_t*>(we->coll.redOpArg);
+        else
+          we->coll.redOpArg = *reinterpret_cast<uint64_t*>(we->coll.redOpArg);
+      }
+    }
+    __syncthreads();
+
     if (ncclShmem.work.elems[0].funcIndex == FnIndex)
       RunWork<Fn, T, RedOp, Algo, Proto>().run(&ncclShmem.work);
     else
@@ -174,52 +209,52 @@ __device__ void ncclKernel(ncclWorkElem first)  {
 
 // Only generate kernels for SUM
 #if NCCL_OP == 0
-#define IMPL_COLL_KERN(func, algo, proto, redop, type, fIndex) \
-__global__ void NCCL_KERN_NAME(func, algo, proto, redop, type)(ncclWorkElem first) { \
-  ncclKernel<ncclFunc##func, type, Func##redop<type>, NCCL_ALGO_##algo, NCCL_PROTO_##proto, fIndex>(first); \
+#define IMPL_COLL_KERN(func, algo, proto, devredop, type, fIndex) \
+__global__ void NCCL_KERN_NAME(func, algo, proto, devredop, type)(ncclWorkElem first) { \
+  ncclKernel<ncclFunc##func, type, Func##devredop<type>, NCCL_ALGO_##algo, NCCL_PROTO_##proto, fIndex>(first); \
 }
 #else
-#define IMPL_COLL_KERN(func, algo, proto, redop, type, fInded)
+#define IMPL_COLL_KERN(func, algo, proto, devredop, type, fInded)
 #endif
 
 // Examples :     AllReduce, RING, LL,    Sum,   uint8
-#define IMPL_COLL_FUNC(func, algo, proto, redop, type) \
-__device__ void NCCL_FUNC_NAME(func, algo, proto, redop, type)() { \
-  RunWork<ncclFunc##func, type, Func##redop<type>, NCCL_ALGO_##algo, NCCL_PROTO_##proto>().run(&ncclShmem.work); \
+#define IMPL_COLL_FUNC(func, algo, proto, devredop, type) \
+__device__ void NCCL_FUNC_NAME(func, algo, proto, devredop, type)() { \
+  RunWork<ncclFunc##func, type, Func##devredop<type>, NCCL_ALGO_##algo, NCCL_PROTO_##proto>().run(&ncclShmem.work); \
 }
 
 // Only generate inline kernels for LL
-#define IMPL_COLL4(func, algo, redop, type, ncclType) \
-  IMPL_COLL_FUNC(func, algo, LL,     redop, type) \
-  IMPL_COLL_FUNC(func, algo, LL128,  redop, type) \
-  IMPL_COLL_FUNC(func, algo, SIMPLE, redop, type) \
-  IMPL_COLL_KERN(func, algo, LL,     redop, type, FUNC_INDEX(ncclFunc##func, nccl##redop, ncclType, NCCL_ALGO_##algo, NCCL_PROTO_LL)) \
+#define IMPL_COLL4(func, algo, devredop, type, ncclType) \
+  IMPL_COLL_FUNC(func, algo, LL,     devredop, type) \
+  IMPL_COLL_FUNC(func, algo, LL128,  devredop, type) \
+  IMPL_COLL_FUNC(func, algo, SIMPLE, devredop, type) \
+  IMPL_COLL_KERN(func, algo, LL,     devredop, type, FUNC_INDEX(ncclFunc##func, ncclDev##devredop, ncclType, NCCL_ALGO_##algo, NCCL_PROTO_LL)) \
 
-#define IMPL_COLL3(func, redop, type, ncclType) \
-  IMPL_COLL4(func, TREE,    redop, type, ncclType) \
-  IMPL_COLL4(func, RING,    redop, type, ncclType) \
-  IMPL_COLL4(func, COLLNET, redop, type, ncclType)
+#define IMPL_COLL3(func, devredop, type, ncclType) \
+  IMPL_COLL4(func, TREE,    devredop, type, ncclType) \
+  IMPL_COLL4(func, RING,    devredop, type, ncclType) \
+  IMPL_COLL4(func, COLLNET, devredop, type, ncclType)
 
 #if NCCL_TYPE == 0
-#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, int8_t,   ncclInt8)
+#define IMPL_COLL2(func, devredop) IMPL_COLL3(func, devredop, int8_t,   ncclInt8)
 #elif NCCL_TYPE == 1
-#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, uint8_t,  ncclUint8)
+#define IMPL_COLL2(func, devredop) IMPL_COLL3(func, devredop, uint8_t,  ncclUint8)
 #elif NCCL_TYPE == 2
-#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, int32_t,  ncclInt32)
+#define IMPL_COLL2(func, devredop) IMPL_COLL3(func, devredop, int32_t,  ncclInt32)
 #elif NCCL_TYPE == 3
-#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, uint32_t, ncclUint32)
+#define IMPL_COLL2(func, devredop) IMPL_COLL3(func, devredop, uint32_t, ncclUint32)
 #elif NCCL_TYPE == 4
-#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, int64_t,  ncclInt64)
+#define IMPL_COLL2(func, devredop) IMPL_COLL3(func, devredop, int64_t,  ncclInt64)
 #elif NCCL_TYPE == 5
-#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, uint64_t, ncclUint64)
+#define IMPL_COLL2(func, devredop) IMPL_COLL3(func, devredop, uint64_t, ncclUint64)
 #elif NCCL_TYPE == 6
-#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, half,     ncclFloat16)
+#define IMPL_COLL2(func, devredop) IMPL_COLL3(func, devredop, half,     ncclFloat16)
 #elif NCCL_TYPE == 7
-#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, float,    ncclFloat32)
+#define IMPL_COLL2(func, devredop) IMPL_COLL3(func, devredop, float,    ncclFloat32)
 #elif NCCL_TYPE == 8
-#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, double,   ncclFloat64)
+#define IMPL_COLL2(func, devredop) IMPL_COLL3(func, devredop, double,   ncclFloat64)
 #elif NCCL_TYPE == 9 && defined(__CUDA_BF16_TYPES_EXIST__)
-#define IMPL_COLL2(func, redop) IMPL_COLL3(func, redop, __nv_bfloat16, ncclBfloat16)
+#define IMPL_COLL2(func, devredop) IMPL_COLL3(func, devredop, __nv_bfloat16, ncclBfloat16)
 #endif
 
 // Reduction define all functions
@@ -232,7 +267,13 @@ __device__ void NCCL_FUNC_NAME(func, algo, proto, redop, type)() { \
 #elif NCCL_OP == 3
 #define IMPL_COLL_R(func) IMPL_COLL2(func, Max);
 #elif NCCL_OP == 4
-#define IMPL_COLL_R(func) IMPL_COLL2(func, Avg);
+#define IMPL_COLL_R(func) IMPL_COLL2(func, PreMulSum);
+#elif NCCL_OP == 5
+  #if NCCL_TYPE < 6
+    #define IMPL_COLL_R(func) IMPL_COLL2(func, SumPostDiv);
+  #else
+    #define IMPL_COLL_R(func) // skip SumPostDiv for floating point
+  #endif
 #endif
 
 #if NCCL_OP == 0 && NCCL_TYPE == 0

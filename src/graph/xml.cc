@@ -625,7 +625,7 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
   NCCLCHECK(xmlGetAttrInt(gpuNode, "sm", &sm));
 
   struct ncclXmlNode* nvlNode = NULL;
-  NCCLCHECK(xmlGetSub(pciNode, "nvlink", &nvlNode));
+  NCCLCHECK(xmlGetSub(gpuNode, "nvlink", &nvlNode));
   if (nvlNode == NULL) {
     // NVML NVLink detection
     int maxNvLinks = (sm < 60) ? 0 : (sm < 70) ? 4 : (sm < 80) ? 6 : 12;

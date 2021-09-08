@@ -20,14 +20,14 @@ class Primitives<
                        Aborted = 0x40,
                        PtrsFifoEnabled = 0x80,
                        SizesFifoEnabled = 0x100,
-                       DirectEnabled = 0x200,
-                       ThreadsSynced = 0x400;
+                       DirectWrite = 0x200,
+                       DirectRead = 0x400,
+                       ThreadsSynced = 0x800;
   const int tid;
   int nthreads;
   int nworkers;
   const int stepSize;
   Fan fan;
-  RedOp const redOp;
   int index; // Peer index I'm responsible for
   int flags;
   int group;
@@ -69,16 +69,21 @@ class Primitives<
   }
 
   template <int DirectRecv, int DirectSend, int Recv, int Send, int Src, int Dst>
-  inline __device__ void waitPeer(intptr_t dstIx, intptr_t remoteOutIx, int offset, int nelts) {
-    if (flags & (Recv*RoleWaitRecv | Send*RoleWaitSend)) {
-      bool const isSendNotRecv = (Send && Recv) ? (flags & RoleWaitSend) : Send;
+  __device__ __forceinline__ void waitPeer(intptr_t dstIx, intptr_t remoteIx, int offset, int nelts) {
+    const bool isSendNotRecv = (Send && Recv) ? (flags & RoleWaitSend) : Send;
+    const bool noRecvWait = DirectRecv && Src && (flags & DirectRead);        // no wait when directly reading from remote input
+    const bool noSendWait = DirectSend && (flags & (DirectRead|DirectWrite)); // no wait in empty send (e.g. directScatter) or direct remote write
+    if (((flags & (Recv*RoleWaitRecv)) && !noRecvWait) ||
+        ((flags & (Send*RoleWaitSend)) && !noSendWait)) {
       int spins = 0;
       while (connStepCache + (isSendNotRecv ? NCCL_STEPS : 0) < step + StepPerSlice) {
         connStepCache = *connStepPtr;
         if (checkAbort(spins)) break;
         //if (spins == 0) printf("r=%d b=%d t=%d SPUN OUT got=%d want=%d\n", ncclShmem.comm.rank, blockIdx.x, threadIdx.x, int(connStepCache + (isSendNotRecv ? NCCL_STEPS : 0)), int(step+StepPerSlice));
       }
+    }
 
+    if (flags & (Recv*RoleWaitRecv | Send*RoleWaitSend)) {
       if (isSendNotRecv && (flags & SizesFifoEnabled))
         connSizesFifoPtr[step%NCCL_STEPS] = nelts*sizeof(T);
 
@@ -86,10 +91,26 @@ class Primitives<
                                   : (ncclShmem.groups[group].srcs + Src);
       if (flags & PtrsFifoEnabled)
         loadPtr(connPtrsFifoPtr + step%NCCL_STEPS, ptrs[index]);
-      else if ((isSendNotRecv ? DirectSend : DirectRecv) && (flags & DirectEnabled))
-        ptrs[index] = directBuff + (isSendNotRecv ? remoteOutIx : dstIx) + offset;
-      else
+      else if (isSendNotRecv && DirectSend) {
+        if (flags & DirectWrite) {
+          ptrs[index] = directBuff + remoteIx + offset;
+        } else if (flags & DirectRead) {  // empty send
+          ptrs[index] = nullptr;
+        } else {
+          ptrs[index] = connEltsFifo + (step%NCCL_STEPS)*stepSize;
+        }
+      } else if (!isSendNotRecv && DirectRecv) {
+        if (flags & DirectRead) {
+          ptrs[index] = directBuff + remoteIx + offset;
+        } else if (flags & DirectWrite) {
+          ptrs[index] = directBuff + dstIx + offset;  // send to next from my output buffer
+        } else {
+          ptrs[index] = connEltsFifo + (step%NCCL_STEPS)*stepSize;
+        }
+      }
+      else {
         ptrs[index] = connEltsFifo + (step%NCCL_STEPS)*stepSize;
+      }
       step += StepPerSlice;
     }
   }
@@ -103,8 +124,8 @@ class Primitives<
   }
 
   template <int DirectRecv1, int DirectSend1, int Recv, int Send, int SrcBuf, int DstBuf>
-  inline __device__ void genericOp(
-      intptr_t srcIx, intptr_t dstIx, intptr_t remoteOutIx, int nelem, bool postOp
+  __device__ __forceinline__ void genericOp(
+      intptr_t srcIx, intptr_t dstIx, intptr_t remoteIx, int nelem, bool postOp
     ) {
     constexpr int DirectRecv = 1 && Direct && DirectRecv1;
     constexpr int DirectSend = 1 && Direct && DirectSend1;
@@ -153,21 +174,30 @@ class Primitives<
           ncclShmem.groups[group].srcs[0] = userBuff + srcIx + offset;
         if (Dst && (flags & (DstBuf==Input ? RoleInput : RoleOutput)))
           ncclShmem.groups[group].dsts[0] = userBuff + dstIx + offset;
-        waitPeer<DirectRecv, DirectSend, Recv, Send, Src, Dst>(dstIx, remoteOutIx, offset, sliceSize);
+        waitPeer<DirectRecv, DirectSend, Recv, Send, Src, Dst>(dstIx, remoteIx, offset, sliceSize);
         subBarrier();
         if (DirectRecv && ncclShmem.groups[group].srcs[0] == ncclShmem.groups[group].dsts[0]) {
           // We can only have one direct receive. Since srcs[0] == dstPtr+offset, skip one copy
           if (Send) {
             // (1-Send) is only there to avoid compilation errors in case MaxSend=0 (and Send=0).
-            ReduceOrCopyMulti<Unroll, RedOp, T, 1, 1, 1, (1-Send)+MaxSend>
-              (tid, nworkers, redOp, false, false,
+            ReduceOrCopyMulti<Unroll, RedOp, T, 1, 1, 1, (1-Send)+MaxSend, 0>
+              (tid, nworkers, nullptr, false,
                1, (T const**)ncclShmem.groups[group].srcs,
                fan.nsend(), (T**)ncclShmem.groups[group].dsts+1,
                sliceSize);
           }
+        } else if (DirectSend && !DirectRecv && SrcBuf != Input && ncclShmem.groups[group].dsts[Dst] == nullptr) {
+          // For broadcast in CollNet to do empty send
+          ReduceOrCopyMulti<Unroll, RedOp, T, 1, 1, 1, 1, 0>
+            (tid, nworkers, ncclShmem.redOpArgs, postOp,
+             Recv, (T const**)ncclShmem.groups[group].srcs,
+             Dst, (T**)ncclShmem.groups[group].dsts,
+             sliceSize);
         } else {
-          ReduceOrCopyMulti<Unroll, RedOp, T, Recv+Src, Recv*MaxRecv+Src, Send+Dst, Send*MaxSend+Dst>
-            (tid, nworkers, redOp, SrcBuf==Input, postOp,
+          constexpr int PreOpN = SrcBuf != Input ? 0 :
+                                 DirectRecv*MaxRecv == NCCL_MAX_DIRECT_ARITY ? (1+NCCL_MAX_DIRECT_ARITY) : 1;
+          ReduceOrCopyMulti<Unroll, RedOp, T, Recv+Src, Recv*MaxRecv+Src, Send+Dst, Send*MaxSend+Dst, PreOpN>
+            (tid, nworkers, ncclShmem.redOpArgs, postOp,
              Recv*fan.nrecv()+Src, (T const**)ncclShmem.groups[group].srcs,
              Send*fan.nsend()+Dst, (T**)ncclShmem.groups[group].dsts,
              sliceSize);
@@ -201,10 +231,12 @@ class Primitives<
     }
   }
 
-  // Scatter and gather do not support Direct
-  template <int Recv, int Send>
-  inline __device__ void
+  // Scatter/Gather generic op
+  template <int DirectRecv1, int DirectSend1, int Recv, int Send>
+  __device__ __forceinline__ void
   ScatterGatherOp(intptr_t inpIx, intptr_t outIx, int totalElem, int peerElem, int skip, int shift, bool postOp) {
+    constexpr int DirectRecv = 1 && Direct && DirectRecv1;
+    constexpr int DirectSend = 1 && Direct && DirectSend1;
     int offset = 0; // slice offset
     int sliceSize = stepSize*StepPerSlice;
     int dataSize = max(DIVUP(peerElem, 16*SlicePerChunk)*16, sliceSize/32);  // per-peer slice size
@@ -213,12 +245,14 @@ class Primitives<
     for (int slice=0; slice<SlicePerChunk; ++slice) {
       int realSize = max(0, min(dataSize, peerElem-offset));
       if (tid < nworkers) {
-        if (Send && (flags & RoleInput)) ncclShmem.groups[group].srcs[0] = userBuff + inpIx + offset;
-        if (Recv && (flags & RoleOutput)) ncclShmem.groups[group].dsts[0] = userBuff + outIx + offset;
-        // realSize is not accurate here; but intra-node does not rely on sizes FIFO
-        waitPeer<0, 0, Recv, Send, 0, 0>(0, 0, 0, realSize);
-        subBarrier();
         if (Send) {
+          // Scatter pre-scales data of input buffer only in non-Direct case
+          constexpr int PreOpN = DirectSend ? 0 : 1;
+          if (flags & RoleInput) ncclShmem.groups[group].srcs[0] = userBuff + inpIx + offset;
+          if (tid == 0) ncclShmem.groups[group].totalSendSize[slice] = 0; // Skip the threadfence
+          // realSize is not accurate here; but intra-node does not rely on sizes FIFO
+          waitPeer<0, DirectSend, 0, 1, 1, 0>(0, inpIx, offset, realSize);
+          subBarrier();
           #pragma unroll
           for (int j=0; j<fan.nsend(); j++) {
             int i = (j+shift)%fan.nsend();
@@ -226,34 +260,45 @@ class Primitives<
             if (skip >= 0 && i >= skip) peerOffset += peerElem;
             const T* src0 = (T*)ncclShmem.groups[group].srcs[0] + peerOffset;
             int realPeerSize = min(realSize, totalElem-peerOffset);
-            if (realPeerSize > 0) ReduceOrCopyMulti<Unroll, RedOp, T, 1, 1, 1, 1>(tid, nworkers, redOp, true, false, 1, &src0, 1, (T**)ncclShmem.groups[group].dsts+i, realPeerSize);
+            if (realPeerSize > 0 && ncclShmem.groups[group].dsts[i] != nullptr) {
+              ReduceOrCopyMulti<Unroll, RedOp, T, 1, 1, 1, 1, PreOpN>(tid, nworkers, ncclShmem.redOpArgs, false, 1, &src0, 1, (T**)ncclShmem.groups[group].dsts+i, realPeerSize);
+              if (tid == 0) ncclShmem.groups[group].totalSendSize[slice] += realPeerSize;
+            }
           }
         } else if (Recv) {
-          #pragma unroll
-          for (int j=0; j<fan.nrecv(); j++) {
-            int i = (j+shift)%fan.nrecv();
-            int peerOffset = i*peerElem;
-            if (skip >= 0 && i >= skip) peerOffset += peerElem;
-            T* dst0 = (T*)ncclShmem.groups[group].dsts[0] + peerOffset;
-            int realPeerSize = min(realSize, totalElem-peerOffset);
-            if (realPeerSize > 0) ReduceOrCopyMulti<Unroll, RedOp, T, 1, 1, 1, 1>(tid, nworkers, redOp, false, postOp, 1, (T const**)ncclShmem.groups[group].srcs+i, 1, &dst0, realPeerSize);
+          if (flags & RoleOutput) ncclShmem.groups[group].dsts[0] = userBuff + outIx + offset;
+          int peerOffset = index*peerElem;
+          if (skip >= 0 && index >= skip) peerOffset += peerElem;
+          // Adjust remote index with peer offset in case we are directly pulling from peer's output buffer
+          waitPeer<DirectRecv, 0, 1, 0, 0, 1>(outIx, outIx+peerOffset, offset, realSize);
+          subBarrier();
+          if (DirectRecv && ncclShmem.groups[group].srcs[0] == ncclShmem.groups[group].dsts[0]) {
+            // Since waitPeer sets srcs[0] to output buffer + offset, we are doing a direct-write based recv
+            // Do nothing
+          } else {
+            #pragma unroll
+            for (int j=0; j<fan.nrecv(); j++) {
+              int i = (j+shift)%fan.nrecv();
+              peerOffset = i*peerElem;
+              if (skip >= 0 && i >= skip) peerOffset += peerElem;
+              T* dst0 = (T*)ncclShmem.groups[group].dsts[0] + peerOffset;
+              int realPeerSize = min(realSize, totalElem-peerOffset);
+              if (realPeerSize > 0) ReduceOrCopyMulti<Unroll, RedOp, T, 1, 1, 1, 1, 0>(tid, nworkers, ncclShmem.redOpArgs, postOp, 1, (const T**)ncclShmem.groups[group].srcs+i, 1, &dst0, realPeerSize);
+            }
           }
         }
       }
       barrier();
-      if (Send && (flags & RolePostSend) && realSize > 0 && index == 0) __threadfence_system();
+      if (Send && (flags & RolePostSend) && ncclShmem.groups[group].totalSendSize[slice] > 0 && index == 0)
+        __threadfence_system();
       __syncwarp();
       postPeer<Recv, Send>();
       offset += realSize;
     }
   }
 
-  __device__ __forceinline__ void loadRecvConn(ncclPeer *peer) {
+  __device__ __forceinline__ void loadRecvConn(ncclPeer *peer, int connIndex, struct ncclWorkElem* e) {
     if (flags & (RoleWaitRecv|RolePostRecv)) {
-      // For other colls: group <= 2, hence always use conn 0
-      // For P2P: Direct is set to 1, hence always use conn 0
-      // Ideally we should be accepting connIndex from the constructor!
-      const int connIndex = Direct ? 0 : group/4;
       auto *conn = &peer->recv[connIndex].conn;
       step = conn->step;
       step = roundUp(step, SlicePerChunk*StepPerSlice);
@@ -266,7 +311,25 @@ class Primitives<
         connStepPtr = conn->tail;
         connStepCache = *connStepPtr;
         flags |= (conn->ptrsFifo != nullptr) ? PtrsFifoEnabled : 0;
-        flags |= (Direct && (conn->direct & NCCL_DIRECT_GPU)) ? DirectEnabled : 0;
+        if (Direct) {
+          // User buffers have been registered
+          if ((conn->direct & (NCCL_IPC_READ|NCCL_IPC_WRITE)) && e != nullptr && e->regUsed) {
+            if (connIndex == 1) {
+              flags |= DirectRead;  // scatter-reduce use direct pull
+            } else {
+              flags |= (e->direct & NCCL_DIRECT_WRITE) ? DirectWrite :
+                       (e->direct & NCCL_DIRECT_READ)  ? DirectRead  : 0;
+            }
+          } else if (conn->direct & (NCCL_DIRECT_WRITE|NCCL_DIRECT_READ)) {
+            if (connIndex == 1) {
+              flags |= DirectRead;  // scatter-reduce use direct pull
+            } else {
+              // direct read not allowed in non-register case
+              // otherwise, in one-to-multi send, we could mix empty send and intermediate send
+              flags |= (conn->direct & NCCL_DIRECT_WRITE) ? DirectWrite : 0;
+            }
+          }
+        }
         if (flags & PtrsFifoEnabled)
           connPtrsFifoPtr = conn->ptrsFifo;
         else
@@ -275,12 +338,8 @@ class Primitives<
     }
   }
 
-  __device__ __forceinline__ void loadSendConn(ncclPeer *peer) {
+  __device__ __forceinline__ void loadSendConn(ncclPeer *peer, int connIndex, struct ncclWorkElem* e) {
     if (flags & (RoleWaitSend|RolePostSend)) {
-      // For other colls: group <= 2, hence always use conn 0
-      // For P2P: Direct is set to 1, hence always use conn 0
-      // Ideally we should be accepting connIndex from the constructor!
-      const int connIndex = Direct ? 0 : group/4;
       auto *conn = &peer->send[connIndex].conn;
       step = conn->step;
       step = roundUp(step, SlicePerChunk*StepPerSlice);
@@ -300,9 +359,25 @@ class Primitives<
         if (conn->sizesFifo != nullptr) {
           flags |= SizesFifoEnabled;
           connSizesFifoPtr = conn->sizesFifo;
+        } else if (Direct) {
+          // User buffers have been registered
+          if ((conn->direct & (NCCL_IPC_READ|NCCL_IPC_WRITE)) && e != nullptr && e->regUsed) {
+            if (connIndex == 1) {
+              flags |= DirectRead;  // scatter-reduce use direct pull
+            } else {
+              flags |= (e->direct & NCCL_DIRECT_WRITE) ? DirectWrite :
+                       (e->direct & NCCL_DIRECT_READ)  ? DirectRead  : 0;
+            }
+          } else if (conn->direct & (NCCL_DIRECT_WRITE|NCCL_DIRECT_READ)) {
+            if (connIndex == 1) {
+              flags |= DirectRead;  // scatter-reduce use direct pull
+            } else {
+              // direct read not allowed in non-register case
+              // otherwise, in one-to-multi send, we could mix empty send and intermediate send
+              flags |= (conn->direct & NCCL_DIRECT_WRITE) ? DirectWrite : 0;
+            }
+          }
         }
-        else if (Direct && (conn->direct & NCCL_DIRECT_GPU))
-          flags |= DirectEnabled;
       }
     }
   }
@@ -310,16 +385,16 @@ class Primitives<
  public:
   __device__ Primitives(
       int tid, int nthreads, int const *recvPeers, int const *sendPeers,
-      void const *inputBuf, void *outputBuf, int group=0
+      void const *inputBuf, void *outputBuf, uint64_t redOpArg, uint32_t group=0, struct ncclWorkElem* e = nullptr
     ):
     tid(tid),
-    stepSize(ncclShmem.comm.buffSizes[NCCL_PROTO_SIMPLE]/NCCL_STEPS/sizeof(T)),
-    redOp(FuncTraits<RedOp>::make(ncclShmem.comm.nRanks)) {
+    stepSize(ncclShmem.comm.buffSizes[NCCL_PROTO_SIMPLE]/NCCL_STEPS/sizeof(T)) {
 
     // For send operations, we need an extra warp to overlap the threadfence and the copy
     this->nthreads = nthreads;
     this->nworkers = nthreads - (MaxSend > 0 && nthreads-WARP_SIZE >= 64 ? WARP_SIZE : 0);
-    this->group = group;
+    this->group = group & (uint16_t)0xFFFF;
+    int connIndex = group >> 16;
 
     int nrecv=0, nsend=0;
     while (nrecv < MaxRecv && recvPeers[nrecv] != -1) nrecv++;
@@ -349,10 +424,10 @@ class Primitives<
     if (flags & (RoleWaitRecv|RolePostRecv)) peer = recvPeers[index];
     if (flags & (RoleWaitSend|RolePostSend)) peer = sendPeers[index];
 
-    loadRecvConn(&ncclShmem.channel.devPeers[peer]);
-    loadSendConn(&ncclShmem.channel.devPeers[peer]);
+    loadRecvConn(&ncclShmem.channel.devPeers[peer], connIndex, e);
+    loadSendConn(&ncclShmem.channel.devPeers[peer], connIndex, e);
 
-    setDataPtrs(inputBuf, outputBuf);
+    setDataPtrs(inputBuf, outputBuf, redOpArg, (struct ncclWorkRegElem*)e);
   }
 
   __device__ ~Primitives() {
@@ -369,10 +444,19 @@ class Primitives<
     barrier();
   }
 
-  __device__ void setDataPtrs(void const *inputBuf, void *outputBuf) {
-    if (flags & RoleInput) userBuff = (T*)inputBuf;
+  __device__ void setDataPtrs(void const *inputBuf, void *outputBuf, uint64_t redOpArg, struct ncclWorkRegElem* e) {
+    if (flags & RoleInput) {
+      userBuff = (T*)inputBuf;
+      ncclShmem.redOpArgs[0] = redOpArg;  // scaler for local input
+    }
     if (flags & RoleOutput) userBuff = (T*)outputBuf;
-    if (Direct && flags == (flags|RoleWaitRecv|DirectEnabled)) {
+    bool recvProvider = flags == (flags|RoleWaitRecv|DirectWrite);
+    bool sendAcceptor = flags == (flags|RoleWaitSend|DirectWrite);
+    bool sendProvider = flags == (flags|RoleWaitSend|DirectRead); // sender provides direct buffer (to be fetched)
+    bool recvAcceptor = flags == (flags|RoleWaitRecv|DirectRead); // receiver accepts direct buffer
+    int regUsed = e != nullptr ? e->elem.regUsed : 0;
+
+    if (Direct && recvProvider) {
       int spins = 0;
       void *volatile *slot = ncclShmem.groups[group].recvConns[index]->ptrExchange;
       // Wait for consumer to consume previous value before trampling it.
@@ -381,9 +465,9 @@ class Primitives<
       // Encode pointer by XOR'ing against some address they definitely wouldn't send
       // since we want to allow them sending us nullptr while not colliding with
       // the empty slot value.
-      *slot = reinterpret_cast<T*>(reinterpret_cast<uintptr_t>(outputBuf) ^ reinterpret_cast<uintptr_t>(slot));
+      *slot = reinterpret_cast<T*>(reinterpret_cast<uintptr_t>(directBuff) ^ reinterpret_cast<uintptr_t>(slot));
     }
-    if (Direct && flags == (flags|RoleWaitSend|DirectEnabled)) {
+    if (Direct && sendAcceptor) {
       int spins = 0;
       void *volatile *slot = ncclShmem.groups[group].sendConns[index]->ptrExchange;
       void *ptr;
@@ -391,7 +475,51 @@ class Primitives<
         ptr = *slot;
         if (ptr != nullptr || checkAbort(spins)) break;
       }
-      directBuff = reinterpret_cast<T*>(reinterpret_cast<uintptr_t>(ptr) ^ reinterpret_cast<uintptr_t>(slot));
+      directBuff = regUsed ? (T*)(e->dnOutputs[index]) :
+                   reinterpret_cast<T*>(reinterpret_cast<uintptr_t>(ptr) ^ reinterpret_cast<uintptr_t>(slot));
+      *slot = nullptr;
+    }
+    if (Direct && sendProvider) {
+      int spins = 0;
+      void *volatile *slot = ncclShmem.groups[group].sendConns[index]->ptrExchange;
+      volatile uint64_t* argSlot0 = ncclShmem.groups[group].sendConns[index]->redOpArgExchange;
+      volatile uint64_t* argSlot1 = ncclShmem.groups[group].sendConns[index]->redOpArgExchange+1;
+      // Wait for consumer to consume previous value before trampling it.
+      while ((*slot != nullptr || *argSlot0 != 0 || *argSlot1 !=0) && !checkAbort(spins));
+      // If there is no recv, then we are directly pulling from input buffer (e.g. directScatter)
+      // Otherwise, we are pulling from output buffer (e.g. recvCopyDirectSend)
+      directBuff = MaxRecv == 0 ? (T*)inputBuf : (T*)outputBuf;
+      // Exchange pre-scalers for use in direct pull
+      *argSlot0 = (uint64_t(1)<<32) | (uint32_t)redOpArg;
+      *argSlot1 = (uint64_t(1)<<32) | (uint32_t)(redOpArg>>32);
+      // Encode pointer by XOR'ing against some address they definitely wouldn't send
+      // since we want to allow them sending us nullptr while not colliding with
+      // the empty slot value.
+      *slot = reinterpret_cast<T*>(reinterpret_cast<uintptr_t>(directBuff) ^ reinterpret_cast<uintptr_t>(slot));
+    }
+    if (Direct && recvAcceptor) {
+      int spins = 0;
+      void *volatile *slot = ncclShmem.groups[group].recvConns[index]->ptrExchange;
+      volatile uint64_t* argSlot0 = ncclShmem.groups[group].recvConns[index]->redOpArgExchange;
+      volatile uint64_t* argSlot1 = ncclShmem.groups[group].recvConns[index]->redOpArgExchange+1;
+      void *ptr;
+      while (true) {
+        ptr = *slot;
+        if (ptr != nullptr || checkAbort(spins)) break;
+      }
+      directBuff = regUsed ? (T*)(MaxSend == 0 ? e->upOutputs[index] : e->dnInputs[index]) :
+                   reinterpret_cast<T*>(reinterpret_cast<uintptr_t>(ptr) ^ reinterpret_cast<uintptr_t>(slot));
+      if (MaxSend != 0) { // reduce group rather than gather group
+        // Store scalers for remote inputs
+        uint64_t arg0, arg1;
+        while (true) {
+          arg0 = *argSlot0;
+          arg1 = *argSlot1;
+          if ((arg0 != 0 && arg1 != 0) || checkAbort(spins)) break;
+        }
+        ncclShmem.redOpArgs[1+index] = ((arg1 & 0xffffffff)<<32) | (arg0 & 0xffffffff);
+      }
+      *argSlot0 = 0; *argSlot1 = 0;
       *slot = nullptr;
     }
   }
@@ -434,6 +562,9 @@ class Primitives<
   __device__ __forceinline__ void directRecvCopySend(intptr_t outIx, intptr_t remoteOutIx, int eltN) {
     genericOp<1, 1, 1, 1, -1, Output>(-1, outIx, remoteOutIx, eltN, false);
   }
+  __device__ __forceinline__ void recvCopyDirectSend(intptr_t outIx, intptr_t remoteOutIx, int eltN, bool postOp=false) {
+    genericOp<0, 1, 1, 1, -1, Output>(-1, outIx, remoteOutIx, eltN, postOp);
+  }
 
   __device__ __forceinline__ void recvReduceCopy(intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false) {
     genericOp<0, 0, 1, 0, Input, Output>(inpIx, outIx, -1, eltN, postOp);
@@ -441,6 +572,9 @@ class Primitives<
 
   __device__ __forceinline__ void recvReduceSend(intptr_t inpIx, int eltN, bool postOp=false) {
     genericOp<0, 0, 1, 1, Input, -1>(inpIx, -1, -1, eltN, postOp);
+  }
+  __device__ __forceinline__ void directRecvReduceSend(intptr_t inpIx, intptr_t remoteInpIx, int eltN, bool postOp=false) {
+    genericOp<1, 0, 1, 1, Input, -1>(inpIx, -1, remoteInpIx, eltN, postOp);
   }
 
   __device__ __forceinline__ void recvReduceCopySend(intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false) {
@@ -453,11 +587,19 @@ class Primitives<
 
   __device__ __forceinline__ void
   scatter(intptr_t inpIx, int totalElem, int peerElem, int skip, int shift) {
-    ScatterGatherOp<0, 1>(inpIx, -1, totalElem, peerElem, skip, shift, /*postOp=*/false);
+    ScatterGatherOp<0, 0, 0, 1>(inpIx, -1, totalElem, peerElem, skip, shift, /*postOp=*/false);
+  }
+  __device__ __forceinline__ void
+  directScatter(intptr_t inpIx, int totalElem, int peerElem, int skip, int shift) {
+    ScatterGatherOp<0, 1, 0, 1>(inpIx, -1, totalElem, peerElem, skip, shift, /*postOp=*/false);
   }
 
   __device__ __forceinline__ void
   gather(intptr_t outIx, int totalElem, int peerElem, int skip, int shift, bool postOp=false) {
-    ScatterGatherOp<1, 0>(-1, outIx, totalElem, peerElem, skip, shift, postOp);
+    ScatterGatherOp<0, 0, 1, 0>(-1, outIx, totalElem, peerElem, skip, shift, postOp);
+  }
+  __device__ __forceinline__ void
+  directGather(intptr_t outIx, int totalElem, int peerElem, int skip, int shift) {
+    ScatterGatherOp<1, 0, 1, 0>(-1, outIx, totalElem, peerElem, skip, shift, /*postOp=*/false);
   }
 };

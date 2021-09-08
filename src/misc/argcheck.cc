@@ -51,8 +51,14 @@ ncclResult_t ArgsCheck(struct ncclInfo* info) {
   }
   if (info->coll == ncclFuncAllGather || info->coll == ncclFuncReduceScatter) info->nBytes *= info->comm->nRanks; // count is per rank
 
-  if (info->op < 0 || info->op >= ncclNumOps) {
+  if (info->op < 0 || ncclMaxRedOp < info->op) {
     WARN("%s : invalid reduction operation %d", info->opName, info->op);
+    return ncclInvalidArgument;
+  }
+  int opIx = int(ncclUserRedOpMangle(info->comm, info->op)) - int(ncclNumOps);
+  if (ncclNumOps <= info->op &&
+      (info->comm->userRedOpCapacity <= opIx || info->comm->userRedOps[opIx].freeNext != -1)) {
+    WARN("%s : reduction operation %d unknown to this communicator", info->opName, info->op);
     return ncclInvalidArgument;
   }
 

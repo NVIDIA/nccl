@@ -10,7 +10,7 @@
 
 namespace {
   template<typename T, typename RedOp, typename Proto>
-  __device__ void runRing(ncclWorkElem *args) {
+  __device__ __forceinline__ void runRing(ncclWorkElem *args) {
     const int tid = threadIdx.x;
     const int nthreads = args->nThreads;
     const int bid = args->coll.bid;
@@ -25,7 +25,7 @@ namespace {
     const ssize_t size = args->coll.count;
 
     Primitives<T, RedOp, FanSymmetric<1>, 0, Proto>
-      prims(tid, nthreads, &ring->prev, &ring->next, args->sendbuff, args->recvbuff);
+      prims(tid, nthreads, &ring->prev, &ring->next, args->sendbuff, args->recvbuff, args->coll.redOpArg);
 
     for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
       ssize_t realChunkSize;
@@ -68,7 +68,7 @@ namespace {
 
 template<typename T, typename RedOp>
 struct RunWorkElement<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
-  __device__ void run(ncclWorkElem *args) {
+  __device__ __forceinline__ void run(ncclWorkElem *args) {
     using Proto = ProtoSimple<REDUCESCATTER_CHUNKSTEPS/REDUCESCATTER_SLICESTEPS, REDUCESCATTER_SLICESTEPS>;
     runRing<T, RedOp, Proto>(args);
   }
@@ -76,14 +76,14 @@ struct RunWorkElement<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_RING, NCCL_PROT
 
 template<typename T, typename RedOp>
 struct RunWorkElement<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_LL> {
-  __device__ void run(ncclWorkElem *args) {
+  __device__ __forceinline__ void run(ncclWorkElem *args) {
     runRing<T, RedOp, ProtoLL>(args);
   }
 };
 
 template<typename T, typename RedOp>
 struct RunWorkElement<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_LL128> {
-  __device__ void run(ncclWorkElem *args) {
+  __device__ __forceinline__ void run(ncclWorkElem *args) {
     runRing<T, RedOp, ProtoLL128>(args);
   }
 };

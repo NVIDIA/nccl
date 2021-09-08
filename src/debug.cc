@@ -138,7 +138,7 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
   int cudaDev;
   cudaGetDevice(&cudaDev);
   int pid = getpid();
-  int tid = gettid();
+  int tid = syscall(SYS_gettid);
 
   char buffer[1024];
   size_t len = 0;

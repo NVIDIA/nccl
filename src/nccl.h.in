@@ -19,7 +19,7 @@
 #define NCCL_SUFFIX "${nccl:Suffix}"
 
 #define NCCL_VERSION_CODE ${nccl:Version}
-#define NCCL_VERSION(X,Y,Z) (((X) >= 2 && (Y) >= 9) ? (X) * 10000 + (Y) * 100 + (Z) : (X) * 1000 + (Y) * 100 + (Z))
+#define NCCL_VERSION(X,Y,Z) (((X) <= 2 && (Y) <= 8) ? (X) * 1000 + (Y) * 100 + (Z) : (X) * 10000 + (Y) * 100 + (Z))
 
 #ifdef __cplusplus
 extern "C" {
@@ -102,12 +102,23 @@ ncclResult_t  ncclCommUserRank(const ncclComm_t comm, int* rank);
 ncclResult_t pncclCommUserRank(const ncclComm_t comm, int* rank);
 
 /* Reduction operation selector */
+typedef enum { ncclNumOps_dummy = 5 } ncclRedOp_dummy_t;
 typedef enum { ncclSum        = 0,
                ncclProd       = 1,
                ncclMax        = 2,
                ncclMin        = 3,
                ncclAvg        = 4,
-               ncclNumOps     = 5 } ncclRedOp_t;
+               /* ncclNumOps: The number of built-in ncclRedOp_t values. Also
+                * serves as the least possible value for dynamic ncclRedOp_t's
+                * as constructed by ncclRedOpCreate*** functions. */
+               ncclNumOps     = 5,
+               /* ncclMaxRedOp: The largest valid value for ncclRedOp_t.
+                * It is defined to be the largest signed value (since compilers
+                * are permitted to use signed enums) that won't grow
+                * sizeof(ncclRedOp_t) when compared to previous NCCL versions to
+                * maintain ABI compatibility. */
+               ncclMaxRedOp   = 0x7fffffff>>(32-8*sizeof(ncclRedOp_dummy_t))
+             } ncclRedOp_t;
 
 /* Data types */
 typedef enum { ncclInt8       = 0, ncclChar       = 0,
@@ -126,6 +137,40 @@ typedef enum { ncclInt8       = 0, ncclChar       = 0,
                ncclNumTypes   = 9
 #endif
 } ncclDataType_t;
+
+/* ncclScalarResidence_t: Location and dereferencing logic for scalar arguments. */
+typedef enum {
+  /* ncclScalarDevice: The scalar is in device-visible memory and will be
+   * dereferenced while the collective is running. */
+  ncclScalarDevice = 0,
+
+  /* ncclScalarHostImmediate: The scalar is in host-visible memory and will be
+   * dereferenced before the ncclRedOpCreate***() function returns. */
+  ncclScalarHostImmediate = 1
+} ncclScalarResidence_t;
+
+/*
+ * ncclRedOpCreatePreMulSum
+ *
+ * Creates a new reduction operator which pre-multiplies input values by a given
+ * scalar locally before reducing them with peer values via summation. For use
+ * only with collectives launched against *comm* and *datatype*. The
+ * *residence* argument indicates how/when the memory pointed to by *scalar*
+ * will be dereferenced. Upon return, the newly created operator's handle
+ * is stored in *op*.
+ */
+ncclResult_t  ncclRedOpCreatePreMulSum(ncclRedOp_t *op, void *scalar, ncclDataType_t datatype, ncclScalarResidence_t residence, ncclComm_t comm);
+ncclResult_t pncclRedOpCreatePreMulSum(ncclRedOp_t *op, void *scalar, ncclDataType_t datatype, ncclScalarResidence_t residence, ncclComm_t comm);
+
+/*
+ * ncclRedOpDestroy
+ *
+ * Destroys the reduction operator *op*. The operator must have been created by
+ * ncclRedOpCreatePreMul with the matching communicator *comm*. An operator may be
+ * destroyed as soon as the last NCCL function which is given that operator returns.
+ */
+ncclResult_t ncclRedOpDestroy(ncclRedOp_t op, ncclComm_t comm);
+ncclResult_t pncclRedOpDestroy(ncclRedOp_t op, ncclComm_t comm);
 
 /*
  * Collective communication operations

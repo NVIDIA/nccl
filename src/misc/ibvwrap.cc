@@ -60,7 +60,7 @@ ncclResult_t wrap_ibv_symbols(void) {
   if (!ibvhandle) {
     ibvhandle=dlopen("libibverbs.so.1", RTLD_NOW);
     if (!ibvhandle) {
-      WARN("Failed to open libibverbs.so[.1]");
+      INFO(NCCL_INIT, "Failed to open libibverbs.so[.1]");
       goto teardown;
     }
   }

@@ -17,7 +17,7 @@ targets="GENOBJS := \\\\\n"
 
 for base in sendrecv all_reduce all_gather broadcast reduce reduce_scatter; do
   opn=0
-  for op in sum prod min max avg; do
+  for op in sum prod min max premulsum sumpostdiv; do
     dtn=0
     # Order must match that of the ncclDataType_t enum
     for dt in ${datatypes}; do

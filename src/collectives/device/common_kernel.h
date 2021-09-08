@@ -26,7 +26,6 @@ typedef uint64_t PackType;
 
 template<typename Fn>
 struct FuncTraits /*{
-  __device__ static Fn make();
   __device__ static T preOp(Fn, T);
   __device__ static T postOp(Fn, T);
 }*/;
@@ -487,12 +486,12 @@ inline __device__ void Store128(Pack128* p, Pack128& v) {
   asm volatile("st.volatile.global.v2.u64 [%0], {%1,%2};" :: "l"(p), "l"(v.x), "l"(v.y) : "memory");
 }
 
-template<class FUNC, typename T, int UNROLL, int MINSRCS, int MAXSRCS, int MINDSTS, int MAXDSTS>
+template<class FUNC, typename T, int UNROLL, int MINSRCS, int MAXSRCS, int MINDSTS, int MAXDSTS, int PreOpN, typename Int>
 __device__ __forceinline__ void ReduceCopyMulti(const int w, const int nw, const int t,
-    FUNC fn, bool preOpSrc0, bool postOp, int nsrcs, const T** s, int ndsts, T** d, const int elemOffset, const int Nelem
+    uint64_t* redOpArgs, bool postOp, int nsrcs, const T** s, int ndsts, T** d, const int elemOffset, const Int Nelem
   ) {
-  const int inc = nw * UNROLL * WARP_SIZE;
-  int offset = w * UNROLL * WARP_SIZE + t;
+  const Int inc = nw * UNROLL * WARP_SIZE;
+  Int offset = w * UNROLL * WARP_SIZE + t;
 
   const T* srcs[MAXSRCS];
   for (int i=0; i<MAXSRCS; i++) srcs[i] = s[i]+elemOffset+offset;
@@ -503,26 +502,36 @@ __device__ __forceinline__ void ReduceCopyMulti(const int w, const int nw, const
     T vals[UNROLL];
     // Load and reduce
     for (int u = 0; u < UNROLL; ++u) vals[u] = vFetch(srcs[0]+u*WARP_SIZE);
-    if (preOpSrc0) {
+    if (PreOpN) {
+      FUNC fn(redOpArgs[0]);
       for (int u = 0; u < UNROLL; ++u) vals[u] = FuncTraits<FUNC>().preOp(fn, vals[u]);
     }
 
     #pragma unroll
     for (int i=1; i<MINSRCS; i++) {
       T vals2[UNROLL];
+      FUNC fn(redOpArgs[i]);
       for (int u = 0; u < UNROLL; ++u) vals2[u] = vFetch(srcs[i]+u*WARP_SIZE);
+      if (i<PreOpN) {
+        for (int u = 0; u < UNROLL; ++u) vals2[u] = FuncTraits<FUNC>().preOp(fn, vals2[u]);
+      }
       for (int u = 0; u < UNROLL; ++u) vals[u] = fn(vals[u], vals2[u]);
     }
     #pragma unroll
     for (int i=MINSRCS; i<MAXSRCS; i++) {
       if (i<nsrcs) {
         T vals2[UNROLL];
+        FUNC fn(redOpArgs[i]);
         for (int u = 0; u < UNROLL; ++u) vals2[u] = vFetch(srcs[i]+u*WARP_SIZE);
+        if (i<PreOpN) {
+          for (int u = 0; u < UNROLL; ++u) vals2[u] = FuncTraits<FUNC>().preOp(fn, vals2[u]);
+        }
         for (int u = 0; u < UNROLL; ++u) vals[u] = fn(vals[u], vals2[u]);
       }
     }
 
     if (postOp) {
+      FUNC fn(redOpArgs[0]);
       #pragma unroll
       for (int u = 0; u < UNROLL; ++u) vals[u] = FuncTraits<FUNC>().postOp(fn, vals[u]);
     }
@@ -544,12 +553,12 @@ __device__ __forceinline__ void ReduceCopyMulti(const int w, const int nw, const
   }
 }
 
-template<class FUNC, typename T, int UNROLL, int MINSRCS, int MAXSRCS, int MINDSTS, int MAXDSTS>
+template<class FUNC, typename T, int UNROLL, int MINSRCS, int MAXSRCS, int MINDSTS, int MAXDSTS, int PreOpN, typename Int>
 __device__ __forceinline__ void ReduceCopy128bMulti(const int w, const int nw, const int t,
-    FUNC fn, bool preOpSrc0, bool postOp, int nsrcs, const T** s, int ndsts, T** d, const int elemOffset, const int Npack
+    uint64_t* redOpArgs, bool postOp, int nsrcs, const T** s, int ndsts, T** d, const int elemOffset, const Int Npack
   ) {
-  const int inc = nw * UNROLL * WARP_SIZE;
-  int offset = w * UNROLL * WARP_SIZE + t;
+  const Int inc = nw * UNROLL * WARP_SIZE;
+  Int offset = w * UNROLL * WARP_SIZE + t;
 
   const Pack128* srcs[MAXSRCS];
   for (int i=0; i<MAXSRCS; i++) srcs[i] = ((const Pack128*)(s[i]+elemOffset))+offset;
@@ -560,26 +569,36 @@ __device__ __forceinline__ void ReduceCopy128bMulti(const int w, const int nw, c
     Pack128 vals[UNROLL];
     // Load and reduce
     for (int u = 0; u < UNROLL; ++u) Fetch128(vals[u], srcs[0]+u*WARP_SIZE);
-    if (preOpSrc0) {
+    if (PreOpN) {
+      FUNC fn(redOpArgs[0]);
       for (int u = 0; u < UNROLL; ++u) MULTI128<FUNC, T>().preOp(fn, vals[u]);
     }
 
     #pragma unroll
     for (int i=1; i<MINSRCS; i++) {
       Pack128 vals2[UNROLL];
+      FUNC fn(redOpArgs[i]);
       for (int u = 0; u < UNROLL; ++u) Fetch128(vals2[u], srcs[i]+u*WARP_SIZE);
+      if (i<PreOpN) {
+        for (int u = 0; u < UNROLL; ++u) MULTI128<FUNC, T>().preOp(fn, vals2[u]);
+      }
       for (int u = 0; u < UNROLL; ++u) MULTI128<FUNC, T>()(fn, vals[u], vals2[u]);
     }
     #pragma unroll
     for (int i=MINSRCS; i<MAXSRCS; i++) {
       if (i<nsrcs) {
         Pack128 vals2[UNROLL];
+        FUNC fn(redOpArgs[i]);
         for (int u = 0; u < UNROLL; ++u) Fetch128(vals2[u], srcs[i]+u*WARP_SIZE);
+        if (i<PreOpN) {
+          for (int u = 0; u < UNROLL; ++u) MULTI128<FUNC, T>().preOp(fn, vals2[u]);
+        }
         for (int u = 0; u < UNROLL; ++u) MULTI128<FUNC, T>()(fn, vals[u], vals2[u]);
       }
     }
 
     if (postOp) {
+      FUNC fn(redOpArgs[0]);
       #pragma unroll
       for (int u = 0; u < UNROLL; ++u) MULTI128<FUNC, T>().postOp(fn, vals[u]);
     }
@@ -606,11 +625,11 @@ __device__ int ptrAlign128(T* ptr) { return (uint64_t)ptr % alignof(Pack128); }
 
 #define PACKELEMS (sizeof(Pack128) / sizeof(T))
 
-template<int UNROLL, class FUNC, typename T, int MINSRCS, int MAXSRCS, int MINDSTS, int MAXDSTS>
+template<int UNROLL, class FUNC, typename T, int MINSRCS, int MAXSRCS, int MINDSTS, int MAXDSTS, int PreOpN, typename Int>
 __device__ __forceinline__ void ReduceOrCopyMulti(
-    const int tid, const int nthreads, FUNC fn, bool preOpSrc0, bool postOp, int nsrcs, const T** srcs, int ndsts, T** dsts, int N
+    const int tid, const int nthreads, uint64_t* redOpArgs, bool postOp, int nsrcs, const T** srcs, int ndsts, T** dsts, Int N
   ) {
-  int Nrem = N;
+  Int Nrem = N;
   if (Nrem <= 0) return;
 
   int w = tid / WARP_SIZE;       // Warp number
@@ -626,17 +645,17 @@ __device__ __forceinline__ void ReduceOrCopyMulti(
   for (int i=0; i<MINDSTS; i++) align |= ptrAlign128(dsts[i]);
   for (int i=MINDSTS; i<MAXDSTS && i<ndsts; i++) align |= ptrAlign128(dsts[i]);
 
-  int offset = 0;
+  Int offset = 0;
   if (align == 0) {
     // fast path: use 128b loads/stores to do the bulk of the work,
     // assuming the pointers we have are all 128-bit aligned.
 
     // main loop
-    int Npack = (Nrem / (PACKELEMS*UNROLL*WARP_SIZE)) * (UNROLL*WARP_SIZE); // round down
-    int Nelem = Npack * PACKELEMS;
+    Int Npack = (Nrem / (PACKELEMS*UNROLL*WARP_SIZE)) * (UNROLL*WARP_SIZE); // round down
+    Int Nelem = Npack * PACKELEMS;
 
-    ReduceCopy128bMulti<FUNC, T, UNROLL, MINSRCS, MAXSRCS, MINDSTS, MAXDSTS>
-      (w, nw, t, fn, preOpSrc0, postOp, nsrcs, srcs, ndsts, dsts, offset, Npack);
+    ReduceCopy128bMulti<FUNC, T, UNROLL, MINSRCS, MAXSRCS, MINDSTS, MAXDSTS, PreOpN>
+      (w, nw, t, redOpArgs, postOp, nsrcs, srcs, ndsts, dsts, offset, Npack);
 
     Nrem -= Nelem;
     if (Nrem == 0) return;
@@ -646,8 +665,8 @@ __device__ __forceinline__ void ReduceOrCopyMulti(
     Npack = Nrem / PACKELEMS;
     Nelem = Npack * PACKELEMS;
 
-    ReduceCopy128bMulti<FUNC, T, 1, MINSRCS, MAXSRCS, MINDSTS, MAXDSTS>
-      (w, nw, t, fn, preOpSrc0, postOp, nsrcs, srcs, ndsts, dsts, offset, Npack);
+    ReduceCopy128bMulti<FUNC, T, 1, MINSRCS, MAXSRCS, MINDSTS, MAXDSTS, PreOpN>
+      (w, nw, t, redOpArgs, postOp, nsrcs, srcs, ndsts, dsts, offset, Npack);
 
     Nrem -= Nelem;
     if (Nrem == 0) return;
@@ -655,18 +674,18 @@ __device__ __forceinline__ void ReduceOrCopyMulti(
   }
 
   // unrolled, by-type (mostly for unaligned buffers)
-  int Nelem = (Nrem / (UNROLL*PACKELEMS/2*WARP_SIZE)) * (UNROLL*PACKELEMS/2*WARP_SIZE); // round down
+  Int Nelem = (Nrem / (UNROLL*PACKELEMS/2*WARP_SIZE)) * (UNROLL*PACKELEMS/2*WARP_SIZE); // round down
 
-  ReduceCopyMulti<FUNC, T, UNROLL*PACKELEMS/2, MINSRCS, MAXSRCS, MINDSTS, MAXDSTS>
-    (w, nw, t, fn, preOpSrc0, postOp, nsrcs, srcs, ndsts, dsts, offset, Nelem);
+  ReduceCopyMulti<FUNC, T, UNROLL*PACKELEMS/2, MINSRCS, MAXSRCS, MINDSTS, MAXDSTS, PreOpN>
+    (w, nw, t, redOpArgs, postOp, nsrcs, srcs, ndsts, dsts, offset, Nelem);
 
   Nrem -= Nelem;
   if (Nrem == 0) return;
   offset += Nelem;
 
   // no unroll, by type. Should finish what's remaining.
-  ReduceCopyMulti<FUNC, T, 1, MINSRCS, MAXSRCS, MINDSTS, MAXDSTS>
-    (w, nw, t, fn, preOpSrc0, postOp, nsrcs, srcs, ndsts, dsts, offset, Nrem);
+  ReduceCopyMulti<FUNC, T, 1, MINSRCS, MAXSRCS, MINDSTS, MAXDSTS, PreOpN>
+    (w, nw, t, redOpArgs, postOp, nsrcs, srcs, ndsts, dsts, offset, Nrem);
 }
 
 #endif // COMMON_KERNEL_H_

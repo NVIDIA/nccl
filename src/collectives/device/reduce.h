@@ -10,7 +10,7 @@
 
 namespace {
   template<typename T, typename RedOp, typename Proto>
-  __device__ void runRing(ncclWorkElem *args) {
+  __device__ __forceinline__ void runRing(ncclWorkElem *args) {
     const int tid = threadIdx.x;
     const int nthreads = args->nThreads;
     const int bid = args->coll.bid;
@@ -26,7 +26,7 @@ namespace {
     const int root = args->coll.root;
 
     Primitives<T, RedOp, FanSymmetric<1>, 0, Proto>
-      prims(tid, nthreads, &ring->prev, &ring->next, args->sendbuff, args->recvbuff);
+      prims(tid, nthreads, &ring->prev, &ring->next, args->sendbuff, args->recvbuff, args->coll.redOpArg);
 
     auto calcChunkSize = [&]__device__(ssize_t gridOffset)->int {
       int realChunkSize;
@@ -70,7 +70,7 @@ namespace {
 
 template<typename T, typename RedOp>
 struct RunWorkElement<ncclFuncReduce, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
-  __device__ void run(ncclWorkElem *args) {
+  __device__ __forceinline__ void run(ncclWorkElem *args) {
     using Proto = ProtoSimple<REDUCE_CHUNKSTEPS/REDUCE_SLICESTEPS, REDUCE_SLICESTEPS>;
     runRing<T, RedOp, Proto>(args);
   }
@@ -78,14 +78,14 @@ struct RunWorkElement<ncclFuncReduce, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPL
 
 template<typename T, typename RedOp>
 struct RunWorkElement<ncclFuncReduce, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_LL> {
-  __device__ void run(ncclWorkElem *args) {
+  __device__ __forceinline__ void run(ncclWorkElem *args) {
     runRing<T, RedOp, ProtoLL>(args);
   }
 };
 
 template<typename T, typename RedOp>
 struct RunWorkElement<ncclFuncReduce, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_LL128> {
-  __device__ void run(ncclWorkElem *args) {
+  __device__ __forceinline__ void run(ncclWorkElem *args) {
     runRing<T, RedOp, ProtoLL128>(args);
   }
 };

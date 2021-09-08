@@ -30,10 +30,19 @@ void CUDART_CB ncclEnqueueHostSetup(void* arg);
 ncclResult_t ncclGetCudaGraph(ncclComm_t comm, cudaGraph_t* graph);
 ncclResult_t ncclCudaGraphHostSetup(ncclComm_t comm, cudaGraph_t graph);
 
+struct ncclBuffRegInfo {
+  void* sendbuffsBase[NCCL_MAX_INTRA_RANKS];
+  void* recvbuffsBase[NCCL_MAX_INTRA_RANKS];
+  void* sendbuffs[NCCL_MAX_INTRA_RANKS];
+  void* recvbuffs[NCCL_MAX_INTRA_RANKS];
+  int nBuffs;
+};
+
 // Enqueue information (for kernel and proxy) for each operation
 struct ncclQueueElem {
   struct ncclWorkElem work;
   struct ncclProxyArgs proxyArgs;
+  struct ncclBuffRegInfo buffRegInfo;
 };
 
 typedef ncclRecyclableList<struct ncclQueueElem> ncclQueueElemList;
@@ -43,6 +52,7 @@ struct ncclQueueInfo {
   ncclComm_t comm;
   int maxChannels;    // Dynamic version of gridDim
   ncclResult_t ret;   // Return value of host setup call
+  int nRegBuffs;
   ncclQueueElemList* elemList;
 };
 
@@ -50,6 +60,7 @@ static ncclResult_t ncclCreateQueueInfo(struct ncclQueueInfo** eqInfo, ncclComm_
   NCCLCHECK(ncclCalloc(eqInfo, 1));
   (*eqInfo)->comm = comm;
   (*eqInfo)->elemList = new ncclQueueElemList();
+  (*eqInfo)->comm->nQueueInfoCreated++;
   return ncclSuccess;
 }
 
@@ -58,6 +69,7 @@ static ncclResult_t ncclResetQueueInfo(struct ncclQueueInfo* eqInfo) {
   if (eqInfo == NULL) return ncclInternalError;
   eqInfo->maxChannels = 0;
   eqInfo->ret = ncclSuccess;
+  eqInfo->nRegBuffs = 0;
   eqInfo->elemList->recycle();
   return ncclSuccess;
 }
@@ -67,7 +79,54 @@ static ncclResult_t ncclResetQueueInfo(struct ncclQueueInfo* eqInfo) {
 static void ncclDestroyQueueInfo(void* ptr) {
   if (ptr == NULL) return;
   struct ncclQueueInfo* eqInfo = (struct ncclQueueInfo*)ptr;
+  struct ncclComm* comm = eqInfo->comm;
+  // Close IPC mem handles for registered buffers
+  struct ncclQueueElem* eqElem = eqInfo->elemList->begin();
+#if 0
+  // Ideally, the deregistration should happen here
+  // but currently the destroy function of CUDA objects does not allow CUDA API calls
+  while (eqElem != NULL) {
+    for (int i=0; i<eqElem->buffRegInfo.nBuffs; i++) {
+      if (i == eqInfo->comm->intraNodeRank) continue;
+      CUDACHECKIGNORE(cudaIpcCloseMemHandle(eqElem->buffRegInfo.sendbuffsBase[i]));
+      CUDACHECKIGNORE(cudaIpcCloseMemHandle(eqElem->buffRegInfo.recvbuffsBase[i]));
+    }
+    eqElem = eqInfo->elemList->getNext();
+  }
+#else
+  // Instead, we push these pointers to a pool owned by ncclComm
+  // and asks a helper thread to close mem handles
+  struct ncclGraphHelperResources* res = comm->graphHelperResources;
+  int ipcTailOld = 0;
+  if (res == NULL || (!comm->graphHelperThread) || eqInfo->nRegBuffs == 0) goto skip;
+
+  pthread_mutex_lock(&res->threadLock);
+  ipcTailOld = res->ipcTail;
+  while (eqElem != NULL) {
+    for (int i=0; i<eqElem->buffRegInfo.nBuffs; i++) {
+      if (eqElem->buffRegInfo.sendbuffsBase[i] != NULL) {
+        res->ipcBases[res->ipcTail] = eqElem->buffRegInfo.sendbuffsBase[i];
+        res->ipcTail = (res->ipcTail+1)%NCCL_IPC_POOL_SIZE;
+      }
+      if (eqElem->buffRegInfo.recvbuffsBase[i] != NULL) {
+        res->ipcBases[res->ipcTail] = eqElem->buffRegInfo.recvbuffsBase[i];
+        res->ipcTail = (res->ipcTail+1)%NCCL_IPC_POOL_SIZE;
+      }
+    }
+    eqElem = eqInfo->elemList->getNext();
+  }
+  if (res->ipcTail != ipcTailOld) {
+    res->threadState = ThreadStart;
+    TRACE(NCCL_COLL, "CUDA Graph destroy function signaling helper thread with %d IPC handles", res->ipcTail-ipcTailOld);
+    pthread_cond_signal(&res->threadCond);
+  }
+  pthread_mutex_unlock(&res->threadLock);
+#endif
+
+skip:
   delete eqInfo->elemList;
   free(eqInfo);
+  comm->nQueueInfoDestroyed++;
+  return;
 }
 #endif // End include guard

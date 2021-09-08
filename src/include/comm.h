@@ -9,6 +9,7 @@
 
 #include "transport.h"
 #include "p2p.h"
+#include "collectives.h"
 
 #if CUDART_VERSION < 9000
 struct cudaLaunchParams {
@@ -30,13 +31,16 @@ struct cudaLaunchParams {
 #define NCCL_LL128_THREAD_THRESHOLD 8
 #define NCCL_SIMPLE_THREAD_THRESHOLD 64
 
+#define NCCL_MAX_INTRA_RANKS 32
+
 struct ncclSendMem {
   union {
     struct {
       uint64_t head;
       char pad1[CACHE_LINE_SIZE-sizeof(uint64_t)];
       void* ptrExchange;
-      char pad2[CACHE_LINE_SIZE-sizeof(void*)];
+      uint64_t redOpArgExchange[2];
+      char pad2[CACHE_LINE_SIZE-sizeof(void*)-2*sizeof(uint64_t)];
     };
     char pad3[MEM_ALIGN];
   };
@@ -54,6 +58,28 @@ struct ncclRecvMem {
     char pad4[MEM_ALIGN];
   };
   char buff[1]; // Actually larger than that
+};
+
+typedef cudaError_t(*pfn_cuMemGetAddressRange_t)(void**, size_t*, void*);
+
+enum helperThreadState {ThreadStart, ThreadStop};
+
+#define NCCL_IPC_POOL_SIZE (2*NCCL_MAX_INTRA_RANKS*NCCL_MAX_OPS)
+
+struct ncclGraphHelperResources {
+  ncclComm* comm;
+  pthread_mutex_t threadLock;
+  pthread_cond_t  threadCond;
+  enum helperThreadState threadState;
+  void* ipcBases[NCCL_IPC_POOL_SIZE];
+  int ipcTail;
+  int ipcHead;
+};
+
+struct ncclUserRedOp {
+  int freeNext; // -1=allocated, otherwise index of next free entry in array
+  ncclDataType_t datatype;
+  ncclDevRedOpFull opFull;
 };
 
 struct ncclComm {
@@ -76,7 +102,12 @@ struct ncclComm {
 
   int node;
   int nNodes;
+
+  // Intra-node rank info
+  int intraNodeGlobalRanks[NCCL_MAX_INTRA_RANKS];
   int localRanks;
+  int intraNodeRank;
+  int8_t* rankToIntraNodeRank;
 
   enum { GROUP, PARALLEL, GROUP_GRAPH } launchMode;
   cudaStream_t userStream;
@@ -142,6 +173,7 @@ struct ncclComm {
 
   // Whether this communicator uses collNet
   int collNetSupport;
+  int intraHighestTransportType;
 
   // Store info of async operations
   struct ncclInfo* asyncOps;
@@ -160,9 +192,38 @@ struct ncclComm {
   // Store info for cudaGraph
   int usingCudaGraph; // Only use it during capture time, not launch time
   struct ncclQueueInfo* enqueueInfo;
+  int nQueueInfoCreated;
+  int nQueueInfoDestroyed;
   cudaGraphNode_t lastSetupNode;
   unsigned long long lastCudaGraphId;
   int driverVersion;
+  pfn_cuMemGetAddressRange_t pfnCuMemGetAddressRange;
+  pthread_t graphHelperThread;
+  struct ncclGraphHelperResources* graphHelperResources;
+  int disableGraphHelper;
+  int graphRegister;
+
+  // user-created reduction ops
+  int userRedOpCapacity, userRedOpFreeHead;
+  ncclUserRedOp *userRedOps;
 };
+
+// Scrambles the bits of non-builtin values of ncclRedOp_t according to the
+// communicator memory address. Used to catch bugs so that integer handles
+// associated with this communicator won't collide with handles of other
+// communicatrs. This function is its own inverse.
+static inline ncclRedOp_t ncclUserRedOpMangle(ncclComm *comm, ncclRedOp_t op) {
+  // Preserve the built-in values.
+  if(int(op) < int(ncclNumOps))
+    return op;
+  uint64_t h = reinterpret_cast<uint64_t>(comm);
+  h ^= h >> 32;
+  h *= 0x9e3779b97f4a7c13u; // Knuth's 64-bit magical hash constant
+  h >>= 32; // h is now an excellent 32-bit hash of the comm pointer
+  h &= int(ncclMaxRedOp); // ncclMaxRedOp is a power of 2 minus 1
+  int op1 = int(h) ^ int(op);
+  // Since builtin values are preserved, we also have to preserve their preimage.
+  return op1 < int(ncclNumOps) ? op : ncclRedOp_t(op1);
+}
 
 #endif

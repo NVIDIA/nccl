@@ -7,17 +7,14 @@
 #ifndef NCCL_DEBUG_H_
 #define NCCL_DEBUG_H_
 
-#include "core.h"
-
+#include "nccl_net.h"
 #include <stdio.h>
 #include <chrono>
 
 #include <sys/syscall.h>
 #include <limits.h>
 #include <string.h>
-#include "nccl_net.h"
-
-#define gettid() (pid_t) syscall(SYS_gettid)
+#include <pthread.h>
 
 extern int ncclDebugLevel;
 extern uint64_t ncclDebugMask;

@@ -7,6 +7,7 @@
 #ifndef NCCL_PARAM_H_
 #define NCCL_PARAM_H_
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/types.h>

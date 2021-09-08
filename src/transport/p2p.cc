@@ -21,6 +21,7 @@ struct p2pSendResources {
   void* ipcPtr;
   int remoteId;
   int memRank;
+  void* remIpcPtr;
   void* bootstrap;
 };
 
@@ -29,6 +30,7 @@ struct p2pRecvResources {
   void* ipcPtr;
   int remoteId;
   int memRank;
+  void* remIpcPtr;
   void* bootstrap;
 };
 
@@ -87,6 +89,21 @@ ncclResult_t p2pCanConnect(int* ret, struct ncclTopoSystem* topo, struct ncclTop
     *ret = 0;
     return ncclSuccess;
   }
+
+  // Check that legacy IPC support is available
+  if (p2p != 0) {
+    char *dummy;
+    cudaIpcMemHandle_t ipc;
+    NCCLCHECK(ncclCudaCalloc(&dummy, CUDA_IPC_MIN));
+    if (cudaIpcGetMemHandle(&ipc, dummy) != cudaSuccess) {
+      INFO(NCCL_INIT|NCCL_P2P,"Legacy IPC not supported on dev %d(=%lx)",
+           cudaDev1, info1->busId);
+      *ret = 0;
+    }
+    CUDACHECK(cudaFree(dummy));
+    return ncclSuccess;
+  }
+
   if (p2p == 0) {
     INFO(NCCL_INIT|NCCL_P2P,"Could not enable P2P between dev %d(=%lx) and dev %d(=%lx)",
          cudaDev1, info1->busId, cudaDev2, info2->busId);
@@ -164,10 +181,11 @@ ncclResult_t p2pSendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, st
     NCCLCHECK(ncclCudaCalloc((char**)&info.directPtr, sendSize));
     info.rank = myInfo->rank;
     if (myInfo->pidHash == peerInfo->pidHash) {
-      if (info.read == 0) send->conn.direct |= NCCL_DIRECT_GPU;
+      send->conn.direct |= info.read ? NCCL_DIRECT_READ : NCCL_DIRECT_WRITE;
       INFO(NCCL_INIT|NCCL_P2P, "Channel %02d : %d[%lx] -> %d[%lx] via P2P/direct pointer%s",
           channelId, myInfo->rank, myInfo->busId, peerInfo->rank, peerInfo->busId, useReadStr);
     } else {
+      send->conn.direct |= info.read ? NCCL_IPC_READ : NCCL_IPC_WRITE;
       CUDACHECK(cudaIpcGetMemHandle(&info.devIpc, info.directPtr));
       INFO(NCCL_INIT|NCCL_P2P,"Channel %02d : %d[%lx] -> %d[%lx] via P2P/IPC%s",
           channelId, myInfo->rank, myInfo->busId, peerInfo->rank, peerInfo->busId, useReadStr);
@@ -212,8 +230,9 @@ ncclResult_t p2pRecvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, st
     NCCLCHECK(ncclCudaCalloc((char**)&info.directPtr, recvSize));
     info.rank = myInfo->rank;
     if (myInfo->pidHash == peerInfo->pidHash) {
-      if (info.read == 0) recv->conn.direct |= NCCL_DIRECT_GPU;
+      recv->conn.direct |= info.read ? NCCL_DIRECT_READ : NCCL_DIRECT_WRITE;
     } else {
+      recv->conn.direct |= info.read ? NCCL_IPC_READ : NCCL_IPC_WRITE;
       CUDACHECK(cudaIpcGetMemHandle(&info.devIpc, info.directPtr));
     }
   } else {
@@ -235,7 +254,7 @@ static ncclResult_t p2pSendConnect(struct ncclComm* comm, struct ncclConnect* co
   struct ncclRecvMem* remDevMem;
   struct p2pConnectInfo* info = (struct p2pConnectInfo*)connectInfo;
 
-  NCCLCHECK(p2pMap(comm->peerInfo+rank, comm->peerInfo+info->rank, info, (void**)&remDevMem, &resources->ipcPtr));
+  NCCLCHECK(p2pMap(comm->peerInfo+rank, comm->peerInfo+info->rank, info, (void**)&remDevMem, &resources->remIpcPtr));
 
   int offset = 0;
   for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) {
@@ -250,6 +269,7 @@ static ncclResult_t p2pSendConnect(struct ncclComm* comm, struct ncclConnect* co
   send->conn.tail = &remDevMem->tail;
   send->conn.head = &resources->devMem->head;
   send->conn.ptrExchange = &resources->devMem->ptrExchange;
+  send->conn.redOpArgExchange = resources->devMem->redOpArgExchange;
   return ncclSuccess;
 }
 
@@ -259,7 +279,7 @@ ncclResult_t p2pRecvConnect(struct ncclComm* comm, struct ncclConnect* connectIn
   struct ncclSendMem* remDevMem;
   struct p2pConnectInfo* info = (struct p2pConnectInfo*)connectInfo;
 
-  NCCLCHECK(p2pMap(comm->peerInfo+rank, comm->peerInfo+info->rank, info, (void**)&remDevMem, &resources->ipcPtr));
+  NCCLCHECK(p2pMap(comm->peerInfo+rank, comm->peerInfo+info->rank, info, (void**)&remDevMem, &resources->remIpcPtr));
 
   int offset = 0;
   for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) {
@@ -274,6 +294,7 @@ ncclResult_t p2pRecvConnect(struct ncclComm* comm, struct ncclConnect* connectIn
   recv->conn.tail = &resources->devMem->tail;
   recv->conn.head = &remDevMem->head;
   recv->conn.ptrExchange = &remDevMem->ptrExchange;
+  recv->conn.redOpArgExchange = remDevMem->redOpArgExchange;
   return ncclSuccess;
 }
 
@@ -281,6 +302,8 @@ ncclResult_t p2pSendFree(void* resources) {
   struct p2pSendResources* sendRes = (struct p2pSendResources*)resources;
   if (sendRes->ipcPtr)
     CUDACHECK(cudaIpcCloseMemHandle(sendRes->ipcPtr));
+  if (sendRes->remIpcPtr)
+    CUDACHECK(cudaIpcCloseMemHandle(sendRes->remIpcPtr));
   if (sendRes->remoteId != -1) {
     NCCLCHECK(bootstrapRemFree(sendRes->remoteId, sendRes->memRank, sendRes->bootstrap));
     sendRes->devMem = NULL;
@@ -294,6 +317,8 @@ ncclResult_t p2pRecvFree(void* resources) {
   struct p2pRecvResources* recvRes = (struct p2pRecvResources*)resources;
   if (recvRes->ipcPtr)
     CUDACHECK(cudaIpcCloseMemHandle(recvRes->ipcPtr));
+  if (recvRes->remIpcPtr)
+    CUDACHECK(cudaIpcCloseMemHandle(recvRes->remIpcPtr));
   if (recvRes->remoteId != -1) {
     NCCLCHECK(bootstrapRemFree(recvRes->remoteId, recvRes->memRank, recvRes->bootstrap));
     recvRes->devMem = NULL;

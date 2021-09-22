@@ -507,7 +507,7 @@ ncclResult_t collNetRecvProxy(struct ncclProxyArgs* args) {
         int sharedBuffSlot = sub->transmitted%NCCL_STEPS;
         int startChannel = group*COLLNET_GROUP_NSUBS;
         char* groupRecvAddress;
-        NCCLCHECK(ncclProxySharedBuffersGetCollNet(sub->connector->comm, 1, 1, sharedBuffSlot, startChannel, &groupRecvAddress));
+        NCCLCHECK(ncclProxySharedBuffersGetCollNet(sub->connector->comm, p == NCCL_PROTO_SIMPLE ? resources->useGdr : 0, 1, sharedBuffSlot, startChannel, &groupRecvAddress));
         char* ptr = groupRecvAddress + (s%COLLNET_GROUP_NSUBS)*args->sharedSize[sharedBuffSlot];
         if (p == NCCL_PROTO_SIMPLE) {
           volatile void** ptrsFifo = (volatile void**)resources->recvMem->ptrsFifo;

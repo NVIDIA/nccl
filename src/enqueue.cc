@@ -10,6 +10,8 @@
 #include "gdrwrap.h"
 #include "bootstrap.h"
 
+#include <cstring> // std::memcpy
+
 // Only generate inline kernels for LL
 #define NCCL_FUNC5(func, algo, devredop, dtype) \
   (void*)NCCL_KERN_NAME(func, algo, LL, devredop, dtype), \

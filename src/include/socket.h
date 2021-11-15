@@ -446,9 +446,9 @@ static ncclResult_t socketWait(int op, int fd, union socketAddress *addr, void* 
   return ncclSuccess;
 }
 
-static ncclResult_t socketSend(int fd, union socketAddress *addr, void* ptr, int size) {
+static ncclResult_t socketSend(int fd, union socketAddress *addr, const void* ptr, int size) {
   int offset = 0;
-  NCCLCHECK(socketWait(NCCL_SOCKET_SEND, fd, addr, ptr, size, &offset));
+  NCCLCHECK(socketWait(NCCL_SOCKET_SEND, fd, addr, (void*)ptr, size, &offset));
   return ncclSuccess;
 }
 

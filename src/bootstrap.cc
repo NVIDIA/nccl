@@ -224,9 +224,22 @@ struct extState {
 
 #define MAX_SEGMENTS 128
 
+// Magic number prefixed to remote allocation requests.
+static const int remAllocMagicNumber = 0xDEADC0DE;
+
 static ncclResult_t remoteAlloc(void** ptr, int fd, union socketAddress *addr) {
+  char socketName[SOCKET_NAME_MAXLEN+1];
+  int prefix;
+  NCCLCHECK(socketRecv(fd, addr, &prefix, sizeof(int)));
+  if (prefix != remAllocMagicNumber) {
+    INFO(NCCL_INIT, "[Rem Allocator] invalid request from %s",
+         socketToString(addr, socketName));
+    return ncclInternalError;
+  }
   size_t size;
   NCCLCHECK(socketRecv(fd, addr, &size, sizeof(size_t)));
+  INFO(NCCL_INIT, "[Rem Allocator] allocation of size %zu requested by %s",
+       size, socketToString(addr, socketName));
   cudaIpcMemHandle_t devIpc;
   NCCLCHECK(ncclCudaCalloc((char**)ptr, size));
   cudaError_t res = cudaIpcGetMemHandle(&devIpc, *ptr);
@@ -312,6 +325,7 @@ ncclResult_t bootstrapRemAlloc(size_t size, int rank, void* commState, int* id, 
   *id = -1;
   union socketAddress *addr = state->peerAllocAddresses+rank;
   NCCLCHECK(connectAddress(&fd, addr));
+  NCCLCHECKGOTO(socketSend(fd, addr, &remAllocMagicNumber, sizeof(int)), res, end);
   NCCLCHECKGOTO(socketSend(fd, addr, &size, sizeof(size_t)), res, end);
   NCCLCHECKGOTO(socketRecv(fd, addr, ipc, sizeof(cudaIpcMemHandle_t)), res, end);
   NCCLCHECKGOTO(socketRecv(fd, addr, ptr, sizeof(void*)), res, end);

@@ -25,11 +25,9 @@ ncclResult_t int64ToBusId(int64_t id, char* busId) {
 }
 
 ncclResult_t busIdToInt64(const char* busId, int64_t* id) {
-  const int size = strlen(busId);
-  char* hexStr;
-  NCCLCHECK(ncclCalloc(&hexStr, size));
+  char hexStr[17];  // Longest possible int64 hex string + null terminator.
   int hexOffset = 0;
-  for (int i=0; i<size; i++) {
+  for (int i = 0; hexOffset < sizeof(hexStr) - 1; i++) {
     char c = busId[i];
     if (c == '.' || c == ':') continue;
     if ((c >= '0' && c <= '9') ||
@@ -40,7 +38,6 @@ ncclResult_t busIdToInt64(const char* busId, int64_t* id) {
   }
   hexStr[hexOffset] = '\0';
   *id = strtol(hexStr, NULL, 16);
-  free(hexStr);
   return ncclSuccess;
 }
 

@@ -36,8 +36,8 @@ static ncclResult_t selectTransport(struct ncclComm* comm, struct ncclTopoGraph*
       return ncclSuccess;
     }
   }
-  WARN("No transport found !");
-  return ncclInternalError;
+  WARN("No transport found for rank %d[%lx] -> rank %d[%lx]", myInfo->rank, myInfo->busId, peerInfo->rank, peerInfo->busId);
+  return ncclSystemError;
 }
 
 ncclResult_t ncclTransportP2pConnect(struct ncclComm* comm, struct ncclChannel* channel, int nrecv, int* peerRecv, int nsend, int* peerSend, int connIndex) {

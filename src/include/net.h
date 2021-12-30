@@ -31,7 +31,6 @@ static ncclResult_t ncclNetCloseRecv(void* recvComm) { NCCLCHECK(ncclNet->closeR
 static ncclResult_t ncclNetCloseListen(void* listenComm) { NCCLCHECK(ncclNet->closeListen(listenComm)); return ncclSuccess; }
 
 // Test whether the current GPU support GPU Direct RDMA.
-#define GPU_BUF_SIZE (2*1024*1024)
 static ncclResult_t ncclGpuGdrSupport(int* gdrSupport) {
   int netDevs;
   NCCLCHECK(ncclNetDevices(&netDevs));
@@ -40,35 +39,10 @@ static ncclResult_t ncclGpuGdrSupport(int* gdrSupport) {
     // Find a net device which is GDR-capable
     ncclNetProperties_t props;
     NCCLCHECK(ncclNet->getProperties(dev, &props));
-    if ((props.ptrSupport & NCCL_PTR_CUDA) == 0) continue;
-
-    // Allocate memory on the GPU and try to register it on the NIC.
-    void *lComm = NULL, *sComm = NULL, *rComm = NULL;
-    ncclNetHandle_t handle;
-    void* gpuPtr = NULL;
-    void* mHandle = NULL;
-    ncclResult_t ret;
-    ncclDebugNoWarn = NCCL_NET;
-    NCCLCHECKGOTO(ncclNetListen(dev, &handle, &lComm), ret, cleanup1);
-    NCCLCHECKGOTO(ncclNetConnect(dev, &handle, &sComm), ret, cleanup2);
-    NCCLCHECKGOTO(ncclNetAccept(lComm, &rComm), ret, cleanup3);
-    CUDACHECKGOTO(cudaMalloc(&gpuPtr, GPU_BUF_SIZE), ret, cleanup4);
-    if (ncclNetRegMr(sComm, gpuPtr, GPU_BUF_SIZE, NCCL_PTR_CUDA, &mHandle) == ncclSuccess) {
-      NCCLCHECK(ncclNetDeregMr(sComm, mHandle));
-      NCCLCHECK(ncclNetRegMr(rComm, gpuPtr, GPU_BUF_SIZE, NCCL_PTR_CUDA, &mHandle));
-      NCCLCHECK(ncclNetDeregMr(rComm, mHandle));
+    if ((props.ptrSupport & NCCL_PTR_CUDA) != 0) {
       *gdrSupport = 1;
+      break;
     }
-    ncclDebugNoWarn = 0;
-    CUDACHECK(cudaFree(gpuPtr));
-cleanup4:
-    NCCLCHECK(ncclNetCloseRecv(rComm));
-cleanup3:
-    NCCLCHECK(ncclNetCloseSend(sComm));
-cleanup2:
-    NCCLCHECK(ncclNetCloseListen(lComm));
-cleanup1:
-    break;
   }
   return ncclSuccess;
 }

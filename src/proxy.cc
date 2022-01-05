@@ -223,15 +223,19 @@ ncclResult_t ncclProxySaveColl(struct ncclProxyArgs* args, int nranks) {
   }
   if (pattern == ncclPatternTreeUp || pattern == ncclPatternTreeUpDown) {
     // Tree up
-    struct ncclTree* tree = &channel->tree;
-    for (int i=0; i<NCCL_MAX_TREE_ARITY; i++) NCCLCHECK(SaveProxy(proxyRecv, tree->down[i], args, 0));
-    NCCLCHECK(SaveProxy(proxySend, tree->up, args, 0));
+    for (int t=0; t<NTREES; t++) { // for both trees in a channel
+      struct ncclTree* tree = channel->tree + t;
+      for (int i=0; i<NCCL_MAX_TREE_ARITY; i++) NCCLCHECK(SaveProxy(proxyRecv, tree->down[i], args, t));
+      NCCLCHECK(SaveProxy(proxySend, tree->up, args, t));
+    }
   }
   if (pattern == ncclPatternTreeDown || pattern == ncclPatternTreeUpDown) {
     // Tree down
-    struct ncclTree* tree = &channel->tree;
-    for (int i=0; i< NCCL_MAX_TREE_ARITY; i++) NCCLCHECK(SaveProxy(proxySend, tree->down[i], args, 0));
-    NCCLCHECK(SaveProxy(proxyRecv, tree->up, args, 0));
+    for (int t=0; t<NTREES; t++) { // for both trees in a channel
+      struct ncclTree* tree = channel->tree + t;
+      for (int i=0; i< NCCL_MAX_TREE_ARITY; i++) NCCLCHECK(SaveProxy(proxySend, tree->down[i], args, t));
+      NCCLCHECK(SaveProxy(proxyRecv, tree->up, args, t));
+    }
   }
   if (pattern == ncclPatternCollTreeUpDown) {
     // CollTree up

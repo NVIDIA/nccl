@@ -204,11 +204,12 @@ struct ncclWork {
   };
 };
 
+#define NTREES 2
 struct ncclChannel {
   union {
     struct {
       struct ncclRing ring;
-      struct ncclTree tree;
+      struct ncclTree tree[NTREES];
       struct ncclDirect collTree;
 
       int id;

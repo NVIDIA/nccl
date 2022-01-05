@@ -453,6 +453,10 @@ static ncclResult_t getAlgoInfo(struct ncclInfo* info, int collNetTypeSupport, i
     if (info->algorithm == NCCL_ALGO_TREE) nt += 3*WARP_SIZE;
     if (info->algorithm == NCCL_ALGO_COLLNET) nt += 3*WARP_SIZE;
   }
+  // Each tree requires a minimum of 64 threads
+  if (info->algorithm == NCCL_ALGO_TREE) {
+    nt = std::max(nt, 64*NTREES);
+  }
   info->nChannels = nc;
   info->nThreads = nt;
   return ncclSuccess;
@@ -481,6 +485,7 @@ static ncclResult_t getLoopInfo(struct ncclInfo* info) {
     case ncclPatternTreeUp:
     case ncclPatternTreeDown:
     case ncclPatternTreeUpDown:
+      info->nstepsPerLoop = 1; info-> nchunksPerLoop = NTREES; break;
     case ncclPatternPipelineFrom:
     case ncclPatternPipelineTo:
       info->nstepsPerLoop = info-> nchunksPerLoop = 1; break;
@@ -537,9 +542,9 @@ comp_next:
   if (info->algorithm == NCCL_ALGO_TREE && info->protocol == NCCL_PROTO_SIMPLE) {
     if (info->pattern == ncclPatternTreeUpDown) {
       // Optimize chunkSize / nSteps
-      while (info->nBytes / (info->nChannels*chunkSize) < info->comm->channels[0].tree.depth*8 && chunkSize > 131072) chunkSize /= 2;
-      while (info->nBytes / (info->nChannels*chunkSize) < info->comm->channels[0].tree.depth*4 && chunkSize > 65536) chunkSize /= 2;
-      while (info->nBytes / (info->nChannels*chunkSize) < info->comm->channels[0].tree.depth && chunkSize > 32768) chunkSize /= 2;
+      while (info->nBytes / (info->nChannels*chunkSize) < info->comm->channels[0].tree[0].depth*8 && chunkSize > 131072) chunkSize /= 2;
+      while (info->nBytes / (info->nChannels*chunkSize) < info->comm->channels[0].tree[0].depth*4 && chunkSize > 65536) chunkSize /= 2;
+      while (info->nBytes / (info->nChannels*chunkSize) < info->comm->channels[0].tree[0].depth && chunkSize > 32768) chunkSize /= 2;
     }
     // Use lastChunkSize as chunkSize
     work->coll.lastChunkSize = chunkSize / ncclTypeSize(info->datatype);

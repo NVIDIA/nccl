@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2017-2021, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2017-2022, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -9,6 +9,7 @@
 
 #include "collectives.h"
 #include "devcomm.h"
+#include "op128.h"
 
 #if __CUDA_ARCH__ >= 800
 #define COLL_UNROLL 8
@@ -23,9 +24,29 @@ __device__ inline bool barrierReduceAny(int bit) {
   asm ("{"
     ".reg .pred barr_pred;"
     "setp.eq.u32 barr_pred, %1, 1;"
-    "bar.red.popc.u32 %0, 0, barr_pred;"
+    "bar.red.popc.u32 %0, 2, barr_pred;"
   "}" : "=r"(popc) : "r"(bit));
   return popc != 0;
+}
+
+// Copy src to dst and fill extra size with zeroes
+template<typename Tdst, typename Tsrc>
+__device__ void copyToShmem(Tdst *dst, Tsrc const *src, int tid, int nthreads) {
+  static_assert(sizeof(Tdst)%(2*sizeof(uint64_t)) == 0 && sizeof(Tsrc)%(2*sizeof(uint64_t)) == 0,
+      "copyToShmem needs sizes which are multiple of 16B");
+  static_assert(sizeof(Tdst) >= sizeof(Tsrc), "Tdst size is too small");
+  static_assert(sizeof(Tdst) <= WARP_SIZE*2*sizeof(uint64_t), "copyToShmem limited to 512B to make sure it can always be done in one cycle");
+  uint64_t *d = reinterpret_cast<uint64_t*>(dst);
+  uint64_t const *s = reinterpret_cast<uint64_t const*>(src);
+  uint64_t *shmemPtr = shmemCvtPtr(d);
+  int offset = 2*tid;
+  uint64_t v0, v1;
+  if (offset >= sizeof(Tsrc)/sizeof(uint64_t)) {
+    v0 = v1 = 0ULL;
+  } else {
+    v0 = s[offset] ; v1 = s[offset+1];
+  }
+  if (offset < sizeof(Tdst)/sizeof(uint64_t)) storeShmem128(shmemPtr+offset, v0, v1);
 }
 
 template<typename T>
@@ -67,41 +88,16 @@ struct RunWorkElement {
   }
 };
 
-#if CUDART_VERSION >= 11030
-__device__ constexpr int ncclWorkElemFactors[NCCL_NUM_ALGORITHMS] =
-#else
-static __device__ __constant__ int ncclWorkElemFactors[NCCL_NUM_ALGORITHMS] =
-#endif
-{/*Tree*/1, /*Ring and P2P*/1, /*CollNet*/NCCL_REG_ELEM_FACTOR};
-
 template<ncclFunc_t Fn, typename T, typename RedOp, int Algo, int Proto>
 struct RunWork {
   // This __forceinline__ is necessary. The compiler was inserting a function call
   // here from the LL ncclKernel.
   __device__ __forceinline__ void run(ncclWork *w) {
-    int tid = threadIdx.x;
-    /* Some invariants that must hold:
-     * 1. All elems[] have same funcIndex.
-     * 2. All elems[] have same nThreads.
-     * 3. The thread-to-group relation (as in prims group numbers) is the same
-     *    for all elems[].
-     *
-     * If (1) isn't true then we might be in the wrong function since dispatch
-     * on ncclFuncs[w->funcIndex] is how we got here.
-     *
-     * If (2) or (3) aren't true, then threads from different work elements
-     * could race for barrier resources (barrier numbers 0...15) which is fatal.
-     *
-     * IMPORTANT!!! To ensure (3), implementations of
-     * `RunWorkElement<Fn,T,RedOp,Algo,Proto>::run()` may only use the following
-     * when deciding how to map threads to groups:
-     *    Fn, T, RedOp, Algo, Proto, nThreads
-     *
-     * This last one is difficult to enforce so I hope everyone reads this.
-     */
-    if (tid < w->elems[0].nThreads) {
-      #pragma unroll 1
-      for(int e=0; e < NCCL_MAX_WORK_ELEMENTS && w->elems[e].active != 0; e+=ncclWorkElemFactors[Algo])
+    int wid = threadIdx.x / WARP_SIZE;
+    int inc = w->header.type == ncclWorkTypeRegColl ? sizeof(ncclWorkElemReg) / sizeof(ncclWorkElem) : 1;
+    #pragma unroll 1
+    for(int e=0; e < NCCL_MAX_WORK_ELEMENTS && w->elems[e].header.type != ncclWorkTypeUnused; e += inc) {
+      if (wid < w->header.nWarps)
         RunWorkElement<Fn, T, RedOp, Algo, Proto>().run(&w->elems[e]);
     }
   }
@@ -124,30 +120,51 @@ struct ncclShmemData {
     struct ncclShmemGroup groups[NCCL_MAX_GROUPS];
   };
   uint64_t redOpArgs[NCCL_MAX_DIRECT_ARITY+1];
-  ncclDevComm comm;
-  ncclChannel channel;
-  ncclWork work;
+  struct ncclDevComm comm;
+  struct ncclChannel channel;
+  uint64_t pad;
+  struct ncclWork work;
 };
+static_assert(offsetof(struct ncclShmemData, work)%16 == 0, "shmem.work needs to be 16B aligned");
+
+static __device__ void ncclRedopPtrDeref(struct ncclWorkElem* we) {
+  if (we->header.type != ncclWorkTypeUnused && we->redOpArgIsPtr) {
+    /* redOpArg is a pointer to the scalar value, so we'll dereference it
+     * here so that redOpArg holds the bits of the scalar going forward.
+     * The tricky thing is we don't know its type T since that's encoded in
+     * the funcIndex. Because it would be difficult to get sizeof(T) from
+     * funcIndex, we'll cheat and just dereference the largest possible size
+     * given the alignment of the pointer. We might be reading in more bytes
+     * than we need but that's harmless.
+     */
+    if (we->redOpArg%2 != 0)
+      we->redOpArg = *reinterpret_cast<uint8_t*>(we->redOpArg);
+    else if (we->redOpArg%4 != 0)
+      we->redOpArg = *reinterpret_cast<uint16_t*>(we->redOpArg);
+    else if (we->redOpArg%8 != 0)
+      we->redOpArg = *reinterpret_cast<uint32_t*>(we->redOpArg);
+    else
+      we->redOpArg = *reinterpret_cast<uint64_t*>(we->redOpArg);
+  }
+}
 
 extern __shared__ ncclShmemData ncclShmem;
 
 template<ncclFunc_t Fn, typename T, typename RedOp, int Algo, int Proto, int FnIndex>
-__device__ void ncclKernel(ncclWorkElem first)  {
+__device__ void ncclKernel(struct ncclDevComm* comm, ncclWorkElem first)  {
   int tid = threadIdx.x;
+  int nthreads = blockDim.x;
   int bid = blockIdx.x;
 
-  int turn = copyToShmem(&ncclShmem.comm, first.comm);
+  int turn = copyToShmem(&ncclShmem.comm, comm);
   // get address of channel without incurring indirect load from ncclDevCom::channels
-  ncclChannel *channel = &((ncclDevCommAndChannels*)first.comm)->channels[bid];
+  ncclChannel *channel = &((ncclDevCommAndChannels*)comm)->channels[bid];
   turn = copyToShmem(&ncclShmem.channel, channel, turn);
 
   // To optimize for latency, (only) the first operation is passed as argument.
-  if (bid == 0 && first.active != 0) {
-    turn = copyToShmem(&ncclShmem.work.elems[0], &first, turn);
-    if (1 <= tid && tid < NCCL_MAX_WORK_ELEMENTS && tid % ncclWorkElemFactors[Algo] == 0) {
-      ncclShmem.work.elems[tid].active = 0;
-      ncclShmem.work.elems[tid].redOpArgIsPtr = 0;
-    }
+  if (bid == 0 && first.header.type != ncclWorkTypeUnused) {
+    // Copy first elem to work and zero out the rest
+    copyToShmem(&ncclShmem.work, &first, tid, nthreads);
   }
   __syncthreads(); // publish ncclShmem
 
@@ -155,17 +172,17 @@ __device__ void ncclKernel(ncclWorkElem first)  {
   ncclWork *workFifoDev = ncclShmem.channel.workFifoDev;
   int workFifoIx = ncclShmem.channel.index;
 
-  if (bid == 0 && first.active != 0)
+  if (bid == 0 && first.header.type != ncclWorkTypeUnused)
     goto SkipLoadWork;
 
   while (true) {
-    copyToShmem(&ncclShmem.work, &workFifoDev[workFifoIx]); // turn no longer helps
+    copyToShmem(&ncclShmem.work, &workFifoDev[workFifoIx], tid, nthreads);
     { // Check whether the last operation was aborted and make sure all threads exit
-      int aborted = tid == 0 ? *ncclShmem.comm.abortFlag : 0;
+      int aborted = tid == 0 ? *comm->abortFlag : 0;
       if (barrierReduceAny(aborted)) // publish ncclShmem.work
         break;
       if (tid == 0)
-        workFifoHost[workFifoIx].elems[0].active = 0;
+        workFifoHost[workFifoIx].header.type = ncclWorkTypeUnused;
     }
 
   SkipLoadWork:
@@ -173,36 +190,20 @@ __device__ void ncclKernel(ncclWorkElem first)  {
     if (tid == 0)
       channel->index = workFifoIx; // write back to real channel, not shmem shadow
 
-    if (tid < NCCL_MAX_WORK_ELEMENTS && tid % ncclWorkElemFactors[Algo] == 0) {
-      ncclWorkElem *we = &ncclShmem.work.elems[tid];
-      if (we->redOpArgIsPtr && we->active != 0) {
-        /* redOpArg is a pointer to the scalar value, so we'll dereference it
-         * here so that redOpArg holds the bits of the scalar going forward.
-         * The tricky thing is we don't know its type T since that's encoded in
-         * the funcIndex. Because it would be difficult to get sizeof(T) from
-         * funcIndex, we'll cheat and just dereference the largest possible size
-         * given the alignment of the pointer. We might be reading in more bytes
-         * than we need but that's harmless.
-         */
-        if (we->coll.redOpArg%2 != 0)
-          we->coll.redOpArg = *reinterpret_cast<uint8_t*>(we->coll.redOpArg);
-        else if (we->coll.redOpArg%4 != 0)
-          we->coll.redOpArg = *reinterpret_cast<uint16_t*>(we->coll.redOpArg);
-        else if (we->coll.redOpArg%8 != 0)
-          we->coll.redOpArg = *reinterpret_cast<uint32_t*>(we->coll.redOpArg);
-        else
-          we->coll.redOpArg = *reinterpret_cast<uint64_t*>(we->coll.redOpArg);
-      }
+    __syncwarp();
+    if (ncclShmem.work.header.type == ncclWorkTypeColl) {
+      if (tid < NCCL_MAX_WORK_ELEMENTS) ncclRedopPtrDeref(&ncclShmem.work.elems[tid]);
+    } else if (ncclShmem.work.header.type == ncclWorkTypeRegColl) {
+      if (tid < NCCL_MAX_WORK_ELEMENTS_REG) ncclRedopPtrDeref(&ncclShmem.work.regElems[tid].elem);
     }
     __syncthreads();
 
-    if (ncclShmem.work.elems[0].funcIndex == FnIndex)
+    if (ncclShmem.work.header.funcIndex == FnIndex)
       RunWork<Fn, T, RedOp, Algo, Proto>().run(&ncclShmem.work);
     else
-      ncclFuncs[ncclShmem.work.elems[0].funcIndex]();
+      ncclFuncs[ncclShmem.work.header.funcIndex]();
 
-    if (ncclShmem.work.elems[0].active == 2)
-      break;
+    if (ncclShmem.work.header.isLast) break;
     __syncthreads();
   }
 }
@@ -210,8 +211,8 @@ __device__ void ncclKernel(ncclWorkElem first)  {
 // Only generate kernels for SUM
 #if NCCL_OP == 0
 #define IMPL_COLL_KERN(func, algo, proto, devredop, type, fIndex) \
-__global__ void NCCL_KERN_NAME(func, algo, proto, devredop, type)(ncclWorkElem first) { \
-  ncclKernel<ncclFunc##func, type, Func##devredop<type>, NCCL_ALGO_##algo, NCCL_PROTO_##proto, fIndex>(first); \
+__global__ void NCCL_KERN_NAME(func, algo, proto, devredop, type)(struct ncclDevComm* comm, struct ncclWorkElem first) { \
+  ncclKernel<ncclFunc##func, type, Func##devredop<type>, NCCL_ALGO_##algo, NCCL_PROTO_##proto, fIndex>(comm, first); \
 }
 #else
 #define IMPL_COLL_KERN(func, algo, proto, devredop, type, fInded)

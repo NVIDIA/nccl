@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2022, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -29,6 +29,6 @@ static ncclResult_t collNetTest(void* request, int* done, int* size) { NCCLCHECK
 static ncclResult_t collNetCloseColl(void* collComm) { NCCLCHECK(ncclCollNet->closeColl(collComm)); return ncclSuccess; }
 static ncclResult_t collNetCloseListen(void* listenComm) { NCCLCHECK(ncclCollNet->closeListen(listenComm)); return ncclSuccess; }
 
-static int collNetSupport() { return ncclCollNet != NULL ? 1 : 0; }
+static int collNetSupport() { return ncclCollNet != nullptr ? 1 : 0; }
 
 #endif

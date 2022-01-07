@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2022, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -29,6 +29,7 @@ int (*ibv_internal_query_qp)(struct ibv_qp *qp, struct ibv_qp_attr *attr, int at
 struct ibv_pd * (*ibv_internal_alloc_pd)(struct ibv_context *context);
 int (*ibv_internal_dealloc_pd)(struct ibv_pd *pd);
 struct ibv_mr * (*ibv_internal_reg_mr)(struct ibv_pd *pd, void *addr, size_t length, int access);
+struct ibv_mr * (*ibv_internal_reg_mr_iova2)(struct ibv_pd *pd, void *addr, size_t length, uint64_t iova, int access);
 int (*ibv_internal_dereg_mr)(struct ibv_mr *mr);
 struct ibv_cq * (*ibv_internal_create_cq)(struct ibv_context *context, int cqe, void *cq_context, struct ibv_comp_channel *channel, int comp_vector);
 int (*ibv_internal_destroy_cq)(struct ibv_cq *cq);
@@ -65,7 +66,7 @@ ncclResult_t wrap_ibv_symbols(void) {
     }
   }
 
-#define LOAD_SYM(handle, symbol, funcptr) do {         \
+#define LOAD_SYM(handle, symbol, funcptr) do {           \
     cast = (void**)&funcptr;                             \
     tmp = dlvsym(handle, symbol, IBVERBS_VERSION);       \
     if (tmp == NULL) {                                   \
@@ -73,6 +74,12 @@ ncclResult_t wrap_ibv_symbols(void) {
       goto teardown;                                     \
     }                                                    \
     *cast = tmp;                                         \
+  } while (0)
+
+// Attempt to load a specific symbol version - fail silently
+#define LOAD_SYM_VERSION(handle, symbol, funcptr, version) do {  \
+    cast = (void**)&funcptr;                                     \
+    *cast = dlvsym(handle, symbol, version);                     \
   } while (0)
 
   LOAD_SYM(ibvhandle, "ibv_get_device_list", ibv_internal_get_device_list);
@@ -89,6 +96,8 @@ ncclResult_t wrap_ibv_symbols(void) {
   LOAD_SYM(ibvhandle, "ibv_alloc_pd", ibv_internal_alloc_pd);
   LOAD_SYM(ibvhandle, "ibv_dealloc_pd", ibv_internal_dealloc_pd);
   LOAD_SYM(ibvhandle, "ibv_reg_mr", ibv_internal_reg_mr);
+  // Cherry-pick the ibv_reg_mr_iova2 API from IBVERBS 1.8
+  LOAD_SYM_VERSION(ibvhandle, "ibv_reg_mr_iova2", ibv_internal_reg_mr_iova2, "IBVERBS_1.8");
   LOAD_SYM(ibvhandle, "ibv_dereg_mr", ibv_internal_dereg_mr);
   LOAD_SYM(ibvhandle, "ibv_create_cq", ibv_internal_create_cq);
   LOAD_SYM(ibvhandle, "ibv_destroy_cq", ibv_internal_destroy_cq);
@@ -116,6 +125,7 @@ teardown:
   ibv_internal_alloc_pd = NULL;
   ibv_internal_dealloc_pd = NULL;
   ibv_internal_reg_mr = NULL;
+  ibv_internal_reg_mr_iova2 = NULL;
   ibv_internal_dereg_mr = NULL;
   ibv_internal_create_cq = NULL;
   ibv_internal_destroy_cq = NULL;
@@ -258,6 +268,14 @@ struct ibv_mr * wrap_direct_ibv_reg_mr(struct ibv_pd *pd, void *addr, size_t len
     return NULL;
   }
   return ibv_internal_reg_mr(pd, addr, length, access);
+}
+
+ncclResult_t wrap_ibv_reg_mr_iova2(struct ibv_mr **ret, struct ibv_pd *pd, void *addr, size_t length, uint64_t iova, int access) {
+  if (ibv_internal_reg_mr_iova2 == NULL) {
+    return ncclInternalError;
+  }
+  if (ret == NULL) { return ncclSuccess; } // Assume dummy call
+  IBV_PTR_CHECK(ibv_internal_reg_mr_iova2, ibv_internal_reg_mr_iova2(pd, addr, length, iova, access), *ret, NULL, "ibv_reg_mr_iova2");
 }
 
 ncclResult_t wrap_ibv_dereg_mr(struct ibv_mr *mr) { /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/

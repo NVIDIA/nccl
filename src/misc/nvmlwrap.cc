@@ -1,219 +1,262 @@
 /*************************************************************************
- * Copyright (c) 2015-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2022, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
 
 #include "nvmlwrap.h"
+#include "checks.h"
+#include "debug.h"
 
-#ifndef NVML_DIRECT
-#include <dlfcn.h>
-#include "core.h"
+#include <initializer_list>
+#include <memory>
+#include <mutex>
 
-static enum { nvmlUninitialized, nvmlInitializing, nvmlInitialized, nvmlError } nvmlState = nvmlUninitialized;
+int ncclNvmlDeviceCount = 0;
+ncclNvmlDeviceInfo ncclNvmlDevices[ncclNvmlMaxDevices];
+ncclNvmlDevicePairInfo ncclNvmlDevicePairs[ncclNvmlMaxDevices][ncclNvmlMaxDevices];
 
-static nvmlReturn_t (*nvmlInternalInit)(void);
-static nvmlReturn_t (*nvmlInternalShutdown)(void);
-static nvmlReturn_t (*nvmlInternalDeviceGetHandleByPciBusId)(const char* pciBusId, nvmlDevice_t* device);
-static nvmlReturn_t (*nvmlInternalDeviceGetIndex)(nvmlDevice_t device, unsigned* index);
-static const char* (*nvmlInternalErrorString)(nvmlReturn_t r);
-static nvmlReturn_t (*nvmlInternalDeviceGetNvLinkState)(nvmlDevice_t device, unsigned int link, nvmlEnableState_t *isActive);
-static nvmlReturn_t (*nvmlInternalDeviceGetNvLinkRemotePciInfo)(nvmlDevice_t device, unsigned int link, nvmlPciInfo_t *pci);
-static nvmlReturn_t (*nvmlInternalDeviceGetNvLinkCapability)(nvmlDevice_t device, unsigned int link,
-    nvmlNvLinkCapability_t capability, unsigned int *capResult);
-static nvmlReturn_t (*nvmlInternalDeviceGetCudaComputeCapability)(nvmlDevice_t device, int* major, int* minor);
-
-// Used to make the NVML library calls thread safe
-pthread_mutex_t nvmlLock = PTHREAD_MUTEX_INITIALIZER;
-
-ncclResult_t wrapNvmlSymbols(void) {
-  if (nvmlState == nvmlInitialized)
-    return ncclSuccess;
-  if (nvmlState == nvmlError)
-    return ncclSystemError;
-
-  if (__sync_bool_compare_and_swap(&nvmlState, nvmlUninitialized, nvmlInitializing) == false) {
-    // Another thread raced in front of us. Wait for it to be done.
-    while (nvmlState == nvmlInitializing) pthread_yield();
-    return (nvmlState == nvmlInitialized) ? ncclSuccess : ncclSystemError;
-  }
-
-  static void* nvmlhandle = NULL;
-  void* tmp;
-  void** cast;
-
-  nvmlhandle=dlopen("libnvidia-ml.so.1", RTLD_NOW);
-  if (!nvmlhandle) {
-    WARN("Failed to open libnvidia-ml.so.1");
-    goto teardown;
-  }
-
-#define LOAD_SYM(handle, symbol, funcptr) do {         \
-    cast = (void**)&funcptr;                             \
-    tmp = dlsym(handle, symbol);                         \
-    if (tmp == NULL) {                                   \
-      WARN("dlsym failed on %s - %s", symbol, dlerror());\
-      goto teardown;                                     \
-    }                                                    \
-    *cast = tmp;                                         \
-  } while (0)
-
-#define LOAD_SYM_OPTIONAL(handle, symbol, funcptr) do {\
-    cast = (void**)&funcptr;                             \
-    tmp = dlsym(handle, symbol);                         \
-    if (tmp == NULL) {                                   \
-      INFO(NCCL_INIT,"dlsym failed on %s, ignoring", symbol); \
-    }                                                    \
-    *cast = tmp;                                         \
-  } while (0)
-
-  LOAD_SYM(nvmlhandle, "nvmlInit", nvmlInternalInit);
-  LOAD_SYM(nvmlhandle, "nvmlShutdown", nvmlInternalShutdown);
-  LOAD_SYM(nvmlhandle, "nvmlDeviceGetHandleByPciBusId", nvmlInternalDeviceGetHandleByPciBusId);
-  LOAD_SYM(nvmlhandle, "nvmlDeviceGetIndex", nvmlInternalDeviceGetIndex);
-  LOAD_SYM(nvmlhandle, "nvmlErrorString", nvmlInternalErrorString);
-  LOAD_SYM_OPTIONAL(nvmlhandle, "nvmlDeviceGetNvLinkState", nvmlInternalDeviceGetNvLinkState);
-  LOAD_SYM_OPTIONAL(nvmlhandle, "nvmlDeviceGetNvLinkRemotePciInfo", nvmlInternalDeviceGetNvLinkRemotePciInfo);
-  LOAD_SYM_OPTIONAL(nvmlhandle, "nvmlDeviceGetNvLinkCapability", nvmlInternalDeviceGetNvLinkCapability);
-  LOAD_SYM(nvmlhandle, "nvmlDeviceGetCudaComputeCapability", nvmlInternalDeviceGetCudaComputeCapability);
-
-  nvmlState = nvmlInitialized;
-  return ncclSuccess;
-
-teardown:
-  nvmlInternalInit = NULL;
-  nvmlInternalShutdown = NULL;
-  nvmlInternalDeviceGetHandleByPciBusId = NULL;
-  nvmlInternalDeviceGetIndex = NULL;
-  nvmlInternalDeviceGetNvLinkState = NULL;
-  nvmlInternalDeviceGetNvLinkRemotePciInfo = NULL;
-  nvmlInternalDeviceGetNvLinkCapability = NULL;
-
-  if (nvmlhandle != NULL) dlclose(nvmlhandle);
-  nvmlState = nvmlError;
-  return ncclSystemError;
-}
-
-
-ncclResult_t wrapNvmlInit(void) {
-  if (nvmlInternalInit == NULL) {
-    WARN("lib wrapper not initialized.");
-    return ncclInternalError;
-  }
-  nvmlReturn_t ret = nvmlInternalInit();
-  if (ret != NVML_SUCCESS) {
-    WARN("nvmlInit() failed: %s",
-        nvmlInternalErrorString(ret));
-    return ncclSystemError;
-  }
-  return ncclSuccess;
-}
-
-ncclResult_t wrapNvmlShutdown(void) {
-  if (nvmlInternalShutdown == NULL) {
-    WARN("lib wrapper not initialized.");
-    return ncclInternalError;
-  }
-  nvmlReturn_t ret = nvmlInternalShutdown();
-  if (ret != NVML_SUCCESS) {
-    WARN("nvmlShutdown() failed: %s ",
-        nvmlInternalErrorString(ret));
-    return ncclSystemError;
-  }
-  return ncclSuccess;
-}
-
-ncclResult_t wrapNvmlDeviceGetHandleByPciBusId(const char* pciBusId, nvmlDevice_t* device) {
-  if (nvmlInternalDeviceGetHandleByPciBusId == NULL) {
-    WARN("lib wrapper not initialized.");
-    return ncclInternalError;
-  }
-  nvmlReturn_t ret;
-  NVMLLOCKCALL(nvmlInternalDeviceGetHandleByPciBusId(pciBusId, device), ret);
-  if (ret != NVML_SUCCESS) {
-    WARN("nvmlDeviceGetHandleByPciBusId() failed: %s ",
-        nvmlInternalErrorString(ret));
-    return ncclSystemError;
-  }
-  return ncclSuccess;
-}
-
-ncclResult_t wrapNvmlDeviceGetIndex(nvmlDevice_t device, unsigned* index) {
-  if (nvmlInternalDeviceGetIndex == NULL) {
-    WARN("lib wrapper not initialized.");
-    return ncclInternalError;
-  }
-  nvmlReturn_t ret;
-  NVMLLOCKCALL(nvmlInternalDeviceGetIndex(device, index), ret);
-  if (ret != NVML_SUCCESS) {
-    WARN("nvmlDeviceGetIndex() failed: %s ",
-        nvmlInternalErrorString(ret));
-    return ncclSystemError;
-  }
-  return ncclSuccess;
-}
-
-ncclResult_t wrapNvmlDeviceGetNvLinkState(nvmlDevice_t device, unsigned int link, nvmlEnableState_t *isActive) {
-  if (nvmlInternalDeviceGetNvLinkState == NULL) {
-    /* Do not warn, this symbol is optional. */
-    return ncclInternalError;
-  }
-  nvmlReturn_t ret;
-  NVMLLOCKCALL(nvmlInternalDeviceGetNvLinkState(device, link, isActive), ret);
-  if (ret != NVML_SUCCESS) {
-    if (ret != NVML_ERROR_NOT_SUPPORTED)
-      INFO(NCCL_INIT,"nvmlDeviceGetNvLinkState() failed: %s ",
-          nvmlInternalErrorString(ret));
-    return ncclSystemError;
-  }
-  return ncclSuccess;
-}
-
-ncclResult_t wrapNvmlDeviceGetNvLinkRemotePciInfo(nvmlDevice_t device, unsigned int link, nvmlPciInfo_t *pci) {
-  if (nvmlInternalDeviceGetNvLinkRemotePciInfo == NULL) {
-    /* Do not warn, this symbol is optional. */
-    return ncclInternalError;
-  }
-  nvmlReturn_t ret;
-  NVMLLOCKCALL(nvmlInternalDeviceGetNvLinkRemotePciInfo(device, link, pci), ret);
-  if (ret != NVML_SUCCESS) {
-    if (ret != NVML_ERROR_NOT_SUPPORTED)
-      INFO(NCCL_INIT,"nvmlDeviceGetNvLinkRemotePciInfo() failed: %s ",
-          nvmlInternalErrorString(ret));
-    return ncclSystemError;
-  }
-  return ncclSuccess;
-}
-
-ncclResult_t wrapNvmlDeviceGetNvLinkCapability(nvmlDevice_t device, unsigned int link,
-    nvmlNvLinkCapability_t capability, unsigned int *capResult) {
-  if (nvmlInternalDeviceGetNvLinkCapability == NULL) {
-    /* Do not warn, this symbol is optional. */
-    return ncclInternalError;
-  }
-  nvmlReturn_t ret;
-  NVMLLOCKCALL(nvmlInternalDeviceGetNvLinkCapability(device, link, capability, capResult), ret);
-  if (ret != NVML_SUCCESS) {
-    if (ret != NVML_ERROR_NOT_SUPPORTED)
-      INFO(NCCL_INIT,"nvmlDeviceGetNvLinkCapability() failed: %s ",
-          nvmlInternalErrorString(ret));
-    return ncclSystemError;
-  }
-  return ncclSuccess;
-}
-
-ncclResult_t wrapNvmlDeviceGetCudaComputeCapability(nvmlDevice_t device, int* major, int* minor) {
-  if (nvmlInternalDeviceGetNvLinkCapability == NULL) {
-    WARN("lib wrapper not initialized.");
-    return ncclInternalError;
-  }
-  nvmlReturn_t ret;
-  NVMLLOCKCALL(nvmlInternalDeviceGetCudaComputeCapability(device, major, minor), ret);
-  if (ret != NVML_SUCCESS) {
-    WARN("nvmlDeviceGetCudaComputeCapability() failed: %s ",
-        nvmlInternalErrorString(ret));
-    return ncclSystemError;
-  }
-  return ncclSuccess;
-}
+#if NCCL_NVML_DIRECT
+  #define NCCL_NVML_FN(name, rettype, arglist) constexpr rettype(*pfn_##name)arglist = name;
+#else
+  #include <dlfcn.h>
+  #define NCCL_NVML_FN(name, rettype, arglist) rettype(*pfn_##name)arglist = nullptr;
 #endif
+
+namespace {
+  NCCL_NVML_FN(nvmlInit, nvmlReturn_t, ())
+  NCCL_NVML_FN(nvmlInit_v2, nvmlReturn_t, ())
+  NCCL_NVML_FN(nvmlShutdown, nvmlReturn_t, ())
+  NCCL_NVML_FN(nvmlDeviceGetCount, nvmlReturn_t, (unsigned int*))
+  NCCL_NVML_FN(nvmlDeviceGetCount_v2, nvmlReturn_t, (unsigned int*))
+  NCCL_NVML_FN(nvmlDeviceGetHandleByPciBusId, nvmlReturn_t, (const char* pciBusId, nvmlDevice_t* device))
+  NCCL_NVML_FN(nvmlDeviceGetHandleByIndex, nvmlReturn_t, (unsigned int index, nvmlDevice_t *device))
+  NCCL_NVML_FN(nvmlDeviceGetIndex, nvmlReturn_t, (nvmlDevice_t device, unsigned* index))
+  NCCL_NVML_FN(nvmlErrorString, char const*, (nvmlReturn_t r))
+  NCCL_NVML_FN(nvmlDeviceGetNvLinkState, nvmlReturn_t, (nvmlDevice_t device, unsigned int link, nvmlEnableState_t *isActive))
+  NCCL_NVML_FN(nvmlDeviceGetNvLinkRemotePciInfo, nvmlReturn_t, (nvmlDevice_t device, unsigned int link, nvmlPciInfo_t *pci))
+  NCCL_NVML_FN(nvmlDeviceGetNvLinkCapability, nvmlReturn_t, (nvmlDevice_t device, unsigned int link, nvmlNvLinkCapability_t capability, unsigned int *capResult))
+  NCCL_NVML_FN(nvmlDeviceGetCudaComputeCapability, nvmlReturn_t, (nvmlDevice_t device, int* major, int* minor))
+  NCCL_NVML_FN(nvmlDeviceGetP2PStatus, nvmlReturn_t, (nvmlDevice_t device1, nvmlDevice_t device2, nvmlGpuP2PCapsIndex_t p2pIndex, nvmlGpuP2PStatus_t* p2pStatus))
+
+  std::mutex lock; // NVML has had some thread safety bugs
+  bool initialized = false;
+  thread_local bool threadInitialized = false;
+  ncclResult_t initResult;
+}
+
+ncclResult_t ncclNvmlEnsureInitialized() {
+  // Optimization to avoid repeatedly grabbing the lock when we only want to
+  // read from the global tables.
+  if (threadInitialized) return initResult;
+  threadInitialized = true;
+
+  std::lock_guard<std::mutex> locked(lock);
+
+  if (initialized) return initResult;
+  initialized = true;
+
+  #if !NCCL_NVML_DIRECT
+  if (pfn_nvmlInit == nullptr) {
+    void *libhandle = dlopen("libnvidia-ml.so.1", RTLD_NOW);
+    if (libhandle == nullptr) {
+      WARN("Failed to open libnvidia-ml.so.1");
+      initResult = ncclSystemError;
+      return initResult;
+    }
+
+    struct Symbol { void **ppfn; char const *name; };
+    std::initializer_list<Symbol> symbols = {
+      {(void**)&pfn_nvmlInit, "nvmlInit"},
+      {(void**)&pfn_nvmlInit_v2, "nvmlInit_v2"},
+      {(void**)&pfn_nvmlShutdown, "nvmlShutdown"},
+      {(void**)&pfn_nvmlDeviceGetCount, "nvmlDeviceGetCount"},
+      {(void**)&pfn_nvmlDeviceGetCount_v2, "nvmlDeviceGetCount_v2"},
+      {(void**)&pfn_nvmlDeviceGetHandleByPciBusId, "nvmlDeviceGetHandleByPciBusId"},
+      {(void**)&pfn_nvmlDeviceGetHandleByIndex, "nvmlDeviceGetHandleByIndex"},
+      {(void**)&pfn_nvmlDeviceGetIndex, "nvmlDeviceGetIndex"},
+      {(void**)&pfn_nvmlErrorString, "nvmlErrorString"},
+      {(void**)&pfn_nvmlDeviceGetNvLinkState, "nvmlDeviceGetNvLinkState"},
+      {(void**)&pfn_nvmlDeviceGetNvLinkRemotePciInfo, "nvmlDeviceGetNvLinkRemotePciInfo"},
+      {(void**)&pfn_nvmlDeviceGetNvLinkCapability, "nvmlDeviceGetNvLinkCapability"},
+      {(void**)&pfn_nvmlDeviceGetCudaComputeCapability, "nvmlDeviceGetCudaComputeCapability"},
+      {(void**)&pfn_nvmlDeviceGetP2PStatus, "nvmlDeviceGetP2PStatus"}
+    };
+    for(Symbol sym: symbols) {
+      *sym.ppfn = dlsym(libhandle, sym.name);
+    }
+  }
+  #endif
+
+  #if NCCL_NVML_DIRECT
+    bool have_v2 = true;
+  #else
+    bool have_v2 = pfn_nvmlInit_v2 != nullptr; // if this compare is done in the NCCL_NVML_DIRECT=1 case then GCC warns about it never being null
+  #endif
+  nvmlReturn_t res1 = (have_v2 ? pfn_nvmlInit_v2 : pfn_nvmlInit)();
+  if (res1 != NVML_SUCCESS) {
+    WARN("nvmlInit%s() failed: %s", have_v2 ? "_v2" : "", pfn_nvmlErrorString(res1));
+    initResult = ncclSystemError;
+    return initResult;
+  }
+
+  unsigned int ndev;
+  res1 = (have_v2 ? pfn_nvmlDeviceGetCount_v2 : pfn_nvmlDeviceGetCount)(&ndev);
+  if (res1 != NVML_SUCCESS) {
+    WARN("nvmlDeviceGetCount%s() failed: %s", have_v2 ? "_v2" :"", pfn_nvmlErrorString(res1));
+    initResult = ncclSystemError;
+    return initResult;
+  }
+
+  ncclNvmlDeviceCount = int(ndev);
+  if (ncclNvmlMaxDevices < ncclNvmlDeviceCount) {
+    WARN("nvmlDeviceGetCount() reported more devices (%d) than the internal maximum (ncclNvmlMaxDevices=%d)", ncclNvmlDeviceCount, ncclNvmlMaxDevices);
+    initResult = ncclInternalError;
+    return initResult;
+  }
+
+  for(int a=0; a < ncclNvmlDeviceCount; a++) {
+    res1 = pfn_nvmlDeviceGetHandleByIndex(a, &ncclNvmlDevices[a].handle);
+    if (res1 != NVML_SUCCESS) {
+      WARN("nvmlDeviceGetHandleByIndex(%d) failed: %s", int(a), pfn_nvmlErrorString(res1));
+      initResult = ncclSystemError;
+      return initResult;
+    }
+
+    res1 = pfn_nvmlDeviceGetCudaComputeCapability(ncclNvmlDevices[a].handle, &ncclNvmlDevices[a].computeCapabilityMajor, &ncclNvmlDevices[a].computeCapabilityMinor);
+    if (res1 != NVML_SUCCESS) {
+      WARN("nvmlDeviceGetCudaComputeCapability(%d) failed: %s", int(a), pfn_nvmlErrorString(res1));
+      initResult = ncclSystemError;
+      return initResult;
+    }
+  }
+
+  for(int a=0; a < ncclNvmlDeviceCount; a++) {
+    for(int b=0; b < ncclNvmlDeviceCount; b++) {
+      nvmlDevice_t da = ncclNvmlDevices[a].handle;
+      nvmlDevice_t db = ncclNvmlDevices[b].handle;
+
+      res1 = pfn_nvmlDeviceGetP2PStatus(da, db, NVML_P2P_CAPS_INDEX_READ, &ncclNvmlDevicePairs[a][b].p2pStatusRead);
+      if (res1 != NVML_SUCCESS) {
+        WARN("nvmlDeviceGetP2PStatus(%d,%d,NVML_P2P_CAPS_INDEX_READ) failed: %s", a, b, pfn_nvmlErrorString(res1));
+        initResult = ncclSystemError;
+        return initResult;
+      }
+
+      res1 = pfn_nvmlDeviceGetP2PStatus(da, db, NVML_P2P_CAPS_INDEX_WRITE, &ncclNvmlDevicePairs[a][b].p2pStatusWrite);
+      if (res1 != NVML_SUCCESS) {
+        WARN("nvmlDeviceGetP2PStatus(%d,%d,NVML_P2P_CAPS_INDEX_READ) failed: %s", a, b, pfn_nvmlErrorString(res1));
+        initResult = ncclSystemError;
+        return initResult;
+      }
+    }
+  }
+
+  initResult = ncclSuccess;
+  return initResult;
+}
+
+#define NVMLCHECK(name, ...) do { \
+  nvmlReturn_t e44241808 = pfn_##name(__VA_ARGS__); \
+  if (e44241808 != NVML_SUCCESS) { \
+    WARN(#name "() failed: %s", pfn_nvmlErrorString(e44241808)); \
+    return ncclSystemError; \
+  } \
+} while(0)
+
+#define NVMLTRY(name, ...) do { \
+  if (!NCCL_NVML_DIRECT && pfn_##name == nullptr) \
+    return ncclInternalError; /* missing symbol is not a warned error */ \
+  nvmlReturn_t e44241808 = pfn_##name(__VA_ARGS__); \
+  if (e44241808 != NVML_SUCCESS) { \
+    if (e44241808 != NVML_ERROR_NOT_SUPPORTED) \
+      INFO(NCCL_INIT, #name "() failed: %s", pfn_nvmlErrorString(e44241808)); \
+    return ncclSystemError; \
+  } \
+} while(0)
+
+ncclResult_t ncclNvmlDeviceGetHandleByPciBusId(const char* pciBusId, nvmlDevice_t* device) {
+  NCCLCHECK(ncclNvmlEnsureInitialized());
+  std::lock_guard<std::mutex> locked(lock);
+  NVMLCHECK(nvmlDeviceGetHandleByPciBusId, pciBusId, device);
+  return ncclSuccess;
+}
+
+ncclResult_t ncclNvmlDeviceGetHandleByIndex(unsigned int index, nvmlDevice_t *device) {
+  NCCLCHECK(ncclNvmlEnsureInitialized());
+  *device = ncclNvmlDevices[index].handle;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclNvmlDeviceGetIndex(nvmlDevice_t device, unsigned* index) {
+  NCCLCHECK(ncclNvmlEnsureInitialized());
+  for (int d=0; d < ncclNvmlDeviceCount; d++) {
+    if (ncclNvmlDevices[d].handle == device) {
+      *index = d;
+      return ncclSuccess;
+    }
+  }
+  return ncclInvalidArgument;
+}
+
+ncclResult_t ncclNvmlDeviceGetNvLinkState(nvmlDevice_t device, unsigned int link, nvmlEnableState_t *isActive) {
+  NCCLCHECK(ncclNvmlEnsureInitialized());
+  std::lock_guard<std::mutex> locked(lock);
+  NVMLTRY(nvmlDeviceGetNvLinkState, device, link, isActive);
+  return ncclSuccess;
+}
+
+ncclResult_t ncclNvmlDeviceGetNvLinkRemotePciInfo(nvmlDevice_t device, unsigned int link, nvmlPciInfo_t *pci) {
+  NCCLCHECK(ncclNvmlEnsureInitialized());
+  std::lock_guard<std::mutex> locked(lock);
+  NVMLTRY(nvmlDeviceGetNvLinkRemotePciInfo, device, link, pci);
+  return ncclSuccess;
+}
+
+ncclResult_t ncclNvmlDeviceGetNvLinkCapability(
+    nvmlDevice_t device, unsigned int link, nvmlNvLinkCapability_t capability,
+    unsigned int *capResult
+  ) {
+  NCCLCHECK(ncclNvmlEnsureInitialized());
+  std::lock_guard<std::mutex> locked(lock);
+  NVMLTRY(nvmlDeviceGetNvLinkCapability, device, link, capability, capResult);
+  return ncclSuccess;
+}
+
+ncclResult_t ncclNvmlDeviceGetCudaComputeCapability(nvmlDevice_t device, int* major, int* minor) {
+  NCCLCHECK(ncclNvmlEnsureInitialized());
+
+  for(int d=0; d < ncclNvmlDeviceCount; d++) {
+    if(device == ncclNvmlDevices[d].handle) {
+      *major = ncclNvmlDevices[d].computeCapabilityMajor;
+      *minor = ncclNvmlDevices[d].computeCapabilityMinor;
+      return ncclSuccess;
+    }
+  }
+  return ncclInvalidArgument;
+}
+
+ncclResult_t ncclNvmlDeviceGetP2PStatus(
+    nvmlDevice_t device1, nvmlDevice_t device2, nvmlGpuP2PCapsIndex_t p2pIndex,
+    nvmlGpuP2PStatus_t* p2pStatus
+  ) {
+  NCCLCHECK(ncclNvmlEnsureInitialized());
+
+  if (p2pIndex == NVML_P2P_CAPS_INDEX_READ || p2pIndex == NVML_P2P_CAPS_INDEX_WRITE) {
+    int a = -1, b = -1;
+    for(int d=0; d < ncclNvmlDeviceCount; d++) {
+      if(device1 == ncclNvmlDevices[d].handle) a = d;
+      if(device2 == ncclNvmlDevices[d].handle) b = d;
+    }
+    if (a == -1 || b == -1) return ncclInvalidArgument;
+    if (p2pIndex == NVML_P2P_CAPS_INDEX_READ)
+      *p2pStatus = ncclNvmlDevicePairs[a][b].p2pStatusRead;
+    else
+      *p2pStatus = ncclNvmlDevicePairs[a][b].p2pStatusWrite;
+  }
+  else {
+    std::lock_guard<std::mutex> locked(lock);
+    NVMLCHECK(nvmlDeviceGetP2PStatus, device1, device2, p2pIndex, p2pStatus);
+  }
+  return ncclSuccess;
+}

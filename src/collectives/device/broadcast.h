@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2022, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -12,22 +12,22 @@ namespace {
   template<typename T, typename RedOp, typename Proto>
   __device__ __forceinline__ void runRing(ncclWorkElem *args) {
     const int tid = threadIdx.x;
-    const int nthreads = args->nThreads;
-    const int bid = args->coll.bid;
-    const int nChannels = args->coll.nChannels;
+    const int nthreads = args->header.nWarps*WARP_SIZE;
+    const int bid = args->bid;
+    const int nChannels = args->nChannels;
     ncclRing *ring = &ncclShmem.channel.ring;
     const ssize_t chunkSize = int(Proto::calcBytePerStep()/sizeof(T) * (Proto::Id == NCCL_PROTO_SIMPLE ? BROADCAST_CHUNKSTEPS : 1));
     const ssize_t minChunkSizeLL128 = int(nthreads*(Proto::calcBytePerGrain()/sizeof(T)));
     const ssize_t loopSize = nChannels*chunkSize;
-    const ssize_t size = args->coll.count;
+    const ssize_t size = args->count;
     const int rank = ring->devUserRanks[0];
     const int nextRank = ring->devUserRanks[1];
-    const int root = args->coll.root;
+    const int root = args->root;
 
     T *inputBuf = (T*)args->sendbuff;
     T *outputBuf = (T*)args->recvbuff;
-    Primitives<T, RedOp, FanSymmetric<1>, 0, Proto>
-      prims(tid, nthreads, &ring->prev, &ring->next, inputBuf, outputBuf, args->coll.redOpArg);
+    Primitives<T, RedOp, FanSymmetric<1>, 0, Proto, 0>
+      prims(tid, nthreads, &ring->prev, &ring->next, inputBuf, outputBuf, args->redOpArg);
 
     for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
       ssize_t realChunkSize;
@@ -36,7 +36,7 @@ namespace {
         realChunkSize = roundUp(realChunkSize, (nthreads-WARP_SIZE)*sizeof(uint64_t)/sizeof(T));
       }
       else if (Proto::Id == NCCL_PROTO_LL)
-        realChunkSize = size-gridOffset < loopSize ? args->coll.lastChunkSize : chunkSize;
+        realChunkSize = size-gridOffset < loopSize ? args->lastChunkSize : chunkSize;
       else if (Proto::Id == NCCL_PROTO_LL128)
         realChunkSize = min(chunkSize, divUp(size-gridOffset, nChannels*minChunkSizeLL128)*minChunkSizeLL128);
       realChunkSize = int(realChunkSize);

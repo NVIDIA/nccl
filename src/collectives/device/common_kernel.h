@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2021, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2022, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -16,10 +16,11 @@
 // Define min for ssize_t
 static __device__ int min(int a, ssize_t b) { return (a < b) ? a : b; }
 
-template <typename T>
-inline __device__ void loadPtr(void** ptr, T* &v) {
-  asm volatile("ld.volatile.global.u64 %0, [%1];"
-      : "=l"(v) : "l"(ptr));
+inline __device__ int loadInt(int* ptr) {
+  int v;
+  asm volatile("ld.volatile.global.u32 %0, [%1];"
+      : "=r"(v) : "l"(ptr));
+  return v;
 }
 
 typedef uint64_t PackType;

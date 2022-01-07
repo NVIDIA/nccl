@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2019-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -63,12 +63,8 @@ ncclResult_t ArgsCheck(struct ncclInfo* info) {
   }
 
   if (info->comm->checkPointers) {
-    if (info->coll == ncclFuncSendRecv) {
-      if (strcmp(info->opName, "Send") == 0) {
-        NCCLCHECK(CudaPtrCheck(info->sendbuff, info->comm, "sendbuff", "Send"));
-      } else {
-        NCCLCHECK(CudaPtrCheck(info->recvbuff, info->comm, "recvbuff", "Recv"));
-      }
+    if ((info->coll == ncclFuncSend || info->coll == ncclFuncRecv) && info->count > 0) {
+      NCCLCHECK(CudaPtrCheck(info->recvbuff, info->comm, "buff", info->opName));
     } else {
       // Check CUDA device pointers
       if (info->coll != ncclFuncBroadcast || info->comm->rank == info->root) {

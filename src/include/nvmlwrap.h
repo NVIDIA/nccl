@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2022, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -9,59 +9,13 @@
 
 #include "nccl.h"
 
-// The NVML library doesn't appear to be thread safe
-#include <pthread.h>
-extern pthread_mutex_t nvmlLock;
-#define NVMLLOCK() pthread_mutex_lock(&nvmlLock)
-#define NVMLUNLOCK() pthread_mutex_unlock(&nvmlLock)
+//#define NCCL_NVML_DIRECT 1
+#ifndef NCCL_NVML_DIRECT
+#define NCCL_NVML_DIRECT 0
+#endif
 
-#define NVMLLOCKCALL(cmd, ret) do {                      \
-    NVMLLOCK();                                          \
-    ret = cmd;                                           \
-    NVMLUNLOCK();                                        \
-} while(false)
-
-#define NVMLCHECK(cmd) do {                              \
-    nvmlReturn_t e;                                      \
-    NVMLLOCKCALL(cmd, e);                                \
-    if( e != NVML_SUCCESS ) {                            \
-      WARN("NVML failure '%s'", nvmlErrorString(e));     \
-      return ncclSystemError;                            \
-    }                                                    \
-} while(false)
-
-//#define NVML_DIRECT 1
-#ifdef NVML_DIRECT
+#if NCCL_NVML_DIRECT
 #include "nvml.h"
-
-static ncclResult_t wrapNvmlSymbols(void) { return ncclSuccess; }
-static ncclResult_t wrapNvmlInit(void) { NVMLCHECK(nvmlInit()); return ncclSuccess; }
-static ncclResult_t wrapNvmlShutdown(void) { NVMLCHECK(nvmlShutdown()); return ncclSuccess; }
-static ncclResult_t wrapNvmlDeviceGetHandleByPciBusId(const char* pciBusId, nvmlDevice_t* device) {
-  NVMLCHECK(nvmlDeviceGetHandleByPciBusId(pciBusId, device));
-  return ncclSuccess;
-}
-static ncclResult_t wrapNvmlDeviceGetIndex(nvmlDevice_t device, unsigned* index) {
-  NVMLCHECK(nvmlDeviceGetIndex(device, index));
-  return ncclSuccess;
-}
-static ncclResult_t wrapNvmlDeviceGetNvLinkState(nvmlDevice_t device, unsigned int link, nvmlEnableState_t *isActive) {
-  NVMLCHECK(nvmlDeviceGetNvLinkState(device, link, isActive));
-  return ncclSuccess;
-}
-static ncclResult_t wrapNvmlDeviceGetNvLinkRemotePciInfo(nvmlDevice_t device, unsigned int link, nvmlPciInfo_t *pci) {
-  NVMLCHECK(nvmlDeviceGetNvLinkRemotePciInfo(device, link, pci));
-  return ncclSuccess;
-}
-static ncclResult_t wrapNvmlDeviceGetNvLinkCapability(nvmlDevice_t device, unsigned int link,
-                                                   nvmlNvLinkCapability_t capability, unsigned int *capResult) {
-  NVMLCHECK(nvmlDeviceGetNvLinkCapability(device, link, capability, capResult));
-  return ncclSuccess;
-}
-static ncclResult_t wrapNvmlDeviceGetCudaComputeCapability(nvmlDevice_t device, int* major, int* minor) {
-  NVMLCHECK(nvmlDeviceGetCudaComputeCapability(device, major, minor));
-  return ncclSuccess;
-}
 #else
 // Dynamically handle dependencies on NVML
 
@@ -129,21 +83,56 @@ typedef struct nvmlPciInfo_st
     unsigned int reserved2;
     unsigned int reserved3;
 } nvmlPciInfo_t;
+
+/* P2P Capability Index Status*/
+typedef enum nvmlGpuP2PStatus_enum
+{
+    NVML_P2P_STATUS_OK     = 0,
+    NVML_P2P_STATUS_CHIPSET_NOT_SUPPORED,
+    NVML_P2P_STATUS_GPU_NOT_SUPPORTED,
+    NVML_P2P_STATUS_IOH_TOPOLOGY_NOT_SUPPORTED,
+    NVML_P2P_STATUS_DISABLED_BY_REGKEY,
+    NVML_P2P_STATUS_NOT_SUPPORTED,
+    NVML_P2P_STATUS_UNKNOWN
+} nvmlGpuP2PStatus_t;
+
+/* P2P Capability Index*/
+typedef enum nvmlGpuP2PCapsIndex_enum
+{
+    NVML_P2P_CAPS_INDEX_READ = 0,
+    NVML_P2P_CAPS_INDEX_WRITE,
+    NVML_P2P_CAPS_INDEX_NVLINK,
+    NVML_P2P_CAPS_INDEX_ATOMICS,
+    NVML_P2P_CAPS_INDEX_PROP,
+    NVML_P2P_CAPS_INDEX_UNKNOWN
+} nvmlGpuP2PCapsIndex_t;
+
 /* End of nvml.h */
+#endif // NCCL_NVML_DIRECT
 
-ncclResult_t wrapNvmlSymbols(void);
+constexpr int ncclNvmlMaxDevices = 32;
+struct ncclNvmlDeviceInfo {
+  nvmlDevice_t handle;
+  int computeCapabilityMajor, computeCapabilityMinor;
+};
+struct ncclNvmlDevicePairInfo {
+  nvmlGpuP2PStatus_t p2pStatusRead, p2pStatusWrite;
+};
+extern int ncclNvmlDeviceCount;
+extern ncclNvmlDeviceInfo ncclNvmlDevices[ncclNvmlMaxDevices];
+extern ncclNvmlDevicePairInfo ncclNvmlDevicePairs[ncclNvmlMaxDevices][ncclNvmlMaxDevices];
 
-ncclResult_t wrapNvmlInit(void);
-ncclResult_t wrapNvmlShutdown(void);
-ncclResult_t wrapNvmlDeviceGetHandleByPciBusId(const char* pciBusId, nvmlDevice_t* device);
-ncclResult_t wrapNvmlDeviceGetIndex(nvmlDevice_t device, unsigned* index);
-ncclResult_t wrapNvmlDeviceGetHandleByIndex(unsigned int index, nvmlDevice_t *device);
-ncclResult_t wrapNvmlDeviceGetNvLinkState(nvmlDevice_t device, unsigned int link, nvmlEnableState_t *isActive);
-ncclResult_t wrapNvmlDeviceGetNvLinkRemotePciInfo(nvmlDevice_t device, unsigned int link, nvmlPciInfo_t *pci);
-ncclResult_t wrapNvmlDeviceGetNvLinkCapability(nvmlDevice_t device, unsigned int link,
-                                                   nvmlNvLinkCapability_t capability, unsigned int *capResult);
-ncclResult_t wrapNvmlDeviceGetCudaComputeCapability(nvmlDevice_t device, int* major, int* minor);
+// All ncclNvmlFoo() functions call ncclNvmlEnsureInitialized() implicitly.
+// Outsiders need only call it if they want to inspect the ncclNvml global
+// tables above.
+ncclResult_t ncclNvmlEnsureInitialized();
 
-#endif // NVML_DIRECT
-
+ncclResult_t ncclNvmlDeviceGetHandleByPciBusId(const char* pciBusId, nvmlDevice_t* device);
+ncclResult_t ncclNvmlDeviceGetIndex(nvmlDevice_t device, unsigned* index);
+ncclResult_t ncclNvmlDeviceGetHandleByIndex(unsigned int index, nvmlDevice_t *device);
+ncclResult_t ncclNvmlDeviceGetNvLinkState(nvmlDevice_t device, unsigned int link, nvmlEnableState_t *isActive);
+ncclResult_t ncclNvmlDeviceGetNvLinkRemotePciInfo(nvmlDevice_t device, unsigned int link, nvmlPciInfo_t *pci);
+ncclResult_t ncclNvmlDeviceGetNvLinkCapability(nvmlDevice_t device, unsigned int link, nvmlNvLinkCapability_t capability, unsigned int *capResult);
+ncclResult_t ncclNvmlDeviceGetCudaComputeCapability(nvmlDevice_t device, int* major, int* minor);
+ncclResult_t ncclNvmlDeviceGetP2PStatus(nvmlDevice_t device1, nvmlDevice_t device2, nvmlGpuP2PCapsIndex_t p2pIndex, nvmlGpuP2PStatus_t* p2pStatus);
 #endif // End include guard

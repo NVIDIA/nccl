@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -16,11 +16,11 @@ namespace {
     int tid = threadIdx.x;
     int tn = blockDim.x;
     #pragma unroll 1
-    for(int e=0; e < NCCL_MAX_WORK_ELEMENTS && w->elems[e].active != 0; e++) {
+    for(int e=0; e < NCCL_MAX_WORK_ELEMENTS && w->elems[e].header.type != ncclWorkTypeUnused; e++) {
       ncclWorkElem *we = &w->elems[e];
-      intptr_t eltN = we->coll.count;
-      int bid = we->coll.bid;
-      int bn = we->coll.nChannels;
+      intptr_t eltN = we->count;
+      int bid = we->bid;
+      int bn = we->nChannels;
       T const *src = (T const*)we->sendbuff;
       T *dst = (T*)we->recvbuff;
 
@@ -36,7 +36,7 @@ namespace {
       src += i0;
       dst += i0;
       ReduceOrCopyMulti<COLL_UNROLL, RedOp, T, 1, 1, 1, 1, 1>
-        (tid, tn, &(we->coll.redOpArg), true, 1, &src, 1, &dst, i1-i0);
+        (tid, tn, &(we->redOpArg), true, 1, &src, 1, &dst, i1-i0);
     }
   }
 }

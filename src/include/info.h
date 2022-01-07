@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2019-2021, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -11,7 +11,7 @@
 #include "devcomm.h"
 #include "collectives.h"
 
-typedef enum {
+typedef enum : uint8_t {
   ncclPatternRing,
   ncclPatternRingTwice,
   ncclPatternPipelineFrom,
@@ -19,7 +19,9 @@ typedef enum {
   ncclPatternTreeUp,
   ncclPatternTreeDown,
   ncclPatternTreeUpDown,
-  ncclPatternCollTreeUpDown
+  ncclPatternCollTreeUpDown,
+  ncclPatternSend,
+  ncclPatternRecv
 } ncclPattern_t;
 
 // Used to pass NCCL call information between functions
@@ -32,7 +34,7 @@ struct ncclInfo {
   size_t count;
   ncclDataType_t datatype;
   ncclRedOp_t op;
-  int root;
+  int root; // peer for p2p operations
   ncclComm_t comm;
   cudaStream_t stream;
   // Algorithm details
@@ -48,11 +50,7 @@ struct ncclInfo {
   size_t nBytes;
   int nstepsPerLoop;
   int nchunksPerLoop;
-  ssize_t sendbytes;
-  ssize_t recvbytes;
-  int recvChunkSize;
-  int sendChunkSize;
-  uint32_t delta;
+  int chunkSize;
   int channelId;
 };
 

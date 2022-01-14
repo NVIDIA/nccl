@@ -940,6 +940,14 @@ ncclResult_t ncclCommInitRankSync(ncclComm_t* newcomm, int nranks, ncclUniqueId 
   NCCLCHECKGOTO(commAlloc(newcomm, nranks, myrank), res, cleanup);
   NCCLCHECKGOTO(initTransportsRank(*newcomm, &commId), res, cleanup);
   NCCLCHECKGOTO(devCommSetup(*newcomm), res, cleanup);
+  
+  // Prevent deadlock in CUDA driver by ensuring that all ranks have finished
+  // allocating before allowing any to proceed and enqueue kernels.
+  int isLast;
+  NCCLCHECKGOTO(ncclCpuBarrierIn(*newcomm, &isLast), res, cleanup);
+  if (isLast) NCCLCHECKGOTO(ncclCpuBarrierLast(*newcomm), res, cleanup);
+  INFO(NCCL_INIT,"comm %p rank %d nranks %d cudaDev %d busId %lx - Init BARRIER", *newcomm, myrank, nranks, (*newcomm)->cudaDev, (*newcomm)->busId);
+  NCCLCHECKGOTO(ncclCpuBarrierOut(*newcomm), res, cleanup);
 
   INFO(NCCL_INIT,"comm %p rank %d nranks %d cudaDev %d busId %lx - Init COMPLETE", *newcomm, myrank, nranks, (*newcomm)->cudaDev, (*newcomm)->busId);
 

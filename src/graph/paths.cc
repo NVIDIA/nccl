@@ -41,6 +41,11 @@ static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclT
   struct ncclTopoNodeList nextNodeList;
   nodeList.count = 1; nodeList.list[0] = baseNode;
   nextNodeList.count = 0;
+  struct ncclTopoLinkList* basePath;
+  NCCLCHECK(getPath(system, baseNode, baseNode->type, baseNode->id, &basePath));
+  basePath->count = 0;
+  basePath->width = LOC_WIDTH;
+  basePath->type = PATH_LOC;
 
   while (nodeList.count) {
     nextNodeList.count = 0;

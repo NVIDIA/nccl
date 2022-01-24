@@ -1,10 +1,10 @@
 CUDA_HOME?=/usr/local/cuda
 INC:=-I$(CUDA_HOME)/include
-PLUGIN_SO:=../../build/libnccl-net.so
+PLUGIN_SO:=libnccl-net.so
 
 default: $(PLUGIN_SO)
 
-$(PLUGIN_SO): nccl-fastsocket/net_fastsocket.cc nccl-fastsocket/compat.cc
+$(PLUGIN_SO): nccl-fastsocket/net_fastsocket.cc nccl-fastsocket/compat.cc nccl-fastsocket/utilities.cc
 	$(CC) $(INC) -fPIC -shared -o $@ -Wl,-soname,$(PLUGIN_SO) $^
 
 nccl-fastsocket/%.cc:

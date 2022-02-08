@@ -680,11 +680,16 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, int size, void* mhandle, vo
 #else
   __sync_synchronize(); // order the readyPtr load against rkey load below
   // Sanity checks to catch user collective call count/size mismatches
-  // plus any potential programming errors
-  if (size > slot->size || slot->size < 0 || slot->addr == 0 || slot->rkey == 0 || slot->seq != comm->fifoHead) {
+  if (size > slot->size || slot->seq != comm->fifoHead) {
     char line[SOCKET_NAME_MAXLEN+1];
-    WARN("NET/IB : peer %s collective mismatch error local size %d remote %d addr %lx rkey %x seq %x/%x",
-         socketToString(req->addr, line), size, slot->size, slot->addr, slot->rkey, slot->seq, comm->fifoHead);
+    WARN("NET/IB : peer %s collective mismatch error, local size %d remote size %d seq %x/%x",
+         socketToString(req->addr, line), size, slot->size, slot->seq, comm->fifoHead);
+    return ncclInvalidUsage;
+  } // plus any potential programming errors
+  else if (slot->size < 0 || slot->addr == 0 || slot->rkey == 0) {
+    char line[SOCKET_NAME_MAXLEN+1];
+    WARN("NET/IB : peer %s posted incorrect receive info: size %d addr %lx rkey %x",
+         socketToString(req->addr, line), slot->size, slot->addr, slot->rkey);
     return ncclInternalError;
   }
   wr[0].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;

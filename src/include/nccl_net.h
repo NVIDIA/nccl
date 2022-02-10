@@ -10,7 +10,7 @@
 #include "nccl.h"
 #include <stdint.h>
 
-#define NCCL_NET_HANDLE_MAXSIZE 64
+#define NCCL_NET_HANDLE_MAXSIZE 128
 
 #define NCCL_PTR_HOST 0x1
 #define NCCL_PTR_CUDA 0x2

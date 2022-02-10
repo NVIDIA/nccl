@@ -41,6 +41,8 @@ struct ncclPeerInfo {
 };
 
 #define CONNECT_SIZE 128
+static_assert(NCCL_NET_HANDLE_MAXSIZE <= CONNECT_SIZE, "NET Handle size should be less or equal to connect size");
+
 struct ncclConnect {
   char data[CONNECT_SIZE];
 };

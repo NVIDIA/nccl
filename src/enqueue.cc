@@ -1284,7 +1284,7 @@ ncclResult_t ncclRedOpCreatePreMulSum(ncclRedOp_t *op, void *scalar, ncclDataTyp
     int cap = 2*comm->userRedOpCapacity;
     if (cap < 4) cap = 4;
     ncclUserRedOp *ops = new ncclUserRedOp[cap];
-    std::memcpy(ops, comm->userRedOps, comm->userRedOpCapacity*sizeof(ncclUserRedOp));
+    memcpy(ops, comm->userRedOps, comm->userRedOpCapacity*sizeof(ncclUserRedOp));
     for(int ix=comm->userRedOpCapacity; ix < cap; ix++)
       ops[ix].freeNext = ix + 1;
     delete[] comm->userRedOps;
@@ -1301,7 +1301,7 @@ ncclResult_t ncclRedOpCreatePreMulSum(ncclRedOp_t *op, void *scalar, ncclDataTyp
   user->opFull.op = ncclDevPreMulSum;
   if (residence == ncclScalarHostImmediate) {
     user->opFull.scalarArgIsPtr = false;
-    std::memcpy(&user->opFull.scalarArg, scalar, ncclTypeSize(datatype));
+    memcpy(&user->opFull.scalarArg, scalar, ncclTypeSize(datatype));
   } else {
     user->opFull.scalarArgIsPtr = true;
     user->opFull.scalarArg = reinterpret_cast<uint64_t>(scalar);

@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2021, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2022, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -43,9 +43,10 @@ extern const char* topoNodeTypeStr[];
 // Skipping 2 for PATH_NVB
 #define LINK_PCI 3
 // Skipping 4 for PATH_PXB
-// Skipping 5 for PATH_PHB
-#define LINK_SYS 6
-#define LINK_NET 7
+// Skipping 5 for PATH_PXN
+// Skipping 6 for PATH_PHB
+#define LINK_SYS 7
+#define LINK_NET 8
 extern const char* topoLinkTypeStr[];
 
 #define PATH_LOC 0
@@ -53,8 +54,10 @@ extern const char* topoLinkTypeStr[];
 #define PATH_NVB 2
 #define PATH_PIX 3
 #define PATH_PXB 4
-#define PATH_PHB 5
-#define PATH_SYS 6
+#define PATH_PXN 5
+#define PATH_PHB 6
+#define PATH_SYS 7
+#define PATH_DIS 7
 extern const char* topoPathTypeStr[];
 
 struct ncclTopoNode;
@@ -93,6 +96,7 @@ struct ncclTopoNode {
       uint64_t asic;
       int port;
       float width;
+      float latency;
       int gdrSupport;
       int collSupport;
       int maxChannels;
@@ -132,8 +136,7 @@ ncclResult_t ncclTopoRemoveNode(struct ncclTopoSystem* system, int type, int id)
 ncclResult_t ncclTopoConnectNodes(struct ncclTopoNode* node, struct ncclTopoNode* remNode, int type, float width);
 ncclResult_t ncclTopoPrintPaths(struct ncclTopoSystem* system);
 ncclResult_t ncclTopoLoadSystem(const char* xmlTopoFile, struct ncclTopoSystem* system);
-
-ncclResult_t ncclTopoGetLocalNet(struct ncclTopoSystem* system, int rank, int64_t* id, int rr);
+ncclResult_t ncclTopoGetIntermediateRank(struct ncclTopoSystem* system, int rank, int netDev, int* intermediateRank);
 
 ncclResult_t ncclTopoGetSystemFromXml(struct ncclXml* xml, struct ncclTopoSystem** topoSystem);
 ncclResult_t ncclTopoGetGraphFromXml(struct ncclXmlNode *xmlGraphs, struct ncclTopoSystem* system, struct ncclTopoGraph* graph, int* nChannels);

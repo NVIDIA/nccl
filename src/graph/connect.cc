@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2021, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2022, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -8,6 +8,7 @@
 #include "graph.h"
 #include "trees.h"
 #include "rings.h"
+#include "topo.h"
 
 /******************************************************************/
 /********************* Internode connection ***********************/
@@ -17,7 +18,7 @@ ncclResult_t ncclTopoPreset(struct ncclComm* comm,
     struct ncclTopoGraph* treeGraph, struct ncclTopoGraph* ringGraph,
     struct ncclTopoRanks* topoRanks) {
   int rank = comm->rank;
-  int localRanks = comm->localRanks;
+  int localRanks = comm->topo->nodes[GPU].count;
   int nChannels = comm->nChannels;
 
   for (int c=0; c<nChannels; c++) {

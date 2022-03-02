@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2021, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2022, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -11,8 +11,8 @@
 #include "align.h"
 #include <stdint.h>
 
-#define NCCL_NUM_FUNCTIONS 5 // SendRecv not included for now
-typedef enum { ncclFuncBroadcast, ncclFuncReduce, ncclFuncAllGather, ncclFuncReduceScatter, ncclFuncAllReduce, ncclFuncSendRecv, ncclNumFuncs} ncclFunc_t;
+#define NCCL_NUM_FUNCTIONS 5 // Send/Recv not included for now
+typedef enum { ncclFuncBroadcast, ncclFuncReduce, ncclFuncAllGather, ncclFuncReduceScatter, ncclFuncAllReduce, ncclFuncSendRecv, ncclFuncSend, ncclFuncRecv, ncclNumFuncs} ncclFunc_t;
 extern const char* ncclFuncStr[NCCL_NUM_FUNCTIONS];
 
 #define NCCL_NUM_ALGORITHMS 3 // Tree/Ring/CollNet
@@ -90,16 +90,22 @@ struct ncclConnInfo {
   uint64_t* redOpArgExchange; // PreOp scaler exchange for direct pull case
 
   int *sizesFifo;     // Sizes fifo from GPU to proxy
-  void* *ptrsFifo;      // Buffer fifo from proxy to GPU
+  int *offsFifo;      // Buffer fifo from proxy to GPU
 
   uint64_t step;      // Keep where we are
   uint64_t llLastCleaning;
 };
 
+struct ncclProxyConnector {
+  int rank;
+  int localRank;
+  struct ncclProxyConnection* connection;
+  struct ncclComm* comm;
+};
+
 struct ncclConnector {
   int connected;
-  struct ncclProxyArgs *proxyAppend;
-  struct ncclProxyArgs **proxyAppendPtr;
+  struct ncclProxyConnector proxyConn;
   struct ncclTransportComm* transportComm;
   void* transportResources;
   struct ncclConnInfo conn;
@@ -147,64 +153,91 @@ struct ncclPeer {
 
 struct ncclDevComm;
 
-#define NCCL_MAX_WORK_ELEMENTS 8
-#define NCCL_MAX_GROUPS (NCCL_MAX_WORK_ELEMENTS*2)
-
 /* ncclWork is to be a power of two, currently 8x64 bytes, */
 /* to make sure reads to host from the CUDA kernel are aligned. */
 /* Make sure to adjust padding at the end of ncclWorkElem. */
-struct ncclWorkElem {
-  // Header
-  struct ncclDevComm* comm;
-  uint16_t nThreads;
+#define NCCL_WORK_SIZE 512
+
+enum ncclWorkElemType : uint8_t {
+   ncclWorkTypeUnused=0,
+   ncclWorkTypeColl=1,
+   ncclWorkTypeP2p=2,
+   ncclWorkTypeRegColl=3
+};
+enum ncclWorkElemSubType : uint8_t {
+  ncclWorkSubTypeUnused =0,
+  ncclWorkSubTypeSend,
+  ncclWorkSubTypeRecv
+};
+
+struct ncclWorkElemHeader {
   uint16_t funcIndex;
+  enum ncclWorkElemType type;
+  unsigned nWarps:5;
+  unsigned isLast:1;
+};
+
+struct ncclWorkElem {
+  struct ncclWorkElemHeader header;
   uint8_t regUsed;
   uint8_t direct;
-  uint8_t active, redOpArgIsPtr;
+  uint8_t redOpArgIsPtr;
 
   const void * sendbuff;
   void * recvbuff;
 
-  // Op-specific fields.
-  union {
-    struct {
-      size_t count;
-      size_t lastChunkSize;
-      uint32_t root;
-      uint8_t bid;
-      uint8_t nChannels;
-      uint64_t redOpArg;
-    } coll;
-    struct {
-      size_t sendCount;
-      size_t recvCount;
-      int sendChunkSize;
-      int recvChunkSize;
-      int32_t delta;
-      uint16_t nThreads;
-    } p2p;
-    uint64_t align[4];
-  };
+  size_t count;
+  size_t lastChunkSize;
+  uint32_t root;
+  uint8_t bid;
+  uint8_t nChannels;
+  uint64_t redOpArg;
+  uint64_t pad;
 };
-static_assert(sizeof(struct ncclWorkElem) == (0x10*sizeof(int)), "ncclWorkElem must have a pow2 size");
+static_assert(NCCL_WORK_SIZE % sizeof(struct ncclWorkElem) == 0, "ncclWorkElem size must be a multiple of ncclWork size");
 
-struct ncclWorkRegElem {
+struct ncclWorkElemP2p {
+  struct ncclWorkElemHeader header;
+  int32_t peer;
+  void* buff;
+  size_t count;
+  int chunkSize;
+  uint8_t ngroups;
+  uint8_t warpStart;
+  uint8_t nWarps;
+  enum ncclWorkElemSubType subType;
+};
+static_assert(NCCL_WORK_SIZE % sizeof(struct ncclWorkElemP2p) == 0, "ncclWorkElemP2p size must be a multiple of ncclWork size");
+
+struct ncclWorkElemReg {
   struct ncclWorkElem elem;
   void* dnInputs[NCCL_MAX_DIRECT_ARITY+1];
   void* dnOutputs[NCCL_MAX_DIRECT_ARITY+1];
   void* upOutputs[NCCL_MAX_DIRECT_ARITY+1];
 };
-#define NCCL_REG_ELEM_FACTOR 4
-static_assert(sizeof(struct ncclWorkRegElem) == (NCCL_REG_ELEM_FACTOR*sizeof(struct ncclWorkElem)), "ncclWorkRegElem size must be pow2 times ncclWorkElem size");
+static_assert(NCCL_WORK_SIZE % sizeof(struct ncclWorkElemReg) == 0, "ncclWork size must be a multiple of ncclWorkElemReg size");
+static_assert(sizeof(struct ncclWorkElemReg) % sizeof(struct ncclWorkElem) == 0, "ncclWorkElemReg size must be a multiple of ncclWorkElem size");
+
+#define NCCL_MAX_WORK_ELEMENTS (NCCL_WORK_SIZE/sizeof(struct ncclWorkElem))
+#define NCCL_MAX_WORK_ELEMENTS_P2P (NCCL_WORK_SIZE/sizeof(struct ncclWorkElemP2p))
+#define NCCL_MAX_WORK_ELEMENTS_REG (NCCL_WORK_SIZE/sizeof(struct ncclWorkElemReg))
+// Number of named barriers supported by CUDA
+#define NCCL_MAX_GROUPS 16
 
 struct ncclWork {
   union {
+    char pad[NCCL_WORK_SIZE];
+    struct ncclWorkElemHeader header;
     struct ncclWorkElem elems[NCCL_MAX_WORK_ELEMENTS];
-    struct ncclWorkRegElem regElems[NCCL_MAX_WORK_ELEMENTS/NCCL_REG_ELEM_FACTOR];
+    struct ncclWorkElemP2p p2pElems[NCCL_MAX_WORK_ELEMENTS_P2P];
+    struct ncclWorkElemReg regElems[NCCL_MAX_WORK_ELEMENTS_REG];
   };
 };
 
+static_assert(sizeof(struct ncclWork) == NCCL_WORK_SIZE, "ncclWork size needs to be well aligned");
+
 #define NTREES 2
+
 struct ncclChannel {
   union {
     struct {

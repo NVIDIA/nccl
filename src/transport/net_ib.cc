@@ -841,7 +841,7 @@ ncclResult_t ncclIbRegMr(void* comm, void* data, int size, int type, void** mhan
       else {
         NCCLCHECKGOTO(wrap_ibv_reg_mr(&mr, verbs->pd, (void*)addr, pages*pageSize, flags), res, returning);
       }
-      TRACE(NCCL_INIT,"regAddr %llx size %lld rkey %x", (unsigned long long)addr, (long long)pages*PageSize, mr->rkey);
+      TRACE(NCCL_INIT,"regAddr %llx size %lld rkey %x", (unsigned long long)addr, (long long)pages*pageSize, mr->rkey);
       cache->population += 1;
       cache->slots[slot].addr = addr;
       cache->slots[slot].pages = pages;

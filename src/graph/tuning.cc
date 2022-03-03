@@ -234,7 +234,6 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
     comm->threadThresholds[a][NCCL_PROTO_SIMPLE] = NCCL_SIMPLE_THREAD_THRESHOLD;
   }
   comm->threadThresholds[NCCL_ALGO_RING][NCCL_PROTO_LL] *= nRanks;
-  comm->threadThresholds[NCCL_ALGO_COLLNET][NCCL_PROTO_SIMPLE] = 512;
 
   // Override defaults with user env
   char* str = getenv("NCCL_THREAD_THRESHOLDS");
@@ -248,6 +247,17 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
       }
     }
   }
+
+  // Tune channel factor based on intra-channel parallelism and graph speed
+  comm->channelFactors[NCCL_ALGO_RING] = 1;
+  // For Tree: when NIC bw is smaller than 100G (12GB/s), we can use one SM (two trees)
+  // to drive one NIC; otherwise, two SM's are needed (as if one SM only contributes
+  // one tree)
+  const float treeSpeed = nNodes <= 2 ? treeGraph->speedIntra : treeGraph->speedInter;
+  comm->channelFactors[NCCL_ALGO_TREE] = treeSpeed <= 12.0 ? NTREES : 1;
+  // For CollNet: this is set to the ratio of the old CollNet threadThreshold (512)
+  // to the universal Simple threadThreshold
+  comm->channelFactors[NCCL_ALGO_COLLNET] = 512 / NCCL_SIMPLE_THREAD_THRESHOLD;
 
   INFO(NCCL_INIT, "threadThresholds %ld/%ld/%ld | %ld/%ld/%ld | %ld/%ld/%ld",
       comm->threadThresholds[NCCL_ALGO_TREE][NCCL_PROTO_LL],

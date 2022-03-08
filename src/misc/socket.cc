@@ -16,12 +16,16 @@
  *
  * Output: "IPv4/IPv6 address<port>"
  */
-const char *ncclSocketToString(union ncclSocketAddress *addr, char *buf) {
+const char *ncclSocketToString(union ncclSocketAddress *addr, char *buf, const int numericHostForm /*= 1*/) {
   if (buf == NULL || addr == NULL) return NULL;
   struct sockaddr *saddr = &addr->sa;
   if (saddr->sa_family != AF_INET && saddr->sa_family != AF_INET6) { buf[0]='\0'; return buf; }
   char host[NI_MAXHOST], service[NI_MAXSERV];
-  (void) getnameinfo(saddr, sizeof(union ncclSocketAddress), host, NI_MAXHOST, service, NI_MAXSERV, NI_NUMERICHOST|NI_NUMERICSERV);
+  /* NI_NUMERICHOST: If set, then the numeric form of the hostname is returned.
+   * (When not set, this will still happen in case the node's name cannot be determined.)
+   */
+  int flag = NI_NUMERICSERV | (numericHostForm ? NI_NUMERICHOST : 0);
+  (void) getnameinfo(saddr, sizeof(union ncclSocketAddress), host, NI_MAXHOST, service, NI_MAXSERV, flag);
   sprintf(buf, "%s<%s>", host, service);
   return buf;
 }
@@ -516,7 +520,7 @@ ncclResult_t ncclSocketProgress(int op, struct ncclSocket* sock, void* ptr, int 
   NCCLCHECK(ncclSocketProgressOpt(op, sock, ptr, size, offset, 0, &closed));
   if (closed) {
     char line[SOCKET_NAME_MAXLEN+1];
-    WARN("Net : Connection closed by remote peer %s", ncclSocketToString(&sock->addr, line));
+    WARN("Net : Connection closed by remote peer %s", ncclSocketToString(&sock->addr, line, 0));
     return ncclSystemError;
   }
   return ncclSuccess;

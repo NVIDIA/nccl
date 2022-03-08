@@ -44,7 +44,7 @@ struct ncclSocket {
   enum ncclSocketState state;
 };
 
-const char *ncclSocketToString(union ncclSocketAddress *addr, char *buf);
+const char *ncclSocketToString(union ncclSocketAddress *addr, char *buf, const int numericHostForm = 1);
 ncclResult_t ncclGetSocketAddrFromString(union ncclSocketAddress* ua, const char* ip_port_pair);
 int ncclFindInterfaceMatchSubnet(char* ifNames, union ncclSocketAddress* localAddrs, union ncclSocketAddress* remoteAddr, int ifNameMaxSize, int maxIfs);
 int ncclFindInterfaces(char* ifNames, union ncclSocketAddress *ifAddrs, int ifNameMaxSize, int maxIfs);

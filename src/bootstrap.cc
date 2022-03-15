@@ -165,6 +165,7 @@ ncclResult_t bootstrapCreateRoot(ncclUniqueId* id, bool idFromEnv) {
   memcpy(id, &listenSock->addr, sizeof(union ncclSocketAddress));
   pthread_t thread;
   pthread_create(&thread, NULL, bootstrapRoot, (void*)listenSock);
+  pthread_detach(thread); // will not be pthread_join()'d
   ncclSetThreadName(thread, "NCCL BootstrapR");
   return ncclSuccess;
 }

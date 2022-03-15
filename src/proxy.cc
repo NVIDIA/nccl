@@ -1073,6 +1073,7 @@ ncclResult_t ncclProxyInit(struct ncclComm* comm, struct ncclSocket* sock, union
 }
 
 ncclResult_t ncclProxyCreate(struct ncclComm* comm) {
+  // comm->proxyState.thread is pthread_join()'d by commFree() in init.cc
   pthread_create(&comm->proxyState.thread, NULL, ncclProxyService, comm);
   return ncclSuccess;
 }

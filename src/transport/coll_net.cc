@@ -217,6 +217,9 @@ static ncclResult_t sendConnect(struct ncclComm* comm, struct ncclConnect* conne
   struct connectMap* map;
   NCCLCHECK(ncclProxyCall(&send->proxyConn, ncclProxyMsgConnect, &args, sizeof(struct collNetConnectArgs), &map, sizeof(struct connectMap*)));
 
+  // If collnet connect failed, propagate error to fallback on regular p2p
+  if (map == NULL) return ncclSystemError;
+
   //NCCLCHECK(collNetDumpMap(map));
 
   struct ncclSendMem *sendMem = (struct ncclSendMem*) NCCL_NET_MAP_GET_POINTER(map, gpu, sendMem);
@@ -239,6 +242,9 @@ static ncclResult_t recvConnect(struct ncclComm* comm, struct ncclConnect* conne
   struct collNetConnectArgs args = { rank, nranks, connectInfos };
   struct connectMap* map;
   NCCLCHECK(ncclProxyCall(&recv->proxyConn, ncclProxyMsgConnect, &args, sizeof(struct collNetConnectArgs), &map, sizeof(struct connectMap*)));
+
+  // If collnet connect failed, propagate error to fallback on regular p2p
+  if (map == NULL) return ncclSystemError;
 
   //NCCLCHECK(collNetDumpMap(map));
 
@@ -309,12 +315,15 @@ static ncclResult_t sharedConnect(struct ncclComm* comm, int netDev, struct nccl
           resources->collNetListenComms[netDev],
           resources->collNetComms+netDev);
     free(handlePtrs);
-    NCCLCHECK(ret);
-    // Close listen comm
-    NCCLCHECK(collNetCloseListen(resources->collNetListenComms[netDev]));
+    if (ret == ncclSuccess) {
+      // Close listen comm
+      NCCLCHECK(collNetCloseListen(resources->collNetListenComms[netDev]));
+    } else {
+      resources->collNetListenComms[netDev] = NULL;
+    }
   }
   *collNetComm = resources->collNetComms[netDev];
-  resources->commRefCount[netDev]++;
+  if (*collNetComm) resources->commRefCount[netDev]++;
   return ncclSuccess;
 }
 
@@ -400,6 +409,13 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
     resources->recvMhandles[p] = info->mhandles[p];
 
   NCCLCHECK(sharedConnect(comm, resources->netDev, args->connectInfos, args->nranks, args->rank, &resources->collNetComm));
+
+  // Collnet connect is allowed to fail. Gracefully handle that case by returning NULL to the caller.
+  if (respSize != sizeof(struct connectMap*)) { WARN("sendProxyConnect: respSize is %d != %ld\n", respSize, sizeof(void*)); return ncclInternalError; }
+  if (resources->collNetComm == NULL) {
+    *((struct connectMap**)respBuff) = NULL;
+    return ncclSuccess;
+  }
   connection->proxyAppendPtr = comm->proxyState.progressState.collNet.proxyAppend+2*resources->netDev;
 
   struct connectMap* map = &resources->map;
@@ -435,7 +451,6 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
         resources->useGdr ? NCCL_PTR_CUDA : NCCL_PTR_HOST,
         &resources->sendMhandles[NCCL_PROTO_SIMPLE]));
 
-  if (respSize != sizeof(struct connectMap*)) { WARN("sendProxyConnect: respSize is %d != %ld\n", respSize, sizeof(void*)); return ncclInternalError; }
   *((struct connectMap**)respBuff) = &resources->map;
   return ncclSuccess;
 }
@@ -449,6 +464,13 @@ static ncclResult_t recvProxyConnect(struct ncclProxyConnection* connection, str
   resources->collNetRank = args->rank;
 
   NCCLCHECK(sharedConnect(comm, resources->netDev, args->connectInfos, args->nranks, args->rank, &resources->collNetComm));
+
+  // Collnet connect is allowed to fail. Gracefully handle that case by returning NULL to the caller.
+  if (respSize != sizeof(struct connectMap*)) { WARN("sendProxyConnect: respSize is %d != %ld\n", respSize, sizeof(void*)); return ncclInternalError; }
+  if (resources->collNetComm == NULL) {
+    *((struct connectMap**)respBuff) = NULL;
+    return ncclSuccess;
+  }
   connection->proxyAppendPtr = comm->proxyState.progressState.collNet.proxyAppend+2*resources->netDev+1;
 
   struct connectMap* map = &resources->map;
@@ -743,7 +765,7 @@ static ncclResult_t recvProxyProgress(struct ncclComm* comm, struct ncclProxyArg
         int offset;
         NCCLCHECK(sharedBuffersGet(comm, 1, sharedBuffSlot, startChannel, &offset));
         volatile int* offsFifo = (volatile int*)resources->recvMem->offsFifo;
-        offsFifo[buffSlot] = offset;
+        offsFifo[buffSlot] = offset + (s%COLLNET_GROUP_NSUBS)*args->chunkSize;
         __sync_synchronize();
         volatile uint64_t* recvTail = resources->gdcSync ? resources->gdcSync : &resources->recvMem->tail;
         *recvTail = sub->base + sub->flushed;

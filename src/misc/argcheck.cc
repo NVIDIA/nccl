@@ -11,7 +11,7 @@ static ncclResult_t CudaPtrCheck(const void* pointer, struct ncclComm* comm, con
   cudaPointerAttributes attr;
   cudaError_t err = cudaPointerGetAttributes(&attr, pointer);
   if (err != cudaSuccess || attr.devicePointer == NULL) {
-    WARN("%s : %s is not a valid pointer", opname, ptrname);
+    WARN("%s : %s %p is not a valid pointer", opname, ptrname, pointer);
     return ncclInvalidArgument;
   }
 #if CUDART_VERSION >= 10000
@@ -63,8 +63,9 @@ ncclResult_t ArgsCheck(struct ncclInfo* info) {
   }
 
   if (info->comm->checkPointers) {
-    if ((info->coll == ncclFuncSend || info->coll == ncclFuncRecv) && info->count > 0) {
-      NCCLCHECK(CudaPtrCheck(info->recvbuff, info->comm, "buff", info->opName));
+    if ((info->coll == ncclFuncSend || info->coll == ncclFuncRecv)) {
+      if (info->count >0)
+        NCCLCHECK(CudaPtrCheck(info->recvbuff, info->comm, "buff", info->opName));
     } else {
       // Check CUDA device pointers
       if (info->coll != ncclFuncBroadcast || info->comm->rank == info->root) {

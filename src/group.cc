@@ -274,8 +274,8 @@ sched_delta:
                 if (sendbytes > sendChunkSize) { sendbytes = sendChunkSize; } else { sendRemaining = 0; }
                 // 0-bytes send/recv are considered as syncs. Make sure we only add syncs when requested
                 // (total size == 0), otherwise set size to -1.
-                if (sendbytes <= 0 && totSendBytes != 0) send = NULL;
-                if (recvbytes <= 0 && totRecvBytes != 0) recv = NULL;
+                if (sendbytes < 0 || (sendbytes == 0 && totSendBytes != 0)) send = NULL;
+                if (recvbytes < 0 || (recvbytes == 0 && totRecvBytes != 0)) recv = NULL;
                 if (recv) {
                   NCCLCHECKGOTO(scheduleRecv(comm, recvPeer, channelId, recvbytes, ((char*)recvBuff)+recvOffset), ret, group_cleanup);
                 }

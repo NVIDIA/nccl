@@ -500,8 +500,10 @@ ncclResult_t ncclSocketTest(void* request, int* done, int* size) {
     // Check size is less or equal to the size provided by the user
     if (r->op == NCCL_SOCKET_RECV && data > r->size) {
       char line[SOCKET_NAME_MAXLEN+1];
-      WARN("NET/Socket : peer %s message truncated : receiving %d bytes instead of %d", ncclSocketToString(&r->ctrlSock->addr, line), data, r->size);
-      return ncclInternalError;
+      WARN("NET/Socket : peer %s message truncated : receiving %d bytes instead of %d. If you believe your socket network is in healthy state, \
+          there may be a mismatch in collective sizes or environment settings (e.g. NCCL_PROTO, NCCL_ALGO) between ranks",
+          ncclSocketToString(&r->ctrlSock->addr, line), data, r->size);
+      return ncclInvalidUsage;
     }
     r->size = data;
     r->offset = 0;

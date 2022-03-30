@@ -806,6 +806,7 @@ ncclResult_t ncclProxyCall(struct ncclProxyConnector* proxyConn, int type, void*
   return ncclSuccess;
 error:
   WARN("Proxy Call to rank %d failed (%s)", proxyConn->comm->localRankToRank[proxyConn->localRank], ncclProxyMsgTypeStr[type]);
+  sock->fd = -1;
   return ret;
 }
 
@@ -870,8 +871,6 @@ ncclResult_t ncclProxyShmUnlink(struct ncclComm* comm) {
 
 static ncclResult_t proxyConnInit(struct ncclProxyLocalPeer* peer, struct ncclProxyConnectionPool* connectionPool, struct ncclComm* comm) {
   struct ncclSocket* sock = &peer->sock;
-  char buf[SOCKET_NAME_MAXLEN+1];
-  buf[SOCKET_NAME_MAXLEN] = '\0';
   int id;
   struct ncclProxyConnection* connection;
   NCCLCHECK(ncclProxyNewConnection(connectionPool, &id));
@@ -889,8 +888,7 @@ static ncclResult_t proxyConnInit(struct ncclProxyLocalPeer* peer, struct ncclPr
     struct ncclProxyProgressState* state = &comm->proxyState.progressState;
     NCCLCHECK(ncclSocketSend(sock, state->opsPoolShmSuffix, sizeof("XXXXXX")-1));
   }
-  buf[SOCKET_NAME_MAXLEN] = '\0';
-  INFO(NCCL_NET, "New proxy %s connection %d from %s, transport %d", connection->send ? "send":"recv", id, ncclSocketToString(&sock->addr, buf), connection->transport);
+  INFO(NCCL_NET, "New proxy %s connection %d from local rank %d, transport %d", connection->send ? "send":"recv", id, connection->localRank, connection->transport);
   return ncclSuccess;
 }
 

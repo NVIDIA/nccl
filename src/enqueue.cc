@@ -125,6 +125,19 @@ error:
   return (res != ncclSuccess) ? 0 : max;
 }
 
+// Set shared memory carveout for the nccl kernels
+ncclResult_t ncclKernSetSharedMemoryCarveout(int carveOut) {
+  ncclResult_t res = ncclSuccess;
+  int numNcclKerns = sizeof(ncclKerns)/sizeof(ncclKerns[0]);
+  for (int i = 0; i < numNcclKerns; i++) {
+    CUDACHECKGOTO(cudaFuncSetAttribute(ncclKerns[i], cudaFuncAttributePreferredSharedMemoryCarveout, carveOut), res, error);
+  }
+
+error:
+  return res;
+}
+
+
 /*****************************************************************************/
 /*       Launch system : synchronization and CUDA kernel launch              */
 /*****************************************************************************/
@@ -705,17 +718,6 @@ static ncclResult_t ncclSetupCollKernel(struct ncclInfo* info) {
   params->blockDim.x = std::max<unsigned>(params->blockDim.x, info->nThreads);
   comm->enqueueInfo->maxChannels = params->gridDim.x;  // params may be varied by a second graph hence we need to capture it here
 
-  // Register and exchange input and output buffers
-  if (comm->usingCudaGraph &&                   // only in CUDA graph mode
-      comm->graphRegister == 1 &&               // when registration is enabled
-      info->algorithm == NCCL_ALGO_COLLNET &&   // limited to CollNet for now
-      comm->intraHighestTransportType == TRANSPORT_P2P && // only when all ranks can p2p each other
-      comm->intraRanks == 1) {                  // only in multi-process mode
-    NCCLCHECK(ncclRegBuffAndExchange(info, &eqElem->buffRegInfo));
-    comm->enqueueInfo->nRegBuffs += eqElem->buffRegInfo.nBuffs;
-    work->header.type = ncclWorkTypeRegColl;
-  }
-
   // Inline the first kernel
   if (params->func == NULL) {
     params->func = ncclKerns[work->header.funcIndex];
@@ -726,6 +728,20 @@ static ncclResult_t ncclSetupCollKernel(struct ncclInfo* info) {
       comm->args.bid = 0;    // Only inline for channel 0
       comm->args.header.isLast = 1; // I am so far the last element
     }
+  }
+
+  // Register and exchange input and output buffers
+  if (comm->usingCudaGraph &&                   // only in CUDA graph mode
+      comm->graphRegister == 1 &&               // when registration is enabled
+      info->algorithm == NCCL_ALGO_COLLNET &&   // limited to CollNet for now
+      comm->intraHighestTransportType == TRANSPORT_P2P && // only when all ranks can p2p each other
+      comm->intraRanks == 1) {                  // only in multi-process mode
+    NCCLCHECK(ncclRegBuffAndExchange(info, &eqElem->buffRegInfo));
+    comm->enqueueInfo->nRegBuffs += eqElem->buffRegInfo.nBuffs;
+    work->header.type = ncclWorkTypeRegColl;
+    // Disable inline argument because we need kernel to copy the entire ncclWork from workFifo
+    // because the registered addresses are in ncclWorkElemReg
+    comm->args.header.type = ncclWorkTypeUnused;
   }
 
   return ncclSuccess;

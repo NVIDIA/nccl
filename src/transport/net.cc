@@ -130,7 +130,7 @@ struct recvResources {
   uint64_t llLastCleaning;
 };
 
-NCCL_PARAM(NetDisableIntra, "NET_DISABLE_INTRA", -2);
+NCCL_PARAM(NetDisableIntra, "NET_DISABLE_INTRA", 0);
 
 /* Determine if two peers can communicate with NET */
 static ncclResult_t canConnect(int* ret, struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo* info1, struct ncclPeerInfo* info2) {

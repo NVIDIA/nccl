@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2022, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -8,6 +8,7 @@
 #define NCCL_UTILS_H_
 
 #include "nccl.h"
+#include "checks.h"
 #include <stdint.h>
 
 int ncclCudaCompCap();
@@ -92,6 +93,11 @@ class ncclRecyclableList {
     T* rv = &cursor->data;
     cursor = cursor->next;
     return rv;
+  }
+
+  T* peakNext() {
+    if (cursor == NULL || cursor == tail) return NULL;
+    return &cursor->data;
   }
 
   // Recycle the list without freeing the space

@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2021, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2022, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -64,13 +64,13 @@ ncclResult_t freeChannel(struct ncclChannel* channel, int nRanks) {
   for (int r=0; r<nRanks+1; r++) {
     struct ncclPeer* peer = channel->peers+r;
     for (int b=0; b<NCCL_MAX_CONNS; b++) {
-      if (peer->send[b].transportResources) NCCLCHECK(peer->send[b].transportComm->free(peer->send[b].transportResources));
+      if (peer->send[b].transportComm) NCCLCHECK(peer->send[b].transportComm->free(peer->send+b));
     }
   }
   for (int r=0; r<nRanks+1; r++) {
     struct ncclPeer* peer = channel->peers+r;
     for (int b=0; b<NCCL_MAX_CONNS; b++) {
-      if (peer->recv[b].transportResources) NCCLCHECK(peer->recv[b].transportComm->free(peer->recv[b].transportResources));
+      if (peer->recv[b].transportComm) NCCLCHECK(peer->recv[b].transportComm->free(peer->recv+b));
     }
   }
 

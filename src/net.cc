@@ -112,7 +112,7 @@ static void initPlugin(ncclNet_v5_t** net, ncclCollNet_v5_t** collnet) {
   const char* envPluginName = getenv("NCCL_NET_PLUGIN");
   if (envPluginName && strlen(envPluginName)) {
     snprintf(ncclNetPluginName, 128, "libnccl-net-%s.so", envPluginName);
-    INFO(NCCL_INIT, "Plugin name set by env to %s\n", ncclNetPluginName);
+    INFO(NCCL_INIT, "Plugin name set by env to %s", ncclNetPluginName);
   } else {
     sprintf(ncclNetPluginName, "libnccl-net.so");
   }

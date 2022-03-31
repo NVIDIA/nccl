@@ -236,11 +236,13 @@ struct ncclWork {
 
 static_assert(sizeof(struct ncclWork) == NCCL_WORK_SIZE, "ncclWork size needs to be well aligned");
 
+#define NTREES 2
+
 struct ncclChannel {
   union {
     struct {
       struct ncclRing ring;
-      struct ncclTree tree;
+      struct ncclTree tree[NTREES];
       struct ncclDirect collTree;
 
       int id;

@@ -698,7 +698,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
   char line[1024];
   line[0]='\0';
   for (int c=0; c<comm->nChannels; c++) {
-    struct ncclTree* tree = &comm->channels[c].tree;
+    struct ncclTree* tree = &comm->channels[c].tree[0];
     snprintf(line+strlen(line), 1023-strlen(line), " [%d] %d/%d/%d->%d->%d",
         c, tree->down[0], tree->down[1], tree->down[2], rank, tree->up);
     INFO(NCCL_GRAPH, "Ring %02d : %d -> %d -> %d", c, comm->channels[c].ring.prev, comm->rank, comm->channels[c].ring.next);
@@ -720,14 +720,16 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
   INFO(NCCL_INIT, "Connected all rings");
 
   // Connect Trees
-  for (int c=0; c<comm->nChannels; c++) {
-    struct ncclChannel* channel = comm->channels+c;
-    if (comm->nRanks == 1) continue;
-    NCCLCHECKGOTO(ncclTransportP2pConnect(comm, channel, NCCL_MAX_TREE_ARITY, channel->tree.down, 1, &channel->tree.up, 0), ret, affinity_restore);
-    NCCLCHECKGOTO(ncclTransportP2pConnect(comm, channel, 1, &channel->tree.up, NCCL_MAX_TREE_ARITY, channel->tree.down, 0), ret, affinity_restore);
+  for (int t=0; t<NTREES; t++) { // Connect both trees in a channel
+    for (int c=0; c<comm->nChannels; c++) {
+      struct ncclChannel* channel = comm->channels+c;
+      if (comm->nRanks == 1) continue;
+      NCCLCHECKGOTO(ncclTransportP2pConnect(comm, channel, NCCL_MAX_TREE_ARITY, channel->tree[t].down, 1, &channel->tree[t].up, t), ret, affinity_restore);
+      NCCLCHECKGOTO(ncclTransportP2pConnect(comm, channel, 1, &channel->tree[t].up, NCCL_MAX_TREE_ARITY, channel->tree[t].down, t), ret, affinity_restore);
+    }
+    NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &treeGraph, t), ret, affinity_restore);
   }
-  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &treeGraph, 0), ret, affinity_restore);
-  INFO(NCCL_INIT, "Connected all trees");
+  INFO(NCCL_INIT, "Connected all double trees");
 
   // Check if we can setup CollNet
   if (comm->collNetSupport > 0) {

@@ -96,11 +96,13 @@ namespace {
 
   template<typename T, typename RedOp, typename Proto>
   __device__ __forceinline__ void runTreeUpDown(ncclWorkElem *args) {
-    const int tid = threadIdx.x;
-    const int nthreads = args->header.nWarps*WARP_SIZE;
-    const int bid = args->bid;
-    const int nChannels = args->nChannels;
-    ncclTree *tree = &ncclShmem.channel.tree;
+    int tid = threadIdx.x;
+    const int nthreads = args->header.nWarps*WARP_SIZE/NTREES;
+    const int nChannels = args->nChannels * NTREES;
+    const int treeId = tid / nthreads;
+    const int bid = args->bid * NTREES + treeId;
+    ncclTree *tree = ncclShmem.channel.tree + treeId;
+    tid = tid % nthreads;
     ssize_t chunkSize = int(
       Proto::Id == NCCL_PROTO_SIMPLE ? args->lastChunkSize
                    /* LL & LL128 */  : Proto::calcBytePerStep()/sizeof(T));
@@ -113,9 +115,10 @@ namespace {
     if (loopSize > size)
       chunkSize = divUp((int)size, int(nChannels*minChunkSize))*int(minChunkSize);
 
+    int group = (treeId*Proto::MaxGroupWidth) | (treeId<<16);
     { // Reduce : max number of recv is 3, max number of send is 1 (binary tree + local)
       Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_DEV_ARITY, 1>, /*Direct=*/0, Proto, 0> prims
-        (tid, nthreads, tree->down, &tree->up, args->sendbuff, args->recvbuff, args->redOpArg);
+        (tid, nthreads, tree->down, &tree->up, args->sendbuff, args->recvbuff, args->redOpArg, group);
       if (tree->up == -1) {
         for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
           ssize_t offset = gridOffset + bid*int(chunkSize);
@@ -141,7 +144,7 @@ namespace {
 
     { // Broadcast : max number of recv is 1, max number of send is 3 (binary tree + local)
       Primitives<T, RedOp, FanAsymmetric<1, NCCL_MAX_DEV_ARITY>, /*Direct=*/1, Proto, 0> prims
-        (tid, nthreads, &tree->up, tree->down, args->sendbuff, args->recvbuff, args->redOpArg);
+        (tid, nthreads, &tree->up, tree->down, args->sendbuff, args->recvbuff, args->redOpArg, group);
       if (tree->up == -1) {
         for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
           ssize_t offset = gridOffset + bid*int(chunkSize);
@@ -168,11 +171,13 @@ namespace {
 
   template<typename T, typename RedOp, typename Proto>
   __device__ __forceinline__ void runTreeSplit(ncclWorkElem *args) {
-    const int tid = threadIdx.x;
-    const int nthreads = args->header.nWarps*WARP_SIZE;
-    const int bid = args->bid;
-    const int nChannels = args->nChannels;
-    ncclTree *tree = &ncclShmem.channel.tree;
+    int tid = threadIdx.x;
+    const int nthreads = args->header.nWarps*WARP_SIZE/NTREES;
+    const int nChannels = args->nChannels * NTREES;
+    const int treeId = tid / nthreads;
+    const int bid = args->bid * NTREES + treeId;
+    ncclTree *tree = ncclShmem.channel.tree + treeId;
+    tid = tid % nthreads;
     ssize_t chunkSize = int(
       Proto::Id != NCCL_PROTO_LL ? args->lastChunkSize
                                  : Proto::calcBytePerStep()/sizeof(T));
@@ -185,8 +190,8 @@ namespace {
 
     int nthreadsSplit;
     if (Proto::Id == NCCL_PROTO_SIMPLE) {
-      nthreadsSplit = nthreads/2;
-      if (nthreadsSplit >= 256) nthreadsSplit += 64;
+      nthreadsSplit = alignUp(nthreads/2, WARP_SIZE);
+      if (nthreads-nthreadsSplit >= 128) nthreadsSplit += WARP_SIZE;
     } else { // LL & LL128
       // Receiving from up to 3 sources is more compute intensive than sending
       // to 3 dests. Use 70% for reduce and 30% for bcast.
@@ -198,8 +203,9 @@ namespace {
 
     if (tree->up == -1) {
       // Reduce and broadcast. Max number of recv is 3, max number of send is 3
+      const int group = (2*treeId*Proto::MaxGroupWidth) | (treeId<<16);
       Primitives<T, RedOp, FanSymmetric<NCCL_MAX_DEV_ARITY>, /*Direct=*/1, Proto, 0>
-        prims(tid, nthreads, tree->down, tree->down, args->sendbuff, args->recvbuff, args->redOpArg);
+        prims(tid, nthreads, tree->down, tree->down, args->sendbuff, args->recvbuff, args->redOpArg, group);
       for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
         ssize_t offset = gridOffset + bid*int(chunkSize);
         int nelem = min(chunkSize, size-offset);
@@ -215,8 +221,9 @@ namespace {
        * into DirectRecv and DirectSend capabilities, this ctor would have both=0,
        * but the ctor above for tree roots would be DirectRecv=0 DirectSend=1.
        */
+      const int group = (2*treeId*Proto::MaxGroupWidth) | (treeId<<16);
       Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_DEV_ARITY, 1>, /*Direct=*/1, Proto, 0>
-        prims(tid, nthreadsSplit, tree->down, &tree->up, args->sendbuff, args->recvbuff, args->redOpArg, 0*Proto::MaxGroupWidth);
+        prims(tid, nthreadsSplit, tree->down, &tree->up, args->sendbuff, args->recvbuff, args->redOpArg, group);
       if (tree->down[0] == -1) {
         for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
           ssize_t offset = gridOffset + bid*int(chunkSize);
@@ -234,8 +241,9 @@ namespace {
     }
     else {
       // Broadcast down. Max number of recv is 1, max number of send is 3 (binary tree + local)
+      const int group = ((2*treeId+1)*Proto::MaxGroupWidth) | (treeId<<16);
       Primitives<T, RedOp, FanAsymmetric<1, NCCL_MAX_DEV_ARITY>, /*Direct=*/1, Proto, 0>
-        prims(tid-nthreadsSplit, nthreads-nthreadsSplit, &tree->up, tree->down, args->sendbuff, args->recvbuff, args->redOpArg, 1*Proto::MaxGroupWidth);
+        prims(tid-nthreadsSplit, nthreads-nthreadsSplit, &tree->up, tree->down, args->sendbuff, args->recvbuff, args->redOpArg, group);
       if (tree->down[0] == -1) {
         for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
           ssize_t offset = gridOffset + bid*int(chunkSize);

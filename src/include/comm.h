@@ -141,6 +141,9 @@ struct ncclComm {
   float latencies[NCCL_NUM_FUNCTIONS][NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
   float bandwidths[NCCL_NUM_FUNCTIONS][NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
   int maxThreads[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
+  // Parallelism factor for tuning number of channels used at run time
+  // e.g. for tree algorithm: 1 or 2 (NTREES)
+  int channelFactors[NCCL_NUM_ALGORITHMS];
 
   // An internal CUDA stream for NCCL kernel CGMD launches
   int groupCudaStream;

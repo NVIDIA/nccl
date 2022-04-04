@@ -121,7 +121,7 @@ clean :
 	$(MAKE) -C collectives/device clean
 	rm -rf ${INCDIR} ${LIBDIR} ${PKGDIR} ${OBJDIR}
 
-install : lib
+install : build
 	mkdir -p $(PREFIX)/lib
 	mkdir -p $(PREFIX)/lib/pkgconfig
 	mkdir -p $(PREFIX)/include

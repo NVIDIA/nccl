@@ -228,6 +228,9 @@ ncclResult_t ncclGetLevel(int* level, const char* disableEnv, const char* levelE
           }
         }
         // Old style numbering
+        // levelsOldToNew to is an array with each index corresponding to the
+        // "old level" int, and each value mapping to the correct value defined in topo.h
+        // maxOldLevel is a quick check to handle out of bounds (based on the length of levelsOldToNew)
         if (l == -1 && str[0] >= '0' && str[0] <= '9') {
           int oldLevel = strtol(str, NULL, 0);
           const int maxOldLevel = sizeof(levelsOldToNew)/sizeof(int) - 1;
@@ -521,24 +524,27 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclPeer
       // Check whether we can access the NIC through another NVLink-connected GPU (PXN)
       struct ncclTopoNode* gpu = system->nodes[GPU].nodes+g;
       if (ncclPxnDisable() != 1 && gpu->paths[NET][n].type > PATH_PXB) {
+        int pxnGpu = -1;
+
         for (int p=0; p<system->nodes[GPU].count; p++) {
           if (p == g) continue;
-          struct ncclTopoNode* peerNode = system->nodes[GPU].nodes+p;
-
-          // To ensure proper balancing, use only a local GPU which advertised that NIC as its preferred one.
-          int netDev;
-          NCCLCHECK(ncclTopoGetLocalNet(system, peerNode->gpu.rank, &netDev));
-          // Make sure we can allocate memory on that GPU.
-          if (netDev != netNode->id) continue;
 
           // PXN = PCI + NVLink.
-          if (netNode->paths[GPU][p].type > PATH_PXB || peerNode->paths[GPU][g].type > PATH_NVL) continue;
+          struct ncclTopoNode* peerNode = system->nodes[GPU].nodes+p;
+          if (peerNode->paths[NET][n].type > PATH_PXB || peerNode->paths[GPU][g].type > PATH_NVL) continue;
 
+          pxnGpu = p;
+
+          int netDev;
+          NCCLCHECK(ncclTopoGetLocalNet(system, peerNode->gpu.rank, &netDev));
+          // To ensure proper balancing, use preferably a local GPU which advertised that NIC as its preferred one.
+          if (netDev == netNode->id) break;
+        }
+        if (pxnGpu != -1) {
           // We can use that GPU as relay to communicate with that NIC.
           // Only enabling it in the GPU->NIC direction for now to favor
           // receiving locally and sending remotely (consistent with net.cc)
-          NCCLCHECK(addInterStep(system, GPU, p, GPU, g, NET, n));
-          break;
+          NCCLCHECK(addInterStep(system, GPU, pxnGpu, GPU, g, NET, n));
         }
       }
       // Update path when we dont want to / can't use GPU Direct RDMA.

@@ -223,8 +223,8 @@ ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction) {
           ncclIbDevs[ncclNIbDevs].mrCache.slots = NULL;
 
           pthread_create(&ncclIbAsyncThread, NULL, ncclIbAsyncThreadMain, context);
-          pthread_detach(ncclIbAsyncThread); // will not be pthread_join()'d
           ncclSetThreadName(ncclIbAsyncThread, "NCCL IbAsync %2d", ncclNIbDevs);
+          pthread_detach(ncclIbAsyncThread); // will not be pthread_join()'d
           ncclNIbDevs++;
           nPorts++;
         }

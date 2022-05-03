@@ -823,18 +823,17 @@ collnet_cleanup:
     NCCLCHECK(ncclTopoGetNvbGpus(comm->topo, comm->rank, &nvbNpeers, &nvbPeers));
     for (int r=0; r<nvbNpeers; r++) {
       int peer = nvbPeers[r];
-      int delta = (comm->nRanks + (comm->rank-peer)) % comm->nRanks;
+      int channelId;
       for (int c=0; c<comm->p2pnChannelsPerPeer; c++) {
-        int channelId = (delta+comm->p2pChannels[c]) % comm->p2pnChannels;
-        if (comm->channels[channelId].peers[peer].recv[1].connected == 0) { // P2P uses only 1 connector
-          comm->connectRecv[peer] |= (1<<channelId);
+        NCCLCHECK(ncclChannelCompute(comm, peer, c, ncclFuncSend, &channelId));
+        if (comm->channels[channelId].peers[peer].send[1].connected == 0) {
+          comm->connectSend[peer] |= (1<<channelId);
         }
       }
-      delta = (comm->nRanks - (comm->rank-peer)) % comm->nRanks;
       for (int c=0; c<comm->p2pnChannelsPerPeer; c++) {
-        int channelId = (delta+comm->p2pChannels[c]) % comm->p2pnChannels;
-        if (comm->channels[channelId].peers[peer].send[1].connected == 0) { // P2P uses only 1 connector
-          comm->connectSend[peer] |= (1<<channelId);
+        NCCLCHECK(ncclChannelCompute(comm, peer, c, ncclFuncRecv, &channelId));
+        if (comm->channels[channelId].peers[peer].recv[1].connected == 0) {
+          comm->connectRecv[peer] |= (1<<channelId);
         }
       }
     }

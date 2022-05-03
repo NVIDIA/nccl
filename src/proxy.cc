@@ -960,12 +960,10 @@ void* ncclProxyService(void* _args) {
 
   struct pollfd pollfds[NCCL_MAX_LOCAL_RANKS+1];
   struct ncclProxyLocalPeer peers[NCCL_MAX_LOCAL_RANKS];
+  memset(&peers, 0, sizeof(struct ncclProxyLocalPeer)*NCCL_MAX_LOCAL_RANKS);
   for (int s=0; s<NCCL_MAX_LOCAL_RANKS; s++) {
     peers[s].sock.fd = pollfds[s].fd = -1;
-    peers[s].sock.abortFlag = NULL;
-    peers[s].sock.asyncFlag = 0;
     pollfds[s].events = POLLHUP|POLLIN;
-    peers[s].asyncOps.type = 0;
   }
   pollfds[NCCL_MAX_LOCAL_RANKS].fd = comm->proxyState.listenSock->fd;
   pollfds[NCCL_MAX_LOCAL_RANKS].events = POLLIN;
@@ -1066,13 +1064,13 @@ void* ncclProxyService(void* _args) {
 ncclResult_t ncclProxyInit(struct ncclComm* comm, struct ncclSocket* sock, union ncclSocketAddress* peerAddresses) {
   comm->proxyState.listenSock = sock;
   comm->proxyState.peerAddresses = peerAddresses;
-  ncclSetThreadName(comm->proxyState.thread, "NCCL Service %2d", comm->cudaDev);
   return ncclSuccess;
 }
 
 ncclResult_t ncclProxyCreate(struct ncclComm* comm) {
   // comm->proxyState.thread is pthread_join()'d by commFree() in init.cc
   pthread_create(&comm->proxyState.thread, NULL, ncclProxyService, comm);
+  ncclSetThreadName(comm->proxyState.thread, "NCCL Service %2d", comm->cudaDev);
   return ncclSuccess;
 }
 

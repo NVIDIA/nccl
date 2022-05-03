@@ -49,13 +49,28 @@ extern const char* topoNodeTypeStr[];
 #define LINK_NET 8
 extern const char* topoLinkTypeStr[];
 
+// Local (myself)
 #define PATH_LOC 0
+
+// Connection traversing NVLink
 #define PATH_NVL 1
+
+// Connection through NVLink using an intermediate GPU
 #define PATH_NVB 2
+
+// Connection traversing at most a single PCIe bridge
 #define PATH_PIX 3
+
+// Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
 #define PATH_PXB 4
+
+// Connection between a GPU and a NIC using an intermediate GPU. Used to enable rail-local, aggregated network send/recv operations.
 #define PATH_PXN 5
+
+// Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
 #define PATH_PHB 6
+
+// Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
 #define PATH_SYS 7
 #define PATH_DIS 7
 extern const char* topoPathTypeStr[];

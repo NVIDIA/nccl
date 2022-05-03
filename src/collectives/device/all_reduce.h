@@ -17,7 +17,7 @@ namespace {
     const int nChannels = args->nChannels;
     ncclRing *ring = &ncclShmem.channel.ring;
     int ringIx = ring->index;
-    const ssize_t chunkSize = int(Proto::calcBytePerStep()/sizeof(T) * (Proto::Id == NCCL_PROTO_SIMPLE ? ALLREDUCE_CHUNKSTEPS : 1));
+    const ssize_t chunkSize = int(Proto::calcBytePerStep(NCCL_STEPS)/sizeof(T) * (Proto::Id == NCCL_PROTO_SIMPLE ? ALLREDUCE_CHUNKSTEPS : 1));
     const int nranks = ncclShmem.comm.nRanks;
     const ssize_t loopSize = nChannels*nranks*chunkSize;
     const ssize_t size = args->count;
@@ -103,7 +103,7 @@ namespace {
     ncclTree *tree = &ncclShmem.channel.tree;
     ssize_t chunkSize = int(
       Proto::Id == NCCL_PROTO_SIMPLE ? args->lastChunkSize
-                   /* LL & LL128 */  : Proto::calcBytePerStep()/sizeof(T));
+                   /* LL & LL128 */  : Proto::calcBytePerStep(NCCL_STEPS)/sizeof(T));
     const ssize_t minChunkSize = int(
       Proto::Id == NCCL_PROTO_SIMPLE ? (nthreads-2*WARP_SIZE)*8*(sizeof(uint64_t)/sizeof(T))
                    /* LL & LL128 */  : nthreads*(Proto::calcBytePerGrain()/sizeof(T)));
@@ -175,7 +175,7 @@ namespace {
     ncclTree *tree = &ncclShmem.channel.tree;
     ssize_t chunkSize = int(
       Proto::Id != NCCL_PROTO_LL ? args->lastChunkSize
-                                 : Proto::calcBytePerStep()/sizeof(T));
+                                 : Proto::calcBytePerStep(NCCL_STEPS)/sizeof(T));
     const ssize_t minChunkSize = int(
       Proto::Id == NCCL_PROTO_SIMPLE ? (nthreads - 2*WARP_SIZE)*8*(sizeof(uint64_t)/sizeof(T)) :
       Proto::Id == NCCL_PROTO_LL     ? nthreads*(Proto::calcBytePerGrain()/sizeof(T))

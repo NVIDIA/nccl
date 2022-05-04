@@ -39,7 +39,7 @@ struct ncclSendMem {
       void* ptrExchange;
       uint64_t redOpArgExchange[2];
       char pad2[CACHE_LINE_SIZE-sizeof(void*)-2*sizeof(uint64_t)];
-      int offsFifo[NCCL_STEPS];
+      int offsFifo[NCCL_MAX_STEPS];
     };
     char pad3[MEM_ALIGN];
   };
@@ -50,8 +50,8 @@ struct ncclRecvMem {
     struct {
       uint64_t tail;
       char pad1[CACHE_LINE_SIZE-sizeof(uint64_t)];
-      int sizesFifo[NCCL_STEPS];
-      int offsFifo[NCCL_STEPS];
+      int sizesFifo[NCCL_MAX_STEPS];
+      int offsFifo[NCCL_MAX_STEPS];
       int flush; // For GDRCopy-based flush
     };
     char pad4[MEM_ALIGN];

@@ -95,14 +95,14 @@ ncclResult_t printProxyOp(struct ncclProxyArgs* op, int poolIndex, int opIndex) 
     if (op->state == ncclProxyOpProgress) {
       char status = ' ';
       if (op->pattern == ncclPatternRecv) {
-        if (sub->posted < sub->nsteps && sub->posted < sub->done + NCCL_STEPS) status = 'I'; // Init
+        if (sub->posted < sub->nsteps && sub->posted < sub->done + op->ncclSteps) status = 'I'; // Init
         else if (sub->received < sub->posted) status = 'R'; // Receiving
         else if (sub->received < sub->transmitted) status = 'R'; // Receiving
         else if (sub->transmitted < sub->received) status = 'F'; // Flushing
         else if (sub->done < sub->transmitted) status = 'G'; // Waiting on GPU
         else status = 'D'; // Done
       } else if (op->pattern == ncclPatternSend) {
-        if (sub->posted < sub->nsteps && sub->posted < sub->done + NCCL_STEPS) status = 'I'; // Init
+        if (sub->posted < sub->nsteps && sub->posted < sub->done + op->ncclSteps) status = 'I'; // Init
         else if (sub->transmitted < sub->posted) status = 'G'; // Waiting on GPU
         else if (sub->done < sub->transmitted) status = 'S'; // Sending
         else status = 'D'; // Done
@@ -225,6 +225,7 @@ static ncclResult_t ncclProxyOpToArgs(struct ncclProxyOp* op, struct ncclProxyAr
   //memset(&args->progress, 0, sizeof(struct ncclProxyArgs)-offsetof(struct ncclProxyArgs, progress));
   args->done = 0;
   args->opCount = op->opCount;
+  args->ncclSteps = op->ncclSteps;
   args->sliceSteps = op->sliceSteps;
   args->chunkSteps = op->chunkSteps;
   args->chunkSize = op->chunkSize;
@@ -401,12 +402,13 @@ ncclResult_t ncclProxyComputeP2p(struct ncclInfo* info, struct ncclProxyOp* op) 
   int channelId = info->channelId;
   struct ncclChannel* channel = info->comm->channels+channelId;
   op->channelId = channelId;
+  op->ncclSteps = info->ncclSteps;
   op->sliceSteps = 1;
   op->chunkSteps = 1;
   op->protocol = NCCL_PROTO_SIMPLE;
   op->dtype = info->datatype;
 
-  int stepSize = info->comm->buffSizes[NCCL_PROTO_SIMPLE]/NCCL_STEPS/SENDRECV_SLICEFACTOR;
+  int stepSize = info->comm->buffSizes[NCCL_PROTO_SIMPLE]/info->ncclSteps/SENDRECV_SLICEFACTOR;
   info->chunkSize = stepSize;
   op->root = info->root;
   op->nbytes = info->count;

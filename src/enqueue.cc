@@ -546,7 +546,7 @@ comp_next:
   work->header.nWarps = info->nThreads / WARP_SIZE;
   work->redOpArg = info->opFull.scalarArg;
   work->redOpArgIsPtr = info->opFull.scalarArgIsPtr;
-  work->ncclSteps = NCCL_STEPS;
+  work->ncclSteps = info->ncclSteps;
   // ncclSteps must be power of two for NCCL_LL_CLEAN_MASK
   assert((work->ncclSteps & (work->ncclSteps - 1)) == 0);
 
@@ -558,7 +558,7 @@ comp_next:
 
   work->header.funcIndex = FUNC_INDEX(info->coll, info->opFull.op, info->datatype, info->algorithm, info->protocol);
 
-  int stepSize   = info->comm->buffSizes[info->protocol]/NCCL_STEPS;
+  int stepSize   = info->comm->buffSizes[info->protocol]/info->ncclSteps;
   int chunkSteps = (info->protocol == NCCL_PROTO_SIMPLE && info->algorithm == NCCL_ALGO_RING) ? info->chunkSteps : 1;
   int sliceSteps = (info->protocol == NCCL_PROTO_SIMPLE && info->algorithm == NCCL_ALGO_RING) ? info->sliceSteps : 1;
   int chunkSize  = stepSize*chunkSteps;
@@ -605,6 +605,7 @@ comp_next:
   //if (info->comm->rank == 0) printf("Coll %d, size %ld -> %dx%d, chunkSize %d (algo %d proto%d)\n", info->coll, info->nBytes, info->nChannels, info->nThreads, chunkSize, info->algorithm, info->protocol);
   int nLoops = (int)(DIVUP(info->nBytes, (((size_t)(info->nChannels))*info->nchunksPerLoop*chunkEffectiveSize)));
   proxyOp->nsteps = info->nstepsPerLoop * nLoops * chunkSteps;
+  proxyOp->ncclSteps = info->ncclSteps;
   proxyOp->sliceSteps = sliceSteps;
   proxyOp->chunkSteps = chunkSteps;
   proxyOp->chunkSize = chunkSize;
@@ -885,7 +886,7 @@ static ncclResult_t ncclSaveP2p(struct ncclInfo* info) {
         }
       }
     }
-    NCCLCHECK(ncclSaveP2pInfo(comm->p2pSends[info->root], info->recvbuff, nBytes));
+    NCCLCHECK(ncclSaveP2pInfo(comm->p2pSends[info->root], info->recvbuff, nBytes, info->ncclSteps));
     comm->p2pSendCount++;
   } else {
     if (peer != comm->rank) {
@@ -902,7 +903,7 @@ static ncclResult_t ncclSaveP2p(struct ncclInfo* info) {
         }
       }
     }
-    NCCLCHECK(ncclSaveP2pInfo(comm->p2pRecvs[info->root], info->recvbuff, nBytes));
+    NCCLCHECK(ncclSaveP2pInfo(comm->p2pRecvs[info->root], info->recvbuff, nBytes, info->ncclSteps));
     comm->p2pRecvCount++;
   }
   return ncclSuccess;
@@ -938,7 +939,7 @@ static ncclResult_t computeP2pWorkElem(struct ncclInfo* info /* input */, struct
   elem->buff = info->recvbuff;
   elem->subType = info->coll == ncclFuncSend ? ncclWorkSubTypeSend : ncclWorkSubTypeRecv;
   elem->count = info->count;
-  elem->ncclSteps = NCCL_STEPS;
+  elem->ncclSteps = info->ncclSteps;
   elem->chunkSize = info->chunkSize;
   elem->peer = info->root;
   return ncclSuccess;
@@ -1334,6 +1335,8 @@ static ncclResult_t hostToDevRedOp(
   return ncclSuccess;
 }
 
+NCCL_PARAM(Steps, "STEPS", NCCL_STEPS_DEFAULT);
+
 ncclResult_t ncclEnqueueCheck(struct ncclInfo* info) {
   ncclResult_t ret = ncclSuccess;
   bool isAsync = ncclAsyncMode();
@@ -1345,6 +1348,9 @@ ncclResult_t ncclEnqueueCheck(struct ncclInfo* info) {
     CUDACHECKGOTO(cudaSetDevice(info->comm->cudaDev), ret, end);
   }
   NCCLCHECKGOTO(ArgsCheck(info), ret, end);
+
+  info->ncclSteps = ncclParamSteps();
+  assert(info->ncclSteps <= NCCL_MAX_STEPS);
 
   // Copy reduction op state from op handle into info struct here since the
   // op handle may be destroyed before ncclGroupEnd().

@@ -52,6 +52,7 @@ struct ncclInfo {
   int nchunksPerLoop;
   int chunkSize;
   int channelId;
+  int ncclSteps;
 };
 
 #endif

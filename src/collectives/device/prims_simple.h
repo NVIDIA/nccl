@@ -355,6 +355,8 @@ class Primitives<
       if (flags & RoleWaitSend) {
         ncclShmem.groups[group].sendConns[index] = conn; // WaitSend role saves since that's who needs it in setDataPtrs()
         connStepPtr = conn->head;
+        // Adjust initial credit set in sendProxyConnect()
+        if (*connStepPtr == (uint64_t)-NCCL_MAX_STEPS) *connStepPtr = -ncclSteps;
         connStepCache = *connStepPtr;
         flags |= (conn->offsFifo != nullptr) ? OffsFifoEnabled : 0;
         if (flags & OffsFifoEnabled)

@@ -8,6 +8,7 @@
 #include "debug.h"
 #include "enqueue.h"
 #include "transport.h"
+#include <assert.h>
 
 #define MAX_ASYNC_OPS 128
 thread_local pthread_t ncclGroupThreads[MAX_ASYNC_OPS];
@@ -101,19 +102,21 @@ ncclResult_t ncclGroupStart() {
   return ncclSuccess;
 }
 
-static ncclResult_t scheduleSend(struct ncclComm* comm, int peer, int channelId, size_t count, void* buff) {
+static ncclResult_t scheduleSend(struct ncclComm* comm, int peer, int channelId, int ncclSteps, size_t count, void* buff) {
   struct ncclInfo info = { ncclFuncSend, "Send",
     NULL, buff, count, ncclInt8, ncclSum, peer, comm, comm->userStream, /* Args */
     1, 1 };
   info.channelId = channelId;
+  info.ncclSteps = ncclSteps;
   NCCLCHECK(ncclSetupP2pKernel(&info));
   return ncclSuccess;
 }
-static ncclResult_t scheduleRecv(struct ncclComm* comm, int peer, int channelId, size_t count, void* buff) {
+static ncclResult_t scheduleRecv(struct ncclComm* comm, int peer, int channelId, int ncclSteps, size_t count, void* buff) {
   struct ncclInfo info = { ncclFuncRecv, "Recv",
     NULL, buff, count, ncclInt8, ncclSum, peer, comm, comm->userStream, /* Args */
     1, 1 };
   info.channelId = channelId;
+  info.ncclSteps = ncclSteps;
   NCCLCHECK(ncclSetupP2pKernel(&info));
   return ncclSuccess;
 }
@@ -210,9 +213,6 @@ ncclResult_t ncclGroupEnd() {
       int localRank = comm->localRank;
       int p2pGroupSize = NCCL_MAX_WORK_ELEMENTS_P2P/2;
 
-      // Compute how much to split operations
-      // Natural step size matching buffer steps.
-      ssize_t stepSize = comm->buffSizes[NCCL_PROTO_SIMPLE] / NCCL_STEPS;
       // Try to use all channels
       int nChannelsMax = comm->p2pnChannelsPerPeer;
       int nChannelsMin = nChannelsMax;
@@ -256,6 +256,10 @@ sched_delta:
               if (recv && comm->p2pRecvs[recvPeer]->peakNext() == NULL) comm->p2pRecvs[recvPeer]->recycle();
               if (send && comm->p2pSends[sendPeer]->peakNext() == NULL) comm->p2pSends[sendPeer]->recycle();
 
+              // Compute how much to split operations
+              // Natural step size matching buffer steps.
+              ssize_t stepSize = comm->buffSizes[NCCL_PROTO_SIMPLE] / (recv ? recv->ncclSteps : send->ncclSteps);
+              assert((!recv || !send) || (recv->ncclSteps == send->ncclSteps));
               ssize_t recvChunkSize = getP2pChunkSize(totRecvBytes, nChannelsMin, nChannelsMax, stepSize, SENDRECV_SLICEFACTOR*stepSize);
               ssize_t sendChunkSize = getP2pChunkSize(totSendBytes, nChannelsMin, nChannelsMax, stepSize, SENDRECV_SLICEFACTOR*stepSize);
 
@@ -277,10 +281,10 @@ sched_delta:
                 if (sendbytes < 0 || (sendbytes == 0 && totSendBytes != 0)) send = NULL;
                 if (recvbytes < 0 || (recvbytes == 0 && totRecvBytes != 0)) recv = NULL;
                 if (recv) {
-                  NCCLCHECKGOTO(scheduleRecv(comm, recvPeer, channelId, recvbytes, ((char*)recvBuff)+recvOffset), ret, group_cleanup);
+                  NCCLCHECKGOTO(scheduleRecv(comm, recvPeer, channelId, recv->ncclSteps, recvbytes, ((char*)recvBuff)+recvOffset), ret, group_cleanup);
                 }
                 if (send) {
-                  NCCLCHECKGOTO(scheduleSend(comm, sendPeer, channelId, sendbytes, ((char*)sendBuff)+sendOffset), ret, group_cleanup);
+                  NCCLCHECKGOTO(scheduleSend(comm, sendPeer, channelId, send->ncclSteps, sendbytes, ((char*)sendBuff)+sendOffset), ret, group_cleanup);
                 }
                 recvOffset += recvChunkSize;
                 sendOffset += sendChunkSize;

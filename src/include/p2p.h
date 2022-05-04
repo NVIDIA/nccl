@@ -12,16 +12,18 @@
 struct ncclP2Pinfo {
   void* buff;
   ssize_t nbytes;
+  int ncclSteps;
 };
 
 typedef ncclRecyclableList<struct ncclP2Pinfo> ncclP2Plist;
 
-static ncclResult_t ncclSaveP2pInfo(ncclP2Plist* &p2p, void* buff, ssize_t nBytes) {
+static ncclResult_t ncclSaveP2pInfo(ncclP2Plist* &p2p, void* buff, ssize_t nBytes, int ncclSteps) {
   if (p2p == NULL) p2p = new ncclP2Plist();
   struct ncclP2Pinfo* next;
   NCCLCHECK(p2p->getNewElem(&next));
   next->buff = buff;
   next->nbytes = nBytes;
+  next->ncclSteps = ncclSteps;
   return ncclSuccess;
 }
 #endif

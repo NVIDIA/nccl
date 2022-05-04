@@ -9,6 +9,7 @@
 #include "coll_net.h"
 #include "gdrwrap.h"
 #include "bootstrap.h"
+#include <assert.h>
 
 #include <cstring> // std::memcpy
 
@@ -545,6 +546,9 @@ comp_next:
   work->header.nWarps = info->nThreads / WARP_SIZE;
   work->redOpArg = info->opFull.scalarArg;
   work->redOpArgIsPtr = info->opFull.scalarArgIsPtr;
+  work->ncclSteps = NCCL_STEPS;
+  // ncclSteps must be power of two for NCCL_LL_CLEAN_MASK
+  assert((work->ncclSteps & (work->ncclSteps - 1)) == 0);
 
   if (info->comm->nRanks == 1) {
     // one-rank reduce index
@@ -934,6 +938,7 @@ static ncclResult_t computeP2pWorkElem(struct ncclInfo* info /* input */, struct
   elem->buff = info->recvbuff;
   elem->subType = info->coll == ncclFuncSend ? ncclWorkSubTypeSend : ncclWorkSubTypeRecv;
   elem->count = info->count;
+  elem->ncclSteps = NCCL_STEPS;
   elem->chunkSize = info->chunkSize;
   elem->peer = info->root;
   return ncclSuccess;

@@ -26,6 +26,7 @@ class Primitives<
   const int tid;
   int nthreads;
   int nworkers;
+  const int ncclSteps;
   const int stepSize;
   Fan fan;
   int index; // Peer index I'm responsible for
@@ -76,28 +77,28 @@ class Primitives<
     if (((flags & (Recv*RoleWaitRecv)) && !noRecvWait) ||
         ((flags & (Send*RoleWaitSend)) && !noSendWait)) {
       int spins = 0;
-      while (connStepCache + (isSendNotRecv ? NCCL_STEPS : 0) < step + StepPerSlice) {
+      while (connStepCache + (isSendNotRecv ? ncclSteps : 0) < step + StepPerSlice) {
         connStepCache = *connStepPtr;
         if (checkAbort(spins)) break;
-        //if (spins == 0) printf("r=%d b=%d t=%d SPUN OUT got=%d want=%d\n", ncclShmem.comm.rank, blockIdx.x, threadIdx.x, int(connStepCache + (isSendNotRecv ? NCCL_STEPS : 0)), int(step+StepPerSlice));
+        //if (spins == 0) printf("r=%d b=%d t=%d SPUN OUT got=%d want=%d\n", ncclShmem.comm.rank, blockIdx.x, threadIdx.x, int(connStepCache + (isSendNotRecv ? ncclSteps : 0)), int(step+StepPerSlice));
       }
     }
 
     if (flags & (Recv*RoleWaitRecv | Send*RoleWaitSend)) {
       if (isSendNotRecv && (flags & SizesFifoEnabled))
-        connSizesFifoPtr[step%NCCL_STEPS] = nelts*sizeof(T);
+        connSizesFifoPtr[step%ncclSteps] = nelts*sizeof(T);
 
       void **ptrs = isSendNotRecv ? (ncclShmem.groups[group].dsts + Dst)
                                   : (ncclShmem.groups[group].srcs + Src);
       if (flags & OffsFifoEnabled)
-        ptrs[index] = connEltsFifo + loadInt(connOffsFifoPtr + (step%NCCL_STEPS))/sizeof(T);
+        ptrs[index] = connEltsFifo + loadInt(connOffsFifoPtr + (step%ncclSteps))/sizeof(T);
       else if (isSendNotRecv && DirectSend) {
         if (flags & DirectWrite) {
           ptrs[index] = directBuff + remoteIx + offset;
         } else if (flags & DirectRead) {  // empty send
           ptrs[index] = nullptr;
         } else {
-          ptrs[index] = connEltsFifo + (step%NCCL_STEPS)*stepSize;
+          ptrs[index] = connEltsFifo + (step%ncclSteps)*stepSize;
         }
       } else if (!isSendNotRecv && DirectRecv) {
         if (flags & DirectRead) {
@@ -105,11 +106,11 @@ class Primitives<
         } else if (flags & DirectWrite) {
           ptrs[index] = directBuff + dstIx + offset;  // send to next from my output buffer
         } else {
-          ptrs[index] = connEltsFifo + (step%NCCL_STEPS)*stepSize;
+          ptrs[index] = connEltsFifo + (step%ncclSteps)*stepSize;
         }
       }
       else {
-        ptrs[index] = connEltsFifo + (step%NCCL_STEPS)*stepSize;
+        ptrs[index] = connEltsFifo + (step%ncclSteps)*stepSize;
       }
       step += StepPerSlice;
     }
@@ -389,10 +390,12 @@ class Primitives<
  public:
   __device__ Primitives(
       int tid, int nthreads, int const *recvPeers, int const *sendPeers,
-      void const *inputBuf, void *outputBuf, uint64_t redOpArg, uint32_t group=0, struct ncclWorkElem* e = nullptr
+      void const *inputBuf, void *outputBuf, uint64_t redOpArg, int ncclSteps,
+      uint32_t group=0, struct ncclWorkElem* e = nullptr
     ):
     tid(tid),
-    stepSize(ncclShmem.comm.buffSizes[NCCL_PROTO_SIMPLE]/NCCL_STEPS/sizeof(T)) {
+    ncclSteps(ncclSteps),
+    stepSize(ncclShmem.comm.buffSizes[NCCL_PROTO_SIMPLE]/ncclSteps/sizeof(T)) {
 
     // For send operations, we need an extra warp to overlap the threadfence and the copy
     this->nthreads = nthreads;

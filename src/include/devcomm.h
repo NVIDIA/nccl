@@ -52,15 +52,13 @@ union ncclLLFifoLine {
 #define NCCL_LL_MAX_NTHREADS 512
 #define NCCL_LL_LINES_PER_THREAD 8
 #ifdef TEST_LL_CLEANUP
-#define NCCL_LL_CLEAN_MASK 0x078 // Set to 0x100 to disable cleanup
-#define NCCL_LL_FLAG_MAX   0x100
+#define NCCL_LL_CLEAN_MASK_BASE 0x07f // Set to 0x100 to disable cleanup
+#define NCCL_LL_FLAG_MAX        0x100
 #define NCCL_LL_FLAG(a) ((uint32_t)((a) % NCCL_LL_FLAG_MAX))
 #else
-#define NCCL_LL_CLEAN_MASK 0x7ffffff8
+#define NCCL_LL_CLEAN_MASK_BASE 0x7fffffff
 #define NCCL_LL_FLAG(a) ((uint32_t)(a))
 #endif
-// Make sure the clean mask will last for at least NCCL_NSTEPS
-static_assert(NCCL_LL_CLEAN_MASK % NCCL_STEPS == 0, "Invalid NCCL_LL_CLEAN_MASK value");
 
 #define NCCL_LL128_LINESIZE 128
 #define NCCL_LL128_LINEELEMS (NCCL_LL128_LINESIZE/sizeof(uint64_t))
@@ -182,6 +180,7 @@ struct ncclWorkElem {
   uint8_t regUsed;
   uint8_t direct;
   uint8_t redOpArgIsPtr;
+  uint8_t ncclSteps;
 
   const void * sendbuff;
   void * recvbuff;
@@ -198,7 +197,8 @@ static_assert(NCCL_WORK_SIZE % sizeof(struct ncclWorkElem) == 0, "ncclWorkElem s
 
 struct ncclWorkElemP2p {
   struct ncclWorkElemHeader header;
-  int32_t peer;
+  int16_t peer;
+  uint8_t ncclSteps;
   void* buff;
   size_t count;
   int chunkSize;

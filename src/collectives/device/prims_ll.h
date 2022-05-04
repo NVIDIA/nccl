@@ -15,6 +15,8 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
   const int nthreads;
   const int wid;
   const int group;
+  const int ncclSteps;
+  const uint32_t NCCL_LL_CLEAN_MASK;
   const int stepLines;
   Fan fan;
   T *userBufs[2];
@@ -33,8 +35,8 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
   union ncclLLFifoLine* recvBuff[MaxRecv];
   union ncclLLFifoLine* sendBuff[MaxSend];
 
-  inline __device__ int recvOffset(int i) { return (recvStep[i]%NCCL_STEPS)*stepLines; }
-  inline __device__ int sendOffset(int i) { return (sendStep[i]%NCCL_STEPS)*stepLines; }
+  inline __device__ int recvOffset(int i) { return (recvStep[i]%ncclSteps)*stepLines; }
+  inline __device__ int sendOffset(int i) { return (sendStep[i]%ncclSteps)*stepLines; }
   inline __device__ union ncclLLFifoLine* recvPtr(int i) { return recvBuff[i]+recvOffset(i); }
   inline __device__ union ncclLLFifoLine* sendPtr(int i) { return sendBuff[i]+sendOffset(i); }
   inline __device__ uint32_t recvFlag(int i) { return NCCL_LL_FLAG(recvStep[i]+1); }
@@ -58,13 +60,13 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
   inline __device__ void waitSend(int nbytes) {
     if (sendConnHeadPtr) {
       int spins = 0;
-      while (sendConnHeadCache + NCCL_STEPS < sendConnHead + 1) {
+      while (sendConnHeadCache + ncclSteps < sendConnHead + 1) {
         sendConnHeadCache = *sendConnHeadPtr;
         if (checkAbort(spins, 1)) break;
       }
       if (sendConnFifoPtr) {
         int size = ((sendConnHead & NCCL_LL_CLEAN_MASK) == NCCL_LL_CLEAN_MASK) ? stepLines*sizeof(union ncclLLFifoLine) : nbytes;
-        sendConnFifoPtr[sendConnHead%NCCL_STEPS] = size;
+        sendConnFifoPtr[sendConnHead%ncclSteps] = size;
       }
       sendConnHead += 1;
     }
@@ -316,11 +318,14 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
  public:
   __device__  Primitives(
       const int tid, const int nthreads, int const *recvPeers, int const *sendPeers,
-      void const *inputBuf, void *outputBuf, uint64_t redOpArg, int group=0
+      void const *inputBuf, void *outputBuf, uint64_t redOpArg, int ncclSteps, int group=0
     ):
     redOp(redOpArg),
     tid(tid), nthreads(nthreads), wid(tid%WARP_SIZE), group(group),
-    stepLines(ncclShmem.comm.buffSizes[NCCL_PROTO_LL]/NCCL_STEPS/sizeof(ncclLLFifoLine)) {
+    ncclSteps(ncclSteps),
+    // Make sure the clean mask will last for at least ncclSteps which must be power of two.
+    NCCL_LL_CLEAN_MASK(NCCL_LL_CLEAN_MASK_BASE ^ (ncclSteps - 1)),
+    stepLines(ncclShmem.comm.buffSizes[NCCL_PROTO_LL]/ncclSteps/sizeof(ncclLLFifoLine)) {
 
     auto *channel = &ncclShmem.channel;
     // If we are going to support oneshot collNet + LL, then we would need to add connector index here

@@ -141,6 +141,7 @@ struct ncclComm {
   float latencies[NCCL_NUM_FUNCTIONS][NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
   float bandwidths[NCCL_NUM_FUNCTIONS][NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
   int maxThreads[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
+  float interLat[NCCL_NUM_ALGORITHMS];
 
   // An internal CUDA stream for NCCL kernel CGMD launches
   int groupCudaStream;

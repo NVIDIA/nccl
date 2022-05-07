@@ -438,8 +438,17 @@ static ncclResult_t computeBuffSizes(struct ncclComm* comm) {
 
   if (cpuArch == NCCL_TOPO_CPU_ARCH_ARM) defaults[NCCL_PROTO_SIMPLE] = DEFAULT_BUFFSIZE_ARM;
 
+  // Scale up buffer sizes for deeper buffer (NCCL_STEPS)
+  int size_mult = 1;
+  for (int a=0; a<NCCL_NUM_ALGORITHMS; a++) {
+    if (comm->interLat[a] > 100) {
+      size_mult = NCCL_MAX_STEPS/NCCL_STEPS_DEFAULT;
+      break;
+    }
+  }
+
   for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) {
-    comm->buffSizes[p] = comm->hostDevComm.buffSizes[p] = envs[p] != -2 ? envs[p] : defaults[p];
+    comm->buffSizes[p] = comm->hostDevComm.buffSizes[p] = envs[p] != -2 ? envs[p] : defaults[p] * size_mult;
   }
   return ncclSuccess;
 }
@@ -718,6 +727,10 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
   line[1023] = '\0';
   INFO(NCCL_INIT, "Trees%s", line);
 
+  // Save inter-node latency to scale up buffer sizes
+  comm->interLat[NCCL_ALGO_RING] = ringGraph.latencyInter;
+  comm->interLat[NCCL_ALGO_TREE] = treeGraph.latencyInter;
+  comm->interLat[NCCL_ALGO_COLLNET] = collNetGraph.latencyInter;
   NCCLCHECK(computeBuffSizes(comm));
 
   // Connect with prev/next for each ring

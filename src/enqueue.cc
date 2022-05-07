@@ -419,6 +419,18 @@ static inline ncclResult_t getCollNetSupport(struct ncclInfo* info, int* collNet
   return ncclSuccess;
 }
 
+NCCL_PARAM(Steps, "STEPS", -2);
+
+static inline ncclResult_t getNcclSteps(struct ncclInfo* info) {
+  struct ncclComm* comm = info->comm;
+  if (ncclParamSteps() == -2 && comm->interLat[NCCL_ALGO_RING] > 100 && info->algorithm == NCCL_ALGO_RING) {
+    info->ncclSteps = NCCL_MAX_STEPS;
+  }
+  assert(info->ncclSteps <= NCCL_MAX_STEPS && info->ncclSteps >= NCCL_STEPS_DEFAULT);
+
+  return ncclSuccess;
+}
+
 // numPipeOps: number of pipelined ops. Can be greater than 1 in aggregation mode. Used to adjust latency.
 static ncclResult_t getAlgoInfo(struct ncclInfo* info, int collNetTypeSupport, int numPipeOps) {
   struct ncclComm* comm = info->comm;
@@ -482,6 +494,7 @@ static ncclResult_t getAlgoInfo(struct ncclInfo* info, int collNetTypeSupport, i
   }
   info->nChannels = nc;
   info->nThreads = nt;
+  NCCLCHECK(getNcclSteps(info));
   return ncclSuccess;
 }
 
@@ -835,6 +848,7 @@ ncclResult_t ncclSetupAsyncKernels(ncclComm_t comm) {
         // Set fields to skip the individual computeColl in ncclSetupCollKernel
         info->algorithm = total.algorithm;
         info->protocol = total.protocol;
+        info->ncclSteps = total.ncclSteps;
         info->nThreads = total.nThreads;
       }
       NCCLCHECK(ncclSetupCollKernel(info));
@@ -1335,8 +1349,6 @@ static ncclResult_t hostToDevRedOp(
   return ncclSuccess;
 }
 
-NCCL_PARAM(Steps, "STEPS", NCCL_STEPS_DEFAULT);
-
 ncclResult_t ncclEnqueueCheck(struct ncclInfo* info) {
   ncclResult_t ret = ncclSuccess;
   bool isAsync = ncclAsyncMode();
@@ -1349,8 +1361,9 @@ ncclResult_t ncclEnqueueCheck(struct ncclInfo* info) {
   }
   NCCLCHECKGOTO(ArgsCheck(info), ret, end);
 
-  info->ncclSteps = ncclParamSteps();
-  assert(info->ncclSteps <= NCCL_MAX_STEPS);
+  // ncclSteps can be tuned in getAlgoInfo() unless it is set
+  info->ncclSteps = ncclParamSteps() == -2 ? NCCL_STEPS_DEFAULT : ncclParamSteps();
+  assert(info->ncclSteps <= NCCL_MAX_STEPS && info->ncclSteps >= NCCL_STEPS_DEFAULT);
 
   // Copy reduction op state from op handle into info struct here since the
   // op handle may be destroyed before ncclGroupEnd().

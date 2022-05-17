@@ -13,7 +13,6 @@ ncclResult_t ncclReduceScatter(const void* sendbuff, void* recvbuff, size_t recv
     ncclDataType_t datatype, ncclRedOp_t op, ncclComm* comm, cudaStream_t stream) {
   NVTX3_FUNC_RANGE_IN(nccl_domain);
   struct ncclInfo info = { ncclFuncReduceScatter, "ReduceScatter",
-    sendbuff, recvbuff, recvcount, datatype, op, 0, comm, stream, /* Args */
-    REDUCESCATTER_CHUNKSTEPS, REDUCESCATTER_SLICESTEPS };
+    sendbuff, recvbuff, recvcount, datatype, op, 0, comm, stream, /* Args */ };
   return ncclEnqueueCheck(&info);
 }

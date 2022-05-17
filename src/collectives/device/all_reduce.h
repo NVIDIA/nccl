@@ -17,7 +17,7 @@ namespace {
     const int nChannels = args->nChannels;
     ncclRing *ring = &ncclShmem.channel.ring;
     int ringIx = ring->index;
-    const ssize_t chunkSize = int(Proto::calcBytePerStep()/sizeof(T) * (Proto::Id == NCCL_PROTO_SIMPLE ? ALLREDUCE_CHUNKSTEPS : 1));
+    const ssize_t chunkSize = int(Proto::calcBytePerStep()/sizeof(T) * (Proto::Id == NCCL_PROTO_SIMPLE ? ALLREDUCE_CHUNKSTEPS : DEFAULT_CHUNKSTEPS));
     const int nranks = ncclShmem.comm.nRanks;
     const ssize_t loopSize = nChannels*nranks*chunkSize;
     const ssize_t size = args->count;
@@ -103,7 +103,7 @@ namespace {
     ncclTree *tree = &ncclShmem.channel.tree;
     ssize_t chunkSize = int(
       Proto::Id == NCCL_PROTO_SIMPLE ? args->lastChunkSize
-                   /* LL & LL128 */  : Proto::calcBytePerStep()/sizeof(T));
+                   /* LL & LL128 */  : Proto::calcBytePerStep()/sizeof(T)*DEFAULT_CHUNKSTEPS);
     const ssize_t minChunkSize = int(
       Proto::Id == NCCL_PROTO_SIMPLE ? (nthreads-2*WARP_SIZE)*8*(sizeof(uint64_t)/sizeof(T))
                    /* LL & LL128 */  : nthreads*(Proto::calcBytePerGrain()/sizeof(T)));
@@ -175,7 +175,7 @@ namespace {
     ncclTree *tree = &ncclShmem.channel.tree;
     ssize_t chunkSize = int(
       Proto::Id != NCCL_PROTO_LL ? args->lastChunkSize
-                                 : Proto::calcBytePerStep()/sizeof(T));
+                                 : Proto::calcBytePerStep()/sizeof(T)*DEFAULT_CHUNKSTEPS);
     const ssize_t minChunkSize = int(
       Proto::Id == NCCL_PROTO_SIMPLE ? (nthreads - 2*WARP_SIZE)*8*(sizeof(uint64_t)/sizeof(T)) :
       Proto::Id == NCCL_PROTO_LL     ? nthreads*(Proto::calcBytePerGrain()/sizeof(T))
@@ -266,9 +266,9 @@ template<typename T, typename RedOp>
 struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_TREE, NCCL_PROTO_SIMPLE> {
   __device__ __forceinline__ void run(ncclWorkElem *args) {
     #if CUDART_VERSION >= 11020 && CUDART_VERSION < 11040 && __CUDA_ARCH__ >= 800
-      runTreeUpDown<T, RedOp, ProtoSimple<1, 1>>(args);
+      runTreeUpDown<T, RedOp, ProtoSimple<DEFAULT_CHUNKSTEPS/DEFAULT_SLICESTEPS, DEFAULT_SLICESTEPS>>(args);
     #else
-      runTreeSplit<T, RedOp, ProtoSimple<1, 1>>(args);
+      runTreeSplit<T, RedOp, ProtoSimple<DEFAULT_CHUNKSTEPS/DEFAULT_SLICESTEPS, DEFAULT_SLICESTEPS>>(args);
     #endif
   }
 };
@@ -295,7 +295,7 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET, NCCL_PROTO
     const int tidStartScatter = tidStartBcast + nThreadsBcast;
     const int tidStartReduce = tidStartScatter + nThreadsScatter;
 
-    using Proto = ProtoSimple<1, 1>;
+    using Proto = ProtoSimple<DEFAULT_CHUNKSTEPS/DEFAULT_SLICESTEPS, DEFAULT_SLICESTEPS>;
 
     if (tid >= tidStartScatter && tid < tidStartReduce && hasUp) {
       // Scatter

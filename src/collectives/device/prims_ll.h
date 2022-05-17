@@ -37,8 +37,8 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
   inline __device__ int sendOffset(int i) { return (sendStep[i]%NCCL_STEPS)*stepLines; }
   inline __device__ union ncclLLFifoLine* recvPtr(int i) { return recvBuff[i]+recvOffset(i); }
   inline __device__ union ncclLLFifoLine* sendPtr(int i) { return sendBuff[i]+sendOffset(i); }
-  inline __device__ uint32_t recvFlag(int i) { return NCCL_LL_FLAG(recvStep[i]+1); }
-  inline __device__ uint32_t sendFlag(int i) { return NCCL_LL_FLAG(sendStep[i]+1); }
+  inline __device__ uint32_t recvFlag(int i) { return NCCL_LL_FLAG(recvStep[i]+DEFAULT_SLICESTEPS); }
+  inline __device__ uint32_t sendFlag(int i) { return NCCL_LL_FLAG(sendStep[i]+DEFAULT_SLICESTEPS); }
 
   inline __device__ void barrier() {
     asm volatile ("bar.sync %1, %0;" :: "r"(nthreads), "r"(15-group));
@@ -58,7 +58,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
   inline __device__ void waitSend(int nbytes) {
     if (sendConnHeadPtr) {
       int spins = 0;
-      while (sendConnHeadCache + NCCL_STEPS < sendConnHead + 1) {
+      while (sendConnHeadCache + NCCL_STEPS < sendConnHead + DEFAULT_SLICESTEPS) {
         sendConnHeadCache = *sendConnHeadPtr;
         if (checkAbort(spins, 1)) break;
       }
@@ -66,17 +66,17 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
         int size = ((sendConnHead & NCCL_LL_CLEAN_MASK) == NCCL_LL_CLEAN_MASK) ? stepLines*sizeof(union ncclLLFifoLine) : nbytes;
         sendConnFifoPtr[sendConnHead%NCCL_STEPS] = size;
       }
-      sendConnHead += 1;
+      sendConnHead += DEFAULT_SLICESTEPS;
     }
     barrier();
   }
 
   inline __device__ void incRecv(int i) {
-    recvStep[i] += 1;
+    recvStep[i] += DEFAULT_SLICESTEPS;
   }
   inline __device__ void postRecv() {
     barrier();
-    if (recvConnHeadPtr) *recvConnHeadPtr = recvConnHead += 1;
+    if (recvConnHeadPtr) *recvConnHeadPtr = recvConnHead += DEFAULT_SLICESTEPS;
   }
 
   inline __device__ void incSend(int i, int offset) {
@@ -85,7 +85,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
     if ((sendStep[i] & NCCL_LL_CLEAN_MASK) == NCCL_LL_CLEAN_MASK) {
       for (int o = offset; o<stepLines; o+=nthreads) storeLL(sendPtr(i)+o, 0, sendFlag(i));
     }
-    sendStep[i]++;
+    sendStep[i] += DEFAULT_SLICESTEPS;
   }
 
   __device__ uint64_t readLL(int offset, int i) {

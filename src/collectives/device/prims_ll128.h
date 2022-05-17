@@ -45,8 +45,8 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
   inline __device__ int sendOffset(int i) { return (sendStep[i]%NCCL_STEPS)*stepSize; }
   inline __device__ uint64_t* recvPtr(int i) { return recvBuff[i]+recvOffset(i); }
   inline __device__ uint64_t* sendPtr(int i) { return sendBuff[i]+sendOffset(i); }
-  inline __device__ uint64_t recvFlag(int i) { return recvStep[i]+1; }
-  inline __device__ uint64_t sendFlag(int i) { return sendStep[i]+1; }
+  inline __device__ uint64_t recvFlag(int i) { return recvStep[i]+DEFAULT_SLICESTEPS; }
+  inline __device__ uint64_t sendFlag(int i) { return sendStep[i]+DEFAULT_SLICESTEPS; }
 
   inline __device__ void barrier() {
     asm volatile ("bar.sync %1, %0;" :: "r"(nthreads), "r"(15-group));
@@ -66,22 +66,22 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
   inline __device__ void waitSend(int nbytes) {
     if (sendConnHeadPtr) {
       int spins = 0;
-      while (sendConnHeadCache + NCCL_STEPS < sendConnHead + 1) {
+      while (sendConnHeadCache + NCCL_STEPS < sendConnHead + DEFAULT_SLICESTEPS) {
         sendConnHeadCache = *sendConnHeadPtr;
         if (checkAbort(spins, wid, 1)) break;
       }
       if (sendConnFifoPtr) {
         sendConnFifoPtr[sendStep[wid]%NCCL_STEPS] = nbytes;
       }
-      sendConnHead += 1;
+      sendConnHead += DEFAULT_SLICESTEPS;
     }
   }
 
   inline __device__ void postRecv() {
-    if (recvConnHeadPtr) *recvConnHeadPtr = recvConnHead += 1;
+    if (recvConnHeadPtr) *recvConnHeadPtr = recvConnHead += DEFAULT_SLICESTEPS;
   }
   inline __device__ void postSend() {
-    if (sendConnTailPtr) { __threadfence(); *sendConnTailPtr = sendConnTail += 1; }
+    if (sendConnTailPtr) { __threadfence(); *sendConnTailPtr = sendConnTail += DEFAULT_SLICESTEPS; }
   }
 
   template<int WordPerThread>
@@ -313,9 +313,9 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
     }
 
     barrier();
-    if (SEND) for (int i=0; i < MaxSend; i++) sendStep[i] += 1;
+    if (SEND) for (int i=0; i < MaxSend; i++) sendStep[i] += DEFAULT_SLICESTEPS;
     if (SEND) postSend();
-    if (RECV) for (int i=0; i < MaxRecv; i++) recvStep[i] += 1;
+    if (RECV) for (int i=0; i < MaxRecv; i++) recvStep[i] += DEFAULT_SLICESTEPS;
     if (RECV) postRecv();
   }
 

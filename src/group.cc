@@ -260,8 +260,9 @@ sched_delta:
               if (recv && comm->p2pRecvs[recvPeer]->peakNext() == NULL) comm->p2pRecvs[recvPeer]->recycle();
               if (send && comm->p2pSends[sendPeer]->peakNext() == NULL) comm->p2pSends[sendPeer]->recycle();
 
-              ssize_t recvChunkSize = getP2pChunkSize(totRecvBytes, nChannelsMin, nChannelsMax, stepSize, SENDRECV_SLICEFACTOR*stepSize);
-              ssize_t sendChunkSize = getP2pChunkSize(totSendBytes, nChannelsMin, nChannelsMax, stepSize, SENDRECV_SLICEFACTOR*stepSize);
+              ssize_t chunkSize = stepSize*DEFAULT_CHUNKSTEPS;
+              ssize_t recvChunkSize = getP2pChunkSize(totRecvBytes, nChannelsMin, nChannelsMax, chunkSize, SENDRECV_SLICEFACTOR*chunkSize);
+              ssize_t sendChunkSize = getP2pChunkSize(totSendBytes, nChannelsMin, nChannelsMax, chunkSize, SENDRECV_SLICEFACTOR*chunkSize);
 
               ssize_t sendOffset = 0;
               ssize_t recvOffset = 0;

@@ -407,7 +407,7 @@ ncclResult_t ncclProxyComputeP2p(struct ncclInfo* info, struct ncclProxyOp* op) 
   op->dtype = info->datatype;
 
   int stepSize = info->comm->buffSizes[NCCL_PROTO_SIMPLE]/NCCL_STEPS/SENDRECV_SLICEFACTOR;
-  info->chunkSize = stepSize;
+  info->chunkSize = stepSize*DEFAULT_CHUNKSTEPS;
   op->root = info->root;
   op->nbytes = info->count;
   struct ncclPeer* peer = channel->peers + op->root;

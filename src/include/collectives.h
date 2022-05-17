@@ -106,8 +106,8 @@ extern __device__ void NCCL_ONERANK_REDUCE_NAME(PreMulSum, __nv_bfloat16)();
 extern __device__ void NCCL_ONERANK_REDUCE_NAME(PreMulSum, float)();
 extern __device__ void NCCL_ONERANK_REDUCE_NAME(PreMulSum, double)();
 
-#define DEFAULT_SLICESTEPS 1
-#define DEFAULT_CHUNKSTEPS 1
+#define DEFAULT_SLICESTEPS 4
+#define DEFAULT_CHUNKSTEPS 4
 
 // CHUNKSIZE must be a multiple of SLICESIZE
 #define ALLREDUCE_SLICESTEPS (NCCL_STEPS/4)

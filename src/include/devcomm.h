@@ -28,7 +28,7 @@ extern const char* ncclAlgoStr[NCCL_NUM_ALGORITHMS];
 extern const char* ncclProtoStr[NCCL_NUM_PROTOCOLS];
 
 #define NCCL_MAX_OPS 2048
-#define NCCL_STEPS 8
+#define NCCL_STEPS 32
 
 union ncclLLFifoLine {
   /* Flags have to be *after* data, because otherwise, an incomplete receive
@@ -56,7 +56,7 @@ union ncclLLFifoLine {
 #define NCCL_LL_FLAG_MAX   0x100
 #define NCCL_LL_FLAG(a) ((uint32_t)((a) % NCCL_LL_FLAG_MAX))
 #else
-#define NCCL_LL_CLEAN_MASK 0x7ffffff8
+#define NCCL_LL_CLEAN_MASK 0x7fffff20
 #define NCCL_LL_FLAG(a) ((uint32_t)(a))
 #endif
 // Make sure the clean mask will last for at least NCCL_NSTEPS

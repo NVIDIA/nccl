@@ -486,6 +486,13 @@ static ncclResult_t getAlgoInfo(struct ncclInfo* info, int collNetTypeSupport, i
 }
 
 static ncclResult_t getAlgoStepInfo(struct ncclInfo* info) {
+  if (!(info->protocol == NCCL_PROTO_SIMPLE &&
+        (info->algorithm == NCCL_ALGO_RING || info->algorithm == NCCL_ALGO_TREE))) {
+    info->sliceSteps = DEFAULT_SLICESTEPS;
+    info->chunkSteps = DEFAULT_CHUNKSTEPS;
+    return ncclSuccess;
+  }
+  struct ncclComm* comm = info->comm;
   switch (info->coll) {
     case ncclFuncBroadcast:
       info->sliceSteps = BROADCAST_SLICESTEPS;
@@ -511,10 +518,11 @@ static ncclResult_t getAlgoStepInfo(struct ncclInfo* info) {
       WARN("Unknown pattern for collective %d algorithm %d", info->coll, info->algorithm);
       return ncclInternalError;
   }
-  // Override
-  if (!(info->protocol == NCCL_PROTO_SIMPLE && info->algorithm == NCCL_ALGO_RING)) {
-    info->sliceSteps = DEFAULT_SLICESTEPS;
-    info->chunkSteps = DEFAULT_CHUNKSTEPS;
+  // Make buffer deeper for longer latency network segment
+  if (comm->interLat[info->algorithm] > 100 &&
+      (info->coll == ncclFuncReduceScatter || info->coll == ncclFuncAllGather || info->coll == ncclFuncAllReduce)) {
+    info->sliceSteps /= 4;
+    info->chunkSteps /= 4;
   }
   return ncclSuccess;
 }

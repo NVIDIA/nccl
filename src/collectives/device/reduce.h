@@ -16,7 +16,7 @@ namespace {
     const int bid = args->bid;
     const int nChannels = args->nChannels;
     ncclRing *ring = &ncclShmem.channel.ring;
-    const ssize_t chunkSize = int(Proto::calcBytePerStep()/sizeof(T) * (Proto::Id == NCCL_PROTO_SIMPLE ? REDUCE_CHUNKSTEPS : DEFAULT_CHUNKSTEPS));
+    const ssize_t chunkSize = int(Proto::calcBytePerStep()/sizeof(T) * args->chunkSteps);
     const ssize_t minChunkSizeLL128 = int(nthreads*(Proto::calcBytePerGrain()/sizeof(T)));
     const int nranks = ncclShmem.comm.nRanks;
     const ssize_t loopSize = nChannels*chunkSize;
@@ -26,7 +26,7 @@ namespace {
     const int root = args->root;
 
     Primitives<T, RedOp, FanSymmetric<1>, 0, Proto, 0>
-      prims(tid, nthreads, &ring->prev, &ring->next, args->sendbuff, args->recvbuff, args->redOpArg);
+      prims(tid, nthreads, &ring->prev, &ring->next, args->sendbuff, args->recvbuff, args->redOpArg, args->chunkSteps, args->sliceSteps);
 
     auto calcChunkSize = [&]__device__(ssize_t gridOffset)->int {
       int realChunkSize;
@@ -71,7 +71,7 @@ namespace {
 template<typename T, typename RedOp>
 struct RunWorkElement<ncclFuncReduce, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
   __device__ __forceinline__ void run(ncclWorkElem *args) {
-    using Proto = ProtoSimple<REDUCE_CHUNKSTEPS/REDUCE_SLICESTEPS, REDUCE_SLICESTEPS>;
+    using Proto = ProtoSimple<>;
     runRing<T, RedOp, Proto>(args);
   }
 };

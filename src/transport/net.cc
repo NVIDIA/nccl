@@ -829,7 +829,7 @@ static ncclResult_t sendProxyProgress(struct ncclComm* comm, struct ncclProxyArg
             if (!ready) {
               // When data is in sysmem, we need to wait until all flags are correct since the GPU only
               // called threadfence()
-              uint64_t flag = sub->base+sub->transmitted+DEFAULT_SLICESTEPS;
+              uint64_t flag = sub->base+sub->transmitted+args->sliceSteps;
               int nFifoLines = DIVUP(sizesFifo[buffSlot], sizeof(uint64_t)*NCCL_LL128_LINEELEMS);
               volatile uint64_t* lines = (volatile uint64_t*)buff;
               ready = 1;
@@ -838,7 +838,7 @@ static ncclResult_t sendProxyProgress(struct ncclComm* comm, struct ncclProxyArg
               }
             }
           } else if (p == NCCL_PROTO_LL) {
-            uint32_t flag = NCCL_LL_FLAG(sub->base+sub->transmitted+DEFAULT_SLICESTEPS);
+            uint32_t flag = NCCL_LL_FLAG(sub->base+sub->transmitted+args->sliceSteps);
             int nFifoLines = DIVUP(size, sizeof(union ncclLLFifoLine));
             union ncclLLFifoLine* lines = (union ncclLLFifoLine*)buff;
             for (int i=0; i<nFifoLines; i++) {

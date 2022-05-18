@@ -17,7 +17,7 @@ namespace {
     const int nChannels = args->nChannels;
     ncclRing *ring = &ncclShmem.channel.ring;
     const int *ringRanks = ring->devUserRanks;
-    const ssize_t chunkSize = int(Proto::calcBytePerStep()/sizeof(T) * (Proto::Id == NCCL_PROTO_SIMPLE ? ALLGATHER_CHUNKSTEPS : DEFAULT_CHUNKSTEPS));
+    const ssize_t chunkSize = int(Proto::calcBytePerStep()/sizeof(T) * args->chunkSteps);
     // We should not need the final /2 but it makes performance much, much smoother. Might be a bug somewhere.
     const ssize_t minChunkSizeLL128 = int(nthreads*(Proto::calcBytePerGrain()/sizeof(T))/2);
     const int nranks = ncclShmem.comm.nRanks;
@@ -27,7 +27,7 @@ namespace {
     T *inputBuf = (T*)args->sendbuff;
     T *outputBuf = (T*)args->recvbuff;
     Primitives<T, RedOp, FanSymmetric<1>, 1, Proto, 0> prims
-      (tid, nthreads, &ring->prev, &ring->next, inputBuf, outputBuf, args->redOpArg);
+      (tid, nthreads, &ring->prev, &ring->next, inputBuf, outputBuf, args->redOpArg, args->chunkSteps, args->sliceSteps);
 
     for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
       ssize_t realChunkSize;
@@ -79,7 +79,7 @@ namespace {
 template<typename T, typename RedOp>
 struct RunWorkElement<ncclFuncAllGather, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
   __device__ __forceinline__ void run(ncclWorkElem *args) {
-    using Proto = ProtoSimple<ALLGATHER_CHUNKSTEPS/ALLGATHER_SLICESTEPS, ALLGATHER_SLICESTEPS>;
+    using Proto = ProtoSimple<>;
     runRing<T, RedOp, Proto>(args);
   }
 };

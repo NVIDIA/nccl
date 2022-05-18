@@ -17,12 +17,12 @@ struct RunWork<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
         ReduceOrCopyMulti<COLL_UNROLL, RedOp, T, 1, 1, 1, 1, 0>(tid, nthreads, nullptr, false, 1, (const T**)&args->buff, 1, (T**)&recvArgs->buff, args->count);
       }
     } else {
-      using Proto = ProtoSimple<1, 1>;
+      using Proto = ProtoSimple<>;
       ssize_t const count = args->count;
       int const chunkSize = args->chunkSize/sizeof(T);
       int const peer = args->peer;
       Primitives<T, RedOp, FanAsymmetric<0, 1>, 1, Proto, 1> prims
-        (tid, nthreads, nullptr, &peer, args->buff, nullptr, /*redOpArg(ignored)=*/0, group);
+        (tid, nthreads, nullptr, &peer, args->buff, nullptr, /*redOpArg(ignored)=*/0, 1, 1, group);
       ssize_t offset = 0;
       do {
         int nelem = min(chunkSize, count-offset);
@@ -34,12 +34,12 @@ struct RunWork<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
 
   __device__ __forceinline__ void runRecv(const int tid, const int nthreads, const int group, struct ncclWorkElemP2p* args) {
     if (args->peer != ncclShmem.comm.rank) {
-      using Proto = ProtoSimple<1, 1>;
+      using Proto = ProtoSimple<>;
       ssize_t const count = args->count;
       int const chunkSize = args->chunkSize/sizeof(T);
       int const peer = args->peer;
       Primitives<T, RedOp, FanAsymmetric<1, 0>, 1, Proto, 1> prims
-        (tid, nthreads, &peer, nullptr, nullptr, args->buff, /*redOpArg(ignored)=*/0, group);
+        (tid, nthreads, &peer, nullptr, nullptr, args->buff, /*redOpArg(ignored)=*/0, 1, 1, group);
       ssize_t offset = 0;
       do {
         int nelem = min(chunkSize, count-offset);

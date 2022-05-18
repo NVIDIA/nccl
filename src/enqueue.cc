@@ -578,6 +578,8 @@ comp_next:
   work->root = info->root;
   work->count = info->count;
   work->nChannels = info->nChannels;
+  work->sliceSteps = info->sliceSteps;
+  work->chunkSteps = info->chunkSteps;
   work->header.nWarps = info->nThreads / WARP_SIZE;
   work->redOpArg = info->opFull.scalarArg;
   work->redOpArgIsPtr = info->opFull.scalarArgIsPtr;

@@ -57,7 +57,7 @@ ncclResult_t wrap_gdr_symbols(void) {
 
   if (__sync_bool_compare_and_swap(&gdrState, gdrUninitialized, gdrInitializing) == false) {
     // Another thread raced in front of us. Wait for it to be done.
-    while (gdrState == gdrInitializing) pthread_yield();
+    while (gdrState == gdrInitializing) sched_yield();
     return (gdrState == gdrInitialized) ? ncclSuccess : ncclSystemError;
   }
 

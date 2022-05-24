@@ -626,11 +626,11 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   // Auto-detect NICs if needed. net/collnet share the same xml/graph nodes,
   // so we start with collnet so that it has precedence.
   int netDevCount = 0;
-  if (collNetSupport()) {
-    NCCLCHECK(collNetDevices(&netDevCount));
+  if (collNetSupport(comm)) {
+    NCCLCHECK(collNetDevices(comm, &netDevCount));
     for (int n=0; n<netDevCount; n++) {
       ncclNetProperties_t props;
-      NCCLCHECK(collNetGetProperties(n, &props));
+      NCCLCHECK(collNetGetProperties(comm, n, &props));
       struct ncclXmlNode* netNode;
       NCCLCHECK(ncclTopoFillNet(xml, props.pciPath, props.name, &netNode));
       NCCLCHECK(xmlSetAttrInt(netNode, "keep", 1));
@@ -639,16 +639,18 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
       NCCLCHECK(xmlInitAttrInt(netNode, "port", props.port));
       NCCLCHECK(xmlInitAttrUint64(netNode, "guid", props.guid));
       NCCLCHECK(xmlInitAttrInt(netNode, "maxconn", props.maxComms));
-      NCCLCHECK(xmlInitAttrInt(netNode, "gdr", props.ptrSupport & NCCL_PTR_CUDA ? 1 : 0));
+      bool gdrSupport = (props.ptrSupport & NCCL_PTR_CUDA) || (comm->dmaBufSupport && (props.ptrSupport & NCCL_PTR_DMABUF));
+      INFO(NCCL_NET,"NET/%s : GPU Direct RDMA %s for HCA %d '%s'", comm->ncclNet->name, gdrSupport ? "Enabled" : "Disabled", n, props.name);
+      NCCLCHECK(xmlInitAttrInt(netNode, "gdr", gdrSupport));
       NCCLCHECK(xmlInitAttrInt(netNode, "coll", 1));
     }
   }
   if (netDevCount == 0) {
-    NCCLCHECK(ncclNetDevices(&netDevCount));
+    NCCLCHECK(ncclNetDevices(comm, &netDevCount));
   }
   for (int n=0; n<netDevCount; n++) {
     ncclNetProperties_t props;
-    NCCLCHECK(ncclNetGetProperties(n, &props));
+    NCCLCHECK(ncclNetGetProperties(comm, n, &props));
     struct ncclXmlNode* netNode;
     NCCLCHECK(ncclTopoFillNet(xml, props.pciPath, props.name, &netNode));
     NCCLCHECK(xmlSetAttrInt(netNode, "keep", 1));
@@ -658,7 +660,9 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
     NCCLCHECK(xmlInitAttrFloat(netNode, "latency", props.latency));
     NCCLCHECK(xmlInitAttrUint64(netNode, "guid", props.guid));
     NCCLCHECK(xmlInitAttrInt(netNode, "maxconn", props.maxComms));
-    NCCLCHECK(xmlInitAttrInt(netNode, "gdr", props.ptrSupport & NCCL_PTR_CUDA ? 1 : 0));
+    bool gdrSupport = (props.ptrSupport & NCCL_PTR_CUDA) || (comm->dmaBufSupport && (props.ptrSupport & NCCL_PTR_DMABUF));
+    INFO(NCCL_NET,"NET/%s : GPU Direct RDMA %s for HCA %d '%s'", comm->ncclNet->name, gdrSupport ? "Enabled" : "Disabled", n, props.name);
+    NCCLCHECK(xmlInitAttrInt(netNode, "gdr", gdrSupport));
   }
 
   // Remove XML branches which don't have a node with keep="1" (typically when importing a topology)

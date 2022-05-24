@@ -181,6 +181,17 @@ static ncclResult_t ncclTopoRankToIndex(struct ncclTopoSystem* system, int rank,
   return ncclInternalError;
 }
 
+static ncclResult_t ncclTopoDevToRank(struct ncclTopoSystem* system, int dev, int* rank) {
+  *rank = -1;
+  for (int i=0; i<system->nodes[GPU].count; i++) {
+    if (system->nodes[GPU].nodes[i].gpu.dev == dev) {
+      *rank = system->nodes[GPU].nodes[i].gpu.rank;
+      return ncclSuccess;
+    }
+  }
+  return ncclInternalError;
+}
+
 // Returns NVLink speed in GB/s
 static float ncclTopoNVLinkSpeed(int cudaCompCap) {
   return

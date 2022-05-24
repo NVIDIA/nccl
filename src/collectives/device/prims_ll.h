@@ -326,11 +326,11 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
     // If we are going to support oneshot collNet + LL, then we would need to add connector index here
     int nrecv=0, nsend=0;
     while (nrecv < MaxRecv && recvPeers[nrecv] >= 0) {
-      loadRecvConn(&channel->devPeers[recvPeers[nrecv]].recv->conn, nrecv);
+      loadRecvConn(&channel->peers[recvPeers[nrecv]].recv[0], nrecv);
       nrecv++;
     }
     while (nsend < MaxSend && sendPeers[nsend] >= 0) {
-      loadSendConn(&channel->devPeers[sendPeers[nsend]].send->conn, nsend);
+      loadSendConn(&channel->peers[sendPeers[nsend]].send[0], nsend);
       nsend++;
     }
     this->fan = Fan(nrecv, nsend);

@@ -12,7 +12,7 @@ namespace {
   template<typename T, typename RedOp, typename Proto>
   __device__ __forceinline__ void runRing(ncclWorkElem *args) {
     const int tid = threadIdx.x;
-    const int nthreads = args->header.nWarps*WARP_SIZE;
+    const int nthreads = args->nWarps*WARP_SIZE;
     const int bid = args->bid;
     const int nChannels = args->nChannels;
     ncclRing *ring = &ncclShmem.channel.ring;
@@ -22,7 +22,7 @@ namespace {
     const ssize_t loopSize = nChannels*chunkSize;
     const ssize_t size = args->count;
     const int rank = ncclShmem.comm.rank;
-    const int prevRank = ring->devUserRanks[nranks-1];
+    const int prevRank = ring->userRanks[nranks-1];
     const int root = args->root;
 
     Primitives<T, RedOp, FanSymmetric<1>, 0, Proto, 0>

@@ -274,6 +274,31 @@ ncclResult_t ncclIbGdrSupport(int ibDev) {
   return ncclSuccess;
 }
 
+// Detect whether DMA-BUF support is present in the kernel
+// Returns :
+// ncclSuccess : DMA-BUF support is available
+// ncclSystemError : DMA-BUF is not supported by the kernel
+ncclResult_t ncclIbDmaBufSupport(int dev) {
+  static int dmaBufSupported = -1;
+  if (dmaBufSupported == -1) {
+    ncclResult_t res;
+    struct ibv_pd* pd;
+    struct ibv_context* ctx;
+    ctx = ncclIbDevs[dev].context;
+    NCCLCHECKGOTO(wrap_ibv_alloc_pd(&pd, ctx), res, failure);
+    // Test kernel DMA-BUF support with a dummy call (fd=-1)
+    (void) wrap_direct_ibv_reg_dmabuf_mr(pd, 0ULL/*offset*/, 0ULL/*len*/, 0ULL/*iova*/, -1/*fd*/, 0/*flags*/);
+    // ibv_reg_dmabuf_mr() will fail with EOPNOTSUPP if not supported (EBADF otherwise)
+    dmaBufSupported = (errno != EOPNOTSUPP) ? 1 : 0;
+    NCCLCHECKGOTO(wrap_ibv_dealloc_pd(pd), res, failure);
+  }
+  if (dmaBufSupported == 0) return ncclSystemError;
+  return ncclSuccess;
+failure:
+  dmaBufSupported = 0;
+  return ncclSystemError;
+}
+
 static ncclResult_t GetSocketAddr(union ncclSocketAddress* addr) {
   memcpy(addr, &ncclIbIfAddr, sizeof(*addr));
   return ncclSuccess;
@@ -286,10 +311,11 @@ ncclResult_t ncclIbGetProperties(int dev, ncclNetProperties_t* props) {
   props->pciPath = ncclIbDevs[dev].pciPath;
   props->guid = ncclIbDevs[dev].guid;
   props->ptrSupport = NCCL_PTR_HOST;
-  if (ncclIbGdrSupport(dev) != ncclSuccess) {
-    INFO(NCCL_NET,"NET/IB : GPU Direct RDMA Disabled for HCA %d '%s' (no module)", dev, ncclIbDevs[dev].devName);
-  } else {
-    props->ptrSupport |= NCCL_PTR_CUDA;
+  if (ncclIbGdrSupport(dev) == ncclSuccess) {
+    props->ptrSupport |= NCCL_PTR_CUDA; // GDR support via nv_peermem
+  }
+  if (ncclIbDmaBufSupport(dev) == ncclSuccess) {
+    props->ptrSupport |= NCCL_PTR_DMABUF; // GDR support via DMA-BUF
   }
   props->speed = ncclIbDevs[dev].speed;
   props->latency = 0; // Not set
@@ -546,6 +572,7 @@ ncclResult_t ncclIbListen(int dev, void* opaqueHandle, void** listenComm) {
   static_assert(sizeof(struct ncclIbHandle) < NCCL_NET_HANDLE_MAXSIZE, "ncclIbHandle size too large");
   memset(handle, 0, sizeof(struct ncclIbHandle));
   comm->dev = dev;
+  comm->sock.asyncFlag = 1; /* nonblocking socket is required by network communication. */
   NCCLCHECK(GetSocketAddr(&comm->sock.addr));
   NCCLCHECK(ncclSocketListen(&comm->sock));
   memcpy(&handle->connectAddr, &comm->sock.addr, sizeof(union ncclSocketAddress));
@@ -580,7 +607,7 @@ ib_connect_check:
     /* expect user to call again */
     return ncclSuccess;
   } else if (conState == ncclSocketError) {
-    return ncclSystemError;
+    return ncclRemoteError;
   }
 
   // IB Setup
@@ -658,7 +685,6 @@ ncclResult_t ncclIbAccept(void* listenComm, void** recvComm) {
   stage->comm = rComm;
   stage->state = ncclIbCommStateAccept;
   lComm->sock.asyncFlag = 1;
-  rComm->sock.asyncFlag = 1;
 
 ib_accept:
   NCCLCHECK(ncclSocketAccept(&rComm->sock, &lComm->sock));
@@ -812,7 +838,8 @@ ncclResult_t ncclRecvCheck(struct ncclIbRecvComm* comm) {
 
 ncclResult_t ncclIbTest(void* request, int* done, int* size);
 
-ncclResult_t ncclIbRegMr(void* comm, void* data, int size, int type, void** mhandle) {
+/* DMA-BUF support */
+ncclResult_t ncclIbRegMrDmaBuf(void* comm, void* data, size_t size, int type, uint64_t offset, int fd, void** mhandle) {
   static_assert(offsetof(struct ncclIbSendComm, verbs) == offsetof(struct ncclIbRecvComm, verbs), "Send and recv comms must have verbs at the same offset");
   assert(size > 0);
 
@@ -822,7 +849,7 @@ ncclResult_t ncclIbRegMr(void* comm, void* data, int size, int type, void** mhan
   struct ncclIbVerbs* verbs = (struct ncclIbVerbs*)comm;
   struct ncclIbMrCache* cache = &ncclIbDevs[verbs->dev].mrCache;
   uintptr_t addr = (uintptr_t)data & -pageSize;
-  int pages = ((uintptr_t)data + size - addr + pageSize-1)/pageSize;
+  size_t pages = ((uintptr_t)data + size - addr + pageSize-1)/pageSize;
   ncclResult_t res;
   pthread_mutex_lock(&ncclIbDevs[verbs->dev].lock);
   for (int slot=0; /*true*/; slot++) {
@@ -834,14 +861,20 @@ ncclResult_t ncclIbRegMr(void* comm, void* data, int size, int type, void** mhan
       // Deregister / register
       struct ibv_mr* mr;
       unsigned int flags = IBV_ACCESS_LOCAL_WRITE|IBV_ACCESS_REMOTE_WRITE|IBV_ACCESS_REMOTE_READ;
-      if (ncclIbRelaxedOrderingEnabled) {
-        // Use IBVERBS_1.8 API - needed for IBV_ACCESS_RELAXED_ORDERING support
-        NCCLCHECKGOTO(wrap_ibv_reg_mr_iova2(&mr, verbs->pd, (void*)addr, pages*pageSize, (uintptr_t)addr, flags|IBV_ACCESS_RELAXED_ORDERING), res, returning);
+      if (ncclIbRelaxedOrderingEnabled) flags |= IBV_ACCESS_RELAXED_ORDERING;
+      if (fd != -1) {
+        /* DMA-BUF support */
+        NCCLCHECKGOTO(wrap_ibv_reg_dmabuf_mr(&mr, verbs->pd, offset, pages*pageSize, addr, fd, flags), res, returning);
+      } else {
+        if (ncclIbRelaxedOrderingEnabled) {
+          // Use IBVERBS_1.8 API - needed for IBV_ACCESS_RELAXED_ORDERING support
+          NCCLCHECKGOTO(wrap_ibv_reg_mr_iova2(&mr, verbs->pd, (void*)addr, pages*pageSize, addr, flags), res, returning);
+        }
+        else {
+          NCCLCHECKGOTO(wrap_ibv_reg_mr(&mr, verbs->pd, (void*)addr, pages*pageSize, flags), res, returning);
+        }
       }
-      else {
-        NCCLCHECKGOTO(wrap_ibv_reg_mr(&mr, verbs->pd, (void*)addr, pages*pageSize, flags), res, returning);
-      }
-      TRACE(NCCL_INIT,"regAddr %llx size %lld rkey %x", (unsigned long long)addr, (long long)pages*pageSize, mr->rkey);
+      TRACE(NCCL_INIT,"regAddr %llx size %lld rkey %x fd %d", (unsigned long long)addr, (long long)pages*pageSize, mr->rkey, fd);
       cache->population += 1;
       cache->slots[slot].addr = addr;
       cache->slots[slot].pages = pages;
@@ -861,6 +894,10 @@ ncclResult_t ncclIbRegMr(void* comm, void* data, int size, int type, void** mhan
 returning:
   pthread_mutex_unlock(&ncclIbDevs[verbs->dev].lock);
   return res;
+}
+
+ncclResult_t ncclIbRegMr(void* comm, void* data, int size, int type, void** mhandle) {
+  return ncclIbRegMrDmaBuf(comm, data, (size_t)size, type, 0ULL, -1, mhandle);
 }
 
 ncclResult_t ncclIbDeregMr(void* comm, void* mhandle) {
@@ -916,13 +953,16 @@ ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
 
   // Write size as immediate data. In the case of multi-send, only write
   // 0 or 1 as size to indicate whether there was data sent or received.
-  uint64_t immData = 0;
+  uint32_t immData = 0;
   if (nreqs == 1) {
     immData = reqs[0]->send.size;
   } else {
-    uint8_t* multiImmData = (uint8_t*)&immData;
+    if (nreqs > 32) {
+      WARN("Cannot store sizes of %d requests in a 32-bits field", nreqs);
+      return ncclInternalError;
+    }
     for (int r=0; r<nreqs; r++) {
-      multiImmData[r] = reqs[r]->send.size ? 1 : 0;
+      immData |= (reqs[r]->send.size ? 1 : 0) << r;
     }
   }
 
@@ -1197,7 +1237,7 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
         char line[SOCKET_NAME_MAXLEN+1];
         WARN("NET/IB : Got completion from peer %s with error %d, opcode %d, len %d, vendor err %d",
              ncclSocketToString(r->addr, line), wc->status, wc->opcode, wc->byte_len, wc->vendor_err);
-        return ncclSystemError;
+        return ncclRemoteError;
       }
 
       struct ncclIbRequest* req = r->verbs->reqs+(wc->wr_id & 0xff);
@@ -1212,9 +1252,8 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
           if (req->type != NCCL_NET_IB_REQ_RECV) return ncclInternalError;
           if (req->nreqs > 1) {
             // In the case of a multi recv, we only set sizes to 0 or 1.
-            uint8_t* sizes = (uint8_t*)&wc->imm_data;
             for (int i=0; i<req->nreqs; i++) {
-              req->recv.sizes[i] |= sizes[i];
+              req->recv.sizes[i] = (wc->imm_data >> i) & 0x1;
             }
           } else {
             req->recv.sizes[0] += wc->imm_data;
@@ -1275,6 +1314,7 @@ ncclNet_t ncclNetIb = {
   ncclIbConnect,
   ncclIbAccept,
   ncclIbRegMr,
+  ncclIbRegMrDmaBuf,
   ncclIbDeregMr,
   ncclIbIsend,
   ncclIbIrecv,

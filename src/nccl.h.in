@@ -38,7 +38,8 @@ typedef enum { ncclSuccess                 =  0,
                ncclInternalError           =  3,
                ncclInvalidArgument         =  4,
                ncclInvalidUsage            =  5,
-               ncclNumResults              =  6 } ncclResult_t;
+               ncclRemoteError             =  6,
+               ncclNumResults              =  7 } ncclResult_t;
 
 /* Return the NCCL_VERSION_CODE of the NCCL library in the supplied integer.
  * This integer is coded with the MAJOR, MINOR and PATCH level of the
@@ -81,9 +82,15 @@ ncclResult_t pncclCommDestroy(ncclComm_t comm);
 ncclResult_t  ncclCommAbort(ncclComm_t comm);
 ncclResult_t pncclCommAbort(ncclComm_t comm);
 
-/* Returns a human-readable error message. */
+/* Returns a string for each error code. */
 const char*  ncclGetErrorString(ncclResult_t result);
 const char* pncclGetErrorString(ncclResult_t result);
+
+/* Returns a human-readable message of the last error that occurred.
+ * comm is currently unused and can be set to NULL
+ */
+const char*  ncclGetLastError(ncclComm_t comm);
+const char* pncclGetError(ncclComm_t comm);
 
 /* Checks whether the comm has encountered any asynchronous errors */
 ncclResult_t  ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t *asyncError);

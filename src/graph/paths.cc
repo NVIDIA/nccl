@@ -428,10 +428,10 @@ NCCL_PARAM(PxnDisable, "PXN_DISABLE", 0);
 
 // Net v4 plugins don't have non-blocking connect/accept. We can't therefore use
 // remote proxies without risking deadlocks
-int ncclPxnDisable() {
+int ncclPxnDisable(struct ncclComm* comm) {
   static int pxnDisable = -1;
   if (pxnDisable == -1) {
-    if (ncclNetVersion() == 4) {
+    if (comm && ncclNetVersion(comm) == 4) {
       INFO(NCCL_INIT, "PXN Disabled as plugin is v4");
       pxnDisable = 1;
     } else {
@@ -470,7 +470,7 @@ ncclResult_t ncclTopoGetPxnRanks(struct ncclComm* comm, int** intermediateRanks,
   return ncclSuccess;
 }
 
-ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclPeerInfo* peerInfos) {
+ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclComm* comm) {
   // Precompute paths between GPUs/NICs.
 
   // Remove everything in case we're re-computing
@@ -498,16 +498,16 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclPeer
       }
     }
 
-    if (peerInfos == NULL) continue;
+    if (comm == NULL) continue;
     // Remove GPUs we can't talk to because of containers.
-    struct ncclPeerInfo* dstInfo = peerInfos+system->nodes[GPU].nodes[g].gpu.rank;
+    struct ncclPeerInfo* dstInfo = comm->peerInfo+system->nodes[GPU].nodes[g].gpu.rank;
     for (int p=0; p<system->nodes[GPU].count; p++) {
       if (p == g) continue;
-      struct ncclPeerInfo* srcInfo = peerInfos+system->nodes[GPU].nodes[p].gpu.rank;
+      struct ncclPeerInfo* srcInfo = comm->peerInfo+system->nodes[GPU].nodes[p].gpu.rank;
       int shm;
-      NCCLCHECK(ncclTransports[TRANSPORT_SHM].canConnect(&shm, system, NULL, srcInfo, dstInfo));
+      NCCLCHECK(ncclTransports[TRANSPORT_SHM]->canConnect(&shm, system, NULL, srcInfo, dstInfo));
       int p2p;
-      NCCLCHECK(ncclTransports[TRANSPORT_P2P].canConnect(&p2p, system, NULL, srcInfo, dstInfo));
+      NCCLCHECK(ncclTransports[TRANSPORT_P2P]->canConnect(&p2p, system, NULL, srcInfo, dstInfo));
       if (shm == 0 && p2p == 0) {
         // Mark this peer as inaccessible. We'll trim it later.
         system->nodes[GPU].nodes[p].paths[GPU][g].count = 0;
@@ -523,7 +523,7 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclPeer
     for (int g=0; g<system->nodes[GPU].count; g++) {
       // Check whether we can access the NIC through another NVLink-connected GPU (PXN)
       struct ncclTopoNode* gpu = system->nodes[GPU].nodes+g;
-      if (ncclPxnDisable() != 1 && gpu->paths[NET][n].type > PATH_PXB) {
+      if (ncclPxnDisable(comm) != 1 && gpu->paths[NET][n].type > PATH_PXB) {
         int pxnGpu = -1;
 
         for (int p=0; p<system->nodes[GPU].count; p++) {
@@ -670,7 +670,7 @@ ncclResult_t ncclTopoComputeP2pChannels(struct ncclComm* comm) {
   // We want to spread channels used when there aren't many and progressively
   // fill the whole space of nChannels. To do so we mirror the bits in the
   // nChannels space.
-  for (int c=0; c<comm->p2pnChannelsPerPeer; c++) {
+  for (int c=0; c<comm->p2pnChannels; c++) {
     int mirror = 0;
     for (int b=1, mb=(comm->p2pnChannels>>1); b<comm->p2pnChannels; b<<=1, mb>>=1) if (c & b) mirror |= mb;
     comm->p2pChannels[c] = mirror;

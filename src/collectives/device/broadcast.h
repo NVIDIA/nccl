@@ -12,7 +12,7 @@ namespace {
   template<typename T, typename RedOp, typename Proto>
   __device__ __forceinline__ void runRing(ncclWorkElem *args) {
     const int tid = threadIdx.x;
-    const int nthreads = args->header.nWarps*WARP_SIZE;
+    const int nthreads = args->nWarps*WARP_SIZE;
     const int bid = args->bid;
     const int nChannels = args->nChannels;
     ncclRing *ring = &ncclShmem.channel.ring;
@@ -20,8 +20,8 @@ namespace {
     const ssize_t minChunkSizeLL128 = int(nthreads*(Proto::calcBytePerGrain()/sizeof(T)));
     const ssize_t loopSize = nChannels*chunkSize;
     const ssize_t size = args->count;
-    const int rank = ring->devUserRanks[0];
-    const int nextRank = ring->devUserRanks[1];
+    const int rank = ring->userRanks[0];
+    const int nextRank = ring->userRanks[1];
     const int root = args->root;
 
     T *inputBuf = (T*)args->sendbuff;

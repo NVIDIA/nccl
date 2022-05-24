@@ -7,6 +7,7 @@
 #include "comm.h"
 #include "graph.h"
 #include "utils.h"
+#include "shm.h"
 
 struct ncclP2pBuff {
   void* directPtr;
@@ -17,6 +18,34 @@ struct p2pConnectInfo {
   int rank;
   int read;
   struct ncclP2pBuff p2pBuff;
+  // Use by CE memcpy
+  char shmName[7];
+  int shmSize;
+};
+static_assert(sizeof(struct p2pConnectInfo) <= CONNECT_SIZE, "p2pConnectInfo is too large");
+
+struct p2pShm {
+  struct ncclSendMem sendMem;
+  struct ncclRecvMem recvMem;
+};
+struct p2pProxyInfo {
+  // Shared memory between proxy and receiving GPU
+  struct p2pShm* shm;
+  struct p2pShm* devShm;
+  char shmName[7];
+  int shmSize;
+
+  // Intermediate step for sender
+  struct ncclRecvMem* ceRecvMem;
+  char* ceDevBuff;
+
+  // Receiver buffer
+  char* recvFifo;
+
+  // Used by progress only
+  uint64_t step;
+  cudaStream_t stream;
+  cudaEvent_t events[NCCL_STEPS];
 };
 static_assert(sizeof(p2pConnectInfo) <= CONNECT_SIZE, "P2P Connect info is too large");
 
@@ -24,12 +53,16 @@ struct p2pSendResources {
   struct ncclSendMem* devMem;
   void* sendMemIpc;
   void* recvMemIpc;
+  struct p2pProxyInfo proxyInfo;
 };
 
 struct p2pRecvResources {
   struct ncclRecvMem* devMem;
   void* sendMemIpc;
   void* recvMemIpc;
+  struct p2pShm* shm;
+  struct p2pShm* devShm;
+  int shmSize;
 };
 
 #include <sys/types.h>
@@ -51,8 +84,14 @@ static int busIdToCudaDev(int64_t busId) {
   return -1;
 }
 
+NCCL_PARAM(P2pUseCudaMemcpy, "P2P_USE_CUDA_MEMCPY", 0);
+static int useMemcpy = 0;
+static void initCeOperation();
+
 /* Determine if two peers can communicate through p2p */
 ncclResult_t p2pCanConnect(int* ret, struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo* info1, struct ncclPeerInfo* info2) {
+  initCeOperation();
+
   // Rule out different nodes / isolated containers
   if (info1->hostHash != info2->hostHash || info1->shmDev != info2->shmDev) {
     *ret = 0;
@@ -63,7 +102,10 @@ ncclResult_t p2pCanConnect(int* ret, struct ncclTopoSystem* topo, struct ncclTop
   int intermediateRank;
   NCCLCHECK(ncclTopoCheckP2p(topo, info1->busId, info2->busId, ret, NULL, &intermediateRank));
   if (*ret == 0) return ncclSuccess;
-  if (intermediateRank != -1) return ncclSuccess;
+  if (intermediateRank != -1) {
+    if (useMemcpy) *ret = 0;
+    return ncclSuccess;
+  }
 
   // Convert the peer's busId into a local cudaDev index (cf. CUDA_VISIBLE_DEVICES)
   int cudaDev1 = busIdToCudaDev(info1->busId);
@@ -170,6 +212,7 @@ ncclResult_t p2pSendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, st
   send->transportResources = resources;
   int useRead, intermediateRank;
   NCCLCHECK(p2pGetInfo(comm->topo, myInfo, peerInfo, &useRead, &intermediateRank));
+  if (useMemcpy) useRead = 0;
 
   static_assert(sizeof(struct p2pConnectInfo) <= sizeof(struct ncclConnect), "p2p Connect Info is too big");
   struct p2pConnectInfo* info = (struct p2pConnectInfo*)connectInfo;
@@ -185,14 +228,14 @@ ncclResult_t p2pSendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, st
 
   if (intermediateRank == -1) {
     info->rank = myInfo->rank;
-    if (myInfo->pidHash == peerInfo->pidHash) {
+    if (myInfo->pidHash == peerInfo->pidHash && useMemcpy == 0) {
       if (ncclParamP2pDirectDisable() == 0) send->conn.direct |= info->read ? NCCL_DIRECT_READ : NCCL_DIRECT_WRITE;
       INFO(NCCL_INIT|NCCL_P2P, "Channel %02d : %d[%lx] -> %d[%lx] via P2P/direct pointer%s",
           channelId, myInfo->rank, myInfo->busId, peerInfo->rank, peerInfo->busId, useReadStr);
     } else {
       send->conn.direct |= info->read ? NCCL_IPC_READ : NCCL_IPC_WRITE;
-      INFO(NCCL_INIT|NCCL_P2P,"Channel %02d : %d[%lx] -> %d[%lx] via P2P/IPC%s",
-          channelId, myInfo->rank, myInfo->busId, peerInfo->rank, peerInfo->busId, useReadStr);
+      INFO(NCCL_INIT|NCCL_P2P,"Channel %02d : %d[%lx] -> %d[%lx] via P2P/IPC%s%s",
+          channelId, myInfo->rank, myInfo->busId, peerInfo->rank, peerInfo->busId, useReadStr, useMemcpy ? "/CE" : "");
     }
   } else {
     info->rank = intermediateRank;
@@ -202,9 +245,15 @@ ncclResult_t p2pSendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, st
   }
 
   NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_P2P, 1, info->rank, &send->proxyConn));
-  NCCLCHECK(ncclProxyCall(&send->proxyConn, ncclProxyMsgSetup, &sendSize, sizeof(int), &info->p2pBuff, sizeof(struct ncclP2pBuff)));
+  if (useMemcpy) {
+    NCCLCHECK(ncclProxyCall(&send->proxyConn, ncclProxyMsgSetup, NULL, 0, &resources->proxyInfo, sizeof(struct p2pProxyInfo)));
+    info->shmSize = resources->proxyInfo.shmSize;
+    memcpy(info->shmName, resources->proxyInfo.shmName, sizeof(info->shmName));
+  } else {
+    NCCLCHECK(ncclProxyCall(&send->proxyConn, ncclProxyMsgSetup, &sendSize, sizeof(int), &info->p2pBuff, sizeof(struct ncclP2pBuff)));
+    NCCLCHECK(p2pMap(myInfo, comm->peerInfo+info->rank, &info->p2pBuff, (void**)&resources->devMem, &resources->sendMemIpc));
+  }
 
-  NCCLCHECK(p2pMap(myInfo, comm->peerInfo+info->rank, &info->p2pBuff, (void**)&resources->devMem, &resources->sendMemIpc));
   return ncclSuccess;
 }
 
@@ -230,7 +279,7 @@ ncclResult_t p2pRecvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, st
 
   if (intermediateRank == -1) {
     info->rank = myInfo->rank;
-    if (myInfo->pidHash == peerInfo->pidHash) {
+    if (myInfo->pidHash == peerInfo->pidHash && useMemcpy == 0) {
       if (ncclParamP2pDirectDisable() == 0) recv->conn.direct |= info->read ? NCCL_DIRECT_READ : NCCL_DIRECT_WRITE;
     } else {
       recv->conn.direct |= info->read ? NCCL_IPC_READ : NCCL_IPC_WRITE;
@@ -258,30 +307,61 @@ static ncclResult_t p2pSendConnect(struct ncclComm* comm, struct ncclConnect* co
   for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) {
     if (info->read && p == NCCL_PROTO_SIMPLE) {
       /* For P2P Read the SIMPLE buffer is local (ncclSendMem) */
+      if (resources->devMem == NULL) return ncclInternalError; // We should not use read + memcpy
       send->conn.buffs[p] = (char*)(resources->devMem+1);
     } else {
       send->conn.buffs[p] = buff;
       buff += send->comm->buffSizes[p];
     }
   }
-  send->conn.tail = &remDevMem->tail;
-  send->conn.head = &resources->devMem->head;
-  send->conn.ptrExchange = &resources->devMem->ptrExchange;
-  send->conn.redOpArgExchange = resources->devMem->redOpArgExchange;
+
+  if (useMemcpy) {
+    send->conn.tail = &resources->proxyInfo.ceRecvMem->tail;
+    send->conn.sizesFifo = resources->proxyInfo.ceRecvMem->sizesFifo;
+    send->conn.head = &resources->proxyInfo.devShm->sendMem.head;
+    // Send SIMPLE buff to proxy, and replace it by local buffer
+    NCCLCHECK(ncclProxyCall(&send->proxyConn, ncclProxyMsgConnect, &send->conn.buffs[NCCL_PROTO_SIMPLE], sizeof(void*), NULL, 0));
+    send->conn.buffs[NCCL_PROTO_SIMPLE] = resources->proxyInfo.ceDevBuff;
+  } else {
+    send->conn.tail = &remDevMem->tail;
+    send->conn.head = &resources->devMem->head;
+    send->conn.ptrExchange = &resources->devMem->ptrExchange;
+    send->conn.redOpArgExchange = resources->devMem->redOpArgExchange;
+  }
   return ncclSuccess;
 }
 
 /* Connect/Recv from this peer */
 ncclResult_t p2pRecvConnect(struct ncclComm* comm, struct ncclConnect* connectInfo, int nranks, int rank, struct ncclConnector* recv) {
   struct p2pRecvResources* resources = (struct p2pRecvResources*)recv->transportResources;
-  struct ncclSendMem* remDevMem;
   struct p2pConnectInfo* info = (struct p2pConnectInfo*)connectInfo;
 
-  NCCLCHECK(p2pMap(comm->peerInfo+rank, comm->peerInfo+info->rank, &info->p2pBuff, (void**)&remDevMem, &resources->sendMemIpc));
+  struct ncclSendMem* remDevMem = NULL;
+
+  if (useMemcpy) {
+    char shmPath[PATH_MAX];
+    sprintf(shmPath, "/dev/shm/nccl-%s", info->shmName);
+    TRACE(NCCL_SHM,"Open shmName %s shmSize %d", shmPath, info->shmSize);
+    resources->shmSize = info->shmSize;
+    NCCLCHECK(ncclShmOpen(shmPath, info->shmSize, (void**)&resources->shm, (void**)&resources->devShm, 0));
+    // Remove the file to ensure proper clean-up
+    NCCLCHECK(ncclShmUnlink(shmPath));
+
+    recv->conn.tail = &resources->devShm->recvMem.tail;
+    recv->conn.head = &resources->devShm->sendMem.head;
+  } else {
+    NCCLCHECK(p2pMap(comm->peerInfo+rank, comm->peerInfo+info->rank, &info->p2pBuff, (void**)&remDevMem, &resources->sendMemIpc));
+
+    recv->conn.tail = &resources->devMem->tail;
+    recv->conn.head = &remDevMem->head;
+    recv->conn.ptrExchange = &remDevMem->ptrExchange;
+    recv->conn.redOpArgExchange = remDevMem->redOpArgExchange;
+  }
 
   char* buff = (char*)(resources->devMem+1);
   for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) {
     if (info->read && p == NCCL_PROTO_SIMPLE) {
+      if (remDevMem == NULL) return ncclInternalError; // We should not use read + memcpy
       /* For P2P Read the SIMPLE buffer is remote (ncclSendMem) */
       recv->conn.buffs[p] = (char*)(remDevMem+1);
     } else {
@@ -289,10 +369,6 @@ ncclResult_t p2pRecvConnect(struct ncclComm* comm, struct ncclConnect* connectIn
       buff += recv->comm->buffSizes[p];
     }
   }
-  recv->conn.tail = &resources->devMem->tail;
-  recv->conn.head = &remDevMem->head;
-  recv->conn.ptrExchange = &remDevMem->ptrExchange;
-  recv->conn.redOpArgExchange = remDevMem->redOpArgExchange;
   return ncclSuccess;
 }
 
@@ -308,11 +384,52 @@ ncclResult_t p2pRecvFree(struct ncclConnector* recv) {
   struct p2pRecvResources* resources = (struct p2pRecvResources*)recv->transportResources;
   if (resources->sendMemIpc) CUDACHECK(cudaIpcCloseMemHandle(resources->sendMemIpc));
   if (resources->recvMemIpc) CUDACHECK(cudaIpcCloseMemHandle(resources->recvMemIpc));
+  if (useMemcpy) {
+    NCCLCHECK(ncclShmClose(resources->shm, resources->devShm, resources->shmSize));
+  }
   free(resources);
   return ncclSuccess;
 }
 
-static ncclResult_t p2pProxySetup(struct ncclProxyConnection* connection, struct ncclComm* comm, void* reqBuff, int reqSize, void* respBuff, int respSize, int* done) {
+static ncclResult_t p2pSendProxySetup(struct ncclProxyConnection* connection, struct ncclComm* comm, void* reqBuff, int reqSize, void* respBuff, int respSize, int* done) {
+  if (useMemcpy) {
+    struct p2pProxyInfo* proxyInfo;
+    NCCLCHECK(ncclCalloc(&proxyInfo, 1));
+    connection->transportResources = proxyInfo;
+
+    NCCLCHECK(ncclCudaCalloc(&proxyInfo->ceDevBuff, comm->buffSizes[NCCL_PROTO_SIMPLE]));
+
+    char shmPath[PATH_MAX];
+    shmPath[0] = '\0';
+    proxyInfo->shmSize = sizeof(struct ncclSendMem) + sizeof(struct ncclRecvMem);
+    NCCLCHECK(ncclShmOpen(shmPath, proxyInfo->shmSize, (void**)&proxyInfo->shm, (void**)&proxyInfo->devShm, 1));
+    TRACE(NCCL_SHM,"Opened shmName %s shmSize %d", shmPath, proxyInfo->shmSize);
+    memcpy(proxyInfo->shmName, shmPath+sizeof("/dev/shm/nccl-")-1, sizeof(proxyInfo->shmName));
+
+    NCCLCHECK(ncclCudaHostCalloc(&proxyInfo->ceRecvMem, 1));
+
+    if (respSize != sizeof(struct p2pProxyInfo)) return ncclInternalError;
+    memcpy(respBuff, proxyInfo, sizeof(struct p2pProxyInfo));
+  } else {
+    if (reqSize != sizeof(int)) return ncclInternalError;
+    int size = *((int*)reqBuff);
+    if (respSize != sizeof(struct ncclP2pBuff)) return ncclInternalError;
+    struct ncclP2pBuff* p2pBuff = (struct ncclP2pBuff*)respBuff;
+    NCCLCHECK(ncclCudaCalloc((char**)&p2pBuff->directPtr, size));
+    connection->transportResources = p2pBuff->directPtr;
+    cudaError_t res = cudaIpcGetMemHandle(&p2pBuff->devIpc, p2pBuff->directPtr);
+    if (res != cudaSuccess) {
+      WARN("cudaIpcGetMemHandle failed : %s", cudaGetErrorString(res));
+      cudaFree(p2pBuff->directPtr);
+      free(p2pBuff);
+      CUDACHECK(res);
+    }
+  }
+  *done = 1;
+  return ncclSuccess;
+}
+
+static ncclResult_t p2pRecvProxySetup(struct ncclProxyConnection* connection, struct ncclComm* comm, void* reqBuff, int reqSize, void* respBuff, int respSize, int* done) {
   if (reqSize != sizeof(int)) return ncclInternalError;
   int size = *((int*)reqBuff);
   if (respSize != sizeof(struct ncclP2pBuff)) return ncclInternalError;
@@ -330,15 +447,116 @@ static ncclResult_t p2pProxySetup(struct ncclProxyConnection* connection, struct
   return ncclSuccess;
 }
 
-static ncclResult_t p2pProxyFree(struct ncclProxyConnection* connection, struct ncclComm* comm) {
+static ncclResult_t p2pSendProxyConnect(struct ncclProxyConnection* connection, struct ncclComm* comm, void* reqBuff, int reqSize, void* respBuff, int respSize, int* done) {
+  struct p2pProxyInfo* proxyInfo = (struct p2pProxyInfo*)connection->transportResources;
+
+  if (reqSize != sizeof(void*)) return ncclInternalError;
+  proxyInfo->recvFifo = *((char**)reqBuff);
+
+  CUDACHECK(cudaStreamCreateWithFlags(&proxyInfo->stream, cudaStreamNonBlocking));
+  for (int i=0; i<NCCL_STEPS; i++) {
+    CUDACHECK(cudaEventCreate(proxyInfo->events+i));
+  }
+  connection->proxyAppendPtr = &connection->proxyAppend;
+  return ncclSuccess;
+}
+
+static ncclResult_t p2pSendProxyFree(struct ncclProxyConnection* connection, struct ncclComm* comm) {
+  if (useMemcpy) {
+    struct p2pProxyInfo* proxyInfo = (struct p2pProxyInfo*)connection->transportResources;
+    NCCLCHECK(ncclShmClose(proxyInfo->shm, proxyInfo->devShm, proxyInfo->shmSize));
+    NCCLCHECK(ncclCudaHostFree(proxyInfo->ceRecvMem));
+    CUDACHECK(cudaFree(proxyInfo->ceDevBuff));
+    CUDACHECK(cudaStreamDestroy(proxyInfo->stream));
+    for (int i=0; i<NCCL_STEPS; i++) {
+      CUDACHECK(cudaEventDestroy(proxyInfo->events[i]));
+    }
+    free(proxyInfo);
+  } else {
+    // Do not check return code as CUDA may have already shut down
+    cudaFree(connection->transportResources);
+  }
+  return ncclSuccess;
+}
+
+static ncclResult_t p2pRecvProxyFree(struct ncclProxyConnection* connection, struct ncclComm* comm) {
   // Do not check return code as CUDA may have already shut down
   cudaFree(connection->transportResources);
+  return ncclSuccess;
+}
+
+static ncclResult_t p2pSendProxyProgress(struct ncclComm* comm, struct ncclProxyArgs* args) {
+  if (args->state == ncclProxyOpReady) {
+    for (int s=0; s<args->nsubs; s++) {
+      struct ncclProxySubArgs* sub = args->subs+s;
+      struct p2pProxyInfo* resources = (struct p2pProxyInfo*) (sub->connection->transportResources);
+      // Round to next multiple of sliceSteps
+      sub->base = ROUNDUP(resources->step, args->chunkSteps);
+      sub->posted = sub->transmitted = sub->done = 0;
+    }
+    args->state = ncclProxyOpProgress;
+  }
+  args->idle = 1;
+  if (args->state == ncclProxyOpProgress) {
+    int p = args->protocol;
+    int stepSize = comm->buffSizes[p] / NCCL_STEPS;
+    for (int s=0; s<args->nsubs; s++) {
+      struct ncclProxySubArgs* sub = args->subs+s;
+      struct p2pProxyInfo* resources = (struct p2pProxyInfo*) (sub->connection->transportResources);
+      if (p != NCCL_PROTO_SIMPLE) { // Only Simple uses cudaMemcpy
+          resources->step = sub->base + sub->nsteps;
+          args->done++;
+          continue;
+      }
+      if (sub->transmitted < sub->done + NCCL_STEPS && sub->transmitted < sub->nsteps) {
+        int buffSlot = (sub->base+sub->transmitted)%NCCL_STEPS;
+        volatile int* sizesFifo = resources->ceRecvMem->sizesFifo;
+        volatile uint64_t* recvTail = &resources->ceRecvMem->tail;
+        // Check GPU has sent everything
+        if ((*recvTail > sub->base+sub->transmitted)) {
+          int size = sizesFifo[buffSlot];
+          CUDACHECK(cudaMemcpyAsync(resources->recvFifo+buffSlot*stepSize, resources->ceDevBuff+buffSlot*stepSize, size, cudaMemcpyDeviceToDevice, resources->stream));
+          CUDACHECK(cudaEventRecord(resources->events[buffSlot], resources->stream));
+          sub->transmitted += args->sliceSteps;
+        }
+      }
+      if (sub->done < sub->transmitted) {
+        int buffSlot = (sub->base+sub->done)%NCCL_STEPS;
+        cudaError_t res = cudaEventQuery(resources->events[buffSlot]);
+        if (res != cudaErrorNotReady) CUDACHECK(res);
+        if (res == cudaSuccess) {
+          sub->done += args->sliceSteps;
+          // Notify SHM
+          resources->shm->recvMem.tail = sub->base + sub->done;
+        }
+        if (sub->done == sub->nsteps) {
+          resources->step = sub->base + sub->nsteps;
+          args->done++;
+        }
+      }
+    }
+    if (args->done == args->nsubs) {
+      args->state = ncclProxyOpNone;
+    }
+  }
   return ncclSuccess;
 }
 
 struct ncclTransport p2pTransport = {
   "P2P",
   p2pCanConnect,
-  { p2pSendSetup, p2pSendConnect, p2pSendFree, NULL, p2pProxySetup, NULL, p2pProxyFree, NULL },
-  { p2pRecvSetup, p2pRecvConnect, p2pRecvFree, NULL, p2pProxySetup, NULL, p2pProxyFree, NULL }
+  { p2pSendSetup, p2pSendConnect, p2pSendFree, NULL, p2pSendProxySetup, NULL, p2pSendProxyFree, NULL },
+  { p2pRecvSetup, p2pRecvConnect, p2pRecvFree, NULL, p2pRecvProxySetup, NULL, p2pRecvProxyFree, NULL }
 };
+
+static void initCeOperation() {
+  static int init = 0;
+  if (!init) {
+    useMemcpy = ncclParamP2pUseCudaMemcpy();
+    if (useMemcpy) {
+      p2pTransport.send.proxyConnect = p2pSendProxyConnect;
+      p2pTransport.send.proxyProgress = p2pSendProxyProgress;
+    }
+    init = 1;
+  }
+}

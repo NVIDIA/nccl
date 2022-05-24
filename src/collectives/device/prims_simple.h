@@ -303,9 +303,9 @@ class Primitives<
     }
   }
 
-  __device__ __forceinline__ void loadRecvConn(ncclPeer *peer, int connIndex, struct ncclWorkElem* e) {
+  __device__ __forceinline__ void loadRecvConn(ncclDevChannelPeer *peer, int connIndex, struct ncclWorkElem* e) {
     if (flags & (RoleWaitRecv|RolePostRecv)) {
-      auto *conn = &peer->recv[connIndex].conn;
+      auto *conn = &peer->recv[connIndex];
       step = conn->step;
       step = roundUp(step, SlicePerChunk*StepPerSlice);
       if (flags & RolePostRecv) {
@@ -343,9 +343,9 @@ class Primitives<
     }
   }
 
-  __device__ __forceinline__ void loadSendConn(ncclPeer *peer, int connIndex, struct ncclWorkElem* e) {
+  __device__ __forceinline__ void loadSendConn(ncclDevChannelPeer *peer, int connIndex, struct ncclWorkElem* e) {
     if (flags & (RoleWaitSend|RolePostSend)) {
-      auto *conn = &peer->send[connIndex].conn;
+      auto *conn = &peer->send[connIndex];
       step = conn->step;
       step = roundUp(step, SlicePerChunk*StepPerSlice);
       if (flags & RolePostSend) {
@@ -428,8 +428,8 @@ class Primitives<
     if (flags & (RoleWaitRecv|RolePostRecv)) peer = recvPeers[index];
     if (flags & (RoleWaitSend|RolePostSend)) peer = sendPeers[index];
 
-    loadRecvConn(&ncclShmem.channel.devPeers[peer], connIndex, e);
-    loadSendConn(&ncclShmem.channel.devPeers[peer], connIndex, e);
+    loadRecvConn(&ncclShmem.channel.peers[peer], connIndex, e);
+    loadSendConn(&ncclShmem.channel.peers[peer], connIndex, e);
 
     setDataPtrs(inputBuf, outputBuf, redOpArg, (struct ncclWorkElemReg*)e);
   }

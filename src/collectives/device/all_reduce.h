@@ -12,7 +12,7 @@ namespace {
   template<typename T, typename RedOp, typename Proto>
   __device__ __forceinline__ void runRing(ncclWorkElem *args) {
     const int tid = threadIdx.x;
-    const int nthreads = args->header.nWarps*WARP_SIZE;
+    const int nthreads = args->nWarps*WARP_SIZE;
     const int bid = args->bid;
     const int nChannels = args->nChannels;
     ncclRing *ring = &ncclShmem.channel.ring;
@@ -97,7 +97,7 @@ namespace {
   template<typename T, typename RedOp, typename Proto>
   __device__ __forceinline__ void runTreeUpDown(ncclWorkElem *args) {
     const int tid = threadIdx.x;
-    const int nthreads = args->header.nWarps*WARP_SIZE;
+    const int nthreads = args->nWarps*WARP_SIZE;
     const int bid = args->bid;
     const int nChannels = args->nChannels;
     ncclTree *tree = &ncclShmem.channel.tree;
@@ -169,7 +169,7 @@ namespace {
   template<typename T, typename RedOp, typename Proto>
   __device__ __forceinline__ void runTreeSplit(ncclWorkElem *args) {
     const int tid = threadIdx.x;
-    const int nthreads = args->header.nWarps*WARP_SIZE;
+    const int nthreads = args->nWarps*WARP_SIZE;
     const int bid = args->bid;
     const int nChannels = args->nChannels;
     ncclTree *tree = &ncclShmem.channel.tree;
@@ -290,7 +290,7 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET, NCCL_PROTO
     const int nThreadsScatter = WARP_SIZE + ((hasUp && hasDn) ? COLLNET_COPY_THREADS : hasUp ? 3*COLLNET_COPY_THREADS : 0);
     const int nThreadsGather  =             ((hasUp && hasDn) ? COLLNET_COPY_THREADS : hasUp ? 2*COLLNET_COPY_THREADS : 0);
     const int nThreadsBcast   = WARP_SIZE + ((hasUp && hasDn) ? COLLNET_COPY_THREADS : hasUp ? 0 : 2*COLLNET_COPY_THREADS);
-    const int nThreadsReduce = args->header.nWarps*WARP_SIZE - nThreadsScatter - nThreadsGather - nThreadsBcast;
+    const int nThreadsReduce = args->nWarps*WARP_SIZE - nThreadsScatter - nThreadsGather - nThreadsBcast;
     const int tidStartBcast = nThreadsGather;
     const int tidStartScatter = tidStartBcast + nThreadsBcast;
     const int tidStartReduce = tidStartScatter + nThreadsScatter;

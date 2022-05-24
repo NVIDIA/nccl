@@ -12,11 +12,11 @@ namespace {
   template<typename T, typename RedOp, typename Proto>
   __device__ __forceinline__ void runRing(ncclWorkElem *args) {
     const int tid = threadIdx.x;
-    const int nthreads = args->header.nWarps*WARP_SIZE;
+    const int nthreads = args->nWarps*WARP_SIZE;
     const int bid = args->bid;
     const int nChannels = args->nChannels;
     ncclRing *ring = &ncclShmem.channel.ring;
-    const int *ringRanks = ring->devUserRanks;
+    const int *ringRanks = ring->userRanks;
     const ssize_t chunkSize = int(Proto::calcBytePerStep()/sizeof(T) * (Proto::Id == NCCL_PROTO_SIMPLE ? ALLGATHER_CHUNKSTEPS : 1));
     // We should not need the final /2 but it makes performance much, much smoother. Might be a bug somewhere.
     const ssize_t minChunkSizeLL128 = int(nthreads*(Proto::calcBytePerGrain()/sizeof(T))/2);

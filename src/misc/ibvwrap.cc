@@ -30,6 +30,8 @@ struct ibv_pd * (*ibv_internal_alloc_pd)(struct ibv_context *context);
 int (*ibv_internal_dealloc_pd)(struct ibv_pd *pd);
 struct ibv_mr * (*ibv_internal_reg_mr)(struct ibv_pd *pd, void *addr, size_t length, int access);
 struct ibv_mr * (*ibv_internal_reg_mr_iova2)(struct ibv_pd *pd, void *addr, size_t length, uint64_t iova, int access);
+/* DMA-BUF support */
+struct ibv_mr * (*ibv_internal_reg_dmabuf_mr)(struct ibv_pd *pd, uint64_t offset, size_t length, uint64_t iova, int fd, int access);
 int (*ibv_internal_dereg_mr)(struct ibv_mr *mr);
 struct ibv_cq * (*ibv_internal_create_cq)(struct ibv_context *context, int cqe, void *cq_context, struct ibv_comp_channel *channel, int comp_vector);
 int (*ibv_internal_destroy_cq)(struct ibv_cq *cq);
@@ -49,7 +51,7 @@ ncclResult_t wrap_ibv_symbols(void) {
 
   if (__sync_bool_compare_and_swap(&ibvState, ibvUninitialized, ibvInitializing) == false) {
     // Another thread raced in front of us. Wait for it to be done.
-    while (ibvState == ibvInitializing) pthread_yield();
+    while (ibvState == ibvInitializing) sched_yield();
     return (ibvState == ibvInitialized) ? ncclSuccess : ncclSystemError;
   }
 
@@ -98,6 +100,8 @@ ncclResult_t wrap_ibv_symbols(void) {
   LOAD_SYM(ibvhandle, "ibv_reg_mr", ibv_internal_reg_mr);
   // Cherry-pick the ibv_reg_mr_iova2 API from IBVERBS 1.8
   LOAD_SYM_VERSION(ibvhandle, "ibv_reg_mr_iova2", ibv_internal_reg_mr_iova2, "IBVERBS_1.8");
+  // Cherry-pick the ibv_reg_dmabuf_mr API from IBVERBS 1.12
+  LOAD_SYM_VERSION(ibvhandle, "ibv_reg_dmabuf_mr", ibv_internal_reg_dmabuf_mr, "IBVERBS_1.12");
   LOAD_SYM(ibvhandle, "ibv_dereg_mr", ibv_internal_dereg_mr);
   LOAD_SYM(ibvhandle, "ibv_create_cq", ibv_internal_create_cq);
   LOAD_SYM(ibvhandle, "ibv_destroy_cq", ibv_internal_destroy_cq);
@@ -126,6 +130,7 @@ teardown:
   ibv_internal_dealloc_pd = NULL;
   ibv_internal_reg_mr = NULL;
   ibv_internal_reg_mr_iova2 = NULL;
+  ibv_internal_reg_dmabuf_mr = NULL;
   ibv_internal_dereg_mr = NULL;
   ibv_internal_create_cq = NULL;
   ibv_internal_destroy_cq = NULL;
@@ -259,7 +264,7 @@ ncclResult_t wrap_ibv_dealloc_pd(struct ibv_pd *pd) { /*returns 0 on success, or
 }
 
 ncclResult_t wrap_ibv_reg_mr(struct ibv_mr **ret, struct ibv_pd *pd, void *addr, size_t length, int access) {
-  IBV_PTR_CHECK(ibv_internal_reg_mr, ibv_internal_reg_mr(pd, addr, length, access), *ret, NULL, "ibv_reg_mr");
+  IBV_PTR_CHECK_ERRNO(ibv_internal_reg_mr, ibv_internal_reg_mr(pd, addr, length, access), *ret, NULL, "ibv_reg_mr");
 }
 
 struct ibv_mr * wrap_direct_ibv_reg_mr(struct ibv_pd *pd, void *addr, size_t length, int access) {
@@ -275,7 +280,19 @@ ncclResult_t wrap_ibv_reg_mr_iova2(struct ibv_mr **ret, struct ibv_pd *pd, void 
     return ncclInternalError;
   }
   if (ret == NULL) { return ncclSuccess; } // Assume dummy call
-  IBV_PTR_CHECK(ibv_internal_reg_mr_iova2, ibv_internal_reg_mr_iova2(pd, addr, length, iova, access), *ret, NULL, "ibv_reg_mr_iova2");
+  IBV_PTR_CHECK_ERRNO(ibv_internal_reg_mr_iova2, ibv_internal_reg_mr_iova2(pd, addr, length, iova, access), *ret, NULL, "ibv_reg_mr_iova2");
+}
+
+/* DMA-BUF support */
+ncclResult_t wrap_ibv_reg_dmabuf_mr(struct ibv_mr **ret, struct ibv_pd *pd, uint64_t offset, size_t length, uint64_t iova, int fd, int access) {
+  IBV_PTR_CHECK_ERRNO(ibv_internal_reg_dmabuf_mr, ibv_internal_reg_dmabuf_mr(pd, offset, length, iova, fd, access), *ret, NULL, "ibv_reg_dmabuf_mr");
+}
+
+struct ibv_mr * wrap_direct_ibv_reg_dmabuf_mr(struct ibv_pd *pd, uint64_t offset, size_t length, uint64_t iova, int fd, int access) {
+  if (ibv_internal_reg_dmabuf_mr == NULL) {
+    return NULL;
+  }
+  return ibv_internal_reg_dmabuf_mr(pd, offset, length, iova, fd, access);
 }
 
 ncclResult_t wrap_ibv_dereg_mr(struct ibv_mr *mr) { /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/

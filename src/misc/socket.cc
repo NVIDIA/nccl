@@ -332,9 +332,10 @@ ncclResult_t ncclSocketListen(struct ncclSocket* sock) {
 #endif
   }
 
-  /* make all new sockets non-blocking */
-  EQCHECK(flags = fcntl(fd, F_GETFL), -1);
-  SYSCHECK(fcntl(fd, F_SETFL, flags | O_NONBLOCK), "fcntl");
+  if (sock->asyncFlag) {
+    EQCHECK(flags = fcntl(fd, F_GETFL), -1);
+    SYSCHECK(fcntl(fd, F_SETFL, flags | O_NONBLOCK), "fcntl");
+  }
 
   // addr port should be 0 (Any port)
   SYSCHECK(bind(fd, &sock->addr.sa, salen), "bind");
@@ -373,7 +374,7 @@ static ncclResult_t getFdState(int fd, enum ncclSocketState* state) {
       SYSCHECK(getsockopt(fd, SOL_SOCKET, SO_ERROR, (void*)&ret, &rlen), "getsockopt");
     }
 
-    if (ret == EINPROGRESS)
+    if (ret == EINPROGRESS || ret == ECONNREFUSED)
       *state = ncclSocketConnecting;
     else if (ret == 0)
       *state = ncclSocketConnected;
@@ -409,10 +410,12 @@ ncclResult_t ncclSocketConnect(struct ncclSocket* sock) {
 
   const int one = 1;
   SYSCHECK(setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char*)&one, sizeof(int)), "setsockopt");
-
+  
   /* support non-blocking socket; by default, the socket is non-blocking */
-  EQCHECK(flags = fcntl(fd, F_GETFL), -1);
-  SYSCHECK(fcntl(fd, F_SETFL, flags | O_NONBLOCK), "fcntl");
+  if (sock->asyncFlag) {
+    EQCHECK(flags = fcntl(fd, F_GETFL), -1);
+    SYSCHECK(fcntl(fd, F_SETFL, flags | O_NONBLOCK), "fcntl");
+  }
 
   /*  const int bufsize = 128*1024;
     SYSCHECK(setsockopt(fd, SOL_SOCKET, SO_SNDBUF, (char*)&bufsize, sizeof(int)), "setsockopt");
@@ -424,31 +427,26 @@ ncclResult_t ncclSocketConnect(struct ncclSocket* sock) {
   int timedout_retries = 0;
   int refused_retries = 0;
 retry:
-  /* async connect; abort when error happens and abortFlag is present. */
+  /* blocking/non-blocking connect() is determined by asyncFlag. */
   ret = connect(fd, &sock->addr.sa, salen);
 
-  if (errno == EAGAIN || (errno == ECONNREFUSED && ++refused_retries < RETRY_REFUSED_TIMES) ||
-    (errno == ETIMEDOUT && ++timedout_retries < RETRY_TIMEDOUT_TIMES)) {
-    if (refused_retries % 1000 == 0) INFO(NCCL_ALL, "Call to connect returned %s, retrying", strerror(errno));
+  if (!sock->asyncFlag && (errno == EAGAIN || (errno == ECONNREFUSED && ++refused_retries < RETRY_REFUSED_TIMES) ||
+    (errno == ETIMEDOUT && ++timedout_retries < RETRY_TIMEDOUT_TIMES))) {
+    if (errno == ECONNREFUSED && refused_retries % 1000 == 0) INFO(NCCL_ALL, "Call to connect returned %s, retrying", strerror(errno));
     usleep(SLEEP_INT);
     goto retry;
-  } else if (errno == EINPROGRESS && !sock->asyncFlag) {
-    enum ncclSocketState state;
-    do {
-      if (sock->abortFlag) NEQCHECK(*sock->abortFlag, 0);
-      NCCLCHECK(getFdState(fd, &state));
-    } while (state == ncclSocketConnecting);
-    EQCHECK(state, ncclSocketError);
-    ret = 0;
   }
 
-  if (ret == 0 || (errno == EINPROGRESS && sock->asyncFlag)) {
+  /* If connect() fails with errno == EAGAIN/EINPROGRESS/ETIMEDOUT, we may want to try connect again.
+   * However, it can return EISCONN instead of success which indicates connection is built up in
+   * background already. No need to call connect() again. */
+  if (ret == 0 || ((errno == EINPROGRESS || errno == ECONNREFUSED) && sock->asyncFlag) || errno == EISCONN) {
     sock->fd = fd;
     return ncclSuccess;
   }
 
   WARN("Net : Connect to %s failed : %s", ncclSocketToString(&sock->addr, line), strerror(errno));
-  return ncclSystemError;
+  return ncclRemoteError;
 }
 
 ncclResult_t ncclSocketAccept(struct ncclSocket* sock, struct ncclSocket* listenSocket) {
@@ -501,7 +499,7 @@ static ncclResult_t ncclSocketProgressOpt(int op, struct ncclSocket* sock, void*
     if (bytes == -1) {
       if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
         WARN("Net : Call to recv from %s failed : %s", ncclSocketToString(&sock->addr, line), strerror(errno));
-        return ncclSystemError;
+        return ncclRemoteError;
       } else {
         bytes = 0;
       }
@@ -521,7 +519,7 @@ ncclResult_t ncclSocketProgress(int op, struct ncclSocket* sock, void* ptr, int 
   if (closed) {
     char line[SOCKET_NAME_MAXLEN+1];
     WARN("Net : Connection closed by remote peer %s", ncclSocketToString(&sock->addr, line, 0));
-    return ncclSystemError;
+    return ncclRemoteError;
   }
   return ncclSuccess;
 }

@@ -16,7 +16,7 @@ namespace {
     int tid = threadIdx.x;
     int tn = blockDim.x;
     #pragma unroll 1
-    for(int e=0; e < NCCL_MAX_WORK_ELEMENTS && w->elems[e].header.type != ncclWorkTypeUnused; e++) {
+    for(int e=0; e < NCCL_MAX_WORK_ELEMENTS && w->elems[e].isUsed; e++) {
       ncclWorkElem *we = &w->elems[e];
       intptr_t eltN = we->count;
       int bid = we->bid;

@@ -121,7 +121,6 @@ struct ncclRing {
   // since we need to know how the user expects data to be ordered across
   // devices. Ordered from current device.
   int* userRanks;
-  int* devUserRanks;
 
   int index; // This rank's index in the ring
 };
@@ -146,7 +145,7 @@ struct ncclDirect {
 };
 
 #define NCCL_MAX_CONNS 2
-struct ncclPeer {
+struct ncclChannelPeer {
   struct ncclConnector send[NCCL_MAX_CONNS];
   struct ncclConnector recv[NCCL_MAX_CONNS];
 };
@@ -158,30 +157,38 @@ struct ncclDevComm;
 /* Make sure to adjust padding at the end of ncclWorkElem. */
 #define NCCL_WORK_SIZE 512
 
-enum ncclWorkElemType : uint8_t {
+enum ncclWorkType : uint8_t {
    ncclWorkTypeUnused=0,
    ncclWorkTypeColl=1,
    ncclWorkTypeP2p=2,
    ncclWorkTypeRegColl=3
 };
-enum ncclWorkElemSubType : uint8_t {
-  ncclWorkSubTypeUnused =0,
-  ncclWorkSubTypeSend,
-  ncclWorkSubTypeRecv
+enum ncclWorkP2PType : uint8_t {
+  ncclWorkP2pTypeUnused=0,
+  ncclWorkP2pTypeSend,
+  ncclWorkP2pTypeRecv
 };
 
-struct ncclWorkElemHeader {
+struct ncclWorkHeader {
+  union {
+    int32_t workNext;  // when isLast=0: Offset from kernel argument workHead
+    uint32_t doneAcks; // when isLast=1: Monotonic (mod 1<<32) ack value to send back.
+  };
   uint16_t funcIndex;
-  enum ncclWorkElemType type;
-  unsigned nWarps:5;
-  unsigned isLast:1;
+  uint8_t isLast:1; // last work for this kernel
+  uint8_t inFifo:1; // is this work in the fifo
+  enum ncclWorkType type;
 };
 
 struct ncclWorkElem {
-  struct ncclWorkElemHeader header;
-  uint8_t regUsed;
+  union {
+    uint8_t flagBits;
+    struct {
+      uint8_t isUsed:1, redOpArgIsPtr:1, regUsed:1;
+    };
+  };
+  uint8_t nWarps;
   uint8_t direct;
-  uint8_t redOpArgIsPtr;
 
   const void * sendbuff;
   void * recvbuff;
@@ -192,22 +199,29 @@ struct ncclWorkElem {
   uint8_t bid;
   uint8_t nChannels;
   uint64_t redOpArg;
-  uint64_t pad;
 };
-static_assert(NCCL_WORK_SIZE % sizeof(struct ncclWorkElem) == 0, "ncclWorkElem size must be a multiple of ncclWork size");
+
+#define NCCL_MAX_WORK_ELEMENTS ((NCCL_WORK_SIZE - alignUp(sizeof(ncclWorkHeader), alignof(ncclWorkElem)))/sizeof(ncclWorkElem))
+static_assert(NCCL_MAX_WORK_ELEMENTS == 9, "Sanity check: NCCL_MAX_WORK_ELEMENTS == 9");
 
 struct ncclWorkElemP2p {
-  struct ncclWorkElemHeader header;
   int32_t peer;
-  void* buff;
-  size_t count;
-  int chunkSize;
-  uint8_t ngroups;
-  uint8_t warpStart;
+  enum ncclWorkP2PType p2pType;
   uint8_t nWarps;
-  enum ncclWorkElemSubType subType;
+  uint8_t warpStart;
+  uint8_t ngroups;
+  // Important not to use any fields with greater than 4-byte alignment since
+  // we need sizeof(ncclWorkElemP2p)==28, but that would be padded up to 32 if
+  // there were 8-byte fields.
+  //void* buff;
+  uint32_t buffHi32, buffLo32; // buff = buffHi32<<32 | buffLo32;
+  //size_t count;
+  uint32_t countHi32, countLo32; // count = countHi32<<32 | countLo32;
+  int chunkSize;
 };
-static_assert(NCCL_WORK_SIZE % sizeof(struct ncclWorkElemP2p) == 0, "ncclWorkElemP2p size must be a multiple of ncclWork size");
+
+static_assert(((NCCL_WORK_SIZE - alignUp(sizeof(ncclWorkHeader), alignof(ncclWorkElemP2p)))/sizeof(ncclWorkElemP2p)) >= 16, "Sanity check: NCCL_MAX_WORK_ELEMENTS_P2P == 16");
+#define NCCL_MAX_WORK_ELEMENTS_P2P 16
 
 struct ncclWorkElemReg {
   struct ncclWorkElem elem;
@@ -215,72 +229,59 @@ struct ncclWorkElemReg {
   void* dnOutputs[NCCL_MAX_DIRECT_ARITY+1];
   void* upOutputs[NCCL_MAX_DIRECT_ARITY+1];
 };
-static_assert(NCCL_WORK_SIZE % sizeof(struct ncclWorkElemReg) == 0, "ncclWork size must be a multiple of ncclWorkElemReg size");
-static_assert(sizeof(struct ncclWorkElemReg) % sizeof(struct ncclWorkElem) == 0, "ncclWorkElemReg size must be a multiple of ncclWorkElem size");
 
-#define NCCL_MAX_WORK_ELEMENTS (NCCL_WORK_SIZE/sizeof(struct ncclWorkElem))
-#define NCCL_MAX_WORK_ELEMENTS_P2P (NCCL_WORK_SIZE/sizeof(struct ncclWorkElemP2p))
-#define NCCL_MAX_WORK_ELEMENTS_REG (NCCL_WORK_SIZE/sizeof(struct ncclWorkElemReg))
+#define NCCL_MAX_WORK_ELEMENTS_REG ((NCCL_WORK_SIZE - alignUp(sizeof(ncclWorkHeader), alignof(ncclWorkElemReg)))/sizeof(ncclWorkElemReg))
+static_assert(NCCL_MAX_WORK_ELEMENTS_REG == 2, "Sanity check: NCCL_MAX_WORK_ELEMENTS_REG == 2");
+
 // Number of named barriers supported by CUDA
 #define NCCL_MAX_GROUPS 16
 
 struct ncclWork {
+  struct ncclWorkHeader header;
   union {
-    char pad[NCCL_WORK_SIZE];
-    struct ncclWorkElemHeader header;
+    char pad[NCCL_WORK_SIZE - sizeof(struct ncclWorkHeader)];
     struct ncclWorkElem elems[NCCL_MAX_WORK_ELEMENTS];
     struct ncclWorkElemP2p p2pElems[NCCL_MAX_WORK_ELEMENTS_P2P];
     struct ncclWorkElemReg regElems[NCCL_MAX_WORK_ELEMENTS_REG];
   };
 };
+static_assert(sizeof(struct ncclWork) == NCCL_WORK_SIZE, "Sanity check: sizeof(struct ncclWork) == NCCL_WORK_SIZE");
+static_assert(sizeof(struct ncclWork)%16 == 0, "Sanity check: sizeof(struct ncclWork)%16 == 0");
 
-static_assert(sizeof(struct ncclWork) == NCCL_WORK_SIZE, "ncclWork size needs to be well aligned");
-
-struct ncclChannel {
-  union {
-    struct {
-      struct ncclRing ring;
-      struct ncclTree tree;
-      struct ncclDirect collTree;
-
-      int id;
-
-      // Communication structures
-      struct ncclPeer* peers;
-      struct ncclPeer* devPeers;
-
-      // Operation list for aggregation
-      struct ncclWork* workFifo;
-      int workCount;
-      size_t totalSize;
-      uint64_t workFifoTail; // Only used by CPU
-      uint16_t index;        // Only used by GPU
-
-      // GDRCOPY support
-      struct ncclWork* workFifoGdr;
-      struct ncclWork* workFifoDev;
-      void* gdrMemDesc;
-    };
-    int data[0x80];
-  };
+struct ncclDevChannelPeer {
+  // Stripped version of ncclChannelPeer where we only keep the ncclConnInfo
+  // instead of the full ncclConnector.
+  struct ncclConnInfo send[NCCL_MAX_CONNS];
+  struct ncclConnInfo recv[NCCL_MAX_CONNS];
 };
-static_assert(sizeof(struct ncclChannel) == 0x80*sizeof(int), "ncclChannel must have a pow2 size");
+
+struct alignas(16) ncclDevChannel {
+  struct ncclDevChannelPeer *peers;
+  struct ncclRing ring;
+  struct ncclTree tree;
+  struct ncclDirect collTree;
+  uint32_t* workFifoDone; // Location of done counter, device writes index+1 of last work processed
+};
 
 struct ncclDevComm {
   int rank;
   int nRanks;
   int buffSizes[NCCL_NUM_PROTOCOLS];
 
+  // Operation list for aggregation
+  int workFifoDepth;
+  struct ncclWork* workFifoHeap; // may be cudaHost or GDR memory
+
   // Flag to ask NCCL kernels to abort
-  volatile uint32_t *abortFlag;
+  volatile uint32_t* abortFlag;
 
   // Channels, device side
-  struct ncclChannel* channels;
+  struct ncclDevChannel* channels/*[MAXCHANNELS]*/;
 };
 
-struct ncclDevCommAndChannels {
-  ncclDevComm comm;
-  ncclChannel channels[MAXCHANNELS];
+struct alignas(16) ncclDevCommAndChannels {
+  struct ncclDevComm comm;
+  struct ncclDevChannel channels[MAXCHANNELS];
 };
 
 #endif

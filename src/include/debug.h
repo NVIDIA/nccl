@@ -10,8 +10,8 @@
 #include "nccl_net.h"
 #include <stdio.h>
 #include <chrono>
+#include <type_traits>
 
-#include <sys/syscall.h>
 #include <limits.h>
 #include <string.h>
 #include <pthread.h>
@@ -21,7 +21,7 @@
 
 extern int ncclDebugLevel;
 extern uint64_t ncclDebugMask;
-extern pthread_mutex_t ncclDebugOutputLock;
+extern pthread_mutex_t ncclDebugLock;
 extern FILE *ncclDebugFile;
 extern ncclResult_t getHostName(char* hostname, int maxlen, const char delim);
 
@@ -29,13 +29,15 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
 
 // Let code temporarily downgrade WARN into INFO
 extern thread_local int ncclDebugNoWarn;
+extern char ncclLastError[];
 
 #define WARN(...) ncclDebugLog(NCCL_LOG_WARN, NCCL_ALL, __FILE__, __LINE__, __VA_ARGS__)
 #define INFO(FLAGS, ...) ncclDebugLog(NCCL_LOG_INFO, (FLAGS), __func__, __LINE__, __VA_ARGS__)
+#define TRACE_CALL(...) ncclDebugLog(NCCL_LOG_TRACE, NCCL_CALL, __func__, __LINE__, __VA_ARGS__)
 
 #ifdef ENABLE_TRACE
 #define TRACE(FLAGS, ...) ncclDebugLog(NCCL_LOG_TRACE, (FLAGS), __func__, __LINE__, __VA_ARGS__)
-extern std::chrono::high_resolution_clock::time_point ncclEpoch;
+extern std::chrono::steady_clock::time_point ncclEpoch;
 #else
 #define TRACE(...)
 #endif

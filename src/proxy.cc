@@ -13,6 +13,8 @@
 #define ENABLE_TIMER 0
 #include "timer.h"
 
+#include <sys/syscall.h>
+
 enum { proxyRecv=0, proxySend=1 };
 
 static bool NeedProxy(int type, int pattern, int root, struct ncclRing* ring, int nranks) {
@@ -349,10 +351,10 @@ ncclResult_t ncclLocalOpAppend(struct ncclComm* comm, struct ncclProxyConnector*
   return ncclSuccess;
 }
 
-static ncclResult_t SaveProxy(struct ncclChannel* channel, int type, int peer, struct ncclProxyOp* op, int connIndex) {
+static ncclResult_t SaveProxy(struct ncclChannel* channel, int type, int peer, struct ncclProxyOp* op, int connIndex, bool* justInquire) {
   if (peer < 0) return ncclSuccess;
 
-  struct ncclPeer* peerComm = channel->peers+peer;
+  struct ncclChannelPeer* peerComm = channel->peers+peer;
   struct ncclConnector* connector = type == proxyRecv ? peerComm->recv+connIndex : peerComm->send+connIndex;
   if (connector->transportComm == NULL) {
     WARN("Rank %d has no transport for %s peer %d on channel %d/%d", connector->comm->rank,
@@ -361,35 +363,62 @@ static ncclResult_t SaveProxy(struct ncclChannel* channel, int type, int peer, s
   }
   if (connector->transportComm->proxyProgress == NULL) return ncclSuccess;
 
-  NCCLCHECK(ncclLocalOpAppend(connector->comm, &connector->proxyConn, op));
+  if (justInquire) *justInquire = true;
+  else {
+    NCCLCHECK(ncclLocalOpAppend(connector->comm, &connector->proxyConn, op));
+  }
   return ncclSuccess;
 }
 
-ncclResult_t ncclProxySaveColl(struct ncclComm* comm, struct ncclProxyOp* op, int nranks) {
-  struct ncclChannel* channel = comm->channels+op->channelId;
-  int pattern = op->pattern;
-  if (pattern == ncclPatternRing || pattern == ncclPatternRingTwice || pattern == ncclPatternPipelineFrom || pattern == ncclPatternPipelineTo) {
-    struct ncclRing* ring = &channel->ring;
-    if (NeedProxy(proxyRecv, pattern, op->root, ring, nranks)) NCCLCHECK(SaveProxy(channel, proxyRecv, ring->prev, op, 0));
-    if (NeedProxy(proxySend, pattern, op->root, ring, nranks)) NCCLCHECK(SaveProxy(channel, proxySend, ring->next, op, 0));
-  }
-  if (pattern == ncclPatternTreeUp || pattern == ncclPatternTreeUpDown) {
-    // Tree up
-    struct ncclTree* tree = &channel->tree;
-    for (int i=0; i<NCCL_MAX_TREE_ARITY; i++) NCCLCHECK(SaveProxy(channel, proxyRecv, tree->down[i], op, 0));
-    NCCLCHECK(SaveProxy(channel, proxySend, tree->up, op, 0));
-  }
-  if (pattern == ncclPatternTreeDown || pattern == ncclPatternTreeUpDown) {
-    // Tree down
-    struct ncclTree* tree = &channel->tree;
-    for (int i=0; i< NCCL_MAX_TREE_ARITY; i++) NCCLCHECK(SaveProxy(channel, proxySend, tree->down[i], op, 0));
-    NCCLCHECK(SaveProxy(channel, proxyRecv, tree->up, op, 0));
-  }
-  if (pattern == ncclPatternCollTreeUpDown) {
-    // CollTree up
-    NCCLCHECK(SaveProxy(channel, proxySend, channel->collTree.out, op, 1));  // For CollTree up, we are using push
-    // CollTree down
-    NCCLCHECK(SaveProxy(channel, proxyRecv, channel->collTree.out, op, 0));
+// justInquire != nullptr means don't actually do anything, just assertain need of
+// ncclProxySaveOp for this op.
+ncclResult_t ncclProxySaveOp(struct ncclComm* comm, struct ncclProxyOp* op, bool* justInquire) {
+  struct ncclChannel* channel = &comm->channels[op->channelId];
+  if (justInquire) *justInquire = false;
+  switch (op->pattern) {
+  case ncclPatternRing:
+  case ncclPatternRingTwice:
+  case ncclPatternPipelineFrom:
+  case ncclPatternPipelineTo: {
+      struct ncclRing* ring = &channel->ring;
+      if (NeedProxy(proxyRecv, op->pattern, op->root, ring, comm->nRanks)) {
+        NCCLCHECK(SaveProxy(channel, proxyRecv, ring->prev, op, 0, justInquire));
+      }
+      if (NeedProxy(proxySend, op->pattern, op->root, ring, comm->nRanks)) {
+        NCCLCHECK(SaveProxy(channel, proxySend, ring->next, op, 0, justInquire));
+      }
+    } break;
+  case ncclPatternTreeUp:
+  case ncclPatternTreeDown:
+  case ncclPatternTreeUpDown: {
+      if (op->pattern != ncclPatternTreeDown) { // Tree up
+        struct ncclTree* tree = &channel->tree;
+        for (int i=0; i<NCCL_MAX_TREE_ARITY; i++) {
+          NCCLCHECK(SaveProxy(channel, proxyRecv, tree->down[i], op, 0, justInquire));
+        }
+        NCCLCHECK(SaveProxy(channel, proxySend, tree->up, op, 0, justInquire));
+      }
+      if (op->pattern != ncclPatternTreeUp) { // Tree down
+        struct ncclTree* tree = &channel->tree;
+        for (int i=0; i< NCCL_MAX_TREE_ARITY; i++) {
+          NCCLCHECK(SaveProxy(channel, proxySend, tree->down[i], op, 0, justInquire));
+        }
+        NCCLCHECK(SaveProxy(channel, proxyRecv, tree->up, op, 0, justInquire));
+      }
+    } break;
+  case ncclPatternCollTreeUpDown: {
+      // CollTree up
+      NCCLCHECK(SaveProxy(channel, proxySend, channel->collTree.out, op, 1, justInquire));  // For CollTree up, we are using push
+      // CollTree down
+      NCCLCHECK(SaveProxy(channel, proxyRecv, channel->collTree.out, op, 0, justInquire));
+    } break;
+  case ncclPatternSend:
+  case ncclPatternRecv: {
+      if (op->root == comm->rank) return ncclSuccess;
+      op->nsteps = DIVUP(op->nbytes, op->chunkSize);
+      if (op->nsteps == 0) op->nsteps = 1;
+      NCCLCHECK(SaveProxy(channel, op->pattern == ncclPatternSend ? proxySend : proxyRecv, op->root, op, 1, justInquire));
+    } break;
   }
   return ncclSuccess;
 }
@@ -406,22 +435,23 @@ ncclResult_t ncclProxyComputeP2p(struct ncclInfo* info, struct ncclProxyOp* op) 
   op->protocol = NCCL_PROTO_SIMPLE;
   op->dtype = info->datatype;
 
-  int stepSize = info->comm->buffSizes[NCCL_PROTO_SIMPLE]/NCCL_STEPS/SENDRECV_SLICEFACTOR;
+  int stepSize = info->comm->buffSizes[NCCL_PROTO_SIMPLE]/NCCL_STEPS;
+  if (info->comm->nNodes > 1) stepSize /= SENDRECV_SLICEFACTOR;
   info->chunkSize = stepSize;
   op->root = info->root;
   op->nbytes = info->count;
-  struct ncclPeer* peer = channel->peers + op->root;
+  struct ncclChannelPeer* peer = channel->peers + op->root;
 
   if (info->coll == ncclFuncSend) {
     op->pattern = ncclPatternSend;
-    if (op->root != info->comm->rank && peer->send[1].transportComm && peer->send[1].transportComm->proxyProgress) {
+    if (op->root != info->comm->rank && peer->send[1].transportComm == &netTransport.send) {
       // Tune chunk size for the network
       if (info->count < stepSize) info->chunkSize /= 4;
       else if (info->count < 8*stepSize) info->chunkSize /= 2;
     }
   } else if (info->coll == ncclFuncRecv) {
     op->pattern = ncclPatternRecv;
-    if (op->root != info->comm->rank && peer->recv[1].transportComm && peer->recv[1].transportComm->proxyProgress) {
+    if (op->root != info->comm->rank && peer->recv[1].transportComm == &netTransport.recv) {
       // Tune chunk size for the network
       if (info->count < stepSize) info->chunkSize /= 4;
       else if (info->count < 8*stepSize) info->chunkSize /= 2;
@@ -434,22 +464,6 @@ ncclResult_t ncclProxyComputeP2p(struct ncclInfo* info, struct ncclProxyOp* op) 
     info->chunkSize = ncclParamChunkSize();
   }
   op->chunkSize = info->chunkSize;
-  return ncclSuccess;
-}
-
-ncclResult_t ncclProxySaveP2p(struct ncclComm* comm, struct ncclProxyOp* op) {
-  struct ncclChannel* channel = comm->channels+op->channelId;
-  op->opCount = channel->workFifoTail-1;
-  if (op->root == comm->rank) return ncclSuccess;
-  if (op->pattern == ncclPatternRecv) {
-    op->nsteps = DIVUP(op->nbytes, op->chunkSize);
-    if (op->nsteps == 0) op->nsteps = 1;
-    NCCLCHECK(SaveProxy(channel, proxyRecv, op->root, op, 1));
-  } else if (op->pattern == ncclPatternSend) {
-    op->nsteps = DIVUP(op->nbytes, op->chunkSize);
-    if (op->nsteps == 0) op->nsteps = 1;
-    NCCLCHECK(SaveProxy(channel, proxySend, op->root, op, 1));
-  }
   return ncclSuccess;
 }
 
@@ -594,8 +608,48 @@ void ncclDumpProxyState(int signal) {
   dumpProxyState(ncclLastProxyState);
 }
 
+NCCL_PARAM(CreateThreadContext, "CREATE_THREAD_CONTEXT", 0);
+ncclResult_t ncclSetThreadContext(struct ncclComm* comm) {
+#if CUDART_VERSION >= 11030
+  static int createThreadContext = -1;
+
+  if (createThreadContext == -1) {
+    createThreadContext = ncclParamCreateThreadContext();
+    if (createThreadContext) {
+      if (CUPFN(cuCtxCreate_v3020) == nullptr || CUPFN(cuCtxDestroy) == nullptr || CUPFN(cuCtxSetCurrent) == nullptr) {
+        WARN("Unable to create thread context due to old driver, disabling.");
+        createThreadContext = 0;
+      }
+    }
+  }
+  if (createThreadContext) {
+    if (comm->proxyState.cudaCtx == NULL) {
+      if (CUPFN(cuCtxCreate_v3020(&comm->proxyState.cudaCtx,
+                                  CU_CTX_SCHED_SPIN|CU_CTX_MAP_HOST, comm->cudaDev)) != CUDA_SUCCESS) {
+        WARN("Failed to create CUDA context on device %d", comm->cudaDev);
+        createThreadContext = 0;
+        return ncclSuccess;
+      }
+    } else {
+      if (CUPFN(cuCtxSetCurrent(comm->proxyState.cudaCtx)) != CUDA_SUCCESS) {
+        WARN("Failed to set CUDA context on device %d", comm->cudaDev);
+        return ncclUnhandledCudaError;
+      }
+    }
+  }
+#endif
+  return ncclSuccess;
+}
+
 void* ncclProxyProgress(void *comm_) {
   struct ncclComm* comm = (struct ncclComm*)comm_;
+  if (ncclSetThreadContext(comm) != ncclSuccess) {
+    WARN("[Proxy Progress] Failed to set CUDA context on device %d", comm->cudaDev);
+  } else if (cudaSetDevice(comm->cudaDev) != cudaSuccess) {
+    WARN("[Proxy Progress] Failed to set CUDA device %d", comm->cudaDev);
+  }
+  if (CPU_COUNT(&comm->cpuAffinity)) sched_setaffinity(0, sizeof(cpu_set_t), &comm->cpuAffinity);
+
   struct ncclProxyProgressState* state = &comm->proxyState.progressState;
   state->nextOps = -1;
   signal(SIGUSR1, ncclDumpProxyState);
@@ -728,9 +782,9 @@ static ncclResult_t ncclProxyGetConnection(struct ncclProxyConnectionPool* pool,
 
 static ncclResult_t proxyFree(struct ncclProxyConnection* connection, struct ncclComm* comm) {
   if (connection->send) {
-    NCCLCHECK(ncclTransports[connection->transport].send.proxyFree(connection, comm));
+    NCCLCHECK(ncclTransports[connection->transport]->send.proxyFree(connection, comm));
   } else {
-    NCCLCHECK(ncclTransports[connection->transport].recv.proxyFree(connection, comm));
+    NCCLCHECK(ncclTransports[connection->transport]->recv.proxyFree(connection, comm));
   }
   return ncclSuccess;
 }
@@ -774,7 +828,7 @@ ncclResult_t ncclProxyConnect(struct ncclComm* comm, int transport, int send, in
   NCCLCHECK(ncclSocketSend(sock, &send, sizeof(int)));
   NCCLCHECK(ncclSocketSend(sock, &comm->localRank, sizeof(int)));
   NCCLCHECK(ncclSocketRecv(sock, &proxyConn->connection, sizeof(void*)));
-  struct ncclTransportComm* tcomm = send ? &ncclTransports[transport].send : &ncclTransports[transport].recv;
+  struct ncclTransportComm* tcomm = send ? &ncclTransports[transport]->send : &ncclTransports[transport]->recv;
   // If we need proxy progress, map progress ops
   if (tcomm->proxyProgress) {
     char poolPath[] = "/dev/shm/nccl-XXXXXX";
@@ -881,7 +935,7 @@ static ncclResult_t proxyConnInit(struct ncclProxyLocalPeer* peer, struct ncclPr
   NCCLCHECK(ncclSocketRecv(sock, &peer->localRank, sizeof(int)));
   connection->localRank = peer->localRank;
   NCCLCHECK(ncclSocketSend(sock, &connection, sizeof(void*)));
-  connection->tcomm = connection->send ? &ncclTransports[connection->transport].send : &ncclTransports[connection->transport].recv;
+  connection->tcomm = connection->send ? &ncclTransports[connection->transport]->send : &ncclTransports[connection->transport]->recv;
   // If we need proxy progress, let's allocate ops and start the thread
   if (connection->tcomm->proxyProgress) {
     NCCLCHECK(proxyProgressInit(comm));
@@ -947,7 +1001,10 @@ static ncclResult_t proxyConnSetupConnect(int type, struct ncclProxyLocalPeer* p
 
 void* ncclProxyService(void* _args) {
   struct ncclComm* comm =  (struct ncclComm *) _args;
-  if (cudaSetDevice(comm->cudaDev) != cudaSuccess) {
+  if (CPU_COUNT(&comm->cpuAffinity)) sched_setaffinity(0, sizeof(cpu_set_t), &comm->cpuAffinity);
+  if (ncclSetThreadContext(comm) != ncclSuccess) {
+    WARN("[Proxy Service] Failed to set CUDA context on device %d", comm->cudaDev);
+  } else if (cudaSetDevice(comm->cudaDev) != cudaSuccess) {
     WARN("[Proxy Service] Failed to set CUDA device %d", comm->cudaDev);
   }
   if (CPU_COUNT(&comm->cpuAffinity)) sched_setaffinity(0, sizeof(cpu_set_t), &comm->cpuAffinity);

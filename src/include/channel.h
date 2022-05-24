@@ -31,7 +31,8 @@ static ncclResult_t ncclChannelComputeBase(struct ncclComm* comm, int peer, int 
 }
 
 static ncclResult_t ncclChannelComputeFromBase(struct ncclComm* comm, int base, int channelInc, int*channelId) {
-  *channelId = (base+comm->p2pChannels[channelInc]) % comm->p2pnChannels;
+  //*channelId = (base+comm->p2pChannels[channelInc]) % comm->p2pnChannels;
+  *channelId = (comm->p2pChannels[base%comm->p2pnChannels]+channelInc) % comm->p2pnChannels;
   return ncclSuccess;
 }
 

@@ -1066,6 +1066,15 @@ ncclResult_t ncclCommAbort(ncclComm_t comm) {
   return ncclSuccess;
 }
 
+NCCL_API(ncclResult_t, ncclCommMarkAbort, ncclComm_t comm);
+ncclResult_t ncclCommMarkAbort(ncclComm_t comm) {
+  NVTX3_FUNC_RANGE_IN(nccl_domain);
+  if (comm == NULL)
+    return ncclSuccess;
+  *comm->abortFlag = 1;
+  return ncclSuccess;
+}
+
 NCCL_API(const char*, ncclGetErrorString, ncclResult_t code);
 const char* ncclGetErrorString(ncclResult_t code) {
   switch (code) {

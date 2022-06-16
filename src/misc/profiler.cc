@@ -8,6 +8,7 @@
 
 //#define PROFILE_PROXY 1
 #ifdef PROFILE_PROXY
+#define ENABLE_TIMER  1
 #include "timer.h"
 #include "alloc.h"
 
@@ -27,7 +28,6 @@ struct ncclProxyProfileEvent {
 struct ncclProxyProfileEvent* profilingEvents = NULL;
 int profilingIndex = 0;
 double profilingStart = 0;
-#define MAX_EVENTS 200000
 
 ncclResult_t ncclProfilingRecord(struct ncclProxyArgs* args, int sub, int step, int state) {
   if (profilingEvents == NULL) {
@@ -37,7 +37,7 @@ ncclResult_t ncclProfilingRecord(struct ncclProxyArgs* args, int sub, int step, 
   struct ncclProxyProfileEvent* event = NULL;
   if (state%8 == 0) {
     if (profilingIndex == MAX_EVENTS) return ncclSuccess;
-    args->subs[sub].profilingEvents[step%NCCL_STEPS] = event = profilingEvents+profilingIndex++;
+    args->subs[sub].profilingEvents[step] = event = profilingEvents+profilingIndex++;
     if (state == ncclProxyProfileBegin) {
       // Proxy operation information
       event->opCount = args->opCount;
@@ -48,8 +48,8 @@ ncclResult_t ncclProfilingRecord(struct ncclProxyArgs* args, int sub, int step, 
       event->opIndex = (((uint64_t)args)/sizeof(struct ncclProxyArgs))%256;
     } else event->peer = -state;
   } else {
-    event = (struct ncclProxyProfileEvent*)args->subs[sub].profilingEvents[step%NCCL_STEPS];
-    if (state == ncclProxyProfileEnd) args->subs[sub].profilingEvents[step%NCCL_STEPS] = NULL;
+    event = (struct ncclProxyProfileEvent*)args->subs[sub].profilingEvents[step];
+    if (state == ncclProxyProfileEnd) args->subs[sub].profilingEvents[step] = NULL;
     if (state == ncclProxyProfileAppendEnd) event->opCount = args->opCount;
   }
   // Timestamp

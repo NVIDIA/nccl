@@ -7,6 +7,8 @@
 #ifndef NCCL_PROFILER_H_
 #define NCCL_PROFILER_H_
 
+#define MAX_EVENTS 200000
+
 #include "proxy.h"
 
 enum ncclProxyProfileState {

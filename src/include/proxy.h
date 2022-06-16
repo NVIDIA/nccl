@@ -10,6 +10,7 @@
 #include "devcomm.h"
 #include "info.h"
 #include "socket.h"
+#include "profiler.h"
 #include <pthread.h>
 
 enum ncclProxyOpState { ncclProxyOpNone, ncclProxyOpReady, ncclProxyOpProgress };
@@ -17,6 +18,7 @@ enum ncclProxyOpState { ncclProxyOpNone, ncclProxyOpReady, ncclProxyOpProgress }
 struct ncclProxyArgs;
 typedef ncclResult_t (*proxyProgressFunc_t)(struct ncclComm*, struct ncclProxyArgs*);
 
+#define MAX_EVENTS_SUB  MAX_EVENTS/MAXCHANNELS
 #define NCCL_PROXY_MAX_SUBS MAXCHANNELS
 static_assert(NCCL_MAX_WORK_ELEMENTS <= MAXCHANNELS, "Not enough sub space for max work elements");
 
@@ -56,7 +58,7 @@ struct ncclProxySubArgs {
   uint64_t done;
   uint64_t end;
   void* requests[NCCL_STEPS];
-  void* profilingEvents[NCCL_STEPS];
+  void* profilingEvents[MAX_EVENTS_SUB];
 };
 
 struct ncclProxyArgs {

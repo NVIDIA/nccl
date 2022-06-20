@@ -21,8 +21,10 @@ struct ncclProxyProfileEvent {
   int peer;
   int step;
   uint16_t channel;
-  uint8_t type; // send / recv
+  uint8_t type; // send / recv / ring / trees
   uint8_t opIndex;
+  uint8_t direction; // send / recv
+  size_t size; // size of network transfer
 };
 
 struct ncclProxyProfileEvent* profilingEvents = NULL;
@@ -44,11 +46,19 @@ ncclResult_t ncclProfilingRecord(struct ncclProxyArgs* args, int sub, int step, 
       event->channel = args->subs[sub].channelId;
       event->peer = args->subs[sub].peer;
       event->type = args->pattern;
+      if (event->type == ncclPatternRing) {
+        event->direction = args->direction;
+        event->size = (event->direction == ncclDirectionSend) ? args->sendSize : args->recvSize;
+      }
       event->step = step;
       event->opIndex = (((uint64_t)args)/sizeof(struct ncclProxyArgs))%256;
     } else event->peer = -state;
   } else {
     event = (struct ncclProxyProfileEvent*)args->subs[sub].profilingEvents[step];
+    if ((event->type == ncclPatternRing) && (event->direction == ncclDirectionSend) && (state == ncclProxyProfileSendWait)) {
+      /* Update size for sends as we have the update size to transfer from GPUs later in the process */
+      event->size = args->sendSize;
+    }
     if (state == ncclProxyProfileEnd) args->subs[sub].profilingEvents[step] = NULL;
     if (state == ncclProxyProfileAppendEnd) event->opCount = args->opCount;
   }
@@ -71,28 +81,36 @@ void ncclProfilingDump() {
     const int sendrecv = e->peer >= 0;
     const char* typeStr = sendrecv ? (e->type == ncclPatternSend ? "Send" : "Recv") :
       profilingEventStr[-(e->peer/8)];
+    if ((e->type == ncclPatternRing) && sendrecv) {
+      typeStr = (e->direction == ncclDirectionSend) ? "Send" : "Recv";
+    }
 
 
     if (sendrecv) {
       int state = ncclProxyProfileBegin;
       const char** stateStr = e->type == ncclPatternSend ? profilingStateSendStr : profilingStateRecvStr;
-      fprintf(f, "{\"name\": \"%s-%d-%d\", \"cat\": \"NET\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": 1, \"ts\": %f, \"args\": { \"opCount\": %ld, \"proxyOpIndex\":%d } },\n",
-          typeStr, e->peer, e->step, i, e->channel, e->timestamp[state], e->opCount, e->opIndex);
+
+      if ((e->type == ncclPatternRing) && sendrecv) {
+        stateStr = (e->direction == ncclDirectionSend) ? profilingStateSendStr : profilingStateRecvStr;
+      }
+
+      fprintf(f, "{\"name\": \"%s-%d-%d\", \"cat\": \"NET\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": 1, \"ts\": %f, \"args\": { \"opCount\": %ld, \"proxyOpIndex\":%d , \"xferSize\": %zu} },\n",
+          typeStr, e->peer, e->step, i, e->channel, e->timestamp[state], e->opCount, e->opIndex, e->size);
 
       while (state<ncclProxyProfileEnd) {
         if (e->timestamp[state]) {
           const char* name = stateStr[state];
-          fprintf(f, "{\"name\": \"%s\", \"cat\": \"NET\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": 1, \"ts\": %f },\n",
-              name, i, e->channel, e->timestamp[state]);
+          fprintf(f, "{\"name\": \"%s\", \"cat\": \"NET\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": 1, \"ts\": %f, \"args\": { \"opCount\": %ld, \"proxyOpIndex\":%d , \"xferSize\": %zu} },\n",
+              name, i, e->channel, e->timestamp[state], e->opCount, e->opIndex, e->size);
           state++;
           while (e->timestamp[state] == 0) state++;
-          fprintf(f, "{\"name\": \"%s\", \"cat\": \"NET\", \"ph\": \"e\", \"id\": %d, \"pid\": %d, \"tid\": 1, \"ts\": %f },\n",
-              name, i, e->channel, e->timestamp[state]);
+          fprintf(f, "{\"name\": \"%s\", \"cat\": \"NET\", \"ph\": \"e\", \"id\": %d, \"pid\": %d, \"tid\": 1, \"ts\": %f, \"args\": { \"opCount\": %ld, \"proxyOpIndex\":%d , \"xferSize\": %zu} },\n",
+              name, i, e->channel, e->timestamp[state], e->opCount, e->opIndex, e->size);
         }
       }
 
-      fprintf(f, "{\"name\": \"%s-%d-%d\", \"cat\": \"NET\", \"ph\": \"e\", \"id\": %d, \"pid\": %d, \"tid\": 1, \"ts\": %f },\n",
-          typeStr, e->peer, e->step, i, e->channel, e->timestamp[state]);
+      fprintf(f, "{\"name\": \"%s-%d-%d\", \"cat\": \"NET\", \"ph\": \"e\", \"id\": %d, \"pid\": %d, \"tid\": 1, \"ts\": %f, \"args\": { \"opCount\": %ld, \"proxyOpIndex\":%d , \"xferSize\": %zu} },\n",
+          typeStr, e->peer, e->step, i, e->channel, e->timestamp[state], e->opCount, e->opIndex, e->size);
     } else {
       if (e->peer == -ncclProxyProfileAppend) {
       fprintf(f, "{\"name\": \"%s\", \"cat\": \"NET\", \"ph\": \"b\", \"id\": %d, \"pid\": -1, \"tid\": 1, \"ts\": %f, \"args\": { \"added\": %ld } },\n",

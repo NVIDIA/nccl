@@ -78,6 +78,11 @@ struct ncclProxyArgs {
   char* sharedBuff[NCCL_STEPS];
   int sharedSize[NCCL_STEPS];
 
+  /* Required for profiling */
+  ncclDirection_t direction;
+  size_t sendSize;
+  size_t recvSize;
+
   int idle;
 
   // Element linking

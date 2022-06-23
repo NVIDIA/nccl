@@ -34,6 +34,6 @@ enum ncclProxyProfileState {
 };
 
 ncclResult_t ncclProfilingRecord(struct ncclProxyArgs* args, int sub, int step, int state);
-void ncclProfilingDump();
+void ncclProfilingDump(int rank);
 
 #endif

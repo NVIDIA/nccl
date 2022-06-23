@@ -11,6 +11,7 @@
 #define ENABLE_TIMER  1
 #include "timer.h"
 #include "alloc.h"
+#include <libgen.h>
 
 static const char* profilingStateSendStr[] = { "BufferWait", "GPUWait", "SendWait", "", "End" };
 static const char* profilingStateRecvStr[] = { "BufferWait", "RecvWait", "FlushWait", "GPUWait", "End" };
@@ -67,13 +68,29 @@ ncclResult_t ncclProfilingRecord(struct ncclProxyArgs* args, int sub, int step, 
   return ncclSuccess;
 }
 
-void ncclProfilingDump() {
+void ncclProfilingDump(int rank) {
   static int dumpDone = 0;
   if (dumpDone) return;
   dumpDone = 1;
-  const char* str = getenv("NCCL_PROXY_PROFILE");
+  char* str = getenv("NCCL_PROXY_PROFILE");
   if (!str) { free(profilingEvents); return; }
-  FILE* f = fopen(str, "w");
+  int str_size = strlen(str);
+
+  /* Extract filename and dirname */
+  const char *filename = basename(str);
+  const char *dname = dirname(str);
+
+  /* Create files for each rank to avoid data corruption when multiple processes write to the same file */
+  int fname_size = str_size + sizeof(int) + 10;
+  char* fname = (char *)malloc(fname_size*sizeof(char));
+
+  /* FIXME: Filename can have extension which needs to be removed too */
+  int rc = snprintf(fname, fname_size, "%s/%s_%d.json", dname, filename, rank);
+  if (rc < 0) {
+    printf("Error occured when forming the filename from %s and %d\n", str, rank);
+  }
+
+  FILE* f = fopen(fname, "w");
   fprintf(f, "[\n");
 
   for (int i=0; i<profilingIndex; i++) {
@@ -129,5 +146,5 @@ void ncclProfilingDump() {
 }
 #else
 ncclResult_t ncclProfilingRecord(struct ncclProxyArgs* args, int sub, int step, int state) { return ncclSuccess; }
-void ncclProfilingDump() {}
+void ncclProfilingDump(int rank) {}
 #endif

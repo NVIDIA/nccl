@@ -13,6 +13,8 @@
 #define ENABLE_TIMER 0
 #include "timer.h"
 
+struct ncclProxyArgs profArgs; // Only used for profiling purposes
+
 enum { proxyRecv=0, proxySend=1 };
 
 static bool NeedProxy(int type, int pattern, int root, struct ncclRing* ring, int nranks) {
@@ -511,17 +513,17 @@ static ncclResult_t ncclProxyGetPostedOps(struct ncclComm* comm, int* added) {
   if (state->opsPool == NULL) return ncclInternalError;
   struct ncclProxyOpsPool* pool = state->opsPool;
 
-  struct ncclProxyArgs profArgs; // Only used for profiling purposes
   if (state->nextOps != -1) goto process_nextops;
 
   // If we have ops to progress, no need to block waiting for something to arrive or even wait for the lock
   // to be available. Exit, continue progress, and come back later.
-  if (state->active != NULL && (pool->nextOps == -1 || pthread_mutex_trylock(&pool->mutex) != 0)) return ncclSuccess;
+  if (state->active != NULL && (pool->nextOps == -1 || pthread_mutex_trylock(&pool->mutex) != 0)) {
+    return ncclSuccess;
+  }
 
   if (state->active == NULL) {
     pthread_mutex_lock(&pool->mutex);
     while (pool->nextOps == -1 && !state->stop) {
-      struct ncclProxyArgs profArgs; // Only used for profiling purposes
       ncclProfilingRecord(&profArgs, 0, 0, ncclProxyProfileSleep);
       pthread_cond_wait(&pool->cond, &pool->mutex);
       ncclProfilingRecord(&profArgs, 0, 0, ncclProxyProfileWakeup);
@@ -535,7 +537,9 @@ static ncclResult_t ncclProxyGetPostedOps(struct ncclComm* comm, int* added) {
   state->nextOps = pool->nextOps;
   pool->nextOps = pool->nextOpsEnd = -1;
   pthread_mutex_unlock(&pool->mutex);
-  if (state->nextOps == -1) return ncclInternalError;
+  if (state->nextOps == -1) {
+    return ncclInternalError;
+  }
 
 process_nextops:
   ncclProfilingRecord(&profArgs, 0, 0, ncclProxyProfileAppend);
@@ -547,7 +551,9 @@ process_nextops:
   for (int opIndex = state->nextOps; opIndex != -1;) {
     struct ncclProxyOp* peerOp = pool->ops+opIndex;
     int peer = opIndex / MAX_OPS_PER_PEER;
-    if (peerOp->connection == NULL) return ncclInternalError;
+    if (peerOp->connection == NULL) {
+      return ncclInternalError;
+    }
     if (peerOp->next != -1) __builtin_prefetch(pool->ops+peerOp->next);
     NCCLCHECK(ProxyAppend(state, peerOp));
     (*added)++;
@@ -575,7 +581,9 @@ process_nextops:
       // The main thread may recycle free ops at any time, replace the freeOps value atomically and check it worked.
       int swap = __sync_val_compare_and_swap(pool->freeOps+i, oldFree, newFree);
       if (swap != oldFree) {
-        if (swap != -1) return ncclInternalError;
+        if (swap != -1) {
+          return ncclInternalError;
+        }
         // Ops were recycled while we were trying to swap, just set the value directly now.
         pool->ops[freeOpEnd[i]].next = -1;
         pool->freeOps[i] = newFree;
@@ -598,6 +606,7 @@ void* ncclProxyProgress(void *comm_) {
   struct ncclComm* comm = (struct ncclComm*)comm_;
   struct ncclProxyProgressState* state = &comm->proxyState.progressState;
   state->nextOps = -1;
+  ncclResult_t res = ncclSuccess;
   signal(SIGUSR1, ncclDumpProxyState);
   ncclLastProxyState = state;
   char threadName[NCCL_THREAD_NAMELEN];
@@ -605,7 +614,6 @@ void* ncclProxyProgress(void *comm_) {
   nvtxNameOsThreadA(syscall(SYS_gettid), threadName);
 
   int lastIdle = 0;
-  struct ncclProxyArgs profArgs; // Only used for profiling purposes
   while (state->stop == 0 && *comm->abortFlag == 0) {
     int idle = 1;
     ncclResult_t ret = progressOps(comm, state, state->active, &idle);
@@ -631,6 +639,7 @@ void* ncclProxyProgress(void *comm_) {
     }
     lastIdle = idle;
   }
+out:
   return NULL;
 }
 

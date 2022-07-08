@@ -6,7 +6,7 @@
 
 #include "profiler.h"
 
-//#define PROFILE_PROXY 1
+#define PROFILE_PROXY 1
 #ifdef PROFILE_PROXY
 #define ENABLE_TIMER  1
 #include "timer.h"
@@ -47,7 +47,7 @@ ncclResult_t ncclProfilingRecord(struct ncclProxyArgs* args, int sub, int step, 
       event->channel = args->subs[sub].channelId;
       event->peer = args->subs[sub].peer;
       event->type = args->pattern;
-      if (event->type == ncclPatternRing) {
+      if ((event->type == ncclPatternRing) || (event->type == ncclPatternTreeUpDown)) {
         event->direction = args->direction;
         event->size = (event->direction == ncclDirectionSend) ? args->sendSize : args->recvSize;
       }
@@ -56,7 +56,9 @@ ncclResult_t ncclProfilingRecord(struct ncclProxyArgs* args, int sub, int step, 
     } else event->peer = -state;
   } else {
     event = (struct ncclProxyProfileEvent*)args->subs[sub].profilingEvents[step];
-    if ((event->type == ncclPatternRing) && (event->direction == ncclDirectionSend) && (state == ncclProxyProfileSendWait)) {
+    if (((event->type == ncclPatternRing) || (event->type == ncclPatternTreeUpDown)) &&
+        (event->direction == ncclDirectionSend) &&
+        (state == ncclProxyProfileSendWait)) {
       /* Update size for sends as we have the update size to transfer from GPUs later in the process */
       event->size = args->sendSize;
     }
@@ -98,7 +100,7 @@ void ncclProfilingDump(int rank) {
     const int sendrecv = e->peer >= 0;
     const char* typeStr = sendrecv ? (e->type == ncclPatternSend ? "Send" : "Recv") :
       profilingEventStr[-(e->peer/8)];
-    if ((e->type == ncclPatternRing) && sendrecv) {
+    if (((e->type == ncclPatternRing) || (e->type == ncclPatternTreeUpDown)) && sendrecv) {
       typeStr = (e->direction == ncclDirectionSend) ? "Send" : "Recv";
     }
 
@@ -107,7 +109,7 @@ void ncclProfilingDump(int rank) {
       int state = ncclProxyProfileBegin;
       const char** stateStr = e->type == ncclPatternSend ? profilingStateSendStr : profilingStateRecvStr;
 
-      if ((e->type == ncclPatternRing) && sendrecv) {
+      if (((e->type == ncclPatternRing) || (e->type == ncclPatternTreeUpDown)) && sendrecv) {
         stateStr = (e->direction == ncclDirectionSend) ? profilingStateSendStr : profilingStateRecvStr;
       }
 

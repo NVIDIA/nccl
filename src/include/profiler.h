@@ -7,7 +7,7 @@
 #ifndef NCCL_PROFILER_H_
 #define NCCL_PROFILER_H_
 
-#define MAX_EVENTS 200000
+#define MAX_EVENTS 2000000
 
 #include "proxy.h"
 

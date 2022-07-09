@@ -777,7 +777,11 @@ static ncclResult_t sendProxyProgress(struct ncclComm* comm, struct ncclProxyArg
       // Round to next multiple of sliceSteps
       sub->base = ROUNDUP(resources->step, args->chunkSteps);
       sub->posted = sub->transmitted = sub->done = 0;
-      for (uint64_t step=0; step<sub->nsteps; step++) ncclProfilingRecord(args, s, step, ncclProxyProfileBegin);
+      for (uint64_t step=0; step<sub->nsteps; step++) {
+        args->direction = ncclDirectionSend;
+        args->sendSize = resources->buffSizes[args->protocol] / NCCL_STEPS;
+        ncclProfilingRecord(args, s, step, ncclProxyProfileBegin);
+      }
     }
     args->state = ncclProxyOpProgress;
   }
@@ -849,6 +853,7 @@ static ncclResult_t sendProxyProgress(struct ncclComm* comm, struct ncclProxyArg
           }
           if (ready) {
             // Data is ready, try to send.
+            args->sendSize = size;
             NCCLCHECK(ncclNetIsend(resources->netSendComm, buff, size, resources->rank, mhandle, sub->requests+buffSlot));
             if (sub->requests[buffSlot] != NULL) {
               TRACE(NCCL_NET, "sendProxy [%ld/%d] Isend posted, req %p", sub->transmitted, buffSlot, sub->requests[buffSlot]);
@@ -926,7 +931,11 @@ static ncclResult_t recvProxyProgress(struct ncclComm* comm, struct ncclProxyArg
       sub->base = ROUNDUP(resources->step, args->chunkSteps);
       sub->posted = sub->received = sub->transmitted = sub->done = 0;
       for (int i=0; i<groupSize; i++) sub[-i].groupSize = groupSize;
-      for (uint64_t step=0; step<sub->nsteps; step++) ncclProfilingRecord(args, s, step, ncclProxyProfileBegin);
+      for (uint64_t step=0; step<sub->nsteps; step++) {
+        args->direction = ncclDirectionRecv;
+        args->recvSize = (resources->buffSizes[args->protocol] / NCCL_STEPS) * (args->sliceSteps);
+        ncclProfilingRecord(args, s, step, ncclProxyProfileBegin);
+      }
     }
     args->state = ncclProxyOpProgress;
   }

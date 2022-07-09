@@ -678,7 +678,7 @@ ncclResult_t ncclProxyProgressDestroy(struct ncclComm* comm) {
     state->pools = next;
   }
 
-  ncclProfilingDump();
+  ncclProfilingDump(comm->localRank);
   TIME_PRINT("Proxy");
   return ncclSuccess;
 }

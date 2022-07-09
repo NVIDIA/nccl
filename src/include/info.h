@@ -24,6 +24,11 @@ typedef enum : uint8_t {
   ncclPatternRecv
 } ncclPattern_t;
 
+typedef enum : uint8_t {
+  ncclDirectionSend = 1,
+  ncclDirectionRecv
+} ncclDirection_t;
+
 // Used to pass NCCL call information between functions
 struct ncclInfo {
   ncclFunc_t coll;

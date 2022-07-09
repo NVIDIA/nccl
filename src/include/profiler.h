@@ -7,6 +7,8 @@
 #ifndef NCCL_PROFILER_H_
 #define NCCL_PROFILER_H_
 
+#define MAX_EVENTS 200000
+
 #include "proxy.h"
 
 enum ncclProxyProfileState {
@@ -32,6 +34,6 @@ enum ncclProxyProfileState {
 };
 
 ncclResult_t ncclProfilingRecord(struct ncclProxyArgs* args, int sub, int step, int state);
-void ncclProfilingDump();
+void ncclProfilingDump(int rank);
 
 #endif

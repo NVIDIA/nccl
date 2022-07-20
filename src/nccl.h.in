@@ -358,6 +358,13 @@ ncclResult_t pncclGroupStart();
 ncclResult_t  ncclGroupEnd();
 ncclResult_t pncclGroupEnd();
 
+
+/*
+ * Hack : Enable and disable NCCL proxy thread profiler.
+ */
+bool ncclProfilerEnable();
+bool ncclProfilerDisable();
+void ncclProfilingDump();
 #ifdef __cplusplus
 } // end extern "C"
 #endif

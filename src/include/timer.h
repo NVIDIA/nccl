@@ -6,7 +6,7 @@
 
 #ifndef NCCL_TIMER_H_
 #define NCCL_TIMER_H_
-#if ENABLE_TIMER
+
 #include <unistd.h>
 #include <sys/time.h>
 #include <x86intrin.h>
@@ -27,6 +27,7 @@ static inline double gettime() {
   if (freq == -1) calibrate();
   return __rdtsc()/freq;
 }
+#if ENABLE_TIMER
 static uint64_t counts[8];
 static double times[8];
 static double startTimes[8];

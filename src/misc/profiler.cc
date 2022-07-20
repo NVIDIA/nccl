@@ -4,9 +4,11 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
+#include <atomic>
+#include <mutex>
 #include "profiler.h"
 
-//#define PROFILE_PROXY 1
+#define PROFILE_PROXY 1
 #ifdef PROFILE_PROXY
 #include "timer.h"
 #include "alloc.h"
@@ -24,12 +26,18 @@ struct ncclProxyProfileEvent {
   uint8_t opIndex;
 };
 
+std::atomic<bool> enable_profiler{false}};
+std::mutex profiler_dump_mutex;
+
 struct ncclProxyProfileEvent* profilingEvents = NULL;
 int profilingIndex = 0;
 double profilingStart = 0;
 #define MAX_EVENTS 200000
 
 ncclResult_t ncclProfilingRecord(struct ncclProxyArgs* args, int sub, int step, int state) {
+   if (!enable_profiler.load(std::memory_order_relaxed)) {
+    return ncclSuccess;
+  }
   if (profilingEvents == NULL) {
     NCCLCHECK(ncclCalloc(&profilingEvents, MAX_EVENTS));
     profilingStart = gettime();
@@ -50,10 +58,13 @@ ncclResult_t ncclProfilingRecord(struct ncclProxyArgs* args, int sub, int step, 
   } else {
     event = (struct ncclProxyProfileEvent*)args->subs[sub].profilingEvents[step%NCCL_STEPS];
     if (state == ncclProxyProfileEnd) args->subs[sub].profilingEvents[step%NCCL_STEPS] = NULL;
-    if (state == ncclProxyProfileAppendEnd) event->opCount = args->opCount;
+    if (event && state == ncclProxyProfileAppendEnd) event->opCount = args->opCount;
   }
   // Timestamp
-  event->timestamp[state%8] = gettime()-profilingStart;
+  if(event)
+  {
+    event->timestamp[state%8] = gettime()-profilingStart;
+  }
   return ncclSuccess;
 }
 
@@ -109,6 +120,22 @@ void ncclProfilingDump() {
   fclose(f);
   free(profilingEvents);
 }
+
+// returns true if it was previously disabled
+bool ncclProfilerEnable() {
+  // only if it was previously disabled
+  if (!enable_profiler.exchange(true)) {
+    profilingIndex = 0;
+    return true;
+  }
+  return false;
+};
+
+// returns true if it was previously enabled
+bool ncclProfilerDisable() {
+  return enable_profiler.exchange(false);
+};
+
 #else
 ncclResult_t ncclProfilingRecord(struct ncclProxyArgs* args, int sub, int step, int state) { return ncclSuccess; }
 void ncclProfilingDump() {}

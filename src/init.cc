@@ -16,6 +16,7 @@
 #include "enqueue.h"
 #include "graph.h"
 #include "argcheck.h"
+#include "profiler.h"
 #include <fcntl.h>
 #include <string.h>
 #include <errno.h>
@@ -114,6 +115,18 @@ ncclResult_t ncclGetUniqueId(ncclUniqueId* out) {
   TRACE_CALL("ncclGetUniqueId(0x%llx)", (unsigned long long)hashUniqueId(*out));
   return res;
 }
+
+NCCL_API(ncclResult_t, ncclProfilerStart);
+ncclResult_t ncclProfilerStart() {
+  ncclProfilerEnable();
+  return ncclSuccess;
+};
+
+NCCL_API(ncclResult_t, ncclProfilerStop);
+ncclResult_t ncclProfilerStop() {
+  ncclProfilerDisable();
+  return ncclSuccess;
+};
 
 // Prevent compiler from optimizing out these operations
 #ifdef __clang__

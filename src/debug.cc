@@ -26,6 +26,20 @@ void ncclDebugInit() {
   pthread_mutex_lock(&ncclDebugLock);
   if (ncclDebugLevel != -1) { pthread_mutex_unlock(&ncclDebugLock); return; }
   const char* nccl_debug = getenv("NCCL_DEBUG");
+  int tempNcclDebugLevel = -1;
+  if (nccl_debug == NULL) {
+    tempNcclDebugLevel = NCCL_LOG_NONE;
+  } else if (strcasecmp(nccl_debug, "VERSION") == 0) {
+    tempNcclDebugLevel = NCCL_LOG_VERSION;
+  } else if (strcasecmp(nccl_debug, "WARN") == 0) {
+    tempNcclDebugLevel = NCCL_LOG_WARN;
+  } else if (strcasecmp(nccl_debug, "INFO") == 0) {
+    tempNcclDebugLevel = NCCL_LOG_INFO;
+  } else if (strcasecmp(nccl_debug, "ABORT") == 0) {
+    tempNcclDebugLevel = NCCL_LOG_ABORT;
+  } else if (strcasecmp(nccl_debug, "TRACE") == 0) {
+    tempNcclDebugLevel = NCCL_LOG_TRACE;
+  }
 
   /* Parse the NCCL_DEBUG_SUBSYS env var
    * This can be a comma separated list such as INIT,COLL
@@ -80,7 +94,7 @@ void ncclDebugInit() {
    * NCCL_DEBUG level is > VERSION
    */
   const char* ncclDebugFileEnv = getenv("NCCL_DEBUG_FILE");
-  if (ncclDebugLevel > NCCL_LOG_VERSION && ncclDebugFileEnv != NULL) {
+  if (tempNcclDebugLevel > NCCL_LOG_VERSION && ncclDebugFileEnv != NULL) {
     int c = 0;
     char debugFn[PATH_MAX+1] = "";
     char *dfn = debugFn;
@@ -113,21 +127,6 @@ void ncclDebugInit() {
         ncclDebugFile = file;
       }
     }
-  }
-
-  int tempNcclDebugLevel = -1;
-  if (nccl_debug == NULL) {
-    tempNcclDebugLevel = NCCL_LOG_NONE;
-  } else if (strcasecmp(nccl_debug, "VERSION") == 0) {
-    tempNcclDebugLevel = NCCL_LOG_VERSION;
-  } else if (strcasecmp(nccl_debug, "WARN") == 0) {
-    tempNcclDebugLevel = NCCL_LOG_WARN;
-  } else if (strcasecmp(nccl_debug, "INFO") == 0) {
-    tempNcclDebugLevel = NCCL_LOG_INFO;
-  } else if (strcasecmp(nccl_debug, "ABORT") == 0) {
-    tempNcclDebugLevel = NCCL_LOG_ABORT;
-  } else if (strcasecmp(nccl_debug, "TRACE") == 0) {
-    tempNcclDebugLevel = NCCL_LOG_TRACE;
   }
 
   ncclEpoch = std::chrono::steady_clock::now();

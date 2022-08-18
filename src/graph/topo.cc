@@ -56,24 +56,24 @@ static ncclResult_t findLocalCpu(struct ncclTopoNode* node, struct ncclTopoNode*
   return ncclSuccess;
 }
 
-int interCpuWidth = 0;
-int cpuPciWidth = 0;
+int interCpuBw = 0;
+int cpuPciBw = 0;
 
-static ncclResult_t ncclTopoGetInterCpuWidth(struct ncclTopoNode* cpu, float* width) {
-  *width = LOC_WIDTH;
+static ncclResult_t ncclTopoGetInterCpuBw(struct ncclTopoNode* cpu, float* bw) {
+  *bw = LOC_BW;
   if (cpu->cpu.arch == NCCL_TOPO_CPU_ARCH_POWER) {
-    *width = P9_WIDTH;
+    *bw = P9_BW;
     return ncclSuccess;
   }
   if (cpu->cpu.arch == NCCL_TOPO_CPU_ARCH_ARM) {
-    *width = ARM_WIDTH;
+    *bw = ARM_BW;
     return ncclSuccess;
   }
   if (cpu->cpu.arch == NCCL_TOPO_CPU_ARCH_X86 && cpu->cpu.vendor == NCCL_TOPO_CPU_VENDOR_INTEL) {
-    *width = cpu->cpu.model == NCCL_TOPO_CPU_TYPE_SKL ? SKL_QPI_WIDTH : QPI_WIDTH;
+    *bw = cpu->cpu.model == NCCL_TOPO_CPU_TYPE_SKL ? SKL_QPI_BW : QPI_BW;
   }
   if (cpu->cpu.arch == NCCL_TOPO_CPU_ARCH_X86 && cpu->cpu.vendor == NCCL_TOPO_CPU_VENDOR_ZHAOXIN) {
-    *width = cpu->cpu.model ==  NCCL_TOPO_CPU_TYPE_YONGFENG ? YONGFENG_ZPI_WIDTH : ZPI_WIDTH;
+    *bw = cpu->cpu.model ==  NCCL_TOPO_CPU_TYPE_YONGFENG ? YONGFENG_ZPI_BW : ZPI_BW;
   }
   return ncclSuccess;
 }
@@ -109,7 +109,7 @@ ncclResult_t ncclTopoCreateNode(struct ncclTopoSystem* system, struct ncclTopoNo
     n->nlinks=1;
     n->links[0].type = LINK_LOC;
     n->links[0].remNode = n;
-    n->links[0].width = LOC_WIDTH;
+    n->links[0].bw = LOC_BW;
     n->gpu.dev = NCCL_TOPO_UNDEF;
     n->gpu.rank = NCCL_TOPO_UNDEF;
     n->gpu.cudaCompCap = NCCL_TOPO_UNDEF;
@@ -120,7 +120,7 @@ ncclResult_t ncclTopoCreateNode(struct ncclTopoSystem* system, struct ncclTopoNo
   } else if (type == NET) {
     n->net.asic = 0ULL;
     n->net.port = NCCL_TOPO_UNDEF;
-    n->net.width = 0.0;
+    n->net.bw = 0.0;
     n->net.latency = 0.0;
   }
   *node = n;
@@ -150,8 +150,8 @@ ncclResult_t ncclTopoRemoveNode(struct ncclTopoSystem* system, int type, int ind
   return ncclSuccess;
 }
 
-ncclResult_t ncclTopoConnectNodes(struct ncclTopoNode* node, struct ncclTopoNode* remNode, int type, float width) {
-  // Aggregate links into higher width for NVLink
+ncclResult_t ncclTopoConnectNodes(struct ncclTopoNode* node, struct ncclTopoNode* remNode, int type, float bw) {
+  // Aggregate links into higher bw for NVLink
   struct ncclTopoLink* link;
   for (link = node->links; link->remNode; link++) {
     if (link->remNode == remNode && link->type == type) break;
@@ -159,13 +159,13 @@ ncclResult_t ncclTopoConnectNodes(struct ncclTopoNode* node, struct ncclTopoNode
   if (link->remNode == NULL) node->nlinks++;
   link->type = type;
   link->remNode = remNode;
-  link->width += width;
+  link->bw += bw;
 
   // Sort links in BW descending order
   struct ncclTopoLink linkSave;
   memcpy(&linkSave, link, sizeof(struct ncclTopoLink));
   while (link != node->links) {
-    if ((link-1)->width >= linkSave.width) break;
+    if ((link-1)->bw >= linkSave.bw) break;
     memcpy(link, link-1, sizeof(struct ncclTopoLink));
     link--;
   }
@@ -237,9 +237,9 @@ ncclResult_t ncclTopoConnectCpus(struct ncclTopoSystem* system) {
   for (int n=0; n<system->nodes[CPU].count; n++) {
     for (int p=0; p<system->nodes[CPU].count; p++) {
       if (n == p) continue;
-      float width;
-      NCCLCHECK(ncclTopoGetInterCpuWidth(system->nodes[CPU].nodes+n, &width));
-      NCCLCHECK(ncclTopoConnectNodes(system->nodes[CPU].nodes+n, system->nodes[CPU].nodes+p, LINK_SYS, width));
+      float bw;
+      NCCLCHECK(ncclTopoGetInterCpuBw(system->nodes[CPU].nodes+n, &bw));
+      NCCLCHECK(ncclTopoConnectNodes(system->nodes[CPU].nodes+n, system->nodes[CPU].nodes+p, LINK_SYS, bw));
     }
   }
   return ncclSuccess;
@@ -262,13 +262,13 @@ static ncclResult_t ncclTopoPrintRec(struct ncclTopoNode* node, struct ncclTopoN
     struct ncclTopoLink* link = node->links+l;
     if (link->type == LINK_LOC) continue;
     if (link->type != LINK_PCI || link->remNode != prevNode) {
-      sprintf(line+offset, "+ %s[%2.1f] - ", topoLinkTypeStr[link->type], link->width);
+      sprintf(line+offset, "+ %s[%2.1f] - ", topoLinkTypeStr[link->type], link->bw);
       int nextOffset = strlen(line);
       if (link->type == LINK_PCI) {
         NCCLCHECK(ncclTopoPrintRec(link->remNode, node, line, nextOffset));
       } else {
         if (link->remNode->type == NET) {
-          sprintf(line+nextOffset, "%s/%lX (%lx/%d/%f)", topoNodeTypeStr[link->remNode->type], link->remNode->id, link->remNode->net.asic, link->remNode->net.port, link->remNode->net.width);
+          sprintf(line+nextOffset, "%s/%lX (%lx/%d/%f)", topoNodeTypeStr[link->remNode->type], link->remNode->id, link->remNode->net.asic, link->remNode->net.port, link->remNode->net.bw);
         } else {
           sprintf(line+nextOffset, "%s/%lX", topoNodeTypeStr[link->remNode->type], link->remNode->id);
         }
@@ -280,7 +280,7 @@ static ncclResult_t ncclTopoPrintRec(struct ncclTopoNode* node, struct ncclTopoN
 }
 
 ncclResult_t ncclTopoPrint(struct ncclTopoSystem* s) {
-  INFO(NCCL_GRAPH, "=== System : maxWidth %2.1f totalWidth %2.1f ===", s->maxWidth, s->totalWidth);
+  INFO(NCCL_GRAPH, "=== System : maxBw %2.1f totalBw %2.1f ===", s->maxBw, s->totalBw);
   char line[1024];
   for (int n=0; n<s->nodes[CPU].count; n++) NCCLCHECK(ncclTopoPrintRec(s->nodes[CPU].nodes+n, NULL, line, 0));
   INFO(NCCL_GRAPH, "==========================================");
@@ -335,7 +335,7 @@ ncclResult_t ncclTopoAddNet(struct ncclXmlNode* xmlNet, struct ncclTopoSystem* s
   int mbps;
   NCCLCHECK(xmlGetAttrIntDefault(xmlNet, "speed", &mbps, 0));
   if (mbps <= 0) mbps = 10000; // Some NICs define speed = -1
-  net->net.width = mbps / 8000.0;
+  net->net.bw = mbps / 8000.0;
   if (xmlGetAttrFloat(xmlNet, "latency", &net->net.latency) != ncclSuccess) net->net.latency = 0;
   NCCLCHECK(xmlGetAttrIntDefault(xmlNet, "port", &net->net.port, 0));
   NCCLCHECK(xmlGetAttrIntDefault(xmlNet, "gdr", &net->net.gdrSupport, 0));
@@ -343,8 +343,8 @@ ncclResult_t ncclTopoAddNet(struct ncclXmlNode* xmlNet, struct ncclTopoSystem* s
   NCCLCHECK(xmlGetAttrIntDefault(xmlNet, "coll", &net->net.collSupport, 0));
   ncclDebugNoWarn = 0;
 
-  NCCLCHECK(ncclTopoConnectNodes(nic, net, LINK_NET, net->net.width));
-  NCCLCHECK(ncclTopoConnectNodes(net, nic, LINK_NET, net->net.width));
+  NCCLCHECK(ncclTopoConnectNodes(nic, net, LINK_NET, net->net.bw));
+  NCCLCHECK(ncclTopoConnectNodes(net, nic, LINK_NET, net->net.bw));
   return ncclSuccess;
 }
 
@@ -480,8 +480,8 @@ ncclResult_t ncclTopoAddCpu(struct ncclXmlNode* xmlCpu, struct ncclTopoSystem* s
       NCCLCHECK(ncclTopoGetNode(system, &nic, NIC, 0));
       if (nic == NULL) {
         NCCLCHECK(ncclTopoCreateNode(system, &nic, NIC, 0));
-        NCCLCHECK(ncclTopoConnectNodes(cpu, nic, LINK_PCI, LOC_WIDTH));
-        NCCLCHECK(ncclTopoConnectNodes(nic, cpu, LINK_PCI, LOC_WIDTH));
+        NCCLCHECK(ncclTopoConnectNodes(cpu, nic, LINK_PCI, LOC_BW));
+        NCCLCHECK(ncclTopoConnectNodes(nic, cpu, LINK_PCI, LOC_BW));
       }
       NCCLCHECK(ncclTopoAddNic(node, system, nic));
     }
@@ -524,10 +524,10 @@ ncclResult_t ncclTopoAddNvLinks(struct ncclXmlNode* node, struct ncclTopoSystem*
       }
     }
     if (remote) {
-      float nvlSpeed = ncclTopoNVLinkSpeed(gpu->gpu.cudaCompCap);
-      NCCLCHECK(ncclTopoConnectNodes(gpu, remote, LINK_NVL, count*nvlSpeed));
+      float nvlBw = ncclTopoNVLinkBw(gpu->gpu.cudaCompCap);
+      NCCLCHECK(ncclTopoConnectNodes(gpu, remote, LINK_NVL, count*nvlBw));
       if (remote->type != GPU) {
-        NCCLCHECK(ncclTopoConnectNodes(remote, gpu, LINK_NVL, count*nvlSpeed));
+        NCCLCHECK(ncclTopoConnectNodes(remote, gpu, LINK_NVL, count*nvlBw));
       }
     }
   } else {
@@ -683,18 +683,18 @@ ncclResult_t ncclTopoGetLocalNet(struct ncclTopoSystem* system, int rank, int* i
   int g;
   NCCLCHECK(ncclTopoRankToIndex(system, rank, &g));
   int minType = PATH_SYS;
-  float maxWidth = 0;
+  float maxBw = 0;
   int count = 0;
   int* nets;
   NCCLCHECK(ncclCalloc(&nets, system->nodes[NET].count));
   for (int n=0; n<system->nodes[NET].count; n++) {
     struct ncclTopoLinkList* path = system->nodes[NET].nodes[n].paths[GPU]+g;
-    if (path->width > maxWidth || (path->width == maxWidth && path->type < minType)) {
-      maxWidth = path->width;
+    if (path->bw > maxBw || (path->bw == maxBw && path->type < minType)) {
+      maxBw = path->bw;
       minType = path->type;
       count = 0;
     }
-    if (path->width == maxWidth && path->type == minType) nets[count++] = system->nodes[NET].nodes[n].id;
+    if (path->bw == maxBw && path->type == minType) nets[count++] = system->nodes[NET].nodes[n].id;
   }
   if (count == 0) {
     *id = -1;
@@ -787,6 +787,11 @@ ncclResult_t ncclTopoGetCpuAffinity(struct ncclTopoSystem* system, int rank, cpu
 
 ncclResult_t ncclTopoGetNetCount(struct ncclTopoSystem* system, int* count) {
   *count = system->nodes[NET].count;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclTopoGetNvsCount(struct ncclTopoSystem* system, int* count) {
+  *count = system->nodes[NVS].count;
   return ncclSuccess;
 }
 

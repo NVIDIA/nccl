@@ -104,8 +104,8 @@ static void *bootstrapRoot(void* args) {
   /* Receive addresses from all ranks */
   do {
     struct ncclSocket sock;
-    sock.abortFlag = NULL;
     /* bootstrap root thread always uses blocking ncclSocketAccept. */
+    NCCLCHECKGOTO(ncclSocketInit(&sock, NULL, NULL, 0), res, out);
     NCCLCHECKGOTO(ncclSocketAccept(&sock, listenSock), res, out);
     NCCLCHECKGOTO(bootstrapNetRecv(&sock, &info, sizeof(info)), res, out);
     close(sock.fd);
@@ -228,16 +228,17 @@ ncclResult_t bootstrapInit(ncclUniqueId * id, struct ncclComm* comm) {
   info.rank = rank;
   info.nranks = nranks;
   struct ncclSocket sock, listenSockRoot;
-  sock.abortFlag = listenSockRoot.abortFlag = comm->abortFlag;
-  sock.asyncFlag = listenSockRoot.asyncFlag = 0;
 
+  NCCLCHECK(ncclSocketInit(&sock, (union ncclSocketAddress*) id, comm->abortFlag, 0));
+  NCCLCHECK(ncclSocketInit(&listenSockRoot, &bootstrapNetIfAddr, comm->abortFlag, 0));
+  NCCLCHECK(ncclSocketInit(&state->listenSock, &bootstrapNetIfAddr, comm->abortFlag, 0));
+  NCCLCHECK(ncclSocketInit(&state->ringSendSocket, NULL, comm->abortFlag, 0));
+  NCCLCHECK(ncclSocketInit(&state->ringRecvSocket, NULL, comm->abortFlag, 0));
   // Create socket for other ranks to contact me
-  memcpy(&state->listenSock.addr, &bootstrapNetIfAddr, sizeof(union ncclSocketAddress));
   NCCLCHECK(ncclSocketListen(&state->listenSock));
   memcpy(&info.extAddressListen, &state->listenSock.addr, sizeof(union ncclSocketAddress));
 
   // Create socket for root to contact me
-  memcpy(&listenSockRoot.addr, &bootstrapNetIfAddr, sizeof(union ncclSocketAddress));
   NCCLCHECK(ncclSocketListen(&listenSockRoot));
   memcpy(&info.extAddressListenRoot, &listenSockRoot.addr, sizeof(union ncclSocketAddress));
 
@@ -252,7 +253,6 @@ ncclResult_t bootstrapInit(ncclUniqueId * id, struct ncclComm* comm) {
   }
 
   // send info on my listening socket to root
-  memcpy(&sock.addr, id, sizeof(union ncclSocketAddress));
   NCCLCHECK(ncclSocketConnect(&sock));
   NCCLCHECK(bootstrapNetSend(&sock, &info, sizeof(info)));
   close(sock.fd);
@@ -276,8 +276,7 @@ ncclResult_t bootstrapInit(ncclUniqueId * id, struct ncclComm* comm) {
   NCCLCHECK(ncclCalloc(&state->peerProxyAddresses, nranks));
   struct ncclSocket* proxySocket;
   NCCLCHECK(ncclCalloc(&proxySocket, 1));
-  proxySocket->abortFlag = NULL; // proxy is aborted through a message
-  memcpy(&proxySocket->addr, &bootstrapNetIfAddr, sizeof(union ncclSocketAddress));
+  NCCLCHECK(ncclSocketInit(proxySocket, &bootstrapNetIfAddr, NULL, 0));
   NCCLCHECK(ncclSocketListen(proxySocket));
   memcpy(state->peerProxyAddresses+rank, &proxySocket->addr, sizeof(union ncclSocketAddress));
   NCCLCHECK(bootstrapAllGather(state, state->peerProxyAddresses, sizeof(union ncclSocketAddress)));
@@ -317,9 +316,8 @@ ncclResult_t bootstrapAllGather(void* commState, void* allData, int size) {
 ncclResult_t bootstrapSend(void* commState, int peer, int tag, void* data, int size) {
   struct bootstrapState* state = (struct bootstrapState*)commState;
   struct ncclSocket sock;
-  sock.abortFlag = state->abortFlag;
-  sock.asyncFlag = 0;
-  memcpy(&sock.addr, state->peerCommAddresses+peer, sizeof(union ncclSocketAddress));
+
+  NCCLCHECK(ncclSocketInit(&sock, state->peerCommAddresses+peer, state->abortFlag, 1));
   NCCLCHECK(ncclSocketConnect(&sock));
   NCCLCHECK(bootstrapNetSend(&sock, &state->rank, sizeof(int)));
   NCCLCHECK(bootstrapNetSend(&sock, &tag, sizeof(int)));
@@ -408,9 +406,7 @@ ncclResult_t unexpectedDequeue(struct bootstrapState* state, int peer, int tag, 
 // We can't know who we'll receive from, so we need to receive everything at once
 ncclResult_t bootstrapRecv(void* commState, int peer, int tag, void* data, int size) {
   struct bootstrapState* state = (struct bootstrapState*)commState;
-
   struct ncclSocket sock;
-  sock.abortFlag = state->abortFlag;
 
   // Search unexpected connections first
   NCCLCHECK(unexpectedDequeue(state, peer, tag, &sock));
@@ -421,6 +417,7 @@ ncclResult_t bootstrapRecv(void* commState, int peer, int tag, void* data, int s
   }
 
   // Then look for new connections
+  NCCLCHECK(ncclSocketInit(&sock, NULL, state->listenSock.abortFlag, 0));
   while (1) {
     NCCLCHECK(ncclSocketAccept(&sock, &state->listenSock));
     int newPeer, newTag;
@@ -442,9 +439,9 @@ ncclResult_t bootstrapClose(void* commState) {
     WARN("Unexpected connections are not empty");
     return ncclInternalError;
   }
-  close(state->listenSock.fd);
-  close(state->ringSendSocket.fd);
-  close(state->ringRecvSocket.fd);
+  if (state->listenSock.fd >= 0) close(state->listenSock.fd);
+  if (state->ringSendSocket.fd >= 0) close(state->ringSendSocket.fd);
+  if (state->ringRecvSocket.fd >= 0) close(state->ringRecvSocket.fd);
 
   free(state->peerCommAddresses);
   free(state);

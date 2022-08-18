@@ -25,7 +25,6 @@
 
 #include "ibvwrap.h"
 
-#define USE_RDMA_WRITE 1
 #define MAXNAMESIZE 64
 static char ncclIbIfName[MAX_IF_NAME_SIZE+1];
 static union ncclSocketAddress ncclIbIfAddr;
@@ -73,7 +72,7 @@ pthread_mutex_t ncclIbLock = PTHREAD_MUTEX_INITIALIZER;
 static int ncclIbRelaxedOrderingEnabled = 0;
 
 NCCL_PARAM(IbGidIndex, "IB_GID_INDEX", 0);
-NCCL_PARAM(IbTimeout, "IB_TIMEOUT", 14);
+NCCL_PARAM(IbTimeout, "IB_TIMEOUT", 18);
 NCCL_PARAM(IbRetryCnt, "IB_RETRY_CNT", 7);
 NCCL_PARAM(IbPkey, "IB_PKEY", 0);
 NCCL_PARAM(IbUseInline, "IB_USE_INLINE", 0);
@@ -120,7 +119,7 @@ static ncclResult_t ncclIbGetPciPath(char* devName, char** path, int* realPort) 
   return ncclSuccess;
 }
 
-static int ibvWidths[] = { 1, 4, 8, 12 };
+static int ibvWidths[] = { 1, 4, 8, 12, 2 };
 static int ibvSpeeds[] = { 2500, 5000, 10000, 10000, 14000, 25000, 50000 };
 static int firstBitSet(int val, int max) {
   int i = 0;
@@ -288,8 +287,8 @@ ncclResult_t ncclIbDmaBufSupport(int dev) {
     NCCLCHECKGOTO(wrap_ibv_alloc_pd(&pd, ctx), res, failure);
     // Test kernel DMA-BUF support with a dummy call (fd=-1)
     (void) wrap_direct_ibv_reg_dmabuf_mr(pd, 0ULL/*offset*/, 0ULL/*len*/, 0ULL/*iova*/, -1/*fd*/, 0/*flags*/);
-    // ibv_reg_dmabuf_mr() will fail with EOPNOTSUPP if not supported (EBADF otherwise)
-    dmaBufSupported = (errno != EOPNOTSUPP) ? 1 : 0;
+    // ibv_reg_dmabuf_mr() will fail with EOPNOTSUPP/EPROTONOSUPPORT if not supported (EBADF otherwise)
+    dmaBufSupported = (errno != EOPNOTSUPP && errno != EPROTONOSUPPORT) ? 1 : 0;
     NCCLCHECKGOTO(wrap_ibv_dealloc_pd(pd), res, failure);
   }
   if (dmaBufSupported == 0) return ncclSystemError;
@@ -684,7 +683,7 @@ ncclResult_t ncclIbAccept(void* listenComm, void** recvComm) {
   NCCLCHECK(ncclIbMalloc((void**)&rComm, sizeof(struct ncclIbRecvComm)));
   stage->comm = rComm;
   stage->state = ncclIbCommStateAccept;
-  lComm->sock.asyncFlag = 1;
+  NCCLCHECK(ncclSocketInit(&rComm->sock, NULL, lComm->sock.abortFlag, 1));
 
 ib_accept:
   NCCLCHECK(ncclSocketAccept(&rComm->sock, &lComm->sock));

@@ -38,6 +38,7 @@ static ncclResult_t ncclShmSetup(char* shmPath, const int shmSize, int* fd, void
       WARN("Error: failed to extend %s to %d bytes", shmPath, shmSize);
       return ncclSystemError;
     }
+    INFO(NCCL_ALLOC, "Allocated %d bytes of shared memory in %s\n", shmSize, shmPath);
   } else {
     SYSCHECKVAL(open(shmPath, O_RDWR, S_IRUSR | S_IWUSR), "open", *fd);
   }
@@ -81,10 +82,12 @@ ncclResult_t ncclShmUnlink(const char* shmPath) {
 }
 
 ncclResult_t ncclShmClose(void* shmPtr, void* devShmPtr, const int shmSize) {
-  if (devShmPtr) CUDACHECK(cudaHostUnregister(shmPtr));
-  if (munmap(shmPtr, shmSize) != 0) {
-    WARN("munmap of shared memory failed");
-    return ncclSystemError;
+  if (shmPtr) {
+    if (devShmPtr) CUDACHECK(cudaHostUnregister(shmPtr));
+    if (munmap(shmPtr, shmSize) != 0) {
+      WARN("munmap of shared memory failed");
+      return ncclSystemError;
+    }
   }
   return ncclSuccess;
 }

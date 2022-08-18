@@ -40,7 +40,10 @@ ncclResult_t initChannel(struct ncclComm* comm, int channelId) {
 }
 
 ncclResult_t freeChannel(struct ncclChannel* channel, int nRanks) {
-  if (channel->id == -1) return ncclSuccess;
+  /* channel peers are only valid when async init thread completes commAlloc() and
+   * the channel is intialized with initChannel(); if either is not done, this channel
+   * should never be free. */
+  if (channel->id == -1 || channel->peers == NULL) return ncclSuccess;
 
   // Free transport proxy resources
   // Note: free all send resources first due to CollNet arrangement

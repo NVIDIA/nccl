@@ -317,7 +317,6 @@ ncclResult_t ncclSocketListen(int dev, void* opaqueHandle, void** listenComm) {
   NCCLCHECK(ncclSocketGetNsockNthread(dev, &comm->nSocks, &comm->nThreads));
   handle->nSocks = comm->nSocks;
   handle->nThreads = comm->nThreads;
-  comm->sock.asyncFlag = 1;
   comm->dev = dev;
   *listenComm = comm;
   return ncclSuccess;
@@ -394,7 +393,7 @@ ncclResult_t ncclSocketAccept(void* listenComm, void** recvComm) {
   for (; i<rComm->nSocks+1; i++) {
     uint8_t sendSockIdx;
     ncclCalloc(&sock, 1);
-    NCCLCHECK(ncclSocketInit(sock, NULL, NULL, 1));
+    NCCLCHECK(ncclSocketInit(sock, NULL, lComm->sock.abortFlag, 1));
     stage->sock = sock;
     stage->state = ncclSocketCommStateAccept;
     stage->iteration = i;

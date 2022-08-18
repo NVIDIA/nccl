@@ -9,31 +9,52 @@
 #include "enqueue.h"
 #include "transport.h"
 #include "channel.h"
+#include <assert.h>
 
 __thread int ncclGroupDepth = 0; // depth of ncclGroupStart nesting
 __thread ncclResult_t ncclGroupError = ncclSuccess;
 __thread struct ncclComm* ncclGroupCommHead = nullptr;
 __thread struct ncclComm* ncclGroupCommPreconnectHead = nullptr;
 __thread struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> ncclAsyncJobs;
+__thread struct ncclGroupJob *ncclGroupJobMainPtr = NULL;
+__thread struct ncclGroupJob ncclGroupJobMain;
+__thread int ncclGroupBlocking = -1; /* default mode */
+__thread bool ncclGroupJobAbortFlag = false;
+
+void* ncclAsyncJobMain(void* arg);
+static ncclResult_t groupJobComplete(struct ncclGroupJob *job);
 
 ncclResult_t ncclAsyncLaunch(
     struct ncclAsyncJob* job,
     ncclResult_t(*func)(struct ncclAsyncJob*),
     void(*undo)(struct ncclAsyncJob*),
-    void(*destructor)(void*)
+    void(*destructor)(void*), ncclComm_t comm
   ) {
-  if (0 == ncclGroupDepth) {
-    ncclResult_t res = func(job);
-    if (res != ncclSuccess && undo) undo(job);
+  ncclResult_t ret = ncclSuccess;
+
+  if (ncclGroupDepth == 0) {
+    ret = func(job);
+    if (ret != ncclSuccess && undo) undo(job);
     if (destructor) destructor(job);
-    return res;
   } else {
     job->func = func;
     job->undo = undo;
     job->destructor = destructor;
+    job->abortFlag = comm->abortFlag;
+    job->state = ncclGroupJobRunning;
+    job->comm = comm;
+    /* check if there are blocking and nonblocking comms at the same time in group. */
+    if (ncclGroupBlocking == -1) {
+      /* first met communicator */
+      ncclGroupBlocking = comm->blocking;
+    } else if (ncclGroupBlocking != comm->blocking) {
+      WARN("Blocking and nonblocking communicators are not allowed in the same group.");
+      ret = ncclInvalidArgument;
+    }
     ncclIntruQueueEnqueue(&ncclAsyncJobs, job);
-    return ncclSuccess;
   }
+
+  return ret;
 }
 
 void* ncclAsyncJobMain(void* arg) {
@@ -42,23 +63,50 @@ void* ncclAsyncJobMain(void* arg) {
   if (job->result != ncclSuccess) {
     INFO(NCCL_INIT,"%s:%d -> %d [Async thread]", __FILE__, __LINE__, job->result);
   }
+  __atomic_store_n(&job->state, ncclGroupJobDone, __ATOMIC_RELEASE);
   return arg;
+}
+
+ncclResult_t ncclAsyncJobComplete(struct ncclAsyncJob* job) {
+  ncclResult_t ret;
+  SYSCHECK(pthread_join(job->thread, NULL), "pthread_join");
+  if (job->result != ncclSuccess) {
+    WARN("ncclAsyncJobComplete: job %p failed, job error %d", job, job->result);
+  }
+  ret = job->result;
+  if (job->destructor) job->destructor((void*)job);
+  return ret;
 }
 
 NCCL_API(ncclResult_t, ncclGroupStart);
 ncclResult_t ncclGroupStart() {
+  ncclResult_t ret = ncclSuccess;
   NVTX3_FUNC_RANGE_IN(nccl_domain);
+
+  /* if previous group launch does not complete, don't launch this one. */
+  if (ncclGroupJobMainPtr != NULL) {
+    if (__atomic_load_n(&ncclGroupJobMainPtr->doneFlag, __ATOMIC_ACQUIRE) == false) {
+      ret = ncclInvalidUsage;
+      goto exit;
+    } else {
+      NCCLCHECKGOTO(groupJobComplete(ncclGroupJobMainPtr), ret, exit);
+    }
+  }
   NCCLCHECK(ncclGroupStartInternal());
   TRACE_CALL("ncclGroupStart()");
-  return ncclSuccess;
+
+exit:
+  return ret;
 }
 
 NCCL_API(ncclResult_t, ncclGroupEnd);
 ncclResult_t ncclGroupEnd() {
+  ncclResult_t ret = ncclSuccess;
   NVTX3_FUNC_RANGE_IN(nccl_domain);
-  NCCLCHECK(ncclGroupEndInternal());
+  NCCLCHECKGOTO(ncclGroupEndInternal(), ret, exit);
   TRACE_CALL("ncclGroupEnd()");
-  return ncclSuccess;
+exit:
+  return ret;
 }
 
 struct ncclPreconnectJob {
@@ -143,31 +191,103 @@ failure:
   return result;
 }
 
-ncclResult_t ncclGroupEndInternal() {
-  if (ncclGroupDepth == 0) {
-    WARN("ncclGroupEnd: not in a group call.");
-    return ncclInvalidUsage;
+static inline void groupResetJobState() {
+  ncclGroupBlocking = -1;
+  ncclGroupJobMainPtr = NULL;
+  memset(&ncclGroupJobMain, 0, sizeof(struct ncclGroupJob));
+  return;
+}
+
+static void groupCleanup(struct ncclComm** groupCommHeadPtr, struct ncclComm** groupCommPreconnectHeadPtr, struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next>* asyncJobsPtr, ncclResult_t* groupErrorPtr, ncclResult_t error) {
+  struct ncclComm* comm = *groupCommHeadPtr;
+
+  while (comm != nullptr) {
+    struct ncclComm* next = comm->groupNext;
+    (void) ncclGroupCommLeave(comm); // overwrites comm->groupNext
+    // We don't know if preconnect succeeded or happened at all, so clear
+    // the flags that let `taskAppend()` skip over checking if preconnect
+    // is needed.
+    comm->preconnectNext = reinterpret_cast<struct ncclComm*>(0x1);
+    for (int i = 0; i < comm->nRanks; i++) {
+      comm->tasks.peers[i].sendSeen = false;
+      comm->tasks.peers[i].recvSeen = false;
+      comm->connectSend[i] = 0;
+      comm->connectRecv[i] = 0;
+    }
+    comm->unlaunchedPlansHead = nullptr;
+    // Reclaim abandoned kernel plan memory. Note ncclWork structs were already
+    // reclaimed by a `ncclMemoryStackPop(&comm->memScoped)` during `ncclGroupCommLeave()`.
+    while (!ncclIntruQueueEmpty(&comm->planQueue)) {
+      struct ncclKernelPlan* plan = ncclIntruQueueDequeue(&comm->planQueue);
+      // Persistent plans will be reclaimed via the callbackQueue when the
+      // graph drops its UserObject reference.
+      if (!plan->persistent) {
+        for (int c = 0; c < MAXCHANNELS; c++) {
+          while (!ncclIntruQueueEmpty(&plan->channels[c].proxyOpQueue)) {
+            struct ncclProxyOp* pxop = ncclIntruQueueDequeue(&plan->channels[c].proxyOpQueue);
+            ncclMemoryPoolFree(&comm->memPool_ncclProxyOp, pxop);
+          }
+        }
+        ncclMemoryPoolFree(&comm->memPool_ncclKernelPlan, plan);
+      }
+    }
+    // Reset comm->tasks to empty.
+    comm->tasks.nTasksColl = 0;
+    comm->tasks.nTasksP2p = 0;
+    comm->tasks.streams = nullptr;
+    ncclIntruQueueConstruct(&comm->tasks.collQueue);
+    comm->tasks.collBytesTotal = 0;
+    for (int i = 0; i < comm->nRanks; i++) {
+      ncclIntruQueueConstruct(&comm->tasks.peers[i].sendQueue);
+      ncclIntruQueueConstruct(&comm->tasks.peers[i].recvQueue);
+    }
+
+    if (!comm->blocking)
+      (void) ncclCommSetAsyncError(comm, error);
+    comm = next;
   }
-  ncclGroupDepth--;
-  if (ncclGroupDepth > 0) return ncclSuccess;
 
+  /* reset everything */
+  while (!ncclIntruQueueEmpty(asyncJobsPtr)) {
+    struct ncclAsyncJob* job = ncclIntruQueueDequeue(asyncJobsPtr);
+    *job->abortFlag = 1;
+    if (job->comm && !job->comm->blocking)
+      (void) ncclCommSetAsyncError(job->comm, error);
+    if (job->undo) job->undo(job);
+    if (job->destructor) job->destructor((void*)job);
+  }
+
+  *groupErrorPtr = ncclSuccess;
+  *groupCommHeadPtr = nullptr;
+  *groupCommPreconnectHeadPtr = nullptr;
+  return;
+}
+
+static ncclResult_t groupLaunch(struct ncclAsyncJob *job_) {
   int savedDev;
-  CUDACHECK(cudaGetDevice(&savedDev));
-
-  ncclResult_t ret = ncclGroupError;
+  ncclResult_t ret = ncclSuccess;
   bool jobsDone = false;
-  if (ret != ncclSuccess) goto failure;
+  bool errorJobAbortFlag = false;
+  struct ncclGroupJob *gjob = (struct ncclGroupJob*) job_;
+  struct ncclComm *groupCommHeadMain = *gjob->groupCommHeadPtr;
+  struct ncclComm *groupCommPreconnectHeadMain = *gjob->groupCommPreconnectHeadPtr;
+  struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> *asyncJobsMain = gjob->asyncJobsPtr;
+  volatile bool *groupAbortFlag = gjob->abortFlagPtr;
 
-  if (ncclGroupCommPreconnectHead != nullptr) {
-    struct ncclComm* comm = ncclGroupCommPreconnectHead;
+  CUDACHECKGOTO(cudaGetDevice(&savedDev), ret, fail);
+
+  if (groupCommPreconnectHeadMain != nullptr) {
+    struct ncclComm* comm = groupCommPreconnectHeadMain;
     do {
       struct ncclPreconnectJob* job;
-      NCCLCHECK(ncclCalloc(&job, 1));
+      NCCLCHECKGOTO(ncclCalloc(&job, 1), ret, fail);
       job->base.func = ncclPreconnectFunc;
       job->base.undo = nullptr;
       job->base.destructor = free;
+      job->base.state = ncclGroupJobRunning;
+      job->base.abortFlag = comm->abortFlag;
       job->comm = comm;
-      ncclIntruQueueEnqueue(&ncclAsyncJobs, &job->base);
+      ncclIntruQueueEnqueue(asyncJobsMain, &job->base);
 
       struct ncclComm* next = comm->preconnectNext;
       comm->preconnectNext = reinterpret_cast<struct ncclComm*>(0x1);
@@ -175,94 +295,154 @@ ncclResult_t ncclGroupEndInternal() {
     } while (comm != nullptr);
   }
 
-  if (!ncclIntruQueueEmpty(&ncclAsyncJobs)) {
-    struct ncclAsyncJob* job = ncclIntruQueueHead(&ncclAsyncJobs);
+  if (!ncclIntruQueueEmpty(asyncJobsMain)) {
+    struct ncclAsyncJob* job = ncclIntruQueueHead(asyncJobsMain);
     do {
-      pthread_create(&job->thread, nullptr, ncclAsyncJobMain, job);
+      SYSCHECKGOTO(pthread_create(&job->thread, nullptr, ncclAsyncJobMain, job), ret, fail);
       job = job->next;
     } while (job != nullptr);
 
-    job = ncclIntruQueueHead(&ncclAsyncJobs);
     do {
-      int err = pthread_join(job->thread, nullptr);
-      if (err != 0) {
-        WARN("Error waiting for pthread_join : %s", strerror(errno));
-        ret = ncclSystemError;
-      }
-      if (ret == ncclSuccess && job->result != ncclSuccess) ret = job->result;
-      job = job->next;
-    } while (job != nullptr);
-
-    jobsDone = true;
-    if (ret != ncclSuccess) goto failure;
-  }
-
-  if (ncclGroupCommHead != nullptr) {
-    NCCLCHECKGOTO(doLaunches(ncclGroupCommHead), ret, failure);
-    do {
-      struct ncclComm* comm = ncclGroupCommHead;
-      struct ncclComm* next = comm->groupNext;
-      ncclGroupCommLeave(comm);
-      ncclGroupCommHead = next;
-    } while (ncclGroupCommHead != nullptr);
-  }
-
-  if (false) {
-  failure:
-    struct ncclComm* comm = ncclGroupCommHead;
-    while (comm != nullptr) {
-      struct ncclComm* next = comm->groupNext;
-      ncclGroupCommLeave(comm); // overwrites comm->groupNext
-      // We don't know if preconnect succeeded or happened at all, so clear
-      // the flags that let `taskAppend()` skip over checking if preconnect
-      // is needed.
-      comm->preconnectNext = reinterpret_cast<struct ncclComm*>(0x1);
-      for (int i=0; i < comm->nRanks; i++) {
-        comm->tasks.peers[i].sendSeen = false;
-        comm->tasks.peers[i].recvSeen = false;
-        comm->connectSend[i] = 0;
-        comm->connectRecv[i] = 0;
-      }
-      comm->unlaunchedPlansHead = nullptr;
-      // Reclaim abandoned kernel plan memory. Note ncclWork structs were already
-      // reclaimed by a `ncclMemoryStackPop(&comm->memScoped)` during `ncclGroupCommLeave()`.
-      while (!ncclIntruQueueEmpty(&comm->planQueue)) {
-        struct ncclKernelPlan* plan = ncclIntruQueueDequeue(&comm->planQueue);
-        // Persistent plans will be reclaimed via the callbackQueue when the
-        // graph drops its UserObject reference.
-        if (!plan->persistent) {
-          for (int c=0; c < MAXCHANNELS; c++) {
-            while (!ncclIntruQueueEmpty(&plan->channels[c].proxyOpQueue)) {
-              struct ncclProxyOp* pxop = ncclIntruQueueDequeue(&plan->channels[c].proxyOpQueue);
-              ncclMemoryPoolFree(&comm->memPool_ncclProxyOp, pxop);
-            }
+      jobsDone = true;
+      job = ncclIntruQueueHead(asyncJobsMain);
+      do {
+        ncclGroupJobState_t state = __atomic_load_n(&job->state, __ATOMIC_ACQUIRE);
+        if (state == ncclGroupJobRunning) {
+          jobsDone = false;
+        } else if (state == ncclGroupJobDone) {
+          if (pthread_join(job->thread, nullptr) != 0) {
+            WARN("Error waiting for pthread_join : %s", strerror(errno));
+            ret = ncclSystemError;
           }
-          ncclMemoryPoolFree(&comm->memPool_ncclKernelPlan, plan);
+          job->state = ncclGroupJobJoined;
+          if (job->result != ncclSuccess) {
+            ret = job->result;
+            errorJobAbortFlag = true;
+          }
+        } else {
+          /* safety check */
+          assert(state == ncclGroupJobJoined);
         }
-      }
-      // Reset comm->tasks to empty.
-      comm->tasks.nTasksColl = 0;
-      comm->tasks.nTasksP2p = 0;
-      comm->tasks.streams = nullptr;
-      ncclIntruQueueConstruct(&comm->tasks.collQueue);
-      comm->tasks.collBytesTotal = 0;
-      for (int i=0; i < comm->nRanks; i++) {
-        ncclIntruQueueConstruct(&comm->tasks.peers[i].sendQueue);
-        ncclIntruQueueConstruct(&comm->tasks.peers[i].recvQueue);
-      }
-      comm = next;
-    }
+
+        if (*groupAbortFlag == true || errorJobAbortFlag == true) {
+          *job->abortFlag = 1;
+          ret = ncclInternalError;
+        }
+
+        job = job->next;
+      } while (job != nullptr);
+    } while (jobsDone == false);
+
+    if (ret != ncclSuccess) goto fail;
   }
 
-  while (!ncclIntruQueueEmpty(&ncclAsyncJobs)) {
-    struct ncclAsyncJob* job = ncclIntruQueueDequeue(&ncclAsyncJobs);
-    if (ret != ncclSuccess && jobsDone && job->undo) job->undo(job);
+  if (groupCommHeadMain != nullptr) {
+    NCCLCHECKGOTO(doLaunches(groupCommHeadMain), ret, fail);
+  }
+
+  /* this atomic must happen before cleanup and setting state of communicators */
+  __atomic_store_n(&gjob->doneFlag, true, __ATOMIC_RELEASE);
+
+  while (!ncclIntruQueueEmpty(asyncJobsMain)) {
+    struct ncclAsyncJob* job = ncclIntruQueueDequeue(asyncJobsMain);
+    if (job->comm && !job->comm->blocking)
+      (void) ncclCommSetAsyncError(job->comm, ret);
     if (job->destructor) job->destructor((void*)job);
   }
 
-  ncclGroupError = ncclSuccess;
-  ncclGroupCommHead = nullptr;
-  ncclGroupCommPreconnectHead = nullptr;
-  CUDACHECK(cudaSetDevice(savedDev)); // do other clean-ups first before calling cudaSetDevice, because this call can fail too
+  while (groupCommHeadMain != nullptr) {
+    struct ncclComm* comm = groupCommHeadMain;
+    struct ncclComm* next = comm->groupNext;
+    (void) ncclGroupCommLeave(comm);
+    if (!comm->blocking) {
+      (void) ncclCommSetAsyncError(comm, ret);
+    }
+    groupCommHeadMain = next;
+  }
+
+  *gjob->groupErrorPtr = ncclSuccess;
+  *gjob->groupCommHeadPtr = nullptr;
+  *gjob->groupCommPreconnectHeadPtr = nullptr;
+
+  CUDACHECK(cudaSetDevice(savedDev));
+
+exit:
   return ret;
+fail:
+  groupCleanup(gjob->groupCommHeadPtr, gjob->groupCommPreconnectHeadPtr, gjob->asyncJobsPtr, gjob->groupErrorPtr, ret);
+  goto exit;
+}
+
+ncclResult_t ncclGroupEndInternal() {
+  ncclResult_t ret = ncclSuccess;
+
+  if (ncclGroupDepth == 0) {
+    WARN("ncclGroupEnd: not in a group call.");
+    ret = ncclInvalidUsage;
+    goto exit;
+  }
+
+  if ((--ncclGroupDepth) > 0) goto exit;
+
+  if ((ret = ncclGroupError) != ncclSuccess) goto fail;
+
+  if (ncclGroupCommHead != nullptr || !ncclIntruQueueEmpty(&ncclAsyncJobs) || ncclGroupCommPreconnectHead != nullptr) {
+    ncclGroupJobMain.groupCommHeadPtr = &ncclGroupCommHead;
+    ncclGroupJobMain.groupCommPreconnectHeadPtr = &ncclGroupCommPreconnectHead;
+    ncclGroupJobMain.groupErrorPtr = &ncclGroupError;
+    ncclGroupJobMain.asyncJobsPtr = &ncclAsyncJobs;
+    ncclGroupJobMain.abortFlagPtr = &ncclGroupJobAbortFlag;
+    ncclGroupJobMain.doneFlag = false;
+    ncclGroupJobMainPtr = &ncclGroupJobMain;
+    /* make sure ncclGroupBlocking has been set. */
+    assert(ncclGroupBlocking == 0 || ncclGroupBlocking == 1);
+    if (ncclGroupBlocking == 0 && (ncclGroupCommPreconnectHead != nullptr || !ncclIntruQueueEmpty(&ncclAsyncJobs))) {
+      /* nonblocking group */
+      if (!ncclIntruQueueEmpty(&ncclAsyncJobs)) {
+        ncclAsyncJob* job = ncclIntruQueueHead(&ncclAsyncJobs);
+        do {
+          NCCLCHECKGOTO(ncclCommSetAsyncError(job->comm, ncclInProgress), ret, fail);
+          job = job->next;
+        } while (job);
+      }
+
+      if (ncclGroupCommHead) {
+        ncclComm_t comm = ncclGroupCommHead;
+        do {
+          NCCLCHECKGOTO(ncclCommSetAsyncError(comm, ncclInProgress), ret, fail);
+          comm = comm->groupNext;
+        } while (comm);
+      }
+      ncclGroupJobMainPtr->base.func = groupLaunch;
+      SYSCHECKGOTO(pthread_create(&ncclGroupJobMainPtr->base.thread, NULL, ncclAsyncJobMain, (void*)&ncclGroupJobMainPtr->base), ret, fail);
+      ret = ncclInProgress;
+    } else {
+      /* blocking group */
+      NCCLCHECKGOTO(groupLaunch(&ncclGroupJobMainPtr->base), ret, fail);
+      groupResetJobState();
+    }
+  }
+
+exit:
+  return ret;
+fail:
+  groupCleanup(&ncclGroupCommHead, &ncclGroupCommPreconnectHead, &ncclAsyncJobs, &ncclGroupError, ret);
+  groupResetJobState();
+  goto exit;
+}
+
+static ncclResult_t groupJobComplete(struct ncclGroupJob* job) {
+  ncclResult_t ret = ncclSuccess;
+  if (job) {
+    ret = ncclAsyncJobComplete(&job->base);
+    groupResetJobState();
+  }
+  return ret;
+}
+
+void ncclGroupJobAbort() {
+  ncclGroupJobAbortFlag = true;
+  (void) groupJobComplete(ncclGroupJobMainPtr);
+  /* reset group abort flag */
+  ncclGroupJobAbortFlag = false;
 }

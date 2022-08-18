@@ -106,7 +106,7 @@
 // Propagate errors up
 #define NCCLCHECK(call) do { \
   ncclResult_t res = call; \
-  if (res != ncclSuccess) { \
+  if (res != ncclSuccess && res != ncclInProgress) { \
     /* Print the back trace*/ \
     if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, res);    \
     return res; \
@@ -115,7 +115,7 @@
 
 #define NCCLCHECKGOTO(call, res, label) do { \
   res = call; \
-  if (res != ncclSuccess) { \
+  if (res != ncclSuccess && res != ncclInProgress) { \
     /* Print the back trace*/ \
     if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, res);    \
     goto label; \
@@ -125,7 +125,7 @@
 #define NCCLWAIT(call, cond, abortFlagPtr) do {         \
   volatile uint32_t* tmpAbortFlag = (abortFlagPtr);     \
   ncclResult_t res = call;                \
-  if (res != ncclSuccess) {               \
+  if (res != ncclSuccess && res != ncclInProgress) {               \
     if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, res);    \
     return ncclInternalError;             \
   }                                       \
@@ -135,7 +135,7 @@
 #define NCCLWAITGOTO(call, cond, abortFlagPtr, res, label) do { \
   volatile uint32_t* tmpAbortFlag = (abortFlagPtr);             \
   res = call;                             \
-  if (res != ncclSuccess) {               \
+  if (res != ncclSuccess && res != ncclInProgress) {               \
     if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, res);    \
     goto label;                           \
   }                                       \
@@ -143,7 +143,7 @@
 } while (!(cond));
 
 #define NCCLCHECKTHREAD(a, args) do { \
-  if (((args)->ret = (a)) != ncclSuccess) { \
+  if (((args)->ret = (a)) != ncclSuccess && (args)->ret != ncclInProgress) { \
     INFO(NCCL_INIT,"%s:%d -> %d [Async thread]", __FILE__, __LINE__, (args)->ret); \
     return args; \
   } \

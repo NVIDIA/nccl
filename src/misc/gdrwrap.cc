@@ -9,8 +9,6 @@
 #ifndef GDR_DIRECT
 #include "core.h"
 
-static enum { gdrUninitialized, gdrInitializing, gdrInitialized, gdrError } gdrState = gdrUninitialized;
-
 /* Function pointers assigned from dlopen() */
 static gdr_t (*gdr_internal_open)(void);
 static int (*gdr_internal_close)(gdr_t g);
@@ -49,18 +47,10 @@ pthread_mutex_t gdrLock = PTHREAD_MUTEX_INITIALIZER;
     *cast = tmp;                                         \
   } while (0)
 
-ncclResult_t wrap_gdr_symbols(void) {
-  if (gdrState == gdrInitialized)
-    return ncclSuccess;
-  if (gdrState == gdrError)
-    return ncclSystemError;
+static pthread_once_t initOnceControl = PTHREAD_ONCE_INIT;
+static ncclResult_t initResult;
 
-  if (__sync_bool_compare_and_swap(&gdrState, gdrUninitialized, gdrInitializing) == false) {
-    // Another thread raced in front of us. Wait for it to be done.
-    while (gdrState == gdrInitializing) sched_yield();
-    return (gdrState == gdrInitialized) ? ncclSuccess : ncclSystemError;
-  }
-
+static void initOnceFunc(void) {
   static void* gdrhandle = NULL;
   void* tmp;
   void** cast;
@@ -84,8 +74,8 @@ ncclResult_t wrap_gdr_symbols(void) {
   LOAD_SYM(gdrhandle, "gdr_copy_to_mapping", gdr_internal_copy_to_mapping);
   LOAD_SYM(gdrhandle, "gdr_copy_from_mapping", gdr_internal_copy_from_mapping);
 
-  gdrState = gdrInitialized;
-  return ncclSuccess;
+  initResult = ncclSuccess;
+  return;
 
 teardown:
   gdr_internal_open = NULL;
@@ -101,10 +91,15 @@ teardown:
   gdr_internal_copy_from_mapping = NULL;
 
   if (gdrhandle != NULL) dlclose(gdrhandle);
-  gdrState = gdrError;
-  return ncclSystemError;
+  initResult = ncclSystemError;
+  return;
 }
 
+
+ncclResult_t wrap_gdr_symbols(void) {
+  pthread_once(&initOnceControl, initOnceFunc);
+  return initResult;
+}
 
 gdr_t wrap_gdr_open(void) {
   if (gdr_internal_open == NULL) {

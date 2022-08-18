@@ -12,9 +12,9 @@
 #if CUDART_VERSION >= 11030
 #include <cudaTypedefs.h>
 #else
-typedef CUresult (CUDAAPI *PFN_cuInit)(unsigned int Flags);
-typedef CUresult (CUDAAPI *PFN_cuDriverGetVersion)(int *driverVersion);
-typedef CUresult (CUDAAPI *PFN_cuGetProcAddress)(const char *symbol, void **pfn, int driverVersion, cuuint64_t flags);
+typedef CUresult (CUDAAPI *PFN_cuInit_v2000)(unsigned int Flags);
+typedef CUresult (CUDAAPI *PFN_cuDriverGetVersion_v2020)(int *driverVersion);
+typedef CUresult (CUDAAPI *PFN_cuGetProcAddress_v11030)(const char *symbol, void **pfn, int driverVersion, cuuint64_t flags);
 #endif
 
 #define CUPFN(symbol) pfn_##symbol
@@ -60,27 +60,27 @@ typedef CUresult (CUDAAPI *PFN_cuGetProcAddress)(const char *symbol, void **pfn,
     }									\
 } while(0)
 
-#define DECLARE_CUDA_PFN_EXTERN(symbol) extern PFN_##symbol pfn_##symbol
+#define DECLARE_CUDA_PFN_EXTERN(symbol,version) extern PFN_##symbol##_v##version pfn_##symbol
 
 #if CUDART_VERSION >= 11030
 /* CUDA Driver functions loaded with cuGetProcAddress for versioning */
-DECLARE_CUDA_PFN_EXTERN(cuDeviceGet);
-DECLARE_CUDA_PFN_EXTERN(cuDeviceGetAttribute);
-DECLARE_CUDA_PFN_EXTERN(cuGetErrorString);
-DECLARE_CUDA_PFN_EXTERN(cuGetErrorName);
-DECLARE_CUDA_PFN_EXTERN(cuMemGetAddressRange);
-DECLARE_CUDA_PFN_EXTERN(cuCtxCreate_v3020);
-DECLARE_CUDA_PFN_EXTERN(cuCtxDestroy);
-DECLARE_CUDA_PFN_EXTERN(cuCtxSetCurrent);
+DECLARE_CUDA_PFN_EXTERN(cuDeviceGet, 2000);
+DECLARE_CUDA_PFN_EXTERN(cuDeviceGetAttribute, 2000);
+DECLARE_CUDA_PFN_EXTERN(cuGetErrorString, 6000);
+DECLARE_CUDA_PFN_EXTERN(cuGetErrorName, 6000);
+DECLARE_CUDA_PFN_EXTERN(cuMemGetAddressRange, 3020);
+DECLARE_CUDA_PFN_EXTERN(cuCtxCreate, 3020);
+DECLARE_CUDA_PFN_EXTERN(cuCtxDestroy, 4000);
+DECLARE_CUDA_PFN_EXTERN(cuCtxSetCurrent, 4000);
 #if CUDA_VERSION >= 11070
-DECLARE_CUDA_PFN_EXTERN(cuMemGetHandleForAddressRange); // DMA-BUF support
+DECLARE_CUDA_PFN_EXTERN(cuMemGetHandleForAddressRange, 11070); // DMA-BUF support
 #endif
 #endif
 
 /* CUDA Driver functions loaded with dlsym() */
-DECLARE_CUDA_PFN_EXTERN(cuInit);
-DECLARE_CUDA_PFN_EXTERN(cuDriverGetVersion);
-DECLARE_CUDA_PFN_EXTERN(cuGetProcAddress);
+DECLARE_CUDA_PFN_EXTERN(cuInit, 2000);
+DECLARE_CUDA_PFN_EXTERN(cuDriverGetVersion, 2020);
+DECLARE_CUDA_PFN_EXTERN(cuGetProcAddress, 11030);
 
 
 ncclResult_t cudaLibraryInit(void);

@@ -10,32 +10,30 @@
 
 #include <dlfcn.h>
 
-#define DECLARE_CUDA_PFN(symbol) PFN_##symbol pfn_##symbol = nullptr
+#define DECLARE_CUDA_PFN(symbol,version) PFN_##symbol##_v##version pfn_##symbol = nullptr
 
 #if CUDART_VERSION >= 11030
 /* CUDA Driver functions loaded with cuGetProcAddress for versioning */
-DECLARE_CUDA_PFN(cuDeviceGet);
-DECLARE_CUDA_PFN(cuDeviceGetAttribute);
-DECLARE_CUDA_PFN(cuGetErrorString);
-DECLARE_CUDA_PFN(cuGetErrorName);
+DECLARE_CUDA_PFN(cuDeviceGet, 2000);
+DECLARE_CUDA_PFN(cuDeviceGetAttribute, 2000);
+DECLARE_CUDA_PFN(cuGetErrorString, 6000);
+DECLARE_CUDA_PFN(cuGetErrorName, 6000);
 /* enqueue.cc */
-DECLARE_CUDA_PFN(cuMemGetAddressRange);
+DECLARE_CUDA_PFN(cuMemGetAddressRange, 3020);
 /* proxy.cc */
-DECLARE_CUDA_PFN(cuCtxCreate_v3020);
-DECLARE_CUDA_PFN(cuCtxDestroy);
-DECLARE_CUDA_PFN(cuCtxSetCurrent);
+DECLARE_CUDA_PFN(cuCtxCreate, 3020);
+DECLARE_CUDA_PFN(cuCtxDestroy, 4000);
+DECLARE_CUDA_PFN(cuCtxSetCurrent, 4000);
 #if CUDA_VERSION >= 11070
 /* transport/collNet.cc/net.cc*/
-DECLARE_CUDA_PFN(cuMemGetHandleForAddressRange); // DMA-BUF support
+DECLARE_CUDA_PFN(cuMemGetHandleForAddressRange, 11070); // DMA-BUF support
 #endif
 #endif
 
 /* CUDA Driver functions loaded with dlsym() */
-DECLARE_CUDA_PFN(cuInit);
-DECLARE_CUDA_PFN(cuDriverGetVersion);
-DECLARE_CUDA_PFN(cuGetProcAddress);
-
-static enum { cudaUninitialized, cudaInitializing, cudaInitialized, cudaError } cudaState = cudaUninitialized;
+DECLARE_CUDA_PFN(cuInit, 2000);
+DECLARE_CUDA_PFN(cuDriverGetVersion, 2020);
+DECLARE_CUDA_PFN(cuGetProcAddress, 11030);
 
 #define CUDA_DRIVER_MIN_VERSION 11030
 
@@ -46,46 +44,37 @@ static int cudaDriverVersion;
 /*
   Load the CUDA symbols
  */
-static int cudaPfnFuncLoader(void) {
+static ncclResult_t cudaPfnFuncLoader(void) {
   CUresult res;
 
-#define LOAD_SYM(symbol, ignore) do {                                   \
-    res = pfn_cuGetProcAddress(#symbol, (void **) (&pfn_##symbol), cudaDriverVersion, 0); \
+#define LOAD_SYM(symbol, version, ignore) do {                           \
+    res = pfn_cuGetProcAddress(#symbol, (void **) (&pfn_##symbol), version, 0); \
     if (res != 0) {                                                     \
       if (!ignore) {                                                    \
-        WARN("Retrieve %s version %d failed with %d", #symbol, cudaDriverVersion, res); \
+        WARN("Retrieve %s version %d failed with %d", #symbol, version, res); \
         return ncclSystemError; }                                       \
     } } while(0)
 
-  LOAD_SYM(cuGetErrorString, 0);
-  LOAD_SYM(cuGetErrorName, 0);
-  LOAD_SYM(cuDeviceGet, 0);
-  LOAD_SYM(cuDeviceGetAttribute, 0);
-  LOAD_SYM(cuMemGetAddressRange, 1);
-  LOAD_SYM(cuCtxCreate_v3020, 1);
-  LOAD_SYM(cuCtxDestroy, 1);
-  LOAD_SYM(cuCtxSetCurrent, 1);
+  LOAD_SYM(cuGetErrorString, 6000, 0);
+  LOAD_SYM(cuGetErrorName, 6000, 0);
+  LOAD_SYM(cuDeviceGet, 2000, 0);
+  LOAD_SYM(cuDeviceGetAttribute, 2000, 0);
+  LOAD_SYM(cuMemGetAddressRange, 3020, 1);
+  LOAD_SYM(cuCtxCreate, 3020, 1);
+  LOAD_SYM(cuCtxDestroy, 4000, 1);
+  LOAD_SYM(cuCtxSetCurrent, 4000, 1);
 #if CUDA_VERSION >= 11070
-  LOAD_SYM(cuMemGetHandleForAddressRange, 1); // DMA-BUF support
+  LOAD_SYM(cuMemGetHandleForAddressRange, 11070, 1); // DMA-BUF support
 #endif
   return ncclSuccess;
 }
 #endif
 
-ncclResult_t cudaLibraryInit(void) {
+static pthread_once_t initOnceControl = PTHREAD_ONCE_INIT;
+static ncclResult_t initResult;
+
+static void initOnceFunc() {
   CUresult res;
-
-  if (cudaState == cudaInitialized)
-    return ncclSuccess;
-  if (cudaState == cudaError)
-    return ncclSystemError;
-
-  if (__sync_bool_compare_and_swap(&cudaState, cudaUninitialized, cudaInitializing) == false) {
-    // Another thread raced in front of us. Wait for it to be done.
-    while (cudaState == cudaInitializing) sched_yield();
-    return (cudaState == cudaInitialized) ? ncclSuccess : ncclSystemError;
-  }
-
   /*
    * Load CUDA driver library
    */
@@ -106,13 +95,13 @@ ncclResult_t cudaLibraryInit(void) {
    * Load initial CUDA functions
    */
 
-  pfn_cuInit = (PFN_cuInit) dlsym(cudaLib, "cuInit");
+  pfn_cuInit = (PFN_cuInit_v2000) dlsym(cudaLib, "cuInit");
   if (pfn_cuInit == NULL) {
     WARN("Failed to load CUDA missing symbol cuInit");
     goto error;
   }
 
-  pfn_cuDriverGetVersion = (PFN_cuDriverGetVersion) dlsym(cudaLib, "cuDriverGetVersion");
+  pfn_cuDriverGetVersion = (PFN_cuDriverGetVersion_v2020) dlsym(cudaLib, "cuDriverGetVersion");
   if (pfn_cuDriverGetVersion == NULL) {
     WARN("Failed to load CUDA missing symbol cuDriverGetVersion");
     goto error;
@@ -132,7 +121,7 @@ ncclResult_t cudaLibraryInit(void) {
     goto error;
   }
 
-  pfn_cuGetProcAddress = (PFN_cuGetProcAddress) dlsym(cudaLib, "cuGetProcAddress");
+  pfn_cuGetProcAddress = (PFN_cuGetProcAddress_v11030) dlsym(cudaLib, "cuGetProcAddress");
   if (pfn_cuGetProcAddress == NULL) {
     WARN("Failed to load CUDA missing symbol cuGetProcAddress");
     goto error;
@@ -145,19 +134,21 @@ ncclResult_t cudaLibraryInit(void) {
    */
   pfn_cuInit(0);
 
-#if CUDART_VERSION >= 11030
+  #if CUDART_VERSION >= 11030
   if (cudaPfnFuncLoader()) {
     WARN("CUDA some PFN functions not found in the library");
     goto error;
   }
-#endif
+  #endif
 
-  cudaState = cudaInitialized;
-  return ncclSuccess;
-
+  initResult = ncclSuccess;
+  return;
 error:
-  cudaState = cudaError;
-  return ncclSystemError;
+  initResult = ncclSystemError;
+  return;
 }
 
-
+ncclResult_t cudaLibraryInit() {
+  pthread_once(&initOnceControl, initOnceFunc);
+  return initResult;
+}

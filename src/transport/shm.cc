@@ -49,6 +49,10 @@ static ncclResult_t shmCanConnect(int* ret, struct ncclTopoSystem* topo, struct 
 
   if (ncclParamShmDisable() == 1) return ncclSuccess;
 
+  int useNet = 0;
+  NCCLCHECK(ncclTopoCheckNet(topo, info1->busId, info2->busId, &useNet));
+  if (useNet) return ncclSuccess;
+
   // Same host?
   TRACE(NCCL_INIT|NCCL_SHM, "peer1 hostHash %lx peer2 hostHash %lx", info1->hostHash, info2->hostHash);
   if (info1->hostHash != info2->hostHash) return ncclSuccess;
@@ -191,17 +195,21 @@ static ncclResult_t shmRecvConnect(struct ncclComm* comm, struct ncclConnect* co
 
 static ncclResult_t shmSendFree(struct ncclConnector* send) {
   struct shmRecvResources* resources = (struct shmRecvResources*)send->transportResources;
-  NCCLCHECK(ncclShmClose(resources->hostMem, resources->devHostMem, resources->shmSize));
-  NCCLCHECK(ncclShmClose(resources->remHostMem, resources->devRemHostMem, resources->remShmSize));
-  free(resources);
+  if (resources) {
+    NCCLCHECK(ncclShmClose(resources->hostMem, resources->devHostMem, resources->shmSize));
+    NCCLCHECK(ncclShmClose(resources->remHostMem, resources->devRemHostMem, resources->remShmSize));
+    free(resources);
+  }
   return ncclSuccess;
 }
 
 static ncclResult_t shmRecvFree(struct ncclConnector* recv) {
   struct shmRecvResources* resources = (struct shmRecvResources*)recv->transportResources;
-  NCCLCHECK(ncclShmClose(resources->hostMem, resources->devHostMem, resources->shmSize));
-  NCCLCHECK(ncclShmClose(resources->remHostMem, resources->devRemHostMem, resources->remShmSize));
-  free(resources);
+  if (resources) {
+    NCCLCHECK(ncclShmClose(resources->hostMem, resources->devHostMem, resources->shmSize));
+    NCCLCHECK(ncclShmClose(resources->remHostMem, resources->devRemHostMem, resources->remShmSize));
+    free(resources);
+  }
   return ncclSuccess;
 }
 
@@ -243,25 +251,31 @@ static ncclResult_t shmRecvProxyConnect(struct ncclProxyConnection* connection, 
 
 static ncclResult_t shmSendProxyFree(struct ncclProxyConnection* connection, struct ncclComm* comm) {
   struct shmProxyInfo* resources = (struct shmProxyInfo*)connection->transportResources;
-  CUDACHECK(cudaStreamDestroy(resources->stream));
-  CUDACHECK(cudaFree(resources->devFifo));
-  NCCLCHECK(ncclCudaHostFree(resources->ceRecvMem));
-  for (int i=0; i<NCCL_STEPS; i++) {
-    CUDACHECK(cudaEventDestroy(resources->events[i]));
+
+  if (resources) {
+    CUDACHECK(cudaStreamDestroy(resources->stream));
+    CUDACHECK(cudaFree(resources->devFifo));
+    NCCLCHECK(ncclCudaHostFree(resources->ceRecvMem));
+    for (int i=0; i<NCCL_STEPS; i++) {
+      CUDACHECK(cudaEventDestroy(resources->events[i]));
+    }
+    free(connection->transportResources);
   }
-  free(connection->transportResources);
   return ncclSuccess;
 }
 
 static ncclResult_t shmRecvProxyFree(struct ncclProxyConnection* connection, struct ncclComm* comm) {
   struct shmProxyInfo* resources = (struct shmProxyInfo*)connection->transportResources;
-  CUDACHECK(cudaStreamDestroy(resources->stream));
-  CUDACHECK(cudaFree(resources->devFifo));
-  NCCLCHECK(ncclCudaHostFree(resources->ceRecvMem));
-  for (int i=0; i<NCCL_STEPS; i++) {
-    CUDACHECK(cudaEventDestroy(resources->events[i]));
+
+  if (resources) {
+    CUDACHECK(cudaStreamDestroy(resources->stream));
+    CUDACHECK(cudaFree(resources->devFifo));
+    NCCLCHECK(ncclCudaHostFree(resources->ceRecvMem));
+    for (int i=0; i<NCCL_STEPS; i++) {
+      CUDACHECK(cudaEventDestroy(resources->events[i]));
+    }
+    free(connection->transportResources);
   }
-  free(connection->transportResources);
   return ncclSuccess;
 }
 

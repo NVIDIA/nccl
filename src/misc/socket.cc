@@ -332,10 +332,10 @@ ncclResult_t ncclSocketListen(struct ncclSocket* sock) {
 #endif
   }
 
-  if (sock->asyncFlag) {
-    EQCHECK(flags = fcntl(fd, F_GETFL), -1);
-    SYSCHECK(fcntl(fd, F_SETFL, flags | O_NONBLOCK), "fcntl");
-  }
+  /* The socket is set non-blocking for OS level, but asyncFlag is used to control
+   * blocking and non-blocking behavior in user level. */
+  EQCHECK(flags = fcntl(fd, F_GETFL), -1);
+  SYSCHECK(fcntl(fd, F_SETFL, flags | O_NONBLOCK), "fcntl");
 
   // addr port should be 0 (Any port)
   SYSCHECK(bind(fd, &sock->addr.sa, salen), "bind");
@@ -411,11 +411,10 @@ ncclResult_t ncclSocketConnect(struct ncclSocket* sock) {
   const int one = 1;
   SYSCHECK(setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char*)&one, sizeof(int)), "setsockopt");
   
-  /* support non-blocking socket; by default, the socket is non-blocking */
-  if (sock->asyncFlag) {
-    EQCHECK(flags = fcntl(fd, F_GETFL), -1);
-    SYSCHECK(fcntl(fd, F_SETFL, flags | O_NONBLOCK), "fcntl");
-  }
+  /* The socket is set non-blocking for OS level, but asyncFlag is used to control
+   * blocking and non-blocking behavior in user level. */
+  EQCHECK(flags = fcntl(fd, F_GETFL), -1);
+  SYSCHECK(fcntl(fd, F_SETFL, flags | O_NONBLOCK), "fcntl");
 
   /*  const int bufsize = 128*1024;
     SYSCHECK(setsockopt(fd, SOL_SOCKET, SO_SNDBUF, (char*)&bufsize, sizeof(int)), "setsockopt");
@@ -430,17 +429,26 @@ retry:
   /* blocking/non-blocking connect() is determined by asyncFlag. */
   ret = connect(fd, &sock->addr.sa, salen);
 
-  if (!sock->asyncFlag && (errno == EAGAIN || (errno == ECONNREFUSED && ++refused_retries < RETRY_REFUSED_TIMES) ||
-    (errno == ETIMEDOUT && ++timedout_retries < RETRY_TIMEDOUT_TIMES))) {
-    if (errno == ECONNREFUSED && refused_retries % 1000 == 0) INFO(NCCL_ALL, "Call to connect returned %s, retrying", strerror(errno));
-    usleep(SLEEP_INT);
-    goto retry;
-  }
+  if (!sock->asyncFlag) {
+    /* blocking socket, need retry if connect fails. */
+    if (errno == EINPROGRESS || errno == EAGAIN || errno == EALREADY ||
+    (errno == ECONNREFUSED && ++refused_retries < RETRY_REFUSED_TIMES) ||
+    (errno == ETIMEDOUT && ++timedout_retries < RETRY_TIMEDOUT_TIMES)) {
+      /* check abortFlag as long as we have chance to retry. */
+      if (sock->abortFlag && *sock->abortFlag != 0) return ncclInternalError;
+      if (errno == ECONNREFUSED && refused_retries % 1000 == 0) INFO(NCCL_ALL, "Call to connect returned %s, retrying", strerror(errno));
+      usleep(SLEEP_INT);
+      goto retry;
+    }
 
-  /* If connect() fails with errno == EAGAIN/EINPROGRESS/ETIMEDOUT, we may want to try connect again.
-   * However, it can return EISCONN instead of success which indicates connection is built up in
-   * background already. No need to call connect() again. */
-  if (ret == 0 || ((errno == EINPROGRESS || errno == ECONNREFUSED) && sock->asyncFlag) || errno == EISCONN) {
+    /* If connect() fails with errno == EAGAIN/EINPROGRESS/ETIMEDOUT, we may want to try connect again.
+     * However, it can return EISCONN instead of success which indicates connection is built up in
+     * background already. No need to call connect() again. */
+    if (ret == 0 || errno == EISCONN) {
+      sock->fd = fd;
+      return ncclSuccess;
+    }
+  } else {
     sock->fd = fd;
     return ncclSuccess;
   }
@@ -451,17 +459,26 @@ retry:
 
 ncclResult_t ncclSocketAccept(struct ncclSocket* sock, struct ncclSocket* listenSocket) {
   socklen_t socklen = sizeof(union ncclSocketAddress);
+  struct pollfd pollfd;
   int tmpFd = sock->fd = -1;
+  int pollret;
 
-  do {
-    if (listenSocket->abortFlag) NEQCHECK(*listenSocket->abortFlag, 0);
+  pollfd.fd = listenSocket->fd;
+  pollfd.events = POLLIN;
+retry:
+  if ((pollret = poll(&pollfd, 1, listenSocket->asyncFlag ? 0 : 100)) < 0) {
+    return ncclSystemError;
+  } else {
     tmpFd = accept(listenSocket->fd, &sock->addr.sa, &socklen);
-  } while ((errno == EAGAIN || errno == EWOULDBLOCK) && tmpFd == -1 && !listenSocket->asyncFlag);
+  }
 
   if (!listenSocket->asyncFlag) {
+    /* blocking socket, if tmpFd is still -1, we need to retry */
+    if (tmpFd == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      if (listenSocket->abortFlag && *listenSocket->abortFlag != 0) return ncclInternalError;
+      goto retry;
+    }
     EQCHECK(tmpFd, -1);
-  } else if (tmpFd == -1 && errno != EAGAIN && errno != EWOULDBLOCK) {
-    return ncclSystemError;
   }
 
   sock->fd = tmpFd;
@@ -491,7 +508,7 @@ static ncclResult_t ncclSocketProgressOpt(int op, struct ncclSocket* sock, void*
   char line[SOCKET_NAME_MAXLEN+1];
   do {
     if (op == NCCL_SOCKET_RECV) bytes = recv(sock->fd, data+(*offset), size-(*offset), block ? 0 : MSG_DONTWAIT);
-    if (op == NCCL_SOCKET_SEND) bytes = send(sock->fd, data+(*offset), size-(*offset), block ? 0 : MSG_DONTWAIT);
+    if (op == NCCL_SOCKET_SEND) bytes = send(sock->fd, data+(*offset), size-(*offset), block ? MSG_NOSIGNAL : MSG_DONTWAIT | MSG_NOSIGNAL);
     if (op == NCCL_SOCKET_RECV && bytes == 0) {
       *closed = 1;
       return ncclSuccess;
@@ -507,7 +524,7 @@ static ncclResult_t ncclSocketProgressOpt(int op, struct ncclSocket* sock, void*
     (*offset) += bytes;
     if (sock->abortFlag && *sock->abortFlag != 0) {
       INFO(NCCL_NET, "Socket progress: abort called");
-      return ncclSystemError;
+      return ncclInternalError;
     }
   } while (bytes > 0 && (*offset) < size);
   return ncclSuccess;

@@ -8,7 +8,10 @@ template<typename T, typename RedOp, typename Fan, int Direct, int P2p>
 class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
   public PrimitivesWithoutDirect<Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>> {
 
-  static constexpr int MaxRecv = Fan::MaxRecv, MaxSend = Fan::MaxSend;
+  // In the case of Fan::MaxRecv == 0, we need to force MaxRecv to 1 for this to compile
+  // This is because of a recv buffer which is allocated to MaxRecv length in send-only cases
+  static constexpr int MaxRecv = Fan::MaxRecv > 1 ? Fan::MaxRecv : 1;
+  static constexpr int MaxSend = Fan::MaxSend;
   static constexpr int Input=0, Output=1;
   RedOp redOp;
   const int tid;
@@ -41,7 +44,10 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
   inline __device__ uint32_t sendFlag(int i) { return NCCL_LL_FLAG(sendStep[i]+1); }
 
   inline __device__ void barrier() {
-    asm volatile ("bar.sync %1, %0;" :: "r"(nthreads), "r"(15-group));
+    if (nthreads == WARP_SIZE)
+      __syncwarp();
+    else
+      asm volatile ("bar.sync %1, %0;" :: "r"(nthreads), "r"(15-group));
   }
 
   uint32_t abort = 0;
@@ -319,18 +325,19 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
       void const *inputBuf, void *outputBuf, uint64_t redOpArg, int group=0
     ):
     redOp(redOpArg),
-    tid(tid), nthreads(nthreads), wid(tid%WARP_SIZE), group(group),
+    tid(tid), nthreads(nthreads), wid(tid%WARP_SIZE), group(group&(uint16_t)0xFFFF),
     stepLines(ncclShmem.comm.buffSizes[NCCL_PROTO_LL]/NCCL_STEPS/sizeof(ncclLLFifoLine)) {
-
+    int connIndex = group >> 16;
     auto *channel = &ncclShmem.channel;
     // If we are going to support oneshot collNet + LL, then we would need to add connector index here
     int nrecv=0, nsend=0;
-    while (nrecv < MaxRecv && recvPeers[nrecv] >= 0) {
-      loadRecvConn(&channel->peers[recvPeers[nrecv]].recv[0], nrecv);
+    // We compare with Fan::MaxRecv here because this->MaxRecv is always at least 1
+    while (nrecv < Fan::MaxRecv && recvPeers[nrecv] >= 0) {
+      loadRecvConn(&channel->peers[recvPeers[nrecv]].recv[connIndex], nrecv);
       nrecv++;
     }
     while (nsend < MaxSend && sendPeers[nsend] >= 0) {
-      loadSendConn(&channel->peers[sendPeers[nsend]].send[0], nsend);
+      loadSendConn(&channel->peers[sendPeers[nsend]].send[connIndex], nsend);
       nsend++;
     }
     this->fan = Fan(nrecv, nsend);

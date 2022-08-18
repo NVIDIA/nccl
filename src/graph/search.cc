@@ -10,39 +10,39 @@
 #include "xml.h"
 #include <math.h>
 
-// Initialize system->maxWidth. This is the per-channel (i.e. per-SM)
-// max speed.
-static float getMaxWidth(struct ncclTopoSystem* system, struct ncclTopoNode* gpu, int type) {
-  float maxWidth = 0.0;
+// Initialize system->maxBw. This is the per-channel (i.e. per-SM)
+// max bw.
+static float getMaxBw(struct ncclTopoSystem* system, struct ncclTopoNode* gpu, int type) {
+  float maxBw = 0.0;
   for (int i=0; i<system->nodes[type].count; i++) {
     struct ncclTopoLinkList* path = gpu->paths[type]+i;
-    float width = path->width;
+    float bw = path->bw;
     if (path->count == 0) continue;
-    maxWidth = std::max(maxWidth, width);
+    maxBw = std::max(maxBw, bw);
   }
-  return maxWidth;
+  return maxBw;
 }
-static float getTotalWidth(struct ncclTopoSystem* system, struct ncclTopoNode* gpu) {
-  float nvlinkWidth = 0.0, pciWidth = 0.0;
+static float getTotalBw(struct ncclTopoSystem* system, struct ncclTopoNode* gpu) {
+  float nvlinkBw = 0.0, pciBw = 0.0;
   for (int l=0; l<gpu->nlinks; l++) {
     struct ncclTopoLink* link = gpu->links+l;
-    if (link->type == LINK_NVL) nvlinkWidth += link->width;
-    if (link->type == LINK_PCI) pciWidth = link->width;
+    if (link->type == LINK_NVL) nvlinkBw += link->bw;
+    if (link->type == LINK_PCI) pciBw = link->bw;
   }
-  return std::max(pciWidth, nvlinkWidth);
+  return std::max(pciBw, nvlinkBw);
 }
 ncclResult_t ncclTopoSearchInit(struct ncclTopoSystem* system) {
-  system->maxWidth = 0.0;
-  system->totalWidth = 0.0;
+  system->maxBw = 0.0;
+  system->totalBw = 0.0;
   int inter = system->nodes[NET].count;
   if (inter == 0 && system->nodes[GPU].count == 1) {
-    system->maxWidth = LOC_WIDTH;
+    system->maxBw = LOC_BW;
     return ncclSuccess;
   }
   for (int g=0; g<system->nodes[GPU].count; g++) {
     struct ncclTopoNode* gpu = system->nodes[GPU].nodes+g;
-    system->maxWidth = std::max(system->maxWidth, getMaxWidth(system, gpu, inter ? NET : GPU));
-    system->totalWidth = std::max(system->totalWidth, getTotalWidth(system, gpu));
+    system->maxBw = std::max(system->maxBw, getMaxBw(system, gpu, inter ? NET : GPU));
+    system->totalBw = std::max(system->totalBw, getTotalBw(system, gpu));
   }
   return ncclSuccess;
 }
@@ -62,8 +62,8 @@ static ncclResult_t findRevLink(struct ncclTopoNode* node1, struct ncclTopoNode*
 // This is unfortunately needed since manipulating floats often results in rounding errors.
 #define SUB_ROUND(a, b) (a = roundf((a-b)*1000)/1000)
 
-static ncclResult_t followPath(struct ncclTopoLinkList* path, struct ncclTopoNode* start, int maxSteps, float speed, int* steps) {
-  float pciSpeed = speed;
+static ncclResult_t followPath(struct ncclTopoLinkList* path, struct ncclTopoNode* start, int maxSteps, float bw, int* steps) {
+  float pciBw = bw;
   for (int step=0; step<path->count; step++) {
     struct ncclTopoNode* node = path->list[step]->remNode;
     if (node->type == CPU) {
@@ -71,7 +71,7 @@ static ncclResult_t followPath(struct ncclTopoLinkList* path, struct ncclTopoNod
       if (path->type == PATH_PHB && start->type == GPU &&
           node->cpu.arch == NCCL_TOPO_CPU_ARCH_X86 &&
           node->cpu.vendor == NCCL_TOPO_CPU_VENDOR_INTEL) {
-        pciSpeed = INTEL_P2P_OVERHEAD(speed);
+        pciBw = INTEL_P2P_OVERHEAD(bw);
       }
     }
   }
@@ -80,19 +80,19 @@ static ncclResult_t followPath(struct ncclTopoLinkList* path, struct ncclTopoNod
   for (int step=0; step<maxSteps; step++) {
     struct ncclTopoLink* link = path->list[step];
     struct ncclTopoLink* revLink = NULL;
-    float fwSpeed = link->type == LINK_PCI ? pciSpeed : speed;
-    float revSpeed = 0;
+    float fwBw = link->type == LINK_PCI ? pciBw : bw;
+    float revBw = 0;
     if (link->remNode->type == GPU && link->remNode->gpu.cudaCompCap < 80 && start->type != GPU) {
       if (revLink == NULL) NCCLCHECK(findRevLink(node, link->remNode, &revLink));
-      revSpeed += fwSpeed/8;
+      revBw += fwBw/8;
     }
     if (link->remNode->type == CPU && link->type == LINK_NVL) {
       if (revLink == NULL) NCCLCHECK(findRevLink(node, link->remNode, &revLink));
-      revSpeed += fwSpeed;
+      revBw += fwBw;
     }
-    if (link->width < fwSpeed || (revSpeed && revLink->width < revSpeed)) { *steps = step; return ncclSuccess; }
-    SUB_ROUND(link->width, fwSpeed);
-    if (revSpeed) SUB_ROUND(revLink->width, revSpeed);
+    if (link->bw < fwBw || (revBw && revLink->bw < revBw)) { *steps = step; return ncclSuccess; }
+    SUB_ROUND(link->bw, fwBw);
+    if (revBw) SUB_ROUND(revLink->bw, revBw);
     node = link->remNode;
   }
   *steps = maxSteps;
@@ -111,16 +111,16 @@ static ncclResult_t ncclTopoFollowPath(struct ncclTopoSystem* system, struct ncc
   // Now check link type
   *node = NULL;
   int intra = type1 == GPU && type2 == GPU;
-  float speed = intra ? graph->speedIntra : graph->speedInter;
+  float bw = intra ? graph->bwIntra : graph->bwInter;
   int type = intra ? graph->typeIntra : graph->typeInter;
 
   if (mult == 1 && (path->type > type)) return ncclSuccess;
 
-  speed *= mult;
+  bw *= mult;
 
   // Check there is enough bandwidth on paths.
   int step = 0;
-  NCCLCHECK(followPath(path, node1, path->count, speed, &step));
+  NCCLCHECK(followPath(path, node1, path->count, bw, &step));
   if (step < path->count) goto rewind;
 
   // Enough bandwidth : return destination node.
@@ -130,11 +130,11 @@ static ncclResult_t ncclTopoFollowPath(struct ncclTopoSystem* system, struct ncc
 
 rewind:
   // Not enough bandwidth : rewind and exit.
-  NCCLCHECK(followPath(path, node1, step, -speed, &step));
+  NCCLCHECK(followPath(path, node1, step, -bw, &step));
   return ncclSuccess;
 }
 
-static int gpuPciWidth(struct ncclTopoNode* gpu) {
+static int gpuPciBw(struct ncclTopoNode* gpu) {
   for (int l=0; l<gpu->nlinks; l++) {
     struct ncclTopoLink* gpuLink = gpu->links+l;
     if (gpuLink->type != LINK_PCI) continue;
@@ -142,7 +142,7 @@ static int gpuPciWidth(struct ncclTopoNode* gpu) {
     for (int l=0; l<pci->nlinks; l++) {
       struct ncclTopoLink* pciLink = pci->links+l;
       if (pciLink->remNode != gpu) continue;
-      return std::min(gpuLink->width, pciLink->width);
+      return std::min(gpuLink->bw, pciLink->bw);
     }
   }
   return -1;
@@ -154,29 +154,29 @@ struct ncclGpuScore {
   int g;             // Retain the index
   int startIndex;    // Least important
   int intraNhops;
-  int intraWidth;
+  int intraBw;
   int interNhops;
-  int interPciWidth;
-  int interWidth;    // Most important
+  int interPciBw;
+  int interBw;    // Most important
 };
 
 static int cmpScore(const void * g1, const void * g2) {
    struct ncclGpuScore *s1 = (struct ncclGpuScore*)g1;
    struct ncclGpuScore *s2 = (struct ncclGpuScore*)g2;
    int d;
-   if ((d = (s2->interWidth - s1->interWidth))) return d;
-   if ((d = (s2->interPciWidth - s1->interPciWidth))) return d;
+   if ((d = (s2->interBw - s1->interBw))) return d;
+   if ((d = (s2->interPciBw - s1->interPciBw))) return d;
    if ((d = (s1->interNhops - s2->interNhops))) return d;
-   if ((d = (s2->intraWidth - s1->intraWidth))) return d;
+   if ((d = (s2->intraBw - s1->intraBw))) return d;
    if ((d = (s1->intraNhops - s2->intraNhops))) return d;
    return s1->startIndex - s2->startIndex;
 }
 
 static int cmpIntraScores(struct ncclGpuScore* scores, int count) {
-  int intraWidth = scores[0].intraWidth;
+  int intraBw = scores[0].intraBw;
   int intraNhops = scores[0].intraNhops;
   for (int i=1; i<count; i++) {
-    if (scores[i].intraWidth != intraWidth || scores[i].intraNhops != intraNhops) return 1;
+    if (scores[i].intraBw != intraBw || scores[i].intraNhops != intraNhops) return 1;
   }
   return 0;
 }
@@ -229,11 +229,11 @@ ncclResult_t ncclTopoSearchNextGpuSort(struct ncclTopoSystem* system, struct ncc
     scores[count].g = g;
     scores[count].startIndex = i;
     scores[count].intraNhops = paths[g].count;
-    scores[count].intraWidth = paths[g].width;
+    scores[count].intraBw = paths[g].bw;
     if (netPaths) {
       scores[count].interNhops = netPaths[g].count;
-      scores[count].interPciWidth = gpuPciWidth(system->nodes[GPU].nodes+g);
-      scores[count].interWidth = netPaths[g].width;
+      scores[count].interPciBw = gpuPciBw(system->nodes[GPU].nodes+g);
+      scores[count].interBw = netPaths[g].bw;
     }
     count++;
   }
@@ -295,8 +295,8 @@ ncclResult_t ncclTopoCompareGraphs(struct ncclTopoGraph* graph, struct ncclTopoG
   if (graph->nChannels < graph->minChannels) return ncclSuccess;
 
   // 2. Try to get better bandwidth
-  if (graph->nChannels*graph->speedIntra < refGraph->nChannels*refGraph->speedIntra) return ncclSuccess;
-  if (graph->nChannels*graph->speedIntra > refGraph->nChannels*refGraph->speedIntra) {
+  if (graph->nChannels*graph->bwIntra < refGraph->nChannels*refGraph->bwIntra) return ncclSuccess;
+  if (graph->nChannels*graph->bwIntra > refGraph->nChannels*refGraph->bwIntra) {
     *copy = 1;
     return ncclSuccess;
   }
@@ -396,23 +396,23 @@ ncclResult_t ncclTopoSearchRecGpu(struct ncclTopoSystem* system, struct ncclTopo
 
         // Balanced Tree : count half of the bandwidth on first two GPUs
         int nextBackToNet = -1;
-        float speedInterSave = graph->speedInter;
+        float bwInterSave = graph->bwInter;
         if (graph->pattern == NCCL_TOPO_PATTERN_BALANCED_TREE) {
           // Count half of the bandwidth on each of the first two GPUs
           if (step == 0) nextBackToNet = 1;
           else if (net->id != graph->inter[graph->nChannels*2+1]) continue;
-          graph->speedInter /= 2;
+          graph->bwInter /= 2;
         }
 
         NCCLCHECK(ncclTopoFollowPath(system, graph, GPU, g, NET, n, 1, &net));
-        graph->speedInter = speedInterSave;
+        graph->bwInter = bwInterSave;
         if (net) {
           graph->inter[graph->nChannels*2+1] = net->id;
           NCCLCHECK(ncclTopoSearchRecGpu(system, graph, saveGraph, gpu, step, nextBackToNet, backToFirstRank, forcedOrder, time));
 
-          if (graph->pattern == NCCL_TOPO_PATTERN_BALANCED_TREE) graph->speedInter /= 2;
+          if (graph->pattern == NCCL_TOPO_PATTERN_BALANCED_TREE) graph->bwInter /= 2;
           NCCLCHECK(ncclTopoFollowPath(system, graph, GPU, g, NET, n, -1, &net));
-          graph->speedInter = speedInterSave;
+          graph->bwInter = bwInterSave;
         }
       }
       free(nets);
@@ -451,7 +451,7 @@ ncclResult_t ncclTopoSearchRecGpu(struct ncclTopoSystem* system, struct ncclTopo
 }
 
 ncclResult_t ncclTopoSearchRecNet(struct ncclTopoSystem* system, struct ncclTopoGraph* graph, struct ncclTopoGraph* saveGraph, int backToNet, int backToFirstRank, int* time) {
-  const int speed = graph->speedInter;
+  const int bw = graph->bwInter;
   int* nets;
   NCCLCHECK(ncclCalloc(&nets, system->nodes[NET].count));
   int netcount;
@@ -461,7 +461,7 @@ ncclResult_t ncclTopoSearchRecNet(struct ncclTopoSystem* system, struct ncclTopo
     struct ncclTopoNode* net = system->nodes[NET].nodes+n;
     struct ncclTopoNode* gpu;
     if (graph->collNet && net->net.collSupport == 0) continue;
-    if (net->net.width < speed) continue;
+    if (net->net.bw < bw) continue;
     if (net->net.maxChannels == 0) continue;
 
     graph->inter[graph->nChannels*2] = net->id;
@@ -470,7 +470,7 @@ ncclResult_t ncclTopoSearchRecNet(struct ncclTopoSystem* system, struct ncclTopo
     for (int i=0; i<system->nodes[NET].count; i++) {
       if ((system->nodes[NET].nodes[i].net.asic == net->net.asic) &&
           (system->nodes[NET].nodes[i].net.port == net->net.port)) {
-        system->nodes[NET].nodes[i].net.width -= speed;
+        system->nodes[NET].nodes[i].net.bw -= bw;
       }
     }
     net->net.maxChannels--;
@@ -490,26 +490,26 @@ ncclResult_t ncclTopoSearchRecNet(struct ncclTopoSystem* system, struct ncclTopo
       }
 
       // Then try the most local GPUs
-      float maxWidth = 0;
+      float maxBw = 0;
       int minHops = 0xfffffff;
       struct ncclTopoLinkList* paths = net->paths[GPU];
       for (int g=0; g<system->nodes[GPU].count; g++) {
-        if (paths[g].width > maxWidth) {
-          maxWidth = paths[g].width;
+        if (paths[g].bw > maxBw) {
+          maxBw = paths[g].bw;
           minHops = paths[g].count;
-        } else if (paths[g].width == maxWidth && paths[g].count < minHops) {
+        } else if (paths[g].bw == maxBw && paths[g].count < minHops) {
           minHops = paths[g].count;
         }
       }
-      if (maxWidth >= speed) {
+      if (maxBw >= bw) {
         // In the first loop, avoid using GPUs in both directions between channels (one channel
         // sending from that GPU and one channel receiving to that GPU), since that usually leads
         // to lower BW.
         for (int tryGpuBidir=0; tryGpuBidir<2; tryGpuBidir++) {
           for (int g=0; g<system->nodes[GPU].count; g++) {
-            if (paths[g].width == maxWidth && paths[g].count == minHops) {
+            if (paths[g].bw == maxBw && paths[g].count == minHops) {
               gpu = system->nodes[GPU].nodes+g;
-              int gpuUsed = gpuPciWidth(gpu) > 0 ? 0 : 1;
+              int gpuUsed = gpuPciBw(gpu) > 0 ? 0 : 1;
               if (tryGpuBidir == gpuUsed) {
                 NCCLCHECK(ncclTopoSearchTryGpu(system, graph, saveGraph, 0, backToNet, backToFirstRank, 0, time, NET, n, g));
               }
@@ -523,7 +523,7 @@ ncclResult_t ncclTopoSearchRecNet(struct ncclTopoSystem* system, struct ncclTopo
     for (int i=0; i<system->nodes[NET].count; i++) {
       if ((system->nodes[NET].nodes[i].net.asic == net->net.asic) &&
           (system->nodes[NET].nodes[i].net.port == net->net.port)) {
-        system->nodes[NET].nodes[i].net.width += speed;
+        system->nodes[NET].nodes[i].net.bw += bw;
       }
     }
   }
@@ -642,8 +642,8 @@ ncclResult_t ncclTopoGetGraphFromXmlSub(struct ncclXmlNode *xmlGraph, struct ncc
 
   NCCLCHECK(xmlGetAttrInt(xmlGraph, "pattern", &graph->pattern));
   NCCLCHECK(xmlGetAttrInt(xmlGraph, "nchannels", &graph->nChannels));
-  NCCLCHECK(xmlGetAttrFloat(xmlGraph, "speedintra", &graph->speedIntra));
-  NCCLCHECK(xmlGetAttrFloat(xmlGraph, "speedinter", &graph->speedInter));
+  NCCLCHECK(xmlGetAttrFloat(xmlGraph, "speedintra", &graph->bwIntra));
+  NCCLCHECK(xmlGetAttrFloat(xmlGraph, "speedinter", &graph->bwInter));
   if (xmlGetAttrFloat(xmlGraph, "latencyinter", &graph->latencyInter) != ncclSuccess) graph->latencyInter = 0.0;
   const char* str;
   NCCLCHECK(xmlGetAttr(xmlGraph, "typeintra", &str));
@@ -701,8 +701,8 @@ ncclResult_t ncclTopoGetXmlFromGraph(struct ncclTopoGraph* graph, struct ncclTop
   NCCLCHECK(xmlSetAttrInt(xmlGraph, "pattern", graph->pattern));
   NCCLCHECK(xmlSetAttrInt(xmlGraph, "crossnic", graph->crossNic));
   NCCLCHECK(xmlSetAttrInt(xmlGraph, "nchannels", graph->nChannels));
-  NCCLCHECK(xmlSetAttrFloat(xmlGraph, "speedintra", graph->speedIntra));
-  NCCLCHECK(xmlSetAttrFloat(xmlGraph, "speedinter", graph->speedInter));
+  NCCLCHECK(xmlSetAttrFloat(xmlGraph, "speedintra", graph->bwIntra));
+  NCCLCHECK(xmlSetAttrFloat(xmlGraph, "speedinter", graph->bwInter));
   NCCLCHECK(xmlSetAttrFloat(xmlGraph, "latencyinter", graph->latencyInter));
   const char* str;
   NCCLCHECK(kvConvertToStr(graph->typeIntra, &str, kvDictLinkType));
@@ -737,7 +737,7 @@ ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph
   int ngpus = system->nodes[GPU].count;
   graph->crossNic = ncclParamCrossNic();
   int crossNic = (system->nodes[NET].count > 1) && graph->crossNic ? 1 : 0;
-  graph->speedIntra = graph->speedInter = 0;
+  graph->bwIntra = graph->bwInter = 0;
   graph->latencyInter = 0;
   if (graph->crossNic == 2) graph->crossNic = 0;
   graph->typeIntra = ngpus == 1 ? PATH_LOC : PATH_NVL;
@@ -767,7 +767,7 @@ ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph
   struct ncclTopoGraph tmpGraph;
   memcpy(&tmpGraph, graph, sizeof(struct ncclTopoGraph));
 
-  // First try crossnic, then decrease speed and finally increase speedIntra.
+  // First try crossnic, then decrease bw and finally increase bwIntra.
   int nspeeds = 0;
   float* speedArray = NULL;
   if (system->nodes[NET].count == 0) {
@@ -779,8 +779,8 @@ ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph
   }
   int pass = 1;
   int speedIndex = 0;
-  while (speedArray[speedIndex] > system->maxWidth && speedIndex < nspeeds-1) speedIndex++;
-  tmpGraph.speedIntra = tmpGraph.speedInter = speedArray[speedIndex];
+  while (speedArray[speedIndex] > system->maxBw && speedIndex < nspeeds-1) speedIndex++;
+  tmpGraph.bwIntra = tmpGraph.bwInter = speedArray[speedIndex];
   int64_t globalTimeout = NCCL_SEARCH_GLOBAL_TIMEOUT;
 
 search:
@@ -791,7 +791,7 @@ search:
 
   NCCLCHECK(ncclTopoSearchRec(system, &tmpGraph, graph, &time));
 #if 0
-  printf("Pattern %d, crossNic %d, Speed %g/%g, type %d/%d, channels %d-%d sameChannels %d -> nChannels %dx%g/%g %s\n", tmpGraph.pattern, tmpGraph.crossNic, tmpGraph.speedInter, tmpGraph.speedIntra, tmpGraph.typeInter, tmpGraph.typeIntra, tmpGraph.minChannels, tmpGraph.maxChannels, tmpGraph.sameChannels, graph->nChannels, graph->speedInter, graph->speedIntra, time == 0 ? "TIMEOUT" : time == -1 ? "PERFECT" : "");
+  printf("Pattern %d, crossNic %d, Bw %g/%g, type %d/%d, channels %d-%d sameChannels %d -> nChannels %dx%g/%g %s\n", tmpGraph.pattern, tmpGraph.crossNic, tmpGraph.bwInter, tmpGraph.bwIntra, tmpGraph.typeInter, tmpGraph.typeIntra, tmpGraph.minChannels, tmpGraph.maxChannels, tmpGraph.sameChannels, graph->nChannels, graph->bwInter, graph->bwIntra, time == 0 ? "TIMEOUT" : time == -1 ? "PERFECT" : "");
   for (int c=0; c<graph->nChannels; c++) {
     printf("%2d : ", c);
     for (int g=0; g<ngpus; g++) {
@@ -803,7 +803,7 @@ search:
 #endif
   // Optimal solution, stop here
   if (time == -1) goto done;
-  if (graph->nChannels*graph->speedInter >= system->totalWidth) goto done;
+  if (graph->nChannels*graph->bwInter >= system->totalBw) goto done;
 
   if (pass == 1) {
     // First pass, we don't have a solution yet ; try other options
@@ -846,14 +846,14 @@ search:
     }
     tmpGraph.pattern = graph->pattern;
 
-    // Decrease speed until we find a solution
-    if ((speedIndex < nspeeds-1) && (graph->nChannels == 0 || (speedArray[speedIndex+1]/graph->speedInter > .49))) {
-      tmpGraph.speedInter = tmpGraph.speedIntra = speedArray[++speedIndex];
+    // Decrease bw until we find a solution
+    if ((speedIndex < nspeeds-1) && (graph->nChannels == 0 || (speedArray[speedIndex+1]/graph->bwInter > .49))) {
+      tmpGraph.bwInter = tmpGraph.bwIntra = speedArray[++speedIndex];
       goto search;
     }
     speedIndex = 0;
-    while (speedArray[speedIndex] > system->maxWidth && speedIndex < nspeeds-1) speedIndex++;
-    tmpGraph.speedIntra = tmpGraph.speedInter = speedArray[speedIndex];
+    while (speedArray[speedIndex] > system->maxBw && speedIndex < nspeeds-1) speedIndex++;
+    tmpGraph.bwIntra = tmpGraph.bwInter = speedArray[speedIndex];
 
   }
 
@@ -863,18 +863,18 @@ done:
     time = -1;
     memcpy(&tmpGraph, graph, sizeof(tmpGraph));
     speedIndex = 0;
-    while (speedArray[speedIndex] > graph->speedInter && speedIndex < nspeeds-1) speedIndex++;
-    tmpGraph.speedIntra = tmpGraph.speedInter = speedArray[speedIndex];
+    while (speedArray[speedIndex] > graph->bwInter && speedIndex < nspeeds-1) speedIndex++;
+    tmpGraph.bwIntra = tmpGraph.bwInter = speedArray[speedIndex];
     tmpGraph.minChannels = graph->nChannels;
     pass = 2;
   }
 
-  // 3. See if we can increase speedIntra for trees (2 nodes or collnet)
+  // 3. See if we can increase bwIntra for trees (2 nodes or collnet)
   if (pass == 2) {
     if (time != 0 && graph->pattern != NCCL_TOPO_PATTERN_RING &&
-        tmpGraph.speedIntra == graph->speedIntra && tmpGraph.speedIntra < tmpGraph.speedInter*2 &&
+        tmpGraph.bwIntra == graph->bwIntra && tmpGraph.bwIntra < tmpGraph.bwInter*2 &&
         speedIndex > 0) {
-      tmpGraph.speedIntra = speedArray[--speedIndex];
+      tmpGraph.bwIntra = speedArray[--speedIndex];
       goto search;
     }
     time = -1;
@@ -885,24 +885,24 @@ done:
     WARN("Could not find a path for pattern %d, falling back to simple order", graph->pattern);
     for (int i=0; i<ngpus; i++) graph->intra[i] = system->nodes[GPU].nodes[i].gpu.rank;
     graph->inter[0] = graph->inter[1] = 0;
-    graph->speedIntra = graph->speedInter = 0.1;
+    graph->bwIntra = graph->bwInter = 0.1;
     graph->typeIntra = graph->typeInter = PATH_SYS;
     graph->nChannels = 1;
   }
 
-  if (graph->speedIntra >= 25.0) {
+  if (graph->bwIntra >= 25.0) {
     int dupChannels = std::min(graph->nChannels*2, graph->maxChannels);
     memcpy(graph->intra+graph->nChannels*ngpus, graph->intra, (dupChannels-graph->nChannels)*ngpus*sizeof(int));
     memcpy(graph->inter+graph->nChannels*2,graph->inter, (dupChannels-graph->nChannels)*2*sizeof(int));
-    graph->speedIntra /= DIVUP(dupChannels, graph->nChannels);
-    graph->speedInter /= DIVUP(dupChannels, graph->nChannels);
+    graph->bwIntra /= DIVUP(dupChannels, graph->nChannels);
+    graph->bwInter /= DIVUP(dupChannels, graph->nChannels);
     graph->nChannels = dupChannels;
   }
   return ncclSuccess;
 }
 
 ncclResult_t ncclTopoPrintGraph(struct ncclTopoSystem* system, struct ncclTopoGraph* graph) {
-  INFO(NCCL_GRAPH, "Pattern %d, crossNic %d, nChannels %d, speed %f/%f, type %s/%s, sameChannels %d", graph->pattern, graph->crossNic, graph->nChannels, graph->speedIntra, graph->speedInter, topoPathTypeStr[graph->typeIntra], topoPathTypeStr[graph->typeInter], graph->sameChannels);
+  INFO(NCCL_GRAPH, "Pattern %d, crossNic %d, nChannels %d, bw %f/%f, type %s/%s, sameChannels %d", graph->pattern, graph->crossNic, graph->nChannels, graph->bwIntra, graph->bwInter, topoPathTypeStr[graph->typeIntra], topoPathTypeStr[graph->typeInter], graph->sameChannels);
   int ngpus = system->nodes[GPU].count;
 
   char line[1024];

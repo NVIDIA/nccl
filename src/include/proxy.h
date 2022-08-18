@@ -164,6 +164,7 @@ struct ncclProxyState {
   struct ncclSocket* listenSock;
   int stop;
   CUcontext cudaCtx;
+  int safeAbortFlag;
 
   // Used by main thread
   union ncclSocketAddress* peerAddresses;
@@ -183,6 +184,7 @@ struct ncclProxyConnection {
   struct ncclProxyArgs *proxyAppend;
   struct ncclProxyArgs **proxyAppendPtr;
   void* transportResources;
+  bool initFlag;
 };
 
 typedef ncclResult_t (*threadFunc_t)(struct ncclProxyArgs*);

@@ -29,7 +29,7 @@ all: $(STATICLIB)
 all_deps: $(DEPENDFILES)
 
 # Auto-generating the rules per op/reduction/datatype/algorithm
-$(RULESFILE) :
+$(RULESFILE) : gen_rules.sh
 	@printf "Generating %-35s > %s\n" rules $@
 	@mkdir -p $(OBJDIR)
 	@CUDA_MAJOR=${CUDA_MAJOR} CUDA_MINOR=${CUDA_MINOR} ./gen_rules.sh $(OBJDIR) > $@

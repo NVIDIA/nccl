@@ -13,9 +13,6 @@ then
     datatypes+=" bf16"
 fi
 
-echo "CURDIR := \$(dir \$(realpath \$(word \$(words \$(math\$(MAKEFILE_LIST))-1), \$(MAKEFILE_LIST))))"
-+echo ""
-
 targets="GENOBJS := \\\\\n"
 
 for base in sendrecv all_reduce all_gather broadcast reduce reduce_scatter; do
@@ -26,11 +23,12 @@ for base in sendrecv all_reduce all_gather broadcast reduce reduce_scatter; do
     for dt in ${datatypes}; do
       # Generate a unique filename for each compilation unit,
       # otherwise the __nv_module_id may conflict at link time
-      echo "${dir}/${base}_${opn}_${dtn}.cu :"
-      echo "	echo \"#include \\\"\$(CURDIR)${base}.cu\\\"\" > \$@"
+      echo "${dir}/${base}_${op}_${dt}.cu : ${base}.cu"
+      echo "	@printf \"Copying    %-35s > %s\\\\n\" \$< \$@"
+      echo "	cp \$< \$@"
       echo ""
       # Compile the file
-      echo "${dir}/${base}_${op}_${dt}.o : ${dir}/${base}_${opn}_${dtn}.cu ${base}.cu ${dir}/${base}.dep"
+      echo "${dir}/${base}_${op}_${dt}.o : ${dir}/${base}_${op}_${dt}.cu ${base}.cu ${dir}/${base}.dep"
 
       echo "	@printf \"Compiling  %-35s > %s\\\\n\" ${base}.cu ${dir}/${base}_${op}_${dt}.o"
       echo "	mkdir -p ${dir}"

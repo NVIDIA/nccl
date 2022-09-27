@@ -1037,6 +1037,8 @@ collnet_cleanup:
     }
   }
 
+  NCCLCHECKGOTO(devCommSetup(comm), ret, affinity_restore);
+
   /* Local intra-node barrier */
   NCCLCHECK(bootstrapBarrier(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, comm->localRankToRank[0]));
 
@@ -1087,7 +1089,6 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
   }
   NCCLCHECKGOTO(commAlloc(newcomm, nranks, myrank), res, cleanup);
   NCCLCHECKGOTO(initTransportsRank(*newcomm, &commId), res, cleanup);
-  NCCLCHECKGOTO(devCommSetup(*newcomm), res, cleanup);
 
   // update communicator state
   comm->initState = ncclSuccess;

@@ -38,7 +38,7 @@ DECLARE_CUDA_PFN(cuGetProcAddress, 11030);
 #define CUDA_DRIVER_MIN_VERSION 11030
 
 static void *cudaLib;
-static int cudaDriverVersion;
+int ncclCudaDriverVersionCache = -1;
 
 #if CUDART_VERSION >= 11030
 /*
@@ -107,16 +107,17 @@ static void initOnceFunc() {
     goto error;
   }
 
-  res = pfn_cuDriverGetVersion(&cudaDriverVersion);
+  int driverVersion;
+  res = pfn_cuDriverGetVersion(&driverVersion);
   if (res != 0) {
     WARN("cuDriverGetVersion failed with %d", res);
     goto error;
   }
 
-  INFO(NCCL_INIT, "cudaDriverVersion %d", cudaDriverVersion);
+  INFO(NCCL_INIT, "cudaDriverVersion %d", driverVersion);
 
-  if (cudaDriverVersion < CUDA_DRIVER_MIN_VERSION) {
-    // WARN("CUDA Driver version found is %d. Minimum requirement is %d", cudaDriverVersion, CUDA_DRIVER_MIN_VERSION);
+  if (driverVersion < CUDA_DRIVER_MIN_VERSION) {
+    // WARN("CUDA Driver version found is %d. Minimum requirement is %d", driverVersion, CUDA_DRIVER_MIN_VERSION);
     // Silently ignore version check mismatch for backwards compatibility
     goto error;
   }
@@ -148,7 +149,7 @@ error:
   return;
 }
 
-ncclResult_t cudaLibraryInit() {
+ncclResult_t ncclCudaLibraryInit() {
   pthread_once(&initOnceControl, initOnceFunc);
   return initResult;
 }

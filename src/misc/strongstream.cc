@@ -5,6 +5,7 @@
  ************************************************************************/
 
 #include "strongstream.h"
+#include "cudawrap.h"
 #include "checks.h"
 #include "param.h"
 
@@ -14,10 +15,8 @@ ncclResult_t ncclCudaGetCapturingGraph(
     struct ncclCudaGraph* graph, cudaStream_t stream
   ) {
   #if CUDART_VERSION >= 11030
-    thread_local int driver = -1;
-    if (driver == -1) {
-      CUDACHECK(cudaDriverGetVersion(&driver));
-    }
+    int driver;
+    NCCLCHECK(ncclCudaDriverVersion(&driver));
     if (driver < 11030) {
       cudaStreamCaptureStatus status;
       unsigned long long gid;
@@ -192,11 +191,11 @@ ncclResult_t ncclStrongStreamWaitStream(
         CUDACHECK(cudaEventRecord(b->event, b->stream));
       }
       CUDACHECK(cudaStreamWaitEvent(a->stream, b->event, 0));
-      a->eventIsLagging = 1;
     } else {
       cudaGraphNode_t pair[2] = {a->node, b->node};
       CUDACHECK(cudaGraphAddEmptyNode(&a->node, graph.graph, pair, 2));
     }
+    a->eventIsLagging = 1;
   #else
     CUDACHECK(cudaEventRecord(b->event, b->stream));
     CUDACHECK(cudaStreamWaitEvent(a->stream, b->event, 0));
@@ -232,9 +231,8 @@ ncclResult_t ncclStrongStreamWaitStream(
         }
         cudaGraphNode_t pair[2] = {a->node, tie};
         CUDACHECK(cudaGraphAddEmptyNode(&a->node, graph.graph, pair, 2));
+        a->eventIsLagging = 1;
       }
-      // a->eventIsLagging doesn't change since we are just updating the
-      // dependencies of a->node.
     }
   #else
     CUDACHECK(cudaEventRecord(a->event, b));

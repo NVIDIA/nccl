@@ -8,6 +8,8 @@
 #define NCCL_CUDAWRAP_H_
 
 #include <cuda.h>
+#include <cuda_runtime.h>
+#include "checks.h"
 
 #if CUDART_VERSION >= 11030
 #include <cudaTypedefs.h>
@@ -83,6 +85,18 @@ DECLARE_CUDA_PFN_EXTERN(cuDriverGetVersion, 2020);
 DECLARE_CUDA_PFN_EXTERN(cuGetProcAddress, 11030);
 
 
-ncclResult_t cudaLibraryInit(void);
+ncclResult_t ncclCudaLibraryInit(void);
+
+extern int ncclCudaDriverVersionCache;
+
+inline ncclResult_t ncclCudaDriverVersion(int* driver) {
+  int version = __atomic_load_n(&ncclCudaDriverVersionCache, __ATOMIC_RELAXED);
+  if (version == -1) {
+    CUDACHECK(cudaDriverGetVersion(&version));
+    __atomic_store_n(&ncclCudaDriverVersionCache, version, __ATOMIC_RELAXED);
+  }
+  *driver = version;
+  return ncclSuccess;
+}
 
 #endif

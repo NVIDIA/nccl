@@ -118,6 +118,7 @@ struct recvResources {
   int netDev;
   int useGdr;
   int useDmaBuf;
+  int needFlush;
   int maxRecvs;
   uint64_t* gdcSync;
   uint64_t* gdcFlush;
@@ -152,6 +153,7 @@ struct setupReq {
   int shared;
   int netDev;
   int useGdr;
+  int needFlush;
   int channelId;
   int connIndex;
 };
@@ -204,6 +206,9 @@ static ncclResult_t recvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   int proxyRank;
   NCCLCHECK(ncclTopoGetNetDev(comm, myInfo->rank, graph, channelId, myInfo->rank, &req.netDev, &proxyRank));
   NCCLCHECK(ncclTopoCheckGdr(comm->topo, myInfo->busId, req.netDev, 0, &req.useGdr));
+
+  // Determine whether we need to flush the GDR buffer on recv or not
+  if (req.useGdr) NCCLCHECK(ncclTopoNeedFlush(comm->topo, myInfo->busId, &req.needFlush));
 
   // We don't support PXN on receive yet
   NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_NET, 0, myInfo->rank, &recv->proxyConn));
@@ -470,6 +475,7 @@ static ncclResult_t recvProxySetup(struct ncclProxyConnection* connection, struc
   resources->netDev = req->netDev;
   resources->shared = connection->shared = req->shared;
   resources->useGdr = req->useGdr;
+  resources->needFlush = req->needFlush;
   resources->channelId = req->channelId;
   resources->connIndex = req->connIndex;
   ncclNetProperties_t props;
@@ -1033,7 +1039,7 @@ static ncclResult_t recvProxyProgress(struct ncclComm* comm, struct ncclProxyArg
         for (int i=0; i<NCCL_PROXY_MAX_SUBS; i++) sizes[i] = 0;
         NCCLCHECK(ncclNetTest(comm, subGroup->requests[step%NCCL_STEPS], &done, sizes));
         if (done) {
-          int useGdr = 0;
+          int needFlush = 0;
           int totalSize = 0;
           for (int i=0; i<NCCL_PROXY_MAX_SUBS; i++) totalSize += sizes[i];
           for (int i=0; i<subGroup->groupSize; i++) {
@@ -1042,11 +1048,11 @@ static ncclResult_t recvProxyProgress(struct ncclComm* comm, struct ncclProxyArg
             for (uint64_t step=sub->received-args->sliceSteps; step<sub->received; step++) ncclProfilingRecord(args, s+i, step, ncclProxyProfileRecvFlushWait);
             if (step < sub->nsteps) {
               struct recvResources* resources = (struct recvResources*) (sub->connection->transportResources);
-              if (resources->useGdr) useGdr = 1;
+              if (resources->useGdr) needFlush |= resources->needFlush;
             }
           }
           subGroup->requests[step%NCCL_STEPS] = NULL;
-          if (totalSize > 0 && p == NCCL_PROTO_SIMPLE && useGdr) {
+          if (totalSize > 0 && p == NCCL_PROTO_SIMPLE && needFlush) {
             // GDRCOPY support
             struct recvResources* resources = (struct recvResources*) (subGroup->connection->transportResources);
             if (resources->gdcFlush) {

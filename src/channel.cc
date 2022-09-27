@@ -27,7 +27,7 @@ ncclResult_t initChannel(struct ncclComm* comm, int channelId) {
   NCCLCHECK(ncclCudaCallocAsync(&channel->devRingUserRanks, nRanks, comm->deviceStream.stream));
   ncclCommPushCudaFree(comm, channel->devRingUserRanks);
 
-  NCCLCHECK(ncclStrongStreamRelease(ncclCudaGraphNull(), &comm->deviceStream));
+  NCCLCHECK(ncclStrongStreamRelease(ncclCudaGraphNone(), &comm->deviceStream));
 
   for (int r=0; r < nRanks+1; ++r) {
     for (int b=0; b < NCCL_MAX_CONNS; b++) {

@@ -1215,6 +1215,7 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev, const int* devlist) {
       gpuFlags[devlist[i]] = 1;
     }
     free(gpuFlags);
+    gpuFlags = nullptr;
   }
 
   ncclUniqueId uniqueId;
@@ -1226,11 +1227,9 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev, const int* devlist) {
   }
   NCCLCHECKGOTO(ncclGroupEnd(), ret, fail);
 
-exit:
-  return ret;
 fail:
-  if (gpuFlags) free(gpuFlags);
-  goto exit;
+  free(gpuFlags);
+  return ret;
 }
 
 ncclResult_t ncclCommSetAsyncError(ncclComm_t comm, ncclResult_t nextState) {

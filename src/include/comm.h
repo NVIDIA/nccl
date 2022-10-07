@@ -168,8 +168,8 @@ struct ncclComm {
   ncclCollNet_t* ncclCollNet;
   void* bootstrap;
   // Bitmasks for ncclTransportP2pSetup
-  uint32_t* connectSend;
-  uint32_t* connectRecv;
+  uint64_t* connectSend;
+  uint64_t* connectRecv;
 
   int rank;    // my rank in the communicator
   int nRanks;  // number of GPUs in communicator

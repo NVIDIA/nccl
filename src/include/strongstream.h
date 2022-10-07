@@ -22,7 +22,7 @@ struct ncclCudaGraph {
 #endif
 };
 
-inline struct ncclCudaGraph ncclCudaGraphNull() {
+inline struct ncclCudaGraph ncclCudaGraphNone() {
   struct ncclCudaGraph tmp;
   #if CUDART_VERSION >= 11030
     tmp.graph = nullptr;
@@ -49,7 +49,6 @@ inline bool ncclCudaGraphSame(struct ncclCudaGraph a, struct ncclCudaGraph b) {
 
 ncclResult_t ncclCudaGetCapturingGraph(struct ncclCudaGraph* graph, cudaStream_t stream);
 ncclResult_t ncclCudaGraphAddDestructor(struct ncclCudaGraph graph, cudaHostFn_t fn, void* arg);
-
 
 /* ncclStrongStream: An abstraction over CUDA streams that do not lose their
  * identity while being captured. Regular streams have the deficiency that the
@@ -88,7 +87,7 @@ ncclResult_t ncclStrongStreamAcquire(
 // Acquire-fence the strong stream assuming no graph is capturing. This permits
 // the caller to enqueue directly to the `ss->stream` member using native CUDA
 // calls. Strong stream must be released via:
-//   ncclStrongStreamRelease(ncclCudaGraphNull(), graphRefs, ss);
+//   ncclStrongStreamRelease(ncclCudaGraphNone(), ss);
 ncclResult_t ncclStrongStreamAcquireUncaptured(struct ncclStrongStream* ss);
 
 // Release-fence of the strong stream.

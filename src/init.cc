@@ -416,7 +416,7 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
 
   NCCLCHECK(ncclCudaMemcpyAsync(devCommAndChans, &tmpCommAndChans, 1, comm->deviceStream.stream));
   CUDACHECK(cudaStreamSynchronize(comm->deviceStream.stream));
-  NCCLCHECK(ncclStrongStreamRelease(ncclCudaGraphNull(), &comm->deviceStream));
+  NCCLCHECK(ncclStrongStreamRelease(ncclCudaGraphNone(), &comm->deviceStream));
   return ncclSuccess;
 }
 
@@ -955,13 +955,13 @@ collnet_cleanup:
       for (int c=0; c<comm->p2pnChannelsPerPeer; c++) {
         NCCLCHECK(ncclChannelCompute(comm, peer, c, ncclFuncSend, &channelId));
         if (comm->channels[channelId].peers[peer].send[1].connected == 0) {
-          comm->connectSend[peer] |= (1<<channelId);
+          comm->connectSend[peer] |= (1UL<<channelId);
         }
       }
       for (int c=0; c<comm->p2pnChannelsPerPeer; c++) {
         NCCLCHECK(ncclChannelCompute(comm, peer, c, ncclFuncRecv, &channelId));
         if (comm->channels[channelId].peers[peer].recv[1].connected == 0) {
-          comm->connectRecv[peer] |= (1<<channelId);
+          comm->connectRecv[peer] |= (1UL<<channelId);
         }
       }
     }
@@ -1172,7 +1172,7 @@ ncclResult_t ncclCommInitRank(ncclComm_t* newcomm, int nranks, ncclUniqueId comm
   NVTX3_FUNC_RANGE_IN(nccl_domain);
 
   // Load the CUDA driver and dlsym hooks (can fail on old drivers)
-  (void) cudaLibraryInit();
+  (void)ncclCudaLibraryInit();
 
   int cudaDev;
   CUDACHECK(cudaGetDevice(&cudaDev));
@@ -1187,7 +1187,7 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev, const int* devlist) {
   int totalnDev;
   int *gpuFlags = NULL;
   // Load the CUDA driver and dlsym hooks (can fail on old drivers)
-  (void) cudaLibraryInit();
+  (void)ncclCudaLibraryInit();
 
   NCCLCHECKGOTO(PtrCheck(comms, "CommInitAll", "comms"), ret, fail);
   if (ndev < 0) {
@@ -1279,7 +1279,7 @@ ncclResult_t ncclCommInitRankConfig(ncclComm_t *newcomm, int nranks, ncclUniqueI
   }
   if (blockingEnv == 1) internalConfigPtr->blocking = blockingEnv;
 
-  (void) cudaLibraryInit();
+  (void)ncclCudaLibraryInit();
   CUDACHECKGOTO(cudaGetDevice(&cudaDev), ret, exit);
   NCCLCHECKGOTO(ncclCommInitRankDev(newcomm, nranks, commId, myrank, cudaDev, internalConfigPtr), ret, fail);
 

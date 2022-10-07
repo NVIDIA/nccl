@@ -107,6 +107,75 @@ typedef enum nvmlGpuP2PCapsIndex_enum
     NVML_P2P_CAPS_INDEX_UNKNOWN
 } nvmlGpuP2PCapsIndex_t;
 
+/**
+ * Represents the type for sample value returned
+ */
+typedef enum nvmlValueType_enum
+{
+    NVML_VALUE_TYPE_DOUBLE = 0,
+    NVML_VALUE_TYPE_UNSIGNED_INT = 1,
+    NVML_VALUE_TYPE_UNSIGNED_LONG = 2,
+    NVML_VALUE_TYPE_UNSIGNED_LONG_LONG = 3,
+    NVML_VALUE_TYPE_SIGNED_LONG_LONG = 4,
+
+    // Keep this last
+    NVML_VALUE_TYPE_COUNT
+}nvmlValueType_t;
+
+
+/**
+ * Union to represent different types of Value
+ */
+typedef union nvmlValue_st
+{
+    double dVal;                    //!< If the value is double
+    unsigned int uiVal;             //!< If the value is unsigned int
+    unsigned long ulVal;            //!< If the value is unsigned long
+    unsigned long long ullVal;      //!< If the value is unsigned long long
+    signed long long sllVal;        //!< If the value is signed long long
+}nvmlValue_t;
+
+/**
+ * Field Identifiers.
+ *
+ * All Identifiers pertain to a device. Each ID is only used once and is guaranteed never to change.
+ */
+
+/* NVLink Speed */
+#define NVML_FI_DEV_NVLINK_SPEED_MBPS_COMMON 90  //!< Common NVLink Speed in MBps for active links
+#define NVML_FI_DEV_NVLINK_LINK_COUNT        91  //!< Number of NVLinks present on the device
+
+/**
+ * Remote device NVLink ID
+ *
+ * Link ID needs to be specified in the scopeId field in nvmlFieldValue_t.
+ */
+#define NVML_FI_DEV_NVLINK_REMOTE_NVLINK_ID     146 //!< Remote device NVLink ID
+
+/**
+ * NVSwitch: connected NVLink count
+ */
+#define NVML_FI_DEV_NVSWITCH_CONNECTED_LINK_COUNT   147  //!< Number of NVLinks connected to NVSwitch
+
+#define NVML_FI_DEV_NVLINK_GET_SPEED                  164
+#define NVML_FI_DEV_NVLINK_GET_STATE                  165
+#define NVML_FI_DEV_NVLINK_GET_VERSION                166
+#define NVML_FI_MAX 167 //!< One greater than the largest field ID defined above
+
+/**
+ * Information for a Field Value Sample
+ */
+typedef struct nvmlFieldValue_st
+{
+    unsigned int fieldId;       //!< ID of the NVML field to retrieve. This must be set before any call that uses this struct. See the constants starting with NVML_FI_ above.
+    unsigned int scopeId;       //!< Scope ID can represent data used by NVML depending on fieldId's context. For example, for NVLink throughput counter data, scopeId can represent linkId.
+    long long timestamp;        //!< CPU Timestamp of this value in microseconds since 1970
+    long long latencyUsec;      //!< How long this field value took to update (in usec) within NVML. This may be averaged across several fields that are serviced by the same driver call.
+    nvmlValueType_t valueType;  //!< Type of the value stored in value
+    nvmlReturn_t nvmlReturn;    //!< Return code for retrieving this value. This must be checked before looking at value, as value is undefined if nvmlReturn != NVML_SUCCESS
+    nvmlValue_t value;          //!< Value for this field. This is only valid if nvmlReturn == NVML_SUCCESS
+} nvmlFieldValue_t;
+
 /* End of nvml.h */
 #endif // NCCL_NVML_DIRECT
 
@@ -135,4 +204,6 @@ ncclResult_t ncclNvmlDeviceGetNvLinkRemotePciInfo(nvmlDevice_t device, unsigned 
 ncclResult_t ncclNvmlDeviceGetNvLinkCapability(nvmlDevice_t device, unsigned int link, nvmlNvLinkCapability_t capability, unsigned int *capResult);
 ncclResult_t ncclNvmlDeviceGetCudaComputeCapability(nvmlDevice_t device, int* major, int* minor);
 ncclResult_t ncclNvmlDeviceGetP2PStatus(nvmlDevice_t device1, nvmlDevice_t device2, nvmlGpuP2PCapsIndex_t p2pIndex, nvmlGpuP2PStatus_t* p2pStatus);
+ncclResult_t ncclNvmlDeviceGetFieldValues(nvmlDevice_t device, int valuesCount, nvmlFieldValue_t *values);
+
 #endif // End include guard

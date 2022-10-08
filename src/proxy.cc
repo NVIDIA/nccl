@@ -10,6 +10,17 @@
 #include "socket.h"
 #include "shm.h"
 #include "profiler.h"
+
+// when build NCCL with ntrace_rt.h, we ensure ntrace_rt.h is always
+// referenced via ibvwrap.h after verbs type definition, to obtain type
+// definition while avoiding cross-reference issues.
+#ifdef ENABLE_NTRACE
+#include "ibvwrap.h"
+#else
+// for reference to no-op ntraceProfilingDump
+#include "ntrace_profiler.h"
+#endif
+
 #define ENABLE_TIMER 0
 #include "timer.h"
 
@@ -749,6 +760,7 @@ ncclResult_t ncclProxyProgressDestroy(struct ncclComm* comm) {
   }
 
   ncclProfilingDump();
+  ntraceProfilingDump();
   TIME_PRINT("Proxy");
   return ncclSuccess;
 }

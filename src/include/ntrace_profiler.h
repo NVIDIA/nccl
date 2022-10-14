@@ -8,11 +8,11 @@
 
 #define NTRACE_PROFILING_RECORD(profile_state, ...) \
   do {                                              \
-    ntrace_log_##profile_state(__VA_ARGS__);        \
+    ntraceLog##profile_state(__VA_ARGS__);        \
   } while (0)
 
 static inline void ntraceProfilingDump(void) {
-  ntrace_dump();
+  ntraceDump();
 }
 
 #else

@@ -1081,7 +1081,7 @@ ncclResult_t wrap_ibv_create_cq(struct ibv_cq **ret, struct ibv_context *context
 ncclResult_t wrap_ibv_destroy_cq(struct ibv_cq *cq);
 static inline ncclResult_t wrap_ibv_poll_cq(struct ibv_cq *cq, int num_entries, struct ibv_wc *wc, int* num_done) {
   int done = cq->context->ops.poll_cq(cq, num_entries, wc); /*returns the number of wcs or 0 on success, a negative number otherwise*/
-  NTRACE_PROFILING_RECORD(ibv_poll_cq, cq, num_entries, wc, done);
+  NTRACE_PROFILING_RECORD(IbvPollCq, cq, num_entries, wc, done);
   if (done < 0) {
     WARN("Call to ibv_poll_cq() returned %d", done);
     return ncclSystemError;
@@ -1097,7 +1097,7 @@ static inline int ibv_post_send(struct ibv_qp *qp, struct ibv_send_wr *wr, struc
 }
 
 static inline ncclResult_t wrap_ibv_post_send(struct ibv_qp *qp, struct ibv_send_wr *wr, struct ibv_send_wr **bad_wr) {
-  NTRACE_PROFILING_RECORD(ibv_post_send, qp, wr, bad_wr, NULL);
+  NTRACE_PROFILING_RECORD(IbvPostSend, qp, wr, bad_wr, NULL);
   int ret = qp->context->ops.post_send(qp, wr, bad_wr); /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/
   if (ret != IBV_SUCCESS) {
     WARN("ibv_post_send() failed with error %s, Bad WR %p, First WR %p", strerror(ret), wr, *bad_wr);
@@ -1107,7 +1107,7 @@ static inline ncclResult_t wrap_ibv_post_send(struct ibv_qp *qp, struct ibv_send
 }
 
 static inline ncclResult_t wrap_ibv_post_recv(struct ibv_qp *qp, struct ibv_recv_wr *wr, struct ibv_recv_wr **bad_wr) {
-  NTRACE_PROFILING_RECORD(ibv_post_recv, qp, wr, bad_wr, NULL);
+  NTRACE_PROFILING_RECORD(IbvPostRecv, qp, wr, bad_wr, NULL);
   int ret = qp->context->ops.post_recv(qp, wr, bad_wr); /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/
   if (ret != IBV_SUCCESS) {
     WARN("ibv_post_recv() failed with error %s", strerror(ret));

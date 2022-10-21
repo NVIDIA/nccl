@@ -316,10 +316,10 @@ ncclResult_t ncclTopoCompareGraphs(struct ncclTopoGraph* graph, struct ncclTopoG
 //    based on the GPU NVML index so that e.g. GPU 1 chooses NIC 1 first instead of NIC 0 which
 //    might have been choosen by GPU 0 (case with multiple independent communicators per node)
 // 3. Then add the NETs to the final list if they were not already added by another closer GPU.
-
-ncclResult_t ncclTopoSelectNets(struct ncclTopoSystem* system, int typeInter, int gpu, int* nets, int* netCountRet, int crossNic) {
-  // not cross nic
-  if (!crossNic) {
+NCCL_PARAM(SearchBestNic, "SEARCH_BEST_NIC", 1);
+ncclResult_t ncclTopoSelectNets(struct ncclTopoSystem* system, int typeInter, int gpu, int* nets, int* netCountRet) {
+  // need search best nic
+  if (!ncclParamSearchBestNic()) {
     *netCountRet = system->nodes[NET].count;
     for (int i = 0; i < *netCountRet; ++i) {
       nets[i] = i;
@@ -396,7 +396,7 @@ ncclResult_t ncclTopoSearchRecGpu(struct ncclTopoSystem* system, struct ncclTopo
       int netcount;
       int* nets;
       NCCLCHECK(ncclCalloc(&nets, system->nodes[NET].count));
-      NCCLCHECK(ncclTopoSelectNets(system, graph->typeInter, g, nets, &netcount, graph->crossNic));
+      NCCLCHECK(ncclTopoSelectNets(system, graph->typeInter, g, nets, &netcount));
       for (int i=0; i<netcount; i++) {
         int n = nets[i];
         struct ncclTopoNode* net = system->nodes[NET].nodes+n;
@@ -464,7 +464,7 @@ ncclResult_t ncclTopoSearchRecNet(struct ncclTopoSystem* system, struct ncclTopo
   int* nets;
   NCCLCHECK(ncclCalloc(&nets, system->nodes[NET].count));
   int netcount;
-  NCCLCHECK(ncclTopoSelectNets(system, graph->typeInter, -1, nets, &netcount, graph->crossNic));
+  NCCLCHECK(ncclTopoSelectNets(system, graph->typeInter, -1, nets, &netcount));
   for (int i=0; i<netcount; i++) {
     int n = nets[i];
     struct ncclTopoNode* net = system->nodes[NET].nodes+n;

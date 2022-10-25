@@ -364,7 +364,7 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
 
   int nRanks = comm->nRanks;
   struct ncclDevCommAndChannels *devCommAndChans, tmpCommAndChans;
-  NCCLCHECK(ncclCudaCallocAsync(&devCommAndChans, 1, comm->deviceStream.stream));
+  NCCLCHECK(ncclCudaCallocAsync(&devCommAndChans, 1, comm->deviceStream.cudaStream));
   ncclCommPushCudaFree(comm, devCommAndChans);
   comm->devComm = &devCommAndChans->comm;
   tmpCommAndChans.comm.rank = comm->rank;
@@ -410,12 +410,12 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
     tmpCommAndChans.channels[c].workFifoDone = &comm->workFifoDone[c];
 
     if (comm->channels[c].ring.userRanks != nullptr) {
-      NCCLCHECK(ncclCudaMemcpyAsync(tmpCommAndChans.channels[c].ring.userRanks, comm->channels[c].ring.userRanks, nRanks, comm->deviceStream.stream));
+      NCCLCHECK(ncclCudaMemcpyAsync(tmpCommAndChans.channels[c].ring.userRanks, comm->channels[c].ring.userRanks, nRanks, comm->deviceStream.cudaStream));
     }
   }
 
-  NCCLCHECK(ncclCudaMemcpyAsync(devCommAndChans, &tmpCommAndChans, 1, comm->deviceStream.stream));
-  CUDACHECK(cudaStreamSynchronize(comm->deviceStream.stream));
+  NCCLCHECK(ncclCudaMemcpyAsync(devCommAndChans, &tmpCommAndChans, 1, comm->deviceStream.cudaStream));
+  CUDACHECK(cudaStreamSynchronize(comm->deviceStream.cudaStream));
   NCCLCHECK(ncclStrongStreamRelease(ncclCudaGraphNone(), &comm->deviceStream));
   return ncclSuccess;
 }
@@ -649,7 +649,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* comm
   allGather3Data[rank].collNetSupport = comm->collNetSupport;
 
   comm->nChannels = std::min(treeGraph.nChannels, ringGraph.nChannels);
-  NCCLCHECK(ncclTopoPreset(comm, &treeGraph, &ringGraph, &allGather3Data[rank].topoRanks));
+  NCCLCHECK(ncclTopoPreset(comm, &treeGraph, &ringGraph, &collNetGraph, &allGather3Data[rank].topoRanks));
 
   NCCLCHECK(bootstrapAllGather(comm->bootstrap, allGather3Data, sizeof(*allGather3Data)));
 
@@ -1037,6 +1037,8 @@ collnet_cleanup:
     }
   }
 
+  NCCLCHECKGOTO(devCommSetup(comm), ret, affinity_restore);
+
   /* Local intra-node barrier */
   NCCLCHECK(bootstrapBarrier(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, comm->localRankToRank[0]));
 
@@ -1087,7 +1089,6 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
   }
   NCCLCHECKGOTO(commAlloc(newcomm, nranks, myrank), res, cleanup);
   NCCLCHECKGOTO(initTransportsRank(*newcomm, &commId), res, cleanup);
-  NCCLCHECKGOTO(devCommSetup(*newcomm), res, cleanup);
 
   // update communicator state
   comm->initState = ncclSuccess;
@@ -1214,6 +1215,7 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev, const int* devlist) {
       gpuFlags[devlist[i]] = 1;
     }
     free(gpuFlags);
+    gpuFlags = nullptr;
   }
 
   ncclUniqueId uniqueId;
@@ -1225,11 +1227,9 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev, const int* devlist) {
   }
   NCCLCHECKGOTO(ncclGroupEnd(), ret, fail);
 
-exit:
-  return ret;
 fail:
-  if (gpuFlags) free(gpuFlags);
-  goto exit;
+  free(gpuFlags);
+  return ret;
 }
 
 ncclResult_t ncclCommSetAsyncError(ncclComm_t comm, ncclResult_t nextState) {

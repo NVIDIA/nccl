@@ -15,11 +15,12 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
   static constexpr int MaxRecv = Fan::MaxRecv, MaxSend = Fan::MaxSend;
   static constexpr int Input=0, Output=1;
   RedOp redOp;
-  const int tid;
-  const int nthreads;
-  const int wid;
+  const int tid; // thread index in primitives group
+  const int nthreads; // thread count in primitives group
+  const int wid; // lane index in warp
   const int stepSize;
-  const int warp;
+  const int warp; // warp index in primitives group
+  const int warpInBlock; // warp index in thread block
   const bool flagThread;
   const int group;
   Fan fan;
@@ -108,7 +109,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
       // buffer into shmem.
       int misalignment = reinterpret_cast<uintptr_t>(src) % 16;
       uint64_t *src8 = reinterpret_cast<uint64_t*>(reinterpret_cast<uintptr_t>(src) & -uintptr_t(16));
-      uint64_t *shm8 = shmemCvtPtr(ncclShmem.ll128warp[warp]);
+      uint64_t *shm8 = shmemCvtPtr(ncclShmem.ll128warp[warpInBlock]);
       #pragma unroll
       for(int g=0; g < WordPerThread/2; g++)
         if((g*WARP_SIZE + wid)*16 < misalignment + eltN*sizeof(T))
@@ -152,7 +153,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
     }
     // Write to dst if 16-byte aligned, shmem otherwise.
     int misalignment = reinterpret_cast<uintptr_t>(dst)%16;
-    uint64_t *shm8 = shmemCvtPtr(ncclShmem.ll128warp[warp]);
+    uint64_t *shm8 = shmemCvtPtr(ncclShmem.ll128warp[warpInBlock]);
     #pragma unroll
     for(int g=0; g < WordPerThread/2; g++) {
       int ix = g*WARP_SIZE - 4*(g/2) + wid - (g%2)*(wid/8);
@@ -166,7 +167,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
     __syncwarp();
     // Write rest from shmem to dst. No need to coalesce stores to 16-bytes,
     // the hardware keeps up fine.
-    T *shm = (T*)ncclShmem.ll128warp[warp];
+    T *shm = (T*)ncclShmem.ll128warp[warpInBlock];
     int skip = misalignment == 0 ? eltN & -EltPer16B : 0;
     for(int i=skip+wid; i < eltN; i += WARP_SIZE)
       dst[i] = shm[i];
@@ -215,7 +216,6 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
     /************************ Recv rest *********************/
     if (RECV) {
       { // Consume data from first recv
-        uint64_t* ptr = recvPtr(0)+ll128Offset;
         #pragma unroll
         for (int u=0; u<ELEMS_PER_THREAD; u+=2) {
           v[u] = SRC ? MULTI<RedOp, T>()(redOp, vr[u], v[u]) : vr[u];
@@ -360,6 +360,7 @@ public:
     ):
     redOp(redOpArg),
     tid(tid), nthreads(nthreads), wid(tid%WARP_SIZE), warp(tid/WARP_SIZE),
+    warpInBlock(threadIdx.x/WARP_SIZE),
     flagThread((tid%8)==7), group(group&(uint16_t)0xFFFF),
     stepSize(ncclShmem.comm.buffSizes[NCCL_PROTO_LL128]/NCCL_STEPS/sizeof(uint64_t)) {
     int connIndex = group >> 16;

@@ -20,11 +20,11 @@ ncclResult_t initChannel(struct ncclComm* comm, int channelId) {
 
   // The extra on nRanks+1 is for collnet root (i.e. network)
   channel->peers = ncclMemoryStackAlloc<struct ncclChannelPeer>(&comm->memPermanent, nRanks+1);
-  NCCLCHECK(ncclCudaCallocAsync(&channel->devPeers, nRanks+1, comm->deviceStream.stream));
+  NCCLCHECK(ncclCudaCallocAsync(&channel->devPeers, nRanks+1, comm->deviceStream.cudaStream));
   ncclCommPushCudaFree(comm, channel->devPeers);
 
   channel->ring.userRanks = ncclMemoryStackAlloc<int>(&comm->memPermanent, nRanks);
-  NCCLCHECK(ncclCudaCallocAsync(&channel->devRingUserRanks, nRanks, comm->deviceStream.stream));
+  NCCLCHECK(ncclCudaCallocAsync(&channel->devRingUserRanks, nRanks, comm->deviceStream.cudaStream));
   ncclCommPushCudaFree(comm, channel->devRingUserRanks);
 
   NCCLCHECK(ncclStrongStreamRelease(ncclCudaGraphNone(), &comm->deviceStream));

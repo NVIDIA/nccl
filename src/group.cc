@@ -331,6 +331,8 @@ static ncclResult_t groupLaunch(struct ncclAsyncJob *job_) {
 
         job = job->next;
       } while (job != nullptr);
+      // Let preconnect threads progress.
+      if (jobsDone == false) usleep(1);
     } while (jobsDone == false);
 
     if (ret != ncclSuccess) goto fail;

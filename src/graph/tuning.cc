@@ -227,8 +227,16 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
     int pEnable = protoEnable[p];
     if (pEnable == 2 && p == NCCL_PROTO_LL128) {
       // Enable LL128 by default only on Volta/Ampere/Hopper+NVLink. Other cases are not tested and may cause silent data corruption.
-      pEnable = (graphs[a]->typeInter <= PATH_PXB) && graphs[a]->typeIntra <= PATH_NVL &&
-        ((minCompCap == 70 && maxCompCap == 70) || (minCompCap == 80 && maxCompCap == 80) || (minCompCap == 90 && maxCompCap == 90)) ? 1 : 0;
+      pEnable = 1;
+      pEnable &= (graphs[a]->typeInter <= PATH_PXB);
+      pEnable &= (graphs[a]->typeIntra <= PATH_NVL);
+      pEnable &= (minCompCap == maxCompCap);
+      switch (minCompCap) {
+      case 70: pEnable &= 1; break;
+      case 80: pEnable &= 1; break;
+      case 90: pEnable &= !(CUDART_VERSION == 11080 && c == ncclFuncAllReduce && a == NCCL_ALGO_RING && comm->nRanks == 2); break;
+      default: pEnable &= 0; break;
+      }
     }
     if (pEnable == 0) comm->bandwidths[c][a][p] = 0;
     // Only disable algo for Allreduce since others only have one

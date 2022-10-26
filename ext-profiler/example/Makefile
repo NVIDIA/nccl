@@ -12,7 +12,7 @@ PLUGIN_SO:=libnccl-profiler.so
 
 default: $(PLUGIN_SO)
 
-$(PLUGIN_SO): dummy_profiler.cc
+$(PLUGIN_SO): profiler.cc
 	$(CC) $(INC) -fPIC -shared -o $@ -Wl,-soname,$(PLUGIN_SO) $^
 
 clean:

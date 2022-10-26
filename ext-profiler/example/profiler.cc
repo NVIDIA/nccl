@@ -123,7 +123,7 @@ __hidden ncclResult_t profilingDump() {
 
 // Instantiate plugin symbol
 ncclProfiler_t NCCL_PROFILER_SYMBOL = {
-  "Dummy",
+  "Example",
   profilingRecord,
   profilingDump
 };

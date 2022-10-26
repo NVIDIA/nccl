@@ -10,9 +10,11 @@
 #include "nccl_profiler.h"
 #include "proxy.h"
 
+/* Profiling APIs to be called by NCCL internal code, such as proxy.cc */
+
 ncclResult_t ncclProfilerInit();
 
 ncclResult_t ncclProfilingRecord(struct ncclProxyArgs* args, int sub, int step, int state);
-void ncclProfilingDump();
+ncclResult_t ncclProfilingDump();
 
 #endif

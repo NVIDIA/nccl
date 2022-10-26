@@ -62,12 +62,17 @@ __hidden ncclResult_t profilingRecord(ncclProxyProfileInfo_t* args, int state, v
   return ncclSuccess;
 }
 
-__hidden void profilingDump() {
+__hidden ncclResult_t profilingDump() {
   static int dumpDone = 0;
-  if (dumpDone) return;
+  if (dumpDone)
+    return ncclSuccess;
   dumpDone = 1;
   const char* str = getenv("NCCL_PROXY_PROFILE");
-  if (!str) { free(profilingEvents); return; }
+  if (!str) {
+    printf("Empty env NCCL_PROXY_PROFILE.\n");
+    free(profilingEvents);
+    return ncclSuccess;
+  }
   FILE* f = fopen(str, "w");
   fprintf(f, "[\n");
 
@@ -113,6 +118,7 @@ __hidden void profilingDump() {
   fprintf(f, "{} ]\n");
   fclose(f);
   free(profilingEvents);
+  return ncclSuccess;
 }
 
 // Instantiate plugin symbol

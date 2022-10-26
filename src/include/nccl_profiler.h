@@ -10,6 +10,8 @@
 #include "nccl.h"
 #include <stdint.h>
 
+/* State agreement between internal profiling caller (e.g. proxy.cc) and external profiler */
+
 enum ncclProxyProfileState {
   ncclProxyProfileBegin = 0,
 
@@ -37,6 +39,8 @@ typedef enum : uint8_t {
   ncclProxyRecv
 } ncclProxyPattern_t;
 
+/* Structure for packing information */
+
 typedef struct {
   uint64_t opCount;
   int peer;
@@ -46,12 +50,14 @@ typedef struct {
   uint8_t opIndex;
 } ncclProxyProfileInfo_t;
 
+/* APIs to be implemented by external profiler */
+
 typedef struct {
   // Name of the profiler
   const char* name;
   // Record an event
   ncclResult_t (*profilingRecord)(ncclProxyProfileInfo_t* info, int state, void** profileEvent);
-  void (*profilingDump)();
+  ncclResult_t (*profilingDump)();
 } ncclProfiler_t;
 
 #endif

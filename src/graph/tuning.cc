@@ -382,7 +382,7 @@ ncclResult_t ncclTopoGetAlgoTime(struct ncclInfo* info, int algorithm, int proto
     lat *= info->comm->minCompCap < 80 ? 1.9 : 1.4; // Plateau effect of ring
   }
   // Tree pipelining saves latency in aggregation cases
-  int latCount = algorithm == NCCL_ALGO_RING ? numPipeOps : DIVUP(numPipeOps, NCCL_MAX_WORK_ELEMENTS);
+  int latCount = algorithm == NCCL_ALGO_RING ? numPipeOps : 1;
   *time = lat * latCount + (info->nBytes) / (1000 * bw);
   return ncclSuccess;
 }

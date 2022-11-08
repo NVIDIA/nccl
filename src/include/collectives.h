@@ -19,7 +19,9 @@ struct ncclDevRedOpFull {
 };
 
 #define FUNC_INDEX_P2P 0
-#define FUNC_INDEX(func, devredop, ncclType, al, pr) (1+ncclNumTypes+(((((func)*ncclNumDevRedOps + (devredop))*ncclNumTypes) + (ncclType))*NCCL_NUM_ALGORITHMS+(al))*NCCL_NUM_PROTOCOLS+(pr))
+#define FUNC_INDEX_REDUCE_ONERANK(type) (1 + (type))
+#define FUNC_INDEX(func, devredop, type, al, pr) (1+ncclNumTypes+(((((func)*ncclNumDevRedOps + (devredop))*ncclNumTypes) + (type))*NCCL_NUM_ALGORITHMS+(al))*NCCL_NUM_PROTOCOLS+(pr))
+#define FUNC_INDEX_BCAST(proto) FUNC_INDEX(ncclFuncBroadcast, ncclDevSum, ncclInt8, NCCL_ALGO_RING, proto)
 
 #define NCCL_FUNC_NAME(func, algo, proto, devredop, type) \
   ncclFunction_##func##_##algo##_##proto##_##devredop##_##type
@@ -36,7 +38,7 @@ struct ncclDevRedOpFull {
 /* Declare all collective operations */
 #define DECL5(func, algo, proto, devredop, type) \
   extern __device__ void NCCL_FUNC_NAME(func, algo, proto, devredop, type)(); \
-  extern __global__ void NCCL_KERN_NAME(func, algo, proto, devredop, type)(struct ncclDevComm* comm, uint64_t channelMask, struct ncclWork* workHead); \
+  extern __global__ void NCCL_KERN_NAME(func, algo, proto, devredop, type)(struct ncclKernelArgs args); \
 
 #define SINGLE_ARG(...) __VA_ARGS__
 #define CONCAT(a,b) a##b

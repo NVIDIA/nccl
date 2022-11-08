@@ -36,11 +36,14 @@ struct cudaLaunchParams {
 struct ncclSendMem {
   union {
     struct {
+      alignas(CACHE_LINE_SIZE)
       uint64_t head;
-      char pad1[CACHE_LINE_SIZE-sizeof(uint64_t)];
+
+      alignas(CACHE_LINE_SIZE)
       void* ptrExchange;
       uint64_t redOpArgExchange[2];
-      char pad2[CACHE_LINE_SIZE-sizeof(void*)-2*sizeof(uint64_t)];
+
+      alignas(CACHE_LINE_SIZE)
       int offsFifo[NCCL_STEPS];
     };
     char pad3[MEM_ALIGN];
@@ -50,8 +53,10 @@ struct ncclSendMem {
 struct ncclRecvMem {
   union {
     struct {
+      alignas(CACHE_LINE_SIZE)
       uint64_t tail;
-      char pad1[CACHE_LINE_SIZE-sizeof(uint64_t)];
+
+      alignas(CACHE_LINE_SIZE)
       int sizesFifo[NCCL_STEPS];
       int offsFifo[NCCL_STEPS];
       int flush; // For GDRCopy-based flush
@@ -101,10 +106,6 @@ struct ncclSharedResources {
   struct ncclComm* owner; /* comm which creates this shared res. */
   struct ncclChannelPeer* peers[MAXCHANNELS];
   struct ncclDevChannelPeer* devPeers[MAXCHANNELS];
-  /* P2P operation counter, one per channel */
-  uint64_t p2pOpCount[MAXCHANNELS];
-  /* Collective operation counter */
-  uint64_t collOpCount;
   int tpNRanks;
   int tpNLocalRanks;
   int tpNChannels;
@@ -119,6 +120,13 @@ struct ncclSharedResources {
 
   /* proxy related shared res */
   struct ncclProxyState* proxyState;
+
+  /* Collective operation counter */
+  uint64_t collOpCount;
+
+  struct Channel {
+    uint64_t p2pOpCount; /* P2P operation counter */
+  } channels[MAXCHANNELS];
 };
 
 struct ncclChannel {
@@ -134,7 +142,7 @@ struct ncclChannel {
   struct ncclNvls nvls;
 
   int id; // index of this channel
-  uint32_t workFifoSent; // last used work index+1
+  uint32_t devWorkFifoProduced; // +1 successor of last-used work fifo byte
 
   /* comm split sharable resources */
   struct ncclChannelPeer* collnetPeers;
@@ -143,49 +151,96 @@ struct ncclChannel {
   struct ncclDevChannelPeer* nvlsDevPeers;
 };
 
-struct ncclWorkList {
-  struct ncclWorkList* next;
-  struct ncclWork work;
+struct alignas(ncclMaxDevWorkAlign) ncclKernelPlanWorkList {
+  struct ncclKernelPlanWorkList* next;
+  // This struct is followed by one of the following:
+  //   struct ncclDevWorkColl coll;
+  //   struct ncclDevWorkCollReg collReg;
+  //   struct ncclDevWorkP2p p2p;
+  //   struct ncclDevWorkBcast bcast;
+  // To access the element do: (ElemType*)(this+1)
+};
+
+struct ncclKernelPlanWorkBatchList {
+  struct ncclKernelPlanWorkBatchList* next;
+  struct ncclDevWorkBatchHeader header;
+  int footprint;
+  struct ncclIntruQueue<struct ncclKernelPlanWorkList, &ncclKernelPlanWorkList::next> workQueue;
 };
 
 struct ncclPointerList {
   struct ncclPointerList* next;
-  void *ptr;
+  void* ptr;
 };
 
+// Each kernel launched is backed by one kernel plan. If the kernel is persistent
+// (graph captured) then the plan will live so that we can remember what needs
+// to be destroyed when the graph is destroyed.
 struct ncclKernelPlan {
   // A kernel plan is also a callback that reclaims itself. Hence this must
   // be the first member.
   struct ncclCommCallback reclaimer;
-  struct ncclMemoryPool memPool_ncclProxyOp; // memory to return to comm in cleanup
+  struct ncclMemoryPool memPool_ncclProxyWork; // memory to return to comm in cleanup
 
   struct ncclComm* comm;
   struct ncclKernelPlan* next;
 
   bool persistent; // aka captured in a graph
-  bool kernelSpecialized;
   void *kernelFn;
-  int channelUbound; // only channels c < channelUbound are present
-  int channelCount; // number of channels present
-  uint64_t channelMask; // which channels are present, channelCount == popcount(channelMask)
-  bool hasProxyOps; // does any channel have a non-empty proxyOpQueue
+  uint64_t channelMask; // Which channels are present in kernel.
+  bool hasProxyWork; // does any channel have a non-empty proxyWorkQueue
   int threadPerBlock;
-  // workHeap fields are null until uploadWorkFifo() or preparePersistentKernel()
-  struct ncclWork* workHead;
+  struct ncclKernelArgs args;
 
   int collOpCount; // zero based for this plan
 
   struct ncclIntruQueue<struct ncclPointerList, &ncclPointerList::next> ipcMemQueue;
 
   struct Channel {
-    int nWork;
+    int devWorkFootprint; // bytes required in devWorkFifo
+    int p2pOpCount;
+    struct ncclIntruQueue<struct ncclKernelPlanWorkBatchList, &ncclKernelPlanWorkBatchList::next> devWorkBatchQueue;
+    struct ncclIntruQueue<struct ncclProxyWork, &ncclProxyWork::next> proxyWorkQueue;
+  } channels[MAXCHANNELS];
+};
+
+// The state required while building a kernel plan. This could all live in ncclComm,
+// but having it factored out here keeps things more organized since it closely
+// mirrors ncclKernelPlan. It also makes it easy to clear the state since we can
+// just memset(0) one struct.
+struct ncclKernelPlanner {
+  bool persistent; // aka captured in a graph
+  bool kernelSpecialized;
+  void *kernelFn;
+  int threadPerBlock;
+
+  int collOpCount; // zero based for this plan
+  struct ncclIntruQueue<struct ncclPointerList, &ncclPointerList::next> ipcMemQueue;
+
+  struct Channel {
+    int devWorkFootprint; // Accumulated size of work batch footprints.
     union {
-      int nWorkElem; // used for coll and reg coll
-      int p2pTailElem[2]; // used for p2p, indexed by ncclWorkElemP2pType-1
+      struct {
+        int opCount;
+        // For p2p's of the batch currently being built we store a hashtable of
+        // connections where a connection is a peer plus a direction (send vs recv).
+        // The hashtable uses open addressing with quadratic probing.
+        uint8_t nConns; // Number of connections = number of non-empty slots in table.
+        uint8_t nConnsOfType[/*ncclDevWorkP2pType*/3];
+        // Hashtable slots hold connection ids, which are encoded as follows:
+        //  Empty slot     : -1
+        //  Local copy     : 0..NCCL_MAX_LOCAL_RANKS-1
+        //  Fifo send/recv : NCCL_MAX_LOCAL_RANKS + (Rank<<1 | SendNotRecv={1,0})
+        // Connection id of slot.
+        uint32_t slotConnId[2*NCCL_MAX_P2P_CONNS_PER_WORK_BATCH];
+      } p2p;
     };
-    size_t collBytes;
-    struct ncclIntruQueue<struct ncclWorkList, &ncclWorkList::next> workQueue;
-    struct ncclIntruQueue<struct ncclProxyOp, &ncclProxyOp::enqNext> proxyOpQueue;
+    // Accumulated bytes of traffic scheduled to this channel for load balancing.
+    size_t loadBytes;
+    // Work-In-Progress batch, will be enqueued to devWorkBatchQueue when finished
+    struct ncclKernelPlanWorkBatchList* devWorkBatchWip;
+    struct ncclIntruQueue<struct ncclKernelPlanWorkBatchList, &ncclKernelPlanWorkBatchList::next> devWorkBatchQueue;
+    struct ncclIntruQueue<struct ncclProxyWork, &ncclProxyWork::next> proxyWorkQueue;
   } channels[MAXCHANNELS];
 };
 
@@ -270,29 +325,33 @@ struct ncclComm {
   uint32_t *abortFlagRefCount;
 
   // Device side of the communicator (for cudaFree's)
-  struct ncclDevComm* devComm; // actually = &ncclDevCommAndChannels::comm
+  struct ncclDevCommAndChannels* devComm;
 
   // Operation pool.
-  int workFifoDepth; // size of workFifoHeap[], power of 2
-  struct ncclWork* workFifoHeap;
-  struct ncclWork* devWorkFifoHeap;
-  void* workFifoHeapGdrHandle;
+  int devWorkFifoBytes; // size of devWorkFifoBuf, power of 2
+  int maxDevWorkFootprint; // min over all ranks ncclMaxDevWorkBytes(__CUDA_ARCH__)
+  char* devWorkFifoBuf;
+  char* devWorkFifoBufDev;
+  void* devWorkFifoBufGdrHandle;
 
-  // Work completion notificaion
-  uint32_t* workFifoDone/*[MAXCHANNELS]*/; // in cudaHost memory
-  uint32_t workFifoSent; // Monotonic (mod 1<<32) index of next unused fifo slot.
-  uint32_t workFifoAckdMin; // Monotonic index of least unprocessed fifo slot over all channels.
+  // Work completion notificaion in units=bytes.
+  uint32_t* devWorkFifoConsumed/*[MAXCHANNELS]*/; // in cudaHost memory
+  uint32_t devWorkFifoConsumedLbound; // Monotonic (mod 1<<32) index of least non-consumed byte over all channels.
+  uint32_t devWorkFifoProduced; // Monotonic (mod 1<<32) index of next unused byte.
 
   // Intra-process sync
   struct ncclComm* intraComm0; // leader of intra-process comms (self possible)
+  struct ncclComm** intraComms;
   struct ncclComm* intraNext; // next of intra-process comms, intraComm0 is head
   int intraRank;
   int intraRanks;
   uint32_t intraBarrierPhase;
-  char intraPad1[64 - sizeof(uint64_t)];
+  char intraPad1[64 - sizeof(uint32_t)];
   uint64_t intraBarrierCounter; // only used if this is intraComm0
+  uint64_t intraSyncArrived, intraSyncOrArg; // atomic bitmask of local ranks
   char intraPad2[64 - sizeof(uint64_t)];
   uint64_t intraBarrierGate; // only used if this is intraComm0
+  char intraPad3[64 - sizeof(uint32_t)];
 
   struct ncclProxyState* proxyState;
   int proxyRefCountOld; /* store proxy post-atomic-sub refcount */
@@ -309,10 +368,10 @@ struct ncclComm {
   /* sharable NVLS resource. */
   struct ncclNvlsSharedRes* nvlsResources;
 
-  size_t channelSize; // User requested work size (bytes) for channel partitions
+  size_t channelSize; // User requested work size (bytes) for channel partitions, 0 means unset
 
   // pools backed by comm->memPermanent
-  struct ncclMemoryPool memPool_ncclProxyOp;
+  struct ncclMemoryPool memPool_ncclProxyWork;
   struct ncclMemoryPool memPool_ncclKernelPlan;
   struct ncclMemoryPool memPool_ncclPointerList;
   // Next comm in this thread's active ncclGroup[Start|End](). Holds "0x1" when
@@ -322,6 +381,9 @@ struct ncclComm {
   struct ncclComm* preconnectNext;
   int persistentRefs; // number of persistent plan-lists capturing this comm
   struct ncclTasks tasks;
+
+  struct ncclKernelPlanner planner;
+  void* ringTasks; // An array of nRanks pointers used in ring sorting rooted collectives (bcast)
 
   // user-created reduction ops
   int userRedOpCapacity, userRedOpFreeHead;

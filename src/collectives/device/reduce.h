@@ -10,19 +10,19 @@
 
 namespace {
   template<typename T, typename RedOp, typename Proto>
-  __device__ __forceinline__ void runRing(ncclWorkElem *args) {
+  __device__ __forceinline__ void runRing(ncclDevWorkColl *args) {
     const int tid = threadIdx.x;
-    const int nthreads = args->nWarps*WARP_SIZE;
+    const int nthreads = blockDim.x;
     const int bid = args->bid;
     const int nChannels = args->nChannels;
     ncclRing *ring = &ncclShmem.channel.ring;
     const ssize_t chunkSize = int(Proto::calcBytePerStep()/sizeof(T) * (Proto::Id == NCCL_PROTO_SIMPLE ? REDUCE_CHUNKSTEPS : 1));
     const ssize_t minChunkSizeLL128 = int(nthreads*(Proto::calcBytePerGrain()/sizeof(T)));
-    const int nranks = ncclShmem.comm.nRanks;
+    //const int nranks = ncclShmem.comm.nRanks;
     const ssize_t loopSize = nChannels*chunkSize;
     const ssize_t size = args->count;
     const int rank = ncclShmem.comm.rank;
-    const int prevRank = ring->userRanks[nranks-1];
+    const int prevRank = ring->prev;
     const int root = args->root;
 
     Primitives<T, RedOp, FanSymmetric<1>, 0, Proto, 0>
@@ -69,23 +69,23 @@ namespace {
 }
 
 template<typename T, typename RedOp>
-struct RunWorkElement<ncclFuncReduce, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
-  __device__ __forceinline__ void run(ncclWorkElem *args) {
+struct RunWork<ncclFuncReduce, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
+  __device__ __forceinline__ void run(ncclDevWorkColl *args) {
     using Proto = ProtoSimple<REDUCE_CHUNKSTEPS/REDUCE_SLICESTEPS, REDUCE_SLICESTEPS>;
     runRing<T, RedOp, Proto>(args);
   }
 };
 
 template<typename T, typename RedOp>
-struct RunWorkElement<ncclFuncReduce, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_LL> {
-  __device__ __forceinline__ void run(ncclWorkElem *args) {
+struct RunWork<ncclFuncReduce, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_LL> {
+  __device__ __forceinline__ void run(ncclDevWorkColl *args) {
     runRing<T, RedOp, ProtoLL>(args);
   }
 };
 
 template<typename T, typename RedOp>
-struct RunWorkElement<ncclFuncReduce, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_LL128> {
-  __device__ __forceinline__ void run(ncclWorkElem *args) {
+struct RunWork<ncclFuncReduce, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_LL128> {
+  __device__ __forceinline__ void run(ncclDevWorkColl *args) {
     runRing<T, RedOp, ProtoLL128>(args);
   }
 };

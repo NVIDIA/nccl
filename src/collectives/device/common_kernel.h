@@ -10,7 +10,6 @@
 #include "devcomm.h"
 #include "op128.h"
 #include "reduce_kernel.h"
-#include <cstdio>
 #include <cstdint>
 
 #include <cuda_runtime.h>
@@ -71,8 +70,7 @@ __device__ __forceinline__ void reduceCopyPacks(
   for (int d=0; d < MinDsts; d++)
     minDsts[d] = cvta_to_global(dstPtrs[d]) + threadBytesBehind;
 
-  // We dictate loop termination condition according to whether partial hunks
-  // can be handled or not.
+  // Whether partial hunks can be handled dictates loop termination condition.
   while (Unroll==1 ? (BytePerPack <= threadBytesAhead) : (0 < nHunksAhead)) {
     BytePack<BytePerPack> acc[Unroll];
 
@@ -99,7 +97,7 @@ __device__ __forceinline__ void reduceCopyPacks(
       for (int u=0; u < Unroll; u++) {
         if (s < MultimemSrcs) {
           // applyLoadMultimem uses relaxed semantics for same reason we use volatile below.
-          acc[u] = applyLoadMultimem<RedFn, BytePerPack>(preFn, minSrcs[s]);
+          tmp[u] = applyLoadMultimem<RedFn, BytePerPack>(preFn, minSrcs[s]);
         } else {
           // Use volatile loads in case credits are polled for with volatile (instead of acquire).
           tmp[u] = ld_volatile_global<BytePerPack>(minSrcs[s]);
@@ -238,4 +236,167 @@ __device__ __forceinline__ void reduceCopy(
      nSrcs, srcPtrs, nDsts, dstPtrs, /*&*/nBytesBehind, /*&*/nBytesAhead);
 }
 
+// Warp-uniform memory copy from shared address (not generic) to global address.
+// The number of bytes copied is `min(MaxBytes, nBytesAhead)`, a negative value
+// is interpeted as zero. EltSize is the guaranteed alignment of the addresses and sizes.
+template<int EltSize, int MaxBytes, typename IntBytes>
+__device__ __forceinline__ void copyGlobalShared_WarpUnrolled(
+    int lane, uintptr_t dstAddr, uint32_t srcAddr, IntBytes nBytesAhead
+  ) {
+  static_assert(std::is_signed<IntBytes>::value, "`IntBytes` must be a signed integral type.");
+  int nBytes = min(nBytesAhead, (IntBytes)MaxBytes);
+  int nFrontBytes = min(nBytes, (16 - int(dstAddr%16))%16);
+  int nMiddleBytes = (nBytes-nFrontBytes) & -16;
+  int nBackBytes = (nBytes-nFrontBytes) % 16;
+
+  { int backLane = WARP_SIZE-1 - lane;
+    bool hasFront = lane*EltSize < nFrontBytes;
+    bool hasBack = backLane*EltSize < nBackBytes;
+    int offset = hasFront ? lane*EltSize : (nBytes - (backLane+1)*EltSize);
+    if (hasFront | hasBack) {
+      BytePack<EltSize> tmp = ld_shared<EltSize>(srcAddr+offset);
+      st_global<EltSize>(dstAddr+offset, tmp);
+    }
+  }
+
+  srcAddr += nFrontBytes;
+  int srcMisalign = EltSize < 4 ? (srcAddr%4) : 0;
+  srcAddr += -srcMisalign + lane*16;
+  dstAddr += nFrontBytes + lane*16;
+  nMiddleBytes -= lane*16;
+  #pragma unroll
+  for (int u=0; u < divUp(MaxBytes, WARP_SIZE*16); u++) {
+    if (nMiddleBytes <= 0) break;
+    union {
+      BytePack<16> b16;
+      BytePack<4> b4[4];
+    };
+    BytePack<4> b4_4;
+    b4[0] = ld_shared<4>(srcAddr + 0*4);
+    b4[1] = ld_shared<4>(srcAddr + 1*4);
+    b4[2] = ld_shared<4>(srcAddr + 2*4);
+    b4[3] = ld_shared<4>(srcAddr + 3*4);
+
+    if(srcMisalign != 0) {
+      b4_4 = ld_shared<4>(srcAddr + 4*4);
+      b4[0].native = __funnelshift_r(b4[0].native, b4[1].native, srcMisalign*8);
+      b4[1].native = __funnelshift_r(b4[1].native, b4[2].native, srcMisalign*8);
+      b4[2].native = __funnelshift_r(b4[2].native, b4[3].native, srcMisalign*8);
+      b4[3].native = __funnelshift_r(b4[3].native, b4_4.native, srcMisalign*8);
+    }
+
+    st_global<16>(dstAddr, b16);
+
+    srcAddr += WARP_SIZE*16;
+    dstAddr += WARP_SIZE*16;
+    nMiddleBytes -= WARP_SIZE*16;
+  }
+}
+
+template<int Unroll, bool DstAligned, bool SrcAligned, bool Partial, typename IntBytes>
+__device__ __forceinline__ void copyGlobalGlobal_WarpUnrolled16(
+    int lane, uintptr_t dstAddr, uintptr_t srcAddr, IntBytes bytes, uint32_t scratchAddr
+  ) {
+  int srcMisalign = SrcAligned ? 0 : srcAddr%16;
+  srcAddr -= srcMisalign;
+
+  BytePack<16> reg[Unroll];
+  int offset = 0;
+  bytes -= lane*16;
+  srcAddr += lane*16;
+  #pragma unroll Unroll
+  for (int u=0; u < Unroll; u++) {
+    if (!Partial || offset < srcMisalign + bytes) {
+      reg[u] = ld_volatile_global<16>(srcAddr + offset);
+    }
+    offset += WARP_SIZE*16;
+  }
+
+  if (SrcAligned && DstAligned) {
+    offset = 0;
+    dstAddr += lane*16;
+    #pragma unroll Unroll
+    for (int u=0; u < Unroll; u++) {
+      if (!Partial || offset < bytes) {
+        st_global<16>(dstAddr + offset, reg[u]);
+      }
+      offset += WARP_SIZE*16;
+    }
+  } else {
+    __syncwarp();
+    offset = 0;
+    scratchAddr += lane*16;
+    #pragma unroll Unroll
+    for (int u=0; u < Unroll; u++) {
+      if (!Partial || (offset < srcMisalign + bytes)) {
+        st_shared<16>(scratchAddr + offset, reg[u]);
+      }
+      offset += WARP_SIZE*16;
+    }
+    __syncwarp();
+    bytes += lane*16;
+    srcAddr -= lane*16;
+    scratchAddr -= lane*16;
+    if (!SrcAligned) {
+      // Ignore the beginning of the first pack corresponding to bytes overread
+      // due to misalignment.
+      bytes = (int)min(bytes, IntBytes(Unroll*WARP_SIZE*16 - srcMisalign));
+    }
+    copyGlobalShared_WarpUnrolled<1, /*MaxBytes=*/Unroll*WARP_SIZE*16>
+      (lane, dstAddr, scratchAddr + srcMisalign, bytes);
+  }
+}
+
+template<bool DstAligned, bool SrcAligned, typename IntBytes>
+__device__ __forceinline__ void copyGlobalGlobal(
+    int nWarps, int warp, int lane,
+    uintptr_t dstAddr, uintptr_t srcAddr, IntBytes bytesAhead, uint32_t scratchAddr
+  ) {
+  constexpr int Unroll = ncclCollUnroll();
+  constexpr int BytePerHunk = Unroll*WARP_SIZE*16;
+
+  if (!SrcAligned && srcAddr%16 != 0) {
+    if (warp == 0) {
+      copyGlobalGlobal_WarpUnrolled16
+        <Unroll, /*DstAligned=*/false, /*SrcAligned=*/false, /*Partial=*/true>
+          (lane, dstAddr, srcAddr, bytesAhead, scratchAddr);
+      warp = nWarps;
+    }
+    warp -= 1;
+    int delta = BytePerHunk-(srcAddr%16);
+    srcAddr += delta;
+    dstAddr += delta;
+    bytesAhead -= delta;
+  }
+
+  srcAddr += warp*BytePerHunk;
+  dstAddr += warp*BytePerHunk;
+  bytesAhead -= warp*BytePerHunk;
+
+  if ((SrcAligned && DstAligned) || dstAddr%16 == 0) {
+    while (BytePerHunk <= bytesAhead) {
+      copyGlobalGlobal_WarpUnrolled16
+        <Unroll, /*DstAligned=*/true, /*SrcAligned=*/true, /*Partial=*/false>
+          (lane, dstAddr, srcAddr, bytesAhead, scratchAddr);
+      srcAddr += nWarps*BytePerHunk;
+      dstAddr += nWarps*BytePerHunk;
+      bytesAhead -= nWarps*BytePerHunk;
+    }
+  } else {
+    while (BytePerHunk <= bytesAhead) {
+      copyGlobalGlobal_WarpUnrolled16
+        <Unroll, /*DstAligned=*/false, /*SrcAligned=*/true, /*Partial=*/false>
+          (lane, dstAddr, srcAddr, bytesAhead, scratchAddr);
+      srcAddr += nWarps*BytePerHunk;
+      dstAddr += nWarps*BytePerHunk;
+      bytesAhead -= nWarps*BytePerHunk;
+    }
+  }
+
+  if (0 < bytesAhead) {
+    copyGlobalGlobal_WarpUnrolled16
+      <Unroll, /*DstAligned=*/false, /*SrcAligned=*/false, /*Partial=*/true>
+        (lane, dstAddr, srcAddr, bytesAhead, scratchAddr);
+  }
+}
 #endif // COMMON_KERNEL_H_

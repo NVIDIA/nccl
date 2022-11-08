@@ -23,6 +23,7 @@ __thread bool ncclGroupJobAbortFlag = false;
 
 void* ncclAsyncJobMain(void* arg);
 static ncclResult_t groupJobComplete(struct ncclGroupJob *job);
+static uint64_t groupIntraSync(bool isCollective, ptrdiff_t localPeerMaskOffsetInComm, struct ncclComm* head, uint64_t subsetMask, uint64_t orArgMask);
 
 ncclResult_t ncclAsyncLaunch(
     struct ncclAsyncJob* job,
@@ -118,27 +119,36 @@ ncclResult_t ncclPreconnectFunc(struct ncclAsyncJob* job_) {
   struct ncclComm* comm = job->comm;
   CUDACHECK(cudaSetDevice(comm->cudaDev));
   if (CPU_COUNT(&comm->cpuAffinity)) sched_setaffinity(0, sizeof(cpu_set_t), &comm->cpuAffinity);
-  NCCLCHECK(ncclTransportP2pSetup(comm, NULL, 1));
+
+  NCCLCHECK(ncclStrongStreamAcquireUncaptured(&comm->sharedRes->hostStream));
+  NCCLCHECK(ncclTransportP2pSetup(comm, NULL, 1, comm->sharedRes->hostStream.cudaStream));
+
+  NCCLCHECK(ncclStrongStreamAcquireUncaptured(&comm->sharedRes->deviceStream));
+  NCCLCHECK(ncclStrongStreamWaitStream(ncclCudaGraphNone(), &comm->sharedRes->deviceStream, &comm->sharedRes->hostStream));
+  NCCLCHECK(ncclStrongStreamRelease(ncclCudaGraphNone(), &comm->sharedRes->deviceStream));
+
+  NCCLCHECK(ncclStrongStreamRelease(ncclCudaGraphNone(), &comm->sharedRes->hostStream));
+  NCCLCHECK(ncclStrongStreamSynchronize(&comm->sharedRes->hostStream));
   return ncclSuccess;
 }
 
 static ncclResult_t doLaunches(struct ncclComm* head) {
   ncclResult_t result = ncclSuccess;
-  struct ncclComm* cliqueComm0 = head->intraComm0;
   struct ncclComm* cliqueHead = head;
   struct ncclComm* cliqueNextHead;
-  bool useBarrier = ncclParamLaunchMode == ncclLaunchModeGroup;
+  bool isCollective = (0 != head->tasks.nTasksColl + head->tasks.nTasksBcast);
   // This outer loop iterates over cliques of comms which are siblings of the
   // same global entity. We calculate a clique as all comms which have the same
   // `intraComm0` value.
   do {
+    struct ncclComm* cliqueComm0 = cliqueHead->intraComm0;
     struct ncclComm* comm = cliqueHead;
     bool capturingYes = false, capturingNo = false;
+    uint64_t cliqueMask = 0;
+    uint64_t subsetMask, moreMask;
     do {
       (ncclCudaGraphValid(comm->tasks.capturingGraph) ? capturingYes : capturingNo) = true;
-      CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), result, failure);
-      NCCLCHECKGOTO(ncclLaunchPrepare(comm), result, failure);
-      if (useBarrier) ncclCommIntraBarrierIn(comm, 1);
+      cliqueMask |= uint64_t(1)<<comm->intraRank;
       comm = comm->groupNext;
     } while (comm != nullptr && comm->intraComm0 == cliqueComm0);
     cliqueNextHead = comm;
@@ -152,18 +162,28 @@ static ncclResult_t doLaunches(struct ncclComm* head) {
       goto failure;
     }
 
-    while (true) { // Iterate rounds of launches for clique.
-      bool moreRounds;
+    (void)groupIntraSync(isCollective, offsetof(ncclComm, tasks.p2pIntraPeerMask), cliqueHead, cliqueMask, /*orArgMask=*/0);
+    comm = cliqueHead;
+    do {
+      CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), result, failure);
+      NCCLCHECKGOTO(ncclLaunchPrepare(comm), result, failure);
+      comm = comm->groupNext;
+    } while (comm != cliqueNextHead);
+
+    // Iterate rounds of launches for clique. `subsetMask` tracks which comms
+    // (by local rank index) are either still launching or communicate with an
+    // intra-proc peer which is still launching. `moreMask` is which comms have
+    // a plan to launch on the next round.
+    subsetMask = cliqueMask;
+    moreMask = cliqueMask;
+    while (true) {
+      subsetMask = groupIntraSync(isCollective, offsetof(ncclComm, tasks.p2pIntraPeerMask), cliqueHead, subsetMask, moreMask);
+      if (subsetMask == 0) break;
+
       comm = cliqueHead;
+      moreMask = 0;
       do { // Iterate clique members.
-        struct ncclComm* next = comm->groupNext;
-        if (useBarrier) {
-          // Barrier reduction result tells us if this was the final round.
-          moreRounds = 0 != ncclCommIntraBarrierOut(comm);
-        } else {
-          moreRounds = comm->unlaunchedPlansHead != nullptr;
-        }
-        if (moreRounds) {
+        if (1 & subsetMask>>comm->intraRank) {
           // Pop next unlaunched kernel
           struct ncclKernelPlan* plan = comm->unlaunchedPlansHead;
           if (plan != nullptr) {
@@ -173,18 +193,22 @@ static ncclResult_t doLaunches(struct ncclComm* head) {
             NCCLCHECKGOTO(ncclLaunchKernel(comm, plan), result, failure);
           }
           // Barrier reduction input indicates if we require further rounds.
-          if (useBarrier) ncclCommIntraBarrierIn(comm, comm->unlaunchedPlansHead != nullptr ? 1 : 0);
+          moreMask |= uint64_t(comm->unlaunchedPlansHead != nullptr ? 1 : 0)<<comm->intraRank;
           if (plan != nullptr) {
             NCCLCHECKGOTO(ncclLaunchKernelAfter_NoCuda(comm, plan), result, failure);
           }
-        } else { // Final round.
-          CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), result, failure);
-          NCCLCHECKGOTO(ncclLaunchFinish(comm), result, failure);
         }
-        comm = next;
+        comm = comm->groupNext;
       } while (comm != cliqueNextHead);
-      if (!moreRounds) break;
     }
+
+    comm = cliqueHead;
+    do {
+      CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), result, failure);
+      NCCLCHECKGOTO(ncclLaunchFinish(comm), result, failure);
+      comm = comm->groupNext;
+    } while (comm != cliqueNextHead);
+
     cliqueHead = cliqueNextHead;
   } while (cliqueHead != nullptr);
 failure:
@@ -223,9 +247,9 @@ static void groupCleanup(struct ncclComm** groupCommHeadPtr, struct ncclComm** g
       // graph drops its UserObject reference.
       if (!plan->persistent) {
         for (int c = 0; c < MAXCHANNELS; c++) {
-          while (!ncclIntruQueueEmpty(&plan->channels[c].proxyOpQueue)) {
-            struct ncclProxyOp* pxop = ncclIntruQueueDequeue(&plan->channels[c].proxyOpQueue);
-            ncclMemoryPoolFree(&comm->memPool_ncclProxyOp, pxop);
+          while (!ncclIntruQueueEmpty(&plan->channels[c].proxyWorkQueue)) {
+            struct ncclProxyWork* proxyWork = ncclIntruQueueDequeue(&plan->channels[c].proxyWorkQueue);
+            ncclMemoryPoolFree(&comm->memPool_ncclProxyWork, proxyWork);
           }
         }
         ncclMemoryPoolFree(&comm->memPool_ncclKernelPlan, plan);
@@ -234,12 +258,17 @@ static void groupCleanup(struct ncclComm** groupCommHeadPtr, struct ncclComm** g
     // Reset comm->tasks to empty.
     comm->tasks.nTasksColl = 0;
     comm->tasks.nTasksP2p = 0;
+    comm->tasks.nTasksBcast = 0;
+    comm->tasks.p2pIntraPeerMask = 0;
+    comm->tasks.minBcastPeer = INT_MAX;
+    comm->tasks.maxBcastPeer = INT_MIN;
     comm->tasks.streams = nullptr;
     ncclIntruQueueConstruct(&comm->tasks.collQueue);
-    comm->tasks.collBytesTotal = 0;
+    comm->tasks.collLoadBytes = 0;
     for (int i = 0; i < comm->nRanks; i++) {
       ncclIntruQueueConstruct(&comm->tasks.peers[i].sendQueue);
       ncclIntruQueueConstruct(&comm->tasks.peers[i].recvQueue);
+      ncclIntruQueueConstruct(&comm->tasks.peers[i].bcastQueue);
     }
 
     if (!comm->config.blocking)
@@ -446,4 +475,117 @@ void ncclGroupJobAbort() {
   (void) groupJobComplete(ncclGroupJobMainPtr);
   /* reset group abort flag */
   ncclGroupJobAbortFlag = false;
+}
+
+static inline bool groupIntraSync_Collective(struct ncclComm* head, int nComms, bool orArg) {
+  int intraRanks = head->intraRanks;
+  uint32_t phase = head->intraBarrierPhase;
+  { struct ncclComm* comm = head;
+    for (int n=nComms; n-- != 0;) {
+      comm->intraBarrierPhase = phase+1;
+      comm = comm->groupNext;
+    }
+  }
+  phase &= 1;
+  struct ncclComm* comm0 = head->intraComm0;
+  uint64_t count = __atomic_add_fetch(&comm0->intraBarrierCounter, (uint64_t(orArg?1:0)<<32) + nComms, __ATOMIC_RELEASE);
+
+  if (uint32_t(count) == intraRanks) {
+    // Reset.
+    __atomic_store_n(&comm0->intraBarrierCounter, 0, __ATOMIC_RELAXED);
+    // Release everyone.
+    count = count>>32;
+    __atomic_store_n(&comm0->intraBarrierGate, (count<<32)|(phase^1), __ATOMIC_RELEASE);
+  } else {
+    uint64_t gate = __atomic_load_n(&comm0->intraBarrierGate, __ATOMIC_RELAXED);
+    if ((gate & 1) == phase) {
+      uint64_t t0 = clockNano();
+      do {
+        // Spin vigorously for first 5us.
+        if (clockNano()-t0 >= 5*1000) sched_yield();
+        gate = __atomic_load_n(&comm0->intraBarrierGate, __ATOMIC_RELAXED);
+      } while ((gate & 1) == phase);
+    }
+    count = gate>>32;
+  }
+  __atomic_thread_fence(__ATOMIC_ACQUIRE);
+  return count != 0;
+}
+
+static uint64_t groupIntraSync_NonCollective(
+    ptrdiff_t localPeerMaskOffsetInComm, struct ncclComm* head,
+    uint64_t subsetMask, uint64_t orArgMask
+  ) {
+  struct ncclComm* comm = head;
+  for (uint64_t mask=subsetMask; mask != 0;) {
+    if (1 & subsetMask>>comm->intraRank) {
+      uint64_t selfMask = uint64_t(1)<<comm->intraRank;
+      uint64_t peerMask = *(uint64_t*)((char*)comm + localPeerMaskOffsetInComm);
+      peerMask &= ~selfMask;
+      if (peerMask != 0) {
+        uint64_t t0 = clockNano();
+        do {
+          int intraPeer = bitffs(peerMask)-1;
+          peerMask &= peerMask-1;
+          struct ncclComm* peerComm = comm->intraComms[intraPeer];
+          // Wait for previous syncs with this peer to be consumed.
+          while (0 != (selfMask & __atomic_load_n(&peerComm->intraSyncArrived, __ATOMIC_RELAXED))) {
+            // Spin vigorously for first 5us.
+            if (clockNano()-t0 >= 5*1000) sched_yield();
+          }
+          __atomic_thread_fence(__ATOMIC_ACQUIRE);
+          // Send our sync.
+          __atomic_fetch_or(&peerComm->intraSyncOrArg, selfMask & orArgMask, __ATOMIC_RELAXED);
+          __atomic_fetch_or(&peerComm->intraSyncArrived, selfMask, __ATOMIC_RELEASE);
+        } while (peerMask != 0);
+      }
+    }
+    mask &= ~(uint64_t(1)<<comm->intraRank);
+    comm = comm->groupNext;
+  }
+
+  uint64_t orResult = 0;
+  comm = head;
+  for (uint64_t mask=subsetMask; mask != 0;) {
+    if (1 & subsetMask>>comm->intraRank) {
+      uint64_t selfMask = uint64_t(1)<<comm->intraRank;
+      uint64_t peerMask = *(uint64_t*)((char*)comm + localPeerMaskOffsetInComm);
+      peerMask &= ~selfMask;
+      if (peerMask != 0) {
+        uint64_t t0 = clockNano();
+        // Wait for syncs to arrive.
+        while (peerMask != (peerMask & __atomic_load_n(&comm->intraSyncArrived, __ATOMIC_RELAXED))) {
+          // Spin vigorously for first 5us.
+          if (clockNano()-t0 >= 5*1000) sched_yield();
+        }
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        // Consume sync in a way that resets those bits to zero.
+        if (0 != (peerMask & __atomic_fetch_and(&comm->intraSyncOrArg, ~peerMask, __ATOMIC_RELAXED))) {
+          orResult |= selfMask;
+        }
+        __atomic_fetch_and(&comm->intraSyncArrived, ~peerMask, __ATOMIC_RELEASE);
+      }
+    }
+    mask &= ~(uint64_t(1)<<comm->intraRank);
+    comm = comm->groupNext;
+  }
+
+  return orResult;
+}
+
+// Sync with intra-proc peer threads. `isCollective=true` indicates if all
+// peers are syncing with each other (barrier), otherwise the mask of local peers
+// with whom to 1:1 sync with is obtained from each comm struct via the
+// `localPeerMaskOffsetInComm` byte offset. The input list of comms are those
+// managed by this thread, it starts at `head` and has `nComms` members and is
+// linked via `ncclComm::groupNext` field. The value returned is the OR-reduction
+// of the `orArg` supplied by each thread synced with.
+inline static uint64_t groupIntraSync(bool isCollective, ptrdiff_t localPeerMaskOffsetInComm, struct ncclComm* head, uint64_t subsetMask, uint64_t orArgMask) {
+  int nComms = bitpopcnt(subsetMask);
+  if (nComms == head->intraRanks) return orArgMask;
+  if (isCollective) {
+    return groupIntraSync_Collective(head, nComms, orArgMask != 0) ? subsetMask : 0;
+  } else {
+    return groupIntraSync_NonCollective(localPeerMaskOffsetInComm, head, subsetMask, orArgMask);
+  }
 }

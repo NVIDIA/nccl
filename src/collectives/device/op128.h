@@ -48,25 +48,24 @@ inline __device__ void loadShmemMisaligned128(T *ptr, uint64_t &v0, uint64_t &v1
       // Produce 4 bytes of sub-register type by reading 2 4-byte
       // aligned values and shifting.
       uint32_t lo, hi;
-      asm("ld.shared.b32 %0,[%1];" : "=r"(lo) : "l"(ptr4+e+0));
-      asm("ld.shared.b32 %0,[%1];" : "=r"(hi) : "l"(ptr4+e+1));
+      asm("ld.shared.b32 %0,[%1];" : "=r"(lo) : "l"(ptr4+e+0) : "memory");
+      asm("ld.shared.b32 %0,[%1];" : "=r"(hi) : "l"(ptr4+e+1) : "memory");
       tmp4[e] = __funnelshift_r(lo, hi, 8*(int(reinterpret_cast<uintptr_t>(ptr))%4));
     }
   }
   else if(sizeof(T) == 4) {
     #pragma unroll
     for(int e=0; e < 4; e++)
-      asm("ld.shared.b32 %0,[%1];" : "=r"(tmp4[e]) : "l"(ptr+e));
+      asm("ld.shared.b32 %0,[%1];" : "=r"(tmp4[e]) : "l"(ptr+e) : "memory");
   }
   else /*sizeof(T)==8*/ {
     #pragma unroll
     for(int e=0; e < 2; e++)
-      asm("ld.shared.b64 %0,[%1];" : "=l"(tmp8[e]) : "l"(ptr+e));
+      asm("ld.shared.b64 %0,[%1];" : "=l"(tmp8[e]) : "l"(ptr+e) : "memory");
   }
   v0 = tmp8[0];
   v1 = tmp8[1];
 }
-
 
 template<typename T>
 __device__ __forceinline__ uint32_t cvta_to_shared(T* ptr) {
@@ -99,20 +98,20 @@ template<>
 union BytePack<0> {};
 template<>
 union BytePack<1> {
-  uint8_t u8, native;
+  uint8_t u8[1], native;
 };
 template<>
 union BytePack<2> {
   BytePack<1> half[2];
   uint8_t u8[2];
-  uint16_t u16, native;
+  uint16_t u16[1], native;
 };
 template<>
 union BytePack<4> {
   BytePack<2> half[2];
   uint8_t u8[4];
   uint16_t u16[2];
-  uint32_t u32, native;
+  uint32_t u32[1], native;
 };
 template<>
 union BytePack<8> {
@@ -120,7 +119,7 @@ union BytePack<8> {
   uint8_t u8[8];
   uint16_t u16[4];
   uint32_t u32[2];
-  uint64_t u64, native;
+  uint64_t u64[1], native;
 };
 template<>
 union alignas(16) BytePack<16> {
@@ -129,7 +128,7 @@ union alignas(16) BytePack<16> {
   uint16_t u16[8];
   uint32_t u32[4];
   uint64_t u64[2];
-  ulong2 ul2, native;
+  ulong2 ul2[1], native;
 };
 
 template<typename T>
@@ -179,7 +178,7 @@ template<> __device__ __forceinline__ void st_shared<0>(uint32_t addr, BytePack<
   template<> \
   __device__ __forceinline__ BytePack<bytes> ld_##space<bytes>(addr_cxx_ty addr) { \
     data_cxx_ty tmp; \
-    asm("ld." #space "." #data_ptx_ty " %0, [%1];" : "="#data_reg_ty(tmp) : #addr_reg_ty(addr)); \
+    asm("ld." #space "." #data_ptx_ty " %0, [%1];" : "="#data_reg_ty(tmp) : #addr_reg_ty(addr) : "memory"); \
     BytePack<bytes> ans; \
     ans.native = tmp; \
     return ans; \
@@ -187,7 +186,7 @@ template<> __device__ __forceinline__ void st_shared<0>(uint32_t addr, BytePack<
   template<> \
   __device__ __forceinline__ BytePack<bytes> ld_volatile_##space<bytes>(addr_cxx_ty addr) { \
     data_cxx_ty tmp; \
-    asm("ld.volatile." #space "." #data_ptx_ty " %0, [%1];" : "="#data_reg_ty(tmp) : #addr_reg_ty(addr)); \
+    asm("ld.volatile." #space "." #data_ptx_ty " %0, [%1];" : "="#data_reg_ty(tmp) : #addr_reg_ty(addr) : "memory"); \
     BytePack<bytes> ans; \
     ans.native = tmp; \
     return ans; \
@@ -213,18 +212,18 @@ DEFINE_ld_st(8, uint64_t, b64, l, shared, uint32_t, r)
   template<> \
   __device__ __forceinline__ BytePack<16> ld_##space<16>(addr_cxx_ty addr) { \
     BytePack<16> ans; \
-    asm("ld." #space ".v2.b64 {%0,%1}, [%2];" : "=l"(ans.u64[0]), "=l"(ans.u64[1]) : #addr_reg_ty(addr)); \
+    asm("ld." #space ".v2.b64 {%0,%1}, [%2];" : "=l"(ans.u64[0]), "=l"(ans.u64[1]) : #addr_reg_ty(addr) : "memory"); \
     return ans; \
   } \
   template<> \
   __device__ __forceinline__ BytePack<16> ld_volatile_##space<16>(addr_cxx_ty addr) { \
     BytePack<16> ans; \
-    asm("ld.volatile." #space ".v2.b64 {%0,%1}, [%2];" : "=l"(ans.u64[0]), "=l"(ans.u64[1]) : #addr_reg_ty(addr)); \
+    asm("ld.volatile." #space ".v2.b64 {%0,%1}, [%2];" : "=l"(ans.u64[0]), "=l"(ans.u64[1]) : #addr_reg_ty(addr) : "memory"); \
     return ans; \
   } \
   template<> \
   __device__ __forceinline__ void st_##space<16>(addr_cxx_ty addr, BytePack<16> value) { \
-    asm("st." #space ".v2.b64 [%0], {%1,%2};" :: #addr_reg_ty(addr), "l"(value.u64[0]), "l"(value.u64[1]) : "memory"); \
+    asm volatile("st." #space ".v2.b64 [%0], {%1,%2};" :: #addr_reg_ty(addr), "l"(value.u64[0]), "l"(value.u64[1]) : "memory"); \
   }
 DEFINE_ld_st_16(global, uintptr_t, l)
 DEFINE_ld_st_16(shared, uint32_t, r)
@@ -235,24 +234,24 @@ DEFINE_ld_st_16(shared, uint32_t, r)
 
 __device__ __forceinline__ uint64_t ld_volatile_global(uint64_t *ptr) {
   uint64_t ans;
-  asm("ld.volatile.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
+  asm("ld.volatile.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)) : "memory");
   return ans;
 }
 __device__ __forceinline__ uint64_t ld_relaxed_sys_global(uint64_t *ptr) {
   uint64_t ans;
   #if __CUDA_ARCH__ >= 700
-    asm("ld.relaxed.sys.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
+    asm("ld.relaxed.sys.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)) : "memory");
   #else
-    asm("ld.volatile.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
+    asm("ld.volatile.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)) : "memory");
   #endif
   return ans;
 }
 __device__ __forceinline__ uint64_t ld_acquire_sys_global(uint64_t *ptr) {
   uint64_t ans;
   #if __CUDA_ARCH__ >= 700
-    asm("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
+    asm("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)) : "memory");
   #else
-    asm("ld.volatile.sys.global.u64 %0, [%1]; membar.gl;" : "=l"(ans) : "l"(cvta_to_global(ptr)));
+    asm("ld.volatile.sys.global.u64 %0, [%1]; membar.gl;" : "=l"(ans) : "l"(cvta_to_global(ptr)) : "memory");
   #endif
   return ans;
 }
@@ -372,10 +371,10 @@ __device__ __forceinline__ void copyGlobalShared_WarpUnrolled(
     b4[3] = ld_shared<4>(srcAddr + 3*4);
     if (srcMisalign != 0) {
       BytePack<4> b4_4 = ld_shared<4>(srcAddr + 4*4);
-      b4[0].u32 = __funnelshift_r(b4[0].u32, b4[1].u32, srcMisalign*8);
-      b4[1].u32 = __funnelshift_r(b4[1].u32, b4[2].u32, srcMisalign*8);
-      b4[2].u32 = __funnelshift_r(b4[2].u32, b4[3].u32, srcMisalign*8);
-      b4[3].u32 = __funnelshift_r(b4[3].u32, b4_4.u32, srcMisalign*8);
+      b4[0].native = __funnelshift_r(b4[0].native, b4[1].native, srcMisalign*8);
+      b4[1].native = __funnelshift_r(b4[1].native, b4[2].native, srcMisalign*8);
+      b4[2].native = __funnelshift_r(b4[2].native, b4[3].native, srcMisalign*8);
+      b4[3].native = __funnelshift_r(b4[3].native, b4_4.native, srcMisalign*8);
     }
     if (Multimem) multimem_st_global<16>(dstAddr, b16);
     else          st_global<16>(dstAddr, b16);
@@ -385,5 +384,4 @@ __device__ __forceinline__ void copyGlobalShared_WarpUnrolled(
     nMiddleBytes -= WARP_SIZE*16;
   }
 }
-
 #endif

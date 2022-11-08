@@ -43,6 +43,20 @@ static long log2i(long n) {
  return l;
 }
 
+inline int bitffs(int x) { return __builtin_ffs(x); }
+inline int bitffs(unsigned int x) { return __builtin_ffs((int)x); }
+inline int bitffs(long x) { return __builtin_ffsl(x); }
+inline int bitffs(unsigned long x) { return __builtin_ffsl((long)x); }
+inline int bitffs(long long x) { return __builtin_ffsll(x); }
+inline int bitffs(unsigned long long x) { return __builtin_ffsll((long long)x); }
+
+inline int bitpopcnt(int x) { return __builtin_popcount(x); }
+inline int bitpopcnt(unsigned int x) { return __builtin_popcount(x); }
+inline int bitpopcnt(long x) { return __builtin_popcountl(x); }
+inline int bitpopcnt(unsigned long x) { return __builtin_popcountl(x); }
+inline int bitpopcnt(long long x) { return __builtin_popcountll(x); }
+inline int bitpopcnt(unsigned long long x) { return __builtin_popcountll(x); }
+
 inline uint64_t clockNano() {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -90,6 +104,7 @@ void ncclMemoryStackConstruct(struct ncclMemoryStack* me);
 void ncclMemoryStackDestruct(struct ncclMemoryStack* me);
 void ncclMemoryStackPush(struct ncclMemoryStack* me);
 void ncclMemoryStackPop(struct ncclMemoryStack* me);
+void* ncclMemoryStackAlloc(struct ncclMemoryStack* me, size_t size, size_t align, bool zeroed=true);
 template<typename T>
 T* ncclMemoryStackAlloc(struct ncclMemoryStack* me, size_t n=1);
 
@@ -215,29 +230,29 @@ inline void ncclMemoryStackConstruct(struct ncclMemoryStack* me) {
   me->topFrame.below = nullptr;
 }
 
-inline void* ncclMemoryStack::allocate(struct ncclMemoryStack* me, size_t size, size_t align) {
+inline void* ncclMemoryStackAlloc(struct ncclMemoryStack* me, size_t size, size_t align, bool zeroed) {
   uintptr_t o = (me->topFrame.bumper + align-1) & -uintptr_t(align);
   void* obj;
   if (__builtin_expect(o + size <= me->topFrame.end, true)) {
     me->topFrame.bumper = o + size;
     obj = reinterpret_cast<void*>(o);
   } else {
-    obj = allocateSpilled(me, size, align);
+    obj = ncclMemoryStack::allocateSpilled(me, size, align);
   }
+  obj = __builtin_assume_aligned(obj, align);
+  if (zeroed) memset(obj, 0, size);
   return obj;
 }
 
 template<typename T>
 inline T* ncclMemoryStackAlloc(struct ncclMemoryStack* me, size_t n) {
-  void *obj = ncclMemoryStack::allocate(me, n*sizeof(T), alignof(T));
-  memset(obj, 0, n*sizeof(T));
-  return (T*)obj;
+  return (T*)ncclMemoryStackAlloc(me, n*sizeof(T), alignof(T));
 }
 
 inline void ncclMemoryStackPush(struct ncclMemoryStack* me) {
   using Frame = ncclMemoryStack::Frame;
   Frame tmp = me->topFrame;
-  Frame* snapshot = (Frame*)ncclMemoryStack::allocate(me, sizeof(Frame), alignof(Frame));
+  Frame* snapshot = (Frame*)ncclMemoryStackAlloc(me, sizeof(Frame), alignof(Frame));
   *snapshot = tmp; // C++ struct assignment
   me->topFrame.unhunks = nullptr;
   me->topFrame.below = snapshot;
@@ -281,8 +296,7 @@ inline T* ncclMemoryPoolAlloc(struct ncclMemoryPool* me, struct ncclMemoryStack*
     cell = me->head;
     me->head = cell->next;
   } else {
-    // Use the internal allocate() since it doesn't memset to 0 yet.
-    cell = (Cell*)ncclMemoryStack::allocate(backing, sizeof(CellSized), alignof(CellSized));
+    cell = (Cell*)ncclMemoryStackAlloc(backing, sizeof(CellSized), alignof(CellSized), /*zeroed=*/false);
   }
   memset(cell, 0, sizeof(T));
   return reinterpret_cast<T*>(cell);

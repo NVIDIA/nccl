@@ -150,7 +150,6 @@ static ncclResult_t shmSendConnect(struct ncclComm* comm, struct ncclConnect* co
   }
   send->conn.tail = &resources->devRemHostMem->tail;
   send->conn.head = &resources->devHostMem->head;
-
   if (useMemcpyRecv) {
     send->conn.sizesFifo = resources->devRemHostMem->sizesFifo;
   }
@@ -288,7 +287,7 @@ static ncclResult_t shmSendProxyProgress(struct ncclProxyState* proxyState, stru
       struct ncclProxySubArgs* sub = args->subs+s;
       struct shmProxyInfo* resources = (struct shmProxyInfo*) (sub->connection->transportResources);
       // Round to next multiple of sliceSteps
-      sub->base = ROUNDUP(resources->step, args->chunkSteps);
+      sub->base = ROUNDUP(resources->step, args->sliceSteps);
       sub->posted = sub->transmitted = sub->done = 0;
     }
     args->state = ncclProxyOpProgress;
@@ -347,7 +346,7 @@ static ncclResult_t shmRecvProxyProgress(struct ncclProxyState* proxyState, stru
       struct ncclProxySubArgs* sub = args->subs+s;
       struct shmProxyInfo* resources = (struct shmProxyInfo*) (sub->connection->transportResources);
       // Round to next multiple of sliceSteps
-      sub->base = ROUNDUP(resources->step, args->chunkSteps);
+      sub->base = ROUNDUP(resources->step, args->sliceSteps);
       sub->posted = sub->transmitted = sub->done = 0;
     }
     args->state = ncclProxyOpProgress;

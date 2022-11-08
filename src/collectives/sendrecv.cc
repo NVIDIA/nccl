@@ -27,11 +27,8 @@ ncclResult_t ncclSend(const void* sendbuff, size_t count, ncclDataType_t datatyp
   struct ncclInfo info = { ncclFuncSend, "Send",
     NULL, (void*)sendbuff, count, datatype, ncclSum, peer, comm, stream, /* Args */
     1, 1 };
-  ncclResult_t ret;
-  NCCLCHECK(ncclGroupStart());
-  ret = ncclEnqueueCheck(&info);
-  NCCLCHECK(ncclGroupEnd());
-  return ret;
+  NCCLCHECK(ncclEnqueueCheck(&info));
+  return ncclSuccess;
 }
 
 NCCL_API(ncclResult_t, ncclRecv, void* recvbuff, size_t count, ncclDataType_t datatype, int peer,
@@ -44,9 +41,6 @@ ncclResult_t ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype, int
   struct ncclInfo info = { ncclFuncRecv, "Recv",
     NULL, recvbuff, count, datatype, ncclSum, peer, comm, stream, /* Args */
     1, 1 };
-  ncclResult_t ret;
-  NCCLCHECK(ncclGroupStart());
-  ret = ncclEnqueueCheck(&info);
-  NCCLCHECK(ncclGroupEnd());
-  return ret;
+  NCCLCHECK(ncclEnqueueCheck(&info));
+  return ncclSuccess;
 }

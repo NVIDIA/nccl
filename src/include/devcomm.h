@@ -11,6 +11,26 @@
 #include "align.h"
 #include <stdint.h>
 
+#ifdef __CUDA_ARCH__
+  #define NCCL_CUDA_ARCH __CUDA_ARCH__
+#else
+  #define NCCL_CUDA_ARCH 0
+#endif
+
+template<typename T>
+__host__ __device__ constexpr T min_constexpr(T a) { return a; }
+template<typename T, typename ...Ts>
+__host__ __device__ constexpr T min_constexpr(T a, T b, Ts ...c) {
+  return min_constexpr<T>((a < b ? a : b), c...);
+}
+
+template<typename T>
+__host__ __device__ constexpr T max_constexpr(T a) { return a; }
+template<typename T, typename ...Ts>
+__host__ __device__ constexpr T max_constexpr(T a, T b, Ts ...c) {
+  return max_constexpr<T>((a > b ? a : b), c...);
+}
+
 #define NCCL_NUM_FUNCTIONS 5 // Send/Recv not included for now
 typedef enum { ncclFuncBroadcast, ncclFuncReduce, ncclFuncAllGather, ncclFuncReduceScatter, ncclFuncAllReduce, ncclFuncSendRecv, ncclFuncSend, ncclFuncRecv, ncclNumFuncs} ncclFunc_t;
 extern const char* ncclFuncStr[NCCL_NUM_FUNCTIONS];
@@ -50,8 +70,10 @@ union ncclLLFifoLine {
 
 #define WARP_SIZE 32
 #define MAXCHANNELS 32
+#define NCCL_MIN_NTHREADS (4*WARP_SIZE)
 #define NCCL_MAX_NTHREADS 640
 #define NCCL_SIMPLE_MAX_NTHREADS 512
+#define NCCL_SIMPLE_FENCE_WARP_NTHREADS (3*WARP_SIZE)
 #define NCCL_LL_MAX_NTHREADS 512
 #define NCCL_LL_LINES_PER_THREAD 8
 #ifdef TEST_LL_CLEANUP
@@ -81,6 +103,10 @@ static_assert(NCCL_LL_CLEAN_MASK % NCCL_STEPS == 0, "Invalid NCCL_LL_CLEAN_MASK 
 #define NCCL_IPC_WRITE    0x08
 #define NCCL_IPC_READ     0x10
 #define NCCL_NVLS_MIN_POLL 0x20
+
+#define NCCL_DIRECT_FIFO_DEPTH 16
+
+#define NCCL_MAX_LOCAL_RANKS 64
 
 struct ncclConnInfo {
   // Regular comm mechanism
@@ -124,7 +150,8 @@ struct ncclRing {
   // since we need to know how the user expects data to be ordered across
   // devices. Ordered from current device.
   int* userRanks;
-
+  // Maps a user rank to an internal ring index.
+  int* rankToIndex;
   int index; // This rank's index in the ring
 };
 
@@ -170,103 +197,104 @@ struct ncclChannelPeer {
 
 struct ncclDevComm;
 
-/* ncclWork is to be a power of two, currently 8x64 bytes, */
-/* to make sure reads to host from the CUDA kernel are aligned. */
-/* Make sure to adjust padding at the end of ncclWorkElem. */
-#define NCCL_WORK_SIZE 512
-
-enum ncclWorkType : uint8_t {
-   ncclWorkTypeUnused=0,
-   ncclWorkTypeColl=1,
-   ncclWorkTypeP2p=2,
-   ncclWorkTypeRegColl=3
+enum ncclDevWorkType : uint8_t {
+  ncclDevWorkTypeColl=0,
+  ncclDevWorkTypeCollReg,
+  ncclDevWorkTypeBcast,
+  ncclDevWorkTypeP2p
 };
-enum ncclWorkP2PType : uint8_t {
-  ncclWorkP2pTypeUnused=0,
-  ncclWorkP2pTypeSend,
-  ncclWorkP2pTypeRecv
+enum ncclDevWorkP2PType : uint8_t {
+  ncclDevWorkP2pTypeRecv=0,
+  ncclDevWorkP2pTypeSend,
+  ncclDevWorkP2pTypeCopy
 };
 
-struct ncclWorkHeader {
+#define NCCL_MAX_P2P_CONNS_PER_WORK_BATCH 16
+#define NCCL_MAX_P2P_FIFO_CONNS_PER_WORK_BATCH 8 // 8 sends + 8 recvs
+struct ncclDevWorkP2p {
+  uint64_t p2pType:2, protocol:2, group:5;
+  uint64_t bytes:48;
   union {
-    int32_t workNext;  // when isLast=0: Offset from kernel argument workHead
-    uint32_t doneAcks; // when isLast=1: Monotonic (mod 1<<32) ack value to send back.
-  };
-  uint16_t funcIndex;
-  uint8_t isLast:1; // last work for this kernel
-  uint8_t inFifo:1; // is this work in the fifo
-  enum ncclWorkType type;
-};
-
-struct ncclWorkElem {
-  union {
-    uint8_t flagBits;
     struct {
-      uint8_t isUsed:1, redOpArgIsPtr:1, regUsed:1;
-    };
+      int32_t peer;
+      int32_t chunkBytes;
+      void *localBuf;
+    } fifo; // send or recv through fifo
+    struct {
+      void *srcBuf, *dstBuf;
+    } copy;
   };
-  uint8_t nWarps;
-  uint8_t direct;
+};
 
-  const void * sendbuff;
-  void * recvbuff;
-
-  size_t count;
-  size_t lastChunkSize;
-  uint32_t root;
-  uint8_t bid;
-  uint8_t nChannels;
+struct ncclDevWorkColl {
+  union { void* srcBuf; void* sendbuff; };
+  union { void* dstBuf; void* recvbuff; };
+  uint64_t count:60, direct:3, redOpArgIsPtr:1;
   uint64_t redOpArg;
+  int32_t root;
+  union { uint32_t /*chunkSize,*/ lastChunkSize; };
+  uint8_t nChannels;
+  union { uint8_t bid, channelId; };
 };
 
-#define NCCL_MAX_WORK_ELEMENTS ((NCCL_WORK_SIZE - alignUp(sizeof(ncclWorkHeader), alignof(ncclWorkElem)))/sizeof(ncclWorkElem))
-static_assert(NCCL_MAX_WORK_ELEMENTS == 9, "Sanity check: NCCL_MAX_WORK_ELEMENTS == 9");
-
-struct ncclWorkElemP2p {
-  int peer : 30;
-  int proto : 2;
-
-  enum ncclWorkP2PType p2pType;
-  uint8_t nWarps;
-  uint8_t warpStart;
-  uint8_t ngroups;
-  // Important not to use any fields with greater than 4-byte alignment since
-  // we need sizeof(ncclWorkElemP2p)==28, but that would be padded up to 32 if
-  // there were 8-byte fields.
-  //void* buff;
-  uint32_t buffHi32, buffLo32; // buff = buffHi32<<32 | buffLo32;
-  //size_t count;
-  uint32_t countHi32, countLo32; // count = countHi32<<32 | countLo32;
-  int chunkSize;
-};
-
-static_assert(((NCCL_WORK_SIZE - alignUp(sizeof(ncclWorkHeader), alignof(ncclWorkElemP2p)))/sizeof(ncclWorkElemP2p)) >= 16, "Sanity check: NCCL_MAX_WORK_ELEMENTS_P2P == 16");
-#define NCCL_MAX_WORK_ELEMENTS_P2P 16
-
-struct ncclWorkElemReg {
-  struct ncclWorkElem elem;
+struct ncclDevWorkCollReg {
+  struct ncclDevWorkColl coll;
   void* dnInputs[NCCL_MAX_DIRECT_ARITY+1];
   void* dnOutputs[NCCL_MAX_DIRECT_ARITY+1];
   void* upOutputs[NCCL_MAX_DIRECT_ARITY+1];
 };
 
-#define NCCL_MAX_WORK_ELEMENTS_REG ((NCCL_WORK_SIZE - alignUp(sizeof(ncclWorkHeader), alignof(ncclWorkElemReg)))/sizeof(ncclWorkElemReg))
-static_assert(NCCL_MAX_WORK_ELEMENTS_REG == 2, "Sanity check: NCCL_MAX_WORK_ELEMENTS_REG == 2");
+struct ncclDevWorkBcast {
+  void *dstBuf;
+  uint64_t bytes:44;
+  uint64_t ringDepth:20; // How many hops (upstream) from local rank to this root.
+};
 
 // Number of named barriers supported by CUDA
 #define NCCL_MAX_GROUPS 16
 
-struct ncclWork {
-  struct ncclWorkHeader header;
+__host__ __device__ constexpr int ncclMaxDevWorkBatchBytes(int cudaArch = NCCL_CUDA_ARCH) {
+  return cudaArch < 700 ? (1<<10) :
+         cudaArch < 800 ? (16<<10) :
+                          (32<<10);
+}
+
+constexpr size_t ncclMaxDevWorkAlign = max_constexpr(alignof(struct ncclDevWorkP2p),
+                                                     alignof(struct ncclDevWorkColl),
+                                                     alignof(struct ncclDevWorkCollReg),
+                                                     alignof(struct ncclDevWorkBcast));
+struct alignas(ncclMaxDevWorkAlign) ncclDevWorkBatchHeader {
+  uint8_t /*ncclDevWorkType*/ type:2;
+  uint16_t funcIndex;
+  uint32_t nextCursor; // Monotonic (mod 1<<32) position of next work in fifo.
+  uint16_t nextBytes; // Size of next work, 0 indicates we are last.
+  uint16_t nWorks;
   union {
-    char pad[NCCL_WORK_SIZE - sizeof(struct ncclWorkHeader)];
-    struct ncclWorkElem elems[NCCL_MAX_WORK_ELEMENTS];
-    struct ncclWorkElemP2p p2pElems[NCCL_MAX_WORK_ELEMENTS_P2P];
-    struct ncclWorkElemReg regElems[NCCL_MAX_WORK_ELEMENTS_REG];
+    struct {
+      uint32_t lastWarpMask; // mask of warps which are the last of their subgroup
+    } p2p;
+    struct {
+      void* rootSrcBuf;
+      uint32_t sliceBytes;
+    } bcast;
   };
+
+  // Compiler won't allow the following union of unsized arrays which is why we
+  // put the alignment constraint on the ncclDevWorkBatchHeader type. To access the trailing
+  // array for a given work type do: (WorkType*)(this+1)
+  // union {
+  //   struct ncclDevWorkColl coll[];
+  //   struct ncclDevWorkCollReg collReg[];
+  //   struct ncclDevWorkBcast bcast[];
+  //   struct ncclDevWorkP2p p2p[];
+  // };
 };
-static_assert(sizeof(struct ncclWork) == NCCL_WORK_SIZE, "Sanity check: sizeof(struct ncclWork) == NCCL_WORK_SIZE");
-static_assert(sizeof(struct ncclWork)%16 == 0, "Sanity check: sizeof(struct ncclWork)%16 == 0");
+
+// Compute how many bytes a dev work batch will occupy in the dev work fifo.
+template<typename Work>
+constexpr int ncclDevWorkBatchFootprint(int nWorks) {
+  return alignUp(sizeof(struct ncclDevWorkBatchHeader) + nWorks*sizeof(Work), 16);
+}
 
 struct ncclDevChannelPeer {
   // Stripped version of ncclChannelPeer where we only keep the ncclConnInfo
@@ -282,49 +310,25 @@ struct alignas(16) ncclDevChannel {
   struct ncclTree collnetChain;
   struct ncclDirect collnetDirect;
   struct ncclNvls nvls;
-  uint32_t* workFifoDone; // Location of done counter, device writes index+1 of last work processed
 };
 
-struct ncclDevComm {
+struct alignas(16) ncclDevComm {
   int rank;
   int nRanks;
+  int localRank;
+  int nLocalRanks;
   int buffSizes[NCCL_NUM_PROTOCOLS];
-
-  // Operation list for aggregation
-  int workFifoDepth;
-  struct ncclWork* workFifoHeap; // may be cudaHost or GDR memory
 
   // Flag to ask NCCL kernels to abort
   volatile uint32_t* abortFlag;
-
-  // Channels, device side
-  struct ncclDevChannel* channels/*[MAXCHANNELS]*/;
+  // Host-polled per-channel counter monitoring fifo consumption.
+  uint32_t* devWorkFifoConsumed/*[MAXCHANNELS]*/;
 };
 
-struct alignas(16) ncclDevCommAndChannels {
+struct ncclDevCommAndChannels {
   struct ncclDevComm comm;
   struct ncclDevChannel channels[MAXCHANNELS];
 };
-
-#ifdef __CUDA_ARCH__
-  #define NCCL_CUDA_ARCH __CUDA_ARCH__
-#else
-  #define NCCL_CUDA_ARCH 0
-#endif
-
-template<typename T>
-__host__ __device__ constexpr T min_constexpr(T a) { return a; }
-template<typename T, typename ...Ts>
-__host__ __device__ constexpr T min_constexpr(T a, T b, Ts ...c) {
-  return min_constexpr<T>((a < b ? a : b), c...);
-}
-
-template<typename T>
-__host__ __device__ constexpr T max_constexpr(T a) { return a; }
-template<typename T, typename ...Ts>
-__host__ __device__ constexpr T max_constexpr(T a, T b, Ts ...c) {
-  return max_constexpr<T>((a > b ? a : b), c...);
-}
 
 // Calculate the unroll factor given:
 // * bytePerPack: number of bytes accessed per instruction
@@ -366,5 +370,14 @@ __host__ __device__ constexpr int ncclShmemScratchWarpSize(int cudaArch = NCCL_C
 __host__ __device__ constexpr int ncclShmemDynamicSize(int cudaArch = NCCL_CUDA_ARCH) {
   return cudaArch < 700 ? 0 : ncclShmemScratchWarpSize(cudaArch)*(NCCL_MAX_NTHREADS/WARP_SIZE);
 }
+
+struct ncclKernelArgs {
+  struct ncclDevCommAndChannels* comm;
+  void* devWorkBuf;
+  uint32_t devWorkCursor;
+  uint16_t devWorkFifoSizeLog2;
+  bool inWorkFifo;
+  uint16_t firstDevWorkBytes[MAXCHANNELS];
+};
 
 #endif

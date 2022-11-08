@@ -5,9 +5,9 @@
  ************************************************************************/
 
 template<typename T, typename RedOp, typename Fan, int Direct,
-         int SlicePerChunk, int StepPerSlice, int Unroll, int P2p, int MultimemSrcs, int MultimemDsts>
+         int SlicePerChunk, int StepPerSlice, int Unroll, int P2p, int MultimemSrcs, int MultimemDsts, bool MinimizeNumSlices>
 class Primitives<
-    T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice, Unroll, MultimemSrcs, MultimemDsts>, P2p
+    T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice, Unroll, MultimemSrcs, MultimemDsts, MinimizeNumSlices>, P2p
   > {
   static constexpr int MaxRecv = Fan::MaxRecv, MaxSend = Fan::MaxSend;
   static constexpr int Input=0, Output=1;
@@ -32,6 +32,7 @@ class Primitives<
   int index; // Peer index I'm responsible for
   int flags;
   int group;
+  uint32_t scratch;
   uint64_t step;
   int *connOffsFifoPtr;   // (flags & OffsFifoEnabled)
   union {
@@ -57,7 +58,7 @@ class Primitives<
   __device__ void subBarrier() {
     if (nworkers == WARP_SIZE) __syncwarp();
     else {
-      int bar = (nworkers==nthreads ? 15 : 8) - group;
+      int bar = 15-(group+(nworkers==nthreads ? 0 : 1));
       asm volatile("bar.sync %0, %1;" :: "r"(bar), "r"(nworkers) : "memory");
     }
   }
@@ -81,7 +82,7 @@ class Primitives<
     if (nworkers == WARP_SIZE) {
       return __any_sync(~0u, vote);
     } else {
-      int ans, bar = (nworkers==nthreads ? 15 : 8) - group;
+      int ans, bar = 15-(group+(nworkers==nthreads ? 0 : 1));
       asm volatile(
         "{ .reg .pred p;"
         "  setp.ne.s32 p, %1, 0;"
@@ -108,7 +109,7 @@ class Primitives<
     #if __CUDA_ARCH__ >= 900 && CUDART_VERSION >= 12010
     if (flags & NvlsMinPolling) {
       uint64_t ans;
-      asm("multimem.ld_reduce.acquire.sys.global.min.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
+      asm("multimem.ld_reduce.acquire.sys.global.min.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)) : "memory");
       return ans;
     }
     #endif
@@ -168,7 +169,9 @@ class Primitives<
   inline __device__ void postPeer(bool dataStored) {
     if (flags & (Recv*RolePostRecv | Send*RolePostSend)) {
       step += StepPerSlice;
-      if (Send && (flags & RolePostSend) && dataStored) fence_acq_rel_sys();
+      if (Send && (flags & RolePostSend) && ((flags & SizesFifoEnabled) || dataStored)) {
+        fence_acq_rel_sys();
+      }
       st_relaxed_sys_global(connStepPtr, step);
     }
   }
@@ -182,44 +185,20 @@ class Primitives<
     constexpr int Src = SrcBuf != -1;
     constexpr int Dst = DstBuf != -1;
 
-    nelem = nelem < 0 ? 0 : nelem;
+    nelem = max(0, nelem);
     int sliceSize = stepSize*StepPerSlice;
-    sliceSize = max(divUp(nelem, 16*SlicePerChunk)*16, sliceSize/32);
+    if (!MinimizeNumSlices) sliceSize = max(divUp(nelem, 16*SlicePerChunk)*16, sliceSize/32);
     int slice = 0;
     int offset = 0;
-
-    if (tid < nworkers && offset < nelem) {
-      // Worker-only loop for non-empty slices. Non-workers and empty slices are
-      // processed in the loop following this if block. The benefit of splitting
-      // the loop like this is we pull two branches out of the critical path.
-      // Using "number of branch insns (taken or not) encountered dynamically"
-      // as the performance metric, then:
-      //   perf_orig = 2*numslices
-      //   perf_new = 2+numslices
-      // So the new code and old code behave the same for numslices=2, and for
-      // numslices>2 the new code is superior. And note that in the case
-      // numslices=1, the loop is trivially unrollable (single iteration) so we
-      // don't incur that that tail branch and we still have perf_new=2.
-      //
-      // ORIGINAL CODE:
-      //   unrolled for(slices) {
-      //     if(worker) { // This branch removed
-      //       wait();
-      //       subBarrier();
-      //       if(slice not empty) // This branch removed
-      //         ReduceCopyMulti();
-      //     }
-      //     barrier();
-      //     post();
-      //   } // Since we no longer unroll, new branch added here
-      #if __CUDA_ARCH__ < 700
-        // Above doesn't matter on older hardware.
-        #pragma unroll SlicePerChunk
-      #else
-        #pragma unroll 1
-      #endif
-      do {
-        sliceSize = sliceSize < nelem-offset ? sliceSize : nelem-offset;
+    #if __CUDA_ARCH__ < 700
+      #pragma unroll SlicePerChunk
+    #else
+      #pragma unroll 1
+    #endif
+    while ((slice < SlicePerChunk) &&
+           (MinimizeNumSlices ? (offset < nelem) : true)) {
+      sliceSize = min(sliceSize, nelem-offset);
+      if (tid < nworkers) {
         if (Src && (flags & (SrcBuf==Input ? RoleInput : RoleOutput)))
           ncclShmem.groups[group].srcs[0] = userBuff + srcIx + offset;
         if (Dst && (flags & (DstBuf==Input ? RoleInput : RoleOutput)))
@@ -245,6 +224,13 @@ class Primitives<
              Recv, ncclShmem.groups[group].srcs,
              Dst, ncclShmem.groups[group].dsts,
              workSize);
+        } else if (Recv*MaxRecv+Src == 1 && Send*MaxSend+Dst == 1 &&
+                   Apply_PreOp<RedOp, 1>::IsIdentity &&
+                   Apply_PostOp<RedOp, 1>::IsIdentity) {
+          copyGlobalGlobal<!Dst, !Src>(nworkers/WARP_SIZE, tid/WARP_SIZE, tid%WARP_SIZE,
+            cvta_to_global(ncclShmem.groups[group].dsts[0]),
+            cvta_to_global(ncclShmem.groups[group].srcs[0]),
+            workSize*(int)sizeof(T), scratch);
         } else {
           constexpr int PreOpSrcs = SrcBuf != Input ? 0 :
                                     DirectRecv*MaxRecv == NCCL_MAX_DIRECT_ARITY ? (1+NCCL_MAX_DIRECT_ARITY) : 1;
@@ -256,25 +242,8 @@ class Primitives<
              Send*fan.nsend()+Dst, ncclShmem.groups[group].dsts,
              workSize);
         }
-        barrier(); // This barrier has a counterpart in following loop
-        postPeer<Recv, Send>(0 < sliceSize);
-        offset += sliceSize;
-        slice += 1;
-      } while (slice < SlicePerChunk && offset < nelem);
-    }
-
-    // Non-workers come straight here. Workers too but only once the remaining
-    // slices are all empty. Since empty slices are the uncommon case, and
-    // worker perf is the limiter, perf-wise this loop is effectively unentered,
-    // hence just a single branch insn.
-    #pragma unroll 1
-    while (slice < SlicePerChunk) {
-      sliceSize = sliceSize < nelem-offset ? sliceSize : nelem-offset;
-      { // Only workers could have Wait roles so we know the slice must be empty
-        // since we've exited the loop above.
-        waitPeer<DirectRecv, DirectSend, Recv, Send, Src, Dst>(0, 0, 0, 0);
       }
-      barrier(); // Has couterpart in preceding worker-only loop.
+      barrier();
       postPeer<Recv, Send>(0 < sliceSize);
       offset += sliceSize;
       slice += 1;
@@ -349,11 +318,11 @@ class Primitives<
     }
   }
 
-  __device__ __forceinline__ void loadRecvConn(ncclDevChannelPeer *peer, int connIndex, struct ncclWorkElem* e) {
+  __device__ __forceinline__ void loadRecvConn(ncclDevChannelPeer *peer, int connIndex, struct ncclDevWorkColl* e) {
     if (flags & (RoleWaitRecv|RolePostRecv)) {
       auto *conn = &peer->recv[connIndex];
       step = conn->step;
-      step = roundUp(step, SlicePerChunk*StepPerSlice);
+      step = roundUp(step, StepPerSlice);
       if (flags & RolePostRecv) {
         connStepPtr = conn->head;
         *connStepPtr = step; // Return credits in case we rounded up.
@@ -366,7 +335,7 @@ class Primitives<
         flags |= (conn->offsFifo != nullptr) ? OffsFifoEnabled : 0;
         if (Direct) {
           // User buffers have been registered
-          if ((conn->flags & (NCCL_IPC_READ|NCCL_IPC_WRITE)) && e != nullptr && e->regUsed) {
+          if ((conn->flags & (NCCL_IPC_READ|NCCL_IPC_WRITE)) && e != nullptr && ncclShmem.workBatch.type == ncclDevWorkTypeCollReg) {
             if (connIndex == 1 && P2p == 0) {
               flags |= DirectRead;  // scatter-reduce use direct pull
             } else {
@@ -390,11 +359,11 @@ class Primitives<
     }
   }
 
-  __device__ __forceinline__ void loadSendConn(ncclDevChannelPeer *peer, int connIndex, struct ncclWorkElem* e) {
+  __device__ __forceinline__ void loadSendConn(ncclDevChannelPeer *peer, int connIndex, struct ncclDevWorkColl* e) {
     if (flags & (RoleWaitSend|RolePostSend)) {
       auto *conn = &peer->send[connIndex];
       step = conn->step;
-      step = roundUp(step, SlicePerChunk*StepPerSlice);
+      step = roundUp(step, StepPerSlice);
       if (flags & RolePostSend) {
         connStepPtr = conn->tail;
       }
@@ -413,7 +382,7 @@ class Primitives<
           connSizesFifoPtr = conn->sizesFifo;
         } else if (Direct) {
           // User buffers have been registered
-          if ((conn->flags & (NCCL_IPC_READ|NCCL_IPC_WRITE)) && e != nullptr && e->regUsed) {
+          if ((conn->flags & (NCCL_IPC_READ|NCCL_IPC_WRITE)) && e != nullptr && ncclShmem.workBatch.type == ncclDevWorkTypeCollReg) {
             if (connIndex == 1 && P2p == 0) {
               flags |= DirectRead;  // scatter-reduce use direct pull
             } else {
@@ -438,13 +407,14 @@ class Primitives<
   __device__ Primitives(
       int tid, int nthreads, int const *recvPeers, int const *sendPeers,
       void const *inputBuf, void *outputBuf, uint64_t redOpArg, uint8_t group=0,
-      uint8_t connIndexRecv = 0, uint8_t connIndexSend = 0, struct ncclWorkElem* e = nullptr
+      uint8_t connIndexRecv = 0, uint8_t connIndexSend = 0, struct ncclDevWorkColl* e = nullptr
     ):
     tid(tid), nthreads(nthreads), tidInBlock(threadIdx.x), group(group),
     stepSize(ncclShmem.comm.buffSizes[NCCL_PROTO_SIMPLE]/NCCL_STEPS/sizeof(T)) {
 
     // For send operations, we need an extra warp to overlap the threadfence and the copy
-    this->nworkers = nthreads - (MaxSend > 0 && nthreads-WARP_SIZE >= 64 ? WARP_SIZE : 0);
+    this->nworkers = nthreads - (MaxSend > 0 && nthreads >= NCCL_SIMPLE_FENCE_WARP_NTHREADS ? WARP_SIZE : 0);
+    this->scratch = cvta_to_shared(ncclScratchForWarp(threadIdx.x/WARP_SIZE));
 
     int nrecv=0, nsend=0;
     while (nrecv < MaxRecv && recvPeers[nrecv] != -1) nrecv++;
@@ -477,7 +447,9 @@ class Primitives<
     loadRecvConn(ncclShmem.channel.peers[peer], connIndexRecv, e);
     loadSendConn(ncclShmem.channel.peers[peer], connIndexSend, e);
 
-    setDataPtrs(inputBuf, outputBuf, redOpArg, (struct ncclWorkElemReg*)e);
+    if (inputBuf || outputBuf || e) {
+      setDataPtrs(inputBuf, outputBuf, redOpArg, (struct ncclDevWorkCollReg*)e);
+    }
   }
 
   __device__ ~Primitives() {
@@ -489,22 +461,24 @@ class Primitives<
       auto *conns = (flags & RolePostSend) ? ncclShmem.groups[group].sendConns : ncclShmem.groups[group].recvConns;
       conns[index]->step = step;
     }
+
     // Make sure all threads are done writing back conn->step and done using
     // ncclShmem.groups[group]
     barrier();
   }
 
-  __device__ void setDataPtrs(void const *inputBuf, void *outputBuf, uint64_t redOpArg, struct ncclWorkElemReg* e) {
+  __device__ void setDataPtrs(void const *inputBuf, void *outputBuf, uint64_t redOpArg=0, struct ncclDevWorkCollReg* e=nullptr) {
     if (flags & RoleInput) {
       userBuff = (T*)inputBuf;
       ncclShmem.redOpArgs[0] = redOpArg;  // scaler for local input
     }
     if (flags & RoleOutput) userBuff = (T*)outputBuf;
+
     bool recvProvider = flags == (flags|RoleWaitRecv|DirectWrite);
     bool sendAcceptor = flags == (flags|RoleWaitSend|DirectWrite);
     bool sendProvider = flags == (flags|RoleWaitSend|DirectRead); // sender provides direct buffer (to be fetched)
     bool recvAcceptor = flags == (flags|RoleWaitRecv|DirectRead); // receiver accepts direct buffer
-    int regUsed = e != nullptr ? e->elem.regUsed : 0;
+    int regUsed = ncclShmem.workBatch.type == ncclDevWorkTypeCollReg;
 
     if (Direct && recvProvider) {
       int spins = 0;

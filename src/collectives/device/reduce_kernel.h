@@ -65,6 +65,12 @@ struct Apply_LoadMultimem/*{
   static BytePack<BytePerPack> load(Fn fn, uintptr_t addr);
 }*/;
 
+template<typename Fn>
+struct RedOpArg {
+  static constexpr bool ArgUsed = false;
+  __device__ static uint64_t loadArg(void *ptr) { return 0; }
+};
+
 ////////////////////////////////////////////////////////////////////////////////
 // Public API for calling the trait classes. These take the data elements as a
 // pack of any type, which could be a BytePack<?> or any integral type (uint64_t,
@@ -163,9 +169,9 @@ struct Apply_Reduce<FuncSum<uint8_t>, /*EltPerPack=*/4> {
   __device__ static BytePack<4> reduce(FuncSum<uint8_t> fn, BytePack<4> a, BytePack<4> b) {
     constexpr uint32_t lo = 0x00ff00ff;
     constexpr uint32_t hi = ~lo;
-    uint32_t x = a.u32;
-    uint32_t y = b.u32;
-    a.u32 = (((x&lo) + (y&lo))&lo) + (((x&hi) + (y&hi))&hi);
+    uint32_t x = a.native;
+    uint32_t y = b.native;
+    a.native = (((x&lo) + (y&lo))&lo) + (((x&hi) + (y&hi))&hi);
     return a;
   }
 };
@@ -181,7 +187,7 @@ struct Apply_Reduce<FuncSum<int8_t>, /*EltPerPack=*/4> {
   struct Apply_Reduce<FuncMin<uint8_t>, /*EltPerPack=*/4> {
     __device__ static BytePack<4> reduce(FuncMin<uint8_t> fn, BytePack<4> a, BytePack<4> b) {
       uint32_t z=0;
-      asm("vmin4.u32.u32.u32 %0, %1, %2, %3;" : "=r"(a.u32) : "r"(a.u32), "r"(b.u32), "r"(z));
+      asm("vmin4.u32.u32.u32 %0, %1, %2, %3;" : "=r"(a.native) : "r"(a.native), "r"(b.native), "r"(z));
       return a;
     }
   };
@@ -189,7 +195,7 @@ struct Apply_Reduce<FuncSum<int8_t>, /*EltPerPack=*/4> {
   struct Apply_Reduce<FuncMin<int8_t>, /*EltPerPack=*/4> {
     __device__ static BytePack<4> reduce(FuncMin<int8_t> fn, BytePack<4> a, BytePack<4> b) {
       int32_t z=0;
-      asm("vmin4.s32.s32.s32 %0, %1, %2, %3;" : "=r"(a.u32) : "r"(a.u32), "r"(b.u32), "r"(z));
+      asm("vmin4.s32.s32.s32 %0, %1, %2, %3;" : "=r"(a.native) : "r"(a.native), "r"(b.native), "r"(z));
       return a;
     }
   };
@@ -197,7 +203,7 @@ struct Apply_Reduce<FuncSum<int8_t>, /*EltPerPack=*/4> {
   struct Apply_Reduce<FuncMax<uint8_t>, /*EltPerPack=*/4> {
     __device__ static BytePack<4> reduce(FuncMax<uint8_t> fn, BytePack<4> a, BytePack<4> b) {
       uint32_t z=0;
-      asm("vmax4.u32.u32.u32 %0, %1, %2, %3;" : "=r"(a.u32) : "r"(a.u32), "r"(b.u32), "r"(z));
+      asm("vmax4.u32.u32.u32 %0, %1, %2, %3;" : "=r"(a.native) : "r"(a.native), "r"(b.native), "r"(z));
       return a;
     }
   };
@@ -205,7 +211,7 @@ struct Apply_Reduce<FuncSum<int8_t>, /*EltPerPack=*/4> {
   struct Apply_Reduce<FuncMax<int8_t>, /*EltPerPack=*/4> {
     __device__ static BytePack<4> reduce(FuncMax<int8_t> fn, BytePack<4> a, BytePack<4> b) {
       int32_t z=0;
-      asm("vmax4.s32.s32.s32 %0, %1, %2, %3;" : "=r"(a.u32) : "r"(a.u32), "r"(b.u32), "r"(z));
+      asm("vmax4.s32.s32.s32 %0, %1, %2, %3;" : "=r"(a.native) : "r"(a.native), "r"(b.native), "r"(z));
       return a;
     }
   };
@@ -349,6 +355,17 @@ struct Apply_PostOp<Fn, /*EltPerPack=*/0> {
 ////////////////////////////////////////////////////////////////////////////////
 // FuncPreMulSum
 
+template<typename T>
+struct RedOpArg<FuncPreMulSum<T>> {
+  static constexpr bool ArgUsed = true;
+  __device__ static uint64_t loadArg(void *ptr) {
+    union { uint64_t u64; T val; };
+    u64 = 0;
+    val = *(T*)ptr;
+    return u64;
+  }
+};
+
 // General definition for all integral types, float, and double.
 template<typename T>
 struct FuncPreMulSum {
@@ -480,6 +497,14 @@ struct Apply_PreOp<FuncPreMulSum<half>, /*EltPerPack=*/1> {
 // FuncSumPostDiv
 
 template<typename T>
+struct RedOpArg<FuncSumPostDiv<T>> {
+  static constexpr bool ArgUsed = true;
+  __device__ static uint64_t loadArg(void *ptr) {
+    return *(uint64_t*)ptr;
+  }
+};
+
+template<typename T>
 struct IsFloatingPoint: std::false_type {};
 template<>
 struct IsFloatingPoint<half>: std::true_type {};
@@ -551,7 +576,8 @@ struct Apply_PostOp<FuncSumPostDiv<T>, /*EltPerPack=*/1> {
       BytePack<PackSize> ans; \
       asm("multimem.ld_reduce.relaxed.sys.global." #op "." #ptx_ty " %0, [%1];" \
         : "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field) \
-        : "l"(addr)); \
+        : "l"(addr) \
+        : "memory"); \
       return ans; \
     } \
   };
@@ -566,7 +592,8 @@ struct Apply_PostOp<FuncSumPostDiv<T>, /*EltPerPack=*/1> {
           "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field[1]), \
           "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field[2]), \
           "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field[3]) \
-        : "l"(addr)); \
+        : "l"(addr) \
+        : "memory"); \
       return ans; \
     } \
   };
@@ -578,7 +605,8 @@ struct Apply_PostOp<FuncSumPostDiv<T>, /*EltPerPack=*/1> {
       BytePack<2*sizeof(T)> tmp; \
       asm("multimem.ld_reduce.relaxed.sys.global." #op "." #ptx_ty " %0, [%1];" \
         : "=" PTX_REG_BytePack_field_##pack_field(tmp.pack_field) \
-        : "l"(addr & -uintptr_t(sizeof(T)))); \
+        : "l"(addr & -uintptr_t(sizeof(T))) \
+        : "memory"); \
       return tmp.half[(addr/sizeof(T))%2]; \
     } \
   };

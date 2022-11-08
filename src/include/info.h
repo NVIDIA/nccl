@@ -15,6 +15,7 @@
 #include "strongstream.h"
 
 typedef enum : uint8_t {
+  ncclPatternNone = 0,
   ncclPatternRing,
   ncclPatternRingTwice,
   ncclPatternPipelineFrom,
@@ -81,9 +82,15 @@ struct ncclTaskColl {
   ncclDevRedOpFull op;
   int chunkSteps, sliceSteps;
 };
+struct ncclTaskBcast {
+  struct ncclTaskBcast* next;
+  void* dstBuf;
+  void* srcBuf;
+  size_t bytes;
+};
 struct ncclTaskP2p {
-  ncclTaskP2p *next;
-  void *buff;
+  struct ncclTaskP2p *next;
+  void *localBuf;
   size_t bytes;
   // Stateful chunk index. If a p2p gets "cut" over two plans this keeps track
   // of where it left off.
@@ -99,13 +106,17 @@ struct ncclTasks {
     bool sendSeen, recvSeen;
     struct ncclIntruQueue<struct ncclTaskP2p, &ncclTaskP2p::next> sendQueue;
     struct ncclIntruQueue<struct ncclTaskP2p, &ncclTaskP2p::next> recvQueue;
+    // bcast's rooted at this peer
+    struct ncclIntruQueue<struct ncclTaskBcast, &ncclTaskBcast::next> bcastQueue;
   };
   struct ncclIntruQueue<ncclTaskColl, &ncclTaskColl::next> collQueue;
-  size_t collBytesTotal;
+  size_t collLoadBytes; // Total load of all collective tasks
   struct Peer* peers/*[nRanks]*/;
-  int *p2pSendOrder, *p2pRecvOrder;
+  int *p2pSendOrder/*[nRanks]*/, *p2pRecvOrder/*[nRanks]*/;
   int p2pOrderSteps;
-  int nTasksColl, nTasksP2p;
+  uint64_t p2pIntraPeerMask; // set of local ranks with which we p2p
+  int nTasksColl, nTasksP2p, nTasksBcast;
+  int minBcastPeer, maxBcastPeer;
 
   // The list of user streams aggregated over all tasks present.
   struct ncclCudaStreamList* streams;

@@ -14,6 +14,27 @@
 
 #include <cstring> // std::memcpy
 #include <cinttypes> // PRIx64
+#include <float.h>
+
+////////////////////////////////////////////////////////////////////////////////
+
+static ncclResult_t startDevWorkBatch(
+  struct ncclComm* comm, int* devWorkBudget, int channelId,
+  ncclDevWorkType type, int funcIndex
+);
+template<typename DevWork>
+static ncclResult_t enqueueDevWorkToBatch(
+  struct ncclComm* comm, int* devWorkBudget, int channelId, DevWork const* work
+);
+static ncclResult_t finishDevWorkBatch(struct ncclComm* comm, int channelId);
+
+static ncclResult_t addProxyWorkIfNeeded(struct ncclComm* comm, int channelId, struct ncclProxyWork* proxyWork);
+static uint64_t leastLoadedChannels(struct ncclComm* comm, int nCandidates, int nChoose);
+
+static ncclResult_t computeCollDevWork(struct ncclInfo* info, /*out*/int* workFuncIndex, /*out*/struct ncclDevWorkColl* work);
+static ncclResult_t computeCollProxyWork(struct ncclInfo* info, int channelId, /*out*/struct ncclProxyWork* proxyWork);
+
+////////////////////////////////////////////////////////////////////////////////
 
 static void* const ncclKernelGeneric = (void*)NCCL_KERN_NAME(SendRecv, RING, SIMPLE, Sum, int8_t);
 
@@ -90,8 +111,6 @@ static const ncclKernelMatch ncclKerns[1+ncclNumTypes+NCCL_NUM_FUNCTIONS*ncclNum
   NCCL_FUNCS2(AllReduce, /*reduction=*/1)
 };
 
-static ncclResult_t computeColl(struct ncclInfo* info /* input */, int* workFuncIndex, struct ncclWorkElem* work, struct ncclProxyOp* proxyOp /* output */);
-
 NCCL_PARAM(L1SharedMemoryCarveout, "L1_SHARED_MEMORY_CARVEOUT", 0);
 
 // Returns maximum kernel stack size of all CUDA kernels
@@ -138,288 +157,454 @@ ncclResult_t ncclInitKernelsForDevice(int cudaArch, size_t* maxStackSize) {
 /*       Launch system : synchronization and CUDA kernel launch              */
 /*****************************************************************************/
 
-static void appendWorkElemColl(
-    struct ncclComm* comm, struct ncclKernelPlan* plan, int channelId,
-    int funcIndex, struct ncclWorkElem const *elem, int bid
+// Start a new empty batch. Finishes any pre-existing work-in-progress batch.
+static ncclResult_t startDevWorkBatch(
+    struct ncclComm* comm, int* devWorkBudget, int channelId, ncclDevWorkType type, int funcIndex
   ) {
-  struct ncclKernelPlan::Channel* chan = &plan->channels[channelId];
-  struct ncclWorkList* q = ncclIntruQueueTail(&chan->workQueue);
-  if (q && funcIndex == q->work.header.funcIndex
-        && elem->nWarps == q->work.elems[0].nWarps
-        && chan->nWorkElem < NCCL_MAX_WORK_ELEMENTS) {
-    int e = chan->nWorkElem++;
-    q->work.elems[e] = *elem; // C++ struct assignment
-    q->work.elems[e].bid = bid;
-    q->work.elems[e].isUsed = 1;
-    return;
-  }
-  q = ncclMemoryStackAlloc<struct ncclWorkList>(&comm->memScoped);
-  q->work.header.type = ncclWorkTypeColl;
-  q->work.header.funcIndex = funcIndex;
-  q->work.elems[0] = *elem; // C++ struct assignment
-  q->work.elems[0].bid = bid;
-  q->work.elems[0].isUsed = 1;
-  chan->nWorkElem = 1;
-  chan->nWork += 1;
-  ncclIntruQueueEnqueue(&chan->workQueue, q);
-}
-
-static void appendWorkElemColl(
-    struct ncclComm* comm, struct ncclKernelPlan* plan, int channelId,
-    int funcIndex, struct ncclWorkElemReg const *elem, int bid
-  ) {
-  struct ncclKernelPlan::Channel* chan = &plan->channels[channelId];
-  struct ncclWorkList* q = ncclIntruQueueTail(&chan->workQueue);
-  if (q && funcIndex == q->work.header.funcIndex
-        && elem->elem.nWarps == q->work.regElems[0].elem.nWarps
-        && chan->nWorkElem < NCCL_MAX_WORK_ELEMENTS_REG) {
-    int e = chan->nWorkElem++;
-    q->work.regElems[e] = *elem; // C++ struct assignment
-    q->work.regElems[e].elem.bid = bid;
-    q->work.regElems[e].elem.isUsed = 1;
-    return;
-  }
-  q = ncclMemoryStackAlloc<struct ncclWorkList>(&comm->memScoped);
-  q->work.header.type = ncclWorkTypeRegColl;
-  q->work.header.funcIndex = funcIndex;
-  q->work.regElems[0] = *elem; // C++ struct assignment
-  q->work.regElems[0].elem.bid = bid;
-  q->work.regElems[0].elem.isUsed = 1;
-  chan->nWorkElem = 1;
-  chan->nWork += 1;
-  ncclIntruQueueEnqueue(&chan->workQueue, q);
-}
-
-static void finishWorkP2p(struct ncclWork* work) {
-  int nElem = 0;
-  for (int e=0; e < NCCL_MAX_WORK_ELEMENTS_P2P; e++) {
-    if (work->p2pElems[e].p2pType != ncclWorkP2pTypeUnused)
-      nElem = e+1;
-  }
-  int nGroup = 1;
-  while (nGroup < nElem) nGroup *= 2;
-  int nWarp = 1;
-  while (nWarp*nGroup <= (NCCL_MAX_NTHREADS/WARP_SIZE)/2) nWarp *= 2;
-  for (int i=0; i < nGroup; i++) {
-    work->p2pElems[i].ngroups = nGroup;
-    work->p2pElems[i].warpStart = i*(NCCL_MAX_NTHREADS/WARP_SIZE)/nGroup;
-    int extraWarp = nWarp >= 2 ? i%2 : 0;
-    work->p2pElems[i].nWarps = nWarp + extraWarp;
-  }
-}
-
-static void finishWork(struct ncclWork* work) {
-  if (work->header.type == ncclWorkTypeP2p) {
-    finishWorkP2p(work);
-  }
-}
-
-static void appendWorkElemP2p(
-    struct ncclComm* comm, struct ncclKernelPlan* plan, int channelId,
-    struct ncclWorkElemP2p const *elem, bool fuseOk
-  ) {
-  constexpr int funcIndex = FUNC_INDEX_P2P;
-  struct ncclKernelPlan::Channel* chan = &plan->channels[channelId];
-  struct ncclWorkList* q = ncclIntruQueueTail(&chan->workQueue);
-  if (q && funcIndex == q->work.header.funcIndex) {
-    if (!fuseOk) goto NewWork;
-    if (chan->p2pTailElem[elem->p2pType-1] < NCCL_MAX_WORK_ELEMENTS_P2P) {
-      for (int e = -2 + chan->p2pTailElem[elem->p2pType-1]; e >= 0; e -= 2) {
-        // Can't have multiple elements of the same ncclWork communicate with the
-        // same peer otherwise they would attempt to use that connection concurrently.
-        if (q->work.p2pElems[e].peer == elem->peer)
-          goto NewWork;
-      }
-      int e = chan->p2pTailElem[elem->p2pType-1];
-      q->work.p2pElems[e] = *elem; // C++ struct assignment
-      chan->p2pTailElem[elem->p2pType-1] += 2;
-      return;
+  struct ncclKernelPlanner::Channel* chan = &comm->planner.channels[channelId];
+  *devWorkBudget += chan->devWorkFootprint; // subtract delta of chan->devWorkFootprint, part 1
+  NCCLCHECK(finishDevWorkBatch(comm, channelId));
+  chan->devWorkBatchWip = ncclMemoryStackAlloc<struct ncclKernelPlanWorkBatchList>(&comm->memScoped);
+  struct ncclKernelPlanWorkBatchList* batch = chan->devWorkBatchWip;
+  batch->header.funcIndex = funcIndex;
+  batch->header.type = type;
+  batch->header.nWorks = 0;
+  batch->footprint = alignUp(sizeof(struct ncclDevWorkBatchHeader), 16);
+  ncclIntruQueueConstruct(&batch->workQueue);
+  chan->devWorkFootprint += batch->footprint;
+  if (type == ncclDevWorkTypeP2p) {
+    // Clear p2p connection hashtable.
+    chan->p2p.nConns = 0;
+    for (int ty=0; ty < int(sizeof(chan->p2p.nConnsOfType)/sizeof(chan->p2p.nConnsOfType[0])); ty++) {
+      chan->p2p.nConnsOfType[ty] = 0;
     }
-  NewWork:
-    finishWorkP2p(&q->work);
+    for (int slot=0; slot < int(sizeof(chan->p2p.slotConnId)/sizeof(chan->p2p.slotConnId[0])); slot++) {
+      chan->p2p.slotConnId[slot] = -1;
+    }
   }
-  q = ncclMemoryStackAlloc<struct ncclWorkList>(&comm->memScoped);
-  q->work.header.type = ncclWorkTypeP2p;
-  q->work.header.funcIndex = FUNC_INDEX_P2P;
-  chan->p2pTailElem[ncclWorkP2pTypeRecv-1] = 0;
-  chan->p2pTailElem[ncclWorkP2pTypeSend-1] = 1;
-  q->work.p2pElems[chan->p2pTailElem[elem->p2pType-1]] = *elem; // C++ struct assignment
-  chan->p2pTailElem[elem->p2pType-1] += 2;
-  chan->nWork += 1;
-  ncclIntruQueueEnqueue(&chan->workQueue, q);
+  *devWorkBudget -= chan->devWorkFootprint; // subtract delta of chan->devWorkFootprint, part 2
+  return ncclSuccess;
 }
 
-static ncclResult_t addProxyOpIfNeeded(struct ncclComm* comm, struct ncclKernelPlan* plan, struct ncclProxyOp* op) {
-  bool needed = true;
-  NCCLCHECK(ncclProxySaveOp(comm, op, &needed));
-  if (needed) {
-    struct ncclProxyOp* q = ncclMemoryPoolAlloc<struct ncclProxyOp>(&comm->memPool_ncclProxyOp, &comm->memPermanent);
-    *q = *op; // C++ struct assignment
-    ncclIntruQueueEnqueue(&plan->channels[op->channelId].proxyOpQueue, q);
+// Add a work to the work-in-progress batch. This does no overflow checks and
+// so assumes the batch can accommodate the work.
+template<typename DevWork>
+static ncclResult_t enqueueDevWorkToBatch(
+    struct ncclComm* comm, int* devWorkBudget, int channelId, DevWork const* work
+  ) {
+  struct ncclKernelPlanner::Channel* chan = &comm->planner.channels[channelId];
+  *devWorkBudget += chan->devWorkFootprint; // subtract delta of chan->devWorkFootprint, part 1
+  struct ncclKernelPlanWorkBatchList* batch = chan->devWorkBatchWip;
+  struct ncclKernelPlanWorkList* node = (struct ncclKernelPlanWorkList*)ncclMemoryStackAlloc(
+    &comm->memScoped, sizeof(ncclKernelPlanWorkList)+sizeof(DevWork), alignof(ncclKernelPlanWorkList)
+  );
+  memcpy((DevWork*)(node+1), work, sizeof(DevWork));
+  chan->devWorkFootprint -= batch->footprint; // add delta of batch->footprint, part 1
+  batch->header.nWorks += 1;
+  batch->footprint = ncclDevWorkBatchFootprint<DevWork>(batch->header.nWorks);
+  chan->devWorkFootprint += batch->footprint; // add delta of batch->footprint, part 2
+  ncclIntruQueueEnqueue(&batch->workQueue, node);
+  *devWorkBudget -= chan->devWorkFootprint; // subtract delta of chan->devWorkFootprint, part 2
+  return ncclSuccess;
+}
+
+// If the work-in-progress batch exists, do any required post processing and
+// then add it to devWorkBatchQueue.
+static ncclResult_t finishDevWorkBatch(struct ncclComm* comm, int channelId) {
+  struct ncclKernelPlanner::Channel* chan = &comm->planner.channels[channelId];
+  struct ncclKernelPlanWorkBatchList* batch = chan->devWorkBatchWip;
+  if (batch == nullptr) return ncclSuccess;
+  int nWorks = batch->header.nWorks;
+  if (nWorks == 0) { // Empty batch. Drop it.
+    chan->devWorkFootprint -= batch->footprint;
+    chan->devWorkBatchWip = nullptr;
+    return ncclSuccess;
+  }
+  if (batch->header.type == ncclDevWorkTypeP2p) {
+    struct ncclKernelPlanWorkList* node;
+    // Pass #1: Count fifo vs copy works
+    int nSendWorks=0, nCopyWorks=0;
+    node = ncclIntruQueueHead(&batch->workQueue);
+    for (int w=0; w < nWorks; w++) {
+      struct ncclDevWorkP2p* work = (struct ncclDevWorkP2p*)(node+1);
+      if (work->p2pType == ncclDevWorkP2pTypeSend) nSendWorks++;
+      if (work->p2pType == ncclDevWorkP2pTypeCopy) nCopyWorks++;
+      node = node->next;
+    }
+    int nFifoWorks = nWorks - nCopyWorks;
+
+    // Determine num warps per work
+    constexpr int MaxWarps = NCCL_MAX_NTHREADS/WARP_SIZE;
+    constexpr int CopyWeight=2, FifoWeight=1;
+    int nCopyWarps =        (nCopyWorks*CopyWeight*MaxWarps)
+                   / (nFifoWorks*FifoWeight + nCopyWorks*CopyWeight);
+    if (nCopyWorks != 0 && nCopyWarps == 0) nCopyWarps = 1;
+    if (nFifoWorks != 0 && nCopyWarps == MaxWarps) nCopyWarps -= 1;
+    int nFifoWarps = MaxWarps - nCopyWarps;
+
+    int nWarpPerFifoWork = nFifoWorks==0 ? 0 : nFifoWarps/nFifoWorks;
+    int nWarpModFifoWork = nFifoWorks==0 ? 0 : nFifoWarps%nFifoWorks;
+    int nWarpPerCopyWork = nCopyWorks==0 ? 0 : nCopyWarps/nCopyWorks;
+    int extraWarpPerSend = (nSendWorks <= nWarpModFifoWork) ? 1 : 0;
+
+    // Pass #2: Partition warps over works
+    uint32_t lastWarpMask=0; // 1-bit for each last warp of a group
+    int warp=0, group=0;
+    node = ncclIntruQueueHead(&batch->workQueue);
+    for (int w=0; w < nWorks; w++) {
+      struct ncclDevWorkP2p* work = (struct ncclDevWorkP2p*)(node+1);
+      int nWorkWarps = 0;
+      switch (work->p2pType) {
+      case ncclDevWorkP2pTypeRecv: nWorkWarps = nWarpPerFifoWork; break;
+      case ncclDevWorkP2pTypeSend: nWorkWarps = nWarpPerFifoWork + extraWarpPerSend; break;
+      case ncclDevWorkP2pTypeCopy: nWorkWarps = nWarpPerCopyWork; break;
+      }
+      lastWarpMask |= 1u<<(warp + nWorkWarps-1);
+      work->group = 31; // Initialize as unassigned
+      if (nWorkWarps > 1) { // Needs CUDA barrier id
+        // Give out these group numbers first. Workers not needing a CUDA barrier id
+        // go into higher groups in following pass.
+        switch (work->p2pType) {
+        case ncclDevWorkP2pTypeRecv:
+          work->group = group;
+          group += 1;
+          break;
+        case ncclDevWorkP2pTypeSend:
+          work->group = group;
+          group += (nWorkWarps*WARP_SIZE >= NCCL_SIMPLE_FENCE_WARP_NTHREADS) ? 2 : 1;
+          break;
+        }
+      }
+      warp += nWorkWarps;
+      node = node->next;
+    }
+    batch->header.p2p.lastWarpMask = lastWarpMask;
+
+    // Pass #3: Assign group ids to those that don't use a CUDA barrier id.
+    node = ncclIntruQueueHead(&batch->workQueue);
+    for (int w=0; w < nWorks; w++) {
+      struct ncclDevWorkP2p* work = (struct ncclDevWorkP2p*)(node+1);
+      if (work->group == /*unassigned*/31) {
+        work->group = group;
+        group += 1;
+      }
+      node = node->next;
+    }
+
+    chan->p2p.opCount++;
+  }
+  // Wip is complete, add to queue.
+  ncclIntruQueueEnqueue(&chan->devWorkBatchQueue, batch);
+  chan->devWorkBatchWip = nullptr;
+  return ncclSuccess;
+}
+
+// Add a dev work to work-in-progress batch. Check for overflows and starts a
+// new work-in-progress if necessary. For p2p's this will do all the extra
+// constraint checks to ensure that redundant peers don't exist in the same batch.
+template<ncclDevWorkType type, typename DevWork>
+static ncclResult_t appendDevWork(
+    struct ncclComm* comm, int* devWorkBudget, int channelId,
+    int funcIndex, DevWork const* work, struct ncclProxyWork* proxyWork, bool fuseOk
+  ) {
+  struct ncclKernelPlanner::Channel* chan = &comm->planner.channels[channelId];
+
+  constexpr int p2pSlotCount = 2*NCCL_MAX_P2P_CONNS_PER_WORK_BATCH;
+  uint32_t p2pConnId = -1u;
+  int p2pSlot = -1;
+  struct ncclDevWorkP2p* p2pWork = nullptr;
+  if (type == ncclDevWorkTypeP2p) {
+    p2pWork = (struct ncclDevWorkP2p*)work;
+    p2pConnId = (p2pWork->p2pType == ncclDevWorkP2pTypeCopy)
+              ? comm->localRank
+              : NCCL_MAX_LOCAL_RANKS + (p2pWork->fifo.peer<<1) + (int)p2pWork->p2pType;
+    p2pSlot = p2pConnId % p2pSlotCount;
+  }
+
+  if (!fuseOk) goto new_batch;
+
+  { struct ncclKernelPlanWorkBatchList* batch = chan->devWorkBatchWip;
+    if (batch == nullptr) goto new_batch;
+    if (funcIndex != batch->header.funcIndex) goto new_batch;
+
+    size_t footprintNew = ncclDevWorkBatchFootprint<DevWork>(batch->header.nWorks+1);
+    if (footprintNew > comm->maxDevWorkFootprint) goto new_batch;
+
+    if (type == ncclDevWorkTypeP2p) {
+      static_assert(!(NCCL_MAX_P2P_CONNS_PER_WORK_BATCH & (NCCL_MAX_P2P_CONNS_PER_WORK_BATCH-1)),
+                    "NCCL_MAX_P2P_CONNS_PER_WORK_BATCH must be a pow2");
+      int probe = 1; // quadratic probing index, hence the need for ispow2(nSlots)
+      while (true) {
+        if (chan->p2p.slotConnId[p2pSlot] == p2pConnId) {
+          // Connection already exists.
+          goto p2p_new_batch;
+        }
+        if (chan->p2p.slotConnId[p2pSlot] == ~0u) {
+          // Empty slot implies new connection. Attempt to fit another.
+          if (chan->p2p.nConns == NCCL_MAX_P2P_CONNS_PER_WORK_BATCH) goto p2p_new_batch;
+          if (p2pWork->p2pType != ncclDevWorkP2pTypeCopy) {
+            if (chan->p2p.nConnsOfType[(int)p2pWork->p2pType] == NCCL_MAX_P2P_FIFO_CONNS_PER_WORK_BATCH) {
+              goto p2p_new_batch;
+            }
+          } else { // copy
+            // The first of each two copies steals a spot from both send and recv.
+            // This is because the p2p schedule requires that we can always process one
+            // send and one recv concurrently. So we model this as N slots where each
+            // slot can do either:
+            //   * At most one send, and at most one recv, both concurrently.
+            //   * At most two copies, concurrently.
+            if (chan->p2p.nConnsOfType[(int)ncclDevWorkP2pTypeCopy]%2 == 0) {
+              if (chan->p2p.nConnsOfType[(int)ncclDevWorkP2pTypeRecv] == NCCL_MAX_P2P_FIFO_CONNS_PER_WORK_BATCH ||
+                  chan->p2p.nConnsOfType[(int)ncclDevWorkP2pTypeSend] == NCCL_MAX_P2P_FIFO_CONNS_PER_WORK_BATCH) {
+                goto p2p_new_batch;
+              }
+              chan->p2p.nConnsOfType[(int)ncclDevWorkP2pTypeRecv]++;
+              chan->p2p.nConnsOfType[(int)ncclDevWorkP2pTypeSend]++;
+            }
+          }
+          goto enqueue_work;
+        }
+        // Didn't find matching or empty slot. Move to next slot via quadratic probing.
+        p2pSlot = (p2pSlot + probe++) % p2pSlotCount;
+      }
+    p2p_new_batch:
+      p2pSlot = p2pConnId%p2pSlotCount;
+      goto new_batch;
+    }
+  }
+  goto enqueue_work;
+
+new_batch:
+  NCCLCHECK(startDevWorkBatch(comm, devWorkBudget, channelId, type, funcIndex));
+
+enqueue_work:
+  NCCLCHECK(enqueueDevWorkToBatch(comm, devWorkBudget, channelId, work));
+  if (type == ncclDevWorkTypeP2p) {
+    // Add p2p connection to hashtable
+    chan->p2p.nConns++;
+    chan->p2p.nConnsOfType[(int)p2pWork->p2pType]++;
+    chan->p2p.slotConnId[p2pSlot] = p2pConnId;
+  }
+  if (proxyWork != nullptr) {
+    if (type == ncclDevWorkTypeP2p) {
+      if (p2pWork->p2pType != ncclDevWorkP2pTypeCopy) { // Copies don't require proxy ops.
+        proxyWork->opCount = uint64_t(chan->p2p.opCount)<<1 | /*p2p=*/1;
+        NCCLCHECK(addProxyWorkIfNeeded(comm, channelId, proxyWork));
+      }
+    } else {
+      NCCLCHECK(addProxyWorkIfNeeded(comm, channelId, proxyWork));
+    }
   }
   return ncclSuccess;
 }
 
-// Put coll workelem & proxyOp in plan assuming nWorkBudget permits, so please
-// ensure *nWorkBudget >= nBids upon entry.
-static ncclResult_t addCollToPlan(
-    struct ncclComm* comm, struct ncclKernelPlan* plan, int* nWorkBudget, int funcIndex,
-    struct ncclWorkElem const* workElem, struct ncclProxyOp const* proxyOp,
-    int nCollChannels, int nBid, size_t bytes, bool regBufUsed, void* regBufSend[], void* regBufRecv[]
+// Add proxy work to plan's channel only if a proxy thread exists.
+static ncclResult_t addProxyWorkIfNeeded(
+    struct ncclComm* comm, int channelId, struct ncclProxyWork* proxyWork
   ) {
-  struct ncclKernelPlan::Channel *chans = plan->channels;
+  bool needed = true;
+  NCCLCHECK(ncclProxySaveWork(comm, channelId, proxyWork, &needed));
+  if (needed) {
+    struct ncclProxyWork* q = ncclMemoryPoolAlloc<struct ncclProxyWork>(&comm->memPool_ncclProxyWork, &comm->memPermanent);
+    *q = *proxyWork; // C++ struct assignment
+    ncclIntruQueueEnqueue(&comm->planner.channels[channelId].proxyWorkQueue, q);
+  }
+  return ncclSuccess;
+}
 
-  // Choose the `nBid` least loaded channels to do the work. This ensures
-  // all bids go to different channels in case they need to synchronize.
-  int least[/*nBid*/MAXCHANNELS];
-  least[0] = 0;
-  int maxIndexInLeast = 0;
-  size_t maxBytesInLeast = chans[0].collBytes;
-  // Initialize least[] such that the first nBid channels are accounted for.
-  for (int b=1; b < nBid; b++) {
-    least[b] = b;
-    if (maxBytesInLeast < chans[b].collBytes) {
-      maxIndexInLeast = b;
-      maxBytesInLeast = chans[b].collBytes;
+// leastLoadedChannels: Returns mask of the `nChoose` least loaded channels from
+// channels `[0, nCandidates)`.
+static uint64_t leastLoadedChannels(struct ncclComm* comm, int nCandidates, int nChoose) {
+  struct ncclKernelPlanner::Channel *chans = comm->planner.channels;
+  uint64_t mask = ~uint64_t(0)>>(64-nChoose);
+  if (nChoose == nCandidates) return mask;
+  int maxChannelInMask = 0;
+  size_t maxLoadInMask = chans[0].loadBytes;
+  // Initialize such that the first `nChoose` channels are accounted for.
+  for (int c=1; c < nChoose; c++) {
+    if (maxLoadInMask < chans[c].loadBytes) {
+      maxChannelInMask = c;
+      maxLoadInMask = chans[c].loadBytes;
     }
   }
   // Sort in the rest of the channels. If a channel has less work than the max
-  // member of least[], replace that member and compute the new max.
-  for (int c=nBid; c < nCollChannels; c++) {
-    if (chans[c].collBytes < maxBytesInLeast) {
-      least[maxIndexInLeast] = c;
-      maxBytesInLeast = chans[least[0]].collBytes;
-      maxIndexInLeast = 0;
-      for (int b=1; b < nBid; b++) {
-        if (maxBytesInLeast < chans[least[b]].collBytes) {
-          maxIndexInLeast = b;
-          maxBytesInLeast = chans[least[b]].collBytes;
+  // member of mask, replace that member and compute the new max.
+  for (int c=nChoose; c < nCandidates; c++) {
+    if (chans[c].loadBytes < maxLoadInMask) {
+      mask ^= uint64_t(1)<<maxChannelInMask; // Drop previous max channel
+      mask ^= uint64_t(1)<<c; // Include new channel
+      // Compute new max
+      uint64_t maskAhead = mask; // Unvisited mask bits
+      maxChannelInMask = bitffs(maskAhead)-1; // Find least 1 bit
+      maskAhead &= maskAhead-1; // Drop least 1 bit
+      maxLoadInMask = chans[maxChannelInMask].loadBytes;
+      while (maskAhead != 0) {
+        int i = bitffs(maskAhead)-1;
+        maskAhead &= maskAhead-1;
+        if (maxLoadInMask < chans[i].loadBytes) {
+          maxChannelInMask = i;
+          maxLoadInMask = chans[i].loadBytes;
         }
       }
     }
   }
+  return mask;
+}
 
-  uint64_t opCount = uint64_t(plan->collOpCount++)<<1 | 0;
-  bytes /= nBid;
-  for (int bid=0; bid < nBid; bid++) {
-    int c = least[bid];
-    chans[c].collBytes += bytes;
+// Put coll workElem & proxyWork in plan assuming nWorkBudget permits, so please
+// ensure *nWorkBudget >= nBids upon entry.
+static ncclResult_t addCollToPlan(
+    struct ncclComm* comm, int* devWorkBudget, struct ncclInfo* info,
+    int funcIndex, struct ncclDevWorkColl const* devWork_, int maxChannels,
+    bool regBufUsed, void* regBufSend[], void* regBufRecv[]
+  ) {
+  struct ncclKernelPlanner::Channel *chans = comm->planner.channels;
+  struct ncclDevWorkColl devWork = *devWork_; // C++ struct assignment
+  int nParts = devWork.nChannels;
+  uint64_t chanMask = leastLoadedChannels(comm, maxChannels, nParts);
+  size_t bytes = info->nBytes/nParts;
+  uint64_t proxyOpCount = uint64_t(comm->planner.collOpCount++)<<1 | /*coll=*/0;
+  for (int part=0; part < nParts; part++) {
+    int channelId = bitffs(chanMask)-1; // Find least 1 bit
+    chanMask &= chanMask-1; // Drop least 1 bit
+    chans[channelId].loadBytes += bytes; // Add our load to channel counter.
 
-    // Add work elem
-    *nWorkBudget += chans[c].nWork;
+    devWork.bid = part;
+    struct ncclProxyWork proxyWork;
+    proxyWork.opCount = proxyOpCount;
+    NCCLCHECK(computeCollProxyWork(info, channelId, &proxyWork));
+
+    // Add devWork
     if (!regBufUsed) {
-      appendWorkElemColl(comm, plan, c, funcIndex, workElem, bid);
+      NCCLCHECK(appendDevWork<ncclDevWorkTypeColl>(comm, devWorkBudget, channelId, funcIndex, &devWork, &proxyWork, /*fuseOk=*/true));
     } else {
       // Buffer registration in play which could only for CollNet at the moment.
-      struct ncclChannel* channel = &comm->channels[c];
-      struct ncclWorkElemReg workElemReg;
-      workElemReg.elem = *workElem; // C++ struct assignment
-      workElemReg.elem.regUsed = 1;
+      struct ncclChannel* channel = &comm->channels[channelId];
+      struct ncclDevWorkCollReg devWorkReg;
+      devWorkReg.coll = devWork; // C++ struct assignment
       for (int i=0; i < NCCL_MAX_DIRECT_ARITY; i++) {
         int peer = channel->collnetDirect.down[i];
         if (peer == -1) break;
         int j = comm->rankToLocalRank[peer]; // Get intra-node slot
-        workElemReg.dnInputs[i] = regBufSend[j]; // Input buffer of leaf peer
-        workElemReg.dnOutputs[i] = regBufRecv[j]; // Output buffer of leaf peer
+        devWorkReg.dnInputs[i] = regBufSend[j]; // Input buffer of leaf peer
+        devWorkReg.dnOutputs[i] = regBufRecv[j]; // Output buffer of leaf peer
       }
       for (int i=0; i < NCCL_MAX_DIRECT_ARITY; i++) {
         int peer = channel->collnetDirect.up[i];
         if (peer == -1) break;
         int j = comm->rankToLocalRank[peer];
         // Output buffer of root peer
-        workElemReg.upOutputs[i] = regBufRecv[j];
+        devWorkReg.upOutputs[i] = regBufRecv[j];
       }
-      appendWorkElemColl(comm, plan, c, funcIndex, &workElemReg, bid);
-    }
-    *nWorkBudget -= chans[c].nWork; // subtract delta of chans[c].nWork
-
-    // Add proxy task. Empty collectives do not make it to the proxy thread
-    // since they don't imply synchronization for the user like p2p.
-    if (proxyOp->nsteps != 0) {
-      struct ncclProxyOp tmp = *proxyOp; // C++ struct assignment
-      tmp.channelId = c;
-      tmp.opCount = opCount;
-      NCCLCHECK(addProxyOpIfNeeded(comm, plan, &tmp));
+      NCCLCHECK(appendDevWork<ncclDevWorkTypeCollReg>(comm, devWorkBudget, channelId, funcIndex, &devWorkReg, &proxyWork, /*fuseOk=*/true));
     }
   }
   return ncclSuccess;
 }
 
+NCCL_PARAM(ChunkSize, "CHUNK_SIZE", 0);
 NCCL_PARAM(P2pLLThreshold, "P2P_LL_THRESHOLD", 16384);
 
-// Put p2p op in plan assuming there is space in nWorkBudget, so you must
-// ensure *nWorkBudget >= 1 upon entry.
-static ncclResult_t addP2pToPlan(
-    struct ncclComm* comm, struct ncclKernelPlan* plan, int* nWorkBudget,
-    bool isSendNotRecv, int peer, int chunk, void *addr, size_t bytes, bool fuseOk
+// Put p2p op in plan assuming there is space in devWorkBudget
+static ncclResult_t addP2pFifoToPlan(
+    struct ncclComm* comm, int* devWorkBudget,
+    int peerRank, bool isSendNotRecv, void* localBuf, size_t bytes, int chunk, bool fuseOk
   ) {
-  struct ncclInfo info = {
-    isSendNotRecv ? ncclFuncSend : ncclFuncRecv,
-    isSendNotRecv ? "Send" : "Recv",
-    nullptr, addr, bytes, ncclInt8, ncclSum, peer, comm, (cudaStream_t)0,
-    /*Args*/1, 1
-  };
-
   int channelId;
-  NCCLCHECK(ncclChannelCompute(comm, peer, chunk%comm->p2pnChannelsPerPeer, info.coll, &channelId));
-  info.channelId = channelId;
+  NCCLCHECK(ncclChannelCompute(comm, peerRank, chunk%comm->p2pnChannelsPerPeer, isSendNotRecv, &channelId));
+  struct ncclChannel* channel = &comm->channels[channelId];
+  struct ncclChannelPeer* peer = channel->peers[peerRank];
+  struct ncclConnector* connector = isSendNotRecv ? &peer->send[1] : &peer->recv[1];
+  struct ncclConnInfo* conn = &connector->conn;
+  bool usesNetwork = connector->transportComm == (isSendNotRecv ? &netTransport.send : &netTransport.recv);
+  int protocol = ((conn->buffs[NCCL_PROTO_LL] != nullptr) && bytes <= ncclParamP2pLLThreshold())
+               ? NCCL_PROTO_LL : NCCL_PROTO_SIMPLE;
 
-  // 1 is connIndex
-  struct ncclConnInfo* conn = isSendNotRecv ?
-    &comm->channels[channelId].peers[peer]->send[1].conn : &comm->channels[channelId].peers[peer]->recv[1].conn;
-  info.protocol = ((conn->buffs[NCCL_PROTO_LL] != nullptr) && bytes <= ncclParamP2pLLThreshold()) ? NCCL_PROTO_LL : NCCL_PROTO_SIMPLE;
+  int stepSize = comm->buffSizes[protocol]/NCCL_STEPS;
+  if (protocol == NCCL_PROTO_SIMPLE) stepSize = comm->p2pChunkSize;
 
-  struct ncclProxyOp proxyOp = {};
-  NCCLCHECK(ncclProxyComputeP2p(&info, &proxyOp));
+  int chunkSize = stepSize;
+  if (usesNetwork && (peerRank != comm->rank)) {
+    // Tune chunk size for the network
+    if (bytes < stepSize) chunkSize /= 4;
+    else if (bytes < 8*stepSize) chunkSize /= 2;
+  }
+  if (ncclParamChunkSize() != 0) chunkSize = ncclParamChunkSize();
 
-  struct ncclWorkElemP2p elem = {0};
-  elem.proto = info.protocol;
-  elem.peer = peer;
-  elem.nWarps = NCCL_MAX_NTHREADS/WARP_SIZE;
-  elem.p2pType = isSendNotRecv ? ncclWorkP2pTypeSend : ncclWorkP2pTypeRecv;
-  elem.buffLo32 = uint32_t(reinterpret_cast<uintptr_t>(addr));
-  elem.buffHi32 = reinterpret_cast<uintptr_t>(addr)>>32;
-  elem.countLo32 = uint32_t(bytes);
-  elem.countHi32 = bytes>>32;
-  elem.chunkSize = info.chunkSize; // computed by ncclProxyComputeP2p
+  int chunkEffectiveSize = chunkSize;
+  if (protocol == NCCL_PROTO_LL) chunkEffectiveSize /= 2;
 
-  *nWorkBudget += plan->channels[channelId].nWork;
-  appendWorkElemP2p(comm, plan, channelId, &elem, fuseOk);
-  *nWorkBudget -= plan->channels[channelId].nWork;
+  struct ncclDevWorkP2p devWork = {};
+  devWork.p2pType = isSendNotRecv ? ncclDevWorkP2pTypeSend : ncclDevWorkP2pTypeRecv;
+  devWork.protocol = protocol;
+  devWork.bytes = bytes;
+  devWork.fifo.peer = peerRank;
+  devWork.fifo.localBuf = localBuf;
+  devWork.fifo.chunkBytes = chunkEffectiveSize;
 
-  // Calculate the opCount after appendWorkElemP2p since it will always return
-  // with channel->nWork equal to one plus the work index this p2p settled in.
-  proxyOp.opCount = uint64_t(plan->channels[channelId].nWork)<<1 | 1;
-  NCCLCHECK(addProxyOpIfNeeded(comm, plan, &proxyOp));
+  struct ncclProxyWork proxyWork = {};
+  proxyWork.pattern = isSendNotRecv ? ncclProxyWorkPatternP2pSend : ncclProxyWorkPatternP2pRecv;
+  proxyWork.protocol = protocol;
+  proxyWork.sliceSteps = 1;
+  proxyWork.p2p.peer = peerRank;
+  proxyWork.p2p.sliceBytes = stepSize;
+  proxyWork.p2p.slices = std::max<int>(1, divUp(bytes, chunkEffectiveSize));
+
+  NCCLCHECK(appendDevWork<ncclDevWorkTypeP2p>(comm, devWorkBudget, channelId, FUNC_INDEX_P2P, &devWork, &proxyWork, fuseOk));
   return ncclSuccess;
 }
 
-static void finishPlan(struct ncclKernelPlan* plan) {
-  int channelUbound = 0;
-  int channelCount = 0;
+// Put p2p op in plan assuming there is space in devWorkBudget
+static ncclResult_t addP2pCopyToPlan(
+    struct ncclComm* comm, int* devWorkBudget,
+    void* dstBuf, void* srcBuf, size_t bytes, int chunk
+  ) {
+  int peerRank = comm->rank; // peer==self
+  int channelId;
+  NCCLCHECK(ncclChannelCompute(comm, peerRank, chunk%comm->p2pnChannelsPerPeer, /*isSendNotRecv=*/false, &channelId));
+  struct ncclDevWorkP2p devWork = {};
+  devWork.p2pType = ncclDevWorkP2pTypeCopy;
+  devWork.bytes = bytes;
+  devWork.copy.dstBuf = dstBuf;
+  devWork.copy.srcBuf = srcBuf;
+  NCCLCHECK(appendDevWork<ncclDevWorkTypeP2p>(comm, devWorkBudget, channelId, FUNC_INDEX_P2P, &devWork, nullptr, /*fuseOk=*/true));
+  return ncclSuccess;
+}
+
+static ncclResult_t reclaimPlan(struct ncclComm* comm, struct ncclCommCallback* me);
+
+// Creates a new plan on `comm->planQueue` from contents of `comm->planner`.
+static ncclResult_t finishPlan(struct ncclComm* comm) {
+  struct ncclKernelPlan* plan = ncclMemoryPoolAlloc<struct ncclKernelPlan>(&comm->memPool_ncclKernelPlan, &comm->memPermanent);
+  ncclIntruQueueEnqueue(&comm->planQueue, plan);
+  plan->comm = comm;
+  plan->reclaimer.fn = reclaimPlan;
+  plan->args.comm = comm->devComm;
+  plan->persistent = comm->planner.persistent;
+
+  bool hasProxyWork = false;
   uint64_t channelMask = 0;
-  bool hasProxyOps = false;
   for (int c=0; c < MAXCHANNELS; c++) {
-    struct ncclWorkList* tail = ncclIntruQueueTail(&plan->channels[c].workQueue);
-    if (tail != nullptr) {
-      channelUbound = c+1;
-      channelCount += 1;
-      channelMask |= 1ull<<c;
-      tail->work.header.isLast = 1;
-      finishWork(&tail->work);
-    }
-    hasProxyOps |= !ncclIntruQueueEmpty(&plan->channels[c].proxyOpQueue);
+    NCCLCHECK(finishDevWorkBatch(plan->comm, c));
+    bool hasWork = !ncclIntruQueueEmpty(&comm->planner.channels[c].devWorkBatchQueue);
+    channelMask |= uint64_t(hasWork ? 1 : 0)<<c;
+    hasProxyWork |= !ncclIntruQueueEmpty(&comm->planner.channels[c].proxyWorkQueue);
+    plan->channels[c].devWorkFootprint = comm->planner.channels[c].devWorkFootprint;
+    plan->channels[c].p2pOpCount = comm->planner.channels[c].p2p.opCount;
+    plan->channels[c].devWorkBatchQueue = comm->planner.channels[c].devWorkBatchQueue;
+    plan->channels[c].proxyWorkQueue = comm->planner.channels[c].proxyWorkQueue;
   }
-  plan->channelUbound = channelUbound;
-  plan->channelCount = channelCount;
+  plan->kernelFn = comm->planner.kernelFn;
+  plan->threadPerBlock = std::max(comm->planner.threadPerBlock, NCCL_MIN_NTHREADS);
   plan->channelMask = channelMask;
-  plan->hasProxyOps = hasProxyOps;
-  plan->threadPerBlock = std::max(plan->threadPerBlock, 3*WARP_SIZE);
+  plan->hasProxyWork = hasProxyWork;
+  plan->collOpCount = comm->planner.collOpCount;
+  plan->ipcMemQueue = comm->planner.ipcMemQueue;
+  return ncclSuccess;
 }
 
 static ncclResult_t registerIntraNodeBuffers(
-    struct ncclComm* comm, struct ncclKernelPlan* plan, struct ncclInfo* info,
-    bool* outRegBufUsed,
+    struct ncclComm* comm, struct ncclInfo* info, bool* outRegBufUsed,
     void* outRegBufSend[NCCL_MAX_LOCAL_RANKS],
     void* outRegBufRecv[NCCL_MAX_LOCAL_RANKS]
   ) {
@@ -464,7 +649,7 @@ static ncclResult_t registerIntraNodeBuffers(
         // Enqueue reminder to close memory handle
         struct ncclPointerList* q = ncclMemoryPoolAlloc<struct ncclPointerList>(&comm->memPool_ncclPointerList, &comm->memPermanent);
         q->ptr = base;
-        ncclIntruQueueEnqueue(&plan->ipcMemQueue, q);
+        ncclIntruQueueEnqueue(&comm->planner.ipcMemQueue, q);
       }
     }
   }
@@ -480,10 +665,9 @@ NCCL_PARAM(GraphRegister, "GRAPH_REGISTER", 0);
 static ncclResult_t getCollNetSupport(struct ncclInfo* info, int* collNetTypeSupport);
 static ncclResult_t getAlgoInfo(struct ncclInfo* info, int collNetTypeSupport, int numPipeOps);
 
-static ncclResult_t scheduleCollTasksToPlan(
-    struct ncclComm* comm, struct ncclKernelPlan* plan, int* nWorkBudget
-  ) {
+static ncclResult_t scheduleCollTasksToPlan(struct ncclComm* comm, int* devWorkBudget) {
   struct ncclTasks* tasks = &comm->tasks;
+  int nRanks = comm->nRanks;
 
   size_t bytePerChannel[/*collNetSupport*/2];
   if (comm->channelSize > 0) {
@@ -498,7 +682,7 @@ static ncclResult_t scheduleCollTasksToPlan(
   }
 
   for (int collNetSupport=0; collNetSupport < 2; collNetSupport++) {
-    while (tasks->collBytesTotal < bytePerChannel[collNetSupport]*comm->nChannels &&
+    while (tasks->collLoadBytes < bytePerChannel[collNetSupport]*comm->nChannels &&
            bytePerChannel[collNetSupport] > NCCL_MIN_CHANNEL_SIZE) {
       // Reduce per-channel size so we utilize all channels.
       bytePerChannel[collNetSupport] /= 2;
@@ -564,35 +748,168 @@ static ncclResult_t scheduleCollTasksToPlan(
       }
 
       int workFuncIndex;
-      struct ncclWorkElem workElem = {};
-      struct ncclProxyOp proxyOp = {};
-      NCCLCHECK(computeColl(&info, &workFuncIndex, &workElem, &proxyOp));
+      struct ncclDevWorkColl workElem = {};
+      NCCLCHECK(computeCollDevWork(&info, &workFuncIndex, &workElem));
 
-      if (*nWorkBudget < info.nChannels) return ncclSuccess; // Ensure room for addCollToPlan()
+      if (*devWorkBudget < info.nChannels*ncclDevWorkBatchFootprint<ncclDevWorkCollReg>(1)) {
+        return ncclSuccess; // Ensure room for addCollToPlan()
+      }
 
       bool regBufUsed = false;
       void* regBufSend[NCCL_MAX_LOCAL_RANKS];
       void* regBufRecv[NCCL_MAX_LOCAL_RANKS];
-      if (plan->persistent && ncclParamGraphRegister() &&
+      if (comm->planner.persistent && ncclParamGraphRegister() &&
           info.algorithm == NCCL_ALGO_COLLNET_DIRECT &&   // limited to CollNetDirect for now
           comm->intraHighestTransportType == TRANSPORT_P2P && // only when all ranks can p2p each other
           comm->intraRanks < comm->localRanks) { // only with inter-process & intra-node peers
-        NCCLCHECK(registerIntraNodeBuffers(comm, plan, &info, &regBufUsed, regBufSend, regBufRecv));
+        NCCLCHECK(registerIntraNodeBuffers(comm, &info, &regBufUsed, regBufSend, regBufRecv));
       }
 
       int maxChannels = info.algorithm == NCCL_ALGO_NVLS || aggInfo.algorithm == NCCL_ALGO_NVLS_TREE ? comm->nvlsChannels : comm->nChannels;
-      NCCLCHECK(addCollToPlan(comm, plan, nWorkBudget, workFuncIndex, &workElem, &proxyOp,
-        maxChannels, info.nChannels, info.nBytes, regBufUsed, regBufSend, regBufRecv));
+      NCCLCHECK(addCollToPlan(comm, devWorkBudget, &info, workFuncIndex, &workElem,
+                              maxChannels, regBufUsed, regBufSend, regBufRecv));
       tasks->nTasksColl -= 1;
-      tasks->collBytesTotal -= info.nBytes;
+      tasks->collLoadBytes -= info.nBytes;
       ncclIntruQueueDequeue(&tasks->collQueue);
       head = ncclIntruQueueHead(&tasks->collQueue);
 
-      plan->threadPerBlock = std::max(plan->threadPerBlock, info.nThreads);
-      if (!plan->kernelSpecialized) {
-        plan->kernelFn = ncclKerns[workFuncIndex].kernelFn;
-        plan->kernelSpecialized = ncclKerns[workFuncIndex].specialized;
+      comm->planner.threadPerBlock = std::max(comm->planner.threadPerBlock, info.nThreads);
+      if (!comm->planner.kernelSpecialized) {
+        comm->planner.kernelFn = ncclKerns[workFuncIndex].kernelFn;
+        comm->planner.kernelSpecialized = ncclKerns[workFuncIndex].specialized;
       }
+    }
+  }
+
+  while (tasks->nTasksBcast != 0) {
+    // Make a batch consisting of one bcast from each peer.
+    size_t batchLoadBytes = 0;
+    int batchTasks = 0;
+    for (int peer=tasks->minBcastPeer; peer <= tasks->maxBcastPeer; peer++) {
+      struct ncclTaskBcast* t = ncclIntruQueueHead(&tasks->peers[peer].bcastQueue);
+      if (t != nullptr) {
+        int footprint = ncclDevWorkBatchFootprint<ncclDevWorkBcast>(batchTasks+1);
+        if (footprint > comm->maxDevWorkFootprint) break;
+        batchTasks += 1;
+        batchLoadBytes += t->bytes;
+      }
+    }
+    // Number of channels, one part per channel.
+    int nParts = divUp(batchLoadBytes, bytePerChannel[/*collNetSupport=*/0]);
+    nParts = std::max(nParts, 1);
+    nParts = std::min(nParts, comm->nChannels);
+    // Ensure we can fit batch within our budget.
+    if (*devWorkBudget < nParts*ncclDevWorkBatchFootprint<ncclDevWorkBcast>(batchTasks)) {
+      break;
+    }
+    // Find best protocol.
+    int proto = 0;
+    float protoTime = FLT_MAX;
+    for (int p=0; p < NCCL_NUM_PROTOCOLS; p++) {
+      ncclFunc_t func = batchTasks==1 ? ncclFuncBroadcast : ncclFuncAllGather;
+      float bw = comm->bandwidths[(int)func][NCCL_ALGO_RING][p];
+      float lat = comm->latencies[(int)func][NCCL_ALGO_RING][p];
+      float time = lat + float(batchLoadBytes)/(1000*bw);
+      if (time < protoTime) { proto = p; protoTime = time; }
+    }
+
+    constexpr int SliceSteps = 1;
+    int sliceWireBytes = SliceSteps*(comm->buffSizes[proto]/NCCL_STEPS);
+    int sliceDataBytes = sliceWireBytes;
+    if (proto == NCCL_PROTO_LL) sliceDataBytes = sliceWireBytes/2;
+    if (proto == NCCL_PROTO_LL128) sliceDataBytes = (sliceWireBytes/NCCL_LL128_LINEELEMS)*NCCL_LL128_DATAELEMS;
+
+    // Determine thread count per block.
+    int threadPerBlock = comm->maxThreads[NCCL_ALGO_RING][proto];
+    int threadThreshold = comm->threadThresholds[NCCL_ALGO_RING][proto];
+    while (batchLoadBytes < threadPerBlock*threadThreshold) {
+      threadPerBlock -= WARP_SIZE;
+    }
+    if (proto == NCCL_PROTO_SIMPLE) threadPerBlock += WARP_SIZE; // for threadfence_system()
+    threadPerBlock = std::max(threadPerBlock, NCCL_MIN_NTHREADS);
+    threadPerBlock = std::min(threadPerBlock, NCCL_MAX_NTHREADS);
+
+    // Increase plan thread count if necessary.
+    comm->planner.threadPerBlock = std::max(comm->planner.threadPerBlock, threadPerBlock);
+
+    // Choose kernel for plan.
+    int funcIndex = FUNC_INDEX_BCAST(proto);
+    if (!comm->planner.kernelSpecialized) {
+      comm->planner.kernelFn = ncclKerns[funcIndex].kernelFn;
+      comm->planner.kernelSpecialized = ncclKerns[funcIndex].specialized;
+    }
+
+    // Compute opCount for proxy work.
+    uint64_t proxyOpCount = uint64_t(comm->planner.collOpCount++)<<1 | /*coll=*/0;
+    // Break each bcast into nParts, each part assigned to a channel.
+    uint64_t chanMask = leastLoadedChannels(comm, comm->nChannels, nParts);
+    size_t batchLoadPerPart = batchLoadBytes/nParts;
+    for (int part=0; part < nParts; part++) {
+      int channelId = bitffs(chanMask)-1; // Index of least 1 bit.
+      chanMask &= chanMask-1; // Drop least 1 bit.
+      // Add our load to channel counter.
+      comm->planner.channels[channelId].loadBytes += batchLoadPerPart;
+      // Sort tasks according to ring depth upstream from us.
+      int nTasks = batchTasks;
+      struct ncclTaskBcast** ringTasks = (struct ncclTaskBcast**)comm->ringTasks;
+      for (int r=0; r < nRanks; r++) ringTasks[r] = nullptr;
+      int minRingDepth = INT_MAX;
+      int maxRingDepth = INT_MIN;
+      for (int peer=tasks->minBcastPeer; nTasks != 0; peer++) {
+        struct ncclTaskBcast* t = ncclIntruQueueHead(&tasks->peers[peer].bcastQueue);
+        if (t != nullptr) {
+          nTasks -= 1;
+          int ringDepth = comm->channels[channelId].ring.rankToIndex[peer];
+          // Need to flip from "downstream from us" to "upstream from us".
+          ringDepth = (ringDepth == 0) ? 0 : nRanks-ringDepth;
+          ringTasks[ringDepth] = t;
+          minRingDepth = std::min(minRingDepth, ringDepth);
+          maxRingDepth = std::max(maxRingDepth, ringDepth);
+        }
+      }
+      // Start an empty dev work batch.
+      NCCLCHECK(startDevWorkBatch(comm, devWorkBudget, channelId, ncclDevWorkTypeBcast, funcIndex));
+      struct ncclDevWorkBatchHeader* batch = &comm->planner.channels[channelId].devWorkBatchWip->header;
+      batch->bcast.sliceBytes = sliceDataBytes;
+      int sendSlices=0, recvSlices=0;
+      // Add each task to the batch in ring depth order.
+      for (int ringDepth=minRingDepth; ringDepth <= maxRingDepth; ringDepth++) {
+        struct ncclTaskBcast* t = ringTasks[ringDepth];
+        if (t != nullptr) {
+          struct ncclDevWorkBcast work;
+          size_t partBytes = t->bytes/nParts;
+          size_t lo = std::min<size_t>(alignUp((part+0)*partBytes, 256), t->bytes);
+          size_t hi = std::min<size_t>(alignUp((part+1)*partBytes, 256), t->bytes);
+          work.dstBuf = (char*)t->dstBuf + lo;
+          work.bytes = hi-lo;
+          work.ringDepth = ringDepth;
+          if (work.bytes != 0) {
+            int slices = divUp(work.bytes, sliceDataBytes);
+            if (ringDepth != 0) recvSlices += slices;
+            if (ringDepth != nRanks-1) sendSlices += slices;
+            if (ringDepth == 0) batch->bcast.rootSrcBuf = (char*)t->srcBuf + lo;
+            NCCLCHECK(enqueueDevWorkToBatch(comm, devWorkBudget, channelId, &work));
+          }
+        }
+      }
+      // Record a proxy work for this channel.
+      if (sendSlices + recvSlices != 0) {
+        struct ncclProxyWork proxyWork;
+        proxyWork.opCount = proxyOpCount;
+        proxyWork.protocol = proto;
+        proxyWork.sliceSteps = SliceSteps;
+        proxyWork.pattern = ncclProxyWorkPatternRing;
+        proxyWork.ring.sendSlices = sendSlices;
+        proxyWork.ring.recvSlices = recvSlices;
+        NCCLCHECK(addProxyWorkIfNeeded(comm, channelId, &proxyWork));
+      }
+    }
+    // Drop processed work from `comm->tasks`.
+    tasks->nTasksBcast -= batchTasks;
+    tasks->collLoadBytes -= batchLoadBytes;
+    for (int peer=tasks->minBcastPeer; batchTasks != 0; peer++) {
+      struct ncclTaskBcast* t = ncclIntruQueueTryDequeue(&tasks->peers[peer].bcastQueue);
+      if (t != nullptr) batchTasks -= 1;
     }
   }
   return ncclSuccess;
@@ -608,19 +925,18 @@ static size_t calcP2pChunkSize(size_t totalSize, int minChannels, int maxChannel
   return alignUp(size, minSize);
 }
 
-static ncclResult_t scheduleP2pTasksToPlan(
-    struct ncclComm* comm, struct ncclKernelPlan* plan, int* nWorkBudget
-  ) {
+static ncclResult_t scheduleP2pTasksToPlan(struct ncclComm* comm, int* devWorkBudget) {
   struct ncclTasks* tasks = &comm->tasks;
+  int rank = comm->rank;
   int nRanks = comm->nRanks;
   struct ncclTasks::Peer* peers = tasks->peers;
   int const *sendOrder = tasks->p2pSendOrder;
   int const *recvOrder = tasks->p2pRecvOrder;
 
-  plan->threadPerBlock = std::max(plan->threadPerBlock, NCCL_MAX_NTHREADS);
-  if (!plan->kernelSpecialized) {
-    plan->kernelFn = ncclKerns[FUNC_INDEX_P2P].kernelFn;
-    plan->kernelSpecialized = ncclKerns[FUNC_INDEX_P2P].specialized;
+  comm->planner.threadPerBlock = std::max(comm->planner.threadPerBlock, NCCL_MAX_NTHREADS);
+  if (!comm->planner.kernelSpecialized) {
+    comm->planner.kernelFn = ncclKerns[FUNC_INDEX_P2P].kernelFn;
+    comm->planner.kernelSpecialized = ncclKerns[FUNC_INDEX_P2P].specialized;
   }
 
   // Compute how much to split operations
@@ -640,7 +956,7 @@ static ncclResult_t scheduleP2pTasksToPlan(
     for (int i=0; i < tasks->p2pOrderSteps; i++) {
       int sendPeer = sendOrder[i];
       int recvPeer = recvOrder[i];
-      if ((i % (NCCL_MAX_WORK_ELEMENTS_P2P/2)) == 0) fuseOk = false;
+      if ((i % NCCL_MAX_P2P_FIFO_CONNS_PER_WORK_BATCH) == 0) fuseOk = false;
       struct ncclTaskP2p* send = sendPeer != -1 ? ncclIntruQueueHead(&peers[sendPeer].sendQueue) : NULL;
       struct ncclTaskP2p* recv = recvPeer != -1 ? ncclIntruQueueHead(&peers[recvPeer].recvQueue) : NULL;
       if (sendPeer == comm->rank) {
@@ -658,8 +974,8 @@ static ncclResult_t scheduleP2pTasksToPlan(
         }
       }
       if (send != nullptr || recv != nullptr) {
-        char* recvPtr = recv ? (char*)recv->buff : nullptr;
-        char* sendPtr = send ? (char*)send->buff : nullptr;
+        char* recvLocalBuf = recv ? (char*)recv->localBuf : nullptr;
+        char* sendLocalBuf = send ? (char*)send->localBuf : nullptr;
         ssize_t recvBytes = recv ? recv->bytes : 0;
         ssize_t sendBytes = send ? send->bytes : 0;
         ssize_t minSize = stepSize/8;
@@ -670,20 +986,24 @@ static ncclResult_t scheduleP2pTasksToPlan(
         recvBytes = recv && recvBytes == 0 ? -1 : recvBytes;
         sendBytes = send && sendBytes == 0 ? -1 : sendBytes;
         // Advance to current chunk. Syncs will always have chunk=0 so no effect on the -1.
-        if (recv) recvPtr   += recv->chunk*recvChunkBytesMax;
-        if (recv) recvBytes -= recv->chunk*recvChunkBytesMax;
-        if (send) sendPtr   += send->chunk*sendChunkBytesMax;
-        if (send) sendBytes -= send->chunk*sendChunkBytesMax;
+        if (recv) recvLocalBuf  += recv->chunk*recvChunkBytesMax;
+        if (recv) recvBytes     -= recv->chunk*recvChunkBytesMax;
+        if (send) sendLocalBuf  += send->chunk*sendChunkBytesMax;
+        if (send) sendBytes     -= send->chunk*sendChunkBytesMax;
 
         do {
           ssize_t recvChunkBytes = std::min(recvBytes, recvChunkBytesMax); // -1 preserved
           ssize_t sendChunkBytes = std::min(sendBytes, sendChunkBytesMax);
           if (recvChunkBytes != 0) {
             if (recvChunkBytes == -1) recvChunkBytes = 0;
-            if (*nWorkBudget < 1) return ncclSuccess; // ensure room in budget
-            NCCLCHECK(addP2pToPlan(comm, plan, nWorkBudget, /*isSendNotRecv=*/false, recvPeer, recv->chunk, recvPtr, recvChunkBytes, fuseOk));
+            if (*devWorkBudget < ncclDevWorkBatchFootprint<ncclDevWorkP2p>(1)) return ncclSuccess; // ensure room in budget
+            if (recvPeer == rank) { // local copy
+              NCCLCHECK(addP2pCopyToPlan(comm, devWorkBudget, recvLocalBuf, sendLocalBuf, recvChunkBytes, recv->chunk));
+            } else {
+              NCCLCHECK(addP2pFifoToPlan(comm, devWorkBudget, recvPeer, /*isSendNotRecv=*/false, recvLocalBuf, recvChunkBytes, recv->chunk, fuseOk));
+            }
             fuseOk = true;
-            recvPtr += recvChunkBytes;
+            recvLocalBuf += recvChunkBytes;
             recvBytes -= recvChunkBytes;
             recv->chunk += 1;
             if (recvBytes <= 0) {
@@ -694,10 +1014,12 @@ static ncclResult_t scheduleP2pTasksToPlan(
           }
           if (sendChunkBytes != 0) {
             if (sendChunkBytes == -1) sendChunkBytes = 0;
-            if (*nWorkBudget < 1) return ncclSuccess; // ensure room in budget
-            NCCLCHECK(addP2pToPlan(comm, plan, nWorkBudget, /*isSendNotRecv=*/true, sendPeer, send->chunk, sendPtr, sendChunkBytes, fuseOk));
+            if (*devWorkBudget < ncclDevWorkBatchFootprint<ncclDevWorkP2p>(1)) return ncclSuccess; // ensure room in budget
+            if (sendPeer != rank) {
+              NCCLCHECK(addP2pFifoToPlan(comm, devWorkBudget, sendPeer, /*isSendNotRecv=*/true, sendLocalBuf, sendChunkBytes, send->chunk,  /*fuseOk=*/true));
+            }
             fuseOk = true;
-            sendPtr += sendChunkBytes;
+            sendLocalBuf += sendChunkBytes;
             sendBytes -= sendChunkBytes;
             send->chunk += 1;
             if (sendBytes <= 0) {
@@ -713,34 +1035,29 @@ static ncclResult_t scheduleP2pTasksToPlan(
   return ncclSuccess;
 }
 
-// Comparison of monotonic rolling counters.
-static inline bool rollingLess32(uint32_t a, uint32_t b) {
-  constexpr uint32_t PositiveMax = uint32_t(-1)>>1;
-  return a-b > PositiveMax;
-}
-static inline uint32_t rollingMin32(uint32_t a, uint32_t b) {
-  constexpr uint32_t PositiveMax = uint32_t(-1)>>1;
-  return (b-a <= PositiveMax) ? a : b;
-}
-
-// Spin until its safe to increase comm->workFifoSent to desiredSent.
-static void waitWorkFifoAvailable(struct ncclComm* comm, uint32_t desiredSent) {
-  if (__builtin_expect(rollingLess32(comm->workFifoAckdMin + comm->workFifoDepth, desiredSent), false)) {
+// Spin until its safe to increase comm->workFifoProduced to desiredProduced.
+static void waitWorkFifoAvailable(struct ncclComm* comm, uint32_t desiredProduced) {
+  bool hasRoom = (desiredProduced - comm->devWorkFifoConsumedLbound) <= comm->devWorkFifoBytes;
+  if (__builtin_expect(!hasRoom, false)) {
     while (1) {
       // We have to poll for notifications from device.
-      uint32_t* doneLive = comm->workFifoDone;
-      uint32_t ackd[MAXCHANNELS];
+      uint32_t* consumedLive = comm->devWorkFifoConsumed;
+      uint32_t consumed[MAXCHANNELS];
       for (int c=0; c < MAXCHANNELS; c++) {
-        ackd[c] = __atomic_load_n(&doneLive[c], __ATOMIC_RELAXED);
+        consumed[c] = __atomic_load_n(&consumedLive[c], __ATOMIC_RELAXED);
       }
       // Compiler-only fence to prevent fusion of loops to encourage dense loads.
       __atomic_signal_fence(__ATOMIC_SEQ_CST);
 
-      uint32_t ackdAll = comm->workFifoSent;
+      uint32_t ubound = comm->devWorkFifoProduced;
+      uint32_t consumedLb = ubound;
       for (int c=0; c < MAXCHANNELS; c++) {
-        // ackdAll is min over all non-quiesced channels
-        if (ackd[c] != comm->channels[c].workFifoSent)
-          ackdAll = rollingMin32(ackdAll, ackd[c]);
+        // consumedLb is min over all non-quiesced channels
+        if (consumed[c] != comm->channels[c].devWorkFifoProduced) {
+          if (ubound - consumedLb < ubound - consumed[c]) {
+            consumedLb = consumed[c];
+          }
+        }
       }
 
       // Compiler only fence to prevent fusion of loops to encourage dense stores.
@@ -749,121 +1066,172 @@ static void waitWorkFifoAvailable(struct ncclComm* comm, uint32_t desiredSent) {
       for (int c=0; c < MAXCHANNELS; c++) {
         // Advance counter on quiesced channels so they don't lag behind
         // too far where they could get lost in 32-bit wraparound.
-        if (ackd[c] == comm->channels[c].workFifoSent) {
-          comm->channels[c].workFifoSent = ackdAll;
-          __atomic_store_n(&doneLive[c], ackdAll, __ATOMIC_RELAXED);
+        if (consumed[c] == comm->channels[c].devWorkFifoProduced) {
+          comm->channels[c].devWorkFifoProduced = consumedLb;
+          __atomic_store_n(&consumedLive[c], consumedLb, __ATOMIC_RELAXED);
         }
       }
-      comm->workFifoAckdMin = ackdAll;
+      comm->devWorkFifoConsumedLbound = consumedLb;
 
       // See if that was enough.
-      if (!rollingLess32(comm->workFifoAckdMin + comm->workFifoDepth, desiredSent)) break;
+      hasRoom = (desiredProduced - comm->devWorkFifoConsumedLbound) <= comm->devWorkFifoBytes;
+      if (hasRoom) break;
       sched_yield();
     }
   }
 }
 
-static ncclResult_t uploadWork(struct ncclComm* comm, struct ncclKernelPlan* plan) {
+// Byte copy a T into fifo where the bytes of T may wrap around the fifo boundary.
+// * `cursor` is the monotonic position of the fifo writer which is advanced on return,
+//   it only wraps around due to 32 bit overflow. It is assumed cursor is already
+//   aligned to alignof(T).
+// * `mask` is the size (power of 2) of the fifo minus 1.
+template<typename T>
+static void writeFifo(void* fifo, uint32_t* /*inout*/cursor, uint32_t mask, T const* src) {
+  char* d = (char*)fifo;
+  char const* s = (char const*)src;
+  uint32_t cur = *cursor;
+  *cursor += sizeof(T);
+  for (int off=0; off < (int)sizeof(T); off += alignof(T)) {
+    memcpy(
+      __builtin_assume_aligned(d + ((cur + off) & mask), alignof(T)),
+      __builtin_assume_aligned(s + off, alignof(T)),
+      alignof(T)
+    );
+  }
+}
+
+static ncclResult_t uploadDevWork(struct ncclComm* comm, struct ncclKernelPlan* plan) {
   bool persistent = plan->persistent;
-  int channelUbound = plan->channelUbound;
-  int nWork = 0;
-  for (int c=0; c < channelUbound; c++) nWork += plan->channels[c].nWork;
+  size_t footprint = 0;
+  for (int c=0; c < MAXCHANNELS; c++) {
+    footprint += plan->channels[c].devWorkFootprint;
+  }
 
-  struct ncclWork* workHeap;
+  void* fifoBuf;
+  uint32_t fifoCursor, fifoMask;
   if (!persistent) {
-    workHeap = comm->workFifoHeap;
+    fifoBuf = comm->devWorkFifoBuf;
+    fifoCursor = comm->devWorkFifoProduced;
+    fifoMask = comm->devWorkFifoBytes-1;
+    waitWorkFifoAvailable(comm, fifoCursor + footprint);
+    plan->args.devWorkBuf = comm->devWorkFifoBufDev;
+    plan->args.devWorkCursor = fifoCursor;
+    plan->args.devWorkFifoSizeLog2 = log2i(comm->devWorkFifoBytes);
+    plan->args.inWorkFifo = true;
   } else {
-    workHeap = ncclMemoryStackAlloc<struct ncclWork>(&comm->memScoped, nWork);
+    // Persistent kernels don't use a fifo, just a buffer big enough to hold everything.
+    fifoBuf = ncclMemoryStackAlloc(&comm->memScoped, footprint, /*align=*/16);
+    fifoCursor = 0;
+    fifoMask = ~0u;
+    plan->args.devWorkCursor = fifoCursor;
+    plan->args.inWorkFifo = false;
   }
-  uint32_t ixMask = persistent ? ~uint32_t(0) : comm->workFifoDepth-1;
-  uint32_t ixSent;
-  if (persistent) {
-    ixSent = 0;
-  } else {
-    ixSent = comm->workFifoSent;
-    // First work for a channel has to be at workHeap+blockIdx.x which means
-    // we cannot tolerate fifo wraparound. So round up to the wrap boundary
-    // if not doing so would incur crossing it.
-    if (((ixSent + plan->channelCount-1) & ixMask) < (ixSent & ixMask)) {
-      ixSent = (ixSent + ixMask) & ~ixMask;
-      // Need to update workFifoSent so waitWorkFifoAvailable() knows we've
-      // skipped those elements. Consider if all the channels report quiesced,
-      // this way the skipped slots will be considered consumed as well.
-      comm->workFifoSent = ixSent;
-    }
-    waitWorkFifoAvailable(comm, ixSent + nWork);
+
+  // We use two passes over the channels when serializing the work:
+  //   pass=0: put first work batch of each channel in fifo.
+  //   pass=1: remaining batch of each channel.
+  // We do this so each channel `c` in the kernel can find its first batch by
+  // calculating:
+  //   firstBatchCursor[c] = sum(firstBatchBytes[c1] for c1 < c)`.
+  // Batches after the first are located using `nextCursor` pointers. When
+  // building the first work of each channel we compute its `nextCursor` by:
+  //   firstBatchNext[c] = sum(firstBatchBytes[c1] for all c1)
+  //                     + sum(totalBatchBytes[c1] - firstBatchBytes[c1] for c1 < c)
+  uint32_t firstBatchNext = fifoCursor; // `nextCursor` field for the first batch
+  for (int c=0; c < MAXCHANNELS; c++) {
+    struct ncclKernelPlanWorkBatchList* batch = ncclIntruQueueHead(&plan->channels[c].devWorkBatchQueue);
+    plan->args.firstDevWorkBytes[c] = (batch ? batch->footprint : 0);
+    firstBatchNext += (batch ? batch->footprint : 0);
   }
-  uint32_t ixHead = ixSent;
-  ixSent += plan->channelCount;
-  int channelsWithWork = 0; // number of channels below `c` with work structs.
-  for (int c=0; c < channelUbound; c++) {
-    struct ncclWorkList* q = ncclIntruQueueHead(&plan->channels[c].workQueue);
-    // Offset of first work equals number of channels below with work.
-    uint32_t ix = ixHead + channelsWithWork;
-    channelsWithWork += q != nullptr ? 1 : 0;
-    while (q != nullptr) {
-      if (q->next != nullptr) {
-        q->work.header.workNext = int32_t(ixSent & ixMask) - int32_t(ixHead & ixMask);
-      } else {
-        q->work.header.inFifo = !persistent ? 1 : 0;
-        // Tell channel to ack us back ix+1 indicating that all slots up to and
-        // including ix have been consumed.
-        q->work.header.doneAcks = ix+1;
-        comm->channels[c].workFifoSent = ix+1;
+  for (int pass=0; pass < 2; pass++) {
+    for (uint64_t mask=plan->channelMask; mask != 0; mask &= mask-1) {
+      int channelId = bitffs(mask)-1;
+      struct ncclKernelPlanWorkBatchList* batch = ncclIntruQueueHead(&plan->channels[channelId].devWorkBatchQueue);
+      if (batch == nullptr) continue; // Skip channel if it has no work.
+
+      int firstBatchBytes = batch->footprint;
+      if (pass == 1) batch = batch->next; // Second pass skips first work.
+
+      while (batch != nullptr) {
+        struct ncclDevWorkBatchHeader header = batch->header; // C++ struct copy
+        header.nextCursor = pass==0 ? firstBatchNext : (fifoCursor + batch->footprint);
+        header.nextBytes = batch->next ? batch->next->footprint : 0;
+        writeFifo(fifoBuf, &fifoCursor, fifoMask, &header);
+        struct ncclKernelPlanWorkList* work = ncclIntruQueueHead(&batch->workQueue);
+        while (work != nullptr) {
+          switch (header.type) {
+          case ncclDevWorkTypeP2p:
+            writeFifo(fifoBuf, &fifoCursor, fifoMask, (struct ncclDevWorkP2p*)(work+1));
+            break;
+          case ncclDevWorkTypeColl:
+            writeFifo(fifoBuf, &fifoCursor, fifoMask, (struct ncclDevWorkColl*)(work+1));
+            break;
+          case ncclDevWorkTypeCollReg:
+            writeFifo(fifoBuf, &fifoCursor, fifoMask, (struct ncclDevWorkCollReg*)(work+1));
+            break;
+          case ncclDevWorkTypeBcast:
+            writeFifo(fifoBuf, &fifoCursor, fifoMask, (struct ncclDevWorkBcast*)(work+1));
+            break;
+          }
+          work = work->next;
+        }
+        batch = batch->next;
+        fifoCursor = alignUp(fifoCursor, 16);
+        if (pass == 0) break; // First pass processes only first work.
       }
-      workHeap[ix & ixMask] = q->work; // C++ struct assignment
-      q = q->next;
-      if (q != nullptr) ix = ixSent++;
+      if (pass == 0) {
+        // The next channel's first batch's `nextCursor` points just after all
+        // of this channel's work.
+        firstBatchNext += plan->channels[channelId].devWorkFootprint;
+        // Don't double count bytes of first batch.
+        firstBatchNext -= firstBatchBytes;
+      }
+      if (!persistent) comm->channels[channelId].devWorkFifoProduced = fifoCursor;
     }
   }
 
   if (!persistent) {
-    comm->workFifoSent = ixSent;
-    if (comm->workFifoHeapGdrHandle != nullptr) wc_store_fence();
-    plan->workHead = &comm->devWorkFifoHeap[ixHead & ixMask];
+    comm->devWorkFifoProduced = fifoCursor;
+    if (comm->devWorkFifoBufGdrHandle != nullptr) wc_store_fence();
   } else {
-    NCCLCHECK(ncclCudaMalloc(&plan->workHead, nWork));
-    NCCLCHECK(ncclCudaMemcpy(plan->workHead, workHeap, nWork));
+    char* buf;
+    NCCLCHECK(ncclCudaMalloc(&buf, footprint));
+    plan->args.devWorkBuf = (void*)buf;
+    NCCLCHECK(ncclCudaMemcpy(buf, (char*)fifoBuf, footprint));
   }
   return ncclSuccess;
 }
 
-static ncclResult_t uploadProxyOps(struct ncclComm* comm, struct ncclKernelPlan* plan) {
+static ncclResult_t uploadProxyWork(struct ncclComm* comm, struct ncclKernelPlan* plan) {
   uint64_t collOpCount = comm->sharedRes->collOpCount;
   // Advance comm's collOpCount by number of colls in this plan.
-  comm->sharedRes->collOpCount += plan->collOpCount;
-  for (int c=0; c < plan->channelUbound; c++) {
-    struct ncclProxyOp* q = ncclIntruQueueHead(&plan->channels[c].proxyOpQueue);
-    uint64_t p2pOpCount = comm->sharedRes->p2pOpCount[c];
-    uint64_t nextP2pOpCount = p2pOpCount;
+  comm->sharedRes->collOpCount = collOpCount + plan->collOpCount;
+  for (uint64_t m=plan->channelMask; m != 0; m &= m-1) {
+    int channelId = bitffs(m)-1;
+    struct ncclProxyWork* q = ncclIntruQueueHead(&plan->channels[channelId].proxyWorkQueue);
+    uint64_t p2pOpCount = comm->sharedRes->channels[channelId].p2pOpCount;
     while (q != nullptr) {
-      struct ncclProxyOp* qNext = q->enqNext;
+      struct ncclProxyWork* qNext = q->next;
       // Ignoring the bottom tag bit, opCount's are zero-based within plan so
       // translate them to the tip of the comm's history.
-      if (q->opCount & 1) { // p2p
-        // p2pOpCount is monotonic increasing within a plan's channel so just
-        // remember last value to compute max.
-        nextP2pOpCount = p2pOpCount + (q->opCount>>1);
-        nextP2pOpCount += 1; // +1 to ensure next plan doesn't collide
-        q->opCount = (p2pOpCount<<1) + q->opCount;
-      } else { // coll
-        q->opCount = (collOpCount<<1) + q->opCount;
-      }
-      NCCLCHECK(ncclProxySaveOp(comm, q, nullptr)); // May overwrite enqNext.
+      bool p2p = (q->opCount & 1);
+      q->opCount = ((p2p ? p2pOpCount : collOpCount)<<1) + q->opCount;
+      NCCLCHECK(ncclProxySaveWork(comm, channelId, q, nullptr));
       if (!plan->persistent) {
         // Non-persistent kernels have their memory reclaimed after upload.
-        ncclMemoryPoolFree(&plan->memPool_ncclProxyOp, q);
+        ncclMemoryPoolFree(&plan->memPool_ncclProxyWork, q);
       }
       q = qNext;
     }
     // Advance channel's p2pOpCount by number of p2p's in this plan channel.
-    comm->sharedRes->p2pOpCount[c] = nextP2pOpCount;
+    comm->sharedRes->channels[channelId].p2pOpCount += plan->channels[channelId].p2pOpCount;
   }
   return ncclSuccess;
 }
 
 static ncclResult_t hostStreamPlanTask(struct ncclComm* comm, struct ncclKernelPlan* plan) {
-  NCCLCHECK(uploadProxyOps(comm, plan));
+  NCCLCHECK(uploadProxyWork(comm, plan));
   NCCLCHECK(ncclProxyStart(comm));
   if (!plan->persistent) {
     // Notify main thread of our reclaiming. This will reclaim plan concurrently.
@@ -885,14 +1253,14 @@ static ncclResult_t reclaimPlan(struct ncclComm* comm, struct ncclCommCallback* 
   struct ncclKernelPlan* plan = (struct ncclKernelPlan*)me; // cast from first member `reclaim`
   if (plan->persistent) {
     comm->persistentRefs -= 1;
-    NCCLCHECK(ncclCudaFree(plan->workHead));
+    NCCLCHECK(ncclCudaFree(plan->args.devWorkBuf));
     while (!ncclIntruQueueEmpty(&plan->ipcMemQueue)) {
       struct ncclPointerList* q = ncclIntruQueueDequeue(&plan->ipcMemQueue);
       CUDACHECKIGNORE(cudaIpcCloseMemHandle(q->ptr));
       ncclMemoryPoolFree(&comm->memPool_ncclPointerList, q);
     }
   }
-  ncclMemoryPoolTakeAll(&comm->memPool_ncclProxyOp, &plan->memPool_ncclProxyOp);
+  ncclMemoryPoolTakeAll(&comm->memPool_ncclProxyWork, &plan->memPool_ncclProxyWork);
   ncclMemoryPoolFree(&comm->memPool_ncclKernelPlan, plan);
   return ncclSuccess;
 }
@@ -919,44 +1287,44 @@ ncclResult_t ncclLaunchPrepare(struct ncclComm* comm) {
 
   // We already have one frame present which holds all of our tasks (which we
   // are about to schedule). Now push an additional frame for allocating
-  // work structs (see appendWorkElem() variants all use scoped allocation).
+  // work structs (see appendDevWork() variants all use scoped allocation).
   ncclMemoryStackPush(&comm->memScoped);
 
-  if (tasks->nTasksColl + tasks->nTasksP2p != 0) {
-    do {
-      struct ncclKernelPlan* plan = ncclMemoryPoolAlloc<struct ncclKernelPlan>(&comm->memPool_ncclKernelPlan, &comm->memPermanent);
-      ncclIntruQueueEnqueue(&comm->planQueue, plan);
-      nPlans += 1;
-      plan->comm = comm;
-      plan->reclaimer.fn = reclaimPlan;
-      plan->persistent = persistent;
+  if (tasks->nTasksColl + tasks->nTasksBcast + tasks->nTasksP2p != 0) {
+    while (true) {
+      memset(&comm->planner, 0, sizeof(comm->planner));
+      comm->planner.persistent = persistent;
 
       // Non-persistent kernels fill up at most half of our fifo per kernel.
-      int nWorkBudget = plan->persistent ? INT_MAX : comm->workFifoDepth/2;
-      int nWorkBudgetOld = nWorkBudget;
+      int devWorkBudget = persistent ? INT_MAX : comm->devWorkFifoBytes/2;
+      int nTasksOld = tasks->nTasksColl + tasks->nTasksBcast + tasks->nTasksP2p;
 
       // Drain coll tasks first. This is essential since we partition tasks based
       // on the work budget and p2p work isn't collective. If we were to drain p2p
       // first, the place where we cut the kernel could vary by rank which would
-      // cause the "shortest channel first" channel picker to have divergent results.
-      if (tasks->nTasksColl != 0) {
-        NCCLCHECKGOTO(scheduleCollTasksToPlan(comm, plan, &nWorkBudget), result, failure);
+      // cause the least loaded channel picker to have divergent results.
+      if (tasks->nTasksColl + tasks->nTasksBcast != 0) {
+        NCCLCHECKGOTO(scheduleCollTasksToPlan(comm, &devWorkBudget), result, failure);
       }
       // And only drain p2p tasks once colls are depleted.
-      if (tasks->nTasksColl == 0 && tasks->nTasksP2p != 0) {
-        NCCLCHECKGOTO(scheduleP2pTasksToPlan(comm, plan, &nWorkBudget), result, failure);
+      if (tasks->nTasksColl + tasks->nTasksBcast == 0 && tasks->nTasksP2p != 0) {
+        NCCLCHECKGOTO(scheduleP2pTasksToPlan(comm, &devWorkBudget), result, failure);
       }
-      if (nWorkBudget == nWorkBudgetOld) {
+
+      int nTasksNow = tasks->nTasksColl + tasks->nTasksBcast + tasks->nTasksP2p;
+      if (nTasksNow == nTasksOld) {
         // We weren't able to fit any tasks into our budget which means now we're
         // stuck in an infinite loop. We defer this check until here, instead of
         // doing it in comm init, to permit testing with insanely shallow queues
         // for cases where that's expected to still work (e.g. few channels).
-        WARN("'NCCL_WORK_FIFO_DEPTH=%d' is too small. Minimum value is %d", comm->workFifoDepth, 2*MAXCHANNELS);
+        WARN("'NCCL_WORK_FIFO_BYTES=%d' is too small. Minimum value is %d", comm->devWorkFifoBytes, 2*MAXCHANNELS*ncclMaxDevWorkBatchBytes(comm->cudaArch));
         result = ncclInvalidUsage;
         goto failure;
       }
-      finishPlan(plan);
-    } while (tasks->nTasksColl + tasks->nTasksP2p != 0);
+      NCCLCHECKGOTO(finishPlan(comm), result, failure);
+      nPlans += 1;
+      if (0 == tasks->nTasksColl + tasks->nTasksBcast + tasks->nTasksP2p) break;
+    }
 
     struct ncclKernelPlan* planHead = ncclIntruQueueHead(&comm->planQueue);
     comm->unlaunchedPlansHead = planHead;
@@ -990,7 +1358,7 @@ ncclResult_t ncclLaunchPrepare(struct ncclComm* comm) {
       // do this if necessary since host tasks impose a high performance cost in CUDA.
       bool acquired = false;
       for (struct ncclKernelPlan* plan=planHead; plan != nullptr; plan = plan->next) {
-        if (plan->hasProxyOps) {
+        if (plan->hasProxyWork) {
           if (!acquired) {
             acquired = true;
             NCCLCHECKGOTO(ncclStrongStreamAcquire(tasks->capturingGraph, &comm->sharedRes->hostStream), result, failure);
@@ -1013,7 +1381,7 @@ ncclResult_t ncclLaunchPrepare(struct ncclComm* comm) {
 
   if (false) {
   failure:
-    ncclMemoryStackPop(&comm->memScoped); // deallocate ncclWork's
+    ncclMemoryStackPop(&comm->memScoped); // deallocate ncclDevWorkBatchHeader's
   }
   return result;
 }
@@ -1022,7 +1390,7 @@ ncclResult_t ncclLaunchKernelBefore_NoUncapturedCuda(struct ncclComm* comm, stru
   // This code is called after we've checked in to the intra-process barrier
   // but before launching the kernel. We are not allowed to call CUDA unless the
   // kernel launch is captured.
-  NCCLCHECK(uploadWork(comm, plan));
+  NCCLCHECK(uploadDevWork(comm, plan));
   return ncclSuccess;
 }
 
@@ -1035,10 +1403,10 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
   struct ncclTasks* tasks = &comm->tasks;
   void *fn = plan->kernelFn;
   cudaStream_t launchStream = tasks->streams->stream;
-  dim3 grid = {(unsigned)plan->channelCount, 1, 1};
+  dim3 grid = {(unsigned)bitpopcnt(plan->channelMask), 1, 1};
   dim3 block = {(unsigned)plan->threadPerBlock, 1, 1};
   size_t smem = ncclShmemDynamicSize(comm->cudaArch);
-  void *args[3] = {&comm->devComm, &plan->channelMask, &plan->workHead};
+  void* args[1] = {&plan->args};
 
   #if CUDART_VERSION >= 11080
   int driverVersion;
@@ -1087,14 +1455,18 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
   }
   #endif
   // Standard kernel launch
-  CUDACHECK(cudaLaunchKernel(fn, grid, block, args, smem, launchStream));
+  cudaError_t err = cudaLaunchKernel(fn, grid, block, args, smem, launchStream);
+  if (err != cudaSuccess) {
+    WARN("cudaLaunchKernel(fn=%p, grid={%u,%u,%u}, block={%u,%u,%u}, smem=%llu, stream=%p) failed with %s: %s", fn, grid.x, grid.y, grid.z, block.x, block.y, block.z, (unsigned long long)smem, launchStream, cudaGetErrorName(err), cudaGetErrorString(err));
+    return ncclUnhandledCudaError;
+  }
   return ncclSuccess;
 }
 
 ncclResult_t ncclLaunchKernelAfter_NoCuda(struct ncclComm* comm, struct ncclKernelPlan* plan) {
   if (!(plan->persistent || comm->persistentRefs != 0 || ncclCudaLaunchBlocking)) {
     // If this isn't being captured and there aren't any CUDA graphs alive
-    // then we don't need to do our proxyOp pushing on the host stream.
+    // then we don't need to do our proxyWork pushing on the host stream.
     NCCLCHECK(hostStreamPlanTask(comm, plan));
   }
   return ncclSuccess;
@@ -1103,10 +1475,9 @@ ncclResult_t ncclLaunchKernelAfter_NoCuda(struct ncclComm* comm, struct ncclKern
 ncclResult_t ncclLaunchFinish(struct ncclComm* comm) {
   ncclResult_t result = ncclSuccess;
   struct ncclTasks* tasks = &comm->tasks;
-  tasks->collBytesTotal = 0; // Just in case subtraction during scheduleCollTasksToPlan() doesn't get to 0
 
-  // Deallocate ncclWork's. This frame exists so long as ncclLaunchPrepare
-  // succeeded, and if it ncclLaunchPrepare didn't succeed we wouldn't be here.
+  // Deallocate ncclDevWorkBatchHeader's. This frame exists so long as ncclLaunchPrepare
+  // succeeded, and if ncclLaunchPrepare didn't succeed we wouldn't be here.
   ncclMemoryStackPop(&comm->memScoped);
 
   if (!ncclIntruQueueEmpty(&comm->planQueue)) {
@@ -1252,6 +1623,7 @@ static ncclResult_t getPatternInfo(struct ncclInfo* info) {
 
 static ncclResult_t getLoopInfo(struct ncclInfo* info) {
   switch (info->pattern) {
+    case ncclPatternNone: break;
     case ncclPatternTreeUp:
     case ncclPatternTreeDown:
     case ncclPatternTreeUpDown:
@@ -1276,25 +1648,22 @@ static ncclResult_t getLoopInfo(struct ncclInfo* info) {
   return ncclSuccess;
 }
 
-static ncclResult_t computeColl(struct ncclInfo* info /* input */, int* workFuncIndex, struct ncclWorkElem* work, struct ncclProxyOp* proxyOp /* output */) {
+static ncclResult_t computeCollDevWork(
+    /*inout*/struct ncclInfo* info,
+    /*out*/int* workFuncIndex, /*out*/struct ncclDevWorkColl* work
+  ) {
   int collNetTypeSupport = 0;
   // Check whether algo and proto have been preset (as in aggregation case)
   // If so, skip the calculation
-  if (info->nChannels > 0 && info->nThreads > 0) goto comp_next;
-  NCCLCHECK(getCollNetSupport(info, &collNetTypeSupport));
-  NCCLCHECK(getAlgoInfo(info, collNetTypeSupport, 1));
-
-comp_next:
-  // Set nstepsPerLoop and nchunksPerLoop
-  NCCLCHECK(getPatternInfo(info));
-  NCCLCHECK(getLoopInfo(info));
-
-  work->sendbuff = info->sendbuff;
-  work->recvbuff = info->recvbuff;
+  if (info->nChannels == 0 || info->nThreads == 0) {
+    NCCLCHECK(getCollNetSupport(info, &collNetTypeSupport));
+    NCCLCHECK(getAlgoInfo(info, collNetTypeSupport, 1));
+  }
+  work->srcBuf = (void*)info->sendbuff;
+  work->dstBuf = (void*)info->recvbuff;
   work->root = info->root;
   work->count = info->count;
   work->nChannels = info->nChannels;
-  work->nWarps = info->nThreads / WARP_SIZE;
   work->redOpArg = info->opFull.scalarArg;
   work->redOpArgIsPtr = info->opFull.scalarArgIsPtr;
 
@@ -1306,9 +1675,15 @@ comp_next:
 
   *workFuncIndex = FUNC_INDEX(info->coll, info->opFull.op, info->datatype, info->algorithm, info->protocol);
 
+  // Set nstepsPerLoop and nchunksPerLoop
+  NCCLCHECK(getPatternInfo(info));
+  NCCLCHECK(getLoopInfo(info));
+
   int stepSize   = info->comm->buffSizes[info->protocol]/NCCL_STEPS;
   int chunkSteps = (info->protocol == NCCL_PROTO_SIMPLE && info->algorithm == NCCL_ALGO_RING) ? info->chunkSteps : 1;
   int sliceSteps = (info->protocol == NCCL_PROTO_SIMPLE && info->algorithm == NCCL_ALGO_RING) ? info->sliceSteps : 1;
+  info->chunkSteps = chunkSteps;
+  info->sliceSteps = sliceSteps;
   int chunkSize  = stepSize*chunkSteps;
 
   // Compute lastChunkSize
@@ -1369,31 +1744,77 @@ comp_next:
     // Use lastChunkSize as chunkSize
     work->lastChunkSize = chunkSize*NCCL_LL128_DATAELEMS/(NCCL_LL128_LINEELEMS*ncclTypeSize(info->datatype));
   }
+  info->chunkSize = chunkSize;
+  return ncclSuccess;
+}
 
-  // Compute nSteps for proxies
+// Called after computeCollDevWork() on same `info`
+static ncclResult_t computeCollProxyWork(
+    struct ncclInfo* info, int channelId,
+    /*out*/struct ncclProxyWork* proxyWork
+  ) {
+  if (info->pattern == ncclPatternNone) {
+    proxyWork->pattern = ncclProxyWorkPatternNone;
+    return ncclSuccess;
+  }
+  struct ncclComm* comm = info->comm;
+  //int stepSize   = comm->buffSizes[info->protocol]/NCCL_STEPS;
+  int chunkSteps = info->chunkSteps;
+  int sliceSteps = info->sliceSteps;
+  int chunkSize  = info->chunkSize;
   int chunkEffectiveSize = chunkSize;
   if (info->protocol == NCCL_PROTO_LL) chunkEffectiveSize /= 2;
   if (info->protocol == NCCL_PROTO_LL128) chunkEffectiveSize = (chunkSize / NCCL_LL128_LINEELEMS) * NCCL_LL128_DATAELEMS;
-  //if (info->comm->rank == 0) printf("Coll %d, size %ld -> %dx%d, chunkSize %d (algo %d proto%d)\n", info->coll, info->nBytes, info->nChannels, info->nThreads, chunkSize, info->algorithm, info->protocol);
-  int nLoops = (int)(DIVUP(info->nBytes, (((size_t)(info->nChannels))*info->nchunksPerLoop*chunkEffectiveSize)));
-  proxyOp->nsteps = info->nstepsPerLoop * nLoops * chunkSteps;
-  proxyOp->sliceSteps = sliceSteps;
-  proxyOp->chunkSteps = chunkSteps;
-  proxyOp->chunkSize = chunkSize;
-  proxyOp->protocol = info->protocol;
-  proxyOp->dtype = info->datatype;
-  proxyOp->redOp = info->opFull.op==ncclDevPreMulSum || info->opFull.op==ncclDevSumPostDiv ? ncclSum : // Network sees avg as sum
-                     info->op;
-  proxyOp->pattern = info->pattern;
-  proxyOp->root = info->root;
-  // This is used by P2P to reduce the receive buffer size. We don't use it in collectives
-  // because some protocols need to transmit more than the total size, plus they sometimes
-  // round up
-  proxyOp->nbytes = stepSize*proxyOp->sliceSteps;
 
-  TRACE(NCCL_COLL,"opCount %lx slicesteps %d spl %d cpl %d nbytes %zi -> protocol %d nchannels %d nthreads %d, nloops %d nsteps %d chunksize %d comm %p",
-      proxyOp->opCount, sliceSteps, info->nstepsPerLoop, info->nchunksPerLoop, info->nBytes, info->protocol, info->nChannels, info->nThreads,
-      nLoops, proxyOp->nsteps, chunkSize, info->comm);
+  int nLoops = (int)divUp(info->nBytes, (((size_t)(info->nChannels))*info->nchunksPerLoop*chunkEffectiveSize));
+  int slices = nLoops*info->nstepsPerLoop*(chunkSteps/sliceSteps);
+  proxyWork->sliceSteps = sliceSteps;
+  proxyWork->protocol = info->protocol;
+  switch (info->pattern) {
+  case ncclPatternRing:
+  case ncclPatternRingTwice:
+    { proxyWork->pattern = ncclProxyWorkPatternRing;
+      proxyWork->ring.sendSlices = slices;
+      proxyWork->ring.recvSlices = slices;
+    } break;
+  case ncclPatternPipelineFrom:
+  case ncclPatternPipelineTo:
+    { proxyWork->pattern = ncclProxyWorkPatternRing;
+      bool fromNotTo = (info->pattern == ncclPatternPipelineFrom);
+      struct ncclRing* ring = &comm->channels[channelId].ring;
+      bool isRoot = (comm->rank == info->root);
+      bool isLeaf = ((fromNotTo ? ring->next : ring->prev) == info->root);
+      proxyWork->ring.sendSlices = (fromNotTo ? !isLeaf : !isRoot) ? slices : 0;
+      proxyWork->ring.recvSlices = (fromNotTo ? !isRoot : !isLeaf) ? slices : 0;
+    } break;
+  case ncclPatternTreeUp:
+  case ncclPatternTreeDown:
+  case ncclPatternTreeUpDown:
+    { proxyWork->pattern = ncclProxyWorkPatternTree;
+      proxyWork->tree.up = (info->pattern != ncclPatternTreeDown);
+      proxyWork->tree.down = (info->pattern != ncclPatternTreeUp);
+      proxyWork->tree.slices = slices;
+    } break;
+  case ncclPatternCollnetChain:
+  case ncclPatternCollnetDirect:
+    { proxyWork->pattern = ncclProxyWorkPatternCollnet;
+      proxyWork->collnet.directNotChain = (info->pattern == ncclPatternCollnetDirect);
+      proxyWork->collnet.slices = slices;
+      proxyWork->collnet.dtype = info->datatype;
+      proxyWork->collnet.redOp = info->op;
+      // Network sees these as sum
+      if (info->opFull.op == ncclDevPreMulSum) proxyWork->collnet.redOp = ncclSum;
+      if (info->opFull.op == ncclDevSumPostDiv) proxyWork->collnet.redOp = ncclSum;
+    } break;
+  case ncclPatternNvls:
+  case ncclPatternNvlsTree:
+    { proxyWork->pattern = ncclProxyWorkPatternNvls;
+      proxyWork->nvls.slices = slices;
+      proxyWork->nvls.isTree = (info->pattern == ncclPatternNvlsTree);
+    } break;
+  default:
+    return ncclInternalError;
+  }
   return ncclSuccess;
 }
 
@@ -1476,20 +1897,22 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo const* inf
     bool isSendNotRecv = info->coll == ncclFuncSend;
 
     // Must be in thread local group before tasks can be alloc'd in `comm->memScoped`.
-    ncclGroupCommJoin(info->comm);
+    ncclGroupCommJoin(comm);
     struct ncclTaskP2p* p2p = ncclMemoryStackAlloc<struct ncclTaskP2p>(&comm->memScoped);
-    p2p->buff = (void*)info->recvbuff;
+    p2p->localBuf = (void*)info->recvbuff;
     p2p->bytes = nBytes;
     p2p->chunk = 0;
     ncclIntruQueueEnqueue(
       isSendNotRecv ? &tasks->peers[peer].sendQueue : &tasks->peers[peer].recvQueue,
       p2p);
     tasks->nTasksP2p += 1;
-
+    if (comm->peerInfo[peer].isIntraProc) {
+      tasks->p2pIntraPeerMask |= uint64_t(1)<<comm->peerInfo[peer].comm->intraRank;
+    }
     // Mark channels that need pre-connect
     if (comm->rank != peer) {
       int channelBaseId;
-      NCCLCHECK(ncclChannelComputeBase(comm, peer, info->coll, &channelBaseId));
+      NCCLCHECK(ncclChannelComputeBase(comm, peer, isSendNotRecv, &channelBaseId));
       if (!(isSendNotRecv ? tasks->peers[peer].sendSeen : tasks->peers[peer].recvSeen)) {
         (isSendNotRecv ? tasks->peers[peer].sendSeen : tasks->peers[peer].recvSeen) = true;
         for (int c=0; c < comm->p2pnChannelsPerPeer; c++) {
@@ -1510,6 +1933,9 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo const* inf
       }
     }
   } else {
+    // Empty collectives are discarded entirely.
+    if (info->count == 0) return ncclSuccess;
+
     // Copy reduction op state from op handle into info struct here since the
     // op handle may be destroyed before ncclGroupEnd().
     struct ncclDevRedOpFull opFull;
@@ -1525,19 +1951,31 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo const* inf
     } else {
       // Must be in thread local group before tasks can be alloc'd in `comm->memScoped`.
       ncclGroupCommJoin(info->comm);
-      struct ncclTaskColl* t = ncclMemoryStackAlloc<struct ncclTaskColl>(&comm->memScoped);
-      t->func = info->coll;
-      t->sendbuff = info->sendbuff;
-      t->recvbuff = info->recvbuff;
-      t->count = info->count;
-      t->root = info->root;
-      t->datatype = info->datatype;
-      t->op = opFull; // C++ struct assignment
-      t->chunkSteps = info->chunkSteps;
-      t->sliceSteps = info->sliceSteps;
-      ncclIntruQueueEnqueue(&tasks->collQueue, t);
-      tasks->collBytesTotal += t->count*ncclTypeSize(t->datatype);
-      tasks->nTasksColl += 1;
+      if (info->coll == ncclFuncBroadcast) {
+        struct ncclTaskBcast* t = ncclMemoryStackAlloc<struct ncclTaskBcast>(&comm->memScoped);
+        t->srcBuf = (void*)info->sendbuff;
+        t->dstBuf = (void*)info->recvbuff;
+        t->bytes = info->count;
+        ncclIntruQueueEnqueue(&tasks->peers[info->root].bcastQueue, t);
+        tasks->collLoadBytes += t->bytes;
+        tasks->nTasksBcast += 1;
+        tasks->minBcastPeer = std::min(tasks->minBcastPeer, info->root);
+        tasks->maxBcastPeer = std::max(tasks->maxBcastPeer, info->root);
+      } else {
+        struct ncclTaskColl* t = ncclMemoryStackAlloc<struct ncclTaskColl>(&comm->memScoped);
+        t->func = info->coll;
+        t->sendbuff = info->sendbuff;
+        t->recvbuff = info->recvbuff;
+        t->count = info->count;
+        t->root = info->root;
+        t->datatype = info->datatype;
+        t->op = opFull; // C++ struct assignment
+        t->chunkSteps = info->chunkSteps;
+        t->sliceSteps = info->sliceSteps;
+        ncclIntruQueueEnqueue(&tasks->collQueue, t);
+        tasks->collLoadBytes += info->nBytes;
+        tasks->nTasksColl += 1;
+      }
     }
   }
 

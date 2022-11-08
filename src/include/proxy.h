@@ -20,39 +20,73 @@ enum ncclProxyOpState { ncclProxyOpNone, ncclProxyOpReady, ncclProxyOpProgress }
 struct ncclProxyArgs;
 typedef ncclResult_t (*proxyProgressFunc_t)(struct ncclProxyState*, struct ncclProxyArgs*);
 
-#define NCCL_PROXY_MAX_SUBS MAXCHANNELS
-static_assert(NCCL_MAX_WORK_ELEMENTS <= MAXCHANNELS, "Not enough sub space for max work elements");
+#define NCCL_PROXY_MAX_SUBS (NCCL_MAX_P2P_CONNS_PER_WORK_BATCH > MAXCHANNELS ? NCCL_MAX_P2P_CONNS_PER_WORK_BATCH : MAXCHANNELS)
+//static_assert(NCCL_MAX_WORK_ELEMENTS <= MAXCHANNELS, "Not enough sub space for max work elements");
+
+enum ncclProxyWorkPattern : uint8_t {
+  ncclProxyWorkPatternNone = 0,
+  ncclProxyWorkPatternRing,
+  ncclProxyWorkPatternTree,
+  ncclProxyWorkPatternCollnet,
+  ncclProxyWorkPatternNvls,
+  ncclProxyWorkPatternP2pSend,
+  ncclProxyWorkPatternP2pRecv
+};
+struct ncclProxyWork {
+  struct ncclProxyWork* next;
+  uint64_t opCount;
+  uint8_t protocol;
+  uint8_t sliceSteps;
+  enum ncclProxyWorkPattern pattern;
+  union {
+    struct {
+      uint32_t sendSlices, recvSlices;
+    } ring;
+    struct {
+      uint32_t slices;
+      uint32_t up:1, down:1;
+    } tree;
+    struct {
+      uint32_t slices;
+      uint8_t directNotChain;
+      uint8_t /*ncclDataType_t*/ dtype;
+      uint8_t /*ncclDevRedOp_t*/ redOp;
+    } collnet;
+    struct {
+      uint32_t slices;
+      uint32_t isTree:1;
+    } nvls;
+    struct {
+      uint32_t slices;
+      uint32_t sliceBytes;
+      int32_t peer;
+    } p2p;
+  };
+};
 
 struct ncclProxyOp {
   struct ncclProxyConnection* connection;
-  int channelId;
-  int nsteps;
-  ssize_t nbytes;
-  int root;
-  int next;
-
   uint64_t opCount;
-  int sliceSteps;
-  int chunkSteps;
-  int chunkSize;
-  uint8_t /*ncclDataType_t*/ dtype;
-  uint8_t /*ncclDevRedOp_t*/ redOp;
-  uint8_t /*ncclPattern_t*/ pattern;
+  int next;
+  int peer;
+  int slices;
+  uint32_t sliceBytes:24, sliceSteps:8;
+  uint8_t channelId;
   uint8_t protocol;
-
+  enum ncclProxyWorkPattern pattern;
   union {
-    uint64_t unused;
-    // For use by enqueue.cc
-    struct ncclProxyOp *enqNext;
+    struct {
+      uint8_t /*ncclDataType_t*/ dtype;
+      uint8_t /*ncclDevRedOp_t*/ redOp;
+    } collnet;
   };
 };
-static_assert(sizeof(struct ncclProxyOp) == 64, "Keep ProxyOp aligned with cache lines for effective prefetch");
 
 struct ncclProxySubArgs {
   struct ncclProxyConnection* connection;
   int channelId;
   int nsteps;
-  ssize_t nbytes;
+  int sliceBytes;
   int peer;
 
   int groupSize; // Number of consecutive sub operations sharing the same recvComm
@@ -74,11 +108,10 @@ struct ncclProxyArgs {
   int done;
   uint64_t opCount;
   int sliceSteps;
-  int chunkSteps;
-  int chunkSize;
+  int sliceBytes;
   uint8_t /*ncclDataType_t*/ dtype;
   uint8_t /*ncclDevRedOp_t*/ redOp;
-  uint8_t /*ncclPattern_t*/ pattern;
+  enum ncclProxyWorkPattern pattern;
   uint8_t protocol;
   int state;
   char* sharedBuff[NCCL_STEPS];
@@ -96,8 +129,8 @@ struct ncclProxyArgs {
 // ProxyOps are used to communicate between main thread and service thread
 // Make sure we have enough to store two full rounds of operations on all channels.
 // Otherwise we'd be unable to post half of them to free new elements.
-#define MAX_OPS_PER_PEER (2*MAXCHANNELS*NCCL_MAX_WORK_ELEMENTS_P2P)
-#define NCCL_MAX_LOCAL_RANKS 64
+#define MAX_OPS_PER_PEER (2*MAXCHANNELS*NCCL_MAX_P2P_CONNS_PER_WORK_BATCH)
+
 struct ncclProxyOpsPool {
   struct ncclProxyOp ops[MAX_OPS_PER_PEER*NCCL_MAX_LOCAL_RANKS];
   volatile int nextOps;
@@ -245,8 +278,9 @@ enum proxyMode {
   proxyTo = 2
 };
 
-ncclResult_t ncclProxySaveOp(struct ncclComm* comm, struct ncclProxyOp* proxyOp, bool *justInquire);
-ncclResult_t ncclProxyComputeP2p(struct ncclInfo* info, struct ncclProxyOp* proxyOp);
+ncclResult_t ncclProxySaveWork(struct ncclComm* comm, int channelId, struct ncclProxyWork* proxyWork, bool *justInquire);
+//ncclResult_t ncclProxySaveOp(struct ncclComm* comm, struct ncclProxyOp* proxyOp, bool *justInquire);
+ncclResult_t ncclProxyComputeP2p(struct ncclInfo* info, struct ncclProxyWork* proxyWork);
 ncclResult_t ncclProxyStart(struct ncclComm* comm);
 ncclResult_t ncclProxyInit(struct ncclComm* comm, struct ncclSocket* sock, union ncclSocketAddress* peerAddresses);
 ncclResult_t ncclProxyCreate(struct ncclComm* comm);

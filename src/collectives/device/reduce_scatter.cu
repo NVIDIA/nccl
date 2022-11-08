@@ -4,6 +4,8 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
+#define NCCL_HOLLOW_THIS_TU NCCL_HOLLOW_REDUCE_SCATTER
+
 #include "reduce_scatter.h"
 #include "common.h"
 #include "collectives.h"

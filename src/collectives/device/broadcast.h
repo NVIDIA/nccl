@@ -9,74 +9,118 @@
 #include "primitives.h"
 
 namespace {
-  template<typename T, typename RedOp, typename Proto>
-  __device__ __forceinline__ void runRing(ncclWorkElem *args) {
-    const int tid = threadIdx.x;
-    const int nthreads = args->nWarps*WARP_SIZE;
-    const int bid = args->bid;
-    const int nChannels = args->nChannels;
-    ncclRing *ring = &ncclShmem.channel.ring;
-    const ssize_t chunkSize = int(Proto::calcBytePerStep()/sizeof(T) * (Proto::Id == NCCL_PROTO_SIMPLE ? BROADCAST_CHUNKSTEPS : 1));
-    const ssize_t minChunkSizeLL128 = int(nthreads*(Proto::calcBytePerGrain()/sizeof(T)));
-    const ssize_t loopSize = nChannels*chunkSize;
-    const ssize_t size = args->count;
-    const int rank = ring->userRanks[0];
-    const int nextRank = ring->userRanks[1];
-    const int root = args->root;
+  template<typename Proto>
+  __device__ __forceinline__ void runBcasts() {
+    int tid = threadIdx.x;
+    int tn = blockDim.x;
+    ncclRing* ring = &ncclShmem.channel.ring;
+    ncclDevWorkBcast* works = (ncclDevWorkBcast*)(&ncclShmem.workBatch+1);
+    Primitives<int8_t, FuncSum<int8_t>, FanSymmetric<1>, /*Direct=*/0, Proto, 0>
+      prims(tid, tn, &ring->prev, &ring->next, nullptr, nullptr, /*redOpArg=*/0);
+    int w = 0; // `works[]` index of the current broadcaster.
+    int wPrev = -1; // Value of `w` for previous loop iteration.
+    bool wPrevIsEmpty = false; // Local cache of `works[wPrev].bytes==0`
 
-    T *inputBuf = (T*)args->sendbuff;
-    T *outputBuf = (T*)args->recvbuff;
-    Primitives<T, RedOp, FanSymmetric<1>, 0, Proto, 0>
-      prims(tid, nthreads, &ring->prev, &ring->next, inputBuf, outputBuf, args->redOpArg);
+    while (true) {
+      int nWorks = ncclShmem.workBatch.nWorks;
+      int nRanks = ncclShmem.comm.nRanks;
+      size_t bytes = works[w].bytes;
+      int chunkBytes = (Proto::SlicePerChunk)*ncclShmem.workBatch.bcast.sliceBytes;
+      int ringDepth = works[w].ringDepth; // How far down the ring am I from this broadcaster
+      void* srcBuf = ringDepth==0 ? ncclShmem.workBatch.bcast.rootSrcBuf : nullptr;
+      void* dstBuf = works[w].dstBuf;
+      bool inPlace = srcBuf == dstBuf;
+      prims.setDataPtrs(srcBuf, dstBuf);
 
-    for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
-      ssize_t realChunkSize;
-      if (Proto::Id == NCCL_PROTO_SIMPLE) {
-        realChunkSize = min(chunkSize, divUp(size-gridOffset, nChannels));
-        realChunkSize = roundUp(realChunkSize, (nthreads-WARP_SIZE)*sizeof(uint64_t)/sizeof(T));
+      // The current broadcaster we're going to work on is element `w`. Here
+      // we compute the next broadcaster `wNext` which has work remaining. We
+      // are careful to compare against `wPrev` since `tid=0` could still be
+      // updating `works[wPrev]` in the previous loop iteration.
+      int wNext = (w+1 == nWorks) ? 0 : w+1;
+      while ((wNext==wPrev) ? wPrevIsEmpty : (works[wNext].bytes == 0)) {
+        wNext = (wNext+1 == nWorks) ? 0 : wNext+1;
       }
-      else if (Proto::Id == NCCL_PROTO_LL)
-        realChunkSize = size-gridOffset < loopSize ? args->lastChunkSize : chunkSize;
-      else if (Proto::Id == NCCL_PROTO_LL128)
-        realChunkSize = min(chunkSize, divUp(size-gridOffset, nChannels*minChunkSizeLL128)*minChunkSizeLL128);
-      realChunkSize = int(realChunkSize);
+      // The gap is the ring distance between `w` and `wNext`. This is the
+      // number of chunks we'll be expecting from broadcaster `w`. If `w` is the
+      // only remaining broadcaster (thus `w==next`) then we'll process all
+      // remaining chunks by setting ringGap=INT_MAX.
+      int ringGap = INT_MAX;
+      if (w != wNext) {
+        ringGap = works[wNext].ringDepth - ringDepth;
+        if (ringGap <= 0) ringGap += nRanks;
+      }
 
-      ssize_t offset = gridOffset + int(bid*realChunkSize);
-      int nelem = min(realChunkSize, size-offset);
-
-      if (rank == root) {
-        if (inputBuf == outputBuf) {
-          prims.send(offset, nelem);
+      // The following loop does data movement for the current broadcaster. We
+      // expect another chunk for every hop in the gap. An important side effect
+      // of the data movement primitives is that they include a thread barrier.
+      // We rely on this barrier when we write to shmem later on.
+      size_t offset = 0;
+      do {
+        int delta = min(bytes, (size_t)chunkBytes);
+        if (ringDepth == 0) { // This rank is broadcast root
+          if (inPlace) {
+            prims.send(offset, delta); // barrier
+          } else {
+            prims.copySend(offset, offset, delta); // barrier
+          }
+        } else if (ringDepth == nRanks-1) { // Downstream neighbor is broadcast root
+          prims.recv(offset, delta); // barrier
         } else {
-          prims.copySend(offset, offset, nelem);
+          prims.recvCopySend(offset, delta); // barrier
         }
-      } else if (nextRank == root) {
-        prims.recv(offset, nelem);
-      } else {
-        prims.recvCopySend(offset, nelem);
+        bytes -= delta;
+        offset += delta;
+        ringGap -= 1;
+      } while (ringGap != 0 && bytes != 0);
+      // ...a thread barrier has happened.
+
+      // If the next broadcaster is the current one, then we just completed all
+      // work since ringGap was INT_MAX.
+      if (wNext == w) break;
+
+      if (tid == 0) {
+        // Since there was a thread barrier in the primitive operation above, we
+        // know that these writes to shmem are safe since all threads have moved
+        // on to reading from works[wNext], and we know wNext cannot be equal to w.
+        works[w].bytes = bytes;
+        works[w].dstBuf = (char*)works[w].dstBuf + offset;
+        if (ringDepth == 0) {
+          ncclShmem.workBatch.bcast.rootSrcBuf = (char*)ncclShmem.workBatch.bcast.rootSrcBuf + offset;
+        }
       }
+      // The `tid!=0` threads in the next loop iteration must avoid racing with
+      // `tid==0` above since it is updating `works[wPrev]`. From the perspective
+      // of the next iteration, the threads are interested in `works[wPrev].bytes==0`,
+      // so we compute it in a local boolean here to be carried forward.
+      wPrevIsEmpty = (bytes == 0);
+      wPrev = w;
+      w = wNext;
     }
   }
 }
 
 template<typename T, typename RedOp>
-struct RunWorkElement<ncclFuncBroadcast, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
-  __device__ __forceinline__ void run(ncclWorkElem *args) {
-    using Proto = ProtoSimple<BROADCAST_CHUNKSTEPS/BROADCAST_SLICESTEPS, BROADCAST_SLICESTEPS>;
-    runRing<T, RedOp, Proto>(args);
+struct RunWorkBatch<ncclFuncBroadcast, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
+  __device__ __forceinline__ void run() {
+    using Proto = ProtoSimple</*SlicePerChunk      =*/NCCL_STEPS/2,
+                              /*StepPerSlice       =*/1,
+                              /*Unroll             =*/ncclCollUnroll(),
+                              /*Multimem{Srcs,Dsts}=*/0, 0,
+                              /*MinimizeNumSlices  =*/true>;
+    runBcasts<Proto>();
   }
 };
 
 template<typename T, typename RedOp>
-struct RunWorkElement<ncclFuncBroadcast, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_LL> {
-  __device__ __forceinline__ void run(ncclWorkElem *args) {
-    runRing<T, RedOp, ProtoLL>(args);
+struct RunWorkBatch<ncclFuncBroadcast, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_LL> {
+  __device__ __forceinline__ void run() {
+    runBcasts<ProtoLL>();
   }
 };
 
 template<typename T, typename RedOp>
-struct RunWorkElement<ncclFuncBroadcast, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_LL128> {
-  __device__ __forceinline__ void run(ncclWorkElem *args) {
-    runRing<T, RedOp, ProtoLL128>(args);
+struct RunWorkBatch<ncclFuncBroadcast, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_LL128> {
+  __device__ __forceinline__ void run() {
+    runBcasts<ProtoLL128>();
   }
 };

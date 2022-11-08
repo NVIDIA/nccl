@@ -93,6 +93,10 @@ inline void ncclGroupCommJoin(struct ncclComm* comm) {
     // Comms gets a new memory stack scope upon joining. Each task batched for
     // this comm is allocated there.
     ncclMemoryStackPush(&comm->memScoped);
+    comm->tasks.p2pIntraPeerMask = 0;
+    comm->tasks.minBcastPeer = INT_MAX;
+    comm->tasks.maxBcastPeer = INT_MIN;
+    comm->tasks.collLoadBytes = 0;
   }
 
   ncclGroupBlocking = comm->config.blocking;

@@ -238,19 +238,21 @@ ncclResult_t getOpIndex(struct ncclProxyArgs* op, struct ncclProxyProgressState*
 }
 
 ncclResult_t printProxyOp(struct ncclProxyArgs* op, int poolIndex, int opIndex) {
-  printf("[%d-%d|%ld| %s", poolIndex, opIndex, op->opCount, op->pattern == ncclPatternSend ? "Send" : op->pattern == ncclPatternRecv ? "Recv" : "Coll");
+  printf("[%d-%d|%ld| %s", poolIndex, opIndex, op->opCount,
+         op->pattern == ncclProxyWorkPatternP2pSend ? "Send" :
+         op->pattern == ncclProxyWorkPatternP2pRecv ? "Recv" : "Coll");
   for (int s=0; s<op->nsubs; s++) {
     struct ncclProxySubArgs* sub = op->subs+s;
     if (op->state == ncclProxyOpProgress) {
       char status = ' ';
-      if (op->pattern == ncclPatternRecv) {
+      if (op->pattern == ncclProxyWorkPatternP2pRecv) {
         if (sub->posted < sub->nsteps && sub->posted < sub->done + NCCL_STEPS) status = 'I'; // Init
         else if (sub->received < sub->posted) status = 'R'; // Receiving
         else if (sub->received < sub->transmitted) status = 'R'; // Receiving
         else if (sub->transmitted < sub->received) status = 'F'; // Flushing
         else if (sub->done < sub->transmitted) status = 'G'; // Waiting on GPU
         else status = 'D'; // Done
-      } else if (op->pattern == ncclPatternSend) {
+      } else if (op->pattern == ncclProxyWorkPatternP2pSend) {
         if (sub->posted < sub->nsteps && sub->posted < sub->done + NCCL_STEPS) status = 'I'; // Init
         else if (sub->transmitted < sub->posted) status = 'G'; // Waiting on GPU
         else if (sub->done < sub->transmitted) status = 'S'; // Sending
@@ -352,16 +354,18 @@ static ncclResult_t ncclProxyOpToArgs(struct ncclProxyOp* op, struct ncclProxyAr
   //memset(sub, 0, sizeof(struct ncclProxySubArgs));
   sub->connection = op->connection;
   sub->channelId = op->channelId;
-  sub->nsteps = op->nsteps;
-  sub->nbytes = op->nbytes;
-  sub->peer = op->root;
+  sub->sliceBytes = op->sliceBytes;
+  sub->nsteps = op->slices*op->sliceSteps;
+  sub->peer = op->peer;
   args->nsubs = subIndex+1;
   if (subIndex) {
-    if ((args->sliceSteps != op->sliceSteps) ||
-        (args->chunkSteps != op->chunkSteps) ||
-        (args->protocol != op->protocol) ||
-        (args->dtype != op->dtype) ||
-        (args->redOp != op->redOp)) {
+    if (!((args->sliceSteps == op->sliceSteps) &&
+          (args->protocol == op->protocol) &&
+          (args->pattern == op->pattern) &&
+          (args->pattern != ncclProxyWorkPatternCollnet || (
+            args->dtype == op->collnet.dtype &&
+            args->redOp == op->collnet.redOp))
+      )) {
       WARN("Proxy append mismatch");
       return ncclInternalError;
     }
@@ -375,10 +379,9 @@ static ncclResult_t ncclProxyOpToArgs(struct ncclProxyOp* op, struct ncclProxyAr
   args->done = 0;
   args->opCount = op->opCount;
   args->sliceSteps = op->sliceSteps;
-  args->chunkSteps = op->chunkSteps;
-  args->chunkSize = op->chunkSize;
-  args->dtype = op->dtype;
-  args->redOp = op->redOp;
+  args->sliceBytes = op->sliceBytes;
+  args->dtype = op->collnet.dtype;
+  args->redOp = op->collnet.redOp;
   args->pattern = op->pattern;
   args->protocol = op->protocol;
   args->state = ncclProxyOpReady;
@@ -499,14 +502,17 @@ static ncclResult_t ncclLocalOpAppend(struct ncclComm* comm, struct ncclProxyCon
   return ncclSuccess;
 }
 
-static ncclResult_t SaveProxy(struct ncclComm* comm, struct ncclChannel* channel, int type, int peer, struct ncclProxyOp* op, int connIndex, bool* justInquire) {
-  if (peer < 0) return ncclSuccess;
+static ncclResult_t savePeerOp(
+    struct ncclComm* comm, struct ncclChannel* channel, int type,
+    struct ncclProxyOp* op, int connIndex, bool* justInquire
+  ) {
+  if (op->peer < 0) return ncclSuccess;
 
-  struct ncclChannelPeer* peerComm = channel->peers[peer];
-  struct ncclConnector* connector = type == proxyRecv ? peerComm->recv+connIndex : peerComm->send+connIndex;
+  struct ncclChannelPeer* peerComm = channel->peers[op->peer];
+  struct ncclConnector* connector = &(type == proxyRecv ? peerComm->recv : peerComm->send)[connIndex];
   if (connector->transportComm == NULL) {
     WARN("Rank %d has no transport for %s peer %d on channel %d/%d", comm->rank,
-        type == proxyRecv ? "recv" : "send", peer, channel->id, connIndex);
+         (type==proxyRecv ? "recv" : "send"), op->peer, channel->id, connIndex);
     return ncclInternalError;
   }
   if (connector->transportComm->proxyProgress == NULL) return ncclSuccess;
@@ -520,121 +526,95 @@ static ncclResult_t SaveProxy(struct ncclComm* comm, struct ncclChannel* channel
 
 // justInquire != nullptr means don't actually do anything, just assertain need of
 // ncclProxySaveOp for this op.
-ncclResult_t ncclProxySaveOp(struct ncclComm* comm, struct ncclProxyOp* op, bool* justInquire) {
-  struct ncclChannel* channel = &comm->channels[op->channelId];
+ncclResult_t ncclProxySaveWork(struct ncclComm* comm, int channelId, struct ncclProxyWork* work, bool* justInquire) {
+  struct ncclChannel* channel = &comm->channels[channelId];
   if (justInquire) *justInquire = false;
-  switch (op->pattern) {
-  case ncclPatternRing:
-  case ncclPatternRingTwice:
-  case ncclPatternPipelineFrom:
-  case ncclPatternPipelineTo: {
-      struct ncclRing* ring = &channel->ring;
-      if (NeedProxy(proxyRecv, op->pattern, op->root, ring, comm->nRanks)) {
-        NCCLCHECK(SaveProxy(comm, channel, proxyRecv, ring->prev, op, 0, justInquire));
+
+  struct ncclProxyOp op;
+  op.opCount = work->opCount;
+  int stepBytes = comm->buffSizes[work->protocol]/NCCL_STEPS;
+  op.sliceBytes = work->sliceSteps*stepBytes;
+  op.sliceSteps = work->sliceSteps;
+  op.channelId = channelId;
+  op.protocol = work->protocol;
+  op.pattern = work->pattern;
+  switch (work->pattern) {
+  case ncclProxyWorkPatternNone: break;
+  case ncclProxyWorkPatternRing:
+    { struct ncclRing* ring = &channel->ring;
+      if (work->ring.recvSlices != 0) {
+        op.slices = work->ring.recvSlices;
+        op.peer = ring->prev;
+        NCCLCHECK(savePeerOp(comm, channel, proxyRecv, &op, 0, justInquire));
       }
-      if (NeedProxy(proxySend, op->pattern, op->root, ring, comm->nRanks)) {
-        NCCLCHECK(SaveProxy(comm, channel, proxySend, ring->next, op, 0, justInquire));
+      if (work->ring.sendSlices != 0) {
+        op.slices = work->ring.sendSlices;
+        op.peer = ring->next;
+        NCCLCHECK(savePeerOp(comm, channel, proxySend, &op, 0, justInquire));
       }
     } break;
-  case ncclPatternTreeUp:
-  case ncclPatternTreeDown:
-  case ncclPatternTreeUpDown: {
-      if (op->pattern != ncclPatternTreeDown) { // Tree up
-        struct ncclTree* tree = &channel->tree;
-        for (int i=0; i<NCCL_MAX_TREE_ARITY; i++) {
-          NCCLCHECK(SaveProxy(comm, channel, proxyRecv, tree->down[i], op, 0, justInquire));
+  case ncclProxyWorkPatternTree:
+    { struct ncclTree* tree = &channel->tree;
+      op.slices = work->tree.slices;
+      if (work->tree.up) {
+        for (int i=0; i < NCCL_MAX_TREE_ARITY; i++) {
+          op.peer = tree->down[i];
+          NCCLCHECK(savePeerOp(comm, channel, proxyRecv, &op, 0, justInquire));
         }
-        NCCLCHECK(SaveProxy(comm, channel, proxySend, tree->up, op, 0, justInquire));
+        op.peer = tree->up;
+        NCCLCHECK(savePeerOp(comm, channel, proxySend, &op, 0, justInquire));
       }
-      if (op->pattern != ncclPatternTreeUp) { // Tree down
-        struct ncclTree* tree = &channel->tree;
-        for (int i=0; i< NCCL_MAX_TREE_ARITY; i++) {
-          NCCLCHECK(SaveProxy(comm, channel, proxySend, tree->down[i], op, 0, justInquire));
+      if (work->tree.down) {
+        for (int i=0; i < NCCL_MAX_TREE_ARITY; i++) {
+          op.peer = tree->down[i];
+          NCCLCHECK(savePeerOp(comm, channel, proxySend, &op, 0, justInquire));
         }
-        NCCLCHECK(SaveProxy(comm, channel, proxyRecv, tree->up, op, 0, justInquire));
+        op.peer = tree->up;
+        NCCLCHECK(savePeerOp(comm, channel, proxyRecv, &op, 0, justInquire));
       }
     } break;
-  case ncclPatternCollnetChain: {
-      NCCLCHECK(SaveProxy(comm, channel, proxySend, channel->collnetChain.up, op, 1, justInquire));
-      NCCLCHECK(SaveProxy(comm, channel, proxyRecv, channel->collnetChain.up, op, 0, justInquire));
+  case ncclProxyWorkPatternCollnet:
+    { op.peer = work->collnet.directNotChain ? channel->collnetDirect.out : channel->collnetChain.up;
+      op.slices = work->collnet.slices;
+      op.collnet.dtype = work->collnet.dtype;
+      op.collnet.redOp = work->collnet.redOp;
+      NCCLCHECK(savePeerOp(comm, channel, proxySend, &op, 1, justInquire));
+      NCCLCHECK(savePeerOp(comm, channel, proxyRecv, &op, 0, justInquire));
     } break;
-  case ncclPatternCollnetDirect: {
-      NCCLCHECK(SaveProxy(comm, channel, proxySend, channel->collnetDirect.out, op, 1, justInquire));
-      NCCLCHECK(SaveProxy(comm, channel, proxyRecv, channel->collnetDirect.out, op, 0, justInquire));
+  case ncclProxyWorkPatternNvls:
+    { op.slices = work->nvls.slices;
+      if (work->nvls.isTree) {
+        op.peer = channel->nvls.treeDown[1];
+        NCCLCHECK(savePeerOp(comm, channel, proxyRecv, &op, 0, justInquire));
+        op.peer = channel->nvls.treeDown[2];
+        NCCLCHECK(savePeerOp(comm, channel, proxyRecv, &op, 0, justInquire));
+        op.peer = channel->nvls.treeUp;
+        NCCLCHECK(savePeerOp(comm, channel, proxySend, &op, 0, justInquire));
+
+        op.peer = channel->nvls.treeDown[1];
+        NCCLCHECK(savePeerOp(comm, channel, proxySend, &op, 0, justInquire));
+        op.peer = channel->nvls.treeDown[2];
+        NCCLCHECK(savePeerOp(comm, channel, proxySend, &op, 0, justInquire));
+        op.peer = channel->nvls.treeUp;
+        NCCLCHECK(savePeerOp(comm, channel, proxyRecv, &op, 0, justInquire));
+      } else {
+        op.peer = channel->nvls.out;
+        NCCLCHECK(savePeerOp(comm, channel, proxySend, &op, 1, justInquire));
+        NCCLCHECK(savePeerOp(comm, channel, proxyRecv, &op, 0, justInquire));
+      }
     } break;
-  case ncclPatternNvls: {
-      NCCLCHECK(SaveProxy(comm, channel, proxySend, channel->nvls.out, op, 1, justInquire));
-      NCCLCHECK(SaveProxy(comm, channel, proxyRecv, channel->nvls.out, op, 0, justInquire));
+  case ncclProxyWorkPatternP2pSend:
+  case ncclProxyWorkPatternP2pRecv:
+    { int dir = (work->pattern == ncclProxyWorkPatternP2pSend) ? proxySend : proxyRecv;
+      op.peer = work->p2p.peer;
+      op.slices = work->p2p.slices;
+      op.sliceBytes = work->p2p.sliceBytes;
+      if (op.peer != comm->rank) NCCLCHECK(savePeerOp(comm, channel, dir, &op, 1, justInquire));
     } break;
-  case ncclPatternNvlsTree: {
-      NCCLCHECK(SaveProxy(comm, channel, proxyRecv, channel->nvls.treeDown[1], op, 0, justInquire));
-      NCCLCHECK(SaveProxy(comm, channel, proxyRecv, channel->nvls.treeDown[2], op, 0, justInquire));
-      NCCLCHECK(SaveProxy(comm, channel, proxySend, channel->nvls.treeUp, op, 0, justInquire));
-      NCCLCHECK(SaveProxy(comm, channel, proxySend, channel->nvls.treeDown[1], op, 0, justInquire));
-      NCCLCHECK(SaveProxy(comm, channel, proxySend, channel->nvls.treeDown[2], op, 0, justInquire));
-      NCCLCHECK(SaveProxy(comm, channel, proxyRecv, channel->nvls.treeUp, op, 0, justInquire));
-    } break;
-  case ncclPatternSend:
-  case ncclPatternRecv: {
-      if (op->root == comm->rank) return ncclSuccess;
-      NCCLCHECK(SaveProxy(comm, channel, op->pattern == ncclPatternSend ? proxySend : proxyRecv, op->root, op, 1, justInquire));
-    } break;
-  }
-  return ncclSuccess;
-}
-
-NCCL_PARAM(ChunkSize, "CHUNK_SIZE", 0);
-
-ncclResult_t ncclProxyComputeP2p(struct ncclInfo* info, struct ncclProxyOp* op) {
-  memset(op, 0, sizeof(struct ncclProxyOp));
-  int channelId = info->channelId;
-  struct ncclChannel* channel = info->comm->channels+channelId;
-  op->channelId = channelId;
-  op->sliceSteps = 1;
-  op->chunkSteps = 1;
-  op->dtype = info->datatype;
-  op->protocol = info->protocol;
-
-  int stepSize = info->comm->buffSizes[op->protocol]/NCCL_STEPS;
-
-  if (op->protocol == NCCL_PROTO_SIMPLE) stepSize = info->comm->p2pChunkSize;
-  info->chunkSize = stepSize;
-  op->root = info->root;
-
-  struct ncclChannelPeer* peer = channel->peers[op->root];
-  if (info->coll == ncclFuncSend) {
-    op->pattern = ncclPatternSend;
-    if (op->root != info->comm->rank && peer->send[1].transportComm == &netTransport.send) {
-      // Tune chunk size for the network
-      if (info->count < stepSize) info->chunkSize /= 4;
-      else if (info->count < 8*stepSize) info->chunkSize /= 2;
-    }
-  } else if (info->coll == ncclFuncRecv) {
-    op->pattern = ncclPatternRecv;
-    if (op->root != info->comm->rank && peer->recv[1].transportComm == &netTransport.recv) {
-      // Tune chunk size for the network
-      if (info->count < stepSize) info->chunkSize /= 4;
-      else if (info->count < 8*stepSize) info->chunkSize /= 2;
-    }
-  } else {
-    WARN("P2p operation is neither send or recv");
+  default:
+    WARN("Invalid ncclProxyWorkPattern=%d", (int)work->pattern);
     return ncclInternalError;
   }
-  if (ncclParamChunkSize() != 0) {
-    info->chunkSize = ncclParamChunkSize();
-  }
-  op->chunkSize = info->chunkSize;
-
-  // Compute nSteps for proxies
-  int chunkEffectiveSize = op->chunkSize;
-  if (op->protocol == NCCL_PROTO_LL) {
-    chunkEffectiveSize /= 2;
-  }
-
-  op->nbytes = stepSize;
-  op->nsteps = DIVUP(info->count, chunkEffectiveSize);
-  if (op->nsteps == 0) op->nsteps = 1;
-
   return ncclSuccess;
 }
 
@@ -742,7 +722,10 @@ process_nextops:
     lastOpCount = peerOp->opCount;
     lastPeer = peer;
     if (peerOp->connection == NULL) return ncclInternalError;
-    if (peerOp->next != -1) __builtin_prefetch(pool->ops+peerOp->next);
+    if (peerOp->next != -1) {
+      __builtin_prefetch(pool->ops + peerOp->next);
+      __builtin_prefetch((char*)(pool->ops + peerOp->next + 1) - 1);
+    }
     NCCLCHECK(ProxyAppend(state, peerOp));
     (*added)++;
     int lastOpIndex = opIndex;

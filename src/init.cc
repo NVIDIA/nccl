@@ -244,9 +244,10 @@ static ncclResult_t commFree(ncclComm_t comm) {
 
 NCCL_PARAM(AggChannelSize, "AGG_CHANNEL_SIZE", -2);
 NCCL_PARAM(DisableGraphHelper, "GRAPH_HELPER_DISABLE", 0);
-// GDRCOPY support: FIFO_ENABLE when enabled locates a workFifo in CUDA memory
+// GDRCOPY support: FIFO_ENABLE when enabled locates a devWorkFifo in CUDA memory
 NCCL_PARAM(GdrCopyFifoEnable, "GDRCOPY_FIFO_ENABLE", 1);
-NCCL_PARAM(WorkFifoDepth, "WORK_FIFO_DEPTH", 64<<10);
+NCCL_PARAM(WorkFifoDepth, "WORK_FIFO_DEPTH", 64<<10); // fallback if WORK_FIFO_BYTES not present
+NCCL_PARAM(WorkFifoBytes, "WORK_FIFO_BYTES", 0);
 enum ncclLaunchMode ncclParamLaunchMode;
 
 NCCL_PARAM(DmaBufEnable, "DMABUF_ENABLE", 1);
@@ -329,12 +330,12 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
   comm->collNetSupport = 0;
 
   ncclMemoryPoolConstruct(&comm->memPool_ncclKernelPlan);
-  ncclMemoryPoolConstruct(&comm->memPool_ncclProxyOp);
+  ncclMemoryPoolConstruct(&comm->memPool_ncclProxyWork);
   ncclMemoryPoolConstruct(&comm->memPool_ncclPointerList);
 
   comm->groupNext = reinterpret_cast<struct ncclComm*>(0x1);
   comm->preconnectNext = reinterpret_cast<struct ncclComm*>(0x1);
-  comm->channelSize = ncclParamAggChannelSize();
+  comm->channelSize = std::max<int64_t>(0, ncclParamAggChannelSize());
 
   static_assert(MAXCHANNELS <= sizeof(*comm->connectSend)*8, "comm->connectSend must have enough bits for all channels");
   static_assert(MAXCHANNELS <= sizeof(*comm->connectRecv)*8, "comm->connectRecv must have enough bits for all channels");
@@ -360,6 +361,10 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
     ncclAtomicRefCountIncrement(&parent->sharedRes->refCount);
   }
 
+  comm->ringTasks = ncclMemoryStackAlloc<void*>(&comm->memPermanent, comm->nRanks);
+  comm->tasks.minBcastPeer = INT_MAX;
+  comm->tasks.maxBcastPeer = INT_MIN;
+
   if (comm->topParentRanks == NULL) {
     NCCLCHECK(ncclCalloc(&comm->topParentRanks, comm->nRanks));
     for (int i = 0; i < comm->nRanks; ++i)
@@ -370,68 +375,67 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
   return ncclSuccess;
 }
 
-static ncclResult_t devCommSetup(ncclComm_t comm) {
+static ncclResult_t devCommSetup(ncclComm_t comm, cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
   int nRanks = comm->nRanks;
-  struct ncclDevCommAndChannels tmpCommAndChans;
-  struct ncclDevCommAndChannels *devCommAndChans = NULL;
+  struct ncclDevCommAndChannels *devComm=nullptr, tmpComm={/*0...*/};
 
-  NCCLCHECKGOTO(ncclStrongStreamAcquireUncaptured(&comm->sharedRes->deviceStream), ret, fail);
-  NCCLCHECKGOTO(ncclCudaCallocAsync(&devCommAndChans, 1, comm->sharedRes->deviceStream.cudaStream), ret, fail);
-  ncclCommPushCudaFree(comm, devCommAndChans);
-  comm->devComm = &devCommAndChans->comm;
-  tmpCommAndChans.comm.rank = comm->rank;
-  tmpCommAndChans.comm.nRanks = nRanks;
-  tmpCommAndChans.comm.abortFlag = comm->abortFlag;
+  NCCLCHECKGOTO(ncclCudaCallocAsync(&devComm, 1, stream), ret, fail);
+  ncclCommPushCudaFree(comm, devComm);
+
+  comm->devComm = devComm;
+  tmpComm.comm.rank = comm->rank;
+  tmpComm.comm.nRanks = nRanks;
+  tmpComm.comm.localRank = comm->localRank;
+  tmpComm.comm.nLocalRanks = comm->localRanks;
+  tmpComm.comm.abortFlag = comm->abortFlag;
   for (int p=0; p < NCCL_NUM_PROTOCOLS; p++) {
-    tmpCommAndChans.comm.buffSizes[p] = comm->buffSizes[p];
+    tmpComm.comm.buffSizes[p] = comm->buffSizes[p];
   }
-  tmpCommAndChans.comm.channels = &devCommAndChans->channels[0];
 
-  comm->workFifoDepth = ncclParamWorkFifoDepth();
-  if (0 != (comm->workFifoDepth & (comm->workFifoDepth-1))) {
-    WARN("NCCL_WORK_FIFO_DEPTH=%d is being ignored because it is not a power of 2.", comm->workFifoDepth);
-    comm->workFifoDepth = 64<<10;
+  comm->devWorkFifoBytes = ncclParamWorkFifoBytes();
+  if (comm->devWorkFifoBytes == 0) {
+    comm->devWorkFifoBytes = 512*ncclParamWorkFifoDepth();
   }
-  tmpCommAndChans.comm.workFifoDepth = comm->workFifoDepth;
+  if (comm->devWorkFifoBytes == 0 || 0 != (comm->devWorkFifoBytes & (comm->devWorkFifoBytes-1))) {
+    WARN("NCCL_WORK_FIFO_BYTES=%d is being ignored because it is not a power of 2.", comm->devWorkFifoBytes);
+    comm->devWorkFifoBytes = 32<<20;
+  }
 
   if (ncclGdrCopy != NULL && ncclParamGdrCopyFifoEnable() == 1) {
-    // The workFifoHeap lives in GDR mapped CUDA memory.
-    NCCLCHECKGOTO(ncclGdrCudaCalloc(&comm->workFifoHeap, &comm->devWorkFifoHeap, comm->workFifoDepth, &comm->workFifoHeapGdrHandle), ret, fail);
-    ncclCommPushCudaGdrFree(comm, comm->workFifoHeapGdrHandle);
+    // The devWorkFifoBuf lives in GDR mapped CUDA memory.
+    NCCLCHECKGOTO(ncclGdrCudaCalloc(&comm->devWorkFifoBuf, &comm->devWorkFifoBufDev, comm->devWorkFifoBytes, &comm->devWorkFifoBufGdrHandle), ret, fail);
+    ncclCommPushCudaGdrFree(comm, comm->devWorkFifoBufGdrHandle);
   } else {
-    // The workFifoHeap lives in cudaHost memory.
-    comm->workFifoHeapGdrHandle = nullptr;
-    NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->workFifoHeap, comm->workFifoDepth), ret, fail);
-    ncclCommPushCudaHostFree(comm, comm->workFifoHeap);
-    comm->devWorkFifoHeap = comm->workFifoHeap;
+    // The devWorkFifoBuf lives in cudaHost memory.
+    comm->devWorkFifoBufGdrHandle = nullptr;
+    NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->devWorkFifoBuf, comm->devWorkFifoBytes), ret, fail);
+    ncclCommPushCudaHostFree(comm, comm->devWorkFifoBuf);
+    comm->devWorkFifoBufDev = comm->devWorkFifoBuf;
   }
-  tmpCommAndChans.comm.workFifoHeap = comm->devWorkFifoHeap;
 
-  NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->workFifoDone, MAXCHANNELS), ret, fail);
-  ncclCommPushCudaHostFree(comm, comm->workFifoDone);
-  comm->workFifoSent = 0;
-  comm->workFifoAckdMin = 0;
-
+  NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->devWorkFifoConsumed, MAXCHANNELS), ret, fail);
+  ncclCommPushCudaHostFree(comm, comm->devWorkFifoConsumed);
+  tmpComm.comm.devWorkFifoConsumed = comm->devWorkFifoConsumed;
+  comm->devWorkFifoProduced = 0;
+  comm->devWorkFifoConsumedLbound = 0;
   for (int c=0; c < MAXCHANNELS; c++) {
-    tmpCommAndChans.channels[c].peers = comm->channels[c].devPeers;
-    tmpCommAndChans.channels[c].ring = comm->channels[c].ring;
-    tmpCommAndChans.channels[c].ring.userRanks = comm->channels[c].devRingUserRanks;
-    tmpCommAndChans.channels[c].tree = comm->channels[c].tree;
-    tmpCommAndChans.channels[c].collnetChain = comm->channels[c].collnetChain;
-    tmpCommAndChans.channels[c].collnetDirect = comm->channels[c].collnetDirect;
-    tmpCommAndChans.channels[c].nvls = comm->channels[c].nvls;
-    tmpCommAndChans.channels[c].workFifoDone = &comm->workFifoDone[c];
-
+    tmpComm.channels[c].peers = comm->channels[c].devPeers;
+    tmpComm.channels[c].ring = comm->channels[c].ring;
+    tmpComm.channels[c].ring.userRanks = comm->channels[c].devRingUserRanks;
+    tmpComm.channels[c].tree = comm->channels[c].tree;
+    tmpComm.channels[c].collnetChain = comm->channels[c].collnetChain;
+    tmpComm.channels[c].collnetDirect = comm->channels[c].collnetDirect;
+    tmpComm.channels[c].nvls = comm->channels[c].nvls;
     if (comm->channels[c].ring.userRanks != nullptr) {
-      NCCLCHECKGOTO(ncclCudaMemcpyAsync(tmpCommAndChans.channels[c].ring.userRanks, comm->channels[c].ring.userRanks, nRanks, comm->sharedRes->deviceStream.cudaStream), ret, fail);
+      NCCLCHECKGOTO(ncclCudaMemcpyAsync(tmpComm.channels[c].ring.userRanks, comm->channels[c].ring.userRanks, nRanks, stream), ret, fail);
     }
   }
 
-  NCCLCHECKGOTO(ncclCudaMemcpyAsync(devCommAndChans, &tmpCommAndChans, 1, comm->sharedRes->deviceStream.cudaStream), ret, fail);
+  NCCLCHECKGOTO(ncclCudaMemcpyAsync(devComm, &tmpComm, 1, stream), ret, fail);
 exit:
-  CUDACHECK(cudaStreamSynchronize(comm->sharedRes->deviceStream.cudaStream));
-  NCCLCHECK(ncclStrongStreamRelease(ncclCudaGraphNone(), &comm->sharedRes->deviceStream));
+  // Ensure memcpy's referencing tmpComm are complete.
+  CUDACHECK(cudaStreamSynchronize(stream));
   return ret;
 fail:
   goto exit;
@@ -471,9 +475,9 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
   return ncclSuccess;
 }
 
-static ncclResult_t setupChannel(struct ncclComm* comm, int channelId, int rank, int nranks, int* ringRanks) {
+static ncclResult_t setupChannel(struct ncclComm* comm, int channelId, int rank, int nranks, int* ringRanks, cudaStream_t stream) {
   TRACE(NCCL_INIT, "rank %d nranks %d", rank, nranks);
-  NCCLCHECK(initChannel(comm, channelId));
+  NCCLCHECK(initChannel(comm, channelId, stream));
 
   struct ncclRing* ring = &comm->channels[channelId].ring;
   // Find our ring-distance from rank zero and reorganize ranks to start with rank.
@@ -485,6 +489,7 @@ static ncclResult_t setupChannel(struct ncclComm* comm, int channelId, int rank,
   ring->index = (ixRank-ixZero + nranks)%nranks;
   for (int i=0; i<nranks; i++) {
     ring->userRanks[i] = ringRanks[(i+ixRank)%nranks];
+    ring->rankToIndex[ring->userRanks[i]] = i;
   }
   return ncclSuccess;
 }
@@ -533,12 +538,14 @@ NCCL_PARAM(CollNetNodeThreshold, "COLLNET_NODE_THRESHOLD", 2);
 NCCL_PARAM(NvbPreconnect, "NVB_PRECONNECT", 1);
 NCCL_PARAM(AllocP2pNetLLBuffers, "ALLOC_P2P_NET_LL_BUFFERS", 0);
 
-static ncclResult_t collNetTrySetup(ncclComm_t comm, ncclComm_t parent, struct ncclTopoGraph* collNetGraph) {
+static ncclResult_t collNetTrySetup(ncclComm_t comm, ncclComm_t parent, struct ncclTopoGraph* collNetGraph, cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
   int* heads = NULL;
   int rank = comm->rank;
   int collNetSetupFail = 0;
-  int highestTypes[NCCL_MAX_LOCAL_RANKS] = { TRANSPORT_P2P };
+  int highestTypes[NCCL_MAX_LOCAL_RANKS];
+  for (int lr=0; lr < NCCL_MAX_LOCAL_RANKS; lr++) highestTypes[lr] = TRANSPORT_P2P;
+
   // Find all head ranks
   int nHeads = collNetGraph->nChannels;
   int highestTransportType0, highestTransportType1;
@@ -600,7 +607,7 @@ static ncclResult_t collNetTrySetup(ncclComm_t comm, ncclComm_t parent, struct n
           comm->collNetSharedRes = parent->collNetSharedRes;
           comm->collNetChannels = std::min(std::max(comm->nChannels, comm->nvlsChannels), parent->collNetSharedRes->nChannels);
           for (int c = 0; c < comm->collNetChannels; ++c)
-            NCCLCHECKGOTO(initCollnetChannel(comm, c, parent, true), ret, fail);
+            NCCLCHECKGOTO(initCollnetChannel(comm, c, parent, true, stream), ret, fail);
         }
       } else {
         /* TODO: CX-6 and CX-7 both do not support multiple sharp resources per process, if child comm cannot
@@ -622,7 +629,7 @@ static ncclResult_t collNetTrySetup(ncclComm_t comm, ncclComm_t parent, struct n
     comm->collNetSharedRes->buffSize = comm->buffSizes[NCCL_PROTO_SIMPLE];
     for (int c = 0; c < comm->collNetChannels; c++) {
       struct ncclChannel* channel = comm->channels + c;
-      NCCLCHECKGOTO(initCollnetChannel(comm, c, parent, false), ret, fail);
+      NCCLCHECKGOTO(initCollnetChannel(comm, c, parent, false, stream), ret, fail);
       for (int h = 0; h < nHeads; h++) {
         const int head = heads[h];
         collNetSetupFail |= ncclTransportCollNetSetup(comm, collNetGraph, channel, head, head, h, collNetRecv);
@@ -654,12 +661,12 @@ static ncclResult_t collNetTrySetup(ncclComm_t comm, ncclComm_t parent, struct n
     struct ncclChannel* channel = comm->channels + c;
     NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, 1, &channel->collnetChain.up, 1, channel->collnetChain.down, 0), ret, fail);
   }
-  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, collNetGraph, 0), ret, fail);
+  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, collNetGraph, 0, stream), ret, fail);
   for (int c = 0; c < comm->nChannels; c++) {
     struct ncclChannel* channel = comm->channels + c;
     NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, 1, channel->collnetChain.down, 1, &channel->collnetChain.up, 1), ret, fail);
   }
-  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, collNetGraph, 1), ret, fail);
+  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, collNetGraph, 1, stream), ret, fail);
   INFO(NCCL_INIT, "Connected collnet + chain");
 
   // Connect intra-node CollNet + Direct
@@ -667,13 +674,13 @@ static ncclResult_t collNetTrySetup(ncclComm_t comm, ncclComm_t parent, struct n
     struct ncclChannel* channelRecv = comm->channels + c;
     NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, NCCL_MAX_DIRECT_ARITY, channelRecv->collnetDirect.up, NCCL_MAX_DIRECT_ARITY, channelRecv->collnetDirect.down, 0), ret, fail);
   }
-  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, collNetGraph, 0, &highestTransportType0), ret, fail);
+  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, collNetGraph, 0, stream, &highestTransportType0), ret, fail);
 
   for (int c = 0; c < comm->nChannels; c++) {
     struct ncclChannel* channelSend = comm->channels + c;
     NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, NCCL_MAX_DIRECT_ARITY, channelSend->collnetDirect.down, NCCL_MAX_DIRECT_ARITY, channelSend->collnetDirect.up, 1), ret, fail);
   }
-  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, collNetGraph, 1, &highestTransportType1), ret, fail);
+  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, collNetGraph, 1, stream, &highestTransportType1), ret, fail);
 
   // Exchange highest intra-node transport type among ranks
   // because we need to know whether all ranks can p2p each other to determine whether we can directly read/write registered user buffer
@@ -711,6 +718,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   struct ncclTopoGraph collNetGraph;
   struct ncclTopoGraph nvlsGraph;
   struct ncclTopoGraph* graphs[] = { &treeGraph, &ringGraph, &collNetGraph, &collNetGraph, &nvlsGraph, &nvlsGraph };
+  cudaStream_t setupStream = nullptr;
 
   struct graphInfo {
     int pattern;
@@ -743,12 +751,16 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   NCCLCHECKGOTO(fillInfo(comm, comm->peerInfo+rank, comm->commHash), ret, fail);
   NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, comm->peerInfo, sizeof(struct ncclPeerInfo)), ret, fail);
 
+  comm->maxDevWorkFootprint = INT_MAX;
   for (int i = 0; i < nranks; i++) {
     if ((i != rank) && (comm->peerInfo[i].hostHash == comm->peerInfo[rank].hostHash) && (comm->peerInfo[i].busId == comm->peerInfo[rank].busId)) {
       WARN("Duplicate GPU detected : rank %d and rank %d both on CUDA device %lx", rank, i, comm->peerInfo[rank].busId);
       ret = ncclInvalidUsage;
       goto fail;
     }
+    int cudaArch = comm->peerInfo[i].cudaCompCap;
+    cudaArch = 100*(cudaArch/10) + (cudaArch%10); // put in __CUDA_ARCH__ encoding
+    comm->maxDevWorkFootprint = std::min<int>(comm->maxDevWorkFootprint, ncclMaxDevWorkBatchBytes(cudaArch));
   }
   // AllGather1 - end
 
@@ -761,6 +773,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
       if ((comm->peerInfo[i].hostHash == comm->peerInfo[rank].hostHash)
           && (comm->peerInfo[i].pidHash == comm->peerInfo[rank].pidHash)) {
         // Rank is in same process
+        comm->peerInfo[i].isIntraProc = true;
         if (intraProcRanks == 0) intraProcRank0 = i;
         if (i == rank) intraProcRank = intraProcRanks;
         intraProcRanks++;
@@ -787,6 +800,12 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     comm->intraBarrierPhase = 0;
     comm->intraBarrierCounter = 0;
     comm->intraBarrierGate = 0;
+    comm->intraComms = ncclMemoryStackAlloc<struct ncclComm*>(&comm->memPermanent, intraProcRanks);
+    for (int i=0, j=0; i < nranks; i++) {
+      if (comm->peerInfo[i].isIntraProc) {
+        comm->intraComms[j++] = comm->peerInfo[i].comm;
+      }
+    }
   } while(0);
 
   // Topo detection / System graph creation
@@ -929,6 +948,9 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   comm->localRankToRank = comm->nodeRanks[comm->node].localRankToRank;
   comm->localRank = comm->rankToLocalRank[rank];
   comm->localRanks = comm->nodeRanks[comm->node].localRanks;
+  for (int r=0; r<comm->nRanks; r++) {
+    comm->peerInfo[r].isLocal = (comm->rankToNode[r] == comm->node);
+  }
 
   TRACE(NCCL_INIT,"hostHash[%d] %lx localRank %d localRanks %d localRank0 %d",
         rank, comm->peerInfo[rank].hostHash, comm->localRank, comm->localRanks, comm->localRankToRank[0]);
@@ -998,9 +1020,11 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   INFO(NCCL_INIT, "Trees%s", line);
 
   NCCLCHECKGOTO(computeBuffSizes(comm), ret, fail);
+  NCCLCHECK(ncclStrongStreamAcquireUncaptured(&comm->sharedRes->hostStream));
+  setupStream = comm->sharedRes->hostStream.cudaStream;
 
   // Compute nChannels per peer for p2p
-  NCCLCHECKGOTO(ncclTopoComputeP2pChannels(comm), ret, fail);
+  NCCLCHECKGOTO(ncclTopoComputeP2pChannels(comm, setupStream), ret, fail);
 
   /* until now, all info of comm should be known. We can initialize shared resources and
    * map localRanks to top parent local ranks. NOTE: this shareRes init must be put before
@@ -1025,11 +1049,11 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   // Connect with prev/next for each ring
   for (int c=0; c<comm->nChannels; c++) {
     struct ncclChannel* channel = comm->channels+c;
-    NCCLCHECKGOTO(setupChannel(comm, c, rank, nranks, rings+c*nranks), ret, fail);
+    NCCLCHECKGOTO(setupChannel(comm, c, rank, nranks, rings+c*nranks, setupStream), ret, fail);
     if (comm->nRanks == 1) continue;
     NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, 1, &channel->ring.prev, 1, &channel->ring.next, 0), ret, fail);
   }
-  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &ringGraph, 0), ret, fail);
+  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &ringGraph, 0, setupStream), ret, fail);
   INFO(NCCL_INIT, "Connected all rings");
 
   // Connect Trees
@@ -1039,7 +1063,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, NCCL_MAX_TREE_ARITY, channel->tree.down, 1, &channel->tree.up, 0), ret, fail);
     NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, 1, &channel->tree.up, NCCL_MAX_TREE_ARITY, channel->tree.down, 0), ret, fail);
   }
-  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &treeGraph, 0), ret, fail);
+  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &treeGraph, 0, setupStream), ret, fail);
   INFO(NCCL_INIT, "Connected all trees");
 
   // Setup NVLS
@@ -1051,12 +1075,12 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
       NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, NCCL_MAX_NVLS_TREE_ARITY, channel->nvls.treeDown, 1, &channel->nvls.treeUp, 0), ret, fail);
       NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, 1, &channel->nvls.treeUp, NCCL_MAX_NVLS_TREE_ARITY, channel->nvls.treeDown, 0), ret, fail);
     }
-    NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &nvlsGraph, 0), ret, fail);
+    NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &nvlsGraph, 0, setupStream), ret, fail);
     INFO(NCCL_INIT, "Connected NVLS tree");
   }
 
   // Check if we can setup CollNet
-  if (comm->collNetSupport > 0) collNetTrySetup(comm, parent, &collNetGraph);
+  if (comm->collNetSupport > 0) collNetTrySetup(comm, parent, &collNetGraph, setupStream);
 
   TRACE(NCCL_INIT, "rank %d nranks %d - CONNECTED %d RINGS AND TREES", rank, nranks, comm->nChannels);
 
@@ -1072,7 +1096,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     struct ncclNodeRanks *nodeRanks = comm->nodeRanks;
     int localRank = comm->localRank;
     // We want to fuse along node boundaries. Make sure nsteps is a multiple or divides 8.
-    int steps = ALIGN_POWER(comm->maxLocalRanks, NCCL_MAX_WORK_ELEMENTS_P2P/2);
+    int steps = ALIGN_POWER(comm->maxLocalRanks, NCCL_MAX_P2P_FIFO_CONNS_PER_WORK_BATCH);
     tasks->p2pOrderSteps = comm->nNodes * steps;
     tasks->peers = ncclMemoryStackAlloc<ncclTasks::Peer>(&comm->memPermanent, tasks->p2pOrderSteps);
     tasks->p2pSendOrder = ncclMemoryStackAlloc<int>(&comm->memPermanent, tasks->p2pOrderSteps);
@@ -1117,20 +1141,19 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
       int peer = nvbPeers[r];
       int channelId;
       for (int c=0; c<comm->p2pnChannelsPerPeer; c++) {
-        NCCLCHECKGOTO(ncclChannelCompute(comm, peer, c, ncclFuncSend, &channelId), ret, fail);
+        NCCLCHECKGOTO(ncclChannelCompute(comm, peer, c, /*isSendNotRecv=*/true, &channelId), ret, fail);
         if (comm->channels[channelId].peers[peer]->send[1].connected == 0) {
           comm->connectSend[peer] |= (1UL<<channelId);
         }
       }
       for (int c=0; c<comm->p2pnChannelsPerPeer; c++) {
-        NCCLCHECKGOTO(ncclChannelCompute(comm, peer, c, ncclFuncRecv, &channelId), ret, fail);
+        NCCLCHECKGOTO(ncclChannelCompute(comm, peer, c, /*isSendNotRecv=*/false, &channelId), ret, fail);
         if (comm->channels[channelId].peers[peer]->recv[1].connected == 0) {
           comm->connectRecv[peer] |= (1UL<<channelId);
         }
       }
     }
-
-    NCCLCHECKGOTO(ncclTransportP2pSetup(comm, NULL, 1), ret, fail);
+    NCCLCHECKGOTO(ncclTransportP2pSetup(comm, NULL, 1, setupStream), ret, fail);
   }
 
   // Connect to local net proxy
@@ -1167,7 +1190,14 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
 
   // Call devCommSetup before the last barrier, making sure we don't have a thread running in front and starting to
   // launch NCCL kernels before all cuda mem allocation is complete. That could cause a deadlock.
-  NCCLCHECKGOTO(devCommSetup(comm), ret, fail);
+  NCCLCHECKGOTO(devCommSetup(comm, setupStream), ret, fail);
+
+  // Sync setupStream copies before intra-node barrier.
+  NCCLCHECK(ncclStrongStreamAcquireUncaptured(&comm->sharedRes->deviceStream));
+  NCCLCHECK(ncclStrongStreamWaitStream(ncclCudaGraphNone(), &comm->sharedRes->deviceStream, &comm->sharedRes->hostStream));
+  NCCLCHECK(ncclStrongStreamRelease(ncclCudaGraphNone(), &comm->sharedRes->deviceStream));
+  NCCLCHECK(ncclStrongStreamRelease(ncclCudaGraphNone(), &comm->sharedRes->hostStream));
+  NCCLCHECK(ncclStrongStreamSynchronize(&comm->sharedRes->hostStream));
 
   /* Local intra-node barrier */
   NCCLCHECKGOTO(bootstrapBarrier(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, comm->localRankToRank[0]), ret, fail);
@@ -1191,6 +1221,9 @@ exit:
   free(pxnPeers);
   return ret;
 fail:
+  // Sync the setupStream even on failure so that we can safely free buffers when we
+  // tear down the communicator.
+  NCCLCHECK(ncclStrongStreamSynchronize(&comm->sharedRes->hostStream));
   goto exit;
 }
 

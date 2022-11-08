@@ -9,83 +9,84 @@
 #include "primitives.h"
 
 template<typename T, typename RedOp>
-struct RunWork<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
+struct RunWorkBatch<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
+  static_assert(sizeof(T)==1, "Required sizeof(T)==1");
+
   template<typename Proto>
-  __device__ void runSend(const int tid, const int nthreads, const uint8_t group, struct ncclWorkElemP2p* args) {
-    void* buff = reinterpret_cast<void*>(uintptr_t(args->buffHi32)<<32 | args->buffLo32);
-    ssize_t count = reinterpret_cast<size_t>(size_t(args->countHi32)<<32 | args->countLo32);
-    if (args->peer == ncclShmem.comm.rank) {
-      struct ncclWorkElemP2p* recvArgs = args-1;
-      void* recvBuff = reinterpret_cast<void*>(uintptr_t(recvArgs->buffHi32)<<32 | recvArgs->buffLo32);
-      if (buff != recvBuff) {
-        reduceCopy<COLL_UNROLL, RedOp, T, 0,1,1, 0,1,1, /*PreOpSrcs=*/0>
-          (tid, nthreads, 0, nullptr, false, 1, &buff, 1, &recvBuff, count);
-      }
-    } else {
-      int chunkSize = args->chunkSize/sizeof(T);
-      if (args->proto == NCCL_PROTO_LL) chunkSize /= 2;
-      int const peer = args->peer;
-      Primitives<T, RedOp, FanAsymmetric<0, 1>, 1, Proto, 1> prims
-        (tid, nthreads, nullptr, &peer, buff, nullptr, /*redOpArg(ignored)=*/0, group, 1, 1);
-      size_t offset = 0;
-      do {
-        int nelem = min(size_t(chunkSize), count-offset);
-        prims.directSend(offset, offset, nelem);
-        offset += nelem;
-      } while(offset < count);
-    }
+  __device__ void runSend(const int tid, const int nthreads, struct ncclDevWorkP2p* work) {
+    int peer = work->fifo.peer;
+    void* buf = work->fifo.localBuf;
+    int group = work->group;
+    Primitives<T, RedOp, FanAsymmetric<0, 1>, /*Direct=*/1, Proto, /*P2p=*/1> prims
+      (tid, nthreads, nullptr, &peer, buf, nullptr, /*redOpArg(ignored)=*/0, group, 1, 1);
+    int32_t chunkBytes = work->fifo.chunkBytes;
+    ssize_t ahead = work->bytes;
+    ssize_t behind = 0;
+    do {
+      int32_t nelem = min(chunkBytes, ahead);
+      prims.directSend(behind, behind, nelem);
+      behind += nelem;
+      ahead -= nelem;
+    } while (ahead != 0);
   }
 
   template<typename Proto>
-  __device__ void runRecv(const int tid, const int nthreads, const uint8_t group, struct ncclWorkElemP2p* args) {
-    if (args->peer != ncclShmem.comm.rank) {
-      void* buff = reinterpret_cast<void*>(uintptr_t(args->buffHi32)<<32 | args->buffLo32);
-      ssize_t count = reinterpret_cast<size_t>(size_t(args->countHi32)<<32 | args->countLo32);
-      int chunkSize = args->chunkSize/sizeof(T);
-      if (args->proto == NCCL_PROTO_LL) chunkSize /= 2; // This is to account for chunkEffectiveSize
-      int const peer = args->peer;
-      Primitives<T, RedOp, FanAsymmetric<1, 0>, 1, Proto, 1> prims
-        (tid, nthreads, &peer, nullptr, nullptr, buff, /*redOpArg(ignored)=*/0, group, 1, 1);
-      size_t offset = 0;
-      do {
-        int nelem = min(size_t(chunkSize), count-offset);
-        prims.directRecv(offset, nelem);
-        offset += nelem;
-      } while(offset < count);
-    }
+  __device__ void runRecv(const int tid, const int nthreads, struct ncclDevWorkP2p* work) {
+    int peer = work->fifo.peer;
+    void* buf = work->fifo.localBuf;
+    int group = work->group;
+    Primitives<T, RedOp, FanAsymmetric<1, 0>, /*Direct=*/1, Proto, /*P2p=*/1> prims
+      (tid, nthreads, &peer, nullptr, nullptr, buf, /*redOpArg(ignored)=*/0, group, 1, 1);
+    int32_t chunkBytes = work->fifo.chunkBytes;
+    ssize_t ahead = work->bytes;
+    ssize_t behind = 0;
+    do {
+      int32_t nelem = min(chunkBytes, ahead);
+      prims.directRecv(behind, nelem);
+      behind += nelem;
+      ahead -= nelem;
+    } while (ahead != 0);
   }
 
-  __device__ __forceinline__ void run(ncclWork *work) {
-    struct ncclWorkElemP2p* args = work->p2pElems;
-    int ngroups = args->ngroups;
+  __device__ __forceinline__ void run() {
     int tid = threadIdx.x;
-    int wid = tid / WARP_SIZE;
-    // This has to work even for groups of 2.5 warps (which is 8 groups, and means 3
-    // warps for send, 2 warps for recv).
-    // warpStarts were rounded thanks to int division, but for group number we need to round the other way around
-    // So we mirror wid then mirror again the group.
-    #define NWARPS (NCCL_MAX_NTHREADS/WARP_SIZE)
-    uint8_t group = ngroups-1- (NWARPS-1-wid) * ngroups / NWARPS;
-    args += group;
-    tid -= args->warpStart * WARP_SIZE;
-    int nthreads = args->nWarps * WARP_SIZE;
-
-    if (args->p2pType == ncclWorkP2pTypeUnused) return;
-    if (tid >= nthreads || args->peer == -1) return;
-
-    // Select Proto here
-    // This is to allow the same kernel to run multiple primitives on different warps (thread groups)
-    if ((group%2) == 0) {
-      if (args->proto == NCCL_PROTO_LL) {
-        runRecv<ProtoLL>(tid, nthreads, group, args);
-      } else {
-        runRecv<ProtoSimple<1,1>>(tid, nthreads, group, args);
-      }
-    } else {
-      if (args->proto == NCCL_PROTO_LL) {
-        runSend<ProtoLL>(tid, nthreads, group, args);
-      } else {
-        runSend<ProtoSimple<1,1>>(tid, nthreads, group, args);
+    int wid = tid/WARP_SIZE;
+    int lane = tid%WARP_SIZE;
+    struct ncclDevWorkBatchHeader* batch = &ncclShmem.workBatch;
+    int nWorks = batch->nWorks;
+    uint32_t lasts = batch->p2p.lastWarpMask;
+    uint32_t lastsBelow = lasts & ((1u<<wid)-1); // Last warps beneath self
+    uint32_t lastsAbove = lasts & ~((1u<<wid)-1); // Last warps not beneath self.
+    int workIx = __popc(lastsBelow);
+    if (workIx < nWorks) {
+      int nWarpsBelow = 32 - __clz(lastsBelow);
+      int subwid = wid - nWarpsBelow;
+      int lastWarp = 31 - __clz(lastsAbove & -lastsAbove); // Index of last warp of our group
+      int subwn = lastWarp+1 - nWarpsBelow;
+      int subtid = subwid*WARP_SIZE + lane;
+      int subtn = subwn*WARP_SIZE;
+      struct ncclDevWorkP2p* work = (struct ncclDevWorkP2p*)(batch+1) + workIx;
+      switch (work->p2pType) {
+      case ncclDevWorkP2pTypeRecv:
+        { if (work->protocol == NCCL_PROTO_LL) {
+            runRecv<ProtoLL>(subtid, subtn, work);
+          } else {
+            runRecv<ProtoSimple<1,1>>(subtid, subtn, work);
+          }
+        } break;
+      case ncclDevWorkP2pTypeSend:
+        { if (work->protocol == NCCL_PROTO_LL) {
+            runSend<ProtoLL>(subtid, subtn, work);
+          } else {
+            runSend<ProtoSimple<1,1>>(subtid, subtn, work);
+          }
+        } break;
+      default: // ncclDevWorkP2pTypeCopy:
+        { copyGlobalGlobal</*DstAligned=*/false, /*SrcAligned=*/false>
+            (subwn, subwid, lane,
+             cvta_to_global(work->copy.dstBuf), cvta_to_global(work->copy.srcBuf),
+             (int64_t)work->bytes, cvta_to_shared(ncclScratchForWarp(wid)));
+        } break;
       }
     }
   }

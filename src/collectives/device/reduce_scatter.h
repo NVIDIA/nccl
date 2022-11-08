@@ -10,9 +10,9 @@
 
 namespace {
   template<typename T, typename RedOp, typename Proto>
-  __device__ __forceinline__ void runRing(ncclWorkElem *args) {
+  __device__ __forceinline__ void runRing(ncclDevWorkColl *args) {
     const int tid = threadIdx.x;
-    const int nthreads = args->nWarps*WARP_SIZE;
+    const int nthreads = blockDim.x;
     const int bid = args->bid;
     const int nChannels = args->nChannels;
     ncclRing *ring = &ncclShmem.channel.ring;
@@ -67,30 +67,30 @@ namespace {
 }
 
 template<typename T, typename RedOp>
-struct RunWorkElement<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
-  __device__ __forceinline__ void run(ncclWorkElem *args) {
+struct RunWork<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
+  __device__ __forceinline__ void run(ncclDevWorkColl *args) {
     using Proto = ProtoSimple<REDUCESCATTER_CHUNKSTEPS/REDUCESCATTER_SLICESTEPS, REDUCESCATTER_SLICESTEPS>;
     runRing<T, RedOp, Proto>(args);
   }
 };
 
 template<typename T, typename RedOp>
-struct RunWorkElement<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_LL> {
-  __device__ __forceinline__ void run(ncclWorkElem *args) {
+struct RunWork<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_LL> {
+  __device__ __forceinline__ void run(ncclDevWorkColl *args) {
     runRing<T, RedOp, ProtoLL>(args);
   }
 };
 
 template<typename T, typename RedOp>
-struct RunWorkElement<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_LL128> {
-  __device__ __forceinline__ void run(ncclWorkElem *args) {
+struct RunWork<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_LL128> {
+  __device__ __forceinline__ void run(ncclDevWorkColl *args) {
     runRing<T, RedOp, ProtoLL128>(args);
   }
 };
 
 template<typename T, typename RedOp>
-struct RunWorkElement<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SIMPLE> {
-  __device__ __forceinline__ void run(ncclWorkElem *args) {
+struct RunWork<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SIMPLE> {
+  __device__ __forceinline__ void run(ncclDevWorkColl *args) {
     const int tid = threadIdx.x;
     const int bid = args->bid;
     const int nChannels = args->nChannels;

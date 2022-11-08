@@ -10,9 +10,9 @@
 
 namespace {
   template<typename T, typename RedOp, typename Proto>
-  __device__ __forceinline__ void runRing(ncclWorkElem *args) {
+  __device__ __forceinline__ void runRing(ncclDevWorkColl *args) {
     const int tid = threadIdx.x;
-    const int nthreads = args->nWarps*WARP_SIZE;
+    const int nthreads = blockDim.x;
     const int bid = args->bid;
     const int nChannels = args->nChannels;
     ncclRing *ring = &ncclShmem.channel.ring;
@@ -95,9 +95,9 @@ namespace {
   }
 
   template<typename T, typename RedOp, typename Proto>
-  __device__ __forceinline__ void runTreeUpDown(ncclWorkElem *args) {
+  __device__ __forceinline__ void runTreeUpDown(ncclDevWorkColl *args) {
     const int tid = threadIdx.x;
-    const int nthreads = args->nWarps*WARP_SIZE;
+    const int nthreads = blockDim.x;
     const int bid = args->bid;
     const int nChannels = args->nChannels;
     ncclTree *tree = &ncclShmem.channel.tree;
@@ -167,9 +167,9 @@ namespace {
   }
 
   template<typename T, typename RedOp, typename Proto>
-  __device__ __forceinline__ void runTreeSplit(ncclWorkElem *args) {
+  __device__ __forceinline__ void runTreeSplit(ncclDevWorkColl *args) {
     const int tid = threadIdx.x;
-    const int nthreads = args->nWarps*WARP_SIZE;
+    const int nthreads = blockDim.x;
     const int bid = args->bid;
     const int nChannels = args->nChannels;
     ncclTree *tree = &ncclShmem.channel.tree;
@@ -256,16 +256,16 @@ namespace {
 }
 
 template<typename T, typename RedOp>
-struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
-  __device__ __forceinline__ void run(ncclWorkElem *args) {
+struct RunWork<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
+  __device__ __forceinline__ void run(ncclDevWorkColl *args) {
     using Proto = ProtoSimple<ALLREDUCE_CHUNKSTEPS/ALLREDUCE_SLICESTEPS, ALLREDUCE_SLICESTEPS>;
     runRing<T, RedOp, Proto>(args);
   }
 };
 
 template<typename T, typename RedOp>
-struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_TREE, NCCL_PROTO_SIMPLE> {
-  __device__ __forceinline__ void run(ncclWorkElem *args) {
+struct RunWork<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_TREE, NCCL_PROTO_SIMPLE> {
+  __device__ __forceinline__ void run(ncclDevWorkColl *args) {
     #if CUDART_VERSION >= 11020 && CUDART_VERSION < 11040 && __CUDA_ARCH__ >= 800
       runTreeUpDown<T, RedOp, ProtoSimple<1, 1>>(args);
     #else
@@ -275,8 +275,8 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_TREE, NCCL_PROTO_SI
 };
 
 template<typename T, typename RedOp>
-struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NCCL_PROTO_SIMPLE> {
-  __device__ __forceinline__ void run(ncclWorkElem *args) {
+struct RunWork<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NCCL_PROTO_SIMPLE> {
+  __device__ __forceinline__ void run(ncclDevWorkColl *args) {
     static constexpr int COLLNET_COPY_THREADS = 96;
     const int tid = threadIdx.x;
     const int bid = args->bid;
@@ -285,13 +285,14 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NCC
     const ssize_t chunkSize = int(args->lastChunkSize);
     const ssize_t size = args->count;
     const ssize_t loopSize = nChannels*direct->nHeads*chunkSize;
+    const bool regUsed = (ncclShmem.workBatch.type == ncclDevWorkTypeCollReg);
 
     const int hasUp = (direct->up[0] >= 0) ? 1 : 0;
     const int hasDn = (direct->down[0] >= 0) ? 1 : 0;
     const int nThreadsScatter = WARP_SIZE + ((hasUp && hasDn) ? COLLNET_COPY_THREADS : hasUp ? 3*COLLNET_COPY_THREADS : 0);
     const int nThreadsGather  =             ((hasUp && hasDn) ? COLLNET_COPY_THREADS : hasUp ? 2*COLLNET_COPY_THREADS : 0);
     const int nThreadsBcast   = WARP_SIZE + ((hasUp && hasDn) ? COLLNET_COPY_THREADS : hasUp ? 0 : 2*COLLNET_COPY_THREADS);
-    const int nThreadsReduce = args->nWarps*WARP_SIZE - nThreadsScatter - nThreadsGather - nThreadsBcast;
+    const int nThreadsReduce = blockDim.x - nThreadsScatter - nThreadsGather - nThreadsBcast;
     const int tidStartBcast = nThreadsGather;
     const int tidStartScatter = tidStartBcast + nThreadsBcast;
     const int tidStartReduce = tidStartScatter + nThreadsScatter;
@@ -306,7 +307,7 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NCC
       for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
         ssize_t offset = gridOffset + bid*direct->nHeads*chunkSize;
         int nelem = min(direct->nHeads*chunkSize, size-offset);
-        if (args->regUsed) {
+        if (regUsed) {
           prims.directScatter(offset, nelem, chunkSize, chunkSize, direct->headRank, direct->shift);
         } else {
           prims.scatter(offset, nelem, chunkSize, chunkSize, direct->headRank, direct->shift);
@@ -321,7 +322,7 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NCC
         for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
           ssize_t offset = gridOffset + (bid*direct->nHeads+direct->headRank)*chunkSize;
           int nelem = min(chunkSize, size-offset);
-          if (args->regUsed) {
+          if (regUsed) {
             prims.directRecvReduceSend(offset, nelem);
           } else {
             prims.recvReduceSend(offset, nelem);
@@ -375,8 +376,8 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NCC
 };
 
 template<typename T, typename RedOp>
-struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SIMPLE> {
-  __device__ __forceinline__ void run(ncclWorkElem *args) {
+struct RunWork<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SIMPLE> {
+  __device__ __forceinline__ void run(ncclDevWorkColl *args) {
   #if NCCL_NVLS_ENABLED
     const int tid = threadIdx.x;
     const int bid = args->bid;
@@ -464,8 +465,8 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SI
 };
 
 template<typename T, typename RedOp>
-struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS_TREE, NCCL_PROTO_SIMPLE> {
-  __device__ __forceinline__ void run(ncclWorkElem *args) {
+struct RunWork<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS_TREE, NCCL_PROTO_SIMPLE> {
+  __device__ __forceinline__ void run(ncclDevWorkColl *args) {
   #if NCCL_NVLS_ENABLED
     const int tid = threadIdx.x;
     const int bid = args->bid;
@@ -555,10 +556,10 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS_TREE, NCCL_PRO
 };
 
 template<typename T, typename RedOp>
-struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET_CHAIN, NCCL_PROTO_SIMPLE> {
-  __device__ __forceinline__ void run(ncclWorkElem *args) {
+struct RunWork<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET_CHAIN, NCCL_PROTO_SIMPLE> {
+  __device__ __forceinline__ void run(ncclDevWorkColl *args) {
     const int tid = threadIdx.x;
-    const int nthreads = args->nWarps*WARP_SIZE;
+    const int nthreads = blockDim.x;
     const int bid = args->bid;
     const int nChannels = args->nChannels;
     ncclTree *tree = &ncclShmem.channel.collnetChain;
@@ -627,29 +628,29 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET_CHAIN, NCCL
 };
 
 template<typename T, typename RedOp>
-struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_LL> {
-  __device__ __forceinline__ void run(ncclWorkElem *args) {
+struct RunWork<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_LL> {
+  __device__ __forceinline__ void run(ncclDevWorkColl *args) {
     runRing<T, RedOp, ProtoLL>(args);
   }
 };
 
 template<typename T, typename RedOp>
-struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_TREE, NCCL_PROTO_LL> {
-  __device__ __forceinline__ void run(ncclWorkElem *args) {
+struct RunWork<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_TREE, NCCL_PROTO_LL> {
+  __device__ __forceinline__ void run(ncclDevWorkColl *args) {
     runTreeSplit<T, RedOp, ProtoLL>(args);
   }
 };
 
 template<typename T, typename RedOp>
-struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_LL128> {
-  __device__ __forceinline__ void run(ncclWorkElem *args) {
+struct RunWork<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_LL128> {
+  __device__ __forceinline__ void run(ncclDevWorkColl *args) {
     runRing<T, RedOp, ProtoLL128>(args);
   }
 };
 
 template<typename T, typename RedOp>
-struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_TREE, NCCL_PROTO_LL128> {
-  __device__ __forceinline__ void run(ncclWorkElem *args) {
+struct RunWork<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_TREE, NCCL_PROTO_LL128> {
+  __device__ __forceinline__ void run(ncclDevWorkColl *args) {
     runTreeSplit<T, RedOp, ProtoLL128>(args);
   }
 };

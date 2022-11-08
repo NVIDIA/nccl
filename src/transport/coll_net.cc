@@ -617,7 +617,7 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
       struct ncclProxySubArgs* sub = args->subs+s;
       struct sendResources* resources = (struct sendResources*) (sub->connection->transportResources);
       // Round to next multiple of sliceSteps
-      sub->base = ROUNDUP(resources->step, args->chunkSteps);
+      sub->base = ROUNDUP(resources->step, args->sliceSteps);
       sub->posted = sub->received = sub->transmitted = sub->done = 0;
       resources->step = sub->base + sub->nsteps;
     }
@@ -639,7 +639,7 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
         int sharedBuffSlot = sub->posted%NCCL_STEPS;
         int offset;
         NCCLCHECK(sharedBuffersGet(sub->connection->collNet, 0, sharedBuffSlot, 0, &offset));
-        resources->recvMem->offsFifo[buffSlot] = offset + s*args->chunkSize;
+        resources->recvMem->offsFifo[buffSlot] = offset + s*args->sliceBytes;
         __sync_synchronize();
         volatile uint64_t* sendHead = resources->gdcSync ? resources->gdcSync : &resources->sendMem->head;
         sub->posted += args->sliceSteps;
@@ -661,7 +661,7 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
             int offset;
             NCCLCHECK(sharedBuffersGet(sub->connection->collNet, 0, sharedBuffSlot, 0, &offset));
             args->sharedBuff[sharedBuffSlot] = localBuff + offset;
-            args->sharedSize[sharedBuffSlot] = args->chunkSize;
+            args->sharedSize[sharedBuffSlot] = args->sliceBytes;
           }
           if (ready) {
             sizesFifo[buffSlot] = -1;
@@ -726,7 +726,7 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
       struct ncclProxySubArgs* sub = args->subs+s;
       struct recvResources* resources = (struct recvResources*) (sub->connection->transportResources);
       // Round to next multiple of sliceSteps
-      sub->base = ROUNDUP(resources->step, args->chunkSteps);
+      sub->base = ROUNDUP(resources->step, args->sliceSteps);
       sub->posted = sub->received = sub->flushed = sub->transmitted = sub->done = 0;
       resources->step = sub->base + sub->nsteps;
     }
@@ -813,7 +813,7 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
         int offset;
         NCCLCHECK(sharedBuffersGet(sub->connection->collNet, 1, sharedBuffSlot, startChannel, &offset));
         volatile int* offsFifo = (volatile int*)resources->recvMem->offsFifo;
-        offsFifo[buffSlot] = offset + (s%COLLNET_GROUP_NSUBS)*args->chunkSize;
+        offsFifo[buffSlot] = offset + (s%COLLNET_GROUP_NSUBS)*args->sliceBytes;
         __sync_synchronize();
         volatile uint64_t* recvTail = resources->gdcSync ? resources->gdcSync : &resources->recvMem->tail;
         *recvTail = sub->base + sub->flushed;

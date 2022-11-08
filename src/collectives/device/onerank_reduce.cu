@@ -12,33 +12,37 @@
 namespace {
   template<typename T, typename RedOp>
   __device__ __forceinline__ void oneRankReduce() {
-    ncclWork *w = &ncclShmem.work;
     int tid = threadIdx.x;
     int tn = blockDim.x;
+    int nWorks = ncclShmem.workBatch.nWorks;
+    for (int w=tid; w < nWorks; w += tn) {
+      struct ncclDevWorkColl *work = (ncclDevWorkColl*)(&ncclShmem.workBatch+1) + w;
+      if (work->redOpArgIsPtr) {
+        work->redOpArg = RedOpArg<RedOp>::loadArg(reinterpret_cast<void*>(work->redOpArg));
+      }
+    }
+    __syncthreads();
     #pragma unroll 1
-    for(int e=0; e < NCCL_MAX_WORK_ELEMENTS && w->elems[e].isUsed; e++) {
-      ncclWorkElem *we = &w->elems[e];
-      intptr_t eltN = we->count;
-      int bid = we->bid;
-      int bn = we->nChannels;
-      T const *src = (T const*)we->sendbuff;
-      T *dst = (T*)we->recvbuff;
+    for(int w=0; w < nWorks; w++) {
+      struct ncclDevWorkColl *work = (ncclDevWorkColl*)(&ncclShmem.workBatch+1) + w;
+      intptr_t eltN = work->count;
+      int bid = work->bid;
+      int bn = work->nChannels;
+      T const *src = (T const*)work->sendbuff;
+      T *dst = (T*)work->recvbuff;
 
       // each block/channel gets a roughly equal segment of 16 byte packs
       constexpr int EltPerPack = 16/sizeof(T);
-      intptr_t packN = (eltN + EltPerPack-1) - (eltN + EltPerPack-1)%EltPerPack;
-      intptr_t i0 = (bid+0)*(packN/bn) + (bid+0 < packN%bn ? bid+0 : packN%bn);
-      intptr_t i1 = (bid+1)*(packN/bn) + (bid+1 < packN%bn ? bid+1 : packN%bn);
-      i0 *= EltPerPack;
+      intptr_t i0 = (bid+0)*alignUp(eltN/bn, EltPerPack);
+      intptr_t i1 = (bid+1)*alignUp(eltN/bn, EltPerPack);
       i0 = i0 < eltN ? i0 : eltN;
-      i1 *= EltPerPack;
       i1 = i1 < eltN ? i1 : eltN;
       src += i0;
       dst += i0;
       void *vsrc = (void*)src;
       void *vdst = (void*)dst;
       reduceCopy<COLL_UNROLL, RedOp, T, 0,1,1, 0,1,1, /*PreOpSrcs=*/1>
-        (tid, tn, we->redOpArg, &(we->redOpArg), true, 1, &vsrc, 1, &vdst, i1-i0);
+        (tid, tn, work->redOpArg, &(work->redOpArg), true, 1, &vsrc, 1, &vdst, i1-i0);
     }
   }
 }

@@ -248,7 +248,7 @@ ncclResult_t ncclGetLevel(int* level, const char* disableEnv, const char* levelE
 NCCL_PARAM(IgnoreDisabledP2p, "IGNORE_DISABLED_P2P", 0);
 
 int ncclTopoUserP2pLevel = -1;
-ncclResult_t ncclTopoCheckP2p(struct ncclTopoSystem* system, int64_t id1, int64_t id2, int* p2p, int *read, int* intermediateRank) {
+ncclResult_t ncclTopoCheckP2p(struct ncclTopoSystem* system, int64_t id1, int64_t id2, int* p2p, int *read, bool intermediatePermitted, int* intermediateRank) {
   *p2p = 0;
   if (read) *read = 0;
   if (intermediateRank) *intermediateRank = -1;
@@ -266,6 +266,7 @@ ncclResult_t ncclTopoCheckP2p(struct ncclTopoSystem* system, int64_t id1, int64_
   // Set intermediate GPU rank, if routing through an intermediate GPU.
   struct ncclTopoLinkList* path = gpu1->paths[GPU]+g2;
   if (path->count == 2) {
+    if (!intermediatePermitted) return ncclSuccess;
     struct ncclTopoNode* intermediateNode = path->list[0]->remNode;
     if (intermediateNode->type == GPU) {
       intermediateIndex = intermediateNode - system->nodes[GPU].nodes;
@@ -547,7 +548,7 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclComm
   for (int g=0; g<system->nodes[GPU].count; g++) {
     for (int p=0; p<system->nodes[GPU].count; p++) {
       int p2p;
-      NCCLCHECK(ncclTopoCheckP2p(system, system->nodes[GPU].nodes[p].id, system->nodes[GPU].nodes[g].id, &p2p, NULL, NULL));
+      NCCLCHECK(ncclTopoCheckP2p(system, system->nodes[GPU].nodes[p].id, system->nodes[GPU].nodes[g].id, &p2p, NULL, /*intermediatePermitted=*/true, NULL));
       if (p2p == 0) {
         // Divert all traffic through the CPU
         int cpu;
@@ -699,7 +700,7 @@ static int nextPow2(int v) {
   return pow2;
 }
 
-ncclResult_t ncclTopoComputeP2pChannels(struct ncclComm* comm) {
+ncclResult_t ncclTopoComputeP2pChannels(struct ncclComm* comm, cudaStream_t stream) {
   /* here we already honor comm->max/minCTAs for p2pnChannels. */
   if (comm->sharedRes->owner != comm) {
     comm->p2pnChannels = std::min(comm->nChannels, (int)ncclParamMaxP2pNChannels());
@@ -724,7 +725,9 @@ ncclResult_t ncclTopoComputeP2pChannels(struct ncclComm* comm) {
   comm->p2pnChannels = nextPow2(comm->p2pnChannels);
 
   // Init channels that weren't used so far
-  for (int c=comm->nChannels; c<comm->p2pnChannels; c++) NCCLCHECK(initChannel(comm, c));
+  for (int c=comm->nChannels; c<comm->p2pnChannels; c++) {
+    NCCLCHECK(initChannel(comm, c, stream));
+  }
 
   // We want to spread channels used when there aren't many and progressively
   // fill the whole space of nChannels. To do so we mirror the bits in the

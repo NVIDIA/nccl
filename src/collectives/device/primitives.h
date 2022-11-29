@@ -21,11 +21,9 @@
  * to how that protocol operates with a consistent interface so that our
  * algorithm code can operate protocol parametrically.
  */
-template<int SlicePerChunk_1, int StepPerSlice_1, int Unroll_1 = COLL_UNROLL, int MultimemSrcs_1 = 0, int MultimemDsts_1 = 0>
+template<int Unroll_1 = COLL_UNROLL, int MultimemSrcs_1 = 0, int MultimemDsts_1 = 0>
 struct ProtoSimple {
   static constexpr int Id = NCCL_PROTO_SIMPLE;
-  static constexpr int SlicePerChunk = SlicePerChunk_1;
-  static constexpr int StepPerSlice = StepPerSlice_1;
   static constexpr int Unroll = Unroll_1;
   static constexpr int MultimemSrcs = MultimemSrcs_1;
   static constexpr int MultimemDsts = MultimemDsts_1;

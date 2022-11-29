@@ -16,7 +16,7 @@ namespace {
     const int bid = args->bid;
     const int nChannels = args->nChannels;
     ncclRing *ring = &ncclShmem.channel.ring;
-    const ssize_t chunkSize = int(Proto::calcBytePerStep()/sizeof(T) * (Proto::Id == NCCL_PROTO_SIMPLE ? BROADCAST_CHUNKSTEPS : 1));
+    const ssize_t chunkSize = int(Proto::calcBytePerStep()/sizeof(T) * args->stepsPerSlice);
     const ssize_t minChunkSizeLL128 = int(nthreads*(Proto::calcBytePerGrain()/sizeof(T)));
     const ssize_t loopSize = nChannels*chunkSize;
     const ssize_t size = args->count;
@@ -27,7 +27,8 @@ namespace {
     T *inputBuf = (T*)args->sendbuff;
     T *outputBuf = (T*)args->recvbuff;
     Primitives<T, RedOp, FanSymmetric<1>, 0, Proto, 0>
-      prims(tid, nthreads, &ring->prev, &ring->next, inputBuf, outputBuf, args->redOpArg);
+      prims(tid, nthreads, &ring->prev, &ring->next, inputBuf, outputBuf, args->redOpArg,
+          args->stepsPerSlice, args->slicesPerChunk);
 
     for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
       ssize_t realChunkSize;
@@ -62,7 +63,7 @@ namespace {
 template<typename T, typename RedOp>
 struct RunWorkElement<ncclFuncBroadcast, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
   __device__ __forceinline__ void run(ncclWorkElem *args) {
-    using Proto = ProtoSimple<BROADCAST_CHUNKSTEPS/BROADCAST_SLICESTEPS, BROADCAST_SLICESTEPS>;
+    using Proto = ProtoSimple<>;
     runRing<T, RedOp, Proto>(args);
   }
 };

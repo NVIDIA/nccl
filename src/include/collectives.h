@@ -110,19 +110,6 @@ extern __device__ void NCCL_ONERANK_REDUCE_NAME(PreMulSum, __nv_bfloat16)();
 extern __device__ void NCCL_ONERANK_REDUCE_NAME(PreMulSum, float)();
 extern __device__ void NCCL_ONERANK_REDUCE_NAME(PreMulSum, double)();
 
-// CHUNKSIZE must be a multiple of SLICESIZE
-#define ALLREDUCE_SLICESTEPS (NCCL_STEPS/4)
-#define ALLREDUCE_CHUNKSTEPS (NCCL_STEPS/2)
-#define ALLGATHER_SLICESTEPS (NCCL_STEPS/4)
-#define ALLGATHER_CHUNKSTEPS (NCCL_STEPS/2)
-#define REDUCESCATTER_SLICESTEPS (NCCL_STEPS/4)
-#define REDUCESCATTER_CHUNKSTEPS (NCCL_STEPS/2)
-#define BROADCAST_SLICESTEPS 1
-#define BROADCAST_CHUNKSTEPS 1
-#define REDUCE_SLICESTEPS 1
-#define REDUCE_CHUNKSTEPS 1
-#define NCCL_MAX_SLICE_PER_CHUNK 2  // max value for CHUNKSTEPS/SLICESTEPS, must accord with above
-
 // We can't use the enum identifiers like ncclSum, ncclFloat, etc since this
 // macro will be used in preprocessor conditionals where enums have no meaning.
 #define NCCL_NVLS_SUPPORTS(/*ncclDataType_t*/ type, /*ncclDevRedOp_t*/ red) \
@@ -132,4 +119,5 @@ extern __device__ void NCCL_ONERANK_REDUCE_NAME(PreMulSum, double)();
    (type==7 && red==0) || \
    (type==8 && red==0))
 
+#define NCCL_MAX_SLICE_PER_CHUNK 8  // max value for CHUNKSTEPS/SLICESTEPS, must accord with below
 #endif

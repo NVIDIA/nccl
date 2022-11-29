@@ -62,7 +62,10 @@ class Primitives<
   inline __device__ bool checkAbort(int &spins) {
     spins++;
     if (!(flags & Aborted) && spins == NCCL_SPINS_BEFORE_CHECK_ABORT) {
-      flags |= *ncclShmem.comm.abortFlag ? Aborted : 0;
+      if (*ncclShmem.comm.abortFlag) {
+        flags |= Aborted;
+        ncclShmem.aborted = 1;
+      }
       spins = 0;
     }
     return flags & Aborted;
@@ -176,6 +179,9 @@ class Primitives<
           ncclShmem.groups[group].dsts[0] = userBuff + dstIx + offset;
         waitPeer<DirectRecv, DirectSend, Recv, Send, Src, Dst>(dstIx, remoteIx, offset, sliceSize);
         subBarrier();
+        /* if user abort the kernel, we don't need to actually perform copy/reduce; just set size
+         * to 0 to avoid unnecessary workload. */
+        size_t workSize = ncclShmem.aborted ? 0 : sliceSize;
         if (DirectRecv && ncclShmem.groups[group].srcs[0] == ncclShmem.groups[group].dsts[0]) {
           // We can only have one direct receive. Since srcs[0] == dstPtr+offset, skip one copy
           if (Send) {
@@ -184,7 +190,7 @@ class Primitives<
               (tid, nworkers, nullptr, false,
                1, (T const**)ncclShmem.groups[group].srcs,
                fan.nsend(), (T**)ncclShmem.groups[group].dsts+1,
-               sliceSize);
+               workSize);
           }
         } else if (DirectSend && !DirectRecv && SrcBuf != Input && ncclShmem.groups[group].dsts[Dst] == nullptr) {
           // For broadcast in CollNet to do empty send
@@ -192,7 +198,7 @@ class Primitives<
             (tid, nworkers, ncclShmem.redOpArgs, postOp,
              Recv, (T const**)ncclShmem.groups[group].srcs,
              Dst, (T**)ncclShmem.groups[group].dsts,
-             sliceSize);
+             workSize);
         } else {
           constexpr int PreOpN = SrcBuf != Input ? 0 :
                                  DirectRecv*MaxRecv == NCCL_MAX_DIRECT_ARITY ? (1+NCCL_MAX_DIRECT_ARITY) : 1;
@@ -200,7 +206,7 @@ class Primitives<
             (tid, nworkers, ncclShmem.redOpArgs, postOp,
              Recv*fan.nrecv()+Src, (T const**)ncclShmem.groups[group].srcs,
              Send*fan.nsend()+Dst, (T**)ncclShmem.groups[group].dsts,
-             sliceSize);
+             workSize);
         }
         barrier(); // This barrier has a counterpart in following loop
         if (Send && (flags & RolePostSend) && index == 0) __threadfence_system();

@@ -37,6 +37,7 @@ struct ncclShmemData {
   };
   uint64_t redOpArgs[NCCL_MAX_DIRECT_ARITY+1];
   int channelId;
+  int aborted;
   alignas(16) struct ncclDevComm comm;
   alignas(16) struct ncclDevChannel channel;
   alignas(16) struct ncclWork work;
@@ -135,6 +136,8 @@ __device__ void ncclKernel(
   }
   __syncthreads(); // publish ncclShmem.channelId
   int channelId = ncclShmem.channelId;
+  /* set abort flag to 0 */
+  if (tid == 0) ncclShmem.aborted = 0;
 
   if (true) {
     void *dst, *src;

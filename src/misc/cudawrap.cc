@@ -87,7 +87,7 @@ static void initOnceFunc() {
 
   cudaLib = dlopen(path, RTLD_LAZY);
   if (cudaLib == NULL) {
-    WARN("Failed to find CUDA library in %s (NCCL_CUDA_PATH=%s)", ncclCudaPath, ncclCudaPath);
+    WARN("Failed to find CUDA library (NCCL_CUDA_PATH='%s') : %s", ncclCudaPath ? ncclCudaPath : "", dlerror());
     goto error;
   }
 

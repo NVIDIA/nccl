@@ -98,16 +98,19 @@ ncclResult_t ncclStrongStreamLaunchKernel(
 );
 
 // Cause `a` to wait for the current state `b`. Both `a` and `b` must be acquired.
+// `b_subsumes_a` indicates that all work in `a` is already present in `b`, thus
+// we want to fast-forward `a` to be a clone of `b`. Knowing this permits the
+// implementation to induce few graph dependencies.
 ncclResult_t ncclStrongStreamWaitStream(
-  struct ncclCudaGraph graph, struct ncclStrongStream* a, struct ncclStrongStream* b
+  struct ncclCudaGraph graph, struct ncclStrongStream* a, struct ncclStrongStream* b, bool b_subsumes_a=false
 );
 // `b` must be capturing within `graph`.
 ncclResult_t ncclStrongStreamWaitStream(
-  struct ncclCudaGraph graph, struct ncclStrongStream* a, cudaStream_t b
+  struct ncclCudaGraph graph, struct ncclStrongStream* a, cudaStream_t b, bool b_subsumes_a=false
 );
 // `a` must be capturing within `graph`.
 ncclResult_t ncclStrongStreamWaitStream(
-  struct ncclCudaGraph graph, cudaStream_t a, struct ncclStrongStream* b
+  struct ncclCudaGraph graph, cudaStream_t a, struct ncclStrongStream* b, bool b_subsumes_a=false
 );
 
 // Synchrnoization does not need the strong stream to be acquired.

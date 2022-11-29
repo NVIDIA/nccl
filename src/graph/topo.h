@@ -18,6 +18,7 @@
 #define PCI_BW 12.0           // PCI Gen3 x16
 #define QPI_BW 6.0
 #define SKL_QPI_BW 9.0
+#define AMD_BW 16.0
 #define ZPI_BW 6.0
 #define YONGFENG_ZPI_BW 9.0
 #define P9_BW 32.0

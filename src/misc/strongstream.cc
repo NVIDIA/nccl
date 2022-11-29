@@ -305,7 +305,8 @@ static void mergeTips(struct ncclStrongStreamGraph* a, cudaGraphNode_t const* bN
 }
 
 ncclResult_t ncclStrongStreamWaitStream(
-    struct ncclCudaGraph graph, struct ncclStrongStream* a, struct ncclStrongStream* b
+    struct ncclCudaGraph graph, struct ncclStrongStream* a, struct ncclStrongStream* b,
+    bool b_subsumes_a
   ) {
   #if CUDART_VERSION >= 11030
     if (graph.graph == nullptr) {
@@ -319,6 +320,7 @@ ncclResult_t ncclStrongStreamWaitStream(
       NCCLCHECK(checkGraphId(ag, graph.graphId));
       struct ncclStrongStreamGraph* bg = b->graphHead;
       NCCLCHECK(checkGraphId(bg, graph.graphId));
+      if (b_subsumes_a) ag->tipCount = 0;
       mergeTips(ag, bg->tipNodes, bg->tipCount);
     }
     a->serialEventNeedsRecord = true;
@@ -330,7 +332,8 @@ ncclResult_t ncclStrongStreamWaitStream(
 }
 
 ncclResult_t ncclStrongStreamWaitStream(
-    struct ncclCudaGraph graph, struct ncclStrongStream* a, cudaStream_t b
+    struct ncclCudaGraph graph, struct ncclStrongStream* a, cudaStream_t b,
+    bool b_subsumes_a
   ) {
   #if CUDART_VERSION >= 11030
     if (graph.graph == nullptr) {
@@ -351,6 +354,7 @@ ncclResult_t ncclStrongStreamWaitStream(
       }
       struct ncclStrongStreamGraph* ag = a->graphHead;
       NCCLCHECK(checkGraphId(ag, graph.graphId));
+      if (b_subsumes_a) ag->tipCount = 0;
       mergeTips(ag, bNodes, bCount);
     }
     a->serialEventNeedsRecord = true;
@@ -362,7 +366,8 @@ ncclResult_t ncclStrongStreamWaitStream(
 }
 
 ncclResult_t ncclStrongStreamWaitStream(
-    struct ncclCudaGraph graph, cudaStream_t a, struct ncclStrongStream* b
+    struct ncclCudaGraph graph, cudaStream_t a, struct ncclStrongStream* b,
+    bool b_subsumes_a
   ) {
   #if CUDART_VERSION >= 11030
     if (graph.graph == nullptr) {
@@ -374,7 +379,9 @@ ncclResult_t ncclStrongStreamWaitStream(
     } else {
       struct ncclStrongStreamGraph* bg = b->graphHead;
       NCCLCHECK(checkGraphId(bg, graph.graphId));
-      CUDACHECK(cudaStreamUpdateCaptureDependencies(a, bg->tipNodes, bg->tipCount, cudaStreamAddCaptureDependencies));
+      CUDACHECK(cudaStreamUpdateCaptureDependencies(a, bg->tipNodes, bg->tipCount,
+        b_subsumes_a ? cudaStreamSetCaptureDependencies : cudaStreamAddCaptureDependencies
+      ));
     }
   #else
     CUDACHECK(cudaEventRecord(b->scratchEvent, b->cudaStream));

@@ -754,3 +754,15 @@ ncclResult_t ncclTopoGetNvbGpus(struct ncclTopoSystem* system, int rank, int* nr
   *nranks = nvbGpus;
   return ncclSuccess;
 }
+
+int ncclTopoPathAllNVLink(struct ncclTopoSystem* system) {
+  int minPath = PATH_DIS;
+  for (int i=0; i<system->nodes[GPU].count; i++) {
+    struct ncclTopoLinkList* paths = system->nodes[GPU].nodes[i].paths[GPU];
+    for (int j=0; j<system->nodes[GPU].count; j++) {
+      if (i == j) continue;
+      minPath = std::min(minPath, paths[j].type);
+    }
+  }
+  return minPath >= PATH_PIX ? 0 : 1;
+}

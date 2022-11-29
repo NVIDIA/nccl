@@ -609,8 +609,7 @@ static ncclResult_t scheduleP2pTasksToPlan(
 
   // Compute how much to split operations
   // Natural step size matching buffer steps.
-  ssize_t stepSize = comm->buffSizes[NCCL_PROTO_SIMPLE]/NCCL_STEPS;
-  if (comm->nNodes > 1) stepSize = comm->p2pNetChunkSize;
+  ssize_t stepSize = comm->p2pChunkSize;
   // Try to use all channels
   int nChannelsMax = comm->p2pnChannelsPerPeer;
   int nChannelsMin = nChannelsMax;
@@ -1008,7 +1007,13 @@ ncclResult_t ncclLaunchKernelBefore_NoUncapturedCuda(struct ncclComm* comm, stru
 
 #if CUDART_VERSION >= 11080
 #define NCCL_MAX_CGA_CLUSTER_SIZE 8
-NCCL_PARAM(CGAClusterSize, "CGA_CLUSTER_SIZE", 0);
+#define NCCL_CGA_CLUSTER_SIZE_SM90 4
+NCCL_PARAM(CGAClusterSize, "CGA_CLUSTER_SIZE", -2);
+#endif
+
+#if CUDART_VERSION >= 12000
+// NCCL uses the "Remote" Mem Sync domain by default
+NCCL_PARAM(MemSyncDomain, "MEM_SYNC_DOMAIN", cudaLaunchMemSyncDomainRemote);
 #endif
 
 ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan) {
@@ -1022,22 +1027,25 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
   #if CUDART_VERSION >= 11080
   int driverVersion;
   NCCLCHECK(ncclCudaDriverVersion(&driverVersion));
-
-  unsigned int clusterSize = 0;
-  clusterSize = ncclParamCGAClusterSize();
-  if (clusterSize > NCCL_MAX_CGA_CLUSTER_SIZE) {
-    static bool warned = false;
-    if (warned == false) {
-      WARN("NCCL_CGA_CLUSTER_SIZE value %d is too big. Limiting value to %d.",
-           clusterSize, NCCL_MAX_CGA_CLUSTER_SIZE);
-      warned = true;
+  if (driverVersion >= 11080) {
+    int compCap = comm->compCap;
+    unsigned int clusterSize = (compCap == 90) ? NCCL_CGA_CLUSTER_SIZE_SM90 : 0;
+    if (ncclParamCGAClusterSize() != -2) {
+      clusterSize = ncclParamCGAClusterSize();
+      if (clusterSize > NCCL_MAX_CGA_CLUSTER_SIZE) {
+        static bool warned = false;
+        if (warned == false) {
+          WARN("NCCL_CGA_CLUSTER_SIZE value %d is too big. Limiting value to %d.",
+               clusterSize, NCCL_MAX_CGA_CLUSTER_SIZE);
+          warned = true;
+        }
+        clusterSize = NCCL_MAX_CGA_CLUSTER_SIZE;
+      }
     }
-    clusterSize = NCCL_MAX_CGA_CLUSTER_SIZE;
-  }
 
-  if (clusterSize && driverVersion >= 11080) {
     cudaLaunchConfig_t launchConfig = {0};
-    cudaLaunchAttribute launchAttrs[2];
+    cudaLaunchAttribute launchAttrs[3];
+    int attrs = 0;
     /* Cooperative Group Array (CGA)
      * On sm90 and later we have an extra level of hierarchy where we
      * can group together several blocks within the Grid, called
@@ -1048,17 +1056,25 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
      * concurrently scheduled onto a group of SMs.
      * The maximum value is 8 and it must be divisible into the grid dimensions
      */
-    // Grid dimension must be divisible by clusterSize
-    if (grid.x % clusterSize) clusterSize = 1;
-    launchAttrs[0].id = cudaLaunchAttributeClusterDimension;
-    launchAttrs[0].val.clusterDim = {clusterSize, 1, 1};
-    launchAttrs[1].id = cudaLaunchAttributeClusterSchedulingPolicyPreference;
-    launchAttrs[1].val.clusterSchedulingPolicyPreference = cudaClusterSchedulingPolicySpread;
-
+    if (clusterSize) {
+      // Grid dimension must be divisible by clusterSize
+      if (grid.x % clusterSize) clusterSize = 1;
+      launchAttrs[attrs].id = cudaLaunchAttributeClusterDimension;
+      launchAttrs[attrs++].val.clusterDim = {clusterSize, 1, 1};
+      launchAttrs[attrs].id = cudaLaunchAttributeClusterSchedulingPolicyPreference;
+      launchAttrs[attrs++].val.clusterSchedulingPolicyPreference = cudaClusterSchedulingPolicySpread;
+    }
+    #if CUDART_VERSION >= 12000
+    if (compCap >= 90 && driverVersion >= 12000) {
+      // Set the NCCL Mem Sync domain on CUDA 12.0 and later (sm90)
+      launchAttrs[attrs].id = cudaLaunchAttributeMemSyncDomain;
+      launchAttrs[attrs++].val.memSyncDomain = (cudaLaunchMemSyncDomain) ncclParamMemSyncDomain();
+    }
+    #endif
     launchConfig.gridDim = grid;
     launchConfig.blockDim = block;
     launchConfig.attrs = launchAttrs;
-    launchConfig.numAttrs = sizeof(launchAttrs)/sizeof(launchAttrs[0]);
+    launchConfig.numAttrs = attrs;
     launchConfig.stream = launchStream;
 
     CUDACHECK(cudaLaunchKernelExC(&launchConfig, fn, args));
@@ -1093,14 +1109,18 @@ ncclResult_t ncclLaunchFinish(struct ncclComm* comm) {
     // back to us for reclaiming via callbackQueue.
     ncclIntruQueueConstruct(&comm->planQueue);
     cudaStream_t launchStream = tasks->streams->stream; // First user stream gets launch
-    // Create dependency for deviceStream on launchStream.
-    NCCLCHECKGOTO(ncclStrongStreamWaitStream(tasks->capturingGraph, &comm->deviceStream, launchStream), result, resume1);
+    // Create dependency for deviceStream on launchStream. We know that deviceStream
+    // hasn't been modified since launchStream waited on it (in ncclLaunchPrepare),
+    // so we can say that launchStream subsumes it.
+    NCCLCHECKGOTO(ncclStrongStreamWaitStream(tasks->capturingGraph, &comm->deviceStream, launchStream, /*b_subsumes_a=*/true), result, resume1);
   resume1:
-    // Create dependency for other user streams (skip launch stream).
+    // Create dependency for other user streams (skip launch stream) on deviceStream.
+    // Again, the user streams haven't been touched since deviceStream waited on them
+    // so we can say they are subsumed by deviceStream.
     struct ncclCudaStreamList* sl = tasks->streams->next;
     tasks->streams = nullptr; // Reset comm->tasks.streams to empty.
     while (sl != nullptr) {
-      NCCLCHECKGOTO(ncclStrongStreamWaitStream(tasks->capturingGraph, sl->stream, &comm->deviceStream), result, resume2);
+      NCCLCHECKGOTO(ncclStrongStreamWaitStream(tasks->capturingGraph, sl->stream, &comm->deviceStream, /*b_subsumes_a=*/true), result, resume2);
     resume2:
       sl = sl->next;
     }

@@ -27,6 +27,7 @@ ncclResult_t getHostName(char* hostname, int maxlen, const char delim);
 uint64_t getHash(const char* string, int n);
 uint64_t getHostHash();
 uint64_t getPidHash();
+ncclResult_t getRandomData(void* buffer, size_t bytes);
 
 struct netIf {
   char prefix[64];
@@ -46,6 +47,19 @@ inline uint64_t clockNano() {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return uint64_t(ts.tv_sec)*1000*1000*1000 + ts.tv_nsec;
+}
+
+/* get any bytes of random data from /dev/urandom, return 0 if it succeeds; else
+ * return -1 */
+inline ncclResult_t getRandomData(void* buffer, size_t bytes) {
+  ncclResult_t ret = ncclSuccess;
+  if (bytes > 0) {
+    const size_t one = 1UL;
+    FILE* fp = fopen("/dev/urandom", "r");
+    if (buffer == NULL || fp == NULL || fread(buffer, bytes, one, fp) != one) ret = ncclSystemError;
+    if (fp) fclose(fp);
+  }
+  return ret;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

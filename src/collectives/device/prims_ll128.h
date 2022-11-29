@@ -23,6 +23,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
   const int warpInBlock; // warp index in thread block
   const bool flagThread;
   const int group;
+  const int stepsPerChunk;
   Fan fan;
   T *userBufs[2];
   struct ncclConnInfo* recvConn = NULL;
@@ -46,8 +47,8 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
   inline __device__ int sendOffset(int i) { return (sendStep[i]%NCCL_STEPS)*stepSize; }
   inline __device__ uint64_t* recvPtr(int i) { return recvBuff[i]+recvOffset(i); }
   inline __device__ uint64_t* sendPtr(int i) { return sendBuff[i]+sendOffset(i); }
-  inline __device__ uint64_t recvFlag(int i) { return recvStep[i]+1; }
-  inline __device__ uint64_t sendFlag(int i) { return sendStep[i]+1; }
+  inline __device__ uint64_t recvFlag(int i) { return recvStep[i]+stepsPerChunk; }
+  inline __device__ uint64_t sendFlag(int i) { return sendStep[i]+stepsPerChunk; }
 
   inline __device__ void barrier() {
     asm volatile ("bar.sync %1, %0;" :: "r"(nthreads), "r"(15-group));
@@ -67,22 +68,22 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
   inline __device__ void waitSend(int nbytes) {
     if (sendConnHeadPtr) {
       int spins = 0;
-      while (sendConnHeadCache + NCCL_STEPS < sendConnHead + 1) {
+      while (sendConnHeadCache + NCCL_STEPS < sendConnHead + stepsPerChunk) {
         sendConnHeadCache = *sendConnHeadPtr;
         if (checkAbort(spins, wid, 1)) break;
       }
       if (sendConnFifoPtr) {
         sendConnFifoPtr[sendStep[wid]%NCCL_STEPS] = nbytes;
       }
-      sendConnHead += 1;
+      sendConnHead += stepsPerChunk;
     }
   }
 
   inline __device__ void postRecv() {
-    if (recvConnHeadPtr) *recvConnHeadPtr = recvConnHead += 1;
+    if (recvConnHeadPtr) *recvConnHeadPtr = recvConnHead += stepsPerChunk;
   }
   inline __device__ void postSend() {
-    if (sendConnTailPtr) { __threadfence(); *sendConnTailPtr = sendConnTail += 1; }
+    if (sendConnTailPtr) { __threadfence(); *sendConnTailPtr = sendConnTail += stepsPerChunk; }
   }
 
   template<int WordPerThread>
@@ -315,15 +316,16 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
     }
 
     barrier();
-    if (SEND) for (int i=0; i < MaxSend; i++) sendStep[i] += 1;
+    if (SEND) for (int i=0; i < MaxSend; i++) sendStep[i] += stepsPerChunk;
     if (SEND) postSend();
-    if (RECV) for (int i=0; i < MaxRecv; i++) recvStep[i] += 1;
+    if (RECV) for (int i=0; i < MaxRecv; i++) recvStep[i] += stepsPerChunk;
     if (RECV) postRecv();
   }
 
   __device__ __forceinline__ void loadRecvConn(struct ncclConnInfo* conn, int i) {
     recvBuff[i] = (uint64_t*)conn->buffs[NCCL_PROTO_LL128];
     recvStep[i] = conn->step;
+    recvStep[i] = roundUp(recvStep[i], stepsPerChunk);
     if (wid == i) recvConn = conn;
   }
   __device__ __forceinline__ void loadRecvSync() {
@@ -336,6 +338,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
   __device__ __forceinline__ void loadSendConn(struct ncclConnInfo* conn, int i) {
     sendBuff[i] = (uint64_t*)conn->buffs[NCCL_PROTO_LL128];
     sendStep[i] = conn->step;
+    sendStep[i] = roundUp(sendStep[i], stepsPerChunk);
     if (wid == i) sendConn = conn;
   }
   __device__ __forceinline__ void loadSendSync() {
@@ -356,12 +359,14 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
 public:
   __device__ Primitives(
       const int tid, const int nthreads, int const *recvPeers, int const *sendPeers,
-      void const *inputBuf, void *outputBuf, uint64_t redOpArg, int group=0
+      void const *inputBuf, void *outputBuf, uint64_t redOpArg, int stepsPerChunk,
+      int ignored, int group=0
     ):
     redOp(redOpArg),
     tid(tid), nthreads(nthreads), wid(tid%WARP_SIZE), warp(tid/WARP_SIZE),
     warpInBlock(threadIdx.x/WARP_SIZE),
     flagThread((tid%8)==7), group(group&(uint16_t)0xFFFF),
+    stepsPerChunk(stepsPerChunk),
     stepSize(ncclShmem.comm.buffSizes[NCCL_PROTO_LL128]/NCCL_STEPS/sizeof(uint64_t)) {
     int connIndex = group >> 16;
     auto *channel = &ncclShmem.channel;

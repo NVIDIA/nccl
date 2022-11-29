@@ -837,7 +837,6 @@ static ncclResult_t sendProxyProgress(struct ncclComm* comm, struct ncclProxyArg
   args->idle = 1;
   if (args->state == ncclProxyOpProgress) {
     int p = args->protocol;
-    int maxDepth = std::min(NCCL_STEPS, NCCL_SHARED_STEPS/args->nsubs);
     for (int s=0; s<args->nsubs; s++) {
       struct ncclProxySubArgs* sub = args->subs+s;
       if (sub->done == sub->nsteps) continue;
@@ -848,6 +847,7 @@ static ncclResult_t sendProxyProgress(struct ncclComm* comm, struct ncclProxyArg
       int buffSize = stepSize*args->sliceSteps;
       if (sub->nbytes < buffSize) buffSize = sub->nbytes;
       // Post buffers to the GPU
+      int maxDepth = resources->shared ? NCCL_SHARED_STEPS/args->nsubs : NCCL_STEPS;
       if (sub->posted < sub->nsteps && sub->posted < sub->done + maxDepth) {
         int buffSlot = (sub->base+sub->posted)%NCCL_STEPS;
         if (resources->shared) {
@@ -883,7 +883,7 @@ static ncclResult_t sendProxyProgress(struct ncclComm* comm, struct ncclProxyArg
             if (!ready) {
               // When data is in sysmem, we need to wait until all flags are correct since the GPU only
               // called threadfence()
-              uint64_t flag = sub->base+sub->transmitted+1;
+              uint64_t flag = sub->base+sub->transmitted+args->sliceSteps;
               int nFifoLines = DIVUP(sizesFifo[buffSlot], sizeof(uint64_t)*NCCL_LL128_LINEELEMS);
               volatile uint64_t* lines = (volatile uint64_t*)buff;
               ready = 1;
@@ -892,7 +892,7 @@ static ncclResult_t sendProxyProgress(struct ncclComm* comm, struct ncclProxyArg
               }
             }
           } else if (p == NCCL_PROTO_LL) {
-            uint32_t flag = NCCL_LL_FLAG(sub->base+sub->transmitted+1);
+            uint32_t flag = NCCL_LL_FLAG(sub->base+sub->transmitted+args->sliceSteps);
             int nFifoLines = DIVUP(size, sizeof(union ncclLLFifoLine));
             union ncclLLFifoLine* lines = (union ncclLLFifoLine*)buff;
             for (int i=0; i<nFifoLines; i++) {
@@ -987,7 +987,6 @@ static ncclResult_t recvProxyProgress(struct ncclComm* comm, struct ncclProxyArg
   args->idle = 1;
   if (args->state == ncclProxyOpProgress) {
     int p = args->protocol;
-    int maxDepth = std::min(NCCL_STEPS, NCCL_SHARED_STEPS/args->nsubs);
     for (int s=0; s<args->nsubs; s+=args->subs[s].groupSize) {
       struct ncclProxySubArgs* subGroup = args->subs+s;
       int subCount = 0;
@@ -999,8 +998,9 @@ static ncclResult_t recvProxyProgress(struct ncclComm* comm, struct ncclProxyArg
       for (int i=0; i<subGroup->groupSize; i++) {
         struct ncclProxySubArgs* sub = subGroup + i;
         if (sub->posted < sub->nsteps) {
-          if (sub->posted >= sub->done + maxDepth) { subCount = 0; break; }
           struct recvResources* resources = (struct recvResources*) (sub->connection->transportResources);
+          int maxDepth = resources->shared ? NCCL_SHARED_STEPS/args->nsubs : NCCL_STEPS;
+          if (sub->posted >= sub->done + maxDepth) { subCount = 0; break; }
           int stepSize = resources->buffSizes[p] / NCCL_STEPS;
           char* localBuff = NCCL_NET_MAP_GET_POINTER(&resources->map, cpu, buffs[p]);
           int buffSlot = (sub->base+sub->posted)%NCCL_STEPS;

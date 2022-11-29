@@ -25,7 +25,8 @@ struct RunWork<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
       if (args->proto == NCCL_PROTO_LL) chunkSize /= 2;
       int const peer = args->peer;
       Primitives<T, RedOp, FanAsymmetric<0, 1>, 1, Proto, 1> prims
-        (tid, nthreads, nullptr, &peer, buff, nullptr, /*redOpArg(ignored)=*/0, group);
+        (tid, nthreads, nullptr, &peer, buff, nullptr, /*redOpArg(ignored)=*/0,
+         1<<args->stepsPerChunkPow2, 1, group);
       size_t offset = 0;
       do {
         int nelem = min(size_t(chunkSize), count-offset);
@@ -44,7 +45,8 @@ struct RunWork<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
       if (args->proto == NCCL_PROTO_LL) chunkSize /= 2; // This is to account for chunkEffectiveSize
       int const peer = args->peer;
       Primitives<T, RedOp, FanAsymmetric<1, 0>, 1, Proto, 1> prims
-        (tid, nthreads, &peer, nullptr, nullptr, buff, /*redOpArg(ignored)=*/0, group);
+        (tid, nthreads, &peer, nullptr, nullptr, buff, /*redOpArg(ignored)=*/0,
+         1<<args->stepsPerChunkPow2, 1, group);
       size_t offset = 0;
       do {
         int nelem = min(size_t(chunkSize), count-offset);
@@ -79,13 +81,13 @@ struct RunWork<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
       if (args->proto == NCCL_PROTO_LL) {
         runRecv<ProtoLL>(tid, nthreads, group, args);
       } else {
-        runRecv<ProtoSimple<1,1>>(tid, nthreads, group, args);
+        runRecv<ProtoSimple<>>(tid, nthreads, group, args);
       }
     } else {
       if (args->proto == NCCL_PROTO_LL) {
         runSend<ProtoLL>(tid, nthreads, group, args);
       } else {
-        runSend<ProtoSimple<1,1>>(tid, nthreads, group, args);
+        runSend<ProtoSimple<>>(tid, nthreads, group, args);
       }
     }
   }

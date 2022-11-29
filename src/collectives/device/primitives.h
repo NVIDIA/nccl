@@ -20,11 +20,9 @@
  * to how that protocol operates with a consistent interface so that our
  * algorithm code can operate protocol parametrically.
  */
-template<int SlicePerChunk_1, int StepPerSlice_1, int Unroll_1 = COLL_UNROLL>
+template<int Unroll_1 = COLL_UNROLL>
 struct ProtoSimple {
   static constexpr int Id = NCCL_PROTO_SIMPLE;
-  static constexpr int SlicePerChunk = SlicePerChunk_1;
-  static constexpr int StepPerSlice = StepPerSlice_1;
   static constexpr int Unroll = Unroll_1;
 
   // Data bytes (no flags etc) in one step of the fifo queue.

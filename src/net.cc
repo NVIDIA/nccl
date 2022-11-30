@@ -285,6 +285,10 @@ ncclResult_t ncclNetInit(struct ncclComm* comm) {
     WARN("Error: network %s not found.", netName ? netName : "");
     return ncclInvalidUsage;
   }
+
+  ncclNetProperties_t props;
+  NCCLCHECK(comm->ncclNet->getProperties(0, &props));
+  comm->netLatency = props.latency;
   return ncclSuccess;
 }
 

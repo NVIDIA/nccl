@@ -1299,6 +1299,12 @@ static ncclResult_t getStepInfo(struct ncclInfo* info) {
       info->sliceSteps = ncclParamRingSliceSteps();
     }
   }
+  // Make buffer deeper for longer latency network segment
+  if (info->comm->nNodes > 1 && info->comm->netLatency > 100 &&
+      (info->coll == ncclFuncReduceScatter || info->coll == ncclFuncAllGather || info->coll == ncclFuncAllReduce)) {
+    info->sliceSteps = 1;
+    info->chunkSteps = 2;
+  }
   if (info->chunkSteps > NCCL_STEPS/2 || info->sliceSteps > NCCL_STEPS/2) {
     WARN("Invalid chunkSteps=%d/sliceSteps=%d, must be at most NCCL_STEPS/2=%d\n", info->chunkSteps, info->sliceSteps, NCCL_STEPS/2);
     return ncclInvalidUsage;

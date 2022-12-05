@@ -1274,7 +1274,8 @@ static ncclResult_t getStepInfo(struct ncclInfo* info) {
   } else if (info->protocol == NCCL_PROTO_LL128) {
      info->chunkSteps = info->sliceSteps = ncclParamLL128ChunkSteps();
   } else { /* SIMPLE */
-    if (info->algorithm == NCCL_ALGO_TREE || info->coll == ncclFuncBroadcast || info->coll == ncclFuncReduce) {
+    if (info->algorithm == NCCL_ALGO_COLLNET_CHAIN || info->algorithm == NCCL_ALGO_COLLNET_DIRECT ||
+        info->algorithm == NCCL_ALGO_TREE || info->coll == ncclFuncBroadcast || info->coll == ncclFuncReduce) {
       info->chunkSteps = info->sliceSteps = ncclParamPipelineChunkSteps();
     } else {
       info->chunkSteps = ncclParamRingChunkSteps();
@@ -1360,8 +1361,7 @@ comp_next:
     // Set direct direction for broadcast-gather (read or write)
     work->direct = (info->nBytes / info->nChannels <= 1024*1024) ? NCCL_DIRECT_WRITE : NCCL_DIRECT_READ;
   } else if (info->algorithm == NCCL_ALGO_COLLNET_CHAIN) {
-    stepSize   = info->comm->buffSizes[NCCL_PROTO_SIMPLE]/NCCL_STEPS;
-    chunkSize  = std::min(256*1024, stepSize*chunkSteps);
+    chunkSize  = std::min(256*1024, chunkSize);
     while (info->nBytes / (info->nChannels*chunkSize) < info->comm->channels[0].collnetChain.depth*64 && chunkSize > 131072) chunkSize /= 2;
     while (info->nBytes / (info->nChannels*chunkSize) < info->comm->channels[0].collnetChain.depth*8 && chunkSize > 65536) chunkSize /= 2;
     while (info->nBytes / (info->nChannels*chunkSize) < info->comm->channels[0].collnetChain.depth && chunkSize > 32768) chunkSize /= 2;

@@ -367,10 +367,14 @@ static ncclResult_t sharedBuffersInit(struct ncclComm* comm, int cuda, char** gp
   return ncclSuccess;
 }
 
-static ncclResult_t sharedBuffersGet(struct ncclComm* comm, int type, int slot, int channel, int* offset) {
+// Allocate buffers between channels, so that consecutive channels have contiguous buffers.
+// slot is going to be a multiple of sliceSteps and the buffer per channel needs to be
+// large enough for sliceSteps.
+static ncclResult_t sharedBuffersGet(struct ncclComm* comm, int type, int slot, int channel, int* offset, int sliceSteps) {
   // Use different pools for different channels and also separate send/recv.
-  int slotSize = comm->buffSizes[NCCL_PROTO_SIMPLE]/NCCL_STEPS;
-  int globalSlot = (type*NCCL_STEPS+slot)*comm->nChannels+channel;
+  int stepSize = comm->buffSizes[NCCL_PROTO_SIMPLE]/NCCL_STEPS;
+  int slotSize = stepSize*sliceSteps;
+  int globalSlot = ((type*NCCL_STEPS+slot)/sliceSteps)*comm->nChannels+channel;
   *offset = slotSize * globalSlot;
   return ncclSuccess;
 }
@@ -629,7 +633,7 @@ static ncclResult_t sendProxyProgress(struct ncclComm* comm, struct ncclProxyArg
         int buffSlot = (sub->base+sub->posted)%NCCL_STEPS;
         int sharedBuffSlot = sub->posted%NCCL_STEPS;
         int offset;
-        NCCLCHECK(sharedBuffersGet(comm, 0, sharedBuffSlot, 0, &offset));
+        NCCLCHECK(sharedBuffersGet(comm, 0, sharedBuffSlot, 0, &offset, args->sliceSteps));
         resources->recvMem->offsFifo[buffSlot] = offset + s*args->chunkSize;
         __sync_synchronize();
         volatile uint64_t* sendHead = resources->gdcSync ? resources->gdcSync : &resources->sendMem->head;
@@ -650,7 +654,7 @@ static ncclResult_t sendProxyProgress(struct ncclComm* comm, struct ncclProxyArg
           int ready = 1;
           if (s == 0) {
             int offset;
-            NCCLCHECK(sharedBuffersGet(comm, 0, sharedBuffSlot, 0, &offset));
+            NCCLCHECK(sharedBuffersGet(comm, 0, sharedBuffSlot, 0, &offset, args->sliceSteps));
             args->sharedBuff[sharedBuffSlot] = localBuff + offset;
             args->sharedSize[sharedBuffSlot] = args->chunkSize;
           }
@@ -742,7 +746,7 @@ static ncclResult_t recvProxyProgress(struct ncclComm* comm, struct ncclProxyArg
         int sharedBuffSlot = sub->posted%NCCL_STEPS;
         int startChannel = group*COLLNET_GROUP_NSUBS;
         int offset;
-        NCCLCHECK(sharedBuffersGet(comm, 1, sharedBuffSlot, startChannel, &offset));
+        NCCLCHECK(sharedBuffersGet(comm, 1, sharedBuffSlot, startChannel, &offset, args->sliceSteps));
         reqFifo[group][buffSlot].recvBuff = localBuff + offset;
         TRACE(NCCL_NET, "recvProxy [%d/%d/%d] posted buffer %p", sub->posted, group, buffSlot, reqFifo[group][buffSlot].recvBuff);
         sub->posted += args->sliceSteps;
@@ -773,7 +777,7 @@ static ncclResult_t recvProxyProgress(struct ncclComm* comm, struct ncclProxyArg
             } else {
               int startChannel = group*COLLNET_GROUP_NSUBS;
               int offset;
-              NCCLCHECK(sharedBuffersGet(comm, 1, sharedBuffSlot, startChannel, &offset));
+              NCCLCHECK(sharedBuffersGet(comm, 1, sharedBuffSlot, startChannel, &offset, args->sliceSteps));
               NCCLCHECK(collNetIflush(comm, resources->collNetComm, localBuff + offset, totalSize, mhandle, sub->requests+buffSlot));
             }
           } else {
@@ -802,7 +806,7 @@ static ncclResult_t recvProxyProgress(struct ncclComm* comm, struct ncclProxyArg
         int sharedBuffSlot = sub->transmitted%NCCL_STEPS;
         int startChannel = group*COLLNET_GROUP_NSUBS;
         int offset;
-        NCCLCHECK(sharedBuffersGet(comm, 1, sharedBuffSlot, startChannel, &offset));
+        NCCLCHECK(sharedBuffersGet(comm, 1, sharedBuffSlot, startChannel, &offset, args->sliceSteps));
         volatile int* offsFifo = (volatile int*)resources->recvMem->offsFifo;
         offsFifo[buffSlot] = offset + (s%COLLNET_GROUP_NSUBS)*args->chunkSize;
         __sync_synchronize();

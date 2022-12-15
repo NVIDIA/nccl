@@ -470,6 +470,7 @@ static ncclResult_t setupChannel(struct ncclComm* comm, int channelId, int rank,
 NCCL_PARAM(BuffSize, "BUFFSIZE", -2);
 NCCL_PARAM(LlBuffSize, "LL_BUFFSIZE", -2);
 NCCL_PARAM(Ll128BuffSize, "LL128_BUFFSIZE", -2);
+NCCL_PARAM(LongNetLatBuffSizeScaling, "LONG_NET_LAT_BUFFSIZE_SCALING", 4);
 
 NCCL_PARAM(P2pNetChunkSize, "P2P_NET_CHUNKSIZE", (1 << 17)); /* 128 kB */
 NCCL_PARAM(P2pPciChunkSize, "P2P_PCI_CHUNKSIZE", (1 << 17)); /* 128 kB */
@@ -484,8 +485,14 @@ static ncclResult_t computeBuffSizes(struct ncclComm* comm) {
 
   if (cpuArch == NCCL_TOPO_CPU_ARCH_ARM) defaults[NCCL_PROTO_SIMPLE] = DEFAULT_BUFFSIZE_ARM;
 
+  // Make buffer deeper for longer network latency segment
+  int scaling = 1;
+  if (comm->nNodes > 1 && comm->netLatency > 100) {
+    scaling = ncclParamLongNetLatBuffSizeScaling();
+  }
+
   for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) {
-    comm->buffSizes[p] = envs[p] != -2 ? envs[p] : defaults[p];
+    comm->buffSizes[p] = envs[p] != -2 ? envs[p] : scaling * defaults[p];
   }
 
   if (comm->nNodes > 1) comm->p2pChunkSize = ncclParamP2pNetChunkSize();

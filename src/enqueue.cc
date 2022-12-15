@@ -1286,6 +1286,11 @@ NCCL_PARAM(PipelineChunkSteps, "PIPELINE_CHUNKSTEPS", (NCCL_STEPS/8));
 NCCL_PARAM(RingChunkSteps, "RING_CHUNKSTEPS", (NCCL_STEPS/2));
 NCCL_PARAM(RingSliceSteps, "RING_SLICESTEPS", (NCCL_STEPS/4));
 
+NCCL_PARAM(TreeLongNetLatChunkSteps, "TREE_LONG_NET_LAT_CHUNKSTEPS", (4));
+NCCL_PARAM(TreeLongNetLatSliceSteps, "TREE_LONG_NET_LAT_SLICESTEPS", (2));
+NCCL_PARAM(RingLongNetLatChunkSteps, "RING_LONG_NET_LAT_CHUNKSTEPS", (4));
+NCCL_PARAM(RingLongNetLatSliceSteps, "RING_LONG_NET_LAT_SLICESTEPS", (2));
+
 static ncclResult_t getStepInfo(struct ncclInfo* info) {
   if (info->protocol == NCCL_PROTO_LL) {
      info->chunkSteps = info->sliceSteps = ncclParamLLChunkSteps();
@@ -1300,12 +1305,19 @@ static ncclResult_t getStepInfo(struct ncclInfo* info) {
       info->sliceSteps = ncclParamRingSliceSteps();
     }
   }
-  // Make buffer deeper for longer latency network segment
+
+  // Make buffer deeper for long latency network segment
   if (info->comm->nNodes > 1 && info->comm->netLatency > 100 &&
       (info->coll == ncclFuncReduceScatter || info->coll == ncclFuncAllGather || info->coll == ncclFuncAllReduce)) {
-    info->sliceSteps = 1;
-    info->chunkSteps = 2;
+    if (info->algorithm == NCCL_ALGO_TREE) {
+      info->chunkSteps = ncclParamTreeLongNetLatChunkSteps();
+      info->sliceSteps = ncclParamTreeLongNetLatSliceSteps();
+    } else {
+      info->chunkSteps = ncclParamRingLongNetLatChunkSteps();
+      info->sliceSteps = ncclParamRingLongNetLatSliceSteps();
+    }
   }
+
   if (info->chunkSteps > NCCL_STEPS/2 || info->sliceSteps > NCCL_STEPS/2) {
     WARN("Invalid chunkSteps=%d/sliceSteps=%d, must be at most NCCL_STEPS/2=%d\n", info->chunkSteps, info->sliceSteps, NCCL_STEPS/2);
     return ncclInvalidUsage;

@@ -470,7 +470,7 @@ static ncclResult_t setupChannel(struct ncclComm* comm, int channelId, int rank,
 NCCL_PARAM(BuffSize, "BUFFSIZE", -2);
 NCCL_PARAM(LlBuffSize, "LL_BUFFSIZE", -2);
 NCCL_PARAM(Ll128BuffSize, "LL128_BUFFSIZE", -2);
-NCCL_PARAM(LongNetLatBuffSizeScaling, "LONG_NET_LAT_BUFFSIZE_SCALING", 4);
+NCCL_PARAM(LongNetLatBuffSizeScaling, "LONG_NET_LAT_BUFFSIZE_SCALING", 1);
 
 NCCL_PARAM(P2pNetChunkSize, "P2P_NET_CHUNKSIZE", (1 << 17)); /* 128 kB */
 NCCL_PARAM(P2pPciChunkSize, "P2P_PCI_CHUNKSIZE", (1 << 17)); /* 128 kB */

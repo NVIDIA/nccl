@@ -380,6 +380,10 @@ struct ncclIbRequest {
   int type;
   int events;
   struct ncclSocket* sock;
+  // Only one of sendComm and recvComm can be not NULL.
+  // Both can be NULL for gpuFlush.
+  struct ncclIbSendComm* sendComm;
+  struct ncclIbRecvComm* recvComm;
   int nreqs;
   union {
     struct {
@@ -431,6 +435,10 @@ struct ncclIbSendComm {
   int nqps;
   struct ibv_mr* fifoMr;
   int ar;
+
+  int devId;  // Index in ncclIbDevs
+  union ibv_gid localGid;
+  union ibv_gid remoteGid;
 };
 // The SendFifo needs to be 32-byte aligned and each element needs
 // to be a 32-byte multiple, so that an entry does not get split and
@@ -464,6 +472,8 @@ struct ncclIbRecvComm {
   struct ibv_qp* qps[NCCL_IB_MAX_QPS];
   int nqps;
   struct ncclIbGpuFlush gpuFlush;
+  union ibv_gid localGid;
+  union ibv_gid remoteGid;
 };
 static_assert((offsetof(struct ncclIbRecvComm, remFifo) % 32) == 0, "ncclIbSendComm fifo must be 32-byte aligned");
 
@@ -609,6 +619,7 @@ ib_connect_check:
   if (!ready) return ncclSuccess;
 
   // IB Setup
+  comm->devId = dev;
   struct ibv_context* ctx;
   ctx = ncclIbDevs[dev].context;
   NCCLCHECK(ncclIbInitVerbs(dev, ctx, &comm->verbs));
@@ -640,7 +651,7 @@ ib_connect_check:
     for (int q=0; q<comm->nqps; q++)
       INFO(NCCL_NET,"NET/IB: Dev %d Port %d qpn %d mtu %d LID %d", dev, ib_port, qpInfo.qpn[q], qpInfo.mtu, qpInfo.lid);
   } else { // RoCE
-    union ibv_gid gid;
+    union ibv_gid& gid = comm->localGid;
     NCCLCHECK(wrap_ibv_query_gid(ctx, ib_port, ncclParamIbGidIndex(), &gid));
     qpInfo.spn = gid.global.subnet_prefix;
     qpInfo.iid = gid.global.interface_id;
@@ -704,6 +715,9 @@ ib_recv:
   memcpy(&remQpInfo, stage->buffer, sizeof(struct ncclIbQpInfo));
 
   // IB setup
+  rComm->remoteGid.global.subnet_prefix = remQpInfo.spn;
+  rComm->remoteGid.global.interface_id = remQpInfo.iid;
+
   struct ibv_context* ctx;
   uint8_t ib_port;
   ctx = ncclIbDevs[lComm->dev].context;
@@ -711,7 +725,8 @@ ib_recv:
   struct ibv_port_attr portAttr;
   NCCLCHECK(wrap_ibv_query_port(ctx, ib_port, &portAttr));
   union ibv_gid gid;
-  NCCLCHECK(wrap_ibv_query_gid(ctx, ib_port, ncclParamIbGidIndex(), &gid));
+  NCCLCHECK(wrap_ibv_query_gid(ctx, ib_port, ncclParamIbGidIndex(), &rComm->localGid));
+  gid = rComm->localGid;
 
   // QP Creation
   NCCLCHECK(ncclIbInitVerbs(lComm->dev, ctx, &rComm->verbs));
@@ -793,6 +808,8 @@ ncclResult_t ncclIbGetRequest(struct ncclIbVerbs* verbs, struct ncclIbRequest** 
       r->verbs = verbs;
       r->events = 1;
       r->sock = NULL;
+      r->sendComm = NULL;
+      r->recvComm = NULL;
       *req = r;
       return ncclSuccess;
     }
@@ -814,6 +831,8 @@ ncclResult_t ncclSendCheck(struct ncclIbSendComm* comm) {
   NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_RECV, &comm->sock, &remQpInfo, sizeof(remQpInfo), &bytes));
   if (bytes == 0) return ncclSuccess; // Try again later
   NCCLCHECK(ncclSocketWait(NCCL_SOCKET_RECV, &comm->sock, &remQpInfo, sizeof(remQpInfo), &bytes));
+  comm->remoteGid.global.subnet_prefix = remQpInfo.spn;
+  comm->remoteGid.global.interface_id = remQpInfo.iid;
 
   for (int q=0; q<comm->nqps; q++) {
     struct ibv_qp* qp = comm->qps[q];
@@ -1060,6 +1079,7 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, int size, int tag, void* mh
     req->send.lkey = mr->lkey;
     req->send.offset = 0;
     req->events = comm->nqps;
+    req->sendComm = comm;
     *request = reqs[r] = req;
 
     // If this is a multi-recv, send only when all requests have matched.
@@ -1153,6 +1173,7 @@ ncclResult_t ncclIbIrecv(void* recvComm, int n, void** data, int* sizes, int* ta
   req->type = NCCL_NET_IB_REQ_RECV;
   req->sock = &comm->sock;
   req->nreqs = n;
+  req->recvComm = comm;
   for (int i=0; i<n; i++) req->recv.sizes[i] = 0;
 
   struct ibv_recv_wr wr;
@@ -1237,11 +1258,23 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
     for (int w=0; w<wrDone; w++) {
       struct ibv_wc *wc = wcs+w;
       if (wc->status != IBV_WC_SUCCESS) {
+        // NOTE: this error trace is only printed upon completion failure.
         char line[SOCKET_NAME_MAXLEN+1];
+        char localGid[INET6_ADDRSTRLEN];
+        char remoteGid[INET6_ADDRSTRLEN];
         union ncclSocketAddress addr;
         ncclSocketGetAddr(r->sock, &addr);
-        WARN("NET/IB : Got completion from peer %s with error %d, opcode %d, len %d, vendor err %d",
-             ncclSocketToString(&addr, line), wc->status, wc->opcode, wc->byte_len, wc->vendor_err);
+        if (r->sendComm != NULL) {
+          inet_ntop(AF_INET6, &(r->sendComm->localGid), localGid, sizeof(localGid));
+          inet_ntop(AF_INET6, &(r->sendComm->remoteGid), remoteGid, sizeof(remoteGid));
+          WARN("NET/IB : Got completion from peer %s with error %d, opcode %d, len %d, vendor err %d (sendComm) localGid %s remoteGid %s",
+             ncclSocketToString(&addr, line), wc->status, wc->opcode, wc->byte_len, wc->vendor_err, localGid, remoteGid);
+        } else if (r->recvComm != NULL) {
+          inet_ntop(AF_INET6, &(r->recvComm->localGid), localGid, sizeof(localGid));
+          inet_ntop(AF_INET6, &(r->recvComm->remoteGid), remoteGid, sizeof(remoteGid));
+          WARN("NET/IB : Got completion from peer %s with error %d, opcode %d, len %d, vendor err %d (recvComm) localGid %s remoteGid %s",
+             ncclSocketToString(&addr, line), wc->status, wc->opcode, wc->byte_len, wc->vendor_err, localGid, remoteGid);
+        }
         return ncclRemoteError;
       }
 
@@ -1329,4 +1362,3 @@ ncclNet_t ncclNetIb = {
   ncclIbCloseRecv,
   ncclIbCloseListen
 };
-

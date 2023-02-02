@@ -731,6 +731,11 @@ float speedArrayInter[] = { 48.0, 30.0, 28.0, 24.0, 22.0, 18.0, 15.0, 12.0, 10.0
 #define NSPEEDSINTRA (sizeof(speedArrayIntra)/sizeof(float))
 #define NSPEEDSINTER (sizeof(speedArrayInter)/sizeof(float))
 
+float sm90SpeedArrayIntra[] = { 66.0, 33.0, 24.0, 20.0, 15.0, 12.0, 6.0, 3.0 };
+float sm90SpeedArrayInter[] = { 48.0, 45.0, 30.0, 24.0, 15.0, 12.0, 6.0, 3.0, 2.4, 1.2, 0.24, 0.12 };
+#define NSPEEDSINTRA_SM90 (sizeof(sm90SpeedArrayIntra)/sizeof(float))
+#define NSPEEDSINTER_SM90 (sizeof(sm90SpeedArrayInter)/sizeof(float))
+
 NCCL_PARAM(CrossNic, "CROSS_NIC", 2);
 
 ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph) {
@@ -771,11 +776,11 @@ ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph
   int nspeeds = 0;
   float* speedArray = NULL;
   if (system->nodes[NET].count == 0) {
-    nspeeds = NSPEEDSINTRA;
-    speedArray = speedArrayIntra;
+    nspeeds = ccMin >= 90 ? NSPEEDSINTRA_SM90 : NSPEEDSINTRA;
+    speedArray = ccMin >= 90 ? sm90SpeedArrayIntra : speedArrayIntra;
   } else {
-    nspeeds = NSPEEDSINTER;
-    speedArray = speedArrayInter;
+    nspeeds = ccMin >= 90 ? NSPEEDSINTER_SM90 : NSPEEDSINTER;
+    speedArray = ccMin >= 90 ? sm90SpeedArrayInter : speedArrayInter;
   }
   int pass = 1;
   int speedIndex = 0;
@@ -890,7 +895,7 @@ done:
     graph->nChannels = 1;
   }
 
-  if (graph->bwIntra >= 25.0) {
+  if ((ccMin <= 80 && graph->bwIntra >= 25.0) || (ccMin <= 90 && graph->bwIntra >= 50.0)) {
     int dupChannels = std::min(graph->nChannels*2, graph->maxChannels);
     memcpy(graph->intra+graph->nChannels*ngpus, graph->intra, (dupChannels-graph->nChannels)*ngpus*sizeof(int));
     memcpy(graph->inter+graph->nChannels*2,graph->inter, (dupChannels-graph->nChannels)*2*sizeof(int));

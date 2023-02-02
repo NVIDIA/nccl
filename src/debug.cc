@@ -15,7 +15,7 @@ static int pid = -1;
 static char hostname[1024];
 thread_local int ncclDebugNoWarn = 0;
 char ncclLastError[1024] = ""; // Global string for the last error in human readable form
-uint64_t ncclDebugMask = NCCL_INIT; // Default debug sub-system mask is INIT
+uint64_t ncclDebugMask = NCCL_INIT|NCCL_ENV; // Default debug sub-system mask is INIT and ENV
 FILE *ncclDebugFile = stdout;
 pthread_mutex_t ncclDebugLock = PTHREAD_MUTEX_INITIALIZER;
 std::chrono::steady_clock::time_point ncclEpoch;

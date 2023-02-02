@@ -72,7 +72,7 @@ void ncclLoadParam(char const* env, int64_t deftVal, int64_t uninitialized, int6
         value = deftVal;
         INFO(NCCL_ALL,"Invalid value %s for %s, using default %lld.", str, env, (long long)deftVal);
       } else {
-        INFO(NCCL_ALL,"%s set by environment to %lld.", env, (long long)value);
+        INFO(NCCL_ENV,"%s set by environment to %lld.", env, (long long)value);
       }
     }
     __atomic_store_n(cache, value, __ATOMIC_RELAXED);

@@ -490,11 +490,18 @@ static ncclResult_t socketPollConnect(struct ncclSocket* sock) {
   memset(&pfd, 0, sizeof(struct pollfd));
   pfd.fd = sock->fd;
   pfd.events = POLLOUT;
-  SYSCHECK(ret = poll(&pfd, 1, timeout), "poll");
-  if (ret == 0) return ncclSuccess;
+  ret = poll(&pfd, 1, timeout);
+
+  if (ret == 0 || (ret < 0 && errno == EINTR)) {
+    return ncclSuccess;
+  } else if (ret < 0) {
+    WARN("socketPollConnect poll() failed with error %s", strerror(errno));
+    return ncclRemoteError;
+  } else {
+    EQCHECK(ret == 1 && (pfd.revents & POLLOUT), 0);
+  }
 
   /* check socket status */
-  EQCHECK(ret == 1 && (pfd.revents & POLLOUT), 0);
   SYSCHECK(getsockopt(sock->fd, SOL_SOCKET, SO_ERROR, (void*)&ret, &rlen), "getsockopt");
 
   if (ret == 0) {

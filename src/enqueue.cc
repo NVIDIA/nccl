@@ -15,6 +15,19 @@
 #include <cstring> // std::memcpy
 #include <cinttypes> // PRIx64
 
+static pthread_once_t initOnceControl = PTHREAD_ONCE_INIT;
+static bool isCudaLaunchBlocking = false;
+
+static void initOnceFunc() {
+  char* val = getenv("CUDA_LAUNCH_BLOCKING");
+  isCudaLaunchBlocking = val!=nullptr && val[0]!=0 && !(val[0]=='0' && val[1]==0);
+}
+
+static void initOnce() {
+  pthread_once(&initOnceControl, initOnceFunc);
+}
+
+
 static void* const ncclKernelGeneric = (void*)NCCL_KERN_NAME(SendRecv, RING, SIMPLE, Sum, int8_t);
 
 struct ncclKernelMatch {
@@ -964,7 +977,8 @@ ncclResult_t ncclLaunchPrepare(struct ncclComm* comm) {
     }
     NCCLCHECKGOTO(ncclStrongStreamWaitStream(tasks->capturingGraph, launchStream, &comm->deviceStream), result, failure);
 
-    if (persistent || comm->persistentRefs != 0) {
+    initOnce(); // isCudaLaunchBlocking
+    if (persistent || comm->persistentRefs != 0 || isCudaLaunchBlocking) {
       // We have to launch host tasks to push proxy args. We are careful to only
       // do this if necessary since host tasks impose a high performance cost in CUDA.
       bool acquired = false;
@@ -1087,7 +1101,8 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
 }
 
 ncclResult_t ncclLaunchKernelAfter_NoCuda(struct ncclComm* comm, struct ncclKernelPlan* plan) {
-  if (comm->persistentRefs == 0) { // implies !plan->persistent
+  initOnce(); // isCudaLaunchBlocking
+  if (!(plan->persistent || comm->persistentRefs != 0 || isCudaLaunchBlocking)) {
     // If this isn't being captured and there aren't any CUDA graphs alive
     // then we don't need to do our proxyOp pushing on the host stream.
     NCCLCHECK(hostStreamPlanTask(comm, plan));

@@ -1273,8 +1273,8 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
             commType = (char*)"sendComm";
         }
         else if (r->recvComm != NULL){
-            localGid = &(r->sendComm->localGid);
-            remoteGid = &(r->sendComm->remoteGid);
+            localGid = &(r->recvComm->localGid);
+            remoteGid = &(r->recvComm->remoteGid);
             commType = (char*)"recvComm";
         }
 

@@ -1261,20 +1261,36 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
       if (wc->status != IBV_WC_SUCCESS) {
         // NOTE: this error trace is only printed upon completion failure.
         char line[SOCKET_NAME_MAXLEN+1];
-        char localGid[INET6_ADDRSTRLEN];
-        char remoteGid[INET6_ADDRSTRLEN];
         union ncclSocketAddress addr;
         ncclSocketGetAddr(r->sock, &addr);
+        
+        union ibv_gid* localGid;
+        union ibv_gid* remoteGid;
+        char* commType = NULL;
         if (r->sendComm != NULL) {
-          inet_ntop(AF_INET6, &(r->sendComm->localGid), localGid, sizeof(localGid));
-          inet_ntop(AF_INET6, &(r->sendComm->remoteGid), remoteGid, sizeof(remoteGid));
-          WARN("NET/IB : Got completion from peer %s with error %d, opcode %d, len %d, vendor err %d (sendComm) localGid %s remoteGid %s",
-             ncclSocketToString(&addr, line), wc->status, wc->opcode, wc->byte_len, wc->vendor_err, localGid, remoteGid);
-        } else if (r->recvComm != NULL) {
-          inet_ntop(AF_INET6, &(r->recvComm->localGid), localGid, sizeof(localGid));
-          inet_ntop(AF_INET6, &(r->recvComm->remoteGid), remoteGid, sizeof(remoteGid));
-          WARN("NET/IB : Got completion from peer %s with error %d, opcode %d, len %d, vendor err %d (recvComm) localGid %s remoteGid %s",
-             ncclSocketToString(&addr, line), wc->status, wc->opcode, wc->byte_len, wc->vendor_err, localGid, remoteGid);
+            localGid = &(r->sendComm->localGid);
+            remoteGid = &(r->sendComm->remoteGid);
+            commType = (char*)"sendComm";
+        }
+        else if (r->recvComm != NULL){
+            localGid = &(r->sendComm->localGid);
+            remoteGid = &(r->sendComm->remoteGid);
+            commType = (char*)"recvComm";
+        }
+
+        char localGidString[INET6_ADDRSTRLEN];
+        char remoteGidString[INET6_ADDRSTRLEN];
+        bool isParseSuccess = false;
+        if (commType != NULL) {
+          isParseSuccess = inet_ntop(AF_INET6, localGid, localGidString, sizeof(localGidString)) != NULL;
+          isParseSuccess = inet_ntop(AF_INET6, remoteGid, remoteGidString, sizeof(remoteGidString)) != NULL && isParseSuccess;
+        }
+        if (isParseSuccess) {
+          WARN("NET/IB : Got completion from peer %s with error %d, opcode %d, len %d, vendor err %d (%s) localGid %s remoteGid %s",
+              ncclSocketToString(&addr, line), wc->status, wc->opcode, wc->byte_len, wc->vendor_err,commType, localGid, remoteGid);
+        } else {
+          WARN("NET/IB : Got completion from peer %s with error %d, opcode %d, len %d, vendor err %d",
+              ncclSocketToString(&addr, line), wc->status, wc->opcode, wc->byte_len, wc->vendor_err);
         }
         return ncclRemoteError;
       }

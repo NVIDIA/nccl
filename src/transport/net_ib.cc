@@ -380,8 +380,9 @@ struct ncclIbRequest {
   int type;
   int events;
   struct ncclSocket* sock;
-  // Only one of sendComm and recvComm can be not NULL.
-  // Both can be NULL for gpuFlush.
+  // The corresponding send/recv comm for the request; Used for error tracing
+  // Only one of sendComm and recvComm can be not NULL
+  // Both can be NULL for gpuFlush
   struct ncclIbSendComm* sendComm;
   struct ncclIbRecvComm* recvComm;
   int nreqs;
@@ -437,8 +438,8 @@ struct ncclIbSendComm {
   int ar;
 
   int devId;  // Index in ncclIbDevs
-  union ibv_gid localGid;
-  union ibv_gid remoteGid;
+  union ibv_gid localGid; // GID for the local rank; Used for error tracing
+  union ibv_gid remoteGid; // GID for the remote rank; Used for error tracing
 };
 // The SendFifo needs to be 32-byte aligned and each element needs
 // to be a 32-byte multiple, so that an entry does not get split and
@@ -472,8 +473,8 @@ struct ncclIbRecvComm {
   struct ibv_qp* qps[NCCL_IB_MAX_QPS];
   int nqps;
   struct ncclIbGpuFlush gpuFlush;
-  union ibv_gid localGid;
-  union ibv_gid remoteGid;
+  union ibv_gid localGid; // GID for the local rank; Used for error tracing
+  union ibv_gid remoteGid; // GID for the remote rank; Used for error tracing
 };
 static_assert((offsetof(struct ncclIbRecvComm, remFifo) % 32) == 0, "ncclIbSendComm fifo must be 32-byte aligned");
 
@@ -1362,3 +1363,4 @@ ncclNet_t ncclNetIb = {
   ncclIbCloseRecv,
   ncclIbCloseListen
 };
+

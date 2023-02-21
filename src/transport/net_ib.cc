@@ -1287,7 +1287,7 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
         }
         if (isParseSuccess) {
           WARN("NET/IB : Got completion from peer %s with error %d, opcode %d, len %d, vendor err %d (%s) localGid %s remoteGid %s",
-              ncclSocketToString(&addr, line), wc->status, wc->opcode, wc->byte_len, wc->vendor_err,commType, localGid, remoteGid);
+              ncclSocketToString(&addr, line), wc->status, wc->opcode, wc->byte_len, wc->vendor_err, commType, localGidString, remoteGidString);
         } else {
           WARN("NET/IB : Got completion from peer %s with error %d, opcode %d, len %d, vendor err %d",
               ncclSocketToString(&addr, line), wc->status, wc->opcode, wc->byte_len, wc->vendor_err);

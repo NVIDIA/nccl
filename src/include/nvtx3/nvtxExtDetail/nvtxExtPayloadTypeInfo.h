@@ -54,11 +54,14 @@ MKTYPEDEF(size_t);
 MKTYPEDEF(pointer_type);
 
 MKTYPEDEF(wchar_t);
-#if (__STDC_VERSION__ > 201710L) || (defined(__cplusplus) && __cplusplus > 201703L)
-    {sizeof(char8_t), nvtx_alignof(char8_t)},
+
+#endif /* __cplusplus */
+#endif /*  __STDC_VERSION__ >= 201112L */
+
+#if (__STDC_VERSION__ >= 202311L) || (defined(__cplusplus) && __cplusplus >= 201811L)
     MKTYPEDEF(char8_t);
 #endif
-#if (__STDC_VERSION__ >= 201112L) || (defined(__cplusplus) && __cplusplus >= 201103L)
+#if (__STDC_VERSION__ >= 201112L) || (defined(__cplusplus) && __cplusplus >= 200704L)
     MKTYPEDEF(char16_t);
     MKTYPEDEF(char32_t);
 #endif
@@ -66,8 +69,6 @@ MKTYPEDEF(wchar_t);
 #undef MKTYPEDEF
 #undef MKTYPEDEF2
 
-#endif /* __cplusplus */
-#endif /*  __STDC_VERSION__ >= 201112L */
 
 /*
  * The order of entries must match the values in`enum nvtxPayloadSchemaEntryType`.
@@ -110,12 +111,12 @@ const nvtxPayloadEntryTypeInfo_t nvtxExtPayloadTypeInfo[NVTX_PAYLOAD_ENTRY_TYPE_
     /*** Special character types ***/
     /* NVTX_PAYLOAD_ENTRY_TYPE_WCHAR */ {sizeof(wchar_t), nvtx_alignof(wchar_t)},
     /* NVTX_PAYLOAD_ENTRY_TYPE_CHAR8 */
-#if (__STDC_VERSION__ > 201710L) || (defined(__cplusplus) && __cplusplus > 201703L)
+#if (__STDC_VERSION__ >= 202311L) || (defined(__cplusplus) && __cplusplus >= 201811L)
     {sizeof(char8_t), nvtx_alignof(char8_t)},
 #else
     {0, 0},
 #endif
-#if (__STDC_VERSION__ >= 201112L) || (defined(__cplusplus) && __cplusplus >= 201103L)
+#if (__STDC_VERSION__ >= 201112L) || (defined(__cplusplus) && __cplusplus >= 200704L)
     /* NVTX_PAYLOAD_ENTRY_TYPE_CHAR16 */ {sizeof(char16_t), nvtx_alignof(char16_t)},
     /* NVTX_PAYLOAD_ENTRY_TYPE_CHAR32 */ {sizeof(char32_t), nvtx_alignof(char32_t)}
 #else

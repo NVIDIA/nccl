@@ -952,6 +952,7 @@ static void proxyOpsFree(struct ncclComm* comm) {
   if (ncclShmClose(state->handle) != ncclSuccess) {
     WARN("[Service thread] shm close failed");
   }
+  free(comm->proxyState.listenSock);
 }
 
 ncclResult_t ncclProxyShmUnlink(struct ncclComm* comm) {

@@ -6,7 +6,7 @@
 
 #include "devcomm.h"
 #include "collectives.h"
-#include "reduce_kernel.h"
+#include "common_kernel.h"
 #include "common.h"
 
 namespace {
@@ -35,8 +35,10 @@ namespace {
       i1 = i1 < eltN ? i1 : eltN;
       src += i0;
       dst += i0;
-      ReduceOrCopyMulti<COLL_UNROLL, RedOp, T, 1, 1, 1, 1, 1>
-        (tid, tn, &(we->redOpArg), true, 1, &src, 1, &dst, i1-i0);
+      void *vsrc = (void*)src;
+      void *vdst = (void*)dst;
+      ReduceOrCopyMulti<COLL_UNROLL, RedOp, T, 1, 1, 1, 1, /*PreOpSrcs=*/1>
+        (tid, tn, we->redOpArg, &(we->redOpArg), true, 1, &vsrc, 1, &vdst, i1-i0);
     }
   }
 }

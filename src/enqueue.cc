@@ -32,7 +32,8 @@ struct ncclKernelMatch {
   NCCL_FUNC5(func, TREE,           devredop, type, specialized), \
   NCCL_FUNC5(func, RING,           devredop, type, specialized), \
   NCCL_FUNC5(func, COLLNET_DIRECT, devredop, type, specialized), \
-  NCCL_FUNC5(func, COLLNET_CHAIN,  devredop, type, specialized)
+  NCCL_FUNC5(func, COLLNET_CHAIN,  devredop, type, specialized), \
+  NCCL_FUNC5(func, NVLS,           devredop, type, specialized)
 
 #ifdef __CUDA_BF16_TYPES_EXIST__
   #define HAVE_BFLOAT16 1
@@ -90,33 +91,47 @@ static const ncclKernelMatch ncclKerns[1+ncclNumTypes+NCCL_NUM_FUNCTIONS*ncclNum
 
 static ncclResult_t computeColl(struct ncclInfo* info /* input */, int* workFuncIndex, struct ncclWorkElem* work, struct ncclProxyOp* proxyOp /* output */);
 
-// Determine the maximum kernel stack size of all CUDA kernels
-size_t ncclKernMaxLocalSize() {
-  ncclResult_t res = ncclSuccess;
-  int numNcclKerns = sizeof(ncclKerns)/sizeof(ncclKerns[0]);
-  cudaFuncAttributes attr = {0};
-  size_t max = 0;
-  for (int i = 0; i < numNcclKerns; i++) {
-    CUDACHECKGOTO(cudaFuncGetAttributes(&attr, ncclKerns[i].kernelFn), res, error);
-    if (attr.localSizeBytes > max) max = attr.localSizeBytes;
+NCCL_PARAM(L1SharedMemoryCarveout, "L1_SHARED_MEMORY_CARVEOUT", 0);
+
+// Returns maximum kernel stack size of all CUDA kernels
+ncclResult_t ncclInitKernelsForDevice(int cudaArch, size_t* maxStackSize) {
+  constexpr int KernelCount = sizeof(ncclKerns)/sizeof(ncclKerns[0]);
+  ncclResult_t result = ncclSuccess;
+
+  if (maxStackSize) *maxStackSize = 0;
+  int carveout = ncclParamL1SharedMemoryCarveout();
+
+  // Keep track if we already visited a function pointer.
+  void* lru[2] = {nullptr, nullptr};
+  for (int i=0; i < KernelCount; i++) {
+    void* fn = ncclKerns[i].kernelFn;
+    if (fn == lru[0] || fn == lru[1]) goto next_kernel;
+    lru[1] = lru[0];
+    lru[0] = fn;
+
+    if (maxStackSize) {
+      cudaFuncAttributes attr = {0};
+      CUDACHECKGOTO(cudaFuncGetAttributes(&attr, fn), result, ignore0);
+      if (attr.localSizeBytes > *maxStackSize) *maxStackSize = attr.localSizeBytes;
+    ignore0:;
+    }
+
+    if (carveout) {
+      CUDACHECKGOTO(cudaFuncSetAttribute(fn,
+        cudaFuncAttributePreferredSharedMemoryCarveout, carveout),
+        result, ignore1);
+    ignore1:;
+    }
+
+    if (ncclShmemDynamicSize(cudaArch) != 0) {
+      CUDACHECKGOTO(cudaFuncSetAttribute(fn,
+        cudaFuncAttributeMaxDynamicSharedMemorySize, ncclShmemDynamicSize(cudaArch)),
+        result, next_kernel);
+    }
+  next_kernel:;
   }
-
-error:
-  return (res != ncclSuccess) ? 0 : max;
+  return result;
 }
-
-// Set shared memory carveout for the nccl kernels
-ncclResult_t ncclKernSetSharedMemoryCarveout(int carveOut) {
-  ncclResult_t res = ncclSuccess;
-  int numNcclKerns = sizeof(ncclKerns)/sizeof(ncclKerns[0]);
-  for (int i = 0; i < numNcclKerns; i++) {
-    CUDACHECKGOTO(cudaFuncSetAttribute(ncclKerns[i].kernelFn, cudaFuncAttributePreferredSharedMemoryCarveout, carveOut), res, error);
-  }
-
-error:
-  return res;
-}
-
 
 /*****************************************************************************/
 /*       Launch system : synchronization and CUDA kernel launch              */
@@ -248,10 +263,9 @@ static ncclResult_t addProxyOpIfNeeded(struct ncclComm* comm, struct ncclKernelP
 static ncclResult_t addCollToPlan(
     struct ncclComm* comm, struct ncclKernelPlan* plan, int* nWorkBudget, int funcIndex,
     struct ncclWorkElem const* workElem, struct ncclProxyOp const* proxyOp,
-    int nBid, size_t bytes, bool regBufUsed, void* regBufSend[], void* regBufRecv[]
+    int nCollChannels, int nBid, size_t bytes, bool regBufUsed, void* regBufSend[], void* regBufRecv[]
   ) {
   struct ncclKernelPlan::Channel *chans = plan->channels;
-  int nCollChannels = comm->nChannels;
 
   // Choose the `nBid` least loaded channels to do the work. This ensures
   // all bids go to different channels in case they need to synchronize.
@@ -268,9 +282,7 @@ static ncclResult_t addCollToPlan(
     }
   }
   // Sort in the rest of the channels. If a channel has less work than the max
-  // member of least[], replace that member and compute the new max. The optimal
-  // algorithm uses a max-heap, but for our small sizes I suspect the better
-  // asymptotic complexity would be swamped by the increased instruction complexity.
+  // member of least[], replace that member and compute the new max.
   for (int c=nBid; c < nCollChannels; c++) {
     if (chans[c].collBytes < maxBytesInLeast) {
       least[maxIndexInLeast] = c;
@@ -541,8 +553,9 @@ static ncclResult_t scheduleCollTasksToPlan(
       info.sliceSteps = head->sliceSteps;
       NCCLCHECK(ncclInfoSetDerived(&info, comm->nRanks));
       if (nAggOps > 1) {
+        int maxChannels = aggInfo.algorithm == NCCL_ALGO_NVLS ? comm->nvlsChannels : comm->nChannels;
         info.nChannels = DIVUP(info.nBytes, bytePerChannel[collNetSupport]);
-        info.nChannels = std::max(1, std::min(info.nChannels, comm->nChannels));
+        info.nChannels = std::max(1, std::min(info.nChannels, maxChannels));
         info.algorithm = aggInfo.algorithm;
         info.protocol = aggInfo.protocol;
         info.nThreads = aggInfo.nThreads;
@@ -565,8 +578,9 @@ static ncclResult_t scheduleCollTasksToPlan(
         NCCLCHECK(registerIntraNodeBuffers(comm, plan, &info, &regBufUsed, regBufSend, regBufRecv));
       }
 
+      int maxChannels = info.algorithm == NCCL_ALGO_NVLS ? comm->nvlsChannels : comm->nChannels;
       NCCLCHECK(addCollToPlan(comm, plan, nWorkBudget, workFuncIndex, &workElem, &proxyOp,
-        info.nChannels, info.nBytes, regBufUsed, regBufSend, regBufRecv));
+        maxChannels, info.nChannels, info.nBytes, regBufUsed, regBufSend, regBufRecv));
       tasks->nTasksColl -= 1;
       tasks->collBytesTotal -= info.nBytes;
       ncclIntruQueueDequeue(&tasks->collQueue);
@@ -856,7 +870,7 @@ static void CUDART_CB hostStreamPlanCallback(void *plan_) {
   struct ncclKernelPlan* plan = (struct ncclKernelPlan*)plan_;
   ncclResult_t result = hostStreamPlanTask(plan->comm, plan);
   if (result != ncclSuccess) {
-    WARN("hostStreamPlanCallback() failed : %s\n", ncclGetErrorString(result));
+    WARN("hostStreamPlanCallback() failed : %s", ncclGetErrorString(result));
   }
 }
 
@@ -964,7 +978,7 @@ ncclResult_t ncclLaunchPrepare(struct ncclComm* comm) {
     }
     NCCLCHECKGOTO(ncclStrongStreamWaitStream(tasks->capturingGraph, launchStream, &comm->deviceStream), result, failure);
 
-    if (persistent || comm->persistentRefs != 0) {
+    if (persistent || comm->persistentRefs != 0 || ncclCudaLaunchBlocking) {
       // We have to launch host tasks to push proxy args. We are careful to only
       // do this if necessary since host tasks impose a high performance cost in CUDA.
       bool acquired = false;
@@ -1005,12 +1019,6 @@ ncclResult_t ncclLaunchKernelBefore_NoUncapturedCuda(struct ncclComm* comm, stru
   return ncclSuccess;
 }
 
-#if CUDART_VERSION >= 11080
-#define NCCL_MAX_CGA_CLUSTER_SIZE 8
-#define NCCL_CGA_CLUSTER_SIZE_SM90 4
-NCCL_PARAM(CGAClusterSize, "CGA_CLUSTER_SIZE", -2);
-#endif
-
 #if CUDART_VERSION >= 12000
 // NCCL uses the "Remote" Mem Sync domain by default
 NCCL_PARAM(MemSyncDomain, "MEM_SYNC_DOMAIN", cudaLaunchMemSyncDomainRemote);
@@ -1022,6 +1030,7 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
   cudaStream_t launchStream = tasks->streams->stream;
   dim3 grid = {(unsigned)plan->channelCount, 1, 1};
   dim3 block = {(unsigned)plan->threadPerBlock, 1, 1};
+  size_t smem = ncclShmemDynamicSize(comm->cudaArch);
   void *args[3] = {&comm->devComm, &plan->channelMask, &plan->workHead};
 
   #if CUDART_VERSION >= 11080
@@ -1029,19 +1038,7 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
   NCCLCHECK(ncclCudaDriverVersion(&driverVersion));
   if (driverVersion >= 11080) {
     int compCap = comm->compCap;
-    unsigned int clusterSize = (compCap == 90) ? NCCL_CGA_CLUSTER_SIZE_SM90 : 0;
-    if (ncclParamCGAClusterSize() != -2) {
-      clusterSize = ncclParamCGAClusterSize();
-      if (clusterSize > NCCL_MAX_CGA_CLUSTER_SIZE) {
-        static bool warned = false;
-        if (warned == false) {
-          WARN("NCCL_CGA_CLUSTER_SIZE value %d is too big. Limiting value to %d.",
-               clusterSize, NCCL_MAX_CGA_CLUSTER_SIZE);
-          warned = true;
-        }
-        clusterSize = NCCL_MAX_CGA_CLUSTER_SIZE;
-      }
-    }
+    unsigned int clusterSize = (compCap == 90) ? comm->cgaClusterSize : 0;
 
     cudaLaunchConfig_t launchConfig = {0};
     cudaLaunchAttribute launchAttrs[3];
@@ -1073,6 +1070,7 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
     #endif
     launchConfig.gridDim = grid;
     launchConfig.blockDim = block;
+    launchConfig.dynamicSmemBytes = smem;
     launchConfig.attrs = launchAttrs;
     launchConfig.numAttrs = attrs;
     launchConfig.stream = launchStream;
@@ -1082,12 +1080,12 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
   }
   #endif
   // Standard kernel launch
-  CUDACHECK(cudaLaunchKernel(fn, grid, block, args, 0, launchStream));
+  CUDACHECK(cudaLaunchKernel(fn, grid, block, args, smem, launchStream));
   return ncclSuccess;
 }
 
 ncclResult_t ncclLaunchKernelAfter_NoCuda(struct ncclComm* comm, struct ncclKernelPlan* plan) {
-  if (comm->persistentRefs == 0) { // implies !plan->persistent
+  if (!(plan->persistent || comm->persistentRefs != 0 || ncclCudaLaunchBlocking)) {
     // If this isn't being captured and there aren't any CUDA graphs alive
     // then we don't need to do our proxyOp pushing on the host stream.
     NCCLCHECK(hostStreamPlanTask(comm, plan));
@@ -1161,6 +1159,8 @@ static ncclResult_t getAlgoInfo(struct ncclInfo* info, int collNetTypeSupport, i
     int nAlgos = NCCL_NUM_ALGORITHMS;
     for (int a=0; a<nAlgos; a++) {
       if ((a == NCCL_ALGO_COLLNET_DIRECT || a == NCCL_ALGO_COLLNET_CHAIN) && collNetTypeSupport != 1) continue;
+      if (a == NCCL_ALGO_NVLS && !NCCL_NVLS_SUPPORTS(info->datatype, info->opFull.op)) continue;
+
       for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) {
         float time;
         NCCLCHECK(ncclTopoGetAlgoTime(info, a, p, numPipeOps, &time));
@@ -1193,6 +1193,9 @@ static ncclResult_t getAlgoInfo(struct ncclInfo* info, int collNetTypeSupport, i
       }
       ncSwitch /= 2;
     }
+  } else if (info->algorithm == NCCL_ALGO_NVLS) {
+    // NVLS should not need more than 16 channels to get peak BW.
+    nc = comm->nvlsChannels;
   } else {
     // Ring/Tree channel tuning
     while (info->nBytes < nc*nt*threadThreshold) {
@@ -1207,6 +1210,7 @@ static ncclResult_t getAlgoInfo(struct ncclInfo* info, int collNetTypeSupport, i
     if (info->algorithm == NCCL_ALGO_TREE) nt += 3*WARP_SIZE;
     if (info->algorithm == NCCL_ALGO_COLLNET_DIRECT) nt += 3*WARP_SIZE;
     if (info->algorithm == NCCL_ALGO_COLLNET_CHAIN) nt += 3*WARP_SIZE;
+    if (info->algorithm == NCCL_ALGO_NVLS) nt = NCCL_MAX_NTHREADS;
   }
   nt = nt/WARP_SIZE < 3 ? 3*WARP_SIZE : nt;
   info->nChannels = nc;
@@ -1225,6 +1229,7 @@ static ncclResult_t getPatternInfo(struct ncclInfo* info) {
       info->pattern = ncclPatternRing; break;
     case ncclFuncAllReduce:
       info->pattern =
+        info->algorithm == NCCL_ALGO_NVLS ? ncclPatternNvls :
         info->algorithm == NCCL_ALGO_COLLNET_DIRECT ? ncclPatternCollnetDirect :
         info->algorithm == NCCL_ALGO_COLLNET_CHAIN ? ncclPatternCollnetChain :
         info->algorithm == NCCL_ALGO_TREE ? ncclPatternTreeUpDown :
@@ -1244,6 +1249,7 @@ static ncclResult_t getLoopInfo(struct ncclInfo* info) {
     case ncclPatternPipelineFrom:
     case ncclPatternPipelineTo:
     case ncclPatternCollnetChain:
+    case ncclPatternNvls:
       info->nstepsPerLoop = info-> nchunksPerLoop = 1; break;
     case ncclPatternCollnetDirect:
       info->nstepsPerLoop = 1; info->nchunksPerLoop = info->comm->channels[0].collnetDirect.nHeads; break;
@@ -1318,6 +1324,14 @@ comp_next:
     while (info->nBytes / (info->nChannels*chunkSize) < info->comm->channels[0].collnetChain.depth*64 && chunkSize > 131072) chunkSize /= 2;
     while (info->nBytes / (info->nChannels*chunkSize) < info->comm->channels[0].collnetChain.depth*8 && chunkSize > 65536) chunkSize /= 2;
     while (info->nBytes / (info->nChannels*chunkSize) < info->comm->channels[0].collnetChain.depth && chunkSize > 32768) chunkSize /= 2;
+    work->lastChunkSize = chunkSize / ncclTypeSize(info->datatype);
+  } else if (info->algorithm == NCCL_ALGO_NVLS) {
+    if (chunkSize > 131072) chunkSize = 131072;
+    // Use uint64_t so that concurrentOps*chunkSize*X does not overflow
+    uint64_t concurrentOps = info->nChannels*info->comm->channels[0].nvls.nHeads;
+    if ((info->nBytes < (32 * (concurrentOps*chunkSize))) && (chunkSize > 65536)) chunkSize = 65536;
+    if ((info->nBytes < (8 * (concurrentOps*chunkSize))) && (chunkSize > 32768)) chunkSize = 32768;
+    if ((info->nBytes < (2 * (concurrentOps*chunkSize))) && (chunkSize > 16384)) chunkSize = 16384;
     work->lastChunkSize = chunkSize / ncclTypeSize(info->datatype);
   } else if (info->protocol == NCCL_PROTO_LL) {
     const ssize_t sliceSize = stepSize*sizeof(uint64_t)/sizeof(union ncclLLFifoLine);
@@ -1618,6 +1632,11 @@ ncclResult_t ncclRedOpDestroy(ncclRedOp_t op, ncclComm_t comm) {
     WARN("ncclRedOpDestroy :  operator is garbage.");
     return ncclInvalidArgument;
   }
+  if (comm == NULL) {
+    WARN("ncclRedOpDestroy : invalid communicator passed.");
+    return ncclInvalidArgument;
+  }
+
   int ix = int(ncclUserRedOpMangle(comm, op)) - int(ncclNumOps);
   if (comm->userRedOpCapacity <= ix || comm->userRedOps[ix].freeNext != -1) {
     WARN("ncclRedOpDestroy : operator unknown to this communicator.");

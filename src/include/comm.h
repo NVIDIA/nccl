@@ -104,6 +104,7 @@ struct ncclChannel {
   struct ncclTree tree;
   struct ncclTree collnetChain;
   struct ncclDirect collnetDirect;
+  struct ncclNvls nvls;
   int id; // index of this channel
   uint32_t workFifoSent; // last used work index+1
   uint64_t p2pOpCount;
@@ -177,8 +178,10 @@ struct ncclComm {
   int nRanks;  // number of GPUs in communicator
   int cudaDev; // my cuda device index
   int compCap; // compute capability of the GPU
+  int minCompCap; // min compute capability in the communicator
   int64_t busId;   // my PCI bus ID in int format
   cpu_set_t cpuAffinity; // CPU affinity of the GPU
+  int cudaArch; // matches __CUDA_ARCH__ of device
 
   int node;
   int nNodes;
@@ -201,6 +204,7 @@ struct ncclComm {
 
   // Channels for collectives
   int nChannels;
+  int nvlsChannels;
   // Channels (per peer) for p2p
   int p2pnChannels;
   int p2pnChannelsPerPeer;
@@ -257,6 +261,10 @@ struct ncclComm {
   int collNetSupport;
   int intraHighestTransportType;
 
+  // NVLink SHARP (NVLS) support
+  int nvlsSupport;
+  void* nvlsResources;
+
   size_t channelSize; // User requested work size (bytes) for channel partitions
 
   // Internal streams
@@ -288,6 +296,11 @@ struct ncclComm {
 
   // communicator mode
   int blocking;
+  // CGA cluster size
+  int cgaClusterSize;
+  int minCTAs, maxCTAs;
+  // network interface name
+  char *netName;
   // initState is to more conveniently reclaim resources when errors happen.
   ncclResult_t initState;
   // flag to indicate if ncclCommFinalize() is called

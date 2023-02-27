@@ -11,31 +11,23 @@
 #include "devcomm.h"
 #include "op128.h"
 
-#if __CUDA_ARCH__ >= 800
-#define COLL_UNROLL 8
-#else
-#define COLL_UNROLL 4
-#endif
-
+#define COLL_UNROLL (ncclCollUnroll())
 #define NCCL_MAX_DEV_ARITY (NCCL_MAX_TREE_ARITY-1)  // Using balanced tree instead of split tree
 
 typedef void(*ncclKern_t)();
 extern __device__ ncclKern_t ncclFuncs[];
 
 struct ncclShmemGroup {
-  ncclConnInfo *recvConns[NCCL_MAX_DIRECT_ARITY];
-  ncclConnInfo *sendConns[NCCL_MAX_DIRECT_ARITY];
-  void* srcs[NCCL_MAX_DIRECT_ARITY+1];
-  void* dsts[NCCL_MAX_DIRECT_ARITY+1];
-  int totalSendSize[NCCL_MAX_SLICE_PER_CHUNK];
+  ncclConnInfo *recvConns[NCCL_MAX_NVLS_ARITY];
+  ncclConnInfo *sendConns[NCCL_MAX_NVLS_ARITY];
+  void* srcs[NCCL_MAX_NVLS_ARITY+1];
+  void* dsts[NCCL_MAX_NVLS_ARITY+1];
+  int nvlsRecv;
 };
 
 struct ncclShmemData {
-  union {
-    uint64_t ll128warp[NCCL_LL128_MAX_NTHREADS/WARP_SIZE][NCCL_LL128_SHMEM_ELEMS_PER_THREAD*WARP_SIZE];
-    struct ncclShmemGroup groups[NCCL_MAX_GROUPS];
-  };
-  uint64_t redOpArgs[NCCL_MAX_DIRECT_ARITY+1];
+  struct ncclShmemGroup groups[NCCL_MAX_GROUPS];
+  uint64_t redOpArgs[NCCL_MAX_NVLS_ARITY+1];
   int channelId;
   int aborted;
   alignas(16) struct ncclDevComm comm;
@@ -45,6 +37,15 @@ struct ncclShmemData {
 static_assert(offsetof(struct ncclShmemData, work)%16 == 0, "shmem.work needs to be 16B aligned");
 
 extern __shared__ ncclShmemData ncclShmem;
+#if __CUDA_ARCH__ >= 700
+  extern __shared__ ulong2 ncclShmemPerWarp[/*ncclShmemDynamicSize()/sizeof(ulong2)*/];
+#else
+  extern __shared__ ulong2 ncclShmemPerWarp[ncclShmemScratchWarpSize()*(NCCL_MAX_NTHREADS/WARP_SIZE)/sizeof(ulong2)];
+#endif
+
+__device__ inline void* ncclScratchForWarp(int warp) {
+  return (char*)ncclShmemPerWarp + warp*ncclShmemScratchWarpSize();
+}
 
 __device__ inline bool barrierReduceAny(int bit) {
   uint32_t popc;
@@ -235,7 +236,8 @@ __device__ void NCCL_FUNC_NAME(func, algo, proto, devredop, type)() { \
   IMPL_COLL4(func, TREE,    devredop, type, ncclType) \
   IMPL_COLL4(func, RING,    devredop, type, ncclType) \
   IMPL_COLL4(func, COLLNET_DIRECT, devredop, type, ncclType) \
-  IMPL_COLL4(func, COLLNET_CHAIN, devredop, type, ncclType)
+  IMPL_COLL4(func, COLLNET_CHAIN, devredop, type, ncclType) \
+  IMPL_COLL4(func, NVLS, devredop, type, ncclType)
 
 #if NCCL_TYPE == 0
 #define IMPL_COLL2(func, devredop) IMPL_COLL3(func, devredop, int8_t,   ncclInt8)
@@ -290,5 +292,7 @@ __device__ void NCCL_FUNC_NAME(func, algo, proto, devredop, type)() { \
 #define IMPL_COLL_C(func)
 #define IMPL_COLL_P(func)
 #endif
+
+#define NCCL_NVLS_ENABLED (__CUDA_ARCH__ >= 900 && NCCL_NVLS_SUPPORTS(NCCL_TYPE, NCCL_OP))
 
 #endif

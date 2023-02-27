@@ -9,6 +9,7 @@
 
 #include <type_traits>
 #include "reduce_kernel.h" // for reduction funcs
+#include "common_kernel.h"
 #include "common.h"
 
 #define NCCL_SPINS_BEFORE_CHECK_ABORT 1000000
@@ -20,12 +21,13 @@
  * to how that protocol operates with a consistent interface so that our
  * algorithm code can operate protocol parametrically.
  */
-template<int SlicePerChunk_1, int StepPerSlice_1, int Unroll_1 = COLL_UNROLL>
+template<int SlicePerChunk_1, int StepPerSlice_1, int Unroll_1 = COLL_UNROLL, bool NVLS_1 = false>
 struct ProtoSimple {
   static constexpr int Id = NCCL_PROTO_SIMPLE;
   static constexpr int SlicePerChunk = SlicePerChunk_1;
   static constexpr int StepPerSlice = StepPerSlice_1;
   static constexpr int Unroll = Unroll_1;
+  static constexpr bool NVLS = NVLS_1;
 
   // Data bytes (no flags etc) in one step of the fifo queue.
   __device__ static int calcBytePerStep() {

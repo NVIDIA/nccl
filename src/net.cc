@@ -176,14 +176,8 @@ ncclResult_t ncclNetPluginInit() {
   }
   void* netPluginLib = dlopen(ncclNetPluginName, RTLD_NOW | RTLD_LOCAL);
   if (netPluginLib == nullptr) {
-    // dlopen does not guarantee to set errno, but dlerror only gives us a
-    // string, so checking errno doesn't hurt to try to provide a better
-    // error message
-    if (errno == ENOENT) {
-      INFO(NCCL_INIT|NCCL_NET, "NET/Plugin : No plugin found (%s), using internal implementation", ncclNetPluginName);
-    } else {
-      INFO(NCCL_INIT|NCCL_NET, "NET/Plugin : Plugin load returned %d : %s.", errno, dlerror());
-    }
+    INFO(NCCL_INIT|NCCL_NET, "NET/Plugin : Plugin load (%s) returned %d : %s", ncclNetPluginName, errno, dlerror());
+    INFO(NCCL_INIT|NCCL_NET, "NET/Plugin : No plugin found, using internal implementation");
     return ncclSuccess;
   }
 
@@ -264,9 +258,10 @@ static ncclResult_t collNetGetState(int i, enum ncclNetState* state) {
 
 ncclResult_t ncclNetInit(struct ncclComm* comm) {
   // Initialize main communication network
-  char* netName = getenv("NCCL_NET");
+  char* netName;
   bool ok = false;
 
+  netName = comm->netName;
   for (int i=0; i<3; i++) {
     if (ncclNets[i] == nullptr) continue;
     enum ncclNetState state;
@@ -324,9 +319,26 @@ ncclResult_t ncclGpuGdrSupport(struct ncclComm* comm, int* gdrSupport) {
     ncclResult_t ret;
     ncclDebugNoWarn = NCCL_NET;
     NCCLCHECKGOTO(ncclNetListen(comm, dev, &handle, &lComm), ret, cleanup1);
-    NCCLWAITGOTO(ncclNetConnect(comm, dev, &handle, &sComm), sComm != NULL, comm->abortFlag, ret, cleanup2);
-    NCCLWAITGOTO(ncclNetAccept(comm, lComm, &rComm), rComm != NULL, comm->abortFlag, ret, cleanup3);
-    CUDACHECKGOTO(cudaMalloc(&gpuPtr, GPU_BUF_SIZE), ret, cleanup4);
+
+    bool connected;
+    connected = false;
+    while (!connected) {
+
+      // If we're aborting now, skip to cleanup
+      if (*comm->abortFlag) {
+        goto cleanup2;
+      }
+
+      if (sComm == NULL)
+        NCCLCHECKGOTO(ncclNetConnect(comm, dev, &handle, &sComm), ret, cleanup2);
+
+      if (rComm == NULL)
+        NCCLCHECKGOTO(ncclNetAccept(comm, lComm, &rComm), ret, cleanup2);
+
+      connected = (rComm != NULL) && (sComm != NULL);
+    }
+
+    CUDACHECKGOTO(cudaMalloc(&gpuPtr, GPU_BUF_SIZE), ret, cleanup2);
     if (ncclNetRegMr(comm, sComm, gpuPtr, GPU_BUF_SIZE, NCCL_PTR_CUDA, &mHandle) == ncclSuccess) {
       NCCLCHECK(ncclNetDeregMr(comm, sComm, mHandle));
       NCCLCHECK(ncclNetRegMr(comm, rComm, gpuPtr, GPU_BUF_SIZE, NCCL_PTR_CUDA, &mHandle));
@@ -335,11 +347,11 @@ ncclResult_t ncclGpuGdrSupport(struct ncclComm* comm, int* gdrSupport) {
     }
     ncclDebugNoWarn = 0;
     CUDACHECK(cudaFree(gpuPtr));
-cleanup4:
-    NCCLCHECK(ncclNetCloseRecv(comm, rComm));
-cleanup3:
-    NCCLCHECK(ncclNetCloseSend(comm, sComm));
 cleanup2:
+    if (rComm != NULL)
+      NCCLCHECK(ncclNetCloseRecv(comm, rComm));
+    if (sComm != NULL)
+      NCCLCHECK(ncclNetCloseSend(comm, sComm));
     NCCLCHECK(ncclNetCloseListen(comm, lComm));
 cleanup1:
     break;

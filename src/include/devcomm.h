@@ -15,11 +15,12 @@
 typedef enum { ncclFuncBroadcast, ncclFuncReduce, ncclFuncAllGather, ncclFuncReduceScatter, ncclFuncAllReduce, ncclFuncSendRecv, ncclFuncSend, ncclFuncRecv, ncclNumFuncs} ncclFunc_t;
 extern const char* ncclFuncStr[NCCL_NUM_FUNCTIONS];
 
-#define NCCL_NUM_ALGORITHMS 4 // Tree/Ring/CollNet*
+#define NCCL_NUM_ALGORITHMS 5 // Tree/Ring/CollNet*
 #define NCCL_ALGO_TREE 0
 #define NCCL_ALGO_RING 1
 #define NCCL_ALGO_COLLNET_DIRECT 2
 #define NCCL_ALGO_COLLNET_CHAIN 3
+#define NCCL_ALGO_NVLS 4
 extern const char* ncclAlgoStr[NCCL_NUM_ALGORITHMS];
 
 #define NCCL_NUM_PROTOCOLS 3 // Simple/LL/LL128
@@ -78,6 +79,7 @@ static_assert(NCCL_LL_CLEAN_MASK % NCCL_STEPS == 0, "Invalid NCCL_LL_CLEAN_MASK 
 #define NCCL_DIRECT_NIC   0x04
 #define NCCL_IPC_WRITE    0x08
 #define NCCL_IPC_READ     0x10
+#define NCCL_NVLS_MIN_POLL 0x20
 
 struct ncclConnInfo {
   // Regular comm mechanism
@@ -85,7 +87,7 @@ struct ncclConnInfo {
   uint64_t *tail;     // Local for recv, remote for send
   uint64_t *head;     // Local for send, remote for recv
 
-  int direct;         // Direct communication
+  int flags;          // Direct communication / other flags
   int shared;         // Buffers are shared
   void **ptrExchange; // Pointer exchange for direct communication
   uint64_t* redOpArgExchange; // PreOp scaler exchange for direct pull case
@@ -138,11 +140,20 @@ struct ncclTree {
 struct ncclDirect {
   int depth;
   int out;
-  int nHeads;
-  int headRank;
-  int shift;
+  int nHeads;   // Number of parallel N<->1<->net operations we'll do in parallel; size of up/down
+  int headRank; // Index in 0..nHeads-1 I am the head rank of. -1 if I'm not a head rank (no local NIC)
+  int shift;    // Shuffling of send/recv for scatter/gather operations, basically localRank%nHeads
   int up[NCCL_MAX_DIRECT_ARITY];
   int down[NCCL_MAX_DIRECT_ARITY];
+};
+
+#define NCCL_MAX_NVLS_ARITY 8
+struct ncclNvls {
+  int out;
+  int nHeads;   // Number of parallel N<->1<->net operations we'll do in parallel; size of up/down
+  int headRank; // Index in 0..nHeads-1 I am the head rank of. -1 if I'm not a head rank (no local NIC)
+  int up[NCCL_MAX_NVLS_ARITY];
+  int down;
 };
 
 #define NCCL_MAX_CONNS 2
@@ -264,6 +275,7 @@ struct alignas(16) ncclDevChannel {
   struct ncclTree tree;
   struct ncclTree collnetChain;
   struct ncclDirect collnetDirect;
+  struct ncclNvls nvls;
   uint32_t* workFifoDone; // Location of done counter, device writes index+1 of last work processed
 };
 
@@ -287,5 +299,66 @@ struct alignas(16) ncclDevCommAndChannels {
   struct ncclDevComm comm;
   struct ncclDevChannel channels[MAXCHANNELS];
 };
+
+#ifdef __CUDA_ARCH__
+  #define NCCL_CUDA_ARCH __CUDA_ARCH__
+#else
+  #define NCCL_CUDA_ARCH 0
+#endif
+
+template<typename T>
+__host__ __device__ constexpr T min_constexpr(T a) { return a; }
+template<typename T, typename ...Ts>
+__host__ __device__ constexpr T min_constexpr(T a, T b, Ts ...c) {
+  return min_constexpr<T>((a < b ? a : b), c...);
+}
+
+template<typename T>
+__host__ __device__ constexpr T max_constexpr(T a) { return a; }
+template<typename T, typename ...Ts>
+__host__ __device__ constexpr T max_constexpr(T a, T b, Ts ...c) {
+  return max_constexpr<T>((a > b ? a : b), c...);
+}
+
+// Calculate the unroll factor given:
+// * bytePerPack: number of bytes accessed per instruction
+// * insns: max permissible unroll value
+// * bytes: desired number of in-flight bytes per iteration ( = unroll*bytePerPack)
+__host__ __device__ constexpr int ncclCalcUnroll(int bytePerPack, int insns, int bytes) {
+  return min_constexpr(insns, (bytes + bytePerPack-1)/bytePerPack);
+}
+
+// Note that all unroll value logic should depend on a given cudaArch argument
+// and not __CUDA_ARCH__ since these need to be host-side executable where the
+// arch value is strictly runtime only. By defaulting to NCCL_CUDA_ARCH, device
+// side code can elide passing the arch for brevity.
+
+__host__ __device__ constexpr int ncclCollUnroll(int cudaArch = NCCL_CUDA_ARCH) {
+  // Our collective unroll should move to the same bytes&insns model as NVLS.
+  return cudaArch >= 800 ? 8 : 4;
+}
+
+__host__ __device__ constexpr int ncclNvlsUnrollBytes(int cudaArch = NCCL_CUDA_ARCH) { return 4*16; }
+__host__ __device__ constexpr int ncclNvlsUnrollInsns(int cudaArch = NCCL_CUDA_ARCH) { return 16; }
+
+__host__ __device__ constexpr int ncclNvlsUnroll(int bytePerPack, int cudaArch = NCCL_CUDA_ARCH) {
+  return ncclCalcUnroll(bytePerPack, ncclNvlsUnrollInsns(cudaArch), ncclNvlsUnrollBytes(cudaArch));
+}
+
+// The amount of dynamic shmem per warp
+__host__ __device__ constexpr int ncclShmemScratchWarpSize(int cudaArch = NCCL_CUDA_ARCH) {
+  return (max_constexpr<int>(
+      /*LL    */0,
+      /*LL128 */(NCCL_LL128_SHMEM_ELEMS_PER_THREAD*WARP_SIZE)*sizeof(uint64_t),
+      /*SIMPLE*/(ncclCollUnroll(cudaArch)*WARP_SIZE + 1)*16,
+      // NVLS needs an extra 16B to read unaligned data.
+      /*NVLS  */WARP_SIZE*(cudaArch >= 900 ? ncclNvlsUnrollBytes(cudaArch) : 0) + 16
+    ) + 15) & -16; // pad to 16 bytes
+}
+
+// The amount of dynamic shmem per block
+__host__ __device__ constexpr int ncclShmemDynamicSize(int cudaArch = NCCL_CUDA_ARCH) {
+  return cudaArch < 700 ? 0 : ncclShmemScratchWarpSize(cudaArch)*(NCCL_MAX_NTHREADS/WARP_SIZE);
+}
 
 #endif

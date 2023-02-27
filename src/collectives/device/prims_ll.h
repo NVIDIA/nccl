@@ -255,18 +255,18 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
       }
       if (SRC) {
         data = dl.loadFinish();
-        if (SrcBuf == Input) data = MULTI<RedOp, T>().preOp(redOp, data);
+        if (SrcBuf == Input) data = applyPreOp(redOp, data);
       }
       if (RECV) {
-        data = !SRC ? peerData : MULTI<RedOp,T>()(redOp, peerData, data);
+        data = !SRC ? peerData : applyReduce(redOp, peerData, data);
         #pragma unroll MaxRecv
         for (int i=1; i < MaxRecv && i < fan.nrecv(); i++) {
           peerData = readLLFinish(offset, line, i);
-          data = MULTI<RedOp,T>()(redOp, peerData, data);
+          data = applyReduce(redOp, peerData, data);
         }
       }
 
-      if (postOp) data = MULTI<RedOp, T>().postOp(redOp, data);
+      if (postOp) data = applyPostOp(redOp, data);
 
       // Send : inter-node, then intra-node, then local
       if (SEND) {

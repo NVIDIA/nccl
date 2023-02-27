@@ -8,466 +8,447 @@
 #ifndef NCCL_REDUCE_KERNEL_H_
 #define NCCL_REDUCE_KERNEL_H_
 
-#include "common_kernel.h"
+#include "op128.h"
 #include <limits>
 #include <type_traits>
 
-template<typename T>
-struct FuncNull {
-  __device__ FuncNull(uint64_t opArg=0) {}
-  __device__ T operator()(const T x, const T y) const {
-    return 0;
-  }
-};
+////////////////////////////////////////////////////////////////////////////////
+// The reduction function classes. All classes must:
+//  1. Expose the `EltType` typedef.
+//  2. Have constructor taking no arguments (default constructible).
+//  3. Have constructor taking `uint64_t opArg`.
 
 template<typename T>
-struct FuncSum {
-  __device__ FuncSum(uint64_t opArg=0) {}
-  __device__ T operator()(const T x, const T y) const {
-    return x + y;
-  }
-};
-
+struct FuncNull { using EltType = T; __device__ FuncNull(uint64_t opArg=0) {}; };
 template<typename T>
-struct FuncProd {
-  __device__ FuncProd(uint64_t opArg=0) {}
-  __device__ T operator()(const T x, const T y) const {
-    return x * y;
-  }
-};
-
+struct FuncSum  { using EltType = T; __device__ FuncSum(uint64_t opArg=0) {}; };
 template<typename T>
-struct FuncMax {
-  __device__ FuncMax(uint64_t opArg=0) {}
-  __device__ T operator()(const T x, const T y) const {
-    return (x < y) ? y : x;
-  }
-};
-
+struct FuncProd { using EltType = T; __device__ FuncProd(uint64_t opArg=0) {}; };
 template<typename T>
-struct FuncMin {
-  __device__ FuncMin(uint64_t opArg=0) {}
-  __device__ T operator()(const T x, const T y) const {
-    return (x < y) ? x : y;
-  }
-};
+struct FuncMin  { using EltType = T; __device__ FuncMin(uint64_t opArg=0) {}; };
+template<typename T>
+struct FuncMax  { using EltType = T; __device__ FuncMax(uint64_t opArg=0) {}; };
+
+template<typename T> struct FuncPreMulSum;
+template<typename T> struct FuncSumPostDiv;
+
+////////////////////////////////////////////////////////////////////////////////
+// Trait classes for reduction functions. Given a function (FuncSum, etc.)
+// and a number of elements in a pack, will reduce, preOp, or postOp a pack
+// of elements. These classes are intended to be specialized for specific
+// combinations of reduction function and pack size.
+
+template<typename Fn, int EltPerPack>
+struct Apply_Reduce /*{
+  static BytePack<EltPerPack*sizeof(T)> reduce(
+    Fn fn, BytePack<EltPerPack*sizeof(T)> a, BytePack<EltPerPack*sizeof(T)> b
+  );
+}*/;
+template<typename Fn, int EltPerPack>
+struct Apply_PreOp/*{
+  static constexpr bool IsIdentity;
+  static BytePack<EltPerPack*sizeof(T)> preOp(Fn fn, BytePack<EltPerPack*sizeof(T)> a);
+}*/;
+template<typename Fn, int EltPerPack>
+struct Apply_PostOp/*{
+  static constexpr bool IsIdentity;
+  static BytePack<EltPerPack*sizeof(T)> postOp(Fn fn, BytePack<EltPerPack*sizeof(T)> a);
+}*/;
+template<typename Fn>
+struct Apply_LoadMultimem/*{
+  static constexpr int PackSize; // 0 if not implemented
+  static BytePack<PackSize> load(Fn fn, uintptr_t addr);
+}*/;
+
+////////////////////////////////////////////////////////////////////////////////
+// Public API for calling the trait classes. These take the data elements as a
+// pack of any type, which could be a BytePack<?> or any integral type (uint64_t,
+// uint32_t, etc.), and will return a new pack where each element has been
+// transformed appropriately.
+
+template<typename Fn, typename Pack>
+__device__ __forceinline__ Pack applyReduce(Fn fn, Pack a, Pack b) {
+  return fromPack<Pack>(
+    Apply_Reduce<Fn, sizeof(Pack)/sizeof(typename Fn::EltType)>
+      ::reduce(fn, toPack(a), toPack(b))
+  );
+}
+
+template<typename Fn, typename Pack>
+__device__ __forceinline__ Pack applyPreOp(Fn fn, Pack a) {
+  return fromPack<Pack>(
+    Apply_PreOp<Fn, sizeof(Pack)/sizeof(typename Fn::EltType)>
+      ::preOp(fn, toPack(a))
+  );
+}
+
+template<typename Fn, typename Pack>
+__device__ __forceinline__ Pack applyPostOp(Fn fn, Pack a) {
+  return fromPack<Pack>(
+    Apply_PostOp<Fn, sizeof(Pack)/sizeof(typename Fn::EltType)>
+      ::postOp(fn, toPack(a))
+  );
+}
 
 template<typename Fn>
-struct FuncTraits { // generic implementation for FuncSum,Prod,Min,Max
-  static constexpr bool IsPreOpIdentity = true;
-  static constexpr bool IsPostOpIdentity = true;
-
-  template<typename T>
-  __device__ static T preOp(Fn, T x) { return x; }
-  template<typename T>
-  __device__ static T postOp(Fn, T x) { return x; }
-};
-
-#define MASK0 0x00ff00ff
-#define MASK1 0xff00ff00
-static __device__ uint32_t addChar4(const uint32_t x, const uint32_t y) {
-  /* This can be used both for signed and unsigned 8-bit addition */
-  const uint32_t x0 = x & MASK0;
-  const uint32_t x1 = x & MASK1;
-  const uint32_t y0 = y & MASK0;
-  const uint32_t y1 = y & MASK1;
-  const uint32_t r0 = (x0+y0);
-  const uint32_t r1 = (x1+y1);
-  return (r0 & MASK0) | (r1 & MASK1);
+__device__ __forceinline__ BytePack<Apply_LoadMultimem<Fn>::PackSize> applyLoadMultimem(Fn fn, uintptr_t addr) {
+  return Apply_LoadMultimem<Fn>::load(fn, addr);
 }
 
-template<>
-struct FuncSum<int8_t> {
-  __device__ FuncSum(uint64_t opArg=0) {}
-  __device__ uint32_t operator()(const uint32_t x, const uint32_t y) const {
-#if (__CUDA_ARCH__ >= 300) && (__CUDA_ARCH__ < 500)
-    int32_t rv, z=0;
-    asm("vadd4.s32.s32.s32 %0, %1, %2, %3;" : "=r"(rv) : "r"(x), "r"(y), "r"(z));
-    return rv;
-#else
-    return addChar4(x, y);
-#endif
-  }
-  __device__ int8_t operator()(const int8_t x, const int8_t y) const {
-    return x+y;
-  }
-};
-template<>
-struct FuncSum<uint8_t> {
-  __device__ FuncSum(uint64_t opArg=0) {}
-  __device__ uint32_t operator()(const uint32_t x, const uint32_t y) const {
-#if (__CUDA_ARCH__ >= 300) && (__CUDA_ARCH__ < 500)
-    int32_t rv, z=0;
-    asm("vadd4.u32.u32.u32 %0, %1, %2, %3;" : "=r"(rv) : "r"(x), "r"(y), "r"(z));
-    return rv;
-#else
-    return addChar4(x, y);
-#endif
-  }
-  __device__ uint8_t operator()(const uint8_t x, const uint8_t y) const {
-    return x+y;
+////////////////////////////////////////////////////////////////////////////////
+// Apply_Reduce
+
+// General recursive definition (EltPerPack > 1). This is how we iterate over
+// all elements in a pack of any size, by breaking it into halves. Eventually
+// we'll hit a base case (a more specific template specialization which takes
+// precedence).
+template<typename Fn, int EltPerPack>
+struct Apply_Reduce {
+  template<int Size>
+  __device__ static BytePack<Size> reduce(Fn fn, BytePack<Size> a, BytePack<Size> b) {
+    a.half[0] = Apply_Reduce<Fn, EltPerPack/2>::reduce(fn, a.half[0], b.half[0]);
+    a.half[1] = Apply_Reduce<Fn, EltPerPack/2>::reduce(fn, a.half[1], b.half[1]);
+    return a;
   }
 };
 
-static __device__ uint32_t mulChar4(const uint32_t x, const uint32_t y) {
-  /* This can be used both for signed and unsigned 8-bit multiplication */
-  union converter { uint32_t storage; char4 a; };
-  converter cx, cy, cr;
-  cx.storage = x;
-  cy.storage = y;
-  cr.a.x = cx.a.x * cy.a.x;
-  cr.a.y = cx.a.y * cy.a.y;
-  cr.a.z = cx.a.z * cy.a.z;
-  cr.a.w = cx.a.w * cy.a.w;
-  return cr.storage;
-}
-
-template<>
-struct FuncProd<int8_t> {
-  __device__ FuncProd(uint64_t opArg=0) {}
-  __device__ uint32_t operator()(const uint32_t x, const uint32_t y) const {
-    return mulChar4(x, y);
-  }
-  __device__ int8_t operator()(const int8_t x, const int8_t y) const {
-    return x*y;
+// Base case definitions (EltPerPack == 1)
+template<typename T>
+struct Apply_Reduce<FuncNull<T>, /*EltPerPack=*/1> {
+  __device__ static BytePack<sizeof(T)> reduce(FuncSum<T> fn, BytePack<sizeof(T)> a, BytePack<sizeof(T)> b) {
+    return a;
   }
 };
-template<>
-struct FuncProd<uint8_t> {
-  __device__ FuncProd(uint64_t opArg=0) {}
-  __device__ uint32_t operator()(const uint32_t x, const uint32_t y) const {
-    return mulChar4(x, y);
+template<typename T>
+struct Apply_Reduce<FuncSum<T>, /*EltPerPack=*/1> {
+  __device__ static BytePack<sizeof(T)> reduce(FuncSum<T> fn, BytePack<sizeof(T)> a, BytePack<sizeof(T)> b) {
+    return toPack<T>(fromPack<T>(a) + fromPack<T>(b));
   }
-  __device__ uint8_t operator()(const uint8_t x, const uint8_t y) const {
-    return x*y;
+};
+template<typename T>
+struct Apply_Reduce<FuncProd<T>, /*EltPerPack=*/1> {
+  __device__ static BytePack<sizeof(T)> reduce(FuncProd<T> fn, BytePack<sizeof(T)> a, BytePack<sizeof(T)> b) {
+    return toPack<T>(fromPack<T>(a) * fromPack<T>(b));
+  }
+};
+template<typename T>
+struct Apply_Reduce<FuncMin<T>, /*EltPerPack=*/1> {
+  __device__ static BytePack<sizeof(T)> reduce(FuncMin<T> fn, BytePack<sizeof(T)> a, BytePack<sizeof(T)> b) {
+    return toPack<T>(min(fromPack<T>(a), fromPack<T>(b)));
+  }
+};
+template<typename T>
+struct Apply_Reduce<FuncMax<T>, /*EltPerPack=*/1> {
+  __device__ static BytePack<sizeof(T)> reduce(FuncMax<T> fn, BytePack<sizeof(T)> a, BytePack<sizeof(T)> b) {
+    return toPack<T>(max(fromPack<T>(a), fromPack<T>(b)));
   }
 };
 
+// Optimizations for specfic types and element count combinations:
 template<>
-struct FuncMax<int8_t> {
-  __device__ FuncMax(uint64_t opArg=0) {}
-  union converter { uint32_t storage; char4 a; };
-  __device__ uint32_t operator()(const uint32_t x, const uint32_t y) const {
-#if (__CUDA_ARCH__ >= 300) && (__CUDA_ARCH__ < 500)
-    int32_t rv, z=0;
-    asm("vmax4.s32.s32.s32 %0, %1, %2, %3;" : "=r"(rv) : "r"(x), "r"(y), "r"(z));
-    return rv;
-#else
-    converter cx, cy, cr;
-    cx.storage = x;
-    cy.storage = y;
-    cr.a.x = max(cx.a.x, cy.a.x);
-    cr.a.y = max(cx.a.y, cy.a.y);
-    cr.a.z = max(cx.a.z, cy.a.z);
-    cr.a.w = max(cx.a.w, cy.a.w);
-    return cr.storage;
-#endif
-  }
-  __device__ int8_t operator()(const int8_t x, const int8_t y) const {
-    return (x>y) ? x : y;
+struct Apply_Reduce<FuncSum<uint8_t>, /*EltPerPack=*/4> {
+  __device__ static BytePack<4> reduce(FuncSum<uint8_t> fn, BytePack<4> a, BytePack<4> b) {
+    constexpr uint32_t lo = 0x00ff00ff;
+    constexpr uint32_t hi = ~lo;
+    uint32_t x = a.u32;
+    uint32_t y = b.u32;
+    a.u32 = (((x&lo) + (y&lo))&lo) + (((x&hi) + (y&hi))&hi);
+    return a;
   }
 };
 template<>
-struct FuncMax<uint8_t> {
-  __device__ FuncMax(uint64_t opArg=0) {}
-  union converter { uint32_t storage; uchar4 a; };
-  __device__ uint32_t operator()(const uint32_t x, const uint32_t y) const {
-#if (__CUDA_ARCH__ >= 300) && (__CUDA_ARCH__ < 500)
-    int32_t rv, z=0;
-    asm("vmax4.u32.u32.u32 %0, %1, %2, %3;" : "=r"(rv) : "r"(x), "r"(y), "r"(z));
-    return rv;
-#else
-    converter cx, cy, cr;
-    cx.storage = x;
-    cy.storage = y;
-    cr.a.x = max(cx.a.x, cy.a.x);
-    cr.a.y = max(cx.a.y, cy.a.y);
-    cr.a.z = max(cx.a.z, cy.a.z);
-    cr.a.w = max(cx.a.w, cy.a.w);
-    return cr.storage;
-#endif
-  }
-  __device__ uint8_t operator()(const uint8_t x, const uint8_t y) const {
-    return (x>y) ? x : y;
+struct Apply_Reduce<FuncSum<int8_t>, /*EltPerPack=*/4> {
+  __device__ static BytePack<4> reduce(FuncSum<int8_t> fn, BytePack<4> a, BytePack<4> b) {
+    return Apply_Reduce<FuncSum<uint8_t>, 4>::reduce(FuncSum<uint8_t>(), a, b);
   }
 };
 
-template<>
-struct FuncMin<int8_t> {
-  __device__ FuncMin(uint64_t opArg=0) {}
-  union converter { uint32_t storage; char4 a; };
-  __device__ uint32_t operator()(const uint32_t x, const uint32_t y) const {
-#if (__CUDA_ARCH__ >= 300) && (__CUDA_ARCH__ < 500)
-    int32_t rv, z=0;
-    asm("vmin4.s32.s32.s32 %0, %1, %2, %3;" : "=r"(rv) : "r"(x), "r"(y), "r"(z));
-    return rv;
-#else
-    converter cx, cy, cr;
-    cx.storage = x;
-    cy.storage = y;
-    cr.a.x = min(cx.a.x, cy.a.x);
-    cr.a.y = min(cx.a.y, cy.a.y);
-    cr.a.z = min(cx.a.z, cy.a.z);
-    cr.a.w = min(cx.a.w, cy.a.w);
-    return cr.storage;
+#if 300 <= __CUDA_ARCH__ && __CUDA_ARCH__ < 500
+  template<>
+  struct Apply_Reduce<FuncMin<uint8_t>, /*EltPerPack=*/4> {
+    __device__ static BytePack<4> reduce(FuncMin<uint8_t> fn, BytePack<4> a, BytePack<4> b) {
+      uint32_t z=0;
+      asm("vmin4.u32.u32.u32 %0, %1, %2, %3;" : "=r"(a.u32) : "r"(a.u32), "r"(b.u32), "r"(z));
+      return a;
+    }
+  };
+  template<>
+  struct Apply_Reduce<FuncMin<int8_t>, /*EltPerPack=*/4> {
+    __device__ static BytePack<4> reduce(FuncMin<int8_t> fn, BytePack<4> a, BytePack<4> b) {
+      int32_t z=0;
+      asm("vmin4.s32.s32.s32 %0, %1, %2, %3;" : "=r"(a.u32) : "r"(a.u32), "r"(b.u32), "r"(z));
+      return a;
+    }
+  };
+  template<>
+  struct Apply_Reduce<FuncMax<uint8_t>, /*EltPerPack=*/4> {
+    __device__ static BytePack<4> reduce(FuncMax<uint8_t> fn, BytePack<4> a, BytePack<4> b) {
+      uint32_t z=0;
+      asm("vmax4.u32.u32.u32 %0, %1, %2, %3;" : "=r"(a.u32) : "r"(a.u32), "r"(b.u32), "r"(z));
+      return a;
+    }
+  };
+  template<>
+  struct Apply_Reduce<FuncMax<int8_t>, /*EltPerPack=*/4> {
+    __device__ static BytePack<4> reduce(FuncMax<int8_t> fn, BytePack<4> a, BytePack<4> b) {
+      int32_t z=0;
+      asm("vmax4.s32.s32.s32 %0, %1, %2, %3;" : "=r"(a.u32) : "r"(a.u32), "r"(b.u32), "r"(z));
+      return a;
+    }
+  };
 #endif
-  }
-  __device__ int8_t operator()(const int8_t x, const int8_t y) const {
-    return (x<y) ? x : y;
-  }
-};
-template<>
-struct FuncMin<uint8_t> {
-  __device__ FuncMin(uint64_t opArg=0) {}
-  union converter { uint32_t storage; uchar4 a; };
-  __device__ uint32_t operator()(const uint32_t x, const uint32_t y) const {
-#if (__CUDA_ARCH__ >= 300) && (__CUDA_ARCH__ < 500)
-    int32_t rv, z=0;
-    asm("vmin4.u32.u32.u32 %0, %1, %2, %3;" : "=r"(rv) : "r"(x), "r"(y), "r"(z));
-    return rv;
-#else
-    converter cx, cy, cr;
-    cx.storage = x;
-    cy.storage = y;
-    cr.a.x = min(cx.a.x, cy.a.x);
-    cr.a.y = min(cx.a.y, cy.a.y);
-    cr.a.z = min(cx.a.z, cy.a.z);
-    cr.a.w = min(cx.a.w, cy.a.w);
-    return cr.storage;
-#endif
-  }
-  __device__ uint8_t operator()(const uint8_t x, const uint8_t y) const {
-    return (x<y) ? x : y;
-  }
-};
 
-template<>
-struct FuncSum<half> {
-  __device__ FuncSum(uint64_t opArg=0) {}
-  __device__ half2 operator()(const half2 x, const half2 y) const {
+#define SPECIALIZE_REDUCE(Fn, T, EltPerPack, Vec, expr_of_x_y) \
+  template<> \
+  struct Apply_Reduce<Fn<T>, EltPerPack> { \
+    __device__ __forceinline__ static BytePack<sizeof(Vec)> reduce( \
+        Fn<T> fn, BytePack<sizeof(Vec)> a, BytePack<sizeof(Vec)> b \
+      ) { \
+      Vec x = fromPack<Vec>(a); \
+      Vec y = fromPack<Vec>(b); \
+      return toPack<Vec>(expr_of_x_y); \
+    } \
+  };
+
 #if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
-    return __hadd2(x, y);
+  SPECIALIZE_REDUCE(FuncSum, half, 1, half, __hadd(x, y))
+  SPECIALIZE_REDUCE(FuncSum, half, 2, half2, __hadd2(x, y))
+  SPECIALIZE_REDUCE(FuncProd, half, 1, half, __hmul(x, y))
+  SPECIALIZE_REDUCE(FuncProd, half, 2, half2, __hmul2(x, y))
 #else
-    float2 fx, fy, fr;
-    fx = __half22float2(x);
-    fy = __half22float2(y);
-    fr.x = fx.x + fy.x;
-    fr.y = fx.y + fy.y;
-    return __float22half2_rn(fr);
+  SPECIALIZE_REDUCE(FuncSum, half, 1, half, __float2half(__half2float(x) + __half2float(y)))
+  SPECIALIZE_REDUCE(FuncProd, half, 1, half, __float2half(__half2float(x) * __half2float(y)))
 #endif
+
+#if __CUDA_ARCH__ >= 800
+  SPECIALIZE_REDUCE(FuncMin, half, 1, half, __hmin(x, y))
+  SPECIALIZE_REDUCE(FuncMin, half, 2, half2, __hmin2(x, y))
+  SPECIALIZE_REDUCE(FuncMax, half, 1, half, __hmax(x, y))
+  SPECIALIZE_REDUCE(FuncMax, half, 2, half2, __hmax2(x, y))
+#else
+  SPECIALIZE_REDUCE(FuncMin, half, 1, half, __float2half(fminf(__half2float(x), __half2float(y))))
+  SPECIALIZE_REDUCE(FuncMax, half, 1, half, __float2half(fmaxf(__half2float(x), __half2float(y))))
+#endif
+
+#if defined(__CUDA_BF16_TYPES_EXIST__)
+#if __CUDA_ARCH__ >= 800
+  SPECIALIZE_REDUCE(FuncSum, __nv_bfloat16, 1, __nv_bfloat16, __hadd(x, y))
+  SPECIALIZE_REDUCE(FuncSum, __nv_bfloat16, 2, __nv_bfloat162, __hadd2(x, y))
+  SPECIALIZE_REDUCE(FuncProd, __nv_bfloat16, 1, __nv_bfloat16, __hmul(x, y))
+  SPECIALIZE_REDUCE(FuncProd, __nv_bfloat16, 2, __nv_bfloat162, __hmul2(x, y))
+  SPECIALIZE_REDUCE(FuncMin, __nv_bfloat16, 1, __nv_bfloat16, __hmin(x, y))
+  SPECIALIZE_REDUCE(FuncMin, __nv_bfloat16, 2, __nv_bfloat162, __hmin2(x, y))
+  SPECIALIZE_REDUCE(FuncMax, __nv_bfloat16, 1, __nv_bfloat16, __hmax(x, y))
+  SPECIALIZE_REDUCE(FuncMax, __nv_bfloat16, 2, __nv_bfloat162, __hmax2(x, y))
+#else
+  SPECIALIZE_REDUCE(FuncSum, __nv_bfloat16, 1, __nv_bfloat16, __float2bfloat16(__bfloat162float(x) + __bfloat162float(y)))
+  SPECIALIZE_REDUCE(FuncProd, __nv_bfloat16, 1, __nv_bfloat16, __float2bfloat16(__bfloat162float(x) * __bfloat162float(y)))
+  SPECIALIZE_REDUCE(FuncMin, __nv_bfloat16, 1, __nv_bfloat16, __float2bfloat16(fminf(__bfloat162float(x), __bfloat162float(y))))
+  SPECIALIZE_REDUCE(FuncMax, __nv_bfloat16, 1, __nv_bfloat16, __float2bfloat16(fmaxf(__bfloat162float(x), __bfloat162float(y))))
+#endif
+#endif
+
+#undef SPECIALIZE_REDUCE
+
+////////////////////////////////////////////////////////////////////////////////
+// Apply_PreOp
+
+// General recursive definition (EltPerPack > 1)
+template<typename Fn, int EltPerPack>
+struct Apply_PreOp {
+  static constexpr bool IsIdentity = Apply_PreOp<Fn, EltPerPack/2>::IsIdentity;
+  template<int Size>
+  __device__ static BytePack<Size> preOp(Fn fn, BytePack<Size> a) {
+    #if __cpp_if_constexpr
+    if constexpr(!IsIdentity) {
+    #else
+    if (!IsIdentity) {
+    #endif
+      // The `if (!IsIdentity)` condition is not strictly necessary, but it may help
+      // compiler in that it won't have to tear a register apart for no reason
+      // just to put it back together again.
+      a.half[0] = Apply_PreOp<Fn, EltPerPack/2>::preOp(fn, a.half[0]);
+      a.half[1] = Apply_PreOp<Fn, EltPerPack/2>::preOp(fn, a.half[1]);
+    }
+    return a;
   }
-  __device__ half operator()(const half x, const half y) const {
+};
+// Base case definition (EltPerPack == 1), by default is identity function.
+template<typename Fn>
+struct Apply_PreOp<Fn, /*EltPerPack=*/1> {
+  static constexpr bool IsIdentity = true;
+  template<int Size>
+  __device__ static BytePack<Size> preOp(Fn fn, BytePack<Size> a) {
+    return a;
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// Apply_PostOp
+
+// General recursive definition (EltPerPack > 1)
+template<typename Fn, int EltPerPack>
+struct Apply_PostOp {
+  static constexpr bool IsIdentity = Apply_PostOp<Fn, EltPerPack/2>::IsIdentity;
+  template<int Size>
+  __device__ static BytePack<Size> postOp(Fn fn, BytePack<Size> a) {
+    #if __cpp_if_constexpr
+    if constexpr(!IsIdentity) {
+    #else
+    if (!IsIdentity) {
+    #endif
+      // The `if (!IsIdentity)` condition is not strictly necessary, but it may help
+      // compiler in that it won't have to tear a register apart for no reason
+      // just to put it back together again.
+      a.half[0] = Apply_PostOp<Fn, EltPerPack/2>::postOp(fn, a.half[0]);
+      a.half[1] = Apply_PostOp<Fn, EltPerPack/2>::postOp(fn, a.half[1]);
+    }
+    return a;
+  }
+};
+// Base case definition (EltPerPack == 1), by default is identity function.
+template<typename Fn>
+struct Apply_PostOp<Fn, /*EltPerPack=*/1> {
+  static constexpr bool IsIdentity = true;
+  template<int Size>
+  __device__ static BytePack<Size> postOp(Fn fn, BytePack<Size> a) {
+    return a;
+  }
+};
+
+
+////////////////////////////////////////////////////////////////////////////////
+// FuncPreMulSum
+
+// General definition for all integral types, float, and double.
+template<typename T>
+struct FuncPreMulSum {
+  using EltType = T;
+  T scalar;
+  __device__ FuncPreMulSum(uint64_t opArg=0) {
+    union { uint64_t u64; T val; };
+    u64 = opArg;
+    scalar = val;
+  }
+};
+
+template<>
+struct FuncPreMulSum<half> {
+  using EltType = half;
 #if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
-    return __hadd(x, y);
-#else
-    return __float2half( __half2float(x) + __half2float(y) );
-#endif
+  half2 scalar;
+  __device__ FuncPreMulSum(uint64_t opArg=0) {
+    union { uint64_t u64; half val; };
+    u64 = opArg;
+    scalar.x = val;
+    scalar.y = val;
   }
+#else
+  float scalar;
+  __device__ FuncPreMulSum(uint64_t opArg=0) {
+    union { uint64_t u64; half val; };
+    u64 = opArg;
+    scalar = __half2float(val);
+  }
+#endif
 };
 
 #if defined(__CUDA_BF16_TYPES_EXIST__)
-template<>
-struct FuncSum<__nv_bfloat16> {
-  __device__ FuncSum(uint64_t opArg=0) {}
-  __device__ __nv_bfloat162 operator()(const __nv_bfloat162 x, const __nv_bfloat162 y) const {
-#if __CUDA_ARCH__ >= 800
-    return __hadd2(x, y);
-#else
-    float fxl, fxh, fyl, fyh;
-    fxl = __low2float(x);
-    fxh = __high2float(x);
-    fyl = __low2float(y);
-    fyh = __high2float(y);
-    return __floats2bfloat162_rn(fxl + fyl, fxh + fyh);
-#endif
-   }
-  __device__ __nv_bfloat16 operator()(const __nv_bfloat16 x, const __nv_bfloat16 y) const {
-#if __CUDA_ARCH__ >= 800
-    return __hadd(x, y);
-#else
-    return __float2bfloat16( __bfloat162float(x) + __bfloat162float(y) );
-#endif
-  }
-};
+  template<>
+  struct FuncPreMulSum<__nv_bfloat16> {
+    using EltType = __nv_bfloat16;
+  #if __CUDA_ARCH__ >= 800
+    __nv_bfloat162 scalar;
+    __device__ FuncPreMulSum(uint64_t opArg=0) {
+      union { uint64_t u64; __nv_bfloat16 val; };
+      u64 = opArg;
+      scalar.x = val;
+      scalar.y = val;
+    }
+  #else
+    float scalar;
+    __device__ FuncPreMulSum(uint64_t opArg=0) {
+      union { uint64_t u64; __nv_bfloat16 val; };
+      u64 = opArg;
+      scalar = __bfloat162float(val);
+    }
+  #endif
+  };
 #endif
 
+template<typename T>
+struct Apply_Reduce<FuncPreMulSum<T>, /*EltPerPack=*/1> {
+  __device__ static BytePack<sizeof(T)> reduce(FuncPreMulSum<T> fn, BytePack<sizeof(T)> a, BytePack<sizeof(T)> b) {
+    // FuncPreMulSum reduce dispatches to FuncSum.
+    return Apply_Reduce<FuncSum<T>, 1>::reduce(FuncSum<T>(), a, b);
+  }
+};
+
+// PreOp of FuncPreMulSum for integral types, float, and double.
+template<typename T>
+struct Apply_PreOp<FuncPreMulSum<T>, /*EltPerPack=*/1> {
+  static constexpr bool IsIdentity = false;
+  __device__ static BytePack<sizeof(T)> preOp(FuncPreMulSum<T> fn, BytePack<sizeof(T)> a) {
+    return toPack<T>(fromPack<T>(a) * fn.scalar);
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// Apply_PreOp of FuncPreMulSum for float16.
+
 template<>
-struct FuncProd<half> {
-  __device__ FuncProd(uint64_t opArg=0) {}
-  __device__ half2 operator()(const half2 x, const half2 y) const {
+struct Apply_PreOp<FuncPreMulSum<half>, /*EltPerPack=*/1> {
+  static constexpr bool IsIdentity = false;
+  __device__ static BytePack<sizeof(half)> preOp(FuncPreMulSum<half> fn, BytePack<sizeof(half)> a) {
+    #if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
+      return toPack<half>(__hmul(fromPack<half>(a), fn.scalar.x));
+    #else
+      return toPack<half>(__float2half(__half2float(fromPack<half>(a)) * fn.scalar));
+    #endif
+  }
+};
 #if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
-    return __hmul2(x, y);
-#else
-    float2 fx, fy, fr;
-    fx = __half22float2(x);
-    fy = __half22float2(y);
-    fr.x = fx.x * fy.x;
-    fr.y = fx.y * fy.y;
-    return __float22half2_rn(fr);
+  template<>
+  struct Apply_PreOp<FuncPreMulSum<half>, /*EltPerPack=*/2> {
+    static constexpr bool IsIdentity = false;
+    __device__ static BytePack<sizeof(half2)> preOp(FuncPreMulSum<half> fn, BytePack<sizeof(half2)> a) {
+      return toPack<half2>(__hmul2(fromPack<half2>(a), fn.scalar));
+    }
+  };
 #endif
-  }
-  __device__ half operator()(const half x, const half y) const {
-#if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
-    return __hmul(x, y);
-#else
-    return __float2half( __half2float(x) * __half2float(y) );
-#endif
-  }
-};
+
+////////////////////////////////////////////////////////////////////////////////
+// Apply_PreOp of FuncPreMulSum for bfloat16.
 
 #if defined(__CUDA_BF16_TYPES_EXIST__)
-template<>
-struct FuncProd<__nv_bfloat16> {
-  __device__ FuncProd(uint64_t opArg=0) {}
-  __device__ __nv_bfloat162 operator()(const __nv_bfloat162 x, const __nv_bfloat162 y) const {
-#if __CUDA_ARCH__ >= 800
-    return __hmul2(x, y);
-#else
-    float fxl, fxh, fyl, fyh;
-    fxl = __low2float(x);
-    fxh = __high2float(x);
-    fyl = __low2float(y);
-    fyh = __high2float(y);
-    return __floats2bfloat162_rn(fxl * fyl, fxh * fyh);
-#endif
-  }
-  __device__ __nv_bfloat16 operator()(const __nv_bfloat16 x, const __nv_bfloat16 y) const {
-#if __CUDA_ARCH__ >= 800
-    return __hmul(x, y);
-#else
-    return __float2bfloat16( __bfloat162float(x) * __bfloat162float(y) );
-#endif
-  }
-};
-#endif
-
-template<>
-struct FuncMax<half> {
-  __device__ FuncMax(uint64_t opArg=0) {}
-  __device__ half2 operator()(const half2 x, const half2 y) const {
-    float2 fx, fy, fr;
-    fx = __half22float2(x);
-    fy = __half22float2(y);
-    fr.x = fmaxf(fx.x, fy.x);
-    fr.y = fmaxf(fx.y, fy.y);
-    return __float22half2_rn(fr);
-  }
-  __device__ half operator()(const half x, const half y) const {
-    float fx, fy, fm;
-    fx = __half2float(x);
-    fy = __half2float(y);
-    fm = fmaxf(fx, fy);
-    return __float2half(fm);
-  }
-};
-
-#if defined(__CUDA_BF16_TYPES_EXIST__)
-template<>
-struct FuncMax<__nv_bfloat16> {
-  __device__ FuncMax(uint64_t opArg=0) {}
-  __device__ __nv_bfloat162 operator()(const __nv_bfloat162 x, const __nv_bfloat162 y) const {
-#if __CUDA_ARCH__ >= 800
-    return __hmax2(x, y);
-#else
-    float fxl, fxh, fyl, fyh;
-    fxl = __low2float(x);
-    fxh = __high2float(x);
-    fyl = __low2float(y);
-    fyh = __high2float(y);
-    return __floats2bfloat162_rn(fmaxf(fxl, fyl), fmaxf(fxh, fyh));
-#endif
-  }
-  __device__ __nv_bfloat16 operator()(const __nv_bfloat16 x, const __nv_bfloat16 y) const {
-#if __CUDA_ARCH__ >= 800
-    return __hmax(x, y);
-#else
-    float fx, fy;
-    fx = __bfloat162float(x);
-    fy = __bfloat162float(y);
-    return __float2bfloat16(fmaxf(fx, fy));
-#endif
-  }
-};
+  template<>
+  struct Apply_PreOp<FuncPreMulSum<__nv_bfloat16>, /*EltPerPack=*/1> {
+    static constexpr bool IsIdentity = false;
+    __device__ static BytePack<sizeof(__nv_bfloat16)> preOp(
+        FuncPreMulSum<__nv_bfloat16> fn, BytePack<sizeof(__nv_bfloat16)> a
+      ) {
+      #if __CUDA_ARCH__ >= 800
+        return toPack<__nv_bfloat16>(__hmul(fromPack<__nv_bfloat16>(a), fn.scalar.x));
+      #else
+        return toPack<__nv_bfloat16>(__float2bfloat16(__bfloat162float(fromPack<__nv_bfloat16>(a)) * fn.scalar));
+      #endif
+    }
+  };
+  #if __CUDA_ARCH__ >= 800
+    template<>
+    struct Apply_PreOp<FuncPreMulSum<__nv_bfloat16>, /*EltPerPack=*/2> {
+      static constexpr bool IsIdentity = false;
+      __device__ static BytePack<sizeof(__nv_bfloat162)> preOp(
+          FuncPreMulSum<__nv_bfloat16> fn, BytePack<sizeof(__nv_bfloat162)> a
+        ) {
+        return toPack<__nv_bfloat162>(__hmul2(fromPack<__nv_bfloat162>(a), fn.scalar));
+      }
+    };
+  #endif
 #endif
 
-template<>
-struct FuncMin<half> {
-  __device__ FuncMin(uint64_t opArg=0) {}
-  __device__ half2 operator()(const half2 x, const half2 y) const {
-    float2 fx, fy, fr;
-    fx = __half22float2(x);
-    fy = __half22float2(y);
-    fr.x = fminf(fx.x, fy.x);
-    fr.y = fminf(fx.y, fy.y);
-    return __float22half2_rn(fr);
-  }
-  __device__ half operator()(const half x, const half y) const {
-    float fx, fy, fm;
-    fx = __half2float(x);
-    fy = __half2float(y);
-    fm = fminf(fx, fy);
-    return __float2half(fm);
-  }
-};
-
-#if defined(__CUDA_BF16_TYPES_EXIST__)
-template<>
-struct FuncMin<__nv_bfloat16> {
-  __device__ FuncMin(uint64_t opArg=0) {}
-   __device__ __nv_bfloat162 operator()(const __nv_bfloat162 x, const __nv_bfloat162 y) const {
-#if __CUDA_ARCH__ >= 800
-    return __hmin2(x, y);
-#else
-    float fxl, fxh, fyl, fyh;
-    fxl = __low2float(x);
-    fxh = __high2float(x);
-    fyl = __low2float(y);
-    fyh = __high2float(y);
-    return __floats2bfloat162_rn(fminf(fxl, fyl), fminf(fxh, fyh));
-#endif
-  }
-  __device__ __nv_bfloat16 operator()(const __nv_bfloat16 x, const __nv_bfloat16 y) const {
-#if __CUDA_ARCH__ >= 800
-    return __hmin(x, y);
-#else
-    float fx, fy;
-    fx = __bfloat162float(x);
-    fy = __bfloat162float(y);
-    return __float2bfloat16(fminf(fx, fy));
-#endif
-  }
-};
-#endif
-
-template<>
-struct FuncMax<float> {
-  __device__ FuncMax(uint64_t opArg=0) {}
-  __device__ float operator()(float x, float y) const {
-    return fmaxf(x, y);
-  }
-};
-template<>
-struct FuncMin<float> {
-  __device__ FuncMin(uint64_t opArg=0) {}
-  __device__ float operator()(float x, float y) const {
-    return fminf(x, y);
-  }
-};
-
-template<>
-struct FuncMax<double> {
-  __device__ FuncMax(uint64_t opArg=0) {}
-  __device__ double operator()(double x, double y) const {
-    return fmax(x, y);
-  }
-};
-template<>
-struct FuncMin<double> {
-  __device__ FuncMin(uint64_t opArg=0) {}
-  __device__ double operator()(double x, double y) const {
-    return fmin(x, y);
-  }
-};
+////////////////////////////////////////////////////////////////////////////////
+// FuncSumPostDiv
 
 template<typename T>
 struct IsFloatingPoint: std::false_type {};
@@ -483,223 +464,128 @@ template<>
 struct IsFloatingPoint<double>: std::true_type {};
 
 template<typename T, bool IsFloating=IsFloatingPoint<T>::value>
-struct FuncSumPostDiv;
+struct FuncSumPostDiv_IntOnly;
 
 template<typename T>
-struct FuncSumPostDiv<T, /*IsFloating=*/false>: FuncSum<T> {
-  static constexpr bool IsPreOpIdentity = true;
-  static constexpr bool IsPostOpIdentity = false;
-  int n;
-  __device__ FuncSumPostDiv(uint64_t opArg): n(opArg) {}
-  // inherits FuncSum::operator()
-  __device__ T preOp(T x) const { return x; }
-  __device__ T postOp(T x) const { return T(x/n); }
+struct FuncSumPostDiv: FuncSumPostDiv_IntOnly<T> {
+  __device__ FuncSumPostDiv(uint64_t opArg=0):
+    FuncSumPostDiv_IntOnly<T>(opArg) {
+  }
 };
 
 template<typename T>
-struct FuncSumPostDiv<T, /*IsFloating=*/true> {
+struct FuncSumPostDiv_IntOnly<T, /*IsFloating=*/false>: FuncSum<T> {
+  using EltType = T;
+  int divisor;
+  __device__ FuncSumPostDiv_IntOnly(uint64_t opArg=0): divisor(opArg) {}
+};
+
+template<typename T>
+struct FuncSumPostDiv_IntOnly<T, /*IsFloating=*/true> {
   static_assert(sizeof(T)!=sizeof(T), "FuncSumPostDiv is only for implementing ncclAvg on integral types.");
 };
 
 template<typename T>
-struct FuncPreMulSum: FuncSum<T> { // integral T since all floats are specialized below
-  static constexpr bool IsPreOpIdentity = false;
-  static constexpr bool IsPostOpIdentity = true;
-  T scale;
-  __device__ FuncPreMulSum(uint64_t opArg) { scale = *(T*)&opArg; }
-  // inherits FuncSum::operator()
-  __device__ T preOp(T x) const { return x*scale; }
-  __device__ T postOp(T x) const { return x; }
-};
-
-template<>
-struct FuncPreMulSum<double>: FuncSum<double> {
-  static constexpr bool IsPreOpIdentity = false;
-  static constexpr bool IsPostOpIdentity = true;
-  double scale;
-  __device__ FuncPreMulSum(uint64_t opArg) {
-    scale = *(double*)&opArg;
-  }
-  // inherits FuncSum::operator()
-  __device__ double preOp(double x) const {
-    return IsPreOpIdentity ? x : x*scale;
-  }
-  __device__ double postOp(double x) const {
-    return IsPostOpIdentity ? x : x*scale;
+struct Apply_Reduce<FuncSumPostDiv<T>, /*EltPerPack=*/1>:
+    Apply_Reduce<FuncSum<T>, 1> {
+  __device__ static BytePack<sizeof(T)> reduce(FuncSumPostDiv<T> fn, BytePack<sizeof(T)> a, BytePack<sizeof(T)> b) {
+    // FuncSumPostDiv reduce dispatches to FuncSum.
+    return Apply_Reduce<FuncSum<T>, 1>::reduce(FuncSum<T>(), a, b);
   }
 };
-
-template<>
-struct FuncPreMulSum<float>: FuncSum<float> {
-  static constexpr bool IsPreOpIdentity = false;
-  static constexpr bool IsPostOpIdentity = true;
-  float scale;
-  __device__ FuncPreMulSum(uint64_t opArg) {
-    scale = *(float*)&opArg;
-  }
-  // inherits FuncSum::operator()
-  __device__ float preOp(float x) const {
-    return IsPreOpIdentity ? x : x*scale;
-  }
-  __device__ float postOp(float x) const {
-    return IsPostOpIdentity ? x : x*scale;
-  }
-};
-
-template<>
-struct FuncPreMulSum<half>: FuncSum<half> {
-  // Change these to switch between all prescale, all postscale, or both by sqrt(N).
-  // Obviously, the only invalid combination is both true. An improvement would be
-  // make this parameterized as a build time setting and passed here through
-  // preprocessor definitions.
-  static constexpr bool IsPreOpIdentity = false;
-  static constexpr bool IsPostOpIdentity = true;
-
-#if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
-  half2 scale;
-  __device__ FuncPreMulSum(uint64_t opArg) {
-    scale.x = *(half*)&opArg;
-    scale.y = scale.x;
-  }
-  // inherits FuncSum::operator()
-  __device__ half preOp(half x) const {
-    return IsPreOpIdentity ? x : __hmul(x, scale.x);
-  }
-  __device__ half2 preOp(half2 x) const {
-    return IsPreOpIdentity ? x : __hmul2(x, scale);
-  }
-  __device__ half postOp(half x) const {
-    return IsPostOpIdentity ? x : __hmul(x, scale.x);
-  }
-  __device__ half2 postOp(half2 x) const {
-    return IsPostOpIdentity ? x : __hmul2(x, scale);
-  }
-#else
-  float scale;
-  __device__ FuncPreMulSum(uint64_t opArg) {
-    scale = __half2float(*(half*)&opArg);
-  }
-  // inherits FuncSum::operator()
-  __device__ half preOp(half x) const {
-    return IsPreOpIdentity ? x : __float2half(__half2float(x)*scale);
-  }
-  __device__ half2 preOp(half2 x) const {
-    if (IsPreOpIdentity)
-      return x;
-    else {
-      float2 a = __half22float2(x);
-      a.x *= scale;
-      a.y *= scale;
-      return __float22half2_rn(a);
-    }
-  }
-  __device__ half postOp(half x) const {
-    return IsPostOpIdentity ? x : __float2half(__half2float(x)*scale);
-  }
-  __device__ half2 postOp(half2 x) const {
-    if (IsPostOpIdentity)
-      return x;
-    else {
-      float2 a = __half22float2(x);
-      a.x *= scale;
-      a.y *= scale;
-      return __float22half2_rn(a);
-    }
-  }
-#endif
-};
-
-#if defined(__CUDA_BF16_TYPES_EXIST__)
-template<>
-struct FuncPreMulSum<__nv_bfloat16>: FuncSum<__nv_bfloat16> {
-  // Change these to switch between all prescale, all postscale, or both by sqrt(N).
-  // Obviously, the only invalid combination is both true. An improvement would be
-  // make this parameterized as a build time setting and passed here through
-  // preprocessor definitions.
-  static constexpr bool IsPreOpIdentity = false;
-  static constexpr bool IsPostOpIdentity = true;
-
-#if __CUDA_ARCH__ >= 800
-  __nv_bfloat162 scale;
-  __device__ FuncPreMulSum(uint64_t opArg) {
-    scale.x = *(__nv_bfloat16*)&opArg;
-    scale.y = scale.x;
-  }
-  // inherits FuncSum::operator()
-  __device__ __nv_bfloat16 preOp(__nv_bfloat16 x) const {
-    return IsPreOpIdentity ? x : __hmul(x, scale.x);
-  }
-  __device__ __nv_bfloat162 preOp(__nv_bfloat162 x) const {
-    return IsPreOpIdentity ? x : __hmul2(x, scale);
-  }
-  __device__ __nv_bfloat16 postOp(__nv_bfloat16 x) const {
-    return IsPostOpIdentity ? x : __hmul(x, scale.x);
-  }
-  __device__ __nv_bfloat162 postOp(__nv_bfloat162 x) const {
-    return IsPostOpIdentity ? x : __hmul2(x, scale);
-  }
-#else
-  float scale;
-  __device__ FuncPreMulSum(uint64_t opArg) {
-    scale = *(__nv_bfloat16*)&opArg;
-  }
-  // inherits FuncSum::operator()
-  __device__ __nv_bfloat16 preOp(__nv_bfloat16 x) const {
-    return IsPreOpIdentity ? x : __float2bfloat16(__bfloat162float(x)*scale);
-  }
-  __device__ __nv_bfloat162 preOp(__nv_bfloat162 x) const {
-    if (IsPreOpIdentity)
-      return x;
-    else {
-      float fxl, fxh;
-      fxl = __low2float(x);
-      fxh = __high2float(x);
-      return __floats2bfloat162_rn(fxl * scale, fxh * scale);
-    }
-  }
-  __device__ __nv_bfloat16 postOp(__nv_bfloat16 x) const {
-    return IsPostOpIdentity ? x : __float2bfloat16(__bfloat162float(x)*scale);
-  }
-  __device__ __nv_bfloat162 postOp(__nv_bfloat162 x) const {
-    if (IsPostOpIdentity)
-      return x;
-    else {
-      float fxl, fxh;
-      fxl = __low2float(x);
-      fxh = __high2float(x);
-      return __floats2bfloat162_rn(fxl * scale, fxh * scale);
-    }
-  }
-#endif
-};
-#endif
 
 template<typename T>
-struct FuncTraits<FuncPreMulSum<T>> {
-  static constexpr bool IsPreOpIdentity = FuncPreMulSum<T>::IsPreOpIdentity;
-  static constexpr bool IsPostOpIdentity = FuncPreMulSum<T>::IsPostOpIdentity;
-
-  template<typename U>
-  __device__ static U preOp(FuncPreMulSum<T> fn, U x) {
-    return fn.preOp(x);
-  }
-  template<typename U>
-  __device__ static U postOp(FuncPreMulSum<T> fn, U x) {
-    return fn.postOp(x);
+struct Apply_PostOp<FuncSumPostDiv<T>, /*EltPerPack=*/1> {
+  static constexpr bool IsIdentity = false;
+  __device__ static BytePack<sizeof(T)> postOp(FuncSumPostDiv<T> fn, BytePack<sizeof(T)> a) {
+    return toPack<T>(fromPack<T>(a) / fn.divisor);
   }
 };
-template<typename T>
-struct FuncTraits<FuncSumPostDiv<T>> {
-  static constexpr bool IsPreOpIdentity = FuncSumPostDiv<T>::IsPreOpIdentity;
-  static constexpr bool IsPostOpIdentity = FuncSumPostDiv<T>::IsPostOpIdentity;
 
-  template<typename U>
-  __device__ static U preOp(FuncSumPostDiv<T> fn, U x) {
-    return fn.preOp(x);
-  }
-  template<typename U>
-  __device__ static U postOp(FuncSumPostDiv<T> fn, U x) {
-    return fn.postOp(x);
-  }
+////////////////////////////////////////////////////////////////////////////////
+// Apply_LoadMultimem
+
+template<typename Fn>
+struct Apply_LoadMultimem {
+  static constexpr int PackSize = 0; // Indicates not implemented
 };
+
+#define SIZEOF_BytePack_field_u16 2
+#define PTX_REG_BytePack_field_u16 "h"
+
+#define SIZEOF_BytePack_field_u32 4
+#define PTX_REG_BytePack_field_u32 "r"
+
+#define SIZEOF_BytePack_field_u64 8
+#define PTX_REG_BytePack_field_u64 "l"
+
+#define DEFINE_Apply_LoadMultimem(Fn, T, op, ptx_ty, pack_field) \
+  template<> \
+  struct Apply_LoadMultimem<Fn<T>> { \
+    static constexpr int PackSize = 1*(SIZEOF_BytePack_field_##pack_field); \
+    __device__ static BytePack<PackSize> load(Fn<T> fn, uintptr_t addr) { \
+      BytePack<PackSize> ans; \
+      asm("multimem.ld_reduce.global." #op "." #ptx_ty " %0, [%1];" \
+        : "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field) \
+        : "l"(addr)); \
+      return ans; \
+    } \
+  };
+#define DEFINE_Apply_LoadMultimem_v4(Fn, T, op, ptx_ty, pack_field) \
+  template<> \
+  struct Apply_LoadMultimem<Fn<T>> { \
+    static constexpr int PackSize = 4*(SIZEOF_BytePack_field_##pack_field); \
+    __device__ static BytePack<PackSize> load(Fn<T> fn, uintptr_t addr) { \
+      BytePack<PackSize> ans; \
+      asm("multimem.ld_reduce.global." #op ".v4." #ptx_ty " {%0,%1,%2,%3}, [%4];" \
+        : "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field[0]), \
+          "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field[1]), \
+          "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field[2]), \
+          "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field[3]) \
+        : "l"(addr)); \
+      return ans; \
+    } \
+  };
+
+#if __CUDA_ARCH__ >= 900 && CUDART_VERSION >= 12010
+  DEFINE_Apply_LoadMultimem(FuncSum, uint32_t, add, u32, u32)
+  DEFINE_Apply_LoadMultimem(FuncMin, uint32_t, min, u32, u32)
+  DEFINE_Apply_LoadMultimem(FuncMax, uint32_t, max, u32, u32)
+
+  DEFINE_Apply_LoadMultimem(FuncSum, int32_t, add, s32, u32)
+  DEFINE_Apply_LoadMultimem(FuncMin, int32_t, min, s32, u32)
+  DEFINE_Apply_LoadMultimem(FuncMax, int32_t, max, s32, u32)
+
+  DEFINE_Apply_LoadMultimem(FuncSum, uint64_t, add, u64, u64)
+  DEFINE_Apply_LoadMultimem(FuncMin, uint64_t, min, u64, u64)
+  DEFINE_Apply_LoadMultimem(FuncMax, uint64_t, max, u64, u64)
+
+  DEFINE_Apply_LoadMultimem(FuncSum, int64_t, add, u64, u64)
+  DEFINE_Apply_LoadMultimem(FuncMin, int64_t, min, s64, u64)
+  DEFINE_Apply_LoadMultimem(FuncMax, int64_t, max, s64, u64)
+
+  DEFINE_Apply_LoadMultimem_v4(FuncSum, float, add, f32, u32)
+
+  DEFINE_Apply_LoadMultimem(FuncSum, double, add, f64, u64)
+
+  DEFINE_Apply_LoadMultimem_v4(FuncSum, half, add, f16x2, u32)
+  DEFINE_Apply_LoadMultimem_v4(FuncMin, half, min, f16x2, u32)
+  DEFINE_Apply_LoadMultimem_v4(FuncMax, half, max, f16x2, u32)
+
+  #if defined(__CUDA_BF16_TYPES_EXIST__)
+    DEFINE_Apply_LoadMultimem_v4(FuncSum, __nv_bfloat16, add, bf16x2, u32)
+    DEFINE_Apply_LoadMultimem_v4(FuncMin, __nv_bfloat16, min, bf16x2, u32)
+    DEFINE_Apply_LoadMultimem_v4(FuncMax, __nv_bfloat16, max, bf16x2, u32)
+  #endif
+#endif
+
+#undef DEFINE_Apply_LoadMultimem
+#undef DEFINE_Apply_LoadMultimem_v4
+#undef SIZEOF_BytePack_field_u64
+#undef PTX_REG_BytePack_field_u64
+#undef SIZEOF_BytePack_field_u32
+#undef PTX_REG_BytePack_field_u32
+#undef SIZEOF_BytePack_field_u16
+#undef PTX_REG_BytePack_field_u16
+
 #endif // REDUCE_KERNEL_H_

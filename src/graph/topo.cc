@@ -815,6 +815,6 @@ ncclResult_t ncclTopoGetLocalRank(struct ncclTopoSystem* system, int rank, int* 
       return ncclSuccess;
     }
   }
-  WARN("Could not find local GPU with rank %d\n", rank);
+  WARN("Could not find local GPU with rank %d", rank);
   return ncclInternalError;
 }

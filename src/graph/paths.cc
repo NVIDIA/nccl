@@ -461,7 +461,7 @@ ncclResult_t ncclTopoGetIntermediateRank(struct ncclTopoSystem* system, int rank
       type = node->type;
     }
     if (type != GPU) {
-      WARN("Could not find intermediate GPU between GPU rank %d and NIC %d\n", rank, netDev);
+      WARN("Could not find intermediate GPU between GPU rank %d and NIC %d", rank, netDev);
       return ncclInternalError;
     }
     *intermediateRank = node->gpu.rank;
@@ -707,6 +707,7 @@ static int nextPow2(int v) {
 }
 
 ncclResult_t ncclTopoComputeP2pChannels(struct ncclComm* comm) {
+  /* here we already honor comm->max/minCTAs for p2pnChannels. */
   comm->p2pnChannels = std::min(comm->nChannels, (int)ncclParamMaxP2pNChannels());
   comm->p2pnChannels = std::max(comm->p2pnChannels, (int)ncclParamMinP2pNChannels());
   int minChannels = comm->p2pnChannels;
@@ -734,7 +735,6 @@ ncclResult_t ncclTopoComputeP2pChannels(struct ncclComm* comm) {
     for (int b=1, mb=(comm->p2pnChannels>>1); b<comm->p2pnChannels; b<<=1, mb>>=1) if (c & b) mirror |= mb;
     comm->p2pChannels[c] = mirror;
   }
-  INFO(NCCL_INIT, "%d coll channels, %d p2p channels, %d p2p channels per peer", comm->nChannels, comm->p2pnChannels, comm->p2pnChannelsPerPeer);
   return ncclSuccess;
 }
 

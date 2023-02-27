@@ -765,7 +765,6 @@ ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph
 
   if (ngpus == 1) if (graph->pattern != NCCL_TOPO_PATTERN_RING) graph->pattern = NCCL_TOPO_PATTERN_TREE;
 
-  // SPLIT_TREE works better on older archs.
   int ccMin;
   NCCLCHECK(ncclTopoGetCompCap(system, &ccMin, NULL));
 

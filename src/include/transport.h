@@ -62,7 +62,7 @@ struct ncclTransportComm {
 };
 
 struct ncclTransport {
-  const char name[4];
+  const char name[8];
   ncclResult_t (*canConnect)(int*, struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo*, struct ncclPeerInfo*);
   struct ncclTransportComm send;
   struct ncclTransportComm recv;
@@ -70,6 +70,9 @@ struct ncclTransport {
 
 ncclResult_t ncclTransportP2pConnect(struct ncclComm* comm, int channelId, int nrecv, int* peerRecv, int nsend, int* peerSend, int connIndex);
 ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, int connIndex, int* highestTransportType=NULL);
+
+ncclResult_t ncclNvlsSetup(struct ncclComm* comm);
+ncclResult_t ncclNvlsFree(struct ncclComm* comm);
 
 enum { collNetRecv=0, collNetSend=1 };
 int ncclTransportCollNetSetup(struct ncclComm* comm, struct ncclTopoGraph* collNetGraph, struct ncclChannel* channel, int masterRank, int masterPeer, int collNetGraphChannelId, int type);

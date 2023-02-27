@@ -8,13 +8,15 @@
 #define NCCL_COMMON_KERNEL_H_
 
 #include "devcomm.h"
+#include "op128.h"
+#include "reduce_kernel.h"
 #include <cstdio>
 #include <cstdint>
 
 #include <cuda_runtime.h>
 
 // Define min for ssize_t
-static __device__ int min(int a, ssize_t b) { return (a < b) ? a : b; }
+inline __device__ int min(int a, ssize_t b) { return (a < b) ? a : b; }
 
 inline __device__ int loadInt(int* ptr) {
   int v;
@@ -23,670 +25,353 @@ inline __device__ int loadInt(int* ptr) {
   return v;
 }
 
-typedef uint64_t PackType;
-
-template<typename Fn>
-struct FuncTraits /*{
-  __device__ static T preOp(Fn, T);
-  __device__ static T postOp(Fn, T);
-}*/;
-
-// unpack x and y to elements of type T and apply FUNC to each element
-template<class FUNC, typename T>
-struct MULTI {
-  __device__ PackType operator()(FUNC fn, const PackType x, const PackType y) const;
-  __device__ PackType preOp(FUNC fn, PackType x) const;
-  __device__ PackType postOp(FUNC fn, PackType x) const;
-};
-
-template<class FUNC>
-struct MULTI<FUNC, int8_t> {
-  static_assert(sizeof(PackType) == 2 * sizeof(uint32_t),
-      "PackType must be twice the size of uint32_t.");
-  union converter {
-    PackType storage;
-    struct {
-      uint32_t a, b;
-    };
-  };
-
-  __device__ PackType operator()(FUNC fn, const PackType x, const PackType y) const {
-    converter cx, cy, cr;
-    cx.storage = x;
-    cy.storage = y;
-
-    // for char, we do these as vector ops
-    cr.a = fn(cx.a, cy.a);
-    cr.b = fn(cx.b, cy.b);
-
-    return cr.storage;
-  }
-  __device__ PackType preOp(FUNC fn, PackType x) const {
-    union {
-      PackType pack;
-      int8_t elt[8];
-    } u;
-    u.pack = x;
-    #pragma unroll
-    for (int i=0; i < 8; i++)
-      u.elt[i] = FuncTraits<FUNC>().preOp(fn, u.elt[i]);
-    return u.pack;
-  }
-  __device__ PackType postOp(FUNC fn, PackType x) const {
-    union {
-      PackType pack;
-      int8_t elt[8];
-    } u;
-    u.pack = x;
-    #pragma unroll
-    for (int i=0; i < 8; i++)
-      u.elt[i] = FuncTraits<FUNC>().postOp(fn, u.elt[i]);
-    return u.pack;
-  }
-};
-
-template<class FUNC>
-struct MULTI<FUNC, uint8_t> {
-  static_assert(sizeof(PackType) == 2 * sizeof(uint32_t),
-      "PackType must be twice the size of uint32_t.");
-  union converter {
-    PackType storage;
-    struct {
-      uint32_t a, b;
-    };
-  };
-
-  __device__ PackType operator()(FUNC fn, const PackType x, const PackType y) const {
-    converter cx, cy, cr;
-    cx.storage = x;
-    cy.storage = y;
-
-    // for char, we do these as vector ops
-    cr.a = fn(cx.a, cy.a);
-    cr.b = fn(cx.b, cy.b);
-
-    return cr.storage;
-  }
-  __device__ PackType preOp(FUNC fn, PackType x) const {
-    union {
-      PackType pack;
-      uint8_t elt[8];
-    } u;
-    u.pack = x;
-    #pragma unroll
-    for (int i=0; i < 8; i++)
-      u.elt[i] = FuncTraits<FUNC>().preOp(fn, u.elt[i]);
-    return u.pack;
-  }
-  __device__ PackType postOp(FUNC fn, PackType x) const {
-    union {
-      PackType pack;
-      uint8_t elt[8];
-    } u;
-    u.pack = x;
-    #pragma unroll
-    for (int i=0; i < 8; i++)
-      u.elt[i] = FuncTraits<FUNC>().postOp(fn, u.elt[i]);
-    return u.pack;
-  }
-};
-
-template<class FUNC>
-struct MULTI<FUNC, int32_t> {
-  static_assert(sizeof(PackType) == 2 * sizeof(int32_t),
-      "PackType must be twice the size of int.");
-  union converter {
-    PackType storage;
-    struct {
-      int32_t a, b;
-    };
-  };
-
-  __device__ PackType operator()(FUNC fn, const PackType x, const PackType y) const {
-    converter cx, cy, cr;
-    cx.storage = x;
-    cy.storage = y;
-
-    cr.a = fn(cx.a, cy.a);
-    cr.b = fn(cx.b, cy.b);
-
-    return cr.storage;
-  }
-  __device__ PackType preOp(FUNC fn, PackType x) const {
-    union {
-      PackType pack;
-      int32_t elt[2];
-    } u;
-    u.pack = x;
-    u.elt[0] = FuncTraits<FUNC>().preOp(fn, u.elt[0]);
-    u.elt[1] = FuncTraits<FUNC>().preOp(fn, u.elt[1]);
-    return u.pack;
-  }
-  __device__ PackType postOp(FUNC fn, PackType x) const {
-    union {
-      PackType pack;
-      int32_t elt[2];
-    } u;
-    u.pack = x;
-    u.elt[0] = FuncTraits<FUNC>().postOp(fn, u.elt[0]);
-    u.elt[1] = FuncTraits<FUNC>().postOp(fn, u.elt[1]);
-    return u.pack;
-  }
-};
-
-template<class FUNC>
-struct MULTI<FUNC, uint32_t> {
-  static_assert(sizeof(PackType) == 2 * sizeof(uint32_t),
-      "PackType must be twice the size of int.");
-  union converter {
-    PackType storage;
-    struct {
-      uint32_t a, b;
-    };
-  };
-
-  __device__ PackType operator()(FUNC fn, const PackType x, const PackType y) const {
-    converter cx, cy, cr;
-    cx.storage = x;
-    cy.storage = y;
-
-    cr.a = fn(cx.a, cy.a);
-    cr.b = fn(cx.b, cy.b);
-
-    return cr.storage;
-  }
-  __device__ PackType preOp(FUNC fn, PackType x) const {
-    union {
-      PackType pack;
-      uint32_t elt[2];
-    } u;
-    u.pack = x;
-    u.elt[0] = FuncTraits<FUNC>().preOp(fn, u.elt[0]);
-    u.elt[1] = FuncTraits<FUNC>().preOp(fn, u.elt[1]);
-    return u.pack;
-  }
-  __device__ PackType postOp(FUNC fn, PackType x) const {
-    union {
-      PackType pack;
-      uint32_t elt[2];
-    } u;
-    u.pack = x;
-    u.elt[0] = FuncTraits<FUNC>().postOp(fn, u.elt[0]);
-    u.elt[1] = FuncTraits<FUNC>().postOp(fn, u.elt[1]);
-    return u.pack;
-  }
-};
-
-template<class FUNC>
-struct MULTI<FUNC, half> {
-  static_assert(sizeof(PackType) == 4 * sizeof(half),
-      "PackType must be four times the size of half.");
-
-  union Converter {
-    PackType pack;
-    half2 h2[2];
-  };
-  __device__ PackType operator()(FUNC fn, const PackType x, const PackType y) const {
-    Converter cx, cy, cr;
-    cx.pack = x;
-    cy.pack = y;
-    cr.h2[0] = fn(cx.h2[0], cy.h2[0]);
-    cr.h2[1] = fn(cx.h2[1], cy.h2[1]);
-    return cr.pack;
-  }
-  __device__ PackType preOp(FUNC fn, PackType x) const {
-    Converter c;
-    c.pack = x;
-    c.h2[0] = FuncTraits<FUNC>().preOp(fn, c.h2[0]);
-    c.h2[1] = FuncTraits<FUNC>().preOp(fn, c.h2[1]);
-    return c.pack;
-  }
-  __device__ PackType postOp(FUNC fn, PackType x) const {
-    Converter c;
-    c.pack = x;
-    c.h2[0] = FuncTraits<FUNC>().postOp(fn, c.h2[0]);
-    c.h2[1] = FuncTraits<FUNC>().postOp(fn, c.h2[1]);
-    return c.pack;
-  }
-};
-
-#if defined(__CUDA_BF16_TYPES_EXIST__)
-template<class FUNC>
-struct MULTI<FUNC, __nv_bfloat16> {
-  static_assert(sizeof(PackType) == 4 * sizeof(__nv_bfloat16),
-      "PackType must be four times the size of __nv_bfloat16.");
-
-  union Converter {
-    PackType pack;
-    __nv_bfloat162 h2[2];
-  };
-  __device__ PackType operator()(FUNC fn, const PackType x, const PackType y) const {
-    Converter cx, cy, cr;
-    cx.pack = x;
-    cy.pack = y;
-    cr.h2[0] = fn(cx.h2[0], cy.h2[0]);
-    cr.h2[1] = fn(cx.h2[1], cy.h2[1]);
-    return cr.pack;
-  }
-  __device__ PackType preOp(FUNC fn, PackType x) const {
-    Converter c;
-    c.pack = x;
-    c.h2[0] = FuncTraits<FUNC>().preOp(fn, c.h2[0]);
-    c.h2[1] = FuncTraits<FUNC>().preOp(fn, c.h2[1]);
-    return c.pack;
-  }
-  __device__ PackType postOp(FUNC fn, PackType x) const {
-    Converter c;
-    c.pack = x;
-    c.h2[0] = FuncTraits<FUNC>().postOp(fn, c.h2[0]);
-    c.h2[1] = FuncTraits<FUNC>().postOp(fn, c.h2[1]);
-    return c.pack;
-  }
-};
-#endif
-
-template<class FUNC>
-struct MULTI<FUNC, float> {
-  static_assert(sizeof(PackType) == 2 * sizeof(float),
-      "PackType must be twice the size of float.");
-  union converter {
-    PackType storage;
-    struct {
-      float a, b;
-    };
-  };
-
-  __device__ PackType operator()(FUNC fn, const PackType x, const PackType y) const {
-    converter cx, cy, cr;
-    cx.storage = x;
-    cy.storage = y;
-
-    cr.a = fn(cx.a, cy.a);
-    cr.b = fn(cx.b, cy.b);
-
-    return cr.storage;
-  }
-  __device__ PackType preOp(FUNC fn, PackType x) const {
-    union {
-      PackType pack;
-      float elt[2];
-    } u;
-    u.pack = x;
-    u.elt[0] = FuncTraits<FUNC>().preOp(fn, u.elt[0]);
-    u.elt[1] = FuncTraits<FUNC>().preOp(fn, u.elt[1]);
-    return u.pack;
-  }
-  __device__ PackType postOp(FUNC fn, PackType x) const {
-    union {
-      PackType pack;
-      float elt[2];
-    } u;
-    u.pack = x;
-    u.elt[0] = FuncTraits<FUNC>().postOp(fn, u.elt[0]);
-    u.elt[1] = FuncTraits<FUNC>().postOp(fn, u.elt[1]);
-    return u.pack;
-  }
-};
-
-template<class FUNC>
-struct MULTI<FUNC, double> {
-  static_assert(sizeof(PackType) == sizeof(double),
-      "PackType must be the same size as double.");
-  __device__ PackType operator()(FUNC fn, const PackType x, const PackType y) const {
-    double rv = fn(__longlong_as_double(x), __longlong_as_double(y));
-    return __double_as_longlong(rv);
-  }
-  __device__ PackType preOp(FUNC fn, PackType x) const {
-    union {
-      PackType pack;
-      double elt;
-    } u;
-    u.pack = x;
-    u.elt = FuncTraits<FUNC>().preOp(fn, u.elt);
-    return u.pack;
-  }
-  __device__ PackType postOp(FUNC fn, PackType x) const {
-    union {
-      PackType pack;
-      double elt;
-    } u;
-    u.pack = x;
-    u.elt = FuncTraits<FUNC>().postOp(fn, u.elt);
-    return u.pack;
-  }
-};
-
-template<class FUNC>
-struct MULTI<FUNC, uint64_t> {
-  static_assert(sizeof(PackType) == sizeof(uint64_t),
-      "PackType must be the same size as uint64_t.");
-  __device__ PackType operator()(FUNC fn, const PackType x, const PackType y) const {
-    uint64_t rv = fn(x, y);
-    return rv;
-  }
-  __device__ PackType preOp(FUNC fn, PackType x) const {
-    union {
-      PackType pack;
-      uint64_t elt;
-    } u;
-    u.pack = x;
-    u.elt = FuncTraits<FUNC>().preOp(fn, u.elt);
-    return u.pack;
-  }
-  __device__ PackType postOp(FUNC fn, PackType x) const {
-    union {
-      PackType pack;
-      uint64_t elt;
-    } u;
-    u.pack = x;
-    u.elt = FuncTraits<FUNC>().postOp(fn, u.elt);
-    return u.pack;
-  }
-};
-
-template<class FUNC>
-struct MULTI<FUNC, int64_t> {
-  static_assert(sizeof(PackType) == sizeof(int64_t),
-      "PackType must be the same size as int64_t.");
-  __device__ PackType operator()(FUNC fn, const PackType x, const PackType y) const {
-    int64_t rv = fn((int64_t)x, (int64_t)y);
-    return rv;
-  }
-  __device__ PackType preOp(FUNC fn, PackType x) const {
-    union {
-      PackType pack;
-      int64_t elt;
-    } u;
-    u.pack = x;
-    u.elt = FuncTraits<FUNC>().preOp(fn, u.elt);
-    return u.pack;
-  }
-  __device__ PackType postOp(FUNC fn, PackType x) const {
-    union {
-      PackType pack;
-      int64_t elt;
-    } u;
-    u.pack = x;
-    u.elt = FuncTraits<FUNC>().postOp(fn, u.elt);
-    return u.pack;
-  }
-};
-
-template<typename T> inline __device__
-T vFetch(const volatile T* ptr) {
-  return *ptr;
-}
-
-template<typename T> inline __device__
-void vStore(volatile T* ptr, const T val) {
-  *ptr = val;
-}
-
-#if CUDART_VERSION < 9000
-template<> inline __device__
-half vFetch<half>(const volatile half* ptr) {
-  half r;
-  r.x = ptr->x;
-  return r;
-}
-
-template<> inline __device__
-void vStore<half>(volatile half* ptr, const half val) {
-  ptr->x = val.x;
-}
-#else
-template<> inline __device__
-half vFetch<half>(const volatile half* ptr) {
-  half r;
-  r = ((half*)ptr)[0];
-  return r;
-}
-
-template<> inline __device__
-void vStore<half>(volatile half* ptr, const half val) {
-  ((half*)ptr)[0] = val;
-}
-#endif
-
-#if defined(__CUDA_BF16_TYPES_EXIST__)
-template<> inline __device__
-__nv_bfloat16 vFetch<__nv_bfloat16>(const volatile __nv_bfloat16* ptr) {
-  __nv_bfloat16 r;
-  r = ((__nv_bfloat16*)ptr)[0];
-  return r;
-}
-
-template<> inline __device__
-void vStore<__nv_bfloat16>(volatile __nv_bfloat16* ptr, const __nv_bfloat16 val) {
-  ((__nv_bfloat16*)ptr)[0] = val;
-}
-#endif
-
-typedef ulong2 Pack128;
-
-template<class FUNC, typename T>
-struct MULTI128 {
-  __device__ void operator()(FUNC fn, Pack128& x, Pack128 const& y) const {
-    x.x = MULTI<FUNC, T>()(fn, x.x, y.x);
-    x.y = MULTI<FUNC, T>()(fn, x.y, y.y);
-  }
-  __device__ void preOp(FUNC fn, Pack128 &x) const {
-    x.x = MULTI<FUNC, T>().preOp(fn, x.x);
-    x.y = MULTI<FUNC, T>().preOp(fn, x.y);
-  }
-  __device__ void postOp(FUNC fn, Pack128 &x) const {
-    x.x = MULTI<FUNC, T>().postOp(fn, x.x);
-    x.y = MULTI<FUNC, T>().postOp(fn, x.y);
-  }
-};
-
-inline __device__ void Fetch128(Pack128& v, const Pack128* p) {
-  asm volatile("ld.volatile.global.v2.u64 {%0,%1}, [%2];" : "=l"(v.x), "=l"(v.y) : "l"(p) : "memory");
-}
-inline __device__ void Store128(Pack128* p, Pack128& v) {
-  asm volatile("st.volatile.global.v2.u64 [%0], {%1,%2};" :: "l"(p), "l"(v.x), "l"(v.y) : "memory");
-}
-
-template<class FUNC, typename T, int UNROLL, int MINSRCS, int MAXSRCS, int MINDSTS, int MAXDSTS, int PreOpN, typename Int>
-__device__ __forceinline__ void ReduceCopyMulti(const int w, const int nw, const int t,
-    uint64_t* redOpArgs, bool postOp, int nsrcs, const T** s, int ndsts, T** d, const int elemOffset, const Int Nelem
+template<typename RedFn, typename T, int Unroll, int BytePerPack,
+         int MinSrcs, int MaxSrcs, int MinDsts, int MaxDsts, int PreOpSrcs,
+         typename IntBytes>
+__device__ __forceinline__ void reduceCopyPacks(
+    int nThreads, int &thread,
+    uint64_t redArg, uint64_t *preOpArgs, bool postOp,
+    int nSrcs, void **srcPtrs, int nDsts, void **dstPtrs,
+    IntBytes &nBytesBehind, IntBytes &nBytesAhead
   ) {
-  const Int inc = nw * UNROLL * WARP_SIZE;
-  Int offset = w * UNROLL * WARP_SIZE + t;
+  static_assert(std::is_signed<IntBytes>::value, "IntBytes must be a signed integral type.");
 
-  const T* srcs[MAXSRCS];
-  for (int i=0; i<MAXSRCS; i++) srcs[i] = s[i]+elemOffset+offset;
-  T* dsts[MAXDSTS];
-  for (int i=0; i<MAXDSTS; i++) dsts[i] = d[i]+elemOffset+offset;
+  // A hunk is the amount of contiguous data a warp consumes per loop iteration
+  // assuming all threads partake.
+  constexpr int BytePerHunk = Unroll*WARP_SIZE*BytePerPack;
+  int nWarps = nThreads/WARP_SIZE;
+  int warp = thread/WARP_SIZE;
+  int lane = thread%WARP_SIZE;
 
-  while (offset < Nelem) {
-    T vals[UNROLL];
-    // Load and reduce
-    for (int u = 0; u < UNROLL; ++u) vals[u] = vFetch(srcs[0]+u*WARP_SIZE);
-    if (PreOpN) {
-      FUNC fn(redOpArgs[0]);
-      for (int u = 0; u < UNROLL; ++u) vals[u] = FuncTraits<FUNC>().preOp(fn, vals[u]);
-    }
+  // This thread's initial position.
+  IntBytes threadBytesBehind = nBytesBehind + (warp*BytePerHunk + lane*BytePerPack);
+  IntBytes threadBytesAhead = nBytesAhead - (warp*BytePerHunk + lane*BytePerPack);
+  // Number of hunks to be consumed over all warps.
+  IntBytes nHunksAhead = nBytesAhead/BytePerHunk;
+  // Advance collective position.
+  nBytesBehind += nHunksAhead*BytePerHunk;
+  nBytesAhead -= nHunksAhead*BytePerHunk;
+  if (Unroll==1 && BytePerPack <= nBytesAhead) {
+    // Only Unroll=1 can do partial hunks (where not all threads partake).
+    nHunksAhead += 1;
+    nBytesBehind += nBytesAhead - (nBytesAhead%BytePerPack);
+    nBytesAhead = nBytesAhead%BytePerPack;
+  }
+  nHunksAhead -= warp;
 
-    #pragma unroll
-    for (int i=1; i<MINSRCS; i++) {
-      T vals2[UNROLL];
-      FUNC fn(redOpArgs[i]);
-      for (int u = 0; u < UNROLL; ++u) vals2[u] = vFetch(srcs[i]+u*WARP_SIZE);
-      if (i<PreOpN) {
-        for (int u = 0; u < UNROLL; ++u) vals2[u] = FuncTraits<FUNC>().preOp(fn, vals2[u]);
+  RedFn redFn(redArg);
+  uintptr_t minSrcs[MinSrcs + !MinSrcs];
+  uintptr_t minDsts[MinDsts + !MinDsts];
+  #pragma unroll
+  for (int s=0; s < MinSrcs; s++)
+    minSrcs[s] = cvta_to_global(srcPtrs[s]) + threadBytesBehind;
+  #pragma unroll
+  for (int d=0; d < MinDsts; d++)
+    minDsts[d] = cvta_to_global(dstPtrs[d]) + threadBytesBehind;
+
+  // We dictate loop termination condition according to whether partial hunks
+  // can be handled or not.
+  while (Unroll==1 ? (BytePerPack <= threadBytesAhead) : (0 < nHunksAhead)) {
+    BytePack<BytePerPack> acc[Unroll];
+
+    { RedFn preFn(0 < PreOpSrcs ? preOpArgs[0] : 0);
+      #pragma unroll Unroll
+      for (int u=0; u < Unroll; u++) {
+        // Use volatile loads in case credits are polled for with volatile (instead of acquire).
+        acc[u] = ld_volatile_global<BytePerPack>(minSrcs[0]);
+        minSrcs[0] += WARP_SIZE*BytePerPack;
+        if (0 < PreOpSrcs) acc[u] = applyPreOp(preFn, acc[u]);
       }
-      for (int u = 0; u < UNROLL; ++u) vals[u] = fn(vals[u], vals2[u]);
     }
-    #pragma unroll
-    for (int i=MINSRCS; i<MAXSRCS; i++) {
-      if (i<nsrcs) {
-        T vals2[UNROLL];
-        FUNC fn(redOpArgs[i]);
-        for (int u = 0; u < UNROLL; ++u) vals2[u] = vFetch(srcs[i]+u*WARP_SIZE);
-        if (i<PreOpN) {
-          for (int u = 0; u < UNROLL; ++u) vals2[u] = FuncTraits<FUNC>().preOp(fn, vals2[u]);
-        }
-        for (int u = 0; u < UNROLL; ++u) vals[u] = fn(vals[u], vals2[u]);
+
+    #pragma unroll (MinSrcs-1 + !(MinSrcs-1))
+    for (int s=1; s < MinSrcs; s++) {
+      BytePack<BytePerPack> tmp[Unroll];
+      RedFn preFn(s < PreOpSrcs ? preOpArgs[s] : 0);
+      #pragma unroll Unroll
+      for (int u=0; u < Unroll; u++) {
+        // Use volatile loads in case credits are polled for with volatile (instead of acquire).
+        tmp[u] = ld_volatile_global<BytePerPack>(minSrcs[s]);
+        minSrcs[s] += WARP_SIZE*BytePerPack;
+      }
+      #pragma unroll Unroll
+      for (int u=0; u < Unroll; u++) {
+        if (s < PreOpSrcs) tmp[u] = applyPreOp(preFn, tmp[u]);
+        acc[u] = applyReduce(redFn, acc[u], tmp[u]);
+      }
+    }
+
+    for (int s=MinSrcs; (MinSrcs < MaxSrcs) && (s < MaxSrcs) && (s < nSrcs); s++) {
+      uintptr_t src = cvta_to_global(srcPtrs[s]) + threadBytesBehind;
+      BytePack<BytePerPack> tmp[Unroll];
+      RedFn preFn(s < PreOpSrcs ? preOpArgs[s] : 0);
+      #pragma unroll Unroll
+      for (int u=0; u < Unroll; u++) {
+        // Use volatile loads in case credits are polled for with volatile (instead of acquire).
+        tmp[u] = ld_volatile_global<BytePerPack>(src);
+        src += WARP_SIZE*BytePerPack;
+      }
+      #pragma unroll Unroll
+      for (int u=0; u < Unroll; u++) {
+        if (s < PreOpSrcs) tmp[u] = applyPreOp(preFn, tmp[u]);
+        acc[u] = applyReduce(redFn, acc[u], tmp[u]);
       }
     }
 
     if (postOp) {
-      FUNC fn(redOpArgs[0]);
-      #pragma unroll
-      for (int u = 0; u < UNROLL; ++u) vals[u] = FuncTraits<FUNC>().postOp(fn, vals[u]);
+      #pragma unroll Unroll
+      for (int u=0; u < Unroll; u++)
+        acc[u] = applyPostOp(redFn, acc[u]);
     }
 
-    // Store
-    #pragma unroll
-    for (int i = 0; i < MINDSTS; i++) {
-      for (int u = 0; u < UNROLL; ++u) vStore(dsts[i]+u*WARP_SIZE, vals[u]);
-    }
-    #pragma unroll
-    for (int i=MINDSTS; i<MAXDSTS; i++) {
-      if (i<ndsts) {
-        for (int u = 0; u < UNROLL; ++u) vStore(dsts[i]+u*WARP_SIZE, vals[u]);
+    #pragma unroll (MinDsts + !MinDsts)
+    for (int d=0; d < MinDsts; d++) {
+      #pragma unroll Unroll
+      for (int u=0; u < Unroll; u++) {
+        st_global<BytePerPack>(minDsts[d], acc[u]);
+        minDsts[d] += WARP_SIZE*BytePerPack;
       }
     }
-    for (int i=0; i<MAXSRCS; i++) srcs[i] += inc;
-    for (int i=0; i<MAXDSTS; i++) dsts[i] += inc;
-    offset += inc;
+    for (int d=MinDsts; (MinDsts < MaxDsts) && (d < MaxDsts) && (d < nDsts); d++) {
+      uintptr_t dst = cvta_to_global(dstPtrs[d]) + threadBytesBehind;
+      #pragma unroll Unroll
+      for (int u=0; u < Unroll; u++) {
+        st_global<BytePerPack>(dst, acc[u]);
+        dst += WARP_SIZE*BytePerPack;
+      }
+    }
+
+    nWarps = nThreads/WARP_SIZE;
+    #pragma unroll
+    for (int s=0; s < MinSrcs; s++) minSrcs[s] += (nWarps-1)*BytePerHunk;
+    #pragma unroll
+    for (int d=0; d < MinDsts; d++) minDsts[d] += (nWarps-1)*BytePerHunk;
+    threadBytesBehind += nWarps*BytePerHunk;
+    threadBytesAhead -= nWarps*BytePerHunk;
+    nHunksAhead -= nWarps;
   }
+
+  nWarps = nThreads/WARP_SIZE;
+  warp = thread/WARP_SIZE;
+  lane = thread%WARP_SIZE;
+  // The last loop iteration could have been partial, i.e. not taken by all
+  // threads. The threads that weren't included need an extra subtraction to
+  // make the value warp uniform.
+  if (Unroll==1 && nHunksAhead > 0) nHunksAhead -= nWarps;
+  // Rotate warps so the warp which got the least work here will be warp 0.
+  // This effectively assigns: warp = (warp-nHunks+nWarps)%nWarps;
+  warp = -nHunksAhead;
+  thread = warp*WARP_SIZE + lane;
 }
 
-template<class FUNC, typename T, int UNROLL, int MINSRCS, int MAXSRCS, int MINDSTS, int MAXDSTS, int PreOpN, typename Int>
-__device__ __forceinline__ void ReduceCopy128bMulti(const int w, const int nw, const int t,
-    uint64_t* redOpArgs, bool postOp, int nsrcs, const T** s, int ndsts, T** d, const int elemOffset, const Int Npack
-  ) {
-  const Int inc = nw * UNROLL * WARP_SIZE;
-  Int offset = w * UNROLL * WARP_SIZE + t;
-
-  const Pack128* srcs[MAXSRCS];
-  for (int i=0; i<MAXSRCS; i++) srcs[i] = ((const Pack128*)(s[i]+elemOffset))+offset;
-  Pack128* dsts[MAXDSTS];
-  for (int i=0; i<MAXDSTS; i++) dsts[i] = ((Pack128*)(d[i]+elemOffset))+offset;
-
-  while (offset < Npack) {
-    Pack128 vals[UNROLL];
-    // Load and reduce
-    for (int u = 0; u < UNROLL; ++u) Fetch128(vals[u], srcs[0]+u*WARP_SIZE);
-    if (PreOpN) {
-      FUNC fn(redOpArgs[0]);
-      for (int u = 0; u < UNROLL; ++u) MULTI128<FUNC, T>().preOp(fn, vals[u]);
-    }
-
-    #pragma unroll
-    for (int i=1; i<MINSRCS; i++) {
-      Pack128 vals2[UNROLL];
-      FUNC fn(redOpArgs[i]);
-      for (int u = 0; u < UNROLL; ++u) Fetch128(vals2[u], srcs[i]+u*WARP_SIZE);
-      if (i<PreOpN) {
-        for (int u = 0; u < UNROLL; ++u) MULTI128<FUNC, T>().preOp(fn, vals2[u]);
-      }
-      for (int u = 0; u < UNROLL; ++u) MULTI128<FUNC, T>()(fn, vals[u], vals2[u]);
-    }
-    #pragma unroll
-    for (int i=MINSRCS; i<MAXSRCS; i++) {
-      if (i<nsrcs) {
-        Pack128 vals2[UNROLL];
-        FUNC fn(redOpArgs[i]);
-        for (int u = 0; u < UNROLL; ++u) Fetch128(vals2[u], srcs[i]+u*WARP_SIZE);
-        if (i<PreOpN) {
-          for (int u = 0; u < UNROLL; ++u) MULTI128<FUNC, T>().preOp(fn, vals2[u]);
-        }
-        for (int u = 0; u < UNROLL; ++u) MULTI128<FUNC, T>()(fn, vals[u], vals2[u]);
-      }
-    }
-
-    if (postOp) {
-      FUNC fn(redOpArgs[0]);
-      #pragma unroll
-      for (int u = 0; u < UNROLL; ++u) MULTI128<FUNC, T>().postOp(fn, vals[u]);
-    }
-
-    // Store
-    #pragma unroll
-    for (int i = 0; i < MINDSTS; i++) {
-      for (int u = 0; u < UNROLL; ++u) Store128(dsts[i]+u*WARP_SIZE, vals[u]);
-    }
-    #pragma unroll
-    for (int i=MINDSTS; i<MAXDSTS; i++) {
-      if (i<ndsts) {
-        for (int u = 0; u < UNROLL; ++u) Store128(dsts[i]+u*WARP_SIZE, vals[u]);
-      }
-    }
-    for (int i=0; i<MAXSRCS; i++) srcs[i] += inc;
-    for (int i=0; i<MAXDSTS; i++) dsts[i] += inc;
-    offset += inc;
-  }
-}
-
-template <typename T>
-__device__ int ptrAlign128(T* ptr) { return (uint64_t)ptr % alignof(Pack128); }
-
-#define PACKELEMS (sizeof(Pack128) / sizeof(T))
-
-template<int UNROLL, class FUNC, typename T, int MINSRCS, int MAXSRCS, int MINDSTS, int MAXDSTS, int PreOpN, typename Int>
+template<int Unroll, typename RedFn, typename T,
+         int MinSrcs, int MaxSrcs, int MinDsts, int MaxDsts, int PreOpSrcs,
+         typename IntBytes>
 __device__ __forceinline__ void ReduceOrCopyMulti(
-    const int tid, const int nthreads, uint64_t* redOpArgs, bool postOp, int nsrcs, const T** srcs, int ndsts, T** dsts, Int N
+    int thread, int nThreads,
+    uint64_t redArg, uint64_t *preOpArgs, bool postOp,
+    int nSrcs, void **srcPtrs, int nDsts, void **dstPtrs,
+    IntBytes nElts
   ) {
-  Int Nrem = N;
-  if (Nrem <= 0) return;
-
-  int w = tid / WARP_SIZE;       // Warp number
-  int nw = nthreads / WARP_SIZE; // Number of warps
-  int t = tid % WARP_SIZE;       // Thread (inside the warp)
+  //int nWarps = nThreads/WARP_SIZE;
+  //int warp = thread/WARP_SIZE;
+  int lane = thread%WARP_SIZE;
 
   // Check that all is 16B aligned. If not don't use 16B load/stores.
-  int align = 0;
-  #pragma unroll
-  for (int i=0; i<MINSRCS; i++) align |= ptrAlign128(srcs[i]);
-  for (int i=MINSRCS; i<MAXSRCS && i<nsrcs; i++) align |= ptrAlign128(srcs[i]);
-  #pragma unroll
-  for (int i=0; i<MINDSTS; i++) align |= ptrAlign128(dsts[i]);
-  for (int i=MINDSTS; i<MAXDSTS && i<ndsts; i++) align |= ptrAlign128(dsts[i]);
+  int aligned = 1;
+  if (lane < nSrcs) aligned &= 0 == cvta_to_global(srcPtrs[lane])%16;
+  if (lane < nDsts) aligned &= 0 == cvta_to_global(dstPtrs[lane])%16;
+  aligned = __all_sync(~0u, aligned);
 
-  Int offset = 0;
-  if (align == 0) {
-    // fast path: use 128b loads/stores to do the bulk of the work,
-    // assuming the pointers we have are all 128-bit aligned.
+  IntBytes nBytesBehind = 0;
+  IntBytes nBytesAhead = nElts*sizeof(T);
+  if (aligned) {
+    reduceCopyPacks<RedFn, T, Unroll, /*BytePerPack=*/16,
+      MinSrcs, MaxSrcs, MinDsts, MaxDsts, PreOpSrcs>
+      (nThreads, /*&*/thread, redArg, preOpArgs, postOp,
+       nSrcs, srcPtrs, nDsts, dstPtrs, /*&*/nBytesBehind, /*&*/nBytesAhead);
+    if (nBytesAhead == 0) return;
 
-    // main loop
-    Int Npack = (Nrem / (PACKELEMS*UNROLL*WARP_SIZE)) * (UNROLL*WARP_SIZE); // round down
-    Int Nelem = Npack * PACKELEMS;
-
-    ReduceCopy128bMulti<FUNC, T, UNROLL, MINSRCS, MAXSRCS, MINDSTS, MAXDSTS, PreOpN>
-      (w, nw, t, redOpArgs, postOp, nsrcs, srcs, ndsts, dsts, offset, Npack);
-
-    Nrem -= Nelem;
-    if (Nrem == 0) return;
-    offset += Nelem;
-
-    // slightly less optimized for section when we don't have full unrolling
-    Npack = Nrem / PACKELEMS;
-    Nelem = Npack * PACKELEMS;
-
-    ReduceCopy128bMulti<FUNC, T, 1, MINSRCS, MAXSRCS, MINDSTS, MAXDSTS, PreOpN>
-      (w, nw, t, redOpArgs, postOp, nsrcs, srcs, ndsts, dsts, offset, Npack);
-
-    Nrem -= Nelem;
-    if (Nrem == 0) return;
-    offset += Nelem;
+    reduceCopyPacks<RedFn, T, /*Unroll=*/1, /*BytePerPack=*/16,
+      MinSrcs, MaxSrcs, MinDsts, MaxDsts, PreOpSrcs>
+      (nThreads, /*&*/thread, redArg, preOpArgs, postOp,
+       nSrcs, srcPtrs, nDsts, dstPtrs, /*&*/nBytesBehind, /*&*/nBytesAhead);
+    if (nBytesAhead == 0) return;
   }
 
-  // unrolled, by-type (mostly for unaligned buffers)
-  Int Nelem = (Nrem / (UNROLL*PACKELEMS/2*WARP_SIZE)) * (UNROLL*PACKELEMS/2*WARP_SIZE); // round down
+  reduceCopyPacks<RedFn, T, Unroll*(16/sizeof(T))/2, /*BytePerPack=*/sizeof(T),
+    MinSrcs, MaxSrcs, MinDsts, MaxDsts, PreOpSrcs>
+    (nThreads, /*&*/thread, redArg, preOpArgs, postOp,
+     nSrcs, srcPtrs, nDsts, dstPtrs, /*&*/nBytesBehind, /*&*/nBytesAhead);
+  if (nBytesAhead == 0) return;
 
-  ReduceCopyMulti<FUNC, T, UNROLL*PACKELEMS/2, MINSRCS, MAXSRCS, MINDSTS, MAXDSTS, PreOpN>
-    (w, nw, t, redOpArgs, postOp, nsrcs, srcs, ndsts, dsts, offset, Nelem);
-
-  Nrem -= Nelem;
-  if (Nrem == 0) return;
-  offset += Nelem;
-
-  // no unroll, by type. Should finish what's remaining.
-  ReduceCopyMulti<FUNC, T, 1, MINSRCS, MAXSRCS, MINDSTS, MAXDSTS, PreOpN>
-    (w, nw, t, redOpArgs, postOp, nsrcs, srcs, ndsts, dsts, offset, Nrem);
+  reduceCopyPacks<RedFn, T, /*Unroll=*/1, /*BytePerPack=*/sizeof(T),
+    MinSrcs, MaxSrcs, MinDsts, MaxDsts, PreOpSrcs>
+    (nThreads, /*&*/thread, redArg, preOpArgs, postOp,
+     nSrcs, srcPtrs, nDsts, dstPtrs, /*&*/nBytesBehind, /*&*/nBytesAhead);
 }
 
+// Copies from srcAddr to dstAddr using multimem load/store. The amount copied
+// will be at most Unroll*BytePerPack*WARP_SIZE. If Partial=1, then the amount
+// will be the min() of that and nBytesAhead. If srcAddr is not BytePerPack
+// aligned then the amount copied will be less by (srcAddr%BytePerPack) since
+// we begin loads at the first pack containing the first element.
+template<typename RedFn, typename T, int Unroll, int BytePerPack,
+         bool SrcAligned, // is srcAddr aligned to BytePerPack
+         bool DstAligned, // are dstAddr and nBytesAhead both aligned to BytePerPack
+         bool Partial, // is this a possibly partial hunk
+         typename IntBytes>
+__device__ __forceinline__ void copyMultimemMultimem_WarpUnrolled(
+    int lane, RedFn redFn, bool postOp, uintptr_t srcAddr, uintptr_t dstAddr,
+    IntBytes nBytesAhead, uint32_t scratchAddr
+  ) {
+  int srcMisalign = SrcAligned ? 0 : srcAddr%BytePerPack;
+  srcAddr -= srcMisalign;
+
+  BytePack<BytePerPack> reg[Unroll];
+  int offset = lane*BytePerPack;
+  #pragma unroll Unroll
+  for (int u=0; u < Unroll; u++) {
+    if (!Partial || (offset < srcMisalign + nBytesAhead)) {
+      reg[u] = applyLoadMultimem(redFn, srcAddr+offset);
+      if (postOp) reg[u] = applyPostOp(redFn, reg[u]);
+    }
+    offset += WARP_SIZE*BytePerPack;
+  }
+
+  if (SrcAligned && DstAligned) {
+    offset = lane*BytePerPack;
+    #pragma unroll Unroll
+    for (int u=0; u < Unroll; u++) {
+      if (!Partial || offset < nBytesAhead) {
+        multimem_st_global<BytePerPack>(dstAddr+offset, reg[u]);
+      }
+      offset += WARP_SIZE*BytePerPack;
+    }
+  } else {
+    __syncwarp();
+    offset = lane*BytePerPack;
+    #pragma unroll Unroll
+    for (int u=0; u < Unroll; u++) {
+      if (!Partial || (offset < srcMisalign + nBytesAhead)) {
+        st_shared<BytePerPack>(scratchAddr+offset, reg[u]);
+      }
+      offset += WARP_SIZE*BytePerPack;
+    }
+    __syncwarp();
+    if (!SrcAligned) {
+      // Ignore the beginning of the first pack corresponding to bytes overread
+      // due to misalignment.
+      nBytesAhead = min(nBytesAhead, Unroll*WARP_SIZE*BytePerPack - srcMisalign);
+    }
+    copyGlobalShared_WarpUnrolled
+      <sizeof(T), /*MaxBytes=*/Unroll*WARP_SIZE*BytePerPack, /*Multimem=*/1>
+        (lane, dstAddr, scratchAddr+srcMisalign, nBytesAhead);
+  }
+}
+
+// copyMultimemMultimem_IfEnabled has two overloads: the enabled case whose first arg
+// has type `std::true_type` and the disabled case with first arg `std::false_type`.
+// This is to guard the template instantiations of Apply_LoadMultimem on types/ops where
+// they aren't supported. A nicer approach is to use C++17's "if constexpr".
+template<typename RedFn, typename IntBytes>
+__device__ __forceinline__ void copyMultimemMultimem_IfEnabled(
+    std::false_type enabled/*=false*/,
+    int thread, int nThreads, uint64_t redArg, bool postOp,
+    void *srcPtr, void *dstPtr, IntBytes nElts, uint32_t warpScratchAddr
+  ) {
+  // nop
+}
+
+template<typename RedFn, typename IntBytes>
+__device__ __forceinline__ void copyMultimemMultimem_IfEnabled(
+    std::true_type enabled/*=true*/,
+    int thread, int nThreads, uint64_t redArg, bool postOp,
+    void *srcPtr, void *dstPtr, IntBytes nElts, uint32_t warpScratchAddr
+  ) {
+  static_assert(std::is_signed<IntBytes>::value, "IntBytes must be a signed integral type.");
+
+  constexpr int BytePerPack = Apply_LoadMultimem<RedFn>::PackSize;
+  using T = typename RedFn::EltType;
+  constexpr int Unroll = ncclNvlsUnroll(BytePerPack);
+  constexpr int BytePerHunk = Unroll*WARP_SIZE*BytePerPack;
+  int nWarps = nThreads/WARP_SIZE;
+  int warp = thread/WARP_SIZE;
+  int lane = thread%WARP_SIZE;
+  RedFn redFn(redArg);
+
+  uintptr_t srcAddr = cvta_to_global(srcPtr);
+  uintptr_t dstAddr = cvta_to_global(dstPtr);
+  IntBytes warpBytesAhead = nElts*sizeof(T);
+  bool partialHunkIsFront;
+
+  // First handle misalignment of srcAddr.
+  if ((BytePerPack != sizeof(T)) && (srcAddr%BytePerPack != 0)) {
+    // If srcAddr isn't pack aligned then the first hunk processed will be short
+    // the same number of bytes as srcAddr's misalignment.
+    if (warp == 0) {
+      partialHunkIsFront = true;
+      goto PartialHunk; // "call" PartialHunk()
+    PartialHunkFrontReturn:
+      warp = nWarps;
+    }
+    warp -= 1; // Rotate warp numbers for load balancing
+    int advanced = BytePerHunk-(srcAddr%BytePerPack); // since copyMultimemMultimem_WarpUnrolled shorts by the misalignment
+    srcAddr += advanced; // srcAddr is now pack aligned
+    dstAddr += advanced;
+    warpBytesAhead -= advanced;
+  }
+
+  warpBytesAhead -= warp*BytePerHunk;
+  srcAddr += warp*BytePerHunk;
+  dstAddr += warp*BytePerHunk;
+  // Now that srcAddr is pack aligned detect if dstAddr is pack aligned.
+  if ((BytePerPack == sizeof(T)) || (dstAddr%BytePerPack == 0)) {
+    while (BytePerHunk <= warpBytesAhead) {
+      copyMultimemMultimem_WarpUnrolled
+        <RedFn, T, Unroll, BytePerPack, /*SrcAligned=*/true, /*DstAligned=*/true, /*Partial=*/false>
+          (lane, redFn, postOp, srcAddr, dstAddr, warpBytesAhead, warpScratchAddr);
+      srcAddr += nWarps*BytePerHunk;
+      dstAddr += nWarps*BytePerHunk;
+      warpBytesAhead -= nWarps*BytePerHunk;
+    }
+  } else {
+    while (BytePerHunk <= warpBytesAhead) {
+      copyMultimemMultimem_WarpUnrolled
+        <RedFn, T, Unroll, BytePerPack, /*SrcAligned=*/true, /*DstAligned=*/false, /*Partial=*/false>
+          (lane, redFn, postOp, srcAddr, dstAddr, warpBytesAhead, warpScratchAddr);
+      srcAddr += nWarps*BytePerHunk;
+      dstAddr += nWarps*BytePerHunk;
+      warpBytesAhead -= nWarps*BytePerHunk;
+    }
+  }
+
+  if (0 < warpBytesAhead) {
+    partialHunkIsFront = false;
+    goto PartialHunk; // "call" PartialHunk()
+  PartialHunkBackReturn:;
+  }
+  return;
+
+PartialHunk:
+  // We have to handle a partial hunk possibly at the front and back of the
+  // buffer. We generate the code once here since its a lot of instructions,
+  // and then simulate function calls with gotos.
+  copyMultimemMultimem_WarpUnrolled
+    <RedFn, T, Unroll, BytePerPack, /*SrcAligned=*/false, /*DstAligned=*/false, /*Partial=*/true>
+      (lane, redFn, postOp, srcAddr, dstAddr, warpBytesAhead, warpScratchAddr);
+  if (partialHunkIsFront) goto PartialHunkFrontReturn;
+  goto PartialHunkBackReturn;
+}
+
+template<typename RedFn, typename IntBytes>
+__device__ __forceinline__ void copyMultimemMultimem(
+    int thread, int nThreads, uint64_t redArg, bool postOp,
+    void *srcPtr, void *dstPtr, IntBytes nElts, uint32_t warpScratchAddr
+  ) {
+  constexpr bool Enabled = Apply_LoadMultimem<RedFn>::PackSize != 0;
+  copyMultimemMultimem_IfEnabled<RedFn>(
+    /*enabled=*/std::integral_constant<bool, Enabled>(),
+    thread, nThreads, redArg, postOp, srcPtr, dstPtr, nElts, warpScratchAddr);
+}
 #endif // COMMON_KERNEL_H_

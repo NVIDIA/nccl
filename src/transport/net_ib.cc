@@ -363,7 +363,9 @@ enum ncclIbCommState {
   ncclIbCommStateAccept = 3,
   ncclIbCommStateSend = 4,
   ncclIbCommStateRecv = 5,
-  ncclIbCommStateConnected = 6,
+  ncclIbCommStateConnecting = 6,
+  ncclIbCommStateConnected = 7,
+  ncclIbCommStatePendingReady = 8,
 };
 
 struct ncclIbCommStage {
@@ -599,8 +601,10 @@ ncclResult_t ncclIbConnect(int dev, void* opaqueHandle, void** sendComm) {
   int ready;
   *sendComm = NULL;
 
-  if (stage->state == ncclIbCommStateConnect) goto ib_connect_check;
-  if (stage->state == ncclIbCommStateSend) goto ib_send;
+  if (stage->state == ncclIbCommStateConnect)    goto ib_connect_check;
+  if (stage->state == ncclIbCommStateSend)       goto ib_send;
+  if (stage->state == ncclIbCommStateConnecting) goto ib_connect;
+  if (stage->state == ncclIbCommStateConnected)  goto ib_send_ready;
   if (stage->state != ncclIbCommStateStart) {
     WARN("Error: trying to connect already connected sendComm");
     return ncclInternalError;
@@ -664,11 +668,37 @@ ib_connect_check:
 
 ib_send:
   NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_SEND, &comm->sock, stage->buffer, sizeof(qpInfo), &stage->offset));
-  if (stage->offset != sizeof(qpInfo))
-    return ncclSuccess;
+  if (stage->offset != sizeof(qpInfo)) return ncclSuccess;
+
+  stage->state = ncclIbCommStateConnecting;
+  stage->offset = 0;
+  // Clear the staging buffer for re-use
+  memset(stage->buffer, 0, sizeof(qpInfo));
+
+ib_connect:
+  struct ncclIbQpInfo remQpInfo;
+  NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_RECV, &comm->sock, stage->buffer, sizeof(ncclIbQpInfo), &stage->offset));
+  if (stage->offset != sizeof(remQpInfo)) return ncclSuccess;
+
+  memcpy(&remQpInfo, stage->buffer, sizeof(ncclIbQpInfo));
+
+  for (int q=0; q<comm->nqps; q++) {
+    struct ibv_qp* qp = comm->qps[q];
+    NCCLCHECK(ncclIbRtrQp(qp, remQpInfo.qpn[q], &remQpInfo));
+    NCCLCHECK(ncclIbRtsQp(qp));
+  }
+
+  comm->ready = 1;
+  stage->state = ncclIbCommStateConnected;
+  stage->offset = 0;
+
+ib_send_ready:
+  NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_SEND, &comm->sock, &comm->ready, sizeof(int), &stage->offset));
+  if (stage->offset != sizeof(int)) return ncclSuccess;
 
   free(stage->buffer);
-  stage->state = ncclIbCommStateConnected;
+  stage->state = ncclIbCommStateStart;
+
   *sendComm = comm;
   return ncclSuccess;
 }
@@ -685,8 +715,9 @@ ncclResult_t ncclIbAccept(void* listenComm, void** recvComm) {
   if (stage->state == ncclIbCommStateAccept) goto ib_accept_check;
   if (stage->state == ncclIbCommStateRecv) goto ib_recv;
   if (stage->state == ncclIbCommStateSend) goto ib_send;
+  if (stage->state == ncclIbCommStatePendingReady) goto ib_recv_ready;
   if (stage->state != ncclIbCommStateStart) {
-    WARN("Listencomm in unknown state %d\n", stage->state);
+    WARN("Listencomm in unknown state %d", stage->state);
     return ncclInternalError;
   }
 
@@ -704,10 +735,10 @@ ib_accept_check:
   stage->state = ncclIbCommStateRecv;
   stage->offset = 0;
   NCCLCHECK(ncclIbMalloc((void**)&stage->buffer, sizeof(remQpInfo)));
+
 ib_recv:
   NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_RECV, &rComm->sock, stage->buffer, sizeof(remQpInfo), &stage->offset));
-  if (stage->offset != sizeof(remQpInfo))
-    return ncclSuccess;
+  if (stage->offset != sizeof(remQpInfo)) return ncclSuccess;
 
   /* copy back the received info */
   memcpy(&remQpInfo, stage->buffer, sizeof(struct ncclIbQpInfo));
@@ -780,9 +811,17 @@ ib_recv:
   if (stage->buffer) free(stage->buffer);
   NCCLCHECK(ncclIbMalloc((void**)&stage->buffer, sizeof(struct ncclIbQpInfo)));
   memcpy(stage->buffer, &qpInfo, sizeof(struct ncclIbQpInfo));
+
 ib_send:
   NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_SEND, &rComm->sock, stage->buffer, sizeof(struct ncclIbQpInfo), &stage->offset));
   if (stage->offset < sizeof(struct ncclIbQpInfo)) return ncclSuccess;
+
+  stage->offset = 0;
+  stage->state = ncclIbCommStatePendingReady;
+
+ib_recv_ready:
+  NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_RECV,  &rComm->sock, &rComm->ready, sizeof(int), &stage->offset));
+  if (stage->offset != sizeof(int)) return ncclSuccess;
 
   free(stage->buffer);
   *recvComm = rComm;
@@ -812,36 +851,6 @@ ncclResult_t ncclIbGetRequest(struct ncclIbVerbs* verbs, struct ncclIbRequest** 
 }
 ncclResult_t ncclIbFreeRequest(struct ncclIbRequest* r) {
   r->type = NCCL_NET_IB_REQ_UNUSED;
-  return ncclSuccess;
-}
-
-ncclResult_t ncclSendCheck(struct ncclIbSendComm* comm) {
-  struct ncclIbQpInfo remQpInfo;
-
-  // Do not block on this receive, return if not ready.
-  int bytes = 0;
-  NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_RECV, &comm->sock, &remQpInfo, sizeof(remQpInfo), &bytes));
-  if (bytes == 0) return ncclSuccess; // Try again later
-  NCCLCHECK(ncclSocketWait(NCCL_SOCKET_RECV, &comm->sock, &remQpInfo, sizeof(remQpInfo), &bytes));
-
-  for (int q=0; q<comm->nqps; q++) {
-    struct ibv_qp* qp = comm->qps[q];
-    NCCLCHECK(ncclIbRtrQp(qp, remQpInfo.qpn[q], &remQpInfo));
-    NCCLCHECK(ncclIbRtsQp(qp));
-  }
-  comm->ready = 1;
-  // Block until this is done. It *should* not block indefinitely.
-  NCCLCHECK(ncclSocketSend(&comm->sock, &comm->ready, sizeof(int)));
-
-  return ncclSuccess;
-}
-
-ncclResult_t ncclRecvCheck(struct ncclIbRecvComm* comm) {
-  // Do not block on this receive, return if not ready.
-  int bytes = 0;
-  NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_RECV, &comm->sock, &comm->ready, sizeof(int), &bytes));
-  if (bytes == 0) return ncclSuccess; // Try again later
-  NCCLCHECK(ncclSocketWait(NCCL_SOCKET_RECV, &comm->sock, &comm->ready, sizeof(int), &bytes));
   return ncclSuccess;
 }
 
@@ -1020,7 +1029,7 @@ ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
 
 ncclResult_t ncclIbIsend(void* sendComm, void* data, int size, int tag, void* mhandle, void** request) {
   struct ncclIbSendComm* comm = (struct ncclIbSendComm*)sendComm;
-  if (comm->ready == 0) NCCLCHECK(ncclSendCheck(comm));
+  if (comm->ready == 0) { WARN("NET/IB: ncclIbIsend() called when comm->ready == 0"); return ncclInternalError; }
   if (comm->ready == 0) { *request = NULL; return ncclSuccess; }
 
   struct ibv_mr* mr = (struct ibv_mr*)mhandle;
@@ -1153,7 +1162,7 @@ ncclResult_t ncclIbPostFifo(struct ncclIbRecvComm* comm, int n, void** data, int
 
 ncclResult_t ncclIbIrecv(void* recvComm, int n, void** data, int* sizes, int* tags, void** mhandles, void** request) {
   struct ncclIbRecvComm* comm = (struct ncclIbRecvComm*)recvComm;
-  if (comm->ready == 0) NCCLCHECK(ncclRecvCheck(comm));
+  if (comm->ready == 0) { WARN("NET/IB: ncclIbIrecv() called when comm->ready == 0"); return ncclInternalError; }
   if (comm->ready == 0) { *request = NULL; return ncclSuccess; }
   if (n > NCCL_NET_IB_MAX_RECVS) return ncclInternalError;
 

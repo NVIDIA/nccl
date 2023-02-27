@@ -13,14 +13,15 @@ ncclResult_t initChannel(struct ncclComm* comm, int channelId) {
   if (channel->id != -1) return ncclSuccess;
 
   int nRanks = comm->nRanks;
+  int nPeers = nRanks + 1 /* Collnet */ + comm->localRanks /* NVLS */;
   channel->id = channelId;
   channel->workFifoSent = 0;
 
   NCCLCHECK(ncclStrongStreamAcquireUncaptured(&comm->deviceStream));
 
   // The extra on nRanks+1 is for collnet root (i.e. network)
-  channel->peers = ncclMemoryStackAlloc<struct ncclChannelPeer>(&comm->memPermanent, nRanks+1);
-  NCCLCHECK(ncclCudaCallocAsync(&channel->devPeers, nRanks+1, comm->deviceStream.cudaStream));
+  channel->peers = ncclMemoryStackAlloc<struct ncclChannelPeer>(&comm->memPermanent, nPeers);
+  NCCLCHECK(ncclCudaCallocAsync(&channel->devPeers, nPeers, comm->deviceStream.cudaStream));
   ncclCommPushCudaFree(comm, channel->devPeers);
 
   channel->ring.userRanks = ncclMemoryStackAlloc<int>(&comm->memPermanent, nRanks);
@@ -29,7 +30,7 @@ ncclResult_t initChannel(struct ncclComm* comm, int channelId) {
 
   NCCLCHECK(ncclStrongStreamRelease(ncclCudaGraphNone(), &comm->deviceStream));
 
-  for (int r=0; r < nRanks+1; ++r) {
+  for (int r=0; r < nPeers; ++r) {
     for (int b=0; b < NCCL_MAX_CONNS; b++) {
       channel->peers[r].send[b].comm = comm;
       channel->peers[r].recv[b].comm = comm;

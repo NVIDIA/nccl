@@ -1,12 +1,12 @@
 /*
-* Copyright 2021  NVIDIA Corporation.  All rights reserved.
+* Copyright 2021-2022  NVIDIA Corporation.  All rights reserved.
 *
 * Licensed under the Apache License v2.0 with LLVM Exceptions.
 * See https://llvm.org/LICENSE.txt for license information.
 * SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 */
 
-#include "nvtx3/nvToolsExt.h"
+#include "nvToolsExt.h"
 
 #ifndef NVTOOLSEXT_PAYLOAD_H
 #define NVTOOLSEXT_PAYLOAD_H

@@ -92,6 +92,6 @@ ncclResult_t ncclSocketProgress(int op, struct ncclSocket* sock, void* ptr, int 
 ncclResult_t ncclSocketWait(int op, struct ncclSocket* sock, void* ptr, int size, int* offset);
 ncclResult_t ncclSocketSend(struct ncclSocket* sock, void* ptr, int size);
 ncclResult_t ncclSocketRecv(struct ncclSocket* sock, void* ptr, int size);
-ncclResult_t ncclSocketTryRecv(struct ncclSocket* sock, void* ptr, int size, int* closed);
+ncclResult_t ncclSocketTryRecv(struct ncclSocket* sock, void* ptr, int size, int* closed, bool blocking);
 ncclResult_t ncclSocketClose(struct ncclSocket* sock);
 #endif

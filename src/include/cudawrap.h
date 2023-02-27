@@ -73,9 +73,31 @@ DECLARE_CUDA_PFN_EXTERN(cuGetErrorName, 6000);
 DECLARE_CUDA_PFN_EXTERN(cuMemGetAddressRange, 3020);
 DECLARE_CUDA_PFN_EXTERN(cuCtxCreate, 3020);
 DECLARE_CUDA_PFN_EXTERN(cuCtxDestroy, 4000);
+DECLARE_CUDA_PFN_EXTERN(cuCtxGetCurrent, 4000);
 DECLARE_CUDA_PFN_EXTERN(cuCtxSetCurrent, 4000);
+DECLARE_CUDA_PFN_EXTERN(cuCtxGetDevice, 2000);
+// cuMem API support
+DECLARE_CUDA_PFN_EXTERN(cuMemAddressReserve, 10020);
+DECLARE_CUDA_PFN_EXTERN(cuMemAddressFree, 10020);
+DECLARE_CUDA_PFN_EXTERN(cuMemCreate, 10020);
+DECLARE_CUDA_PFN_EXTERN(cuMemGetAllocationGranularity, 10020);
+DECLARE_CUDA_PFN_EXTERN(cuMemExportToShareableHandle, 10020);
+DECLARE_CUDA_PFN_EXTERN(cuMemImportFromShareableHandle, 10020);
+DECLARE_CUDA_PFN_EXTERN(cuMemMap, 10020);
+DECLARE_CUDA_PFN_EXTERN(cuMemRelease, 10020);
+DECLARE_CUDA_PFN_EXTERN(cuMemSetAccess, 10020);
+DECLARE_CUDA_PFN_EXTERN(cuMemUnmap, 10020);
 #if CUDA_VERSION >= 11070
 DECLARE_CUDA_PFN_EXTERN(cuMemGetHandleForAddressRange, 11070); // DMA-BUF support
+#endif
+#if CUDA_VERSION >= 12010
+/* NVSwitch Multicast support */
+DECLARE_CUDA_PFN_EXTERN(cuMulticastAddDevice, 12010);
+DECLARE_CUDA_PFN_EXTERN(cuMulticastBindMem, 12010);
+DECLARE_CUDA_PFN_EXTERN(cuMulticastBindAddr, 12010);
+DECLARE_CUDA_PFN_EXTERN(cuMulticastCreate, 12010);
+DECLARE_CUDA_PFN_EXTERN(cuMulticastGetGranularity, 12010);
+DECLARE_CUDA_PFN_EXTERN(cuMulticastUnbind, 12010);
 #endif
 #endif
 
@@ -88,6 +110,7 @@ DECLARE_CUDA_PFN_EXTERN(cuGetProcAddress, 11030);
 ncclResult_t ncclCudaLibraryInit(void);
 
 extern int ncclCudaDriverVersionCache;
+extern bool ncclCudaLaunchBlocking; // initialized by ncclCudaLibraryInit()
 
 inline ncclResult_t ncclCudaDriverVersion(int* driver) {
   int version = __atomic_load_n(&ncclCudaDriverVersionCache, __ATOMIC_RELAXED);
@@ -98,5 +121,4 @@ inline ncclResult_t ncclCudaDriverVersion(int* driver) {
   *driver = version;
   return ncclSuccess;
 }
-
 #endif

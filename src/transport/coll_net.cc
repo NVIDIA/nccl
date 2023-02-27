@@ -152,13 +152,13 @@ static ncclResult_t sendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   int proxyRank;
   NCCLCHECK(ncclTopoGetNetDev(comm, myInfo->rank, graph, channelId, -1, &req.netDev, &proxyRank));
   NCCLCHECK(ncclTopoCheckGdr(comm->topo, myInfo->busId, req.netDev, 1, &req.useGdr));
-  send->conn.direct |= req.useGdr ? NCCL_DIRECT_NIC : 0;
+  send->conn.flags |= req.useGdr ? NCCL_DIRECT_NIC : 0;
   // Determine whether we need to flush the GDR buffer on recv or not
   if (req.useGdr) NCCLCHECK(ncclTopoNeedFlush(comm->topo, myInfo->busId, &req.needFlush));
 
   NCCLCHECK(ncclTopoGetLocalRank(comm->topo, myInfo->rank, &send->proxyConn.localRank));
   NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_COLLNET, 1, myInfo->rank, &send->proxyConn));
-  NCCLCHECK(ncclProxyCall(&send->proxyConn, ncclProxyMsgSetup, &req, sizeof(req), NULL, 0));
+  NCCLCHECK(ncclProxyCallBlocking(&send->proxyConn, ncclProxyMsgSetup, &req, sizeof(req), NULL, 0));
 
   INFO(NCCL_INIT|NCCL_NET,"CollNet %02d/%1d : %d [send] via COLLNET/%s/%d%s", channelId, connIndex, myInfo->rank, collNetName(comm), req.netDev,
       req.useGdr ? "/GDRDMA" : "");
@@ -171,12 +171,12 @@ static ncclResult_t recvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   int proxyRank;
   NCCLCHECK(ncclTopoGetNetDev(comm, myInfo->rank, graph, channelId, -1, &req.netDev, &proxyRank));
   NCCLCHECK(ncclTopoCheckGdr(comm->topo, myInfo->busId, req.netDev, 0, &req.useGdr));
-  recv->conn.direct |= req.useGdr ? NCCL_DIRECT_NIC : 0;
+  recv->conn.flags |= req.useGdr ? NCCL_DIRECT_NIC : 0;
 
   NCCLCHECK(ncclTopoGetLocalRank(comm->topo, myInfo->rank, &recv->proxyConn.localRank));
   NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_COLLNET, 0, myInfo->rank, &recv->proxyConn));
   struct collNetRecvConnectInfo* info = (struct collNetRecvConnectInfo*) connectInfo;
-  NCCLCHECK(ncclProxyCall(&recv->proxyConn, ncclProxyMsgSetup, &req, sizeof(req), &info->collNetHandle, sizeof(collNetHandle_t)));
+  NCCLCHECK(ncclProxyCallBlocking(&recv->proxyConn, ncclProxyMsgSetup, &req, sizeof(req), &info->collNetHandle, sizeof(collNetHandle_t)));
 
   INFO(NCCL_INIT|NCCL_NET,"CollNet %02d/%1d : %d [receive] via COLLNET/%s/%d%s", channelId, connIndex, myInfo->rank, collNetName(comm), req.netDev,
       req.useGdr ? "/GDRDMA" : "");
@@ -221,7 +221,7 @@ static ncclResult_t sendConnect(struct ncclComm* comm, struct ncclConnect* conne
   // We're on the same process as the proxy. We can pass a pointer to a struct.
   struct collNetConnectArgs args = { rank, nranks, connectInfos };
   struct connectMap* map;
-  NCCLCHECK(ncclProxyCall(&send->proxyConn, ncclProxyMsgConnect, &args, sizeof(struct collNetConnectArgs), &map, sizeof(struct connectMap*)));
+  NCCLCHECK(ncclProxyCallBlocking(&send->proxyConn, ncclProxyMsgConnect, &args, sizeof(struct collNetConnectArgs), &map, sizeof(struct connectMap*)));
 
   // If collnet connect failed, propagate error to fallback on regular p2p
   if (map == NULL) return ncclSystemError;
@@ -247,7 +247,7 @@ static ncclResult_t recvConnect(struct ncclComm* comm, struct ncclConnect* conne
   // We're on the same process as the proxy. We can pass a pointer to a struct.
   struct collNetConnectArgs args = { rank, nranks, connectInfos };
   struct connectMap* map;
-  NCCLCHECK(ncclProxyCall(&recv->proxyConn, ncclProxyMsgConnect, &args, sizeof(struct collNetConnectArgs), &map, sizeof(struct connectMap*)));
+  NCCLCHECK(ncclProxyCallBlocking(&recv->proxyConn, ncclProxyMsgConnect, &args, sizeof(struct collNetConnectArgs), &map, sizeof(struct connectMap*)));
 
   // If collnet connect failed, propagate error to fallback on regular p2p
   if (map == NULL) return ncclSystemError;
@@ -410,7 +410,7 @@ static ncclResult_t recvProxySetup(struct ncclProxyConnection* connection, struc
 }
 
 static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, struct ncclComm* comm, void* reqBuff, int reqSize, void* respBuff, int respSize, int* done) {
-  if (reqSize != sizeof(struct collNetConnectArgs)) { WARN("sendProxyConnect: reqSize is %d != %ld\n", reqSize, sizeof(struct collNetConnectArgs)); return ncclInternalError; }
+  if (reqSize != sizeof(struct collNetConnectArgs)) { WARN("sendProxyConnect: reqSize is %d != %ld", reqSize, sizeof(struct collNetConnectArgs)); return ncclInternalError; }
   struct collNetConnectArgs* args = (struct collNetConnectArgs*)reqBuff;
   struct collNetSendConnectInfo* info = (struct collNetSendConnectInfo*)(args->connectInfos+args->rank);
 
@@ -426,7 +426,7 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
   NCCLCHECK(sharedConnect(comm, resources->netDev, args->connectInfos, args->nranks, args->rank, &resources->collNetComm));
 
   // Collnet connect is allowed to fail. Gracefully handle that case by returning NULL to the caller.
-  if (respSize != sizeof(struct connectMap*)) { WARN("sendProxyConnect: respSize is %d != %ld\n", respSize, sizeof(void*)); return ncclInternalError; }
+  if (respSize != sizeof(struct connectMap*)) { WARN("sendProxyConnect: respSize is %d != %ld", respSize, sizeof(void*)); return ncclInternalError; }
   if (resources->collNetComm == NULL) {
     *((struct connectMap**)respBuff) = NULL;
     return ncclSuccess;
@@ -484,7 +484,7 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
 }
 
 static ncclResult_t recvProxyConnect(struct ncclProxyConnection* connection, struct ncclComm* comm, void* reqBuff, int reqSize, void* respBuff, int respSize, int* done) {
-  if (reqSize != sizeof(struct collNetConnectArgs)) { WARN("recvProxyConnect: reqSize is %d != %ld\n", reqSize, sizeof(struct collNetConnectArgs)); return ncclInternalError; }
+  if (reqSize != sizeof(struct collNetConnectArgs)) { WARN("recvProxyConnect: reqSize is %d != %ld", reqSize, sizeof(struct collNetConnectArgs)); return ncclInternalError; }
   struct collNetConnectArgs* args = (struct collNetConnectArgs*)reqBuff;
 
   struct recvResources* resources = (struct recvResources*)(connection->transportResources);
@@ -494,7 +494,7 @@ static ncclResult_t recvProxyConnect(struct ncclProxyConnection* connection, str
   NCCLCHECK(sharedConnect(comm, resources->netDev, args->connectInfos, args->nranks, args->rank, &resources->collNetComm));
 
   // Collnet connect is allowed to fail. Gracefully handle that case by returning NULL to the caller.
-  if (respSize != sizeof(struct connectMap*)) { WARN("sendProxyConnect: respSize is %d != %ld\n", respSize, sizeof(void*)); return ncclInternalError; }
+  if (respSize != sizeof(struct connectMap*)) { WARN("sendProxyConnect: respSize is %d != %ld", respSize, sizeof(void*)); return ncclInternalError; }
   if (resources->collNetComm == NULL) {
     *((struct connectMap**)respBuff) = NULL;
     return ncclSuccess;
@@ -553,7 +553,7 @@ static ncclResult_t recvProxyConnect(struct ncclProxyConnection* connection, str
   for (int p=0; p<NCCL_NUM_PROTOCOLS; p++)
     info->mhandles[p] = resources->mhandles[p];
 
-  if (respSize != sizeof(struct connectMap*)) { WARN("recvProxyConnect: respSize is %d != %ld\n", respSize, sizeof(void*)); return ncclInternalError; }
+  if (respSize != sizeof(struct connectMap*)) { WARN("recvProxyConnect: respSize is %d != %ld", respSize, sizeof(void*)); return ncclInternalError; }
   *((struct connectMap**)respBuff) = &resources->map;
   return ncclSuccess;
 }

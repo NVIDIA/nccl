@@ -386,6 +386,24 @@ ncclResult_t bootstrapIntraNodeAllGather(void* commState, int *ranks, int rank, 
   return ncclSuccess;
 }
 
+// IntraNode in-place Broadcast
+ncclResult_t bootstrapIntraNodeBroadcast(void* commState, int *ranks, int rank, int nranks, int root, void* bcastData, int size) {
+  if (nranks == 1) return ncclSuccess;
+  TRACE(NCCL_INIT, "rank %d nranks %d root %d size %d - ENTER", rank, nranks, root, size);
+
+  if (rank == root) {
+    for (int i=0; i<nranks; i++) {
+      if (i != root) NCCLCHECK(bootstrapSend(commState, ranks[i], /*tag=*/ranks[i], bcastData, size));
+    }
+  }
+  else {
+    NCCLCHECK(bootstrapRecv(commState, ranks[root], /*tag=*/rank, bcastData, size));
+  }
+
+  TRACE(NCCL_INIT, "rank %d nranks %d root %d size %d - DONE", rank, nranks, root, size);
+  return ncclSuccess;
+}
+
 ncclResult_t unexpectedEnqueue(struct bootstrapState* state, int peer, int tag, struct ncclSocket* sock) {
   // New unex
   struct unexConn* unex;

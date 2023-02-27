@@ -25,6 +25,7 @@ ncclResult_t bootstrapSend(void* commState, int peer, int tag, void* data, int s
 ncclResult_t bootstrapRecv(void* commState, int peer, int tag, void* data, int size);
 ncclResult_t bootstrapBarrier(void* commState, int *ranks, int rank, int nranks, int tag);
 ncclResult_t bootstrapIntraNodeAllGather(void* commState, int *ranks, int rank, int nranks, void* allData, int size);
+ncclResult_t bootstrapIntraNodeBroadcast(void* commState, int *ranks, int rank, int nranks, int root, void* bcastData, int size);
 ncclResult_t bootstrapClose(void* commState);
 ncclResult_t bootstrapAbort(void* commState);
 #endif

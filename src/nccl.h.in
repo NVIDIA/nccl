@@ -25,8 +25,10 @@
 extern "C" {
 #endif
 
+#include <limits.h>
 /* Opaque handle to communicator */
 typedef struct ncclComm* ncclComm_t;
+#define NCCL_COMM_NULL NULL
 
 #define NCCL_UNIQUE_ID_BYTES 128
 typedef struct { char internal[NCCL_UNIQUE_ID_BYTES]; } ncclUniqueId;
@@ -42,15 +44,22 @@ typedef enum { ncclSuccess                 =  0,
                ncclInProgress              =  7,
                ncclNumResults              =  8 } ncclResult_t;
 
+#define NCCL_CONFIG_UNDEF_INT INT_MIN
+#define NCCL_CONFIG_UNDEF_PTR NULL
+
 /* Communicator configuration. Users can assign value to attributes to specify the
  * behavior of a communicator. */
-typedef struct ncclConfig_v21400 {
+typedef struct ncclConfig_v21700 {
   /* attributes that users should never touch. */
   size_t size;
   unsigned int magic;
   unsigned int version;
   /* attributes that users are able to customize. */
   int blocking;
+  int cgaClusterSize;
+  int minCTAs;
+  int maxCTAs;
+  const char *netName;
 } ncclConfig_t;
 
 /* Config initializer must be assigned to initialize config structure when it is created.
@@ -59,7 +68,11 @@ typedef struct ncclConfig_v21400 {
   sizeof(ncclConfig_t), /* size */                                      \
   0xcafebeef,           /* magic */                                     \
   NCCL_VERSION(NCCL_MAJOR, NCCL_MINOR, NCCL_PATCH), /* version */       \
-  1                     /* blocking */                                  \
+  NCCL_CONFIG_UNDEF_INT,                    /* blocking */              \
+  NCCL_CONFIG_UNDEF_INT,                    /* cgaClusterSize */        \
+  NCCL_CONFIG_UNDEF_INT,                    /* minCTAs */               \
+  NCCL_CONFIG_UNDEF_INT,                    /* maxCTAs */               \
+  NCCL_CONFIG_UNDEF_PTR                     /* netName */               \
 }
 
 /* Return the NCCL_VERSION_CODE of the NCCL library in the supplied integer.

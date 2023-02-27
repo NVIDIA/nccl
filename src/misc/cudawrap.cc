@@ -23,10 +23,32 @@ DECLARE_CUDA_PFN(cuMemGetAddressRange, 3020);
 /* proxy.cc */
 DECLARE_CUDA_PFN(cuCtxCreate, 3020);
 DECLARE_CUDA_PFN(cuCtxDestroy, 4000);
+DECLARE_CUDA_PFN(cuCtxGetCurrent, 4000);
 DECLARE_CUDA_PFN(cuCtxSetCurrent, 4000);
+DECLARE_CUDA_PFN(cuCtxGetDevice, 2000);
+/* cuMem API support */
+DECLARE_CUDA_PFN(cuMemAddressReserve, 10020);
+DECLARE_CUDA_PFN(cuMemAddressFree, 10020);
+DECLARE_CUDA_PFN(cuMemCreate, 10020);
+DECLARE_CUDA_PFN(cuMemGetAllocationGranularity, 10020);
+DECLARE_CUDA_PFN(cuMemExportToShareableHandle, 10020);
+DECLARE_CUDA_PFN(cuMemImportFromShareableHandle, 10020);
+DECLARE_CUDA_PFN(cuMemMap, 10020);
+DECLARE_CUDA_PFN(cuMemRelease, 10020);
+DECLARE_CUDA_PFN(cuMemSetAccess, 10020);
+DECLARE_CUDA_PFN(cuMemUnmap, 10020);
 #if CUDA_VERSION >= 11070
 /* transport/collNet.cc/net.cc*/
 DECLARE_CUDA_PFN(cuMemGetHandleForAddressRange, 11070); // DMA-BUF support
+#endif
+#if CUDA_VERSION >= 12010
+/* NVSwitch Multicast support */
+DECLARE_CUDA_PFN(cuMulticastAddDevice, 12010);
+DECLARE_CUDA_PFN(cuMulticastBindMem, 12010);
+DECLARE_CUDA_PFN(cuMulticastBindAddr, 12010);
+DECLARE_CUDA_PFN(cuMulticastCreate, 12010);
+DECLARE_CUDA_PFN(cuMulticastGetGranularity, 12010);
+DECLARE_CUDA_PFN(cuMulticastUnbind, 12010);
 #endif
 #endif
 
@@ -39,6 +61,7 @@ DECLARE_CUDA_PFN(cuGetProcAddress, 11030);
 
 static void *cudaLib;
 int ncclCudaDriverVersionCache = -1;
+bool ncclCudaLaunchBlocking = false;
 
 #if CUDART_VERSION >= 11030
 /*
@@ -62,9 +85,33 @@ static ncclResult_t cudaPfnFuncLoader(void) {
   LOAD_SYM(cuMemGetAddressRange, 3020, 1);
   LOAD_SYM(cuCtxCreate, 3020, 1);
   LOAD_SYM(cuCtxDestroy, 4000, 1);
+  LOAD_SYM(cuCtxGetCurrent, 4000, 1);
   LOAD_SYM(cuCtxSetCurrent, 4000, 1);
+  LOAD_SYM(cuCtxGetDevice, 2000, 1);
+/* cuMem API support */
+#if CUDA_VERSION >= 11030
+  LOAD_SYM(cuMemAddressReserve, 10020, 1);
+  LOAD_SYM(cuMemAddressFree, 10020, 1);
+  LOAD_SYM(cuMemCreate, 10020, 1);
+  LOAD_SYM(cuMemGetAllocationGranularity, 10020, 1);
+  LOAD_SYM(cuMemExportToShareableHandle, 10020, 1);
+  LOAD_SYM(cuMemImportFromShareableHandle, 10020, 1);
+  LOAD_SYM(cuMemMap, 10020, 1);
+  LOAD_SYM(cuMemRelease, 10020, 1);
+  LOAD_SYM(cuMemSetAccess, 10020, 1);
+  LOAD_SYM(cuMemUnmap, 10020, 1);
+#endif
 #if CUDA_VERSION >= 11070
   LOAD_SYM(cuMemGetHandleForAddressRange, 11070, 1); // DMA-BUF support
+#endif
+#if CUDA_VERSION >= 12010
+/* NVSwitch Multicast support */
+  LOAD_SYM(cuMulticastAddDevice, 12010, 1);
+  LOAD_SYM(cuMulticastBindMem, 12010, 1);
+  LOAD_SYM(cuMulticastBindAddr, 12010, 1);
+  LOAD_SYM(cuMulticastCreate, 12010, 1);
+  LOAD_SYM(cuMulticastGetGranularity, 12010, 1);
+  LOAD_SYM(cuMulticastUnbind, 12010, 1);
 #endif
   return ncclSuccess;
 }
@@ -74,6 +121,11 @@ static pthread_once_t initOnceControl = PTHREAD_ONCE_INIT;
 static ncclResult_t initResult;
 
 static void initOnceFunc() {
+  do {
+    char* val = getenv("CUDA_LAUNCH_BLOCKING");
+    ncclCudaLaunchBlocking = val!=nullptr && val[0]!=0 && !(val[0]=='0' && val[1]==0);
+  } while (0);
+
   CUresult res;
   /*
    * Load CUDA driver library
@@ -85,9 +137,10 @@ static void initOnceFunc() {
   else
     snprintf(path, 1024, "%s%s", ncclCudaPath, "libcuda.so");
 
+  (void) dlerror(); // Clear any previous errors
   cudaLib = dlopen(path, RTLD_LAZY);
   if (cudaLib == NULL) {
-    WARN("Failed to find CUDA library (NCCL_CUDA_PATH='%s') : %s", ncclCudaPath ? ncclCudaPath : "", dlerror());
+    WARN("Failed to find CUDA library %s (NCCL_CUDA_PATH='%s') : %s", path, ncclCudaPath ? ncclCudaPath : "", dlerror());
     goto error;
   }
 

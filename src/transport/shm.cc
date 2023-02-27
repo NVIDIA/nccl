@@ -157,7 +157,7 @@ static ncclResult_t shmSendConnect(struct ncclComm* comm, struct ncclConnect* co
   if (useMemcpySend) {
     NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_SHM, 1, comm->rank, &send->proxyConn));
     struct shmProxyInfo proxyInfo = { NULL, NULL, send->conn.buffs[NCCL_PROTO_SIMPLE], resources->hostMem, resources->remHostMem };
-    NCCLCHECK(ncclProxyCall(&send->proxyConn, ncclProxyMsgConnect, &proxyInfo, sizeof(struct shmProxyInfo), &proxyInfo, sizeof(struct shmProxyInfo)));
+    NCCLCHECK(ncclProxyCallBlocking(&send->proxyConn, ncclProxyMsgConnect, &proxyInfo, sizeof(struct shmProxyInfo), &proxyInfo, sizeof(struct shmProxyInfo)));
     send->conn.buffs[NCCL_PROTO_SIMPLE] = proxyInfo.devFifo;
     send->conn.tail = &proxyInfo.ceRecvMem->tail;
     send->conn.sizesFifo = proxyInfo.ceRecvMem->sizesFifo;
@@ -187,7 +187,7 @@ static ncclResult_t shmRecvConnect(struct ncclComm* comm, struct ncclConnect* co
   if (useMemcpyRecv) {
     NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_SHM, 0, comm->rank, &recv->proxyConn));
     struct shmProxyInfo proxyInfo = { NULL, NULL, recv->conn.buffs[NCCL_PROTO_SIMPLE], resources->remHostMem, resources->hostMem };
-    NCCLCHECK(ncclProxyCall(&recv->proxyConn, ncclProxyMsgConnect, &proxyInfo, sizeof(struct shmProxyInfo), &proxyInfo, sizeof(struct shmProxyInfo)));
+    NCCLCHECK(ncclProxyCallBlocking(&recv->proxyConn, ncclProxyMsgConnect, &proxyInfo, sizeof(struct shmProxyInfo), &proxyInfo, sizeof(struct shmProxyInfo)));
     recv->conn.buffs[NCCL_PROTO_SIMPLE] = proxyInfo.devFifo;
     recv->conn.tail = &proxyInfo.ceRecvMem->tail;
   }

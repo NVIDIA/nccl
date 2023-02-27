@@ -35,10 +35,11 @@ NVTX_EXT_PAYLOAD_VERSIONED_ID(nvtxExtPayloadSlots)[NVTX3EXT_CBID_PAYLOAD_FN_NUM 
 
 NVTX_LINKONCE_DEFINE_FUNCTION void NVTX_EXT_PAYLOAD_VERSIONED_ID(nvtxExtPayloadInitOnce)()
 {
+    intptr_t* fnSlots = NVTX_EXT_PAYLOAD_VERSIONED_ID(nvtxExtPayloadSlots) + 1;
     nvtxExtModuleSegment_t segment = {
         0, // unused (only one segment)
         NVTX3EXT_CBID_PAYLOAD_FN_NUM,
-        NVTX_EXT_PAYLOAD_VERSIONED_ID(nvtxExtPayloadSlots) + 1
+        fnSlots
     };
 
     nvtxExtModuleInfo_t module = {

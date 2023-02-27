@@ -13,12 +13,13 @@ struct RunWork<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
   template<typename Proto>
   __device__ void runSend(const int tid, const int nthreads, const int group, struct ncclWorkElemP2p* args) {
     void* buff = reinterpret_cast<void*>(uintptr_t(args->buffHi32)<<32 | args->buffLo32);
-    size_t count = reinterpret_cast<size_t>(size_t(args->countHi32)<<32 | args->countLo32);
+    ssize_t count = reinterpret_cast<size_t>(size_t(args->countHi32)<<32 | args->countLo32);
     if (args->peer == ncclShmem.comm.rank) {
       struct ncclWorkElemP2p* recvArgs = args-1;
       void* recvBuff = reinterpret_cast<void*>(uintptr_t(recvArgs->buffHi32)<<32 | recvArgs->buffLo32);
       if (buff != recvBuff) {
-        ReduceOrCopyMulti<COLL_UNROLL, RedOp, T, 1, 1, 1, 1, 0>(tid, nthreads, nullptr, false, 1, (const T**)&buff, 1, (T**)&recvBuff, count);
+        ReduceOrCopyMulti<COLL_UNROLL, RedOp, T, 1, 1, 1, 1, /*PreOpSrcs=*/0>
+          (tid, nthreads, 0, nullptr, false, 1, &buff, 1, &recvBuff, count);
       }
     } else {
       int chunkSize = args->chunkSize/sizeof(T);

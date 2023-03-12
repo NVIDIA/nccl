@@ -1,7 +1,6 @@
 #ifndef NCCL_IBV_CORE_H_
 #define NCCL_IBV_CORE_H_
 
-#ifndef NCCL_BUILD_RDMA_CORE
 /* Basic IB verbs structs. Needed to dynamically load IB verbs functions without
  * explicit including of IB verbs header.
  */
@@ -1041,5 +1040,4 @@ static inline int ibv_post_send(struct ibv_qp *qp, struct ibv_send_wr *wr, struc
   return qp->context->ops.post_send(qp, wr, bad_wr);
 }
 
-#endif  // NCCL_BUILD_RDMA_CORE
 #endif  // NCCL_IBV_CORE_H_

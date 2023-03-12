@@ -21,16 +21,11 @@ ncclResult_t wrap_ibv_symbols(void) {
 }
 
 /* CHECK_NOT_NULL: helper macro to check for NULL symbol only with dynamic loading */
-#ifdef NCCL_BUILD_RDMA_CORE
-#define CHECK_NOT_NULL(container, internal_name)
-#else
 #define CHECK_NOT_NULL(container, internal_name) \
   if (container.internal_name == NULL) { \
      WARN("lib wrapper not initialized."); \
      return ncclInternalError; \
   }
-#endif
-
 
 #define IBV_PTR_CHECK_ERRNO(container, internal_name, call, retval, error_retval, name) \
   CHECK_NOT_NULL(container, internal_name); \

@@ -20,7 +20,7 @@ ncclResult_t wrap_ibv_symbols(void) {
   return initResult;
 }
 
-/* CHECK_NOT_NULL: helper macro to check for NULL symbol only with dynamic loading */
+/* CHECK_NOT_NULL: helper macro to check for NULL symbol */
 #define CHECK_NOT_NULL(container, internal_name) \
   if (container.internal_name == NULL) { \
      WARN("lib wrapper not initialized."); \

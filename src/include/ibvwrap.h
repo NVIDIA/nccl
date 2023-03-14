@@ -12,7 +12,11 @@
 #ifndef NCCL_IBVWRAP_H_
 #define NCCL_IBVWRAP_H_
 
+#ifdef NCCL_BUILD_RDMA_CORE
+#include <infiniband/verbs.h>
+#else
 #include "ibvcore.h"
+#endif
 
 #include "core.h"
 #include <sys/types.h>

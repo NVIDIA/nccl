@@ -10,6 +10,7 @@
 #include "transport.h"
 #include "p2p.h"
 #include "collectives.h"
+#include "nccl_performance_tuner.h"
 #include "proxy.h"
 #include "strongstream.h"
 
@@ -307,6 +308,9 @@ struct ncclComm {
   bool finalizeCalled;
   // shared structures for finalization
   int finalizeRankCnt;
+
+  // Performance tuning plugin
+  ncclPerformanceTuner_t* performanceTuner;
 };
 
 enum ncclLaunchMode {

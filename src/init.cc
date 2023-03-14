@@ -16,6 +16,7 @@
 #include "enqueue.h"
 #include "graph.h"
 #include "argcheck.h"
+#include "performance_tuner.h"
 #include <fcntl.h>
 #include <string.h>
 #include <errno.h>
@@ -1113,6 +1114,13 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
   NCCLCHECKGOTO(commAlloc(newcomm, nranks, myrank), res, fail);
   NCCLCHECKGOTO(initTransportsRank(*newcomm, &commId), res, fail);
 
+  if (ncclLoadPerformanceTuner(&(*newcomm)->performanceTuner) == ncclSuccess) {
+    NCCLCHECK((*newcomm)->performanceTuner->init((*newcomm)->nRanks, (*newcomm)->nNodes, ncclDebugLog));
+    INFO(NCCL_INIT, "Using performance tuner plugin: '%s'", (*newcomm)->performanceTuner->name);
+  } else {
+    INFO(NCCL_INIT, "Using default topo-based performance tuner");
+  }
+
   // update communicator state
   comm->initState = ncclSuccess;
 
@@ -1489,6 +1497,11 @@ static ncclResult_t commCleanup(ncclComm_t comm) {
   CUDACHECK(cudaGetDevice(&savedDevice));
   if (savedDevice != commDevice) {
     CUDACHECK(cudaSetDevice(commDevice));
+  }
+
+  if (comm->performanceTuner != NULL) {
+    NCCLCHECK(comm->performanceTuner->destroy());
+    NCCLCHECK(ncclClosePerformanceTuner(&comm->performanceTuner));
   }
 
   NCCLCHECK(commFree(comm));

@@ -8,25 +8,12 @@
 #define NCCL_DEVICE_H_
 
 #include "nccl.h"
+#include "nccl_performance_tuner.h"
 #include "align.h"
 #include <stdint.h>
 
-#define NCCL_NUM_FUNCTIONS 5 // Send/Recv not included for now
-typedef enum { ncclFuncBroadcast, ncclFuncReduce, ncclFuncAllGather, ncclFuncReduceScatter, ncclFuncAllReduce, ncclFuncSendRecv, ncclFuncSend, ncclFuncRecv, ncclNumFuncs} ncclFunc_t;
 extern const char* ncclFuncStr[NCCL_NUM_FUNCTIONS];
-
-#define NCCL_NUM_ALGORITHMS 5 // Tree/Ring/CollNet*
-#define NCCL_ALGO_TREE 0
-#define NCCL_ALGO_RING 1
-#define NCCL_ALGO_COLLNET_DIRECT 2
-#define NCCL_ALGO_COLLNET_CHAIN 3
-#define NCCL_ALGO_NVLS 4
 extern const char* ncclAlgoStr[NCCL_NUM_ALGORITHMS];
-
-#define NCCL_NUM_PROTOCOLS 3 // Simple/LL/LL128
-#define NCCL_PROTO_LL 0
-#define NCCL_PROTO_LL128 1
-#define NCCL_PROTO_SIMPLE 2
 extern const char* ncclProtoStr[NCCL_NUM_PROTOCOLS];
 
 #define NCCL_MAX_OPS 2048

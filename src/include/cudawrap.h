@@ -11,6 +11,9 @@
 #include <cuda_runtime.h>
 #include "checks.h"
 
+// Is cuMem API usage enabled
+extern int ncclCuMemEnable();
+
 #if CUDART_VERSION >= 11030
 #include <cudaTypedefs.h>
 #else
@@ -85,6 +88,7 @@ DECLARE_CUDA_PFN_EXTERN(cuMemExportToShareableHandle, 10020);
 DECLARE_CUDA_PFN_EXTERN(cuMemImportFromShareableHandle, 10020);
 DECLARE_CUDA_PFN_EXTERN(cuMemMap, 10020);
 DECLARE_CUDA_PFN_EXTERN(cuMemRelease, 10020);
+DECLARE_CUDA_PFN_EXTERN(cuMemRetainAllocationHandle, 11000);
 DECLARE_CUDA_PFN_EXTERN(cuMemSetAccess, 10020);
 DECLARE_CUDA_PFN_EXTERN(cuMemUnmap, 10020);
 #if CUDA_VERSION >= 11070

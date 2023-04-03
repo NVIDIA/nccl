@@ -46,8 +46,8 @@ ncclResult_t ncclAsyncLaunch(
     /* check if there are blocking and nonblocking comms at the same time in group. */
     if (ncclGroupBlocking == -1) {
       /* first met communicator */
-      ncclGroupBlocking = comm->blocking;
-    } else if (ncclGroupBlocking != comm->blocking) {
+      ncclGroupBlocking = comm->config.blocking;
+    } else if (ncclGroupBlocking != comm->config.blocking) {
       WARN("Blocking and nonblocking communicators are not allowed in the same group.");
       ret = ncclInvalidArgument;
     }
@@ -242,7 +242,7 @@ static void groupCleanup(struct ncclComm** groupCommHeadPtr, struct ncclComm** g
       ncclIntruQueueConstruct(&comm->tasks.peers[i].recvQueue);
     }
 
-    if (!comm->blocking)
+    if (!comm->config.blocking)
       (void) ncclCommSetAsyncError(comm, error);
     comm = next;
   }
@@ -251,7 +251,7 @@ static void groupCleanup(struct ncclComm** groupCommHeadPtr, struct ncclComm** g
   while (!ncclIntruQueueEmpty(asyncJobsPtr)) {
     struct ncclAsyncJob* job = ncclIntruQueueDequeue(asyncJobsPtr);
     *job->abortFlag = 1;
-    if (job->comm && !job->comm->blocking)
+    if (job->comm && !job->comm->config.blocking)
       (void) ncclCommSetAsyncError(job->comm, error);
     if (job->undo) job->undo(job);
     if (job->destructor) job->destructor((void*)job);
@@ -346,7 +346,7 @@ static ncclResult_t groupLaunch(struct ncclAsyncJob *job_) {
 
   while (!ncclIntruQueueEmpty(asyncJobsMain)) {
     struct ncclAsyncJob* job = ncclIntruQueueDequeue(asyncJobsMain);
-    if (job->comm && !job->comm->blocking)
+    if (job->comm && !job->comm->config.blocking)
       (void) ncclCommSetAsyncError(job->comm, ret);
     if (job->destructor) job->destructor((void*)job);
   }
@@ -355,7 +355,7 @@ static ncclResult_t groupLaunch(struct ncclAsyncJob *job_) {
     struct ncclComm* comm = groupCommHeadMain;
     struct ncclComm* next = comm->groupNext;
     (void) ncclGroupCommLeave(comm);
-    if (!comm->blocking) {
+    if (!comm->config.blocking) {
       (void) ncclCommSetAsyncError(comm, ret);
     }
     groupCommHeadMain = next;

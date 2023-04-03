@@ -55,7 +55,7 @@ namespace {
       if (inputBuf + chunkOffset == outputBuf + offset) { // In place
         prims.directSend(chunkOffset, offset, nelem);
       } else {
-        prims.directCopySend(chunkOffset, offset, offset, nelem);
+        prims.directCopySend(chunkOffset, offset, nelem);
       }
 
       // k-2 steps: copy to next GPU
@@ -63,7 +63,7 @@ namespace {
         rankDest = ringRanks[nranks-j];
         offset = chunkOffset + rankDest * size;
 
-        prims.directRecvCopySend(offset, offset, nelem);
+        prims.directRecvCopySend(offset, nelem);
       }
 
       // Make final copy from buffer to dest.
@@ -118,19 +118,19 @@ struct RunWorkElement<ncclFuncAllGather, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SI
 
     if (tid < tidEndGather) {
       // Gather
-      int group = (0*Proto::MaxGroupWidth) | (0<<16);
       Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_NVLS_ARITY, 0>, /*Direct=*/0, Proto, 0>
-        prims(tid, nThreadsGather, nvls->up, NULL, NULL, args->recvbuff, args->redOpArg, group, args);
+        prims(tid, nThreadsGather, nvls->up, NULL, NULL, args->recvbuff,
+           args->redOpArg, 0*Proto::MaxGroupWidth, 0, 0);
       for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
         ssize_t offset = gridOffset + bid*chunkSize;
         int nelem = min(chunkSize, size-offset);
         prims.gather(offset, nvls->nHeads*size, nelem, size, -1, 0);
       }
     } else if (tid < tidEndBcast) {
-      int group = (3*Proto::MaxGroupWidth) | (1<<16);
-      // Bcast through MC
+      // Bcast through NVLS
       Primitives<T, RedOp, FanAsymmetric<0, 1>, /*Direct=*/0, Proto, 0>
-        prims(tid-tidEndGather, nThreadsBcast, NULL, &nvls->down, args->sendbuff, NULL, args->redOpArg, group, args);
+        prims(tid-tidEndGather, nThreadsBcast, NULL, &nvls->down, args->sendbuff, NULL,
+           args->redOpArg, 3*Proto::MaxGroupWidth, 1, 1);
       for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
         ssize_t offset = gridOffset + bid*chunkSize;
         int nelem = min(chunkSize, size-offset);

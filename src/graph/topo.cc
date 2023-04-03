@@ -646,11 +646,11 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
     }
   }
   if (netDevCount == 0) {
-    NCCLCHECK(ncclNetDevices(comm, &netDevCount));
+    NCCLCHECK(comm->ncclNet->devices(&netDevCount));
   }
   for (int n=0; n<netDevCount; n++) {
     ncclNetProperties_t props;
-    NCCLCHECK(ncclNetGetProperties(comm, n, &props));
+    NCCLCHECK(comm->ncclNet->getProperties(n, &props));
     struct ncclXmlNode* netNode;
     NCCLCHECK(ncclTopoFillNet(xml, props.pciPath, props.name, &netNode));
     NCCLCHECK(xmlSetAttrInt(netNode, "keep", 1));
@@ -679,10 +679,8 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   return ncclSuccess;
 }
 
-ncclResult_t ncclTopoGetLocalNet(struct ncclTopoSystem* system, int rank, int* id) {
-  int g;
-  NCCLCHECK(ncclTopoRankToIndex(system, rank, &g));
-  int minType = PATH_SYS;
+static ncclResult_t getLocalNetMask(struct ncclTopoSystem* system, int g, uint64_t* localNetMask, int* type) {
+  int minType = PATH_DIS;
   float maxBw = 0;
   int count = 0;
   int* nets;
@@ -692,20 +690,115 @@ ncclResult_t ncclTopoGetLocalNet(struct ncclTopoSystem* system, int rank, int* i
     if (path->bw > maxBw || (path->bw == maxBw && path->type < minType)) {
       maxBw = path->bw;
       minType = path->type;
+      if (type) *type = minType;
       count = 0;
     }
     if (path->bw == maxBw && path->type == minType) nets[count++] = system->nodes[NET].nodes[n].id;
   }
-  if (count == 0) {
-    *id = -1;
-    free(nets);
+
+  *localNetMask = 0ULL;
+  for (int n=0; n<count; n++) {
+    if (nets[n] >= 64) return ncclInternalError;
+    *localNetMask |= 1ULL<<nets[n];
+  }
+  free(nets);
+  return ncclSuccess;
+}
+
+ncclResult_t ncclTopoGetLocalNet(struct ncclTopoSystem* system, int rank, int channelId, int* id) {
+  uint64_t* localNetMasks;
+  int ngpus = system->nodes[GPU].count;
+  NCCLCHECK(ncclCalloc(&localNetMasks, ngpus));
+
+  // Fill localNetMasks for all GPUs.
+  for (int g=0; g<ngpus; g++) {
+    NCCLCHECK(getLocalNetMask(system, g, localNetMasks+g, NULL));
+  }
+
+  // Find GPUs which have the same mask as rank, i.e. share the same local Nets.
+  int gpu;
+  NCCLCHECK(ncclTopoRankToIndex(system, rank, &gpu));
+  int netLocalGpus = 0, netLocalGpu = 0;
+  for (int g=0; g<ngpus; g++) {
+    if (localNetMasks[g] == localNetMasks[gpu]) {
+      if (g == gpu) netLocalGpu = netLocalGpus;
+      netLocalGpus++;
+    }
+  }
+  uint64_t localNetMask = localNetMasks[gpu];
+  free(localNetMasks);
+  if (localNetMask == 0) return ncclInternalError;
+
+  // Round robin on GPUs and channels
+  int gIndex = 0, cId = 0, n = 0;
+  while (1) {
+    if (1ULL << n & localNetMask) {
+      if (gIndex == netLocalGpu && cId == channelId) {
+        *id = n;
+        return ncclSuccess;
+      }
+      gIndex++;
+      if (gIndex == netLocalGpus) {
+        gIndex = 0;
+        cId++;
+      }
+    }
+    n = (n+1) % 64;
+  }
+}
+
+ncclResult_t ncclTopoGetLocalGpu(struct ncclTopoSystem* system, int net, int* gpuIndex) {
+  int ngpus = system->nodes[GPU].count;
+  int* gpus;
+  NCCLCHECK(ncclCalloc(&gpus, ngpus));
+
+  // Find localNetMask which includes net with the most local GPUs.
+  int netLocalGpus = 0, minType = PATH_DIS;
+  uint64_t localNetMask = 0ULL;
+  for (int g=0; g<ngpus; g++) {
+    int type = PATH_DIS;
+    uint64_t mask;
+    NCCLCHECK(getLocalNetMask(system, g, &mask, &type));
+    if ((1ULL<<net) & mask) {
+      if (type < minType) {
+        localNetMask = mask;
+        netLocalGpus = 0;
+        minType = type;
+      }
+      if (type == minType) {
+        if (localNetMask && mask != localNetMask) {
+          WARN("Gpus %d and %d both have a type of %d with net %d yet have different netMasks of %lx and %lx\n", g, gpus[netLocalGpus-1], minType, net, mask, localNetMask);
+          free(gpus);
+          return ncclInternalError;
+        }
+        gpus[netLocalGpus] = g;
+        netLocalGpus++;
+      }
+    }
+  }
+  if (localNetMask == 0ULL) {
+    *gpuIndex = -1;
+    free(gpus);
     return ncclSuccess;
   }
 
-  int rr = system->nodes[GPU].nodes[g].gpu.dev;
-  *id = nets[rr%count];
-  free(nets);
-  return ncclSuccess;
+  // Round robin on GPUs and channels
+  int gIndex = 0, cId = 0, n = 0;
+  while (1) {
+    if (1ULL << n & localNetMask) {
+      if (n == net) {
+        *gpuIndex = gpus[gIndex];
+        free(gpus);
+        return ncclSuccess;
+      }
+      gIndex++;
+      if (gIndex == netLocalGpus) {
+        gIndex = 0;
+        cId++;
+      }
+    }
+    n = (n+1) % 64;
+  }
 }
 
 /****************************/
@@ -782,6 +875,11 @@ ncclResult_t ncclTopoGetCpuAffinity(struct ncclTopoSystem* system, int rank, cpu
     NCCLCHECK(ncclCpusetToStr(&finalMask, affinityStr));
     INFO(NCCL_INIT, "Setting affinity for GPU %d to %s", gpu->gpu.dev, affinityStr);
   }
+  return ncclSuccess;
+}
+
+ncclResult_t ncclTopoGetGpuCount(struct ncclTopoSystem* system, int* count) {
+  *count = system->nodes[GPU].count;
   return ncclSuccess;
 }
 

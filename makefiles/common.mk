@@ -12,6 +12,7 @@ DEBUG ?= 0
 TRACE ?= 0
 PROFAPI ?= 1
 NVTX ?= 1
+RDMA_CORE ?= 0
 
 NVCC = $(CUDA_HOME)/bin/nvcc
 
@@ -105,4 +106,8 @@ endif
 
 ifneq ($(PROFAPI), 0)
 CXXFLAGS += -DPROFAPI
+endif
+
+ifneq ($(RDMA_CORE), 0)
+CXXFLAGS += -DNCCL_BUILD_RDMA_CORE=1
 endif

@@ -25,6 +25,7 @@ typedef enum : uint8_t {
   ncclPatternCollnetChain,
   ncclPatternCollnetDirect,
   ncclPatternNvls,
+  ncclPatternNvlsTree,
   ncclPatternSend,
   ncclPatternRecv
 } ncclPattern_t;
@@ -93,7 +94,6 @@ struct ncclCudaStreamList {
   struct ncclCudaStreamList *next;
   cudaStream_t stream;
 };
-
 struct ncclTasks {
   struct Peer {
     bool sendSeen, recvSeen;
@@ -103,7 +103,8 @@ struct ncclTasks {
   struct ncclIntruQueue<ncclTaskColl, &ncclTaskColl::next> collQueue;
   size_t collBytesTotal;
   struct Peer* peers/*[nRanks]*/;
-  int *p2pSendOrder/*[nRanks]*/, *p2pRecvOrder/*[nRanks]*/;
+  int *p2pSendOrder, *p2pRecvOrder;
+  int p2pOrderSteps;
   int nTasksColl, nTasksP2p;
 
   // The list of user streams aggregated over all tasks present.

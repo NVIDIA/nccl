@@ -411,7 +411,7 @@ static ncclResult_t socketTryAccept(struct ncclSocket* sock) {
   if (sock->fd != -1) {
     sock->state = ncclSocketStateAccepted;
   } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
-    WARN("socketTryAccept: get errno %d that is not EAGAIN or EWOULDBLOCK", errno);
+    WARN("socketTryAccept: Accept failed: %s", strerror(errno));
     return ncclSystemError;
   }
   return ncclSuccess;

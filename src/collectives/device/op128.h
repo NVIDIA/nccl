@@ -7,6 +7,8 @@
 #ifndef OP128_H_
 #define OP128_H_
 
+#include <type_traits>
+
 inline __device__ void load128(const uint64_t* ptr, uint64_t &v0, uint64_t &v1) {
   asm volatile("ld.volatile.global.v2.u64 {%0,%1}, [%2];"
       : "=l"(v0), "=l"(v1) : "l"(ptr));
@@ -94,6 +96,8 @@ __device__ __forceinline__ T* cvta_from_global(uintptr_t gptr) {
 template<int Size>
 union BytePack;
 template<>
+union BytePack<0> {};
+template<>
 union BytePack<1> {
   uint8_t u8, native;
 };
@@ -129,14 +133,26 @@ union alignas(16) BytePack<16> {
 };
 
 template<typename T>
-__device__ __forceinline__ BytePack<sizeof(T)> toPack(T value)  {
-  union { BytePack<sizeof(T)> p; T v; };
+struct BytePackOf {
+  static constexpr int Size = sizeof(T);
+  using Pack = BytePack<Size>;
+};
+template<>
+struct BytePackOf<BytePack<0>> {
+  static constexpr int Size = 0;
+  using Pack = BytePack<0>;
+};
+
+template<typename T>
+__device__ __forceinline__ typename BytePackOf<T>::Pack toPack(T value)  {
+  union { typename BytePackOf<T>::Pack p; T v; };
   v = value;
   return p;
 }
+
 template<typename T>
-__device__ __forceinline__ T fromPack(BytePack<sizeof(T)> pack)  {
-  union { BytePack<sizeof(T)> p; T v; };
+__device__ __forceinline__ T fromPack(typename BytePackOf<T>::Pack pack)  {
+  union { typename BytePackOf<T>::Pack p; T v; };
   p = pack;
   return v;
 }
@@ -150,6 +166,13 @@ template<int Size> __device__ BytePack<Size> ld_shared(uint32_t addr);
 template<int Size> __device__ BytePack<Size> ld_volatile_shared(uint32_t addr);
 template<int Size> __device__ void st_global(uintptr_t addr, BytePack<Size> value);
 template<int Size> __device__ void st_shared(uint32_t addr, BytePack<Size> value);
+
+template<> __device__ __forceinline__ BytePack<0> ld_global<0>(uintptr_t addr) { return {}; }
+template<> __device__ __forceinline__ BytePack<0> ld_volatile_global<0>(uintptr_t addr) { return {}; }
+template<> __device__ __forceinline__ BytePack<0> ld_shared<0>(uint32_t addr) { return {}; }
+template<> __device__ __forceinline__ BytePack<0> ld_volatile_shared<0>(uint32_t addr) { return {}; }
+template<> __device__ __forceinline__ void st_global<0>(uintptr_t addr, BytePack<0> value) {}
+template<> __device__ __forceinline__ void st_shared<0>(uint32_t addr, BytePack<0> value) {}
 
 // Used to define implementations for above prototypes.
 #define DEFINE_ld_st(bytes, data_cxx_ty, data_ptx_ty, data_reg_ty, space, addr_cxx_ty, addr_reg_ty) \
@@ -274,6 +297,18 @@ template<int Size>
 __device__ __forceinline__ void multimem_st_global(uintptr_t addr, BytePack<Size> val);
 
 #if __CUDA_ARCH__ >= 900 && CUDART_VERSION >= 12010
+template<>
+__device__ __forceinline__ void multimem_st_global<0>(uintptr_t addr, BytePack<0> val) {
+  // nop
+}
+template<>
+__device__ __forceinline__ void multimem_st_global<1>(uintptr_t addr, BytePack<1> val) {
+  asm volatile("st.global.b8 [%0], %1;" :: "l"(addr), "r"((uint32_t)val.u8) : "memory");
+}
+template<>
+__device__ __forceinline__ void multimem_st_global<2>(uintptr_t addr, BytePack<2> val) {
+  asm volatile("st.global.b16 [%0], %1;" :: "l"(addr), "h"(val.u16) : "memory");
+}
 template<>
 __device__ __forceinline__ void multimem_st_global<4>(uintptr_t addr, BytePack<4> val) {
   asm volatile("multimem.st.global.b32 [%0], %1;" :: "l"(addr), "r"(val.u32) : "memory");

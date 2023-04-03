@@ -1,30 +1,33 @@
+/*
+* Copyright 2021-2023  NVIDIA Corporation.  All rights reserved.
+*
+* Licensed under the Apache License v2.0 with LLVM Exceptions.
+* See https://llvm.org/LICENSE.txt for license information.
+* SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+*/
+
 #ifndef NVTX_EXT_IMPL_PAYLOAD_GUARD
 #error Never include this file directly -- it is automatically included by nvToolsExtPayload.h (except when NVTX_NO_IMPL is defined).
 #endif
 
-/*
- * Helper array to get the alignment for each predefined C language type.
- */
-
 typedef void* pointer_type;
 
-#if __STDC_VERSION__ >= 201112L /* or CPP11 */
+#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L)
+#include <uchar.h>
 #include <stdalign.h>
+#endif
+
+/* `alignof` is available as of C11 or C++11 */
+#if (defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)) || (defined(__cplusplus) && __cplusplus >= 201103L)
+
 #define nvtx_alignof(type) alignof(type)
 #define nvtx_alignof2(type,tname) alignof(type)
-#else /*  __STDC_VERSION__ >= 201112L */
-#ifndef __cplusplus
 
-#include <stddef.h>
-#define nvtx_alignof(type) offsetof(struct {char c; type d;}, d)
-#define nvtx_alignof2(type,tname) nvtx_alignof(type)
+#else /* (__STDC_VERSION__ >= 201112L) || (__cplusplus >= 201103L) */
 
-#else /* __cplusplus */
-
-#define MKTYPEDEF(TYPE) typedef struct {char c; TYPE d;} _nvtx_##TYPE
-#define MKTYPEDEF2(TYPE,TNAME) typedef struct {char c; TYPE d;} _nvtx_##TNAME
-#define nvtx_alignof(TNAME) offsetof(_nvtx_##TNAME, d)
-#define nvtx_alignof2(type,tname) offsetof(_nvtx_##tname, d)
+/* Create helper structs to determine type alignment. */
+#define MKTYPEDEF(type) typedef struct {char c; type d;} _nvtx_##type
+#define MKTYPEDEF2(type,tname) typedef struct {char c; type d;} _nvtx_##tname
 
 MKTYPEDEF(char);
 MKTYPEDEF2(unsigned char, uchar);
@@ -54,22 +57,33 @@ MKTYPEDEF(size_t);
 MKTYPEDEF(pointer_type);
 
 MKTYPEDEF(wchar_t);
-#if (__STDC_VERSION__ > 201710L) || (defined(__cplusplus) && __cplusplus > 201703L)
-    {sizeof(char8_t), nvtx_alignof(char8_t)},
+
+/* `char8_t` is available as of C++20 or C23 */
+#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L) || (defined(__cplusplus) && __cplusplus >= 201811L)
     MKTYPEDEF(char8_t);
 #endif
-#if (__STDC_VERSION__ >= 201112L) || (defined(__cplusplus) && __cplusplus >= 201103L)
+
+/* `char16_t` and `char32_t` are available as of C++11 or C11 */
+#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L) || (defined(__cplusplus) && __cplusplus >= 200704L)
     MKTYPEDEF(char16_t);
     MKTYPEDEF(char32_t);
 #endif
 
+/* C requires to include stddef.h to use `offsetof` */
+#ifndef __cplusplus
+#include <stddef.h>
+#endif
+
+#define nvtx_alignof(tname) offsetof(_nvtx_##tname, d)
+#define nvtx_alignof2(type, tname) offsetof(_nvtx_##tname, d)
+
+#endif /*  __STDC_VERSION__ >= 201112L */
+
 #undef MKTYPEDEF
 #undef MKTYPEDEF2
 
-#endif /* __cplusplus */
-#endif /*  __STDC_VERSION__ >= 201112L */
-
 /*
+ * Helper array to get the alignment for each predefined C/C++ language type.
  * The order of entries must match the values in`enum nvtxPayloadSchemaEntryType`.
  */
 const nvtxPayloadEntryTypeInfo_t nvtxExtPayloadTypeInfo[NVTX_PAYLOAD_ENTRY_TYPE_INFO_ARRAY_SIZE] =
@@ -109,13 +123,14 @@ const nvtxPayloadEntryTypeInfo_t nvtxExtPayloadTypeInfo[NVTX_PAYLOAD_ENTRY_TYPE_
 
     /*** Special character types ***/
     /* NVTX_PAYLOAD_ENTRY_TYPE_WCHAR */ {sizeof(wchar_t), nvtx_alignof(wchar_t)},
-    /* NVTX_PAYLOAD_ENTRY_TYPE_CHAR8 */
-#if (__STDC_VERSION__ > 201710L) || (defined(__cplusplus) && __cplusplus > 201703L)
-    {sizeof(char8_t), nvtx_alignof(char8_t)},
+
+#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L) || (defined(__cplusplus) && __cplusplus >= 201811L)
+    /* NVTX_PAYLOAD_ENTRY_TYPE_CHAR8 */ {sizeof(char8_t), nvtx_alignof(char8_t)},
 #else
-    {0, 0},
+    /* NVTX_PAYLOAD_ENTRY_TYPE_CHAR8 */ {0, 0},
 #endif
-#if (__STDC_VERSION__ >= 201112L) || (defined(__cplusplus) && __cplusplus >= 201103L)
+
+#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L) || (defined(__cplusplus) && __cplusplus >= 200704L)
     /* NVTX_PAYLOAD_ENTRY_TYPE_CHAR16 */ {sizeof(char16_t), nvtx_alignof(char16_t)},
     /* NVTX_PAYLOAD_ENTRY_TYPE_CHAR32 */ {sizeof(char32_t), nvtx_alignof(char32_t)}
 #else

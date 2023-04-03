@@ -99,6 +99,7 @@ static void* ncclIbAsyncThreadMain(void* args) {
 }
 
 NCCL_PARAM(IbDisable, "IB_DISABLE", 0);
+NCCL_PARAM(IbMergeVfs, "IB_MERGE_VFS", 1);
 
 static ncclResult_t ncclIbGetPciPath(char* devName, char** path, int* realPort) {
   char devicePath[PATH_MAX];
@@ -110,7 +111,7 @@ static ncclResult_t ncclIbGetPciPath(char* devName, char** path, int* realPort) 
     // Merge multi-port NICs into the same PCI device
     p[strlen(p)-1] = '0';
     // Also merge virtual functions (VF) into the same device
-    p[strlen(p)-3] = '0';
+    if (ncclParamIbMergeVfs()) p[strlen(p)-3] = '0';
     // And keep the real port aside (the ibv port is always 1 on recent cards)
     *realPort = 0;
     for (int d=0; d<ncclNIbDevs; d++) {
@@ -381,16 +382,25 @@ struct ncclIbHandle {
   struct ncclIbCommStage stage; // Used by the other side when connecting
 };
 
+// Retain local and remote RoCE addresses for error logging
+struct ncclIbGidInfo {
+  uint8_t link_layer;
+  union ibv_gid localGid;
+  union ibv_gid remoteGid;
+};
+
 #define NCCL_NET_IB_REQ_UNUSED 0
 #define NCCL_NET_IB_REQ_SEND 1
 #define NCCL_NET_IB_REQ_RECV 2
 #define NCCL_NET_IB_REQ_FLUSH 3
+const char* reqTypeStr[] = { "Unused", "Send", "Recv", "Flush" };
 
 struct ncclIbRequest {
   struct ncclIbVerbs* verbs;
   int type;
   int events;
   struct ncclSocket* sock;
+  struct ncclIbGidInfo* gidInfo;
   int nreqs;
   union {
     struct {
@@ -440,8 +450,10 @@ struct ncclIbSendComm {
   int ready;
   struct ibv_qp* qps[NCCL_IB_MAX_QPS];
   int nqps;
+  int qpIndex;
   struct ibv_mr* fifoMr;
   int ar;
+  struct ncclIbGidInfo gidInfo;
 };
 // The SendFifo needs to be 32-byte aligned and each element needs
 // to be a 32-byte multiple, so that an entry does not get split and
@@ -474,7 +486,9 @@ struct ncclIbRecvComm {
   int ready;
   struct ibv_qp* qps[NCCL_IB_MAX_QPS];
   int nqps;
+  int qpIndex;
   struct ncclIbGpuFlush gpuFlush;
+  struct ncclIbGidInfo gidInfo;
 };
 static_assert((offsetof(struct ncclIbRecvComm, remFifo) % 32) == 0, "ncclIbSendComm fifo must be 32-byte aligned");
 
@@ -648,15 +662,14 @@ ib_connect_check:
 
   // RoCE support
   qpInfo.lid = portAttr.lid;
-  qpInfo.link_layer = portAttr.link_layer;
+  qpInfo.link_layer = comm->gidInfo.link_layer = portAttr.link_layer;
   if (qpInfo.link_layer == IBV_LINK_LAYER_INFINIBAND) { // IB
     for (int q=0; q<comm->nqps; q++)
       INFO(NCCL_NET,"NET/IB: Dev %d Port %d qpn %d mtu %d LID %d", dev, ib_port, qpInfo.qpn[q], qpInfo.mtu, qpInfo.lid);
   } else { // RoCE
-    union ibv_gid gid;
-    NCCLCHECK(wrap_ibv_query_gid(ctx, ib_port, ncclParamIbGidIndex(), &gid));
-    qpInfo.spn = gid.global.subnet_prefix;
-    qpInfo.iid = gid.global.interface_id;
+    NCCLCHECK(wrap_ibv_query_gid(ctx, ib_port, ncclParamIbGidIndex(), &comm->gidInfo.localGid));
+    qpInfo.spn = comm->gidInfo.localGid.global.subnet_prefix;
+    qpInfo.iid = comm->gidInfo.localGid.global.interface_id;
     for (int q=0; q<comm->nqps; q++)
       INFO(NCCL_NET,"NET/IB: Dev %d Port %d qpn %d mtu %d GID %ld (%lX/%lX)", dev, ib_port, qpInfo.qpn[q], qpInfo.mtu, ncclParamIbGidIndex(), qpInfo.spn, qpInfo.iid);
   }
@@ -682,6 +695,8 @@ ib_connect:
 
   memcpy(&remQpInfo, stage->buffer, sizeof(ncclIbQpInfo));
 
+  comm->gidInfo.remoteGid.global.subnet_prefix = remQpInfo.spn;
+  comm->gidInfo.remoteGid.global.interface_id = remQpInfo.iid;
   for (int q=0; q<comm->nqps; q++) {
     struct ibv_qp* qp = comm->qps[q];
     NCCLCHECK(ncclIbRtrQp(qp, remQpInfo.qpn[q], &remQpInfo));
@@ -743,6 +758,9 @@ ib_recv:
   /* copy back the received info */
   memcpy(&remQpInfo, stage->buffer, sizeof(struct ncclIbQpInfo));
 
+  rComm->gidInfo.remoteGid.global.subnet_prefix = remQpInfo.spn;
+  rComm->gidInfo.remoteGid.global.interface_id = remQpInfo.iid;
+
   // IB setup
   struct ibv_context* ctx;
   uint8_t ib_port;
@@ -750,8 +768,7 @@ ib_recv:
   ib_port = ncclIbDevs[lComm->dev].port;
   struct ibv_port_attr portAttr;
   NCCLCHECK(wrap_ibv_query_port(ctx, ib_port, &portAttr));
-  union ibv_gid gid;
-  NCCLCHECK(wrap_ibv_query_gid(ctx, ib_port, ncclParamIbGidIndex(), &gid));
+  NCCLCHECK(wrap_ibv_query_gid(ctx, ib_port, ncclParamIbGidIndex(), &rComm->gidInfo.localGid));
 
   // QP Creation
   NCCLCHECK(ncclIbInitVerbs(lComm->dev, ctx, &rComm->verbs));
@@ -789,8 +806,8 @@ ib_recv:
     localQpInfo.lid=portAttr.lid;
     localQpInfo.link_layer=portAttr.link_layer;
     localQpInfo.ib_port=ib_port;
-    localQpInfo.spn=gid.global.subnet_prefix;
-    localQpInfo.iid=gid.global.interface_id;
+    localQpInfo.spn=rComm->gidInfo.localGid.global.subnet_prefix;
+    localQpInfo.iid=rComm->gidInfo.localGid.global.interface_id;
     localQpInfo.mtu=portAttr.active_mtu;
     NCCLCHECK(ncclIbRtrQp(rComm->gpuFlush.qp, rComm->gpuFlush.qp->qp_num, &localQpInfo));
     NCCLCHECK(ncclIbRtsQp(rComm->gpuFlush.qp));
@@ -799,11 +816,11 @@ ib_recv:
   // Fill Handle
   struct ncclIbQpInfo qpInfo;
   qpInfo.lid=portAttr.lid;
-  qpInfo.link_layer=portAttr.link_layer;
+  qpInfo.link_layer= rComm->gidInfo.link_layer = portAttr.link_layer;
   qpInfo.ib_port=ib_port;
   for (int q=0; q<rComm->nqps; q++) qpInfo.qpn[q]=rComm->qps[q]->qp_num;
-  qpInfo.spn=gid.global.subnet_prefix;
-  qpInfo.iid=gid.global.interface_id;
+  qpInfo.spn=rComm->gidInfo.localGid.global.subnet_prefix;
+  qpInfo.iid=rComm->gidInfo.localGid.global.interface_id;
   qpInfo.mtu=remQpInfo.mtu;
 
   stage->state = ncclIbCommStateSend;
@@ -841,6 +858,7 @@ ncclResult_t ncclIbGetRequest(struct ncclIbVerbs* verbs, struct ncclIbRequest** 
       r->verbs = verbs;
       r->events = 1;
       r->sock = NULL;
+      r->gidInfo = NULL;
       *req = r;
       return ncclSuccess;
     }
@@ -945,6 +963,8 @@ returning:
   return res;
 }
 
+NCCL_PARAM(IbSplitDataOnQps, "IB_SPLIT_DATA_ON_QPS", 1);
+
 ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
   struct ncclIbRequest** reqs = comm->fifoReqs[slot];
   volatile struct ncclIbSendFifo* slots = comm->fifo[slot];
@@ -1000,9 +1020,10 @@ ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
 
   // Multi-QP: make sure IB writes are multiples of 128B so that LL and LL128 protocols still work
   const int align = 128;
-  for (int q=0; q<comm->nqps; q++) {
+  const int nqps = ncclParamIbSplitDataOnQps() ? comm->nqps : 1;
+  for (int q=0; q<nqps; q++) {
     for (int r=0; r<nreqs; r++) {
-      int chunkSize = DIVUP(DIVUP(reqs[r]->send.size, comm->nqps), align) * align;
+      int chunkSize = DIVUP(DIVUP(reqs[r]->send.size, nqps), align) * align;
       int length = std::min(reqs[r]->send.size-reqs[r]->send.offset, chunkSize);
       if (length <= 0) {
         comm->wrs[r].sg_list = NULL;
@@ -1014,10 +1035,11 @@ ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
       }
     }
     struct ibv_send_wr* bad_wr;
-    NCCLCHECK(wrap_ibv_post_send(comm->qps[q], comm->wrs, &bad_wr));
+    NCCLCHECK(wrap_ibv_post_send(comm->qps[comm->qpIndex], comm->wrs, &bad_wr));
+    comm->qpIndex = (comm->qpIndex+1)%comm->nqps;
 
     for (int r=0; r<nreqs; r++) {
-      int chunkSize = DIVUP(DIVUP(reqs[r]->send.size, comm->nqps), align) * align;
+      int chunkSize = DIVUP(DIVUP(reqs[r]->send.size, nqps), align) * align;
       reqs[r]->send.offset += chunkSize;
       comm->sges[r].addr += chunkSize;
       comm->wrs[r].wr.rdma.remote_addr += chunkSize;
@@ -1077,7 +1099,8 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, int size, int tag, void* mh
     req->send.data = data;
     req->send.lkey = mr->lkey;
     req->send.offset = 0;
-    req->events = comm->nqps;
+    req->events = ncclParamIbSplitDataOnQps() ? comm->nqps : 1;
+    if (comm->gidInfo.link_layer == IBV_LINK_LAYER_ETHERNET) req->gidInfo = &comm->gidInfo;
     *request = reqs[r] = req;
 
     // If this is a multi-recv, send only when all requests have matched.
@@ -1171,6 +1194,7 @@ ncclResult_t ncclIbIrecv(void* recvComm, int n, void** data, int* sizes, int* ta
   req->type = NCCL_NET_IB_REQ_RECV;
   req->sock = &comm->sock;
   req->nreqs = n;
+  if (comm->gidInfo.link_layer == IBV_LINK_LAYER_ETHERNET) req->gidInfo = &comm->gidInfo;
   for (int i=0; i<n; i++) req->recv.sizes[i] = 0;
 
   struct ibv_recv_wr wr;
@@ -1181,13 +1205,15 @@ ncclResult_t ncclIbIrecv(void* recvComm, int n, void** data, int* sizes, int* ta
   wr.num_sge = 0;
 
   TIME_START(1);
-  for (int q=0; q<comm->nqps; q++) {
-    struct ibv_qp* qp = comm->qps[q];
+  const int nqps = ncclParamIbSplitDataOnQps() ? comm->nqps : 1;
+  for (int q=0; q<nqps; q++) {
+    struct ibv_qp* qp = comm->qps[comm->qpIndex];
     struct ibv_recv_wr* bad_wr;
     NCCLCHECK(wrap_ibv_post_recv(qp, &wr, &bad_wr));
+    comm->qpIndex = (comm->qpIndex+1)%comm->nqps;
   }
   TIME_STOP(1);
-  req->events = comm->nqps;
+  req->events = nqps;
 
   *request = req;
 
@@ -1258,8 +1284,16 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
         char line[SOCKET_NAME_MAXLEN+1];
         union ncclSocketAddress addr;
         ncclSocketGetAddr(r->sock, &addr);
-        WARN("NET/IB : Got completion from peer %s with error %d, opcode %d, len %d, vendor err %d",
-             ncclSocketToString(&addr, line), wc->status, wc->opcode, wc->byte_len, wc->vendor_err);
+        char localGidString[INET6_ADDRSTRLEN] = "";
+        char remoteGidString[INET6_ADDRSTRLEN] = "";
+        const char* localGidStr = NULL, *remoteGidStr = NULL;
+        if (r->gidInfo) {
+            localGidStr = inet_ntop(AF_INET6, &r->gidInfo->localGid, localGidString, sizeof(localGidString));
+            remoteGidStr = inet_ntop(AF_INET6, &r->gidInfo->remoteGid, remoteGidString, sizeof(remoteGidString));
+        }
+        WARN("NET/IB : Got completion from peer %s with error %d, opcode %d, len %d, vendor err %d (%s)%s%s%s%s",
+            ncclSocketToString(&addr, line), wc->status, wc->opcode, wc->byte_len, wc->vendor_err, reqTypeStr[r->type],
+            localGidStr ?  " localGid ":"", localGidString, remoteGidStr ? " remoteGid ":"", remoteGidString);
         return ncclRemoteError;
       }
 

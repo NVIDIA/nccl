@@ -818,7 +818,10 @@ ncclResult_t ncclSocketTryRecv(struct ncclSocket* sock, void* ptr, int size, int
 
 ncclResult_t ncclSocketClose(struct ncclSocket* sock) {
   if (sock != NULL) {
-    if (sock->fd >= 0) close(sock->fd);
+    if (sock->fd >= 0) {
+      shutdown(sock->fd, SHUT_RDWR);
+      close(sock->fd);
+    }
     sock->state = ncclSocketStateClosed;
     sock->fd = -1;
   }

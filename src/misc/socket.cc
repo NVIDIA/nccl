@@ -819,6 +819,10 @@ ncclResult_t ncclSocketTryRecv(struct ncclSocket* sock, void* ptr, int size, int
 ncclResult_t ncclSocketClose(struct ncclSocket* sock) {
   if (sock != NULL) {
     if (sock->fd >= 0) {
+      /* shutdown() is needed to send FIN packet to proxy thread; shutdown() is not affected
+       * by refcount of fd, but close() is. close() won't close a fd and send FIN packet if
+       * the fd is duplicated (e.g. fork()). So shutdown() guarantees the correct and graceful
+       * connection close here. */
       shutdown(sock->fd, SHUT_RDWR);
       close(sock->fd);
     }

@@ -817,10 +817,10 @@ NCCL_PARAM(ProgressAppendOpFreq, "PROGRESS_APPENDOP_FREQ", 8);
 
 void* ncclProxyProgress(void *comm_) {
   struct ncclComm* comm = (struct ncclComm*)comm_;
-  if (ncclSetThreadContext(comm) != ncclSuccess) {
-    WARN("[Proxy Progress] Failed to set CUDA context on device %d", comm->cudaDev);
-  } else if (cudaSetDevice(comm->cudaDev) != cudaSuccess) {
+  if (cudaSetDevice(comm->cudaDev) != cudaSuccess) {
     WARN("[Proxy Progress] Failed to set CUDA device %d", comm->cudaDev);
+  } else if (ncclSetThreadContext(comm) != ncclSuccess) {
+    WARN("[Proxy Progress] Failed to set CUDA context on device %d", comm->cudaDev);
   }
   if (CPU_COUNT(&comm->cpuAffinity)) sched_setaffinity(0, sizeof(cpu_set_t), &comm->cpuAffinity);
 
@@ -1301,7 +1301,7 @@ static ncclResult_t proxyProgressAsync(struct ncclProxyAsyncOp* op, struct ncclC
       __atomic_store_n(&op->connection->state, connSetupDone, __ATOMIC_RELEASE);
     else if (op->type == ncclProxyMsgConnect)
       __atomic_store_n(&op->connection->state, connConnected, __ATOMIC_RELEASE);
-    /* if setup or connect is done, we should not return any error at this point since 
+    /* if setup or connect is done, we should not return any error at this point since
      * ncclSocketSend might already send the respBuff to the requester. If we still choose
      * to abort and close the connection, it can cause segfault if the requester is using
      * the respBuff. */
@@ -1360,10 +1360,10 @@ static ncclResult_t proxyConnSetupConnect(int type, struct ncclProxyLocalPeer* p
 void* ncclProxyService(void* _args) {
   struct ncclComm* comm =  (struct ncclComm *) _args;
   if (CPU_COUNT(&comm->cpuAffinity)) sched_setaffinity(0, sizeof(cpu_set_t), &comm->cpuAffinity);
-  if (ncclSetThreadContext(comm) != ncclSuccess) {
-    WARN("[Proxy Service] Failed to set CUDA context on device %d", comm->cudaDev);
-  } else if (cudaSetDevice(comm->cudaDev) != cudaSuccess) {
+  if (cudaSetDevice(comm->cudaDev) != cudaSuccess) {
     WARN("[Proxy Service] Failed to set CUDA device %d", comm->cudaDev);
+  } else if (ncclSetThreadContext(comm) != ncclSuccess) {
+    WARN("[Proxy Service] Failed to set CUDA context on device %d", comm->cudaDev);
   }
   if (CPU_COUNT(&comm->cpuAffinity)) sched_setaffinity(0, sizeof(cpu_set_t), &comm->cpuAffinity);
 

@@ -180,13 +180,25 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
                    hostname, pid, tid, cudaDev, timestamp, filefunc, line);
   }
 
-  if (len) {
+  // If header resulted in no error and was not truncated try to add caller payload and write:
+  if (len >= 0 && len < sizeof(buffer)) {
     va_list vargs;
     va_start(vargs, fmt);
-    len += vsnprintf(buffer+len, sizeof(buffer)-len, fmt, vargs);
+    // Try adding caller payload starting on the terminating \0 of the header
+    int va_len = vsnprintf(buffer+len, sizeof(buffer)-len, fmt, vargs);
     va_end(vargs);
-    buffer[len++] = '\n';
-    fwrite(buffer, 1, len, ncclDebugFile);
+    // If no error, write message
+    if (va_len >= 0) {
+      // If payload was not truncated, replace terminating \0 with \n and write message
+      if (va_len < sizeof(buffer) - len) {
+        buffer[len + va_len] = '\n';
+        fwrite(buffer, 1, len + va_len + 1, ncclDebugFile);
+      } else {
+        // If payload was truncated, replace last character with \n and write truncated message
+        buffer[sizeof(buffer) - 1] = '\n';
+        fwrite(buffer, 1, sizeof(buffer), ncclDebugFile);
+      }
+    }
   }
 }
 

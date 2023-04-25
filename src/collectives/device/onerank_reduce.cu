@@ -41,8 +41,10 @@ namespace {
       dst += i0;
       void *vsrc = (void*)src;
       void *vdst = (void*)dst;
+      uint32_t scratchAddr = cvta_to_shared(ncclScratchForWarp(tid/WARP_SIZE));
       reduceCopy<COLL_UNROLL, RedOp, T, 0,1,1, 0,1,1, /*PreOpSrcs=*/1>
-        (tid, tn, work->redOpArg, &(work->redOpArg), true, 1, &vsrc, 1, &vdst, i1-i0);
+        (tid, tn, work->redOpArg, &(work->redOpArg), true, 1, &vsrc, 1, &vdst, i1-i0,
+         scratchAddr);
     }
   }
 }

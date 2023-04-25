@@ -131,6 +131,9 @@ union alignas(16) BytePack<16> {
   ulong2 ul2[1], native;
 };
 
+// Use BytePackOf<T>::Pack to get a BytePack<?> of the correct size to hold a T.
+// BytePack<sizeof(T)> almost always works except when T=BytePack<0> (since
+// sizeof(BytePack<0>)==1, no C++ type has zero size), that's why we have this.
 template<typename T>
 struct BytePackOf {
   static constexpr int Size = sizeof(T);
@@ -329,59 +332,4 @@ __device__ __forceinline__ void multimem_st_global(uintptr_t addr, BytePack<Size
 }
 #endif
 
-// Warp-uniform memory copy from shared address (not generic) to global memory.
-// The number of bytes copied is `min(MaxBytes, nBytesAhead)`, a negative value
-// is interpeted as zero. EltSize is the guaranteed alignment of the addresses and sizes.
-template<int EltSize, int MaxBytes, bool Multimem, typename IntBytes>
-__device__ __forceinline__ void copyGlobalShared_WarpUnrolled(
-    int lane, uintptr_t dstAddr, uint32_t srcAddr, IntBytes nBytesAhead
-  ) {
-  static_assert(std::is_signed<IntBytes>::value, "`IntBytes` must be a signed integral type.");
-  int nBytes = min(nBytesAhead, (IntBytes)MaxBytes);
-  int nFrontBytes = min(nBytes, (16 - int(dstAddr%16))%16);
-  int nMiddleBytes = (nBytes-nFrontBytes) & -16;
-  int nBackBytes = (nBytes-nFrontBytes) % 16;
-
-  { int backLane = WARP_SIZE-1 - lane;
-    bool hasFront = lane*EltSize < nFrontBytes;
-    bool hasBack = backLane*EltSize < nBackBytes;
-    int offset = hasFront ? lane*EltSize : (nBytes - (backLane+1)*EltSize);
-    if (hasFront | hasBack) {
-      BytePack<EltSize> tmp = ld_shared<EltSize>(srcAddr+offset);
-      // Can't use multimem_st since it doesn't support EltSize==2
-      st_global<EltSize>(dstAddr+offset, tmp);
-    }
-  }
-
-  srcAddr += nFrontBytes;
-  int srcMisalign = EltSize < 4 ? (srcAddr%4) : 0;
-  srcAddr += -srcMisalign + lane*16;
-  dstAddr += nFrontBytes + lane*16;
-  nMiddleBytes -= lane*16;
-  #pragma unroll
-  for (int u=0; u < divUp(MaxBytes, WARP_SIZE*16); u++) {
-    if (nMiddleBytes <= 0) break;
-    union {
-      BytePack<4> b4[4];
-      BytePack<16> b16;
-    };
-    b4[0] = ld_shared<4>(srcAddr + 0*4);
-    b4[1] = ld_shared<4>(srcAddr + 1*4);
-    b4[2] = ld_shared<4>(srcAddr + 2*4);
-    b4[3] = ld_shared<4>(srcAddr + 3*4);
-    if (srcMisalign != 0) {
-      BytePack<4> b4_4 = ld_shared<4>(srcAddr + 4*4);
-      b4[0].native = __funnelshift_r(b4[0].native, b4[1].native, srcMisalign*8);
-      b4[1].native = __funnelshift_r(b4[1].native, b4[2].native, srcMisalign*8);
-      b4[2].native = __funnelshift_r(b4[2].native, b4[3].native, srcMisalign*8);
-      b4[3].native = __funnelshift_r(b4[3].native, b4_4.native, srcMisalign*8);
-    }
-    if (Multimem) multimem_st_global<16>(dstAddr, b16);
-    else          st_global<16>(dstAddr, b16);
-
-    srcAddr += WARP_SIZE*16;
-    dstAddr += WARP_SIZE*16;
-    nMiddleBytes -= WARP_SIZE*16;
-  }
-}
 #endif

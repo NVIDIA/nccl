@@ -82,10 +82,10 @@ struct RunWorkBatch<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPL
           }
         } break;
       default: // ncclDevWorkP2pTypeCopy:
-        { copyGlobalGlobal</*DstAligned=*/false, /*SrcAligned=*/false>
+        { copyOneToOne</*EltSize=*/1, /*DstAligned=*/false, /*SrcAligned=*/false>
             (subwn, subwid, lane,
-             cvta_to_global(work->copy.dstBuf), cvta_to_global(work->copy.srcBuf),
-             (int64_t)work->bytes, cvta_to_shared(ncclScratchForWarp(wid)));
+             work->copy.dstBuf, work->copy.srcBuf, (int64_t)work->bytes,
+             cvta_to_shared(ncclScratchForWarp(wid)));
         } break;
       }
     }

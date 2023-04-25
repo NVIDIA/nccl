@@ -258,7 +258,7 @@ ncclResult_t ncclNvlsInit(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
+ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent, cudaStream_t stream) {
   if (comm->nvlsSupport == 0 || comm->nvlsChannels == 0) return ncclSuccess;
 
   int nHeads = comm->channels[0].nvls.nHeads;
@@ -278,7 +278,7 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
     /* reuse NVLS resources */
     comm->nvlsChannels = std::min(comm->nvlsChannels, parent->nvlsResources->nChannels);
     for (int c = 0; c < comm->nvlsChannels; c++) {
-      NCCLCHECKGOTO(initNvlsChannel(comm, c, parent, true), res, cleanup);
+      NCCLCHECKGOTO(initNvlsChannel(comm, c, parent, true, stream), res, cleanup);
     }
 
     comm->nvlsResources = parent->nvlsResources;
@@ -300,7 +300,7 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
 
     nChannels = resources->nChannels = comm->nvlsChannels;
     for (int c = 0; c < nChannels; c++) {
-      NCCLCHECK(initNvlsChannel(comm, c, parent, false));
+      NCCLCHECK(initNvlsChannel(comm, c, parent, false, stream));
     }
 
     size_t buffSize = comm->buffSizes[NCCL_PROTO_SIMPLE];
@@ -408,7 +408,7 @@ ncclResult_t ncclNvlsInit(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
+ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent, cudaStream_t stream) {
   return ncclSuccess;
 }
 

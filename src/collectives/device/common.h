@@ -116,7 +116,7 @@ template<ncclFunc_t Fn, typename T, typename RedOp, int Algo, int Proto>
 struct RunWork {
   __device__ void run(ncclDevWorkColl*) {
     // Put NOT IMPLEMENTED behavior here.
-    printf("r=%d b=%d RunWork NOT IMPLEMENTED\n", ncclShmem.comm.rank, blockIdx.x);
+    __trap();
   }
 };
 

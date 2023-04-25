@@ -575,7 +575,7 @@ struct Apply_PostOp<FuncSumPostDiv<T>, /*EltPerPack=*/1> {
     __device__ static BytePack<PackSize> load(Fn<T> fn, uintptr_t addr) { \
       BytePack<PackSize> ans; \
       asm("multimem.ld_reduce.relaxed.sys.global." #op "." #ptx_ty " %0, [%1];" \
-        : "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field) \
+        : "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field[0]) \
         : "l"(addr) \
         : "memory"); \
       return ans; \
@@ -604,7 +604,7 @@ struct Apply_PostOp<FuncSumPostDiv<T>, /*EltPerPack=*/1> {
     __device__ static BytePack<sizeof(T)> load(Fn<T> fn, uintptr_t addr) { \
       BytePack<2*sizeof(T)> tmp; \
       asm("multimem.ld_reduce.relaxed.sys.global." #op "." #ptx_ty " %0, [%1];" \
-        : "=" PTX_REG_BytePack_field_##pack_field(tmp.pack_field) \
+        : "=" PTX_REG_BytePack_field_##pack_field(tmp.pack_field[0]) \
         : "l"(addr & -uintptr_t(sizeof(T))) \
         : "memory"); \
       return tmp.half[(addr/sizeof(T))%2]; \

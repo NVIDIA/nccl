@@ -302,19 +302,19 @@ __device__ __forceinline__ void multimem_st_global<0>(uintptr_t addr, BytePack<0
 }
 template<>
 __device__ __forceinline__ void multimem_st_global<1>(uintptr_t addr, BytePack<1> val) {
-  asm volatile("st.global.b8 [%0], %1;" :: "l"(addr), "r"((uint32_t)val.u8) : "memory");
+  asm volatile("st.global.b8 [%0], %1;" :: "l"(addr), "r"((uint32_t)val.u8[0]) : "memory");
 }
 template<>
 __device__ __forceinline__ void multimem_st_global<2>(uintptr_t addr, BytePack<2> val) {
-  asm volatile("st.global.b16 [%0], %1;" :: "l"(addr), "h"(val.u16) : "memory");
+  asm volatile("st.global.b16 [%0], %1;" :: "l"(addr), "h"(val.u16[0]) : "memory");
 }
 template<>
 __device__ __forceinline__ void multimem_st_global<4>(uintptr_t addr, BytePack<4> val) {
-  asm volatile("multimem.st.global.b32 [%0], %1;" :: "l"(addr), "r"(val.u32) : "memory");
+  asm volatile("multimem.st.global.b32 [%0], %1;" :: "l"(addr), "r"(val.u32[0]) : "memory");
 }
 template<>
 __device__ __forceinline__ void multimem_st_global<8>(uintptr_t addr, BytePack<8> val) {
-  asm volatile("multimem.st.global.b64 [%0], %1;" :: "l"(addr), "l"(val.u64) : "memory");
+  asm volatile("multimem.st.global.b64 [%0], %1;" :: "l"(addr), "l"(val.u64[0]) : "memory");
 }
 template<>
 __device__ __forceinline__ void multimem_st_global<16>(uintptr_t addr, BytePack<16> val) {

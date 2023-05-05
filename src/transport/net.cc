@@ -986,6 +986,9 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
             }
           }
           if (ready) {
+            // Profiler will not update if already in ncclProxyProfileRemFIFOWait state
+            ncclProfilingRecord(args, s, sub->transmitted, ncclProxyProfileRemFIFOWait);
+
             // Data is ready, try to send.
             NCCLCHECK(proxyState->ncclNet->isend(resources->netSendComm, buff, size, resources->tpRank, mhandle, sub->requests+buffSlot));
             if (sub->requests[buffSlot] != NULL) {
@@ -995,6 +998,7 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
               __sync_synchronize();
               sub->transmitted += args->sliceSteps;
               for (uint64_t step=sub->transmitted-args->sliceSteps; step<sub->transmitted; step++) ncclProfilingRecord(args, s, step, ncclProxyProfileSendWait);
+              for (uint64_t step=sub->transmitted-args->sliceSteps; step<sub->transmitted; step++) ncclProfilingRecordUpdate(args, s, step, resources->remoteRank, size);
               args->idle = 0;
               continue;
             }
@@ -1115,6 +1119,7 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
             struct ncclProxySubArgs* sub = subGroup+i;
             sub->posted += args->sliceSteps;
             for (uint64_t step=sub->posted-args->sliceSteps; step<sub->posted; step++) ncclProfilingRecord(args, s+i, step, ncclProxyProfileRecvWait);
+            for (uint64_t step=sub->posted-args->sliceSteps; step<sub->posted; step++) ncclProfilingRecordUpdate(args, s+i, step, resources->remoteRank, sizes[i]);
           }
           args->idle = 0;
         }

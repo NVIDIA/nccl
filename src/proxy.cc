@@ -915,6 +915,8 @@ static ncclResult_t ncclProxyProgressCreate(struct ncclProxyState* proxyState) {
   return ncclSuccess;
 }
 
+static int nProxyComms = 0;
+
 ncclResult_t ncclProxyProgressDestroy(struct ncclProxyState* proxyState) {
   struct ncclProxyProgressState* state = &proxyState->progressState;
 
@@ -933,9 +935,12 @@ ncclResult_t ncclProxyProgressDestroy(struct ncclProxyState* proxyState) {
     free(state->pools);
     state->pools = next;
   }
-
-  ncclProfilingDump();
-  ntraceProfilingDump();
+  // Dump profiling results only after destroying the last communicator
+  nProxyComms--;
+  if (nProxyComms == 0){
+    ncclProfilingDump();
+    ntraceProfilingDump();
+  }
   TIME_PRINT("Proxy");
   return ncclSuccess;
 }
@@ -1407,6 +1412,8 @@ static bool proxyMatchOpType(int type) {
 
 void* ncclProxyService(void* _args) {
   struct ncclProxyState* proxyState =  (struct ncclProxyState*) _args;
+  INFO(NCCL_INIT, "pid %d ncclProxyService for proxyState %p, nProxyComms=%d\n", getpid(), proxyState, nProxyComms);
+  nProxyComms++;
   // if (CPU_COUNT(&comm->cpuAffinity)) sched_setaffinity(0, sizeof(cpu_set_t), &comm->cpuAffinity);
   if (setProxyThreadContext(proxyState)) {
     INFO(NCCL_INIT, "[Proxy Service] Created CUDA context on device %d", proxyState->cudaDev);
@@ -1632,7 +1639,7 @@ ncclResult_t ncclProxyStop(struct ncclComm* comm) {
       }
     }
   }
-  
+
   return ncclSuccess;
 }
 

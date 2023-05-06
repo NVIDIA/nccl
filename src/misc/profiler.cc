@@ -109,7 +109,7 @@ void ncclProfilingDump() {
   fclose(f);
   free(profilingEvents);
 }
-#else
+#elif !defined(ENABLE_FB_PROFILE_PROXY)
 ncclResult_t ncclProfilingRecord(struct ncclProxyArgs* args, int sub, int step, int state) { return ncclSuccess; }
 void ncclProfilingDump() {}
 #endif

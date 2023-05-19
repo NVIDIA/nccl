@@ -17,6 +17,8 @@
 #include <pthread.h>
 #include <pwd.h>
 
+static bool envInitialized = false;
+
 const char* userHomeDir() {
   struct passwd *pwUser = getpwuid(getuid());
   return pwUser == NULL ? NULL : pwUser->pw_dir;
@@ -49,14 +51,17 @@ void setEnvFile(const char* fileName) {
 }
 
 void initEnv() {
-  char confFilePath[1024];
-  const char * userDir = userHomeDir();
-  if (userDir) {
-    sprintf(confFilePath, "%s/.nccl.conf", userDir);
+  if (!envInitialized) {
+    char confFilePath[1024];
+    const char * userDir = userHomeDir();
+    if (userDir) {
+      sprintf(confFilePath, "%s/.nccl.conf", userDir);
+      setEnvFile(confFilePath);
+    }
+    sprintf(confFilePath, "/etc/nccl.conf");
     setEnvFile(confFilePath);
+    envInitialized = true;
   }
-  sprintf(confFilePath, "/etc/nccl.conf");
-  setEnvFile(confFilePath);
 }
 
 void ncclLoadParam(char const* env, int64_t deftVal, int64_t uninitialized, int64_t* cache) {

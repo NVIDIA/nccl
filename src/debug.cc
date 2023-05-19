@@ -6,6 +6,7 @@
 
 #include "core.h"
 #include "nccl_net.h"
+#include "param.h"
 #include <stdlib.h>
 #include <stdarg.h>
 #include <sys/syscall.h>
@@ -25,6 +26,7 @@ static __thread int tid = -1;
 void ncclDebugInit() {
   pthread_mutex_lock(&ncclDebugLock);
   if (ncclDebugLevel != -1) { pthread_mutex_unlock(&ncclDebugLock); return; }
+  initEnv();
   const char* nccl_debug = getenv("NCCL_DEBUG");
   int tempNcclDebugLevel = -1;
   if (nccl_debug == NULL) {

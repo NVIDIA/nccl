@@ -13,6 +13,8 @@
 #include "proxy.h"
 #include "strongstream.h"
 
+#include <assert.h>
+
 #if CUDART_VERSION < 9000
 struct cudaLaunchParams {
   void *func;
@@ -277,8 +279,10 @@ struct ncclComm {
   // Next comm in this thread's active ncclGroup[Start|End](). Holds "0x1" when
   // this comm is not yet in a group.
   struct ncclComm* groupNext;
+  void* groupThread;
   // Subset of those in groupNext list. Holds 0x1 if not needing preconnect.
   struct ncclComm* preconnectNext;
+  int raceCount;
   int persistentRefs; // number of persistent plan-lists capturing this comm
   struct ncclTasks tasks;
 

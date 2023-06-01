@@ -1549,6 +1549,7 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo const* inf
 }
 
 ncclResult_t ncclEnqueueCheck(struct ncclInfo* info) {
+  assert(0 == __atomic_fetch_add(&info->comm->raceCount, 1, __ATOMIC_SEQ_CST));
   NCCLCHECK(ncclGroupStartInternal());
   ncclResult_t ret = ncclSuccess;
   int devOld = -1;
@@ -1577,6 +1578,7 @@ exit:
   /* if depth is 1, ncclGroupEndInternal() will trigger group ops. The state can change
    * so we have to check state here. */
   if (info->comm && !info->comm->blocking) { NCCLCHECK(ncclCommGetAsyncError(info->comm, &ret)) };
+  assert(1 == __atomic_fetch_add(&info->comm->raceCount, -1, __ATOMIC_SEQ_CST));
   return ret;
 fail:
   if (info->comm && !info->comm->blocking) (void) ncclCommSetAsyncError(info->comm, ret);

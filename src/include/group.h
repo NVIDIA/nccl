@@ -82,6 +82,8 @@ inline ncclResult_t ncclGroupErrCheck(ncclResult_t ret) {
 // Add comm to this thread's group
 inline void ncclGroupCommJoin(struct ncclComm* comm) {
   if (comm->groupNext == reinterpret_cast<struct ncclComm*>(0x1)) {
+    assert(nullptr == __atomic_exchange_n(&comm->groupThread, (void*)&ncclGroupCommHead, __ATOMIC_SEQ_CST));
+
     // Insert comm into ncclGroupCommHead adjacent to sibling comms. This preserves
     // the users program order yet insures siblings occur consecutively. This
     // is required by doLaunches() in "group.cc".
@@ -93,6 +95,8 @@ inline void ncclGroupCommJoin(struct ncclComm* comm) {
     // Comms gets a new memory stack scope upon joining. Each task batched for
     // this comm is allocated there.
     ncclMemoryStackPush(&comm->memScoped);
+  } else {
+    assert(comm->groupThread == (void*)&ncclGroupCommHead);
   }
 
   ncclGroupBlocking = comm->blocking;
@@ -108,6 +112,7 @@ inline void ncclGroupCommPreconnect(struct ncclComm* comm) {
 
 // Comm has left group
 inline ncclResult_t ncclGroupCommLeave(struct ncclComm* comm) {
+  comm->groupThread = nullptr;
   comm->groupNext = reinterpret_cast<struct ncclComm*>(0x1);
   ncclMemoryStackPop(&comm->memScoped);
   return ncclSuccess;

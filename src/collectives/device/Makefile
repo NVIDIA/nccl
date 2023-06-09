@@ -1,5 +1,6 @@
 #
 # Copyright (c) 2015-2021, NVIDIA CORPORATION. All rights reserved.
+# Modifications Copyright (c) Microsoft Corporation. Licensed under the MIT License.
 #
 # See LICENSE.txt for license information
 #
@@ -20,7 +21,7 @@ STATICLIB  := $(OBJDIR)/colldevice.a
 DEVOBJ     := $(OBJDIR)/devlink.o
 RULESFILE  := $(OBJDIR)/Makefile.rules
 
-NVCUFLAGS  += -I. -I.. -I$(BUILDDIR)/include -I../../include --compiler-options "-fPIC -fvisibility=hidden"
+NVCUFLAGS += -I. -I.. -I$(BUILDDIR)/include -I../../include -I../../include/msccl --compiler-options "-fPIC -fvisibility=hidden"
 
 
 all: $(STATICLIB)
@@ -36,7 +37,7 @@ $(RULESFILE) : gen_rules.sh
 
 -include $(RULESFILE)
 
-LIBOBJ     := $(GENOBJS) $(OBJDIR)/functions.o $(OBJDIR)/onerank_reduce.o
+LIBOBJ := $(GENOBJS) $(OBJDIR)/functions.o $(OBJDIR)/onerank_reduce.o $(OBJDIR)/msccl_kernel.o
 
 -include $(DEPFILES)
 
@@ -64,6 +65,11 @@ $(OBJDIR)/functions.o : functions.cu $(OBJDIR)/functions.dep
 	$(NVCC) $(NVCUFLAGS) -dc $< -o $@
 
 $(OBJDIR)/onerank_reduce.o : onerank_reduce.cu $(OBJDIR)/onerank_reduce.dep
+	@printf "Compiling  %-35s > %s\n" $< $@
+	mkdir -p `dirname $@`
+	$(NVCC) $(NVCUFLAGS) -dc $< -o $@
+
+$(OBJDIR)/msccl_kernel.o : msccl_kernel.cu $(OBJDIR)/msccl_kernel.dep
 	@printf "Compiling  %-35s > %s\n" $< $@
 	mkdir -p `dirname $@`
 	$(NVCC) $(NVCUFLAGS) -dc $< -o $@

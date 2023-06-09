@@ -1,5 +1,6 @@
 /*************************************************************************
  * Copyright (c) 2017-2022, NVIDIA CORPORATION. All rights reserved.
+ * Modifications Copyright (c) Microsoft Corporation. Licensed under the MIT License.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -57,7 +58,21 @@ struct ncclDevRedOpFull {
   DECL4(func, NVLS,           devredop, type, undef) \
   DECL4(func, NVLS_TREE,      devredop, type, undef)
 
-#if defined(__CUDA_BF16_TYPES_EXIST__)
+#if defined(__CUDA_BF16_TYPES_EXIST__) && defined(__CUDA_FP8_TYPES_EXIST__)
+#define DECL2(func, devredop, undefForFloat) \
+  DECL3(func, devredop, int8_t, /*undef=*/0) \
+  DECL3(func, devredop, uint8_t, /*undef=*/0) \
+  DECL3(func, devredop, int32_t, /*undef=*/0) \
+  DECL3(func, devredop, uint32_t, /*undef=*/0) \
+  DECL3(func, devredop, int64_t, /*undef=*/0) \
+  DECL3(func, devredop, uint64_t, /*undef=*/0) \
+  DECL3(func, devredop, half, /*undef=*/undefForFloat) \
+  DECL3(func, devredop, float, /*undef=*/undefForFloat) \
+  DECL3(func, devredop, double, /*undef=*/undefForFloat) \
+  DECL3(func, devredop, __nv_bfloat16, /*undef=*/undefForFloat) \
+  DECL3(func, devredop, __nv_fp8_e4m3, /*undef=*/undefForFloat) \
+  DECL3(func, devredop, __nv_fp8_e5m2, /*undef=*/undefForFloat)
+#elif defined(__CUDA_BF16_TYPES_EXIST__)
 #define DECL2(func, devredop, undefForFloat) \
   DECL3(func, devredop, int8_t, /*undef=*/0) \
   DECL3(func, devredop, uint8_t, /*undef=*/0) \
@@ -106,6 +121,10 @@ extern __device__ void NCCL_ONERANK_REDUCE_NAME(PreMulSum, uint64_t)();
 extern __device__ void NCCL_ONERANK_REDUCE_NAME(PreMulSum, half)();
 #if defined(__CUDA_BF16_TYPES_EXIST__)
 extern __device__ void NCCL_ONERANK_REDUCE_NAME(PreMulSum, __nv_bfloat16)();
+#endif
+#if defined(__CUDA_FP8_TYPES_EXIST__)
+extern __device__ void NCCL_ONERANK_REDUCE_NAME(PreMulSum, __nv_fp8_e4m3)();
+extern __device__ void NCCL_ONERANK_REDUCE_NAME(PreMulSum, __nv_fp8_e5m2)();
 #endif
 extern __device__ void NCCL_ONERANK_REDUCE_NAME(PreMulSum, float)();
 extern __device__ void NCCL_ONERANK_REDUCE_NAME(PreMulSum, double)();

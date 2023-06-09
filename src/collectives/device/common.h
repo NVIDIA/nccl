@@ -1,5 +1,6 @@
 /*************************************************************************
  * Copyright (c) 2017-2022, NVIDIA CORPORATION. All rights reserved.
+ * Modifications Copyright (c) Microsoft Corporation. Licensed under the MIT License.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -259,6 +260,10 @@ __device__ void NCCL_FUNC_NAME(func, algo, proto, devredop, type)() { \
 #define IMPL_COLL2(func, devredop) IMPL_COLL3(func, devredop, double,   ncclFloat64)
 #elif NCCL_TYPE == 9 && defined(__CUDA_BF16_TYPES_EXIST__)
 #define IMPL_COLL2(func, devredop) IMPL_COLL3(func, devredop, __nv_bfloat16, ncclBfloat16)
+#elif NCCL_TYPE == 10 && defined(__CUDA_FP8_TYPES_EXIST__)
+#define IMPL_COLL2(func, devredop) IMPL_COLL3(func, devredop, __nv_fp8_e4m3, ncclFp8E4M3)
+#elif NCCL_TYPE == 11 && defined(__CUDA_FP8_TYPES_EXIST__)
+#define IMPL_COLL2(func, devredop) IMPL_COLL3(func, devredop, __nv_fp8_e5m2, ncclFp8E5M2)
 #endif
 
 // Reduction define all functions

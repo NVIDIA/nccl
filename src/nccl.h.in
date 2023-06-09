@@ -1,5 +1,6 @@
 /*************************************************************************
  * Copyright (c) 2015-2021, NVIDIA CORPORATION. All rights reserved.
+ * Modifications Copyright (c) Microsoft Corporation. Licensed under the MIT License.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -11,6 +12,9 @@
 #include <cuda_fp16.h>
 #if CUDART_VERSION >= 11000
 #include <cuda_bf16.h>
+#endif
+#if CUDART_VERSION >= 11080
+#include <cuda_fp8.h>
 #endif
 
 #define NCCL_MAJOR ${nccl:Major}
@@ -196,7 +200,12 @@ typedef enum { ncclInt8       = 0, ncclChar       = 0,
                ncclFloat16    = 6, ncclHalf       = 6,
                ncclFloat32    = 7, ncclFloat      = 7,
                ncclFloat64    = 8, ncclDouble     = 8,
-#if defined(__CUDA_BF16_TYPES_EXIST__)
+#if defined(__CUDA_BF16_TYPES_EXIST__) && defined(__CUDA_FP8_TYPES_EXIST__)
+               ncclBfloat16   = 9,
+               ncclFp8E4M3    = 10,
+               ncclFp8E5M2    = 11,
+               ncclNumTypes   = 12
+#elif defined(__CUDA_BF16_TYPES_EXIST__)
                ncclBfloat16   = 9,
                ncclNumTypes   = 10
 #else
@@ -374,6 +383,57 @@ ncclResult_t pncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype, in
     ncclComm_t comm, cudaStream_t stream);
 ncclResult_t  ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype, int peer,
     ncclComm_t comm, cudaStream_t stream);
+
+/* All-To-All
+ *
+ * Device (i) send (j)th block of data to device (j) and be placed as (i)th
+ * block. Each block for sending/receiving has count elements, which means
+ * that recvbuff and sendbuff should have a size of nranks*count elements.
+ *
+ * In-place operation will happen if sendbuff == recvbuff.
+ */
+ncclResult_t  ncclAllToAll(const void* sendbuff, void* recvbuff, size_t count,
+    ncclDataType_t datatype, ncclComm_t comm, cudaStream_t stream);
+ncclResult_t pncclAllToAll(const void* sendbuff, void* recvbuff, size_t count,
+    ncclDataType_t datatype, ncclComm_t comm, cudaStream_t stream);
+
+/*! @brief Opaque handle to MSCCL algorithm */
+typedef int mscclAlgoHandle_t;
+
+/*! @brief MSCCL Load Algorithm
+ *
+ * @details Load MSCCL algorithm file specified in mscclAlgoFilePath and return
+ * its handle via mscclAlgoHandle. This API is expected to be called by MSCCL
+ * scheduler instead of end users.
+ */
+ncclResult_t  mscclLoadAlgo(const char *mscclAlgoFilePath, mscclAlgoHandle_t *mscclAlgoHandle, int rank);
+ncclResult_t pmscclLoadAlgo(const char *mscclAlgoFilePath, mscclAlgoHandle_t *mscclAlgoHandle, int rank);
+
+/*! @brief MSCCL Run Algorithm
+ *
+ * @details Run MSCCL algorithm specified by mscclAlgoHandle. The parameter
+ * list merges all possible parameters required by different operations as this
+ * is a general-purposed API. This API is expected to be called by MSCCL
+ * scheduler instead of end users.
+ */
+ncclResult_t  mscclRunAlgo(
+    const void* sendBuff, const size_t sendCounts[], const size_t sDisPls[],
+    void* recvBuff, const size_t recvCounts[], const size_t rDisPls[],
+    size_t count, ncclDataType_t dataType, int root, int peer, ncclRedOp_t op,
+    mscclAlgoHandle_t mscclAlgoHandle, ncclComm_t comm, cudaStream_t stream);
+ncclResult_t pmscclRunAlgo(
+    const void* sendBuff, const size_t sendCounts[], const size_t sDisPls[],
+    void* recvBuff, const size_t recvCounts[], const size_t rDisPls[],
+    size_t count, ncclDataType_t dataType, int root, int peer, ncclRedOp_t op,
+    mscclAlgoHandle_t mscclAlgoHandle, ncclComm_t comm, cudaStream_t stream);
+
+/*! @brief MSCCL Load Algorithm
+ *
+ * @details Unload MSCCL algorithm previous loaded using its handle. This API
+ * is expected to be called by MSCCL scheduler instead of end users.
+ */
+ncclResult_t mscclUnloadAlgo(mscclAlgoHandle_t mscclAlgoHandle);
+ncclResult_t pmscclUnloadAlgo(mscclAlgoHandle_t mscclAlgoHandle);
 
 /*
  * Group semantics

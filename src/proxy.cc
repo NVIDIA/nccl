@@ -1,5 +1,6 @@
 /*************************************************************************
  * Copyright (c) 2016-2022, NVIDIA CORPORATION. All rights reserved.
+ * Modifications Copyright (c) Microsoft Corporation. Licensed under the MIT License.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -15,8 +16,6 @@
 
 #include <sys/syscall.h>
 #include <assert.h>
-
-enum { proxyRecv=0, proxySend=1 };
 
 static bool NeedProxy(int type, int pattern, int root, struct ncclRing* ring, int nranks) {
   if (pattern == ncclPatternRing || pattern == ncclPatternRingTwice) return true;
@@ -515,6 +514,11 @@ static ncclResult_t SaveProxy(struct ncclComm* comm, struct ncclChannel* channel
   else {
     NCCLCHECK(ncclLocalOpAppend(comm, &connector->proxyConn, op));
   }
+  return ncclSuccess;
+}
+
+ncclResult_t mscclSaveProxy(struct ncclComm* comm, struct ncclChannel* channel, int type, int peer, struct ncclProxyOp* op, int connIndex, bool* justInquire) {
+  NCCLCHECK(SaveProxy(comm, channel, type, peer, op, connIndex, justInquire));
   return ncclSuccess;
 }
 

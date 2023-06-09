@@ -1,5 +1,6 @@
 /*************************************************************************
  * Copyright (c) 2015-2022, NVIDIA CORPORATION. All rights reserved.
+ * Modifications Copyright (c) Microsoft Corporation. Licensed under the MIT License.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -24,6 +25,9 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "graph/topo.h"
+#include "graph/xml.h"
+#include "msccl/msccl_lifecycle.h"
 
 #define STR2(v) #v
 #define STR(v) STR2(v)
@@ -426,6 +430,10 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
     if (comm->channels[c].ring.userRanks != nullptr) {
       NCCLCHECKGOTO(ncclCudaMemcpyAsync(tmpCommAndChans.channels[c].ring.userRanks, comm->channels[c].ring.userRanks, nRanks, comm->sharedRes->deviceStream.cudaStream), ret, fail);
     }
+  }
+
+  if (mscclEnabled()) {
+    NCCLCHECK(mscclInit(comm));
   }
 
   NCCLCHECKGOTO(ncclCudaMemcpyAsync(devCommAndChans, &tmpCommAndChans, 1, comm->sharedRes->deviceStream.cudaStream), ret, fail);
@@ -1732,6 +1740,10 @@ static ncclResult_t commCleanup(ncclComm_t comm) {
 
   if (savedDevice != commDevice) {
     CUDACHECK(cudaSetDevice(savedDevice));
+  }
+
+  if (mscclEnabled()) {
+    NCCLCHECK(mscclTeardown());
   }
 
   return ncclSuccess;

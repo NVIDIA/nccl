@@ -1,0 +1,33 @@
+<system version="1">
+  <cpu numaid="0" affinity="00000000,00000000,00ffffff" arch="x86_64" vendor="AuthenticAMD" familyid="175" modelid="1">
+    <pci busid="0001:00:00.0" class="0x030200" vendor="0x10de" device="0x20b5" subsystem_vendor="0x10de" subsystem_device="0x1533" link_speed="" link_width="0">
+      <gpu dev="0" sm="80" rank="0" gdr="1">
+        <nvlink target="0002:00:00.0" count="12" tclass="0x030200"/>
+      </gpu>
+    </pci>
+    <nic>
+      <net name="eth0" dev="0" speed="100000" port="0" latency="0.000000" guid="0x0" maxconn="65536" gdr="0"/>
+    </nic>
+  </cpu>
+  <cpu numaid="1" affinity="00000000,0000ffff,ff000000" arch="x86_64" vendor="AuthenticAMD" familyid="175" modelid="1">
+    <pci busid="0002:00:00.0" class="0x030200" vendor="0x10de" device="0x20b5" subsystem_vendor="0x10de" subsystem_device="0x1533" link_speed="" link_width="0">
+      <gpu dev="1" sm="80" rank="1" gdr="1">
+        <nvlink target="0001:00:00.0" count="12" tclass="0x030200"/>
+      </gpu>
+    </pci>
+  </cpu>
+  <cpu numaid="2" affinity="000000ff,ffff0000,00000000" arch="x86_64" vendor="AuthenticAMD" familyid="175" modelid="1">
+    <pci busid="0003:00:00.0" class="0x030200" vendor="0x10de" device="0x20b5" subsystem_vendor="0x10de" subsystem_device="0x1533" link_speed="" link_width="0">
+      <gpu dev="2" sm="80" rank="2" gdr="1">
+        <nvlink target="0004:00:00.0" count="12" tclass="0x030200"/>
+      </gpu>
+    </pci>
+  </cpu>
+  <cpu numaid="3" affinity="ffffff00,00000000,00000000" arch="x86_64" vendor="AuthenticAMD" familyid="175" modelid="1">
+    <pci busid="0004:00:00.0" class="0x030200" vendor="0x10de" device="0x20b5" subsystem_vendor="0x10de" subsystem_device="0x1533" link_speed="" link_width="0">
+      <gpu dev="3" sm="80" rank="3" gdr="1">
+        <nvlink target="0003:00:00.0" count="12" tclass="0x030200"/>
+      </gpu>
+    </pci>
+  </cpu>
+</system>

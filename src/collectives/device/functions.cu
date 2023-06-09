@@ -1,5 +1,6 @@
 /*************************************************************************
  * Copyright (c) 2015-2021, NVIDIA CORPORATION. All rights reserved.
+ * Modifications Copyright (c) Microsoft Corporation. Licensed under the MIT License.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -26,7 +27,35 @@ __shared__ ncclShmemData ncclShmem;
   NCCL_FUNC5(func, NVLS,           devredop, type, nullify), \
   NCCL_FUNC5(func, NVLS_TREE,      devredop, type, nullify)
 
-#if defined(__CUDA_BF16_TYPES_EXIST__)
+#if defined(__CUDA_BF16_TYPES_EXIST__) && defined(__CUDA_FP8_TYPES_EXIST__)
+// Must be consistent with ncclDataType_t
+#define NCCL_FUNCS3A(func, devredop, nullForFloat) \
+  NCCL_FUNC4(func, devredop, int8_t, 0), \
+  NCCL_FUNC4(func, devredop, uint8_t, 0), \
+  NCCL_FUNC4(func, devredop, int32_t, 0), \
+  NCCL_FUNC4(func, devredop, uint32_t, 0), \
+  NCCL_FUNC4(func, devredop, int64_t, 0), \
+  NCCL_FUNC4(func, devredop, uint64_t, 0), \
+  NCCL_FUNC4(func, devredop, half, nullForFloat), \
+  NCCL_FUNC4(func, devredop, float, nullForFloat), \
+  NCCL_FUNC4(func, devredop, double, nullForFloat), \
+  NCCL_FUNC4(func, devredop, __nv_bfloat16, nullForFloat), \
+  NCCL_FUNC4(func, devredop, __nv_fp8_e4m3, nullForFloat), \
+  NCCL_FUNC4(func, devredop, __nv_fp8_e5m2, nullForFloat)
+#define NCCL_FUNCS3B(func, devredop) \
+  NCCL_FUNC4(func, devredop, int8_t, 0), \
+  NCCL_FUNC4(func, devredop, int8_t, 0), \
+  NCCL_FUNC4(func, devredop, int8_t, 0), \
+  NCCL_FUNC4(func, devredop, int8_t, 0), \
+  NCCL_FUNC4(func, devredop, int8_t, 0), \
+  NCCL_FUNC4(func, devredop, int8_t, 0), \
+  NCCL_FUNC4(func, devredop, int8_t, 0), \
+  NCCL_FUNC4(func, devredop, int8_t, 0), \
+  NCCL_FUNC4(func, devredop, int8_t, 0), \
+  NCCL_FUNC4(func, devredop, int8_t, 0), \
+  NCCL_FUNC4(func, devredop, int8_t, 0), \
+  NCCL_FUNC4(func, devredop, int8_t, 0)
+#elif defined(__CUDA_BF16_TYPES_EXIST__)
 // Must be consistent with ncclDataType_t
 #define NCCL_FUNCS3A(func, devredop, nullForFloat) \
   NCCL_FUNC4(func, devredop, int8_t, 0), \
@@ -109,6 +138,10 @@ __device__ ncclKern_t ncclFuncs[1+ncclNumTypes+NCCL_NUM_FUNCTIONS*ncclNumDevRedO
   NCCL_ONERANK_REDUCE_NAME(PreMulSum, double),
   #if defined(__CUDA_BF16_TYPES_EXIST__)
     NCCL_ONERANK_REDUCE_NAME(PreMulSum, __nv_bfloat16),
+  #endif
+  #if defined(__CUDA_FP8_TYPES_EXIST__)
+    NCCL_ONERANK_REDUCE_NAME(PreMulSum, __nv_fp8_e4m3),
+    NCCL_ONERANK_REDUCE_NAME(PreMulSum, __nv_fp8_e5m2),
   #endif
   NCCL_FUNCS2B(Broadcast),
   NCCL_FUNCS2A(Reduce),

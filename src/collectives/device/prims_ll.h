@@ -1,6 +1,6 @@
 /*************************************************************************
  * Copyright (c) 2016-2022, NVIDIA CORPORATION. All rights reserved.
- *
+ * Modifications Copyright (c) Microsoft Corporation. Licensed under the MIT License.
  * See LICENSE.txt for license information
  ************************************************************************/
 
@@ -223,6 +223,20 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
     }
   }
 
+  __device__ void mscclStoreData(T *dst, uint64_t val, int eltN) {
+    union {
+      uint64_t u8;
+      T elt[EltPerLine];
+    };
+    u8 = val;
+    #pragma unroll
+    for(int i=0; i < EltPerLine; i++) {
+      if (i==0 || i < eltN)
+        store(dst+i, elt[i]);
+        // dst[i] = elt[i];
+    }
+  }
+
   template <int RECV, int SEND, int SrcBuf, int DstBuf>
   __device__ __forceinline__ void LLGenericOp(intptr_t srcIx, intptr_t dstIx, int nelem, bool postOp) {
     constexpr int SRC = SrcBuf != -1 ? 1 : 0;
@@ -293,6 +307,69 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
     }
   }
 
+template <int REDUCE, int COPY, int MULTISRCS, int MULTIDSTS>
+  __device__ __forceinline__ void mscclGenericOp(T** srcs, int nsrcs, T** dsts, int ndsts, int nelem) {
+    nelem = nelem < 0 ? 0 : nelem;
+    T *srcElts = srcs[0];
+    T *dstElts = dsts[0];
+    nelem -= tid*EltPerLine;
+    srcElts += tid*EltPerLine;
+    dstElts += tid*EltPerLine;
+    if (MULTISRCS){
+      for (int i = 1; i < nsrcs; i++){
+        srcs[i] += tid*EltPerLine;
+      }
+    }
+    if (MULTIDSTS){
+      for (int i = 1; i < ndsts; i++){
+        dsts[i] += tid*EltPerLine;
+      }
+    }
+    int offset = tid;
+    int eltPerTrip = nthreads*EltPerLine;
+    while (nelem > 0) {
+      int eltInLine = EltPerLine < nelem ? EltPerLine : nelem;
+
+      DataLoader dl;
+      uint64_t data;
+      dl.loadBegin(srcElts, eltInLine);
+      srcElts += eltPerTrip;
+      data = dl.loadFinish();
+      if (REDUCE) {
+        uint64_t dataD;
+        dl.loadBegin(dstElts, eltInLine);
+        dataD = dl.loadFinish();
+        dataD = applyReduce(redOp, dataD, data);
+        if (MULTISRCS){
+          for (int i = 1; i < nsrcs; i++){
+            dl.loadBegin(srcs[i], eltInLine);
+            srcs[i] += eltPerTrip;
+            data = dl.loadFinish();
+            dataD = applyReduce(redOp, dataD, data);
+          }
+        }
+        mscclStoreData(dstElts, dataD, eltInLine);
+        dstElts += eltPerTrip;
+      }
+      if (COPY){
+        mscclStoreData(dstElts, data, eltInLine);
+        dstElts += eltPerTrip;
+        if (MULTIDSTS){
+          for (int i = 1; i < ndsts; i++){
+            dl.loadBegin(srcs[i], eltInLine);
+            srcs[i] += eltPerTrip;
+            data = dl.loadFinish();
+            mscclStoreData(dsts[i], data, eltInLine);
+            dsts[i] += eltPerTrip;
+          }
+        }
+      }
+      nelem -= eltPerTrip;
+      offset += nthreads;
+    }
+    barrier();
+  }
+  
   __device__ __forceinline__ void loadRecvConn(struct ncclConnInfo* conn, int i) {
     recvBuff[i] = (union ncclLLFifoLine*)conn->buffs[NCCL_PROTO_LL];
     recvStep[i] = conn->step;
@@ -389,5 +466,21 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
   }
   __device__ void recvReduceCopySend(intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false) {
     return LLGenericOp<1, 1, Input, Output>(inpIx, outIx, eltN, postOp);
+  }
+  // MSCCL primitives
+  __device__ void sendWithBarrier(intptr_t inpIx, int eltN) {
+    send(inpIx, eltN);
+    // This is the only primitive.instruction where there is no barrier at the end, add it
+    barrier();
+  }
+  __device__ void localCopy(T* srcs, T* dsts, int eltN) {
+    return mscclGenericOp<0,1,0,0>(&srcs, 1, &dsts, 1, eltN);
+  }
+  __device__ void reduce(T** srcs, int nsrcs, T** dsts, int ndsts, int eltN) {
+    if (nsrcs == 1) {
+      return mscclGenericOp<1,0,0,0>(srcs, 1, dsts, 1, eltN);
+    } else {
+      return mscclGenericOp<1,0,1,0>(srcs, nsrcs, dsts, 1, eltN);
+    }
   }
 };

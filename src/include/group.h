@@ -1,5 +1,6 @@
 /*************************************************************************
  * Copyright (c) 2015-2017, NVIDIA CORPORATION. All rights reserved.
+ * Modifications Copyright (c) Microsoft Corporation. Licensed under the MIT License.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -66,11 +67,6 @@ extern __thread ncclResult_t ncclGroupError;
 extern __thread struct ncclComm* ncclGroupCommHead;
 extern __thread struct ncclComm* ncclGroupCommPreconnectHead;
 extern __thread int ncclGroupBlocking;
-
-inline ncclResult_t ncclGroupStartInternal() {
-  ncclGroupDepth++;
-  return ncclSuccess;
-}
 
 inline ncclResult_t ncclGroupErrCheck(ncclResult_t ret) {
   if (ncclGroupDepth > 0) {

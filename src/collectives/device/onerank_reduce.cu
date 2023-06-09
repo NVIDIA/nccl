@@ -1,5 +1,6 @@
 /*************************************************************************
  * Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
+ * Modifications Copyright (c) Microsoft Corporation. Licensed under the MIT License.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -57,6 +58,10 @@ INSTANTIATE(PreMulSum, uint64_t)
 INSTANTIATE(PreMulSum, half)
 #if defined(__CUDA_BF16_TYPES_EXIST__)
 INSTANTIATE(PreMulSum, __nv_bfloat16)
+#endif
+#if defined(__CUDA_FP8_TYPES_EXIST__)
+INSTANTIATE(PreMulSum, __nv_fp8_e4m3)
+INSTANTIATE(PreMulSum, __nv_fp8_e5m2)
 #endif
 INSTANTIATE(PreMulSum, float)
 INSTANTIATE(PreMulSum, double)

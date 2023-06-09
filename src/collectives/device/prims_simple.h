@@ -1,8 +1,11 @@
 /*************************************************************************
  * Copyright (c) 2016-2022, NVIDIA CORPORATION. All rights reserved.
+ * Modifications Copyright (c) Microsoft Corporation. Licensed under the MIT License.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
+
+#include "msccl/msccl_struct.h"
 
 template<typename T, typename RedOp, typename Fan, int Direct,
          int SlicePerChunk, int StepPerSlice, int Unroll, int P2p, int MultimemSrcs, int MultimemDsts>
@@ -279,6 +282,35 @@ class Primitives<
       offset += sliceSize;
       slice += 1;
     }
+  }
+
+  template <int REDUCE, int COPY, int MULTISRCS, int MULTIDSTS>
+  __device__ __forceinline__ void mscclGenericOp(T** srcs, int nsrcs, T** dsts, int ndsts, int nelem) {
+    nelem = nelem < 0 ? 0 : nelem;
+    if (tid < nworkers) {
+      if (REDUCE){
+        srcs[nsrcs] = dsts[0];
+        nsrcs++;
+        if (MULTISRCS){
+          reduceCopy<Unroll, RedOp, T, MultimemSrcs, 3, MSCCL_MAX_REDUCE_FUSION, 0, 1, 1, 0>
+            (tid, nworkers, ncclShmem.redOpArgs[0], nullptr, false, nsrcs, (void**)srcs, 1, (void**)dsts, nelem);
+        } else {
+          reduceCopy<Unroll, RedOp, T, 0, 2, 2, 0, 1, 1, 0>
+            (tid, nworkers, ncclShmem.redOpArgs[0], nullptr, false, 2, (void**)srcs, 1, (void**)dsts, nelem);
+        }
+      }
+      if (COPY){
+        reduceCopy<Unroll, RedOp, T, 0, 1, 1, 0, 1, 1, 0>
+          (tid, nworkers, ncclShmem.redOpArgs[0], nullptr, false, 1, (void**)srcs, 1, (void**)dsts, nelem);
+        if (MULTISRCS) {
+          for (int i = 1; i < nsrcs; i++){
+            reduceCopy<Unroll, RedOp, T, 0, 1, 1, 0, 1, 1, 0>
+              (tid, nworkers, ncclShmem.redOpArgs[0], nullptr, false, 1, (void**)&srcs[i], 1, (void**)&dsts[i], nelem);
+          }
+        }
+      }
+    }
+    barrier();
   }
 
   // Scatter/Gather generic op
@@ -578,6 +610,11 @@ class Primitives<
     if (flags & (RoleInput|RoleOutput))
       userBuff += delta;
   }
+  // Set MSCCL data pointers
+  __device__ __forceinline__ void setDataPtrs(void const *inputBuf, void *outputBuf) {
+    if (flags & RoleInput) userBuff = (T*)inputBuf;
+    if (flags & RoleOutput) userBuff = (T*)outputBuf;
+  }
 
   __device__ __forceinline__ void send(intptr_t inpIx, int eltN) {
     genericOp<0, 0, 0, 1, Input, -1>(inpIx, -1, eltN, false);
@@ -654,5 +691,19 @@ class Primitives<
   __device__ __forceinline__ void
   directGather(intptr_t outIx, int totalElem, int peerElem, int peerOffset, int skip, int shift) {
     ScatterGatherOp<1, 0, 1, 0>(-1, outIx, totalElem, peerElem, peerOffset, skip, shift, /*postOp=*/false);
+  }
+  // MSCCL primitives
+  __device__ __forceinline__ void sendWithBarrier(intptr_t inpIx, int eltN) {
+    send(inpIx, eltN);
+  }
+  __device__ __forceinline__ void localCopy(T* srcs, T* dsts, int eltN) {
+    return mscclGenericOp<0,1,0,0>(&srcs, 1, &dsts, 1, eltN);
+  }
+  __device__ __forceinline__ void reduce(T** srcs, int nsrcs, T** dsts, int ndsts, int eltN) {
+    if (nsrcs == 1) {
+      return mscclGenericOp<1,0,0,0>(srcs, 1, dsts, 1, eltN);
+    } else {
+      return mscclGenericOp<1,0,1,0>(srcs, nsrcs, dsts, 1, eltN);
+    }
   }
 };

@@ -215,6 +215,7 @@ struct ncclComm {
   int rank;    // my rank in the communicator
   int nRanks;  // number of GPUs in communicator
   int cudaDev; // my cuda device index
+  int nvmlDev; // my nvml device index
   int compCap; // compute capability of the GPU
   int minCompCap, maxCompCap; // min/max compute capability in the communicator
   int64_t busId;   // my PCI bus ID in int format
@@ -298,6 +299,7 @@ struct ncclComm {
   int proxyRefCountOld; /* store proxy post-atomic-sub refcount */
   // Whether this communicator uses collNet
   int collNetSupport;
+  uint8_t collNetSupportMatrix[4/*sum,prod,min,max*/][ncclNumTypes];
   int intraHighestTransportType;
   int* collNetHeads;
   int collNetHeadsNum;

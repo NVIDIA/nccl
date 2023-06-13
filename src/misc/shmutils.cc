@@ -32,7 +32,7 @@ static void shmHandleInit(int fd, char* shmPath, size_t shmSize, size_t realShmS
   handle->devShmPtr = dptr;
   handle->shmSize = shmSize;
   handle->realShmSize = realShmSize;
-  handle->refcount = (int*)(hptr + shmSize);
+  handle->refcount = (hptr != NULL) ? (int*)(hptr + shmSize) : NULL;
   if (create) {
     int slen = strlen(shmPath);
     handle->shmPath = (char*)malloc(slen + 1);
@@ -81,6 +81,7 @@ ncclResult_t ncclShmOpen(char* shmPath, size_t shmSize, void** shmPtr, void** de
   if (hptr == MAP_FAILED) {
     WARN("Could not map %s size %zi, error: %s", shmPath, realShmSize, strerror(errno));
     ret = ncclSystemError;
+    hptr = NULL;
     goto fail;
   }
 
@@ -125,7 +126,7 @@ ncclResult_t ncclShmClose(ncclShmHandle_t handle) {
   if (tmphandle) {
     if (tmphandle->fd >= 0) {
       close(tmphandle->fd);
-      if (tmphandle->shmPath != NULL && *tmphandle->refcount > 0) {
+      if (tmphandle->shmPath != NULL && tmphandle->refcount != NULL && *tmphandle->refcount > 0) {
         if (unlink(tmphandle->shmPath) != 0) {
           WARN("unlink shared memory %s failed, error: %s", tmphandle->shmPath, strerror(errno));
           ret = ncclSystemError;

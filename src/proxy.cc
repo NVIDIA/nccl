@@ -1474,10 +1474,11 @@ void* ncclProxyService(void* _args) {
       // Progress all ops for this ncclProxyLocalPeer
       ncclProxyAsyncOp* op = peer->asyncOps;
       while (op != nullptr) {
+        ncclProxyAsyncOp* opnext = op->next; /* in case op is freed in proxyProgressAsync */
         type = op->type;
         res = proxyProgressAsync(op, proxyState, &asyncOpCount, peer, &connectionPool);
         if (res == ncclSuccess || res == ncclInProgress) {
-          op = op->next;
+          op = opnext;
         } else {
           // Res is a bad result
           closeConn = 1;
@@ -1620,7 +1621,7 @@ ncclResult_t ncclProxyStop(struct ncclComm* comm) {
       }
     }
   }
-  
+
   return ncclSuccess;
 }
 

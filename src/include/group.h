@@ -35,6 +35,7 @@ struct ncclAsyncJob {
   void(*destructor)(void*);
   ncclGroupJobState_t state;
   volatile uint32_t *abortFlag; /* point to comm abortFlag */
+  volatile uint32_t *childAbortFlag; /* point to child abortFlag */
   ncclComm_t comm;
 };
 
@@ -66,8 +67,34 @@ extern __thread ncclResult_t ncclGroupError;
 extern __thread struct ncclComm* ncclGroupCommHead;
 extern __thread struct ncclComm* ncclGroupCommPreconnectHead;
 extern __thread int ncclGroupBlocking;
+extern __thread struct ncclGroupJob *ncclGroupJobMainPtr;
+extern __thread struct ncclGroupJob ncclGroupJobMain;
+
+static inline void groupResetJobState() {
+  ncclGroupBlocking = -1;
+  ncclGroupJobMainPtr = NULL;
+  memset(&ncclGroupJobMain, 0, sizeof(struct ncclGroupJob));
+  return;
+}
+
+static inline ncclResult_t groupJobComplete(struct ncclGroupJob* job) {
+  ncclResult_t ret = ncclSuccess;
+  if (job) {
+    ret = ncclAsyncJobComplete(&job->base);
+    groupResetJobState();
+  }
+  return ret;
+}
 
 inline ncclResult_t ncclGroupStartInternal() {
+  /* if previous group launch does not complete, don't launch this one. */
+  if (ncclGroupJobMainPtr != NULL) {
+    if (__atomic_load_n(&ncclGroupJobMainPtr->doneFlag, __ATOMIC_ACQUIRE) == false) {
+      return ncclInvalidUsage;
+    } else {
+      NCCLCHECK(groupJobComplete(ncclGroupJobMainPtr));
+    }
+  }
   ncclGroupDepth++;
   return ncclSuccess;
 }

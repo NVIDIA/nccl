@@ -327,19 +327,15 @@ class Primitives<
           // Adjust remote index with peer offset in case we are directly pulling from peer's output buffer
           waitPeer<DirectRecv, 0, 1, 0, 0, 1>(outIx, outIx+pOffset, offset, realSize);
           subBarrier();
-          if (DirectRecv && ncclShmem.groups[group].srcs[0] == ncclShmem.groups[group].dsts[0]) {
-            // Since waitPeer sets srcs[0] to output buffer + offset, we are doing a direct-write based recv
-            // Do nothing
-          } else {
-            #pragma unroll
-            for (int j=0; j<fan.nrecv(); j++) {
-              int i = (j+shift)%fan.nrecv();
-              pOffset = i*peerOffset;
-              if (skip >= 0 && i >= skip) pOffset += peerElem;
-              void* dst0 = (T*)ncclShmem.groups[group].dsts[0] + pOffset;
-              int realPeerSize = min(realSize, totalElem-pOffset);
-              if (realPeerSize > 0) reduceCopy<Unroll, RedOp, T, 0,1,1, 0,1,1, /*PreOpSrcs=*/0>(tid, nworkers, ncclShmem.redOpArgs[0], ncclShmem.redOpArgs, postOp, 1, ncclShmem.groups[group].srcs+i, 1, &dst0, realPeerSize);
-            }
+          #pragma unroll
+          for (int j=0; j<fan.nrecv(); j++) {
+            int i = (j+shift)%fan.nrecv();
+            pOffset = i*peerOffset;
+            if (skip >= 0 && i >= skip) pOffset += peerElem;
+            void* dst0 = (T*)ncclShmem.groups[group].dsts[0] + pOffset;
+            int realPeerSize = min(realSize, totalElem-pOffset);
+            if (DirectRecv && ncclShmem.groups[group].srcs[i] == dst0) realPeerSize = 0;
+            if (realPeerSize > 0) reduceCopy<Unroll, RedOp, T, 0,1,1, 0,1,1, /*PreOpSrcs=*/0>(tid, nworkers, ncclShmem.redOpArgs[0], ncclShmem.redOpArgs, postOp, 1, ncclShmem.groups[group].srcs+i, 1, &dst0, realPeerSize);
           }
         }
       }

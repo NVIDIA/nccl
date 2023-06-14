@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <sys/syscall.h>
+#include <sys/time.h>
+#include <time.h>
 
 int ncclDebugLevel = -1;
 static int pid = -1;
@@ -166,19 +168,32 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
     cudaGetDevice(&cudaDev);
   }
 
+  // Get current timestamp.
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  std::tm tcal;
+  localtime_r(&tv.tv_sec, &tcal);
+  const int32_t usec = tv.tv_usec;
+
   char buffer[1024];
   size_t len = 0;
   if (level == NCCL_LOG_WARN) {
-    len = snprintf(buffer, sizeof(buffer), "\n%s:%d:%d [%d] %s:%d NCCL WARN ",
+    len = snprintf(buffer, sizeof(buffer), "\n%02d%02d %02d:%02d:%02d.%06d %s:%d:%d [%d] %s:%d NCCL WARN ",
+                   tcal.tm_mon + 1, tcal.tm_mday, tcal.tm_hour, tcal.tm_min, tcal.tm_sec, usec,
                    hostname, pid, tid, cudaDev, filefunc, line);
   } else if (level == NCCL_LOG_INFO) {
-    len = snprintf(buffer, sizeof(buffer), "%s:%d:%d [%d] NCCL INFO ", hostname, pid, tid, cudaDev);
+    len = snprintf(buffer, sizeof(buffer), "%02d%02d %02d:%02d:%02d.%06d %s:%d:%d [%d] NCCL INFO ",
+                   tcal.tm_mon + 1, tcal.tm_mday, tcal.tm_hour, tcal.tm_min, tcal.tm_sec, usec,
+                   hostname, pid, tid, cudaDev);
   } else if (level == NCCL_LOG_TRACE && flags == NCCL_CALL) {
-    len = snprintf(buffer, sizeof(buffer), "%s:%d:%d NCCL CALL ", hostname, pid, tid);
+    len = snprintf(buffer, sizeof(buffer), "%02d%02d %02d:%02d:%02d.%06d %s:%d:%d NCCL CALL ",
+                   tcal.tm_mon + 1, tcal.tm_mday, tcal.tm_hour, tcal.tm_min, tcal.tm_sec, usec,
+                   hostname, pid, tid);
   } else if (level == NCCL_LOG_TRACE) {
     auto delta = std::chrono::steady_clock::now() - ncclEpoch;
     double timestamp = std::chrono::duration_cast<std::chrono::duration<double>>(delta).count()*1000;
-    len = snprintf(buffer, sizeof(buffer), "%s:%d:%d [%d] %f %s:%d NCCL TRACE ",
+    len = snprintf(buffer, sizeof(buffer), "%02d%02d %02d:%02d:%02d.%06d %s:%d:%d [%d] %f %s:%d NCCL TRACE ",
+                   tcal.tm_mon + 1, tcal.tm_mday, tcal.tm_hour, tcal.tm_min, tcal.tm_sec, usec,
                    hostname, pid, tid, cudaDev, timestamp, filefunc, line);
   }
 

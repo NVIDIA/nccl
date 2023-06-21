@@ -1,0 +1,64 @@
+/*************************************************************************
+ * Copyright (c) 2023, Google LLC.  All rights reserved.
+ * Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
+ *
+ * See LICENSE.txt for license information
+ ************************************************************************/
+#ifndef NET_DEVICE_UNPACK_DEFS_H
+#define NET_DEVICE_UNPACK_DEFS_H
+
+#include <stdint.h>
+
+#include "devcomm.h"
+
+#define NCCL_NET_DEVICE_UNPACK_MAX_QUEUE_DEPTH 16
+
+union alignas(16) loadMeta {
+  uint64_t r64[2];
+  struct {
+    uint32_t src_off;
+    uint32_t len;
+    uint64_t dst_off;
+  };
+};
+static_assert(sizeof(union loadMeta) == 16);
+
+/****** global memory ******/
+
+#define NET_UNPACK_MAX_QUEUE_DEPTH 16  // MAX_REQUESTS
+#define NET_UNPACK_MAX_SLICE_SIZE 4194304  // 4MB per Irecv call
+#define SLICE_PAGE_SIZE 4096
+#define NET_UNPACK_MAX_SLICE_PAGES \
+  (NET_UNPACK_MAX_SLICE_SIZE / SLICE_PAGE_SIZE * 2)  // * 2 for slack, wasteful..
+
+struct netUnpackMeta {
+  loadMeta mem[NCCL_NET_DEVICE_UNPACK_MAX_QUEUE_DEPTH][NET_UNPACK_MAX_SLICE_PAGES];
+  uint64_t cnt[NCCL_NET_DEVICE_UNPACK_MAX_QUEUE_DEPTH];
+};
+
+struct unpackNetDeviceHandle {
+  struct netUnpackMeta *meta;  // mapped
+  void* bounce_buf;
+};
+
+/****** shared memory ******/
+
+#define NET_UNPACK_MAX_GROUPS 16 // Forked from NCCL_MAX_GROUPS in devcomm.h
+#define NET_UNPACK_MAX_NPEERS 2  // The most you should have is 2 network peers per-group (indexed by index)
+#define WARP_SHM_PAGE_CNT 4
+#define WARP_SHM_SIZE (WARP_SHM_PAGE_CNT * sizeof(union loadMeta))
+struct unpackShmem {
+  // Currently, even/odd groups perform send/recv separately. We don't really need space for send side.
+  // Total size is N page per warp * 16 B per page * 20 WARPS max = 320 * N bytes, N == WARP_SHM_PAGE_CNT
+  union loadMeta meta[NCCL_MAX_NTHREADS / WARP_SIZE * WARP_SHM_PAGE_CNT];
+
+  struct netUnpackMeta* g_meta[NET_UNPACK_MAX_GROUPS][NET_UNPACK_MAX_NPEERS];  // head of handle to index into meta for meta copy
+  void* bounce_buf;
+};
+
+struct unpackGroupShmem {
+  int unpackNetDeviceIndexMask; // We store a single unpackNetDeviceIndex because only one peer can be network recv
+   uint64_t head;
+};
+
+#endif // NET_DEVICE_UNPACK_DEFS_H_

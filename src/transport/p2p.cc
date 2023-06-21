@@ -474,6 +474,7 @@ static ncclResult_t p2pSendConnect(struct ncclComm* comm, struct ncclConnect* co
     send->conn.ptrExchange = &resources->sendDevMem->ptrExchange;
     send->conn.redOpArgExchange = resources->sendDevMem->redOpArgExchange;
   }
+
   return ncclSuccess;
 }
 
@@ -515,6 +516,7 @@ ncclResult_t p2pRecvConnect(struct ncclComm* comm, struct ncclConnect* connectIn
       buff += comm->buffSizes[p];
     }
   }
+
   return ncclSuccess;
 }
 

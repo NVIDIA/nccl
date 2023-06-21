@@ -12,6 +12,7 @@
 #include "collectives.h"
 #include "proxy.h"
 #include "strongstream.h"
+#include "nccl_net.h"
 
 #if CUDART_VERSION < 9000
 struct cudaLaunchParams {

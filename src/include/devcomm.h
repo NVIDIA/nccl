@@ -33,6 +33,8 @@ extern const char* ncclProtoStr[NCCL_NUM_PROTOCOLS];
 #define NCCL_MAX_OPS 2048
 #define NCCL_STEPS 8
 
+#include "net_device.h"
+
 union ncclLLFifoLine {
   /* Flags have to be *after* data, because otherwise, an incomplete receive
      from the network may receive the flag but not the data.
@@ -85,6 +87,7 @@ static_assert(NCCL_LL_CLEAN_MASK % NCCL_STEPS == 0, "Invalid NCCL_LL_CLEAN_MASK 
 struct ncclConnInfo {
   // Regular comm mechanism
   char *buffs[NCCL_NUM_PROTOCOLS]; // Local for recv, remote for send
+  void* mhandles[NCCL_NUM_PROTOCOLS];
   uint64_t *tail;     // Local for recv, remote for send
   uint64_t *head;     // Local for send, remote for recv
 
@@ -98,6 +101,7 @@ struct ncclConnInfo {
 
   uint64_t step;      // Keep where we are
   uint64_t llLastCleaning;
+  struct ncclNetDeviceHandle netDeviceHandle;
 };
 
 struct ncclProxyConnector {
@@ -105,6 +109,7 @@ struct ncclProxyConnector {
   int tpLocalRank;
   int sameProcess;
   struct ncclProxyConnection* connection;
+  ncclResult_t (*proxyProgress)(struct ncclComm* comm, struct ncclProxyArgs*); // Copied from transport if necessary
 };
 
 struct ncclConnector {
@@ -126,6 +131,7 @@ struct ncclRing {
   int* userRanks;
 
   int index; // This rank's index in the ring
+  int p2pChunkSize;
 };
 
 
@@ -289,6 +295,7 @@ struct ncclDevComm {
   int rank;
   int nRanks;
   int buffSizes[NCCL_NUM_PROTOCOLS];
+  int p2pChunkSize;
 
   // Operation list for aggregation
   int workFifoDepth;

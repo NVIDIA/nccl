@@ -161,21 +161,25 @@ __device__ __forceinline__ T fromPack(typename BytePackOf<T>::Pack pack)  {
 // Load/store of BytePack<?> using integral addresses.
 
 template<int Size> __device__ BytePack<Size> ld_global(uintptr_t addr);
-template<int Size> __device__ BytePack<Size> ld_volatile_global(uintptr_t addr);
 template<int Size> __device__ BytePack<Size> ld_shared(uint32_t addr);
+template<int Size> __device__ BytePack<Size> ld_volatile_global(uintptr_t addr);
 template<int Size> __device__ BytePack<Size> ld_volatile_shared(uint32_t addr);
+template<int Size> __device__ BytePack<Size> ld_relaxed_gpu_global(uintptr_t addr);
 template<int Size> __device__ void st_global(uintptr_t addr, BytePack<Size> value);
 template<int Size> __device__ void st_shared(uint32_t addr, BytePack<Size> value);
+template<int Size> __device__ void st_relaxed_gpu_global(uintptr_t addr, BytePack<Size> value);
 
 template<> __device__ __forceinline__ BytePack<0> ld_global<0>(uintptr_t addr) { return {}; }
-template<> __device__ __forceinline__ BytePack<0> ld_volatile_global<0>(uintptr_t addr) { return {}; }
 template<> __device__ __forceinline__ BytePack<0> ld_shared<0>(uint32_t addr) { return {}; }
+template<> __device__ __forceinline__ BytePack<0> ld_volatile_global<0>(uintptr_t addr) { return {}; }
 template<> __device__ __forceinline__ BytePack<0> ld_volatile_shared<0>(uint32_t addr) { return {}; }
+template<> __device__ __forceinline__ BytePack<0> ld_relaxed_gpu_global<0>(uintptr_t addr) { return {}; }
 template<> __device__ __forceinline__ void st_global<0>(uintptr_t addr, BytePack<0> value) {}
 template<> __device__ __forceinline__ void st_shared<0>(uint32_t addr, BytePack<0> value) {}
+template<> __device__ __forceinline__ void st_relaxed_gpu_global<0>(uintptr_t addr, BytePack<0> value) {}
 
 // Used to define implementations for above prototypes.
-#define DEFINE_ld_st(bytes, data_cxx_ty, data_ptx_ty, data_reg_ty, space, addr_cxx_ty, addr_reg_ty) \
+#define DEFINE_ld_st__size_space(bytes, data_cxx_ty, data_ptx_ty, data_reg_ty, space, addr_cxx_ty, addr_reg_ty) \
   template<> \
   __device__ __forceinline__ BytePack<bytes> ld_##space<bytes>(addr_cxx_ty addr) { \
     data_cxx_ty tmp; \
@@ -197,19 +201,43 @@ template<> __device__ __forceinline__ void st_shared<0>(uint32_t addr, BytePack<
     data_cxx_ty tmp = value.native; \
     asm volatile("st." #space "." #data_ptx_ty " [%0], %1;" :: #addr_reg_ty(addr), #data_reg_ty(tmp) : "memory"); \
   }
+#if __CUDA_ARCH__ >= 700
+  #define PTX_relaxed_gpu "relaxed.gpu"
+#else
+  #define PTX_relaxed_gpu "volatile"
+#endif
+
+#define DEFINE_ld_st_gpu_relaxed__size(bytes, data_cxx_ty, data_ptx_ty, data_reg_ty) \
+  template<> \
+  __device__ __forceinline__ BytePack<bytes> ld_relaxed_gpu_global<bytes>(uintptr_t addr) { \
+    data_cxx_ty tmp; \
+    asm("ld." PTX_relaxed_gpu ".global." #data_ptx_ty " %0, [%1];" : "="#data_reg_ty(tmp) : "l"(addr)); \
+    BytePack<bytes> ans; \
+    ans.native = tmp; \
+    return ans; \
+  } \
+  template<> \
+  __device__ __forceinline__ void st_relaxed_gpu_global<bytes>(uintptr_t addr, BytePack<bytes> value) { \
+    data_cxx_ty tmp = value.native; \
+    asm volatile("st." PTX_relaxed_gpu ".global." #data_ptx_ty " [%0], %1;" :: "l"(addr), #data_reg_ty(tmp) : "memory"); \
+  }
+
+#define DEFINE_ld_st__size(bytes, data_cxx_ty, data_ptx_ty, data_reg_ty) \
+  DEFINE_ld_st__size_space(bytes, data_cxx_ty, data_ptx_ty, data_reg_ty, global, uintptr_t, l) \
+  DEFINE_ld_st__size_space(bytes, data_cxx_ty, data_ptx_ty, data_reg_ty, shared, uint32_t, r) \
+  DEFINE_ld_st_gpu_relaxed__size(bytes, data_cxx_ty, data_ptx_ty, data_reg_ty)
+
 // Single-byte types use 4-byte registers since there is no 1-byte register
 // character for asm blocks. See https://docs.nvidia.com/cuda/inline-ptx-assembly/index.html#constraints
-DEFINE_ld_st(1, uint32_t, b8, r, global, uintptr_t, l)
-DEFINE_ld_st(1, uint32_t, b8, r, shared, uint32_t, r)
-DEFINE_ld_st(2, uint16_t, b16, h, global, uintptr_t, l)
-DEFINE_ld_st(2, uint16_t, b16, h, shared, uint32_t, r)
-DEFINE_ld_st(4, uint32_t, b32, r, global, uintptr_t, l)
-DEFINE_ld_st(4, uint32_t, b32, r, shared, uint32_t, r)
-DEFINE_ld_st(8, uint64_t, b64, l, global, uintptr_t, l)
-DEFINE_ld_st(8, uint64_t, b64, l, shared, uint32_t, r)
-#undef DEFINE_ld_st
+DEFINE_ld_st__size(1, uint32_t, b8, r)
+DEFINE_ld_st__size(2, uint16_t, b16, h)
+DEFINE_ld_st__size(4, uint32_t, b32, r)
+DEFINE_ld_st__size(8, uint64_t, b64, l)
 
-#define DEFINE_ld_st_16(space, addr_cxx_ty, addr_reg_ty) \
+#undef DEFINE_ld_st__size_space
+#undef DEFINE_ld_st__size
+
+#define DEFINE_ld_st_16__space(space, addr_cxx_ty, addr_reg_ty) \
   template<> \
   __device__ __forceinline__ BytePack<16> ld_##space<16>(addr_cxx_ty addr) { \
     BytePack<16> ans; \
@@ -226,9 +254,22 @@ DEFINE_ld_st(8, uint64_t, b64, l, shared, uint32_t, r)
   __device__ __forceinline__ void st_##space<16>(addr_cxx_ty addr, BytePack<16> value) { \
     asm("st." #space ".v2.b64 [%0], {%1,%2};" :: #addr_reg_ty(addr), "l"(value.u64[0]), "l"(value.u64[1]) : "memory"); \
   }
-DEFINE_ld_st_16(global, uintptr_t, l)
-DEFINE_ld_st_16(shared, uint32_t, r)
+DEFINE_ld_st_16__space(global, uintptr_t, l)
+DEFINE_ld_st_16__space(shared, uint32_t, r)
 #undef DEFINE_ld_st_16
+
+template<>
+__device__ __forceinline__ BytePack<16> ld_relaxed_gpu_global<16>(uintptr_t addr) {
+  BytePack<16> ans;
+  asm("ld." PTX_relaxed_gpu ".global.v2.b64 {%0,%1}, [%2];" : "=l"(ans.u64[0]), "=l"(ans.u64[1]) : "l"(addr));
+  return ans;
+}
+template<>
+__device__ __forceinline__ void st_relaxed_gpu_global<16>(uintptr_t addr, BytePack<16> value) {
+  asm volatile("st." PTX_relaxed_gpu ".global.v2.b64 [%0], {%1,%2};" :: "l"(addr), "l"(value.u64[0]), "l"(value.u64[1]) : "memory");
+}
+
+#undef PTX_relaxed_gpu
 
 ////////////////////////////////////////////////////////////////////////////////
 // Atomic load/store using c++ pointers.
@@ -242,6 +283,15 @@ __device__ __forceinline__ uint64_t ld_relaxed_sys_global(uint64_t *ptr) {
   uint64_t ans;
   #if __CUDA_ARCH__ >= 700
     asm("ld.relaxed.sys.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
+  #else
+    asm("ld.volatile.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
+  #endif
+  return ans;
+}
+__device__ __forceinline__ uint64_t ld_relaxed_gpu_global(uint64_t *ptr) {
+  uint64_t ans;
+  #if __CUDA_ARCH__ >= 700
+    asm("ld.relaxed.gpu.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
   #else
     asm("ld.volatile.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
   #endif

@@ -65,6 +65,8 @@ struct ncclProxySubArgs {
   uint64_t end;
   void* requests[NCCL_STEPS];
   void* profilingEvents[NCCL_STEPS];
+  void* recvRequestsCache[NCCL_STEPS];
+  int recvRequestsSubCount;
 };
 
 struct ncclProxyArgs {
@@ -233,6 +235,8 @@ struct ncclProxyConnection {
   struct ncclProxyArgs *proxyAppend;
   struct ncclProxyArgs **proxyAppendPtr;
   void* transportResources;
+  ncclNetDeviceHandle* netDeviceHandle; // dev_ptr
+  void* mhandles[NCCL_NUM_PROTOCOLS];
   proxyConnectState state;
   struct ncclCollNetSharedRes* collNet;
 };

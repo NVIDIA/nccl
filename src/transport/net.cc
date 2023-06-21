@@ -103,6 +103,9 @@ struct sendResources {
   void* mhandles[NCCL_NUM_PROTOCOLS];
   uint64_t step;
   uint64_t llLastCleaning;
+  int netDeviceVersion;
+  ncclNetDeviceType netDeviceType;
+  int useProxy;
 };
 
 struct recvResources {
@@ -132,6 +135,9 @@ struct recvResources {
   void* mhandles[NCCL_NUM_PROTOCOLS];
   uint64_t step;
   uint64_t llLastCleaning;
+  int netDeviceVersion;
+  ncclNetDeviceType netDeviceType;
+  int useProxy;
 };
 
 /* Determine if two peers can communicate with NET */
@@ -339,6 +345,15 @@ static ncclResult_t sendConnect(struct ncclComm* comm, struct ncclConnect* conne
 
   for (int p=0; p<NCCL_NUM_PROTOCOLS; p++)
     send->conn.buffs[p] = NCCL_NET_MAP_GET_POINTER(map, gpu, buffs[p]);
+
+  if (send->proxyConn.sameProcess) {
+    if (send->proxyConn.connection->netDeviceHandle)
+      send->conn.netDeviceHandle = *send->proxyConn.connection->netDeviceHandle;
+
+    for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++)
+      send->conn.mhandles[p] = send->proxyConn.connection->mhandles[p];
+  }
+
   return ncclSuccess;
 }
 
@@ -378,6 +393,15 @@ static ncclResult_t recvConnect(struct ncclComm* comm, struct ncclConnect* conne
 
   for (int p=0; p<NCCL_NUM_PROTOCOLS; p++)
     recv->conn.buffs[p] = NCCL_NET_MAP_GET_POINTER(map, gpu, buffs[p]);
+
+  if (recv->proxyConn.sameProcess) {
+    if (recv->proxyConn.connection->netDeviceHandle)
+      recv->conn.netDeviceHandle = *recv->proxyConn.connection->netDeviceHandle;
+
+    for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++)
+      recv->conn.mhandles[p] = recv->proxyConn.connection->mhandles[p];
+  }
+
   return ncclSuccess;
 }
 
@@ -518,6 +542,10 @@ static ncclResult_t sendProxySetup(struct ncclProxyConnection* connection, struc
   resources->useDmaBuf = resources->useGdr && proxyState->dmaBufSupport && (props.ptrSupport & NCCL_PTR_DMABUF);
   resources->maxRecvs = props.maxRecvs;
 
+  resources->netDeviceVersion = props.netDeviceVersion;
+  resources->netDeviceType = props.netDeviceType;
+  resources->useProxy      = props.useProxy;
+
   // We don't return any data
   if (respSize != 0) return ncclInternalError;
   *done = 1;
@@ -546,6 +574,9 @@ static ncclResult_t recvProxySetup(struct ncclProxyConnection* connection, struc
   /* DMA-BUF support */
   resources->useDmaBuf = resources->useGdr && proxyState->dmaBufSupport && (props.ptrSupport & NCCL_PTR_DMABUF);
   resources->maxRecvs = props.maxRecvs;
+  resources->netDeviceVersion = props.netDeviceVersion;
+  resources->netDeviceType = props.netDeviceType;
+  resources->useProxy      = props.useProxy;
 
   if (respSize != sizeof(ncclNetHandle_t)) return ncclInternalError;
   NCCLCHECK(proxyState->ncclNet->listen(req->netDev, respBuff, &resources->netListenComm));
@@ -679,7 +710,18 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
       {
         NCCLCHECK(proxyState->ncclNet->regMr(resources->netSendComm, resources->buffers[p], resources->buffSizes[p], NCCL_NET_MAP_DEV_MEM(map, buffs[p]) ? NCCL_PTR_CUDA : NCCL_PTR_HOST, &resources->mhandles[p]));
       }
+
+      // Copy mhandle dptr
+      if (resources->netDeviceType != NCCL_NET_DEVICE_HOST)
+        NCCLCHECK(proxyState->ncclNet->getDeviceMr(resources->netSendComm, resources->mhandles[p], &connection->mhandles[p]));
     }
+  }
+
+  // If the network plugin supports device-initiated communication, get the netDeviceHandle here
+  // netDeviceHandle->handle must be a device ptr!
+  if (resources->netDeviceType != NCCL_NET_DEVICE_HOST) {
+    NCCLCHECK(ncclCalloc(&connection->netDeviceHandle, 1));
+    NCCLCHECK(proxyState->ncclNet->getDeviceHandle(resources->netSendComm, resources->tpRemoteRank, connection->netDeviceHandle));
   }
 
   //NCCLCHECK(netDumpMap(map));
@@ -809,7 +851,18 @@ static ncclResult_t recvProxyConnect(struct ncclProxyConnection* connection, str
       {
         NCCLCHECK(proxyState->ncclNet->regMr(resources->netRecvComm, resources->buffers[p], resources->buffSizes[p], NCCL_NET_MAP_DEV_MEM(map, buffs[p]) ? NCCL_PTR_CUDA : NCCL_PTR_HOST, &resources->mhandles[p]));
       }
+
+      // Copy the mhandle dptr
+      if (resources->netDeviceType != NCCL_NET_DEVICE_HOST)
+        NCCLCHECK(proxyState->ncclNet->getDeviceMr(resources->netRecvComm, resources->mhandles[p], &connection->mhandles[p]));
     }
+  }
+
+  // If the network plugin supports device-initiated communication, get the netDeviceHandle here
+  // netDeviceHandle->handle must be a device ptr!
+  if (resources->netDeviceType != NCCL_NET_DEVICE_HOST) {
+    NCCLCHECK(ncclCalloc(&connection->netDeviceHandle, 1));
+    NCCLCHECK(proxyState->ncclNet->getDeviceHandle(resources->netRecvComm, resources->tpRemoteRank, connection->netDeviceHandle));
   }
 
   //NCCLCHECK(netDumpMap(map));
@@ -1111,6 +1164,8 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
         void** requestPtr = subGroup->requests+(step%NCCL_STEPS);
         NCCLCHECK(proxyState->ncclNet->irecv(resources->netRecvComm, subCount, ptrs, sizes, tags, mhandles, requestPtr));
         if (*requestPtr) {
+          subGroup->recvRequestsCache[step%NCCL_STEPS] = *requestPtr;
+          subGroup->recvRequestsSubCount = subCount;
           for (int i=0; i<subGroup->groupSize; i++) {
             struct ncclProxySubArgs* sub = subGroup+i;
             sub->posted += args->sliceSteps;
@@ -1219,6 +1274,12 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
           while (done > sub->base + sub->done &&
               // LL and LL128 can acknowledge 0-bytes send before they even happen. Don't go past what we transmitted.
               sub->transmitted > sub->done) {
+            if (subGroup->recvRequestsCache[sub->done%NCCL_STEPS]) {
+              // the multirecv requests are only cached in the first sub.
+              if (proxyState->ncclNet->irecvConsumed)
+                NCCLCHECK(proxyState->ncclNet->irecvConsumed(resources->netRecvComm, subGroup->recvRequestsSubCount, subGroup->recvRequestsCache[sub->done%NCCL_STEPS]));
+              subGroup->recvRequestsCache[sub->done%NCCL_STEPS] = NULL;
+            }
             sub->done += args->sliceSteps;
             for (uint64_t step=sub->done-args->sliceSteps; step<sub->done; step++) ncclProfilingRecord(args, s+i, step, ncclProxyProfileEnd);
             args->idle = 0;

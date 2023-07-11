@@ -428,15 +428,6 @@ class Primitives<
   __device__ __forceinline__ void loadSendConn(ncclDevChannelPeer *peer, int connIndex, struct ncclWorkElem* e) {
     if (flags & (RoleWaitSend|RolePostSend)) {
       auto *conn = &peer->send[connIndex];
-      if (conn->netDeviceHandle.netDeviceType == NCCL_NET_DEVICE_UNPACK) {
-        // handle must be a device ptr
-        netDeviceHandle = conn->netDeviceHandle.handle;
-        // Cache the handle
-        // ncclNetDeviceUnpackSetup(netDeviceHandle, group, index);
-        // Store mhandle for buffer here, if necessary
-        mhandle = conn->mhandles[NCCL_PROTO_SIMPLE];
-        flags |= NetDeviceUnpack;
-      }
       step = conn->step;
       step = roundUp(step, SlicePerChunk*StepPerSlice);
       if (flags & RolePostSend) {

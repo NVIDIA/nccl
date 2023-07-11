@@ -48,17 +48,13 @@ struct unpackNetDeviceHandle {
 #define WARP_SHM_PAGE_CNT 4
 #define WARP_SHM_SIZE (WARP_SHM_PAGE_CNT * sizeof(union loadMeta))
 struct unpackShmem {
-  // Currently, even/odd groups perform send/recv separately. We don't really need space for send side.
-  // Total size is N page per warp * 16 B per page * 20 WARPS max = 320 * N bytes, N == WARP_SHM_PAGE_CNT
-  union loadMeta meta[NCCL_MAX_NTHREADS / WARP_SIZE * WARP_SHM_PAGE_CNT];
-
-  struct netUnpackMeta* g_meta[NET_UNPACK_MAX_GROUPS][NET_UNPACK_MAX_NPEERS];  // head of handle to index into meta for meta copy
   void* bounce_buf;
 };
 
 struct unpackGroupShmem {
   int unpackNetDeviceIndexMask; // We store a single unpackNetDeviceIndex because only one peer can be network recv
-   uint64_t head;
+  uint64_t head;
+  struct netUnpackMeta* g_meta[NET_UNPACK_MAX_NPEERS]; // head of handle to index into meta for meta copy
 };
 
 #endif // NET_DEVICE_UNPACK_DEFS_H_

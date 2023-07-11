@@ -32,8 +32,11 @@ inline __device__ void load64gpu(const uint64_t* ptr, uint64_t &v) {
 // Map internal association of handle with group and peer index (called once at init time)
 inline __device__ void ncclNetDeviceUnpackSetup(void* ohandle, const int group, const int index) {
   struct unpackNetDeviceHandle* handle = (struct unpackNetDeviceHandle*) ohandle;
-  ncclShmem.devicePlugin.unpack.g_meta[group][index] = handle->meta;
+  ncclShmem.groups[group].devicePlugin.unpack.g_meta[index] = handle->meta;
   ncclShmem.devicePlugin.unpack.bounce_buf = handle->bounce_buf;
+
+  // Total size is N page per warp * 16 B per page * 20 WARPS max = 320 * N bytes, N == WARP_SHM_PAGE_CNT
+  static_assert(ncclShmemScratchWarpSize() >= WARP_SHM_SIZE, "Each warp must have enough scratch space");
 }
 
 template <uint8_t sz>
@@ -179,11 +182,11 @@ inline __device__ void ncclNetDeviceUnpack</*Recv=*/1>(
   loadMeta* s_meta;
   uint64_t meta_cnt;
 
-  const int shm_off = group * nw * WARP_SHM_PAGE_CNT;
+  // const int shm_off = group * nw * WARP_SHM_PAGE_CNT;
 
   // hack head use per-warp
   head          = step;
-  g_meta_struct = ncclShmem.devicePlugin.unpack.g_meta[group][index];
+  g_meta_struct = ncclShmem.groups[group].devicePlugin.unpack.g_meta[index];
   bounce_buf    = ncclShmem.devicePlugin.unpack.bounce_buf;
 
   __syncwarp();
@@ -191,8 +194,9 @@ inline __device__ void ncclNetDeviceUnpack</*Recv=*/1>(
   head %= NCCL_NET_DEVICE_UNPACK_MAX_QUEUE_DEPTH;
 
   g_meta = g_meta_struct->mem[head];
-  s_meta = (loadMeta*) (ncclShmem.devicePlugin.unpack.meta + shm_off);
 
+  // Currently, even/odd groups perform send/recv separately. We don't really need space for send side.
+  s_meta = (loadMeta*) ncclScratchForWarp(threadIdx.x / WARP_SIZE); // (loadMeta*) (ncclShmem.devicePlugin.unpack.meta + shm_off);
   load64gpu(g_meta_struct->cnt + head, meta_cnt);
 
   int PPW = ppw(nbytes, nw);

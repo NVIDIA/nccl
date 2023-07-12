@@ -166,7 +166,8 @@ __device__ void ncclKernel(
       bytes = 0;
       break;
     }
-    copyToShmem16(tid%WARP_SIZE, dst, src, bytes);
+    if (bytes)
+      copyToShmem16(tid%WARP_SIZE, dst, src, bytes);
   }
   __syncthreads(); // publish ncclShmem
 

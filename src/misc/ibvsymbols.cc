@@ -50,6 +50,9 @@ ncclResult_t buildIbvSymbols(struct ncclIbvSymbols* ibvSymbols) {
   ASSIGN_SYM(ibvSymbols, ibv_destroy_qp, ibv_internal_destroy_qp);
   ASSIGN_SYM(ibvSymbols, ibv_fork_init, ibv_internal_fork_init);
   ASSIGN_SYM(ibvSymbols, ibv_event_type_str, ibv_internal_event_type_str);
+  
+  ASSIGN_SYM(ibvSymbols, ibv_query_ece, ibv_internal_query_ece);
+  ASSIGN_SYM(ibvSymbols, ibv_set_ece, ibv_internal_set_ece);
 
   ibvSymbols->ibv_internal_reg_mr = &ibv_internal_reg_mr;
   ibvSymbols->ibv_internal_query_port = &ibv_internal_query_port;
@@ -123,6 +126,9 @@ ncclResult_t buildIbvSymbols(struct ncclIbvSymbols* ibvSymbols) {
   LOAD_SYM(ibvhandle, "ibv_fork_init", ibvSymbols->ibv_internal_fork_init);
   LOAD_SYM(ibvhandle, "ibv_event_type_str", ibvSymbols->ibv_internal_event_type_str);
 
+  LOAD_SYM_VERSION(ibvhandle, "ibv_query_ece", ibvSymbols->ibv_internal_query_ece, "IBVERBS_1.10");
+  LOAD_SYM_VERSION(ibvhandle, "ibv_set_ece",   ibvSymbols->ibv_internal_set_ece, "IBVERBS_1.10");
+
   return ncclSuccess;
 
 teardown:
@@ -150,6 +156,8 @@ teardown:
   ibvSymbols->ibv_internal_destroy_qp = NULL;
   ibvSymbols->ibv_internal_fork_init = NULL;
   ibvSymbols->ibv_internal_event_type_str = NULL;
+  ibvSymbols->ibv_internal_query_ece = NULL;
+  ibvSymbols->ibv_internal_set_ece = NULL;
 
   if (ibvhandle != NULL) dlclose(ibvhandle);
   return ncclSystemError;

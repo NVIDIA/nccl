@@ -348,6 +348,10 @@ struct ncclIbQpInfo {
   uint8_t link_layer;
   uint32_t qpn[NCCL_IB_MAX_QPS];
 
+  // Fields needed for ece (enhanced connection establishment)
+  struct ibv_ece ece[NCCL_IB_MAX_QPS];
+  int ece_supported[NCCL_IB_MAX_QPS];
+
   // For RoCE
   uint64_t spn;
   uint64_t iid;
@@ -652,7 +656,13 @@ ib_connect_check:
   NCCLCHECK(wrap_ibv_query_port(ctx, ib_port, &portAttr));
   struct ncclIbQpInfo qpInfo;
   qpInfo.ib_port = ib_port;
-  for (int q=0; q<comm->nqps; q++) qpInfo.qpn[q] = comm->qps[q]->qp_num;
+  for (int q=0; q<comm->nqps; q++) {
+    qpInfo.qpn[q] = comm->qps[q]->qp_num;
+
+    // Query ece capabilities (enhanced connection establishment)
+    NCCLCHECK(wrap_ibv_query_ece(comm->qps[q], &qpInfo.ece[q], &qpInfo.ece_supported[q]));
+  }
+
   qpInfo.mtu = portAttr.active_mtu;
 
   // Prepare my fifo
@@ -699,6 +709,9 @@ ib_connect:
   comm->gidInfo.remoteGid.global.interface_id = remQpInfo.iid;
   for (int q=0; q<comm->nqps; q++) {
     struct ibv_qp* qp = comm->qps[q];
+    if (remQpInfo.ece_supported[q] && qpInfo.ece_supported[q])
+      NCCLCHECK(wrap_ibv_set_ece(qp, &remQpInfo.ece[q], &qpInfo.ece_supported[q]));
+
     NCCLCHECK(ncclIbRtrQp(qp, remQpInfo.qpn[q], &remQpInfo));
     NCCLCHECK(ncclIbRtsQp(qp));
   }
@@ -781,8 +794,21 @@ ib_recv:
   remQpInfo.mtu = (enum ibv_mtu)std::min(remQpInfo.mtu, portAttr.active_mtu);
 
   // Setup QP
+  struct ncclIbQpInfo qpInfo;
   for (int q=0; q<rComm->nqps; q++) {
     struct ibv_qp* qp = rComm->qps[q];
+
+    // Set the ece (enhanced connection establishment) on this QP before RTR
+    if (remQpInfo.ece_supported[q]) {
+      NCCLCHECK(wrap_ibv_set_ece(qp, &remQpInfo.ece[q], &qpInfo.ece_supported[q]));
+  
+      // Query the reduced ece for this QP (matching enhancements between the requestor and the responder)
+      // Store this in our own qpInfo for returning to the requestor
+      if (qpInfo.ece_supported[q]) {
+        NCCLCHECK(wrap_ibv_query_ece(qp, &qpInfo.ece[q], &qpInfo.ece_supported[q]));
+      }
+    }
+
     NCCLCHECK(ncclIbRtrQp(qp, remQpInfo.qpn[q], &remQpInfo));
     NCCLCHECK(ncclIbRtsQp(qp));
   }
@@ -795,8 +821,7 @@ ib_recv:
   if (ncclParamIbUseInline()) rComm->remFifo.flags = IBV_SEND_INLINE;
 
   // Allocate Flush dummy buffer for GPU Direct RDMA
-  rComm->gpuFlush.enabled = ((ncclIbGdrSupport(lComm->dev) == ncclSuccess || ncclIbDmaBufSupport(lComm->dev) == ncclSuccess)
-                             && (ncclParamIbGdrFlushDisable() == 0)) ? 1 : 0;
+  rComm->gpuFlush.enabled = ((ncclIbGdrSupport(lComm->dev) == ncclSuccess || ncclIbDmaBufSupport(lComm->dev) == ncclSuccess) && (ncclParamIbGdrFlushDisable() == 0)) ? 1 : 0;
   if (rComm->gpuFlush.enabled) {
     NCCLCHECK(wrap_ibv_reg_mr(&rComm->gpuFlush.hostMr, rComm->verbs.pd, &rComm->gpuFlush.hostMem, sizeof(int), IBV_ACCESS_LOCAL_WRITE));
     rComm->gpuFlush.sge.addr = (uint64_t)&rComm->gpuFlush.hostMem;
@@ -815,7 +840,6 @@ ib_recv:
   }
 
   // Fill Handle
-  struct ncclIbQpInfo qpInfo;
   qpInfo.lid=portAttr.lid;
   qpInfo.link_layer= rComm->gidInfo.link_layer = portAttr.link_layer;
   qpInfo.ib_port=ib_port;

@@ -335,7 +335,6 @@ ncclResult_t ncclIbGetProperties(int dev, ncclNetProperties_t* props) {
   props->maxRecvs = NCCL_NET_IB_MAX_RECVS;
   props->netDeviceType    = NCCL_NET_DEVICE_HOST;
   props->netDeviceVersion = NCCL_NET_DEVICE_INVALID_VERSION;
-  props->useProxy         = 1;
   return ncclSuccess;
 }
 
@@ -611,7 +610,7 @@ ncclResult_t ncclIbListen(int dev, void* opaqueHandle, void** listenComm) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclIbConnect(int dev, void* opaqueHandle, void** sendComm) {
+ncclResult_t ncclIbConnect(int dev, void* opaqueHandle, void** sendComm, ncclNetDeviceHandle_t** sendDevComm) {
   struct ncclIbHandle* handle = (struct ncclIbHandle*) opaqueHandle;
   struct ncclIbCommStage* stage = &handle->stage;
   struct ncclIbSendComm* comm = (struct ncclIbSendComm*)stage->comm;
@@ -723,7 +722,7 @@ ib_send_ready:
 
 NCCL_PARAM(IbGdrFlushDisable, "GDR_FLUSH_DISABLE", 0);
 
-ncclResult_t ncclIbAccept(void* listenComm, void** recvComm) {
+ncclResult_t ncclIbAccept(void* listenComm, void** recvComm, ncclNetDeviceHandle_t** sendDevComm) {
   struct ncclIbListenComm* lComm = (struct ncclIbListenComm*)listenComm;
   struct ncclIbCommStage* stage = &lComm->stage;
   struct ncclIbRecvComm* rComm = (struct ncclIbRecvComm*)stage->comm;
@@ -1370,7 +1369,6 @@ ncclNet_t ncclNetIb = {
   ncclIbInit,
   ncclIbDevices,
   ncclIbGetProperties,
-  NULL /* getDeviceHandle */,
   ncclIbListen,
   ncclIbConnect,
   ncclIbAccept,

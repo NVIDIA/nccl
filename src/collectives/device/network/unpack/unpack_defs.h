@@ -39,6 +39,7 @@ struct netUnpackMeta {
 struct unpackNetDeviceHandle {
   struct netUnpackMeta *meta;  // mapped
   void* bounce_buf;
+  uint64_t head;
 };
 
 /****** shared memory ******/

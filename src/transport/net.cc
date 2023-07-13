@@ -105,7 +105,7 @@ struct sendResources {
   uint64_t llLastCleaning;
   int netDeviceVersion;
   ncclNetDeviceType netDeviceType;
-  int useProxy;
+  ncclNetDeviceHandle_t* netDeviceHandle;
 };
 
 struct recvResources {
@@ -137,7 +137,7 @@ struct recvResources {
   uint64_t llLastCleaning;
   int netDeviceVersion;
   ncclNetDeviceType netDeviceType;
-  int useProxy;
+  ncclNetDeviceHandle_t* netDeviceHandle;
 };
 
 /* Determine if two peers can communicate with NET */
@@ -164,6 +164,9 @@ struct setupReq {
   int channelId;
   int connIndex;
 };
+
+// Forward declaration
+static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct ncclProxyArgs* args);
 
 /* Determine if we will use this transport for this peer and return connect
  * information for this peer */
@@ -544,7 +547,6 @@ static ncclResult_t sendProxySetup(struct ncclProxyConnection* connection, struc
 
   resources->netDeviceVersion = props.netDeviceVersion;
   resources->netDeviceType = props.netDeviceType;
-  resources->useProxy      = props.useProxy;
 
   // We don't return any data
   if (respSize != 0) return ncclInternalError;
@@ -576,7 +578,6 @@ static ncclResult_t recvProxySetup(struct ncclProxyConnection* connection, struc
   resources->maxRecvs = props.maxRecvs;
   resources->netDeviceVersion = props.netDeviceVersion;
   resources->netDeviceType = props.netDeviceType;
-  resources->useProxy      = props.useProxy;
 
   if (respSize != sizeof(ncclNetHandle_t)) return ncclInternalError;
   NCCLCHECK(proxyState->ncclNet->listen(req->netDev, respBuff, &resources->netListenComm));
@@ -585,10 +586,34 @@ static ncclResult_t recvProxySetup(struct ncclProxyConnection* connection, struc
   return ncclSuccess;
 }
 
+// This function embeds plugin-specific rules given the current versions
+static ncclResult_t ncclNetGetDeviceHandle(ncclNetDeviceType type, int version, bool isRecv, ncclNetDeviceHandle_t** handle) {
+  bool needsDeviceHandle  = false;
+
+  if (type == NCCL_NET_DEVICE_UNPACK) {
+    if (version == NCCL_NET_DEVICE_UNPACK_VERSION && isRecv) {
+      needsDeviceHandle  = true;
+    }
+  }
+
+  // Don't re-alloc netDeviceHandles
+  if (needsDeviceHandle && (*handle == NULL)) {
+    NCCLCHECK(ncclCalloc(handle, 1));
+    (*handle)->netDeviceType = type;
+    (*handle)->netDeviceVersion = version;
+  } else if (!needsDeviceHandle) {
+    *handle = NULL;
+  }
+
+  return ncclSuccess;
+}
+
 static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState, void* reqBuff, int reqSize, void* respBuff, int respSize, int* done) {
   struct sendResources* resources = (struct sendResources*)(connection->transportResources);
   if (reqSize != sizeof(ncclNetHandle_t)) return ncclInternalError;
   ncclResult_t ret = ncclSuccess;
+
+  NCCLCHECK(ncclNetGetDeviceHandle(resources->netDeviceType, resources->netDeviceVersion, false /*isRecv*/, &resources->netDeviceHandle));
 
   if (resources->shared) {
     // Shared buffers
@@ -608,15 +633,15 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
         NCCLCHECK(ncclCalloc(progressState->netComms + resources->netDev, proxyState->tpnRanks));
       }
       struct ncclSharedNetComms* comms = progressState->netComms[resources->netDev] + resources->tpRemoteRank;
-      if (comms->sendComm[resources->channelId] == NULL) ret = proxyState->ncclNet->connect(resources->netDev, reqBuff, comms->sendComm + resources->channelId);
+      if (comms->sendComm[resources->channelId] == NULL) ret = proxyState->ncclNet->connect(resources->netDev, reqBuff, comms->sendComm + resources->channelId, &resources->netDeviceHandle);
       resources->netSendComm = comms->sendComm[resources->channelId];
       if (comms->sendComm[resources->channelId]) comms->sendRefCount[resources->channelId]++;
     } else {
-      ret = proxyState->ncclNet->connect(resources->netDev, reqBuff, &resources->netSendComm);
+      ret = proxyState->ncclNet->connect(resources->netDev, reqBuff, &resources->netSendComm, &resources->netDeviceHandle);
     }
   } else {
     // Connect to remote peer
-    ret = proxyState->ncclNet->connect(resources->netDev, reqBuff, &resources->netSendComm);
+    ret = proxyState->ncclNet->connect(resources->netDev, reqBuff, &resources->netSendComm, &resources->netDeviceHandle);
     connection->proxyAppendPtr = &connection->proxyAppend;
   }
 
@@ -626,6 +651,13 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
     return ncclInProgress;
   }
   *done = 1;
+
+  if (resources->netDeviceHandle) {
+    connection->netDeviceHandle = resources->netDeviceHandle;
+    connection->needsProxyProgress = connection->netDeviceHandle->needsProxyProgress;
+  } else {
+    connection->needsProxyProgress = 1;
+  }
 
   // Create structures
   struct connectMap* map = &resources->map;
@@ -710,18 +742,10 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
       {
         NCCLCHECK(proxyState->ncclNet->regMr(resources->netSendComm, resources->buffers[p], resources->buffSizes[p], NCCL_NET_MAP_DEV_MEM(map, buffs[p]) ? NCCL_PTR_CUDA : NCCL_PTR_HOST, &resources->mhandles[p]));
       }
-
-      // Copy mhandle dptr
-      if (resources->netDeviceType != NCCL_NET_DEVICE_HOST)
+      // Copy the mhandle dptr
+      if (resources->netDeviceHandle)
         NCCLCHECK(proxyState->ncclNet->getDeviceMr(resources->netSendComm, resources->mhandles[p], &connection->mhandles[p]));
     }
-  }
-
-  // If the network plugin supports device-initiated communication, get the netDeviceHandle here
-  // netDeviceHandle->handle must be a device ptr!
-  if (resources->netDeviceType != NCCL_NET_DEVICE_HOST) {
-    NCCLCHECK(ncclCalloc(&connection->netDeviceHandle, 1));
-    NCCLCHECK(proxyState->ncclNet->getDeviceHandle(resources->netSendComm, resources->tpRemoteRank, connection->netDeviceHandle));
   }
 
   //NCCLCHECK(netDumpMap(map));
@@ -735,6 +759,8 @@ static ncclResult_t recvProxyConnect(struct ncclProxyConnection* connection, str
   struct recvResources* resources = (struct recvResources*)(connection->transportResources);
   resources->tpRemoteProxyRank = *(int*)reqBuff;
   ncclResult_t ret = ncclSuccess;
+
+  NCCLCHECK(ncclNetGetDeviceHandle(resources->netDeviceType, resources->netDeviceVersion, true /*isRecv*/, &resources->netDeviceHandle));
 
   // Finish connection establishment from remote peer
   if (resources->shared) {
@@ -755,15 +781,15 @@ static ncclResult_t recvProxyConnect(struct ncclProxyConnection* connection, str
         NCCLCHECK(ncclCalloc(progressState->netComms + resources->netDev, proxyState->tpnRanks));
       }
       struct ncclSharedNetComms* comms = progressState->netComms[resources->netDev] + resources->tpRemoteProxyRank;
-      if (comms->recvComm[resources->channelId] == NULL) ret = proxyState->ncclNet->accept(resources->netListenComm, comms->recvComm+resources->channelId);
+      if (comms->recvComm[resources->channelId] == NULL) ret = proxyState->ncclNet->accept(resources->netListenComm, comms->recvComm+resources->channelId, &resources->netDeviceHandle);
       resources->netRecvComm = comms->recvComm[resources->channelId];
       if (comms->recvComm[resources->channelId]) comms->recvRefCount[resources->channelId]++;
     } else {
-      ret = proxyState->ncclNet->accept(resources->netListenComm, &resources->netRecvComm);
+      ret = proxyState->ncclNet->accept(resources->netListenComm, &resources->netRecvComm, &resources->netDeviceHandle);
     }
   } else {
     // Connect to remote peer
-    ret = proxyState->ncclNet->accept(resources->netListenComm, &resources->netRecvComm);
+    ret = proxyState->ncclNet->accept(resources->netListenComm, &resources->netRecvComm, &resources->netDeviceHandle);
     connection->proxyAppendPtr = &connection->proxyAppend;
   }
 
@@ -773,6 +799,13 @@ static ncclResult_t recvProxyConnect(struct ncclProxyConnection* connection, str
     return ncclInProgress;
   }
   *done = 1;
+
+  if (resources->netDeviceHandle) {
+    connection->netDeviceHandle = resources->netDeviceHandle;
+    connection->needsProxyProgress = connection->netDeviceHandle->needsProxyProgress;
+  } else {
+    connection->needsProxyProgress = 1;
+  }
 
   NCCLCHECK(proxyState->ncclNet->closeListen(resources->netListenComm));
 
@@ -856,13 +889,6 @@ static ncclResult_t recvProxyConnect(struct ncclProxyConnection* connection, str
       if (resources->netDeviceType != NCCL_NET_DEVICE_HOST)
         NCCLCHECK(proxyState->ncclNet->getDeviceMr(resources->netRecvComm, resources->mhandles[p], &connection->mhandles[p]));
     }
-  }
-
-  // If the network plugin supports device-initiated communication, get the netDeviceHandle here
-  // netDeviceHandle->handle must be a device ptr!
-  if (resources->netDeviceType != NCCL_NET_DEVICE_HOST) {
-    NCCLCHECK(ncclCalloc(&connection->netDeviceHandle, 1));
-    NCCLCHECK(proxyState->ncclNet->getDeviceHandle(resources->netRecvComm, resources->tpRemoteRank, connection->netDeviceHandle));
   }
 
   //NCCLCHECK(netDumpMap(map));

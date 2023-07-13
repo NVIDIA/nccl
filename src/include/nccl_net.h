@@ -39,7 +39,6 @@ typedef struct {
   int maxRecvs;                    // Maximum number of grouped receives.
   ncclNetDeviceType netDeviceType; // Network offload type
   int netDeviceVersion;            // Version number for network offload
-  int useProxy;
 } ncclNetProperties_v7_t;
 
 typedef ncclNetProperties_v7_t ncclNetProperties_t;
@@ -53,8 +52,6 @@ typedef struct {
   ncclResult_t (*devices)(int* ndev);
   // Get various device properties.
   ncclResult_t (*getProperties)(int dev, ncclNetProperties_v7_t* props);
-  // Get handle for device offload
-  ncclResult_t (*getDeviceHandle)(void* netComm, int tag, ncclNetDeviceHandle* handle);
   // Create a receiving object and provide a handle to connect to it. The
   // handle can be up to NCCL_NET_HANDLE_MAXSIZE bytes and will be exchanged
   // between ranks to create a connection.
@@ -63,12 +60,14 @@ typedef struct {
   // This call must not block for the connection to be established, and instead
   // should return successfully with sendComm == NULL with the expectation that
   // it will be called again until sendComm != NULL.
-  ncclResult_t (*connect)(int dev, void* handle, void** sendComm);
+  // If *sendDevComm points to a valid object, then NCCL is requesting device offload for this connection
+  ncclResult_t (*connect)(int dev, void* handle, void** sendComm, ncclNetDeviceHandle_v7_t** sendDevComm);
   // Finalize connection establishment after remote peer has called connect.
   // This call must not block for the connection to be established, and instead
   // should return successfully with recvComm == NULL with the expectation that
   // it will be called again until recvComm != NULL.
-  ncclResult_t (*accept)(void* listenComm, void** recvComm);
+  // If *recvDevComm points to a valid object, then NCCL is requesting device offload for this connection
+  ncclResult_t (*accept)(void* listenComm, void** recvComm, ncclNetDeviceHandle_v7_t** recvDevComm);
   // Register/Deregister memory. Comm can be either a sendComm or a recvComm.
   // Type is either NCCL_PTR_HOST or NCCL_PTR_CUDA.
   ncclResult_t (*regMr)(void* comm, void* data, int size, int type, void** mhandle);
@@ -92,7 +91,7 @@ typedef struct {
   ncclResult_t (*closeRecv)(void* recvComm);
   ncclResult_t (*closeListen)(void* listenComm);
 
-  // Copy the given mhandle to a dptr
+  // Copy the given mhandle to a dptr in a format usable by this plugin's device code
   ncclResult_t (*getDeviceMr)(void* comm, void* mhandle, void** dptr_mhandle);
 
   // Notify the plugin that a recv has completed by the device

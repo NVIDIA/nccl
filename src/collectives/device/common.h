@@ -10,7 +10,7 @@
 #include "collectives.h"
 #include "devcomm.h"
 #include "op128.h"
-#include "network/net_device_unpack_defs.h"
+#include "network/unpack/unpack_defs.h"
 
 #define COLL_UNROLL (ncclCollUnroll())
 #define NCCL_MAX_DEV_ARITY (NCCL_MAX_TREE_ARITY-1)  // Using balanced tree instead of split tree

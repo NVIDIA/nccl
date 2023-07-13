@@ -101,7 +101,7 @@ struct ncclConnInfo {
 
   uint64_t step;      // Keep where we are
   uint64_t llLastCleaning;
-  struct ncclNetDeviceHandle netDeviceHandle;
+  ncclNetDeviceHandle_t netDeviceHandle;
 };
 
 struct ncclProxyConnector {

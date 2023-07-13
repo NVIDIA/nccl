@@ -4,7 +4,7 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
-#include "network/net_device_unpack.h"
+#include "network/unpack/unpack.h"
 
 template<typename T, typename RedOp, typename Fan, int Direct,
          int SlicePerChunk, int StepPerSlice, int Unroll, int P2p, int MultimemSrcs, int MultimemDsts>
@@ -167,8 +167,7 @@ class Primitives<
         ptrs[index] = connEltsFifo + (step%NCCL_STEPS)*stepSize;
       }
       if ((flags & (AnyNetDeviceUnpack)) && (flags & (Recv*RoleWaitRecv))) {
-        // TODO - Inline function
-        ncclShmem.groups[group].devicePlugin.unpack.head = step / StepPerSlice;
+        ncclNetDeviceIncrementHead(group);
       }
       step += StepPerSlice;
     }
@@ -240,21 +239,11 @@ class Primitives<
          * to 0 to avoid unnecessary workload. */
         int workSize = ncclShmem.aborted ? 0 : sliceSize;
         if (flags & AnyNetDeviceUnpack) {
-          int mask = ncclShmem.groups[group].devicePlugin.unpack.unpackNetDeviceIndexMask;
-
-          while (mask != 0) {
-            int ix = __ffs(mask)-1; // Get the first set bit of the mask (this should correlate to a peer index)
-            mask &= mask-1; // Drop the first set bit of the mask
-
-            // Pack data from the internal iovec to the supplied flat srcs buffer using all the threads
-            // + Src is necessary in the case of accessing the user buffer directly
-            ncclNetDeviceUnpack<Recv>(tid, nworkers, group /* in case they need to use split warps shared memory partitioning*/,
-                ix, ncclShmem.groups[group].srcs[ix + Src], workSize, ncclShmem.groups[group].devicePlugin.unpack.head);
-          }
-
+          ncclNetDeviceUnpack<Recv>(tid, tidInBlock, nworkers, group, ncclShmem.groups[group].devicePlugin.unpack.unpackNetDeviceIndexMask, Src, workSize);
           // Sync here to make sure all workers are reading from the updated srcs)
           subBarrier();
         }
+
         if (DirectRecv && ncclShmem.groups[group].srcs[0] == ncclShmem.groups[group].dsts[0]) {
           // We can only have one direct receive. Since srcs[0] == dstPtr+offset, skip one copy
           if (Send) {
@@ -353,19 +342,15 @@ class Primitives<
           // Adjust remote index with peer offset in case we are directly pulling from peer's output buffer
           waitPeer<DirectRecv, 0, 1, 0, 0, 1>(outIx, outIx+pOffset, offset, realSize);
           subBarrier();
-          if (DirectRecv && ncclShmem.groups[group].srcs[0] == ncclShmem.groups[group].dsts[0]) {
-            // Since waitPeer sets srcs[0] to output buffer + offset, we are doing a direct-write based recv
-            // Do nothing
-          } else {
-            #pragma unroll
-            for (int j=0; j<fan.nrecv(); j++) {
-              int i = (j+shift)%fan.nrecv();
-              pOffset = i*peerOffset;
-              if (skip >= 0 && i >= skip) pOffset += peerElem;
-              void* dst0 = (T*)ncclShmem.groups[group].dsts[0] + pOffset;
-              int realPeerSize = min(realSize, totalElem-pOffset);
-              if (realPeerSize > 0) reduceCopy<Unroll, RedOp, T, 0,1,1, 0,1,1, /*PreOpSrcs=*/0>(tid, nworkers, ncclShmem.redOpArgs[0], ncclShmem.redOpArgs, postOp, 1, ncclShmem.groups[group].srcs+i, 1, &dst0, realPeerSize);
-            }
+          #pragma unroll
+          for (int j=0; j<fan.nrecv(); j++) {
+            int i = (j+shift)%fan.nrecv();
+            pOffset = i*peerOffset;
+            if (skip >= 0 && i >= skip) pOffset += peerElem;
+            void* dst0 = (T*)ncclShmem.groups[group].dsts[0] + pOffset;
+            int realPeerSize = min(realSize, totalElem-pOffset);
+            if (DirectRecv && ncclShmem.groups[group].srcs[i] == dst0) realPeerSize = 0;
+            if (realPeerSize > 0) reduceCopy<Unroll, RedOp, T, 0,1,1, 0,1,1, /*PreOpSrcs=*/0>(tid, nworkers, ncclShmem.redOpArgs[0], ncclShmem.redOpArgs, postOp, 1, ncclShmem.groups[group].srcs+i, 1, &dst0, realPeerSize);
           }
         }
       }
@@ -383,8 +368,6 @@ class Primitives<
         netDeviceHandle = conn->netDeviceHandle.handle;
         // Cache the handle
         ncclNetDeviceUnpackSetup(netDeviceHandle, group, index);
-        // Store mhandle for buffer here, if necessary
-        mhandle = conn->mhandles[NCCL_PROTO_SIMPLE];
         flags |= NetDeviceUnpack;
       }
       step = conn->step;
@@ -539,8 +522,10 @@ class Primitives<
       auto *conns = (flags & RolePostSend) ? ncclShmem.groups[group].sendConns : ncclShmem.groups[group].recvConns;
       conns[index]->step = step;
     }
-    // Make sure all threads are done writing back conn->step and done using
-    // ncclShmem.groups[group]
+
+    if ((flags & (AnyNetDeviceUnpack)) && (flags & (RoleWaitRecv))) {
+      ncclNetDeviceSaveHead(netDeviceHandle, group);
+    }
     barrier();
   }
 

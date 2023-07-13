@@ -159,11 +159,12 @@ struct ncclProxyProgressState {
 
 // Expected proxy response fifo
 struct ncclExpectedProxyResponse {
-  void*    opId;
-  int      respSize;
-  bool     done;
-  void*    respBuff;
-  struct   ncclExpectedProxyResponse* next;
+  void*                             opId;
+  int                               respSize;
+  bool                              done;
+  void*                             respBuff;
+  ncclResult_t                      res;
+  struct ncclExpectedProxyResponse* next;
 };
 
 struct ncclProxyAsyncOp {
@@ -183,6 +184,14 @@ struct ncclProxyLocalPeer {
   int asyncOpCounter;
 };
 
+// Common response header for all proxyOps
+// We pack this into a struct to reduce the number of blocking send and recv calls
+struct ncclProxyRpcResponseHeader {
+  void* opId;
+  ncclResult_t res;
+  int respSize;
+};
+
 struct ncclProxyState {
   int refCount;
   int tpRank;
@@ -195,6 +204,7 @@ struct ncclProxyState {
   int buffSizes[NCCL_NUM_PROTOCOLS];
   bool allocP2pNetLLBuffers;
   bool dmaBufSupport;
+  volatile bool readyFree;
   ncclNet_t* ncclNet;
   ncclCollNet_t* ncclCollNet;
   volatile uint32_t* abortFlag;
@@ -235,10 +245,11 @@ struct ncclProxyConnection {
   struct ncclProxyArgs *proxyAppend;
   struct ncclProxyArgs **proxyAppendPtr;
   void* transportResources;
-  ncclNetDeviceHandle* netDeviceHandle; // dev_ptr
+  ncclNetDeviceHandle_t* netDeviceHandle;
   void* mhandles[NCCL_NUM_PROTOCOLS];
   proxyConnectState state;
   struct ncclCollNetSharedRes* collNet;
+  int needsProxyProgress;
 };
 
 typedef ncclResult_t (*threadFunc_t)(struct ncclProxyArgs*);
@@ -281,4 +292,5 @@ ncclResult_t ncclProxyClientConvertFdBlocking(struct ncclComm* comm, struct nccl
 ncclResult_t ncclProxyStop(struct ncclComm* comm);
 ncclResult_t ncclProxyShmUnlink(struct ncclComm* comm);
 ncclResult_t ncclProxyDestroy(struct ncclComm* comm);
+ncclResult_t ncclProxyDetach(struct ncclProxyState *proxyState);
 #endif

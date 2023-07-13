@@ -7,8 +7,6 @@
 #ifndef NET_DEVICE_H_
 #define NET_DEVICE_H_
 
-#include "devcomm.h"
-
 #define NCCL_NET_DEVICE_INVALID_VERSION      0x0
 #define NCCL_NET_MTU_SIZE                    4096
 
@@ -18,11 +16,14 @@
 
 typedef enum {NCCL_NET_DEVICE_HOST=0, NCCL_NET_DEVICE_UNPACK=1} ncclNetDeviceType;
 
-struct ncclNetDeviceHandle {
+typedef struct {
   ncclNetDeviceType netDeviceType; // Network offload type
   int netDeviceVersion;            // Version number for network offload
   void* handle;
   size_t size;
-};
+  int needsProxyProgress;
+} ncclNetDeviceHandle_v7_t;
 
-#endif // NET_DEVICE_H_
+typedef ncclNetDeviceHandle_v7_t ncclNetDeviceHandle_t;
+
+#endif

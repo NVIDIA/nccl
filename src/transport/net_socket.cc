@@ -103,7 +103,6 @@ ncclResult_t ncclNetSocketGetProperties(int dev, ncclNetProperties_t* props) {
   props->maxRecvs = 1;
   props->netDeviceType    = NCCL_NET_DEVICE_HOST;
   props->netDeviceVersion = NCCL_NET_DEVICE_INVALID_VERSION;
-  props->useProxy         = 1;
   return ncclSuccess;
 }
 
@@ -304,7 +303,7 @@ ncclResult_t ncclNetSocketListen(int dev, void* opaqueHandle, void** listenComm)
   return ncclSuccess;
 }
 
-ncclResult_t ncclNetSocketConnect(int dev, void* opaqueHandle, void** sendComm) {
+ncclResult_t ncclNetSocketConnect(int dev, void* opaqueHandle, void** sendComm, ncclNetDeviceHandle_t** /*sendDevComm*/) {
   if (dev < 0 || dev >= ncclNetIfs) { // data transfer socket is based on specified dev
     return ncclInternalError;
   }
@@ -349,7 +348,7 @@ socket_send:
   return ncclSuccess;
 }
 
-ncclResult_t ncclNetSocketAccept(void* listenComm, void** recvComm) {
+ncclResult_t ncclNetSocketAccept(void* listenComm, void** recvComm, ncclNetDeviceHandle_t** /*recvDevComm*/) {
   struct ncclNetSocketListenComm* lComm = (struct ncclNetSocketListenComm*)listenComm;
   struct ncclNetSocketCommStage* stage = &lComm->stage;
   struct ncclNetSocketComm* rComm = stage->comm;
@@ -600,7 +599,6 @@ ncclNet_t ncclNetSocket = {
   ncclNetSocketInit,
   ncclNetSocketDevices,
   ncclNetSocketGetProperties,
-  NULL /* getDeviceHandle */,
   ncclNetSocketListen,
   ncclNetSocketConnect,
   ncclNetSocketAccept,

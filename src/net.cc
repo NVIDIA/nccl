@@ -56,6 +56,14 @@ static ncclResult_t ncclNet_v4_as_v7_iflush(void* recvComm, int n, void** data, 
   return ncclNet_v4->iflush(recvComm, data[0], sizes[0], mhandles[0], request);
 }
 
+static ncclResult_t ncclNet_v4_as_v7_connect(int dev, void* handle, void** sendComm, ncclNetDeviceHandle_t** /*sendDevComm*/) {
+  return ncclNet_v4->connect(dev, handle, sendComm);
+}
+
+static ncclResult_t ncclNet_v4_as_v7_accept(void* listenComm, void** recvComm, ncclNetDeviceHandle_t** /*recvDevComm*/) {
+  return ncclNet_v4->accept(listenComm, recvComm);
+}
+
 // We use a wrapper around the v4 init to copy over the struct contents
 // post-init since they may not be initialized before hand.
 static ncclResult_t ncclNet_v4_as_v7_init(ncclDebugLogger_t logfn) {
@@ -64,11 +72,10 @@ static ncclResult_t ncclNet_v4_as_v7_init(ncclDebugLogger_t logfn) {
   ncclNet_v4_as_v7.devices = ncclNet_v4->devices;
   ncclNet_v4_as_v7.getProperties = ncclNet_v4_as_v7_getProperties;
   ncclNet_v4_as_v7.listen = ncclNet_v4->listen;
-  ncclNet_v4_as_v7.connect = ncclNet_v4->connect;
-  ncclNet_v4_as_v7.accept = ncclNet_v4->accept;
+  ncclNet_v4_as_v7.connect = ncclNet_v4_as_v7_connect;
+  ncclNet_v4_as_v7.accept  = ncclNet_v4_as_v7_accept;
   ncclNet_v4_as_v7.regMr = ncclNet_v4->regMr;
   ncclNet_v4_as_v7.regMrDmaBuf = NULL;
-  ncclNet_v4_as_v7.getDeviceHandle = NULL;
   ncclNet_v4_as_v7.deregMr = ncclNet_v4->deregMr;
   ncclNet_v4_as_v7.isend = ncclNet_v4_as_v7_isend;
   ncclNet_v4_as_v7.irecv = ncclNet_v4_as_v7_irecv;
@@ -77,6 +84,7 @@ static ncclResult_t ncclNet_v4_as_v7_init(ncclDebugLogger_t logfn) {
   ncclNet_v4_as_v7.closeSend = ncclNet_v4->closeSend;
   ncclNet_v4_as_v7.closeRecv = ncclNet_v4->closeRecv;
   ncclNet_v4_as_v7.closeListen = ncclNet_v4->closeListen;
+  ncclNet_v4_as_v7.getDeviceMr = NULL;
   return ncclSuccess;
 }
 
@@ -86,8 +94,15 @@ static ncclResult_t ncclNet_v6_as_v7_getProperties(int dev, ncclNetProperties_v7
   if (ans != ncclSuccess) return ans;
   props->netDeviceType = NCCL_NET_DEVICE_HOST;
   props->netDeviceVersion = NCCL_NET_DEVICE_INVALID_VERSION;
-  props->useProxy         = 1;
   return ncclSuccess;
+}
+
+static ncclResult_t ncclNet_v6_as_v7_connect(int dev, void* handle, void** sendComm, ncclNetDeviceHandle_t** /*sendDevComm*/) {
+  return ncclNet_v6->connect(dev, handle, sendComm);
+}
+
+static ncclResult_t ncclNet_v6_as_v7_accept(void* listenComm, void** recvComm, ncclNetDeviceHandle_t** /*recvDevComm*/) {
+  return ncclNet_v6->accept(listenComm, recvComm);
 }
 
 static ncclResult_t ncclNet_v6_as_v7_init(ncclDebugLogger_t logfn) {
@@ -96,11 +111,10 @@ static ncclResult_t ncclNet_v6_as_v7_init(ncclDebugLogger_t logfn) {
   ncclNet_v6_as_v7.devices = ncclNet_v6->devices;
   ncclNet_v6_as_v7.getProperties = ncclNet_v6_as_v7_getProperties; // ncclNet_v5->getProperties;
   ncclNet_v6_as_v7.listen = ncclNet_v6->listen;
-  ncclNet_v6_as_v7.connect = ncclNet_v6->connect;
-  ncclNet_v6_as_v7.accept = ncclNet_v6->accept;
+  ncclNet_v6_as_v7.connect = ncclNet_v6_as_v7_connect;
+  ncclNet_v6_as_v7.accept =  ncclNet_v6_as_v7_accept;
   ncclNet_v6_as_v7.regMr = ncclNet_v6->regMr;
   ncclNet_v6_as_v7.regMrDmaBuf = NULL;
-  ncclNet_v6_as_v7.getDeviceHandle = NULL;
   ncclNet_v6_as_v7.deregMr = ncclNet_v6->deregMr;
   ncclNet_v6_as_v7.isend = ncclNet_v6->isend;
   ncclNet_v6_as_v7.irecv = ncclNet_v6->irecv;
@@ -132,6 +146,14 @@ static ncclResult_t ncclNet_v5_as_v7_getProperties(int dev, ncclNetProperties_v7
   return ncclSuccess;
 }
 
+static ncclResult_t ncclNet_v5_as_v7_connect(int dev, void* handle, void** sendComm, ncclNetDeviceHandle_t** /*sendDevComm*/) {
+  return ncclNet_v5->connect(dev, handle, sendComm);
+}
+
+static ncclResult_t ncclNet_v5_as_v7_accept(void* listenComm, void** recvComm, ncclNetDeviceHandle_t** /*recvDevComm*/) {
+  return ncclNet_v5->accept(listenComm, recvComm);
+}
+
 // We use a wrapper around the v5 init to copy over the struct contents
 // post-init since they may not be initialized before hand.
 static ncclResult_t ncclNet_v5_as_v7_init(ncclDebugLogger_t logfn) {
@@ -140,8 +162,8 @@ static ncclResult_t ncclNet_v5_as_v7_init(ncclDebugLogger_t logfn) {
   ncclNet_v5_as_v7.devices = ncclNet_v5->devices;
   ncclNet_v5_as_v7.getProperties = ncclNet_v5_as_v7_getProperties;
   ncclNet_v5_as_v7.listen = ncclNet_v5->listen;
-  ncclNet_v5_as_v7.connect = ncclNet_v5->connect;
-  ncclNet_v5_as_v7.accept = ncclNet_v5->accept;
+  ncclNet_v5_as_v7.connect = ncclNet_v5_as_v7_connect;
+  ncclNet_v5_as_v7.accept =  ncclNet_v5_as_v7_accept;
   ncclNet_v5_as_v7.regMr = ncclNet_v5->regMr;
   ncclNet_v5_as_v7.regMrDmaBuf = NULL;
   ncclNet_v5_as_v7.deregMr = ncclNet_v5->deregMr;
@@ -153,7 +175,7 @@ static ncclResult_t ncclNet_v5_as_v7_init(ncclDebugLogger_t logfn) {
   ncclNet_v5_as_v7.closeRecv = ncclNet_v5->closeRecv;
   ncclNet_v5_as_v7.closeListen = ncclNet_v5->closeListen;
   ncclNet_v5_as_v7.getDeviceMr = NULL;
-  ncclNet_v6_as_v7.irecvConsumed = NULL;
+  ncclNet_v5_as_v7.irecvConsumed = NULL;
   return ncclSuccess;
 }
 
@@ -296,20 +318,28 @@ ncclResult_t ncclNetPluginInit() {
   }
   void* netPluginLib = dlopen(ncclNetPluginName, RTLD_NOW | RTLD_LOCAL);
   if (netPluginLib == nullptr) {
-    INFO(NCCL_INIT|NCCL_NET, "NET/Plugin : Plugin load (%s) returned %d : %s", ncclNetPluginName, errno, dlerror());
-    INFO(NCCL_INIT|NCCL_NET, "NET/Plugin : No plugin found, using internal implementation");
+    // dlopen does not guarantee to set errno, but dlerror only gives us a
+    // string, so checking errno doesn't hurt to try to provide a better
+    // error message
+    if (errno == ENOENT) {
+      INFO(NCCL_INIT|NCCL_NET, "NET/Plugin : dlerror=%s No plugin found (%s), using internal implementation", dlerror(), ncclNetPluginName);
+      // exit(-1);
+    } else {
+      INFO(NCCL_INIT|NCCL_NET, "NET/Plugin : Plugin load returned %d : %s.", errno, dlerror());
+    }
     return ncclSuccess;
   }
 
   ncclNets[0] = (ncclNet_v7_t*)dlsym(netPluginLib, "ncclNetPlugin_v7");
   if (ncclNets[0] == nullptr) {
-    INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Failed to find ncclNetPlugin_v6 symbol.");
+    INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Failed to find ncclNetPlugin_v7 symbol.");
     // Try v6 plugin
     ncclNet_v6 = (ncclNet_v6_t*)dlsym(netPluginLib, "ncclNetPlugin_v6");
     if (ncclNet_v6 == nullptr) {
       // Try v5 plugin
       ncclNet_v5 = (ncclNet_v5_t*)dlsym(netPluginLib, "ncclNetPlugin_v5");
       if (ncclNet_v5 == nullptr) {
+        // Try v4 plugin
         ncclNet_v4 = (ncclNet_v4_t*)dlsym(netPluginLib, "ncclNetPlugin_v4");
         if (ncclNet_v4 == nullptr) {
           INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Failed to find ncclNetPlugin symbol (v4 or v5).");
@@ -340,7 +370,7 @@ ncclResult_t ncclNetPluginInit() {
   // Check for CollNet
   ncclCollNets[0] = (ncclCollNet_v7_t*) dlsym(netPluginLib, "ncclCollNetPlugin_v7");
   if (ncclCollNets[0] == nullptr) {
-    INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Failed to find ncclCollNetPlugin_v6 symbol.");
+    INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Failed to find ncclCollNetPlugin_v7 symbol.");
     ncclCollNet_v6 = (ncclCollNet_v6_t*)dlsym(netPluginLib, "ncclCollNetPlugin_v6");
     if (ncclCollNet_v6 == nullptr) {
       ncclCollNet_v5 = (ncclCollNet_v5_t*)dlsym(netPluginLib, "ncclCollNetPlugin_v5");
@@ -502,10 +532,10 @@ ncclResult_t ncclGpuGdrSupport(struct ncclComm* comm, int* gdrSupport) {
       }
 
       if (sComm == NULL)
-        NCCLCHECKGOTO(comm->ncclNet->connect(dev, &handle, &sComm), ret, cleanup2);
+        NCCLCHECKGOTO(comm->ncclNet->connect(dev, &handle, &sComm, NULL), ret, cleanup2);
 
       if (rComm == NULL)
-        NCCLCHECKGOTO(comm->ncclNet->accept(lComm, &rComm), ret, cleanup2);
+        NCCLCHECKGOTO(comm->ncclNet->accept(lComm, &rComm, NULL), ret, cleanup2);
 
       connected = (rComm != NULL) && (sComm != NULL);
     }
@@ -542,4 +572,5 @@ int ncclNetVersion(struct ncclComm* comm) {
     return 6;
   } else {
     return 7;
-  }}
+  }
+}

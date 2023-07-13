@@ -7,11 +7,12 @@
 #ifndef NET_DEVICE_UNPACK_H
 #define NET_DEVICE_UNPACK_H
 
-#include "net_device_unpack_defs.h"
+#include "unpack_defs.h"
 
 #include "op128.h"
 #include "align.h"
 #include "devcomm.h"
+#include "common.h"
 
 // #define ALIGNED_LOAD
 
@@ -34,9 +35,16 @@ inline __device__ void ncclNetDeviceUnpackSetup(void* ohandle, const int group, 
   struct unpackNetDeviceHandle* handle = (struct unpackNetDeviceHandle*) ohandle;
   ncclShmem.groups[group].devicePlugin.unpack.g_meta[index] = handle->meta;
   ncclShmem.devicePlugin.unpack.bounce_buf = handle->bounce_buf;
+  ncclShmem.groups[group].devicePlugin.unpack.head = handle->head;
+}
 
-  // Total size is N page per warp * 16 B per page * 20 WARPS max = 320 * N bytes, N == WARP_SHM_PAGE_CNT
-  static_assert(ncclShmemScratchWarpSize() >= WARP_SHM_SIZE, "Each warp must have enough scratch space");
+inline __device__ void ncclNetDeviceIncrementHead(const int group) {
+  ncclShmem.groups[group].devicePlugin.unpack.head++;
+}
+
+inline __device__ void ncclNetDeviceSaveHead(void* ohandle, const int group) {
+  struct unpackNetDeviceHandle* handle = (struct unpackNetDeviceHandle*) ohandle;
+  handle->head = ncclShmem.groups[group].devicePlugin.unpack.head;
 }
 
 template <uint8_t sz>
@@ -152,19 +160,35 @@ inline __device__ int ppw(const int nbytes, int nw) {
 // threads
 template <int Recv>
 inline __device__ void ncclNetDeviceUnpack(
-    const int tid, const int nworkers, const int group, const int index,
-    void *src, const int nbytes, const uint64_t step);
+    const int tid, const int tidInBlock, const int nworkers, const int group, int mask, int Src, int workSize);
 
 template <>
 inline __device__ void ncclNetDeviceUnpack</*Recv=*/0>(
-    const int tid, const int nworkers, const int group, const int index,
-    void *src, const int nbytes, const uint64_t step) {
+    const int tid, const int tidInBlock, const int nworkers, const int group, int mask, int Src, int workSize) {
   // send unpack empty
 }
 
+inline __device__ void ncclNetDeviceUnpackInner(
+    const int tid, const int tidInBlock, const int nworkers, const int group, const int index,
+    void *src, const int nbytes, const uint64_t step);
+
 template <>
 inline __device__ void ncclNetDeviceUnpack</*Recv=*/1>(
-    const int tid, const int nworkers, const int group, const int index,
+    const int tid, const int tidInBlock, const int nworkers, const int group, int mask, int Src, int workSize) {
+
+  while (mask != 0) {
+    int ix = __ffs(mask)-1; // Get the first set bit of the mask (this should correlate to a peer index)
+    mask &= mask-1; // Drop the first set bit of the mask
+
+    // Pack data from the internal iovec to the supplied flat srcs buffer using all the threads
+    // + Src is necessary in the case of accessing the user buffer directly
+    ncclNetDeviceUnpackInner(tid, tidInBlock, nworkers, group /* in case they need to use split warps shared memory partitioning*/,
+        ix, ncclShmem.groups[group].srcs[ix + Src], workSize, ncclShmem.groups[group].devicePlugin.unpack.head);
+  }
+}
+
+inline __device__ void ncclNetDeviceUnpackInner(
+    const int tid, const int tidInBlock, const int nworkers, const int group, const int index,
     void *src, const int nbytes, const uint64_t step) {
   // from src/collectives/device/common_kernel.h
   const int w = tid / WARP_SIZE;        // Warp number
@@ -182,8 +206,6 @@ inline __device__ void ncclNetDeviceUnpack</*Recv=*/1>(
   loadMeta* s_meta;
   uint64_t meta_cnt;
 
-  // const int shm_off = group * nw * WARP_SHM_PAGE_CNT;
-
   // hack head use per-warp
   head          = step;
   g_meta_struct = ncclShmem.groups[group].devicePlugin.unpack.g_meta[index];
@@ -196,7 +218,10 @@ inline __device__ void ncclNetDeviceUnpack</*Recv=*/1>(
   g_meta = g_meta_struct->mem[head];
 
   // Currently, even/odd groups perform send/recv separately. We don't really need space for send side.
-  s_meta = (loadMeta*) ncclScratchForWarp(threadIdx.x / WARP_SIZE); // (loadMeta*) (ncclShmem.devicePlugin.unpack.meta + shm_off);
+  // Total size is N page per warp * 16 B per page * 20 WARPS max = 320 * N bytes, N == WARP_SHM_PAGE_CNT
+  static_assert(ncclShmemScratchWarpSize() >= WARP_SHM_SIZE, "Each warp must have enough scratch space");
+  s_meta = (loadMeta*) ncclScratchForWarp(tidInBlock / WARP_SIZE);
+
   load64gpu(g_meta_struct->cnt + head, meta_cnt);
 
   int PPW = ppw(nbytes, nw);
@@ -252,4 +277,4 @@ inline __device__ void ncclNetDeviceUnpack</*Recv=*/1>(
   }
 }
 
-#endif  // NET_DEVICE_UNPACK_H
+#endif  // NET_DEVICE_UNPACK_DEFS_H_

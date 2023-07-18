@@ -673,15 +673,20 @@ ib_connect_check:
   // RoCE support
   qpInfo.lid = portAttr.lid;
   qpInfo.link_layer = comm->gidInfo.link_layer = portAttr.link_layer;
-  if (qpInfo.link_layer == IBV_LINK_LAYER_INFINIBAND) { // IB
-    for (int q=0; q<comm->nqps; q++)
-      INFO(NCCL_NET,"NET/IB: Dev %d Port %d qpn %d mtu %d LID %d", dev, ib_port, qpInfo.qpn[q], qpInfo.mtu, qpInfo.lid);
-  } else { // RoCE
-    NCCLCHECK(wrap_ibv_query_gid(ctx, ib_port, ncclParamIbGidIndex(), &comm->gidInfo.localGid));
+  if (qpInfo.link_layer == IBV_LINK_LAYER_ETHERNET) {
+    NCCLCHECK(wrap_ibv_query_gid(ncclIbDevs[dev].context, ncclIbDevs[dev].port, ncclParamIbGidIndex(), &comm->gidInfo.localGid));
     qpInfo.spn = comm->gidInfo.localGid.global.subnet_prefix;
     qpInfo.iid = comm->gidInfo.localGid.global.interface_id;
+  }
+
+  if (qpInfo.link_layer == IBV_LINK_LAYER_INFINIBAND) { // IB
     for (int q=0; q<comm->nqps; q++)
-      INFO(NCCL_NET,"NET/IB: Dev %d Port %d qpn %d mtu %d GID %ld (%lX/%lX)", dev, ib_port, qpInfo.qpn[q], qpInfo.mtu, ncclParamIbGidIndex(), qpInfo.spn, qpInfo.iid);
+      INFO(NCCL_NET,"NET/IB: Dev %d Port %d qpn %d mtu %d LID %d", dev, ncclIbDevs[dev].port, qpInfo.qpn[q], qpInfo.mtu, qpInfo.lid);
+  } else { // RoCE
+    for (int q=0; q<comm->nqps; q++)
+      INFO(NCCL_NET,"NET/IB: Dev %d Port %d qpn %d mtu %d query_ece={supported=%d, vendor_id=0x%x, options=0x%x, comp_mask=0x%x} GID %ld (%lX/%lX)",
+        dev, ncclIbDevs[dev].port, qpInfo.qpn[q], qpInfo.mtu, qpInfo.ece_supported[q], qpInfo.ece[q].vendor_id, qpInfo.ece[q].options, qpInfo.ece[q].comp_mask, ncclParamIbGidIndex(),
+        qpInfo.spn, qpInfo.iid);
   }
 
   stage->state = ncclIbCommStateSend;
@@ -714,6 +719,12 @@ ib_connect:
 
     NCCLCHECK(ncclIbRtrQp(qp, remQpInfo.qpn[q], &remQpInfo));
     NCCLCHECK(ncclIbRtsQp(qp));
+  }
+
+  if (qpInfo.link_layer == IBV_LINK_LAYER_ETHERNET) { // RoCE
+    for (int q=0; q<comm->nqps; q++)
+      INFO(NCCL_NET,"NET/IB: Dev %d Port %d qpn %d set_ece={supported=%d, vendor_id=0x%x, options=0x%x, comp_mask=0x%x}",
+        dev, ncclIbDevs[dev].port, qpInfo.qpn[q], remQpInfo.ece_supported[q], remQpInfo.ece[q].vendor_id, remQpInfo.ece[q].options, remQpInfo.ece[q].comp_mask);
   }
 
   comm->ready = 1;

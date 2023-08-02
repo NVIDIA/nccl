@@ -530,7 +530,11 @@ ncclResult_t ncclTopoSearchRecNet(struct ncclTopoSystem* system, struct ncclTopo
 
     // NVLS needs to balance on all NICs
     if (graph->pattern == NCCL_TOPO_PATTERN_NVLS) {
-      NCCLCHECK(ncclTopoSearchTryGpu(system, graph, saveGraph, 0, backToNet, backToFirstRank, 0, time, -1, -1, nets[graph->nChannels]));
+      if (graph->nChannels < netcount) {
+        int gpu;
+        NCCLCHECK(ncclTopoGetLocalGpu(system, nets[graph->nChannels], &gpu));
+        if (gpu != -1) NCCLCHECK(ncclTopoSearchTryGpu(system, graph, saveGraph, 0, backToNet, backToFirstRank, 0, time, -1, -1, gpu));
+      }
     } else {
       if (graph->nChannels > 0) {
         // Try to replay the last channel

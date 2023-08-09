@@ -65,8 +65,12 @@ ncclResult_t ncclRealloc(T** ptr, size_t oldNelem, size_t nelem) {
     WARN("Failed to malloc %ld bytes", nelem*sizeof(T));
     return ncclSystemError;
   }
-  memcpy(p, oldp, oldNelem*sizeof(T));
-  free(oldp);
+
+  if (oldp != NULL) {
+    memcpy(p, oldp, oldNelem*sizeof(T));
+    free(oldp);
+  }
+
   memset(p+oldNelem, 0, (nelem-oldNelem)*sizeof(T));
   *ptr = (T*)p;
   INFO(NCCL_ALLOC, "Mem Realloc old size %ld, new size %ld pointer %p", oldNelem*sizeof(T), nelem*sizeof(T), *ptr);

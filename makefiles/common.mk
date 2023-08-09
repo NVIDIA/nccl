@@ -9,6 +9,10 @@ PREFIX ?= /usr/local
 VERBOSE ?= 0
 KEEP ?= 0
 DEBUG ?= 0
+# Note that user must set ASAN_OPTIONS="protect_shadow_gap=0"
+# because it is required when ASAN is run within a CUDA application.
+# Otherwise, CUDA would return an OOM error.
+ASAN ?= 0
 TRACE ?= 0
 PROFAPI ?= 1
 NVTX ?= 1
@@ -83,6 +87,11 @@ CXXFLAGS  += -O3 -g
 else
 NVCUFLAGS += -O0 -G -g
 CXXFLAGS  += -O0 -g -ggdb3
+endif
+
+ifneq ($(ASAN), 0)
+CXXFLAGS += -fsanitize=address
+LDFLAGS += -fsanitize=address
 endif
 
 ifneq ($(VERBOSE), 0)

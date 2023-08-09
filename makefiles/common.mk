@@ -13,6 +13,7 @@ DEBUG ?= 0
 # because it is required when ASAN is run within a CUDA application.
 # Otherwise, CUDA would return an OOM error.
 ASAN ?= 0
+UBSAN ?= 0
 TRACE ?= 0
 PROFAPI ?= 1
 NVTX ?= 1
@@ -92,6 +93,11 @@ endif
 ifneq ($(ASAN), 0)
 CXXFLAGS += -fsanitize=address
 LDFLAGS += -fsanitize=address
+endif
+
+ifneq ($(UBSAN), 0)
+CXXFLAGS += -fsanitize=undefined
+LDFLAGS += -fsanitize=undefined
 endif
 
 ifneq ($(VERBOSE), 0)

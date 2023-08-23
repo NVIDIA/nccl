@@ -66,7 +66,7 @@ struct userIbDev {
   uint16_t port_en;
 };
 
-#define MAX_IB_DEVS 16
+#define MAX_IB_DEVS 32
 struct ncclIbDev ncclIbDevs[MAX_IB_DEVS];
 struct userIbDev userIbDevs[MAX_IB_DEVS];
 pthread_mutex_t ncclIbLock = PTHREAD_MUTEX_INITIALIZER;

@@ -576,7 +576,18 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
       }
     }
     pciNode->parent = parent;
-    parent->subs[parent->nSubs++] = pciNode;
+    // Keep PCI sub devices ordered by PCI Bus ID (Issue #820)
+    int subIndex = parent->nSubs;
+    const char* newBusId;
+    NCCLCHECK(xmlGetAttrStr(pciNode, "busid", &newBusId));
+    for (int s=0; s<parent->nSubs; s++) {
+      const char* busId;
+      NCCLCHECK(xmlGetAttrStr(parent->subs[s], "busid", &busId));
+      if (strcmp(newBusId, busId) < 0) { subIndex = s; break; }
+    }
+    for (int s = parent->nSubs; s > subIndex; s--) parent->subs[s] = parent->subs[s-1];
+    parent->subs[subIndex] = pciNode;
+    parent->nSubs++;
   }
   if (strcmp(parent->name, "pci") == 0) {
     NCCLCHECK(ncclTopoGetXmlFromSys(parent, xml));

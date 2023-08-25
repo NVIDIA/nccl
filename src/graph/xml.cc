@@ -576,7 +576,18 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
       }
     }
     pciNode->parent = parent;
-    parent->subs[parent->nSubs++] = pciNode;
+    // Keep PCI sub devices ordered by PCI Bus ID (Issue #820)
+    int subIndex = parent->nSubs;
+    const char* newBusId;
+    NCCLCHECK(xmlGetAttrStr(pciNode, "busid", &newBusId));
+    for (int s=0; s<parent->nSubs; s++) {
+      const char* busId;
+      NCCLCHECK(xmlGetAttrStr(parent->subs[s], "busid", &busId));
+      if (strcmp(newBusId, busId) < 0) { subIndex = s; break; }
+    }
+    for (int s = parent->nSubs; s > subIndex; s--) parent->subs[s] = parent->subs[s-1];
+    parent->subs[subIndex] = pciNode;
+    parent->nSubs++;
   }
   if (strcmp(parent->name, "pci") == 0) {
     NCCLCHECK(ncclTopoGetXmlFromSys(parent, xml));
@@ -597,13 +608,7 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
   int dev = -1;
   NCCLCHECK(xmlGetAttrIndex(gpuNode, "dev", &index));
   if (index == -1) {
-    if (nvmlDev == NULL) {
-      const char* busId;
-      NCCLCHECK(xmlGetAttr(pciNode, "busid", &busId));
-      if (busId == NULL || cudaDeviceGetByPCIBusId(&dev, busId) != cudaSuccess) dev = -1;
-    } else {
-      NCCLCHECK(ncclNvmlDeviceGetIndex(nvmlDev, (unsigned int*)&dev));
-    }
+    NCCLCHECK(ncclNvmlDeviceGetIndex(nvmlDev, (unsigned int*)&dev));
     NCCLCHECK(xmlSetAttrInt(gpuNode, "dev", dev));
   }
   NCCLCHECK(xmlGetAttrInt(gpuNode, "dev", &dev));
@@ -713,8 +718,8 @@ ncclResult_t ncclTopoFillGpu(struct ncclXml* xml, const char* busId, struct nccl
   NCCLCHECK(ncclTopoGetPciNode(xml, busId, &node));
   NCCLCHECK(xmlSetAttrIfUnset(node, "class", "0x03"));
   NCCLCHECK(ncclTopoGetXmlFromSys(node, xml));
-  nvmlDevice_t nvmlDev = NULL;
-  if (ncclNvmlDeviceGetHandleByPciBusId(busId, &nvmlDev) != ncclSuccess) nvmlDev = NULL;
+  nvmlDevice_t nvmlDev;
+  NCCLCHECK(ncclNvmlDeviceGetHandleByPciBusId(busId, &nvmlDev));
   NCCLCHECK(ncclTopoGetXmlFromGpu(node, nvmlDev, xml, gpuNode));
   return ncclSuccess;
 }

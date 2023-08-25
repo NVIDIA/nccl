@@ -126,7 +126,7 @@
  * Systems:
  *
  * \image html
- * https://raw.githubusercontent.com/jrhemstad/nvtx_wrappers/master/docs/example_range.png
+ * https://raw.githubusercontent.com/NVIDIA/NVTX/release-v3/docs/images/example_range.png
  *
  * Alternatively, use the \ref MACROS like `NVTX3_FUNC_RANGE()` to add
  * ranges to your code that automatically use the name of the enclosing function
@@ -561,18 +561,27 @@
 
 /* Temporary helper #defines, removed with #undef at end of header */
 
-#if !defined(NVTX3_USE_CHECKED_OVERLOADS_FOR_GET)
-#if defined(_MSC_VER) && _MSC_VER < 1914
-/* Microsoft's compiler prior to VS2017 Update 7 (15.7) uses an older parser
- * that does not work with domain::get's specialization for domain::global,
- * and would require extra conditions to make SFINAE work for the overloaded
- * get() functions.  This macro disables use of overloaded get() in order to
- * work with VS2015 and versions of VS2017 below 15.7, without penalizing
- * users of newer compilers.  Building with this flag set to 0 means errors
- * when defining tag structs (see documentation for domain, named_category,
- * and registered_string) will have more complex compiler error messages
- * instead of the clear static_assert messages from the get() overloads.
+/* Some compilers do not correctly support SFINAE, which is used in this API
+ * to detect common usage errors and provide clearer error messages (by using
+ * static_assert) than the compiler would produce otherwise.  These compilers
+ * will generate errors while compiling this file such as:
+ *
+ *  error: ‘name’ is not a member of ‘nvtx3::v1::domain::global’
+ *
+ * The following compiler versions are known to have this problem, and so are
+ * set by default to disable the SFINAE-based checks:
+ *
+ * - All MSVC versions prior to VS2017 Update 7 (15.7)
+ * - GCC 8.1-8.3 (the problem was fixed in GCC 8.4)
+ *
+ * If you find your compiler hits this problem, you can work around it by
+ * defining NVTX3_USE_CHECKED_OVERLOADS_FOR_GET to 0 before including this
+ * header, or you can add a check for your compiler version to this #if.
+ * Also, please report the issue on the NVTX github page.
  */
+#if !defined(NVTX3_USE_CHECKED_OVERLOADS_FOR_GET)
+#if defined(_MSC_VER) && _MSC_VER < 1914 \
+  || defined(__GNUC__) && __GNUC__ == 8 && __GNUC_MINOR__ < 4
 #define NVTX3_USE_CHECKED_OVERLOADS_FOR_GET 0
 #else
 #define NVTX3_USE_CHECKED_OVERLOADS_FOR_GET 1

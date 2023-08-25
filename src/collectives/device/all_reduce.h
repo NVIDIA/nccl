@@ -114,7 +114,7 @@ namespace {
       chunkSize = divUp((int)size, int(nChannels*minChunkSize))*int(minChunkSize);
 
     { // Reduce : max number of recv is 3, max number of send is 1 (binary tree + local)
-      Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_DEV_ARITY, 1>, /*Direct=*/0, Proto, 0> prims
+      Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_TREE_ARITY, 1>, /*Direct=*/0, Proto, 0> prims
         (tid, nthreads, tree->down, &tree->up, args->sendbuff, args->recvbuff, args->redOpArg);
       if (tree->up == -1) {
         for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
@@ -140,7 +140,7 @@ namespace {
     }
 
     { // Broadcast : max number of recv is 1, max number of send is 3 (binary tree + local)
-      Primitives<T, RedOp, FanAsymmetric<1, NCCL_MAX_DEV_ARITY>, /*Direct=*/1, Proto, 0> prims
+      Primitives<T, RedOp, FanAsymmetric<1, NCCL_MAX_TREE_ARITY>, /*Direct=*/1, Proto, 0> prims
         (tid, nthreads, &tree->up, tree->down, args->sendbuff, args->recvbuff, args->redOpArg);
       if (tree->up == -1) {
         for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
@@ -197,8 +197,8 @@ namespace {
       chunkSize = divUp((int)size, nChannels*int(minChunkSize))*int(minChunkSize);
 
     if (tree->up == -1) {
-      // Reduce and broadcast. Max number of recv is 3, max number of send is 3
-      Primitives<T, RedOp, FanSymmetric<NCCL_MAX_DEV_ARITY>, /*Direct=*/1, Proto, 0>
+      // Reduce and broadcast. Max number of recv is 2, max number of send is 2
+      Primitives<T, RedOp, FanSymmetric<NCCL_MAX_TREE_ARITY_TOP>, /*Direct=*/1, Proto, 0>
         prims(tid, nthreads, tree->down, tree->down, args->sendbuff, args->recvbuff, args->redOpArg);
       for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
         ssize_t offset = gridOffset + bid*int(chunkSize);
@@ -215,7 +215,7 @@ namespace {
        * into DirectRecv and DirectSend capabilities, this ctor would have both=0,
        * but the ctor above for tree roots would be DirectRecv=0 DirectSend=1.
        */
-      Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_DEV_ARITY, 1>, /*Direct=*/1, Proto, 0>
+      Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_TREE_ARITY, 1>, /*Direct=*/1, Proto, 0>
         prims(tid, nthreadsSplit, tree->down, &tree->up, args->sendbuff, args->recvbuff, args->redOpArg, 0*Proto::MaxGroupWidth);
       if (tree->down[0] == -1) {
         for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
@@ -234,7 +234,7 @@ namespace {
     }
     else {
       // Broadcast down. Max number of recv is 1, max number of send is 3 (binary tree + local)
-      Primitives<T, RedOp, FanAsymmetric<1, NCCL_MAX_DEV_ARITY>, /*Direct=*/1, Proto, 0>
+      Primitives<T, RedOp, FanAsymmetric<1, NCCL_MAX_TREE_ARITY>, /*Direct=*/1, Proto, 0>
         prims(tid-nthreadsSplit, nthreads-nthreadsSplit, &tree->up, tree->down, args->sendbuff, args->recvbuff,
             args->redOpArg, 1*Proto::MaxGroupWidth);
       if (tree->down[0] == -1) {
@@ -564,6 +564,7 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET_CHAIN, NCCL
     ncclTree *tree = &ncclShmem.channel.collnetChain;
     ssize_t chunkSize = int(args->lastChunkSize);
     const ssize_t loopSize = int(nChannels*chunkSize);
+    const int nranks = ncclShmem.comm.nRanks;
     const ssize_t size = args->count;
 
     int nthreadsSplit = nthreads/2;
@@ -609,17 +610,34 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET_CHAIN, NCCL
       }
     }
     else {
-      if (send == -1) {
-        for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
-          ssize_t offset = gridOffset + bid*int(chunkSize);
-          int nelem = min(chunkSize, size-offset);
-          prims.directRecv(offset, nelem);
+      if (recv == nranks) {
+        // I'm the first in the broadcast chain, I need to perform the division (postOp)
+        if (send == -1) {
+          for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
+            ssize_t offset = gridOffset + bid*int(chunkSize);
+            int nelem = min(chunkSize, size-offset);
+            prims.recv(offset, nelem, /*postOp*/true);
+          }
+        } else {
+          for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
+            ssize_t offset = gridOffset + bid*int(chunkSize);
+            int nelem = min(chunkSize, size-offset);
+            prims.recvCopyDirectSend(offset, nelem, /*postOp*/true);
+          }
         }
       } else {
-        for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
-          ssize_t offset = gridOffset + bid*int(chunkSize);
-          int nelem = min(chunkSize, size-offset);
-          prims.directRecvCopySend(offset, nelem);
+        if (send == -1) {
+          for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
+            ssize_t offset = gridOffset + bid*int(chunkSize);
+            int nelem = min(chunkSize, size-offset);
+            prims.directRecv(offset, nelem);
+          }
+        } else {
+          for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
+            ssize_t offset = gridOffset + bid*int(chunkSize);
+            int nelem = min(chunkSize, size-offset);
+            prims.directRecvCopySend(offset, nelem);
+          }
         }
       }
     }

@@ -13,7 +13,6 @@
 #include "network/unpack/unpack_defs.h"
 
 #define COLL_UNROLL (ncclCollUnroll())
-#define NCCL_MAX_DEV_ARITY (NCCL_MAX_TREE_ARITY-1)  // Using balanced tree instead of split tree
 
 typedef void(*ncclKern_t)();
 extern __device__ ncclKern_t ncclFuncs[];

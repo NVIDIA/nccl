@@ -629,10 +629,12 @@ static ncclResult_t scheduleP2pTasksToPlan(
   // Try to use all channels
   int nChannelsMax = comm->p2pnChannelsPerPeer;
   int nChannelsMin = nChannelsMax;
-  // Try to use all channels, but one channel per operation.
-  while (nChannelsMin*nRanks > comm->p2pnChannels && nChannelsMin > 1) nChannelsMin /= 2;
-  // Avoid overloading channels with 8+ operations as we loose the sync warp, hence a bit of bandwidth.
-  while (nChannelsMax*nRanks > comm->p2pnChannels*4 && nChannelsMax > 1) nChannelsMax /= 2;
+  if (comm->nNodes == 1) {
+    // Try to use all channels, but one channel per operation.
+    while (nChannelsMin*nRanks > comm->p2pnChannels && nChannelsMin > 1) nChannelsMin /= 2;
+    // Avoid overloading channels with 8+ operations as we loose the sync warp, hence a bit of bandwidth.
+    while (nChannelsMax*nRanks > comm->p2pnChannels*4 && nChannelsMax > 1) nChannelsMax /= 2;
+  }
 
   bool fuseOk;
   // We can perform 8 send/recv per round per CTA. Make sure we jump between fused blocks at node boundaries.
@@ -1141,13 +1143,9 @@ ncclResult_t ncclLaunchFinish(struct ncclComm* comm) {
 /*****************************************************************************/
 
 static inline ncclResult_t getCollNetSupport(struct ncclInfo* info, int* collNetTypeSupport) {
-  if (info->comm->collNetSupport > 0) {
-    // Translate ncclAvg and PreMulSum
-    ncclRedOp_t netOp = info->op == ncclAvg || info->op >= ncclNumOps ? ncclSum : info->op;
-    NCCLCHECK(collNetReduceSupport(info->comm, info->datatype, netOp, collNetTypeSupport));
-  } else {
-    *collNetTypeSupport = 0;
-  }
+  // Translate ncclAvg and PreMulSum
+  ncclRedOp_t netOp = info->op == ncclAvg || info->op >= ncclNumOps ? ncclSum : info->op;
+  *collNetTypeSupport = info->comm->collNetSupportMatrix[netOp][info->datatype];
   return ncclSuccess;
 }
 
@@ -1536,7 +1534,7 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo const* inf
       t->chunkSteps = info->chunkSteps;
       t->sliceSteps = info->sliceSteps;
       ncclIntruQueueEnqueue(&tasks->collQueue, t);
-      tasks->collBytesTotal += t->count*ncclTypeSize(t->datatype);
+      tasks->collBytesTotal += info->nBytes;
       tasks->nTasksColl += 1;
     }
   }

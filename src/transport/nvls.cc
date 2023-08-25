@@ -285,7 +285,6 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
     ncclAtomicRefCountIncrement(&parent->nvlsResources->refCount);
   } else {
     int nChannels;
-    ncclResult_t res = ncclSuccess;
     struct ncclNvlsSharedRes* resources;
 
     NCCLCHECK(ncclCalloc(&resources, 1));

@@ -730,9 +730,7 @@ ncclResult_t ncclTopoComputeP2pChannels(struct ncclComm* comm) {
   // fill the whole space of nChannels. To do so we mirror the bits in the
   // nChannels space.
   for (int c=0; c<comm->p2pnChannels; c++) {
-    int mirror = 0;
-    for (int b=1, mb=(comm->p2pnChannels>>1); b<comm->p2pnChannels; b<<=1, mb>>=1) if (c & b) mirror |= mb;
-    comm->p2pChannels[c] = mirror;
+    comm->p2pChannels[c] = mirrorBits(c, comm->p2pnChannels);
   }
   return ncclSuccess;
 }

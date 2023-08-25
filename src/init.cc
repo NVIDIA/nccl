@@ -320,6 +320,12 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
   CUDACHECK(cudaGetDevice(&comm->cudaDev));
 
   NCCLCHECK(getBusId(comm->cudaDev, &comm->busId));
+  nvmlDevice_t nvmlDev;
+  char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE];
+  NCCLCHECK(int64ToBusId(comm->busId, busId));
+  NCCLCHECK(ncclNvmlDeviceGetHandleByPciBusId(busId, &nvmlDev));
+  NCCLCHECK(ncclNvmlDeviceGetIndex(nvmlDev, (unsigned int*)&comm->nvmlDev));
+
   comm->compCap = ncclCudaCompCap();
   TRACE(NCCL_INIT,"comm %p rank %d nranks %d cudaDev %d busId %lx compCap %d", comm, rank, ndev, comm->cudaDev, comm->busId, comm->compCap);
 
@@ -327,6 +333,7 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
   comm->dmaBufSupport = (dmaBufSupported(comm) == ncclSuccess) ? true : false;
 
   comm->collNetSupport = 0;
+  memset(comm->collNetSupportMatrix, 0, sizeof(comm->collNetSupportMatrix));
 
   ncclMemoryPoolConstruct(&comm->memPool_ncclKernelPlan);
   ncclMemoryPoolConstruct(&comm->memPool_ncclProxyOp);
@@ -453,7 +460,8 @@ static void showVersion() {
 
 static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, uint64_t commHash) {
   info->rank = comm->rank;
-  CUDACHECK(cudaGetDevice(&info->cudaDev));
+  info->cudaDev = comm->cudaDev;
+  info->nvmlDev = comm->nvmlDev;
   info->hostHash=getHostHash()+commHash;
   info->pidHash=getPidHash()+commHash;
 
@@ -635,6 +643,45 @@ static ncclResult_t collNetTrySetup(ncclComm_t comm, ncclComm_t parent, struct n
       }
     }
     share = false;
+  }
+
+  if (share) {
+    memcpy(comm->collNetSupportMatrix, parent->collNetSupportMatrix, sizeof(comm->collNetSupportMatrix));
+  } else {
+    do {
+      /* Initialize all entries in collNetSupportMatrix[redop][type]. Since some
+      ranks don't connect to sharp we enable a (redop,type) if any rank claims
+      support. */
+      const ncclRedOp_t redops[] = {ncclSum, ncclProd, ncclMin, ncclMax};
+      uint8_t(*matrix)[4][ncclNumTypes];
+      bool isHead = false;
+      matrix = nullptr;
+      NCCLCHECKGOTO(ncclCalloc(&matrix, comm->nRanks), ret, matrix_end);
+      for (int h = 0; h < nHeads; h++) isHead |= (heads[h] == comm->rank);
+      if (isHead) {
+        for (int ty=0; ty < ncclNumTypes; ty++) {
+          for (int i=0; i < 4; i++) {
+            int support = 0;
+            NCCLCHECKGOTO(collNetReduceSupport(comm, (ncclDataType_t)ty, redops[i], &support), ret, matrix_end);
+            // bit 0 = not supported, bit 1 = supported
+            matrix[rank][redops[i]][ty] = 1<<(support ? 1 : 0);
+          }
+        }
+      }
+      NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, matrix, sizeof(*matrix)), ret, matrix_end);
+      for (int ty=0; ty < ncclNumTypes; ty++) {
+        for (int i=0; i < 4; i++) {
+          int op = redops[i];
+          uint8_t accum = 0;
+          for (int r=0; r < comm->nRanks; r++) accum |= matrix[r][op][ty];
+          // We support (redop, type) if some rank supports it and no rank doesn't support it
+          comm->collNetSupportMatrix[op][ty] = (accum == (1<<1));
+        }
+      }
+    matrix_end:
+      free(matrix);
+      if (ret != ncclSuccess) goto fail;
+    } while (0);
   }
 
   // Verify CollNet setup across ranks after trying all channels
@@ -1307,6 +1354,8 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
   comm->cudaArch = cudaArch;
   comm->commHash = getHash(job->commId.internal, NCCL_UNIQUE_ID_BYTES);
 
+  INFO(NCCL_INIT,"comm %p rank %d nranks %d cudaDev %d nvmlDev %d busId %lx commId 0x%llx - Init START", comm, comm->rank, comm->nRanks, comm->cudaDev, comm->nvmlDev, comm->busId, (unsigned long long)hashUniqueId(job->commId));
+
   NCCLCHECKGOTO(initTransportsRank(comm, job->parent), res, fail);
 
   // update communicator state
@@ -1324,7 +1373,7 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
   }
 
 
-  INFO(NCCL_INIT,"comm %p rank %d nranks %d cudaDev %d busId %lx commId 0x%llx - Init COMPLETE", comm, comm->rank, comm->nRanks, comm->cudaDev, comm->busId, (unsigned long long)hashUniqueId(job->commId));
+  INFO(NCCL_INIT,"comm %p rank %d nranks %d cudaDev %d nvmlDev %d busId %lx commId 0x%llx - Init COMPLETE", comm, comm->rank, comm->nRanks, comm->cudaDev, comm->nvmlDev, comm->busId, (unsigned long long)hashUniqueId(job->commId));
 exit:
   if (job->newcomm) {
     /* assign it to user pointer. */
@@ -1953,7 +2002,8 @@ ncclResult_t ncclCommSplit(ncclComm_t comm, int color, int key, ncclComm_t *newc
     if (comm->config.splitShare) {
       childComm->abortFlag = comm->abortFlag;
       childComm->abortFlagRefCount = comm->abortFlagRefCount;
-      ncclAtomicRefCountIncrement(comm->abortFlagRefCount);  
+      comm->childAbortFlag = NULL;
+      ncclAtomicRefCountIncrement(comm->abortFlagRefCount);
     } else {
       NCCLCHECKGOTO(ncclCudaHostCalloc((uint32_t**)&childComm->abortFlag, 1), res, fail);
       NCCLCHECKGOTO(ncclCalloc((uint32_t**)&childComm->abortFlagRefCount, 1), res, fail);

@@ -370,11 +370,16 @@ ncclResult_t ncclTopoPostset(struct ncclComm* comm, int* firstRanks, int* treePa
       treeToParent[c*nNodes+n] = allTopoRanks[r]->treeToParent[c];
       treeToChild0[c*nNodes+n] = allTopoRanks[r]->treeToChild0[c];
       treeToChild1[c*nNodes+n] = allTopoRanks[r]->treeToChild1[c];
-      nvlsHeads[c*nNodes+n] = allTopoRanks[r]->nvlsHeads[c];
     }
     for (int r=0; r<nranks; r++) {
       ringPrev[c*nranks+r] = allTopoRanks[r]->ringPrev[c];
       ringNext[c*nranks+r] = allTopoRanks[r]->ringNext[c];
+    }
+  }
+  for (int c=0; c<graphs[NCCL_ALGO_NVLS]->nChannels; c++) {
+    for (int n=0; n<nNodes; n++) {
+      int r = firstRanks[n];
+      nvlsHeads[c*nNodes+n] = allTopoRanks[r]->nvlsHeads[c];
     }
   }
 

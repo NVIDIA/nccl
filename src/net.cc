@@ -167,6 +167,10 @@ enum ncclNetState ncclCollNetStates[3] = { ncclNetStateInit, ncclNetStateInit, n
 
 ncclResult_t ncclNetPluginInit() {
   char ncclNetPluginName[128];
+#ifdef NCCL_NET_PLUGIN_STATIC_LINKING
+  sprintf(ncclNetPluginName, "statically-linked");
+  void* netPluginLib = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
+#else
   const char* envPluginName = getenv("NCCL_NET_PLUGIN");
   if (envPluginName && strlen(envPluginName)) {
     snprintf(ncclNetPluginName, 128, "libnccl-net-%s.so", envPluginName);
@@ -175,6 +179,8 @@ ncclResult_t ncclNetPluginInit() {
     sprintf(ncclNetPluginName, "libnccl-net.so");
   }
   void* netPluginLib = dlopen(ncclNetPluginName, RTLD_NOW | RTLD_LOCAL);
+#endif
+
   if (netPluginLib == nullptr) {
     INFO(NCCL_INIT|NCCL_NET, "NET/Plugin : Plugin load (%s) returned %d : %s", ncclNetPluginName, errno, dlerror());
     INFO(NCCL_INIT|NCCL_NET, "NET/Plugin : No plugin found, using internal implementation");

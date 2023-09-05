@@ -155,7 +155,7 @@ static ncclResult_t sendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   NCCLCHECK(ncclTopoCheckGdr(comm->topo, myInfo->busId, req.netDev, 1, &req.useGdr));
   send->conn.flags |= req.useGdr ? NCCL_DIRECT_NIC : 0;
 
-  NCCLCHECK(ncclTopoGetLocalRank(comm->topo, myInfo->rank, &send->proxyConn.tpLocalRank));
+  send->proxyConn.tpLocalRank = comm->topParentLocalRanks[comm->localRank];
   tpProxyRank = comm->topParentRanks[myInfo->rank];
   NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_COLLNET, 1, tpProxyRank, &send->proxyConn));
   ncclAtomicRefCountIncrement(&comm->collNetSharedRes->refCount);
@@ -177,7 +177,7 @@ static ncclResult_t recvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   // Determine whether we need to flush the GDR buffer on recv or not
   if (req.useGdr) NCCLCHECK(ncclTopoNeedFlush(comm->topo, myInfo->busId, &req.needFlush));
 
-  NCCLCHECK(ncclTopoGetLocalRank(comm->topo, myInfo->rank, &recv->proxyConn.tpLocalRank));
+  recv->proxyConn.tpLocalRank = comm->topParentLocalRanks[comm->localRank];
   tpProxyRank = comm->topParentRanks[myInfo->rank];
   NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_COLLNET, 0, tpProxyRank, &recv->proxyConn));
   struct collNetRecvConnectInfo* info = (struct collNetRecvConnectInfo*) connectInfo;

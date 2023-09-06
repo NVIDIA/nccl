@@ -870,7 +870,7 @@ void* ncclProxyProgress(void *proxyState_) {
       if (ret != ncclSuccess) {
         INFO(NCCL_ALL,"%s:%d -> %d [Proxy Thread]", __FILE__, __LINE__, ret);
       }
-      if (added == 0) {
+      if (added == 0 && idle) {
         sched_yield(); // No request progressed. Let others run.
       }
     }

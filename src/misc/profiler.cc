@@ -10,6 +10,7 @@
 #ifdef PROFILE_PROXY
 #include "timer.h"
 #include "alloc.h"
+#include <assert.h>
 
 static const char* profilingStateSendStr[] = { "BufferWait", "GPUWait", "SendWait", "", "End" };
 static const char* profilingStateRecvStr[] = { "BufferWait", "RecvWait", "FlushWait", "GPUWait", "End" };
@@ -34,21 +35,33 @@ ncclResult_t ncclProfilingRecord(struct ncclProxyArgs* args, int sub, int step, 
     NCCLCHECK(ncclCalloc(&profilingEvents, MAX_EVENTS));
     profilingStart = gettime();
   }
-  struct ncclProxyProfileEvent* event = NULL;
-  if (state%8 == 0) {
+  if (state == ncclProxyProfileBegin) {
+    double profileBeginTimestamp = gettime()-profilingStart;
+    // This record is created when the proxy starts profiling the steps of this sub.
+    // Any future step will have `e->timestamps[ncclProxyProfileBegin] == profileBeginTimestamp`;
+    // however, at this point, the proxy may not have started processing the step yet.
+    // Therefore, here we store `profileBeginTimestamp` in a field of `ncclProxySubArgs`,
+    // so that it can be copied to `e->timestamps[ncclProxyProfileBegin]` below.
+    args->subs[sub].profileBeginTimestamp = profileBeginTimestamp;
+    return ncclSuccess;
+  }
+  struct ncclProxyProfileEvent* event = (struct ncclProxyProfileEvent*)args->subs[sub].profilingEvents[step%NCCL_STEPS];
+  if (event == nullptr || state%8 == 0) {
     if (profilingIndex == MAX_EVENTS) return ncclSuccess;
     args->subs[sub].profilingEvents[step%NCCL_STEPS] = event = profilingEvents+profilingIndex++;
-    if (state == ncclProxyProfileBegin) {
+    if (state < 8) {
       // Proxy operation information
+      // `state` should be the very first state in a step (i.e., either a send GPU wait, or a recv wait).
+      assert(state == ncclProxyProfileSendGPUWait || state == ncclProxyProfileRecvWait);
       event->opCount = args->opCount;
       event->channel = args->subs[sub].channelId;
       event->peer = args->subs[sub].peer;
       event->type = args->pattern;
       event->step = step;
       event->opIndex = (((uint64_t)args)/sizeof(struct ncclProxyArgs))%256;
+      event->timestamp[ncclProxyProfileBegin] = args->subs[sub].profileBeginTimestamp;
     } else event->peer = -state;
   } else {
-    event = (struct ncclProxyProfileEvent*)args->subs[sub].profilingEvents[step%NCCL_STEPS];
     if (state == ncclProxyProfileEnd) args->subs[sub].profilingEvents[step%NCCL_STEPS] = NULL;
     if (state == ncclProxyProfileAppendEnd) event->opCount = args->opCount;
   }

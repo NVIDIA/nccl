@@ -707,10 +707,10 @@ static ncclResult_t ncclProxyGetPostedOps(struct ncclProxyState* proxyState, int
     pthread_mutex_lock(&pool->mutex);
     while (pool->nextOps == -1 && !state->stop) {
       nvtxRangeEnd(proxyState->rangeStateId);
-      proxyState->rangeStateId = nvtxRangeStartEx(&proxyState->eventAttrs.sleep);
+      proxyState->rangeStateId = nvtxDomainRangeStartEx(proxyState->nvtxDomain, &proxyState->eventAttrs.sleep);
       pthread_cond_wait(&pool->cond, &pool->mutex);
       nvtxRangeEnd(proxyState->rangeStateId);
-      proxyState->rangeStateId = nvtxRangeStartEx(&proxyState->eventAttrs.wakeup);
+      proxyState->rangeStateId = nvtxDomainRangeStartEx(proxyState->nvtxDomain, &proxyState->eventAttrs.wakeup);
     }
     if (state->stop) { // We might have been woken up to stop.
       pthread_mutex_unlock(&pool->mutex);
@@ -725,7 +725,7 @@ static ncclResult_t ncclProxyGetPostedOps(struct ncclProxyState* proxyState, int
 
 process_nextops:
   nvtxRangeEnd(proxyState->rangeStateId);
-  proxyState->rangeStateId = nvtxRangeStartEx(&proxyState->eventAttrs.append);
+  proxyState->rangeStateId = nvtxDomainRangeStartEx(proxyState->nvtxDomain, &proxyState->eventAttrs.append);
   TIME_START(2);
   int freeOp[NCCL_MAX_LOCAL_RANKS];
   int freeOpEnd[NCCL_MAX_LOCAL_RANKS];
@@ -777,7 +777,7 @@ process_nextops:
     }
   }
   nvtxRangeEnd(proxyState->rangeStateId);
-  proxyState->rangeStateId = nvtxRangeStartEx(&proxyState->eventAttrs.active);
+  proxyState->rangeStateId = nvtxDomainRangeStartEx(proxyState->nvtxDomain, &proxyState->eventAttrs.active);
   TIME_STOP(2);
   return ncclSuccess;
 }
@@ -836,6 +836,8 @@ static int setProxyThreadContext(struct ncclProxyState* proxyState) {
 #define PURPLE2 0xffc864d2
 
 void ncclProxyInitNvtx(struct ncclProxyState* proxyState) {
+  proxyState->nvtxDomain = nvtxDomainCreateA("com.nvidia.nccl.proxy");
+
   nvtxNameCategoryA(123,"Proxy Thread State");
   nvtxNameCategoryA(124,"Proxy Recv Progress");
   nvtxNameCategoryA(125,"Proxy Send Progress");
@@ -924,7 +926,7 @@ void* ncclProxyProgress(void *proxyState_) {
   nvtxNameOsThreadA(syscall(SYS_gettid), threadName);
 
   ncclProxyInitNvtx(proxyState);
-  proxyState->rangeStateId = nvtxRangeStartEx(&proxyState->eventAttrs.wakeup);
+  proxyState->rangeStateId = nvtxDomainRangeStartEx(proxyState->nvtxDomain, &proxyState->eventAttrs.wakeup);
 
   int lastIdle = 0;
   /* Too frequent call of ncclProxyGetPostedOps() will result in perf regression for small message
@@ -942,11 +944,11 @@ void* ncclProxyProgress(void *proxyState_) {
     }
     if (lastIdle == 0 && idle == 1) {
       nvtxRangeEnd(proxyState->rangeStateId);
-      proxyState->rangeStateId = nvtxRangeStartEx(&proxyState->eventAttrs.idle);
+      proxyState->rangeStateId = nvtxDomainRangeStartEx(proxyState->nvtxDomain, &proxyState->eventAttrs.idle);
     }
     if (lastIdle == 1 && idle == 0) {
       nvtxRangeEnd(proxyState->rangeStateId);
-      proxyState->rangeStateId = nvtxRangeStartEx(&proxyState->eventAttrs.active);
+      proxyState->rangeStateId = nvtxDomainRangeStartEx(proxyState->nvtxDomain, &proxyState->eventAttrs.active);
     }
     if (idle || (++proxyOpAppendCounter == ncclParamProgressAppendOpFreq())) {
       int added = 0;

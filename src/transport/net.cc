@@ -994,7 +994,7 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
       sub->posted = sub->transmitted = sub->done = 0;
       sub->opRangeIds = (nvtxRangeId_t*) malloc(sizeof(nvtxRangeId_t)*sub->nsteps);
       for (uint64_t step=0; step<sub->nsteps; step++) {
-        sub->opRangeIds[step] = nvtxRangeStartEx(&proxyState->eventAttrs.sendBegin);
+        sub->opRangeIds[step] = nvtxDomainRangeStartEx(proxyState->nvtxDomain, &proxyState->eventAttrs.sendBegin);
       }
     }
     args->state = ncclProxyOpProgress;
@@ -1028,7 +1028,7 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
         } else sub->posted += args->sliceSteps;
         for (uint64_t step=sub->posted-args->sliceSteps; step<sub->posted; step++) {
           nvtxRangeEnd(sub->opRangeIds[step]);
-          sub->opRangeIds[step] = nvtxRangeStartEx(&proxyState->eventAttrs.sendGpuWait);
+          sub->opRangeIds[step] = nvtxDomainRangeStartEx(proxyState->nvtxDomain, &proxyState->eventAttrs.sendGpuWait);
         }
         args->idle = 0;
         continue;
@@ -1071,7 +1071,7 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
             // Data is ready, try to send.
             for (uint64_t step=sub->transmitted-args->sliceSteps; step<sub->transmitted; step++) {
               nvtxRangeEnd(sub->opRangeIds[step]);
-              sub->opRangeIds[step] = nvtxRangeStartEx(&proxyState->eventAttrs.sendNetPost);
+              sub->opRangeIds[step] = nvtxDomainRangeStartEx(proxyState->nvtxDomain, &proxyState->eventAttrs.sendNetPost);
             }
             NCCLCHECK(proxyState->ncclNet->isend(resources->netSendComm, buff, size, resources->tpRank, mhandle, sub->requests+buffSlot));
             if (sub->requests[buffSlot] != NULL) {
@@ -1082,7 +1082,7 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
               sub->transmitted += args->sliceSteps;
               for (uint64_t step=sub->transmitted-args->sliceSteps; step<sub->transmitted; step++) {
                 nvtxRangeEnd(sub->opRangeIds[step]);
-                sub->opRangeIds[step] = nvtxRangeStartEx(&proxyState->eventAttrs.sendNetWait);
+                sub->opRangeIds[step] = nvtxDomainRangeStartEx(proxyState->nvtxDomain, &proxyState->eventAttrs.sendNetWait);
               }
               args->idle = 0;
               continue;
@@ -1161,7 +1161,7 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
       for (int i=0; i<groupSize; i++) sub[-i].groupSize = groupSize;
       sub->opRangeIds = (nvtxRangeId_t*) malloc(sizeof(nvtxRangeId_t)*sub->nsteps);
       for (uint64_t step=0; step<sub->nsteps; step++) {
-        sub->opRangeIds[step] = nvtxRangeStartEx(&proxyState->eventAttrs.recvBegin);
+        sub->opRangeIds[step] = nvtxDomainRangeStartEx(proxyState->nvtxDomain, &proxyState->eventAttrs.recvBegin);
       }
     }
     args->state = ncclProxyOpProgress;
@@ -1216,7 +1216,7 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
             sub->posted += args->sliceSteps;
             for (uint64_t step=sub->posted-args->sliceSteps; step<sub->posted; step++) {
               nvtxRangeEnd(sub->opRangeIds[step]);
-              sub->opRangeIds[step] = nvtxRangeStartEx(&proxyState->eventAttrs.recvNetWait);
+              sub->opRangeIds[step] = nvtxDomainRangeStartEx(proxyState->nvtxDomain, &proxyState->eventAttrs.recvNetWait);
             }
           }
           args->idle = 0;
@@ -1244,7 +1244,7 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
             sub->received += args->sliceSteps;
             for (uint64_t step=sub->received-args->sliceSteps; step<sub->received; step++) {
               nvtxRangeEnd(sub->opRangeIds[step]);
-              sub->opRangeIds[step] = nvtxRangeStartEx(&proxyState->eventAttrs.recvFlushWait);
+              sub->opRangeIds[step] = nvtxDomainRangeStartEx(proxyState->nvtxDomain, &proxyState->eventAttrs.recvFlushWait);
             }
             if (step < sub->nsteps) {
               struct recvResources* resources = (struct recvResources*) (sub->connection->transportResources);
@@ -1300,7 +1300,7 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
             sub->transmitted += args->sliceSteps;
             for (uint64_t step=sub->transmitted-args->sliceSteps; step<sub->transmitted; step++) {
               nvtxRangeEnd(sub->opRangeIds[step]);
-              sub->opRangeIds[step] = nvtxRangeStartEx(&proxyState->eventAttrs.recvGpuWait);
+              sub->opRangeIds[step] = nvtxDomainRangeStartEx(proxyState->nvtxDomain, &proxyState->eventAttrs.recvGpuWait);
             }
             if (step < sub->nsteps) {
               __sync_synchronize();

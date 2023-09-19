@@ -247,6 +247,7 @@ struct ncclProxyState {
 
   // NVTX
   nvtxRangeId_t rangeStateId;
+  nvtxDomainHandle_t nvtxDomain;
   ncclProxyEventAttributes eventAttrs;
 };
 

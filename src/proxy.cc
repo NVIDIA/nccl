@@ -9,7 +9,6 @@
 #include "collectives.h"
 #include "socket.h"
 #include "shm.h"
-#include "profiler.h"
 #define ENABLE_TIMER 0
 #include "timer.h"
 
@@ -698,7 +697,6 @@ static ncclResult_t ncclProxyGetPostedOps(struct ncclProxyState* proxyState, int
   if (state->opsPool == NULL) return ncclInternalError;
   struct ncclProxyOpsPool* pool = state->opsPool;
 
-  struct ncclProxyArgs profArgs; // Only used for profiling purposes
   if (state->nextOps != -1) goto process_nextops;
 
   // If we have ops to progress, no need to block waiting for something to arrive or even wait for the lock
@@ -708,10 +706,11 @@ static ncclResult_t ncclProxyGetPostedOps(struct ncclProxyState* proxyState, int
   if (state->active == NULL) {
     pthread_mutex_lock(&pool->mutex);
     while (pool->nextOps == -1 && !state->stop) {
-      struct ncclProxyArgs profArgs; // Only used for profiling purposes
-      ncclProfilingRecord(&profArgs, 0, 0, ncclProxyProfileSleep);
+      nvtxRangeEnd(proxyState->rangeStateId);
+      proxyState->rangeStateId = nvtxRangeStartEx(&proxyState->eventAttrs.sleep);
       pthread_cond_wait(&pool->cond, &pool->mutex);
-      ncclProfilingRecord(&profArgs, 0, 0, ncclProxyProfileWakeup);
+      nvtxRangeEnd(proxyState->rangeStateId);
+      proxyState->rangeStateId = nvtxRangeStartEx(&proxyState->eventAttrs.wakeup);
     }
     if (state->stop) { // We might have been woken up to stop.
       pthread_mutex_unlock(&pool->mutex);
@@ -725,7 +724,8 @@ static ncclResult_t ncclProxyGetPostedOps(struct ncclProxyState* proxyState, int
   if (state->nextOps == -1) return ncclInternalError;
 
 process_nextops:
-  ncclProfilingRecord(&profArgs, 0, 0, ncclProxyProfileAppend);
+  nvtxRangeEnd(proxyState->rangeStateId);
+  proxyState->rangeStateId = nvtxRangeStartEx(&proxyState->eventAttrs.append);
   TIME_START(2);
   int freeOp[NCCL_MAX_LOCAL_RANKS];
   int freeOpEnd[NCCL_MAX_LOCAL_RANKS];
@@ -776,8 +776,8 @@ process_nextops:
       }
     }
   }
-  profArgs.opCount = *added;
-  ncclProfilingRecord(&profArgs, 0, 0, ncclProxyProfileAppendEnd);
+  nvtxRangeEnd(proxyState->rangeStateId);
+  proxyState->rangeStateId = nvtxRangeStartEx(&proxyState->eventAttrs.active);
   TIME_STOP(2);
   return ncclSuccess;
 }
@@ -821,6 +821,86 @@ static int setProxyThreadContext(struct ncclProxyState* proxyState) {
   return 0;
 }
 
+#define RED 0xffff0000
+#define BLUE 0xff91d2ff
+#define YELLOW 0xffffcc00
+#define YELLOW1 0xffc8cc00
+#define YELLOW2 0xfffac864
+#define YELLOW3 0xffcd7864
+#define GREEN 0xff0aff32
+#define GREEN1 0xff00c800
+#define GREEN2 0xff19a019
+#define GREEN3 0xff3c7819
+#define PURPLE 0xffff80ff
+#define PURPLE1 0xffe56edc
+#define PURPLE2 0xffc864d2
+
+void ncclProxyInitNvtx(struct ncclProxyState* proxyState) {
+  nvtxNameCategoryA(123,"Proxy Thread State");
+  nvtxNameCategoryA(124,"Proxy Recv Progress");
+  nvtxNameCategoryA(125,"Proxy Send Progress");
+
+  nvtxEventAttributes_t sleep = {0};
+  sleep.version = NVTX_VERSION; 
+  sleep.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
+  sleep.colorType = NVTX_COLOR_ARGB;
+  sleep.color = BLUE;
+  sleep.messageType = NVTX_MESSAGE_TYPE_ASCII; 
+  sleep.message.ascii = "Proxy Sleep";
+  sleep.category = 123;
+  proxyState->eventAttrs.sleep = sleep;
+
+  proxyState->eventAttrs.active = sleep;
+  proxyState->eventAttrs.active.color = RED;
+  proxyState->eventAttrs.active.message.ascii = "Proxy Active";
+
+  proxyState->eventAttrs.append = sleep;
+  proxyState->eventAttrs.append.color = PURPLE;
+  proxyState->eventAttrs.append.message.ascii = "Proxy Append";
+
+  proxyState->eventAttrs.idle = sleep;
+  proxyState->eventAttrs.idle.color = PURPLE1;
+  proxyState->eventAttrs.idle.message.ascii = "Proxy Idle";
+
+  proxyState->eventAttrs.wakeup = sleep;
+  proxyState->eventAttrs.wakeup.color = PURPLE2;
+  proxyState->eventAttrs.wakeup.message.ascii = "Proxy Wakeup";
+
+  sleep.category = 124;
+  proxyState->eventAttrs.recvBegin = sleep;
+  proxyState->eventAttrs.recvBegin.color = GREEN;
+  proxyState->eventAttrs.recvBegin.message.ascii = "Recv Begin";
+
+  proxyState->eventAttrs.recvNetWait = sleep;
+  proxyState->eventAttrs.recvNetWait.color = GREEN1;
+  proxyState->eventAttrs.recvNetWait.message.ascii = "Recv Net Wait";
+
+  proxyState->eventAttrs.recvFlushWait = sleep;
+  proxyState->eventAttrs.recvFlushWait.color = GREEN2;
+  proxyState->eventAttrs.recvFlushWait.message.ascii = "Recv Flush Wait";
+
+  proxyState->eventAttrs.recvGpuWait = sleep;
+  proxyState->eventAttrs.recvGpuWait.color = GREEN3;
+  proxyState->eventAttrs.recvGpuWait.message.ascii = "Recv GPU Wait";
+
+  sleep.category = 125;
+  proxyState->eventAttrs.sendBegin = sleep;
+  proxyState->eventAttrs.sendBegin.color = YELLOW;
+  proxyState->eventAttrs.sendBegin.message.ascii = "Send Begin";
+
+  proxyState->eventAttrs.sendGpuWait = sleep;
+  proxyState->eventAttrs.sendGpuWait.color = YELLOW1;
+  proxyState->eventAttrs.sendGpuWait.message.ascii = "Send GPU Wait";
+
+  proxyState->eventAttrs.sendNetPost = sleep;
+  proxyState->eventAttrs.sendNetPost.color = YELLOW2;
+  proxyState->eventAttrs.sendNetPost.message.ascii = "Send Net Post";
+
+  proxyState->eventAttrs.sendNetWait = sleep;
+  proxyState->eventAttrs.sendNetWait.color = YELLOW3;
+  proxyState->eventAttrs.sendNetWait.message.ascii = "Send Net Wait";
+}
+
 // Set to SIGUSR1 or SIGUSR2 to help debug proxy state during hangs
 NCCL_PARAM(ProxyDumpSignal, "PROXY_DUMP_SIGNAL", -1);
 NCCL_PARAM(ProgressAppendOpFreq, "PROGRESS_APPENDOP_FREQ", 8);
@@ -843,6 +923,9 @@ void* ncclProxyProgress(void *proxyState_) {
   snprintf(threadName, NCCL_THREAD_NAMELEN, "NCCL Progress%2d", proxyState->cudaDev);
   nvtxNameOsThreadA(syscall(SYS_gettid), threadName);
 
+  ncclProxyInitNvtx(proxyState);
+  proxyState->rangeStateId = nvtxRangeStartEx(&proxyState->eventAttrs.wakeup);
+
   int lastIdle = 0;
   /* Too frequent call of ncclProxyGetPostedOps() will result in perf regression for small message
    * communication. proxyOpAppendCounter is a counter that helps us decide if we need to append proxy ops.
@@ -850,7 +933,6 @@ void* ncclProxyProgress(void *proxyState_) {
    * ncclParamProgressAppendOpFreq(). If they are equal, we will append proxy ops. This will decrease the
    * frequency of calling ncclProxyGetPostedOps() and reduce the perf impact. */
   int proxyOpAppendCounter = 0;
-  struct ncclProxyArgs profArgs; // Only used for profiling purposes
   while ((state->stop == false || (state->stop == true && state->active)) && *proxyState->abortFlag == 0) {
     int idle = 1;
     ncclResult_t ret = progressOps(proxyState, state, state->active, &idle);
@@ -858,8 +940,14 @@ void* ncclProxyProgress(void *proxyState_) {
       INFO(NCCL_ALL,"%s:%d -> %d [Proxy Thread]", __FILE__, __LINE__, ret);
       return NULL;
     }
-    if (lastIdle == 0 && idle == 1) ncclProfilingRecord(&profArgs, 0, 0, ncclProxyProfileIdle);
-    if (lastIdle == 1 && idle == 0) ncclProfilingRecord(&profArgs, 0, 0, ncclProxyProfileActive);
+    if (lastIdle == 0 && idle == 1) {
+      nvtxRangeEnd(proxyState->rangeStateId);
+      proxyState->rangeStateId = nvtxRangeStartEx(&proxyState->eventAttrs.idle);
+    }
+    if (lastIdle == 1 && idle == 0) {
+      nvtxRangeEnd(proxyState->rangeStateId);
+      proxyState->rangeStateId = nvtxRangeStartEx(&proxyState->eventAttrs.active);
+    }
     if (idle || (++proxyOpAppendCounter == ncclParamProgressAppendOpFreq())) {
       int added = 0;
       proxyOpAppendCounter = 0;
@@ -923,7 +1011,6 @@ ncclResult_t ncclProxyProgressDestroy(struct ncclProxyState* proxyState) {
     state->pools = next;
   }
 
-  ncclProfilingDump();
   TIME_PRINT("Proxy");
   return ncclSuccess;
 }

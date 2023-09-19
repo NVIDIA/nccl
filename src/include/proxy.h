@@ -64,9 +64,9 @@ struct ncclProxySubArgs {
   uint64_t done;
   uint64_t end;
   void* requests[NCCL_STEPS];
-  void* profilingEvents[NCCL_STEPS];
   void* recvRequestsCache[NCCL_STEPS];
   int recvRequestsSubCount;
+  nvtxRangeId_t* opRangeIds;
 };
 
 struct ncclProxyArgs {
@@ -192,6 +192,24 @@ struct ncclProxyRpcResponseHeader {
   int respSize;
 };
 
+struct ncclProxyEventAttributes {
+  nvtxEventAttributes_t sleep;
+  nvtxEventAttributes_t append;
+  nvtxEventAttributes_t active;
+  nvtxEventAttributes_t idle;
+  nvtxEventAttributes_t wakeup;
+
+  nvtxEventAttributes_t recvBegin;
+  nvtxEventAttributes_t recvNetWait;
+  nvtxEventAttributes_t recvFlushWait;
+  nvtxEventAttributes_t recvGpuWait;
+
+  nvtxEventAttributes_t sendBegin;
+  nvtxEventAttributes_t sendGpuWait;
+  nvtxEventAttributes_t sendNetPost;
+  nvtxEventAttributes_t sendNetWait;
+};
+
 struct ncclProxyState {
   int refCount;
   int tpRank;
@@ -226,6 +244,10 @@ struct ncclProxyState {
 
   // Queue of expected responses from the proxy
   struct ncclExpectedProxyResponse* expectedResponses;
+
+  // NVTX
+  nvtxRangeId_t rangeStateId;
+  ncclProxyEventAttributes eventAttrs;
 };
 
 enum proxyConnectState {

@@ -42,9 +42,11 @@ ncclResult_t initChannel(struct ncclComm* comm, int channelId) {
     /* channel->devPeers is not shared, so just free it when calling commFree() */
     NCCLCHECK(ncclCudaCallocAsync(&channel->devPeers, nPeers, sharedRes->deviceStream.cudaStream));
     ncclCommPushCudaFree(comm, channel->devPeers);
+    NCCLCHECK(ncclCalloc(&channel->devPeersHostPtr, nPeers));
     for (int r = 0; r < nRanks; r++) {
       uintptr_t addr = (uintptr_t)(comm->sharedRes->devPeers[channelId] + comm->topParentRanks[r]);
       NCCLCHECK(ncclCudaMemcpyAsync((uintptr_t*)(channel->devPeers + r), (uintptr_t*)&addr, 1, sharedRes->deviceStream.cudaStream));
+      channel->devPeersHostPtr[r] = (struct ncclDevChannelPeer*)addr;
     }
   }
 
@@ -52,6 +54,8 @@ ncclResult_t initChannel(struct ncclComm* comm, int channelId) {
   NCCLCHECK(ncclCudaCallocAsync(&channel->devRingUserRanks, nRanks, sharedRes->deviceStream.cudaStream));
   ncclCommPushCudaFree(comm, channel->devRingUserRanks);
 
+  /* guarantee addr has been copied into channel->devPeers */
+  NCCLCHECK(ncclStrongStreamSynchronize(&sharedRes->deviceStream));
   NCCLCHECK(ncclStrongStreamRelease(ncclCudaGraphNone(), &sharedRes->deviceStream));
 
   return ncclSuccess;
@@ -77,6 +81,7 @@ ncclResult_t initNvlsChannel(struct ncclComm* comm, int channelId, struct ncclCo
       uintptr_t addr = (uintptr_t)(parent->channels[channelId].nvlsDevPeers + tr);
       channel->peers[comm->nRanks + 1 + r] = parent->channels[channelId].nvlsPeers + tr;
       NCCLCHECK(ncclCudaMemcpyAsync((uintptr_t*)(channel->devPeers + comm->nRanks + 1 + r), (uintptr_t*)&addr, 1, sharedRes->deviceStream.cudaStream));
+      channel->devPeersHostPtr[comm->nRanks + 1 + r] = (struct ncclDevChannelPeer*)addr;
       ncclAtomicRefCountIncrement(&parent->channels[channelId].nvlsPeers[tr].refCount);
     }
   } else {
@@ -86,10 +91,12 @@ ncclResult_t initNvlsChannel(struct ncclComm* comm, int channelId, struct ncclCo
       uintptr_t addr = (uintptr_t)(channel->nvlsDevPeers + r);
       channel->peers[comm->nRanks + 1 + r] = channel->nvlsPeers + r;
       NCCLCHECK(ncclCudaMemcpyAsync((uintptr_t*)(channel->devPeers + comm->nRanks + 1 + r), (uintptr_t*)&addr, 1, sharedRes->deviceStream.cudaStream));
+      channel->devPeersHostPtr[comm->nRanks + 1 + r] = (struct ncclDevChannelPeer*)addr;
       ncclAtomicRefCountIncrement(&channel->nvlsPeers[r].refCount);
     }
   }
 
+  NCCLCHECK(ncclStrongStreamSynchronize(&sharedRes->deviceStream));
   NCCLCHECK(ncclStrongStreamRelease(ncclCudaGraphNone(), &sharedRes->deviceStream));
 
   return ncclSuccess;
@@ -114,6 +121,7 @@ ncclResult_t initCollnetChannel(struct ncclComm* comm, int channelId, struct ncc
     addr = (uintptr_t)parent->channels[channelId].collnetDevPeers;
     channel->peers[comm->nRanks] = parent->channels[channelId].collnetPeers;
     NCCLCHECK(ncclCudaMemcpyAsync((uintptr_t*)(channel->devPeers + comm->nRanks), (uintptr_t*)&addr, 1, sharedRes->deviceStream.cudaStream));
+    channel->devPeersHostPtr[comm->nRanks] = (struct ncclDevChannelPeer*)addr;
     ncclAtomicRefCountIncrement(&parent->channels[channelId].collnetPeers->refCount);
   } else {
     NCCLCHECK(ncclCalloc(&channel->collnetPeers, 1));
@@ -121,9 +129,11 @@ ncclResult_t initCollnetChannel(struct ncclComm* comm, int channelId, struct ncc
     addr = (uintptr_t)channel->collnetDevPeers;
     channel->peers[comm->nRanks] = channel->collnetPeers;
     NCCLCHECK(ncclCudaMemcpyAsync((uintptr_t*)(channel->devPeers + comm->nRanks), (uintptr_t*)&addr, 1, sharedRes->deviceStream.cudaStream));
+    channel->devPeersHostPtr[comm->nRanks] = (struct ncclDevChannelPeer*)addr;
     ncclAtomicRefCountIncrement(&channel->collnetPeers->refCount);
   }
 
+  NCCLCHECK(ncclStrongStreamSynchronize(&sharedRes->deviceStream));
   NCCLCHECK(ncclStrongStreamRelease(ncclCudaGraphNone(), &sharedRes->deviceStream));
 
   return ncclSuccess;
@@ -156,5 +166,7 @@ ncclResult_t freeChannel(struct ncclChannel* channel, int nRanks, int collnetNRa
       }
     }
   }
+
+  free(channel->devPeersHostPtr);
   return ncclSuccess;
 }

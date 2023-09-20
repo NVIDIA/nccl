@@ -124,6 +124,8 @@ struct ncclSharedResources {
 struct ncclChannel {
   struct ncclChannelPeer** peers;
   struct ncclDevChannelPeer** devPeers;
+  /* devPeer pointer array used for host side access */
+  struct ncclDevChannelPeer** devPeersHostPtr; 
   struct ncclRing ring;
   int* devRingUserRanks;
   struct ncclTree tree;

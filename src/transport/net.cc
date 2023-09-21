@@ -10,9 +10,10 @@
 #include "proxy.h"
 #include "collectives.h"
 #include "gdrwrap.h"
-#include "shm.h"
+#include "shmutils.h"
 #include "p2p.h"
 #include "profiler.h"
+#include "shm.h"
 
 static_assert(sizeof(ncclNetHandle_t) <= CONNECT_SIZE, "NET Connect info is too large");
 
@@ -61,9 +62,8 @@ struct connectMapMem{
   char* cpuPtr;
   int size;
   ncclIpcDesc ipcDesc;
-  char shmPath[PATH_MAX];
-  ncclShmHandle_t attachHandle;
-  ncclShmHandle_t createHandle;
+  ncclShmIpcDesc_t attachDesc;
+  ncclShmIpcDesc_t createDesc;
 };
 
 struct connectMap {
@@ -235,24 +235,24 @@ static ncclResult_t recvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   return ncclSuccess;
 }
 
-static ncclResult_t netMapShm(struct connectMapMem* mem) {
-  NCCLCHECK(ncclShmOpen(mem->shmPath, mem->size, (void**)&mem->cpuPtr, (void**)&mem->gpuPtr, -1, &mem->attachHandle));
+static ncclResult_t netMapShm(struct ncclComm *comm, struct connectMapMem* mem) {
+  NCCLCHECK(ncclShmImportShareableBuffer(comm, &mem->createDesc, (void**)&mem->cpuPtr, (void**)&mem->gpuPtr, &mem->attachDesc));
   return ncclSuccess;
 }
-static ncclResult_t netCreateShm(struct connectMapMem* mem) {
-  mem->shmPath[0] = '\0'; // Let ncclShmOpen create a tmp file
-  NCCLCHECK(ncclShmOpen(mem->shmPath, mem->size, (void**)&mem->cpuPtr, NULL, 1, &mem->createHandle));
+
+static ncclResult_t netCreateShm(struct ncclProxyState* proxyState, struct connectMapMem* mem) {
+  NCCLCHECK(ncclShmAllocateShareableBuffer(proxyState->tpRank, mem->size, &mem->createDesc, (void**)&mem->cpuPtr, NULL));
   return ncclSuccess;
 }
 
 static ncclResult_t netDumpMap(struct connectMap* map) {
   printf("Dump map same process %d shared %d\n", map->sameProcess, map->shared);
   struct connectMapMem *mem = map->mems+NCCL_NET_MAP_HOSTMEM;
-  printf("Mem 0: Host mem %s (%x B) CPU %p GPU %p\n", mem->shmPath, mem->size, mem->cpuPtr, mem->gpuPtr);
+  printf("Mem 0: Host mem (%x B) CPU %p GPU %p\n", mem->size, mem->cpuPtr, mem->gpuPtr);
   mem = map->mems+NCCL_NET_MAP_DEVMEM;
   printf("Mem 1: Vid  mem (%x B) CPU %p GPU %p\n", mem->size, mem->cpuPtr, mem->gpuPtr);
   mem = map->mems+NCCL_NET_MAP_SHARED_HOSTMEM;
-  printf("Mem 2: Shared Host mem %s (%x B) CPU %p GPU %p\n", mem->shmPath, mem->size, mem->cpuPtr, mem->gpuPtr);
+  printf("Mem 2: Shared Host mem (%x B) CPU %p GPU %p\n", mem->size, mem->cpuPtr, mem->gpuPtr);
   mem = map->mems+NCCL_NET_MAP_SHARED_DEVMEM;
   printf("Mem 3: Shared Vid mem (%x B) CPU %p GPU %p\n", mem->size, mem->cpuPtr, mem->gpuPtr);
   printf("SendMem -> Used %d Bank %d Offset %x, cpu %p gpu %p\n",
@@ -319,7 +319,7 @@ static ncclResult_t sendConnect(struct ncclComm* comm, struct ncclConnect* conne
       }
     }
   } else if (!(map->sameProcess && map->cudaDev == comm->cudaDev)) {
-    if (!map->sameProcess) NCCLCHECK(netMapShm(map->mems+NCCL_NET_MAP_HOSTMEM));
+    if (!map->sameProcess) NCCLCHECK(netMapShm(comm, map->mems + NCCL_NET_MAP_HOSTMEM));
     if (map->mems[NCCL_NET_MAP_DEVMEM].size) {
       NCCLCHECK(ncclP2pImportShareableBuffer(comm, send->proxyConn.tpRank,
                                              map->mems[NCCL_NET_MAP_DEVMEM].size,
@@ -447,7 +447,7 @@ static ncclResult_t sendFree(struct ncclConnector* send) {
       return ncclSuccess;
     }
     if (!map->sameProcess || ncclCuMemEnable()) {
-      if (!map->sameProcess) NCCLCHECK(ncclShmClose(map->mems[NCCL_NET_MAP_HOSTMEM].attachHandle));
+      if (!map->sameProcess) NCCLCHECK(ncclShmIpcClose(&map->mems[NCCL_NET_MAP_HOSTMEM].attachDesc));
       if (map->mems[NCCL_NET_MAP_DEVMEM].size) {
         if (ncclCuMemEnable()) {
           // cuMem API support
@@ -735,7 +735,7 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
     NCCLCHECK(ncclCudaHostCalloc(&map->mems[NCCL_NET_MAP_HOSTMEM].cpuPtr, map->mems[NCCL_NET_MAP_HOSTMEM].size));
     map->mems[NCCL_NET_MAP_HOSTMEM].gpuPtr = map->mems[NCCL_NET_MAP_HOSTMEM].cpuPtr;
   } else {
-    NCCLCHECK(netCreateShm(map->mems+NCCL_NET_MAP_HOSTMEM));
+    NCCLCHECK(netCreateShm(proxyState, map->mems+NCCL_NET_MAP_HOSTMEM));
   }
   if (ncclGdrCopy && map->sameProcess && ncclParamGdrCopySyncEnable()) {
     uint64_t *cpuPtr, *gpuPtr;
@@ -944,7 +944,7 @@ static ncclResult_t sendProxyFree(struct ncclProxyConnection* connection, struct
     if (resources->map.sameProcess) {
       NCCLCHECK(ncclCudaHostFree(mems[NCCL_NET_MAP_HOSTMEM].cpuPtr));
     } else {
-      NCCLCHECK(ncclShmClose(mems[NCCL_NET_MAP_HOSTMEM].createHandle));
+      NCCLCHECK(ncclShmIpcClose(&mems[NCCL_NET_MAP_HOSTMEM].createDesc));
     }
     NCCLCHECK(ncclCudaFree(mems[NCCL_NET_MAP_DEVMEM].cpuPtr));
     if (!resources->map.sameProcess || ncclCuMemEnable()) {

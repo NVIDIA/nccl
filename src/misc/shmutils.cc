@@ -4,7 +4,7 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
-#include "shm.h"
+#include "shmutils.h"
 #include "comm.h"
 #include "checks.h"
 #include <sys/types.h>
@@ -99,7 +99,7 @@ ncclResult_t ncclShmOpen(char* shmPath, size_t shmSize, void** shmPtr, void** de
   }
 
   if (devShmPtr) {
-    CUDACHECKGOTO(cudaHostRegister((void*)hptr, realShmSize, cudaHostRegisterMapped), ret, fail);
+    CUDACHECKGOTO(cudaHostRegister((void*)hptr, realShmSize, cudaHostRegisterPortable | cudaHostRegisterMapped), ret, fail);
     CUDACHECKGOTO(cudaHostGetDevicePointer(&dptr, (void*)hptr, 0), ret, fail);
   }
 

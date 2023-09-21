@@ -299,7 +299,7 @@ struct ncclComm {
   // Flag to ask NCCL kernels to abort
   volatile uint32_t *abortFlag;
   volatile uint32_t *childAbortFlag;
-  volatile uint32_t *abortFlagRefCount;
+  uint32_t *abortFlagRefCount;
 
   // Device side of the communicator (for cudaFree's)
   struct ncclDevComm* devComm; // actually = &ncclDevCommAndChannels::comm

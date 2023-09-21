@@ -240,6 +240,21 @@ static void initOnceFunc() {
   // Determine whether we support the cuMem APIs or not
   ncclCuMemSupported = ncclIsCuMemSupported();
 
+#if 12020 <= CUDART_VERSION && CUDART_VERSION <= 12030
+  /* To use cuMem* for host memory allocation, we need to create context on each 
+   * visible device. This is workaround needed in CUDA 12.2 and 12.3 which is fixed 
+   * in 12.4. */
+  if (ncclCuMemSupported) {
+    int deviceCnt, saveDevice;
+    cudaGetDevice(&saveDevice);
+    cudaGetDeviceCount(&deviceCnt);
+    for (int i = 0; i < deviceCnt; ++i) {
+      cudaSetDevice(i);
+      cudaFree(NULL);
+    }
+    cudaSetDevice(saveDevice);
+  }
+#endif
   initResult = ncclSuccess;
   return;
 error:

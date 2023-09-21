@@ -7,8 +7,9 @@
 #include "comm.h"
 #include "graph.h"
 #include "utils.h"
-#include "shm.h"
+#include "shmutils.h"
 #include "p2p.h"
+#include "shm.h"
 
 enum p2pType { P2P_DIRECT, P2P_INTERMEDIATE, P2P_IPC, P2P_CUMEM };
 
@@ -23,8 +24,7 @@ struct p2pConnectInfo {
   int read;
   struct ncclP2pBuff p2pBuff;
   // Used by CE memcpy
-  char shmName[7];
-  int shmSize;
+  ncclShmIpcDesc_t desc;
 };
 static_assert(sizeof(struct p2pConnectInfo) <= CONNECT_SIZE, "p2pConnectInfo is too large");
 
@@ -36,9 +36,7 @@ struct p2pShmProxyInfo {
   // Shared memory between proxy and receiving GPU
   struct p2pShm* shm;
   struct p2pShm* devShm;
-  char shmName[7];
-  int shmSize;
-  ncclShmHandle_t handle;
+  ncclShmIpcDesc_t desc;
 
   // Intermediate step for sender
   struct ncclRecvMem* ceRecvMem;
@@ -66,8 +64,7 @@ struct p2pResources {
   struct p2pShmProxyInfo proxyInfo;
   struct p2pShm* shm;
   struct p2pShm* devShm;
-  int shmSize;
-  ncclShmHandle_t handle;
+  ncclShmIpcDesc_t desc;
 };
 
 // cuMem API support
@@ -385,8 +382,7 @@ ncclResult_t p2pSendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, st
   NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_P2P, 1, tpProxyRank, &send->proxyConn));
   if (useMemcpy) {
     NCCLCHECK(ncclProxyCallBlocking(comm, &send->proxyConn, ncclProxyMsgSetup, NULL, 0, &resources->proxyInfo, sizeof(struct p2pShmProxyInfo)));
-    info->shmSize = resources->proxyInfo.shmSize;
-    memcpy(info->shmName, resources->proxyInfo.shmName, sizeof(info->shmName));
+    memcpy(&info->desc, &resources->proxyInfo.desc, sizeof(ncclShmIpcDesc_t));
   } else {
     NCCLCHECK(ncclProxyCallBlocking(comm, &send->proxyConn, ncclProxyMsgSetup, &sendSize, sizeof(int), &info->p2pBuff, sizeof(struct ncclP2pBuff)));
     NCCLCHECK(p2pMap(comm, &send->proxyConn, myInfo, comm->peerInfo+info->rank, &info->p2pBuff, (void**)&resources->sendDevMem, &resources->sendMemIpc));
@@ -492,12 +488,8 @@ ncclResult_t p2pRecvConnect(struct ncclComm* comm, struct ncclConnect* connectIn
   struct ncclSendMem* remDevMem = NULL;
 
   if (useMemcpy) {
-    char shmPath[PATH_MAX];
-    sprintf(shmPath, "/dev/shm/nccl-%s", info->shmName);
-    TRACE(NCCL_SHM,"Open shmName %s shmSize %d", shmPath, info->shmSize);
-    resources->shmSize = info->shmSize;
     // Attach to peer's SHM segment
-    NCCLCHECK(ncclShmOpen(shmPath, info->shmSize, (void**)&resources->shm, (void**)&resources->devShm, -1, &resources->handle));
+    NCCLCHECK(ncclShmImportShareableBuffer(comm, &info->desc, (void**)&resources->shm, (void**)&resources->devShm, &resources->desc));
 
     recv->conn.tail = &resources->devShm->recvMem.tail;
     recv->conn.head = &resources->devShm->sendMem.head;
@@ -554,7 +546,7 @@ ncclResult_t p2pRecvFree(struct ncclConnector* recv) {
       if (resources->sendMemIpc) CUDACHECK(cudaIpcCloseMemHandle(resources->sendMemIpc));
       if (resources->recvMemIpc) CUDACHECK(cudaIpcCloseMemHandle(resources->recvMemIpc));
       if (useMemcpy) {
-        NCCLCHECK(ncclShmClose(resources->handle));
+        NCCLCHECK(ncclShmIpcClose(&resources->desc));
       }
     }
     free(resources);
@@ -566,22 +558,19 @@ static ncclResult_t p2pSendProxySetup(struct ncclProxyConnection* connection, st
   if (useMemcpy) {
     // CE memcpy support
     struct p2pShmProxyInfo* proxyInfo;
+    size_t shmSize;
+
+    if (respSize != sizeof(struct p2pShmProxyInfo)) return ncclInternalError;
     NCCLCHECK(ncclCalloc(&proxyInfo, 1));
     connection->transportResources = proxyInfo;
 
     NCCLCHECK(ncclCudaCalloc(&proxyInfo->ceDevBuff, proxyState->buffSizes[NCCL_PROTO_SIMPLE]));
 
-    char shmPath[PATH_MAX];
-    shmPath[0] = '\0';
-    proxyInfo->shmSize = sizeof(struct ncclSendMem) + sizeof(struct ncclRecvMem);
     // Create a SHM segment for the peer to attach to
-    NCCLCHECK(ncclShmOpen(shmPath, proxyInfo->shmSize, (void**)&proxyInfo->shm, (void**)&proxyInfo->devShm, 1, &proxyInfo->handle));
-    TRACE(NCCL_SHM,"Opened shmName %s shmSize %d", shmPath, proxyInfo->shmSize);
-    memcpy(proxyInfo->shmName, shmPath+sizeof("/dev/shm/nccl-")-1, sizeof(proxyInfo->shmName));
+    shmSize = sizeof(struct ncclSendMem) + sizeof(struct ncclRecvMem);
+    NCCLCHECK(ncclShmAllocateShareableBuffer(proxyState->tpRank, shmSize, &proxyInfo->desc, (void**)&proxyInfo->shm, (void**)&proxyInfo->devShm));
 
     NCCLCHECK(ncclCudaHostCalloc(&proxyInfo->ceRecvMem, 1));
-
-    if (respSize != sizeof(struct p2pShmProxyInfo)) return ncclInternalError;
     memcpy(respBuff, proxyInfo, sizeof(struct p2pShmProxyInfo));
   } else {
     if (reqSize != sizeof(int)) return ncclInternalError;
@@ -643,7 +632,7 @@ static ncclResult_t p2pSendProxyFree(struct ncclProxyConnection* connection, str
   if (useMemcpy) {
     struct p2pShmProxyInfo* proxyInfo = (struct p2pShmProxyInfo*)connection->transportResources;
     if (proxyInfo) {
-      NCCLCHECK(ncclShmClose(proxyInfo->handle));
+      NCCLCHECK(ncclShmIpcClose(&proxyInfo->desc));
       NCCLCHECK(ncclCudaHostFree(proxyInfo->ceRecvMem));
       NCCLCHECK(ncclCudaFree(proxyInfo->ceDevBuff));
       CUDACHECK(cudaStreamDestroy(proxyInfo->stream));

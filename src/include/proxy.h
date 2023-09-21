@@ -13,7 +13,7 @@
 #include "ipcsocket.h"
 #include "nccl_net.h"
 #include <pthread.h>
-#include "shm.h"
+#include "shmutils.h"
 #include "p2p.h"
 
 enum ncclProxyOpState { ncclProxyOpNone, ncclProxyOpReady, ncclProxyOpProgress };
@@ -101,6 +101,7 @@ struct ncclProxyArgs {
 // Otherwise we'd be unable to post half of them to free new elements.
 #define MAX_OPS_PER_PEER (2*MAXCHANNELS*NCCL_MAX_WORK_ELEMENTS_P2P)
 #define NCCL_MAX_LOCAL_RANKS 64
+#define NCCL_HEARTBEAT_THRESHOLD 8 /* 8 seconds */
 struct ncclProxyOpsPool {
   struct ncclProxyOp ops[MAX_OPS_PER_PEER*NCCL_MAX_LOCAL_RANKS];
   volatile int nextOps;
@@ -194,10 +195,10 @@ struct ncclProxyRpcResponseHeader {
 };
 
 struct ncclProxyState {
-  int internalRefCount;
   int refCount;
   int tpRank;
   int tpnRanks;
+  int tpLocalRank;
   int tpLocalnRanks;
   int cudaDev;
   int p2pnChannels;
@@ -209,11 +210,10 @@ struct ncclProxyState {
   ncclNet_t* ncclNet;
   ncclCollNet_t* ncclCollNet;
   volatile uint32_t* abortFlag;
-  volatile uint32_t* abortFlagRefCount;
   // Service thread
   pthread_t thread;
   struct ncclSocket* listenSock;
-  volatile int stop;
+  int stop;
   CUcontext cudaCtx;
   ncclResult_t asyncResult;
 
@@ -229,6 +229,9 @@ struct ncclProxyState {
 
   // Queue of expected responses from the proxy
   struct ncclExpectedProxyResponse* expectedResponses;
+  // Shared heartbeat array
+  uint64_t* heartBeatArray;
+  ncclShmHandle_t heartBeatHandle;
 };
 
 enum proxyConnectState {
@@ -294,6 +297,5 @@ ncclResult_t ncclProxyClientGetFdBlocking(struct ncclComm* comm, struct ncclProx
 
 ncclResult_t ncclProxyStop(struct ncclComm* comm);
 ncclResult_t ncclProxyShmUnlink(struct ncclComm* comm);
-ncclResult_t ncclProxyDestroy(struct ncclProxyState *proxyState);
-ncclResult_t ncclProxyTryDetach(struct ncclProxyState *proxyState);
+ncclResult_t ncclProxyDestroy(struct ncclComm* comm);
 #endif

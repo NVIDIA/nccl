@@ -220,7 +220,6 @@ struct bootstrapState {
   struct ncclSocket ringRecvSocket;
   struct ncclSocket ringSendSocket;
   union ncclSocketAddress* peerCommAddresses;
-  union ncclSocketAddress* peerProxyAddresses;
   struct unexConn* unexpectedConnections;
   int cudaDev;
   int rank;
@@ -233,7 +232,6 @@ ncclResult_t bootstrapInit(struct ncclBootstrapHandle* handle, struct ncclComm* 
   int rank = comm->rank;
   int nranks = comm->nRanks;
   struct bootstrapState* state;
-  struct ncclSocket* proxySocket;
   ncclSocketAddress nextAddr;
   struct ncclSocket sock, listenSockRoot;
   struct extInfo info = { 0 };
@@ -293,17 +291,6 @@ ncclResult_t bootstrapInit(struct ncclBootstrapHandle* handle, struct ncclComm* 
   NCCLCHECK(ncclSocketGetAddr(&state->listenSock, state->peerCommAddresses+rank));
   NCCLCHECK(bootstrapAllGather(state, state->peerCommAddresses, sizeof(union ncclSocketAddress)));
 
-  // Create the service proxy
-  NCCLCHECK(ncclCalloc(&state->peerProxyAddresses, nranks));
-
-  // proxy is aborted through a message; don't set abortFlag
-  NCCLCHECK(ncclCalloc(&proxySocket, 1));
-  NCCLCHECK(ncclSocketInit(proxySocket, &bootstrapNetIfAddr, comm->magic, ncclSocketTypeProxy, comm->abortFlag));
-  NCCLCHECK(ncclSocketListen(proxySocket));
-  NCCLCHECK(ncclSocketGetAddr(proxySocket, state->peerProxyAddresses+rank));
-  NCCLCHECK(bootstrapAllGather(state, state->peerProxyAddresses, sizeof(union ncclSocketAddress)));
-  NCCLCHECK(ncclProxyInit(comm, proxySocket, state->peerProxyAddresses));
-
   TRACE(NCCL_INIT, "rank %d nranks %d - DONE", rank, nranks);
 
   return ncclSuccess;
@@ -315,7 +302,6 @@ ncclResult_t bootstrapSplit(struct ncclBootstrapHandle* handle, struct ncclComm*
   int nranks = comm->nRanks;
   int prev, next;
   ncclSocketAddress listenAddr, tmpAddr;
-  struct ncclSocket* proxySocket;
   struct bootstrapState* state;
 
   NCCLCHECKGOTO(ncclCalloc(&state, 1), ret, fail);
@@ -352,21 +338,8 @@ ncclResult_t bootstrapSplit(struct ncclBootstrapHandle* handle, struct ncclComm*
 
   if (parent->config.splitShare) {
     /* map local rank to top parent local rank. */
-    for (int i = 0; i < nranks; ++i) {
+    for (int i = 0; i < nranks; ++i)
       comm->topParentRanks[i] = parent->topParentRanks[parentRanks[i]];
-    }
-    comm->proxyState = parent->sharedRes->proxyState;
-    ncclAtomicRefCountIncrement(&parent->sharedRes->proxyState->refCount);
-  } else {
-    // Create the service proxy
-    NCCLCHECKGOTO(ncclCalloc(&state->peerProxyAddresses, nranks), ret, fail);
-    NCCLCHECKGOTO(ncclCalloc(&proxySocket, 1), ret, fail);
-    NCCLCHECKGOTO(ncclSocketInit(proxySocket, &bootstrapNetIfAddr, comm->magic, ncclSocketTypeProxy, comm->abortFlag, 0), ret, fail);
-    NCCLCHECKGOTO(ncclSocketListen(proxySocket), ret, fail);
-    NCCLCHECKGOTO(ncclSocketGetAddr(proxySocket, &tmpAddr), ret, fail);
-    memcpy(state->peerProxyAddresses + rank, &tmpAddr, sizeof(union ncclSocketAddress));
-    NCCLCHECKGOTO(bootstrapAllGather(state, state->peerProxyAddresses, sizeof(union ncclSocketAddress)), ret, fail);
-    NCCLCHECKGOTO(ncclProxyInit(comm, proxySocket, state->peerProxyAddresses), ret, fail);
   }
 
   INFO(NCCL_INIT, "bootstrapSplit: rank %d nranks %d color %d key %d prev %d next %d - DONE", rank, nranks, color, key, prev, next);
@@ -591,7 +564,11 @@ ncclResult_t bootstrapAbort(void* commState) {
   NCCLCHECK(ncclSocketClose(&state->ringSendSocket));
   NCCLCHECK(ncclSocketClose(&state->ringRecvSocket));
   free(state->peerCommAddresses);
-  free(state->peerProxyAddresses);
   free(state);
+  return ncclSuccess;
+}
+
+ncclResult_t bootstrapGetNetIf(union ncclSocketAddress *netIf) {
+  memcpy(netIf, &bootstrapNetIfAddr, sizeof(union ncclSocketAddress));
   return ncclSuccess;
 }

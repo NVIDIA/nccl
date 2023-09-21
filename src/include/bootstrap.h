@@ -29,4 +29,5 @@ ncclResult_t bootstrapIntraNodeAllGather(void* commState, int *ranks, int rank, 
 ncclResult_t bootstrapIntraNodeBroadcast(void* commState, int *ranks, int rank, int nranks, int root, void* bcastData, int size);
 ncclResult_t bootstrapClose(void* commState);
 ncclResult_t bootstrapAbort(void* commState);
+ncclResult_t bootstrapGetNetIf(union ncclSocketAddress *netIf);
 #endif

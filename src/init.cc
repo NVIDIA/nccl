@@ -466,7 +466,7 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
 
   NCCLCHECKGOTO(ncclCudaMemcpyAsync(devCommAndChans, &tmpCommAndChans, 1, comm->sharedRes->deviceStream.cudaStream), ret, fail);
 exit:
-  CUDACHECK(cudaStreamSynchronize(comm->sharedRes->deviceStream.cudaStream));
+  NCCLCHECK(ncclStrongStreamSynchronize(&comm->sharedRes->deviceStream));
   NCCLCHECK(ncclStrongStreamRelease(ncclCudaGraphNone(), &comm->sharedRes->deviceStream));
   return ret;
 fail:

@@ -160,7 +160,12 @@ typedef union nvmlValue_st
 #define NVML_FI_DEV_NVLINK_GET_SPEED                  164
 #define NVML_FI_DEV_NVLINK_GET_STATE                  165
 #define NVML_FI_DEV_NVLINK_GET_VERSION                166
-#define NVML_FI_MAX 167 //!< One greater than the largest field ID defined above
+
+#define NVML_FI_DEV_C2C_LINK_COUNT                    170 //!< Number of C2C Links present on the device
+#define NVML_FI_DEV_C2C_LINK_GET_STATUS               171 //!< C2C Link Status 0=INACTIVE 1=ACTIVE
+#define NVML_FI_DEV_C2C_LINK_GET_MAX_BW               172 //!< C2C Link Speed in MBps for active links
+
+#define NVML_FI_MAX 173 //!< One greater than the largest field ID defined above
 
 /**
  * Information for a Field Value Sample

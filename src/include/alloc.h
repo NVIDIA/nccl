@@ -101,7 +101,7 @@ static inline ncclResult_t ncclCuMemAlloc(void **ptr, CUmemGenericAllocationHand
   /* Allocate the physical memory on the device */
   CUCHECK(cuMemCreate(&handle, size, &prop, 0));
   /* Reserve a virtual address range */
-  CUCHECK(cuMemAddressReserve((CUdeviceptr *)ptr, size, 0, 0, 0));
+  CUCHECK(cuMemAddressReserve((CUdeviceptr *)ptr, size, granularity, 0, 0));
   /* Map the virtual address range to the physical allocation */
   CUCHECK(cuMemMap((CUdeviceptr)*ptr, size, 0, handle, 0));
   /* Now allow RW access to the newly mapped memory */

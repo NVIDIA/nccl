@@ -5,7 +5,7 @@
 #
 NCCL_HOME:=../../build/
 CUDA_HOME:=/usr/local/cuda
-INC:= -I$(NCCL_HOME)/include -I$(CUDA_HOME)/include
+INC:= -I$(NCCL_HOME)/include -I$(CUDA_HOME)/include -Inccl
 PLUGIN_SO:=libnccl-net.so
 
 default: $(PLUGIN_SO)

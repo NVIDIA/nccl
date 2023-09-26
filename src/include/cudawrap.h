@@ -30,7 +30,7 @@ typedef CUresult (CUDAAPI *PFN_cuGetProcAddress_v11030)(const char *symbol, void
     if( err != CUDA_SUCCESS ) {				      \
       const char *errStr;				      \
       (void) pfn_cuGetErrorString(err, &errStr);	      \
-      WARN("Cuda failure '%s'", errStr);		      \
+      WARN("Cuda failure %d '%s'", err, errStr);	      \
       return ncclUnhandledCudaError;			      \
     }							      \
 } while(false)
@@ -40,7 +40,7 @@ typedef CUresult (CUDAAPI *PFN_cuGetProcAddress_v11030)(const char *symbol, void
     if( err != CUDA_SUCCESS ) {				      \
       const char *errStr;				      \
       (void) pfn_cuGetErrorString(err, &errStr);	      \
-      WARN("Cuda failure '%s'", errStr);		      \
+      WARN("Cuda failure %d '%s'", err, errStr);	      \
       res = ncclUnhandledCudaError;			      \
       goto label;					      \
     }							      \
@@ -52,7 +52,7 @@ typedef CUresult (CUDAAPI *PFN_cuGetProcAddress_v11030)(const char *symbol, void
     if( err != CUDA_SUCCESS ) {						\
       const char *errStr;						\
       (void) pfn_cuGetErrorString(err, &errStr);			\
-      INFO(NCCL_ALL,"%s:%d Cuda failure '%s'", __FILE__, __LINE__, errStr);	\
+      INFO(NCCL_ALL,"%s:%d Cuda failure %d '%s'", __FILE__, __LINE__, err, errStr); \
     }									\
 } while(false)
 
@@ -79,6 +79,7 @@ DECLARE_CUDA_PFN_EXTERN(cuCtxDestroy, 4000);
 DECLARE_CUDA_PFN_EXTERN(cuCtxGetCurrent, 4000);
 DECLARE_CUDA_PFN_EXTERN(cuCtxSetCurrent, 4000);
 DECLARE_CUDA_PFN_EXTERN(cuCtxGetDevice, 2000);
+DECLARE_CUDA_PFN_EXTERN(cuPointerGetAttribute, 4000);
 // cuMem API support
 DECLARE_CUDA_PFN_EXTERN(cuMemAddressReserve, 10020);
 DECLARE_CUDA_PFN_EXTERN(cuMemAddressFree, 10020);

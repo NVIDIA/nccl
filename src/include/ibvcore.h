@@ -1040,4 +1040,19 @@ static inline int ibv_post_send(struct ibv_qp *qp, struct ibv_send_wr *wr, struc
   return qp->context->ops.post_send(qp, wr, bad_wr);
 }
 
+struct ibv_ece {
+	/*
+	 * Unique identifier of the provider vendor on the network.
+	 * The providers will set IEEE OUI here to distinguish
+	 * itself in non-homogenius network.
+	 */
+	uint32_t vendor_id;
+	/*
+	 * Provider specific attributes which are supported or
+	 * needed to be enabled by ECE users.
+	 */
+	uint32_t options;
+	uint32_t comp_mask;
+};
+
 #endif  // NCCL_IBV_CORE_H_

@@ -30,7 +30,7 @@ ncclResult_t ncclIpcSocketInit(ncclIpcSocket *handle, int rank, uint64_t hash, v
   handle->fd = -1;
   handle->socketName[0] = '\0';
   if ((fd = socket(AF_UNIX, SOCK_DGRAM, 0)) < 0) {
-    WARN("UDS: Socket creation error : %d", errno);
+    WARN("UDS: Socket creation error : %s (%d)", strerror(errno), errno);
     return ncclSystemError;
   }
 
@@ -54,7 +54,7 @@ ncclResult_t ncclIpcSocketInit(ncclIpcSocket *handle, int rank, uint64_t hash, v
   cliaddr.sun_path[0] = '\0'; // Linux abstract socket trick
 #endif
   if (bind(fd, (struct sockaddr *)&cliaddr, sizeof(cliaddr)) < 0) {
-    WARN("UDS: Binding to socket %s failed : %d", temp, errno);
+    WARN("UDS: Binding to socket %s failed : %s (%d)", temp, strerror(errno), errno);
     close(fd);
     return ncclSystemError;
   }
@@ -70,6 +70,15 @@ ncclResult_t ncclIpcSocketInit(ncclIpcSocket *handle, int rank, uint64_t hash, v
     SYSCHECK(fcntl(fd, F_SETFL, flags | O_NONBLOCK), "fcntl");
   }
 
+  return ncclSuccess;
+}
+
+ncclResult_t ncclIpcSocketGetFd(struct ncclIpcSocket* handle, int* fd) {
+  if (handle == NULL) {
+    WARN("ncclSocketGetFd: pass NULL socket");
+    return ncclInvalidArgument;
+  }
+  if (fd) *fd = handle->fd;
   return ncclSuccess;
 }
 
@@ -90,7 +99,7 @@ ncclResult_t ncclIpcSocketClose(ncclIpcSocket *handle) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclIpcSocketRecvFd(ncclIpcSocket *handle, int *recvFd) {
+ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, int *recvFd) {
   struct msghdr msg = {0, 0, 0, 0, 0, 0, 0};
   struct iovec iov[1];
 
@@ -107,8 +116,13 @@ ncclResult_t ncclIpcSocketRecvFd(ncclIpcSocket *handle, int *recvFd) {
   msg.msg_control = control_un.control;
   msg.msg_controllen = sizeof(control_un.control);
 
-  iov[0].iov_base = (void *)dummy_buffer;
-  iov[0].iov_len = sizeof(dummy_buffer);
+  if (hdr == NULL) {
+    iov[0].iov_base = (void *)dummy_buffer;
+    iov[0].iov_len = sizeof(dummy_buffer);
+  } else {
+    iov[0].iov_base = hdr;
+    iov[0].iov_len = hdrLen;
+  }
 
   msg.msg_iov = iov;
   msg.msg_iovlen = 1;
@@ -121,25 +135,30 @@ ncclResult_t ncclIpcSocketRecvFd(ncclIpcSocket *handle, int *recvFd) {
     if (handle->abortFlag && *handle->abortFlag) return ncclInternalError;
   }
 
-  if (((cmptr = CMSG_FIRSTHDR(&msg)) != NULL) && (cmptr->cmsg_len == CMSG_LEN(sizeof(int)))) {
-    if ((cmptr->cmsg_level != SOL_SOCKET) || (cmptr->cmsg_type != SCM_RIGHTS)) {
-      WARN("UDS: Receiving data over socket failed");
+  if (recvFd != NULL) {
+    if (((cmptr = CMSG_FIRSTHDR(&msg)) != NULL) && (cmptr->cmsg_len == CMSG_LEN(sizeof(int)))) {
+      if ((cmptr->cmsg_level != SOL_SOCKET) || (cmptr->cmsg_type != SCM_RIGHTS)) {
+        WARN("UDS: Receiving data over socket failed");
+      return ncclSystemError;
+      }
+
+      memmove(recvFd, CMSG_DATA(cmptr), sizeof(*recvFd));
+    } else {
+      WARN("UDS: Receiving data over socket %s failed", handle->socketName);
       return ncclSystemError;
     }
-
-    memmove(recvFd, CMSG_DATA(cmptr), sizeof(*recvFd));
-  } else {
-    WARN("UDS: Receiving data over socket %s failed", handle->socketName);
-    return ncclSystemError;
+    TRACE(NCCL_INIT|NCCL_P2P, "UDS: Got recvFd %d from socket %s", *recvFd, handle->socketName);
   }
-
-  TRACE(NCCL_INIT|NCCL_P2P, "UDS: Got recvFd %d from socket %s", *recvFd, handle->socketName);
 
   return ncclSuccess;
 }
 
-ncclResult_t ncclIpcSocketSendFd(ncclIpcSocket *handle, const int sendFd, int rank, uint64_t hash) {
-  struct msghdr msg;
+ncclResult_t ncclIpcSocketRecvFd(ncclIpcSocket *handle, int *recvFd) {
+  return ncclIpcSocketRecvMsg(handle, NULL, 0, recvFd);
+}
+
+ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, const int sendFd, int rank, uint64_t hash) {
+  struct msghdr msg = {0, 0, 0, 0, 0, 0, 0};
   struct iovec iov[1];
   char temp[NCCL_IPC_SOCKNAME_LEN];
 
@@ -149,6 +168,7 @@ ncclResult_t ncclIpcSocketSendFd(ncclIpcSocket *handle, const int sendFd, int ra
   } control_un;
 
   struct cmsghdr *cmptr;
+  char dummy_buffer[1];
   struct sockaddr_un cliaddr;
 
   // Construct client address to send this shareable handle to
@@ -162,39 +182,51 @@ ncclResult_t ncclIpcSocketSendFd(ncclIpcSocket *handle, const int sendFd, int ra
   }
   (void) strncpy(cliaddr.sun_path, temp, len);
 
-  TRACE(NCCL_INIT, "UDS: Sending fd %d to UDS socket %s", sendFd, temp);
-
 #ifdef USE_ABSTRACT_SOCKET
   cliaddr.sun_path[0] = '\0'; // Linux abstract socket trick
 #endif
 
-  msg.msg_control = control_un.control;
-  msg.msg_controllen = sizeof(control_un.control);
+  TRACE(NCCL_INIT, "UDS: Sending hdr %p len %d to UDS socket %s", hdr, hdrLen, temp);
 
-  cmptr = CMSG_FIRSTHDR(&msg);
-  cmptr->cmsg_len = CMSG_LEN(sizeof(int));
-  cmptr->cmsg_level = SOL_SOCKET;
-  cmptr->cmsg_type = SCM_RIGHTS;
+  if (sendFd != -1) {
+    TRACE(NCCL_INIT, "UDS: Sending fd %d to UDS socket %s", sendFd, temp);
 
-  memmove(CMSG_DATA(cmptr), &sendFd, sizeof(sendFd));
+    msg.msg_control = control_un.control;
+    msg.msg_controllen = sizeof(control_un.control);
+
+    cmptr = CMSG_FIRSTHDR(&msg);
+    cmptr->cmsg_len = CMSG_LEN(sizeof(int));
+    cmptr->cmsg_level = SOL_SOCKET;
+    cmptr->cmsg_type = SCM_RIGHTS;
+    memmove(CMSG_DATA(cmptr), &sendFd, sizeof(sendFd));
+  }
 
   msg.msg_name = (void *)&cliaddr;
   msg.msg_namelen = sizeof(struct sockaddr_un);
 
-  iov[0].iov_base = (void *)"";
-  iov[0].iov_len = 1;
+  if (hdr == NULL) {
+    iov[0].iov_base = (void *)dummy_buffer;
+    iov[0].iov_len = sizeof(dummy_buffer);
+  } else {
+    iov[0].iov_base = hdr;
+    iov[0].iov_len = hdrLen;
+  }
   msg.msg_iov = iov;
   msg.msg_iovlen = 1;
   msg.msg_flags = 0;
 
   ssize_t sendResult;
-  while ((sendResult = sendmsg(handle->fd, &msg, 0)) <= 0) {
+  while ((sendResult = sendmsg(handle->fd, &msg, 0)) < 0) {
     if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
-      WARN("UDS: Sending data over socket %s failed : %d", temp, errno);
+      WARN("UDS: Sending data over socket %s failed : %s (%d)", temp, strerror(errno), errno);
       return ncclSystemError;
     }
     if (handle->abortFlag && *handle->abortFlag) return ncclInternalError;
   }
 
   return ncclSuccess;
+}
+
+ncclResult_t ncclIpcSocketSendFd(ncclIpcSocket *handle, const int sendFd, int rank, uint64_t hash) {
+  return ncclIpcSocketSendMsg(handle, NULL, 0, sendFd, rank, hash);
 }

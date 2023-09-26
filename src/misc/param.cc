@@ -63,7 +63,7 @@ void ncclLoadParam(char const* env, int64_t deftVal, int64_t uninitialized, int6
   static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
   pthread_mutex_lock(&mutex);
   if (__atomic_load_n(cache, __ATOMIC_RELAXED) == uninitialized) {
-    char* str = getenv(env);
+    const char* str = ncclGetEnv(env);
     int64_t value = deftVal;
     if (str && strlen(str) > 0) {
       errno = 0;
@@ -78,4 +78,10 @@ void ncclLoadParam(char const* env, int64_t deftVal, int64_t uninitialized, int6
     __atomic_store_n(cache, value, __ATOMIC_RELAXED);
   }
   pthread_mutex_unlock(&mutex);
+}
+
+const char *ncclGetEnv(const char *name) {
+  static pthread_once_t once = PTHREAD_ONCE_INIT;
+  pthread_once(&once, initEnv);
+  return getenv(name);
 }

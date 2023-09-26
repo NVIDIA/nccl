@@ -45,11 +45,30 @@ ncclResult_t wrap_ibv_symbols(void) {
   } \
   return ncclSuccess;
 
+#define IBV_INT_CHECK_RET_ERRNO_OPTIONAL(container, internal_name, call, success_retval, name, supported) \
+  if (container.internal_name == NULL) { \
+    INFO(NCCL_NET, "Call to " name " skipped, internal_name doesn't exist"); \
+    *supported = 0; \
+    return ncclSuccess; \
+  } \
+  int ret = container.call; \
+  if (ret == ENOTSUP || ret == EOPNOTSUPP) { \
+    INFO(NCCL_NET, "Call to " name " failed with error %s errno %d", strerror(ret), ret); \
+    *supported = 0; \
+    return ncclSuccess; \
+  } else if (ret != success_retval) { \
+    WARN("Call to " name " failed with error %s errno %d", strerror(ret), ret); \
+    *supported = 1; \
+    return ncclSystemError; \
+  } \
+  *supported = 1; \
+  return ncclSuccess;
+
 #define IBV_INT_CHECK_RET_ERRNO(container, internal_name, call, success_retval, name) \
   CHECK_NOT_NULL(container, internal_name); \
   int ret = container.call; \
   if (ret != success_retval) { \
-    WARN("Call to " name " failed with error %s", strerror(ret)); \
+    WARN("Call to " name " failed with error %s errno %d", strerror(ret), ret); \
     return ncclSystemError; \
   } \
   return ncclSuccess;
@@ -185,6 +204,14 @@ ncclResult_t wrap_ibv_create_qp(struct ibv_qp **ret, struct ibv_pd *pd, struct i
 
 ncclResult_t wrap_ibv_modify_qp(struct ibv_qp *qp, struct ibv_qp_attr *attr, int attr_mask) { /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/
   IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_modify_qp, ibv_internal_modify_qp(qp, attr, attr_mask), 0, "ibv_modify_qp");
+}
+
+ncclResult_t wrap_ibv_query_ece(struct ibv_qp *qp, struct ibv_ece *ece, int* supported) { /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/
+  IBV_INT_CHECK_RET_ERRNO_OPTIONAL(ibvSymbols, ibv_internal_query_ece, ibv_internal_query_ece(qp, ece), 0, "ibv_query_ece", supported);
+}
+
+ncclResult_t wrap_ibv_set_ece(struct ibv_qp *qp, struct ibv_ece *ece, int* supported) { /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/
+  IBV_INT_CHECK_RET_ERRNO_OPTIONAL(ibvSymbols, ibv_internal_set_ece, ibv_internal_set_ece(qp, ece), 0, "ibv_set_ece", supported);
 }
 
 ncclResult_t wrap_ibv_event_type_str(char **ret, enum ibv_event_type event) {

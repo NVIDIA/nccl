@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <sys/syscall.h>
+#include "param.h"
 
 int ncclDebugLevel = -1;
 static int pid = -1;
@@ -25,7 +26,7 @@ static __thread int tid = -1;
 void ncclDebugInit() {
   pthread_mutex_lock(&ncclDebugLock);
   if (ncclDebugLevel != -1) { pthread_mutex_unlock(&ncclDebugLock); return; }
-  const char* nccl_debug = getenv("NCCL_DEBUG");
+  const char* nccl_debug = ncclGetEnv("NCCL_DEBUG");
   int tempNcclDebugLevel = -1;
   if (nccl_debug == NULL) {
     tempNcclDebugLevel = NCCL_LOG_NONE;
@@ -45,7 +46,7 @@ void ncclDebugInit() {
    * This can be a comma separated list such as INIT,COLL
    * or ^INIT,COLL etc
    */
-  char* ncclDebugSubsysEnv = getenv("NCCL_DEBUG_SUBSYS");
+  const char* ncclDebugSubsysEnv = ncclGetEnv("NCCL_DEBUG_SUBSYS");
   if (ncclDebugSubsysEnv != NULL) {
     int invert = 0;
     if (ncclDebugSubsysEnv[0] == '^') { invert = 1; ncclDebugSubsysEnv++; }
@@ -97,7 +98,7 @@ void ncclDebugInit() {
    * then create the debug file. But don't bother unless the
    * NCCL_DEBUG level is > VERSION
    */
-  const char* ncclDebugFileEnv = getenv("NCCL_DEBUG_FILE");
+  const char* ncclDebugFileEnv = ncclGetEnv("NCCL_DEBUG_FILE");
   if (tempNcclDebugLevel > NCCL_LOG_VERSION && ncclDebugFileEnv != NULL) {
     int c = 0;
     char debugFn[PATH_MAX+1] = "";

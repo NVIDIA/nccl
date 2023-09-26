@@ -12,7 +12,7 @@
 #include <dlfcn.h>
 
 // This env var (NCCL_CUMEM_ENABLE) toggles cuMem API usage
-NCCL_PARAM(CuMemEnable, "CUMEM_ENABLE", 0);
+NCCL_PARAM(CuMemEnable, "CUMEM_ENABLE", -2);
 
 static int ncclCuMemSupported = 0;
 
@@ -43,7 +43,9 @@ error:
 }
 
 int ncclCuMemEnable() {
-  return ((ncclParamCuMemEnable() == -2 && ncclCuMemSupported) || ncclParamCuMemEnable());
+  // NCCL_CUMEM_ENABLE=-2 means auto-detect CUMEM support
+  int param = ncclParamCuMemEnable();
+  return  param >= 0 ? param : (param == -2 && ncclCuMemSupported);
 }
 
 #define DECLARE_CUDA_PFN(symbol,version) PFN_##symbol##_v##version pfn_##symbol = nullptr
@@ -74,6 +76,8 @@ DECLARE_CUDA_PFN(cuMemRelease, 10020);
 DECLARE_CUDA_PFN(cuMemRetainAllocationHandle, 11000);
 DECLARE_CUDA_PFN(cuMemSetAccess, 10020);
 DECLARE_CUDA_PFN(cuMemUnmap, 10020);
+/* ncclMemAlloc/Free */
+DECLARE_CUDA_PFN(cuPointerGetAttribute, 4000);
 #if CUDA_VERSION >= 11070
 /* transport/collNet.cc/net.cc*/
 DECLARE_CUDA_PFN(cuMemGetHandleForAddressRange, 11070); // DMA-BUF support
@@ -137,6 +141,8 @@ static ncclResult_t cudaPfnFuncLoader(void) {
   LOAD_SYM(cuMemRetainAllocationHandle, 11000, 1);
   LOAD_SYM(cuMemSetAccess, 10020, 1);
   LOAD_SYM(cuMemUnmap, 10020, 1);
+/* ncclMemAlloc/Free */
+  LOAD_SYM(cuPointerGetAttribute, 4000, 1);
 #if CUDA_VERSION >= 11070
   LOAD_SYM(cuMemGetHandleForAddressRange, 11070, 1); // DMA-BUF support
 #endif
@@ -158,7 +164,7 @@ static ncclResult_t initResult;
 
 static void initOnceFunc() {
   do {
-    char* val = getenv("CUDA_LAUNCH_BLOCKING");
+    const char* val = ncclGetEnv("CUDA_LAUNCH_BLOCKING");
     ncclCudaLaunchBlocking = val!=nullptr && val[0]!=0 && !(val[0]=='0' && val[1]==0);
   } while (0);
 
@@ -167,7 +173,7 @@ static void initOnceFunc() {
    * Load CUDA driver library
    */
   char path[1024];
-  char *ncclCudaPath = getenv("NCCL_CUDA_PATH");
+  const char *ncclCudaPath = ncclGetEnv("NCCL_CUDA_PATH");
   if (ncclCudaPath == NULL)
     snprintf(path, 1024, "%s", "libcuda.so");
   else

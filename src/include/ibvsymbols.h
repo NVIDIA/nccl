@@ -36,6 +36,8 @@ struct ncclIbvSymbols {
   int (*ibv_internal_modify_qp)(struct ibv_qp *qp, struct ibv_qp_attr *attr, int attr_mask);
   int (*ibv_internal_destroy_qp)(struct ibv_qp *qp);
   const char * (*ibv_internal_event_type_str)(enum ibv_event_type event);
+  int (*ibv_internal_query_ece)(struct ibv_qp *qp, struct ibv_ece *ece);
+  int (*ibv_internal_set_ece)(struct ibv_qp *qp, struct ibv_ece *ece);
 };
 
 /* Constructs IB verbs symbols per rdma-core linking or dynamic loading mode */

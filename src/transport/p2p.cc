@@ -193,9 +193,13 @@ ncclResult_t ncclP2pAllocateShareableBuffer(size_t size, ncclIpcDesc *ipcDesc, v
     // cuMem API support
     CUmemAllocationHandleType type = NCCL_P2P_HANDLE_TYPE;
     CUmemGenericAllocationHandle handle;
-
     NCCLCHECK(ncclCuMemAlloc(ptr, &handle, size));
-    CUCHECK(cuMemExportToShareableHandle(&ipcDesc->cuDesc, handle, type, 0));
+    if (type == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
+      // Return the native cuMem handle for later Export/Import via UDS
+      memcpy(&ipcDesc->cuDesc.data, &handle, sizeof(handle));
+    } else {
+      CUCHECK(cuMemExportToShareableHandle(&ipcDesc->cuDesc, handle, type, 0));
+    }
 #else
     return ncclInternalError;
 #endif
@@ -215,17 +219,6 @@ ncclResult_t ncclP2pAllocateShareableBuffer(size_t size, ncclIpcDesc *ipcDesc, v
 }
 
 ncclResult_t ncclP2pFreeShareableBuffer(ncclIpcDesc *ipcDesc) {
-  if (ncclCuMemEnable()) {
-    // cuMem API support
-    CUmemAllocationHandleType type = NCCL_P2P_HANDLE_TYPE;
-
-    if (type == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
-      int fd = *(int *) &ipcDesc->cuDesc.data;
-      if (fd <= 0) return ncclInternalError;
-      (void) close(fd);
-    }
-  }
-
   return ncclSuccess;
 }
 
@@ -242,20 +235,20 @@ ncclResult_t ncclP2pImportShareableBuffer(struct ncclComm *comm, int tpPeer, siz
     if (type == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
       // UDS fd support
       struct ncclProxyConnector proxyConn;
-      int fd = *(int *)(&cuDesc->data);
-      int newFd = -1;
+      int fd = -1;
+      // Send cuMem handle to remote for conversion to an fd
       NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_P2P, 1, tpPeer, &proxyConn));
-      NCCLCHECK(ncclProxyClientConvertFdBlocking(comm, &proxyConn, fd, &newFd));
-      INFO(NCCL_P2P, "UDS converted fd %d -> %d on peer %d", fd, newFd, tpPeer);
-      CUCHECK(cuMemImportFromShareableHandle(&handle, (void *)(uintptr_t)newFd, type));
-      close(newFd);
+      NCCLCHECK(ncclProxyClientGetFdBlocking(comm, &proxyConn, &cuDesc->data, &fd));
+      INFO(NCCL_P2P, "UDS converted handle 0x%lx to fd %d on remote peer %d", *(uint64_t*)&cuDesc->data, fd, tpPeer);
+      CUCHECK(cuMemImportFromShareableHandle(&handle, (void *)(uintptr_t)fd, type));
+      (void) close(fd);
     } else {
       CUCHECK(cuMemImportFromShareableHandle(&handle, cuDesc, type));
     }
     CUCHECK(cuMemAddressReserve(&dptr, size, /* alignment */ 0, /* addr */ 0, /* flags */ 0));
     CUCHECK(cuMemMap(dptr, size, /* offset */ 0, handle, /* flags */ 0));
 
-    TRACE(NCCL_P2P, "Imported shareable buffer size %zi handle 0x%lx dptr %p", size, (long)handle, (void*)dptr);
+    TRACE(NCCL_P2P, "Imported shareable buffer size %zi handle 0x%llx dptr %p", size, handle, (void*)dptr);
 
     // Allow access by the local GPU
     CUmemAccessDesc accessDesc = {};
@@ -294,7 +287,7 @@ static ncclResult_t p2pGetInfo(struct ncclTopoSystem* topo, struct ncclPeerInfo*
   return ncclSuccess;
 }
 
-static ncclResult_t p2pMap(struct ncclComm *comm, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo, struct ncclP2pBuff* p2pBuff, void** devMem, void** ipcPtr) {
+static ncclResult_t p2pMap(struct ncclComm *comm, struct ncclProxyConnector* proxyConn, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo, struct ncclP2pBuff* p2pBuff, void** devMem, void** ipcPtr) {
   if (!ncclCuMemEnable() && myInfo->pidHash == peerInfo->pidHash) {
     if (peerInfo->cudaDev != myInfo->cudaDev) {
       // Same PID different GPUs, enable P2P access
@@ -384,7 +377,7 @@ ncclResult_t p2pSendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, st
     memcpy(info->shmName, resources->proxyInfo.shmName, sizeof(info->shmName));
   } else {
     NCCLCHECK(ncclProxyCallBlocking(comm, &send->proxyConn, ncclProxyMsgSetup, &sendSize, sizeof(int), &info->p2pBuff, sizeof(struct ncclP2pBuff)));
-    NCCLCHECK(p2pMap(comm, myInfo, comm->peerInfo+info->rank, &info->p2pBuff, (void**)&resources->sendDevMem, &resources->sendMemIpc));
+    NCCLCHECK(p2pMap(comm, &send->proxyConn, myInfo, comm->peerInfo+info->rank, &info->p2pBuff, (void**)&resources->sendDevMem, &resources->sendMemIpc));
   }
 
   return ncclSuccess;
@@ -437,7 +430,7 @@ ncclResult_t p2pRecvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, st
   NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_P2P, 0, tpProxyRank, &recv->proxyConn));
   NCCLCHECK(ncclProxyCallBlocking(comm, &recv->proxyConn, ncclProxyMsgSetup, &recvSize, sizeof(int), &info->p2pBuff, sizeof(struct ncclP2pBuff)));
 
-  NCCLCHECK(p2pMap(comm, myInfo, comm->peerInfo+info->rank, &info->p2pBuff, (void**)&resources->recvDevMem, &resources->recvMemIpc));
+  NCCLCHECK(p2pMap(comm, &recv->proxyConn, myInfo, comm->peerInfo+info->rank, &info->p2pBuff, (void**)&resources->recvDevMem, &resources->recvMemIpc));
   return ncclSuccess;
 }
 
@@ -447,7 +440,7 @@ static ncclResult_t p2pSendConnect(struct ncclComm* comm, struct ncclConnect* co
   struct ncclRecvMem* remDevMem = NULL;
   struct p2pConnectInfo* info = (struct p2pConnectInfo*)connectInfo;
 
-  NCCLCHECK(p2pMap(comm, comm->peerInfo+rank, comm->peerInfo+info->rank, &info->p2pBuff, (void**)&remDevMem, &resources->recvMemIpc));
+  NCCLCHECK(p2pMap(comm, &send->proxyConn, comm->peerInfo+rank, comm->peerInfo+info->rank, &info->p2pBuff, (void**)&remDevMem, &resources->recvMemIpc));
 
   char* buff = (char*)(remDevMem+1);
   for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) {
@@ -474,6 +467,8 @@ static ncclResult_t p2pSendConnect(struct ncclComm* comm, struct ncclConnect* co
     send->conn.ptrExchange = &resources->sendDevMem->ptrExchange;
     send->conn.redOpArgExchange = resources->sendDevMem->redOpArgExchange;
   }
+  // We must assign the proxyConn's proxyProgress property for proper checking at enqueue-time
+  send->proxyConn.proxyProgress = p2pTransport.send.proxyProgress;
   return ncclSuccess;
 }
 
@@ -495,7 +490,7 @@ ncclResult_t p2pRecvConnect(struct ncclComm* comm, struct ncclConnect* connectIn
     recv->conn.tail = &resources->devShm->recvMem.tail;
     recv->conn.head = &resources->devShm->sendMem.head;
   } else {
-    NCCLCHECK(p2pMap(comm, comm->peerInfo+rank, comm->peerInfo+info->rank, &info->p2pBuff, (void**)&remDevMem, &resources->sendMemIpc));
+    NCCLCHECK(p2pMap(comm, &recv->proxyConn, comm->peerInfo+rank, comm->peerInfo+info->rank, &info->p2pBuff, (void**)&remDevMem, &resources->sendMemIpc));
 
     struct ncclRecvMem* devMem = resources->recvDevMem;
     recv->conn.tail = &devMem->tail;

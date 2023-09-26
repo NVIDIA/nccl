@@ -14,7 +14,8 @@ ncclResult_t ncclGroupErrCheck(ncclResult_t ret);
 void ncclGroupCommJoin(struct ncclComm* comm);
 void ncclGroupCommPreconnect(struct ncclComm* comm);
 ncclResult_t ncclGroupCommLeave(struct ncclComm* comm);
-void ncclGroupJobAbort();
+ncclResult_t ncclGroupJobAbort(struct ncclGroupJob* groupJob);
+ncclResult_t ncclGroupJobComplete(struct ncclGroupJob *groupJob);
 
 typedef ncclResult_t(*ncclInitFunc_t)(ncclComm_t* newcomm, int ndev, ncclUniqueId commId, int myrank, int cudaDev);
 
@@ -52,8 +53,9 @@ struct ncclGroupJob {
   struct ncclComm **groupCommPreconnectHeadPtr;
   ncclResult_t *groupErrorPtr;
   volatile bool *abortFlagPtr;
+  int *groupBlockingPtr;
   struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> *asyncJobsPtr;
-  bool doneFlag;
+  bool initialized;
 };
 
 ncclResult_t ncclGroupStartInternal();
@@ -87,14 +89,6 @@ static inline ncclResult_t groupJobComplete(struct ncclGroupJob* job) {
 }
 
 inline ncclResult_t ncclGroupStartInternal() {
-  /* if previous group launch does not complete, don't launch this one. */
-  if (ncclGroupJobMainPtr != NULL) {
-    if (__atomic_load_n(&ncclGroupJobMainPtr->doneFlag, __ATOMIC_ACQUIRE) == false) {
-      return ncclInvalidUsage;
-    } else {
-      NCCLCHECK(groupJobComplete(ncclGroupJobMainPtr));
-    }
-  }
   ncclGroupDepth++;
   return ncclSuccess;
 }

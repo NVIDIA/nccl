@@ -164,6 +164,10 @@ static ncclResult_t shmSendConnect(struct ncclComm* comm, struct ncclConnect* co
     send->conn.tail = &proxyInfo.ceRecvMem->tail;
     send->conn.sizesFifo = proxyInfo.ceRecvMem->sizesFifo;
   }
+
+  // We must assign the proxyConn's proxyProgress property for proper checking at enqueue-time
+  send->proxyConn.proxyProgress = shmTransport.send.proxyProgress;
+
   return ncclSuccess;
 }
 
@@ -193,6 +197,10 @@ static ncclResult_t shmRecvConnect(struct ncclComm* comm, struct ncclConnect* co
     recv->conn.buffs[NCCL_PROTO_SIMPLE] = proxyInfo.devFifo;
     recv->conn.tail = &proxyInfo.ceRecvMem->tail;
   }
+
+  // We must assign the proxyConn's proxyProgress property for proper checking at enqueue-time
+  recv->proxyConn.proxyProgress = shmTransport.recv.proxyProgress;
+
   return ncclSuccess;
 }
 

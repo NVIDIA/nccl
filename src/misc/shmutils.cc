@@ -5,6 +5,7 @@
  ************************************************************************/
 
 #include "shm.h"
+#include "comm.h"
 #include "checks.h"
 #include <sys/types.h>
 #include <sys/mman.h>
@@ -67,7 +68,7 @@ ncclResult_t ncclShmOpen(char* shmPath, size_t shmSize, void** shmPtr, void** de
       SYSCHECKGOTO(fd = open(shmPath, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR), ret, fail);
     }
 
-    if (ftruncate(fd, realShmSize) != 0) {
+    if (fallocate(fd, 0, 0, realShmSize) != 0) {
       WARN("Error: failed to extend %s to %ld bytes", shmPath, realShmSize);
       ret = ncclSystemError;
       goto fail;
@@ -160,5 +161,39 @@ ncclResult_t ncclShmUnlink(ncclShmHandle_t handle) {
       tmphandle->shmPath = NULL;
     }
   }
+  return ret;
+}
+
+ncclResult_t ncclShmemAllgather(struct ncclComm *comm, struct ncclShmemCollBuff *shmem, void *sendbuff, void *recvbuff, size_t typeSize) {
+  ncclResult_t ret = ncclSuccess;
+  int curRound = shmem->round;
+  size_t mycnt;
+
+  if (comm == NULL || shmem == NULL || sendbuff == NULL || recvbuff == NULL) {
+    ret = ncclInvalidArgument;
+    goto exit;
+  }
+
+  memcpy((char*)shmem->ptr[curRound] + comm->localRank * typeSize, sendbuff, typeSize);
+  /* sync among local ranks */
+  mycnt = __atomic_add_fetch(shmem->cnt[curRound], 1, __ATOMIC_ACQ_REL);
+  if (mycnt == comm->localRanks) {
+    *shmem->cnt[curRound ^ 1] = 0; /* prepare next round */
+    __atomic_store_n(shmem->cnt[curRound], comm->localRanks + 1, __ATOMIC_RELEASE); /* release everyone */
+  } else {
+    uint64_t t0 = clockNano();
+    while(__atomic_load_n(shmem->cnt[curRound], __ATOMIC_ACQUIRE) != comm->localRanks + 1) {
+      if (clockNano() - t0 >= 5 * 1000) sched_yield();
+      if (*comm->abortFlag == 1) {
+        ret = ncclInternalError;
+        goto exit;
+      }
+    }
+  }
+
+  memcpy(recvbuff, (const void*)shmem->ptr[curRound], comm->localRanks * typeSize);
+  shmem->round ^= 1;
+
+exit:
   return ret;
 }

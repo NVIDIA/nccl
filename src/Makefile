@@ -3,19 +3,17 @@
 #
 # See LICENSE.txt for license information
 #
-
 include ../makefiles/common.mk
 include ../makefiles/version.mk
 
 ##### src files
 INCEXPORTS  := nccl.h nccl_net.h
-LIBSRCFILES := init.cc init_nvtx.cc channel.cc bootstrap.cc transport.cc enqueue.cc group.cc debug.cc proxy.cc net.cc \
-		misc/cudawrap.cc misc/nvmlwrap.cc misc/ibvsymbols.cc misc/ibvwrap.cc misc/gdrwrap.cc \
-		misc/utils.cc misc/argcheck.cc misc/socket.cc misc/shmutils.cc misc/profiler.cc misc/param.cc misc/strongstream.cc \
-		misc/ipcsocket.cc \
-		transport/p2p.cc transport/shm.cc transport/net.cc transport/net_socket.cc transport/net_ib.cc transport/coll_net.cc transport/nvls.cc \
-                collectives/sendrecv.cc collectives/all_reduce.cc collectives/all_gather.cc collectives/broadcast.cc collectives/reduce.cc collectives/reduce_scatter.cc \
-                graph/topo.cc graph/paths.cc graph/search.cc graph/connect.cc graph/rings.cc graph/trees.cc graph/tuning.cc graph/xml.cc
+LIBSRCFILES := \
+	bootstrap.cc channel.cc collectives.cc debug.cc enqueue.cc group.cc \
+	init.cc init_nvtx.cc net.cc proxy.cc transport.cc \
+	$(wildcard graph/*.cc) \
+	$(wildcard misc/*.cc) \
+	$(wildcard transport/*.cc)
 
 ##### lib files
 LIBNAME     := libnccl.so
@@ -45,7 +43,7 @@ LIBOBJ     := $(LIBSRCFILES:%.cc=$(OBJDIR)/%.o)
 DEPFILES   := $(LIBOBJ:%.o=%.d)
 LDFLAGS    += -L${CUDA_LIB} -l$(CUDARTLIB) -lpthread -lrt -ldl
 
-DEVICELIB  := $(BUILDDIR)/obj/collectives/device/colldevice.a
+DEVMANIFEST := $(BUILDDIR)/obj/device/manifest
 
 ##### rules
 build : lib staticlib
@@ -54,8 +52,8 @@ lib : $(INCTARGETS) $(LIBDIR)/$(LIBTARGET) $(PKGDIR)/$(PKGTARGET)
 
 staticlib : $(LIBDIR)/$(STATICLIBTARGET)
 
-$(DEVICELIB): ALWAYS_REBUILD $(INCTARGETS)
-	$(MAKE) -C collectives/device
+$(DEVMANIFEST): ALWAYS_REBUILD $(INCTARGETS)
+	$(MAKE) -C ./device
 
 # Empty target to force rebuild
 ALWAYS_REBUILD:
@@ -75,21 +73,17 @@ $(INCDIR)/nccl.h : nccl.h.in ../makefiles/version.mk
 	    -e "s/\$${nccl:Version}/$(NCCL_VERSION)/g" \
 	    $< > $@
 
-$(LIBDIR)/$(LIBTARGET): $(LIBOBJ) $(DEVICELIB)
+$(LIBDIR)/$(LIBTARGET): $(LIBOBJ) $(DEVMANIFEST)
 	@printf "Linking    %-35s > %s\n" $(LIBTARGET) $@
 	mkdir -p $(LIBDIR)
-	$(CXX) $(CXXFLAGS) -shared -Wl,--no-as-needed -Wl,-soname,$(LIBSONAME) -o $@ $(LIBOBJ) $(DEVICELIB) $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) -shared -Wl,--no-as-needed -Wl,-soname,$(LIBSONAME) -o $@ $(LIBOBJ) $$(cat $(DEVMANIFEST)) $(LDFLAGS)
 	ln -sf $(LIBSONAME) $(LIBDIR)/$(LIBNAME)
 	ln -sf $(LIBTARGET) $(LIBDIR)/$(LIBSONAME)
 
-null :=
-space := $(null) #
-comma := ,
-
-$(LIBDIR)/$(STATICLIBTARGET): $(LIBOBJ) $(DEVICELIB)
+$(LIBDIR)/$(STATICLIBTARGET): $(LIBOBJ) $(DEVMANIFEST)
 	@printf "Archiving  %-35s > %s\n" $(STATICLIBTARGET) $@
 	mkdir -p $(LIBDIR)
-	printf "create $@\naddlib $(DEVICELIB)\naddmod $(subst $(space),$(comma),$(strip $(LIBOBJ)))\nsave\nend" | ar -M
+	ar cr $@ $(LIBOBJ) $$(cat $(DEVMANIFEST))
 
 $(PKGDIR)/nccl.pc : nccl.pc.in
 	mkdir -p $(PKGDIR)
@@ -126,7 +120,7 @@ $(OBJDIR)/%.o : %.cc $(INCTARGETS)
 	@rm -f $(@:%.o=%.d.tmp)
 
 clean :
-	$(MAKE) -C collectives/device clean
+	$(MAKE) -C device clean
 	rm -rf ${INCDIR} ${LIBDIR} ${PKGDIR} ${OBJDIR}
 
 install : build

@@ -182,10 +182,32 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
     }
   }
 
-  // Clear all connect masks and free each connectInfo array
-  for (int i=1; i<comm->nRanks; i++) {
+  /* We need to sync ranks here since some ranks might run too fast after connection setup
+   * and start to destroy the connection after returning from this function; however, the
+   * others might still be trying to connect and import the buffer. No sync can lead to invalid
+   * shmem/cuda buffer. In addition, we also clear all connect masks and free each connectInfo array */
+  for (int i = 1; i < comm->nRanks; i++) {
+    int bootstrapTag = (i << 8) + (graph ? graph->id + 1 : 0);
     int recvPeer = (comm->rank - i + comm->nRanks) % comm->nRanks;
     int sendPeer = (comm->rank + i) % comm->nRanks;
+    int flag = 0;
+
+    if (recvPeer != sendPeer) {
+      if (comm->connectSend[sendPeer] != 0UL)
+        NCCLCHECKGOTO(bootstrapSend(comm->bootstrap, sendPeer, bootstrapTag, &flag, sizeof(int)), ret, fail);
+      if (comm->connectRecv[recvPeer] != 0UL)
+        NCCLCHECKGOTO(bootstrapSend(comm->bootstrap, recvPeer, bootstrapTag, &flag, sizeof(int)), ret, fail);
+
+      if (comm->connectSend[sendPeer] != 0UL)
+        NCCLCHECKGOTO(bootstrapRecv(comm->bootstrap, sendPeer, bootstrapTag, &flag, sizeof(int)), ret, fail);
+      if (comm->connectRecv[recvPeer] != 0UL)
+        NCCLCHECKGOTO(bootstrapRecv(comm->bootstrap, recvPeer, bootstrapTag, &flag, sizeof(int)), ret, fail);
+    } else {
+      if (comm->connectSend[sendPeer] != 0UL || comm->connectRecv[recvPeer] != 0UL) {
+        NCCLCHECKGOTO(bootstrapSend(comm->bootstrap, sendPeer, bootstrapTag, &flag, sizeof(int)), ret, fail);
+        NCCLCHECKGOTO(bootstrapRecv(comm->bootstrap, sendPeer, bootstrapTag, &flag, sizeof(int)), ret, fail);
+      }
+    }
     comm->connectRecv[recvPeer] = comm->connectSend[sendPeer] = 0UL;
     free(data[i]);
   }

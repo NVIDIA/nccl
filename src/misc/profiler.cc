@@ -61,7 +61,7 @@ void ncclProfilingDump() {
   static int dumpDone = 0;
   if (dumpDone) return;
   dumpDone = 1;
-  const char* str = getenv("NCCL_PROXY_PROFILE");
+  const char* str = ncclGetEnv("NCCL_PROXY_PROFILE");
   if (!str) { free(profilingEvents); return; }
   FILE* f = fopen(str, "w");
   fprintf(f, "[\n");

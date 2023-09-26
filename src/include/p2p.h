@@ -12,7 +12,7 @@
 #define NCCL_P2P_HANDLE_TYPE CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR
 
 typedef struct {
-  int data; // Currently only support an fd based descriptor
+  uint64_t data; // Needs to hold a CUmemGenericAllocationHandle for UDS fd support
 } ncclCuDesc;
 
 typedef union {

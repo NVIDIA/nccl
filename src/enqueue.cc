@@ -401,9 +401,9 @@ static ncclResult_t registerIntraNodeBuffers(
       /* tweak NVLS channels usage; for registered NVLS buffer, we only need 4/5 channels to
        * saturate bandwidth. */
       if (info->coll == ncclFuncReduceScatter)
-        info->nChannels = std::max(comm->config.minCTAs, std::min(comm->config.maxCTAs, 5));
+        info->nChannels = std::min(5, comm->nvlsChannels);
       else
-        info->nChannels = std::max(comm->config.minCTAs, std::min(comm->config.maxCTAs, 4));
+        info->nChannels = std::min(4, comm->nvlsChannels);
       *outRegBufType = NCCL_NVLS_REG_BUFFER;
     }
   } else if (info->algorithm == NCCL_ALGO_COLLNET_DIRECT &&   // limited to CollNetDirect for now
@@ -1358,6 +1358,7 @@ static ncclResult_t computeColl(struct ncclInfo* info /* input */, int* workFunc
     work->lastChunkSize = chunkSize / ncclTypeSize(info->datatype);
   } else if (info->algorithm == NCCL_ALGO_NVLS) {
     int maxChunkSize = 131072;
+    if (info->comm->nNodes > 1 && info->comm->bandwidths[ncclFuncAllReduce][NCCL_ALGO_NVLS][NCCL_PROTO_SIMPLE] < 150) maxChunkSize = 32768;
     if (chunkSize > maxChunkSize) chunkSize = maxChunkSize;
     // Use uint64_t so that concurrentOps*chunkSize*X does not overflow
     uint64_t concurrentOps = info->nChannels*info->comm->channels[0].nvls.nHeads;
@@ -1368,6 +1369,7 @@ static ncclResult_t computeColl(struct ncclInfo* info /* input */, int* workFunc
   } else if (info->algorithm == NCCL_ALGO_NVLS_TREE) {
     // Use uint64_t so that concurrentOps*chunkSize*X does not overflow
     uint64_t concurrentOps = info->nChannels*info->comm->channels[0].nvls.nHeads;
+    if (info->comm->nNodes >= 4) chunkSize = 65536;
     if ((info->nBytes < (32 * (concurrentOps*chunkSize))) && (chunkSize > 262144)) chunkSize = 262144;
     if ((info->nBytes < (16 * (concurrentOps*chunkSize))) && (chunkSize > 131072)) chunkSize = 131072;
     if ((info->nBytes < (4 * (concurrentOps*chunkSize))) && (chunkSize > 65536)) chunkSize = 65536;

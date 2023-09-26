@@ -1174,7 +1174,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
       int sendNode = (node+delta)%nNodes;
       for (int step=0; step < steps; step++) {
         int recvIndex = (localRank-step+steps)%steps;
-	int recvRank = recvIndex < nodeRanks[recvNode].localRanks ? nodeRanks[recvNode].localRankToRank[recvIndex] : -1;
+        int recvRank = recvIndex < nodeRanks[recvNode].localRanks ? nodeRanks[recvNode].localRankToRank[recvIndex] : -1;
         tasks->p2pRecvOrder[i] = recvRank;
         int sendIndex = (localRank+step)%steps;
         int sendRank = sendIndex < nodeRanks[sendNode].localRanks ? nodeRanks[sendNode].localRankToRank[sendIndex] : -1;

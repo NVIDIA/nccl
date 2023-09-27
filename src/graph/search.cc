@@ -387,6 +387,8 @@ ncclResult_t ncclTopoSelectNets(struct ncclTopoSystem* system, int typeInter, in
       NCCLCHECK(ncclTopoIdToIndex(system, NET, netId, localNets+localNetCount));
       if (localNetCount > 0 && localNets[localNetCount] == localNets[0]) break;
       localNetCount++;
+
+      if (localNetCount == system->nodes[NET].count) break;
     }
     // Append NICs to list
     for (int i=0; i<localNetCount; i++) {

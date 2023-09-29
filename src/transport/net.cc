@@ -1069,7 +1069,7 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
           }
           if (ready) {
             // Data is ready, try to send.
-            for (uint64_t step=sub->transmitted-args->sliceSteps; step<sub->transmitted; step++) {
+            for (uint64_t step=sub->transmitted; step<sub->transmitted+args->sliceSteps; step++) {
               nvtxRangeEnd(sub->opRangeIds[step]);
               sub->opRangeIds[step] = nvtxDomainRangeStartEx(proxyState->nvtxDomain, &proxyState->eventAttrs.sendNetPost);
             }

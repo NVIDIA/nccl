@@ -693,12 +693,6 @@ static ncclResult_t ncclTopoGetNchannels(struct ncclTopoSystem* system, int g /*
 NCCL_PARAM(MinP2pNChannels, "MIN_P2P_NCHANNELS", 1);
 NCCL_PARAM(MaxP2pNChannels, "MAX_P2P_NCHANNELS", MAXCHANNELS);
 
-static int nextPow2(int v) {
-  int pow2 = 1;
-  while (pow2 < v) pow2 <<= 1;
-  return pow2;
-}
-
 ncclResult_t ncclTopoComputeP2pChannels(struct ncclComm* comm) {
   /* here we already honor comm->max/minCTAs for p2pnChannels. */
   if (comm->sharedRes->owner != comm) {

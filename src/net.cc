@@ -166,14 +166,31 @@ enum ncclNetState ncclNetStates[3] = { ncclNetStateInit, ncclNetStateInit, ncclN
 enum ncclNetState ncclCollNetStates[3] = { ncclNetStateInit, ncclNetStateInit, ncclNetStateInit };
 
 ncclResult_t ncclNetPluginInit() {
-  char ncclNetPluginName[128];
+  char ncclNetPluginName[PATH_MAX];
+  int ncclNetPluginNameGenLen = -1;
   const char* envPluginName = getenv("NCCL_NET_PLUGIN");
-  if (envPluginName && strlen(envPluginName)) {
-    snprintf(ncclNetPluginName, 128, "libnccl-net-%s.so", envPluginName);
-    INFO(NCCL_INIT, "Plugin name set by env to %s", ncclNetPluginName);
+  const char* envPluginPath = getenv("NCCL_NET_PLUGIN_PATH");
+  if (envPluginPath && strlen(envPluginPath)) {
+    if (envPluginName) {
+      INFO(NCCL_INIT, "NCCL_NET_PLUGIN_PATH=%s will override NCCL_NET_PLUGIN=%s", envPluginPath, envPluginName);
+    }
+    ncclNetPluginNameGenLen = snprintf(ncclNetPluginName, PATH_MAX, "%s", envPluginPath);
+    INFO(NCCL_INIT, "Plugin set by env NCCL_NET_PLUGIN_PATH to %s", envPluginPath);
+  } else if (envPluginName && strlen(envPluginName)) {
+    ncclNetPluginNameGenLen = snprintf(ncclNetPluginName, PATH_MAX, "libnccl-net-%s.so", envPluginName);
+    INFO(NCCL_INIT, "Plugin name set by env NCCL_NET_PLUGIN to libnccl-net-%s.so", envPluginName);
   } else {
-    sprintf(ncclNetPluginName, "libnccl-net.so");
+    ncclNetPluginNameGenLen = snprintf(ncclNetPluginName, PATH_MAX, "libnccl-net.so");
   }
+  
+  if (ncclNetPluginNameGenLen < 0) {
+    INFO(NCCL_INIT|NCCL_NET, "NET/Plugin : Error formatting plugin name, using internal implementation");
+    return ncclSuccess;
+  } else if (ncclNetPluginNameGenLen >= PATH_MAX) {
+    INFO(NCCL_INIT|NCCL_NET, "NET/Plugin : Error: using the specified plugin name or path would exceed PATH_MAX, using internal implementation");
+    return ncclSuccess;
+  }
+  
   void* netPluginLib = dlopen(ncclNetPluginName, RTLD_NOW | RTLD_LOCAL);
   if (netPluginLib == nullptr) {
     INFO(NCCL_INIT|NCCL_NET, "NET/Plugin : Plugin load (%s) returned %d : %s", ncclNetPluginName, errno, dlerror());

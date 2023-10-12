@@ -16,6 +16,7 @@
 #include "enqueue.h"
 #include "graph.h"
 #include "argcheck.h"
+#include "profiler.h"
 #include <fcntl.h>
 #include <string.h>
 #include <errno.h>
@@ -81,6 +82,7 @@ static ncclResult_t ncclInit() {
     // Always initialize bootstrap network
     NCCLCHECK(bootstrapNetInit());
     NCCLCHECK(ncclNetPluginInit());
+    NCCLCHECK(ncclProfilerInit());
 
     initNvtxRegisteredEnums();
     __atomic_store_n(&initialized, true, __ATOMIC_RELEASE);

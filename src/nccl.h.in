@@ -31,7 +31,9 @@ typedef struct ncclComm* ncclComm_t;
 #define NCCL_COMM_NULL NULL
 
 #define NCCL_UNIQUE_ID_BYTES 128
-typedef struct { char internal[NCCL_UNIQUE_ID_BYTES]; } ncclUniqueId;
+typedef struct {
+    char internal[NCCL_UNIQUE_ID_BYTES];
+} ncclUniqueId __attribute__((aligned(8)));
 
 /* Error type */
 typedef enum { ncclSuccess                 =  0,

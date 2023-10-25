@@ -7,7 +7,7 @@
 #ifndef NCCL_TRANSPORT_H_
 #define NCCL_TRANSPORT_H_
 
-#include "devcomm.h"
+#include "device.h"
 #include "graph.h"
 #include "nvmlwrap.h"
 #include "core.h"
@@ -65,6 +65,7 @@ struct ncclNvlsSharedRes {
   CUmemGenericAllocationHandle ucHandle; // Unicast Handle for NVLS buffer
   char* ucBuff; // Unicast NVLS buffer address
   char shareableHandle[NVLS_HANDLE_SIZE];
+  size_t ucGran;
   int nChannels;
 };
 
@@ -102,8 +103,20 @@ struct ncclTransport {
 ncclResult_t ncclTransportP2pConnect(struct ncclComm* comm, int channelId, int nrecv, int* peerRecv, int nsend, int* peerSend, int connIndex);
 ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, int connIndex, int* highestTransportType=NULL);
 
+// Currently we only support POSIX_FILE_DESCRIPTOR handle exchange
+#define USE_POSIX_FD 1
+
+#if USE_POSIX_FD
+#define NVLS_CU_MEM_HANDLE_TYPE CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR
+#else
+#define NVLS_CU_MEM_HANDLE_TYPE CU_MEM_HANDLE_TYPE_NONE
+#endif
+
 ncclResult_t ncclNvlsInit(struct ncclComm* comm);
 ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent);
+ncclResult_t ncclNvlsGraphRegisterBuffer(struct ncclComm *comm, struct ncclKernelPlan *plan, const void *sendbuff, void *recvbuff, size_t sendbuffSize, size_t recvbuffSize, bool *outRegBufUsed, void **outRegBufSend, void **outRegBufRecv);
+ncclResult_t ncclNvlsLocalRegisterBuffer(struct ncclComm *comm, const void *sendbuff, void *recvbuff, size_t sendbuffSize, size_t recvbuffSize, bool *outRegBufUsed, void **outRegBufSend, void **outRegBufRecv);
+ncclResult_t ncclNvlsDeregBuffer(CUmemGenericAllocationHandle *mcHandler, CUdeviceptr ptr, int dev, size_t size);
 ncclResult_t ncclNvlsFree(struct ncclComm* comm);
 
 enum { collNetRecv=0, collNetSend=1 };

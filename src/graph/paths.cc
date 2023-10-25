@@ -70,7 +70,7 @@ static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclT
         if ((remPath->bw == 0 || remPath->count > path->count) && remPath->bw < bw) {
           // Find reverse link
           for (int l=0; l<remNode->nlinks; l++) {
-            if (remNode->links[l].remNode == node) {
+            if (remNode->links[l].remNode == node && remNode->links[l].type == link->type) {
               remPath->list[0] = remNode->links+l;
               break;
             }
@@ -126,7 +126,7 @@ static void printNodePaths(struct ncclTopoSystem* system, struct ncclTopoNode* n
       for (int i=0; i<node->paths[t][n].count; i++) {
         struct ncclTopoLink* link = node->paths[t][n].list[i];
         struct ncclTopoNode* remNode = link->remNode;
-        sprintf(line+offset, "--%s->%s/%lX", topoLinkTypeStr[link->type], topoNodeTypeStr[remNode->type], remNode->id);
+        sprintf(line+offset, "--%s(%g)->%s/%lX", topoLinkTypeStr[link->type], link->bw, topoNodeTypeStr[remNode->type], remNode->id);
         offset = strlen(line);
       }
       INFO(NCCL_GRAPH, "%s (%f)", line, node->paths[t][n].bw);
@@ -212,14 +212,14 @@ ncclResult_t ncclGetLevel(int* level, const char* disableEnv, const char* levelE
   if (*level == -1) {
     int l = -1;
     if (disableEnv) {
-      char* str = getenv(disableEnv);
+      const char* str = ncclGetEnv(disableEnv);
       if (str) {
         int disable = strtol(str, NULL, 0);
         if (disable == 1) l = 0;
       }
     }
     if (l == -1) {
-      char* str = getenv(levelEnv);
+      const char* str = ncclGetEnv(levelEnv);
       if (str) {
         for (int i=0; i<=PATH_SYS; i++) {
           if (strcmp(str, topoPathTypeStr[i]) == 0) {
@@ -318,14 +318,15 @@ compare:
         status = ncclNvmlDevicePairs[indexes[i-1]][indexes[i-0]].p2pStatusWrite;
         good &= status == NVML_P2P_STATUS_OK;
         if (!good) {
-          if (ncclParamIgnoreDisabledP2p()) {
-            *p2p = 0;
-          } else if (path->type <= PATH_NVB) {
-            WARN("P2P is disabled between NVLINK connected GPUs %d and %d. This should not be the case given their connectivity, and is probably due to a hardware issue. If you still want to proceed, you can set NCCL_IGNORE_DISABLED_P2P=1.", indexes[i-1], indexes[i-0]);
-            return ncclUnhandledCudaError;
-          } else if (path->type < PATH_SYS) {
-            INFO(NCCL_INIT, "P2P is disabled between connected GPUs %d and %d. You can repress this message with NCCL_IGNORE_DISABLED_P2P=1.", indexes[i-1], indexes[i-0]);
+          if (!ncclParamIgnoreDisabledP2p()) {
+            if (path->type <= PATH_NVB) {
+              WARN("P2P is disabled between NVLINK connected GPUs %d and %d. This should not be the case given their connectivity, and is probably due to a hardware issue. If you still want to proceed, you can set NCCL_IGNORE_DISABLED_P2P=1.", indexes[i-1], indexes[i-0]);
+              return ncclUnhandledCudaError;
+            } else if (path->type < PATH_SYS) {
+              INFO(NCCL_INIT, "P2P is disabled between connected GPUs %d and %d. You can repress this message with NCCL_IGNORE_DISABLED_P2P=1.", indexes[i-1], indexes[i-0]);
+            }
           }
+          *p2p = 0;
         }
       }
     }
@@ -360,7 +361,8 @@ ncclResult_t ncclTopoCheckGdr(struct ncclTopoSystem* system, int64_t busId, int 
   if (read) { // For reads (sends) only enable under certain conditions
     int gdrReadParam = ncclParamNetGdrRead();
     if (gdrReadParam == 0) return ncclSuccess;
-    if (gdrReadParam < 0) {
+    // Disable GDR Reads pre-Ampere when we have other PCI flows
+    if (gdrReadParam < 0 && gpu->gpu.cudaCompCap < 80) {
       int nvlink = 0;
       // Since we don't know whether there are other communicators,
       // it's better to keep things local if we have a single GPU.
@@ -400,7 +402,7 @@ ncclResult_t ncclTopoCheckGdr(struct ncclTopoSystem* system, int64_t busId, int 
 }
 
 // Set to 0 to disable the flush on Hopper when using GDR
-NCCL_PARAM(NetForceFlush, "NET_FORCE_FLUSH", 1);
+NCCL_PARAM(NetForceFlush, "NET_FORCE_FLUSH", 0);
 
 // Determine whether we need to flush the GDR recv buffers
 ncclResult_t ncclTopoNeedFlush(struct ncclTopoSystem* system, int64_t busId, int* flush) {

@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <ifaddrs.h>
 #include <net/if.h>
+#include "param.h"
 
 static ncclResult_t socketProgressOpt(int op, struct ncclSocket* sock, void* ptr, int size, int* offset, int block, int* closed) {
   int bytes = 0;
@@ -84,7 +85,7 @@ static uint16_t socketToPort(union ncclSocketAddress *addr) {
 /* Allow the user to force the IPv4/IPv6 interface selection */
 static int envSocketFamily(void) {
   int family = -1; // Family selection is not forced, will use first one found
-  char* env = getenv("NCCL_SOCKET_FAMILY");
+  const char* env = ncclGetEnv("NCCL_SOCKET_FAMILY");
   if (env == NULL)
     return family;
 
@@ -325,7 +326,7 @@ int ncclFindInterfaces(char* ifNames, union ncclSocketAddress *ifAddrs, int ifNa
   // Allow user to force the INET socket family selection
   int sock_family = envSocketFamily();
   // User specified interface
-  char* env = getenv("NCCL_SOCKET_IFNAME");
+  const char* env = ncclGetEnv("NCCL_SOCKET_IFNAME");
   if (env && strlen(env) > 1) {
     INFO(NCCL_ENV, "NCCL_SOCKET_IFNAME set by environment to %s", env);
     // Specified by user : find or fail
@@ -337,10 +338,10 @@ int ncclFindInterfaces(char* ifNames, union ncclSocketAddress *ifAddrs, int ifNa
     nIfs = findInterfaces("ib", ifNames, ifAddrs, sock_family, ifNameMaxSize, maxIfs);
     // else see if we can get some hint from COMM ID
     if (nIfs == 0) {
-      char* commId = getenv("NCCL_COMM_ID");
+      const char* commId = ncclGetEnv("NCCL_COMM_ID");
       if (commId && strlen(commId) > 1) {
-	INFO(NCCL_ENV, "NCCL_COMM_ID set by environment to %s", commId);
-	// Try to find interface that is in the same subnet as the IP in comm id
+        INFO(NCCL_ENV, "NCCL_COMM_ID set by environment to %s", commId);
+        // Try to find interface that is in the same subnet as the IP in comm id
         union ncclSocketAddress idAddr;
         ncclSocketGetAddrFromString(&idAddr, commId);
         nIfs = ncclFindInterfaceMatchSubnet(ifNames, ifAddrs, &idAddr, ifNameMaxSize, maxIfs);

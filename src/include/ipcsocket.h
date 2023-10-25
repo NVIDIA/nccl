@@ -30,6 +30,7 @@ struct ncclIpcSocket {
 
 ncclResult_t ncclIpcSocketInit(struct ncclIpcSocket *handle, int rank, uint64_t hash, volatile uint32_t* abortFlag);
 ncclResult_t ncclIpcSocketClose(struct ncclIpcSocket *handle);
+ncclResult_t ncclIpcSocketGetFd(struct ncclIpcSocket* handle, int* fd);
 
 ncclResult_t ncclIpcSocketRecvFd(struct ncclIpcSocket *handle, int *fd);
 ncclResult_t ncclIpcSocketSendFd(struct ncclIpcSocket *handle, const int fd, int rank, uint64_t hash);

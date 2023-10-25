@@ -333,6 +333,8 @@ ncclResult_t ncclIbGetProperties(int dev, ncclNetProperties_t* props) {
   props->port = ncclIbDevs[dev].port + ncclIbDevs[dev].realPort;
   props->maxComms = ncclIbDevs[dev].maxQp;
   props->maxRecvs = NCCL_NET_IB_MAX_RECVS;
+  props->netDeviceType    = NCCL_NET_DEVICE_HOST;
+  props->netDeviceVersion = NCCL_NET_DEVICE_INVALID_VERSION;
   return ncclSuccess;
 }
 
@@ -347,6 +349,10 @@ struct ncclIbQpInfo {
   uint8_t ib_port;
   uint8_t link_layer;
   uint32_t qpn[NCCL_IB_MAX_QPS];
+
+  // Fields needed for ece (enhanced connection establishment)
+  struct ibv_ece ece[NCCL_IB_MAX_QPS];
+  int ece_supported[NCCL_IB_MAX_QPS];
 
   // For RoCE
   uint64_t spn;
@@ -608,7 +614,7 @@ ncclResult_t ncclIbListen(int dev, void* opaqueHandle, void** listenComm) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclIbConnect(int dev, void* opaqueHandle, void** sendComm) {
+ncclResult_t ncclIbConnect(int dev, void* opaqueHandle, void** sendComm, ncclNetDeviceHandle_t** /*sendDevComm*/) {
   struct ncclIbHandle* handle = (struct ncclIbHandle*) opaqueHandle;
   struct ncclIbCommStage* stage = &handle->stage;
   struct ncclIbSendComm* comm = (struct ncclIbSendComm*)stage->comm;
@@ -652,7 +658,13 @@ ib_connect_check:
   NCCLCHECK(wrap_ibv_query_port(ctx, ib_port, &portAttr));
   struct ncclIbQpInfo qpInfo;
   qpInfo.ib_port = ib_port;
-  for (int q=0; q<comm->nqps; q++) qpInfo.qpn[q] = comm->qps[q]->qp_num;
+  for (int q=0; q<comm->nqps; q++) {
+    qpInfo.qpn[q] = comm->qps[q]->qp_num;
+
+    // Query ece capabilities (enhanced connection establishment)
+    NCCLCHECK(wrap_ibv_query_ece(comm->qps[q], &qpInfo.ece[q], &qpInfo.ece_supported[q]));
+  }
+
   qpInfo.mtu = portAttr.active_mtu;
 
   // Prepare my fifo
@@ -663,15 +675,20 @@ ib_connect_check:
   // RoCE support
   qpInfo.lid = portAttr.lid;
   qpInfo.link_layer = comm->gidInfo.link_layer = portAttr.link_layer;
-  if (qpInfo.link_layer == IBV_LINK_LAYER_INFINIBAND) { // IB
-    for (int q=0; q<comm->nqps; q++)
-      INFO(NCCL_NET,"NET/IB: Dev %d Port %d qpn %d mtu %d LID %d", dev, ib_port, qpInfo.qpn[q], qpInfo.mtu, qpInfo.lid);
-  } else { // RoCE
-    NCCLCHECK(wrap_ibv_query_gid(ctx, ib_port, ncclParamIbGidIndex(), &comm->gidInfo.localGid));
+  if (qpInfo.link_layer == IBV_LINK_LAYER_ETHERNET) {
+    NCCLCHECK(wrap_ibv_query_gid(ncclIbDevs[dev].context, ncclIbDevs[dev].port, ncclParamIbGidIndex(), &comm->gidInfo.localGid));
     qpInfo.spn = comm->gidInfo.localGid.global.subnet_prefix;
     qpInfo.iid = comm->gidInfo.localGid.global.interface_id;
+  }
+
+  if (qpInfo.link_layer == IBV_LINK_LAYER_INFINIBAND) { // IB
     for (int q=0; q<comm->nqps; q++)
-      INFO(NCCL_NET,"NET/IB: Dev %d Port %d qpn %d mtu %d GID %ld (%lX/%lX)", dev, ib_port, qpInfo.qpn[q], qpInfo.mtu, ncclParamIbGidIndex(), qpInfo.spn, qpInfo.iid);
+      INFO(NCCL_NET,"NET/IB: Dev %d Port %d qpn %d mtu %d LID %d", dev, ncclIbDevs[dev].port, qpInfo.qpn[q], qpInfo.mtu, qpInfo.lid);
+  } else { // RoCE
+    for (int q=0; q<comm->nqps; q++)
+      INFO(NCCL_NET,"NET/IB: Dev %d Port %d qpn %d mtu %d query_ece={supported=%d, vendor_id=0x%x, options=0x%x, comp_mask=0x%x} GID %ld (%lX/%lX)",
+        dev, ncclIbDevs[dev].port, qpInfo.qpn[q], qpInfo.mtu, qpInfo.ece_supported[q], qpInfo.ece[q].vendor_id, qpInfo.ece[q].options, qpInfo.ece[q].comp_mask, ncclParamIbGidIndex(),
+        qpInfo.spn, qpInfo.iid);
   }
 
   stage->state = ncclIbCommStateSend;
@@ -699,8 +716,17 @@ ib_connect:
   comm->gidInfo.remoteGid.global.interface_id = remQpInfo.iid;
   for (int q=0; q<comm->nqps; q++) {
     struct ibv_qp* qp = comm->qps[q];
+    if (remQpInfo.ece_supported[q] && qpInfo.ece_supported[q])
+      NCCLCHECK(wrap_ibv_set_ece(qp, &remQpInfo.ece[q], &qpInfo.ece_supported[q]));
+
     NCCLCHECK(ncclIbRtrQp(qp, remQpInfo.qpn[q], &remQpInfo));
     NCCLCHECK(ncclIbRtsQp(qp));
+  }
+
+  if (qpInfo.link_layer == IBV_LINK_LAYER_ETHERNET ) { // RoCE
+    for (int q=0; q<comm->nqps; q++)
+      INFO(NCCL_NET,"NET/IB: Dev %d Port %d qpn %d set_ece={supported=%d, vendor_id=0x%x, options=0x%x, comp_mask=0x%x}",
+        dev, ncclIbDevs[dev].port, qpInfo.qpn[q], remQpInfo.ece_supported[q], remQpInfo.ece[q].vendor_id, remQpInfo.ece[q].options, remQpInfo.ece[q].comp_mask);
   }
 
   comm->ready = 1;
@@ -720,7 +746,7 @@ ib_send_ready:
 
 NCCL_PARAM(IbGdrFlushDisable, "GDR_FLUSH_DISABLE", 0);
 
-ncclResult_t ncclIbAccept(void* listenComm, void** recvComm) {
+ncclResult_t ncclIbAccept(void* listenComm, void** recvComm, ncclNetDeviceHandle_t** /*recvDevComm*/) {
   struct ncclIbListenComm* lComm = (struct ncclIbListenComm*)listenComm;
   struct ncclIbCommStage* stage = &lComm->stage;
   struct ncclIbRecvComm* rComm = (struct ncclIbRecvComm*)stage->comm;
@@ -781,8 +807,21 @@ ib_recv:
   remQpInfo.mtu = (enum ibv_mtu)std::min(remQpInfo.mtu, portAttr.active_mtu);
 
   // Setup QP
+  struct ncclIbQpInfo qpInfo;
   for (int q=0; q<rComm->nqps; q++) {
     struct ibv_qp* qp = rComm->qps[q];
+
+    // Set the ece (enhanced connection establishment) on this QP before RTR
+    if (remQpInfo.ece_supported[q]) {
+      NCCLCHECK(wrap_ibv_set_ece(qp, &remQpInfo.ece[q], &qpInfo.ece_supported[q]));
+  
+      // Query the reduced ece for this QP (matching enhancements between the requestor and the responder)
+      // Store this in our own qpInfo for returning to the requestor
+      if (qpInfo.ece_supported[q]) {
+        NCCLCHECK(wrap_ibv_query_ece(qp, &qpInfo.ece[q], &qpInfo.ece_supported[q]));
+      }
+    }
+
     NCCLCHECK(ncclIbRtrQp(qp, remQpInfo.qpn[q], &remQpInfo));
     NCCLCHECK(ncclIbRtsQp(qp));
   }
@@ -815,7 +854,6 @@ ib_recv:
   }
 
   // Fill Handle
-  struct ncclIbQpInfo qpInfo;
   qpInfo.lid=portAttr.lid;
   qpInfo.link_layer= rComm->gidInfo.link_layer = portAttr.link_layer;
   qpInfo.ib_port=ib_port;
@@ -1380,6 +1418,8 @@ ncclNet_t ncclNetIb = {
   ncclIbTest,
   ncclIbCloseSend,
   ncclIbCloseRecv,
-  ncclIbCloseListen
+  ncclIbCloseListen,
+  NULL /* getDeviceMr */,
+  NULL /* irecvConsumed */
 };
 

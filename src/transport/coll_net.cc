@@ -155,7 +155,7 @@ static ncclResult_t sendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   NCCLCHECK(ncclTopoCheckGdr(comm->topo, myInfo->busId, req.netDev, 1, &req.useGdr));
   send->conn.flags |= req.useGdr ? NCCL_DIRECT_NIC : 0;
 
-  NCCLCHECK(ncclTopoGetLocalRank(comm->topo, myInfo->rank, &send->proxyConn.tpLocalRank));
+  send->proxyConn.tpLocalRank = comm->topParentLocalRanks[comm->localRank];
   tpProxyRank = comm->topParentRanks[myInfo->rank];
   NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_COLLNET, 1, tpProxyRank, &send->proxyConn));
   ncclAtomicRefCountIncrement(&comm->collNetSharedRes->refCount);
@@ -177,7 +177,7 @@ static ncclResult_t recvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   // Determine whether we need to flush the GDR buffer on recv or not
   if (req.useGdr) NCCLCHECK(ncclTopoNeedFlush(comm->topo, myInfo->busId, &req.needFlush));
 
-  NCCLCHECK(ncclTopoGetLocalRank(comm->topo, myInfo->rank, &recv->proxyConn.tpLocalRank));
+  recv->proxyConn.tpLocalRank = comm->topParentLocalRanks[comm->localRank];
   tpProxyRank = comm->topParentRanks[myInfo->rank];
   NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_COLLNET, 0, tpProxyRank, &recv->proxyConn));
   struct collNetRecvConnectInfo* info = (struct collNetRecvConnectInfo*) connectInfo;
@@ -224,6 +224,8 @@ struct collNetConnectArgs {
   struct ncclConnect* connectInfos;
 };
 
+static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct ncclProxyArgs* args);
+
 static ncclResult_t sendConnect(struct ncclComm* comm, struct ncclConnect* connectInfos, int nranks, int rank, struct ncclConnector* send) {
   // We're on the same process as the proxy. We can pass a pointer to a struct.
   struct collNetConnectArgs args = { rank, nranks, connectInfos };
@@ -247,8 +249,13 @@ static ncclResult_t sendConnect(struct ncclComm* comm, struct ncclConnect* conne
 
   for (int p=0; p<NCCL_NUM_PROTOCOLS; p++)
     send->conn.buffs[p] = NCCL_NET_MAP_GET_POINTER(map, gpu, buffs[p]);
+
+  send->proxyConn.proxyProgress = sendProxyProgress;
+
   return ncclSuccess;
 }
+
+static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct ncclProxyArgs* args);
 
 static ncclResult_t recvConnect(struct ncclComm* comm, struct ncclConnect* connectInfos, int nranks, int rank, struct ncclConnector* recv) {
   // We're on the same process as the proxy. We can pass a pointer to a struct.
@@ -272,6 +279,9 @@ static ncclResult_t recvConnect(struct ncclComm* comm, struct ncclConnect* conne
   for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) {
     recv->conn.buffs[p] = NCCL_NET_MAP_GET_POINTER(map, gpu, buffs[p]);
   }
+
+  recv->proxyConn.proxyProgress = recvProxyProgress;
+
   return ncclSuccess;
 }
 

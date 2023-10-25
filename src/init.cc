@@ -16,6 +16,7 @@
 #include "enqueue.h"
 #include "graph.h"
 #include "argcheck.h"
+#include "tuner.h"
 #include <fcntl.h>
 #include <string.h>
 #include <errno.h>
@@ -24,6 +25,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "param.h"
 
 #define STR2(v) #v
 #define STR(v) STR2(v)
@@ -177,7 +179,13 @@ static ncclResult_t commFree(ncclComm_t comm) {
    * free all intra-process communicators; therefore, we only need to focus on local
    * resource cleanup in commFree(). */
   if (comm->proxyState && comm->proxyRefCountOld == 0 && comm->proxyState->thread) {
-    pthread_join(comm->proxyState->thread, nullptr);
+    if (*comm->abortFlag == 0) {
+      /* regular thread join */
+      pthread_join(comm->proxyState->thread, nullptr);
+    } else {
+      /* try to detach thread due to abort */
+      ncclProxyTryDetach(comm->proxyState);
+    }
   }
 
   delete[] comm->userRedOps;
@@ -211,7 +219,7 @@ static ncclResult_t commFree(ncclComm_t comm) {
       free(comm->sharedRes->tpRankToLocalRank);
       NCCLCHECK(ncclStrongStreamDestruct(&comm->sharedRes->hostStream));
       NCCLCHECK(ncclStrongStreamDestruct(&comm->sharedRes->deviceStream));
-      NCCLCHECK(ncclProxyDestroy(comm));
+      NCCLCHECK(ncclProxyDestroy(comm->sharedRes->proxyState));
       free(comm->sharedRes);
     }
   }
@@ -229,12 +237,24 @@ static ncclResult_t commFree(ncclComm_t comm) {
 
   if (ncclAtomicRefCountDecrement(comm->abortFlagRefCount) == 0) {
     NCCLCHECK(ncclCudaHostFree((void *)comm->abortFlag));
-    free(comm->abortFlagRefCount);
+    free((void*)comm->abortFlagRefCount);
   }
   free((void*)comm->config.netName);
 
   free(comm->topParentRanks);
   free(comm->topParentLocalRanks);
+
+  while (!ncclIntruQueueEmpty(&comm->regRecordQueue)) {
+    struct ncclRegRecord* rec = ncclIntruQueueDequeue(&comm->regRecordQueue);
+    NCCLCHECK(ncclNvlsDeregBuffer(&rec->mcHandle, rec->regAddr, rec->dev, rec->regSize));
+    free(rec->addrs);
+    free(rec);
+  }
+
+  while (!ncclIntruQueueEmpty(&comm->regRequestQueue)) {
+    struct ncclRegRequest* req = ncclIntruQueueDequeue(&comm->regRequestQueue);
+    free(req);
+  }
 
   commPoison(comm); // poison comm before free to avoid comm reuse.
   free(comm);
@@ -275,7 +295,7 @@ ncclResult_t ncclCommEnsureReady(ncclComm_t comm) {
   ncclResult_t ret = ncclSuccess;
 
   if (*comm->abortFlag) {
-    ncclGroupJobAbort();
+    ncclGroupJobAbort(comm->groupJob);
   } else {
     NCCLCHECK(ncclCommGetAsyncError(comm, &ret));
     if (ret != ncclSuccess) {
@@ -283,6 +303,11 @@ ncclResult_t ncclCommEnsureReady(ncclComm_t comm) {
       WARN("Attempt to use communicator before the previous operation returned ncclSuccess");
       if (ret == ncclInProgress) ret = ncclInvalidArgument;
       goto exit;
+    }
+    /* if there is linked group job, we should complete it. */
+    if (comm->groupJob) {
+      NCCLCHECK(ncclGroupJobComplete(comm->groupJob));
+      comm->groupJob = NULL;
     }
   }
 
@@ -338,6 +363,7 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
   ncclMemoryPoolConstruct(&comm->memPool_ncclKernelPlan);
   ncclMemoryPoolConstruct(&comm->memPool_ncclProxyOp);
   ncclMemoryPoolConstruct(&comm->memPool_ncclPointerList);
+  ncclMemoryPoolConstruct(&comm->memPool_ncclNvlsHandleList);
 
   comm->groupNext = reinterpret_cast<struct ncclComm*>(0x1);
   comm->preconnectNext = reinterpret_cast<struct ncclComm*>(0x1);
@@ -373,6 +399,8 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
       comm->topParentRanks[i] = i;
   }
 
+  ncclIntruQueueConstruct(&comm->regRequestQueue);
+  ncclIntruQueueConstruct(&comm->regRecordQueue);
   ncclIntruQueueMpscConstruct(&comm->callbackQueue);
   return ncclSuccess;
 }
@@ -393,6 +421,7 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
   for (int p=0; p < NCCL_NUM_PROTOCOLS; p++) {
     tmpCommAndChans.comm.buffSizes[p] = comm->buffSizes[p];
   }
+  tmpCommAndChans.comm.p2pChunkSize = comm->p2pChunkSize;
   tmpCommAndChans.comm.channels = &devCommAndChans->channels[0];
 
   comm->workFifoDepth = ncclParamWorkFifoDepth();
@@ -500,7 +529,6 @@ static ncclResult_t setupChannel(struct ncclComm* comm, int channelId, int rank,
 #define DEFAULT_LL_BUFFSIZE (NCCL_LL_LINES_PER_THREAD*NCCL_LL_MAX_NTHREADS*NCCL_STEPS*sizeof(union ncclLLFifoLine))
 #define DEFAULT_LL128_BUFFSIZE (NCCL_LL128_ELEMS_PER_THREAD*NCCL_LL128_MAX_NTHREADS*NCCL_STEPS*sizeof(uint64_t))
 #define DEFAULT_BUFFSIZE (1 << 22) /* 4MiB */
-#define DEFAULT_BUFFSIZE_ARM (1 << 20) /* 1MiB */
 NCCL_PARAM(BuffSize, "BUFFSIZE", -2);
 NCCL_PARAM(LlBuffSize, "LL_BUFFSIZE", -2);
 NCCL_PARAM(Ll128BuffSize, "LL128_BUFFSIZE", -2);
@@ -516,8 +544,6 @@ static ncclResult_t computeBuffSizes(struct ncclComm* comm) {
   int64_t envs[NCCL_NUM_PROTOCOLS] = { ncclParamLlBuffSize(), ncclParamLl128BuffSize(), ncclParamBuffSize() };
   int defaults[NCCL_NUM_PROTOCOLS] = { DEFAULT_LL_BUFFSIZE, DEFAULT_LL128_BUFFSIZE, DEFAULT_BUFFSIZE };
 
-  if (cpuArch == NCCL_TOPO_CPU_ARCH_ARM) defaults[NCCL_PROTO_SIMPLE] = DEFAULT_BUFFSIZE_ARM;
-
   for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) {
     comm->buffSizes[p] = envs[p] != -2 ? envs[p] : defaults[p];
   }
@@ -525,6 +551,10 @@ static ncclResult_t computeBuffSizes(struct ncclComm* comm) {
   if (comm->nNodes > 1) comm->p2pChunkSize = ncclParamP2pNetChunkSize();
   else if (ncclTopoPathAllNVLink(comm->topo)) comm->p2pChunkSize = ncclParamP2pNvlChunkSize();
   else comm->p2pChunkSize = ncclParamP2pPciChunkSize();
+
+  // Make sure P2P chunksize is not larger than coll chunksize.
+  if (comm->p2pChunkSize * NCCL_STEPS > comm->buffSizes[NCCL_PROTO_SIMPLE]) comm->p2pChunkSize = comm->buffSizes[NCCL_PROTO_SIMPLE]/NCCL_STEPS;
+
   if (comm->sharedRes->owner != comm) {
     /* make sure split comm p2pChunkSize won't exceed shared p2pChunkSize. */
     comm->p2pChunkSize = std::min(comm->p2pChunkSize, comm->sharedRes->tpP2pChunkSize);
@@ -606,7 +636,7 @@ static ncclResult_t collNetTrySetup(ncclComm_t comm, ncclComm_t parent, struct n
       if (share) {
         if (myinfo->isMaster) {
           comm->collNetSharedRes = parent->collNetSharedRes;
-          comm->collNetChannels = std::min(std::max(comm->nChannels, comm->nvlsChannels), parent->collNetSharedRes->nChannels);
+          comm->collNetChannels = std::min(comm->nChannels, parent->collNetSharedRes->nChannels);
           for (int c = 0; c < comm->collNetChannels; ++c)
             NCCLCHECKGOTO(initCollnetChannel(comm, c, parent, true), ret, fail);
         }
@@ -625,8 +655,7 @@ static ncclResult_t collNetTrySetup(ncclComm_t comm, ncclComm_t parent, struct n
   } else {
     /* this allocated buffer will be freed on proxy side */
     NCCLCHECK(ncclCalloc(&comm->collNetSharedRes, 1));
-    /* TODO: min or max? */
-    comm->collNetChannels = comm->collNetSharedRes->nChannels = std::max(comm->nChannels, comm->nvlsChannels);
+    comm->collNetChannels = comm->collNetSharedRes->nChannels = comm->nChannels;
     comm->collNetSharedRes->buffSize = comm->buffSizes[NCCL_PROTO_SIMPLE];
     for (int c = 0; c < comm->collNetChannels; c++) {
       struct ncclChannel* channel = comm->channels + c;
@@ -804,6 +833,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     int intraProcRank0 = -1, intraProcRank = -1, intraProcRanks = 0;
     for (int i = 0; i < nranks; i++) comm->minCompCap = std::min(comm->minCompCap, comm->peerInfo[rank].cudaCompCap);
     for (int i = 0; i < nranks; i++) comm->maxCompCap = std::max(comm->maxCompCap, comm->peerInfo[rank].cudaCompCap);
+
+    comm->nvlsRegSupport = 1;
     for (int i = 0; i < nranks; i++) {
       if ((comm->peerInfo[i].hostHash == comm->peerInfo[rank].hostHash)
           && (comm->peerInfo[i].pidHash == comm->peerInfo[rank].pidHash)) {
@@ -814,6 +845,16 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
         if (intraProcRank0 == rank && rank != i) {
           comm->peerInfo[i].comm->intraNext = comm->intraNext;
           comm->intraNext = comm->peerInfo[i].comm;
+        }
+      }
+
+      if (comm->nvlsRegSupport) {
+        for (int j = i + 1; j < nranks; j++) {
+          if (comm->peerInfo[i].hostHash == comm->peerInfo[j].hostHash &&
+            comm->peerInfo[i].pidHash == comm->peerInfo[j].pidHash) {
+            comm->nvlsRegSupport = 0;
+            break;
+          }
         }
       }
     }
@@ -859,7 +900,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
 
   // Determine local CollNet support
   if (collNetSupport(comm)) {
-    char *collNetEnable = getenv("NCCL_COLLNET_ENABLE");
+    const char *collNetEnable = ncclGetEnv("NCCL_COLLNET_ENABLE");
     if (collNetEnable != NULL) {
       INFO(NCCL_ALL, "NCCL_COLLNET_ENABLE set by environment to %s.", collNetEnable);
       if (strcmp(collNetEnable, "1") == 0) {
@@ -872,22 +913,23 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   NCCLCHECK(ncclNvlsInit(comm));
 
   // Get rings and trees
+  memset(&ringGraph, 0, sizeof(struct ncclTopoGraph));
   ringGraph.id = 0;
   ringGraph.pattern = NCCL_TOPO_PATTERN_RING;
-  ringGraph.collNet = 0;
   ringGraph.minChannels = 1;
   ringGraph.maxChannels = MAXCHANNELS/2;
   NCCLCHECKGOTO(ncclTopoCompute(comm->topo, &ringGraph), ret, fail);
   NCCLCHECKGOTO(ncclTopoPrintGraph(comm->topo, &ringGraph), ret, fail);
 
+  memset(&treeGraph, 0, sizeof(struct ncclTopoGraph));
   treeGraph.id = 1;
   treeGraph.pattern = NCCL_TOPO_PATTERN_BALANCED_TREE;
-  treeGraph.collNet = 0;
   treeGraph.minChannels = ringGraph.nChannels;
   treeGraph.maxChannels = ringGraph.nChannels;
   NCCLCHECKGOTO(ncclTopoCompute(comm->topo, &treeGraph), ret, fail);
   NCCLCHECKGOTO(ncclTopoPrintGraph(comm->topo, &treeGraph), ret, fail);
 
+  memset(&collNetGraph, 0, sizeof(struct ncclTopoGraph));
   collNetGraph.id = 2;
   collNetGraph.pattern = NCCL_TOPO_PATTERN_TREE;
   collNetGraph.collNet = 1;
@@ -895,20 +937,16 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   if (comm->collNetSupport) {
     NCCLCHECKGOTO(ncclTopoCompute(comm->topo, &collNetGraph), ret, fail);
     NCCLCHECKGOTO(ncclTopoPrintGraph(comm->topo, &collNetGraph), ret, fail);
-  } else {
-    collNetGraph.nChannels = 0;
   }
 
+  memset(&nvlsGraph, 0, sizeof(struct ncclTopoGraph));
   nvlsGraph.id = 3;
   nvlsGraph.pattern = NCCL_TOPO_PATTERN_NVLS;
-  nvlsGraph.collNet = 0;
   nvlsGraph.minChannels = 1;
   nvlsGraph.maxChannels = MAXCHANNELS;
   if (comm->nvlsSupport) {
     NCCLCHECKGOTO(ncclTopoCompute(comm->topo, &nvlsGraph), ret, fail);
     NCCLCHECKGOTO(ncclTopoPrintGraph(comm->topo, &nvlsGraph), ret, fail);
-  } else {
-    nvlsGraph.nChannels = 0;
   }
 
   // Initialize num P2P LL buffers for this communicator
@@ -1136,7 +1174,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
       int sendNode = (node+delta)%nNodes;
       for (int step=0; step < steps; step++) {
         int recvIndex = (localRank-step+steps)%steps;
-	int recvRank = recvIndex < nodeRanks[recvNode].localRanks ? nodeRanks[recvNode].localRankToRank[recvIndex] : -1;
+        int recvRank = recvIndex < nodeRanks[recvNode].localRanks ? nodeRanks[recvNode].localRankToRank[recvIndex] : -1;
         tasks->p2pRecvOrder[i] = recvRank;
         int sendIndex = (localRank+step)%steps;
         int sendRank = sendIndex < nodeRanks[sendNode].localRanks ? nodeRanks[sendNode].localRankToRank[sendIndex] : -1;
@@ -1197,7 +1235,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   }
 
   if (comm->intraRank == 0) { // Load ncclParamLaunchMode
-    char* str = getenv("NCCL_LAUNCH_MODE");
+    const char* str = ncclGetEnv("NCCL_LAUNCH_MODE");
     enum ncclLaunchMode mode, modeOld;
     if (str && strcasecmp(str, "GROUP") == 0) {
       mode = ncclLaunchModeGroup;
@@ -1357,6 +1395,11 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
 
   NCCLCHECKGOTO(initTransportsRank(comm, job->parent), res, fail);
 
+  NCCLCHECKGOTO(ncclLoadTunerPlugin(&comm->tuner), res, fail);
+  if (comm->tuner) {
+    NCCLCHECK(comm->tuner->init(comm->nRanks, comm->nNodes, ncclDebugLog));
+  }
+
   // update communicator state
   comm->initState = ncclSuccess;
 
@@ -1425,7 +1468,7 @@ static ncclResult_t envConfigOverride(ncclComm_t comm) {
     comm->config.maxCTAs = maxCTAsEnv;
   }
 
-  envNetName = getenv("NCCL_NET");
+  envNetName = ncclGetEnv("NCCL_NET");
   if (envNetName)
     tmpNetName = envNetName;
   if (tmpNetName != NULL) {
@@ -1560,7 +1603,7 @@ static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm, int nranks, ncclUni
   ncclResult_t res = ncclSuccess;
   ncclComm_t comm = NULL;
   struct ncclCommInitRankAsyncJob *job = NULL;
-  char* env = getenv("NCCL_COMM_ID");
+  const char* env = ncclGetEnv("NCCL_COMM_ID");
   if (env && myrank == 0) {
     INFO(NCCL_ENV, "NCCL_COMM_ID set by environment to %s", env);
     NCCLCHECKGOTO(bootstrapCreateRoot((struct ncclBootstrapHandle*)&commId, true), res, fail);
@@ -1602,7 +1645,7 @@ exit:
 fail:
   if (comm) {
     if (comm->abortFlag) ncclCudaHostFree((void *)comm->abortFlag);
-    if (comm->abortFlagRefCount) free(comm->abortFlagRefCount);
+    if (comm->abortFlagRefCount) free((void*)comm->abortFlagRefCount);
     free(comm);
   }
   if (newcomm) *newcomm = NULL;
@@ -1775,6 +1818,11 @@ static ncclResult_t commCleanup(ncclComm_t comm) {
   CUDACHECK(cudaGetDevice(&savedDevice));
   if (savedDevice != commDevice) {
     CUDACHECK(cudaSetDevice(commDevice));
+  }
+
+  if (comm->tuner != NULL) {
+    NCCLCHECK(comm->tuner->destroy());
+    NCCLCHECK(ncclCloseTunerPlugin(&comm->tuner));
   }
 
   NCCLCHECK(commFree(comm));
@@ -1991,6 +2039,7 @@ ncclResult_t ncclCommSplit(ncclComm_t comm, int color, int key, ncclComm_t *newc
   NCCLCHECK(ncclGroupStartInternal());
   NCCLCHECKGOTO(PtrCheck(comm, "CommSplit", "comm"), res, fail);
   NCCLCHECKGOTO(PtrCheck(newcomm, "CommSplit", "newcomm"), res, fail);
+  NCCLCHECKGOTO(ncclCommEnsureReady(comm), res, fail);
 
   /* *newcomm should be NCCL_COMM_NULL until comm split fully complete. */
   *newcomm = NCCL_COMM_NULL;
@@ -2037,7 +2086,7 @@ fail:
   if (childComm) {
     if (comm && !comm->config.splitShare) {
       if (childComm->abortFlag) ncclCudaHostFree((void*)childComm->abortFlag);
-      if (childComm->abortFlagRefCount) free(childComm->abortFlagRefCount);
+      if (childComm->abortFlagRefCount) free((void*)childComm->abortFlagRefCount);
     }
     free(childComm);
   }
@@ -2074,6 +2123,7 @@ ncclResult_t ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t *asyncError) {
   NCCLCHECK(PtrCheck(asyncError, "ncclGetAsyncError", "asyncError"));
 
   *asyncError = __atomic_load_n(&comm->asyncResult, __ATOMIC_ACQUIRE);
+  if (*asyncError == ncclSuccess && comm->proxyState) *asyncError = __atomic_load_n(&comm->proxyState->asyncResult, __ATOMIC_ACQUIRE);
   return ncclSuccess;
 }
 
@@ -2115,4 +2165,209 @@ ncclResult_t ncclCommUserRank(const ncclComm_t comm, int* rank) {
 
   *rank = comm->rank;
   return ncclSuccess;
+}
+
+NCCL_PARAM(LocalRegister, "LOCAL_REGISTER", 1);
+
+NCCL_API(ncclResult_t, ncclCommRegister, const ncclComm_t comm, void* buff, size_t size, void** handle);
+ncclResult_t ncclCommRegister(const ncclComm_t comm, void* buff, size_t size, void** handle) {
+  NVTX3_FUNC_RANGE_IN(nccl_domain);
+  ncclResult_t ret = ncclSuccess;
+
+#if CUDART_VERSION >= 12010
+  size_t granularity;
+  if (ncclParamLocalRegister()) {
+    if (comm == NCCL_COMM_NULL || buff == NULL || handle == NULL || size == 0) {
+      WARN("Invalid arguments comm %p, buff %p, size %ld, handle %p", comm, buff, size, handle);
+      ret = ncclInvalidArgument;
+    } else if (comm->nvlsSupport) {
+      CUmulticastObjectProp prop = comm->nvlsResources->properties;
+
+      prop.size = size;
+      CUCHECK(cuMulticastGetGranularity(&granularity, &prop, CU_MULTICAST_GRANULARITY_RECOMMENDED));
+
+      if ((uintptr_t)buff % comm->nvlsResources->ucGran == 0 && size % granularity == 0) {
+        /* we can direct register what user provide */
+        struct ncclRegRequest* req;
+        NCCLCHECK(ncclCalloc(&req, 1));
+        req->buff = (uintptr_t)buff;
+        req->size = size;
+        ncclIntruQueueEnqueue(&comm->regRequestQueue, req);
+        *handle = (void*)req;
+      } else {
+        void* base;
+        size_t baseSize;
+        /* Since we don't provide actually allocated buffer size for users by ncclMemAlloc,
+         * therefore, we need to get the full range of the buffer by cuMemGetAddressRange to
+         * register buffers. */
+        CUCHECK(cuMemGetAddressRange((CUdeviceptr*)&base, &baseSize, (CUdeviceptr)buff));
+        if ((uintptr_t)base % comm->nvlsResources->ucGran == 0 && baseSize % granularity == 0) {
+          struct ncclRegRequest* req;
+          NCCLCHECK(ncclCalloc(&req, 1));
+          req->buff = (uintptr_t)base;
+          req->size = baseSize;
+          ncclIntruQueueEnqueue(&comm->regRequestQueue, req);
+          *handle = (void*)req;
+        } else {
+          WARN("register fails, buffer %p (aligned %s, granularity %ld) and size %ld (aligned %s, granularity %ld) for registration", buff, (uintptr_t)buff % comm->nvlsResources->ucGran == 0 ? "TRUE" : "FALSE", comm->nvlsResources->ucGran, size, size % granularity == 0 ? "TRUE" : "FALSE", granularity);
+          ret = ncclInvalidArgument;
+        }
+      }
+    }
+  }
+#endif
+
+  return ret;
+}
+
+NCCL_API(ncclResult_t, ncclCommDeregister, const ncclComm_t comm, void* handle);
+ncclResult_t ncclCommDeregister(const ncclComm_t comm, void* handle) {
+  ncclResult_t ret = ncclSuccess;
+
+#if CUDART_VERSION >= 12010
+  struct ncclRegRequest* dreq = (struct ncclRegRequest*)handle;
+  if (ncclParamLocalRegister()) {
+    if (comm == NCCL_COMM_NULL || handle == NULL) {
+      WARN("Invalid arguments comm %p, handle %p", comm, handle);
+      ret = ncclInvalidArgument;
+    } else {
+      struct ncclRegRecord* rec;
+
+      /* first release register record */
+      rec = ncclIntruQueueHead(&comm->regRecordQueue);
+
+      while (rec) {
+        if (rec->buff == dreq->buff && rec->size == dreq->size) {
+          NCCLCHECK(ncclNvlsDeregBuffer(&rec->mcHandle, rec->regAddr, rec->dev, rec->regSize));
+          ncclIntruQueueDelete(&comm->regRecordQueue, rec);
+          free(rec->addrs);
+          free(rec);
+          break;
+        }
+        rec = rec->next;
+      }
+
+      /* then free register request */
+      if (ncclIntruQueueDelete(&comm->regRequestQueue, dreq) == false) {
+        WARN("Invalid handle %p", handle);
+        ret = ncclInvalidArgument;
+      }
+    }
+  }
+#endif
+
+  return ret;
+}
+
+NCCL_API(ncclResult_t, ncclMemAlloc, void **ptr, size_t size);
+ncclResult_t  ncclMemAlloc(void **ptr, size_t size) {
+  NVTX3_FUNC_RANGE_IN(nccl_domain);
+  ncclResult_t ret = ncclSuccess;
+
+#if CUDART_VERSION >= 12010
+  size_t memGran = 0;
+  size_t mcGran = 0;
+  CUdevice currentDev;
+  CUmemAllocationProp memprop = {};
+  CUmulticastObjectProp mcprop = {};
+  CUmemAccessDesc accessDesc = {};
+  CUmemGenericAllocationHandle handle;
+  int cudaDev;
+  int flag = 0;
+  int dcnt;
+  int mcSupport = 0;
+
+  if (ptr == NULL || size == 0) goto fallback;
+
+  if (ncclCudaLibraryInit() != ncclSuccess) goto fallback;
+
+  CUDACHECK(cudaGetDevice(&cudaDev));
+  CUCHECK(cuDeviceGet(&currentDev, cudaDev));
+  if (CUPFN(cuMulticastCreate) != NULL)
+    CUCHECK(cuDeviceGetAttribute(&mcSupport, CU_DEVICE_ATTRIBUTE_MULTICAST_SUPPORTED, currentDev));
+
+  if (mcSupport) {
+    memprop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
+    memprop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
+    memprop.requestedHandleTypes = NVLS_CU_MEM_HANDLE_TYPE;
+    memprop.location.id = currentDev;
+    // Query device to see if RDMA support is available
+    CUCHECK(cuDeviceGetAttribute(&flag, CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_SUPPORTED, currentDev));
+    if (flag) memprop.allocFlags.gpuDirectRDMACapable = 1;
+    CUCHECK(cuMemGetAllocationGranularity(&memGran, &memprop, CU_MEM_ALLOC_GRANULARITY_RECOMMENDED));
+
+    /* mc property */
+    CUDACHECK(cudaGetDeviceCount(&dcnt));
+    mcprop.size = size;
+    /* device cnt is a dummy value right now, it might affect mc granularity in the future. */
+    mcprop.numDevices = dcnt;
+    mcprop.handleTypes = NVLS_CU_MEM_HANDLE_TYPE;
+    mcprop.flags = 0;
+    CUCHECK(cuMulticastGetGranularity(&mcGran, &mcprop, CU_MULTICAST_GRANULARITY_RECOMMENDED));
+
+    /* only size needs to be aligned to mcGran */
+    ALIGN_SIZE(size, mcGran);
+    /* Allocate the physical memory on the device */
+    CUCHECK(cuMemCreate(&handle, size, &memprop, 0));
+    /* Reserve a virtual address range */
+    CUCHECK(cuMemAddressReserve((CUdeviceptr*)ptr, size, memGran, 0, 0));
+    /* Map the virtual address range to the physical allocation */
+    CUCHECK(cuMemMap((CUdeviceptr)*ptr, size, 0, handle, 0));
+    /* Now allow RW access to the newly mapped memory */
+    for (int i = 0; i < dcnt; ++i) {
+      int p2p = 0;
+      if (i == cudaDev || ((cudaDeviceCanAccessPeer(&p2p, cudaDev, i) == cudaSuccess) && p2p)) {
+        accessDesc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
+        accessDesc.location.id = i;
+        accessDesc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
+        CUCHECK(cuMemSetAccess((CUdeviceptr)*ptr, size, &accessDesc, 1));
+      }
+    }
+    goto exit;
+  }
+
+fallback:
+#endif
+  CUDACHECKGOTO(cudaMalloc(ptr, size), ret, fail);
+
+exit:
+  return ret;
+fail:
+  goto exit;
+}
+
+NCCL_API(ncclResult_t, ncclMemFree, void *ptr);
+ncclResult_t  ncclMemFree(void *ptr) {
+  NVTX3_FUNC_RANGE_IN(nccl_domain);
+  ncclResult_t ret = ncclSuccess;
+  int saveDevice;
+
+  CUDACHECK(cudaGetDevice(&saveDevice));
+#if CUDART_VERSION >= 12010
+  CUdevice ptrDev = 0;
+  int mcSupport = 0;
+
+  if (ptr == NULL) goto fallback;
+
+  if (ncclCudaLibraryInit() != ncclSuccess) goto fallback;
+
+  CUCHECKGOTO(cuPointerGetAttribute((void*)&ptrDev, CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL, (CUdeviceptr)ptr), ret, fail);
+  if (CUPFN(cuMulticastCreate) != NULL)
+    CUCHECKGOTO(cuDeviceGetAttribute(&mcSupport, CU_DEVICE_ATTRIBUTE_MULTICAST_SUPPORTED, ptrDev), ret, fail);
+
+  CUDACHECKGOTO(cudaSetDevice((int)ptrDev), ret, fail);
+  if (mcSupport) {
+    NCCLCHECKGOTO(ncclCuMemFree(ptr), ret, fail);
+    goto exit;
+  }
+
+fallback:
+#endif
+  CUDACHECKGOTO(cudaFree(ptr), ret, fail);
+
+exit:
+  cudaSetDevice(saveDevice);
+  return ret;
+fail:
+  goto exit;
 }

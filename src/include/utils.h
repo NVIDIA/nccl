@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include <time.h>
 #include <sched.h>
+#include <algorithm>
 #include <new>
 
 int ncclCudaCompCap();
@@ -259,11 +260,6 @@ struct ncclMemoryPool {
   struct Cell {
     Cell *next;
   };
-  template<int Size, int Align>
-  union CellSized {
-    Cell cell;
-    alignas(Align) char space[Size];
-  };
   struct Cell* head;
   struct Cell* tail; // meaningful only when head != nullptr
 };
@@ -275,14 +271,15 @@ inline void ncclMemoryPoolConstruct(struct ncclMemoryPool* me) {
 template<typename T>
 inline T* ncclMemoryPoolAlloc(struct ncclMemoryPool* me, struct ncclMemoryStack* backing) {
   using Cell = ncclMemoryPool::Cell;
-  using CellSized = ncclMemoryPool::CellSized<sizeof(T), alignof(T)>;
   Cell* cell;
   if (__builtin_expect(me->head != nullptr, true)) {
     cell = me->head;
     me->head = cell->next;
   } else {
     // Use the internal allocate() since it doesn't memset to 0 yet.
-    cell = (Cell*)ncclMemoryStack::allocate(backing, sizeof(CellSized), alignof(CellSized));
+    size_t cellSize = std::max(sizeof(Cell), sizeof(T));
+    size_t cellAlign = std::max(alignof(Cell), alignof(T));
+    cell = (Cell*)ncclMemoryStack::allocate(backing, cellSize, cellAlign);
   }
   memset(cell, 0, sizeof(T));
   return reinterpret_cast<T*>(cell);
@@ -347,6 +344,32 @@ inline T* ncclIntruQueueDequeue(ncclIntruQueue<T,next> *me) {
   me->head = ans->*next;
   if (me->head == nullptr) me->tail = nullptr;
   return ans;
+}
+
+template<typename T, T *T::*next>
+inline bool ncclIntruQueueDelete(ncclIntruQueue<T,next> *me, T *x) {
+  T *prev = nullptr;
+  T *cur = me->head;
+  bool found = false;
+
+  while (cur) {
+    if (cur == x) {
+      found = true;
+      break;
+    }
+    prev = cur;
+    cur = cur->*next;
+  }
+
+  if (found) {
+    if (prev == nullptr)
+      me->head = cur->*next;
+    else
+      prev->*next = cur->*next;
+    if (cur == me->tail)
+      me->tail = prev;
+  }
+  return found;
 }
 
 template<typename T, T *T::*next>

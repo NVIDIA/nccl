@@ -85,13 +85,13 @@ uint64_t getHash(const char* string, int n) {
 #define HOSTID_FILE "/proc/sys/kernel/random/boot_id"
 uint64_t getHostHash(void) {
   char hostHash[1024];
-  char *hostId;
+  const char *hostId;
 
   // Fall back is the full hostname if something fails
   (void) getHostName(hostHash, sizeof(hostHash), '\0');
   int offset = strlen(hostHash);
 
-  if ((hostId = getenv("NCCL_HOSTID")) != NULL) {
+  if ((hostId = ncclGetEnv("NCCL_HOSTID")) != NULL) {
     INFO(NCCL_ENV, "NCCL_HOSTID set by environment to %s", hostId);
     strncpy(hostHash, hostId, sizeof(hostHash));
   } else {

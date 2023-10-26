@@ -1,115 +1,128 @@
 /*************************************************************************
- * Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2023, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
 
 #include "profiler.h"
+#include "proxy.h"
 
-//#define PROFILE_PROXY 1
-#ifdef PROFILE_PROXY
-#include "timer.h"
-#include "alloc.h"
+NCCL_PARAM(ProxyTraceNvtx, "PROXY_NVTX_ENABLE", 0);
 
-static const char* profilingStateSendStr[] = { "BufferWait", "GPUWait", "SendWait", "", "End" };
-static const char* profilingStateRecvStr[] = { "BufferWait", "RecvWait", "FlushWait", "GPUWait", "End" };
-static const char* profilingEventStr[] = { "SendRecv", "Sleep", "Idle", "Append" };
-struct ncclProxyProfileEvent {
-  double timestamp[6];
-  uint64_t opCount;
-  int peer;
-  int step;
-  uint16_t channel;
-  uint8_t type; // send / recv
-  uint8_t opIndex;
-};
+thread_local char buffer[1024];
 
-struct ncclProxyProfileEvent* profilingEvents = NULL;
-int profilingIndex = 0;
-double profilingStart = 0;
-#define MAX_EVENTS 200000
+void ncclProxyInitNvtx(struct ncclProxyState* proxyState) {
+  if (ncclParamProxyTraceNvtx() == 0) return;
 
-ncclResult_t ncclProfilingRecord(struct ncclProxyArgs* args, int sub, int step, int state) {
-  if (profilingEvents == NULL) {
-    NCCLCHECK(ncclCalloc(&profilingEvents, MAX_EVENTS));
-    profilingStart = gettime();
-  }
-  struct ncclProxyProfileEvent* event = NULL;
-  if (state%8 == 0) {
-    if (profilingIndex == MAX_EVENTS) return ncclSuccess;
-    args->subs[sub].profilingEvents[step%NCCL_STEPS] = event = profilingEvents+profilingIndex++;
-    if (state == ncclProxyProfileBegin) {
-      // Proxy operation information
-      event->opCount = args->opCount;
-      event->channel = args->subs[sub].channelId;
-      event->peer = args->subs[sub].peer;
-      event->type = args->pattern;
-      event->step = step;
-      event->opIndex = (((uint64_t)args)/sizeof(struct ncclProxyArgs))%256;
-    } else event->peer = -state;
-  } else {
-    event = (struct ncclProxyProfileEvent*)args->subs[sub].profilingEvents[step%NCCL_STEPS];
-    if (state == ncclProxyProfileEnd) args->subs[sub].profilingEvents[step%NCCL_STEPS] = NULL;
-    if (state == ncclProxyProfileAppendEnd) event->opCount = args->opCount;
-  }
-  // Timestamp
-  event->timestamp[state%8] = gettime()-profilingStart;
-  return ncclSuccess;
+  proxyState->nvtx.domain = nvtxDomainCreateA("com.nvidia.nccl.proxy");
+
+  nvtxNameCategoryA(NVTX_CATEGORY_STATE, "Proxy Thread State");
+  nvtxNameCategoryA(NVTX_CATEGORY_RECV,  "Proxy Recv Progress");
+  nvtxNameCategoryA(NVTX_CATEGORY_SEND,  "Proxy Send Progress");
+
+  nvtxEventAttributes_t sleep = {0};
+  sleep.version = NVTX_VERSION; 
+  sleep.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
+  sleep.colorType = NVTX_COLOR_ARGB;
+  sleep.color = ARGB_BLUE;
+  sleep.messageType = NVTX_MESSAGE_TYPE_ASCII; 
+  sleep.message.ascii = "Proxy Sleep";
+  sleep.category = 123;
+  proxyState->nvtx.sleep = sleep;
+
+  proxyState->nvtx.active = sleep;
+  proxyState->nvtx.active.color = ARGB_RED;
+  proxyState->nvtx.active.message.ascii = "Proxy Active";
+
+  proxyState->nvtx.append = sleep;
+  proxyState->nvtx.append.color = ARGB_PURPLE;
+  proxyState->nvtx.append.message.ascii = "Proxy Append";
+
+  proxyState->nvtx.idle = sleep;
+  proxyState->nvtx.idle.color = ARGB_PURPLE1;
+  proxyState->nvtx.idle.message.ascii = "Proxy Idle";
+
+  proxyState->nvtx.wakeup = sleep;
+  proxyState->nvtx.wakeup.color = ARGB_PURPLE2;
+  proxyState->nvtx.wakeup.message.ascii = "Proxy Wakeup";
+
+  sleep.category = 124;
+  proxyState->nvtx.recvBegin = sleep;
+  proxyState->nvtx.recvBegin.color = ARGB_GREEN;
+  proxyState->nvtx.recvBegin.message.ascii = "Recv Begin";
+
+  proxyState->nvtx.recvNetWait = sleep;
+  proxyState->nvtx.recvNetWait.color = ARGB_GREEN1;
+  proxyState->nvtx.recvNetWait.message.ascii = "Recv Net Wait";
+
+  proxyState->nvtx.recvFlushWait = sleep;
+  proxyState->nvtx.recvFlushWait.color = ARGB_GREEN2;
+  proxyState->nvtx.recvFlushWait.message.ascii = "Recv Flush Wait";
+
+  proxyState->nvtx.recvGpuWait = sleep;
+  proxyState->nvtx.recvGpuWait.color = ARGB_GREEN3;
+  proxyState->nvtx.recvGpuWait.message.ascii = "Recv GPU Wait";
+
+  sleep.category = 125;
+  proxyState->nvtx.sendBegin = sleep;
+  proxyState->nvtx.sendBegin.color = ARGB_YELLOW;
+  proxyState->nvtx.sendBegin.message.ascii = "Send Begin";
+
+  proxyState->nvtx.sendGpuWait = sleep;
+  proxyState->nvtx.sendGpuWait.color = ARGB_YELLOW1;
+  proxyState->nvtx.sendGpuWait.message.ascii = "Send GPU Wait";
+
+  proxyState->nvtx.sendNetPost = sleep;
+  proxyState->nvtx.sendNetPost.color = ARGB_YELLOW2;
+  proxyState->nvtx.sendNetPost.message.ascii = "Send Net Post";
+
+  proxyState->nvtx.sendNetWait = sleep;
+  proxyState->nvtx.sendNetWait.color = ARGB_YELLOW3;
+  proxyState->nvtx.sendNetWait.message.ascii = "Send Net Wait";
+
+  // Set wakeup state
+  proxyState->nvtx.rangeStateId = nvtxDomainRangeStartEx(proxyState->nvtx.domain, &proxyState->nvtx.wakeup);
 }
 
-void ncclProfilingDump() {
-  static int dumpDone = 0;
-  if (dumpDone) return;
-  dumpDone = 1;
-  const char* str = getenv("NCCL_PROXY_PROFILE");
-  if (!str) { free(profilingEvents); return; }
-  FILE* f = fopen(str, "w");
-  fprintf(f, "[\n");
-
-  for (int i=0; i<profilingIndex; i++) {
-    struct ncclProxyProfileEvent* e = profilingEvents+i;
-    const int sendrecv = e->peer >= 0;
-    const char* typeStr = sendrecv ? (e->type == ncclPatternSend ? "Send" : "Recv") :
-      profilingEventStr[-(e->peer/8)];
-
-
-    if (sendrecv) {
-      int state = ncclProxyProfileBegin;
-      const char** stateStr = e->type == ncclPatternSend ? profilingStateSendStr : profilingStateRecvStr;
-      fprintf(f, "{\"name\": \"%s-%d-%d\", \"cat\": \"NET\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": 1, \"ts\": %f, \"args\": { \"opCount\": %ld, \"proxyOpIndex\":%d } },\n",
-          typeStr, e->peer, e->step, i, e->channel, e->timestamp[state], e->opCount, e->opIndex);
-
-      while (state<ncclProxyProfileEnd) {
-        if (e->timestamp[state]) {
-          const char* name = stateStr[state];
-          fprintf(f, "{\"name\": \"%s\", \"cat\": \"NET\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": 1, \"ts\": %f },\n",
-              name, i, e->channel, e->timestamp[state]);
-          state++;
-          while (e->timestamp[state] == 0) state++;
-          fprintf(f, "{\"name\": \"%s\", \"cat\": \"NET\", \"ph\": \"e\", \"id\": %d, \"pid\": %d, \"tid\": 1, \"ts\": %f },\n",
-              name, i, e->channel, e->timestamp[state]);
-        }
-      }
-
-      fprintf(f, "{\"name\": \"%s-%d-%d\", \"cat\": \"NET\", \"ph\": \"e\", \"id\": %d, \"pid\": %d, \"tid\": 1, \"ts\": %f },\n",
-          typeStr, e->peer, e->step, i, e->channel, e->timestamp[state]);
-    } else {
-      if (e->peer == -ncclProxyProfileAppend) {
-      fprintf(f, "{\"name\": \"%s\", \"cat\": \"NET\", \"ph\": \"b\", \"id\": %d, \"pid\": -1, \"tid\": 1, \"ts\": %f, \"args\": { \"added\": %ld } },\n",
-          typeStr, i, e->timestamp[0], e->opCount);
-      } else {
-        fprintf(f, "{\"name\": \"%s\", \"cat\": \"NET\", \"ph\": \"b\", \"id\": %d, \"pid\": -1, \"tid\": 1, \"ts\": %f },\n",
-          typeStr, i, e->timestamp[0]);
-      }
-      fprintf(f, "{\"name\": \"%s\", \"cat\": \"NET\", \"ph\": \"e\", \"id\": %d, \"pid\": -1, \"tid\": 1, \"ts\": %f },\n",
-          typeStr, i, e->timestamp[1]);
-    }
+// Event should be beginSend or beginRecv
+void ncclProxySubArgsInitNvtx(struct ncclProxySubArgs* sub, nvtxDomainHandle_t domain, nvtxEventAttributes_t* event, uint64_t opCount) {
+  if (ncclParamProxyTraceNvtx() == 0) return;
+  sub->opRangeIds = (nvtxRangeId_t*) malloc(sizeof(nvtxRangeId_t)*sub->nsteps);
+  for (uint64_t step=0; step<sub->nsteps; step++) {
+    nvtxEventAttributes_t eventCopy = *event;
+    snprintf(buffer, 1024, "%s o=%ld s=%ld nbytes=%ld", event->message.ascii, opCount, step+sub->base, sub->nbytes);
+    eventCopy.message.ascii = buffer;
+    sub->opRangeIds[step] = nvtxDomainRangeStartEx(domain, &eventCopy);
   }
-  fprintf(f, "{} ]\n");
-  fclose(f);
-  free(profilingEvents);
 }
-#else
-ncclResult_t ncclProfilingRecord(struct ncclProxyArgs* args, int sub, int step, int state) { return ncclSuccess; }
-void ncclProfilingDump() {}
-#endif
+
+void ncclProxySubArgsFreeNvtx(struct ncclProxyArgs* args) {
+  if (ncclParamProxyTraceNvtx() == 0) return;
+  for (int s=0; s<args->nsubs; s++) {
+      struct ncclProxySubArgs* sub = args->subs+s;
+      free(sub->opRangeIds);
+  }
+}
+
+// Stop prior event, start next event (subarg proxy state)
+void ncclProxySubArgsTraceNvtx(struct ncclProxySubArgs* sub, uint64_t opCount, uint64_t step, nvtxDomainHandle_t domain, nvtxEventAttributes_t* event, int size) {
+  if (ncclParamProxyTraceNvtx() == 0) return;
+  nvtxRangeEnd(sub->opRangeIds[step]);
+  nvtxEventAttributes_t eventCopy = *event;
+  snprintf(buffer, 1024, "%s o=%ld s=%ld sz=%d", event->message.ascii, opCount, step, size);
+  eventCopy.message.ascii = buffer;
+  sub->opRangeIds[step] = nvtxDomainRangeStartEx(domain, &eventCopy);
+  sub->opRangeIds[step] = nvtxDomainRangeStartEx(domain, event);
+}
+
+void ncclProxySubArgsStopNvtx(struct ncclProxySubArgs* sub, uint64_t step) {
+  if (ncclParamProxyTraceNvtx() == 0) return;
+  nvtxRangeEnd(sub->opRangeIds[step]);
+}
+
+// Stop prior event, start next event (global proxy state)
+void ncclProxyStateTraceNvtx(struct ncclProxyState* proxyState, nvtxEventAttributes_t* event) {
+  if (ncclParamProxyTraceNvtx() == 0) return;
+  nvtxRangeEnd(proxyState->nvtx.rangeStateId);
+  proxyState->nvtx.rangeStateId = nvtxDomainRangeStartEx(proxyState->nvtx.domain, event);
+}

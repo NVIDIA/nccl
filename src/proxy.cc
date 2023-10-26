@@ -706,11 +706,9 @@ static ncclResult_t ncclProxyGetPostedOps(struct ncclProxyState* proxyState, int
   if (state->active == NULL) {
     pthread_mutex_lock(&pool->mutex);
     while (pool->nextOps == -1 && !state->stop) {
-      nvtxRangeEnd(proxyState->rangeStateId);
-      proxyState->rangeStateId = nvtxDomainRangeStartEx(proxyState->nvtxDomain, &proxyState->eventAttrs.sleep);
+      ncclProxyStateTraceNvtx(proxyState, &proxyState->nvtx.sleep);
       pthread_cond_wait(&pool->cond, &pool->mutex);
-      nvtxRangeEnd(proxyState->rangeStateId);
-      proxyState->rangeStateId = nvtxDomainRangeStartEx(proxyState->nvtxDomain, &proxyState->eventAttrs.wakeup);
+      ncclProxyStateTraceNvtx(proxyState, &proxyState->nvtx.wakeup);
     }
     if (state->stop) { // We might have been woken up to stop.
       pthread_mutex_unlock(&pool->mutex);
@@ -724,8 +722,7 @@ static ncclResult_t ncclProxyGetPostedOps(struct ncclProxyState* proxyState, int
   if (state->nextOps == -1) return ncclInternalError;
 
 process_nextops:
-  nvtxRangeEnd(proxyState->rangeStateId);
-  proxyState->rangeStateId = nvtxDomainRangeStartEx(proxyState->nvtxDomain, &proxyState->eventAttrs.append);
+  ncclProxyStateTraceNvtx(proxyState, &proxyState->nvtx.append);
   TIME_START(2);
   int freeOp[NCCL_MAX_LOCAL_RANKS];
   int freeOpEnd[NCCL_MAX_LOCAL_RANKS];
@@ -776,8 +773,7 @@ process_nextops:
       }
     }
   }
-  nvtxRangeEnd(proxyState->rangeStateId);
-  proxyState->rangeStateId = nvtxDomainRangeStartEx(proxyState->nvtxDomain, &proxyState->eventAttrs.active);
+  ncclProxyStateTraceNvtx(proxyState, &proxyState->nvtx.active);
   TIME_STOP(2);
   return ncclSuccess;
 }
@@ -835,74 +831,6 @@ static int setProxyThreadContext(struct ncclProxyState* proxyState) {
 #define PURPLE1 0xffe56edc
 #define PURPLE2 0xffc864d2
 
-void ncclProxyInitNvtx(struct ncclProxyState* proxyState) {
-  proxyState->nvtxDomain = nvtxDomainCreateA("com.nvidia.nccl.proxy");
-
-  nvtxNameCategoryA(123,"Proxy Thread State");
-  nvtxNameCategoryA(124,"Proxy Recv Progress");
-  nvtxNameCategoryA(125,"Proxy Send Progress");
-
-  nvtxEventAttributes_t sleep = {0};
-  sleep.version = NVTX_VERSION; 
-  sleep.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
-  sleep.colorType = NVTX_COLOR_ARGB;
-  sleep.color = BLUE;
-  sleep.messageType = NVTX_MESSAGE_TYPE_ASCII; 
-  sleep.message.ascii = "Proxy Sleep";
-  sleep.category = 123;
-  proxyState->eventAttrs.sleep = sleep;
-
-  proxyState->eventAttrs.active = sleep;
-  proxyState->eventAttrs.active.color = RED;
-  proxyState->eventAttrs.active.message.ascii = "Proxy Active";
-
-  proxyState->eventAttrs.append = sleep;
-  proxyState->eventAttrs.append.color = PURPLE;
-  proxyState->eventAttrs.append.message.ascii = "Proxy Append";
-
-  proxyState->eventAttrs.idle = sleep;
-  proxyState->eventAttrs.idle.color = PURPLE1;
-  proxyState->eventAttrs.idle.message.ascii = "Proxy Idle";
-
-  proxyState->eventAttrs.wakeup = sleep;
-  proxyState->eventAttrs.wakeup.color = PURPLE2;
-  proxyState->eventAttrs.wakeup.message.ascii = "Proxy Wakeup";
-
-  sleep.category = 124;
-  proxyState->eventAttrs.recvBegin = sleep;
-  proxyState->eventAttrs.recvBegin.color = GREEN;
-  proxyState->eventAttrs.recvBegin.message.ascii = "Recv Begin";
-
-  proxyState->eventAttrs.recvNetWait = sleep;
-  proxyState->eventAttrs.recvNetWait.color = GREEN1;
-  proxyState->eventAttrs.recvNetWait.message.ascii = "Recv Net Wait";
-
-  proxyState->eventAttrs.recvFlushWait = sleep;
-  proxyState->eventAttrs.recvFlushWait.color = GREEN2;
-  proxyState->eventAttrs.recvFlushWait.message.ascii = "Recv Flush Wait";
-
-  proxyState->eventAttrs.recvGpuWait = sleep;
-  proxyState->eventAttrs.recvGpuWait.color = GREEN3;
-  proxyState->eventAttrs.recvGpuWait.message.ascii = "Recv GPU Wait";
-
-  sleep.category = 125;
-  proxyState->eventAttrs.sendBegin = sleep;
-  proxyState->eventAttrs.sendBegin.color = YELLOW;
-  proxyState->eventAttrs.sendBegin.message.ascii = "Send Begin";
-
-  proxyState->eventAttrs.sendGpuWait = sleep;
-  proxyState->eventAttrs.sendGpuWait.color = YELLOW1;
-  proxyState->eventAttrs.sendGpuWait.message.ascii = "Send GPU Wait";
-
-  proxyState->eventAttrs.sendNetPost = sleep;
-  proxyState->eventAttrs.sendNetPost.color = YELLOW2;
-  proxyState->eventAttrs.sendNetPost.message.ascii = "Send Net Post";
-
-  proxyState->eventAttrs.sendNetWait = sleep;
-  proxyState->eventAttrs.sendNetWait.color = YELLOW3;
-  proxyState->eventAttrs.sendNetWait.message.ascii = "Send Net Wait";
-}
-
 // Set to SIGUSR1 or SIGUSR2 to help debug proxy state during hangs
 NCCL_PARAM(ProxyDumpSignal, "PROXY_DUMP_SIGNAL", -1);
 NCCL_PARAM(ProgressAppendOpFreq, "PROGRESS_APPENDOP_FREQ", 8);
@@ -926,7 +854,7 @@ void* ncclProxyProgress(void *proxyState_) {
   nvtxNameOsThreadA(syscall(SYS_gettid), threadName);
 
   ncclProxyInitNvtx(proxyState);
-  proxyState->rangeStateId = nvtxDomainRangeStartEx(proxyState->nvtxDomain, &proxyState->eventAttrs.wakeup);
+  ncclProxyStateTraceNvtx(proxyState, &proxyState->nvtx.wakeup);
 
   int lastIdle = 0;
   /* Too frequent call of ncclProxyGetPostedOps() will result in perf regression for small message
@@ -943,12 +871,10 @@ void* ncclProxyProgress(void *proxyState_) {
       return NULL;
     }
     if (lastIdle == 0 && idle == 1) {
-      nvtxRangeEnd(proxyState->rangeStateId);
-      proxyState->rangeStateId = nvtxDomainRangeStartEx(proxyState->nvtxDomain, &proxyState->eventAttrs.idle);
+      ncclProxyStateTraceNvtx(proxyState, &proxyState->nvtx.idle);
     }
     if (lastIdle == 1 && idle == 0) {
-      nvtxRangeEnd(proxyState->rangeStateId);
-      proxyState->rangeStateId = nvtxDomainRangeStartEx(proxyState->nvtxDomain, &proxyState->eventAttrs.active);
+      ncclProxyStateTraceNvtx(proxyState, &proxyState->nvtx.active);
     }
     if (idle || (++proxyOpAppendCounter == ncclParamProgressAppendOpFreq())) {
       int added = 0;

@@ -14,6 +14,7 @@
 #include <pthread.h>
 #include "shm.h"
 #include "p2p.h"
+#include "profiler.h"
 
 enum ncclProxyOpState { ncclProxyOpNone, ncclProxyOpReady, ncclProxyOpProgress };
 
@@ -246,9 +247,7 @@ struct ncclProxyState {
   struct ncclExpectedProxyResponse* expectedResponses;
 
   // NVTX
-  nvtxRangeId_t rangeStateId;
-  nvtxDomainHandle_t nvtxDomain;
-  ncclProxyEventAttributes eventAttrs;
+  ncclProxyStateNvtx nvtx;
 };
 
 enum proxyConnectState {

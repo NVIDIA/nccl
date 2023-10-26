@@ -12,14 +12,16 @@ NCCL_API(ncclResult_t, ncclBroadcast, const void* sendbuff, void* recvbuff, size
 ncclResult_t ncclBroadcast(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype, int root,
     ncclComm_t comm, cudaStream_t stream) {
   struct NvtxParamsBroadcast {
+    uint64_t opCount;
     size_t bytes;
     int root;
   };
   constexpr nvtxPayloadSchemaEntry_t BroadcastSchema[] = {
+    {0, NVTX_PAYLOAD_ENTRY_TYPE_UINT64, "opCount"},
     {0, NVTX_PAYLOAD_ENTRY_TYPE_SIZE, "Bytes"},
     {0, NVTX_PAYLOAD_ENTRY_TYPE_INT, "Root", nullptr, 0, offsetof(NvtxParamsBroadcast, root)}
   };
-  NvtxParamsBroadcast payload{count * ncclTypeSize(datatype), root};
+  NvtxParamsBroadcast payload{comm->opCount, count * ncclTypeSize(datatype), root};
   NVTX3_FUNC_WITH_PARAMS(Broadcast, BroadcastSchema, payload)
 
   struct ncclInfo info = { ncclFuncBroadcast, "Broadcast",

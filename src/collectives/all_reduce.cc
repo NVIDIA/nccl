@@ -12,16 +12,18 @@ NCCL_API(ncclResult_t, ncclAllReduce, const void* sendbuff, void* recvbuff, size
 ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
     ncclDataType_t datatype, ncclRedOp_t op, ncclComm* comm, cudaStream_t stream) {
   struct NvtxParamsAllReduce {
+    uint64_t opCount;
     size_t bytes;
     ncclRedOp_t op;
   };
   // Just pass the size of one message and not the total bytes sent/received.
   static constexpr nvtxPayloadSchemaEntry_t AllReduceSchema[] = {
+    {0, NVTX_PAYLOAD_ENTRY_TYPE_UINT64, "opCount"},
     {0, NVTX_PAYLOAD_ENTRY_TYPE_SIZE, "Message size [bytes]"},
     {0, NVTX_PAYLOAD_ENTRY_NCCL_REDOP, "Reduction operation", nullptr, 0,
       offsetof(NvtxParamsAllReduce, op)}
   };
-  NvtxParamsAllReduce payload{count * ncclTypeSize(datatype), op};
+  NvtxParamsAllReduce payload{comm->opCount, count * ncclTypeSize(datatype), op};
   NVTX3_FUNC_WITH_PARAMS(AllReduce, AllReduceSchema, payload)
 
   struct ncclInfo info = { ncclFuncAllReduce, "AllReduce",

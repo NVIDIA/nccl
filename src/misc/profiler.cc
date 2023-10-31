@@ -112,7 +112,6 @@ void ncclProxySubArgsTraceNvtx(struct ncclProxySubArgs* sub, uint64_t opCount, u
   snprintf(buffer, 1024, "%s o=%ld s=%ld sz=%d", event->message.ascii, opCount, step, size);
   eventCopy.message.ascii = buffer;
   sub->opRangeIds[step] = nvtxDomainRangeStartEx(domain, &eventCopy);
-  sub->opRangeIds[step] = nvtxDomainRangeStartEx(domain, event);
 }
 
 void ncclProxySubArgsStopNvtx(struct ncclProxySubArgs* sub, uint64_t step) {

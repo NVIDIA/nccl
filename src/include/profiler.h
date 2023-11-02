@@ -50,7 +50,7 @@ struct ncclProxyStateNvtx {
 };
 
 void ncclProxyInitNvtx(struct ncclProxyState* proxyState);
-void ncclProxySubArgsInitNvtx(struct ncclProxySubArgs* sub, uint64_t opCount, nvtxDomainHandle_t domain, nvtxEventAttributes_t* event);
+void ncclProxySubArgsInitNvtx(struct ncclProxySubArgs* sub, uint64_t opCount, nvtxDomainHandle_t domain, nvtxEventAttributes_t* event, uint32_t category);
 void ncclProxySubArgsTraceNvtx(struct ncclProxySubArgs* sub, uint64_t opCount, uint64_t step, nvtxDomainHandle_t domain, nvtxEventAttributes_t* event, int size, uint32_t category);
 void ncclProxySubArgsFreeNvtx(struct ncclProxyArgs* args);
 void ncclProxySubArgsStopNvtx(struct ncclProxySubArgs* sub, uint64_t step);

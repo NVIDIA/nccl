@@ -86,13 +86,15 @@ void ncclProxyInitNvtx(struct ncclProxyState* proxyState) {
 }
 
 // Event should be beginSend or beginRecv
-void ncclProxySubArgsInitNvtx(struct ncclProxySubArgs* sub, uint64_t opCount, nvtxDomainHandle_t domain, nvtxEventAttributes_t* event) {
+void ncclProxySubArgsInitNvtx(struct ncclProxySubArgs* sub, uint64_t opCount, nvtxDomainHandle_t domain, nvtxEventAttributes_t* event, uint32_t category) {
   if (ncclParamProxyTraceNvtx() == 0) return;
   sub->opRangeIds = (nvtxRangeId_t*) malloc(sizeof(nvtxRangeId_t)*sub->nsteps);
   for (uint64_t step=0; step<sub->nsteps; step++) {
     nvtxEventAttributes_t eventCopy = *event;
     snprintf(buffer, 1024, "%s o=%ld s=%ld nbytes=%ld", event->message.ascii, opCount, step+sub->base, sub->nbytes);
+    TRACE(NCCL_NET, "Tracing %s", buffer);
     eventCopy.message.ascii = buffer;
+    eventCopy.category = category;
     sub->opRangeIds[step] = nvtxDomainRangeStartEx(domain, &eventCopy);
   }
 }
@@ -112,6 +114,7 @@ void ncclProxySubArgsTraceNvtx(struct ncclProxySubArgs* sub, uint64_t opCount, u
   nvtxEventAttributes_t eventCopy = *event;
   eventCopy.category = category;
   snprintf(buffer, 1024, "%s o=%ld s=%ld sz=%d", event->message.ascii, opCount, step, size);
+  TRACE(NCCL_NET, "Tracing %s", buffer);
   eventCopy.message.ascii = buffer;
   sub->opRangeIds[step] = nvtxDomainRangeStartEx(domain, &eventCopy);
 }

@@ -52,6 +52,10 @@ void ncclProxyInitNvtx(struct ncclProxyState* proxyState) {
   proxyState->nvtx.recvBegin.color = ARGB_GREEN;
   proxyState->nvtx.recvBegin.message.ascii = "Recv Begin";
 
+  proxyState->nvtx.proxyRecv = sleep;
+  proxyState->nvtx.proxyRecv.color = ARGB_GREEN;
+  proxyState->nvtx.proxyRecv.message.ascii = "Proxy Receive";
+
   proxyState->nvtx.recvNetWait = sleep;
   proxyState->nvtx.recvNetWait.color = ARGB_GREEN1;
   proxyState->nvtx.recvNetWait.message.ascii = "Recv Net Wait";
@@ -69,6 +73,10 @@ void ncclProxyInitNvtx(struct ncclProxyState* proxyState) {
   proxyState->nvtx.sendBegin.color = ARGB_YELLOW;
   proxyState->nvtx.sendBegin.message.ascii = "Send Begin";
 
+  proxyState->nvtx.proxySend = sleep;
+  proxyState->nvtx.proxySend.color = ARGB_YELLOW;
+  proxyState->nvtx.proxySend.message.ascii = "Proxy Send";
+
   proxyState->nvtx.sendGpuWait = sleep;
   proxyState->nvtx.sendGpuWait.color = ARGB_YELLOW1;
   proxyState->nvtx.sendGpuWait.message.ascii = "Send GPU Wait";
@@ -85,8 +93,27 @@ void ncclProxyInitNvtx(struct ncclProxyState* proxyState) {
   proxyState->nvtx.rangeStateId = nvtxDomainRangeStartEx(proxyState->nvtx.domain, &proxyState->nvtx.wakeup);
 }
 
+void ncclProxyArgsInitNvtx(struct ncclProxyArgs* args, nvtxDomainHandle_t domain, nvtxEventAttributes_t* event) {
+  if (ncclParamProxyTraceNvtx() == 0) return;
+    nvtxEventAttributes_t eventCopy = *event;
+    size_t totalBytes = 0;
+    for (int s = 0; s < args->nsubs; s++) {
+      totalBytes += args->subs[s].nbytes;
+    }
+
+    snprintf(buffer, 1024, "%s o=%ld nsubs=%ld nbytes=%ld", event->message.ascii, args->opCount, args->nsubs, totalBytes);
+    TRACE(NCCL_NET, "Tracing %s", buffer);
+    eventCopy.message.ascii = buffer;
+    args->opRangeId = nvtxDomainRangeStartEx(domain, &eventCopy);
+}
+
+void ncclProxyArgsStopNvtx(struct ncclProxyArgs* args) {
+  if (ncclParamProxyTraceNvtx() == 0) return;
+  nvtxRangeEnd(args->opRangeId);
+}
+
 // Event should be beginSend or beginRecv
-void ncclProxySubArgsInitNvtx(struct ncclProxySubArgs* sub, uint64_t opCount, nvtxDomainHandle_t domain, nvtxEventAttributes_t* event, uint32_t category) {
+void ncclProxySubArgsInitNvtx(struct ncclProxySubArgs* sub, uint64_t opCount, nvtxDomainHandle_t domain, nvtxEventAttributes_t* event) {
   if (ncclParamProxyTraceNvtx() == 0) return;
   sub->opRangeIds = (nvtxRangeId_t*) malloc(sizeof(nvtxRangeId_t)*sub->nsteps);
   for (uint64_t step=0; step<sub->nsteps; step++) {
@@ -94,7 +121,6 @@ void ncclProxySubArgsInitNvtx(struct ncclProxySubArgs* sub, uint64_t opCount, nv
     snprintf(buffer, 1024, "%s o=%ld s=%ld nbytes=%ld", event->message.ascii, opCount, step+sub->base, sub->nbytes);
     TRACE(NCCL_NET, "Tracing %s", buffer);
     eventCopy.message.ascii = buffer;
-    eventCopy.category = category;
     sub->opRangeIds[step] = nvtxDomainRangeStartEx(domain, &eventCopy);
   }
 }
@@ -108,11 +134,10 @@ void ncclProxySubArgsFreeNvtx(struct ncclProxyArgs* args) {
 }
 
 // Stop prior event, start next event (subarg proxy state)
-void ncclProxySubArgsTraceNvtx(struct ncclProxySubArgs* sub, uint64_t opCount, uint64_t step, nvtxDomainHandle_t domain, nvtxEventAttributes_t* event, int size, uint32_t category) {
+void ncclProxySubArgsTraceNvtx(struct ncclProxySubArgs* sub, uint64_t opCount, uint64_t step, nvtxDomainHandle_t domain, nvtxEventAttributes_t* event, int size) {
   if (ncclParamProxyTraceNvtx() == 0) return;
   nvtxRangeEnd(sub->opRangeIds[step]);
   nvtxEventAttributes_t eventCopy = *event;
-  eventCopy.category = category;
   snprintf(buffer, 1024, "%s o=%ld s=%ld sz=%d", event->message.ascii, opCount, step, size);
   TRACE(NCCL_NET, "Tracing %s", buffer);
   eventCopy.message.ascii = buffer;

@@ -93,6 +93,7 @@ struct ncclProxyArgs {
   struct ncclProxyArgs* next;
   struct ncclProxyArgs* nextPeer;
   struct ncclProxyArgs** proxyAppendPtr;
+  nvtxRangeId_t opRangeId;
 };
 #define NCCL_MAX_NETDEVS 128
 

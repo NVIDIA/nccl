@@ -38,11 +38,13 @@ struct ncclProxyStateNvtx {
   nvtxEventAttributes_t idle;
   nvtxEventAttributes_t wakeup;
 
+  nvtxEventAttributes_t proxyRecv;
   nvtxEventAttributes_t recvBegin;
   nvtxEventAttributes_t recvNetWait;
   nvtxEventAttributes_t recvFlushWait;
   nvtxEventAttributes_t recvGpuWait;
 
+  nvtxEventAttributes_t proxySend;
   nvtxEventAttributes_t sendBegin;
   nvtxEventAttributes_t sendGpuWait;
   nvtxEventAttributes_t sendNetPost;
@@ -50,8 +52,11 @@ struct ncclProxyStateNvtx {
 };
 
 void ncclProxyInitNvtx(struct ncclProxyState* proxyState);
-void ncclProxySubArgsInitNvtx(struct ncclProxySubArgs* sub, uint64_t opCount, nvtxDomainHandle_t domain, nvtxEventAttributes_t* event, uint32_t category);
-void ncclProxySubArgsTraceNvtx(struct ncclProxySubArgs* sub, uint64_t opCount, uint64_t step, nvtxDomainHandle_t domain, nvtxEventAttributes_t* event, int size, uint32_t category);
+void ncclProxyArgsInitNvtx(struct ncclProxyArgs* args, nvtxDomainHandle_t domain, nvtxEventAttributes_t* event);
+void ncclProxyArgsStopNvtx(struct ncclProxyArgs* args);
+
+void ncclProxySubArgsInitNvtx(struct ncclProxySubArgs* sub, uint64_t opCount, nvtxDomainHandle_t domain, nvtxEventAttributes_t* event);
+void ncclProxySubArgsTraceNvtx(struct ncclProxySubArgs* sub, uint64_t opCount, uint64_t step, nvtxDomainHandle_t domain, nvtxEventAttributes_t* event, int size);
 void ncclProxySubArgsFreeNvtx(struct ncclProxyArgs* args);
 void ncclProxySubArgsStopNvtx(struct ncclProxySubArgs* sub, uint64_t step);
 

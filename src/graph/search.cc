@@ -814,16 +814,7 @@ float sm90SpeedArrayInter[] = { 48.0, 45.0, 42.0, 40.0, 30.0, 24.0, 20.0, 17.5, 
 #define NSPEEDSINTRA_SM90 (sizeof(sm90SpeedArrayIntra)/sizeof(float))
 #define NSPEEDSINTER_SM90 (sizeof(sm90SpeedArrayInter)/sizeof(float))
 
-NCCL_PARAM(NChannelsPerNic, "NCHANNELS_PER_NIC", -1);
-
 ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph) {
-  if (ncclParamNChannelsPerNic() != -1) {
-    graph->minChannels = ncclParamNChannelsPerNic() * (system->nodes[NIC].count);
-    graph->maxChannels = ncclParamNChannelsPerNic() * (system->nodes[NIC].count);
-    graph->minChannels = nextPow2(graph->minChannels);
-    graph->maxChannels = nextPow2(graph->maxChannels);
-  }
-
   int ngpus = system->nodes[GPU].count;
   graph->crossNic = ncclParamCrossNic();
   int crossNic = (system->nodes[NET].count > 1) && graph->crossNic &&

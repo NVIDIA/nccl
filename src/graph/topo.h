@@ -209,12 +209,6 @@ static float ncclTopoNVLinkBw(int cudaCompCap) {
     SM80_NVLINK_BW;
 }
 
-static int nextPow2(int v) {
-  int pow2 = 1;
-  while (pow2 < v) pow2 <<= 1;
-  return pow2;
-}
-
 // Mirror bits
 static bool isPow2(int val) {
   return (val & (val-1)) == 0;

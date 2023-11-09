@@ -695,6 +695,7 @@ static ncclResult_t collNetTrySetup(ncclComm_t comm, ncclComm_t parent, struct n
       c, chain->down[0], rank, chain->up);
   }
   line[1023] = '\0';
+  char connTypeStr[32];
 
   INFO(NCCL_INIT, "Collnet Chains %s", line);
   // Connect Collnet + chain
@@ -702,12 +703,14 @@ static ncclResult_t collNetTrySetup(ncclComm_t comm, ncclComm_t parent, struct n
     struct ncclChannel* channel = comm->channels + c;
     NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, 1, &channel->collnetChain.up, 1, channel->collnetChain.down, 0), ret, fail);
   }
-  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, collNetGraph, 0), ret, fail);
+  strncpy(connTypeStr, "collnetChainUp", sizeof("collnetChainUp"));
+  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, collNetGraph, 0, connTypeStr), ret, fail);
   for (int c = 0; c < comm->nChannels; c++) {
     struct ncclChannel* channel = comm->channels + c;
     NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, 1, channel->collnetChain.down, 1, &channel->collnetChain.up, 1), ret, fail);
   }
-  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, collNetGraph, 1), ret, fail);
+  strncpy(connTypeStr, "collnetChainDown", sizeof("collnetChainDown"));
+  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, collNetGraph, 1, connTypeStr), ret, fail);
   INFO(NCCL_INIT, "Connected collnet + chain");
 
   // Connect intra-node CollNet + Direct
@@ -715,13 +718,15 @@ static ncclResult_t collNetTrySetup(ncclComm_t comm, ncclComm_t parent, struct n
     struct ncclChannel* channelRecv = comm->channels + c;
     NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, NCCL_MAX_DIRECT_ARITY, channelRecv->collnetDirect.up, NCCL_MAX_DIRECT_ARITY, channelRecv->collnetDirect.down, 0), ret, fail);
   }
-  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, collNetGraph, 0, &highestTransportType0), ret, fail);
+  strncpy(connTypeStr, "collnetDirectUp", sizeof("collnetDirectUp"));
+  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, collNetGraph, 0, connTypeStr, &highestTransportType0), ret, fail);
 
   for (int c = 0; c < comm->nChannels; c++) {
     struct ncclChannel* channelSend = comm->channels + c;
     NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, NCCL_MAX_DIRECT_ARITY, channelSend->collnetDirect.down, NCCL_MAX_DIRECT_ARITY, channelSend->collnetDirect.up, 1), ret, fail);
   }
-  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, collNetGraph, 1, &highestTransportType1), ret, fail);
+  strncpy(connTypeStr, "collnetDirectDown", sizeof("collnetDirectDown"));
+  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, collNetGraph, 1, connTypeStr, &highestTransportType1), ret, fail);
 
   // Exchange highest intra-node transport type among ranks
   // because we need to know whether all ranks can p2p each other to determine whether we can directly read/write registered user buffer
@@ -1077,7 +1082,9 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     if (comm->nRanks == 1) continue;
     NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, 1, &channel->ring.prev, 1, &channel->ring.next, 0), ret, fail);
   }
-  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &ringGraph, 0), ret, fail);
+  char connTypeStr[32];
+  strncpy(connTypeStr, "ring", sizeof("ring"));
+  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &ringGraph, 0, connTypeStr), ret, fail);
   INFO(NCCL_INIT, "Connected all rings");
 
   // Connect Trees
@@ -1087,7 +1094,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, NCCL_MAX_TREE_ARITY, channel->tree.down, 1, &channel->tree.up, 0), ret, fail);
     NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, 1, &channel->tree.up, NCCL_MAX_TREE_ARITY, channel->tree.down, 0), ret, fail);
   }
-  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &treeGraph, 0), ret, fail);
+  strncpy(connTypeStr, "tree", sizeof("tree"));
+  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &treeGraph, 0,connTypeStr), ret, fail);
   INFO(NCCL_INIT, "Connected all trees");
 
   // Setup NVLS
@@ -1099,7 +1107,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
       NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, NCCL_MAX_NVLS_TREE_ARITY, channel->nvls.treeDown, 1, &channel->nvls.treeUp, 0), ret, fail);
       NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, 1, &channel->nvls.treeUp, NCCL_MAX_NVLS_TREE_ARITY, channel->nvls.treeDown, 0), ret, fail);
     }
-    NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &nvlsGraph, 0), ret, fail);
+    strncpy(connTypeStr, "nvlsTree", sizeof("nvlsTree"));
+    NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &nvlsGraph, 0, connTypeStr), ret, fail);
     INFO(NCCL_INIT, "Connected NVLS tree");
   }
 
@@ -1178,7 +1187,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
       }
     }
 
-    NCCLCHECKGOTO(ncclTransportP2pSetup(comm, NULL, 1), ret, fail);
+    strncpy(connTypeStr, "nvb", sizeof("nvb"));
+    NCCLCHECKGOTO(ncclTransportP2pSetup(comm, NULL, 1, connTypeStr), ret, fail);
   }
 
   // Connect to local net proxy

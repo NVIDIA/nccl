@@ -108,7 +108,9 @@ ncclResult_t ncclPreconnectFunc(struct ncclAsyncJob* job_) {
   struct ncclComm* comm = job->comm;
   CUDACHECK(cudaSetDevice(comm->cudaDev));
   if (CPU_COUNT(&comm->cpuAffinity)) sched_setaffinity(0, sizeof(cpu_set_t), &comm->cpuAffinity);
-  NCCLCHECK(ncclTransportP2pSetup(comm, NULL, 1));
+  char connTypeStr[4];
+  strncpy(connTypeStr, "p2p", sizeof("p2p"));
+  NCCLCHECK(ncclTransportP2pSetup(comm, NULL, 1, connTypeStr));
   return ncclSuccess;
 }
 

@@ -65,7 +65,7 @@ void dumpData(struct ncclConnect* data, int ndata) {
   }
 }
 
-ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, int connIndex, int* highestTransportType/*=NULL*/) {
+ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, int connIndex, char* connTypeStr, int* highestTransportType/*=NULL*/) {
   // Stream used during transport setup; need for P2P pre-connect + CUDA Graph
   ncclResult_t ret = ncclSuccess;
   int highestType = TRANSPORT_P2P;  // track highest transport type
@@ -74,6 +74,12 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
   struct ncclConnect** sendData = (ncclConnect**) malloc(sizeof(ncclConnect*) * comm->nRanks); // Points to entries inside data for given send connection within a channel
 
   NCCLCHECKGOTO(ncclStrongStreamAcquireUncaptured(&comm->sharedRes->hostStream), ret, fail);
+  size_t nConnections;
+  size_t nP2pConnections;
+  size_t nShmConnections;
+  size_t nNetConnections;
+  nConnections = nShmConnections = nP2pConnections = nNetConnections = 0;
+
   // First time initialization
   for (int i=1; i<comm->nRanks; i++) {
     int bootstrapTag = (i<<8) + (graph ? graph->id+1 : 0);
@@ -96,6 +102,10 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
       if (recvMask & (1UL<<c)) {
         NCCLCHECKGOTO(selectTransport<0>(comm, graph, recvData[i]+recvChannels++, c, recvPeer, connIndex, &type), ret, fail);
         if (type > highestType) highestType = type;
+        if (type == TRANSPORT_P2P) nP2pConnections++;
+        if (type == TRANSPORT_SHM) nShmConnections++;
+        if (type == TRANSPORT_NET) nNetConnections++;
+        nConnections++;
       }
     }
     TIME_STOP(0);
@@ -105,6 +115,10 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
       if (sendMask & (1UL<<c)) {
         NCCLCHECKGOTO(selectTransport<1>(comm, graph, sendData[i]+sendChannels++, c, sendPeer, connIndex, &type), ret, fail);
         if (type > highestType) highestType = type;
+        if (type == TRANSPORT_P2P) nP2pConnections++;
+        if (type == TRANSPORT_SHM) nShmConnections++;
+        if (type == TRANSPORT_NET) nNetConnections++;
+        nConnections++;
       }
     }
     TIME_STOP(1);
@@ -189,6 +203,8 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
   free(data);
   free(sendData);
   free(recvData);
+
+  INFO(NCCL_INIT, "%ld total : %ld p2p %ld shm %ld net %s connections", nConnections, nP2pConnections, nShmConnections, nNetConnections, connTypeStr);
 
   if (highestTransportType != NULL) *highestTransportType = highestType;
   TIME_PRINT("P2P Setup/Connect");

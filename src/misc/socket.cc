@@ -432,7 +432,15 @@ static ncclResult_t socketFinalizeAccept(struct ncclSocket* sock) {
     WARN("socketFinalizeAccept: wrong magic %lx != %lx", magic, sock->magic);
     close(sock->fd);
     sock->fd = -1;
-    // Ignore spurious connection and accept again
+    // Proxy worker marks the listening socket as non-blocking and uses a event
+    // loop to detect new connection. So just break out and wait for next accept
+    // event.
+    if (sock->type == ncclSocketTypeProxy) {
+      sock->state = ncclSocketStateError;
+      return ncclInternalError;
+    }
+    // For other types, the caller is relying us to ignore spurious connection
+    // and accept again
     sock->state = ncclSocketStateAccepting;
     return ncclSuccess;
   } else {
@@ -440,9 +448,9 @@ static ncclResult_t socketFinalizeAccept(struct ncclSocket* sock) {
     NCCLCHECK(socketWait(NCCL_SOCKET_RECV, sock, &type, sizeof(type), &received));
     if (type != sock->type) {
       WARN("socketFinalizeAccept: wrong type %d != %d", type, sock->type);
-      sock->state = ncclSocketStateError;
       close(sock->fd);
       sock->fd = -1;
+      sock->state = ncclSocketStateError;
       return ncclInternalError;
     } else {
       sock->state = ncclSocketStateReady;

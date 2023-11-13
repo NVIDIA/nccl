@@ -60,21 +60,18 @@ ncclResult_t ncclTopoTrimXml(struct ncclXml* xml);
 /* Functions  */
 /**************/
 
-static ncclResult_t xmlGetAttrIndex(struct ncclXmlNode* node, const char* attrName, int* index) {
-  *index = -1;
+static int xmlGetAttrIndex(struct ncclXmlNode* node, const char* attrName) {
   const int nAttrs = node->nAttrs;
   for (int a=0; a<nAttrs; a++) {
     if (strncmp(node->attrs[a].key, attrName, MAX_STR_LEN) == 0) {
-      *index = a;
-      return ncclSuccess;
+      return a;
     }
   }
-  return ncclSuccess;
+  return -1;
 }
 
 static ncclResult_t xmlGetAttr(struct ncclXmlNode* node, const char* attrName, const char** value) {
-  int index;
-  NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
+  int index = xmlGetAttrIndex(node, attrName);
   *value = index == -1 ? NULL : node->attrs[index].value;
   return ncclSuccess;
 }
@@ -138,8 +135,7 @@ static ncclResult_t xmlFindTagKv(struct ncclXml* xml, const char* tagName, struc
 }
 
 static ncclResult_t xmlSetAttr(struct ncclXmlNode* node, const char* attrName, const char* value) {
-  int index;
-  NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
+  int index = xmlGetAttrIndex(node, attrName);
   if (index == -1) {
     index = node->nAttrs++;
     strncpy(node->attrs[index].key, attrName, MAX_STR_LEN);
@@ -151,8 +147,7 @@ static ncclResult_t xmlSetAttr(struct ncclXmlNode* node, const char* attrName, c
 }
 
 static ncclResult_t xmlSetAttrIfUnset(struct ncclXmlNode* node, const char* attrName, const char* value) {
-  int index;
-  NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
+  int index = xmlGetAttrIndex(node, attrName);
   if (index != -1) return ncclSuccess;
   index = node->nAttrs++;
   strncpy(node->attrs[index].key, attrName, MAX_STR_LEN);
@@ -163,8 +158,7 @@ static ncclResult_t xmlSetAttrIfUnset(struct ncclXmlNode* node, const char* attr
 }
 
 static ncclResult_t xmlSetAttrInt(struct ncclXmlNode* node, const char* attrName, const int value) {
-  int index;
-  NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
+  int index = xmlGetAttrIndex(node, attrName);
   if (index == -1) {
     index = node->nAttrs++;
     strncpy(node->attrs[index].key, attrName, MAX_STR_LEN);
@@ -176,8 +170,7 @@ static ncclResult_t xmlSetAttrInt(struct ncclXmlNode* node, const char* attrName
 }
 
 static ncclResult_t xmlSetAttrFloat(struct ncclXmlNode* node, const char* attrName, const float value) {
-  int index;
-  NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
+  int index = xmlGetAttrIndex(node, attrName);
   if (index == -1) {
     index = node->nAttrs++;
     strncpy(node->attrs[index].key, attrName, MAX_STR_LEN);
@@ -189,8 +182,7 @@ static ncclResult_t xmlSetAttrFloat(struct ncclXmlNode* node, const char* attrNa
 }
 
 static ncclResult_t xmlUnsetAttr(struct ncclXmlNode* node, const char* attrName) {
-  int index;
-  NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
+  int index = xmlGetAttrIndex(node, attrName);
   if (index == -1) return ncclSuccess;
   for (int i=index+1; i<node->nAttrs; i++) {
     strcpy(node->attrs[i-1].key, node->attrs[i].key);

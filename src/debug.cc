@@ -139,6 +139,8 @@ void ncclDebugInit() {
   pthread_mutex_unlock(&ncclDebugLock);
 }
 
+NCCL_PARAM(WarnSetDebugInfo, "WARN_ENABLE_DEBUG_INFO", 0);
+
 /* Common logging function used by the INFO, WARN and TRACE macros
  * Also exported to the dynamically loadable Net transport modules so
  * they can share the debugging mechanisms and output files
@@ -172,6 +174,7 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
   if (level == NCCL_LOG_WARN) {
     len = snprintf(buffer, sizeof(buffer), "\n%s:%d:%d [%d] %s:%d NCCL WARN ",
                    hostname, pid, tid, cudaDev, filefunc, line);
+    if (ncclParamWarnSetDebugInfo()) ncclDebugLevel = NCCL_LOG_INFO;
   } else if (level == NCCL_LOG_INFO) {
     len = snprintf(buffer, sizeof(buffer), "%s:%d:%d [%d] NCCL INFO ", hostname, pid, tid, cudaDev);
   } else if (level == NCCL_LOG_TRACE && flags == NCCL_CALL) {

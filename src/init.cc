@@ -179,13 +179,7 @@ static ncclResult_t commFree(ncclComm_t comm) {
    * free all intra-process communicators; therefore, we only need to focus on local
    * resource cleanup in commFree(). */
   if (comm->proxyState && comm->proxyRefCountOld == 0 && comm->proxyState->thread) {
-    if (*comm->abortFlag == 0) {
-      /* regular thread join */
-      pthread_join(comm->proxyState->thread, nullptr);
-    } else {
-      /* try to detach thread due to abort */
-      ncclProxyTryDetach(comm->proxyState);
-    }
+    pthread_join(comm->proxyState->thread, nullptr);
   }
 
   delete[] comm->userRedOps;
@@ -219,7 +213,7 @@ static ncclResult_t commFree(ncclComm_t comm) {
       free(comm->sharedRes->tpRankToLocalRank);
       NCCLCHECK(ncclStrongStreamDestruct(&comm->sharedRes->hostStream));
       NCCLCHECK(ncclStrongStreamDestruct(&comm->sharedRes->deviceStream));
-      NCCLCHECK(ncclProxyDestroy(comm->sharedRes->proxyState));
+      NCCLCHECK(ncclProxyDestroy(comm));
       free(comm->sharedRes);
     }
   }
@@ -237,7 +231,7 @@ static ncclResult_t commFree(ncclComm_t comm) {
 
   if (ncclAtomicRefCountDecrement(comm->abortFlagRefCount) == 0) {
     NCCLCHECK(ncclCudaHostFree((void *)comm->abortFlag));
-    free((void*)comm->abortFlagRefCount);
+    free(comm->abortFlagRefCount);
   }
   free((void*)comm->config.netName);
 
@@ -1645,7 +1639,7 @@ exit:
 fail:
   if (comm) {
     if (comm->abortFlag) ncclCudaHostFree((void *)comm->abortFlag);
-    if (comm->abortFlagRefCount) free((void*)comm->abortFlagRefCount);
+    if (comm->abortFlagRefCount) free(comm->abortFlagRefCount);
     free(comm);
   }
   if (newcomm) *newcomm = NULL;
@@ -2086,7 +2080,7 @@ fail:
   if (childComm) {
     if (comm && !comm->config.splitShare) {
       if (childComm->abortFlag) ncclCudaHostFree((void*)childComm->abortFlag);
-      if (childComm->abortFlagRefCount) free((void*)childComm->abortFlagRefCount);
+      if (childComm->abortFlagRefCount) free(childComm->abortFlagRefCount);
     }
     free(childComm);
   }

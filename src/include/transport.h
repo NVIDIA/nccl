@@ -67,6 +67,8 @@ struct ncclNvlsSharedRes {
   char shareableHandle[NVLS_HANDLE_SIZE];
   size_t ucGran;
   int nChannels;
+  struct ncclShmemCollBuff nvlsShmem;
+  void *nvlsShmemHandle;
 };
 
 #endif /* CUDART_VERSION >= 12010 */

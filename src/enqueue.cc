@@ -627,13 +627,12 @@ static ncclResult_t scheduleP2pTasksToPlan(
     while (nChannelsMax*nRanks > comm->p2pnChannels*4 && nChannelsMax > 1) nChannelsMax /= 2;
   }
 
-  bool fuseOk;
+  bool fuseOk = false;
   // We can perform 8 send/recv per round per CTA. Make sure we jump between fused blocks at node boundaries.
   while (tasks->nTasksP2p != 0) {
     for (int i=0; i < tasks->p2pOrderSteps; i++) {
       int sendPeer = sendOrder[i];
       int recvPeer = recvOrder[i];
-      if ((i % (NCCL_MAX_WORK_ELEMENTS_P2P/2)) == 0) fuseOk = false;
       struct ncclTaskP2p* send = sendPeer != -1 ? ncclIntruQueueHead(&peers[sendPeer].sendQueue) : NULL;
       struct ncclTaskP2p* recv = recvPeer != -1 ? ncclIntruQueueHead(&peers[recvPeer].recvQueue) : NULL;
       if (sendPeer == comm->rank) {
@@ -669,6 +668,7 @@ static ncclResult_t scheduleP2pTasksToPlan(
         if (send) sendBytes -= send->chunk*sendChunkBytesMax;
 
         do {
+          if ((i % (NCCL_MAX_WORK_ELEMENTS_P2P/2)) == 0) fuseOk = false;
           ssize_t recvChunkBytes = std::min(recvBytes, recvChunkBytesMax); // -1 preserved
           ssize_t sendChunkBytes = std::min(sendBytes, sendChunkBytesMax);
           if (recvChunkBytes != 0) {
@@ -879,6 +879,14 @@ static ncclResult_t reclaimPlan(struct ncclComm* comm, struct ncclCommCallback* 
   if (plan->persistent) {
     comm->persistentRefs -= 1;
     NCCLCHECK(ncclCudaFree(plan->workHead));
+    for (int c=0; c < plan->channelUbound; c++) {
+      struct ncclProxyOp* q = ncclIntruQueueHead(&plan->channels[c].proxyOpQueue);
+      while (q != nullptr) {
+        struct ncclProxyOp* q1 = q->enqNext;
+        ncclMemoryPoolFree(&plan->memPool_ncclProxyOp, q);
+        q = q1;
+      }
+    }
     while (!ncclIntruQueueEmpty(&plan->ipcMemQueue)) {
       struct ncclPointerList* q = ncclIntruQueueDequeue(&plan->ipcMemQueue);
       CUDACHECKIGNORE(cudaIpcCloseMemHandle(q->ptr));
@@ -1093,9 +1101,16 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
 
 ncclResult_t ncclLaunchKernelAfter_NoCuda(struct ncclComm* comm, struct ncclKernelPlan* plan) {
   if (!(plan->persistent || comm->persistentRefs != 0 || ncclCudaLaunchBlocking)) {
-    // If this isn't being captured and there aren't any CUDA graphs alive
-    // then we don't need to do our proxyOp pushing on the host stream.
+    // We are not using the host stream for proxy ops and reclaimation submission.
     NCCLCHECK(hostStreamPlanTask(comm, plan));
+  } else {
+    // We are using the host stream for proxy ops and reclaimation submission.
+    // Only plans with proxy ops have a callback pushed by ncclLaunchPrepare.
+    // Since non-persistent plans also require reclaimation, we have to do it
+    // here.
+    if (!plan->persistent && !plan->hasProxyOps) {
+      ncclIntruQueueMpscEnqueue(&comm->callbackQueue, &plan->reclaimer);
+    }
   }
   return ncclSuccess;
 }

@@ -70,6 +70,10 @@ static int xmlGetAttrIndex(struct ncclXmlNode* node, const char* attrName) {
   return -1;
 }
 
+static bool xmlHasAttr(struct ncclXmlNode* node, const char* attrName) {
+  return xmlGetAttrIndex(node, attrName) != -1;
+}
+
 static ncclResult_t xmlGetAttr(struct ncclXmlNode* node, const char* attrName, const char** value) {
   int index = xmlGetAttrIndex(node, attrName);
   *value = index == -1 ? NULL : node->attrs[index].value;

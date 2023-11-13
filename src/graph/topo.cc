@@ -355,8 +355,7 @@ ncclResult_t ncclTopoAddNic(struct ncclXmlNode* xmlNic, struct ncclTopoSystem* s
   for (int s=0; s<xmlNic->nSubs; s++) {
     struct ncclXmlNode* xmlNet = xmlNic->subs[s];
     if (strcmp(xmlNet->name, "net") != 0) continue;
-    int index = xmlGetAttrIndex(xmlNet, "dev");
-    if (index == -1) continue;
+    if (!xmlHasAttr(xmlNet, "dev")) continue;
     NCCLCHECK(ncclTopoAddNet(xmlNet, system, nic));
   }
   return ncclSuccess;
@@ -392,8 +391,7 @@ ncclResult_t ncclTopoAddPci(struct ncclXmlNode* xmlPci, struct ncclTopoSystem* s
   NCCLCHECK(xmlGetSub(xmlPci, "gpu", &xmlGpu));
   if (xmlGpu != NULL) {
     type = GPU;
-    int index = xmlGetAttrIndex(xmlGpu, "rank");
-    if (index == -1) return ncclSuccess;
+    if (!xmlHasAttr(xmlGpu, "rank")) return ncclSuccess;
     NCCLCHECK(ncclTopoCreateNode(system, &node, type, busId));
     NCCLCHECK(ncclTopoAddGpu(xmlGpu, system, node));
   }

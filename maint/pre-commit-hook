@@ -1,0 +1,39 @@
+#!/bin/bash
+
+# Run the NCCL formatting checker
+# According to the docs (https://git-scm.com/docs/githooks#_description), this
+# will always run from the base of the repository.
+#exec cd src
+#exec make format
+
+ASTYLE_FORMAT_OPTS="-Qv --style=java --indent-after-parens --indent-modifiers --indent-switches --indent-continuation=2 --keep-one-line-blocks --keep-one-line-statements --indent=spaces=2 --lineend=linux --suffix=none"
+ASTYLEDIR="${PWD}/contrib"
+ASTYLEBIN="${ASTYLEDIR}/astyle/build/gcc/bin/astyle"
+exts="\.\(cc\|h\)$"
+
+if [ ! -f ${ASTYLEBIN} ]; then
+  1>&2 echo "astyle formatter binary not found. Run make format-install from src/"
+  exit 1
+fi
+
+# Format staged files
+git diff --name-only --diff-filter=ACMR HEAD | grep "$exts" | while read file; do
+  # Get the file from index
+  git show ":$file" > "$file.tmp"
+  # Format it
+  maint/formatter.bash "$file.tmp"
+  # Create a blob object from the formatted file
+  hash=`git hash-object -w "$file.tmp"`
+  # Add it back to index
+  git update-index --add --cacheinfo 100644 "$hash" "$file"
+  # Remove the tmp file
+  rm "$file.tmp"
+done
+
+# If no files left in index after formatting - fail
+ret=0
+files=`git diff --name-only --staged HEAD`
+if [ "x${files}" = "x" ]; then
+  1>&2 echo "No files left after formatting"
+  exit 1
+fi

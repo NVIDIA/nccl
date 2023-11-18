@@ -932,7 +932,7 @@ ncclResult_t ncclProxyProgressDestroy(struct ncclProxyState* proxyState) {
   // Request the proxy to stop and then wake it
   if (state->opsPool) {
     pthread_mutex_lock(&state->opsPool->mutex);
-    if (*proxyState->abortFlag == 0) 
+    if (*proxyState->abortFlag == 0)
       state->stop = PROGRESS_REQUEST_STOP;
     else
       state->stop = PROGRESS_ABORT;
@@ -1485,13 +1485,14 @@ void* ncclProxyService(void* _args) {
         WARN("[Proxy service] Too many connections (%d max)", NCCL_MAX_LOCAL_RANKS);
         return NULL;
       }
-      if (maxnpeers < s+1) maxnpeers = s+1;
       if (ncclSocketInit(&peers[s].sock) != ncclSuccess) {
         WARN("[Service thread] Initialize peers[%d].sock fails", s);
         return NULL;
       }
       if (ncclSocketAccept(&peers[s].sock, proxyState->listenSock) != ncclSuccess) {
         WARN("[Service thread] Accept failed %s", strerror(errno));
+        // Spurious connection. Drop it and wait for next incoming connection.
+        ncclSocketClose(&peers[s].sock);
       } else {
         if (ncclSocketGetFd(&peers[s].sock, &pollfds[s].fd) != ncclSuccess) {
           WARN("[Service thread] Get peers[%d].sock fd fails", s);
@@ -1499,6 +1500,7 @@ void* ncclProxyService(void* _args) {
         }
         npeers++;
         peers[s].tpLocalRank = -1;
+        if (maxnpeers < s+1) maxnpeers = s+1;
       }
     }
     for (int s=0; s<maxnpeers; s++) {
@@ -1717,7 +1719,7 @@ ncclResult_t ncclProxyTryDetach(struct ncclProxyState *proxyState) {
         break;
       }
     } while(now.tv_sec - start.tv_sec < 5);
-    
+
     if (join == false) {
       pthread_detach(proxyState->thread);
     }

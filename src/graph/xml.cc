@@ -13,6 +13,9 @@
 #include "core.h"
 #include "nvmlwrap.h"
 #include "xml.h"
+#if defined(__x86_64__)
+#include <cpuid.h>
+#endif
 
 /*******************/
 /* XML File Parser */
@@ -413,7 +416,8 @@ ncclResult_t ncclTopoGetXmlFromCpu(struct ncclXmlNode* cpuNode, struct ncclXml* 
       char vendor[12];
     } cpuid0;
 
-    asm volatile("cpuid" : "=b" (cpuid0.ebx), "=c" (cpuid0.ecx), "=d" (cpuid0.edx) : "a" (0) : "memory");
+    unsigned unused;
+    __cpuid(0, unused, cpuid0.ebx, cpuid0.ecx, cpuid0.edx);
     char vendor[13];
     strncpy(vendor, cpuid0.vendor, 12);
     vendor[12] = '\0';
@@ -435,7 +439,8 @@ ncclResult_t ncclTopoGetXmlFromCpu(struct ncclXmlNode* cpuNode, struct ncclXml* 
       };
       uint32_t val;
     } cpuid1;
-    asm volatile("cpuid" : "=a" (cpuid1.val) : "a" (1) : "memory");
+    unsigned unused;
+    __cpuid(1, cpuid1.val, unused, unused, unused);
     int familyId = cpuid1.familyId + (cpuid1.extFamilyId << 4);
     int modelId = cpuid1.modelId + (cpuid1.extModelId << 4);
     NCCLCHECK(xmlSetAttrInt(cpuNode, "familyid", familyId));

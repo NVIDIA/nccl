@@ -828,7 +828,10 @@ NCCL_PARAM(ProgressAppendOpFreq, "PROGRESS_APPENDOP_FREQ", 8);
 void* ncclProxyProgress(void *proxyState_) {
   struct ncclProxyState* proxyState = (struct ncclProxyState*)proxyState_;
   if (setProxyThreadContext(proxyState)) {
-    INFO(NCCL_INIT, "[Proxy Progress] Created CUDA context on device %d", proxyState->cudaDev);
+    cpu_set_t affinity;
+    sched_getaffinity(0, sizeof(cpu_set_t), &affinity);
+    INFO(NCCL_INIT, "[Proxy Progress] Created CUDA context on device=%d rank=%d pid=%u tid=%u affinity=0x%lx",
+      proxyState->cudaDev, proxyState->tpRank, getpid(), syscall(SYS_gettid), affinity);
   } else if (cudaSetDevice(proxyState->cudaDev) != cudaSuccess) {
     WARN("[Proxy Progress] Failed to set CUDA device %d", proxyState->cudaDev);
   }

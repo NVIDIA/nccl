@@ -771,24 +771,15 @@ ncclResult_t ncclTopoGetCpuAffinity(struct ncclTopoSystem* system, int rank, cpu
   cpu_set_t mask;
   SYSCHECK(sched_getaffinity(0, sizeof(cpu_set_t), &mask), "sched_getaffinity");
 
-#ifdef ENABLE_TRACE
-  {
-    char affinityStr[sizeof(cpu_set_t)*2];
-    NCCLCHECK(ncclCpusetToStr(&mask, affinityStr));
-    TRACE(NCCL_INIT, "Current affinity for GPU %d is %s", gpu->gpu.dev, affinityStr);
-  }
-#endif
+  char affinityStr[sizeof(cpu_set_t)*2];
+  NCCLCHECK(ncclCpusetToStr(&mask, affinityStr));
+  INFO(NCCL_INIT, "Current affinity for GPU %d is %s", gpu->gpu.dev, affinityStr);
 
   // Get the affinity of the CPU close to our GPU.
   cpu_set_t cpuMask = cpu->cpu.affinity;
 
-#ifdef ENABLE_TRACE
-  {
-    char affinityStr[sizeof(cpu_set_t)*2];
-    NCCLCHECK(ncclCpusetToStr(&cpuMask, affinityStr));
-    TRACE(NCCL_INIT, "CPU GPU affinity for GPU %d is %s", gpu->gpu.dev, affinityStr);
-  }
-#endif
+  NCCLCHECK(ncclCpusetToStr(&cpuMask, affinityStr));
+  INFO(NCCL_INIT, "CPU GPU affinity for GPU %d is %s", gpu->gpu.dev, affinityStr);
 
   cpu_set_t finalMask;
   if (ncclParamIgnoreCpuAffinity())

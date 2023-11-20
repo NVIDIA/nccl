@@ -12,6 +12,7 @@
 #include "profiler.h"
 #define ENABLE_TIMER 0
 #include "timer.h"
+#include "cpuset.h"
 
 #include <sys/syscall.h>
 #include <assert.h>
@@ -829,9 +830,11 @@ void* ncclProxyProgress(void *proxyState_) {
   struct ncclProxyState* proxyState = (struct ncclProxyState*)proxyState_;
   if (setProxyThreadContext(proxyState)) {
     cpu_set_t affinity;
+    char affinityStr[sizeof(cpu_set_t)*2];
     sched_getaffinity(0, sizeof(cpu_set_t), &affinity);
-    INFO(NCCL_INIT, "[Proxy Progress] Created CUDA context on device=%d rank=%d pid=%u tid=%u affinity=0x%lx",
-      proxyState->cudaDev, proxyState->tpRank, getpid(), syscall(SYS_gettid), affinity);
+    ncclCpusetToStr(&affinity, affinityStr);
+    INFO(NCCL_INIT, "[Proxy Progress] Created CUDA context on device=%d rank=%d pid=%u tid=%lu affinity=%s",
+      proxyState->cudaDev, proxyState->tpRank, getpid(), syscall(SYS_gettid), affinityStr);
   } else if (cudaSetDevice(proxyState->cudaDev) != cudaSuccess) {
     WARN("[Proxy Progress] Failed to set CUDA device %d", proxyState->cudaDev);
   }

@@ -255,6 +255,7 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
   if (protoStr) {
     INFO(NCCL_ENV, "NCCL_PROTO set by environment to %s", protoStr);
     NCCLCHECK(parseList(protoStr, ncclProtoStr, NCCL_NUM_PROTOCOLS, protoEnable));
+    if (protoEnable[1]) protoEnable[1] = 2;
   }
   const char *algoStr = ncclGetEnv("NCCL_ALGO");
   if (algoStr) {

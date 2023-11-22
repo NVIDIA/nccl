@@ -136,17 +136,17 @@ static ncclResult_t pluginIflush_v4(void* recvComm, void* data, int size, void* 
 static ncclResult_t pluginConnect_v4(int dev, void* handle, void** sendComm) {
   ncclResult_t ret;
   do {
-    ncclNetDeviceHandle_v7_t* handle = NULL;
+    ncclNetDeviceHandle_v7_t* handle = nullptr;
     ret = pluginConnect(dev, handle, sendComm, &handle);
-  } while (ret == ncclSuccess && *sendComm == NULL);
+  } while (ret == ncclSuccess && *sendComm == nullptr);
   return ret;
 }
 static ncclResult_t pluginAccept_v4(void* listenComm, void** recvComm) {
   ncclResult_t ret;
   do {
-    ncclNetDeviceHandle_v7_t* handle = NULL;
+    ncclNetDeviceHandle_v7_t* handle = nullptr;
     ret = pluginAccept(listenComm, recvComm, &handle);
-  } while (ret == ncclSuccess && *recvComm == NULL);
+  } while (ret == ncclSuccess && *recvComm == nullptr);
   return ret;
 }
 const ncclNet_v4_t ncclNetPlugin_v4 = {
@@ -174,7 +174,7 @@ static ncclResult_t pluginFlush(void* recvComm, void* data, int size, void* mhan
   ncclResult_t ret = pluginIflush_v4(recvComm, data, size, mhandle, &req);
   int done = 0;
   while (ret == ncclSuccess && done == 0) {
-    ret = pluginTest(req, &done, NULL);
+    ret = pluginTest(req, &done, nullptr);
   }
   return ret;
 }

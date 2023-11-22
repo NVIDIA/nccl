@@ -258,7 +258,7 @@ static ncclResult_t connectNvls(struct ncclComm* comm, int* nvlsHeads, struct nc
         &tree0Parent, &tree0Child0, &tree0Child1, &pc0,
         &tree1Parent, &tree1Child0, &tree1Child1, &pc1));
 
-  int* heads = NULL;
+  int* heads = nullptr;
   int treeUp[2] = { -1, -1 };
   int treeDown0[2] = { -1, -1 };
   int treeDown1[2] = { -1, -1 };

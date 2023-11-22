@@ -30,8 +30,8 @@ pthread_mutex_t ncclNetSocketLock = PTHREAD_MUTEX_INITIALIZER;
 static ncclResult_t ncclNetSocketGetPciPath(char* devName, char** pciPath) {
   char devicePath[PATH_MAX];
   snprintf(devicePath, PATH_MAX, "/sys/class/net/%s/device", devName);
-  // May return NULL if the file doesn't exist.
-  *pciPath = realpath(devicePath, NULL);
+  // May return nullptr if the file doesn't exist.
+  *pciPath = realpath(devicePath, nullptr);
   return ncclSuccess;
 }
 
@@ -80,7 +80,7 @@ static ncclResult_t ncclNetSocketGetSpeed(char* devName, int* speed) {
   if (fd != -1) {
     char speedStr[] = "        ";
     if (read(fd, speedStr, sizeof(speedStr)-1) > 0) {
-      *speed = strtol(speedStr, NULL, 0);
+      *speed = strtol(speedStr, nullptr, 0);
     }
     close(fd);
   }
@@ -210,11 +210,11 @@ void* persistentSocketThread(void *args_) {
         repeat = 0;
         for (int j=0; j<nSocksPerThread; j++) {
           struct ncclNetSocketTask* r = myQueue->tasks+i+j;
-          if (r != NULL && r->used == 1 && r->offset < r->size) {
+          if (r != nullptr && r->used == 1 && r->offset < r->size) {
             r->result = ncclSocketProgress(r->op, r->sock, r->data, r->size, &r->offset);
             if (r->result != ncclSuccess) {
               WARN("NET/Socket : socket progress error");
-              return NULL;
+              return nullptr;
             }
             idle = 0;
             if (r->offset < r->size) repeat = 1;
@@ -229,7 +229,7 @@ void* persistentSocketThread(void *args_) {
       }
       pthread_mutex_unlock(&resource->threadLock);
     }
-    if (resource->stop) return NULL;
+    if (resource->stop) return nullptr;
   }
 }
 
@@ -245,7 +245,7 @@ ncclResult_t ncclNetSocketGetNsockNthread(int dev, int* ns, int* nt) {
     int autoNt=0, autoNs=1; // By default, we only use the main thread and do not spawn extra threads
     char vendorPath[PATH_MAX];
     snprintf(vendorPath, PATH_MAX, "/sys/class/net/%s/device/vendor", ncclNetSocketDevs[dev].devName);
-    char* rPath = realpath(vendorPath, NULL);
+    char* rPath = realpath(vendorPath, nullptr);
     int fd = open(rPath, O_RDONLY);
     free(rPath);
     if (fd == -1) {
@@ -292,7 +292,7 @@ ncclResult_t ncclNetSocketListen(int dev, void* opaqueHandle, void** listenComm)
   struct ncclNetSocketListenComm* comm;
   NCCLCHECK(ncclCalloc(&comm, 1));
   handle->magic = NCCL_SOCKET_MAGIC;
-  NCCLCHECK(ncclSocketInit(&comm->sock, &ncclNetSocketDevs[dev].addr, handle->magic, ncclSocketTypeNetSocket, NULL, 1));
+  NCCLCHECK(ncclSocketInit(&comm->sock, &ncclNetSocketDevs[dev].addr, handle->magic, ncclSocketTypeNetSocket, nullptr, 1));
   NCCLCHECK(ncclSocketListen(&comm->sock));
   NCCLCHECK(ncclSocketGetAddr(&comm->sock, &handle->connectAddr));
   NCCLCHECK(ncclNetSocketGetNsockNthread(dev, &comm->nSocks, &comm->nThreads));
@@ -314,7 +314,7 @@ ncclResult_t ncclNetSocketConnect(int dev, void* opaqueHandle, void** sendComm, 
   struct ncclNetSocketComm* comm = stage->comm;
   uint8_t i = stage->iteration;
   struct ncclSocket* sock = stage->sock;
-  *sendComm = NULL;
+  *sendComm = nullptr;
 
   if (stage->state == ncclNetSocketCommStateConnect) goto socket_connect_check;
   if (stage->state == ncclNetSocketCommStateSend) goto socket_send;
@@ -327,7 +327,7 @@ ncclResult_t ncclNetSocketConnect(int dev, void* opaqueHandle, void** sendComm, 
   CUDACHECK(cudaGetDevice(&comm->cudaDev));
   for (; i<comm->nSocks+1; i++) {
     sock = (i == comm->nSocks) ? &comm->ctrlSock : comm->socks+i;
-    NCCLCHECK(ncclSocketInit(sock, &handle->connectAddr, handle->magic, ncclSocketTypeNetSocket, NULL, 1));
+    NCCLCHECK(ncclSocketInit(sock, &handle->connectAddr, handle->magic, ncclSocketTypeNetSocket, nullptr, 1));
 
     stage->sock = sock;
     stage->state = ncclNetSocketCommStateConnect;
@@ -356,7 +356,7 @@ ncclResult_t ncclNetSocketAccept(void* listenComm, void** recvComm, ncclNetDevic
   struct ncclSocket* sock = stage->sock;
   int ready;
 
-  *recvComm = NULL;
+  *recvComm = nullptr;
   if (stage->state == ncclNetSocketCommStateAccept) goto socket_accept_check;
   if (stage->state == ncclNetSocketCommStateRecv) goto socket_recv;
 
@@ -397,8 +397,8 @@ socket_recv:
   /* reset lComm state */
   stage->state = ncclNetSocketCommStateStart;
   stage->iteration = 0;
-  stage->sock = NULL;
-  stage->comm = NULL;
+  stage->sock = nullptr;
+  stage->comm = nullptr;
   return ncclSuccess;
 }
 
@@ -426,7 +426,7 @@ ncclResult_t ncclNetSocketGetTask(struct ncclNetSocketComm* comm, int op, void* 
   struct ncclNetSocketThreadResources* res = comm->threadResources+tid;
   struct ncclNetSocketTaskQueue* queue = &res->threadTaskQueue;
   // create helper threads and prepare per-thread task queue
-  if (queue->tasks == NULL) {
+  if (queue->tasks == nullptr) {
     // each request can be divided up to nSocks tasks, and
     // these tasks are distributed to nThreads threads,
     // we need to make sure each thread queue has enough slots for MAX_REQUESTS
@@ -434,9 +434,9 @@ ncclResult_t ncclNetSocketGetTask(struct ncclNetSocketComm* comm, int op, void* 
     NCCLCHECK(ncclCalloc(&queue->tasks, queue->len));
     queue->next = 0;
     res->comm = comm;
-    pthread_mutex_init(&res->threadLock, NULL);
-    pthread_cond_init(&res->threadCond, NULL);
-    pthread_create(comm->helperThread+tid, NULL, persistentSocketThread, res);
+    pthread_mutex_init(&res->threadLock, nullptr);
+    pthread_cond_init(&res->threadCond, nullptr);
+    pthread_create(comm->helperThread+tid, nullptr, persistentSocketThread, res);
     ncclSetThreadName(comm->helperThread[tid], "NCCL Sock%c%1u%2u%2u", op == NCCL_SOCKET_SEND ? 'S' : 'R', comm->dev, tid, comm->cudaDev);
   }
   struct ncclNetSocketTask* r = queue->tasks+queue->next;
@@ -463,8 +463,8 @@ ncclResult_t ncclNetSocketGetTask(struct ncclNetSocketComm* comm, int op, void* 
 ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
   *done = 0;
   struct ncclNetSocketRequest *r = (struct ncclNetSocketRequest*)request;
-  if (r == NULL) {
-    WARN("NET/Socket : test called with NULL request");
+  if (r == nullptr) {
+    WARN("NET/Socket : test called with nullptr request");
     return ncclInternalError;
   }
   if (r->used == 1) { /* try to send/recv size */
@@ -578,7 +578,7 @@ ncclResult_t ncclNetSocketClose(void* opaqueComm) {
         res->stop = 1;
         pthread_cond_signal(&res->threadCond);
         pthread_mutex_unlock(&res->threadLock);
-        pthread_join(comm->helperThread[i], NULL);
+        pthread_join(comm->helperThread[i], nullptr);
       }
       free(res->threadTaskQueue.tasks);
     }
@@ -603,7 +603,7 @@ ncclNet_t ncclNetSocket = {
   ncclNetSocketConnect,
   ncclNetSocketAccept,
   ncclNetSocketRegMr,
-  NULL, // No DMA-BUF support
+  nullptr, // No DMA-BUF support
   ncclNetSocketDeregMr,
   ncclNetSocketIsend,
   ncclNetSocketIrecv,
@@ -612,6 +612,6 @@ ncclNet_t ncclNetSocket = {
   ncclNetSocketClose,
   ncclNetSocketClose,
   ncclNetSocketCloseListen,
-  NULL /* getDeviceMr */,
-  NULL /* irecvConsumed */
+  nullptr /* getDeviceMr */,
+  nullptr /* irecvConsumed */
 };

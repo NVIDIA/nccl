@@ -24,17 +24,17 @@ struct ncclProxyProfileEvent {
   uint8_t opIndex;
 };
 
-struct ncclProxyProfileEvent* profilingEvents = NULL;
+struct ncclProxyProfileEvent* profilingEvents = nullptr;
 int profilingIndex = 0;
 double profilingStart = 0;
 #define MAX_EVENTS 200000
 
 ncclResult_t ncclProfilingRecord(struct ncclProxyArgs* args, int sub, int step, int state) {
-  if (profilingEvents == NULL) {
+  if (profilingEvents == nullptr) {
     NCCLCHECK(ncclCalloc(&profilingEvents, MAX_EVENTS));
     profilingStart = gettime();
   }
-  struct ncclProxyProfileEvent* event = NULL;
+  struct ncclProxyProfileEvent* event = nullptr;
   if (state%8 == 0) {
     if (profilingIndex == MAX_EVENTS) return ncclSuccess;
     args->subs[sub].profilingEvents[step%NCCL_STEPS] = event = profilingEvents+profilingIndex++;
@@ -49,7 +49,7 @@ ncclResult_t ncclProfilingRecord(struct ncclProxyArgs* args, int sub, int step, 
     } else event->peer = -state;
   } else {
     event = (struct ncclProxyProfileEvent*)args->subs[sub].profilingEvents[step%NCCL_STEPS];
-    if (state == ncclProxyProfileEnd) args->subs[sub].profilingEvents[step%NCCL_STEPS] = NULL;
+    if (state == ncclProxyProfileEnd) args->subs[sub].profilingEvents[step%NCCL_STEPS] = nullptr;
     if (state == ncclProxyProfileAppendEnd) event->opCount = args->opCount;
   }
   // Timestamp

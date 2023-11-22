@@ -68,7 +68,7 @@ typedef enum nvmlReturn_enum
 
 typedef struct nvmlPciInfo_st
 {
-    char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE]; //!< The tuple domain:bus:device.function PCI identifier (&amp; NULL terminator)
+    char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE]; //!< The tuple domain:bus:device.function PCI identifier (&amp; nullptr terminator)
     unsigned int domain;             //!< The PCI domain on which the device's bus resides, 0 to 0xffff
     unsigned int bus;                //!< The bus on which the device resides, 0 to 0xff
     unsigned int device;             //!< The device's id on the bus, 0 to 31

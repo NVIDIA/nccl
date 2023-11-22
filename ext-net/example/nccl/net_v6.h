@@ -33,13 +33,13 @@ typedef struct {
   ncclResult_t (*listen)(int dev, void* handle, void** listenComm);
   // Connect to a handle and return a sending comm object for that peer.
   // This call must not block for the connection to be established, and instead
-  // should return successfully with sendComm == NULL with the expectation that
-  // it will be called again until sendComm != NULL.
+  // should return successfully with sendComm == nullptr with the expectation that
+  // it will be called again until sendComm != nullptr.
   ncclResult_t (*connect)(int dev, void* handle, void** sendComm);
   // Finalize connection establishment after remote peer has called connect.
   // This call must not block for the connection to be established, and instead
-  // should return successfully with recvComm == NULL with the expectation that
-  // it will be called again until recvComm != NULL.
+  // should return successfully with recvComm == nullptr with the expectation that
+  // it will be called again until recvComm != nullptr.
   ncclResult_t (*accept)(void* listenComm, void** recvComm);
   // Register/Deregister memory. Comm can be either a sendComm or a recvComm.
   // Type is either NCCL_PTR_HOST or NCCL_PTR_CUDA.
@@ -48,15 +48,15 @@ typedef struct {
   ncclResult_t (*regMrDmaBuf)(void* comm, void* data, size_t size, int type, uint64_t offset, int fd, void** mhandle);
   ncclResult_t (*deregMr)(void* comm, void* mhandle);
   // Asynchronous send to a peer.
-  // May return request == NULL if the call cannot be performed (or would block)
+  // May return request == nullptr if the call cannot be performed (or would block)
   ncclResult_t (*isend)(void* sendComm, void* data, int size, int tag, void* mhandle, void** request);
   // Asynchronous recv from a peer.
-  // May return request == NULL if the call cannot be performed (or would block)
+  // May return request == nullptr if the call cannot be performed (or would block)
   ncclResult_t (*irecv)(void* recvComm, int n, void** data, int* sizes, int* tags, void** mhandles, void** request);
   // Perform a flush/fence to make sure all data received with NCCL_PTR_CUDA is
   // visible to the GPU
   ncclResult_t (*iflush)(void* recvComm, int n, void** data, int* sizes, void** mhandles, void** request);
-  // Test whether a request is complete. If size is not NULL, it returns the
+  // Test whether a request is complete. If size is not nullptr, it returns the
   // number of bytes sent/received.
   ncclResult_t (*test)(void* request, int* done, int* sizes);
   // Close and free send/recv comm objects

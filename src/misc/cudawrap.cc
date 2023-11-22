@@ -29,7 +29,7 @@ int ncclIsCuMemSupported() {
   CUDACHECKGOTO(cudaDriverGetVersion(&cudaDriverVersion), ret, error);
   if (cudaDriverVersion < 12000) return 0;  // Need CUDA_VISIBLE_DEVICES support
   CUDACHECKGOTO(cudaGetDevice(&cudaDev), ret, error);
-  if (CUPFN(cuMemCreate) == NULL) return 0;
+  if (CUPFN(cuMemCreate) == nullptr) return 0;
   CUCHECKGOTO(cuDeviceGet(&currentDev, cudaDev), ret, error);
   // Query device to see if CUMEM VMM support is available
   CUCHECKGOTO(cuDeviceGetAttribute(&flag, CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED, currentDev), ret, error);
@@ -174,14 +174,14 @@ static void initOnceFunc() {
    */
   char path[1024];
   const char *ncclCudaPath = ncclGetEnv("NCCL_CUDA_PATH");
-  if (ncclCudaPath == NULL)
+  if (ncclCudaPath == nullptr)
     snprintf(path, 1024, "%s", "libcuda.so");
   else
     snprintf(path, 1024, "%s/%s", ncclCudaPath, "libcuda.so");
 
   (void) dlerror(); // Clear any previous errors
   cudaLib = dlopen(path, RTLD_LAZY);
-  if (cudaLib == NULL) {
+  if (cudaLib == nullptr) {
     WARN("Failed to find CUDA library %s (NCCL_CUDA_PATH='%s') : %s", path, ncclCudaPath ? ncclCudaPath : "", dlerror());
     goto error;
   }
@@ -191,13 +191,13 @@ static void initOnceFunc() {
    */
 
   pfn_cuInit = (PFN_cuInit_v2000) dlsym(cudaLib, "cuInit");
-  if (pfn_cuInit == NULL) {
+  if (pfn_cuInit == nullptr) {
     WARN("Failed to load CUDA missing symbol cuInit");
     goto error;
   }
 
   pfn_cuDriverGetVersion = (PFN_cuDriverGetVersion_v2020) dlsym(cudaLib, "cuDriverGetVersion");
-  if (pfn_cuDriverGetVersion == NULL) {
+  if (pfn_cuDriverGetVersion == nullptr) {
     WARN("Failed to load CUDA missing symbol cuDriverGetVersion");
     goto error;
   }
@@ -218,7 +218,7 @@ static void initOnceFunc() {
   }
 
   pfn_cuGetProcAddress = (PFN_cuGetProcAddress_v11030) dlsym(cudaLib, "cuGetProcAddress");
-  if (pfn_cuGetProcAddress == NULL) {
+  if (pfn_cuGetProcAddress == nullptr) {
     WARN("Failed to load CUDA missing symbol cuGetProcAddress");
     goto error;
   }

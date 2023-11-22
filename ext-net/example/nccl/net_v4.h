@@ -41,15 +41,15 @@ typedef struct {
   ncclResult_t (*regMr)(void* comm, void* data, int size, int type, void** mhandle);
   ncclResult_t (*deregMr)(void* comm, void* mhandle);
   // Asynchronous send to a peer.
-  // May return request == NULL if the call cannot be performed (or would block)
+  // May return request == nullptr if the call cannot be performed (or would block)
   ncclResult_t (*isend)(void* sendComm, void* data, int size, void* mhandle, void** request);
   // Asynchronous recv from a peer.
-  // May return request == NULL if the call cannot be performed (or would block)
+  // May return request == nullptr if the call cannot be performed (or would block)
   ncclResult_t (*irecv)(void* recvComm, void* data, int size, void* mhandle, void** request);
   // Perform a flush/fence to make sure all data received with NCCL_PTR_CUDA is
   // visible to the GPU
   ncclResult_t (*iflush)(void* recvComm, void* data, int size, void* mhandle, void** request);
-  // Test whether a request is complete. If size is not NULL, it returns the
+  // Test whether a request is complete. If size is not nullptr, it returns the
   // number of bytes sent/received.
   ncclResult_t (*test)(void* request, int* done, int* size);
   // Close and free send/recv comm objects

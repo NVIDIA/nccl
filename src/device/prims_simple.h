@@ -533,7 +533,7 @@ class Primitives<
       auto *conns = (flags & RolePostSend) ? ncclShmem.groups[group].sendConns : ncclShmem.groups[group].recvConns;
       conns[index]->step = step;
     }
-    
+
     if ((flags & (AnyNetDeviceUnpack)) && (flags & (RoleWaitRecv))) {
       ncclNetDeviceSaveHead(netDeviceHandle, group);
     }
@@ -579,7 +579,7 @@ class Primitives<
                    reinterpret_cast<T*>(reinterpret_cast<uintptr_t>(ptr) ^ reinterpret_cast<uintptr_t>(slot));
         *slot = nullptr;
       } else {
-        /* slot is NULL, it must be regUsed == 1 */
+        /* slot is nullptr, it must be regUsed == 1 */
         directBuff = (T*)e->dnOutputs[index];
       }
     }

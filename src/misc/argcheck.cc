@@ -10,7 +10,7 @@
 static ncclResult_t CudaPtrCheck(const void* pointer, struct ncclComm* comm, const char* ptrname, const char* opname) {
   cudaPointerAttributes attr;
   cudaError_t err = cudaPointerGetAttributes(&attr, pointer);
-  if (err != cudaSuccess || attr.devicePointer == NULL) {
+  if (err != cudaSuccess || attr.devicePointer == nullptr) {
     WARN("%s : %s %p is not a valid pointer", opname, ptrname, pointer);
     return ncclInvalidArgument;
   }
@@ -26,8 +26,8 @@ static ncclResult_t CudaPtrCheck(const void* pointer, struct ncclComm* comm, con
 }
 
 ncclResult_t PtrCheck(void* ptr, const char* opname, const char* ptrname) {
-  if (ptr == NULL) {
-    WARN("%s : %s argument is NULL", opname, ptrname);
+  if (ptr == nullptr) {
+    WARN("%s : %s argument is nullptr", opname, ptrname);
     return ncclInvalidArgument;
   }
   return ncclSuccess;

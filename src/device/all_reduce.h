@@ -301,7 +301,7 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NCC
     if (tid >= tidStartScatter && tid < tidStartReduce && hasUp) {
       // Scatter
       Primitives<T, RedOp, FanAsymmetric<0, NCCL_MAX_DIRECT_ARITY>, /*Direct=*/1, Proto, 0>
-        prims(tid-tidStartScatter, nThreadsScatter, NULL, direct->up, args->sendbuff, args->recvbuff,
+        prims(tid-tidStartScatter, nThreadsScatter, nullptr, direct->up, args->sendbuff, args->recvbuff,
            args->redOpArg, 2*Proto::MaxGroupWidth, 1, 1, args);
       for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
         ssize_t offset = gridOffset + bid*direct->nHeads*chunkSize;
@@ -341,7 +341,7 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NCC
     } else if (tid < tidStartBcast && hasUp) {
       // Gather
       Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_DIRECT_ARITY, 0>, /*Direct=*/1, Proto, 0>
-        prims(tid, nThreadsGather, direct->up, NULL, args->sendbuff, args->recvbuff,
+        prims(tid, nThreadsGather, direct->up, nullptr, args->sendbuff, args->recvbuff,
            args->redOpArg, 0*Proto::MaxGroupWidth, 0, 0, args);
       for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
         ssize_t offset = gridOffset + bid*direct->nHeads*chunkSize;
@@ -405,7 +405,7 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SI
       // Scatter
       using Proto = ProtoSimple<1, 1, COLL_UNROLL>;
       Primitives<T, RedOp, FanAsymmetric<0, NCCL_MAX_NVLS_ARITY>, /*Direct=*/0, Proto, 0>
-        prims(tid, nThreadsScatter, NULL, nvls->up, args->sendbuff, NULL,
+        prims(tid, nThreadsScatter, nullptr, nvls->up, args->sendbuff, nullptr,
           args->redOpArg, 0 * Proto::MaxGroupWidth, 1, 1);
       for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
         ssize_t offset = gridOffset + bid * nvls->nHeads * chunkSize;
@@ -416,7 +416,7 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SI
       // Gather
       using Proto = ProtoSimple<1, 1, COLL_UNROLL>;
       Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_NVLS_ARITY, 0>, /*Direct=*/0, Proto, 0>
-        prims(tid - tidEndScatter, nThreadsGather, nvls->up, NULL, NULL, args->recvbuff,
+        prims(tid - tidEndScatter, nThreadsGather, nvls->up, nullptr, nullptr, args->recvbuff,
           args->redOpArg, 1 * Proto::MaxGroupWidth, 1, 1);
       for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
         ssize_t offset = gridOffset + bid * nvls->nHeads * chunkSize;
@@ -428,7 +428,7 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SI
         // Reduce, broadcast through NVLS
         using Proto = ProtoSimple<1, 1, COLL_UNROLL, 1, 1>;
         Primitives<T, RedOp, FanSymmetric<1>, /*Direct=*/1, Proto, 0>
-          prims(tid - tidEndGather, nThreadsReduce, &nvls->down, &nvls->down, NULL, NULL,
+          prims(tid - tidEndGather, nThreadsReduce, &nvls->down, &nvls->down, nullptr, nullptr,
             args->redOpArg, 2 * Proto::MaxGroupWidth, 0, 0, args);
         for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
           ssize_t offset = gridOffset + (bid * nvls->nHeads + nvls->headRank) * chunkSize;
@@ -439,7 +439,7 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SI
         // Reduce, send to network
         using Proto = ProtoSimple<1, 1, COLL_UNROLL, 1, 0>;
         Primitives<T, RedOp, FanSymmetric<1>, /*Direct=*/1, Proto, 0>
-          prims(tid - tidEndGather, nThreadsReduce, &nvls->down, &nvls->out, NULL, NULL,
+          prims(tid - tidEndGather, nThreadsReduce, &nvls->down, &nvls->out, nullptr, nullptr,
             args->redOpArg, 2 * Proto::MaxGroupWidth, 0, 1, args);
         for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
           ssize_t offset = gridOffset + (bid * nvls->nHeads + nvls->headRank) * chunkSize;
@@ -451,7 +451,7 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SI
       // Recv from network, broadcast
       using Proto = ProtoSimple<1, 1, COLL_UNROLL, 0, 1>;
       Primitives<T, RedOp, FanSymmetric<1>, /*Direct=*/1, Proto, 0>
-        prims(tid - tidEndReduce, nThreadsBcast, &nvls->out, &nvls->down, NULL, NULL,
+        prims(tid - tidEndReduce, nThreadsBcast, &nvls->out, &nvls->down, nullptr, nullptr,
           args->redOpArg, 3 * Proto::MaxGroupWidth, 0, 0, args);
       for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
         ssize_t offset = gridOffset + (bid * nvls->nHeads + nvls->headRank) * chunkSize;
@@ -495,7 +495,7 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS_TREE, NCCL_PRO
       // Scatter
       using Proto = ProtoSimple<1, 1, COLL_UNROLL>;
       Primitives<T, RedOp, FanAsymmetric<0, NCCL_MAX_NVLS_ARITY>, /*Direct=*/0, Proto, 0>
-        prims(tid, nThreadsScatter, NULL, nvls->up, args->sendbuff, NULL,
+        prims(tid, nThreadsScatter, nullptr, nvls->up, args->sendbuff, nullptr,
           args->redOpArg, 0 * Proto::MaxGroupWidth, 1, 1);
       for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
         ssize_t offset = gridOffset + bid * nvls->nHeads * chunkSize;
@@ -506,7 +506,7 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS_TREE, NCCL_PRO
       // Gather
       using Proto = ProtoSimple<1, 1, COLL_UNROLL>;
       Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_NVLS_ARITY, 0>, /*Direct=*/0, Proto, 0>
-        prims(tid - tidEndScatter, nThreadsGather, nvls->up, NULL, NULL, args->recvbuff,
+        prims(tid - tidEndScatter, nThreadsGather, nvls->up, nullptr, nullptr, args->recvbuff,
           args->redOpArg, 1 * Proto::MaxGroupWidth, 1, 1);
       for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
         ssize_t offset = gridOffset + bid * nvls->nHeads * chunkSize;
@@ -518,7 +518,7 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS_TREE, NCCL_PRO
         // Reduce and Broadcast
         using Proto = ProtoSimple<1, 1, COLL_UNROLL, 1, 1>;
         Primitives<T, RedOp, FanSymmetric<3>, /*Direct=*/1, Proto, 0>
-          prims(tid - tidEndGather, nThreadsReduce, treeDown, treeDown, NULL, NULL,
+          prims(tid - tidEndGather, nThreadsReduce, treeDown, treeDown, nullptr, nullptr,
             args->redOpArg, 2 * Proto::MaxGroupWidth, 0, 0, args);
         for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
           ssize_t offset = gridOffset + (bid * nvls->nHeads + nvls->headRank) * chunkSize;
@@ -529,7 +529,7 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS_TREE, NCCL_PRO
         // Reduce, send to network
         using Proto = ProtoSimple<1, 1, COLL_UNROLL, 1, 0>;
         Primitives<T, RedOp, FanAsymmetric<3, 1>, /*Direct=*/1, Proto, 0>
-          prims(tid - tidEndGather, nThreadsReduce, treeDown, &treeUp, NULL, NULL,
+          prims(tid - tidEndGather, nThreadsReduce, treeDown, &treeUp, nullptr, nullptr,
             args->redOpArg, 2 * Proto::MaxGroupWidth, 0, 0, args);
         for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
           ssize_t offset = gridOffset + (bid * nvls->nHeads + nvls->headRank) * chunkSize;
@@ -541,7 +541,7 @@ struct RunWorkElement<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS_TREE, NCCL_PRO
       // Recv from network, broadcast
       using Proto = ProtoSimple<1, 1, COLL_UNROLL, 0, 1>;
       Primitives<T, RedOp, FanAsymmetric<1, 3>, /*Direct=*/1, Proto, 0>
-        prims(tid - tidEndReduce, nThreadsBcast, &treeUp, treeDown, NULL, NULL,
+        prims(tid - tidEndReduce, nThreadsBcast, &treeUp, treeDown, nullptr, nullptr,
           args->redOpArg, 3 * Proto::MaxGroupWidth, 0, 0, args);
       for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
         ssize_t offset = gridOffset + (bid * nvls->nHeads + nvls->headRank) * chunkSize;

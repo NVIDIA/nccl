@@ -39,7 +39,7 @@ ncclResult_t busIdToInt64(const char* busId, int64_t* id) {
     } else break;
   }
   hexStr[hexOffset] = '\0';
-  *id = strtol(hexStr, NULL, 16);
+  *id = strtol(hexStr, nullptr, 16);
   return ncclSuccess;
 }
 
@@ -91,12 +91,12 @@ uint64_t getHostHash(void) {
   (void) getHostName(hostHash, sizeof(hostHash), '\0');
   int offset = strlen(hostHash);
 
-  if ((hostId = ncclGetEnv("NCCL_HOSTID")) != NULL) {
+  if ((hostId = ncclGetEnv("NCCL_HOSTID")) != nullptr) {
     INFO(NCCL_ENV, "NCCL_HOSTID set by environment to %s", hostId);
     strncpy(hostHash, hostId, sizeof(hostHash));
   } else {
     FILE *file = fopen(HOSTID_FILE, "r");
-    if (file != NULL) {
+    if (file != nullptr) {
       char *p;
       if (fscanf(file, "%ms", &p) == 1) {
         strncpy(hostHash+offset, p, sizeof(hostHash)-offset-1);

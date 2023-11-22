@@ -21,13 +21,13 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
   const int stepLines;
   Fan fan;
   T *userBufs[2];
-  struct ncclConnInfo* recvConn = NULL;
-  volatile uint64_t* recvConnHeadPtr = NULL;
+  struct ncclConnInfo* recvConn = nullptr;
+  volatile uint64_t* recvConnHeadPtr = nullptr;
   uint64_t recvConnHead;
 
-  struct ncclConnInfo* sendConn = NULL;
-  volatile int* sendConnFifoPtr = NULL;
-  volatile uint64_t* sendConnHeadPtr = NULL;
+  struct ncclConnInfo* sendConn = nullptr;
+  volatile int* sendConnFifoPtr = nullptr;
+  volatile uint64_t* sendConnHeadPtr = nullptr;
   uint64_t sendConnHead;
   uint64_t sendConnHeadCache; // Cache last seen value
 

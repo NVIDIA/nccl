@@ -57,7 +57,7 @@ inline ncclResult_t getRandomData(void* buffer, size_t bytes) {
   if (bytes > 0) {
     const size_t one = 1UL;
     FILE* fp = fopen("/dev/urandom", "r");
-    if (buffer == NULL || fp == NULL || fread(buffer, bytes, one, fp) != one) ret = ncclSystemError;
+    if (buffer == nullptr || fp == nullptr || fread(buffer, bytes, one, fp) != one) ret = ncclSystemError;
     if (fp) fclose(fp);
   }
   return ret;

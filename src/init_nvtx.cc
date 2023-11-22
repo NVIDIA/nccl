@@ -15,7 +15,7 @@ void initNvtxRegisteredEnums() {
   constexpr const nvtxPayloadEnumAttr_t eAttr {
     .fieldMask = NVTX_PAYLOAD_ENUM_ATTR_ENTRIES | NVTX_PAYLOAD_ENUM_ATTR_NUM_ENTRIES |
       NVTX_PAYLOAD_ENUM_ATTR_SIZE | NVTX_PAYLOAD_ENUM_ATTR_SCHEMA_ID,
-    .name = NULL,
+    .name = nullptr,
     .entries = NvtxEnumRedSchema,
     .numEntries = std::extent<decltype(NvtxEnumRedSchema)>::value,
     .sizeOfEnum = sizeof(ncclRedOp_t),

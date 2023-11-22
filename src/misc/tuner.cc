@@ -67,7 +67,7 @@ ncclResult_t ncclCloseTunerPlugin(ncclTuner_t** tuner) {
   pthread_mutex_lock(&tunerPluginLock);
   if (--tunerPluginRefCount == 0) {
     if (tunerPluginLib == nullptr) {
-      WARN("Tuner plugin refcount is 0, yet tunerPluginLib ptr is NULL\n");
+      WARN("Tuner plugin refcount is 0, yet tunerPluginLib ptr is nullptr\n");
     } else {
       INFO(NCCL_TUNING, "Closing tuner: '%s'", tunerSymbol->name);
       dlclose(tunerPluginLib);

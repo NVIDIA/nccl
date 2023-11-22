@@ -16,7 +16,7 @@ __thread ncclResult_t ncclGroupError = ncclSuccess;
 __thread struct ncclComm* ncclGroupCommHead = nullptr;
 __thread struct ncclComm* ncclGroupCommPreconnectHead = nullptr;
 __thread struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> ncclAsyncJobs;
-__thread struct ncclGroupJob *ncclGroupJobMainPtr = NULL;
+__thread struct ncclGroupJob *ncclGroupJobMainPtr = nullptr;
 __thread struct ncclGroupJob ncclGroupJobMain;
 __thread int ncclGroupBlocking = -1; /* default mode */
 __thread bool ncclGroupJobAbortFlag = false;
@@ -69,7 +69,7 @@ void* ncclAsyncJobMain(void* arg) {
 
 ncclResult_t ncclAsyncJobComplete(struct ncclAsyncJob* job) {
   ncclResult_t ret;
-  SYSCHECK(pthread_join(job->thread, NULL), "pthread_join");
+  SYSCHECK(pthread_join(job->thread, nullptr), "pthread_join");
   if (job->result != ncclSuccess) {
     WARN("ncclAsyncJobComplete: job %p failed, job error %d", job, job->result);
   }
@@ -107,7 +107,7 @@ ncclResult_t ncclPreconnectFunc(struct ncclAsyncJob* job_) {
   struct ncclComm* comm = job->comm;
   CUDACHECK(cudaSetDevice(comm->cudaDev));
   if (CPU_COUNT(&comm->cpuAffinity)) sched_setaffinity(0, sizeof(cpu_set_t), &comm->cpuAffinity);
-  NCCLCHECK(ncclTransportP2pSetup(comm, NULL, 1));
+  NCCLCHECK(ncclTransportP2pSetup(comm, nullptr, 1));
   return ncclSuccess;
 }
 
@@ -185,8 +185,8 @@ static inline void groupResetJobState(struct ncclGroupJob* job) {
     if (job->groupBlockingPtr) *job->groupBlockingPtr = -1;
     if (job->abortFlagPtr) *job->abortFlagPtr = false;
     if (job->groupErrorPtr) *job->groupErrorPtr = ncclSuccess;
-    if (job->groupCommHeadPtr) *job->groupCommHeadPtr = NULL;
-    if (job->groupCommPreconnectHeadPtr) *job->groupCommPreconnectHeadPtr = NULL;
+    if (job->groupCommHeadPtr) *job->groupCommHeadPtr = nullptr;
+    if (job->groupCommPreconnectHeadPtr) *job->groupCommPreconnectHeadPtr = nullptr;
     memset(job, 0, sizeof(struct ncclGroupJob));
   }
   return;
@@ -196,8 +196,8 @@ static void groupCleanup(struct ncclComm** groupCommHeadPtr, struct ncclComm** g
   struct ncclComm* comm = *groupCommHeadPtr;
 
   /* reset all thread local variables */
-  *groupCommHeadPtr = NULL;
-  *groupCommPreconnectHeadPtr = NULL;
+  *groupCommHeadPtr = nullptr;
+  *groupCommPreconnectHeadPtr = nullptr;
   *groupErrorPtr = ncclSuccess;
   *groupBlockingPtr = -1;
   *groupJobAbortFlagPtr = false;
@@ -411,7 +411,7 @@ ncclResult_t ncclGroupEndInternal() {
       }
 
       ncclGroupJobMainPtr->base.func = groupLaunch;
-      SYSCHECKGOTO(pthread_create(&ncclGroupJobMainPtr->base.thread, NULL, ncclAsyncJobMain, (void*)&ncclGroupJobMainPtr->base), ret, fail);
+      SYSCHECKGOTO(pthread_create(&ncclGroupJobMainPtr->base.thread, nullptr, ncclAsyncJobMain, (void*)&ncclGroupJobMainPtr->base), ret, fail);
       ret = ncclInProgress;
     } else {
       /* blocking group */

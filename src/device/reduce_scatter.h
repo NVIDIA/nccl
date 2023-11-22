@@ -101,7 +101,7 @@ struct RunWorkElement<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROT
     const int rank = ncclShmem.comm.rank;
     const int nranks = ncclShmem.comm.nRanks;
 
-    /* if we are direct NVLS, we only need to allocate 1 warp to scatter for sync; 
+    /* if we are direct NVLS, we only need to allocate 1 warp to scatter for sync;
      * if not, based on #ranks, we allocate 7 or 5 warps to reduce to saturate bandwidth
      * and the rest are allocated to scatter. */
     const int nThreadsReduce = args->regUsed ? (NCCL_MAX_NTHREADS - WARP_SIZE) : (nranks <= 6 ? 7 * WARP_SIZE : 5 * WARP_SIZE);
@@ -114,7 +114,7 @@ struct RunWorkElement<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROT
         // Scatter
         using Proto = ProtoSimple<1, 1, COLL_UNROLL>;
         Primitives<T, RedOp, FanAsymmetric<0, NCCL_MAX_NVLS_ARITY>, /*Direct=*/0, Proto, 0>
-          prims(tid, nThreadsScatter, NULL, nvls->up, args->sendbuff, NULL,
+          prims(tid, nThreadsScatter, nullptr, nvls->up, args->sendbuff, nullptr,
             args->redOpArg, 0 * Proto::MaxGroupWidth, 1, 1);
         for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
           ssize_t offset = gridOffset + bid * chunkSize;
@@ -125,7 +125,7 @@ struct RunWorkElement<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROT
         // Reduce through NVLS
         using Proto = ProtoSimple<1, 1, COLL_UNROLL, 1, 0>;
         Primitives<T, RedOp, FanAsymmetric<1, 0>, /*Direct=*/0, Proto, 0>
-          prims(tid - tidEndScatter, nThreadsReduce, &nvls->down, NULL, NULL, args->recvbuff,
+          prims(tid - tidEndScatter, nThreadsReduce, &nvls->down, nullptr, nullptr, args->recvbuff,
             args->redOpArg, 3 * Proto::MaxGroupWidth, 0, 0);
         for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
           ssize_t offset = gridOffset + bid * chunkSize;
@@ -138,7 +138,7 @@ struct RunWorkElement<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROT
         // Scatter
         using Proto = ProtoSimple<1, 1, COLL_UNROLL>;
         Primitives<T, RedOp, FanSymmetric<NCCL_MAX_NVLS_ARITY>, /*Direct=*/0, Proto, 0>
-          prims(tid, nThreadsScatter, nvls->up, nvls->up, NULL, NULL,
+          prims(tid, nThreadsScatter, nvls->up, nvls->up, nullptr, nullptr,
             args->redOpArg, 0 * Proto::MaxGroupWidth, 1, 1);
         for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
           prims.scatter(0, 0, 0, 0, -1, 0);
@@ -150,7 +150,7 @@ struct RunWorkElement<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROT
         // Reduce through NVLS
         using Proto = ProtoSimple<1, 1, COLL_UNROLL, 1, 0>;
         Primitives<T, RedOp, FanSymmetric<1>, /*Direct=*/1, Proto, 0>
-          prims(tid - tidEndScatter, nThreadsReduce, &nvls->down, &nvls->down, NULL, args->recvbuff,
+          prims(tid - tidEndScatter, nThreadsReduce, &nvls->down, &nvls->down, nullptr, args->recvbuff,
             args->redOpArg, 3 * Proto::MaxGroupWidth, 0, 0, args);
         for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
           ssize_t outOffset = gridOffset + bid * chunkSize;

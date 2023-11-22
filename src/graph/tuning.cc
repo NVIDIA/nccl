@@ -45,7 +45,7 @@ ncclResult_t parseList(const char* str, const char* elems[], int nelems, int* li
   while (token) {
     for (int i=0; i<nelems; i++)
       if (strcasecmp(token, elems[i]) == 0) list[i] = set;
-    token = strtok_r(NULL, ",", &tmpStr);
+    token = strtok_r(nullptr, ",", &tmpStr);
   }
   free(tokStr);
   return ncclSuccess;
@@ -398,9 +398,9 @@ static float treeCorrectionFactor[NCCL_NUM_PROTOCOLS][23] = {
 };
 
 ncclResult_t ncclTopoGetAlgoTime(struct ncclInfo* info, int algorithm, int protocol, int numPipeOps, float* time, bool* backup) {
-  float bw = info->comm->bandwidths[info->coll][algorithm][protocol]; 
+  float bw = info->comm->bandwidths[info->coll][algorithm][protocol];
   float lat = info->comm->latencies[info->coll][algorithm][protocol];
-  
+
   if (backup) {
     *backup = false;
     if (algorithm == NCCL_ALGO_RING && bw == 0.0f) {

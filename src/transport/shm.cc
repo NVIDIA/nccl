@@ -158,7 +158,7 @@ static ncclResult_t shmSendConnect(struct ncclComm* comm, struct ncclConnect* co
     int tpProxyRank;
     tpProxyRank = comm->topParentRanks[comm->rank];
     NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_SHM, 1, tpProxyRank, &send->proxyConn));
-    struct shmProxyInfo proxyInfo = { NULL, NULL, send->conn.buffs[NCCL_PROTO_SIMPLE], resources->hostMem, resources->remHostMem };
+    struct shmProxyInfo proxyInfo = { nullptr, nullptr, send->conn.buffs[NCCL_PROTO_SIMPLE], resources->hostMem, resources->remHostMem };
     NCCLCHECK(ncclProxyCallBlocking(comm, &send->proxyConn, ncclProxyMsgConnect, &proxyInfo, sizeof(struct shmProxyInfo), &proxyInfo, sizeof(struct shmProxyInfo)));
     send->conn.buffs[NCCL_PROTO_SIMPLE] = proxyInfo.devFifo;
     send->conn.tail = &proxyInfo.ceRecvMem->tail;
@@ -192,7 +192,7 @@ static ncclResult_t shmRecvConnect(struct ncclComm* comm, struct ncclConnect* co
 
   if (useMemcpyRecv) {
     NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_SHM, 0, comm->rank, &recv->proxyConn));
-    struct shmProxyInfo proxyInfo = { NULL, NULL, recv->conn.buffs[NCCL_PROTO_SIMPLE], resources->remHostMem, resources->hostMem };
+    struct shmProxyInfo proxyInfo = { nullptr, nullptr, recv->conn.buffs[NCCL_PROTO_SIMPLE], resources->remHostMem, resources->hostMem };
     NCCLCHECK(ncclProxyCallBlocking(comm, &recv->proxyConn, ncclProxyMsgConnect, &proxyInfo, sizeof(struct shmProxyInfo), &proxyInfo, sizeof(struct shmProxyInfo)));
     recv->conn.buffs[NCCL_PROTO_SIMPLE] = proxyInfo.devFifo;
     recv->conn.tail = &proxyInfo.ceRecvMem->tail;
@@ -409,8 +409,8 @@ static ncclResult_t shmRecvProxyProgress(struct ncclProxyState* proxyState, stru
 struct ncclTransport shmTransport = {
   "SHM",
   shmCanConnect,
-  { shmSendSetup, shmSendConnect, shmSendFree, NULL, NULL, NULL, NULL, NULL },
-  { shmRecvSetup, shmRecvConnect, shmRecvFree, NULL, NULL, NULL, NULL, NULL }
+  { shmSendSetup, shmSendConnect, shmSendFree, nullptr, nullptr, nullptr, nullptr, nullptr },
+  { shmRecvSetup, shmRecvConnect, shmRecvFree, nullptr, nullptr, nullptr, nullptr, nullptr }
 };
 
 static void initCeOperation() {

@@ -64,7 +64,7 @@ static ncclResult_t socketWait(int op, struct ncclSocket* sock, void* ptr, int s
  * Output: "IPv4/IPv6 address<port>"
  */
 const char *ncclSocketToString(union ncclSocketAddress *addr, char *buf, const int numericHostForm /*= 1*/) {
-  if (buf == NULL || addr == NULL) return NULL;
+  if (buf == nullptr || addr == nullptr) return nullptr;
   struct sockaddr *saddr = &addr->sa;
   if (saddr->sa_family != AF_INET && saddr->sa_family != AF_INET6) { buf[0]='\0'; return buf; }
   char host[NI_MAXHOST], service[NI_MAXSERV];
@@ -86,7 +86,7 @@ static uint16_t socketToPort(union ncclSocketAddress *addr) {
 static int envSocketFamily(void) {
   int family = -1; // Family selection is not forced, will use first one found
   const char* env = ncclGetEnv("NCCL_SOCKET_FAMILY");
-  if (env == NULL)
+  if (env == nullptr)
     return family;
 
   INFO(NCCL_ENV, "NCCL_SOCKET_FAMILY set by environment to %s", env);
@@ -113,7 +113,7 @@ static int findInterfaces(const char* prefixList, char* names, union ncclSocketA
   struct ifaddrs *interfaces, *interface;
   getifaddrs(&interfaces);
   for (interface = interfaces; interface && found < maxIfs; interface = interface->ifa_next) {
-    if (interface->ifa_addr == NULL) continue;
+    if (interface->ifa_addr == nullptr) continue;
 
     /* We only support IPv4 & IPv6 */
     int family = interface->ifa_addr->sa_family;
@@ -210,7 +210,7 @@ int ncclFindInterfaceMatchSubnet(char* ifNames, union ncclSocketAddress* localAd
   struct ifaddrs *interfaces, *interface;
   getifaddrs(&interfaces);
   for (interface = interfaces; interface && !found; interface = interface->ifa_next) {
-    if (interface->ifa_addr == NULL) continue;
+    if (interface->ifa_addr == nullptr) continue;
 
     /* We only support IPv4 & IPv6 */
     int family = interface->ifa_addr->sa_family;
@@ -263,7 +263,7 @@ ncclResult_t ncclSocketGetAddrFromString(union ncclSocketAddress* ua, const char
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
 
-    if ( (rv = getaddrinfo(ni.prefix, NULL, &hints, &p)) != 0) {
+    if ( (rv = getaddrinfo(ni.prefix, nullptr, &hints, &p)) != 0) {
       WARN("Net : error encountered when getting address info : %s", gai_strerror(rv));
       return ncclInvalidArgument;
     }
@@ -357,8 +357,8 @@ int ncclFindInterfaces(char* ifNames, union ncclSocketAddress *ifAddrs, int ifNa
 }
 
 ncclResult_t ncclSocketListen(struct ncclSocket* sock) {
-  if (sock == NULL) {
-    WARN("ncclSocketListen: pass NULL socket");
+  if (sock == nullptr) {
+    WARN("ncclSocketListen: pass nullptr socket");
     return ncclInvalidArgument;
   }
   if (sock->fd == -1) {
@@ -397,8 +397,8 @@ ncclResult_t ncclSocketListen(struct ncclSocket* sock) {
 }
 
 ncclResult_t ncclSocketGetAddr(struct ncclSocket* sock, union ncclSocketAddress* addr) {
-  if (sock == NULL) {
-    WARN("ncclSocketGetAddr: pass NULL socket");
+  if (sock == nullptr) {
+    WARN("ncclSocketGetAddr: pass nullptr socket");
     return ncclInvalidArgument;
   }
   if (sock->state != ncclSocketStateReady) return ncclInternalError;
@@ -535,8 +535,8 @@ static ncclResult_t socketPollConnect(struct ncclSocket* sock) {
 }
 
 ncclResult_t ncclSocketPollConnect(struct ncclSocket* sock) {
-  if (sock == NULL) {
-    WARN("ncclSocketPollConnect: pass NULL socket");
+  if (sock == nullptr) {
+    WARN("ncclSocketPollConnect: pass nullptr socket");
     return ncclInvalidArgument;
   }
   NCCLCHECK(socketPollConnect(sock));
@@ -574,7 +574,7 @@ static ncclResult_t socketProgressState(struct ncclSocket* sock) {
 }
 
 ncclResult_t ncclSocketReady(struct ncclSocket* sock, int *running) {
-  if (sock == NULL) {
+  if (sock == nullptr) {
     *running = 0;
     return ncclSuccess;
   }
@@ -596,8 +596,8 @@ ncclResult_t ncclSocketConnect(struct ncclSocket* sock) {
 #endif
   const int one = 1;
 
-  if (sock == NULL) {
-    WARN("ncclSocketConnect: pass NULL socket");
+  if (sock == nullptr) {
+    WARN("ncclSocketConnect: pass nullptr socket");
     return ncclInvalidArgument;
   }
   if (sock->fd == -1) {
@@ -618,7 +618,7 @@ ncclResult_t ncclSocketConnect(struct ncclSocket* sock) {
   do {
     NCCLCHECK(socketProgressState(sock));
   } while (sock->asyncFlag == 0 &&
-      (sock->abortFlag == NULL || *sock->abortFlag == 0) &&
+      (sock->abortFlag == nullptr || *sock->abortFlag == 0) &&
       (sock->state == ncclSocketStateConnecting ||
        sock->state == ncclSocketStateConnectPolling ||
        sock->state == ncclSocketStateConnected));
@@ -642,8 +642,8 @@ ncclResult_t ncclSocketConnect(struct ncclSocket* sock) {
 ncclResult_t ncclSocketAccept(struct ncclSocket* sock, struct ncclSocket* listenSock) {
   ncclResult_t ret = ncclSuccess;
 
-  if (listenSock == NULL || sock == NULL) {
-    WARN("ncclSocketAccept: pass NULL socket");
+  if (listenSock == nullptr || sock == nullptr) {
+    WARN("ncclSocketAccept: pass nullptr socket");
     ret = ncclInvalidArgument;
     goto exit;
   }
@@ -665,7 +665,7 @@ ncclResult_t ncclSocketAccept(struct ncclSocket* sock, struct ncclSocket* listen
   do {
     NCCLCHECKGOTO(socketProgressState(sock), ret, exit);
   } while (sock->asyncFlag == 0 &&
-      (sock->abortFlag == NULL || *sock->abortFlag == 0) &&
+      (sock->abortFlag == nullptr || *sock->abortFlag == 0) &&
       (sock->state == ncclSocketStateAccepting ||
        sock->state == ncclSocketStateAccepted));
 
@@ -693,7 +693,7 @@ exit:
 ncclResult_t ncclSocketInit(struct ncclSocket* sock, union ncclSocketAddress* addr, uint64_t magic, enum ncclSocketType type, volatile uint32_t* abortFlag, int asyncFlag) {
   ncclResult_t ret = ncclSuccess;
 
-  if (sock == NULL) goto exit;
+  if (sock == nullptr) goto exit;
   sock->timedOutRetries = 0;
   sock->refusedRetries = 0;
   sock->abortFlag = abortFlag;
@@ -743,8 +743,8 @@ fail:
 }
 
 ncclResult_t ncclSocketProgress(int op, struct ncclSocket* sock, void* ptr, int size, int* offset) {
-  if (sock == NULL) {
-    WARN("ncclSocketProgress: pass NULL socket");
+  if (sock == nullptr) {
+    WARN("ncclSocketProgress: pass nullptr socket");
     return ncclInvalidArgument;
   }
   NCCLCHECK(socketProgress(op, sock, ptr, size, offset));
@@ -752,8 +752,8 @@ ncclResult_t ncclSocketProgress(int op, struct ncclSocket* sock, void* ptr, int 
 }
 
 ncclResult_t ncclSocketWait(int op, struct ncclSocket* sock, void* ptr, int size, int* offset) {
-  if (sock == NULL) {
-    WARN("ncclSocketWait: pass NULL socket");
+  if (sock == nullptr) {
+    WARN("ncclSocketWait: pass nullptr socket");
     return ncclInvalidArgument;
   }
   NCCLCHECK(socketWait(op, sock, ptr, size, offset));
@@ -762,8 +762,8 @@ ncclResult_t ncclSocketWait(int op, struct ncclSocket* sock, void* ptr, int size
 
 ncclResult_t ncclSocketSend(struct ncclSocket* sock, void* ptr, int size) {
   int offset = 0;
-  if (sock == NULL) {
-    WARN("ncclSocketSend: pass NULL socket");
+  if (sock == nullptr) {
+    WARN("ncclSocketSend: pass nullptr socket");
     return ncclInvalidArgument;
   }
   if (sock->state != ncclSocketStateReady) {
@@ -776,8 +776,8 @@ ncclResult_t ncclSocketSend(struct ncclSocket* sock, void* ptr, int size) {
 
 ncclResult_t ncclSocketRecv(struct ncclSocket* sock, void* ptr, int size) {
   int offset = 0;
-  if (sock == NULL) {
-    WARN("ncclSocketRecv: pass NULL socket");
+  if (sock == nullptr) {
+    WARN("ncclSocketRecv: pass nullptr socket");
     return ncclInvalidArgument;
   }
   if (sock->state != ncclSocketStateReady) {
@@ -791,8 +791,8 @@ ncclResult_t ncclSocketRecv(struct ncclSocket* sock, void* ptr, int size) {
 // Receive or detect connection closed
 ncclResult_t ncclSocketTryRecv(struct ncclSocket* sock, void* ptr, int size, int* closed, bool blocking) {
   int offset = 0;
-  if (sock == NULL) {
-    WARN("ncclSocketTryRecv: pass NULL socket");
+  if (sock == nullptr) {
+    WARN("ncclSocketTryRecv: pass nullptr socket");
     return ncclInvalidArgument;
   }
   *closed = 0;
@@ -821,7 +821,7 @@ ncclResult_t ncclSocketTryRecv(struct ncclSocket* sock, void* ptr, int size, int
 }
 
 ncclResult_t ncclSocketClose(struct ncclSocket* sock) {
-  if (sock != NULL) {
+  if (sock != nullptr) {
     if (sock->fd >= 0) {
       /* shutdown() is needed to send FIN packet to proxy thread; shutdown() is not affected
        * by refcount of fd, but close() is. close() won't close a fd and send FIN packet if
@@ -837,8 +837,8 @@ ncclResult_t ncclSocketClose(struct ncclSocket* sock) {
 }
 
 ncclResult_t ncclSocketGetFd(struct ncclSocket* sock, int* fd) {
-  if (sock == NULL) {
-    WARN("ncclSocketGetFd: pass NULL socket");
+  if (sock == nullptr) {
+    WARN("ncclSocketGetFd: pass nullptr socket");
     return ncclInvalidArgument;
   }
   if (fd) *fd = sock->fd;
@@ -846,8 +846,8 @@ ncclResult_t ncclSocketGetFd(struct ncclSocket* sock, int* fd) {
 }
 
 ncclResult_t ncclSocketSetFd(int fd, struct ncclSocket* sock) {
-  if (sock == NULL) {
-    WARN("ncclSocketGetFd: pass NULL socket");
+  if (sock == nullptr) {
+    WARN("ncclSocketGetFd: pass nullptr socket");
     return ncclInvalidArgument;
   }
   sock->fd = fd;

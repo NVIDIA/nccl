@@ -33,30 +33,30 @@ static void shmHandleInit(int fd, char* shmPath, size_t shmSize, size_t realShmS
   handle->devShmPtr = dptr;
   handle->shmSize = shmSize;
   handle->realShmSize = realShmSize;
-  handle->refcount = (hptr != NULL) ? (int*)(hptr + shmSize) : NULL;
+  handle->refcount = (hptr != nullptr) ? (int*)(hptr + shmSize) : nullptr;
   if (create) {
     int slen = strlen(shmPath);
     handle->shmPath = (char*)malloc(slen + 1);
     memcpy(handle->shmPath, shmPath, slen + 1);
     if (hptr) memset(hptr, 0, shmSize);
   } else {
-    handle->shmPath = NULL;
+    handle->shmPath = nullptr;
   }
   return;
 }
 
 ncclResult_t ncclShmOpen(char* shmPath, size_t shmSize, void** shmPtr, void** devShmPtr, int refcount, ncclShmHandle_t* handle) {
   int fd = -1;
-  char* hptr = NULL;
-  void* dptr = NULL;
+  char* hptr = nullptr;
+  void* dptr = nullptr;
   ncclResult_t ret = ncclSuccess;
   struct shmHandleInternal* tmphandle;
   bool create = refcount > 0 ? true : false;
   const size_t refSize = sizeof(int); /* extra sizeof(int) bytes for reference count */
   const size_t realShmSize = shmSize + refSize;
 
-  *handle = *shmPtr = NULL; /* assume shmPtr and handle always set correctly by users. */
-  EQCHECKGOTO(tmphandle = (struct shmHandleInternal*)calloc(1, sizeof(struct shmHandleInternal)), NULL, ret, fail);
+  *handle = *shmPtr = nullptr; /* assume shmPtr and handle always set correctly by users. */
+  EQCHECKGOTO(tmphandle = (struct shmHandleInternal*)calloc(1, sizeof(struct shmHandleInternal)), nullptr, ret, fail);
   if (create) {
     /* refcount > 0 means the caller tries to allocate a shared memory. This shared memory segment will have
      * refcount references; when the peer attaches, it should pass -1 to reduce one reference count. When it
@@ -78,11 +78,11 @@ ncclResult_t ncclShmOpen(char* shmPath, size_t shmSize, void** shmPtr, void** de
     SYSCHECKGOTO(fd = open(shmPath, O_RDWR, S_IRUSR | S_IWUSR), ret, fail);
   }
 
-  hptr = (char*)mmap(NULL, realShmSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  hptr = (char*)mmap(nullptr, realShmSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   if (hptr == MAP_FAILED) {
     WARN("Could not map %s size %zi, error: %s", shmPath, realShmSize, strerror(errno));
     ret = ncclSystemError;
-    hptr = NULL;
+    hptr = nullptr;
     goto fail;
   }
 
@@ -114,10 +114,10 @@ fail:
   if (tmphandle) {
     shmHandleInit(fd, shmPath, shmSize, realShmSize, hptr, dptr, create, tmphandle);
     ncclShmClose((ncclShmHandle_t)tmphandle);
-    tmphandle = NULL;
+    tmphandle = nullptr;
   }
-  hptr = NULL;
-  dptr = NULL;
+  hptr = nullptr;
+  dptr = nullptr;
   goto exit;
 }
 
@@ -127,7 +127,7 @@ ncclResult_t ncclShmClose(ncclShmHandle_t handle) {
   if (tmphandle) {
     if (tmphandle->fd >= 0) {
       close(tmphandle->fd);
-      if (tmphandle->shmPath != NULL && tmphandle->refcount != NULL && *tmphandle->refcount > 0) {
+      if (tmphandle->shmPath != nullptr && tmphandle->refcount != nullptr && *tmphandle->refcount > 0) {
         if (unlink(tmphandle->shmPath) != 0) {
           WARN("unlink shared memory %s failed, error: %s", tmphandle->shmPath, strerror(errno));
           ret = ncclSystemError;
@@ -152,13 +152,13 @@ ncclResult_t ncclShmUnlink(ncclShmHandle_t handle) {
   ncclResult_t ret = ncclSuccess;
   struct shmHandleInternal* tmphandle = (struct shmHandleInternal*)handle;
   if (tmphandle) {
-    if (tmphandle->shmPath != NULL) {
+    if (tmphandle->shmPath != nullptr) {
       if (unlink(tmphandle->shmPath) != 0) {
         WARN("unlink shared memory %s failed, error: %s", tmphandle->shmPath, strerror(errno));
         ret = ncclSystemError;
       }
       free(tmphandle->shmPath);
-      tmphandle->shmPath = NULL;
+      tmphandle->shmPath = nullptr;
     }
   }
   return ret;
@@ -169,7 +169,7 @@ ncclResult_t ncclShmemAllgather(struct ncclComm *comm, struct ncclShmemCollBuff 
   int curRound = shmem->round;
   size_t mycnt;
 
-  if (comm == NULL || shmem == NULL || sendbuff == NULL || recvbuff == NULL) {
+  if (comm == nullptr || shmem == nullptr || sendbuff == nullptr || recvbuff == nullptr) {
     ret = ncclInvalidArgument;
     goto exit;
   }

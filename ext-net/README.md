@@ -80,13 +80,13 @@ typedef struct {
   ncclResult_t (*listen)(int dev, void* handle, void** listenComm);
   // Connect to a handle and return a sending comm object for that peer.
   // This call must not block for the connection to be established, and instead
-  // should return successfully with sendComm == NULL with the expectation that
-  // it will be called again until sendComm != NULL.
+  // should return successfully with sendComm == nullptr with the expectation that
+  // it will be called again until sendComm != nullptr.
   ncclResult_t (*connect)(int dev, void* handle, void** sendComm);
   // Finalize connection establishment after remote peer has called connect.
   // This call must not block for the connection to be established, and instead
-  // should return successfully with recvComm == NULL with the expectation that
-  // it will be called again until recvComm != NULL.
+  // should return successfully with recvComm == nullptr with the expectation that
+  // it will be called again until recvComm != nullptr.
   ncclResult_t (*accept)(void* listenComm, void** recvComm);
   // Register/Deregister memory. Comm can be either a sendComm or a recvComm.
   // Type is either NCCL_PTR_HOST or NCCL_PTR_CUDA.
@@ -95,15 +95,15 @@ typedef struct {
   ncclResult_t (*regMrDmaBuf)(void* comm, void* data, size_t size, int type, uint64_t offset, int fd, void** mhandle);
   ncclResult_t (*deregMr)(void* comm, void* mhandle);
   // Asynchronous send to a peer.
-  // May return request == NULL if the call cannot be performed (or would block)
+  // May return request == nullptr if the call cannot be performed (or would block)
   ncclResult_t (*isend)(void* sendComm, void* data, int size, int tag, void* mhandle, void** request);
   // Asynchronous recv from a peer.
-  // May return request == NULL if the call cannot be performed (or would block)
+  // May return request == nullptr if the call cannot be performed (or would block)
   ncclResult_t (*irecv)(void* recvComm, int n, void** data, int* sizes, int* tags, void** mhandles, void** request);
   // Perform a flush/fence to make sure all data received with NCCL_PTR_CUDA is
   // visible to the GPU
   ncclResult_t (*iflush)(void* recvComm, int n, void** data, int* sizes, void** mhandles, void** request);
-  // Test whether a request is complete. If size is not NULL, it returns the
+  // Test whether a request is complete. If size is not nullptr, it returns the
   // number of bytes sent/received.
   ncclResult_t (*test)(void* request, int* done, int* sizes);
   // Close and free send/recv comm objects
@@ -197,7 +197,7 @@ The `name` is only used for logging.
 The `pciPath` is the base for all topology detection and should point to the PCI device directory
 in /sys. This is typically the directory pointed by `/sys/class/net/eth0/device` or
 `/sys/class/infiniband/mlx5_0/device`. If the network interface is virtual, then `pciPath` should
-be `NULL`.
+be `nullptr`.
 
 The `guid` field is used to determine when network adapters are connected to multiple PCI
 endpoints. For normal cases, it can be set to the device number. If multiple network devices have
@@ -238,20 +238,20 @@ takes a device number as input argument, and should return a local `listenComm` 
 The `handle` is a buffer of size `NCCL_NET_HANDLE_MAXSIZE` and is provided by NCCL.
 
 This call should never block, but contrary to `connect` and `accept`, `listenComm` should never
-be `NULL` if the call succeeds.
+be `nullptr` if the call succeeds.
 
 `connect`
 
 NCCL will use its bootstrap infrastructure to provide the `handle` to the sender side, then call
 `connect` on the sender side on a given device index `dev`, providing the `handle`. `connect`
-should not block either, and instead set `sendComm` to `NULL` and return `ncclSuccess`. In that
+should not block either, and instead set `sendComm` to `nullptr` and return `ncclSuccess`. In that
 case, NCCL will call `accept` again until it succeeds.
 
 `accept`
 
 To finalize the connection, the receiver side will call `accept` on the `listenComm` returned by
 the `listen` call previously. If the sender did not connect yet, `accept` should not block. It
-should return `ncclSuccess`, setting `recvComm` to `NULL`. NCCL will call `accept` again until it
+should return `ncclSuccess`, setting `recvComm` to `nullptr`. NCCL will call `accept` again until it
 succeeds.
 
 `closeListen`/`closeSend`/`closeRecv`
@@ -287,7 +287,7 @@ registration, as this `mhandle` will be passed back for all `isend`, `irecv`, `i
 `regMrDmaBuf`
 
 If the plugin has set the `NCCL_PTR_DMABUF` property in `ptrSupport`, NCCL will use `regMrDmaBuf`
-instead of `regMr`. If the property was not set, `regMrDmaBuf` can be set to `NULL`.
+instead of `regMr`. If the property was not set, `regMrDmaBuf` can be set to `nullptr`.
 
 
 `deregMr`
@@ -304,7 +304,7 @@ used if the network supports multi-receive operations (see `irecv`) to distingui
 different sends matching the same multi-receive. Otherwise it can be set to 0.
 
 The `isend` operation returns a handle in the `request` argument for further calls to `test`. If
-the `isend` operation cannot be initiated, `request` can be set to `NULL` and NCCL will call
+the `isend` operation cannot be initiated, `request` can be set to `nullptr` and NCCL will call
 `isend` again later.
 
 `irecv`
@@ -316,7 +316,7 @@ arrays. `tags` will specify a tag for each receive so that each of the `n` indep
 operations is received into the right buffer.
 
 If all receive operations can be initiated, `irecv` will return a handle in the `request` pointer,
-otherwise it will set it to `NULL`. In the case of multi-receive, all `n` receive operations are
+otherwise it will set it to `nullptr`. In the case of multi-receive, all `n` receive operations are
 handled by a single request handle.
 
 The sizes provided to `irecv` can (and will) be larger than the size of the `isend` operation.

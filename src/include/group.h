@@ -74,7 +74,7 @@ extern __thread struct ncclGroupJob ncclGroupJobMain;
 
 static inline void groupResetJobState() {
   ncclGroupBlocking = -1;
-  ncclGroupJobMainPtr = NULL;
+  ncclGroupJobMainPtr = nullptr;
   memset(&ncclGroupJobMain, 0, sizeof(struct ncclGroupJob));
   return;
 }

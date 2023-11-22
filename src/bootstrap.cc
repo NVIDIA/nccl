@@ -105,9 +105,9 @@ static void *bootstrapRoot(void* rargs) {
   ncclResult_t res = ncclSuccess;
   int nranks = 0, c = 0;
   struct extInfo info;
-  union ncclSocketAddress *rankAddresses = NULL;
-  union ncclSocketAddress *rankAddressesRoot = NULL; // for initial rank <-> root information exchange
-  union ncclSocketAddress *zero = NULL;
+  union ncclSocketAddress *rankAddresses = nullptr;
+  union ncclSocketAddress *rankAddressesRoot = nullptr; // for initial rank <-> root information exchange
+  union ncclSocketAddress *zero = nullptr;
   NCCLCHECKGOTO(ncclCalloc(&zero, 1), res, out);
   setFilesLimit();
 
@@ -157,7 +157,7 @@ static void *bootstrapRoot(void* rargs) {
   TRACE(NCCL_INIT, "SENT OUT ALL %d HANDLES", nranks);
 
 out:
-  if (listenSock != NULL) {
+  if (listenSock != nullptr) {
     ncclSocketClose(listenSock);
     free(listenSock);
   }
@@ -167,7 +167,7 @@ out:
   free(rargs);
 
   TRACE(NCCL_INIT, "DONE");
-  return NULL;
+  return nullptr;
 }
 
 ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFromEnv) {
@@ -176,14 +176,14 @@ ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFrom
   pthread_t thread;
 
   NCCLCHECK(ncclCalloc(&listenSock, 1));
-  NCCLCHECK(ncclSocketInit(listenSock, &handle->addr, handle->magic, ncclSocketTypeBootstrap, NULL, 0));
+  NCCLCHECK(ncclSocketInit(listenSock, &handle->addr, handle->magic, ncclSocketTypeBootstrap, nullptr, 0));
   NCCLCHECK(ncclSocketListen(listenSock));
   NCCLCHECK(ncclSocketGetAddr(listenSock, &handle->addr));
 
   NCCLCHECK(ncclCalloc(&args, 1));
   args->listenSock = listenSock;
   args->magic = handle->magic;
-  NEQCHECK(pthread_create(&thread, NULL, bootstrapRoot, (void*)args), 0);
+  NEQCHECK(pthread_create(&thread, nullptr, bootstrapRoot, (void*)args), 0);
   ncclSetThreadName(thread, "NCCL BootstrapR");
   NEQCHECK(pthread_detach(thread), 0); // will not be pthread_join()'d
   return ncclSuccess;
@@ -266,7 +266,7 @@ ncclResult_t bootstrapInit(struct ncclBootstrapHandle* handle, struct ncclComm* 
     tv.tv_sec = msec / 1000;
     tv.tv_nsec = 1000000 * (msec % 1000);
     TRACE(NCCL_INIT, "rank %d delaying connection to root by %ld msec", rank, msec);
-    (void) nanosleep(&tv, NULL);
+    (void) nanosleep(&tv, nullptr);
   }
 
   // send info on my listening socket to root
@@ -330,7 +330,7 @@ ncclResult_t bootstrapSplit(struct ncclBootstrapHandle* handle, struct ncclComm*
 
   // Setup my sockets for the allgather ring and other p2p connections
   NCCLCHECKGOTO(ncclSocketInit(&state->listenSock, &bootstrapNetIfAddr, comm->magic, ncclSocketTypeBootstrap, comm->abortFlag, 0), ret, fail);
-  NCCLCHECKGOTO(ncclSocketInit(&state->ringRecvSocket, NULL, comm->magic, ncclSocketTypeBootstrap, comm->abortFlag, 0), ret, fail);
+  NCCLCHECKGOTO(ncclSocketInit(&state->ringRecvSocket, nullptr, comm->magic, ncclSocketTypeBootstrap, comm->abortFlag, 0), ret, fail);
 
   // Create socket for other ranks to contact me
   NCCLCHECKGOTO(ncclSocketListen(&state->listenSock), ret, fail);
@@ -486,7 +486,7 @@ ncclResult_t unexpectedEnqueue(struct bootstrapState* state, int peer, int tag, 
 
   // Enqueue
   struct unexConn* list = state->unexpectedConnections;
-  if (list == NULL) {
+  if (list == nullptr) {
     state->unexpectedConnections = unex;
     return ncclSuccess;
   }
@@ -497,11 +497,11 @@ ncclResult_t unexpectedEnqueue(struct bootstrapState* state, int peer, int tag, 
 
 ncclResult_t unexpectedDequeue(struct bootstrapState* state, int peer, int tag, struct ncclSocket* sock, int* found) {
   struct unexConn* elem = state->unexpectedConnections;
-  struct unexConn* prev = NULL;
+  struct unexConn* prev = nullptr;
   *found = 0;
   while (elem) {
     if (elem->peer == peer && elem->tag == tag) {
-      if (prev == NULL) {
+      if (prev == nullptr) {
         state->unexpectedConnections = elem->next;
       } else {
         prev->next = elem->next;
@@ -519,7 +519,7 @@ ncclResult_t unexpectedDequeue(struct bootstrapState* state, int peer, int tag, 
 
 static void unexpectedFree(struct bootstrapState* state) {
   struct unexConn* elem = state->unexpectedConnections;
-  struct unexConn* prev = NULL;
+  struct unexConn* prev = nullptr;
 
   while (elem) {
     prev = elem;
@@ -566,7 +566,7 @@ fail:
 
 ncclResult_t bootstrapClose(void* commState) {
   struct bootstrapState* state = (struct bootstrapState*)commState;
-  if (state->unexpectedConnections != NULL) {
+  if (state->unexpectedConnections != nullptr) {
     unexpectedFree(state);
     if (*state->abortFlag == 0) {
       WARN("Unexpected connections are not empty");
@@ -586,7 +586,7 @@ ncclResult_t bootstrapClose(void* commState) {
 
 ncclResult_t bootstrapAbort(void* commState) {
   struct bootstrapState* state = (struct bootstrapState*)commState;
-  if (commState == NULL) return ncclSuccess;
+  if (commState == nullptr) return ncclSuccess;
   NCCLCHECK(ncclSocketClose(&state->listenSock));
   NCCLCHECK(ncclSocketClose(&state->ringSendSocket));
   NCCLCHECK(ncclSocketClose(&state->ringRecvSocket));

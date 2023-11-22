@@ -28,7 +28,7 @@ extern "C" {
 #include <limits.h>
 /* Opaque handle to communicator */
 typedef struct ncclComm* ncclComm_t;
-#define NCCL_COMM_NULL NULL
+#define NCCL_COMM_NULL nullptr
 
 #define NCCL_UNIQUE_ID_BYTES 128
 typedef struct { char internal[NCCL_UNIQUE_ID_BYTES]; } ncclUniqueId;
@@ -45,7 +45,7 @@ typedef enum { ncclSuccess                 =  0,
                ncclNumResults              =  8 } ncclResult_t;
 
 #define NCCL_CONFIG_UNDEF_INT INT_MIN
-#define NCCL_CONFIG_UNDEF_PTR NULL
+#define NCCL_CONFIG_UNDEF_PTR nullptr
 #define NCCL_SPLIT_NOCOLOR -1
 
 /* Communicator configuration. Users can assign value to attributes to specify the
@@ -118,7 +118,7 @@ ncclResult_t pncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId commId
  * This is a convenience function to create a single-process communicator clique.
  * Returns an array of ndev newly initialized communicators in comm.
  * comm should be pre-allocated with size at least ndev*sizeof(ncclComm_t).
- * If devlist is NULL, the first ndev CUDA devices are used.
+ * If devlist is nullptr, the first ndev CUDA devices are used.
  * Order of devlist defines user-order of processors within the communicator. */
 ncclResult_t  ncclCommInitAll(ncclComm_t* comm, int ndev, const int* devlist);
 ncclResult_t pncclCommInitAll(ncclComm_t* comm, int ndev, const int* devlist);
@@ -144,8 +144,8 @@ ncclResult_t pncclCommAbort(ncclComm_t comm);
  * Ranks with the same color will end up in the same communicator.
  * Within the new communicator, key will be used to order ranks.
  * NCCL_SPLIT_NOCOLOR as color will indicate the rank will not be part of any group
- * and will therefore return a NULL communicator.
- * If config is NULL, the new communicator will inherit the original communicator's
+ * and will therefore return a nullptr communicator.
+ * If config is nullptr, the new communicator will inherit the original communicator's
  * configuration*/
 ncclResult_t  ncclCommSplit(ncclComm_t comm, int color, int key, ncclComm_t *newcomm, ncclConfig_t* config);
 ncclResult_t pncclCommSplit(ncclComm_t comm, int color, int key, ncclComm_t *newcomm, ncclConfig_t* config);
@@ -155,7 +155,7 @@ const char*  ncclGetErrorString(ncclResult_t result);
 const char* pncclGetErrorString(ncclResult_t result);
 
 /* Returns a human-readable message of the last error that occurred.
- * comm is currently unused and can be set to NULL
+ * comm is currently unused and can be set to nullptr
  */
 const char*  ncclGetLastError(ncclComm_t comm);
 const char* pncclGetLastError(ncclComm_t comm);
@@ -265,7 +265,7 @@ ncclResult_t pncclRedOpDestroy(ncclRedOp_t op, ncclComm_t comm);
  *
  * Reduces data arrays of length count in sendbuff into recvbuff using op
  * operation.
- * recvbuff may be NULL on all calls except for root device.
+ * recvbuff may be nullptr on all calls except for root device.
  * root is the rank (not the CUDA device) where data will reside after the
  * operation is complete.
  *

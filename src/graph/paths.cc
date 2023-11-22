@@ -32,7 +32,7 @@ static ncclResult_t getPath(struct ncclTopoSystem* system, struct ncclTopoNode* 
 NCCL_PARAM(NvbDisable, "NVB_DISABLE", 0);
 
 static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclTopoSystem* system) {
-  if (baseNode->paths[baseNode->type] == NULL) {
+  if (baseNode->paths[baseNode->type] == nullptr) {
     NCCLCHECK(ncclCalloc(baseNode->paths+baseNode->type, system->nodes[baseNode->type].count));
   }
 
@@ -56,7 +56,7 @@ static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclT
       for (int l=0; l<node->nlinks; l++) {
         struct ncclTopoLink* link = node->links+l;
         struct ncclTopoNode* remNode = link->remNode;
-        if (remNode->paths[baseNode->type] == NULL) {
+        if (remNode->paths[baseNode->type] == nullptr) {
           NCCLCHECK(ncclCalloc(remNode->paths+baseNode->type, system->nodes[baseNode->type].count));
         }
         struct ncclTopoLinkList* remPath;
@@ -75,7 +75,7 @@ static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclT
               break;
             }
           }
-          if (remPath->list[0] == NULL) {
+          if (remPath->list[0] == nullptr) {
             WARN("Failed to find reverse path from remNode %d/%lx nlinks %d to node %d/%lx",
                  remNode->type, remNode->id, remNode->nlinks, node->type, node->id);
             return ncclInternalError;
@@ -118,7 +118,7 @@ static void printNodePaths(struct ncclTopoSystem* system, struct ncclTopoNode* n
   int offset = strlen(line);
 #endif
   for (int t=0; t<NCCL_TOPO_NODE_TYPES; t++) {
-    if (node->paths[t] == NULL) continue;
+    if (node->paths[t] == nullptr) continue;
     for (int n = 0; n<system->nodes[t].count; n++) {
 #ifdef ENABLE_TRACE
       line[0] = 0;
@@ -196,13 +196,13 @@ static void ncclTopoRemovePathType(struct ncclTopoSystem* system, int nodeType) 
     for (int n=0; n<system->nodes[t].count; n++) {
       struct ncclTopoNode* node = system->nodes[t].nodes+n;
       free(node->paths[nodeType]);
-      node->paths[nodeType] = NULL;
+      node->paths[nodeType] = nullptr;
     }
     // Remove links _from_ the given type
     for (int n=0; n<system->nodes[nodeType].count; n++) {
       struct ncclTopoNode* node = system->nodes[nodeType].nodes+n;
       free(node->paths[t]);
-      node->paths[t] = NULL;
+      node->paths[t] = nullptr;
     }
   }
 }
@@ -214,7 +214,7 @@ ncclResult_t ncclGetLevel(int* level, const char* disableEnv, const char* levelE
     if (disableEnv) {
       const char* str = ncclGetEnv(disableEnv);
       if (str) {
-        int disable = strtol(str, NULL, 0);
+        int disable = strtol(str, nullptr, 0);
         if (disable == 1) l = 0;
       }
     }
@@ -232,7 +232,7 @@ ncclResult_t ncclGetLevel(int* level, const char* disableEnv, const char* levelE
         // "old level" int, and each value mapping to the correct value defined in topo.h
         // maxOldLevel is a quick check to handle out of bounds (based on the length of levelsOldToNew)
         if (l == -1 && str[0] >= '0' && str[0] <= '9') {
-          int oldLevel = strtol(str, NULL, 0);
+          int oldLevel = strtol(str, nullptr, 0);
           const int maxOldLevel = sizeof(levelsOldToNew)/sizeof(int) - 1;
           if (oldLevel > maxOldLevel) oldLevel = maxOldLevel;
           l = levelsOldToNew[oldLevel];
@@ -380,7 +380,7 @@ ncclResult_t ncclTopoCheckGdr(struct ncclTopoSystem* system, int64_t busId, int 
 
   // Check if we are close enough that it makes sense to enable GDR
   int netGdrLevel = PATH_PXB;
-  NCCLCHECK(ncclGetLevel(&ncclTopoUserGdrLevel, NULL, "NCCL_NET_GDR_LEVEL"));
+  NCCLCHECK(ncclGetLevel(&ncclTopoUserGdrLevel, nullptr, "NCCL_NET_GDR_LEVEL"));
   if (ncclTopoUserGdrLevel != -2) netGdrLevel = ncclTopoUserGdrLevel;
   int distance = gpu->paths[NET][n].type;
   if (distance == PATH_PXN) {
@@ -493,14 +493,14 @@ int ncclPxnDisable(struct ncclComm* comm) {
 ncclResult_t ncclTopoGetPxnRanks(struct ncclComm* comm, int** intermediateRanks, int* nranks) {
   struct ncclTopoSystem* system = comm->topo;
   *nranks = 0;
-  *intermediateRanks = NULL;
+  *intermediateRanks = nullptr;
   if (system->nodes[NET].count == 0) return ncclSuccess;
 
   int nr = 0;
-  int* ranks = NULL;
+  int* ranks = nullptr;
   for (int rank=0; rank<comm->nRanks; rank++) {
     int netDev, proxyRank;
-    NCCLCHECK(ncclTopoGetNetDev(comm, comm->rank, NULL, 0, rank, &netDev, &proxyRank));
+    NCCLCHECK(ncclTopoGetNetDev(comm, comm->rank, nullptr, 0, rank, &netDev, &proxyRank));
     if (proxyRank == comm->rank) continue;
     int useGdr;
     NCCLCHECK(ncclTopoCheckGdr(comm->topo, comm->busId, netDev, 1, &useGdr));
@@ -549,7 +549,7 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclComm
   for (int g=0; g<system->nodes[GPU].count; g++) {
     for (int p=0; p<system->nodes[GPU].count; p++) {
       int p2p;
-      NCCLCHECK(ncclTopoCheckP2p(system, system->nodes[GPU].nodes[p].id, system->nodes[GPU].nodes[g].id, &p2p, NULL, NULL));
+      NCCLCHECK(ncclTopoCheckP2p(system, system->nodes[GPU].nodes[p].id, system->nodes[GPU].nodes[g].id, &p2p, nullptr, nullptr));
       if (p2p == 0) {
         // Divert all traffic through the CPU
         int cpu;
@@ -558,17 +558,17 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclComm
       }
     }
 
-    if (comm == NULL) continue;
+    if (comm == nullptr) continue;
     // Remove GPUs we can't (or don't want to) communicate with through P2P or SHM
     struct ncclPeerInfo* dstInfo = comm->peerInfo+system->nodes[GPU].nodes[g].gpu.rank;
     for (int p=0; p<system->nodes[GPU].count; p++) {
       if (p == g) continue;
       struct ncclPeerInfo* srcInfo = comm->peerInfo+system->nodes[GPU].nodes[p].gpu.rank;
       int p2p;
-      NCCLCHECK(ncclTransports[TRANSPORT_P2P]->canConnect(&p2p, system, NULL, srcInfo, dstInfo));
+      NCCLCHECK(ncclTransports[TRANSPORT_P2P]->canConnect(&p2p, system, nullptr, srcInfo, dstInfo));
       if (p2p == 0) {
         int shm;
-        NCCLCHECK(ncclTransports[TRANSPORT_SHM]->canConnect(&shm, system, NULL, srcInfo, dstInfo));
+        NCCLCHECK(ncclTransports[TRANSPORT_SHM]->canConnect(&shm, system, nullptr, srcInfo, dstInfo));
         if (shm == 0) {
           // Mark this peer as inaccessible. We'll trim it later.
           system->nodes[GPU].nodes[p].paths[GPU][g].type = PATH_NET;
@@ -637,13 +637,13 @@ ncclResult_t ncclTopoTrimSystem(struct ncclTopoSystem* system, struct ncclComm* 
   int ngpus = system->nodes[GPU].count;
   for (int i=0; i<ngpus; i++) {
     if (domains[i] == myDomain) continue;
-    struct ncclTopoNode* gpu = NULL;
+    struct ncclTopoNode* gpu = nullptr;
     int g;
     for (g=0; g<system->nodes[GPU].count /* This one varies over the loops */; g++) {
       gpu = system->nodes[GPU].nodes+g;
-      if (gpu->id == ids[i]) break; else gpu=NULL;
+      if (gpu->id == ids[i]) break; else gpu=nullptr;
     }
-    if (gpu == NULL) {
+    if (gpu == nullptr) {
       WARN("Could not find id %lx", ids[i]);
       free(domains);
       free(ids);
@@ -670,7 +670,7 @@ NCCL_PARAM(NChannelsPerNetPeer, "NCHANNELS_PER_NET_PEER", 2);
 
 static ncclResult_t ncclTopoGetNchannels(struct ncclTopoSystem* system, int g /*local gpu index*/, int peerRank, int* nChannels) {
   int peer;
-  struct ncclTopoLinkList* path = NULL;
+  struct ncclTopoLinkList* path = nullptr;
   if (ncclTopoRankToIndex(system, peerRank, &peer) == ncclSuccess) {
     // Same rank
     if (g == peer) {

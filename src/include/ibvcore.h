@@ -39,7 +39,7 @@ union ibv_gid {
 #define vext_field_avail(type, fld, sz) (offsetof(type, fld) < (sz))
 
 /*XXX:__VERBS_ABI_IS_EXTENDED produces warning "integer operation result is out of range" with g++ 4.8.2*/
-//static void *__VERBS_ABI_IS_EXTENDED = ((uint8_t *)NULL) - 1;
+//static void *__VERBS_ABI_IS_EXTENDED = ((uint8_t *)nullptr) - 1;
 
 enum ibv_node_type {
 	IBV_NODE_UNKNOWN	= -1,
@@ -1017,13 +1017,13 @@ struct verbs_context {
 /*static inline struct verbs_context *verbs_get_ctx(struct ibv_context *ctx)
 {
 	return (!ctx || (ctx->abi_compat != __VERBS_ABI_IS_EXTENDED)) ?
-		NULL : container_of(ctx, struct verbs_context, context);
+		nullptr : container_of(ctx, struct verbs_context, context);
 }
 
 #define verbs_get_ctx_op(ctx, op) ({ \
 	struct verbs_context *_vctx = verbs_get_ctx(ctx); \
 	(!_vctx || (_vctx->sz < sizeof(*_vctx) - offsetof(struct verbs_context, op)) || \
-	!_vctx->op) ? NULL : _vctx; })*/
+	!_vctx->op) ? nullptr : _vctx; })*/
 
 #define verbs_set_ctx_op(_vctx, op, ptr) ({ \
 	struct verbs_context *vctx = _vctx; \
@@ -1033,7 +1033,7 @@ struct verbs_context {
 static inline struct verbs_device *verbs_get_device(struct ibv_device *dev)
 {
 	return (dev->ops.alloc_context) ?
-		NULL : container_of(dev, struct verbs_device, device);
+		nullptr : container_of(dev, struct verbs_device, device);
 }
 
 static inline int ibv_post_send(struct ibv_qp *qp, struct ibv_send_wr *wr, struct ibv_send_wr **bad_wr) {

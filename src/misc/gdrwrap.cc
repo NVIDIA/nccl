@@ -31,7 +31,7 @@ pthread_mutex_t gdrLock = PTHREAD_MUTEX_INITIALIZER;
 #define LOAD_SYM(handle, symbol, funcptr) do {         \
     cast = (void**)&funcptr;                             \
     tmp = dlsym(handle, symbol);                         \
-    if (tmp == NULL) {                                   \
+    if (tmp == nullptr) {                                   \
       WARN("dlsym failed on %s - %s", symbol, dlerror());\
       goto teardown;                                     \
     }                                                    \
@@ -41,7 +41,7 @@ pthread_mutex_t gdrLock = PTHREAD_MUTEX_INITIALIZER;
 #define LOAD_SYM_OPTIONAL(handle, symbol, funcptr) do {\
     cast = (void**)&funcptr;                             \
     tmp = dlsym(handle, symbol);                         \
-    if (tmp == NULL) {                                   \
+    if (tmp == nullptr) {                                   \
       INFO(NCCL_INIT,"dlsym failed on %s, ignoring", symbol); \
     }                                                    \
     *cast = tmp;                                         \
@@ -51,7 +51,7 @@ static pthread_once_t initOnceControl = PTHREAD_ONCE_INIT;
 static ncclResult_t initResult;
 
 static void initOnceFunc(void) {
-  static void* gdrhandle = NULL;
+  static void* gdrhandle = nullptr;
   void* tmp;
   void** cast;
 
@@ -78,19 +78,19 @@ static void initOnceFunc(void) {
   return;
 
 teardown:
-  gdr_internal_open = NULL;
-  gdr_internal_close = NULL;
-  gdr_internal_pin_buffer = NULL;
-  gdr_internal_unpin_buffer = NULL;
-  gdr_internal_get_info = NULL;
-  gdr_internal_map = NULL;
-  gdr_internal_unmap = NULL;
-  gdr_internal_runtime_get_version = NULL;
-  gdr_internal_driver_get_version = NULL;
-  gdr_internal_copy_to_mapping = NULL;
-  gdr_internal_copy_from_mapping = NULL;
+  gdr_internal_open = nullptr;
+  gdr_internal_close = nullptr;
+  gdr_internal_pin_buffer = nullptr;
+  gdr_internal_unpin_buffer = nullptr;
+  gdr_internal_get_info = nullptr;
+  gdr_internal_map = nullptr;
+  gdr_internal_unmap = nullptr;
+  gdr_internal_runtime_get_version = nullptr;
+  gdr_internal_driver_get_version = nullptr;
+  gdr_internal_copy_to_mapping = nullptr;
+  gdr_internal_copy_from_mapping = nullptr;
 
-  if (gdrhandle != NULL) dlclose(gdrhandle);
+  if (gdrhandle != nullptr) dlclose(gdrhandle);
   initResult = ncclSystemError;
   return;
 }
@@ -102,15 +102,15 @@ ncclResult_t wrap_gdr_symbols(void) {
 }
 
 gdr_t wrap_gdr_open(void) {
-  if (gdr_internal_open == NULL) {
+  if (gdr_internal_open == nullptr) {
     WARN("GDRCOPY lib wrapper not initialized.");
-    return NULL;
+    return nullptr;
   }
   return gdr_internal_open();
 }
 
 ncclResult_t wrap_gdr_close(gdr_t g) {
-  if (gdr_internal_close == NULL) {
+  if (gdr_internal_close == nullptr) {
     WARN("GDRCOPY lib wrapper not initialized.");
     return ncclInternalError;
   }
@@ -123,7 +123,7 @@ ncclResult_t wrap_gdr_close(gdr_t g) {
 }
 
 ncclResult_t wrap_gdr_pin_buffer(gdr_t g, unsigned long addr, size_t size, uint64_t p2p_token, uint32_t va_space, gdr_mh_t *handle) {
-  if (gdr_internal_pin_buffer == NULL) {
+  if (gdr_internal_pin_buffer == nullptr) {
     WARN("GDRCOPY lib wrapper not initialized.");
     return ncclInternalError;
   }
@@ -137,7 +137,7 @@ ncclResult_t wrap_gdr_pin_buffer(gdr_t g, unsigned long addr, size_t size, uint6
 }
 
 ncclResult_t wrap_gdr_unpin_buffer(gdr_t g, gdr_mh_t handle) {
-  if (gdr_internal_unpin_buffer == NULL) {
+  if (gdr_internal_unpin_buffer == nullptr) {
     WARN("GDRCOPY lib wrapper not initialized.");
     return ncclInternalError;
   }
@@ -151,7 +151,7 @@ ncclResult_t wrap_gdr_unpin_buffer(gdr_t g, gdr_mh_t handle) {
 }
 
 ncclResult_t wrap_gdr_get_info(gdr_t g, gdr_mh_t handle, gdr_info_t *info) {
-  if (gdr_internal_get_info == NULL) {
+  if (gdr_internal_get_info == nullptr) {
     WARN("GDRCOPY lib wrapper not initialized.");
     return ncclInternalError;
   }
@@ -165,7 +165,7 @@ ncclResult_t wrap_gdr_get_info(gdr_t g, gdr_mh_t handle, gdr_info_t *info) {
 }
 
 ncclResult_t wrap_gdr_map(gdr_t g, gdr_mh_t handle, void **va, size_t size) {
-  if (gdr_internal_map == NULL) {
+  if (gdr_internal_map == nullptr) {
     WARN("GDRCOPY lib wrapper not initialized.");
     return ncclInternalError;
   }
@@ -179,7 +179,7 @@ ncclResult_t wrap_gdr_map(gdr_t g, gdr_mh_t handle, void **va, size_t size) {
 }
 
 ncclResult_t wrap_gdr_unmap(gdr_t g, gdr_mh_t handle, void *va, size_t size) {
-  if (gdr_internal_unmap == NULL) {
+  if (gdr_internal_unmap == nullptr) {
     WARN("GDRCOPY lib wrapper not initialized.");
     return ncclInternalError;
   }
@@ -193,7 +193,7 @@ ncclResult_t wrap_gdr_unmap(gdr_t g, gdr_mh_t handle, void *va, size_t size) {
 }
 
 ncclResult_t wrap_gdr_runtime_get_version(int *major, int *minor) {
-  if (gdr_internal_runtime_get_version == NULL) {
+  if (gdr_internal_runtime_get_version == nullptr) {
     WARN("GDRCOPY lib wrapper not initialized.");
     return ncclInternalError;
   }
@@ -202,7 +202,7 @@ ncclResult_t wrap_gdr_runtime_get_version(int *major, int *minor) {
 }
 
 ncclResult_t wrap_gdr_driver_get_version(gdr_t g, int *major, int *minor) {
-  if (gdr_internal_driver_get_version == NULL) {
+  if (gdr_internal_driver_get_version == nullptr) {
     WARN("GDRCOPY lib wrapper not initialized.");
     return ncclInternalError;
   }
@@ -211,7 +211,7 @@ ncclResult_t wrap_gdr_driver_get_version(gdr_t g, int *major, int *minor) {
 }
 
 ncclResult_t wrap_gdr_copy_to_mapping(gdr_mh_t handle, void *map_d_ptr, const void *h_ptr, size_t size) {
-  if (gdr_internal_copy_to_mapping == NULL) {
+  if (gdr_internal_copy_to_mapping == nullptr) {
     WARN("GDRCOPY lib wrapper not initialized.");
     return ncclInternalError;
   }
@@ -225,7 +225,7 @@ ncclResult_t wrap_gdr_copy_to_mapping(gdr_mh_t handle, void *map_d_ptr, const vo
 }
 
 ncclResult_t wrap_gdr_copy_from_mapping(gdr_mh_t handle, void *h_ptr, const void *map_d_ptr, size_t size) {
-  if (gdr_internal_copy_from_mapping == NULL) {
+  if (gdr_internal_copy_from_mapping == nullptr) {
     WARN("GDRCOPY lib wrapper not initialized.");
     return ncclInternalError;
   }

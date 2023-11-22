@@ -13,12 +13,12 @@
 static double freq = -1;
 static void calibrate() {
   struct timeval tv;
-  gettimeofday(&tv, NULL);
+  gettimeofday(&tv, nullptr);
   uint64_t timeCycles = __rdtsc();
   double time = - tv.tv_sec*1E6 - tv.tv_usec;
   uint64_t total = 0ULL;
   for (int i=0; i<10000; i++) total += __rdtsc();
-  gettimeofday(&tv, NULL);
+  gettimeofday(&tv, nullptr);
   timeCycles = __rdtsc() - timeCycles;
   time += tv.tv_sec*1E6 + tv.tv_usec;
   freq = timeCycles/time;

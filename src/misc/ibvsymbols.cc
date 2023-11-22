@@ -50,7 +50,7 @@ ncclResult_t buildIbvSymbols(struct ncclIbvSymbols* ibvSymbols) {
   ASSIGN_SYM(ibvSymbols, ibv_destroy_qp, ibv_internal_destroy_qp);
   ASSIGN_SYM(ibvSymbols, ibv_fork_init, ibv_internal_fork_init);
   ASSIGN_SYM(ibvSymbols, ibv_event_type_str, ibv_internal_event_type_str);
-  
+
   ASSIGN_SYM(ibvSymbols, ibv_query_ece, ibv_internal_query_ece);
   ASSIGN_SYM(ibvSymbols, ibv_set_ece, ibv_internal_set_ece);
 
@@ -70,7 +70,7 @@ ncclResult_t buildIbvSymbols(struct ncclIbvSymbols* ibvSymbols) {
 #define IBVERBS_VERSION "IBVERBS_1.1"
 
 ncclResult_t buildIbvSymbols(struct ncclIbvSymbols* ibvSymbols) {
-  static void* ibvhandle = NULL;
+  static void* ibvhandle = nullptr;
   void* tmp;
   void** cast;
 
@@ -86,7 +86,7 @@ ncclResult_t buildIbvSymbols(struct ncclIbvSymbols* ibvSymbols) {
 #define LOAD_SYM(handle, symbol, funcptr) do {           \
     cast = (void**)&funcptr;                             \
     tmp = dlvsym(handle, symbol, IBVERBS_VERSION);       \
-    if (tmp == NULL) {                                   \
+    if (tmp == nullptr) {                                   \
       WARN("dlvsym failed on %s - %s version %s", symbol, dlerror(), IBVERBS_VERSION);  \
       goto teardown;                                     \
     }                                                    \
@@ -132,34 +132,34 @@ ncclResult_t buildIbvSymbols(struct ncclIbvSymbols* ibvSymbols) {
   return ncclSuccess;
 
 teardown:
-  ibvSymbols->ibv_internal_get_device_list = NULL;
-  ibvSymbols->ibv_internal_free_device_list = NULL;
-  ibvSymbols->ibv_internal_get_device_name = NULL;
-  ibvSymbols->ibv_internal_open_device = NULL;
-  ibvSymbols->ibv_internal_close_device = NULL;
-  ibvSymbols->ibv_internal_get_async_event = NULL;
-  ibvSymbols->ibv_internal_ack_async_event = NULL;
-  ibvSymbols->ibv_internal_query_device = NULL;
-  ibvSymbols->ibv_internal_query_port = NULL;
-  ibvSymbols->ibv_internal_query_gid = NULL;
-  ibvSymbols->ibv_internal_query_qp = NULL;
-  ibvSymbols->ibv_internal_alloc_pd = NULL;
-  ibvSymbols->ibv_internal_dealloc_pd = NULL;
-  ibvSymbols->ibv_internal_reg_mr = NULL;
-  ibvSymbols->ibv_internal_reg_mr_iova2 = NULL;
-  ibvSymbols->ibv_internal_reg_dmabuf_mr = NULL;
-  ibvSymbols->ibv_internal_dereg_mr = NULL;
-  ibvSymbols->ibv_internal_create_cq = NULL;
-  ibvSymbols->ibv_internal_destroy_cq = NULL;
-  ibvSymbols->ibv_internal_create_qp = NULL;
-  ibvSymbols->ibv_internal_modify_qp = NULL;
-  ibvSymbols->ibv_internal_destroy_qp = NULL;
-  ibvSymbols->ibv_internal_fork_init = NULL;
-  ibvSymbols->ibv_internal_event_type_str = NULL;
-  ibvSymbols->ibv_internal_query_ece = NULL;
-  ibvSymbols->ibv_internal_set_ece = NULL;
+  ibvSymbols->ibv_internal_get_device_list = nullptr;
+  ibvSymbols->ibv_internal_free_device_list = nullptr;
+  ibvSymbols->ibv_internal_get_device_name = nullptr;
+  ibvSymbols->ibv_internal_open_device = nullptr;
+  ibvSymbols->ibv_internal_close_device = nullptr;
+  ibvSymbols->ibv_internal_get_async_event = nullptr;
+  ibvSymbols->ibv_internal_ack_async_event = nullptr;
+  ibvSymbols->ibv_internal_query_device = nullptr;
+  ibvSymbols->ibv_internal_query_port = nullptr;
+  ibvSymbols->ibv_internal_query_gid = nullptr;
+  ibvSymbols->ibv_internal_query_qp = nullptr;
+  ibvSymbols->ibv_internal_alloc_pd = nullptr;
+  ibvSymbols->ibv_internal_dealloc_pd = nullptr;
+  ibvSymbols->ibv_internal_reg_mr = nullptr;
+  ibvSymbols->ibv_internal_reg_mr_iova2 = nullptr;
+  ibvSymbols->ibv_internal_reg_dmabuf_mr = nullptr;
+  ibvSymbols->ibv_internal_dereg_mr = nullptr;
+  ibvSymbols->ibv_internal_create_cq = nullptr;
+  ibvSymbols->ibv_internal_destroy_cq = nullptr;
+  ibvSymbols->ibv_internal_create_qp = nullptr;
+  ibvSymbols->ibv_internal_modify_qp = nullptr;
+  ibvSymbols->ibv_internal_destroy_qp = nullptr;
+  ibvSymbols->ibv_internal_fork_init = nullptr;
+  ibvSymbols->ibv_internal_event_type_str = nullptr;
+  ibvSymbols->ibv_internal_query_ece = nullptr;
+  ibvSymbols->ibv_internal_set_ece = nullptr;
 
-  if (ibvhandle != NULL) dlclose(ibvhandle);
+  if (ibvhandle != nullptr) dlclose(ibvhandle);
   return ncclSystemError;
 }
 

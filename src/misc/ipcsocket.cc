@@ -23,7 +23,7 @@ ncclResult_t ncclIpcSocketInit(ncclIpcSocket *handle, int rank, uint64_t hash, v
   struct sockaddr_un cliaddr;
   char temp[NCCL_IPC_SOCKNAME_LEN] = "";
 
-  if (handle == NULL) {
+  if (handle == nullptr) {
     return ncclInternalError;
   }
 
@@ -74,8 +74,8 @@ ncclResult_t ncclIpcSocketInit(ncclIpcSocket *handle, int rank, uint64_t hash, v
 }
 
 ncclResult_t ncclIpcSocketGetFd(struct ncclIpcSocket* handle, int* fd) {
-  if (handle == NULL) {
-    WARN("ncclSocketGetFd: pass NULL socket");
+  if (handle == nullptr) {
+    WARN("ncclSocketGetFd: pass nullptr socket");
     return ncclInvalidArgument;
   }
   if (fd) *fd = handle->fd;
@@ -83,7 +83,7 @@ ncclResult_t ncclIpcSocketGetFd(struct ncclIpcSocket* handle, int* fd) {
 }
 
 ncclResult_t ncclIpcSocketClose(ncclIpcSocket *handle) {
-  if (handle == NULL) {
+  if (handle == nullptr) {
     return ncclInternalError;
   }
   if (handle->fd <= 0) {
@@ -116,7 +116,7 @@ ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
   msg.msg_control = control_un.control;
   msg.msg_controllen = sizeof(control_un.control);
 
-  if (hdr == NULL) {
+  if (hdr == nullptr) {
     iov[0].iov_base = (void *)dummy_buffer;
     iov[0].iov_len = sizeof(dummy_buffer);
   } else {
@@ -135,8 +135,8 @@ ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
     if (handle->abortFlag && *handle->abortFlag) return ncclInternalError;
   }
 
-  if (recvFd != NULL) {
-    if (((cmptr = CMSG_FIRSTHDR(&msg)) != NULL) && (cmptr->cmsg_len == CMSG_LEN(sizeof(int)))) {
+  if (recvFd != nullptr) {
+    if (((cmptr = CMSG_FIRSTHDR(&msg)) != nullptr) && (cmptr->cmsg_len == CMSG_LEN(sizeof(int)))) {
       if ((cmptr->cmsg_level != SOL_SOCKET) || (cmptr->cmsg_type != SCM_RIGHTS)) {
         WARN("UDS: Receiving data over socket failed");
       return ncclSystemError;
@@ -154,7 +154,7 @@ ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
 }
 
 ncclResult_t ncclIpcSocketRecvFd(ncclIpcSocket *handle, int *recvFd) {
-  return ncclIpcSocketRecvMsg(handle, NULL, 0, recvFd);
+  return ncclIpcSocketRecvMsg(handle, nullptr, 0, recvFd);
 }
 
 ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, const int sendFd, int rank, uint64_t hash) {
@@ -204,7 +204,7 @@ ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
   msg.msg_name = (void *)&cliaddr;
   msg.msg_namelen = sizeof(struct sockaddr_un);
 
-  if (hdr == NULL) {
+  if (hdr == nullptr) {
     iov[0].iov_base = (void *)dummy_buffer;
     iov[0].iov_len = sizeof(dummy_buffer);
   } else {
@@ -228,5 +228,5 @@ ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
 }
 
 ncclResult_t ncclIpcSocketSendFd(ncclIpcSocket *handle, const int sendFd, int rank, uint64_t hash) {
-  return ncclIpcSocketSendMsg(handle, NULL, 0, sendFd, rank, hash);
+  return ncclIpcSocketSendMsg(handle, nullptr, 0, sendFd, rank, hash);
 }

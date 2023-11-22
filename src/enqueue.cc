@@ -373,11 +373,11 @@ static ncclResult_t registerIntraNodeBuffers(
     void *recvbuff = info->recvbuff;
     cudaPointerAttributes sattr, rattr;
     bool query = false;
-    
+
     if (info->coll == ncclFuncAllGather)
-      sendbuff = NULL;
+      sendbuff = nullptr;
     else if (info->coll == ncclFuncReduceScatter)
-      recvbuff = NULL;
+      recvbuff = nullptr;
 
     /* first try local registration. */
     if (ncclParamLocalRegister()) {
@@ -633,8 +633,8 @@ static ncclResult_t scheduleP2pTasksToPlan(
     for (int i=0; i < tasks->p2pOrderSteps; i++) {
       int sendPeer = sendOrder[i];
       int recvPeer = recvOrder[i];
-      struct ncclTaskP2p* send = sendPeer != -1 ? ncclIntruQueueHead(&peers[sendPeer].sendQueue) : NULL;
-      struct ncclTaskP2p* recv = recvPeer != -1 ? ncclIntruQueueHead(&peers[recvPeer].recvQueue) : NULL;
+      struct ncclTaskP2p* send = sendPeer != -1 ? ncclIntruQueueHead(&peers[sendPeer].sendQueue) : nullptr;
+      struct ncclTaskP2p* recv = recvPeer != -1 ? ncclIntruQueueHead(&peers[recvPeer].recvQueue) : nullptr;
       if (sendPeer == comm->rank) {
         if (recvPeer != comm->rank) {
           WARN("Sendrecv plan not aligned for self");
@@ -1262,7 +1262,7 @@ static ncclResult_t getAlgoInfo(struct ncclInfo* info, int collNetSupport, int n
   info->algorithm = NCCL_ALGO_UNDEF;
   info->protocol = NCCL_PROTO_UNDEF;
   int nChannels = 0;
-  if (info->comm->tuner != NULL) {
+  if (info->comm->tuner != nullptr) {
     NCCLCHECK(info->comm->tuner->getCollInfo(
           info->coll, info->nBytes,
           collNetSupport, nvlsSupport, numPipeOps,
@@ -1694,7 +1694,7 @@ ncclResult_t ncclRedOpDestroy(ncclRedOp_t op, ncclComm_t comm) {
     WARN("ncclRedOpDestroy :  operator is garbage.");
     return ncclInvalidArgument;
   }
-  if (comm == NULL) {
+  if (comm == nullptr) {
     WARN("ncclRedOpDestroy : invalid communicator passed.");
     return ncclInvalidArgument;
   }

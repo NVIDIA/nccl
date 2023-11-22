@@ -68,8 +68,8 @@ static ncclResult_t ncclNet_v6_as_v7_init(ncclDebugLogger_t logfn) {
   ncclNet_v6_as_v7.closeSend = ncclNet_v6->closeSend;
   ncclNet_v6_as_v7.closeRecv = ncclNet_v6->closeRecv;
   ncclNet_v6_as_v7.closeListen = ncclNet_v6->closeListen;
-  ncclNet_v6_as_v7.getDeviceMr = NULL;
-  ncclNet_v6_as_v7.irecvConsumed = NULL;
+  ncclNet_v6_as_v7.getDeviceMr = nullptr;
+  ncclNet_v6_as_v7.irecvConsumed = nullptr;
   return ncclSuccess;
 }
 
@@ -110,7 +110,7 @@ static ncclResult_t ncclNet_v5_as_v7_init(ncclDebugLogger_t logfn) {
   ncclNet_v5_as_v7.connect = ncclNet_v5_as_v7_connect;
   ncclNet_v5_as_v7.accept =  ncclNet_v5_as_v7_accept;
   ncclNet_v5_as_v7.regMr = ncclNet_v5->regMr;
-  ncclNet_v5_as_v7.regMrDmaBuf = NULL;
+  ncclNet_v5_as_v7.regMrDmaBuf = nullptr;
   ncclNet_v5_as_v7.deregMr = ncclNet_v5->deregMr;
   ncclNet_v5_as_v7.isend = ncclNet_v5->isend;
   ncclNet_v5_as_v7.irecv = ncclNet_v5->irecv;
@@ -119,8 +119,8 @@ static ncclResult_t ncclNet_v5_as_v7_init(ncclDebugLogger_t logfn) {
   ncclNet_v5_as_v7.closeSend = ncclNet_v5->closeSend;
   ncclNet_v5_as_v7.closeRecv = ncclNet_v5->closeRecv;
   ncclNet_v5_as_v7.closeListen = ncclNet_v5->closeListen;
-  ncclNet_v5_as_v7.getDeviceMr = NULL;
-  ncclNet_v5_as_v7.irecvConsumed = NULL;
+  ncclNet_v5_as_v7.getDeviceMr = nullptr;
+  ncclNet_v5_as_v7.irecvConsumed = nullptr;
   return ncclSuccess;
 }
 
@@ -153,7 +153,7 @@ static ncclResult_t ncclCollNet_v5_as_v7_init(ncclDebugLogger_t logfn) {
   ncclCollNet_v5_as_v7.connect = ncclCollNet_v5->connect;
   ncclCollNet_v5_as_v7.reduceSupport = ncclCollNet_v5->reduceSupport;
   ncclCollNet_v5_as_v7.regMr = ncclCollNet_v5->regMr;
-  ncclCollNet_v5_as_v7.regMrDmaBuf = NULL;
+  ncclCollNet_v5_as_v7.regMrDmaBuf = nullptr;
   ncclCollNet_v5_as_v7.deregMr = ncclCollNet_v5->deregMr;
   ncclCollNet_v5_as_v7.iallreduce = ncclCollNet_v5->iallreduce;
   ncclCollNet_v5_as_v7.iflush = ncclCollNet_v5->iflush;
@@ -403,10 +403,10 @@ ncclResult_t ncclGpuGdrSupport(struct ncclComm* comm, int* gdrSupport) {
       if ((props.ptrSupport & NCCL_PTR_CUDA) == 0) continue;
 
     // Allocate memory on the GPU and try to register it on the NIC.
-    void *lComm = NULL, *sComm = NULL, *rComm = NULL;
+    void *lComm = nullptr, *sComm = nullptr, *rComm = nullptr;
     ncclNetHandle_t handle;
-    char* gpuPtr = NULL;
-    void* mHandle = NULL;
+    char* gpuPtr = nullptr;
+    void* mHandle = nullptr;
     ncclResult_t ret;
     ncclDebugNoWarn = NCCL_NET;
     NCCLCHECKGOTO(comm->ncclNet->listen(dev, &handle, &lComm), ret, cleanup1);
@@ -420,13 +420,13 @@ ncclResult_t ncclGpuGdrSupport(struct ncclComm* comm, int* gdrSupport) {
         goto cleanup2;
       }
 
-      if (sComm == NULL)
-        NCCLCHECKGOTO(comm->ncclNet->connect(dev, &handle, &sComm, NULL), ret, cleanup2);
+      if (sComm == nullptr)
+        NCCLCHECKGOTO(comm->ncclNet->connect(dev, &handle, &sComm, nullptr), ret, cleanup2);
 
-      if (rComm == NULL)
-        NCCLCHECKGOTO(comm->ncclNet->accept(lComm, &rComm, NULL), ret, cleanup2);
+      if (rComm == nullptr)
+        NCCLCHECKGOTO(comm->ncclNet->accept(lComm, &rComm, nullptr), ret, cleanup2);
 
-      connected = (rComm != NULL) && (sComm != NULL);
+      connected = (rComm != nullptr) && (sComm != nullptr);
     }
 
     NCCLCHECKGOTO(ncclCudaMalloc(&gpuPtr, GPU_BUF_SIZE), ret, cleanup2);
@@ -439,9 +439,9 @@ ncclResult_t ncclGpuGdrSupport(struct ncclComm* comm, int* gdrSupport) {
     ncclDebugNoWarn = 0;
     NCCLCHECK(ncclCudaFree(gpuPtr));
 cleanup2:
-    if (rComm != NULL)
+    if (rComm != nullptr)
       NCCLCHECK(comm->ncclNet->closeRecv(rComm));
-    if (sComm != NULL)
+    if (sComm != nullptr)
       NCCLCHECK(comm->ncclNet->closeSend(sComm));
     NCCLCHECK(comm->ncclNet->closeListen(lComm));
 cleanup1:

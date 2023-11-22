@@ -21,11 +21,11 @@ ncclResult_t initChannel(struct ncclComm* comm, int channelId) {
 
   NCCLCHECK(ncclStrongStreamAcquireUncaptured(&sharedRes->deviceStream));
 
-  if (channel->peers == NULL) {
+  if (channel->peers == nullptr) {
     // The extra on nRanks+1 is for collnet root (i.e. network)
     // Allocate everything related to sharedRes with ncclCalloc as this can be
     // shared between communicators hence should not be tied to comm.
-    if (sharedRes->peers[channelId] == NULL) {
+    if (sharedRes->peers[channelId] == nullptr) {
       NCCLCHECK(ncclCalloc(sharedRes->peers + channelId, sharedRes->tpNRanks));
     }
     channel->peers = ncclMemoryStackAlloc<struct ncclChannelPeer*>(&comm->memPermanent, nPeers);
@@ -35,8 +35,8 @@ ncclResult_t initChannel(struct ncclComm* comm, int channelId) {
     }
   }
 
-  if (channel->devPeers == NULL) {
-    if (sharedRes->devPeers[channelId] == NULL) {
+  if (channel->devPeers == nullptr) {
+    if (sharedRes->devPeers[channelId] == nullptr) {
       NCCLCHECK(ncclCudaCallocAsync(sharedRes->devPeers + channelId, sharedRes->tpNRanks, sharedRes->deviceStream.cudaStream));
     }
     /* channel->devPeers is not shared, so just free it when calling commFree() */
@@ -65,7 +65,7 @@ ncclResult_t initNvlsChannel(struct ncclComm* comm, int channelId, struct ncclCo
   struct ncclChannel* channel = &comm->channels[channelId];
   struct ncclSharedResources* sharedRes = comm->sharedRes;
 
-  if (channel->nvlsPeers != NULL)
+  if (channel->nvlsPeers != nullptr)
     return ncclSuccess;
 
   if (channel->id == -1)
@@ -107,7 +107,7 @@ ncclResult_t initCollnetChannel(struct ncclComm* comm, int channelId, struct ncc
   struct ncclSharedResources* sharedRes = comm->sharedRes;
   uintptr_t addr;
 
-  if (channel->collnetPeers != NULL)
+  if (channel->collnetPeers != nullptr)
     return ncclSuccess;
 
   if (channel->id == -1)
@@ -144,7 +144,7 @@ ncclResult_t freeChannel(struct ncclChannel* channel, int nRanks, int collnetNRa
   /* channel peers are only valid when async init thread completes commAlloc() and
    * the channel is intialized with initChannel(); if either is not done, this channel
    * should never be free. */
-  if (channel->id == -1 || channel->peers == NULL) return ncclSuccess;
+  if (channel->id == -1 || channel->peers == nullptr) return ncclSuccess;
 
   // Free transport proxy resources
   // Note: free all send resources first due to CollNet arrangement

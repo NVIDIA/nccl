@@ -69,7 +69,7 @@ NCCL_PARAM(ConnectRoundMaxPeers, "CONNECT_ROUND_MAX_PEERS", 128);
 NCCL_PARAM(ReportConnectProgress, "REPORT_CONNECT_PROGRESS", 0);
 #include <sys/time.h>
 
-ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, int connIndex, int* highestTransportType/*=NULL*/) {
+ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, int connIndex, int* highestTransportType/*=nullptr*/) {
   // Stream used during transport setup; need for P2P pre-connect + CUDA Graph
   ncclResult_t ret = ncclSuccess;
   int highestType = TRANSPORT_P2P;  // track highest transport type
@@ -84,7 +84,7 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
   NCCLCHECK(ncclCalloc(&sendData, maxPeers));
 
   struct timeval timeStart, timeLast;
-  gettimeofday(&timeStart, NULL);
+  gettimeofday(&timeStart, nullptr);
   timeLast = timeStart; // struct copy
   bool timeReported = false;
 
@@ -194,12 +194,12 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
           }
           if (sendMask || recvMask) {
             free(data[p]);
-            data[p] = NULL;
+            data[p] = nullptr;
           }
         }
 	if (ncclParamReportConnectProgress() && comm->rank == 0) {
           struct timeval now;
-          gettimeofday(&now, NULL);
+          gettimeofday(&now, nullptr);
           if (((now.tv_sec - timeLast.tv_sec)*1.0 + (now.tv_usec-timeLast.tv_usec)*1e-6) > 1) {
             float elapsed = (now.tv_sec - timeStart.tv_sec)*1.0 + (now.tv_usec-timeStart.tv_usec)*1e-6;
 	    float remaining = elapsed*(comm->nRanks-done)/done;
@@ -217,7 +217,7 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
 
   if (timeReported) {
     struct timeval now;
-    gettimeofday(&now, NULL);
+    gettimeofday(&now, nullptr);
     float elapsed = (now.tv_sec - timeStart.tv_sec)*1.0 + (now.tv_usec-timeStart.tv_usec)*1e-6;
     printf("\rP2p connect done in %d:%02d                                                                       \n",
         ((int)elapsed)/60, ((int)elapsed)%60);
@@ -257,7 +257,7 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
   free(sendData);
   free(recvData);
 
-  if (highestTransportType != NULL) *highestTransportType = highestType;
+  if (highestTransportType != nullptr) *highestTransportType = highestType;
   TIME_PRINT("P2P Setup/Connect");
 exit:
   NCCLCHECK(ncclStrongStreamWaitStream(ncclCudaGraphNone(), &comm->sharedRes->deviceStream, &comm->sharedRes->hostStream));
@@ -310,8 +310,8 @@ int ncclTransportCollNetSetup(struct ncclComm* comm, struct ncclTopoGraph* collN
   struct {
     int isMaster;
     ncclConnect connect;
-  } *allConnects = NULL;
-  ncclConnect *masterConnects = NULL;
+  } *allConnects = nullptr;
+  ncclConnect *masterConnects = nullptr;
   NCCLCHECK(ncclCalloc(&masterConnects, nMasters));
   if (type == collNetRecv) {  // recv side: AllGather
     // all ranks must participate
@@ -348,8 +348,8 @@ int ncclTransportCollNetSetup(struct ncclComm* comm, struct ncclTopoGraph* collN
   }
   fail = 0;
 cleanup:
-  if (allConnects != NULL) free(allConnects);
-  if (masterConnects != NULL) free(masterConnects);
+  if (allConnects != nullptr) free(allConnects);
+  if (masterConnects != nullptr) free(masterConnects);
   return fail;
 }
 
@@ -381,12 +381,12 @@ ncclResult_t ncclTransportCollNetFree(struct ncclComm* comm) {
         for (int b=0; b<NCCL_MAX_CONNS; b++) {
           struct ncclConnector* send = peer->send + b;
           if (send->transportResources && send->transportComm) NCCLCHECK(send->transportComm->free(send));
-          send->transportResources = NULL; // avoid double free
+          send->transportResources = nullptr; // avoid double free
         }
         for (int b=0; b<NCCL_MAX_CONNS; b++) {
           struct ncclConnector* recv = peer->recv + b;
           if (recv->transportResources && recv->transportComm) NCCLCHECK(recv->transportComm->free(recv));
-          recv->transportResources = NULL; // avoid double free
+          recv->transportResources = nullptr; // avoid double free
         }
       }
     }

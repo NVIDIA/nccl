@@ -25,15 +25,15 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
   const int group;
   Fan fan;
   T *userBufs[2];
-  struct ncclConnInfo* recvConn = NULL;
-  volatile uint64_t* recvConnHeadPtr = NULL;
+  struct ncclConnInfo* recvConn = nullptr;
+  volatile uint64_t* recvConnHeadPtr = nullptr;
   uint64_t recvConnHead;
 
-  struct ncclConnInfo* sendConn = NULL;
-  volatile int* sendConnFifoPtr = NULL;
-  volatile uint64_t* sendConnTailPtr = NULL;
+  struct ncclConnInfo* sendConn = nullptr;
+  volatile int* sendConnFifoPtr = nullptr;
+  volatile uint64_t* sendConnTailPtr = nullptr;
   uint64_t sendConnTail;
-  volatile uint64_t* sendConnHeadPtr = NULL;
+  volatile uint64_t* sendConnHeadPtr = nullptr;
   uint64_t sendConnHead;
   uint64_t sendConnHeadCache; // Cache last seen value
 

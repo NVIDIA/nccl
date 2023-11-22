@@ -158,12 +158,12 @@ typedef struct gdr_mem_desc {
 
 static gdr_t ncclGdrInit() {
   int libMajor, libMinor, drvMajor, drvMinor;
-  gdr_t handle = NULL;
+  gdr_t handle = nullptr;
   // Dynamically load the GDRAPI library symbols
   if (wrap_gdr_symbols() == ncclSuccess) {
     handle = wrap_gdr_open();
 
-    if (handle != NULL) {
+    if (handle != nullptr) {
       ncclResult_t res;
 
       // Query the version of libgdrapi
@@ -182,8 +182,8 @@ static gdr_t ncclGdrInit() {
   }
   return handle;
 error:
-  if (handle != NULL) (void) wrap_gdr_close(handle);
-  return NULL;
+  if (handle != nullptr) (void) wrap_gdr_close(handle);
+  return nullptr;
 }
 
 template <typename T>

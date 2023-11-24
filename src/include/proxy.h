@@ -66,6 +66,7 @@ struct ncclProxySubArgs {
   uint64_t end;
   void* requests[NCCL_STEPS];
   void* profilingEvents[NCCL_STEPS];
+  double profileBeginTimestamp;
   void* recvRequestsCache[NCCL_STEPS];
   int recvRequestsSubCount;
 };

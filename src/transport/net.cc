@@ -1023,7 +1023,9 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
       // Round to next multiple of sliceSteps
       sub->base = ROUNDUP(resources->step, args->chunkSteps);
       sub->posted = sub->transmitted = sub->done = 0;
-      for (uint64_t step=0; step<sub->nsteps; step++) ncclProfilingRecord(args, s, step, ncclProxyProfileBegin);
+      // The `ncclProxyProfileBegin` state doesn't correspond to any particular step,
+      // so we pass `0` as the step number.
+      ncclProfilingRecord(args, s, 0, ncclProxyProfileBegin);
     }
     args->state = ncclProxyOpProgress;
   }
@@ -1173,7 +1175,9 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
       sub->base = ROUNDUP(resources->step, args->chunkSteps);
       sub->posted = sub->received = sub->transmitted = sub->done = 0;
       for (int i=0; i<groupSize; i++) sub[-i].groupSize = groupSize;
-      for (uint64_t step=0; step<sub->nsteps; step++) ncclProfilingRecord(args, s, step, ncclProxyProfileBegin);
+      // The `ncclProxyProfileBegin` state doesn't correspond to any particular step,
+      // so we pass `0` as the step number.
+      ncclProfilingRecord(args, s, 0, ncclProxyProfileBegin);
     }
     args->state = ncclProxyOpProgress;
   }

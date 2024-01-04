@@ -434,6 +434,22 @@ ncclResult_t pncclCommRegister(const ncclComm_t comm, void* buff, size_t size, v
 ncclResult_t  ncclCommDeregister(const ncclComm_t comm, void* handle);
 ncclResult_t pncclCommDeregister(const ncclComm_t comm, void* handle);
 
+/* Sets CUDA stream for allocating and initializing persistent plans on device
+ * using stream ordered allocation.
+ *
+ * When NCCL operations captured into CUDA graphs persistent state associated
+ * with captured graphs allocated on device and freed when CUDA graph is
+ * destroyed. It is a user responsibility to serialize captured CUDA graph
+ * execution after allocations recorded on a given stream: launch captured graph
+ * on the same stream, or add an event after graph capture is completed.
+ * */
+ncclResult_t  ncclCommSetPersistentAllocStream(const ncclComm_t comm, cudaStream_t stream);
+ncclResult_t pncclCommSetPersistentAllocStream(const ncclComm_t comm, cudaStream_t stream);
+
+/* Gets CUDA stream for allocating and initializing persistent plans on device */
+ncclResult_t  ncclCommGetPersistentAllocStream(const ncclComm_t comm, cudaStream_t* stream);
+ncclResult_t pncclCommGetPersistentAllocStream(const ncclComm_t comm, cudaStream_t* stream);
+
 #ifdef __cplusplus
 } // end extern "C"
 #endif

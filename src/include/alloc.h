@@ -164,6 +164,21 @@ finish:
 #define ncclCudaMalloc(...) ncclCudaMallocDebug(__VA_ARGS__, __FILE__, __LINE__)
 
 template <typename T>
+ncclResult_t ncclCudaMallocAsyncDebug(T** ptr, size_t nelem, cudaStream_t stream, const char *filefunc, int line) {
+  ncclResult_t result = ncclSuccess;
+  cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
+  *ptr = nullptr;
+  CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
+  CUDACHECKGOTO(cudaMallocAsync(ptr, nelem*sizeof(T), stream), result, finish);
+finish:
+  CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
+  if (*ptr == nullptr) WARN("Failed to CUDA malloc %ld bytes", nelem*sizeof(T));
+  INFO(NCCL_ALLOC, "%s:%d Cuda Alloc Size %ld pointer %p", filefunc, line, nelem*sizeof(T), *ptr);
+  return result;
+}
+#define ncclCudaMallocAsync(...) ncclCudaMallocAsyncDebug(__VA_ARGS__, __FILE__, __LINE__)
+
+template <typename T>
 ncclResult_t ncclCudaCallocDebug(T** ptr, size_t nelem, const char *filefunc, int line) {
   ncclResult_t result = ncclSuccess;
   cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
@@ -246,6 +261,18 @@ ncclResult_t ncclCudaFree(T* ptr) {
   } else {
     CUDACHECKGOTO(cudaFree(ptr), result, finish);
   }
+finish:
+  CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
+  return result;
+}
+
+template <typename T>
+ncclResult_t ncclCudaFreeAsync(T* ptr, cudaStream_t stream) {
+  ncclResult_t result = ncclSuccess;
+  cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
+  TRACE(NCCL_ALLOC, "Cuda Free pointer %p", ptr);
+  CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
+  CUDACHECKGOTO(cudaFreeAsync(ptr, stream), result, finish);
 finish:
   CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
   return result;

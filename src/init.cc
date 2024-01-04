@@ -2253,6 +2253,18 @@ ncclResult_t ncclCommDeregister(const ncclComm_t comm, void* handle) {
   return ret;
 }
 
+NCCL_API(ncclResult_t, ncclCommSetPersistentAllocStream, const ncclComm_t comm, cudaStream_t stream);
+ncclResult_t ncclCommSetPersistentAllocStream(const ncclComm_t comm, cudaStream_t stream) {
+  comm->persistentAllocStream = stream;
+  return ncclSuccess;
+}
+
+NCCL_API(ncclResult_t, ncclCommGetPersistentAllocStream, const ncclComm_t comm, cudaStream_t* stream);
+ncclResult_t  ncclCommGetPersistentAllocStream(const ncclComm_t comm, cudaStream_t* stream) {
+  *stream = comm->persistentAllocStream;
+  return ncclSuccess;
+}
+
 NCCL_API(ncclResult_t, ncclMemAlloc, void **ptr, size_t size);
 ncclResult_t  ncclMemAlloc(void **ptr, size_t size) {
   NVTX3_FUNC_RANGE_IN(nccl_domain);

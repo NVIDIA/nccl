@@ -175,6 +175,8 @@ struct ncclKernelPlan {
   struct ncclKernelPlan* next;
 
   bool persistent; // aka captured in a graph
+  cudaStream_t persistentAllocStream; // stream for allocating persistent plans
+
   bool kernelSpecialized;
   void *kernelFn;
   int channelUbound; // only channels c < channelUbound are present
@@ -387,6 +389,9 @@ struct ncclComm {
 
   // Tuning plugin
   ncclTuner_t* tuner;
+
+  // Stream that was used to allocate persistent plan.
+  cudaStream_t persistentAllocStream;
 };
 
 enum ncclLaunchMode {

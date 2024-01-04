@@ -815,8 +815,15 @@ static ncclResult_t uploadWork(struct ncclComm* comm, struct ncclKernelPlan* pla
     if (comm->workFifoHeapGdrHandle != nullptr) wc_store_fence();
     plan->workHead = &comm->devWorkFifoHeap[ixHead & ixMask];
   } else {
-    NCCLCHECK(ncclCudaMalloc(&plan->workHead, nWork));
-    NCCLCHECK(ncclCudaMemcpy(plan->workHead, workHeap, nWork));
+    if (comm->persistentAllocStream) {
+      NCCLCHECK(ncclCudaMallocAsync(&plan->workHead, nWork, comm->persistentAllocStream));
+      NCCLCHECK(ncclCudaMemcpyAsync(plan->workHead, workHeap, nWork, comm->persistentAllocStream));
+      plan->persistentAllocStream = comm->persistentAllocStream;
+    } else {
+      NCCLCHECK(ncclCudaMalloc(&plan->workHead, nWork));
+      NCCLCHECK(ncclCudaMemcpy(plan->workHead, workHeap, nWork));
+      plan->persistentAllocStream = nullptr;
+    }
   }
   return ncclSuccess;
 }
@@ -878,7 +885,11 @@ static ncclResult_t reclaimPlan(struct ncclComm* comm, struct ncclCommCallback* 
   struct ncclKernelPlan* plan = (struct ncclKernelPlan*)me; // cast from first member `reclaim`
   if (plan->persistent) {
     comm->persistentRefs -= 1;
-    NCCLCHECK(ncclCudaFree(plan->workHead));
+    if (plan->persistentAllocStream) {
+      NCCLCHECK(ncclCudaFreeAsync(plan->workHead, plan->persistentAllocStream));
+    } else {
+      NCCLCHECK(ncclCudaFree(plan->workHead));
+    }
     for (int c=0; c < plan->channelUbound; c++) {
       struct ncclProxyOp* q = ncclIntruQueueHead(&plan->channels[c].proxyOpQueue);
       while (q != nullptr) {

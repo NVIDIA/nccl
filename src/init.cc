@@ -1885,7 +1885,9 @@ fail:
   goto exit;
 }
 
-static ncclResult_t commReclaim(ncclComm_t comm) {
+static ncclResult_t commReclaim(struct ncclAsyncJob* job_) {
+  struct ncclCommFinalizeAsyncJob* job = (struct ncclCommFinalizeAsyncJob*) job_;
+  ncclComm_t comm = job->comm;
   ncclResult_t ret = ncclSuccess;
   ncclResult_t state;
   int curRank; /* Debug info */
@@ -1977,6 +1979,8 @@ ncclResult_t ncclCommDestroy(ncclComm_t comm) {
   }
 
   int rank = comm->rank, nranks = comm->nRanks, cudaDev = comm->cudaDev;
+  struct ncclCommFinalizeAsyncJob *job = NULL;
+  ncclResult_t res = ncclSuccess;
 
   NvtxParamsCommInitRank payload{rank, nranks, cudaDev};
   NVTX3_FUNC_WITH_PARAMS(CommDestroy, CommInitRankSchema, payload)
@@ -1989,13 +1993,20 @@ ncclResult_t ncclCommDestroy(ncclComm_t comm) {
     return ncclInvalidArgument;
   }
 
+  comm->destroyFlag = 1;
   /* init thread must be joined before we destroy the comm. */
   NCCLCHECK(ncclCommEnsureReady(comm));
+  NCCLCHECKGOTO(ncclCalloc(&job, 1), res, fail);
+  job->comm = comm;
+  NCCLCHECKGOTO(ncclAsyncLaunch(&job->base, commReclaim, NULL, free, comm), res, fail);
 
-  NCCLCHECK(commReclaim(comm));
   INFO(NCCL_INIT,"comm %p rank %d nranks %d cudaDev %d busId %lx - Destroy COMPLETE", comm, rank, nranks, cudaDev, busId);
 
-  return ncclSuccess;
+exit:
+  return res;
+fail:
+  free(job);
+  goto exit;
 }
 
 NCCL_API(ncclResult_t, ncclCommAbort, ncclComm_t comm);
@@ -2007,6 +2018,8 @@ ncclResult_t ncclCommAbort(ncclComm_t comm) {
 
   volatile uint32_t* childAbortFlag;
   int rank = comm->rank, nranks = comm->nRanks, cudaDev = comm->cudaDev;
+  struct ncclCommFinalizeAsyncJob *job = NULL;
+  ncclResult_t res = ncclSuccess;
 
   NvtxParamsCommInitRank payload{rank, nranks, cudaDev};
   NVTX3_FUNC_WITH_PARAMS(CommAbort, CommInitRankSchema, payload)
@@ -2019,15 +2032,24 @@ ncclResult_t ncclCommAbort(ncclComm_t comm) {
   if (childAbortFlag != NULL) {
     *childAbortFlag = 1;
   }
-  *comm->abortFlag = 1;
+  __atomic_store_n(comm->abortFlag, 1, __ATOMIC_RELAXED);
+
+  comm->destroyFlag = 1;
   /* init thread must be joined before we destroy the comm,
    * and we should ignore the init error here. */
   ncclCommEnsureReady(comm);
 
-  (void) commReclaim(comm);
+  NCCLCHECKGOTO(ncclCalloc(&job, 1), res, fail);
+  job->comm = comm;
+  NCCLCHECKGOTO(ncclAsyncLaunch(&job->base, commReclaim, NULL, free, comm), res, fail);
+
   INFO(NCCL_INIT,"comm %p rank %d nranks %d cudaDev %d busId %lx - Abort COMPLETE", comm, rank, nranks, cudaDev, busId);
 
+exit:
   return ncclSuccess;
+fail:
+  free(job);
+  goto exit;
 }
 
 NCCL_API(ncclResult_t, ncclCommSplit, ncclComm_t comm, int color, int key, ncclComm_t *newcomm, ncclConfig_t *config);

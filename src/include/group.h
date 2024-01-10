@@ -38,6 +38,8 @@ struct ncclAsyncJob {
   volatile uint32_t *abortFlag; /* point to comm abortFlag */
   volatile uint32_t *childAbortFlag; /* point to child abortFlag */
   ncclComm_t comm;
+  int destroyFlag;
+  int blocking;
 };
 
 ncclResult_t ncclAsyncLaunch(

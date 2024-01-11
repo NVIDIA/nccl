@@ -171,6 +171,7 @@ void ncclCommPushCudaGdrFree(struct ncclComm* comm, void* handle) {
 }
 
 static ncclResult_t commFree(ncclComm_t comm) {
+  int abort = 0;
   /* commFree() should not involve any sync among ranks. */
   if (comm == NULL)
     return ncclSuccess;
@@ -229,6 +230,7 @@ static ncclResult_t commFree(ncclComm_t comm) {
   ncclMemoryStackDestruct(&comm->memScoped);
   ncclMemoryStackDestruct(&comm->memPermanent);
 
+  abort = *comm->abortFlag;
   if (ncclAtomicRefCountDecrement(comm->abortFlagRefCount) == 0) {
     NCCLCHECK(ncclCudaHostFree((void *)comm->abortFlag));
     free(comm->abortFlagRefCount);
@@ -249,6 +251,8 @@ static ncclResult_t commFree(ncclComm_t comm) {
     struct ncclRegRequest* req = ncclIntruQueueDequeue(&comm->regRequestQueue);
     free(req);
   }
+
+  INFO(NCCL_INIT,"comm %p rank %d nranks %d cudaDev %d busId %lx - %s COMPLETE", comm, comm->rank, comm->nRanks, comm->cudaDev, comm->busId, abort ? "Abort" : "Destroy");
 
   commPoison(comm); // poison comm before free to avoid comm reuse.
   free(comm);
@@ -1985,8 +1989,7 @@ ncclResult_t ncclCommDestroy(ncclComm_t comm) {
   NvtxParamsCommInitRank payload{rank, nranks, cudaDev};
   NVTX3_FUNC_WITH_PARAMS(CommDestroy, CommInitRankSchema, payload)
 
-  int64_t busId = comm->busId;
-  TRACE(NCCL_INIT, "comm %p rank %d nRanks %d cudaDev %d busId %lx", comm, rank, nranks, cudaDev, busId);
+  TRACE(NCCL_INIT, "comm %p rank %d nRanks %d cudaDev %d busId %lx", comm, rank, nranks, cudaDev, comm->busId);
   // Try and prevent a double free of the comm struct (user error)
   if (comm->rank == -1 || comm->nRanks == -1 || comm->cudaDev == -1 || comm->busId == -1) {
     WARN("comm %p has already been destroyed", comm);
@@ -1999,8 +2002,6 @@ ncclResult_t ncclCommDestroy(ncclComm_t comm) {
   NCCLCHECKGOTO(ncclCalloc(&job, 1), res, fail);
   job->comm = comm;
   NCCLCHECKGOTO(ncclAsyncLaunch(&job->base, commReclaim, NULL, free, comm), res, fail);
-
-  INFO(NCCL_INIT,"comm %p rank %d nranks %d cudaDev %d busId %lx - Destroy COMPLETE", comm, rank, nranks, cudaDev, busId);
 
 exit:
   return res;
@@ -2042,8 +2043,6 @@ ncclResult_t ncclCommAbort(ncclComm_t comm) {
   NCCLCHECKGOTO(ncclCalloc(&job, 1), res, fail);
   job->comm = comm;
   NCCLCHECKGOTO(ncclAsyncLaunch(&job->base, commReclaim, NULL, free, comm), res, fail);
-
-  INFO(NCCL_INIT,"comm %p rank %d nranks %d cudaDev %d busId %lx - Abort COMPLETE", comm, rank, nranks, cudaDev, busId);
 
 exit:
   return ncclSuccess;

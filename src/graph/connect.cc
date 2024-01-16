@@ -105,8 +105,8 @@ static ncclResult_t connectRings(struct ncclComm* comm, int* ringRecv, int* ring
 }
 
 static ncclResult_t getIndexes(int* ranks, int* indexes, int nNodes) {
- for (int n=0; n<nNodes; n++) indexes[n] = ranks[n];
- return ncclSuccess;
+  for (int n=0; n<nNodes; n++) indexes[n] = ranks[n];
+  return ncclSuccess;
 }
 
 static ncclResult_t setTreeUp(struct ncclTree* tree, int* indexes, int u) {
@@ -138,30 +138,30 @@ static ncclResult_t connectTrees(struct ncclComm* comm, int* treeToParent, int* 
   int* ttp, *ttc0, *ttc1;
   NCCLCHECK(ncclGetDtree(nNodes, node, &t0u, &t0d0, &t0d1, &t0ChildType, &t1u, &t1d0, &t1d1, &t1ChildType));
   for (int c=0; c<nChannels; c++) {
-     struct ncclChannel* channel0 = comm->channels+c;
-     struct ncclChannel* channel1 = channel0+nChannels;
-     ttp = treeToParent+c*comm->nNodes;
-     ttc0 = treeToChild0+c*comm->nNodes;
-     ttc1 = treeToChild1+c*comm->nNodes;
-     if (comm->rank == ttp[node]) {
-       NCCLCHECK(setTreeUp(&channel0->tree, t0ChildType == 0 ? ttc0 : ttc1, t0u));
-       NCCLCHECK(setTreeUp(&channel1->tree, t1ChildType == 0 ? ttc0 : ttc1, t1u));
-     }
-     if (comm->rank == ttc0[node]) {
-       NCCLCHECK(setTreeDown(&channel0->tree, ttp, t0d0));
-       NCCLCHECK(setTreeDown(&channel1->tree, ttp, t1d0));
-     }
-     if (comm->rank == ttc1[node]) {
-       NCCLCHECK(setTreeDown(&channel0->tree, ttp, t0d1));
-       NCCLCHECK(setTreeDown(&channel1->tree, ttp, t1d1));
-     }
-     if (comm->rank == ttp[node] ||
-         comm->rank == ttc0[node] ||
-         comm->rank == ttc1[node]) {
-       INFO(NCCL_GRAPH, "Tree %d : %d -> %d -> %d/%d/%d", c,           channel0->tree.up, comm->rank, channel0->tree.down[0], channel0->tree.down[1], channel0->tree.down[2]);
-       INFO(NCCL_GRAPH, "Tree %d : %d -> %d -> %d/%d/%d", c+nChannels, channel1->tree.up, comm->rank, channel1->tree.down[0], channel1->tree.down[1], channel1->tree.down[2]);
-     }
-     channel0->tree.depth = channel1->tree.depth = depth;
+    struct ncclChannel* channel0 = comm->channels+c;
+    struct ncclChannel* channel1 = channel0+nChannels;
+    ttp = treeToParent+c*comm->nNodes;
+    ttc0 = treeToChild0+c*comm->nNodes;
+    ttc1 = treeToChild1+c*comm->nNodes;
+    if (comm->rank == ttp[node]) {
+      NCCLCHECK(setTreeUp(&channel0->tree, t0ChildType == 0 ? ttc0 : ttc1, t0u));
+      NCCLCHECK(setTreeUp(&channel1->tree, t1ChildType == 0 ? ttc0 : ttc1, t1u));
+    }
+    if (comm->rank == ttc0[node]) {
+      NCCLCHECK(setTreeDown(&channel0->tree, ttp, t0d0));
+      NCCLCHECK(setTreeDown(&channel1->tree, ttp, t1d0));
+    }
+    if (comm->rank == ttc1[node]) {
+      NCCLCHECK(setTreeDown(&channel0->tree, ttp, t0d1));
+      NCCLCHECK(setTreeDown(&channel1->tree, ttp, t1d1));
+    }
+    if (comm->rank == ttp[node] ||
+        comm->rank == ttc0[node] ||
+        comm->rank == ttc1[node]) {
+      INFO(NCCL_GRAPH, "Tree %d : %d -> %d -> %d/%d/%d", c,           channel0->tree.up, comm->rank, channel0->tree.down[0], channel0->tree.down[1], channel0->tree.down[2]);
+      INFO(NCCL_GRAPH, "Tree %d : %d -> %d -> %d/%d/%d", c+nChannels, channel1->tree.up, comm->rank, channel1->tree.down[0], channel1->tree.down[1], channel1->tree.down[2]);
+    }
+    channel0->tree.depth = channel1->tree.depth = depth;
   }
   return ncclSuccess;
 }
@@ -255,8 +255,8 @@ static ncclResult_t connectNvls(struct ncclComm* comm, int* nvlsHeads, struct nc
   int tree0Parent, tree0Child0, tree0Child1, tree1Parent, tree1Child0, tree1Child1;
   int pc0, pc1; // ignored
   NCCLCHECK(ncclGetDtree(comm->nNodes, comm->node,
-        &tree0Parent, &tree0Child0, &tree0Child1, &pc0,
-        &tree1Parent, &tree1Child0, &tree1Child1, &pc1));
+          &tree0Parent, &tree0Child0, &tree0Child1, &pc0,
+          &tree1Parent, &tree1Child0, &tree1Child1, &pc1));
 
   int* heads = NULL;
   int treeUp[2] = { -1, -1 };
@@ -362,7 +362,7 @@ ncclResult_t ncclTopoPostset(struct ncclComm* comm, int* firstRanks, int* treePa
   NCCLCHECK(ncclCalloc(&treeToChild0, nNodes*MAXCHANNELS));
   NCCLCHECK(ncclCalloc(&treeToChild1, nNodes*MAXCHANNELS));
   NCCLCHECK(ncclCalloc(&nvlsHeads, nNodes*MAXCHANNELS));
-  for (int c=0; c<nChannels;c++) {
+  for (int c=0; c<nChannels; c++) {
     for (int n=0; n<nNodes; n++) {
       int r = firstRanks[n];
       ringRecv[c*nNodes+n] = allTopoRanks[r]->ringRecv[c];
@@ -408,7 +408,7 @@ ncclResult_t ncclTopoPostset(struct ncclComm* comm, int* firstRanks, int* treePa
 
   // Use 4 compute channels per search channel to reach peak BW on <8 PPN
   if (comm->minCompCap == 90 && comm->nNodes > 1 && graphs[NCCL_ALGO_RING]->bwIntra > 45.0 && 2*nChannels <= MAXCHANNELS) {
-     nChannels = comm->nChannels = copyChannels(comm, nChannels, 2*nChannels, ringPrev, ringNext);
+    nChannels = comm->nChannels = copyChannels(comm, nChannels, 2*nChannels, ringPrev, ringNext);
   }
 
   // Honor NCCL_MIN_NRINGS/NCCL_MAX_NRINGS.

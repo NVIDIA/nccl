@@ -124,176 +124,166 @@ typedef void (NVTX_API * nvtxDomainSyncUserReleasing_impl_fntype)(nvtxSyncUser_t
 typedef const void *(NVTX_API * NvtxGetExportTableFunc_t)(uint32_t exportTableId);
 typedef int (NVTX_API * NvtxInitializeInjectionNvtxFunc_t)(NvtxGetExportTableFunc_t exportTable);
 
-typedef enum NvtxCallbackModule
-{
-    NVTX_CB_MODULE_INVALID                 = 0,
-    NVTX_CB_MODULE_CORE                    = 1,
-    NVTX_CB_MODULE_CUDA                    = 2,
-    NVTX_CB_MODULE_OPENCL                  = 3,
-    NVTX_CB_MODULE_CUDART                  = 4,
-    NVTX_CB_MODULE_CORE2                   = 5,
-    NVTX_CB_MODULE_SYNC                    = 6,
-    /* --- New constants must only be added directly above this line --- */
-    NVTX_CB_MODULE_SIZE,
-    NVTX_CB_MODULE_FORCE_INT               = 0x7fffffff
+typedef enum NvtxCallbackModule {
+  NVTX_CB_MODULE_INVALID                 = 0,
+  NVTX_CB_MODULE_CORE                    = 1,
+  NVTX_CB_MODULE_CUDA                    = 2,
+  NVTX_CB_MODULE_OPENCL                  = 3,
+  NVTX_CB_MODULE_CUDART                  = 4,
+  NVTX_CB_MODULE_CORE2                   = 5,
+  NVTX_CB_MODULE_SYNC                    = 6,
+  /* --- New constants must only be added directly above this line --- */
+  NVTX_CB_MODULE_SIZE,
+  NVTX_CB_MODULE_FORCE_INT               = 0x7fffffff
 } NvtxCallbackModule;
 
-typedef enum NvtxCallbackIdCore
-{
-    NVTX_CBID_CORE_INVALID                 =  0,
-    NVTX_CBID_CORE_MarkEx                  =  1,
-    NVTX_CBID_CORE_MarkA                   =  2,
-    NVTX_CBID_CORE_MarkW                   =  3,
-    NVTX_CBID_CORE_RangeStartEx            =  4,
-    NVTX_CBID_CORE_RangeStartA             =  5,
-    NVTX_CBID_CORE_RangeStartW             =  6,
-    NVTX_CBID_CORE_RangeEnd                =  7,
-    NVTX_CBID_CORE_RangePushEx             =  8,
-    NVTX_CBID_CORE_RangePushA              =  9,
-    NVTX_CBID_CORE_RangePushW              = 10,
-    NVTX_CBID_CORE_RangePop                = 11,
-    NVTX_CBID_CORE_NameCategoryA           = 12,
-    NVTX_CBID_CORE_NameCategoryW           = 13,
-    NVTX_CBID_CORE_NameOsThreadA           = 14,
-    NVTX_CBID_CORE_NameOsThreadW           = 15,
-    /* --- New constants must only be added directly above this line --- */
-    NVTX_CBID_CORE_SIZE,
-    NVTX_CBID_CORE_FORCE_INT = 0x7fffffff
+typedef enum NvtxCallbackIdCore {
+  NVTX_CBID_CORE_INVALID                 =  0,
+  NVTX_CBID_CORE_MarkEx                  =  1,
+  NVTX_CBID_CORE_MarkA                   =  2,
+  NVTX_CBID_CORE_MarkW                   =  3,
+  NVTX_CBID_CORE_RangeStartEx            =  4,
+  NVTX_CBID_CORE_RangeStartA             =  5,
+  NVTX_CBID_CORE_RangeStartW             =  6,
+  NVTX_CBID_CORE_RangeEnd                =  7,
+  NVTX_CBID_CORE_RangePushEx             =  8,
+  NVTX_CBID_CORE_RangePushA              =  9,
+  NVTX_CBID_CORE_RangePushW              = 10,
+  NVTX_CBID_CORE_RangePop                = 11,
+  NVTX_CBID_CORE_NameCategoryA           = 12,
+  NVTX_CBID_CORE_NameCategoryW           = 13,
+  NVTX_CBID_CORE_NameOsThreadA           = 14,
+  NVTX_CBID_CORE_NameOsThreadW           = 15,
+  /* --- New constants must only be added directly above this line --- */
+  NVTX_CBID_CORE_SIZE,
+  NVTX_CBID_CORE_FORCE_INT = 0x7fffffff
 } NvtxCallbackIdCore;
 
-typedef enum NvtxCallbackIdCore2
-{
-    NVTX_CBID_CORE2_INVALID                 = 0,
-    NVTX_CBID_CORE2_DomainMarkEx            = 1,
-    NVTX_CBID_CORE2_DomainRangeStartEx      = 2,
-    NVTX_CBID_CORE2_DomainRangeEnd          = 3,
-    NVTX_CBID_CORE2_DomainRangePushEx       = 4,
-    NVTX_CBID_CORE2_DomainRangePop          = 5,
-    NVTX_CBID_CORE2_DomainResourceCreate    = 6,
-    NVTX_CBID_CORE2_DomainResourceDestroy   = 7,
-    NVTX_CBID_CORE2_DomainNameCategoryA     = 8,
-    NVTX_CBID_CORE2_DomainNameCategoryW     = 9,
-    NVTX_CBID_CORE2_DomainRegisterStringA   = 10,
-    NVTX_CBID_CORE2_DomainRegisterStringW   = 11,
-    NVTX_CBID_CORE2_DomainCreateA           = 12,
-    NVTX_CBID_CORE2_DomainCreateW           = 13,
-    NVTX_CBID_CORE2_DomainDestroy           = 14,
-    NVTX_CBID_CORE2_Initialize              = 15,
-    /* --- New constants must only be added directly above this line --- */
-    NVTX_CBID_CORE2_SIZE,
-    NVTX_CBID_CORE2_FORCE_INT               = 0x7fffffff
+typedef enum NvtxCallbackIdCore2 {
+  NVTX_CBID_CORE2_INVALID                 = 0,
+  NVTX_CBID_CORE2_DomainMarkEx            = 1,
+  NVTX_CBID_CORE2_DomainRangeStartEx      = 2,
+  NVTX_CBID_CORE2_DomainRangeEnd          = 3,
+  NVTX_CBID_CORE2_DomainRangePushEx       = 4,
+  NVTX_CBID_CORE2_DomainRangePop          = 5,
+  NVTX_CBID_CORE2_DomainResourceCreate    = 6,
+  NVTX_CBID_CORE2_DomainResourceDestroy   = 7,
+  NVTX_CBID_CORE2_DomainNameCategoryA     = 8,
+  NVTX_CBID_CORE2_DomainNameCategoryW     = 9,
+  NVTX_CBID_CORE2_DomainRegisterStringA   = 10,
+  NVTX_CBID_CORE2_DomainRegisterStringW   = 11,
+  NVTX_CBID_CORE2_DomainCreateA           = 12,
+  NVTX_CBID_CORE2_DomainCreateW           = 13,
+  NVTX_CBID_CORE2_DomainDestroy           = 14,
+  NVTX_CBID_CORE2_Initialize              = 15,
+  /* --- New constants must only be added directly above this line --- */
+  NVTX_CBID_CORE2_SIZE,
+  NVTX_CBID_CORE2_FORCE_INT               = 0x7fffffff
 } NvtxCallbackIdCore2;
 
-typedef enum NvtxCallbackIdCuda
-{
-    NVTX_CBID_CUDA_INVALID                 =  0,
-    NVTX_CBID_CUDA_NameCuDeviceA           =  1,
-    NVTX_CBID_CUDA_NameCuDeviceW           =  2,
-    NVTX_CBID_CUDA_NameCuContextA          =  3,
-    NVTX_CBID_CUDA_NameCuContextW          =  4,
-    NVTX_CBID_CUDA_NameCuStreamA           =  5,
-    NVTX_CBID_CUDA_NameCuStreamW           =  6,
-    NVTX_CBID_CUDA_NameCuEventA            =  7,
-    NVTX_CBID_CUDA_NameCuEventW            =  8,
-    /* --- New constants must only be added directly above this line --- */
-    NVTX_CBID_CUDA_SIZE,
-    NVTX_CBID_CUDA_FORCE_INT               = 0x7fffffff
+typedef enum NvtxCallbackIdCuda {
+  NVTX_CBID_CUDA_INVALID                 =  0,
+  NVTX_CBID_CUDA_NameCuDeviceA           =  1,
+  NVTX_CBID_CUDA_NameCuDeviceW           =  2,
+  NVTX_CBID_CUDA_NameCuContextA          =  3,
+  NVTX_CBID_CUDA_NameCuContextW          =  4,
+  NVTX_CBID_CUDA_NameCuStreamA           =  5,
+  NVTX_CBID_CUDA_NameCuStreamW           =  6,
+  NVTX_CBID_CUDA_NameCuEventA            =  7,
+  NVTX_CBID_CUDA_NameCuEventW            =  8,
+  /* --- New constants must only be added directly above this line --- */
+  NVTX_CBID_CUDA_SIZE,
+  NVTX_CBID_CUDA_FORCE_INT               = 0x7fffffff
 } NvtxCallbackIdCuda;
 
-typedef enum NvtxCallbackIdCudaRt
-{
-    NVTX_CBID_CUDART_INVALID               =  0,
-    NVTX_CBID_CUDART_NameCudaDeviceA       =  1,
-    NVTX_CBID_CUDART_NameCudaDeviceW       =  2,
-    NVTX_CBID_CUDART_NameCudaStreamA       =  3,
-    NVTX_CBID_CUDART_NameCudaStreamW       =  4,
-    NVTX_CBID_CUDART_NameCudaEventA        =  5,
-    NVTX_CBID_CUDART_NameCudaEventW        =  6,
-    /* --- New constants must only be added directly above this line --- */
-    NVTX_CBID_CUDART_SIZE,
-    NVTX_CBID_CUDART_FORCE_INT             = 0x7fffffff
+typedef enum NvtxCallbackIdCudaRt {
+  NVTX_CBID_CUDART_INVALID               =  0,
+  NVTX_CBID_CUDART_NameCudaDeviceA       =  1,
+  NVTX_CBID_CUDART_NameCudaDeviceW       =  2,
+  NVTX_CBID_CUDART_NameCudaStreamA       =  3,
+  NVTX_CBID_CUDART_NameCudaStreamW       =  4,
+  NVTX_CBID_CUDART_NameCudaEventA        =  5,
+  NVTX_CBID_CUDART_NameCudaEventW        =  6,
+  /* --- New constants must only be added directly above this line --- */
+  NVTX_CBID_CUDART_SIZE,
+  NVTX_CBID_CUDART_FORCE_INT             = 0x7fffffff
 } NvtxCallbackIdCudaRt;
 
-typedef enum NvtxCallbackIdOpenCL
-{
-    NVTX_CBID_OPENCL_INVALID               =  0,
-    NVTX_CBID_OPENCL_NameClDeviceA         =  1,
-    NVTX_CBID_OPENCL_NameClDeviceW         =  2,
-    NVTX_CBID_OPENCL_NameClContextA        =  3,
-    NVTX_CBID_OPENCL_NameClContextW        =  4,
-    NVTX_CBID_OPENCL_NameClCommandQueueA   =  5,
-    NVTX_CBID_OPENCL_NameClCommandQueueW   =  6,
-    NVTX_CBID_OPENCL_NameClMemObjectA      =  7,
-    NVTX_CBID_OPENCL_NameClMemObjectW      =  8,
-    NVTX_CBID_OPENCL_NameClSamplerA        =  9,
-    NVTX_CBID_OPENCL_NameClSamplerW        = 10,
-    NVTX_CBID_OPENCL_NameClProgramA        = 11,
-    NVTX_CBID_OPENCL_NameClProgramW        = 12,
-    NVTX_CBID_OPENCL_NameClEventA          = 13,
-    NVTX_CBID_OPENCL_NameClEventW          = 14,
-    /* --- New constants must only be added directly above this line --- */
-    NVTX_CBID_OPENCL_SIZE,
-    NVTX_CBID_OPENCL_FORCE_INT             = 0x7fffffff
+typedef enum NvtxCallbackIdOpenCL {
+  NVTX_CBID_OPENCL_INVALID               =  0,
+  NVTX_CBID_OPENCL_NameClDeviceA         =  1,
+  NVTX_CBID_OPENCL_NameClDeviceW         =  2,
+  NVTX_CBID_OPENCL_NameClContextA        =  3,
+  NVTX_CBID_OPENCL_NameClContextW        =  4,
+  NVTX_CBID_OPENCL_NameClCommandQueueA   =  5,
+  NVTX_CBID_OPENCL_NameClCommandQueueW   =  6,
+  NVTX_CBID_OPENCL_NameClMemObjectA      =  7,
+  NVTX_CBID_OPENCL_NameClMemObjectW      =  8,
+  NVTX_CBID_OPENCL_NameClSamplerA        =  9,
+  NVTX_CBID_OPENCL_NameClSamplerW        = 10,
+  NVTX_CBID_OPENCL_NameClProgramA        = 11,
+  NVTX_CBID_OPENCL_NameClProgramW        = 12,
+  NVTX_CBID_OPENCL_NameClEventA          = 13,
+  NVTX_CBID_OPENCL_NameClEventW          = 14,
+  /* --- New constants must only be added directly above this line --- */
+  NVTX_CBID_OPENCL_SIZE,
+  NVTX_CBID_OPENCL_FORCE_INT             = 0x7fffffff
 } NvtxCallbackIdOpenCL;
 
-typedef enum NvtxCallbackIdSync
-{
-    NVTX_CBID_SYNC_INVALID                      = 0,
-    NVTX_CBID_SYNC_DomainSyncUserCreate         = 1,
-    NVTX_CBID_SYNC_DomainSyncUserDestroy        = 2,
-    NVTX_CBID_SYNC_DomainSyncUserAcquireStart   = 3,
-    NVTX_CBID_SYNC_DomainSyncUserAcquireFailed  = 4,
-    NVTX_CBID_SYNC_DomainSyncUserAcquireSuccess = 5,
-    NVTX_CBID_SYNC_DomainSyncUserReleasing      = 6,
-    /* --- New constants must only be added directly above this line --- */
-    NVTX_CBID_SYNC_SIZE,
-    NVTX_CBID_SYNC_FORCE_INT                    = 0x7fffffff
+typedef enum NvtxCallbackIdSync {
+  NVTX_CBID_SYNC_INVALID                      = 0,
+  NVTX_CBID_SYNC_DomainSyncUserCreate         = 1,
+  NVTX_CBID_SYNC_DomainSyncUserDestroy        = 2,
+  NVTX_CBID_SYNC_DomainSyncUserAcquireStart   = 3,
+  NVTX_CBID_SYNC_DomainSyncUserAcquireFailed  = 4,
+  NVTX_CBID_SYNC_DomainSyncUserAcquireSuccess = 5,
+  NVTX_CBID_SYNC_DomainSyncUserReleasing      = 6,
+  /* --- New constants must only be added directly above this line --- */
+  NVTX_CBID_SYNC_SIZE,
+  NVTX_CBID_SYNC_FORCE_INT                    = 0x7fffffff
 } NvtxCallbackIdSync;
 
 /* IDs for NVTX Export Tables */
-typedef enum NvtxExportTableID
-{
-    NVTX_ETID_INVALID                      = 0,
-    NVTX_ETID_CALLBACKS                    = 1,
-    NVTX_ETID_RESERVED0                    = 2,
-    NVTX_ETID_VERSIONINFO                  = 3,
-    /* --- New constants must only be added directly above this line --- */
-    NVTX_ETID_SIZE,
-    NVTX_ETID_FORCE_INT                    = 0x7fffffff
+typedef enum NvtxExportTableID {
+  NVTX_ETID_INVALID                      = 0,
+  NVTX_ETID_CALLBACKS                    = 1,
+  NVTX_ETID_RESERVED0                    = 2,
+  NVTX_ETID_VERSIONINFO                  = 3,
+  /* --- New constants must only be added directly above this line --- */
+  NVTX_ETID_SIZE,
+  NVTX_ETID_FORCE_INT                    = 0x7fffffff
 } NvtxExportTableID;
 
 typedef void (* NvtxFunctionPointer)(void); /* generic uncallable function pointer, must be casted to appropriate function type */
 typedef NvtxFunctionPointer** NvtxFunctionTable; /* double pointer because array(1) of pointers(2) to function pointers */
 
-typedef struct NvtxExportTableCallbacks
-{
-    size_t struct_size;
+typedef struct NvtxExportTableCallbacks {
+  size_t struct_size;
 
-    /* returns an array of pointer to function pointers*/
-    int (NVTX_API *GetModuleFunctionTable)(
-        NvtxCallbackModule module,
-        NvtxFunctionTable* out_table,
-        unsigned int* out_size);
+  /* returns an array of pointer to function pointers*/
+  int (NVTX_API *GetModuleFunctionTable)(
+      NvtxCallbackModule module,
+      NvtxFunctionTable* out_table,
+      unsigned int* out_size);
 } NvtxExportTableCallbacks;
 
-typedef struct NvtxExportTableVersionInfo
-{
-    /* sizeof(NvtxExportTableVersionInfo) */
-    size_t struct_size;
+typedef struct NvtxExportTableVersionInfo {
+  /* sizeof(NvtxExportTableVersionInfo) */
+  size_t struct_size;
 
-    /* The API version comes from the NVTX library linked to the app.  The
-    * injection library is can use this info to make some assumptions */
-    uint32_t version;
+  /* The API version comes from the NVTX library linked to the app.  The
+  * injection library is can use this info to make some assumptions */
+  uint32_t version;
 
-    /* Reserved for alignment, do not use */
-    uint32_t reserved0;
+  /* Reserved for alignment, do not use */
+  uint32_t reserved0;
 
-    /* This must be set by tools when attaching to provide applications
-    *  the ability to, in emergency situations, detect problematic tools
-    *  versions and modify the NVTX source to prevent attaching anything
-    *  that causes trouble in the app.  Currently, this value is ignored. */
-    void (NVTX_API *SetInjectionNvtxVersion)(
-        uint32_t version);
+  /* This must be set by tools when attaching to provide applications
+  *  the ability to, in emergency situations, detect problematic tools
+  *  versions and modify the NVTX source to prevent attaching anything
+  *  that causes trouble in the app.  Currently, this value is ignored. */
+  void (NVTX_API *SetInjectionNvtxVersion)(
+      uint32_t version);
 } NvtxExportTableVersionInfo;
 
 

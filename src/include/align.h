@@ -20,12 +20,12 @@
   size = ((size + (align) - 1) / (align)) * (align);
 
 #if !__CUDA_ARCH__
-  #ifndef __host__
-    #define __host__
-  #endif
-  #ifndef __device__
-    #define __device__
-  #endif
+#ifndef __host__
+#define __host__
+#endif
+#ifndef __device__
+#define __device__
+#endif
 #endif
 
 template<typename X, typename Y, typename Z = decltype(X()+Y())>

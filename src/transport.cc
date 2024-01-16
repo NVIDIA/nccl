@@ -22,7 +22,7 @@ static ncclResult_t selectTransport(struct ncclComm* comm, struct ncclTopoGraph*
   struct ncclPeerInfo* myInfo = comm->peerInfo+comm->rank;
   struct ncclPeerInfo* peerInfo = comm->peerInfo+peer;
   struct ncclConnector* connector = (type == 1) ? comm->channels[channelId].peers[peer]->send + connIndex :
-                                                  comm->channels[channelId].peers[peer]->recv + connIndex;
+      comm->channels[channelId].peers[peer]->recv + connIndex;
   for (int t=0; t<NTRANSPORTS; t++) {
     struct ncclTransport *transport = ncclTransports[t];
     struct ncclTransportComm* transportComm = type == 1 ? &transport->send : &transport->recv;
@@ -197,17 +197,17 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
             data[p] = NULL;
           }
         }
-	if (ncclParamReportConnectProgress() && comm->rank == 0) {
+        if (ncclParamReportConnectProgress() && comm->rank == 0) {
           struct timeval now;
           gettimeofday(&now, NULL);
           if (((now.tv_sec - timeLast.tv_sec)*1.0 + (now.tv_usec-timeLast.tv_usec)*1e-6) > 1) {
             float elapsed = (now.tv_sec - timeStart.tv_sec)*1.0 + (now.tv_usec-timeStart.tv_usec)*1e-6;
-	    float remaining = elapsed*(comm->nRanks-done)/done;
+            float remaining = elapsed*(comm->nRanks-done)/done;
             printf("%sP2p connect: %g%% Elapsed %d:%02d Remaining %d:%02d                                       ",
                 timeReported ? "\r" : "", done*100.0/comm->nRanks, ((int)elapsed)/60, ((int)elapsed)%60, ((int)remaining)/60, ((int)remaining)%60);
             fflush(stdout);
             timeReported = true;
-	    timeLast = now; // struct copy;
+            timeLast = now; // struct copy;
           }
         }
       }

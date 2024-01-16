@@ -19,14 +19,14 @@ struct RunWork<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
       void* recvBuff = reinterpret_cast<void*>(uintptr_t(recvArgs->buffHi32)<<32 | recvArgs->buffLo32);
       if (buff != recvBuff) {
         reduceCopy<COLL_UNROLL, RedOp, T, 0,1,1, 0,1,1, /*PreOpSrcs=*/0>
-          (tid, nthreads, 0, nullptr, false, 1, &buff, 1, &recvBuff, count);
+                   (tid, nthreads, 0, nullptr, false, 1, &buff, 1, &recvBuff, count);
       }
     } else {
       int chunkSize = args->chunkSize/sizeof(T);
       if (args->proto == NCCL_PROTO_LL) chunkSize /= 2;
       int const peer = args->peer;
       Primitives<T, RedOp, FanAsymmetric<0, 1>, 1, Proto, 1> prims
-        (tid, nthreads, nullptr, &peer, buff, nullptr, /*redOpArg(ignored)=*/0, group, 1, 1, nullptr, ncclShmem.comm.p2pChunkSize/sizeof(T));
+      (tid, nthreads, nullptr, &peer, buff, nullptr, /*redOpArg(ignored)=*/0, group, 1, 1, nullptr, ncclShmem.comm.p2pChunkSize/sizeof(T));
       size_t offset = 0;
       do {
         int nelem = min(size_t(chunkSize), count-offset);
@@ -45,7 +45,7 @@ struct RunWork<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
       if (args->proto == NCCL_PROTO_LL) chunkSize /= 2; // This is to account for chunkEffectiveSize
       int const peer = args->peer;
       Primitives<T, RedOp, FanAsymmetric<1, 0>, 1, Proto, 1> prims
-        (tid, nthreads, &peer, nullptr, nullptr, buff, /*redOpArg(ignored)=*/0, group, 1, 1, nullptr, ncclShmem.comm.p2pChunkSize/sizeof(T));
+      (tid, nthreads, &peer, nullptr, nullptr, buff, /*redOpArg(ignored)=*/0, group, 1, 1, nullptr, ncclShmem.comm.p2pChunkSize/sizeof(T));
       size_t offset = 0;
       do {
         int nelem = min(size_t(chunkSize), count-offset);
@@ -64,7 +64,7 @@ struct RunWork<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
     // warps for send, 2 warps for recv).
     // warpStarts were rounded thanks to int division, but for group number we need to round the other way around
     // So we mirror wid then mirror again the group.
-    #define NWARPS (NCCL_MAX_NTHREADS/WARP_SIZE)
+#define NWARPS (NCCL_MAX_NTHREADS/WARP_SIZE)
     uint8_t group = ngroups-1- (NWARPS-1-wid) * ngroups / NWARPS;
     args += group;
     tid -= args->warpStart * WARP_SIZE;

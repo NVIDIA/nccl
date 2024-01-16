@@ -113,7 +113,7 @@ struct ncclTopoNode {
       int rank;
       int cudaCompCap;
       int gdrSupport;
-    }gpu;
+    } gpu;
     struct {
       uint64_t asic;
       int port;
@@ -122,16 +122,16 @@ struct ncclTopoNode {
       int gdrSupport;
       int collSupport;
       int maxChannels;
-    }net;
+    } net;
     struct {
       int arch;
       int vendor;
       int model;
       cpu_set_t affinity;
-    }cpu;
+    } cpu;
     struct {
       uint64_t device;
-    }pci;
+    } pci;
   };
   int nlinks;
   struct ncclTopoLink links[NCCL_TOPO_MAX_LINKS];
@@ -202,12 +202,12 @@ static ncclResult_t ncclTopoDevToRank(struct ncclTopoSystem* system, int dev, in
 // Returns NVLink bw in GB/s
 static float ncclTopoNVLinkBw(int cudaCompCap) {
   return
-    cudaCompCap >= 90 ? SM90_NVLINK_BW :
-    cudaCompCap == 86 ? SM86_NVLINK_BW :
-    cudaCompCap >= 80 ? SM80_NVLINK_BW :
-    cudaCompCap >= 70 ? SM70_NVLINK_BW :
-    cudaCompCap >= 60 ? SM60_NVLINK_BW :
-    SM80_NVLINK_BW;
+      cudaCompCap >= 90 ? SM90_NVLINK_BW :
+      cudaCompCap == 86 ? SM86_NVLINK_BW :
+      cudaCompCap >= 80 ? SM80_NVLINK_BW :
+      cudaCompCap >= 70 ? SM70_NVLINK_BW :
+      cudaCompCap >= 60 ? SM60_NVLINK_BW :
+      SM80_NVLINK_BW;
 }
 
 // Mirror bits

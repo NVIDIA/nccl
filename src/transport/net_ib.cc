@@ -131,7 +131,8 @@ static int ibvSpeeds[] = {
   14000, /* FDR */
   25000, /* EDR */
   50000, /* HDR */
-  100000 /* NDR */ };
+  100000 /* NDR */
+};
 
 static int firstBitSet(int val, int max) {
   int i = 0;
@@ -262,7 +263,7 @@ ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction) {
       line[1023] = '\0';
       char addrline[SOCKET_NAME_MAXLEN+1];
       INFO(NCCL_INIT|NCCL_NET, "NET/IB : Using%s %s; OOB %s:%s", line, ncclIbRelaxedOrderingEnabled ? "[RO]" : "",
-           ncclIbIfName, ncclSocketToString(&ncclIbIfAddr, addrline));
+          ncclIbIfName, ncclSocketToString(&ncclIbIfAddr, addrline));
     }
     pthread_mutex_unlock(&ncclIbLock);
   }
@@ -283,8 +284,8 @@ ncclResult_t ncclIbGdrSupport(int ibDev) {
   if (moduleLoaded == -1) {
     // Check for the nv_peer_mem module being loaded
     moduleLoaded = ((access("/sys/kernel/mm/memory_peers/nv_mem/version", F_OK) == -1) &&
-                    // Also support the new nvidia-peermem module
-                    (access("/sys/kernel/mm/memory_peers/nvidia-peermem/version", F_OK) == -1)) ? 0 : 1;
+            // Also support the new nvidia-peermem module
+            (access("/sys/kernel/mm/memory_peers/nvidia-peermem/version", F_OK) == -1)) ? 0 : 1;
   }
   if (moduleLoaded == 0) return ncclSystemError;
   return ncclSuccess;
@@ -508,7 +509,7 @@ ncclResult_t ncclIbInitVerbs(int dev, struct ibv_context* ctx, struct ncclIbVerb
     ncclResult_t res;
     NCCLCHECKGOTO(wrap_ibv_alloc_pd(&ncclIbDevs[dev].pd, ctx), res, failure);
     if (0) {
-    failure:
+failure:
       pthread_mutex_unlock(&ncclIbDevs[dev].lock);
       return res;
     }
@@ -687,8 +688,8 @@ ib_connect_check:
   } else { // RoCE
     for (int q=0; q<comm->nqps; q++)
       INFO(NCCL_NET,"NET/IB: Dev %d Port %d qpn %d mtu %d query_ece={supported=%d, vendor_id=0x%x, options=0x%x, comp_mask=0x%x} GID %ld (%lX/%lX)",
-        dev, ncclIbDevs[dev].port, qpInfo.qpn[q], qpInfo.mtu, qpInfo.ece_supported[q], qpInfo.ece[q].vendor_id, qpInfo.ece[q].options, qpInfo.ece[q].comp_mask, ncclParamIbGidIndex(),
-        qpInfo.spn, qpInfo.iid);
+          dev, ncclIbDevs[dev].port, qpInfo.qpn[q], qpInfo.mtu, qpInfo.ece_supported[q], qpInfo.ece[q].vendor_id, qpInfo.ece[q].options, qpInfo.ece[q].comp_mask, ncclParamIbGidIndex(),
+          qpInfo.spn, qpInfo.iid);
   }
 
   stage->state = ncclIbCommStateSend;
@@ -726,7 +727,7 @@ ib_connect:
   if (qpInfo.link_layer == IBV_LINK_LAYER_ETHERNET ) { // RoCE
     for (int q=0; q<comm->nqps; q++)
       INFO(NCCL_NET,"NET/IB: Dev %d Port %d qpn %d set_ece={supported=%d, vendor_id=0x%x, options=0x%x, comp_mask=0x%x}",
-        dev, ncclIbDevs[dev].port, qpInfo.qpn[q], remQpInfo.ece_supported[q], remQpInfo.ece[q].vendor_id, remQpInfo.ece[q].options, remQpInfo.ece[q].comp_mask);
+          dev, ncclIbDevs[dev].port, qpInfo.qpn[q], remQpInfo.ece_supported[q], remQpInfo.ece[q].vendor_id, remQpInfo.ece[q].options, remQpInfo.ece[q].comp_mask);
   }
 
   comm->ready = 1;
@@ -814,7 +815,7 @@ ib_recv:
     // Set the ece (enhanced connection establishment) on this QP before RTR
     if (remQpInfo.ece_supported[q]) {
       NCCLCHECK(wrap_ibv_set_ece(qp, &remQpInfo.ece[q], &qpInfo.ece_supported[q]));
-  
+
       // Query the reduced ece for this QP (matching enhancements between the requestor and the responder)
       // Store this in our own qpInfo for returning to the requestor
       if (qpInfo.ece_supported[q]) {
@@ -835,7 +836,7 @@ ib_recv:
 
   // Allocate Flush dummy buffer for GPU Direct RDMA
   rComm->gpuFlush.enabled = ((ncclIbGdrSupport(lComm->dev) == ncclSuccess || ncclIbDmaBufSupport(lComm->dev) == ncclSuccess)
-                             && (ncclParamIbGdrFlushDisable() == 0)) ? 1 : 0;
+          && (ncclParamIbGdrFlushDisable() == 0)) ? 1 : 0;
   if (rComm->gpuFlush.enabled) {
     NCCLCHECK(wrap_ibv_reg_mr(&rComm->gpuFlush.hostMr, rComm->verbs.pd, &rComm->gpuFlush.hostMem, sizeof(int), IBV_ACCESS_LOCAL_WRITE));
     rComm->gpuFlush.sge.addr = (uint64_t)&rComm->gpuFlush.hostMem;
@@ -944,8 +945,7 @@ ncclResult_t ncclIbRegMrDmaBuf(void* comm, void* data, size_t size, int type, ui
         if (ncclIbRelaxedOrderingEnabled) {
           // Use IBVERBS_1.8 API - needed for IBV_ACCESS_RELAXED_ORDERING support
           NCCLCHECKGOTO(wrap_ibv_reg_mr_iova2(&mr, verbs->pd, (void*)addr, pages*pageSize, addr, flags), res, returning);
-        }
-        else {
+        } else {
           NCCLCHECKGOTO(wrap_ibv_reg_mr(&mr, verbs->pd, (void*)addr, pages*pageSize, flags), res, returning);
         }
       }
@@ -958,8 +958,7 @@ ncclResult_t ncclIbRegMrDmaBuf(void* comm, void* data, size_t size, int type, ui
       *mhandle = (void*)mr;
       res = ncclSuccess;
       goto returning;
-    }
-    else if (cache->slots[slot].addr == addr && cache->slots[slot].pages == pages) {
+    } else if (cache->slots[slot].addr == addr && cache->slots[slot].pages == pages) {
       cache->slots[slot].refs += 1;
       *mhandle = (void*)cache->slots[slot].mr;
       res = ncclSuccess;
@@ -1117,7 +1116,7 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, int size, int tag, void* mh
       union ncclSocketAddress addr;
       ncclSocketGetAddr(&comm->sock, &addr);
       WARN("NET/IB : req %d/%d tag %x peer %s collective mismatch error, local size %d remote size %d",
-        r, nreqs, tag, ncclSocketToString(&addr, line), size, slots[r].size);
+          r, nreqs, tag, ncclSocketToString(&addr, line), size, slots[r].size);
       return ncclInvalidUsage;
     } // plus any potential programming errors
     else if (slots[r].size < 0 || slots[r].addr == 0 || slots[r].rkey == 0) {
@@ -1125,7 +1124,7 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, int size, int tag, void* mh
       union ncclSocketAddress addr;
       ncclSocketGetAddr(&comm->sock, &addr);
       WARN("NET/IB : req %d/%d tag %x peer %s posted incorrect receive info: size %d addr %lx rkey %x",
-        r, nreqs, tag, ncclSocketToString(&addr, line), slots[r].size, slots[r].addr, slots[r].rkey);
+          r, nreqs, tag, ncclSocketToString(&addr, line), slots[r].size, slots[r].addr, slots[r].rkey);
       return ncclInternalError;
     }
     struct ncclIbRequest* req;
@@ -1327,8 +1326,8 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
         char remoteGidString[INET6_ADDRSTRLEN] = "";
         const char* localGidStr = NULL, *remoteGidStr = NULL;
         if (r->gidInfo) {
-            localGidStr = inet_ntop(AF_INET6, &r->gidInfo->localGid, localGidString, sizeof(localGidString));
-            remoteGidStr = inet_ntop(AF_INET6, &r->gidInfo->remoteGid, remoteGidString, sizeof(remoteGidString));
+          localGidStr = inet_ntop(AF_INET6, &r->gidInfo->localGid, localGidString, sizeof(localGidString));
+          remoteGidStr = inet_ntop(AF_INET6, &r->gidInfo->remoteGid, remoteGidString, sizeof(remoteGidString));
         }
         WARN("NET/IB : Got completion from peer %s with error %d, opcode %d, len %d, vendor err %d (%s)%s%s%s%s",
             ncclSocketToString(&addr, line), wc->status, wc->opcode, wc->byte_len, wc->vendor_err, reqTypeStr[r->type],

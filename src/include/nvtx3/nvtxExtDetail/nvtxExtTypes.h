@@ -20,23 +20,21 @@
 
 typedef intptr_t (NVTX_API * NvtxExtGetExportFunction_t)(uint32_t exportFunctionId);
 
-typedef struct nvtxExtModuleSegment_t
-{
-    size_t segmentId;
-    size_t slotCount;
-    intptr_t* functionSlots;
+typedef struct nvtxExtModuleSegment_t {
+  size_t segmentId;
+  size_t slotCount;
+  intptr_t* functionSlots;
 } nvtxExtModuleSegment_t;
 
-typedef struct nvtxExtModuleInfo_t
-{
-    uint16_t nvtxVer;
-    uint16_t structSize;
-    uint16_t moduleId;
-    uint16_t compatId;
-    size_t segmentsCount;
-    nvtxExtModuleSegment_t* segments;
-    NvtxExtGetExportFunction_t getExportFunction;
-    const void* extInfo;
+typedef struct nvtxExtModuleInfo_t {
+  uint16_t nvtxVer;
+  uint16_t structSize;
+  uint16_t moduleId;
+  uint16_t compatId;
+  size_t segmentsCount;
+  nvtxExtModuleSegment_t* segments;
+  NvtxExtGetExportFunction_t getExportFunction;
+  const void* extInfo;
 } nvtxExtModuleInfo_t;
 
 typedef int (NVTX_API * NvtxExtInitializeInjectionFunc_t)(nvtxExtModuleInfo_t* moduleInfo);

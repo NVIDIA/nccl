@@ -125,8 +125,8 @@ static ncclResult_t ncclTopoFollowPath(struct ncclTopoSystem* system, struct ncc
 
   if (mult == 1 && (path->type > type)) return ncclSuccess;
   if (mult == 1 && (graph->pattern == NCCL_TOPO_PATTERN_BALANCED_TREE ||
-        graph->pattern == NCCL_TOPO_PATTERN_TREE ||
-        graph->pattern == NCCL_TOPO_PATTERN_SPLIT_TREE) &&
+          graph->pattern == NCCL_TOPO_PATTERN_TREE ||
+          graph->pattern == NCCL_TOPO_PATTERN_SPLIT_TREE) &&
       (revPath->type > type)) return ncclSuccess;
 
   bw *= mult;
@@ -174,15 +174,15 @@ struct ncclGpuScore {
 };
 
 static int cmpScore(const void * g1, const void * g2) {
-   struct ncclGpuScore *s1 = (struct ncclGpuScore*)g1;
-   struct ncclGpuScore *s2 = (struct ncclGpuScore*)g2;
-   int d;
-   if ((d = (s2->interBw - s1->interBw))) return d;
-   if ((d = (s2->interPciBw - s1->interPciBw))) return d;
-   if ((d = (s1->interNhops - s2->interNhops))) return d;
-   if ((d = (s2->intraBw - s1->intraBw))) return d;
-   if ((d = (s1->intraNhops - s2->intraNhops))) return d;
-   return s1->startIndex - s2->startIndex;
+  struct ncclGpuScore *s1 = (struct ncclGpuScore*)g1;
+  struct ncclGpuScore *s2 = (struct ncclGpuScore*)g2;
+  int d;
+  if ((d = (s2->interBw - s1->interBw))) return d;
+  if ((d = (s2->interPciBw - s1->interPciBw))) return d;
+  if ((d = (s1->interNhops - s2->interNhops))) return d;
+  if ((d = (s2->intraBw - s1->intraBw))) return d;
+  if ((d = (s1->intraNhops - s2->intraNhops))) return d;
+  return s1->startIndex - s2->startIndex;
 }
 
 static int cmpIntraScores(struct ncclGpuScore* scores, int count) {
@@ -307,9 +307,9 @@ ncclResult_t ncclTopoReplayGetGpu(struct ncclTopoSystem* system, struct ncclTopo
   int ngpus = system->nodes[GPU].count;
   int nextRank = graph->intra[(graph->nChannels-1)*ngpus+step+1];
   for (int i=0; i<ngpus; i++) if (system->nodes[GPU].nodes[i].gpu.rank == nextRank) {
-    *g = i;
-    return ncclSuccess;
-  }
+      *g = i;
+      return ncclSuccess;
+    }
   if (*g == -1) return ncclInternalError;
   return ncclSuccess;
 }
@@ -848,7 +848,7 @@ float sm90SpeedArrayInter[] = { 48.0, 45.0, 42.0, 40.0, 30.0, 24.0, 22.0, 20.0, 
 ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph) {
   int ngpus = system->nodes[GPU].count;
   int crossNic = (system->nodes[NET].count > 1) &&
-	 (graph->pattern == NCCL_TOPO_PATTERN_RING ||
+      (graph->pattern == NCCL_TOPO_PATTERN_RING ||
           graph->pattern == NCCL_TOPO_PATTERN_BALANCED_TREE ||
           graph->pattern == NCCL_TOPO_PATTERN_SPLIT_TREE) ? ncclParamCrossNic() : 0;
   graph->crossNic = crossNic == 1 ? 1 : 0;
@@ -913,7 +913,7 @@ ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph
 
 search:
   int time = tmpGraph.sameChannels ? NCCL_SEARCH_TIMEOUT_SAMECHANNELS :
-    tmpGraph.pattern == NCCL_TOPO_PATTERN_TREE ? NCCL_SEARCH_TIMEOUT_TREE : NCCL_SEARCH_TIMEOUT;
+      tmpGraph.pattern == NCCL_TOPO_PATTERN_TREE ? NCCL_SEARCH_TIMEOUT_TREE : NCCL_SEARCH_TIMEOUT;
   tmpGraph.nChannels = 0;
   globalTimeout -= time;
 

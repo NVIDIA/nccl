@@ -41,8 +41,8 @@ typedef struct {
   // algorithm and protocol, but not only the algorithm or only the protocol.
   // Unset fields will be set automatically by NCCL.
   ncclResult_t (*getCollInfo)(ncclFunc_t collType, size_t nBytes,
-                              int collNetSupport, int nvlsSupport, int numPipeOps,
-                              int *algorithm, int *protocol, int* nChannels);
+      int collNetSupport, int nvlsSupport, int numPipeOps,
+      int *algorithm, int *protocol, int* nChannels);
 
   // Terminates the plugin and cleans up any resources that the plugin allocated.
   ncclResult_t (*destroy)();

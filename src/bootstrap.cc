@@ -467,8 +467,7 @@ ncclResult_t bootstrapIntraNodeBroadcast(void* commState, int *ranks, int rank, 
     for (int i=0; i<nranks; i++) {
       if (i != root) NCCLCHECK(bootstrapSend(commState, ranks[i], /*tag=*/ranks[i], bcastData, size));
     }
-  }
-  else {
+  } else {
     NCCLCHECK(bootstrapRecv(commState, ranks[root], /*tag=*/ranks[rank], bcastData, size));
   }
 

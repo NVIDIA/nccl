@@ -43,7 +43,7 @@ inline __device__ void loadShmemMisaligned128(T *ptr, uint64_t &v0, uint64_t &v1
   };
   if(sizeof(T) < 4) {
     uint32_t *ptr4 = reinterpret_cast<uint32_t*>(reinterpret_cast<uintptr_t>(ptr) & -uintptr_t(4));
-    #pragma unroll
+#pragma unroll
     for(int e=0; e < 4; e++) {
       // Produce 4 bytes of sub-register type by reading 2 4-byte
       // aligned values and shifting.
@@ -52,14 +52,12 @@ inline __device__ void loadShmemMisaligned128(T *ptr, uint64_t &v0, uint64_t &v1
       asm("ld.shared.b32 %0,[%1];" : "=r"(hi) : "l"(ptr4+e+1));
       tmp4[e] = __funnelshift_r(lo, hi, 8*(int(reinterpret_cast<uintptr_t>(ptr))%4));
     }
-  }
-  else if(sizeof(T) == 4) {
-    #pragma unroll
+  } else if(sizeof(T) == 4) {
+#pragma unroll
     for(int e=0; e < 4; e++)
       asm("ld.shared.b32 %0,[%1];" : "=r"(tmp4[e]) : "l"(ptr+e));
-  }
-  else /*sizeof(T)==8*/ {
-    #pragma unroll
+  } else { /*sizeof(T)==8*/
+#pragma unroll
     for(int e=0; e < 2; e++)
       asm("ld.shared.b64 %0,[%1];" : "=l"(tmp8[e]) : "l"(ptr+e));
   }
@@ -203,9 +201,9 @@ template<> __device__ __forceinline__ void st_relaxed_gpu_global<0>(uintptr_t ad
   }
 
 #if __CUDA_ARCH__ >= 700
-  #define PTX_relaxed_gpu "relaxed.gpu"
+#define PTX_relaxed_gpu "relaxed.gpu"
 #else
-  #define PTX_relaxed_gpu "volatile"
+#define PTX_relaxed_gpu "volatile"
 #endif
 
 #define DEFINE_ld_st_gpu_relaxed__size(bytes, data_cxx_ty, data_ptx_ty, data_reg_ty) \
@@ -282,29 +280,29 @@ __device__ __forceinline__ uint64_t ld_volatile_global(uint64_t *ptr) {
 }
 __device__ __forceinline__ uint64_t ld_relaxed_sys_global(uint64_t *ptr) {
   uint64_t ans;
-  #if __CUDA_ARCH__ >= 700
-    asm("ld.relaxed.sys.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
-  #else
-    asm("ld.volatile.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
-  #endif
+#if __CUDA_ARCH__ >= 700
+  asm("ld.relaxed.sys.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
+#else
+  asm("ld.volatile.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
+#endif
   return ans;
 }
 __device__ __forceinline__ uint64_t ld_relaxed_gpu_global(uint64_t *ptr) {
   uint64_t ans;
-  #if __CUDA_ARCH__ >= 700
-    asm("ld.relaxed.gpu.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
-  #else
-    asm("ld.volatile.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
-  #endif
+#if __CUDA_ARCH__ >= 700
+  asm("ld.relaxed.gpu.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
+#else
+  asm("ld.volatile.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
+#endif
   return ans;
 }
 __device__ __forceinline__ uint64_t ld_acquire_sys_global(uint64_t *ptr) {
   uint64_t ans;
-  #if __CUDA_ARCH__ >= 700
-    asm("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
-  #else
-    asm("ld.volatile.sys.global.u64 %0, [%1]; membar.gl;" : "=l"(ans) : "l"(cvta_to_global(ptr)));
-  #endif
+#if __CUDA_ARCH__ >= 700
+  asm("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
+#else
+  asm("ld.volatile.sys.global.u64 %0, [%1]; membar.gl;" : "=l"(ans) : "l"(cvta_to_global(ptr)));
+#endif
   return ans;
 }
 
@@ -312,33 +310,33 @@ __device__ __forceinline__ void st_volatile_global(uint64_t *ptr, uint64_t val) 
   asm volatile("st.volatile.global.u64 [%0], %1;" :: "l"(cvta_to_global(ptr)), "l"(val) : "memory");
 }
 __device__ __forceinline__ void st_relaxed_sys_global(uint64_t *ptr, uint64_t val) {
-  #if __CUDA_ARCH__ >= 700
-    asm volatile("st.relaxed.sys.global.u64 [%0], %1;" :: "l"(cvta_to_global(ptr)), "l"(val) : "memory");
-  #else
-    asm volatile("st.volatile.global.u64 [%0], %1;" :: "l"(cvta_to_global(ptr)), "l"(val) : "memory");
-  #endif
+#if __CUDA_ARCH__ >= 700
+  asm volatile("st.relaxed.sys.global.u64 [%0], %1;" :: "l"(cvta_to_global(ptr)), "l"(val) : "memory");
+#else
+  asm volatile("st.volatile.global.u64 [%0], %1;" :: "l"(cvta_to_global(ptr)), "l"(val) : "memory");
+#endif
 }
 __device__ __forceinline__ void st_release_sys_global(uint64_t *ptr, uint64_t val) {
-  #if __CUDA_ARCH__ >= 700
-    asm volatile("st.release.sys.global.u64 [%0], %1;" :: "l"(cvta_to_global(ptr)), "l"(val) : "memory");
-  #else
-    asm volatile("membar.sys; st.volatile.global.u64 [%0], %1;" :: "l"(cvta_to_global(ptr)), "l"(val) : "memory");
-  #endif
+#if __CUDA_ARCH__ >= 700
+  asm volatile("st.release.sys.global.u64 [%0], %1;" :: "l"(cvta_to_global(ptr)), "l"(val) : "memory");
+#else
+  asm volatile("membar.sys; st.volatile.global.u64 [%0], %1;" :: "l"(cvta_to_global(ptr)), "l"(val) : "memory");
+#endif
 }
 
 __device__ __forceinline__ void fence_acq_rel_sys() {
-  #if __CUDA_ARCH__ >= 700
-    asm volatile("fence.acq_rel.sys;" ::: "memory");
-  #else
-    asm volatile("membar.sys;" ::: "memory");
-  #endif
+#if __CUDA_ARCH__ >= 700
+  asm volatile("fence.acq_rel.sys;" ::: "memory");
+#else
+  asm volatile("membar.sys;" ::: "memory");
+#endif
 }
 __device__ __forceinline__ void fence_acq_rel_gpu() {
-  #if __CUDA_ARCH__ >= 700
-    asm volatile("fence.acq_rel.gpu;" ::: "memory");
-  #else
-    asm volatile("membar.gl;" ::: "memory");
-  #endif
+#if __CUDA_ARCH__ >= 700
+  asm volatile("fence.acq_rel.gpu;" ::: "memory");
+#else
+  asm volatile("membar.gl;" ::: "memory");
+#endif
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -371,8 +369,8 @@ __device__ __forceinline__ void multimem_st_global<8>(uintptr_t addr, BytePack<8
 template<>
 __device__ __forceinline__ void multimem_st_global<16>(uintptr_t addr, BytePack<16> val) {
   asm volatile("multimem.st.global.v4.f32 [%0], {%1,%2,%3,%4};"
-    :: "l"(addr), "r"(val.u32[0]), "r"(val.u32[1]), "r"(val.u32[2]), "r"(val.u32[3])
-    : "memory");
+      :: "l"(addr), "r"(val.u32[0]), "r"(val.u32[1]), "r"(val.u32[2]), "r"(val.u32[3])
+      : "memory");
 }
 #else
 template<int Size>
@@ -387,14 +385,15 @@ __device__ __forceinline__ void multimem_st_global(uintptr_t addr, BytePack<Size
 template<int EltSize, int MaxBytes, bool Multimem, typename IntBytes>
 __device__ __forceinline__ void copyGlobalShared_WarpUnrolled(
     int lane, uintptr_t dstAddr, uint32_t srcAddr, IntBytes nBytesAhead
-  ) {
+) {
   static_assert(std::is_signed<IntBytes>::value, "`IntBytes` must be a signed integral type.");
   int nBytes = min(nBytesAhead, (IntBytes)MaxBytes);
   int nFrontBytes = min(nBytes, (16 - int(dstAddr%16))%16);
   int nMiddleBytes = (nBytes-nFrontBytes) & -16;
   int nBackBytes = (nBytes-nFrontBytes) % 16;
 
-  { int backLane = WARP_SIZE-1 - lane;
+  {
+    int backLane = WARP_SIZE-1 - lane;
     bool hasFront = lane*EltSize < nFrontBytes;
     bool hasBack = backLane*EltSize < nBackBytes;
     int offset = hasFront ? lane*EltSize : (nBytes - (backLane+1)*EltSize);
@@ -410,7 +409,7 @@ __device__ __forceinline__ void copyGlobalShared_WarpUnrolled(
   srcAddr += -srcMisalign + lane*16;
   dstAddr += nFrontBytes + lane*16;
   nMiddleBytes -= lane*16;
-  #pragma unroll
+#pragma unroll
   for (int u=0; u < divUp(MaxBytes, WARP_SIZE*16); u++) {
     if (nMiddleBytes <= 0) break;
     union {

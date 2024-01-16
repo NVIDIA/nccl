@@ -16,7 +16,7 @@ struct ncclIbvSymbols ibvSymbols;
 
 ncclResult_t wrap_ibv_symbols(void) {
   pthread_once(&initOnceControl,
-               [](){ initResult = buildIbvSymbols(&ibvSymbols); });
+  []() { initResult = buildIbvSymbols(&ibvSymbols); });
   return initResult;
 }
 

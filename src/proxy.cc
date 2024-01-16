@@ -529,10 +529,10 @@ ncclResult_t ncclProxySaveOp(struct ncclComm* comm, struct ncclProxyOp* op, bool
   struct ncclChannel* channel = &comm->channels[op->channelId];
   if (justInquire) *justInquire = false;
   switch (op->pattern) {
-  case ncclPatternRing:
-  case ncclPatternRingTwice:
-  case ncclPatternPipelineFrom:
-  case ncclPatternPipelineTo: {
+    case ncclPatternRing:
+    case ncclPatternRingTwice:
+    case ncclPatternPipelineFrom:
+    case ncclPatternPipelineTo: {
       struct ncclRing* ring = &channel->ring;
       if (NeedProxy(proxyRecv, op->pattern, op->root, ring, comm->nRanks)) {
         NCCLCHECK(SaveProxy(comm, channel, proxyRecv, ring->prev, op, 0, justInquire));
@@ -541,9 +541,9 @@ ncclResult_t ncclProxySaveOp(struct ncclComm* comm, struct ncclProxyOp* op, bool
         NCCLCHECK(SaveProxy(comm, channel, proxySend, ring->next, op, 0, justInquire));
       }
     } break;
-  case ncclPatternTreeUp:
-  case ncclPatternTreeDown:
-  case ncclPatternTreeUpDown: {
+    case ncclPatternTreeUp:
+    case ncclPatternTreeDown:
+    case ncclPatternTreeUpDown: {
       if (op->pattern != ncclPatternTreeDown) { // Tree up
         struct ncclTree* tree = &channel->tree;
         for (int i=0; i<NCCL_MAX_TREE_ARITY; i++) {
@@ -559,19 +559,19 @@ ncclResult_t ncclProxySaveOp(struct ncclComm* comm, struct ncclProxyOp* op, bool
         NCCLCHECK(SaveProxy(comm, channel, proxyRecv, tree->up, op, 0, justInquire));
       }
     } break;
-  case ncclPatternCollnetChain: {
+    case ncclPatternCollnetChain: {
       NCCLCHECK(SaveProxy(comm, channel, proxySend, channel->collnetChain.up, op, 1, justInquire));
       NCCLCHECK(SaveProxy(comm, channel, proxyRecv, channel->collnetChain.up, op, 0, justInquire));
     } break;
-  case ncclPatternCollnetDirect: {
+    case ncclPatternCollnetDirect: {
       NCCLCHECK(SaveProxy(comm, channel, proxySend, channel->collnetDirect.out, op, 1, justInquire));
       NCCLCHECK(SaveProxy(comm, channel, proxyRecv, channel->collnetDirect.out, op, 0, justInquire));
     } break;
-  case ncclPatternNvls: {
+    case ncclPatternNvls: {
       NCCLCHECK(SaveProxy(comm, channel, proxySend, channel->nvls.out, op, 1, justInquire));
       NCCLCHECK(SaveProxy(comm, channel, proxyRecv, channel->nvls.out, op, 0, justInquire));
     } break;
-  case ncclPatternNvlsTree: {
+    case ncclPatternNvlsTree: {
       NCCLCHECK(SaveProxy(comm, channel, proxyRecv, channel->nvls.treeDown[1], op, 0, justInquire));
       NCCLCHECK(SaveProxy(comm, channel, proxyRecv, channel->nvls.treeDown[2], op, 0, justInquire));
       NCCLCHECK(SaveProxy(comm, channel, proxySend, channel->nvls.treeUp, op, 0, justInquire));
@@ -579,8 +579,8 @@ ncclResult_t ncclProxySaveOp(struct ncclComm* comm, struct ncclProxyOp* op, bool
       NCCLCHECK(SaveProxy(comm, channel, proxySend, channel->nvls.treeDown[2], op, 0, justInquire));
       NCCLCHECK(SaveProxy(comm, channel, proxyRecv, channel->nvls.treeUp, op, 0, justInquire));
     } break;
-  case ncclPatternSend:
-  case ncclPatternRecv: {
+    case ncclPatternSend:
+    case ncclPatternRecv: {
       if (op->root == comm->rank) return ncclSuccess;
       NCCLCHECK(SaveProxy(comm, channel, op->pattern == ncclPatternSend ? proxySend : proxyRecv, op->root, op, 1, justInquire));
     } break;
@@ -810,7 +810,7 @@ static int setProxyThreadContext(struct ncclProxyState* proxyState) {
   if (createThreadContext) {
     if (proxyState->cudaCtx == NULL) {
       if (CUPFN(cuCtxCreate(&proxyState->cudaCtx,
-                                  CU_CTX_SCHED_SPIN|CU_CTX_MAP_HOST, proxyState->cudaDev)) != CUDA_SUCCESS) {
+                  CU_CTX_SCHED_SPIN|CU_CTX_MAP_HOST, proxyState->cudaDev)) != CUDA_SUCCESS) {
         WARN("Failed to create CUDA context on device %d", proxyState->cudaDev);
         createThreadContext = 0;
       }
@@ -1153,7 +1153,7 @@ ncclResult_t ncclPollProxyResponse(struct ncclComm* comm, struct ncclProxyConnec
 
     if (offset == 0) {
       return ncclInProgress;
-    // If we've returned a partial response, block to receive the rest of it
+      // If we've returned a partial response, block to receive the rest of it
     } else if (offset < sizeof(resp)) {
       while (offset < sizeof(resp))
         NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_RECV, sock, &resp, sizeof(resp), &offset));

@@ -31,30 +31,29 @@ extern "C" {
  */
 NVTX_LINKONCE_DEFINE_GLOBAL intptr_t
 NVTX_EXT_PAYLOAD_VERSIONED_ID(nvtxExtPayloadSlots)[NVTX3EXT_CBID_PAYLOAD_FN_NUM + 1]
-    = {0};
+  = {0};
 
-NVTX_LINKONCE_DEFINE_FUNCTION void NVTX_EXT_PAYLOAD_VERSIONED_ID(nvtxExtPayloadInitOnce)()
-{
-    intptr_t* fnSlots = NVTX_EXT_PAYLOAD_VERSIONED_ID(nvtxExtPayloadSlots) + 1;
-    nvtxExtModuleSegment_t segment = {
-        0, // unused (only one segment)
-        NVTX3EXT_CBID_PAYLOAD_FN_NUM,
-        fnSlots
-    };
+NVTX_LINKONCE_DEFINE_FUNCTION void NVTX_EXT_PAYLOAD_VERSIONED_ID(nvtxExtPayloadInitOnce)() {
+  intptr_t* fnSlots = NVTX_EXT_PAYLOAD_VERSIONED_ID(nvtxExtPayloadSlots) + 1;
+  nvtxExtModuleSegment_t segment = {
+    0, // unused (only one segment)
+    NVTX3EXT_CBID_PAYLOAD_FN_NUM,
+    fnSlots
+  };
 
-    nvtxExtModuleInfo_t module = {
-        NVTX_VERSION, sizeof(nvtxExtModuleInfo_t),
-        NVTX_EXT_MODULEID_PAYLOAD, NVTX_EXT_COMPATID_PAYLOAD,
-        1, &segment, // number of segments, segments
-        NULL, // no export function needed
-        // bake type sizes and alignment information into program binary
-        &nvtxExtPayloadTypeInfo
-    };
+  nvtxExtModuleInfo_t module = {
+    NVTX_VERSION, sizeof(nvtxExtModuleInfo_t),
+    NVTX_EXT_MODULEID_PAYLOAD, NVTX_EXT_COMPATID_PAYLOAD,
+    1, &segment, // number of segments, segments
+    NULL, // no export function needed
+    // bake type sizes and alignment information into program binary
+    &nvtxExtPayloadTypeInfo
+  };
 
-    NVTX_INFO( "%s\n", __FUNCTION__  );
+  NVTX_INFO( "%s\n", __FUNCTION__  );
 
-    NVTX_VERSIONED_IDENTIFIER(nvtxExtInitOnce)(&module,
-        NVTX_EXT_PAYLOAD_VERSIONED_ID(nvtxExtPayloadSlots));
+  NVTX_VERSIONED_IDENTIFIER(nvtxExtInitOnce)(&module,
+      NVTX_EXT_PAYLOAD_VERSIONED_ID(nvtxExtPayloadSlots));
 }
 
 #define NVTX_EXT_FN_IMPL(ret_val, fn_name, signature, arg_names) \

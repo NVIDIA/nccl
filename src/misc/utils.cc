@@ -219,7 +219,8 @@ void* ncclMemoryStack::allocateSpilled(struct ncclMemoryStack* me, size_t size, 
     }
   }
 
-  { // If the next hunk we're going to allocate wouldn't be big enough but the
+  {
+    // If the next hunk we're going to allocate wouldn't be big enough but the
     // Unhunk proxy fits in the current hunk then go allocate as unhunked.
     size_t nextSize = (top ? top->size : 0) + (64<<10);
     constexpr size_t maxAlign = 64;
@@ -244,7 +245,8 @@ void* ncclMemoryStack::allocateSpilled(struct ncclMemoryStack* me, size_t size, 
     me->topFrame.bumper = reinterpret_cast<uintptr_t>(top) + sizeof(struct Hunk);
   }
 
-  { // Try to fit object in the new top hunk.
+  {
+    // Try to fit object in the new top hunk.
     uintptr_t uobj = (me->topFrame.bumper + align-1) & -uintptr_t(align);
     if (uobj + size <= me->topFrame.end) {
       me->topFrame.bumper = uobj + size;
@@ -252,8 +254,8 @@ void* ncclMemoryStack::allocateSpilled(struct ncclMemoryStack* me, size_t size, 
     }
   }
 
-unhunked:
-  { // We need to allocate the object out-of-band and put an Unhunk proxy in-band
+unhunked: {
+    // We need to allocate the object out-of-band and put an Unhunk proxy in-band
     // to keep track of it.
     uintptr_t uproxy = (me->topFrame.bumper + alignof(Unhunk)-1) & -uintptr_t(alignof(Unhunk));
     Unhunk* proxy = reinterpret_cast<Unhunk*>(uproxy);

@@ -701,35 +701,35 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
   struct ncclXmlNode* c2cNode = NULL;
   NCCLCHECK(xmlGetSub(gpuNode, "c2c", &c2cNode));
   if (c2cNode == NULL) {
-      if (sm >= 90) {
-        int c2cLinksCount = 0;
-        nvmlFieldValue_t fv;
-        fv.fieldId = NVML_FI_DEV_C2C_LINK_COUNT;
-        if ((ncclNvmlDeviceGetFieldValues(nvmlDev, 1, &fv) == ncclSuccess) && (fv.nvmlReturn == NVML_SUCCESS)) {
-          c2cLinksCount = fv.value.uiVal;
-          int bw = 0;
-	  int count = 0;
-          for (int l=0; l<c2cLinksCount; l++) {
-            nvmlFieldValue_t fvs[2];
-            fvs[0].fieldId = NVML_FI_DEV_C2C_LINK_GET_STATUS;
-            fvs[0].scopeId = l;
-            fvs[1].fieldId = NVML_FI_DEV_C2C_LINK_GET_MAX_BW;
-            fvs[1].scopeId = l;
-            if ((ncclNvmlDeviceGetFieldValues(nvmlDev, 2, fvs) == ncclSuccess) &&
-                (fvs[0].nvmlReturn == NVML_SUCCESS) &&
-                (fvs[0].value.uiVal == 1) &&
-                (fvs[1].nvmlReturn == NVML_SUCCESS)) {
-              bw = fvs[1].value.uiVal;
-	      count++;
-            }
-          }
-          if (count > 0) {
-            NCCLCHECK(xmlAddNode(xml, gpuNode, "c2c", &c2cNode));
-            NCCLCHECK(xmlSetAttrInt(c2cNode, "bw", bw));
-            NCCLCHECK(xmlSetAttrInt(c2cNode, "count", count));
+    if (sm >= 90) {
+      int c2cLinksCount = 0;
+      nvmlFieldValue_t fv;
+      fv.fieldId = NVML_FI_DEV_C2C_LINK_COUNT;
+      if ((ncclNvmlDeviceGetFieldValues(nvmlDev, 1, &fv) == ncclSuccess) && (fv.nvmlReturn == NVML_SUCCESS)) {
+        c2cLinksCount = fv.value.uiVal;
+        int bw = 0;
+        int count = 0;
+        for (int l=0; l<c2cLinksCount; l++) {
+          nvmlFieldValue_t fvs[2];
+          fvs[0].fieldId = NVML_FI_DEV_C2C_LINK_GET_STATUS;
+          fvs[0].scopeId = l;
+          fvs[1].fieldId = NVML_FI_DEV_C2C_LINK_GET_MAX_BW;
+          fvs[1].scopeId = l;
+          if ((ncclNvmlDeviceGetFieldValues(nvmlDev, 2, fvs) == ncclSuccess) &&
+              (fvs[0].nvmlReturn == NVML_SUCCESS) &&
+              (fvs[0].value.uiVal == 1) &&
+              (fvs[1].nvmlReturn == NVML_SUCCESS)) {
+            bw = fvs[1].value.uiVal;
+            count++;
           }
         }
+        if (count > 0) {
+          NCCLCHECK(xmlAddNode(xml, gpuNode, "c2c", &c2cNode));
+          NCCLCHECK(xmlSetAttrInt(c2cNode, "bw", bw));
+          NCCLCHECK(xmlSetAttrInt(c2cNode, "count", count));
+        }
       }
+    }
   }
 #endif
   // Fill target classes

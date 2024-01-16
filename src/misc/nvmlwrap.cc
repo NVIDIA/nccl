@@ -17,33 +17,33 @@ ncclNvmlDeviceInfo ncclNvmlDevices[ncclNvmlMaxDevices];
 ncclNvmlDevicePairInfo ncclNvmlDevicePairs[ncclNvmlMaxDevices][ncclNvmlMaxDevices];
 
 #if NCCL_NVML_DIRECT
-  #define NCCL_NVML_FN(name, rettype, arglist) constexpr rettype(*pfn_##name)arglist = name;
+#define NCCL_NVML_FN(name, rettype, arglist) constexpr rettype(*pfn_##name)arglist = name;
 #else
-  #include <dlfcn.h>
-  #define NCCL_NVML_FN(name, rettype, arglist) rettype(*pfn_##name)arglist = nullptr;
+#include <dlfcn.h>
+#define NCCL_NVML_FN(name, rettype, arglist) rettype(*pfn_##name)arglist = nullptr;
 #endif
 
 namespace {
-  NCCL_NVML_FN(nvmlInit, nvmlReturn_t, ())
-  NCCL_NVML_FN(nvmlInit_v2, nvmlReturn_t, ())
-  NCCL_NVML_FN(nvmlShutdown, nvmlReturn_t, ())
-  NCCL_NVML_FN(nvmlDeviceGetCount, nvmlReturn_t, (unsigned int*))
-  NCCL_NVML_FN(nvmlDeviceGetCount_v2, nvmlReturn_t, (unsigned int*))
-  NCCL_NVML_FN(nvmlDeviceGetHandleByPciBusId, nvmlReturn_t, (const char* pciBusId, nvmlDevice_t* device))
-  NCCL_NVML_FN(nvmlDeviceGetHandleByIndex, nvmlReturn_t, (unsigned int index, nvmlDevice_t *device))
-  NCCL_NVML_FN(nvmlDeviceGetIndex, nvmlReturn_t, (nvmlDevice_t device, unsigned* index))
-  NCCL_NVML_FN(nvmlErrorString, char const*, (nvmlReturn_t r))
-  NCCL_NVML_FN(nvmlDeviceGetNvLinkState, nvmlReturn_t, (nvmlDevice_t device, unsigned int link, nvmlEnableState_t *isActive))
-  NCCL_NVML_FN(nvmlDeviceGetNvLinkRemotePciInfo, nvmlReturn_t, (nvmlDevice_t device, unsigned int link, nvmlPciInfo_t *pci))
-  NCCL_NVML_FN(nvmlDeviceGetNvLinkCapability, nvmlReturn_t, (nvmlDevice_t device, unsigned int link, nvmlNvLinkCapability_t capability, unsigned int *capResult))
-  NCCL_NVML_FN(nvmlDeviceGetCudaComputeCapability, nvmlReturn_t, (nvmlDevice_t device, int* major, int* minor))
-  NCCL_NVML_FN(nvmlDeviceGetP2PStatus, nvmlReturn_t, (nvmlDevice_t device1, nvmlDevice_t device2, nvmlGpuP2PCapsIndex_t p2pIndex, nvmlGpuP2PStatus_t* p2pStatus))
-  NCCL_NVML_FN(nvmlDeviceGetFieldValues, nvmlReturn_t, (nvmlDevice_t device, int valuesCount, nvmlFieldValue_t *values))
+NCCL_NVML_FN(nvmlInit, nvmlReturn_t, ())
+NCCL_NVML_FN(nvmlInit_v2, nvmlReturn_t, ())
+NCCL_NVML_FN(nvmlShutdown, nvmlReturn_t, ())
+NCCL_NVML_FN(nvmlDeviceGetCount, nvmlReturn_t, (unsigned int*))
+NCCL_NVML_FN(nvmlDeviceGetCount_v2, nvmlReturn_t, (unsigned int*))
+NCCL_NVML_FN(nvmlDeviceGetHandleByPciBusId, nvmlReturn_t, (const char* pciBusId, nvmlDevice_t* device))
+NCCL_NVML_FN(nvmlDeviceGetHandleByIndex, nvmlReturn_t, (unsigned int index, nvmlDevice_t *device))
+NCCL_NVML_FN(nvmlDeviceGetIndex, nvmlReturn_t, (nvmlDevice_t device, unsigned* index))
+NCCL_NVML_FN(nvmlErrorString, char const*, (nvmlReturn_t r))
+NCCL_NVML_FN(nvmlDeviceGetNvLinkState, nvmlReturn_t, (nvmlDevice_t device, unsigned int link, nvmlEnableState_t *isActive))
+NCCL_NVML_FN(nvmlDeviceGetNvLinkRemotePciInfo, nvmlReturn_t, (nvmlDevice_t device, unsigned int link, nvmlPciInfo_t *pci))
+NCCL_NVML_FN(nvmlDeviceGetNvLinkCapability, nvmlReturn_t, (nvmlDevice_t device, unsigned int link, nvmlNvLinkCapability_t capability, unsigned int *capResult))
+NCCL_NVML_FN(nvmlDeviceGetCudaComputeCapability, nvmlReturn_t, (nvmlDevice_t device, int* major, int* minor))
+NCCL_NVML_FN(nvmlDeviceGetP2PStatus, nvmlReturn_t, (nvmlDevice_t device1, nvmlDevice_t device2, nvmlGpuP2PCapsIndex_t p2pIndex, nvmlGpuP2PStatus_t* p2pStatus))
+NCCL_NVML_FN(nvmlDeviceGetFieldValues, nvmlReturn_t, (nvmlDevice_t device, int valuesCount, nvmlFieldValue_t *values))
 
-  std::mutex lock; // NVML has had some thread safety bugs
-  bool initialized = false;
-  thread_local bool threadInitialized = false;
-  ncclResult_t initResult;
+std::mutex lock; // NVML has had some thread safety bugs
+bool initialized = false;
+thread_local bool threadInitialized = false;
+ncclResult_t initResult;
 }
 
 ncclResult_t ncclNvmlEnsureInitialized() {
@@ -57,7 +57,7 @@ ncclResult_t ncclNvmlEnsureInitialized() {
   if (initialized) return initResult;
   initialized = true;
 
-  #if !NCCL_NVML_DIRECT
+#if !NCCL_NVML_DIRECT
   if (pfn_nvmlInit == nullptr) {
     void *libhandle = dlopen("libnvidia-ml.so.1", RTLD_NOW);
     if (libhandle == nullptr) {
@@ -88,13 +88,13 @@ ncclResult_t ncclNvmlEnsureInitialized() {
       *sym.ppfn = dlsym(libhandle, sym.name);
     }
   }
-  #endif
+#endif
 
-  #if NCCL_NVML_DIRECT
-    bool have_v2 = true;
-  #else
-    bool have_v2 = pfn_nvmlInit_v2 != nullptr; // if this compare is done in the NCCL_NVML_DIRECT=1 case then GCC warns about it never being null
-  #endif
+#if NCCL_NVML_DIRECT
+  bool have_v2 = true;
+#else
+  bool have_v2 = pfn_nvmlInit_v2 != nullptr; // if this compare is done in the NCCL_NVML_DIRECT=1 case then GCC warns about it never being null
+#endif
   nvmlReturn_t res1 = (have_v2 ? pfn_nvmlInit_v2 : pfn_nvmlInit)();
   if (res1 != NVML_SUCCESS) {
     WARN("nvmlInit%s() failed: %s", have_v2 ? "_v2" : "", pfn_nvmlErrorString(res1));
@@ -218,7 +218,7 @@ ncclResult_t ncclNvmlDeviceGetNvLinkRemotePciInfo(nvmlDevice_t device, unsigned 
 ncclResult_t ncclNvmlDeviceGetNvLinkCapability(
     nvmlDevice_t device, unsigned int link, nvmlNvLinkCapability_t capability,
     unsigned int *capResult
-  ) {
+) {
   NCCLCHECK(ncclNvmlEnsureInitialized());
   std::lock_guard<std::mutex> locked(lock);
   NVMLTRY(nvmlDeviceGetNvLinkCapability, device, link, capability, capResult);
@@ -241,7 +241,7 @@ ncclResult_t ncclNvmlDeviceGetCudaComputeCapability(nvmlDevice_t device, int* ma
 ncclResult_t ncclNvmlDeviceGetP2PStatus(
     nvmlDevice_t device1, nvmlDevice_t device2, nvmlGpuP2PCapsIndex_t p2pIndex,
     nvmlGpuP2PStatus_t* p2pStatus
-  ) {
+) {
   NCCLCHECK(ncclNvmlEnsureInitialized());
 
   if (p2pIndex == NVML_P2P_CAPS_INDEX_READ || p2pIndex == NVML_P2P_CAPS_INDEX_WRITE) {
@@ -255,8 +255,7 @@ ncclResult_t ncclNvmlDeviceGetP2PStatus(
       *p2pStatus = ncclNvmlDevicePairs[a][b].p2pStatusRead;
     else
       *p2pStatus = ncclNvmlDevicePairs[a][b].p2pStatusWrite;
-  }
-  else {
+  } else {
     std::lock_guard<std::mutex> locked(lock);
     NVMLCHECK(nvmlDeviceGetP2PStatus, device1, device2, p2pIndex, p2pStatus);
   }

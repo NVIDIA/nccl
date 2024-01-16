@@ -109,7 +109,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
 
   template<int BeginIx>
   __device__ void readLLBeginAll(int offset, ncclLLFifoLine(&line)[MaxRecv]) {
-    #pragma unroll
+#pragma unroll
     for (int i=BeginIx; i < MaxRecv; i++) {
       if (i < fan.nrecv()) {
         union ncclLLFifoLine* src = recvPtr(i) + offset;
@@ -189,9 +189,8 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
         u4[1] = misalign + eltN*sizeof(T) > 4 ? load(p+1) : 0;
         // u4[2] would be simpler, but that throws warnings on some compilers
         u4[sizeof(T) <= 2 ? 2 : 0] = misalign + eltN*sizeof(T) > 8 ? load(p+2) : 0;
-      }
-      else {
-        #pragma unroll
+      } else {
+#pragma unroll
         for(int i=0; i < EltPerLine; i++) {
           if(i==0 || i < eltN)
             elt[i] = load(src + i);
@@ -215,7 +214,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
       T elt[EltPerLine];
     };
     u8 = val;
-    #pragma unroll
+#pragma unroll
     for(int i=0; i < EltPerLine; i++) {
       if (i==0 || i < eltN)
         //store(dst+i, elt[i]);
@@ -259,7 +258,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
       }
       if (RECV) {
         data = !SRC ? peerData : applyReduce(redOp, peerData, data);
-        #pragma unroll MaxRecv
+#pragma unroll MaxRecv
         for (int i=1; i < MaxRecv && i < fan.nrecv(); i++) {
           peerData = readLLFinish(offset, line, i);
           data = applyReduce(redOp, peerData, data);
@@ -324,7 +323,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
       const int tid, const int nthreads, int const *recvPeers, int const *sendPeers,
       void const *inputBuf, void *outputBuf, uint64_t redOpArg, uint8_t group=0,
       uint8_t connIndexRecv=0, uint8_t connIndexSend=0, struct ncclWorkElem* e = nullptr, int stepSize_=0
-    ):
+  ):
     redOp(redOpArg),
     tid(tid), nthreads(nthreads), wid(tid%WARP_SIZE), group(group),
     stepLines(ncclShmem.comm.buffSizes[NCCL_PROTO_LL]/NCCL_STEPS/sizeof(ncclLLFifoLine)) {

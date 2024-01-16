@@ -90,8 +90,7 @@ ncclResult_t nvlsGroupCreate(struct ncclComm *comm, CUmulticastObjectProp *prop,
   if ((NVLS_CU_MEM_HANDLE_TYPE != CU_MEM_HANDLE_TYPE_NONE) && (NVLS_CU_MEM_HANDLE_TYPE != CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)) {
     // Get a handle to pass to other ranks
     CUCHECK(cuMemExportToShareableHandle(shareableHandle, *mcHandle, NVLS_CU_MEM_HANDLE_TYPE, 0));
-  }
-  else {
+  } else {
     memcpy(shareableHandle, mcHandle, sizeof(CUmemGenericAllocationHandle));
   }
 
@@ -215,7 +214,7 @@ ncclResult_t nvlsGroupUnmapMem(struct ncclComm *comm, struct ncclNvlsSharedRes* 
   size_t size;
   CUdeviceptr ptr;
   INFO(NCCL_NVLS, "NVLS Unmap mem UC handle 0x%llx(%p) MC handle 0x%llx(%p)",
-       resources->ucHandle, resources->ucBuff, resources->mcHandle, resources->mcBuff);
+      resources->ucHandle, resources->ucBuff, resources->mcHandle, resources->mcBuff);
 
   // Release the UC memory and mapping
   ptr = (CUdeviceptr)resources->ucBuff;
@@ -323,7 +322,7 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
     size_t nvlsTotalSize = nvlsPerRankSize * nHeads;
 
     INFO(NCCL_INIT | NCCL_NVLS, "NVLS comm %p headRank %d nHeads %d buffSize %zi memSize %zi nvlsPerRankSize %zi nvlsTotalSize %zi",
-      comm, headRank, nHeads, buffSize, memSize, nvlsPerRankSize, nvlsTotalSize);
+        comm, headRank, nHeads, buffSize, memSize, nvlsPerRankSize, nvlsTotalSize);
 
     char* shareableHandle = resources->shareableHandle;
     NCCLCHECKGOTO(nvlsGetProperties(comm, resources, dev, comm->localRanks, nvlsTotalSize), res, cleanup);
@@ -513,7 +512,7 @@ ncclResult_t ncclNvlsLocalRegisterBuffer(struct ncclComm *comm, const void *send
   while (regRecordHead && ((sendRegRecord == NULL && sendbuff != NULL) || (recvRegRecord == NULL && recvbuff != NULL))) {
     /* check send reg record */
     if (sendRegRecord == NULL && regRecordHead->buff <= (uintptr_t)sendbuff &&
-      regRecordHead->buff + regRecordHead->size >= (uintptr_t)sendbuff + sendbuffSize) {
+        regRecordHead->buff + regRecordHead->size >= (uintptr_t)sendbuff + sendbuffSize) {
       regData[comm->localRank].recSendbuff = regRecordHead->buff;
       regData[comm->localRank].recSendOffset = (uintptr_t)sendbuff - regRecordHead->buff;
       sendRegRecord = regRecordHead;
@@ -521,7 +520,7 @@ ncclResult_t ncclNvlsLocalRegisterBuffer(struct ncclComm *comm, const void *send
 
     /* check recv reg record */
     if (recvRegRecord == NULL && regRecordHead->buff <= (uintptr_t)recvbuff &&
-      regRecordHead->buff + regRecordHead->size >= (uintptr_t)recvbuff + recvbuffSize) {
+        regRecordHead->buff + regRecordHead->size >= (uintptr_t)recvbuff + recvbuffSize) {
       regData[comm->localRank].recRecvbuff = regRecordHead->buff;
       regData[comm->localRank].recRecvOffset = (uintptr_t)recvbuff - regRecordHead->buff;
       recvRegRecord = regRecordHead;
@@ -534,7 +533,7 @@ ncclResult_t ncclNvlsLocalRegisterBuffer(struct ncclComm *comm, const void *send
   while (regRequestHead && ((sendRegRequest == NULL && sendbuff != NULL) || (recvRegRequest == NULL && recvbuff != NULL))) {
     /* check send reg request */
     if (regRequestHead->buff <= (uintptr_t)sendbuff &&
-      regRequestHead->buff + regRequestHead->size >= (uintptr_t)sendbuff + sendbuffSize) {
+        regRequestHead->buff + regRequestHead->size >= (uintptr_t)sendbuff + sendbuffSize) {
       regData[comm->localRank].reqSendbuff = regRequestHead->buff;
       regData[comm->localRank].reqSendSize = regRequestHead->size;
       regData[comm->localRank].reqSendOffset = (uintptr_t)sendbuff - regRequestHead->buff;
@@ -543,7 +542,7 @@ ncclResult_t ncclNvlsLocalRegisterBuffer(struct ncclComm *comm, const void *send
 
     /* check recv reg request */
     if (regRequestHead->buff <= (uintptr_t)recvbuff &&
-      regRequestHead->buff + regRequestHead->size >= (uintptr_t)recvbuff + recvbuffSize) {
+        regRequestHead->buff + regRequestHead->size >= (uintptr_t)recvbuff + recvbuffSize) {
       regData[comm->localRank].reqRecvbuff = regRequestHead->buff;
       regData[comm->localRank].reqRecvSize = regRequestHead->size;
       regData[comm->localRank].reqRecvOffset = (uintptr_t)recvbuff - regRequestHead->buff;

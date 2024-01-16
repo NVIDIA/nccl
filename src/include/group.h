@@ -41,10 +41,10 @@ struct ncclAsyncJob {
 };
 
 ncclResult_t ncclAsyncLaunch(
-  struct ncclAsyncJob* job,
-  ncclResult_t(*func)(struct ncclAsyncJob*),
-  void(*undo)(struct ncclAsyncJob*),
-  void(*destructor)(void*), ncclComm_t comm
+    struct ncclAsyncJob* job,
+    ncclResult_t(*func)(struct ncclAsyncJob*),
+    void(*undo)(struct ncclAsyncJob*),
+    void(*destructor)(void*), ncclComm_t comm
 );
 
 struct ncclGroupJob {

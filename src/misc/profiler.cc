@@ -70,7 +70,7 @@ void ncclProfilingDump() {
     struct ncclProxyProfileEvent* e = profilingEvents+i;
     const int sendrecv = e->peer >= 0;
     const char* typeStr = sendrecv ? (e->type == ncclPatternSend ? "Send" : "Recv") :
-      profilingEventStr[-(e->peer/8)];
+        profilingEventStr[-(e->peer/8)];
 
 
     if (sendrecv) {
@@ -95,11 +95,11 @@ void ncclProfilingDump() {
           typeStr, e->peer, e->step, i, e->channel, e->timestamp[state]);
     } else {
       if (e->peer == -ncclProxyProfileAppend) {
-      fprintf(f, "{\"name\": \"%s\", \"cat\": \"NET\", \"ph\": \"b\", \"id\": %d, \"pid\": -1, \"tid\": 1, \"ts\": %f, \"args\": { \"added\": %ld } },\n",
-          typeStr, i, e->timestamp[0], e->opCount);
+        fprintf(f, "{\"name\": \"%s\", \"cat\": \"NET\", \"ph\": \"b\", \"id\": %d, \"pid\": -1, \"tid\": 1, \"ts\": %f, \"args\": { \"added\": %ld } },\n",
+            typeStr, i, e->timestamp[0], e->opCount);
       } else {
         fprintf(f, "{\"name\": \"%s\", \"cat\": \"NET\", \"ph\": \"b\", \"id\": %d, \"pid\": -1, \"tid\": 1, \"ts\": %f },\n",
-          typeStr, i, e->timestamp[0]);
+            typeStr, i, e->timestamp[0]);
       }
       fprintf(f, "{\"name\": \"%s\", \"cat\": \"NET\", \"ph\": \"e\", \"id\": %d, \"pid\": -1, \"tid\": 1, \"ts\": %f },\n",
           typeStr, i, e->timestamp[1]);

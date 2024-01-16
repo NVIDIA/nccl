@@ -43,9 +43,9 @@ static_assert(offsetof(struct ncclShmemData, work)%16 == 0, "shmem.work needs to
 
 extern __shared__ ncclShmemData ncclShmem;
 #if __CUDA_ARCH__ >= 700
-  extern __shared__ ulong2 ncclShmemPerWarp[/*ncclShmemDynamicSize()/sizeof(ulong2)*/];
+extern __shared__ ulong2 ncclShmemPerWarp[/*ncclShmemDynamicSize()/sizeof(ulong2)*/];
 #else
-  extern __shared__ ulong2 ncclShmemPerWarp[ncclShmemScratchWarpSize()*(NCCL_MAX_NTHREADS/WARP_SIZE)/sizeof(ulong2)];
+extern __shared__ ulong2 ncclShmemPerWarp[ncclShmemScratchWarpSize()*(NCCL_MAX_NTHREADS/WARP_SIZE)/sizeof(ulong2)];
 #endif
 
 __device__ inline void* ncclScratchForWarp(int warp) {
@@ -55,10 +55,10 @@ __device__ inline void* ncclScratchForWarp(int warp) {
 __device__ inline bool barrierReduceAny(int bit) {
   uint32_t popc;
   asm ("{"
-    ".reg .pred barr_pred;"
-    "setp.eq.u32 barr_pred, %1, 1;"
-    "bar.red.popc.u32 %0, 2, barr_pred;"
-  "}" : "=r"(popc) : "r"(bit));
+      ".reg .pred barr_pred;"
+      "setp.eq.u32 barr_pred, %1, 1;"
+      "bar.red.popc.u32 %0, 2, barr_pred;"
+      "}" : "=r"(popc) : "r"(bit));
   return popc != 0;
 }
 
@@ -87,7 +87,7 @@ struct RunWork {
     int wid = threadIdx.x / WARP_SIZE;
     ncclWorkElem* we = w->header.type == ncclWorkTypeRegColl ? &w->regElems[0].elem : &w->elems[0];
     int stride = w->header.type == ncclWorkTypeRegColl ? sizeof(ncclWorkElemReg) : sizeof(ncclWorkElem);
-    #pragma unroll 1
+#pragma unroll 1
     while ((char*)we + stride <= (char*)(w+1) && we->isUsed) {
       if (wid < we->nWarps) {
         RunWorkElement<Fn, T, RedOp, Algo, Proto>().run(we);
@@ -148,28 +148,28 @@ __device__ void ncclKernelMain(struct ncclDevComm* comm, uint64_t channelMask, s
     int bytes;
     // Use first 3 warps to load comm, channel, and work into ncclShmem
     switch (tid/WARP_SIZE) {
-    case 0:
-      dst = &ncclShmem.comm;
-      src = comm;
-      bytes = sizeof(ncclDevComm);
-      static_assert(sizeof(ncclDevComm) <= 16*WARP_SIZE, "ncclDevComm cannot be loaded by a single warp in one insn.");
-      break;
-    case 1:
-      // Get address of channel without incurring indirect load from ncclDevComm::channels
-      dst = &ncclShmem.channel;
-      src = &((ncclDevCommAndChannels*)comm)->channels[channelId];
-      bytes = sizeof(ncclDevChannel);
-      static_assert(sizeof(ncclDevChannel) <= 16*WARP_SIZE, "ncclDevChannel cannot be loaded by a single warp in one insn.");
-      break;
-    case 2:
-      dst = &ncclShmem.work;
-      src = workHead + blockIdx.x;
-      bytes = sizeof(ncclWork);
-      static_assert(sizeof(ncclWork) <= 16*WARP_SIZE, "ncclWork cannot be loaded by a single warp in one insn.");
-      break;
-    default:
-      bytes = 0;
-      break;
+      case 0:
+        dst = &ncclShmem.comm;
+        src = comm;
+        bytes = sizeof(ncclDevComm);
+        static_assert(sizeof(ncclDevComm) <= 16*WARP_SIZE, "ncclDevComm cannot be loaded by a single warp in one insn.");
+        break;
+      case 1:
+        // Get address of channel without incurring indirect load from ncclDevComm::channels
+        dst = &ncclShmem.channel;
+        src = &((ncclDevCommAndChannels*)comm)->channels[channelId];
+        bytes = sizeof(ncclDevChannel);
+        static_assert(sizeof(ncclDevChannel) <= 16*WARP_SIZE, "ncclDevChannel cannot be loaded by a single warp in one insn.");
+        break;
+      case 2:
+        dst = &ncclShmem.work;
+        src = workHead + blockIdx.x;
+        bytes = sizeof(ncclWork);
+        static_assert(sizeof(ncclWork) <= 16*WARP_SIZE, "ncclWork cannot be loaded by a single warp in one insn.");
+        break;
+      default:
+        bytes = 0;
+        break;
     }
     if (bytes) copyToShmem16(tid%WARP_SIZE, dst, src, bytes);
   }
@@ -201,7 +201,8 @@ __device__ void ncclKernelMain(struct ncclDevComm* comm, uint64_t channelMask, s
 
     copyToShmem16(tid, &ncclShmem.work, workHead + workIxNext, sizeof(ncclWork));
 
-    { // Check whether the last operation was aborted and make sure all threads exit
+    {
+      // Check whether the last operation was aborted and make sure all threads exit
       int aborted = tid == 0 ? *comm->abortFlag : 0;
       if (barrierReduceAny(aborted)) // publish ncclShmem.work
         break;

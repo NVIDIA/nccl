@@ -46,7 +46,7 @@ ncclResult_t ncclNetSocketInit(ncclDebugLogger_t logFunction) {
         WARN("NET/Socket : no interface found");
         return ncclInternalError;
       } else {
-        #define MAX_LINE_LEN (2047)
+#define MAX_LINE_LEN (2047)
         char line[MAX_LINE_LEN+1];
         char addrline[SOCKET_NAME_MAXLEN+1];
         line[0] = '\0';

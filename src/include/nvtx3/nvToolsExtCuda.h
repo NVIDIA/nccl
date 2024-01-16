@@ -30,7 +30,7 @@ extern "C" {
  */
 
 /*  ------------------------------------------------------------------------- */
-/* \cond SHOW_HIDDEN 
+/* \cond SHOW_HIDDEN
 * \brief Used to build a non-colliding value for resource types separated class
 * \version \NVTX_VERSION_2
 */
@@ -40,12 +40,11 @@ extern "C" {
 /*  ------------------------------------------------------------------------- */
 /** \brief Resource types for CUDA
 */
-typedef enum nvtxResourceCUDAType_t
-{
-    NVTX_RESOURCE_TYPE_CUDA_DEVICE = NVTX_RESOURCE_MAKE_TYPE(CUDA, 1), /* CUdevice */
-    NVTX_RESOURCE_TYPE_CUDA_CONTEXT = NVTX_RESOURCE_MAKE_TYPE(CUDA, 2), /* CUcontext */
-    NVTX_RESOURCE_TYPE_CUDA_STREAM = NVTX_RESOURCE_MAKE_TYPE(CUDA, 3), /* CUstream */
-    NVTX_RESOURCE_TYPE_CUDA_EVENT = NVTX_RESOURCE_MAKE_TYPE(CUDA, 4), /* CUevent */
+typedef enum nvtxResourceCUDAType_t {
+  NVTX_RESOURCE_TYPE_CUDA_DEVICE = NVTX_RESOURCE_MAKE_TYPE(CUDA, 1), /* CUdevice */
+  NVTX_RESOURCE_TYPE_CUDA_CONTEXT = NVTX_RESOURCE_MAKE_TYPE(CUDA, 2), /* CUcontext */
+  NVTX_RESOURCE_TYPE_CUDA_STREAM = NVTX_RESOURCE_MAKE_TYPE(CUDA, 3), /* CUstream */
+  NVTX_RESOURCE_TYPE_CUDA_EVENT = NVTX_RESOURCE_MAKE_TYPE(CUDA, 4), /* CUevent */
 } nvtxResourceCUDAType_t;
 
 
@@ -117,15 +116,15 @@ NVTX_DECLSPEC void NVTX_API nvtxNameCuEventW(CUevent event, const wchar_t* name)
 
 /* ========================================================================= */
 #ifdef UNICODE
-  #define nvtxNameCuDevice   nvtxNameCuDeviceW
-  #define nvtxNameCuContext  nvtxNameCuContextW
-  #define nvtxNameCuStream   nvtxNameCuStreamW
-  #define nvtxNameCuEvent    nvtxNameCuEventW
+#define nvtxNameCuDevice   nvtxNameCuDeviceW
+#define nvtxNameCuContext  nvtxNameCuContextW
+#define nvtxNameCuStream   nvtxNameCuStreamW
+#define nvtxNameCuEvent    nvtxNameCuEventW
 #else
-  #define nvtxNameCuDevice   nvtxNameCuDeviceA
-  #define nvtxNameCuContext  nvtxNameCuContextA
-  #define nvtxNameCuStream   nvtxNameCuStreamA
-  #define nvtxNameCuEvent    nvtxNameCuEventA
+#define nvtxNameCuDevice   nvtxNameCuDeviceA
+#define nvtxNameCuContext  nvtxNameCuContextA
+#define nvtxNameCuStream   nvtxNameCuStreamA
+#define nvtxNameCuEvent    nvtxNameCuEventA
 #endif
 
 #ifdef __cplusplus

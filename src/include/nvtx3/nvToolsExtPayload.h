@@ -333,10 +333,9 @@ extern "C" {
  * array for the predefined types is passed via nvtxExtModuleInfo_t to the NVTX
  * client/handler. The type (ID) is used as index into this array.
  */
-typedef struct nvtxPayloadEntryTypeInfo_t
-{
-    uint16_t size;
-    uint16_t align;
+typedef struct nvtxPayloadEntryTypeInfo_t {
+  uint16_t size;
+  uint16_t align;
 } nvtxPayloadEntryTypeInfo_t;
 
 /**
@@ -354,75 +353,74 @@ typedef struct nvtxPayloadEntryTypeInfo_t
  *      {0, NVTX_EXT_PAYLOAD_TYPE_INT32, "four bytes"}
  *  };
  */
-typedef struct nvtxPayloadSchemaEntry_t
-{
-    /**
-     * \brief Flags to augment the basic type.
-     *
-     * This field allows additional properties of the payload entry to be
-     * specified. Valid values are `NVTX_PAYLOAD_ENTRY_FLAG_*`.
-     */
-    uint64_t       flags;
+typedef struct nvtxPayloadSchemaEntry_t {
+  /**
+   * \brief Flags to augment the basic type.
+   *
+   * This field allows additional properties of the payload entry to be
+   * specified. Valid values are `NVTX_PAYLOAD_ENTRY_FLAG_*`.
+   */
+  uint64_t       flags;
 
-    /**
-     * \brief Predefined payload schema entry type or ID of a registered payload
-     * schema.
-     */
-    uint64_t       type;
+  /**
+   * \brief Predefined payload schema entry type or ID of a registered payload
+   * schema.
+   */
+  uint64_t       type;
 
-    /**
-     * \brief Name of the payload entry. (Optional)
-     *
-     * Providing a name is useful to give a meaning to the associated value.
-     */
-    const char*    name;
+  /**
+   * \brief Name of the payload entry. (Optional)
+   *
+   * Providing a name is useful to give a meaning to the associated value.
+   */
+  const char*    name;
 
-    /**
-     * \brief Description of the payload entry. (Optional)
-     */
-    const char*    description;
+  /**
+   * \brief Description of the payload entry. (Optional)
+   */
+  const char*    description;
 
-    /**
-     * \brief String or array length or union selector for union types.
-     *
-     * If @ref type is a C string type, this defines the length of the string.
-     *
-     * If @ref flags specify that the entry is an array, this field defines the
-     * length of the array. See `NVTX_PAYLOAD_ENTRY_FLAG_ARRAY_*` for more
-     * details.
-     *
-     * If @ref type implies that the entry is a union with schema type
-     * @ref NVTX_PAYLOAD_SCHEMA_TYPE_UNION (external selection of the union
-     * member), this field contains the index (starting with 0) to an entry of
-     * integer type in the same schema. The associated field contains the
-     * selected union member.
-     *
-     * @note An array of schema type @ref NVTX_PAYLOAD_SCHEMA_TYPE_UNION is not
-     * supported. @ref NVTX_PAYLOAD_SCHEMA_TYPE_UNION_WITH_INTERNAL_SELECTOR can
-     * be used instead.
-     */
-    uint64_t       arrayOrUnionDetail;
+  /**
+   * \brief String or array length or union selector for union types.
+   *
+   * If @ref type is a C string type, this defines the length of the string.
+   *
+   * If @ref flags specify that the entry is an array, this field defines the
+   * length of the array. See `NVTX_PAYLOAD_ENTRY_FLAG_ARRAY_*` for more
+   * details.
+   *
+   * If @ref type implies that the entry is a union with schema type
+   * @ref NVTX_PAYLOAD_SCHEMA_TYPE_UNION (external selection of the union
+   * member), this field contains the index (starting with 0) to an entry of
+   * integer type in the same schema. The associated field contains the
+   * selected union member.
+   *
+   * @note An array of schema type @ref NVTX_PAYLOAD_SCHEMA_TYPE_UNION is not
+   * supported. @ref NVTX_PAYLOAD_SCHEMA_TYPE_UNION_WITH_INTERNAL_SELECTOR can
+   * be used instead.
+   */
+  uint64_t       arrayOrUnionDetail;
 
-    /**
-     * \brief Offset in the binary payload data (in bytes).
-     *
-     * This field specifies the byte offset from the base address of the actual
-     * binary data (blob) to the data of this entry.
-     *
-     * This is an optional field, but it is recommended to specify this field to
-     * avoid issues in the automatic detection of the offset by a tool/handler.
-     */
-    uint64_t       offset;
+  /**
+   * \brief Offset in the binary payload data (in bytes).
+   *
+   * This field specifies the byte offset from the base address of the actual
+   * binary data (blob) to the data of this entry.
+   *
+   * This is an optional field, but it is recommended to specify this field to
+   * avoid issues in the automatic detection of the offset by a tool/handler.
+   */
+  uint64_t       offset;
 
-    /**
-     * Semantics are not yet defined.
-     */
-    void*          semantics;
+  /**
+   * Semantics are not yet defined.
+   */
+  void*          semantics;
 
-    /**
-     * Reserved for future use. Do not use it!
-     */
-    void*          reserved;
+  /**
+   * Reserved for future use. Do not use it!
+   */
+  void*          reserved;
 } nvtxPayloadSchemaEntry_t;
 
 /**
@@ -432,22 +430,21 @@ typedef struct nvtxPayloadSchemaEntry_t
  * member. To attach a single payload the macro @ref NVTX_EXT_PAYLOAD_SET_ATTR
  * can be used.
  */
-typedef struct nvtxPayloadData_t
-{
-    /**
-     * The schema ID, which defines the layout of the binary data.
-     */
-    uint64_t    schemaId;
+typedef struct nvtxPayloadData_t {
+  /**
+   * The schema ID, which defines the layout of the binary data.
+   */
+  uint64_t    schemaId;
 
-    /**
-     * Size of the binary payload (blob) in bytes.
-     */
-    size_t      size;
+  /**
+   * Size of the binary payload (blob) in bytes.
+   */
+  size_t      size;
 
-    /**
-     * Pointer to the binary payload data.
-     */
-    const void* payload;
+  /**
+   * Pointer to the binary payload data.
+   */
+  const void* payload;
 } nvtxPayloadData_t;
 
 /* Helper macros for safe double-cast of pointer to uint64_t value */
@@ -495,64 +492,62 @@ typedef struct nvtxPayloadData_t
  *
  * A schema can be either of these types.
  */
-enum nvtxPayloadSchemaType
-{
-    NVTX_PAYLOAD_SCHEMA_TYPE_INVALID = 0,
+enum nvtxPayloadSchemaType {
+  NVTX_PAYLOAD_SCHEMA_TYPE_INVALID = 0,
 
-    NVTX_PAYLOAD_SCHEMA_TYPE_STATIC  = 1,
-    NVTX_PAYLOAD_SCHEMA_TYPE_DYNAMIC = 2,
+  NVTX_PAYLOAD_SCHEMA_TYPE_STATIC  = 1,
+  NVTX_PAYLOAD_SCHEMA_TYPE_DYNAMIC = 2,
 
-    NVTX_PAYLOAD_SCHEMA_TYPE_UNION   = 3,
-    NVTX_PAYLOAD_SCHEMA_TYPE_UNION_WITH_INTERNAL_SELECTOR = 4
+  NVTX_PAYLOAD_SCHEMA_TYPE_UNION   = 3,
+  NVTX_PAYLOAD_SCHEMA_TYPE_UNION_WITH_INTERNAL_SELECTOR = 4
 };
 
 /**
  * \brief Flags for static and dynamic schemas.
  */
-enum nvtxPayloadSchemaFlags
-{
-    NVTX_PAYLOAD_SCHEMA_FLAG_NONE = 0,
+enum nvtxPayloadSchemaFlags {
+  NVTX_PAYLOAD_SCHEMA_FLAG_NONE = 0,
 
-    /**
-     * This flag indicates that a schema and the corresponding payloads can
-     * contain fields which require a deep copy.
-     */
-    NVTX_PAYLOAD_SCHEMA_FLAG_DEEP_COPY  = (1 << 1),
+  /**
+   * This flag indicates that a schema and the corresponding payloads can
+   * contain fields which require a deep copy.
+   */
+  NVTX_PAYLOAD_SCHEMA_FLAG_DEEP_COPY  = (1 << 1),
 
-    /**
-     * This flag indicates that a schema and the corresponding payloads can
-     * be referenced by another payload of the same event.
-     */
-    NVTX_PAYLOAD_SCHEMA_FLAG_REFERENCED = (1 << 2),
+  /**
+   * This flag indicates that a schema and the corresponding payloads can
+   * be referenced by another payload of the same event.
+   */
+  NVTX_PAYLOAD_SCHEMA_FLAG_REFERENCED = (1 << 2),
 
-    /**
-     * The schema describes a deferred event/marker. Such a schema requires one
-     * timestamp entry and one string entry with the flag
-     * `NVTX_PAYLOAD_ENTRY_FLAG_EVENT_MESSAGE`. Category and color can be
-     * optionally specified with the respective entry types. The deferred event
-     * can contain a binary payload itself by using a custom schema ID as type
-     * its schema description. Multiple occurrences of the same event can be
-     * described by specifying an array timestamps.
-     */
-    NVTX_PAYLOAD_SCHEMA_FLAG_DEFERRED_EVENT = (1 << 3),
-    /**
-     * The schema describes a deferred event/marker. Such a schema requires
-     * one start timestamp, one end timestamp and one string entry with the flag
-     * `NVTX_PAYLOAD_ENTRY_FLAG_EVENT_MESSAGE`. Category and color can be
-     * optionally specified with the respective entry types. The deferred range
-     * can contain a binary payload itself by using a custom schema ID as type
-     * its schema description.
-     *
-     * Timestamps can be provided in different ways:
-     *  - A single range has two timestamp entries with the first (smaller entry
-     *    index) being used as the start/push timestamp.
-     *  - If the range schema contains one array of timestamps, the tool assumes
-     *    that the array contains alternating start and end timestamps.
-     *  - If two timestamp arrays are specified the first entry (with the
-     *    smaller entry index) is assumed to contain the start timestamps. Both
-     *    arrays have to be of the same size.
-     */
-    NVTX_PAYLOAD_SCHEMA_FLAG_DEFERRED_RANGE = (2 << 3)
+  /**
+   * The schema describes a deferred event/marker. Such a schema requires one
+   * timestamp entry and one string entry with the flag
+   * `NVTX_PAYLOAD_ENTRY_FLAG_EVENT_MESSAGE`. Category and color can be
+   * optionally specified with the respective entry types. The deferred event
+   * can contain a binary payload itself by using a custom schema ID as type
+   * its schema description. Multiple occurrences of the same event can be
+   * described by specifying an array timestamps.
+   */
+  NVTX_PAYLOAD_SCHEMA_FLAG_DEFERRED_EVENT = (1 << 3),
+  /**
+   * The schema describes a deferred event/marker. Such a schema requires
+   * one start timestamp, one end timestamp and one string entry with the flag
+   * `NVTX_PAYLOAD_ENTRY_FLAG_EVENT_MESSAGE`. Category and color can be
+   * optionally specified with the respective entry types. The deferred range
+   * can contain a binary payload itself by using a custom schema ID as type
+   * its schema description.
+   *
+   * Timestamps can be provided in different ways:
+   *  - A single range has two timestamp entries with the first (smaller entry
+   *    index) being used as the start/push timestamp.
+   *  - If the range schema contains one array of timestamps, the tool assumes
+   *    that the array contains alternating start and end timestamps.
+   *  - If two timestamp arrays are specified the first entry (with the
+   *    smaller entry index) is assumed to contain the start timestamps. Both
+   *    arrays have to be of the same size.
+   */
+  NVTX_PAYLOAD_SCHEMA_FLAG_DEFERRED_RANGE = (2 << 3)
 };
 
 /**
@@ -571,73 +566,72 @@ enum nvtxPayloadSchemaFlags
 /**
  * NVTX payload schema attributes.
  */
-typedef struct nvtxPayloadSchemaAttr_t
-{
-    /**
-     * \brief Mask of valid fields in this structure.
-     *
-     * The values from `enum nvtxPayloadSchemaAttributes` have to be used.
-     */
-    uint64_t                        fieldMask;
+typedef struct nvtxPayloadSchemaAttr_t {
+  /**
+   * \brief Mask of valid fields in this structure.
+   *
+   * The values from `enum nvtxPayloadSchemaAttributes` have to be used.
+   */
+  uint64_t                        fieldMask;
 
-    /**
-     * \brief Name of the payload schema. (Optional)
-     */
-    const char*                     name;
+  /**
+   * \brief Name of the payload schema. (Optional)
+   */
+  const char*                     name;
 
-    /**
-     * \brief Payload schema type. (Mandatory) \anchor PAYLOAD_TYPE_FIELD
-     *
-     * A value from `enum nvtxPayloadSchemaType` has to be used.
-     */
-    uint64_t                        type;
+  /**
+   * \brief Payload schema type. (Mandatory) \anchor PAYLOAD_TYPE_FIELD
+   *
+   * A value from `enum nvtxPayloadSchemaType` has to be used.
+   */
+  uint64_t                        type;
 
-    /**
-     * \brief Payload schema flags. (Optional)
-     *
-     * Flags defined in `enum nvtxPayloadSchemaFlags` can be used to set
-     * additional properties of the schema.
-     */
-    uint64_t                        flags;
+  /**
+   * \brief Payload schema flags. (Optional)
+   *
+   * Flags defined in `enum nvtxPayloadSchemaFlags` can be used to set
+   * additional properties of the schema.
+   */
+  uint64_t                        flags;
 
-    /**
-     * \brief Entries of a payload schema. (Mandatory) \anchor ENTRIES_FIELD
-     *
-     * This field is a pointer to an array of schema entries, each describing a
-     * field in a data structure, e.g. in a C struct or union.
-     */
-    const nvtxPayloadSchemaEntry_t* entries;
+  /**
+   * \brief Entries of a payload schema. (Mandatory) \anchor ENTRIES_FIELD
+   *
+   * This field is a pointer to an array of schema entries, each describing a
+   * field in a data structure, e.g. in a C struct or union.
+   */
+  const nvtxPayloadSchemaEntry_t* entries;
 
-    /**
-     * \brief Number of entries in the payload schema. (Mandatory)
-     *
-     * Number of entries in the array of payload entries \ref ENTRIES_FIELD.
-     */
-    size_t                          numEntries;
+  /**
+   * \brief Number of entries in the payload schema. (Mandatory)
+   *
+   * Number of entries in the array of payload entries \ref ENTRIES_FIELD.
+   */
+  size_t                          numEntries;
 
-    /**
-     * \brief The binary payload size in bytes for static payload schemas.
-     *
-     * If \ref PAYLOAD_TYPE_FIELD is @ref NVTX_PAYLOAD_SCHEMA_TYPE_DYNAMIC this
-     * value is ignored. If this field is not specified for a schema of type
-     * @ref NVTX_PAYLOAD_SCHEMA_TYPE_STATIC, the size can be automatically
-     * determined by a tool.
-     */
-    size_t                          payloadStaticSize;
+  /**
+   * \brief The binary payload size in bytes for static payload schemas.
+   *
+   * If \ref PAYLOAD_TYPE_FIELD is @ref NVTX_PAYLOAD_SCHEMA_TYPE_DYNAMIC this
+   * value is ignored. If this field is not specified for a schema of type
+   * @ref NVTX_PAYLOAD_SCHEMA_TYPE_STATIC, the size can be automatically
+   * determined by a tool.
+   */
+  size_t                          payloadStaticSize;
 
-    /**
-     * \brief The byte alignment for packed structures.
-     *
-     * If not specified, this field defaults to `0`, which means that the fields
-     * in the data structure are not packed and natural alignment rules can be
-     * applied.
-     */
-    size_t                          packAlign;
+  /**
+   * \brief The byte alignment for packed structures.
+   *
+   * If not specified, this field defaults to `0`, which means that the fields
+   * in the data structure are not packed and natural alignment rules can be
+   * applied.
+   */
+  size_t                          packAlign;
 
-    /* Static/custom schema ID must be
-       >= NVTX_PAYLOAD_ENTRY_TYPE_SCHEMA_ID_STATIC_START and
-       < NVTX_PAYLOAD_ENTRY_TYPE_SCHEMA_ID_DYNAMIC_START */
-    uint64_t                        schemaId;
+  /* Static/custom schema ID must be
+     >= NVTX_PAYLOAD_ENTRY_TYPE_SCHEMA_ID_STATIC_START and
+     < NVTX_PAYLOAD_ENTRY_TYPE_SCHEMA_ID_DYNAMIC_START */
+  uint64_t                        schemaId;
 } nvtxPayloadSchemaAttr_t;
 
 /**
@@ -657,23 +651,22 @@ NVTX_DECLSPEC uint64_t NVTX_API nvtxPayloadSchemaRegister(
  *
  * @note EXPERIMENTAL
  */
-typedef struct nvtxPayloadEnum_t
-{
-    /**
-     * Name of the enum value.
-     */
-    const char* name;
+typedef struct nvtxPayloadEnum_t {
+  /**
+   * Name of the enum value.
+   */
+  const char* name;
 
-    /**
-     * Value of the enum entry.
-     */
-    uint64_t    value;
+  /**
+   * Value of the enum entry.
+   */
+  uint64_t    value;
 
-    /**
-     * Indicates that this entry sets a specific set of bits, which can be used
-     * to easily define bitsets.
-     */
-    int8_t      isFlag;
+  /**
+   * Indicates that this entry sets a specific set of bits, which can be used
+   * to easily define bitsets.
+   */
+  int8_t      isFlag;
 } nvtxPayloadEnum_t;
 
 /**
@@ -690,38 +683,38 @@ typedef struct nvtxPayloadEnum_t
  * NVTX payload enumeration type attributes.
  */
 typedef struct nvtxPayloadEnumAttr_t {
-    /**
-     * Mask of valid fields in this struct.
-     * The values from `enum nvtxPayloadSchemaAttributes` have to be used.
-     */
-    uint64_t                 fieldMask;
+  /**
+   * Mask of valid fields in this struct.
+   * The values from `enum nvtxPayloadSchemaAttributes` have to be used.
+   */
+  uint64_t                 fieldMask;
 
-    /**
-     * Name of the enum. (Optional)
-     */
-    const char*              name;
+  /**
+   * Name of the enum. (Optional)
+   */
+  const char*              name;
 
-    /**
-     * Entries of the enum. (Mandatory)
-     */
-    const nvtxPayloadEnum_t* entries;
+  /**
+   * Entries of the enum. (Mandatory)
+   */
+  const nvtxPayloadEnum_t* entries;
 
-    /**
-     * Number of entries in the enum. (Mandatory)
-     */
-    size_t                   numEntries;
+  /**
+   * Number of entries in the enum. (Mandatory)
+   */
+  size_t                   numEntries;
 
-    /**
-     * Size of enumeration type in bytes
-     */
-    size_t                   sizeOfEnum;
+  /**
+   * Size of enumeration type in bytes
+   */
+  size_t                   sizeOfEnum;
 
-    /**
-     * Static/custom schema ID must be
-     * >= NVTX_PAYLOAD_ENTRY_TYPE_SCHEMA_ID_STATIC_START and
-     *  < NVTX_PAYLOAD_ENTRY_TYPE_SCHEMA_ID_DYNAMIC_START
-     */
-    uint64_t                 schemaId;
+  /**
+   * Static/custom schema ID must be
+   * >= NVTX_PAYLOAD_ENTRY_TYPE_SCHEMA_ID_STATIC_START and
+   *  < NVTX_PAYLOAD_ENTRY_TYPE_SCHEMA_ID_DYNAMIC_START
+   */
+  uint64_t                 schemaId;
 } nvtxPayloadEnumAttr_t;
 
 /**
@@ -743,11 +736,10 @@ NVTX_DECLSPEC uint64_t nvtxPayloadEnumRegister(nvtxDomainHandle_t domain,
  *      moduleInfo->segments->slots[NVTX3EXT_CBID_nvtxPayloadSchemaRegister] =
  *          (intptr_t)handlenvtxPayloadRegisterSchema;
  */
-typedef enum NvtxExtPayloadCallbackId
-{
-    NVTX3EXT_CBID_nvtxPayloadSchemaRegister = 0,
-    NVTX3EXT_CBID_nvtxPayloadEnumRegister   = 1,
-    NVTX3EXT_CBID_PAYLOAD_FN_NUM            = 2
+typedef enum NvtxExtPayloadCallbackId {
+  NVTX3EXT_CBID_nvtxPayloadSchemaRegister = 0,
+  NVTX3EXT_CBID_nvtxPayloadEnumRegister   = 1,
+  NVTX3EXT_CBID_PAYLOAD_FN_NUM            = 2
 } NvtxExtPayloadCallbackId;
 
 #ifdef __GNUC__

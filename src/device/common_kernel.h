@@ -26,15 +26,15 @@ inline __device__ int loadInt(int* ptr) {
 }
 
 template<typename RedFn, typename T, int Unroll, int BytePerPack,
-         int MultimemSrcs, int MinSrcs, int MaxSrcs,
-         int MultimemDsts, int MinDsts, int MaxDsts, int PreOpSrcs,
-         typename IntBytes>
+    int MultimemSrcs, int MinSrcs, int MaxSrcs,
+    int MultimemDsts, int MinDsts, int MaxDsts, int PreOpSrcs,
+    typename IntBytes>
 __device__ __forceinline__ void reduceCopyPacks(
     int nThreads, int &thread,
     uint64_t redArg, uint64_t *preOpArgs, bool postOp,
     int nSrcs, void **srcPtrs, int nDsts, void **dstPtrs,
     IntBytes &nBytesBehind, IntBytes &nBytesAhead
-  ) {
+) {
   static_assert(std::is_signed<IntBytes>::value, "IntBytes must be a signed integral type.");
   if (BytePerPack == 0) __trap();
 
@@ -64,10 +64,10 @@ __device__ __forceinline__ void reduceCopyPacks(
   RedFn redFn(redArg);
   uintptr_t minSrcs[MinSrcs + !MinSrcs];
   uintptr_t minDsts[MinDsts + !MinDsts];
-  #pragma unroll
+#pragma unroll
   for (int s=0; s < MinSrcs; s++)
     minSrcs[s] = cvta_to_global(srcPtrs[s]) + threadBytesBehind;
-  #pragma unroll
+#pragma unroll
   for (int d=0; d < MinDsts; d++)
     minDsts[d] = cvta_to_global(dstPtrs[d]) + threadBytesBehind;
 
@@ -76,8 +76,9 @@ __device__ __forceinline__ void reduceCopyPacks(
   while (Unroll==1 ? (BytePerPack <= threadBytesAhead) : (0 < nHunksAhead)) {
     BytePack<BytePerPack> acc[Unroll];
 
-    { RedFn preFn(0 < PreOpSrcs ? preOpArgs[0] : 0);
-      #pragma unroll Unroll
+    {
+      RedFn preFn(0 < PreOpSrcs ? preOpArgs[0] : 0);
+#pragma unroll Unroll
       for (int u=0; u < Unroll; u++) {
         if (0 < MultimemSrcs) {
           // applyLoadMultimem uses relaxed semantics for same reason we use volatile below.
@@ -91,11 +92,11 @@ __device__ __forceinline__ void reduceCopyPacks(
       }
     }
 
-    #pragma unroll (MinSrcs-1 + !(MinSrcs-1))
+#pragma unroll (MinSrcs-1 + !(MinSrcs-1))
     for (int s=1; s < MinSrcs; s++) {
       BytePack<BytePerPack> tmp[Unroll];
       RedFn preFn(s < PreOpSrcs ? preOpArgs[s] : 0);
-      #pragma unroll Unroll
+#pragma unroll Unroll
       for (int u=0; u < Unroll; u++) {
         if (s < MultimemSrcs) {
           // applyLoadMultimem uses relaxed semantics for same reason we use volatile below.
@@ -106,7 +107,7 @@ __device__ __forceinline__ void reduceCopyPacks(
         }
         minSrcs[s] += WARP_SIZE*BytePerPack;
       }
-      #pragma unroll Unroll
+#pragma unroll Unroll
       for (int u=0; u < Unroll; u++) {
         if (s < PreOpSrcs) tmp[u] = applyPreOp(preFn, tmp[u]);
         acc[u] = applyReduce(redFn, acc[u], tmp[u]);
@@ -117,13 +118,13 @@ __device__ __forceinline__ void reduceCopyPacks(
       uintptr_t src = cvta_to_global(srcPtrs[s]) + threadBytesBehind;
       BytePack<BytePerPack> tmp[Unroll];
       RedFn preFn(s < PreOpSrcs ? preOpArgs[s] : 0);
-      #pragma unroll Unroll
+#pragma unroll Unroll
       for (int u=0; u < Unroll; u++) {
         // Use volatile loads in case credits are polled for with volatile (instead of acquire).
         tmp[u] = ld_volatile_global<BytePerPack>(src);
         src += WARP_SIZE*BytePerPack;
       }
-      #pragma unroll Unroll
+#pragma unroll Unroll
       for (int u=0; u < Unroll; u++) {
         if (s < PreOpSrcs) tmp[u] = applyPreOp(preFn, tmp[u]);
         acc[u] = applyReduce(redFn, acc[u], tmp[u]);
@@ -131,14 +132,14 @@ __device__ __forceinline__ void reduceCopyPacks(
     }
 
     if (postOp) {
-      #pragma unroll Unroll
+#pragma unroll Unroll
       for (int u=0; u < Unroll; u++)
         acc[u] = applyPostOp(redFn, acc[u]);
     }
 
-    #pragma unroll (MinDsts + !MinDsts)
+#pragma unroll (MinDsts + !MinDsts)
     for (int d=0; d < MinDsts; d++) {
-      #pragma unroll Unroll
+#pragma unroll Unroll
       for (int u=0; u < Unroll; u++) {
         if (d < MultimemDsts) {
           multimem_st_global(minDsts[d], acc[u]);
@@ -150,7 +151,7 @@ __device__ __forceinline__ void reduceCopyPacks(
     }
     for (int d=MinDsts; (MinDsts < MaxDsts) && (d < MaxDsts) && (d < nDsts); d++) {
       uintptr_t dst = cvta_to_global(dstPtrs[d]) + threadBytesBehind;
-      #pragma unroll Unroll
+#pragma unroll Unroll
       for (int u=0; u < Unroll; u++) {
         st_global<BytePerPack>(dst, acc[u]);
         dst += WARP_SIZE*BytePerPack;
@@ -158,9 +159,9 @@ __device__ __forceinline__ void reduceCopyPacks(
     }
 
     nWarps = nThreads/WARP_SIZE;
-    #pragma unroll
+#pragma unroll
     for (int s=0; s < MinSrcs; s++) minSrcs[s] += (nWarps-1)*BytePerHunk;
-    #pragma unroll
+#pragma unroll
     for (int d=0; d < MinDsts; d++) minDsts[d] += (nWarps-1)*BytePerHunk;
     threadBytesBehind += nWarps*BytePerHunk;
     threadBytesAhead -= nWarps*BytePerHunk;
@@ -181,15 +182,15 @@ __device__ __forceinline__ void reduceCopyPacks(
 }
 
 template<int Unroll, typename RedFn, typename T,
-         int MultimemSrcs, int MinSrcs, int MaxSrcs,
-         int MultimemDsts, int MinDsts, int MaxDsts, int PreOpSrcs,
-         typename IntBytes>
+    int MultimemSrcs, int MinSrcs, int MaxSrcs,
+    int MultimemDsts, int MinDsts, int MaxDsts, int PreOpSrcs,
+    typename IntBytes>
 __device__ __forceinline__ void reduceCopy(
     int thread, int nThreads,
     uint64_t redArg, uint64_t *preOpArgs, bool postOp,
     int nSrcs, void **srcPtrs, int nDsts, void **dstPtrs,
     IntBytes nElts
-  ) {
+) {
   static_assert(MultimemSrcs <= MinSrcs && MultimemDsts <= MinDsts, "Multimem pointers cannot exceed respective Min values.");
   //int nWarps = nThreads/WARP_SIZE;
   //int warp = thread/WARP_SIZE;
@@ -201,11 +202,11 @@ __device__ __forceinline__ void reduceCopy(
   IntBytes nBytesBehind = 0;
   IntBytes nBytesAhead = nElts*sizeof(T);
 
-  #if __cpp_if_constexpr
+#if __cpp_if_constexpr
   if constexpr (BigPackSize > sizeof(T)) {
-  #else
+#else
   if (BigPackSize > sizeof(T)) {
-  #endif
+#endif
     // Check that all pointers are BigPackSize aligned.
     bool aligned = true;
     if (lane < nSrcs) aligned &= 0 == cvta_to_global(srcPtrs[lane]) % (BigPackSize + !BigPackSize);
@@ -213,29 +214,29 @@ __device__ __forceinline__ void reduceCopy(
     aligned = __all_sync(~0u, aligned);
     if (aligned) {
       reduceCopyPacks<RedFn, T, Unroll, BigPackSize,
-        MultimemSrcs, MinSrcs, MaxSrcs, MultimemDsts, MinDsts, MaxDsts, PreOpSrcs>
-        (nThreads, /*&*/thread, redArg, preOpArgs, postOp,
-         nSrcs, srcPtrs, nDsts, dstPtrs, /*&*/nBytesBehind, /*&*/nBytesAhead);
+                      MultimemSrcs, MinSrcs, MaxSrcs, MultimemDsts, MinDsts, MaxDsts, PreOpSrcs>
+                      (nThreads, /*&*/thread, redArg, preOpArgs, postOp,
+                          nSrcs, srcPtrs, nDsts, dstPtrs, /*&*/nBytesBehind, /*&*/nBytesAhead);
       if (nBytesAhead == 0) return;
 
       reduceCopyPacks<RedFn, T, /*Unroll=*/1, BigPackSize,
-        MultimemSrcs, MinSrcs, MaxSrcs, MultimemDsts, MinDsts, MaxDsts, PreOpSrcs>
-        (nThreads, /*&*/thread, redArg, preOpArgs, postOp,
-         nSrcs, srcPtrs, nDsts, dstPtrs, /*&*/nBytesBehind, /*&*/nBytesAhead);
+                      MultimemSrcs, MinSrcs, MaxSrcs, MultimemDsts, MinDsts, MaxDsts, PreOpSrcs>
+                      (nThreads, /*&*/thread, redArg, preOpArgs, postOp,
+                          nSrcs, srcPtrs, nDsts, dstPtrs, /*&*/nBytesBehind, /*&*/nBytesAhead);
       if (nBytesAhead == 0) return;
     }
   }
 
   reduceCopyPacks<RedFn, T, Unroll*(16/sizeof(T))/2, /*BytePerPack=*/sizeof(T),
-    MultimemSrcs, MinSrcs, MaxSrcs, MultimemDsts, MinDsts, MaxDsts, PreOpSrcs>
-    (nThreads, /*&*/thread, redArg, preOpArgs, postOp,
-     nSrcs, srcPtrs, nDsts, dstPtrs, /*&*/nBytesBehind, /*&*/nBytesAhead);
+                  MultimemSrcs, MinSrcs, MaxSrcs, MultimemDsts, MinDsts, MaxDsts, PreOpSrcs>
+                  (nThreads, /*&*/thread, redArg, preOpArgs, postOp,
+                      nSrcs, srcPtrs, nDsts, dstPtrs, /*&*/nBytesBehind, /*&*/nBytesAhead);
   if (nBytesAhead == 0) return;
 
   reduceCopyPacks<RedFn, T, /*Unroll=*/1, /*BytePerPack=*/sizeof(T),
-    MultimemSrcs, MinSrcs, MaxSrcs, MultimemDsts, MinDsts, MaxDsts, PreOpSrcs>
-    (nThreads, /*&*/thread, redArg, preOpArgs, postOp,
-     nSrcs, srcPtrs, nDsts, dstPtrs, /*&*/nBytesBehind, /*&*/nBytesAhead);
+                  MultimemSrcs, MinSrcs, MaxSrcs, MultimemDsts, MinDsts, MaxDsts, PreOpSrcs>
+                  (nThreads, /*&*/thread, redArg, preOpArgs, postOp,
+                      nSrcs, srcPtrs, nDsts, dstPtrs, /*&*/nBytesBehind, /*&*/nBytesAhead);
 }
 
 #endif // COMMON_KERNEL_H_

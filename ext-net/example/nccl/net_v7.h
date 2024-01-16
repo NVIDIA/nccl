@@ -10,8 +10,7 @@
 typedef struct {
   char* name;                      // Used mostly for logging.
   char* pciPath;                   // Path to the PCI device in /sys.
-  uint64_t guid;                   // Unique identifier for the NIC chip. Important for
-                                   // cards with multiple PCI functions (Physical or virtual).
+  uint64_t guid;                   // Unique identifier for the NIC chip. Important for cards with multiple PCI functions (Physical or virtual).
   int ptrSupport;                  // [NCCL_PTR_HOST|NCCL_PTR_CUDA|NCCL_PTR_DMABUF]
   int speed;                       // Port speed in Mbps.
   int port;                        // Port number.

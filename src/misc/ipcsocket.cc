@@ -139,7 +139,7 @@ ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
     if (((cmptr = CMSG_FIRSTHDR(&msg)) != NULL) && (cmptr->cmsg_len == CMSG_LEN(sizeof(int)))) {
       if ((cmptr->cmsg_level != SOL_SOCKET) || (cmptr->cmsg_type != SCM_RIGHTS)) {
         WARN("UDS: Receiving data over socket failed");
-      return ncclSystemError;
+        return ncclSystemError;
       }
 
       memmove(recvFd, CMSG_DATA(cmptr), sizeof(*recvFd));

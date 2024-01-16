@@ -42,20 +42,20 @@ ncclResult_t ncclInitKernelsForDevice(int cudaArch, size_t* maxStackSize) {
       cudaFuncAttributes attr = {0};
       CUDACHECKGOTO(cudaFuncGetAttributes(&attr, fn), result, ignore0);
       if (attr.localSizeBytes > *maxStackSize) *maxStackSize = attr.localSizeBytes;
-    ignore0:;
+ignore0:;
     }
     if (carveout) {
       CUDACHECKGOTO(cudaFuncSetAttribute(fn,
-        cudaFuncAttributePreferredSharedMemoryCarveout, carveout),
-        result, ignore1);
-    ignore1:;
+              cudaFuncAttributePreferredSharedMemoryCarveout, carveout),
+          result, ignore1);
+ignore1:;
     }
     if (ncclShmemDynamicSize(cudaArch) != 0) {
       CUDACHECKGOTO(cudaFuncSetAttribute(fn,
-        cudaFuncAttributeMaxDynamicSharedMemorySize, ncclShmemDynamicSize(cudaArch)),
-        result, next_kernel);
+              cudaFuncAttributeMaxDynamicSharedMemorySize, ncclShmemDynamicSize(cudaArch)),
+          result, next_kernel);
     }
-  next_kernel:;
+next_kernel:;
   }
   return result;
 }
@@ -67,12 +67,12 @@ ncclResult_t ncclInitKernelsForDevice(int cudaArch, size_t* maxStackSize) {
 static void appendWorkElemColl(
     struct ncclComm* comm, struct ncclKernelPlan* plan, int channelId,
     int funcIndex, struct ncclWorkElem const *elem, int bid
-  ) {
+) {
   struct ncclKernelPlan::Channel* chan = &plan->channels[channelId];
   struct ncclWorkList* q = ncclIntruQueueTail(&chan->workQueue);
   if (q && funcIndex == q->work.header.funcIndex
-        && elem->nWarps == q->work.elems[0].nWarps
-        && chan->nWorkElem < NCCL_MAX_WORK_ELEMENTS) {
+      && elem->nWarps == q->work.elems[0].nWarps
+      && chan->nWorkElem < NCCL_MAX_WORK_ELEMENTS) {
     int e = chan->nWorkElem++;
     q->work.elems[e] = *elem; // C++ struct assignment
     q->work.elems[e].bid = bid;
@@ -93,12 +93,12 @@ static void appendWorkElemColl(
 static void appendWorkElemColl(
     struct ncclComm* comm, struct ncclKernelPlan* plan, int channelId,
     int funcIndex, struct ncclWorkElemReg const *elem, int bid
-  ) {
+) {
   struct ncclKernelPlan::Channel* chan = &plan->channels[channelId];
   struct ncclWorkList* q = ncclIntruQueueTail(&chan->workQueue);
   if (q && funcIndex == q->work.header.funcIndex
-        && elem->elem.nWarps == q->work.regElems[0].elem.nWarps
-        && chan->nWorkElem < NCCL_MAX_WORK_ELEMENTS_REG) {
+      && elem->elem.nWarps == q->work.regElems[0].elem.nWarps
+      && chan->nWorkElem < NCCL_MAX_WORK_ELEMENTS_REG) {
     int e = chan->nWorkElem++;
     q->work.regElems[e] = *elem; // C++ struct assignment
     q->work.regElems[e].elem.bid = bid;
@@ -143,7 +143,7 @@ static void finishWork(struct ncclWork* work) {
 static void appendWorkElemP2p(
     struct ncclComm* comm, struct ncclKernelPlan* plan, int channelId,
     struct ncclWorkElemP2p const *elem, bool fuseOk
-  ) {
+) {
   int funcIndex = ncclDevFuncId_P2p();
   struct ncclKernelPlan::Channel* chan = &plan->channels[channelId];
   struct ncclWorkList* q = ncclIntruQueueTail(&chan->workQueue);
@@ -161,7 +161,7 @@ static void appendWorkElemP2p(
       chan->p2pTailElem[elem->p2pType-1] += 2;
       return;
     }
-  NewWork:
+NewWork:
     finishWorkP2p(&q->work);
   }
   q = ncclMemoryStackAlloc<struct ncclWorkList>(&comm->memScoped);
@@ -192,7 +192,7 @@ static ncclResult_t addCollToPlan(
     struct ncclComm* comm, struct ncclKernelPlan* plan, int* nWorkBudget, int funcIndex,
     struct ncclWorkElem const* workElem, struct ncclProxyOp const* proxyOp,
     int nCollChannels, int nBid, size_t bytes, ncclRegBufferType regBufType, void* regBufSend[], void* regBufRecv[]
-  ) {
+) {
   struct ncclKernelPlan::Channel *chans = plan->channels;
 
   // Choose the `nBid` least loaded channels to do the work. This ensures
@@ -289,7 +289,7 @@ NCCL_PARAM(P2pLLThreshold, "P2P_LL_THRESHOLD", 16384);
 static ncclResult_t addP2pToPlan(
     struct ncclComm* comm, struct ncclKernelPlan* plan, int* nWorkBudget,
     bool isSendNotRecv, int peer, int chunk, void *addr, size_t bytes, bool fuseOk
-  ) {
+) {
   struct ncclInfo info = {
     isSendNotRecv ? ncclFuncSend : ncclFuncRecv,
     isSendNotRecv ? "Send" : "Recv",
@@ -303,7 +303,7 @@ static ncclResult_t addP2pToPlan(
 
   // 1 is connIndex
   struct ncclConnInfo* conn = isSendNotRecv ?
-    &comm->channels[channelId].peers[peer]->send[1].conn : &comm->channels[channelId].peers[peer]->recv[1].conn;
+        &comm->channels[channelId].peers[peer]->send[1].conn : &comm->channels[channelId].peers[peer]->recv[1].conn;
   info.protocol = ((conn->buffs[NCCL_PROTO_LL] != nullptr) && bytes <= ncclParamP2pLLThreshold()) ? NCCL_PROTO_LL : NCCL_PROTO_SIMPLE;
 
   struct ncclProxyOp proxyOp = {};
@@ -362,7 +362,7 @@ static ncclResult_t registerIntraNodeBuffers(
     void* outRegBufSend[NCCL_MAX_LOCAL_RANKS],
     void* outRegBufRecv[NCCL_MAX_LOCAL_RANKS],
     ncclRegBufferType *outRegBufType
-  ) {
+) {
   ncclResult_t result = ncclSuccess;
 
   *outRegBufType = NCCL_REGULAR_BUFFER;
@@ -373,7 +373,7 @@ static ncclResult_t registerIntraNodeBuffers(
     void *recvbuff = info->recvbuff;
     cudaPointerAttributes sattr, rattr;
     bool query = false;
-    
+
     if (info->coll == ncclFuncAllGather)
       sendbuff = NULL;
     else if (info->coll == ncclFuncReduceScatter)
@@ -407,9 +407,9 @@ static ncclResult_t registerIntraNodeBuffers(
       *outRegBufType = NCCL_NVLS_REG_BUFFER;
     }
   } else if (info->algorithm == NCCL_ALGO_COLLNET_DIRECT &&   // limited to CollNetDirect for now
-    comm->intraHighestTransportType == TRANSPORT_P2P && // only when all ranks can p2p each other
-    comm->intraRanks < comm->localRanks &&  // only with inter-process & intra-node peers
-    plan->persistent && 0) {
+      comm->intraHighestTransportType == TRANSPORT_P2P && // only when all ranks can p2p each other
+      comm->intraRanks < comm->localRanks &&  // only with inter-process & intra-node peers
+      plan->persistent && 0) {
     /* Disable CollnetDirect registration since it does not support cuMem* allocated memory. */
     int localRank = comm->localRank;
     cudaPointerAttributes sattr, rattr;
@@ -469,7 +469,7 @@ static ncclResult_t getAlgoInfo(struct ncclInfo* info, int collNetSupport, int n
 
 static ncclResult_t scheduleCollTasksToPlan(
     struct ncclComm* comm, struct ncclKernelPlan* plan, int* nWorkBudget
-  ) {
+) {
   struct ncclTasks* tasks = &comm->tasks;
 
   size_t bytePerChannel[/*collNetSupport*/2];
@@ -486,7 +486,7 @@ static ncclResult_t scheduleCollTasksToPlan(
 
   for (int collNetSupport=0; collNetSupport < 2; collNetSupport++) {
     while (tasks->collBytesTotal < bytePerChannel[collNetSupport]*comm->nChannels &&
-           bytePerChannel[collNetSupport] > NCCL_MIN_CHANNEL_SIZE) {
+        bytePerChannel[collNetSupport] > NCCL_MIN_CHANNEL_SIZE) {
       // Reduce per-channel size so we utilize all channels.
       bytePerChannel[collNetSupport] /= 2;
     }
@@ -510,9 +510,9 @@ static ncclResult_t scheduleCollTasksToPlan(
 
     // Find a range of ops that can be aggregated together.
     while (aggEnd != nullptr &&
-           aggEnd->func == aggInfo.coll &&
-           aggEnd->datatype == aggInfo.datatype &&
-           aggEnd->op.op == aggInfo.opFull.op) {
+        aggEnd->func == aggInfo.coll &&
+        aggEnd->datatype == aggInfo.datatype &&
+        aggEnd->op.op == aggInfo.opFull.op) {
       aggInfo.count += aggEnd->count;
       int nc = DIVUP(aggEnd->count*ncclTypeSize(aggInfo.datatype), bytePerChannel[collNetSupport]);
       nc = std::max(1, std::min(nc, comm->nChannels));
@@ -573,7 +573,7 @@ static ncclResult_t scheduleCollTasksToPlan(
 
       int maxChannels = info.algorithm == NCCL_ALGO_NVLS || aggInfo.algorithm == NCCL_ALGO_NVLS_TREE ? comm->nvlsChannels : comm->nChannels;
       NCCLCHECK(addCollToPlan(comm, plan, nWorkBudget, workFuncIndex, &workElem, &proxyOp,
-        maxChannels, info.nChannels, info.nBytes, regBufType, regBufSend, regBufRecv));
+              maxChannels, info.nChannels, info.nBytes, regBufType, regBufSend, regBufRecv));
       tasks->nTasksColl -= 1;
       tasks->collBytesTotal -= info.nBytes;
       ncclIntruQueueDequeue(&tasks->collQueue);
@@ -601,7 +601,7 @@ static size_t calcP2pChunkSize(size_t totalSize, int minChannels, int maxChannel
 
 static ncclResult_t scheduleP2pTasksToPlan(
     struct ncclComm* comm, struct ncclKernelPlan* plan, int* nWorkBudget
-  ) {
+) {
   struct ncclTasks* tasks = &comm->tasks;
   int nRanks = comm->nRanks;
   struct ncclTasks::Peer* peers = tasks->peers;
@@ -1020,7 +1020,7 @@ ncclResult_t ncclLaunchPrepare(struct ncclComm* comm) {
   }
 
   if (false) {
-  failure:
+failure:
     ncclMemoryStackPop(&comm->memScoped); // deallocate ncclWork's
   }
   return result;
@@ -1048,7 +1048,7 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
   size_t smem = ncclShmemDynamicSize(comm->cudaArch);
   void *args[3] = {&comm->devComm, &plan->channelMask, &plan->workHead};
 
-  #if CUDART_VERSION >= 11080
+#if CUDART_VERSION >= 11080
   int driverVersion;
   NCCLCHECK(ncclCudaDriverVersion(&driverVersion));
   if (driverVersion >= 11080) {
@@ -1076,13 +1076,13 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
       launchAttrs[attrs].id = cudaLaunchAttributeClusterSchedulingPolicyPreference;
       launchAttrs[attrs++].val.clusterSchedulingPolicyPreference = cudaClusterSchedulingPolicySpread;
     }
-    #if CUDART_VERSION >= 12000
+#if CUDART_VERSION >= 12000
     if (compCap >= 90 && driverVersion >= 12000) {
       // Set the NCCL Mem Sync domain on CUDA 12.0 and later (sm90)
       launchAttrs[attrs].id = cudaLaunchAttributeMemSyncDomain;
       launchAttrs[attrs++].val.memSyncDomain = (cudaLaunchMemSyncDomain) ncclParamMemSyncDomain();
     }
-    #endif
+#endif
     launchConfig.gridDim = grid;
     launchConfig.blockDim = block;
     launchConfig.dynamicSmemBytes = smem;
@@ -1093,7 +1093,7 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
     CUDACHECK(cudaLaunchKernelExC(&launchConfig, fn, args));
     return ncclSuccess;
   }
-  #endif
+#endif
   // Standard kernel launch
   CUDACHECK(cudaLaunchKernel(fn, grid, block, args, smem, launchStream));
   return ncclSuccess;
@@ -1133,7 +1133,7 @@ ncclResult_t ncclLaunchFinish(struct ncclComm* comm) {
     // hasn't been modified since launchStream waited on it (in ncclLaunchPrepare),
     // so we can say that launchStream subsumes it.
     NCCLCHECKGOTO(ncclStrongStreamWaitStream(tasks->capturingGraph, &comm->sharedRes->deviceStream, launchStream, /*b_subsumes_a=*/true), result, resume1);
-  resume1:
+resume1:
     // Create dependency for other user streams (skip launch stream) on deviceStream.
     // Again, the user streams haven't been touched since deviceStream waited on them
     // so we can say they are subsumed by deviceStream.
@@ -1141,12 +1141,12 @@ ncclResult_t ncclLaunchFinish(struct ncclComm* comm) {
     tasks->streams = nullptr; // Reset comm->tasks.streams to empty.
     while (sl != nullptr) {
       NCCLCHECKGOTO(ncclStrongStreamWaitStream(tasks->capturingGraph, sl->stream, &comm->sharedRes->deviceStream, /*b_subsumes_a=*/true), result, resume2);
-    resume2:
+resume2:
       sl = sl->next;
     }
     // Release device stream as acquired in ncclLaunchPrepare()
     NCCLCHECKGOTO(ncclStrongStreamRelease(tasks->capturingGraph, &comm->sharedRes->deviceStream), result, resume3);
-  resume3:;
+resume3:;
   }
   return result;
 }
@@ -1168,8 +1168,7 @@ static ncclResult_t topoGetAlgoInfo(struct ncclInfo* info, int collNetSupport, i
   if (comm->nRanks == 1) {
     info->algorithm = NCCL_ALGO_RING;
     info->protocol = NCCL_PROTO_SIMPLE;
-  }
-  else if (info->algorithm == NCCL_ALGO_UNDEF || info->protocol == NCCL_PROTO_UNDEF) {
+  } else if (info->algorithm == NCCL_ALGO_UNDEF || info->protocol == NCCL_PROTO_UNDEF) {
     float minTime = 3600000000.0; // Hopefully no operation will take an hour to complete.
     float backupMinTime = 3600000000.0;
     bool backup = false;
@@ -1264,9 +1263,9 @@ static ncclResult_t getAlgoInfo(struct ncclInfo* info, int collNetSupport, int n
   int nChannels = 0;
   if (info->comm->tuner != NULL) {
     NCCLCHECK(info->comm->tuner->getCollInfo(
-          info->coll, info->nBytes,
-          collNetSupport, nvlsSupport, numPipeOps,
-          &info->algorithm, &info->protocol, &nChannels));
+            info->coll, info->nBytes,
+            collNetSupport, nvlsSupport, numPipeOps,
+            &info->algorithm, &info->protocol, &nChannels));
   }
   NCCLCHECK(topoGetAlgoInfo(info, collNetSupport, nvlsSupport, numPipeOps));
   if (nChannels) info->nChannels = nChannels; // Set by plugin; override default.
@@ -1282,16 +1281,16 @@ static ncclResult_t getPatternInfo(struct ncclInfo* info) {
     case ncclFuncReduceScatter:
     case ncclFuncAllGather:
       info->pattern =
-        info->algorithm == NCCL_ALGO_NVLS ? ncclPatternNvls :
-        ncclPatternRing; break;
+          info->algorithm == NCCL_ALGO_NVLS ? ncclPatternNvls :
+          ncclPatternRing; break;
     case ncclFuncAllReduce:
       info->pattern =
-        info->algorithm == NCCL_ALGO_NVLS ? ncclPatternNvls :
-        info->algorithm == NCCL_ALGO_NVLS_TREE ? ncclPatternNvlsTree :
-        info->algorithm == NCCL_ALGO_COLLNET_DIRECT ? ncclPatternCollnetDirect :
-        info->algorithm == NCCL_ALGO_COLLNET_CHAIN ? ncclPatternCollnetChain :
-        info->algorithm == NCCL_ALGO_TREE ? ncclPatternTreeUpDown :
-        ncclPatternRingTwice; break;
+          info->algorithm == NCCL_ALGO_NVLS ? ncclPatternNvls :
+          info->algorithm == NCCL_ALGO_NVLS_TREE ? ncclPatternNvlsTree :
+          info->algorithm == NCCL_ALGO_COLLNET_DIRECT ? ncclPatternCollnetDirect :
+          info->algorithm == NCCL_ALGO_COLLNET_CHAIN ? ncclPatternCollnetChain :
+          info->algorithm == NCCL_ALGO_TREE ? ncclPatternTreeUpDown :
+          ncclPatternRingTwice; break;
     default:
       WARN("Unknown pattern for collective %d algorithm %d", info->coll, info->algorithm);
       return ncclInternalError;
@@ -1419,7 +1418,7 @@ static ncclResult_t computeColl(struct ncclInfo* info /* input */, int* workFunc
   proxyOp->protocol = info->protocol;
   proxyOp->dtype = info->datatype;
   proxyOp->redOp = info->opFull.op==ncclDevPreMulSum || info->opFull.op==ncclDevSumPostDiv ? ncclSum : // Network sees avg as sum
-                     info->opFull.proxyOp;
+      info->opFull.proxyOp;
   proxyOp->pattern = info->pattern;
   proxyOp->root = info->root;
   // This is used by P2P to reduce the receive buffer size. We don't use it in collectives
@@ -1435,15 +1434,15 @@ static ncclResult_t computeColl(struct ncclInfo* info /* input */, int* workFunc
 
 static ncclResult_t hostToDevRedOp(
     ncclDevRedOpFull *opFull, ncclRedOp_t op, ncclDataType_t datatype, ncclComm *comm
-  ) {
+) {
   union {
     int8_t   i8; uint8_t   u8;
     int32_t i32; uint32_t u32;
     int64_t i64; uint64_t u64;
     half f16; float f32; double f64;
-    #if defined(__CUDA_BF16_TYPES_EXIST__)
-      __nv_bfloat16 bf16;
-    #endif
+#if defined(__CUDA_BF16_TYPES_EXIST__)
+    __nv_bfloat16 bf16;
+#endif
     void *ptr;
   };
   u64 = 0;
@@ -1455,58 +1454,58 @@ static ncclResult_t hostToDevRedOp(
   uint64_t signBit = allBits^(allBits>>1);
 
   switch (int(op)) {
-  case ncclSum:  opFull->op = ncclDevSum;  break;
-  case ncclProd: opFull->op = ncclDevProd; break;
-  case ncclMin:
-  case ncclMax:
-    opFull->op = ncclDevMinMax;
-    opFull->scalarArg = 0;
-    // The xormask used by ncclFuncMinMax<[u]int> is the XOR of the sign bit
-    // for signed (opposed to unsigned) types and all the bits for max (opposed to min).
-    if (datatype==ncclInt8 || datatype==ncclInt32 || datatype==ncclInt64) {
-      opFull->scalarArg ^= signBit;
-    }
-    opFull->scalarArg ^= (op == ncclMax) ? allBits : 0;
-    break;
-  case ncclAvg:
-    switch ((int)datatype) {
-    case ncclInt8:  case ncclInt32:  case ncclInt64:
-    case ncclUint8: case ncclUint32: case ncclUint64:
-      opFull->op = ncclDevSumPostDiv;
-      u64 = comm->nRanks;
+    case ncclSum:  opFull->op = ncclDevSum;  break;
+    case ncclProd: opFull->op = ncclDevProd; break;
+    case ncclMin:
+    case ncclMax:
+      opFull->op = ncclDevMinMax;
+      opFull->scalarArg = 0;
+      // The xormask used by ncclFuncMinMax<[u]int> is the XOR of the sign bit
+      // for signed (opposed to unsigned) types and all the bits for max (opposed to min).
+      if (datatype==ncclInt8 || datatype==ncclInt32 || datatype==ncclInt64) {
+        opFull->scalarArg ^= signBit;
+      }
+      opFull->scalarArg ^= (op == ncclMax) ? allBits : 0;
       break;
-    case ncclFloat16:
-      opFull->op = ncclDevPreMulSum;
-      f16 = __float2half(float(1.0/comm->nRanks)); // __double2half not supported pre CUDA 11.x
+    case ncclAvg:
+      switch ((int)datatype) {
+        case ncclInt8:  case ncclInt32:  case ncclInt64:
+        case ncclUint8: case ncclUint32: case ncclUint64:
+          opFull->op = ncclDevSumPostDiv;
+          u64 = comm->nRanks;
+          break;
+        case ncclFloat16:
+          opFull->op = ncclDevPreMulSum;
+          f16 = __float2half(float(1.0/comm->nRanks)); // __double2half not supported pre CUDA 11.x
+          break;
+#if defined(__CUDA_BF16_TYPES_EXIST__)
+        case ncclBfloat16:
+          opFull->op = ncclDevPreMulSum;
+          bf16 = __float2bfloat16(float(1.0/comm->nRanks));
+          break;
+#endif
+        case ncclFloat32:
+          opFull->op = ncclDevPreMulSum;
+          f32 = float(1.0/comm->nRanks);
+          break;
+        case ncclFloat64:
+          opFull->op = ncclDevPreMulSum;
+          f64 = 1.0/comm->nRanks;
+          break;
+      }
+      opFull->scalarArgIsPtr = false;
+      opFull->scalarArg = u64;
       break;
-    #if defined(__CUDA_BF16_TYPES_EXIST__)
-    case ncclBfloat16:
-      opFull->op = ncclDevPreMulSum;
-      bf16 = __float2bfloat16(float(1.0/comm->nRanks));
+    default: // user created
+      int ix = int(ncclUserRedOpMangle(comm, op)) - int(ncclNumOps);
+      ncclUserRedOp *user = &comm->userRedOps[ix];
+      if (datatype != user->datatype) {
+        WARN("Data type supplied to user-created ncclRedOp_t does not match type "
+            "given to reduction operation");
+        return ncclInvalidArgument;
+      }
+      *opFull = user->opFull;
       break;
-    #endif
-    case ncclFloat32:
-      opFull->op = ncclDevPreMulSum;
-      f32 = float(1.0/comm->nRanks);
-      break;
-    case ncclFloat64:
-      opFull->op = ncclDevPreMulSum;
-      f64 = 1.0/comm->nRanks;
-      break;
-    }
-    opFull->scalarArgIsPtr = false;
-    opFull->scalarArg = u64;
-    break;
-  default: // user created
-    int ix = int(ncclUserRedOpMangle(comm, op)) - int(ncclNumOps);
-    ncclUserRedOp *user = &comm->userRedOps[ix];
-    if (datatype != user->datatype) {
-      WARN("Data type supplied to user-created ncclRedOp_t does not match type "
-           "given to reduction operation");
-      return ncclInvalidArgument;
-    }
-    *opFull = user->opFull;
-    break;
   }
   return ncclSuccess;
 }
@@ -1528,8 +1527,8 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo const* inf
     p2p->bytes = nBytes;
     p2p->chunk = 0;
     ncclIntruQueueEnqueue(
-      isSendNotRecv ? &tasks->peers[peer].sendQueue : &tasks->peers[peer].recvQueue,
-      p2p);
+        isSendNotRecv ? &tasks->peers[peer].sendQueue : &tasks->peers[peer].recvQueue,
+        p2p);
     tasks->nTasksP2p += 1;
 
     // Mark channels that need pre-connect
@@ -1626,8 +1625,8 @@ ncclResult_t ncclEnqueueCheck(struct ncclInfo* info) {
   NCCLCHECKGOTO(ArgsCheck(info), ret, fail);
 
   INFO(NCCL_COLL,"%s: opCount %lx sendbuff %p recvbuff %p count %zi datatype %d op %d root %d comm %p [nranks=%d] stream %p",
-        info->opName, info->comm->opCount, info->sendbuff, info->recvbuff, info->count,
-        info->datatype, info->op, info->root, info->comm, info->comm->nRanks, info->stream);
+      info->opName, info->comm->opCount, info->sendbuff, info->recvbuff, info->count,
+      info->datatype, info->op, info->root, info->comm, info->comm->nRanks, info->stream);
   TRACE_CALL("nccl%s(%" PRIx64 ",%" PRIx64 ",%zi,%d,%d,%d,%p,%p)", info->opName, reinterpret_cast<int64_t>(info->sendbuff), reinterpret_cast<int64_t>(info->recvbuff), info->count, info->datatype, info->op, info->root, info->comm, info->stream);
 
   NCCLCHECKGOTO(taskAppend(info->comm, info), ret, fail);

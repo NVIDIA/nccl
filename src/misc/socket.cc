@@ -620,8 +620,8 @@ ncclResult_t ncclSocketConnect(struct ncclSocket* sock) {
   } while (sock->asyncFlag == 0 &&
       (sock->abortFlag == NULL || *sock->abortFlag == 0) &&
       (sock->state == ncclSocketStateConnecting ||
-       sock->state == ncclSocketStateConnectPolling ||
-       sock->state == ncclSocketStateConnected));
+          sock->state == ncclSocketStateConnectPolling ||
+          sock->state == ncclSocketStateConnected));
 
   if (sock->abortFlag && *sock->abortFlag != 0) return ncclInternalError;
 
@@ -667,7 +667,7 @@ ncclResult_t ncclSocketAccept(struct ncclSocket* sock, struct ncclSocket* listen
   } while (sock->asyncFlag == 0 &&
       (sock->abortFlag == NULL || *sock->abortFlag == 0) &&
       (sock->state == ncclSocketStateAccepting ||
-       sock->state == ncclSocketStateAccepted));
+          sock->state == ncclSocketStateAccepted));
 
   if (sock->abortFlag && *sock->abortFlag != 0) return ncclInternalError;
 
@@ -812,7 +812,7 @@ ncclResult_t ncclSocketTryRecv(struct ncclSocket* sock, void* ptr, int size, int
         NCCLCHECK(socketProgressOpt(NCCL_SOCKET_RECV, sock, ptr, size, &offset, 0, closed));
         if (*closed) return ncclSuccess;
       }
-    // No bytes were received, return ncclInProgress
+      // No bytes were received, return ncclInProgress
     } else {
       return ncclInProgress;
     }

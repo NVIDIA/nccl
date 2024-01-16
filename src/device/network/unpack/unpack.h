@@ -17,13 +17,13 @@
 // #define ALIGNED_LOAD
 
 inline __device__ void load64gpu(const uint64_t* ptr, uint64_t &v) {
-  #if __CUDA_ARCH__ >= 700
-      asm volatile("ld.relaxed.gpu.u64 {%0}, [%1];"
+#if __CUDA_ARCH__ >= 700
+  asm volatile("ld.relaxed.gpu.u64 {%0}, [%1];"
       : "=l"(v) : "l"(ptr));
-  #else
-      asm volatile("ld.volatile.global.u64 {%0}, [%1];"
+#else
+  asm volatile("ld.volatile.global.u64 {%0}, [%1];"
       : "=l"(v) : "l"(ptr));
-  #endif
+#endif
 }
 
 #define PAGE_META_SIZE 16
@@ -48,12 +48,12 @@ inline __device__ void ncclNetDeviceSaveHead(void* ohandle, const int group) {
 }
 
 template <uint8_t sz>
-inline __device__ void bulkLoad(const int t, const uint32_t len, char* cpy_src, char* cpy_dst, BytePack<sz> *reg, const int w, loadMeta* g_meta, loadMeta* s_meta, uint32_t src_off, uint64_t dst_off){
+inline __device__ void bulkLoad(const int t, const uint32_t len, char* cpy_src, char* cpy_dst, BytePack<sz> *reg, const int w, loadMeta* g_meta, loadMeta* s_meta, uint32_t src_off, uint64_t dst_off) {
   bulkLoad<1>(t, len, cpy_src, cpy_dst, reg, w, g_meta, s_meta, src_off, dst_off);
 }
 
 template <>
-inline __device__ void bulkLoad<1>(const int t, const uint32_t len, char* cpy_src, char* cpy_dst, BytePack<1> reg[16], const int w, loadMeta* g_meta, loadMeta* s_meta, uint32_t src_off, uint64_t dst_off){
+inline __device__ void bulkLoad<1>(const int t, const uint32_t len, char* cpy_src, char* cpy_dst, BytePack<1> reg[16], const int w, loadMeta* g_meta, loadMeta* s_meta, uint32_t src_off, uint64_t dst_off) {
   uint64_t data_s;
   for (data_s = t * DATA_LOAD_SIZE; data_s + DATA_LOAD_SIZE - 1 < len; data_s += WARP_SIZE * DATA_LOAD_SIZE) {
 
@@ -74,7 +74,7 @@ inline __device__ void bulkLoad<1>(const int t, const uint32_t len, char* cpy_sr
 }
 
 template <>
-inline __device__ void bulkLoad<2>(const int t, const uint32_t len, char* cpy_src, char* cpy_dst, BytePack<2> reg[8], const int w, loadMeta* g_meta, loadMeta* s_meta, uint32_t src_off, uint64_t dst_off){
+inline __device__ void bulkLoad<2>(const int t, const uint32_t len, char* cpy_src, char* cpy_dst, BytePack<2> reg[8], const int w, loadMeta* g_meta, loadMeta* s_meta, uint32_t src_off, uint64_t dst_off) {
   uint64_t data_s;
   for (data_s = t * DATA_LOAD_SIZE; data_s + DATA_LOAD_SIZE - 1 < len; data_s += WARP_SIZE * DATA_LOAD_SIZE) {
 #ifdef ALIGNED_LOAD
@@ -95,7 +95,7 @@ inline __device__ void bulkLoad<2>(const int t, const uint32_t len, char* cpy_sr
 }
 
 template <>
-inline __device__ void bulkLoad<4>(const int t, const uint32_t len, char* cpy_src, char* cpy_dst, BytePack<4> reg[4], const int w, loadMeta* g_meta, loadMeta* s_meta, uint32_t src_off, uint64_t dst_off){
+inline __device__ void bulkLoad<4>(const int t, const uint32_t len, char* cpy_src, char* cpy_dst, BytePack<4> reg[4], const int w, loadMeta* g_meta, loadMeta* s_meta, uint32_t src_off, uint64_t dst_off) {
   uint64_t data_s;
   for (data_s = t * DATA_LOAD_SIZE; data_s + DATA_LOAD_SIZE - 1 < len; data_s += WARP_SIZE * DATA_LOAD_SIZE) {
 #ifdef ALIGNED_LOAD
@@ -115,7 +115,7 @@ inline __device__ void bulkLoad<4>(const int t, const uint32_t len, char* cpy_sr
 }
 
 template <>
-inline __device__ void bulkLoad<8>(const int t, const uint32_t len, char* cpy_src, char* cpy_dst, BytePack<8> reg[2], const int w, loadMeta* g_meta, loadMeta* s_meta, uint32_t src_off, uint64_t dst_off){
+inline __device__ void bulkLoad<8>(const int t, const uint32_t len, char* cpy_src, char* cpy_dst, BytePack<8> reg[2], const int w, loadMeta* g_meta, loadMeta* s_meta, uint32_t src_off, uint64_t dst_off) {
   uint64_t data_s;
   for (data_s = t * DATA_LOAD_SIZE; data_s + DATA_LOAD_SIZE - 1 < len; data_s += WARP_SIZE * DATA_LOAD_SIZE) {
 #ifdef ALIGNED_LOAD
@@ -135,7 +135,7 @@ inline __device__ void bulkLoad<8>(const int t, const uint32_t len, char* cpy_sr
 }
 
 template <>
-inline __device__ void bulkLoad<16>(const int t, const uint32_t len, char* cpy_src, char* cpy_dst, BytePack<16> reg[1], const int w, loadMeta* g_meta, loadMeta* s_meta, uint32_t src_off, uint64_t dst_off){
+inline __device__ void bulkLoad<16>(const int t, const uint32_t len, char* cpy_src, char* cpy_dst, BytePack<16> reg[1], const int w, loadMeta* g_meta, loadMeta* s_meta, uint32_t src_off, uint64_t dst_off) {
   uint64_t data_s;
   for (data_s = t * DATA_LOAD_SIZE; data_s + DATA_LOAD_SIZE - 1 < len; data_s += WARP_SIZE * DATA_LOAD_SIZE) {
     reg[0] = ld_volatile_global<16>((uintptr_t)(cpy_src + data_s));
@@ -242,7 +242,7 @@ inline __device__ void ncclNetDeviceUnpackInner(
 
     for (int x = 0; x < iter_meta_cnt; x++) {
       int meta_idx = x + w * PPW;
-      
+
       // load page offs
       loadShmem128(shmemCvtPtr((uint64_t*) (s_meta + meta_idx)), meta.r64[0], meta.r64[1]);
 

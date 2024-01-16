@@ -30,25 +30,24 @@ extern "C" {
  */
 
 /*  ------------------------------------------------------------------------- */
-/* \cond SHOW_HIDDEN 
+/* \cond SHOW_HIDDEN
 * \brief Used to build a non-colliding value for resource types separated class
 * \version \NVTX_VERSION_2
 */
-#define NVTX_RESOURCE_CLASS_OPENCL 6 
+#define NVTX_RESOURCE_CLASS_OPENCL 6
 /** \endcond */
 
 /*  ------------------------------------------------------------------------- */
 /** \brief Resource types for OpenCL
 */
-typedef enum nvtxResourceOpenCLType_t
-{
-    NVTX_RESOURCE_TYPE_OPENCL_DEVICE = NVTX_RESOURCE_MAKE_TYPE(OPENCL, 1),
-    NVTX_RESOURCE_TYPE_OPENCL_CONTEXT = NVTX_RESOURCE_MAKE_TYPE(OPENCL, 2),
-    NVTX_RESOURCE_TYPE_OPENCL_COMMANDQUEUE = NVTX_RESOURCE_MAKE_TYPE(OPENCL, 3),
-    NVTX_RESOURCE_TYPE_OPENCL_MEMOBJECT = NVTX_RESOURCE_MAKE_TYPE(OPENCL, 4),
-    NVTX_RESOURCE_TYPE_OPENCL_SAMPLER = NVTX_RESOURCE_MAKE_TYPE(OPENCL, 5),
-    NVTX_RESOURCE_TYPE_OPENCL_PROGRAM = NVTX_RESOURCE_MAKE_TYPE(OPENCL, 6),
-    NVTX_RESOURCE_TYPE_OPENCL_EVENT = NVTX_RESOURCE_MAKE_TYPE(OPENCL, 7),
+typedef enum nvtxResourceOpenCLType_t {
+  NVTX_RESOURCE_TYPE_OPENCL_DEVICE = NVTX_RESOURCE_MAKE_TYPE(OPENCL, 1),
+  NVTX_RESOURCE_TYPE_OPENCL_CONTEXT = NVTX_RESOURCE_MAKE_TYPE(OPENCL, 2),
+  NVTX_RESOURCE_TYPE_OPENCL_COMMANDQUEUE = NVTX_RESOURCE_MAKE_TYPE(OPENCL, 3),
+  NVTX_RESOURCE_TYPE_OPENCL_MEMOBJECT = NVTX_RESOURCE_MAKE_TYPE(OPENCL, 4),
+  NVTX_RESOURCE_TYPE_OPENCL_SAMPLER = NVTX_RESOURCE_MAKE_TYPE(OPENCL, 5),
+  NVTX_RESOURCE_TYPE_OPENCL_PROGRAM = NVTX_RESOURCE_MAKE_TYPE(OPENCL, 6),
+  NVTX_RESOURCE_TYPE_OPENCL_EVENT = NVTX_RESOURCE_MAKE_TYPE(OPENCL, 7),
 } nvtxResourceOpenCLType_t;
 
 
@@ -161,21 +160,21 @@ NVTX_DECLSPEC void NVTX_API nvtxNameClEventW(cl_event evnt, const wchar_t* name)
 
 /* ========================================================================= */
 #ifdef UNICODE
-  #define nvtxNameClDevice        nvtxNameClDeviceW
-  #define nvtxNameClContext       nvtxNameClContextW
-  #define nvtxNameClCommandQueue  nvtxNameClCommandQueueW
-  #define nvtxNameClMemObject     nvtxNameClMemObjectW
-  #define nvtxNameClSampler       nvtxNameClSamplerW
-  #define nvtxNameClProgram       nvtxNameClProgramW
-  #define nvtxNameClEvent         nvtxNameClEventW
+#define nvtxNameClDevice        nvtxNameClDeviceW
+#define nvtxNameClContext       nvtxNameClContextW
+#define nvtxNameClCommandQueue  nvtxNameClCommandQueueW
+#define nvtxNameClMemObject     nvtxNameClMemObjectW
+#define nvtxNameClSampler       nvtxNameClSamplerW
+#define nvtxNameClProgram       nvtxNameClProgramW
+#define nvtxNameClEvent         nvtxNameClEventW
 #else
-  #define nvtxNameClDevice        nvtxNameClDeviceA
-  #define nvtxNameClContext       nvtxNameClContextA
-  #define nvtxNameClCommandQueue  nvtxNameClCommandQueueA
-  #define nvtxNameClMemObject     nvtxNameClMemObjectA
-  #define nvtxNameClSampler       nvtxNameClSamplerA
-  #define nvtxNameClProgram       nvtxNameClProgramA
-  #define nvtxNameClEvent         nvtxNameClEventA
+#define nvtxNameClDevice        nvtxNameClDeviceA
+#define nvtxNameClContext       nvtxNameClContextA
+#define nvtxNameClCommandQueue  nvtxNameClCommandQueueA
+#define nvtxNameClMemObject     nvtxNameClMemObjectA
+#define nvtxNameClSampler       nvtxNameClSamplerA
+#define nvtxNameClProgram       nvtxNameClProgramA
+#define nvtxNameClEvent         nvtxNameClEventA
 #endif
 
 #ifdef __cplusplus

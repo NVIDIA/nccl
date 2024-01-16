@@ -26,6 +26,7 @@ INCDIR := $(BUILDDIR)/include
 LIBDIR := $(BUILDDIR)/lib
 OBJDIR := $(BUILDDIR)/obj
 PKGDIR := $(BUILDDIR)/lib/pkgconfig
+SRCDIR := $(abspath .)
 ##### target files
 CUDARTLIB  ?= cudart_static
 
@@ -131,8 +132,4 @@ install : build
 	cp -P -v $(BUILDDIR)/lib/pkgconfig/* $(PREFIX)/lib/pkgconfig/
 	cp -v $(BUILDDIR)/include/* $(PREFIX)/include/
 
-FILESTOFORMAT := $(shell find . -name ".\#*" -prune -o \( -name "*.cc" -o -name "*.h" \) -print | grep -v -E 'ibvwrap.h|nvmlwrap.h|gdrwrap.h|nccl.h')
-# Note that formatting.mk defines a new target so in order to not overwrite the default target,
-# it shouldn't be included at the top. Also, it uses the above definition of FILESTOFORMAT as well
-# as the BUILDDIR variable.
 include ../makefiles/formatting.mk

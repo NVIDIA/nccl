@@ -77,7 +77,7 @@ static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclT
           }
           if (remPath->list[0] == NULL) {
             WARN("Failed to find reverse path from remNode %d/%lx nlinks %d to node %d/%lx",
-                 remNode->type, remNode->id, remNode->nlinks, node->type, node->id);
+                remNode->type, remNode->id, remNode->nlinks, node->type, node->id);
             return ncclInternalError;
           }
           // Copy the rest of the path
@@ -594,11 +594,11 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclComm
           if (peerNode->paths[NET][n].type <= PATH_PXB && // Is connected to the NIC through PCI
               peerNode->paths[GPU][g].type <= PATH_NVL && // Is connected to us through NVLink
               (peerNode->paths[NET][n].bw > gpu->paths[NET][n].bw || // Has either higher BW to that NIC
-               gpu->paths[NET][n].type > PATH_PXB))                  // or avoids going through a CPU
-          // We can use that GPU as relay to communicate with that NIC.
-          // Only enabling it in the GPU->NIC direction for now to favor
-          // receiving locally and sending remotely (consistent with net.cc)
-          NCCLCHECK(addInterStep(system, GPU, localGpuIndex, GPU, g, NET, n));
+                  gpu->paths[NET][n].type > PATH_PXB))                  // or avoids going through a CPU
+            // We can use that GPU as relay to communicate with that NIC.
+            // Only enabling it in the GPU->NIC direction for now to favor
+            // receiving locally and sending remotely (consistent with net.cc)
+            NCCLCHECK(addInterStep(system, GPU, localGpuIndex, GPU, g, NET, n));
         }
       }
       // Update path when we dont want to / can't use GPU Direct RDMA.

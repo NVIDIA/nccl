@@ -31,7 +31,7 @@ extern "C" {
  */
 
 /*  ------------------------------------------------------------------------- */
-/* \cond SHOW_HIDDEN 
+/* \cond SHOW_HIDDEN
 * \brief Used to build a non-colliding value for resource types separated class
 * \version \NVTX_VERSION_2
 */
@@ -41,11 +41,10 @@ extern "C" {
 /*  ------------------------------------------------------------------------- */
 /** \brief Resource types for CUDART
 */
-typedef enum nvtxResourceCUDARTType_t
-{
-    NVTX_RESOURCE_TYPE_CUDART_DEVICE = NVTX_RESOURCE_MAKE_TYPE(CUDART, 0), /* int device */
-    NVTX_RESOURCE_TYPE_CUDART_STREAM = NVTX_RESOURCE_MAKE_TYPE(CUDART, 1), /* cudaStream_t */
-    NVTX_RESOURCE_TYPE_CUDART_EVENT = NVTX_RESOURCE_MAKE_TYPE(CUDART, 2), /* cudaEvent_t */
+typedef enum nvtxResourceCUDARTType_t {
+  NVTX_RESOURCE_TYPE_CUDART_DEVICE = NVTX_RESOURCE_MAKE_TYPE(CUDART, 0), /* int device */
+  NVTX_RESOURCE_TYPE_CUDART_STREAM = NVTX_RESOURCE_MAKE_TYPE(CUDART, 1), /* cudaStream_t */
+  NVTX_RESOURCE_TYPE_CUDART_EVENT = NVTX_RESOURCE_MAKE_TYPE(CUDART, 2), /* cudaEvent_t */
 } nvtxResourceCUDARTType_t;
 
 
@@ -95,13 +94,13 @@ NVTX_DECLSPEC void NVTX_API nvtxNameCudaEventW(cudaEvent_t event, const wchar_t*
 
 /* ========================================================================= */
 #ifdef UNICODE
-  #define nvtxNameCudaDevice nvtxNameCudaDeviceW
-  #define nvtxNameCudaStream nvtxNameCudaStreamW
-  #define nvtxNameCudaEvent  nvtxNameCudaEventW
+#define nvtxNameCudaDevice nvtxNameCudaDeviceW
+#define nvtxNameCudaStream nvtxNameCudaStreamW
+#define nvtxNameCudaEvent  nvtxNameCudaEventW
 #else
-  #define nvtxNameCudaDevice nvtxNameCudaDeviceA
-  #define nvtxNameCudaStream nvtxNameCudaStreamA
-  #define nvtxNameCudaEvent  nvtxNameCudaEventA
+#define nvtxNameCudaDevice nvtxNameCudaDeviceA
+#define nvtxNameCudaStream nvtxNameCudaStreamA
+#define nvtxNameCudaEvent  nvtxNameCudaEventA
 #endif
 
 #ifdef __cplusplus

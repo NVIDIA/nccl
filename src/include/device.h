@@ -184,10 +184,10 @@ struct ncclDevComm;
 #define NCCL_WORK_SIZE 512
 
 enum ncclWorkType : uint8_t {
-   ncclWorkTypeUnused=0,
-   ncclWorkTypeColl=1,
-   ncclWorkTypeP2p=2,
-   ncclWorkTypeRegColl=3
+  ncclWorkTypeUnused=0,
+  ncclWorkTypeColl=1,
+  ncclWorkTypeP2p=2,
+  ncclWorkTypeRegColl=3
 };
 enum ncclWorkP2PType : uint8_t {
   ncclWorkP2pTypeUnused=0,
@@ -316,9 +316,9 @@ struct alignas(16) ncclDevCommAndChannels {
 };
 
 #ifdef __CUDA_ARCH__
-  #define NCCL_CUDA_ARCH __CUDA_ARCH__
+#define NCCL_CUDA_ARCH __CUDA_ARCH__
 #else
-  #define NCCL_CUDA_ARCH 0
+#define NCCL_CUDA_ARCH 0
 #endif
 
 template<typename T>
@@ -363,12 +363,12 @@ __host__ __device__ constexpr int ncclNvlsUnroll(int bytePerPack, int cudaArch =
 // The amount of dynamic shmem per warp
 __host__ __device__ constexpr int ncclShmemScratchWarpSize(int cudaArch = NCCL_CUDA_ARCH) {
   return (max_constexpr<int>(
-      /*LL    */0,
-      /*LL128 */(NCCL_LL128_SHMEM_ELEMS_PER_THREAD*WARP_SIZE)*sizeof(uint64_t),
-      /*SIMPLE*/(ncclCollUnroll(cudaArch)*WARP_SIZE + 1)*16,
-      // NVLS needs an extra 16B to read unaligned data.
-      /*NVLS  */WARP_SIZE*(cudaArch >= 900 ? ncclNvlsUnrollBytes(cudaArch) : 0) + 16
-    ) + 15) & -16; // pad to 16 bytes
+              /*LL    */0,
+              /*LL128 */(NCCL_LL128_SHMEM_ELEMS_PER_THREAD*WARP_SIZE)*sizeof(uint64_t),
+              /*SIMPLE*/(ncclCollUnroll(cudaArch)*WARP_SIZE + 1)*16,
+              // NVLS needs an extra 16B to read unaligned data.
+              /*NVLS  */WARP_SIZE*(cudaArch >= 900 ? ncclNvlsUnrollBytes(cudaArch) : 0) + 16
+          ) + 15) & -16; // pad to 16 bytes
 }
 
 // The amount of dynamic shmem per block
@@ -391,30 +391,30 @@ ncclResult_t ncclLaunchOneRank(void* dst, void const* src, size_t nElts, struct 
 // `ncclNvlsSupported()` needs to be in sync with "func_valid" in "src/device/generate.py"
 inline bool ncclNvlsSupported(int devRedOp, int type) {
   switch (type) {
-  case ncclInt32:
-  case ncclUint32:
-  case ncclInt64:
-  case ncclUint64:
-  case ncclFloat16:
-  #if defined(__CUDA_BF16_TYPES_EXIST__)
-  case ncclBfloat16:
-  #endif
-    return devRedOp == ncclDevSum || devRedOp == ncclDevMinMax;
-  case ncclFloat:
-  case ncclDouble:
-    return devRedOp == ncclDevSum;
-  default:
-    return false;
+    case ncclInt32:
+    case ncclUint32:
+    case ncclInt64:
+    case ncclUint64:
+    case ncclFloat16:
+#if defined(__CUDA_BF16_TYPES_EXIST__)
+    case ncclBfloat16:
+#endif
+      return devRedOp == ncclDevSum || devRedOp == ncclDevMinMax;
+    case ncclFloat:
+    case ncclDouble:
+      return devRedOp == ncclDevSum;
+    default:
+      return false;
   }
 }
 
 // `ncclDevFuncIndex()` needs to be in sync with "all_functions()" in "src/device/generate.py"
 inline int ncclDevFuncId(int coll, int devRedOp, int type, int algo, int proto) {
-  #if defined(__CUDA_BF16_TYPES_EXIST__)
+#if defined(__CUDA_BF16_TYPES_EXIST__)
   constexpr int NumTypes = ncclNumTypes;
-  #else
+#else
   constexpr int NumTypes = ncclNumTypes + 1;
-  #endif
+#endif
 
   int row = 0; // ncclDevFuncIndex_P2p
   if (coll == ncclFuncSendRecv) goto have_row;
@@ -422,7 +422,7 @@ inline int ncclDevFuncId(int coll, int devRedOp, int type, int algo, int proto) 
 
   if (coll == ncclFuncAllGather) {
     int algo1 = algo == NCCL_ALGO_RING ? 0 :
-              /*algo == NCCL_ALGO_NVLS*/ 1;
+        /*algo == NCCL_ALGO_NVLS*/ 1;
     row += algo1*NCCL_NUM_PROTOCOLS + proto;
     goto have_row;
   }
@@ -448,7 +448,7 @@ inline int ncclDevFuncId(int coll, int devRedOp, int type, int algo, int proto) 
 
   if (coll == ncclFuncReduceScatter) {
     int algo1 = algo == NCCL_ALGO_RING ? 0 :
-              /*algo == NCCL_ALGO_NVLS*/ 1;
+        /*algo == NCCL_ALGO_NVLS*/ 1;
     row += ((devRedOp*NumTypes + type)*2 + algo1)*NCCL_NUM_PROTOCOLS + proto;
     goto have_row;
   }

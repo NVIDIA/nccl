@@ -33,12 +33,11 @@
 
 extern const nvtxDomainHandle_t ncclNvtxDomainHandle;
 
-struct nccl_domain{static constexpr char const* name{"NCCL"};};
+struct nccl_domain {static constexpr char const* name{"NCCL"};};
 
 class payload_schema {
  public:
-  explicit payload_schema(const nvtxPayloadSchemaEntry_t entries[], size_t numEntries, const uint64_t schemaId, const char* schemaName = nullptr) noexcept
-  {
+  explicit payload_schema(const nvtxPayloadSchemaEntry_t entries[], size_t numEntries, const uint64_t schemaId, const char* schemaName = nullptr) noexcept {
     schema_attr.name = schemaName;
     schema_attr.entries = entries;
     schema_attr.numEntries = numEntries;

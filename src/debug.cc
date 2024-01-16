@@ -173,7 +173,7 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
   size_t len = 0;
   if (level == NCCL_LOG_WARN) {
     len = snprintf(buffer, sizeof(buffer), "\n%s:%d:%d [%d] %s:%d NCCL WARN ",
-                   hostname, pid, tid, cudaDev, filefunc, line);
+            hostname, pid, tid, cudaDev, filefunc, line);
     if (ncclParamWarnSetDebugInfo()) ncclDebugLevel = NCCL_LOG_INFO;
   } else if (level == NCCL_LOG_INFO) {
     len = snprintf(buffer, sizeof(buffer), "%s:%d:%d [%d] NCCL INFO ", hostname, pid, tid, cudaDev);
@@ -183,7 +183,7 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
     auto delta = std::chrono::steady_clock::now() - ncclEpoch;
     double timestamp = std::chrono::duration_cast<std::chrono::duration<double>>(delta).count()*1000;
     len = snprintf(buffer, sizeof(buffer), "%s:%d:%d [%d] %f %s:%d NCCL TRACE ",
-                   hostname, pid, tid, cudaDev, timestamp, filefunc, line);
+            hostname, pid, tid, cudaDev, timestamp, filefunc, line);
   }
 
   if (len) {

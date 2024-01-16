@@ -129,7 +129,7 @@ static ncclResult_t cudaPfnFuncLoader(void) {
   LOAD_SYM(cuCtxGetCurrent, 4000, 1);
   LOAD_SYM(cuCtxSetCurrent, 4000, 1);
   LOAD_SYM(cuCtxGetDevice, 2000, 1);
-/* cuMem API support */
+  /* cuMem API support */
   LOAD_SYM(cuMemAddressReserve, 10020, 1);
   LOAD_SYM(cuMemAddressFree, 10020, 1);
   LOAD_SYM(cuMemCreate, 10020, 1);
@@ -141,13 +141,13 @@ static ncclResult_t cudaPfnFuncLoader(void) {
   LOAD_SYM(cuMemRetainAllocationHandle, 11000, 1);
   LOAD_SYM(cuMemSetAccess, 10020, 1);
   LOAD_SYM(cuMemUnmap, 10020, 1);
-/* ncclMemAlloc/Free */
+  /* ncclMemAlloc/Free */
   LOAD_SYM(cuPointerGetAttribute, 4000, 1);
 #if CUDA_VERSION >= 11070
   LOAD_SYM(cuMemGetHandleForAddressRange, 11070, 1); // DMA-BUF support
 #endif
 #if CUDA_VERSION >= 12010
-/* NVSwitch Multicast support */
+  /* NVSwitch Multicast support */
   LOAD_SYM(cuMulticastAddDevice, 12010, 1);
   LOAD_SYM(cuMulticastBindMem, 12010, 1);
   LOAD_SYM(cuMulticastBindAddr, 12010, 1);
@@ -230,12 +230,12 @@ static void initOnceFunc() {
    */
   pfn_cuInit(0);
 
-  #if CUDART_VERSION >= 11030
+#if CUDART_VERSION >= 11030
   if (cudaPfnFuncLoader()) {
     WARN("CUDA some PFN functions not found in the library");
     goto error;
   }
-  #endif
+#endif
 
   // Determine whether we support the cuMem APIs or not
   ncclCuMemSupported = ncclIsCuMemSupported();

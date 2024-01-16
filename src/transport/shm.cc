@@ -309,9 +309,9 @@ static ncclResult_t shmSendProxyProgress(struct ncclProxyState* proxyState, stru
       struct ncclProxySubArgs* sub = args->subs+s;
       struct shmProxyInfo* resources = (struct shmProxyInfo*) (sub->connection->transportResources);
       if (p != NCCL_PROTO_SIMPLE) { // Only Simple uses cudaMemcpy
-          resources->step = sub->base + sub->nsteps;
-          args->done++;
-          continue;
+        resources->step = sub->base + sub->nsteps;
+        args->done++;
+        continue;
       }
       if (sub->transmitted < sub->done + NCCL_STEPS && sub->transmitted < sub->nsteps) {
         int buffSlot = (sub->base+sub->transmitted)%NCCL_STEPS;
@@ -368,9 +368,9 @@ static ncclResult_t shmRecvProxyProgress(struct ncclProxyState* proxyState, stru
       struct ncclProxySubArgs* sub = args->subs+s;
       struct shmProxyInfo* resources = (struct shmProxyInfo*) (sub->connection->transportResources);
       if (p != NCCL_PROTO_SIMPLE) { // Only Simple uses cudaMemcpy
-          resources->step = sub->base + sub->nsteps;
-          args->done++;
-          continue;
+        resources->step = sub->base + sub->nsteps;
+        args->done++;
+        continue;
       }
       if (sub->transmitted < sub->done + NCCL_STEPS && sub->transmitted < sub->nsteps) {
         int buffSlot = (sub->base+sub->transmitted)%NCCL_STEPS;

@@ -60,13 +60,13 @@ MKTYPEDEF(wchar_t);
 
 /* `char8_t` is available as of C++20 or C23 */
 #if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L) || (defined(__cplusplus) && __cplusplus >= 201811L)
-    MKTYPEDEF(char8_t);
+MKTYPEDEF(char8_t);
 #endif
 
 /* `char16_t` and `char32_t` are available as of C++11 or C11 */
 #if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L) || (defined(__cplusplus) && __cplusplus >= 200704L)
-    MKTYPEDEF(char16_t);
-    MKTYPEDEF(char32_t);
+MKTYPEDEF(char16_t);
+MKTYPEDEF(char32_t);
 #endif
 
 /* C requires to include stddef.h to use `offsetof` */
@@ -86,56 +86,55 @@ MKTYPEDEF(wchar_t);
  * Helper array to get the alignment for each predefined C/C++ language type.
  * The order of entries must match the values in`enum nvtxPayloadSchemaEntryType`.
  */
-const nvtxPayloadEntryTypeInfo_t nvtxExtPayloadTypeInfo[NVTX_PAYLOAD_ENTRY_TYPE_INFO_ARRAY_SIZE] =
-{
-    /* The first entry contains this array's length and the size of each entry in this array. */
-    {NVTX_PAYLOAD_ENTRY_TYPE_INFO_ARRAY_SIZE, sizeof(nvtxPayloadEntryTypeInfo_t)},
+const nvtxPayloadEntryTypeInfo_t nvtxExtPayloadTypeInfo[NVTX_PAYLOAD_ENTRY_TYPE_INFO_ARRAY_SIZE] = {
+  /* The first entry contains this array's length and the size of each entry in this array. */
+  {NVTX_PAYLOAD_ENTRY_TYPE_INFO_ARRAY_SIZE, sizeof(nvtxPayloadEntryTypeInfo_t)},
 
-    /*** C integer types ***/
-    /* NVTX_PAYLOAD_ENTRY_TYPE_CHAR */   {sizeof(char), nvtx_alignof(char)},
-    /* NVTX_PAYLOAD_ENTRY_TYPE_UCHAR */  {sizeof(unsigned char), nvtx_alignof2(unsigned char, uchar)},
-    /* NVTX_PAYLOAD_ENTRY_TYPE_SHORT */  {sizeof(short), nvtx_alignof(short)},
-    /* NVTX_PAYLOAD_ENTRY_TYPE_USHORT */ {sizeof(unsigned short), nvtx_alignof2(unsigned short, ushort)},
-    /* NVTX_PAYLOAD_ENTRY_TYPE_INT */    {sizeof(int), nvtx_alignof(int)},
-    /* NVTX_PAYLOAD_ENTRY_TYPE_UINT */   {sizeof(unsigned int), nvtx_alignof2(unsigned int, uint)},
-    /* NVTX_PAYLOAD_ENTRY_TYPE_LONG */   {sizeof(long), nvtx_alignof(long)},
-    /* NVTX_PAYLOAD_ENTRY_TYPE_ULONG */  {sizeof(unsigned long), nvtx_alignof2(unsigned long, ulong)},
-    /* NVTX_PAYLOAD_ENTRY_TYPE_LONGLONG */  {sizeof(long long), nvtx_alignof2(long long, longlong)},
-    /* NVTX_PAYLOAD_ENTRY_TYPE_ULONGLONG */ {sizeof(unsigned long long), nvtx_alignof2(unsigned long long,ulonglong)},
+  /*** C integer types ***/
+  /* NVTX_PAYLOAD_ENTRY_TYPE_CHAR */   {sizeof(char), nvtx_alignof(char)},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_UCHAR */  {sizeof(unsigned char), nvtx_alignof2(unsigned char, uchar)},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_SHORT */  {sizeof(short), nvtx_alignof(short)},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_USHORT */ {sizeof(unsigned short), nvtx_alignof2(unsigned short, ushort)},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_INT */    {sizeof(int), nvtx_alignof(int)},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_UINT */   {sizeof(unsigned int), nvtx_alignof2(unsigned int, uint)},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_LONG */   {sizeof(long), nvtx_alignof(long)},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_ULONG */  {sizeof(unsigned long), nvtx_alignof2(unsigned long, ulong)},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_LONGLONG */  {sizeof(long long), nvtx_alignof2(long long, longlong)},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_ULONGLONG */ {sizeof(unsigned long long), nvtx_alignof2(unsigned long long,ulonglong)},
 
-    /*** Integer types with explicit size ***/
-    /* NVTX_PAYLOAD_ENTRY_TYPE_INT8 */   {sizeof(int8_t),   nvtx_alignof(int8_t)},
-    /* NVTX_PAYLOAD_ENTRY_TYPE_UINT8 */  {sizeof(uint8_t),  nvtx_alignof(uint8_t)},
-    /* NVTX_PAYLOAD_ENTRY_TYPE_INT16 */  {sizeof(int16_t),  nvtx_alignof(int16_t)},
-    /* NVTX_PAYLOAD_ENTRY_TYPE_UINT16 */ {sizeof(uint16_t), nvtx_alignof(uint16_t)},
-    /* NVTX_PAYLOAD_ENTRY_TYPE_INT32 */  {sizeof(int32_t),  nvtx_alignof(int32_t)},
-    /* NVTX_PAYLOAD_ENTRY_TYPE_UINT32 */ {sizeof(uint32_t), nvtx_alignof(uint32_t)},
-    /* NVTX_PAYLOAD_ENTRY_TYPE_INT64 */  {sizeof(int64_t),  nvtx_alignof(int64_t)},
-    /* NVTX_PAYLOAD_ENTRY_TYPE_UINT64 */ {sizeof(uint64_t), nvtx_alignof(uint64_t)},
+  /*** Integer types with explicit size ***/
+  /* NVTX_PAYLOAD_ENTRY_TYPE_INT8 */   {sizeof(int8_t),   nvtx_alignof(int8_t)},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_UINT8 */  {sizeof(uint8_t),  nvtx_alignof(uint8_t)},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_INT16 */  {sizeof(int16_t),  nvtx_alignof(int16_t)},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_UINT16 */ {sizeof(uint16_t), nvtx_alignof(uint16_t)},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_INT32 */  {sizeof(int32_t),  nvtx_alignof(int32_t)},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_UINT32 */ {sizeof(uint32_t), nvtx_alignof(uint32_t)},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_INT64 */  {sizeof(int64_t),  nvtx_alignof(int64_t)},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_UINT64 */ {sizeof(uint64_t), nvtx_alignof(uint64_t)},
 
-    /*** C floating point types ***/
-    /* NVTX_PAYLOAD_ENTRY_TYPE_FLOAT */      {sizeof(float),       nvtx_alignof(float)},
-    /* NVTX_PAYLOAD_ENTRY_TYPE_DOUBLE */     {sizeof(double),      nvtx_alignof(double)},
-    /* NVTX_PAYLOAD_ENTRY_TYPE_LONGDOUBLE */ {sizeof(long double), nvtx_alignof2(long double, longdouble)},
+  /*** C floating point types ***/
+  /* NVTX_PAYLOAD_ENTRY_TYPE_FLOAT */      {sizeof(float),       nvtx_alignof(float)},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_DOUBLE */     {sizeof(double),      nvtx_alignof(double)},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_LONGDOUBLE */ {sizeof(long double), nvtx_alignof2(long double, longdouble)},
 
-    /* NVTX_PAYLOAD_ENTRY_TYPE_SIZE */    {sizeof(size_t),       nvtx_alignof(size_t)},
-    /* NVTX_PAYLOAD_ENTRY_TYPE_ADDRESS */ {sizeof(pointer_type), nvtx_alignof(pointer_type)},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_SIZE */    {sizeof(size_t),       nvtx_alignof(size_t)},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_ADDRESS */ {sizeof(pointer_type), nvtx_alignof(pointer_type)},
 
-    /*** Special character types ***/
-    /* NVTX_PAYLOAD_ENTRY_TYPE_WCHAR */ {sizeof(wchar_t), nvtx_alignof(wchar_t)},
+  /*** Special character types ***/
+  /* NVTX_PAYLOAD_ENTRY_TYPE_WCHAR */ {sizeof(wchar_t), nvtx_alignof(wchar_t)},
 
 #if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L) || (defined(__cplusplus) && __cplusplus >= 201811L)
-    /* NVTX_PAYLOAD_ENTRY_TYPE_CHAR8 */ {sizeof(char8_t), nvtx_alignof(char8_t)},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_CHAR8 */ {sizeof(char8_t), nvtx_alignof(char8_t)},
 #else
-    /* NVTX_PAYLOAD_ENTRY_TYPE_CHAR8 */ {0, 0},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_CHAR8 */ {0, 0},
 #endif
 
 #if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L) || (defined(__cplusplus) && __cplusplus >= 200704L)
-    /* NVTX_PAYLOAD_ENTRY_TYPE_CHAR16 */ {sizeof(char16_t), nvtx_alignof(char16_t)},
-    /* NVTX_PAYLOAD_ENTRY_TYPE_CHAR32 */ {sizeof(char32_t), nvtx_alignof(char32_t)}
+  /* NVTX_PAYLOAD_ENTRY_TYPE_CHAR16 */ {sizeof(char16_t), nvtx_alignof(char16_t)},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_CHAR32 */ {sizeof(char32_t), nvtx_alignof(char32_t)}
 #else
-    /* NVTX_PAYLOAD_ENTRY_TYPE_CHAR16 */ {0, 0},
-    /* NVTX_PAYLOAD_ENTRY_TYPE_CHAR32 */ {0, 0}
+  /* NVTX_PAYLOAD_ENTRY_TYPE_CHAR16 */ {0, 0},
+  /* NVTX_PAYLOAD_ENTRY_TYPE_CHAR32 */ {0, 0}
 #endif
 };
 

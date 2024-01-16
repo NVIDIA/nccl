@@ -102,7 +102,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
        * defer that shuffle, which incurs a dependency stall, until after other
        * memops are launched by the caller.
        */
-      #pragma unroll
+#pragma unroll
       for(int g=0; g < WordPerThread/2; g++) {
         int ix = g*WARP_SIZE - 4*(g/2) + wid - (g%2)*(wid/8);
         if(!flagThread || g%2==0) {
@@ -110,18 +110,17 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
             load128((uint64_t*)(src + ix*EltPer16B), regs[2*g+0], regs[2*g+1]);
         }
       }
-    }
-    else {
+    } else {
       // Not aligned. Stage the smallest 16 byte aligned region subsuming the
       // buffer into shmem.
       int misalignment = reinterpret_cast<uintptr_t>(src) % 16;
       uint64_t *src8 = reinterpret_cast<uint64_t*>(reinterpret_cast<uintptr_t>(src) & -uintptr_t(16));
       uint64_t *shm8 = shmemCvtPtr((uint64_t*)ncclScratchForWarp(warpInBlock));
-      #pragma unroll
+#pragma unroll
       for(int g=0; g < WordPerThread/2; g++)
         if((g*WARP_SIZE + wid)*16 < misalignment + eltN*sizeof(T))
           load128(src8 + 2*(g*WARP_SIZE + wid), regs[2*g+0], regs[2*g+1]);
-      #pragma unroll
+#pragma unroll
       for(int g=0; g < WordPerThread/2; g++)
         storeShmem128(shm8 + 2*(g*WARP_SIZE + wid), regs[2*g+0], regs[2*g+1]);
 
@@ -130,7 +129,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
       // Now load from shmem stage to regs. Preserve the same pre-shuffled layout
       // as the aligned case since Finish() will be applied regardless.
       T *shm = (T*)shm8 + misalignment/sizeof(T);
-      #pragma unroll
+#pragma unroll
       for(int g=0; g < WordPerThread/2; g++) {
         int ix = g*WARP_SIZE - 4*(g/2) + wid - (g%2)*(wid/8);
         if(!flagThread || g%2==0) {
@@ -144,7 +143,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
   template<int WordPerThread>
   __device__ __forceinline__ void loadRegsFinish(uint64_t(&regs)[WordPerThread]) {
     // Move data out of flag registers into the vacant registers.
-    #pragma unroll
+#pragma unroll
     for (int g=1; g < WordPerThread/2; g+=2) {
       if (flagThread) regs[2*g] = regs[2*g-1];
     }
@@ -154,14 +153,14 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
   __device__ __forceinline__ void storeRegs(T *dst, uint64_t(&regs)[WordPerThread], int eltN) {
     constexpr int EltPer16B = 16/sizeof(T);
     // Reverse Finish() register permuatation.
-    #pragma unroll
+#pragma unroll
     for (int g=1; g < WordPerThread/2; g+=2) {
       if (flagThread) regs[2*g-1] = regs[2*g];
     }
     // Write to dst if 16-byte aligned, shmem otherwise.
     int misalignment = reinterpret_cast<uintptr_t>(dst)%16;
     uint64_t *shm8 = shmemCvtPtr((uint64_t*)ncclScratchForWarp(warpInBlock));
-    #pragma unroll
+#pragma unroll
     for(int g=0; g < WordPerThread/2; g++) {
       int ix = g*WARP_SIZE - 4*(g/2) + wid - (g%2)*(wid/8);
       if (!flagThread || g%2==0) {
@@ -180,7 +179,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
       dst[i] = shm[i];
   }
 
-  #define WARP_MASK 0xffffffff
+#define WARP_MASK 0xffffffff
 
   template <int ELEMS_PER_THREAD, int RECV, int SEND, int SrcBuf, int DstBuf>
   __device__ __forceinline__ void recvReduceSendCopy(uint64_t(&v)[ELEMS_PER_THREAD], int ll128Offset, bool postOp) {
@@ -196,7 +195,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
       int spins = 0;
       do {
         needReload = false;
-        #pragma unroll
+#pragma unroll
         for (int u=0; u<ELEMS_PER_THREAD; u+=2) {
           load128(ptr+u*WARP_SIZE, vr[u], vr[u+1]);
           needReload |= flagThread && (vr[u+1] != flag);
@@ -204,7 +203,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
         needReload &= (0 == checkAbort(spins, 0, 0));
       } while (__any_sync(WARP_MASK, needReload));
 
-      #pragma unroll
+#pragma unroll
       for (int u=0; u<ELEMS_PER_THREAD; u+=2)
         load128(ptr+u*WARP_SIZE, vr[u], vr[u+1]);
     }
@@ -215,7 +214,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
       // peer's data with memory loads of src data.
       loadRegsFinish(v);
       if (SrcBuf == Input) {
-        #pragma unroll
+#pragma unroll
         for (int u=0; u<ELEMS_PER_THREAD; u+=2) {
           v[u] = applyPreOp(redOp, v[u]);
           if (!flagThread)
@@ -226,8 +225,9 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
 
     /************************ Recv rest *********************/
     if (RECV) {
-      { // Consume data from first recv
-        #pragma unroll
+      {
+        // Consume data from first recv
+#pragma unroll
         for (int u=0; u<ELEMS_PER_THREAD; u+=2) {
           v[u]   = SRC ? applyReduce(redOp, vr[u], v[u]) : vr[u];
           v[u+1] = SRC ? applyReduce(redOp, vr[u+1], v[u+1]) : vr[u+1];
@@ -241,7 +241,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
         int spins = 0;
         do {
           needReload = false;
-          #pragma unroll
+#pragma unroll
           for (int u=0; u<ELEMS_PER_THREAD; u+=2) {
             load128(ptr+u*WARP_SIZE, vr[u], vr[u+1]);
             needReload |= flagThread && (vr[u+1] != flag);
@@ -249,11 +249,11 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
           needReload &= (0 == checkAbort(spins, i, 0));
         } while (__any_sync(WARP_MASK, needReload));
 
-        #pragma unroll
+#pragma unroll
         for (int u=0; u<ELEMS_PER_THREAD; u+=2)
           load128(ptr+u*WARP_SIZE, vr[u], vr[u+1]);
 
-        #pragma unroll
+#pragma unroll
         for (int u=0; u<ELEMS_PER_THREAD; u+=2) {
           v[u]   = applyReduce(redOp, vr[u], v[u]);
           v[u+1] = applyReduce(redOp, vr[u+1], v[u+1]);
@@ -263,7 +263,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
     /********************** End Recv ************************/
 
     if (postOp) {
-      #pragma unroll
+#pragma unroll
       for (int u=0; u<ELEMS_PER_THREAD; u+=2) {
         v[u]   = applyPostOp(redOp, v[u]);
         v[u+1] = applyPostOp(redOp, v[u+1]);
@@ -275,14 +275,14 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
       for (int i=1; i<MaxSend && i<fan.nsend(); i++) {
         uint64_t flag = sendFlag(i);
         uint64_t* ptr = sendPtr(i)+ll128Offset;
-        #pragma unroll
+#pragma unroll
         for (int u=0; u<ELEMS_PER_THREAD; u+=2) {
           store128(ptr+u*WARP_SIZE, v[u], flagThread ? flag : v[u+1]);
         }
       }
       uint64_t flag = sendFlag(0);
       uint64_t* ptr = sendPtr(0)+ll128Offset;
-      #pragma unroll
+#pragma unroll
       for (int u=0; u<ELEMS_PER_THREAD; u+=2) {
         store128(ptr+u*WARP_SIZE, v[u], flagThread ? flag : v[u+1]);
       }
@@ -360,12 +360,12 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
     }
   }
 
-public:
+ public:
   __device__ Primitives(
       const int tid, const int nthreads, int const *recvPeers, int const *sendPeers,
       void const *inputBuf, void *outputBuf, uint64_t redOpArg, uint8_t group=0,
       uint8_t connIndexRecv=0, uint8_t connIndexSend=0, struct ncclWorkElem* e = nullptr, int stepSize_=0
-    ):
+  ):
     redOp(redOpArg),
     tid(tid), nthreads(nthreads), wid(tid%WARP_SIZE), warp(tid/WARP_SIZE),
     warpInBlock(threadIdx.x/WARP_SIZE),

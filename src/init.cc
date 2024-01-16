@@ -700,7 +700,7 @@ static ncclResult_t collNetTrySetup(ncclComm_t comm, ncclComm_t parent, struct n
           comm->collNetSupportMatrix[op][ty] = (accum == (1<<1));
         }
       }
-    matrix_end:
+matrix_end:
       free(matrix);
       if (ret != ncclSuccess) goto fail;
     } while (0);
@@ -714,7 +714,7 @@ static ncclResult_t collNetTrySetup(ncclComm_t comm, ncclComm_t parent, struct n
   for (int c = 0; c < comm->nChannels; c++) {
     struct ncclTree* chain = &comm->channels[c].collnetChain;
     snprintf(line + strlen(line), 1023 - strlen(line), " [%d] %d->%d->%d",
-      c, chain->down[0], rank, chain->up);
+        c, chain->down[0], rank, chain->up);
   }
   line[1023] = '\0';
 
@@ -845,7 +845,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
       if (comm->nvlsRegSupport) {
         for (int j = i + 1; j < nranks; j++) {
           if (comm->peerInfo[i].hostHash == comm->peerInfo[j].hostHash &&
-            comm->peerInfo[i].pidHash == comm->peerInfo[j].pidHash) {
+              comm->peerInfo[i].pidHash == comm->peerInfo[j].pidHash) {
             comm->nvlsRegSupport = 0;
             break;
           }
@@ -1010,11 +1010,11 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   comm->localRanks = comm->nodeRanks[comm->node].localRanks;
 
   TRACE(NCCL_INIT,"hostHash[%d] %lx localRank %d localRanks %d localRank0 %d",
-        rank, comm->peerInfo[rank].hostHash, comm->localRank, comm->localRanks, comm->localRankToRank[0]);
+      rank, comm->peerInfo[rank].hostHash, comm->localRank, comm->localRanks, comm->localRankToRank[0]);
   if (comm->localRank == -1 || comm->localRankToRank[0] == -1 || comm->localRanks == 0) {
     WARN("Failed to determine local ranks rank %d hostHash %lx pidHash %lx localRank %d localRanks %d localRank0 %d",
-         rank, comm->peerInfo[rank].hostHash, comm->peerInfo[rank].pidHash,
-         comm->localRank, comm->localRanks, comm->localRankToRank[0]);
+        rank, comm->peerInfo[rank].hostHash, comm->peerInfo[rank].pidHash,
+        comm->localRank, comm->localRanks, comm->localRankToRank[0]);
     ret = ncclInternalError;
     goto fail;
   }
@@ -1163,7 +1163,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
       int deltas[4] = { d, (nNodes-d)%nNodes, nNodes/2-d, (nNodes-(nNodes/2-d))%nNodes };
       int index = 0;
       int delta = deltas[index];
-    sched_delta:
+sched_delta:
       int recvNode = (node+nNodes-delta)%nNodes;
       int sendNode = (node+delta)%nNodes;
       for (int step=0; step < steps; step++) {
@@ -1402,10 +1402,10 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
     /* unlink child abort flag. */
     __atomic_store_n(&job->parent->childAbortFlag, NULL, __ATOMIC_RELEASE);
     TRACE_CALL("ncclCommSplit(%p, %d, %d, %p, %d, %d)",
-                job->parent, job->color, job->key, comm, comm->rank, comm->nRanks);
+        job->parent, job->color, job->key, comm, comm->rank, comm->nRanks);
   } else {
     TRACE_CALL("ncclCommInitRank(%p, %d, 0x%llx, %d, %d)",
-                comm, comm->nRanks, (unsigned long long)hashUniqueId(job->commId), comm->rank, comm->cudaDev);
+        comm, comm->nRanks, (unsigned long long)hashUniqueId(job->commId), comm->rank, comm->cudaDev);
   }
 
 
@@ -1554,10 +1554,10 @@ static ncclResult_t parseCommConfig(ncclComm_t comm, ncclConfig_t *config) {
   }
 
   if ((internalConfigPtr->minCTAs != NCCL_CONFIG_UNDEF_INT &&
-    internalConfigPtr->minCTAs <= 0) ||
-    (internalConfigPtr->maxCTAs != NCCL_CONFIG_UNDEF_INT &&
-      internalConfigPtr->maxCTAs <= 0) ||
-    (internalConfigPtr->minCTAs > internalConfigPtr->maxCTAs)) {
+          internalConfigPtr->minCTAs <= 0) ||
+      (internalConfigPtr->maxCTAs != NCCL_CONFIG_UNDEF_INT &&
+          internalConfigPtr->maxCTAs <= 0) ||
+      (internalConfigPtr->minCTAs > internalConfigPtr->maxCTAs)) {
     WARN("Invalid config min/max channels attribute value %d/%d", internalConfigPtr->minCTAs, internalConfigPtr->maxCTAs);
     ret = ncclInvalidArgument;
     goto fail;
@@ -1646,8 +1646,7 @@ fail:
   goto exit;
 }
 
-struct NvtxParamsCommInitRank
-{
+struct NvtxParamsCommInitRank {
   int rank;
   int nranks;
   int cudaDev;

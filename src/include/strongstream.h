@@ -24,27 +24,27 @@ struct ncclCudaGraph {
 
 inline struct ncclCudaGraph ncclCudaGraphNone() {
   struct ncclCudaGraph tmp;
-  #if CUDART_VERSION >= 11030
-    tmp.graph = nullptr;
-    tmp.graphId = ULLONG_MAX;
-  #endif
+#if CUDART_VERSION >= 11030
+  tmp.graph = nullptr;
+  tmp.graphId = ULLONG_MAX;
+#endif
   return tmp;
 }
 
 inline bool ncclCudaGraphValid(struct ncclCudaGraph graph) {
-  #if CUDART_VERSION >= 11030
-    return graph.graph != nullptr;
-  #else
-    return false;
-  #endif
+#if CUDART_VERSION >= 11030
+  return graph.graph != nullptr;
+#else
+  return false;
+#endif
 }
 
 inline bool ncclCudaGraphSame(struct ncclCudaGraph a, struct ncclCudaGraph b) {
-  #if CUDART_VERSION >= 11030
-    return a.graphId == b.graphId;
-  #else
-    return true;
-  #endif
+#if CUDART_VERSION >= 11030
+  return a.graphId == b.graphId;
+#else
+  return true;
+#endif
 }
 
 ncclResult_t ncclCudaGetCapturingGraph(struct ncclCudaGraph* graph, cudaStream_t stream);
@@ -74,7 +74,7 @@ ncclResult_t ncclStrongStreamDestruct(struct ncclStrongStream* ss);
 
 // Acquire-fence the strong stream.
 ncclResult_t ncclStrongStreamAcquire(
-  struct ncclCudaGraph graph, struct ncclStrongStream* ss
+    struct ncclCudaGraph graph, struct ncclStrongStream* ss
 );
 
 // Acquire-fence the strong stream assuming no graph is capturing. This permits
@@ -88,13 +88,13 @@ ncclResult_t ncclStrongStreamRelease(struct ncclCudaGraph graph, struct ncclStro
 
 // Add a host launch to the stream.
 ncclResult_t ncclStrongStreamLaunchHost(
-  struct ncclCudaGraph graph, struct ncclStrongStream* ss,
-  cudaHostFn_t fn, void* arg
+    struct ncclCudaGraph graph, struct ncclStrongStream* ss,
+    cudaHostFn_t fn, void* arg
 );
 // Add a kernel launch to the stream.
 ncclResult_t ncclStrongStreamLaunchKernel(
-  struct ncclCudaGraph graph, struct ncclStrongStream* ss,
-  void* fn, dim3 grid, dim3 block, void** args, size_t sharedMemBytes
+    struct ncclCudaGraph graph, struct ncclStrongStream* ss,
+    void* fn, dim3 grid, dim3 block, void** args, size_t sharedMemBytes
 );
 
 // Cause `a` to wait for the current state `b`. Both `a` and `b` must be acquired.
@@ -102,15 +102,15 @@ ncclResult_t ncclStrongStreamLaunchKernel(
 // we want to fast-forward `a` to be a clone of `b`. Knowing this permits the
 // implementation to induce few graph dependencies.
 ncclResult_t ncclStrongStreamWaitStream(
-  struct ncclCudaGraph graph, struct ncclStrongStream* a, struct ncclStrongStream* b, bool b_subsumes_a=false
+    struct ncclCudaGraph graph, struct ncclStrongStream* a, struct ncclStrongStream* b, bool b_subsumes_a=false
 );
 // `b` must be capturing within `graph`.
 ncclResult_t ncclStrongStreamWaitStream(
-  struct ncclCudaGraph graph, struct ncclStrongStream* a, cudaStream_t b, bool b_subsumes_a=false
+    struct ncclCudaGraph graph, struct ncclStrongStream* a, cudaStream_t b, bool b_subsumes_a=false
 );
 // `a` must be capturing within `graph`.
 ncclResult_t ncclStrongStreamWaitStream(
-  struct ncclCudaGraph graph, cudaStream_t a, struct ncclStrongStream* b, bool b_subsumes_a=false
+    struct ncclCudaGraph graph, cudaStream_t a, struct ncclStrongStream* b, bool b_subsumes_a=false
 );
 
 // Synchrnoization does not need the strong stream to be acquired.

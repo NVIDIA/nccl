@@ -22,7 +22,8 @@ ncclResult_t ncclAllGather(const void* sendbuff, void* recvbuff, size_t sendcoun
 
   struct ncclInfo info = { ncclFuncAllGather, "AllGather",
     sendbuff, recvbuff, sendcount, datatype, ncclSum, 0, comm, stream, /* Args */
-    ALLGATHER_CHUNKSTEPS, ALLGATHER_SLICESTEPS };
+    ALLGATHER_CHUNKSTEPS, ALLGATHER_SLICESTEPS
+  };
   return ncclEnqueueCheck(&info);
 }
 
@@ -37,15 +38,18 @@ ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
   // Just pass the size of one message and not the total bytes sent/received.
   static constexpr nvtxPayloadSchemaEntry_t AllReduceSchema[] = {
     {0, NVTX_PAYLOAD_ENTRY_TYPE_SIZE, "Message size [bytes]"},
-    {0, NVTX_PAYLOAD_ENTRY_NCCL_REDOP, "Reduction operation", nullptr, 0,
-      offsetof(NvtxParamsAllReduce, op)}
+    {
+      0, NVTX_PAYLOAD_ENTRY_NCCL_REDOP, "Reduction operation", nullptr, 0,
+      offsetof(NvtxParamsAllReduce, op)
+    }
   };
   NvtxParamsAllReduce payload{count * ncclTypeSize(datatype), op};
   NVTX3_FUNC_WITH_PARAMS(AllReduce, AllReduceSchema, payload)
 
   struct ncclInfo info = { ncclFuncAllReduce, "AllReduce",
     sendbuff, recvbuff, count, datatype, op, 0, comm, stream, /* Args */
-    ALLREDUCE_CHUNKSTEPS, ALLREDUCE_SLICESTEPS };
+    ALLREDUCE_CHUNKSTEPS, ALLREDUCE_SLICESTEPS
+  };
   return ncclEnqueueCheck(&info);
 }
 
@@ -66,7 +70,8 @@ ncclResult_t ncclBroadcast(const void* sendbuff, void* recvbuff, size_t count, n
 
   struct ncclInfo info = { ncclFuncBroadcast, "Broadcast",
     sendbuff, recvbuff, count, datatype, ncclSum, root, comm, stream, /* Args */
-    BROADCAST_CHUNKSTEPS, BROADCAST_SLICESTEPS };
+    BROADCAST_CHUNKSTEPS, BROADCAST_SLICESTEPS
+  };
   return ncclEnqueueCheck(&info);
 }
 /* Deprecated original "in place" function, similar to MPI */
@@ -89,15 +94,18 @@ ncclResult_t ncclReduce(const void* sendbuff, void* recvbuff, size_t count,
   constexpr nvtxPayloadSchemaEntry_t ReduceSchema[] = {
     {0, NVTX_PAYLOAD_ENTRY_TYPE_SIZE, "Message size [bytes]"},
     {0, NVTX_PAYLOAD_ENTRY_TYPE_INT, "Root", nullptr, 0, offsetof(NvtxParamsReduce, root)},
-    {0, NVTX_PAYLOAD_ENTRY_NCCL_REDOP, "Reduction operation", nullptr, 0,
-      offsetof(NvtxParamsReduce, op)}
+    {
+      0, NVTX_PAYLOAD_ENTRY_NCCL_REDOP, "Reduction operation", nullptr, 0,
+      offsetof(NvtxParamsReduce, op)
+    }
   };
   NvtxParamsReduce payload{count * ncclTypeSize(datatype), root, op};
   NVTX3_FUNC_WITH_PARAMS(Reduce, ReduceSchema, payload)
 
   struct ncclInfo info = { ncclFuncReduce, "Reduce",
     sendbuff, recvbuff, count, datatype, op, root, comm, stream, /* Args */
-    REDUCE_CHUNKSTEPS, REDUCE_SLICESTEPS };
+    REDUCE_CHUNKSTEPS, REDUCE_SLICESTEPS
+  };
   return ncclEnqueueCheck(&info);
 }
 
@@ -111,25 +119,28 @@ ncclResult_t ncclReduceScatter(const void* sendbuff, void* recvbuff, size_t recv
   };
   constexpr nvtxPayloadSchemaEntry_t ReduceScatterSchema[] = {
     {0, NVTX_PAYLOAD_ENTRY_TYPE_SIZE, "Message size [bytes]"},
-    {0, NVTX_PAYLOAD_ENTRY_NCCL_REDOP, "Reduction operation", nullptr, 0,
-      offsetof(NvtxParamsReduceScatter, op)}
+    {
+      0, NVTX_PAYLOAD_ENTRY_NCCL_REDOP, "Reduction operation", nullptr, 0,
+      offsetof(NvtxParamsReduceScatter, op)
+    }
   };
   NvtxParamsReduceScatter payload{recvcount * ncclTypeSize(datatype), op};
   NVTX3_FUNC_WITH_PARAMS(ReduceScatter, ReduceScatterSchema, payload)
 
   struct ncclInfo info = { ncclFuncReduceScatter, "ReduceScatter",
     sendbuff, recvbuff, recvcount, datatype, op, 0, comm, stream, /* Args */
-    REDUCESCATTER_CHUNKSTEPS, REDUCESCATTER_SLICESTEPS };
+    REDUCESCATTER_CHUNKSTEPS, REDUCESCATTER_SLICESTEPS
+  };
   return ncclEnqueueCheck(&info);
 }
 
 struct NvtxParamsSendRecv {
-    size_t bytes;
-    int peer;
+  size_t bytes;
+  int peer;
 };
 constexpr const nvtxPayloadSchemaEntry_t SendRecvSchema[] = {
-    {0, NVTX_PAYLOAD_ENTRY_TYPE_SIZE, "Bytes"},
-    {0, NVTX_PAYLOAD_ENTRY_TYPE_INT, "Peer rank", nullptr, 0, offsetof(NvtxParamsSendRecv, peer)}
+  {0, NVTX_PAYLOAD_ENTRY_TYPE_SIZE, "Bytes"},
+  {0, NVTX_PAYLOAD_ENTRY_TYPE_INT, "Peer rank", nullptr, 0, offsetof(NvtxParamsSendRecv, peer)}
 };
 
 NCCL_API(ncclResult_t, ncclSend, const void* sendbuff, size_t count, ncclDataType_t datatype, int peer,
@@ -141,7 +152,8 @@ ncclResult_t ncclSend(const void* sendbuff, size_t count, ncclDataType_t datatyp
 
   struct ncclInfo info = { ncclFuncSend, "Send",
     NULL, (void*)sendbuff, count, datatype, ncclSum, peer, comm, stream, /* Args */
-    1, 1 };
+    1, 1
+  };
   ncclResult_t ret;
   NCCLCHECK(ncclGroupStart());
   ret = ncclEnqueueCheck(&info);
@@ -158,7 +170,8 @@ ncclResult_t ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype, int
 
   struct ncclInfo info = { ncclFuncRecv, "Recv",
     NULL, recvbuff, count, datatype, ncclSum, peer, comm, stream, /* Args */
-    1, 1 };
+    1, 1
+  };
   ncclResult_t ret;
   NCCLCHECK(ncclGroupStart());
   ret = ncclEnqueueCheck(&info);

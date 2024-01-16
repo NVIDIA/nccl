@@ -56,7 +56,7 @@ static_assert(sizeof(ncclNetHandle_t) <= CONNECT_SIZE, "NET Connect info is too 
     } \
 } while (0);
 
-struct connectMapMem{
+struct connectMapMem {
   char* gpuPtr;
   char* cpuPtr;
   int size;
@@ -322,18 +322,18 @@ static ncclResult_t sendConnect(struct ncclComm* comm, struct ncclConnect* conne
     if (!map->sameProcess) NCCLCHECK(netMapShm(map->mems+NCCL_NET_MAP_HOSTMEM));
     if (map->mems[NCCL_NET_MAP_DEVMEM].size) {
       NCCLCHECK(ncclP2pImportShareableBuffer(comm, send->proxyConn.tpRank,
-                                             map->mems[NCCL_NET_MAP_DEVMEM].size,
-                                             &map->mems[NCCL_NET_MAP_DEVMEM].ipcDesc,
-                                             (void**)&map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr));
+              map->mems[NCCL_NET_MAP_DEVMEM].size,
+              &map->mems[NCCL_NET_MAP_DEVMEM].ipcDesc,
+              (void**)&map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr));
       map->mems[NCCL_NET_MAP_DEVMEM].cpuPtr = NULL;
     }
     if (map->mems[NCCL_NET_MAP_SHARED_DEVMEM].size) {
       void** sharedDevMemPtr = comm->proxyState->sharedDevMems + send->proxyConn.tpLocalRank;
       if (*sharedDevMemPtr == NULL) {
         NCCLCHECK(ncclP2pImportShareableBuffer(comm, send->proxyConn.tpRank,
-                                               map->mems[NCCL_NET_MAP_SHARED_DEVMEM].size,
-                                               &map->mems[NCCL_NET_MAP_SHARED_DEVMEM].ipcDesc,
-                                               sharedDevMemPtr));
+                map->mems[NCCL_NET_MAP_SHARED_DEVMEM].size,
+                &map->mems[NCCL_NET_MAP_SHARED_DEVMEM].ipcDesc,
+                sharedDevMemPtr));
       }
       map->mems[NCCL_NET_MAP_SHARED_DEVMEM].gpuPtr = (char*)(*sharedDevMemPtr);
       map->mems[NCCL_NET_MAP_SHARED_DEVMEM].cpuPtr = NULL;
@@ -387,7 +387,7 @@ static ncclResult_t recvConnect(struct ncclComm* comm, struct ncclConnect* conne
     // Use recv connector as unique identifier
     opId = recv;
     INFO(NCCL_PROXY, "recvConnect ncclProxyCallAsync opId=%p &recv->proxyConn=%p connectInfo=%p",
-       opId, &recv->proxyConn, connectInfo);
+        opId, &recv->proxyConn, connectInfo);
     netRecvConnectArgs args = {0};
     args.proxyRank = *((int*)connectInfo);
     NCCLCHECK(ncclProxyCallAsync(comm, &recv->proxyConn, ncclProxyMsgConnect, &args, sizeof(netRecvConnectArgs), sizeof(struct connectMap), opId));
@@ -474,8 +474,8 @@ static ncclResult_t recvFree(struct ncclConnector* recv) {
 static ncclResult_t sharedNetBuffersInit(struct ncclProxyState* proxyState, int cuda, int tpLocalRank, int type, int sameProcess,
     int nChannels, char** gpuPtr, char** cpuPtr, int* size, ncclIpcDesc *ipcDesc) {
   if (cuda == 0 && sameProcess == 0) {
-      WARN("PXN should not use host buffers for data");
-      return ncclInternalError;
+    WARN("PXN should not use host buffers for data");
+    return ncclInternalError;
   }
   struct ncclProxyProgressState* progressState = &proxyState->progressState;
   if (progressState->localPeers == NULL) {
@@ -521,7 +521,7 @@ static ncclResult_t sharedNetBuffersDestroy(struct ncclProxyState* proxyState, i
   if (proxyState->progressState.localPeers == NULL) NCCLCHECK(ncclInternalError);
   struct ncclProxyPeer* peer = proxyState->progressState.localPeers[tpLocalRank];
   if (peer == NULL) NCCLCHECK(ncclInternalError;)
-  struct ncclProxySharedP2p* state = type == 0 ? &peer->send : &peer->recv;
+    struct ncclProxySharedP2p* state = type == 0 ? &peer->send : &peer->recv;
   if (state->size == 0) NCCLCHECK(ncclInternalError);
   if (ncclAtomicRefCountDecrement(&state->refcount) == 0) {
     if (state->cudaBuff) {
@@ -704,8 +704,8 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
     int bank = resources->useGdr ? NCCL_NET_MAP_SHARED_DEVMEM : NCCL_NET_MAP_SHARED_HOSTMEM;
     struct connectMapMem* mapMem = map->mems+bank;
     NCCLCHECK(sharedNetBuffersInit(
-          proxyState, resources->useGdr, resources->tpLocalRank, 0, map->sameProcess, proxyState->p2pnChannels,
-          &mapMem->gpuPtr, &mapMem->cpuPtr, &mapMem->size, &mapMem->ipcDesc));
+            proxyState, resources->useGdr, resources->tpLocalRank, 0, map->sameProcess, proxyState->p2pnChannels,
+            &mapMem->gpuPtr, &mapMem->cpuPtr, &mapMem->size, &mapMem->ipcDesc));
     resources->buffSizes[NCCL_PROTO_SIMPLE] = mapMem->size;
 
     if (proxyState->allocP2pNetLLBuffers) {
@@ -724,7 +724,7 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
       if (!map->sameProcess || ncclCuMemEnable()) {
         ALIGN_SIZE(map->mems[NCCL_NET_MAP_DEVMEM].size, CUDA_IPC_MIN);
         NCCLCHECK(ncclP2pAllocateShareableBuffer(map->mems[NCCL_NET_MAP_DEVMEM].size, &map->mems[NCCL_NET_MAP_DEVMEM].ipcDesc,
-                                                 (void**)&map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr));
+                (void**)&map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr));
       } else {
         NCCLCHECK(ncclCudaCalloc(&map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr, map->mems[NCCL_NET_MAP_DEVMEM].size));
       }
@@ -855,8 +855,8 @@ static ncclResult_t recvProxyConnect(struct ncclProxyConnection* connection, str
     int bank = resources->useGdr ? NCCL_NET_MAP_SHARED_DEVMEM : NCCL_NET_MAP_SHARED_HOSTMEM;
     struct connectMapMem* mapMem = map->mems+bank;
     NCCLCHECK(sharedNetBuffersInit(
-          proxyState, resources->useGdr, resources->tpLocalRank, 1, 1, proxyState->p2pnChannels,
-          &mapMem->gpuPtr, &mapMem->cpuPtr, &mapMem->size, NULL));
+            proxyState, resources->useGdr, resources->tpLocalRank, 1, 1, proxyState->p2pnChannels,
+            &mapMem->gpuPtr, &mapMem->cpuPtr, &mapMem->size, NULL));
     resources->buffSizes[NCCL_PROTO_SIMPLE] = mapMem->size;
     NCCL_NET_MAP_ADD_POINTER(map, 1, resources->useGdr, mapMem->size, buffs[NCCL_PROTO_SIMPLE]);
   }
@@ -873,7 +873,7 @@ static ncclResult_t recvProxyConnect(struct ncclProxyConnection* connection, str
     if (resources->shared == 0) {
       if (ncclCuMemEnable()) {
         NCCLCHECK(ncclP2pAllocateShareableBuffer(map->mems[NCCL_NET_MAP_DEVMEM].size, &map->mems[NCCL_NET_MAP_DEVMEM].ipcDesc,
-                                                 (void**)&map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr));
+                (void**)&map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr));
       } else {
         NCCLCHECK(ncclCudaCalloc(&map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr, map->mems[NCCL_NET_MAP_DEVMEM].size));
       }

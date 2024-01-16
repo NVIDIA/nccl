@@ -106,256 +106,232 @@ __attribute__((weak)) NvtxExtInitializeInjectionFunc_t InitializeInjectionNvtxEx
 *  - Statically-linked injection library defining InitializeInjectionNvtx2_fnptr
 */
 NVTX_LINKONCE_FWDDECL_FUNCTION int NVTX_VERSIONED_IDENTIFIER(nvtxExtLoadInjectionLibrary)(NvtxExtInitializeInjectionFunc_t* out_init_fnptr);
-NVTX_LINKONCE_DEFINE_FUNCTION int NVTX_VERSIONED_IDENTIFIER(nvtxExtLoadInjectionLibrary)(NvtxExtInitializeInjectionFunc_t* out_init_fnptr)
-{
-    const char* const initFuncName = "InitializeInjectionNvtxExtension";
-    NvtxExtInitializeInjectionFunc_t init_fnptr = (NvtxExtInitializeInjectionFunc_t)0;
-    NVTX_DLLHANDLE injectionLibraryHandle = (NVTX_DLLHANDLE)0;
+NVTX_LINKONCE_DEFINE_FUNCTION int NVTX_VERSIONED_IDENTIFIER(nvtxExtLoadInjectionLibrary)(NvtxExtInitializeInjectionFunc_t* out_init_fnptr) {
+  const char* const initFuncName = "InitializeInjectionNvtxExtension";
+  NvtxExtInitializeInjectionFunc_t init_fnptr = (NvtxExtInitializeInjectionFunc_t)0;
+  NVTX_DLLHANDLE injectionLibraryHandle = (NVTX_DLLHANDLE)0;
 
-    if(out_init_fnptr){
-        *out_init_fnptr = (NvtxExtInitializeInjectionFunc_t)0;
-    }
+  if(out_init_fnptr) {
+    *out_init_fnptr = (NvtxExtInitializeInjectionFunc_t)0;
+  }
 
 #if NVTX_SUPPORT_ALREADY_INJECTED_LIBRARY
-    /* Use POSIX global symbol chain to query for init function from any module */
-    init_fnptr = (NvtxExtInitializeInjectionFunc_t)NVTX_DLLFUNC(0, initFuncName);
+  /* Use POSIX global symbol chain to query for init function from any module */
+  init_fnptr = (NvtxExtInitializeInjectionFunc_t)NVTX_DLLFUNC(0, initFuncName);
 #endif
 
 #if NVTX_SUPPORT_DYNAMIC_INJECTION_LIBRARY
-    /* Try discovering dynamic injection library to load */
-    if (!init_fnptr)
-    {
+  /* Try discovering dynamic injection library to load */
+  if (!init_fnptr) {
 #if NVTX_SUPPORT_ENV_VARS
-        /* If env var NVTX_INJECTION64_PATH is set, it should contain the path
-        *  to a 64-bit dynamic NVTX injection library (and similar for 32-bit). */
-        const NVTX_PATHCHAR* const nvtxEnvVarName = (sizeof(void*) == 4)
-            ? NVTX_STR("NVTX_INJECTION32_PATH")
-            : NVTX_STR("NVTX_INJECTION64_PATH");
+    /* If env var NVTX_INJECTION64_PATH is set, it should contain the path
+    *  to a 64-bit dynamic NVTX injection library (and similar for 32-bit). */
+    const NVTX_PATHCHAR* const nvtxEnvVarName = (sizeof(void*) == 4)
+        ? NVTX_STR("NVTX_INJECTION32_PATH")
+        : NVTX_STR("NVTX_INJECTION64_PATH");
 #endif /* NVTX_SUPPORT_ENV_VARS */
-        NVTX_PATHCHAR injectionLibraryPathBuf[NVTX_BUFSIZE];
-        const NVTX_PATHCHAR* injectionLibraryPath = (const NVTX_PATHCHAR*)0;
+    NVTX_PATHCHAR injectionLibraryPathBuf[NVTX_BUFSIZE];
+    const NVTX_PATHCHAR* injectionLibraryPath = (const NVTX_PATHCHAR*)0;
 
-        /* Refer to this variable explicitly in case all references to it are #if'ed out */
-        (void)injectionLibraryPathBuf;
+    /* Refer to this variable explicitly in case all references to it are #if'ed out */
+    (void)injectionLibraryPathBuf;
 
 #if NVTX_SUPPORT_ENV_VARS
-        /* Disable the warning for getenv & _wgetenv -- this usage is safe because
-        *  these functions are not called again before using the returned value. */
+    /* Disable the warning for getenv & _wgetenv -- this usage is safe because
+    *  these functions are not called again before using the returned value. */
 #if defined(_MSC_VER)
 #pragma warning( push )
 #pragma warning( disable : 4996 )
 #endif
-        injectionLibraryPath = NVTX_GETENV(nvtxEnvVarName);
+    injectionLibraryPath = NVTX_GETENV(nvtxEnvVarName);
 #if defined(_MSC_VER)
 #pragma warning( pop )
 #endif
 #endif
 
 #if defined(__ANDROID__)
-        if (!injectionLibraryPath)
-        {
-            const char *bits = (sizeof(void*) == 4) ? "32" : "64";
-            char cmdlineBuf[32];
-            char pkgName[PATH_MAX];
-            int count;
-            int pid;
-            FILE *fp;
-            size_t bytesRead;
-            size_t pos;
+    if (!injectionLibraryPath) {
+      const char *bits = (sizeof(void*) == 4) ? "32" : "64";
+      char cmdlineBuf[32];
+      char pkgName[PATH_MAX];
+      int count;
+      int pid;
+      FILE *fp;
+      size_t bytesRead;
+      size_t pos;
 
-            pid = (int)getpid();
-            count = snprintf(cmdlineBuf, sizeof(cmdlineBuf), "/proc/%d/cmdline", pid);
-            if (count <= 0 || count >= (int)sizeof(cmdlineBuf))
-            {
-                NVTX_ERR("Path buffer too small for: /proc/%d/cmdline\n", pid);
-                return NVTX_ERR_INIT_ACCESS_LIBRARY;
-            }
+      pid = (int)getpid();
+      count = snprintf(cmdlineBuf, sizeof(cmdlineBuf), "/proc/%d/cmdline", pid);
+      if (count <= 0 || count >= (int)sizeof(cmdlineBuf)) {
+        NVTX_ERR("Path buffer too small for: /proc/%d/cmdline\n", pid);
+        return NVTX_ERR_INIT_ACCESS_LIBRARY;
+      }
 
-            fp = fopen(cmdlineBuf, "r");
-            if (!fp)
-            {
-                NVTX_ERR("File couldn't be opened: %s\n", cmdlineBuf);
-                return NVTX_ERR_INIT_ACCESS_LIBRARY;
-            }
+      fp = fopen(cmdlineBuf, "r");
+      if (!fp) {
+        NVTX_ERR("File couldn't be opened: %s\n", cmdlineBuf);
+        return NVTX_ERR_INIT_ACCESS_LIBRARY;
+      }
 
-            bytesRead = fread(pkgName, 1, sizeof(pkgName) - 1, fp);
-            fclose(fp);
-            if (bytesRead == 0)
-            {
-                NVTX_ERR("Package name couldn't be read from file: %s\n", cmdlineBuf);
-                return NVTX_ERR_INIT_ACCESS_LIBRARY;
-            }
+      bytesRead = fread(pkgName, 1, sizeof(pkgName) - 1, fp);
+      fclose(fp);
+      if (bytesRead == 0) {
+        NVTX_ERR("Package name couldn't be read from file: %s\n", cmdlineBuf);
+        return NVTX_ERR_INIT_ACCESS_LIBRARY;
+      }
 
-            pkgName[bytesRead] = 0;
+      pkgName[bytesRead] = 0;
 
-            /* String can contain colon as a process separator. In this case the package name is before the colon. */
-            pos = 0;
-            while (pos < bytesRead && pkgName[pos] != ':' && pkgName[pos] != '\0')
-            {
-                ++pos;
-            }
-            pkgName[pos] = 0;
+      /* String can contain colon as a process separator. In this case the package name is before the colon. */
+      pos = 0;
+      while (pos < bytesRead && pkgName[pos] != ':' && pkgName[pos] != '\0') {
+        ++pos;
+      }
+      pkgName[pos] = 0;
 
-            count = snprintf(injectionLibraryPathBuf, NVTX_BUFSIZE, "/data/data/%s/files/libNvtxInjection%s.so", pkgName, bits);
-            if (count <= 0 || count >= NVTX_BUFSIZE)
-            {
-                NVTX_ERR("Path buffer too small for: /data/data/%s/files/libNvtxInjection%s.so\n", pkgName, bits);
-                return NVTX_ERR_INIT_ACCESS_LIBRARY;
-            }
+      count = snprintf(injectionLibraryPathBuf, NVTX_BUFSIZE, "/data/data/%s/files/libNvtxInjection%s.so", pkgName, bits);
+      if (count <= 0 || count >= NVTX_BUFSIZE) {
+        NVTX_ERR("Path buffer too small for: /data/data/%s/files/libNvtxInjection%s.so\n", pkgName, bits);
+        return NVTX_ERR_INIT_ACCESS_LIBRARY;
+      }
 
-            /* On Android, verify path is accessible due to aggressive file access restrictions. */
-            /* For dlopen, if the filename contains a leading slash, then it is interpreted as a */
-            /* relative or absolute pathname; otherwise it will follow the rules in ld.so. */
-            if (injectionLibraryPathBuf[0] == '/')
-            {
+      /* On Android, verify path is accessible due to aggressive file access restrictions. */
+      /* For dlopen, if the filename contains a leading slash, then it is interpreted as a */
+      /* relative or absolute pathname; otherwise it will follow the rules in ld.so. */
+      if (injectionLibraryPathBuf[0] == '/') {
 #if (__ANDROID_API__ < 21)
-                int access_err = access(injectionLibraryPathBuf, F_OK | R_OK);
+        int access_err = access(injectionLibraryPathBuf, F_OK | R_OK);
 #else
-                int access_err = faccessat(AT_FDCWD, injectionLibraryPathBuf, F_OK | R_OK, 0);
+        int access_err = faccessat(AT_FDCWD, injectionLibraryPathBuf, F_OK | R_OK, 0);
 #endif
-                if (access_err != 0)
-                {
-                    NVTX_ERR("Injection library path wasn't accessible [code=%s] [path=%s]\n", strerror(errno), injectionLibraryPathBuf);
-                    return NVTX_ERR_INIT_ACCESS_LIBRARY;
-                }
-            }
-            injectionLibraryPath = injectionLibraryPathBuf;
+        if (access_err != 0) {
+          NVTX_ERR("Injection library path wasn't accessible [code=%s] [path=%s]\n", strerror(errno), injectionLibraryPathBuf);
+          return NVTX_ERR_INIT_ACCESS_LIBRARY;
         }
+      }
+      injectionLibraryPath = injectionLibraryPathBuf;
+    }
 #endif
 
-        /* At this point, injectionLibraryPath is specified if a dynamic
-        *  injection library was specified by a tool. */
-        if (injectionLibraryPath)
-        {
-            /* Load the injection library */
-            injectionLibraryHandle = NVTX_DLLOPEN(injectionLibraryPath);
-            if (!injectionLibraryHandle)
-            {
-                NVTX_ERR("Failed to load injection library\n");
-                return NVTX_ERR_INIT_LOAD_LIBRARY;
-            }
-            else
-            {
-                /* Attempt to get the injection library's entry-point */
-                init_fnptr = (NvtxExtInitializeInjectionFunc_t)NVTX_DLLFUNC(injectionLibraryHandle, initFuncName);
-                if (!init_fnptr)
-                {
-                    NVTX_DLLCLOSE(injectionLibraryHandle);
-                    NVTX_ERR("Failed to get address of function %s from injection library\n", initFuncName);
-                    return NVTX_ERR_INIT_MISSING_LIBRARY_ENTRY_POINT;
-                }
-            }
+    /* At this point, injectionLibraryPath is specified if a dynamic
+    *  injection library was specified by a tool. */
+    if (injectionLibraryPath) {
+      /* Load the injection library */
+      injectionLibraryHandle = NVTX_DLLOPEN(injectionLibraryPath);
+      if (!injectionLibraryHandle) {
+        NVTX_ERR("Failed to load injection library\n");
+        return NVTX_ERR_INIT_LOAD_LIBRARY;
+      } else {
+        /* Attempt to get the injection library's entry-point */
+        init_fnptr = (NvtxExtInitializeInjectionFunc_t)NVTX_DLLFUNC(injectionLibraryHandle, initFuncName);
+        if (!init_fnptr) {
+          NVTX_DLLCLOSE(injectionLibraryHandle);
+          NVTX_ERR("Failed to get address of function %s from injection library\n", initFuncName);
+          return NVTX_ERR_INIT_MISSING_LIBRARY_ENTRY_POINT;
         }
+      }
     }
+  }
 #endif
 
 #if NVTX_SUPPORT_STATIC_INJECTION_LIBRARY
-    if (!init_fnptr)
-    {
-        /* Check weakly-defined function pointer.  A statically-linked injection can define this as
-        *  a normal symbol and it will take precedence over a dynamic injection. */
-        if (InitializeInjectionNvtxExtension_fnptr)
-        {
-            init_fnptr = InitializeInjectionNvtxExtension_fnptr;
-        }
+  if (!init_fnptr) {
+    /* Check weakly-defined function pointer.  A statically-linked injection can define this as
+    *  a normal symbol and it will take precedence over a dynamic injection. */
+    if (InitializeInjectionNvtxExtension_fnptr) {
+      init_fnptr = InitializeInjectionNvtxExtension_fnptr;
     }
+  }
 #endif
 
-    if(out_init_fnptr){
-        *out_init_fnptr = init_fnptr;
-    }
+  if(out_init_fnptr) {
+    *out_init_fnptr = init_fnptr;
+  }
 
-    /* At this point, if init_fnptr is not set, then no tool has specified
-    *  an NVTX injection library -- return non-success result so all NVTX
-    *  API functions will be set to no-ops. */
-    if (!init_fnptr)
-    {
-        return NVTX_ERR_NO_INJECTION_LIBRARY_AVAILABLE;
-    }
+  /* At this point, if init_fnptr is not set, then no tool has specified
+  *  an NVTX injection library -- return non-success result so all NVTX
+  *  API functions will be set to no-ops. */
+  if (!init_fnptr) {
+    return NVTX_ERR_NO_INJECTION_LIBRARY_AVAILABLE;
+  }
 
-    return NVTX_SUCCESS;
+  return NVTX_SUCCESS;
 }
 
 NVTX_LINKONCE_DEFINE_FUNCTION void NVTX_VERSIONED_IDENTIFIER(nvtxExtInitOnce) (
     nvtxExtModuleInfo_t* moduleInfo,
     intptr_t* moduleState
-    )
-{
-    intptr_t old;
+) {
+  intptr_t old;
 
-    NVTX_INFO( "%s\n", __FUNCTION__ );
+  NVTX_INFO( "%s\n", __FUNCTION__ );
 
-    if( *moduleState == NVTX_EXTENSION_LOADED) {
-        return;
+  if( *moduleState == NVTX_EXTENSION_LOADED) {
+    return;
+  }
+
+  NVTX_ATOMIC_CAS_PTR(
+      old,
+      moduleState,
+      NVTX_EXTENSION_STARTING,
+      NVTX_EXTENSION_FRESH);
+  if (old == NVTX_EXTENSION_FRESH) {
+    NvtxExtInitializeInjectionFunc_t init_fnptr = NVTX_VERSIONED_IDENTIFIER(injectionFnPtr);
+    int entryPointStatus = 0;
+    int forceAllToNoops = 0;
+
+    /* Load & initialize injection library -- it will assign the function pointers */
+    if(init_fnptr == 0) {
+      int result = 0;
+
+      /* try to load vanilla NVTX first*/
+      nvtxInitialize(0);
+
+      result = NVTX_VERSIONED_IDENTIFIER(nvtxExtLoadInjectionLibrary)(&init_fnptr);
+      /*at this point init_fnptr will be either 0 or a real function*/
+
+      if(result == NVTX_SUCCESS) {
+        NVTX_VERSIONED_IDENTIFIER(injectionFnPtr) = init_fnptr;
+      } else {
+        NVTX_ERR("Failed to load injection library\n");
+      }
     }
 
-    NVTX_ATOMIC_CAS_PTR(
-        old,
+    if(init_fnptr != 0) {
+      /* Invoke injection library's initialization function.  If it returns
+      *  0 (failure) and a dynamic injection was loaded, unload it. */
+      entryPointStatus = init_fnptr(moduleInfo);
+      if (entryPointStatus == 0) {
+        NVTX_ERR("Failed to initialize injection library -- initialization function returned 0\n");
+      }
+    }
+
+    /* Clean up any functions that are still uninitialized so that they are skipped.
+     * Set all to null if injection init function failed as well.
+    */
+    forceAllToNoops = (init_fnptr == 0) || (entryPointStatus == 0);
+    for(size_t s = 0; s < moduleInfo->segmentsCount; ++s) {
+      nvtxExtModuleSegment_t* segment = moduleInfo->segments+s;
+      for(size_t i = 0; i < segment->slotCount; ++i) {
+        if(forceAllToNoops || (segment->functionSlots[i] == NVTX_EXTENSION_FRESH)) {
+          segment->functionSlots[i] = NVTX_EXTENSION_DISABLED;
+        }
+      }
+    }
+
+    NVTX_MEMBAR();
+
+    /* Signal that initialization has finished, so now the assigned function pointers will be used */
+    NVTX_ATOMIC_WRITE_PTR(
         moduleState,
-        NVTX_EXTENSION_STARTING,
-        NVTX_EXTENSION_FRESH);
-    if (old == NVTX_EXTENSION_FRESH)
-    {
-        NvtxExtInitializeInjectionFunc_t init_fnptr = NVTX_VERSIONED_IDENTIFIER(injectionFnPtr);
-        int entryPointStatus = 0;
-        int forceAllToNoops = 0;
-
-        /* Load & initialize injection library -- it will assign the function pointers */
-        if(init_fnptr == 0){
-            int result = 0;
-
-            /* try to load vanilla NVTX first*/
-            nvtxInitialize(0);
-
-            result = NVTX_VERSIONED_IDENTIFIER(nvtxExtLoadInjectionLibrary)(&init_fnptr);
-            /*at this point init_fnptr will be either 0 or a real function*/
-
-            if(result == NVTX_SUCCESS) {
-                NVTX_VERSIONED_IDENTIFIER(injectionFnPtr) = init_fnptr;
-            }
-            else {
-                NVTX_ERR("Failed to load injection library\n");
-            }
-        }
-
-        if(init_fnptr != 0) {
-            /* Invoke injection library's initialization function.  If it returns
-            *  0 (failure) and a dynamic injection was loaded, unload it. */
-            entryPointStatus = init_fnptr(moduleInfo);
-            if (entryPointStatus == 0) {
-                NVTX_ERR("Failed to initialize injection library -- initialization function returned 0\n");
-            }
-        }
-
-        /* Clean up any functions that are still uninitialized so that they are skipped.
-         * Set all to null if injection init function failed as well.
-        */
-        forceAllToNoops = (init_fnptr == 0) || (entryPointStatus == 0);
-        for(size_t s = 0; s < moduleInfo->segmentsCount; ++s){
-            nvtxExtModuleSegment_t* segment = moduleInfo->segments+s;
-            for(size_t i = 0; i < segment->slotCount; ++i){
-                if(forceAllToNoops || (segment->functionSlots[i] == NVTX_EXTENSION_FRESH)){
-                    segment->functionSlots[i] = NVTX_EXTENSION_DISABLED;
-                }
-            }
-        }
-
-        NVTX_MEMBAR();
-
-        /* Signal that initialization has finished, so now the assigned function pointers will be used */
-        NVTX_ATOMIC_WRITE_PTR(
-            moduleState,
-            NVTX_EXTENSION_LOADED);
+        NVTX_EXTENSION_LOADED);
+  } else { /* Spin-wait until initialization has finished */
+    NVTX_MEMBAR();
+    while (*moduleState != NVTX_EXTENSION_LOADED) {
+      NVTX_YIELD();
+      NVTX_MEMBAR();
     }
-    else /* Spin-wait until initialization has finished */
-    {
-        NVTX_MEMBAR();
-        while (*moduleState != NVTX_EXTENSION_LOADED)
-        {
-            NVTX_YIELD();
-            NVTX_MEMBAR();
-        }
-    }
+  }
 }
 
 #ifdef __cplusplus

@@ -92,25 +92,25 @@ struct Apply_LoadMultimem/*{
 template<typename Fn, typename Pack>
 __device__ __forceinline__ Pack applyReduce(Fn fn, Pack a, Pack b) {
   return fromPack<Pack>(
-    Apply_Reduce<Fn, BytePackOf<Pack>::Size/sizeof(typename Fn::EltType)>
-      ::reduce(fn, toPack(a), toPack(b))
-  );
+          Apply_Reduce<Fn, BytePackOf<Pack>::Size/sizeof(typename Fn::EltType)>
+          ::reduce(fn, toPack(a), toPack(b))
+      );
 }
 
 template<typename Fn, typename Pack>
 __device__ __forceinline__ Pack applyPreOp(Fn fn, Pack a) {
   return fromPack<Pack>(
-    Apply_PreOp<Fn, BytePackOf<Pack>::Size/sizeof(typename Fn::EltType)>
-      ::preOp(fn, toPack(a))
-  );
+          Apply_PreOp<Fn, BytePackOf<Pack>::Size/sizeof(typename Fn::EltType)>
+          ::preOp(fn, toPack(a))
+      );
 }
 
 template<typename Fn, typename Pack>
 __device__ __forceinline__ Pack applyPostOp(Fn fn, Pack a) {
   return fromPack<Pack>(
-    Apply_PostOp<Fn, BytePackOf<Pack>::Size/sizeof(typename Fn::EltType)>
-      ::postOp(fn, toPack(a))
-  );
+          Apply_PostOp<Fn, BytePackOf<Pack>::Size/sizeof(typename Fn::EltType)>
+          ::postOp(fn, toPack(a))
+      );
 }
 
 template<typename Fn, int BytePerPack>
@@ -237,34 +237,34 @@ SPECIALIZE_REDUCE(FuncMinMax, float, 1, float, fn.isMinNotMax ? fminf(x, y) : fm
 SPECIALIZE_REDUCE(FuncMinMax, double, 1, double, fn.isMinNotMax ? fmin(x, y) : fmax(x, y))
 
 #if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
-  SPECIALIZE_REDUCE(FuncSum, half, 1, half, __hadd(x, y))
-  SPECIALIZE_REDUCE(FuncSum, half, 2, half2, __hadd2(x, y))
-  SPECIALIZE_REDUCE(FuncProd, half, 1, half, __hmul(x, y))
-  SPECIALIZE_REDUCE(FuncProd, half, 2, half2, __hmul2(x, y))
+SPECIALIZE_REDUCE(FuncSum, half, 1, half, __hadd(x, y))
+SPECIALIZE_REDUCE(FuncSum, half, 2, half2, __hadd2(x, y))
+SPECIALIZE_REDUCE(FuncProd, half, 1, half, __hmul(x, y))
+SPECIALIZE_REDUCE(FuncProd, half, 2, half2, __hmul2(x, y))
 #else
-  SPECIALIZE_REDUCE(FuncSum, half, 1, half, __float2half(__half2float(x) + __half2float(y)))
-  SPECIALIZE_REDUCE(FuncProd, half, 1, half, __float2half(__half2float(x) * __half2float(y)))
+SPECIALIZE_REDUCE(FuncSum, half, 1, half, __float2half(__half2float(x) + __half2float(y)))
+SPECIALIZE_REDUCE(FuncProd, half, 1, half, __float2half(__half2float(x) * __half2float(y)))
 #endif
 
 #if __CUDA_ARCH__ >= 800
-  SPECIALIZE_REDUCE(FuncMinMax, half, 1, half, fn.isMinNotMax ? __hmin(x, y) : __hmax(x, y))
-  SPECIALIZE_REDUCE(FuncMinMax, half, 2, half2, fn.isMinNotMax ? __hmin2(x, y) : __hmax2(x, y))
+SPECIALIZE_REDUCE(FuncMinMax, half, 1, half, fn.isMinNotMax ? __hmin(x, y) : __hmax(x, y))
+SPECIALIZE_REDUCE(FuncMinMax, half, 2, half2, fn.isMinNotMax ? __hmin2(x, y) : __hmax2(x, y))
 #else
-  SPECIALIZE_REDUCE(FuncMinMax, half, 1, half, __float2half(fn.isMinNotMax ? fminf(__half2float(x), __half2float(y)) : fmaxf(__half2float(x), __half2float(y))))
+SPECIALIZE_REDUCE(FuncMinMax, half, 1, half, __float2half(fn.isMinNotMax ? fminf(__half2float(x), __half2float(y)) : fmaxf(__half2float(x), __half2float(y))))
 #endif
 
 #if defined(__CUDA_BF16_TYPES_EXIST__)
 #if __CUDA_ARCH__ >= 800
-  SPECIALIZE_REDUCE(FuncSum, __nv_bfloat16, 1, __nv_bfloat16, __hadd(x, y))
-  SPECIALIZE_REDUCE(FuncSum, __nv_bfloat16, 2, __nv_bfloat162, __hadd2(x, y))
-  SPECIALIZE_REDUCE(FuncProd, __nv_bfloat16, 1, __nv_bfloat16, __hmul(x, y))
-  SPECIALIZE_REDUCE(FuncProd, __nv_bfloat16, 2, __nv_bfloat162, __hmul2(x, y))
-  SPECIALIZE_REDUCE(FuncMinMax, __nv_bfloat16, 1, __nv_bfloat16, fn.isMinNotMax ? __hmin(x, y) : __hmax(x, y))
-  SPECIALIZE_REDUCE(FuncMinMax, __nv_bfloat16, 2, __nv_bfloat162, fn.isMinNotMax ? __hmin2(x, y) : __hmax2(x, y))
+SPECIALIZE_REDUCE(FuncSum, __nv_bfloat16, 1, __nv_bfloat16, __hadd(x, y))
+SPECIALIZE_REDUCE(FuncSum, __nv_bfloat16, 2, __nv_bfloat162, __hadd2(x, y))
+SPECIALIZE_REDUCE(FuncProd, __nv_bfloat16, 1, __nv_bfloat16, __hmul(x, y))
+SPECIALIZE_REDUCE(FuncProd, __nv_bfloat16, 2, __nv_bfloat162, __hmul2(x, y))
+SPECIALIZE_REDUCE(FuncMinMax, __nv_bfloat16, 1, __nv_bfloat16, fn.isMinNotMax ? __hmin(x, y) : __hmax(x, y))
+SPECIALIZE_REDUCE(FuncMinMax, __nv_bfloat16, 2, __nv_bfloat162, fn.isMinNotMax ? __hmin2(x, y) : __hmax2(x, y))
 #else
-  SPECIALIZE_REDUCE(FuncSum, __nv_bfloat16, 1, __nv_bfloat16, __float2bfloat16(__bfloat162float(x) + __bfloat162float(y)))
-  SPECIALIZE_REDUCE(FuncProd, __nv_bfloat16, 1, __nv_bfloat16, __float2bfloat16(__bfloat162float(x) * __bfloat162float(y)))
-  SPECIALIZE_REDUCE(FuncMinMax, __nv_bfloat16, 1, __nv_bfloat16, __float2bfloat16(fn.isMinNotMax ? fminf(__bfloat162float(x), __bfloat162float(y)) : fmaxf(__bfloat162float(x), __bfloat162float(y))))
+SPECIALIZE_REDUCE(FuncSum, __nv_bfloat16, 1, __nv_bfloat16, __float2bfloat16(__bfloat162float(x) + __bfloat162float(y)))
+SPECIALIZE_REDUCE(FuncProd, __nv_bfloat16, 1, __nv_bfloat16, __float2bfloat16(__bfloat162float(x) * __bfloat162float(y)))
+SPECIALIZE_REDUCE(FuncMinMax, __nv_bfloat16, 1, __nv_bfloat16, __float2bfloat16(fn.isMinNotMax ? fminf(__bfloat162float(x), __bfloat162float(y)) : fmaxf(__bfloat162float(x), __bfloat162float(y))))
 #endif
 #endif
 
@@ -279,11 +279,11 @@ struct Apply_PreOp {
   static constexpr bool IsIdentity = Apply_PreOp<Fn, EltPerPack/2>::IsIdentity;
   template<int Size>
   __device__ static BytePack<Size> preOp(Fn fn, BytePack<Size> a) {
-    #if __cpp_if_constexpr
+#if __cpp_if_constexpr
     if constexpr(!IsIdentity) {
-    #else
+#else
     if (!IsIdentity) {
-    #endif
+#endif
       // The `if (!IsIdentity)` condition is not strictly necessary, but it may help
       // compiler in that it won't have to tear a register apart for no reason
       // just to put it back together again.
@@ -320,11 +320,11 @@ struct Apply_PostOp {
   static constexpr bool IsIdentity = Apply_PostOp<Fn, EltPerPack/2>::IsIdentity;
   template<int Size>
   __device__ static BytePack<Size> postOp(Fn fn, BytePack<Size> a) {
-    #if __cpp_if_constexpr
+#if __cpp_if_constexpr
     if constexpr(!IsIdentity) {
-    #else
+#else
     if (!IsIdentity) {
-    #endif
+#endif
       // The `if (!IsIdentity)` condition is not strictly necessary, but it may help
       // compiler in that it won't have to tear a register apart for no reason
       // just to put it back together again.
@@ -390,26 +390,26 @@ struct FuncPreMulSum<half> {
 };
 
 #if defined(__CUDA_BF16_TYPES_EXIST__)
-  template<>
-  struct FuncPreMulSum<__nv_bfloat16> {
-    using EltType = __nv_bfloat16;
-  #if __CUDA_ARCH__ >= 800
-    __nv_bfloat162 scalar;
-    __device__ FuncPreMulSum(uint64_t opArg=0) {
-      union { uint64_t u64; __nv_bfloat16 val; };
-      u64 = opArg;
-      scalar.x = val;
-      scalar.y = val;
-    }
-  #else
-    float scalar;
-    __device__ FuncPreMulSum(uint64_t opArg=0) {
-      union { uint64_t u64; __nv_bfloat16 val; };
-      u64 = opArg;
-      scalar = __bfloat162float(val);
-    }
-  #endif
-  };
+template<>
+struct FuncPreMulSum<__nv_bfloat16> {
+  using EltType = __nv_bfloat16;
+#if __CUDA_ARCH__ >= 800
+  __nv_bfloat162 scalar;
+  __device__ FuncPreMulSum(uint64_t opArg=0) {
+    union { uint64_t u64; __nv_bfloat16 val; };
+    u64 = opArg;
+    scalar.x = val;
+    scalar.y = val;
+  }
+#else
+  float scalar;
+  __device__ FuncPreMulSum(uint64_t opArg=0) {
+    union { uint64_t u64; __nv_bfloat16 val; };
+    u64 = opArg;
+    scalar = __bfloat162float(val);
+  }
+#endif
+};
 #endif
 
 template<typename T>
@@ -436,51 +436,51 @@ template<>
 struct Apply_PreOp<FuncPreMulSum<half>, /*EltPerPack=*/1> {
   static constexpr bool IsIdentity = false;
   __device__ static BytePack<sizeof(half)> preOp(FuncPreMulSum<half> fn, BytePack<sizeof(half)> a) {
-    #if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
-      return toPack<half>(__hmul(fromPack<half>(a), fn.scalar.x));
-    #else
-      return toPack<half>(__float2half(__half2float(fromPack<half>(a)) * fn.scalar));
-    #endif
+#if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
+    return toPack<half>(__hmul(fromPack<half>(a), fn.scalar.x));
+#else
+    return toPack<half>(__float2half(__half2float(fromPack<half>(a)) * fn.scalar));
+#endif
   }
 };
 #if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
-  template<>
-  struct Apply_PreOp<FuncPreMulSum<half>, /*EltPerPack=*/2> {
-    static constexpr bool IsIdentity = false;
-    __device__ static BytePack<sizeof(half2)> preOp(FuncPreMulSum<half> fn, BytePack<sizeof(half2)> a) {
-      return toPack<half2>(__hmul2(fromPack<half2>(a), fn.scalar));
-    }
-  };
+template<>
+struct Apply_PreOp<FuncPreMulSum<half>, /*EltPerPack=*/2> {
+  static constexpr bool IsIdentity = false;
+  __device__ static BytePack<sizeof(half2)> preOp(FuncPreMulSum<half> fn, BytePack<sizeof(half2)> a) {
+    return toPack<half2>(__hmul2(fromPack<half2>(a), fn.scalar));
+  }
+};
 #endif
 
 ////////////////////////////////////////////////////////////////////////////////
 // Apply_PreOp of FuncPreMulSum for bfloat16.
 
 #if defined(__CUDA_BF16_TYPES_EXIST__)
-  template<>
-  struct Apply_PreOp<FuncPreMulSum<__nv_bfloat16>, /*EltPerPack=*/1> {
-    static constexpr bool IsIdentity = false;
-    __device__ static BytePack<sizeof(__nv_bfloat16)> preOp(
-        FuncPreMulSum<__nv_bfloat16> fn, BytePack<sizeof(__nv_bfloat16)> a
-      ) {
-      #if __CUDA_ARCH__ >= 800
-        return toPack<__nv_bfloat16>(__hmul(fromPack<__nv_bfloat16>(a), fn.scalar.x));
-      #else
-        return toPack<__nv_bfloat16>(__float2bfloat16(__bfloat162float(fromPack<__nv_bfloat16>(a)) * fn.scalar));
-      #endif
-    }
-  };
-  #if __CUDA_ARCH__ >= 800
-    template<>
-    struct Apply_PreOp<FuncPreMulSum<__nv_bfloat16>, /*EltPerPack=*/2> {
-      static constexpr bool IsIdentity = false;
-      __device__ static BytePack<sizeof(__nv_bfloat162)> preOp(
-          FuncPreMulSum<__nv_bfloat16> fn, BytePack<sizeof(__nv_bfloat162)> a
-        ) {
-        return toPack<__nv_bfloat162>(__hmul2(fromPack<__nv_bfloat162>(a), fn.scalar));
-      }
-    };
-  #endif
+template<>
+struct Apply_PreOp<FuncPreMulSum<__nv_bfloat16>, /*EltPerPack=*/1> {
+  static constexpr bool IsIdentity = false;
+  __device__ static BytePack<sizeof(__nv_bfloat16)> preOp(
+      FuncPreMulSum<__nv_bfloat16> fn, BytePack<sizeof(__nv_bfloat16)> a
+  ) {
+#if __CUDA_ARCH__ >= 800
+    return toPack<__nv_bfloat16>(__hmul(fromPack<__nv_bfloat16>(a), fn.scalar.x));
+#else
+    return toPack<__nv_bfloat16>(__float2bfloat16(__bfloat162float(fromPack<__nv_bfloat16>(a)) * fn.scalar));
+#endif
+  }
+};
+#if __CUDA_ARCH__ >= 800
+template<>
+struct Apply_PreOp<FuncPreMulSum<__nv_bfloat16>, /*EltPerPack=*/2> {
+  static constexpr bool IsIdentity = false;
+  __device__ static BytePack<sizeof(__nv_bfloat162)> preOp(
+      FuncPreMulSum<__nv_bfloat16> fn, BytePack<sizeof(__nv_bfloat162)> a
+  ) {
+    return toPack<__nv_bfloat162>(__hmul2(fromPack<__nv_bfloat162>(a), fn.scalar));
+  }
+};
+#endif
 #endif
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -510,7 +510,7 @@ struct FuncSumPostDiv_IntOnly<T, /*IsFloating=*/true> {
 
 template<typename T>
 struct Apply_Reduce<FuncSumPostDiv<T>, /*EltPerPack=*/1>:
-    Apply_Reduce<FuncSum<T>, 1> {
+         Apply_Reduce<FuncSum<T>, 1> {
   __device__ static BytePack<sizeof(T)> reduce(FuncSumPostDiv<T> fn, BytePack<sizeof(T)> a, BytePack<sizeof(T)> b) {
     // FuncSumPostDiv reduce dispatches to FuncSum.
     return Apply_Reduce<FuncSum<T>, 1>::reduce(FuncSum<T>(), a, b);
@@ -648,51 +648,51 @@ struct Apply_LoadMultimem {
 };
 
 #if __CUDA_ARCH__ >= 900 && CUDART_VERSION >= 12010
-  template<typename Fn>
-  struct LoadMultimem_BigPackSize {
-    using T = typename Fn::EltType;
-    static constexpr bool IsSum = std::is_same<Fn, FuncSum<T>>::value ||
-                                  std::is_same<Fn, FuncPreMulSum<T>>::value ||
-                                  std::is_same<Fn, FuncSumPostDiv<T>>::value;
-    static constexpr bool IsMinMax = std::is_same<Fn, FuncMinMax<T>>::value;
-    static constexpr bool IsFloat = IsFloatingPoint<T>::value;
-    static constexpr int BigPackSize =
+template<typename Fn>
+struct LoadMultimem_BigPackSize {
+  using T = typename Fn::EltType;
+  static constexpr bool IsSum = std::is_same<Fn, FuncSum<T>>::value ||
+      std::is_same<Fn, FuncPreMulSum<T>>::value ||
+      std::is_same<Fn, FuncSumPostDiv<T>>::value;
+  static constexpr bool IsMinMax = std::is_same<Fn, FuncMinMax<T>>::value;
+  static constexpr bool IsFloat = IsFloatingPoint<T>::value;
+  static constexpr int BigPackSize =
       IsFloat && IsSum && sizeof(T) < 8 ? 16 :
       IsFloat && IsSum ? 8 :
       IsFloat && IsMinMax && sizeof(T)==2 ? 16 :
       !IsFloat && (IsSum||IsMinMax) && sizeof(T)>=4 ? sizeof(T) :
       /*multimem.ld_reduce not supported:*/ 0;
-  };
+};
 
-  DEFINE_Apply_LoadMultimem_sum(uint32_t, u32, u32)
-  DEFINE_Apply_LoadMultimem_minmax(uint32_t, u32, u32)
+DEFINE_Apply_LoadMultimem_sum(uint32_t, u32, u32)
+DEFINE_Apply_LoadMultimem_minmax(uint32_t, u32, u32)
 
-  DEFINE_Apply_LoadMultimem_sum(int32_t, s32, u32)
-  DEFINE_Apply_LoadMultimem_minmax(int32_t, s32, u32)
+DEFINE_Apply_LoadMultimem_sum(int32_t, s32, u32)
+DEFINE_Apply_LoadMultimem_minmax(int32_t, s32, u32)
 
-  DEFINE_Apply_LoadMultimem_sum(uint64_t, u64, u64)
-  DEFINE_Apply_LoadMultimem_minmax(uint64_t, u64, u64)
+DEFINE_Apply_LoadMultimem_sum(uint64_t, u64, u64)
+DEFINE_Apply_LoadMultimem_minmax(uint64_t, u64, u64)
 
-  DEFINE_Apply_LoadMultimem_sum(int64_t, u64, u64)
-  DEFINE_Apply_LoadMultimem_minmax(int64_t, s64, u64)
+DEFINE_Apply_LoadMultimem_sum(int64_t, u64, u64)
+DEFINE_Apply_LoadMultimem_minmax(int64_t, s64, u64)
 
-  DEFINE_Apply_LoadMultimem_sum(float, f32, u32)
-  DEFINE_Apply_LoadMultimem_sum_v4(float, f32, u32)
+DEFINE_Apply_LoadMultimem_sum(float, f32, u32)
+DEFINE_Apply_LoadMultimem_sum_v4(float, f32, u32)
 
-  DEFINE_Apply_LoadMultimem_sum(double, f64, u64)
+DEFINE_Apply_LoadMultimem_sum(double, f64, u64)
 
-  DEFINE_Apply_LoadMultimem_sum_v4x2_and_subhalf(half, f16x2, u32)
-  DEFINE_Apply_LoadMultimem_minmax_v4x2_and_subhalf(half, f16x2, u32)
+DEFINE_Apply_LoadMultimem_sum_v4x2_and_subhalf(half, f16x2, u32)
+DEFINE_Apply_LoadMultimem_minmax_v4x2_and_subhalf(half, f16x2, u32)
 
-  #if defined(__CUDA_BF16_TYPES_EXIST__)
-    DEFINE_Apply_LoadMultimem_sum_v4x2_and_subhalf(__nv_bfloat16, bf16x2, u32)
-    DEFINE_Apply_LoadMultimem_minmax_v4x2_and_subhalf(__nv_bfloat16, bf16x2, u32)
-  #endif
+#if defined(__CUDA_BF16_TYPES_EXIST__)
+DEFINE_Apply_LoadMultimem_sum_v4x2_and_subhalf(__nv_bfloat16, bf16x2, u32)
+DEFINE_Apply_LoadMultimem_minmax_v4x2_and_subhalf(__nv_bfloat16, bf16x2, u32)
+#endif
 #else
-  template<typename Fn>
-  struct LoadMultimem_BigPackSize {
-    static constexpr int BigPackSize = 0;
-  };
+template<typename Fn>
+struct LoadMultimem_BigPackSize {
+  static constexpr int BigPackSize = 0;
+};
 #endif
 
 #undef DEFINE_Apply_LoadMultimem

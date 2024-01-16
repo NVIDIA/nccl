@@ -15,23 +15,23 @@
 extern "C" {
 #endif /* __cplusplus */
 
-/* \cond SHOW_HIDDEN 
+/* \cond SHOW_HIDDEN
 * \version \NVTX_VERSION_2
 */
 #define NVTX_SYNCUSER_ATTRIB_STRUCT_SIZE ( (uint16_t)( sizeof(nvtxSyncUserAttributes_v0) ) )
 /** \endcond */
 
 
-/** 
+/**
 * \page PAGE_SYNCHRONIZATION Synchronization
 *
 * This section covers a subset of the API that allow users to track additional
-* synchronization details of their application.   Naming OS synchronization primitives 
-* may allow users to better understand the data collected by traced synchronization 
+* synchronization details of their application.   Naming OS synchronization primitives
+* may allow users to better understand the data collected by traced synchronization
 * APIs.  Additionally, a user defined synchronization object can allow the users to
 * to tell the tools when the user is building their own synchronization system
 * that do not rely on the OS to provide behaviors and instead use techniques like
-* atomic operations and spinlocks.  
+* atomic operations and spinlocks.
 *
 * See module \ref SYNCHRONIZATION for details.
 *
@@ -59,7 +59,7 @@ extern "C" {
 *
 *     bool Lock() {
 *          nvtxDomainSyncUserAcquireStart(hSync);
-*          bool acquired = __sync_bool_compare_and_swap(&bLocked, 0, 1);//atomic compiler intrinsic 
+*          bool acquired = __sync_bool_compare_and_swap(&bLocked, 0, 1);//atomic compiler intrinsic
 
 *          if (acquired) {
 *              nvtxDomainSyncUserAcquireSuccess(hSync);
@@ -76,12 +76,12 @@ extern "C" {
 *     }
 * };
 * \endcode
-* 
+*
 * \version \NVTX_VERSION_2
 */
 
 /*  ------------------------------------------------------------------------- */
-/* \cond SHOW_HIDDEN 
+/* \cond SHOW_HIDDEN
 * \brief Used to build a non-colliding value for resource types separated class
 * \version \NVTX_VERSION_2
 */
@@ -98,40 +98,37 @@ extern "C" {
 
 /** \brief Resource type values for OSs with POSIX Thread API support
  */
-typedef enum nvtxResourceSyncPosixThreadType_t
-{
-    NVTX_RESOURCE_TYPE_SYNC_PTHREAD_MUTEX = NVTX_RESOURCE_MAKE_TYPE(SYNC_PTHREAD, 1), /* pthread_mutex_t  */
-    NVTX_RESOURCE_TYPE_SYNC_PTHREAD_CONDITION = NVTX_RESOURCE_MAKE_TYPE(SYNC_PTHREAD, 2), /* pthread_cond_t  */
-    NVTX_RESOURCE_TYPE_SYNC_PTHREAD_RWLOCK = NVTX_RESOURCE_MAKE_TYPE(SYNC_PTHREAD, 3), /* pthread_rwlock_t  */
-    NVTX_RESOURCE_TYPE_SYNC_PTHREAD_BARRIER = NVTX_RESOURCE_MAKE_TYPE(SYNC_PTHREAD, 4), /* pthread_barrier_t  */
-    NVTX_RESOURCE_TYPE_SYNC_PTHREAD_SPINLOCK = NVTX_RESOURCE_MAKE_TYPE(SYNC_PTHREAD, 5), /* pthread_spinlock_t  */
-    NVTX_RESOURCE_TYPE_SYNC_PTHREAD_ONCE = NVTX_RESOURCE_MAKE_TYPE(SYNC_PTHREAD, 6) /* pthread_once_t  */
+typedef enum nvtxResourceSyncPosixThreadType_t {
+  NVTX_RESOURCE_TYPE_SYNC_PTHREAD_MUTEX = NVTX_RESOURCE_MAKE_TYPE(SYNC_PTHREAD, 1), /* pthread_mutex_t  */
+  NVTX_RESOURCE_TYPE_SYNC_PTHREAD_CONDITION = NVTX_RESOURCE_MAKE_TYPE(SYNC_PTHREAD, 2), /* pthread_cond_t  */
+  NVTX_RESOURCE_TYPE_SYNC_PTHREAD_RWLOCK = NVTX_RESOURCE_MAKE_TYPE(SYNC_PTHREAD, 3), /* pthread_rwlock_t  */
+  NVTX_RESOURCE_TYPE_SYNC_PTHREAD_BARRIER = NVTX_RESOURCE_MAKE_TYPE(SYNC_PTHREAD, 4), /* pthread_barrier_t  */
+  NVTX_RESOURCE_TYPE_SYNC_PTHREAD_SPINLOCK = NVTX_RESOURCE_MAKE_TYPE(SYNC_PTHREAD, 5), /* pthread_spinlock_t  */
+  NVTX_RESOURCE_TYPE_SYNC_PTHREAD_ONCE = NVTX_RESOURCE_MAKE_TYPE(SYNC_PTHREAD, 6) /* pthread_once_t  */
 } nvtxResourceSyncPosixThreadType_t;
 
 /** \brief Resource type values for Windows OSs
 */
-typedef enum nvtxResourceSyncWindowsType_t
-{
-    NVTX_RESOURCE_TYPE_SYNC_WINDOWS_MUTEX = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 1),
-    NVTX_RESOURCE_TYPE_SYNC_WINDOWS_SEMAPHORE = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 2),
-    NVTX_RESOURCE_TYPE_SYNC_WINDOWS_EVENT = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 3),
-    NVTX_RESOURCE_TYPE_SYNC_WINDOWS_CRITICAL_SECTION = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 4),
-    NVTX_RESOURCE_TYPE_SYNC_WINDOWS_SRWLOCK = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 5)
+typedef enum nvtxResourceSyncWindowsType_t {
+  NVTX_RESOURCE_TYPE_SYNC_WINDOWS_MUTEX = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 1),
+  NVTX_RESOURCE_TYPE_SYNC_WINDOWS_SEMAPHORE = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 2),
+  NVTX_RESOURCE_TYPE_SYNC_WINDOWS_EVENT = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 3),
+  NVTX_RESOURCE_TYPE_SYNC_WINDOWS_CRITICAL_SECTION = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 4),
+  NVTX_RESOURCE_TYPE_SYNC_WINDOWS_SRWLOCK = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 5)
 } nvtxResourceSyncWindowsType_t;
 
 /** \brief Resource type values for Linux and Linux derived OSs such as Android
 * \sa
 * ::nvtxResourceSyncPosixThreadType_t
 */
-typedef enum nvtxResourceSyncLinuxType_t
-{
-    NVTX_RESOURCE_TYPE_SYNC_LINUX_MUTEX = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 1),
-    NVTX_RESOURCE_TYPE_SYNC_LINUX_FUTEX = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 2),
-    NVTX_RESOURCE_TYPE_SYNC_LINUX_SEMAPHORE = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 3),
-    NVTX_RESOURCE_TYPE_SYNC_LINUX_COMPLETION = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 4),
-    NVTX_RESOURCE_TYPE_SYNC_LINUX_SPINLOCK = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 5),
-    NVTX_RESOURCE_TYPE_SYNC_LINUX_SEQLOCK = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 6),
-    NVTX_RESOURCE_TYPE_SYNC_LINUX_RCU = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 7)
+typedef enum nvtxResourceSyncLinuxType_t {
+  NVTX_RESOURCE_TYPE_SYNC_LINUX_MUTEX = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 1),
+  NVTX_RESOURCE_TYPE_SYNC_LINUX_FUTEX = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 2),
+  NVTX_RESOURCE_TYPE_SYNC_LINUX_SEMAPHORE = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 3),
+  NVTX_RESOURCE_TYPE_SYNC_LINUX_COMPLETION = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 4),
+  NVTX_RESOURCE_TYPE_SYNC_LINUX_SPINLOCK = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 5),
+  NVTX_RESOURCE_TYPE_SYNC_LINUX_SEQLOCK = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 6),
+  NVTX_RESOURCE_TYPE_SYNC_LINUX_RCU = NVTX_RESOURCE_MAKE_TYPE(SYNC_OS, 7)
 } nvtxResourceSyncLinuxType_t;
 
 /** \brief Resource type values for Android come from Linux.
@@ -154,8 +151,8 @@ typedef struct nvtxSyncUser* nvtxSyncUser_t;
 /** \brief User Defined Synchronization Object Attributes Structure.
 * \anchor USERDEF_SYNC_ATTRIBUTES_STRUCTURE
 *
-* This structure is used to describe the attributes of a user defined synchronization 
-* object.  The layout of the structure is defined by a specific version of the tools 
+* This structure is used to describe the attributes of a user defined synchronization
+* object.  The layout of the structure is defined by a specific version of the tools
 * extension library and can change between different versions of the Tools Extension
 * library.
 *
@@ -220,46 +217,45 @@ typedef struct nvtxSyncUser* nvtxSyncUser_t;
 * \sa
 * ::nvtxDomainSyncUserCreate
 */
-typedef struct nvtxSyncUserAttributes_v0
-{
-    /**
-    * \brief Version flag of the structure.
-    *
-    * Needs to be set to NVTX_VERSION to indicate the version of NVTX APIs
-    * supported in this header file. This can optionally be overridden to
-    * another version of the tools extension library.
-    */
-    uint16_t version;
+typedef struct nvtxSyncUserAttributes_v0 {
+  /**
+  * \brief Version flag of the structure.
+  *
+  * Needs to be set to NVTX_VERSION to indicate the version of NVTX APIs
+  * supported in this header file. This can optionally be overridden to
+  * another version of the tools extension library.
+  */
+  uint16_t version;
 
-    /**
-    * \brief Size of the structure.
-    *
-    * Needs to be set to the size in bytes of the event attribute
-    * structure used to specify the event.
-    */
-    uint16_t size;
+  /**
+  * \brief Size of the structure.
+  *
+  * Needs to be set to the size in bytes of the event attribute
+  * structure used to specify the event.
+  */
+  uint16_t size;
 
-    /** \brief Message type specified in this attribute structure.
-    *
-    * Defines the message format of the attribute structure's \ref nvtxSyncUserAttributes_v0::message
-    * "message" field.
-    *
-    * Default Value is NVTX_MESSAGE_UNKNOWN
-    */
-    int32_t messageType;            /* nvtxMessageType_t */
+  /** \brief Message type specified in this attribute structure.
+  *
+  * Defines the message format of the attribute structure's \ref nvtxSyncUserAttributes_v0::message
+  * "message" field.
+  *
+  * Default Value is NVTX_MESSAGE_UNKNOWN
+  */
+  int32_t messageType;            /* nvtxMessageType_t */
 
-    /** \brief Message assigned to this attribute structure.
-    *
-    * The text message that is attached to an event.
-    */
-    nvtxMessageValue_t message;
+  /** \brief Message assigned to this attribute structure.
+  *
+  * The text message that is attached to an event.
+  */
+  nvtxMessageValue_t message;
 
 } nvtxSyncUserAttributes_v0;
 
 typedef struct nvtxSyncUserAttributes_v0 nvtxSyncUserAttributes_t;
 
 /* ------------------------------------------------------------------------- */
-/** \brief Create a user defined synchronization object 
+/** \brief Create a user defined synchronization object
 * This is used to track non-OS synchronization working with spinlocks and atomics
 *
 * \param domain - Domain to own the resource
@@ -317,7 +313,7 @@ NVTX_DECLSPEC void NVTX_API nvtxDomainSyncUserAcquireStart(nvtxSyncUser_t handle
 /* ------------------------------------------------------------------------- */
 /** \brief Signal to tools of failure in acquiring a user defined synchronization object
 * This should be called after \ref nvtxDomainSyncUserAcquireStart
-* 
+*
 * \param handle - A handle to the object to operate on.
 *
 * \sa

@@ -9,7 +9,9 @@
 #include "comm.h"
 
 ncclResult_t initChannel(struct ncclComm* comm, int channelid);
-ncclResult_t freeChannel(struct ncclChannel* channel, int nRanks);
+ncclResult_t initNvlsChannel(struct ncclComm* comm, int channelId, struct ncclComm* parent, bool share);
+ncclResult_t initCollnetChannel(struct ncclComm* comm, int channelId, struct ncclComm* parent, bool share);
+ncclResult_t freeChannel(struct ncclChannel* channel, int nRanks, int collnetNRanks, int nvlsNRanks);
 static ncclResult_t ncclChannelComputeBase(struct ncclComm* comm, int peer, int coll, int*channelBase) {
   int p2pGroupSize = NCCL_MAX_WORK_ELEMENTS_P2P/2;
   int peerNode = comm->rankToNode[peer];

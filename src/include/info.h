@@ -8,7 +8,7 @@
 #define NCCL_INFO_H_
 
 #include "nccl.h"
-#include "devcomm.h"
+#include "device.h"
 #include "collectives.h"
 #include "core.h"
 #include "utils.h"
@@ -24,6 +24,8 @@ typedef enum : uint8_t {
   ncclPatternTreeUpDown,
   ncclPatternCollnetChain,
   ncclPatternCollnetDirect,
+  ncclPatternNvls,
+  ncclPatternNvlsTree,
   ncclPatternSend,
   ncclPatternRecv
 } ncclPattern_t;
@@ -52,6 +54,8 @@ struct ncclInfo {
   int nChannels;
   int nThreads;
   size_t nBytes;
+  size_t sendbuffSize;
+  size_t recvbuffSize;
   int nstepsPerLoop;
   int nchunksPerLoop;
   int chunkSize;
@@ -65,6 +69,17 @@ inline ncclResult_t ncclInfoSetDerived(struct ncclInfo* info, int nRanks) {
     info->datatype = ncclInt8;
   }
   if (info->coll == ncclFuncAllGather || info->coll == ncclFuncReduceScatter) info->nBytes *= nRanks; // count is per rank
+
+  /* compute buffer size for NVLS buffer registration */
+  if (info->coll == ncclFuncAllGather) {
+    info->sendbuffSize = info->count * ncclTypeSize(info->datatype);
+    info->recvbuffSize = info->sendbuffSize * nRanks;
+  } else if (info->coll == ncclFuncReduceScatter) {
+    info->recvbuffSize = info->count * ncclTypeSize(info->datatype);
+    info->sendbuffSize = info->recvbuffSize * nRanks;
+  } else {
+    info->sendbuffSize = info->recvbuffSize = info->count * ncclTypeSize(info->datatype);
+  }
   return ncclSuccess;
 }
 
@@ -92,7 +107,6 @@ struct ncclCudaStreamList {
   struct ncclCudaStreamList *next;
   cudaStream_t stream;
 };
-
 struct ncclTasks {
   struct Peer {
     bool sendSeen, recvSeen;
@@ -102,7 +116,8 @@ struct ncclTasks {
   struct ncclIntruQueue<ncclTaskColl, &ncclTaskColl::next> collQueue;
   size_t collBytesTotal;
   struct Peer* peers/*[nRanks]*/;
-  int *p2pSendOrder/*[nRanks]*/, *p2pRecvOrder/*[nRanks]*/;
+  int *p2pSendOrder, *p2pRecvOrder;
+  int p2pOrderSteps;
   int nTasksColl, nTasksP2p;
 
   // The list of user streams aggregated over all tasks present.

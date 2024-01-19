@@ -18,11 +18,11 @@
     }                                                       \
 } while(false)
 
-#define CUDACHECKGOTO(cmd, res, label) do {                 \
+#define CUDACHECKGOTO(cmd, RES, label) do {                 \
     cudaError_t err = cmd;                                  \
     if( err != cudaSuccess ) {                              \
         WARN("Cuda failure '%s'", cudaGetErrorString(err)); \
-        res = ncclUnhandledCudaError;                       \
+        RES = ncclUnhandledCudaError;                       \
         goto label;                                         \
     }                                                       \
 } while(false)
@@ -60,11 +60,11 @@
   } \
 } while(true)
 
-#define SYSCHECKGOTO(statement, res, label) do { \
+#define SYSCHECKGOTO(statement, RES, label) do { \
   if ((statement) == -1) {    \
     /* Print the back trace*/ \
-    res = ncclSystemError;    \
-    INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, res);    \
+    RES = ncclSystemError;    \
+    INFO(NCCL_ALL,"%s:%d -> %d (%s)", __FILE__, __LINE__, RES, strerror(errno));    \
     goto label; \
   } \
 } while (0);
@@ -72,16 +72,16 @@
 #define NEQCHECK(statement, value) do {   \
   if ((statement) != value) {             \
     /* Print the back trace*/             \
-    INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, ncclSystemError);    \
+    INFO(NCCL_ALL,"%s:%d -> %d (%s)", __FILE__, __LINE__, ncclSystemError, strerror(errno));    \
     return ncclSystemError;     \
   }                             \
 } while (0);
 
-#define NEQCHECKGOTO(statement, value, res, label) do { \
+#define NEQCHECKGOTO(statement, value, RES, label) do { \
   if ((statement) != value) { \
     /* Print the back trace*/ \
-    res = ncclSystemError;    \
-    INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, res);    \
+    RES = ncclSystemError;    \
+    INFO(NCCL_ALL,"%s:%d -> %d (%s)", __FILE__, __LINE__, RES, strerror(errno));    \
     goto label; \
   } \
 } while (0);
@@ -89,57 +89,57 @@
 #define EQCHECK(statement, value) do {    \
   if ((statement) == value) {             \
     /* Print the back trace*/             \
-    INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, ncclSystemError);    \
+    INFO(NCCL_ALL,"%s:%d -> %d (%s)", __FILE__, __LINE__, ncclSystemError, strerror(errno));    \
     return ncclSystemError;     \
   }                             \
 } while (0);
 
-#define EQCHECKGOTO(statement, value, res, label) do { \
+#define EQCHECKGOTO(statement, value, RES, label) do { \
   if ((statement) == value) { \
     /* Print the back trace*/ \
-    res = ncclSystemError;    \
-    INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, res);    \
+    RES = ncclSystemError;    \
+    INFO(NCCL_ALL,"%s:%d -> %d (%s)", __FILE__, __LINE__, RES, strerror(errno));    \
     goto label; \
   } \
 } while (0);
 
 // Propagate errors up
 #define NCCLCHECK(call) do { \
-  ncclResult_t res = call; \
-  if (res != ncclSuccess && res != ncclInProgress) { \
+  ncclResult_t RES = call; \
+  if (RES != ncclSuccess && RES != ncclInProgress) { \
     /* Print the back trace*/ \
-    if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, res);    \
-    return res; \
+    if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, RES);    \
+    return RES; \
   } \
 } while (0);
 
-#define NCCLCHECKGOTO(call, res, label) do { \
-  res = call; \
-  if (res != ncclSuccess && res != ncclInProgress) { \
+#define NCCLCHECKGOTO(call, RES, label) do { \
+  RES = call; \
+  if (RES != ncclSuccess && RES != ncclInProgress) { \
     /* Print the back trace*/ \
-    if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, res);    \
+    if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, RES);    \
     goto label; \
   } \
 } while (0);
 
 #define NCCLWAIT(call, cond, abortFlagPtr) do {         \
   volatile uint32_t* tmpAbortFlag = (abortFlagPtr);     \
-  ncclResult_t res = call;                \
-  if (res != ncclSuccess && res != ncclInProgress) {               \
-    if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, res);    \
+  ncclResult_t RES = call;                \
+  if (RES != ncclSuccess && RES != ncclInProgress) {               \
+    if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, RES);    \
     return ncclInternalError;             \
   }                                       \
   if (tmpAbortFlag) NEQCHECK(*tmpAbortFlag, 0); \
 } while (!(cond));
 
-#define NCCLWAITGOTO(call, cond, abortFlagPtr, res, label) do { \
+#define NCCLWAITGOTO(call, cond, abortFlagPtr, RES, label) do { \
   volatile uint32_t* tmpAbortFlag = (abortFlagPtr);             \
-  res = call;                             \
-  if (res != ncclSuccess && res != ncclInProgress) {               \
-    if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, res);    \
+  RES = call;                             \
+  if (RES != ncclSuccess && RES != ncclInProgress) {               \
+    if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, RES);    \
     goto label;                           \
   }                                       \
-  if (tmpAbortFlag) NEQCHECKGOTO(*tmpAbortFlag, 0, res, label); \
+  if (tmpAbortFlag) NEQCHECKGOTO(*tmpAbortFlag, 0, RES, label); \
 } while (!(cond));
 
 #define NCCLCHECKTHREAD(a, args) do { \

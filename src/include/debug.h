@@ -4,10 +4,11 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
-#ifndef NCCL_DEBUG_H_
-#define NCCL_DEBUG_H_
+#ifndef NCCL_INT_DEBUG_H_
+#define NCCL_INT_DEBUG_H_
 
-#include "nccl_net.h"
+#include "nccl.h"
+#include "nccl_common.h"
 #include <stdio.h>
 #include <chrono>
 #include <type_traits>

@@ -9,13 +9,14 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <sys/syscall.h>
+#include "param.h"
 
 int ncclDebugLevel = -1;
 static int pid = -1;
 static char hostname[1024];
 thread_local int ncclDebugNoWarn = 0;
 char ncclLastError[1024] = ""; // Global string for the last error in human readable form
-uint64_t ncclDebugMask = NCCL_INIT; // Default debug sub-system mask is INIT
+uint64_t ncclDebugMask = NCCL_INIT|NCCL_ENV; // Default debug sub-system mask is INIT and ENV
 FILE *ncclDebugFile = stdout;
 pthread_mutex_t ncclDebugLock = PTHREAD_MUTEX_INITIALIZER;
 std::chrono::steady_clock::time_point ncclEpoch;
@@ -25,7 +26,7 @@ static __thread int tid = -1;
 void ncclDebugInit() {
   pthread_mutex_lock(&ncclDebugLock);
   if (ncclDebugLevel != -1) { pthread_mutex_unlock(&ncclDebugLock); return; }
-  const char* nccl_debug = getenv("NCCL_DEBUG");
+  const char* nccl_debug = ncclGetEnv("NCCL_DEBUG");
   int tempNcclDebugLevel = -1;
   if (nccl_debug == NULL) {
     tempNcclDebugLevel = NCCL_LOG_NONE;
@@ -45,7 +46,7 @@ void ncclDebugInit() {
    * This can be a comma separated list such as INIT,COLL
    * or ^INIT,COLL etc
    */
-  char* ncclDebugSubsysEnv = getenv("NCCL_DEBUG_SUBSYS");
+  const char* ncclDebugSubsysEnv = ncclGetEnv("NCCL_DEBUG_SUBSYS");
   if (ncclDebugSubsysEnv != NULL) {
     int invert = 0;
     if (ncclDebugSubsysEnv[0] == '^') { invert = 1; ncclDebugSubsysEnv++; }
@@ -74,6 +75,10 @@ void ncclDebugInit() {
         mask = NCCL_ALLOC;
       } else if (strcasecmp(subsys, "CALL") == 0) {
         mask = NCCL_CALL;
+      } else if (strcasecmp(subsys, "PROXY") == 0) {
+        mask = NCCL_PROXY;
+      } else if (strcasecmp(subsys, "NVLS") == 0) {
+        mask = NCCL_NVLS;
       } else if (strcasecmp(subsys, "ALL") == 0) {
         mask = NCCL_ALL;
       }
@@ -93,7 +98,7 @@ void ncclDebugInit() {
    * then create the debug file. But don't bother unless the
    * NCCL_DEBUG level is > VERSION
    */
-  const char* ncclDebugFileEnv = getenv("NCCL_DEBUG_FILE");
+  const char* ncclDebugFileEnv = ncclGetEnv("NCCL_DEBUG_FILE");
   if (tempNcclDebugLevel > NCCL_LOG_VERSION && ncclDebugFileEnv != NULL) {
     int c = 0;
     char debugFn[PATH_MAX+1] = "";
@@ -134,6 +139,8 @@ void ncclDebugInit() {
   pthread_mutex_unlock(&ncclDebugLock);
 }
 
+NCCL_PARAM(WarnSetDebugInfo, "WARN_ENABLE_DEBUG_INFO", 0);
+
 /* Common logging function used by the INFO, WARN and TRACE macros
  * Also exported to the dynamically loadable Net transport modules so
  * they can share the debugging mechanisms and output files
@@ -167,6 +174,7 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
   if (level == NCCL_LOG_WARN) {
     len = snprintf(buffer, sizeof(buffer), "\n%s:%d:%d [%d] %s:%d NCCL WARN ",
                    hostname, pid, tid, cudaDev, filefunc, line);
+    if (ncclParamWarnSetDebugInfo()) ncclDebugLevel = NCCL_LOG_INFO;
   } else if (level == NCCL_LOG_INFO) {
     len = snprintf(buffer, sizeof(buffer), "%s:%d:%d [%d] NCCL INFO ", hostname, pid, tid, cudaDev);
   } else if (level == NCCL_LOG_TRACE && flags == NCCL_CALL) {

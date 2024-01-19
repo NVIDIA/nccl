@@ -4,10 +4,10 @@ PLUGIN_SO:=libnccl-net.so
 
 default: $(PLUGIN_SO)
 
-$(PLUGIN_SO): nccl-fastsocket/net_fastsocket.cc nccl-fastsocket/compat.cc nccl-fastsocket/utilities.cc
+$(PLUGIN_SO): nccl-fastsocket/*.cc
 	$(CC) $(INC) -fPIC -shared -o $@ -Wl,-soname,$(PLUGIN_SO) $^
 
-nccl-fastsocket/%.cc:
+nccl-fastsocket/*.cc:
 	git clone https://github.com/google/nccl-fastsocket.git
 
 install: $(BUILDDIR)/lib/$(PLUGIN_SO)

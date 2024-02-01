@@ -210,6 +210,7 @@ static ncclResult_t shmSendFree(struct ncclConnector* send) {
     NCCLCHECK(ncclShmClose(resources->hostHandle));
     NCCLCHECK(ncclShmClose(resources->remHandle));
     free(resources);
+    send->transportResources = NULL;
   }
   return ncclSuccess;
 }
@@ -220,6 +221,7 @@ static ncclResult_t shmRecvFree(struct ncclConnector* recv) {
     NCCLCHECK(ncclShmClose(resources->hostHandle));
     NCCLCHECK(ncclShmClose(resources->remHandle));
     free(resources);
+    recv->transportResources = NULL;
   }
   return ncclSuccess;
 }
@@ -271,6 +273,7 @@ static ncclResult_t shmSendProxyFree(struct ncclProxyConnection* connection, str
       CUDACHECK(cudaEventDestroy(resources->events[i]));
     }
     free(connection->transportResources);
+    connection->transportResources = NULL;
   }
   return ncclSuccess;
 }
@@ -286,6 +289,7 @@ static ncclResult_t shmRecvProxyFree(struct ncclProxyConnection* connection, str
       CUDACHECK(cudaEventDestroy(resources->events[i]));
     }
     free(connection->transportResources);
+    connection->transportResources = NULL;
   }
   return ncclSuccess;
 }

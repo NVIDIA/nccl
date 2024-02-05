@@ -74,11 +74,11 @@ else:
 ################################################################################
 
 algos_of_coll = {
-  "AllGather":     ["RING","NVLS"],
+  "AllGather":     ["RING","COLLNET_DIRECT","NVLS"],
   "AllReduce":     all_algos,
   "Broadcast":     ["RING"],
   "Reduce":        ["RING"],
-  "ReduceScatter": ["RING","NVLS"],
+  "ReduceScatter": ["RING","COLLNET_DIRECT","NVLS"],
   "SendRecv":      [None]
 }
 

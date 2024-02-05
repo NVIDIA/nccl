@@ -324,10 +324,10 @@ int ncclTransportCollNetSetup(struct ncclComm* comm, struct ncclTopoGraph* collN
     for (int r = 0; r < nranks; r++) {
       if (allConnects[r].isMaster) {
         memcpy(masterConnects+c, &(allConnects[r].connect), sizeof(struct ncclConnect));
-        if (r == rank) rankInCollNet = c;
         c++;
       }
     }
+    if (isMaster) rankInCollNet = comm->node;
   } else { // send side : copy in connect info received from peer recv master
     if (isMaster) memcpy(masterConnects+rankInCollNet, &(sendrecvExchange.connect), sizeof(struct ncclConnect));
   }

@@ -152,7 +152,7 @@ static ncclResult_t shmSendConnect(struct ncclComm* comm, struct ncclConnect* co
   send->conn.head = &resources->devHostMem->head;
 
   if (useMemcpyRecv) {
-    send->conn.sizesFifo = resources->devRemHostMem->sizesFifo;
+    send->conn.connFifo = resources->devRemHostMem->connFifo;
   }
   if (useMemcpySend) {
     int tpProxyRank;
@@ -162,7 +162,7 @@ static ncclResult_t shmSendConnect(struct ncclComm* comm, struct ncclConnect* co
     NCCLCHECK(ncclProxyCallBlocking(comm, &send->proxyConn, ncclProxyMsgConnect, &proxyInfo, sizeof(struct shmProxyInfo), &proxyInfo, sizeof(struct shmProxyInfo)));
     send->conn.buffs[NCCL_PROTO_SIMPLE] = proxyInfo.devFifo;
     send->conn.tail = &proxyInfo.ceRecvMem->tail;
-    send->conn.sizesFifo = proxyInfo.ceRecvMem->sizesFifo;
+    send->conn.connFifo = proxyInfo.ceRecvMem->connFifo;
   }
 
   // We must assign the proxyConn's proxyProgress property for proper checking at enqueue-time
@@ -315,15 +315,15 @@ static ncclResult_t shmSendProxyProgress(struct ncclProxyState* proxyState, stru
       }
       if (sub->transmitted < sub->done + NCCL_STEPS && sub->transmitted < sub->nsteps) {
         int buffSlot = (sub->base+sub->transmitted)%NCCL_STEPS;
-        volatile int* sizesFifo = resources->ceRecvMem->sizesFifo;
+        volatile struct ncclConnFifo* connFifo = resources->ceRecvMem->connFifo;
         volatile uint64_t* recvTail = &resources->ceRecvMem->tail;
         // Check GPU has sent everything
         if ((*recvTail > sub->base+sub->transmitted)) {
-          int size = sizesFifo[buffSlot];
+          int size = connFifo[buffSlot].size;
           CUDACHECK(cudaMemcpyAsync(resources->shmFifo+buffSlot*stepSize, resources->devFifo+buffSlot*stepSize, size, cudaMemcpyDeviceToHost, resources->stream));
           CUDACHECK(cudaEventRecord(resources->events[buffSlot], resources->stream));
-          resources->recvMem->sizesFifo[buffSlot] = size;
-          __sync_synchronize(); // make sure sizesFifo is visible
+          resources->recvMem->connFifo[buffSlot].size = size;
+          __sync_synchronize(); // make sure connFifo[].size is visible
           sub->transmitted += args->sliceSteps;
         }
       }
@@ -374,11 +374,11 @@ static ncclResult_t shmRecvProxyProgress(struct ncclProxyState* proxyState, stru
       }
       if (sub->transmitted < sub->done + NCCL_STEPS && sub->transmitted < sub->nsteps) {
         int buffSlot = (sub->base+sub->transmitted)%NCCL_STEPS;
-        volatile int* sizesFifo = resources->recvMem->sizesFifo;
+        volatile struct ncclConnFifo* connFifo = resources->recvMem->connFifo;
         volatile uint64_t* recvTail = &resources->recvMem->tail;
         // Check data is ready in SHM
         if ((*recvTail > sub->base+sub->transmitted)) {
-          int size = sizesFifo[buffSlot];
+          int size = connFifo[buffSlot].size;
           CUDACHECK(cudaMemcpyAsync(resources->devFifo+buffSlot*stepSize, resources->shmFifo+buffSlot*stepSize, size, cudaMemcpyHostToDevice, resources->stream));
           CUDACHECK(cudaEventRecord(resources->events[buffSlot], resources->stream));
           sub->transmitted += args->sliceSteps;

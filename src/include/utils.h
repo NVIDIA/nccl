@@ -30,6 +30,11 @@ uint64_t getHostHash();
 uint64_t getPidHash();
 ncclResult_t getRandomData(void* buffer, size_t bytes);
 
+const char* ncclOpToString(ncclRedOp_t op);
+const char* ncclDatatypeToString(ncclDataType_t type);
+const char* ncclAlgoToString(int algo);
+const char* ncclProtoToString(int proto);
+
 struct netIf {
   char prefix[64];
   int port;
@@ -391,6 +396,36 @@ void ncclIntruQueueFreeAll(ncclIntruQueue<T,next> *me, ncclMemoryPool *pool) {
     T *tmp = head->*next;
     ncclMemoryPoolFree(pool, tmp);
     head = tmp;
+  }
+}
+
+/* cmp function determines the sequence of objects in the queue. If cmp returns value >= 0, it means a > b,
+ * and we should put a before b; otherwise, b should be put ahead of a. */
+template<typename T, T *T::*next>
+inline void ncclIntruQueueSortEnqueue(ncclIntruQueue<T,next> *me, T *x, int (*cmp)(T *a, T *b)) {
+  T *cur = me->head;
+  T *prev = NULL;
+
+  if (cur == NULL) {
+    x->*next = nullptr;
+    me->tail = me->head = x;
+  } else {
+    while (cur) {
+      if (cmp(cur, x) > 0) {
+        prev = cur;
+        cur = cur->next;
+      } else {
+        break;
+      }
+    }
+
+    x->*next = cur;
+    if (prev) {
+      prev->*next = x;
+      if (cur == NULL) me->tail = x;
+    } else {
+      me->head = x;
+    }
   }
 }
 

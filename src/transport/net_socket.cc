@@ -96,6 +96,7 @@ ncclResult_t ncclNetSocketGetProperties(int dev, ncclNetProperties_t* props) {
   props->pciPath = ncclNetSocketDevs[dev].pciPath;
   props->guid = dev;
   props->ptrSupport = NCCL_PTR_HOST;
+  props->regIsGlobal = 0;
   NCCLCHECK(ncclNetSocketGetSpeed(props->name, &props->speed));
   props->latency = 0; // Not set
   props->port = 0;
@@ -534,7 +535,7 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclNetSocketRegMr(void* comm, void* data, int size, int type, void** mhandle) {
+ncclResult_t ncclNetSocketRegMr(void* comm, void* data, size_t size, int type, void** mhandle) {
   return (type != NCCL_PTR_HOST) ? ncclInternalError : ncclSuccess;
 }
 ncclResult_t ncclNetSocketDeregMr(void* comm, void* mhandle) { return ncclSuccess; }

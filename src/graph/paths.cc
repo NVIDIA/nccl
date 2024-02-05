@@ -341,6 +341,23 @@ compare:
   return ncclSuccess;
 }
 
+// MNNVL: Check whether peers are in the same fabric cluster and clique
+ncclResult_t ncclTopoCheckMNNVL(struct ncclTopoSystem* system, struct ncclPeerInfo* info1, struct ncclPeerInfo* info2, int* ret) {
+  *ret = 0;
+
+  nvmlGpuFabricInfoV_t *fabricInfo1 = &info1->fabricInfo;
+  nvmlGpuFabricInfoV_t *fabricInfo2 = &info2->fabricInfo;
+  // A zero UUID means we don't have MNNVL fabric info
+  if ((((long *)&fabricInfo2->clusterUuid)[0]|((long *)fabricInfo2->clusterUuid)[1]) == 0) return ncclSuccess;
+  if ((memcmp(fabricInfo1->clusterUuid, fabricInfo2->clusterUuid, NVML_GPU_FABRIC_UUID_LEN) == 0) &&
+      (fabricInfo1->cliqueId == fabricInfo2->cliqueId)) {
+    INFO(NCCL_NET, "MNNVL matching peer 0x%lx UUID %lx.%lx cliqueId 0x%x",
+         info2->busId, ((long *)fabricInfo2->clusterUuid)[0], ((long *)fabricInfo2->clusterUuid)[1], fabricInfo2->cliqueId);
+    *ret = 1;
+  }
+  return ncclSuccess;
+}
+
 NCCL_PARAM(NetGdrRead, "NET_GDR_READ", -2);
 int ncclTopoUserGdrLevel = -1;
 
@@ -652,7 +669,8 @@ ncclResult_t ncclTopoTrimSystem(struct ncclTopoSystem* system, struct ncclComm* 
     NCCLCHECK(ncclTopoRemoveNode(system, GPU, g));
   }
 
-  if (system->nodes[GPU].count == comm->nRanks) {
+  // MNNVL: Remove network nodes as they are connected via NVLink
+  if (system->nodes[GPU].count == comm->nRanks || comm->MNNVL) {
     for (int n=system->nodes[NET].count-1; n>=0; n--)
       NCCLCHECK(ncclTopoRemoveNode(system, NET, n));
   }
@@ -666,10 +684,11 @@ void ncclTopoFree(struct ncclTopoSystem* system) {
   free(system);
 }
 
-NCCL_PARAM(NChannelsPerNetPeer, "NCHANNELS_PER_NET_PEER", 2);
+NCCL_PARAM(NChannelsPerNetPeer, "NCHANNELS_PER_NET_PEER", -1);
 
-static ncclResult_t ncclTopoGetNchannels(struct ncclTopoSystem* system, int g /*local gpu index*/, int peerRank, int* nChannels) {
+static ncclResult_t ncclTopoGetNchannels(struct ncclComm* comm, int g /*local gpu index*/, int peerRank, int* nChannels) {
   int peer;
+  struct ncclTopoSystem* system = comm->topo;
   struct ncclTopoLinkList* path = NULL;
   if (ncclTopoRankToIndex(system, peerRank, &peer) == ncclSuccess) {
     // Same rank
@@ -685,9 +704,28 @@ static ncclResult_t ncclTopoGetNchannels(struct ncclTopoSystem* system, int g /*
     } else {
       *nChannels = 2;
     }
+  } else if (comm->MNNVL) {
+    // MNNVL assume all GPUs are connected via NVLink
+    path = system->nodes[GPU].nodes[g].paths[GPU]+((g+1)%system->nodes[GPU].count);
+    float nvlBw = ncclTopoNVLinkBw(system->nodes[GPU].nodes[g].gpu.cudaCompCap);
+    *nChannels = 2*std::max(1, (int)(path->bw / nvlBw));
   } else {
     // Remote rank, use network
-    *nChannels = ncclParamNChannelsPerNetPeer();
+    int nNetChannels = ncclParamNChannelsPerNetPeer();
+    if (nNetChannels == -1) {
+       //start from 2 channels per NIC and reduce with scale
+       nNetChannels = 2;
+
+       // check if we need to use more than one NIC, hence more than one channel
+       int netCountByBw = 1, nChannelsMax = nNetChannels;
+       NCCLCHECK(getLocalNetCountByBw(system, g, &netCountByBw));
+       // Avoid overloading channels with 8+ operations as we loose the sync warp, hence a bit of bandwidth.
+       while (nChannelsMax*comm->nRanks > comm->p2pnChannels*4 && nChannelsMax > 1) nChannelsMax /= 2;
+
+       //allow upto channels requires to drive the NICs
+       nNetChannels = std::max(netCountByBw, nChannelsMax);
+    }
+    *nChannels = nNetChannels;
   }
   return ncclSuccess;
 }
@@ -716,7 +754,7 @@ ncclResult_t ncclTopoComputeP2pChannels(struct ncclComm* comm) {
   for (int g=0; g<comm->topo->nodes[GPU].count; g++) {
     for (int r=0; r<comm->nRanks; r++) {
       int nChannels;
-      NCCLCHECK(ncclTopoGetNchannels(comm->topo, g, r, &nChannels));
+      NCCLCHECK(ncclTopoGetNchannels(comm, g, r, &nChannels));
       if (nChannels >= 0) minChannels = std::min(minChannels, nChannels);
     }
   }

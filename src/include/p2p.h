@@ -9,10 +9,22 @@
 #ifndef NCCL_P2P_H_
 #define NCCL_P2P_H_
 
-#define NCCL_P2P_HANDLE_TYPE CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR
+#include <cuda.h>
 
-typedef struct {
+#if CUDART_VERSION < 12030
+// MNNVL: FABRIC handle support lifted from CUDA 12.3
+#define CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_FABRIC_SUPPORTED ((CUdevice_attribute)128)
+#define CU_MEM_HANDLE_TYPE_FABRIC ((CUmemAllocationHandleType)0x8ULL)
+#define CU_IPC_HANDLE_SIZE 64
+typedef struct CUmemFabricHandle_st {
+    unsigned char data[CU_IPC_HANDLE_SIZE];
+} CUmemFabricHandle_v1;
+typedef CUmemFabricHandle_v1 CUmemFabricHandle;
+#endif
+
+typedef union {
   uint64_t data; // Needs to hold a CUmemGenericAllocationHandle for UDS fd support
+  CUmemFabricHandle handle;
 } ncclCuDesc;
 
 typedef union {

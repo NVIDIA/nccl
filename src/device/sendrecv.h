@@ -26,13 +26,13 @@ struct RunWork<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
       if (args->proto == NCCL_PROTO_LL) chunkSize /= 2;
       int const peer = args->peer;
       Primitives<T, RedOp, FanAsymmetric<0, 1>, 1, Proto, 1> prims
-        (tid, nthreads, nullptr, &peer, buff, nullptr, /*redOpArg(ignored)=*/0, group, 1, 1, nullptr, ncclShmem.comm.p2pChunkSize/sizeof(T));
+        (tid, nthreads, nullptr, &peer, buff, nullptr, /*redOpArg(ignored)=*/0, group, 1, 1, nullptr, args, ncclShmem.comm.p2pChunkSize/sizeof(T));
       size_t offset = 0;
       do {
         int nelem = min(size_t(chunkSize), count-offset);
         prims.directSend(offset, offset, nelem);
         offset += nelem;
-      } while(offset < count);
+      } while(offset < count && args->reg == 0);
     }
   }
 
@@ -45,13 +45,13 @@ struct RunWork<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE> {
       if (args->proto == NCCL_PROTO_LL) chunkSize /= 2; // This is to account for chunkEffectiveSize
       int const peer = args->peer;
       Primitives<T, RedOp, FanAsymmetric<1, 0>, 1, Proto, 1> prims
-        (tid, nthreads, &peer, nullptr, nullptr, buff, /*redOpArg(ignored)=*/0, group, 1, 1, nullptr, ncclShmem.comm.p2pChunkSize/sizeof(T));
+        (tid, nthreads, &peer, nullptr, nullptr, buff, /*redOpArg(ignored)=*/0, group, 1, 1, nullptr, args, ncclShmem.comm.p2pChunkSize/sizeof(T));
       size_t offset = 0;
       do {
         int nelem = min(size_t(chunkSize), count-offset);
         prims.directRecv(offset, nelem);
         offset += nelem;
-      } while(offset < count);
+      } while(offset < count && args->reg == 0);
     }
   }
 

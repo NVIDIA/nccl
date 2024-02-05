@@ -45,4 +45,15 @@ inline int ncclTypeSize(ncclDataType_t type) {
   }
 }
 
+#include <sys/types.h>
+
+#define NCCL_MODE_NORMAL 0
+#define NCCL_MODE_OFFSET 1
+#define NCCL_MODE_PTR    2
+struct ncclConnFifo {
+  int mode;
+  int offset;
+  ssize_t size;
+  void* ptr;
+};
 #endif

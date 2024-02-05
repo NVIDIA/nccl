@@ -191,6 +191,9 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
     va_start(vargs, fmt);
     len += vsnprintf(buffer+len, sizeof(buffer)-len, fmt, vargs);
     va_end(vargs);
+    // vsnprintf may return len > sizeof(buffer) in the case of a truncated output.
+    // Rewind len so that we can replace the final \0 by \n
+    if (len > sizeof(buffer)) len = sizeof(buffer)-1;
     buffer[len++] = '\n';
     fwrite(buffer, 1, len, ncclDebugFile);
   }

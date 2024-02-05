@@ -16,6 +16,10 @@ extern int ncclCuMemEnable();
 
 #if CUDART_VERSION >= 11030
 #include <cudaTypedefs.h>
+
+// Handle type used for cuMemCreate()
+extern CUmemAllocationHandleType ncclCuMemHandleType;
+
 #else
 typedef CUresult (CUDAAPI *PFN_cuInit_v2000)(unsigned int Flags);
 typedef CUresult (CUDAAPI *PFN_cuDriverGetVersion_v2020)(int *driverVersion);

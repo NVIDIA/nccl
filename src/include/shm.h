@@ -18,6 +18,7 @@ struct ncclShmemCollBuff {
   volatile size_t *cnt[2];
   volatile void *ptr[2];
   int round;
+  size_t maxTypeSize;
 };
 
 ncclResult_t ncclShmemAllgather(struct ncclComm *comm, struct ncclShmemCollBuff *shmem, void *sendbuff, void *recvbuff, size_t typeSize);

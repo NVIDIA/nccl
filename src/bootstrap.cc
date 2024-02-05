@@ -221,6 +221,7 @@ struct bootstrapState {
   struct ncclSocket ringSendSocket;
   union ncclSocketAddress* peerCommAddresses;
   union ncclSocketAddress* peerProxyAddresses;
+  uint64_t* peerProxyAddressesUDS;
   struct unexConn* unexpectedConnections;
   int cudaDev;
   int rank;
@@ -295,6 +296,7 @@ ncclResult_t bootstrapInit(struct ncclBootstrapHandle* handle, struct ncclComm* 
 
   // Create the service proxy
   NCCLCHECK(ncclCalloc(&state->peerProxyAddresses, nranks));
+  NCCLCHECK(ncclCalloc(&state->peerProxyAddressesUDS, nranks));
 
   // proxy is aborted through a message; don't set abortFlag
   NCCLCHECK(ncclCalloc(&proxySocket, 1));
@@ -302,7 +304,10 @@ ncclResult_t bootstrapInit(struct ncclBootstrapHandle* handle, struct ncclComm* 
   NCCLCHECK(ncclSocketListen(proxySocket));
   NCCLCHECK(ncclSocketGetAddr(proxySocket, state->peerProxyAddresses+rank));
   NCCLCHECK(bootstrapAllGather(state, state->peerProxyAddresses, sizeof(union ncclSocketAddress)));
-  NCCLCHECK(ncclProxyInit(comm, proxySocket, state->peerProxyAddresses));
+  // cuMem UDS support
+  state->peerProxyAddressesUDS[rank] = getPidHash()+comm->commHash;
+  NCCLCHECK(bootstrapAllGather(state, state->peerProxyAddressesUDS, sizeof(*state->peerProxyAddressesUDS)));
+  NCCLCHECK(ncclProxyInit(comm, proxySocket, state->peerProxyAddresses, state->peerProxyAddressesUDS));
 
   TRACE(NCCL_INIT, "rank %d nranks %d - DONE", rank, nranks);
 
@@ -355,8 +360,6 @@ ncclResult_t bootstrapSplit(struct ncclBootstrapHandle* handle, struct ncclComm*
     for (int i = 0; i < nranks; ++i) {
       comm->topParentRanks[i] = parent->topParentRanks[parentRanks[i]];
     }
-    comm->proxyState = parent->sharedRes->proxyState;
-    ncclAtomicRefCountIncrement(&parent->sharedRes->proxyState->refCount);
   } else {
     // Create the service proxy
     NCCLCHECKGOTO(ncclCalloc(&state->peerProxyAddresses, nranks), ret, fail);
@@ -366,10 +369,14 @@ ncclResult_t bootstrapSplit(struct ncclBootstrapHandle* handle, struct ncclComm*
     NCCLCHECKGOTO(ncclSocketGetAddr(proxySocket, &tmpAddr), ret, fail);
     memcpy(state->peerProxyAddresses + rank, &tmpAddr, sizeof(union ncclSocketAddress));
     NCCLCHECKGOTO(bootstrapAllGather(state, state->peerProxyAddresses, sizeof(union ncclSocketAddress)), ret, fail);
-    NCCLCHECKGOTO(ncclProxyInit(comm, proxySocket, state->peerProxyAddresses), ret, fail);
+    // cuMem UDS support
+    NCCLCHECKGOTO(ncclCalloc(&state->peerProxyAddressesUDS, nranks), ret, fail);
+    state->peerProxyAddressesUDS[rank] = getPidHash()+comm->commHash;
+    NCCLCHECKGOTO(bootstrapAllGather(state, state->peerProxyAddressesUDS, sizeof(*state->peerProxyAddressesUDS)), ret, fail);
+    NCCLCHECKGOTO(ncclProxyInit(comm, proxySocket, state->peerProxyAddresses, state->peerProxyAddressesUDS), ret, fail);
   }
 
-  INFO(NCCL_INIT, "bootstrapSplit: rank %d nranks %d color %d key %d prev %d next %d - DONE", rank, nranks, color, key, prev, next);
+  INFO(NCCL_INIT, "bootstrapSplit: comm %p parent %p rank %d nranks %d color %d key %d prev %d next %d - DONE", comm, parent, rank, nranks, color, key, prev, next);
 
 exit:
   return ret;
@@ -568,7 +575,7 @@ ncclResult_t bootstrapClose(void* commState) {
   struct bootstrapState* state = (struct bootstrapState*)commState;
   if (state->unexpectedConnections != NULL) {
     unexpectedFree(state);
-    if (*state->abortFlag == 0) {
+    if (__atomic_load_n(state->abortFlag, __ATOMIC_RELAXED) == 0) {
       WARN("Unexpected connections are not empty");
       return ncclInternalError;
     }
@@ -592,6 +599,7 @@ ncclResult_t bootstrapAbort(void* commState) {
   NCCLCHECK(ncclSocketClose(&state->ringRecvSocket));
   free(state->peerCommAddresses);
   free(state->peerProxyAddresses);
+  free(state->peerProxyAddressesUDS);
   free(state);
   return ncclSuccess;
 }

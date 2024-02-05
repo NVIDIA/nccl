@@ -372,13 +372,12 @@ ncclResult_t ncclTopoCompareGraphs(struct ncclTopoSystem* system, struct ncclTop
     return ncclSuccess;
   }
   // 2. Try to get better bandwidth
-  // Give a 15% perf bonus to paths not crossing nics
-  float target = 1.0 - (refGraph->crossNic - graph->crossNic) * .15;
-  if (graph->nChannels*graph->bwIntra > refGraph->nChannels*refGraph->bwIntra*target) {
+  // Give a 5% perf bonus to paths not crossing nics
+  if (graph->nChannels*graph->bwIntra > refGraph->nChannels*refGraph->bwIntra) {
     *copy = 1;
     return ncclSuccess;
   }
-  if (graph->nChannels*graph->bwIntra < refGraph->nChannels*refGraph->bwIntra*target) return ncclSuccess;
+  if (graph->nChannels*graph->bwIntra < refGraph->nChannels*refGraph->bwIntra) return ncclSuccess;
 
   // 3. Less hops
   if (graph->pattern == refGraph->pattern && graph->crossNic == refGraph->crossNic && graph->nHops < refGraph->nHops) *copy = 1;
@@ -484,6 +483,7 @@ ncclResult_t ncclTopoSearchRecGpu(struct ncclTopoSystem* system, struct ncclTopo
         struct ncclTopoNode* net = system->nodes[NET].nodes+n;
         if (graph->pattern == NCCL_TOPO_PATTERN_TREE && net->id != startNet->id) continue; // Trees are symmetric
         if (graph->crossNic != 1 && (net->net.asic != startNet->net.asic || net->net.port != startNet->net.port)) continue;
+        if (graph->crossNic && (graph->nChannels & 1) && net->id != graph->inter[(graph->nChannels-1)*2]) continue;
 
         // Balanced Tree : count half of the bandwidth on first two GPUs
         int nextBackToNet = -1;
@@ -555,6 +555,7 @@ ncclResult_t ncclTopoSearchRecNet(struct ncclTopoSystem* system, struct ncclTopo
     struct ncclTopoNode* net = system->nodes[NET].nodes+n;
     if (graph->collNet && net->net.collSupport == 0) continue;
     if (net->net.bw < bw) continue;
+    if (graph->crossNic && (graph->nChannels & 1) && net->id != graph->inter[(graph->nChannels-1)*2+1]) continue;
 
     graph->inter[graph->nChannels*2] = net->id;
     graph->latencyInter = net->net.latency;
@@ -1071,16 +1072,29 @@ ncclResult_t ncclTopoDumpGraphs(struct ncclTopoSystem* system, int ngraphs, stru
 
 #include "comm.h"
 // NVLS channels aren't compute channels. Find which NIC corresponds to our rank being the head
-ncclResult_t getNvlsNetDev(struct ncclComm* comm, struct ncclTopoGraph* graph, int* dev) {
+ncclResult_t getNvlsNetDev(struct ncclComm* comm, struct ncclTopoGraph* graph, int channelId, int* dev) {
+  ncclResult_t ret = ncclSuccess;
   int localRanks = comm->topo->nodes[GPU].count;
-  for (int c=0; c<graph->nChannels; c++) {
-    if (graph->intra[c*localRanks] == comm->rank) {
-      *dev = graph->inter[c*2];
-      return ncclSuccess;
+  int netNum = 0;
+  int net[MAXCHANNELS];
+  
+  for (int c = 0; c < graph->nChannels; c++) {
+    if (graph->intra[c * localRanks] == comm->rank) {
+      net[netNum++] = graph->inter[c * 2];
     }
   }
+  if (netNum) {
+    *dev = net[channelId % netNum];
+  } else {
+    ret = ncclInternalError;
+    goto fail;
+  }
+
+exit:
+  return ret;
+fail:
   WARN("Could not find NIC for rank %d in NVLS graph\n", comm->rank);
-  return ncclInternalError;
+  goto exit;
 }
 
 // 0: don't use PXN for P2P, 1: use PXN if needed, 2: use PXN as much as possible to maximize aggregation
@@ -1095,7 +1109,7 @@ ncclResult_t ncclTopoGetNetDev(struct ncclComm* comm, int rank, struct ncclTopoG
     if (graph->pattern != NCCL_TOPO_PATTERN_NVLS) {
       *dev = graph->inter[channel*2+index];
     } else {
-      NCCLCHECK(getNvlsNetDev(comm, graph, dev));
+      NCCLCHECK(getNvlsNetDev(comm, graph, channelId, dev));
     }
     NCCLCHECK(ncclTopoGetIntermediateRank(comm->topo, rank, *dev, proxyRank));
   } else if (peerRank == -1) {

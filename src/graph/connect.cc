@@ -414,9 +414,9 @@ ncclResult_t ncclTopoPostset(struct ncclComm* comm, int* firstRanks, int* treePa
      nChannels = comm->nChannels = copyChannels(comm, nChannels, 2*nChannels, ringPrev, ringNext);
   }
 
-  // Double the number of channels when using unpack beyond 4 nodes.
+  // Double the number of channels when using unpack on 2+ nodes
   // We won't automatically double past 16 channels, users can specify 32 if they want
-  if (comm->netDeviceType == NCCL_NET_DEVICE_UNPACK && comm->nNodes > 4 && nChannels < 16 && ncclParamUnpackDoubleChannels()) {
+  if (comm->netDeviceType == NCCL_NET_DEVICE_UNPACK && comm->nNodes > 1 && nChannels < 16 && ncclParamUnpackDoubleChannels()) {
      nChannels = comm->nChannels = copyChannels(comm, nChannels, 2*nChannels, ringPrev, ringNext);
   }
 

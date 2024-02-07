@@ -206,6 +206,7 @@ struct ncclComm {
   struct ncclTopoSystem* topo;
 
   ncclNet_t* ncclNet;
+  ncclNetDeviceType netDeviceType;
   ncclCollNet_t* ncclCollNet;
   void* bootstrap;
   // Bitmasks for ncclTransportP2pSetup

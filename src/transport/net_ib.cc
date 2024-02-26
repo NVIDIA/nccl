@@ -87,6 +87,7 @@ NCCL_PARAM(IbTc, "IB_TC", 0);
 NCCL_PARAM(IbArThreshold, "IB_AR_THRESHOLD", 8192);
 NCCL_PARAM(IbPciRelaxedOrdering, "IB_PCI_RELAXED_ORDERING", 2);
 NCCL_PARAM(IbAdaptiveRouting, "IB_ADAPTIVE_ROUTING", -2);
+NCCL_PARAM(IbFifoTc, "IB_FIFO_TC", 0);
 
 pthread_t ncclIbAsyncThread;
 static void* ncclIbAsyncThreadMain(void* args) {
@@ -698,7 +699,7 @@ ncclResult_t ncclIbCreateQp(uint8_t ib_port, struct ncclIbNetCommDevBase* base, 
   return ncclSuccess;
 }
 
-ncclResult_t ncclIbRtrQp(struct ibv_qp* qp, uint32_t dest_qp_num, struct ncclIbDevInfo* info) {
+ncclResult_t ncclIbRtrQp(struct ibv_qp* qp, uint32_t dest_qp_num, struct ncclIbDevInfo* info, bool override_tc) {
   struct ibv_qp_attr qpAttr;
   memset(&qpAttr, 0, sizeof(struct ibv_qp_attr));
   qpAttr.qp_state = IBV_QPS_RTR;
@@ -714,7 +715,11 @@ ncclResult_t ncclIbRtrQp(struct ibv_qp* qp, uint32_t dest_qp_num, struct ncclIbD
     qpAttr.ah_attr.grh.flow_label = 0;
     qpAttr.ah_attr.grh.sgid_index = ncclParamIbGidIndex();
     qpAttr.ah_attr.grh.hop_limit = 255;
-    qpAttr.ah_attr.grh.traffic_class = ncclParamIbTc();
+    if(ncclParamIbFifoTc() && override_tc) {
+    qpAttr.ah_attr.grh.traffic_class = ncclParamIbFifoTc();
+    } else {
+      qpAttr.ah_attr.grh.traffic_class = ncclParamIbTc();
+    }
   } else {
     qpAttr.ah_attr.is_global = 0;
     qpAttr.ah_attr.dlid = info->lid;
@@ -853,7 +858,7 @@ ib_connect_check:
         // Print just the QPs for this dev
         if (comm->base.qps[q].devIndex == i)
           INFO(NCCL_NET,"NET/IB: %s %d IbDev %d Port %d qpn %d mtu %d query_ece={supported=%d, vendor_id=0x%x, options=0x%x, comp_mask=0x%x} GID %ld (%lX/%lX) fifoRkey=0x%x fifoLkey=0x%x",
-            comm->base.ndevs > 2 ? "NCCL MergedDev" : "NCCL Dev", dev, 
+            comm->base.ndevs > 2 ? "NCCL MergedDev" : "NCCL Dev", dev,
             commDev->base.ibDevN, ibDev->portNum, meta.qpInfo[q].qpn, devInfo->mtu, meta.qpInfo[q].ece_supported, meta.qpInfo[q].ece.vendor_id, meta.qpInfo[q].ece.options, meta.qpInfo[q].ece.comp_mask, ncclParamIbGidIndex(),
             devInfo->spn, devInfo->iid, devInfo->fifoRkey, commDev->fifoMr->lkey);
       }
@@ -928,7 +933,7 @@ ib_connect:
     if (remQpInfo->ece_supported && remQpInfo->ece_supported)
       NCCLCHECK(wrap_ibv_set_ece(qp, &remQpInfo->ece, &remQpInfo->ece_supported));
 
-    NCCLCHECK(ncclIbRtrQp(qp, remQpInfo->qpn, remDevInfo));
+    NCCLCHECK(ncclIbRtrQp(qp, remQpInfo->qpn, remDevInfo, false));
     NCCLCHECK(ncclIbRtsQp(qp));
   }
 
@@ -1057,14 +1062,18 @@ ib_recv:
     // Set the ece (enhanced connection establishment) on this QP before RTR
     if (remMeta.qpInfo[q].ece_supported) {
       NCCLCHECK(wrap_ibv_set_ece(qp->qp, &remMeta.qpInfo[q].ece, &meta.qpInfo[q].ece_supported));
-  
+
       // Query the reduced ece for this QP (matching enhancements between the requestor and the responder)
       // Store this in our own qpInfo for returning to the requestor
       if (meta.qpInfo[q].ece_supported)
         NCCLCHECK(wrap_ibv_query_ece(qp->qp, &meta.qpInfo[q].ece, &meta.qpInfo[q].ece_supported));
     }
 
-    NCCLCHECK(ncclIbRtrQp(qp->qp, remMeta.qpInfo[q].qpn, remDevInfo));
+    if(q == 0) {
+      NCCLCHECK(ncclIbRtrQp(qp->qp, remMeta.qpInfo[q].qpn, remDevInfo, true));
+    } else {
+      NCCLCHECK(ncclIbRtrQp(qp->qp, remMeta.qpInfo[q].qpn, remDevInfo, false));
+    }
     NCCLCHECK(ncclIbRtsQp(qp->qp));
   }
 
@@ -1097,7 +1106,7 @@ ib_recv:
       devInfo.spn         = rCommDev->base.gidInfo.localGid.global.subnet_prefix;
       devInfo.iid         = rCommDev->base.gidInfo.localGid.global.interface_id;
       devInfo.mtu         = ibDev->portAttr.active_mtu;
-      NCCLCHECK(ncclIbRtrQp(rCommDev->gpuFlush.qp.qp, rCommDev->gpuFlush.qp.qp->qp_num, &devInfo));
+      NCCLCHECK(ncclIbRtrQp(rCommDev->gpuFlush.qp.qp, rCommDev->gpuFlush.qp.qp->qp_num, &devInfo, false));
       NCCLCHECK(ncclIbRtsQp(rCommDev->gpuFlush.qp.qp));
     }
 
@@ -1811,4 +1820,3 @@ ncclNet_t ncclNetIb = {
   NULL /* getDeviceMr */,
   NULL /* irecvConsumed */
 };
-

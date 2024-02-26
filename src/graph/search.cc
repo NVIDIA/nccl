@@ -1077,7 +1077,7 @@ ncclResult_t getNvlsNetDev(struct ncclComm* comm, struct ncclTopoGraph* graph, i
   int localRanks = comm->topo->nodes[GPU].count;
   int netNum = 0;
   int net[MAXCHANNELS];
-  
+
   for (int c = 0; c < graph->nChannels; c++) {
     if (graph->intra[c * localRanks] == comm->rank) {
       net[netNum++] = graph->inter[c * 2];

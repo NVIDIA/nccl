@@ -1660,6 +1660,9 @@ ncclResult_t ncclProxyInit(struct ncclComm* comm, struct ncclSocket* sock, union
   comm->proxyState->listenSock = sock;
   comm->proxyState->peerAddresses = peerAddresses;
   comm->proxyState->peerAddressesUDS = peerAddressesUDS;
+
+  // UDS support
+  NCCLCHECK(ncclIpcSocketInit(&comm->proxyState->ipcSock, comm->rank, peerAddressesUDS[comm->rank], comm->abortFlag));
   // Seed the random number generator for UDS filename generation
   struct timeval time;
   gettimeofday(&time,NULL);
@@ -1693,8 +1696,7 @@ ncclResult_t ncclProxyCreate(struct ncclComm* comm) {
     ncclSetThreadName(comm->proxyState->thread, "NCCL Service %2d", comm->cudaDev);
 
     // UDS support
-    INFO(NCCL_PROXY, "UDS: Creating service thread comm %p rank %d pidHash %lx", comm, comm->rank, comm->peerInfo[comm->rank].pidHash);
-    NCCLCHECK(ncclIpcSocketInit(&comm->proxyState->ipcSock, comm->rank, comm->peerInfo[comm->rank].pidHash, comm->abortFlag));
+    INFO(NCCL_PROXY, "UDS: Creating service thread comm %p rank %d", comm, comm->rank);
     pthread_create(&comm->proxyState->threadUDS, NULL, ncclProxyServiceUDS, comm->proxyState);
     ncclSetThreadName(comm->proxyState->threadUDS, "NCCL UDS Service %2d", comm->cudaDev);
   }

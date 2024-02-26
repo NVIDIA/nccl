@@ -305,7 +305,10 @@ ncclResult_t bootstrapInit(struct ncclBootstrapHandle* handle, struct ncclComm* 
   NCCLCHECK(ncclSocketGetAddr(proxySocket, state->peerProxyAddresses+rank));
   NCCLCHECK(bootstrapAllGather(state, state->peerProxyAddresses, sizeof(union ncclSocketAddress)));
   // cuMem UDS support
-  state->peerProxyAddressesUDS[rank] = getPidHash()+comm->commHash;
+  // Make sure we create a unique UDS socket name
+  uint64_t randId;
+  NCCLCHECK(getRandomData(&randId, sizeof(randId)));
+  state->peerProxyAddressesUDS[rank] = getPidHash()+randId;
   NCCLCHECK(bootstrapAllGather(state, state->peerProxyAddressesUDS, sizeof(*state->peerProxyAddressesUDS)));
   NCCLCHECK(ncclProxyInit(comm, proxySocket, state->peerProxyAddresses, state->peerProxyAddressesUDS));
 
@@ -371,7 +374,10 @@ ncclResult_t bootstrapSplit(struct ncclBootstrapHandle* handle, struct ncclComm*
     NCCLCHECKGOTO(bootstrapAllGather(state, state->peerProxyAddresses, sizeof(union ncclSocketAddress)), ret, fail);
     // cuMem UDS support
     NCCLCHECKGOTO(ncclCalloc(&state->peerProxyAddressesUDS, nranks), ret, fail);
-    state->peerProxyAddressesUDS[rank] = getPidHash()+comm->commHash;
+    // Make sure we create a unique UDS socket name
+    uint64_t randId;
+    NCCLCHECKGOTO(getRandomData(&randId, sizeof(randId)), ret, fail);
+    state->peerProxyAddressesUDS[rank] = getPidHash()+randId;
     NCCLCHECKGOTO(bootstrapAllGather(state, state->peerProxyAddressesUDS, sizeof(*state->peerProxyAddressesUDS)), ret, fail);
     NCCLCHECKGOTO(ncclProxyInit(comm, proxySocket, state->peerProxyAddresses, state->peerProxyAddressesUDS), ret, fail);
   }

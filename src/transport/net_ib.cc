@@ -853,7 +853,7 @@ ib_connect_check:
         // Print just the QPs for this dev
         if (comm->base.qps[q].devIndex == i)
           INFO(NCCL_NET,"NET/IB: %s %d IbDev %d Port %d qpn %d mtu %d query_ece={supported=%d, vendor_id=0x%x, options=0x%x, comp_mask=0x%x} GID %ld (%lX/%lX) fifoRkey=0x%x fifoLkey=0x%x",
-            comm->base.ndevs > 2 ? "NCCL MergedDev" : "NCCL Dev", dev, 
+            comm->base.ndevs > 2 ? "NCCL MergedDev" : "NCCL Dev", dev,
             commDev->base.ibDevN, ibDev->portNum, meta.qpInfo[q].qpn, devInfo->mtu, meta.qpInfo[q].ece_supported, meta.qpInfo[q].ece.vendor_id, meta.qpInfo[q].ece.options, meta.qpInfo[q].ece.comp_mask, ncclParamIbGidIndex(),
             devInfo->spn, devInfo->iid, devInfo->fifoRkey, commDev->fifoMr->lkey);
       }

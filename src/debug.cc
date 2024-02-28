@@ -360,32 +360,29 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
 
   // Add level specific formatting.
   if (level == NCCL_LOG_WARN) {
-    len += snprintf(buffer+len, sizeof(buffer)-len, "[%d] %s:%d NCCL WARN ", cudaDev, filefunc, line);
+    len += snprintf(buffer+len, sizeof(buffer)-len, "[%d] %s:%d NCCL WARN %s\n", cudaDev, filefunc, line, fmt);
     if (ncclWarnSetDebugInfo) __atomic_store_n(&ncclDebugLevel, NCCL_LOG_INFO, __ATOMIC_RELEASE);
   } else if (level == NCCL_LOG_INFO) {
-    len += snprintf(buffer+len, sizeof(buffer)-len, "[%d] NCCL INFO ", cudaDev);
+    len += snprintf(buffer+len, sizeof(buffer)-len, "[%d] NCCL INFO %s\n", cudaDev, fmt);
   } else if (level == NCCL_LOG_TRACE && flags == NCCL_CALL) {
-    len += snprintf(buffer+len, sizeof(buffer)-len, "NCCL CALL ");
+    len += snprintf(buffer+len, sizeof(buffer)-len, "NCCL CALL %s\n", fmt);
   } else if (level == NCCL_LOG_TRACE) {
     auto delta = std::chrono::steady_clock::now() - ncclEpoch;
     double timestamp = std::chrono::duration_cast<std::chrono::duration<double>>(delta).count()*1000;
-    len += snprintf(buffer+len, sizeof(buffer)-len, "[%d] %f %s:%d NCCL TRACE ", cudaDev, timestamp, filefunc, line);
+    len += snprintf(buffer+len, sizeof(buffer)-len, "[%d] %f %s:%d NCCL TRACE %s\n", cudaDev, timestamp, filefunc, line, fmt);
   }
-  len = std::min(len, sizeof(buffer)-1);  // prevent overflows
+  if (len >= sizeof(buffer)) {
+    // If the prefixed format string overflows, make sure it is at least correctly truncated
+    buffer[sizeof(buffer)-1] = '\0';
+    buffer[sizeof(buffer)-2] = '\n';
+  }
 
   // Add the message as given by the call site.
+  // The call site's format string has been incorporated into `buffer` along with our prefix.
   va_list vargs;
   va_start(vargs, fmt);
-  len += vsnprintf(buffer+len, sizeof(buffer)-len, fmt, vargs);
+  (void) vfprintf(ncclDebugFile, buffer, vargs);
   va_end(vargs);
-  // vsnprintf may return len >= sizeof(buffer) in the case of a truncated output.
-  // Rewind len so that we can replace the final \0 by "\n"
-  len = std::min(len, sizeof(buffer)-1);  // prevent overflows
-
-  // Add a newline and write it to the debug file. No terminating null is
-  // necessary since we write bytes instead of the string.
-  buffer[len++] = '\n';
-  fwrite(buffer, 1, len, ncclDebugFile);
   pthread_mutex_unlock(&ncclDebugLock);
 }
 

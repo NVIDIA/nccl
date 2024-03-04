@@ -40,7 +40,7 @@ struct ncclProxyOp {
   uint64_t opCount;
   int root;
   int next;
-  int nsteps;
+  // int nsteps;
   int chunkSize;
   uint8_t sliceSteps;
   uint8_t chunkSteps;

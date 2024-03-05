@@ -30,7 +30,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
   uint64_t recvConnHead;
 
   struct ncclConnInfo* sendConn = NULL;
-  volatile int* sendConnFifoPtr = NULL;
+  volatile struct ncclConnFifo* sendConnFifo = NULL;
   volatile uint64_t* sendConnTailPtr = NULL;
   uint64_t sendConnTail;
   volatile uint64_t* sendConnHeadPtr = NULL;
@@ -71,8 +71,8 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
         sendConnHeadCache = *sendConnHeadPtr;
         if (checkAbort(spins, wid, 1)) break;
       }
-      if (sendConnFifoPtr) {
-        sendConnFifoPtr[sendStep[wid]%NCCL_STEPS] = nbytes;
+      if (sendConnFifo) {
+        sendConnFifo[sendStep[wid]%NCCL_STEPS].size = nbytes;
       }
       sendConnHead += 1;
     }
@@ -350,10 +350,10 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
       sendConnHeadPtr = sendConn->head;
       sendConnHeadCache = *sendConnHeadPtr;
       sendConnHead = sendConn->step;
-      sendConnFifoPtr = sendConn->sizesFifo;
+      sendConnFifo = sendConn->connFifo;
     }
     if (tid >= nthreads-WARP_SIZE && wid<fan.nsend()) {
-      if (sendConn->sizesFifo) {
+      if (sendConn->connFifo) {
         sendConnTailPtr = sendConn->tail;
         sendConnTail = sendConn->step;
       }

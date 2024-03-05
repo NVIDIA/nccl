@@ -14,6 +14,9 @@
 // This env var (NCCL_CUMEM_ENABLE) toggles cuMem API usage
 NCCL_PARAM(CuMemEnable, "CUMEM_ENABLE", -2);
 
+// Handle type used for cuMemCreate()
+CUmemAllocationHandleType ncclCuMemHandleType = CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
+
 static int ncclCuMemSupported = 0;
 
 // Determine whether CUMEM & VMM RDMA is supported on this platform

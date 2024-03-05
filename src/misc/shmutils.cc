@@ -169,7 +169,7 @@ ncclResult_t ncclShmemAllgather(struct ncclComm *comm, struct ncclShmemCollBuff 
   int curRound = shmem->round;
   size_t mycnt;
 
-  if (comm == NULL || shmem == NULL || sendbuff == NULL || recvbuff == NULL) {
+  if (comm == NULL || shmem == NULL || sendbuff == NULL || recvbuff == NULL || shmem->maxTypeSize < typeSize) {
     ret = ncclInvalidArgument;
     goto exit;
   }
@@ -184,7 +184,7 @@ ncclResult_t ncclShmemAllgather(struct ncclComm *comm, struct ncclShmemCollBuff 
     uint64_t t0 = clockNano();
     while(__atomic_load_n(shmem->cnt[curRound], __ATOMIC_ACQUIRE) != comm->localRanks + 1) {
       if (clockNano() - t0 >= 5 * 1000) sched_yield();
-      if (*comm->abortFlag == 1) {
+      if (__atomic_load_n(comm->abortFlag, __ATOMIC_RELAXED) == 1) {
         ret = ncclInternalError;
         goto exit;
       }

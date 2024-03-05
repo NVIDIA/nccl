@@ -26,7 +26,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
   uint64_t recvConnHead;
 
   struct ncclConnInfo* sendConn = NULL;
-  volatile int* sendConnFifoPtr = NULL;
+  volatile struct ncclConnFifo* sendConnFifo = NULL;
   volatile uint64_t* sendConnHeadPtr = NULL;
   uint64_t sendConnHead;
   uint64_t sendConnHeadCache; // Cache last seen value
@@ -68,9 +68,9 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
         sendConnHeadCache = *sendConnHeadPtr;
         if (checkAbort(spins, 1)) break;
       }
-      if (sendConnFifoPtr) {
+      if (sendConnFifo) {
         int size = ((sendConnHead & NCCL_LL_CLEAN_MASK) == NCCL_LL_CLEAN_MASK) ? stepLines*sizeof(union ncclLLFifoLine) : nbytes;
-        sendConnFifoPtr[sendConnHead%NCCL_STEPS] = size;
+        sendConnFifo[sendConnHead%NCCL_STEPS].size = size;
       }
       sendConnHead += 1;
     }
@@ -315,7 +315,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
       sendConnHeadPtr = sendConn->head;
       sendConnHeadCache = *sendConnHeadPtr;
       sendConnHead = sendConn->step;
-      sendConnFifoPtr = sendConn->sizesFifo;
+      sendConnFifo = sendConn->connFifo;
     }
   }
 
@@ -323,7 +323,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
   __device__  Primitives(
       const int tid, const int nthreads, int const *recvPeers, int const *sendPeers,
       void const *inputBuf, void *outputBuf, uint64_t redOpArg, uint8_t group=0,
-      uint8_t connIndexRecv=0, uint8_t connIndexSend=0, struct ncclWorkElem* e = nullptr, int stepSize_=0
+      uint8_t connIndexRecv=0, uint8_t connIndexSend=0, struct ncclWorkElem* e = nullptr, struct ncclWorkElemP2p* p2p = nullptr, int stepSize_=0
     ):
     redOp(redOpArg),
     tid(tid), nthreads(nthreads), wid(tid%WARP_SIZE), group(group),

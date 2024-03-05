@@ -30,25 +30,25 @@ ncclResult_t ncclLoadTunerPlugin(ncclTuner_t** tuner) {
     if (name) {
       INFO(NCCL_TUNING, "NCCL_TUNER_PLUGIN set to %s", name);
       tunerPluginLib = dlopen(name, RTLD_LAZY | RTLD_LOCAL);
-    }
-    if (tunerPluginLib == nullptr) {
-      // dlopen does not guarantee to set errno, but dlerror only gives us a
-      // string, so checking errno doesn't hurt to try to provide a better
-      // error message
-      if (errno == ENOENT) {
-        INFO(NCCL_TUNING, "Tuner: no plugin found '%s', using default tuner instead.", name);
+      if (tunerPluginLib == nullptr) {
+        // dlopen does not guarantee to set errno, but dlerror only gives us a
+        // string, so checking errno doesn't hurt to try to provide a better
+        // error message
+        if (errno == ENOENT) {
+          INFO(NCCL_TUNING, "Tuner: no plugin found '%s', using default tuner instead.", name);
+        } else {
+          INFO(NCCL_TUNING, "Tuner: plugin load '%s' returned error (%d : %s), using default tuner instead.", name, errno, dlerror());
+        }
       } else {
-        INFO(NCCL_TUNING, "Tuner: plugin load '%s' returned error (%d : %s), using default tuner instead.", name, errno, dlerror());
-      }
-    } else {
-      tunerSymbol = (ncclTuner_t*)dlsym(tunerPluginLib, NCCL_TUNER_PLUGIN_SYMBOL);
-      if (tunerSymbol == nullptr) {
-        INFO(NCCL_TUNING, "Tuner: failed to find " NCCL_TUNER_PLUGIN_SYMBOL " in plugin (%s), using default tuner instead.", name);
-        dlclose(tunerPluginLib);
-        tunerPluginLib = nullptr;
-      } else {
-        INFO(NCCL_TUNING, "Opened tuner: '%s'", tunerSymbol->name);
-        tunerPluginRefCount = 0;
+        tunerSymbol = (ncclTuner_t*)dlsym(tunerPluginLib, NCCL_TUNER_PLUGIN_SYMBOL);
+        if (tunerSymbol == nullptr) {
+          INFO(NCCL_TUNING, "Tuner: failed to find " NCCL_TUNER_PLUGIN_SYMBOL " in plugin (%s), using default tuner instead.", name);
+          dlclose(tunerPluginLib);
+          tunerPluginLib = nullptr;
+        } else {
+          INFO(NCCL_TUNING, "Opened tuner: '%s'", tunerSymbol->name);
+          tunerPluginRefCount = 0;
+        }
       }
     }
   }

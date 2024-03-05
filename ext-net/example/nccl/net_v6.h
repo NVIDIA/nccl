@@ -5,6 +5,8 @@
 #ifndef NCCL_NET_V6_H_
 #define NCCL_NET_V6_H_
 
+#define NCCL_NET_MAX_REQUESTS_V6 8
+
 typedef struct {
   char* name;     // Used mostly for logging.
   char* pciPath;  // Path to the PCI device in /sys.

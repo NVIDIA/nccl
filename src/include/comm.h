@@ -14,6 +14,7 @@
 #include "proxy.h"
 #include "strongstream.h"
 #include "nccl_net.h"
+#include "register.h"
 
 #if CUDART_VERSION < 9000
 struct cudaLaunchParams {
@@ -54,8 +55,7 @@ struct ncclRecvMem {
     struct {
       uint64_t tail;
       char pad1[CACHE_LINE_SIZE-sizeof(uint64_t)];
-      int sizesFifo[NCCL_STEPS];
-      int offsFifo[NCCL_STEPS];
+      struct ncclConnFifo connFifo[NCCL_STEPS];
       int flush; // For GDRCopy-based flush
     };
     char pad4[MEM_ALIGN];
@@ -169,7 +169,6 @@ struct ncclKernelPlan {
   // A kernel plan is also a callback that reclaims itself. Hence this must
   // be the first member.
   struct ncclCommCallback reclaimer;
-  struct ncclMemoryPool memPool_ncclProxyOp; // memory to return to comm in cleanup
 
   struct ncclComm* comm;
   struct ncclKernelPlan* next;
@@ -200,23 +199,7 @@ struct ncclKernelPlan {
     struct ncclIntruQueue<struct ncclWorkList, &ncclWorkList::next> workQueue;
     struct ncclIntruQueue<struct ncclProxyOp, &ncclProxyOp::enqNext> proxyOpQueue;
   } channels[MAXCHANNELS];
-};
-
-struct ncclRegRequest {
-  uintptr_t buff;
-  size_t size;
-  struct ncclRegRequest *next;
-};
-
-struct ncclRegRecord {
-  uintptr_t buff;
-  size_t size;
-  CUdeviceptr regAddr;
-  size_t regSize;
-  int dev;
-  CUmemGenericAllocationHandle mcHandle;
-  uintptr_t *addrs; /* use to check if NVLS buffers match among intra-node ranks */
-  struct ncclRegRecord *next;
+  size_t maxBytesPerChannel;
 };
 
 struct ncclComm {
@@ -262,6 +245,7 @@ struct ncclComm {
   int* localRankToRank;
   // localRanks and localRanktoRank for all nodes
   struct ncclNodeRanks* nodeRanks;
+  int MNNVL; // MNNVL: Multi-Node NVLink
 
   bool checkPointers;
   bool dmaBufSupport;
@@ -270,8 +254,9 @@ struct ncclComm {
   uint64_t opCount;
 
   // Channels for collectives
-  int nChannels;
-  int nvlsChannels;
+  int nChannels; // connection nChannels
+  int collChannels; // enqueue nChannels
+  int nvlsChannels; // enqueue nChannels
   int collNetChannels;
   // Channels (per peer) for p2p
   int p2pnChannels;
@@ -334,6 +319,9 @@ struct ncclComm {
   int intraHighestTransportType;
   int* collNetHeads;
   int collNetHeadsNum;
+  int collNetHeadsUniqueNum;
+  int* collNetDenseToUserRank;
+  int* collNetUserToDenseRank;
   /* sharable collNet proxy progress resource. */
   struct ncclCollNetSharedRes* collNetSharedRes;
 
@@ -342,8 +330,6 @@ struct ncclComm {
   int nvlsRegSupport;
   /* sharable NVLS resource. */
   struct ncclNvlsSharedRes* nvlsResources;
-
-  ssize_t channelSize; // User requested work size (bytes) for channel partitions
 
   // pools backed by comm->memPermanent
   struct ncclMemoryPool memPool_ncclProxyOp;
@@ -380,13 +366,10 @@ struct ncclComm {
   // group job to support multi-thread FT
   struct ncclGroupJob *groupJob;
 
-  /* store to buffer register request */
-  struct ncclIntruQueue<struct ncclRegRequest, &ncclRegRequest::next> regRequestQueue;
-  /* store registered buffer */
-  struct ncclIntruQueue<struct ncclRegRecord, &ncclRegRecord::next> regRecordQueue;
-
   // Tuning plugin
   ncclTuner_t* tuner;
+  // buffer registration cache
+  struct ncclRegCache regCache;
 };
 
 enum ncclLaunchMode {

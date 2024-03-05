@@ -35,4 +35,7 @@ ncclResult_t ncclIpcSocketGetFd(struct ncclIpcSocket* handle, int* fd);
 ncclResult_t ncclIpcSocketRecvFd(struct ncclIpcSocket *handle, int *fd);
 ncclResult_t ncclIpcSocketSendFd(struct ncclIpcSocket *handle, const int fd, int rank, uint64_t hash);
 
+ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, const int sendFd, int rank, uint64_t hash);
+ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, int *recvFd);
+
 #endif /* NCCL_IPCSOCKET_H */

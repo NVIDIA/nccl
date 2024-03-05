@@ -96,8 +96,7 @@ struct ncclConnInfo {
   void **ptrExchange; // Pointer exchange for direct communication
   uint64_t* redOpArgExchange; // PreOp scaler exchange for direct pull case
 
-  int *sizesFifo;     // Sizes fifo from GPU to proxy
-  int *offsFifo;      // Buffer fifo from proxy to GPU
+  struct ncclConnFifo* connFifo; // Used for GPU - Proxy communication
 
   uint64_t step;      // Keep where we are
   uint64_t llLastCleaning;
@@ -151,6 +150,9 @@ struct ncclDirect {
   int nHeads;   // Number of parallel N<->1<->net operations we'll do in parallel; size of up/down
   int headRank; // Index in 0..nHeads-1 I am the head rank of. -1 if I'm not a head rank (no local NIC)
   int shift;    // Shuffling of send/recv for scatter/gather operations, basically localRank%nHeads
+  // The heads[...] are guaranteed to be in rotated order start with self:
+  //   headRank, (headRank+1)%nHeads, (headRank+2)%nHeads, ...
+  int heads[NCCL_MAX_DIRECT_ARITY+1];
   int up[NCCL_MAX_DIRECT_ARITY];
   int down[NCCL_MAX_DIRECT_ARITY];
 };
@@ -210,21 +212,28 @@ struct ncclWorkElem {
   union {
     uint8_t flagBits;
     struct {
-      uint8_t isUsed:1, redOpArgIsPtr:1, regUsed:1;
+      uint8_t isUsed:1, redOpArgIsPtr:1, regUsed:1, oneNode:1;
     };
   };
   uint8_t nWarps;
   uint8_t direct;
-
-  const void * sendbuff;
-  void * recvbuff;
+  uint32_t root;
+  const void *sendbuff;
+  void *recvbuff;
 
   size_t count;
-  size_t lastChunkSize;
-  uint32_t root;
-  uint8_t bid;
-  uint8_t nChannels;
   uint64_t redOpArg;
+  uint64_t chunkCount:25, workCount:39;
+  union {
+    struct {
+      uint64_t lastChunkCount:25;
+      uint64_t workOffset:39;
+    };
+    struct {
+      uint64_t bid:32;
+      uint64_t nChannels:32;
+    };
+  };
 };
 
 #define NCCL_MAX_WORK_ELEMENTS ((NCCL_WORK_SIZE - alignUp(sizeof(ncclWorkHeader), alignof(ncclWorkElem)))/sizeof(ncclWorkElem))
@@ -235,7 +244,8 @@ struct ncclWorkElemP2p {
   int proto : 2;
 
   enum ncclWorkP2PType p2pType;
-  uint8_t nWarps;
+  uint8_t reg:1;
+  uint8_t nWarps:5;
   uint8_t warpStart;
   uint8_t ngroups;
   // Important not to use any fields with greater than 4-byte alignment since
@@ -296,12 +306,16 @@ struct alignas(16) ncclDevChannel {
 struct ncclDevComm {
   int rank;
   int nRanks;
+  int node;
+  int nNodes;
   int buffSizes[NCCL_NUM_PROTOCOLS];
   int p2pChunkSize;
 
   // Operation list for aggregation
   int workFifoDepth;
   struct ncclWork* workFifoHeap; // may be cudaHost or GDR memory
+
+  int* collNetDenseToUserRank;
 
   // Flag to ask NCCL kernels to abort
   volatile uint32_t* abortFlag;
@@ -415,46 +429,54 @@ inline int ncclDevFuncId(int coll, int devRedOp, int type, int algo, int proto) 
   #else
   constexpr int NumTypes = ncclNumTypes + 1;
   #endif
+  int row;
+  do {
+    row = 0; // ncclDevFuncIndex_P2p
+    if (coll == ncclFuncSendRecv) break;
+    row += 1;
 
-  int row = 0; // ncclDevFuncIndex_P2p
-  if (coll == ncclFuncSendRecv) goto have_row;
-  row += 1;
+    int nAlgos = 3;
+    if (coll == ncclFuncAllGather) {
+      int algo1 = algo == NCCL_ALGO_RING ? 0 :
+                  algo == NCCL_ALGO_COLLNET_DIRECT ? 1 :
+                /*algo == NCCL_ALGO_NVLS*/ 2;
+      row += algo1*NCCL_NUM_PROTOCOLS + proto;
+      break;
+    }
+    row += nAlgos*NCCL_NUM_PROTOCOLS;
 
-  if (coll == ncclFuncAllGather) {
-    int algo1 = algo == NCCL_ALGO_RING ? 0 :
-              /*algo == NCCL_ALGO_NVLS*/ 1;
-    row += algo1*NCCL_NUM_PROTOCOLS + proto;
-    goto have_row;
-  }
-  row += (/*NumAlgos=*/2)*NCCL_NUM_PROTOCOLS;
+    nAlgos = 1;
+    if (coll == ncclFuncBroadcast) {
+      row += proto;
+      break;
+    }
+    row += nAlgos*NCCL_NUM_PROTOCOLS;
 
-  if (coll == ncclFuncBroadcast) {
-    row += proto;
-    goto have_row;
-  }
-  row += (/*NumAlgos=*/1)*NCCL_NUM_PROTOCOLS;
+    nAlgos = NCCL_NUM_ALGORITHMS;
+    if (coll == ncclFuncAllReduce) {
+      row += ((devRedOp*NumTypes + type)*nAlgos + algo)*NCCL_NUM_PROTOCOLS + proto;
+      break;
+    }
+    row += ncclNumDevRedOps*NumTypes*nAlgos*NCCL_NUM_PROTOCOLS;
 
-  if (coll == ncclFuncAllReduce) {
-    row += ((devRedOp*NumTypes + type)*NCCL_NUM_ALGORITHMS + algo)*NCCL_NUM_PROTOCOLS + proto;
-    goto have_row;
-  }
-  row += ncclNumDevRedOps*NumTypes*NCCL_NUM_ALGORITHMS*NCCL_NUM_PROTOCOLS;
+    nAlgos = 1;
+    if (coll == ncclFuncReduce) {
+      row += (devRedOp*NumTypes + type)*NCCL_NUM_PROTOCOLS + proto;
+      break;
+    }
+    row += ncclNumDevRedOps*NumTypes*nAlgos*NCCL_NUM_PROTOCOLS;
 
-  if (coll == ncclFuncReduce) {
-    row += (devRedOp*NumTypes + type)*NCCL_NUM_PROTOCOLS + proto;
-    goto have_row;
-  }
-  row += ncclNumDevRedOps*NumTypes*(/*NumAlgos=*/1)*NCCL_NUM_PROTOCOLS;
+    nAlgos = 3;
+    if (coll == ncclFuncReduceScatter) {
+      int algo1 = algo == NCCL_ALGO_RING ? 0 :
+                  algo == NCCL_ALGO_COLLNET_DIRECT ? 1 :
+                /*algo == NCCL_ALGO_NVLS*/ 2;
+      row += ((devRedOp*NumTypes + type)*nAlgos + algo1)*NCCL_NUM_PROTOCOLS + proto;
+      break;
+    }
+    row += ncclNumDevRedOps*NumTypes*nAlgos*NCCL_NUM_PROTOCOLS;
+  } while (false);
 
-  if (coll == ncclFuncReduceScatter) {
-    int algo1 = algo == NCCL_ALGO_RING ? 0 :
-              /*algo == NCCL_ALGO_NVLS*/ 1;
-    row += ((devRedOp*NumTypes + type)*2 + algo1)*NCCL_NUM_PROTOCOLS + proto;
-    goto have_row;
-  }
-  row += ncclNumDevRedOps*NumTypes*(/*NumAlgos=*/2)*NCCL_NUM_PROTOCOLS;
-
-have_row:
   return ncclDevFuncRowToId[row];
 }
 

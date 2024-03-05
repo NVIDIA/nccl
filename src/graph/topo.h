@@ -14,7 +14,7 @@
 #define SM60_NVLINK_BW 18.0
 #define SM70_NVLINK_BW 20.0
 #define SM80_NVLINK_BW 20.0
-#define SM90_NVLINK_BW 20.0
+#define SM90_NVLINK_BW 20.6
 #define SM86_NVLINK_BW 12.0
 #define PCI_BW 12.0           // PCI Gen3 x16
 #define QPI_BW 6.0

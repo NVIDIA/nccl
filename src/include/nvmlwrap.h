@@ -20,6 +20,12 @@
 // Dynamically handle dependencies on NVML
 
 /* Extracted from nvml.h */
+
+#define NVML_API_VERSION            12
+
+#define NVML_STRUCT_VERSION(data, ver) (unsigned int)(sizeof(nvml ## data ## _v ## ver ## _t) | \
+                                                      (ver << 24U))
+
 typedef struct nvmlDevice_st* nvmlDevice_t;
 #define NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE   16
 
@@ -181,6 +187,72 @@ typedef struct nvmlFieldValue_st
     nvmlValue_t value;          //!< Value for this field. This is only valid if nvmlReturn == NVML_SUCCESS
 } nvmlFieldValue_t;
 
+
+#define NVML_GPU_FABRIC_UUID_LEN 16
+
+#define NVML_GPU_FABRIC_STATE_NOT_SUPPORTED 0
+#define NVML_GPU_FABRIC_STATE_NOT_STARTED   1
+#define NVML_GPU_FABRIC_STATE_IN_PROGRESS   2
+#define NVML_GPU_FABRIC_STATE_COMPLETED     3
+
+typedef unsigned char nvmlGpuFabricState_t;
+
+typedef struct {
+    unsigned char        clusterUuid[NVML_GPU_FABRIC_UUID_LEN]; //!< Uuid of the cluster to which this GPU belongs
+    nvmlReturn_t         status;                                //!< Error status, if any. Must be checked only if state returns "complete".
+    unsigned int         cliqueId;                              //!< ID of the fabric clique to which this GPU belongs
+    nvmlGpuFabricState_t state;                                 //!< Current state of GPU registration process
+} nvmlGpuFabricInfo_t;
+
+#define NVML_GPU_FABRIC_HEALTH_MASK_DEGRADED_BW_NOT_SUPPORTED 0
+#define NVML_GPU_FABRIC_HEALTH_MASK_DEGRADED_BW_TRUE          1
+#define NVML_GPU_FABRIC_HEALTH_MASK_DEGRADED_BW_FALSE         2
+
+#define NVML_GPU_FABRIC_HEALTH_MASK_SHIFT_DEGRADED_BW 0
+#define NVML_GPU_FABRIC_HEALTH_MASK_WIDTH_DEGRADED_BW 0x11
+
+/**
+ * GPU Fabric Health Status Mask for various fields can be obtained
+ * using the below macro.
+ * Ex - NVML_GPU_FABRIC_HEALTH_GET(var, _DEGRADED_BW)
+ */
+#define NVML_GPU_FABRIC_HEALTH_GET(var, type)             \
+    (((var) >> NVML_GPU_FABRIC_HEALTH_MASK_SHIFT##type) & \
+     (NVML_GPU_FABRIC_HEALTH_MASK_WIDTH##type))
+
+/**
+ * GPU Fabric Health Status Mask for various fields can be tested
+ * using the below macro.
+ * Ex - NVML_GPU_FABRIC_HEALTH_TEST(var, _DEGRADED_BW, _TRUE)
+ */
+#define NVML_GPU_FABRIC_HEALTH_TEST(var, type, val) \
+    (NVML_GPU_FABRIC_HEALTH_GET(var, type) ==       \
+     NVML_GPU_FABRIC_HEALTH_MASK##type##val)
+
+/**
+* GPU Fabric information (v2).
+*
+* Version 2 adds the \ref nvmlGpuFabricInfo_v2_t.version field
+* to the start of the structure, and the \ref nvmlGpuFabricInfo_v2_t.healthMask
+* field to the end. This structure is not backwards-compatible with
+* \ref nvmlGpuFabricInfo_t.
+*/
+typedef struct {
+    unsigned int         version;                               //!< Structure version identifier (set to \ref nvmlGpuFabricInfo_v2)
+    unsigned char        clusterUuid[NVML_GPU_FABRIC_UUID_LEN]; //!< Uuid of the cluster to which this GPU belongs
+    nvmlReturn_t         status;                                //!< Error status, if any. Must be checked only if state returns "complete".
+    unsigned int         cliqueId;                              //!< ID of the fabric clique to which this GPU belongs
+    nvmlGpuFabricState_t state;                                 //!< Current state of GPU registration process
+    unsigned int         healthMask;                            //!< GPU Fabric health Status Mask
+} nvmlGpuFabricInfo_v2_t;
+
+typedef nvmlGpuFabricInfo_v2_t nvmlGpuFabricInfoV_t;
+
+/**
+* Version identifier value for \ref nvmlGpuFabricInfo_v2_t.version.
+*/
+#define nvmlGpuFabricInfo_v2 NVML_STRUCT_VERSION(GpuFabricInfo, 2)
+
 /* End of nvml.h */
 #endif // NCCL_NVML_DIRECT
 
@@ -210,5 +282,6 @@ ncclResult_t ncclNvmlDeviceGetNvLinkCapability(nvmlDevice_t device, unsigned int
 ncclResult_t ncclNvmlDeviceGetCudaComputeCapability(nvmlDevice_t device, int* major, int* minor);
 ncclResult_t ncclNvmlDeviceGetP2PStatus(nvmlDevice_t device1, nvmlDevice_t device2, nvmlGpuP2PCapsIndex_t p2pIndex, nvmlGpuP2PStatus_t* p2pStatus);
 ncclResult_t ncclNvmlDeviceGetFieldValues(nvmlDevice_t device, int valuesCount, nvmlFieldValue_t *values);
+ncclResult_t ncclNvmlDeviceGetGpuFabricInfoV(nvmlDevice_t device, nvmlGpuFabricInfoV_t *gpuFabricInfo);
 
 #endif // End include guard

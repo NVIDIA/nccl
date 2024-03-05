@@ -283,6 +283,7 @@ ncclResult_t ncclSocketGetAddrFromString(union ncclSocketAddress* ua, const char
       sin6.sin6_flowinfo = 0;                          // needed by IPv6, but possibly obsolete
       sin6.sin6_scope_id = 0;                          // should be global scope, set to 0
     } else {
+      freeaddrinfo(p);
       WARN("Net : unsupported IP family");
       return ncclInvalidArgument;
     }

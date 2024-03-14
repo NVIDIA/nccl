@@ -928,8 +928,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   do {
     // Compute intra-process ranks
     int intraProcRank0 = -1, intraProcRank = -1, intraProcRanks = 0;
-    for (int i = 0; i < nranks; i++) comm->minCompCap = std::min(comm->minCompCap, comm->peerInfo[rank].cudaCompCap);
-    for (int i = 0; i < nranks; i++) comm->maxCompCap = std::max(comm->maxCompCap, comm->peerInfo[rank].cudaCompCap);
+    for (int i = 0; i < nranks; i++) comm->minCompCap = std::min(comm->minCompCap, comm->peerInfo[i].cudaCompCap);
+    for (int i = 0; i < nranks; i++) comm->maxCompCap = std::max(comm->maxCompCap, comm->peerInfo[i].cudaCompCap);
 
     comm->nvlsRegSupport = 1;
     for (int i = 0; i < nranks; i++) {

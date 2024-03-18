@@ -156,6 +156,8 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
     va_start(vargs, fmt);
     (void) vsnprintf(ncclLastError, sizeof(ncclLastError), fmt, vargs);
     va_end(vargs);
+    // Make sure ncclLastError is always null-terminated
+    ncclLastError[sizeof(ncclLastError)-1] = '\0';
     pthread_mutex_unlock(&ncclDebugLock);
   }
   if (ncclDebugLevel < level || ((flags & ncclDebugMask) == 0)) return;
@@ -172,30 +174,29 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
   char buffer[1024];
   size_t len = 0;
   if (level == NCCL_LOG_WARN) {
-    len = snprintf(buffer, sizeof(buffer), "\n%s:%d:%d [%d] %s:%d NCCL WARN ",
-                   hostname, pid, tid, cudaDev, filefunc, line);
+    len = snprintf(buffer, sizeof(buffer), "\n%s:%d:%d [%d] %s:%d NCCL WARN %s\n",
+                   hostname, pid, tid, cudaDev, filefunc, line, fmt);
     if (ncclParamWarnSetDebugInfo()) ncclDebugLevel = NCCL_LOG_INFO;
   } else if (level == NCCL_LOG_INFO) {
-    len = snprintf(buffer, sizeof(buffer), "%s:%d:%d [%d] NCCL INFO ", hostname, pid, tid, cudaDev);
+    len = snprintf(buffer, sizeof(buffer), "%s:%d:%d [%d] NCCL INFO %s\n", hostname, pid, tid, cudaDev, fmt);
   } else if (level == NCCL_LOG_TRACE && flags == NCCL_CALL) {
-    len = snprintf(buffer, sizeof(buffer), "%s:%d:%d NCCL CALL ", hostname, pid, tid);
+    len = snprintf(buffer, sizeof(buffer), "%s:%d:%d NCCL CALL %s\n", hostname, pid, tid, fmt);
   } else if (level == NCCL_LOG_TRACE) {
     auto delta = std::chrono::steady_clock::now() - ncclEpoch;
     double timestamp = std::chrono::duration_cast<std::chrono::duration<double>>(delta).count()*1000;
-    len = snprintf(buffer, sizeof(buffer), "%s:%d:%d [%d] %f %s:%d NCCL TRACE ",
-                   hostname, pid, tid, cudaDev, timestamp, filefunc, line);
+    len = snprintf(buffer, sizeof(buffer), "%s:%d:%d [%d] %f %s:%d NCCL TRACE %s\n",
+                   hostname, pid, tid, cudaDev, timestamp, filefunc, line, fmt);
   }
-
+  if (len >= sizeof(buffer)) {
+    // If the string overflows, make sure it is at least correctly truncated
+    buffer[sizeof(buffer)-1] = '\0';
+    buffer[sizeof(buffer)-2] = '\n';
+  }
   if (len) {
     va_list vargs;
     va_start(vargs, fmt);
-    len += vsnprintf(buffer+len, sizeof(buffer)-len, fmt, vargs);
+    vfprintf(ncclDebugFile, buffer, vargs);
     va_end(vargs);
-    // vsnprintf may return len > sizeof(buffer) in the case of a truncated output.
-    // Rewind len so that we can replace the final \0 by \n
-    if (len > sizeof(buffer)) len = sizeof(buffer)-1;
-    buffer[len++] = '\n';
-    fwrite(buffer, 1, len, ncclDebugFile);
   }
 }
 

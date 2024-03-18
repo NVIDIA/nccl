@@ -142,7 +142,7 @@ static ncclResult_t doLaunches(struct ncclComm* head) {
     }
 
     while (true) { // Iterate rounds of launches for clique.
-      bool moreRounds;
+      bool moreRounds = false;
       comm = cliqueHead;
       do { // Iterate clique members.
         struct ncclComm* next = comm->groupNext;
@@ -150,7 +150,7 @@ static ncclResult_t doLaunches(struct ncclComm* head) {
           // Barrier reduction result tells us if this was the final round.
           moreRounds = 0 != ncclCommIntraBarrierOut(comm);
         } else {
-          moreRounds = comm->unlaunchedPlansHead != nullptr;
+          moreRounds |= comm->unlaunchedPlansHead != nullptr;
         }
         if (moreRounds) {
           // Pop next unlaunched kernel

@@ -433,6 +433,15 @@ ncclResult_t pncclGroupStart();
 ncclResult_t  ncclGroupEnd();
 ncclResult_t pncclGroupEnd();
 
+/*
+ * Enable and disable NCCL proxy thread profiler.
+ */
+#define NCCL_PROXY_PROFILER_ENABLED 1
+ncclResult_t ncclProfilerEnable();
+ncclResult_t ncclProfilerDisable();
+void ncclProfilingDump(const char* filename);
+ncclResult_t ncclCollectiveRecord(const char* name, char type);
+
 /* Register CUDA buffer for zero-copy operation */
 ncclResult_t  ncclCommRegister(const ncclComm_t comm, void* buff, size_t size, void** handle);
 ncclResult_t pncclCommRegister(const ncclComm_t comm, void* buff, size_t size, void** handle);

@@ -359,6 +359,7 @@ static ncclResult_t ncclProxyOpToArgs(struct ncclProxyOp* op, struct ncclProxyAr
   sub->nsteps = op->nsteps;
   sub->nbytes = op->nbytes;
   sub->peer = op->root;
+  sub->nChannels = op->nChannels;
   sub->reg = op->reg;
   sub->buffer = op->buffer;
   args->nsubs = subIndex+1;
@@ -598,6 +599,7 @@ ncclResult_t ncclProxyComputeP2p(struct ncclInfo* info, struct ncclProxyOp* op, 
   memset(op, 0, sizeof(struct ncclProxyOp));
   int channelId = info->channelId;
   struct ncclChannel* channel = info->comm->channels+channelId;
+  op->nChannels = info->comm->nChannels;
   op->channelId = channelId;
   op->sliceSteps = 1;
   op->chunkSteps = 1;

@@ -48,7 +48,7 @@ static ncclResult_t ncclNet_v7_as_v8_getProperties(int dev, ncclNetProperties_v8
 }
 
 static ncclResult_t ncclNet_v7_as_v8_regMr(void* comm, void* data, size_t size, int type, void** mhandle) {
-  if (size >= 1<<31) return ncclInternalError;
+  if (size >= 1UL<<31) return ncclInternalError;
   return ncclNet_v7->regMr(comm, data, (int) size, type, mhandle);
 }
 
@@ -95,7 +95,7 @@ static ncclResult_t ncclNet_v6_as_v8_getProperties(int dev, ncclNetProperties_v8
 }
 
 static ncclResult_t ncclNet_v6_as_v8_regMr(void* comm, void* data, size_t size, int type, void** mhandle) {
-  if (size >= 1<<31) return ncclInternalError;
+  if (size >= 1UL<<31) return ncclInternalError;
   return ncclNet_v6->regMr(comm, data, (int) size, type, mhandle);
 }
 
@@ -150,7 +150,7 @@ static ncclResult_t ncclNet_v5_as_v8_getProperties(int dev, ncclNetProperties_v8
 }
 
 static ncclResult_t ncclNet_v5_as_v8_regMr(void* comm, void* data, size_t size, int type, void** mhandle) {
-  if (size >= 1<<31) return ncclInternalError;
+  if (size >= 1UL<<31) return ncclInternalError;
   return ncclNet_v5->regMr(comm, data, (int) size, type, mhandle);
 }
 
@@ -207,7 +207,7 @@ static ncclResult_t ncclCollNet_v5_as_v8_getProperties(int dev, ncclNetPropertie
 }
 
 static ncclResult_t ncclCollNet_v5_as_v8_regMr(void* comm, void* data, size_t size, int type, void** mhandle) {
-  if (size >= 1<<31) return ncclInternalError;
+  if (size >= 1UL<<31) return ncclInternalError;
   return ncclCollNet_v5->regMr(comm, data, (int) size, type, mhandle);
 }
 
@@ -254,7 +254,7 @@ static ncclResult_t ncclCollNet_v6_as_v8_getProperties(int dev, ncclNetPropertie
 }
 
 static ncclResult_t ncclCollNet_v6_as_v8_regMr(void* comm, void* data, size_t size, int type, void** mhandle) {
-  if (size >= 1<<31) return ncclInternalError;
+  if (size >= 1UL<<31) return ncclInternalError;
   return ncclCollNet_v6->regMr(comm, data, (int) size, type, mhandle);
 }
 
@@ -301,7 +301,7 @@ static ncclResult_t ncclCollNet_v7_as_v8_getProperties(int dev, ncclNetPropertie
 }
 
 static ncclResult_t ncclCollNet_v7_as_v8_regMr(void* comm, void* data, size_t size, int type, void** mhandle) {
-  if (size >= 1<<31) return ncclInternalError;
+  if (size >= 1UL<<31) return ncclInternalError;
   return ncclCollNet_v7->regMr(comm, data, (int) size, type, mhandle);
 }
 

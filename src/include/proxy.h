@@ -34,6 +34,8 @@ union ncclProxyOpSpecifics {
 struct ncclProxyOp {
   struct ncclProxyConnection* connection;
   void* buffer;
+  uint16_t nsteps;
+  uint16_t nChannels;
   ssize_t nbytes;
   uint64_t opCount;
   int root;
@@ -62,6 +64,7 @@ struct ncclProxySubArgs {
   void* mhandle;
   int channelId;
   int nsteps;
+  int nChannels;
   ssize_t nbytes;
   int peer;
 

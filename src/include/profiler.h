@@ -8,6 +8,7 @@
 #define NCCL_PROFILER_H_
 
 #include "proxy.h"
+#define NCCL_PROXY_PROFILER_ENABLED 1
 
 enum ncclProxyProfileState {
   ncclProxyProfileBegin = 0,
@@ -32,6 +33,9 @@ enum ncclProxyProfileState {
 };
 
 ncclResult_t ncclProfilingRecord(struct ncclProxyArgs* args, int sub, int step, int state);
-void ncclProfilingDump();
+ncclResult_t ncclProfilerEnable();
+ncclResult_t ncclProfilerDisable();
+void ncclProfilingDump(const char* filename = "//");
+ncclResult_t ncclCollectiveRecord(const char* name, char type);
 
 #endif

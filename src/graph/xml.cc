@@ -376,9 +376,7 @@ ncclResult_t ncclTopoSetAttrFromSys(struct ncclXmlNode* pciNode, const char* pat
 }
 
 ncclResult_t ncclTopoGetXmlFromCpu(struct ncclXmlNode* cpuNode, struct ncclXml* xml) {
-  int index;
-  NCCLCHECK(xmlGetAttrIndex(cpuNode, "affinity", &index));
-  if (index == -1) {
+  if (!xmlHasAttr(cpuNode, "affinity")) {
     const char* numaId;
     NCCLCHECK(xmlGetAttr(cpuNode, "numaid", &numaId));
     if (numaId == NULL) {
@@ -391,8 +389,7 @@ ncclResult_t ncclTopoGetXmlFromCpu(struct ncclXmlNode* cpuNode, struct ncclXml* 
     NCCLCHECK(ncclTopoSetAttrFromSys(cpuNode, cpumaskPath, "cpumap", "affinity"));
   }
 
-  NCCLCHECK(xmlGetAttrIndex(cpuNode, "arch", &index));
-  if (index == -1) {
+  if (!xmlHasAttr(cpuNode, "arch")) {
     // Fill CPU type / vendor / model
 #if defined(__PPC__)
     NCCLCHECK(xmlSetAttr(cpuNode, "arch", "ppc64"));
@@ -404,8 +401,7 @@ ncclResult_t ncclTopoGetXmlFromCpu(struct ncclXmlNode* cpuNode, struct ncclXml* 
   }
 
 #if defined(__x86_64__)
-  NCCLCHECK(xmlGetAttrIndex(cpuNode, "vendor", &index));
-  if (index == -1) {
+  if (!xmlHasAttr(cpuNode, "vendor")) {
     union {
       struct {
         // CPUID 0 String register order
@@ -424,8 +420,7 @@ ncclResult_t ncclTopoGetXmlFromCpu(struct ncclXmlNode* cpuNode, struct ncclXml* 
     NCCLCHECK(xmlSetAttr(cpuNode, "vendor", vendor));
   }
 
-  NCCLCHECK(xmlGetAttrIndex(cpuNode, "familyid", &index));
-  if (index == -1) {
+  if (!xmlHasAttr(cpuNode, "familyid")) {
     union {
       struct {
         unsigned steppingId:4;
@@ -483,27 +478,21 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
   if (path) {
     NCCLCHECK(ncclTopoSetAttrFromSys(pciNode, path, "class", "class"));
   }
-  int index;
   ncclDebugNoWarn = NCCL_GRAPH;
-  NCCLCHECK(xmlGetAttrIndex(pciNode, "vendor", &index));
-  if (index == -1) {
+  if (!xmlHasAttr(pciNode, "vendor")) {
     if (path) ncclTopoSetAttrFromSys(pciNode, path, "vendor", "vendor");
   }
-  NCCLCHECK(xmlGetAttrIndex(pciNode, "device", &index));
-  if (index == -1) {
+  if (!xmlHasAttr(pciNode, "device")) {
     if (path) ncclTopoSetAttrFromSys(pciNode, path, "device", "device");
   }
-  NCCLCHECK(xmlGetAttrIndex(pciNode, "subsystem_vendor", &index));
-  if (index == -1) {
+  if (!xmlHasAttr(pciNode, "subsystem_vendor")) {
     if (path) ncclTopoSetAttrFromSys(pciNode, path, "subsystem_vendor", "subsystem_vendor");
   }
-  NCCLCHECK(xmlGetAttrIndex(pciNode, "subsystem_device", &index));
-  if (index == -1) {
+  if (!xmlHasAttr(pciNode, "subsystem_device")) {
     if (path) ncclTopoSetAttrFromSys(pciNode, path, "subsystem_device", "subsystem_device");
   }
   ncclDebugNoWarn = 0;
-  NCCLCHECK(xmlGetAttrIndex(pciNode, "link_speed", &index));
-  if (index == -1) {
+  if (!xmlHasAttr(pciNode, "link_speed")) {
     if (path) {
       char deviceSpeedStr[MAX_STR_LEN];
       float deviceSpeed = FLT_MAX;
@@ -518,8 +507,7 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
       NCCLCHECK(xmlSetAttr(pciNode, "link_speed", ""));
     }
   }
-  NCCLCHECK(xmlGetAttrIndex(pciNode, "link_width", &index));
-  if (index == -1) {
+  if (!xmlHasAttr(pciNode, "link_width")) {
     if (path) {
       char strValue[MAX_STR_LEN];
       NCCLCHECK(ncclTopoGetStrFromSys(path, "max_link_width", strValue));
@@ -613,19 +601,15 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
   NCCLCHECK(xmlGetSub(pciNode, "gpu", &gpuNode));
   if (gpuNode == NULL) NCCLCHECK(xmlAddNode(xml, pciNode, "gpu", &gpuNode));
 
-  int index = -1;
-
   int dev = -1;
-  NCCLCHECK(xmlGetAttrIndex(gpuNode, "dev", &index));
-  if (index == -1) {
+  if (!xmlHasAttr(gpuNode, "dev")) {
     NCCLCHECK(ncclNvmlDeviceGetIndex(nvmlDev, (unsigned int*)&dev));
     NCCLCHECK(xmlSetAttrInt(gpuNode, "dev", dev));
   }
   NCCLCHECK(xmlGetAttrInt(gpuNode, "dev", &dev));
   if (dev == -1) { *gpuNodeRet = NULL; return ncclSuccess; }
 
-  NCCLCHECK(xmlGetAttrIndex(gpuNode, "sm", &index));
-  if (index == -1) {
+  if (!xmlHasAttr(gpuNode, "sm")) {
     int cudaMajor, cudaMinor;
     if (nvmlDev == NULL) {
       cudaDeviceProp devProp;
@@ -736,9 +720,7 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
   for (int s=0; s<gpuNode->nSubs; s++) {
     struct ncclXmlNode* sub = gpuNode->subs[s];
     if (strcmp(sub->name, "nvlink") != 0) continue;
-    int index;
-    NCCLCHECK(xmlGetAttrIndex(sub, "tclass", &index));
-    if (index == -1) {
+    if (!xmlHasAttr(sub, "tclass")) {
       const char* busId;
       NCCLCHECK(xmlGetAttr(sub, "target", &busId));
       char* path;

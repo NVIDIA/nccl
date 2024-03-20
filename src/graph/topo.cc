@@ -360,9 +360,7 @@ ncclResult_t ncclTopoAddNic(struct ncclXmlNode* xmlNic, struct ncclTopoSystem* s
   for (int s=0; s<xmlNic->nSubs; s++) {
     struct ncclXmlNode* xmlNet = xmlNic->subs[s];
     if (strcmp(xmlNet->name, "net") != 0) continue;
-    int index;
-    NCCLCHECK(xmlGetAttrIndex(xmlNet, "dev", &index));
-    if (index == -1) continue;
+    if (!xmlHasAttr(xmlNet, "dev")) continue;
     NCCLCHECK(ncclTopoAddNet(xmlNet, system, nic));
   }
   return ncclSuccess;
@@ -398,9 +396,7 @@ ncclResult_t ncclTopoAddPci(struct ncclXmlNode* xmlPci, struct ncclTopoSystem* s
   NCCLCHECK(xmlGetSub(xmlPci, "gpu", &xmlGpu));
   if (xmlGpu != NULL) {
     type = GPU;
-    int index;
-    NCCLCHECK(xmlGetAttrIndex(xmlGpu, "rank", &index));
-    if (index == -1) return ncclSuccess;
+    if (!xmlHasAttr(xmlGpu, "rank")) return ncclSuccess;
     NCCLCHECK(ncclTopoCreateNode(system, &node, type, busId));
     NCCLCHECK(ncclTopoAddGpu(xmlGpu, system, node));
   }
@@ -600,8 +596,7 @@ NCCL_PARAM(TopoDumpFileRank, "TOPO_DUMP_FILE_RANK", 0);
 
 // Only set values if not already set
 static ncclResult_t xmlInitAttrInt(struct ncclXmlNode* node, const char* attrName, const int value) {
-  int index;
-  NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
+  int index = xmlGetAttrIndex(node, attrName);
   if (index == -1) {
     index = node->nAttrs++;
     strncpy(node->attrs[index].key, attrName, MAX_STR_LEN);
@@ -610,8 +605,7 @@ static ncclResult_t xmlInitAttrInt(struct ncclXmlNode* node, const char* attrNam
   return ncclSuccess;
 }
 static ncclResult_t xmlInitAttrUint64(struct ncclXmlNode* node, const char* attrName, const uint64_t value) {
-  int index;
-  NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
+  int index = xmlGetAttrIndex(node, attrName);
   if (index == -1) {
     index = node->nAttrs++;
     strncpy(node->attrs[index].key, attrName, MAX_STR_LEN);
@@ -620,8 +614,7 @@ static ncclResult_t xmlInitAttrUint64(struct ncclXmlNode* node, const char* attr
   return ncclSuccess;
 }
 static ncclResult_t xmlInitAttrFloat(struct ncclXmlNode* node, const char* attrName, const float value) {
-  int index;
-  NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
+  int index = xmlGetAttrIndex(node, attrName);
   if (index == -1) {
     index = node->nAttrs++;
     strncpy(node->attrs[index].key, attrName, MAX_STR_LEN);

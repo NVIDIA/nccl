@@ -194,6 +194,7 @@ ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction) {
       ncclNMergedIbDevs = 0;
       if (ncclFindInterfaces(ncclIbIfName, &ncclIbIfAddr, MAX_IF_NAME_SIZE, 1) != 1) {
         WARN("NET/IB : No IP interface found.");
+        pthread_mutex_unlock(&ncclIbLock);
         return ncclInternalError;
       }
 
@@ -211,7 +212,10 @@ ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction) {
       if (searchExact) userIbEnv++;
       int nUserIfs = parseStringList(userIbEnv, userIfs, MAX_IB_DEVS);
 
-      if (ncclSuccess != wrap_ibv_get_device_list(&devices, &nIbDevs)) return ncclInternalError;
+      if (ncclSuccess != wrap_ibv_get_device_list(&devices, &nIbDevs)) {
+        pthread_mutex_unlock(&ncclIbLock);
+        return ncclInternalError;
+      }
 
       for (int d=0; d<nIbDevs && ncclNIbDevs<MAX_IB_DEVS; d++) {
         struct ibv_context * context;
@@ -224,7 +228,10 @@ ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction) {
         memset(&devAttr, 0, sizeof(devAttr));
         if (ncclSuccess != wrap_ibv_query_device(context, &devAttr)) {
           WARN("NET/IB : Unable to query device %s", devices[d]->name);
-          if (ncclSuccess != wrap_ibv_close_device(context)) { return ncclInternalError; }
+          if (ncclSuccess != wrap_ibv_close_device(context)) {
+            pthread_mutex_unlock(&ncclIbLock);
+            return ncclInternalError;
+          }
           continue;
         }
         for (int port_num = 1; port_num <= devAttr.phys_port_cnt; port_num++) {
@@ -295,9 +302,15 @@ ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction) {
           ncclNIbDevs++;
           nPorts++;
         }
-        if (nPorts == 0 && ncclSuccess != wrap_ibv_close_device(context)) { return ncclInternalError; }
+        if (nPorts == 0 && ncclSuccess != wrap_ibv_close_device(context)) {
+          pthread_mutex_unlock(&ncclIbLock);
+          return ncclInternalError;
+        }
       }
-      if (nIbDevs && (ncclSuccess != wrap_ibv_free_device_list(devices))) { return ncclInternalError; };
+      if (nIbDevs && (ncclSuccess != wrap_ibv_free_device_list(devices))) {
+        pthread_mutex_unlock(&ncclIbLock);
+        return ncclInternalError;
+      };
     }
     if (ncclNIbDevs == 0) {
       INFO(NCCL_INIT|NCCL_NET, "NET/IB : No device found.");
@@ -1677,8 +1690,11 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
       if (r->events[i]) {
         NCCLCHECK(wrap_ibv_poll_cq(r->devBases[i]->cq, 4, wcs, &wrDone));
         totalWrDone += wrDone;
-        if (wrDone == 0) { TIME_CANCEL(3); } else { TIME_STOP(3); }
-        if (wrDone == 0) continue;
+        if (wrDone == 0) {
+          TIME_CANCEL(3);
+          return ncclSuccess;
+        }
+        TIME_STOP(3);
         for (int w=0; w<wrDone; w++) {
           struct ibv_wc *wc = wcs+w;
           if (wc->status != IBV_WC_SUCCESS) {
@@ -1811,4 +1827,3 @@ ncclNet_t ncclNetIb = {
   NULL /* getDeviceMr */,
   NULL /* irecvConsumed */
 };
-

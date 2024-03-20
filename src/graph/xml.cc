@@ -478,6 +478,7 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
   char* path = NULL;
   ncclDebugNoWarn = NCCL_GRAPH;
   getPciPath(busId, &path);
+  std::unique_ptr<void, void(*)(void*)> path_ptr(path, free);
   ncclDebugNoWarn = 0;
 
   if (path) {
@@ -604,7 +605,6 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
   } else if (strcmp(parent->name, "cpu") == 0) {
     NCCLCHECK(ncclTopoGetXmlFromCpu(parent, xml));
   }
-  free(path);
   return ncclSuccess;
 }
 
@@ -744,13 +744,13 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
       char* path;
       ncclDebugNoWarn = NCCL_GRAPH;
       getPciPath(busId, &path);
+      std::unique_ptr<void, void(*)(void*)> path_ptr(path, free);
       ncclDebugNoWarn = 0;
       if (path == NULL || strcmp(busId, "fffffff:ffff:ff") == 0) {
         // Remote NVLink device is not visible inside this VM. Assume NVSwitch.
         NCCLCHECK(xmlSetAttr(sub, "tclass", "0x068000"));
       } else {
         NCCLCHECK(ncclTopoSetAttrFromSys(sub, path, "class", "tclass"));
-        free(path);
       }
     }
   }

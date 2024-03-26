@@ -339,26 +339,87 @@ enum ncclNetState {
 enum ncclNetState ncclNetStates[3] = { ncclNetStateInit, ncclNetStateInit, ncclNetStateInit };
 enum ncclNetState ncclCollNetStates[3] = { ncclNetStateInit, ncclNetStateInit, ncclNetStateInit };
 
-ncclResult_t ncclNetPluginInit() {
-  char ncclNetPluginName[128];
-  const char* envPluginName = ncclGetEnv("NCCL_NET_PLUGIN");
-  if (envPluginName && strlen(envPluginName)) {
-    snprintf(ncclNetPluginName, 128, "libnccl-net-%s.so", envPluginName);
-    INFO(NCCL_INIT, "Plugin name set by env to %s", ncclNetPluginName);
-  } else {
-    sprintf(ncclNetPluginName, "libnccl-net.so");
+static void* tryOpenDynamicLib(char* name) {
+  if (nullptr == name || strlen(name) == 0) {
+    return nullptr;
   }
-  void* netPluginLib = dlopen(ncclNetPluginName, RTLD_NOW | RTLD_LOCAL);
-  if (netPluginLib == nullptr) {
-    // dlopen does not guarantee to set errno, but dlerror only gives us a
-    // string, so checking errno doesn't hurt to try to provide a better
-    // error message
-    if (errno == ENOENT) {
-      INFO(NCCL_INIT|NCCL_NET, "NET/Plugin : dlerror=%s No plugin found (%s), using internal implementation", dlerror(), ncclNetPluginName);
-      // exit(-1);
+  void *handle = dlopen(name, RTLD_NOW | RTLD_LOCAL);
+  if (nullptr == handle) {
+    if (ENOENT == errno) {
+      INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: No plugin found (%s)", name);
     } else {
-      INFO(NCCL_INIT|NCCL_NET, "NET/Plugin : Plugin load returned %d : %s.", errno, dlerror());
+      INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Plugin load returned %d : %s when loading %s", errno, dlerror(), name);
     }
+  }
+  return handle;
+}
+
+static void summarizeOpenNetPluginErrors(char* pluginNames) {
+  const char *separator = " ";
+  int len = strlen(pluginNames);
+  // remove tail separator
+  pluginNames[len - 1] = '\0';
+
+  // remove last plugin name
+  while (len > 0 && pluginNames[--len] != *separator);
+  if (len > 0) {
+    pluginNames[len] = '\0';
+  }
+
+  // distinguish between one load attempt and multiple attempts
+  if (strstr(pluginNames, separator)) {
+    INFO(NCCL_ENV|NCCL_TUNING, "NET/Plugin: Most recent plugin load returned %d : %s. All attempts to load '%s' also failed.", errno, dlerror(), pluginNames);
+  } else {
+    INFO(NCCL_ENV|NCCL_TUNING, "NET/Plugin: Plugin load returned %d : %s : when loading %s", errno, dlerror(), pluginNames);
+  }
+}
+
+static void* openNetPluginLib(void) {
+  void *pluginLib;
+
+#define MAX_PLUGIN_LOAD 2
+
+  int len;
+  char netPluginLibNameTried[MAX_PLUGIN_LOAD * PATH_MAX] = { 0 };
+  char *ptr = netPluginLibNameTried;
+  char netPluginLibName[PATH_MAX];
+  const char *envNetPluginName = getenv("NCCL_NET_PLUGIN");
+  if (envNetPluginName && strlen(envNetPluginName)) {
+    snprintf(netPluginLibName, PATH_MAX, "%s", envNetPluginName);
+    pluginLib = tryOpenDynamicLib(netPluginLibName);
+    if (pluginLib) {
+      INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Plugin name set by env to %s", netPluginLibName);
+      return pluginLib;
+    }
+    len = PATH_MAX - strlen(ptr);
+    snprintf(ptr + strlen(ptr), len + 1, "%s ", netPluginLibName);
+
+    snprintf(netPluginLibName, PATH_MAX, "libnccl-net-%s.so", envNetPluginName);
+    pluginLib = tryOpenDynamicLib(netPluginLibName);
+    if (pluginLib) {
+      INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Plugin name set by env to %s", netPluginLibName);
+      return pluginLib;
+    }
+    len = PATH_MAX - strlen(ptr);
+    snprintf(ptr + strlen(ptr), len + 1, "%s ", netPluginLibName);
+  } else {
+    snprintf(netPluginLibName, PATH_MAX, "libnccl-net.so");
+    pluginLib = tryOpenDynamicLib(netPluginLibName);
+    if (pluginLib) {
+      return pluginLib;
+    }
+    len = PATH_MAX - strlen(ptr);
+    snprintf(ptr + strlen(ptr), len + 1, "%s ", netPluginLibName);
+  }
+  summarizeOpenNetPluginErrors(ptr);
+
+  return nullptr;
+}
+
+ncclResult_t ncclNetPluginInit() {
+  void* netPluginLib = openNetPluginLib();
+  if (netPluginLib == nullptr) {
+    INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Using internal network plugin.");
     return ncclSuccess;
   }
 

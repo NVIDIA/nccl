@@ -9,6 +9,7 @@
 #include "graph.h"
 #include "proxy.h"
 #include "gdrwrap.h"
+#include "assert.h"
 
 int64_t ncclParamGdrCopySyncEnable();
 int64_t ncclParamGdrCopyFlushEnable();
@@ -151,8 +152,9 @@ static ncclResult_t sendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   struct setupReq req = { 0 };
 
   int proxyRank, tpProxyRank;
-  NCCLCHECK(ncclTopoGetNetDev(comm, myInfo->rank, graph, channelId, -1, &req.netDev, &proxyRank));
-  NCCLCHECK(ncclTopoCheckGdr(comm->topo, myInfo->busId, req.netDev, 1, &req.useGdr));
+  int64_t netId;
+  NCCLCHECK(ncclTopoGetNetDev(comm, myInfo->rank, graph, channelId, -1, &netId, &req.netDev, &proxyRank));
+  NCCLCHECK(ncclTopoCheckGdr(comm->topo, myInfo->busId, netId, 1, &req.useGdr));
   send->conn.flags |= req.useGdr ? NCCL_DIRECT_NIC : 0;
 
   send->proxyConn.tpLocalRank = comm->topParentLocalRanks[comm->localRank];
@@ -171,8 +173,9 @@ static ncclResult_t recvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   struct setupReq req = { 0 };
 
   int proxyRank, tpProxyRank;
-  NCCLCHECK(ncclTopoGetNetDev(comm, myInfo->rank, graph, channelId, -1, &req.netDev, &proxyRank));
-  NCCLCHECK(ncclTopoCheckGdr(comm->topo, myInfo->busId, req.netDev, 0, &req.useGdr));
+  int64_t netId;
+  NCCLCHECK(ncclTopoGetNetDev(comm, myInfo->rank, graph, channelId, -1, &netId, &req.netDev, &proxyRank));
+  NCCLCHECK(ncclTopoCheckGdr(comm->topo, myInfo->busId, netId, 0, &req.useGdr));
   recv->conn.flags |= req.useGdr ? NCCL_DIRECT_NIC : 0;
   // Determine whether we need to flush the GDR buffer on recv or not
   if (req.useGdr) NCCLCHECK(ncclTopoNeedFlush(comm->topo, myInfo->busId, &req.needFlush));
@@ -696,8 +699,10 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
 
       if (sub->posted < sub->nsteps && sub->posted < sub->done + NCCL_STEPS) {
         int buffSlot = (sub->base+sub->posted)%NCCL_STEPS;
-        resources->recvMem->connFifo[buffSlot].offset = calcRegionOffset(args, 0, s, sub->posted, 0);
-        __sync_synchronize();
+        if (sub->reg == 0) {
+          resources->recvMem->connFifo[buffSlot].offset = calcRegionOffset(args, 0, s, sub->posted, 0);
+          __sync_synchronize();
+        }
         volatile uint64_t* sendHead = resources->gdcSync ? resources->gdcSync : &resources->sendMem->head;
         TRACE(NCCL_NET, "sendProxy [%ld/%d/%d] posted offset %d @ %p signal %ld->%ld", long(sub->posted), group, buffSlot, resources->recvMem->connFifo[buffSlot].offset, &resources->recvMem->connFifo[buffSlot].offset, long(*sendHead), long(sub->base + sub->posted + args->sliceSteps - NCCL_STEPS));
         sub->posted += args->sliceSteps;
@@ -708,8 +713,8 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
         int buffSlot = (sub->base+sub->received)%NCCL_STEPS;
         volatile struct ncclConnFifo* connFifo = (volatile struct ncclConnFifo*)resources->recvMem->connFifo;
         volatile uint64_t* recvTail = &resources->recvMem->tail;
-        if (connFifo[buffSlot].size != -1 && ((*recvTail > (sub->base+sub->received)))) {
-          if (args->coll != ncclFuncAllReduce) {
+        if ((connFifo[buffSlot].size != -1 || sub->reg) && ((*recvTail > (sub->base+sub->received)))) {
+          if (args->coll != ncclFuncAllReduce && sub->reg == 0) {
             int sendBeg = calcRegionOffset(args, 0, s, sub->received, 0);
             int sendEnd = calcRegionOffset(args, 0, s, sub->received, 1);
             if (sendEnd-sendBeg != connFifo[buffSlot].size) {
@@ -740,33 +745,89 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
           reqFifo[group][buffSlot].size = recvEnd - recvBeg;
           size_t eltSize = ncclTypeSize((ncclDataType_t)args->dtype);
 
-          if (sendBeg==sendEnd && recvBeg==recvEnd) {
+          if (sendBeg==sendEnd && recvBeg==recvEnd && sub->reg == 0) {
             sub->requests[buffSlot] = nullptr; // trivally finished request
           } else {
             if (args->coll == ncclFuncAllReduce) {
-              int count = (sendEnd-sendBeg)/eltSize;
-              NCCLCHECK(proxyState->ncclCollNet->iallreduce(resources->collNetComm, region+sendBeg, region+recvBeg, count, (ncclDataType_t)args->dtype, (ncclRedOp_t)args->redOp, sendMhandle, recvMhandle, sub->requests+buffSlot));
+              if (sub->reg) {
+                size_t nBytes = std::min(sub->nbytes, NCCL_MAX_COLLNET_SIZE);
+                int count = (int)(nBytes / eltSize);
+                NCCLCHECK(proxyState->ncclCollNet->iallreduce(resources->collNetComm, sub->sendbuff, sub->recvbuff, count, (ncclDataType_t)args->dtype, (ncclRedOp_t)args->redOp, sub->sendMhandle, sub->recvMhandle, sub->requests + buffSlot));
+                if (sub->requests[buffSlot]) {
+                  sub->nbytes -= nBytes;
+                  sub->sendbuff += nBytes;
+                  sub->recvbuff += nBytes;
+                }
+              } else {
+                int count = (sendEnd - sendBeg) / eltSize;
+                NCCLCHECK(proxyState->ncclCollNet->iallreduce(resources->collNetComm, region + sendBeg, region + recvBeg, count, (ncclDataType_t)args->dtype, (ncclRedOp_t)args->redOp, sendMhandle, recvMhandle, sub->requests + buffSlot));
+              }
             } else {
               sizePerRank = args->specifics.collnetDirect.sizePerRank;
               if (args->coll == ncclFuncAllGather) {
                 ncclNetSGE_v8_t recvParts;
-                recvParts.mhandle = recvMhandle;
-                recvParts.address = region + recvBeg;
-                recvParts.size = allEnd - allBeg;
-                NCCLCHECK(proxyState->ncclCollNet->iallgather(
-                  resources->collNetComm, region+sendBeg, 1, &recvParts,
-                  sizePerRank, allBeg, allEnd-allBeg,
-                  sendMhandle, sub->requests+buffSlot));
+                if (sub->reg) {
+                  size_t nBytes = std::min(sub->nbytes, NCCL_MAX_COLLNET_SIZE);
+                  void *sendbuff;
+                  recvParts.mhandle = sub->recvMhandle;
+                  recvParts.address = sub->recvbuff;
+                  recvParts.size = nBytes;
+                  if (sub->offset / sizePerRank == args->specifics.collnetDirect.node) {
+                    sendbuff = sub->sendbuff + sub->offset % sizePerRank;
+                  } else {
+                    sendbuff = sub->sendbuff;
+                  }
+                  NCCLCHECK(proxyState->ncclCollNet->iallgather(
+                    resources->collNetComm, sendbuff, 1, &recvParts,
+                    sizePerRank, sub->offset, nBytes,
+                    sub->sendMhandle, sub->requests + buffSlot));
+                  if (sub->requests[buffSlot]) {
+                    sub->recvbuff += nBytes;
+                    sub->nbytes -= nBytes;
+                    sub->offset += nBytes;
+                  }
+                } else {
+                  recvParts.mhandle = recvMhandle;
+                  recvParts.address = region + recvBeg;
+                  recvParts.size = allEnd - allBeg;
+                  NCCLCHECK(proxyState->ncclCollNet->iallgather(
+                    resources->collNetComm, region + sendBeg, 1, &recvParts,
+                    sizePerRank, allBeg, allEnd - allBeg,
+                    sendMhandle, sub->requests + buffSlot));
+                }
               } else {
                 ncclNetSGE_v8_t sendParts;
-                sendParts.mhandle = sendMhandle;
-                sendParts.address = region + sendBeg;
-                sendParts.size = allEnd - allBeg;
-                NCCLCHECK(proxyState->ncclCollNet->ireducescatter(
-                  resources->collNetComm, 1, &sendParts, region+recvBeg,
-                  sizePerRank, allBeg, allEnd-allBeg,
-                  (ncclDataType_t)args->dtype, (ncclRedOp_t)args->redOp,
-                  recvMhandle, sub->requests+buffSlot));
+                if (sub->reg) {
+                  size_t nBytes = std::min(sub->nbytes, NCCL_MAX_COLLNET_SIZE);
+                  void *recvbuff;
+                  sendParts.mhandle = sub->sendMhandle;
+                  sendParts.address = sub->sendbuff;
+                  sendParts.size = nBytes;
+                  if (sub->offset / sizePerRank == args->specifics.collnetDirect.node) {
+                    recvbuff = sub->recvbuff + sub->offset % sizePerRank;
+                  } else {
+                    recvbuff = sub->recvbuff;
+                  }
+                  NCCLCHECK(proxyState->ncclCollNet->ireducescatter(
+                    resources->collNetComm, 1, &sendParts, recvbuff,
+                    sizePerRank, sub->offset, nBytes,
+                    (ncclDataType_t)args->dtype, (ncclRedOp_t)args->redOp,
+                    sub->recvMhandle, sub->requests + buffSlot));
+                  if (sub->requests[buffSlot]) {
+                    sub->sendbuff += nBytes;
+                    sub->nbytes -= nBytes;
+                    sub->offset += nBytes;
+                  }
+                } else {
+                  sendParts.mhandle = sendMhandle;
+                  sendParts.address = region + sendBeg;
+                  sendParts.size = allEnd - allBeg;
+                  NCCLCHECK(proxyState->ncclCollNet->ireducescatter(
+                    resources->collNetComm, 1, &sendParts, region + recvBeg,
+                    sizePerRank, allBeg, allEnd - allBeg,
+                    (ncclDataType_t)args->dtype, (ncclRedOp_t)args->redOp,
+                    recvMhandle, sub->requests + buffSlot));
+                }
               }
             }
             if (sub->requests[buffSlot] == nullptr) continue;
@@ -854,7 +915,7 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
           int totalSize = recvEnd - recvBeg;
           TRACE(NCCL_NET, "recvProxy [%ld/%d/%d] received, size %d chunkSize=%d", (long)sub->received, group, buffSlot, totalSize, args->chunkSize);
           sub->received += args->sliceSteps;
-          if (reqFifo[group][buffSlot].size > 0 && resources->useGdr && resources->needFlush) {
+          if ((reqFifo[group][buffSlot].size > 0 || sub->reg) && resources->useGdr && resources->needFlush) {
             // GDRCOPY support
             if (resources->gdcFlush) {
 #if defined (__x86_64__)
@@ -865,7 +926,37 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
               return ncclInternalError;
 #endif
             } else {
-              NCCLCHECK(proxyState->ncclCollNet->iflush(resources->collNetComm, region+recvBeg, totalSize, mhandle, sub->requests+buffSlot));
+              if (sub->reg) {
+                size_t nBytes = std::min(sub->nbytes, NCCL_MAX_COLLNET_SIZE);
+                size_t offset = 0;
+                if (args->coll == ncclFuncReduceScatter) {
+                  size_t sizePerRank = args->specifics.collnetDirect.sizePerRank;
+                  int node = args->specifics.collnetDirect.node;
+                  int startNode = sub->offset / sizePerRank;
+                  int lastNode = (sub->offset + nBytes) / sizePerRank;
+                  if (startNode == node) {
+                    offset = sub->offset % sizePerRank;
+                    nBytes = std::min(sizePerRank - offset, nBytes);
+                  } else if (startNode < node && node < lastNode) {
+                    nBytes = sizePerRank;
+                  } else if (node == lastNode) {
+                    nBytes = (sub->offset + nBytes) % sizePerRank;
+                  } else {
+                    // no need to flush
+                    nBytes = 0;
+                  }
+                }
+                NCCLCHECK(proxyState->ncclCollNet->iflush(resources->collNetComm, sub->recvbuff + offset, nBytes, sub->recvMhandle, sub->requests+buffSlot));
+                if (sub->requests[buffSlot]) {
+                  sub->nbytes -= nBytes;
+                  sub->offset += nBytes;
+                  if (args->coll == ncclFuncAllGather || args->coll == ncclFuncAllReduce) {
+                    sub->recvbuff += nBytes;
+                  }
+                }
+              } else {
+                NCCLCHECK(proxyState->ncclCollNet->iflush(resources->collNetComm, region+recvBeg, totalSize, mhandle, sub->requests+buffSlot));
+              }
             }
           }
           args->idle = 0;
@@ -886,10 +977,12 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
         }
       }
       if (sub->transmitted < sub->flushed) {
-        int buffSlot = (sub->base + sub->transmitted)%NCCL_STEPS;
-        volatile struct ncclConnFifo* connFifo = (volatile struct ncclConnFifo*)resources->recvMem->connFifo;
-        connFifo[buffSlot].offset = calcRegionOffset(args, 1, s, sub->transmitted, 0);
-        __sync_synchronize();
+        if (sub->reg == 0) {
+          int buffSlot = (sub->base + sub->transmitted)%NCCL_STEPS;
+          volatile struct ncclConnFifo* connFifo = (volatile struct ncclConnFifo*)resources->recvMem->connFifo;
+          connFifo[buffSlot].offset = calcRegionOffset(args, 1, s, sub->transmitted, 0);
+          __sync_synchronize();
+        }
         volatile uint64_t* recvTail = resources->gdcSync ? resources->gdcSync : &resources->recvMem->tail;
         *recvTail = sub->base + sub->flushed;
         if (resources->gdcSync) wc_store_fence(); // Flush out WC write
@@ -916,9 +1009,134 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
   return ncclSuccess;
 }
 
+struct collnetRegInfo {
+  uintptr_t buffer;
+  size_t size;
+};
+
+ncclResult_t ncclCollnetLocalRegisterBuffer(struct ncclComm* comm, const void* userbuff, size_t buffSize, int type, int* outRegBufFlag, void** outHandle) {
+  ncclResult_t ret = ncclSuccess;
+  struct ncclReg *regRecord = NULL;
+
+  *outRegBufFlag = 0;
+  *outHandle = NULL;
+  if (comm && userbuff && buffSize > 0) {
+    NCCLCHECKGOTO(ncclRegFind(comm, userbuff, buffSize, &regRecord), ret, fail);
+    if (regRecord) {
+      if (regRecord->state & COLLNET_REG_COMPLETE) {
+        // reuse previous registration
+        *outRegBufFlag = 2;
+        *outHandle = regRecord->collnetHandle;
+        goto exit;
+      } else {
+        /* start register collnet buffer */
+        struct collnetRegInfo info = {regRecord->addr, regRecord->pages * comm->regCache.pageSize};
+        void* handle = NULL;
+        struct ncclProxyConnector* proxyconn = (type == collNetRecv) ? &comm->channels[0].peers[comm->nRanks]->recv[type].proxyConn : &comm->channels[0].peers[comm->nRanks]->send[type].proxyConn;
+        NCCLCHECKGOTO(ncclProxyCallBlocking(comm, proxyconn, ncclProxyMsgRegister, &info, sizeof(struct collnetRegInfo), &handle, sizeof(void*)), ret, fail);
+        if (handle) {
+          regRecord->state |= COLLNET_REG_COMPLETE;
+          regRecord->proxyconn = proxyconn;
+          *outHandle = regRecord->collnetHandle = handle;
+          *outRegBufFlag = 1;
+        }
+      }
+    }
+  }
+
+exit:
+  return ret;
+fail:
+  *outRegBufFlag = 0;
+  *outHandle = NULL;
+  goto exit;
+}
+
+ncclResult_t ncclCollnetGraphRegisterBuffer(struct ncclComm* comm, struct ncclKernelPlan *plan, const void* userbuff, size_t buffSize, int type, int* outRegBufFlag, void** outHandle) {
+  ncclResult_t ret = ncclSuccess;
+  void* handle = NULL;
+  struct ncclRegCache* cache = &comm->regCache;
+  uintptr_t pageSize = cache->pageSize;
+  uintptr_t addr = (uintptr_t)userbuff & -pageSize;
+  size_t size = DIVUP((uintptr_t)userbuff - addr + buffSize, pageSize) * pageSize;
+  collnetRegInfo info = {addr, size};
+  struct ncclCollnetHandleList* record = NULL;
+  struct ncclProxyConnector* proxyConn = (type == collNetRecv) ? &comm->channels[0].peers[comm->nRanks]->recv[type].proxyConn : &comm->channels[0].peers[comm->nRanks]->send[type].proxyConn;
+
+  *outRegBufFlag = 0;
+  NCCLCHECKGOTO(ncclProxyCallBlocking(comm, proxyConn, ncclProxyMsgRegister, &info, sizeof(struct collnetRegInfo), &handle, sizeof(void*)), ret, fail);
+  record = ncclMemoryPoolAlloc<struct ncclCollnetHandleList>(&comm->memPool_ncclCollnetHandleList, &comm->memPermanent);
+  record->proxyconn = proxyConn;
+  record->buffer = userbuff;
+  record->size = buffSize;
+  *outHandle = record->collnetHandle = handle;
+  *outRegBufFlag = 1;
+  ncclIntruQueueEnqueue(&plan->collnetHandleQueue, record);
+
+exit:
+  return ret;
+fail:
+  *outRegBufFlag = 0;
+  *outHandle = NULL;
+  goto exit;
+}
+
+ncclResult_t ncclCollnetDeregBuffer(struct ncclComm* comm, struct ncclProxyConnector* proxyconn, void* handle) {
+  NCCLCHECK(ncclProxyCallBlocking(comm, proxyconn, ncclProxyMsgDeregister, &handle, sizeof(void*), NULL, 0));
+  return ncclSuccess;
+}
+
+static ncclResult_t sendProxyRegBuffer(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState, void* reqBuff, int reqSize, void* respBuff, int respSize, int* done) {
+  void* handle;
+  struct collnetRegInfo* info = (struct collnetRegInfo*)reqBuff;
+  struct sendResources* resources = (struct sendResources*)(connection->transportResources);
+
+  assert(reqSize == sizeof(struct collnetRegInfo));
+  assert(respSize == sizeof(void*));
+  if (proxyState->ncclCollNet->regMr(resources->collNetComm, (void*)info->buffer, info->size, NCCL_PTR_CUDA, &handle) != ncclSuccess) handle = NULL;
+  memcpy(respBuff, (void*)&handle, sizeof(void*));
+  *done = 1;
+  return ncclSuccess;
+}
+
+static ncclResult_t recvProxyRegBuffer(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState, void* reqBuff, int reqSize, void* respBuff, int respSize, int* done) {
+  void* handle;
+  struct collnetRegInfo* info = (struct collnetRegInfo*)reqBuff;
+  struct recvResources* resources = (struct recvResources*)(connection->transportResources);
+
+  assert(reqSize == sizeof(struct collnetRegInfo));
+  assert(respSize == sizeof(void*));
+  if (proxyState->ncclCollNet->regMr(resources->collNetComm, (void*)info->buffer, info->size, NCCL_PTR_CUDA, &handle) != ncclSuccess) handle = NULL;
+  memcpy(respBuff, (void*)&handle, sizeof(void*));
+  *done = 1;
+  return ncclSuccess;
+}
+
+static ncclResult_t sendProxyDeregBuffer(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState, void* reqBuff, int reqSize, int* done) {
+  void* handle;
+  struct sendResources* resources = (struct sendResources*)(connection->transportResources);
+
+  assert(reqSize == sizeof(void*));
+  memcpy(&handle, reqBuff, sizeof(void*));
+  NCCLCHECK(proxyState->ncclCollNet->deregMr(resources->collNetComm, handle));
+  *done = 1;
+  return ncclSuccess;
+}
+
+static ncclResult_t recvProxyDeregBuffer(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState, void* reqBuff, int reqSize, int* done) {
+  void* handle;
+  struct recvResources* resources = (struct recvResources*)(connection->transportResources);
+
+  assert(reqSize == sizeof(void*));
+  memcpy(&handle, reqBuff, sizeof(void*));
+  NCCLCHECK(proxyState->ncclCollNet->deregMr(resources->collNetComm, handle));
+  *done = 1;
+  return ncclSuccess;
+}
+
 struct ncclTransport collNetTransport = {
   "COL",
   canConnect,
-  { sendSetup, sendConnect, sendFree, NULL, sendProxySetup, sendProxyConnect, sendProxyFree, sendProxyProgress },
-  { recvSetup, recvConnect, recvFree, NULL, recvProxySetup, recvProxyConnect, recvProxyFree, recvProxyProgress }
+  { sendSetup, sendConnect, sendFree, NULL, sendProxySetup, sendProxyConnect, sendProxyFree, sendProxyProgress, sendProxyRegBuffer, sendProxyDeregBuffer },
+  { recvSetup, recvConnect, recvFree, NULL, recvProxySetup, recvProxyConnect, recvProxyFree, recvProxyProgress, recvProxyRegBuffer, recvProxyDeregBuffer }
 };

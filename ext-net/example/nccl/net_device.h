@@ -7,8 +7,6 @@
 #ifndef NET_DEVICE_H_
 #define NET_DEVICE_H_
 
-#include "net_device.h"
-
 #define NCCL_NET_DEVICE_INVALID_VERSION      0x0
 #define NCCL_NET_MTU_SIZE                    4096
 

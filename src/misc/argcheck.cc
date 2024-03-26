@@ -33,6 +33,15 @@ ncclResult_t PtrCheck(void* ptr, const char* opname, const char* ptrname) {
   return ncclSuccess;
 }
 
+ncclResult_t CommCheck(struct ncclComm* comm, const char* opname, const char* ptrname) {
+  NCCLCHECK(PtrCheck(comm, opname, ptrname));
+  if (comm->startMagic != NCCL_MAGIC || comm->endMagic != NCCL_MAGIC) {
+    WARN("Error: corrupted comm object detected");
+    return ncclInvalidArgument;
+  }
+  return ncclSuccess;
+}
+
 ncclResult_t ArgsCheck(struct ncclInfo* info) {
   // First, the easy ones
   if (info->root < 0 || info->root >= info->comm->nRanks) {

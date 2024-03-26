@@ -88,7 +88,7 @@ struct ncclTopoLink {
   float bw;
   struct ncclTopoNode* remNode;
 };
-#define NCCL_TOPO_MAX_LINKS 32
+#define NCCL_TOPO_MAX_LINKS 128
 #define NCCL_TOPO_MAX_HOPS (NCCL_TOPO_MAX_NODES*NCCL_TOPO_NODE_TYPES)
 
 struct ncclTopoLinkList {
@@ -103,6 +103,10 @@ struct ncclTopoLinkList {
 
 #define NCCL_TOPO_UNDEF (-1)
 
+#define NCCL_TOPO_ID_SYSTEM_ID(id) (id >> 56)
+#define NCCL_TOPO_ID_LOCAL_ID(id) (id & 0x00ffffffffffffff)
+#define NCCL_TOPO_ID(systemid, localid) (((int64_t)systemid << 56) + localid)
+
 struct ncclTopoNode {
   int type;
   int64_t id;
@@ -115,6 +119,7 @@ struct ncclTopoNode {
       int gdrSupport;
     }gpu;
     struct {
+      int dev; // Plugin dev number
       uint64_t asic;
       int port;
       float bw;
@@ -147,6 +152,9 @@ struct ncclTopoNodeSet {
 };
 
 struct ncclTopoSystem {
+  int systemId;
+  uint64_t hostHashes[NCCL_TOPO_MAX_NODES];
+  int nHosts;
   struct ncclTopoNodeSet nodes[NCCL_TOPO_NODE_TYPES];
   float maxBw;
   float totalBw;
@@ -158,9 +166,11 @@ ncclResult_t ncclTopoRemoveNode(struct ncclTopoSystem* system, int type, int id)
 ncclResult_t ncclTopoConnectNodes(struct ncclTopoNode* node, struct ncclTopoNode* remNode, int type, float bw);
 ncclResult_t ncclTopoPrintPaths(struct ncclTopoSystem* system);
 ncclResult_t ncclTopoLoadSystem(const char* xmlTopoFile, struct ncclTopoSystem* system);
-ncclResult_t ncclTopoGetIntermediateRank(struct ncclTopoSystem* system, int rank, int netDev, int* intermediateRank);
+ncclResult_t ncclTopoGetIntermediateRank(struct ncclTopoSystem* system, int rank, int64_t netId, int* intermediateRank);
 
-ncclResult_t ncclTopoGetSystemFromXml(struct ncclXml* xml, struct ncclTopoSystem** topoSystem);
+#define NCCL_TOPO_XML_MAX_NODES 256
+#define NCCL_GRAPH_XML_MAX_NODES 4096
+ncclResult_t ncclTopoGetSystemFromXml(struct ncclXml* xml, struct ncclTopoSystem** topoSystem, uint64_t localHostHash);
 ncclResult_t ncclTopoGetGraphFromXml(struct ncclXmlNode *xmlGraphs, struct ncclTopoSystem* system, struct ncclTopoGraph* graph, int* nChannels);
 ncclResult_t ncclTopoGetXmlFromGraphs(int ngraphs, struct ncclTopoGraph** graphs, struct ncclTopoSystem* system, struct ncclXml *xml);
 
@@ -191,11 +201,24 @@ static ncclResult_t ncclTopoRankToIndex(struct ncclTopoSystem* system, int rank,
 static ncclResult_t ncclTopoDevToRank(struct ncclTopoSystem* system, int dev, int* rank) {
   *rank = -1;
   for (int i=0; i<system->nodes[GPU].count; i++) {
+    if (NCCL_TOPO_ID_SYSTEM_ID(system->nodes[GPU].nodes[i].id) != system->systemId) continue; // Only consider GPUs on our node
     if (system->nodes[GPU].nodes[i].gpu.dev == dev) {
       *rank = system->nodes[GPU].nodes[i].gpu.rank;
       return ncclSuccess;
     }
   }
+  return ncclInternalError;
+}
+
+static ncclResult_t ncclTopoIdToNetDev(struct ncclTopoSystem* system, int64_t id, int* netDev) {
+  *netDev = -1;
+  for (int i=0; i<system->nodes[NET].count; i++) {
+    if (system->nodes[NET].nodes[i].id == id) {
+      *netDev = system->nodes[NET].nodes[i].net.dev;
+      return ncclSuccess;
+    }
+  }
+  WARN("Could not find NET with id %lx\n", id);
   return ncclInternalError;
 }
 

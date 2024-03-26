@@ -10,13 +10,13 @@
 #include "nccl.h"
 #include "debug.h"
 #include "checks.h"
+#include "alloc.h"
 #include <stdlib.h>
 
 // A few constraints to make the implementation easy
 #define MAX_STR_LEN 255
 #define MAX_ATTR_COUNT 16
-#define MAX_SUBS 32
-#define MAX_NODES 1024
+#define MAX_SUBS 128
 
 #define NODE_TYPE_NONE 0
 #define NODE_TYPE_OPEN 1
@@ -37,8 +37,8 @@ struct ncclXmlNode {
 };
 
 struct ncclXml {
-  struct ncclXmlNode nodes[MAX_NODES];
-  int maxIndex;
+  int maxIndex, maxNodes;
+  struct ncclXmlNode nodes[1];
 };
 
 /* File functions */
@@ -55,10 +55,26 @@ ncclResult_t ncclTopoFillNet(struct ncclXml* xml, const char* pciPath, const cha
 /* Remove unneeded parts */
 ncclResult_t ncclTopoTrimXml(struct ncclXml* xml);
 
+/* Fuse multiple system XMLs into one, skipping duplicate CPUs */
+ncclResult_t ncclTopoFuseXml(struct ncclXml* dst, struct ncclXml* src);
+/* Relocate pointers in XML to (de-)serialize the structure */
+ncclResult_t ncclTopoConvertXml(struct ncclXml* xml, uintptr_t base, int exp);
+
 /**************/
 /* XML Struct */
 /* Functions  */
 /**************/
+
+static size_t xmlMemSize(int maxNodes) {
+  return offsetof(struct ncclXml, nodes) + sizeof(struct ncclXmlNode)*maxNodes;
+}
+static ncclResult_t xmlAlloc(struct ncclXml** xml, int maxNodes) {
+  char* mem;
+  NCCLCHECK(ncclCalloc(&mem, xmlMemSize(maxNodes)));
+  *xml = (struct ncclXml*)mem;
+  (*xml)->maxNodes = maxNodes;
+  return ncclSuccess;
+}
 
 static ncclResult_t xmlGetAttrIndex(struct ncclXmlNode* node, const char* attrName, int* index) {
   *index = -1;
@@ -101,6 +117,13 @@ static ncclResult_t xmlGetAttrIntDefault(struct ncclXmlNode* node, const char* a
   return ncclSuccess;
 }
 
+static ncclResult_t xmlGetAttrLong(struct ncclXmlNode* node, const char* attrName, int64_t* value) {
+  const char* str;
+  NCCLCHECK(xmlGetAttrStr(node, attrName, &str));
+  *value = strtol(str, NULL, 0);
+  return ncclSuccess;
+}
+
 
 static ncclResult_t xmlGetAttrFloat(struct ncclXmlNode* node, const char* attrName, float* value) {
   const char* str;
@@ -112,6 +135,18 @@ static ncclResult_t xmlGetAttrFloat(struct ncclXmlNode* node, const char* attrNa
 static ncclResult_t xmlFindTag(struct ncclXml* xml, const char* tagName, struct ncclXmlNode** node) {
   *node = NULL;
   for (int i=0; i<xml->maxIndex; i++) {
+    struct ncclXmlNode* n = xml->nodes+i;
+    if (strcmp(n->name, tagName) == 0) {
+      *node = n;
+      return ncclSuccess;
+    }
+  }
+  return ncclSuccess;
+}
+
+static ncclResult_t xmlFindNextTag(struct ncclXml* xml, const char* tagName, struct ncclXmlNode* prev, struct ncclXmlNode** node) {
+  *node = NULL;
+  for (int i=prev-xml->nodes+1; i<xml->maxIndex; i++) {
     struct ncclXmlNode* n = xml->nodes+i;
     if (strcmp(n->name, tagName) == 0) {
       *node = n;
@@ -188,6 +223,19 @@ static ncclResult_t xmlSetAttrFloat(struct ncclXmlNode* node, const char* attrNa
   return ncclSuccess;
 }
 
+static ncclResult_t xmlSetAttrLong(struct ncclXmlNode* node, const char* attrName, const int64_t value) {
+  int index;
+  NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
+  if (index == -1) {
+    index = node->nAttrs++;
+    strncpy(node->attrs[index].key, attrName, MAX_STR_LEN);
+    node->attrs[index].key[MAX_STR_LEN] = '\0';
+  }
+  snprintf(node->attrs[index].value, MAX_STR_LEN, "%#lx", value);
+  node->attrs[index].value[MAX_STR_LEN] = '\0';
+  return ncclSuccess;
+}
+
 static ncclResult_t xmlUnsetAttr(struct ncclXmlNode* node, const char* attrName) {
   int index;
   NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
@@ -234,8 +282,8 @@ static ncclResult_t xmlGetSubKvInt(struct ncclXmlNode* node, const char* subName
 }
 
 static ncclResult_t xmlAddNode(struct ncclXml* xml, struct ncclXmlNode* parent, const char* subName, struct ncclXmlNode** sub) {
-  if (xml->maxIndex == MAX_NODES) {
-    WARN("Error : too many XML nodes (max %d)", MAX_NODES);
+  if (xml->maxIndex == xml->maxNodes) {
+    WARN("Error : too many XML nodes (max %d)", xml->maxNodes);
     return ncclInternalError;
   }
   struct ncclXmlNode* s = xml->nodes+xml->maxIndex++;
@@ -243,7 +291,13 @@ static ncclResult_t xmlAddNode(struct ncclXml* xml, struct ncclXmlNode* parent, 
   s->nAttrs = 0;
   *sub = s;
   s->parent = parent;
-  if (parent) parent->subs[parent->nSubs++] = s;
+  if (parent) {
+    if (parent->nSubs == MAX_SUBS) {
+      WARN("Error : too many XML subnodes (max %d)", MAX_SUBS);
+      return ncclInternalError;
+    }
+    parent->subs[parent->nSubs++] = s;
+  }
   strncpy(s->name, subName, MAX_STR_LEN);
   s->name[MAX_STR_LEN] = '\0';
   return ncclSuccess;
@@ -261,6 +315,29 @@ static ncclResult_t xmlRemoveNode(struct ncclXmlNode* node) {
   parent->nSubs--;
   return ncclSuccess;
 }
+
+static ncclResult_t xmlAddTree(struct ncclXml* dst, struct ncclXmlNode* parent, struct ncclXmlNode* srcNode) {
+  if (dst->maxIndex == dst->maxNodes) {
+    WARN("Error : too many XML nodes (max %d)", dst->maxNodes);
+    return ncclInternalError;
+  }
+  struct ncclXmlNode* dstNode = dst->nodes+dst->maxIndex++;
+  *dstNode = *srcNode;
+  dstNode->parent = parent;
+  if (parent) {
+    if (parent->nSubs == MAX_SUBS) {
+      WARN("Error : too many XML subnodes (max %d)", MAX_SUBS);
+      return ncclInternalError;
+    }
+    parent->subs[parent->nSubs++] = dstNode;
+  }
+  dstNode->nSubs = 0;
+  // Recursively copy the subtree(s)
+  for (int i=0; i<srcNode->nSubs; i++)
+    NCCLCHECK(xmlAddTree(dst, dstNode, srcNode->subs[i]));
+  return ncclSuccess;
+}
+
 
 // Dictionary for STR -> INT conversions. No dictionary size information,
 // there needs to be a last element with str == NULL.

@@ -17,13 +17,17 @@ typedef struct {
   const char* name;
 
   // Initializes tuner states.
-  // nRanks: number of ranks in current communicator. Each communicator initialize its own tuner.
-  // nNodes: number of nodes in current communicator.
-  // logFunction: a logFunction can be useful to integrate logging together with NCCL core.
-  ncclResult_t (*init)(size_t nRanks, size_t nNodes, ncclDebugLogger_t logFunction);
+  // Inputs:
+  //   - nRanks: number of ranks in current communicator. Each communicator initialize its own tuner.
+  //   - nNodes: number of nodes in current communicator.
+  //   - logFunction: a logFunction can be useful to integrate logging together with NCCL core.
+  // Outputs:
+  //   - context: tuner context object
+  ncclResult_t (*init)(size_t nRanks, size_t nNodes, ncclDebugLogger_t logFunction, void **context);
 
   // Gets info (algo, protocol, number of ctas and threads) for a given collective.
   // Inputs:
+  //   - context: tuner context object
   //   - collType: collective type , e.g., allreduce, allgather…
   //   - nBytes: collective size in bytes
   //   - collNetTypeSupport: whether collnet supports this type
@@ -40,16 +44,17 @@ typedef struct {
   // Also, the plugin is allowed to not set any output, or set only the
   // algorithm and protocol, but not only the algorithm or only the protocol.
   // Unset fields will be set automatically by NCCL.
-  ncclResult_t (*getCollInfo)(ncclFunc_t collType, size_t nBytes,
+  ncclResult_t (*getCollInfo)(void* context, ncclFunc_t collType, size_t nBytes,
                               int collNetSupport, int nvlsSupport, int numPipeOps,
                               int *algorithm, int *protocol, int* nChannels);
 
   // Terminates the plugin and cleans up any resources that the plugin allocated.
-  ncclResult_t (*destroy)();
-} ncclTuner_v1_t;
+  // context: tuner context object
+  ncclResult_t (*destroy)(void* context);
+} ncclTuner_v2_t;
 
-typedef ncclTuner_v1_t ncclTuner_t;
+typedef ncclTuner_v2_t ncclTuner_t;
 
-#define NCCL_TUNER_PLUGIN_SYMBOL "ncclTunerPlugin_v1"
+#define NCCL_TUNER_PLUGIN_SYMBOL "ncclTunerPlugin_v2"
 
 #endif

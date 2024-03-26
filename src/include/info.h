@@ -31,13 +31,6 @@ typedef enum : uint8_t {
   ncclPatternRecv
 } ncclPattern_t;
 
-enum ncclRegBufferType {
-  NCCL_REGULAR_BUFFER = 0,
-  NCCL_IPC_REG_BUFFER = 1,
-  NCCL_NVLS_REG_BUFFER = 2,
-  NCCL_REG_BUFFER_NUM = 3
-};
-
 // Used to pass NCCL call information between functions
 struct ncclInfo {
   ncclFunc_t coll;
@@ -70,6 +63,9 @@ struct ncclInfo {
   ncclRegBufferType regBufType;
   void* regBufSend[NCCL_MAX_LOCAL_RANKS];
   void* regBufRecv[NCCL_MAX_LOCAL_RANKS];
+  // collnet buffer reg handles
+  void* sendMhandle;
+  void* recvMhandle;
   // Need to initialize
   int nThreads;
   int nChannels;

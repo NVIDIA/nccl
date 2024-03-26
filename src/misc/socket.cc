@@ -790,6 +790,24 @@ ncclResult_t ncclSocketRecv(struct ncclSocket* sock, void* ptr, int size) {
   return ncclSuccess;
 }
 
+ncclResult_t ncclSocketSendRecv(struct ncclSocket* sendSock, void* sendPtr, int sendSize, struct ncclSocket* recvSock, void* recvPtr, int recvSize) {
+  int sendOffset = 0, recvOffset = 0;
+  if (sendSock == NULL || recvSock == NULL) {
+    WARN("ncclSocketSendRecv: invalid socket %p/%p", sendSock, recvSock);
+    return ncclInternalError;
+  }
+  if (sendSock->state != ncclSocketStateReady || recvSock->state != ncclSocketStateReady) {
+    WARN("ncclSocketSendRecv: socket state (%d/%d) is not ready", sendSock->state, recvSock->state);
+    return ncclInternalError;
+  }
+  while (sendOffset < sendSize || recvOffset < recvSize) {
+    if (sendOffset < sendSize) NCCLCHECK(socketProgress(NCCL_SOCKET_SEND, sendSock, sendPtr, sendSize, &sendOffset));
+    if (recvOffset < recvSize) NCCLCHECK(socketProgress(NCCL_SOCKET_RECV, recvSock, recvPtr, recvSize, &recvOffset));
+  }
+  return ncclSuccess;
+}
+
+
 // Receive or detect connection closed
 ncclResult_t ncclSocketTryRecv(struct ncclSocket* sock, void* ptr, int size, int* closed, bool blocking) {
   int offset = 0;

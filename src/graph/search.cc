@@ -4,6 +4,7 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
+#include "comm.h"
 #include "core.h"
 #include "graph.h"
 #include "topo.h"
@@ -39,6 +40,7 @@ ncclResult_t ncclTopoSearchInit(struct ncclTopoSystem* system) {
   int inter = system->nodes[NET].count;
   if (inter == 0 && system->nodes[GPU].count == 1) {
     system->maxBw = LOC_BW;
+    system->totalBw = LOC_BW;
     return ncclSuccess;
   }
   for (int g=0; g<system->nodes[GPU].count; g++) {
@@ -115,7 +117,6 @@ static ncclResult_t ncclTopoFollowPath(struct ncclTopoSystem* system, struct ncc
     WARN("No path computed to go from %s/%d to %s/%d", topoNodeTypeStr[type1], index1, topoNodeTypeStr[type2], index2);
     return ncclInternalError;
   }
-  if (path->count == 0 ) return ncclSuccess;
 
   // Now check link type
   *node = NULL;
@@ -217,7 +218,7 @@ static ncclResult_t getNetIndex(struct ncclTopoSystem* system, int64_t id, int* 
 }
 
 static ncclResult_t getNetPaths(struct ncclTopoSystem* system, struct ncclTopoGraph* graph, struct ncclTopoLinkList** netPaths) {
-  int netId = graph->inter[graph->nChannels*2];
+  int64_t netId = graph->inter[graph->nChannels*2];
   int n;
   NCCLCHECK(getNetIndex(system, netId, &n));
   *netPaths=system->nodes[NET].nodes[n].paths[GPU];
@@ -261,6 +262,8 @@ ncclResult_t ncclTopoSearchNextGpuSort(struct ncclTopoSystem* system, struct ncc
     for (int i=0; i<count; i++) next[i] = scores[i].g;
   }
 
+  *countPtr = count;
+
   if (system->nodes[NVS].count) {
     // NVSwitches prefer when we talk to a limited set of peers. Try to use neighbors first.
     int index = gpu-system->nodes[GPU].nodes;
@@ -277,16 +280,18 @@ ncclResult_t ncclTopoSearchNextGpuSort(struct ncclTopoSystem* system, struct ncc
     } else {
       firstGpus[0] = nextGpu; firstGpuCount = 1;
     }
+    if (nextGpu == prevGpu && firstGpuCount == 2) firstGpuCount = 1;
+    int firstGpuRealCount = 0;
     for (int g=0; g<firstGpuCount; g++) {
       for (i=0; i<count && next[i] != firstGpus[g]; i++);
       if (i<count) {
         for (; i>0; i--) next[i] = next[i-1];
         next[0] = firstGpus[g];
+        firstGpuRealCount++;
       }
     }
+    *countPtr = firstGpuRealCount;
   }
-
-  *countPtr = count;
   return ncclSuccess;
 }
 
@@ -372,7 +377,6 @@ ncclResult_t ncclTopoCompareGraphs(struct ncclTopoSystem* system, struct ncclTop
     return ncclSuccess;
   }
   // 2. Try to get better bandwidth
-  // Give a 5% perf bonus to paths not crossing nics
   if (graph->nChannels*graph->bwIntra > refGraph->nChannels*refGraph->bwIntra) {
     *copy = 1;
     return ncclSuccess;
@@ -405,8 +409,8 @@ ncclResult_t ncclTopoSelectNets(struct ncclTopoSystem* system, int typeInter, in
     localNetCount = 0;
     struct ncclTopoNode* gpu = system->nodes[GPU].nodes+g;
     for (int c = 0; c<MAXCHANNELS; c++) {
-      int netId;
-      NCCLCHECK(ncclTopoGetLocalNet(system, gpu->gpu.rank, c, &netId));
+      int64_t netId;
+      NCCLCHECK(ncclTopoGetLocalNet(system, gpu->gpu.rank, c, &netId, NULL));
       NCCLCHECK(ncclTopoIdToIndex(system, NET, netId, localNets+localNetCount));
       if (localNetCount > 0 && localNets[localNetCount] == localNets[0]) break;
       localNetCount++;
@@ -427,7 +431,7 @@ ncclResult_t ncclTopoSelectNets(struct ncclTopoSystem* system, int typeInter, in
       localNetCount = 0;
       struct ncclTopoNode* gpu = system->nodes[GPU].nodes+g;
       struct ncclTopoLinkList* paths = gpu->paths[NET];
-      for (int n=0; n<system->nodes[NET].count; n++) {
+      for (int n=0; n<system->nodes[NET].count && n<MAXCHANNELS; n++) {
         if (paths[n].type == t) localNets[localNetCount++] = n;
       }
       // Append NICs to list
@@ -702,22 +706,25 @@ struct kvDict kvDictLinkType[] = {
 
 ncclResult_t ncclTopoGetChannelFromXml(struct ncclXmlNode *xmlChannel, int c, struct ncclTopoSystem* system, struct ncclTopoGraph* graph) {
   int ngpus = system->nodes[GPU].count;
-  int* inter = graph->inter+2*c;
+  int64_t* inter = graph->inter+2*c;
   int* intra = graph->intra+ngpus*c;
   int n=0, g=0;
   for (int s=0; s<xmlChannel->nSubs; s++) {
     struct ncclXmlNode* sub = xmlChannel->subs[s];
-    int dev;
-    NCCLCHECK(xmlGetAttrInt(sub, "dev", &dev));
+    int64_t dev;
+    const char* str;
+    NCCLCHECK(xmlGetAttrStr(sub, "dev", &str));
+    dev = strtol(str, NULL, 16);
     if (strcmp(sub->name, "net") == 0) {
       inter[n++] = dev;
     } else if (strcmp(sub->name, "gpu") == 0) {
       int rank = -1;
       for (int g=0; g<ngpus; g++) {
-        if (system->nodes[GPU].nodes[g].gpu.dev == dev) rank = system->nodes[GPU].nodes[g].gpu.rank;
+        int systemId = NCCL_TOPO_ID_SYSTEM_ID(system->nodes[GPU].nodes[g].id);
+        if (NCCL_TOPO_ID(systemId, system->nodes[GPU].nodes[g].gpu.dev) == dev) rank = system->nodes[GPU].nodes[g].gpu.rank;
       }
       if (rank == -1) {
-        WARN("XML Import Channel : dev %d not found.", dev);
+        WARN("XML Import Channel : dev %ld not found.", dev);
         return ncclSystemError;
       }
       intra[g++] = rank;
@@ -763,29 +770,33 @@ ncclResult_t ncclTopoGetGraphFromXml(struct ncclXmlNode *xmlGraphs, struct ncclT
 ncclResult_t ncclTopoGetXmlFromChannel(struct ncclTopoGraph* graph, int c, struct ncclTopoSystem* system, struct ncclXml *xml, struct ncclXmlNode* parent) {
   struct ncclXmlNode* xmlChannel;
   int ngpus = system->nodes[GPU].count;
-  int* inter = graph->inter+2*c;
+  int64_t* inter = graph->inter+2*c;
   int* intra = graph->intra+ngpus*c;
   NCCLCHECK(xmlAddNode(xml, parent, "channel", &xmlChannel));
   struct ncclXmlNode* node;
   if (system->nodes[NET].count) {
     NCCLCHECK(xmlAddNode(xml, xmlChannel, "net", &node));
-    NCCLCHECK(xmlSetAttrInt(node, "dev", inter[0]));
+    NCCLCHECK(xmlSetAttrLong(node, "dev", inter[0]));
   }
   for (int g=0; g<ngpus; g++) {
     NCCLCHECK(xmlAddNode(xml, xmlChannel, "gpu", &node));
-    int dev = -1;
+    int64_t dev = -1;
     for (int i=0; i<ngpus; i++) {
-      if (system->nodes[GPU].nodes[i].gpu.rank == intra[g]) dev = system->nodes[GPU].nodes[i].gpu.dev;
+      if (system->nodes[GPU].nodes[i].gpu.rank == intra[g]) {
+        int systemId = NCCL_TOPO_ID_SYSTEM_ID(system->nodes[GPU].nodes[i].id);
+        dev = NCCL_TOPO_ID(systemId, system->nodes[GPU].nodes[i].gpu.dev);
+      }
     }
     if (dev == -1) {
       WARN("XML Export Channel : rank %d not found.", intra[g]);
       return ncclInternalError;
     }
-    NCCLCHECK(xmlSetAttrInt(node, "dev", dev));
+    NCCLCHECK(xmlSetAttrLong(node, "dev", dev));
+    if (graph->id == 3) break; // NVLS graphs only use the first GPU
   }
   if (system->nodes[NET].count) {
     NCCLCHECK(xmlAddNode(xml, xmlChannel, "net", &node));
-    NCCLCHECK(xmlSetAttrInt(node, "dev", inter[1]));
+    NCCLCHECK(xmlSetAttrLong(node, "dev", inter[1]));
   }
   return ncclSuccess;
 }
@@ -829,7 +840,7 @@ ncclResult_t ncclTopoDupChannels(struct ncclTopoGraph* graph, int ccMin, int ngp
 
   int dupChannels = std::min(graph->nChannels*2, graph->maxChannels);
   memcpy(graph->intra+graph->nChannels*ngpus, graph->intra, (dupChannels-graph->nChannels)*ngpus*sizeof(int));
-  memcpy(graph->inter+graph->nChannels*2,graph->inter, (dupChannels-graph->nChannels)*2*sizeof(int));
+  memcpy(graph->inter+graph->nChannels*2,graph->inter, (dupChannels-graph->nChannels)*2*sizeof(int64_t));
   graph->bwIntra /= DIVUP(dupChannels, graph->nChannels);
   graph->bwInter /= DIVUP(dupChannels, graph->nChannels);
   graph->nChannels = dupChannels;
@@ -841,7 +852,7 @@ float speedArrayInter[] = { 48.0, 30.0, 28.0, 24.0, 20.0, 18.0, 15.0, 12.0, 10.0
 #define NSPEEDSINTRA (sizeof(speedArrayIntra)/sizeof(float))
 #define NSPEEDSINTER (sizeof(speedArrayInter)/sizeof(float))
 
-float sm90SpeedArrayIntra[] = { 60.0, 50.0, 40.0, 30.0, 24.0, 20.0, 15.0, 12.0, 6.0, 3.0 };
+float sm90SpeedArrayIntra[] = { 60.0, 50.0, 40.0, 30.0, 24.0, 20.0, 15.0, 12.0, 11.0, 6.0, 3.0 };
 float sm90SpeedArrayInter[] = { 48.0, 45.0, 42.0, 40.0, 30.0, 24.0, 22.0, 20.0, 17.5, 15.0, 12.0, 6.0, 3.0, 2.4, 1.2, 0.24, 0.12 };
 #define NSPEEDSINTRA_SM90 (sizeof(sm90SpeedArrayIntra)/sizeof(float))
 #define NSPEEDSINTER_SM90 (sizeof(sm90SpeedArrayInter)/sizeof(float))
@@ -868,7 +879,7 @@ ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph
   if (str) {
     INFO(NCCL_ENV, "NCCL_GRAPH_FILE set by environment to %s", str);
     struct ncclXml* xml;
-    NCCLCHECK(ncclCalloc(&xml, 1));
+    NCCLCHECK(xmlAlloc(&xml, NCCL_GRAPH_XML_MAX_NODES));
     NCCLCHECK(ncclTopoGetXmlGraphFromFile(str, xml));
     int nChannels;
     NCCLCHECK(ncclTopoGetGraphFromXml(xml->nodes, system, graph, &nChannels));
@@ -907,7 +918,7 @@ ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph
   int speedIndex = 0;
   float maxBw = system->maxBw;
   float totalBw = system->totalBw;
-  if (ngpus == 1 || graph->pattern != NCCL_TOPO_PATTERN_RING) totalBw *= ngpus*1.0/(ngpus-1);
+  if (ngpus > 1 && graph->pattern != NCCL_TOPO_PATTERN_RING) totalBw *= ngpus*1.0/(ngpus-1);
   while ((speedArray[speedIndex] > maxBw || speedArray[speedIndex]*graph->minChannels > totalBw) && speedIndex < nspeeds-1) speedIndex++;
   tmpGraph.bwIntra = tmpGraph.bwInter = speedArray[speedIndex];
   int64_t globalTimeout = NCCL_SEARCH_GLOBAL_TIMEOUT;
@@ -926,7 +937,7 @@ search:
     for (int g=0; g<ngpus; g++) {
       printf("%d ", graph->intra[c*ngpus+g]);
     }
-    printf("[%d %d]", graph->inter[c*2+0], graph->inter[c*2+1]);
+    printf("[%lx %lx]", graph->inter[c*2+0], graph->inter[c*2+1]);
     printf("\n");
   }
 #endif
@@ -1041,7 +1052,7 @@ ncclResult_t ncclTopoPrintGraph(struct ncclTopoSystem* system, struct ncclTopoGr
     sprintf(line, "%2d :", c);
     int offset = strlen(line);
     if (system->nodes[NET].count > 0) {
-      sprintf(line+offset, " %s/%d", topoNodeTypeStr[NET], graph->inter[2*c]);
+      sprintf(line+offset, " %s/%lx", topoNodeTypeStr[NET], graph->inter[2*c]);
       offset = strlen(line);
     }
     for (int i=0; i<ngpus; i++) {
@@ -1049,7 +1060,7 @@ ncclResult_t ncclTopoPrintGraph(struct ncclTopoSystem* system, struct ncclTopoGr
       offset = strlen(line);
     }
     if (system->nodes[NET].count > 0) {
-      sprintf(line+offset, " %s/%d", topoNodeTypeStr[NET], graph->inter[2*c+1]);
+      sprintf(line+offset, " %s/%lx", topoNodeTypeStr[NET], graph->inter[2*c+1]);
       offset = strlen(line);
     }
     INFO(NCCL_GRAPH, "%s", line);
@@ -1062,7 +1073,7 @@ ncclResult_t ncclTopoDumpGraphs(struct ncclTopoSystem* system, int ngraphs, stru
   if (str) {
     INFO(NCCL_ENV, "NCCL_GRAPH_DUMP_FILE set by environment to %s", str);
     struct ncclXml* xml;
-    NCCLCHECK(ncclCalloc(&xml, 1));
+    NCCLCHECK(xmlAlloc(&xml, NCCL_GRAPH_XML_MAX_NODES));
     NCCLCHECK(ncclTopoGetXmlFromGraphs(ngraphs, graphs, system, xml));
     NCCLCHECK(ncclTopoDumpXmlToFile(str, xml));
     free(xml);
@@ -1072,11 +1083,11 @@ ncclResult_t ncclTopoDumpGraphs(struct ncclTopoSystem* system, int ngraphs, stru
 
 #include "comm.h"
 // NVLS channels aren't compute channels. Find which NIC corresponds to our rank being the head
-ncclResult_t getNvlsNetDev(struct ncclComm* comm, struct ncclTopoGraph* graph, int channelId, int* dev) {
+ncclResult_t getNvlsNetDev(struct ncclComm* comm, struct ncclTopoGraph* graph, int channelId, int64_t* netId) {
   ncclResult_t ret = ncclSuccess;
   int localRanks = comm->topo->nodes[GPU].count;
   int netNum = 0;
-  int net[MAXCHANNELS];
+  int64_t net[MAXCHANNELS];
 
   for (int c = 0; c < graph->nChannels; c++) {
     if (graph->intra[c * localRanks] == comm->rank) {
@@ -1084,7 +1095,7 @@ ncclResult_t getNvlsNetDev(struct ncclComm* comm, struct ncclTopoGraph* graph, i
     }
   }
   if (netNum) {
-    *dev = net[channelId % netNum];
+    *netId = net[channelId % netNum];
   } else {
     ret = ncclInternalError;
     goto fail;
@@ -1100,23 +1111,30 @@ fail:
 // 0: don't use PXN for P2P, 1: use PXN if needed, 2: use PXN as much as possible to maximize aggregation
 NCCL_PARAM(P2pPxnLevel, "P2P_PXN_LEVEL", 2);
 
-ncclResult_t ncclTopoGetNetDev(struct ncclComm* comm, int rank, struct ncclTopoGraph* graph, int channelId, int peerRank, int* dev, int* proxyRank) {
+ncclResult_t ncclTopoGetNetDev(struct ncclComm* comm, int rank, struct ncclTopoGraph* graph, int channelId, int peerRank, int64_t* id, int* dev, int* proxyRank) {
+  int64_t netId = -1;
+  int netDev = -1;
   if (graph) {
     // Honor the net device in the graph
     int channel = channelId%graph->nChannels;
     int ngpus = comm->topo->nodes[GPU].count;
     int index = graph->intra[channel*ngpus] == rank ? 0 : 1;
     if (graph->pattern != NCCL_TOPO_PATTERN_NVLS) {
-      *dev = graph->inter[channel*2+index];
+      netId = graph->inter[channel*2+index];
     } else {
-      NCCLCHECK(getNvlsNetDev(comm, graph, channelId, dev));
+      NCCLCHECK(getNvlsNetDev(comm, graph, channelId, &netId));
     }
-    NCCLCHECK(ncclTopoGetIntermediateRank(comm->topo, rank, *dev, proxyRank));
+    NCCLCHECK(ncclTopoIdToNetDev(comm->topo, netId, &netDev));
+    if (dev) *dev = netDev;
+    if (id) *id = netId;
+    NCCLCHECK(ncclTopoGetIntermediateRank(comm->topo, rank, netId, proxyRank));
   } else if (peerRank == -1) {
     return ncclInternalError;
   } else {
     // Start with our local NIC and local Rank
-    NCCLCHECK(ncclTopoGetLocalNet(comm->topo, rank, channelId, dev));
+    NCCLCHECK(ncclTopoGetLocalNet(comm->topo, rank, channelId, &netId, &netDev));
+    if (dev) *dev = netDev;
+    if (id) *id = netId;
     *proxyRank = rank;
 
     int pxnLevel = ncclPxnDisable(comm) == 1 ? 0 : ncclParamP2pPxnLevel();
@@ -1126,38 +1144,35 @@ ncclResult_t ncclTopoGetNetDev(struct ncclComm* comm, int rank, struct ncclTopoG
       int nvmlDev = comm->peerInfo[peerRank].nvmlDev;
       int localRank;
       if (ncclTopoDevToRank(comm->topo, nvmlDev, &localRank) != ncclSuccess) return ncclSuccess;
-      int netDev;
-      NCCLCHECK(ncclTopoGetLocalNet(comm->topo, localRank, channelId, &netDev));
+      NCCLCHECK(ncclTopoGetLocalNet(comm->topo, localRank, channelId, &netId, &netDev));
 
-      int n;
       // Check that device exists on our node
       if (ncclParamCrossNic() == 0) {
-        if (ncclTopoIdToIndex(comm->topo, NET, netDev, &n) != ncclSuccess) {
-          WARN("Rank %d requires NIC %d but that NIC is not available for rank %d", peerRank, netDev, rank);
-          return ncclInvalidUsage;
-        }
-        *dev = netDev;
+        if (dev) *dev = netDev;
+        if (id) *id = netId;
       }
       if (pxnLevel == 1) {
         int g, n;
         NCCLCHECK(ncclTopoRankToIndex(comm->topo, rank, &g));
-        NCCLCHECK(ncclTopoIdToIndex(comm->topo, NET, netDev, &n));
+        NCCLCHECK(ncclTopoIdToIndex(comm->topo, NET, netId, &n));
         struct ncclTopoNode* gpu = comm->topo->nodes[GPU].nodes+g;
         if (gpu->paths[NET][n].type <= PATH_PXN) {
-          *dev = netDev;
+          if (dev) *dev = netDev;
+          if (id) *id = netId;
           NCCLCHECK(ncclTopoGetIntermediateRank(comm->topo, rank, *dev, proxyRank));
         }
       } else if (pxnLevel == 2) {
         // Check which local GPU corresponds to that NIC and see if we can use PXN.
         int n, g1, g2;
-        NCCLCHECK(ncclTopoIdToIndex(comm->topo, NET, netDev, &n));
+        NCCLCHECK(ncclTopoIdToIndex(comm->topo, NET, netId, &n));
         NCCLCHECK(ncclTopoRankToIndex(comm->topo, rank, &g1));
-        NCCLCHECK(ncclTopoGetLocalGpu(comm->topo, netDev, &g2));
+        NCCLCHECK(ncclTopoGetLocalGpu(comm->topo, netId, &g2));
         if (g2 != -1) {
           struct ncclTopoNode* peerGpu = comm->topo->nodes[GPU].nodes+g2;
           if (peerGpu->paths[GPU][g1].type <= PATH_NVL && peerGpu->paths[NET][n].type <= PATH_PXB) {
             *proxyRank = peerGpu->gpu.rank;
-            *dev = netDev;
+            if (dev) *dev = netDev;
+            if (id) *id = netId;
             return ncclSuccess;
           }
         }

@@ -150,6 +150,7 @@ static ncclResult_t shmSendConnect(struct ncclComm* comm, struct ncclConnect* co
   }
   send->conn.tail = &resources->devRemHostMem->tail;
   send->conn.head = &resources->devHostMem->head;
+  send->conn.stepSize = comm->buffSizes[NCCL_PROTO_SIMPLE]/NCCL_STEPS;
 
   if (useMemcpyRecv) {
     send->conn.connFifo = resources->devRemHostMem->connFifo;
@@ -189,6 +190,7 @@ static ncclResult_t shmRecvConnect(struct ncclComm* comm, struct ncclConnect* co
   }
   recv->conn.head = &resources->devRemHostMem->head;
   recv->conn.tail = &resources->devHostMem->tail;
+  recv->conn.stepSize = comm->buffSizes[NCCL_PROTO_SIMPLE]/NCCL_STEPS;
 
   if (useMemcpyRecv) {
     NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_SHM, 0, comm->rank, &recv->proxyConn));
@@ -210,6 +212,7 @@ static ncclResult_t shmSendFree(struct ncclConnector* send) {
     NCCLCHECK(ncclShmClose(resources->hostHandle));
     NCCLCHECK(ncclShmClose(resources->remHandle));
     free(resources);
+    send->transportResources = NULL;
   }
   return ncclSuccess;
 }
@@ -220,6 +223,7 @@ static ncclResult_t shmRecvFree(struct ncclConnector* recv) {
     NCCLCHECK(ncclShmClose(resources->hostHandle));
     NCCLCHECK(ncclShmClose(resources->remHandle));
     free(resources);
+    recv->transportResources = NULL;
   }
   return ncclSuccess;
 }
@@ -271,6 +275,7 @@ static ncclResult_t shmSendProxyFree(struct ncclProxyConnection* connection, str
       CUDACHECK(cudaEventDestroy(resources->events[i]));
     }
     free(connection->transportResources);
+    connection->transportResources = NULL;
   }
   return ncclSuccess;
 }
@@ -286,6 +291,7 @@ static ncclResult_t shmRecvProxyFree(struct ncclProxyConnection* connection, str
       CUDACHECK(cudaEventDestroy(resources->events[i]));
     }
     free(connection->transportResources);
+    connection->transportResources = NULL;
   }
   return ncclSuccess;
 }
@@ -409,8 +415,8 @@ static ncclResult_t shmRecvProxyProgress(struct ncclProxyState* proxyState, stru
 struct ncclTransport shmTransport = {
   "SHM",
   shmCanConnect,
-  { shmSendSetup, shmSendConnect, shmSendFree, NULL, NULL, NULL, NULL, NULL },
-  { shmRecvSetup, shmRecvConnect, shmRecvFree, NULL, NULL, NULL, NULL, NULL }
+  { shmSendSetup, shmSendConnect, shmSendFree, NULL, NULL, NULL, NULL, NULL, NULL },
+  { shmRecvSetup, shmRecvConnect, shmRecvFree, NULL, NULL, NULL, NULL, NULL, NULL }
 };
 
 static void initCeOperation() {

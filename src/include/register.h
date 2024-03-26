@@ -5,7 +5,8 @@ enum {
   NET_REG_COMPLETE = 0x01,
   NVLS_REG_COMPLETE = 0x02,
   NVLS_REG_POSSIBLE = 0x04,
-  NVLS_REG_NO_SUPPORT = 0x08
+  NVLS_REG_NO_SUPPORT = 0x08,
+  COLLNET_REG_COMPLETE = 0x10
 };
 
 struct ncclReg {
@@ -26,6 +27,9 @@ struct ncclReg {
   int dev;
   CUmemGenericAllocationHandle mcHandle;
   uintptr_t caddrs[NCCL_MAX_LOCAL_RANKS]; /* use to check if NVLS buffers match among intra-node ranks */
+  // collnet reg
+  void* collnetHandle;
+  struct ncclProxyConnector* proxyconn;
 };
 
 struct ncclRegCache {

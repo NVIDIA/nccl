@@ -317,7 +317,7 @@ struct alignas(16) ncclDevChannel {
   struct ncclTree collnetChain;
   struct ncclDirect collnetDirect;
   struct ncclNvls nvls;
-  uint32_t* workFifoDone; // Location of done counter, device writes index+1 of last work processed
+  volatile uint32_t* workFifoDone; // Location of done counter, device writes index+1 of last work processed
 };
 
 struct ncclDevComm {

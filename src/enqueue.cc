@@ -1078,7 +1078,7 @@ static ncclResult_t uploadWork(struct ncclComm* comm, struct ncclKernelPlan* pla
         // Tell channel to ack us back ix+1 indicating that all slots up to and
         // including ix have been consumed.
         q->work.header.doneAcks = ix+1;
-        comm->channels[c].workFifoSent = ix+1;
+        if (!persistent) comm->channels[c].workFifoSent = ix+1;
       }
       workHeap[ix & ixMask] = q->work; // C++ struct assignment
       q = q->next;

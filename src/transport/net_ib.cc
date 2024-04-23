@@ -78,6 +78,7 @@ pthread_mutex_t ncclIbLock = PTHREAD_MUTEX_INITIALIZER;
 static int ncclIbRelaxedOrderingEnabled = 0;
 
 NCCL_PARAM(IbGidIndex, "IB_GID_INDEX", -1);
+NCCL_PARAM(IbRoutableFlidIbGidIndex, "IB_ROUTABLE_FLID_GID_INDEX", 1);
 NCCL_PARAM(IbRoceVersionNum, "IB_ROCE_VERSION_NUM", 2);
 NCCL_PARAM(IbTimeout, "IB_TIMEOUT", 18);
 NCCL_PARAM(IbRetryCnt, "IB_RETRY_CNT", 7);
@@ -289,7 +290,38 @@ static ncclResult_t ncclUpdateGidIndex(struct ibv_context* context, uint8_t port
   return ncclSuccess;
 }
 
-static ncclResult_t ncclIbGetGidIndex(struct ibv_context *context, uint8_t portNum, int gidTblLen, int *gidIndex) {
+// GID Format
+// global:  |              64b  - subnet-prefix                |                 64b - EUI                          |
+// raw   :  | 10b fixed | 22b 0 | 16b FLID | 16b subnet-prefix |                 64b - EUI                          |
+static uint16_t ncclIbExtractLocalSubnetPrefix(uint64_t subnet_prefix)
+{
+  return (be64toh(subnet_prefix) & 0xffff);
+}
+
+static int ncclIbExtractFlid (union ibv_gid *gid)
+{
+  return ntohs(*((uint16_t*)((uintptr_t)(gid->raw) + 4)));
+}
+
+static ncclResult_t ncclIbGetGidIndex(struct ibv_context *context, uint8_t portNum, struct ibv_port_attr* portAttr, int *gidIndex) {
+  int gidTblLen = portAttr->gid_tbl_len;
+
+  //for IB, choose GID Index that will have routable FLID if present
+  if (portAttr->link_layer == IBV_LINK_LAYER_INFINIBAND) {
+    union ibv_gid gid;
+    int routableGidIndex = ncclParamIbRoutableFlidIbGidIndex();
+    if (routableGidIndex < gidTblLen) {
+      NCCLCHECK(wrap_ibv_query_gid(context, portNum, routableGidIndex, &gid));
+      if (ncclIbExtractFlid(&gid) != 0) {
+        *gidIndex = routableGidIndex;
+        return ncclSuccess;
+      }
+    }
+    *gidIndex = 0;
+    return ncclSuccess;
+  }
+
+  //for ROCE
   *gidIndex = ncclParamIbGidIndex();
   if (*gidIndex >= 0) {
     return ncclSuccess;
@@ -649,12 +681,13 @@ struct ncclIbDevInfo {
   enum ibv_mtu mtu;
   uint8_t link_layer;
 
-  // For RoCE
-  uint64_t spn;
-  uint64_t iid;
+  // For RoCE and IB Rounter
+  union ibv_gid gid;
 
   // FIFO RDMA info
   uint32_t fifoRkey;
+
+  //remote dev info
   union ibv_gid remoteGid;
 };
 
@@ -910,7 +943,7 @@ ncclResult_t ncclIbCreateQp(uint8_t ib_port, struct ncclIbNetCommDevBase* base, 
   return ncclSuccess;
 }
 
-ncclResult_t ncclIbRtrQp(struct ibv_qp* qp, uint8_t sGidIndex, uint32_t dest_qp_num, struct ncclIbDevInfo* info) {
+ncclResult_t ncclIbRtrQp(struct ibv_qp* qp, struct ncclIbGidInfo* sGidInfo, uint32_t dest_qp_num, struct ncclIbDevInfo* info) {
   struct ibv_qp_attr qpAttr;
   memset(&qpAttr, 0, sizeof(struct ibv_qp_attr));
   qpAttr.qp_state = IBV_QPS_RTR;
@@ -921,15 +954,32 @@ ncclResult_t ncclIbRtrQp(struct ibv_qp* qp, uint8_t sGidIndex, uint32_t dest_qp_
   qpAttr.min_rnr_timer = 12;
   if (info->link_layer == IBV_LINK_LAYER_ETHERNET) {
     qpAttr.ah_attr.is_global = 1;
-    qpAttr.ah_attr.grh.dgid.global.subnet_prefix = info->spn;
-    qpAttr.ah_attr.grh.dgid.global.interface_id = info->iid;
+    qpAttr.ah_attr.grh.dgid.global.subnet_prefix = info->gid.global.subnet_prefix;
+    qpAttr.ah_attr.grh.dgid.global.interface_id = info->gid.global.interface_id;
     qpAttr.ah_attr.grh.flow_label = 0;
-    qpAttr.ah_attr.grh.sgid_index = sGidIndex;
+    qpAttr.ah_attr.grh.sgid_index = sGidInfo->localGidIndex;
     qpAttr.ah_attr.grh.hop_limit = 255;
     qpAttr.ah_attr.grh.traffic_class = ncclParamIbTc();
   } else {
-    qpAttr.ah_attr.is_global = 0;
-    qpAttr.ah_attr.dlid = info->lid;
+    //pick lid if subnet prefixs are same, FLID if they are not
+    if (ncclIbExtractLocalSubnetPrefix(sGidInfo->localGid.global.subnet_prefix) ==
+		    ncclIbExtractLocalSubnetPrefix(info->gid.global.subnet_prefix)) {
+        qpAttr.ah_attr.is_global = 0;
+        qpAttr.ah_attr.dlid = info->lid;
+    } else {
+	uint16_t flid = ncclIbExtractFlid(&info->gid);
+        if (flid == 0) {
+          WARN("Warning: remote FLID configured as zero even when endpoints are on different subnets, using dlid as fallback");
+          qpAttr.ah_attr.dlid = info->lid;
+	} else {
+          qpAttr.ah_attr.dlid = ncclIbExtractFlid(&info->gid);
+	}
+        qpAttr.ah_attr.is_global = 1;
+        qpAttr.ah_attr.grh.dgid.global.subnet_prefix = info->gid.global.subnet_prefix;
+        qpAttr.ah_attr.grh.dgid.global.interface_id = info->gid.global.interface_id;
+        qpAttr.ah_attr.grh.sgid_index = sGidInfo->localGidIndex;
+	qpAttr.ah_attr.grh.hop_limit = 255;
+    }
   }
   qpAttr.ah_attr.sl = ncclParamIbSl();
   qpAttr.ah_attr.src_path_bits = 0;
@@ -1041,22 +1091,22 @@ ib_connect_check:
     NCCLCHECK(wrap_ibv_reg_mr(&commDev->fifoMr, commDev->base.pd, comm->fifo, sizeof(struct ncclIbSendFifo)*MAX_REQUESTS*NCCL_NET_IB_MAX_RECVS, IBV_ACCESS_LOCAL_WRITE|IBV_ACCESS_REMOTE_WRITE|IBV_ACCESS_REMOTE_READ));
     devInfo->fifoRkey = commDev->fifoMr->rkey;
 
-    // RoCE support
+    // Pack local GID info
     devInfo->link_layer = commDev->base.gidInfo.link_layer = ibDev->portAttr.link_layer;
-    if (devInfo->link_layer == IBV_LINK_LAYER_ETHERNET) {
-      NCCLCHECK(ncclIbGetGidIndex(ibDev->context, ibDev->portNum, ibDev->portAttr.gid_tbl_len, &commDev->base.gidInfo.localGidIndex));
-      NCCLCHECK(wrap_ibv_query_gid(ibDev->context, ibDev->portNum, commDev->base.gidInfo.localGidIndex, &commDev->base.gidInfo.localGid));
-      devInfo->spn = commDev->base.gidInfo.localGid.global.subnet_prefix;
-      devInfo->iid = commDev->base.gidInfo.localGid.global.interface_id;
-    }
+    NCCLCHECK(ncclIbGetGidIndex(ibDev->context, ibDev->portNum, &ibDev->portAttr, &commDev->base.gidInfo.localGidIndex));
+    NCCLCHECK(wrap_ibv_query_gid(ibDev->context, ibDev->portNum, commDev->base.gidInfo.localGidIndex, &commDev->base.gidInfo.localGid));
+    devInfo->gid.global.subnet_prefix = commDev->base.gidInfo.localGid.global.subnet_prefix;
+    devInfo->gid.global.interface_id = commDev->base.gidInfo.localGid.global.interface_id;
 
+    // info logging
     if (devInfo->link_layer == IBV_LINK_LAYER_INFINIBAND) { // IB
       for (int q = 0; q < comm->base.nqps; q++) {
         // Print just the QPs for this dev
         if (comm->base.qps[q].devIndex == i)
-          INFO(NCCL_NET,"NET/IB: %s %d IbDev %d Port %d qpn %d mtu %d LID %d fifoRkey=0x%x fifoLkey=0x%x",
+          INFO(NCCL_NET,"NET/IB: %s %d IbDev %d Port %d qpn %d mtu %d LID %d subnet-prefix %lu  FLID %d fifoRkey=0x%x fifoLkey=0x%x",
             comm->base.ndevs > 2 ? "NCCL MergedDev" : "NCCL Dev",
-            dev, commDev->base.ibDevN, ibDev->portNum, meta.qpInfo[q].qpn, devInfo->mtu, devInfo->lid, devInfo->fifoRkey, commDev->fifoMr->lkey);
+            dev, commDev->base.ibDevN, ibDev->portNum, meta.qpInfo[q].qpn, devInfo->mtu, devInfo->lid,
+	    devInfo->gid.global.subnet_prefix, ncclIbExtractFlid(&devInfo->gid), devInfo->fifoRkey, commDev->fifoMr->lkey);
       }
     } else { // RoCE
       for (int q = 0; q < comm->base.nqps; q++) {
@@ -1065,7 +1115,7 @@ ib_connect_check:
           INFO(NCCL_NET,"NET/IB: %s %d IbDev %d Port %d qpn %d mtu %d query_ece={supported=%d, vendor_id=0x%x, options=0x%x, comp_mask=0x%x} GID %ld (%lX/%lX) fifoRkey=0x%x fifoLkey=0x%x",
             comm->base.ndevs > 2 ? "NCCL MergedDev" : "NCCL Dev", dev,
             commDev->base.ibDevN, ibDev->portNum, meta.qpInfo[q].qpn, devInfo->mtu, meta.qpInfo[q].ece_supported, meta.qpInfo[q].ece.vendor_id, meta.qpInfo[q].ece.options, meta.qpInfo[q].ece.comp_mask, (int64_t)commDev->base.gidInfo.localGidIndex,
-            devInfo->spn, devInfo->iid, devInfo->fifoRkey, commDev->fifoMr->lkey);
+            devInfo->gid.global.subnet_prefix, devInfo->gid.global.interface_id, devInfo->fifoRkey, commDev->fifoMr->lkey);
       }
     }
   }
@@ -1114,8 +1164,8 @@ ib_connect:
   // Copy remDevInfo for things like remGidInfo, remFifoAddr, etc.
   for (int i = 0; i < remMeta.ndevs; i++) {
     comm->base.remDevs[i] = remMeta.devs[i];
-    comm->base.remDevs[i].remoteGid.global.interface_id = comm->base.remDevs[i].iid;
-    comm->base.remDevs[i].remoteGid.global.subnet_prefix = comm->base.remDevs[i].spn;
+    comm->base.remDevs[i].remoteGid.global.interface_id = comm->base.remDevs[i].gid.global.interface_id;
+    comm->base.remDevs[i].remoteGid.global.subnet_prefix = comm->base.remDevs[i].gid.global.subnet_prefix;
 
     // Retain remote sizes fifo info and prepare RDMA ops
     comm->remSizesFifo.rkeys[i] = remMeta.devs[i].fifoRkey;
@@ -1135,13 +1185,12 @@ ib_connect:
     comm->base.qps[q].remDevIdx = remQpInfo->devIndex;
     int devIndex = comm->base.qps[q].devIndex;
     ncclIbSendCommDev* commDev = comm->devs + devIndex;
-    uint8_t gidIndex = commDev->base.gidInfo.localGidIndex;
 
     struct ibv_qp* qp = comm->base.qps[q].qp;
     if (remQpInfo->ece_supported && remQpInfo->ece_supported)
       NCCLCHECK(wrap_ibv_set_ece(qp, &remQpInfo->ece, &remQpInfo->ece_supported));
 
-    NCCLCHECK(ncclIbRtrQp(qp, gidIndex, remQpInfo->qpn, remDevInfo));
+    NCCLCHECK(ncclIbRtrQp(qp, &commDev->base.gidInfo, remQpInfo->qpn, remDevInfo));
     NCCLCHECK(ncclIbRtsQp(qp));
   }
 
@@ -1237,15 +1286,15 @@ ib_recv:
     ibDevN = mergedDev->devs[i];
     NCCLCHECK(ncclIbInitCommDevBase(ibDevN, &rCommDev->base));
     ibDev = ncclIbDevs + ibDevN;
-    NCCLCHECK(ncclIbGetGidIndex(ibDev->context, ibDev->portNum, ibDev->portAttr.gid_tbl_len, &rCommDev->base.gidInfo.localGidIndex));
+    NCCLCHECK(ncclIbGetGidIndex(ibDev->context, ibDev->portNum, &ibDev->portAttr, &rCommDev->base.gidInfo.localGidIndex));
     NCCLCHECK(wrap_ibv_query_gid(ibDev->context, ibDev->portNum, rCommDev->base.gidInfo.localGidIndex, &rCommDev->base.gidInfo.localGid));
   }
 
   // Copy remDevInfo for things like remGidInfo, remFifoAddr, etc.
   for (int i = 0; i < remMeta.ndevs; i++) {
     rComm->base.remDevs[i] = remMeta.devs[i];
-    rComm->base.remDevs[i].remoteGid.global.interface_id  = rComm->base.remDevs[i].iid;
-    rComm->base.remDevs[i].remoteGid.global.subnet_prefix = rComm->base.remDevs[i].spn;
+    rComm->base.remDevs[i].remoteGid.global.interface_id  = rComm->base.remDevs[i].gid.global.interface_id;
+    rComm->base.remDevs[i].remoteGid.global.subnet_prefix = rComm->base.remDevs[i].gid.global.subnet_prefix;
   }
 
   // Stripe QP creation across merged devs
@@ -1277,7 +1326,7 @@ ib_recv:
         NCCLCHECK(wrap_ibv_query_ece(qp->qp, &meta.qpInfo[q].ece, &meta.qpInfo[q].ece_supported));
     }
 
-    NCCLCHECK(ncclIbRtrQp(qp->qp, rCommDev->base.gidInfo.localGidIndex, remMeta.qpInfo[q].qpn, remDevInfo));
+    NCCLCHECK(ncclIbRtrQp(qp->qp, &rCommDev->base.gidInfo, remMeta.qpInfo[q].qpn, remDevInfo));
     NCCLCHECK(ncclIbRtsQp(qp->qp));
   }
 
@@ -1307,10 +1356,10 @@ ib_recv:
       devInfo.lid         = ibDev->portAttr.lid;
       devInfo.link_layer  = ibDev->portAttr.link_layer;
       devInfo.ib_port     = ibDev->portNum;
-      devInfo.spn         = rCommDev->base.gidInfo.localGid.global.subnet_prefix;
-      devInfo.iid         = rCommDev->base.gidInfo.localGid.global.interface_id;
+      devInfo.gid.global.subnet_prefix        = rCommDev->base.gidInfo.localGid.global.subnet_prefix;
+      devInfo.gid.global.interface_id         = rCommDev->base.gidInfo.localGid.global.interface_id;
       devInfo.mtu         = ibDev->portAttr.active_mtu;
-      NCCLCHECK(ncclIbRtrQp(rCommDev->gpuFlush.qp.qp, rCommDev->base.gidInfo.localGidIndex, rCommDev->gpuFlush.qp.qp->qp_num, &devInfo));
+      NCCLCHECK(ncclIbRtrQp(rCommDev->gpuFlush.qp.qp, &rCommDev->base.gidInfo, rCommDev->gpuFlush.qp.qp->qp_num, &devInfo));
       NCCLCHECK(ncclIbRtsQp(rCommDev->gpuFlush.qp.qp));
     }
 
@@ -1318,8 +1367,8 @@ ib_recv:
     meta.devs[i].lid        = ibDev->portAttr.lid;
     meta.devs[i].link_layer = rCommDev->base.gidInfo.link_layer = ibDev->portAttr.link_layer;
     meta.devs[i].ib_port    = ibDev->portNum;
-    meta.devs[i].spn        = rCommDev->base.gidInfo.localGid.global.subnet_prefix;
-    meta.devs[i].iid        = rCommDev->base.gidInfo.localGid.global.interface_id;
+    meta.devs[i].gid.global.subnet_prefix       = rCommDev->base.gidInfo.localGid.global.subnet_prefix;
+    meta.devs[i].gid.global.interface_id        = rCommDev->base.gidInfo.localGid.global.interface_id;
 
     // Adjust the MTU
     remMeta.devs[i].mtu    = (enum ibv_mtu) std::min(remMeta.devs[i].mtu, ibDev->portAttr.active_mtu);

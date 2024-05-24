@@ -44,6 +44,7 @@ ncclResult_t ncclNetSocketInit(ncclDebugLogger_t logFunction) {
       ncclNetIfs = ncclFindInterfaces(names, addrs, MAX_IF_NAME_SIZE, MAX_IFS);
       if (ncclNetIfs <= 0) {
         WARN("NET/Socket : no interface found");
+        pthread_mutex_unlock(&ncclNetSocketLock);
         return ncclInternalError;
       } else {
         #define MAX_LINE_LEN (2047)

@@ -79,6 +79,8 @@ void ncclDebugInit() {
         mask = NCCL_PROXY;
       } else if (strcasecmp(subsys, "NVLS") == 0) {
         mask = NCCL_NVLS;
+      } else if (strcasecmp(subsys, "PROFILE") == 0) {
+        mask = NCCL_PROFILE;
       } else if (strcasecmp(subsys, "ALL") == 0) {
         mask = NCCL_ALL;
       }

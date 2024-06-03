@@ -98,6 +98,21 @@ static int envSocketFamily(void) {
   return family;
 }
 
+/* Set the number of retries for no route to host*/
+static int envNoRouteRetryCount(void) {
+  int retries = RETRY_NO_ROUTE_TIMES;
+  const char* env = ncclGetEnv("NCCL_NO_ROUTE_RETRY_COUNT");
+
+  if (env == NULL)
+    return retries;
+  
+  retries = atoi(env);
+
+  INFO(NCCL_ENV, "NCCL_NO_ROUTE_RETRY_COUNT set by environment to %s", env);
+  
+  return retries;
+}
+
 static int findInterfaces(const char* prefixList, char* names, union ncclSocketAddress *addrs, int sock_family, int maxIfNameSize, int maxIfs) {
 #ifdef ENABLE_TRACE
   char line[SOCKET_NAME_MAXLEN+1];
@@ -455,6 +470,8 @@ static ncclResult_t socketStartConnect(struct ncclSocket* sock) {
   /* blocking/non-blocking connect() is determined by asyncFlag. */
   int ret = connect(sock->fd, &sock->addr.sa, sock->salen);
 
+  int noRouteRetriesCount = envNoRouteRetryCount();
+
   if (ret == 0) {
     sock->state = ncclSocketStateConnected;
     return ncclSuccess;
@@ -478,6 +495,15 @@ static ncclResult_t socketStartConnect(struct ncclSocket* sock) {
     }
     usleep(SLEEP_INT);
     return ncclSuccess;
+  } else if (errno == EHOSTUNREACH) {
+    if (++sock->noRouteRetries == noRouteRetriesCount) {
+      sock->state = ncclSocketStateError;
+      WARN("socketStartConnect: exceeded no route retries (%d/%d)", sock->noRouteRetries, noRouteRetriesCount);
+      return ncclRemoteError;
+    }
+    INFO(NCCL_ALL, "socketStartConnect: no route retry (%d/%d)", sock->noRouteRetries, noRouteRetriesCount);
+    usleep(SLEEP_INT);
+    return ncclSuccess;
   } else {
     char line[SOCKET_NAME_MAXLEN+1];
     sock->state = ncclSocketStateError;
@@ -490,6 +516,8 @@ static ncclResult_t socketPollConnect(struct ncclSocket* sock) {
   struct pollfd pfd;
   int timeout = 1, ret;
   socklen_t rlen = sizeof(int);
+
+  int noRouteRetriesCount = envNoRouteRetryCount();
 
   memset(&pfd, 0, sizeof(struct pollfd));
   pfd.fd = sock->fd;
@@ -527,6 +555,15 @@ static ncclResult_t socketPollConnect(struct ncclSocket* sock) {
     }
     usleep(SLEEP_INT);
     sock->state = ncclSocketStateConnecting;
+  } else if (ret == EHOSTUNREACH) {
+    if (++sock->noRouteRetries == noRouteRetriesCount) {
+      sock->state = ncclSocketStateError;
+      WARN("socketStartConnect: exceeded no route retries (%d/%d)", sock->noRouteRetries, noRouteRetriesCount);
+      return ncclRemoteError;
+    }
+    INFO(NCCL_ALL, "socketStartConnect: no route retry (%d/%d)", sock->noRouteRetries, noRouteRetriesCount);
+    usleep(SLEEP_INT);
+    return ncclSuccess;
   } else if (ret != EINPROGRESS) {
     sock->state = ncclSocketStateError;
     char line[SOCKET_NAME_MAXLEN+1];
@@ -698,6 +735,7 @@ ncclResult_t ncclSocketInit(struct ncclSocket* sock, union ncclSocketAddress* ad
   if (sock == NULL) goto exit;
   sock->timedOutRetries = 0;
   sock->refusedRetries = 0;
+  sock->noRouteRetries = 0;
   sock->abortFlag = abortFlag;
   sock->asyncFlag = asyncFlag;
   sock->state = ncclSocketStateInitialized;

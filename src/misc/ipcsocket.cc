@@ -132,7 +132,7 @@ ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
       WARN("UDS: Receiving data over socket failed : %d", errno);
       return ncclSystemError;
     }
-    if (handle->abortFlag && __atomic_load_n(handle->abortFlag, __ATOMIC_RELAXED)) return ncclInternalError;
+    if (handle->abortFlag && __atomic_load_n(handle->abortFlag, __ATOMIC_ACQUIRE)) return ncclInternalError;
   }
 
   if (recvFd != NULL) {
@@ -221,7 +221,7 @@ ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
       WARN("UDS: Sending data over socket %s failed : %s (%d)", temp, strerror(errno), errno);
       return ncclSystemError;
     }
-    if (handle->abortFlag && __atomic_load_n(handle->abortFlag, __ATOMIC_RELAXED)) return ncclInternalError;
+    if (handle->abortFlag && __atomic_load_n(handle->abortFlag, __ATOMIC_ACQUIRE)) return ncclInternalError;
   }
 
   return ncclSuccess;

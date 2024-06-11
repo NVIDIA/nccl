@@ -44,10 +44,11 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
   inline __device__ uint32_t sendFlag(int i) { return NCCL_LL_FLAG(sendStep[i]+1); }
 
   inline __device__ void barrier() {
-    if (nthreads == WARP_SIZE)
+    if (nthreads == WARP_SIZE) {
       __syncwarp();
-    else
-      asm volatile ("bar.sync %1, %0;" :: "r"(nthreads), "r"(15-group));
+    } else {
+      barrier_sync(15-group, nthreads);
+    }
   }
 
   uint32_t abort = 0;
@@ -323,7 +324,8 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
   __device__  Primitives(
       const int tid, const int nthreads, int const *recvPeers, int const *sendPeers,
       void const *inputBuf, void *outputBuf, uint64_t redOpArg, uint8_t group=0,
-      uint8_t connIndexRecv=0, uint8_t connIndexSend=0, struct ncclWorkElem* e = nullptr, struct ncclWorkElemP2p* p2p = nullptr, int stepSize_=0
+      uint8_t connIndexRecv=0, uint8_t connIndexSend=0, struct ncclWorkElem* e = nullptr,
+      bool userBufReg=false, int stepSize_=0
     ):
     redOp(redOpArg),
     tid(tid), nthreads(nthreads), wid(tid%WARP_SIZE), group(group),

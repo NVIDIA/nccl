@@ -9,7 +9,10 @@
 #include "graph.h"
 #include "proxy.h"
 #include "gdrwrap.h"
+#include "transport.h"
 #include "assert.h"
+#include "bootstrap.h"
+#include "channel.h"
 
 int64_t ncclParamGdrCopySyncEnable();
 int64_t ncclParamGdrCopyFlushEnable();
@@ -1052,7 +1055,23 @@ fail:
   goto exit;
 }
 
-ncclResult_t ncclCollnetGraphRegisterBuffer(struct ncclComm* comm, struct ncclKernelPlan *plan, const void* userbuff, size_t buffSize, int type, int* outRegBufFlag, void** outHandle) {
+struct ncclCollnetCleanupCallback {
+  struct ncclCommCallback base;
+  struct ncclProxyConnector* proxyConn;
+  void* buffer;
+  size_t size;
+  void* mhandle;
+};
+
+static ncclResult_t cleanupCollnet(struct ncclComm* comm, struct ncclCommCallback* cb) {
+  struct ncclCollnetCleanupCallback* obj = (struct ncclCollnetCleanupCallback*)cb;
+  NCCLCHECK(ncclCollnetDeregBuffer(comm, obj->proxyConn, obj->mhandle));
+  INFO(NCCL_REG, "rank %d - deregistered collnet buffer handle %p, size %ld, buff %p", comm->rank, obj->mhandle, obj->size, obj->buffer);
+  free(obj);
+  return ncclSuccess;
+}
+
+ncclResult_t ncclCollnetGraphRegisterBuffer(struct ncclComm* comm, const void* userbuff, size_t buffSize, int type, int* outRegBufFlag, void** outHandle, struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next>* cleanupQueue, int* nCleanupQueueElts) {
   ncclResult_t ret = ncclSuccess;
   void* handle = NULL;
   struct ncclRegCache* cache = &comm->regCache;
@@ -1060,18 +1079,20 @@ ncclResult_t ncclCollnetGraphRegisterBuffer(struct ncclComm* comm, struct ncclKe
   uintptr_t addr = (uintptr_t)userbuff & -pageSize;
   size_t size = DIVUP((uintptr_t)userbuff - addr + buffSize, pageSize) * pageSize;
   collnetRegInfo info = {addr, size};
-  struct ncclCollnetHandleList* record = NULL;
+  struct ncclCollnetCleanupCallback* record = NULL;
   struct ncclProxyConnector* proxyConn = (type == collNetRecv) ? &comm->channels[0].peers[comm->nRanks]->recv[type].proxyConn : &comm->channels[0].peers[comm->nRanks]->send[type].proxyConn;
 
   *outRegBufFlag = 0;
   NCCLCHECKGOTO(ncclProxyCallBlocking(comm, proxyConn, ncclProxyMsgRegister, &info, sizeof(struct collnetRegInfo), &handle, sizeof(void*)), ret, fail);
-  record = ncclMemoryPoolAlloc<struct ncclCollnetHandleList>(&comm->memPool_ncclCollnetHandleList, &comm->memPermanent);
-  record->proxyconn = proxyConn;
-  record->buffer = userbuff;
+  record = (struct ncclCollnetCleanupCallback*)malloc(sizeof(struct ncclCollnetCleanupCallback));
+  record->base.fn = cleanupCollnet;
+  record->proxyConn = proxyConn;
+  record->buffer = (void*)userbuff;
   record->size = buffSize;
-  *outHandle = record->collnetHandle = handle;
+  *outHandle = record->mhandle = handle;
   *outRegBufFlag = 1;
-  ncclIntruQueueEnqueue(&plan->collnetHandleQueue, record);
+  ncclIntruQueueEnqueue(cleanupQueue, &record->base);
+  *nCleanupQueueElts += 1;
 
 exit:
   return ret;
@@ -1140,3 +1161,269 @@ struct ncclTransport collNetTransport = {
   { sendSetup, sendConnect, sendFree, NULL, sendProxySetup, sendProxyConnect, sendProxyFree, sendProxyProgress, sendProxyRegBuffer, sendProxyDeregBuffer },
   { recvSetup, recvConnect, recvFree, NULL, recvProxySetup, recvProxyConnect, recvProxyFree, recvProxyProgress, recvProxyRegBuffer, recvProxyDeregBuffer }
 };
+
+ncclResult_t ncclCollNetChainBufferSetup(ncclComm_t comm) {
+  ncclResult_t ret = ncclSuccess;
+  char line[1024];
+
+  if (comm->collNetSupport == 0) goto exit;
+  // Connect Collnet + chain
+  for (int c = 0; c < comm->nChannels; c++) {
+    struct ncclChannel* channel = comm->channels + c;
+    NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, 1, &channel->collnetChain.up, 1, channel->collnetChain.down, 0), ret, fail);
+  }
+  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &comm->graphs[NCCL_ALGO_COLLNET_CHAIN], 0), ret, fail);
+  for (int c = 0; c < comm->nChannels; c++) {
+    struct ncclChannel* channel = comm->channels + c;
+    NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, 1, channel->collnetChain.down, 1, &channel->collnetChain.up, 1), ret, fail);
+  }
+  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &comm->graphs[NCCL_ALGO_COLLNET_CHAIN], 1), ret, fail);
+
+  line[0] = '\0';
+  for (int c = 0; c < comm->nChannels; c++) {
+    struct ncclTree* chain = &comm->channels[c].collnetChain;
+    snprintf(line + strlen(line), 1023 - strlen(line), " [%d] %d->%d->%d",
+      c, chain->down[0], comm->rank, chain->up);
+  }
+  line[1023] = '\0';
+
+  INFO(NCCL_INIT, "Connected Collnet Chains %s", line);
+
+exit:
+  return ret;
+fail:
+  goto exit;
+}
+
+ncclResult_t ncclCollNetDirectBufferSetup(ncclComm_t comm) {
+  ncclResult_t ret = ncclSuccess;
+  int highestTransportType0 = TRANSPORT_UNDEFINED, highestTransportType1 = TRANSPORT_UNDEFINED;
+
+  if (comm->collNetSupport == 0) goto exit;
+
+  // Connect intra-node CollNet + Direct
+  for (int c = 0; c < comm->nChannels; c++) {
+    struct ncclChannel* channelRecv = comm->channels + c;
+    NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, NCCL_MAX_DIRECT_ARITY, channelRecv->collnetDirect.up, NCCL_MAX_DIRECT_ARITY, channelRecv->collnetDirect.down, 0), ret, fail);
+  }
+  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &comm->graphs[NCCL_ALGO_COLLNET_DIRECT], 0, &highestTransportType0), ret, fail);
+
+  for (int c = 0; c < comm->nChannels; c++) {
+    struct ncclChannel* channelSend = comm->channels + c;
+    NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, NCCL_MAX_DIRECT_ARITY, channelSend->collnetDirect.down, NCCL_MAX_DIRECT_ARITY, channelSend->collnetDirect.up, 1), ret, fail);
+  }
+  NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &comm->graphs[NCCL_ALGO_COLLNET_DIRECT], 1, &highestTransportType1), ret, fail);
+
+  // Exchange highest intra-node transport type among ranks
+  // because we need to know whether all ranks can p2p each other to determine whether we can directly read/write registered user buffer
+  if (highestTransportType0 != TRANSPORT_UNDEFINED && highestTransportType1 != TRANSPORT_UNDEFINED) {
+    int highestTypes[NCCL_MAX_LOCAL_RANKS] = { TRANSPORT_UNDEFINED };
+
+    comm->intraHighestTransportType = highestTypes[comm->localRank] = highestTransportType0 > highestTransportType1 ? highestTransportType0 : highestTransportType1;
+    NCCLCHECKGOTO(bootstrapIntraNodeAllGather(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, highestTypes, sizeof(int)), ret, fail);
+    for (int i = 0; i < comm->localRanks; i++) {
+      if (highestTypes[i] > comm->intraHighestTransportType)
+        comm->intraHighestTransportType = highestTypes[i];
+    }
+    if (comm->collNetSharedRes->intraHighestTransportType < comm->intraHighestTransportType)
+      comm->collNetSharedRes->intraHighestTransportType = comm->intraHighestTransportType;
+  } else if (comm->intraHighestTransportType == TRANSPORT_UNDEFINED) {
+    // reuse previous shared intraHighestTransportType
+    comm->intraHighestTransportType = comm->collNetSharedRes->intraHighestTransportType;
+  }
+  INFO(NCCL_INIT, "rank %d Connected CollNet", comm->rank);
+
+exit:
+  return ret;
+fail:
+  goto exit;
+}
+
+static ncclResult_t collNetInitRailRankMap(ncclComm_t comm) {
+  int rank = comm->rank;
+  uint64_t nonHeadMask = (1ull << comm->localRanks) - 1;
+
+  comm->collNetDenseToUserRank = ncclMemoryStackAlloc<int>(&comm->memPermanent, comm->nRanks);
+  comm->collNetUserToDenseRank = ncclMemoryStackAlloc<int>(&comm->memPermanent, comm->nRanks);
+  // initialize collNetUserToDenseRank[rank]
+  comm->collNetUserToDenseRank[rank] = -1;
+  for (int h = 0; h < comm->collNetHeadsNum; h++) {
+    nonHeadMask ^= 1ull << comm->rankToLocalRank[comm->collNetHeads[h]];
+    if (comm->collNetHeads[h] == rank) { comm->collNetUserToDenseRank[rank] = h; break; }
+  }
+  if (comm->collNetUserToDenseRank[rank] == -1) {
+    comm->collNetUserToDenseRank[rank] = __builtin_popcountll(nonHeadMask & ((1ull << comm->localRank) - 1));
+  }
+  comm->collNetUserToDenseRank[rank] += comm->node * comm->localRanks;
+
+  NCCLCHECK(bootstrapAllGather(comm->bootstrap, comm->collNetUserToDenseRank, sizeof(int)));
+  for (int r = 0; r < comm->nRanks; r++) {
+    comm->collNetDenseToUserRank[comm->collNetUserToDenseRank[r]] = r;
+  }
+  return ncclSuccess;
+}
+
+ncclResult_t ncclCollNetSetup(ncclComm_t comm, ncclComm_t parent, struct ncclTopoGraph* graphs[]) {
+  ncclResult_t ret = ncclSuccess;
+  int rank = comm->rank;
+  int collNetSetupFail = 0;
+  // Find all head ranks
+  int nHeadsUnique = 0;
+  int* headsUnique = NULL;
+  bool share;
+  struct ncclTopoGraph* directGraph = graphs[NCCL_ALGO_COLLNET_DIRECT];
+
+  struct collnetShareInfo {
+    int headPosition;
+    int isMaster;
+  };
+  struct collnetShareInfo* infos = NULL;
+
+  NCCLCHECKGOTO(ncclCalloc(&headsUnique, directGraph->nChannels), ret, fail);
+  { uint64_t mask = 0;
+    // Head GPU index is always 0
+    for (int c = 0; c < directGraph->nChannels; c++) {
+      int head = directGraph->intra[c * comm->localRanks + 0];
+      assert(comm->rankToNode[head] == comm->node);
+      uint64_t mask0 = mask;
+      mask |= 1ull<<comm->rankToLocalRank[head];
+      if (mask != mask0) headsUnique[nHeadsUnique++] = head;
+    }
+  }
+
+  comm->collNetHeads = headsUnique;
+  comm->collNetHeadsNum = nHeadsUnique;
+  if (parent && parent->collNetSupport && parent->nNodes == comm->nNodes) {
+    if (!parent->config.splitShare) {
+      collNetSetupFail = 1;
+      goto fail;
+    }
+    NCCLCHECKGOTO(ncclCalloc(&infos, comm->nRanks), ret, fail);
+    /* check whether child can share collnet resources of parent. Since parent builds each collnet communicator
+     * based on heads with the same head position in each node, as long as the collnet heads of child comm
+     * can match parent's heads, we can let child communicator share parent's collnet resources. */
+    for (int h = 0; h < nHeadsUnique; ++h) {
+      int prev = INT_MIN;
+      struct collnetShareInfo* myinfo;
+
+      share = true;
+      myinfo = infos + comm->rank;
+      memset(myinfo, 0, sizeof(struct collnetShareInfo));
+      /* find the child head position in parent collnet heads. */
+      if (headsUnique[h] == comm->rank) {
+        myinfo->headPosition = -1;
+        myinfo->isMaster = 1;
+        for (int th = 0; th < parent->collNetHeadsNum; ++th)
+          if (parent->topParentRanks[parent->collNetHeads[th]] == comm->topParentRanks[comm->rank]) {
+            myinfo->headPosition = th;
+            break;
+          }
+      }
+
+      NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, infos, sizeof(struct collnetShareInfo)), ret, fail);
+      for (int i = 0; i < comm->nRanks; ++i) {
+        if (infos[i].isMaster) {
+          if (prev == INT_MIN)
+            prev = infos[i].headPosition;
+
+          if (infos[i].headPosition == -1 || prev != infos[i].headPosition) {
+            share = false;
+            break;
+          }
+        }
+      }
+
+      if (share) {
+        if (myinfo->isMaster) {
+          comm->collNetSharedRes = parent->collNetSharedRes;
+          for (int c = 0; c < comm->nChannels; ++c)
+            NCCLCHECKGOTO(initCollnetChannel(comm, c, parent, true), ret, fail);
+        }
+
+        NCCLCHECKGOTO(collNetInitRailRankMap(comm), ret, fail);
+      } else {
+        /* TODO: CX-6 and CX-7 both do not support multiple sharp resources per process, if child comm cannot
+         * share the sharp resource from parent, we cannot use sharp in this case. This restriction might be
+         * lifted by sharp plugin/IB hardware in the future. */
+        collNetSetupFail = 1;
+        if (comm->rank == 0) {
+          WARN("Child comms (nRanks %d) fails to share parent comms (nRanks %d) sharp resources", comm->nRanks, parent->nRanks);
+        }
+        goto fail;
+      }
+    }
+    share = true;
+  } else {
+    /* this allocated buffer will be freed on proxy side */
+    NCCLCHECK(ncclCalloc(&comm->collNetSharedRes, 1));
+    comm->collNetSharedRes->nChannels = comm->nChannels;
+    comm->collNetSharedRes->buffSize = comm->buffSizes[NCCL_PROTO_SIMPLE];
+
+    NCCLCHECKGOTO(collNetInitRailRankMap(comm), ret, fail);
+
+    for (int c = 0; c < comm->nChannels; c++) {
+      struct ncclChannel* channel = comm->channels + c;
+      NCCLCHECKGOTO(initCollnetChannel(comm, c, parent, false), ret, fail);
+      for (int h = 0; h < nHeadsUnique; h++) {
+        const int head = headsUnique[h];
+        ncclConnect connect;
+        collNetSetupFail |= ncclTransportCollNetSetup(comm, directGraph, channel, head, head, h, collNetRecv, &connect);
+        if (!collNetSetupFail) collNetSetupFail |= ncclTransportCollNetSetup(comm, directGraph, channel, head, head, h, collNetSend, &connect);
+      }
+      // Verify CollNet setup across ranks after trying the first channel
+      if (c == 0) {
+        NCCLCHECKGOTO(ncclTransportCollNetCheck(comm, collNetSetupFail), ret, fail);
+      }
+    }
+    share = false;
+  }
+
+  if (share) {
+    memcpy(comm->collNetSupportMatrix, parent->collNetSupportMatrix, sizeof(comm->collNetSupportMatrix));
+  } else {
+    do {
+      /* Initialize all entries in collNetSupportMatrix[redop][type]. Since some
+      ranks don't connect to sharp we enable a (redop,type) if any rank claims
+      support. */
+      uint8_t(*matrix)[4][ncclNumTypes];
+      bool isHead = false;
+      matrix = nullptr;
+      NCCLCHECKGOTO(ncclCalloc(&matrix, comm->nRanks), ret, matrix_end);
+      for (int h = 0; h < nHeadsUnique; h++) isHead |= (headsUnique[h] == comm->rank);
+      if (isHead) {
+        for (int ty=0; ty < ncclNumTypes; ty++) {
+          for (int op=0; op < 4; op++) {
+            int support = 0;
+            NCCLCHECKGOTO(collNetReduceSupport(comm, (ncclDataType_t)ty, (ncclRedOp_t)op, &support), ret, matrix_end);
+            // bit 0 = not supported, bit 1 = supported
+            matrix[rank][op][ty] = 1<<(support ? 1 : 0);
+          }
+        }
+      }
+      NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, matrix, sizeof(*matrix)), ret, matrix_end);
+      for (int ty=0; ty < ncclNumTypes; ty++) {
+        for (int op=0; op < 4; op++) {
+          uint8_t accum = 0;
+          for (int r=0; r < comm->nRanks; r++) accum |= matrix[r][op][ty];
+          // We support (redop, type) if some rank supports it and no rank doesn't support it
+          comm->collNetSupportMatrix[op][ty] = (accum == (1<<1));
+        }
+      }
+    matrix_end:
+      free(matrix);
+      if (ret != ncclSuccess) goto fail;
+    } while (0);
+  }
+
+  // Verify CollNet setup across ranks after trying all channels
+  NCCLCHECKGOTO(ncclTransportCollNetCheck(comm, collNetSetupFail), ret, fail);
+  TRACE(NCCL_INIT, "rank %d Connected inter-node CollNet", rank);
+
+exit:
+  free(infos);
+  return ret;
+fail:
+  ncclTransportCollNetFree(comm);
+  comm->collNetSupport = 0;
+  goto exit;
+}

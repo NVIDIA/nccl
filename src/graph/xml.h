@@ -55,7 +55,7 @@ ncclResult_t ncclTopoFillNet(struct ncclXml* xml, const char* pciPath, const cha
 /* Remove unneeded parts */
 ncclResult_t ncclTopoTrimXml(struct ncclXml* xml);
 
-/* Fuse multiple system XMLs into one, skipping duplicate CPUs */
+/* Fuse multiple system XMLs into one, skipping duplicate entries */
 ncclResult_t ncclTopoFuseXml(struct ncclXml* dst, struct ncclXml* src);
 /* Relocate pointers in XML to (de-)serialize the structure */
 ncclResult_t ncclTopoConvertXml(struct ncclXml* xml, uintptr_t base, int exp);
@@ -164,6 +164,29 @@ static ncclResult_t xmlFindTagKv(struct ncclXml* xml, const char* tagName, struc
       const char* value;
       NCCLCHECK(xmlGetAttr(n, attrName, &value));
       if (value && strcmp(value, attrValue) == 0) {
+        *node = n;
+        return ncclSuccess;
+      }
+    }
+  }
+  return ncclSuccess;
+}
+
+static ncclResult_t xmlFindNode(struct ncclXmlNode* parentNode, struct ncclXmlNode* searchNode, struct ncclXmlNode** node) {
+  *node = NULL;
+  // Search for the node at the current level only.
+  for (int i=0; i<parentNode->nSubs; i++) {
+    struct ncclXmlNode* n = parentNode->subs[i];
+    if (strcmp(n->name, searchNode->name) == 0 && n->type == searchNode->type && n->nAttrs == searchNode->nAttrs) {
+      int a;
+      // Ensure that all the attributes are the same.
+      for (a=0; a<searchNode->nAttrs; a++) {
+        const char* val;
+        NCCLCHECK(xmlGetAttr(n, searchNode->attrs[a].key, &val));
+        if (!val || strcmp(val, searchNode->attrs[a].value))
+          break;
+      }
+      if (a == searchNode->nAttrs) {
         *node = n;
         return ncclSuccess;
       }

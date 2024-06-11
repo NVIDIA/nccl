@@ -23,7 +23,7 @@ class Primitives<
                        ConnFifoEnabled = 0x100,
                        DirectWrite = 0x200,
                        DirectRead = 0x400,
-                       ThreadsSynced = 0x800,
+                       // 0x800 is free to use
                        NvlsMinPolling = 0x1000,
                        NetDeviceUnpack = 0x2000,
                        AnyNetDeviceUnpack = 0x4000,
@@ -44,53 +44,38 @@ class Primitives<
   uint64_t *connStepPtr;
   uint64_t connStepCache; // Cache last seen value of (*connStepPtr)
   int      connStepSize; // Connection step size
-  void*    mhandle;
   void*    netDeviceHandle;
 
   // Don't use barrier 0 as it's used by the final sync
   __device__ void barrier() {
-    flags |= ThreadsSynced;
     if (nthreads == WARP_SIZE) __syncwarp();
     else {
       int bar = 15-group;
-      asm volatile("bar.sync %0, %1;" :: "r"(bar), "r"(nthreads) : "memory");
+      barrier_sync(bar, nthreads);
     }
   }
   __device__ void subBarrier() {
     if (nworkers == WARP_SIZE) __syncwarp();
     else {
-      int bar = (nworkers==nthreads ? 15 : 8) - group;
-      asm volatile("bar.sync %0, %1;" :: "r"(bar), "r"(nworkers) : "memory");
+      int bar = 15-group - (nworkers!=nthreads ? 1 : 0);
+      barrier_sync(bar, nworkers);
     }
   }
 
   __device__ bool barrierAny(int vote) {
-    flags |= ThreadsSynced;
     if (nthreads == WARP_SIZE) {
       return __any_sync(~0u, vote);
     } else {
-      int ans, bar = 15-group;
-      asm volatile(
-        "{ .reg .pred p;"
-        "  setp.ne.s32 p, %1, 0;"
-        "  bar.red.or.pred p, %2, %3, p; "
-        "  selp.s32 %0, 1, 0, p; }"
-        : "=r"(ans) : "r"(vote), "r"(bar), "r"(nthreads) : "memory");
-      return ans != 0;
+      int name = 15-group;
+      return barrier_red_or(vote, name, nthreads);
     }
   }
   __device__ bool subBarrierAny(int vote) {
     if (nworkers == WARP_SIZE) {
       return __any_sync(~0u, vote);
     } else {
-      int ans, bar = (nworkers==nthreads ? 15 : 8) - group;
-      asm volatile(
-        "{ .reg .pred p;"
-        "  setp.ne.s32 p, %1, 0;"
-        "  bar.red.or.pred p, %2, %3, p; "
-        "  selp.s32 %0, 1, 0, p; }"
-        : "=r"(ans) : "r"(vote), "r"(bar), "r"(nworkers) : "memory");
-      return ans != 0;
+      int name = 15-group - (nworkers!=nthreads ? 1 : 0);
+      return barrier_red_or(vote, name, nworkers);
     }
   }
 
@@ -164,8 +149,8 @@ class Primitives<
       else {
         ptrs[index] = connEltsFifo + (step%NCCL_STEPS)*connStepSize;
       }
-      if ((flags & (AnyNetDeviceUnpack)) && (flags & (Recv*RoleWaitRecv))) {
-        ncclNetDeviceIncrementHead(group);
+      if (flags & NetDeviceUnpack) {
+        ncclNetDeviceIncrementHead(group, index);
       }
       step += StepPerSlice;
     }
@@ -436,7 +421,7 @@ private:
     }
   }
 
-  __device__ __forceinline__ void loadRecvConn(ncclDevChannelPeer *peer, int connIndex, struct ncclWorkElem* e) {
+  __device__ __forceinline__ void loadRecvConn(ncclDevChannelPeer *peer, int connIndex, struct ncclDevWorkColl* e) {
     if (flags & (RoleWaitRecv|RolePostRecv)) {
       auto *conn = &peer->recv[connIndex];
       if (conn->netDeviceHandle.netDeviceType == NCCL_NET_DEVICE_UNPACK) {
@@ -488,7 +473,7 @@ private:
     }
   }
 
-  __device__ __forceinline__ void loadSendConn(ncclDevChannelPeer *peer, int connIndex, struct ncclWorkElem* e) {
+  __device__ __forceinline__ void loadSendConn(ncclDevChannelPeer *peer, int connIndex, struct ncclDevWorkColl* e) {
     if (flags & (RoleWaitSend|RolePostSend)) {
       auto *conn = &peer->send[connIndex];
       step = conn->step;
@@ -538,13 +523,13 @@ private:
   __device__ Primitives(
       int tid, int nthreads, int const *recvPeers, int const *sendPeers,
       void const *inputBuf, void *outputBuf, uint64_t redOpArg, uint8_t group=0,
-      uint8_t connIndexRecv = 0, uint8_t connIndexSend = 0, struct ncclWorkElem* e = nullptr, struct ncclWorkElemP2p* p2p = nullptr, int stepSize_=0
+      uint8_t connIndexRecv = 0, uint8_t connIndexSend = 0, struct ncclDevWorkColl* e = nullptr,bool userBufReg=false, int stepSize_=0
     ):
     tid(tid), nthreads(nthreads), tidInBlock(threadIdx.x), group(group),
     stepSize(stepSize_ == 0 ? ncclShmem.comm.buffSizes[NCCL_PROTO_SIMPLE]/NCCL_STEPS/sizeof(T) : stepSize_) {
 
     // For send operations, we need an extra warp to overlap the threadfence and the copy
-    this->nworkers = nthreads - (MaxSend > 0 && nthreads-WARP_SIZE >= 64 ? WARP_SIZE : 0);
+    this->nworkers = nthreads - (MaxSend > 0 && nthreads >= NCCL_SIMPLE_EXTRA_GROUP_IF_NTHREADS_GE ? WARP_SIZE : 0);
 
     int nrecv=0, nsend=0;
     while (nrecv < MaxRecv && recvPeers[nrecv] != -1) nrecv++;
@@ -572,7 +557,7 @@ private:
     loadRecvConn(ncclShmem.channel.peers[peer], connIndexRecv, e);
     loadSendConn(ncclShmem.channel.peers[peer], connIndexSend, e);
 
-    if (p2p && p2p->reg) flags |= UserBufferMode;
+    if (userBufReg) flags |= UserBufferMode;
 
     if (barrierAny(flags & NetDeviceUnpack)) {
       flags |= AnyNetDeviceUnpack;
@@ -584,13 +569,12 @@ private:
       }
     }
 
-    setDataPtrs(inputBuf, outputBuf, redOpArg, (struct ncclWorkElemReg*)e);
+    setDataPtrs(inputBuf, outputBuf, redOpArg, (struct ncclDevWorkCollReg*)e);
   }
 
   __device__ ~Primitives() {
     // Ensure ncclShmem.groups[].send/recvConns are available
-    if (!(flags & ThreadsSynced))
-      barrier();
+    barrier();
     // Save steps for the next operation
     if (flags & (RolePostSend|RolePostRecv)) {
       auto *conns = (flags & RolePostSend) ? ncclShmem.groups[group].sendConns : ncclShmem.groups[group].recvConns;
@@ -606,8 +590,8 @@ private:
       while (*ptr != -1) if (checkAbort(spins)) break;
     }
 
-    if ((flags & (AnyNetDeviceUnpack)) && (flags & (RoleWaitRecv))) {
-      ncclNetDeviceSaveHead(netDeviceHandle, group);
+    if (flags & NetDeviceUnpack) {
+      ncclNetDeviceSaveHead(netDeviceHandle, group, index);
     }
 
     // Make sure all threads are done writing back conn->step and done using
@@ -615,7 +599,7 @@ private:
     barrier();
   }
 
-  __device__ void setDataPtrs(void const *inputBuf, void *outputBuf, uint64_t redOpArg, struct ncclWorkElemReg* e) {
+  __device__ void setDataPtrs(void const *inputBuf, void *outputBuf, uint64_t redOpArg, struct ncclDevWorkCollReg* e) {
     if (tid==0) {
       ncclShmem.groups[group].userInput = (void*)inputBuf;
       ncclShmem.groups[group].userOutput = (void*)outputBuf;
@@ -625,7 +609,7 @@ private:
     bool sendAcceptor = (flags == (flags|RoleWaitSend|DirectWrite)) || (flags == (flags|RoleWaitSend|NvlsDirectWrite));
     bool sendProvider = flags == (flags|RoleWaitSend|DirectRead); // sender provides direct buffer (to be fetched)
     bool recvAcceptor = flags == (flags|RoleWaitRecv|DirectRead) || (flags == (flags|RoleWaitRecv|NvlsDirectRead)); // receiver accepts direct buffer
-    int regUsed = e != nullptr ? e->elem.regUsed : 0;
+    int regUsed = e != nullptr ? e->coll.regUsed : 0;
 
     if (Direct && recvProvider) {
       int spins = 0;

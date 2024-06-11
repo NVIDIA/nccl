@@ -93,7 +93,8 @@ uint64_t getHostHash(void) {
 
   if ((hostId = ncclGetEnv("NCCL_HOSTID")) != NULL) {
     INFO(NCCL_ENV, "NCCL_HOSTID set by environment to %s", hostId);
-    strncpy(hostHash, hostId, sizeof(hostHash));
+    strncpy(hostHash, hostId, sizeof(hostHash)-1);
+    hostHash[sizeof(hostHash)-1] = '\0';
   } else {
     FILE *file = fopen(HOSTID_FILE, "r");
     if (file != NULL) {
@@ -289,81 +290,5 @@ void ncclMemoryStackDestruct(struct ncclMemoryStack* me) {
     struct ncclMemoryStack::Hunk *h1 = h->above;
     free(h);
     h = h1;
-  }
-}
-
-const char* ncclOpToString(ncclRedOp_t op) {
-  switch (op) {
-    case ncclSum:
-      return "ncclSum";
-    case ncclProd:
-      return "ncclProd";
-    case ncclMax:
-      return "ncclMax";
-    case ncclMin:
-      return "ncclMin";
-    case ncclAvg:
-      return "ncclAvg";
-    default:
-      return "Unknown";
-  }
-}
-
-const char* ncclDatatypeToString(ncclDataType_t type) {
-  switch (type) {
-    case ncclInt8: // ncclChar
-      return "ncclInt8";
-    case ncclInt32: // ncclInt
-      return "ncclInt32";
-    case ncclUint32:
-      return "ncclUint32";
-    case ncclInt64:
-      return "ncclInt64";
-    case ncclUint64:
-      return "ncclUint64";
-    case ncclFloat16: // ncclHalf
-      return "ncclFloat16";
-    case ncclFloat32: // ncclFloat
-      return "ncclFloat32";
-    case ncclFloat64: // ncclDouble
-      return "ncclFloat64";
-#if defined(__CUDA_BF16_TYPES_EXIST__)
-    case ncclBfloat16:
-      return "ncclBfloat16";
-#endif
-    default:
-      return "Unknown";
-  }
-}
-
-const char* ncclAlgoToString(int algo) {
-  switch (algo) {
-    case NCCL_ALGO_TREE:
-      return "TREE";
-    case NCCL_ALGO_RING:
-      return "RING";
-    case NCCL_ALGO_COLLNET_DIRECT:
-      return "COLLNET_DIRECT";
-    case NCCL_ALGO_COLLNET_CHAIN:
-      return "COLLNET_CHAIN";
-    case NCCL_ALGO_NVLS:
-      return "NVLS";
-    case NCCL_ALGO_NVLS_TREE:
-      return "NVLS_TREE";
-    default:
-      return "Unknown";
-  }
-}
-
-const char* ncclProtoToString(int proto) {
-  switch (proto) {
-    case NCCL_PROTO_LL:
-      return "LL";
-    case NCCL_PROTO_LL128:
-      return "LL128";
-    case NCCL_PROTO_SIMPLE:
-      return "SIMPLE";
-    default:
-      return "Unknown";
   }
 }

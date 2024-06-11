@@ -1,6 +1,11 @@
 #ifndef NCCL_REGISTER_H_
 #define NCCL_REGISTER_H_
 
+#include "device.h"
+
+#include <cuda.h>
+#include <stdint.h>
+
 enum {
   NET_REG_COMPLETE = 0x01,
   NVLS_REG_COMPLETE = 0x02,

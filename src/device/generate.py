@@ -233,6 +233,8 @@ with open(os.path.join(gensrc, "host_table.cc"), "w") as f:
   out('#include "device.h"\n')
   out("\n")
 
+  out("extern int const ncclDevFuncIdCount = %d;\n" % len(primary_funcs))
+
   # The mapping from function rows to valid primary function ids.
   out("extern int const ncclDevFuncRowToId[] = {\n")
   index = 0
@@ -251,7 +253,7 @@ with open(os.path.join(gensrc, "host_table.cc"), "w") as f:
     cudart, _ = required_cuda(*kfn)
     sym = paste("_", "ncclDevKernel", *kfn)
     if cudart != 0: out("#if CUDART_VERSION >= %d\n" % cudart)
-    out("__global__ void %s(struct ncclDevComm*, uint64_t, struct ncclWork*);\n" % sym)
+    out("__global__ void %s(ncclDevKernelArgs4K const);\n" % sym)
     if cudart != 0: out("#endif\n")
   out("\n")
 

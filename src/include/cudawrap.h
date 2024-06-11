@@ -80,6 +80,10 @@ DECLARE_CUDA_PFN_EXTERN(cuCtxGetCurrent);
 DECLARE_CUDA_PFN_EXTERN(cuCtxSetCurrent);
 DECLARE_CUDA_PFN_EXTERN(cuCtxGetDevice);
 DECLARE_CUDA_PFN_EXTERN(cuPointerGetAttribute);
+DECLARE_CUDA_PFN_EXTERN(cuLaunchKernel);
+#if CUDART_VERSION >= 11080
+DECLARE_CUDA_PFN_EXTERN(cuLaunchKernelEx);
+#endif
 // cuMem API support
 DECLARE_CUDA_PFN_EXTERN(cuMemAddressReserve);
 DECLARE_CUDA_PFN_EXTERN(cuMemAddressFree);

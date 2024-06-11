@@ -37,6 +37,7 @@ template<typename T>
 struct FuncSum  { using EltType = T; __device__ FuncSum(uint64_t opArg=0) {}; };
 template<typename T>
 struct FuncProd { using EltType = T; __device__ FuncProd(uint64_t opArg=0) {}; };
+
 template<typename T>
 struct FuncMinMax {
   using EltType = T;
@@ -47,8 +48,29 @@ struct FuncMinMax {
     isMinNotMax = (opArg&1)==0;
   }
 };
+
 template<typename T> struct FuncPreMulSum;
 template<typename T> struct FuncSumPostDiv;
+
+////////////////////////////////////////////////////////////////////////////////
+// Trait class for handling the reduction argument.
+
+template<typename Fn>
+struct RedOpArg { // default case: no argument
+  static constexpr bool ArgUsed = false;
+  __device__ static uint64_t loadArg(void *ptr) { return 0; }
+};
+
+template<typename T>
+struct RedOpArg<FuncMinMax<T>> {
+  static constexpr bool ArgUsed = true;
+  __device__ static uint64_t loadArg(void *ptr) {
+    union { uint64_t u64; T val; };
+    u64 = 0;
+    val = *(T*)ptr;
+    return u64;
+  }
+};
 
 ////////////////////////////////////////////////////////////////////////////////
 // Trait classes for reduction functions. Given a function (FuncSum, etc.)
@@ -356,6 +378,17 @@ struct Apply_PostOp<Fn, /*EltPerPack=*/0> {
 ////////////////////////////////////////////////////////////////////////////////
 // FuncPreMulSum
 
+template<typename T>
+struct RedOpArg<FuncPreMulSum<T>> {
+  static constexpr bool ArgUsed = true;
+  __device__ static uint64_t loadArg(void *ptr) {
+    union { uint64_t u64; T val; };
+    u64 = 0;
+    val = *(T*)ptr;
+    return u64;
+  }
+};
+
 // General definition for all integral types, float, and double.
 template<typename T>
 struct FuncPreMulSum {
@@ -485,6 +518,14 @@ struct Apply_PreOp<FuncPreMulSum<half>, /*EltPerPack=*/1> {
 
 ////////////////////////////////////////////////////////////////////////////////
 // FuncSumPostDiv
+
+template<typename T>
+struct RedOpArg<FuncSumPostDiv<T>> {
+  static constexpr bool ArgUsed = true;
+  __device__ static uint64_t loadArg(void *ptr) {
+    return *(uint64_t*)ptr;
+  }
+};
 
 template<typename T, bool IsFloating=IsFloatingPoint<T>::value>
 struct FuncSumPostDiv_IntOnly;
@@ -658,7 +699,7 @@ struct Apply_LoadMultimem {
     static constexpr bool IsFloat = IsFloatingPoint<T>::value;
     static constexpr int BigPackSize =
       IsFloat && IsSum && sizeof(T) < 8 ? 16 :
-      IsFloat && IsSum ? 8 :
+      IsFloat && IsSum ? sizeof(T) :
       IsFloat && IsMinMax && sizeof(T)==2 ? 16 :
       !IsFloat && (IsSum||IsMinMax) && sizeof(T)>=4 ? sizeof(T) :
       /*multimem.ld_reduce not supported:*/ 0;

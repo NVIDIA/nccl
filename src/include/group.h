@@ -35,9 +35,12 @@ struct ncclAsyncJob {
   void(*undo)(struct ncclAsyncJob*);
   void(*destructor)(void*);
   ncclGroupJobState_t state;
-  volatile uint32_t *abortFlag; /* point to comm abortFlag */
-  volatile uint32_t *childAbortFlag; /* point to child abortFlag */
+  uint32_t* abortFlag; /* point to comm abortFlag */
+  uint32_t* abortFlagDev; /* point to comm abortFlagDev */
+  uint32_t* childAbortFlag; /* point to child abortFlag */
+  uint32_t* childAbortFlagDev; /* point to child abortFlagDev */
   ncclComm_t comm;
+  int destroyFlag;
 };
 
 ncclResult_t ncclAsyncLaunch(
@@ -52,14 +55,14 @@ struct ncclGroupJob {
   struct ncclComm **groupCommHeadPtr;
   struct ncclComm **groupCommPreconnectHeadPtr;
   ncclResult_t *groupErrorPtr;
-  volatile bool *abortFlagPtr;
+  bool *abortFlagPtr;
   int *groupBlockingPtr;
   struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> *asyncJobsPtr;
   bool initialized;
 };
 
 ncclResult_t ncclGroupStartInternal();
-ncclResult_t ncclGroupEndInternal();
+ncclResult_t ncclGroupEndInternal(ncclSimInfo_t* simInfo = NULL);
 ncclResult_t ncclAsyncJobComplete(struct ncclAsyncJob* job);
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -114,6 +117,10 @@ inline void ncclGroupCommJoin(struct ncclComm* comm) {
     // Comms gets a new memory stack scope upon joining. Each task batched for
     // this comm is allocated there.
     ncclMemoryStackPush(&comm->memScoped);
+    // Initialize planner
+    ncclKernelPlanner::Peer* tmp = comm->planner.peers;
+    memset(&comm->planner, 0, sizeof(comm->planner));
+    comm->planner.peers = tmp;
   }
 
   ncclGroupBlocking = comm->config.blocking;

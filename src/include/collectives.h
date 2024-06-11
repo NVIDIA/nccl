@@ -8,6 +8,8 @@
 #define NCCL_COLLECTIVES_H_
 
 #include "nccl.h"
+#include "nccl_common.h"
+#include "device.h"
 
 // CHUNKSIZE must be a multiple of SLICESIZE
 #define ALLREDUCE_SLICESTEPS (NCCL_STEPS/4)
@@ -21,6 +23,12 @@
 #define REDUCE_SLICESTEPS 1
 #define REDUCE_CHUNKSTEPS 1
 #define NCCL_MAX_SLICE_PER_CHUNK 2  // max value for CHUNKSTEPS/SLICESTEPS, must accord with above
+
+const char* ncclFuncToString(ncclFunc_t op);
+const char* ncclDevRedOpToString(ncclDevRedOp_t op);
+const char* ncclDatatypeToString(ncclDataType_t type);
+const char* ncclAlgoToString(int algo);
+const char* ncclProtoToString(int proto);
 
 inline int ncclTypeSize(ncclDataType_t type) {
   switch (type) {

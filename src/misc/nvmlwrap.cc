@@ -41,11 +41,19 @@ namespace {
   NCCL_NVML_FN(nvmlDeviceGetFieldValues, nvmlReturn_t, (nvmlDevice_t device, int valuesCount, nvmlFieldValue_t *values))
   // MNNVL support
   NCCL_NVML_FN(nvmlDeviceGetGpuFabricInfoV, nvmlReturn_t, (nvmlDevice_t device, nvmlGpuFabricInfoV_t *gpuFabricInfo))
+  // CC support
+  NCCL_NVML_FN(nvmlSystemGetConfComputeState, nvmlReturn_t, (nvmlConfComputeSystemState_t *state));
+  NCCL_NVML_FN(nvmlSystemGetConfComputeSettings, nvmlReturn_t, (nvmlSystemConfComputeSettings_t *setting));
 
   std::mutex lock; // NVML has had some thread safety bugs
   bool initialized = false;
   thread_local bool threadInitialized = false;
   ncclResult_t initResult;
+
+  union nvmlCCInfoInternal {
+    nvmlConfComputeSystemState_t settingV12020;
+    nvmlSystemConfComputeSettings_t settingV12040;
+  };
 }
 
 ncclResult_t ncclNvmlEnsureInitialized() {
@@ -87,6 +95,9 @@ ncclResult_t ncclNvmlEnsureInitialized() {
       {(void**)&pfn_nvmlDeviceGetFieldValues, "nvmlDeviceGetFieldValues"},
       // MNNVL support
       {(void**)&pfn_nvmlDeviceGetGpuFabricInfoV, "nvmlDeviceGetGpuFabricInfoV"},
+      // CC support
+      {(void**)&pfn_nvmlSystemGetConfComputeState, "nvmlSystemGetConfComputeState"},
+      {(void**)&pfn_nvmlSystemGetConfComputeSettings, "nvmlSystemGetConfComputeSettings"}
     };
     for(Symbol sym: symbols) {
       *sym.ppfn = dlsym(libhandle, sym.name);
@@ -280,5 +291,35 @@ ncclResult_t ncclNvmlDeviceGetGpuFabricInfoV(nvmlDevice_t device, nvmlGpuFabricI
   std::lock_guard<std::mutex> locked(lock);
   gpuFabricInfo->version = nvmlGpuFabricInfo_v2;
   NVMLTRY(nvmlDeviceGetGpuFabricInfoV, device, gpuFabricInfo);
+  return ncclSuccess;
+}
+
+ncclResult_t ncclNvmlGetCCStatus(struct ncclNvmlCCStatus *status) {
+  NCCLCHECK(ncclNvmlEnsureInitialized());
+  std::lock_guard<std::mutex> locked(lock);
+  nvmlCCInfoInternal ccInfo;
+  if (pfn_nvmlSystemGetConfComputeSettings != NULL) {
+    ccInfo.settingV12040.version = nvmlSystemConfComputeSettings_v1;
+    NVMLTRY(nvmlSystemGetConfComputeSettings, &ccInfo.settingV12040);
+    if (ccInfo.settingV12040.ccFeature == NVML_CC_SYSTEM_FEATURE_ENABLED)
+      status->CCEnabled = true;
+    else
+      status->CCEnabled = false;
+
+    if (ccInfo.settingV12040.multiGpuMode == NVML_CC_SYSTEM_MULTIGPU_PROTECTED_PCIE)
+      status->multiGpuCCEnabled = true;
+    else
+      status->multiGpuCCEnabled = false;
+  } else if (pfn_nvmlSystemGetConfComputeState != NULL) {
+    NVMLTRY(nvmlSystemGetConfComputeState, &ccInfo.settingV12020);
+    if (ccInfo.settingV12020.ccFeature == NVML_CC_SYSTEM_FEATURE_ENABLED)
+      status->CCEnabled = true;
+    else
+      status->CCEnabled = false;
+    status->multiGpuCCEnabled = false;
+  } else {
+    status->CCEnabled = false;
+    status->multiGpuCCEnabled = false;
+  }
   return ncclSuccess;
 }

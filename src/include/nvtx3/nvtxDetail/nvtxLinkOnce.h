@@ -23,7 +23,7 @@
  * In some situations it is desirable to declare a variable without initializing
  * it, refer to it in code or other variables' initializers, and then initialize
  * it later.  Similarly, functions can be prototyped, have their address taken,
- * and then have their body defined later.  In such cases, use the FWDDECL macros 
+ * and then have their body defined later.  In such cases, use the FWDDECL macros
  * when forward-declaring LINKONCE global variables without initializers and
  * function prototypes, and then use the DEFINE macros when later defining them.
  * Although in many cases the FWDDECL macro is equivalent to the DEFINE macro,

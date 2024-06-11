@@ -14,11 +14,11 @@ __shared__ ncclShmemData ncclShmem;
 #endif
 
 struct RunWorkNop {
-  __device__ void run(ncclWork *w) {}
+  __device__ void run() {}
 };
 
-__global__ void ncclDevKernel_Generic(struct ncclDevComm* comm, uint64_t channelMask, struct ncclWork* workHead) {
-  ncclKernelMain<-1, RunWorkNop>(comm, channelMask, workHead);
+__global__ void ncclDevKernel_Generic(ncclDevKernelArgs4K NCCL_GRID_CONSTANT const args4K) {
+  ncclKernelMain<-1, RunWorkNop>(&args4K.args);
 }
 
 __device__ void ncclDevFunc_Nop() {}

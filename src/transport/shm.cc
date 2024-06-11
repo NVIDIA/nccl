@@ -6,6 +6,7 @@
 
 #include "comm.h"
 #include "shm.h"
+#include "transport.h"
 
 struct shmConnectInfo {
   char shmName[7];

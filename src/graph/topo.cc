@@ -11,6 +11,7 @@
 #include "nvmlwrap.h"
 #include "net.h"
 #include "coll_net.h"
+#include "transport.h"
 #include <sys/stat.h>
 #include <fcntl.h>
 #include "xml.h"
@@ -51,7 +52,12 @@ static ncclResult_t findLocalCpu(struct ncclTopoNode* node, struct ncclTopoNode*
     return ncclSuccess;
   }
   for (int l=0; l<node->nlinks; l++) {
-    if (node->links[l].type == LINK_PCI) NCCLCHECK(findLocalCpu(node->links[l].remNode, cpu));
+    // Go up the PCI tree to find the CPU. Follow only PCI switches.
+    if (node->links[l].type == LINK_PCI
+	&& (node->links[l].remNode->type == PCI
+	    || node->links[l].remNode->type == CPU)) {
+      NCCLCHECK(findLocalCpu(node->links[l].remNode, cpu));
+    }
     if (*cpu != NULL) return ncclSuccess;
   }
   return ncclSuccess;
@@ -109,11 +115,6 @@ ncclResult_t ncclTopoCreateNode(struct ncclTopoSystem* system, struct ncclTopoNo
   n->type = type;
   n->id = id;
   if (type == GPU) {
-    // Create link to itself (used in some corner cases)
-    n->nlinks=1;
-    n->links[0].type = LINK_LOC;
-    n->links[0].remNode = n;
-    n->links[0].bw = LOC_BW;
     n->gpu.dev = NCCL_TOPO_UNDEF;
     n->gpu.rank = NCCL_TOPO_UNDEF;
     n->gpu.cudaCompCap = NCCL_TOPO_UNDEF;
@@ -279,8 +280,10 @@ static ncclResult_t ncclTopoPrintRec(struct ncclTopoNode* node, struct ncclTopoN
 
   for (int l=0; l<node->nlinks; l++) {
     struct ncclTopoLink* link = node->links+l;
-    if (link->type == LINK_LOC) continue;
-    if (link->type != LINK_PCI || link->remNode != prevNode) {
+    if (link->type == LINK_LOC) {
+      sprintf(line+offset, "+ %s[%2.1f] - %s/%lX", topoLinkTypeStr[link->type], link->bw, topoNodeTypeStr[link->remNode->type], link->remNode->id);
+      INFO(NCCL_GRAPH, "%s", line);
+    } else if (link->type != LINK_PCI || link->remNode != prevNode) {
       sprintf(line+offset, "+ %s[%2.1f] - ", topoLinkTypeStr[link->type], link->bw);
       int nextOffset = strlen(line);
       if (link->type == LINK_PCI) {
@@ -443,7 +446,9 @@ ncclResult_t ncclTopoAddPci(struct ncclXmlNode* xmlPci, struct ncclTopoSystem* s
 
     for (int s=0; s<xmlPci->nSubs; s++) {
       struct ncclXmlNode* xmlSubPci = xmlPci->subs[s];
-      NCCLCHECK(ncclTopoAddPci(xmlSubPci, system, node, systemId));
+      if (strcmp(xmlSubPci->name, "pcilink") != 0) { // PCI links will be added later
+        NCCLCHECK(ncclTopoAddPci(xmlSubPci, system, node, systemId));
+      }
     }
   }
 
@@ -579,6 +584,38 @@ ncclResult_t ncclTopoAddNvLinks(struct ncclXmlNode* node, struct ncclTopoSystem*
   return ncclSuccess;
 }
 
+ncclResult_t ncclTopoAddPciLinks(struct ncclXmlNode* node, struct ncclTopoSystem* system, const char* parentBusId, int systemId) {
+  if (strcmp(node->name, "pcilink") == 0) {
+    struct ncclTopoNode* pci = NULL;
+    int64_t pBusId;
+    NCCLCHECK(busIdToInt64(parentBusId, &pBusId));
+    pBusId = NCCL_TOPO_ID(systemId, pBusId);
+    NCCLCHECK(ncclTopoGetNode(system, &pci, PCI, pBusId));
+    if (pci == NULL) {
+      WARN("Add PCI Link error : could not find PCI SW %lx", pBusId);
+      return ncclInternalError;
+    }
+    struct ncclTopoNode* remote = NULL;
+    const char* target;
+    NCCLCHECK(xmlGetAttrStr(node, "target", &target));
+    int64_t busId;
+    NCCLCHECK(busIdToInt64(target, &busId));
+    NCCLCHECK(ncclTopoGetNode(system, &remote, PCI, NCCL_TOPO_ID(systemId, busId)));
+    if (remote) NCCLCHECK(ncclTopoConnectNodes(pci, remote, LINK_LOC, LOC_BW));
+  } else {
+    if (strcmp(node->name, "cpu") == 0) {
+      NCCLCHECK(ncclGetSystemId(system, node, &systemId));
+    }
+    const char* busId;
+    NCCLCHECK(xmlGetAttr(node, "busid", &busId));
+    for (int s=0; s<node->nSubs; s++) {
+      NCCLCHECK(ncclTopoAddPciLinks(node->subs[s], system, busId ? busId : parentBusId, systemId));
+    }
+  }
+  return ncclSuccess;
+}
+
+
 ncclResult_t ncclTopoAddC2c(struct ncclXmlNode* node, struct ncclTopoSystem* system, const char* parentBusId, int systemId) {
   if (strcmp(node->name, "c2c") == 0) {
     struct ncclTopoNode* gpu = NULL;
@@ -626,6 +663,7 @@ ncclResult_t ncclTopoGetSystemFromXml(struct ncclXml* xml, struct ncclTopoSystem
 
   NCCLCHECK(ncclTopoAddNvLinks(topNode, *topoSystem, NULL, 0));
   NCCLCHECK(ncclTopoAddC2c(topNode, *topoSystem, NULL, 0));
+  NCCLCHECK(ncclTopoAddPciLinks(topNode, *topoSystem, NULL, 0));
 
   NCCLCHECK(ncclTopoFlattenBcmSwitches(*topoSystem));
   NCCLCHECK(ncclTopoConnectCpus(*topoSystem));
@@ -668,6 +706,18 @@ static ncclResult_t xmlInitAttrFloat(struct ncclXmlNode* node, const char* attrN
   return ncclSuccess;
 }
 
+ncclResult_t ncclTopoRefreshBcmP2pLinks(void) {
+  //refresh the switch topology by reading the link below
+  FILE *fp = fopen("/sys/kernel/pci_switch_link/refresh_switch_toplogy", "r");
+  if (fp != NULL) {
+    int tmp;
+    size_t r = fread(&tmp, sizeof(tmp), 1, fp);
+    if (r != 1)
+      INFO(NCCL_GRAPH, "Failed to read refresh_switch_toplogy");
+    fclose(fp);
+  }
+  return ncclSuccess;
+}
 
 ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** system) {
   struct ncclXml* xml;
@@ -687,18 +737,17 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
     NCCLCHECK(xmlSetAttrInt(top, "version", NCCL_TOPO_XML_VERSION));
   }
 
-  // Auto-detect GPUs if needed
-  for (int r=0; r<comm->nRanks; r++) {
-    if (comm->peerInfo[r].hostHash == comm->peerInfo[comm->rank].hostHash) {
-      char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE];
-      NCCLCHECK(int64ToBusId(comm->peerInfo[r].busId, busId));
-      struct ncclXmlNode* node;
-      NCCLCHECK(ncclTopoFillGpu(xml, busId, &node));
-      if (node == NULL) continue;
-      NCCLCHECK(xmlSetAttrInt(node, "keep", 1));
-      NCCLCHECK(xmlSetAttrInt(node, "rank", r));
-      NCCLCHECK(xmlInitAttrInt(node, "gdr", comm->peerInfo[r].gdrSupport));
-    }
+  NCCLCHECK(ncclTopoRefreshBcmP2pLinks());
+
+  // Detect only the GPU managed by this process.  We'll get any others through XML fusion.
+  char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE];
+  NCCLCHECK(int64ToBusId(comm->peerInfo[comm->rank].busId, busId));
+  struct ncclXmlNode* node;
+  NCCLCHECK(ncclTopoFillGpu(xml, busId, &node));
+  if (node) {
+    NCCLCHECK(xmlSetAttrInt(node, "keep", 1));
+    NCCLCHECK(xmlSetAttrInt(node, "rank", comm->rank));
+    NCCLCHECK(xmlInitAttrInt(node, "gdr", comm->peerInfo[comm->rank].gdrSupport));
   }
   // Auto-detect NICs if needed. net/collnet share the same xml/graph nodes,
   // so we start with collnet so that it has precedence.
@@ -728,6 +777,7 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   for (int n=0; n<netDevCount; n++) {
     ncclNetProperties_t props;
     NCCLCHECK(comm->ncclNet->getProperties(n, &props));
+    comm->netDeviceType = props.netDeviceType;
     struct ncclXmlNode* netNode;
     NCCLCHECK(ncclTopoFillNet(xml, props.pciPath, props.name, &netNode));
     NCCLCHECK(xmlSetAttrInt(netNode, "keep", 1));
@@ -745,24 +795,46 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   // Remove XML branches which don't have a node with keep="1" (typically when importing a topology)
   NCCLCHECK(ncclTopoTrimXml(xml));
 
+  // XML topo fusion.
+  int* localRanks;
+  int localRank = -1, nLocalRanks = 0;
   if (comm->MNNVL) {
     // MNNVL clique support
-    char* mem;
-    NCCLCHECK(ncclCalloc(&mem, comm->clique.size * xmlMemSize(NCCL_TOPO_XML_MAX_NODES)));
-    struct ncclXml* rankXml = (struct ncclXml*)(mem+xmlMemSize(NCCL_TOPO_XML_MAX_NODES)*comm->cliqueRank);
-    memcpy(rankXml, xml, xmlMemSize(NCCL_TOPO_XML_MAX_NODES));
-    NCCLCHECK(ncclTopoConvertXml(rankXml, (uintptr_t)xml->nodes, 1));
-    NCCLCHECK(bootstrapIntraNodeAllGather(comm->bootstrap, comm->clique.ranks, comm->cliqueRank, comm->clique.size, mem, xmlMemSize(NCCL_TOPO_XML_MAX_NODES)));
-    struct ncclXml* cliqueXml;
-    NCCLCHECK(xmlAlloc(&cliqueXml, comm->clique.size*NCCL_TOPO_XML_MAX_NODES));
-    for (int i = 0; i < comm->clique.size; i++) {
-      struct ncclXml* peerXml = (struct ncclXml*)(mem+xmlMemSize(NCCL_TOPO_XML_MAX_NODES)*i);
-      NCCLCHECK(ncclTopoConvertXml(peerXml, (uintptr_t)peerXml->nodes, 0));
-      NCCLCHECK(ncclTopoFuseXml(cliqueXml, peerXml));
+    nLocalRanks = comm->clique.size;
+    localRank = comm->cliqueRank;
+    localRanks = comm->clique.ranks;
+  } else {
+    // Intra-node fusion.  Much of the comm is not initialized yet at this point so we need to do our own calculations.
+    NCCLCHECK(ncclCalloc(&localRanks, comm->nRanks));
+    for (int i = 0; i < comm->nRanks; i++) {
+      if (comm->peerInfo[i].hostHash == comm->peerInfo[comm->rank].hostHash) {
+        if (i == comm->rank)
+          localRank = nLocalRanks;
+        localRanks[nLocalRanks++] = i;
+      }
     }
-    free(xml);
-    xml = cliqueXml;
   }
+  char* mem;
+  NCCLCHECK(ncclCalloc(&mem, nLocalRanks * xmlMemSize(NCCL_TOPO_XML_MAX_NODES)));
+  struct ncclXml* rankXml = (struct ncclXml*)(mem+xmlMemSize(NCCL_TOPO_XML_MAX_NODES)*localRank);
+  memcpy(rankXml, xml, xmlMemSize(NCCL_TOPO_XML_MAX_NODES));
+  NCCLCHECK(ncclTopoConvertXml(rankXml, (uintptr_t)xml->nodes, 1));
+  NCCLCHECK(bootstrapIntraNodeAllGather(comm->bootstrap, localRanks, localRank, nLocalRanks, mem, xmlMemSize(NCCL_TOPO_XML_MAX_NODES)));
+  if (comm->MNNVL) {
+    // Ensure that we have enough room when fusing topos from multiple nodes.
+    free(xml);
+    NCCLCHECK(xmlAlloc(&xml, nLocalRanks*NCCL_TOPO_XML_MAX_NODES));
+  } else {
+    // In the intra-node case there's no need to enlarge the topo xml.
+    xml->maxIndex = 0;
+    free(localRanks);
+  }
+  for (int i = 0; i < nLocalRanks; i++) {
+    struct ncclXml* peerXml = (struct ncclXml*)(mem+xmlMemSize(NCCL_TOPO_XML_MAX_NODES)*i);
+    NCCLCHECK(ncclTopoConvertXml(peerXml, (uintptr_t)peerXml->nodes, 0));
+    NCCLCHECK(ncclTopoFuseXml(xml, peerXml));
+  }
+  free(mem);
 
   xmlTopoFile = ncclGetEnv("NCCL_TOPO_DUMP_FILE");
   if (xmlTopoFile && comm->rank == ncclParamTopoDumpFileRank()) {

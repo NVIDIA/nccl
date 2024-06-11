@@ -123,23 +123,23 @@
 } while (0);
 
 #define NCCLWAIT(call, cond, abortFlagPtr) do {         \
-  volatile uint32_t* tmpAbortFlag = (abortFlagPtr);     \
+  uint32_t* tmpAbortFlag = (abortFlagPtr);     \
   ncclResult_t RES = call;                \
   if (RES != ncclSuccess && RES != ncclInProgress) {               \
     if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, RES);    \
     return ncclInternalError;             \
   }                                       \
-  if (tmpAbortFlag) NEQCHECK(*tmpAbortFlag, 0); \
+  if (__atomic_load(tmpAbortFlag, __ATOMIC_ACQUIRE)) NEQCHECK(*tmpAbortFlag, 0); \
 } while (!(cond));
 
 #define NCCLWAITGOTO(call, cond, abortFlagPtr, RES, label) do { \
-  volatile uint32_t* tmpAbortFlag = (abortFlagPtr);             \
+  uint32_t* tmpAbortFlag = (abortFlagPtr);             \
   RES = call;                             \
   if (RES != ncclSuccess && RES != ncclInProgress) {               \
     if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, RES);    \
     goto label;                           \
   }                                       \
-  if (tmpAbortFlag) NEQCHECKGOTO(*tmpAbortFlag, 0, RES, label); \
+  if (__atomic_load(tmpAbortFlag, __ATOMIC_ACQUIRE)) NEQCHECKGOTO(*tmpAbortFlag, 0, RES, label); \
 } while (!(cond));
 
 #define NCCLCHECKTHREAD(a, args) do { \

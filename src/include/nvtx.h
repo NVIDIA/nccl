@@ -63,7 +63,7 @@ class payload_schema {
     nullptr,
     NVTX_PAYLOAD_SCHEMA_TYPE_STATIC,
     NVTX_PAYLOAD_SCHEMA_FLAG_NONE,
-    nullptr, 0, 0, 0};
+    nullptr, 0, 0, 0, 0, nullptr};
 };
 
 // Create NVTX push/pop range with parameters

@@ -10,37 +10,34 @@
 #error Never include this file directly -- it is automatically included by nvToolsExt.h (except when NVTX_NO_IMPL is defined).
 #endif
 
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <wchar.h>
+
 /* ---- Include required platform headers ---- */
 
-#if defined(_WIN32) 
+#if defined(_WIN32)
 
-#include <Windows.h>
+#include <windows.h>
 
 #else
 #include <unistd.h>
 
 #if defined(__ANDROID__)
-#include <android/api-level.h> 
+#include <android/api-level.h>
 #endif
 
 #if defined(__linux__) || defined(__CYGWIN__)
 #include <sched.h>
 #endif
 
+#include <sys/types.h>
 #include <limits.h>
 #include <dlfcn.h>
 #include <fcntl.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <sys/types.h>
-#include <unistd.h>
 #include <errno.h>
-
-#include <string.h>
-#include <sys/types.h>
 #include <pthread.h>
-#include <stdlib.h>
-#include <wchar.h>
 
 #endif
 

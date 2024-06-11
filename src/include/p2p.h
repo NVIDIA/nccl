@@ -10,6 +10,9 @@
 #define NCCL_P2P_H_
 
 #include <cuda.h>
+#include <cuda_runtime.h>
+
+#include "core.h"
 
 #if CUDART_VERSION < 12030
 // MNNVL: FABRIC handle support lifted from CUDA 12.3

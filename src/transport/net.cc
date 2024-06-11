@@ -13,6 +13,7 @@
 #include "shm.h"
 #include "p2p.h"
 #include "profiler.h"
+#include "transport.h"
 
 static_assert(sizeof(ncclNetHandle_t) <= CONNECT_SIZE, "NET Connect info is too large");
 
@@ -238,6 +239,8 @@ static ncclResult_t recvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
 }
 
 static ncclResult_t netMapShm(struct connectMapMem* mem) {
+  mem->cpuPtr = NULL;
+  mem->gpuPtr = NULL;
   NCCLCHECK(ncclShmOpen(mem->shmPath, mem->size, (void**)&mem->cpuPtr, (void**)&mem->gpuPtr, -1, &mem->attachHandle));
   return ncclSuccess;
 }
@@ -303,8 +306,12 @@ static ncclResult_t sendConnect(struct ncclComm* comm, struct ncclConnect* conne
   }
 
   ncclResult_t ret;
-  NCCLCHECK(ret = ncclPollProxyResponse(comm, &send->proxyConn, map, opId));
-  if (ret == ncclInProgress) {
+  ret = ncclPollProxyResponse(comm, &send->proxyConn, map, opId);
+  if (ret != ncclSuccess) {
+    if (ret != ncclInProgress) {
+      free(map);
+      send->transportResources = NULL;
+    }
     return ret;
   }
   INFO(NCCL_PROXY, "sendConnect ncclPollProxyResponse opId=%p", opId);
@@ -323,6 +330,7 @@ static ncclResult_t sendConnect(struct ncclComm* comm, struct ncclConnect* conne
   } else if (!(map->sameProcess && map->cudaDev == comm->cudaDev)) {
     if (!map->sameProcess) NCCLCHECK(netMapShm(map->mems+NCCL_NET_MAP_HOSTMEM));
     if (map->mems[NCCL_NET_MAP_DEVMEM].size) {
+      map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr = NULL;
       NCCLCHECK(ncclP2pImportShareableBuffer(comm, send->proxyConn.tpRank,
                                              map->mems[NCCL_NET_MAP_DEVMEM].size,
                                              &map->mems[NCCL_NET_MAP_DEVMEM].ipcDesc,
@@ -332,6 +340,7 @@ static ncclResult_t sendConnect(struct ncclComm* comm, struct ncclConnect* conne
     if (map->mems[NCCL_NET_MAP_SHARED_DEVMEM].size) {
       void** sharedDevMemPtr = comm->proxyState->sharedDevMems + send->proxyConn.tpLocalRank;
       if (*sharedDevMemPtr == NULL) {
+        map->mems[NCCL_NET_MAP_SHARED_DEVMEM].gpuPtr = NULL;
         NCCLCHECK(ncclP2pImportShareableBuffer(comm, send->proxyConn.tpRank,
                                                map->mems[NCCL_NET_MAP_SHARED_DEVMEM].size,
                                                &map->mems[NCCL_NET_MAP_SHARED_DEVMEM].ipcDesc,
@@ -403,7 +412,11 @@ static ncclResult_t recvConnect(struct ncclComm* comm, struct ncclConnect* conne
 
   ncclResult_t ret;
   NCCLCHECK(ret = ncclPollProxyResponse(comm, &recv->proxyConn, map, opId));
-  if (ret == ncclInProgress) {
+  if (ret != ncclSuccess) {
+    if (ret != ncclInProgress) {
+      free(map);
+      recv->transportResources = NULL;
+    }
     return ret;
   }
   INFO(NCCL_PROXY, "recvConnect ncclPollProxyResponse opId=%p", opId);
@@ -1264,7 +1277,6 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
             ptrs[subCount] = localBuff+buffSlot*stepSize;
             sizes[subCount] = stepSize*args->sliceSteps;
           }
-          sizes[subCount] = stepSize*args->sliceSteps;
           if (sub->nbytes < sizes[subCount]) sizes[subCount] = sub->nbytes;
           tags[subCount] = resources->tpRemoteRank;
           mhandles[subCount] = sub->mhandle;

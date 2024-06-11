@@ -48,7 +48,7 @@ static ncclResult_t ncclNet_v7_as_v8_getProperties(int dev, ncclNetProperties_v8
 }
 
 static ncclResult_t ncclNet_v7_as_v8_regMr(void* comm, void* data, size_t size, int type, void** mhandle) {
-  if (size >= 1<<31) return ncclInternalError;
+  if (size >= 1UL<<31) return ncclInternalError;
   return ncclNet_v7->regMr(comm, data, (int) size, type, mhandle);
 }
 
@@ -95,7 +95,7 @@ static ncclResult_t ncclNet_v6_as_v8_getProperties(int dev, ncclNetProperties_v8
 }
 
 static ncclResult_t ncclNet_v6_as_v8_regMr(void* comm, void* data, size_t size, int type, void** mhandle) {
-  if (size >= 1<<31) return ncclInternalError;
+  if (size >= 1UL<<31) return ncclInternalError;
   return ncclNet_v6->regMr(comm, data, (int) size, type, mhandle);
 }
 
@@ -150,7 +150,7 @@ static ncclResult_t ncclNet_v5_as_v8_getProperties(int dev, ncclNetProperties_v8
 }
 
 static ncclResult_t ncclNet_v5_as_v8_regMr(void* comm, void* data, size_t size, int type, void** mhandle) {
-  if (size >= 1<<31) return ncclInternalError;
+  if (size >= 1UL<<31) return ncclInternalError;
   return ncclNet_v5->regMr(comm, data, (int) size, type, mhandle);
 }
 
@@ -207,7 +207,7 @@ static ncclResult_t ncclCollNet_v5_as_v8_getProperties(int dev, ncclNetPropertie
 }
 
 static ncclResult_t ncclCollNet_v5_as_v8_regMr(void* comm, void* data, size_t size, int type, void** mhandle) {
-  if (size >= 1<<31) return ncclInternalError;
+  if (size >= 1UL<<31) return ncclInternalError;
   return ncclCollNet_v5->regMr(comm, data, (int) size, type, mhandle);
 }
 
@@ -254,7 +254,7 @@ static ncclResult_t ncclCollNet_v6_as_v8_getProperties(int dev, ncclNetPropertie
 }
 
 static ncclResult_t ncclCollNet_v6_as_v8_regMr(void* comm, void* data, size_t size, int type, void** mhandle) {
-  if (size >= 1<<31) return ncclInternalError;
+  if (size >= 1UL<<31) return ncclInternalError;
   return ncclCollNet_v6->regMr(comm, data, (int) size, type, mhandle);
 }
 
@@ -301,7 +301,7 @@ static ncclResult_t ncclCollNet_v7_as_v8_getProperties(int dev, ncclNetPropertie
 }
 
 static ncclResult_t ncclCollNet_v7_as_v8_regMr(void* comm, void* data, size_t size, int type, void** mhandle) {
-  if (size >= 1<<31) return ncclInternalError;
+  if (size >= 1UL<<31) return ncclInternalError;
   return ncclCollNet_v7->regMr(comm, data, (int) size, type, mhandle);
 }
 
@@ -339,88 +339,107 @@ enum ncclNetState {
 enum ncclNetState ncclNetStates[3] = { ncclNetStateInit, ncclNetStateInit, ncclNetStateInit };
 enum ncclNetState ncclCollNetStates[3] = { ncclNetStateInit, ncclNetStateInit, ncclNetStateInit };
 
-static void* tryOpenDynamicLib(char* name) {
+#define MAX_STR_LEN 255
+
+static void* tryOpenLib(char* name, int* err, char* errStr) {
+  *err = 0;
   if (nullptr == name || strlen(name) == 0) {
     return nullptr;
   }
+
+  if (strncasecmp(name, "STATIC_PLUGIN", strlen(name)) == 0) {
+    name = nullptr;
+  }
+
   void *handle = dlopen(name, RTLD_NOW | RTLD_LOCAL);
   if (nullptr == handle) {
-    if (ENOENT == errno) {
-      INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: No plugin found (%s)", name);
-    } else {
-      INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Plugin load returned %d : %s when loading %s", errno, dlerror(), name);
+    strncpy(errStr, dlerror(), MAX_STR_LEN);
+    errStr[MAX_STR_LEN] = '\0';
+    if (strstr(errStr, name) && strstr(errStr, "No such file or directory")) {
+      *err = ENOENT;
     }
   }
   return handle;
 }
 
-static void summarizeOpenNetPluginErrors(char* pluginNames) {
-  const char *separator = " ";
-  int len = strlen(pluginNames);
-  // remove tail separator
-  pluginNames[len - 1] = '\0';
-
-  // remove last plugin name
-  while (len > 0 && pluginNames[--len] != *separator);
-  if (len > 0) {
-    pluginNames[len] = '\0';
+static char* tryOpenLibCheck(int openErr, char* openErrStr, char* nameList, int *nameListLen, char* name) {
+  if (openErr == ENOENT) {
+    snprintf(nameList, *nameListLen, " %s", name);
+    nameList += strlen(name) + 1;
+    *nameListLen -= strlen(name) + 1;
+    return nameList;
   }
-
-  // distinguish between one load attempt and multiple attempts
-  if (strstr(pluginNames, separator)) {
-    INFO(NCCL_ENV|NCCL_TUNING, "NET/Plugin: Most recent plugin load returned %d : %s. All attempts to load '%s' also failed.", errno, dlerror(), pluginNames);
-  } else {
-    INFO(NCCL_ENV|NCCL_TUNING, "NET/Plugin: Plugin load returned %d : %s : when loading %s", errno, dlerror(), pluginNames);
-  }
+  INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: %s", openErrStr);
+  return nameList;
 }
 
-static void* openNetPluginLib(void) {
+static void* openNetPluginLib(char* couldNotFindNames, int len) {
+  int openErr;
   void *pluginLib;
-
-#define MAX_PLUGIN_LOAD 2
-
-  int len;
-  char netPluginLibNameTried[MAX_PLUGIN_LOAD * PATH_MAX] = { 0 };
-  char *ptr = netPluginLibNameTried;
   char netPluginLibName[PATH_MAX];
+  char openErrStr[MAX_STR_LEN + 1] = { 0 };
   const char *envNetPluginName = getenv("NCCL_NET_PLUGIN");
   if (envNetPluginName && strlen(envNetPluginName)) {
     snprintf(netPluginLibName, PATH_MAX, "%s", envNetPluginName);
-    pluginLib = tryOpenDynamicLib(netPluginLibName);
+    pluginLib = tryOpenLib(netPluginLibName, &openErr, openErrStr);
     if (pluginLib) {
       INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Plugin name set by env to %s", netPluginLibName);
       return pluginLib;
     }
-    len = PATH_MAX - strlen(ptr);
-    snprintf(ptr + strlen(ptr), len + 1, "%s ", netPluginLibName);
+    couldNotFindNames = tryOpenLibCheck(openErr, openErrStr, couldNotFindNames, &len, netPluginLibName);
 
     snprintf(netPluginLibName, PATH_MAX, "libnccl-net-%s.so", envNetPluginName);
-    pluginLib = tryOpenDynamicLib(netPluginLibName);
+    pluginLib = tryOpenLib(netPluginLibName, &openErr, openErrStr);
     if (pluginLib) {
       INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Plugin name set by env to %s", netPluginLibName);
       return pluginLib;
     }
-    len = PATH_MAX - strlen(ptr);
-    snprintf(ptr + strlen(ptr), len + 1, "%s ", netPluginLibName);
+    couldNotFindNames = tryOpenLibCheck(openErr, openErrStr, couldNotFindNames, &len, netPluginLibName);
   } else {
     snprintf(netPluginLibName, PATH_MAX, "libnccl-net.so");
-    pluginLib = tryOpenDynamicLib(netPluginLibName);
+    pluginLib = tryOpenLib(netPluginLibName, &openErr, openErrStr);
     if (pluginLib) {
       return pluginLib;
     }
-    len = PATH_MAX - strlen(ptr);
-    snprintf(ptr + strlen(ptr), len + 1, "%s ", netPluginLibName);
+    couldNotFindNames = tryOpenLibCheck(openErr, openErrStr, couldNotFindNames, &len, netPluginLibName);
   }
-  summarizeOpenNetPluginErrors(ptr);
-
   return nullptr;
 }
 
-ncclResult_t ncclNetPluginInit() {
-  void* netPluginLib = openNetPluginLib();
-  if (netPluginLib == nullptr) {
-    INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Using internal network plugin.");
+static pthread_mutex_t netPluginLock = PTHREAD_MUTEX_INITIALIZER;
+static int netPluginRefCount;
+static void* netPluginLib;
+
+enum {
+  netPluginLoadFailed  = -1,
+  netPluginLoadReady   =  0,
+  netPluginLoadSuccess =  1,
+};
+
+static int netPluginStatus = netPluginLoadReady;
+
+#define MAX_PLUGIN_LOAD 2
+
+ncclResult_t ncclNetPluginLoad(struct ncclComm* comm) {
+  char couldNotFindNames[MAX_PLUGIN_LOAD * PATH_MAX] = { 0 };
+  if (netPluginLoadFailed == netPluginStatus) {
     return ncclSuccess;
+  }
+
+  pthread_mutex_lock(&netPluginLock);
+  if (netPluginLoadSuccess == netPluginStatus) {
+    ++netPluginRefCount;
+    goto exit;
+  }
+
+  netPluginLib = openNetPluginLib(couldNotFindNames, MAX_PLUGIN_LOAD * PATH_MAX);
+  if (netPluginLib == nullptr) {
+    if (strlen(couldNotFindNames)) {
+      INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Could not find:%s. Using internal network plugin.", couldNotFindNames);
+    } else {
+      INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Using internal network plugin.");
+    }
+    goto fail;
   }
 
   ncclNets[0] = (ncclNet_v8_t*)dlsym(netPluginLib, "ncclNetPlugin_v8");
@@ -436,8 +455,7 @@ ncclResult_t ncclNetPluginInit() {
         ncclNet_v5 = (ncclNet_v5_t*)dlsym(netPluginLib, "ncclNetPlugin_v5");
         if (ncclNet_v5 == nullptr) {
           INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Failed to find ncclNetPlugin symbol (>= v5). ncclNetPlugin symbols v4 and lower are not supported.");
-          if (netPluginLib != nullptr) dlclose(netPluginLib);
-          return ncclSuccess;
+          goto fail;
         } else {
           ncclNets[0] = &ncclNet_v5_as_v8;
           ncclNet_v5_as_v8.init = ncclNet_v5_as_v8_init;
@@ -476,21 +494,52 @@ ncclResult_t ncclNetPluginInit() {
           ncclCollNets[0] = &ncclCollNet_v5_as_v8;
           ncclCollNet_v5_as_v8.init = ncclCollNet_v5_as_v8_init;
           ncclCollNet_v5_as_v8.name = ncclCollNet_v5->name;
-          INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Loaded coll plugin %s (v5)", ncclCollNets[0]->name);
+          INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Loaded collnet plugin %s (v5)", ncclCollNets[0]->name);
         }
       } else {
         ncclCollNets[0] = &ncclCollNet_v6_as_v8;
         ncclCollNet_v6_as_v8.init = ncclCollNet_v6_as_v8_init;
         ncclCollNet_v6_as_v8.name = ncclCollNet_v6->name;
-        INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Loaded coll plugin %s (v6)", ncclCollNets[0]->name);
+        INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Loaded collnet plugin %s (v6)", ncclCollNets[0]->name);
       }
     } else {
       ncclCollNets[0] = &ncclCollNet_v7_as_v8;
       ncclCollNet_v7_as_v8.init = ncclCollNet_v7_as_v8_init;
       ncclCollNet_v7_as_v8.name = ncclCollNet_v7->name;
-      INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Loaded coll plugin %s (v7)", ncclCollNets[0]->name);
+      INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Loaded collnet plugin %s (v7)", ncclCollNets[0]->name);
     }
   }
+
+  ++netPluginRefCount;
+  netPluginStatus = netPluginLoadSuccess;
+  comm->netPluginLoaded = 1;
+
+exit:
+  pthread_mutex_unlock(&netPluginLock);
+  return ncclSuccess;
+fail:
+  if (netPluginLib) dlclose(netPluginLib);
+  netPluginStatus = netPluginLoadFailed;
+  goto exit;
+}
+
+ncclResult_t ncclNetPluginUnload(struct ncclComm* comm) {
+  pthread_mutex_lock(&netPluginLock);
+  if (comm->netPluginLoaded && 0 == (--netPluginRefCount)) {
+    if (ncclNets[0]) {
+      INFO(NCCL_NET, "NET/Plugin: Closing net plugin '%s'", ncclNets[0]->name);
+    }
+    if (ncclCollNets[0]) {
+      INFO(NCCL_NET, "NET/Plugin: Closing collnet plugin '%s'", ncclCollNets[0]->name);
+    }
+    dlclose(netPluginLib);
+    netPluginLib = nullptr;
+    ncclNets[0] = nullptr;
+    ncclCollNets[0] = nullptr;
+    netPluginStatus = netPluginLoadReady;
+    comm->netPluginLoaded = 0;
+  }
+  pthread_mutex_unlock(&netPluginLock);
   return ncclSuccess;
 }
 
@@ -515,8 +564,6 @@ ncclResult_t ncclNetCheckDeviceVersion(struct ncclComm* comm, ncclNet_t* net, in
       return ncclInternalError;
   }
 
-  INFO(NCCL_INIT, "Using non-device net plugin version %d",
-    props.netDeviceVersion);
   return ncclSuccess;
 }
 
@@ -582,6 +629,12 @@ ncclResult_t ncclNetInit(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
+ncclResult_t ncclNetFinalize(struct ncclComm* comm) {
+  comm->ncclNet = nullptr;
+  comm->ncclCollNet = nullptr;
+  return ncclSuccess;
+}
+
 ncclResult_t ncclGpuGdrSupport(struct ncclComm* comm, int* gdrSupport) {
   constexpr int GPU_BUF_SIZE = 2*1024*1024;
 #if CUDART_VERSION >= 11030
@@ -623,7 +676,7 @@ ncclResult_t ncclGpuGdrSupport(struct ncclComm* comm, int* gdrSupport) {
     while (!connected) {
 
       // If we're aborting now, skip to cleanup
-      if (__atomic_load_n(comm->abortFlag, __ATOMIC_RELAXED)) {
+      if (__atomic_load_n(comm->abortFlag, __ATOMIC_ACQUIRE)) {
         goto cleanup2;
       }
 

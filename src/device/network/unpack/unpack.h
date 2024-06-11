@@ -10,7 +10,7 @@
 #include "unpack_defs.h"
 
 #include "op128.h"
-#include "align.h"
+#include "bitops.h"
 #include "device.h"
 #include "common.h"
 
@@ -35,16 +35,16 @@ inline __device__ void ncclNetDeviceUnpackSetup(void* ohandle, const int group, 
   struct unpackNetDeviceHandle* handle = (struct unpackNetDeviceHandle*) ohandle;
   ncclShmem.groups[group].devicePlugin.unpack.g_meta[index] = handle->meta;
   ncclShmem.devicePlugin.unpack.bounce_buf = handle->bounce_buf;
-  ncclShmem.groups[group].devicePlugin.unpack.head = handle->head;
+  ncclShmem.groups[group].devicePlugin.unpack.head[index] = handle->head;
 }
 
-inline __device__ void ncclNetDeviceIncrementHead(const int group) {
-  ncclShmem.groups[group].devicePlugin.unpack.head++;
+inline __device__ void ncclNetDeviceIncrementHead(const int group, const int index) {
+  ncclShmem.groups[group].devicePlugin.unpack.head[index]++;
 }
 
-inline __device__ void ncclNetDeviceSaveHead(void* ohandle, const int group) {
+inline __device__ void ncclNetDeviceSaveHead(void* ohandle, const int group, const int index) {
   struct unpackNetDeviceHandle* handle = (struct unpackNetDeviceHandle*) ohandle;
-  handle->head = ncclShmem.groups[group].devicePlugin.unpack.head;
+  handle->head = ncclShmem.groups[group].devicePlugin.unpack.head[index];
 }
 
 template <uint8_t sz>
@@ -183,7 +183,7 @@ inline __device__ void ncclNetDeviceUnpack</*Recv=*/1>(
     // Pack data from the internal iovec to the supplied flat srcs buffer using all the threads
     // + Src is necessary in the case of accessing the user buffer directly
     ncclNetDeviceUnpackInner(tid, tidInBlock, nworkers, group /* in case they need to use split warps shared memory partitioning*/,
-        ix, ncclShmem.groups[group].srcs[ix + Src], workSize, ncclShmem.groups[group].devicePlugin.unpack.head);
+      ix, ncclShmem.groups[group].srcs[ix + Src], workSize, ncclShmem.groups[group].devicePlugin.unpack.head[ix]);
   }
 }
 

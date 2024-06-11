@@ -7,16 +7,17 @@
 #include "channel.h"
 #include "param.h"
 #include "gdrwrap.h"
+#include "transport.h"
 
 ncclResult_t initChannel(struct ncclComm* comm, int channelId) {
   struct ncclChannel* channel = &comm->channels[channelId];
   if (channel->id != -1) return ncclSuccess;
 
   int nRanks = comm->nRanks;
-  int nvlsRanks = comm->MNNVL ? comm->clique.size : comm->localRanks;
+  int nvlsRanks = comm->localRanks;
   int nPeers = nRanks + 1 /* Collnet */ + nvlsRanks /* NVLS */;
   channel->id = channelId;
-  channel->workFifoSent = 0;
+  channel->workFifoProduced = 0;
 
   struct ncclSharedResources* sharedRes = comm->sharedRes;
 
@@ -74,7 +75,8 @@ ncclResult_t initNvlsChannel(struct ncclComm* comm, int channelId, struct ncclCo
 
   NCCLCHECK(ncclStrongStreamAcquireUncaptured(&sharedRes->deviceStream));
 
-  int nvlsRanks = comm->MNNVL ? comm->clique.size : comm->localRanks;
+  int nvlsRanks = comm->localRanks;
+
   if (share) {
     channel->nvlsPeers = parent->channels[channelId].nvlsPeers;
     channel->nvlsDevPeers = parent->channels[channelId].nvlsDevPeers;

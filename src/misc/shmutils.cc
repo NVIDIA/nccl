@@ -63,13 +63,28 @@ ncclResult_t ncclShmOpen(char* shmPath, size_t shmSize, void** shmPtr, void** de
      * goes down to 0, unlink should be called in order to delete shared memory file. */
     if (shmPath[0] == '\0') {
       sprintf(shmPath, "/dev/shm/nccl-XXXXXX");
+    retry_mkstemp:
       fd = mkstemp(shmPath);
+      if (fd < 0) {
+        if (errno == EINTR) {
+          INFO(NCCL_ALL, "mkstemp: Failed to create %s, error: %s (%d) - retrying", shmPath, strerror(errno), errno);
+          goto retry_mkstemp;
+        }
+        WARN("Error: failed to create shared memory file %p, error %s (%d)", shmPath, strerror(errno), errno);
+        ret = ncclSystemError;
+        goto fail;
+      }
     } else {
       SYSCHECKGOTO(fd = open(shmPath, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR), ret, fail);
     }
 
+  retry_fallocate:
     if (fallocate(fd, 0, 0, realShmSize) != 0) {
-      WARN("Error: failed to extend %s to %ld bytes", shmPath, realShmSize);
+      if (errno == EINTR) {
+        INFO(NCCL_ALL, "fallocate: Failed to extend %s to %ld bytes, error: %s (%d) - retrying", shmPath, realShmSize, strerror(errno), errno);
+        goto retry_fallocate;
+      }
+      WARN("Error: failed to extend %s to %ld bytes, error: %s (%d)", shmPath, realShmSize, strerror(errno), errno);
       ret = ncclSystemError;
       goto fail;
     }
@@ -80,7 +95,7 @@ ncclResult_t ncclShmOpen(char* shmPath, size_t shmSize, void** shmPtr, void** de
 
   hptr = (char*)mmap(NULL, realShmSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   if (hptr == MAP_FAILED) {
-    WARN("Could not map %s size %zi, error: %s", shmPath, realShmSize, strerror(errno));
+    WARN("Error: Could not map %s size %zu, error: %s (%d)", shmPath, realShmSize, strerror(errno), errno);
     ret = ncclSystemError;
     hptr = NULL;
     goto fail;
@@ -93,7 +108,7 @@ ncclResult_t ncclShmOpen(char* shmPath, size_t shmSize, void** shmPtr, void** de
     if (remref == 0) {
       /* the last peer has completed attachment, it should unlink the shm mem file. */
       if (unlink(shmPath) != 0) {
-        WARN("unlink shared memory %s failed, error: %s", shmPath, strerror(errno));
+        INFO(NCCL_ALLOC, "unlink shared memory %s failed, error: %s (%d)", shmPath, strerror(errno), errno);
       }
     }
   }
@@ -110,7 +125,8 @@ exit:
   *handle = (ncclShmHandle_t)tmphandle;
   return ret;
 fail:
-  WARN("Error while %s shared memory segment %s (size %ld)", create ? "creating" : "attaching to", shmPath, shmSize);
+  WARN("Error while %s shared memory segment %s (size %ld), error: %s (%d)", create ? "creating" : "attaching to",
+       shmPath, shmSize, strerror(errno), errno);
   if (tmphandle) {
     shmHandleInit(fd, shmPath, shmSize, realShmSize, hptr, dptr, create, tmphandle);
     ncclShmClose((ncclShmHandle_t)tmphandle);
@@ -129,7 +145,7 @@ ncclResult_t ncclShmClose(ncclShmHandle_t handle) {
       close(tmphandle->fd);
       if (tmphandle->shmPath != NULL && tmphandle->refcount != NULL && *tmphandle->refcount > 0) {
         if (unlink(tmphandle->shmPath) != 0) {
-          WARN("unlink shared memory %s failed, error: %s", tmphandle->shmPath, strerror(errno));
+          WARN("unlink shared memory %s failed, error: %s (%d)", tmphandle->shmPath, strerror(errno), errno);
           ret = ncclSystemError;
         }
       }
@@ -139,7 +155,7 @@ ncclResult_t ncclShmClose(ncclShmHandle_t handle) {
     if (tmphandle->shmPtr) {
       if (tmphandle->devShmPtr) CUDACHECK(cudaHostUnregister(tmphandle->shmPtr));
       if (munmap(tmphandle->shmPtr, tmphandle->realShmSize) != 0) {
-        WARN("munmap of shared memory %p size %ld failed, error: %s", tmphandle->shmPtr, tmphandle->realShmSize, strerror(errno));
+        WARN("munmap of shared memory %p size %ld failed, error: %s (%d)", tmphandle->shmPtr, tmphandle->realShmSize, strerror(errno), errno);
         ret = ncclSystemError;
       }
     }
@@ -152,9 +168,9 @@ ncclResult_t ncclShmUnlink(ncclShmHandle_t handle) {
   ncclResult_t ret = ncclSuccess;
   struct shmHandleInternal* tmphandle = (struct shmHandleInternal*)handle;
   if (tmphandle) {
-    if (tmphandle->shmPath != NULL) {
+    if (tmphandle->shmPath != NULL && tmphandle->refcount != NULL && *tmphandle->refcount > 0) {
       if (unlink(tmphandle->shmPath) != 0) {
-        WARN("unlink shared memory %s failed, error: %s", tmphandle->shmPath, strerror(errno));
+        WARN("unlink shared memory %s failed, error: %s (%d)", tmphandle->shmPath, strerror(errno), errno);
         ret = ncclSystemError;
       }
       free(tmphandle->shmPath);
@@ -184,7 +200,7 @@ ncclResult_t ncclShmemAllgather(struct ncclComm *comm, struct ncclShmemCollBuff 
     uint64_t t0 = clockNano();
     while(__atomic_load_n(shmem->cnt[curRound], __ATOMIC_ACQUIRE) != comm->localRanks + 1) {
       if (clockNano() - t0 >= 5 * 1000) sched_yield();
-      if (__atomic_load_n(comm->abortFlag, __ATOMIC_RELAXED) == 1) {
+      if (__atomic_load_n(comm->abortFlag, __ATOMIC_ACQUIRE) == 1) {
         ret = ncclInternalError;
         goto exit;
       }

@@ -2,8 +2,8 @@
  * Copyright (c) 2017-2022, NVIDIA CORPORATION. All rights reserved.
  */
 
-#ifndef NCCL_ERR_H_
-#define NCCL_ERR_H_
+#ifndef NCCL_TYPES_H_
+#define NCCL_TYPES_H_
 
 /* Data types */
 typedef enum { ncclInt8       = 0, ncclChar       = 0,

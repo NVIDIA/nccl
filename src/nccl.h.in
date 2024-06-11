@@ -47,6 +47,7 @@ typedef enum { ncclSuccess                 =  0,
 #define NCCL_CONFIG_UNDEF_INT INT_MIN
 #define NCCL_CONFIG_UNDEF_PTR NULL
 #define NCCL_SPLIT_NOCOLOR -1
+#define NCCL_UNDEF_FLOAT -1.0f
 
 /* Communicator configuration. Users can assign value to attributes to specify the
  * behavior of a communicator. */
@@ -76,6 +77,23 @@ typedef struct ncclConfig_v21700 {
   NCCL_CONFIG_UNDEF_INT,                    /* maxCTAs */               \
   NCCL_CONFIG_UNDEF_PTR,                    /* netName */               \
   NCCL_CONFIG_UNDEF_INT                     /* splitShare */            \
+}
+
+/* This struct will be used by ncclGroupSimulateEnd() API to query information about simulation. */
+typedef struct ncclSimInfo_v22200 {
+    size_t size;
+    unsigned int magic;
+    unsigned int version;
+    float estimatedTime;
+} ncclSimInfo_t;
+
+/* NCCL_SIM_INFO_INITIALIZER must be assigned to initialize simInfo structure when it is created.
+ * Not initialized simInfo will result in NCCL error. */
+#define NCCL_SIM_INFO_INITIALIZER {                                         \
+  sizeof(ncclSimInfo_t),                            /* size */              \
+  0x74685283,                                       /* magic */             \
+  NCCL_VERSION(NCCL_MAJOR, NCCL_MINOR, NCCL_PATCH), /* version */           \
+  NCCL_UNDEF_FLOAT                                  /* estimated time */    \
 }
 
 /* NCCL malloc and free function for all types of NCCL optimizations
@@ -431,6 +449,14 @@ ncclResult_t pncclGroupStart();
  */
 ncclResult_t  ncclGroupEnd();
 ncclResult_t pncclGroupEnd();
+
+/*
+ * Group Simulate End
+ *
+ * Simulate a ncclGroupEnd() call and return NCCL's simulation info in a struct.
+ */
+ncclResult_t  ncclGroupSimulateEnd(ncclSimInfo_t* simInfo);
+ncclResult_t pncclGroupSimulateEnd(ncclSimInfo_t* simInfo);
 
 #ifdef __cplusplus
 } // end extern "C"

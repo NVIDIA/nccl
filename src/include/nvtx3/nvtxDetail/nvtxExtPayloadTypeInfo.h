@@ -10,14 +10,14 @@
 #error Never include this file directly -- it is automatically included by nvToolsExtPayload.h (except when NVTX_NO_IMPL is defined).
 #endif
 
-typedef void* pointer_type;
+typedef void* nvtx_payload_pointer_type;
 
 #if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L)
 #include <uchar.h>
 #include <stdalign.h>
 #endif
 
-/* `alignof` is available as of C11 or C++11 */
+/* `alignof` is available as of C11 or C++11. */
 #if (defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)) || (defined(__cplusplus) && __cplusplus >= 201103L)
 
 #define nvtx_alignof(type) alignof(type)
@@ -54,7 +54,7 @@ MKTYPEDEF(double);
 MKTYPEDEF2(long double, longdouble);
 
 MKTYPEDEF(size_t);
-MKTYPEDEF(pointer_type);
+MKTYPEDEF(nvtx_payload_pointer_type);
 
 MKTYPEDEF(wchar_t);
 
@@ -85,8 +85,16 @@ MKTYPEDEF(wchar_t);
 /*
  * Helper array to get the alignment for each predefined C/C++ language type.
  * The order of entries must match the values in`enum nvtxPayloadSchemaEntryType`.
+ *
+ * In C++, `const` variables use internal linkage by default, but we need it to
+ * be public (extern) since weak declarations must be public.
  */
-const nvtxPayloadEntryTypeInfo_t nvtxExtPayloadTypeInfo[NVTX_PAYLOAD_ENTRY_TYPE_INFO_ARRAY_SIZE] =
+NVTX_LINKONCE_DEFINE_GLOBAL
+#ifdef __cplusplus
+extern
+#endif
+const nvtxPayloadEntryTypeInfo_t
+NVTX_EXT_PAYLOAD_VERSIONED_ID(nvtxExtPayloadTypeInfo)[NVTX_PAYLOAD_ENTRY_TYPE_INFO_ARRAY_SIZE] =
 {
     /* The first entry contains this array's length and the size of each entry in this array. */
     {NVTX_PAYLOAD_ENTRY_TYPE_INFO_ARRAY_SIZE, sizeof(nvtxPayloadEntryTypeInfo_t)},
@@ -119,7 +127,7 @@ const nvtxPayloadEntryTypeInfo_t nvtxExtPayloadTypeInfo[NVTX_PAYLOAD_ENTRY_TYPE_
     /* NVTX_PAYLOAD_ENTRY_TYPE_LONGDOUBLE */ {sizeof(long double), nvtx_alignof2(long double, longdouble)},
 
     /* NVTX_PAYLOAD_ENTRY_TYPE_SIZE */    {sizeof(size_t),       nvtx_alignof(size_t)},
-    /* NVTX_PAYLOAD_ENTRY_TYPE_ADDRESS */ {sizeof(pointer_type), nvtx_alignof(pointer_type)},
+    /* NVTX_PAYLOAD_ENTRY_TYPE_ADDRESS */ {sizeof(nvtx_payload_pointer_type), nvtx_alignof(nvtx_payload_pointer_type)},
 
     /*** Special character types ***/
     /* NVTX_PAYLOAD_ENTRY_TYPE_WCHAR */ {sizeof(wchar_t), nvtx_alignof(wchar_t)},

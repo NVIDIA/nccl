@@ -218,7 +218,7 @@ static ncclResult_t ncclTopoIdToNetDev(struct ncclTopoSystem* system, int64_t id
       return ncclSuccess;
     }
   }
-  WARN("Could not find NET with id %lx\n", id);
+  WARN("Could not find NET with id %lx", id);
   return ncclInternalError;
 }
 

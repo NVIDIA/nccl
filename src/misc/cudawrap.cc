@@ -59,6 +59,10 @@ DECLARE_CUDA_PFN(cuGetErrorString);
 DECLARE_CUDA_PFN(cuGetErrorName);
 /* enqueue.cc */
 DECLARE_CUDA_PFN(cuMemGetAddressRange);
+DECLARE_CUDA_PFN(cuLaunchKernel);
+#if CUDA_VERSION >= 11080
+DECLARE_CUDA_PFN(cuLaunchKernelEx);
+#endif
 /* proxy.cc */
 DECLARE_CUDA_PFN(cuCtxCreate);
 DECLARE_CUDA_PFN(cuCtxDestroy);
@@ -137,6 +141,10 @@ static ncclResult_t cudaPfnFuncLoader(void) {
   LOAD_SYM(cuCtxGetCurrent, 1);
   LOAD_SYM(cuCtxSetCurrent, 1);
   LOAD_SYM(cuCtxGetDevice, 1);
+  LOAD_SYM(cuLaunchKernel, 1);
+#if CUDA_VERSION >= 11080
+  LOAD_SYM(cuLaunchKernelEx, 1);
+#endif
 /* cuMem API support */
   LOAD_SYM(cuMemAddressReserve, 1);
   LOAD_SYM(cuMemAddressFree, 1);

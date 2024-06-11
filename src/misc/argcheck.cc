@@ -52,8 +52,6 @@ ncclResult_t ArgsCheck(struct ncclInfo* info) {
     WARN("%s : invalid type %d", info->opName, info->datatype);
     return ncclInvalidArgument;
   }
-  // Type is OK, compute nbytes. Convert Allgather/Broadcast/P2P calls to chars.
-  NCCLCHECK(ncclInfoSetDerived(info, info->comm->nRanks));
 
   if (info->op < 0 || ncclMaxRedOp < info->op) {
     WARN("%s : invalid reduction operation %d", info->opName, info->op);

@@ -201,7 +201,6 @@ ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFrom
 
 ncclResult_t bootstrapGetUniqueId(struct ncclBootstrapHandle* handle) {
   memset(handle, 0, sizeof(ncclBootstrapHandle));
-  NCCLCHECK(getRandomData(&handle->magic, sizeof(handle->magic)));
 
   const char* env = ncclGetEnv("NCCL_COMM_ID");
   if (env) {
@@ -210,7 +209,9 @@ ncclResult_t bootstrapGetUniqueId(struct ncclBootstrapHandle* handle) {
       WARN("Invalid NCCL_COMM_ID, please use format: <ipv4>:<port> or [<ipv6>]:<port> or <hostname>:<port>");
       return ncclInvalidArgument;
     }
+    handle->magic = NCCL_MAGIC;
   } else {
+    NCCLCHECK(getRandomData(&handle->magic, sizeof(handle->magic)));
     memcpy(&handle->addr, &bootstrapNetIfAddr, sizeof(union ncclSocketAddress));
     NCCLCHECK(bootstrapCreateRoot(handle, false));
   }
@@ -626,7 +627,7 @@ ncclResult_t bootstrapClose(void* commState) {
   struct bootstrapState* state = (struct bootstrapState*)commState;
   if (state->unexpectedConnections != NULL) {
     unexpectedFree(state);
-    if (__atomic_load_n(state->abortFlag, __ATOMIC_RELAXED) == 0) {
+    if (__atomic_load_n(state->abortFlag, __ATOMIC_ACQUIRE) == 0) {
       WARN("Unexpected connections are not empty");
       return ncclInternalError;
     }

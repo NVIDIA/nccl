@@ -54,7 +54,7 @@ struct unpackShmem {
 
 struct unpackGroupShmem {
   int unpackNetDeviceIndexMask; // We store a single unpackNetDeviceIndex because only one peer can be network recv
-  uint64_t head;
+  uint64_t head[NET_UNPACK_MAX_NPEERS];
   struct netUnpackMeta* g_meta[NET_UNPACK_MAX_NPEERS]; // head of handle to index into meta for meta copy
 };
 

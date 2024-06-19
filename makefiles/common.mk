@@ -15,7 +15,7 @@ PROFAPI ?= 1
 NVTX ?= 1
 RDMA_CORE ?= 0
 
-NVCC = $(CUDA_HOME)/bin/nvcc
+NVCC ?= $(CUDA_HOME)/bin/nvcc
 
 CUDA_LIB ?= $(CUDA_HOME)/lib64
 CUDA_INC ?= $(CUDA_HOME)/include

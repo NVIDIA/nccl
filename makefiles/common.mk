@@ -118,4 +118,5 @@ endif
 
 ifneq ($(RDMA_CORE), 0)
 CXXFLAGS += -DNCCL_BUILD_RDMA_CORE=1
+NVLDFLAGS += -libverbs -lmlx5
 endif

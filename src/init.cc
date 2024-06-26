@@ -1735,7 +1735,8 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev, const int* devlist) {
     for (int i = 0; i < ndev; ++i) {
       /* invalid device check. */
       if (devlist[i] < 0 || devlist[i] >= totalnDev) {
-        ret = ncclUnhandledCudaError;
+        WARN("Invalid device %d (totalnDev=%d)", devlist[i], totalnDev);
+        ret = ncclInvalidArgument;
         goto fail;
       }
 

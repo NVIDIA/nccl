@@ -441,9 +441,21 @@ ncclResult_t ncclTopoCompareGraphs(struct ncclTopoSystem* system, struct ncclTop
 //
 // The list is built the following way:
 // 1. Select NETs starting with those close to GPU(s), based on paths[n].type.
-// 2. add other NETs satisfying typeInter but not already in the list.
-
+// 2. For each GPU, once that list of NICs with a given distance is prepared, shuffle the list
+//    based on the GPU NVML index so that e.g. GPU 1 chooses NIC 1 first instead of NIC 0 which
+//    might have been choosen by GPU 0 (case with multiple independent communicators per node)
+// 3. Then add the NETs to the final list if they were not already added by another closer GPU.
+NCCL_PARAM(SearchBestNic, "SEARCH_BEST_NIC", 1);
 ncclResult_t ncclTopoSelectNets(struct ncclTopoSystem* system, int typeInter, int gpu, int* nets, int* netCountRet) {
+  // need search best nic
+  if (!ncclParamSearchBestNic()) {
+    *netCountRet = system->nodes[NET].count;
+    for (int i = 0; i < *netCountRet; ++i) {
+      nets[i] = i;
+    }
+    return ncclSuccess;
+  }
+
   int netCount = 0;
   int localNetCount;
   int* localNets;

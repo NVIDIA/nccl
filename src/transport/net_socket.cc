@@ -75,7 +75,7 @@ ncclResult_t ncclNetSocketDevices(int* ndev) {
 static ncclResult_t ncclNetSocketGetSpeed(char* devName, int* speed) {
   *speed = 0;
   char speedPath[PATH_MAX];
-  sprintf(speedPath, "/sys/class/net/%s/speed", devName);
+  snprintf(speedPath, sizeof(speedPath), "/sys/class/net/%s/speed", devName);
   int fd = open(speedPath, O_RDONLY);
   if (fd != -1) {
     char speedStr[] = "        ";

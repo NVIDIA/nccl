@@ -241,12 +241,12 @@ static ncclResult_t recvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
 static ncclResult_t netMapShm(struct connectMapMem* mem) {
   mem->cpuPtr = NULL;
   mem->gpuPtr = NULL;
-  NCCLCHECK(ncclShmOpen(mem->shmPath, mem->size, (void**)&mem->cpuPtr, (void**)&mem->gpuPtr, -1, &mem->attachHandle));
+  NCCLCHECK(ncclShmOpen(mem->shmPath, sizeof(mem->shmPath), mem->size, (void**)&mem->cpuPtr, (void**)&mem->gpuPtr, -1, &mem->attachHandle));
   return ncclSuccess;
 }
 static ncclResult_t netCreateShm(struct connectMapMem* mem) {
   mem->shmPath[0] = '\0'; // Let ncclShmOpen create a tmp file
-  NCCLCHECK(ncclShmOpen(mem->shmPath, mem->size, (void**)&mem->cpuPtr, NULL, 1, &mem->createHandle));
+  NCCLCHECK(ncclShmOpen(mem->shmPath, sizeof(mem->shmPath), mem->size, (void**)&mem->cpuPtr, NULL, 1, &mem->createHandle));
   return ncclSuccess;
 }
 

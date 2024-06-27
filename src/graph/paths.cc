@@ -298,6 +298,9 @@ ncclResult_t ncclTopoCheckP2p(struct ncclTopoSystem* system, int64_t id1, int64_
   if (arch == NCCL_TOPO_CPU_ARCH_X86 && vendor == NCCL_TOPO_CPU_VENDOR_ZHAOXIN) {
     p2pLevel = PATH_PXB;
   }
+  if (arch == NCCL_TOPO_CPU_ARCH_X86 && vendor == NCCL_TOPO_CPU_VENDOR_AMD) {
+    p2pLevel = PATH_PXB;
+  }
 
 compare:
   // Compute the PCI distance and compare with the p2pLevel.

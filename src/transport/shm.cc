@@ -89,7 +89,7 @@ static ncclResult_t shmSendSetup(struct ncclComm* comm, struct ncclTopoGraph* gr
     for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) shmSize += comm->buffSizes[p];
   }
   info->shmSize = resources->shmSize = shmSize;
-  NCCLCHECK(ncclShmOpen(shmPath, resources->shmSize, (void**)&resources->hostMem, (void**)&resources->devHostMem, 1, &resources->hostHandle));
+  NCCLCHECK(ncclShmOpen(shmPath, sizeof(shmPath), resources->shmSize, (void**)&resources->hostMem, (void**)&resources->devHostMem, 1, &resources->hostHandle));
   TRACE(NCCL_SHM,"Opened shmName %s shmSize %d", shmPath, info->shmSize);
   memcpy(info->shmName, shmPath+sizeof("/dev/shm/nccl-")-1, sizeof(info->shmName));
 
@@ -112,7 +112,7 @@ static ncclResult_t shmRecvSetup(struct ncclComm* comm, struct ncclTopoGraph* gr
     for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) shmSize += comm->buffSizes[p];
   }
   info->shmSize = resources->shmSize = shmSize;
-  NCCLCHECK(ncclShmOpen(shmPath, resources->shmSize, (void**)&resources->hostMem, (void**)&resources->devHostMem, 1, &resources->hostHandle));
+  NCCLCHECK(ncclShmOpen(shmPath, sizeof(shmPath), resources->shmSize, (void**)&resources->hostMem, (void**)&resources->devHostMem, 1, &resources->hostHandle));
   TRACE(NCCL_SHM,"Opened shmName %s shmSize %d", shmPath, info->shmSize);
   memcpy(info->shmName, shmPath+sizeof("/dev/shm/nccl-")-1, sizeof(info->shmName));
 
@@ -139,10 +139,10 @@ static ncclResult_t shmSendConnect(struct ncclComm* comm, struct ncclConnect* co
   struct shmSendResources* resources = (struct shmSendResources*)send->transportResources;
 
   char shmPath[PATH_MAX];
-  sprintf(shmPath, "/dev/shm/nccl-%s", info->shmName);
+  snprintf(shmPath, sizeof(shmPath), "/dev/shm/nccl-%s", info->shmName);
   resources->remShmSize = info->shmSize;
   TRACE(NCCL_SHM,"Open shmName %s shmSize %d", shmPath, info->shmSize);
-  NCCLCHECK(ncclShmOpen(shmPath, resources->remShmSize, (void**)&resources->remHostMem, (void**)&resources->devRemHostMem, -1, &resources->remHandle));
+  NCCLCHECK(ncclShmOpen(shmPath, sizeof(shmPath), resources->remShmSize, (void**)&resources->remHostMem, (void**)&resources->devRemHostMem, -1, &resources->remHandle));
 
   char* buff = shmLocality == SHM_SEND_SIDE ? (char*)(resources->devHostMem+1) : (char*)(resources->devRemHostMem+1);
   for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) {
@@ -179,10 +179,10 @@ static ncclResult_t shmRecvConnect(struct ncclComm* comm, struct ncclConnect* co
   struct shmConnectInfo* info = (struct shmConnectInfo*)connectInfo;
 
   char shmPath[PATH_MAX];
-  sprintf(shmPath, "/dev/shm/nccl-%s", info->shmName);
+  snprintf(shmPath, sizeof(shmPath), "/dev/shm/nccl-%s", info->shmName);
   resources->remShmSize = info->shmSize;
   TRACE(NCCL_SHM,"Open shmName %s shmSize %d", shmPath, info->shmSize);
-  NCCLCHECK(ncclShmOpen(shmPath, resources->remShmSize, (void**)&resources->remHostMem, (void**)&resources->devRemHostMem, -1, &resources->remHandle));
+  NCCLCHECK(ncclShmOpen(shmPath, sizeof(shmPath), resources->remShmSize, (void**)&resources->remHostMem, (void**)&resources->devRemHostMem, -1, &resources->remHandle));
 
   char* buff = shmLocality == SHM_RECV_SIDE ? (char*)(resources->devHostMem+1) : (char*)(resources->devRemHostMem+1);
   for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) {

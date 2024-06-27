@@ -52,10 +52,10 @@ void initEnv() {
   char confFilePath[1024];
   const char * userDir = userHomeDir();
   if (userDir) {
-    sprintf(confFilePath, "%s/.nccl.conf", userDir);
+    snprintf(confFilePath, sizeof(confFilePath), "%s/.nccl.conf", userDir);
     setEnvFile(confFilePath);
   }
-  sprintf(confFilePath, "/etc/nccl.conf");
+  snprintf(confFilePath, sizeof(confFilePath), "/etc/nccl.conf");
   setEnvFile(confFilePath);
 }
 

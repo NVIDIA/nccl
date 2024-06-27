@@ -10,7 +10,7 @@
 #include "nccl.h"
 
 typedef void* ncclShmHandle_t;
-ncclResult_t ncclShmOpen(char* shmPath, size_t shmSize, void** shmPtr, void** devShmPtr, int refcount, ncclShmHandle_t* handle);
+ncclResult_t ncclShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize, void** shmPtr, void** devShmPtr, int refcount, ncclShmHandle_t* handle);
 ncclResult_t ncclShmClose(ncclShmHandle_t handle);
 ncclResult_t ncclShmUnlink(ncclShmHandle_t handle);
 

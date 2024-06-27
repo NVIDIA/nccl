@@ -500,11 +500,11 @@ ncclResult_t p2pRecvConnect(struct ncclComm* comm, struct ncclConnect* connectIn
 
   if (useMemcpy) {
     char shmPath[PATH_MAX];
-    sprintf(shmPath, "/dev/shm/nccl-%s", info->shmName);
+    snprintf(shmPath, sizeof(shmPath), "/dev/shm/nccl-%s", info->shmName);
     TRACE(NCCL_SHM,"Open shmName %s shmSize %d", shmPath, info->shmSize);
     resources->shmSize = info->shmSize;
     // Attach to peer's SHM segment
-    NCCLCHECK(ncclShmOpen(shmPath, info->shmSize, (void**)&resources->shm, (void**)&resources->devShm, -1, &resources->handle));
+    NCCLCHECK(ncclShmOpen(shmPath, sizeof(shmPath), info->shmSize, (void**)&resources->shm, (void**)&resources->devShm, -1, &resources->handle));
 
     recv->conn.tail = &resources->devShm->recvMem.tail;
     recv->conn.head = &resources->devShm->sendMem.head;
@@ -583,7 +583,7 @@ static ncclResult_t p2pSendProxySetup(struct ncclProxyConnection* connection, st
     shmPath[0] = '\0';
     proxyInfo->shmSize = sizeof(struct ncclSendMem) + sizeof(struct ncclRecvMem);
     // Create a SHM segment for the peer to attach to
-    NCCLCHECK(ncclShmOpen(shmPath, proxyInfo->shmSize, (void**)&proxyInfo->shm, (void**)&proxyInfo->devShm, 1, &proxyInfo->handle));
+    NCCLCHECK(ncclShmOpen(shmPath, sizeof(shmPath), proxyInfo->shmSize, (void**)&proxyInfo->shm, (void**)&proxyInfo->devShm, 1, &proxyInfo->handle));
     TRACE(NCCL_SHM,"Opened shmName %s shmSize %d", shmPath, proxyInfo->shmSize);
     memcpy(proxyInfo->shmName, shmPath+sizeof("/dev/shm/nccl-")-1, sizeof(proxyInfo->shmName));
 

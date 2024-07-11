@@ -202,6 +202,7 @@ static void ncclTopoRemovePathType(struct ncclTopoSystem* system, int nodeType) 
       free(node->paths[nodeType]);
       node->paths[nodeType] = NULL;
     }
+    if (nodeType == t) continue;
     // Remove links _from_ the given type
     for (int n=0; n<system->nodes[nodeType].count; n++) {
       struct ncclTopoNode* node = system->nodes[nodeType].nodes+n;

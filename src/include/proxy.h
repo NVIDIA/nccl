@@ -194,7 +194,7 @@ struct ncclProxyProgressState {
   pthread_t thread;
   volatile int stop;
   struct ncclProxyPeer** localPeers;
-  struct ncclSharedNetComms* netComms[NCCL_MAX_NETDEVS];
+  struct ncclSharedNetComms* sharedNetComms[NCCL_MAX_NETDEVS];
   struct ncclProxyArgs* active;
   struct ncclProxyArgs* pool;
   struct ncclProxyPool* pools;

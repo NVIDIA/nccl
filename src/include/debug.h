@@ -23,6 +23,7 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
 
 // Let code temporarily downgrade WARN into INFO
 extern thread_local int ncclDebugNoWarn;
+extern ncclResult_t ncclLastResult;
 extern char ncclLastError[];
 
 #define VERSION(...) ncclDebugLog(NCCL_LOG_VERSION, NCCL_ALL, __FILE__, __LINE__, __VA_ARGS__)

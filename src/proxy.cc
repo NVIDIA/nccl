@@ -1523,6 +1523,13 @@ void* ncclProxyService(void* _args) {
       }
 
       if (closeConn) {
+        INFO(NCCL_PROXY, "Close connection since error %s", ncclGetErrorString(res));
+        if (res != ncclSuccess && res != ncclInProgress) {
+          ncclLastResult = res;
+          const char *error_string = ncclGetErrorString(ncclLastResult);
+          strcpy(ncclLastError, error_string);
+        }
+
         ncclSocketClose(sock);
 
         if (op != nullptr) {

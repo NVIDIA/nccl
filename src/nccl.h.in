@@ -172,6 +172,9 @@ ncclResult_t pncclCommSplit(ncclComm_t comm, int color, int key, ncclComm_t *new
 const char*  ncclGetErrorString(ncclResult_t result);
 const char* pncclGetErrorString(ncclResult_t result);
 
+/* Returns a ncclResult_t of the last error that occurred. */
+ncclResult_t ncclGetLastResult(ncclComm_t comm);
+
 /* Returns a human-readable message of the last error that occurred. */
 const char*  ncclGetLastError(ncclComm_t comm);
 const char* pncclGetLastError(ncclComm_t comm);

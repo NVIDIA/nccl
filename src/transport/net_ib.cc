@@ -248,6 +248,10 @@ static ncclResult_t ncclIbRoceGetVersionNum(const char* deviceName, int portNum,
   close(fd);
 
   if (ret == -1) {
+    WARN("NET/IB: read failed: %s, roceTypePath: %s", strerror(errno), roceTypePath);
+    if (errno == EINVAL) {
+      return ncclSuccess;
+    }
     return ncclSystemError;
   }
 

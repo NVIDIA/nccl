@@ -13,6 +13,7 @@
 
 // Is cuMem API usage enabled
 extern int ncclCuMemEnable();
+extern int ncclCuMemHostEnable();
 
 #if CUDART_VERSION >= 11030
 #include <cudaTypedefs.h>
@@ -96,6 +97,7 @@ DECLARE_CUDA_PFN_EXTERN(cuMemRelease);
 DECLARE_CUDA_PFN_EXTERN(cuMemRetainAllocationHandle);
 DECLARE_CUDA_PFN_EXTERN(cuMemSetAccess);
 DECLARE_CUDA_PFN_EXTERN(cuMemUnmap);
+DECLARE_CUDA_PFN_EXTERN(cuMemGetAllocationPropertiesFromHandle);
 #if CUDA_VERSION >= 11070
 DECLARE_CUDA_PFN_EXTERN(cuMemGetHandleForAddressRange); // DMA-BUF support
 #endif

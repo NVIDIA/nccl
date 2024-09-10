@@ -16,20 +16,23 @@
 #endif
 
 // Define all NCCL-provided static schema IDs here (avoid duplicates).
-#define NVTX_SID_CommInitRank  0
-#define NVTX_SID_CommInitAll   1
-#define NVTX_SID_CommDestroy   2 // same schema as NVTX_SID_CommInitRank
-#define NVTX_SID_CommAbort     3 // same schema as NVTX_SID_CommInitRank
-#define NVTX_SID_AllGather     4
-#define NVTX_SID_AllReduce     5
-#define NVTX_SID_Broadcast     6
-#define NVTX_SID_ReduceScatter 7
-#define NVTX_SID_Reduce        8
-#define NVTX_SID_Send          9
-#define NVTX_SID_Recv          10
+#define NVTX_SID_CommInitRank         0
+#define NVTX_SID_CommInitAll          1
+#define NVTX_SID_CommDestroy          2 // same schema as NVTX_SID_CommInitRank
+#define NVTX_SID_CommAbort            3 // same schema as NVTX_SID_CommInitRank
+#define NVTX_SID_AllGather            4
+#define NVTX_SID_AllReduce            5
+#define NVTX_SID_Broadcast            6
+#define NVTX_SID_ReduceScatter        7
+#define NVTX_SID_Reduce               8
+#define NVTX_SID_Send                 9
+#define NVTX_SID_Recv                 10
+#define NVTX_SID_CommInitRankConfig   11 // same schema as NVTX_SID_CommInitRank
+#define NVTX_SID_CommInitRankScalable 12 // same schema as NVTX_SID_CommInitRank
+#define NVTX_SID_CommSplit            13
 
 // Define static schema ID for the reduction operation.
-#define NVTX_PAYLOAD_ENTRY_NCCL_REDOP 11 + NVTX_PAYLOAD_ENTRY_TYPE_SCHEMA_ID_STATIC_START
+#define NVTX_PAYLOAD_ENTRY_NCCL_REDOP 14 + NVTX_PAYLOAD_ENTRY_TYPE_SCHEMA_ID_STATIC_START
 
 extern const nvtxDomainHandle_t ncclNvtxDomainHandle;
 

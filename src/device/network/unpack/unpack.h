@@ -19,10 +19,10 @@
 inline __device__ void load64gpu(const uint64_t* ptr, uint64_t &v) {
   #if __CUDA_ARCH__ >= 700
       asm volatile("ld.relaxed.gpu.u64 {%0}, [%1];"
-      : "=l"(v) : "l"(ptr));
+      : "=l"(v) : "l"(ptr) : "memory");
   #else
       asm volatile("ld.volatile.global.u64 {%0}, [%1];"
-      : "=l"(v) : "l"(ptr));
+      : "=l"(v) : "l"(ptr) : "memory");
   #endif
 }
 
@@ -226,6 +226,8 @@ inline __device__ void ncclNetDeviceUnpackInner(
 
   int PPW = ppw(nbytes, nw);
 
+  // Coverity reports a potential overflow but in reality PPW is tiny so there's no need to store it in an uint64_t.
+  // coverity[overflow_before_widen]
   for (uint64_t meta_s = w * PPW; meta_s < meta_cnt; meta_s += nw * PPW) {
 
     uint64_t iter_meta_cnt = meta_cnt - meta_s;

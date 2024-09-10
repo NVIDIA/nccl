@@ -97,7 +97,7 @@ __device__ inline void barrier_sync_aligned(int name, int nThreads) {
 
 __device__ inline bool barrier_red_or(bool vote, int name) {
   int ans;
-  asm("{ .reg .pred p;"
+  asm volatile("{ .reg .pred p;"
       "  setp.ne.s32 p, %1, 0;"
       "  barrier.red.or.pred p, %2, p; "
       "  selp.s32 %0, 1, 0, p; }"
@@ -106,7 +106,7 @@ __device__ inline bool barrier_red_or(bool vote, int name) {
 }
 __device__ inline bool barrier_red_or(bool vote, int name, int nThreads) {
   int ans;
-  asm("{ .reg .pred p;"
+  asm volatile("{ .reg .pred p;"
       "  setp.ne.s32 p, %1, 0;"
       "  barrier.red.or.pred p, %2, %3, p; "
       "  selp.s32 %0, 1, 0, p; }"
@@ -115,7 +115,7 @@ __device__ inline bool barrier_red_or(bool vote, int name, int nThreads) {
 }
 __device__ inline bool barrier_red_or_aligned(bool vote, int name) {
   int ans;
-  asm("{ .reg .pred p;"
+  asm volatile("{ .reg .pred p;"
       "  setp.ne.s32 p, %1, 0;"
       "  barrier.red.or.pred.aligned p, %2, p; "
       "  selp.s32 %0, 1, 0, p; }"
@@ -137,9 +137,9 @@ inline __device__ void copyToShmem16(int tid, void* dst, void const* src, int by
   int offset = 16*tid;
   if (offset < bytes) {
     uint64_t a=0, b=0;
-    asm("ld.v2.u64 {%0,%1},[%2];" : "=l"(a),"=l"(b) : "l"((char const*)src + offset));
+    asm volatile("ld.v2.u64 {%0,%1},[%2];" : "=l"(a),"=l"(b) : "l"((char const*)src + offset) : "memory");
     uint32_t udst = (uint32_t)__cvta_generic_to_shared(dst);
-    asm volatile("st.shared.v2.u64 [%0],{%1,%2};" :: "r"(udst + offset), "l"(a), "l"(b));
+    asm volatile("st.shared.v2.u64 [%0],{%1,%2};" :: "r"(udst + offset), "l"(a), "l"(b) : "memory");
   }
 }
 
@@ -300,6 +300,9 @@ struct RunWorkBatch {
         if (work->nWarps != workPrev->nWarps) __syncthreads();
       }
       int subtn = work->nWarps*WARP_SIZE;
+      // Coverity reports a possible thread divergence due to not all threads participating in the collective.
+      // However, the code ensures that the participation is on a per-warp basis.
+      // coverity[device_thread_diverged:FALSE]
       if (tid < subtn) RunWorkColl<Fn, T, RedOp, Algo, Proto>().run(tid, subtn, work);
     }
   }
@@ -348,6 +351,9 @@ __device__ __forceinline__ void ncclKernelMain(struct ncclDevKernelArgs const* a
   default:
     { int subtid = tid - 2*WARP_SIZE;
       int subtn = tn - 2*WARP_SIZE;
+      // Coverity reports a possible thread divergence due to not all threads participating in the collective.
+      // However, the code ensures that the participation is on a per-warp basis.
+      // coverity[device_thread_diverged:FALSE]
       loadWorkBatchToShmem(subtid, subtn, args, /*batchIx=*/blockIdx.x);
     } break;
   }

@@ -284,6 +284,7 @@ ncclResult_t ncclSocketGetAddrFromString(union ncclSocketAddress* ua, const char
       sin6.sin6_scope_id = 0;                          // should be global scope, set to 0
     } else {
       WARN("Net : unsupported IP family");
+      freeaddrinfo(p);
       return ncclInvalidArgument;
     }
 
@@ -408,7 +409,7 @@ ncclResult_t ncclSocketGetAddr(struct ncclSocket* sock, union ncclSocketAddress*
 
 static ncclResult_t socketTryAccept(struct ncclSocket* sock) {
   socklen_t socklen = sizeof(union ncclSocketAddress);
-  sock->fd = accept(sock->acceptFd, &sock->addr.sa, &socklen);
+  sock->fd = accept(sock->acceptFd, (struct sockaddr*)&sock->addr, &socklen);
   if (sock->fd != -1) {
     sock->state = ncclSocketStateAccepted;
   } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
@@ -501,8 +502,9 @@ static ncclResult_t socketPollConnect(struct ncclSocket* sock) {
   } else if (ret < 0) {
     WARN("socketPollConnect poll() failed with error %s", strerror(errno));
     return ncclRemoteError;
-  } else {
-    EQCHECK(ret == 1 && (pfd.revents & POLLOUT), 0);
+  } else if (ret != 1 || (pfd.revents & POLLOUT) == 0) {
+    WARN("socketPollConnect poll() returned %d%s", ret, (pfd.revents & POLLOUT) ? "" : ", no POLLOUT events");
+    return ncclSystemError;
   }
 
   /* check socket status */
@@ -734,13 +736,17 @@ ncclResult_t ncclSocketInit(struct ncclSocket* sock, union ncclSocketAddress* ad
   /* Set socket as non-blocking if async or if we need to be able to abort */
   if ((sock->asyncFlag || sock->abortFlag) && sock->fd >= 0) {
     int flags;
-    EQCHECKGOTO(flags = fcntl(sock->fd, F_GETFL), -1, ret, fail);
-    SYSCHECKGOTO(fcntl(sock->fd, F_SETFL, flags | O_NONBLOCK), ret, fail);
+    SYSCHECKGOTO(flags = fcntl(sock->fd, F_GETFL), "fcntl", ret, fail);
+    SYSCHECKGOTO(fcntl(sock->fd, F_SETFL, flags | O_NONBLOCK), "fcntl", ret, fail);
   }
 
 exit:
   return ret;
 fail:
+  if (sock->fd != -1) {
+    close(sock->fd);
+    sock->fd = -1;
+  }
   goto exit;
 }
 

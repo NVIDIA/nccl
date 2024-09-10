@@ -27,7 +27,6 @@ ncclResult_t busIdToInt64(const char* busId, int64_t* id);
 ncclResult_t getBusId(int cudaDev, int64_t *busId);
 
 ncclResult_t getHostName(char* hostname, int maxlen, const char delim);
-uint64_t getHash(const char* string, int n);
 uint64_t getHostHash();
 uint64_t getPidHash();
 ncclResult_t getRandomData(void* buffer, size_t bytes);

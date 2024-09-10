@@ -6,17 +6,23 @@
 
 #include "core.h"
 
-#define MAXWIDTH 20
-#define PREFIXLEN 15
-#define STRLENGTH (PREFIXLEN+5*MAXWIDTH)
 void dumpLine(int* values, int nranks, const char* prefix) {
-  int prefixlen = strlen(prefix);
-  char line[STRLENGTH+1];
-  line[STRLENGTH] = '\0';
-  memset(line, ' ', STRLENGTH);
-  strncpy(line, prefix, PREFIXLEN);
-  for (int i=0; i<nranks && i<MAXWIDTH; i++) sprintf(line+prefixlen+4*i, " %3d", values[i]);
-  INFO(NCCL_INIT,"%s", line);
+  constexpr int line_length = 128;
+  char line[line_length];
+  int num_width = snprintf(nullptr, 0, "%d", nranks-1);  // safe as per "man snprintf"
+  int n = snprintf(line, line_length, "%s", prefix);
+  for (int i = 0; i < nranks && n < line_length-1; i++) {
+    n += snprintf(line + n, line_length - n, " %*d", num_width, values[i]);
+    // At this point n may be more than line_length-1, so don't use it
+    // for indexing into "line".
+  }
+  if (n >= line_length) {
+    // Sprintf wanted to write more than would fit in the buffer. Assume
+    // line_length is at least 4 and replace the end with "..." to
+    // indicate that it was truncated.
+    snprintf(line+line_length-4, 4, "...");
+  }
+  INFO(NCCL_INIT, "%s", line);
 }
 
 ncclResult_t ncclBuildRings(int nrings, int* rings, int rank, int nranks, int* prev, int* next) {
@@ -32,7 +38,7 @@ ncclResult_t ncclBuildRings(int nrings, int* rings, int rank, int nranks, int* p
       rings[r*nranks+i] = current;
       current = next[r*nranks+current];
     }
-    sprintf(prefix, "Channel %02d/%02d : ", r, nrings);
+    snprintf(prefix, sizeof(prefix), "Channel %02d/%02d :", r, nrings);
     if (rank == 0) dumpLine(rings+r*nranks, nranks, prefix);
     if (current != rank) {
       WARN("Error : ring %d does not loop back to start (%d != %d)", r, current, rank);

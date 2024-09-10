@@ -11,7 +11,13 @@ enum {
   NVLS_REG_COMPLETE = 0x02,
   NVLS_REG_POSSIBLE = 0x04,
   NVLS_REG_NO_SUPPORT = 0x08,
-  COLLNET_REG_COMPLETE = 0x10
+  COLLNET_REG_COMPLETE = 0x10,
+  IPC_REG_COMPLETE = 0x20
+};
+
+struct ncclPeerRegIpcAddr {
+  uintptr_t* devPeerRmtAddrs;
+  uintptr_t* hostPeerRmtAddrs;
 };
 
 struct ncclReg {
@@ -34,7 +40,10 @@ struct ncclReg {
   uintptr_t caddrs[NCCL_MAX_LOCAL_RANKS]; /* use to check if NVLS buffers match among intra-node ranks */
   // collnet reg
   void* collnetHandle;
-  struct ncclProxyConnector* proxyconn;
+  struct ncclProxyConnector* collnetProxyconn;
+  // general ipc reg
+  struct ncclPeerRegIpcAddr regIpcAddrs;
+  struct ncclIpcRegInfo* ipcInfos[NCCL_MAX_LOCAL_RANKS];
 };
 
 struct ncclRegCache {

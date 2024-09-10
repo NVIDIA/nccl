@@ -355,6 +355,8 @@ static void* tryOpenLib(char* name, int* err, char* errStr) {
   if (nullptr == handle) {
     strncpy(errStr, dlerror(), MAX_STR_LEN);
     errStr[MAX_STR_LEN] = '\0';
+    // "handle" and "name" won't be NULL at the same time.
+    // coverity[var_deref_model]
     if (strstr(errStr, name) && strstr(errStr, "No such file or directory")) {
       *err = ENOENT;
     }
@@ -422,11 +424,10 @@ static int netPluginStatus = netPluginLoadReady;
 
 ncclResult_t ncclNetPluginLoad(struct ncclComm* comm) {
   char couldNotFindNames[MAX_PLUGIN_LOAD * PATH_MAX] = { 0 };
-  if (netPluginLoadFailed == netPluginStatus) {
-    return ncclSuccess;
-  }
-
   pthread_mutex_lock(&netPluginLock);
+  if (netPluginLoadFailed == netPluginStatus) {
+    goto exit;
+  }
   if (netPluginLoadSuccess == netPluginStatus) {
     ++netPluginRefCount;
     goto exit;

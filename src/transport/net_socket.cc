@@ -73,22 +73,27 @@ ncclResult_t ncclNetSocketDevices(int* ndev) {
 }
 
 static ncclResult_t ncclNetSocketGetSpeed(char* devName, int* speed) {
+  ncclResult_t ret = ncclSuccess;
   *speed = 0;
   char speedPath[PATH_MAX];
   sprintf(speedPath, "/sys/class/net/%s/speed", devName);
-  int fd = open(speedPath, O_RDONLY);
+  int fd = -1;
+  SYSCHECKSYNC(open(speedPath, O_RDONLY), "open", fd);
   if (fd != -1) {
     char speedStr[] = "        ";
-    if (read(fd, speedStr, sizeof(speedStr)-1) > 0) {
+    int n;
+    // Allow this to silently fail
+    n = read(fd, speedStr, sizeof(speedStr)-1);
+    if (n > 0) {
       *speed = strtol(speedStr, NULL, 0);
     }
-    close(fd);
   }
   if (*speed <= 0) {
     INFO(NCCL_NET, "Could not get speed from %s. Defaulting to 10 Gbps.", speedPath);
     *speed = 10000;
   }
-  return ncclSuccess;
+  if (fd != -1) SYSCHECK(close(fd), "close");
+  return ret;
 }
 
 ncclResult_t ncclNetSocketGetProperties(int dev, ncclNetProperties_t* props) {
@@ -235,19 +240,24 @@ void* persistentSocketThread(void *args_) {
 }
 
 ncclResult_t ncclNetSocketGetNsockNthread(int dev, int* ns, int* nt) {
+  ncclResult_t ret = ncclSuccess;
   int nSocksPerThread = ncclParamSocketNsocksPerThread();
   int nThreads = ncclParamSocketNthreads();
   if (nThreads > MAX_THREADS) {
     WARN("NET/Socket : NCCL_SOCKET_NTHREADS is greater than the maximum allowed, setting to %d", MAX_THREADS);
     nThreads = MAX_THREADS;
   }
+  int fd = -1;
+  int nSocks;
   if (nThreads == -2 || nSocksPerThread == -2) {
     // Auto-detection
     int autoNt=0, autoNs=1; // By default, we only use the main thread and do not spawn extra threads
     char vendorPath[PATH_MAX];
     snprintf(vendorPath, PATH_MAX, "/sys/class/net/%s/device/vendor", ncclNetSocketDevs[dev].devName);
+    // Coverity is wrong.  NULL second argument to realpath() is OK by POSIX.1-2008.
+    // coverity[alias_transfer:FALSE]
     char* rPath = realpath(vendorPath, NULL);
-    int fd = open(rPath, O_RDONLY);
+    fd = open(rPath, O_RDONLY);
     free(rPath);
     if (fd == -1) {
       // Could not find device vendor. This is handled silently so
@@ -257,9 +267,7 @@ ncclResult_t ncclNetSocketGetNsockNthread(int dev, int* ns, int* nt) {
     }
     char vendor[7];
     strncpy(vendor, "0x0000", 7);
-    int len;
-    SYSCHECKVAL(read(fd, vendor, 6), "read", len);
-    SYSCHECK(close(fd), "close");
+    SYSCHECKGOTO(read(fd, vendor, 6), "read", ret, fail);
     if (strcmp(vendor, "0x1d0f") == 0) { // AWS
       autoNt = 2;
       autoNs = 8;
@@ -271,7 +279,7 @@ end:
     if (nThreads == -2) nThreads = autoNt;
     if (nSocksPerThread == -2) nSocksPerThread = autoNs;
   }
-  int nSocks = nSocksPerThread * nThreads;
+  nSocks = nSocksPerThread * nThreads;
   if (nSocks > MAX_SOCKETS) {
     nSocksPerThread = MAX_SOCKETS/nThreads;
     WARN("NET/Socket : the total number of sockets is greater than the maximum allowed, setting NCCL_NSOCKS_PERTHREAD to %d", nSocksPerThread);
@@ -280,28 +288,38 @@ end:
   *ns = nSocks;
   *nt = nThreads;
   if (nSocks > 0) INFO(NCCL_INIT, "NET/Socket: Using %d threads and %d sockets per thread", nThreads, nSocksPerThread);
-  return ncclSuccess;
+exit:
+  if (fd != -1) close(fd);
+  return ret;
+fail:
+  goto exit;
 }
 
 ncclResult_t ncclNetSocketListen(int dev, void* opaqueHandle, void** listenComm) {
   if (dev < 0 || dev >= ncclNetIfs) { // data transfer socket is based on specified dev
     return ncclInternalError;
   }
+  ncclResult_t ret = ncclSuccess;
   struct ncclNetSocketHandle* handle = (struct ncclNetSocketHandle*) opaqueHandle;
   memset(handle, 0, sizeof(struct ncclNetSocketHandle));
   static_assert(sizeof(struct ncclNetSocketHandle) <= NCCL_NET_HANDLE_MAXSIZE, "ncclNetSocketHandle size too large");
   struct ncclNetSocketListenComm* comm;
   NCCLCHECK(ncclCalloc(&comm, 1));
   handle->magic = NCCL_SOCKET_MAGIC;
-  NCCLCHECK(ncclSocketInit(&comm->sock, &ncclNetSocketDevs[dev].addr, handle->magic, ncclSocketTypeNetSocket, NULL, 1));
-  NCCLCHECK(ncclSocketListen(&comm->sock));
-  NCCLCHECK(ncclSocketGetAddr(&comm->sock, &handle->connectAddr));
-  NCCLCHECK(ncclNetSocketGetNsockNthread(dev, &comm->nSocks, &comm->nThreads));
+  NCCLCHECKGOTO(ncclSocketInit(&comm->sock, &ncclNetSocketDevs[dev].addr, handle->magic, ncclSocketTypeNetSocket, NULL, 1), ret, fail);
+  NCCLCHECKGOTO(ncclSocketListen(&comm->sock), ret, fail);
+  NCCLCHECKGOTO(ncclSocketGetAddr(&comm->sock, &handle->connectAddr), ret, fail);
+  NCCLCHECKGOTO(ncclNetSocketGetNsockNthread(dev, &comm->nSocks, &comm->nThreads), ret, fail);
   handle->nSocks = comm->nSocks;
   handle->nThreads = comm->nThreads;
   comm->dev = dev;
   *listenComm = comm;
-  return ncclSuccess;
+exit:
+  return ret;
+fail:
+  (void)ncclSocketClose(&comm->sock);
+  free(comm);
+  goto exit;
 }
 
 ncclResult_t ncclNetSocketConnect(int dev, void* opaqueHandle, void** sendComm, ncclNetDeviceHandle_t** /*sendDevComm*/) {
@@ -437,7 +455,7 @@ ncclResult_t ncclNetSocketGetTask(struct ncclNetSocketComm* comm, int op, void* 
     res->comm = comm;
     pthread_mutex_init(&res->threadLock, NULL);
     pthread_cond_init(&res->threadCond, NULL);
-    pthread_create(comm->helperThread+tid, NULL, persistentSocketThread, res);
+    PTHREADCHECK(pthread_create(comm->helperThread+tid, NULL, persistentSocketThread, res), "pthread_create");
     ncclSetThreadName(comm->helperThread[tid], "NCCL Sock%c%1u%2u%2u", op == NCCL_SOCKET_SEND ? 'S' : 'R', comm->dev, tid, comm->cudaDev);
   }
   struct ncclNetSocketTask* r = queue->tasks+queue->next;
@@ -482,7 +500,7 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
     if (r->op == NCCL_SOCKET_RECV && data > r->size) {
       char line[SOCKET_NAME_MAXLEN+1];
       union ncclSocketAddress addr;
-      ncclSocketGetAddr(r->ctrlSock, &addr);
+      NCCLCHECK(ncclSocketGetAddr(r->ctrlSock, &addr));
       WARN("NET/Socket : peer %s message truncated : receiving %d bytes instead of %d. If you believe your socket network is in healthy state, \
           there may be a mismatch in collective sizes or environment settings (e.g. NCCL_PROTO, NCCL_ALGO) between ranks",
           ncclSocketToString(&addr, line), data, r->size);
@@ -579,7 +597,7 @@ ncclResult_t ncclNetSocketClose(void* opaqueComm) {
         res->stop = 1;
         pthread_cond_signal(&res->threadCond);
         pthread_mutex_unlock(&res->threadLock);
-        pthread_join(comm->helperThread[i], NULL);
+        PTHREADCHECK(pthread_join(comm->helperThread[i], NULL), "pthread_join");
       }
       free(res->threadTaskQueue.tasks);
     }

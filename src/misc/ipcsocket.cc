@@ -41,6 +41,7 @@ ncclResult_t ncclIpcSocketInit(ncclIpcSocket *handle, int rank, uint64_t hash, v
   int len = snprintf(temp, NCCL_IPC_SOCKNAME_LEN, NCCL_IPC_SOCKNAME_STR, rank, hash);
   if (len > (sizeof(cliaddr.sun_path) - 1)) {
     WARN("UDS: Cannot bind provided name to socket. Name too large");
+    close(fd);
     return ncclInternalError;
   }
 #ifndef USE_ABSTRACT_SOCKET
@@ -66,7 +67,7 @@ ncclResult_t ncclIpcSocketInit(ncclIpcSocket *handle, int rank, uint64_t hash, v
   // Mark socket as non-blocking
   if (handle->abortFlag) {
     int flags;
-    EQCHECK(flags = fcntl(fd, F_GETFL), -1);
+    SYSCHECK(flags = fcntl(fd, F_GETFL), "fcntl");
     SYSCHECK(fcntl(fd, F_SETFL, flags | O_NONBLOCK), "fcntl");
   }
 
@@ -186,20 +187,16 @@ ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
   cliaddr.sun_path[0] = '\0'; // Linux abstract socket trick
 #endif
 
-  TRACE(NCCL_INIT, "UDS: Sending hdr %p len %d to UDS socket %s", hdr, hdrLen, temp);
+  TRACE(NCCL_INIT, "UDS: Sending hdr %p len %d fd %d to UDS socket %s", hdr, hdrLen, sendFd, temp);
 
-  if (sendFd != -1) {
-    TRACE(NCCL_INIT, "UDS: Sending fd %d to UDS socket %s", sendFd, temp);
+  msg.msg_control = control_un.control;
+  msg.msg_controllen = sizeof(control_un.control);
 
-    msg.msg_control = control_un.control;
-    msg.msg_controllen = sizeof(control_un.control);
-
-    cmptr = CMSG_FIRSTHDR(&msg);
-    cmptr->cmsg_len = CMSG_LEN(sizeof(int));
-    cmptr->cmsg_level = SOL_SOCKET;
-    cmptr->cmsg_type = SCM_RIGHTS;
-    memmove(CMSG_DATA(cmptr), &sendFd, sizeof(sendFd));
-  }
+  cmptr = CMSG_FIRSTHDR(&msg);
+  cmptr->cmsg_len = CMSG_LEN(sizeof(int));
+  cmptr->cmsg_level = SOL_SOCKET;
+  cmptr->cmsg_type = SCM_RIGHTS;
+  memmove(CMSG_DATA(cmptr), &sendFd, sizeof(sendFd));
 
   msg.msg_name = (void *)&cliaddr;
   msg.msg_namelen = sizeof(struct sockaddr_un);

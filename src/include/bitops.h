@@ -185,6 +185,8 @@ inline __host__ __device__ Int pow2Up(Int x) {
 
 template<typename Int>
 inline __host__ __device__ Int pow2Down(Int x) {
+  // True, log2Down can return -1, but we don't normally pass 0 as an argument...
+  // coverity[negative_shift]
   return Int(1)<<log2Down(x);
 }
 
@@ -272,6 +274,15 @@ inline __host__ __device__ uint8_t u32fp8Encode(uint32_t x) {
 }
 inline __host__ __device__ uint32_t u32fp8Decode(uint8_t x) {
   return u32fpDecode(x, 3);
+}
+
+inline __host__ __device__ uint64_t getHash(const char* string, int n) {
+  // Based on DJB2a, result = result * 33 ^ char
+  uint64_t result = 5381;
+  for (int c = 0; c < n; c++) {
+    result = ((result << 5) + result) ^ string[c];
+  }
+  return result;
 }
 
 #endif

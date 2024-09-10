@@ -65,15 +65,7 @@ ncclResult_t getHostName(char* hostname, int maxlen, const char delim) {
   return ncclSuccess;
 }
 
-uint64_t getHash(const char* string, int n) {
-  // Based on DJB2a, result = result * 33 ^ char
-  uint64_t result = 5381;
-  for (int c = 0; c < n; c++) {
-    result = ((result << 5) + result) ^ string[c];
-  }
-  return result;
-}
-
+static uint64_t hostHashValue = 0;
 /* Generate a hash of the unique identifying string for this host
  * that will be unique for both bare-metal and container instances
  * Equivalent of a hash of;
@@ -83,7 +75,7 @@ uint64_t getHash(const char* string, int n) {
  * This string can be overridden by using the NCCL_HOSTID env var.
  */
 #define HOSTID_FILE "/proc/sys/kernel/random/boot_id"
-uint64_t getHostHash(void) {
+static void getHostHashOnce() {
   char hostHash[1024];
   const char *hostId;
 
@@ -103,8 +95,8 @@ uint64_t getHostHash(void) {
         strncpy(hostHash+offset, p, sizeof(hostHash)-offset-1);
         free(p);
       }
+      fclose(file);
     }
-    fclose(file);
   }
 
   // Make sure the string is terminated
@@ -112,7 +104,12 @@ uint64_t getHostHash(void) {
 
   TRACE(NCCL_INIT,"unique hostname '%s'", hostHash);
 
-  return getHash(hostHash, strlen(hostHash));
+  hostHashValue = getHash(hostHash, strlen(hostHash));
+}
+uint64_t getHostHash(void) {
+  static pthread_once_t once = PTHREAD_ONCE_INIT;
+  pthread_once(&once, getHostHashOnce);
+  return hostHashValue;
 }
 
 /* Generate a hash of the unique identifying string for this process

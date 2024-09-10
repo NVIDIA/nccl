@@ -468,8 +468,8 @@ ncclResult_t ncclTopoGetXmlFromCpu(struct ncclXmlNode* cpuNode, struct ncclXml* 
       return ncclInternalError;
     }
     // Set affinity
-    char cpumaskPath[] = "/sys/devices/system/node/node0000";
-    sprintf(cpumaskPath, "/sys/devices/system/node/node%s", numaId);
+    char cpumaskPath[] = "/sys/devices/system/node/node000000";
+    snprintf(cpumaskPath, sizeof(cpumaskPath), "/sys/devices/system/node/node%s", numaId);
     NCCLCHECK(ncclTopoSetAttrFromSys(cpuNode, cpumaskPath, "cpumap", "affinity"));
   }
 
@@ -690,6 +690,9 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
     }
     pciNode->parent = parent;
     // Keep PCI sub devices ordered by PCI Bus ID (Issue #820)
+    // Coverity complains about dereferenced parent being NULL
+    // but this can never happen.
+    // coverity[var_deref_op]
     int subIndex = parent->nSubs;
     const char* newBusId;
     NCCLCHECK(xmlGetAttrStr(pciNode, "busid", &newBusId));

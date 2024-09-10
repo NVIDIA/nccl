@@ -19,7 +19,7 @@ static int pid = -1;
 static char hostname[1024];
 thread_local int ncclDebugNoWarn = 0;
 char ncclLastError[1024] = ""; // Global string for the last error in human readable form
-static uint64_t ncclDebugMask = NCCL_INIT|NCCL_ENV; // Default debug sub-system mask is INIT and ENV
+static uint64_t ncclDebugMask = NCCL_INIT | NCCL_BOOTSTRAP | NCCL_ENV; // Default debug sub-system mask is INIT and ENV
 FILE *ncclDebugFile = stdout;
 static pthread_mutex_t ncclDebugLock = PTHREAD_MUTEX_INITIALIZER;
 static std::chrono::steady_clock::time_point ncclEpoch;
@@ -122,7 +122,7 @@ static void ncclDebugInit() {
     int c = 0;
     char debugFn[PATH_MAX+1] = "";
     char *dfn = debugFn;
-    while (ncclDebugFileEnv[c] != '\0' && c < PATH_MAX) {
+    while (ncclDebugFileEnv[c] != '\0' && (dfn - debugFn) < PATH_MAX) {
       if (ncclDebugFileEnv[c++] != '%') {
         *dfn++ = ncclDebugFileEnv[c-1];
         continue;
@@ -132,15 +132,23 @@ static void ncclDebugInit() {
           *dfn++ = '%';
           break;
         case 'h': // %h = hostname
-          dfn += snprintf(dfn, PATH_MAX, "%s", hostname);
+          dfn += snprintf(dfn, PATH_MAX + 1 - (dfn - debugFn), "%s", hostname);
           break;
         case 'p': // %p = pid
-          dfn += snprintf(dfn, PATH_MAX, "%d", pid);
+          dfn += snprintf(dfn, PATH_MAX + 1 - (dfn - debugFn), "%d", pid);
           break;
         default: // Echo everything we don't understand
           *dfn++ = '%';
-          *dfn++ = ncclDebugFileEnv[c-1];
+          if ((dfn - debugFn) < PATH_MAX) {
+            *dfn++ = ncclDebugFileEnv[c-1];
+          }
           break;
+      }
+      if ((dfn - debugFn) > PATH_MAX) {
+        // snprintf wanted to overfill the buffer: set dfn to the end
+        // of the buffer (for null char) and it will naturally exit
+        // the loop.
+        dfn = debugFn + PATH_MAX;
       }
     }
     *dfn = '\0';
@@ -181,9 +189,9 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
     tid = syscall(SYS_gettid);
   }
 
-  int cudaDev;
+  int cudaDev = 0;
   if (!(level == NCCL_LOG_TRACE && flags == NCCL_CALL)) {
-    cudaGetDevice(&cudaDev);
+    (void)cudaGetDevice(&cudaDev);
   }
 
   char buffer[1024];
@@ -207,11 +215,13 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
   va_start(vargs, fmt);
   len += vsnprintf(buffer+len, sizeof(buffer)-len, fmt, vargs);
   va_end(vargs);
-  // vsnprintf may return len > sizeof(buffer) in the case of a truncated output.
+  // vsnprintf may return len >= sizeof(buffer) in the case of a truncated output.
   // Rewind len so that we can replace the final \0 by \n
-  if (len > sizeof(buffer)) len = sizeof(buffer)-1;
-  buffer[len++] = '\n';
-  if (len) fwrite(buffer, 1, len, ncclDebugFile);
+  if (len >= sizeof(buffer)) len = sizeof(buffer)-1;
+  if (len) {
+    buffer[len++] = '\n';
+    fwrite(buffer, 1, len, ncclDebugFile);
+  }
 }
 
 NCCL_PARAM(SetThreadName, "SET_THREAD_NAME", 0);

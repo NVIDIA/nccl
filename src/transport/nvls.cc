@@ -26,7 +26,7 @@ struct localRegData {
   intptr_t offset;
 };
 
-ncclResult_t nvlsCanConnect(int* ret, struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo* info1, struct ncclPeerInfo* info2) {
+ncclResult_t nvlsCanConnect(int* ret, struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo* info1, struct ncclPeerInfo* info2) {
   // This transport cannot be used for p2p
   *ret = 0;
   return ncclSuccess;
@@ -71,28 +71,31 @@ ncclResult_t nvlsGroupCreate(struct ncclComm *comm, CUmulticastObjectProp *prop,
 
 ncclResult_t nvlsGroupConnect(struct ncclComm *comm, char *shareableHandle, int rank, CUmemGenericAllocationHandle *mcHandle) {
   CUmemAllocationHandleType type = ncclCuMemHandleType;
-
+  int fd = -1;
+  ncclResult_t ret = ncclSuccess;
   INFO(NCCL_NVLS, "NVLS importing shareableHandle %p from rank %d", shareableHandle, rank);
 
   // Import and map the remote memory descriptor to the local GPU
   if (type == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
     // cuMem UDS support
-    int fd = -1;
     TRACE(NCCL_NVLS, "NVLS rank %d Importing shareable handle %p from rank %d", comm->localRank, shareableHandle, rank);
-    int tpProxyRank = comm->topParentRanks[rank];
     TRACE(NCCL_NVLS, "NVLS rank %d request conversion of handle 0x%lx from rank %d", comm->localRank, *(uint64_t*)shareableHandle, rank);
-    NCCLCHECK(ncclProxyClientGetFdBlocking(comm, tpProxyRank, shareableHandle, &fd));
+    NCCLCHECKGOTO(ncclProxyClientGetFdBlocking(comm, rank, shareableHandle, &fd), ret, fail);
     TRACE(NCCL_NVLS, "NVLS rank %d received converted fd %d from rank %d", comm->localRank, fd, rank);
-    CUCHECK(cuMemImportFromShareableHandle(mcHandle, (void *)(uintptr_t)fd, type));
-    (void) close(fd);
+    CUCHECKGOTO(cuMemImportFromShareableHandle(mcHandle, (void *)(uintptr_t)fd, type), ret, fail);
+    SYSCHECK(close(fd), "close");
   } else {
     if (type == CU_MEM_HANDLE_TYPE_FABRIC) {
-      CUCHECK(cuMemImportFromShareableHandle(mcHandle, (void *)shareableHandle, type));
+      CUCHECKGOTO(cuMemImportFromShareableHandle(mcHandle, (void *)shareableHandle, type), ret, fail);
     } else {
       memcpy(mcHandle, shareableHandle, sizeof(CUmemGenericAllocationHandle));
     }
   }
-  return ncclSuccess;
+exit:
+  return ret;
+fail:
+  if (fd != -1) close(fd);
+  goto exit;
 }
 
 ncclResult_t nvlsGroupUnbind(struct ncclComm *comm, size_t size, CUmemGenericAllocationHandle* mcHandle) {
@@ -100,7 +103,7 @@ ncclResult_t nvlsGroupUnbind(struct ncclComm *comm, size_t size, CUmemGenericAll
   INFO(NCCL_NVLS, "NVLS Unbind MC handle %llx size %zu dev %d", *mcHandle, size, dev);
 
   // Unbind physical memory from group for the given device
-  CUCHECK(cuMulticastUnbind(*mcHandle, dev, 0/*mcOffset*/, size));
+  if (size) CUCHECK(cuMulticastUnbind(*mcHandle, dev, 0/*mcOffset*/, size));
 
   return ncclSuccess;
 }
@@ -117,14 +120,18 @@ ncclResult_t nvlsGroupUnmapMem(struct ncclComm *comm, size_t size, void* ucptr, 
   INFO(NCCL_NVLS, "NVLS Unmap mem UC handle 0x%llx(%p) MC handle 0x%llx(%p)", *ucHandle, ucptr, *mcHandle, mcptr);
 
   // Release the UC memory and mapping
-  CUCHECK(cuMemUnmap((CUdeviceptr)ucptr, size));
-  CUCHECK(cuMemAddressFree((CUdeviceptr)ucptr, size));
-  CUCHECK(cuMemRelease(*ucHandle));
+  if (ucptr) {
+    CUCHECK(cuMemUnmap((CUdeviceptr)ucptr, size));
+    CUCHECK(cuMemAddressFree((CUdeviceptr)ucptr, size));
+    CUCHECK(cuMemRelease(*ucHandle));
+  }
 
   // Release the MC memory and mapping
-  CUCHECK(cuMemUnmap((CUdeviceptr)mcptr, size));
-  CUCHECK(cuMemAddressFree((CUdeviceptr)mcptr, size));
-  CUCHECK(cuMemRelease(*mcHandle));
+  if (mcptr) {
+    CUCHECK(cuMemUnmap((CUdeviceptr)mcptr, size));
+    CUCHECK(cuMemAddressFree((CUdeviceptr)mcptr, size));
+    CUCHECK(cuMemRelease(*mcHandle));
+  }
 
   return ncclSuccess;
 }
@@ -191,7 +198,9 @@ static ncclResult_t nvlsAllocateMem(struct ncclComm* comm, CUmulticastGranularit
   size_t size = *sizePtr;
   size_t originSize = size;
   size_t ucgran, mcgran;
+  int allocMcHandle = 0;
 
+  *ucptr = *mcptr = NULL;
   memset(&mcprop, 0, sizeof(CUmulticastObjectProp));
   mcprop.numDevices = comm->localRanks;
   mcprop.handleTypes = ncclCuMemHandleType;
@@ -203,10 +212,12 @@ static ncclResult_t nvlsAllocateMem(struct ncclComm* comm, CUmulticastGranularit
 
   if (comm->localRank == 0) {
     NCCLCHECKGOTO(nvlsGroupCreate(comm, &mcprop, comm->localRank, comm->localRanks, mcHandle, shareableHandle), ret, fail);
+    allocMcHandle = 1;
     NCCLCHECKGOTO(bootstrapIntraNodeBroadcast(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, 0, shareableHandle, NVLS_HANDLE_SIZE), ret, fail);
   } else {
     NCCLCHECKGOTO(bootstrapIntraNodeBroadcast(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, 0, shareableHandle, NVLS_HANDLE_SIZE), ret, fail);
     NCCLCHECKGOTO(nvlsGroupConnect(comm, shareableHandle, comm->localRankToRank[0], mcHandle), ret, fail);
+    allocMcHandle = 1;
   }
 
   CUCHECKGOTO(cuMulticastAddDevice(*mcHandle, comm->cudaDev), ret, fail);
@@ -226,6 +237,8 @@ static ncclResult_t nvlsAllocateMem(struct ncclComm* comm, CUmulticastGranularit
   CUCHECKGOTO(cuMemSetAccess((CUdeviceptr)*ucptr, size, desc, 1), ret, fail);
   CUDACHECKGOTO(cudaMemset(*ucptr, 0, size), ret, fail);
 
+  // intra-node barrier to mitigate the possible hang in cuMulticastBindMem during abort
+  NCCLCHECKGOTO(bootstrapIntraNodeBarrier(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, comm->localRankToRank[0]), ret, fail);
   // Bind physical memory to the Multicast group
   // NB: It will block until all ranks have been added to the Group
   CUCHECKGOTO(cuMulticastBindMem(*mcHandle, 0/*mcOffset*/, *ucHandle, 0/*memOffset*/, size, 0/*flags*/), ret, fail);
@@ -239,6 +252,7 @@ static ncclResult_t nvlsAllocateMem(struct ncclComm* comm, CUmulticastGranularit
 exit:
   return ret;
 fail:
+  if (allocMcHandle && *mcptr == NULL && *ucptr == NULL) CUCHECK(cuMemRelease(*mcHandle));
   goto exit;
 }
 
@@ -350,10 +364,10 @@ setup:
     struct ncclNvlsSharedRes* resources = NULL;
     int nHeads = comm->channels[0].nvls.nHeads;
     int nChannels = comm->nChannels;
-    size_t memSize = 16;
+    size_t memSize = 64;
     size_t creditSize = nChannels * 2 * memSize * nHeads;
     int nvlsStepSize = comm->nvlsChunkSize;
-  
+
     NCCLCHECKGOTO(ncclCalloc(&comm->nvlsResources, 1), res, fail);
     comm->nvlsResources->inited = false;
     comm->nvlsResources->refCount = 1;
@@ -466,7 +480,7 @@ ncclResult_t ncclNvlsFree(struct ncclComm* comm) {
     if (!comm->MNNVL && resources->nvlsShmemHandle)
       NCCLCHECK(ncclShmClose(resources->nvlsShmemHandle));
 
-    if (resources->ucCredit && resources->mcCredit) {
+    if (resources->ucCredit || resources->mcCredit) {
       NCCLCHECK(nvlsGroupUnbind(comm, resources->creditSize, &resources->mcCreditHandle));
       NCCLCHECK(nvlsGroupUnmapMem(comm, resources->creditSize, resources->ucCredit, &resources->ucCreditHandle, resources->mcCredit, &resources->mcCreditHandle));
     }
@@ -490,7 +504,6 @@ ncclResult_t tryRegisterBuffer(struct ncclComm *comm, uintptr_t userBuff, size_t
   char shareableHandle[NVLS_HANDLE_SIZE];
   CUmemGenericAllocationHandle mcHandle;
   size_t minSize = SIZE_MAX;
-  bool localRegBufUsed = false;
   struct localRegData* regData = NULL;
   cudaPointerAttributes attr;
   size_t ucgran, mcgran;
@@ -500,7 +513,7 @@ ncclResult_t tryRegisterBuffer(struct ncclComm *comm, uintptr_t userBuff, size_t
   if (userBuff) {
     NCCLCHECKGOTO(ncclRegFind(comm, (void*)userBuff, buffSize, &regRecord), ret, fail);
     if (regRecord) {
-      CUDACHECK(cudaPointerGetAttributes(&attr, (void*)regRecord->addr));
+      CUDACHECKGOTO(cudaPointerGetAttributes(&attr, (void*)regRecord->addr), ret, fail);
       if (attr.type == cudaMemoryTypeDevice) {
         size_t regSize = regRecord->pages * comm->regCache.pageSize;
         memset(&mcprop, 0, sizeof(CUmulticastObjectProp));
@@ -508,7 +521,7 @@ ncclResult_t tryRegisterBuffer(struct ncclComm *comm, uintptr_t userBuff, size_t
         mcprop.handleTypes = ncclCuMemHandleType;
         mcprop.flags = 0;
         mcprop.size = regSize;
-        CUCHECK(cuMulticastGetGranularity(&mcgran, &mcprop, CU_MULTICAST_GRANULARITY_RECOMMENDED));
+        CUCHECKGOTO(cuMulticastGetGranularity(&mcgran, &mcprop, CU_MULTICAST_GRANULARITY_RECOMMENDED), ret, fail);
 
         memset(&ucprop, 0, sizeof(CUmemAllocationProp));
         ucprop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
@@ -517,7 +530,7 @@ ncclResult_t tryRegisterBuffer(struct ncclComm *comm, uintptr_t userBuff, size_t
         ucprop.requestedHandleTypes = ncclCuMemHandleType;
         CUCHECKGOTO(cuMemGetAllocationGranularity(&ucgran, &ucprop, CU_MEM_ALLOC_GRANULARITY_RECOMMENDED), ret, fail);
 
-        CUCHECK(cuMemGetAddressRange((CUdeviceptr*)&regRecord->baseAddr, &regRecord->baseSize, (CUdeviceptr)regRecord->addr));
+        CUCHECKGOTO(cuMemGetAddressRange((CUdeviceptr*)&regRecord->baseAddr, &regRecord->baseSize, (CUdeviceptr)regRecord->addr), ret, fail);
         if (regSize % mcgran == 0) {
           regRecord->regSize = regSize;
         } else {
@@ -560,6 +573,9 @@ ncclResult_t tryRegisterBuffer(struct ncclComm *comm, uintptr_t userBuff, size_t
   }
 
   CUCHECKGOTO(cuMulticastAddDevice(mcHandle, comm->nvlsResources->dev), ret, fail);
+  // Coverity complains that regRecord could be NULL.  That won't in practice be the case because we've already checked
+  // (regData[i].reg.state & NVLS_REG_POSSIBLE) of all local ranks, which would catch it and bail out.
+  // coverity[var_deref_op]
   CUCHECKGOTO(cuMulticastBindAddr(mcHandle, 0, (CUdeviceptr)regRecord->addr, minSize, 0), ret, fail);
 
   // Create a VA for the NVLS
@@ -584,15 +600,13 @@ ncclResult_t tryRegisterBuffer(struct ncclComm *comm, uintptr_t userBuff, size_t
     }
   }
 
-  localRegBufUsed = true;
-
+  *regAddr = (uintptr_t)regPtr + regData[comm->localRank].offset;
+  *regUsed = true;
 exit:
-  if (localRegBufUsed) *regAddr = (uintptr_t)regPtr + regData[comm->localRank].offset;
-  *regUsed = localRegBufUsed;
   free(regData);
   return ret;
 fail:
-  localRegBufUsed = false;
+  *regUsed = false;
   goto exit;
 }
 
@@ -862,19 +876,21 @@ exit:
     }
 
     if (recvRecord) {
+      // Yes, it's a dead code.  That's fine...
+      // coverity[dead_error_begin]
       ncclNvlsDeregBuffer(&recvRecord->mcHandle, recvRecord->ptr, recvRecord->dev, recvRecord->size);
       free(recvRecord);
     }
   } else {
     if (sendRecord) {
       *outRegBufSend = (void*)((uintptr_t)regSendPtr + (uintptr_t)sendbuff - (uintptr_t)baseSend);
-      ncclIntruQueueEnqueue(cleanupQueue, &sendRecord->base);
+      ncclIntruQueueEnqueue(cleanupQueue, (struct ncclCommCallback*)sendRecord);
       *nCleanupQueueEltsAdded += 1;
     }
 
     if (recvRecord) {
       *outRegBufRecv = (void*)((uintptr_t)regRecvPtr + (uintptr_t)recvbuff - (uintptr_t)baseRecv);
-      ncclIntruQueueEnqueue(cleanupQueue, &recvRecord->base);
+      ncclIntruQueueEnqueue(cleanupQueue, (struct ncclCommCallback*)recvRecord);
       *nCleanupQueueEltsAdded += 1;
     }
 

@@ -23,8 +23,11 @@ namespace {
     int nelem;
     int chunk;
 
+    // Coverity reports that the callee treats &ring->next as an array.  However, due to the use of
+    // FanSymmetric<1>, only the first element is ever accessed, so it's fine.
+    // coverity[callee_ptr_arith:FALSE]
     Primitives<T, RedOp, FanSymmetric<1>, 1, Proto, 0> prims
-      (tid, nthreads, &ring->prev, &ring->next, work->sendbuff, work->recvbuff, work->redOpArg);
+      (tid, nthreads, &ring->prev, &ring->next, work->sendbuff, work->recvbuff, work->redOpArg, 0, 0, 0, work);
 
     for (ssize_t elemOffset = 0; elemOffset < channelCount; elemOffset += loopCount) {
       ssize_t remCount = channelCount - elemOffset;
@@ -41,7 +44,7 @@ namespace {
       chunkOffset = chunk * chunkCount;
       offset = gridOffset + elemOffset + chunkOffset;
       nelem = (int)min(chunkCount, remCount - chunkOffset);
-      prims.send(offset, nelem);
+      prims.directSend(offset, offset, nelem);
 
       // k-2 steps: reduce and copy to next GPU
       for (int j = 2; j < nranks; ++j) {
@@ -49,7 +52,7 @@ namespace {
         chunkOffset = chunk * chunkCount;
         offset = gridOffset + elemOffset + chunkOffset;
         nelem = (int)min(chunkCount, remCount - chunkOffset);
-        prims.recvReduceSend(offset, nelem);
+        prims.directRecvReduceDirectSend(offset, offset, nelem);
       }
 
       // step k-1: reduce this buffer and data, which will produce the final
@@ -58,7 +61,7 @@ namespace {
       chunkOffset = chunk * chunkCount;
       offset = gridOffset + elemOffset + chunkOffset;
       nelem = (int)min(chunkCount, remCount - chunkOffset);
-      prims.directRecvReduceCopySend(offset, offset, nelem, /*postOp=*/true);
+      prims.directRecvReduceCopyDirectSend(offset, offset, nelem, /*postOp=*/true);
 
       // k-2 steps: copy to next GPU
       for (int j = 1; j < nranks - 1; ++j) {
@@ -66,7 +69,7 @@ namespace {
         chunkOffset = chunk * chunkCount;
         offset = gridOffset + elemOffset + chunkOffset;
         nelem = (int)min(chunkCount, remCount - chunkOffset);
-        prims.directRecvCopySend(offset, nelem);
+        prims.directRecvCopyDirectSend(offset, nelem);
       }
 
       // Make final copy from buffer to dest.
@@ -75,7 +78,7 @@ namespace {
       offset = gridOffset + elemOffset + chunkOffset;
       nelem = (int)min(chunkCount, remCount - chunkOffset);
 
-      prims.directRecv(offset, nelem);
+      prims.directRecv(offset, offset, nelem);
     }
   }
 
@@ -90,34 +93,34 @@ namespace {
     int nelem;
 
     { // Reduce : max number of recv is 3, max number of send is 1 (binary tree + local)
-      Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_TREE_ARITY, 1>, /*Direct=*/0, Proto, 0> prims
-        (tid, nthreads, tree->down, &tree->up, work->sendbuff, work->recvbuff, work->redOpArg);
+      Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_TREE_ARITY, 1>, /*Direct=*/1, Proto, 0> prims
+        (tid, nthreads, tree->down, &tree->up, work->sendbuff, work->recvbuff, work->redOpArg, 0, 0, 0, work);
       if (tree->up == -1) {
         for (size_t elemOffset = 0; elemOffset < channelCount; elemOffset += chunkCount) {
           offset = gridOffset + elemOffset;
           nelem = min(chunkCount, channelCount - elemOffset);
-          prims.recvReduceCopy(offset, offset, nelem, /*postOp=*/true);
+          prims.directRecvReduceCopy(offset, offset, nelem, /*postOp=*/true);
         }
       }
       else if (tree->down[0] == -1) {
         for (size_t elemOffset = 0; elemOffset < channelCount; elemOffset += chunkCount) {
           offset = gridOffset + elemOffset;
           nelem = min(chunkCount, channelCount - elemOffset);
-          prims.send(offset, nelem);
+          prims.directSend(offset, nelem);
         }
       }
       else {
         for (size_t elemOffset = 0; elemOffset < channelCount; elemOffset += chunkCount) {
           offset = gridOffset + elemOffset;
           nelem = min(chunkCount, channelCount - elemOffset);
-          prims.recvReduceSend(offset, nelem);
+          prims.directRecvReduceDirectSend(offset, offset, nelem);
         }
       }
     }
 
     { // Broadcast : max number of recv is 1, max number of send is 3 (binary tree + local)
       Primitives<T, RedOp, FanAsymmetric<1, NCCL_MAX_TREE_ARITY>, /*Direct=*/1, Proto, 0> prims
-        (tid, nthreads, &tree->up, tree->down, work->sendbuff, work->recvbuff, work->redOpArg);
+        (tid, nthreads, &tree->up, tree->down, work->sendbuff, work->recvbuff, work->redOpArg, 0, 0, 0, work);
       if (tree->up == -1) {
         for (size_t elemOffset = 0; elemOffset < channelCount; elemOffset += chunkCount) {
           offset = gridOffset + elemOffset;
@@ -129,14 +132,14 @@ namespace {
         for (size_t elemOffset = 0; elemOffset < channelCount; elemOffset += chunkCount) {
           offset = gridOffset + elemOffset;
           nelem = min(chunkCount, channelCount - elemOffset);
-          prims.directRecv(offset, nelem);
+          prims.directRecv(offset, offset, nelem);
         }
       }
       else {
         for (size_t elemOffset = 0; elemOffset < channelCount; elemOffset += chunkCount) {
           offset = gridOffset + elemOffset;
           nelem = min(chunkCount, channelCount - elemOffset);
-          prims.directRecvCopySend(offset, nelem);
+          prims.directRecvCopyDirectSend(offset, nelem);
         }
       }
     }
@@ -164,11 +167,11 @@ namespace {
     if (tree->up == -1) {
       // Reduce and broadcast. Max number of recv is 2, max number of send is 2
       Primitives<T, RedOp, FanSymmetric<NCCL_MAX_TREE_ARITY_TOP>, /*Direct=*/1, Proto, 0>
-        prims(tid, nthreads, tree->down, tree->down, work->sendbuff, work->recvbuff, work->redOpArg);
+        prims(tid, nthreads, tree->down, tree->down, work->sendbuff, work->recvbuff, work->redOpArg, 0, 0, 0, work);
       for (size_t elemOffset = 0; elemOffset < channelCount; elemOffset += chunkCount) {
         offset = gridOffset + elemOffset;
         nelem = min(chunkCount, channelCount - elemOffset);
-        prims.directRecvReduceCopySend(offset, offset, nelem, /*doPost=*/true);
+        prims.directRecvReduceCopyDirectSend(offset, offset, nelem, /*doPost=*/true);
       }
     }
     else if (tid < nthreadsSplit) {
@@ -180,40 +183,46 @@ namespace {
        * into DirectRecv and DirectSend capabilities, this ctor would have both=0,
        * but the ctor above for tree roots would be DirectRecv=0 DirectSend=1.
        */
+      // Coverity reports that the callee treats &tree->up as an array.  However, due to the use of
+      // FanAsymmetric<n, 1>, only the first element is ever accessed, so it's fine.
+      // coverity[callee_ptr_arith:FALSE]
       Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_TREE_ARITY, 1>, /*Direct=*/1, Proto, 0>
-        prims(tid, nthreadsSplit, tree->down, &tree->up, work->sendbuff, work->recvbuff, work->redOpArg, 0*Proto::MaxGroupWidth);
+        prims(tid, nthreadsSplit, tree->down, &tree->up, work->sendbuff, work->recvbuff, work->redOpArg, 0*Proto::MaxGroupWidth, 0, 0, work);
       if (tree->down[0] == -1) {
         for (size_t elemOffset = 0; elemOffset < channelCount; elemOffset += chunkCount) {
           offset = gridOffset + elemOffset;
           nelem = min(chunkCount, channelCount - elemOffset);
-          prims.send(offset, nelem);
+          prims.directSend(offset, offset, nelem);
         }
       }
       else {
         for (size_t elemOffset = 0; elemOffset < channelCount; elemOffset += chunkCount) {
           offset = gridOffset + elemOffset;
           nelem = min(chunkCount, channelCount - elemOffset);
-          prims.recvReduceSend(offset, nelem);
+          prims.directRecvReduceDirectSend(offset, offset, nelem);
         }
       }
     }
     else {
       // Broadcast down. Max number of recv is 1, max number of send is 3 (binary tree + local)
+      // Coverity reports that the callee treats &tree->up as an array.  However, due to the use of
+      // FanAsymmetric<1, n>, only the first element is ever accessed, so it's fine.
+      // coverity[callee_ptr_arith:FALSE]
       Primitives<T, RedOp, FanAsymmetric<1, NCCL_MAX_TREE_ARITY>, /*Direct=*/1, Proto, 0>
         prims(tid-nthreadsSplit, nthreads-nthreadsSplit, &tree->up, tree->down, work->sendbuff, work->recvbuff,
-            work->redOpArg, 1*Proto::MaxGroupWidth);
+            work->redOpArg, 1*Proto::MaxGroupWidth, 0, 0, work);
       if (tree->down[0] == -1) {
         for (size_t elemOffset = 0; elemOffset < channelCount; elemOffset += chunkCount) {
           offset = gridOffset + elemOffset;
           nelem = min(chunkCount, channelCount - elemOffset);
-          prims.directRecv(offset, nelem);
+          prims.directRecv(offset, offset, nelem);
         }
       }
       else {
         for (size_t elemOffset = 0; elemOffset < channelCount; elemOffset += chunkCount) {
           offset = gridOffset + elemOffset;
           nelem = min(chunkCount, channelCount - elemOffset);
-          prims.directRecvCopySend(offset, nelem);
+          prims.directRecvCopyDirectSend(offset, nelem);
         }
       }
     }
@@ -264,9 +273,9 @@ struct RunWorkColl<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NCCL_P
 
     if (tid >= tidStartScatter && tid < tidStartReduce && hasUp) {
       // Scatter
-      Primitives<T, RedOp, FanAsymmetric<0, NCCL_MAX_DIRECT_ARITY>, /*Direct=*/1, Proto, 0>
+      Primitives<T, RedOp, FanAsymmetric<0, NCCL_MAX_DIRECT_ARITY>, /*Direct=*/0, Proto, 0>
         prims(tid-tidStartScatter, nThreadsScatter, NULL, direct->up, work->sendbuff, work->recvbuff,
-           work->redOpArg, 2*Proto::MaxGroupWidth, 1, 1, work);
+           work->redOpArg, 2*Proto::MaxGroupWidth, 1, 1);
       for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
         ssize_t offset = gridOffset + bid*direct->nHeads*chunkSize;
         int nelem = min(direct->nHeads*chunkSize, size-offset);
@@ -276,12 +285,15 @@ struct RunWorkColl<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NCCL_P
           prims.scatter(offset, nelem, chunkSize, chunkSize, direct->headRank, direct->shift);
         }
       }
+      // Coverity complains about a possible overrun inside the destructor of "prims", but that's actually
+      // a false positive.
+      // coverity[overrun-call:FALSE]
     } else if (tid >= tidStartReduce && direct->out != -1) {
       if (hasDn) {
         // Reduce, send to network
-        Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_DIRECT_ARITY, 1>, /*Direct=*/1, Proto, 0>
+        Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_DIRECT_ARITY, 1>, /*Direct=*/0, Proto, 0>
           prims(tid-tidStartReduce, nThreadsReduce, direct->down, &direct->out, work->sendbuff, work->recvbuff,
-             work->redOpArg, 3*Proto::MaxGroupWidth, 1, 1, work);
+             work->redOpArg, 3*Proto::MaxGroupWidth, 1, 1);
         for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
           ssize_t offset = gridOffset + (bid*direct->nHeads+direct->headRank)*chunkSize;
           int nelem = min(chunkSize, size-offset);
@@ -323,6 +335,9 @@ struct RunWorkColl<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NCCL_P
     } else if (tid >= tidStartBcast && tid < tidStartScatter && direct->out != -1) {
       if (hasDn) {
         // Recv from network, broadcast
+        // Coverity complains about a possible overrun inside the class below, but that's actually
+        // a false positive.
+        // coverity[identity_transfer:FALSE]
         Primitives<T, RedOp, FanAsymmetric<1, NCCL_MAX_DIRECT_ARITY>, /*Direct=*/1, Proto, 0>
           prims(tid-tidStartBcast, nThreadsBcast, &direct->out, direct->down, work->sendbuff, work->recvbuff,
              work->redOpArg, 1*Proto::MaxGroupWidth, 0, 0, work);
@@ -382,7 +397,7 @@ struct RunWorkColl<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SIMPL
       ssize_t offset;
       int nelem;
       int remCount = channelCount%(nvls->nHeads*chunkSize);
-      int lastChunkSize = alignUp(divUp(remCount, nvls->nHeads), 16/sizeof(T));
+      int lastChunkSize = alignUp(divUp(remCount, nvls->nHeads), 16384/sizeof(T));
 
       if (tid < tidEndScatter) {
         // Scatter
@@ -456,6 +471,9 @@ struct RunWorkColl<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SIMPL
         if (!hasOut) {
           // Reduce, broadcast through NVLS
           using Proto = ProtoSimple<1, 1, COLL_UNROLL, 1, 1>;
+          // Coverity complains about a possible overrun inside the class below, but that's actually
+          // a false positive.
+          // coverity[identity_transfer:FALSE]
           Primitives<T, RedOp, FanSymmetric<1>, /*Direct=*/1, Proto, 0>
             prims(tid - tidEndGather, nThreadsReduce, &nvls->down, &nvls->down, NULL, NULL,
               work->redOpArg, 2 * Proto::MaxGroupWidth, 0, 0, work);
@@ -467,6 +485,9 @@ struct RunWorkColl<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SIMPL
         } else {
           // Reduce, send to network
           using Proto = ProtoSimple<1, 1, COLL_UNROLL, 1, 0>;
+          // Coverity complains about a possible overrun inside the class below, but that's actually
+          // a false positive.
+          // coverity[identity_transfer:FALSE]
           Primitives<T, RedOp, FanSymmetric<1>, /*Direct=*/1, Proto, 0>
             prims(tid - tidEndGather, nThreadsReduce, &nvls->down, &nvls->out, NULL, NULL,
               work->redOpArg, 2 * Proto::MaxGroupWidth, 0, 1, work);
@@ -479,6 +500,9 @@ struct RunWorkColl<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SIMPL
       } else if (tid < tidEndBcast && nvls->headRank != -1) {
         // Recv from network, broadcast
         using Proto = ProtoSimple<1, 1, COLL_UNROLL, 0, 1>;
+        // Coverity complains about a possible overrun inside the class below, but that's actually
+        // a false positive.
+        // coverity[identity_transfer:FALSE]
         Primitives<T, RedOp, FanSymmetric<1>, /*Direct=*/1, Proto, 0>
           prims(tid - tidEndReduce, nThreadsBcast, &nvls->out, &nvls->down, NULL, NULL,
             work->redOpArg, 3 * Proto::MaxGroupWidth, 0, 0, work);
@@ -564,6 +588,9 @@ struct RunWorkColl<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS_TREE, NCCL_PROTO_
       } else {
         // Reduce, send to network
         using Proto = ProtoSimple<1, 1, COLL_UNROLL, 1, 0>;
+        // Coverity reports that the callee treats &treeUp as an array.  However, due to the use of
+        // FanAsymmetric<3, 1>, only the first element is ever accessed, so it's fine.
+        // coverity[callee_ptr_arith:FALSE]
         Primitives<T, RedOp, FanAsymmetric<3, 1>, /*Direct=*/1, Proto, 0>
           prims(tid - tidEndGather, nThreadsReduce, treeDown, &treeUp, NULL, NULL,
             work->redOpArg, 2 * Proto::MaxGroupWidth, 0, 0, work);
@@ -579,6 +606,9 @@ struct RunWorkColl<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS_TREE, NCCL_PROTO_
     } else if (tid < tidEndBcast && nvls->headRank != -1) {
       // Recv from network, broadcast
       using Proto = ProtoSimple<1, 1, COLL_UNROLL, 0, 1>;
+      // Coverity reports that the callee treats &treeUp as an array.  However, due to the use of
+      // FanAsymmetric<1, 3>, only the first element is ever accessed, so it's fine.
+      // coverity[callee_ptr_arith:FALSE]
       Primitives<T, RedOp, FanAsymmetric<1, 3>, /*Direct=*/1, Proto, 0>
         prims(tid - tidEndReduce, nThreadsBcast, &treeUp, treeDown, NULL, NULL,
           work->redOpArg, 3 * Proto::MaxGroupWidth, 0, 0, work);
@@ -639,21 +669,21 @@ struct RunWorkColl<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET_CHAIN, NCCL_PR
         } else {
           Primitives<T, RedOp, FanSymmetric<1>, /*Direct=*/1, Proto, 0>
             prims(groupTid, groupNthreads, &recv, &send, work->sendbuff, work->recvbuff,
-              work->redOpArg, group * Proto::MaxGroupWidth, connIndex, connIndex);
+              work->redOpArg, group * Proto::MaxGroupWidth, connIndex, connIndex, work);
           for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
             ssize_t offset = gridOffset + bid * int(chunkSize);
             int nelem = min(chunkSize, size - offset);
-            prims.send(offset, nelem);
+            prims.directSend(offset, offset, nelem);
           }
         }
       } else {
         Primitives<T, RedOp, FanSymmetric<1>, /*Direct=*/1, Proto, 0>
           prims(groupTid, groupNthreads, &recv, &send, work->sendbuff, work->recvbuff,
-            work->redOpArg, group * Proto::MaxGroupWidth, connIndex, connIndex);
+            work->redOpArg, group * Proto::MaxGroupWidth, connIndex, connIndex, work);
         for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
           ssize_t offset = gridOffset + bid * int(chunkSize);
           int nelem = min(chunkSize, size - offset);
-          prims.recvReduceSend(offset, nelem);
+          prims.directRecvReduceDirectSend(offset, offset, nelem);
         }
       }
     }
@@ -668,40 +698,49 @@ struct RunWorkColl<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET_CHAIN, NCCL_PR
             }
             __syncwarp();
           } else {
+            // Coverity reports that the callee treats &send as an array.  However, due to the use of
+            // FanSymmetric<1>, only the first element is ever accessed, so it's fine.
+            // coverity[callee_ptr_arith:FALSE]
             Primitives<T, RedOp, FanSymmetric<1>, /*Direct=*/1, Proto, 0>
               prims(groupTid, groupNthreads, &recv, &send, work->sendbuff, work->recvbuff,
-                work->redOpArg, group * Proto::MaxGroupWidth, connIndex, connIndex);
+                work->redOpArg, group * Proto::MaxGroupWidth, connIndex, connIndex, work);
             for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
               ssize_t offset = gridOffset + bid * int(chunkSize);
               int nelem = min(chunkSize, size - offset);
-              prims.recv(offset, nelem, /*postOp*/true);
+              prims.directRecv(offset, offset, nelem, /*postOp*/true);
             }
           }
         } else {
+          // Coverity reports that the callee treats &send as an array.  However, due to the use of
+          // FanSymmetric<1>, only the first element is ever accessed, so it's fine.
+          // coverity[callee_ptr_arith:FALSE]
           Primitives<T, RedOp, FanSymmetric<1>, /*Direct=*/1, Proto, 0>
             prims(groupTid, groupNthreads, &recv, &send, work->sendbuff, work->recvbuff,
-              work->redOpArg, group * Proto::MaxGroupWidth, connIndex, connIndex);
+              work->redOpArg, group * Proto::MaxGroupWidth, connIndex, connIndex, work);
           for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
             ssize_t offset = gridOffset + bid * int(chunkSize);
             int nelem = min(chunkSize, size - offset);
-            prims.recvCopyDirectSend(offset, nelem, /*postOp*/true);
+            prims.directRecvCopyDirectSend(offset, nelem, /*postOp*/true);
           }
         }
       } else {
+        // Coverity reports that the callee treats &send as an array.  However, due to the use of
+        // FanSymmetric<1>, only the first element is ever accessed, so it's fine.
+        // coverity[callee_ptr_arith:FALSE]
         Primitives<T, RedOp, FanSymmetric<1>, /*Direct=*/1, Proto, 0>
           prims(groupTid, groupNthreads, &recv, &send, work->sendbuff, work->recvbuff,
-            work->redOpArg, group * Proto::MaxGroupWidth, connIndex, connIndex);
+            work->redOpArg, group * Proto::MaxGroupWidth, connIndex, connIndex, work);
         if (send == -1) {
           for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
             ssize_t offset = gridOffset + bid*int(chunkSize);
             int nelem = min(chunkSize, size-offset);
-            prims.directRecv(offset, nelem);
+            prims.directRecv(offset, offset, nelem);
           }
         } else {
           for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
             ssize_t offset = gridOffset + bid*int(chunkSize);
             int nelem = min(chunkSize, size-offset);
-            prims.directRecvCopySend(offset, nelem);
+            prims.directRecvCopyDirectSend(offset, nelem);
           }
         }
       }

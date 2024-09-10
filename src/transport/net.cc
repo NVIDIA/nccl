@@ -10,10 +10,11 @@
 #include "proxy.h"
 #include "collectives.h"
 #include "gdrwrap.h"
-#include "shm.h"
+#include "shmutils.h"
 #include "p2p.h"
 #include "profiler.h"
 #include "transport.h"
+#include "shm.h"
 
 static_assert(sizeof(ncclNetHandle_t) <= CONNECT_SIZE, "NET Connect info is too large");
 
@@ -62,9 +63,8 @@ struct connectMapMem{
   char* cpuPtr;
   int size;
   ncclIpcDesc ipcDesc;
-  char shmPath[PATH_MAX];
-  ncclShmHandle_t attachHandle;
-  ncclShmHandle_t createHandle;
+  ncclShmIpcDesc_t attachDesc;
+  ncclShmIpcDesc_t createDesc;
 };
 
 struct connectMap {
@@ -142,11 +142,11 @@ struct recvNetResources {
 };
 
 /* Determine if two peers can communicate with NET */
-static ncclResult_t canConnect(int* ret, struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo* info1, struct ncclPeerInfo* info2) {
+static ncclResult_t canConnect(int* ret, struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo* info1, struct ncclPeerInfo* info2) {
   *ret = 1;
   if (info1->hostHash == info2->hostHash) {
     // If on the same host, check intra-node net is not disabled.
-    NCCLCHECK(ncclTopoCheckNet(topo, info1->busId, info2->busId, ret));
+    NCCLCHECK(ncclTopoCheckNet(comm->topo, info1->rank, info2->rank, ret));
   }
   return ncclSuccess;
 }
@@ -173,9 +173,8 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
  * information for this peer */
 static ncclResult_t sendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo, struct ncclConnect* connectInfo, struct ncclConnector* send, int channelId, int connIndex) {
   struct setupReq req = { 0 };
-  int tpProxyRank;
 
-  send->conn.shared = req.shared = graph ? 0 : ncclParamNetSharedBuffers() != -2 ? ncclParamNetSharedBuffers() : 1;
+  send->conn.shared = req.shared = graph || connIndex == 0 ? 0 : ncclParamNetSharedBuffers() != -2 ? ncclParamNetSharedBuffers() : 1;
   req.channelId = channelId;
   req.connIndex = connIndex;
 
@@ -185,8 +184,7 @@ static ncclResult_t sendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   NCCLCHECK(ncclTopoCheckGdr(comm->topo, myInfo->busId, netId, 1, &req.useGdr));
   send->conn.flags |= req.useGdr ? NCCL_DIRECT_NIC : 0;
 
-  tpProxyRank = comm->topParentRanks[proxyRank];
-  NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_NET, 1, tpProxyRank, &send->proxyConn));
+  NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_NET, 1, proxyRank, &send->proxyConn));
   req.tpLocalRank = comm->topParentLocalRanks[comm->localRank];
   req.tpRank = comm->topParentRanks[myInfo->rank];
   req.tpRemoteRank = comm->topParentRanks[peerInfo->rank];
@@ -199,7 +197,7 @@ static ncclResult_t sendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
     INFO(NCCL_INIT|NCCL_NET,"Channel %02d/%d : %d[%d] -> %d[%d] [send] via NET/%s/%d(%d)%s%s", channelId, connIndex, myInfo->rank, myInfo->nvmlDev, peerInfo->rank, peerInfo->nvmlDev, comm->ncclNet->name, req.netDev,
         proxyRank, req.useGdr ? "/GDRDMA" : "", req.shared ? "/Shared" : "");
   }
-  *((int*)connectInfo) = tpProxyRank;
+  *((int*)connectInfo) = comm->topParentRanks[proxyRank];
   return ncclSuccess;
 }
 
@@ -212,12 +210,12 @@ NCCL_PARAM(GdrCopyFlushEnable, "GDRCOPY_FLUSH_ENABLE", 0);
 static ncclResult_t recvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo* myInfo, struct ncclPeerInfo* peerInfo, struct ncclConnect* connectInfo, struct ncclConnector* recv, int channelId, int connIndex) {
   struct setupReq req = { 0 };
 
-  recv->conn.shared = req.shared = graph ? 0 : ncclParamNetSharedBuffers() != -2 ? ncclParamNetSharedBuffers() : 1;
+  recv->conn.shared = req.shared = graph || connIndex == 0 ? 0 : ncclParamNetSharedBuffers() != -2 ? ncclParamNetSharedBuffers() : 1;
   req.channelId = channelId;
   req.connIndex = connIndex;
 
   // Use myInfo->rank as the receiver uses its own NIC
-  int proxyRank, tpProxyRank;
+  int proxyRank;
   int64_t netId;
   NCCLCHECK(ncclTopoGetNetDev(comm, myInfo->rank, graph, channelId, myInfo->rank, &netId, &req.netDev, &proxyRank));
   NCCLCHECK(ncclTopoCheckGdr(comm->topo, myInfo->busId, netId, 0, &req.useGdr));
@@ -226,8 +224,7 @@ static ncclResult_t recvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   if (req.useGdr) NCCLCHECK(ncclTopoNeedFlush(comm->topo, myInfo->busId, &req.needFlush));
 
   // We don't support PXN on receive yet
-  tpProxyRank = comm->topParentRanks[myInfo->rank];
-  NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_NET, 0, tpProxyRank, &recv->proxyConn));
+  NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_NET, 0, myInfo->rank, &recv->proxyConn));
 
   req.tpLocalRank = comm->topParentLocalRanks[comm->localRank];
   req.tpRank = comm->topParentRanks[myInfo->rank];
@@ -238,26 +235,24 @@ static ncclResult_t recvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   return ncclSuccess;
 }
 
-static ncclResult_t netMapShm(struct connectMapMem* mem) {
-  mem->cpuPtr = NULL;
-  mem->gpuPtr = NULL;
-  NCCLCHECK(ncclShmOpen(mem->shmPath, mem->size, (void**)&mem->cpuPtr, (void**)&mem->gpuPtr, -1, &mem->attachHandle));
+static ncclResult_t netMapShm(struct ncclComm *comm, struct connectMapMem* mem) {
+  NCCLCHECK(ncclShmImportShareableBuffer(comm, &mem->createDesc, (void**)&mem->cpuPtr, (void**)&mem->gpuPtr, &mem->attachDesc));
   return ncclSuccess;
 }
-static ncclResult_t netCreateShm(struct connectMapMem* mem) {
-  mem->shmPath[0] = '\0'; // Let ncclShmOpen create a tmp file
-  NCCLCHECK(ncclShmOpen(mem->shmPath, mem->size, (void**)&mem->cpuPtr, NULL, 1, &mem->createHandle));
+
+static ncclResult_t netCreateShm(struct ncclProxyState* proxyState, struct connectMapMem* mem) {
+  NCCLCHECK(ncclShmAllocateShareableBuffer(proxyState->tpRank, mem->size, false, &mem->createDesc, (void**)&mem->cpuPtr, (void**)&mem->gpuPtr));
   return ncclSuccess;
 }
 
 static ncclResult_t netDumpMap(struct connectMap* map) {
   printf("Dump map same process %d shared %d\n", map->sameProcess, map->shared);
   struct connectMapMem *mem = map->mems+NCCL_NET_MAP_HOSTMEM;
-  printf("Mem 0: Host mem %s (%x B) CPU %p GPU %p\n", mem->shmPath, mem->size, mem->cpuPtr, mem->gpuPtr);
+  printf("Mem 0: Host mem (%x B) CPU %p GPU %p\n", mem->size, mem->cpuPtr, mem->gpuPtr);
   mem = map->mems+NCCL_NET_MAP_DEVMEM;
   printf("Mem 1: Vid  mem (%x B) CPU %p GPU %p\n", mem->size, mem->cpuPtr, mem->gpuPtr);
   mem = map->mems+NCCL_NET_MAP_SHARED_HOSTMEM;
-  printf("Mem 2: Shared Host mem %s (%x B) CPU %p GPU %p\n", mem->shmPath, mem->size, mem->cpuPtr, mem->gpuPtr);
+  printf("Mem 2: Shared Host mem (%x B) CPU %p GPU %p\n", mem->size, mem->cpuPtr, mem->gpuPtr);
   mem = map->mems+NCCL_NET_MAP_SHARED_DEVMEM;
   printf("Mem 3: Shared Vid mem (%x B) CPU %p GPU %p\n", mem->size, mem->cpuPtr, mem->gpuPtr);
   printf("SendMem -> Used %d Bank %d Offset %x, cpu %p gpu %p\n",
@@ -328,10 +323,10 @@ static ncclResult_t sendConnect(struct ncclComm* comm, struct ncclConnect* conne
       }
     }
   } else if (!(map->sameProcess && map->cudaDev == comm->cudaDev)) {
-    if (!map->sameProcess) NCCLCHECK(netMapShm(map->mems+NCCL_NET_MAP_HOSTMEM));
+    if (!map->sameProcess) NCCLCHECK(netMapShm(comm, map->mems + NCCL_NET_MAP_HOSTMEM));
     if (map->mems[NCCL_NET_MAP_DEVMEM].size) {
       map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr = NULL;
-      NCCLCHECK(ncclP2pImportShareableBuffer(comm, send->proxyConn.tpRank,
+      NCCLCHECK(ncclP2pImportShareableBuffer(comm, send->proxyConn.rank,
                                              map->mems[NCCL_NET_MAP_DEVMEM].size,
                                              &map->mems[NCCL_NET_MAP_DEVMEM].ipcDesc,
                                              (void**)&map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr));
@@ -341,7 +336,7 @@ static ncclResult_t sendConnect(struct ncclComm* comm, struct ncclConnect* conne
       void** sharedDevMemPtr = comm->proxyState->sharedDevMems + send->proxyConn.tpLocalRank;
       if (*sharedDevMemPtr == NULL) {
         map->mems[NCCL_NET_MAP_SHARED_DEVMEM].gpuPtr = NULL;
-        NCCLCHECK(ncclP2pImportShareableBuffer(comm, send->proxyConn.tpRank,
+        NCCLCHECK(ncclP2pImportShareableBuffer(comm, send->proxyConn.rank,
                                                map->mems[NCCL_NET_MAP_SHARED_DEVMEM].size,
                                                &map->mems[NCCL_NET_MAP_SHARED_DEVMEM].ipcDesc,
                                                sharedDevMemPtr));
@@ -463,23 +458,18 @@ static ncclResult_t sendFree(struct ncclConnector* send) {
   if (map) {
     int cudaDev;
     CUDACHECK(cudaGetDevice(&cudaDev));
-    if (map->sameProcess && map->cudaDev == cudaDev) {
-      // Our own GPU, so it wasn't mapped in
-      free(map);
-      return ncclSuccess;
-    }
-    if (!map->sameProcess || ncclCuMemEnable()) {
-      if (!map->sameProcess) NCCLCHECK(ncclShmClose(map->mems[NCCL_NET_MAP_HOSTMEM].attachHandle));
-      if (map->mems[NCCL_NET_MAP_DEVMEM].size) {
-        if (ncclCuMemEnable()) {
-          // cuMem API support
-          NCCLCHECK(ncclP2pFreeShareableBuffer(&map->mems[NCCL_NET_MAP_DEVMEM].ipcDesc));
-          NCCLCHECK(ncclCuMemFree(map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr));
-        } else {
-          // Legacy CUDA IPC support
-          CUDACHECK(cudaIpcCloseMemHandle(map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr));
-        }
+    if (map->cudaDev != cudaDev && map->mems[NCCL_NET_MAP_DEVMEM].size) {
+      if (ncclCuMemEnable()) {
+        // cuMem API support
+        NCCLCHECK(ncclP2pFreeShareableBuffer(&map->mems[NCCL_NET_MAP_DEVMEM].ipcDesc));
+        NCCLCHECK(ncclCuMemFree(map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr));
+      } else {
+        // Legacy CUDA IPC support
+        CUDACHECK(cudaIpcCloseMemHandle(map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr));
       }
+    }
+    if (!map->sameProcess) {
+      NCCLCHECK(ncclShmIpcClose(&map->mems[NCCL_NET_MAP_HOSTMEM].attachDesc));
     }
     free(map);
   }
@@ -518,7 +508,7 @@ static ncclResult_t sharedNetBuffersInit(struct ncclProxyState* proxyState, int 
 
   if (cuda && state->cudaBuff == NULL) {
     if (sameProcess == 0 || ncclCuMemEnable()) {
-      NCCLCHECK(ncclP2pAllocateShareableBuffer(state->size, &state->ipcDesc, (void**)&state->cudaBuff));
+      NCCLCHECK(ncclP2pAllocateShareableBuffer(state->size, 0, &state->ipcDesc, (void**)&state->cudaBuff));
     } else {
       NCCLCHECK(ncclCudaCalloc(&state->cudaBuff, state->size));
     }
@@ -527,7 +517,7 @@ static ncclResult_t sharedNetBuffersInit(struct ncclProxyState* proxyState, int 
     NCCLCHECK(ncclCudaHostCalloc(&state->hostBuff, state->size));
   }
   if (cpuPtr) *cpuPtr = cuda ? state->cudaBuff : state->hostBuff;
-  if (gpuPtr) *gpuPtr = sameProcess ? *cpuPtr : NULL;
+  if (gpuPtr) *gpuPtr = (cpuPtr && sameProcess) ? *cpuPtr : NULL;
   if (ipcDesc) memcpy(ipcDesc, &state->ipcDesc, sizeof(state->ipcDesc));
   return ncclSuccess;
 }
@@ -543,7 +533,7 @@ static ncclResult_t sharedBuffersGet(struct ncclProxyState* proxyState, int chan
 static ncclResult_t sharedNetBuffersDestroy(struct ncclProxyState* proxyState, int tpLocalRank, int type, struct ncclProxyConnection* connection) {
   if (proxyState->progressState.localPeers == NULL) NCCLCHECK(ncclInternalError);
   struct ncclProxyPeer* peer = proxyState->progressState.localPeers[tpLocalRank];
-  if (peer == NULL) NCCLCHECK(ncclInternalError;)
+  if (peer == NULL) NCCLCHECK(ncclInternalError);
   struct ncclProxySharedP2p* state = type == 0 ? &peer->send : &peer->recv;
   if (state->size == 0) NCCLCHECK(ncclInternalError);
   if (ncclAtomicRefCountDecrement(&state->refcount) == 0) {
@@ -746,7 +736,7 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
     if (resources->shared == 0) {
       if (!map->sameProcess || ncclCuMemEnable()) {
         ALIGN_SIZE(map->mems[NCCL_NET_MAP_DEVMEM].size, CUDA_IPC_MIN);
-        NCCLCHECK(ncclP2pAllocateShareableBuffer(map->mems[NCCL_NET_MAP_DEVMEM].size, &map->mems[NCCL_NET_MAP_DEVMEM].ipcDesc,
+        NCCLCHECK(ncclP2pAllocateShareableBuffer(map->mems[NCCL_NET_MAP_DEVMEM].size, 0, &map->mems[NCCL_NET_MAP_DEVMEM].ipcDesc,
                                                  (void**)&map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr));
       } else {
         NCCLCHECK(ncclCudaCalloc(&map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr, map->mems[NCCL_NET_MAP_DEVMEM].size));
@@ -758,7 +748,11 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
     NCCLCHECK(ncclCudaHostCalloc(&map->mems[NCCL_NET_MAP_HOSTMEM].cpuPtr, map->mems[NCCL_NET_MAP_HOSTMEM].size));
     map->mems[NCCL_NET_MAP_HOSTMEM].gpuPtr = map->mems[NCCL_NET_MAP_HOSTMEM].cpuPtr;
   } else {
-    NCCLCHECK(netCreateShm(map->mems+NCCL_NET_MAP_HOSTMEM));
+    NCCLCHECK(netCreateShm(proxyState, map->mems+NCCL_NET_MAP_HOSTMEM));
+    void* sendMem = (void*)NCCL_NET_MAP_GET_POINTER(map, cpu, sendMem);
+    void* recvMem = (void*)NCCL_NET_MAP_GET_POINTER(map, cpu, recvMem);
+    memset(sendMem, 0, sizeof(struct ncclSendMem));
+    memset(recvMem, 0, sizeof(struct ncclRecvMem));
   }
   if (ncclGdrCopy && map->sameProcess && ncclParamGdrCopySyncEnable()) {
     uint64_t *cpuPtr, *gpuPtr;
@@ -896,7 +890,7 @@ static ncclResult_t recvProxyConnect(struct ncclProxyConnection* connection, str
   if (map->mems[NCCL_NET_MAP_DEVMEM].size) {
     if (resources->shared == 0) {
       if (ncclCuMemEnable()) {
-        NCCLCHECK(ncclP2pAllocateShareableBuffer(map->mems[NCCL_NET_MAP_DEVMEM].size, &map->mems[NCCL_NET_MAP_DEVMEM].ipcDesc,
+        NCCLCHECK(ncclP2pAllocateShareableBuffer(map->mems[NCCL_NET_MAP_DEVMEM].size, 0, &map->mems[NCCL_NET_MAP_DEVMEM].ipcDesc,
                                                  (void**)&map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr));
       } else {
         NCCLCHECK(ncclCudaCalloc(&map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr, map->mems[NCCL_NET_MAP_DEVMEM].size));
@@ -968,7 +962,7 @@ static ncclResult_t sendProxyFree(struct ncclProxyConnection* connection, struct
     if (resources->map.sameProcess) {
       NCCLCHECK(ncclCudaHostFree(mems[NCCL_NET_MAP_HOSTMEM].cpuPtr));
     } else {
-      NCCLCHECK(ncclShmClose(mems[NCCL_NET_MAP_HOSTMEM].createHandle));
+      NCCLCHECK(ncclShmIpcClose(&mems[NCCL_NET_MAP_HOSTMEM].createDesc));
     }
     NCCLCHECK(ncclCudaFree(mems[NCCL_NET_MAP_DEVMEM].cpuPtr));
     if (!resources->map.sameProcess || ncclCuMemEnable()) {
@@ -1050,7 +1044,7 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
       // Set step base for next op
       resources->step = sub->base + sub->nsteps;
       sub->posted = sub->transmitted = sub->done = 0;
-      for (uint64_t step=0; step<sub->nsteps; step++) ncclProfilingRecord(args, s, step, ncclProxyProfileBegin);
+      ncclProfilerStartSendProxyOpEvent(s, args);
       if (sub->reg && sub->nbytes > 0) {
         NCCLCHECK(proxyState->ncclNet->regMr(resources->netSendComm, sub->recvbuff, sub->nbytes, NCCL_PTR_CUDA, &sub->mhandle));
       } else {
@@ -1072,6 +1066,7 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
       char* localBuff = NCCL_NET_MAP_GET_POINTER(&resources->map, cpu, buffs[p]);
       // Post buffers to the GPU
       if (sub->posted < sub->nsteps && sub->posted < sub->done + maxDepth) {
+        ncclProfilerStartSendProxyStepEvents(s, args, sub->posted, sub->posted+args->sliceSteps);
         int buffSlot = (sub->base+sub->posted)%NCCL_STEPS;
         if (resources->shared) {
           if (!sub->reg) {
@@ -1087,9 +1082,8 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
           if (sub->reg == 0 || sub->posted == args->sliceSteps) *sendHead = sub->base + sub->posted - NCCL_STEPS;
           if (resources->gdcSync) wc_store_fence(); // Flush out WC write
         } else sub->posted += args->sliceSteps;
-        for (uint64_t step=sub->posted-args->sliceSteps; step<sub->posted; step++) {
-          ncclProfilingRecord(args, s, step, ncclProxyProfileSendGPUWait);
-        }
+        ncclProfilerRecordProxyOpEventState(s, args, sub->posted, sub->transSize, ncclProfilerProxyOpSendPosted);
+        ncclProfilerRecordProxyStepEventStates(s, args, sub->posted-args->sliceSteps, sub->posted, ncclProfilerProxyStepSendGPUWait);
         args->idle = 0;
         continue;
       }
@@ -1130,12 +1124,18 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
             buff = sub->reg ? (char*)sub->recvbuff : localBuff+resources->recvMem->connFifo[buffSlot].offset;
           }
           if (ready) {
+            ncclProfilerRecordProxyOpEventState(s, args, sub->transmitted + args->sliceSteps, sub->transSize, ncclProfilerProxyOpSendRemFifoWait);
             // Data is ready, try to send.
+            // Coverity complains about the size here as pointing to an out-of-scope temporary.  Which is nonsense,
+            // since size is a plain integer.
+            // coverity[use_invalid:FALSE]
             NCCLCHECK(proxyState->ncclNet->isend(resources->netSendComm, buff, size, resources->tpRank, sub->mhandle, sub->requests+buffSlot));
             if (sub->requests[buffSlot] != NULL) {
               TRACE(NCCL_NET, "sendProxy [%ld/%d] Isend posted, req %p, size %d, proto %d, myRank %d, channelId %d", sub->transmitted, buffSlot, sub->requests[buffSlot], size, p, proxyState->tpRank, sub->channelId);
               sub->transmitted += args->sliceSteps;
-              for (uint64_t step=sub->transmitted-args->sliceSteps; step<sub->transmitted; step++) ncclProfilingRecord(args, s, step, ncclProxyProfileSendWait);
+              ncclProfilerRecordProxyOpEventState(s, args, sub->transmitted, sub->transSize, ncclProfilerProxyOpSendTransmitted);
+              ncclProfilerRecordProxyStepEventStates(s, args, sub->transmitted-args->sliceSteps, sub->transmitted, ncclProfilerProxyStepSendWait);
+              sub->transSize += size;
               args->idle = 0;
               continue;
             }
@@ -1165,7 +1165,8 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
           __sync_synchronize();
           TRACE(NCCL_NET, "sendProxy [%ld/%d] request %p done", sub->done, buffSlot, sub->requests[buffSlot]);
           sub->done += args->sliceSteps;
-          for (uint64_t step=sub->done-args->sliceSteps; step<sub->done; step++) ncclProfilingRecord(args, s, step, ncclProxyProfileEnd);
+          ncclProfilerStopProxyStepEvents(s, args, sub->done-args->sliceSteps, sub->done);
+          ncclProfilerRecordProxyOpEventState(s, args, sub->done, sub->transSize, ncclProfilerProxyOpSendDone);
 
           if (resources->shared == 0) {
             volatile uint64_t* sendHead = resources->gdcSync ? resources->gdcSync : &resources->sendMem->head;
@@ -1188,6 +1189,9 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
       }
     }
     if (args->done == args->nsubs) {
+      for (int s=0; s<args->nsubs; s++) {
+        ncclProfilerStopProxyOpEvent(s, args);
+      }
       args->state = ncclProxyOpNone;
     }
   }
@@ -1229,7 +1233,7 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
       resources->step = sub->base + sub->nsteps;
       sub->posted = sub->received = sub->transmitted = sub->done = 0;
       for (int i=0; i<groupSize; i++) sub[-i].groupSize = groupSize;
-      for (uint64_t step=0; step<sub->nsteps; step++) ncclProfilingRecord(args, s, step, ncclProxyProfileBegin);
+      ncclProfilerStartRecvProxyOpEvent(s, args);
       if (sub->reg && sub->nbytes > 0) {
         // Register buffer
         NCCLCHECK(proxyState->ncclNet->regMr(resources->netRecvComm, sub->recvbuff, sub->nbytes, NCCL_PTR_CUDA, &sub->mhandle));
@@ -1254,6 +1258,7 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
         struct ncclProxySubArgs* sub = subGroup + i;
         if (sub->posted < sub->nsteps) {
           if (sub->posted >= sub->done + maxDepth) { subCount = 0; break; }
+          ncclProfilerStartRecvProxyStepEvents(s+i, args, sub->posted, sub->posted+args->sliceSteps);
           struct recvNetResources* resources = (struct recvNetResources*) (sub->connection->transportResources);
           if (sub->reg) maxDepth = 1;
           int stepSize = resources->buffSizes[p] / NCCL_STEPS;
@@ -1294,7 +1299,8 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
           for (int i=0; i<subGroup->groupSize; i++) {
             struct ncclProxySubArgs* sub = subGroup+i;
             sub->posted += args->sliceSteps;
-            for (uint64_t step=sub->posted-args->sliceSteps; step<sub->posted; step++) ncclProfilingRecord(args, s+i, step, ncclProxyProfileRecvWait);
+            ncclProfilerRecordProxyOpEventState(s+i, args, sub->posted, sub->transSize, ncclProfilerProxyOpRecvPosted);
+            ncclProfilerRecordProxyStepEventStates(s+i, args, sub->posted-args->sliceSteps, sub->posted, ncclProfilerProxyStepRecvWait);
           }
           args->idle = 0;
         }
@@ -1337,7 +1343,9 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
               }
             }
             sub->received += args->sliceSteps;
-            for (uint64_t step=sub->received-args->sliceSteps; step<sub->received; step++) ncclProfilingRecord(args, s+i, step, ncclProxyProfileRecvFlushWait);
+            sub->transSize += sizes[i];
+            ncclProfilerRecordProxyOpEventState(s+i, args, sub->received, sub->transSize, ncclProfilerProxyOpRecvReceived);
+            ncclProfilerRecordProxyStepEventStates(s+i, args, sub->received-args->sliceSteps, sub->received, ncclProfilerProxyStepRecvFlushWait);
             if (step < sub->nsteps) {
               struct recvNetResources* resources = (struct recvNetResources*) (sub->connection->transportResources);
               if (resources->useGdr) needFlush |= resources->needFlush;
@@ -1393,7 +1401,8 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
             struct ncclProxySubArgs* sub = subGroup + i;
 
             sub->transmitted += args->sliceSteps;
-            for (uint64_t step=sub->transmitted-args->sliceSteps; step<sub->transmitted; step++) ncclProfilingRecord(args, s+i, step, ncclProxyProfileRecvGPUWait);
+            ncclProfilerRecordProxyOpEventState(s+i, args, sub->transmitted, sub->transSize, ncclProfilerProxyOpRecvTransmitted);
+            ncclProfilerRecordProxyStepEventStates(s+i, args, sub->transmitted-args->sliceSteps, sub->transmitted, ncclProfilerProxyStepRecvGPUWait);
             if (step < sub->nsteps) {
               __sync_synchronize();
               struct recvNetResources* resources = (struct recvNetResources*) (sub->connection->transportResources);
@@ -1431,7 +1440,8 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
               subGroup->recvRequestsCache[sub->done%NCCL_STEPS] = NULL;
             }
             sub->done += args->sliceSteps;
-            for (uint64_t step=sub->done-args->sliceSteps; step<sub->done; step++) ncclProfilingRecord(args, s+i, step, ncclProxyProfileEnd);
+            ncclProfilerStopProxyStepEvents(s+i, args, sub->done-args->sliceSteps, sub->done);
+            ncclProfilerRecordProxyOpEventState(s+i, args, sub->done, sub->transSize, ncclProfilerProxyOpRecvDone);
             args->idle = 0;
             if (sub->done == sub->nsteps) {
               struct recvNetResources* resources = (struct recvNetResources*) (sub->connection->transportResources);
@@ -1447,6 +1457,9 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
     }
     if (args->done == args->nsubs) {
       args->state = ncclProxyOpNone;
+      for (int s=0; s<args->nsubs; s++) {
+        ncclProfilerStopProxyOpEvent(s, args);
+      }
     }
   }
   return ncclSuccess;

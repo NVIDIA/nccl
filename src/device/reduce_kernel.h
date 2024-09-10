@@ -234,10 +234,10 @@ struct Apply_Reduce<FuncProd<uint8_t>, /*EltPerPack=*/4> {
     uint32_t a = apack.native;
     uint32_t b = bpack.native;
     uint32_t ab0 = (a*b) & 0xffu;
-    asm("mad.lo.u32 %0, %1, %2, %0;" : "+r"(ab0) : "r"(a&0xff00u), "r"(b&0xff00u));
+    asm volatile("mad.lo.u32 %0, %1, %2, %0;" : "+r"(ab0) : "r"(a&0xff00u), "r"(b&0xff00u));
     uint32_t ab1;
-    asm("mul.hi.u32 %0, %1, %2;"     : "=r"(ab1) : "r"(a&0xff0000), "r"(b&0xff0000));
-    asm("mad.hi.u32 %0, %1, %2, %0;" : "+r"(ab1) : "r"(a&0xff000000u), "r"(b&0xff000000u));
+    asm volatile("mul.hi.u32 %0, %1, %2;"     : "=r"(ab1) : "r"(a&0xff0000), "r"(b&0xff0000));
+    asm volatile("mad.hi.u32 %0, %1, %2, %0;" : "+r"(ab1) : "r"(a&0xff000000u), "r"(b&0xff000000u));
     apack.native = __byte_perm(ab0, ab1, 0x6420);
     return apack;
   }
@@ -260,8 +260,12 @@ SPECIALIZE_REDUCE(FuncMinMax, double, 1, double, fn.isMinNotMax ? fmin(x, y) : f
 
 #if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
   SPECIALIZE_REDUCE(FuncSum, half, 1, half, __hadd(x, y))
+  // Coverity recommends the use of std::move here but, given that half is a scalar,
+  // a plain copy will be just as efficient.
+  // coverity[copy_constructor_call]
   SPECIALIZE_REDUCE(FuncSum, half, 2, half2, __hadd2(x, y))
   SPECIALIZE_REDUCE(FuncProd, half, 1, half, __hmul(x, y))
+  // coverity[copy_constructor_call]
   SPECIALIZE_REDUCE(FuncProd, half, 2, half2, __hmul2(x, y))
 #else
   SPECIALIZE_REDUCE(FuncSum, half, 1, half, __float2half(__half2float(x) + __half2float(y)))
@@ -270,6 +274,7 @@ SPECIALIZE_REDUCE(FuncMinMax, double, 1, double, fn.isMinNotMax ? fmin(x, y) : f
 
 #if __CUDA_ARCH__ >= 800
   SPECIALIZE_REDUCE(FuncMinMax, half, 1, half, fn.isMinNotMax ? __hmin(x, y) : __hmax(x, y))
+  // coverity[copy_constructor_call]
   SPECIALIZE_REDUCE(FuncMinMax, half, 2, half2, fn.isMinNotMax ? __hmin2(x, y) : __hmax2(x, y))
 #else
   SPECIALIZE_REDUCE(FuncMinMax, half, 1, half, __float2half(fn.isMinNotMax ? fminf(__half2float(x), __half2float(y)) : fmaxf(__half2float(x), __half2float(y))))
@@ -278,10 +283,13 @@ SPECIALIZE_REDUCE(FuncMinMax, double, 1, double, fn.isMinNotMax ? fmin(x, y) : f
 #if defined(__CUDA_BF16_TYPES_EXIST__)
 #if __CUDA_ARCH__ >= 800
   SPECIALIZE_REDUCE(FuncSum, __nv_bfloat16, 1, __nv_bfloat16, __hadd(x, y))
+  // coverity[copy_constructor_call]
   SPECIALIZE_REDUCE(FuncSum, __nv_bfloat16, 2, __nv_bfloat162, __hadd2(x, y))
   SPECIALIZE_REDUCE(FuncProd, __nv_bfloat16, 1, __nv_bfloat16, __hmul(x, y))
+  // coverity[copy_constructor_call]
   SPECIALIZE_REDUCE(FuncProd, __nv_bfloat16, 2, __nv_bfloat162, __hmul2(x, y))
   SPECIALIZE_REDUCE(FuncMinMax, __nv_bfloat16, 1, __nv_bfloat16, fn.isMinNotMax ? __hmin(x, y) : __hmax(x, y))
+  // coverity[copy_constructor_call]
   SPECIALIZE_REDUCE(FuncMinMax, __nv_bfloat16, 2, __nv_bfloat162, fn.isMinNotMax ? __hmin2(x, y) : __hmax2(x, y))
 #else
   SPECIALIZE_REDUCE(FuncSum, __nv_bfloat16, 1, __nv_bfloat16, __float2bfloat16(__bfloat162float(x) + __bfloat162float(y)))
@@ -402,6 +410,9 @@ struct FuncPreMulSum {
 };
 
 template<>
+// Coverity recommends the users of this type to use std::move in certain cases but,
+// given that half is a scalar, a plain copy will be just as efficient.
+// coverity[moveable_type]
 struct FuncPreMulSum<half> {
   using EltType = half;
 #if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
@@ -424,6 +435,9 @@ struct FuncPreMulSum<half> {
 
 #if defined(__CUDA_BF16_TYPES_EXIST__)
   template<>
+  // Coverity recommends the users of this type to use std::move in certain cases but,
+  // given that __nv_bfloat16 is a scalar, a plain copy will be just as efficient.
+  // coverity[moveable_type]
   struct FuncPreMulSum<__nv_bfloat16> {
     using EltType = __nv_bfloat16;
   #if __CUDA_ARCH__ >= 800
@@ -584,9 +598,9 @@ struct Apply_PostOp<FuncSumPostDiv<T>, /*EltPerPack=*/1> {
     static constexpr int PackSize = SIZEOF_BytePack_field_##pack_field; \
     __device__ static BytePack<PackSize> load(FuncSum<T> fn, uintptr_t addr) { \
       BytePack<PackSize> ans; \
-      asm("multimem.ld_reduce.relaxed.sys.global.add." #ptx_ty " %0, [%1];" \
+      asm volatile("multimem.ld_reduce.relaxed.sys.global.add." #ptx_ty " %0, [%1];" \
         : "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field) \
-        : "l"(addr)); \
+        : "l"(addr) : "memory"); \
       return ans; \
     } \
   };
@@ -597,13 +611,13 @@ struct Apply_PostOp<FuncSumPostDiv<T>, /*EltPerPack=*/1> {
     __device__ static BytePack<PackSize> load(FuncMinMax<T> fn, uintptr_t addr) { \
       BytePack<PackSize> ans; \
       if (fn.isMinNotMax) { \
-        asm("multimem.ld_reduce.relaxed.sys.global.min." #ptx_ty " %0, [%1];" \
+        asm volatile("multimem.ld_reduce.relaxed.sys.global.min." #ptx_ty " %0, [%1];" \
           : "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field) \
-          : "l"(addr)); \
+          : "l"(addr) : "memory"); \
       } else { \
-        asm("multimem.ld_reduce.relaxed.sys.global.max." #ptx_ty " %0, [%1];" \
+        asm volatile("multimem.ld_reduce.relaxed.sys.global.max." #ptx_ty " %0, [%1];" \
           : "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field) \
-          : "l"(addr)); \
+          : "l"(addr) : "memory"); \
       } \
       return ans; \
     } \
@@ -615,12 +629,12 @@ struct Apply_PostOp<FuncSumPostDiv<T>, /*EltPerPack=*/1> {
     static constexpr int PackSize = 4*(SIZEOF_BytePack_field_##pack_field); \
     __device__ static BytePack<PackSize> load(FuncSum<T> fn, uintptr_t addr) { \
       BytePack<PackSize> ans; \
-      asm("multimem.ld_reduce.relaxed.sys.global.add.v4." #ptx_ty " {%0,%1,%2,%3}, [%4];" \
+      asm volatile("multimem.ld_reduce.relaxed.sys.global.add.v4." #ptx_ty " {%0,%1,%2,%3}, [%4];" \
         : "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field[0]), \
           "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field[1]), \
           "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field[2]), \
           "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field[3]) \
-        : "l"(addr)); \
+        : "l"(addr) : "memory"); \
       return ans; \
     } \
   };
@@ -631,19 +645,19 @@ struct Apply_PostOp<FuncSumPostDiv<T>, /*EltPerPack=*/1> {
     __device__ static BytePack<PackSize> load(FuncMinMax<T> fn, uintptr_t addr) { \
       BytePack<PackSize> ans; \
       if (fn.isMinNotMax) { \
-        asm("multimem.ld_reduce.relaxed.sys.global.min.v4." #ptx_ty " {%0,%1,%2,%3}, [%4];" \
+        asm volatile("multimem.ld_reduce.relaxed.sys.global.min.v4." #ptx_ty " {%0,%1,%2,%3}, [%4];" \
           : "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field[0]), \
             "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field[1]), \
             "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field[2]), \
             "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field[3]) \
-          : "l"(addr)); \
+          : "l"(addr) : "memory"); \
       } else { \
-        asm("multimem.ld_reduce.relaxed.sys.global.max.v4." #ptx_ty " {%0,%1,%2,%3}, [%4];" \
+        asm volatile("multimem.ld_reduce.relaxed.sys.global.max.v4." #ptx_ty " {%0,%1,%2,%3}, [%4];" \
           : "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field[0]), \
             "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field[1]), \
             "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field[2]), \
             "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field[3]) \
-          : "l"(addr)); \
+          : "l"(addr) : "memory"); \
       } \
       return ans; \
     } \
@@ -655,9 +669,9 @@ struct Apply_PostOp<FuncSumPostDiv<T>, /*EltPerPack=*/1> {
   struct Apply_LoadMultimem<FuncSum<T>, sizeof(T)> { \
     __device__ static BytePack<sizeof(T)> load(FuncSum<T> fn, uintptr_t addr) { \
       BytePack<2*sizeof(T)> tmp; \
-      asm("multimem.ld_reduce.relaxed.sys.global.add." #ptx_ty " %0, [%1];" \
+      asm volatile("multimem.ld_reduce.relaxed.sys.global.add." #ptx_ty " %0, [%1];" \
         : "=" PTX_REG_BytePack_field_##pack_field(tmp.pack_field) \
-        : "l"(addr & -uintptr_t(2*sizeof(T)))); \
+        : "l"(addr & -uintptr_t(2*sizeof(T))) : "memory"); \
       return tmp.half[(addr/sizeof(T))%2]; \
     } \
   };
@@ -668,13 +682,13 @@ struct Apply_PostOp<FuncSumPostDiv<T>, /*EltPerPack=*/1> {
     __device__ static BytePack<sizeof(T)> load(FuncMinMax<T> fn, uintptr_t addr) { \
       BytePack<2*sizeof(T)> tmp; \
       if (fn.isMinNotMax) { \
-        asm("multimem.ld_reduce.relaxed.sys.global.min." #ptx_ty " %0, [%1];" \
+        asm volatile("multimem.ld_reduce.relaxed.sys.global.min." #ptx_ty " %0, [%1];" \
           : "=" PTX_REG_BytePack_field_##pack_field(tmp.pack_field) \
-          : "l"(addr & -uintptr_t(2*sizeof(T)))); \
+          : "l"(addr & -uintptr_t(2*sizeof(T))) : "memory"); \
       } else { \
-        asm("multimem.ld_reduce.relaxed.sys.global.max." #ptx_ty " %0, [%1];" \
+        asm volatile("multimem.ld_reduce.relaxed.sys.global.max." #ptx_ty " %0, [%1];" \
           : "=" PTX_REG_BytePack_field_##pack_field(tmp.pack_field) \
-          : "l"(addr & -uintptr_t(2*sizeof(T)))); \
+          : "l"(addr & -uintptr_t(2*sizeof(T))) : "memory"); \
       } \
       return tmp.half[(addr/sizeof(T))%2]; \
     } \

@@ -33,15 +33,15 @@ static double startTimes[8];
 #define TIME_START(index) do { \
   counts[index]++; \
   startTimes[index] = gettime(); \
-} while (0);
+} while (0)
 
 #define TIME_STOP(index) do { \
   times[index] += gettime() - startTimes[index]; \
-} while (0);
+} while (0)
 
 #define TIME_CANCEL(index) do { \
   counts[index]--; \
-} while (0);
+} while (0)
 
 #define TIME_PRINT(name) do { \
   printf("%s stats", name); \
@@ -50,11 +50,11 @@ static double startTimes[8];
     counts[i] = 0; \
   } \
   printf("\n"); \
-} while (0);
+} while (0)
 #else
-#define TIME_START(index) while(0);
-#define TIME_STOP(index) while(0);
-#define TIME_CANCEL(index) while(0);
+#define TIME_START(index) do {} while(0)
+#define TIME_STOP(index) do {} while(0)
+#define TIME_CANCEL(index) do {} while(0)
 #define TIME_PRINT(name)
 #endif
 #endif

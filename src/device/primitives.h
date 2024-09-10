@@ -115,17 +115,23 @@ struct PrimitivesWithoutDirect {
   __device__ void directSendFromOutput(intptr_t outIx, int eltN) {
     static_cast<RealPrimitives*>(this)->sendFromOutput(outIx, eltN);
   }
-  __device__ void directRecv(intptr_t outIx, int eltN) {
+  __device__ void directRecv(intptr_t inpIx, intptr_t outIx, int eltN) {
     static_cast<RealPrimitives*>(this)->recv(outIx, eltN, /*postOp=*/false);
   }
   __device__ void directCopySend(intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false) {
     static_cast<RealPrimitives*>(this)->copySend(inpIx, outIx, eltN, postOp);
   }
-  __device__ void directRecvCopySend(intptr_t outIx, int eltN) {
+  __device__ void directRecvCopyDirectSend(intptr_t outIx, int eltN, bool postOp=false) {
     static_cast<RealPrimitives*>(this)->recvCopySend(outIx, eltN, /*postOp=*/false);
   }
-  __device__ void directRecvReduceCopySend(intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false) {
+  __device__ void recvReduceCopyDirectSend(intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false) {
     // Direct is only for the send part
+    static_cast<RealPrimitives*>(this)->recvReduceCopySend(inpIx, outIx, eltN, postOp);
+  }
+  __device__ __forceinline__ void directRecvReduceDirectSend(intptr_t inpIx, intptr_t outIx, ssize_t eltN, bool postOp=false) {
+    static_cast<RealPrimitives*>(this)->recvReduceSend(inpIx, eltN);
+  }
+  __device__ __forceinline__ void directRecvReduceCopyDirectSend(intptr_t inpIx, intptr_t outIx, ssize_t eltN, bool postOp=false) {
     static_cast<RealPrimitives*>(this)->recvReduceCopySend(inpIx, outIx, eltN, postOp);
   }
 };

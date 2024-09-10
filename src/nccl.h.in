@@ -168,6 +168,13 @@ ncclResult_t pncclCommAbort(ncclComm_t comm);
 ncclResult_t  ncclCommSplit(ncclComm_t comm, int color, int key, ncclComm_t *newcomm, ncclConfig_t* config);
 ncclResult_t pncclCommSplit(ncclComm_t comm, int color, int key, ncclComm_t *newcomm, ncclConfig_t* config);
 
+/* Creates a new communicator (multi thread/process version), similar to ncclCommInitRankConfig.
+ * Allows to use more than one ncclUniqueId (up to one per rank), indicated by nId, to accelerate the init operation.
+ * The number of ncclUniqueIds and their order must be the same for every rank.
+ */
+ncclResult_t ncclCommInitRankScalable(ncclComm_t* newcomm, int nranks, int myrank, int nId, ncclUniqueId* commIds, ncclConfig_t* config);
+ncclResult_t pncclCommInitRankScalable(ncclComm_t* newcomm, int nranks, int myrank, int nId, ncclUniqueId* commIds, ncclConfig_t* config);
+
 /* Returns a string for each error code. */
 const char*  ncclGetErrorString(ncclResult_t result);
 const char* pncclGetErrorString(ncclResult_t result);

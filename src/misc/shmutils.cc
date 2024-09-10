@@ -4,7 +4,7 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
-#include "shm.h"
+#include "shmutils.h"
 #include "comm.h"
 #include "checks.h"
 #include <sys/types.h>
@@ -75,7 +75,7 @@ ncclResult_t ncclShmOpen(char* shmPath, size_t shmSize, void** shmPtr, void** de
         goto fail;
       }
     } else {
-      SYSCHECKGOTO(fd = open(shmPath, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR), ret, fail);
+      SYSCHECKGOTO(fd = open(shmPath, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR), "open", ret, fail);
     }
 
   retry_fallocate:
@@ -90,7 +90,7 @@ ncclResult_t ncclShmOpen(char* shmPath, size_t shmSize, void** shmPtr, void** de
     }
     INFO(NCCL_ALLOC, "Allocated %ld bytes of shared memory in %s", realShmSize, shmPath);
   } else {
-    SYSCHECKGOTO(fd = open(shmPath, O_RDWR, S_IRUSR | S_IWUSR), ret, fail);
+    SYSCHECKGOTO(fd = open(shmPath, O_RDWR, S_IRUSR | S_IWUSR), "open", ret, fail);
   }
 
   hptr = (char*)mmap(NULL, realShmSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
@@ -114,7 +114,7 @@ ncclResult_t ncclShmOpen(char* shmPath, size_t shmSize, void** shmPtr, void** de
   }
 
   if (devShmPtr) {
-    CUDACHECKGOTO(cudaHostRegister((void*)hptr, realShmSize, cudaHostRegisterMapped), ret, fail);
+    CUDACHECKGOTO(cudaHostRegister((void*)hptr, realShmSize, cudaHostRegisterPortable | cudaHostRegisterMapped), ret, fail);
     CUDACHECKGOTO(cudaHostGetDevicePointer(&dptr, (void*)hptr, 0), ret, fail);
   }
 
@@ -129,7 +129,7 @@ fail:
        shmPath, shmSize, strerror(errno), errno);
   if (tmphandle) {
     shmHandleInit(fd, shmPath, shmSize, realShmSize, hptr, dptr, create, tmphandle);
-    ncclShmClose((ncclShmHandle_t)tmphandle);
+    (void)ncclShmClose((ncclShmHandle_t)tmphandle);
     tmphandle = NULL;
   }
   hptr = NULL;
@@ -182,7 +182,7 @@ ncclResult_t ncclShmUnlink(ncclShmHandle_t handle) {
 
 ncclResult_t ncclShmemAllgather(struct ncclComm *comm, struct ncclShmemCollBuff *shmem, void *sendbuff, void *recvbuff, size_t typeSize) {
   ncclResult_t ret = ncclSuccess;
-  int curRound = shmem->round;
+  int curRound;
   size_t mycnt;
 
   if (comm == NULL || shmem == NULL || sendbuff == NULL || recvbuff == NULL || shmem->maxTypeSize < typeSize) {
@@ -190,6 +190,7 @@ ncclResult_t ncclShmemAllgather(struct ncclComm *comm, struct ncclShmemCollBuff 
     goto exit;
   }
 
+  curRound = shmem->round;
   memcpy((char*)shmem->ptr[curRound] + comm->localRank * typeSize, sendbuff, typeSize);
   /* sync among local ranks */
   mycnt = __atomic_add_fetch(shmem->cnt[curRound], 1, __ATOMIC_ACQ_REL);

@@ -4,34 +4,52 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
-#ifndef NCCL_PROFILER_H_
-#define NCCL_PROFILER_H_
+#ifndef PROFILER_H_
+#define PROFILER_H_
 
-#include "proxy.h"
+#include <cuda_runtime.h>
+#include "nccl_profiler.h"
 
-enum ncclProxyProfileState {
-  ncclProxyProfileBegin = 0,
+struct ncclProxyArgs;
+struct ncclKernelPlan;
+struct ncclTaskColl;
+struct ncclTaskP2p;
+struct ncclInfo;
+struct ncclComm;
+struct ncclProxyOp;
 
-  ncclProxyProfileSendGPUWait = 1,
-  ncclProxyProfileSendWait = 2,
+// Plugin Init/Finalize Wrappers
+ncclResult_t ncclProfilerPluginInit(struct ncclComm* comm);
+ncclResult_t ncclProfilerPluginFinalize(struct ncclComm* comm);
 
-  ncclProxyProfileRecvWait = 1,
-  ncclProxyProfileRecvFlushWait = 2,
-  ncclProxyProfileRecvGPUWait = 3,
+// Profiler Start/Stop Group Wrappers
+ncclResult_t ncclProfilerStartGroupEvent(struct ncclKernelPlan* plan);
+ncclResult_t ncclProfilerStopGroupEvent(struct ncclKernelPlan* plan);
 
-  ncclProxyProfileEnd = 4,
+// Profiler Start/Stop Task Events Wrappers
+ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan);
+ncclResult_t ncclProfilerStopTaskEvents(struct ncclKernelPlan* plan);
 
-  ncclProxyProfileSleep = 8,
-  ncclProxyProfileWakeup = 9,
+// Proxy Op Start/Stop Event Wrappers
+ncclResult_t ncclProfilerStartSendProxyOpEvent(int sub, struct ncclProxyArgs* args);
+ncclResult_t ncclProfilerStartRecvProxyOpEvent(int sub, struct ncclProxyArgs* args);
+ncclResult_t ncclProfilerStopProxyOpEvent(int sub, struct ncclProxyArgs* args);
 
-  ncclProxyProfileIdle = 16,
-  ncclProxyProfileActive = 17,
+// Proxy Step Start/Stop Event Wrappers
+ncclResult_t ncclProfilerStartSendProxyStepEvents(int sub, struct ncclProxyArgs* args, uint64_t stepLo, uint64_t stepHi);
+ncclResult_t ncclProfilerStartRecvProxyStepEvents(int sub, struct ncclProxyArgs* args, uint64_t stepLo, uint64_t stepHi);
+ncclResult_t ncclProfilerStopProxyStepEvents(int sub, struct ncclProxyArgs* args, uint64_t stepLo, uint64_t stepHi);
 
-  ncclProxyProfileAppend = 24,
-  ncclProxyProfileAppendEnd = 25
-};
+// Proxy Control Start/Stop Events Wrappers
+ncclResult_t ncclProfilerStartProxyCtrlEvent(void* profilerContext, void** eHandle);
+ncclResult_t ncclProfilerStopProxyCtrlEvent(void* eHandle);
 
-ncclResult_t ncclProfilingRecord(struct ncclProxyArgs* args, int sub, int step, int state);
-void ncclProfilingDump();
+// Record Event Wrappers
+ncclResult_t ncclProfilerRecordProxyOpEventState(int sub, struct ncclProxyArgs* args, int steps, size_t transSize, ncclProfilerEventState_t eState);
+ncclResult_t ncclProfilerRecordProxyStepEventStates(int sub, struct ncclProxyArgs* args, uint64_t stepLo, uint64_t stepHi, ncclProfilerEventState_t eState);
+ncclResult_t ncclProfilerRecordProxyCtrlEventState(void*eHandle, int appended, ncclProfilerEventState_t eState);
+
+// Profiler utility functions
+ncclResult_t ncclProfilerAddPidToProxyOp(struct ncclProxyOp* op);
 
 #endif

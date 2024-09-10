@@ -53,6 +53,10 @@ ncclResult_t ArgsCheck(struct ncclInfo* info) {
     return ncclInvalidArgument;
   }
 
+  // ncclMaxRedOp < info->op will always be false due to the sizes of
+  // the datatypes involved, and that's by design.  We keep the check though
+  // just as a reminder.
+  // coverity[result_independent_of_operands]
   if (info->op < 0 || ncclMaxRedOp < info->op) {
     WARN("%s : invalid reduction operation %d", info->opName, info->op);
     return ncclInvalidArgument;

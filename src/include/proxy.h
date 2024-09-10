@@ -13,7 +13,7 @@
 #include "ipcsocket.h"
 #include "nccl_net.h"
 #include <pthread.h>
-#include "shm.h"
+#include "shmutils.h"
 #include "p2p.h"
 
 typedef enum : uint8_t {
@@ -28,6 +28,8 @@ typedef enum : uint8_t {
   ncclPatternCollnetDirect,
   ncclPatternNvls,
   ncclPatternNvlsTree,
+  ncclPatternPatUp,
+  ncclPatternPatDown,
   ncclPatternSend,
   ncclPatternRecv
 } ncclPattern_t;
@@ -72,6 +74,19 @@ struct ncclProxyOp {
 
   union ncclProxyOpSpecifics specifics;
 
+  // Profiler plugin
+  union {
+    struct ncclTaskColl* coll;
+    struct ncclTaskP2p* p2p;
+  } task;
+
+  int eActivationMask;
+  void* taskEventHandle;
+  int rank;
+  int peer;
+  pid_t pid;
+  void* profilerContext;
+
   struct ncclProxyOp *enqNext;
 };
 
@@ -100,7 +115,15 @@ struct ncclProxySubArgs {
   uint64_t done;
   uint64_t end;
   void* requests[NCCL_STEPS];
-  void* profilingEvents[NCCL_STEPS];
+
+  // Profiler plugin
+  int eActivationMask;
+  int rank;
+  void* taskEventHandle;
+  void* opEventHandle;
+  void* stepEventHandles[NCCL_STEPS];
+  size_t transSize;
+
   void* recvRequestsCache[NCCL_STEPS];
   int recvRequestsSubCount;
 };
@@ -128,6 +151,10 @@ struct ncclProxyArgs {
   int sharedSize[NCCL_STEPS];
 
   int idle;
+
+  // Profiler plugin
+  pid_t pid;
+  void* profilerContext;
 
   // Element linking
   struct ncclProxyArgs* next;
@@ -261,6 +288,7 @@ struct ncclProxyState {
   ncclNet_t* ncclNet;
   ncclCollNet_t* ncclCollNet;
   uint32_t* abortFlag;
+  bool directMode;
   // Service threads
   pthread_t thread;
   pthread_t threadUDS;
@@ -280,6 +308,9 @@ struct ncclProxyState {
 
   // Progress thread
   struct ncclProxyProgressState progressState;
+
+  // Profiler plugin
+  void* profilerContext;
 
   // Queue of expected responses from the proxy
   struct ncclExpectedProxyResponse* expectedResponses;
@@ -332,8 +363,9 @@ enum ncclProxyMsgType {
   ncclProxyMsgAbort = 7,
   ncclProxyMsgStop = 8,
   ncclProxyMsgGetFd = 9, // cuMem API support (UDS)
-  ncclProxyMsgRegister = 10,
-  ncclProxyMsgDeregister = 11
+  ncclProxyMsgQueryFd = 10,
+  ncclProxyMsgRegister = 11,
+  ncclProxyMsgDeregister = 12
 };
 
 // This function is called by a client of the proxy that needs to invoke any of the non-progress proxyOp types
@@ -347,6 +379,7 @@ ncclResult_t ncclPollProxyResponse(struct ncclComm* comm, struct ncclProxyConnec
 
 // UDS support
 ncclResult_t ncclProxyClientGetFdBlocking(struct ncclComm* comm, int rank, void *handle, int* convertedFd);
+ncclResult_t ncclProxyClientQueryFdBlocking(struct ncclComm* comm, struct ncclProxyConnector* proxyConn, int localFd, int* rmtFd);
 
 ncclResult_t ncclProxyStop(struct ncclComm* comm);
 ncclResult_t ncclProxyShmUnlink(struct ncclComm* comm);

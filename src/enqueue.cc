@@ -1286,6 +1286,7 @@ static ncclResult_t uploadWork(struct ncclComm* comm, struct ncclKernelPlan* pla
   size_t batchBytes = plan->nWorkBatches*sizeof(struct ncclDevWorkBatch);
   void* fifoBufHost;
   uint32_t fifoCursor, fifoMask;
+  const int alignment = 16;
 
   switch (plan->workStorageType) {
   case ncclDevWorkStorageTypeArgs:
@@ -1302,8 +1303,9 @@ static ncclResult_t uploadWork(struct ncclComm* comm, struct ncclKernelPlan* pla
     plan->kernelArgs->workBuf = comm->workFifoBufDev;
     break;
   case ncclDevWorkStorageTypePersistent:
-    static_assert(16 <= alignof(max_align_t), "We rely on 16-byte alignment.");
-    fifoBufHost = malloc(workBytes);
+    fifoBufHost =
+        aligned_alloc(16,
+                      ((workBytes + alignment - 1) / alignment) * alignment);
     fifoCursor = 0;
     fifoMask = ~0u;
     break;

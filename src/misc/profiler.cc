@@ -484,7 +484,7 @@ ncclResult_t ncclProfilerRecordProxyOpEventState(int s, struct ncclProxyArgs* ar
   TIME_START_EVENT(proxyOpRecord);
   struct ncclProxySubArgs* sub = &args->subs[s];
   if (__builtin_expect(ncclProfiler != NULL, 0) && sub->opEventHandle) {
-    ncclProfilerEventStateArgs_t a = { 0 };
+    ncclProfilerEventStateArgs_t a{};
     a.proxyOp.steps = steps;
     a.proxyOp.transSize = transSize;
     ncclProfiler->recordEventState(sub->opEventHandle, eState, &a);
@@ -510,7 +510,7 @@ ncclResult_t ncclProfilerRecordProxyStepEventStates(int s, struct ncclProxyArgs*
 ncclResult_t ncclProfilerRecordProxyCtrlEventState(void* eHandle, int appended, ncclProfilerEventState_t eState) {
   TIME_START_EVENT(proxyCtrlRecord);
   if (__builtin_expect(ncclProfiler != NULL, 0) && eHandle && __atomic_load_n(&eActivationMask, __ATOMIC_RELAXED) & ncclProfileProxyCtrl) {
-    ncclProfilerEventStateArgs_t args = { 0 };
+    ncclProfilerEventStateArgs_t args{};
     args.proxyCtrl.appendedProxyOps = appended;
     ncclProfiler->recordEventState(eHandle, eState, &args);
   }

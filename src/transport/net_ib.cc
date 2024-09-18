@@ -2118,7 +2118,7 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
 
             char line[SOCKET_NAME_MAXLEN+1];
             char *hcaName = r->devBases[i]->pd->context->device->name;
-            WARN("NET/IB: Got completion from peer %s with status=%d opcode=%d len=%d vendor err %d (%s)%s%s%s%s hca %s",
+            WARN("NET/IB: Got completion from peer %s with status=%d opcode=%d len=%u vendor err %u (%s)%s%s%s%s hca %s",
                 ncclSocketToString(&addr, line), wc->status, wc->opcode, wc->byte_len, wc->vendor_err, reqTypeStr[r->type],
                 localGidStr ?  " localGid ":"", localGidString, remoteGidStr ? " remoteGids":"", remoteGidString, hcaName);
             return ncclRemoteError;
@@ -2130,7 +2130,7 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
 
           #ifdef ENABLE_TRACE
           char line[SOCKET_NAME_MAXLEN+1];
-          TRACE(NCCL_NET, "Got completion from peer %s with status=%d opcode=%d len=%d wr_id=%ld r=%p type=%d events={%d,%d}, i=%d",
+          TRACE(NCCL_NET, "Got completion from peer %s with status=%d opcode=%d len=%u wr_id=%llu r=%p type=%d events={%d,%d}, i=%d",
               ncclSocketToString(&addr, line), wc->status, wc->opcode,wc->byte_len, wc->wr_id, req, req->type, req->events[0], req->events[1], i);
           #endif
           if (req && req->type == NCCL_NET_IB_REQ_SEND) {

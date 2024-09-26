@@ -54,11 +54,12 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
   uint32_t abort = 0;
 
   inline __device__ int checkAbort(int &spins, int send) {
-    spins++;
-    if (abort == 0 && spins == NCCL_SPINS_BEFORE_CHECK_ABORT) {
+    // Check abortFlag on the 0th spin and multiples of NCCL_SPINS_BEFORE_CHECK_ABORT
+    if (abort == 0 && spins % NCCL_SPINS_BEFORE_CHECK_ABORT == 0) {
       abort = *ncclShmem.comm.abortFlag;
       spins = 0;
     }
+    spins++;
     return abort;
   }
 

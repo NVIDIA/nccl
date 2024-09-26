@@ -92,14 +92,15 @@ class Primitives<
   }
 
   inline __device__ bool checkAbort(int &spins) {
-    spins++;
-    if (!(flags & Aborted) && spins == NCCL_SPINS_BEFORE_CHECK_ABORT) {
+    // Check abortFlag on the 0th spin and multiples of NCCL_SPINS_BEFORE_CHECK_ABORT
+    if (!(flags & Aborted) && spins % NCCL_SPINS_BEFORE_CHECK_ABORT == 0) {
       if (*ncclShmem.comm.abortFlag) {
         flags |= Aborted;
         ncclShmem.aborted = 1;
       }
       spins = 0;
     }
+    spins++;
     return flags & Aborted;
   }
 

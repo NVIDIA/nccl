@@ -10,6 +10,7 @@ VERBOSE ?= 0
 KEEP ?= 0
 DEBUG ?= 0
 ASAN ?= 0
+UBSAN ?= 0
 TRACE ?= 0
 PROFAPI ?= 1
 NVTX ?= 1
@@ -91,6 +92,12 @@ ifneq ($(ASAN), 0)
 CXXFLAGS += -fsanitize=address
 LDFLAGS += -fsanitize=address -static-libasan
 NVLDFLAGS += -Xcompiler -fsanitize=address,-static-libasan
+endif
+
+ifneq ($(UBSAN), 0)
+CXXFLAGS += -fsanitize=undefined
+LDFLAGS += -fsanitize=undefined -static-libubsan
+NVLDFLAGS += -Xcompiler -fsanitize=undefined,-static-libubsan
 endif
 
 ifneq ($(VERBOSE), 0)

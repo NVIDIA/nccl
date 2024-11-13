@@ -31,7 +31,7 @@ extern "C" {
  */
 
 /*  ------------------------------------------------------------------------- */
-/* \cond SHOW_HIDDEN 
+/* \cond SHOW_HIDDEN
 * \brief Used to build a non-colliding value for resource types separated class
 * \version \NVTX_VERSION_2
 */
@@ -109,7 +109,7 @@ NVTX_DECLSPEC void NVTX_API nvtxNameCudaEventW(cudaEvent_t event, const wchar_t*
 #endif /* __cplusplus */
 
 #ifndef NVTX_NO_IMPL
-#define NVTX_IMPL_GUARD_CUDART /* Ensure other headers cannot included directly */
+#define NVTX_IMPL_GUARD_CUDART /* Ensure other headers cannot be included directly */
 #include "nvtxDetail/nvtxImplCudaRt_v3.h"
 #undef NVTX_IMPL_GUARD_CUDART
 #endif /*NVTX_NO_IMPL*/

@@ -30,11 +30,11 @@ extern "C" {
  */
 
 /*  ------------------------------------------------------------------------- */
-/* \cond SHOW_HIDDEN 
+/* \cond SHOW_HIDDEN
 * \brief Used to build a non-colliding value for resource types separated class
 * \version \NVTX_VERSION_2
 */
-#define NVTX_RESOURCE_CLASS_OPENCL 6 
+#define NVTX_RESOURCE_CLASS_OPENCL 6
 /** \endcond */
 
 /*  ------------------------------------------------------------------------- */
@@ -183,7 +183,7 @@ NVTX_DECLSPEC void NVTX_API nvtxNameClEventW(cl_event evnt, const wchar_t* name)
 #endif /* __cplusplus */
 
 #ifndef NVTX_NO_IMPL
-#define NVTX_IMPL_GUARD_OPENCL /* Ensure other headers cannot included directly */
+#define NVTX_IMPL_GUARD_OPENCL /* Ensure other headers cannot be included directly */
 #include "nvtxDetail/nvtxImplOpenCL_v3.h"
 #undef NVTX_IMPL_GUARD_OPENCL
 #endif /*NVTX_NO_IMPL*/

@@ -130,7 +130,7 @@ ncclResult_t wrap_gdr_pin_buffer(gdr_t g, unsigned long addr, size_t size, uint6
   int ret;
   GDRLOCKCALL(gdr_internal_pin_buffer(g, addr, size, p2p_token, va_space, handle), ret);
   if (ret != 0) {
-    WARN("gdr_pin_buffer(addr %lx, size %zi) failed: %d", addr, size, ret);
+    WARN("gdr_pin_buffer(addr %lx, size %zu) failed: %d", addr, size, ret);
     return ncclSystemError;
   }
   return ncclSuccess;
@@ -172,7 +172,7 @@ ncclResult_t wrap_gdr_map(gdr_t g, gdr_mh_t handle, void **va, size_t size) {
   int ret;
   GDRLOCKCALL(gdr_internal_map(g, handle, va, size), ret);
   if (ret != 0) {
-    WARN("gdr_map(handle %lx, size %zi) failed: %d", handle.h, size, ret);
+    WARN("gdr_map(handle %lx, size %zu) failed: %d", handle.h, size, ret);
     return ncclSystemError;
   }
   return ncclSuccess;
@@ -186,7 +186,7 @@ ncclResult_t wrap_gdr_unmap(gdr_t g, gdr_mh_t handle, void *va, size_t size) {
   int ret;
   GDRLOCKCALL(gdr_internal_unmap(g, handle, va, size), ret);
   if (ret != 0) {
-    WARN("gdr_unmap(handle %lx, va %p, size %zi) failed: %d", handle.h, va, size, ret);
+    WARN("gdr_unmap(handle %lx, va %p, size %zu) failed: %d", handle.h, va, size, ret);
     return ncclSystemError;
   }
   return ncclSuccess;
@@ -218,7 +218,7 @@ ncclResult_t wrap_gdr_copy_to_mapping(gdr_mh_t handle, void *map_d_ptr, const vo
   int ret;
   GDRLOCKCALL(gdr_internal_copy_to_mapping(handle, map_d_ptr, h_ptr, size), ret);
   if (ret != 0) {
-    WARN("gdr_copy_to_mapping(handle %lx, map_d_ptr %p, h_ptr %p, size %zi) failed: %d", handle.h, map_d_ptr, h_ptr, size, ret);
+    WARN("gdr_copy_to_mapping(handle %lx, map_d_ptr %p, h_ptr %p, size %zu) failed: %d", handle.h, map_d_ptr, h_ptr, size, ret);
     return ncclSystemError;
   }
   return ncclSuccess;
@@ -232,7 +232,7 @@ ncclResult_t wrap_gdr_copy_from_mapping(gdr_mh_t handle, void *h_ptr, const void
   int ret;
   GDRLOCKCALL(gdr_internal_copy_from_mapping(handle, h_ptr, map_d_ptr, size), ret);
   if (ret != 0) {
-    WARN("gdr_copy_from_mapping(handle %lx, h_ptr %p, map_d_ptr %p, size %zi) failed: %d", handle.h, h_ptr, map_d_ptr, size, ret);
+    WARN("gdr_copy_from_mapping(handle %lx, h_ptr %p, map_d_ptr %p, size %zu) failed: %d", handle.h, h_ptr, map_d_ptr, size, ret);
     return ncclSystemError;
   }
   return ncclSuccess;

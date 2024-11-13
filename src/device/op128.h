@@ -11,28 +11,28 @@
 
 inline __device__ void load128(const uint64_t* ptr, uint64_t &v0, uint64_t &v1) {
   asm volatile("ld.volatile.global.v2.u64 {%0,%1}, [%2];"
-      : "=l"(v0), "=l"(v1) : "l"(ptr));
+      : "=l"(v0), "=l"(v1) : "l"(ptr) : "memory");
 }
 
 inline __device__ void store128(uint64_t* ptr, uint64_t v0, uint64_t v1) {
   asm volatile("st.volatile.global.v2.u64 [%2], {%0,%1};"
-      :: "l"(v0), "l"(v1), "l"(ptr));
+      :: "l"(v0), "l"(v1), "l"(ptr) : "memory");
 }
 
 inline __device__ uint64_t* shmemCvtPtr(volatile uint64_t* shmemGenericPtr) {
   uint64_t* shmemAsmPtr;
-  asm volatile("cvta.to.shared.u64 %0, %1;" : "=l"(shmemAsmPtr) : "l"(shmemGenericPtr));
+  asm volatile("cvta.to.shared.u64 %0, %1;" : "=l"(shmemAsmPtr) : "l"(shmemGenericPtr) : "memory");
   return shmemAsmPtr;
 }
 
 inline __device__ void loadShmem128(uint64_t* shmemAsmPtr, uint64_t &v0, uint64_t &v1) {
   asm volatile("ld.volatile.shared.v2.u64 {%0,%1}, [%2];"
-      : "=l"(v0), "=l"(v1) : "l"(shmemAsmPtr));
+      : "=l"(v0), "=l"(v1) : "l"(shmemAsmPtr) : "memory");
 }
 
 inline __device__ void storeShmem128(uint64_t* shmemAsmPtr, uint64_t v0, uint64_t v1) {
   asm volatile("st.volatile.shared.v2.u64 [%2], {%0,%1};"
-      :: "l"(v0), "l"(v1), "l"(shmemAsmPtr));
+      :: "l"(v0), "l"(v1), "l"(shmemAsmPtr) : "memory");
 }
 
 template<typename T>
@@ -48,20 +48,20 @@ inline __device__ void loadShmemMisaligned128(T *ptr, uint64_t &v0, uint64_t &v1
       // Produce 4 bytes of sub-register type by reading 2 4-byte
       // aligned values and shifting.
       uint32_t lo, hi;
-      asm("ld.shared.b32 %0,[%1];" : "=r"(lo) : "l"(ptr4+e+0));
-      asm("ld.shared.b32 %0,[%1];" : "=r"(hi) : "l"(ptr4+e+1));
+      asm volatile("ld.shared.b32 %0,[%1];" : "=r"(lo) : "l"(ptr4+e+0) : "memory");
+      asm volatile("ld.shared.b32 %0,[%1];" : "=r"(hi) : "l"(ptr4+e+1) : "memory");
       tmp4[e] = __funnelshift_r(lo, hi, 8*(int(reinterpret_cast<uintptr_t>(ptr))%4));
     }
   }
   else if(sizeof(T) == 4) {
     #pragma unroll
     for(int e=0; e < 4; e++)
-      asm("ld.shared.b32 %0,[%1];" : "=r"(tmp4[e]) : "l"(ptr+e));
+      asm volatile("ld.shared.b32 %0,[%1];" : "=r"(tmp4[e]) : "l"(ptr+e) : "memory");
   }
   else /*sizeof(T)==8*/ {
     #pragma unroll
     for(int e=0; e < 2; e++)
-      asm("ld.shared.b64 %0,[%1];" : "=l"(tmp8[e]) : "l"(ptr+e));
+      asm volatile("ld.shared.b64 %0,[%1];" : "=l"(tmp8[e]) : "l"(ptr+e) : "memory");
   }
   v0 = tmp8[0];
   v1 = tmp8[1];
@@ -146,6 +146,9 @@ struct BytePackOf<BytePack<0>> {
 template<typename T>
 __device__ __forceinline__ typename BytePackOf<T>::Pack toPack(T value)  {
   union { typename BytePackOf<T>::Pack p; T v; };
+  // Coverity recommends the use of std::move here but, given that T is a POD
+  // scalar, a plain copy will be just as efficient.
+  // coverity[copy_assignment_call]
   v = value;
   return p;
 }
@@ -183,7 +186,7 @@ template<> __device__ __forceinline__ void st_relaxed_gpu_global<0>(uintptr_t ad
   template<> \
   __device__ __forceinline__ BytePack<bytes> ld_##space<bytes>(addr_cxx_ty addr) { \
     data_cxx_ty tmp; \
-    asm("ld." #space "." #data_ptx_ty " %0, [%1];" : "="#data_reg_ty(tmp) : #addr_reg_ty(addr)); \
+    asm volatile("ld." #space "." #data_ptx_ty " %0, [%1];" : "="#data_reg_ty(tmp) : #addr_reg_ty(addr) : "memory"); \
     BytePack<bytes> ans; \
     ans.native = tmp; \
     return ans; \
@@ -191,7 +194,7 @@ template<> __device__ __forceinline__ void st_relaxed_gpu_global<0>(uintptr_t ad
   template<> \
   __device__ __forceinline__ BytePack<bytes> ld_volatile_##space<bytes>(addr_cxx_ty addr) { \
     data_cxx_ty tmp; \
-    asm("ld.volatile." #space "." #data_ptx_ty " %0, [%1];" : "="#data_reg_ty(tmp) : #addr_reg_ty(addr)); \
+    asm volatile("ld.volatile." #space "." #data_ptx_ty " %0, [%1];" : "="#data_reg_ty(tmp) : #addr_reg_ty(addr) : "memory"); \
     BytePack<bytes> ans; \
     ans.native = tmp; \
     return ans; \
@@ -212,7 +215,7 @@ template<> __device__ __forceinline__ void st_relaxed_gpu_global<0>(uintptr_t ad
   template<> \
   __device__ __forceinline__ BytePack<bytes> ld_relaxed_gpu_global<bytes>(uintptr_t addr) { \
     data_cxx_ty tmp; \
-    asm("ld." PTX_relaxed_gpu ".global." #data_ptx_ty " %0, [%1];" : "="#data_reg_ty(tmp) : "l"(addr)); \
+    asm volatile("ld." PTX_relaxed_gpu ".global." #data_ptx_ty " %0, [%1];" : "="#data_reg_ty(tmp) : "l"(addr) : "memory"); \
     BytePack<bytes> ans; \
     ans.native = tmp; \
     return ans; \
@@ -242,18 +245,18 @@ DEFINE_ld_st__size(8, uint64_t, b64, l)
   template<> \
   __device__ __forceinline__ BytePack<16> ld_##space<16>(addr_cxx_ty addr) { \
     BytePack<16> ans; \
-    asm("ld." #space ".v2.b64 {%0,%1}, [%2];" : "=l"(ans.u64[0]), "=l"(ans.u64[1]) : #addr_reg_ty(addr)); \
+    asm volatile("ld." #space ".v2.b64 {%0,%1}, [%2];" : "=l"(ans.u64[0]), "=l"(ans.u64[1]) : #addr_reg_ty(addr) : "memory"); \
     return ans; \
   } \
   template<> \
   __device__ __forceinline__ BytePack<16> ld_volatile_##space<16>(addr_cxx_ty addr) { \
     BytePack<16> ans; \
-    asm("ld.volatile." #space ".v2.b64 {%0,%1}, [%2];" : "=l"(ans.u64[0]), "=l"(ans.u64[1]) : #addr_reg_ty(addr)); \
+    asm volatile("ld.volatile." #space ".v2.b64 {%0,%1}, [%2];" : "=l"(ans.u64[0]), "=l"(ans.u64[1]) : #addr_reg_ty(addr) : "memory"); \
     return ans; \
   } \
   template<> \
   __device__ __forceinline__ void st_##space<16>(addr_cxx_ty addr, BytePack<16> value) { \
-    asm("st." #space ".v2.b64 [%0], {%1,%2};" :: #addr_reg_ty(addr), "l"(value.u64[0]), "l"(value.u64[1]) : "memory"); \
+    asm volatile("st." #space ".v2.b64 [%0], {%1,%2};" :: #addr_reg_ty(addr), "l"(value.u64[0]), "l"(value.u64[1]) : "memory"); \
   }
 DEFINE_ld_st_16__space(global, uintptr_t, l)
 DEFINE_ld_st_16__space(shared, uint32_t, r)
@@ -262,7 +265,7 @@ DEFINE_ld_st_16__space(shared, uint32_t, r)
 template<>
 __device__ __forceinline__ BytePack<16> ld_relaxed_gpu_global<16>(uintptr_t addr) {
   BytePack<16> ans;
-  asm("ld." PTX_relaxed_gpu ".global.v2.b64 {%0,%1}, [%2];" : "=l"(ans.u64[0]), "=l"(ans.u64[1]) : "l"(addr));
+  asm volatile("ld." PTX_relaxed_gpu ".global.v2.b64 {%0,%1}, [%2];" : "=l"(ans.u64[0]), "=l"(ans.u64[1]) : "l"(addr) : "memory");
   return ans;
 }
 template<>
@@ -277,33 +280,33 @@ __device__ __forceinline__ void st_relaxed_gpu_global<16>(uintptr_t addr, BytePa
 
 __device__ __forceinline__ uint64_t ld_volatile_global(uint64_t *ptr) {
   uint64_t ans;
-  asm("ld.volatile.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
+  asm volatile("ld.volatile.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)) : "memory");
   return ans;
 }
 __device__ __forceinline__ uint64_t ld_relaxed_sys_global(uint64_t *ptr) {
   uint64_t ans;
   #if __CUDA_ARCH__ >= 700
-    asm("ld.relaxed.sys.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
+    asm volatile("ld.relaxed.sys.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)) : "memory");
   #else
-    asm("ld.volatile.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
+    asm volatile("ld.volatile.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)) : "memory");
   #endif
   return ans;
 }
 __device__ __forceinline__ uint64_t ld_relaxed_gpu_global(uint64_t *ptr) {
   uint64_t ans;
   #if __CUDA_ARCH__ >= 700
-    asm("ld.relaxed.gpu.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
+    asm volatile("ld.relaxed.gpu.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)) : "memory");
   #else
-    asm("ld.volatile.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
+    asm volatile("ld.volatile.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)) : "memory");
   #endif
   return ans;
 }
 __device__ __forceinline__ uint64_t ld_acquire_sys_global(uint64_t *ptr) {
   uint64_t ans;
   #if __CUDA_ARCH__ >= 700
-    asm("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)));
+    asm volatile("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)) : "memory");
   #else
-    asm("ld.volatile.sys.global.u64 %0, [%1]; membar.gl;" : "=l"(ans) : "l"(cvta_to_global(ptr)));
+    asm volatile("ld.volatile.sys.global.u64 %0, [%1]; membar.gl;" : "=l"(ans) : "l"(cvta_to_global(ptr)) : "memory");
   #endif
   return ans;
 }

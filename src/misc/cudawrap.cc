@@ -11,7 +11,7 @@
 
 // This env var (NCCL_CUMEM_ENABLE) toggles cuMem API usage
 NCCL_PARAM(CuMemEnable, "CUMEM_ENABLE", -2);
-
+NCCL_PARAM(CuMemHostEnable, "CUMEM_HOST_ENABLE", 0);
 // Handle type used for cuMemCreate()
 CUmemAllocationHandleType ncclCuMemHandleType = CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
 
@@ -49,6 +49,14 @@ int ncclCuMemEnable() {
   return  param >= 0 ? param : (param == -2 && ncclCuMemSupported);
 }
 
+int ncclCuMemHostEnable() {
+#if CUDART_VERSION < 12020
+  return 0;
+#else
+  return ncclParamCuMemHostEnable();
+#endif
+}
+
 #define DECLARE_CUDA_PFN(symbol) PFN_##symbol pfn_##symbol = nullptr
 
 #if CUDART_VERSION >= 11030
@@ -59,6 +67,10 @@ DECLARE_CUDA_PFN(cuGetErrorString);
 DECLARE_CUDA_PFN(cuGetErrorName);
 /* enqueue.cc */
 DECLARE_CUDA_PFN(cuMemGetAddressRange);
+DECLARE_CUDA_PFN(cuLaunchKernel);
+#if CUDA_VERSION >= 11080
+DECLARE_CUDA_PFN(cuLaunchKernelEx);
+#endif
 /* proxy.cc */
 DECLARE_CUDA_PFN(cuCtxCreate);
 DECLARE_CUDA_PFN(cuCtxDestroy);
@@ -77,6 +89,7 @@ DECLARE_CUDA_PFN(cuMemRelease);
 DECLARE_CUDA_PFN(cuMemRetainAllocationHandle);
 DECLARE_CUDA_PFN(cuMemSetAccess);
 DECLARE_CUDA_PFN(cuMemUnmap);
+DECLARE_CUDA_PFN(cuMemGetAllocationPropertiesFromHandle);
 /* ncclMemAlloc/Free */
 DECLARE_CUDA_PFN(cuPointerGetAttribute);
 #if CUDA_VERSION >= 11070
@@ -103,7 +116,7 @@ bool ncclCudaLaunchBlocking = false;
 
 #if CUDART_VERSION >= 12000
 #define LOAD_SYM(symbol, ignore) do {                                   \
-    cudaDriverEntryPointQueryResult driverStatus;                       \
+    cudaDriverEntryPointQueryResult driverStatus = cudaDriverEntryPointSymbolNotFound; \
     res = cudaGetDriverEntryPoint(#symbol, (void **) (&pfn_##symbol), cudaEnableDefault, &driverStatus); \
     if (res != cudaSuccess || driverStatus != cudaDriverEntryPointSuccess) { \
       if (!ignore) {                                                    \
@@ -137,6 +150,10 @@ static ncclResult_t cudaPfnFuncLoader(void) {
   LOAD_SYM(cuCtxGetCurrent, 1);
   LOAD_SYM(cuCtxSetCurrent, 1);
   LOAD_SYM(cuCtxGetDevice, 1);
+  LOAD_SYM(cuLaunchKernel, 1);
+#if CUDA_VERSION >= 11080
+  LOAD_SYM(cuLaunchKernelEx, 1);
+#endif
 /* cuMem API support */
   LOAD_SYM(cuMemAddressReserve, 1);
   LOAD_SYM(cuMemAddressFree, 1);
@@ -149,6 +166,7 @@ static ncclResult_t cudaPfnFuncLoader(void) {
   LOAD_SYM(cuMemRetainAllocationHandle, 1);
   LOAD_SYM(cuMemSetAccess, 1);
   LOAD_SYM(cuMemUnmap, 1);
+  LOAD_SYM(cuMemGetAllocationPropertiesFromHandle, 1);
 /* ncclMemAlloc/Free */
   LOAD_SYM(cuPointerGetAttribute, 1);
 #if CUDA_VERSION >= 11070
@@ -200,6 +218,20 @@ static void initOnceFunc() {
   // Determine whether we support the cuMem APIs or not
   ncclCuMemSupported = ncclIsCuMemSupported();
 
+#if 12020 <= CUDART_VERSION && CUDART_VERSION <= 12030
+  /* To use cuMem* for host memory allocation, we need to create context on each
+   * visible device. This is workaround needed in CUDA 12.3 which is fixed in 12.4. */
+  if (ncclCuMemSupported && ncclCuMemHostEnable()) {
+    int deviceCnt, saveDevice;
+    cudaGetDevice(&saveDevice);
+    cudaGetDeviceCount(&deviceCnt);
+    for (int i = 0; i < deviceCnt; ++i) {
+      cudaSetDevice(i);
+      cudaFree(NULL);
+    }
+    cudaSetDevice(saveDevice);
+  }
+#endif
   initResult = ret;
   return;
 error:

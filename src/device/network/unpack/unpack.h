@@ -10,7 +10,7 @@
 #include "unpack_defs.h"
 
 #include "op128.h"
-#include "align.h"
+#include "bitops.h"
 #include "device.h"
 #include "common.h"
 
@@ -19,10 +19,10 @@
 inline __device__ void load64gpu(const uint64_t* ptr, uint64_t &v) {
   #if __CUDA_ARCH__ >= 700
       asm volatile("ld.relaxed.gpu.u64 {%0}, [%1];"
-      : "=l"(v) : "l"(ptr));
+      : "=l"(v) : "l"(ptr) : "memory");
   #else
       asm volatile("ld.volatile.global.u64 {%0}, [%1];"
-      : "=l"(v) : "l"(ptr));
+      : "=l"(v) : "l"(ptr) : "memory");
   #endif
 }
 
@@ -35,16 +35,16 @@ inline __device__ void ncclNetDeviceUnpackSetup(void* ohandle, const int group, 
   struct unpackNetDeviceHandle* handle = (struct unpackNetDeviceHandle*) ohandle;
   ncclShmem.groups[group].devicePlugin.unpack.g_meta[index] = handle->meta;
   ncclShmem.devicePlugin.unpack.bounce_buf = handle->bounce_buf;
-  ncclShmem.groups[group].devicePlugin.unpack.head = handle->head;
+  ncclShmem.groups[group].devicePlugin.unpack.head[index] = handle->head;
 }
 
-inline __device__ void ncclNetDeviceIncrementHead(const int group) {
-  ncclShmem.groups[group].devicePlugin.unpack.head++;
+inline __device__ void ncclNetDeviceIncrementHead(const int group, const int index) {
+  ncclShmem.groups[group].devicePlugin.unpack.head[index]++;
 }
 
-inline __device__ void ncclNetDeviceSaveHead(void* ohandle, const int group) {
+inline __device__ void ncclNetDeviceSaveHead(void* ohandle, const int group, const int index) {
   struct unpackNetDeviceHandle* handle = (struct unpackNetDeviceHandle*) ohandle;
-  handle->head = ncclShmem.groups[group].devicePlugin.unpack.head;
+  handle->head = ncclShmem.groups[group].devicePlugin.unpack.head[index];
 }
 
 template <uint8_t sz>
@@ -183,7 +183,7 @@ inline __device__ void ncclNetDeviceUnpack</*Recv=*/1>(
     // Pack data from the internal iovec to the supplied flat srcs buffer using all the threads
     // + Src is necessary in the case of accessing the user buffer directly
     ncclNetDeviceUnpackInner(tid, tidInBlock, nworkers, group /* in case they need to use split warps shared memory partitioning*/,
-        ix, ncclShmem.groups[group].srcs[ix + Src], workSize, ncclShmem.groups[group].devicePlugin.unpack.head);
+      ix, ncclShmem.groups[group].srcs[ix + Src], workSize, ncclShmem.groups[group].devicePlugin.unpack.head[ix]);
   }
 }
 
@@ -226,6 +226,8 @@ inline __device__ void ncclNetDeviceUnpackInner(
 
   int PPW = ppw(nbytes, nw);
 
+  // Coverity reports a potential overflow but in reality PPW is tiny so there's no need to store it in an uint64_t.
+  // coverity[overflow_before_widen]
   for (uint64_t meta_s = w * PPW; meta_s < meta_cnt; meta_s += nw * PPW) {
 
     uint64_t iter_meta_cnt = meta_cnt - meta_s;

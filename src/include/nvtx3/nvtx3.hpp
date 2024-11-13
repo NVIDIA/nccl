@@ -12,6 +12,11 @@
  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  *  See the License for the specific language governing permissions and
  *  limitations under the License.
+ *
+ *  Licensed under the Apache License v2.0 with LLVM Exceptions.
+ *  See https://llvm.org/LICENSE.txt for license information.
+ *
+ *  SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
  */
 
 /* Temporary helper #defines, #undef'ed at end of header */
@@ -1937,9 +1942,9 @@ class event_attributes {
         0,                              // color value
         NVTX_PAYLOAD_UNKNOWN,           // payload type
         0,                              // reserved 4B
-        0,                              // payload value (union)
+        {0},                            // payload value (union)
         NVTX_MESSAGE_UNKNOWN,           // message type
-        0                               // message value (union)
+        {0}                             // message value (union)
       }
   {
   }
@@ -2003,20 +2008,20 @@ class event_attributes {
     attributes_.messageType = m.get_type();
   }
 
-   /**
-   * @brief Variadic constructor where the first argument is a binary payload.
+  /**
+   * @brief Variadic constructor where the first argument is an extended payload.
    *
-   * Sets the value of the `EventAttribute`s message based on `m` and forwards
+   * Sets the `ullValue` of the `EventAttribute`s payload and forwards
    * the remaining variadic parameter pack to the next constructor.
    *
    */
   template <typename... Args>
-  NVTX3_CONSTEXPR_IF_CPP14 explicit event_attributes(nvtxPayloadData_t const* bpl, Args const&... args) noexcept
+  NVTX3_CONSTEXPR_IF_CPP14 explicit event_attributes(nvtxPayloadData_t const* p, Args const&... args) noexcept
     : event_attributes(args...)
   {
-    attributes_.payloadType = NVTX_PAYLOAD_TYPE_BINARY;
+    attributes_.payloadType = NVTX_PAYLOAD_TYPE_EXT;
     attributes_.reserved0 = 1; // NCCL uses only a single binary payload per event.
-    attributes_.payload.ullValue = NVTX_POINTER_AS_PAYLOAD_ULLVALUE(bpl);
+    attributes_.payload.ullValue = NVTX_POINTER_AS_PAYLOAD_ULLVALUE(p);
   }
 
   ~event_attributes() = default;

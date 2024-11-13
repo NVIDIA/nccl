@@ -7,7 +7,7 @@ all_colls =  ["Broadcast","Reduce","AllGather","ReduceScatter","AllReduce","Send
 all_redops = ["Sum","Prod","MinMax","PreMulSum","SumPostDiv"]
 all_tys =    ["i8","u8","i32","u32","i64","u64","f16","f32","f64","bf16"]
 all_protos = ["LL","LL128","SIMPLE"]
-all_algos =  ["TREE","RING","COLLNET_DIRECT","COLLNET_CHAIN","NVLS","NVLS_TREE"]
+all_algos =  ["TREE","RING","COLLNET_DIRECT","COLLNET_CHAIN","NVLS","NVLS_TREE","PAT"]
 
 ################################################################################
 # The first command line argument is the path to the directory to generate and
@@ -74,11 +74,11 @@ else:
 ################################################################################
 
 algos_of_coll = {
-  "AllGather":     ["RING","COLLNET_DIRECT","NVLS"],
-  "AllReduce":     all_algos,
+  "AllGather":     ["RING","COLLNET_DIRECT","NVLS","PAT"],
+  "AllReduce":     ["TREE","RING","COLLNET_DIRECT","COLLNET_CHAIN","NVLS","NVLS_TREE"],
   "Broadcast":     ["RING"],
   "Reduce":        ["RING"],
-  "ReduceScatter": ["RING","COLLNET_DIRECT","NVLS"],
+  "ReduceScatter": ["RING","COLLNET_DIRECT","NVLS","PAT"],
   "SendRecv":      [None]
 }
 
@@ -233,6 +233,8 @@ with open(os.path.join(gensrc, "host_table.cc"), "w") as f:
   out('#include "device.h"\n')
   out("\n")
 
+  out("extern int const ncclDevFuncIdCount = %d;\n" % len(primary_funcs))
+
   # The mapping from function rows to valid primary function ids.
   out("extern int const ncclDevFuncRowToId[] = {\n")
   index = 0
@@ -251,7 +253,10 @@ with open(os.path.join(gensrc, "host_table.cc"), "w") as f:
     cudart, _ = required_cuda(*kfn)
     sym = paste("_", "ncclDevKernel", *kfn)
     if cudart != 0: out("#if CUDART_VERSION >= %d\n" % cudart)
-    out("__global__ void %s(struct ncclDevComm*, uint64_t, struct ncclWork*);\n" % sym)
+    # __global__ below gets removed by the host compiler, which results in
+    # Coverity diagnosing a specifiers inconsistency.
+    out("// coverity[declaration]\n")
+    out("__global__ void %s(ncclDevKernelArgs4K const);\n" % sym)
     if cudart != 0: out("#endif\n")
   out("\n")
 

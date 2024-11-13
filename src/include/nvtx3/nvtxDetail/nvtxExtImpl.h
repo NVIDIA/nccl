@@ -14,7 +14,12 @@
 #define NVTX_EXT_IMPL_H
 /* ---- Include required platform headers ---- */
 
-#if defined(_WIN32) 
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <wchar.h>
+
+#if defined(_WIN32)
 
 #include <Windows.h>
 
@@ -22,27 +27,19 @@
 #include <unistd.h>
 
 #if defined(__ANDROID__)
-#include <android/api-level.h> 
+#include <android/api-level.h>
 #endif
 
 #if defined(__linux__) || defined(__CYGWIN__)
 #include <sched.h>
 #endif
 
+#include <sys/types.h>
 #include <limits.h>
 #include <dlfcn.h>
 #include <fcntl.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <sys/types.h>
-#include <unistd.h>
 #include <errno.h>
-
-#include <string.h>
-#include <sys/types.h>
 #include <pthread.h>
-#include <stdlib.h>
-#include <wchar.h>
 
 #endif
 
@@ -66,26 +63,35 @@
 #ifdef __cplusplus
 extern "C" {
 #endif /* __cplusplus */
-
-// #ifdef __GNUC__
-// #pragma GCC visibility push(hidden)
-// #endif
-
+/*
+#ifdef __GNUC__
+#pragma GCC visibility push(hidden)
+#endif
+*/
 #define NVTX_EXTENSION_FRESH 0
 #define NVTX_EXTENSION_DISABLED 1
 #define NVTX_EXTENSION_STARTING 2
 #define NVTX_EXTENSION_LOADED 3
 
-NVTX_LINKONCE_DEFINE_GLOBAL NvtxExtInitializeInjectionFunc_t NVTX_VERSIONED_IDENTIFIER(injectionFnPtr) = (NvtxExtInitializeInjectionFunc_t)0;
+/* Function slots are local to each extension */
+typedef struct nvtxExtGlobals1_t
+{
+    NvtxExtInitializeInjectionFunc_t injectionFnPtr;
+} nvtxExtGlobals1_t;
+
+NVTX_LINKONCE_DEFINE_GLOBAL nvtxExtGlobals1_t NVTX_VERSIONED_IDENTIFIER(nvtxExtGlobals1) =
+{
+    (NvtxExtInitializeInjectionFunc_t)0
+};
 
 #define NVTX_EXT_INIT_GUARD
 #include "nvtxExtInit.h"
 #undef NVTX_EXT_INIT_GUARD
-
-// #ifdef __GNUC__
-// #pragma GCC visibility pop
-// #endif
-
+/*
+#ifdef __GNUC__
+#pragma GCC visibility pop
+#endif
+*/
 #ifdef __cplusplus
 } /* extern "C" */
 #endif /* __cplusplus */

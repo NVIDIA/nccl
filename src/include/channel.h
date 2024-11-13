@@ -7,42 +7,25 @@
 #ifndef NCCL_CHANNEL_H_
 #define NCCL_CHANNEL_H_
 #include "comm.h"
+#include "utils.h"
+
+#include <algorithm>
 
 ncclResult_t initChannel(struct ncclComm* comm, int channelid);
 ncclResult_t initNvlsChannel(struct ncclComm* comm, int channelId, struct ncclComm* parent, bool share);
 ncclResult_t initCollnetChannel(struct ncclComm* comm, int channelId, struct ncclComm* parent, bool share);
 ncclResult_t freeChannel(struct ncclChannel* channel, int nRanks, int collnetNRanks, int nvlsNRanks);
-static ncclResult_t ncclChannelComputeBase(struct ncclComm* comm, int peer, int coll, int*channelBase) {
-  int p2pGroupSize = NCCL_MAX_WORK_ELEMENTS_P2P/2;
-  int peerNode = comm->rankToNode[peer];
-  int peerIndex = comm->rankToLocalRank[peer];
-  int nsteps = comm->maxLocalRanks;
-  int rankIndex = comm->rankToLocalRank[comm->rank];
-  int step, delta;
-  if (coll == ncclFuncSend) {
-    step = (nsteps + peerIndex - rankIndex)%nsteps;
-    delta = (comm->nNodes + peerNode - comm->node) % comm->nNodes;
-  } else if (coll == ncclFuncRecv) {
-    step = (nsteps + rankIndex - peerIndex)%nsteps;
-    delta = (comm->nNodes + comm->node - peerNode) % comm->nNodes;
+
+inline uint8_t ncclP2pChannelBaseForRound(struct ncclComm* comm, int p2pRound) {
+  if (comm->nNodes > 1) {
+    int nodeDelta = p2pRound/comm->maxLocalRanks;
+    int localDelta = p2pRound%comm->maxLocalRanks;
+    int base = nodeDelta*divUp(comm->maxLocalRanks, NCCL_MAX_DEV_WORK_P2P_PER_BATCH);
+    base += localDelta/NCCL_MAX_DEV_WORK_P2P_PER_BATCH;
+    return base & 0xff;
   } else {
-    return ncclInternalError;
+    return p2pRound & 0xff;
   }
-  *channelBase = comm->nNodes > 1 ? delta+(step/p2pGroupSize) : step;
-  return ncclSuccess;
-}
-
-static ncclResult_t ncclChannelComputeFromBase(struct ncclComm* comm, int base, int channelInc, int*channelId) {
-  //*channelId = (base+comm->p2pChannels[channelInc]) % comm->p2pnChannels;
-  *channelId = (comm->p2pChannels[base%comm->p2pnChannels]+channelInc) % comm->p2pnChannels;
-  return ncclSuccess;
-}
-
-static ncclResult_t ncclChannelCompute(struct ncclComm* comm, int peer, int channelInc, int coll, int*channelId) {
-  int base;
-  NCCLCHECK(ncclChannelComputeBase(comm, peer, coll, &base));
-  NCCLCHECK(ncclChannelComputeFromBase(comm, base, channelInc, channelId));
-  return ncclSuccess;
 }
 
 #endif

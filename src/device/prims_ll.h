@@ -44,10 +44,11 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
   inline __device__ uint32_t sendFlag(int i) { return NCCL_LL_FLAG(sendStep[i]+1); }
 
   inline __device__ void barrier() {
-    if (nthreads == WARP_SIZE)
+    if (nthreads == WARP_SIZE) {
       __syncwarp();
-    else
-      asm volatile ("bar.sync %1, %0;" :: "r"(nthreads), "r"(15-group));
+    } else {
+      barrier_sync(15-group, nthreads);
+    }
   }
 
   uint32_t abort = 0;
@@ -100,7 +101,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
     uint32_t data1, flag1, data2, flag2;
     int spins = 0;
     do {
-      asm("ld.volatile.global.v4.u32 {%0,%1,%2,%3}, [%4];" : "=r"(data1), "=r"(flag1), "=r"(data2), "=r"(flag2) : "l"(&src->i4));
+      asm volatile("ld.volatile.global.v4.u32 {%0,%1,%2,%3}, [%4];" : "=r"(data1), "=r"(flag1), "=r"(data2), "=r"(flag2) : "l"(&src->i4) : "memory");
       if (checkAbort(spins, 0)) break;
     } while ((flag1 != flag) || (flag2 != flag));
     uint64_t val64 = data1 + (((uint64_t)data2) << 32);
@@ -111,9 +112,11 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
   __device__ void readLLBeginAll(int offset, ncclLLFifoLine(&line)[MaxRecv]) {
     #pragma unroll
     for (int i=BeginIx; i < MaxRecv; i++) {
+      // Yes, for some template arguments this code will be unreachable.  That's fine.
+      // coverity[dead_error_line]
       if (i < fan.nrecv()) {
         union ncclLLFifoLine* src = recvPtr(i) + offset;
-        asm("ld.volatile.global.v4.u32 {%0,%1,%2,%3}, [%4];" : "=r"(line[i].data1), "=r"(line[i].flag1), "=r"(line[i].data2), "=r"(line[i].flag2) : "l"(&src->i4));
+        asm volatile("ld.volatile.global.v4.u32 {%0,%1,%2,%3}, [%4];" : "=r"(line[i].data1), "=r"(line[i].flag1), "=r"(line[i].data2), "=r"(line[i].flag2) : "l"(&src->i4) : "memory");
       }
     }
   }
@@ -122,7 +125,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
     uint32_t flag = recvFlag(i);
     int spins = 0;
     while (line[i].flag1 != flag || line[i].flag2 != flag) {
-      asm("ld.volatile.global.v4.u32 {%0,%1,%2,%3}, [%4];" : "=r"(line[i].data1), "=r"(line[i].flag1), "=r"(line[i].data2), "=r"(line[i].flag2) : "l"(&src->i4));
+      asm volatile("ld.volatile.global.v4.u32 {%0,%1,%2,%3}, [%4];" : "=r"(line[i].data1), "=r"(line[i].flag1), "=r"(line[i].data2), "=r"(line[i].flag2) : "l"(&src->i4) : "memory");
       if (checkAbort(spins, 0)) break;
     }
     uint64_t val64 = line[i].data1 + (((uint64_t)line[i].data2) << 32);
@@ -130,7 +133,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
   }
 
   __device__ void storeLL(union ncclLLFifoLine* dst, uint64_t val, uint32_t flag) {
-    asm volatile("st.volatile.global.v4.u32 [%0], {%1,%2,%3,%4};" :: "l"(&dst->i4), "r"((uint32_t)val), "r"(flag), "r"((uint32_t)(val >> 32)), "r"(flag));
+    asm volatile("st.volatile.global.v4.u32 [%0], {%1,%2,%3,%4};" :: "l"(&dst->i4), "r"((uint32_t)val), "r"(flag), "r"((uint32_t)(val >> 32)), "r"(flag) : "memory");
   }
 
   static constexpr int EltPerLine = sizeof(uint64_t)/sizeof(T);
@@ -144,13 +147,13 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
       uint64_t u8;
     };
     if(sizeof(U) == 1)
-      asm("ld.volatile.global.b8 %0,[%1];" : "=r"(u4) : "l"(src));
+      asm volatile("ld.volatile.global.b8 %0,[%1];" : "=r"(u4) : "l"(src) : "memory");
     else if(sizeof(U) == 2)
-      asm("ld.volatile.global.b16 %0,[%1];" : "=h"(u2) : "l"(src));
+      asm volatile("ld.volatile.global.b16 %0,[%1];" : "=h"(u2) : "l"(src) : "memory");
     else if(sizeof(U) == 4)
-      asm("ld.volatile.global.b32 %0,[%1];" : "=r"(u4) : "l"(src));
+      asm volatile("ld.volatile.global.b32 %0,[%1];" : "=r"(u4) : "l"(src) : "memory");
     else
-      asm("ld.volatile.global.b64 %0,[%1];" : "=l"(u8) : "l"(src));
+      asm volatile("ld.volatile.global.b64 %0,[%1];" : "=l"(u8) : "l"(src) : "memory");
     return elt;
   }
 
@@ -164,13 +167,13 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
     };
     elt = val;
     if(sizeof(U) == 1)
-      asm("st.volatile.global.b8 [%0],%1;" :: "l"(dst), "r"(u4));
+      asm volatile("st.volatile.global.b8 [%0],%1;" :: "l"(dst), "r"(u4) : "memory");
     else if(sizeof(U) == 2)
-      asm("st.volatile.global.b16 [%0],%1;" :: "l"(dst), "h"(u2));
+      asm volatile("st.volatile.global.b16 [%0],%1;" :: "l"(dst), "h"(u2) : "memory");
     else if(sizeof(U) == 4)
-      asm("st.volatile.global.b32 [%0],%1;" :: "l"(dst), "r"(u4));
+      asm volatile("st.volatile.global.b32 [%0],%1;" :: "l"(dst), "r"(u4) : "memory");
     else
-      asm("st.volatile.global.b64 [%0],%1;" :: "l"(dst), "l"(u8));
+      asm volatile("st.volatile.global.b64 [%0],%1;" :: "l"(dst), "l"(u8) : "memory");
   }
 
   struct DataLoader {
@@ -193,6 +196,8 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
       else {
         #pragma unroll
         for(int i=0; i < EltPerLine; i++) {
+          // Yes, for some template arguments this code will be unreachable.  That's fine.
+          // coverity[dead_error_line]
           if(i==0 || i < eltN)
             elt[i] = load(src + i);
         }
@@ -217,6 +222,8 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
     u8 = val;
     #pragma unroll
     for(int i=0; i < EltPerLine; i++) {
+      // Yes, for some template arguments this code will be unreachable.  That's fine.
+      // coverity[dead_error_line]
       if (i==0 || i < eltN)
         //store(dst+i, elt[i]);
         dst[i] = elt[i];
@@ -260,6 +267,8 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
       if (RECV) {
         data = !SRC ? peerData : applyReduce(redOp, peerData, data);
         #pragma unroll MaxRecv
+        // Yes, for some template arguments this code will be unreachable.  That's fine.
+        // coverity[dead_error_line]
         for (int i=1; i < MaxRecv && i < fan.nrecv(); i++) {
           peerData = readLLFinish(offset, line, i);
           data = applyReduce(redOp, peerData, data);
@@ -270,6 +279,8 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
 
       // Send : inter-node, then intra-node, then local
       if (SEND) {
+        // Yes, for some template arguments this code will be unreachable.  That's fine.
+        // coverity[dead_error_line]
         for (int i=1; i < MaxSend && i < fan.nsend(); i++)
           storeLL(sendPtr(i)+offset, data, sendFlag(i));
         storeLL(sendPtr(0)+offset, data, sendFlag(0));
@@ -287,6 +298,8 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
       postRecv();
     }
     if (SEND) {
+      // Yes, for some template arguments this code will be unreachable.  That's fine.
+      // coverity[dead_error_line]
       for (int i=1; i < MaxSend && i < fan.nsend(); i++)
         incSend(i, offset);
       incSend(0, offset);
@@ -323,7 +336,8 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
   __device__  Primitives(
       const int tid, const int nthreads, int const *recvPeers, int const *sendPeers,
       void const *inputBuf, void *outputBuf, uint64_t redOpArg, uint8_t group=0,
-      uint8_t connIndexRecv=0, uint8_t connIndexSend=0, struct ncclWorkElem* e = nullptr, struct ncclWorkElemP2p* p2p = nullptr, int stepSize_=0
+      uint8_t connIndexRecv=0, uint8_t connIndexSend=0, struct ncclDevWorkColl* e = nullptr,
+      bool ipcReg = false, bool netReg = false, int stepSize_ = 0
     ):
     redOp(redOpArg),
     tid(tid), nthreads(nthreads), wid(tid%WARP_SIZE), group(group),
@@ -332,16 +346,23 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
     // If we are going to support oneshot collNet + LL, then we would need to add connector index here
     int nrecv=0, nsend=0;
     // We compare with Fan::MaxRecv here because this->MaxRecv is always at least 1
+    // Yes, for some template arguments this code will be unreachable.  That's fine.
+    // coverity[dead_error_line]
     while (nrecv < Fan::MaxRecv && recvPeers[nrecv] >= 0) {
       loadRecvConn(&channel->peers[recvPeers[nrecv]]->recv[connIndexRecv], nrecv);
       nrecv++;
     }
+    // coverity[dead_error_line]
     while (nsend < MaxSend && sendPeers[nsend] >= 0) {
       loadSendConn(&channel->peers[sendPeers[nsend]]->send[connIndexSend], nsend);
       nsend++;
     }
     this->fan = Fan(nrecv, nsend);
+    // Coverity reports recvConn and sendConn being possibly NULL at this point but that won't actually
+    // happen given the two "while" loops just above.
+    // coverity[var_deref_model:FALSE]
     loadRecvSync();
+    // coverity[var_deref_model:FALSE]
     loadSendSync();
     setDataPtrs(inputBuf, outputBuf);
   }

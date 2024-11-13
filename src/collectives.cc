@@ -9,6 +9,70 @@
 #include "enqueue.h"
 #include "nccl.h"
 
+const char* ncclFuncToString(ncclFunc_t fn) {
+  switch (fn) {
+  case ncclFuncAllGather: return "AllGather";
+  case ncclFuncAllReduce: return "AllReduce";
+  case ncclFuncBroadcast: return "Broadcast";
+  case ncclFuncRecv: return "Recv";
+  case ncclFuncReduce: return "Reduce";
+  case ncclFuncReduceScatter: return "ReduceScatter";
+  case ncclFuncSendRecv: return "SendRecv";
+  case ncclFuncSend: return "Send";
+  default: return "Invalid";
+  }
+}
+
+const char* ncclDevRedOpToString(ncclDevRedOp_t op) {
+  switch (op) {
+  case ncclDevSum: return "Sum";
+  case ncclDevProd: return "Prod";
+  case ncclDevMinMax: return "MinMax";
+  case ncclDevPreMulSum: return "PreMulSum";
+  case ncclDevSumPostDiv: return "SumPostDiv";
+  default: return "Unknown";
+  }
+}
+
+const char* ncclDatatypeToString(ncclDataType_t type) {
+  switch (type) {
+  case ncclInt8: return "ncclInt8";
+  case ncclInt32: return "ncclInt32";
+  case ncclUint32: return "ncclUint32";
+  case ncclInt64: return "ncclInt64";
+  case ncclUint64: return "ncclUint64";
+  case ncclFloat16: return "ncclFloat16";
+  case ncclFloat32: return "ncclFloat32";
+  case ncclFloat64: return "ncclFloat64";
+#if defined(__CUDA_BF16_TYPES_EXIST__)
+  case ncclBfloat16: return "ncclBfloat16";
+#endif
+  default: return "Unknown";
+  }
+}
+
+const char* ncclAlgoToString(int algo) {
+  switch (algo) {
+  case NCCL_ALGO_TREE: return "TREE";
+  case NCCL_ALGO_RING: return "RING";
+  case NCCL_ALGO_COLLNET_DIRECT: return "COLLNET_DIRECT";
+  case NCCL_ALGO_COLLNET_CHAIN: return "COLLNET_CHAIN";
+  case NCCL_ALGO_NVLS: return "NVLS";
+  case NCCL_ALGO_NVLS_TREE: return "NVLS_TREE";
+  case NCCL_ALGO_PAT: return "PAT";
+  default: return "Unknown";
+  }
+}
+
+const char* ncclProtoToString(int proto) {
+  switch (proto) {
+  case NCCL_PROTO_LL: return "LL";
+  case NCCL_PROTO_LL128: return "LL128";
+  case NCCL_PROTO_SIMPLE: return "SIMPLE";
+  default: return "Unknown";
+  }
+}
+
 NCCL_API(ncclResult_t, ncclAllGather, const void* sendbuff, void* recvbuff, size_t sendcount,
     ncclDataType_t datatype, ncclComm_t comm, cudaStream_t stream);
 ncclResult_t ncclAllGather(const void* sendbuff, void* recvbuff, size_t sendcount,

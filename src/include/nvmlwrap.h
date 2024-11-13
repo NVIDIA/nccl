@@ -253,6 +253,38 @@ typedef nvmlGpuFabricInfo_v2_t nvmlGpuFabricInfoV_t;
 */
 #define nvmlGpuFabricInfo_v2 NVML_STRUCT_VERSION(GpuFabricInfo, 2)
 
+/**
+ * Confidential Compute Feature Status values
+ */
+#define NVML_CC_SYSTEM_FEATURE_DISABLED 0
+#define NVML_CC_SYSTEM_FEATURE_ENABLED  1
+
+typedef struct nvmlConfComputeSystemState_st {
+    unsigned int environment;
+    unsigned int ccFeature;
+    unsigned int devToolsMode;
+} nvmlConfComputeSystemState_t;
+
+/**
+ * Confidential Compute Multigpu mode values
+ */
+#define NVML_CC_SYSTEM_MULTIGPU_NONE 0
+#define NVML_CC_SYSTEM_MULTIGPU_PROTECTED_PCIE 1
+
+/**
+ * Confidential Compute System settings
+ */
+typedef struct {
+    unsigned int version;
+    unsigned int environment;
+    unsigned int ccFeature;
+    unsigned int devToolsMode;
+    unsigned int multiGpuMode;
+} nvmlSystemConfComputeSettings_v1_t;
+
+typedef nvmlSystemConfComputeSettings_v1_t nvmlSystemConfComputeSettings_t;
+#define nvmlSystemConfComputeSettings_v1 NVML_STRUCT_VERSION(SystemConfComputeSettings, 1)
+
 /* End of nvml.h */
 #endif // NCCL_NVML_DIRECT
 
@@ -267,6 +299,11 @@ struct ncclNvmlDevicePairInfo {
 extern int ncclNvmlDeviceCount;
 extern ncclNvmlDeviceInfo ncclNvmlDevices[ncclNvmlMaxDevices];
 extern ncclNvmlDevicePairInfo ncclNvmlDevicePairs[ncclNvmlMaxDevices][ncclNvmlMaxDevices];
+
+struct ncclNvmlCCStatus {
+    bool CCEnabled;
+    bool multiGpuCCEnabled;
+};
 
 // All ncclNvmlFoo() functions call ncclNvmlEnsureInitialized() implicitly.
 // Outsiders need only call it if they want to inspect the ncclNvml global
@@ -283,5 +320,6 @@ ncclResult_t ncclNvmlDeviceGetCudaComputeCapability(nvmlDevice_t device, int* ma
 ncclResult_t ncclNvmlDeviceGetP2PStatus(nvmlDevice_t device1, nvmlDevice_t device2, nvmlGpuP2PCapsIndex_t p2pIndex, nvmlGpuP2PStatus_t* p2pStatus);
 ncclResult_t ncclNvmlDeviceGetFieldValues(nvmlDevice_t device, int valuesCount, nvmlFieldValue_t *values);
 ncclResult_t ncclNvmlDeviceGetGpuFabricInfoV(nvmlDevice_t device, nvmlGpuFabricInfoV_t *gpuFabricInfo);
+ncclResult_t ncclNvmlGetCCStatus(struct ncclNvmlCCStatus *status);
 
 #endif // End include guard

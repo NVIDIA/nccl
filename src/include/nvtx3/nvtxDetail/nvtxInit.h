@@ -14,11 +14,11 @@
 
 /* Prefer macros over inline functions to reduce symbol resolution at link time */
 
-#if defined(_WIN32) 
+#if defined(_WIN32)
 #define NVTX_PATHCHAR   wchar_t
 #define NVTX_STR(x)     L##x
 #define NVTX_GETENV     _wgetenv
-#define NVTX_BUFSIZE    MAX_PATH
+#define NVTX_BUFSIZE    16384
 #define NVTX_DLLHANDLE  HMODULE
 #define NVTX_DLLOPEN(x) LoadLibraryW(x)
 #define NVTX_DLLFUNC    GetProcAddress
@@ -31,7 +31,7 @@
 #define NVTX_PATHCHAR   char
 #define NVTX_STR(x)     x
 #define NVTX_GETENV     getenv
-#define NVTX_BUFSIZE    PATH_MAX
+#define NVTX_BUFSIZE    16384
 #define NVTX_DLLHANDLE  void*
 #define NVTX_DLLOPEN(x) dlopen(x, RTLD_LAZY)
 #define NVTX_DLLFUNC    dlsym

@@ -78,6 +78,9 @@ extern const char* topoLinkTypeStr[];
 // Connection through the network
 #define PATH_NET 8
 
+// New type of path which should precede PATH_PIX
+#define PATH_PORT PATH_NVL
+
 // Disconnected
 #define PATH_DIS 9
 extern const char* topoPathTypeStr[];
@@ -106,6 +109,7 @@ struct ncclTopoLinkList {
 #define NCCL_TOPO_ID_LOCAL_ID_MASK 0x00ffffffffffffff
 #define NCCL_TOPO_ID_SYSTEM_ID(id) (id >> 56)
 #define NCCL_TOPO_ID_LOCAL_ID(id) (id & NCCL_TOPO_ID_LOCAL_ID_MASK)
+#define NCCL_TOPO_LOCAL_NIC_ID(numaid, busid) (((int64_t)numaid << 56) + busid)
 #define NCCL_TOPO_ID(systemid, localid) (((int64_t)systemid << 56) + (localid & NCCL_TOPO_ID_LOCAL_ID_MASK))
 
 struct ncclTopoNode {

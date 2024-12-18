@@ -89,7 +89,7 @@ struct RunWorkColl<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_PAT, NCCL_PROTO_SI
     T *inputBuf = (T*)work->sendbuff;
     T *outputBuf = (T*)work->recvbuff;
     Primitives<T, RedOp, FanSymmetric<1>, 0, Proto, 0> prims
-      (tid, nthreads, NULL, NULL, inputBuf, outputBuf, work->redOpArg, 0*Proto::MaxGroupWidth, 0, 0, nullptr, false, false, 0, primsModePatRs);
+      (tid, nthreads, NULL, NULL, inputBuf, outputBuf, work->redOpArg, 0*Proto::MaxGroupWidth, 0, 0, nullptr, nullptr, 0, primsModePatRs);
 
     PatRSAlgorithm<T> patAlgo(chunkCount*sizeof(T), NCCL_STEPS, channelOffset, channelOffset + channelCount, count, chunkCount, rank, nranks);
     int last = 0;
@@ -137,6 +137,7 @@ struct RunWorkColl<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_S
           nelem = min(chunkCount, channelCount - elemOffset);
           prims.scatter(offset, nvls->nHeads * count, nelem, count, -1, 0);
         }
+        // coverity[overrun-call] => Coverity think prims.index can be greater than 1
       } else if (tid < tidEndReduce) {
         // Reduce through NVLS
         using Proto = ProtoSimple<1, 1, COLL_UNROLL, 1, 0>;
@@ -206,10 +207,10 @@ struct RunWorkColl<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NC
       int nRails = direct->nHeads;
       int part = ncclShmem.channelId - work->channelLo;
       void* inbuf = (void*)work->sendbuff;
-      ssize_t sizePerRank = work->collnet.count;
+      ssize_t countPerRank = work->collnet.count;
 
-      ssize_t railAllBeg = min(railGridOffset + part*chunkSize, nNodes*sizePerRank);
-      ssize_t railAllEnd = min(railAllBeg + chunkSize, nNodes*sizePerRank);
+      ssize_t railAllBeg = min(railGridOffset + part*chunkSize, nNodes*countPerRank);
+      ssize_t railAllEnd = min(railAllBeg + chunkSize, nNodes*countPerRank);
       int railAllSize = railAllEnd - railAllBeg;
       if (tid < nDsts) dstSizes[tid] = railAllSize;
 
@@ -222,15 +223,15 @@ struct RunWorkColl<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NC
         if (rail == nRails) rail = 0;
       }
       do {
-        int node = railAllBeg/sizePerRank;
+        int node = railAllBeg/countPerRank;
         int railAllOffset = 0;
         while (railAllOffset < railAllSize) {
-          ssize_t railOneBeg = node*sizePerRank;
-          ssize_t railOneEnd = railOneBeg + sizePerRank;
+          ssize_t railOneBeg = node*countPerRank;
+          ssize_t railOneEnd = railOneBeg + countPerRank;
           ssize_t railOneOffset = (railAllBeg+railAllOffset) - railOneBeg;
           int delta = min(railAllEnd, railOneEnd) - (railAllBeg+railAllOffset);
           int rank = ncclShmem.comm.collNetDenseToUserRank[node*nRails + rail];
-          ssize_t userOneBeg = rank*sizePerRank + railOneOffset;
+          ssize_t userOneBeg = rank*countPerRank + railOneOffset;
           if (nDsts != 0) {
             reduceCopy<ncclCollUnroll(), RedOp, T,
                      /*MultimemSrcs=*/0, 1+MinSrcs, 1+MaxSrcs,
@@ -239,7 +240,7 @@ struct RunWorkColl<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NC
             (tid, tn, work->redOpArg, &work->redOpArg, false,
              /*nSrcs=*/1+nSrcs, [=]__device__(int s) {
                return s==0 ? (T*)inbuf + userOneBeg
-                           : work->regUsed && (recvDirectFlag & NCCL_DIRECT_READ)
+                           : work->regUsed && (recvDirectFlag & NCCL_P2P_READ)
                            ? (T*)srcPtrs[s-1] + userOneBeg
                            : (T*)srcPtrs[s-1] + railAllOffset;
              },
@@ -264,7 +265,8 @@ struct RunWorkColl<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NC
     struct ncclDirect* direct = &ncclShmem.channel.collnetDirect;
     int const &nNodes = ncclShmem.comm.nNodes;
     ssize_t chunkSize = int(work->collnet.chunkCount);
-    ssize_t sizePerRank = work->collnet.count;
+    ssize_t countPerRank = work->collnet.count;
+    const int hasDn = (direct->down[0] >= 0) ? 1 : 0;
 
     if (direct->out == -1) __trap();
     bool isMultiRail = (direct->nHeads > 1);
@@ -281,15 +283,15 @@ struct RunWorkColl<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NC
     int tn = nWarps1*WARP_SIZE;
     if (tid < tn) {
       // Phase 1: Scatter inputs to peers
-      Primitives<T, RedOp, FanAsymmetric<0, NCCL_MAX_DIRECT_ARITY>, /*Direct=*/1, Proto, 0>
+      Primitives<T, RedOp, FanAsymmetric<0, NCCL_MAX_DIRECT_ARITY>, /*Direct=*/0, Proto, 0>
         prims(tid, tn, nullptr, direct->heads+1, work->sendbuff, nullptr,
-              work->redOpArg, 0*Proto::MaxGroupWidth, 1, 1, work);
-      for (ssize_t railGridOffset=0; railGridOffset < nNodes*sizePerRank; railGridOffset += nChannels*chunkSize) {
+              work->redOpArg, 0*Proto::MaxGroupWidth, 1, 1);
+      for (ssize_t railGridOffset=0; railGridOffset < nNodes*countPerRank; railGridOffset += nChannels*chunkSize) {
         Scatterer</*ReduceSendNotRecv=*/true> scat;
         scat.work = work;
         scat.chunkSize = chunkSize;
         scat.railGridOffset = railGridOffset;
-        prims.template process</*Recv=*/0, /*Send=*/1>(scat, NCCL_DIRECT_READ, 0);
+        prims.template process</*Recv=*/0, /*Send=*/1>(scat, 0, 0);
       }
       return;
     }
@@ -297,23 +299,22 @@ struct RunWorkColl<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NC
 
     tn = nWarps2*WARP_SIZE;
     if (tid < tn) {
-      if (work->regUsed == NCCL_COLLNET_REG_BUFFER) {
+      if (work->netRegUsed && !hasDn) {
         if (tid == 0) {
-          int steps = (int)divUp(nNodes * sizePerRank * sizeof(T), NCCL_MAX_COLLNET_SIZE);
-          Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_DIRECT_ARITY, 1>, /*Direct=*/0, Proto, 0>::sendPeerNotify(direct->out, 1, steps);
+          Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_DIRECT_ARITY, 1>, /*Direct=*/0, Proto, 0>::sendPeerNotify(direct->out, 1, 1);
         }
         __syncwarp();
       } else {
         // Phase 2: Reduce from peers + local input -> send to network
-        Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_DIRECT_ARITY, 1>, /*Direct=*/1, Proto, 0>
+        Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_DIRECT_ARITY, 1>, /*Direct=*/0, Proto, 0>
           prims(tid, tn, direct->heads + 1, &direct->out, nullptr, nullptr,
-            work->redOpArg, 1 * Proto::MaxGroupWidth, 1, 1, work);
-        for (ssize_t railGridOffset = 0; railGridOffset < nNodes * sizePerRank; railGridOffset += nChannels * chunkSize) {
+            work->redOpArg, 1 * Proto::MaxGroupWidth, 1, 1);
+        for (ssize_t railGridOffset = 0; railGridOffset < nNodes * countPerRank; railGridOffset += nChannels * chunkSize) {
           Scatterer</*ReduceSendNotRecv=*/false> scat;
           scat.work = work;
           scat.chunkSize = chunkSize;
           scat.railGridOffset = railGridOffset;
-          prims.template process</*Recv=*/1, /*Send=*/1>(scat, 0, NCCL_DIRECT_READ);
+          prims.template process</*Recv=*/1, /*Send=*/1>(scat, 0, 0);
         }
       }
       return;
@@ -322,9 +323,9 @@ struct RunWorkColl<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NC
 
     tn = nWarps3*WARP_SIZE;
     if (tid < tn) {
-      if (work->regUsed == NCCL_COLLNET_REG_BUFFER) {
+      if (work->netRegUsed) {
         if (tid == 0) {
-          int steps = (int)divUp(nNodes * sizePerRank * sizeof(T), NCCL_MAX_COLLNET_SIZE);
+          int steps = hasDn ? (int)divUp(nNodes * countPerRank, nChannels * chunkSize) : 1;
           Primitives<T, RedOp, FanAsymmetric<1, 0>, /*Direct=*/0, Proto, 0>::recvPeerNotify(direct->out, 0, steps);
         }
         __syncwarp();
@@ -333,11 +334,11 @@ struct RunWorkColl<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NC
         Primitives<T, RedOp, FanAsymmetric<1, 0>, /*Direct=*/0, Proto, 0>
           prims(tid, tn, &direct->out, nullptr, nullptr, work->recvbuff,
             work->redOpArg, 2 * Proto::MaxGroupWidth, 0, 0);
-        for (ssize_t railGridOffset = 0; railGridOffset < nNodes * sizePerRank; railGridOffset += nChannels * chunkSize) {
+        for (ssize_t railGridOffset = 0; railGridOffset < nNodes * countPerRank; railGridOffset += nChannels * chunkSize) {
           ssize_t railAllBeg = railGridOffset + part * chunkSize;
-          ssize_t railAllEnd = min(railAllBeg + chunkSize, nNodes * sizePerRank);
-          ssize_t railOneBeg = ncclShmem.comm.node * sizePerRank;
-          ssize_t railOneEnd = railOneBeg + sizePerRank;
+          ssize_t railAllEnd = min(railAllBeg + chunkSize, nNodes * countPerRank);
+          ssize_t railOneBeg = ncclShmem.comm.node * countPerRank;
+          ssize_t railOneEnd = railOneBeg + countPerRank;
           ssize_t beg = max(railAllBeg, railOneBeg);
           ssize_t end = min(railAllEnd, railOneEnd);
           prims.recv(beg - railOneBeg, max(ssize_t(0), end - beg), /*postOp=*/true);

@@ -13,6 +13,7 @@
 #include "common.h"
 #include "err.h"
 
+#include "profiler_v2.h"
 #include "profiler_v1.h"
 
 #endif // end include guard

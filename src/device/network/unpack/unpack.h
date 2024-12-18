@@ -33,17 +33,21 @@ inline __device__ void load64gpu(const uint64_t* ptr, uint64_t &v) {
 // Map internal association of handle with group and peer index (called once at init time)
 inline __device__ void ncclNetDeviceUnpackSetup(void* ohandle, const int group, const int index) {
   struct unpackNetDeviceHandle* handle = (struct unpackNetDeviceHandle*) ohandle;
+  // coverity[index_parm:FALSE]
   ncclShmem.groups[group].devicePlugin.unpack.g_meta[index] = handle->meta;
   ncclShmem.devicePlugin.unpack.bounce_buf = handle->bounce_buf;
+  // coverity[index_parm:FALSE]
   ncclShmem.groups[group].devicePlugin.unpack.head[index] = handle->head;
 }
 
 inline __device__ void ncclNetDeviceIncrementHead(const int group, const int index) {
+  // coverity[index_parm:FALSE]
   ncclShmem.groups[group].devicePlugin.unpack.head[index]++;
 }
 
 inline __device__ void ncclNetDeviceSaveHead(void* ohandle, const int group, const int index) {
   struct unpackNetDeviceHandle* handle = (struct unpackNetDeviceHandle*) ohandle;
+  // coverity[index_parm:FALSE]
   handle->head = ncclShmem.groups[group].devicePlugin.unpack.head[index];
 }
 

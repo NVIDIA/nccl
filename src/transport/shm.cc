@@ -454,6 +454,7 @@ static ncclResult_t shmRecvProxyProgress(struct ncclProxyState* proxyState, stru
 }
 
 static ncclResult_t shmSendProxySetup(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState, void* reqBuff, int reqSize, void* respBuff, int respSize, int* done) {
+  ncclResult_t result = ncclSuccess;
   struct shmRequest* req = (struct shmRequest*)reqBuff;
   /* check message size */
   if (reqSize != sizeof(struct shmRequest)) return ncclInternalError;
@@ -463,13 +464,18 @@ static ncclResult_t shmSendProxySetup(struct ncclProxyConnection* connection, st
   struct shmProxyInfo* proxyInfo;
 
   NCCLCHECK(ncclCalloc(&proxyInfo, 1));
-  NCCLCHECK(ncclShmAllocateShareableBuffer(proxyState->tpRank, req->size, req->legacy, &proxyInfo->desc, &info->buf.hptr, &info->buf.dptr));
+  NCCLCHECKGOTO(ncclShmAllocateShareableBuffer(proxyState->tpRank, req->size, req->legacy, &proxyInfo->desc, &info->buf.hptr, &info->buf.dptr), result, fail);
   memcpy(&info->desc, &proxyInfo->desc, sizeof(ncclShmIpcDesc_t));
   connection->transportResources = proxyInfo;
-  return ncclSuccess;
+exit:
+  return result;
+fail:
+  free(proxyInfo);
+  goto exit;
 }
 
 static ncclResult_t shmRecvProxySetup(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState, void* reqBuff, int reqSize, void* respBuff, int respSize, int* done) {
+  ncclResult_t result = ncclSuccess;
   struct shmRequest* req = (struct shmRequest*)reqBuff;
   /* check message size */
   if (reqSize != sizeof(struct shmRequest)) return ncclInternalError;
@@ -479,10 +485,14 @@ static ncclResult_t shmRecvProxySetup(struct ncclProxyConnection* connection, st
   struct shmProxyInfo* proxyInfo;
 
   NCCLCHECK(ncclCalloc(&proxyInfo, 1));
-  NCCLCHECK(ncclShmAllocateShareableBuffer(proxyState->tpRank, req->size, req->legacy, &proxyInfo->desc, &info->buf.hptr, &info->buf.dptr));
+  NCCLCHECKGOTO(ncclShmAllocateShareableBuffer(proxyState->tpRank, req->size, req->legacy, &proxyInfo->desc, &info->buf.hptr, &info->buf.dptr), result, fail);
   memcpy(&info->desc, &proxyInfo->desc, sizeof(ncclShmIpcDesc_t));
   connection->transportResources = proxyInfo;
-  return ncclSuccess;
+exit:
+  return result;
+fail:
+  free(proxyInfo);
+  goto exit;
 }
 
 static void initCeOperation() {
@@ -534,7 +544,7 @@ ncclResult_t ncclShmAllocateShareableBuffer(int tpProxyRank, size_t size, bool l
   } else {
     char shmPath[SHM_PATH_MAX] = { '\0' };
     desc->shmli.shmSize = size;
-    NCCLCHECK(ncclShmOpen(shmPath, size, hptr, dptr, 1, &desc->shmli.handle));
+    NCCLCHECK(ncclShmOpen(shmPath, sizeof(shmPath), size, hptr, dptr, 1, &desc->shmli.handle));
     memcpy(desc->shmli.shmSuffix, shmPath + sizeof("/dev/shm/nccl-") - 1, sizeof(desc->shmli.shmSuffix));
     desc->legacy = true;
     INFO(NCCL_SHM, "MMAP allocated shareable host buffer %s size %zi ptr %p", shmPath, desc->shmli.shmSize, *hptr);
@@ -542,7 +552,7 @@ ncclResult_t ncclShmAllocateShareableBuffer(int tpProxyRank, size_t size, bool l
 #else /* CUDART_VERSION >= 12020 */
   char shmPath[SHM_PATH_MAX] = { '\0' };
   desc->shmli.shmSize = size;
-  NCCLCHECK(ncclShmOpen(shmPath, size, hptr, dptr, 1, &desc->shmli.handle));
+  NCCLCHECK(ncclShmOpen(shmPath, sizeof(shmPath), size, hptr, dptr, 1, &desc->shmli.handle));
   memcpy(desc->shmli.shmSuffix, shmPath + sizeof("/dev/shm/nccl-") - 1, sizeof(desc->shmli.shmSuffix));
   desc->legacy = true;
   INFO(NCCL_SHM, "MMAP allocated shareable host buffer %s size %zi ptr %p", shmPath, size, *hptr);
@@ -618,15 +628,15 @@ ncclResult_t ncclShmImportShareableBuffer(struct ncclComm *comm, ncclShmIpcDesc_
     INFO(NCCL_SHM, "CUMEM imported shareable host buffer from tpProxyRank %d size %zi ptr %p, granularity %ld", desc->shmci.tpProxyRank, desc->shmci.size, descOut->shmci.ptr, granularity);
   } else {
     char shmPath[SHM_PATH_MAX];
-    sprintf(shmPath, "/dev/shm/nccl-%s", desc->shmli.shmSuffix);
-    NCCLCHECK(ncclShmOpen(shmPath, desc->shmli.shmSize, hptr, dptr, -1, &descOut->shmli.handle));
+    snprintf(shmPath, sizeof(shmPath), "/dev/shm/nccl-%s", desc->shmli.shmSuffix);
+    NCCLCHECK(ncclShmOpen(shmPath, sizeof(shmPath), desc->shmli.shmSize, hptr, dptr, -1, &descOut->shmli.handle));
     descOut->legacy = true;
     INFO(NCCL_SHM, "MMAP imported shareable host buffer %s size %zi ptr %p", shmPath, desc->shmli.shmSize, *hptr);
   }
 #else /* CUDART_VERSION >= 12020 */
   char shmPath[SHM_PATH_MAX];
-  sprintf(shmPath, "/dev/shm/nccl-%s", desc->shmli.shmSuffix);
-  NCCLCHECK(ncclShmOpen(shmPath, desc->shmli.shmSize, hptr, dptr, -1, &descOut->shmli.handle));
+  snprintf(shmPath, sizeof(shmPath), "/dev/shm/nccl-%s", desc->shmli.shmSuffix);
+  NCCLCHECK(ncclShmOpen(shmPath, sizeof(shmPath), desc->shmli.shmSize, hptr, dptr, -1, &descOut->shmli.handle));
   descOut->legacy = true;
   INFO(NCCL_SHM, "MMAP imported shareable host buffer %s size %zi ptr %p", shmPath, desc->shmli.shmSize, *hptr);
 #endif

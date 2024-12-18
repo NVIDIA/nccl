@@ -44,9 +44,9 @@ const char* ncclDatatypeToString(ncclDataType_t type) {
   case ncclFloat16: return "ncclFloat16";
   case ncclFloat32: return "ncclFloat32";
   case ncclFloat64: return "ncclFloat64";
-#if defined(__CUDA_BF16_TYPES_EXIST__)
   case ncclBfloat16: return "ncclBfloat16";
-#endif
+  case ncclFloat8e4m3: return "ncclFloat8e4m3";
+  case ncclFloat8e5m2: return "ncclFloat8e5m2";
   default: return "Unknown";
   }
 }
@@ -87,8 +87,7 @@ ncclResult_t ncclAllGather(const void* sendbuff, void* recvbuff, size_t sendcoun
   struct ncclInfo info = { ncclFuncAllGather, "AllGather",
     sendbuff, recvbuff, sendcount, datatype, ncclSum, 0, comm, stream, /* Args */
     ALLGATHER_CHUNKSTEPS, ALLGATHER_SLICESTEPS };
-  NCCLCHECK(ncclEnqueueCheck(&info));
-  return ncclSuccess;
+  return ncclEnqueueCheck(&info);
 }
 
 NCCL_API(ncclResult_t, ncclAllReduce, const void* sendbuff, void* recvbuff, size_t count,
@@ -111,8 +110,7 @@ ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
   struct ncclInfo info = { ncclFuncAllReduce, "AllReduce",
     sendbuff, recvbuff, count, datatype, op, 0, comm, stream, /* Args */
     ALLREDUCE_CHUNKSTEPS, ALLREDUCE_SLICESTEPS };
-  NCCLCHECK(ncclEnqueueCheck(&info));
-  return ncclSuccess;
+  return ncclEnqueueCheck(&info);
 }
 
 NCCL_API(ncclResult_t, ncclBroadcast, const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype, int root,
@@ -133,16 +131,14 @@ ncclResult_t ncclBroadcast(const void* sendbuff, void* recvbuff, size_t count, n
   struct ncclInfo info = { ncclFuncBroadcast, "Broadcast",
     sendbuff, recvbuff, count, datatype, ncclSum, root, comm, stream, /* Args */
     BROADCAST_CHUNKSTEPS, BROADCAST_SLICESTEPS };
-  NCCLCHECK(ncclEnqueueCheck(&info));
-  return ncclSuccess;
+  return ncclEnqueueCheck(&info);
 }
 /* Deprecated original "in place" function, similar to MPI */
 NCCL_API(ncclResult_t, ncclBcast, void* buff, size_t count, ncclDataType_t datatype, int root,
     ncclComm_t comm, cudaStream_t stream);
 ncclResult_t ncclBcast(void* buff, size_t count, ncclDataType_t datatype, int root,
     ncclComm_t comm, cudaStream_t stream) {
-  NCCLCHECK(ncclBroadcast(buff, buff, count, datatype, root, comm, stream));
-  return ncclSuccess;
+  return ncclBroadcast(buff, buff, count, datatype, root, comm, stream);
 }
 
 NCCL_API(ncclResult_t, ncclReduce, const void* sendbuff, void* recvbuff, size_t count,
@@ -166,8 +162,7 @@ ncclResult_t ncclReduce(const void* sendbuff, void* recvbuff, size_t count,
   struct ncclInfo info = { ncclFuncReduce, "Reduce",
     sendbuff, recvbuff, count, datatype, op, root, comm, stream, /* Args */
     REDUCE_CHUNKSTEPS, REDUCE_SLICESTEPS };
-  NCCLCHECK(ncclEnqueueCheck(&info));
-  return ncclSuccess;
+  return ncclEnqueueCheck(&info);
 }
 
 NCCL_API(ncclResult_t, ncclReduceScatter, const void* sendbuff, void* recvbuff, size_t recvcount,
@@ -189,8 +184,7 @@ ncclResult_t ncclReduceScatter(const void* sendbuff, void* recvbuff, size_t recv
   struct ncclInfo info = { ncclFuncReduceScatter, "ReduceScatter",
     sendbuff, recvbuff, recvcount, datatype, op, 0, comm, stream, /* Args */
     REDUCESCATTER_CHUNKSTEPS, REDUCESCATTER_SLICESTEPS };
-  NCCLCHECK(ncclEnqueueCheck(&info));
-  return ncclSuccess;
+  return ncclEnqueueCheck(&info);
 }
 
 struct NvtxParamsSendRecv {
@@ -212,12 +206,7 @@ ncclResult_t ncclSend(const void* sendbuff, size_t count, ncclDataType_t datatyp
   struct ncclInfo info = { ncclFuncSend, "Send",
     NULL, (void*)sendbuff, count, datatype, ncclSum, peer, comm, stream, /* Args */
     1, 1 };
-  ncclResult_t ret;
-  NCCLCHECK(ncclGroupStart());
-  NCCLCHECKGOTO(ncclEnqueueCheck(&info), ret, exit);
-exit:
-  NCCLCHECK(ncclGroupEnd());
-  return ret;
+  return ncclEnqueueCheck(&info);
 }
 
 NCCL_API(ncclResult_t, ncclRecv, void* recvbuff, size_t count, ncclDataType_t datatype, int peer,
@@ -230,10 +219,5 @@ ncclResult_t ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype, int
   struct ncclInfo info = { ncclFuncRecv, "Recv",
     NULL, recvbuff, count, datatype, ncclSum, peer, comm, stream, /* Args */
     1, 1 };
-  ncclResult_t ret;
-  NCCLCHECK(ncclGroupStart());
-  NCCLCHECKGOTO(ncclEnqueueCheck(&info), ret, exit);
-exit:
-  NCCLCHECK(ncclGroupEnd());
-  return ret;
+  return ncclEnqueueCheck(&info);
 }

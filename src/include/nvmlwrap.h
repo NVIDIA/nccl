@@ -302,7 +302,7 @@ extern ncclNvmlDevicePairInfo ncclNvmlDevicePairs[ncclNvmlMaxDevices][ncclNvmlMa
 
 struct ncclNvmlCCStatus {
     bool CCEnabled;
-    bool multiGpuCCEnabled;
+    bool multiGpuProtectedPCIE;
 };
 
 // All ncclNvmlFoo() functions call ncclNvmlEnsureInitialized() implicitly.

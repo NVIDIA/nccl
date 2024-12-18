@@ -16,9 +16,11 @@
 pthread_mutex_t tunerPluginLock = PTHREAD_MUTEX_INITIALIZER;
 static int tunerPluginRefCount;
 static void* tunerPluginLib = nullptr;
-static ncclTuner_v3_t* tunerSymbol = nullptr;
+static ncclTuner_v4_t* tunerSymbol = nullptr;
+static ncclTuner_v3_t* ncclTuner_v3 = nullptr;
 static ncclTuner_v2_t* ncclTuner_v2 = nullptr;
-static ncclTuner_v3_t ncclTuner_v2_as_v3;
+static ncclTuner_v4_t ncclTuner_v2_as_v4;
+static ncclTuner_v4_t ncclTuner_v3_as_v4;
 
 static int hasNvlsSupport(float** collCostTable) {
   // Requirements for support of different algorithms:
@@ -39,7 +41,20 @@ static int hasCollNetSupport(float** collCostTable) {
   return (table[NCCL_ALGO_COLLNET_CHAIN][NCCL_PROTO_SIMPLE] == NCCL_ALGO_PROTO_IGNORE) ? 0 : 1;
 }
 
-static ncclResult_t ncclTuner_v2_as_v3_getCollInfo(void* context, ncclFunc_t collType, size_t nBytes, int numPipeOps, float** collCostTable, int numAlgo __attribute__((unused)), int numProto __attribute__((unused)), int* nChannels) {
+static ncclResult_t ncclTuner_v3_as_v4_getCollInfo(void* context, ncclFunc_t collType, size_t nBytes, int numPipeOps, float** collCostTable, int numAlgo, int numProto, int regBuff __attribute__((unused)), int* nChannels) {
+  NCCLCHECK(ncclTuner_v3->getCollInfo(context, collType, nBytes, numPipeOps, collCostTable, numAlgo, numProto,  nChannels));
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclTuner_v3_as_v4_init(size_t nRanks, size_t nNodes, ncclDebugLogger_t logFunction, void** context) {
+  NCCLCHECK(ncclTuner_v3->init(nRanks, nNodes, logFunction, context));
+  ncclTuner_v3_as_v4.name = ncclTuner_v3->name;
+  ncclTuner_v3_as_v4.getCollInfo = ncclTuner_v3_as_v4_getCollInfo;
+  ncclTuner_v3_as_v4.destroy = ncclTuner_v3->destroy;
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclTuner_v2_as_v4_getCollInfo(void* context, ncclFunc_t collType, size_t nBytes, int numPipeOps, float** collCostTable, int numAlgo __attribute__((unused)), int numProto __attribute__((unused)), int regBuff __attribute__((unused)), int* nChannels) {
   int algorithm = NCCL_ALGO_UNDEF;
   int protocol = NCCL_PROTO_UNDEF;
   int nvlsSupport = hasNvlsSupport(collCostTable);
@@ -53,11 +68,11 @@ static ncclResult_t ncclTuner_v2_as_v3_getCollInfo(void* context, ncclFunc_t col
   return ncclSuccess;
 }
 
-static ncclResult_t ncclTuner_v2_as_v3_init(size_t nRanks, size_t nNodes, ncclDebugLogger_t logFunction, void** context) {
+static ncclResult_t ncclTuner_v2_as_v4_init(size_t nRanks, size_t nNodes, ncclDebugLogger_t logFunction, void** context) {
   NCCLCHECK(ncclTuner_v2->init(nRanks, nNodes, logFunction, context));
-  ncclTuner_v2_as_v3.name = ncclTuner_v2->name;
-  ncclTuner_v2_as_v3.getCollInfo = ncclTuner_v2_as_v3_getCollInfo;
-  ncclTuner_v2_as_v3.destroy = ncclTuner_v2->destroy;
+  ncclTuner_v2_as_v4.name = ncclTuner_v2->name;
+  ncclTuner_v2_as_v4.getCollInfo = ncclTuner_v2_as_v4_getCollInfo;
+  ncclTuner_v2_as_v4.destroy = ncclTuner_v2->destroy;
   return ncclSuccess;
 }
 
@@ -198,18 +213,26 @@ ncclResult_t ncclTunerPluginLoad(struct ncclComm* comm) {
     goto fail;
   }
 
-  tunerSymbol = (ncclTuner_v3_t*)dlsym(tunerPluginLib, "ncclTunerPlugin_v3");
+  tunerSymbol = (ncclTuner_v4_t*)dlsym(tunerPluginLib, "ncclTunerPlugin_v4");
   if (tunerSymbol == nullptr) {
-    INFO(NCCL_ENV|NCCL_TUNING, "TUNER/Plugin: Failed to find ncclTunerPlugin_v3 symbol.");
-    ncclTuner_v2 = (ncclTuner_v2_t*)dlsym(tunerPluginLib, "ncclTunerPlugin_v2");
-    if (ncclTuner_v2 == nullptr) {
-      INFO(NCCL_ENV|NCCL_TUNING, "TUNER/Plugin: Failed to find ncclTunerPlugin_v2 symbol, using internal tuner instead.");
-      dlclose(tunerPluginLib);
-      goto fail;
+    INFO(NCCL_ENV|NCCL_TUNING, "TUNER/Plugin: Failed to find ncclTunerPlugin_v4 symbol.");
+    ncclTuner_v3 = (ncclTuner_v3_t*)dlsym(tunerPluginLib, "ncclTunerPlugin_v3");
+    if (ncclTuner_v3 == nullptr) {
+      INFO(NCCL_ENV|NCCL_TUNING, "TUNER/Plugin: Failed to find ncclTunerPlugin_v3 symbol.");
+      ncclTuner_v2 = (ncclTuner_v2_t*)dlsym(tunerPluginLib, "ncclTunerPlugin_v2");
+      if (ncclTuner_v2 == nullptr) {
+        INFO(NCCL_ENV|NCCL_TUNING, "TUNER/Plugin: Failed to find ncclTunerPlugin_v2 symbol, using internal tuner instead.");
+        dlclose(tunerPluginLib);
+        goto fail;
+      } else {
+        ncclTuner_v2_as_v4.init = ncclTuner_v2_as_v4_init;
+        ncclTuner_v2_as_v4.name = ncclTuner_v2->name;
+        tunerSymbol = &ncclTuner_v2_as_v4;
+      }
     } else {
-      ncclTuner_v2_as_v3.init = ncclTuner_v2_as_v3_init;
-      ncclTuner_v2_as_v3.name = ncclTuner_v2->name;
-      tunerSymbol = &ncclTuner_v2_as_v3;
+      ncclTuner_v3_as_v4.init = ncclTuner_v3_as_v4_init;
+      ncclTuner_v3_as_v4.name = ncclTuner_v3->name;
+      tunerSymbol = &ncclTuner_v3_as_v4;
     }
   }
 

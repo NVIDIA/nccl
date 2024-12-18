@@ -23,8 +23,6 @@ typedef struct {
   int netDeviceVersion;            // Version number for network offload
 } ncclNetProperties_v8_t;
 
-typedef ncclNetProperties_v8_t ncclNetProperties_t;
-
 typedef struct {
   // Name of the network (mainly for logs)
   const char* name;

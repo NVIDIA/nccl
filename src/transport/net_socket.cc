@@ -44,6 +44,7 @@ ncclResult_t ncclNetSocketInit(ncclDebugLogger_t logFunction) {
       ncclNetIfs = ncclFindInterfaces(names, addrs, MAX_IF_NAME_SIZE, MAX_IFS);
       if (ncclNetIfs <= 0) {
         WARN("NET/Socket : no interface found");
+        pthread_mutex_unlock(&ncclNetSocketLock);
         return ncclInternalError;
       } else {
         #define MAX_LINE_LEN (2047)
@@ -76,7 +77,7 @@ static ncclResult_t ncclNetSocketGetSpeed(char* devName, int* speed) {
   ncclResult_t ret = ncclSuccess;
   *speed = 0;
   char speedPath[PATH_MAX];
-  sprintf(speedPath, "/sys/class/net/%s/speed", devName);
+  snprintf(speedPath, sizeof(speedPath), "/sys/class/net/%s/speed", devName);
   int fd = -1;
   SYSCHECKSYNC(open(speedPath, O_RDONLY), "open", fd);
   if (fd != -1) {
@@ -102,6 +103,7 @@ ncclResult_t ncclNetSocketGetProperties(int dev, ncclNetProperties_t* props) {
   props->guid = dev;
   props->ptrSupport = NCCL_PTR_HOST;
   props->regIsGlobal = 0;
+  props->forceFlush = 0;
   NCCLCHECK(ncclNetSocketGetSpeed(props->name, &props->speed));
   props->latency = 0; // Not set
   props->port = 0;
@@ -109,6 +111,7 @@ ncclResult_t ncclNetSocketGetProperties(int dev, ncclNetProperties_t* props) {
   props->maxRecvs = 1;
   props->netDeviceType    = NCCL_NET_DEVICE_HOST;
   props->netDeviceVersion = NCCL_NET_DEVICE_INVALID_VERSION;
+  props->maxP2pBytes = NCCL_MAX_NET_SIZE_BYTES;
   return ncclSuccess;
 }
 
@@ -297,6 +300,7 @@ fail:
 
 ncclResult_t ncclNetSocketListen(int dev, void* opaqueHandle, void** listenComm) {
   if (dev < 0 || dev >= ncclNetIfs) { // data transfer socket is based on specified dev
+    WARN("NET/Socket : ncclNetSocketListen dev=%d ncclNetIfs=%d", dev, ncclNetIfs);
     return ncclInternalError;
   }
   ncclResult_t ret = ncclSuccess;
@@ -558,16 +562,16 @@ ncclResult_t ncclNetSocketRegMr(void* comm, void* data, size_t size, int type, v
 }
 ncclResult_t ncclNetSocketDeregMr(void* comm, void* mhandle) { return ncclSuccess; }
 
-ncclResult_t ncclNetSocketIsend(void* sendComm, void* data, int size, int tag, void* mhandle, void** request) {
+ncclResult_t ncclNetSocketIsend(void* sendComm, void* data, size_t size, int tag, void* mhandle, void** request) {
   struct ncclNetSocketComm* comm = (struct ncclNetSocketComm*)sendComm;
-  NCCLCHECK(ncclNetSocketGetRequest(comm, NCCL_SOCKET_SEND, data, size, (struct ncclNetSocketRequest**)request));
+  NCCLCHECK(ncclNetSocketGetRequest(comm, NCCL_SOCKET_SEND, data, (int) size, (struct ncclNetSocketRequest**)request));
   return ncclSuccess;
 }
 
-ncclResult_t ncclNetSocketIrecv(void* recvComm, int n, void** data, int* sizes, int* tags, void** mhandles, void** request) {
+ncclResult_t ncclNetSocketIrecv(void* recvComm, int n, void** data, size_t* sizes, int* tags, void** mhandles, void** request) {
   struct ncclNetSocketComm* comm = (struct ncclNetSocketComm*)recvComm;
   if (n != 1) return ncclInternalError;
-  NCCLCHECK(ncclNetSocketGetRequest(comm, NCCL_SOCKET_RECV, data[0], sizes[0], (struct ncclNetSocketRequest**)request));
+  NCCLCHECK(ncclNetSocketGetRequest(comm, NCCL_SOCKET_RECV, data[0], (int)sizes[0], (struct ncclNetSocketRequest**)request));
   return ncclSuccess;
 }
 
@@ -632,5 +636,6 @@ ncclNet_t ncclNetSocket = {
   ncclNetSocketClose,
   ncclNetSocketCloseListen,
   NULL /* getDeviceMr */,
-  NULL /* irecvConsumed */
+  NULL /* irecvConsumed */,
+  NULL /* mergeDevices */
 };

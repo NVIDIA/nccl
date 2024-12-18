@@ -108,11 +108,12 @@ ncclResult_t nvlsGroupUnbind(struct ncclComm *comm, size_t size, CUmemGenericAll
   return ncclSuccess;
 }
 
-ncclResult_t ncclNvlsDeregBuffer(CUmemGenericAllocationHandle *mcHandler, CUdeviceptr ptr, int dev, size_t size) {
+ncclResult_t ncclNvlsDeregBuffer(struct ncclComm* comm, CUmemGenericAllocationHandle *mcHandler, CUdeviceptr ptr, int dev, size_t size) {
   CUCHECK(cuMulticastUnbind(*mcHandler, dev, 0/*mcOffset*/, size));
   CUCHECK(cuMemUnmap(ptr, size));
   CUCHECK(cuMemAddressFree(ptr, size));
   CUCHECK(cuMemRelease(*mcHandler));
+  INFO(NCCL_NVLS, "rank %d - NVLS deregistered buffer %p on device %d, size %ld", comm->rank, (void*)ptr, dev, size);
   return ncclSuccess;
 }
 
@@ -450,11 +451,11 @@ setup:
 
     if (comm->localRank == 0) {
       shmPath[0] = '\0';
-      NCCLCHECKGOTO(ncclShmOpen(shmPath, (sizeof(size_t) + typeSize * comm->localRanks) * 2, (void**)&nvlsShmem, NULL, comm->localRanks - 1, &comm->nvlsResources->nvlsShmemHandle), res, fail);
+      NCCLCHECKGOTO(ncclShmOpen(shmPath, sizeof(shmPath), (sizeof(size_t) + typeSize * comm->localRanks) * 2, (void**)&nvlsShmem, NULL, comm->localRanks - 1, &comm->nvlsResources->nvlsShmemHandle), res, fail);
       NCCLCHECKGOTO(bootstrapIntraNodeBroadcast(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, 0, shmPath, sizeof(shmPath)), res, fail);
     } else {
       NCCLCHECKGOTO(bootstrapIntraNodeBroadcast(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, 0, shmPath, sizeof(shmPath)), res, fail);
-      NCCLCHECKGOTO(ncclShmOpen(shmPath, (sizeof(size_t) + typeSize * comm->localRanks) * 2, (void**)&nvlsShmem, NULL, -1, &comm->nvlsResources->nvlsShmemHandle), res, fail);
+      NCCLCHECKGOTO(ncclShmOpen(shmPath, sizeof(shmPath), (sizeof(size_t) + typeSize * comm->localRanks) * 2, (void**)&nvlsShmem, NULL, -1, &comm->nvlsResources->nvlsShmemHandle), res, fail);
     }
     /* need 2 pools and a shared counter for shmem-based collectives */
     comm->nvlsResources->nvlsShmem.cnt[0] = (size_t*)nvlsShmem;
@@ -495,7 +496,7 @@ ncclResult_t ncclNvlsFree(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
-ncclResult_t tryRegisterBuffer(struct ncclComm *comm, uintptr_t userBuff, size_t buffSize, CUdeviceptr *regAddr, bool *regUsed) {
+ncclResult_t tryRegisterBuffer(struct ncclComm *comm, uintptr_t userBuff, size_t buffSize, CUdeviceptr *regAddr, int *regUsed) {
   ncclResult_t ret = ncclSuccess;
   struct ncclReg *regRecord = NULL;
   CUdeviceptr regPtr = 0;
@@ -601,43 +602,33 @@ ncclResult_t tryRegisterBuffer(struct ncclComm *comm, uintptr_t userBuff, size_t
   }
 
   *regAddr = (uintptr_t)regPtr + regData[comm->localRank].offset;
-  *regUsed = true;
+  *regUsed = 1;
 exit:
   free(regData);
   return ret;
 fail:
-  *regUsed = false;
+  *regUsed = 0;
   goto exit;
 }
 
-ncclResult_t ncclNvlsLocalRegisterBuffer(struct ncclComm *comm, const void *sendbuff, void *recvbuff, size_t sendbuffSize, size_t recvbuffSize, bool *outRegBufUsed, void **outRegBufSend, void **outRegBufRecv) {
+static ncclResult_t nvlsRegisterBuffer(struct ncclComm *comm, const void *sendbuff, void *recvbuff, size_t sendbuffSize, size_t recvbuffSize, struct ncclReg *sendRegRecord, struct ncclReg *recvRegRecord, int *outRegBufUsed, void **outRegBufSend, void **outRegBufRecv) {
   ncclResult_t ret = ncclSuccess;
-  bool localRegBufUsed = false;
+  int regBufUsed = 0;
   struct localRegData *regData = NULL;
   bool sendNeedReg = false, recvNeedReg = false;
   CUdeviceptr regSendPtr = 0;
   CUdeviceptr regRecvPtr = 0;
-  struct ncclReg *sendRegRecord = NULL;
-  struct ncclReg *recvRegRecord = NULL;
-
-  *outRegBufUsed = false;
 
   NCCLCHECKGOTO(ncclCalloc(&regData, comm->localRanks * 2), ret, fail);
 
-  if (sendbuff) {
-    NCCLCHECKGOTO(ncclRegFind(comm, sendbuff, sendbuffSize, &sendRegRecord), ret, fail);
-    if (sendRegRecord) {
-      memcpy(&regData[comm->localRank * 2].reg, sendRegRecord, sizeof(struct ncclReg));
-      regData[comm->localRank * 2].offset = (uintptr_t)sendbuff - sendRegRecord->addr;
-    }
+  if (sendRegRecord) {
+    memcpy(&regData[comm->localRank * 2].reg, sendRegRecord, sizeof(struct ncclReg));
+    regData[comm->localRank * 2].offset = (uintptr_t)sendbuff - sendRegRecord->addr;
   }
 
-  if (recvbuff) {
-    NCCLCHECKGOTO(ncclRegFind(comm, recvbuff, recvbuffSize, &recvRegRecord), ret, fail);
-    if (recvRegRecord) {
-      memcpy(&regData[comm->localRank * 2 + 1].reg, recvRegRecord, sizeof(struct ncclReg));
-      regData[comm->localRank * 2 + 1].offset = (uintptr_t)recvbuff - recvRegRecord->addr;
-    }
+  if (recvRegRecord) {
+    memcpy(&regData[comm->localRank * 2 + 1].reg, recvRegRecord, sizeof(struct ncclReg));
+    regData[comm->localRank * 2 + 1].offset = (uintptr_t)recvbuff - recvRegRecord->addr;
   }
 
   NCCLCHECKGOTO(ncclShmemAllgather(comm, &comm->nvlsResources->nvlsShmem, regData + comm->localRank * 2, regData, sizeof(struct localRegData) * 2), ret, fail);
@@ -682,229 +673,127 @@ ncclResult_t ncclNvlsLocalRegisterBuffer(struct ncclComm *comm, const void *send
   }
 
   if ((!sendNeedReg || sendbuff == NULL) && (!recvNeedReg || recvbuff == NULL)) {
-    localRegBufUsed = true;
-    INFO(NCCL_NVLS, "rank %d reuse local-registered NVLS sendbuff %p, recvbuff %p, sendbuff size %ld, recvbuff size %ld, reg sendbuff %p, reg recvbuff %p", comm->rank, sendbuff, recvbuff, sendbuffSize, recvbuffSize, (void*)regSendPtr, (void*)regRecvPtr);
+    regBufUsed = 1;
+    INFO(NCCL_REG, "rank %d reuse registered NVLS sendbuff %p, recvbuff %p, sendbuff size %ld, recvbuff size %ld, reg sendbuff %p, reg recvbuff %p", comm->rank, sendbuff, recvbuff, sendbuffSize, recvbuffSize, (void*)regSendPtr, (void*)regRecvPtr);
     goto exit;
   }
 
   /* Start Registration. Not found registered buffers, then check whether both send and recv buffer locate
    * in register request cache. */
-  if (sendNeedReg && sendbuff) {
-    tryRegisterBuffer(comm, (uintptr_t)sendbuff, sendbuffSize, &regSendPtr, &localRegBufUsed);
-    if (localRegBufUsed == false) goto fail;
+  if (sendNeedReg && sendbuff && sendbuffSize > 0) {
+    tryRegisterBuffer(comm, (uintptr_t)sendbuff, sendbuffSize, &regSendPtr, &regBufUsed);
+    if (regBufUsed == 0) goto fail;
   }
 
-  if (recvNeedReg && recvbuff) {
-    tryRegisterBuffer(comm, (uintptr_t)recvbuff, recvbuffSize, &regRecvPtr, &localRegBufUsed);
-    if (localRegBufUsed == false) goto fail;
+  if (recvNeedReg && recvbuff && recvbuffSize > 0) {
+    tryRegisterBuffer(comm, (uintptr_t)recvbuff, recvbuffSize, &regRecvPtr, &regBufUsed);
+    if (regBufUsed == 0) goto fail;
   }
 
-  INFO(NCCL_NVLS, "rank %d successfully local-registered NVLS sendbuff %p, recvbuff %p, sendbuff size %ld, recvbuff size %ld, reg sendbuff %p, reg recvbuff %p", comm->rank, sendbuff, recvbuff, sendbuffSize, recvbuffSize, (void*)regSendPtr, (void*)regRecvPtr);
+  INFO(NCCL_REG, "rank %d successfully registered NVLS sendbuff %p, recvbuff %p, sendbuff size %ld, recvbuff size %ld, reg sendbuff %p, reg recvbuff %p", comm->rank, sendbuff, recvbuff, sendbuffSize, recvbuffSize, (void*)regSendPtr, (void*)regRecvPtr);
 
 exit:
   *outRegBufSend = (void*)regSendPtr;
   *outRegBufRecv = (void*)regRecvPtr;
-  *outRegBufUsed = localRegBufUsed;
+  *outRegBufUsed = regBufUsed;
   free(regData);
   return ncclSuccess;
 fail:
-  localRegBufUsed = false;
+  regBufUsed = 0;
+  WARN("rank %d failed to NVLS register sendbuff %p sendbuffSize %ld recvbuff %p recvbuffSize %ld", comm->rank, sendbuff, sendbuffSize, recvbuff, recvbuffSize);
   goto exit;
+}
+
+ncclResult_t ncclNvlsLocalRegisterBuffer(struct ncclComm *comm, const void *sendbuff, void *recvbuff, size_t sendbuffSize, size_t recvbuffSize, int *outRegBufUsed, void **outRegBufSend, void **outRegBufRecv) {
+  struct ncclReg *sendRegRecord = NULL;
+  struct ncclReg *recvRegRecord = NULL;
+  bool sendIsValid = false;
+  bool recvIsValid = false;
+
+  *outRegBufUsed = 0;
+  if (sendbuff) {
+    NCCLCHECK(ncclRegFind(comm, sendbuff, sendbuffSize, &sendRegRecord));
+    NCCLCHECK(ncclRegLocalIsValid(sendRegRecord, &sendIsValid));
+  } else {
+    sendIsValid = true;
+  }
+  if (recvbuff) {
+    NCCLCHECK(ncclRegFind(comm, recvbuff, recvbuffSize, &recvRegRecord));
+    NCCLCHECK(ncclRegLocalIsValid(recvRegRecord, &recvIsValid));
+  } else {
+    recvIsValid = true;
+  }
+
+  if (sendIsValid && recvIsValid)
+    NCCLCHECK(nvlsRegisterBuffer(comm, sendbuff, recvbuff, sendbuffSize, recvbuffSize, sendRegRecord, recvRegRecord, outRegBufUsed, outRegBufSend, outRegBufRecv));
+
+  return ncclSuccess;
 }
 
 struct ncclNvlsCleanupCallback {
   struct ncclCommCallback base;
-  CUmemGenericAllocationHandle mcHandle;
-  CUdeviceptr ptr;
-  int dev;
-  size_t size;
+  struct ncclReg *reg;
+  struct ncclComm *comm;
 };
 
 static ncclResult_t cleanupNvls(struct ncclComm* comm, struct ncclCommCallback* cb) {
   struct ncclNvlsCleanupCallback* obj = (struct ncclNvlsCleanupCallback*)cb;
-  NCCLCHECK(ncclNvlsDeregBuffer(&obj->mcHandle, obj->ptr, obj->dev, obj->size));
-  INFO(NCCL_NVLS, "rank %d - deregistered buffer %p on device %d, size %ld", comm->rank, (void*)obj->ptr, obj->dev, obj->size);
+  NCCLCHECK(ncclCommGraphDeregister(obj->comm, obj->reg));
   free(obj);
   return ncclSuccess;
 }
 
 ncclResult_t ncclNvlsGraphRegisterBuffer(
     struct ncclComm *comm, const void *sendbuff, void *recvbuff, size_t sendbuffSize, size_t recvbuffSize,
-    bool *outRegBufUsed, void **outRegBufSend, void **outRegBufRecv,
+    int *outRegBufUsed, void **outRegBufSend, void **outRegBufRecv,
     struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next>* cleanupQueue, int* nCleanupQueueEltsAdded
   ) {
-  ncclResult_t ret = ncclSuccess;
-  bool localRegBufUsed = false;
   struct ncclNvlsCleanupCallback* sendRecord = NULL;
   struct ncclNvlsCleanupCallback* recvRecord = NULL;
-  CUdeviceptr regSendPtr = 0;
-  CUdeviceptr regRecvPtr = 0;
-  CUmulticastObjectProp mcprop;
-  CUmemAllocationProp ucprop;
-  char shareableHandle[NVLS_HANDLE_SIZE];
-  CUmemGenericAllocationHandle sendMcHandle, recvMcHandle;
-  size_t sendGran = 0, recvGran = 0;
-  bool *regBufFlags = NULL;
-  struct graphRegData *rdata = NULL;
-  const void *baseSend = NULL;
-  const void *baseRecv = NULL;
-  size_t baseSendSize = 1;
-  size_t baseRecvSize = 1;
-  size_t ucgran;
+  void *baseSend = NULL;
+  void *baseRecv = NULL;
+  size_t baseSendSize = 0;
+  size_t baseRecvSize = 0;
+  struct ncclReg *sendRegRecord = NULL;
+  struct ncclReg *recvRegRecord = NULL;
 
-  *outRegBufUsed = false;
-  NCCLCHECKGOTO(ncclCalloc(&regBufFlags, comm->localRanks), ret, fail);
-  NCCLCHECKGOTO(ncclCalloc(&rdata, comm->localRanks), ret, fail);
-
-  if (sendbuffSize > 0 || recvbuffSize > 0) {
-    /* retrieve base pointer and size */
-    if (CUPFN(cuMemGetAddressRange) == nullptr) goto fail;
-    if (sendbuff != NULL)
-      CUCHECKGOTO(cuMemGetAddressRange((CUdeviceptr *)&baseSend, &baseSendSize, (CUdeviceptr)sendbuff), ret, fail);
-    if (recvbuff != NULL)
-      CUCHECKGOTO(cuMemGetAddressRange((CUdeviceptr *)&baseRecv, &baseRecvSize, (CUdeviceptr)recvbuff), ret, fail);
-
-    memset(&ucprop, 0, sizeof(CUmemAllocationProp));
-    ucprop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
-    ucprop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
-    ucprop.location.id = comm->cudaDev;
-    ucprop.requestedHandleTypes = ncclCuMemHandleType;
-    CUCHECKGOTO(cuMemGetAllocationGranularity(&ucgran, &ucprop, CU_MEM_ALLOC_GRANULARITY_RECOMMENDED), ret, fail);
-
-    localRegBufUsed = ((uint64_t)baseSend % ucgran != 0 || (uint64_t)baseRecv % ucgran != 0) ? false : true;
-    regBufFlags[comm->localRank] = localRegBufUsed;
-    NCCLCHECKGOTO(bootstrapIntraNodeAllGather(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, regBufFlags, sizeof(bool)), ret, fail);
-    for (int i = 0; i < comm->localRanks; ++i)
-      if (regBufFlags[i] == false) goto fail;
-
-    memset(&mcprop, 0, sizeof(CUmulticastObjectProp));
-    mcprop.numDevices = comm->localRanks;
-    mcprop.handleTypes = ncclCuMemHandleType;
-    mcprop.flags = 0;
-
-    if (sendbuff != NULL) {
-      mcprop.size = baseSendSize;
-      CUCHECKGOTO(cuMulticastGetGranularity(&sendGran, &mcprop, CU_MULTICAST_GRANULARITY_RECOMMENDED), ret, fail);
-
-      /* check send buffer offset and size */
-      rdata[comm->localRank].offset = (uintptr_t)sendbuff - (uintptr_t)baseSend;
-      rdata[comm->localRank].size = baseSendSize;
-      NCCLCHECKGOTO(bootstrapIntraNodeAllGather(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, rdata, sizeof(struct graphRegData)), ret, fail);
-      baseSendSize = rdata[0].size;
-      for (int i = 1; i < comm->localRanks; ++i) {
-        if (rdata[0].offset != rdata[i].offset) goto fail;
-        if (baseSendSize > rdata[i].size) baseSendSize = rdata[i].size;
-      }
-      if (baseSendSize % sendGran != 0) goto fail;
-
-      mcprop.size = baseSendSize;
-
-      /* register sendbuff */
-      if (comm->localRank == 0) {
-        NCCLCHECKGOTO(nvlsGroupCreate(comm, &mcprop, comm->localRank, comm->localRanks, &sendMcHandle, shareableHandle), ret, fail);
-        NCCLCHECKGOTO(bootstrapIntraNodeBroadcast(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, 0, shareableHandle, NVLS_HANDLE_SIZE), ret, fail);
-      } else {
-        NCCLCHECKGOTO(bootstrapIntraNodeBroadcast(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, 0, shareableHandle, NVLS_HANDLE_SIZE), ret, fail);
-        NCCLCHECKGOTO(nvlsGroupConnect(comm, shareableHandle, comm->localRankToRank[0], &sendMcHandle), ret, fail);
-      }
-
-      CUCHECKGOTO(cuMulticastAddDevice(sendMcHandle, comm->nvlsResources->dev), ret, fail);
-      CUCHECKGOTO(cuMulticastBindAddr(sendMcHandle, 0, (CUdeviceptr)baseSend, baseSendSize, 0), ret, fail);
-
-      // Create a VA for the NVLS
-      CUCHECKGOTO(cuMemAddressReserve(&regSendPtr, baseSendSize, sendGran, 0U, 0), ret, fail);
-      // Map the VA locally
-      CUCHECKGOTO(cuMemMap(regSendPtr, baseSendSize, 0, sendMcHandle, 0), ret, fail);
-      CUCHECKGOTO(cuMemSetAccess(regSendPtr, baseSendSize, &comm->nvlsResources->accessDesc, 1), ret, fail);
-
-      sendRecord = (struct ncclNvlsCleanupCallback*)malloc(sizeof(struct ncclNvlsCleanupCallback));
-      sendRecord->base.fn = cleanupNvls;
-      sendRecord->mcHandle = sendMcHandle;
-      sendRecord->ptr = regSendPtr;
-      sendRecord->dev = comm->nvlsResources->dev;
-      sendRecord->size = baseSendSize;
-    }
-
-    if (recvbuff != NULL) {
-      mcprop.size = baseRecvSize;
-      CUCHECKGOTO(cuMulticastGetGranularity(&recvGran, &mcprop, CU_MULTICAST_GRANULARITY_RECOMMENDED), ret, fail);
-
-      rdata[comm->localRank].offset = (uintptr_t)recvbuff - (uintptr_t)baseRecv;
-      rdata[comm->localRank].size = baseRecvSize;
-      NCCLCHECKGOTO(bootstrapIntraNodeAllGather(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, rdata, sizeof(struct graphRegData)), ret, fail);
-      baseRecvSize = rdata[0].size;
-      for (int i = 1; i < comm->localRanks; ++i) {
-        if (rdata[0].offset != rdata[i].offset) goto fail;
-        if (baseRecvSize > rdata[i].size) baseRecvSize = rdata[i].size;
-      }
-      if (baseRecvSize % recvGran != 0) goto fail;
-
-      mcprop.size = baseRecvSize;
-      if (comm->localRank == 0) {
-        NCCLCHECKGOTO(nvlsGroupCreate(comm, &mcprop, comm->localRank, comm->localRanks, &recvMcHandle, shareableHandle), ret, fail);
-        NCCLCHECKGOTO(bootstrapIntraNodeBroadcast(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, 0, shareableHandle, NVLS_HANDLE_SIZE), ret, fail);
-      } else {
-        NCCLCHECKGOTO(bootstrapIntraNodeBroadcast(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, 0, shareableHandle, NVLS_HANDLE_SIZE), ret, fail);
-        NCCLCHECKGOTO(nvlsGroupConnect(comm, shareableHandle, comm->localRankToRank[0], &recvMcHandle), ret, fail);
-      }
-
-      CUCHECKGOTO(cuMulticastAddDevice(recvMcHandle, comm->nvlsResources->dev), ret, fail);
-      CUCHECKGOTO(cuMulticastBindAddr(recvMcHandle, 0, (CUdeviceptr)baseRecv, baseRecvSize, 0), ret, fail);
-
-      // Create a VA for the NVLS
-      CUCHECKGOTO(cuMemAddressReserve(&regRecvPtr, baseRecvSize, recvGran, 0U, 0), ret, fail);
-      // Map the VA locally
-      CUCHECKGOTO(cuMemMap(regRecvPtr, baseRecvSize, 0, recvMcHandle, 0), ret, fail);
-      CUCHECKGOTO(cuMemSetAccess(regRecvPtr, baseRecvSize, &comm->nvlsResources->accessDesc, 1), ret, fail);
-
-      recvRecord = (struct ncclNvlsCleanupCallback*)malloc(sizeof(struct ncclNvlsCleanupCallback));
-      recvRecord->base.fn = cleanupNvls;
-      recvRecord->mcHandle = recvMcHandle;
-      recvRecord->ptr = regRecvPtr;
-      recvRecord->dev = comm->nvlsResources->dev;
-      recvRecord->size = baseRecvSize;
-    }
-
-    localRegBufUsed = true;
+  *outRegBufUsed = 0;
+  if (sendbuff) {
+    CUCHECK(cuMemGetAddressRange((CUdeviceptr *)&baseSend, &baseSendSize, (CUdeviceptr)sendbuff));
+    NCCLCHECK(ncclCommGraphRegister(comm, baseSend, baseSendSize, (void**)&sendRegRecord));
   }
 
-exit:
-  if (localRegBufUsed == false) {
-    if (sendRecord) {
-      ncclNvlsDeregBuffer(&sendRecord->mcHandle, sendRecord->ptr, sendRecord->dev, sendRecord->size);
-      free(sendRecord);
-    }
+  if (recvbuff) {
+    CUCHECK(cuMemGetAddressRange((CUdeviceptr *)&baseRecv, &baseRecvSize, (CUdeviceptr)recvbuff));
+    NCCLCHECK(ncclCommGraphRegister(comm, baseRecv, baseRecvSize, (void**)&recvRegRecord));
+  }
 
-    if (recvRecord) {
-      // Yes, it's a dead code.  That's fine...
-      // coverity[dead_error_begin]
-      ncclNvlsDeregBuffer(&recvRecord->mcHandle, recvRecord->ptr, recvRecord->dev, recvRecord->size);
-      free(recvRecord);
-    }
-  } else {
-    if (sendRecord) {
-      *outRegBufSend = (void*)((uintptr_t)regSendPtr + (uintptr_t)sendbuff - (uintptr_t)baseSend);
+  NCCLCHECK(nvlsRegisterBuffer(comm, baseSend, baseRecv, baseSendSize, baseRecvSize, sendRegRecord, recvRegRecord, outRegBufUsed, outRegBufSend, outRegBufRecv));
+
+  if (*outRegBufUsed) {
+    if (sendRegRecord) {
+      sendRecord = (struct ncclNvlsCleanupCallback*)malloc(sizeof(struct ncclNvlsCleanupCallback));
+      sendRecord->base.fn = cleanupNvls;
+      sendRecord->reg = sendRegRecord;
+      sendRecord->comm = comm;
       ncclIntruQueueEnqueue(cleanupQueue, (struct ncclCommCallback*)sendRecord);
       *nCleanupQueueEltsAdded += 1;
     }
 
-    if (recvRecord) {
-      *outRegBufRecv = (void*)((uintptr_t)regRecvPtr + (uintptr_t)recvbuff - (uintptr_t)baseRecv);
+    if (recvRegRecord) {
+      recvRecord = (struct ncclNvlsCleanupCallback*)malloc(sizeof(struct ncclNvlsCleanupCallback));
+      recvRecord->base.fn = cleanupNvls;
+      recvRecord->reg = recvRegRecord;
+      recvRecord->comm = comm;
       ncclIntruQueueEnqueue(cleanupQueue, (struct ncclCommCallback*)recvRecord);
       *nCleanupQueueEltsAdded += 1;
     }
-
-    INFO(NCCL_NVLS, "rank %d successfully graph-registered sendbuff %p, recvbuff %p, sendbuff size %ld (register size %ld, sendGran %ld), recvbuff size %ld (register size %ld, recvGran %ld), reg sendbuff %p, reg recvbuff %p", comm->rank, sendbuff, recvbuff, sendbuffSize, baseSendSize, sendGran, recvbuffSize, baseRecvSize, recvGran, (void*)regSendPtr, (void*)regRecvPtr);
+  } else {
+    if (sendbuff) NCCLCHECK(ncclCommGraphDeregister(comm, sendRegRecord));
+    if (recvbuff) NCCLCHECK(ncclCommGraphDeregister(comm, recvRegRecord));
   }
 
-  *outRegBufUsed = localRegBufUsed;
-  free(regBufFlags);
-  free(rdata);
-  /* always return success. */
   return ncclSuccess;
-fail:
-  localRegBufUsed = false;
-  goto exit;
 }
 
 #else
@@ -936,19 +825,19 @@ ncclResult_t ncclNvlsTreeConnect(struct ncclComm* comm) {
 
 ncclResult_t ncclNvlsGraphRegisterBuffer(
     struct ncclComm *comm, const void *sendbuff, void *recvbuff, size_t sendbuffSize, size_t recvbuffSize,
-    bool *outRegBufUsed, void **outRegBufSend, void **outRegBufRecv,
+    int *outRegBufUsed, void **outRegBufSend, void **outRegBufRecv,
     struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next>* cleanupQueue, int* nCleanupQueueEltsAdded
   ) {
   *outRegBufUsed = false;
   return ncclSuccess;
 }
 
-ncclResult_t ncclNvlsLocalRegisterBuffer(struct ncclComm *comm, const void *sendbuff, void *recvbuff, size_t sendbuffSize, size_t recvbuffSize, bool *outRegBufUsed, void **outRegBufSend, void **outRegBufRecv) {
+ncclResult_t ncclNvlsLocalRegisterBuffer(struct ncclComm *comm, const void *sendbuff, void *recvbuff, size_t sendbuffSize, size_t recvbuffSize, int *outRegBufUsed, void **outRegBufSend, void **outRegBufRecv) {
   *outRegBufUsed = false;
   return ncclSuccess;
 }
 
-ncclResult_t ncclNvlsDeregBuffer(CUmemGenericAllocationHandle *mcHandler, CUdeviceptr ptr, int dev, size_t size) {
+ncclResult_t ncclNvlsDeregBuffer(struct ncclComm* comm, CUmemGenericAllocationHandle *mcHandler, CUdeviceptr ptr, int dev, size_t size) {
   return ncclSuccess;
 }
 

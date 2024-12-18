@@ -20,6 +20,12 @@ struct IsFloatingPoint<half>: std::true_type {};
 template<>
 struct IsFloatingPoint<__nv_bfloat16>: std::true_type {};
 #endif
+#if defined(__CUDA_FP8_TYPES_EXIST__)
+template<>
+struct IsFloatingPoint<__nv_fp8_e4m3>: std::true_type {};
+template<>
+struct IsFloatingPoint<__nv_fp8_e5m2>: std::true_type {};
+#endif
 template<>
 struct IsFloatingPoint<float>: std::true_type {};
 template<>
@@ -298,6 +304,24 @@ SPECIALIZE_REDUCE(FuncMinMax, double, 1, double, fn.isMinNotMax ? fmin(x, y) : f
 #endif
 #endif
 
+#if defined(__CUDA_FP8_TYPES_EXIST__)
+#if __CUDA_ARCH__ >= 900
+  SPECIALIZE_REDUCE(FuncSum, __nv_fp8_e4m3, 1, __nv_fp8_e4m3, __nv_fp8_e4m3(__hadd(__half(x),__half(y))))
+  SPECIALIZE_REDUCE(FuncSum, __nv_fp8_e4m3, 2, __nv_fp8x2_e4m3, __nv_fp8x2_e4m3(__hadd2(__half2(x),__half2(y))))
+  SPECIALIZE_REDUCE(FuncProd, __nv_fp8_e4m3, 1, __nv_fp8_e4m3, __nv_fp8_e4m3(__hmul(__half(x),__half(y))))
+  SPECIALIZE_REDUCE(FuncProd, __nv_fp8_e4m3, 2, __nv_fp8x2_e4m3, __nv_fp8x2_e4m3(__hmul2(__half2(x),__half2(y))))
+  SPECIALIZE_REDUCE(FuncMinMax, __nv_fp8_e4m3, 1, __nv_fp8_e4m3, __nv_fp8_e4m3(fn.isMinNotMax ? __hmin(__half(x),__half(y)) : __hmax(__half(x),__half(y))))
+  SPECIALIZE_REDUCE(FuncMinMax, __nv_fp8_e4m3, 2, __nv_fp8x2_e4m3, __nv_fp8x2_e4m3(fn.isMinNotMax ? __hmin2(__half2(x),__half2(y)) : __hmax2(__half2(x),__half2(y))))
+
+  SPECIALIZE_REDUCE(FuncSum, __nv_fp8_e5m2, 1, __nv_fp8_e5m2, __nv_fp8_e5m2(__hadd(__half(x),__half(y))))
+  SPECIALIZE_REDUCE(FuncSum, __nv_fp8_e5m2, 2, __nv_fp8x2_e5m2, __nv_fp8x2_e5m2(__hadd2(__half2(x),__half2(y))))
+  SPECIALIZE_REDUCE(FuncProd, __nv_fp8_e5m2, 1, __nv_fp8_e5m2, __nv_fp8_e5m2(__hmul(__half(x),__half(y))))
+  SPECIALIZE_REDUCE(FuncProd, __nv_fp8_e5m2, 2, __nv_fp8x2_e5m2, __nv_fp8x2_e5m2(__hmul2(__half2(x),__half2(y))))
+  SPECIALIZE_REDUCE(FuncMinMax, __nv_fp8_e5m2, 1, __nv_fp8_e5m2, __nv_fp8_e5m2(fn.isMinNotMax ? __hmin(__half(x), __half(y)) : __hmax(__half(x), __half(y))))
+  SPECIALIZE_REDUCE(FuncMinMax, __nv_fp8_e5m2, 2, __nv_fp8x2_e5m2, __nv_fp8x2_e5m2(fn.isMinNotMax ? __hmin2(__half2(x), __half2(y)) : __hmax2(__half2(x), __half2(y))))
+#endif
+#endif
+
 #undef SPECIALIZE_REDUCE
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -416,9 +440,9 @@ template<>
 struct FuncPreMulSum<half> {
   using EltType = half;
 #if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
-  half2 scalar;
+  __half2 scalar;
   __device__ FuncPreMulSum(uint64_t opArg=0) {
-    union { uint64_t u64; half val; };
+    union { uint64_t u64; __half val; };
     u64 = opArg;
     scalar.x = val;
     scalar.y = val;
@@ -426,9 +450,9 @@ struct FuncPreMulSum<half> {
 #else
   float scalar;
   __device__ FuncPreMulSum(uint64_t opArg=0) {
-    union { uint64_t u64; half val; };
+    union { uint64_t u64; __half val; };
     u64 = opArg;
-    scalar = __half2float(val);
+    scalar = (float)val;
   }
 #endif
 };
@@ -459,11 +483,39 @@ struct FuncPreMulSum<half> {
   };
 #endif
 
-template<typename T>
-struct Apply_Reduce<FuncPreMulSum<T>, /*EltPerPack=*/1> {
-  __device__ static BytePack<sizeof(T)> reduce(FuncPreMulSum<T> fn, BytePack<sizeof(T)> a, BytePack<sizeof(T)> b) {
+#if defined(__CUDA_FP8_TYPES_EXIST__)
+#if __CUDA_ARCH__ >= 900
+  template<>
+  struct FuncPreMulSum<__nv_fp8_e4m3> {
+    using EltType = __nv_fp8_e4m3;
+    __half2 scalar2;
+    __device__ FuncPreMulSum(uint64_t opArg) {
+      union { uint64_t u64; __nv_fp8_storage_t val; };
+      u64 = opArg;
+      scalar2.x = __half(__nv_cvt_fp8_to_halfraw(val, __NV_E4M3));
+      scalar2.y = scalar2.x;
+    }
+  };
+
+  template<>
+  struct FuncPreMulSum<__nv_fp8_e5m2> {
+    using EltType = __nv_fp8_e5m2;
+    __half2 scalar2;
+    __device__ FuncPreMulSum(uint64_t opArg) {
+      union { uint64_t u64; __nv_fp8_storage_t val; };
+      u64 = opArg;
+      scalar2.x = __half(__nv_cvt_fp8_to_halfraw(val, __NV_E5M2));
+      scalar2.y = scalar2.x;
+    }
+  };
+#endif
+#endif
+
+template<typename T, int EltPerPack>
+struct Apply_Reduce<FuncPreMulSum<T>, EltPerPack> {
+  __device__ static BytePack<EltPerPack*sizeof(T)> reduce(FuncPreMulSum<T> fn, BytePack<EltPerPack*sizeof(T)> a, BytePack<EltPerPack*sizeof(T)> b) {
     // FuncPreMulSum reduce dispatches to FuncSum.
-    return Apply_Reduce<FuncSum<T>, 1>::reduce(FuncSum<T>(), a, b);
+    return Apply_Reduce<FuncSum<T>, EltPerPack>::reduce(FuncSum<T>(), a, b);
   }
 };
 
@@ -531,6 +583,51 @@ struct Apply_PreOp<FuncPreMulSum<half>, /*EltPerPack=*/1> {
 #endif
 
 ////////////////////////////////////////////////////////////////////////////////
+// Apply_PreOp of FuncPreMulSum for fp8.
+
+#if defined(__CUDA_FP8_TYPES_EXIST__)
+#if __CUDA_ARCH__ >= 900
+  template<>
+  struct Apply_PreOp<FuncPreMulSum<__nv_fp8_e4m3>, /*EltPerPack=*/1> {
+    static constexpr bool IsIdentity = false;
+    __device__ static BytePack<sizeof(__nv_fp8_e4m3)> preOp(
+        FuncPreMulSum<__nv_fp8_e4m3> fn, BytePack<sizeof(__nv_fp8_e4m3)> a
+      ) {
+      return toPack<__nv_fp8_e4m3>(__nv_fp8_e4m3(__hmul(__half(fromPack<__nv_fp8_e4m3>(a)), fn.scalar2.x)));
+    }
+  };
+  template<>
+  struct Apply_PreOp<FuncPreMulSum<__nv_fp8_e4m3>, /*EltPerPack=*/2> {
+    static constexpr bool IsIdentity = false;
+    __device__ static BytePack<sizeof(__nv_fp8x2_e4m3)> preOp(
+        FuncPreMulSum<__nv_fp8_e4m3> fn, BytePack<sizeof(__nv_fp8x2_e4m3)> a
+      ) {
+      return toPack<__nv_fp8x2_e4m3>(__nv_fp8x2_e4m3(__hmul2(__half2(fromPack<__nv_fp8x2_e4m3>(a)), fn.scalar2)));
+    }
+  };
+
+  template<>
+  struct Apply_PreOp<FuncPreMulSum<__nv_fp8_e5m2>, /*EltPerPack=*/1> {
+    static constexpr bool IsIdentity = false;
+    __device__ static BytePack<sizeof(__nv_fp8_e5m2)> preOp(
+        FuncPreMulSum<__nv_fp8_e5m2> fn, BytePack<sizeof(__nv_fp8_e5m2)> a
+      ) {
+      return toPack<__nv_fp8_e5m2>(__nv_fp8_e5m2(__hmul(__half(fromPack<__nv_fp8_e5m2>(a)), fn.scalar2.x)));
+    }
+  };
+  template<>
+  struct Apply_PreOp<FuncPreMulSum<__nv_fp8_e5m2>, /*EltPerPack=*/2> {
+    static constexpr bool IsIdentity = false;
+    __device__ static BytePack<sizeof(__nv_fp8x2_e5m2)> preOp(
+        FuncPreMulSum<__nv_fp8_e5m2> fn, BytePack<sizeof(__nv_fp8x2_e5m2)> a
+      ) {
+      return toPack<__nv_fp8x2_e5m2>(__nv_fp8x2_e5m2(__hmul2(__half2(fromPack<__nv_fp8x2_e5m2>(a)), fn.scalar2)));
+    }
+  };
+#endif
+#endif
+
+////////////////////////////////////////////////////////////////////////////////
 // FuncSumPostDiv
 
 template<typename T>
@@ -541,34 +638,44 @@ struct RedOpArg<FuncSumPostDiv<T>> {
   }
 };
 
-template<typename T, bool IsFloating=IsFloatingPoint<T>::value>
-struct FuncSumPostDiv_IntOnly;
-
 template<typename T>
-struct FuncSumPostDiv: FuncSumPostDiv_IntOnly<T> {
-  __device__ FuncSumPostDiv(uint64_t opArg=0):
-    FuncSumPostDiv_IntOnly<T>(opArg) {
+struct FuncSumPostDiv {
+  static_assert(T(0) < T(-1), "FuncSumPostDiv is only for implementing ncclAvg on uint types.");
+  using EltType = T;
+  using UintType = typename std::conditional<sizeof(T)==8, uint64_t, uint32_t>::type;
+  uint32_t divisor:31, isSigned:1;
+  UintType recip;
+  
+  __device__ FuncSumPostDiv(uint64_t opArg=0) {
+    isSigned = opArg & 1;
+    divisor = opArg >> 1;
+    recip =  UintType(-1)/divisor;
+  }
+  __device__ T divide(T x) {
+    // x is negative iff we are in signed mode and the top bit is set
+    bool xneg = isSigned && (x & ~(T(-1)>>1));
+    // Compute abs(x):
+    // T(-x) vs -T(x) is critical. We have to negate then truncate the bits. Consider
+    // if we are doing signed 8-bit types, thus T=uint8_t. The value -1 is encoded
+    // as 0xff. -T(0xff) when promoted to 32-bit (which is implicit by compiler)
+    // gives 0xffffff01, but T(-0xff) is 0x1, and that is the abs value we want.
+    UintType xabs = xneg ? T(-x) : x;
+    // Compute quotient by multiplying by reciprical.
+    UintType q = sizeof(T)==8 ? __umul64hi(xabs, recip) : __umulhi(xabs, recip);
+    // Quotient may be off by one so do a fixup.
+    if (xabs - q*divisor >= divisor) q += 1;
+    // If original x was negative then we have to negate it back since we were
+    // working with its abs val.
+    return xneg ? -T(q) : T(q);
   }
 };
 
-template<typename T>
-struct FuncSumPostDiv_IntOnly<T, /*IsFloating=*/false>: FuncSum<T> {
-  using EltType = T;
-  int divisor;
-  __device__ FuncSumPostDiv_IntOnly(uint64_t opArg=0): divisor(opArg) {}
-};
-
-template<typename T>
-struct FuncSumPostDiv_IntOnly<T, /*IsFloating=*/true> {
-  static_assert(sizeof(T)!=sizeof(T), "FuncSumPostDiv is only for implementing ncclAvg on integral types.");
-};
-
-template<typename T>
-struct Apply_Reduce<FuncSumPostDiv<T>, /*EltPerPack=*/1>:
-    Apply_Reduce<FuncSum<T>, 1> {
-  __device__ static BytePack<sizeof(T)> reduce(FuncSumPostDiv<T> fn, BytePack<sizeof(T)> a, BytePack<sizeof(T)> b) {
+template<typename T, int EltPerPack>
+struct Apply_Reduce<FuncSumPostDiv<T>, EltPerPack>:
+    Apply_Reduce<FuncSum<T>, EltPerPack> {
+  __device__ static BytePack<EltPerPack*sizeof(T)> reduce(FuncSumPostDiv<T> fn, BytePack<EltPerPack*sizeof(T)> a, BytePack<EltPerPack*sizeof(T)> b) {
     // FuncSumPostDiv reduce dispatches to FuncSum.
-    return Apply_Reduce<FuncSum<T>, 1>::reduce(FuncSum<T>(), a, b);
+    return Apply_Reduce<FuncSum<T>, EltPerPack>::reduce(FuncSum<T>(), a, b);
   }
 };
 
@@ -576,7 +683,7 @@ template<typename T>
 struct Apply_PostOp<FuncSumPostDiv<T>, /*EltPerPack=*/1> {
   static constexpr bool IsIdentity = false;
   __device__ static BytePack<sizeof(T)> postOp(FuncSumPostDiv<T> fn, BytePack<sizeof(T)> a) {
-    return toPack<T>(fromPack<T>(a) / fn.divisor);
+    return toPack<T>(fn.divide(fromPack<T>(a)));
   }
 };
 

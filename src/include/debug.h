@@ -38,4 +38,6 @@ extern char ncclLastError[];
 
 void ncclSetThreadName(pthread_t thread, const char *fmt, ...);
 
+void ncclResetDebugInit();
+
 #endif

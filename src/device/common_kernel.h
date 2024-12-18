@@ -65,19 +65,23 @@ __device__ __forceinline__ void reduceCopyPacks(
   uintptr_t minSrcs[MinSrcs + !MinSrcs];
   uintptr_t minDsts[MinDsts + !MinDsts];
   #pragma unroll
-  for (int s=0; s < MinSrcs; s++)
+  for (int s=0; s < MinSrcs; s++) {
     minSrcs[s] = cvta_to_global(srcPtrFn(s)) + threadBytesBehind;
+  }
+
   #pragma unroll
-  for (int d=0; d < MinDsts; d++)
+  for (int d=0; d < MinDsts; d++) {
     // Yes, for some template arguments this code will be unreachable.  That's fine.
     // coverity[dead_error_line]
     minDsts[d] = cvta_to_global(dstPtrFn(d)) + threadBytesBehind;
+  }
 
   // We dictate loop termination condition according to whether partial hunks
   // can be handled or not.
   while (Unroll==1 ? (BytePerPack <= threadBytesAhead) : (0 < nHunksAhead)) {
     BytePack<BytePerPack> acc[Unroll];
 
+    // minSrcs[0] cannot be nullptr so we always process it
     { RedFn preFn(0 < PreOpSrcs ? preOpArgs[0] : 0);
       #pragma unroll Unroll
       for (int u=0; u < Unroll; u++) {
@@ -163,7 +167,8 @@ __device__ __forceinline__ void reduceCopyPacks(
       }
     }
     for (int d=MinDsts; (MinDsts < MaxDsts) && (d < MaxDsts) && (d < nDsts); d++) {
-      uintptr_t dst = cvta_to_global(dstPtrFn(d)) + threadBytesBehind;
+      uintptr_t dstPtr = cvta_to_global(dstPtrFn(d));
+      uintptr_t dst = dstPtr + threadBytesBehind;
       #pragma unroll Unroll
       for (int u=0; u < Unroll; u++) {
         st_global<BytePerPack>(dst, acc[u]);
@@ -173,11 +178,15 @@ __device__ __forceinline__ void reduceCopyPacks(
 
     nWarps = nThreads/WARP_SIZE;
     #pragma unroll
-    for (int s=0; s < MinSrcs; s++) minSrcs[s] += (nWarps-1)*BytePerHunk;
+    for (int s=0; s < MinSrcs; s++) {
+      minSrcs[s] += (nWarps-1)*BytePerHunk;
+    }
     #pragma unroll
     // Yes, for some template arguments this code will be unreachable.  That's fine.
     // coverity[dead_error_line]
-    for (int d=0; d < MinDsts; d++) minDsts[d] += (nWarps-1)*BytePerHunk;
+    for (int d=0; d < MinDsts; d++) {
+      minDsts[d] += (nWarps-1)*BytePerHunk;
+    }
     threadBytesBehind += nWarps*BytePerHunk;
     threadBytesAhead -= nWarps*BytePerHunk;
     nHunksAhead -= nWarps;

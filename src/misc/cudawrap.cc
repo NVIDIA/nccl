@@ -11,7 +11,7 @@
 
 // This env var (NCCL_CUMEM_ENABLE) toggles cuMem API usage
 NCCL_PARAM(CuMemEnable, "CUMEM_ENABLE", -2);
-NCCL_PARAM(CuMemHostEnable, "CUMEM_HOST_ENABLE", 0);
+NCCL_PARAM(CuMemHostEnable, "CUMEM_HOST_ENABLE", -1);
 // Handle type used for cuMemCreate()
 CUmemAllocationHandleType ncclCuMemHandleType = CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
 
@@ -35,9 +35,6 @@ int ncclIsCuMemSupported() {
   // Query device to see if CUMEM VMM support is available
   CUCHECKGOTO(cuDeviceGetAttribute(&flag, CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED, currentDev), ret, error);
   if (!flag) return 0;
-  // Query device to see if CUMEM RDMA support is available
-  CUCHECKGOTO(cuDeviceGetAttribute(&flag, CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WITH_CUDA_VMM_SUPPORTED, currentDev), ret, error);
-  if (!flag) return 0;
 error:
   return (ret == ncclSuccess);
 #endif
@@ -49,11 +46,31 @@ int ncclCuMemEnable() {
   return  param >= 0 ? param : (param == -2 && ncclCuMemSupported);
 }
 
+static int ncclCumemHostEnable = -1;
 int ncclCuMemHostEnable() {
+  if (ncclCumemHostEnable != -1)
+    return ncclCumemHostEnable;
 #if CUDART_VERSION < 12020
-  return 0;
+  ncclCumemHostEnable = 0;
+  return ncclCumemHostEnable;
 #else
-  return ncclParamCuMemHostEnable();
+  ncclResult_t ret = ncclSuccess;
+  int cudaDriverVersion;
+  int paramValue = -1;
+  CUDACHECKGOTO(cudaDriverGetVersion(&cudaDriverVersion), ret, error);
+  if (cudaDriverVersion < 12020) {
+    ncclCumemHostEnable = 0;
+  }
+  else {
+    paramValue = ncclParamCuMemHostEnable();
+    if (paramValue != -1)
+      ncclCumemHostEnable = paramValue;
+    else
+      ncclCumemHostEnable = (cudaDriverVersion >= 12060) ? 1 : 0;
+  }
+  return ncclCumemHostEnable;
+error:
+  return (ret == ncclSuccess);
 #endif
 }
 
@@ -218,10 +235,9 @@ static void initOnceFunc() {
   // Determine whether we support the cuMem APIs or not
   ncclCuMemSupported = ncclIsCuMemSupported();
 
-#if 12020 <= CUDART_VERSION && CUDART_VERSION <= 12030
-  /* To use cuMem* for host memory allocation, we need to create context on each
-   * visible device. This is workaround needed in CUDA 12.3 which is fixed in 12.4. */
-  if (ncclCuMemSupported && ncclCuMemHostEnable()) {
+  /* To use cuMem* for host memory allocation, we need to create context on each visible device.
+   * This is a workaround needed in CUDA 12.2 and CUDA 12.3 which is fixed in 12.4. */
+  if (ncclCuMemSupported && ncclCuMemHostEnable() && 12020 <= driverVersion && driverVersion <= 12030) {
     int deviceCnt, saveDevice;
     cudaGetDevice(&saveDevice);
     cudaGetDeviceCount(&deviceCnt);
@@ -231,7 +247,6 @@ static void initOnceFunc() {
     }
     cudaSetDevice(saveDevice);
   }
-#endif
   initResult = ret;
   return;
 error:

@@ -9,16 +9,6 @@
 
 #include <stdint.h>
 
-enum {
-  ncclProfileGroup     = (1 << 0),  // group event type
-  ncclProfileColl      = (1 << 1),  // host collective call event type
-  ncclProfileP2p       = (1 << 2),  // host point-to-point call event type
-  ncclProfileProxyOp   = (1 << 3),  // proxy operation event type
-  ncclProfileProxyStep = (1 << 4),  // proxy step event type
-  ncclProfileProxyCtrl = (1 << 5),  // proxy control event type
-  ncclProfileNumEvents = (     6),
-};
-
 typedef struct {
   uint8_t type;                 // event type descriptor: ncclProfileColl, ...
   void* parentObj;              // pointer to the profiler parent object (for coll is the group)
@@ -69,42 +59,8 @@ typedef struct {
   };
 } ncclProfilerEventDescr_v1_t;
 
-typedef enum {
-  ncclProfilerProxyOpSendPosted,
-  ncclProfilerProxyOpSendRemFifoWait,
-  ncclProfilerProxyOpSendTransmitted,
-  ncclProfilerProxyOpSendDone,
-  ncclProfilerProxyOpRecvPosted,
-  ncclProfilerProxyOpRecvReceived,
-  ncclProfilerProxyOpRecvTransmitted,
-  ncclProfilerProxyOpRecvDone,
-
-  /* Legacy proxy profiler states */
-  ncclProfilerProxyStepSendGPUWait,
-  ncclProfilerProxyStepSendWait,
-  ncclProfilerProxyStepRecvWait,
-  ncclProfilerProxyStepRecvFlushWait,
-  ncclProfilerProxyStepRecvGPUWait,
-
-  /* Legacy proxy control states */
-  ncclProfilerProxyCtrlIdle,
-  ncclProfilerProxyCtrlActive,
-  ncclProfilerProxyCtrlSleep,
-  ncclProfilerProxyCtrlWakeup,
-  ncclProfilerProxyCtrlAppend,
-  ncclProfilerProxyCtrlAppendEnd,
-} ncclProfilerEventState_v1_t;
-
-typedef union {
-  struct {
-    size_t transSize;
-    int steps;
-  } proxyOp;
-
-  struct {
-    int appendedProxyOps;
-  } proxyCtrl;
-} ncclProfilerEventStateArgs_v1_t;
+typedef ncclProfilerEventState_v2_t ncclProfilerEventState_v1_t;
+typedef ncclProfilerEventStateArgs_v2_t ncclProfilerEventStateArgs_v1_t;
 
 typedef struct {
   const char* name;
@@ -141,10 +97,5 @@ typedef struct {
   //  - context: opaque profiler context object
   ncclResult_t (*finalize)(void* context);
 } ncclProfiler_v1_t;
-
-typedef ncclProfilerEventDescr_v1_t ncclProfilerEventDescr_t;
-typedef ncclProfilerEventState_v1_t ncclProfilerEventState_t;
-typedef ncclProfilerEventStateArgs_v1_t ncclProfilerEventStateArgs_t;
-typedef ncclProfiler_v1_t ncclProfiler_t;
 
 #endif

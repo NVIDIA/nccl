@@ -67,6 +67,7 @@ typedef struct {
   //   - numPipeOps: number of operations in the group
   //   - numAlgo: number of algorithms in collCostTable
   //   - numProto: number of protocols in collCostTable
+  //   - regBuff: can register user buffer
   //
   // Outputs:
   //   - nChannels: number of channels (hence SMs) to be used.
@@ -82,15 +83,15 @@ typedef struct {
   // Unset fields will be set automatically by NCCL.
   ncclResult_t (*getCollInfo)(void* context, ncclFunc_t collType, size_t nBytes,
                               int numPipeOps, float** collCostTable, int numAlgo, int numProto,
-                              int* nChannels);
+                              int regBuff, int* nChannels);
 
   // Terminates the plugin and cleans up any resources that the plugin allocated.
   // context: tuner context object
   ncclResult_t (*destroy)(void* context);
-} ncclTuner_v3_t;
+} ncclTuner_v4_t;
 
-typedef ncclTuner_v3_t ncclTuner_t;
+typedef ncclTuner_v4_t ncclTuner_t;
 
-#define NCCL_TUNER_PLUGIN_SYMBOL "ncclTunerPlugin_v3"
+#define NCCL_TUNER_PLUGIN_SYMBOL "ncclTunerPlugin_v4"
 
 #endif

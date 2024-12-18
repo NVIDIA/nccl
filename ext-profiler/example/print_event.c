@@ -11,56 +11,6 @@
 
 #define __hidden __attribute__ ((visibility("hidden")))
 
-__hidden const char* ncclFuncToString(int func) {
-  switch(func) {
-    case 0:
-      return "ncclBroadcast";
-    case 1:
-      return "ncclReduce";
-    case 2:
-      return "ncclAllGather";
-    case 3:
-      return "ncclReduceScatter";
-    case 4:
-      return "ncclAllReduce";
-    case 5:
-      return "ncclSendRecv";
-    case 6:
-      return "ncclSend";
-    case 7:
-      return "ncclRecv";
-  }
-  return NULL;
-}
-
-__hidden const char* ncclAlgoToString(int algo) {
-  switch(algo) {
-    case 0:
-      return "Tree";
-    case 1:
-      return "Ring";
-    case 2:
-      return "CollnetDirect";
-    case 3:
-      return "CollnetChain";
-    case 4:
-      return "Nvls";
-    case 5:
-      return "NvlsTree";
-  }
-}
-
-__hidden const char* ncclProtoToString(int proto) {
-  switch(proto) {
-    case 0:
-      return "LL";
-    case 1:
-      return "LL128";
-    case 2:
-      return "Simple";
-  }
-}
-
 // FIXME: chrome tracing asynchronous events (following used) allow event nesting for events that have same id and category
 // It appears that nesting more than three events causes issues. Therefore, every event is given an increasing id and a
 // category that matches the type of event (GROUP, COLL, P2P, PROXY, NET)
@@ -77,24 +27,24 @@ __hidden void printGroupEventTrailer(FILE* fh, struct group* event) {
 
 static __thread int collId;
 __hidden void printCollEventHeader(FILE* fh, struct collective* event) {
-  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"COLL\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"SeqNum\": %lu, \"CommHash\": %lu, \"Rank\": %d, \"Count\": %lu, \"Datatype\": %d, \"Algorithm\": \"%s\", \"Protocol\": \"%s\", \"nMaxChannels\": %d}},\n",
-          ncclFuncToString(event->base.func), collId, getpid(), 1, event->base.startTs, event->seqNumber, event->base.commHash, event->base.rank, event->count, event->datatype, ncclAlgoToString(event->algo), ncclProtoToString(event->proto), event->nMaxChannels);
+  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"COLL\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"SeqNum\": %lu, \"CommHash\": %lu, \"Rank\": %d, \"Count\": %lu, \"Datatype\": \"%s\", \"Algorithm\": \"%s\", \"Protocol\": \"%s\", \"nMaxChannels\": %d}},\n",
+          event->base.func, collId, getpid(), 1, event->base.startTs, event->seqNumber, event->base.commHash, event->base.rank, event->count, event->datatype, event->algo, event->proto, event->nMaxChannels);
 }
 
 __hidden void printCollEventTrailer(FILE* fh, struct collective* event) {
   fprintf(fh, "{\"name\": \"%s\", \"cat\": \"COLL\", \"ph\": \"e\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f},\n",
-          ncclFuncToString(event->base.func), collId++, getpid(), 1, event->base.stopTs);
+          event->base.func, collId++, getpid(), 1, event->base.stopTs);
 }
 
 static __thread int p2pId;
 __hidden void printP2pEventHeader(FILE* fh, struct p2p* event) {
-  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"P2P\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"CommHash\": %lu, \"Rank\": %d, \"Peer\": %d, \"Count\": %lu, \"Datatype\": %d}},\n",
-          ncclFuncToString(event->base.func), p2pId, getpid(), 1, event->base.startTs, event->base.commHash, event->base.rank, event->peer, event->count, event->datatype);
+  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"P2P\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"CommHash\": %lu, \"Rank\": %d, \"Peer\": %d, \"Count\": %lu, \"Datatype\": \"%s\"}},\n",
+          event->base.func, p2pId, getpid(), 1, event->base.startTs, event->base.commHash, event->base.rank, event->peer, event->count, event->datatype);
 }
 
 __hidden void printP2pEventTrailer(FILE* fh, struct p2p* event) {
   fprintf(fh, "{\"name\": \"%s\", \"cat\": \"P2P\", \"ph\": \"e\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f},\n",
-          ncclFuncToString(event->base.func), p2pId++, getpid(), 1, event->base.stopTs);
+          event->base.func, p2pId++, getpid(), 1, event->base.stopTs);
 }
 
 static __thread int proxyOpId;
@@ -250,14 +200,18 @@ void printEvent(FILE* fh, void* handle) {
     struct collective* c = (struct collective *)handle;
     printCollEventHeader(fh, c);
     for (int i = 0; i < MAX_CHANNELS; i++) {
-      printEvent(fh, &c->send[i]);
-      printEvent(fh, &c->recv[i]);
+      for (int j = 0; j < c->nProxyOps[i]; j++) {
+        printEvent(fh, &c->send[i][j]);
+        printEvent(fh, &c->recv[i][j]);
+      }
     }
     printCollEventTrailer(fh, c);
   } else if (type == ncclProfileP2p) {
     struct p2p* p = (struct p2p *)handle;
     printP2pEventHeader(fh, p);
-    printEvent(fh, &p->op);
+    for (int i = 0; i < MAX_CHANNELS; i++) {
+      printEvent(fh, &p->op[i]);
+    }
     printP2pEventTrailer(fh, p);
   } else if (type == ncclProfileProxyOp) {
     struct proxyOp* p = (struct proxyOp *)handle;

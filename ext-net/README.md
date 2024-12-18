@@ -60,9 +60,9 @@ of newer ones.
 The `nccl/` directory is populated with `net_vX.h` files extracting all relevant definitions
 from old API versions. It also provides error codes in `err.h`.
 
-# API (v6)
+# API (v9)
 
-Below is the main `ncclNet_v6` struct. Each function is explained in later sections.
+Below is the main `ncclNet_v9` struct. Each function is explained in later sections.
 
 ```
 typedef struct {
@@ -73,7 +73,7 @@ typedef struct {
   // Return the number of adapters.
   ncclResult_t (*devices)(int* ndev);
   // Get various device properties.
-  ncclResult_t (*getProperties)(int dev, ncclNetProperties_v6_t* props);
+  ncclResult_t (*getProperties)(int dev, ncclNetProperties_v9_t* props);
   // Create a receiving object and provide a handle to connect to it. The
   // handle can be up to NCCL_NET_HANDLE_MAXSIZE bytes and will be exchanged
   // between ranks to create a connection.
@@ -82,24 +82,26 @@ typedef struct {
   // This call must not block for the connection to be established, and instead
   // should return successfully with sendComm == NULL with the expectation that
   // it will be called again until sendComm != NULL.
-  ncclResult_t (*connect)(int dev, void* handle, void** sendComm);
+  // If *sendDevComm points to a valid object, then NCCL is requesting device offload for this connection
+  ncclResult_t (*connect)(int dev, void* handle, void** sendComm, ncclNetDeviceHandle_v8_t** sendDevComm);
   // Finalize connection establishment after remote peer has called connect.
   // This call must not block for the connection to be established, and instead
   // should return successfully with recvComm == NULL with the expectation that
   // it will be called again until recvComm != NULL.
-  ncclResult_t (*accept)(void* listenComm, void** recvComm);
+  // If *recvDevComm points to a valid object, then NCCL is requesting device offload for this connection
+  ncclResult_t (*accept)(void* listenComm, void** recvComm, ncclNetDeviceHandle_v8_t** recvDevComm);
   // Register/Deregister memory. Comm can be either a sendComm or a recvComm.
   // Type is either NCCL_PTR_HOST or NCCL_PTR_CUDA.
-  ncclResult_t (*regMr)(void* comm, void* data, int size, int type, void** mhandle);
+  ncclResult_t (*regMr)(void* comm, void* data, size_t size, int type, void** mhandle);
   /* DMA-BUF support */
   ncclResult_t (*regMrDmaBuf)(void* comm, void* data, size_t size, int type, uint64_t offset, int fd, void** mhandle);
   ncclResult_t (*deregMr)(void* comm, void* mhandle);
   // Asynchronous send to a peer.
   // May return request == NULL if the call cannot be performed (or would block)
-  ncclResult_t (*isend)(void* sendComm, void* data, int size, int tag, void* mhandle, void** request);
+  ncclResult_t (*isend)(void* sendComm, void* data, size_t size, int tag, void* mhandle, void** request);
   // Asynchronous recv from a peer.
   // May return request == NULL if the call cannot be performed (or would block)
-  ncclResult_t (*irecv)(void* recvComm, int n, void** data, int* sizes, int* tags, void** mhandles, void** request);
+  ncclResult_t (*irecv)(void* recvComm, int n, void** data, size_t* sizes, int* tags, void** mhandles, void** request);
   // Perform a flush/fence to make sure all data received with NCCL_PTR_CUDA is
   // visible to the GPU
   ncclResult_t (*iflush)(void* recvComm, int n, void** data, int* sizes, void** mhandles, void** request);
@@ -110,7 +112,17 @@ typedef struct {
   ncclResult_t (*closeSend)(void* sendComm);
   ncclResult_t (*closeRecv)(void* recvComm);
   ncclResult_t (*closeListen)(void* listenComm);
-} ncclNet_v6_t;
+
+  // Copy the given mhandle to a dptr in a format usable by this plugin's device code
+  ncclResult_t (*getDeviceMr)(void* comm, void* mhandle, void** dptr_mhandle);
+
+  // Notify the plugin that a recv has completed by the device
+  ncclResult_t (*irecvConsumed)(void* recvComm, int n, void* request);
+
+  // Virtual NIC APIs. makeVDevice will create a virtual NIC given the specified properties, and tell the caller
+  // what index this new vNIC exists at
+  ncclResult_t (*makeVDevice)(int* d, ncclNetVDeviceProps_t* props);
+} ncclNet_t;
 ```
 
 ## Error codes
@@ -136,10 +148,18 @@ not need to rely on CUDA, this should not be common.
 NCCL will call the `init` function first, then query the number of network devices with the
 `devices` function, getting each network device properties with `getProperties`.
 
+If NCCL wishes to initialize virtual devices, used in NIC fusion currently, it can call `makeVDevice`
+specifying a list of physical devices (the original devices listed from `devices`) it wishes to
+merge together. If the plugin does not support NIC fusion, it can set `makeVDevice` to null.
+
 To establish a connection between two network devices, NCCL will first call `listen` on the
 receiving side, pass the returned handle to the sender side of the connection, and call `connect`
 with that handle. Finally, `accept` will be called on the receiving side to finalize the connection
 establishment.
+
+`connect` and `accept` can receive an optional `netDevComm` pointer from the caller, if the caller
+wishes to make use of device networking. This parameter may be ignored by the plugin if it does
+not support device-side networking.
 
 Once the connection is established, communication will be done using the functions `isend`,
 `irecv` and `test`. Prior to calling `isend` or `irecv`, NCCL will call the `regMr` function on
@@ -219,6 +239,12 @@ different offset within the original buffer, with a smaller size, etc), then der
 The call to ncclCommDeregister should call the final deregMr() and effectively remove the mapping
 on the network adapter.
 
+The `forceFlush` field can request the NCCL core to call flush for all transfers. By default,
+flushes are only called when the GPU architecture or PCI topology would not not guarantee correct
+PCI ordering. Plugins can set it to one if the NIC operates in a mode where e.g. the data and the
+completion paths use different PCI links and therefore need a call to flush() to guarantee
+ordering.
+
 The `speed` field indicates the speed of the network port in Mbps (10^6 bits per second). This is
 important to ensure proper optimization of flows within the node.
 
@@ -233,6 +259,17 @@ The `maxComms` field indicates the maximum number of connections we can create.
 
 The `maxRecvs` field indicates the maximum number for grouped receive operations (see grouped
 receive).
+
+The `netDeviceType` indicates which type of device networking this plugin supports. The current supported
+options are `NCCL_NET_DEVICE_HOST` and `NCCL_NET_DEVICE_UNPACK`.
+
+The `netDeviceVersion` indicates the version of device networking this plugin supports. Currently, this must match the associated netDeviceVersion of this netDeviceType compiled into NCCL core. Net device functionality is built as apart of NCCL core's device code.
+
+The `maxP2pBytes` and `maxCollBytes` fields indicate the maximum size the plugin can handle for
+point-to-point and collective calls. This will tell the NCCL core to cut large operations into
+multiple smaller chunks if needed.
+
+`vProps` is the list of devices that have been fused into the current device. Each entry is an index pointing to the child device.
 
 ### Connection establishment
 
@@ -331,6 +368,12 @@ handled by a single request handle.
 
 The sizes provided to `irecv` can (and will) be larger than the size of the `isend` operation.
 The contrary (receive size being lower than the send size) is an error, however.
+
+NCCL sets request pointer in `irecv` to `NCCL_NET_OPTIONAL_RECV_COMPLETION` when it is using
+LL or LL128 protocols. In these cases, NCCL polls on flag embedded in data to detect completion
+of irecv and is resilient to redundant network writes. This allows the plugin to optimize request
+completions on such irecvs (for example, complete the request immediately). The plugin is still
+expected to set a valid request pointer on return which NCCL can poll to check for completion.
 
 Note: for a given connection, send/receive operations should always match in the order they were
 posted. Tags provided for receive operations are only used to assign a given send operation to one

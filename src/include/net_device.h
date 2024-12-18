@@ -25,6 +25,7 @@ typedef struct {
 } ncclNetDeviceHandle_v7_t;
 
 typedef ncclNetDeviceHandle_v7_t ncclNetDeviceHandle_v8_t;
-typedef ncclNetDeviceHandle_v8_t ncclNetDeviceHandle_t;
+typedef ncclNetDeviceHandle_v8_t ncclNetDeviceHandle_v9_t;
+typedef ncclNetDeviceHandle_v9_t ncclNetDeviceHandle_t;
 
 #endif

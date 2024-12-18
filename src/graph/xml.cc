@@ -17,6 +17,9 @@
 #include <cpuid.h>
 #endif
 
+// Arbitrarily large number for constructing virtual topology string
+#define NCCL_MAX_XML_DEPTH 1024
+
 /*******************/
 /* XML File Parser */
 /*******************/
@@ -430,7 +433,7 @@ static ncclResult_t getBcmLinks(const char* busId, int* nlinks, char** peers) {
 
 ncclResult_t ncclTopoGetStrFromSys(const char* path, const char* fileName, char* strValue) {
   char filePath[PATH_MAX];
-  sprintf(filePath, "%s/%s", path, fileName);
+  snprintf(filePath, sizeof(filePath), "%s/%s", path, fileName);
   int offset = 0;
   FILE* file;
   if ((file = fopen(filePath, "r")) != NULL) {
@@ -883,7 +886,7 @@ ncclResult_t ncclTopoFillGpu(struct ncclXml* xml, const char* busId, struct nccl
 // where sysPath/subsystem points to.
 ncclResult_t ncclTopoGetSubsystem(const char* sysPath, char* subSys) {
   char subSysPath[PATH_MAX];
-  sprintf(subSysPath, "%s/subsystem", sysPath);
+  snprintf(subSysPath, sizeof(subSysPath), "%s/subsystem", sysPath);
   char* path = realpath(subSysPath, NULL);
   if (path == NULL) {
     subSys[0] = '\0';
@@ -896,8 +899,9 @@ ncclResult_t ncclTopoGetSubsystem(const char* sysPath, char* subSys) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclTopoFillNet(struct ncclXml* xml, const char* pciPath, const char* netName, struct ncclXmlNode** netNode) {
+ncclResult_t ncclTopoFillNet(struct ncclXml* xml, const char* pciPath, const char* netName, struct ncclXmlNode** netNode, struct ncclXmlNode* forceParent) {
   NCCLCHECK(xmlFindTagKv(xml, "net", netNode, "name", netName));
+
   if (*netNode != NULL) return ncclSuccess;
 
   const char* pciSysPath = pciPath;
@@ -906,13 +910,15 @@ ncclResult_t ncclTopoFillNet(struct ncclXml* xml, const char* pciPath, const cha
     NCCLCHECK(ncclTopoGetSubsystem(pciSysPath, subSystem));
     // This is not a PCI device (virtual, usb, ...).
     if (strcmp(subSystem, "pci") != 0) {
-      INFO(NCCL_GRAPH, "Topology detection: network path %s is not a PCI device (%s). Attaching to first CPU", pciSysPath, subSystem);
+      INFO(NCCL_NET|NCCL_GRAPH, "Topology detection: network path %s is not a PCI device (%s). Attaching to first CPU", pciSysPath, subSystem);
       pciSysPath = NULL;
     }
   }
 
   struct ncclXmlNode* parent = NULL;
-  if (pciSysPath) {
+  if (forceParent) {
+    parent = forceParent;
+  } else if (pciSysPath) {
     int offset;
     for (offset=strlen(pciSysPath)-1; pciSysPath[offset] != '/'; offset--);
     char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE];

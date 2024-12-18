@@ -45,7 +45,7 @@ static void shmHandleInit(int fd, char* shmPath, size_t shmSize, size_t realShmS
   return;
 }
 
-ncclResult_t ncclShmOpen(char* shmPath, size_t shmSize, void** shmPtr, void** devShmPtr, int refcount, ncclShmHandle_t* handle) {
+ncclResult_t ncclShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize, void** shmPtr, void** devShmPtr, int refcount, ncclShmHandle_t* handle) {
   int fd = -1;
   char* hptr = NULL;
   void* dptr = NULL;
@@ -62,7 +62,7 @@ ncclResult_t ncclShmOpen(char* shmPath, size_t shmSize, void** shmPtr, void** de
      * refcount references; when the peer attaches, it should pass -1 to reduce one reference count. When it
      * goes down to 0, unlink should be called in order to delete shared memory file. */
     if (shmPath[0] == '\0') {
-      sprintf(shmPath, "/dev/shm/nccl-XXXXXX");
+      snprintf(shmPath, shmPathSize, "/dev/shm/nccl-XXXXXX");
     retry_mkstemp:
       fd = mkstemp(shmPath);
       if (fd < 0) {
@@ -70,7 +70,7 @@ ncclResult_t ncclShmOpen(char* shmPath, size_t shmSize, void** shmPtr, void** de
           INFO(NCCL_ALL, "mkstemp: Failed to create %s, error: %s (%d) - retrying", shmPath, strerror(errno), errno);
           goto retry_mkstemp;
         }
-        WARN("Error: failed to create shared memory file %p, error %s (%d)", shmPath, strerror(errno), errno);
+        WARN("Error: failed to create shared memory file %s, error %s (%d)", shmPath, strerror(errno), errno);
         ret = ncclSystemError;
         goto fail;
       }

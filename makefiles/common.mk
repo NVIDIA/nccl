@@ -12,6 +12,7 @@ DEBUG ?= 0
 ASAN ?= 0
 UBSAN ?= 0
 TRACE ?= 0
+WERROR ?= 0
 PROFAPI ?= 1
 NVTX ?= 1
 RDMA_CORE ?= 0
@@ -113,6 +114,10 @@ endif
 
 ifeq ($(NVTX), 0)
 CXXFLAGS  += -DNVTX_DISABLE
+endif
+
+ifneq ($(WERROR), 0)
+CXXFLAGS  += -Werror
 endif
 
 ifneq ($(KEEP), 0)

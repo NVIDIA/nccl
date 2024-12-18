@@ -14,9 +14,9 @@ enum primsMode {
 };
 
 template<typename T, typename RedOp, typename Fan, int Direct,
-         int SlicePerChunk, int StepPerSlice, int Unroll, int P2p, int MultimemSrcs, int MultimemDsts>
+         int SlicePerChunk, int StepPerSlice, int Unroll, int P2p, int MultimemSrcs, int MultimemDsts, bool isNetOffload>
 class Primitives<
-    T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice, Unroll, MultimemSrcs, MultimemDsts>, P2p
+    T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice, Unroll, MultimemSrcs, MultimemDsts>, P2p, isNetOffload
   > {
   static constexpr int MaxRecv = Fan::MaxRecv, MaxSend = Fan::MaxSend;
   static constexpr int Input=0, Output=1;
@@ -34,11 +34,7 @@ class Primitives<
                        PatMode = 0x800,
                        NvlsMinPolling = 0x1000,
                        NetDeviceUnpack = 0x2000,
-                       AnyNetDeviceUnpack = 0x4000,
-                       NvlsDirectRead = 0x8000,
-                       NvlsDirectWrite = 0x10000,
-                       IpcWrite = 0x20000,
-                       IpcRead = 0x40000;
+                       AnyNetDeviceUnpack = 0x4000;
   const int tid, tidInBlock;
   const int nthreads;
   int nworkers;
@@ -119,12 +115,9 @@ class Primitives<
   template <int DirectRecv, int DirectSend, int Recv, int Send, int Src, int Dst>
   __device__ __forceinline__ void waitPeer(intptr_t srcIx, intptr_t dstIx, int offset, int nelts) {
     const bool isSendNotRecv = (Send && Recv) ? (flags & RoleWaitSend) : Send;
-    const bool noRecvWait = DirectRecv && Src && (flags & (DirectRead | IpcRead));        // no wait when directly reading from remote input
-    const bool noSendWait = DirectSend && (flags & (DirectRead|DirectWrite)); // no wait in empty send (e.g. directScatter) or direct remote write
     // Yes, for some template arguments this code will be unreachable.  That's fine.
     // coverity[dead_error_line]
-    if (((flags & (Recv*RoleWaitRecv)) && !noRecvWait) ||
-        ((flags & (Send*RoleWaitSend)) && !noSendWait)) {
+    if ((flags & (Recv * RoleWaitRecv)) || (flags & (Send * RoleWaitSend))) {
       int spins = 0;
       while (connStepCache + (isSendNotRecv ? NCCL_STEPS : 0) < step + StepPerSlice) {
         connStepCache = loadStepValue(connStepPtr);
@@ -134,27 +127,38 @@ class Primitives<
     }
 
     if (flags & (Recv*RoleWaitRecv | Send*RoleWaitSend)) {
-      if (flags & ConnFifoEnabled)
+      if ((flags & ConnFifoEnabled) && (flags & (Send * RoleWaitSend)))
         connFifo[step%NCCL_STEPS].size = nelts*sizeof(T);
 
       void **ptrs = isSendNotRecv ? (ncclShmem.groups[group].dsts + Dst)
                                   : (ncclShmem.groups[group].srcs + Src);
       if (flags & NetRegMode) {
-         // Do nothing
+        if (P2p) {
+          ptrs[index] = NULL;
+        } else {
+          if (isSendNotRecv) {
+            if (!Recv)
+              ptrs[index] = NULL;
+            else
+              ptrs[index] = (T*)ncclShmem.groups[group].userOutput + dstIx + offset;
+          } else {
+            ptrs[index] = (T*)ncclShmem.groups[group].userOutput + srcIx + offset;
+          }
+        }
       } else if ((flags & ConnFifoEnabled) && connFifo[step%NCCL_STEPS].mode == NCCL_MODE_OFFSET) {
         ptrs[index] = connEltsFifo + loadInt(&connFifo[step%NCCL_STEPS].offset)/sizeof(T);
       } else if (isSendNotRecv && DirectSend) {
-        if (flags & (DirectWrite | NvlsDirectWrite | IpcWrite)) {
+        if (flags & DirectWrite) {
           ptrs[index] = directBuff + dstIx + offset;
-        } else if ((flags & DirectRead) || (flags & IpcRead)) {  // empty send
+        } else if (flags & DirectRead) {  // empty send
           ptrs[index] = nullptr;
         } else {
           ptrs[index] = connEltsFifo + (step%NCCL_STEPS)*connStepSize;
         }
       } else if (!isSendNotRecv && DirectRecv) {
-        if (flags & (DirectRead | NvlsDirectRead | IpcRead)) {
+        if (flags & DirectRead) {
           ptrs[index] = directBuff + srcIx + offset;
-        } else if ((flags & DirectWrite) || (flags & IpcWrite)) {
+        } else if (flags & DirectWrite) {
           ptrs[index] = directBuff + dstIx + offset;  // send to next from my output buffer
         } else {
           ptrs[index] = connEltsFifo + (step%NCCL_STEPS)*connStepSize;
@@ -198,7 +202,7 @@ class Primitives<
     int slice = 0;
     int offset = 0;
 
-    if (tid < nworkers && offset < nelem && ((flags & NetRegMode) == 0)) {
+    if (tid < nworkers && offset < nelem && !isNetOffload) {
       // Worker-only loop for non-empty slices. Non-workers and empty slices are
       // processed in the loop following this if block. The benefit of splitting
       // the loop like this is we pull two branches out of the critical path.
@@ -252,7 +256,7 @@ class Primitives<
              * so we need to check whether MultimemSrcs and MultimemDsts are 0. */
             && MultimemSrcs == 0 && MultimemDsts == 0 && !Src) {
           // We can only have one direct receive. Since srcs[0] == dstPtr+offset, skip one copy
-          if (Send) {
+          if (Send && Dst && ncclShmem.groups[group].srcs[0] != ncclShmem.groups[group].dsts[1]) {
             reduceCopy<Unroll, RedOp, T, 0, 1, 1, 0, 1, MaxSend, /*PreOpSrcs*/0>
               (tid, nworkers, /*redArg*/0, /*preOpArgs*/nullptr, /*postOp*/false,
                1, ncclShmem.groups[group].srcs,
@@ -269,16 +273,32 @@ class Primitives<
         } else if (ncclShmem.groups[group].srcs[0] && ncclShmem.groups[group].dsts[0]) {
           constexpr int PreOpSrcs = SrcBuf != Input ? 0 :
                                     DirectRecv*MaxRecv == NCCL_MAX_DIRECT_ARITY ? (1+NCCL_MAX_DIRECT_ARITY) : 1;
-          reduceCopy<Unroll, RedOp, T,
-            MultimemSrcs, Recv+Src, Recv*MaxRecv+Src,
-            MultimemDsts, Send+Dst, Send*MaxSend+Dst, PreOpSrcs>
-            (tid, nworkers, ncclShmem.redOpArgs[0], ncclShmem.redOpArgs, postOp,
-             Recv*fan.nrecv()+Src, ncclShmem.groups[group].srcs,
-             Send*fan.nsend()+Dst, ncclShmem.groups[group].dsts,
-             workSize);
+          if (Send && Dst && ncclShmem.groups[group].dsts[1] == nullptr) {
+            // this case should only be directCopySend() with registered buffers and send to net peer
+            reduceCopy<Unroll, RedOp, T,
+              0, Recv + Src, Recv * MaxRecv + Src,
+              0, 1, 1, PreOpSrcs>
+              (tid, nworkers, ncclShmem.redOpArgs[0], ncclShmem.redOpArgs, postOp,
+                Recv * fan.nrecv() + Src, ncclShmem.groups[group].srcs,
+                1, ncclShmem.groups[group].dsts,
+                workSize);
+          } else {
+            reduceCopy<Unroll, RedOp, T,
+              MultimemSrcs, Recv + Src, Recv * MaxRecv + Src,
+              MultimemDsts, Send + Dst, Send * MaxSend + Dst, PreOpSrcs>
+              (tid, nworkers, ncclShmem.redOpArgs[0], ncclShmem.redOpArgs, postOp,
+                Recv * fan.nrecv() + Src, ncclShmem.groups[group].srcs,
+                Send * fan.nsend() + Dst, ncclShmem.groups[group].dsts,
+                workSize);
+          }
+        } else {
+          // we will come here when calling prims.directSend with net peer,
+          // in this case, ncclShmem.groups[group].dsts[0] == NULL, so we
+          // skip data flush.
+          workSize = 0;
         }
         barrier(); // This barrier has a counterpart in following loop
-        postPeer<Recv, Send>(0 < sliceSize);
+        postPeer<Recv, Send>(0 < workSize);
         offset += sliceSize;
         slice += 1;
         // Yes, for some template arguments this code will be unreachable.  That's fine.
@@ -295,10 +315,11 @@ class Primitives<
       sliceSize = sliceSize < nelem-offset ? sliceSize : nelem-offset;
       { // Only workers could have Wait roles so we know the slice must be empty
         // since we've exited the loop above.
-        waitPeer<DirectRecv, DirectSend, Recv, Send, Src, Dst>(0, 0, 0, 0);
+        waitPeer<DirectRecv, DirectSend, Recv, Send, Src, Dst>(0, 0, 0, sliceSize);
       }
       barrier(); // Has couterpart in preceding worker-only loop.
-      postPeer<Recv, Send>(0 < sliceSize);
+      int workSize = ncclShmem.aborted ? 0 : sliceSize;
+      postPeer<Recv, Send>(0 < workSize);
       offset += sliceSize;
       slice += 1;
     }
@@ -347,17 +368,17 @@ public:
             ptrs[index] = connEltsFifo + offset/sizeof(T);
           } else if (Direct && fn.work->regUsed) {
             if (isSendNotRecv) {
-              if (flags & (DirectWrite | IpcWrite)) {
+              if (flags & DirectWrite) {
                 ptrs[index] = directBuff;
-              } else if (flags & (DirectRead | IpcRead)) {  // empty send
+              } else if (flags & DirectRead) {  // empty send
                 ptrs[index] = nullptr;
               } else {
                 ptrs[index] = connEltsFifo + (step%NCCL_STEPS)*stepSize;
               }
             } else {
-              if (flags & (DirectRead | IpcRead)) {
+              if (flags & DirectRead) {
                 ptrs[index] = directBuff;
-              } else if (flags & (DirectWrite | IpcWrite)) {
+              } else if (flags & DirectWrite) {
                 if (Send)
                   ptrs[index] = directBuff;  // send to next from my output buffer
                 else
@@ -440,7 +461,7 @@ private:
             int i = (j+shift)%fan.nsend();
             ssize_t pOffset = i*peerOffset;
             // Skip the data I am responsible of reducing myself
-            if (skip >= 0 && i >= skip) pOffset += peerElem;
+            if (skip >= 0 && i >= skip) pOffset += peerOffset;
             void* src0 = (T*)ncclShmem.groups[group].srcs[0] + pOffset;
             ssize_t realPeerSize = min(realSize, totalElem-pOffset);
             if (realPeerSize > 0 && ncclShmem.groups[group].dsts[i] != nullptr) {
@@ -452,7 +473,7 @@ private:
         } else if (Recv) {
           if (tid==0) ncclShmem.groups[group].dsts[0] = (T*)ncclShmem.groups[group].userOutput + outIx + offset;
           ssize_t pOffset = index*peerOffset;
-          if (skip >= 0 && index >= skip) pOffset += peerElem;
+          if (skip >= 0 && index >= skip) pOffset += peerOffset;
           // Adjust remote index with peer offset in case we are directly pulling from peer's output buffer
           waitPeer<DirectRecv, 0, 1, 0, 0, 1>(outIx+pOffset, outIx+pOffset, offset, realSize);
           subBarrier();
@@ -460,7 +481,7 @@ private:
           for (int j=0; j<fan.nrecv(); j++) {
             int i = (j+shift)%fan.nrecv();
             pOffset = i*peerOffset;
-            if (skip >= 0 && i >= skip) pOffset += peerElem;
+            if (skip >= 0 && i >= skip) pOffset += peerOffset;
             void* dst0 = (T*)ncclShmem.groups[group].dsts[0] + pOffset;
             ssize_t realPeerSize = min(realSize, totalElem-pOffset);
             if (DirectRecv && ncclShmem.groups[group].srcs[i] == dst0) realPeerSize = 0;
@@ -474,7 +495,7 @@ private:
     }
   }
 
-  __device__ __forceinline__ void loadRecvConn(ncclDevChannelPeer *peer, int connIndex, uint32_t direct, int regFlag) {
+  __device__ __forceinline__ void loadRecvConn(ncclDevChannelPeer *peer, int connIndex, uint32_t direct, int ipcRegFlag, int netRegFlag) {
     conn = &peer->recv[connIndex];
     if (conn->netDeviceHandle.netDeviceType == NCCL_NET_DEVICE_UNPACK) {
       // handle must be a device ptr
@@ -499,33 +520,34 @@ private:
       if (conn->connFifo != nullptr) {
         flags |= ConnFifoEnabled;
         connFifo = conn->connFifo;
-      } else if (Direct && regFlag) {
-        // User buffers have been registered
-        if (conn->flags & (NCCL_IPC_READ | NCCL_IPC_WRITE)) {
-          if (P2p) {
-            flags |= conn->flags & NCCL_IPC_WRITE ? IpcWrite : IpcRead;
-          } else if (connIndex == 1 && direct) {
-            flags |= IpcRead;
-          } else {
-            flags |= direct & NCCL_DIRECT_READ ? IpcRead : IpcWrite;
+      }
+      if (Direct) {
+        if (ipcRegFlag) {
+          // User buffers have been registered
+          if (conn->flags & (NCCL_P2P_READ | NCCL_P2P_WRITE)) {
+            if (P2p) {
+              flags |= conn->flags & NCCL_P2P_WRITE ? DirectWrite : DirectRead;
+            } else if (connIndex == 1 && direct) {
+              flags |= DirectRead;
+            } else {
+              flags |= direct & NCCL_P2P_READ ? DirectRead : DirectWrite;
+            }
+          } else if ((conn->flags & NCCL_NVLS_MIN_POLL)) {
+            /* NVLS direct */
+            flags |= DirectRead;
           }
-        } else if (conn->flags & (NCCL_DIRECT_WRITE | NCCL_DIRECT_READ)) {
-          if (P2p) {
-            flags |= conn->flags & NCCL_DIRECT_WRITE ? DirectWrite : DirectRead;
-          } else if (connIndex == 1 && direct) {
-            flags |= DirectRead;  // scatter-reduce use direct pull
-          } else {
-            flags |= direct & NCCL_DIRECT_READ ? DirectRead : DirectWrite;
+        }
+        if (netRegFlag) {
+          if (conn->flags & NCCL_DIRECT_NIC) {
+            flags |= NetRegMode;
+            connFifo[step % NCCL_STEPS].size = 0;
           }
-        } else if ((conn->flags & NCCL_NVLS_MIN_POLL)) {
-          /* NVLS direct */
-          flags |= NvlsDirectRead;
         }
       }
     }
   }
 
-  __device__ __forceinline__ void loadSendConn(ncclDevChannelPeer *peer, int connIndex, uint32_t direct, int regFlag) {
+  __device__ __forceinline__ void loadSendConn(ncclDevChannelPeer *peer, int connIndex, uint32_t direct, int ipcRegFlag, int netRegFlag) {
     conn = &peer->send[connIndex];
     step = conn->step;
     step = roundUp(step, SlicePerChunk*StepPerSlice);
@@ -544,27 +566,26 @@ private:
       connStepCache = loadStepValue(connStepPtr);
       connStepSize = conn->stepSize/sizeof(T);
       connEltsFifo = (T*)conn->buffs[NCCL_PROTO_SIMPLE];
-      if (connFifo == nullptr && Direct && regFlag) {
-        // User buffers have been registered
-        if (conn->flags & (NCCL_IPC_READ | NCCL_IPC_WRITE)) {
-          if (P2p) {
-            flags |= conn->flags & NCCL_IPC_WRITE ? IpcWrite : IpcRead;
-          } else if (connIndex == 1 && direct) {
-            flags |= IpcRead;
-          } else {
-            flags |= direct & NCCL_DIRECT_READ ? IpcRead : IpcWrite;
+      if (Direct) {
+        if (ipcRegFlag) {
+          // User buffers have been registered
+          if (conn->flags & (NCCL_P2P_WRITE | NCCL_P2P_READ)) {
+            if (P2p) {
+              flags |= conn->flags & NCCL_P2P_WRITE ? DirectWrite : DirectRead;
+            } else if (connIndex == 1 && direct) {
+              flags |= DirectRead;  // scatter-reduce use direct pull
+            } else {
+              flags |= direct & NCCL_P2P_READ ? DirectRead : DirectWrite;
+            }
+          } else if ((conn->flags & NCCL_NVLS_MIN_POLL)) {
+            /* NVLS direct */
+            flags |= DirectWrite;
           }
-        } else if (conn->flags & (NCCL_DIRECT_WRITE | NCCL_DIRECT_READ)) {
-          if (P2p) {
-            flags |= conn->flags & NCCL_DIRECT_WRITE ? DirectWrite : DirectRead;
-          } else if (connIndex == 1 && direct) {
-            flags |= DirectRead;  // scatter-reduce use direct pull
-          } else {
-            flags |= direct & NCCL_DIRECT_READ ? DirectRead : DirectWrite;
+        }
+        if (netRegFlag) {
+          if (conn->flags & NCCL_DIRECT_NIC) {
+            flags |= NetRegMode;
           }
-        } else if ((conn->flags & NCCL_NVLS_MIN_POLL)) {
-          /* NVLS direct */
-          flags |= NvlsDirectWrite;
         }
       }
     }
@@ -574,8 +595,8 @@ private:
   __device__ Primitives(
       int tid, int nthreads, int const *recvPeers, int const *sendPeers,
       void const *inputBuf, void *outputBuf, uint64_t redOpArg, uint8_t group=0,
-      uint8_t connIndexRecv = 0, uint8_t connIndexSend = 0, struct ncclDevWorkColl* e = nullptr,
-      bool ipcReg = false, bool netReg = false, int stepSize_ = 0, int mode = primsModeDefault
+      uint8_t connIndexRecv = 0, uint8_t connIndexSend = 0, struct ncclDevWorkColl* collWork = nullptr,
+      struct ncclDevWorkP2p* p2pWork = nullptr, int stepSize_ = 0, int mode = primsModeDefault
     ):
     tid(tid), nthreads(nthreads), tidInBlock(threadIdx.x), group(group),
     stepSize(stepSize_ == 0 ? ncclShmem.comm.buffSizes[NCCL_PROTO_SIMPLE]/NCCL_STEPS/sizeof(T) : stepSize_) {
@@ -643,11 +664,23 @@ private:
 
     // Coverity thinks that index could be -1 here but that's not actually the case.
     // coverity[negative_returns:FALSE]
-    if (flags & (RoleWaitRecv|RolePostRecv)) loadRecvConn(ncclShmem.channel.peers[peer], connIndexRecv, e ? e->direct : 0, e ? e->regUsed : ipcReg);
-    // coverity[negative_returns:FALSE]
-    if (flags & (RoleWaitSend|RolePostSend)) loadSendConn(ncclShmem.channel.peers[peer], connIndexSend, e ? e->direct : 0, e ? e->regUsed : ipcReg);
-
-    if (netReg) flags |= NetRegMode;
+    int sendIpcReg;
+    int recvIpcReg;
+    int sendNetReg;
+    int recvNetReg;
+    if (P2p) {
+      sendIpcReg = p2pWork ? p2pWork->sendIpcReg : 0;
+      recvIpcReg = p2pWork ? p2pWork->recvIpcReg : 0;
+      sendNetReg = p2pWork ? p2pWork->sendNetReg : 0;
+      recvNetReg = p2pWork ? p2pWork->recvNetReg : 0;
+    } else {
+      recvIpcReg = sendIpcReg = collWork ? collWork->regUsed : 0;
+      recvNetReg = sendNetReg = collWork ? collWork->netRegUsed : 0;
+    }
+    // coverity[overrun-call] => Coverity think prims.index can be greater than 1
+    if (flags & (RoleWaitRecv|RolePostRecv)) loadRecvConn(ncclShmem.channel.peers[peer], connIndexRecv, collWork ? collWork->direct : 0, recvIpcReg, recvNetReg);
+    // coverity[overrun-call] => Coverity think prims.index can be greater than 1
+    if (flags & (RoleWaitSend|RolePostSend)) loadSendConn(ncclShmem.channel.peers[peer], connIndexSend, collWork ? collWork->direct : 0, sendIpcReg, sendNetReg);
 
     if (barrierAny(flags & NetDeviceUnpack)) {
       flags |= AnyNetDeviceUnpack;
@@ -659,8 +692,10 @@ private:
       }
     }
 
-    // coverity[negative_returns:FALSE]
-    setDataPtrs(inputBuf, outputBuf, redOpArg, (struct ncclDevWorkCollReg*)e, (uint8_t)(e ? e->regUsed : ipcReg), peer);
+    // coverity[negative_returns:FALSE] => coverity thinks that index could be -1 but that's not actually the case
+    // coverity[var_deref_model] => coverity thinks work can dereferenced if NULL but this is not the case
+    setDataPtrs(inputBuf, outputBuf, redOpArg, (struct ncclDevWorkCollReg*)collWork, sendIpcReg || recvIpcReg, peer);
+    // coverity[uninit_member] => coverity thinks fan.n is not initialized
   }
 
   __device__ ~Primitives() {
@@ -683,6 +718,16 @@ private:
     // Make sure all threads are done writing back conn->step and done using
     // ncclShmem.groups[group]
     barrier();
+
+    if ((flags & DirectRead) && (flags & RoleWaitSend) && P2p) {
+      // For sendrecv DirectRead, sender needs to wait for receiver reading data from src.
+      // This has to be done after barrier() since post thread might have contention with
+      // this check.
+      int spins = 0;
+      volatile uint64_t* tail = conn->tail;
+      volatile uint64_t* head = conn->head;
+      while (*tail > *head) if (checkAbort(spins)) break;
+    }
   }
 
   __device__ void setDataPtrs(void const *inputBuf, void *outputBuf, uint64_t redOpArg, struct ncclDevWorkCollReg* work, uint8_t ipcReg, int peer) {
@@ -693,10 +738,10 @@ private:
     }
 
     if (Direct && ipcReg) {
-      bool recvProvider = (flags & RoleWaitRecv) && (flags & DirectWrite || flags & IpcWrite);
-      bool sendAcceptor = (flags & RoleWaitSend) && (flags & DirectWrite || flags & IpcWrite || flags & NvlsDirectWrite);
-      bool sendProvider = (flags & RoleWaitSend) && (flags & DirectRead || flags & IpcRead); // sender provides direct buffer (to be fetched)
-      bool recvAcceptor = (flags & RoleWaitRecv) && (flags & DirectRead || flags & IpcRead || flags & NvlsDirectRead); // receiver accepts direct buffer
+      bool recvProvider = (flags & RoleWaitRecv) && (flags & DirectWrite);
+      bool sendAcceptor = (flags & RoleWaitSend) && (flags & DirectWrite);
+      bool sendProvider = (flags & RoleWaitSend) && (flags & DirectRead); // sender provides direct buffer (to be fetched)
+      bool recvAcceptor = (flags & RoleWaitRecv) && (flags & DirectRead); // receiver accepts direct buffer
       if (recvProvider) {
         int spins = 0;
         void* volatile* slot = ncclShmem.groups[group].recvConns[index]->ptrExchange;
@@ -709,6 +754,7 @@ private:
             exchgPtr = (T*)outputBuf;
           } else {
             int localPeer = ncclShmem.comm.rankToLocalRank[peer];
+            // coverity[deref_parm:FALSE] => work cannot be NULL if ipcReg != NULL
             exchgPtr = (T*)(work->coll.recvbuffOffset + work->coll.recvbuffRmtAddrs[localPeer]);
           }
           *slot = reinterpret_cast<void*>(exchgPtr);
@@ -727,6 +773,7 @@ private:
           directBuff = reinterpret_cast<T*>(ptr);
           *slot = nullptr;
         } else {
+          // coverity[var_deref_op]
           directBuff = (T*)work->dnOutputs[index];
         }
       }
@@ -747,8 +794,10 @@ private:
           } else {
             int localPeer = ncclShmem.comm.rankToLocalRank[peer];
             if (MaxRecv == 0)
+              // coverity[var_deref_op]
               exchgPtr = (T*)(work->coll.sendbuffOffset + work->coll.sendbuffRmtAddrs[localPeer]);
             else
+              // coverity[var_deref_op]
               exchgPtr = (T*)(work->coll.recvbuffOffset + work->coll.recvbuffRmtAddrs[localPeer]);
           }
 
@@ -837,11 +886,11 @@ private:
   __device__ __forceinline__ void recvCopySend(intptr_t outIx, int eltN, bool postOp=false) {
     genericOp<0, 0, 1, 1, -1, Output>(-1, outIx, eltN, postOp);
   }
-  __device__ __forceinline__ void directRecvCopyDirectSend(intptr_t outIx, int eltN, bool postOp=false) {
-    genericOp<1, 1, 1, 1, -1, Output>(-1, outIx, eltN, postOp);
+  __device__ __forceinline__ void directRecvCopyDirectSend(intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false) {
+    genericOp<1, 1, 1, 1, -1, Output>(inpIx, outIx, eltN, postOp);
   }
-  __device__ __forceinline__ void directRecvDirectSend(intptr_t inpIx, intptr_t outIx, int eltN) {
-    genericOp<1, 1, 1, 1, -1, -1>(inpIx, outIx, eltN, false);
+  __device__ __forceinline__ void directRecvDirectSend(intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false) {
+    genericOp<1, 1, 1, 1, -1, -1>(inpIx, outIx, eltN, postOp);
   }
   __device__ __forceinline__ void recvCopyDirectSend(intptr_t outIx, int eltN, bool postOp=false) {
     genericOp<0, 1, 1, 1, -1, Output>(-1, outIx, eltN, postOp);
@@ -859,6 +908,9 @@ private:
   }
   __device__ __forceinline__ void directRecvReduceSend(intptr_t inpIx, int eltN, bool postOp=false) {
     genericOp<1, 0, 1, 1, Input, -1>(inpIx, -1, eltN, postOp);
+  }
+  __device__ __forceinline__ void recvReduceDirectSend(intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false) {
+    genericOp<0, 1, 1, 1, Input, -1>(inpIx, outIx, eltN, postOp);
   }
   __device__ __forceinline__ void directRecvReduceDirectSend(intptr_t inpIx, intptr_t outIx, ssize_t eltN, bool postOp=false) {
     genericOp<1, 1, 1, 1, Input, -1>(inpIx, outIx, eltN, postOp);

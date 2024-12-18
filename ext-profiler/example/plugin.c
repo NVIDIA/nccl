@@ -21,11 +21,18 @@
 static int initialized;             // initialization counter for profiler
 static double startTime;            // profiler start time
 
-static int groupPoolSize = 16;
-static int collPoolSize = 16;
-static int p2pPoolSize = 1024;
-static int proxyCtrlPoolSize = 16;
-static int detachPoolSize = 128;
+static const int defaultEActivationMask = ncclProfileColl | ncclProfileP2p;
+static const int defaultGroupPoolSize = 16;
+static const int defaultCollPoolSize = 16;
+static const int defaultP2pPoolSize = 1024;
+static const int defaultProxyCtrlPoolSize = 16;
+static const int defaultDetachPoolSize = 128;
+
+static int groupPoolSize;
+static int collPoolSize;
+static int p2pPoolSize;
+static int proxyCtrlPoolSize;
+static int detachPoolSize;
 static int detachPoolBase;
 static int detachPoolIndex;
 static int detachPoolDone;
@@ -56,25 +63,25 @@ __hidden ncclResult_t exampleProfilerInit(void** context, int* eActivationMask) 
   pthread_mutex_lock(&lock);
   if (__atomic_fetch_add(&initialized, 1, __ATOMIC_RELAXED) == 0) {
     // first thread initializes event mask, environment and detach pool
-    __atomic_store_n(eActivationMask, ncclProfileColl | ncclProfileP2p, __ATOMIC_RELAXED);
-    if (getenv("NCCL_PROFILE_EVENT_MASK")) {
-      __atomic_store_n(eActivationMask, atoi(getenv("NCCL_PROFILE_EVENT_MASK")), __ATOMIC_RELAXED);
-    }
-    if (getenv("NCCL_PROFILE_GROUP_POOL_SIZE")) {
-      groupPoolSize = atoi(getenv("NCCL_PROFILE_GROUP_POOL_SIZE"));
-    }
-    if (getenv("NCCL_PROFILE_COLL_POOL_SIZE")) {
-      collPoolSize = atoi(getenv("NCCL_PROFILE_COLL_POOL_SIZE"));
-    }
-    if (getenv("NCCL_PROFILE_P2P_POOL_SIZE")) {
-      p2pPoolSize = atoi(getenv("NCCL_PROFILE_P2P_POOL_SIZE"));
-    }
-    if (getenv("NCCL_PROFILE_PROXY_CTRL_POOL_SIZE")) {
-      proxyCtrlPoolSize = atoi(getenv("NCCL_PROFILE_PROXY_CTRL_POOL_SIZE"));
-    }
-    if (getenv("NCCL_PROFILE_PROXY_DETACH_POOL_SIZE")) {
-      detachPoolSize = atoi(getenv("NCCL_PROFILE_PROXY_DETACH_POOL_SIZE"));
-    }
+    const char* str;
+    str = getenv("NCCL_PROFILE_EVENT_MASK");
+    __atomic_store_n(eActivationMask, str ? atoi(str) : defaultEActivationMask, __ATOMIC_RELAXED);
+
+    str = getenv("NCCL_PROFILE_GROUP_POOL_SIZE");
+    groupPoolSize = str ? atoi(str) : defaultGroupPoolSize;
+
+    str = getenv("NCCL_PROFILE_COLL_POOL_SIZE");
+    collPoolSize = str ? atoi(str) : defaultCollPoolSize;
+
+    str = getenv("NCCL_PROFILE_P2P_POOL_SIZE");
+    p2pPoolSize = str ? atoi(str) : defaultP2pPoolSize;
+
+    str = getenv("NCCL_PROFILE_PROXY_CTRL_POOL_SIZE");
+    proxyCtrlPoolSize = str ? atoi(str) : defaultProxyCtrlPoolSize;
+
+    str = getenv("NCCL_PROFILE_PROXY_DETACH_POOL_SIZE");
+    detachPoolSize = str ? atoi(str) : defaultDetachPoolSize;
+
     // detach pool is used to store PXN proxyOps and is shared among threads
     detachPool = (struct proxyOp *)calloc(detachPoolSize, sizeof(*detachPool));
     if (detachPool == NULL) {
@@ -106,6 +113,13 @@ __hidden ncclResult_t exampleProfilerInit(void** context, int* eActivationMask) 
 
   ctx->proxyCtrlPool = (struct proxyCtrl *)calloc(proxyCtrlPoolSize, sizeof(*ctx->proxyCtrlPool));
   if (ctx->proxyCtrlPool == NULL) goto fail;
+
+  // Print event pool sizes for debugging
+  //fprintf(stdout, "Profiler: Group pool size (bytes): %lu\n", sizeof(struct group)*groupPoolSize);
+  //fprintf(stdout, "Profiler: Coll  pool size (bytes): %lu\n", sizeof(struct collective)*collPoolSize);
+  //fprintf(stdout, "Profiler: P2p   pool size (bytes): %lu\n", sizeof(struct p2p)*p2pPoolSize);
+  //fprintf(stdout, "Profiler: Proxy pool size (bytes): %lu\n", sizeof(struct proxyCtrl)*proxyCtrlPoolSize);
+  //fprintf(stdout, "Profiler: PXN   pool size (bytes): %lu\n", sizeof(struct proxyOp)*detachPoolSize);
 
   *context = ctx;
   return ncclSuccess;
@@ -154,7 +168,7 @@ __hidden ncclResult_t exampleProfilerFinalize(void* context) {
   free(ctx);
 
   // last thread cleans up shared detach pool
-  if (__atomic_fetch_sub(&initialized, 1, __ATOMIC_RELAXED) - 1 == 0) {
+  if (__atomic_sub_fetch(&initialized, 1, __ATOMIC_RELAXED) == 0) {
     start = (detachPoolIndex - detachPoolSize >= 0) ? detachPoolIndex - detachPoolSize : 0;
     end = detachPoolIndex;
     for (int i = start; i < end; i++) {
@@ -171,7 +185,7 @@ __hidden ncclResult_t exampleProfilerFinalize(void* context) {
 
 __hidden void updateEvent(void* handle);
 
-__hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, ncclProfilerEventDescr_v1_t* eDescr) {
+__hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, ncclProfilerEventDescr_t* eDescr) {
   *eHandle = NULL;
   struct context* ctx = (struct context *)context;
   if (eDescr->type == ncclProfileGroup) {
@@ -185,14 +199,15 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
         if (base->type == ncclProfileColl) {
           struct collective* c = (struct collective *)base;
           // reset event proxyOps & proxySteps
-          memset(c->send, 0, sizeof(struct proxyOp)*MAX_CHANNELS);
-          memset(c->recv, 0, sizeof(struct proxyOp)*MAX_CHANNELS);
+          memset(c->send, 0, sizeof(struct proxyOp)*MAX_CHANNELS*MAX_OPS);
+          memset(c->recv, 0, sizeof(struct proxyOp)*MAX_CHANNELS*MAX_OPS);
+          memset(c->nProxyOps, 0, sizeof(int)*MAX_CHANNELS);
           // release collective events in the group and return them to the collective pool
           __atomic_fetch_add(&ctx->collPoolBase, 1, __ATOMIC_RELAXED);
         } else if (base->type == ncclProfileP2p) {
           struct p2p* p = (struct p2p *)base;
           // reset event proxyOp and proxySteps
-          memset(&p->op, 0, sizeof(struct proxyOp));
+          memset(&p->op, 0, sizeof(struct proxyOp)*MAX_CHANNELS);
           // release p2p events in the group and return them to the p2p pool
           __atomic_fetch_add(&ctx->p2pPoolBase, 1, __ATOMIC_RELAXED);
         }
@@ -203,7 +218,6 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
       return ncclSuccess;
     }
     event->type = ncclProfileGroup;
-    __atomic_store_n(&event->refCount, 1, __ATOMIC_RELAXED);
     event->ctx = ctx;
     event->groupId = groupId;
     event->startTs = gettime() - startTime;
@@ -238,14 +252,11 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
     event->count = eDescr->coll.count;
     event->root = eDescr->coll.root;
     event->datatype = eDescr->coll.datatype;
-    event->op = eDescr->coll.op;
     event->trafficBytes = eDescr->coll.trafficBytes;
     event->nMaxChannels = eDescr->coll.nMaxChannels;
     event->nWarps = eDescr->coll.nWarps;
     event->algo = eDescr->coll.algo;
     event->proto = eDescr->coll.proto;
-    event->isCollnet = eDescr->coll.isCollnet;
-    event->isNvls = eDescr->coll.isNvls;
     *eHandle = event;
     taskEventQueueEnqueue(parent, (struct taskEventBase *)event);
     // increment the group ref counter so the event will staty open
@@ -326,9 +337,13 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
 
     if (eventBase->type == ncclProfileColl) {
       struct collective* parent = (struct collective *)eDescr->parentObj;
-      struct proxyOp* event = (eDescr->proxyOp.isSend) ? &parent->send[eDescr->proxyOp.channelId] : &parent->recv[eDescr->proxyOp.channelId];
+      int channelId = eDescr->proxyOp.channelId;
+      struct proxyOp* event = (eDescr->proxyOp.isSend) ?
+        &parent->send[channelId][parent->nProxyOps[channelId]++] :
+        &parent->recv[channelId][parent->nProxyOps[channelId]++];
+
       event->type = ncclProfileProxyOp;
-      event->channelId = eDescr->proxyOp.channelId;
+      event->channelId = channelId;
       event->pid = eDescr->proxyOp.pid;
       event->rank = eDescr->rank;
       event->peer = eDescr->proxyOp.peer;
@@ -338,13 +353,14 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
       event->parent = eventBase;
       event->startTs = gettime() - startTime;
       *eHandle = event;
-      __atomic_store_n(&parent->base.refCount, 1, __ATOMIC_RELAXED);
+      __atomic_fetch_add(&parent->base.refCount, 1, __ATOMIC_RELAXED);
       debugEvent(event, "ProxyOpStart");
     } else { // ncclProfileP2p
       struct p2p* parent = (struct p2p *)eDescr->parentObj;
-      struct proxyOp* event = &parent->op;
+      int channelId = eDescr->proxyOp.channelId;
+      struct proxyOp* event = &parent->op[channelId];
       event->type = ncclProfileProxyOp;
-      event->channelId = eDescr->proxyOp.channelId;
+      event->channelId = channelId;
       event->pid = eDescr->proxyOp.pid;
       event->rank = eDescr->rank;
       event->peer = eDescr->proxyOp.peer;
@@ -354,7 +370,7 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
       event->parent = eventBase;
       event->startTs = gettime() - startTime;
       *eHandle = event;
-      __atomic_store_n(&parent->base.refCount, 1, __ATOMIC_RELAXED);
+      __atomic_fetch_add(&parent->base.refCount, 1, __ATOMIC_RELAXED);
       debugEvent(event, "ProxyOpStart");
     }
  } else if (eDescr->type == ncclProfileProxyStep) {
@@ -379,7 +395,7 @@ void updateEvent(void* handle) {
   uint8_t type = *(uint8_t *)handle;
   if (type == ncclProfileGroup) {
     struct group* event = (struct group *)handle;
-    if (__atomic_fetch_sub(&event->refCount, 1, __ATOMIC_RELAXED) == 1) {
+    if (__atomic_sub_fetch(&event->refCount, 1, __ATOMIC_RELAXED) == 0) {
       event->stopTs = gettime() - startTime;
       // return group event to the pool
       __atomic_fetch_add(&event->ctx->groupPoolBase, 1, __ATOMIC_RELAXED);
@@ -387,7 +403,7 @@ void updateEvent(void* handle) {
     debugEvent(event, "GroupStop");
   } else if (type == ncclProfileColl) {
     struct collective* event = (struct collective *)handle;
-    if (__atomic_fetch_sub(&event->base.refCount, 1, __ATOMIC_RELAXED) == 1) {
+    if (__atomic_sub_fetch(&event->base.refCount, 1, __ATOMIC_RELAXED) == 0) {
       event->base.stopTs = gettime() - startTime;
       debugEvent(event, "CollStop");
       updateEvent(event->base.parent);
@@ -396,7 +412,7 @@ void updateEvent(void* handle) {
     debugEvent(event, "CollStop");
   } else if (type == ncclProfileP2p) {
     struct p2p* event = (struct p2p *)handle;
-    if (__atomic_fetch_sub(&event->base.refCount, 1, __ATOMIC_RELAXED) == 1) {
+    if (__atomic_sub_fetch(&event->base.refCount, 1, __ATOMIC_RELAXED) == 0) {
       event->base.stopTs = gettime() - startTime;
       debugEvent(event, "P2pStop");
       updateEvent(event->base.parent);
@@ -408,7 +424,7 @@ void updateEvent(void* handle) {
     event->stopTs = gettime() - startTime;
     if (event->pid != pid) {
       // only for proxyOps that don't have a parent collective/p2p (i.e., PXN)
-      int done = __atomic_fetch_add(&detachPoolDone, 1, __ATOMIC_RELAXED) + 1;
+      int done = __atomic_add_fetch(&detachPoolDone, 1, __ATOMIC_RELAXED);
       if (done == detachPoolSize) {
         // reset the event completed (done) counter
         __atomic_store_n(&detachPoolDone, 0, __ATOMIC_RELAXED);
@@ -451,12 +467,20 @@ __hidden ncclResult_t exampleProfilerStopEvent(void* eHandle) {
     struct collective* event = (struct collective *)eHandle;
     event->base.stopTs = gettime() - startTime;
     return ncclSuccess;
+  } else if (type == ncclProfileP2p) {
+    // stopping the p2p event in NCCL core does not
+    // mean the p2p has completed. It means the p2p
+    // was submitted/enqueued so we need to keep the event open
+    struct p2p* event = (struct p2p *)eHandle;
+    event->base.stopTs = gettime() - startTime;
+    return ncclSuccess;
   }
+
   updateEvent(eHandle);
   return ncclSuccess;
 }
 
-__hidden ncclResult_t exampleProfilerRecordEventState(void* eHandle, ncclProfilerEventState_v1_t eState, ncclProfilerEventStateArgs_v1_t* eStateArgs) {
+__hidden ncclResult_t exampleProfilerRecordEventState(void* eHandle, ncclProfilerEventState_t eState, ncclProfilerEventStateArgs_t* eStateArgs) {
   // the event handle might be null if we run out of events
   if (eHandle == NULL) return ncclSuccess;
 
@@ -482,7 +506,7 @@ __hidden ncclResult_t exampleProfilerRecordEventState(void* eHandle, ncclProfile
   return ncclSuccess;
 }
 
-ncclProfiler_v1_t ncclProfiler_v1 = {
+ncclProfiler_t ncclProfiler_v2 = {
   "Example-profiler",
   exampleProfilerInit,
   exampleProfilerStartEvent,

@@ -6,6 +6,9 @@
 #include <cuda.h>
 #include <stdint.h>
 
+int64_t ncclParamLocalRegister();
+int64_t ncclParamGraphRegister();
+
 enum {
   NET_REG_COMPLETE = 0x01,
   NVLS_REG_COMPLETE = 0x02,
@@ -20,16 +23,21 @@ struct ncclPeerRegIpcAddr {
   uintptr_t* hostPeerRmtAddrs;
 };
 
+struct ncclRegNetHandles {
+  void* handle;
+  struct ncclProxyConnector* proxyConn;
+  struct ncclRegNetHandles* next;
+};
+
 struct ncclReg {
   // common attributes
   size_t pages;
-  int refs;
+  int localRefs;
+  int graphRefs;
   uintptr_t addr;
   uint32_t state;
   // net reg
-  int nDevs;
-  int devs[MAXCHANNELS];
-  void** handles;
+  struct ncclRegNetHandles* netHandleHead;
   // nvls reg
   uintptr_t baseAddr;
   size_t baseSize;
@@ -50,11 +58,12 @@ struct ncclRegCache {
   struct ncclReg **slots;
   int capacity, population;
   uintptr_t pageSize;
-  void* sComms[MAXCHANNELS];
-  void* rComms[MAXCHANNELS];
 };
 
 ncclResult_t ncclRegCleanup(struct ncclComm* comm);
 ncclResult_t ncclRegFind(struct ncclComm* comm, const void* data, size_t size, struct ncclReg** reg);
+ncclResult_t ncclCommGraphRegister(const ncclComm_t comm, void* buff, size_t size, void** handle);
+ncclResult_t ncclCommGraphDeregister(const ncclComm_t comm, struct ncclReg *handle);
+ncclResult_t ncclRegLocalIsValid(struct ncclReg *reg, bool *isValid);
 
 #endif

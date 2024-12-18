@@ -8,6 +8,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "ibvcore.h"
 #include "ibvsymbols.h"
 
 static pthread_once_t initOnceControl = PTHREAD_ONCE_INIT;
@@ -53,7 +54,7 @@ ncclResult_t wrap_ibv_symbols(void) {
   } \
   int ret = container.call; \
   if (ret == ENOTSUP || ret == EOPNOTSUPP) { \
-    INFO(NCCL_NET, "Call to " name " failed with error %s errno %d", strerror(ret), ret); \
+    INFO(NCCL_NET, "Call to " name " not supported"); \
     *supported = 0; \
     return ncclSuccess; \
   } else if (ret != success_retval) { \
@@ -86,6 +87,14 @@ ncclResult_t wrap_ibv_symbols(void) {
   CHECK_NOT_NULL(container, internal_name); \
   container.call; \
   return ncclSuccess;
+
+NCCL_PARAM(IbMQpRetryAll, "IB_MQP_RETRY_ALL", 0);
+NCCL_PARAM(IbMQpRetryCnt, "IB_MQP_RETRY_CNT", 34);
+NCCL_PARAM(IbMQpRetryTimeout, "IB_MQP_RETRY_SLEEP_MSEC", 100); // in milliseconds
+
+#define IBV_ERR_EQ(e, code)        (e == code || e == (-code))
+#define IBV_MQP_RETRY_ERRNO(e)     (IBV_ERR_EQ(e, ETIMEDOUT))
+#define IBV_MQP_RETRY_ERRNO_ALL(e) (ncclParamIbMQpRetryAll() ? (e != 0) : IBV_MQP_RETRY_ERRNO(e))
 
 ncclResult_t wrap_ibv_fork_init() {
   IBV_INT_CHECK(ibvSymbols, ibv_internal_fork_init, ibv_internal_fork_init(), -1, "ibv_fork_init");
@@ -202,8 +211,87 @@ ncclResult_t wrap_ibv_create_qp(struct ibv_qp **ret, struct ibv_pd *pd, struct i
   IBV_PTR_CHECK_ERRNO(ibvSymbols, ibv_internal_create_qp, ibv_internal_create_qp(pd, qp_init_attr), *ret, NULL, "ibv_create_qp");
 }
 
-ncclResult_t wrap_ibv_modify_qp(struct ibv_qp *qp, struct ibv_qp_attr *attr, int attr_mask) { /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/
-  IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_modify_qp, ibv_internal_modify_qp(qp, attr, attr_mask), 0, "ibv_modify_qp");
+static void ibvQpStateName(enum ibv_qp_state state, char* msg, const size_t len) {
+  switch (state) {
+  case (IBV_QPS_RESET): snprintf(msg, len, "RESET"); break;
+  case (IBV_QPS_INIT): snprintf(msg, len, "INIT"); break;
+  case (IBV_QPS_RTR): snprintf(msg, len, "RTR"); break;
+  case (IBV_QPS_RTS): snprintf(msg, len, "RTS"); break;
+  case (IBV_QPS_SQD): snprintf(msg, len, "SQD"); break;
+  case (IBV_QPS_SQE): snprintf(msg, len, "SQE"); break;
+  case (IBV_QPS_ERR): snprintf(msg, len, "ERR"); break;
+  case (IBV_QPS_UNKNOWN): snprintf(msg, len, "UNKNOWN"); break;
+  default: snprintf(msg, len, "NOT RECOGNIZED (%d)", state); break;
+  }
+}
+
+#define QP_ATTR(attr, userAttr, userFlag, mask) ((userFlag & mask) ? (userAttr) : (attr))
+
+static void ibvModifyQpLog(struct ibv_qp* qp, enum ibv_qp_state qpState, struct ibv_qp_attr* userAttr, int userFlag, char* msg, size_t msgLen) {
+  ncclResult_t res;
+  int portNum = -1, gidIndex = -1;
+  char localGidName[INET6_ADDRSTRLEN], remoteGidName[INET6_ADDRSTRLEN];
+  const char *localGidRes = NULL, *remoteGidRes = NULL;
+
+  char nextState[32], currState[32];
+  ibvQpStateName(qp->state, currState, sizeof(currState));
+  ibvQpStateName(qpState, nextState, sizeof(nextState));
+  char devName[IBV_SYSFS_NAME_MAX] = "";
+  snprintf(devName, sizeof(devName), "%s", (qp->pd->context) ? wrap_ibv_get_device_name(qp->pd->context->device) : "N/A");
+
+  struct ibv_qp_attr attr;
+  struct ibv_qp_init_attr init_attr;
+  int attr_mask = IBV_QP_PORT | IBV_QP_AV;
+  res = wrap_ibv_query_qp(qp, &attr, attr_mask, &init_attr);
+  struct ibv_qp_attr *qpAttr = (res == ncclSuccess) ? &attr : NULL;
+
+  // port info, portAttr can be NULL if not given by the user and query_qp failed
+  struct ibv_qp_attr *portAttr = QP_ATTR(qpAttr, userAttr, userFlag, IBV_QP_PORT);
+  portNum = portAttr ? portAttr->port_num : -1;
+
+  // address info, avAttr can be NULL if not given by the user and query_qp failed
+  struct ibv_qp_attr *avAttr = QP_ATTR(qpAttr, userAttr, userFlag, IBV_QP_AV);
+  if (avAttr && avAttr->ah_attr.is_global) {
+    union ibv_gid *remoteGid = &avAttr->ah_attr.grh.dgid;
+    remoteGidRes = ibvGetGidStr(remoteGid, remoteGidName, sizeof(remoteGidName));
+    // we need pd->context to retrieve local GID, skip if not there
+    if (!qp->pd->context) goto print;
+    gidIndex =  avAttr->ah_attr.grh.sgid_index;
+    union ibv_gid localGid;
+    NCCLCHECKGOTO(wrap_ibv_query_gid(qp->pd->context, portNum, gidIndex, &localGid), res, print);
+    localGidRes = ibvGetGidStr(&localGid, localGidName, sizeof(localGidName));
+  }
+
+print:
+  snprintf(msg, msgLen, "on dev %s:%d, curr state %s, next state %s, local GID index %d, local GID %s, remote GID %s",
+           devName, portNum, currState, nextState, gidIndex, localGidRes ? localGidName : "N/A", remoteGidRes ? remoteGidName : "N/A");
+  return;
+}
+
+ncclResult_t wrap_ibv_modify_qp(struct ibv_qp* qp, struct ibv_qp_attr* attr, int attr_mask) {
+  char qpMsg[1024];
+  int ret = 0, attempts = 0;
+  int maxCnt = (int)ncclParamIbMQpRetryCnt() + 1; // number of attempts = number of retry + 1
+  int timeOut = (int)ncclParamIbMQpRetryTimeout();
+  CHECK_NOT_NULL(ibvSymbols, ibv_internal_modify_qp);
+  do {
+    if (attempts > 0) {
+      unsigned int sleepTime = timeOut * attempts;
+      ibvModifyQpLog(qp, attr->qp_state, attr, attr_mask, qpMsg, sizeof(qpMsg));
+      INFO(NCCL_NET, "Call to ibv_modify_qp failed with %d %s, %s, retrying %d/%d after %u msec of sleep", ret, strerror(ret), qpMsg, attempts, maxCnt, sleepTime);
+      // sleep before retrying
+      struct timespec tv = {.tv_sec = sleepTime / 1000, .tv_nsec = (sleepTime % 1000) * ((long)1e6)};
+      nanosleep(&tv, NULL);
+    }
+    ret = ibvSymbols.ibv_internal_modify_qp(qp, attr, attr_mask);
+    attempts++;
+  } while (IBV_MQP_RETRY_ERRNO_ALL(ret) && attempts < maxCnt);
+  if (ret != 0) {
+    ibvModifyQpLog(qp, attr->qp_state, attr, attr_mask, qpMsg, sizeof(qpMsg));
+    WARN("Call to ibv_modify_qp failed with %d %s, %s", ret, strerror(ret), qpMsg);
+    return ncclSystemError;
+  }
+  return ncclSuccess;
 }
 
 ncclResult_t wrap_ibv_query_ece(struct ibv_qp *qp, struct ibv_ece *ece, int* supported) { /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/

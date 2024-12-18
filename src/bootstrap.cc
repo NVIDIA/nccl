@@ -13,6 +13,7 @@
 #include <sys/types.h>
 #include "proxy.h"
 #include "param.h"
+#include "ras.h"
 
 #define BOOTSTRAP_N_CHECK_ABORT           10000
 #define BOOTSTRAP_TAG_CONNECT             (0x1 << 31)
@@ -110,13 +111,13 @@ ncclResult_t bootstrapNetInit() {
         if (nIfs <= 0) {
           WARN("Bootstrap : no socket interface found");
           pthread_mutex_unlock(&bootstrapNetLock);
-          return ncclInternalError;
+          return ncclInvalidUsage;
         }
       }
       char line[SOCKET_NAME_MAXLEN+MAX_IF_NAME_SIZE+2];
-      sprintf(line, " %s:", bootstrapNetIfName);
+      snprintf(line, sizeof(line), " %s:", bootstrapNetIfName);
       ncclSocketToString(&bootstrapNetIfAddr, line+strlen(line));
-      INFO(NCCL_BOOTSTRAP, "Bootstrap : Using%s", line);
+      INFO(NCCL_BOOTSTRAP, "Bootstrap: Using%s", line);
       bootstrapNetInitDone = 1;
     }
     pthread_mutex_unlock(&bootstrapNetLock);
@@ -152,7 +153,7 @@ static ncclResult_t netIsend(ncclNet_t* net, void* sendComm, void* data, int siz
                              int* done) {
   if (*done) return ncclSuccess;
   if (!*sendReq) {
-    NCCLCHECK(net->isend(sendComm, data, size, tag, dataHandle, sendReq));
+    NCCLCHECK(net->isend(sendComm, data, (size_t)size, tag, dataHandle, sendReq));
   }
   if (*sendReq) {
     NCCLCHECK(net->test(*sendReq, done, NULL));
@@ -166,7 +167,8 @@ static ncclResult_t netIrecv(ncclNet_t* net, void* recvComm, void* data, int siz
                              int* done) {
   if (*done) return ncclSuccess;
   if (!*recvReq) {
-    NCCLCHECK(net->irecv(recvComm, 1, &data, &size, &tag, &dataHandle, recvReq));
+    size_t size64 = size; 
+    NCCLCHECK(net->irecv(recvComm, 1, &data, &size64, &tag, &dataHandle, recvReq));
   }
   if (*recvReq) {
     NCCLCHECK(net->test(*recvReq, done, NULL));
@@ -302,7 +304,7 @@ static void* bootstrapRoot(void* rargs) {
       // if the number of root > 1, we will receive one extra info from the first local_id of the next root
       n2send = nRankFromRoot(iroot, nranks, nroots);
       nrecv = n2send + ((nroots > 1) ? 1 : 0);
-      NCCLCHECKGOTO(ncclCalloc(&rankInfo, nrecv * sizeof(union ringConnectInfo)), res, out);
+      NCCLCHECKGOTO(ncclCalloc(&rankInfo, nrecv), res, out);
       NCCLCHECKGOTO(ncclCalloc(&rankAddressesRoot, nrecv), res, out);
     }
 
@@ -492,29 +494,37 @@ static ncclResult_t netGetDevice(int rank, struct ncclComm* comm, int* dev) {
         struct netIf userIfs[MAX_OOB_DEVS];
         int nUserIfs = parseStringList(userIfEnv, userIfs, MAX_OOB_DEVS);
         // loop over the device and return the first one matching
-        int devId = 0;
         int nDev = 0;
         NCCLCHECK(comm->ncclNet->devices(&nDev));
+        int devId = 0;
         while (devId < nDev) {
           ncclNetProperties_t props;
           comm->ncclNet->getProperties(devId, &props);
           // check against user specified HCAs/ports
-          bool found = matchIfList(props.name, props.port, userIfs, nUserIfs, searchExact) ^ searchNot;
-          if (found) {
+          if (matchIfList(props.name, props.port, userIfs, nUserIfs, searchExact) ^ searchNot) {
+            // All plain physical devices have been initialized at this point
             devOOB = devId;
             break;
           }
           devId++;
         }
         if (devOOB == -1) {
-          WARN("no device found matching NCCL_OOB_NET_IFNAME=%s, ignoring", userIfEnv);
-          goto noEnv;
+          if (!searchNot)
+            WARN("no device found matching %s%s, verify NCCL_OOB_NET_IFNAME", searchExact ? "exactly " : "", userIfEnv);
+          else
+            WARN("no device found after excluding %s%s, verify NCCL_OOB_NET_IFNAME", searchExact ? "exactly " : "", userIfEnv);
+          pthread_mutex_unlock(&bootstrapNetLock);
+          return ncclInvalidArgument;
         }
       } else {
-      noEnv:
         // default choice is device 0
         devOOB = 0;
       }
+      // display info on the chosen device
+      ncclNetProperties_t props;
+      ncclResult_t res = comm->ncclNet->getProperties(devOOB, &props);
+      bool hasProp = res == ncclSuccess;
+      INFO(NCCL_BOOTSTRAP, "Bootstrap: Using %s:%d", (hasProp) ? props.name : "N/A", (hasProp) ? props.port : -1);
     }
     pthread_mutex_unlock(&bootstrapNetLock);
   }
@@ -545,7 +555,8 @@ static ncclResult_t socketRingConnect(ncclSocketAddress* addr, struct ncclSocket
 }
 static ncclResult_t ringAllInfo(struct ncclComm* comm, struct bootstrapState* state,
                                 union ncclSocketAddress* peerAddresss,
-                                union ncclSocketAddress* peerProxy, uint64_t* peerUDS) {
+                                union ncclSocketAddress* peerProxy, uint64_t* peerUDS,
+                                struct rasRankInit* rasRanks) {
   ncclResult_t res = ncclSuccess;
   int rank = comm->rank;
   int nRanks = comm->nRanks;
@@ -553,6 +564,7 @@ static ncclResult_t ringAllInfo(struct ncclComm* comm, struct bootstrapState* st
     union ncclSocketAddress peerAddress;
     union ncclSocketAddress peerProxy;
     uint64_t peerUDS;
+    struct rasRankInit rasRank;
   }* ringData = NULL;
 
   NCCLCHECK(ncclCalloc(&ringData, nRanks));
@@ -563,6 +575,8 @@ static ncclResult_t ringAllInfo(struct ncclComm* comm, struct bootstrapState* st
     memcpy(&(ringData[rank].peerProxy), peerProxy + rank, sizeof(union ncclSocketAddress));
   if (peerUDS)
     memcpy(&(ringData[rank].peerUDS), peerUDS + rank, sizeof(uint64_t));
+  if (rasRanks)
+    memcpy(&(ringData[rank].rasRank), rasRanks + rank, sizeof(*rasRanks));
 
   // allgather
   NCCLCHECKGOTO(bootstrapAllGather(state, ringData, sizeof(struct bootstrapRingData)), res, exit);
@@ -575,6 +589,8 @@ static ncclResult_t ringAllInfo(struct ncclComm* comm, struct bootstrapState* st
       memcpy(peerProxy + irank, &(ringData[irank].peerProxy), sizeof(union ncclSocketAddress));
     if (peerUDS)
       memcpy(peerUDS + irank, &(ringData[irank].peerUDS), sizeof(uint64_t));
+    if (rasRanks)
+      memcpy(rasRanks + irank, &(ringData[irank].rasRank), sizeof(*rasRanks));
   }
 
 exit:
@@ -598,7 +614,10 @@ fail:
 NCCL_PARAM(StaggerRate, "UID_STAGGER_RATE", 7000);
 NCCL_PARAM(StaggerThreshold, "UID_STAGGER_THRESHOLD", 256);
 
+NCCL_PARAM(RasEnable, "RAS_ENABLE", 1);
+
 ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm) {
+  ncclResult_t result = ncclSuccess;
   int rank = comm->rank;
   int nranks = comm->nRanks;
   // char nextPeerHandle[NCCL_NET_HANDLE_MAXSIZE];
@@ -607,6 +626,8 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm) {
   struct ncclSocket sock, listenSockRoot;
   struct extInfo info = {0};
   union ringConnectInfo nextPeer;
+  bool performRasAddRanks = true;
+  struct rasRankInit* rasRanks = nullptr;
 
   uint64_t timers[BOOTSTRAP_INIT_TIME_N] = {0};
 
@@ -696,23 +717,45 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm) {
   // in case of failure, those resources will be free'd when calling bootstrapDestroy, so we can return immediatly
   NCCLCHECK(ncclCalloc(&state->peerProxyAddresses, nranks));
   NCCLCHECK(ncclCalloc(&proxySocket, 1));
-  NCCLCHECK(createListenSocket(comm, comm->magic, proxySocket, state->peerProxyAddresses + rank, ncclSocketTypeProxy));
+  NCCLCHECKGOTO(createListenSocket(comm, comm->magic, proxySocket, state->peerProxyAddresses + rank, ncclSocketTypeProxy), result, fail);
 
-  NCCLCHECK(ncclCalloc(&state->peerProxyAddressesUDS, nranks));
-  NCCLCHECK(getUDS(state->peerProxyAddressesUDS + rank));
+  NCCLCHECKGOTO(ncclCalloc(&state->peerProxyAddressesUDS, nranks), result, fail);
+  NCCLCHECKGOTO(getUDS(state->peerProxyAddressesUDS + rank), result, fail);
 
   // create a socket for others to reach out (P2P)
   union ncclSocketAddress peerSocketAddress;
-  NCCLCHECK(createListenSocket(comm, comm->magic, &STATE_LISTEN(state, peerSocket), &peerSocketAddress, ncclSocketTypeBootstrap));
-  NCCLCHECK(ncclCalloc(&state->peerP2pAddresses, nranks * sizeof(union ncclSocketAddress)));
+  NCCLCHECKGOTO(createListenSocket(comm, comm->magic, &STATE_LISTEN(state, peerSocket), &peerSocketAddress, ncclSocketTypeBootstrap), result, fail);
+  NCCLCHECKGOTO(ncclCalloc(&state->peerP2pAddresses, nranks), result, fail);
   memcpy(state->peerP2pAddresses + rank, &peerSocketAddress, sizeof(union ncclSocketAddress));
 
+  // Initialize RAS
+  if (ncclParamRasEnable() == 1) {
+    // The RAS thread will take care of freeing the memory allocated below.
+    NCCLCHECK(ncclCalloc(&rasRanks, nranks));
+    memcpy(&rasRanks[rank].addr, &bootstrapNetIfAddr, sizeof(rasRanks[rank].addr));
+    rasRanks[rank].pid = getpid();
+    rasRanks[rank].cudaDev = comm->cudaDev;
+    rasRanks[rank].nvmlDev = comm->nvmlDev;
+    if (ncclRasCommInit(comm, rasRanks+rank) != ncclSuccess) {
+      INFO(NCCL_INIT|NCCL_RAS, "Continuing in spite of a RAS initialization error");
+      // We should still participate in the ringAllInfo below as the peers will be waiting for us.
+      // Just make sure that the address is clearly invalid...
+      memset(rasRanks+rank, '\0', sizeof(*rasRanks));
+      performRasAddRanks = false;
+    }
+  }
+
   BOOTSTRAP_PROF_OPEN(timers[BOOTSTRAP_INIT_TIME_RING]);
-  NCCLCHECK(ringAllInfo(comm, state, state->peerP2pAddresses, state->peerProxyAddresses, state->peerProxyAddressesUDS));
+  NCCLCHECKGOTO(ringAllInfo(comm, state, state->peerP2pAddresses, state->peerProxyAddresses, state->peerProxyAddressesUDS, rasRanks), result, fail);
   BOOTSTRAP_PROF_CLOSE(timers[BOOTSTRAP_INIT_TIME_RING]);
 
   // Create the service proxy and get the UDS
-  NCCLCHECK(ncclProxyInit(comm, proxySocket, state->peerProxyAddresses, state->peerProxyAddressesUDS));
+  NCCLCHECKGOTO(ncclProxyInit(comm, proxySocket, state->peerProxyAddresses, state->peerProxyAddressesUDS), result, fail);
+
+  if (ncclParamRasEnable() == 1 && performRasAddRanks) {
+    if (ncclRasAddRanks(rasRanks, nranks) != ncclSuccess)
+      INFO(NCCL_INIT|NCCL_RAS, "Continuing in spite of a RAS initialization error");
+  }
 
   BOOTSTRAP_PROF_CLOSE(timers[BOOTSTRAP_INIT_TIME_TOTAL]);
   TRACE(NCCL_BOOTSTRAP, "rank %d nranks %d - DONE", rank, nranks);
@@ -722,8 +765,11 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm) {
        timers[BOOTSTRAP_INIT_TIME_RECV] / 1e9,
        timers[BOOTSTRAP_INIT_TIME_RING] / 1e9,
        timers[BOOTSTRAP_INIT_TIME_DELAY] / 1e9);
-
-  return ncclSuccess;
+exit:
+  return result;
+fail:
+  free(proxySocket);
+  goto exit;
 }
 
 ncclResult_t bootstrapSplit(uint64_t magic, struct ncclComm* comm, struct ncclComm* parent, int color, int key, int* parentRanks) {
@@ -761,6 +807,11 @@ ncclResult_t bootstrapSplit(uint64_t magic, struct ncclComm* comm, struct ncclCo
   union ncclSocketAddress peerSocketAddress;
   NCCLCHECK(createListenSocket(comm, comm->magic, &STATE_LISTEN(state, peerSocket), &peerSocketAddress, ncclSocketTypeBootstrap));
 
+  if (ncclParamRasEnable() == 1) {
+    if (ncclRasCommInit(comm, nullptr) != ncclSuccess)
+      INFO(NCCL_INIT|NCCL_RAS, "Continuing in spite of a RAS initialization error");
+  }
+
   // Get addr from next rank using the parent's connections
   NCCLCHECKGOTO(bootstrapSend(parent->bootstrap, prev, BOOTSTRAP_TAG_COMMSPLIT, &info, sizeof(union ringConnectInfo)), ret, fail);
   NCCLCHECKGOTO(bootstrapRecv(parent->bootstrap, next, BOOTSTRAP_TAG_COMMSPLIT, &nextPeer, sizeof(union ringConnectInfo)), ret, fail);
@@ -773,14 +824,14 @@ ncclResult_t bootstrapSplit(uint64_t magic, struct ncclComm* comm, struct ncclCo
     NCCLCHECK(socketRingConnect(&nextPeer.addr, &STATE_RING(state, socket.send), &STATE_LISTEN(state, socket), &STATE_RING(state, socket.recv), comm->magic, state->abortFlag));
   }
 
-  NCCLCHECKGOTO(ncclCalloc(&state->peerP2pAddresses, nranks * sizeof(union ncclSocketAddress)), ret, fail);
+  NCCLCHECKGOTO(ncclCalloc(&state->peerP2pAddresses, nranks), ret, fail);
   memcpy(state->peerP2pAddresses + rank, &peerSocketAddress, sizeof(union ncclSocketAddress));
   if (parent->config.splitShare) {
     /* map local rank to top parent local rank. */
     for (int i = 0; i < nranks; ++i) {
       comm->topParentRanks[i] = parent->topParentRanks[parentRanks[i]];
     }
-    NCCLCHECKGOTO(ringAllInfo(comm, state, state->peerP2pAddresses, NULL, NULL), ret, fail);
+    NCCLCHECKGOTO(ringAllInfo(comm, state, state->peerP2pAddresses, NULL, NULL, NULL), ret, fail);
   } else {
     NCCLCHECKGOTO(ncclCalloc(&state->peerProxyAddresses, nranks), ret, fail);
     NCCLCHECKGOTO(ncclCalloc(&state->peerProxyAddressesUDS, nranks), ret, fail);
@@ -788,7 +839,7 @@ ncclResult_t bootstrapSplit(uint64_t magic, struct ncclComm* comm, struct ncclCo
     NCCLCHECKGOTO(ncclCalloc(&proxySocket, 1), ret, fail);
     NCCLCHECKGOTO(getUDS(state->peerProxyAddressesUDS + rank), ret, fail);
     NCCLCHECKGOTO(createListenSocket(comm, comm->magic, proxySocket, state->peerProxyAddresses + rank, ncclSocketTypeProxy), ret, fail);
-    NCCLCHECKGOTO(ringAllInfo(comm, state, state->peerP2pAddresses, state->peerProxyAddresses, state->peerProxyAddressesUDS), ret, fail);
+    NCCLCHECKGOTO(ringAllInfo(comm, state, state->peerP2pAddresses, state->peerProxyAddresses, state->peerProxyAddressesUDS, NULL), ret, fail);
     NCCLCHECKGOTO(ncclProxyInit(comm, proxySocket, state->peerProxyAddresses, state->peerProxyAddressesUDS), ret, fail);
   }
 
@@ -811,7 +862,7 @@ static ncclResult_t socketConnect(void* commState, int peer, int tag, struct ncc
   struct bootstrapState* state = (struct bootstrapState*)commState;
 
   struct socketAckInfo ack = (struct socketAckInfo){.rank = state->rank, .tag = tag};
-  NCCLCHECKGOTO(ncclSocketInit(sock, state->peerP2pAddresses + peer, state->magic, ncclSocketTypeBootstrap), ret, fail);
+  NCCLCHECKGOTO(ncclSocketInit(sock, state->peerP2pAddresses + peer, state->magic, ncclSocketTypeBootstrap, state->abortFlag), ret, fail);
   NCCLCHECKGOTO(ncclSocketConnect(sock), ret, fail);
   NCCLCHECKGOTO(socketSend(sock, &ack, sizeof(struct socketAckInfo)), ret, fail);
   return ncclSuccess;

@@ -66,14 +66,15 @@ static ncclResult_t socketWait(int op, struct ncclSocket* sock, void* ptr, int s
 const char *ncclSocketToString(union ncclSocketAddress *addr, char *buf, const int numericHostForm /*= 1*/) {
   if (buf == NULL || addr == NULL) return NULL;
   struct sockaddr *saddr = &addr->sa;
-  if (saddr->sa_family != AF_INET && saddr->sa_family != AF_INET6) { buf[0]='\0'; return buf; }
+  buf[0]='\0';
+  if (saddr->sa_family != AF_INET && saddr->sa_family != AF_INET6) { return buf; }
   char host[NI_MAXHOST], service[NI_MAXSERV];
   /* NI_NUMERICHOST: If set, then the numeric form of the hostname is returned.
    * (When not set, this will still happen in case the node's name cannot be determined.)
    */
   int flag = NI_NUMERICSERV | (numericHostForm ? NI_NUMERICHOST : 0);
-  (void) getnameinfo(saddr, sizeof(union ncclSocketAddress), host, NI_MAXHOST, service, NI_MAXSERV, flag);
-  sprintf(buf, "%s<%s>", host, service);
+  if (!getnameinfo(saddr, sizeof(union ncclSocketAddress), host, NI_MAXHOST, service, NI_MAXSERV, flag))
+    sprintf(buf, "%s<%s>", host, service);
   return buf;
 }
 

@@ -70,7 +70,7 @@ static int localIdFromRoot(int rank, int root, int nRanks, int nRoots) {
   int ir = BOOTSTRAP_PID(root, nRoots);
   return rank - firstRankFromRoot(ir, nRanks, nRoots);
 }
-// return the number of child for a root, root will be periodized
+// Check if the given rank is the first rank from the root
 static int isFirstFromRoot(int rank, int root, int nRanks, int nRoots) {
   return (rank == firstRankFromRoot(root, nRanks, nRoots));
 }

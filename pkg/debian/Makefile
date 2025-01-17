@@ -25,7 +25,7 @@ prep : $(DEBTARGETS)
 build : prep
 	$(MAKE) -C ../.. src.build BUILDDIR=$(BUILDDIR)
 	@printf "Building Debian package\n"
-	(cd $(BUILDDIR); debuild -eLD_LIBRARY_PATH -uc -us -d -b)
+	(cd $(BUILDDIR); debuild -eLD_LIBRARY_PATH -uc -us -d -b -Zxz)
 	mkdir -p $(PKGDIR)
 	mv $(BUILDDIR)/../libnccl*.deb $(PKGDIR)/
 

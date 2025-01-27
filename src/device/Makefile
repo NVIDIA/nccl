@@ -5,7 +5,7 @@
 #
 
 SHELL := /usr/bin/env bash
-MAKEFALGS += -r
+MAKEFLAGS += -r
 .SUFFIXES:
 .SECONDARY:
 

@@ -16,6 +16,7 @@
 #define SM80_NVLINK_BW 20.0
 #define SM90_NVLINK_BW 20.6
 #define SM86_NVLINK_BW 12.0
+#define SM100_NVLINK_BW 40.0
 #define PCI_BW 12.0           // PCI Gen3 x16
 #define QPI_BW 6.0
 #define AMD_BW 16.0
@@ -91,7 +92,8 @@ struct ncclTopoLink {
   float bw;
   struct ncclTopoNode* remNode;
 };
-#define NCCL_TOPO_MAX_LINKS 128
+// Allows for up to 32 NICs per node on GB200-NVL72
+#define NCCL_TOPO_MAX_LINKS 576
 #define NCCL_TOPO_MAX_HOPS (NCCL_TOPO_MAX_NODES*NCCL_TOPO_NODE_TYPES)
 
 struct ncclTopoLinkList {
@@ -172,6 +174,8 @@ ncclResult_t ncclTopoConnectNodes(struct ncclTopoNode* node, struct ncclTopoNode
 ncclResult_t ncclTopoPrintPaths(struct ncclTopoSystem* system);
 ncclResult_t ncclTopoLoadSystem(const char* xmlTopoFile, struct ncclTopoSystem* system);
 ncclResult_t ncclTopoGetIntermediateRank(struct ncclTopoSystem* system, int rank, int64_t netId, int* intermediateRank);
+ncclResult_t ncclTopoGetGpuMinPath(struct ncclTopoSystem* system, int type, int* min);
+ncclResult_t ncclTopoGetGpuMaxPath(struct ncclTopoSystem* system, int type, int* max);
 
 #define NCCL_TOPO_XML_MAX_NODES 256
 #define NCCL_GRAPH_XML_MAX_NODES 4096
@@ -230,6 +234,7 @@ static ncclResult_t ncclTopoIdToNetDev(struct ncclTopoSystem* system, int64_t id
 // Returns NVLink bw in GB/s
 static float ncclTopoNVLinkBw(int cudaCompCap) {
   return
+    cudaCompCap >= 100 ? SM100_NVLINK_BW :
     cudaCompCap >= 90 ? SM90_NVLINK_BW :
     cudaCompCap == 86 ? SM86_NVLINK_BW :
     cudaCompCap >= 80 ? SM80_NVLINK_BW :

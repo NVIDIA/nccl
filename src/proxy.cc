@@ -21,6 +21,8 @@
 #include <sys/time.h>
 #include <sched.h>
 
+#define NCCL_MAX_PROXY_CONNECTIONS (NCCL_MAX_LOCAL_RANKS+1)
+
 enum { proxyRecv=0, proxySend=1 };
 void* ncclProxyServiceUDS(void* _args);
 
@@ -770,8 +772,8 @@ process_nextops:
   ncclProfilerStartProxyCtrlEvent(proxyState->profilerContext, &eHandle);
   ncclProfilerRecordProxyCtrlEventState(eHandle, 0, ncclProfilerProxyCtrlAppend);
   TIME_START(2);
-  int freeOp[NCCL_MAX_LOCAL_RANKS];
-  int freeOpEnd[NCCL_MAX_LOCAL_RANKS];
+  int freeOp[NCCL_MAX_PROXY_CONNECTIONS];
+  int freeOpEnd[NCCL_MAX_PROXY_CONNECTIONS];
   for (int i = 0; i < proxyState->tpLocalnRanks; i++) freeOp[i] = -1;
 
   uint64_t lastOpCount = 0;
@@ -1060,7 +1062,8 @@ ncclResult_t ncclProxyConnect(struct ncclComm* comm, int transport, int send, in
   struct ncclProxyState* sharedProxyState = comm->proxyState;
   int tpProxyRank = comm->topParentRanks[proxyRank];
 
-  proxyConn->sameProcess = comm->peerInfo[proxyRank].pidHash == comm->peerInfo[comm->rank].pidHash ? 1 : 0;
+  proxyConn->sameProcess = ((comm->peerInfo[proxyRank].hostHash == comm->peerInfo[comm->rank].hostHash) &&
+                            (comm->peerInfo[proxyRank].pidHash == comm->peerInfo[comm->rank].pidHash)) ? 1 : 0;
   // Keep one connection per local rank
   proxyConn->connection = NULL;
   proxyConn->tpRank = tpProxyRank;
@@ -1193,7 +1196,7 @@ fail:
   goto exit;
 }
 
-const char* ncclProxyMsgTypeStr[] = { "Unknown", "Init", "SharedInit", "Setup", "Connect", "Start", "Close", "Abort", "Stop", "GetFd" };
+const char* ncclProxyMsgTypeStr[] = { "Unknown", "Init", "SharedInit", "Setup", "Connect", "Start", "Close", "Abort", "Stop", "GetFd", "QueryFd", "Register", "Deregister" };
 ncclResult_t ncclProxyCallAsync(struct ncclComm* comm, struct ncclProxyConnector* proxyConn, int type, void* reqBuff, int reqSize, int respSize, void* opId) {
   struct ncclSocket* sock;
   ncclResult_t ret = ncclSuccess;
@@ -1552,18 +1555,18 @@ void* ncclProxyService(void* _args) {
   connectionPool.banks = 0;
   connectionPool.offset = NCCL_PROXY_CONN_POOL_SIZE;
 
-  struct pollfd pollfds[NCCL_MAX_LOCAL_RANKS+1];
-  struct ncclProxyLocalPeer peers[NCCL_MAX_LOCAL_RANKS];
-  memset(&peers, 0, sizeof(struct ncclProxyLocalPeer)*NCCL_MAX_LOCAL_RANKS);
-  for (int s=0; s<NCCL_MAX_LOCAL_RANKS; s++) {
+  struct pollfd pollfds[NCCL_MAX_PROXY_CONNECTIONS+1]; // one extra for listenSock fd
+  struct ncclProxyLocalPeer peers[NCCL_MAX_PROXY_CONNECTIONS];
+  memset(&peers, 0, sizeof(struct ncclProxyLocalPeer)*NCCL_MAX_PROXY_CONNECTIONS);
+  for (int s=0; s<NCCL_MAX_PROXY_CONNECTIONS; s++) {
     pollfds[s].fd = -1;
     pollfds[s].events = POLLHUP|POLLIN;
   }
-  if (ncclSocketGetFd(proxyState->listenSock, &pollfds[NCCL_MAX_LOCAL_RANKS].fd) != ncclSuccess) {
+  if (ncclSocketGetFd(proxyState->listenSock, &pollfds[NCCL_MAX_PROXY_CONNECTIONS].fd) != ncclSuccess) {
     WARN("[Proxy Service] Get listenSock fd fails");
     return NULL;
   };
-  pollfds[NCCL_MAX_LOCAL_RANKS].events = POLLIN;
+  pollfds[NCCL_MAX_PROXY_CONNECTIONS].events = POLLIN;
 
   int maxnpeers = 0;
   int npeers = 0;
@@ -1577,17 +1580,19 @@ void* ncclProxyService(void* _args) {
     /* never let proxy service thread blocks in poll, or it cannot receive abortFlag. */
     int ret;
     do {
-      ret = poll(pollfds, NCCL_MAX_LOCAL_RANKS+1, asyncOpCount ? 0 : 500);
+      // poll all fds including the listenSock
+      ret = poll(pollfds, NCCL_MAX_PROXY_CONNECTIONS+1, asyncOpCount ? 0 : 500);
     } while (ret < 0 && errno == EINTR);
     if (ret < 0) {
       WARN("[Proxy Service] Poll failed: %s", strerror(errno));
       return NULL;
     }
-    if (pollfds[NCCL_MAX_LOCAL_RANKS].revents) {
+    if (pollfds[NCCL_MAX_PROXY_CONNECTIONS].revents) {
+      // We got an event on the listenSock
       int s = 0;
-      while (s < NCCL_MAX_LOCAL_RANKS && pollfds[s].fd >= 0) s++;
-      if (s == NCCL_MAX_LOCAL_RANKS) {
-        WARN("[Proxy service] Too many connections (%d max)", NCCL_MAX_LOCAL_RANKS);
+      while (s < NCCL_MAX_PROXY_CONNECTIONS && pollfds[s].fd >= 0) s++;
+      if (s == NCCL_MAX_PROXY_CONNECTIONS) {
+        WARN("[Proxy service] Too many connections (%d max)", NCCL_MAX_PROXY_CONNECTIONS);
         return NULL;
       }
       if (maxnpeers < s+1) maxnpeers = s+1;
@@ -1819,6 +1824,7 @@ ncclResult_t ncclProxyStop(struct ncclComm* comm) {
 
     if ((comm->proxyRefCountOld = ncclAtomicRefCountDecrement(&sharedProxyState->refCount)) == 0) {
       if (*comm->abortFlag == 0 && sharedProxyState->peerAddresses) {
+        // We need to send a ncclProxyMsgStop message to our own proxy
         struct ncclSocket sock;
         int type = ncclProxyMsgStop;
         NCCLCHECK(ncclSocketInit(&sock, sharedProxyState->peerAddresses + comm->topParentRanks[comm->rank], comm->sharedRes->magic, ncclSocketTypeProxy, comm->abortFlag));

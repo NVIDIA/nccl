@@ -828,14 +828,37 @@ ncclResult_t ncclTopoGetNvbGpus(struct ncclTopoSystem* system, int rank, int* nr
   return ncclSuccess;
 }
 
-int ncclTopoPathAllNVLink(struct ncclTopoSystem* system) {
-  int minPath = PATH_DIS;
+ncclResult_t ncclTopoGetGpuMinPath(struct ncclTopoSystem* system, int type, int* min) {
+  int minPath = PATH_SYS;
   for (int i=0; i<system->nodes[GPU].count; i++) {
-    struct ncclTopoLinkList* paths = system->nodes[GPU].nodes[i].paths[GPU];
-    for (int j=0; j<system->nodes[GPU].count; j++) {
-      if (i == j) continue;
+    struct ncclTopoLinkList* paths = system->nodes[GPU].nodes[i].paths[type];
+    if (paths == NULL) continue;
+    for (int j=0; j<system->nodes[type].count; j++) {
+      if (type == GPU && i == j) continue;
       minPath = std::min(minPath, paths[j].type);
     }
   }
-  return minPath >= PATH_PIX ? 0 : 1;
+  *min = minPath;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclTopoGetGpuMaxPath(struct ncclTopoSystem* system, int type, int* max) {
+  int maxPath = PATH_LOC;
+  for (int i=0; i<system->nodes[GPU].count; i++) {
+    struct ncclTopoLinkList* paths = system->nodes[GPU].nodes[i].paths[type];
+    if (paths == NULL) continue;
+    for (int j=0; j<system->nodes[type].count; j++) {
+      if (type == GPU && i == j) continue;
+      maxPath = std::max(maxPath, paths[j].type);
+    }
+  }
+  *max = maxPath;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclTopoPathAllNVLink(struct ncclTopoSystem* system, int* allNvLink) {
+  int maxPath;
+  NCCLCHECK(ncclTopoGetGpuMaxPath(system, GPU, &maxPath));
+  *allNvLink = maxPath >= PATH_PIX ? 0 : 1;
+  return ncclSuccess;
 }

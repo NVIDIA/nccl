@@ -11,7 +11,7 @@
 
 /* This is just an empty marker (for readability), which can be omitted. */
 /* TODO: Fix issue with trailing comma at end of entry list. */
-#define NVTX_PAYLOAD_ENTRIES
+#define NCCL_NVTX_PAYLOAD_ENTRIES
 
 
 /**
@@ -32,7 +32,7 @@
  *
  * Example:
  *  NVTX_DEFINE_SCHEMA_FOR_STRUCT(your_struct, "SchemaName",
- *      NVTX_PAYLOAD_ENTRIES(
+ *      NCCL_NVTX_PAYLOAD_ENTRIES(
  *          (index, TYPE_INT, "integer value"),
  *          (dpfloat, TYPE_DOUBLE, "fp64 value"),
  *          (text, TYPE_CSTRING, "text", NULL, 24)
@@ -80,7 +80,7 @@
  *
  * Example:
  *  NVTX_DEFINE_STRUCT_WITH_SCHEMA(your_struct_name, "Your schema name",
- *      NVTX_PAYLOAD_ENTRIES(
+ *      NCCL_NVTX_PAYLOAD_ENTRIES(
  *          (int, index, TYPE_INT, "integer value"),
  *          (double, dpfloat, TYPE_DOUBLE, "fp64 value"),
  *          (const char, (text, 24), TYPE_CSTRING, "text", NULL, 24)

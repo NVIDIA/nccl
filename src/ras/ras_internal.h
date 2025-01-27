@@ -78,7 +78,7 @@ struct rasCollResponse {
 struct rasPeerInfo {
   union ncclSocketAddress addr;
   pid_t pid;
-  uint64_t cudaDevs; // Bitmask.  Conveniently, NCCL_MAX_LOCAL_RANKS == 64.
+  uint64_t cudaDevs; // Bitmask.  This is for local devices so 64 bits is enough.
   uint64_t nvmlDevs; // Same, but not affected by CUDA_VISIBLE_DEVICES.
 };
 

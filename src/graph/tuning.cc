@@ -145,28 +145,33 @@ static float hwLat [3][NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS] =
 #define VOLTA_COMPCAP_IDX 0
 #define AMPERE_COMPCAP_IDX 1
 #define HOPPER_COMPCAP_IDX 2
+#define BLACKWELL_COMPCAP_IDX 3
 
 // LL128 max BW per channel
-static const double llMaxBws[3][3] = {
+static const double llMaxBws[][3] = {
   /* Volta-N1/Intel-N2/Intel-N4) */ {39.0, 39.0, 20.4},
   /* Ampere-N1/AMD-N2/AMD-N4) */ {87.7, 22.5 /*avg of ring & tree*/, 19.0},
-  /* Hopper-N1/AMD-N2/AMD-N4) */ {141.0, 45.0 /*avg of ring & tree*/, 35.0}
+  /* Hopper-N1/AMD-N2/AMD-N4) */ {141.0, 45.0 /*avg of ring & tree*/, 35.0},
+  /* Blackwell-N1/AMD-N2/AMD-N4) */ {2*141.0, 2*45.0 /*avg of ring & tree*/, 2*35.0},
 };
 
-static const double perChMaxRingLL128Bws[3][3] = {
+static const double perChMaxRingLL128Bws[][3] = {
   /* Volta (N1/N2/N4) */  {20.0, 20.0, 20.0},
   /* Ampere (N1/N2/N4) */ {20.0, 20.0, 20.0},
   /* Hopper (N1/N2/N4) */ {36.7, 36.7, 36.7},
+  /* Blackwell (N1/N2/N4) */ {2*36.7, 2*36.7, 2*36.7},
 };
-static const double perChMaxTreeLL128Bws[3][3] = {
+static const double perChMaxTreeLL128Bws[][3] = {
   /* Volta (N1/N2/N4) */  {20.0, 20.0, 20.0},
   /* Ampere (N1/N2/N4) */ {20.0, 20.0, 20.0},
   /* Hopper (N1/N2/N4) */ {36.7, 36.7, 29.0},
+  /* Blackwell (N1/N2/N4) */ {2*36.7, 2*36.7, 2*29.0},
 };
-static const double perChMaxTreeBws[3][3] = {
+static const double perChMaxTreeBws[][3] = {
   /* Volta (N1/N2/N4) */  {26.5, 18.5, 10.0},
   /* Ampere (N1/N2/N4) */ {24.0, 23.6, 17.8},
   /* Hopper (N1/N2/N4) */ {38.7, 41.4, 36.0},
+  /* Blackwell (N1/N2/N4) */ {2*38.7, 2*41.4, 2*36.0},
 };
 
 NCCL_PARAM(PatEnable, "PAT_ENABLE", 2);
@@ -207,7 +212,7 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
   int nRanks = comm->nRanks;
   if (nRanks <= 1) return ncclSuccess;
 
-  int compCapIndex = minCompCap >= 90 ? HOPPER_COMPCAP_IDX : minCompCap >= 80 ? AMPERE_COMPCAP_IDX : VOLTA_COMPCAP_IDX;
+  int compCapIndex = minCompCap >= 100 ? BLACKWELL_COMPCAP_IDX : (minCompCap >= 90 ? HOPPER_COMPCAP_IDX : minCompCap >= 80 ? AMPERE_COMPCAP_IDX : VOLTA_COMPCAP_IDX);
   int index2 = nNodes <= 2 ? nNodes-1 : 2;
   // LL: for single node, we look at GPU type; for multi-node, we look at CPU type
   int index1 = nNodes == 1 ? compCapIndex :
@@ -418,7 +423,7 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
   for (int c=0; c<NCCL_NUM_FUNCTIONS; c++) for (int a=0; a<NCCL_NUM_ALGORITHMS; a++) for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) {
     int pEnable = protoEnable[c*NCCL_NUM_PROTOCOLS+p];
     if (pEnable == 2 && p == NCCL_PROTO_LL128) {
-      // Enable LL128 by default only on Volta/Ampere/Hopper+NVLink. Other cases are not tested and may cause silent data corruption.
+      // Enable LL128 by default only on Volta/Ampere/Hopper/Blackwell+NVLink. Other cases are not tested and may cause silent data corruption.
       pEnable = 1;
       pEnable &= (graphs[a]->typeInter <= PATH_PXB || (minCompCap >= 90 && graphs[a]->typeInter <= PATH_PXN));
       pEnable &= (graphs[a]->typeIntra <= PATH_NVB);
@@ -427,6 +432,8 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
       case 70: pEnable &= 1; break;
       case 80: pEnable &= 1; break;
       case 90: pEnable &= !(CUDART_VERSION == 11080 && c == ncclFuncAllReduce && a == NCCL_ALGO_RING && comm->nRanks == 2); break;
+      case 100: pEnable &= 1; break;
+      case 120: pEnable &= 1; break;
       default: pEnable &= 0; break;
       }
     }

@@ -436,7 +436,7 @@ struct RunWorkColl<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SIMPL
           int nelem = work->regUsed ? 0 : min(loopCount, channelCount - elemOffset);
           prims.gather(offset, nelem, chunkSize, chunkSize, -1, 0);
         }
-      } else if (tid < tidEndReduce) {
+      } else if (tid < tidEndReduce && nvls->headRank != -1) {
         // Reduce, broadcast through NVLS
         using Proto = ProtoSimple<1, 1, COLL_UNROLL, 1, 1>;
         Primitives<T, RedOp, FanSymmetric<1>, /*Direct=*/1, Proto, 0>

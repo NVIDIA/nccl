@@ -19,7 +19,6 @@
 ncclResult_t ncclTopoPreset(struct ncclComm* comm, struct ncclTopoGraph** graphs, struct ncclTopoRanks* topoRanks) {
   int rank = comm->rank;
   int localRanks = comm->topo->nodes[GPU].count;
-  int nvlsRanks = comm->MNNVL ? comm->clique.size : localRanks;
   int nChannels = comm->nChannels;
 
   topoRanks->nvlsHeadNum = 0;
@@ -74,7 +73,7 @@ ncclResult_t ncclTopoPreset(struct ncclComm* comm, struct ncclTopoGraph** graphs
   // Get nvls heads and the number of heads. Duplicate head is not allowed.
   for (int c = 0; c < graphs[NCCL_ALGO_NVLS]->nChannels; ++c) {
     bool addHead = true;
-    int* nvlsIntra = graphs[NCCL_ALGO_NVLS]->intra + c * nvlsRanks;
+    int* nvlsIntra = graphs[NCCL_ALGO_NVLS]->intra + c * localRanks;
 
     for (int dup = 0; dup < topoRanks->nvlsHeadNum; dup++) {
       if (topoRanks->nvlsHeads[dup] == nvlsIntra[0]) {
@@ -259,8 +258,6 @@ static ncclResult_t connectNvls(struct ncclComm* comm, int* nvlsHeads, int nHead
     channel->nvls.out = -1;       // NVLS+SHARP not yet implemented.
     channel->nvls.headRank = headRank;
     channel->nvls.treeUp = channel->nvls.treeDown[0] = channel->nvls.treeDown[1] = channel->nvls.treeDown[2] = -1;
-    channel->nvls.node = comm->node;
-    channel->nvls.nNodes = comm->nNodes;
     if (comm->collNetSupport && channel->nvls.headRank != -1) channel->nvls.out = comm->nRanks;
   }
   if (comm->nNodes == 1) return ncclSuccess;
@@ -466,7 +463,7 @@ ncclResult_t ncclTopoPostset(struct ncclComm* comm, int* firstRanks, int* treePa
   }
 
   // Use 4 compute channels per search channel to reach peak BW on <8 PPN
-  if (comm->minCompCap == 90 && comm->nNodes > 1 && graphs[NCCL_ALGO_RING]->bwIntra > 45.0 && nChannels < 16) {
+  if (comm->minCompCap >= 90 && comm->nNodes > 1 && graphs[NCCL_ALGO_RING]->bwIntra > 45.0 && nChannels < 16) {
      nChannels = comm->nChannels = copyChannels(comm, nChannels, 2*nChannels, ringPrev, ringNext);
   }
 

@@ -213,7 +213,7 @@ ncclResult_t ncclP2pAllocateShareableBuffer(size_t size, int refcount, ncclIpcDe
 
     // cuMem API support
     CUmemGenericAllocationHandle handle;
-    NCCLCHECK(ncclCuMemAlloc(ptr, &handle, size));
+    NCCLCHECK(ncclCuMemAlloc(ptr, &handle, type, size));
     if (type == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
       // Return the native cuMem handle for later Export/Import via UDS
       memcpy(&ipcDesc->cuDesc.data, &handle, sizeof(handle));
@@ -816,7 +816,7 @@ ncclResult_t ret = ncclSuccess;
   if (isLegacyIpc) *isLegacyIpc = false;
   if (regRecord) {
     // buffer was registered by by users, we need to start to register or reuse it
-    int peerLocalRank;
+    int peerLocalRank = -1;
     for (int p = 0; p < nPeers; p++) {
       int peerRank = peerRanks[p];
       peerLocalRank = comm->rankToLocalRank[peerRank];
@@ -886,8 +886,10 @@ ncclResult_t ret = ncclSuccess;
         ipcInfo.offset = regRecord->addr - (uintptr_t)baseAddr;
         // Now ipcInfo contains all necessary registration info. Start to register buffer on proxy side
         // and get the remote register address back.
-        if (proxyConn)
+        if (proxyConn) {
+          INFO(NCCL_REG, "rank %d - IPC registering buffer %p size %ld (baseAddr %p size %ld) to peer %d", comm->rank, userbuff, buffSize, (void*)regRecord->addr, ipcInfo.size, peerRank);
           NCCLCHECKGOTO(ncclProxyCallBlocking(comm, proxyConn, ncclProxyMsgRegister, &ipcInfo, sizeof(p2pIpcExpInfo), &rmtRegAddr, sizeof(void*)), ret, fail);
+        }
         if (rmtRegAddr) {
           NCCLCHECKGOTO(ncclCalloc(&newInfo, 1), ret, fail);
           assert(regRecord->ipcInfos[peerLocalRank] == NULL);
@@ -905,7 +907,7 @@ ncclResult_t ret = ncclSuccess;
           regRecord->regIpcAddrs.hostPeerRmtAddrs[peerLocalRank] = (uintptr_t)rmtRegAddr;
           needUpdate = true;
           *regBufFlag = 1;
-          INFO(NCCL_REG, "rank %d - IPC register buffer %p size %ld (baseAddr %p size %ld) to peer %d regAddr %p offsetOut %ld", comm->rank, userbuff, buffSize, (void*)regRecord->addr, ipcInfo.size, peerRank, rmtRegAddr, (uintptr_t)userbuff - regRecord->addr);
+          INFO(NCCL_REG, "rank %d - IPC registered buffer %p size %ld (baseAddr %p size %ld) to peer %d regAddr %p offsetOut %ld", comm->rank, userbuff, buffSize, (void*)regRecord->addr, ipcInfo.size, peerRank, rmtRegAddr, (uintptr_t)userbuff - regRecord->addr);
         }
       }
     }
@@ -1039,6 +1041,8 @@ static ncclResult_t p2pProxyRegister(struct ncclProxyConnection* connection, str
   assert(sizeof(struct p2pIpcExpInfo) == reqSize);
   assert(sizeof(void*) == respSize);
 
+  INFO(NCCL_REG, "Proxy rank %d register reqBuff %p size %ld offset %ld legacyIpcCap %d sameProcess %d", proxyState->tpRank, reqBuff, ipcExpInfo->size, ipcExpInfo->offset, ipcExpInfo->legacyIpcCap, connection->sameProcess);
+
   // request peer passes all necessary buffer info to import. The proxy thread would register
   // the buffer locally and return register addr back
   if (ipcExpInfo->legacyIpcCap) {
@@ -1070,7 +1074,7 @@ static ncclResult_t p2pProxyRegister(struct ncclProxyConnection* connection, str
     CUCHECKGOTO(cuMemSetAccess((CUdeviceptr)regAddr, ipcExpInfo->size, &accessDesc, 1), ret, fail);
     regAddr = (void*)((uintptr_t)regAddr + ipcExpInfo->offset);
   }
-  INFO(NCCL_REG, "Proxy rank %d register succeeds, regAddr %p size %ld offset %ld legacyIpcCap %d sameProcess %d", proxyState->tpRank, regAddr, ipcExpInfo->size, ipcExpInfo->offset, ipcExpInfo->legacyIpcCap, connection->sameProcess);
+  INFO(NCCL_REG, "Proxy rank %d register success regAddr %p size %ld offset %ld legacyIpcCap %d sameProcess %d", proxyState->tpRank, regAddr, ipcExpInfo->size, ipcExpInfo->offset, ipcExpInfo->legacyIpcCap, connection->sameProcess);
 
 exit:
   memcpy(respBuff, (void*)&regAddr, sizeof(void*));

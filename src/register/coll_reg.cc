@@ -73,15 +73,19 @@ ncclResult_t ncclRegisterCollNvlsBuffers(
 
     if (nvlsReged) {
       *regNeedConnect = 0;
-      /* tweak NVLS channels usage; for registered NVLS buffer, we only need 4/5 channels to
-       * saturate bandwidth. */
+      /* tweak NVLS channels usage; for registered NVLS buffer to saturate bandwidth. */
       if (comm->nNodes == 1) {
-        if (info->func == ncclFuncReduceScatter)
-          info->nMaxChannels = std::max(comm->config.minCTAs, std::min(comm->config.maxCTAs, 5));
-        else
-          info->nMaxChannels = std::max(comm->config.minCTAs, std::min(comm->config.maxCTAs, 4));
+        if (info->func == ncclFuncReduceScatter) {
+          // RS: Further tweaks for Blackwell with NVLS registered buffers
+          info->nMaxChannels = std::max(comm->config.minCTAs, std::min(comm->config.maxCTAs, (comm->compCap >= 100) ? 6 : 5));
+        }
+        else {
+          // AR/AG: Further tweaks for Blackwell with NVLS registered buffers
+          info->nMaxChannels = std::max(comm->config.minCTAs, std::min(comm->config.maxCTAs, (comm->compCap >= 100) ? 8 : 4));
+        }
       } else {
-        info->nMaxChannels = std::max(comm->config.minCTAs, std::min(comm->config.maxCTAs, 6));
+        // Further tweaks for Blackwell with NVLS registered buffers
+        info->nMaxChannels = std::max(comm->config.minCTAs, std::min(comm->config.maxCTAs, (comm->compCap >= 100) ? 7 : 6));
       }
       info->regBufType |= NCCL_NVLS_REG_BUFFER;
     }

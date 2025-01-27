@@ -80,7 +80,7 @@ static int rasOutBufferSize = 0;
 
 // We use them all over the place; no point in wasting the stack...
 static char lineBuf[1024]; // Temporary buffer used for printing at most 10 (RAS_CLIENT_DETAIL_THRESHOLD) rank numbers
-                           // or for printing the local GPU devices, which can't be more than 64 (NCCL_MAX_LOCAL_RANKS)
+                           // or for printing the local GPU devices, which can't be more than 64
                            // small numbers (times two if the NVML mask is different than the CUDA mask).
                            // Still, 1024 should normally be plenty (verbose output may make things more difficult,
                            // but we do check for overflows, so it will just be trimmed).
@@ -1687,7 +1687,7 @@ static int rasCommRanksCollOpCompare(const void* p1, const void* p2) {
 const char* rasGpuDevsToString(uint64_t cudaDevs, uint64_t nvmlDevs, char* buf, size_t size) {
   bool first = true;
   buf[0] = '\0';
-  for (int i = 0; i < NCCL_MAX_LOCAL_RANKS; i++)
+  for (int i = 0; i < sizeof(cudaDevs)*8; i++)
     if (cudaDevs & (1UL << i)) {
       snprintf(buf+strlen(buf), size-strlen(buf), "%s%d", (first ? "" : ","), i);
       first = false;
@@ -1695,7 +1695,7 @@ const char* rasGpuDevsToString(uint64_t cudaDevs, uint64_t nvmlDevs, char* buf, 
   if (cudaDevs != nvmlDevs) {
     snprintf(buf+strlen(buf), size-strlen(buf), " (NVML ");
     first = true;
-    for (int i = 0; i < NCCL_MAX_LOCAL_RANKS; i++)
+    for (int i = 0; i < sizeof(nvmlDevs)*8; i++)
       if (nvmlDevs & (1UL << i)) {
         snprintf(buf+strlen(buf), size-strlen(buf), "%s%d", (first ? "" : ","), i);
         first = false;

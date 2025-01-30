@@ -2336,7 +2336,7 @@ ncclResult_t  ncclMemAlloc(void **ptr, size_t size) {
     /* Now allow RW access to the newly mapped memory */
     for (int i = 0; i < dcnt; ++i) {
       int p2p = 0;
-      if (i == cudaDev || ((cudaDeviceCanAccessPeer(&p2p, cudaDev, i) == cudaSuccess) && p2p)) {
+      if (i == cudaDev || ((cudaDeviceCanAccessPeer(&p2p, i, cudaDev) == cudaSuccess) && p2p)) {
         accessDesc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
         accessDesc.location.id = i;
         accessDesc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;

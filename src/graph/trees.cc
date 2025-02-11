@@ -102,8 +102,8 @@ ncclResult_t ncclGetDtree(int nranks, int rank, int* s0, int* d0_0, int* d0_1, i
     int u, d0, d1;
     ncclGetBtree(nranks, nranks-1-rank, &u, &d0, &d1, parentChildType1);
     *s1 = u == -1 ? -1 : nranks-1-u;
-    *d1_0 = d0 == -1 ? -1 : nranks-1-d0;
-    *d1_1 = d1 == -1 ? -1 : nranks-1-d1;
+    *d1_0 = d1 == -1 ? -1 : nranks-1-d1;
+    *d1_1 = d0 == -1 ? -1 : nranks-1-d0;
   }
   return ncclSuccess;
 }

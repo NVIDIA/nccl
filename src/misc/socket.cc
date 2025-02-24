@@ -461,6 +461,18 @@ static ncclResult_t socketSetFlags(struct ncclSocket* sock) {
   return ncclSuccess;
 }
 
+/* Ignore spurious connection and accept again */
+static void handleInvalidMagic(struct ncclSocket* sock) {
+  char line[SOCKET_NAME_MAXLEN+1];
+  WARN("handleInvalidMagic: didn't receive a valid magic from: %s",
+       ncclSocketToString(&sock->addr, line, 0));
+
+  close(sock->fd);
+  sock->fd = -1;
+  sock->state = ncclSocketStateAccepting;
+  sock->finalizeCounter = 0;
+}
+
 static ncclResult_t socketFinalizeAccept(struct ncclSocket* sock) {
   uint64_t magic;
   enum ncclSocketType type;
@@ -471,20 +483,27 @@ static ncclResult_t socketFinalizeAccept(struct ncclSocket* sock) {
   if (sock->asyncFlag == 0 || sock->finalizeCounter < sizeof(magic)) {
     if (sock->asyncFlag == 0) {
       received = 0;
-      NCCLCHECK(socketWait(NCCL_SOCKET_RECV, sock, &magic, sizeof(magic), &received));
+      ncclResult_t res = socketWait(NCCL_SOCKET_RECV, sock, &magic, sizeof(magic), &received);
+      if (res != ncclSuccess) {
+        handleInvalidMagic(sock);
+        return ncclSuccess;
+      }
     } else {
+      int pclosed = 0;
       received = sock->finalizeCounter;
-      NCCLCHECK(socketProgress(NCCL_SOCKET_RECV, sock, sock->finalizeBuffer, sizeof(magic), &received));
+      NCCLCHECK(socketProgress(NCCL_SOCKET_RECV, sock, sock->finalizeBuffer, sizeof(magic), &received, &pclosed));
       sock->finalizeCounter = received;
-      if (received < sizeof(magic)) return ncclSuccess;
+      if (received < sizeof(magic)) {
+        if (pclosed) {
+          handleInvalidMagic(sock);
+        }
+        return ncclSuccess;
+      }
       memcpy(&magic, sock->finalizeBuffer, sizeof(magic));
     }
     if (magic != sock->magic) {
       WARN("socketFinalizeAccept: wrong magic %lx != %lx", magic, sock->magic);
-      close(sock->fd);
-      sock->fd = -1;
-      // Ignore spurious connection and accept again
-      sock->state = ncclSocketStateAccepting;
+      handleInvalidMagic(sock);
       return ncclSuccess;
     }
   }

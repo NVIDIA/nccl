@@ -246,7 +246,7 @@ ncclResult_t ncclTopoFlattenBcmSwitches(struct ncclTopoSystem* system) {
       pciSwitch->pci.device |= 0xffff;
       free(subSwIds);
       // Restart, as system->nodes[PCI].nodes has changed.
-      s = 0;
+      s = -1;  // Will be incremented to 0 in the next loop iteration
       continue;
 fail:
       free(subSwIds);

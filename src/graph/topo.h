@@ -18,9 +18,11 @@
 #define SM86_NVLINK_BW 12.0
 #define SM100_NVLINK_BW 40.0
 #define PCI_BW 12.0           // PCI Gen3 x16
-#define QPI_BW 6.0
 #define AMD_BW 16.0
+#define BDW_QPI_BW 6.0
 #define SKL_QPI_BW 10.0
+#define SRP_QPI_BW 22.0
+#define ERP_QPI_BW 40.0
 #define ZPI_BW 6.0
 #define YONGFENG_ZPI_BW 9.0
 #define P9_BW 32.0
@@ -44,12 +46,13 @@ extern const char* topoNodeTypeStr[];
 #define LINK_LOC 0
 #define LINK_NVL 1
 // Skipping 2 for PATH_NVB
-#define LINK_PCI 3
-// Skipping 4 for PATH_PXB
-// Skipping 5 for PATH_PXN
-// Skipping 6 for PATH_PHB
-#define LINK_SYS 7
-#define LINK_NET 8
+#define LINK_C2C 3
+#define LINK_PCI 4
+// Skipping 5 for PATH_PXB
+// Skipping 6 for PATH_PXN
+// Skipping 7 for PATH_PHB
+#define LINK_SYS 8
+#define LINK_NET 9
 extern const char* topoLinkTypeStr[];
 
 // Local (myself)
@@ -61,29 +64,32 @@ extern const char* topoLinkTypeStr[];
 // Connection through NVLink using an intermediate GPU
 #define PATH_NVB 2
 
+// Connection through C2C
+#define PATH_C2C 3
+
 // Connection traversing at most a single PCIe bridge
-#define PATH_PIX 3
+#define PATH_PIX 4
 
 // Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
-#define PATH_PXB 4
+#define PATH_PXB 5
 
 // Connection between a GPU and a NIC using an intermediate GPU. Used to enable rail-local, aggregated network send/recv operations.
-#define PATH_PXN 5
+#define PATH_PXN 6
 
 // Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
-#define PATH_PHB 6
+#define PATH_PHB 7
 
 // Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
-#define PATH_SYS 7
+#define PATH_SYS 8
 
 // Connection through the network
-#define PATH_NET 8
+#define PATH_NET 9
 
 // New type of path which should precede PATH_PIX
 #define PATH_PORT PATH_NVL
 
 // Disconnected
-#define PATH_DIS 9
+#define PATH_DIS 10
 extern const char* topoPathTypeStr[];
 
 struct ncclTopoNode;
@@ -102,9 +108,6 @@ struct ncclTopoLinkList {
   float bw;
   int type;
 };
-
-#define NCCL_TOPO_CPU_INTEL_BDW 1
-#define NCCL_TOPO_CPU_INTEL_SKL 2
 
 #define NCCL_TOPO_UNDEF (-1)
 
@@ -176,6 +179,7 @@ ncclResult_t ncclTopoLoadSystem(const char* xmlTopoFile, struct ncclTopoSystem* 
 ncclResult_t ncclTopoGetIntermediateRank(struct ncclTopoSystem* system, int rank, int64_t netId, int* intermediateRank);
 ncclResult_t ncclTopoGetGpuMinPath(struct ncclTopoSystem* system, int type, int* min);
 ncclResult_t ncclTopoGetGpuMaxPath(struct ncclTopoSystem* system, int type, int* max);
+ncclResult_t ncclTopoSplitNvLink(struct ncclTopoSystem* system, int* splitNvLink);
 
 #define NCCL_TOPO_XML_MAX_NODES 256
 #define NCCL_GRAPH_XML_MAX_NODES 4096

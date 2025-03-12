@@ -18,6 +18,7 @@
 #define TRANSPORT_SHM 1
 #define TRANSPORT_NET 2
 #define TRANSPORT_COLLNET 3
+#define TRANSPORT_PROFILER 4
 
 #include "proxy.h"
 #include "comm.h"
@@ -26,6 +27,7 @@ extern struct ncclTransport p2pTransport;
 extern struct ncclTransport shmTransport;
 extern struct ncclTransport netTransport;
 extern struct ncclTransport collNetTransport;
+extern struct ncclTransport profilerTransport;
 
 extern struct ncclTransport* ncclTransports[];
 // Forward declarations
@@ -65,8 +67,10 @@ struct ncclNvlsSharedRes {
   CUmulticastObjectProp signalProp;
   CUmemAccessDesc accessDesc;
   int dev;
-  size_t buffSize;
-  size_t creditSize;
+  size_t creditUCSize;
+  size_t creditMCSize;
+  size_t buffUCSize;
+  size_t buffMCSize;
   CUmemGenericAllocationHandle mcBuffHandle; // Multicast handle for NVLS buffer
   CUmemGenericAllocationHandle mcCreditHandle; // Multicast handle for NVLS credit buffer
   char* mcBuff; // Multicast NVLS buffer address
@@ -123,7 +127,7 @@ ncclResult_t ncclNvlsBufferSetup(struct ncclComm* comm);
 ncclResult_t ncclNvlsTreeConnect(struct ncclComm* comm);
 ncclResult_t ncclNvlsGraphRegisterBuffer(struct ncclComm *comm, const void *sendbuff, void *recvbuff, size_t sendbuffSize, size_t recvbuffSize, int *outRegBufUsed, void **outRegBufSend, void **outRegBufRecv, struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next>* cleanupQueue, int* nCleanupQueueElts);
 ncclResult_t ncclNvlsLocalRegisterBuffer(struct ncclComm *comm, const void *sendbuff, void *recvbuff, size_t sendbuffSize, size_t recvbuffSize, int *outRegBufUsed, void **outRegBufSend, void **outRegBufRecv);
-ncclResult_t ncclNvlsDeregBuffer(struct ncclComm* comm, CUmemGenericAllocationHandle *mcHandler, CUdeviceptr ptr, int dev, size_t size);
+ncclResult_t ncclNvlsDeregBuffer(struct ncclComm* comm, CUmemGenericAllocationHandle *mcHandler, CUdeviceptr ptr, int dev, size_t ucsize, size_t mcsize);
 ncclResult_t ncclNvlsFree(struct ncclComm* comm);
 
 enum { collNetRecv=0, collNetSend=1 };

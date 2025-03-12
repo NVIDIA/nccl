@@ -171,6 +171,7 @@ static int findInterfaces(const char* prefixList, char* names, union ncclSocketA
       strncpy(names+found*maxIfNameSize, interface->ifa_name, maxIfNameSize);
       // Store the IP address
       int salen = (family == AF_INET) ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
+      memset(addrs+found, '\0', sizeof(*addrs));
       memcpy(addrs+found, interface->ifa_addr, salen);
       found++;
     }
@@ -905,9 +906,17 @@ ncclResult_t ncclSocketShutdown(struct ncclSocket* sock, int how) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclSocketClose(struct ncclSocket* sock) {
+ncclResult_t ncclSocketClose(struct ncclSocket* sock, bool wait) {
   if (sock != NULL) {
     if (sock->state > ncclSocketStateNone && sock->state < ncclSocketStateNum && sock->fd >= 0) {
+      if (wait) {
+        char data;
+        int closed = 0;
+        do {
+          int offset = 0;
+          if (ncclSocketProgress(NCCL_SOCKET_RECV, sock, &data, sizeof(char), &offset, &closed) != ncclSuccess) break;
+        } while (closed == 0);
+      }
       /* shutdown() is needed to send FIN packet to proxy thread; shutdown() is not affected
        * by refcount of fd, but close() is. close() won't close a fd and send FIN packet if
        * the fd is duplicated (e.g. fork()). So shutdown() guarantees the correct and graceful

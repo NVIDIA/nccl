@@ -2,8 +2,8 @@
  * Copyright (c) 2017-2022, NVIDIA CORPORATION. All rights reserved.
  */
 
-#ifndef NCCL_NET_V5_H_
-#define NCCL_NET_V5_H_
+#ifndef NET_V5_H_
+#define NET_V5_H_
 
 typedef ncclNetProperties_v6_t ncclNetProperties_v5_t;
 typedef struct {

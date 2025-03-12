@@ -169,7 +169,7 @@ ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
   } control_un;
 
   struct cmsghdr *cmptr;
-  char dummy_buffer[1];
+  char dummy_buffer[1] = {'\0'};
   struct sockaddr_un cliaddr;
 
   // Construct client address to send this shareable handle to
@@ -190,6 +190,7 @@ ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
   TRACE(NCCL_INIT, "UDS: Sending hdr %p len %d fd %d to UDS socket %s", hdr, hdrLen, sendFd, temp);
 
   if (sendFd != -1) {
+    memset(&control_un, '\0', sizeof(control_un));
     msg.msg_control = control_un.control;
     msg.msg_controllen = sizeof(control_un.control);
 

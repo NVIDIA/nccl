@@ -2,8 +2,8 @@
  * Copyright (c) 2017-2022, NVIDIA CORPORATION. All rights reserved.
  */
 
-#ifndef NCCL_NET_V3_H_
-#define NCCL_NET_V3_H_
+#ifndef NET_V3_H_
+#define NET_V3_H_
 
 #define NCCL_NET_MAX_REQUESTS_V3 16
 

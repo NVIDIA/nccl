@@ -2,18 +2,14 @@
  * Copyright (c) 2017-2022, NVIDIA CORPORATION. All rights reserved.
  */
 
-#ifndef NCCL_NET_V9_H_
-#define NCCL_NET_V9_H_
-
-#include "net_device.h"
+#ifndef NET_V9_H_
+#define NET_V9_H_
 
 #define NCCL_NET_MAX_DEVS_PER_NIC_V9 4
-#define NCCL_NET_MAX_DEVS_PER_NIC NCCL_NET_MAX_DEVS_PER_NIC_V9
 typedef struct {
   int ndevs;
   int devs[NCCL_NET_MAX_DEVS_PER_NIC_V9];
 } ncclNetVDeviceProps_v9_t;
-typedef ncclNetVDeviceProps_v9_t ncclNetVDeviceProps_t;
 
 typedef struct {
   char* name;                      // Used mostly for logging.
@@ -34,8 +30,6 @@ typedef struct {
   size_t maxP2pBytes;              // Max transfer size for point-to-point operations
   size_t maxCollBytes;             // Max transfer size for collective operations
 } ncclNetProperties_v9_t;
-
-typedef ncclNetProperties_v9_t ncclNetProperties_t;
 
 typedef struct {
   // Name of the network (mainly for logs)
@@ -93,7 +87,7 @@ typedef struct {
 
   // Virtual NIC APIs. makeVDevice will create a virtual NIC given the specified properties, and tell the caller
   // what index this new vNIC exists at
-  ncclResult_t (*makeVDevice)(int* d, ncclNetVDeviceProps_t* props);
+  ncclResult_t (*makeVDevice)(int* d, ncclNetVDeviceProps_v9_t* props);
 } ncclNet_v9_t;
 
 #endif // end include guard

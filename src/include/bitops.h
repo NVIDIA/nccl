@@ -8,6 +8,7 @@
 #define NCCL_BITOPS_H_
 
 #include <stdint.h>
+#include <string.h>
 
 #if !__NVCC__
   #ifndef __host__
@@ -276,13 +277,53 @@ inline __host__ __device__ uint32_t u32fp8Decode(uint8_t x) {
   return u32fpDecode(x, 3);
 }
 
-inline __host__ __device__ uint64_t getHash(const char* string, int n) {
-  // Based on DJB2a, result = result * 33 ^ char
-  uint64_t result = 5381;
-  for (int c = 0; c < n; c++) {
-    result = ((result << 5) + result) ^ string[c];
+// The hash isn't just a function of the bytes but also where the bytes are split
+// into different calls to eatHash().
+inline __host__ __device__ void eatHash(uint64_t acc[2], const void* bytes, size_t size) {
+  char const* ptr = (char const*)bytes;
+  acc[0] ^= size;
+  while (size != 0) {
+    // Mix the accumulator bits.
+    acc[0] += acc[1];
+    acc[1] ^= acc[0];
+    acc[0] ^= acc[0] >> 31;
+    acc[0] *= 0x9de62bbc8cef3ce3;
+    acc[1] ^= acc[1] >> 32;
+    acc[1] *= 0x485cd6311b599e79;
+    // Read in a chunk of input.
+    size_t chunkSize = size < sizeof(uint64_t) ? size : sizeof(uint64_t);
+    uint64_t x = 0;
+    memcpy(&x, ptr, chunkSize);
+    ptr += chunkSize;
+    size -= chunkSize;
+    // Add to accumulator.
+    acc[0] += x;
   }
-  return result;
+}
+
+template<typename T>
+inline __host__ __device__ void eatHash(uint64_t acc[2], const T* bytes) {
+  eatHash(acc, (const void*)bytes, sizeof(T));
+}
+
+inline __host__ __device__ uint64_t digestHash(uint64_t const acc[2]) {
+  uint64_t h = acc[0];
+  h ^= h >> 31;
+  h *= 0xbac3bd562846de6b;
+  h += acc[1];
+  h ^= h >> 32;
+  h *= 0x995a187a14e7b445;
+  return h;
+}
+
+inline __host__ __device__ uint64_t getHash(const void* bytes, size_t size) {
+  uint64_t acc[2] = {1, 1};
+  eatHash(acc, bytes, size);
+  return digestHash(acc);
+}
+template<typename T>
+inline __host__ __device__ uint64_t getHash(const T* bytes) {
+  return getHash((const void*)bytes, sizeof(T));
 }
 
 #endif

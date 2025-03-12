@@ -131,6 +131,9 @@ struct ncclSharedResources {
   int* tpRankToLocalRank;
   // Internal streams
   struct ncclStrongStream deviceStream, hostStream;
+  int noncapturedRefs; // number of non-captured hostStreamPlanCallback on the stream
+  int persistentRefs;
+  cudaEvent_t launchEvent, scratchEvent;
 
   /* proxy related shared res */
   struct ncclProxyState* proxyState;
@@ -407,6 +410,7 @@ struct ncclComm {
   // List of destructors to run when comm is destructed
   struct ncclDestructor* destructorHead;
 
+  struct ncclCudaContext* context;
   struct ncclSharedResources* sharedRes;
   /* map to top parent ranks. */
   int* topParentRanks;
@@ -419,6 +423,7 @@ struct ncclComm {
 
   int netPluginLoaded;
   ncclNet_t* ncclNet;
+  int ncclNetVer;
   ncclNetDeviceType netDeviceType;
   ncclCollNet_t* ncclCollNet;
   void* bootstrap;
@@ -426,6 +431,7 @@ struct ncclComm {
   uint64_t* connectSend;
   uint64_t* connectRecv;
   struct ncclTopoGraph graphs[NCCL_NUM_ALGORITHMS];
+  int maxTreePattern;
   bool initAlgoChannels[NCCL_NUM_ALGORITHMS];
   bool runtimeConn; // if dynamic connection is supported
   bool directMode;
@@ -565,8 +571,7 @@ struct ncclComm {
   struct ncclComm* groupNext;
   // Subset of those in groupNext list. Holds 0x1 if not needing preconnect.
   struct ncclComm* preconnectNext;
-  int persistentRefs; // number of persistent plan-lists capturing this comm
-  int noncapturedRefs; // number of non-captured hostStreamPlanCallback on the stream
+  int localPersistentRefs; // number of persistent plan-lists capturing this comm
   struct P2pSchedulePair { int sendRank; int recvRank; } *p2pSchedule;
 
   struct ncclKernelPlanner planner;
@@ -603,6 +608,7 @@ struct ncclComm {
   // Profiler plugin
   void* profilerContext;
   uint64_t seqNumber[NCCL_NUM_FUNCTIONS];
+  struct ncclProfilerProxy profiler;
 
   // buffer registration cache
   struct ncclRegCache regCache;

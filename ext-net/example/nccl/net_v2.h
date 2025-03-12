@@ -2,8 +2,8 @@
  * Copyright (c) 2017-2022, NVIDIA CORPORATION. All rights reserved.
  */
 
-#ifndef NCCL_NET_V2_H_
-#define NCCL_NET_V2_H_
+#ifndef NET_V2_H_
+#define NET_V2_H_
 
 typedef struct {
   // Name of the network (mainly for logs)

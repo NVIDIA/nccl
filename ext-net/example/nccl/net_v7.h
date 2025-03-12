@@ -2,10 +2,8 @@
  * Copyright (c) 2017-2022, NVIDIA CORPORATION. All rights reserved.
  */
 
-#ifndef NCCL_NET_V7_H_
-#define NCCL_NET_V7_H_
-
-#include "net_device.h"
+#ifndef NET_V7_H_
+#define NET_V7_H_
 
 typedef struct {
   char* name;                      // Used mostly for logging.

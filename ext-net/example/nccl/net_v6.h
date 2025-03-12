@@ -2,10 +2,8 @@
  * Copyright (c) 2017-2022, NVIDIA CORPORATION. All rights reserved.
  */
 
-#ifndef NCCL_NET_V6_H_
-#define NCCL_NET_V6_H_
-
-#define NCCL_NET_MAX_REQUESTS_V6 8
+#ifndef NET_V6_H_
+#define NET_V6_H_
 
 typedef struct {
   char* name;     // Used mostly for logging.

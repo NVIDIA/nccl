@@ -32,6 +32,7 @@ void setEnvFile(const char* fileName) {
   size_t n = 0;
   ssize_t read;
   while ((read = getline(&line, &n, file)) != -1) {
+    if (line[0] == '#') continue;
     if (line[read-1] == '\n') line[read-1] = '\0';
     int s=0; // Env Var Size
     while (line[s] != '\0' && line[s] != '=') s++;

@@ -67,7 +67,7 @@ namespace {
         offset = dataOffset + rankDest * count;
 
         // Final wait/copy.
-        prims.directRecv(offset, offset, nelem);
+        prims.directRecv(offset, nelem);
       }
     } else if (inputBuf != outputBuf + ringRanks[0] * count) {
       inputBuf = inputBuf + partOffset;
@@ -111,25 +111,63 @@ struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_LL128
 template<typename T, typename RedOp>
 struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_PAT, NCCL_PROTO_SIMPLE> {
   __device__ __forceinline__ void run(int tid, int nthreads, struct ncclDevWorkColl* work) {
+#if __CUDA_ARCH__ >= 600
     using Proto = ProtoSimple<1, 1>;
     const int nranks = ncclShmem.comm.nRanks;
     const int rank = ncclShmem.comm.rank;
     size_t count, channelOffset, channelCount, chunkCount;
     ncclCollCbdPart(work, ncclShmem.channelId, Proto::Id, sizeof(T), &count, &channelOffset, &channelCount, &chunkCount);
 
-    T *inputBuf = (T*)work->sendbuff;
-    T *outputBuf = (T*)work->recvbuff;
-    Primitives<T, RedOp, FanSymmetric<1>, 0, Proto, 0> prims
-      (tid, nthreads, NULL, NULL, inputBuf, outputBuf, work->redOpArg, 0*Proto::MaxGroupWidth, 0, 0, nullptr, nullptr, 0, primsModePatAg);
+    static constexpr int nworkers = NCCL_PAT_NWORKERS;
+    struct ncclPatShmem* shmem = (struct ncclPatShmem*)ncclScratchForWarp(0);
+    uint64_t pollCount = 0;
+    __syncthreads(); // Don't start using shared mem until everyone arrives
+    for (int i=tid; i<NCCL_SHMEM_PAT_STEPS; i+=nthreads) shmem->patSteps[i].flags = 0;
+    if (tid == 0) shmem->localAccSize = 0;
+    if (tid == nworkers) shmem->parallelFactor = 0;
+    __syncthreads();
 
-    PatAGAlgorithm<T> patAlgo(chunkCount*sizeof(T), NCCL_STEPS, channelOffset, channelOffset + channelCount, count, chunkCount, rank, nranks);
-    int last = 0;
-    while (!last) {
-      int recvDim, sendDim, recvOffset, sendOffset, recvStepOffset, postRecv, postSend, nelem;
-      size_t inpIx, outIx;
-      patAlgo.getNextOp(recvDim, sendDim, inpIx, outIx, recvOffset, sendOffset, recvStepOffset, nelem, postRecv, postSend, last);
-      prims.patCopy(recvDim, sendDim, inpIx, outIx, recvOffset, sendOffset, recvStepOffset, nelem, postRecv, postSend);
+    if (tid == nworkers) { // Algo computation thread
+      PatAGAlgorithm<T> patAlgo(chunkCount*sizeof(T), NCCL_STEPS, NCCL_PAT_NWORKERS/WARP_SIZE, channelOffset, channelOffset + channelCount, count, chunkCount, rank, nranks);
+      int parallelFactor = shmem->parallelFactor = patAlgo.getParallelFactor();
+      int step = 0;
+      while (1) {
+        struct ncclPatStep* ps = shmem->patSteps+(step%NCCL_SHMEM_PAT_STEPS);
+        cuda::atomic_ref<int, cuda::thread_scope_block> poll(ps->flags);
+        while (poll.load(cuda::memory_order_acquire) != 0) pollCount++; // Wait for workers to be done with step 'step-NCCL_SHMEM_PAT_STEPS'
+        patAlgo.getNextOp(ps);
+        int last = ps->last;
+        step++;
+        if (last == 2) break;
+      }
+    } else if (tid < nworkers) { // Worker threads
+      T *inputBuf = (T*)work->sendbuff;
+      T *outputBuf = (T*)work->recvbuff;
+      int parallelFactor = 0;
+      volatile int* pfPtr = &shmem->parallelFactor;
+      while (parallelFactor == 0) parallelFactor = *pfPtr;
+
+      int groupSize = nworkers/(WARP_SIZE*parallelFactor) * WARP_SIZE;
+      int group = tid / groupSize;
+      int nGroups = nworkers / groupSize;
+      int tidInGroup = tid - group*groupSize;
+      // We don't use recvPeers/sendPeers so let's pass shmem structs instead
+      Primitives<T, RedOp, FanSymmetric<1>, 0, Proto, 0> prims
+        (tidInGroup, groupSize, (int*)shmem->recvDims, (int*)shmem->sendDims, inputBuf, outputBuf, work->redOpArg, group, 0, 0, nullptr, nullptr, 0, primsModePatAg);
+
+      int step = group;
+      while(1) {
+        struct ncclPatStep* ps = shmem->patSteps+(step%NCCL_SHMEM_PAT_STEPS);
+        cuda::atomic_ref<int, cuda::thread_scope_block> poll(ps->flags);
+        while (poll.load(cuda::memory_order_acquire) == 0) pollCount++; // Wait for compute thread
+        int last = ps->last;
+        prims.patCopy(ps, shmem);
+        if (tidInGroup == 0) poll.store(0, cuda::memory_order_release); // Return element to compute thread
+        if (last) break;
+        step += nGroups;
+      }
     }
+#endif
   }
 };
 

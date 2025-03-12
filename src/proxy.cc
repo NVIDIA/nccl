@@ -383,6 +383,7 @@ static ncclResult_t ncclProxyOpToArgs(struct ncclProxyOp* op, struct ncclProxyAr
   sub->pid = op->pid;
   sub->profilerContext = op->profilerContext;
   sub->ringAlgo = op->ringAlgo;
+  sub->workCounter = op->workCounter;
   args->nsubs = subIndex+1;
   if (subIndex) {
     if ((args->sliceSteps != op->sliceSteps) ||
@@ -532,6 +533,19 @@ static ncclResult_t ncclLocalOpAppend(struct ncclComm* comm, struct ncclProxyCon
   return ncclSuccess;
 }
 
+static ncclResult_t SaveProxyProfiler(struct ncclComm* comm, struct ncclProxyOp* op, bool* justInquire) {
+  struct ncclProxyConnector* proxyConn = (op->coll == ncclFuncRecv) ? &comm->profiler.recvProxyConn[op->channelId] : &comm->profiler.sendProxyConn[op->channelId];
+  if (justInquire) *justInquire = true;
+  else {
+    op->sendbuff = (uint8_t *)comm->profiler.workStarted;
+    op->recvbuff = (uint8_t *)comm->profiler.workCompleted;
+    NCCLCHECK(ncclLocalOpAppend(comm, proxyConn, op));
+    // Ensure that in graph capturing the proxy workCounter is incremented to keep up with kernel workCounter
+    op->workCounter += comm->profiler.workCounter[op->channelId];
+  }
+  return ncclSuccess;
+}
+
 static ncclResult_t SaveProxy(struct ncclComm* comm, struct ncclChannel* channel, int type, int peer, struct ncclProxyOp* op, int connIndex, bool* justInquire) {
   if (peer < 0) return ncclSuccess;
 
@@ -612,20 +626,19 @@ ncclResult_t ncclProxySaveOp(struct ncclComm* comm, struct ncclProxyOp* op, bool
       // Run full algorithm to count the number of steps for each peer.
       ncclResult_t result = ncclSuccess;
       const ssize_t size = op->nbytes/comm->nRanks;
-      int last = 0;
-      int *nstepsSend = NULL, *nstepsRecv = NULL;
       const int rank = comm->rank, nranks = comm->nRanks;
-      PatRSAlgorithm<char> algo(op->chunkSize, NCCL_STEPS, 0, size, size, op->chunkSize, rank, nranks);
+      int *nstepsSend = NULL, *nstepsRecv = NULL;
+      PatRSAlgorithm<char> algo(op->chunkSize, NCCL_STEPS, 16, 0, size, size, op->chunkSize, rank, nranks);
       NCCLCHECKGOTO(ncclCalloc(&nstepsSend, log2Up(nranks)), result, exit_pat_up);
       NCCLCHECKGOTO(ncclCalloc(&nstepsRecv, log2Up(nranks)), result, exit_pat_up);
 
-      while (last == 0) {
-        int recvDim, sendDim, recvOffset, sendOffset, sendStepOffset, postRecv, postSend, nelem;
-        size_t inpIx, outIx;
-        algo.getNextOp(recvDim, sendDim, inpIx, outIx, recvOffset, sendOffset, sendStepOffset, nelem, postRecv, postSend, last);
-        if (recvDim != -1 && postRecv) nstepsRecv[recvDim]++;
-        if (sendDim != -1 && postSend) nstepsSend[sendDim]++;
-      }
+      struct ncclPatStep ps;
+      do {
+        algo.getNextOp(&ps);
+        if (ps.flags & PatSkipped) continue;
+        if (ps.recvDim != -1 && ps.postRecv) nstepsRecv[ps.recvDim]++;
+        if (ps.sendDim != -1 && ps.postSend) nstepsSend[ps.sendDim]++;
+      } while (ps.last != 2);
       for (int i=0; i<log2Up(nranks); i++) {
         if (nstepsSend[i]) {
           int sendPeer = (rank + (1<<i)) % nranks;
@@ -647,20 +660,19 @@ ncclResult_t ncclProxySaveOp(struct ncclComm* comm, struct ncclProxyOp* op, bool
       // Run full algorithm to count the number of steps for each peer.
       ncclResult_t result = ncclSuccess;
       const ssize_t size = op->nbytes/comm->nRanks;
-      int last = 0;
-      int *nstepsSend = NULL, *nstepsRecv = NULL;
       const int rank = comm->rank, nranks = comm->nRanks;
-      PatAGAlgorithm<char> algo(op->chunkSize, NCCL_STEPS, 0, size, size, op->chunkSize, rank, nranks);
+      int *nstepsSend = NULL, *nstepsRecv = NULL;
+      PatAGAlgorithm<char> algo(op->chunkSize, NCCL_STEPS, 16, 0, size, size, op->chunkSize, rank, nranks);
       NCCLCHECKGOTO(ncclCalloc(&nstepsSend, log2Up(nranks)), result, exit_pat_down);
       NCCLCHECKGOTO(ncclCalloc(&nstepsRecv, log2Up(nranks)), result, exit_pat_down);
 
-      while (last == 0) {
-        int recvDim, sendDim, recvOffset, sendOffset, recvStepOffset, postRecv, postSend, nelem;
-        size_t inpIx, outIx;
-        algo.getNextOp(recvDim, sendDim, inpIx, outIx, recvOffset, sendOffset, recvStepOffset, nelem, postRecv, postSend, last);
-        if (recvDim != -1 && postRecv) nstepsRecv[recvDim]++;
-        if (sendDim != -1 && postSend) nstepsSend[sendDim]++;
-      }
+      struct ncclPatStep ps;
+      do {
+        algo.getNextOp(&ps);
+        if (ps.flags & PatSkipped) continue;
+        if (ps.recvDim != -1 && ps.postRecv) nstepsRecv[ps.recvDim]++;
+        if (ps.sendDim != -1 && ps.postSend) nstepsSend[ps.sendDim]++;
+      } while (ps.last != 2);
       for (int i=0; i<log2Up(nranks); i++) {
         if (nstepsSend[i]) {
           int sendPeer = (rank - (1<<i) + nranks) % nranks;
@@ -682,6 +694,11 @@ ncclResult_t ncclProxySaveOp(struct ncclComm* comm, struct ncclProxyOp* op, bool
   case ncclPatternRecv: {
       if (op->root == comm->rank) return ncclSuccess;
       NCCLCHECK(SaveProxy(comm, channel, op->pattern == ncclPatternSend ? proxySend : proxyRecv, op->root, op, 1, justInquire));
+    } break;
+  case ncclPatternProfiler: {
+      if (ncclProfilerNeedsProxy(comm, op)) {
+        NCCLCHECK(SaveProxyProfiler(comm, op, justInquire));
+      }
     } break;
   }
   return ncclSuccess;
@@ -725,10 +742,10 @@ static ncclResult_t progressOps(struct ncclProxyState* proxyState, struct ncclPr
   while (op) {
     if (op->state == ncclProxyOpNone) return ncclInternalError;
     TIME_START(0); TIME_START(1);
-    NCCLCHECK(op->progress(proxyState, op));
+    ncclResult_t ret = op->progress(proxyState, op);
     if (op->idle) { TIME_STOP(1); TIME_CANCEL(0); } else { TIME_CANCEL(1); TIME_STOP(0); }
     *idle &= op->idle;
-    if (op->state == ncclProxyOpNone) {
+    if (op->state == ncclProxyOpNone || ret != ncclSuccess) {
       TIME_START(2);
       NCCLCHECK(removeOp(state, &op, &prevOp));
       TIME_STOP(2);
@@ -910,7 +927,7 @@ void* ncclProxyProgress(void *proxyState_) {
     if (ret != ncclSuccess) {
       __atomic_store_n(&proxyState->asyncResult, ret, __ATOMIC_RELEASE);
       INFO(NCCL_ALL,"%s:%d -> %d [Progress Thread]", __FILE__, __LINE__, ret);
-      continue;
+      break;
     }
     void* eHandle;
     ncclProfilerStartProxyCtrlEvent(proxyState->profilerContext, &eHandle);
@@ -932,7 +949,7 @@ void* ncclProxyProgress(void *proxyState_) {
       }
     }
     lastIdle = idle;
-  } while (state->stop == 0 || (state->stop == 1 && state->active));
+  } while ((state->stop == 0 || (state->stop == 1 && state->active)) && __atomic_load_n(proxyState->abortFlag, __ATOMIC_ACQUIRE) == 0);
   return NULL;
 }
 
@@ -1140,6 +1157,7 @@ ncclResult_t ncclProxyCallBlockingUDS(struct ncclComm* comm, struct ncclProxyCon
   }
 
   ncclIpcHdr hdr;
+  memset(&hdr, '\0', sizeof(hdr));
   hdr.type = type;
   hdr.rank = rank;
   hdr.reqSize = reqSize;
@@ -1323,9 +1341,12 @@ static ncclResult_t proxyProgressInit(struct ncclProxyState* proxyState) {
     pthread_mutexattr_init(&mutexAttr);
     pthread_mutexattr_setpshared(&mutexAttr, PTHREAD_PROCESS_SHARED);
     pthread_mutex_init(&pool->mutex, &mutexAttr);
+    pthread_mutexattr_destroy(&mutexAttr);
     pthread_condattr_t condAttr;
+    pthread_condattr_init(&condAttr);
     pthread_condattr_setpshared(&condAttr, PTHREAD_PROCESS_SHARED);
     pthread_cond_init(&pool->cond, &condAttr);
+    pthread_condattr_destroy(&condAttr);
     state->opsPool = pool;
 
     memcpy(state->opsPoolShmSuffix, shmPath+sizeof("/dev/shm/nccl-")-1, sizeof("XXXXXX")-1);

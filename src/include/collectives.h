@@ -10,6 +10,7 @@
 #include "nccl.h"
 #include "nccl_common.h"
 #include "device.h"
+
 #define NCCL_MAX_NET_SIZE (1024*1024*1024L) // Rather than send INT_MAX which is 2G-1, send a power of two.
 
 // CHUNKSIZE must be a multiple of SLICESIZE
@@ -382,6 +383,42 @@ public:
   ~RingBCAlgorithm() {}
 };
 
+#if !defined (__CUDA_ARCH__) || __CUDA_ARCH__ >= 600
+#include <cuda/atomic>
+#endif
+
+// Need a power of two to ensure it divides by parallelFactor (which is also a power of two)
+#define NCCL_PAT_NWORKERS 512
+
+static constexpr int PatUsed = 0x1,
+                     PatSkipped = 0x2;
+
+struct ncclPatStep {
+  int recvDim, sendDim, recvOffset, sendOffset, stepOffset, postRecv, postSend, nelem, last, flags;
+  size_t inpIx, outIx;
+};
+
+struct ncclPatPeer {
+    uint64_t step;
+    struct ncclConnInfo* conn;
+    struct ncclConnFifo* connFifo;
+    void* buff;
+    uint64_t *headPtr;
+    uint64_t *tailPtr;
+    uint64_t stepCache;
+    long long int accSize;
+    int connStepSize;
+};
+
+#define NCCL_SHMEM_PAT_STEPS 32
+struct ncclPatShmem {
+  struct ncclPatStep patSteps[NCCL_SHMEM_PAT_STEPS];
+  int parallelFactor;
+  long long int localAccSize;
+  struct ncclPatPeer sendDims[32]; // Should cover 2^32 ranks
+  struct ncclPatPeer recvDims[32];
+};
+
 template<typename T>
 class PatRSAlgorithm{
   size_t offset;
@@ -394,18 +431,17 @@ class PatRSAlgorithm{
   int nrPow2;
   int postFreq;
   int lastA;
-
+  int parallelFactor;
   int aggFactor;
   int as; // aggregated steps
   int a; // step inside aggregated step
   int sendSkipped; // number of skipped steps during aggregation
-  int recvSkipped; // number of skipped steps during aggregation
-  int phase2recv;  // receive offset for phase 2
+  int stepOffset;
   int aggDelta;
   int scale;
   int phase;
 
-  __device__ __host__ int min(int a, int b) {
+  __device__ __host__ ssize_t min(ssize_t a, ssize_t b) {
     return (a<b)?a:b;
   }
 
@@ -433,16 +469,16 @@ class PatRSAlgorithm{
 
   __device__ __host__ void resetA() {
     a = 0;
-    sendSkipped = recvSkipped = 0;
+    sendSkipped = stepOffset = 0;
     lastA = aggFactor;
     if (phase >= 2) lastA /= 2*scale;
+    if (phase == 4) lastA = 1;
   }
 
   __device__ __host__ void reset() {
     nelem = getNelem();
     phase = 0;
     scale = 1;
-    phase2recv = 0;
     as = aggDelta - 1;
     resetA();
   }
@@ -465,8 +501,9 @@ class PatRSAlgorithm{
   }
 
 public:
-   __device__ __host__ PatRSAlgorithm(int stepSize, int stepDepth, size_t offset, size_t end, size_t count, int chunkCount, int rank, int nranks):
+   __device__ __host__ PatRSAlgorithm(int stepSize, int stepDepth, int maxParallelFactor, size_t offset, size_t end, size_t count, int chunkCount, int rank, int nranks):
      offset(offset), end(end), count(count), chunkCount(chunkCount), rank(rank), nranks(nranks) {
+    parallelFactor = maxParallelFactor;
     aggDelta = nrPow2 = (1<<log2Up(nranks));
 
     aggFactor = 1;
@@ -476,6 +513,7 @@ public:
       aggDelta /= 2;
     }
     postFreq = aggFactor;
+    if (postFreq < parallelFactor) parallelFactor = postFreq;
     int d = stepDepth;
     while (d > 1 && aggFactor < nranks/2) {
       d /= 2;
@@ -486,160 +524,151 @@ public:
     reset();
   }
 
-  __device__ __host__ void getNextOp(int &recvDim, int &sendDim, size_t &inpIx, size_t &outIx, int &recvOffset, int &sendOffset, int &sendStepOffset, int &nelemOut, int &postRecv, int &postSend, int &last) {
-restart:
-    last = 0;
-    nelemOut = nelem;
-    outIx = offset;
+  __device__ __host__ int getParallelFactor() {
+    return parallelFactor;
+  }
+
+  __device__ __host__ void getNextOp(struct ncclPatStep* ps) {
+    ps->last = 0;
+    ps->nelem = nelem;
+    ps->outIx = offset;
+    ps->stepOffset = stepOffset;
     int skip = 0;
-    //printf("Phase %d as %d/%d a %d/%d scale %d\n", phase, as, aggDelta, a, lastA, scale);
-    if (phase == 0) {
+    if (a >= lastA) {
+      skip = 1;
+    } else if (phase == 0) {
       int s = mirrorInvert(a, lastA)*aggDelta + as;
       if (s >= nranks) skip = 1;
       int sendDataRank = (rank + s) % nranks;
-      inpIx = sendDataRank * count + offset;
-      recvDim = -1;
-      sendDim = 0;
-      outIx = 0;
-      recvOffset = -1;
-      sendOffset = ((a - sendSkipped)%postFreq) * nelem;
-      sendStepOffset = 0;
-      if ((((a - sendSkipped)%postFreq) + 1 >= postFreq) || (a == lastA-1)) {
-        postSend = 1;
+      ps->inpIx = sendDataRank * count + offset;
+      ps->recvDim = -1;
+      ps->sendDim = 0;
+      ps->outIx = 0;
+      ps->recvOffset = -1;
+      ps->sendOffset = (a%postFreq) * nelem;
+      if (((a%postFreq) + 1 >= postFreq) || (a == lastA-1)) {
+        ps->postSend = 1;
       } else {
-        postSend = 0;
+        ps->postSend = 0;
       }
-      postRecv = 0;
-      if (skip) sendSkipped++;
-      if (++a == lastA) {
-        phase = as == 1 ? (aggFactor > 1 ? 2 : 4) : 1; // If as == 1, switch to phase 2
-        resetA();
-      }
-      if (skip == 0) return;
+      ps->postRecv = 0;
     } else if (phase == 1) {
       int s = mirrorInvert(a, lastA)*aggDelta + as;
       if (s >= nranks) skip = 1;
-      recvDim = firstBitSet(s, nrPow2);
-      sendOffset = ((a - sendSkipped)%postFreq)*nelem;
-      recvOffset = ((a - recvSkipped)%postFreq)*nelem;
-      postSend = 0;
-      if (recvDim == 0) {
-        if ((((a - sendSkipped)%postFreq) + 1 >= postFreq) || (a == lastA-1)) postSend = 1;
-        sendStepOffset = 0;
+      ps->recvDim = firstBitSet(s, nrPow2);
+      ps->sendOffset = (a%postFreq)*nelem;
+      ps->recvOffset = (a%postFreq)*nelem;
+      ps->postSend = 0;
+      if (ps->recvDim == 0 && (((a%postFreq) + 1 >= postFreq) || (a == lastA-1))) ps->postSend = 1;
+      if (((a%postFreq) + 1 >= postFreq) || (a == lastA-1)) {
+        ps->postRecv = 1;
       } else {
-        sendStepOffset = (a - sendSkipped)/postFreq;
+        ps->postRecv = 0;
       }
-      if ((((a - recvSkipped)%postFreq) + 1 >= postFreq) || (a == lastA-1)) {
-        postRecv = 1;
-      } else {
-        postRecv = 0;
-      }
-      s -= (1<<recvDim);
+      s -= (1<<ps->recvDim);
       int recvDataRank = (rank + nranks + s) % nranks;
-      inpIx = recvDataRank * count + offset;
-      sendDim = s ? firstBitSet(s, nrPow2) : -1;
-      if (sendDim == -1) {
-        sendOffset = -1;
-        sendStepOffset = 0;
-      } else if (as - (1<<recvDim) == 0) {
-        if (newPeer(a, aggFactor)) sendSkipped = a;
+      ps->inpIx = recvDataRank * count + offset;
+      ps->sendDim = s ? firstBitSet(s, nrPow2) : -1;
+      if (ps->sendDim == -1) {
+        ps->sendOffset = -1;
+      } else if (as - (1<<ps->recvDim) == 0) {
+        if (newPeer(a, aggFactor)) { sendSkipped = a; ps->stepOffset = stepOffset = 0; }
         int foffset = a - sendSkipped;
-        sendStepOffset = recvDim == 0 ? 0 : foffset/postFreq;
-        sendOffset = (foffset%postFreq)*nelem;
+        ps->sendOffset = (foffset%postFreq)*nelem;
       }
+      int recvDim = ps->recvDim;
       if (s < nranks && skip) {
-        recvDim = -1;
-        recvOffset = -1;
-        postRecv = 0;
+        ps->recvDim = -1;
+        ps->recvOffset = -1;
+        ps->postRecv = 0;
         skip = 0;
       }
-      if (skip || recvDim == -1) recvSkipped++;
-      if (skip) sendSkipped++;
-      if (++a == lastA) {
-        as--;
-        phase = as % 2 == 1 ? 0 : 1;
-        resetA();
-      }
-      if (skip == 0) return;
+      if (recvDim > 0 && (((a-sendSkipped)%postFreq) + 1 >= postFreq) && skip == 0) stepOffset++;
     } else if (phase == 2) {
       int s = (2*mirrorInvert(a, lastA)+1)*scale*aggDelta + 1;
-      postRecv = 0;
+      ps->postRecv = 0;
       if (s >= nranks) skip = 1;
-      recvDim = 0;
-      postSend = a == lastA-1 ? 1 : 0;
+      ps->recvDim = 0;
+      ps->postSend = a == lastA-1 ? 1 : 0;
       s -= 1;
       if (s < nranks && skip) {
-        recvDim = -1;
-        recvOffset = -1;
+        ps->recvDim = -1;
+        ps->recvOffset = -1;
         skip = 0;
       } else if (!skip) {
-        int foffset = phase2recv;
-        phase2recv++;
-        postRecv |= ((foffset+1)%postFreq) == 0 ? 1 : 0;
-        recvOffset = (foffset%postFreq) * nelem;
+        int foffset = a + aggFactor - aggFactor/scale;
+        ps->postRecv |= ((foffset+1)%postFreq) == 0 ? 1 : 0;
+        ps->recvOffset = (foffset%postFreq) * nelem;
       }
       int recvDataRank = (rank + nranks + s) % nranks;
-      inpIx = recvDataRank * count + offset;
-      sendDim = s ? firstBitSet(s, nrPow2) : -1;
-      int foffset = a - sendSkipped;
-      postSend |= ((foffset+1)%postFreq) == 0 ? 1 : 0;
-      sendStepOffset = 0;
-      sendOffset = (foffset%postFreq) * nelem;
-      if (skip || sendDim == -1) sendSkipped++;
-      if (++a == lastA) {
-        phase = 3;
-        resetA();
-      }
-      if (skip == 0) return;
+      ps->inpIx = recvDataRank * count + offset;
+      ps->sendDim = s ? firstBitSet(s, nrPow2) : -1;
+      int foffset = a;
+      ps->postSend |= ((foffset+1)%postFreq) == 0 ? 1 : 0;
+      ps->sendOffset = (foffset%postFreq) * nelem;
     } else if (phase == 3) {
       int s = (2*mirrorInvert(a, lastA)+1)*scale*aggDelta;
-      postRecv = a == lastA-1 ? 1 : 0;
+      ps->postRecv = a == lastA-1 ? 1 : 0;
       if (s >= nranks) skip = 1;
-      recvDim = firstBitSet(s, nrPow2);
-      postSend = 0;
-      s -= (1<<recvDim);
-      int foffset = a - recvSkipped;
-      postRecv |= (foffset+1)%postFreq == 0 ? 1 : 0;
-      recvOffset = (foffset%postFreq) * nelem;
+      ps->recvDim = firstBitSet(s, nrPow2);
+      ps->postSend = 0;
+      s -= (1<<ps->recvDim);
+      int foffset = a;
+      ps->postRecv |= (foffset+1)%postFreq == 0 ? 1 : 0;
+      ps->recvOffset = (foffset%postFreq) * nelem;
       int recvDataRank = (rank + nranks + s) % nranks;
-      inpIx = recvDataRank * count + offset;
-      sendDim = s ? firstBitSet(s, nrPow2) : -1;
+      ps->inpIx = recvDataRank * count + offset;
+      ps->sendDim = s ? firstBitSet(s, nrPow2) : -1;
       if (s < nranks && skip) {
-        recvDim = -1;
-        recvOffset = -1;
-        postRecv = 0;
+        ps->recvDim = -1;
+        ps->recvOffset = -1;
+        ps->postRecv = 0;
         skip = 0;
       }
-      if (newPeer(a, aggFactor/(2*scale))) sendSkipped = a;
+      if (newPeer(a, aggFactor/(2*scale))) { sendSkipped = a; ps->stepOffset = stepOffset = 0; }
       foffset = a - sendSkipped;
-      sendStepOffset = foffset / postFreq; // Accumulate on next steps
-      sendOffset = sendDim >= 0 ? (foffset%postFreq) * nelem : -1;
-      if (skip || recvDim == -1) recvSkipped++;
-      if (skip) sendSkipped++;
-      if (++a == lastA) {
-        scale *= 2;
-        phase = scale < aggFactor ? 2 : 4;
+      if ((foffset%postFreq) + 1 >= postFreq && skip == 0) stepOffset++;
+      ps->sendOffset = ps->sendDim >= 0 ? (foffset%postFreq) * nelem : -1;
+    } else if (phase == 4) {
+      ps->recvDim = 0;
+      ps->sendDim = -1;
+      ps->inpIx = rank * count + offset;
+      ps->recvOffset = ((aggFactor-1)%postFreq) * nelem;
+      ps->sendOffset = -1;
+      ps->postRecv = 1;
+      ps->postSend = 0;
+      offset += chunkCount;
+    }
+    a++;
+    if (a >= lastA && a >= parallelFactor) {
+      int p = phase;
+      if (p == 1) as--;
+      if (p == 3) scale *= 2;
+      phase =
+        p == 0 ? as == 1 ? (aggFactor > 1 ? 2 : 4) : 1 :
+        p == 1 ? as % 2 == 1 ? 0 : 1 :
+        p == 2 ? 3 :
+        p == 3 ? scale < aggFactor ? 2 : 4 :
+        5;
+      if (p == 4) {
+        if (offset >= end) {
+          ps->last = 2;
+        } else {
+          reset();
+        }
+      } else {
         resetA();
       }
-      if (skip == 0) return;
-    } else if (phase == 4) {
-      recvDim = 0;
-      sendDim = -1;
-      inpIx = rank * count + offset;
-      recvOffset = (phase2recv%postFreq) * nelem;
-      sendStepOffset = 0;
-      sendOffset = -1;
-      postRecv = 1;
-      postSend = 0;
-      offset += chunkCount;
-      if (offset >= end) {
-        last = 1;
-      } else {
-        reset();
-      }
-      return;
+    } else if (phase == 4 && offset >= end) {
+      ps->last = 1;
     }
-    goto restart;
+    int flags = PatUsed | (skip ? PatSkipped : 0);
+#if __CUDA_ARCH__ >= 600
+    cuda::atomic_ref<int, cuda::thread_scope_block> a(ps->flags);
+    a.store(flags, cuda::memory_order_release);
+#else
+    ps->flags = flags;
+#endif
   }
 };
 
@@ -655,14 +684,12 @@ class PatAGAlgorithm{
   int nrPow2;
   int postFreq;
   int lastA;
-
+  int parallelFactor;
   int aggFactor;
   int as; // aggregated steps
   int a; // step inside aggregated step
   int aggDelta;
-
   int scale;
-
   int phase;
 
   // AS computation
@@ -671,7 +698,7 @@ class PatAGAlgorithm{
   int bitCount[32];
   int bitZeroStep[32];
 
-  __device__ __host__ int min(int a, int b) {
+  __device__ __host__ ssize_t min(ssize_t a, ssize_t b) {
     return (a<b)?a:b;
   }
 
@@ -738,8 +765,9 @@ class PatAGAlgorithm{
 
 
 public:
-   __device__ __host__ PatAGAlgorithm(int stepSize, int stepDepth, size_t offset, size_t end, size_t count, int chunkCount, int rank, int nranks):
+   __device__ __host__ PatAGAlgorithm(int stepSize, int stepDepth, int maxParallelFactor, size_t offset, size_t end, size_t count, int chunkCount, int rank, int nranks):
      offset(offset), end(end), count(count), chunkCount(chunkCount), rank(rank), nranks(nranks) {
+    parallelFactor = maxParallelFactor;
     aggDelta = nrPow2 = (1<<log2Up(nranks));
 
     aggFactor = 1;
@@ -749,120 +777,120 @@ public:
       aggDelta /= 2;
     }
     postFreq = aggFactor;
+    if (postFreq < parallelFactor) parallelFactor = postFreq;
     int d = stepDepth;
     while (d > 1 && aggFactor < nranks/2) {
       d /= 2;
       aggFactor *= 2;
       aggDelta /= 2;
     }
-    //printf("AggFactor %d PostFreq %d AggDelta %d\n", aggFactor, postFreq, aggDelta);
 
     asDim = log2Up(aggDelta);
     reset();
   }
 
-  __device__ __host__ void getNextOp(int &recvDim, int &sendDim, size_t &inpIx, size_t &outIx, int &recvOffset, int &sendOffset, int &recvStepOffset, int &nelemOut, int &postRecv, int &postSend, int &last) {
-restart:
-    //printf("Phase %d as %d/%d a %d/%d scale %d\n", phase, as, aggDelta, a, lastA, scale);
-    last = 0;
-    nelemOut = nelem;
-    inpIx = offset;
+  __device__ __host__ int getParallelFactor() {
+    return parallelFactor;
+  }
+
+  __device__ __host__ void getNextOp(struct ncclPatStep* ps) {
+    ps->last = 0;
+    ps->nelem = nelem;
+    ps->inpIx = offset;
     int skip = 0;
-    if (phase == 0) {
+    if (a >= lastA) {
+      skip = 1;
+    } else if (phase == 0) {
       int s = a*aggDelta + as;
       if (s >= nranks) skip = 1;
-      int nextSkip = (a+1)*aggDelta + as >= nranks ? 1 : 0;
       int recvDataRank = (rank + s) % nranks;
-      outIx = recvDataRank * count + offset;
-      sendDim = -1;
-      recvDim = 0;
-      inpIx = 0;
-      sendOffset = -1;
-      recvOffset = (a % postFreq) * nelem;
-      recvStepOffset = 0;
-      postRecv = (a % postFreq == postFreq-1) || ((a+1)*aggDelta+as >= nranks) ? 1 : 0;
-      postSend = 0;
-      a++;
-      if (nextSkip) {
-        as = nextAs();
-        if (as == aggDelta/2) {
-          offset += chunkCount;
-          if (offset >= end) {
-            last = 1;
-          } else {
-            reset();
-          }
-          return;
-        }
-        phase = 1;
-        resetA();
-      }
-      if (skip == 0) return;
+      ps->outIx = recvDataRank * count + offset;
+      ps->sendDim = -1;
+      ps->recvDim = 0;
+      ps->inpIx = 0;
+      ps->sendOffset = -1;
+      ps->recvOffset = (a % postFreq) * nelem;
+      ps->stepOffset = 0;
+      ps->postRecv = (a % postFreq == postFreq-1) || ((a+1)*aggDelta+as >= nranks) ? 1 : 0;
+      ps->postSend = 0;
    } else if (phase == 1) {
       int s = a*aggDelta + as;
       if (s >= nranks) skip = 1;
-      sendDim = firstBitSet(s, nrPow2);
-      s -= (1<<sendDim);
+      ps->sendDim = firstBitSet(s, nrPow2);
+      s -= (1<<ps->sendDim);
       int sendDataRank = (rank + nranks + s) % nranks;
-      outIx = sendDataRank * count + offset;
-      recvDim = s ? firstBitSet(s, nrPow2) : -1;
-      sendOffset = recvOffset = (a % postFreq) * nelem;
-      postSend = (a % postFreq == postFreq-1) || ((a+1)*aggDelta+as >= nranks) ? 1 : 0;
-      postRecv = (sendDim == 0) && ((a % postFreq == postFreq-1) || ((a+1)*aggDelta+as-1 >= nranks)) ? 1 : 0;
-      recvStepOffset = (sendDim == 0) ? 0 : a/postFreq;
-      if (recvDim == -1) {
-        recvOffset = -1;
-        postRecv = 0;
-      } else if (as - (1<<sendDim) == 0) {
-        int foffset = (a*aggDelta) >> (recvDim+1);
-        recvOffset = (foffset%postFreq)*nelem;
-        postRecv = (sendDim == 0) && ((foffset % postFreq == postFreq-1) || ((((foffset+1)*2)+1)<<recvDim) >= nranks) ? 1 : 0;
-        recvStepOffset = (sendDim == 0) ? 0 : foffset/postFreq;
+      ps->outIx = sendDataRank * count + offset;
+      ps->recvDim = s ? firstBitSet(s, nrPow2) : -1;
+      ps->sendOffset = ps->recvOffset = (a % postFreq) * nelem;
+      ps->postSend = (a % postFreq == postFreq-1) || ((a+1)*aggDelta+as >= nranks) ? 1 : 0;
+      ps->postRecv = (ps->sendDim == 0) && ((a % postFreq == postFreq-1) || ((a+1)*aggDelta+as-1 >= nranks)) ? 1 : 0;
+      ps->stepOffset = (ps->sendDim == 0) ? 0 : a/postFreq;
+      if (ps->recvDim == -1) {
+        ps->recvOffset = -1;
+        ps->postRecv = 0;
+      } else if (as - (1<<ps->sendDim) == 0) {
+        int foffset = (a*aggDelta) >> (ps->recvDim+1);
+        ps->recvOffset = (foffset%postFreq)*nelem;
+        ps->postRecv = (ps->sendDim == 0) && ((foffset % postFreq == postFreq-1) || ((((foffset+1)*2)+1)<<ps->recvDim) >= nranks) ? 1 : 0;
+        ps->stepOffset = (ps->sendDim == 0) ? 0 : foffset/postFreq;
       }
-      if (s < nranks && sendDim == 0 && skip) {
+      if (s < nranks && ps->sendDim == 0 && skip) {
         // Don't forget to receive at least once even if we don't send afterwards
-        sendDim = -1;
-        sendOffset = -1;
-        postSend = 0;
+        ps->sendDim = -1;
+        ps->sendOffset = -1;
+        ps->postSend = 0;
         skip = 0;
       }
-      if (++a == lastA) {
-        if (as % 2 == 1) {
-          phase = 0;
-        } else {
-          as = nextAs();
-        }
-        resetA();
-      }
-      if (skip == 0) return;
     } else if (phase == 2) {
       int s = (2*a+1)*scale*aggDelta;
-      postSend = (a % postFreq == postFreq-1) || ((2*(a+1)+1)*scale*aggDelta >= nranks) ? 1 : 0;
-      postRecv = 0;
+      ps->postSend = (a % postFreq == postFreq-1) || ((2*(a+1)+1)*scale*aggDelta >= nranks) ? 1 : 0;
+      ps->postRecv = 0;
       if (s >= nranks) skip = 1;
-      sendDim = firstBitSet(s, nrPow2);
-      s -= (1<<sendDim);
-      sendOffset = (a%postFreq) * nelem;
-      recvStepOffset = a / postFreq;
+      ps->sendDim = firstBitSet(s, nrPow2);
+      s -= (1<<ps->sendDim);
+      ps->sendOffset = (a%postFreq) * nelem;
+      ps->stepOffset = a / postFreq;
       int sendDataRank = (rank + nranks + s) % nranks;
-      outIx = sendDataRank * count + offset;
-      recvDim = s ? firstBitSet(s, nrPow2) : -1;
-      if (recvDim == -1) {
-        recvOffset = -1;
+      ps->outIx = sendDataRank * count + offset;
+      ps->recvDim = s ? firstBitSet(s, nrPow2) : -1;
+      if (ps->recvDim == -1) {
+        ps->recvOffset = -1;
       } else {
-        s -= (1<<recvDim);
-        int foffset = (a*2*scale*aggDelta) >> (recvDim+1);
-        recvOffset = (foffset%postFreq)*nelem;
-        recvStepOffset = foffset / postFreq;
+        s -= (1<<ps->recvDim);
+        int foffset = (a*2*scale*aggDelta) >> (ps->recvDim+1);
+        ps->recvOffset = (foffset%postFreq)*nelem;
+        ps->stepOffset = foffset / postFreq;
       }
-      if (++a == lastA) {
-        scale /= 2;
-        phase = scale ? 2 : 1;
+    }
+    a++;
+    if (a >= lastA && a >= parallelFactor) {
+      int p = phase;
+      if (p == 2) scale /= 2;
+      phase =
+        p == 2 ? scale ? 2 : 1 :
+        p == 1 ? as % 2 == 1 ? 0 : 1 :
+        1;
+      if (p == 0 || (p == 1 && as % 2 == 0)) as = nextAs();
+      if (p == 0 && as == aggDelta/2) {
+        offset += chunkCount;
+        if (offset >= end) {
+          ps->last = 2;
+        } else {
+          reset();
+        }
+      } else {
         resetA();
       }
-      if (skip == 0) return;
+    } else if (phase == 0 && as == 1 && offset + chunkCount >= end && a-1 >= ((lastA-1) / parallelFactor) * parallelFactor) {
+      ps->last = 1;
     }
-    goto restart;
+    int flags = PatUsed | (skip ? PatSkipped : 0);
+#if __CUDA_ARCH__ >= 600
+    cuda::atomic_ref<int, cuda::thread_scope_block> a(ps->flags);
+    a.store(flags, cuda::memory_order_release);
+#else
+    ps->flags = flags;
+#endif
   }
 };
 #endif

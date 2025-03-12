@@ -31,9 +31,10 @@
 #define NVTX_SID_CommInitRankScalable 12 // same schema as NVTX_SID_CommInitRank
 #define NVTX_SID_CommSplit            13
 #define NVTX_SID_CommFinalize         14
+// When adding new schema IDs, DO NOT re-use/overlap with the enum schema ID below!
 
 // Define static schema ID for the reduction operation.
-#define NVTX_PAYLOAD_ENTRY_NCCL_REDOP 14 + NVTX_PAYLOAD_ENTRY_TYPE_SCHEMA_ID_STATIC_START
+#define NVTX_PAYLOAD_ENTRY_NCCL_REDOP 15 + NVTX_PAYLOAD_ENTRY_TYPE_SCHEMA_ID_STATIC_START
 
 extern const nvtxDomainHandle_t ncclNvtxDomainHandle;
 

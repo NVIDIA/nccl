@@ -11,181 +11,19 @@
 #include "utils.h"
 #include "proxy.h"
 #include "profiler.h"
+#include "transport.h"
+#include "plugin.h"
+
+extern ncclProfiler_t* getNcclProfiler_v1(void* lib);
+extern ncclProfiler_t* getNcclProfiler_v2(void* lib);
+extern ncclProfiler_t* getNcclProfiler_v3(void* lib);
 
 static pthread_mutex_t profilerLock = PTHREAD_MUTEX_INITIALIZER;
 static int profilerPluginRefCount;
 static void* profilerPluginLib;
 static ncclProfiler_t* ncclProfiler;
-static ncclProfiler_v2_t ncclProfiler_v1_as_v2;
-static ncclProfiler_v1_t* ncclProfiler_v1;
-
-static uint8_t ncclStringToFunc(const char* func) {
-  if (0 == strcmp(func, "AllGather")) return ncclFuncAllGather;
-  if (0 == strcmp(func, "AllReduce")) return ncclFuncAllReduce;
-  if (0 == strcmp(func, "Broadcast")) return ncclFuncBroadcast;
-  if (0 == strcmp(func, "Recv")) return ncclFuncRecv;
-  if (0 == strcmp(func, "Reduce")) return ncclFuncReduce;
-  if (0 == strcmp(func, "ReduceScatter")) return ncclFuncReduceScatter;
-  if (0 == strcmp(func, "SendRecv")) return ncclFuncSendRecv;
-  return ncclFuncSend;
-}
-
-static uint8_t ncclStringToAlgo(const char* algo) {
-  if (0 == strcmp(algo, "TREE")) return NCCL_ALGO_TREE;
-  if (0 == strcmp(algo, "RING")) return NCCL_ALGO_RING;
-  if (0 == strcmp(algo, "COLLNET_DIRECT")) return NCCL_ALGO_COLLNET_DIRECT;
-  if (0 == strcmp(algo, "COLLNET_CHAIN")) return NCCL_ALGO_COLLNET_CHAIN;
-  if (0 == strcmp(algo, "NVLS")) return NCCL_ALGO_NVLS;
-  if (0 == strcmp(algo, "NVLS_TREE")) return NCCL_ALGO_NVLS_TREE;
-  return NCCL_ALGO_PAT;
-}
-
-static uint8_t ncclStringToProto(const char* proto) {
-  if (0 == strcmp(proto, "LL")) return NCCL_PROTO_LL;
-  if (0 == strcmp(proto, "LL128")) return NCCL_PROTO_LL128;
-  return NCCL_PROTO_SIMPLE;
-}
-
-static uint8_t ncclStringToDatatype(const char* dt) {
-  if (0 == strcmp(dt, "ncclInt8")) return ncclInt8;
-  if (0 == strcmp(dt, "ncclInt32")) return ncclInt32;
-  if (0 == strcmp(dt, "ncclUint32")) return ncclUint32;
-  if (0 == strcmp(dt, "ncclInt64")) return ncclInt64;
-  if (0 == strcmp(dt, "ncclUint64")) return ncclUint64;
-  if (0 == strcmp(dt, "ncclFloat16")) return ncclFloat16;
-  if (0 == strcmp(dt, "ncclFloat32")) return ncclFloat32;
-#if defined(__CUDA_BF16_TYPES_EXIST__)
-  if (0 == strcmp(dt, "ncclBfloat16")) return ncclBfloat16;
-#endif
-  return ncclFloat64;
-}
-
-static ncclResult_t ncclProfiler_v1_as_v2_startEvent(void* context, void** eHandle, ncclProfilerEventDescr_v2_t* eDescr) {
-  ncclProfilerEventDescr_v1_t eDescr_v1 = { 0 };
-  eDescr_v1.type = eDescr->type;
-  eDescr_v1.parentObj = eDescr->parentObj;
-  eDescr_v1.rank = eDescr->rank;
-  switch(eDescr->type) {
-    case ncclProfileGroup: break;
-    case ncclProfileColl: {
-      eDescr_v1.coll.name = eDescr->coll.name;
-      eDescr_v1.coll.commHash = eDescr->coll.commHash;
-      eDescr_v1.coll.seqNumber = eDescr->coll.seqNumber;
-      eDescr_v1.coll.func = ncclStringToFunc(eDescr->coll.func);
-      eDescr_v1.coll.sendBuff = eDescr->coll.sendBuff;
-      eDescr_v1.coll.recvBuff = eDescr->coll.recvBuff;
-      eDescr_v1.coll.count = eDescr->coll.count;
-      eDescr_v1.coll.root = eDescr->coll.root;
-      eDescr_v1.coll.datatype = ncclStringToDatatype(eDescr->coll.datatype);
-      eDescr_v1.coll.op = 0; // removed in v2
-      eDescr_v1.coll.trafficBytes = eDescr->coll.trafficBytes;
-      eDescr_v1.coll.nMaxChannels = eDescr->coll.nMaxChannels;
-      eDescr_v1.coll.nWarps = eDescr->coll.nWarps;
-      eDescr_v1.coll.algo = ncclStringToAlgo(eDescr->coll.algo);
-      eDescr_v1.coll.proto = ncclStringToProto(eDescr->coll.proto);
-    } break;
-    case ncclProfileP2p: {
-      eDescr_v1.p2p.name = eDescr->p2p.name;
-      eDescr_v1.p2p.commHash = eDescr->p2p.commHash;
-      eDescr_v1.p2p.func = ncclStringToFunc(eDescr->p2p.func);
-      eDescr_v1.p2p.buff = eDescr->p2p.buff;
-      eDescr_v1.p2p.count = eDescr->p2p.count;
-      eDescr_v1.p2p.datatype = ncclStringToDatatype(eDescr->p2p.datatype);
-      eDescr_v1.p2p.peer = eDescr->p2p.peer;
-    } break;
-    case ncclProfileProxyOp: {
-      eDescr_v1.proxyOp.pid = eDescr->proxyOp.pid;
-      eDescr_v1.proxyOp.channelId = eDescr->proxyOp.channelId;
-      eDescr_v1.proxyOp.peer = eDescr->proxyOp.peer;
-      eDescr_v1.proxyOp.nSteps = eDescr->proxyOp.nSteps;
-      eDescr_v1.proxyOp.chunkSize = eDescr->proxyOp.chunkSize;
-      eDescr_v1.proxyOp.isSend = eDescr->proxyOp.isSend;
-    } break;
-    case ncclProfileProxyStep: {
-      eDescr_v1.proxyStep.step = eDescr->proxyStep.step;
-    } break;
-    case ncclProfileProxyCtrl: break;
-    default:;
-  }
-  return ncclProfiler_v1->startEvent(context, eHandle, &eDescr_v1);
-}
-
-static ncclResult_t ncclProfiler_v1_as_v2_init(void** context, int* eActivationMask) {
-  ncclProfiler_v1->init(context, eActivationMask);
-  ncclProfiler_v1_as_v2.startEvent = ncclProfiler_v1_as_v2_startEvent;
-  ncclProfiler_v1_as_v2.stopEvent = ncclProfiler_v1->stopEvent;
-  ncclProfiler_v1_as_v2.recordEventState = ncclProfiler_v1->recordEventState;
-  ncclProfiler_v1_as_v2.finalize = ncclProfiler_v1->finalize;
-  return ncclSuccess;
-}
 
 #define MAX_STR_LEN 256
-
-static void* tryOpenLib(char* name, int *err, char* errStr) {
-  if (nullptr == name || strlen(name) == 0) {
-    return nullptr;
-  }
-
-  if (strncasecmp(name, "STATIC_PLUGIN", strlen(name)) == 0) {
-    name = nullptr;
-  }
-
-  void *handle = dlopen(name, RTLD_NOW | RTLD_LOCAL);
-  if (nullptr == handle) {
-    strncpy(errStr, dlerror(), MAX_STR_LEN);
-    errStr[MAX_STR_LEN] = 0;
-    if (name && strstr(errStr, name) && strstr(errStr, "No such file or directory")) {
-      *err = ENOENT;
-    }
-  }
-
-  return handle;
-}
-
-static char* tryOpenLibCheck(int openErr, char* openErrStr, char* nameList, int *nameListLen, char* name) {
-  if (openErr == ENOENT) {
-    snprintf(nameList, *nameListLen, " %s", name);
-    nameList += strlen(name) + 1;
-    *nameListLen -= strlen(name) + 1;
-    return nameList;
-  }
-  INFO(NCCL_ENV, "PROFILER/Plugin: %s", openErrStr);
-  return nameList;
-}
-
-static void* openProfilerPluginLib(char* couldNotFindNames, int len) {
-  int openErr;
-  void *pluginLib;
-  char profilerPluginLibName[PATH_MAX];
-  char openErrStr[MAX_STR_LEN + 1] = { 0 };
-
-  const char *envProfilerPluginName = getenv("NCCL_PROFILER_PLUGIN");
-  if (envProfilerPluginName && strlen(envProfilerPluginName)) {
-    snprintf(profilerPluginLibName, PATH_MAX, "%s", envProfilerPluginName);
-    pluginLib = tryOpenLib(profilerPluginLibName, &openErr, openErrStr);
-    if (pluginLib) {
-      INFO(NCCL_INIT|NCCL_ENV, "PROFILER/Plugin: Plugin name set by env to %s", profilerPluginLibName);
-      return pluginLib;
-    }
-
-    couldNotFindNames = tryOpenLibCheck(openErr, openErrStr, couldNotFindNames, &len, profilerPluginLibName);
-    pluginLib = tryOpenLib(profilerPluginLibName, &openErr, openErrStr);
-    if (pluginLib) {
-      INFO(NCCL_INIT|NCCL_ENV, "PROFILER/Plugin: Plugin name set by env to %s", profilerPluginLibName);
-      return pluginLib;
-    }
-    couldNotFindNames = tryOpenLibCheck(openErr, openErrStr, couldNotFindNames, &len, profilerPluginLibName);
-  } else {
-    snprintf(profilerPluginLibName, PATH_MAX, "libnccl-profiler.so");
-    pluginLib = tryOpenLib(profilerPluginLibName, &openErr, openErrStr);
-    if (pluginLib) {
-      return pluginLib;
-    }
-    couldNotFindNames = tryOpenLibCheck(openErr, openErrStr, couldNotFindNames, &len, profilerPluginLibName);
-  }
-
-  return nullptr;
-}
 
 enum {
   profilerPluginLoadFailed = -1,
@@ -195,43 +33,31 @@ enum {
 static int profilerPluginStatus = profilerPluginLoadReady;
 static pid_t pid;
 
-#define MAX_PLUGIN_LOAD 2
-
 static ncclResult_t ncclProfilerPluginLoad(void) {
   if (profilerPluginLoadFailed == profilerPluginStatus) {
     return ncclSuccess;
   }
 
-  char couldNotFindNames[MAX_PLUGIN_LOAD * PATH_MAX] = { 0 };
   pthread_mutex_lock(&profilerLock);
   if (profilerPluginLoadSuccess == profilerPluginStatus) {
     ++profilerPluginRefCount;
     goto exit;
   }
 
-  profilerPluginLib = openProfilerPluginLib(couldNotFindNames, MAX_PLUGIN_LOAD * PATH_MAX);
+  profilerPluginLib = ncclOpenProfilerPluginLib(ncclGetEnv("NCCL_PROFILER_PLUGIN"));
   if (profilerPluginLib == nullptr) {
-    if (strlen(couldNotFindNames)) {
-      INFO(NCCL_ENV, "PROFILER/Plugin: Could not find:%s.", couldNotFindNames);
-    }
     goto fail;
   }
 
-  ncclProfiler = (ncclProfiler_v2_t*)dlsym(profilerPluginLib, "ncclProfiler_v2");
+  ncclProfiler = getNcclProfiler_v3(profilerPluginLib);
   if (ncclProfiler == nullptr) {
-    INFO(NCCL_INIT|NCCL_ENV, "PROFILER/Plugin: failed to find ncclProfiler_v2.");
-    ncclProfiler_v1 = (ncclProfiler_v1_t*)dlsym(profilerPluginLib, "ncclProfiler_v1");
-    if (ncclProfiler_v1 == nullptr) {
-      INFO(NCCL_INIT|NCCL_ENV, "PROFILER/Plugin: failed to find ncclProfiler_v1.");
-      goto fail;
-    } else {
-      ncclProfiler = &ncclProfiler_v1_as_v2;
-      ncclProfiler_v1_as_v2.name = ncclProfiler_v1->name;
-      ncclProfiler_v1_as_v2.init = ncclProfiler_v1_as_v2_init;
-      INFO(NCCL_INIT|NCCL_ENV, "PROFILER/Plugin: loaded ncclProfiler_v1.");
-    }
-  } else {
-    INFO(NCCL_INIT|NCCL_ENV, "PROFILER/Plugin: loaded ncclProfiler_v2.");
+    ncclProfiler = getNcclProfiler_v2(profilerPluginLib);
+  }
+  if (ncclProfiler == NULL) {
+    ncclProfiler = getNcclProfiler_v1(profilerPluginLib);
+  }
+  if (ncclProfiler == NULL) {
+    goto fail;
   }
 
   ++profilerPluginRefCount;
@@ -247,7 +73,7 @@ exit:
   pthread_mutex_unlock(&profilerLock);
   return ncclSuccess;
 fail:
-  if (profilerPluginLib) dlclose(profilerPluginLib);
+  if (profilerPluginLib) NCCLCHECK(ncclClosePluginLib(profilerPluginLib));
   profilerPluginStatus = profilerPluginLoadFailed;
   goto exit;
 }
@@ -256,7 +82,7 @@ static ncclResult_t ncclProfilerPluginUnload(void) {
   pthread_mutex_lock(&profilerLock);
   if (0 == (--profilerPluginRefCount)) {
     INFO(NCCL_ENV, "PROFILER/Plugin: Closing profiler plugin %s", ncclProfiler->name);
-    dlclose(profilerPluginLib);
+    NCCLCHECK(ncclClosePluginLib(profilerPluginLib));
     profilerPluginLib = nullptr;
     ncclProfiler = nullptr;
     profilerPluginStatus = profilerPluginLoadReady;
@@ -269,6 +95,11 @@ static ncclResult_t ncclProfilerPluginUnload(void) {
 #include "timer.h"
 
 #if ENABLE_TIMER
+// These counters are used to measure profiler overheads for different part of the code
+// These counters are only useful/meaningful in controlled test environments where there
+// is only one thread updating each set of counters, i.e., every communicator has its
+// own proxy thread and the network uses only one thread to make progress (this is true
+// for net_ib plugin but might not be true for net_socket plugin).
 static int64_t elapsedCount;
 static int64_t initCount, finalizeCount;
 static int64_t groupStartCount, groupStopCount;
@@ -324,15 +155,14 @@ static double proxyOpRecordTs[2], proxyStepRecordTs[2], proxyCtrlRecordTs[2];
 #endif
 
 
-static int eActivationMask;       // Set by profiler
-static int eActivationMaskGroup;  // Cached for current group
+int ncclProfilerEventMask;       // Set by profiler
 
 ncclResult_t ncclProfilerPluginInit(struct ncclComm* comm) {
   TIME_START_EVENT(elapsed);
   TIME_START_EVENT(init);
   ncclProfilerPluginLoad();
   if (__builtin_expect(ncclProfiler != NULL, 0)) {
-    int err = ncclProfiler->init(&comm->profilerContext, &eActivationMask);
+    int err = ncclProfiler->init(&comm->profilerContext, &ncclProfilerEventMask);
     if (err) {
       WARN("Profiler init failed with error (%d). Continue without profiler.", err);
       ncclProfiler = NULL;
@@ -356,9 +186,29 @@ ncclResult_t ncclProfilerPluginFinalize(struct ncclComm* comm) {
 
 ncclResult_t ncclProfilerStartGroupEvent(struct ncclKernelPlan* plan) {
   TIME_START_EVENT(groupStart);
-  eActivationMaskGroup = __atomic_load_n(&eActivationMask, __ATOMIC_RELAXED);
   if (__builtin_expect(ncclProfiler != NULL, 0)) {
-    if (eActivationMaskGroup & (ncclProfileColl | ncclProfileP2p | ncclProfileProxyOp | ncclProfileProxyStep)) {
+    // Check if any collective in the plan has a set event activation mask
+    struct ncclTaskColl* ct = ncclIntruQueueHead(&plan->collTaskQueue);
+    struct ncclTaskP2p* pt = ncclIntruQueueHead(&plan->p2pTaskQueue);
+    int eActivationMask_ = 0;
+    while (ct) {
+      if (ct->eActivationMask) {
+        eActivationMask_ = ct->eActivationMask;
+        goto startGroup;
+      }
+      ct = ct->next;
+    }
+    // Check if any pt2pt in the plan has a set event activation mask
+    while (pt) {
+      if (pt->eActivationMask) {
+        eActivationMask_ = pt->eActivationMask;
+        goto startGroup;
+      }
+      pt = pt->next;
+    }
+
+  startGroup:
+    if (eActivationMask_ & (ncclProfileGroup | ncclProfileColl | ncclProfileP2p | ncclProfileProxyOp | ncclProfileProxyStep | ncclProfileKernelCh | ncclProfileNetPlugin)) {
       ncclProfilerEventDescr_t eDescr = { 0 };
       eDescr.type = ncclProfileGroup;
       ncclProfiler->startEvent(plan->comm->profilerContext, &plan->groupEventHandle, &eDescr);
@@ -379,52 +229,63 @@ ncclResult_t ncclProfilerStopGroupEvent(struct ncclKernelPlan* plan) {
 
 ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan) {
   TIME_START_EVENT(taskStart);
-  if (__builtin_expect(ncclProfiler != NULL, 0)) {
-    int enable = eActivationMaskGroup & (ncclProfileProxyOp | ncclProfileProxyStep | ncclProfileColl);
-    if (plan->groupEventHandle && enable) {
-      struct ncclTaskColl* ct = ncclIntruQueueHead(&plan->collTaskQueue);
-      while (ct) {
-        ncclProfilerEventDescr_t eDescr = { 0 };
-        eDescr.type = ncclProfileColl;
-        eDescr.parentObj = plan->groupEventHandle;
-        eDescr.rank = plan->comm->rank;
-        eDescr.coll.name = plan->comm->commName;
-        eDescr.coll.commHash = plan->comm->commHash;
-        eDescr.coll.seqNumber = plan->comm->seqNumber[ct->func]++;
-        eDescr.coll.func = ncclFuncToString(ct->func);
-        eDescr.coll.sendBuff = ct->sendbuff;
-        eDescr.coll.recvBuff = ct->recvbuff;
-        eDescr.coll.count = ct->count;
-        eDescr.coll.root = ct->root;
-        eDescr.coll.datatype = ncclDatatypeToString(ct->datatype);
-        eDescr.coll.trafficBytes = ct->trafficBytes;
-        eDescr.coll.nMaxChannels = ct->nMaxChannels;
-        eDescr.coll.nWarps = ct->nWarps;
-        eDescr.coll.algo = ncclAlgoToString(ct->algorithm);
-        eDescr.coll.proto = ncclProtoToString(ct->protocol);
-        ncclProfiler->startEvent(plan->comm->profilerContext, &ct->eventHandle, &eDescr);
-
-        // update collective task with group event activation mask
-        ct->eActivationMask = eActivationMaskGroup;
-        ct = ct->next;
+  struct ncclTaskColl* ct = ncclIntruQueueHead(&plan->collTaskQueue);
+  while (ct) {
+    if (__builtin_expect(ncclProfiler != NULL, 0)) {
+      if (plan->groupEventHandle) {
+        int enable = ct->eActivationMask & (ncclProfileColl | ncclProfileProxyOp | ncclProfileProxyStep | ncclProfileKernelCh | ncclProfileNetPlugin);
+        if (enable) {
+          ncclProfilerEventDescr_t eDescr = { 0 };
+          eDescr.type = ncclProfileColl;
+          eDescr.parentObj = plan->groupEventHandle;
+          eDescr.rank = plan->comm->rank;
+          eDescr.coll.name = plan->comm->commName;
+          eDescr.coll.commHash = plan->comm->commHash;
+          eDescr.coll.seqNumber = plan->comm->seqNumber[ct->func];
+          eDescr.coll.func = ncclFuncToString(ct->func);
+          eDescr.coll.sendBuff = ct->sendbuff;
+          eDescr.coll.recvBuff = ct->recvbuff;
+          eDescr.coll.count = ct->count;
+          eDescr.coll.root = ct->root;
+          eDescr.coll.datatype = ncclDatatypeToString(ct->datatype);
+          eDescr.coll.nMaxChannels = ct->nMaxChannels;
+          eDescr.coll.nWarps = ct->nWarps;
+          eDescr.coll.algo = ncclAlgoToString(ct->algorithm);
+          eDescr.coll.proto = ncclProtoToString(ct->protocol);
+          ncclProfiler->startEvent(plan->comm->profilerContext, &ct->eventHandle, &eDescr);
+        }
       }
+    }
+    // comm->seqNumber values are updated even if the plugin is not active, since they are used by RAS as well.
+    // The test for "persistent" is a workaround for graph-captured collectives.  In their case this function may not be
+    // consistently invoked on all the ranks, which would lead to mismatched counter values and thus false-positive
+    // reports from RAS.  Instead, we choose not to include graph-captured collectives in our counts.  An exception is
+    // made if ncclProfileKernelCh profiler events are active, as they result in proxy events always being added, which
+    // gives the consistency.
+    if (!plan->persistent || (__builtin_expect(ncclProfiler != NULL, 0) && plan->groupEventHandle &&
+                              (ct->eActivationMask & ncclProfileKernelCh)))
+      plan->comm->seqNumber[ct->func]++;
+    ct = ct->next;
+  }
+  if (__builtin_expect(ncclProfiler != NULL, 0)) {
+    if (plan->groupEventHandle) {
       struct ncclTaskP2p* pt = ncclIntruQueueHead(&plan->p2pTaskQueue);
       while (pt) {
-        ncclProfilerEventDescr_t eDescr = { 0 };
-        eDescr.type = ncclProfileP2p;
-        eDescr.parentObj = plan->groupEventHandle;
-        eDescr.rank = plan->comm->rank;
-        eDescr.p2p.name = plan->comm->commName;
-        eDescr.p2p.commHash = plan->comm->commHash;
-        eDescr.p2p.func = ncclFuncToString(pt->func);
-        eDescr.p2p.buff = pt->buff;
-        eDescr.p2p.count = pt->count;
-        eDescr.p2p.datatype = ncclDatatypeToString(pt->datatype);
-        eDescr.p2p.peer = pt->root;
-        ncclProfiler->startEvent(plan->comm->profilerContext, &pt->eventHandle, &eDescr);
-
-        // update collective task with group event activation mask
-        pt->eActivationMask = eActivationMaskGroup;
+        int enable = pt->eActivationMask & (ncclProfileP2p | ncclProfileProxyOp | ncclProfileProxyStep | ncclProfileKernelCh);
+        if (enable) {
+          ncclProfilerEventDescr_t eDescr = { 0 };
+          eDescr.type = ncclProfileP2p;
+          eDescr.parentObj = plan->groupEventHandle;
+          eDescr.rank = plan->comm->rank;
+          eDescr.p2p.name = plan->comm->commName;
+          eDescr.p2p.commHash = plan->comm->commHash;
+          eDescr.p2p.func = ncclFuncToString(pt->func);
+          eDescr.p2p.buff = pt->buff;
+          eDescr.p2p.count = pt->count;
+          eDescr.p2p.datatype = ncclDatatypeToString(pt->datatype);
+          eDescr.p2p.peer = pt->root;
+          ncclProfiler->startEvent(plan->comm->profilerContext, &pt->eventHandle, &eDescr);
+        }
         pt = pt->next;
       }
     }
@@ -436,16 +297,15 @@ ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan) {
 ncclResult_t ncclProfilerStopTaskEvents(struct ncclKernelPlan* plan) {
   TIME_START_EVENT(taskStop);
   if (__builtin_expect(ncclProfiler != NULL, 0)) {
-    int enable = eActivationMaskGroup & (ncclProfileProxyOp | ncclProfileProxyStep | ncclProfileColl);
-    if (plan->groupEventHandle && enable) {
+    if (plan->groupEventHandle) {
       struct ncclTaskColl* ct = ncclIntruQueueHead(&plan->collTaskQueue);
       while (ct) {
-        ncclProfiler->stopEvent(ct->eventHandle);
+        if (ct->eventHandle) ncclProfiler->stopEvent(ct->eventHandle);
         ct = ct->next;
       }
       struct ncclTaskP2p* pt = ncclIntruQueueHead(&plan->p2pTaskQueue);
       while (pt) {
-        ncclProfiler->stopEvent(pt->eventHandle);
+        if (pt->eventHandle) ncclProfiler->stopEvent(pt->eventHandle);
         pt = pt->next;
       }
     }
@@ -463,7 +323,7 @@ ncclResult_t ncclProfilerStartSendProxyOpEvent(int s, struct ncclProxyArgs* args
   TIME_START_EVENT(proxyOpStart);
   struct ncclProxySubArgs* sub = &args->subs[s];
   if (__builtin_expect(ncclProfiler != NULL, 0)) {
-    if (sub->eActivationMask & (ncclProfileProxyStep | ncclProfileProxyOp)) {
+    if (sub->eActivationMask & (ncclProfileProxyOp | ncclProfileProxyStep | ncclProfileNetPlugin)) {
       ncclProfilerEventDescr_t eDescr = { 0 };
       eDescr.type = ncclProfileProxyOp;
       eDescr.parentObj = sub->taskEventHandle;
@@ -485,7 +345,7 @@ ncclResult_t ncclProfilerStartRecvProxyOpEvent(int s, struct ncclProxyArgs* args
   TIME_START_EVENT(proxyOpStart);
   struct ncclProxySubArgs* sub = &args->subs[s];
   if (__builtin_expect(ncclProfiler != NULL, 0)) {
-    if (sub->eActivationMask & (ncclProfileProxyStep | ncclProfileProxyOp)) {
+    if (sub->eActivationMask & (ncclProfileProxyOp | ncclProfileProxyStep | ncclProfileNetPlugin)) {
       ncclProfilerEventDescr_t eDescr = { 0 };
       eDescr.type = ncclProfileProxyOp;
       eDescr.parentObj = sub->taskEventHandle;
@@ -518,7 +378,7 @@ ncclResult_t ncclProfilerStartSendProxyStepEvent(int s, struct ncclProxyArgs* ar
   TIME_START_EVENT(proxyStepStart);
   struct ncclProxySubArgs* sub = &args->subs[s];
   if (__builtin_expect(ncclProfiler != NULL, 0)) {
-    if (sub->opEventHandle && (sub->eActivationMask & ncclProfileProxyStep)) {
+    if (sub->opEventHandle && (sub->eActivationMask & (ncclProfileProxyStep | ncclProfileNetPlugin))) {
       int step_ = DIVUP(stepId, args->sliceSteps);
       ncclProfilerEventDescr_t eDescr = { 0 };
       eDescr.type = ncclProfileProxyStep;
@@ -536,7 +396,7 @@ ncclResult_t ncclProfilerStartRecvProxyStepEvent(int s, struct ncclProxyArgs* ar
   TIME_START_EVENT(proxyStepStart);
   struct ncclProxySubArgs* sub = &args->subs[s];
   if (__builtin_expect(ncclProfiler != NULL, 0)) {
-    if (sub->opEventHandle && (sub->eActivationMask & ncclProfileProxyStep)) {
+    if (sub->opEventHandle && (sub->eActivationMask & (ncclProfileProxyStep | ncclProfileNetPlugin))) {
       int step_ = DIVUP(stepId, args->sliceSteps);
       ncclProfilerEventDescr_t eDescr = { 0 };
       eDescr.type = ncclProfileProxyStep;
@@ -568,7 +428,7 @@ ncclResult_t ncclProfilerStartProxyCtrlEvent(void* profilerContext, void** eHand
   TIME_START_EVENT(proxyCtrlStart);
   if (__builtin_expect(ncclProfiler != NULL, 0)) {
     // for proxy control events we allow profiling mode to change on a per event basis
-    int eActivationMaskProxy = __atomic_load_n(&eActivationMask, __ATOMIC_RELAXED);
+    int eActivationMaskProxy = __atomic_load_n(&ncclProfilerEventMask, __ATOMIC_RELAXED);
     if (eActivationMaskProxy & ncclProfileProxyCtrl) {
       ncclProfilerEventDescr_t eDescr = { 0 };
       eDescr.type = ncclProfileProxyCtrl;
@@ -588,6 +448,30 @@ ncclResult_t ncclProfilerStopProxyCtrlEvent(void* eHandle) {
     ncclProfiler->stopEvent(eHandle);
   }
   TIME_STOP_EVENT(proxyCtrlStop);
+  return ncclSuccess;
+}
+
+ncclResult_t ncclProfilerStartKernelChEvent(struct ncclProxyArgs* args, int s) {
+  if (__builtin_expect(ncclProfiler != NULL, 0)) {
+    struct ncclProxySubArgs* sub = &args->subs[s];
+    if (sub->eActivationMask & ncclProfileKernelCh) {
+      ncclProfilerEventDescr_t eDescr = { };
+      eDescr.type = ncclProfileKernelCh;
+      eDescr.parentObj = sub->taskEventHandle;
+      eDescr.kernelCh.channelId = sub->channelId;
+      ncclProfiler->startEvent(sub->profilerContext, &sub->kernelEventHandle, &eDescr);
+    }
+  }
+  return ncclSuccess;
+}
+
+ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProxyArgs* args, int s) {
+  if (__builtin_expect(ncclProfiler != NULL, 0)) {
+    struct ncclProxySubArgs* sub = &args->subs[s];
+    if (sub->kernelEventHandle) {
+      ncclProfiler->stopEvent(sub->kernelEventHandle);
+    }
+  }
   return ncclSuccess;
 }
 
@@ -619,7 +503,7 @@ ncclResult_t ncclProfilerRecordProxyStepEventState(int s, struct ncclProxyArgs* 
 
 ncclResult_t ncclProfilerRecordProxyCtrlEventState(void* eHandle, int appended, ncclProfilerEventState_t eState) {
   TIME_START_EVENT(proxyCtrlRecord);
-  if (__builtin_expect(ncclProfiler != NULL, 0) && eHandle && __atomic_load_n(&eActivationMask, __ATOMIC_RELAXED) & ncclProfileProxyCtrl) {
+  if (__builtin_expect(ncclProfiler != NULL, 0) && eHandle && __atomic_load_n(&ncclProfilerEventMask, __ATOMIC_RELAXED) & ncclProfileProxyCtrl) {
     ncclProfilerEventStateArgs_t args = { };
     args.proxyCtrl.appendedProxyOps = appended;
     ncclProfiler->recordEventState(eHandle, eState, &args);
@@ -630,5 +514,49 @@ ncclResult_t ncclProfilerRecordProxyCtrlEventState(void* eHandle, int appended, 
 
 ncclResult_t ncclProfilerAddPidToProxyOp(struct ncclProxyOp* op) {
   op->pid = pid;
+  return ncclSuccess;
+}
+
+static pthread_mutex_t proxyProfilerConnectLock = PTHREAD_MUTEX_INITIALIZER;
+
+static ncclResult_t proxyProfilerConnect(struct ncclComm* comm, struct ncclProxyOp* op) {
+  ncclResult_t ret = ncclSuccess;
+  pthread_mutex_lock(&proxyProfilerConnectLock);
+  if (comm->profiler.initialized) goto exit;
+  for (int c = 0; c < MAXCHANNELS; c++) {
+    NCCLCHECKGOTO(ncclProxyConnect(comm, TRANSPORT_PROFILER, 0, comm->rank, &comm->profiler.sendProxyConn[c]), ret, exit);
+    NCCLCHECKGOTO(ncclProxyCallBlocking(comm, &comm->profiler.sendProxyConn[c], ncclProxyMsgConnect, NULL, 0, NULL, 0), ret, exit);
+    NCCLCHECKGOTO(ncclProxyConnect(comm, TRANSPORT_PROFILER, 0, comm->rank, &comm->profiler.recvProxyConn[c]), ret, exit);
+    NCCLCHECKGOTO(ncclProxyCallBlocking(comm, &comm->profiler.recvProxyConn[c], ncclProxyMsgConnect, NULL, 0, NULL, 0), ret, exit);
+  }
+  comm->profiler.initialized = true;
+exit:
+  pthread_mutex_unlock(&proxyProfilerConnectLock);
+  return ret;
+}
+
+bool ncclProfilerNeedsProxy(struct ncclComm* comm, struct ncclProxyOp* op) {
+  bool enabled = (__builtin_expect(ncclProfiler != NULL, 0) && (op->eActivationMask & ncclProfileKernelCh));
+  if (enabled && !comm->profiler.initialized) (void)proxyProfilerConnect(comm, op);
+  return enabled;
+}
+
+ncclResult_t ncclProfilerCallback(void** eHandle, int type, void* pHandle, int64_t pluginId, void* extData) {
+  if (__builtin_expect(ncclProfiler != NULL, 0)) {
+    struct ncclProxySubArgs* sub = (struct ncclProxySubArgs*)pHandle;
+    if (type == 0) { // start
+      if (sub->eActivationMask & ncclProfileNetPlugin) {
+        ncclProfilerEventDescr_t eDescr = { 0 };
+        eDescr.type = ncclProfileNetPlugin;
+        eDescr.parentObj = sub->stepEventHandles[sub->profilerSteps%NCCL_STEPS];
+        eDescr.rank = sub->rank;
+        eDescr.netPlugin.id = pluginId;
+        eDescr.netPlugin.data = extData;
+        ncclProfiler->startEvent(sub->profilerContext, eHandle, &eDescr);
+      }
+    } else { // stop
+      ncclProfiler->stopEvent(*eHandle);
+    }
+  }
   return ncclSuccess;
 }

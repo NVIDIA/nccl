@@ -2,8 +2,8 @@
  * Copyright (c) 2017-2022, NVIDIA CORPORATION. All rights reserved.
  */
 
-#ifndef NCCL_NET_V4_H_
-#define NCCL_NET_V4_H_
+#ifndef NET_V4_H_
+#define NET_V4_H_
 
 #define NCCL_NET_HANDLE_MAXSIZE_V4 64
 

@@ -60,20 +60,20 @@ of newer ones.
 The `nccl/` directory is populated with `net_vX.h` files extracting all relevant definitions
 from old API versions. It also provides error codes in `err.h`.
 
-# API (v9)
+# API (v10)
 
-Below is the main `ncclNet_v9` struct. Each function is explained in later sections.
+Below is the main `ncclNet_v10` struct. Each function is explained in later sections.
 
 ```
 typedef struct {
   // Name of the network (mainly for logs)
   const char* name;
   // Initialize the network.
-  ncclResult_t (*init)(ncclDebugLogger_t logFunction);
+  ncclResult_t (*init)(ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction);
   // Return the number of adapters.
   ncclResult_t (*devices)(int* ndev);
   // Get various device properties.
-  ncclResult_t (*getProperties)(int dev, ncclNetProperties_v9_t* props);
+  ncclResult_t (*getProperties)(int dev, ncclNetProperties_v10_t* props);
   // Create a receiving object and provide a handle to connect to it. The
   // handle can be up to NCCL_NET_HANDLE_MAXSIZE bytes and will be exchanged
   // between ranks to create a connection.
@@ -83,13 +83,13 @@ typedef struct {
   // should return successfully with sendComm == NULL with the expectation that
   // it will be called again until sendComm != NULL.
   // If *sendDevComm points to a valid object, then NCCL is requesting device offload for this connection
-  ncclResult_t (*connect)(int dev, void* handle, void** sendComm, ncclNetDeviceHandle_v8_t** sendDevComm);
+  ncclResult_t (*connect)(int dev, ncclNetCommConfig_v10_t* config, void* handle, void** sendComm, ncclNetDeviceHandle_v10_t** sendDevComm);
   // Finalize connection establishment after remote peer has called connect.
   // This call must not block for the connection to be established, and instead
   // should return successfully with recvComm == NULL with the expectation that
   // it will be called again until recvComm != NULL.
   // If *recvDevComm points to a valid object, then NCCL is requesting device offload for this connection
-  ncclResult_t (*accept)(void* listenComm, void** recvComm, ncclNetDeviceHandle_v8_t** recvDevComm);
+  ncclResult_t (*accept)(void* listenComm, void** recvComm, ncclNetDeviceHandle_v10_t** recvDevComm);
   // Register/Deregister memory. Comm can be either a sendComm or a recvComm.
   // Type is either NCCL_PTR_HOST or NCCL_PTR_CUDA.
   ncclResult_t (*regMr)(void* comm, void* data, size_t size, int type, void** mhandle);
@@ -98,10 +98,10 @@ typedef struct {
   ncclResult_t (*deregMr)(void* comm, void* mhandle);
   // Asynchronous send to a peer.
   // May return request == NULL if the call cannot be performed (or would block)
-  ncclResult_t (*isend)(void* sendComm, void* data, size_t size, int tag, void* mhandle, void** request);
+  ncclResult_t (*isend)(void* sendComm, void* data, size_t size, int tag, void* mhandle, void* pHandle, void** request);
   // Asynchronous recv from a peer.
   // May return request == NULL if the call cannot be performed (or would block)
-  ncclResult_t (*irecv)(void* recvComm, int n, void** data, size_t* sizes, int* tags, void** mhandles, void** request);
+  ncclResult_t (*irecv)(void* recvComm, int n, void** data, size_t* sizes, int* tags, void** mhandles, void** pHandles, void** request);
   // Perform a flush/fence to make sure all data received with NCCL_PTR_CUDA is
   // visible to the GPU
   ncclResult_t (*iflush)(void* recvComm, int n, void** data, int* sizes, void** mhandles, void** request);
@@ -199,6 +199,9 @@ the plugin code adding the following definitions:
 #define WARN(...) logFunction(NCCL_LOG_WARN, NCCL_ALL, __FILE__, __LINE__, __VA_ARGS__)
 #define INFO(FLAGS, ...) logFunction(NCCL_LOG_INFO, (FLAGS), __func__, __LINE__, __VA_ARGS__)
 ```
+
+The `ncclProfilerCallback_t` argument is a NCCL core callback that allows the plugin to define and
+record its own events with the NCCL profiler plugin.
 
 `devices`
 
@@ -301,6 +304,11 @@ the `listen` call previously. If the sender did not connect yet, `accept` should
 should return `ncclSuccess`, setting `recvComm` to `NULL`. NCCL will call `accept` again until it
 succeeds.
 
+The `connect` API takes a `ncclNetCommConfig_t`, which contains a trafficClass field.
+This field can be used by the network plugin to specify the QoS level of the connection. By default,
+`trafficClass` is set to -1 but can be configured by the application during communicator initialization
+to select a plugin-supported QoS level.
+
 `closeListen`/`closeSend`/`closeRecv`
 
 Once a `listenComm`/`sendComm`/`recvComm` is no longer needed, NCCL will call
@@ -354,6 +362,9 @@ The `isend` operation returns a handle in the `request` argument for further cal
 the `isend` operation cannot be initiated, `request` can be set to `NULL` and NCCL will call
 `isend` again later.
 
+The `pHandle` argument allows NCCL to pass an opaque handle that can be used by the network plugin
+to support network defined events.
+
 `irecv`
 
 To receive data, NCCL will call `irecv` with the `recvComm` returned by `accept`. The argument
@@ -374,6 +385,9 @@ LL or LL128 protocols. In these cases, NCCL polls on flag embedded in data to de
 of irecv and is resilient to redundant network writes. This allows the plugin to optimize request
 completions on such irecvs (for example, complete the request immediately). The plugin is still
 expected to set a valid request pointer on return which NCCL can poll to check for completion.
+
+The `pHandle` argument allows NCCL to pass an array of opaque handles that can be used by the
+network plugin to support network defined events.
 
 Note: for a given connection, send/receive operations should always match in the order they were
 posted. Tags provided for receive operations are only used to assign a given send operation to one

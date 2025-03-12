@@ -53,23 +53,14 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>:
     barrier_sync(15-group, nthreads);
   }
 
-  uint32_t abort = 0;
-
-  inline __device__ int checkAbort(int &spins, int i, int send) {
-    spins++;
-    if (abort == 0 && spins == NCCL_SPINS_BEFORE_CHECK_ABORT) {
-      abort = *ncclShmem.comm.abortFlag;
-      spins = 0;
-    }
-    return abort;
-  }
+  int abort = 0;
 
   inline __device__ void waitSend(int nbytes) {
     if (sendConnHeadPtr) {
       int spins = 0;
       while (sendConnHeadCache + NCCL_STEPS < sendConnHead + 1) {
         sendConnHeadCache = *sendConnHeadPtr;
-        if (checkAbort(spins, wid, 1)) break;
+        if (checkAbort(abort, 1, spins)) break;
       }
       if (sendConnFifo) {
         sendConnFifo[sendStep[wid]%NCCL_STEPS].size = nbytes;
@@ -201,7 +192,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>:
           load128(ptr+u*WARP_SIZE, vr[u], vr[u+1]);
           needReload |= flagThread && (vr[u+1] != flag);
         }
-        needReload &= (0 == checkAbort(spins, 0, 0));
+        needReload &= (0 == checkAbort(abort, 1, spins));
       } while (__any_sync(WARP_MASK, needReload));
 
       #pragma unroll
@@ -248,7 +239,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>:
             load128(ptr+u*WARP_SIZE, vr[u], vr[u+1]);
             needReload |= flagThread && (vr[u+1] != flag);
           }
-          needReload &= (0 == checkAbort(spins, i, 0));
+          needReload &= (0 == checkAbort(abort, 1, spins));
         } while (__any_sync(WARP_MASK, needReload));
 
         #pragma unroll

@@ -92,8 +92,8 @@ static ncclResult_t regCleanup(struct ncclComm* comm, struct ncclReg* reg) {
     }
   }
   if (reg->state & NVLS_REG_COMPLETE) {
-    if (ncclNvlsDeregBuffer(comm, &reg->mcHandle, reg->regAddr, reg->dev, reg->regSize) != ncclSuccess) {
-      WARN("rank %d deregister NVLS buffer %p dev %d size %ld failed", comm->rank, (void*)reg->regAddr, reg->dev, reg->regSize);
+    if (ncclNvlsDeregBuffer(comm, &reg->mcHandle, reg->regAddr, reg->dev, reg->regUCSize, reg->regMCSize) != ncclSuccess) {
+      WARN("rank %d deregister NVLS buffer %p dev %d ucsize %ld mcsize %ld failed", comm->rank, (void*)reg->regAddr, reg->dev, reg->regUCSize, reg->regMCSize);
     }
     reg->regAddr = (CUdeviceptr)NULL;
   }

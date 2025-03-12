@@ -16,6 +16,7 @@ WERROR ?= 0
 PROFAPI ?= 1
 NVTX ?= 1
 RDMA_CORE ?= 0
+NET_PROFILER ?= 0
 
 NVCC = $(CUDA_HOME)/bin/nvcc
 
@@ -136,4 +137,8 @@ endif
 
 ifneq ($(RDMA_CORE), 0)
 CXXFLAGS += -DNCCL_BUILD_RDMA_CORE=1
+endif
+
+ifneq ($(NET_PROFILER), 0)
+CXXFLAGS += -DNCCL_ENABLE_NET_PROFILING=1
 endif

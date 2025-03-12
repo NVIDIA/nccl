@@ -15,6 +15,8 @@ struct rasRankInit {
   pid_t pid;
   int cudaDev;
   int nvmlDev;
+  uint64_t hostHash;
+  uint64_t pidHash;
 };
 
 ncclResult_t ncclRasCommInit(struct ncclComm* comm, struct rasRankInit* myRank);

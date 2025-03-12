@@ -53,6 +53,7 @@ struct ncclShmemData {
   int nWorks;
   int workSize;
   uint32_t workConsumed;
+  uint64_t workCounter;
   struct ncclShmemGroup groups[NCCL_MAX_GROUPS];
   uint64_t redOpArgs[NCCL_MAX_NVLS_ARITY+1];
 
@@ -109,24 +110,6 @@ __device__ inline bool barrier_red_or(bool vote, int name, int nThreads) {
   asm volatile("{ .reg .pred p;"
       "  setp.ne.s32 p, %1, 0;"
       "  barrier.red.or.pred p, %2, %3, p; "
-      "  selp.s32 %0, 1, 0, p; }"
-      : "=r"(ans) : "r"((int)vote), "r"(name), "r"(nThreads) : "memory");
-  return bool(ans);
-}
-__device__ inline bool barrier_red_or_aligned(bool vote, int name) {
-  int ans;
-  asm volatile("{ .reg .pred p;"
-      "  setp.ne.s32 p, %1, 0;"
-      "  barrier.red.or.pred.aligned p, %2, p; "
-      "  selp.s32 %0, 1, 0, p; }"
-      : "=r"(ans) : "r"((int)vote), "r"(name) : "memory");
-  return bool(ans);
-}
-__device__ inline bool barrier_red_or_aligned(bool vote, int name, int nThreads) {
-  int ans;
-  asm("{ .reg .pred p;"
-      "  setp.ne.s32 p, %1, 0;"
-      "  barrier.red.or.pred.aligned p, %2, %3, p; "
       "  selp.s32 %0, 1, 0, p; }"
       : "=r"(ans) : "r"((int)vote), "r"(name), "r"(nThreads) : "memory");
   return bool(ans);
@@ -331,7 +314,7 @@ __device__ __forceinline__ void ncclKernelMain(struct ncclDevKernelArgs const* a
   /* set abort flag to 0 */
   if (tid == 0) ncclShmem.aborted = 0;
 
-  // Use first 2 warps to load comm and channel, and reamaining load work batch.
+  // Use first 2 warps to load comm and channel, and remaining load work batch.
   switch (tid/WARP_SIZE) {
   case 0:
     { void* dst = &ncclShmem.comm;
@@ -364,7 +347,8 @@ __device__ __forceinline__ void ncclKernelMain(struct ncclDevKernelArgs const* a
     ncclShmem.comm.workConsumed[ncclShmem.channelId] = ncclShmem.workConsumed;
   }
 
-  while (true) {
+  while (ncclShmem.aborted == 0) {
+    if (tid == 0) ncclShmem.comm.workStarted[ncclShmem.channelId] = (ncclShmem.channel.workCounter += ncclShmem.nWorks);
     if (0 <= SpecializedFnId && ncclShmem.funcId == (unsigned)SpecializedFnId) {
       SpecializedRunWorkBatch().run();
     } else {
@@ -374,17 +358,18 @@ __device__ __forceinline__ void ncclKernelMain(struct ncclDevKernelArgs const* a
     if (ncclShmem.nextBatchIx == -1) break;
     int batchIx = ncclShmem.nextBatchIx;
     __syncthreads();
+    if (tid == 0) ncclShmem.comm.workCompleted[ncclShmem.channelId] = ncclShmem.channel.workCounter;
     loadWorkBatchToShmem(tid, tn, args, batchIx);
+    __syncthreads();
 
-    // Check whether the last operation was aborted and make sure all threads exit
-    bool aborted = false;
-    if (tid == 0) aborted = *ncclShmem.comm.abortFlag;
-    aborted = barrier_red_or_aligned(aborted, 0); // publish ncclShmem.work
     if (tid == 0 && ncclShmem.args.workStorageType == ncclDevWorkStorageTypeFifo) {
-      // ncclShmem.workConsumed written by loadWorkBatchToShmem before barrier_red_or()
+      // ncclShmem.workConsumed written by loadWorkBatchToShmem before __syncthreads()
       ncclShmem.comm.workConsumed[ncclShmem.channelId] = ncclShmem.workConsumed;
     }
-    if (aborted) break;
+  }
+  if (tid == 0) {
+    ncclShmem.comm.workCompleted[ncclShmem.channelId] = ncclShmem.channel.workCounter;
+    ((ncclDevCommAndChannels*)ncclShmem.args.comm)->channels[ncclShmem.channelId].workCounter = ncclShmem.channel.workCounter;
   }
 }
 

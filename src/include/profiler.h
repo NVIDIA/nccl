@@ -17,6 +17,18 @@ struct ncclTaskP2p;
 struct ncclInfo;
 struct ncclComm;
 struct ncclProxyOp;
+struct ncclProxyConnector;
+
+struct ncclProfilerProxy {
+  bool initialized;
+  uint64_t* workStarted/*[MAXCHANNELS]*/;
+  uint64_t* workCompleted/*[MAXCHANNELS]*/;
+  uint64_t workCounter[MAXCHANNELS]; // host work counter
+  struct ncclProxyConnector sendProxyConn[MAXCHANNELS];
+  struct ncclProxyConnector recvProxyConn[MAXCHANNELS];
+};
+
+extern int ncclProfilerEventMask;
 
 // Plugin Init/Finalize Wrappers
 ncclResult_t ncclProfilerPluginInit(struct ncclComm* comm);
@@ -44,6 +56,10 @@ ncclResult_t ncclProfilerStopProxyStepEvent(int sub, struct ncclProxyArgs* args,
 ncclResult_t ncclProfilerStartProxyCtrlEvent(void* profilerContext, void** eHandle);
 ncclResult_t ncclProfilerStopProxyCtrlEvent(void* eHandle);
 
+// Kernel Channel Start/Stop Event Wrappers
+ncclResult_t ncclProfilerStartKernelChEvent(struct ncclProxyArgs* args, int s);
+ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProxyArgs* args, int s);
+
 // Record Event Wrappers
 ncclResult_t ncclProfilerRecordProxyOpEventState(int sub, struct ncclProxyArgs* args, int steps, size_t transSize, ncclProfilerEventState_t eState);
 ncclResult_t ncclProfilerRecordProxyStepEventState(int sub, struct ncclProxyArgs* args, int stepId, ncclProfilerEventState_t eState);
@@ -51,5 +67,9 @@ ncclResult_t ncclProfilerRecordProxyCtrlEventState(void*eHandle, int appended, n
 
 // Profiler utility functions
 ncclResult_t ncclProfilerAddPidToProxyOp(struct ncclProxyOp* op);
+bool ncclProfilerNeedsProxy(struct ncclComm* comm, struct ncclProxyOp* op);
+
+// Profiler callback for network plugin
+ncclResult_t ncclProfilerCallback(void** eHandle, int type, void* pHandle, int64_t pluginId, void* extData);
 
 #endif

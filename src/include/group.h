@@ -112,6 +112,12 @@ inline void ncclGroupCommJoin(struct ncclComm* comm) {
     struct ncclComm** pp = &ncclGroupCommHead;
     while (*pp != nullptr && comm->intraComm0 != (*pp)->intraComm0)
       pp = &(*pp)->groupNext;
+
+    // didn't find its clique, we need to insert it with ascending order based on commHash
+    if (*pp == nullptr) {
+      pp = &ncclGroupCommHead;
+      while (*pp != nullptr && (*pp)->commHash < comm->commHash) pp = &(*pp)->groupNext;
+    }
     comm->groupNext = *pp;
     *pp = comm;
     // Comms gets a new memory stack scope upon joining. Each task batched for

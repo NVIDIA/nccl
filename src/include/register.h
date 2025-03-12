@@ -42,7 +42,7 @@ struct ncclReg {
   uintptr_t baseAddr;
   size_t baseSize;
   CUdeviceptr regAddr;
-  size_t regSize;
+  size_t regUCSize, regMCSize;
   int dev;
   CUmemGenericAllocationHandle mcHandle;
   uintptr_t caddrs[NCCL_MAX_LOCAL_RANKS]; /* use to check if NVLS buffers match among intra-node ranks */

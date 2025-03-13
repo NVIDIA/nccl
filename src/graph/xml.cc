@@ -51,10 +51,11 @@ ncclResult_t xmlGetValue(FILE* file, char* value, char* last) {
 #endif
   }
   int o = 0;
+  char quote = c;  // Remember which quote type we started with
   do {
     NCCLCHECK(xmlGetChar(file, &c));
     value[o++] = c;
-  } while (c != '"');
+  } while (c != quote);
   value[o-1] = '\0';
   NCCLCHECK(xmlGetChar(file, last));
   return ncclSuccess;

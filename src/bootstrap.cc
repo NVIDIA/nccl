@@ -101,7 +101,7 @@ ncclResult_t bootstrapNetInit() {
           pthread_mutex_unlock(&bootstrapNetLock);
           return ncclInvalidArgument;
         }
-        if (ncclFindInterfaceMatchSubnet(bootstrapNetIfName, &bootstrapNetIfAddr, &remoteAddr, MAX_IF_NAME_SIZE, 1) <= 0) {
+        if (ncclFindInterfaces(bootstrapNetIfName, &bootstrapNetIfAddr, MAX_IF_NAME_SIZE, 1) <= 0) {
           WARN("NET/Socket : No usable listening interface found");
           pthread_mutex_unlock(&bootstrapNetLock);
           return ncclSystemError;

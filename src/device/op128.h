@@ -104,12 +104,15 @@ union BytePack<1> {
 template<>
 union BytePack<2> {
   BytePack<1> half[2];
+  BytePack<1> b1[2];
   uint8_t u8[2];
   uint16_t u16, native;
 };
 template<>
 union BytePack<4> {
   BytePack<2> half[2];
+  BytePack<1> b1[4];
+  BytePack<2> b2[2];
   uint8_t u8[4];
   uint16_t u16[2];
   uint32_t u32, native;
@@ -117,6 +120,9 @@ union BytePack<4> {
 template<>
 union BytePack<8> {
   BytePack<4> half[2];
+  BytePack<1> b1[8];
+  BytePack<2> b2[4];
+  BytePack<4> b4[2];
   uint8_t u8[8];
   uint16_t u16[4];
   uint32_t u32[2];
@@ -125,11 +131,28 @@ union BytePack<8> {
 template<>
 union alignas(16) BytePack<16> {
   BytePack<8> half[2];
+  BytePack<1> b1[16];
+  BytePack<2> b2[8];
+  BytePack<4> b4[4];
+  BytePack<8> b8[2];
   uint8_t u8[16];
   uint16_t u16[8];
   uint32_t u32[4];
   uint64_t u64[2];
   ulong2 ul2, native;
+};
+template<int Size>
+union BytePack {
+  BytePack<Size/2> half[2];
+  BytePack<1> b1[Size];
+  BytePack<2> b2[Size/2];
+  BytePack<4> b4[Size/4];
+  BytePack<8> b8[Size/8];
+  BytePack<16> b16[Size/16];
+  uint8_t u8[Size];
+  uint16_t u16[Size/2];
+  uint32_t u32[Size/4];
+  uint64_t u64[Size/8];
 };
 
 template<typename T>
@@ -383,6 +406,56 @@ __device__ __forceinline__ void multimem_st_global(uintptr_t addr, BytePack<Size
   // nop
 }
 #endif
+
+// Load pack starting at index in array. Ignore elements past end (length of array).
+template<typename Pack, typename T>
+__device__ __forceinline__ Pack loadPack(T* ptr, int ix, int end) {
+  constexpr int Size = sizeof(Pack);
+  ptr += ix;
+  int n = end - ix;
+  if (alignof(T) == Size && sizeof(T) == Size) {
+    return *(Pack*)ptr;
+  } else if ((Size+3)/4 + 1 < Size/sizeof(T)) {
+    union { Pack ans; uint32_t part[Size/4]; };
+    int misalign = reinterpret_cast<uintptr_t>(ptr) % 4;
+    uint32_t* down = reinterpret_cast<uint32_t*>(reinterpret_cast<uintptr_t>(ptr) & -uintptr_t(4));
+    int i;
+    #pragma unroll
+    for (i=0; i < Size/4; i++) {
+      if (i*4/sizeof(T) < 1 || i*4/sizeof(T) < n) part[i] = down[i];
+    }
+    uint32_t extra;
+    if (misalign) extra = down[i];
+    #pragma unroll
+    for (i=0; i < Size/4; i++) {
+      part[i] = __funnelshift_r(part[i], part[i+1], 8*misalign);
+    }
+    if (misalign) part[i] = __funnelshift_r(part[i], extra, 8*misalign);
+    return ans;
+  } else {
+    union { Pack ans; BytePack<sizeof(T)> part[Size/sizeof(T)]; };
+    #pragma unroll
+    for (int i=0; i < Size/sizeof(T); i++) {
+      if (i < 1 || i < n) part[i] = ((BytePack<sizeof(T)>*)ptr)[i];
+    }
+    return ans;
+  }
+}
+
+// Store pack starting at index in array. Ignore elements past end (length of array).
+template<typename Pack, typename T>
+__device__ __forceinline__ void storePack(T* ptr, int ix, int end, Pack val) {
+  constexpr int Size = sizeof(Pack);
+  union { Pack tmp; BytePack<sizeof(T)> part[Size/sizeof(T)]; };
+  tmp = val;
+  ptr += ix;
+  int n = end - ix;
+  #pragma unroll
+  for (int i=0; i < Size/sizeof(T); i++) {
+    if (i < 1 || i < n) ((BytePack<sizeof(T)>*)ptr)[i] = part[i];
+  }
+}
+
 
 // Warp-uniform memory copy from shared address (not generic) to global memory.
 // The number of bytes copied is `min(MaxBytes, nBytesAhead)`, a negative value

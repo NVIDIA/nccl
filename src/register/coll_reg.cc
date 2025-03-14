@@ -1,6 +1,7 @@
 #include "register.h"
 #include "transport.h"
 #include "enqueue.h"
+#include "register_inline.h"
 
 static ncclResult_t registerCheckP2PConnection(struct ncclComm* comm, struct ncclConnector* conn, struct ncclTopoGraph* graph, int peer, bool* needReg) {
   if (conn->connected) {

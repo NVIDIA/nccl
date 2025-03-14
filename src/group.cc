@@ -14,7 +14,7 @@
 
 __thread int ncclGroupDepth = 0; // depth of ncclGroupStart nesting
 __thread ncclResult_t ncclGroupError = ncclSuccess;
-__thread struct ncclComm* ncclGroupCommHead = nullptr;
+__thread struct ncclComm* ncclGroupCommHead[ncclGroupTaskTypeNum] = {nullptr};
 __thread struct ncclComm* ncclGroupCommPreconnectHead = nullptr;
 __thread struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> ncclAsyncJobs;
 __thread struct ncclGroupJob *ncclGroupJobMainPtr = NULL;
@@ -191,6 +191,29 @@ fail:
   goto exit;
 }
 
+struct ncclGroupSymmetricJob {
+  struct ncclAsyncJob base;
+  struct ncclComm* comm;
+};
+
+ncclResult_t ncclCommGroupRegisterSymmetric(struct ncclAsyncJob* job_) {
+  struct ncclGroupSymmetricJob* job = (struct ncclGroupSymmetricJob*)job_;
+  struct ncclComm* comm = job->comm;
+  ncclResult_t ret = ncclSuccess;
+
+  CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), ret, fail);
+  while (!ncclIntruQueueEmpty(&comm->symRegTaskQueue)) {
+    struct ncclSymRegTask* task = ncclIntruQueueDequeue(&comm->symRegTaskQueue);
+    NCCLCHECKGOTO(ncclCommResgiterSymInternal(comm, task->buff, task->baseSize, task->alignment, task->memHandle, task->regHandle, task->handle), ret, fail);
+    free(task);
+  }
+
+exit:
+  return ret;
+fail:
+  goto exit;
+}
+
 static ncclResult_t doLaunches(struct ncclComm* head) {
   ncclResult_t result = ncclSuccess;
   struct ncclComm* cliqueHead = head;
@@ -207,7 +230,7 @@ static ncclResult_t doLaunches(struct ncclComm* head) {
       CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), result, failure);
       NCCLCHECKGOTO(ncclLaunchPrepare(comm), result, failure);
       if (useBarrier) ncclCommIntraBarrierIn(comm, 1);
-      comm = comm->groupNext;
+      comm = comm->groupNext[ncclGroupTaskTypeCollective];
     } while (comm != nullptr && comm->intraComm0 == cliqueHead->intraComm0);
     cliqueNextHead = comm;
 
@@ -224,7 +247,7 @@ static ncclResult_t doLaunches(struct ncclComm* head) {
       bool moreRounds = false;
       comm = cliqueHead;
       do { // Iterate clique members.
-        struct ncclComm* next = comm->groupNext;
+        struct ncclComm* next = comm->groupNext[ncclGroupTaskTypeCollective];
         if (useBarrier) {
           // Barrier reduction result tells us if this was the final round.
           moreRounds = 0 != ncclCommIntraBarrierOut(comm);
@@ -264,7 +287,9 @@ static inline void groupResetJobState(struct ncclGroupJob* job) {
     if (job->groupBlockingPtr) *job->groupBlockingPtr = -1;
     if (job->abortFlagPtr) *job->abortFlagPtr = false;
     if (job->groupErrorPtr) *job->groupErrorPtr = ncclSuccess;
-    if (job->groupCommHeadPtr) *job->groupCommHeadPtr = NULL;
+    if (job->groupCommHeadPtr) {
+      for (int type = 0; type < ncclGroupTaskTypeNum; ++type) job->groupCommHeadPtr[type] = NULL;
+    }
     if (job->groupCommPreconnectHeadPtr) *job->groupCommPreconnectHeadPtr = NULL;
     memset(job, 0, sizeof(struct ncclGroupJob));
   }
@@ -272,51 +297,48 @@ static inline void groupResetJobState(struct ncclGroupJob* job) {
 }
 
 static void groupCleanup(struct ncclComm** groupCommHeadPtr, struct ncclComm** groupCommPreconnectHeadPtr, struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next>* asyncJobsPtr, ncclResult_t* groupErrorPtr, int* groupBlockingPtr, volatile bool* groupJobAbortFlagPtr, ncclResult_t error) {
-  struct ncclComm* comm = *groupCommHeadPtr;
-
-  /* reset all thread local variables */
-  *groupCommHeadPtr = NULL;
-  *groupCommPreconnectHeadPtr = NULL;
-  *groupErrorPtr = ncclSuccess;
-  *groupBlockingPtr = -1;
-  *groupJobAbortFlagPtr = false;
-
-  while (comm != nullptr) {
-    struct ncclComm* next = comm->groupNext;
-    (void) ncclGroupCommLeave(comm); // overwrites comm->groupNext
-    // We don't know if preconnect succeeded or happened at all, so clear
-    // the flags that let `taskAppend()` skip over checking if preconnect
-    // is needed.
-    comm->preconnectNext = reinterpret_cast<struct ncclComm*>(0x1);
-    for (int i = 0; i < comm->nRanks; i++) {
-      comm->connectSend[i] = 0UL;
-      comm->connectRecv[i] = 0UL;
-    }
-    // Reclaim abandoned kernel plan memory. Note ncclWork structs were already
-    // reclaimed by a `ncclMemoryStackPop(&comm->memScoped)` during `ncclGroupCommLeave()`.
-    while (!ncclIntruQueueEmpty(&comm->planner.planQueue)) {
-      struct ncclKernelPlan* plan = ncclIntruQueueDequeue(&comm->planner.planQueue);
-      // Persistent plans will be reclaimed via the callbackQueue when the
-      // graph drops its UserObject reference.
-      if (!plan->persistent) {
-        while (!ncclIntruQueueEmpty(&plan->proxyOpQueue)) {
-          struct ncclProxyOp* pxop = ncclIntruQueueDequeue(&plan->proxyOpQueue);
-          ncclMemoryPoolFree(&comm->memPool_ncclProxyOp, pxop);
+  struct ncclComm* comm;
+  for (int type = 0; type < ncclGroupTaskTypeNum; ++type) {
+    comm = groupCommHeadPtr[type];
+    while (comm != nullptr) {
+      struct ncclComm* next = comm->groupNext[type];
+      (void)ncclGroupCommLeave(comm, type); // overwrites comm->groupNext
+      // We don't know if preconnect succeeded or happened at all, so clear
+      // the flags that let `taskAppend()` skip over checking if preconnect
+      // is needed.
+      if (type == ncclGroupTaskTypeCollective) {
+        comm->preconnectNext = reinterpret_cast<struct ncclComm*>(0x1);
+        for (int i = 0; i < comm->nRanks; i++) {
+          comm->connectSend[i] = 0UL;
+          comm->connectRecv[i] = 0UL;
         }
-        ncclMemoryPoolFree(&comm->memPool_ncclKernelPlan, plan);
+        // Reclaim abandoned kernel plan memory. Note ncclWork structs were already
+        // reclaimed by a `ncclMemoryStackPop(&comm->memScoped)` during `ncclGroupCommLeave()`.
+        while (!ncclIntruQueueEmpty(&comm->planner.planQueue)) {
+          struct ncclKernelPlan* plan = ncclIntruQueueDequeue(&comm->planner.planQueue);
+          // Persistent plans will be reclaimed via the callbackQueue when the
+          // graph drops its UserObject reference.
+          if (!plan->persistent) {
+            while (!ncclIntruQueueEmpty(&plan->proxyOpQueue)) {
+              struct ncclProxyOp* pxop = ncclIntruQueueDequeue(&plan->proxyOpQueue);
+              ncclMemoryPoolFree(&comm->memPool_ncclProxyOp, pxop);
+            }
+            ncclMemoryPoolFree(&comm->memPool_ncclKernelPlan, plan);
+          }
+        }
+
+        { // Reset comm->planner to empty.
+          ncclKernelPlanner::Peer* tmp = comm->planner.peers;
+          memset(&comm->planner, 0, sizeof(comm->planner));
+          comm->planner.peers = tmp;
+          if (comm->planner.peers != NULL) memset(comm->planner.peers, 0, comm->nRanks * sizeof(comm->planner.peers[0]));
+        }
       }
-    }
 
-    { // Reset comm->planner to empty.
-      ncclKernelPlanner::Peer* tmp = comm->planner.peers;
-      memset(&comm->planner, 0, sizeof(comm->planner));
-      comm->planner.peers = tmp;
-      if (comm->planner.peers != NULL) memset(comm->planner.peers, 0, comm->nRanks*sizeof(comm->planner.peers[0]));
+      if (!comm->config.blocking)
+        (void)ncclCommSetAsyncError(comm, error);
+      comm = next;
     }
-
-    if (!comm->config.blocking)
-      (void) ncclCommSetAsyncError(comm, error);
-    comm = next;
   }
 
   /* reset everything */
@@ -327,6 +349,13 @@ static void groupCleanup(struct ncclComm** groupCommHeadPtr, struct ncclComm** g
     if (job->undo) job->undo(job);
     if (job->destructor) job->destructor((void*)job);
   }
+
+  /* reset all thread local variables */
+  for (int type = 0; type < ncclGroupTaskTypeNum; ++type) groupCommHeadPtr[type] = NULL;
+  *groupCommPreconnectHeadPtr = NULL;
+  *groupErrorPtr = ncclSuccess;
+  *groupBlockingPtr = -1;
+  *groupJobAbortFlagPtr = false;
 
   return;
 }
@@ -393,7 +422,7 @@ fail:
 static ncclResult_t groupLaunch(struct ncclAsyncJob *job_, ncclSimInfo_t* simInfo = NULL) {
   ncclResult_t ret = ncclSuccess;
   struct ncclGroupJob *gjob = (struct ncclGroupJob*) job_;
-  struct ncclComm *groupCommHeadMain = *gjob->groupCommHeadPtr;
+  struct ncclComm **groupCommHeadMain = gjob->groupCommHeadPtr;
   struct ncclComm *groupCommPreconnectHeadMain = *gjob->groupCommPreconnectHeadPtr;
   struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> *asyncJobsMain = gjob->asyncJobsPtr;
 
@@ -421,9 +450,41 @@ static ncclResult_t groupLaunch(struct ncclAsyncJob *job_, ncclSimInfo_t* simInf
 
   NCCLCHECKGOTO(asyncJobLaunch(asyncJobsMain, groupAbortFlag), ret, fail);
 
+  // only loop through sym alloc and register tasks
+  for (int type = ncclGroupTaskTypeSymRegister; type <= ncclGroupTaskTypeSymRegister; ++type) {
+    if (groupCommHeadMain[type]) {
+      struct ncclComm* cliqueHead = groupCommHeadMain[type];
+      struct ncclComm* comm = NULL;
+      struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> asyncSymJobs;
+      ncclIntruQueueConstruct(&asyncSymJobs);
+      do {
+        comm = cliqueHead;
+        do {
+          struct ncclGroupSymmetricJob* job;
+          NCCLCHECKGOTO(ncclCalloc(&job, 1), ret, fail);
+          job->base.func = ncclCommGroupRegisterSymmetric;
+          job->base.undo = nullptr;
+          job->base.destructor = free;
+          job->base.state = ncclGroupJobRunning;
+          job->base.abortFlag = comm->abortFlag;
+          job->base.abortFlagDev = comm->abortFlagDev;
+          job->comm = comm;
+          ncclIntruQueueEnqueue(&asyncSymJobs, (struct ncclAsyncJob*)job);
+          comm = comm->groupNext[type];
+        } while (comm != nullptr && comm->intraComm0 == cliqueHead->intraComm0);
+        NCCLCHECKGOTO(asyncJobLaunch(&asyncSymJobs, groupAbortFlag), ret, fail);
+        while (!ncclIntruQueueEmpty(&asyncSymJobs)) {
+          struct ncclAsyncJob* job = ncclIntruQueueDequeue(&asyncSymJobs);
+          if (job->destructor) job->destructor((void*)job);
+        }
+        cliqueHead = comm;
+      } while (cliqueHead != nullptr);
+    }
+  }
+
   /* Connect channels at runtime if cumem is supported */
-  if (groupCommHeadMain != nullptr) {
-    struct ncclComm* cliqueHead = groupCommHeadMain;
+  if (groupCommHeadMain[ncclGroupTaskTypeCollective] != nullptr) {
+    struct ncclComm* cliqueHead = groupCommHeadMain[ncclGroupTaskTypeCollective];
     struct ncclComm* comm = NULL;
     struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> asyncCollJobs;
     ncclIntruQueueConstruct(&asyncCollJobs);
@@ -454,7 +515,7 @@ static ncclResult_t groupLaunch(struct ncclAsyncJob *job_, ncclSimInfo_t* simInf
           memcpy(job->algoNeedConnect, algoNeedConnect, sizeof(bool) * NCCL_NUM_ALGORITHMS);
           ncclIntruQueueEnqueue(&asyncCollJobs, &job->base);
         }
-        comm = comm->groupNext;
+        comm = comm->groupNext[ncclGroupTaskTypeCollective];
       } while (comm != nullptr && comm->intraComm0 == cliqueHead->intraComm0);
       // connect
       NCCLCHECKGOTO(asyncJobLaunch(&asyncCollJobs, groupAbortFlag), ret, fail);
@@ -466,16 +527,16 @@ static ncclResult_t groupLaunch(struct ncclAsyncJob *job_, ncclSimInfo_t* simInf
     } while (cliqueHead != nullptr);
 
     // done with all buffer allocation, start registration and enqueue
-    comm = groupCommHeadMain;
+    comm = groupCommHeadMain[ncclGroupTaskTypeCollective];
     do {
       CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), ret, fail);
       NCCLCHECKGOTO(ncclTasksRegAndEnqueue(comm), ret, fail);
-      comm = comm->groupNext;
+      comm = comm->groupNext[ncclGroupTaskTypeCollective];
     } while (comm);
   }
 
-  if ((!simInfo) && (groupCommHeadMain != nullptr)) {
-    NCCLCHECKGOTO(doLaunches(groupCommHeadMain), ret, fail);
+  if ((!simInfo) && (groupCommHeadMain[ncclGroupTaskTypeCollective] != nullptr)) {
+    NCCLCHECKGOTO(doLaunches(groupCommHeadMain[ncclGroupTaskTypeCollective]), ret, fail);
   }
 
   while (!ncclIntruQueueEmpty(asyncJobsMain)) {
@@ -485,17 +546,19 @@ static ncclResult_t groupLaunch(struct ncclAsyncJob *job_, ncclSimInfo_t* simInf
     if (job->destructor) job->destructor((void*)job);
   }
 
-  while (groupCommHeadMain != nullptr) {
-    struct ncclComm* comm = groupCommHeadMain;
-    struct ncclComm* next = comm->groupNext;
-    // Poll for callbacks sent to us from other threads. Typically these free
-    // resources from to our memory pools and UB
-    NCCLCHECKGOTO(ncclCommPollCallbacks(comm, /*waitSome=*/false), ret, fail);
-    (void) ncclGroupCommLeave(comm);
-    if (!comm->config.blocking) {
-      (void) ncclCommSetAsyncError(comm, ret);
+  for (int type = 0; type < ncclGroupTaskTypeNum; ++type) {
+    while (groupCommHeadMain[type] != nullptr) {
+      struct ncclComm* comm = groupCommHeadMain[type];
+      struct ncclComm* next = comm->groupNext[type];
+      // Poll for callbacks sent to us from other threads. Typically these free
+      // resources from to our memory pools and UB
+      NCCLCHECKGOTO(ncclCommPollCallbacks(comm, /*waitSome=*/false), ret, fail);
+      (void)ncclGroupCommLeave(comm, type);
+      if (!comm->config.blocking) {
+        (void)ncclCommSetAsyncError(comm, ret);
+      }
+      groupCommHeadMain[type] = next;
     }
-    groupCommHeadMain = next;
   }
 
 exit:
@@ -514,6 +577,7 @@ ncclResult_t ncclGroupEndInternal(ncclSimInfo_t* simInfo) {
   ncclSimInfo_t internalSimInfo = NCCL_SIM_INFO_INITIALIZER;
   ncclSimInfo_t* internalSimInfoPtr = NULL;
   size_t realSize = 0;
+  bool hasCommHead = false;
 
   internalSimInfo.magic = 0;
 
@@ -539,8 +603,14 @@ ncclResult_t ncclGroupEndInternal(ncclSimInfo_t* simInfo) {
     internalSimInfoPtr = &internalSimInfo;
   }
 
-  if (ncclGroupCommHead != nullptr || !ncclIntruQueueEmpty(&ncclAsyncJobs) || ncclGroupCommPreconnectHead != nullptr) {
-    ncclGroupJobMain.groupCommHeadPtr = &ncclGroupCommHead;
+  for (int type = 0; type < ncclGroupTaskTypeNum; ++type) {
+    if (ncclGroupCommHead[type]) {
+      hasCommHead = true;
+      break;
+    }
+  }
+  if (hasCommHead || !ncclIntruQueueEmpty(&ncclAsyncJobs) || ncclGroupCommPreconnectHead != nullptr) {
+    ncclGroupJobMain.groupCommHeadPtr = ncclGroupCommHead;
     ncclGroupJobMain.groupCommPreconnectHeadPtr = &ncclGroupCommPreconnectHead;
     ncclGroupJobMain.groupErrorPtr = &ncclGroupError;
     ncclGroupJobMain.asyncJobsPtr = &ncclAsyncJobs;
@@ -561,14 +631,16 @@ ncclResult_t ncclGroupEndInternal(ncclSimInfo_t* simInfo) {
         } while (job);
       }
 
-      if (ncclGroupCommHead) {
-        ncclComm_t comm = ncclGroupCommHead;
-        do {
-          NCCLCHECKGOTO(ncclCommSetAsyncError(comm, ncclInProgress), ret, fail);
-          /* link group job to communicators. */
-          comm->groupJob = ncclGroupJobMainPtr;
-          comm = comm->groupNext;
-        } while (comm);
+      for (int type = 0; type < ncclGroupTaskTypeNum; ++type) {
+        if (ncclGroupCommHead[type]) {
+          ncclComm_t comm = ncclGroupCommHead[type];
+          do {
+            NCCLCHECKGOTO(ncclCommSetAsyncError(comm, ncclInProgress), ret, fail);
+            /* link group job to communicators. */
+            comm->groupJob = ncclGroupJobMainPtr;
+            comm = comm->groupNext[type];
+          } while (comm);
+        }
       }
 
       ncclGroupJobMainPtr->base.func = groupLaunchNonBlocking;
@@ -588,7 +660,7 @@ ncclResult_t ncclGroupEndInternal(ncclSimInfo_t* simInfo) {
 exit:
   return ret;
 fail:
-  groupCleanup(&ncclGroupCommHead, &ncclGroupCommPreconnectHead, &ncclAsyncJobs, &ncclGroupError, &ncclGroupBlocking, &ncclGroupJobAbortFlag, ret);
+  groupCleanup(ncclGroupCommHead, &ncclGroupCommPreconnectHead, &ncclAsyncJobs, &ncclGroupError, &ncclGroupBlocking, &ncclGroupJobAbortFlag, ret);
   goto exit;
 }
 

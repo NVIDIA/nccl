@@ -13,6 +13,7 @@
 #include "assert.h"
 #include "bootstrap.h"
 #include "channel.h"
+#include "register_inline.h"
 
 int64_t ncclParamGdrCopySyncEnable();
 int64_t ncclParamGdrCopyFlushEnable();
@@ -1188,7 +1189,7 @@ static ncclResult_t collnetRegisterBuffer(struct ncclComm* comm, const void* use
       goto exit;
     } else {
       /* start register collnet buffer */
-      struct collnetRegInfo info = { regRecord->addr, regRecord->pages * comm->regCache.pageSize };
+      struct collnetRegInfo info = { regRecord->begAddr, regRecord->endAddr - regRecord->begAddr };
       void* handle = NULL;
       struct ncclConnInfo* conn = (type == collNetRecv) ? &comm->channels[0].peers[comm->nRanks]->recv[type].conn : &comm->channels[0].peers[comm->nRanks]->send[type].conn;
 

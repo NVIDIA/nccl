@@ -1,3 +1,41 @@
+# Symmetric Memory Preview branch
+
+This is a preview branch for symmetric memory registration, along with optimized kernels for symmetric memory.
+
+## New API
+
+This adds new symmetric registration and de-registration APIs. Their usage is similar to `ncclCommRegister`,
+except those are collective calls, i.e. they need to be called by all ranks with the same size.
+
+```
+ncclResult_t  ncclCommSymmetricRegister(const ncclComm_t comm, void* buff, size_t size, void** handle);
+ncclResult_t  ncclCommSymmetricDeregister(const ncclComm_t comm, void* handle);
+```
+
+Memory passed to `ncclCommsymmetricRegister` needs to be allocated with `cuMem*` APIs. Using `ncclMemAlloc`
+to allocate that memory is recommended. Memory allocated through `cudaMalloc` is not supported.
+
+## Collective calls
+
+Collective operations can be called on symmetrically registered memory to improve their performance,
+leveraging the symmetric nature of memory.
+This implies extra constraints for collective calls, as each rank has to call collective operations with
+aligned offsets between ranks.
+
+## Current limitations
+
+The current implementation only provides symmetric kernels optimized for NVLink operations. Network
+operations are not yet implemented and communicators with a network dimension will therefore fallback to
+non-symmetric kernels.
+
+The code also requires sm70 or later.
+
+## Running NCCL perf tests with symmetric memory
+
+To use the new kernels, we need the performance tests to register memory using the new registration APIs.
+Make sure to checkout the `v2.27_sym_memory` branch of the NCCL perf tests, and run with `-R 2` to enable
+symmetric registration.
+
 # NCCL
 
 Optimized primitives for inter-GPU communication.

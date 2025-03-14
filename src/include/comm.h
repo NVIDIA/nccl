@@ -17,6 +17,7 @@
 #include "register.h"
 #include "graph.h"
 #include "profiler.h"
+#include "allocator.h"
 
 #if CUDART_VERSION < 9000
 struct cudaLaunchParams {
@@ -243,10 +244,14 @@ struct ncclKernelPlan {
 
   bool persistent; // aka captured in a graph
   bool isHostCbEnq;
+  bool isSymColl;
   enum ncclDevWorkStorageType workStorageType;
   bool kernelSpecialized;
-  void *kernelFn;
-  struct ncclDevKernelArgs* kernelArgs;
+  void* kernelFn;
+  union {
+    struct ncclDevKernelArgs* kernelArgs;
+    struct ncclSymDevArgs* kernelSymArgs;
+  };
   size_t kernelArgsSize;
   uint64_t channelMask; // bitset of which channels are present
   bool hasProxyOps; // does any channel have a non-empty proxyOpQueue
@@ -355,6 +360,7 @@ struct ncclKernelPlanner {
   struct Peer* peers/*[nRanks]*/;
   int nTasksColl, nTasksP2p;
   bool persistent;
+  bool isSymColl;
 
   // The list of user streams aggregated over all tasks present.
   struct ncclCudaStreamList* streams;
@@ -403,6 +409,12 @@ struct ncclKernelPlanner {
 };
 
 #define NCCL_MAGIC 0x0280028002800280 // Nickel atomic number is 28.
+
+typedef enum ncclGroupTaskType {
+  ncclGroupTaskTypeCollective = 0,
+  ncclGroupTaskTypeSymRegister = 1,
+  ncclGroupTaskTypeNum = 2,
+} ncclGroupTaskType_t;
 
 struct ncclComm {
   uint64_t startMagic;
@@ -515,6 +527,7 @@ struct ncclComm {
 
   // Device side of the communicator (for cudaFree's)
   struct ncclDevComm* devComm; // actually = &ncclDevCommAndChannels::comm
+  struct ncclSymDevComm symDevComm;
 
   uint32_t workArgsBytes; // max size of kernel args
   uint32_t workFifoBytes; // size of workFifoBuf, power of 2
@@ -568,7 +581,7 @@ struct ncclComm {
 
   // Next comm in this thread's active ncclGroup[Start|End](). Holds "0x1" when
   // this comm is not yet in a group.
-  struct ncclComm* groupNext;
+  struct ncclComm* groupNext[ncclGroupTaskTypeNum];
   // Subset of those in groupNext list. Holds 0x1 if not needing preconnect.
   struct ncclComm* preconnectNext;
   int localPersistentRefs; // number of persistent plan-lists capturing this comm
@@ -616,6 +629,13 @@ struct ncclComm {
   bool useNetPXN;
   bool useGdr;
   int splitCount;
+  // symmetric buffer
+  uint8_t* baseUCSymPtr;
+  uint8_t* baseMCSymPtr;
+  size_t baseStride;
+  size_t symAllocHead;
+  CUmemGenericAllocationHandle symMCHandle;
+  struct ncclIntruQueue<struct ncclSymRegTask, &ncclSymRegTask::next> symRegTaskQueue;
   uint64_t endMagic;
 };
 

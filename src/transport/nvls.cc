@@ -13,6 +13,7 @@
 #include "enqueue.h"
 #include "register.h"
 #include "transport.h"
+#include "register_inline.h"
 
 #if CUDART_VERSION >= 12010
 
@@ -529,9 +530,9 @@ ncclResult_t tryRegisterBuffer(struct ncclComm *comm, uintptr_t userBuff, size_t
   if (userBuff) {
     NCCLCHECKGOTO(ncclRegFind(comm, (void*)userBuff, buffSize, &regRecord), ret, fail);
     if (regRecord) {
-      CUDACHECKGOTO(cudaPointerGetAttributes(&attr, (void*)regRecord->addr), ret, fail);
+      CUDACHECKGOTO(cudaPointerGetAttributes(&attr, (void*)regRecord->begAddr), ret, fail);
       if (attr.type == cudaMemoryTypeDevice) {
-        size_t regSize = regRecord->pages * comm->regCache.pageSize;
+        size_t regSize = regRecord->endAddr - regRecord->begAddr;
         memset(&mcprop, 0, sizeof(CUmulticastObjectProp));
         mcprop.numDevices = comm->localRanks;
         mcprop.handleTypes = ncclCuMemHandleType;
@@ -546,8 +547,8 @@ ncclResult_t tryRegisterBuffer(struct ncclComm *comm, uintptr_t userBuff, size_t
         ucprop.requestedHandleTypes = ncclCuMemHandleType;
         CUCHECKGOTO(cuMemGetAllocationGranularity(&ucgran, &ucprop, CU_MEM_ALLOC_GRANULARITY_RECOMMENDED), ret, fail);
 
-        CUCHECKGOTO(cuMemGetAddressRange((CUdeviceptr*)&regRecord->baseAddr, &regRecord->baseSize, (CUdeviceptr)regRecord->addr), ret, fail);
-        if (regRecord->addr % ucgran == 0) {
+        CUCHECKGOTO(cuMemGetAddressRange((CUdeviceptr*)&regRecord->baseAddr, &regRecord->baseSize, (CUdeviceptr)regRecord->begAddr), ret, fail);
+        if (regRecord->baseAddr % ucgran == 0) {
           if (regSize % ucgran != 0) {
             regRecord->regUCSize = ALIGN_SIZE(regSize, ucgran);
           } else {
@@ -555,7 +556,7 @@ ncclResult_t tryRegisterBuffer(struct ncclComm *comm, uintptr_t userBuff, size_t
           }
           regRecord->state |= NVLS_REG_POSSIBLE;
           memcpy(&regData[comm->localRank].reg, regRecord, sizeof(struct ncclReg));
-          regData[comm->localRank].offset = userBuff - regRecord->addr;
+          regData[comm->localRank].offset = userBuff - regRecord->begAddr;
         }
       }
 
@@ -595,7 +596,7 @@ ncclResult_t tryRegisterBuffer(struct ncclComm *comm, uintptr_t userBuff, size_t
   // Coverity complains that regRecord could be NULL.  That won't in practice be the case because we've already checked
   // (regData[i].reg.state & NVLS_REG_POSSIBLE) of all local ranks, which would catch it and bail out.
   // coverity[var_deref_op]
-  CUCHECKGOTO(cuMulticastBindAddr(mcHandle, 0, (CUdeviceptr)regRecord->addr, ucsize, 0), ret, fail);
+  CUCHECKGOTO(cuMulticastBindAddr(mcHandle, 0, (CUdeviceptr)regRecord->begAddr, ucsize, 0), ret, fail);
 
   // Create a VA for the NVLS
   CUCHECKGOTO(cuMemAddressReserve(&regPtr, mcsize, mcgran, 0U, 0), ret, fail);
@@ -610,7 +611,7 @@ ncclResult_t tryRegisterBuffer(struct ncclComm *comm, uintptr_t userBuff, size_t
   regRecord->mcHandle = mcHandle;
   regRecord->state |= NVLS_REG_COMPLETE;
   /* get all buffer addresses */
-  regRecord->caddrs[comm->localRank] = regRecord->addr;
+  regRecord->caddrs[comm->localRank] = regRecord->begAddr;
   NCCLCHECKGOTO(ncclShmemAllgather(comm, &comm->nvlsResources->nvlsShmem, regRecord->caddrs + comm->localRank, regRecord->caddrs, sizeof(uintptr_t)), ret, fail);
 
   /* Although registration is done, we still need to check whether the offsets are same among ranks. */
@@ -642,23 +643,23 @@ static ncclResult_t nvlsRegisterBuffer(struct ncclComm *comm, const void *sendbu
 
   if (sendRegRecord) {
     memcpy(&regData[comm->localRank * 2].reg, sendRegRecord, sizeof(struct ncclReg));
-    regData[comm->localRank * 2].offset = (uintptr_t)sendbuff - sendRegRecord->addr;
+    regData[comm->localRank * 2].offset = (uintptr_t)sendbuff - sendRegRecord->begAddr;
   }
 
   if (recvRegRecord) {
     memcpy(&regData[comm->localRank * 2 + 1].reg, recvRegRecord, sizeof(struct ncclReg));
-    regData[comm->localRank * 2 + 1].offset = (uintptr_t)recvbuff - recvRegRecord->addr;
+    regData[comm->localRank * 2 + 1].offset = (uintptr_t)recvbuff - recvRegRecord->begAddr;
   }
 
   NCCLCHECKGOTO(ncclShmemAllgather(comm, &comm->nvlsResources->nvlsShmem, regData + comm->localRank * 2, regData, sizeof(struct localRegData) * 2), ret, fail);
 
   /* first check whether all local ranks find their registered buffer */
   for (int i = 0; i < comm->localRanks; ++i) {
-    if ((regData[i * 2].reg.state & NVLS_REG_COMPLETE) == 0 || regData[comm->localRank * 2].reg.caddrs[i] != regData[i * 2].reg.addr) {
+    if ((regData[i * 2].reg.state & NVLS_REG_COMPLETE) == 0 || regData[comm->localRank * 2].reg.caddrs[i] != regData[i * 2].reg.begAddr) {
       sendNeedReg = true;
     }
 
-    if ((regData[i * 2 + 1].reg.state & NVLS_REG_COMPLETE) == 0 || regData[comm->localRank * 2 + 1].reg.caddrs[i] != regData[i * 2 + 1].reg.addr) {
+    if ((regData[i * 2 + 1].reg.state & NVLS_REG_COMPLETE) == 0 || regData[comm->localRank * 2 + 1].reg.caddrs[i] != regData[i * 2 + 1].reg.begAddr) {
       recvNeedReg = true;
     }
 
@@ -815,6 +816,81 @@ ncclResult_t ncclNvlsGraphRegisterBuffer(
   return ncclSuccess;
 }
 
+ncclResult_t ncclNvlsSymmetricInit(struct ncclComm* comm) {
+  ncclResult_t ret = ncclSuccess;
+  if (comm && comm->nvlsSupport) {
+    CUmulticastObjectProp mcprop = {};
+    CUmemGenericAllocationHandle mcHandle;
+    char shareableHandle[NVLS_HANDLE_SIZE];
+    CUmemAccessDesc accessDesc = {};
+
+    mcprop.numDevices = comm->localRanks;
+    mcprop.handleTypes = ncclCuMemHandleType;
+    mcprop.flags = 0;
+    mcprop.size = comm->baseStride;
+
+    if (comm->localRank == 0) {
+      NCCLCHECKGOTO(nvlsGroupCreate(comm, &mcprop, comm->localRank, comm->localRanks, &mcHandle, shareableHandle), ret, fail);
+      NCCLCHECKGOTO(bootstrapIntraNodeBroadcast(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, 0, shareableHandle, NVLS_HANDLE_SIZE), ret, fail);
+    } else {
+      NCCLCHECKGOTO(bootstrapIntraNodeBroadcast(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, 0, shareableHandle, NVLS_HANDLE_SIZE), ret, fail);
+      NCCLCHECKGOTO(nvlsGroupConnect(comm, shareableHandle, comm->localRankToRank[0], &mcHandle), ret, fail);
+    }
+
+    CUCHECKGOTO(cuMulticastAddDevice(mcHandle, comm->cudaDev), ret, fail);
+    CUCHECKGOTO(cuMemAddressReserve((CUdeviceptr*)&comm->baseMCSymPtr, comm->baseStride, NCCL_MAX_PAGE_SIZE, 0, 0), ret, fail);
+    CUCHECKGOTO(cuMemMap((CUdeviceptr)comm->baseMCSymPtr, comm->baseStride, 0, mcHandle, 0), ret, fail);
+    accessDesc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
+    accessDesc.location.id = comm->cudaDev;
+    accessDesc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
+    CUCHECKGOTO(cuMemSetAccess((CUdeviceptr)comm->baseMCSymPtr, comm->baseStride, &accessDesc, 1), ret, fail);
+    comm->symMCHandle = mcHandle;
+  }
+exit:
+  return ret;
+fail:
+  goto exit;
+}
+
+ncclResult_t ncclNvlsSymmetricFinalize(struct ncclComm* comm) {
+  ncclResult_t ret = ncclSuccess;
+  if (comm && comm->nvlsSupport && comm->baseMCSymPtr) {
+    CUCHECKGOTO(cuMemUnmap((CUdeviceptr)comm->baseMCSymPtr, comm->baseStride), ret, fail);
+    CUCHECKGOTO(cuMemAddressFree((CUdeviceptr)comm->baseMCSymPtr, comm->baseStride), ret, fail);
+    CUCHECKGOTO(cuMemRelease(comm->symMCHandle), ret, fail);
+  }
+exit:
+  return ret;
+fail:
+  goto exit;
+}
+
+ncclResult_t ncclNvlsSymmetricMap(struct ncclComm* comm, size_t offset, size_t ucsize, void* ucaddr) {
+  ncclResult_t ret = ncclSuccess;
+  assert((uintptr_t)ucaddr % NCCL_REC_PAGE_SIZE == 0 && ucsize % NCCL_REC_PAGE_SIZE == 0);
+  if (comm && comm->nvlsSupport && ucaddr && ucsize > 0) {
+    CUCHECKGOTO(cuMulticastBindAddr(comm->symMCHandle, offset, (CUdeviceptr)ucaddr, ucsize, 0), ret, fail);
+    INFO(NCCL_ALLOC, "NVLS symmetric alloc mc buffer ptr %p offset %ld UC addr %p UC size %ld symAllocHead %ld", comm->baseMCSymPtr + offset, offset, ucaddr, ucsize, comm->symAllocHead);
+  }
+
+exit:
+  return ret;
+fail:
+  goto exit;
+}
+
+ncclResult_t ncclNvlsSymmetricFree(struct ncclComm* comm, size_t ucsize, void* ucaddr) {
+  ncclResult_t ret = ncclSuccess;
+  if (comm && comm->nvlsSupport && ucaddr && ucsize > 0) {
+    size_t offset = (size_t)ucaddr - ((size_t)comm->baseUCSymPtr + comm->localRank * comm->baseStride);
+    CUCHECKGOTO(cuMulticastUnbind(comm->symMCHandle, comm->cudaDev, offset, ucsize), ret, fail);
+  }
+exit:
+  return ret;
+fail:
+  goto exit;
+}
+
 #else
 
 /*
@@ -857,6 +933,22 @@ ncclResult_t ncclNvlsLocalRegisterBuffer(struct ncclComm *comm, const void *send
 }
 
 ncclResult_t ncclNvlsDeregBuffer(struct ncclComm* comm, CUmemGenericAllocationHandle *mcHandler, CUdeviceptr ptr, int dev, size_t ucsize, size_t mcsize) {
+  return ncclSuccess;
+}
+
+ncclResult_t ncclNvlsSymmetricInit(struct ncclComm* comm) {
+  return ncclSuccess;
+}
+
+ncclResult_t ncclNvlsSymmetricMap(struct ncclComm* comm, size_t offset, size_t ucsize, void* ucaddr) {
+  return ncclSuccess;
+}
+
+ncclResult_t ncclNvlsSymmetricFree(struct ncclComm* comm, size_t ucsize, void* ucaddr) {
+  return ncclSuccess;
+}
+
+ncclResult_t ncclNvlsSymmetricFinalize(struct ncclComm* comm) {
   return ncclSuccess;
 }
 

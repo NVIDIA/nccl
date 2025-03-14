@@ -10,6 +10,7 @@
 #include "nccl.h"
 #include "nccl_common.h"
 #include "bitops.h"
+#include "symmetric.h"
 #include <algorithm>
 #include <stdint.h>
 #include <sys/types.h>
@@ -505,7 +506,6 @@ extern int const ncclDevKernelCount;
 extern void* const ncclDevKernelList[/*ncclDevKernelCount*/];
 
 // Table of most specialized kernel function to run given func index.
-extern int const ncclDevFuncIdCount;
 extern int const ncclDevFuncRowToId[];
 extern void* const ncclDevKernelForFunc[/*funcIndex*/];
 extern bool const ncclDevKernelForFuncIsSpecialized[/*funcIndex*/];
@@ -533,11 +533,7 @@ inline bool ncclNvlsSupported(int devRedOp, int type) {
 
 // `ncclDevFuncIndex()` needs to be in sync with "all_functions()" in "src/device/generate.py"
 inline int ncclDevFuncId(int coll, int devRedOp, int type, int algo, int proto) {
-  #if defined(__CUDA_BF16_TYPES_EXIST__)
   constexpr int NumTypes = ncclNumTypes;
-  #else
-  constexpr int NumTypes = ncclNumTypes + 1;
-  #endif
   int row;
   do {
     row = 0; // ncclDevFuncIndex_P2p
@@ -562,7 +558,7 @@ inline int ncclDevFuncId(int coll, int devRedOp, int type, int algo, int proto) 
     }
     row += nAlgos*NCCL_NUM_PROTOCOLS;
 
-    nAlgos = 6;
+    nAlgos = 6; // TREE RING COLLNET_DIRECT COLLNET_CHAIN NVLS NVLS_TREE
     if (coll == ncclFuncAllReduce) {
       row += ((devRedOp*NumTypes + type)*nAlgos + algo)*NCCL_NUM_PROTOCOLS + proto;
       break;

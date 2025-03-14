@@ -16,6 +16,7 @@
 #include "transport.h"
 #include "shm.h"
 #include <assert.h>
+#include "register_inline.h"
 
 static_assert(sizeof(ncclNetHandle_t) <= CONNECT_SIZE, "NET Connect info is too large");
 
@@ -1547,9 +1548,9 @@ static ncclResult_t netRegisterBuffer(ncclComm* comm, const void* userbuff, size
       if (found) {
         *outRegBufFlag = 1;
         outHandle[p] = netHandle->handle;
-        INFO(NCCL_REG, "rank %d - NET reuse buffer %p size %ld (baseAddr %p size %ld) handle %p", comm->rank, userbuff, buffSize, (void*)regRecord->addr, regRecord->pages * comm->regCache.pageSize, netHandle->handle);
+        INFO(NCCL_REG, "rank %d - NET reuse buffer %p size %ld (baseAddr %p size %ld) handle %p", comm->rank, userbuff, buffSize, (void*)regRecord->begAddr, regRecord->endAddr - regRecord->begAddr, netHandle->handle);
       } else {
-        struct netRegInfo info = { regRecord->addr, regRecord->pages * comm->regCache.pageSize };
+        struct netRegInfo info = { regRecord->begAddr, regRecord->endAddr - regRecord->begAddr };
         void* handle = NULL;
 
         if (peerConn->conn.flags & NCCL_DIRECT_NIC) {

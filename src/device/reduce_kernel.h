@@ -38,18 +38,18 @@ struct IsFloatingPoint<double>: std::true_type {};
 //  3. Have constructor taking `uint64_t opArg`.
 
 template<typename T>
-struct FuncCopy { using EltType = T; __device__ FuncCopy(uint64_t opArg=0) {}; };
+struct FuncCopy { using EltType = T; __device__ __forceinline__ FuncCopy(uint64_t opArg=0) {}; };
 template<typename T>
-struct FuncSum  { using EltType = T; __device__ FuncSum(uint64_t opArg=0) {}; };
+struct FuncSum  { using EltType = T; __device__ __forceinline__ FuncSum(uint64_t opArg=0) {}; };
 template<typename T>
-struct FuncProd { using EltType = T; __device__ FuncProd(uint64_t opArg=0) {}; };
+struct FuncProd { using EltType = T; __device__ __forceinline__ FuncProd(uint64_t opArg=0) {}; };
 
 template<typename T>
 struct FuncMinMax {
   using EltType = T;
   BytePack<sizeof(T)> xormask; // only used by integers
   bool isMinNotMax; // only used by floats
-  __device__ FuncMinMax(uint64_t opArg=0) {
+  __device__ __forceinline__ FuncMinMax(uint64_t opArg=0) {
     xormask.native = opArg;
     isMinNotMax = (opArg&1)==0;
   }
@@ -64,13 +64,13 @@ template<typename T> struct FuncSumPostDiv;
 template<typename Fn>
 struct RedOpArg { // default case: no argument
   static constexpr bool ArgUsed = false;
-  __device__ static uint64_t loadArg(void *ptr) { return 0; }
+  __device__ __forceinline__ static uint64_t loadArg(void *ptr) { return 0; }
 };
 
 template<typename T>
 struct RedOpArg<FuncMinMax<T>> {
   static constexpr bool ArgUsed = true;
-  __device__ static uint64_t loadArg(void *ptr) {
+  __device__ __forceinline__ static uint64_t loadArg(void *ptr) {
     union { uint64_t u64; T val; };
     u64 = 0;
     val = *(T*)ptr;
@@ -83,6 +83,11 @@ struct RedOpArg<FuncMinMax<T>> {
 // and a number of elements in a pack, will reduce, preOp, or postOp a pack
 // of elements. These classes are intended to be specialized for specific
 // combinations of reduction function and pack size.
+
+template<typename A, typename B, int EltPerPackA>
+struct Apply_Cast/*{
+  static BytePack<EltPerPackA*sizeof(B)/sizeof(A)> cast(BytePack<EltPerPackA*sizeof(A)> a);
+}*/;
 
 template<typename Fn, int EltPerPack>
 struct Apply_Reduce /*{
@@ -111,16 +116,60 @@ struct Apply_LoadMultimem/*{
   static BytePack<BytePerPack> load(Fn fn, uintptr_t addr);
 }*/;
 
+
+// Helpers for dealing with BytePack<0>'s
+template<typename A, typename B, int EltPerPack>
+struct Apply_Cast_MaybeEmpty: Apply_Cast<A, B, EltPerPack> {};
+template<typename A, typename B>
+struct Apply_Cast_MaybeEmpty<A, B, /*EltPerPack=*/0> {
+  __device__ constexpr static BytePack<0> cast(BytePack<0> a) { return {}; }
+};
+
+template<typename Fn, int EltPerPack>
+struct Apply_Reduce_MaybeEmpty: Apply_Reduce<Fn, EltPerPack> {};
+template<typename Fn>
+struct Apply_Reduce_MaybeEmpty<Fn, 0> {
+  __device__ constexpr static BytePack<0> reduce(Fn fn, BytePack<0> a, BytePack<0> b) { return {}; }
+};
+
+template<typename Fn, int EltPerPack>
+struct Apply_PreOp_MaybeEmpty: Apply_PreOp<Fn, EltPerPack> {};
+template<typename Fn>
+struct Apply_PreOp_MaybeEmpty<Fn, 0> {
+  static constexpr bool IsIdentity = true;
+  __device__ constexpr static BytePack<0> preOp(Fn fn, BytePack<0> a) { return {}; }
+};
+
+template<typename Fn, int EltPerPack>
+struct Apply_PostOp_MaybeEmpty: Apply_PostOp<Fn, EltPerPack> {};
+template<typename Fn>
+struct Apply_PostOp_MaybeEmpty<Fn, 0> {
+  static constexpr bool IsIdentity = true;
+  __device__ constexpr static BytePack<0> postOp(Fn fn, BytePack<0> a) { return {}; }
+};
+
+template<typename Fn, int BytePerPack>
+struct Apply_LoadMultimem_MaybeEmpty: Apply_LoadMultimem<Fn, BytePerPack> {};
+template<typename Fn>
+struct Apply_LoadMultimem_MaybeEmpty<Fn, 0> {
+  __device__ constexpr static BytePack<0> load(Fn fn, uintptr_t addr) { return {}; }
+};
+
 ////////////////////////////////////////////////////////////////////////////////
 // Public API for calling the trait classes. These take the data elements as a
 // pack of any type, which could be a BytePack<?> or any integral type (uint64_t,
 // uint32_t, etc.), and will return a new pack where each element has been
 // transformed appropriately.
 
+template<typename A, typename B, typename PackA>
+__device__ __forceinline__ BytePack<BytePackOf<PackA>::Size*sizeof(B)/sizeof(A)> applyCast(PackA a) {
+  return Apply_Cast_MaybeEmpty<A, B, BytePackOf<PackA>::Size/sizeof(A)>::cast(toPack(a));
+}
+
 template<typename Fn, typename Pack>
 __device__ __forceinline__ Pack applyReduce(Fn fn, Pack a, Pack b) {
   return fromPack<Pack>(
-    Apply_Reduce<Fn, BytePackOf<Pack>::Size/sizeof(typename Fn::EltType)>
+    Apply_Reduce_MaybeEmpty<Fn, BytePackOf<Pack>::Size/sizeof(typename Fn::EltType)>
       ::reduce(fn, toPack(a), toPack(b))
   );
 }
@@ -128,7 +177,7 @@ __device__ __forceinline__ Pack applyReduce(Fn fn, Pack a, Pack b) {
 template<typename Fn, typename Pack>
 __device__ __forceinline__ Pack applyPreOp(Fn fn, Pack a) {
   return fromPack<Pack>(
-    Apply_PreOp<Fn, BytePackOf<Pack>::Size/sizeof(typename Fn::EltType)>
+    Apply_PreOp_MaybeEmpty<Fn, BytePackOf<Pack>::Size/sizeof(typename Fn::EltType)>
       ::preOp(fn, toPack(a))
   );
 }
@@ -136,15 +185,99 @@ __device__ __forceinline__ Pack applyPreOp(Fn fn, Pack a) {
 template<typename Fn, typename Pack>
 __device__ __forceinline__ Pack applyPostOp(Fn fn, Pack a) {
   return fromPack<Pack>(
-    Apply_PostOp<Fn, BytePackOf<Pack>::Size/sizeof(typename Fn::EltType)>
+    Apply_PostOp_MaybeEmpty<Fn, BytePackOf<Pack>::Size/sizeof(typename Fn::EltType)>
       ::postOp(fn, toPack(a))
   );
 }
 
 template<typename Fn, int BytePerPack>
 __device__ __forceinline__ BytePack<BytePerPack> applyLoadMultimem(Fn fn, uintptr_t addr) {
-  return Apply_LoadMultimem<Fn, BytePerPack>::load(fn, addr);
+  return Apply_LoadMultimem_MaybeEmpty<Fn, BytePerPack>::load(fn, addr);
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// Apply_Cast
+
+template<typename A, typename B, int EltPerPack>
+struct Apply_Cast {
+  __device__ __forceinline__ static BytePack<EltPerPack*sizeof(B)> cast(BytePack<EltPerPack*sizeof(A)> a) {
+    BytePack<EltPerPack*sizeof(B)> b;
+    b.half[0] = Apply_Cast<A, B, EltPerPack/2>::cast(a.half[0]);
+    b.half[1] = Apply_Cast<A, B, EltPerPack/2>::cast(a.half[1]);
+    return b;
+  }
+};
+
+template<typename A, typename B>
+struct Apply_Cast<A, B, /*EltPerPack=*/1> {
+  __device__ __forceinline__ static BytePack<sizeof(B)> cast(BytePack<sizeof(A)> a) {
+    return toPack(B(fromPack<A>(a)));
+  }
+};
+
+template<>
+struct Apply_Cast<__half, float, /*EltPerPack=*/1> {
+  __device__ __forceinline__ static BytePack<sizeof(float)> cast(BytePack<sizeof(__half)> a) {
+    return toPack(__half2float(fromPack<__half>(a)));
+  }
+};
+template<>
+struct Apply_Cast<float, __half, /*EltPerPack=*/1> {
+  __device__ __forceinline__ static BytePack<sizeof(__half)> cast(BytePack<sizeof(float)> a) {
+    return toPack(__float2half_rn(fromPack<float>(a)));
+  }
+};
+
+template<>
+struct Apply_Cast<__half, float, /*EltPerPack=*/2> {
+  __device__ __forceinline__ static BytePack<4*2> cast(BytePack<2*2> a) {
+    return toPack(__half22float2(fromPack<__half2>(a)));
+  }
+};
+template<>
+struct Apply_Cast<float, __half, /*EltPerPack=*/2> {
+  __device__ __forceinline__ static BytePack<2*2> cast(BytePack<4*2> a) {
+    return toPack(__float22half2_rn(fromPack<float2>(a)));
+  }
+};
+
+#if defined(__CUDA_BF16_TYPES_EXIST__)
+template<>
+struct Apply_Cast<__nv_bfloat16, float, /*EltPerPack=*/2> {
+  __device__ __forceinline__ static BytePack<4*2> cast(BytePack<2*2> a) {
+    return toPack(__bfloat1622float2(fromPack<__nv_bfloat162>(a)));
+  }
+};
+template<>
+struct Apply_Cast<float ,__nv_bfloat16, /*EltPerPack=*/2> {
+  __device__ __forceinline__ static BytePack<2*2> cast(BytePack<4*2> a) {
+    return toPack(__float22bfloat162_rn(fromPack<float2>(a)));
+  }
+};
+#endif
+
+#define EASY_CAST(A, B, EltPerPack, VecA, VecB) \
+  template<> \
+  struct Apply_Cast<A, B, EltPerPack> { \
+    __device__ __forceinline__ static BytePack<sizeof(B)*EltPerPack> cast(BytePack<sizeof(A)*EltPerPack> a) { \
+      return toPack(VecB(fromPack<VecA>(a))); \
+    } \
+  }; \
+  template<> \
+  struct Apply_Cast<B, A, EltPerPack> { \
+    __device__ __forceinline__ static BytePack<sizeof(A)*EltPerPack> cast(BytePack<sizeof(B)*EltPerPack> b) { \
+      return toPack(VecA(fromPack<VecB>(b))); \
+    } \
+  };
+
+#if defined(__CUDA_FP8_TYPES_EXIST__)
+EASY_CAST(__nv_fp8_e5m2, float, 2, __nv_fp8x2_e5m2, float2)
+EASY_CAST(__nv_fp8_e5m2, float, 4, __nv_fp8x4_e5m2, float4)
+
+EASY_CAST(__nv_fp8_e4m3, float, 2, __nv_fp8x2_e4m3, float2)
+EASY_CAST(__nv_fp8_e4m3, float, 4, __nv_fp8x4_e4m3, float4)
+#endif
+#undef EASY_CAST
 
 ////////////////////////////////////////////////////////////////////////////////
 // Apply_Reduce
@@ -152,7 +285,7 @@ __device__ __forceinline__ BytePack<BytePerPack> applyLoadMultimem(Fn fn, uintpt
 // Nonsensical base case
 template<typename Fn>
 struct Apply_Reduce<Fn, /*EltPerPack=*/0> {
-  __device__ static BytePack<0> reduce(Fn fn, BytePack<0> a, BytePack<0> b) {
+  __device__ __forceinline__ static BytePack<0> reduce(Fn fn, BytePack<0> a, BytePack<0> b) {
     return  {};
   }
 };
@@ -164,7 +297,7 @@ struct Apply_Reduce<Fn, /*EltPerPack=*/0> {
 template<typename Fn, int EltPerPack>
 struct Apply_Reduce {
   template<int Size>
-  __device__ static BytePack<Size> reduce(Fn fn, BytePack<Size> a, BytePack<Size> b) {
+  __device__ __forceinline__ static BytePack<Size> reduce(Fn fn, BytePack<Size> a, BytePack<Size> b) {
     a.half[0] = Apply_Reduce<Fn, EltPerPack/2>::reduce(fn, a.half[0], b.half[0]);
     a.half[1] = Apply_Reduce<Fn, EltPerPack/2>::reduce(fn, a.half[1], b.half[1]);
     return a;
@@ -174,25 +307,25 @@ struct Apply_Reduce {
 // Base case definitions (EltPerPack == 1)
 template<typename T>
 struct Apply_Reduce<FuncCopy<T>, /*EltPerPack=*/1> {
-  __device__ static BytePack<sizeof(T)> reduce(FuncCopy<T> fn, BytePack<sizeof(T)> a, BytePack<sizeof(T)> b) {
+  __device__ __forceinline__ static BytePack<sizeof(T)> reduce(FuncCopy<T> fn, BytePack<sizeof(T)> a, BytePack<sizeof(T)> b) {
     return a;
   }
 };
 template<typename T>
 struct Apply_Reduce<FuncSum<T>, /*EltPerPack=*/1> {
-  __device__ static BytePack<sizeof(T)> reduce(FuncSum<T> fn, BytePack<sizeof(T)> a, BytePack<sizeof(T)> b) {
+  __device__ __forceinline__ static BytePack<sizeof(T)> reduce(FuncSum<T> fn, BytePack<sizeof(T)> a, BytePack<sizeof(T)> b) {
     return toPack<T>(fromPack<T>(a) + fromPack<T>(b));
   }
 };
 template<typename T>
 struct Apply_Reduce<FuncProd<T>, /*EltPerPack=*/1> {
-  __device__ static BytePack<sizeof(T)> reduce(FuncProd<T> fn, BytePack<sizeof(T)> a, BytePack<sizeof(T)> b) {
+  __device__ __forceinline__ static BytePack<sizeof(T)> reduce(FuncProd<T> fn, BytePack<sizeof(T)> a, BytePack<sizeof(T)> b) {
     return toPack<T>(fromPack<T>(a) * fromPack<T>(b));
   }
 };
 template<typename T>
 struct Apply_Reduce<FuncMinMax<T>, /*EltPerPack=*/1> {
-  __device__ static BytePack<sizeof(T)> reduce(FuncMinMax<T> fn, BytePack<sizeof(T)> a, BytePack<sizeof(T)> b) {
+  __device__ __forceinline__ static BytePack<sizeof(T)> reduce(FuncMinMax<T> fn, BytePack<sizeof(T)> a, BytePack<sizeof(T)> b) {
     return (a.native ^ fn.xormask.native) < (b.native ^ fn.xormask.native) ? a : b;
   }
 };
@@ -200,7 +333,7 @@ struct Apply_Reduce<FuncMinMax<T>, /*EltPerPack=*/1> {
 // Optimizations for specfic types and element count combinations:
 template<>
 struct Apply_Reduce<FuncSum<uint8_t>, /*EltPerPack=*/4> {
-  __device__ static BytePack<4> reduce(FuncSum<uint8_t> fn, BytePack<4> a, BytePack<4> b) {
+  __device__ __forceinline__ static BytePack<4> reduce(FuncSum<uint8_t> fn, BytePack<4> a, BytePack<4> b) {
     constexpr uint32_t even = 0x00ff00ffu;
     uint32_t x = (a.native &  even) + (b.native &  even);
     uint32_t y = (a.native & ~even) + (b.native & ~even);
@@ -236,7 +369,7 @@ struct Apply_Reduce<FuncMinMax<uint8_t>, /*EltPerPack=*/4> {
 
 template<>
 struct Apply_Reduce<FuncProd<uint8_t>, /*EltPerPack=*/4> {
-  __device__ static BytePack<4> reduce(FuncProd<uint8_t> fn, BytePack<4> apack, BytePack<4> bpack) {
+  __device__ __forceinline__ static BytePack<4> reduce(FuncProd<uint8_t> fn, BytePack<4> apack, BytePack<4> bpack) {
     uint32_t a = apack.native;
     uint32_t b = bpack.native;
     uint32_t ab0 = (a*b) & 0xffu;
@@ -332,7 +465,7 @@ template<typename Fn, int EltPerPack>
 struct Apply_PreOp {
   static constexpr bool IsIdentity = Apply_PreOp<Fn, EltPerPack/2>::IsIdentity;
   template<int Size>
-  __device__ static BytePack<Size> preOp(Fn fn, BytePack<Size> a) {
+  __device__ __forceinline__ static BytePack<Size> preOp(Fn fn, BytePack<Size> a) {
     #if __cpp_if_constexpr
     if constexpr(!IsIdentity) {
     #else
@@ -352,7 +485,7 @@ template<typename Fn>
 struct Apply_PreOp<Fn, /*EltPerPack=*/1> {
   static constexpr bool IsIdentity = true;
   template<int Size>
-  __device__ static BytePack<Size> preOp(Fn fn, BytePack<Size> a) {
+  __device__ __forceinline__ static BytePack<Size> preOp(Fn fn, BytePack<Size> a) {
     return a;
   }
 };
@@ -360,7 +493,7 @@ struct Apply_PreOp<Fn, /*EltPerPack=*/1> {
 template<typename Fn>
 struct Apply_PreOp<Fn, /*EltPerPack=*/0> {
   static constexpr bool IsIdentity = true;
-  __device__ static BytePack<0> preOp(Fn fn, BytePack<0> a) {
+  __device__ __forceinline__ static BytePack<0> preOp(Fn fn, BytePack<0> a) {
     return {};
   }
 };
@@ -373,7 +506,7 @@ template<typename Fn, int EltPerPack>
 struct Apply_PostOp {
   static constexpr bool IsIdentity = Apply_PostOp<Fn, EltPerPack/2>::IsIdentity;
   template<int Size>
-  __device__ static BytePack<Size> postOp(Fn fn, BytePack<Size> a) {
+  __device__ __forceinline__ static BytePack<Size> postOp(Fn fn, BytePack<Size> a) {
     #if __cpp_if_constexpr
     if constexpr(!IsIdentity) {
     #else
@@ -393,7 +526,7 @@ template<typename Fn>
 struct Apply_PostOp<Fn, /*EltPerPack=*/1> {
   static constexpr bool IsIdentity = true;
   template<int Size>
-  __device__ static BytePack<Size> postOp(Fn fn, BytePack<Size> a) {
+  __device__ __forceinline__ static BytePack<Size> postOp(Fn fn, BytePack<Size> a) {
     return a;
   }
 };
@@ -401,7 +534,7 @@ struct Apply_PostOp<Fn, /*EltPerPack=*/1> {
 template<typename Fn>
 struct Apply_PostOp<Fn, /*EltPerPack=*/0> {
   static constexpr bool IsIdentity = true;
-  __device__ static BytePack<0> postOp(Fn fn, BytePack<0> a) {
+  __device__ __forceinline__ static BytePack<0> postOp(Fn fn, BytePack<0> a) {
     return {};
   }
 };
@@ -413,7 +546,7 @@ struct Apply_PostOp<Fn, /*EltPerPack=*/0> {
 template<typename T>
 struct RedOpArg<FuncPreMulSum<T>> {
   static constexpr bool ArgUsed = true;
-  __device__ static uint64_t loadArg(void *ptr) {
+  __device__ __forceinline__ static uint64_t loadArg(void *ptr) {
     union { uint64_t u64; T val; };
     u64 = 0;
     val = *(T*)ptr;
@@ -426,7 +559,7 @@ template<typename T>
 struct FuncPreMulSum {
   using EltType = T;
   T scalar;
-  __device__ FuncPreMulSum(uint64_t opArg=0) {
+  __device__ __forceinline__ FuncPreMulSum(uint64_t opArg=0) {
     union { uint64_t u64; T val; };
     u64 = opArg;
     scalar = val;
@@ -441,7 +574,7 @@ struct FuncPreMulSum<half> {
   using EltType = half;
 #if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
   __half2 scalar;
-  __device__ FuncPreMulSum(uint64_t opArg=0) {
+  __device__ __forceinline__ FuncPreMulSum(uint64_t opArg=0) {
     union { uint64_t u64; __half val; };
     u64 = opArg;
     scalar.x = val;
@@ -449,7 +582,7 @@ struct FuncPreMulSum<half> {
   }
 #else
   float scalar;
-  __device__ FuncPreMulSum(uint64_t opArg=0) {
+  __device__ __forceinline__ FuncPreMulSum(uint64_t opArg=0) {
     union { uint64_t u64; __half val; };
     u64 = opArg;
     scalar = (float)val;
@@ -466,7 +599,7 @@ struct FuncPreMulSum<half> {
     using EltType = __nv_bfloat16;
   #if __CUDA_ARCH__ >= 800
     __nv_bfloat162 scalar;
-    __device__ FuncPreMulSum(uint64_t opArg=0) {
+    __device__ __forceinline__ FuncPreMulSum(uint64_t opArg=0) {
       union { uint64_t u64; __nv_bfloat16 val; };
       u64 = opArg;
       scalar.x = val;
@@ -474,7 +607,7 @@ struct FuncPreMulSum<half> {
     }
   #else
     float scalar;
-    __device__ FuncPreMulSum(uint64_t opArg=0) {
+    __device__ __forceinline__ FuncPreMulSum(uint64_t opArg=0) {
       union { uint64_t u64; __nv_bfloat16 val; };
       u64 = opArg;
       scalar = __bfloat162float(val);
@@ -489,7 +622,7 @@ struct FuncPreMulSum<half> {
   struct FuncPreMulSum<__nv_fp8_e4m3> {
     using EltType = __nv_fp8_e4m3;
     __half2 scalar2;
-    __device__ FuncPreMulSum(uint64_t opArg) {
+    __device__ __forceinline__ FuncPreMulSum(uint64_t opArg) {
       union { uint64_t u64; __nv_fp8_storage_t val; };
       u64 = opArg;
       scalar2.x = __half(__nv_cvt_fp8_to_halfraw(val, __NV_E4M3));
@@ -501,7 +634,7 @@ struct FuncPreMulSum<half> {
   struct FuncPreMulSum<__nv_fp8_e5m2> {
     using EltType = __nv_fp8_e5m2;
     __half2 scalar2;
-    __device__ FuncPreMulSum(uint64_t opArg) {
+    __device__ __forceinline__ FuncPreMulSum(uint64_t opArg) {
       union { uint64_t u64; __nv_fp8_storage_t val; };
       u64 = opArg;
       scalar2.x = __half(__nv_cvt_fp8_to_halfraw(val, __NV_E5M2));
@@ -513,7 +646,7 @@ struct FuncPreMulSum<half> {
 
 template<typename T, int EltPerPack>
 struct Apply_Reduce<FuncPreMulSum<T>, EltPerPack> {
-  __device__ static BytePack<EltPerPack*sizeof(T)> reduce(FuncPreMulSum<T> fn, BytePack<EltPerPack*sizeof(T)> a, BytePack<EltPerPack*sizeof(T)> b) {
+  __device__ __forceinline__ static BytePack<EltPerPack*sizeof(T)> reduce(FuncPreMulSum<T> fn, BytePack<EltPerPack*sizeof(T)> a, BytePack<EltPerPack*sizeof(T)> b) {
     // FuncPreMulSum reduce dispatches to FuncSum.
     return Apply_Reduce<FuncSum<T>, EltPerPack>::reduce(FuncSum<T>(), a, b);
   }
@@ -523,7 +656,7 @@ struct Apply_Reduce<FuncPreMulSum<T>, EltPerPack> {
 template<typename T>
 struct Apply_PreOp<FuncPreMulSum<T>, /*EltPerPack=*/1> {
   static constexpr bool IsIdentity = false;
-  __device__ static BytePack<sizeof(T)> preOp(FuncPreMulSum<T> fn, BytePack<sizeof(T)> a) {
+  __device__ __forceinline__ static BytePack<sizeof(T)> preOp(FuncPreMulSum<T> fn, BytePack<sizeof(T)> a) {
     return toPack<T>(fromPack<T>(a) * fn.scalar);
   }
 };
@@ -534,7 +667,7 @@ struct Apply_PreOp<FuncPreMulSum<T>, /*EltPerPack=*/1> {
 template<>
 struct Apply_PreOp<FuncPreMulSum<half>, /*EltPerPack=*/1> {
   static constexpr bool IsIdentity = false;
-  __device__ static BytePack<sizeof(half)> preOp(FuncPreMulSum<half> fn, BytePack<sizeof(half)> a) {
+  __device__ __forceinline__ static BytePack<sizeof(half)> preOp(FuncPreMulSum<half> fn, BytePack<sizeof(half)> a) {
     #if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
       return toPack<half>(__hmul(fromPack<half>(a), fn.scalar.x));
     #else
@@ -546,7 +679,7 @@ struct Apply_PreOp<FuncPreMulSum<half>, /*EltPerPack=*/1> {
   template<>
   struct Apply_PreOp<FuncPreMulSum<half>, /*EltPerPack=*/2> {
     static constexpr bool IsIdentity = false;
-    __device__ static BytePack<sizeof(half2)> preOp(FuncPreMulSum<half> fn, BytePack<sizeof(half2)> a) {
+    __device__ __forceinline__ static BytePack<sizeof(half2)> preOp(FuncPreMulSum<half> fn, BytePack<sizeof(half2)> a) {
       return toPack<half2>(__hmul2(fromPack<half2>(a), fn.scalar));
     }
   };
@@ -559,7 +692,7 @@ struct Apply_PreOp<FuncPreMulSum<half>, /*EltPerPack=*/1> {
   template<>
   struct Apply_PreOp<FuncPreMulSum<__nv_bfloat16>, /*EltPerPack=*/1> {
     static constexpr bool IsIdentity = false;
-    __device__ static BytePack<sizeof(__nv_bfloat16)> preOp(
+    __device__ __forceinline__ static BytePack<sizeof(__nv_bfloat16)> preOp(
         FuncPreMulSum<__nv_bfloat16> fn, BytePack<sizeof(__nv_bfloat16)> a
       ) {
       #if __CUDA_ARCH__ >= 800
@@ -573,7 +706,7 @@ struct Apply_PreOp<FuncPreMulSum<half>, /*EltPerPack=*/1> {
     template<>
     struct Apply_PreOp<FuncPreMulSum<__nv_bfloat16>, /*EltPerPack=*/2> {
       static constexpr bool IsIdentity = false;
-      __device__ static BytePack<sizeof(__nv_bfloat162)> preOp(
+      __device__ __forceinline__ static BytePack<sizeof(__nv_bfloat162)> preOp(
           FuncPreMulSum<__nv_bfloat16> fn, BytePack<sizeof(__nv_bfloat162)> a
         ) {
         return toPack<__nv_bfloat162>(__hmul2(fromPack<__nv_bfloat162>(a), fn.scalar));
@@ -590,7 +723,7 @@ struct Apply_PreOp<FuncPreMulSum<half>, /*EltPerPack=*/1> {
   template<>
   struct Apply_PreOp<FuncPreMulSum<__nv_fp8_e4m3>, /*EltPerPack=*/1> {
     static constexpr bool IsIdentity = false;
-    __device__ static BytePack<sizeof(__nv_fp8_e4m3)> preOp(
+    __device__ __forceinline__ static BytePack<sizeof(__nv_fp8_e4m3)> preOp(
         FuncPreMulSum<__nv_fp8_e4m3> fn, BytePack<sizeof(__nv_fp8_e4m3)> a
       ) {
       return toPack<__nv_fp8_e4m3>(__nv_fp8_e4m3(__hmul(__half(fromPack<__nv_fp8_e4m3>(a)), fn.scalar2.x)));
@@ -599,7 +732,7 @@ struct Apply_PreOp<FuncPreMulSum<half>, /*EltPerPack=*/1> {
   template<>
   struct Apply_PreOp<FuncPreMulSum<__nv_fp8_e4m3>, /*EltPerPack=*/2> {
     static constexpr bool IsIdentity = false;
-    __device__ static BytePack<sizeof(__nv_fp8x2_e4m3)> preOp(
+    __device__ __forceinline__ static BytePack<sizeof(__nv_fp8x2_e4m3)> preOp(
         FuncPreMulSum<__nv_fp8_e4m3> fn, BytePack<sizeof(__nv_fp8x2_e4m3)> a
       ) {
       return toPack<__nv_fp8x2_e4m3>(__nv_fp8x2_e4m3(__hmul2(__half2(fromPack<__nv_fp8x2_e4m3>(a)), fn.scalar2)));
@@ -609,7 +742,7 @@ struct Apply_PreOp<FuncPreMulSum<half>, /*EltPerPack=*/1> {
   template<>
   struct Apply_PreOp<FuncPreMulSum<__nv_fp8_e5m2>, /*EltPerPack=*/1> {
     static constexpr bool IsIdentity = false;
-    __device__ static BytePack<sizeof(__nv_fp8_e5m2)> preOp(
+    __device__ __forceinline__ static BytePack<sizeof(__nv_fp8_e5m2)> preOp(
         FuncPreMulSum<__nv_fp8_e5m2> fn, BytePack<sizeof(__nv_fp8_e5m2)> a
       ) {
       return toPack<__nv_fp8_e5m2>(__nv_fp8_e5m2(__hmul(__half(fromPack<__nv_fp8_e5m2>(a)), fn.scalar2.x)));
@@ -618,7 +751,7 @@ struct Apply_PreOp<FuncPreMulSum<half>, /*EltPerPack=*/1> {
   template<>
   struct Apply_PreOp<FuncPreMulSum<__nv_fp8_e5m2>, /*EltPerPack=*/2> {
     static constexpr bool IsIdentity = false;
-    __device__ static BytePack<sizeof(__nv_fp8x2_e5m2)> preOp(
+    __device__ __forceinline__ static BytePack<sizeof(__nv_fp8x2_e5m2)> preOp(
         FuncPreMulSum<__nv_fp8_e5m2> fn, BytePack<sizeof(__nv_fp8x2_e5m2)> a
       ) {
       return toPack<__nv_fp8x2_e5m2>(__nv_fp8x2_e5m2(__hmul2(__half2(fromPack<__nv_fp8x2_e5m2>(a)), fn.scalar2)));
@@ -633,7 +766,7 @@ struct Apply_PreOp<FuncPreMulSum<half>, /*EltPerPack=*/1> {
 template<typename T>
 struct RedOpArg<FuncSumPostDiv<T>> {
   static constexpr bool ArgUsed = true;
-  __device__ static uint64_t loadArg(void *ptr) {
+  __device__ __forceinline__ static uint64_t loadArg(void *ptr) {
     return *(uint64_t*)ptr;
   }
 };
@@ -646,12 +779,12 @@ struct FuncSumPostDiv {
   uint32_t divisor:31, isSigned:1;
   UintType recip;
   
-  __device__ FuncSumPostDiv(uint64_t opArg=0) {
+  __device__ __forceinline__ FuncSumPostDiv(uint64_t opArg=0) {
     isSigned = opArg & 1;
     divisor = opArg >> 1;
     recip =  UintType(-1)/divisor;
   }
-  __device__ T divide(T x) {
+  __device__ __forceinline__ T divide(T x) {
     // x is negative iff we are in signed mode and the top bit is set
     bool xneg = isSigned && (x & ~(T(-1)>>1));
     // Compute abs(x):
@@ -673,7 +806,7 @@ struct FuncSumPostDiv {
 template<typename T, int EltPerPack>
 struct Apply_Reduce<FuncSumPostDiv<T>, EltPerPack>:
     Apply_Reduce<FuncSum<T>, EltPerPack> {
-  __device__ static BytePack<EltPerPack*sizeof(T)> reduce(FuncSumPostDiv<T> fn, BytePack<EltPerPack*sizeof(T)> a, BytePack<EltPerPack*sizeof(T)> b) {
+  __device__ __forceinline__ static BytePack<EltPerPack*sizeof(T)> reduce(FuncSumPostDiv<T> fn, BytePack<EltPerPack*sizeof(T)> a, BytePack<EltPerPack*sizeof(T)> b) {
     // FuncSumPostDiv reduce dispatches to FuncSum.
     return Apply_Reduce<FuncSum<T>, EltPerPack>::reduce(FuncSum<T>(), a, b);
   }
@@ -682,7 +815,7 @@ struct Apply_Reduce<FuncSumPostDiv<T>, EltPerPack>:
 template<typename T>
 struct Apply_PostOp<FuncSumPostDiv<T>, /*EltPerPack=*/1> {
   static constexpr bool IsIdentity = false;
-  __device__ static BytePack<sizeof(T)> postOp(FuncSumPostDiv<T> fn, BytePack<sizeof(T)> a) {
+  __device__ __forceinline__ static BytePack<sizeof(T)> postOp(FuncSumPostDiv<T> fn, BytePack<sizeof(T)> a) {
     return toPack<T>(fn.divide(fromPack<T>(a)));
   }
 };
@@ -703,7 +836,7 @@ struct Apply_PostOp<FuncSumPostDiv<T>, /*EltPerPack=*/1> {
   template<> \
   struct Apply_LoadMultimem<FuncSum<T>, SIZEOF_BytePack_field_##pack_field> { \
     static constexpr int PackSize = SIZEOF_BytePack_field_##pack_field; \
-    __device__ static BytePack<PackSize> load(FuncSum<T> fn, uintptr_t addr) { \
+    __device__ __forceinline__ static BytePack<PackSize> load(FuncSum<T> fn, uintptr_t addr) { \
       BytePack<PackSize> ans; \
       asm volatile("multimem.ld_reduce.relaxed.sys.global.add." #ptx_ty " %0, [%1];" \
         : "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field) \
@@ -715,7 +848,7 @@ struct Apply_PostOp<FuncSumPostDiv<T>, /*EltPerPack=*/1> {
   template<> \
   struct Apply_LoadMultimem<FuncMinMax<T>, SIZEOF_BytePack_field_##pack_field> { \
     static constexpr int PackSize = SIZEOF_BytePack_field_##pack_field; \
-    __device__ static BytePack<PackSize> load(FuncMinMax<T> fn, uintptr_t addr) { \
+    __device__ __forceinline__ static BytePack<PackSize> load(FuncMinMax<T> fn, uintptr_t addr) { \
       BytePack<PackSize> ans; \
       if (fn.isMinNotMax) { \
         asm volatile("multimem.ld_reduce.relaxed.sys.global.min." #ptx_ty " %0, [%1];" \
@@ -734,7 +867,7 @@ struct Apply_PostOp<FuncSumPostDiv<T>, /*EltPerPack=*/1> {
   template<> \
   struct Apply_LoadMultimem<FuncSum<T>, 4*(SIZEOF_BytePack_field_##pack_field)> { \
     static constexpr int PackSize = 4*(SIZEOF_BytePack_field_##pack_field); \
-    __device__ static BytePack<PackSize> load(FuncSum<T> fn, uintptr_t addr) { \
+    __device__ __forceinline__ static BytePack<PackSize> load(FuncSum<T> fn, uintptr_t addr) { \
       BytePack<PackSize> ans; \
       asm volatile("multimem.ld_reduce.relaxed.sys.global.add.v4." #ptx_ty " {%0,%1,%2,%3}, [%4];" \
         : "=" PTX_REG_BytePack_field_##pack_field(ans.pack_field[0]), \
@@ -749,7 +882,7 @@ struct Apply_PostOp<FuncSumPostDiv<T>, /*EltPerPack=*/1> {
   template<> \
   struct Apply_LoadMultimem<FuncMinMax<T>, 4*(SIZEOF_BytePack_field_##pack_field)> { \
     static constexpr int PackSize = 4*(SIZEOF_BytePack_field_##pack_field); \
-    __device__ static BytePack<PackSize> load(FuncMinMax<T> fn, uintptr_t addr) { \
+    __device__ __forceinline__ static BytePack<PackSize> load(FuncMinMax<T> fn, uintptr_t addr) { \
       BytePack<PackSize> ans; \
       if (fn.isMinNotMax) { \
         asm volatile("multimem.ld_reduce.relaxed.sys.global.min.v4." #ptx_ty " {%0,%1,%2,%3}, [%4];" \
@@ -774,7 +907,7 @@ struct Apply_PostOp<FuncSumPostDiv<T>, /*EltPerPack=*/1> {
   DEFINE_Apply_LoadMultimem_sum_v4(T, ptx_ty, pack_field) \
   template<> \
   struct Apply_LoadMultimem<FuncSum<T>, sizeof(T)> { \
-    __device__ static BytePack<sizeof(T)> load(FuncSum<T> fn, uintptr_t addr) { \
+    __device__ __forceinline__ static BytePack<sizeof(T)> load(FuncSum<T> fn, uintptr_t addr) { \
       BytePack<2*sizeof(T)> tmp; \
       asm volatile("multimem.ld_reduce.relaxed.sys.global.add." #ptx_ty " %0, [%1];" \
         : "=" PTX_REG_BytePack_field_##pack_field(tmp.pack_field) \
@@ -786,7 +919,7 @@ struct Apply_PostOp<FuncSumPostDiv<T>, /*EltPerPack=*/1> {
   DEFINE_Apply_LoadMultimem_minmax_v4(T, ptx_ty, pack_field) \
   template<> \
   struct Apply_LoadMultimem<FuncMinMax<T>, sizeof(T)> { \
-    __device__ static BytePack<sizeof(T)> load(FuncMinMax<T> fn, uintptr_t addr) { \
+    __device__ __forceinline__ static BytePack<sizeof(T)> load(FuncMinMax<T> fn, uintptr_t addr) { \
       BytePack<2*sizeof(T)> tmp; \
       if (fn.isMinNotMax) { \
         asm volatile("multimem.ld_reduce.relaxed.sys.global.min." #ptx_ty " %0, [%1];" \
@@ -803,7 +936,7 @@ struct Apply_PostOp<FuncSumPostDiv<T>, /*EltPerPack=*/1> {
 
 template<typename Fn, int BytePerPack>
 struct Apply_LoadMultimem {
-  __device__ static BytePack<BytePerPack> load(Fn fn, uintptr_t addr) {
+  __device__ __forceinline__ static BytePack<BytePerPack> load(Fn fn, uintptr_t addr) {
     __trap();
     return {};
   }

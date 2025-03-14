@@ -13,6 +13,7 @@
 #include "cudawrap.h"
 #include "profiler.h"
 #include "transport.h"
+#include "register_inline.h"
 
 #include <cstring> // std::memcpy
 #include <cinttypes> // PRIx64
@@ -28,34 +29,38 @@ ncclResult_t ncclInitKernelsForDevice(int cudaArch, int maxSharedMem, size_t* ma
   int carveout = ncclParamL1SharedMemoryCarveout();
   int ncclMaxSharedMem = ncclShmemDynamicSize(cudaArch);
 
-  for (int k=0; k < ncclDevKernelCount; k++) {
-    void* fn = ncclDevKernelList[k];
-    cudaFuncAttributes attr = {0};
-    if (fn == nullptr) continue;
+  for (int sym=0; sym <= 1; sym++) {
+    int kcount = sym==0 ? ncclDevKernelCount : ncclSymKernelCount;
+    void* const* kptrs = sym==0 ? ncclDevKernelList : ncclSymKernelList;
+    for (int k=0; k < kcount; k++) {
+      void* fn = kptrs[k];
+      cudaFuncAttributes attr = {0};
+      if (fn == nullptr) continue;
 
-    CUDACHECKGOTO(cudaFuncGetAttributes(&attr, fn), result, ignore0);
-    if (maxStackSize) {
-      if (attr.localSizeBytes > *maxStackSize) *maxStackSize = attr.localSizeBytes;
-    ignore0:;
-    }
-    if (carveout) {
-      CUDACHECKGOTO(cudaFuncSetAttribute(fn,
-        cudaFuncAttributePreferredSharedMemoryCarveout, carveout),
-        result, ignore1);
-    ignore1:;
-    }
-    if (ncclMaxSharedMem != 0) {
-      int sharedMemSize = ncclMaxSharedMem;
-      if (sharedMemSize > (maxSharedMem-attr.sharedSizeBytes)) {
-        WARN("cudaArch %d ncclMaxSharedMem %d exceeds device/fn maxSharedMem %zu",
-             cudaArch, sharedMemSize, maxSharedMem-attr.sharedSizeBytes);
-        return ncclSystemError;
+      CUDACHECKGOTO(cudaFuncGetAttributes(&attr, fn), result, ignore0);
+      if (maxStackSize) {
+        if (attr.localSizeBytes > *maxStackSize) *maxStackSize = attr.localSizeBytes;
+      ignore0:;
       }
-      CUDACHECKGOTO(cudaFuncSetAttribute(fn,
-        cudaFuncAttributeMaxDynamicSharedMemorySize, sharedMemSize),
-        result, next_kernel);
+      if (carveout) {
+        CUDACHECKGOTO(cudaFuncSetAttribute(fn,
+          cudaFuncAttributePreferredSharedMemoryCarveout, carveout),
+          result, ignore1);
+      ignore1:;
+      }
+      if (ncclMaxSharedMem != 0) {
+        int sharedMemSize = ncclMaxSharedMem;
+        if (sharedMemSize > (maxSharedMem-attr.sharedSizeBytes)) {
+          WARN("cudaArch %d ncclMaxSharedMem %d exceeds device/fn maxSharedMem %zu",
+               cudaArch, sharedMemSize, maxSharedMem-attr.sharedSizeBytes);
+          return ncclSystemError;
+        }
+        CUDACHECKGOTO(cudaFuncSetAttribute(fn,
+          cudaFuncAttributeMaxDynamicSharedMemorySize, sharedMemSize),
+          result, next_kernel);
+      }
+    next_kernel:;
     }
-  next_kernel:;
   }
   return result;
 }
@@ -258,8 +263,8 @@ static bool testBudget(
 
 ncclResult_t ncclTasksRegAndEnqueue(struct ncclComm* comm) {
   struct ncclKernelPlanner* planner = &comm->planner;
+  if (planner->isSymColl) return ncclSuccess;
   struct ncclTaskColl *task;
-
   task = ncclIntruQueueHead(&planner->collTaskQueue);
   while (task != nullptr) {
     // Build a ncclDevWorkColl[Reg?] struct for each task.
@@ -329,6 +334,44 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
   memset(tasksByFnOpTy, 0, sizeof(tasksByFnOpTy));
   int fnOpTyIndices[ncclNumFuncs*ncclNumDevRedOps*ncclNumTypes];
   int fnOpTyCount = 0;
+
+  if (planner->nTasksColl == 1 && planner->nTasksP2p == 0) {
+    void* sendSymPtr;
+    void* recvSymPtr;
+    size_t size = task->count*ncclTypeSize(task->datatype);
+    NCCLCHECK(ncclRegFindSymmetric(comm, task->sendbuff, size, (void**)&sendSymPtr));
+    NCCLCHECK(ncclRegFindSymmetric(comm, task->recvbuff, size, (void**)&recvSymPtr));
+    bool implemented = ncclSymImplemented(task->func, task->opDev.op, task->datatype);
+
+    if (sendSymPtr && recvSymPtr && implemented) {
+      int collNetSupport = 0;
+      NCCLCHECK(getCollNetSupport(comm, task, &collNetSupport));
+      int nvlsSupport = comm->nvlsSupport && (ncclNvlsSupported(task->opDev.op, task->datatype) || task->func == ncclFuncAllGather);
+      
+      ncclSimInfo_t simInfo;
+      NCCLCHECK(getAlgoInfo(comm, task, collNetSupport, nvlsSupport, 1, &simInfo));
+      
+      enum ncclSymKernelId kernel;
+      int nChannels, nWarps;
+      float estTimeUs = 1.e18;
+      NCCLCHECK(ncclSymPickKernel(comm, task->func, task->opDev.op, task->datatype, task->count, &estTimeUs, &kernel, &nChannels, &nWarps));
+
+      // We should only use symmetric kernel if it beats the asymmetric kernel. But the
+      // perf model accuracy from asymmetric kernels is too inaccurate and reports too high
+      // of a bandwidth. For now just always use symmetric if available.
+      //if (estTimeUs < simInfo.estimatedTime) {
+      if (kernel != ncclSymKernelId_Count) {
+        task->sendbuff = sendSymPtr;
+        task->recvbuff = recvSymPtr;
+        task->devFuncId = (int)kernel;
+        task->nMaxChannels = nChannels;
+        task->nWarps = nWarps;
+        ncclIntruQueueEnqueue(&planner->collTaskQueue, task);
+        planner->isSymColl = true;
+        return ncclSuccess;
+      }
+    }
+  }
 
   // Walk the size sorted tasks, binning them by (fn,op,ty).
   while (task != nullptr) {
@@ -1103,6 +1146,8 @@ namespace {
 }
 
 static ncclResult_t uploadWork(struct ncclComm* comm, struct ncclKernelPlan* plan) {
+  if (plan->isSymColl) return ncclSuccess;
+  
   size_t workBytes = plan->workBytes;
   size_t batchBytes = plan->nWorkBatches*sizeof(struct ncclDevWorkBatch);
   void* fifoBufHost;
@@ -1378,26 +1423,49 @@ ncclResult_t ncclLaunchPrepare(struct ncclComm* comm) {
       plan->workStorageType = persistent ? ncclDevWorkStorageTypePersistent
                                          : ncclDevWorkStorageTypeFifo;
 
-      struct ncclKernelPlanBudget budget;
-      budget.inArgsBytes = comm->workArgsBytes - sizeof(struct ncclDevKernelArgs);
-      // Non-persistent kernels fill up at most half of our fifo per kernel.
-      budget.outArgsBytes = plan->persistent ? (1<<30) : comm->workFifoBytes/2;
+      if (planner->isSymColl) {
+        plan->workStorageType = ncclDevWorkStorageTypeArgs;
 
-      // Drain coll tasks first. This is essential since we partition tasks based
-      // on the work budget and p2p work isn't collective. If we were to drain p2p
-      // first, the place where we cut the kernel could vary by rank which would
-      // cause the "shortest channel first" channel picker to have divergent results.
-      if (planner->nTasksColl != 0) {
-        NCCLCHECKGOTO(scheduleCollTasksToPlan(comm, plan, &budget), result, failure);
-      }
-      // And only drain p2p tasks once colls are depleted.
-      if (planner->nTasksColl == 0 && planner->nTasksP2p != 0) {
-        NCCLCHECKGOTO(scheduleP2pTasksToPlan(comm, plan, &budget), result, failure);
-      }
-      finishPlan(comm, plan);
-      if (plan->workBytes != 0) {
+        struct ncclTaskColl* task = ncclIntruQueueHead(&planner->collTaskQueue);
+        plan->isSymColl = true;
+        plan->kernelFn = ncclSymGetKernelPtr((ncclSymKernelId)task->devFuncId, task->opDev.op, task->datatype);
+        plan->threadPerBlock = task->nWarps*WARP_SIZE;
+        plan->channelMask = uint64_t(-1) >> (64-task->nMaxChannels);
+
+        plan->kernelArgsSize = sizeof(struct ncclSymDevArgs);
+        plan->kernelSymArgs = ncclMemoryStackAlloc<struct ncclSymDevArgs>(&comm->memScoped);
+        plan->kernelSymArgs->comm = comm->symDevComm;
+        plan->kernelSymArgs->rootRank = task->root;
+        plan->kernelSymArgs->redOpArg = task->opDev.scalarArg;
+        plan->kernelSymArgs->nElts = task->count;
+        plan->kernelSymArgs->input = (char*)task->sendbuff;
+        plan->kernelSymArgs->output = (char*)task->recvbuff;
+        
+        planner->nTasksColl -= 1;
         ncclIntruQueueEnqueue(&planner->planQueue, plan);
         nPlans += 1;
+      } else {
+        struct ncclKernelPlanBudget budget;
+        budget.inArgsBytes = comm->workArgsBytes - sizeof(struct ncclDevKernelArgs);
+        // Non-persistent kernels fill up at most half of our fifo per kernel.
+        budget.outArgsBytes = plan->persistent ? (1<<30) : comm->workFifoBytes/2;
+
+        // Drain coll tasks first. This is essential since we partition tasks based
+        // on the work budget and p2p work isn't collective. If we were to drain p2p
+        // first, the place where we cut the kernel could vary by rank which would
+        // cause the "shortest channel first" channel picker to have divergent results.
+        if (planner->nTasksColl != 0) {
+          NCCLCHECKGOTO(scheduleCollTasksToPlan(comm, plan, &budget), result, failure);
+        }
+        // And only drain p2p tasks once colls are depleted.
+        if (planner->nTasksColl == 0 && planner->nTasksP2p != 0) {
+          NCCLCHECKGOTO(scheduleP2pTasksToPlan(comm, plan, &budget), result, failure);
+        }
+        finishPlan(comm, plan);
+        if (plan->workBytes != 0) {
+          ncclIntruQueueEnqueue(&planner->planQueue, plan);
+          nPlans += 1;
+        }
       }
     } while (planner->nTasksColl + planner->nTasksP2p != 0);
 
@@ -1552,7 +1620,6 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
     launchConfig.attrs = launchAttrs;
     launchConfig.numAttrs = attrs;
     launchConfig.hStream = launchStream;
-
     CUCHECKGOTO(cuLaunchKernelEx(&launchConfig, fn, nullptr, extra), ret, do_return);
   #endif
   } else {
@@ -2151,7 +2218,7 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info) {
     bool isSendNotRecv = info->coll == ncclFuncSend;
 
     // Must be in thread local group before tasks can be alloc'd in `comm->memScoped`.
-    ncclGroupCommJoin(info->comm);
+    ncclGroupCommJoin(info->comm, ncclGroupTaskTypeCollective);
     struct ncclTaskP2p* p2p = ncclMemoryPoolAlloc<struct ncclTaskP2p>(&comm->memPool_ncclTaskP2p, &comm->memPermanent);
     p2p->func = info->coll;
     p2p->buff = (void*)info->recvbuff;
@@ -2218,7 +2285,7 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info) {
       return ncclSuccess;
     } else {
       // Must be in thread local group before tasks can be alloc'd in `comm->memScoped`.
-      ncclGroupCommJoin(info->comm);
+      ncclGroupCommJoin(info->comm, ncclGroupTaskTypeCollective);
       struct ncclTaskColl* t = ncclMemoryPoolAlloc<struct ncclTaskColl>(&comm->memPool_ncclTaskColl, &comm->memPermanent);
       t->func = info->coll;
       t->sendbuff = info->sendbuff;

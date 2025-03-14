@@ -51,7 +51,7 @@ typedef enum {
   ncclNumFuncs = 8
 } ncclFunc_t;
 
-#define NCCL_NUM_ALGORITHMS 7 // Tree/Ring/CollNet*
+#define NCCL_NUM_ALGORITHMS 7 // Tree/Ring/CollNet*/PAT
 #define NCCL_ALGO_UNDEF -1
 #define NCCL_ALGO_TREE 0
 #define NCCL_ALGO_RING 1

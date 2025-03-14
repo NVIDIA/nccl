@@ -327,7 +327,7 @@ with open(os.path.join(gensrc, "rules.mk"), "w") as f:
   out = f.write
   impl_names = sorted(name_to_funcs.keys())
   names = impl_names + ["host_table.cc", "device_table.cu"]
-  out("LIB_OBJS_GEN = $(patsubst %, $(OBJDIR)/genobj/%.o, {names})\n"
+  out("LIB_OBJS_GEN = $(patsubst %,$(OBJDIR)/genobj/%.o,{names})\n"
       .format(names=" ".join(names)))
   out("\n")
 

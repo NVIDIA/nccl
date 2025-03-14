@@ -216,6 +216,14 @@ ncclResult_t pncclCommRegister(const ncclComm_t comm, void* buff, size_t size, v
 ncclResult_t  ncclCommDeregister(const ncclComm_t comm, void* handle);
 ncclResult_t pncclCommDeregister(const ncclComm_t comm, void* handle);
 
+/* Register symmetric memory */
+ncclResult_t  ncclCommSymmetricRegister(ncclComm_t comm, void* buff, size_t size, void** handle);
+ncclResult_t pncclCommSymmetricRegister(ncclComm_t comm, void* buff, size_t size, void** handle);
+
+/* Deregister symmetric memory */
+ncclResult_t  ncclCommSymmetricDeregister(ncclComm_t comm, void* handle);
+ncclResult_t pncclCommSymmetricDeregister(ncclComm_t comm, void* handle);
+
 /* Reduction operation selector */
 typedef enum { ncclNumOps_dummy = 5 } ncclRedOp_dummy_t;
 typedef enum { ncclSum        = 0,

@@ -84,10 +84,11 @@ static float calcTime_sm90(ncclSymKernelId kernelId, int nRanks, size_t nBytes);
 // perf is 99% of running at max blocks, and return the estimate runtime for that
 // block count.
 static void queryModel(struct ncclComm* comm, ncclSymKernelId k, size_t nBytes, float* timeUs, int* nBlocks) {
+  size_t totalBytes = nBytes*((kernelMask_coll(ncclFuncAllReduce)>>k & 1) ? 1 : comm->nRanks);
   if (comm->cudaArch >= 1000) {
-    *timeUs = calcTime_sm100(k, comm->nRanks, nBytes);
+    *timeUs = calcTime_sm100(k, comm->nRanks, totalBytes);
   } else {
-    *timeUs = calcTime_sm90(k, comm->nRanks, nBytes);
+    *timeUs = calcTime_sm90(k, comm->nRanks, totalBytes);
   }
 
   int nSM = ncclParamSymSMs();

@@ -168,7 +168,7 @@ static ncclResult_t sendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
 
   int proxyRank;
   int64_t netId;
-  NCCLCHECK(ncclTopoGetNetDev(comm, myInfo->rank, graph, channelId, -1, &netId, &req.netDev, &proxyRank));
+  NCCLCHECK(ncclTopoGetNetDev(comm, myInfo->rank, graph, channelId, peerInfo->rank, -1, &netId, &req.netDev, &proxyRank));
   NCCLCHECK(ncclTopoCheckGdr(comm->topo, myInfo->rank, netId, 1, &req.useGdr));
   send->conn.flags |= req.useGdr ? NCCL_DIRECT_NIC : 0;
 
@@ -188,11 +188,11 @@ static ncclResult_t recvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
 
   int proxyRank;
   int64_t netId;
-  NCCLCHECK(ncclTopoGetNetDev(comm, myInfo->rank, graph, channelId, -1, &netId, &req.netDev, &proxyRank));
+  NCCLCHECK(ncclTopoGetNetDev(comm, myInfo->rank, graph, channelId, peerInfo->rank, -1, &netId, &req.netDev, &proxyRank));
   NCCLCHECK(ncclTopoCheckGdr(comm->topo, myInfo->rank, netId, 0, &req.useGdr));
   recv->conn.flags |= req.useGdr ? NCCL_DIRECT_NIC : 0;
   // Determine whether we need to flush the GDR buffer on recv or not
-  if (req.useGdr) NCCLCHECK(ncclTopoNeedFlush(comm, req.netDev, myInfo->rank, &req.needFlush));
+  if (req.useGdr) NCCLCHECK(ncclTopoNeedFlush(comm, /*netIdx*/ 0, req.netDev, myInfo->rank, &req.needFlush));
 
   recv->proxyConn.tpLocalRank = comm->topParentLocalRanks[comm->localRank];
   NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_COLLNET, 0, myInfo->rank, &recv->proxyConn));
@@ -330,7 +330,7 @@ static ncclResult_t sendProxySetup(struct ncclProxyConnection* connection, struc
   NCCLCHECK(proxyState->ncclCollNet->getProperties(req->netDev, &props));
   connection->collNet = req->collNet;
   /* DMA-BUF support */
-  resources->useDmaBuf = resources->useGdr && proxyState->dmaBufSupport && (props.ptrSupport & NCCL_PTR_DMABUF);
+  resources->useDmaBuf = resources->useGdr && proxyState->dmaBufSupport[0] && (props.ptrSupport & NCCL_PTR_DMABUF);
   /* collective size limits*/
   resources->maxCollBytes = props.maxCollBytes;
   if((resources->maxCollBytes <= 0) || (resources->maxCollBytes > NCCL_MAX_NET_SIZE_BYTES)) {
@@ -448,7 +448,7 @@ static ncclResult_t recvProxySetup(struct ncclProxyConnection* connection, struc
   NCCLCHECK(proxyState->ncclCollNet->getProperties(req->netDev, &props));
   connection->collNet = req->collNet;
   /* DMA-BUF support */
-  resources->useDmaBuf = resources->useGdr && proxyState->dmaBufSupport && (props.ptrSupport & NCCL_PTR_DMABUF);
+  resources->useDmaBuf = resources->useGdr && proxyState->dmaBufSupport[0] && (props.ptrSupport & NCCL_PTR_DMABUF);
   resources->maxCollBytes = props.maxCollBytes;
   if((resources->maxCollBytes <= 0) || (resources->maxCollBytes > NCCL_MAX_NET_SIZE_BYTES)) {
     WARN("sendProxySetup: collnet plugin returned invalid value for maxCollBytes %ld \

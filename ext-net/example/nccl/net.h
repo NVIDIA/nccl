@@ -25,6 +25,7 @@
 
 typedef ncclResult_t (*ncclProfilerCallback_t)(void** eHandle, int type, void* phandle, int64_t pluginId, void* extData);
 
+#include "net_v11.h"
 #include "net_v10.h"
 #include "net_v9.h"
 #include "net_v8.h"
@@ -35,9 +36,10 @@ typedef ncclResult_t (*ncclProfilerCallback_t)(void** eHandle, int type, void* p
 #include "net_v3.h"
 #include "net_v2.h"
 
-typedef ncclNet_v10_t ncclNet_t;
-typedef ncclNetProperties_v10_t ncclNetProperties_t;
-typedef ncclNetVDeviceProps_v10_t ncclNetVDeviceProps_t;
-typedef ncclNetCommConfig_v10_t ncclNetCommConfig_t;
+typedef ncclNet_v11_t ncclNet_t;
+typedef ncclNetProperties_v11_t ncclNetProperties_t;
+typedef ncclNetVDeviceProps_v11_t ncclNetVDeviceProps_t;
+typedef ncclNetCommConfig_v11_t ncclNetCommConfig_t;
+typedef ncclNetPath_v11_t ncclNetPath_t;
 
 #endif // end include guard

@@ -35,6 +35,13 @@ struct ncclRing;
 struct ncclConnector;
 struct ncclComm;
 
+#define PEERINFO_NETDEV_MAXCOUNT (MAXCHANNELS + 2)
+
+struct ncclNetDev {
+  int netIdx;
+  uint64_t fabricId;
+};
+
 struct ncclPeerInfo {
   int rank;
   int cudaDev;
@@ -50,6 +57,9 @@ struct ncclPeerInfo {
   nvmlGpuFabricInfoV_t fabricInfo;
   int cuMemSupport;
   int version;
+  // multi-DC support
+  int netDevCount;
+  ncclNetDev netDevs[PEERINFO_NETDEV_MAXCOUNT];
 };
 
 #define CONNECT_SIZE 256

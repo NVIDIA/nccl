@@ -107,3 +107,9 @@ ncclResult_t ncclGetDtree(int nranks, int rank, int* s0, int* d0_0, int* d0_1, i
   }
   return ncclSuccess;
 }
+
+ncclResult_t ncclGetDtreeRoots(int nranks, int* r0, int* r1) {
+  if (r0) *r0 = 0; // primal tree root is always 0
+  if (r1) *r1 = (nranks % 2 == 1 && nranks > 1) ? 1 : (nranks - 1);
+  return ncclSuccess;
+}

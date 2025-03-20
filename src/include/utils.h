@@ -34,9 +34,13 @@ ncclResult_t getRandomData(void* buffer, size_t bytes);
 struct netIf {
   char prefix[64];
   int port;
+  int64_t fabricId; // -1 is undefined
 };
 
-int parseStringList(const char* string, struct netIf* ifList, int maxList);
+#define NCCL_IF_MAX_FABRICID (1L<<48)
+
+ncclResult_t parseIfList(const char* string, struct netIf* ifList, int maxList, int *ifCount);
+bool indexIfList(const char* string, int port, struct netIf* ifList, int listSize, bool matchExact, int* index);
 bool matchIfList(const char* string, int port, struct netIf* ifList, int listSize, bool matchExact);
 
 static long log2i(long n) {

@@ -17,7 +17,6 @@ __hidden ncclResult_t pluginPciPath(int dev, char** path) { return ncclInternalE
 __hidden ncclResult_t pluginPtrSupport(int dev, int* supportedTypes) { return ncclInternalError; }
 __hidden ncclResult_t pluginGetProperties(int dev, ncclNetProperties_t* props) {
   // Below are default values, if unsure don't change.
-
   props->name = "Example";
   // Fill for proper topology detection, e.g. /sys/devices/pci0000:00/0000:00:10.0/0000:0b:00.0
   props->pciPath = NULL;
@@ -48,6 +47,8 @@ __hidden ncclResult_t pluginGetProperties(int dev, ncclNetProperties_t* props) {
   // maximum transfer sizes the plugin can handle
   props->maxP2pBytes = NCCL_MAX_NET_SIZE_BYTES;
   props->maxCollBytes = NCCL_MAX_NET_SIZE_BYTES;
+  // all devs can connect to each other, fabric ID is 0 (any other value would work)
+  props->fabricId = 0;
   return ncclSuccess;
 }
 
@@ -67,10 +68,12 @@ __hidden ncclResult_t pluginCloseListen(void* listenComm) { return ncclInternalE
 __hidden ncclResult_t pluginIrecvConsumed(void* recvComm, int n, void* request) { return ncclInternalError; }
 __hidden ncclResult_t pluginGetDeviceMr(void* comm, void* mhandle, void** dptr_mhandle) { return ncclInternalError; }
 __hidden ncclResult_t pluginMakeVDevice(int* d, ncclNetVDeviceProps_t* props) { return ncclInternalError; }
+__hidden ncclResult_t pluginGetNetPath(uint64_t fabricId0, uint64_t fabricId1, ncclNetPath_t* path) { return ncclInternalError; }
 
 #define PLUGIN_NAME "Plugin"
 
-const ncclNet_v10_t ncclNetPlugin_v10 = {
+
+const ncclNet_v11_t ncclNetPlugin_v11 = {
   .name = PLUGIN_NAME,
   .init = pluginInit,
   .devices = pluginDevices,
@@ -91,6 +94,59 @@ const ncclNet_v10_t ncclNetPlugin_v10 = {
   .getDeviceMr = pluginGetDeviceMr,
   .irecvConsumed = pluginIrecvConsumed,
   .makeVDevice   = pluginMakeVDevice,
+  .getNetPath = pluginGetNetPath,
+};
+
+__hidden ncclResult_t pluginGetProperties_v10(int dev, ncclNetProperties_v10_t* props_v10) {
+  ncclNetProperties_t props;
+  ncclResult_t ret = pluginGetProperties(dev, &props);
+  if (ret != ncclSuccess) return ret;
+  props_v10->name = props.name;
+  props_v10->pciPath = props.pciPath;
+  props_v10->guid = props.guid;
+  props_v10->ptrSupport = props.ptrSupport;
+  props_v10->regIsGlobal = props.regIsGlobal;
+  props_v10->forceFlush = props.forceFlush;
+  props_v10->speed = props.speed;
+  props_v10->port = props.port;
+  props_v10->maxComms = props.maxComms;
+  props_v10->maxRecvs = props.maxRecvs;
+  props_v10->netDeviceType = props.netDeviceType;
+  props_v10->netDeviceVersion = props.netDeviceVersion;
+  props_v10->vProps.ndevs = props.vProps.ndevs;
+  memcpy(props_v10->vProps.devs, props.vProps.devs, sizeof(props.vProps.devs));
+  props_v10->maxP2pBytes = props.maxP2pBytes;
+  props_v10->maxCollBytes = props.maxCollBytes;
+  return ncclSuccess;
+}
+
+__hidden ncclResult_t pluginConnect_v10(int dev, ncclNetCommConfig_v10_t* config, void* handle, void** sendComm, ncclNetDeviceHandle_t** sendDevComm) {
+  return pluginConnect(dev, (ncclNetCommConfig_t*)config, handle, sendComm, sendDevComm);
+}
+
+__hidden ncclResult_t pluginMakeVDevice_v10(int* d, ncclNetVDeviceProps_v10_t* props) { return ncclInternalError; }
+
+const ncclNet_v10_t ncclNetPlugin_v10 = {
+  .name = PLUGIN_NAME,
+  .init = pluginInit,
+  .devices = pluginDevices,
+  .getProperties = pluginGetProperties_v10,
+  .listen = pluginListen,
+  .connect = pluginConnect_v10,
+  .accept = pluginAccept,
+  .regMr = pluginRegMr,
+  .regMrDmaBuf = pluginRegMrDmaBuf,
+  .deregMr = pluginDeregMr,
+  .isend = pluginIsend,
+  .irecv = pluginIrecv,
+  .iflush = pluginIflush,
+  .test = pluginTest,
+  .closeSend = pluginCloseSend,
+  .closeRecv = pluginCloseRecv,
+  .closeListen = pluginCloseListen,
+  .getDeviceMr = pluginGetDeviceMr,
+  .irecvConsumed = pluginIrecvConsumed,
+  .makeVDevice   = pluginMakeVDevice_v10,
 };
 
 __hidden ncclResult_t pluginInit_v9(ncclDebugLogger_t logFunction) {

@@ -479,8 +479,9 @@ static ncclResult_t getUDS(uint64_t* peerUDS) {
   return ncclSuccess;
 }
 #define MAX_OOB_DEVS 16
-static ncclResult_t netGetDevice(int rank, struct ncclComm* comm, int* dev) {
+static ncclResult_t netGetDevice(int rank, struct ncclComm* comm, ncclNet_t** net, int* dev) {
   static int devOOB = -1;
+  static ncclNet_t* netOOB = NULL;
   if (devOOB < 0) {
     pthread_mutex_lock(&bootstrapNetLock);
     if (devOOB < 0) {
@@ -491,24 +492,28 @@ static ncclResult_t netGetDevice(int rank, struct ncclComm* comm, int* dev) {
         if (searchNot) userIfEnv++;
         bool searchExact = userIfEnv && userIfEnv[0] == '=';
         if (searchExact) userIfEnv++;
+        int nUserIfs;
         struct netIf userIfs[MAX_OOB_DEVS];
-        int nUserIfs = parseStringList(userIfEnv, userIfs, MAX_OOB_DEVS);
-        // loop over the device and return the first one matching
+        NCCLCHECK(parseIfList(userIfEnv, userIfs, MAX_OOB_DEVS,&nUserIfs));
+        // loop over all nets and all devices and return the first one matching
         int nDev = 0;
-        NCCLCHECK(comm->ncclNet->devices(&nDev));
-        int devId = 0;
-        while (devId < nDev) {
-          ncclNetProperties_t props;
-          comm->ncclNet->getProperties(devId, &props);
-          // check against user specified HCAs/ports
-          if (matchIfList(props.name, props.port, userIfs, nUserIfs, searchExact) ^ searchNot) {
-            // All plain physical devices have been initialized at this point
-            devOOB = devId;
-            break;
+        for (int n = 0; n < comm->ncclNetCount; ++n) {
+          NCCLCHECK(comm->ncclNet[n]->devices(&nDev));
+          int devId = 0;
+          while (devId < nDev) {
+            ncclNetProperties_t props;
+            comm->ncclNet[n]->getProperties(devId, &props);
+            // check against user specified HCAs/ports
+            if (matchIfList(props.name, props.port, userIfs, nUserIfs, searchExact) ^ searchNot) {
+              // All plain physical devices have been initialized at this point
+              devOOB = devId;
+              netOOB = comm->ncclNet[n];
+              break;
+            }
+            devId++;
           }
-          devId++;
         }
-        if (devOOB == -1) {
+        if (devOOB == -1 || !netOOB) {
           if (!searchNot)
             WARN("no device found matching %s%s, verify NCCL_OOB_NET_IFNAME", searchExact ? "exactly " : "", userIfEnv);
           else
@@ -519,16 +524,18 @@ static ncclResult_t netGetDevice(int rank, struct ncclComm* comm, int* dev) {
       } else {
         // default choice is device 0
         devOOB = 0;
+        netOOB = comm->ncclNet[0];
       }
       // display info on the chosen device
       ncclNetProperties_t props;
-      ncclResult_t res = comm->ncclNet->getProperties(devOOB, &props);
+      ncclResult_t res = netOOB->getProperties(devOOB, &props);
       bool hasProp = res == ncclSuccess;
       INFO(NCCL_BOOTSTRAP, "Bootstrap: Using %s:%d", (hasProp) ? props.name : "N/A", (hasProp) ? props.port : -1);
     }
     pthread_mutex_unlock(&bootstrapNetLock);
   }
   *dev = devOOB;
+  *net = netOOB;
   return ncclSuccess;
 }
 
@@ -636,7 +643,7 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm) {
   state->nranks = nranks;
   state->cudaDev = comm->cudaDev;
   state->abortFlag = comm->abortFlag;
-  state->net = comm->ncclNet;
+  state->net = NULL;
   comm->bootstrap = state;
   comm->magic = state->magic = BOOTSTRAP_HANDLE(handles, 0)->magic; // state and comm magic set to the first magic ID
 
@@ -651,7 +658,7 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm) {
   BOOTSTRAP_PROF_OPEN(timers[BOOTSTRAP_INIT_TIME_CREATE]);
   if (ncclParamBootstrapNetEnable()) {
     // Create net interface for other ranks to contact me (all gather)
-    NCCLCHECK(netGetDevice(rank, comm, &STATE_LISTEN(state, net.dev)));
+    NCCLCHECK(netGetDevice(rank, comm, &state->net, &STATE_LISTEN(state, net.dev)));
     NCCLCHECK(state->net->listen(STATE_LISTEN(state, net.dev), STATE_LISTEN(state, net.handle), &STATE_LISTEN(state, net.comm)));
     memcpy(info.connectInfo.handle, STATE_LISTEN(state, net.handle), NCCL_NET_HANDLE_MAXSIZE);
   } else {
@@ -789,7 +796,7 @@ ncclResult_t bootstrapSplit(uint64_t magic, struct ncclComm* comm, struct ncclCo
   state->nranks = nranks;
   state->cudaDev = comm->cudaDev;
   state->abortFlag = comm->abortFlag;
-  state->net = comm->ncclNet;
+  state->net = NULL;
   comm->bootstrap = state;
   comm->magic = state->magic = magic;
 
@@ -798,7 +805,7 @@ ncclResult_t bootstrapSplit(uint64_t magic, struct ncclComm* comm, struct ncclCo
 
   // create a handle for the others to reach out to me
   if (ncclParamBootstrapNetEnable()) {
-    NCCLCHECKGOTO(netGetDevice(rank, comm, &STATE_LISTEN(state, net.dev)), ret, fail);
+    NCCLCHECKGOTO(netGetDevice(rank, comm, &state->net, &STATE_LISTEN(state, net.dev)), ret, fail);
     NCCLCHECKGOTO(state->net->listen(STATE_LISTEN(state, net.dev), STATE_LISTEN(state, net.handle), &STATE_LISTEN(state, net.comm)), ret, fail);
     memcpy(info.handle, STATE_LISTEN(state, net.handle), NCCL_NET_HANDLE_MAXSIZE);
   } else {

@@ -201,6 +201,10 @@ static ncclResult_t commFree(ncclComm_t comm) {
     for (int n=0; n<comm->nNodes; n++) free(comm->nodeRanks[n].localRankToRank);
     free(comm->nodeRanks);
   }
+  if(comm->dcNode){
+    for (int dc = 0; dc < comm->dcCount; ++dc) free(comm->dcNode[dc].localNodeToNode);
+    free(comm->dcNode);
+  }
   free(comm->rankToNode);
   free(comm->rankToLocalRank);
   free(comm->collNetHeads);
@@ -278,22 +282,22 @@ enum ncclLaunchMode ncclParamLaunchMode;
 NCCL_PARAM(DmaBufEnable, "DMABUF_ENABLE", 1);
 
 // Detect DMA-BUF support
-static ncclResult_t dmaBufSupported(struct ncclComm* comm) {
-  if (ncclParamDmaBufEnable() == 0 || comm->ncclNet->regMrDmaBuf == NULL || ncclCudaLibraryInit() != ncclSuccess) return ncclInternalError;
+static ncclResult_t dmaBufSupportedByCuda(struct ncclComm* comm) {
+  if (ncclParamDmaBufEnable() == 0 || ncclCudaLibraryInit() != ncclSuccess) return ncclInvalidUsage;
 #if CUDA_VERSION >= 11070
   int flag = 0;
   CUdevice dev;
   int cudaDriverVersion;
   CUDACHECK(cudaDriverGetVersion(&cudaDriverVersion));
-  if (CUPFN(cuDeviceGet) == NULL || cudaDriverVersion < 11070) return ncclInternalError;
+  if (CUPFN(cuDeviceGet) == NULL || cudaDriverVersion < 11070) return ncclInvalidUsage;
   CUCHECK(cuDeviceGet(&dev, comm->cudaDev));
   // Query device to see if DMA-BUF support is available
   (void) CUPFN(cuDeviceGetAttribute(&flag, CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED, dev));
-  if (flag == 0) return ncclInternalError;
+  if (flag == 0) return ncclInvalidUsage;
   INFO(NCCL_INIT, "DMA-BUF is available on GPU device %d", comm->cudaDev);
   return ncclSuccess;
 #endif
-  return ncclInternalError;
+  return ncclInvalidUsage;
 }
 
 ncclResult_t ncclCommEnsureReady(ncclComm_t comm) {
@@ -315,6 +319,15 @@ exit:
   return ret;
 }
 
+static ncclResult_t commNetName(struct ncclComm* comm, char* netName, size_t len) {
+  snprintf(netName, len, "%s", comm->ncclNet[0]->name);
+  for (int n = 1; n < comm->ncclNetCount; n++) {
+    size_t offset = strlen(netName);
+    snprintf(netName + offset, len - offset, "+%s", comm->ncclNet[n]->name);
+  }
+  return ncclSuccess;
+}
+
 static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, int ndev, int rank) {
   if (ndev < 1) {
     WARN("invalid device count (%d) requested", ndev);
@@ -334,13 +347,16 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
   NCCLCHECK(ncclNetPluginLoad(comm));
   NCCLCHECK(ncclNetInit(comm));
   NCCLCHECK(ncclProfilerPluginInit(comm));
-  INFO(NCCL_INIT, "Using network %s", comm->ncclNet->name);
 
-  if (parent && parent->config.splitShare) {
-    if (parent->ncclNet != comm->ncclNet) {
-      WARN("Split shares resources, but parent comm netName %s is different from child comm netName %s", parent->ncclNet->name, comm->ncclNet->name);
-      return ncclInvalidUsage;
-    }
+  char netName[128];
+  NCCLCHECK(commNetName(comm,netName,sizeof(netName)));
+  INFO(NCCL_INIT, "Using network %s", netName);
+
+  if (parent && parent->config.splitShare && (parent->config.netName && comm->config.netName && strcmp(parent->config.netName, comm->config.netName) != 0)) {
+    char parentNetName[128];
+    NCCLCHECK(commNetName(parent, parentNetName, sizeof(parentNetName)));
+    WARN("Split shares resources, but parent comm netName %s is different from child comm netName %s", parentNetName, netName);
+    return ncclInvalidUsage;
   }
   // Try to create a CUDA object right away. If there is something wrong with
   // the device we're on (failure cause #1) , better know it early.
@@ -359,7 +375,11 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
   TRACE(NCCL_INIT,"comm %p rank %d nranks %d cudaDev %d busId %lx compCap %d", comm, rank, ndev, comm->cudaDev, comm->busId, comm->compCap);
 
   comm->checkPointers = ncclParamCheckPointers() == 1 ? true : false;
-  comm->dmaBufSupport = (dmaBufSupported(comm) == ncclSuccess) ? true : false;
+
+  bool dmaBufCuda = dmaBufSupportedByCuda(comm) == ncclSuccess;
+  for (int n = 0; n < comm->ncclNetCount; ++n) {
+    comm->dmaBufSupport[n] = dmaBufCuda && (comm->ncclNet[n]->regMrDmaBuf != NULL);
+  }
 
   comm->collNetSupport = 0;
   memset(comm->collNetSupportMatrix, 0, sizeof(comm->collNetSupportMatrix));
@@ -560,6 +580,37 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
   info->comm = comm;
   info->cudaCompCap = comm->minCompCap = comm->maxCompCap = comm->compCap;
 
+  // cross-DC support, build the list of unique fabric Id on this node.
+  // Packing of info->netDevs must happen with increasing net index.
+  info->netDevCount = 0;
+  for (int n = 0; n < comm->ncclNetCount; ++n) {
+    ncclNet_t* net = comm->ncclNet[n];
+    int nDevs = 0;
+    NCCLCHECK(net->devices(&nDevs));
+    for (int d = 0; d < nDevs; ++d) {
+      ncclNetProperties_t props;
+      NCCLCHECK(net->getProperties(d, &props));
+      // look for a similar fabricID
+      int sameId = -1;
+      for (int j = 0; j < info->netDevCount; ++j) {
+        if (n == info->netDevs[j].netIdx && props.fabricId == info->netDevs[j].fabricId) {
+          sameId = j;
+          break;
+        }
+      }
+      // if we haven't found the id already, add it
+      if (sameId == -1) {
+        if (info->netDevCount == PEERINFO_NETDEV_MAXCOUNT) {
+          WARN("Node cannot have more than %d fabric IDs (found %d)", PEERINFO_NETDEV_MAXCOUNT, info->netDevCount + 1);
+          return ncclInternalError;
+        }
+        info->netDevs[info->netDevCount].netIdx = n;
+        info->netDevs[info->netDevCount].fabricId = props.fabricId;
+        info->netDevCount++;
+      }
+    }
+  }
+
   // MNNVL support
   {
     // MNNVL: Request the fabric UUID and partition info
@@ -690,6 +741,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     struct ncclTopoRanks topoRanks;
     int cpuArch;
     int cpuVendor;
+    int firstRankDc;
   };
 
   int nChannelsOrig;
@@ -705,7 +757,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   timers[TIMER_INIT_ALLGATHER] = clockNano();
   // AllGather1 - begin
   NCCLCHECKGOTO(ncclCalloc(&comm->peerInfo, nranks+1), ret, fail); // Extra rank to represent CollNet root
-  NCCLCHECKGOTO(fillInfo(comm, comm->peerInfo+rank, comm->commHash), ret, fail);
+  NCCLCHECKGOTO(fillInfo(comm, comm->peerInfo + rank, comm->commHash), ret, fail);
   NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, comm->peerInfo, sizeof(struct ncclPeerInfo)), ret, fail);
 
   comm->cuMemSupport = 1;
@@ -892,8 +944,47 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   // Because timers[[TIMER_INIT_ALLGATHER] already contains the timing of the first allgather,
   // we temporarily store the start time of the subsequent one in an as-of-yet unused CONNECT timer.
   timers[TIMER_INIT_CONNECT] = clockNano();
+
   // AllGather3 - begin
   NCCLCHECKGOTO(ncclCalloc(&allGather3Data, nranks), ret, fail);
+
+  // allGather3Data for multiDC support
+  allGather3Data[rank].firstRankDc = -1;
+  int graphTypeInter [NCCL_NUM_ALGORITHMS];
+  for (int a = 0; a < NCCL_NUM_ALGORITHMS; ++a) graphTypeInter[a] = graphs[a]->typeInter;
+  for (int r = 0; r < comm->nRanks; ++r) {
+    // for each algorithm, gather the largest PATH between the GPU and the net that will be used to connect to the peer.
+    for (int a = 0; a < NCCL_NUM_ALGORITHMS; ++a) {
+      for (int c = 0; c < graphs[a]->nChannels; ++c) {
+        int netPathType;
+        ncclResult_t res = ncclTopoGetNetDevFromGraph(comm, comm->rank, /*peerRank=*/r, graphs[a], c, NULL, NULL, &netPathType);
+        if (res != ncclSuccess && graphs[a]->pattern != NCCL_TOPO_PATTERN_NVLS) {
+          // not finding a nic for rank r is an error;
+          //Unless it's an NVLS graphs, then it's expected because not every rank is an NVLS head
+          WARN("Unable to find a net dev to connect to %d with channel %d in graph[%d]", r, c, a);
+          return ncclInternalError;
+        }
+        if(netPathType > graphTypeInter[a]) graphTypeInter[a] = netPathType;
+      }
+    }
+    struct ncclPeerInfo* rankInfo = &comm->peerInfo[rank];
+    struct ncclPeerInfo* peerInfo = &comm->peerInfo[r];
+    for (int d = 0; d < rankInfo->netDevCount; d++) {
+      int devNetIdx = rankInfo->netDevs[d].netIdx;
+      uint64_t devFabricId = rankInfo->netDevs[d].fabricId;
+      // skip if it's not the DC network or if we have found the first rank already
+      if (devNetIdx != comm->ncclDcNetIndex || allGather3Data[rank].firstRankDc != -1) continue;
+      for (int p = 0; p < peerInfo->netDevCount; p++) {
+        ncclNetPath_t path = {.loc = NET_LOC_DISC};
+        if (peerInfo->netDevs[p].netIdx == devNetIdx) NCCLCHECK(comm->ncclNet[devNetIdx]->getNetPath(peerInfo->netDevs[p].fabricId, devFabricId, &path));
+        if (path.loc <= NET_LOC_DCL0) {
+          allGather3Data[rank].firstRankDc = r;
+          break;
+        }
+      }
+    }
+  }
+
 
   for (int a=0; a<NCCL_NUM_ALGORITHMS; a++) {
     allGather3Data[rank].graphInfo[a].pattern = graphs[a]->pattern;
@@ -902,7 +993,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     allGather3Data[rank].graphInfo[a].bwIntra = graphs[a]->bwIntra;
     allGather3Data[rank].graphInfo[a].bwInter = graphs[a]->bwInter;
     allGather3Data[rank].graphInfo[a].typeIntra = graphs[a]->typeIntra;
-    allGather3Data[rank].graphInfo[a].typeInter = graphs[a]->typeInter;
+    allGather3Data[rank].graphInfo[a].typeInter = graphTypeInter[a];
     allGather3Data[rank].graphInfo[a].crossNic = graphs[a]->crossNic;
   }
 
@@ -974,6 +1065,47 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   comm->localRankToRank = comm->nodeRanks[comm->node].localRankToRank;
   comm->localRank = comm->rankToLocalRank[rank];
   comm->localRanks = comm->nodeRanks[comm->node].localRanks;
+
+  // multiDC support - obtain the DC ID for each node and create the DC rank list
+  do {
+    comm->dcCount = 0;
+    int* firstRankDcNode = NULL;
+    NCCLCHECKGOTO(ncclCalloc(&firstRankDcNode, comm->nNodes), ret, fail);
+    for (int n = 0; n < comm->nNodes; n++) {
+      struct ncclNodeRanks* nodeRank = &comm->nodeRanks[n];
+      if (nodeRank->localRanks > 0) {
+        firstRankDcNode[n] = allGather3Data[nodeRank->localRankToRank[0]].firstRankDc;
+      }
+      // now find previous nodes with the same firstRank, assign their DC index
+      int m = 0;
+      for (m = 0; m < n; ++m) {
+        if (firstRankDcNode[m] == firstRankDcNode[n]) {
+          nodeRank->dcIndex = comm->nodeRanks[m].dcIndex;
+          break;
+        }
+      }
+      // haven't found any, create a new DC
+      if (m == n) nodeRank->dcIndex = comm->dcCount++;
+    }
+    free(firstRankDcNode);
+    // then build information for each of them
+    NCCLCHECKGOTO(ncclCalloc(&comm->dcNode, comm->dcCount), ret, fail);
+    for (int n = 0; n < comm->nNodes; n++) {
+      struct ncclNodeRanks* nodeRank = &comm->nodeRanks[n];
+      comm->dcNode[nodeRank->dcIndex].localNodes++;
+    }
+    for (int dc = 0; dc < comm->dcCount; ++dc) {
+      struct ncclDcNode* dcRank = &comm->dcNode[dc];
+      NCCLCHECKGOTO(ncclCalloc(&dcRank->localNodeToNode, dcRank->localNodes), ret, fail);
+      dcRank->localNodes = 0; // reset to 0 to be able to fill the arrays
+    }
+    // store the rank arrays inside the DC rank list
+    for (int n = 0; n < comm->nNodes; n++) {
+      struct ncclNodeRanks* nodeRank = &comm->nodeRanks[n];
+      struct ncclDcNode* dcNode = &comm->dcNode[nodeRank->dcIndex];
+      dcNode->localNodeToNode[dcNode->localNodes++] = n;
+    }
+  } while (0);
 
   TRACE(NCCL_INIT,"hostHash[%d] %lx localRank %d localRanks %d localRank0 %d",
         rank, comm->peerInfo[rank].hostHash, comm->localRank, comm->localRanks, comm->localRankToRank[0]);

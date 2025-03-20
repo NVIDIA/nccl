@@ -1821,8 +1821,10 @@ ncclResult_t ncclProxyCreate(struct ncclComm* comm) {
     proxyState->p2pChunkSize = comm->p2pChunkSize;
     proxyState->nChannels = comm->nChannels;
     proxyState->allocP2pNetLLBuffers = comm->allocP2pNetLLBuffers;
-    proxyState->dmaBufSupport = comm->dmaBufSupport;
-    proxyState->ncclNet = comm->ncclNet;
+    for (int n = 0; n < comm->ncclNetCount; ++n) {
+      proxyState->dmaBufSupport[n] = comm->dmaBufSupport[n];
+      proxyState->ncclNet[n] = comm->ncclNet[n];
+    }
     proxyState->ncclCollNet = comm->ncclCollNet;
     proxyState->profilerContext = comm->profilerContext;
     proxyState->directMode = comm->directMode;

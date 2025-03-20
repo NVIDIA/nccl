@@ -14,6 +14,7 @@
 #include "profiler/net_ib.h"
 
 #include <assert.h>
+#include <cstdint>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -77,6 +78,7 @@ struct alignas(64) ncclIbDev {
   struct ibv_port_attr portAttr;
   struct ncclIbStats stats;
   int dmaBufSupported;
+  uint64_t fid;
 };
 
 #define MAX_IB_DEVS  32
@@ -543,6 +545,10 @@ ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
         props->devs[0], dev0->devName, dev0->portNum, NCCL_IB_LLSTR(dev0->link), props->devs[i], dev->devName, dev->portNum, NCCL_IB_LLSTR(dev->link));
       return ncclInvalidUsage;
     }
+    if (dev->fid != dev0->fid) {
+      WARN("NET/IB : Trying to merge multiple devices together with different fabric ID properties %s -> %lu, %s -> %lu.", dev0->devName, dev0->fid, dev->devName, dev->fid);
+      return ncclInvalidUsage;
+    }
   }
 
   *d = ncclNMergedIbDevs++;
@@ -558,6 +564,32 @@ ncclResult_t ncclIbMakeVDevice(int* d, ncclNetVDeviceProps_t* props) {
 }
 
 static ncclProfilerCallback_t ncclProfilerFunction;
+
+// NCCL_IF_FABRICID_MAX is set to (1<<48), all the bits above are available for default values
+NCCL_PARAM(IbDcMaxRail, "IB_FABRICID_MAXRAIL", (1L<<62));
+NCCL_PARAM(IbDefaultFabricId, "IB_FABRICID_DEFAULT", (1L << 60));
+NCCL_PARAM(RoceDefaultFabricId, "ROCE_FABRICID_DEFAULT", (1L << 61));
+
+// Fabric Id are constructed as dcId * NCCL_IB_FABRICID_DC_MAXRAIL + railId.
+// Two fabric Ids are connected if they have the same rail Id.
+// If they share the same dcId they are connected with LOC_DCL0 (level 0), if not they are connected with LOC_DCL1 (level 1).
+// Note: default fabricIds cannot be associated to a specific rail Ids or DC. By default, they correspond to their own DC.
+ncclResult_t ncclIbgetNetPath(uint64_t fabricId0, uint64_t fabricId1, ncclNetPath_t* path) {
+  if (!path) return ncclInvalidArgument;
+  uint64_t maxRail0 = (fabricId0 == ncclParamIbDefaultFabricId() || fabricId0 == ncclParamRoceDefaultFabricId()) ? UINT64_MAX : ncclParamIbDcMaxRail();
+  uint64_t maxRail1 = (fabricId1 == ncclParamIbDefaultFabricId() || fabricId1 == ncclParamRoceDefaultFabricId()) ? UINT64_MAX: ncclParamIbDcMaxRail();
+  uint64_t dcId0 = fabricId0 / maxRail0;
+  uint64_t dcId1 = fabricId1 / maxRail1;
+  uint64_t railId0 = fabricId0 % maxRail0;
+  uint64_t railId1 = fabricId1 % maxRail1;
+  if (railId0 != railId1)
+    path->loc = NET_LOC_DISC;
+  else if (dcId0 == dcId1) /*railId0 ==railId1 */
+    path->loc = NET_LOC_DCL0;
+  else /*railId0 == railId1 && dcId0 != dcId1*/
+    path->loc = NET_LOC_DCL1;
+  return ncclSuccess;
+}
 
 ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) {
   ncclResult_t ret = ncclSuccess;
@@ -590,7 +622,8 @@ ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction, ncclProfilerCallback_t pr
       if (searchNot) userIbEnv++;
       bool searchExact = userIbEnv && userIbEnv[0] == '=';
       if (searchExact) userIbEnv++;
-      int nUserIfs = parseStringList(userIbEnv, userIfs, MAX_IB_DEVS);
+      int nUserIfs;
+      NCCLCHECK(parseIfList(userIbEnv, userIfs, MAX_IB_DEVS, &nUserIfs));
 
       if (ncclSuccess != wrap_ibv_get_device_list(&devices, &nIbDevs)) { ret = ncclInternalError; goto fail; }
 
@@ -619,9 +652,22 @@ ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction, ncclProfilerCallback_t pr
               && portAttr.link_layer != IBV_LINK_LAYER_ETHERNET) continue;
 
           // check against user specified HCAs/ports
-          if (! (matchIfList(devices[d]->name, port_num, userIfs, nUserIfs, searchExact) ^ searchNot)) {
-            continue;
+          int indexUserIf = -1;
+          if (!(indexIfList(devices[d]->name, port_num, userIfs, nUserIfs, searchExact, &indexUserIf) ^ searchNot)) continue;
+
+          // create the default fabric ID, use the user provided one if available
+          uint64_t fabId = (portAttr.link_layer == IBV_LINK_LAYER_INFINIBAND) ? (uint64_t)ncclParamIbDefaultFabricId() : (uint64_t)ncclParamRoceDefaultFabricId();
+          if (indexUserIf != -1) {
+            int64_t ifFabricId = userIfs[indexUserIf].fabricId;
+            if (ifFabricId == ncclParamIbDefaultFabricId() || ifFabricId == ncclParamRoceDefaultFabricId()) {
+              INFO(NCCL_NET, "Cannot use device %s because the associated fabric Id = %ld conflicts with the default IB = %ld or RoCE = %ld ones. "
+                   "Please consider changing the value of NCCL_IB_FABRICID_DEFAULT and NCCL_IB_ROCE_FABRICID_DEFAULT to avoid conflicts.",
+                   devices[d]->name, ifFabricId, ncclParamIbDefaultFabricId(), ncclParamRoceDefaultFabricId());
+              continue;
+            }
+            if (ifFabricId >= 0) fabId = (uint64_t)ifFabricId;
           }
+
           pthread_mutex_init(&ncclIbDevs[ncclNIbDevs].lock, NULL);
           ncclIbDevs[ncclNIbDevs].device = d;
           ncclIbDevs[ncclNIbDevs].guid = devAttr.sys_image_guid;
@@ -632,6 +678,7 @@ ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction, ncclProfilerCallback_t pr
           ncclIbDevs[ncclNIbDevs].context = context;
           ncclIbDevs[ncclNIbDevs].pdRefs = 0;
           ncclIbDevs[ncclNIbDevs].pd = NULL;
+          ncclIbDevs[ncclNIbDevs].fid = fabId;
           strncpy(ncclIbDevs[ncclNIbDevs].devName, devices[d]->name, MAXNAMESIZE);
           NCCLCHECKGOTO(ncclIbGetPciPath(ncclIbDevs[ncclNIbDevs].devName, &ncclIbDevs[ncclNIbDevs].pciPath, &ncclIbDevs[ncclNIbDevs].realPort), ret, fail);
           ncclIbDevs[ncclNIbDevs].maxQp = devAttr.max_qp;
@@ -645,8 +692,8 @@ ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction, ncclProfilerCallback_t pr
           ncclIbDevs[ncclNIbDevs].ar = (portAttr.link_layer == IBV_LINK_LAYER_INFINIBAND) ? 1 : 0;
           if (ncclParamIbAdaptiveRouting() != -2) ncclIbDevs[ncclNIbDevs].ar = ncclParamIbAdaptiveRouting();
 
-          TRACE(NCCL_NET,"NET/IB: [%d] %s:%s:%d/%s speed=%d context=%p pciPath=%s ar=%d", d, devices[d]->name, devices[d]->dev_name, ncclIbDevs[ncclNIbDevs].portNum,
-              NCCL_IB_LLSTR(portAttr.link_layer), ncclIbDevs[ncclNIbDevs].speed, context, ncclIbDevs[ncclNIbDevs].pciPath, ncclIbDevs[ncclNIbDevs].ar);
+          TRACE(NCCL_NET,"NET/IB: [%d] %s:%s:%d/%s speed=%d context=%p pciPath=%s ar=%d fabricId=%lu", d, devices[d]->name, devices[d]->dev_name, ncclIbDevs[ncclNIbDevs].portNum,
+              NCCL_IB_LLSTR(portAttr.link_layer), ncclIbDevs[ncclNIbDevs].speed, context, ncclIbDevs[ncclNIbDevs].pciPath, ncclIbDevs[ncclNIbDevs].ar,ncclIbDevs[ncclNIbDevs].fabricId);
 
           PTHREADCHECKGOTO(pthread_create(&ncclIbAsyncThread, NULL, ncclIbAsyncThreadMain, ncclIbDevs + ncclNIbDevs), "pthread_create", ret, fail);
           ncclSetThreadName(ncclIbAsyncThread, "NCCL IbAsync %2d", ncclNIbDevs);
@@ -786,6 +833,7 @@ ncclResult_t ncclIbGetPhysProperties(int dev, ncclNetProperties_t* props) {
   props->netDeviceType    = NCCL_NET_DEVICE_HOST;
   props->netDeviceVersion = NCCL_NET_DEVICE_INVALID_VERSION;
   props->maxP2pBytes = NCCL_MAX_NET_SIZE_BYTES;
+  props->fabricId = ibDev->fid;
   pthread_mutex_unlock(&ibDev->lock);
   return ncclSuccess;
 }
@@ -2485,7 +2533,8 @@ ncclNet_t ncclNetIb = {
   ncclIbCloseListen,
   NULL /* getDeviceMr */,
   NULL /* irecvConsumed */,
-  ncclIbMakeVDevice
+  ncclIbMakeVDevice,
+  ncclIbgetNetPath
 };
 
 /*

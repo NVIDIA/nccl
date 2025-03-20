@@ -155,7 +155,7 @@ struct ncclRing {
 
 
 // The root of each tree only has one node down (+1 intra-node).
-#define NCCL_MAX_TREE_ARITY_TOP 2
+#define NCCL_MAX_TREE_ARITY_TOP 3
 // Nodes inside the binary tree can have to two nodes down (+1 intra-node).
 #define NCCL_MAX_TREE_ARITY 3
 struct ncclTree {

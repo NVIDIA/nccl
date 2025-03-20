@@ -299,8 +299,8 @@ struct ncclProxyState {
   int nChannels;
   int buffSizes[NCCL_NUM_PROTOCOLS];
   bool allocP2pNetLLBuffers;
-  bool dmaBufSupport;
-  ncclNet_t* ncclNet;
+  bool dmaBufSupport[NCCL_NET_MAX_PLUGINS];
+  ncclNet_t* ncclNet[NCCL_NET_MAX_PLUGINS];
   ncclCollNet_t* ncclCollNet;
   uint32_t* abortFlag;
   bool directMode;

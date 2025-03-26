@@ -115,6 +115,8 @@ __hidden void printProxyCtrlEvent(FILE* fh, struct proxyCtrl* event) {
     str = "Sleep";
   } else if (event->state == ncclProfilerProxyCtrlAppend || event->state == ncclProfilerProxyCtrlAppendEnd) {
     str = "Append";
+  } else {
+    return;
   }
   if (event->state == ncclProfilerProxyCtrlAppendEnd) {
     fprintf(fh, "{\"name\": \"%s\", \"cat\": \"PROXY\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"appended\": %d}},\n",

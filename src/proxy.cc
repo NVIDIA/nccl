@@ -929,11 +929,13 @@ void* ncclProxyProgress(void *proxyState_) {
       INFO(NCCL_ALL,"%s:%d -> %d [Progress Thread]", __FILE__, __LINE__, ret);
       break;
     }
-    void* eHandle;
-    ncclProfilerStartProxyCtrlEvent(proxyState->profilerContext, &eHandle);
-    if (lastIdle == 0 && idle == 1) ncclProfilerRecordProxyCtrlEventState(eHandle, 0, ncclProfilerProxyCtrlIdle);
-    if (lastIdle == 1 && idle == 0) ncclProfilerRecordProxyCtrlEventState(eHandle, 0, ncclProfilerProxyCtrlActive);
-    ncclProfilerStopProxyCtrlEvent(eHandle);
+    if ((lastIdle == 0 && idle == 1) || (lastIdle == 1 && idle == 0)) {
+      void* eHandle;
+      ncclProfilerStartProxyCtrlEvent(proxyState->profilerContext, &eHandle);
+      if (lastIdle == 0 && idle == 1) ncclProfilerRecordProxyCtrlEventState(eHandle, 0, ncclProfilerProxyCtrlIdle);
+      if (lastIdle == 1 && idle == 0) ncclProfilerRecordProxyCtrlEventState(eHandle, 0, ncclProfilerProxyCtrlActive);
+      ncclProfilerStopProxyCtrlEvent(eHandle);
+    }
     if (idle || !state->active || (++proxyOpAppendCounter == ncclParamProgressAppendOpFreq())) {
       int added = 0;
       proxyOpAppendCounter = 0;

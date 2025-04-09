@@ -10,7 +10,7 @@ PLUGIN_SO := libnccl-profiler.so
 default: $(PLUGIN_SO)
 
 $(PLUGIN_SO): plugin.c event.c print_event.c
-	$(CC) $(INC) -g -fPIC -shared -o $@ -Wl,-soname,$(PLUGIN_SO) $^
+	$(CXX) $(INC) -g -fPIC -shared -o $@ -Wl,-soname,$(PLUGIN_SO) $^
 
 clean:
 	rm -f $(PLUGIN_SO)

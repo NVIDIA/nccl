@@ -4,8 +4,8 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
-#ifndef NCCL_PROFILER_V1_H_
-#define NCCL_PROFILER_V1_H_
+#ifndef PROFILER_V1_H_
+#define PROFILER_V1_H_
 
 #include <stdint.h>
 
@@ -59,8 +59,16 @@ typedef struct {
   };
 } ncclProfilerEventDescr_v1_t;
 
-typedef ncclProfilerEventState_v2_t ncclProfilerEventState_v1_t;
-typedef ncclProfilerEventStateArgs_v2_t ncclProfilerEventStateArgs_v1_t;
+typedef union {
+  struct {
+    size_t transSize;
+    int steps;
+  } proxyOp;
+
+  struct {
+    int appendedProxyOps;
+  } proxyCtrl;
+} ncclProfilerEventStateArgs_v1_t;
 
 typedef struct {
   const char* name;

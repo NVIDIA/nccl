@@ -33,10 +33,42 @@
 
 #define MAX_PROXY_OP_STATES              ((NUM_PROXY_OP_SEND_STATES   > NUM_PROXY_OP_RECV_STATES  ) ? NUM_PROXY_OP_SEND_STATES   : NUM_PROXY_OP_RECV_STATES)
 #define MAX_PROXY_STEP_STATES            ((NUM_PROXY_STEP_SEND_STATES > NUM_PROXY_STEP_RECV_STATES) ? NUM_PROXY_STEP_SEND_STATES : NUM_PROXY_STEP_RECV_STATES)
-
-#define MAX_COMM_CLIQUES                 (32 * 8)
+#define MAX_EVENTS_PER_REQ               (8)
 
 struct proxyOp;
+struct proxyStep;
+
+struct netPlugin {
+  uint8_t type;
+  int pluginType;
+  int pluginVer;
+  uint8_t pluginEvent;
+  union {
+    struct {
+      int device;
+      int qpNum;
+      int opcode;
+      uint64_t wr_id;
+      size_t length;
+    } qp;
+    struct {
+      int fd;
+      int op;
+      size_t length;
+    } sock;
+  };
+  double startTs;
+  double stopTs;
+  struct proxyStep* parent;
+};
+
+struct kernelCh {
+  uint8_t type;
+  uint8_t channelId;
+  struct taskEventBase* parent;
+  double startTs;
+  double stopTs;
+};
 
 struct proxyStep {
   uint8_t type;                     // type of event: network transfer
@@ -46,6 +78,8 @@ struct proxyStep {
   double startTs;
   double stopTs;
   struct proxyOp* parent;
+  struct netPlugin net[MAX_EVENTS_PER_REQ];
+  int nNetEvents;
 };
 
 struct proxyOp {
@@ -101,7 +135,6 @@ struct collective {
   void const* sendBuff;
   void* recvBuff;
   size_t count;
-  size_t trafficBytes;
   int root;
   const char* datatype;
   uint8_t nMaxChannels;
@@ -111,6 +144,7 @@ struct collective {
   struct proxyOp send[MAX_CHANNELS][MAX_OPS];// array of send proxy operation events
   struct proxyOp recv[MAX_CHANNELS][MAX_OPS];// array of recv proxy operation events
   int nProxyOps[MAX_CHANNELS];
+  struct kernelCh kernel[MAX_CHANNELS];
 };
 
 struct p2p {
@@ -121,6 +155,7 @@ struct p2p {
   const char* datatype;
   int peer;
   struct proxyOp op[MAX_CHANNELS];
+  struct kernelCh kernel[MAX_CHANNELS];
 };
 
 struct group {

@@ -35,6 +35,7 @@ static ncclResult_t ncclNet_getProperties(int dev, ncclNetProperties_t* props) {
   props->vProps.devs[0] = dev;
   props->maxP2pBytes = MAX_NET_SIZE;
   props->maxCollBytes = MAX_COLLNET_SIZE;
+  props->fabricId = 0;
   return ncclSuccess;
 }
 
@@ -67,6 +68,12 @@ static ncclResult_t ncclNet_irecv(void* recvComm, int n, void** data, size_t* si
   return ans;
 }
 
+static ncclResult_t ncclNet_getNetPath(uint64_t fabricId0, uint64_t fabricId1, ncclNetPath_t* path) {
+  if (!path) return ncclInvalidArgument;
+  path->loc = (fabricId0 == fabricId1) ? NET_LOC_DCL0 : NET_LOC_DISC;
+  return ncclSuccess;
+}
+
 static ncclResult_t ncclCollNet_getProperties(int dev, ncclNetProperties_t* props) {
   ncclNetProperties_v7_t p7;
   ncclResult_t ans = ncclCollNet_v7->getProperties(dev, &p7);
@@ -88,6 +95,7 @@ static ncclResult_t ncclCollNet_getProperties(int dev, ncclNetProperties_t* prop
   props->vProps.devs[0] = dev;
   props->maxP2pBytes = MAX_NET_SIZE;
   props->maxCollBytes = MAX_COLLNET_SIZE;
+  props->fabricId = 0;
   return ncclSuccess;
 }
 
@@ -104,6 +112,12 @@ static ncclResult_t ncclCollNet_iallreduce(void* collComm, void* sendData, void*
   ncclResult_t ans = ncclCollNet_v7->iallreduce(collComm, sendData, recvData, countInt, dataType, redOp,
                  sendMhandle, recvMhandle, request);
   return ans;
+}
+
+static ncclResult_t ncclCollNet_getNetPath(uint64_t fabricId0, uint64_t fabricId1, ncclNetPath_t* path) {
+  if (!path) return ncclInvalidArgument;
+  path->loc = (fabricId0 == fabricId1) ? NET_LOC_DCL0 : NET_LOC_DISC;
+  return ncclSuccess;
 }
 
 static ncclResult_t ncclNet_init(ncclDebugLogger_t logfn, ncclProfilerCallback_t proffn) {

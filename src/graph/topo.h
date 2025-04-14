@@ -112,10 +112,12 @@ struct ncclTopoLinkList {
 #define NCCL_TOPO_UNDEF (-1)
 
 #define NCCL_TOPO_ID_LOCAL_ID_MASK 0x00ffffffffffffff
+// access a TOPO_ID
 #define NCCL_TOPO_ID_SYSTEM_ID(id) (id >> 56)
 #define NCCL_TOPO_ID_LOCAL_ID(id) (id & NCCL_TOPO_ID_LOCAL_ID_MASK)
-#define NCCL_TOPO_LOCAL_NIC_ID(numaid, busid) (((int64_t)numaid << 56) + busid)
-#define NCCL_TOPO_ID(systemid, localid) (((int64_t)systemid << 56) + (localid & NCCL_TOPO_ID_LOCAL_ID_MASK))
+// create a TOPO_ID
+#define NCCL_TOPO_ID(systemid, localid) (((int64_t)(systemid) << 56) + ((localid) & NCCL_TOPO_ID_LOCAL_ID_MASK))
+#define NCCL_TOPO_ID_NIC(systemid, pluginid, localid) NCCL_TOPO_ID(systemid + pluginid, localid)
 
 struct ncclTopoNode {
   int type;
@@ -129,6 +131,7 @@ struct ncclTopoNode {
       int gdrSupport;
     }gpu;
     struct {
+      int netIdx; // net index inside the comm net array
       int dev; // Plugin dev number
       uint64_t asic;
       int port;
@@ -137,6 +140,8 @@ struct ncclTopoNode {
       int gdrSupport;
       int collSupport;
       int maxChannels;
+      uint64_t fabricId;
+      ncclResult_t (*getNetPath)(uint64_t, uint64_t, ncclNetPath_t*); // gives the locality between this device and another one
     }net;
     struct {
       int arch;
@@ -189,14 +194,18 @@ ncclResult_t ncclTopoGetXmlFromGraphs(int ngraphs, struct ncclTopoGraph** graphs
 
 ncclResult_t ncclTopoGetCompCap(struct ncclTopoSystem* system, int* ccMin, int* ccMax);
 
+ncclResult_t ncclTopoIdToNetIdx(struct ncclComm* comm, int64_t topoId, int* netIdx);
+
 static ncclResult_t ncclTopoIdToIndex(struct ncclTopoSystem* system, int type, int64_t id, int* index) {
   *index = -1;
+  if(system->nodes[type].count == 0) return ncclSuccess;
   for (int i=0; i<system->nodes[type].count; i++) {
     if (system->nodes[type].nodes[i].id == id) {
       *index = i;
       return ncclSuccess;
     }
   }
+  WARN("failed to find a topo node with id %ld", id);
   return ncclInternalError;
 }
 

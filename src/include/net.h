@@ -12,6 +12,8 @@
 #include "comm.h"
 #include "checks.h"
 
+static NCCL_PARAM(AllNet,"ALLNET_ENABLE",0);
+
 typedef char ncclNetHandle_t[NCCL_NET_HANDLE_MAXSIZE];
 
 ncclResult_t ncclNetPluginLoad(struct ncclComm* comm);

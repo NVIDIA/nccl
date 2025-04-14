@@ -85,8 +85,14 @@ struct ncclUserRedOp {
 };
 
 struct ncclNodeRanks {
+  int dcIndex; // index into the DC array
   int localRanks;
   int* localRankToRank;
+};
+
+struct ncclDcNode {
+  int localNodes;
+  int* localNodeToNode;
 };
 
 struct cliqueInfo {
@@ -421,10 +427,14 @@ struct ncclComm {
   struct ncclProxyConnector* gproxyConn;
   struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next> legacyRegCleanupQueue;
 
+  int ncclNetCount;
+  int ncclDcNetIndex;
   int netPluginLoaded;
-  ncclNet_t* ncclNet;
-  int ncclNetVer;
   ncclNetDeviceType netDeviceType;
+  int ncclNetVer[NCCL_NET_MAX_PLUGINS];
+  int ncclNetPluginIdx[NCCL_NET_MAX_PLUGINS];
+  ncclNet_t* ncclNet[NCCL_NET_MAX_PLUGINS];
+  int ncclCollNetPluginIdx;
   ncclCollNet_t* ncclCollNet;
   void* bootstrap;
   // Bitmasks for ncclTransportP2pSetup
@@ -464,13 +474,16 @@ struct ncclComm {
   int* localRankToRank;
   // localRanks and localRanktoRank for all nodes
   struct ncclNodeRanks* nodeRanks;
+  // multi-DC support
+  int dcCount;
+  struct ncclDcNode* dcNode;
   // MNNVL: Multi-Node NVLink
   int MNNVL; // true when MNNVL is available
   struct cliqueInfo clique; // Our MNNVL clique information
   int cliqueRank; // Our rank within the MNNVL clique
 
   bool checkPointers;
-  bool dmaBufSupport;
+  bool dmaBufSupport[NCCL_NET_MAX_PLUGINS];
 
   // Counter for tracking CUDA launches (P2P and collectives included)
   uint64_t opCount;

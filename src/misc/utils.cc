@@ -132,20 +132,34 @@ uint64_t getPidHash(void) {
   return getHash(pname, strlen(pname));
 }
 
-int parseStringList(const char* string, struct netIf* ifList, int maxList) {
-  if (!string) return 0;
-
+ncclResult_t parseIfList(const char* string, struct netIf* ifList, int maxList, int *ifCount) {
   const char* ptr = string;
-
-  int ifNum = 0;
-  int ifC = 0;
+  int ifNum = 0, ifC = 0;
   char c;
+  if (!string) goto exit;
   do {
     c = *ptr;
     if (c == ':') {
       if (ifC > 0) {
         ifList[ifNum].prefix[ifC] = '\0';
-        ifList[ifNum].port = atoi(ptr+1);
+        ifList[ifNum].port = -1;
+        ifList[ifNum].fabricId = -1;
+        char* next = NULL;
+        const char* start = ptr + 1;
+        long port = strtol(start, &next, 10);
+        if (next != start) ifList[ifNum].port = port;
+        if (*next == ':') {
+          start = next + 1;
+          uint64_t fabId = strtol(start, &next, 10);
+          if (next != start) {
+            if (fabId < 0 || fabId > NCCL_IF_MAX_FABRICID) {
+              WARN("fabric ID %ld must be between 0 and  %ld.", fabId, NCCL_IF_MAX_FABRICID);
+              goto fail;
+            }
+            ifList[ifNum].fabricId = fabId;
+          }
+        }
+        INFO(NCCL_ENV | NCCL_NET, "found IF %s port %d fabricId %ld", ifList[ifNum].prefix, ifList[ifNum].port, ifList[ifNum].fabricId);
         ifNum++; ifC = 0;
       }
       while (c != ',' && c != '\0') c = *(++ptr);
@@ -153,6 +167,8 @@ int parseStringList(const char* string, struct netIf* ifList, int maxList) {
       if (ifC > 0) {
         ifList[ifNum].prefix[ifC] = '\0';
         ifList[ifNum].port = -1;
+        ifList[ifNum].fabricId = -1;
+        INFO(NCCL_ENV | NCCL_NET, "found IF %s port %d fabricId %ld", ifList[ifNum].prefix, ifList[ifNum].port, ifList[ifNum].fabricId);
         ifNum++; ifC = 0;
       }
     } else {
@@ -161,7 +177,12 @@ int parseStringList(const char* string, struct netIf* ifList, int maxList) {
     }
     ptr++;
   } while (ifNum < maxList && c);
-  return ifNum;
+exit:
+  if(ifCount) *ifCount = ifNum;
+  return ncclSuccess;
+fail:
+  if(ifCount) *ifCount = ifNum;
+  return ncclInvalidUsage;
 }
 
 static bool matchIf(const char* string, const char* ref, bool matchExact) {
@@ -178,17 +199,21 @@ static bool matchPort(const int port1, const int port2) {
 }
 
 
-bool matchIfList(const char* string, int port, struct netIf* ifList, int listSize, bool matchExact) {
+bool indexIfList(const char* string, int port, struct netIf* ifList, int listSize, bool matchExact, int* index) {
+  if (index) *index = -1;
   // Make an exception for the case where no user list is defined
   if (listSize == 0) return true;
 
   for (int i=0; i<listSize; i++) {
-    if (matchIf(string, ifList[i].prefix, matchExact)
-        && matchPort(port, ifList[i].port)) {
+    if (matchIf(string, ifList[i].prefix, matchExact) && matchPort(port, ifList[i].port)) {
+      if(index) *index=i;
       return true;
     }
   }
   return false;
+}
+bool matchIfList(const char* string, int port, struct netIf* ifList, int listSize, bool matchExact) {
+  return indexIfList(string,port,ifList,listSize,matchExact,NULL);
 }
 
 __thread struct ncclThreadSignal ncclThreadSignalLocalInstance = ncclThreadSignalStaticInitializer();

@@ -124,6 +124,19 @@ static ncclResult_t xmlGetAttrLong(struct ncclXmlNode* node, const char* attrNam
   return ncclSuccess;
 }
 
+static ncclResult_t xmlGetAttrUint64(struct ncclXmlNode* node, const char* attrName, uint64_t* value) {
+  const char* str;
+  NCCLCHECK(xmlGetAttrStr(node, attrName, &str));
+  *value = strtoull(str, NULL, 0);
+  return ncclSuccess;
+}
+
+static ncclResult_t xmlGetAttrUint64Default(struct ncclXmlNode* node, const char* attrName, uint64_t* value, uint64_t defaultValue) {
+  const char* str;
+  NCCLCHECK(xmlGetAttr(node, attrName, &str));
+  *value = str ? strtoull(str, NULL, 0) : defaultValue;
+  return ncclSuccess;
+}
 
 static ncclResult_t xmlGetAttrFloat(struct ncclXmlNode* node, const char* attrName, float* value) {
   const char* str;
@@ -272,6 +285,19 @@ static ncclResult_t xmlSetAttrFloat(struct ncclXmlNode* node, const char* attrNa
 }
 
 static ncclResult_t xmlSetAttrLong(struct ncclXmlNode* node, const char* attrName, const int64_t value) {
+  int index;
+  NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
+  if (index == -1) {
+    index = node->nAttrs++;
+    strncpy(node->attrs[index].key, attrName, MAX_STR_LEN);
+    node->attrs[index].key[MAX_STR_LEN] = '\0';
+  }
+  snprintf(node->attrs[index].value, MAX_STR_LEN, "%#lx", value);
+  node->attrs[index].value[MAX_STR_LEN] = '\0';
+  return ncclSuccess;
+}
+
+static ncclResult_t xmlSetAttrUint64(struct ncclXmlNode* node, const char* attrName, const uint64_t value) {
   int index;
   NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
   if (index == -1) {

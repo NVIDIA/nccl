@@ -438,6 +438,7 @@ ncclResult_t ncclTopoCompareGraphs(struct ncclTopoSystem* system, struct ncclTop
 }
 
 // Build a sorted list of the NETs to try.
+// The NETs returned are compatible with at least one element in the list of netDevs.
 //
 // "gpu" can be set to -1 to build a list suitable for all GPUs (search start) or to a given gpu
 //  index when trying to get back to the NIC.
@@ -446,7 +447,8 @@ ncclResult_t ncclTopoCompareGraphs(struct ncclTopoSystem* system, struct ncclTop
 // 1. Select NETs starting with those close to GPU(s), based on paths[n].type.
 // 2. add other NETs satisfying typeInter but not already in the list.
 
-ncclResult_t ncclTopoSelectNets(struct ncclTopoSystem* system, int typeInter, int gpu, int nets[NCCL_TOPO_MAX_NODES], int* netCountRet) {
+static ncclResult_t ncclTopoSelectNets(struct ncclTopoSystem* system, int typeInter, int gpuId, int nets[NCCL_TOPO_MAX_NODES], int* netCountRet, int netDevCount,
+                                       struct ncclNetDev* netDevs) {
   ncclResult_t ret = ncclSuccess;
   int netCount = 0;
   int localNetCount;
@@ -454,12 +456,19 @@ ncclResult_t ncclTopoSelectNets(struct ncclTopoSystem* system, int typeInter, in
 
   // First add the preferred NICs
   for (int g=0; g<system->nodes[GPU].count; g++) {
-    if (gpu != -1 && gpu != g) continue;
+    if (gpuId != -1 && gpuId != g) continue;
     localNetCount = 0;
     struct ncclTopoNode* gpu = system->nodes[GPU].nodes+g;
     for (int c = 0; c<MAXCHANNELS; c++) {
       int64_t netId;
-      NCCLCHECK(ncclTopoGetLocalNet(system, gpu->gpu.rank, c, &netId, NULL));
+      NCCLCHECK(ncclTopoGetLocalNet(system, gpu->gpu.rank, c, &netId, NULL, /*pathType=*/NULL, netDevCount, netDevs));
+      if (netId == -1) {
+        char msg[256];
+        for (int i = 0; i < netDevCount; ++i) snprintf(msg + strlen(msg), sizeof(msg) - strlen(msg), "%s %d:%lu", (i == 0) ? "" : ",", netDevs[i].netIdx, netDevs[i].fabricId);
+        WARN("Could not find any local path from gpu %d to net with%s", gpu->gpu.rank, msg);
+        return ncclInternalError;
+      }
+
       NCCLCHECK(ncclTopoIdToIndex(system, NET, netId, localNets+localNetCount));
       if (localNetCount > 0 && localNets[localNetCount] == localNets[0]) break;
       localNetCount++;
@@ -476,12 +485,20 @@ ncclResult_t ncclTopoSelectNets(struct ncclTopoSystem* system, int typeInter, in
   // Then add others satisfying typeInter
   for (int t=0; t <= typeInter; t++) {
     for (int g=0; g<system->nodes[GPU].count; g++) {
-      if (gpu != -1 && gpu != g) continue;
+      if (gpuId != -1 && gpuId != g) continue;
       localNetCount = 0;
       struct ncclTopoNode* gpu = system->nodes[GPU].nodes+g;
       struct ncclTopoLinkList* paths = gpu->paths[NET];
       for (int n=0; n<system->nodes[NET].count && n<MAXCHANNELS; n++) {
-        if (paths[n].type == t) localNets[localNetCount++] = n;
+        struct ncclTopoNode* node = &system->nodes[NET].nodes[n];
+        // add if the type is right and the netNode is in the list of requested device
+        int listId = 0;
+        for (listId = 0; listId < netDevCount; listId++) {
+          ncclNetPath_t path = {.loc = NET_LOC_DISC};
+          if (node->net.netIdx == netDevs[listId].netIdx) NCCLCHECK(node->net.getNetPath(node->net.fabricId, netDevs[listId].fabricId, &path));
+          if (path.loc < NET_LOC_DISC) break;
+        }
+        if (paths[n].type == t && (netDevCount == 0 || listId < netDevCount)) localNets[localNetCount++] = n;
       }
       // Append NICs to list
       for (int i=0; i<localNetCount; i++) {
@@ -526,12 +543,16 @@ ncclResult_t ncclTopoSearchRecGpu(struct ncclTopoSystem* system, struct ncclTopo
       int startNetIndex;
       NCCLCHECK(getNetIndex(system, graph->inter[graph->nChannels*2], &startNetIndex));
       struct ncclTopoNode* startNet = system->nodes[NET].nodes+startNetIndex;
+      // When coming back to the NIC, we must select a NIC compatible with the startNet.
+      // We compare two NICs on the same node, so they are either fast connected, or disconnected. A simple == check is enough.
+      // A more thorough check would require access to the comm's ncclNet array, which we don't have here.
       int netCount;
-      NCCLCHECK(ncclTopoSelectNets(system, graph->typeInter, g, nets, &netCount));
+      struct ncclNetDev netDev = {.netIdx = startNet->net.netIdx, .fabricId = startNet->net.fabricId};
+      NCCLCHECK(ncclTopoSelectNets(system, graph->typeInter, g, nets, &netCount, 1, &netDev));
       for (int i=0; i<netCount; i++) {
         int n = nets[i];
         struct ncclTopoNode* net = system->nodes[NET].nodes+n;
-        if (graph->pattern == NCCL_TOPO_PATTERN_TREE && net->id != startNet->id) continue; // Trees are symmetric
+        if (graph->pattern == NCCL_TOPO_PATTERN_TREE && net->id != startNet->id) continue; // enter and exit through the same NIC
         if (graph->pattern == NCCL_TOPO_PATTERN_RING && graph->crossNic == 2) {
           if (graph->nChannels & 1 && net->id != graph->inter[(graph->nChannels-1)*2]) continue;
         } else {
@@ -597,12 +618,13 @@ ncclResult_t ncclTopoSearchRecGpu(struct ncclTopoSystem* system, struct ncclTopo
   return ncclSuccess;
 }
 
-ncclResult_t ncclTopoSearchRecNet(struct ncclTopoSystem* system, struct ncclTopoGraph* graph, struct ncclTopoGraph* saveGraph, int backToNet, int backToFirstRank, int* time) {
+static ncclResult_t ncclTopoSearchRecNet(struct ncclTopoSystem* system, struct ncclTopoGraph* graph, struct ncclTopoGraph* saveGraph, int backToNet, int backToFirstRank, int* time) {
   const int bw = graph->bwInter;
   int nets[NCCL_TOPO_MAX_NODES];
   int netCount;
   int graphFound = 0;
-  NCCLCHECK(ncclTopoSelectNets(system, graph->typeInter, -1, nets, &netCount));
+  // when getting the first net dev, there is no restriction on the (netId, fabricId)
+  NCCLCHECK(ncclTopoSelectNets(system, graph->typeInter, -1, nets, &netCount, /*netDevCount=*/0, /*netDevs=*/NULL));
   for (int i=0; i<netCount; i++) {
     if ((graph->pattern == NCCL_TOPO_PATTERN_NVLS || graph->pattern == NCCL_TOPO_PATTERN_COLLNET_DIRECT) && graphFound) break;
     int n = nets[(graph->nChannels+i)%netCount];
@@ -809,7 +831,7 @@ ncclResult_t ncclTopoGetGraphFromXmlSub(struct ncclXmlNode *xmlGraph, struct ncc
   NCCLCHECK(xmlGetAttrInt(xmlGraph, "nchannels", &graph->nChannels));
   NCCLCHECK(xmlGetAttrFloat(xmlGraph, "speedintra", &graph->bwIntra));
   NCCLCHECK(xmlGetAttrFloat(xmlGraph, "speedinter", &graph->bwInter));
-  if (xmlGetAttrFloat(xmlGraph, "latencyinter", &graph->latencyInter) != ncclSuccess) graph->latencyInter = 0.0;
+  NCCLCHECK(xmlGetAttrFloatDefault(xmlGraph, "latencyinter", &graph->latencyInter, 0.0));
   const char* str;
   NCCLCHECK(xmlGetAttr(xmlGraph, "typeintra", &str));
   NCCLCHECK(kvConvertToInt(str, &graph->typeIntra, kvDictLinkType));
@@ -1178,7 +1200,7 @@ fail:
 
 #include "comm.h"
 // NVLS channels aren't compute channels. Find which NIC corresponds to our rank being the head
-ncclResult_t getNvlsNetDev(struct ncclComm* comm, struct ncclTopoGraph* graph, int channelId, int64_t* netId) {
+static ncclResult_t getNvlsNetDev(struct ncclComm* comm, struct ncclTopoGraph* graph, int channelId, int64_t* netId) {
   ncclResult_t ret = ncclSuccess;
   int localRanks = comm->topo->nodes[GPU].count;
   int netNum = 0;
@@ -1192,42 +1214,93 @@ ncclResult_t getNvlsNetDev(struct ncclComm* comm, struct ncclTopoGraph* graph, i
   if (netNum) {
     *netId = net[channelId % netNum];
   } else {
+    // in case of error, it means that the current rank is not an NVLS head
+    // the caller is responsible to determine if it's an error or not
     ret = ncclInternalError;
-    goto fail;
   }
-
-exit:
   return ret;
-fail:
-  WARN("Could not find NIC for rank %d in NVLS graph", comm->rank);
-  goto exit;
 }
 
 // 0: don't use PXN for P2P, 1: use PXN if needed, 2: use PXN as much as possible to maximize aggregation
 NCCL_PARAM(P2pPxnLevel, "P2P_PXN_LEVEL", 2);
 
-ncclResult_t ncclTopoGetNetDev(struct ncclComm* comm, int rank, struct ncclTopoGraph* graph, int channelId, int peerRank, int64_t* id, int* dev, int* proxyRank) {
+static ncclResult_t ncclTopoPrintNetDev(int netDevCount, struct ncclNetDev* netDevs, char* msg, size_t len) {
+  snprintf(msg, len, "netDevs:");
+  for (int i = 0; i < netDevCount; ++i) {
+    snprintf(msg + strlen(msg), len - strlen(msg), "%s %d:%lu", (i == 0) ? "" : ",", netDevs[i].netIdx, netDevs[i].fabricId);
+  }
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclTopoTryConnectToPeer(struct ncclComm* comm, int64_t netId, int peerRank, bool* successful) {
+  int netIndex;
+  int peerNetDevCount = comm->peerInfo[peerRank].netDevCount;
+  struct ncclNetDev* peerNetDevs = comm->peerInfo[peerRank].netDevs;
+  struct ncclTopoNode* netNode;
+  *successful = false;
+  if (netId == -1) goto exit;
+
+  NCCLCHECK(ncclTopoIdToIndex(comm->topo, NET, netId, &netIndex));
+  netNode = comm->topo->nodes[NET].nodes + netIndex;
+  for (int i = 0; i < peerNetDevCount; ++i) {
+    ncclNetPath_t path = {.loc = NET_LOC_DISC};
+    if (netNode->net.netIdx == peerNetDevs[i].netIdx)
+      NCCLCHECK(comm->ncclNet[netNode->net.netIdx]->getNetPath(netNode->net.fabricId, peerNetDevs[i].fabricId, &path));
+    if (path.loc < NET_LOC_DISC) {
+      *successful = true;
+      goto exit;
+    }
+  }
+exit:
+  return ncclSuccess;
+}
+
+ncclResult_t ncclTopoGetNetDevFromGraph(struct ncclComm* comm, int rank, int peerRank, struct ncclTopoGraph* graph, int channelId, int64_t* netId, int* netDev, int* netPathType) {
+  int64_t localNetId;
+  int channel = channelId % graph->nChannels;
+  int ngpus = comm->topo->nodes[GPU].count;
+  int index = graph->intra[channel * ngpus] == rank ? 0 : 1;
+  if (graph->pattern != NCCL_TOPO_PATTERN_NVLS) {
+    localNetId = graph->inter[channel * 2 + index];
+  } else {
+    // failing here means that the current rank is not an NVLS head
+    // the caller is responsible to determine if it's an error or not, we pass the error along
+    NCCLCHECK(getNvlsNetDev(comm, graph, channelId, &localNetId));
+  }
+  // verify if we can connect. if we cannot connect, search a new net and update the netdev info
+  bool canConnectToPeer = false;
+  NCCLCHECK(ncclTopoTryConnectToPeer(comm, localNetId, peerRank, &canConnectToPeer));
+  if (canConnectToPeer && netDev) {
+    NCCLCHECK(ncclTopoIdToNetDev(comm->topo, localNetId, netDev));
+  } else {
+    NCCLCHECK(ncclTopoGetLocalNet(comm->topo, rank, channelId, &localNetId, netDev, netPathType, comm->peerInfo[peerRank].netDevCount, comm->peerInfo[peerRank].netDevs));
+  }
+  if(netId) *netId = localNetId;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclTopoGetNetDev(struct ncclComm* comm, int rank, struct ncclTopoGraph* graph, int channelId, int peerRank, int pxnRank, int64_t* id, int* dev, int* proxyRank) {
+  ncclResult_t res = ncclSuccess;
   int64_t netId = -1;
   int netDev = -1;
+
+  if (peerRank == -1) return ncclInternalError;
+  if (comm->topo->nodes[NET].count == 0) {
+    if (dev) *dev = -1;
+    if (id) *id = -1;
+    goto exit;
+  }
+
   if (graph) {
-    // Honor the net device in the graph
-    int channel = channelId%graph->nChannels;
-    int ngpus = comm->topo->nodes[GPU].count;
-    int index = graph->intra[channel*ngpus] == rank ? 0 : 1;
-    if (graph->pattern != NCCL_TOPO_PATTERN_NVLS) {
-      netId = graph->inter[channel*2+index];
-    } else {
-      NCCLCHECK(getNvlsNetDev(comm, graph, channelId, &netId));
-    }
-    NCCLCHECK(ncclTopoIdToNetDev(comm->topo, netId, &netDev));
+    NCCLCHECK(ncclTopoGetNetDevFromGraph(comm, rank, peerRank, graph, channelId, &netId, &netDev, /*netPathType=*/NULL));
+    NCCLCHECK(ncclTopoGetIntermediateRank(comm->topo, rank, netId, proxyRank));
+    if(netId == -1 || netDev == -1) goto fail;
     if (dev) *dev = netDev;
     if (id) *id = netId;
-    NCCLCHECK(ncclTopoGetIntermediateRank(comm->topo, rank, netId, proxyRank));
-  } else if (peerRank == -1) {
-    return ncclInternalError;
   } else {
-    // Start with our local NIC and local Rank
-    NCCLCHECK(ncclTopoGetLocalNet(comm->topo, rank, channelId, &netId, &netDev));
+    // Start with our local NIC and local rank (NIC must connect to the peer). Not finding the net it is an error.
+    NCCLCHECK(ncclTopoGetLocalNet(comm->topo, rank, channelId, &netId, &netDev, /*pathType=*/NULL, comm->peerInfo[peerRank].netDevCount, comm->peerInfo[peerRank].netDevs));
+    if (netId == -1) goto fail;
     if (dev) *dev = netDev;
     if (id) *id = netId;
     *proxyRank = rank;
@@ -1235,11 +1308,13 @@ ncclResult_t ncclTopoGetNetDev(struct ncclComm* comm, int rank, struct ncclTopoG
     int pxnLevel = ncclPxnDisable(comm) == 1 ? 0 : ncclParamP2pPxnLevel();
     // See whether we can use the remote rank preferred device.
     if (ncclParamCrossNic() == 0 || (pxnLevel != 0)) {
-      // Find local NIC number close to local nvmlDev
-      int nvmlDev = comm->peerInfo[peerRank].nvmlDev;
+      if(pxnRank == -1) return ncclInternalError;
+      // Find local NIC number close to local nvmlDev, not finding it, we stop here
+      int nvmlDev = comm->peerInfo[pxnRank].nvmlDev;
       int localRank;
       if (ncclTopoDevToRank(comm->topo, nvmlDev, &localRank) != ncclSuccess) return ncclSuccess;
-      NCCLCHECK(ncclTopoGetLocalNet(comm->topo, localRank, channelId, &netId, &netDev));
+      NCCLCHECK(ncclTopoGetLocalNet(comm->topo, localRank, channelId, &netId, &netDev, /*pathType=*/NULL, comm->peerInfo[peerRank].netDevCount, comm->peerInfo[peerRank].netDevs));
+      if (netId == -1) return ncclSuccess;
 
       // Check that device exists on our node
       if (ncclParamCrossNic() == 0) {
@@ -1273,6 +1348,14 @@ ncclResult_t ncclTopoGetNetDev(struct ncclComm* comm, int rank, struct ncclTopoG
         }
       }
     }
+    if (netId == -1) goto fail;
   }
-  return ncclSuccess;
+exit:
+  return res;
+fail:
+  char msg[256];
+  NCCLCHECK(ncclTopoPrintNetDev(comm->peerInfo[peerRank].netDevCount, comm->peerInfo[peerRank].netDevs, msg, sizeof(msg)));
+  WARN("Could not find any netDev to communicate from rank %d to peer %d (peer netDev list = %s)", rank, peerRank, msg);
+  res = ncclInternalError;
+  goto exit;
 }

@@ -116,18 +116,20 @@ ncclResult_t ncclNetSocketGetProperties(int dev, ncclNetProperties_t* props) {
   props->netDeviceType    = NCCL_NET_DEVICE_HOST;
   props->netDeviceVersion = NCCL_NET_DEVICE_INVALID_VERSION;
   props->maxP2pBytes = NCCL_MAX_NET_SIZE_BYTES;
+  props->fabricId = 0;
   return ncclSuccess;
 }
 
 /* Communication functions */
 
-#define MAX_SOCKETS 64
+#define MAX_SOCKETS 128
 #define MAX_THREADS 16
 #define MAX_REQUESTS NCCL_NET_MAX_REQUESTS
-#define MIN_CHUNKSIZE (64*1024)
 
 NCCL_PARAM(SocketNsocksPerThread, "NSOCKS_PERTHREAD", -2);
 NCCL_PARAM(SocketNthreads, "SOCKET_NTHREADS", -2);
+NCCL_PARAM(SocketInlineSize, "SOCKET_INLINE", /*1 kiB=*/1 << 10);
+NCCL_PARAM(SocketMinTaskSize, "SOCKET_MIN_TASKSIZE", /*64 kiB=*/1 << 16);
 
 enum ncclNetSocketCommState {
   ncclNetSocketCommStateStart = 0,
@@ -171,6 +173,7 @@ struct ncclNetSocketRequest {
   int op;
   void* data;
   int size;
+  void* inlineData;
   struct ncclSocket* ctrlSock;
   int offset;
   int used;
@@ -211,6 +214,7 @@ struct ncclNetSocketComm {
   int nSocks;
   int nThreads;
   int nextSock;
+  void* inlineData;
   struct ncclNetSocketRequest requests[MAX_REQUESTS];
   pthread_t helperThread[MAX_THREADS];
   struct ncclNetSocketThreadResources threadResources[MAX_THREADS];
@@ -360,6 +364,7 @@ fail:
   goto exit;
 }
 
+#define SOCKET_CTRL_SIZE (sizeof(int))
 ncclResult_t ncclNetSocketConnect(int dev, ncclNetCommConfig_t* config, void* opaqueHandle, void** sendComm, ncclNetDeviceHandle_t** /*sendDevComm*/) {
   if (dev < 0 || dev >= ncclNetIfs) { // data transfer socket is based on specified dev
     return ncclInternalError;
@@ -401,6 +406,7 @@ socket_send:
     NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_SEND, sock, &i, sizeof(uint8_t), &done));
     if (done == 0) return ncclSuccess;
   }
+  NCCLCHECK(ncclCalloc(&comm->inlineData, MAX_REQUESTS * (SOCKET_CTRL_SIZE + ncclParamSocketInlineSize())));
   *sendComm = comm;
   return ncclSuccess;
 }
@@ -449,6 +455,7 @@ socket_recv:
       memcpy(rComm->socks+sendSockIdx, sock, sizeof(struct ncclSocket));
     free(sock);
   }
+  NCCLCHECK(ncclCalloc(&rComm->inlineData, MAX_REQUESTS * (SOCKET_CTRL_SIZE + ncclParamSocketInlineSize())));
   *recvComm = rComm;
 
   /* reset lComm state */
@@ -470,6 +477,7 @@ ncclResult_t ncclNetSocketGetRequest(struct ncclNetSocketComm* comm, int op, voi
       r->used = 1;
       r->comm = comm;
       r->nSubs = 0;
+      r->inlineData = (uint8_t*)comm->inlineData + i * (SOCKET_CTRL_SIZE + ncclParamSocketInlineSize());
       *req = r;
       return ncclSuccess;
     }
@@ -520,6 +528,9 @@ ncclResult_t ncclNetSocketGetTask(struct ncclNetSocketComm* comm, struct ncclPro
   return ncclInternalError;
 }
 
+// if the dataSize is smaller than the inline size, return the inline size; if not, return 0 to avoid the extra copy.
+static int ncclNetSocketInlineSize(int dataSize) { return (dataSize <= ncclParamSocketInlineSize()) ? dataSize : 0; }
+
 ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
   *done = 0;
   struct ncclNetSocketRequest *r = (struct ncclNetSocketRequest*)request;
@@ -527,37 +538,50 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
     WARN("NET/Socket : test called with NULL request");
     return ncclInternalError;
   }
-  if (r->used == 1) { /* try to send/recv size */
-    int data = r->size;
-    int offset = 0;
-    NCCLCHECK(ncclSocketProgress(r->op, r->ctrlSock, &data, sizeof(int), &offset));
-
-    if (offset == 0) return ncclSuccess; /* Not ready -- retry later */
-
-    // Not sure we could ever receive less than 4 bytes, but just in case ...
-    if (offset < sizeof(int)) NCCLCHECK(ncclSocketWait(r->op, r->ctrlSock, &data, sizeof(int), &offset));
-
-    // Check size is less or equal to the size provided by the user
-    if (r->op == NCCL_SOCKET_RECV && data > r->size) {
-      char line[SOCKET_NAME_MAXLEN+1];
-      union ncclSocketAddress addr;
-      NCCLCHECK(ncclSocketGetAddr(r->ctrlSock, &addr));
-      WARN("NET/Socket : peer %s message truncated : receiving %d bytes instead of %d. If you believe your socket network is in healthy state, \
-          there may be a mismatch in collective sizes or environment settings (e.g. NCCL_PROTO, NCCL_ALGO) between ranks",
-          ncclSocketToString(&addr, line), data, r->size);
-      return ncclInvalidUsage;
+  if (r->used == 1) { /* try to send/recv size (+ inline data if any) */
+    int msgSize;
+    uint8_t* msg = (uint8_t*)r->inlineData;
+    if (r->op == NCCL_SOCKET_SEND) {
+      int inlineSize = ncclNetSocketInlineSize(r->size);
+      msgSize = inlineSize + SOCKET_CTRL_SIZE;
+      ((int*)(msg))[0] = r->size;
+      if (inlineSize > 0) memcpy(msg + SOCKET_CTRL_SIZE, r->data, inlineSize);
+    } else {
+      int sizeOffset = 0;
+      while (sizeOffset < SOCKET_CTRL_SIZE) {
+        NCCLCHECK(ncclSocketProgress(r->op, r->ctrlSock, msg, SOCKET_CTRL_SIZE, &sizeOffset));
+        if (sizeOffset == 0) return ncclSuccess; /* not ready yet*/
+      }
+      int senderSize = ((int*)(msg))[0];
+      if (senderSize > r->size) {
+        char line[SOCKET_NAME_MAXLEN + 1];
+        union ncclSocketAddress addr;
+        NCCLCHECK(ncclSocketGetAddr(r->ctrlSock, &addr));
+        WARN("NET/Socket : peer %s message truncated : receiving %d bytes instead of %d. If you believe your socket network is in healthy state, "
+             "there may be a mismatch in collective sizes or environment settings (e.g. NCCL_PROTO, NCCL_ALGO) between ranks",
+             ncclSocketToString(&addr, line), senderSize, r->size);
+        return ncclInvalidUsage;
+      }
+      // from the actual size, extract the remaining inline size to be received and redirect the msg buffer to the user data
+      r->size = senderSize;
+      msgSize = ncclNetSocketInlineSize(r->size);
+      msg = (uint8_t*)r->data;
     }
-    r->size = data;
-    r->offset = 0;
-    r->used = 2; // done exchanging size
-    // divide into subtasks
-    int chunkOffset = 0, i = 0;
+    int offset = 0;
+    while (offset < msgSize) {
+      NCCLCHECK(ncclSocketProgress(r->op, r->ctrlSock, msg, msgSize, &offset));
+      if (offset == 0) return ncclSuccess; /* not ready yet*/
+    }
+    // done exchanging sizes, r->size now contains the actual size
+    r->used = 2;
+    r->offset = ncclNetSocketInlineSize(r->size);
+    int chunkOffset = r->offset, i = 0;
     if (r->comm->nSocks > 0) {
-      // each request can be divided up to nSocks tasks
-      int taskSize = std::max(MIN_CHUNKSIZE, DIVUP(r->size, r->comm->nSocks));
+      // each request can be divided up to nSocks tasks, we use the size left to transfer
+      int taskSize = std::max((int)ncclParamSocketMinTaskSize(), DIVUP(r->size - r->offset, r->comm->nSocks));
       while (chunkOffset < r->size) {
-        int chunkSize = std::min(taskSize, r->size-chunkOffset);
-        NCCLCHECK(ncclNetSocketGetTask(r->comm, &r->pInfo, r->op, (char*)(r->data)+chunkOffset, chunkSize, r->tasks+i++));
+        int chunkSize = std::min(taskSize, r->size - chunkOffset);
+        NCCLCHECK(ncclNetSocketGetTask(r->comm, &r->pInfo, r->op, (char*)(r->data) + chunkOffset, chunkSize, r->tasks + i++));
         chunkOffset += chunkSize;
       }
     }
@@ -673,8 +697,15 @@ ncclResult_t ncclNetSocketClose(void* opaqueComm) {
       NCCLCHECK(ncclSocketReady(&comm->socks[i], &ready));
       if (ready) NCCLCHECK(ncclSocketClose(&comm->socks[i]));
     }
+    if(comm->inlineData) free(comm->inlineData);
     free(comm);
   }
+  return ncclSuccess;
+}
+
+ncclResult_t ncclSocketgetNetPath(uint64_t fabricId0, uint64_t fabricId1, ncclNetPath_t* path) {
+  if(!path) return ncclInvalidArgument;
+  path->loc = (fabricId0 == fabricId1)? NET_LOC_DCL0 : NET_LOC_DISC;
   return ncclSuccess;
 }
 
@@ -698,5 +729,6 @@ ncclNet_t ncclNetSocket = {
   ncclNetSocketCloseListen,
   NULL /* getDeviceMr */,
   NULL /* irecvConsumed */,
-  NULL /* mergeDevices */
+  NULL /* mergeDevices */,
+  ncclSocketgetNetPath
 };

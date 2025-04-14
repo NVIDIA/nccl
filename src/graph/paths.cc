@@ -473,10 +473,10 @@ ncclResult_t ncclTopoIsGdrAvail(struct ncclTopoSystem* system, int rank, bool *a
 NCCL_PARAM(NetForceFlush, "NET_FORCE_FLUSH", 0);
 
 // Determine whether we need to flush the GDR recv buffers
-ncclResult_t ncclTopoNeedFlush(struct ncclComm* comm, int netDev, int rank, int* flush) {
+ncclResult_t ncclTopoNeedFlush(struct ncclComm* comm, int netIdx, int netDev, int rank, int* flush) {
   *flush = 1;
   ncclNetProperties_t props;
-  NCCLCHECK(comm->ncclNet->getProperties(netDev, &props));
+  NCCLCHECK(comm->ncclNet[netIdx]->getProperties(netDev, &props));
   if (props.forceFlush == 1 || ncclParamNetForceFlush()) return ncclSuccess;
   int g;
   struct ncclTopoSystem* system = comm->topo;
@@ -530,6 +530,8 @@ ncclResult_t ncclTopoCheckNet(struct ncclTopoSystem* system, int rank1, int rank
 }
 
 ncclResult_t ncclTopoGetIntermediateRank(struct ncclTopoSystem* system, int rank, int64_t netId, int* intermediateRank) {
+  if (intermediateRank) *intermediateRank = -1;
+  if (netId == -1 || !intermediateRank) return ncclSuccess;
   // Get GPU and NET
   int n, g;
   NCCLCHECK(ncclTopoIdToIndex(system, NET, netId, &n));
@@ -561,12 +563,7 @@ NCCL_PARAM(PxnDisable, "PXN_DISABLE", 0);
 int ncclPxnDisable(struct ncclComm* comm) {
   static int pxnDisable = -1;
   if (pxnDisable == -1) {
-    if (comm && comm->ncclNetVer == 4) {
-      INFO(NCCL_INIT, "PXN Disabled as plugin is v4");
-      pxnDisable = 1;
-    } else {
-      pxnDisable = ncclParamPxnDisable();
-    }
+    pxnDisable = ncclParamPxnDisable();
   }
   return pxnDisable;
 }
@@ -582,7 +579,7 @@ ncclResult_t ncclTopoGetPxnRanks(struct ncclComm* comm, int** intermediateRanks,
   for (int rank=0; rank<comm->nRanks; rank++) {
     int64_t netId;
     int proxyRank;
-    NCCLCHECK(ncclTopoGetNetDev(comm, comm->rank, NULL, 0, rank, &netId, NULL, &proxyRank));
+    NCCLCHECK(ncclTopoGetNetDev(comm, comm->rank, NULL, 0, rank, rank, &netId, NULL, &proxyRank));
     if (proxyRank == comm->rank) continue;
     enum ncclTopoGdrMode useGdr;
     NCCLCHECK(ncclTopoCheckGdr(comm->topo, comm->rank, netId, 1, &useGdr));

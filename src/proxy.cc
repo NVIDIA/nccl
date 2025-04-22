@@ -9,7 +9,6 @@
 #include "collectives.h"
 #include "socket.h"
 #include "shmutils.h"
-#include "profiler.h"
 #define ENABLE_TIMER 0
 #include "timer.h"
 #include "profiler.h"
@@ -533,15 +532,21 @@ static ncclResult_t ncclLocalOpAppend(struct ncclComm* comm, struct ncclProxyCon
   return ncclSuccess;
 }
 
+static void incWorkCounter(struct ncclComm* comm, struct ncclProxyOp* op) {
+  op->workCounter = (op->incWorkCounter) ? ++comm->profiler.workCounter[op->channelId] : comm->profiler.workCounter[op->channelId];
+}
+
 static ncclResult_t SaveProxyProfiler(struct ncclComm* comm, struct ncclProxyOp* op, bool* justInquire) {
   struct ncclProxyConnector* proxyConn = (op->coll == ncclFuncRecv) ? &comm->profiler.recvProxyConn[op->channelId] : &comm->profiler.sendProxyConn[op->channelId];
-  if (justInquire) *justInquire = true;
-  else {
+  if (justInquire) {
+    *justInquire = true;
+    if (!comm->planner.persistent) incWorkCounter(comm, op);
+  } else {
     op->sendbuff = (uint8_t *)comm->profiler.workStarted;
     op->recvbuff = (uint8_t *)comm->profiler.workCompleted;
-    NCCLCHECK(ncclLocalOpAppend(comm, proxyConn, op));
     // Ensure that in graph capturing the proxy workCounter is incremented to keep up with kernel workCounter
-    op->workCounter += comm->profiler.workCounter[op->channelId];
+    if (comm->planner.persistent) incWorkCounter(comm, op);
+    NCCLCHECK(ncclLocalOpAppend(comm, proxyConn, op));
   }
   return ncclSuccess;
 }
@@ -696,9 +701,8 @@ ncclResult_t ncclProxySaveOp(struct ncclComm* comm, struct ncclProxyOp* op, bool
       NCCLCHECK(SaveProxy(comm, channel, op->pattern == ncclPatternSend ? proxySend : proxyRecv, op->root, op, 1, justInquire));
     } break;
   case ncclPatternProfiler: {
-      if (ncclProfilerNeedsProxy(comm, op)) {
-        NCCLCHECK(SaveProxyProfiler(comm, op, justInquire));
-      }
+      if (ncclProfilerNeedsProxy(comm, op)) NCCLCHECK(SaveProxyProfiler(comm, op, justInquire));
+      else incWorkCounter(comm, op);
     } break;
   }
   return ncclSuccess;

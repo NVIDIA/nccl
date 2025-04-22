@@ -288,6 +288,7 @@ ncclResult_t ncclTasksRegAndEnqueue(struct ncclComm* comm) {
     devWork.oneNode = (comm->nNodes == 1);
     devWork.isOneRPN = comm->isOneRPN;
     devWork.netRegUsed = devWork.regUsed = 0;
+    devWork.profilerEnabled = ncclProfilerPluginLoaded() && (task->eActivationMask & ncclProfileKernelCh);
     if (task->regBufType & NCCL_NET_REG_BUFFER)
       devWork.netRegUsed = 1;
     if (task->regBufType & (NCCL_IPC_REG_BUFFER | NCCL_NVLS_REG_BUFFER))
@@ -445,6 +446,7 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
       devWork.redOpArgIsPtr = task->opDev.scalarArgIsPtr;
       devWork.oneNode = (comm->nNodes == 1);
       devWork.netRegUsed = devWork.regUsed = 0;
+      devWork.profilerEnabled = ncclProfilerPluginLoaded() && (task->eActivationMask & ncclProfileKernelCh);
       if (task->regBufType & NCCL_NET_REG_BUFFER)
         devWork.netRegUsed = 1;
       if (task->regBufType & (NCCL_IPC_REG_BUFFER | NCCL_NVLS_REG_BUFFER))
@@ -557,7 +559,7 @@ static ncclResult_t scheduleCollTasksToPlan(
         proxyOp.task.coll = task;
         proxyOp.rank = comm->rank;
         proxyOp.eActivationMask = task->eActivationMask;
-        proxyOp.workCounter = ++comm->profiler.workCounter[c];
+        proxyOp.incWorkCounter = true;
         addWorkBatchToPlan(comm, plan, c, workNode->workType, task->devFuncId, plan->workBytes);
         // Set pattern to profiler to add a proxy profiler for kernel events
         NCCLCHECK(addProxyOpIfNeeded(comm, plan, &proxyOp));
@@ -681,7 +683,7 @@ static ncclResult_t scheduleCollTasksToPlan(
           proxyOp->ringAlgo->incRefCount();
         }
         proxyOp->eActivationMask = task->eActivationMask;
-        proxyOp->workCounter = ++comm->profiler.workCounter[c];
+        proxyOp->incWorkCounter = true;
         addWorkBatchToPlan(comm, plan, c, workNode->workType, task->devFuncId, plan->workBytes);
         // Coverity reports "proxyOp->connection" as being possibly uninitialized.  It's hard to
         // determine if that's actually true but it's also not clear if that would be an issue.
@@ -886,6 +888,7 @@ static ncclResult_t addP2pToPlan(
   work->recvRank = recvRank;
   work->recvAddr = recvAddr;
   work->recvBytes = recvBytes==-1 ? 0 : recvBytes;
+  work->profilerEnabled = ncclProfilerPluginLoaded() && ((p2pTasks[0] ? p2pTasks[0] : p2pTasks[1])->eActivationMask & ncclProfileKernelCh);
 
   struct ncclProxyOp proxyOps[2] = {};
   int nProxyOps = selfSend ? 0 : 2;
@@ -910,6 +913,7 @@ static ncclResult_t addP2pToPlan(
 
   nChannelsMax = std::max(nChannels[0], nChannels[1]);
   for (int part=0; part < nChannelsMax; part++) {
+    int incWorkCounter = -1;
     int channelId = ncclP2pChannelForPart(comm->p2pnChannels, base, part);
     plan->channelMask |= uint64_t(1)<<channelId;
     // Add batch first.
@@ -945,17 +949,21 @@ static ncclResult_t addP2pToPlan(
         }
       }
 
+      // Increment work counter for <send, recv> pair rather than individual p2p
+      if (proxyOps[dir].nsteps && incWorkCounter < 0) {
+        proxyOps[dir].incWorkCounter = true;
+        incWorkCounter = dir;
+      }
+
       if (proxyOps[dir].nsteps != 0) {
         // Calculate the opCount after adding batch since then the batch count will
         // equal one plus the batch index this p2p settled in.
         proxyOps[dir].channelId = channelId;
         proxyOps[dir].opCount = uint64_t(comm->planner.wipPlan.channels[channelId].nWorkBatchesP2p)<<1 | 1;
-        proxyOps[dir].workCounter = comm->profiler.workCounter[channelId]+1;
         NCCLCHECK(addProxyOpIfNeeded(comm, plan, &proxyOps[dir]));
         NCCLCHECK(addProfilerProxyOpIfNeeded(comm, plan, &proxyOps[dir]));
       }
     }
-    comm->profiler.workCounter[channelId] += (proxyOps[0].nsteps || proxyOps[1].nsteps) ? 1 : 0;
   }
 
   return ncclSuccess;
@@ -1592,7 +1600,16 @@ ncclResult_t ncclLaunchFinish(struct ncclComm* comm) {
     CUDACHECK(cudaEventRecord(comm->sharedRes->scratchEvent, launchStream));
     // deviceStream waits on userStream[0]
     NCCLCHECK(ncclStrongStreamAcquiredWorkStream(planner->capturingGraph, &comm->sharedRes->deviceStream, /*concurrent=*/false, &deviceStream));
-    CUDACHECK(cudaStreamWaitEvent(deviceStream, comm->sharedRes->scratchEvent, 0));
+
+    // We know that deviceStream is strictly behind the launchStream because launchStream
+    // synced with it before kernel launch. This allows us to to see deviceStream waiting
+    // on launchStream as a fast-forward. When building CUDA graphs fast forwards should
+    // be handled specially so as not to create graphs with a blowup in the number of edges.
+    // So we could do this:
+    //   CUDACHECK(cudaStreamWaitEvent(deviceStream, comm->sharedRes->scratchEvent, 0));
+    // But instead we do:
+    NCCLCHECK(ncclStreamAdvanceToEvent(planner->capturingGraph, deviceStream, comm->sharedRes->scratchEvent));
+
     // Each userStream[i] waits on userStream[0]
     for (struct ncclCudaStreamList* l=planner->streams->next; l != nullptr; l = l->next) {
       CUDACHECK(cudaStreamWaitEvent(l->stream, comm->sharedRes->scratchEvent, 0));

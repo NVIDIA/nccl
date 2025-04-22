@@ -221,6 +221,7 @@ struct alignas(16) ncclDevWorkP2p {
   uint8_t sendProtoLL:1, recvProtoLL:1;
   uint8_t sendNetReg:1, recvNetReg:1;
   uint8_t sendIpcReg:1, recvIpcReg:1;
+  uint8_t profilerEnabled:1;
 };
 
 // Compute the subset of the data transfer corresponding to the given part index.
@@ -259,6 +260,7 @@ struct alignas(16) ncclDevWorkColl {
   uint32_t channelLo:8, channelHi:8;
   uint32_t nWarps:8;
   uint32_t redOpArgIsPtr:1, regUsed:1, netRegUsed:1, oneNode:1, direct:2, isOneRPN:1;
+  uint32_t profilerEnabled:1;
   uint32_t root;
   void* recvbuff;
   void* sendbuff;

@@ -80,11 +80,11 @@ $(INCDIR)/nccl.h : nccl.h.in ../makefiles/version.mk
 	@$(eval NCCL_VERSION := $(shell printf "%d%02d%02d" $(NCCL_MAJOR) $(NCCL_MINOR) $(NCCL_PATCH)))
 	mkdir -p $(INCDIR)
 	@printf "Generating %-35s > %s\n" $< $@
-	sed -e "s/\$${nccl:Major}/$(NCCL_MAJOR)/g" \
-	    -e "s/\$${nccl:Minor}/$(NCCL_MINOR)/g" \
-	    -e "s/\$${nccl:Patch}/$(NCCL_PATCH)/g" \
-	    -e "s/\$${nccl:Suffix}/$(NCCL_SUFFIX)/g" \
-	    -e "s/\$${nccl:Version}/$(NCCL_VERSION)/g" \
+	sed -e "s/\$${nccl_Major}/$(NCCL_MAJOR)/g" \
+	    -e "s/\$${nccl_Minor}/$(NCCL_MINOR)/g" \
+	    -e "s/\$${nccl_Patch}/$(NCCL_PATCH)/g" \
+	    -e "s/\$${nccl_Suffix}/$(NCCL_SUFFIX)/g" \
+	    -e "s/\$${nccl_Version}/$(NCCL_VERSION)/g" \
 	    $< > $@
 
 $(LIBDIR)/$(LIBTARGET): $(LIBOBJ) $(DEVMANIFEST)

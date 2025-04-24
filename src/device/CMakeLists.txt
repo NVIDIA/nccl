@@ -1,0 +1,125 @@
+set(
+  CU_FILES
+  common.cu
+  device_table.cu
+  all_gather.cu
+  broadcast.cu
+  sendrecv.cu
+
+  all_reduce_minmax_bf16.cu
+  all_reduce_minmax_f16.cu
+  all_reduce_minmax_f32.cu
+  all_reduce_minmax_f64.cu
+  all_reduce_minmax_i32.cu
+  all_reduce_minmax_i64.cu
+  all_reduce_minmax_u32.cu
+  all_reduce_minmax_u64.cu
+  all_reduce_minmax_u8.cu
+  all_reduce_premulsum_bf16.cu
+  all_reduce_premulsum_f16.cu
+  all_reduce_premulsum_f32.cu
+  all_reduce_premulsum_f64.cu
+  all_reduce_premulsum_u32.cu
+  all_reduce_premulsum_u64.cu
+  all_reduce_premulsum_u8.cu
+  all_reduce_prod_bf16.cu
+  all_reduce_prod_f16.cu
+  all_reduce_prod_f32.cu
+  all_reduce_prod_f64.cu
+  all_reduce_prod_u32.cu
+  all_reduce_prod_u64.cu
+  all_reduce_prod_u8.cu
+  all_reduce_sum_bf16.cu
+  all_reduce_sum_f16.cu
+  all_reduce_sum_f32.cu
+  all_reduce_sum_f64.cu
+  all_reduce_sum_u32.cu
+  all_reduce_sum_u64.cu
+  all_reduce_sum_u8.cu
+  all_reduce_sumpostdiv_i32.cu
+  all_reduce_sumpostdiv_i64.cu
+  all_reduce_sumpostdiv_i8.cu
+  all_reduce_sumpostdiv_u32.cu
+  all_reduce_sumpostdiv_u64.cu
+  all_reduce_sumpostdiv_u8.cu
+  reduce_minmax_bf16.cu
+  reduce_minmax_f16.cu
+  reduce_minmax_f32.cu
+  reduce_minmax_f64.cu
+  reduce_minmax_u32.cu
+  reduce_minmax_u64.cu
+  reduce_minmax_u8.cu
+  reduce_premulsum_bf16.cu
+  reduce_premulsum_f16.cu
+  reduce_premulsum_f32.cu
+  reduce_premulsum_f64.cu
+  reduce_premulsum_u32.cu
+  reduce_premulsum_u64.cu
+  reduce_premulsum_u8.cu
+  reduce_prod_bf16.cu
+  reduce_prod_f16.cu
+  reduce_prod_f32.cu
+  reduce_prod_f64.cu
+  reduce_prod_u32.cu
+  reduce_prod_u64.cu
+  reduce_prod_u8.cu
+  reduce_scatter_minmax_bf16.cu
+  reduce_scatter_minmax_f16.cu
+  reduce_scatter_minmax_f32.cu
+  reduce_scatter_minmax_f64.cu
+  reduce_scatter_minmax_i32.cu
+  reduce_scatter_minmax_i64.cu
+  reduce_scatter_minmax_u32.cu
+  reduce_scatter_minmax_u64.cu
+  reduce_scatter_minmax_u8.cu
+  reduce_scatter_premulsum_bf16.cu
+  reduce_scatter_premulsum_f16.cu
+  reduce_scatter_premulsum_f32.cu
+  reduce_scatter_premulsum_f64.cu
+  reduce_scatter_premulsum_u32.cu
+  reduce_scatter_premulsum_u64.cu
+  reduce_scatter_premulsum_u8.cu
+  reduce_scatter_prod_bf16.cu
+  reduce_scatter_prod_f16.cu
+  reduce_scatter_prod_f32.cu
+  reduce_scatter_prod_f64.cu
+  reduce_scatter_prod_u32.cu
+  reduce_scatter_prod_u64.cu
+  reduce_scatter_prod_u8.cu
+  reduce_scatter_sum_bf16.cu
+  reduce_scatter_sum_f16.cu
+  reduce_scatter_sum_f32.cu
+  reduce_scatter_sum_f64.cu
+  reduce_scatter_sum_u32.cu
+  reduce_scatter_sum_u64.cu
+  reduce_scatter_sum_u8.cu
+  reduce_scatter_sumpostdiv_i32.cu
+  reduce_scatter_sumpostdiv_i64.cu
+  reduce_scatter_sumpostdiv_i8.cu
+  reduce_scatter_sumpostdiv_u32.cu
+  reduce_scatter_sumpostdiv_u64.cu
+  reduce_scatter_sumpostdiv_u8.cu
+  reduce_sum_bf16.cu
+  reduce_sum_f16.cu
+  reduce_sum_f32.cu
+  reduce_sum_f64.cu
+  reduce_sum_u32.cu
+  reduce_sum_u64.cu
+  reduce_sum_u8.cu
+  reduce_sumpostdiv_i32.cu
+  reduce_sumpostdiv_i64.cu
+  reduce_sumpostdiv_i8.cu
+  reduce_sumpostdiv_u32.cu
+  reduce_sumpostdiv_u64.cu
+  reduce_sumpostdiv_u8.cu
+)
+
+add_library(colldevice OBJECT ${CU_FILES})
+
+target_include_directories(
+  colldevice PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+                     ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Compiled kernels and collectives with relocatable device code ...
+set_property(TARGET colldevice PROPERTY CUDA_SEPARABLE_COMPILATION ON)
+set_property(TARGET colldevice PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)

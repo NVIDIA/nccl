@@ -5,7 +5,8 @@
  ************************************************************************/
 
 // Workaround for libstdc++ trying to force public visibility of std:: symbols.  We don't want to do that in libnccl.so.
-#include <bits/c++config.h>
+// @Eugo: removed since this is libstdc++ specific
+// #include <bits/c++config.h>#include <bits/c++config.h>
 #undef _GLIBCXX_VISIBILITY
 #define _GLIBCXX_VISIBILITY(V)
 #include <cstddef>

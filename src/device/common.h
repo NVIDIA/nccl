@@ -24,7 +24,7 @@
 #endif
 
 typedef void(*ncclDevFuncPtr_t)();
-extern __device__ ncclDevFuncPtr_t const ncclDevFuncTable[];
+extern __device__ ncclDevFuncPtr_t ncclDevFuncTable[];
 
 struct ncclShmemGroup {
   ncclConnInfo *recvConns[NCCL_MAX_ARITY];

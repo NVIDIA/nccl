@@ -1,0 +1,35 @@
+cmake_minimum_required(VERSION 3.22)
+
+project(
+  nccl
+  LANGUAGES CUDA CXX
+  VERSION 2.16.2.1)
+
+option(VERBOSE "VERSION" OFF)
+option(KEEP "KEEP" OFF)
+option(TRACE "TRACE" OFF)
+option(PROFAPI "PROFAPI" OFF)
+option(NVTX "NVTX" ON)
+
+include_directories(
+  src/include
+)
+
+add_subdirectory(src)
+
+include(GNUInstallDirs)
+install(FILES ${INCEXPORTS} TYPE INCLUDE)
+
+install(
+  TARGETS nccl nccl_static
+  EXPORT NCCLConfig
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  INCLUDES
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+install(
+  EXPORT NCCLConfig
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/nccl
+  NAMESPACE NCCL::)

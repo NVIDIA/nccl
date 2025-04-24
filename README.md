@@ -8,69 +8,33 @@ NCCL (pronounced "Nickel") is a stand-alone library of standard communication ro
 
 For more information on NCCL usage, please refer to the [NCCL documentation](https://docs.nvidia.com/deeplearning/sdk/nccl-developer-guide/index.html).
 
-## Build
+More NCCL resources:
+• https://docs.nvidia.com/deeplearning/nccl/install-guide/index.html#downloadnccl
+• https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html
+• https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html#host-compiler-support-policy
 
-Note: the official and tested builds of NCCL can be downloaded from: https://developer.nvidia.com/nccl. You can skip the following build steps if you choose to use the official builds.
 
-To build the library :
+## Inspiration
 
-```shell
-$ cd nccl
-$ make -j src.build
-```
+The inspiration for this cmake port came from:
+• https://github.com/NVIDIA/nccl/pull/664/files
+• https://github.com/cyyever/nccl/tree/cmake
+• https://github.com/NVIDIA/nccl/issues/1287
 
-If CUDA is not installed in the default /usr/local/cuda path, you can define the CUDA path with :
+The xla patch for clang came from:
+• https://github.dev/openxla/xla/blob/main/third_party/nccl/archive.patch
 
-```shell
-$ make src.build CUDA_HOME=<path to cuda install>
-```
 
-NCCL will be compiled and installed in `build/` unless `BUILDDIR` is set.
+## Original NCCL repo resources:
+• `export NVCC_APPEND_FLAGS='-allow-unsupported-compiler'`: https://github.com/NVIDIA/cuda-samples/issues/179
+• Provenance of NVTX headers in NCCL: https://github.com/NVIDIA/nccl/issues/1270
 
-By default, NCCL is compiled for all supported architectures. To accelerate the compilation and reduce the binary size, consider redefining `NVCC_GENCODE` (defined in `makefiles/common.mk`) to only include the architecture of the target platform :
-```shell
-$ make -j src.build NVCC_GENCODE="-gencode=arch=compute_70,code=sm_70"
-```
 
-## Install
+## Clang specific CUDA resources:
+• https://github.com/llvm/llvm-project/blob/main/clang/lib/Basic/Targets/NVPTX.cpp
+• https://llvm.org/docs/LangRef.html#:~:text=x%3A%20Invalid.-,NVPTX,-%3A
+• https://llvm.org/docs/CompileCudaWithLLVM.html
 
-To install NCCL on the system, create a package then install it as root.
 
-Debian/Ubuntu :
-```shell
-$ # Install tools to create debian packages
-$ sudo apt install build-essential devscripts debhelper fakeroot
-$ # Build NCCL deb package
-$ make pkg.debian.build
-$ ls build/pkg/deb/
-```
-
-RedHat/CentOS :
-```shell
-$ # Install tools to create rpm packages
-$ sudo yum install rpm-build rpmdevtools
-$ # Build NCCL rpm package
-$ make pkg.redhat.build
-$ ls build/pkg/rpm/
-```
-
-OS-agnostic tarball :
-```shell
-$ make pkg.txz.build
-$ ls build/pkg/txz/
-```
-
-## Tests
-
-Tests for NCCL are maintained separately at https://github.com/nvidia/nccl-tests.
-
-```shell
-$ git clone https://github.com/NVIDIA/nccl-tests.git
-$ cd nccl-tests
-$ make
-$ ./build/all_reduce_perf -b 8 -e 256M -f 2 -g <ngpus>
-```
-
-## Copyright
-
-All source code and accompanying documentation is copyright (c) 2015-2020, NVIDIA CORPORATION. All rights reserved.
+## NVCC Identification Macros
+• https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/#compilation-phases

@@ -328,8 +328,7 @@ ncclResult_t ncclTopoReplayGetGpu(struct ncclTopoSystem* system, struct ncclTopo
     *g = i;
     return ncclSuccess;
   }
-  if (*g == -1) return ncclInternalError;
-  return ncclSuccess;
+  return ncclInternalError;
 }
 
 ncclResult_t ncclTopoSearchRecGpu(struct ncclTopoSystem* system, struct ncclTopoGraph* graph, struct ncclTopoGraph* saveGraph, struct ncclTopoNode* gpu, int step, int backToNet, int backToFirstRank, int forcedOrder, int *time);

@@ -232,7 +232,7 @@ int ncclFindInterfaceMatchSubnet(char* ifNames, union ncclSocketAddress* localAd
   int found = 0;
   struct ifaddrs *interfaces, *interface;
   getifaddrs(&interfaces);
-  for (interface = interfaces; interface && !found; interface = interface->ifa_next) {
+  for (interface = interfaces; interface; interface = interface->ifa_next) {
     if (interface->ifa_addr == NULL) continue;
 
     /* We only support IPv4 & IPv6 */

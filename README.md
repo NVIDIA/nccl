@@ -2,6 +2,8 @@
 
 Optimized primitives for inter-GPU communication.
 
+This fork enables building NCCL with CMake, Clang for both host and device, and using system nvtx instead of the bundled NVTX, and is based on the original NCCL repository. It is designed to be compatible with the original NCCL library, while providing additional build features and improvements.
+
 ## Introduction
 
 NCCL (pronounced "Nickel") is a stand-alone library of standard communication routines for GPUs, implementing all-reduce, all-gather, reduce, broadcast, reduce-scatter, as well as any send/receive based communication pattern. It has been optimized to achieve high bandwidth on platforms using PCIe, NVLink, NVswitch, as well as networking using InfiniBand Verbs or TCP/IP sockets. NCCL supports an arbitrary number of GPUs installed in a single node or across multiple nodes, and can be used in either single- or multi-process (e.g., MPI) applications.
@@ -16,7 +18,7 @@ More NCCL resources:
 
 ## Inspiration
 
-The inspiration for this cmake port came from:
+The inspiration for this cmake port came from (thank you @cyyever):
 • https://github.com/NVIDIA/nccl/pull/664/files
 • https://github.com/cyyever/nccl/tree/cmake
 • https://github.com/NVIDIA/nccl/issues/1287

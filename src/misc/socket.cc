@@ -566,8 +566,12 @@ static ncclResult_t socketStartConnect(struct ncclSocket* sock) {
 
 static ncclResult_t socketPollConnect(struct ncclSocket* sock) {
   struct pollfd pfd;
-  int timeout = 1, ret;
-  socklen_t rlen = sizeof(int);
+  int timeout = 1, ret, sockErrorCode;
+  socklen_t errCodeLen = sizeof(sockErrorCode);
+  char sockstr[SOCKET_NAME_MAXLEN+1];
+  const char *warnStr = "socketPollConnect poll() failed, ret %d, error %s, revents %hd, connect to %s";
+
+  ncclSocketToString(&sock->addr, sockstr);
 
   memset(&pfd, 0, sizeof(struct pollfd));
   pfd.fd = sock->fd;
@@ -577,16 +581,25 @@ static ncclResult_t socketPollConnect(struct ncclSocket* sock) {
   if (ret == 0 || (ret < 0 && errno == EINTR)) {
     return ncclSuccess;
   } else if (ret < 0) {
-    WARN("socketPollConnect poll() failed with error %s", strerror(errno));
+    WARN(warnStr, ret, strerror(errno), pfd.revents, sockstr);
     return ncclRemoteError;
-  } else if (ret != 1 || (pfd.revents & POLLOUT) == 0) {
-    WARN("socketPollConnect poll() returned %d%s", ret, (pfd.revents & POLLOUT) ? "" : ", no POLLOUT events");
+  } else if (ret != 1) {
+    WARN(warnStr, ret, strerror(errno), pfd.revents, sockstr);
     return ncclSystemError;
   }
 
   /* check socket status */
-  SYSCHECK(getsockopt(sock->fd, SOL_SOCKET, SO_ERROR, (void*)&ret, &rlen), "getsockopt");
-  return socketConnectCheck(sock, ret, __func__);
+  SYSCHECK(getsockopt(sock->fd, SOL_SOCKET, SO_ERROR, (void*)&sockErrorCode, &errCodeLen), "getsockopt");
+  if ((pfd.revents & POLLOUT) == 0) {
+    /*
+     * When poll returns 1 however no POLLOUT, it could be POLLERR or POLLHUP.
+     * Those cases could be triggered by transient networking issue, so we would
+     * want to go to socketConnectCheck for retry, instead of returning error directly.
+     */
+    INFO(NCCL_ALL, warnStr, ret, strerror(sockErrorCode), pfd.revents, sockstr);
+  }
+
+  return socketConnectCheck(sock, sockErrorCode, __func__);
 }
 
 ncclResult_t ncclSocketPollConnect(struct ncclSocket* sock) {

@@ -2,3 +2,4 @@
 /build
 *.gcov
 /coverage/
+.DS_Store

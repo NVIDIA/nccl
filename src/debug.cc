@@ -195,6 +195,10 @@ static void ncclDebugInit() {
     }
   }
 
+  // Replace underscore with spaces... it is hard to put spaces in command line parameters.
+  for (int i=0; ncclDebugTimestampFormat[i] != '\0'; ++i) {
+    if (ncclDebugTimestampFormat[i]=='_') ncclDebugTimestampFormat[i] = ' ';
+  }
 
   // Cache pid and hostname
   getHostName(hostname, 1024, '.');
@@ -301,7 +305,7 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
         snprintf(localTimestampFormat + ncclDebugTimestampSubsecondsStart,
                  ncclDebugTimestampSubsecondDigits+1,
                  "%0*ld", ncclDebugTimestampSubsecondDigits,
-                 ts.tv_nsec / (1000000UL/ncclDebugTimestampMaxSubseconds));
+                 ts.tv_nsec / (1000000000UL/ncclDebugTimestampMaxSubseconds));
         strcpy(    localTimestampFormat+ncclDebugTimestampSubsecondsStart+ncclDebugTimestampSubsecondDigits,
                ncclDebugTimestampFormat+ncclDebugTimestampSubsecondsStart+ncclDebugTimestampSubsecondDigits);
       }

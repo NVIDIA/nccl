@@ -4,6 +4,7 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
+#include "alloc.h"
 #include "nccl.h"
 #include "debug.h"
 #include "param.h"
@@ -67,6 +68,36 @@ int ncclCuMemHostEnable() {
       ncclCumemHostEnable = paramValue;
     else
       ncclCumemHostEnable = (cudaDriverVersion >= 12060) ? 1 : 0;
+    if (ncclCumemHostEnable) {
+      // Verify that host allocations actually work.  Docker in particular is known to disable "get_mempolicy",
+      // causing such allocations to fail (this can be fixed by invoking Docker with "--cap-add SYS_NICE").
+      int cudaDev;
+      CUdevice currentDev;
+      int cpuNumaNodeId = -1;
+      CUmemAllocationProp prop = {};
+      size_t granularity = 0;
+      size_t size;
+      CUmemGenericAllocationHandle handle;
+      CUDACHECK(cudaGetDevice(&cudaDev));
+      CUCHECK(cuDeviceGet(&currentDev, cudaDev));
+      CUCHECK(cuDeviceGetAttribute(&cpuNumaNodeId, CU_DEVICE_ATTRIBUTE_HOST_NUMA_ID, currentDev));
+      if (cpuNumaNodeId < 0) cpuNumaNodeId = 0;
+      prop.location.type = CU_MEM_LOCATION_TYPE_HOST_NUMA;
+      prop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
+      prop.requestedHandleTypes = ncclCuMemHandleType;
+      prop.location.id = cpuNumaNodeId;
+      CUCHECK(cuMemGetAllocationGranularity(&granularity, &prop, CU_MEM_ALLOC_GRANULARITY_MINIMUM));
+      size = 1;
+      ALIGN_SIZE(size, granularity);
+      if (CUPFN(cuMemCreate(&handle, size, &prop, 0)) != CUDA_SUCCESS) {
+        INFO(NCCL_INIT, "cuMem host allocations do not appear to be working; falling back to a /dev/shm/ based "
+             "implementation. This could be due to the container runtime disabling NUMA support. "
+             "To disable this warning, set NCCL_CUMEM_HOST_ENABLE=0");
+        ncclCumemHostEnable = 0;
+      } else {
+        CUCHECK(cuMemRelease(handle));
+      }
+    }
   }
   return ncclCumemHostEnable;
 error:

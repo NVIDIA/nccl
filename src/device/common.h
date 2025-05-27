@@ -54,6 +54,7 @@ struct ncclShmemData {
   int workSize;
   uint32_t workConsumed;
   uint64_t workCounter;
+  bool profilerEnabled;
   struct ncclShmemGroup groups[NCCL_MAX_GROUPS];
   uint64_t redOpArgs[NCCL_MAX_NVLS_ARITY+1];
 
@@ -291,6 +292,48 @@ struct RunWorkBatch {
   }
 };
 
+#define START 0
+#define STOP  1
+#define FINI  2
+
+__device__ __forceinline__ bool profilerEnabled(void) {
+  // Check if any of the workItems in the batch is profiled. If so, there is an equivalent
+  // profiler ProxyOp waiting for the counter update in the host thread. If this check was
+  // done only for the first workItem the profiler counter for other workItems in the batch
+  // could never be updated, leaving the host thread spinning forever for the counter update
+  // and causing a hang.
+  bool enabled = false;
+  for (int i = 0; i < ncclShmem.nWorks && !enabled; i++) {
+    if (ncclShmem.workType == ncclDevWorkTypeP2p)
+      enabled = ((struct ncclDevWorkP2p*)ncclShmem.workStorage)[i].profilerEnabled;
+    else
+      enabled = ((struct ncclDevWorkColl*)ncclShmem.workStorage)[i].profilerEnabled;
+  }
+  return enabled;
+}
+
+__device__ __forceinline__ void profiler(int action) {
+  if (action == START) {
+    if (threadIdx.x == 0) {
+      // increment workCounter regardless of the profiler being active or not
+      ncclShmem.channel.workCounter += ncclShmem.nWorks;
+      if(!profilerEnabled()) return;
+      ncclShmem.comm.workStarted[ncclShmem.channelId] = ncclShmem.channel.workCounter;
+    }
+  } else if (action == STOP) {
+    if (threadIdx.x == 0 && profilerEnabled()) {
+      ncclShmem.comm.workCompleted[ncclShmem.channelId] = ncclShmem.channel.workCounter;
+    }
+  } else { // FINI
+    if (threadIdx.x == 0) {
+      // store the workCounter back to vidmem regardless of the profiler being active or not
+      ((ncclDevCommAndChannels*)ncclShmem.args.comm)->channels[ncclShmem.channelId].workCounter = ncclShmem.channel.workCounter;
+      if (!profilerEnabled()) return;
+      ncclShmem.comm.workCompleted[ncclShmem.channelId] = ncclShmem.channel.workCounter;
+    }
+  }
+}
+
 template<int SpecializedFnId, typename SpecializedRunWorkBatch>
 __device__ __forceinline__ void ncclKernelMain(struct ncclDevKernelArgs const* args) {
   int tid = threadIdx.x;
@@ -312,7 +355,10 @@ __device__ __forceinline__ void ncclKernelMain(struct ncclDevKernelArgs const* a
   }
   __syncthreads(); // publish ncclShmem.{args, channelId}
   /* set abort flag to 0 */
-  if (tid == 0) ncclShmem.aborted = 0;
+  if (tid == 0) {
+    ncclShmem.aborted = 0;
+    ncclShmem.channel.workCounter = ((ncclDevCommAndChannels*)ncclShmem.args.comm)->channels[ncclShmem.channelId].workCounter;
+  }
 
   // Use first 2 warps to load comm and channel, and remaining load work batch.
   switch (tid/WARP_SIZE) {
@@ -348,7 +394,7 @@ __device__ __forceinline__ void ncclKernelMain(struct ncclDevKernelArgs const* a
   }
 
   while (ncclShmem.aborted == 0) {
-    if (tid == 0) ncclShmem.comm.workStarted[ncclShmem.channelId] = (ncclShmem.channel.workCounter += ncclShmem.nWorks);
+    profiler(START);
     if (0 <= SpecializedFnId && ncclShmem.funcId == (unsigned)SpecializedFnId) {
       SpecializedRunWorkBatch().run();
     } else {
@@ -358,7 +404,7 @@ __device__ __forceinline__ void ncclKernelMain(struct ncclDevKernelArgs const* a
     if (ncclShmem.nextBatchIx == -1) break;
     int batchIx = ncclShmem.nextBatchIx;
     __syncthreads();
-    if (tid == 0) ncclShmem.comm.workCompleted[ncclShmem.channelId] = ncclShmem.channel.workCounter;
+    profiler(STOP);
     loadWorkBatchToShmem(tid, tn, args, batchIx);
     __syncthreads();
 
@@ -367,10 +413,7 @@ __device__ __forceinline__ void ncclKernelMain(struct ncclDevKernelArgs const* a
       ncclShmem.comm.workConsumed[ncclShmem.channelId] = ncclShmem.workConsumed;
     }
   }
-  if (tid == 0) {
-    ncclShmem.comm.workCompleted[ncclShmem.channelId] = ncclShmem.channel.workCounter;
-    ((ncclDevCommAndChannels*)ncclShmem.args.comm)->channels[ncclShmem.channelId].workCounter = ncclShmem.channel.workCounter;
-  }
+  profiler(FINI);
 }
 
 __global__ void ncclDevKernel_Generic(ncclDevKernelArgs4K NCCL_GRID_CONSTANT const args4K);

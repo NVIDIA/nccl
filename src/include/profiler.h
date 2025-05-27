@@ -68,6 +68,7 @@ ncclResult_t ncclProfilerRecordProxyCtrlEventState(void*eHandle, int appended, n
 // Profiler utility functions
 ncclResult_t ncclProfilerAddPidToProxyOp(struct ncclProxyOp* op);
 bool ncclProfilerNeedsProxy(struct ncclComm* comm, struct ncclProxyOp* op);
+bool ncclProfilerPluginLoaded(void);
 
 // Profiler callback for network plugin
 ncclResult_t ncclProfilerCallback(void** eHandle, int type, void* pHandle, int64_t pluginId, void* extData);

@@ -271,7 +271,7 @@ NCCL_PARAM(DisableGraphHelper, "GRAPH_HELPER_DISABLE", 0);
 // GDRCOPY support: FIFO_ENABLE when enabled locates a workFifo in CUDA memory
 NCCL_PARAM(GdrCopyFifoEnable, "GDRCOPY_FIFO_ENABLE", 1);
 #define NCCL_WORK_FIFO_BYTES_DEFAULT (1<<20)
-NCCL_PARAM(WorkFifoBytes, "WORK_FIFO_BYTES", NCCL_WORK_FIFO_BYTES_DEFAULT);
+NCCL_PARAM(WorkFifoBytes, "WORK_FIFO_BYTES", -1);
 NCCL_PARAM(WorkArgsBytes, "WORK_ARGS_BYTES", INT64_MAX);
 enum ncclLaunchMode ncclParamLaunchMode;
 
@@ -458,12 +458,22 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
   if (ccEnable) {
     comm->workFifoBytes = 0;
   } else {
-    comm->workFifoBytes = ncclParamWorkFifoBytes();
-    if (0 != (comm->workFifoBytes & (comm->workFifoBytes-1))) {
-      WARN("NCCL_WORK_FIFO_BYTES=%d is being ignored because it is not a power of 2.", comm->workFifoBytes);
-      comm->workFifoBytes = NCCL_WORK_FIFO_BYTES_DEFAULT;
+    int64_t workFifoBytesParam = ncclParamWorkFifoBytes();
+    if (workFifoBytesParam == -1) {
+      if (comm->MNNVL && (comm->compCap >= 100)) {
+        // WAR: Disable work fifo for Blackwell all2all hang issue on MNNVL
+        INFO(NCCL_INIT, "Disabling work fifo");
+        comm->workFifoBytes = 0;
+      } else {
+        comm->workFifoBytes = NCCL_WORK_FIFO_BYTES_DEFAULT;
+      }
+    } else {
+      if (0 != (workFifoBytesParam & (workFifoBytesParam-1))) {
+        WARN("NCCL_WORK_FIFO_BYTES=%ld is being ignored because it is not a power of 2.", workFifoBytesParam);
+        comm->workFifoBytes = NCCL_WORK_FIFO_BYTES_DEFAULT;
+      }
+      comm->workFifoBytes = std::min<uint64_t>(workFifoBytesParam, 1ul<<30);
     }
-    comm->workFifoBytes = std::min(comm->workFifoBytes, 1u<<30);
   }
 
   if (comm->rank == 0) {

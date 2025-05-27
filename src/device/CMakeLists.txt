@@ -1,3 +1,15 @@
+# === @begin: Non-Generated Sources ===
+ set(
+   CU_FILES
+    all_gather.cu
+   common.cu
+   device_table.cu
+
+   broadcast.cu
+   sendrecv.cu
+)
+# === @end: Non-Generated Sources ===
+
 # set(
 #   CU_FILES
 #   common.cu

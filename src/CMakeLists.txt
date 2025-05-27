@@ -1,5 +1,4 @@
-include(../cmake/common.cmake)
-
+# === @begin: Headers Configuration ===
 set(nccl_Major ${nccl_VERSION_MAJOR})
 set(nccl_Minor ${nccl_VERSION_MINOR})
 set(nccl_Patch ${nccl_VERSION_PATCH})
@@ -9,13 +8,25 @@ math(
     nccl_Version
     "${nccl_VERSION_MAJOR} * 10000 + ${nccl_VERSION_MINOR} * 100 + ${nccl_VERSION_PATCH}"
 )
-set(nccl_Suffix)
+
+# By default, it's an empty string, but we still must define it otherwise `configure_file` will fail.
+# In theory, one who builds this package may define that to unique value to be used in a `nccl` version string.
+# We, however, don't do that in Eugo environment and keep it mostly for compatability with original Makefile builds.
+set(nccl_Suffix "")
+
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/nccl.h.in
     ${CMAKE_CURRENT_SOURCE_DIR}/include/nccl.h
 )
+# === @end: Headers Configuration ===
 
+
+# === @begin: device/ ===
 add_subdirectory(device)
+# === @end: device/ ===
+
+
+
 add_subdirectory(ras)
 
 set(SRC_FILES

@@ -1,18 +1,25 @@
 # === @begin: Non-Generated Sources ===
  set(
    CU_FILES
-    all_gather.cu
    common.cu
-   device_table.cu
-
-   broadcast.cu
-   sendrecv.cu
+   onerank.cu
 )
 # === @end: Non-Generated Sources ===
 
+
+# === @begin: Generated Sources ===
+execute_process(
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate.py
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+file(GLOB GENERATED_CU_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "${CMAKE_CURRENT_SOURCE_DIR}/*.cu")
+# === @end: Generated Sources ===
+
+
+
 # set(
 #   CU_FILES
-#   common.cu
 #   device_table.cu
 #   all_gather.cu
 #   broadcast.cu
@@ -126,50 +133,50 @@
 #   reduce_sumpostdiv_u8.cu
 # )
 
-# Create an empty list of CU_FILES to store generated files
-set(CU_FILES "")
+# # Create an empty list of CU_FILES to store generated files
+# set(CU_FILES "")
 
-# Define reusable temp directory
-set(EUGO_TMP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/__eugo_tmp")
+# # Define reusable temp directory
+# set(EUGO_TMP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/__eugo_tmp")
 
-# Step 1: Create temp dir and run generate.py
-execute_process(COMMAND ${CMAKE_COMMAND} -E make_directory ${EUGO_TMP_DIR})
+# # Step 1: Create temp dir and run generate.py
+# execute_process(COMMAND ${CMAKE_COMMAND} -E make_directory ${EUGO_TMP_DIR})
 
-execute_process(
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate.py
-    WORKING_DIRECTORY ${EUGO_TMP_DIR}
-)
+# execute_process(
+#     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate.py
+#     WORKING_DIRECTORY ${EUGO_TMP_DIR}
+# )
 
-# Step 2: Get list of generated .cu files
-file(GLOB GENERATED_CU_FILES RELATIVE ${EUGO_TMP_DIR} "${EUGO_TMP_DIR}/*.cu")
+# # Step 2: Get list of generated .cu files
+# file(GLOB GENERATED_CU_FILES RELATIVE ${EUGO_TMP_DIR} "${EUGO_TMP_DIR}/*.cu")
 
-# Step 3: Append to CU_FILES
-foreach(file ${GENERATED_CU_FILES})
-    list(APPEND CU_FILES "${EUGO_TMP_DIR}/${file}")
-endforeach()
+# # Step 3: Append to CU_FILES
+# foreach(file ${GENERATED_CU_FILES})
+#     list(APPEND CU_FILES "${EUGO_TMP_DIR}/${file}")
+# endforeach()
 
-# Step 3.5: Patch device_table.cu to remove all instances of 'const'
-set(GENERATED_DEVICE_TABLE "${EUGO_TMP_DIR}/device_table.cu")
+# # Step 3.5: Patch device_table.cu to remove all instances of 'const'
+# set(GENERATED_DEVICE_TABLE "${EUGO_TMP_DIR}/device_table.cu")
 
-if(EXISTS "${GENERATED_DEVICE_TABLE}")
-    execute_process(
-        COMMAND sed -i.bak "s/\\bconst\\b//g" "${GENERATED_DEVICE_TABLE}"
-    )
-endif()
+# if(EXISTS "${GENERATED_DEVICE_TABLE}")
+#     execute_process(
+#         COMMAND sed -i.bak "s/\\bconst\\b//g" "${GENERATED_DEVICE_TABLE}"
+#     )
+# endif()
 
-# Remove `.bak` file
-file(REMOVE "${GENERATED_DEVICE_TABLE}.bak")
+# # Remove `.bak` file
+# file(REMOVE "${GENERATED_DEVICE_TABLE}.bak")
 
-# Step 4: Copy files to src/device/
-foreach(file ${GENERATED_CU_FILES})
-    file(
-        COPY "${EUGO_TMP_DIR}/${file}"
-        DESTINATION "${CMAKE_CURRENT_SOURCE_DIR}/src/device/"
-    )
-endforeach()
+# # Step 4: Copy files to src/device/
+# foreach(file ${GENERATED_CU_FILES})
+#     file(
+#         COPY "${EUGO_TMP_DIR}/${file}"
+#         DESTINATION "${CMAKE_CURRENT_SOURCE_DIR}/src/device/"
+#     )
+# endforeach()
 
-# Step 5: Remove temp dir
-file(REMOVE_RECURSE "${EUGO_TMP_DIR}")
+# # Step 5: Remove temp dir
+# file(REMOVE_RECURSE "${EUGO_TMP_DIR}")
 
 # Step 6: Add generated files to CU_FILES
 add_library(colldevice OBJECT ${CU_FILES})

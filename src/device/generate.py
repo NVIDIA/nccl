@@ -19,8 +19,9 @@ gensrc = sys.argv[1]
 
 if os.path.exists(gensrc):
   for name in os.listdir(gensrc):
-    os.remove(os.path.join(gensrc, name))
-    #os.truncate(os.path.join(gensrc, name), 0)
+    if not name == "CMakeFiles":  # @EUGO_CHANGE
+      os.remove(os.path.join(gensrc, name))
+      #os.truncate(os.path.join(gensrc, name), 0)
 else:
   os.mkdir(gensrc)
 

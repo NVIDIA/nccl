@@ -56,27 +56,27 @@ add_subdirectory(src)
 # === @end: src/ ===
 
 
-# === @begin: Install Targets ===
-include(GNUInstallDirs)
-install(FILES ${INCEXPORTS} TYPE INCLUDE)
+# # === @begin: Install Targets ===
+# include(GNUInstallDirs)
+# install(FILES ${INCEXPORTS} TYPE INCLUDE)
 
-target_include_directories(ncclras PUBLIC
-  ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_SOURCE_DIR}/../include
-)
+# target_include_directories(ncclras PUBLIC
+#   ${CMAKE_CURRENT_SOURCE_DIR}
+#   ${CMAKE_CURRENT_SOURCE_DIR}/../include
+# )
 
-install(
-    TARGETS nccl nccl_static
-    EXPORT NCCLConfig
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-)
+# install(
+#     TARGETS nccl nccl_static
+#     EXPORT NCCLConfig
+#     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+#     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+#     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+#     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+# )
 
-install(
-    EXPORT NCCLConfig
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/nccl
-    NAMESPACE NCCL::
-)
-# === @end: Install Targets ===
+# install(
+#     EXPORT NCCLConfig
+#     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/nccl
+#     NAMESPACE NCCL::
+# )
+# # === @end: Install Targets ===

@@ -26,47 +26,94 @@ add_subdirectory(device)
 # === @end: device/ ===
 
 
+# === @begin: ras/ ===
+add_subdirectory(ras)
+# === @end: ras/ ===
 
-# add_subdirectory(ras)
+set(SRC_FILES
+    init.cc
+    init_nvtx.cc
+    channel.cc
+    bootstrap.cc
+    transport.cc
+    enqueue.cc
+    group.cc
+    debug.cc
+    proxy.cc
+    enhcompat.cc
+    net.cc
 
-# set(SRC_FILES
-#     init.cc
-#     init_nvtx.cc
-#     channel.cc
-#     bootstrap.cc
-#     transport.cc
-#     enqueue.cc
-#     group.cc
-#     debug.cc
-#     proxy.cc
-#     enhcompat.cc
-#     net.cc
-#     misc/cudawrap.cc
-#     misc/nvmlwrap.cc
-#     misc/ibvwrap.cc
-#     misc/gdrwrap.cc
-#     misc/utils.cc
-#     misc/argcheck.cc
-#     misc/socket.cc
-#     misc/shmutils.cc
-#     misc/profiler.cc
-#     misc/param.cc
-#     misc/strongstream.cc
-#     transport/p2p.cc
-#     transport/shm.cc
-#     transport/net.cc
-#     transport/net_socket.cc
-#     transport/net_ib.cc
-#     transport/coll_net.cc
-#     graph/topo.cc
-#     graph/paths.cc
-#     graph/search.cc
-#     graph/connect.cc
-#     graph/rings.cc
-#     graph/trees.cc
-#     graph/tuning.cc
-#     graph/xml.cc
-# )
+    # === @begin: misc/ ===
+    misc/argcheck.cc
+    misc/cudawrap.cc
+    misc/gdrwrap.cc
+    misc/ibvsymbols.cc
+    misc/ibvwrap.cc
+    misc/ipcsockert.cc
+    misc/nvmlwrap.cc
+    misc/param.cc
+    misc/shmutils.cc
+    misc/socket.cc
+    misc/strongstream.cc
+    misc/utils.cc
+    # === @end: misc/ ===
+
+    # === @begin: plugin/ ===
+    plugin/net/net_v6.cc
+    plugin/net/net_v7.cc
+    plugin/net/net_v8.cc
+    plugin/net/net_v9.cc
+    plugin/net/net_v10.cc
+    plugin/profiler/profiler_v1.cc
+    plugin/profiler/profiler_v2.cc
+    plugin/profiler/profiler_v3.cc
+    plugin/tuner/tuner_v1.cc
+    plugin/tuner/tuner_v2.cc
+    plugin/tuner/tuner_v3.cc
+    plugin/net.cc
+    plugin/plugin_open.cc
+    plugin/profiler.cc
+    plugin/tuner.cc
+    # === @end: plugin/ ===
+
+    # === @begin: transport/ ===
+    transport/coll_net.cc
+    transport/generic.cc
+    transport/net_ib.cc
+    transport/net_socket.cc
+    transport/net.cc
+    transport/nvls.cc
+    transport/p2p.cc
+    transport/profiler.cc
+    transport/shm.cc
+    # === @end: transport/ ===
+
+    # === @being: graph/ ===
+
+    # === @@being: Header Files ===
+    graph/rings.h
+    graph/topo.h
+    graph/xml.h
+    # === @@end: Header Files ===
+
+    # === @@begin: Source Files ===
+    graph/connect.cc
+    graph/paths.cc
+    graph/rings.cc
+    graph/search.cc
+    graph/topo.cc
+    graph/trees.cc
+    graph/tuning.cc
+    graph/xml.cc
+    # === @@end: Source Files ===
+    # === @end: graph/ ===
+
+    # === @begin: register/ ===
+    coll_reg.cc
+    register.cc
+    sendrecv_reg.cc
+    # === @end: register/ ===
+)
 
 # set(INCEXPORTS
 #     ${CMAKE_CURRENT_SOURCE_DIR}/include/nccl.h

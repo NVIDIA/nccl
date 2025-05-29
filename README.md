@@ -1,3 +1,6 @@
+# Eugo Notes
+This is a CMake specific port of NVIDIA's NCCL library. We exclusively leverage Clang for both host and device compilation.
+
 # NCCL
 
 Optimized primitives for inter-GPU communication.

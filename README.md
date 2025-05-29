@@ -43,14 +43,21 @@ The xla patch for clang came from:
 
 
 
+~~NVTX3 finding - you can change to use find_package(CUDA) and extract that as cuda::nvtx3  https://cmake.org/cmake/help/latest/module/FindCUDAToolkit.html~~
+~~Remove nvtx3 from their include folder~~
+~~Update sources in src/CMakeLists.txt [CHECK W/ SLAV]~~
+
+
+
 
 2. Options: (./__io__/tmp/eugo/nccl-1786e871814edc7f76f463980c283f9e04681256/)
         1. ~~Fork `nvidia/NCCL` and insert CMakeFiles introduced by fork with our changes~~
         2. [DONE? -> DOUBLE CHECK W/ SLAV] In `src/device/CMakeLists.txt`, do the below (see cmake script below)
-        3. We need to manually go recursively through all CMakeLists.txt and add all new files into appropriate targets
-            1. Is it best to dynamically generate the list of files from cmake? i think we need /graph, /transport, /register, /misc and exclude /include, /device, /plugin, /ras?
+        3. ~~We need to manually go recursively through all CMakeLists.txt and add all new files into appropriate targets~~
+            1. ~~Is it best to dynamically generate the list of files from cmake? i think we need /graph, /transport, /register, /misc and exclude /include, /device, /plugin, /ras?~~
+        5. ~~Properly add options to disable/enable static and shared libraries~~
+        4. Make nccl.h to be generated in build and not the source tree as we did it for colldevice - but add that into target_include_directories of colldevice. @TODO: add that into other targets target_include_directories
         4. We need to add new CMakeLists.txt for new folders in latest NCCL
-        5. Properly add options to disable/enable static and shared libraries
         6. [DONE? -> DOUBLE CHECK W/ SLAV] Refine/revise CMake options because current ones suck (i.e., too vague and badly documented) - @TODO: highly likely, just remove most of the options.
         7. ~~apply selective `xla` patches?~~
         8. [DONE? -> DOUBLE CHECK W/ SLAV] Dynamically remove `const` from device_table.cu
@@ -64,51 +71,9 @@ The xla patch for clang came from:
         13. Allow specifying of dynamic sm_* architectures
         14. [DONE? -> DOUBLE CHECK W/ SLAV] Add `-Wnvcc-compat` and add `-fcuda-rdc` to cuda compilation flags?
         15. update any/all standards that need to be updated (i.e. CMAKE_CXX_STANDARD / CMAKE_CUDA_STANDARD)
-
-        2. [EXTENDED].
-            1. We need to run generate.py into `./__eugo_tmp`
-            2. List its contents and append them into `CU_FILES` list variable
-            3. Copy all files from `./__eugo_tmp` into `./` (==`src/device/`)
-            4. Remove `./__eugo_tmp`
-            ```
-            # Step 1: Run generate.py into ./__eugo_tmp
-            execute_process(
-            COMMAND ${CMAKE_COMMAND} -E make_directory __eugo_tmp
-            )
-
-            execute_process(
-            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate.py
-            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/__eugo_tmp
-            )
-
-            # Step 2: Get list of generated files
-            file(GLOB GENERATED_CU_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/__eugo_tmp "${CMAKE_CURRENT_SOURCE_DIR}/__eugo_tmp/*.cu")
-
-            # Step 3: Append to CU_FILES
-            set(CU_FILES "")
-            foreach(file ${GENERATED_CU_FILES})
-            list(APPEND CU_FILES "${CMAKE_CURRENT_SOURCE_DIR}/__eugo_tmp/${file}")
-            endforeach()
-
-            # Step 4: Copy files into src/device/
-            foreach(file ${GENERATED_CU_FILES})
-            file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/__eugo_tmp/${file}"
-                DESTINATION "${CMAKE_CURRENT_SOURCE_DIR}")
-            endforeach()
-
-            # Step 5: Remove __eugo_tmp
-            file(REMOVE_RECURSE "${CMAKE_CURRENT_SOURCE_DIR}/__eugo_tmp")
-            ```
-
-        9. [EXTENDED].```cmake
-                # Require NVTX3 from a config-based install
-                find_package(nvtx3 CONFIG REQUIRED)
-
-                add_executable(test_nvtx3 main.cpp)
-
-                # Link against the C++ NVTX interface
-                target_link_libraries(test_nvtx3 PRIVATE nvtx3::nvtx3-cpp)
-            ```
+        16. @CRITICAL!!! After finishing building the entire nccl library, we must ensure that `-mno-outline-atomics` was honored.
+            1. llvm-nm {-U, -DU, -D} <path to the final library> and check if there are no calls to atomic functions from compiler-rt.
+            2. Important caveat - if the host code doesn't use any atomic operations, it won't have any atomic symbols even if -mno-outline-atomics wasn't honored. In such case, we can just add a dummy little function which will perform `std::atomic<int>++` (but it must be marked as public for optimizer to not to strip that)
 
 
 

@@ -6,11 +6,6 @@ project(nccl LANGUAGES CUDA CXX VERSION 2.16.2.1)
 
 # @TODO+:check: do we still need that?
 option(PRINT_VERBOSE "Print verbose build information" OFF)
-option(
-    USE_SYSTEM_NVTX
-    "Use system-installed NVTX3 (via find_package). If OFF, disables NVTX. Disabling NVTX is only for compatibility with NCCL"
-    ON
-)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CUDA_STANDARD 23)
@@ -33,22 +28,21 @@ set(CMAKE_CXX_FLAGS
     -Wvla"
 )
 
-# @TODO+: check and remove
+# @TODO+: check and remove #@HELP
 # -fcuda-rdc
 # === @end: General Configuration ===
 
 
+# === @begin: Dependencies ===
+# Find system NVTX3
+find_package(CUDAToolkit REQUIRED)
 
-# # Find system NVTX3
-# if(USE_SYSTEM_NVTX)
-#     # Fail immediately if not found
-#     find_package(nvtx3 CONFIG REQUIRED)
-# else()
-#     # Disable NVTX-related features
-#     add_compile_definitions(NVTX_DISABLE)
-# endif()
-
-# === @end: General Configuration ===
+if (TARGET CUDA::nvtx3)
+    message(STATUS "Found CUDA::nvtx3")
+else()
+    message(FATAL_ERROR "CUDA::nvtx3 not found")
+endif()
+# === @end: Dependencies ===
 
 
 # === @begin: src/ ===

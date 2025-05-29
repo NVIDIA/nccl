@@ -22,11 +22,4 @@ if(PRINT_VERBOSE)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra")
 endif()
 
-# Find system NVTX3
-if(USE_SYSTEM_NVTX)
-    # Fail immediately if not found
-    find_package(nvtx3 CONFIG REQUIRED)
-else()
-    # Disable NVTX-related features
-    add_compile_definitions(NVTX_DISABLE)
-endif()
+

@@ -39,7 +39,13 @@ ncclResult_t xmlGetValue(FILE* file, char* value, char* last) {
 #if INT_OK
     int o = 0;
     do {
-      value[o++] = c;
+      value[o] = c;
+      if (o == MAX_STR_LEN-1) {
+        value[o] = '\0';
+        WARN("Error : value %s too long (max %d)", value, MAX_STR_LEN);
+        return ncclInternalError;
+      }
+      o++;
       NCCLCHECK(xmlGetChar(file, &c));
     } while (c >= '0' && c <= '9');
     value[o] = '\0';
@@ -51,10 +57,17 @@ ncclResult_t xmlGetValue(FILE* file, char* value, char* last) {
 #endif
   }
   int o = 0;
+  char quote = c;  // Remember which quote type we started with
   do {
     NCCLCHECK(xmlGetChar(file, &c));
-    value[o++] = c;
-  } while (c != '"');
+    value[o] = c;
+    if (o == MAX_STR_LEN-1) {
+      value[o] = '\0';
+      WARN("Error : value %s too long (max %d)", value, MAX_STR_LEN);
+      return ncclInternalError;
+    }
+    o++;
+  } while (c != quote);
   value[o-1] = '\0';
   NCCLCHECK(xmlGetChar(file, last));
   return ncclSuccess;
@@ -267,7 +280,7 @@ ncclResult_t ncclTopoDumpXmlRec(int indent, FILE* file, struct ncclXmlNode* node
 ncclResult_t ncclTopoDumpXmlToFile(const char* xmlTopoFile, struct ncclXml* xml) {
   FILE* file = fopen(xmlTopoFile, "w");
   if (file == NULL) {
-    WARN("Unable to open %s, not dumping topology.", xmlTopoFile);
+    INFO(NCCL_GRAPH|NCCL_ENV, "Unable to open %s, not dumping topology.", xmlTopoFile);
     return ncclSuccess;
   }
   NCCLCHECK(ncclTopoDumpXmlRec(0, file, xml->nodes));
@@ -375,7 +388,7 @@ ncclResult_t ncclTopoGetXmlFromFile(const char* xmlTopoFile, struct ncclXml* xml
   FILE* file = fopen(xmlTopoFile, "r");
   if (file == NULL) {
     if (warn) {
-      WARN("Could not open XML topology file %s : %s", xmlTopoFile, strerror(errno));
+      INFO(NCCL_GRAPH|NCCL_ENV, "Could not open XML topology file %s : %s", xmlTopoFile, strerror(errno));
     }
     return ncclSuccess;
   }
@@ -759,7 +772,7 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
     int maxNvLinks = (sm < 60) ? 0 : (sm < 70) ? 4 : (sm < 80) ? 6 : (sm < 90) ? 12 : 18;
 
     if (maxNvLinks > 0 && nvmlDev == NULL) {
-      WARN("No NVML device handle. Skipping nvlink detection.");
+      INFO(NCCL_GRAPH, "No NVML device handle. Skipping nvlink detection.");
       maxNvLinks = 0;
     }
 
@@ -961,8 +974,16 @@ ncclResult_t ncclTopoTrimXmlRec(struct ncclXmlNode* node, int* keep) {
       NCCLCHECK(ncclTopoTrimXmlRec(subs[s], &k));
       *keep += k;
     }
-    if (*keep == 0 && // Trim PCI switches or CPU with no used GPU/NIC under them.
-        (strcmp(node->name, "pci") == 0 || strcmp(node->name, "cpu") == 0)) {
+    // Remove node if it has no children and no keep attribute
+    if (*keep == 0 && // Trim PCI switches, CPUs with no used GPU/NIC under them, or pruned NICs
+        (strcmp(node->name, "pci") == 0 || strcmp(node->name, "cpu") == 0 || strcmp(node->name, "nic") == 0 || strcmp(node->name, "net") == 0)) {
+#ifdef ENABLE_TRACE
+      const char* name;
+      const char* busid;
+      NCCLCHECK(xmlGetAttr(node, "name", &name));
+      NCCLCHECK(xmlGetAttr(node, "busid", &busid));
+      TRACE(NCCL_GRAPH, "Removing node %s %s %s\n", node->name, name, busid);
+#endif
       NCCLCHECK(xmlRemoveNode(node));
     }
   }

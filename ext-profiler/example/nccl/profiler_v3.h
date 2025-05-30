@@ -111,9 +111,4 @@ typedef struct {
   ncclResult_t (*finalize)(void* context);
 } ncclProfiler_v3_t;
 
-typedef ncclProfilerEventDescr_v3_t ncclProfilerEventDescr_t;
-typedef ncclProfilerEventState_v3_t ncclProfilerEventState_t;
-typedef ncclProfilerEventStateArgs_v3_t ncclProfilerEventStateArgs_t;
-typedef ncclProfiler_v3_t ncclProfiler_t;
-
 #endif

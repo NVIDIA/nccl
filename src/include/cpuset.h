@@ -58,4 +58,29 @@ static ncclResult_t ncclCpusetToStr(cpu_set_t* mask, char* str) {
   return ncclSuccess;
 }
 
+static char* ncclCpusetToRangeStr(cpu_set_t* mask, char* str, size_t len) {
+  int c = 0;
+  int start = -1;
+  // Iterate through all possible CPU bits plus one extra position
+  for (int cpu = 0; cpu <= CPU_SETSIZE; cpu++) {
+    int isSet = (cpu == CPU_SETSIZE) ? 0 : CPU_ISSET(cpu, mask);
+    // Start of a new range
+    if (isSet && start == -1) {
+      start = cpu;
+    }
+    // End of a range, add comma between ranges
+    if (!isSet && start != -1) {
+      if (cpu-1 == start) {
+        c += snprintf(str+c, len-c, "%s%d", c ? "," : "", start);
+      } else {
+        c += snprintf(str+c, len-c, "%s%d-%d", c ? "," : "", start, cpu-1);
+      }
+      if (c >= len-1) break;
+      start = -1;
+    }
+  }
+  if (c == 0) str[0] = '\0';
+  return str;
+}
+
 #endif

@@ -20,8 +20,8 @@ static ncclResult_t ncclProfiler_startEvent(void* context, void** eHandle, ncclP
   switch(eDescr->type) {
     case ncclProfileGroup: break;
     case ncclProfileColl: {
-      eDescr_v2.coll.name = eDescr->coll.name;
-      eDescr_v2.coll.commHash = eDescr->coll.commHash;
+      eDescr_v2.coll.name = nullptr; // removed in v4
+      eDescr_v2.coll.commHash = 0; // removed in v4
       eDescr_v2.coll.seqNumber = eDescr->coll.seqNumber;
       eDescr_v2.coll.func = eDescr->coll.func;
       eDescr_v2.coll.sendBuff = eDescr->coll.sendBuff;
@@ -30,14 +30,14 @@ static ncclResult_t ncclProfiler_startEvent(void* context, void** eHandle, ncclP
       eDescr_v2.coll.root = eDescr->coll.root;
       eDescr_v2.coll.datatype = eDescr->coll.datatype;
       eDescr_v2.coll.trafficBytes = 0; // removed in v3
-      eDescr_v2.coll.nMaxChannels = eDescr->coll.nMaxChannels;
+      eDescr_v2.coll.nMaxChannels = eDescr->coll.nChannels;
       eDescr_v2.coll.nWarps = eDescr->coll.nWarps;
       eDescr_v2.coll.algo = eDescr->coll.algo;
       eDescr_v2.coll.proto = eDescr->coll.proto;
     } break;
     case ncclProfileP2p: {
-      eDescr_v2.p2p.name = eDescr->p2p.name;
-      eDescr_v2.p2p.commHash = eDescr->p2p.commHash;
+      eDescr_v2.p2p.name = nullptr; // removed in v4
+      eDescr_v2.p2p.commHash = 0; // removed in v4
       eDescr_v2.p2p.func = eDescr->p2p.func;
       eDescr_v2.p2p.buff = eDescr->p2p.buff;
       eDescr_v2.p2p.count = eDescr->p2p.count;
@@ -62,10 +62,28 @@ static ncclResult_t ncclProfiler_startEvent(void* context, void** eHandle, ncclP
 }
 
 static ncclResult_t ncclProfiler_recordEventState(void* eHandle, ncclProfilerEventState_t eState, ncclProfilerEventStateArgs_t* eStateArgs) {
-  return ncclProfiler_v2->recordEventState(eHandle, eState, (ncclProfilerEventStateArgs_v2_t *)eStateArgs);
+  ncclProfilerEventStateArgs_v2_t args = { };
+  switch (eState) {
+    case ncclProfilerProxyCtrlIdle:
+    case ncclProfilerProxyCtrlActive:
+    case ncclProfilerProxyCtrlSleep:
+    case ncclProfilerProxyCtrlWakeup:
+    case ncclProfilerProxyCtrlAppend:
+    case ncclProfilerProxyCtrlAppendEnd:
+      args.proxyCtrl.appendedProxyOps = eStateArgs->proxyCtrl.appendedProxyOps;
+      break;
+    case ncclProfilerProxyStepSendGPUWait:
+    case ncclProfilerProxyStepSendWait:
+    case ncclProfilerProxyStepRecvWait:
+    case ncclProfilerProxyStepRecvFlushWait:
+    case ncclProfilerProxyStepRecvGPUWait:
+      break;
+    default: return ncclSuccess;
+  }
+  return ncclProfiler_v2->recordEventState(eHandle, eState, &args);
 }
 
-static ncclResult_t ncclProfiler_init(void** context, int* eActivationMask) {
+static ncclResult_t ncclProfiler_init(void** context, int* eActivationMask, const char* commName, uint64_t commHash, int nNodes, int nranks, int rank, ncclDebugLogger_t logfn) {
   NCCLCHECK(ncclProfiler_v2->init(context, eActivationMask));
   ncclProfiler.startEvent = ncclProfiler_startEvent;
   ncclProfiler.stopEvent = ncclProfiler_v2->stopEvent;

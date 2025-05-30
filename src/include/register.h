@@ -29,18 +29,24 @@ struct ncclRegNetHandles {
   struct ncclRegNetHandles* next;
 };
 
+struct ncclSymRegTask {
+  struct ncclSymRegTask *next;
+  void* buff;
+  size_t baseSize;
+  CUmemGenericAllocationHandle memHandle;
+  struct ncclReg* regHandle;
+  size_t alignment;
+};
+
 struct ncclReg {
   // common attributes
-  size_t pages;
+  uintptr_t begAddr, endAddr; // page aligned
   int localRefs;
   int graphRefs;
-  uintptr_t addr;
   uint32_t state;
   // net reg
   struct ncclRegNetHandles* netHandleHead;
   // nvls reg
-  uintptr_t baseAddr;
-  size_t baseSize;
   CUdeviceptr regAddr;
   size_t regUCSize, regMCSize;
   int dev;
@@ -52,6 +58,10 @@ struct ncclReg {
   // general ipc reg
   struct ncclPeerRegIpcAddr regIpcAddrs;
   struct ncclIpcRegInfo* ipcInfos[NCCL_MAX_LOCAL_RANKS];
+  // symmetric reg
+  void* baseSymPtr;
+  size_t symSize;
+  int winFlags;
 };
 
 struct ncclRegCache {
@@ -60,10 +70,14 @@ struct ncclRegCache {
   uintptr_t pageSize;
 };
 
+struct ncclWindow {
+  struct ncclReg* handle;
+};
+
 ncclResult_t ncclRegCleanup(struct ncclComm* comm);
-ncclResult_t ncclRegFind(struct ncclComm* comm, const void* data, size_t size, struct ncclReg** reg);
 ncclResult_t ncclCommGraphRegister(const ncclComm_t comm, void* buff, size_t size, void** handle);
 ncclResult_t ncclCommGraphDeregister(const ncclComm_t comm, struct ncclReg *handle);
 ncclResult_t ncclRegLocalIsValid(struct ncclReg *reg, bool *isValid);
+ncclResult_t ncclCommSymmetricRegisterInternal(struct ncclComm* comm, void* buff, size_t baseSize, size_t alignment, CUmemGenericAllocationHandle memHandle, struct ncclReg* regHandle);
 
 #endif

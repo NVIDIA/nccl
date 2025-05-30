@@ -7,6 +7,9 @@
 #ifndef PRINT_EVENT_H_
 #define PRINT_EVENT_H_
 
+#include "nccl/common.h"
+extern ncclDebugLogger_t logFn;
+
 void debugEvent(void* eHandle, const char* tag);
 void printEvent(FILE* fh, void* handle);
 

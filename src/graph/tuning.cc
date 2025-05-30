@@ -16,13 +16,13 @@ static int getNthreads(const char* name, int env, int min, int max, int def) {
   int nt = env;
   if (nt > 0) {
     if (nt % WARP_SIZE != 0) {
-      WARN("Invalid %s %d (must be a multiple of %d)", name, nt, WARP_SIZE);
+      INFO(NCCL_GRAPH|NCCL_ENV, "Invalid %s %d (must be a multiple of %d)", name, nt, WARP_SIZE);
       nt = max;
     } else if (nt > max) {
-      WARN("Invalid %s %d (maximum %d).", name, nt, max);
+      INFO(NCCL_GRAPH|NCCL_ENV, "Invalid %s %d (maximum %d).", name, nt, max);
       nt = max;
     } else if (nt < min) {
-      WARN("Invalid %s %d (minimum %d).", name, nt, min);
+      INFO(NCCL_GRAPH|NCCL_ENV, "Invalid %s %d (minimum %d).", name, nt, min);
       nt = min;
      }
   } else {
@@ -51,11 +51,14 @@ static int getNthreads(const char* name, int env, int min, int max, int def) {
 //     NCCL_PROTO="^LL128;allreduce:LL128"
 // Enable everything but LL128, but only LL128 for allreduce.
 ncclResult_t parseList(const char* str, const char* prefixElems[], int nprefixes, const char* elems[], int nelems, int* list) {
+  ncclResult_t ret = ncclSuccess;
   char* fullStr = strdup(str);
   char* tmpFullStr;
   char* fullToken = strtok_r(fullStr, ";", &tmpFullStr);
+  char* subToken = nullptr;
+  char* tokStr = nullptr;
   while (fullToken) {
-    char* subToken = strdup(fullToken);
+    subToken = strdup(fullToken);
     char* tmpSubStr;
     char* prefix = strtok_r(subToken, ":", &tmpSubStr);
     char* elemList = strtok_r(NULL, ":", &tmpSubStr);
@@ -65,7 +68,8 @@ ncclResult_t parseList(const char* str, const char* prefixElems[], int nprefixes
         // because then all the prefixes before the prefix-less entry would be
         // overwritten.
         WARN("All entries except the first must have a prefix: \"%s\"", str);
-        return ncclInvalidUsage;
+        ret = ncclInvalidUsage;
+        goto fail;
       }
       elemList = prefix;
       prefix = NULL;
@@ -84,7 +88,7 @@ ncclResult_t parseList(const char* str, const char* prefixElems[], int nprefixes
       foundPrefix = true;
       for (int e=0; e<nelems; e++) list[p*nelems+e] = unset;
 
-      char* tokStr = strdup(elemList);
+      tokStr = strdup(elemList);
       char* tmpStr;
       char* elem = strtok_r(tokStr, ",", &tmpStr);
       while (elem) {
@@ -97,22 +101,32 @@ ncclResult_t parseList(const char* str, const char* prefixElems[], int nprefixes
         }
         if (e==nelems) {
           WARN("Unrecognized element token \"%s\" when parsing \"%s\"", elem, str);
-          return ncclInvalidUsage;
+          ret = ncclInvalidUsage;
+          goto fail;
         }
         elem = strtok_r(NULL, ",", &tmpStr);
       }
       free(tokStr);
+      tokStr = nullptr;
     }
     if (!foundPrefix) {
       WARN("Unrecognized prefix token \"%s\" when parsing \"%s\"", prefix, str);
-      return ncclInvalidUsage;
+      ret = ncclInvalidUsage;
+      goto fail;
     }
     free(subToken);
+    subToken = nullptr;
 
     fullToken = strtok_r(NULL, ";", &tmpFullStr);
   }
+
+exit:
+  free(tokStr);
+  free(subToken);
   free(fullStr);
-  return ncclSuccess;
+  return ret;
+fail:
+  goto exit;
 }
 
 // Latencies in us, Bandwidths in GB/s
@@ -194,6 +208,8 @@ static float getNetOverhead(struct ncclComm* comm) {
   return 1.0;
 }
 
+NCCL_PARAM(Ll128C2c, "LL128_C2C", 1);
+
 ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCompCap, struct ncclTopoGraph** graphs) {
   int simpleDefaultThreads = (graphs[NCCL_ALGO_RING]->bwIntra*graphs[NCCL_ALGO_RING]->nChannels <= PCI_BW) ? 256 : NCCL_SIMPLE_MAX_NTHREADS;
   comm->maxThreads[NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] =
@@ -248,7 +264,14 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
             && a == NCCL_ALGO_PAT && (p != NCCL_PROTO_SIMPLE || ncclPatEnable(comm) == 0)) continue;
         int collnet = (a == NCCL_ALGO_COLLNET_DIRECT || a == NCCL_ALGO_COLLNET_CHAIN) ? 1 : 0;
         float bw = nNodes <= 2 || collnet ? graphs[a]->bwIntra : graphs[a]->bwInter;
-        if (a == NCCL_ALGO_NVLS) bw = std::min(graphs[a]->bwIntra, graphs[a]->bwInter);
+        if (a == NCCL_ALGO_NVLS) {
+          if (coll == ncclFuncAllReduce) {
+            bw = std::min(graphs[a]->bwIntra, graphs[a]->bwInter);
+          } else {
+            // allgather and reducescatter
+            bw = std::min(graphs[a]->bwIntra * (ppn - 1.0f) / ppn, graphs[a]->bwInter * 0.9f);
+          }
+        }
         if (a == NCCL_ALGO_NVLS_TREE) bw = std::min(graphs[a]->bwIntra, nNodes <= 2 ? graphs[a]->bwInter : graphs[a]->bwInter/2);
         float busBw = graphs[a]->nChannels * bw;
 
@@ -264,25 +287,33 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
         if (a == NCCL_ALGO_COLLNET_CHAIN && p != NCCL_PROTO_SIMPLE) busBw = 0;  // Not used
         if (a == NCCL_ALGO_COLLNET_DIRECT && p == NCCL_PROTO_SIMPLE) {
           if (coll == ncclFuncAllGather || coll == ncclFuncReduceScatter) {
-            busBw = ppn * bw;
-            // AllGather/ReduceScatter requires 1:1 GPU:NIC
-            int nicPerNode = comm->collNetHeadsNum;
-            if (coll == ncclFuncAllGather && comm->nNodes > 1) {
-              if (!comm->ncclCollNet || !comm->ncclCollNet->iallgather || ppn > nicPerNode) busBw = 0;
-            }
-            if (coll == ncclFuncReduceScatter && comm->nNodes > 1) {
-              if (!comm->ncclCollNet || !comm->ncclCollNet->ireducescatter || ppn > nicPerNode) busBw = 0;
-            }
-            // Measured corrective ratio needed at 1 ppn and 8ppn. Here we hackishly
-            // interpolate the two.
-            float w = (ppn-1)/(8-1);
-            busBw *= w*0.85 + (1-w)*0.95;
+            busBw = ppn * std::min(graphs[a]->bwIntra, graphs[a]->bwInter * 0.9f);
           } else {
             // Collnet+Direct requires all GPUs to have a local NIC to work at full speed
             float factor = ppn / (1.0*graphs[a]->nChannels); // GPU/NIC ratio
             factor -= (factor-1)/2;
             busBw /= factor;
             if (minCompCap >= 90) busBw *= .85;
+          }
+        }
+        // disable collnet for allgather/reducescatter if #localranks > #heads
+        // AllGather/ReduceScatter requires 1:1 GPU:NIC
+        if ((a == NCCL_ALGO_NVLS || a == NCCL_ALGO_COLLNET_DIRECT) && p == NCCL_PROTO_SIMPLE && (coll == ncclFuncAllGather || coll == ncclFuncReduceScatter) && comm->nNodes > 1) {
+          int nHeads = 0;
+          if (coll == ncclFuncAllGather && comm->nNodes > 1 && (!comm->ncclCollNet || !comm->ncclCollNet->iallgather)) busBw = 0.0f;
+          if (coll == ncclFuncReduceScatter && comm->nNodes > 1 && (!comm->ncclCollNet || !comm->ncclCollNet->ireducescatter)) busBw = 0.0f;
+          if (comm->config.collnetEnable)
+            nHeads = comm->collNetHeadsNum;
+          else
+            busBw = 0.0f;
+          if (busBw > 0.0f) {
+            for (int r = 0; r < comm->nRanks; r++) {
+              int node = comm->rankToNode[r];
+              if (comm->nodeRanks[node].localRanks > nHeads) {
+                busBw = 0.0f;
+                break;
+              }
+            }
           }
         }
 
@@ -411,7 +442,7 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
       // Disable NVLS Tree on a single node
       if (comm->nNodes == 1 && a == NCCL_ALGO_NVLS_TREE) disable = 1;
       // Disable Collnet+Direct, Collnet+Chain or Collnet+NVLS if collnet is not supported.
-      if (comm->collNetSupport == 0 &&
+      if (comm->config.collnetEnable == 0 &&
           (a == NCCL_ALGO_COLLNET_DIRECT ||
            a == NCCL_ALGO_COLLNET_CHAIN ||
            (a == NCCL_ALGO_NVLS && comm->nNodes > 1))) disable = 1;
@@ -426,17 +457,10 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
     if (pEnable == 2 && p == NCCL_PROTO_LL128) {
       // Enable LL128 by default only on Volta/Ampere/Hopper/Blackwell+NVLink. Other cases are not tested and may cause silent data corruption.
       pEnable = 1;
-      pEnable &= (graphs[a]->typeInter <= PATH_PXB || (minCompCap >= 90 && graphs[a]->typeInter <= PATH_PXN));
+      pEnable &= (graphs[a]->typeInter <= PATH_PXB || (minCompCap >= 90 && graphs[a]->typeInter <= (ncclParamLl128C2c() ? PATH_P2C : PATH_PXN)));
       pEnable &= (graphs[a]->typeIntra <= PATH_NVB);
       pEnable &= (minCompCap == maxCompCap);
-      switch (minCompCap) {
-      case 70: pEnable &= 1; break;
-      case 80: pEnable &= 1; break;
-      case 90: pEnable &= !(CUDART_VERSION == 11080 && c == ncclFuncAllReduce && a == NCCL_ALGO_RING && comm->nRanks == 2); break;
-      case 100: pEnable &= 1; break;
-      case 120: pEnable &= 1; break;
-      default: pEnable &= 0; break;
-      }
+      pEnable &= !(minCompCap < 70 || (minCompCap == 90 && CUDART_VERSION == 11080 && c == ncclFuncAllReduce && a == NCCL_ALGO_RING && comm->nRanks == 2));
     }
     if (pEnable == 0) comm->bandwidths[c][a][p] = 0;
     if (algoEnable[c*NCCL_NUM_ALGORITHMS+a] == 0) comm->bandwidths[c][a][p] = 0;
@@ -483,7 +507,7 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
       }
     }
   }
- 
+
   // Set per-thread amount of work before we increase nThreads and nChannels
   for (int a=0; a<NCCL_NUM_ALGORITHMS; a++) {
     comm->threadThresholds[a][NCCL_PROTO_LL] = NCCL_LL_THREAD_THRESHOLD;

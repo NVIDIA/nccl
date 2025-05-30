@@ -10,24 +10,21 @@
 #include "net.h"
 #include "register.h"
 #include "transport.h"
+#include "group.h"
 
-ncclResult_t ncclRegFind(struct ncclComm* comm, const void* data, size_t size, struct ncclReg** reg) {
+NCCL_PARAM(LocalRegister, "LOCAL_REGISTER", 1);
+
+static ncclResult_t regFindHandleFromSymAddr(struct ncclComm* comm, void* baseSymPtr, struct ncclReg** handle) {
   struct ncclRegCache* cache = &comm->regCache;
-  uintptr_t pageSize = cache->pageSize;
-  uintptr_t addr = (uintptr_t)data & -pageSize;
-  size_t pages = ((uintptr_t)data + size - addr + pageSize-1)/pageSize;
-
-  *reg = NULL;
-  for (int slot=0; /*true*/; slot++) {
-    if (slot == cache->population || addr < cache->slots[slot]->addr) return ncclSuccess;
-    if ((addr >= cache->slots[slot]->addr) &&
-        ((addr-cache->slots[slot]->addr)/pageSize+pages) <= cache->slots[slot]->pages) {
-      *reg = cache->slots[slot];
-      return ncclSuccess;
+  *handle = NULL;
+  for (int slot = 0; slot < cache->population; slot++) {
+    if (baseSymPtr == cache->slots[slot]->baseSymPtr) {
+      *handle = cache->slots[slot];
+      break;
     }
   }
+  return ncclSuccess;
 }
-NCCL_PARAM(LocalRegister, "LOCAL_REGISTER", 1);
 
 ncclResult_t ncclRegLocalIsValid(struct ncclReg *reg, bool *isValid) {
   if (reg && isValid) {
@@ -43,14 +40,14 @@ ncclResult_t ncclRegister(struct ncclComm* comm, void* data, size_t size, bool i
   NCCLCHECK(CommCheck(comm, "ncclCommRegister", "comm"));
   struct ncclRegCache* cache = &comm->regCache;
   uintptr_t pageSize = cache->pageSize;
-  uintptr_t addr = (uintptr_t)data & -pageSize;
-  size_t pages = ((uintptr_t)data + size - addr + pageSize-1)/pageSize;
+  uintptr_t begAddr = (uintptr_t)data & -pageSize;
+  uintptr_t endAddr = ((uintptr_t)data + size + pageSize-1) & -pageSize;
 
   if (comm->checkPointers) NCCLCHECK(CudaPtrCheck(data, comm, "buff", "ncclCommRegister"));
   INFO(NCCL_REG, "register comm %p buffer %p size %zi", comm, data, size);
 
   for (int slot=0; /*true*/; slot++) {
-    if ((slot == cache->population) || (addr < cache->slots[slot]->addr)) {
+    if ((slot == cache->population) || (begAddr < cache->slots[slot]->begAddr)) {
       if (cache->population == cache->capacity) { // must grow cache
         cache->capacity = cache->capacity < 32 ? 32 : 2*cache->capacity;
         NCCLCHECK(ncclRealloc(&cache->slots, cache->population, cache->capacity));
@@ -58,15 +55,15 @@ ncclResult_t ncclRegister(struct ncclComm* comm, void* data, size_t size, bool i
       memmove(cache->slots+slot+1, cache->slots+slot, (cache->population-slot)*sizeof(struct ncclReg*));
       NCCLCHECK(ncclCalloc(cache->slots+slot, 1));
       struct ncclReg* regSlot = cache->slots[slot];
-      regSlot->addr = addr;
-      regSlot->pages = pages;
+      regSlot->begAddr = begAddr;
+      regSlot->endAddr = endAddr;
       if (isGraph) regSlot->graphRefs = 1;
       else regSlot->localRefs = 1;
       cache->population += 1;
       *handle = regSlot;
       goto exit;
-    } else if ((addr >= cache->slots[slot]->addr) &&
-        ((addr-cache->slots[slot]->addr)/pageSize+pages) <= cache->slots[slot]->pages) {
+    } else if ((cache->slots[slot]->begAddr <= begAddr) &&
+               (cache->slots[slot]->endAddr >= endAddr)) {
       if (isGraph) cache->slots[slot]->graphRefs++;
       else cache->slots[slot]->localRefs++;
       *handle = cache->slots[slot];
@@ -120,7 +117,7 @@ ncclResult_t ncclRegCleanup(struct ncclComm* comm) {
   struct ncclRegCache* cache = &comm->regCache;
   for (int i = 0; i < cache->population; i++) {
     struct ncclReg* reg = cache->slots[i];
-    INFO(NCCL_INIT, "Cleanup buffer %p pages %lx", (void*)reg->addr, reg->pages);
+    INFO(NCCL_INIT, "Cleanup buffer %p pages %lx", (void*)reg->begAddr, (reg->endAddr-reg->begAddr)/cache->pageSize);
     NCCLCHECK(regCleanup(comm, reg));
     free(reg);
   }
@@ -176,4 +173,105 @@ ncclResult_t ncclCommDeregister(const ncclComm_t comm, void *handle) {
 ncclResult_t ncclCommGraphDeregister(const ncclComm_t comm, struct ncclReg *handle) {
   NCCLCHECK(commDeregister(comm, true, handle));
   return ncclSuccess;
+}
+
+ncclResult_t ncclCommSymmetricRegisterInternal(struct ncclComm* comm, void* buff, size_t baseSize, size_t alignment, CUmemGenericAllocationHandle memHandle, struct ncclReg* regHandle) {
+  ncclResult_t ret = ncclSuccess;
+  void* regSymAddr = NULL;
+  ALIGN_SIZE(comm->symAllocHead, alignment);
+  NCCLCHECKGOTO(ncclIpcSymmetricMap(comm, comm->symAllocHead, baseSize, memHandle, &regSymAddr), ret, fail);
+  NCCLCHECKGOTO(ncclNvlsSymmetricMap(comm, comm->symAllocHead, baseSize, regSymAddr), ret, fail);
+  NCCLCHECKGOTO(bootstrapIntraNodeBarrier(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, comm->localRankToRank[0]), ret, fail);
+  comm->symAllocHead += baseSize;
+  regHandle->baseSymPtr = regSymAddr;
+  regHandle->symSize = baseSize;
+exit:
+  return ret;
+fail:
+  regHandle->baseSymPtr = NULL;
+  regHandle->symSize = 0;
+  goto exit;
+}
+
+NCCL_API(ncclResult_t, ncclCommWindowRegister, ncclComm_t comm, void* buff, size_t size, ncclWindow_t* win, int winFlags);
+ncclResult_t ncclCommWindowRegister(ncclComm_t comm, void* buff, size_t size, ncclWindow_t* win, int winFlags) {
+  ncclResult_t ret = ncclSuccess;
+  CUmemGenericAllocationHandle memHandle;
+  size_t baseSize;
+  void* baseAddr = NULL;
+  struct ncclReg* regHandle = NULL;
+  int saveDev;
+
+  *win = NULL;
+
+  CUDACHECK(cudaGetDevice(&saveDev));
+  NCCLCHECK(ncclGroupStartInternal());
+  if (!ncclParamLocalRegister() || !ncclCuMemEnable()) {
+    goto exit;
+  }
+
+  NCCLCHECKGOTO(ncclCommEnsureReady(comm), ret, fail);
+
+  CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), ret, fail);
+  if (comm && buff && size && win) {
+    size_t alignment = 0;
+    CUCHECKGOTO(cuMemGetAddressRange((CUdeviceptr*)&baseAddr, &baseSize, (CUdeviceptr)buff), ret, fail);
+    // size and alignment check
+    if (!((uintptr_t)baseAddr % NCCL_REC_PAGE_SIZE == 0 && baseSize % NCCL_REC_PAGE_SIZE == 0 && (uintptr_t)buff + size <= (uintptr_t)baseAddr + baseSize)) {
+      WARN("buffer %p (baseAddr %p align %d) size %zu (baseSize %ld align %d) does not satisfy symmetric registration requirements", buff, baseAddr, (uintptr_t)baseAddr % NCCL_REC_PAGE_SIZE == 0, size, baseSize, baseSize % NCCL_REC_PAGE_SIZE == 0);
+      goto fail;
+    }
+    NCCLCHECKGOTO(ncclRegister(comm, baseAddr, baseSize, false, (void**)&regHandle), ret, fail);
+    NCCLCHECKGOTO(ncclCalloc(win, 1), ret, fail);
+    (*win)->handle = regHandle;
+    regHandle->winFlags = winFlags;
+    if (regHandle->baseSymPtr == NULL && comm->symmetricSupport) {
+      struct ncclSymRegTask* task;
+      CUCHECKGOTO(cuMemRetainAllocationHandle(&memHandle, baseAddr), ret, fail);
+      CUCHECKGOTO(cuMemRelease(memHandle), ret, fail);
+      alignment = baseSize >= NCCL_REC_PAGE_SIZE * 72L ? NCCL_MAX_PAGE_SIZE : NCCL_REC_PAGE_SIZE;
+      NCCLCHECKGOTO(ncclCalloc(&task, 1), ret, fail);
+      task->buff = buff;
+      task->baseSize = baseSize;
+      task->memHandle = memHandle;
+      task->regHandle = regHandle;
+      task->alignment = alignment;
+      ncclIntruQueueEnqueue(&comm->symRegTaskQueue, task);
+      ncclGroupCommJoin(comm, ncclGroupTaskTypeSymRegister);
+    }
+  }
+
+exit:
+  ncclGroupErrCheck(ret);
+  NCCLCHECK(ret = ncclGroupEndInternal());
+  cudaSetDevice(saveDev);
+  return ret;
+fail:
+  free(*win);
+  *win = NULL;
+  goto exit;
+}
+
+NCCL_API(ncclResult_t, ncclCommWindowDeregister, ncclComm_t comm, ncclWindow_t win);
+ncclResult_t ncclCommWindowDeregister(ncclComm_t comm, ncclWindow_t win) {
+  ncclResult_t ret = ncclSuccess;
+  int saveDev;
+  struct ncclReg* regHandle;
+  CUDACHECK(cudaGetDevice(&saveDev));
+  if (win == NULL) goto exit;
+  regHandle = win->handle;
+  if (regHandle && ncclParamLocalRegister() && ncclCuMemEnable()) {
+    if (regHandle->baseSymPtr) {
+      CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), ret, fail);
+      NCCLCHECKGOTO(ncclNvlsSymmetricFree(comm, regHandle->symSize, regHandle->baseSymPtr), ret, fail);
+      NCCLCHECKGOTO(ncclIpcSymmetricFree(comm, regHandle->symSize, regHandle->baseSymPtr), ret, fail);
+    }
+    NCCLCHECKGOTO(commDeregister(comm, false, regHandle), ret, fail);
+  }
+  free(win);
+exit:
+  CUDACHECK(cudaSetDevice(saveDev));
+  return ret;
+fail:
+  goto exit;
 }

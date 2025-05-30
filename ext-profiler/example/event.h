@@ -15,24 +15,6 @@
 #define MAX_CHANNELS                     32
 #define MAX_STEPS                        16
 #define MAX_OPS                          16 // Up to 64K ranks for PAT
-
-#define PROXY_OP_SEND_STATE_OFFSET       (ncclProfilerProxyOpSendPosted)
-#define PROXY_OP_RECV_STATE_OFFSET       (ncclProfilerProxyOpRecvPosted)
-#define PROXY_STEP_SEND_STATE_OFFSET     (ncclProfilerProxyStepSendGPUWait)
-#define PROXY_STEP_RECV_STATE_OFFSET     (ncclProfilerProxyStepRecvWait)
-
-#define NUM_PROXY_OP_SEND_STATES         (ncclProfilerProxyOpSendDone      - ncclProfilerProxyOpSendPosted    + 1)
-#define NUM_PROXY_OP_RECV_STATES         (ncclProfilerProxyOpRecvDone      - ncclProfilerProxyOpRecvPosted    + 1)
-#define NUM_PROXY_STEP_SEND_STATES       (ncclProfilerProxyStepSendWait    - ncclProfilerProxyStepSendGPUWait + 1)
-#define NUM_PROXY_STEP_RECV_STATES       (ncclProfilerProxyStepRecvGPUWait - ncclProfilerProxyStepRecvWait    + 1)
-
-#define PROXY_OP_SEND_STATE_IDX(state)   (state - PROXY_OP_SEND_STATE_OFFSET)
-#define PROXY_OP_RECV_STATE_IDX(state)   (state - PROXY_OP_RECV_STATE_OFFSET)
-#define PROXY_STEP_SEND_STATE_IDX(state) (state - PROXY_STEP_SEND_STATE_OFFSET)
-#define PROXY_STEP_RECV_STATE_IDX(state) (state - PROXY_STEP_RECV_STATE_OFFSET)
-
-#define MAX_PROXY_OP_STATES              ((NUM_PROXY_OP_SEND_STATES   > NUM_PROXY_OP_RECV_STATES  ) ? NUM_PROXY_OP_SEND_STATES   : NUM_PROXY_OP_RECV_STATES)
-#define MAX_PROXY_STEP_STATES            ((NUM_PROXY_STEP_SEND_STATES > NUM_PROXY_STEP_RECV_STATES) ? NUM_PROXY_STEP_SEND_STATES : NUM_PROXY_STEP_RECV_STATES)
 #define MAX_EVENTS_PER_REQ               (8)
 
 struct proxyOp;
@@ -68,13 +50,24 @@ struct kernelCh {
   struct taskEventBase* parent;
   double startTs;
   double stopTs;
+  uint64_t startGpuClk;
+  uint64_t stopGpuClk;
 };
+
+#define PROXY_STEP_SEND_GPU_WAIT 0
+#define PROXY_STEP_SEND_PEER_WAIT 1
+#define PROXY_STEP_SEND_WAIT 2
+#define PROXY_STEP_RECV_WAIT 0
+#define PROXY_STEP_RECV_FLUSH_WAIT 1
+#define PROXY_STEP_RECV_GPU_WAIT 2
+#define PROXY_STEP_MAX_STATES 3
 
 struct proxyStep {
   uint8_t type;                     // type of event: network transfer
+  int state;
   int step;                         // network transfer id in given channel
   int isSend;                       // send/recv channel operation
-  double timestamp[MAX_PROXY_STEP_STATES];
+  double timestamp[PROXY_STEP_MAX_STATES];
   double startTs;
   double stopTs;
   struct proxyOp* parent;
@@ -92,11 +85,8 @@ struct proxyOp {
   int chunkSize;                    // chunk size for this proxy operation
   int isSend;                       // send/recv channel operation
   size_t transSize;                 // transfer data size for this proxy operation
-  struct {
-    int steps;                      // completed steps for this proxy operation state
-    double timestamp;
-  } states[MAX_PROXY_OP_STATES];
   double startTs;
+  double progrTs;                   // In progress state transition
   double stopTs;
   int stepCount;                    // last processed network operation for this proxy operation
   struct proxyStep step[MAX_STEPS]; // array of network transfer events
@@ -119,8 +109,6 @@ struct proxyCtrl {
 struct taskEventBase {
   uint8_t type;                     // event type: collective/p2p
   int rank;                         // rank of the operation in NCCL communicator
-  const char* name;                 // FIXME: unused
-  uint64_t commHash;                // communicator identifier
   const char* func;                 // ncclFunc*
   int refCount;                     // number of references for this operation
   struct group* parent;             // parent event group
@@ -137,12 +125,11 @@ struct collective {
   size_t count;
   int root;
   const char* datatype;
-  uint8_t nMaxChannels;
+  uint8_t nChannels;
   const char* algo;
   const char* proto;
   int nWarps;
-  struct proxyOp send[MAX_CHANNELS][MAX_OPS];// array of send proxy operation events
-  struct proxyOp recv[MAX_CHANNELS][MAX_OPS];// array of recv proxy operation events
+  struct proxyOp op[MAX_CHANNELS][2*MAX_OPS];
   int nProxyOps[MAX_CHANNELS];
   struct kernelCh kernel[MAX_CHANNELS];
 };
@@ -154,6 +141,7 @@ struct p2p {
   size_t count;
   const char* datatype;
   int peer;
+  uint8_t nChannels;
   struct proxyOp op[MAX_CHANNELS];
   struct kernelCh kernel[MAX_CHANNELS];
 };
@@ -172,6 +160,11 @@ struct group {
 
 // arrays for different event objects
 struct context {
+  const char* commName;
+  uint64_t commHash;
+  int nranks;
+  int rank;
+
   int groupPoolSize;
   int groupPoolBase;
   int groupPoolIndex;

@@ -94,6 +94,7 @@ ncclResult_t bootstrapNetInit() {
     pthread_mutex_lock(&bootstrapNetLock);
     if (bootstrapNetInitDone == 0) {
       const char* env = ncclGetEnv("NCCL_COMM_ID");
+      int nIfs = 0;
       if (env) {
         union ncclSocketAddress remoteAddr;
         if (ncclSocketGetAddrFromString(&remoteAddr, env) != ncclSuccess) {
@@ -101,13 +102,15 @@ ncclResult_t bootstrapNetInit() {
           pthread_mutex_unlock(&bootstrapNetLock);
           return ncclInvalidArgument;
         }
-        if (ncclFindInterfaceMatchSubnet(bootstrapNetIfName, &bootstrapNetIfAddr, &remoteAddr, MAX_IF_NAME_SIZE, 1) <= 0) {
+        NCCLCHECK(ncclFindInterfaceMatchSubnet(bootstrapNetIfName, &bootstrapNetIfAddr, &remoteAddr, MAX_IF_NAME_SIZE,
+                                               &nIfs));
+        if (nIfs <= 0) {
           WARN("NET/Socket : No usable listening interface found");
           pthread_mutex_unlock(&bootstrapNetLock);
           return ncclSystemError;
         }
       } else {
-        int nIfs = ncclFindInterfaces(bootstrapNetIfName, &bootstrapNetIfAddr, MAX_IF_NAME_SIZE, 1);
+        NCCLCHECK(ncclFindInterfaces(bootstrapNetIfName, &bootstrapNetIfAddr, MAX_IF_NAME_SIZE, 1, &nIfs));
         if (nIfs <= 0) {
           WARN("Bootstrap : no socket interface found");
           pthread_mutex_unlock(&bootstrapNetLock);
@@ -828,7 +831,7 @@ ncclResult_t bootstrapSplit(uint64_t magic, struct ncclComm* comm, struct ncclCo
 
   NCCLCHECKGOTO(ncclCalloc(&state->peerP2pAddresses, nranks), ret, fail);
   memcpy(state->peerP2pAddresses + rank, &peerSocketAddress, sizeof(union ncclSocketAddress));
-  if (parent->config.splitShare) {
+  if (parent->shareResources) {
     /* map local rank to top parent local rank. */
     for (int i = 0; i < nranks; ++i) {
       comm->topParentRanks[i] = parent->topParentRanks[parentRanks[i]];

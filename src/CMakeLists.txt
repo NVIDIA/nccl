@@ -120,6 +120,22 @@ set(NCCL_SRC_FILES
     # === @end: register/ ===
 )
 
+set_source_files_properties(
+    plugin/net/net_v6.cc
+    plugin/net/net_v7.cc
+    plugin/net/net_v8.cc
+    plugin/net/net_v9.cc
+    plugin/net/net_v10.cc
+    plugin/profiler/profiler_v1.cc
+    plugin/profiler/profiler_v2.cc
+    plugin/profiler/profiler_v3.cc
+    plugin/tuner/tuner_v2.cc
+    plugin/tuner/tuner_v3.cc
+    plugin/tuner/tuner_v4.cc
+
+    PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON
+)
+
 add_library(nccl SHARED ${NCCL_SRC_FILES} $<TARGET_OBJECTS:colldevice>)
 
 set_target_properties(
@@ -146,7 +162,6 @@ target_include_directories(
 set_property(TARGET nccl PROPERTY CUDA_SEPARABLE_COMPILATION ON)
 set_property(TARGET nccl PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
-# @TODO:BEN_DONE?:
 # Only nccl.h and nccl_net.h are public headers and only they are installed!
 set(INCEXPORTS
     ${CONFIGURED_HEADERS_DIR}/nccl.h

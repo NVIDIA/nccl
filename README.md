@@ -83,12 +83,12 @@ The xla patch for clang came from:
            ~~1. I see `-x cuda -fgpu-rdc` but not `-fcuda-rdc` so i added it to `CMAKE_CUDA_FLAGS`.~~
         ~~15. Remove `cmake/common.cmake`?~~
         ~~16. ncclras bug~~
+        ~~17. CMAKE_UNITY builds~~
 
         TODO:
-        17. Write down the eugo_maintenance guide about syncing with upstream
+        18. Write down the eugo_maintenance guide about syncing with upstream
             1. .cu, .cc, in device - add new extensions
             2. all new files, targets, and libs
-        18. CMAKE_UNITY builds
         19. Ensure no ptx emission to reduce binary size and accelerate its production
 
 

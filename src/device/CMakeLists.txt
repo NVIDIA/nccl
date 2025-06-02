@@ -32,6 +32,8 @@ target_include_directories(
          ${CONFIGURED_HEADERS_DIR}
 )
 
+set_target_properties(colldevice PROPERTIES UNITY_BUILD OFF)
+
 set_property(TARGET colldevice PROPERTY CUDA_SEPARABLE_COMPILATION ON)
 set_property(TARGET colldevice PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 # === @end: colldevice library ===

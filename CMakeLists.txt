@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.22)
+cmake_minimum_required(VERSION 4.0)
 
 
 # === @begin: General Configuration ===
@@ -8,23 +8,23 @@ project(nccl LANGUAGES CUDA CXX VERSION 2.16.2.1)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CUDA_STANDARD 17)
 
+set(CMAKE_CXX_VISIBILITY_PRESET hidden)
+set(CMAKE_CUDA_VISIBILITY_PRESET hidden)
+
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 set(CMAKE_CUDA_FLAGS
     "${CMAKE_CUDA_FLAGS} \
     -Wnvcc-compat \
     -Xcuda-ptxas -maxrregcount=96 \
-    -Xcuda-fatbinary -compress-all \
-    -fvisibility=hidden \
-    -fPIC"
+    -Xcuda-fatbinary -compress-all"
 )
 
 set(CMAKE_CXX_FLAGS
     "${CMAKE_CXX_FLAGS} \
-    -fPIC \
-    -Wall \
+    -Wall -Wvla \
     -Wno-unused-function \
-    -Wno-sign-compare \
-    -fvisibility=hidden \
-    -Wvla"
+    -Wno-sign-compare"
 )
 # === @end: General Configuration ===
 
@@ -36,17 +36,6 @@ add_subdirectory(src)
 
 # === @begin: Install Targets ===
 include(GNUInstallDirs)
-
-
-# NOTE: This is the install target output!
-# -- Installing: /usr/local/include/nccl.h
-# -- Up-to-date: /usr/local/include/nccl_net.h
-# -- Installing: /usr/local/lib64/libnccl.so.2.16.2.1
-# -- Installing: /usr/local/lib64/libnccl.so.2
-# -- Installing: /usr/local/lib64/libnccl.so
-# -- Installing: /usr/local/bin/ncclras
-# -- Installing: /usr/local/lib64/cmake/nccl/NCCLConfig.cmake
-# -- Installing: /usr/local/lib64/cmake/nccl/NCCLConfig-release.cmake
 
 # Install the headers into the include directory
 install(FILES ${INCEXPORTS} TYPE INCLUDE)
@@ -65,4 +54,16 @@ install(
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/nccl
     NAMESPACE NCCL::
 )
+
+
+# NOTE: This is the install target output!
+# -- Installing: /usr/local/include/nccl.h
+# -- Up-to-date: /usr/local/include/nccl_net.h
+# -- Installing: /usr/local/lib64/libnccl.so.2.16.2.1
+# -- Installing: /usr/local/lib64/libnccl.so.2
+# -- Installing: /usr/local/lib64/libnccl.so
+# -- Installing: /usr/local/bin/ncclras
+# -- Installing: /usr/local/lib64/cmake/nccl/NCCLConfig.cmake
+# -- Installing: /usr/local/lib64/cmake/nccl/NCCLConfig-release.cmake
+
 # === @end: Install Targets ===

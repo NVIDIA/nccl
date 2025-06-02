@@ -15,13 +15,6 @@
 #include "nvtx3/nvToolsExtPayload.h"
 #include "nvtx3/nvToolsExtPayloadHelper.h"
 
-// @begin:EUGO_CHANGE:
-// NCCL authors used internal macros from nvtx3 and not the public one, which leads to errors in latest versions,
-// where nvtx3 boys removed automatic re-export of internal headers.
-#include "nvtx3/nvtxDetail/nvtxExtPayloadHelperInternal.h"
-
-#define NCCL_NVTX_PAYLOAD_ENTRIES NVTX_PAYLOAD_ENTRIES
-// @end:EUGO_CHANGE
 
 /**
  * \brief Define a C struct together with the matching schema entries.
@@ -29,7 +22,6 @@
  * Does the same as `NCCL_NVTX_DEFINE_STRUCT_WITH_SCHEMA`, but without creating the
  * schema attributes. (Remove this helper when it is available in the NVTX headers.)
  */
-// @EUGO_CHANGE: added parantheses around _NVTX_PAYLOAD_PASS_THROUGH arguments to fix building on clang
 #define NCCL_NVTX_DEFINE_STRUCT_WITH_SCHEMA_ENTRIES(struct_id, prefix, entries) \
   _NVTX_PAYLOAD_TYPEDEF_STRUCT(struct_id, _NVTX_PAYLOAD_PASS_THROUGH entries) \
   prefix _NVTX_PAYLOAD_SCHEMA_INIT_ENTRIES(struct_id, _NVTX_PAYLOAD_PASS_THROUGH entries)

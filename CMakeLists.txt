@@ -4,11 +4,9 @@ cmake_minimum_required(VERSION 3.22)
 # === @begin: General Configuration ===
 project(nccl LANGUAGES CUDA CXX VERSION 2.16.2.1)
 
-# @TODO+:check: do we still need that?
-option(PRINT_VERBOSE "Print verbose build information" OFF)
-
-set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_CUDA_STANDARD 23)
+# @TODO+:return to 23, see other issue blah-blah
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CUDA_STANDARD 17)
 
 set(CMAKE_CUDA_FLAGS
     "${CMAKE_CUDA_FLAGS} \
@@ -18,6 +16,7 @@ set(CMAKE_CUDA_FLAGS
     -fvisibility=hidden \
     -fPIC"
 )
+
 set(CMAKE_CXX_FLAGS
     "${CMAKE_CXX_FLAGS} \
     -fPIC \
@@ -27,22 +26,7 @@ set(CMAKE_CXX_FLAGS
     -Wno-sign-compare \
     -Wvla"
 )
-
-# @TODO+: check and remove #@HELP
-# -fcuda-rdc
 # === @end: General Configuration ===
-
-
-# === @begin: Dependencies ===
-# Find system NVTX3
-find_package(CUDAToolkit REQUIRED)
-
-if (TARGET CUDA::nvtx3)
-    message(STATUS "Found CUDA::nvtx3")
-else()
-    message(FATAL_ERROR "CUDA::nvtx3 not found")
-endif()
-# === @end: Dependencies ===
 
 
 # === @begin: src/ ===
@@ -50,27 +34,35 @@ add_subdirectory(src)
 # === @end: src/ ===
 
 
-# # === @begin: Install Targets ===
-# include(GNUInstallDirs)
-# install(FILES ${INCEXPORTS} TYPE INCLUDE)
+# === @begin: Install Targets ===
+include(GNUInstallDirs)
 
-# target_include_directories(ncclras PUBLIC
-#   ${CMAKE_CURRENT_SOURCE_DIR}
-#   ${CMAKE_CURRENT_SOURCE_DIR}/../include
-# )
 
-# install(
-#     TARGETS nccl nccl_static
-#     EXPORT NCCLConfig
-#     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-#     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-#     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-#     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-# )
+# NOTE: Install target output!
+# -- Installing: /usr/local/include/nccl.h
+# -- Up-to-date: /usr/local/include/nccl_net.h
+# -- Installing: /usr/local/lib64/libnccl.so.2.16.2.1
+# -- Installing: /usr/local/lib64/libnccl.so.2
+# -- Installing: /usr/local/lib64/libnccl.so
+# -- Installing: /usr/local/bin/ncclras
+# -- Installing: /usr/local/lib64/cmake/nccl/NCCLConfig.cmake
+# -- Installing: /usr/local/lib64/cmake/nccl/NCCLConfig-release.cmake
 
-# install(
-#     EXPORT NCCLConfig
-#     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/nccl
-#     NAMESPACE NCCL::
-# )
-# # === @end: Install Targets ===
+# Install the headers into the include directory
+install(FILES ${INCEXPORTS} TYPE INCLUDE)
+
+install(
+    TARGETS nccl ncclras
+    EXPORT NCCLConfig
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)
+
+install(
+    EXPORT NCCLConfig
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/nccl
+    NAMESPACE NCCL::
+)
+# === @end: Install Targets ===

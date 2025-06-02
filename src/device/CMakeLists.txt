@@ -33,9 +33,6 @@ target_include_directories(
          ${CONFIGURED_HEADERS_DIR}
 )
 
-# Link colldevice privately to nvtx3
-target_link_libraries(colldevice PRIVATE CUDA::nvtx3)
-
 set_property(TARGET colldevice PROPERTY CUDA_SEPARABLE_COMPILATION ON)
 set_property(TARGET colldevice PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 # === @end: colldevice library ===

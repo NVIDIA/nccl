@@ -122,7 +122,13 @@ set(NCCL_SRC_FILES
 
 add_library(nccl SHARED ${NCCL_SRC_FILES} $<TARGET_OBJECTS:colldevice>)
 
-# @TODO+: ${CONFIGURED_HEADERS_DIR}
+set_target_properties(
+    nccl
+    PROPERTIES
+        VERSION ${nccl_VERSION}
+        SOVERSION ${nccl_VERSION_MAJOR}
+)
+
 target_include_directories(
     nccl
     PUBLIC
@@ -137,20 +143,19 @@ target_include_directories(
         ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}
 )
 
-target_link_libraries(nccl PRIVATE CUDA::nvtx3)
-
 set_property(TARGET nccl PROPERTY CUDA_SEPARABLE_COMPILATION ON)
 set_property(TARGET nccl PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+
+# @TODO:BEN_DONE?:
+# Only nccl.h and nccl_net.h are public headers and only they are installed!
+set(INCEXPORTS
+    ${CONFIGURED_HEADERS_DIR}/nccl.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin/nccl_net.h
+    PARENT_SCOPE
+)
 # === @end: nccl library ===
 
 
-# Only nccl.h and nccl_net.h are public headers and only they are installed!
-# set(INCEXPORTS
-#     ${CMAKE_CURRENT_SOURCE_DIR}/include/nccl.h
-#     ${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_net.h
-#     PARENT_SCOPE
-# )
-
 # === @begin: ras/ ===
-# add_subdirectory(ras)
+add_subdirectory(ras)
 # === @end: ras/ ===

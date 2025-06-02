@@ -52,28 +52,32 @@ The xla patch for clang came from:
 
 2. Options: (./__io__/tmp/eugo/nccl-1786e871814edc7f76f463980c283f9e04681256/)
         1. ~~Fork `nvidia/NCCL` and insert CMakeFiles introduced by fork with our changes~~
-        2. [DONE? -> DOUBLE CHECK W/ SLAV] In `src/device/CMakeLists.txt`, do the below (see cmake script below)
+        2. ~~[DONE? -> DOUBLE CHECK W/ SLAV] In `src/device/CMakeLists.txt`, do the below (see cmake script below)~~
         3. ~~We need to manually go recursively through all CMakeLists.txt and add all new files into appropriate targets~~
             1. ~~Is it best to dynamically generate the list of files from cmake? i think we need /graph, /transport, /register, /misc and exclude /include, /device, /plugin, /ras?~~
         5. ~~Properly add options to disable/enable static and shared libraries~~
-        4. Make nccl.h to be generated in build and not the source tree as we did it for colldevice - but add that into target_include_directories of colldevice. @TODO: add that into other targets target_include_directories
+        ~~4. Make nccl.h to be generated in build and not the source tree as we did it for colldevice - but add that into target_include_directories of colldevice. @TODO: add that into other targets target_include_directories~~
         4. We need to add new CMakeLists.txt for new folders in latest NCCL
-        6. [DONE? -> DOUBLE CHECK W/ SLAV] Refine/revise CMake options because current ones suck (i.e., too vague and badly documented) - @TODO: highly likely, just remove most of the options.
+        ~~6. [DONE? -> DOUBLE CHECK W/ SLAV] Refine/revise CMake options because current ones suck (i.e., too vague and badly documented) - @TODO: highly likely, just remove most of the options.~~
         7. ~~apply selective `xla` patches?~~
-        8. [DONE? -> DOUBLE CHECK W/ SLAV] Dynamically remove `const` from device_table.cu
-        9. [DONE? -> DOUBLE CHECK W/ SLAV] Add ability to use system-provided nvtx.  @TODO+:Ben:add link to pytorch approach - we'll adopt (but not as-is) or use something like the below (see cmake script below)
-            1. Ensure that /src/CMakeLists.txt has correct `target_link_libraries(${lib_name} PRIVATE CUDA::nvtx3)`
-            2. Research and document the differences between our approach and the PyTorch approach to ensure clarity in implementation.
+        ~~8. [DONE? -> DOUBLE CHECK W/ SLAV] Dynamically remove `const` from device_table.cu - fixed by appplying xla_clang.patch~~
+        ~~15. update any/all standards that need to be updated (i.e. CMAKE_CXX_STANDARD / CMAKE_CUDA_STANDARD)~~
         10. ~~[IN PROGRESS] Generate .pc and/or cmake-config files~~
-            1. Note: no need because we are only using nccl in torch and there are cmake variables we can pass so NCCL is found on the system.
-        11. ~~change `add_subdirectory(collectives/device)` to `add_subdirectory(device)`~~
+            ~~1. Note: no need because we are only using nccl in torch and there are cmake variables we can pass so NCCL is found on the system.~~
+        ~~11. change `add_subdirectory(collectives/device)` to `add_subdirectory(device)`~~
+        ~~9. [DONE? -> DOUBLE CHECK W/ SLAV] Add ability to use system-provided nvtx.  @TODO+:Ben:add link to pytorch approach - we'll adopt (but not as-is) or use something like the below (see cmake script below) 1. Ensure that /src/CMakeLists.txt has correct `target_link_libraries(${lib_name} PRIVATE CUDA::nvtx3)` 2. Research and document the differences between our approach and the PyTorch approach to ensure clarity in implementation.~~
+            ~~BEN_TODO+ add to meta.json and info.md that we are not using our system nvtx!!!~~
         12. [IN PROGRESS] Introduce the build target for ncclras (`src/ras` subfolder)
-        13. Allow specifying of dynamic sm_* architectures
-        14. [DONE? -> DOUBLE CHECK W/ SLAV] Add `-Wnvcc-compat` and add `-fcuda-rdc` to cuda compilation flags?
-        15. update any/all standards that need to be updated (i.e. CMAKE_CXX_STANDARD / CMAKE_CUDA_STANDARD)
-        16. @CRITICAL!!! After finishing building the entire nccl library, we must ensure that `-mno-outline-atomics` was honored.
-            1. llvm-nm {-U, -DU, -D} <path to the final library> and check if there are no calls to atomic functions from compiler-rt.
-            2. Important caveat - if the host code doesn't use any atomic operations, it won't have any atomic symbols even if -mno-outline-atomics wasn't honored. In such case, we can just add a dummy little function which will perform `std::atomic<int>++` (but it must be marked as public for optimizer to not to strip that)
+            BEN_TODO+: ncclras is built after libnccl and links to that.
+            1. Builds, but crashes at runtime
+        ~~13. [DONE? -> DOUBLE CHECK W/ SLAV] Allow specifying of dynamic sm_* architectures~~
+        ~~14. [DONE? -> DOUBLE CHECK W/ SLAV] add `-fcuda-rdc` to cuda compilation flags?~~
+           ~~1. I see `-x cuda -fgpu-rdc` but not `-fcuda-rdc` so i added it to `CMAKE_CUDA_FLAGS`.~~
+        ~~15. Remove `cmake/common.cmake`?~~
+        16. Write down the eugo_maintenance guide about syncing with upstream
+        17. CMAKE_UNITY builds
+        18. Ensure no ptx emission to reduce binary size and accelerate its production
+
 
 
 

@@ -233,8 +233,9 @@ with open(os.path.join(gensrc, "device_table.cu"), "w") as f:
   out("// Workaround for https://reviews.llvm.org/D55580\n"
       "__device__ void ncclWorkaroundClangD55580() {}\n")
 
-# Generate <gensrc>/host_table.cc
-with open(os.path.join(gensrc, "host_table.cc"), "w") as f:
+# @EUGO_CHANGE: host_table.cc -> host_table.cu
+# Generate <gensrc>/host_table.cu
+with open(os.path.join(gensrc, "host_table.cu"), "w") as f:
   out = f.write
   out('#include "device.h"\n')
   out("\n")
@@ -346,7 +347,8 @@ name_to_kernels = partition_by_name(kfn for kfn in kernel_funcs if kfn[0]!="Gene
 with open(os.path.join(gensrc, "rules.mk"), "w") as f:
   out = f.write
   impl_names = sorted(name_to_funcs.keys())
-  names = impl_names + ["host_table.cc", "device_table.cu"]
+  # @EUGO_CHANGE: host_table.cc -> host_table.cu
+  names = impl_names + ["host_table.cu", "device_table.cu"]
   out("LIB_OBJS_GEN = $(patsubst %, $(OBJDIR)/genobj/%.o, {names})\n"
       .format(names=" ".join(names)))
   out("\n")

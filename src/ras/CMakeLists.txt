@@ -1,5 +1,4 @@
 # Create a static library target named "ncclras"
-#
 add_executable(
   ncclras
 
@@ -15,4 +14,5 @@ add_executable(
   rasnet.cc
 )
 
-target_link_libraries(ncclras PUBLIC nccl)
+# Link ncclras privately (important! as it will crash with `ld.lld: error: undefined symbol: cudaDriverGetVersion` if not) to nccl
+target_link_libraries(ncclras PRIVATE nccl)

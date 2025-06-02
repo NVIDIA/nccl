@@ -20,10 +20,10 @@ set(CMAKE_CUDA_FLAGS
 set(CMAKE_CXX_FLAGS
     "${CMAKE_CXX_FLAGS} \
     -fPIC \
-    -fvisibility=hidden \
     -Wall \
     -Wno-unused-function \
     -Wno-sign-compare \
+    -fvisibility=hidden \
     -Wvla"
 )
 # === @end: General Configuration ===
@@ -38,7 +38,7 @@ add_subdirectory(src)
 include(GNUInstallDirs)
 
 
-# NOTE: Install target output!
+# NOTE: This is the install target output!
 # -- Installing: /usr/local/include/nccl.h
 # -- Up-to-date: /usr/local/include/nccl_net.h
 # -- Installing: /usr/local/lib64/libnccl.so.2.16.2.1

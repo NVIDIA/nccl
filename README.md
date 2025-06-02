@@ -1,6 +1,11 @@
 # Eugo Notes
 This is a CMake specific port of NVIDIA's NCCL library. We exclusively leverage Clang for both host and device compilation.
 
+```bash
+bash-5.2# ncclras --version
+NCCL RAS client version 2.16.2
+```
+
 # NCCL
 
 Optimized primitives for inter-GPU communication.
@@ -70,16 +75,21 @@ The xla patch for clang came from:
         ~~11. change `add_subdirectory(collectives/device)` to `add_subdirectory(device)`~~
         ~~9. [DONE? -> DOUBLE CHECK W/ SLAV] Add ability to use system-provided nvtx.  @TODO+:Ben:add link to pytorch approach - we'll adopt (but not as-is) or use something like the below (see cmake script below) 1. Ensure that /src/CMakeLists.txt has correct `target_link_libraries(${lib_name} PRIVATE CUDA::nvtx3)` 2. Research and document the differences between our approach and the PyTorch approach to ensure clarity in implementation.~~
             ~~BEN_TODO+ add to meta.json and info.md that we are not using our system nvtx!!!~~
-        12. [IN PROGRESS] Introduce the build target for ncclras (`src/ras` subfolder)
-            BEN_TODO+: ncclras is built after libnccl and links to that.
-            1. Builds, but crashes at runtime
+        ~~12. [IN PROGRESS] Introduce the build target for ncclras (`src/ras` subfolder)~~
+            ~~BEN_TODO+: ncclras is built after libnccl and links to that.~~
+            ~~1. Builds, but crashes at runtime~~
         ~~13. [DONE? -> DOUBLE CHECK W/ SLAV] Allow specifying of dynamic sm_* architectures~~
         ~~14. [DONE? -> DOUBLE CHECK W/ SLAV] add `-fcuda-rdc` to cuda compilation flags?~~
            ~~1. I see `-x cuda -fgpu-rdc` but not `-fcuda-rdc` so i added it to `CMAKE_CUDA_FLAGS`.~~
         ~~15. Remove `cmake/common.cmake`?~~
-        16. Write down the eugo_maintenance guide about syncing with upstream
-        17. CMAKE_UNITY builds
-        18. Ensure no ptx emission to reduce binary size and accelerate its production
+        ~~16. ncclras bug~~
+
+        TODO:
+        17. Write down the eugo_maintenance guide about syncing with upstream
+            1. .cu, .cc, in device - add new extensions
+            2. all new files, targets, and libs
+        18. CMAKE_UNITY builds
+        19. Ensure no ptx emission to reduce binary size and accelerate its production
 
 
 

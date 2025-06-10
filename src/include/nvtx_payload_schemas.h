@@ -15,6 +15,7 @@
 #include "nvtx3/nvToolsExtPayload.h"
 #include "nvtx3/nvToolsExtPayloadHelper.h"
 
+
 /**
  * \brief Define a C struct together with the matching schema entries.
  *

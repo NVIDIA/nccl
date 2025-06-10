@@ -1,3 +1,27 @@
+# Eugo Notes
+This is a CMake specific port of NVIDIA's NCCL library. We exclusively leverage Clang for both host and device code compilation.
+
+This is unlikely to work with NVIDIA NVCC compiler.
+
+## IMPORTANT: Eugo Maintenance guide about syncing with upstream:
+
+1. For any `.cu`, `.cc`, in `src/device`, we must add/edit their file extensions:
+    1. In the `colldevice` library, if there are other files besides `.cu` (like `host_table.cc`) we need to ensure they are compiled using the proper language (for example, `host_table.cc` is actually a host only cuda file, and to ensure it gets compiled correctly, we renamed it to `host_table.cu` so it gets treated as a cuda file and not pure/usual C++ file).
+    2. For any new `.cu`, `.cc`, or other source files, we need to ensure they are compiled using the proper language (e.g., `.cu` files should be compiled as CUDA files, while `.cc` files should be compiled as C++ files).
+2. All new files, targets, and libraries:
+    1. Wherever NCCL adds new source files, headers, etc, we need to add them to the appropriate existing CMake targets, or introduce brand new ones.
+    2. We need to compare (`diff` or `BeyondCompare`) the new `src/` structure with the one prior syncing with upstream repo.
+        1. RETODO: Script to automatically compare the new `src/` structure with the one prior syncing with upstream repo.
+
+## NCCLRas
+
+Testing ncclras
+
+```bash
+bash-5.2# ncclras --version
+NCCL RAS client version 2.16.2
+```
+
 # NCCL
 
 Optimized primitives for inter-GPU communication.
@@ -40,5 +64,3 @@ The xla patch for clang came from:
 
 ## NVCC Identification Macros
 • https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/#compilation-phases
-
-

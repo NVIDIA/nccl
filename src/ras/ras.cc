@@ -5,10 +5,14 @@
  ************************************************************************/
 
 // Workaround for libstdc++ trying to force public visibility of std:: symbols.  We don't want to do that in libnccl.so.
-// @Eugo: removed since this is libstdc++ specific
+// @EUGO_CHANGE: removed since this is libstdc++ specific
 // #include <bits/c++config.h>#include <bits/c++config.h>
-#undef _GLIBCXX_VISIBILITY
-#define _GLIBCXX_VISIBILITY(V)
+
+// @begin:EUGO_CHANGE: commented out for now..
+// #undef _GLIBCXX_VISIBILITY
+// #define _GLIBCXX_VISIBILITY(V)
+// @end:EUGO_CHANGE
+
 #include <cstddef>
 #include <mutex>
 #include <poll.h>

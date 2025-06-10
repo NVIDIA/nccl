@@ -18,6 +18,13 @@
 #include <new>
 #include <type_traits>
 
+// @EUGO_CHANGE
+// They relied on transitive include of `stdlib.h`/`cstdlib` by some of C++ stdlib headers above
+//
+// References:
+// 1. https://en.cppreference.com/w/c/memory/free
+#include <cstdlib>
+
 int ncclCudaCompCap();
 
 // PCI Bus ID <-> int64 conversion functions

@@ -35,7 +35,7 @@ extern pthread_mutex_t gdrLock;
 } while(false)
 
 // This is required as the GDR memory is mapped WC
-#if !defined(__NVCC__)
+#if !defined(__CUDA_ARCH__)
 #if defined(__PPC__)
 static inline void wc_store_fence(void) { asm volatile("sync") ; }
 #elif defined(__x86_64__)

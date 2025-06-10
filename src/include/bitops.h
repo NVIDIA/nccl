@@ -10,7 +10,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#if !__NVCC__
+#if !__CUDA_ARCH__
   #ifndef __host__
     #define __host__
   #endif

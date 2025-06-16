@@ -347,9 +347,14 @@ name_to_kernels = partition_by_name(kfn for kfn in kernel_funcs if kfn[0]!="Gene
 with open(os.path.join(gensrc, "rules.mk"), "w") as f:
   out = f.write
   impl_names = sorted(name_to_funcs.keys())
+<<<<<<< HEAD
   # @EUGO_CHANGE: host_table.cc -> host_table.cu
   names = impl_names + ["host_table.cu", "device_table.cu"]
   out("LIB_OBJS_GEN = $(patsubst %, $(OBJDIR)/genobj/%.o, {names})\n"
+=======
+  names = impl_names + ["host_table.cc", "device_table.cu"]
+  out("LIB_OBJS_GEN = $(patsubst %,$(OBJDIR)/genobj/%.o,{names})\n"
+>>>>>>> 72d2432094d6ae36abd6e511c3a16a2d052dbf94
       .format(names=" ".join(names)))
   out("\n")
 

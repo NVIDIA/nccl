@@ -50,6 +50,12 @@ static long log2i(long n) {
   return log2Down(n);
 }
 
+// Comparator function for qsort/bsearch to compare integers
+static int compareInts(const void *a, const void *b) {
+    int ia = *(const int*)a, ib = *(const int*)b;
+    return (ia > ib) - (ia < ib);
+}
+
 inline uint64_t clockNano() {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);

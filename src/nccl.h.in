@@ -31,6 +31,7 @@ extern "C" {
 #include <limits.h>
 /* Opaque handle to communicator */
 typedef struct ncclComm* ncclComm_t;
+typedef struct ncclWindow* ncclWindow_t;
 #define NCCL_COMM_NULL NULL
 
 #define NCCL_UNIQUE_ID_BYTES 128
@@ -52,9 +53,21 @@ typedef enum { ncclSuccess                 =  0,
 #define NCCL_SPLIT_NOCOLOR -1
 #define NCCL_UNDEF_FLOAT -1.0f
 
+/* Window Registration flags */
+#define NCCL_WIN_DEFAULT 0x00
+#define NCCL_WIN_COLL_SYMMETRIC 0x01
+
+/* NCCL performance policy */
+#define NCCL_CTA_POLICY_DEFAULT 0x00
+#define NCCL_CTA_POLICY_EFFICIENCY 0x01
+
+/* ncclCommShrink flags*/
+#define NCCL_SHRINK_DEFAULT 0x00 /* shrink the parent communicator */
+#define NCCL_SHRINK_ABORT 0x01   /* First, terminate ongoing parent operations, and then shrink the parent communicator */
+
 /* Communicator configuration. Users can assign value to attributes to specify the
  * behavior of a communicator. */
-typedef struct ncclConfig_v21700 {
+typedef struct ncclConfig_v22700 {
   /* attributes that users should never touch. */
   size_t size;
   unsigned int magic;
@@ -67,6 +80,11 @@ typedef struct ncclConfig_v21700 {
   const char *netName;
   int splitShare;
   int trafficClass;
+  const char *commName;
+  int collnetEnable;
+  int CTAPolicy;
+  int shrinkShare;
+  int nvlsCTAs;
 } ncclConfig_t;
 
 /* Config initializer must be assigned to initialize config structure when it is created.
@@ -82,6 +100,11 @@ typedef struct ncclConfig_v21700 {
   NCCL_CONFIG_UNDEF_PTR,                    /* netName */               \
   NCCL_CONFIG_UNDEF_INT,                    /* splitShare */            \
   NCCL_CONFIG_UNDEF_INT,                    /* trafficClass */          \
+  NCCL_CONFIG_UNDEF_PTR,                    /* commName */              \
+  NCCL_CONFIG_UNDEF_INT,                    /* collnetEnable */         \
+  NCCL_CONFIG_UNDEF_INT,                    /* CTAPolicy */             \
+  NCCL_CONFIG_UNDEF_INT,                    /* shrinkShare */           \
+  NCCL_CONFIG_UNDEF_INT,                    /* nvlsCTAs */              \
 }
 
 /* This struct will be used by ncclGroupSimulateEnd() API to query information about simulation. */
@@ -173,6 +196,14 @@ ncclResult_t pncclCommAbort(ncclComm_t comm);
 ncclResult_t  ncclCommSplit(ncclComm_t comm, int color, int key, ncclComm_t *newcomm, ncclConfig_t* config);
 ncclResult_t pncclCommSplit(ncclComm_t comm, int color, int key, ncclComm_t *newcomm, ncclConfig_t* config);
 
+/* Shrink existing communicator.
+ * Ranks in excludeRanksList will be removed form the existing communicator.
+ * Within the new communicator, ranks will be re-ordered to fill the gap of removed ones.
+ * If config is NULL, the new communicator will inherit the original communicator's configuration
+ * The flag enables NCCL to adapt to various states of the parent communicator, see NCCL_SHRINK flags.*/
+ncclResult_t  ncclCommShrink(ncclComm_t comm, int* excludeRanksList, int excludeRanksCount, ncclComm_t* newcomm, ncclConfig_t* config, int shrinkFlags);
+ncclResult_t pncclCommShrink(ncclComm_t comm, int* excludeRanksList, int excludeRanksCount, ncclComm_t* newcomm, ncclConfig_t* config, int shrinkFlags);
+
 /* Creates a new communicator (multi thread/process version), similar to ncclCommInitRankConfig.
  * Allows to use more than one ncclUniqueId (up to one per rank), indicated by nId, to accelerate the init operation.
  * The number of ncclUniqueIds and their order must be the same for every rank.
@@ -215,6 +246,14 @@ ncclResult_t pncclCommRegister(const ncclComm_t comm, void* buff, size_t size, v
 /* Deregister CUDA buffer */
 ncclResult_t  ncclCommDeregister(const ncclComm_t comm, void* handle);
 ncclResult_t pncclCommDeregister(const ncclComm_t comm, void* handle);
+
+/* Register memory window  */
+ncclResult_t  ncclCommWindowRegister(ncclComm_t comm, void* buff, size_t size, ncclWindow_t* win, int winFlags);
+ncclResult_t pncclCommWindowRegister(ncclComm_t comm, void* buff, size_t size, ncclWindow_t* win, int winFlags);
+
+/* Deregister symmetric memory */
+ncclResult_t  ncclCommWindowDeregister(ncclComm_t comm, ncclWindow_t win);
+ncclResult_t pncclCommWindowDeregister(ncclComm_t comm, ncclWindow_t win);
 
 /* Reduction operation selector */
 typedef enum { ncclNumOps_dummy = 5 } ncclRedOp_dummy_t;

@@ -25,42 +25,52 @@ enum {
 };
 
 typedef enum {
-  ncclProfilerProxyOpSendPosted,
-  ncclProfilerProxyOpSendRemFifoWait,
-  ncclProfilerProxyOpSendTransmitted,
-  ncclProfilerProxyOpSendDone,
-  ncclProfilerProxyOpRecvPosted,
-  ncclProfilerProxyOpRecvReceived,
-  ncclProfilerProxyOpRecvTransmitted,
-  ncclProfilerProxyOpRecvDone,
+  ncclProfilerProxyOpSendPosted        = 0,  // deprecated in v4
+  ncclProfilerProxyOpSendRemFifoWait   = 1,  // deprecated in v4
+  ncclProfilerProxyOpSendTransmitted   = 2,  // deprecated in v4
+  ncclProfilerProxyOpSendDone          = 3,  // deprecated in v4
+  ncclProfilerProxyOpRecvPosted        = 4,  // deprecated in v4
+  ncclProfilerProxyOpRecvReceived      = 5,  // deprecated in v4
+  ncclProfilerProxyOpRecvTransmitted   = 6,  // deprecated in v4
+  ncclProfilerProxyOpRecvDone          = 7,  // deprecated in v4
+  ncclProfilerProxyOpInProgress_v4     = 19,
 
   /* Legacy proxy profiler states */
-  ncclProfilerProxyStepSendGPUWait,
-  ncclProfilerProxyStepSendWait,
-  ncclProfilerProxyStepRecvWait,
-  ncclProfilerProxyStepRecvFlushWait,
-  ncclProfilerProxyStepRecvGPUWait,
+  ncclProfilerProxyStepSendGPUWait     = 8,
+  ncclProfilerProxyStepSendPeerWait_v4 = 20,
+  ncclProfilerProxyStepSendWait        = 9,
+  ncclProfilerProxyStepRecvWait        = 10,
+  ncclProfilerProxyStepRecvFlushWait   = 11,
+  ncclProfilerProxyStepRecvGPUWait     = 12,
 
   /* Legacy proxy control states */
-  ncclProfilerProxyCtrlIdle,
-  ncclProfilerProxyCtrlActive,
-  ncclProfilerProxyCtrlSleep,
-  ncclProfilerProxyCtrlWakeup,
-  ncclProfilerProxyCtrlAppend,
-  ncclProfilerProxyCtrlAppendEnd,
+  ncclProfilerProxyCtrlIdle            = 13,
+  ncclProfilerProxyCtrlActive          = 14,
+  ncclProfilerProxyCtrlSleep           = 15,
+  ncclProfilerProxyCtrlWakeup          = 16,
+  ncclProfilerProxyCtrlAppend          = 17,
+  ncclProfilerProxyCtrlAppendEnd       = 18,
+
+  /* Network defined events states */
+  ncclProfilerNetPluginUpdate          = 21,
+
+  /* Kernel event states */
+  ncclProfilerKernelChStop             = 22,
 } ncclProfilerEventState_t;
 
 typedef ncclProfilerEventState_t ncclProfilerEventState_v1_t;
 typedef ncclProfilerEventState_t ncclProfilerEventState_v2_t;
 typedef ncclProfilerEventState_t ncclProfilerEventState_v3_t;
+typedef ncclProfilerEventState_t ncclProfilerEventState_v4_t;
 
+#include "profiler_v4.h"
 #include "profiler_v3.h"
 #include "profiler_v2.h"
 #include "profiler_v1.h"
 #include "profiler_net.h"
 
-typedef ncclProfiler_v3_t ncclProfiler_t;
-typedef ncclProfilerEventDescr_v3_t ncclProfilerEventDescr_t;
-typedef ncclProfilerEventStateArgs_v3_t ncclProfilerEventStateArgs_t;
+typedef ncclProfiler_v4_t ncclProfiler_t;
+typedef ncclProfilerEventDescr_v4_t ncclProfilerEventDescr_t;
+typedef ncclProfilerEventStateArgs_v4_t ncclProfilerEventStateArgs_t;
 
 #endif // end include guard

@@ -21,8 +21,8 @@ struct ncclProxyConnector;
 
 struct ncclProfilerProxy {
   bool initialized;
-  uint64_t* workStarted/*[MAXCHANNELS]*/;
-  uint64_t* workCompleted/*[MAXCHANNELS]*/;
+  struct ncclDevProfiler* workStarted/*[MAXCHANNELS]*/;
+  struct ncclDevProfiler* workCompleted/*[MAXCHANNELS]*/;
   uint64_t workCounter[MAXCHANNELS]; // host work counter
   struct ncclProxyConnector sendProxyConn[MAXCHANNELS];
   struct ncclProxyConnector recvProxyConn[MAXCHANNELS];
@@ -43,8 +43,7 @@ ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan);
 ncclResult_t ncclProfilerStopTaskEvents(struct ncclKernelPlan* plan);
 
 // Proxy Op Start/Stop Event Wrappers
-ncclResult_t ncclProfilerStartSendProxyOpEvent(int sub, struct ncclProxyArgs* args);
-ncclResult_t ncclProfilerStartRecvProxyOpEvent(int sub, struct ncclProxyArgs* args);
+ncclResult_t ncclProfilerStartProxyOpEvent(int sub, struct ncclProxyArgs* args);
 ncclResult_t ncclProfilerStopProxyOpEvent(int sub, struct ncclProxyArgs* args);
 
 // Proxy Step Start/Stop Event Wrappers
@@ -57,11 +56,11 @@ ncclResult_t ncclProfilerStartProxyCtrlEvent(void* profilerContext, void** eHand
 ncclResult_t ncclProfilerStopProxyCtrlEvent(void* eHandle);
 
 // Kernel Channel Start/Stop Event Wrappers
-ncclResult_t ncclProfilerStartKernelChEvent(struct ncclProxyArgs* args, int s);
-ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProxyArgs* args, int s);
+ncclResult_t ncclProfilerStartKernelChEvent(struct ncclProxyArgs* args, int s, uint64_t start);
+ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProxyArgs* args, int s, uint64_t stop);
 
 // Record Event Wrappers
-ncclResult_t ncclProfilerRecordProxyOpEventState(int sub, struct ncclProxyArgs* args, int steps, size_t transSize, ncclProfilerEventState_t eState);
+ncclResult_t ncclProfilerRecordProxyOpEventState(int sub, struct ncclProxyArgs* args, ncclProfilerEventState_t eState);
 ncclResult_t ncclProfilerRecordProxyStepEventState(int sub, struct ncclProxyArgs* args, int stepId, ncclProfilerEventState_t eState);
 ncclResult_t ncclProfilerRecordProxyCtrlEventState(void*eHandle, int appended, ncclProfilerEventState_t eState);
 

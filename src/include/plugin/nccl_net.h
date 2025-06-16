@@ -28,10 +28,9 @@
 #define NCCL_NET_MAX_REQUESTS 32
 
 // Max number of ncclNet objects which can live in the same process
-#define NCCL_NET_MAX_PLUGINS 3
-
-// NCCL core profiler callback for network defined events instrumentation
-typedef ncclResult_t (*ncclProfilerCallback_t)(void** eHandle, int type, void* pHandle, int64_t pluginId, void* extData);
+#ifndef NCCL_NET_MAX_PLUGINS
+#define NCCL_NET_MAX_PLUGINS 16
+#endif
 
 #include "net/net_v10.h"
 #include "net/net_v9.h"

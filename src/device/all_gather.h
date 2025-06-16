@@ -173,73 +173,221 @@ struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_PAT, NCCL_PROTO_SIMPLE
 
 template<typename T, typename RedOp>
 struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SIMPLE> {
+  template<bool BcastSendNotRecv>
+  struct Scatterer {
+    struct ncclDevWorkColl* work;
+    ssize_t chunkSize;
+    ssize_t railGridOffset;
+
+    template<int SlicePerChunk, int MinSrcs, int MaxSrcs, int MinDsts, int MaxDsts, int MultimemSrcs, int MultimemDsts>
+    __device__ __forceinline__ void operator()(
+        int tid, int tn, int slice, int maxSliceSize,
+        int nSrcs, void** srcPtrs, int nDsts, void** dstPtrs, int32_t* dstSizes, uint32_t sendDirectFlag, uint32_t recvDirectFlag
+      ) {
+      static_assert(SlicePerChunk==1, "require: SlicePerChunk==1");
+      static_assert(MaxDsts<=1 || MaxSrcs<=1, "require: MaxDsts<=1 || MaxSrcs<=1");
+
+      struct ncclNvls* nvls = &ncclShmem.channel.nvls;
+      int nNodes = ncclShmem.comm.nNodes;
+      int nRails = nvls->nHeads;
+      int part = ncclShmem.channelId - work->channelLo;
+      char* inbuf = (char*)work->sendbuff;
+      char* outbuf = (char*)work->recvbuff;
+      ssize_t countPerRank = work->collnet.count;
+      bool inPlace = (inbuf == outbuf + ncclShmem.comm.rank * countPerRank);
+      ssize_t railAllBeg = min(railGridOffset + part * chunkSize, nNodes * countPerRank);
+      ssize_t railAllEnd = min(railAllBeg + chunkSize, nNodes * countPerRank);
+      int railAllSize = railAllEnd - railAllBeg;
+      int rail = 0;
+      int src = 0;
+
+      if (BcastSendNotRecv) {
+        rail = nvls->headRank;
+      } else {
+        if (work->regUsed) return;
+        rail = 0;
+      }
+      if (tid < nDsts) dstSizes[tid] = railAllSize;
+      do {
+        int node = railAllBeg / countPerRank;
+        int railAllOffset = 0;
+        while (railAllOffset < railAllSize) {
+          ssize_t railOneBeg = node * countPerRank;
+          ssize_t railOneEnd = railOneBeg + countPerRank;
+          ssize_t railOneOffset = (railAllBeg + railAllOffset) - railOneBeg;
+          int delta = min(railAllEnd, railOneEnd) - (railAllBeg + railAllOffset);
+          int rank = ncclShmem.comm.collNetDenseToUserRank[node * nRails + rail];
+          ssize_t userOneBeg = rank * countPerRank + railOneOffset;
+          int outIsDst = (inPlace && rank == ncclShmem.comm.rank) || BcastSendNotRecv || work->regUsed ? 0 : 1;
+          if (nSrcs != 0 && outIsDst + nDsts != 0) {
+            reduceCopy<ncclCollUnroll(), RedOp, T,
+              /*MultimemSrcs,MinSrcs,MaxSrcs=*/MultimemSrcs, 1, 1,
+              /*MultimemDsts=*/MultimemDsts, 0 + MultimemDsts + MinDsts, 1 + MaxDsts,
+              /*PreOpSrcs=*/0>
+              (tid, tn, 0, nullptr, false,
+                /*nSrcs=*/1, [=]__device__(int s/*==0*/) -> void* {
+              return (char*)srcPtrs[src] + railAllOffset;
+            },
+                /*nDsts=*/outIsDst + nDsts, [=]__device__(int d) -> void* {
+              return d < outIsDst ? outbuf + userOneBeg
+                : work->regUsed ? (char*)dstPtrs[d - outIsDst] + userOneBeg
+                : (char*)dstPtrs[d - outIsDst] + railAllOffset;
+            }, delta);
+          }
+          railAllOffset += delta;
+          node += 1;
+        }
+        rail += 1;
+        src += 1;
+      } while (!BcastSendNotRecv && src < nRails);
+    }
+  };
+
   __device__ __forceinline__ void run(int tid, int/*nthreads*/, struct ncclDevWorkColl* work) {
     struct ncclNvls* nvls = &ncclShmem.channel.nvls;
-    const ssize_t rank = ncclShmem.comm.rank;
-    size_t count, gridOffset, channelCount;
-    size_t chunkCount;
-    ncclCollCbdPart(work, ncclShmem.channelId, NCCL_PROTO_SIMPLE, sizeof(T), &count, &gridOffset, &channelCount, &chunkCount);
-    size_t offset;
     int nelem;
 
-    const int nThreadsBcast = work->regUsed ? (NCCL_MAX_NTHREADS - WARP_SIZE) : 4 * WARP_SIZE;
-    const int nThreadsGather = work->regUsed ? WARP_SIZE : NCCL_MAX_NTHREADS - nThreadsBcast;
-    const int tidEndGather = nThreadsGather;
-    const int tidEndBcast = tidEndGather + nThreadsBcast;
+    const int nThreadsNetSend = work->oneNode ? 0 : (work->netRegUsed ? WARP_SIZE :  6 * WARP_SIZE);
+    const int nThreadsGather = work->regUsed ? roundUp(nvls->nHeads << 2, WARP_SIZE) : 8 * WARP_SIZE;
+    const int nThreadsBcast = NCCL_MAX_NTHREADS - nThreadsNetSend - nThreadsGather;
 
-    if (!work->regUsed) {
-      if (tid < tidEndGather) {
-        // Gather
-        using Proto = ProtoSimple<1, 1, COLL_UNROLL>;
-        Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_NVLS_ARITY, 0>, /*Direct=*/0, Proto, 0>
-          prims(tid, nThreadsGather, nvls->up, NULL, NULL, work->recvbuff,
-            work->redOpArg, 0 * Proto::MaxGroupWidth, 1, 1);
-        for (size_t elemOffset = 0; elemOffset < channelCount; elemOffset += chunkCount) {
-          offset = gridOffset + elemOffset;
-          nelem = min(chunkCount, channelCount - elemOffset);
-          prims.gather(offset, nvls->nHeads * count, nelem, count, -1, 0);
+    const int tidEndGather = nThreadsGather;
+    const int tidEndNetSend = tidEndGather + nThreadsNetSend;
+    const int tidEndBcast = tidEndNetSend + nThreadsBcast;
+
+    if (work->oneNode) {
+      const ssize_t rank = ncclShmem.comm.rank;
+      size_t count, gridOffset, channelCount, offset, chunkCount;
+      ncclCollCbdPart(work, ncclShmem.channelId, NCCL_PROTO_SIMPLE, sizeof(T), &count, &gridOffset, &channelCount, &chunkCount);
+      if (!work->regUsed) {
+        if (tid < tidEndGather) {
+          // Gather
+          using Proto = ProtoSimple<1, 1, COLL_UNROLL>;
+          Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_NVLS_ARITY, 0>, /*Direct=*/0, Proto, 0>
+            prims(tid, nThreadsGather, nvls->up, NULL, NULL, work->recvbuff,
+              work->redOpArg, 0 * Proto::MaxGroupWidth, 1, 1);
+          for (size_t elemOffset = 0; elemOffset < channelCount; elemOffset += chunkCount) {
+            offset = gridOffset + elemOffset;
+            nelem = min(chunkCount, channelCount - elemOffset);
+            prims.gather(offset, nvls->nHeads * count, nelem, count, -1, 0);
+          }
+          // coverity[overrun-call] => Coverity think prims.index can be greater than 1
+        } else if (tid < tidEndBcast) {
+          // Bcast through NVLS
+          using Proto = ProtoSimple<1, 1, COLL_UNROLL, 0, 1>;
+          Primitives<T, RedOp, FanAsymmetric<0, 1>, /*Direct=*/0, Proto, 0>
+            prims(tid - tidEndGather, nThreadsBcast, NULL, &nvls->down, work->sendbuff, NULL,
+              work->redOpArg, 3 * Proto::MaxGroupWidth, 0, 0);
+          for (size_t elemOffset = 0; elemOffset < channelCount; elemOffset += chunkCount) {
+            offset = gridOffset + elemOffset;
+            nelem = min(chunkCount, channelCount - elemOffset);
+            prims.send(offset, nelem);
+          }
+          // coverity[overrun-call] => Coverity think prims.index can be greater than 1
         }
-        // coverity[overrun-call] => Coverity think prims.index can be greater than 1
-      } else if (tid < tidEndBcast) {
-        // Bcast through NVLS
-        using Proto = ProtoSimple<1, 1, COLL_UNROLL, 0, 1>;
-        Primitives<T, RedOp, FanAsymmetric<0, 1>, /*Direct=*/0, Proto, 0>
-          prims(tid - tidEndGather, nThreadsBcast, NULL, &nvls->down, work->sendbuff, NULL,
-            work->redOpArg, 3 * Proto::MaxGroupWidth, 0, 0);
-        for (size_t elemOffset = 0; elemOffset < channelCount; elemOffset += chunkCount) {
-          offset = gridOffset + elemOffset;
-          nelem = min(chunkCount, channelCount - elemOffset);
-          prims.send(offset, nelem);
+      } else {
+        if (tid < tidEndGather) {
+          using Proto = ProtoSimple<1, 1, COLL_UNROLL>;
+          Primitives<T, RedOp, FanSymmetric<NCCL_MAX_NVLS_ARITY>, /*Direct=*/0, Proto, 0>
+            prims(tid, nThreadsGather, nvls->up, nvls->up, NULL, NULL,
+              work->redOpArg, 0 * Proto::MaxGroupWidth, 1, 1);
+
+          /* used as sync */
+          prims.scatter(0, 0, 0, 0, -1, 0);
+
+          for (size_t elemOffset = 0; elemOffset < channelCount; elemOffset += chunkCount) {
+            prims.gather(0, 0, 0, 0, -1, 0);
+          }
+        } else if (tid < tidEndBcast) {
+          using Proto = ProtoSimple<1, 1, COLL_UNROLL, 0, 1>;
+          Primitives<T, RedOp, FanSymmetric<1>, /*Direct=*/1, Proto, 0>
+            prims(tid - tidEndGather, nThreadsBcast, &nvls->down, &nvls->down, work->sendbuff, NULL,
+              work->redOpArg, 1 * Proto::MaxGroupWidth, 0, 0, work);
+          /* used as sync */
+          prims.recv(0, 0);
+
+          for (size_t elemOffset = 0; elemOffset < channelCount; elemOffset += chunkCount) {
+            ssize_t inpOffset = gridOffset + elemOffset;
+            ssize_t outOffset = inpOffset + rank * count;
+            nelem = min(chunkCount, channelCount - elemOffset);
+            prims.directSend(inpOffset, outOffset, nelem);
+          }
         }
-        // coverity[overrun-call] => Coverity think prims.index can be greater than 1
       }
     } else {
-      /* direct allgather */
+      // NVLS + IB SHARP
+      int nNodes = ncclShmem.comm.nNodes;
+      int part = ncclShmem.channelId - work->channelLo;
+      ssize_t countPerRank = work->collnet.count;
+      const int nChannels = work->channelHi - work->channelLo + 1;
+      ssize_t chunkCount = work->collnet.chunkCount;
       if (tid < tidEndGather) {
         using Proto = ProtoSimple<1, 1, COLL_UNROLL>;
-        Primitives<T, RedOp, FanSymmetric<NCCL_MAX_NVLS_ARITY>, /*Direct=*/0, Proto, 0>
-          prims(tid, nThreadsGather, nvls->up, nvls->up, NULL, NULL,
-            work->redOpArg, 0 * Proto::MaxGroupWidth, 1, 1);
-
-        /* used as sync */
-        prims.scatter(0, 0, 0, 0, -1, 0);
-
-        for (size_t elemOffset = 0; elemOffset < channelCount; elemOffset += chunkCount) {
-          prims.gather(0, 0, 0, 0, -1, 0);
+        Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_NVLS_ARITY, 0>, /*Direct=*/1, Proto, 0>
+          prims(tid, nThreadsGather, nvls->up, nullptr, nullptr, work->recvbuff,
+            /*redOpArg=*/0, 1 * Proto::MaxGroupWidth, 1, 1, work);
+        for (ssize_t railGridOffset = 0; railGridOffset < nNodes * countPerRank; railGridOffset += nChannels * chunkCount) {
+          Scatterer</*BcastSendNotRecv=*/false> scat;
+          scat.work = work;
+          scat.chunkSize = chunkCount;
+          scat.railGridOffset = railGridOffset;
+          prims.template process</*Recv=*/1, /*Send=*/0>(scat);
         }
-      } else if (tid < tidEndBcast) {
-        using Proto = ProtoSimple<1, 1, COLL_UNROLL, 0, 1>;
-        Primitives<T, RedOp, FanSymmetric<1>, /*Direct=*/1, Proto, 0>
-          prims(tid - tidEndGather, nThreadsBcast, &nvls->down, &nvls->down, work->sendbuff, NULL,
-            work->redOpArg, 1 * Proto::MaxGroupWidth, 0, 0, work);
-        /* used as sync */
-        prims.recv(0, 0);
-
-        for (size_t elemOffset = 0; elemOffset < channelCount; elemOffset += chunkCount) {
-          ssize_t inpOffset = gridOffset + elemOffset;
-          ssize_t outOffset = inpOffset + rank * count;
-          nelem = min(chunkCount, channelCount - elemOffset);
-          prims.directSend(inpOffset, outOffset, nelem);
+      } else {
+        if (work->netRegUsed) {
+          using ProtoSend = ProtoSimple<1, 1, COLL_UNROLL>;
+          using ProtoBcast = ProtoSimple<1, 1, COLL_UNROLL, 0, 1>;
+          int maxSteps = (int)divUp(nNodes * countPerRank, nChannels * chunkCount);
+          int curSteps = -1;
+          int postThread = tid - tidEndGather == 0 ? 1 : 0;
+          // for UB, we need to control the send speed to avoid net congestion.
+          // first unroll 2 steps, then unroll the rest steps when the data is received.
+          if (postThread) {
+            curSteps = min(2, maxSteps);
+            Primitives<T, RedOp, FanAsymmetric<0, 1>, /*Direct=*/1, ProtoSend, 0>::sendPeerNotify(nvls->out, 1, curSteps);
+          }
+          Primitives<T, RedOp, FanSymmetric<1>, /*Direct=*/1, ProtoBcast, 0>
+            prims(tid - tidEndGather, nThreadsNetSend + nThreadsBcast, &nvls->out, &nvls->down, nullptr, nullptr,
+              /*redOpArg=*/0, 2 * ProtoBcast::MaxGroupWidth, 0, 0, work);
+          for (ssize_t railGridOffset = 0; railGridOffset < nNodes * countPerRank; railGridOffset += nChannels * chunkCount) {
+            Scatterer</*BcastSendNotRecv=*/true> scat;
+            scat.work = work;
+            scat.chunkSize = chunkCount;
+            scat.railGridOffset = railGridOffset;
+            prims.template process</*Recv=*/1, /*Send=*/1>(scat);
+            if (postThread && curSteps < maxSteps) {
+              curSteps++;
+              Primitives<T, RedOp, FanAsymmetric<0, 1>, /*Direct=*/1, ProtoSend, 0>::sendPeerNotify(nvls->out, 1, 1);
+            }
+          }
+        } else {
+          if (tid < tidEndNetSend) {
+            using Proto = ProtoSimple<1, 1, COLL_UNROLL>;
+            Primitives<T, RedOp, FanAsymmetric<0, 1>, /*Direct=*/0, Proto, 0>
+              prims(tid - tidEndGather, nThreadsNetSend, nullptr, &nvls->out, work->sendbuff, nullptr,
+                /*redOpArg=*/0, 0 * Proto::MaxGroupWidth, 1, 1);
+            for (ssize_t railGridOffset = 0; railGridOffset < nNodes * countPerRank; railGridOffset += nChannels * chunkCount) {
+              ssize_t railAllBeg = railGridOffset + part * chunkCount;
+              ssize_t railAllEnd = min(railAllBeg + chunkCount, nNodes * countPerRank);
+              ssize_t railOneBeg = ncclShmem.comm.node * countPerRank;
+              ssize_t railOneEnd = railOneBeg + countPerRank;
+              ssize_t beg = max(railAllBeg, railOneBeg);
+              ssize_t end = min(railAllEnd, railOneEnd);
+              prims.send(beg - railOneBeg, max(ssize_t(0), end - beg));
+            }
+          } else {
+            using Proto = ProtoSimple<1, 1, COLL_UNROLL, 0, 1>;
+            Primitives<T, RedOp, FanSymmetric<1>, /*Direct=*/0, Proto, 0>
+              prims(tid - tidEndNetSend, nThreadsBcast, &nvls->out, &nvls->down, nullptr, nullptr,
+                /*redOpArg=*/0, 2 * Proto::MaxGroupWidth, 0, 0);
+            for (ssize_t railGridOffset = 0; railGridOffset < nNodes * countPerRank; railGridOffset += nChannels * chunkCount) {
+              Scatterer</*BcastSendNotRecv=*/true> scat;
+              scat.work = work;
+              scat.chunkSize = chunkCount;
+              scat.railGridOffset = railGridOffset;
+              prims.template process</*Recv=*/1, /*Send=*/1>(scat);
+            }
+          }
         }
       }
     }
@@ -254,7 +402,7 @@ struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NCCL_P
     ssize_t chunkSize;
     ssize_t railGridOffset;
 
-    template<int SlicePerChunk, int MinSrcs, int MaxSrcs, int MinDsts, int MaxDsts>
+    template<int SlicePerChunk, int MinSrcs, int MaxSrcs, int MinDsts, int MaxDsts, int MultimemSrcs, int MultimemDsts>
     __device__ __forceinline__ void operator()(
         int tid, int tn, int slice, int maxSliceSize,
         int nSrcs, void** srcPtrs, int nDsts, void** dstPtrs, int32_t* dstSizes, uint32_t sendDirectFlag, uint32_t recvDirectFlag

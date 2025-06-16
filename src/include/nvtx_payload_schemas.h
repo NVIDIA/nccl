@@ -68,6 +68,16 @@ NCCL_NVTX_DEFINE_STRUCT_WITH_SCHEMA_ENTRIES(NcclNvtxParamsCommSplit, static cons
   )
 )
 
+NCCL_NVTX_DEFINE_STRUCT_WITH_SCHEMA_ENTRIES(NcclNvtxParamsCommShrink, static constexpr,
+  NCCL_NVTX_PAYLOAD_ENTRIES(
+    (uint64_t, newcomm, TYPE_UINT64, nccl_nvtxCommStr),
+    (int, nranks, TYPE_INT, nccl_nvtxNranksStr),
+    (int, myrank, TYPE_INT, nccl_nvtxRankStr),
+    (int, cudaDev, TYPE_INT, nccl_nvtxCudaDevStr),
+    (int, num_exclude, TYPE_INT, "num_exclude")
+  )
+)
+
 NCCL_NVTX_DEFINE_STRUCT_WITH_SCHEMA_ENTRIES(NcclNvtxParamsCommFinalize, static constexpr,
   NCCL_NVTX_PAYLOAD_ENTRIES(
     (uint64_t, comm, TYPE_UINT64, nccl_nvtxCommStr)

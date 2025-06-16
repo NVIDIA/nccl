@@ -16,6 +16,8 @@
 #include <chrono>
 #include "param.h"
 
+#define NCCL_DEBUG_RESET_TRIGGERED (-2)
+
 int ncclDebugLevel = -1;
 static uint32_t ncclDebugTimestampLevels = 0;     // bitmaps of levels that have timestamps turned on
 static char ncclDebugTimestampFormat[256];        // with space for subseconds
@@ -26,7 +28,7 @@ static int pid = -1;
 static char hostname[1024];
 thread_local int ncclDebugNoWarn = 0;
 char ncclLastError[1024] = ""; // Global string for the last error in human readable form
-static uint64_t ncclDebugMask = NCCL_INIT | NCCL_BOOTSTRAP | NCCL_ENV; // Default debug sub-system mask is INIT and ENV
+static uint64_t ncclDebugMask = 0;
 FILE *ncclDebugFile = stdout;
 static pthread_mutex_t ncclDebugLock = PTHREAD_MUTEX_INITIALIZER;
 static std::chrono::steady_clock::time_point ncclEpoch;
@@ -34,11 +36,16 @@ static bool ncclWarnSetDebugInfo = false;
 
 static __thread int tid = -1;
 
+// This function must be called with ncclDebugLock locked!
 static void ncclDebugInit() {
-  pthread_mutex_lock(&ncclDebugLock);
-  if (ncclDebugLevel != -1) { pthread_mutex_unlock(&ncclDebugLock); return; }
   const char* nccl_debug = ncclGetEnv("NCCL_DEBUG");
   int tempNcclDebugLevel = -1;
+  uint64_t tempNcclDebugMask = NCCL_INIT | NCCL_BOOTSTRAP | NCCL_ENV; // Default debug sub-system mask
+  if (ncclDebugLevel == NCCL_DEBUG_RESET_TRIGGERED && ncclDebugFile != stdout) {
+    // Finish the reset initiated via ncclResetDebugInit().
+    fclose(ncclDebugFile);
+    ncclDebugFile = stdout;
+  }
   if (nccl_debug == NULL) {
     tempNcclDebugLevel = NCCL_LOG_NONE;
   } else if (strcasecmp(nccl_debug, "VERSION") == 0) {
@@ -61,7 +68,7 @@ static void ncclDebugInit() {
   if (ncclDebugSubsysEnv != NULL) {
     int invert = 0;
     if (ncclDebugSubsysEnv[0] == '^') { invert = 1; ncclDebugSubsysEnv++; }
-    ncclDebugMask = invert ? ~0ULL : 0ULL;
+    tempNcclDebugMask = invert ? ~0ULL : 0ULL;
     char *ncclDebugSubsys = strdup(ncclDebugSubsysEnv);
     char *subsys = strtok(ncclDebugSubsys, ",");
     while (subsys != NULL) {
@@ -102,7 +109,7 @@ static void ncclDebugInit() {
         mask = NCCL_ALL;
       }
       if (mask) {
-        if (invert) ncclDebugMask &= ~mask; else ncclDebugMask |= mask;
+        if (invert) tempNcclDebugMask &= ~mask; else tempNcclDebugMask |= mask;
       }
       subsys = strtok(NULL, ",");
     }
@@ -246,15 +253,15 @@ static void ncclDebugInit() {
     if (debugFn[0] != '\0') {
       FILE *file = fopen(debugFn, "w");
       if (file != nullptr) {
-        setbuf(file, nullptr); // disable buffering
+        setlinebuf(file); // disable block buffering
         ncclDebugFile = file;
       }
     }
   }
 
   ncclEpoch = std::chrono::steady_clock::now();
+  ncclDebugMask = tempNcclDebugMask;
   __atomic_store_n(&ncclDebugLevel, tempNcclDebugLevel, __ATOMIC_RELEASE);
-  pthread_mutex_unlock(&ncclDebugLock);
 }
 
 /* Common logging function used by the INFO, WARN and TRACE macros
@@ -262,19 +269,38 @@ static void ncclDebugInit() {
  * they can share the debugging mechanisms and output files
  */
 void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *filefunc, int line, const char *fmt, ...) {
-  if (__atomic_load_n(&ncclDebugLevel, __ATOMIC_ACQUIRE) == -1) ncclDebugInit();
+  bool locked = false; // Keeps track of the ncclDebugLock state.
+  int gotLevel = __atomic_load_n(&ncclDebugLevel, __ATOMIC_ACQUIRE);
+
   if (ncclDebugNoWarn != 0 && level == NCCL_LOG_WARN) { level = NCCL_LOG_INFO; flags = ncclDebugNoWarn; }
 
   // Save the last error (WARN) as a human readable string
   if (level == NCCL_LOG_WARN) {
     pthread_mutex_lock(&ncclDebugLock);
+    locked = true;
     va_list vargs;
     va_start(vargs, fmt);
     (void) vsnprintf(ncclLastError, sizeof(ncclLastError), fmt, vargs);
     va_end(vargs);
-    pthread_mutex_unlock(&ncclDebugLock);
   }
-  if (ncclDebugLevel < level || ((flags & ncclDebugMask) == 0)) return;
+
+  if (gotLevel >= 0 && (gotLevel < level || (flags & ncclDebugMask) == 0)) {
+    if (locked)
+      pthread_mutex_unlock(&ncclDebugLock);
+    return;
+  }
+
+  if (!locked) {
+    pthread_mutex_lock(&ncclDebugLock);
+    locked = true;
+  }
+  // From this point on ncclDebugLock is always locked so we don't need to check "locked" anymore.
+  if (ncclDebugLevel < 0)
+    ncclDebugInit();
+  if (ncclDebugLevel < level || ((flags & ncclDebugMask) == 0)) {
+    pthread_mutex_unlock(&ncclDebugLock);
+    return;
+  }
 
   if (tid == -1) {
     tid = syscall(SYS_gettid);
@@ -335,7 +361,7 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
   // Add level specific formatting.
   if (level == NCCL_LOG_WARN) {
     len += snprintf(buffer+len, sizeof(buffer)-len, "[%d] %s:%d NCCL WARN ", cudaDev, filefunc, line);
-    if (ncclWarnSetDebugInfo) ncclDebugLevel = NCCL_LOG_INFO;
+    if (ncclWarnSetDebugInfo) __atomic_store_n(&ncclDebugLevel, NCCL_LOG_INFO, __ATOMIC_RELEASE);
   } else if (level == NCCL_LOG_INFO) {
     len += snprintf(buffer+len, sizeof(buffer)-len, "[%d] NCCL INFO ", cudaDev);
   } else if (level == NCCL_LOG_TRACE && flags == NCCL_CALL) {
@@ -360,19 +386,17 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
   // necessary since we write bytes instead of the string.
   buffer[len++] = '\n';
   fwrite(buffer, 1, len, ncclDebugFile);
+  pthread_mutex_unlock(&ncclDebugLock);
 }
 
 NCCL_API(void, ncclResetDebugInit);
 void ncclResetDebugInit() {
   // Cleans up from a previous ncclDebugInit() and reruns.
   // Use this after changing NCCL_DEBUG and related parameters in the environment.
-  __atomic_load_n(&ncclDebugLevel, __ATOMIC_ACQUIRE);
-  if (ncclDebugFile != stdout) {
-    fclose(ncclDebugFile);
-    ncclDebugFile = stdout;
-  }
-  ncclDebugLevel = -1;
-  ncclDebugInit();
+  pthread_mutex_lock(&ncclDebugLock);
+  // Let ncclDebugInit() know to complete the reset.
+  __atomic_store_n(&ncclDebugLevel, NCCL_DEBUG_RESET_TRIGGERED, __ATOMIC_RELEASE);
+  pthread_mutex_unlock(&ncclDebugLock);
 }
 
 NCCL_PARAM(SetThreadName, "SET_THREAD_NAME", 0);

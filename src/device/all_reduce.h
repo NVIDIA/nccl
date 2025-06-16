@@ -106,7 +106,7 @@ namespace {
         for (size_t elemOffset = 0; elemOffset < channelCount; elemOffset += chunkCount) {
           offset = gridOffset + elemOffset;
           nelem = min(chunkCount, channelCount - elemOffset);
-          prims.directSend(offset, nelem);
+          prims.directSend(offset, offset, nelem);
         }
       }
       else {

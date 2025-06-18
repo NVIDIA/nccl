@@ -40,10 +40,12 @@ ifeq ($(shell test "0$(CUDA_MAJOR)" -lt 12; echo $$?),0)
 CUDA8_GENCODE += -gencode=arch=compute_35,code=sm_35
 endif
 CUDA9_GENCODE = -gencode=arch=compute_70,code=sm_70
+CUDA10_GENCODE = -gencode=arch=compute_75,code=sm_75
 CUDA11_GENCODE = -gencode=arch=compute_80,code=sm_80
 CUDA12_GENCODE = -gencode=arch=compute_90,code=sm_90
-CUDA13_GENCODE = -gencode=arch=compute_100,code=sm_100 \
-                 -gencode=arch=compute_120,code=sm_120
+CUDA12_8_GENCODE = -gencode=arch=compute_100,code=sm_100 \
+                   -gencode=arch=compute_120,code=sm_120
+CUDA13_GENCODE = -gencode=arch=compute_110,code=sm_110
 
 CUDA8_PTX     = -gencode=arch=compute_61,code=compute_61
 CUDA9_PTX     = -gencode=arch=compute_70,code=compute_70
@@ -53,10 +55,10 @@ CUDA13_PTX    = -gencode=arch=compute_120,code=compute_120
 
 ifeq ($(shell test "0$(CUDA_MAJOR)" -ge 13; echo $$?),0)
 # Prior to SM75 is deprecated from CUDA13.0 onwards
-  NVCC_GENCODE ?= $(CUDA11_GENCODE) $(CUDA12_GENCODE) $(CUDA13_GENCODE) $(CUDA13_PTX)
+  NVCC_GENCODE ?= $(CUDA10_GENCODE) $(CUDA11_GENCODE) $(CUDA12_GENCODE) $(CUDA12_8_GENCODE) $(CUDA13_GENCODE) $(CUDA13_PTX)
 else ifeq ($(shell test "0$(CUDA_MAJOR)" -eq 12 -a "0$(CUDA_MINOR)" -ge 8; echo $$?),0)
 # Include Blackwell support if we're using CUDA12.8 or above
-  NVCC_GENCODE ?= $(CUDA8_GENCODE) $(CUDA9_GENCODE) $(CUDA11_GENCODE) $(CUDA12_GENCODE) $(CUDA13_GENCODE) $(CUDA13_PTX)
+  NVCC_GENCODE ?= $(CUDA8_GENCODE) $(CUDA9_GENCODE) $(CUDA11_GENCODE) $(CUDA12_GENCODE) $(CUDA12_8_GENCODE) $(CUDA13_PTX)
 else ifeq ($(shell test "0$(CUDA_MAJOR)" -eq 11 -a "0$(CUDA_MINOR)" -ge 8 -o "0$(CUDA_MAJOR)" -gt 11; echo $$?),0)
 # Include Hopper support if we're using CUDA11.8 or above
   NVCC_GENCODE ?= $(CUDA8_GENCODE) $(CUDA9_GENCODE) $(CUDA11_GENCODE) $(CUDA12_GENCODE) $(CUDA12_PTX)

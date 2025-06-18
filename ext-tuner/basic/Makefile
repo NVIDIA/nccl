@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2024, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2015-2019, NVIDIA CORPORATION. All rights reserved.
 #
 # See LICENSE.txt for license information
 #
@@ -10,13 +10,14 @@ BUILDDIR ?= .
 NCCLDIR  := $(BUILDDIR)
 
 SRC_FILES := $(wildcard *.c)
+DST_DIR   := $(BUILDDIR)/test/unit/plugins
 
-build: ${BUILDDIR}/libnccl-profiler-example.so
+build: ${BUILDDIR}/libnccl-tuner-basic.so
 
-${BUILDDIR}/libnccl-profiler-example.so: ${SRC_FILES}
+${BUILDDIR}/libnccl-tuner-basic.so: ${SRC_FILES}
 	@printf "Compiling  %-35s > %s\n" $< $@
 	@mkdir -p ${BUILDDIR}
 	$(CC) -Inccl -fPIC -shared -o $@ $^
 
 clean:
-	rm -f ${BUILDDIR}/libnccl-profiler-example.so
+	rm -f ${BUILDDIR}/libnccl-tuner-basic.so

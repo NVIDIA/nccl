@@ -1009,7 +1009,7 @@ struct Apply_LoadMultimem {
     DEFINE_Apply_LoadMultimem_minmax_v4_and_xparts(__nv_bfloat16, bf16x2, 4)
   #endif
 
-  #if NCCL_CUDA_ARCH_FAMILY_SPECIFIC == 1000 || NCCL_CUDA_ARCH_FAMILY_SPECIFIC == 1010 || NCCL_CUDA_ARCH_SPECIFIC == 1200 || NCCL_CUDA_ARCH_SPECIFIC == 1210
+  #if NCCL_CUDA_ARCH_SPECIFIC == 1000 || NCCL_CUDA_ARCH_SPECIFIC == 1010 || NCCL_CUDA_ARCH_FAMILY_SPECIFIC == 1000 || NCCL_CUDA_ARCH_FAMILY_SPECIFIC == 1010 || NCCL_CUDA_ARCH_SPECIFIC == 1200 || NCCL_CUDA_ARCH_SPECIFIC == 1210
     DEFINE_Apply_LoadMultimem_sum_v4_and_xparts(__nv_fp8_e4m3, e4m3x4, 4)
     DEFINE_Apply_LoadMultimem_minmax_v4_and_xparts(__nv_fp8_e4m3, e4m3x4, 4)
     DEFINE_Apply_LoadMultimem_sum_v4_and_xparts(__nv_fp8_e5m2, e5m2x4, 4)

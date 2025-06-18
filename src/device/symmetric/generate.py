@@ -108,7 +108,7 @@ def required_cuda(k):
       if k.algo in ldmc_algos:
         cudart = 12070
         arch = None
-        specific_sms = [100, 120]
+        specific_sms = ["100a", "101a", "100f", "101f", "120a", "121a"]
   return (cudart, arch, specific_sms)
 
 ################################################################################
@@ -145,7 +145,7 @@ def kernel_conds(k):
   if not specific_sms:
     arch_cond = "__CUDA_ARCH__ >= %d"%arch
   else:
-    arch_cond = " || ".join(["0"] + ["NCCL_CUDA_ARCH_SPECIFIC==%d"%(10*sm) for sm in specific_sms])
+    arch_cond = " || ".join(["0"] + ["NCCL_CUDA_ARCH_%sSPECIFIC==%d"%("FAMILY_" if sm[-1] == "f" else "", 10*int(sm.replace('a', '').replace('f', ''))) for sm in specific_sms])
   return cudart_cond, arch_cond
 
 def instantiate(k):

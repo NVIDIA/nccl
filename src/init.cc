@@ -1507,7 +1507,7 @@ static ncclResult_t envConfigOverride(ncclComm_t comm) {
   int minCTAsEnv;
   int maxCTAsEnv;
   int splitShareEnv;
-  int collnetEnableEnv;
+  const char* collnetEnableEnv;
   int ctaPolicyEnv;
   int shrinkShareEnv;
   int nvlsCTAsEnv;
@@ -1561,9 +1561,15 @@ static ncclResult_t envConfigOverride(ncclComm_t comm) {
     comm->config.shrinkShare = shrinkShareEnv;
   }
 
-  collnetEnableEnv = ncclParamCollnetEnable();
-  if (collnetEnableEnv != NCCL_CONFIG_UNDEF_INT) {
-    comm->config.collnetEnable = collnetEnableEnv;
+  // NCCL_COLLNET_ENABLE needs to be reloaded each time for comm init
+  // since users might change the env on the fly to enable/disable collnet
+  collnetEnableEnv = ncclGetEnv("NCCL_COLLNET_ENABLE");
+  if (collnetEnableEnv != NULL) {
+    int collnetEnableInt = (int)strtol(collnetEnableEnv, NULL, 0);
+    if (collnetEnableInt != NCCL_CONFIG_UNDEF_INT) {
+      comm->config.collnetEnable = collnetEnableInt;
+      INFO(NCCL_ENV, "NCCL_COLLNET_ENABLE set by environment to %d.", collnetEnableInt);
+    }
   }
 
   ctaPolicyEnv = ncclParamCtaPolicy();

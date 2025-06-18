@@ -21,7 +21,6 @@ struct ncclStrongStreamCapture {
   cudaGraph_t graph;
   unsigned long long graphId;
   cudaStream_t captureStream;
-  cudaGraphNode_t lastRecord;
   void* acquiredBy;
 };
 
@@ -216,7 +215,6 @@ ncclResult_t ncclStrongStreamAcquire(
         CUDACHECKGOTO(cudaStreamCreateWithFlags(&cap->captureStream, cudaStreamNonBlocking), ret, do_unlock);
       }
       cap->graphId = graph.graphId;
-      cap->lastRecord = nullptr;
       cap->acquiredBy = localThreadId();
       // Push to capturing list.
       cap->next = ss->captureHead;
@@ -296,16 +294,6 @@ ncclResult_t ncclStrongStreamRelease(
         cudaGraphNode_t recordNode;
         CUDACHECK(cudaGraphAddEventRecordNode(&recordNode, graph.graph, nullptr, 0, ss->serialEvent));
 
-        // Make this record order after previous record on this stream.
-        if (cap->lastRecord != nullptr) {
-        #if CUDART_VERSION >= 13000
-          CUDACHECK(cudaGraphAddDependencies_v2(graph.graph, &cap->lastRecord, &recordNode, nullptr, 1));
-        #else
-          CUDACHECK(cudaGraphAddDependencies(graph.graph, &cap->lastRecord, &recordNode, 1));
-        #endif
-        }
-        cap->lastRecord = recordNode;
-
         // Get current nodes from work stream so we can add them as dependencies.
         cudaStreamCaptureStatus status;
         cudaGraphNode_t const* nodes;
@@ -337,6 +325,22 @@ ncclResult_t ncclStrongStreamRelease(
           #endif
           }
         }
+
+	// Make every future operation captured on cap->captureStream depend on 'recordNode'.
+        #if CUDART_VERSION >= 13000
+        CUDACHECK(cudaStreamUpdateCaptureDependencies_v2(
+                    cap->captureStream,
+                    &recordNode,          /* dependencies                */
+                    /*edges =*/ nullptr,  /* no edge annotations         */
+                    1,                    /* count                       */
+                    cudaStreamSetCaptureDependencies));
+        #else
+        CUDACHECK(cudaStreamUpdateCaptureDependencies(
+                    cap->captureStream,
+                    &recordNode,
+                    1,
+                    cudaStreamSetCaptureDependencies));
+        #endif
 
         if (cap->acquiredBy != localThreadId() && ncclParamLaunchRaceFatal()) {
           WARN("%s", launchRaceFatalMsg);

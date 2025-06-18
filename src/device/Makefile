@@ -36,9 +36,8 @@ define COMPILE
  $(call COMPILE$(or $3,$(suffix $2)),$1,$2)
 endef
 
-ifeq ($(shell echo "$$((1000*$(CUDA_MAJOR) + 10*$(CUDA_MINOR) >= 12080))"),1)
-	NVCC_GENCODE_LDMC_FP8 = -gencode=arch=compute_100a,code=sm_100a \
-                     -gencode=arch=compute_120a,code=sm_120a
+ifeq ($(shell echo "$$((1000*$(CUDA_MAJOR) + 10*$(CUDA_MINOR) >= 12090))"),1)
+	NVCC_GENCODE_LDMC_FP8 = -gencode=arch=compute_100f,code=sm_100f
 else ifeq ($(shell echo "$$((1000*$(CUDA_MAJOR) + 10*$(CUDA_MINOR) >= 12070))"),1)
   NVCC_GENCODE_LDMC_FP8 = -gencode=arch=compute_100a,code=sm_100a
 else

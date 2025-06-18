@@ -52,6 +52,9 @@ ncclResult_t buildMlx5dvSymbols(struct ncclMlx5dvSymbols* mlx5dvSymbols) {
 #define LOAD_SYM_VERSION(handle, symbol, funcptr, version) do {  \
     cast = (void**)&funcptr;                                     \
     *cast = dlvsym(handle, symbol, version);                     \
+    if (*cast == NULL) {                                         \
+      INFO(NCCL_NET, "dlvsym failed on %s - %s version %s", symbol, dlerror(), version);  \
+    }                                                            \
   } while (0)
 
   LOAD_SYM(mlx5dvhandle, "mlx5dv_is_supported", mlx5dvSymbols->mlx5dv_internal_is_supported);

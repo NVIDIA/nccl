@@ -18,7 +18,7 @@
 #define SM80_NVLINK_BW 20.0
 #define SM90_NVLINK_BW 20.6
 #define SM86_NVLINK_BW 12.0
-#define SM100_NVLINK_BW 40.0
+#define SM100_NVLINK_BW 40.1
 #define PCI_BW 12.0           // PCI Gen3 x16
 #define AMD_BW 16.0
 #define BDW_QPI_BW 6.0
@@ -76,11 +76,11 @@ extern const char* topoLinkTypeStr[];
 // Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
 #define PATH_PXB 5
 
-// Connection between a GPU and a NIC using an intermediate GPU. Used to enable rail-local, aggregated network send/recv operations.
-#define PATH_PXN 6
-
 // Connection between a GPU and a NIC using the C2C connection to the CPU and the PCIe connection to the NIC
-#define PATH_P2C 7
+#define PATH_P2C 6
+
+// Connection between a GPU and a NIC using an intermediate GPU. Used to enable rail-local, aggregated network send/recv operations.
+#define PATH_PXN 7
 
 // Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
 #define PATH_PHB 8
@@ -143,6 +143,7 @@ struct ncclTopoNode {
       int gdrSupport;
       int collSupport;
       int maxChannels;
+      int localGpu;
     }net;
     struct {
       int arch;

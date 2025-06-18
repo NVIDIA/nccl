@@ -61,20 +61,20 @@ static void* openPluginLib(enum ncclPluginType type, const char* libName) {
   char eNoEntNameList[PATH_MAX] = { 0 };
 
   if (libName && strlen(libName)) {
-    // match names that start with 'lib' and end with '.so'
-    if (strlen(libName) >= strlen("libX.so") && strncmp(libName, "lib", strlen("lib")) == 0 && strncmp(libName + strlen(libName) - strlen(".so"), ".so", strlen(".so")) == 0) {
-      snprintf(libName_, MAX_STR_LEN, "%s", libName);
-      libHandles[type] = tryOpenLib(libName_, &openErr, openErrStr);
-      if (libHandles[type]) {
-        INFO(subsys[type], "%s/Plugin: Plugin name set by env to %s", pluginNames[type], libName_);
-        return libHandles[type];
-      }
-      if (openErr == ENOENT) {
-        appendNameToList(eNoEntNameList, &len, libName_);
-      } else {
-        INFO(subsys[type], "%s/Plugin: %s", pluginNames[type], openErrStr);
-      }
+    snprintf(libName_, MAX_STR_LEN, "%s", libName);
+    libHandles[type] = tryOpenLib(libName_, &openErr, openErrStr);
+    if (libHandles[type]) {
+      INFO(subsys[type], "%s/Plugin: Plugin name set by env to %s", pluginNames[type], libName_);
+      return libHandles[type];
+    }
+    if (openErr == ENOENT) {
+      appendNameToList(eNoEntNameList, &len, libName_);
     } else {
+      INFO(subsys[type], "%s/Plugin: %s", pluginNames[type], openErrStr);
+    }
+
+    // libName can't be a relative or absolute path (start with '.' or contain any '/'). It can't be a library name either (start with 'lib' or end with '.so')
+    if (strchr(libName, '/') == nullptr && (strncmp(libName, "lib", strlen("lib")) || strlen(libName) < strlen(".so") || strncmp(libName + strlen(libName) - strlen(".so"), ".so", strlen(".so")))) {
       snprintf(libName_, MAX_STR_LEN, "%s-%s.so", pluginPrefix[type], libName);
       libHandles[type] = tryOpenLib(libName_, &openErr, openErrStr);
       if (libHandles[type]) {

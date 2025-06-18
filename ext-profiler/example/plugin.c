@@ -12,7 +12,7 @@
 #include <sys/types.h>
 #include <sys/syscall.h>
 #include <unistd.h>
-#include <x86intrin.h>
+#include <time.h>
 #include "event.h"
 #include "print_event.h"
 
@@ -41,22 +41,10 @@ static struct proxyOp* detachPool;
 ncclDebugLogger_t logFn;
 #define INFO(FLAGS, ...) logFn(NCCL_LOG_INFO, (FLAGS), __func__, __LINE__, __VA_ARGS__)
 
-static double freq = -1;
-__hidden void calibrate() {
-  struct timeval tv;
-  gettimeofday(&tv, NULL);
-  uint64_t timeCycles = __rdtsc();
-  double time = - tv.tv_sec*1e6 - tv.tv_usec;
-  uint64_t total = 0ULL;
-  for (int i = 0; i < 10000; i++) total += __rdtsc();
-  gettimeofday(&tv, NULL);
-  timeCycles = __rdtsc() - timeCycles;
-  time += tv.tv_sec*1e6 + tv.tv_usec;
-  freq = timeCycles / time;
-}
-
 __hidden double gettime(void) {
-  return __rdtsc() / freq;
+  struct timespec t;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  return (t.tv_sec*1e6 + (t.tv_nsec*1e-3));
 }
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
@@ -98,8 +86,6 @@ __hidden ncclResult_t exampleProfilerInit(void** context, int* eActivationMask, 
     // process address space.
     pid = getpid();
 
-    // calibrate and start timer
-    calibrate();
     startTime = gettime();
   }
   pthread_mutex_unlock(&lock);

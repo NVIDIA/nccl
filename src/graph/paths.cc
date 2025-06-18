@@ -175,6 +175,13 @@ ncclResult_t ncclGetLocalCpu(struct ncclTopoSystem* system, int gpu, int* retCpu
   return ncclSuccess;
 }
 
+static int mergePathType(int type0, int type1){
+  int max = std::max(type0,type1);
+  int min = std::min(type0,type1);
+  if(max == PATH_PHB && min == PATH_C2C) return PATH_P2C;
+  else return max;
+}
+
 static ncclResult_t addInterStep(struct ncclTopoSystem* system, int tx, int ix, int t1, int i1, int t2, int i2) {
   struct ncclTopoNode* cpuNode = system->nodes[tx].nodes+ix;
   struct ncclTopoNode* srcNode = system->nodes[t1].nodes+i1;
@@ -187,7 +194,7 @@ static ncclResult_t addInterStep(struct ncclTopoSystem* system, int tx, int ix, 
 
   // Update path characteristics
   srcNode->paths[t2][i2].count = l;
-  srcNode->paths[t2][i2].type = std::max(srcNode->paths[tx][ix].type, cpuNode->paths[t2][i2].type);
+  srcNode->paths[t2][i2].type = mergePathType(srcNode->paths[tx][ix].type, cpuNode->paths[t2][i2].type);
   if (tx == GPU) srcNode->paths[t2][i2].type = PATH_PXN;
   srcNode->paths[t2][i2].bw = std::min(srcNode->paths[tx][ix].bw, cpuNode->paths[t2][i2].bw);
   return ncclSuccess;
@@ -674,9 +681,9 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclComm
       int c;
       NCCLCHECK(ncclGetLocalCpu(system, g, &c));
       if (c == -1) continue;
-      if (gpuNode->paths[NET][n].type == PATH_PHB && gpuNode->paths[CPU][c].type == PATH_C2C) {
-        gpuNode->paths[NET][n].type = PATH_P2C;
-        netNode->paths[GPU][g].type = PATH_P2C;
+      if (mergePathType(gpuNode->paths[CPU][c].type, netNode->paths[CPU][c].type) == PATH_P2C) {
+        gpuNode->paths[NET][n].type = std::min(PATH_P2C, gpuNode->paths[NET][n].type);
+        netNode->paths[GPU][g].type = std::min(PATH_P2C, netNode->paths[GPU][g].type);
       }
     }
   }
@@ -695,16 +702,15 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclComm
           // PXN = PCI + NVLink.
           struct ncclTopoNode* peerNode = system->nodes[GPU].nodes+localGpuIndex;
           // Only use PXN for NIC n if remote GPU p ...
-          if (/* (1) is either connected to the NIC with PXB*/
-              (peerNode->paths[NET][n].type <= PATH_PXB ||
-               /* or with P2C and PxN over C2C is enabled */
-               (ncclParamPxnC2c() && peerNode->paths[NET][n].type == PATH_P2C)) &&
+          int pxnType = ncclParamPxnC2c() ? PATH_P2C : PATH_PXB;
+          if (/* (1) is connected to the NIC with PxN type*/
+              peerNode->paths[NET][n].type <= pxnType &&
               /* and (2) is connected to us through NVLink */
               peerNode->paths[GPU][g].type <= PATH_NVL &&
               /* and (3) is on the same node as us */
               NCCL_TOPO_ID_SYSTEM_ID(peerNode->id) == NCCL_TOPO_ID_SYSTEM_ID(gpu->id) &&
               /* and (4) has either higher bw to that NIC or avoid going through the CPU*/
-              (peerNode->paths[NET][n].bw > gpu->paths[NET][n].bw || gpu->paths[NET][n].type > PATH_PXB))
+              (peerNode->paths[NET][n].bw > gpu->paths[NET][n].bw || gpu->paths[NET][n].type > pxnType))
             // We can use that GPU as relay to communicate with that NIC.
             // Only enabling it in the GPU->NIC direction for now to favor
             // receiving locally and sending remotely (consistent with net.cc)
@@ -724,6 +730,12 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclComm
         }
       }
     }
+  }
+
+  // Pre-compute NET local gpus to accelerate search
+  for (int n=0; n<system->nodes[NET].count; n++) {
+    struct ncclTopoNode* net = system->nodes[NET].nodes+n;
+    NCCLCHECK(ncclTopoGetLocalGpu(system, net->id, &net->net.localGpu));
   }
   return ncclSuccess;
 }

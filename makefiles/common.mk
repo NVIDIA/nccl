@@ -76,7 +76,7 @@ $(info NVCC_GENCODE is ${NVCC_GENCODE})
 ifeq ($(shell test "0$(CUDA_MAJOR)" -ge 13; echo $$?),0)
   CXXSTD ?= -std=c++17
 else
-  CXXSTD ?= -std=c++11
+  CXXSTD ?= -std=c++14
 endif
 
 CXXFLAGS   := -DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR) -fPIC -fvisibility=hidden \

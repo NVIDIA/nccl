@@ -349,6 +349,7 @@ struct ncclProxyState {
   struct ncclIpcSocket ipcSock;
   int stop;
   CUcontext cudaCtx;
+  std::once_flag cudaCtxOnceFlag;
   ncclResult_t asyncResult;
 
   // Used by main thread

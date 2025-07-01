@@ -441,7 +441,8 @@ static ncclResult_t socketTryAccept(struct ncclSocket* sock) {
   if (sock->fd != -1) {
     sock->state = ncclSocketStateAccepted;
   } else if (errno == ENETDOWN || errno == EPROTO || errno == ENOPROTOOPT || errno == EHOSTDOWN ||
-             errno == ENONET || errno == EHOSTUNREACH || errno == EOPNOTSUPP || errno == ENETUNREACH) {
+             errno == ENONET || errno == EHOSTUNREACH || errno == EOPNOTSUPP || errno == ENETUNREACH ||
+             errno == EINTR) {
     /* per accept's man page, for linux sockets, the following errors might be already pending errors
      * and should be considered as EAGAIN. To avoid infinite loop in case of errors, we use the retry count*/
     if (++sock->errorRetries == ncclParamRetryCnt()) {

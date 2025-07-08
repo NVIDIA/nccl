@@ -256,28 +256,38 @@ struct Apply_Cast<float ,__nv_bfloat16, /*EltPerPack=*/2> {
 };
 #endif
 
-#define EASY_CAST(A, B, EltPerPack, VecA, VecB) \
-  template<> \
-  struct Apply_Cast<A, B, EltPerPack> { \
-    __device__ __forceinline__ static BytePack<sizeof(B)*EltPerPack> cast(BytePack<sizeof(A)*EltPerPack> a) { \
-      return toPack(VecB(fromPack<VecA>(a))); \
-    } \
-  }; \
-  template<> \
-  struct Apply_Cast<B, A, EltPerPack> { \
-    __device__ __forceinline__ static BytePack<sizeof(A)*EltPerPack> cast(BytePack<sizeof(B)*EltPerPack> b) { \
-      return toPack(VecA(fromPack<VecB>(b))); \
-    } \
-  };
-
 #if defined(__CUDA_FP8_TYPES_EXIST__)
-EASY_CAST(__nv_fp8_e5m2, float, 2, __nv_fp8x2_e5m2, float2)
-EASY_CAST(__nv_fp8_e5m2, float, 4, __nv_fp8x4_e5m2, float4)
+#define FP8_CAST(FP8_T, VEC2_T, VEC4_T) \
+template<> struct Apply_Cast<FP8_T, float, 2> { \
+  __device__ __forceinline__ static BytePack<8> cast(BytePack<2> a) { \
+    VEC2_T va = fromPack<VEC2_T>(a); FP8_T* p = reinterpret_cast<FP8_T*>(&va); \
+    return toPack(make_float2(float(__half(p[0])), float(__half(p[1])))); \
+  } \
+}; \
+template<> struct Apply_Cast<float, FP8_T, 2> { \
+  __device__ __forceinline__ static BytePack<2> cast(BytePack<8> b) { \
+    float2 vb = fromPack<float2>(b); VEC2_T va; FP8_T* p = reinterpret_cast<FP8_T*>(&va); \
+    p[0] = FP8_T(__half(vb.x)); p[1] = FP8_T(__half(vb.y)); return toPack(va); \
+  } \
+}; \
+template<> struct Apply_Cast<FP8_T, float, 4> { \
+  __device__ __forceinline__ static BytePack<16> cast(BytePack<4> a) { \
+    VEC4_T va = fromPack<VEC4_T>(a); FP8_T* p = reinterpret_cast<FP8_T*>(&va); \
+    return toPack(make_float4(float(__half(p[0])), float(__half(p[1])), float(__half(p[2])), float(__half(p[3])))); \
+  } \
+}; \
+template<> struct Apply_Cast<float, FP8_T, 4> { \
+  __device__ __forceinline__ static BytePack<4> cast(BytePack<16> b) { \
+    float4 vb = fromPack<float4>(b); VEC4_T va; FP8_T* p = reinterpret_cast<FP8_T*>(&va); \
+    p[0] = FP8_T(__half(vb.x)); p[1] = FP8_T(__half(vb.y)); p[2] = FP8_T(__half(vb.z)); p[3] = FP8_T(__half(vb.w)); \
+    return toPack(va); \
+  } \
+};
 
-EASY_CAST(__nv_fp8_e4m3, float, 2, __nv_fp8x2_e4m3, float2)
-EASY_CAST(__nv_fp8_e4m3, float, 4, __nv_fp8x4_e4m3, float4)
+FP8_CAST(__nv_fp8_e5m2, __nv_fp8x2_e5m2, __nv_fp8x4_e5m2)
+FP8_CAST(__nv_fp8_e4m3, __nv_fp8x2_e4m3, __nv_fp8x4_e4m3)
+#undef FP8_CAST
 #endif
-#undef EASY_CAST
 
 ////////////////////////////////////////////////////////////////////////////////
 // Apply_Reduce

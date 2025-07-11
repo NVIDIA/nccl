@@ -52,7 +52,7 @@ ncclResult_t ncclTunerPluginLoad(struct ncclComm* comm) {
 
   tunerPluginLib = ncclOpenTunerPluginLib(ncclGetEnv("NCCL_TUNER_PLUGIN"));
   if (nullptr == tunerPluginLib) {
-    tunerPluginLib = ncclGetNetPluginLib();
+    tunerPluginLib = ncclGetNetPluginLib(ncclPluginTypeTuner);
     if (nullptr == tunerPluginLib) {
       goto fail;
     }
@@ -78,6 +78,7 @@ exit:
   pthread_mutex_unlock(&tunerPluginLock);
   return ncclSuccess;
 fail:
+  if (tunerPluginLib) NCCLCHECK(ncclClosePluginLib(tunerPluginLib, ncclPluginTypeTuner));
   tunerPluginLib = nullptr;
   status = tunerPluginLoadFailed;
   goto exit;
@@ -87,7 +88,7 @@ ncclResult_t ncclTunerPluginUnload(struct ncclComm* comm) {
   pthread_mutex_lock(&tunerPluginLock);
   if (comm->tunerPluginLoaded && 0 == (--tunerPluginRefCount)) {
     INFO(NCCL_TUNING, "TUNER/Plugin: Closing tuner: '%s'", tunerSymbol->name);
-    NCCLCHECK(ncclClosePluginLib(tunerPluginLib));
+    NCCLCHECK(ncclClosePluginLib(tunerPluginLib, ncclPluginTypeTuner));
     tunerPluginLib = nullptr;
     tunerSymbol = nullptr;
     comm->tuner = nullptr;

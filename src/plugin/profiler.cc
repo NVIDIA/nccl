@@ -77,7 +77,8 @@ exit:
   pthread_mutex_unlock(&profilerLock);
   return ncclSuccess;
 fail:
-  if (profilerPluginLib) NCCLCHECK(ncclClosePluginLib(profilerPluginLib));
+  if (profilerPluginLib) NCCLCHECK(ncclClosePluginLib(profilerPluginLib, ncclPluginTypeProfiler));
+  profilerPluginLib = nullptr;
   profilerPluginStatus = profilerPluginLoadFailed;
   goto exit;
 }
@@ -86,7 +87,7 @@ static ncclResult_t ncclProfilerPluginUnload(void) {
   pthread_mutex_lock(&profilerLock);
   if (0 == (--profilerPluginRefCount)) {
     INFO(NCCL_ENV, "PROFILER/Plugin: Closing profiler plugin %s", ncclProfiler->name);
-    NCCLCHECK(ncclClosePluginLib(profilerPluginLib));
+    NCCLCHECK(ncclClosePluginLib(profilerPluginLib, ncclPluginTypeProfiler));
     profilerPluginLib = nullptr;
     ncclProfiler = nullptr;
     profilerPluginStatus = profilerPluginLoadReady;

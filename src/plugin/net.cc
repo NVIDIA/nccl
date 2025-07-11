@@ -67,7 +67,7 @@ static pthread_once_t initPluginLibsOnceControl = PTHREAD_ONCE_INIT;
 static ncclResult_t ncclNetPluginUnload(netPluginLib_t* pluginLib) {
   if ((pluginLib->dlHandle) && ((pluginLib->ncclNetPluginRefCount) == 0)) {
     INFO(NCCL_INIT|NCCL_NET, "Unloading plugin %s", pluginLib->name);
-    NCCLCHECK(ncclClosePluginLib(pluginLib->dlHandle));
+    NCCLCHECK(ncclClosePluginLib(pluginLib->dlHandle, ncclPluginTypeNet));
     memset(pluginLib, 0, sizeof(netPluginLib_t));
   }
   return ncclSuccess;
@@ -105,8 +105,9 @@ exit:
   return ncclSuccess;
 fail:
   if (pluginLib->dlHandle) {
-    NCCLCHECK(ncclClosePluginLib(pluginLib->dlHandle));
+    NCCLCHECK(ncclClosePluginLib(pluginLib->dlHandle, ncclPluginTypeNet));
   }
+  pluginLib->dlHandle = nullptr;
   pluginLib->ncclNetPluginState = ncclNetPluginStateLoadFailed;
   pluginLib->ncclCollNetPluginState = ncclNetPluginStateLoadFailed;
   goto exit;

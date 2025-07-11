@@ -98,6 +98,8 @@ extern const char* topoLinkTypeStr[];
 #define PATH_DIS 11
 extern const char* topoPathTypeStr[];
 
+extern int64_t ncclParamPxnC2c();
+
 struct ncclTopoNode;
 struct ncclTopoLink {
   int type;

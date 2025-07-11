@@ -142,8 +142,14 @@ ncclResult_t wrap_ibv_query_device(struct ibv_context *context, struct ibv_devic
   IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_query_device, ibv_internal_query_device(context, device_attr), 0, "ibv_query_device");
 }
 
-ncclResult_t wrap_ibv_query_port(struct ibv_context *context, uint8_t port_num, struct ibv_port_attr *port_attr) { /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/
-  IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_query_port, ibv_internal_query_port(context, port_num, port_attr), 0, "ibv_query_port");
+ncclResult_t wrap_ibv_query_port(struct ibv_context *context, uint8_t port_num, struct ibv_port_attr *port_attr) {
+  // First try and query the extended port attributes (e.g. active_speed_ex)
+  if (ibv_query_port_ex(context, port_num, port_attr) != 0) {
+    // Fall back to the original attribute API call, but zero all members first
+    memset(port_attr, 0, sizeof(*port_attr));
+    IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_query_port, ibv_internal_query_port(context, port_num, port_attr), 0, "ibv_query_port");
+  }
+  return ncclSuccess;
 }
 
 ncclResult_t wrap_ibv_query_gid(struct ibv_context *context, uint8_t port_num, int index, union ibv_gid *gid) {

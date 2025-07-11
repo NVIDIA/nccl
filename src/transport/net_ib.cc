@@ -652,12 +652,15 @@ ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction, ncclProfilerCallback_t pr
         enum ncclIbProvider ibProvider = IB_PROVIDER_NONE;
         char dataDirectDevicePath[PATH_MAX];
         int dataDirectSupported = 0;
+        int skipNetDevForDataDirect = 0;
         if (wrap_mlx5dv_is_supported(devices[d])) {
           ibProvider = IB_PROVIDER_MLX5;
           snprintf(dataDirectDevicePath, PATH_MAX, "/sys");
           if((ncclMlx5dvDmaBufCapable(context)) && (wrap_mlx5dv_get_data_direct_sysfs_path(context, dataDirectDevicePath + 4, PATH_MAX - 4) == ncclSuccess)) {
-            INFO(NCCL_INIT|NCCL_NET, "Data Direct DMA Interface is detected for device:%s", devices[d]->name);
-            if(ncclParamIbDataDirect()) dataDirectSupported = 1;
+            INFO(NCCL_INIT|NCCL_NET, "NET/IB: Data Direct DMA Interface is detected for device:%s", devices[d]->name);
+            // Now check whether Data Direct has been disabled by the user
+            if(ncclParamIbDataDirect() == 1) { dataDirectSupported = 1; skipNetDevForDataDirect = 1; }
+            if(ncclParamIbDataDirect() == 2) { dataDirectSupported = 1; skipNetDevForDataDirect = 0; }
           }
         }
         int nPorts = 0;
@@ -669,7 +672,8 @@ ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction, ncclProfilerCallback_t pr
           continue;
         }
         for (int port_num = 1; port_num <= devAttr.phys_port_cnt; port_num++) {
-          for (int dataDirect = 0; dataDirect < 1 + dataDirectSupported; ++dataDirect) {
+          // dataDirect = 0 exposes the devices normally, dataDirect = 1 exposes the devices through direct NIC
+          for (int dataDirect = skipNetDevForDataDirect; dataDirect < 1 + dataDirectSupported; ++dataDirect) {
             struct ibv_port_attr portAttr;
             if (ncclSuccess != wrap_ibv_query_port(context, port_num, &portAttr)) {
               WARN("NET/IB : Unable to query port_num %d", port_num);
@@ -690,15 +694,18 @@ ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction, ncclProfilerCallback_t pr
             ncclIbDevs[ncclNIbDevs].portAttr = portAttr;
             ncclIbDevs[ncclNIbDevs].portNum = port_num;
             ncclIbDevs[ncclNIbDevs].link = portAttr.link_layer;
-            ncclIbDevs[ncclNIbDevs].speed = ncclIbSpeed(portAttr.active_speed) * ncclIbWidth(portAttr.active_width);
+            if (portAttr.active_speed_ex)
+              // A non-zero active_speed_ex indicates XDR rate (0x100) or higher
+              ncclIbDevs[ncclNIbDevs].speed = ncclIbSpeed(portAttr.active_speed_ex) * ncclIbWidth(portAttr.active_width);
+            else
+              ncclIbDevs[ncclNIbDevs].speed = ncclIbSpeed(portAttr.active_speed) * ncclIbWidth(portAttr.active_width);
             ncclIbDevs[ncclNIbDevs].context = context;
             ncclIbDevs[ncclNIbDevs].pdRefs = 0;
             ncclIbDevs[ncclNIbDevs].pd = NULL;
             if (!dataDirect) {
               strncpy(ncclIbDevs[ncclNIbDevs].devName, devices[d]->name, MAXNAMESIZE);
               NCCLCHECKGOTO(ncclIbGetPciPath(ncclIbDevs[ncclNIbDevs].devName, &ncclIbDevs[ncclNIbDevs].pciPath, &ncclIbDevs[ncclNIbDevs].realPort), ret, fail);
-            }
-            else {
+            } else {
               snprintf(ncclIbDevs[ncclNIbDevs].devName, MAXNAMESIZE, "%s_dma", devices[d]->name);
               NCCLCHECK(ncclCalloc(&ncclIbDevs[ncclNIbDevs].pciPath, PATH_MAX));
               strncpy(ncclIbDevs[ncclNIbDevs].pciPath, dataDirectDevicePath, PATH_MAX);

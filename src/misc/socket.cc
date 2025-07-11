@@ -77,8 +77,19 @@ static ncclResult_t socketProgress(int op, struct ncclSocket* sock, void* ptr, i
 }
 
 static ncclResult_t socketWait(int op, struct ncclSocket* sock, void* ptr, int size, int* offset) {
-  while (*offset < size)
+  struct pollfd pfd;
+  int timeout = 1;
+  while (*offset < size) {
     NCCLCHECK(socketProgress(op, sock, ptr, size, offset));
+    if ((*offset < size) && (op == NCCL_SOCKET_RECV || op == NCCL_SOCKET_SEND)) {
+      // If we have more data to read or write, use the poll system call to wait
+      // until the socket becomes readable or writable again.
+      pfd.fd = sock->fd;
+      pfd.events = static_cast<short>((op == NCCL_SOCKET_RECV) ? POLLIN : POLLOUT);
+      pfd.revents = 0,
+      poll(&pfd, 1, timeout);
+    }
+  }
   return ncclSuccess;
 }
 

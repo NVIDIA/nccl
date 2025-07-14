@@ -56,6 +56,8 @@ struct ncclSocket {
   int acceptFd;
   int errorRetries;
   union ncclSocketAddress addr;
+  union ncclSocketAddress peerAddr;
+  int family;
   volatile uint32_t* abortFlag;
   int asyncFlag;
   enum ncclSocketState state;
@@ -75,15 +77,15 @@ ncclResult_t ncclFindInterfaces(char* ifNames, union ncclSocketAddress *ifAddrs,
                                 int* nIfs);
 
 // Initialize a socket
-ncclResult_t ncclSocketInit(struct ncclSocket* sock, const union ncclSocketAddress* addr = NULL, uint64_t magic = NCCL_SOCKET_MAGIC, enum ncclSocketType type = ncclSocketTypeUnknown, volatile uint32_t* abortFlag = NULL, int asyncFlag = 0, int customRetry = 0);
+ncclResult_t ncclSocketInit(struct ncclSocket* sock, const union ncclSocketAddress* addr = NULL, const union ncclSocketAddress* peerAddr = NULL, uint64_t magic = NCCL_SOCKET_MAGIC, enum ncclSocketType type = ncclSocketTypeUnknown, volatile uint32_t* abortFlag = NULL, int asyncFlag = 0, int customRetry = 0);
 // Create a listening socket. sock->addr can be pre-filled with IP & port info. sock->fd is set after a successful call
 ncclResult_t ncclSocketListen(struct ncclSocket* sock);
-ncclResult_t ncclSocketGetAddr(struct ncclSocket* sock, union ncclSocketAddress* addr);
-// Connect to sock->addr. sock->fd is set after a successful call.
+ncclResult_t ncclSocketGetAddr(struct ncclSocket* sock, union ncclSocketAddress* addr, bool isPeer = false);
+// Connect to sock->peerAddr. sock->fd is set after a successful call.
 ncclResult_t ncclSocketConnect(struct ncclSocket* sock);
 // Return socket connection state.
 ncclResult_t ncclSocketReady(struct ncclSocket* sock, int *running);
-// Accept an incoming connection from listenSock->fd and keep the file descriptor in sock->fd, with the remote side IP/port in sock->addr.
+// Accept an incoming connection from listenSock->fd and keep the file descriptor in sock->fd, with the remote side IP/port in sock->peerAddr.
 ncclResult_t ncclSocketAccept(struct ncclSocket* sock, struct ncclSocket* ulistenSock);
 ncclResult_t ncclSocketGetFd(struct ncclSocket* sock, int* fd);
 ncclResult_t ncclSocketSetFd(int fd, struct ncclSocket* sock);

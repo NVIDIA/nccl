@@ -44,7 +44,7 @@ static ncclResult_t socketProgressOpt(int op, struct ncclSocket* sock, void* ptr
       }
       if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
         WARN("socketProgressOpt: Call to %s %s failed : %s", (op == NCCL_SOCKET_RECV ? "recv from" : "send to"),
-             ncclSocketToString(&sock->addr, line), strerror(errno));
+             ncclSocketToString(&sock->peerAddr, line), strerror(errno));
         return ncclRemoteError;
       } else {
         bytes = 0;
@@ -69,7 +69,7 @@ static ncclResult_t socketProgress(int op, struct ncclSocket* sock, void* ptr, i
     } else {
       char line[SOCKET_NAME_MAXLEN+1];
       WARN("socketProgress: Connection closed by remote peer %s",
-           ncclSocketToString(&sock->addr, line, /*numericHostForm*/0));
+           ncclSocketToString(&sock->peerAddr, line, /*numericHostForm*/0));
       return ncclRemoteError;
     }
   }
@@ -425,19 +425,22 @@ ncclResult_t ncclSocketListen(struct ncclSocket* sock) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclSocketGetAddr(struct ncclSocket* sock, union ncclSocketAddress* addr) {
+ncclResult_t ncclSocketGetAddr(struct ncclSocket* sock, union ncclSocketAddress* addr, bool isPeer) {
   if (sock == NULL) {
     WARN("ncclSocketGetAddr: pass NULL socket");
     return ncclInvalidArgument;
   }
   if (sock->state != ncclSocketStateReady) return ncclInternalError;
-  memcpy(addr, &sock->addr, sizeof(union ncclSocketAddress));
+  if (isPeer)
+    memcpy(addr, &sock->peerAddr, sizeof(union ncclSocketAddress));
+  else 
+    memcpy(addr, &sock->addr, sizeof(union ncclSocketAddress));
   return ncclSuccess;
 }
 
 static ncclResult_t socketTryAccept(struct ncclSocket* sock) {
   socklen_t socklen = sizeof(union ncclSocketAddress);
-  sock->fd = accept(sock->acceptFd, (struct sockaddr*)&sock->addr, &socklen);
+  sock->fd = accept(sock->acceptFd, (struct sockaddr*)&sock->peerAddr, &socklen);
   if (sock->fd != -1) {
     sock->state = ncclSocketStateAccepted;
   } else if (errno == ENETDOWN || errno == EPROTO || errno == ENOPROTOOPT || errno == EHOSTDOWN ||
@@ -545,7 +548,7 @@ static ncclResult_t socketFinalizeAccept(struct ncclSocket* sock) {
 static ncclResult_t socketResetFd(struct ncclSocket* sock) {
   ncclResult_t ret = ncclSuccess;
   int fd = -1;
-  SYSCHECKGOTO(fd = socket(sock->addr.sa.sa_family, SOCK_STREAM, 0), "socket", ret, cleanup);
+  SYSCHECKGOTO(fd = socket(sock->family, SOCK_STREAM, 0), "socket", ret, cleanup);
   // if sock->fd is valid, close it and reuse its number
   if (sock->fd != -1) {
     SYSCHECKGOTO(dup2(fd, sock->fd), "dup2", ret, cleanup);
@@ -589,7 +592,7 @@ static ncclResult_t socketConnectCheck(struct ncclSocket* sock, int errCode, con
     sock->state = ncclSocketStateConnecting;
   } else {
     sock->state = ncclSocketStateError;
-    WARN("%s: connect to %s failed : %s", funcName, ncclSocketToString(&sock->addr, line), strerror(errCode));
+    WARN("%s: connect to %s failed : %s", funcName, ncclSocketToString(&sock->peerAddr, line), strerror(errCode));
     return ncclSystemError;
   }
   return ncclSuccess;
@@ -597,7 +600,7 @@ static ncclResult_t socketConnectCheck(struct ncclSocket* sock, int errCode, con
 
 static ncclResult_t socketStartConnect(struct ncclSocket* sock) {
   /* blocking/non-blocking connect() is determined by asyncFlag. */
-  int ret = connect(sock->fd, &sock->addr.sa, sock->salen);
+  int ret = connect(sock->fd, &sock->peerAddr.sa, sock->salen);
   return socketConnectCheck(sock, (ret == -1) ? errno : 0, __func__);
 }
 
@@ -695,6 +698,7 @@ ncclResult_t ncclSocketReady(struct ncclSocket* sock, int *running) {
 ncclResult_t ncclSocketConnect(struct ncclSocket* sock) {
 #ifdef ENABLE_TRACE
   char line[SOCKET_NAME_MAXLEN+1];
+  char linePeer[SOCKET_NAME_MAXLEN+1];
 #endif
 
   if (sock == NULL) {
@@ -711,7 +715,15 @@ ncclResult_t ncclSocketConnect(struct ncclSocket* sock) {
     if (sock->state == ncclSocketStateError) return ncclRemoteError;
     return ncclInternalError;
   }
-  TRACE(NCCL_INIT|NCCL_NET,"Connecting to socket %s", ncclSocketToString(&sock->addr, line));
+  SYSCHECK(bind(sock->fd, &sock->addr.sa, sock->salen), "bind");
+
+  /* Get the assigned Port */
+  socklen_t size = sock->salen;
+  SYSCHECK(getsockname(sock->fd, &sock->addr.sa, &size), "getsockname");
+
+#ifdef ENABLE_TRACE
+  TRACE(NCCL_INIT|NCCL_NET,"Connecting to socket local addr: %s, peer addr: %s", ncclSocketToString(&sock->addr, line), ncclSocketToString(&sock->peerAddr, linePeer));
+#endif
 
   sock->state = ncclSocketStateConnecting;
   sock->finalizeCounter = 0;
@@ -791,8 +803,9 @@ exit:
   return ret;
 }
 
-ncclResult_t ncclSocketInit(struct ncclSocket* sock, const union ncclSocketAddress* addr, uint64_t magic, enum ncclSocketType type, volatile uint32_t* abortFlag, int asyncFlag, int customRetry) {
+ncclResult_t ncclSocketInit(struct ncclSocket* sock, const union ncclSocketAddress* addr, const union ncclSocketAddress* peerAddr, uint64_t magic, enum ncclSocketType type, volatile uint32_t* abortFlag, int asyncFlag, int customRetry) {
   ncclResult_t ret = ncclSuccess;
+  int family = -1;
 
   if (sock == NULL) goto exit;
   sock->errorRetries = 0;
@@ -804,24 +817,42 @@ ncclResult_t ncclSocketInit(struct ncclSocket* sock, const union ncclSocketAddre
   sock->fd = -1;
   sock->acceptFd = -1;
   sock->customRetry = customRetry;
+  sock->family = -1;
 
   if (addr) {
-    /* IPv4/IPv6 support */
-    int family;
     memcpy(&sock->addr, addr, sizeof(union ncclSocketAddress));
-    family = sock->addr.sa.sa_family;
-    if (family != AF_INET && family != AF_INET6) {
-      char line[SOCKET_NAME_MAXLEN+1];
-      WARN("ncclSocketInit: connecting to address %s with family %d is neither AF_INET(%d) nor AF_INET6(%d)",
-          ncclSocketToString(&sock->addr, line), family, AF_INET, AF_INET6);
+  } else {
+    memset(&sock->addr, 0, sizeof(union ncclSocketAddress));
+  }
+  if (peerAddr) {
+    memcpy(&sock->peerAddr, peerAddr, sizeof(union ncclSocketAddress));
+  } else {
+    memset(&sock->peerAddr, 0, sizeof(union ncclSocketAddress));
+  }
+  if (addr && peerAddr) {
+    if (addr->sa.sa_family != peerAddr->sa.sa_family) {
+      WARN("ncclSocketInit: local address and peer address family should be the same");
       ret = ncclInternalError;
       goto exit;
     }
+    family = addr->sa.sa_family;
+  } else if (addr) {
+    family = addr->sa.sa_family;
+  } else if (peerAddr) {
+    family = peerAddr->sa.sa_family;
+  }
+  if (addr || peerAddr) {
+    /* IPv4/IPv6 support */
+    if (family != AF_INET && family != AF_INET6) {
+      WARN("ncclSocketInit: socket address family %d is neither AF_INET(%d) nor AF_INET6(%d)",
+          family, AF_INET, AF_INET6);
+      ret = ncclInternalError;
+      goto exit;
+    }
+    sock->family = family;
     sock->salen = (family == AF_INET) ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
     // in case of error, we close the fd before returning as it's unclear if the caller has to use ncclSocketClose for cleanup
     NCCLCHECKGOTO(socketResetFd(sock), ret, fail);
-  } else {
-    memset(&sock->addr, 0, sizeof(union ncclSocketAddress));
   }
 exit:
   return ret;

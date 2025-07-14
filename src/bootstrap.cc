@@ -258,7 +258,7 @@ static ncclResult_t setFilesLimit() {
 static ncclResult_t rootSend(union ncclSocketAddress* addr, uint64_t magic, union ringConnectInfo* info) {
   ncclResult_t res = ncclSuccess;
   struct ncclSocket sock;
-  NCCLCHECKGOTO(ncclSocketInit(&sock, addr, magic, ncclSocketTypeBootstrap), res, fail);
+  NCCLCHECKGOTO(ncclSocketInit(&sock, &bootstrapNetIfAddr, addr, magic, ncclSocketTypeBootstrap), res, fail);
   NCCLCHECKGOTO(ncclSocketConnect(&sock), res, fail);
   NCCLCHECKGOTO(socketSend(&sock, info, sizeof(union ringConnectInfo)), res, fail);
   NCCLCHECK(ncclSocketClose(&sock));
@@ -381,7 +381,7 @@ ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFrom
   pthread_t thread;
 
   NCCLCHECK(ncclCalloc(&listenSock, 1));
-  NCCLCHECKGOTO(ncclSocketInit(listenSock, &handle->addr, handle->magic, ncclSocketTypeBootstrap, NULL, 0), ret, fail);
+  NCCLCHECKGOTO(ncclSocketInit(listenSock, &handle->addr, NULL, handle->magic, ncclSocketTypeBootstrap, NULL, 0), ret, fail);
   NCCLCHECKGOTO(ncclSocketListen(listenSock), ret, fail);
   NCCLCHECKGOTO(ncclSocketGetAddr(listenSock, &handle->addr), ret, fail);
 
@@ -470,7 +470,7 @@ struct bootstrapState {
 // helper functions
 static ncclResult_t createListenSocket(struct ncclComm* comm, uint64_t magic, struct ncclSocket* socket, union ncclSocketAddress* addr,
                                        ncclSocketType type) {
-  NCCLCHECK(ncclSocketInit(socket, &bootstrapNetIfAddr, magic, type, comm->abortFlag));
+  NCCLCHECK(ncclSocketInit(socket, &bootstrapNetIfAddr, NULL, magic, type, comm->abortFlag));
   NCCLCHECK(ncclSocketListen(socket));
   NCCLCHECK(ncclSocketGetAddr(socket, addr));
   return ncclSuccess;
@@ -550,7 +550,7 @@ static ncclResult_t netRingConnect(ncclNet_t* net, struct bootstrapListen_t* lis
   return ncclSuccess;
 }
 static ncclResult_t socketRingConnect(ncclSocketAddress* addr, struct ncclSocket* sendSocket, struct ncclSocket* listenSock, struct ncclSocket* recvSocket, uint64_t magic, volatile uint32_t* abortFlag) {
-  NCCLCHECK(ncclSocketInit(sendSocket, addr, magic, ncclSocketTypeBootstrap, abortFlag));
+  NCCLCHECK(ncclSocketInit(sendSocket, &bootstrapNetIfAddr, addr, magic, ncclSocketTypeBootstrap, abortFlag));
   NCCLCHECK(ncclSocketConnect(sendSocket));
   NCCLCHECK(ncclSocketInit(recvSocket));
   NCCLCHECK(ncclSocketAccept(recvSocket, listenSock));
@@ -604,7 +604,7 @@ exit:
 static ncclResult_t sendToRoot(struct ncclBootstrapHandle* handle, struct ncclComm* comm, struct extInfo* info) {
   ncclResult_t ret = ncclSuccess;
   struct ncclSocket sock;
-  NCCLCHECK(ncclSocketInit(&sock, &handle->addr, handle->magic, ncclSocketTypeBootstrap, comm->abortFlag));
+  NCCLCHECK(ncclSocketInit(&sock, &bootstrapNetIfAddr, &handle->addr, handle->magic, ncclSocketTypeBootstrap, comm->abortFlag));
   NCCLCHECKGOTO(ncclSocketConnect(&sock), ret, fail);
   NCCLCHECKGOTO(socketSend(&sock, info, sizeof(struct extInfo)), ret, fail);
   NCCLCHECK(ncclSocketClose(&sock));
@@ -867,7 +867,7 @@ static ncclResult_t socketConnect(void* commState, int peer, int tag, struct ncc
   struct bootstrapState* state = (struct bootstrapState*)commState;
 
   struct socketAckInfo ack = (struct socketAckInfo){.rank = state->rank, .tag = tag};
-  NCCLCHECKGOTO(ncclSocketInit(sock, state->peerP2pAddresses + peer, state->magic, ncclSocketTypeBootstrap, state->abortFlag), ret, fail);
+  NCCLCHECKGOTO(ncclSocketInit(sock, &bootstrapNetIfAddr, state->peerP2pAddresses + peer, state->magic, ncclSocketTypeBootstrap, state->abortFlag), ret, fail);
   NCCLCHECKGOTO(ncclSocketConnect(sock), ret, fail);
   NCCLCHECKGOTO(socketSend(sock, &ack, sizeof(struct socketAckInfo)), ret, fail);
   return ncclSuccess;

@@ -97,7 +97,7 @@ ncclResult_t ncclRasCommInit(struct ncclComm* comm, struct rasRankInit* myRank) 
 
       memcpy(&addr, &myRank->addr, sizeof(addr));
       (addr.sa.sa_family == AF_INET ? addr.sin.sin_port : addr.sin6.sin6_port) = htons(0);
-      NCCLCHECKGOTO(ncclSocketInit(&rasNetListeningSocket, &addr, NCCL_SOCKET_MAGIC, ncclSocketTypeRasNetwork,
+      NCCLCHECKGOTO(ncclSocketInit(&rasNetListeningSocket, &addr, NULL, NCCL_SOCKET_MAGIC, ncclSocketTypeRasNetwork,
                                    /*abortFlag*/nullptr, /*asyncFlag*/1), ret, fail);
       NCCLCHECKGOTO(ncclSocketListen(&rasNetListeningSocket), ret, fail);
       INFO(NCCL_RAS, "RAS network listening socket at %s",
@@ -405,7 +405,7 @@ ncclResult_t rasMsgHandle(struct rasMsg* msg, struct rasSocket* sock) {
   } else if (msg->type == RAS_MSG_COLLRESP) {
     NCCLCHECK(rasMsgHandleCollResp(msg, sock));
   } else {
-    WARN("RAS received unknown message type (%d) from %s", msg->type, ncclSocketToString(&sock->sock.addr, rasLine));
+    WARN("RAS received unknown message type (%d) from %s", msg->type, ncclSocketToString(&sock->sock.peerAddr, rasLine));
     return ncclInternalError;
   }
 
@@ -422,13 +422,13 @@ static ncclResult_t rasMsgHandleConnInit(const struct rasMsg* msg, struct rasSoc
   char line[SOCKET_NAME_MAXLEN+1];
 
   INFO(NCCL_RAS, "RAS handling connInit from %s (version %d, listeningAddr %s, peersHash 0x%lx, deadPeersHash 0x%lx)",
-       ncclSocketToString(&sock->sock.addr, rasLine), msg->connInit.ncclVersion,
+       ncclSocketToString(&sock->sock.peerAddr, rasLine), msg->connInit.ncclVersion,
        ncclSocketToString(&msg->connInit.listeningAddr, line), msg->connInit.peersHash, msg->connInit.deadPeersHash);
 
   if (msg->connInit.ncclVersion != NCCL_VERSION_CODE) {
     // Close any such sockets immediately!  This is basically unrecoverable...
     WARN("NCCL version mismatch with remote peer %s (local: %d, remote %d)",
-         ncclSocketToString(&sock->sock.addr, rasLine), NCCL_VERSION_CODE, msg->connInit.ncclVersion);
+         ncclSocketToString(&sock->sock.peerAddr, rasLine), NCCL_VERSION_CODE, msg->connInit.ncclVersion);
     rasNetSendNack(sock);
     rasSocketTerminate(sock, /*finalize*/true);
     ret = ncclInvalidUsage;
@@ -482,7 +482,7 @@ static ncclResult_t rasMsgHandleConnInit(const struct rasMsg* msg, struct rasSoc
 
   conn->sock = sock;
   sock->conn = conn;
-  memcpy(&sock->sock.addr, &msg->connInit.listeningAddr, sizeof(sock->sock.addr));
+  memcpy(&sock->sock.peerAddr, &msg->connInit.listeningAddr, sizeof(sock->sock.peerAddr));
 
   // Make sure that the connection is part of the right links forming the RAS network.  At this point we only
   // update the expected (non-external) connections; external ones will be added during keep-alive handling.
@@ -518,13 +518,13 @@ exit:
 // Handles the second message sent over a RAS socket as part of the handshake.
 static ncclResult_t rasMsgHandleConnInitAck(const struct rasMsg* msg, struct rasSocket* sock) {
   INFO(NCCL_RAS, "RAS handling connInitAck from %s (nack %d)",
-       ncclSocketToString(&sock->sock.addr, rasLine), msg->connInitAck.nack);
+       ncclSocketToString(&sock->sock.peerAddr, rasLine), msg->connInitAck.nack);
 
   if (msg->connInitAck.nack) {
     // The remote peer doesn't want to talk to us.  The easiest way to prevent it is by declaring it dead.
     // We make a copy of the address because rasConnDisconnect will terminate the rasSocket.
     union ncclSocketAddress addr;
-    memcpy(&addr, &sock->sock.addr, sizeof(addr));
+    memcpy(&addr, &sock->sock.peerAddr, sizeof(addr));
     rasConnDisconnect(&addr);
     (void)rasPeerDeclareDead(&addr);
 
@@ -563,7 +563,7 @@ static ncclResult_t rasNetSendNack(struct rasSocket* sock) {
   int closed = 0;
   int offset;
 
-  INFO(NCCL_RAS, "RAS sending NACK to %s", ncclSocketToString(&sock->sock.addr, rasLine));
+  INFO(NCCL_RAS, "RAS sending NACK to %s", ncclSocketToString(&sock->sock.peerAddr, rasLine));
 
   memset(&msg, '\0', sizeof(msg));
   msg.type = RAS_MSG_CONNINITACK;

@@ -77,6 +77,9 @@ extern __thread struct ncclComm* ncclGroupCommPreconnectHead;
 extern __thread int ncclGroupBlocking;
 
 inline ncclResult_t ncclGroupStartInternal() {
+  if (ncclGroupDepth == 0) {
+    TRACE_CALL("ncclGroupStart()");
+  }
   ncclGroupDepth++;
   return ncclSuccess;
 }

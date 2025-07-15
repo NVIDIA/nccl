@@ -621,6 +621,8 @@ ncclResult_t ncclGroupEndInternal(ncclSimInfo_t* simInfo) {
 
   if ((ret = ncclGroupError) != ncclSuccess) goto fail;
 
+  TRACE_CALL("ncclGroupEnd()");
+
   if (simInfo) {
     memcpy((void*)&realSize, (void*)&simInfo->size, sizeof(size_t));
     realSize = realSize > sizeof(ncclSimInfo_t) ? sizeof(ncclSimInfo_t) : realSize;

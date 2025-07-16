@@ -1,0 +1,22 @@
+name: NCCL request for enhancement
+description: Request for enhancement
+title: "[RFE]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+
+        Thanks for your feedback! Before reporting a new RFE you could quickly check if this already exists in our [existing requests](https://github.com/NVIDIA/nccl/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20label%3Aenhancement).
+        
+        ---
+  - type: textarea
+    id: rfe-description
+    attributes:
+      label: Please provide the below details to ensure we understand your needs
+      description: |
+        * What is the goal of this request?
+        * Who will benefit from this feature?
+        * Is this request for a specific GPU architecture or network infrastructure?
+        * How will this feature improve current workflows or processes?
+        * What is the priority level of this request?

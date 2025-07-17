@@ -38,10 +38,13 @@ Thanks for your understanding and for contributing to NCCL.`;
       // Ignore PRs
       if (issue.pull_request) continue;
 
+      // Ignore issues with label "ongoing"
+      if (issue.labels.some(label => label.name === "ongoing")) continue;
+
       const createdAt = new Date(issue.created_at);
       const updatedAt = new Date(issue.updated_at);
 
-        if (createdAt < sixMonthsAgo && updatedAt < oneMonthAgo) {
+        if (createdAt < sixMonthsAgo && updatedAt < sixMonthsAgo) {
 
         // Add a comment before closing
         await octokit.issues.createComment({

@@ -1259,7 +1259,7 @@ ncclResult_t ncclIbListen(int dev, void* opaqueHandle, void** listenComm) {
   memset(handle, 0, sizeof(struct ncclIbHandle));
   comm->dev = dev;
   handle->magic = NCCL_SOCKET_MAGIC;
-  NCCLCHECKGOTO(ncclSocketInit(&comm->sock, &ncclIbIfAddr, handle->magic, ncclSocketTypeNetIb, NULL, 1), ret, fail);
+  NCCLCHECKGOTO(ncclSocketInit(&comm->sock, &ncclIbIfAddr, NULL, handle->magic, ncclSocketTypeNetIb, NULL, 1), ret, fail);
   NCCLCHECKGOTO(ncclSocketListen(&comm->sock), ret, fail);
   NCCLCHECKGOTO(ncclSocketGetAddr(&comm->sock, &handle->connectAddr), ret, fail);
   *listenComm = comm;
@@ -1294,7 +1294,7 @@ ncclResult_t ncclIbConnect(int dev, ncclNetCommConfig_t* config, void* opaqueHan
 
   NCCLCHECK(ncclIbMalloc((void**)&comm, sizeof(struct ncclIbSendComm)));
   NCCLCHECKGOTO(ncclIbStatsInit(&comm->base.stats), ret, fail);
-  NCCLCHECKGOTO(ncclSocketInit(&comm->base.sock, &handle->connectAddr, handle->magic, ncclSocketTypeNetIb, NULL, 1), ret, fail);
+  NCCLCHECKGOTO(ncclSocketInit(&comm->base.sock, &ncclIbIfAddr, &handle->connectAddr, handle->magic, ncclSocketTypeNetIb, NULL, 1), ret, fail);
   stage->comm = comm;
   stage->state = ncclIbCommStateConnect;
   NCCLCHECKGOTO(ncclSocketConnect(&comm->base.sock), ret, fail);
@@ -2140,7 +2140,7 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, size_t size, int tag, void*
     if (slots[r].size < 0 || slots[r].addr == 0 || slots[r].rkeys[0] == 0) {
       char line[SOCKET_NAME_MAXLEN + 1];
       union ncclSocketAddress addr;
-      ncclSocketGetAddr(&comm->base.sock, &addr);
+      ncclSocketGetAddr(&comm->base.sock, &addr, true);
       WARN("NET/IB : req %d/%d tag %x peer %s posted incorrect receive info: size %ld addr %lx rkeys[0]=%x",
         r, nreqs, tag, ncclSocketToString(&addr, line), slots[r].size, slots[r].addr, slots[r].rkeys[0]);
       return ncclInternalError;
@@ -2444,7 +2444,7 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
           struct ibv_wc *wc = wcs+w;
           if (wc->status != IBV_WC_SUCCESS) {
             union ncclSocketAddress addr;
-            ncclSocketGetAddr(r->sock, &addr);
+            ncclSocketGetAddr(r->sock, &addr, true);
             char localGidString[INET6_ADDRSTRLEN] = "";
             char remoteGidString[INET6_ADDRSTRLEN] = "";
             const char* localGidStr = NULL, *remoteGidStr = NULL;
@@ -2462,7 +2462,7 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
           }
 
           union ncclSocketAddress addr;
-          ncclSocketGetAddr(r->sock, &addr);
+          ncclSocketGetAddr(r->sock, &addr, true);
           struct ncclIbRequest* req = r->base->reqs+(wc->wr_id & 0xff);
 
           #ifdef ENABLE_TRACE

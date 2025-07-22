@@ -751,11 +751,12 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   do {
     // Compute intra-process ranks
     int intraProcRank0 = -1, intraProcRank = -1, intraProcRanks = 0;
-    for (int i = 0; i < nranks; i++) comm->minCompCap = std::min(comm->minCompCap, comm->peerInfo[i].cudaCompCap);
-    for (int i = 0; i < nranks; i++) comm->maxCompCap = std::max(comm->maxCompCap, comm->peerInfo[i].cudaCompCap);
 
     comm->nvlsRegSupport = 1;
     for (int i = 0; i < nranks; i++) {
+      comm->minCompCap = std::min(comm->minCompCap, comm->peerInfo[i].cudaCompCap);
+      comm->maxCompCap = std::max(comm->maxCompCap, comm->peerInfo[i].cudaCompCap);
+
       if ((comm->peerInfo[i].hostHash == comm->peerInfo[rank].hostHash)
           && (comm->peerInfo[i].pidHash == comm->peerInfo[rank].pidHash)) {
         // Rank is in same process
@@ -767,17 +768,10 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
           comm->intraNext = comm->peerInfo[i].comm;
         }
       }
-
-      if (comm->nvlsRegSupport) {
-        for (int j = i + 1; j < nranks; j++) {
-          if (comm->peerInfo[i].hostHash == comm->peerInfo[j].hostHash &&
-            comm->peerInfo[i].pidHash == comm->peerInfo[j].pidHash) {
-            comm->nvlsRegSupport = 0;
-            break;
-          }
-        }
-      }
     }
+
+    // Have NVLS Reg support if there is only one intra process rank
+    comm->nvlsRegSupport = (intraProcRanks == 1) ? 1 : 0;
 
     // Buffer Registration is not supported with MNNVL
     if (comm->MNNVL) comm->nvlsRegSupport = 0;

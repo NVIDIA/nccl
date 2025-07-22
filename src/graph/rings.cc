@@ -4,6 +4,8 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
+ #include <vector>
+
 #include "core.h"
 
 void dumpLine(int* values, int nranks, const char* prefix) {
@@ -25,7 +27,7 @@ void dumpLine(int* values, int nranks, const char* prefix) {
   INFO(NCCL_INIT, "%s", line);
 }
 
-ncclResult_t ncclBuildRings(int nrings, int* rings, int rank, int nranks, int* prev, int* next) {
+int ncclBuildRings(int nrings, int* rings, int rank, int nranks, int* prev, int* next) {
   for (int r=0; r<nrings; r++) {
     char prefix[40];
     /*sprintf(prefix, "[%d] Channel %d Prev : ", rank, r);
@@ -33,8 +35,10 @@ ncclResult_t ncclBuildRings(int nrings, int* rings, int rank, int nranks, int* p
     sprintf(prefix, "[%d] Channel %d Next : ", rank, r);
     dumpLine(next+r*nranks, nranks, prefix);*/
 
+    std::vector<bool> rankBitSet(nranks, false);
     int current = rank;
     for (int i=0; i<nranks; i++) {
+      rankBitSet[current] = true;
       rings[r*nranks+i] = current;
       current = next[r*nranks+current];
     }
@@ -46,14 +50,7 @@ ncclResult_t ncclBuildRings(int nrings, int* rings, int rank, int nranks, int* p
     }
     // Check that all ranks are there
     for (int i=0; i<nranks; i++) {
-      int found = 0;
-      for (int j=0; j<nranks; j++) {
-        if (rings[r*nranks+j] == i) {
-          found = 1;
-          break;
-        }
-      }
-      if (found == 0) {
+      if (!rankBitSet[i]) {
         WARN("Error : ring %d does not contain rank %d", r, i);
         return ncclInternalError;
       }

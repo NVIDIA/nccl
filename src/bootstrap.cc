@@ -4,6 +4,10 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
+#include <atomic>
+#include <future>
+#include <thread>
+
 #include "nccl.h"
 #include "core.h"
 #include "utils.h"
@@ -1012,26 +1016,51 @@ exit:
   if (recvDataHandle) netDereg(net, recvComm, &recvDataHandle);
   return res;
 }
-static ncclResult_t socketRingAllGather(struct ncclSocket* sendSock, struct ncclSocket* recvSock, int rank, int nranks, char* data, int size) {
+static ncclResult_t socketRingAllGather(struct ncclSocket* nextSock, struct ncclSocket* prevSock, int rank, int nranks, char* data, int size) {
   ncclResult_t res = ncclSuccess;
   uint64_t tFirst = 0, tRest = 0;
-  /* Simple ring based AllGather
-   * At each step i receive data from (rank-i-1) from prev
-   * and send previous step's data from (rank-i) to next
-   */
+   /* Simple ring based AllGather but bi-directional. At each step a process
+    * will do send and receive data to both of its peers. At each step i, we
+    * step i, we
+    * - send data of (rank + i) to previous peer
+    * - send data of (rank - i) to next peer
+    * - receive data of (rank - i - 1) from previous peer
+    * - receive data of (rank + i + 1) from next peer
+    * With this we conclude AllGather in N/2 steps.
+    */
   TRACE(NCCL_BOOTSTRAP, "socketRingAllGather started");
   BOOTSTRAP_PROF_OPEN(tFirst);
-  for (int i = 0; i < nranks - 1; i++) {
-    size_t rslice = (rank - i - 1 + nranks) % nranks;
-    size_t sslice = (rank - i + nranks) % nranks;
-    void* recv_data = data + rslice * size;
-    void* send_data = data + sslice * size;
-    NCCLCHECKGOTO(socketSendRecv(sendSock, send_data, size, recvSock, recv_data, size), res, exit);
-    if (i == 0) {
-      BOOTSTRAP_PROF_CLOSE(tFirst);
-      BOOTSTRAP_PROF_OPEN(tRest);
+  std::atomic<bool> first{true};
+  auto forwardLoop = [&]() {
+    for (int i=0; i < (nranks / 2); i++) {
+      size_t ssliceNext = (rank - i + nranks) % nranks;
+      size_t rslicePrev = (rank - i - 1 + nranks) % nranks;
+      NCCLCHECK(ncclSocketSend(nextSock, data + (ssliceNext * size), size));
+      NCCLCHECK(ncclSocketRecv(prevSock, data + (rslicePrev * size), size));
+      if (i == 0 && first.exchange(false)) {
+        BOOTSTRAP_PROF_CLOSE(tFirst);
+        BOOTSTRAP_PROF_OPEN(tRest);
+      }
     }
-  }
+    return ncclSuccess;
+  };
+  auto backwardLoop = [&]() {
+    for (int i=0; i < (nranks / 2); i++) {
+      size_t sslicePrev = (rank + i) % nranks;
+      size_t rsliceNext = (rank + i + 1) % nranks;
+      NCCLCHECK(ncclSocketSend(prevSock, data + (sslicePrev * size), size));
+      NCCLCHECK(ncclSocketRecv(nextSock, data + (rsliceNext * size), size));
+      if (i == 0 && first.exchange(false)) {
+        BOOTSTRAP_PROF_CLOSE(tFirst);
+        BOOTSTRAP_PROF_OPEN(tRest);
+      }
+    }
+    return ncclSuccess;
+  };
+  auto forwardLoopFuture = std::async(std::launch::async, forwardLoop);
+  auto backwardLoopFuture = std::async(std::launch::async, backwardLoop);
+  NCCLCHECKGOTO(forwardLoopFuture.get(), res, exit);
+  NCCLCHECKGOTO(backwardLoopFuture.get(), res, exit);
   BOOTSTRAP_PROF_CLOSE(tRest);
   TRACE(NCCL_BOOTSTRAP | NCCL_PROFILE, "socketRingAllGather first message in %f (%f MB/sec), rest in %f (%f MB/sec)", tFirst / 1e9, (size / 1e6) / (tFirst / 1e9), tRest / 1e9, (nranks - 1) * (size / 1e6) / (tRest / 1e9));
 exit:

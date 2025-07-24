@@ -104,7 +104,6 @@ Set the `NCCL_TUNER_CONFIG_FILE` environment variable to specify the config file
 
 ```bash
 export NCCL_TUNER_CONFIG_FILE=/path/to/your/tuner.conf
-export LD_LIBRARY_PATH=/path/to/plugin:$LD_LIBRARY_PATH
 mpirun -np 4 your_nccl_application
 ```
 
@@ -158,7 +157,7 @@ When channels is set to `-1`, NCCL's default channel selection logic is preserve
 
 1. **Config file not found**: Check the file path and permissions
 2. **Configurations not applied**: Verify the collective type, size ranges, algorithm/protocol names, and topology parameters
-3. **Plugin not loaded**: Ensure `LD_LIBRARY_PATH` includes the plugin directory
+3. **Plugin not loaded**: Ensure `LD_LIBRARY_PATH` includes the plugin directory and that `NCCL_TUNER_PLUGIN` either specifies the plugin name, or an absolute path to the plugin shared library.
 4. **No effect on performance**: Check that NCCL is actually using the tuner plugin with `NCCL_DEBUG=INFO`
 5. **Topology mismatch**: Verify that nNodes and nRanks match your actual setup, or use -1 for wildcards
 6. **CSV parsing errors**: Ensure no spaces after commas, or quote fields containing spaces

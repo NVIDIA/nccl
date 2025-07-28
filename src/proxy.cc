@@ -1105,7 +1105,7 @@ ncclResult_t ncclProxyConnect(struct ncclComm* comm, int transport, int send, in
   sock = sharedProxyState->peerSocks + proxyConn->tpLocalRank;
   NCCLCHECK(ncclSocketReady(sock, &ready));
   if (!ready) {
-    NCCLCHECK(ncclSocketInit(sock, sharedProxyState->peerAddresses+proxyConn->tpRank, comm->sharedRes->magic, ncclSocketTypeProxy, comm->abortFlag));
+    NCCLCHECK(ncclSocketInit(sock, NULL, sharedProxyState->peerAddresses+proxyConn->tpRank, comm->sharedRes->magic, ncclSocketTypeProxy, comm->abortFlag));
     NCCLCHECK(ncclSocketConnect(sock));
   }
 
@@ -1855,7 +1855,7 @@ ncclResult_t ncclProxyStop(struct ncclComm* comm) {
         // We need to send a ncclProxyMsgStop message to our own proxy
         struct ncclSocket sock;
         int type = ncclProxyMsgStop;
-        NCCLCHECK(ncclSocketInit(&sock, sharedProxyState->peerAddresses + comm->topParentRanks[comm->rank], comm->sharedRes->magic, ncclSocketTypeProxy, comm->abortFlag));
+        NCCLCHECK(ncclSocketInit(&sock, NULL, sharedProxyState->peerAddresses + comm->topParentRanks[comm->rank], comm->sharedRes->magic, ncclSocketTypeProxy, comm->abortFlag));
         if (ncclSocketConnect(&sock) == ncclSuccess) {
           (void)ncclSocketSend(&sock, &type, sizeof(int));
         }

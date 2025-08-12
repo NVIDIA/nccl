@@ -50,8 +50,8 @@ define COMPILE_SYM
  $(NVCC) $(NVCUFLAGS_SYM) $3 -dw $2 -o $1
 endef
 
-DEPENDS.cu = $(NVCC) $(NVCUFLAGS) -M -dc $1
-DEPENDS.cc = $(CXX) $(CXXFLAGS) -M -c $1
+DEPENDS.cu = $(NVCC) $(NVCUFLAGS) -MM -dc $1
+DEPENDS.cc = $(CXX) $(CXXFLAGS) -MM -c $1
 define DEPENDS
 @$(SAY) "Dependencies" $2;\
  mkdir -p $(dir $1);\

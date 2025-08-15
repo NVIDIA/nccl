@@ -7,16 +7,32 @@
 
 #include <dlfcn.h>
 #include "debug.h"
+#include "checks.h"
 #include "nccl_tuner.h"
 
 static ncclTuner_v4_t* ncclTuner_v4;
+static ncclTuner_t ncclTuner;
+
+static ncclResult_t ncclTuner_finalize(void* ctx) {
+  return ncclTuner_v4->destroy(ctx);
+}
+
+static ncclResult_t ncclTuner_init(void** context, uint64_t commId, size_t nRanks, size_t nNodes, ncclDebugLogger_t logfn,
+                                   ncclNvlDomainInfo_v5_t* nvlDomainInfo, ncclTunerConstants_t* /*constants*/) {
+  NCCLCHECK(ncclTuner_v4->init(nRanks, nNodes, logfn, context));
+  ncclTuner.getCollInfo = ncclTuner_v4->getCollInfo;
+  ncclTuner.finalize = ncclTuner_finalize;
+  return ncclSuccess;
+}
 
 ncclTuner_t* getNcclTuner_v4(void* lib) {
   ncclTuner_v4 = (ncclTuner_v4_t*)dlsym(lib, "ncclTunerPlugin_v4");
   if (ncclTuner_v4) {
-    INFO(NCCL_ENV|NCCL_TUNING, "TUNER/Plugin: Using tuner plugin %s", ncclTuner_v4->name);
-    return ncclTuner_v4;
+    ncclTuner.name = ncclTuner_v4->name;
+    ncclTuner.init = ncclTuner_init;
+
+    INFO(NCCL_INIT|NCCL_TUNING, "TUNER/Plugin: Using %s (v4)", ncclTuner_v4->name);
+    return &ncclTuner;
   }
-  INFO(NCCL_ENV|NCCL_TUNING, "TUNER/Plugin: Failed to find ncclTunerPlugin_v4 symbol.");
   return NULL;
 }

@@ -32,13 +32,8 @@ CUDA_MINOR = $(shell echo $(CUDA_VERSION) | cut -d "." -f 2)
 
 # You should define NVCC_GENCODE in your environment to the minimal set
 # of archs to reduce compile time.
-CUDA8_GENCODE = -gencode=arch=compute_50,code=sm_50 \
-                -gencode=arch=compute_60,code=sm_60 \
+CUDA8_GENCODE = -gencode=arch=compute_60,code=sm_60 \
                 -gencode=arch=compute_61,code=sm_61
-ifeq ($(shell test "0$(CUDA_MAJOR)" -lt 12; echo $$?),0)
-# SM35 is deprecated from CUDA12.0 onwards
-CUDA8_GENCODE += -gencode=arch=compute_35,code=sm_35
-endif
 CUDA9_GENCODE = -gencode=arch=compute_70,code=sm_70
 CUDA10_GENCODE = -gencode=arch=compute_75,code=sm_75
 CUDA11_GENCODE = -gencode=arch=compute_80,code=sm_80

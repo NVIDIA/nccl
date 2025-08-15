@@ -45,6 +45,40 @@ typedef enum {
 
 #define NCCL_ALGO_PROTO_IGNORE -1.0
 
+#define NCCL_HW_NVLINK 0
+#define NCCL_HW_PCI 1
+#define NCCL_HW_NET 2
+#define NCCL_NUM_HW_LINKS 3
+
+#define NCCL_VOLTA_COMPCAP_IDX 0
+#define NCCL_AMPERE_COMPCAP_IDX 1
+#define NCCL_HOPPER_COMPCAP_IDX 2
+#define NCCL_BLACKWELL_COMPCAP_IDX 3
+#define NCCL_NUM_COMPCAPS 4
+
+#define NCCL_TUNING_SCALE_1NODE 0
+#define NCCL_TUNING_SCALE_2NODES 1
+#define NCCL_TUNING_SCALE_4NODES 2
+#define NCCL_NUM_TUNING_SCALES 3
+
+typedef struct {
+  int nNvlDomains;                    // number of NVLink domains
+  int minRanksPerNvlDomain;           // minimum ranks across all NVLink domains
+  int maxRanksPerNvlDomain;           // maximum ranks across all NVLink domains
+} ncclNvlDomainInfo_v5_t;
+
+typedef struct {
+  double baseLatencies [NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
+  double hwLatencies [NCCL_NUM_HW_LINKS][NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
+
+  double llMaxBws [NCCL_NUM_COMPCAPS][NCCL_NUM_TUNING_SCALES];
+  double perChMaxRingLL128Bws [NCCL_NUM_COMPCAPS][NCCL_NUM_TUNING_SCALES];
+  double perChMaxTreeLL128Bws [NCCL_NUM_COMPCAPS][NCCL_NUM_TUNING_SCALES];
+  double perChMaxTreeBws [NCCL_NUM_COMPCAPS][NCCL_NUM_TUNING_SCALES];
+
+
+} ncclTunerConstants_v5_t;
+
 // API to be implemented by external tuner
 typedef struct {
   // Name of the tuner
@@ -52,12 +86,17 @@ typedef struct {
 
   // Initializes tuner states.
   // Inputs:
+  //   - commId: communicator identifier
   //   - nRanks: number of ranks in current communicator. Each communicator initialize its own tuner.
   //   - nNodes: number of nodes in current communicator.
   //   - logFunction: a logFunction can be useful to integrate logging together with NCCL core.
+  //   - nvlDomainInfo: NVL domain information struct
   // Outputs:
   //   - context: tuner context object
-  ncclResult_t (*init)(size_t nRanks, size_t nNodes, ncclDebugLogger_t logFunction, void **context);
+  // Input/Output:
+  //   - constants: tuner constants
+  ncclResult_t (*init)(void** ctx, uint64_t commId, size_t nRanks, size_t nNodes, ncclDebugLogger_t logFunction,
+                      ncclNvlDomainInfo_v5_t* nvlDomainInfo, ncclTunerConstants_v5_t* constants);
 
   // Gets info (algo, protocol, number of ctas and threads) for a given collective.
   // Inputs:
@@ -87,11 +126,13 @@ typedef struct {
 
   // Terminates the plugin and cleans up any resources that the plugin allocated.
   // context: tuner context object
-  ncclResult_t (*destroy)(void* context);
-} ncclTuner_v4_t;
+  ncclResult_t (*finalize)(void* context);
+} ncclTuner_v5_t;
 
-typedef ncclTuner_v4_t ncclTuner_t;
+typedef ncclTuner_v5_t ncclTuner_t;
+typedef ncclNvlDomainInfo_v5_t ncclNvlDomainInfo_t;
+typedef ncclTunerConstants_v5_t ncclTunerConstants_t;
 
-#define NCCL_TUNER_PLUGIN_SYMBOL "ncclTunerPlugin_v4"
+#define NCCL_TUNER_PLUGIN_SYMBOL "ncclTunerPlugin_v5"
 
 #endif

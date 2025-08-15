@@ -124,6 +124,13 @@ static ncclResult_t xmlGetAttrUint64(struct ncclXmlNode* node, const char* attrN
   return ncclSuccess;
 }
 
+static ncclResult_t xmlGetAttrUint64Default(struct ncclXmlNode* node, const char* attrName, uint64_t* value, uint64_t defaultValue) {
+  const char* str;
+  NCCLCHECK(xmlGetAttr(node, attrName, &str));
+  *value = str ? strtoull(str, NULL, 0) : defaultValue;
+  return ncclSuccess;
+}
+
 static ncclResult_t xmlGetAttrLong(struct ncclXmlNode* node, const char* attrName, int64_t* value) {
   const char* str;
   NCCLCHECK(xmlGetAttrStr(node, attrName, &str));

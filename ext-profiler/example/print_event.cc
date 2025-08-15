@@ -5,15 +5,59 @@
  ************************************************************************/
 
 #include <stdio.h>
+#include "err.h"
 #include "profiler.h"
 #include "event.h"
 #include "print_event.h"
+#include <cuda_runtime.h>
 
 #define __hidden __attribute__ ((visibility("hidden")))
 
 // FIXME: chrome tracing asynchronous events (following used) allow event nesting for events that have same id and category
 // It appears that nesting more than three events causes issues. Therefore, every event is given an increasing id and a
-// category that matches the type of event (GROUP, COLL, P2P, PROXY, NET)
+// category that matches the type of event (GROUP API, COLL API, P2P API, GROUP, COLL, P2P, PROXY, NET)
+static __thread int groupApiId;
+__hidden void printGroupApiEventHeader(FILE* fh, struct groupApi* event) {
+  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"GROUP_API\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"groupApiId\": %d, \"groupDepth\":%d}},\n",
+          "Group API", groupApiId, getpid(), 1, event->startTs, event->groupApiId, event->groupDepth);
+}
+
+__hidden void printGroupApiEventTrailer(FILE* fh, struct groupApi* event) {
+  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"GROUP_API\", \"ph\": \"e\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f},\n",
+          "Group API", groupApiId++, getpid(), 1, event->stopTs);
+}
+
+static __thread int p2pApiId;
+__hidden void printP2pApiEventHeader(FILE* fh, struct p2pApi* event) {
+  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"P2P_API\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"count\": %lu, \"datatype\": %s, \"GraphCaptured\":%d, \"Stream\": %p}},\n",
+      event->func, p2pApiId, getpid(), 1, event->startTs, event->count, event->datatype, event->graphCaptured, event->stream);
+}
+
+__hidden void printP2pApiEventTrailer(FILE* fh, struct p2pApi* event) {
+  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"P2P_API\", \"ph\": \"e\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f},\n",
+          event->func, p2pApiId++, getpid(), 1, event->stopTs);
+}
+
+static __thread int collApiId;
+__hidden void printCollApiEventHeader(FILE* fh, struct collApi* event) {
+  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"COLL_API\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"count\": %lu, \"datatype\": %s, \"root\": %d, \"GraphCaptured\":%d, \"Stream\": %p}},\n",
+      event->func, collApiId, getpid(), 1, event->startTs, event->count, event->datatype, event->root, event->graphCaptured, event->stream);
+}
+
+__hidden void printCollApiEventTrailer(FILE* fh, struct collApi* event) {
+  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"COLL_API\", \"ph\": \"e\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f},\n",
+      event->func, collApiId++, getpid(), 1, event->stopTs);
+}
+
+static __thread int kernelLaunchId;
+__hidden void printKernelLaunchEventHeader(FILE* fh, struct kernelLaunch* event) {
+  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"KERNEL_LAUNCH\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"groupId\": %d, \"Stream\": %p}},\n", "KernelLaunch", kernelLaunchId, getpid(), 1, event->startTs, event->kernelLaunchId, event->stream);
+}
+
+__hidden void printKernelLaunchEventTrailer(FILE* fh, struct kernelLaunch* event) {
+  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"KERNEL_LAUNCH\", \"ph\": \"e\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f},\n", "KernelLaunch", kernelLaunchId++, getpid(), 1, event->stopTs);
+}
+
 static __thread int groupId;
 __hidden void printGroupEventHeader(FILE* fh, struct group* event) {
   fprintf(fh, "{\"name\": \"%s\", \"cat\": \"GROUP\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"groupId\": %d}},\n",
@@ -28,7 +72,7 @@ __hidden void printGroupEventTrailer(FILE* fh, struct group* event) {
 static __thread int collId;
 __hidden void printCollEventHeader(FILE* fh, struct collective* event) {
   fprintf(fh, "{\"name\": \"%s\", \"cat\": \"COLL\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"SeqNum\": %lu, \"CommHash\": %lu, \"Rank\": %d, \"Count\": %lu, \"Datatype\": \"%s\", \"Algorithm\": \"%s\", \"Protocol\": \"%s\", \"nChannels\": %d}},\n",
-          event->base.func, collId, getpid(), 1, event->base.startTs, event->seqNumber, event->base.parent->ctx->commHash, event->base.rank, event->count, event->datatype, event->algo, event->proto, event->nChannels);
+          event->base.func, collId, getpid(), 1, event->base.startTs, event->seqNumber, ((struct collApi*)event->base.parent)->ctx->commHash, event->base.rank, event->count, event->datatype, event->algo, event->proto, event->nChannels);
 }
 
 __hidden void printCollEventTrailer(FILE* fh, struct collective* event) {
@@ -39,7 +83,7 @@ __hidden void printCollEventTrailer(FILE* fh, struct collective* event) {
 static __thread int p2pId;
 __hidden void printP2pEventHeader(FILE* fh, struct p2p* event) {
   fprintf(fh, "{\"name\": \"%s\", \"cat\": \"P2P\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"CommHash\": %lu, \"Rank\": %d, \"Peer\": %d, \"Count\": %lu, \"Datatype\": \"%s\", \"nChannels\": %d}},\n",
-          event->base.func, p2pId, getpid(), 1, event->base.startTs, event->base.parent->ctx->commHash, event->base.rank, event->peer, event->count, event->datatype, event->nChannels);
+          event->base.func, p2pId, getpid(), 1, event->base.startTs, ((struct p2pApi*)event->base.parent)->ctx->commHash, event->base.rank, event->peer, event->count, event->datatype, event->nChannels);
 }
 
 __hidden void printP2pEventTrailer(FILE* fh, struct p2p* event) {
@@ -173,7 +217,7 @@ void debugEvent(void* eHandle, const char* tag) {
   char filename[64] = { 0 };
   sprintf(filename, "EventDebug-%d", getpid());
   FILE* fh = fopen(filename, "a+");
-  uint8_t type = *(uint8_t *)eHandle;
+  uint64_t type = *(uint64_t *)eHandle;
   if (type == ncclProfileGroup) {
     struct group* event = (struct group *)eHandle;
     fprintf(fh, "Group event %p tag = %s {\n", event, tag);
@@ -241,8 +285,51 @@ void debugEvent(void* eHandle, const char* tag) {
 
 void printEvent(FILE* fh, void* handle) {
   if (handle == NULL || fh == NULL) return;
-  uint8_t type = *(uint8_t *)handle;
-  if (type == ncclProfileGroup) {
+  uint64_t type = *(uint64_t *)handle;
+  if (type == ncclProfileGroupApi) {
+    struct groupApi* g = (struct groupApi*) handle;
+    printGroupApiEventHeader(fh, g);
+    struct kernelLaunch* kernelLaunchHead = profilerQueueHead(&g->kernelLaunchEvents);
+    while (kernelLaunchHead != NULL) {
+      printEvent(fh, kernelLaunchHead);
+      kernelLaunchHead = kernelLaunchHead->next;
+    }
+    struct collApi* collApiHead = profilerQueueHead(&g->collApiEvents);
+    while (collApiHead != NULL) {
+      printEvent(fh, collApiHead);
+      collApiHead = collApiHead->next;
+    }
+    struct p2pApi* p2pApiHead = profilerQueueHead(&g->p2pApiEvents);
+    while (p2pApiHead != NULL) {
+      printEvent(fh, p2pApiHead);
+      p2pApiHead = p2pApiHead->next;
+    }
+    printGroupApiEventTrailer(fh, g);
+  } else if (type == ncclProfileCollApi) {
+    struct collApi* collApiEvent = (struct collApi *) handle;
+    printCollApiEventHeader(fh, collApiEvent);
+    struct taskEventBase* base = taskEventQueueHead(collApiEvent);
+    while (base) {
+      struct taskEventBase* next = base->next;
+      printEvent(fh, base);
+      base = next;
+    }
+    printCollApiEventTrailer(fh, collApiEvent);
+  } else if (type == ncclProfileP2pApi) {
+    struct p2pApi* p2pApiEvent = (struct p2pApi *) handle;
+    printP2pApiEventHeader(fh, p2pApiEvent);
+    struct taskEventBase* base = taskEventQueueHead(p2pApiEvent);
+    while (base) {
+      struct taskEventBase* next = base->next;
+      printEvent(fh, base);
+      base = next;
+    }
+    printP2pApiEventTrailer(fh, p2pApiEvent);
+  } else if (type == ncclProfileKernelLaunch) {
+    struct kernelLaunch* kernelLaunchEvent = (struct kernelLaunch *) handle;
+    printKernelLaunchEventHeader(fh, kernelLaunchEvent);
+    printKernelLaunchEventTrailer(fh, kernelLaunchEvent);
+  } else if (type == ncclProfileGroup) {
     struct group* g = (struct group *)handle;
     printGroupEventHeader(fh, g);
     struct taskEventBase* base = taskEventQueueHead(g);

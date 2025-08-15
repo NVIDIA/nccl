@@ -36,7 +36,11 @@ ncclResult_t ncclMnnvlCheck(struct ncclComm* comm) {
     nvmlGpuFabricInfoV_t *fabricInfo2 = &comm->peerInfo[i].fabricInfo;
     // Check if the cluster UUID and cliqueId match
     // A zero UUID means we don't have MNNVL fabric info - disable MNNVL
-    if ((((long *)&fabricInfo2->clusterUuid)[0]|((long *)fabricInfo2->clusterUuid)[1]) == 0) return ncclSuccess;
+    unsigned long uuid0 = 0;
+    unsigned long uuid1 = 0;
+    memcpy(&uuid0, fabricInfo2->clusterUuid, sizeof(uuid0));
+    memcpy(&uuid1, fabricInfo2->clusterUuid + sizeof(uuid0), sizeof(uuid1));
+    if ((uuid0 | uuid1) == 0) return ncclSuccess;
     if ((memcmp(fabricInfo1->clusterUuid, fabricInfo2->clusterUuid, NVML_GPU_FABRIC_UUID_LEN) == 0) &&
         (fabricInfo1->cliqueId == fabricInfo2->cliqueId)) {
       if (i == comm->rank) {

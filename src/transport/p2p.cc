@@ -955,6 +955,8 @@ ncclResult_t ncclIpcLocalRegisterBuffer(ncclComm* comm, const void* userbuff, si
   ncclResult_t ret = ncclSuccess;
   struct ncclReg *regRecord = NULL;
   bool isValid = false;
+  void *baseAddr = NULL;
+  size_t baseSize = 0;
 
   *regBufFlag = 0;
   *offsetOut = 0;
@@ -962,8 +964,11 @@ ncclResult_t ncclIpcLocalRegisterBuffer(ncclComm* comm, const void* userbuff, si
   if (comm && userbuff && buffSize > 0 && nPeers > 0) {
     NCCLCHECKGOTO(ncclRegFind(comm, userbuff, buffSize, &regRecord), ret, fail);
     NCCLCHECKGOTO(ncclRegLocalIsValid(regRecord, &isValid), ret, fail);
-    if (isValid)
+    if (isValid) {
+      CUCHECKGOTO(cuMemGetAddressRange((CUdeviceptr *)&baseAddr, &baseSize, (CUdeviceptr)userbuff), ret, fail);
+      if ((uint64_t)baseAddr + baseSize < (uint64_t)userbuff + buffSize) goto exit;
       NCCLCHECKGOTO(ipcRegisterBuffer(comm, userbuff, buffSize, peerRanks, nPeers, type, regRecord, regBufFlag, offsetOut, peerRmtAddrsOut, NULL), ret, fail);
+    }
   }
 
 exit:
@@ -1001,6 +1006,7 @@ ncclResult_t ncclIpcGraphRegisterBuffer(ncclComm* comm, const void* userbuff, si
   *peerRmtAddrsOut = NULL;
   if (comm && userbuff && buffSize > 0 && nPeers > 0) {
     CUCHECKGOTO(cuMemGetAddressRange((CUdeviceptr*)&baseAddr, &baseSize, (CUdeviceptr)userbuff), ret, fail);
+    if ((uint64_t)baseAddr + baseSize < (uint64_t)userbuff + buffSize) goto exit;
     NCCLCHECKGOTO(ncclCommGraphRegister(comm, baseAddr, baseSize, (void**)&regRecord), ret, fail);
     NCCLCHECKGOTO(ipcRegisterBuffer(comm, userbuff, buffSize, peerRanks, nPeers, type, regRecord, regBufFlag, offsetOut, peerRmtAddrsOut, &isLegacyIpc), ret, fail);
     if (*regBufFlag) {
@@ -1113,88 +1119,6 @@ static ncclResult_t p2pProxyDeregister(struct ncclProxyConnection* connection, s
 
 exit:
   *done = 1;
-  return ret;
-fail:
-  goto exit;
-}
-
-ncclResult_t ncclIpcSymmetricInit(struct ncclComm* comm) {
-  CUCHECK(cuMemAddressReserve((CUdeviceptr*)&comm->baseUCSymPtr, comm->baseStride * comm->localRanks, NCCL_MAX_PAGE_SIZE, 0, 0));
-  return ncclSuccess;
-}
-
-ncclResult_t ncclIpcSymmetricFinalize(struct ncclComm* comm) {
-  if (comm->baseUCSymPtr) {
-    CUCHECK(cuMemAddressFree((CUdeviceptr)comm->baseUCSymPtr, comm->baseStride * comm->localRanks));
-  }
-  return ncclSuccess;
-}
-
-ncclResult_t ncclIpcSymmetricMap(struct ncclComm* comm, size_t offset, size_t size, CUmemGenericAllocationHandle memHandle, void** symPtr) {
-  ncclResult_t ret = ncclSuccess;
-  CUmemGenericAllocationHandle impHandle;
-  int impFd = -1;
-  ncclCuDesc* desc = NULL;
-  CUmemAccessDesc accessDesc = {};
-
-  assert(offset % NCCL_REC_PAGE_SIZE == 0 && size % NCCL_REC_PAGE_SIZE == 0);
-  NCCLCHECKGOTO(ncclCalloc(&desc, comm->localRanks), ret, fail);
-  if (ncclCuMemHandleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
-    memcpy(&desc[comm->localRank].data, &memHandle, sizeof(CUmemGenericAllocationHandle));
-  } else {
-    CUCHECKGOTO(cuMemExportToShareableHandle(&desc[comm->localRank].handle, memHandle, ncclCuMemHandleType, 0), ret, fail);
-  }
-
-  NCCLCHECKGOTO(bootstrapIntraNodeAllGather(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, desc, sizeof(ncclCuDesc)), ret, fail);
-
-  // start mapping
-  accessDesc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
-  accessDesc.location.id = comm->cudaDev;
-  accessDesc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
-  for (int r = 0; r < comm->localRanks; ++r) {
-    CUdeviceptr maddr;
-    if (r == comm->localRank) {
-      impHandle = memHandle;
-    } else {
-      if (ncclCuMemHandleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
-        impFd = -1;
-        NCCLCHECKGOTO(ncclProxyClientGetFdBlocking(comm, comm->localRankToRank[r], &desc[r].data, &impFd), ret, fail);
-        CUCHECKGOTO(cuMemImportFromShareableHandle(&impHandle, (void*)(uintptr_t)impFd, ncclCuMemHandleType), ret, fail);
-        SYSCHECKGOTO(close(impFd), "close", ret, fail);
-      } else {
-        CUCHECKGOTO(cuMemImportFromShareableHandle(&impHandle, (void*)&desc[r].handle, ncclCuMemHandleType), ret, fail);
-      }
-    }
-    maddr = (CUdeviceptr)(comm->baseUCSymPtr + (size_t)r * comm->baseStride + offset);
-    CUCHECKGOTO(cuMemMap(maddr, size, 0, impHandle, 0), ret, fail);
-    CUCHECKGOTO(cuMemSetAccess(maddr, size, &accessDesc, 1), ret, fail);
-
-    if (r == comm->localRank) {
-      *symPtr = (void*)maddr;
-    } else {
-      CUCHECKGOTO(cuMemRelease(impHandle), ret, fail);
-    }
-  }
-
-  INFO(NCCL_ALLOC, "IPC symmetric alloc buffer %p offset %ld size %ld symAllocHead %ld", *symPtr, offset, size, comm->symAllocHead);
-
-exit:
-  free(desc);
-  return ret;
-fail:
-  goto exit;
-}
-
-ncclResult_t ncclIpcSymmetricFree(struct ncclComm* comm, size_t size, void* symPtr) {
-  ncclResult_t ret = ncclSuccess;
-  if (comm && symPtr && size > 0) {
-    size_t offset = (size_t)symPtr - ((size_t)comm->baseUCSymPtr + comm->localRank * comm->baseStride);
-    for (int r = 0; r < comm->localRanks; ++r) {
-      CUdeviceptr peerAddr = (CUdeviceptr)(comm->baseUCSymPtr + r * comm->baseStride + offset);
-      CUCHECKGOTO(cuMemUnmap(peerAddr, size), ret, fail);
-    }
-  }
-exit:
   return ret;
 fail:
   goto exit;

@@ -7,11 +7,9 @@
 #ifndef NET_V9_H_
 #define NET_V9_H_
 
-#define NCCL_NET_MAX_DEVS_PER_NIC_V9 4
-
 typedef struct {
   int ndevs;
-  int devs[NCCL_NET_MAX_DEVS_PER_NIC_V9];
+  int devs[NCCL_NET_MAX_DEVS_PER_NIC];
 } ncclNetVDeviceProps_v9_t;
 
 typedef struct {

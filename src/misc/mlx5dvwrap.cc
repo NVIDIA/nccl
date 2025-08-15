@@ -7,6 +7,7 @@
 #include "mlx5/mlx5dvwrap.h"
 #include <sys/types.h>
 #include <unistd.h>
+#include <mutex>
 
 #ifdef NCCL_BUILD_MLX5DV
 #include <infiniband/mlx5dv.h>
@@ -15,12 +16,12 @@
 #endif
 #include "mlx5/mlx5dvsymbols.h"
 
-static pthread_once_t initOnceControl = PTHREAD_ONCE_INIT;
+static std::once_flag initOnceFlag;
 static ncclResult_t initResult;
 struct ncclMlx5dvSymbols mlx5dvSymbols;
 
 ncclResult_t wrap_mlx5dv_symbols(void) {
-  pthread_once(&initOnceControl,
+  std::call_once(initOnceFlag,
                [](){ initResult = buildMlx5dvSymbols(&mlx5dvSymbols); });
   return initResult;
 }

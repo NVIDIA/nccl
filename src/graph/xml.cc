@@ -917,31 +917,33 @@ ncclResult_t ncclTopoFillNet(struct ncclXml* xml, const char* pciPath, const cha
 
   if (*netNode != NULL) return ncclSuccess;
 
-  const char* pciSysPath = pciPath;
-  if (pciSysPath) {
-    char subSystem[PATH_MAX];
-    NCCLCHECK(ncclTopoGetSubsystem(pciSysPath, subSystem));
-    // This is not a PCI device (virtual, usb, ...).
-    if (strcmp(subSystem, "pci") != 0) {
-      INFO(NCCL_NET|NCCL_GRAPH, "Topology detection: network path %s is not a PCI device (%s). Attaching to first CPU", pciSysPath, subSystem);
-      pciSysPath = NULL;
-    }
-  }
-
   struct ncclXmlNode* parent = NULL;
   if (forceParent) {
     parent = forceParent;
-  } else if (pciSysPath) {
-    int offset;
-    for (offset=strlen(pciSysPath)-1; pciSysPath[offset] != '/'; offset--);
-    char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE];
-    strcpy(busId, pciSysPath+offset+1);
-    NCCLCHECK(ncclTopoGetPciNode(xml, busId, &parent));
-    NCCLCHECK(xmlSetAttrIfUnset(parent, "class", "0x02"));
-    NCCLCHECK(ncclTopoGetXmlFromSys(parent, xml));
   } else {
-    // Virtual NIC, no PCI device, attach to first CPU
-    NCCLCHECK(xmlFindTag(xml, "cpu", &parent));
+    const char* pciSysPath = pciPath;
+    if (pciSysPath) {
+      char subSystem[PATH_MAX];
+      NCCLCHECK(ncclTopoGetSubsystem(pciSysPath, subSystem));
+      // This is not a PCI device (virtual, usb, ...).
+      if (strcmp(subSystem, "pci") != 0 && !forceParent) {
+        INFO(NCCL_NET | NCCL_GRAPH, "Topology detection: network path (name = %s) %s is not a PCI device (%s). Attaching to first CPU", netName, pciSysPath, subSystem);
+        pciSysPath = NULL;
+      }
+    }
+
+    if (pciSysPath) {
+      int offset;
+      for (offset = strlen(pciSysPath) - 1; pciSysPath[offset] != '/'; offset--);
+      char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE];
+      strcpy(busId, pciSysPath + offset + 1);
+      NCCLCHECK(ncclTopoGetPciNode(xml, busId, &parent));
+      NCCLCHECK(xmlSetAttrIfUnset(parent, "class", "0x02"));
+      NCCLCHECK(ncclTopoGetXmlFromSys(parent, xml));
+    } else {
+      // Virtual NIC, no PCI device, attach to first CPU
+      NCCLCHECK(xmlFindTag(xml, "cpu", &parent));
+    }
   }
 
   struct ncclXmlNode* nicNode = NULL;

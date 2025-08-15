@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sys
+import shutil
 
 # Order of redops, tys, protos, algos must match src/include/device.h
 all_colls =  ["Broadcast","Reduce","AllGather","ReduceScatter","AllReduce","SendRecv"]
@@ -17,8 +18,11 @@ gensrc = sys.argv[1]
 
 if os.path.exists(gensrc):
   for name in os.listdir(gensrc):
-    os.remove(os.path.join(gensrc, name))
-    #os.truncate(os.path.join(gensrc, name), 0)
+    path = os.path.join(gensrc, name)
+    if os.path.isfile(path):
+      os.remove(path)
+    elif os.path.isdir(path):
+      shutil.rmtree(path)
 else:
   os.mkdir(gensrc)
 
@@ -321,6 +325,16 @@ def partition_by_name(fns):
 
 name_to_funcs = partition_by_name(fn for fn in primary_funcs if fn[0]!="Nop")
 name_to_kernels = partition_by_name(kfn for kfn in kernel_funcs if kfn[0]!="Generic")
+
+files = ""
+for name in sorted(name_to_funcs.keys()):
+    files += name + ";"
+files += "device_table.cu;"
+files += "host_table.cc"
+
+# Do not print files when running make
+if os.environ.get("NCCL_USE_CMAKE", "0") == "1":
+    print(files)
 
 # Generate <gensrc>/rules.mk
 with open(os.path.join(gensrc, "rules.mk"), "w") as f:

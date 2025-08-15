@@ -17,15 +17,16 @@ ncclResult_t initCollnetChannel(struct ncclComm* comm, int channelId, struct ncc
 ncclResult_t freeChannel(struct ncclChannel* channel, int nRanks, int collnetNRanks, int nvlsNRanks);
 
 inline uint8_t ncclP2pChannelBaseForRound(struct ncclComm* comm, int p2pRound) {
+  int base;
   if (comm->nNodes > 1) {
     int nodeDelta = p2pRound/comm->maxLocalRanks;
     int localDelta = p2pRound%comm->maxLocalRanks;
-    int base = nodeDelta*divUp(comm->maxLocalRanks, NCCL_MAX_DEV_WORK_P2P_PER_BATCH);
+    base = nodeDelta*divUp(comm->maxLocalRanks, NCCL_MAX_DEV_WORK_P2P_PER_BATCH);
     base += localDelta/NCCL_MAX_DEV_WORK_P2P_PER_BATCH;
-    return base & 0xff;
   } else {
-    return p2pRound & 0xff;
+    base = p2pRound;
   }
+  return reverseBits(base, log2Up(comm->p2pnChannels));
 }
 
 #endif

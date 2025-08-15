@@ -176,7 +176,8 @@ ncclResult_t ncclRegisterCollBuffers(
     // IPC buffer registration
     if (info->func == ncclFuncReduceScatter && info->algorithm != NCCL_ALGO_COLLNET_DIRECT) goto exit;
     if (info->algorithm == NCCL_ALGO_RING && ((info->func == ncclFuncAllReduce && info->sendbuff == info->recvbuff) || info->func == ncclFuncReduce)) goto exit;
-    if ((info->algorithm == NCCL_ALGO_TREE || info->algorithm == NCCL_ALGO_COLLNET_CHAIN) && info->sendbuff == info->recvbuff) goto exit;
+    if (info->algorithm == NCCL_ALGO_TREE && info->sendbuff == info->recvbuff) goto exit;
+    if (info->algorithm == NCCL_ALGO_COLLNET_CHAIN && info->sendbuff == info->recvbuff && comm->maxLocalRanks > 1) goto exit;
     if (info->func == ncclFuncAllGather && info->algorithm == NCCL_ALGO_PAT) goto exit;
 
     int peerRanks[NCCL_MAX_LOCAL_RANKS];

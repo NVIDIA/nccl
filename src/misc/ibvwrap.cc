@@ -7,6 +7,7 @@
 #include "ibvwrap.h"
 #include <sys/types.h>
 #include <unistd.h>
+#include <mutex>
 
 #ifdef NCCL_BUILD_RDMA_CORE
 #include <infiniband/verbs.h>
@@ -15,12 +16,12 @@
 #endif
 #include "ibvsymbols.h"
 
-static pthread_once_t initOnceControl = PTHREAD_ONCE_INIT;
+static std::once_flag initOnceFlag;
 static ncclResult_t initResult;
 struct ncclIbvSymbols ibvSymbols;
 
 ncclResult_t wrap_ibv_symbols(void) {
-  pthread_once(&initOnceControl,
+  std::call_once(initOnceFlag,
                [](){ initResult = buildIbvSymbols(&ibvSymbols); });
   return initResult;
 }

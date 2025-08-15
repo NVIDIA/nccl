@@ -551,4 +551,6 @@ T* ncclIntruQueueMpscAbandon(ncclIntruQueueMpsc<T,next>* me) {
     return head;
   }
 }
+
+ncclResult_t ncclBitsToString(uint32_t bits, uint32_t mask, const char* (*toStr)(int), char *buf, size_t bufLen, const char *wildcard);
 #endif

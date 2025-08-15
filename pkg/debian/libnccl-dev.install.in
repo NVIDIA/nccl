@@ -1,4 +1,4 @@
 bin/ncclras /usr/bin
-include/nccl.h /usr/include
+include/* /usr/include
 lib/libnccl.so /usr/lib/${pkg:MultiArch}
 lib/libnccl_static.a /usr/lib/${pkg:MultiArch}

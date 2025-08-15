@@ -18,16 +18,5 @@ static inline ncclResult_t ncclRegFind(struct ncclComm* comm, const void* data, 
   }
 }
 
-static inline ncclResult_t ncclRegFindSymmetric(struct ncclComm* comm, const void* data, size_t size, void** symPtr, struct ncclReg** outReg) {
-  struct ncclReg* regRecord = NULL;
-  *symPtr = NULL;
-  *outReg = NULL;
-  NCCLCHECK(ncclRegFind(comm, data, size, &regRecord));
-  if (regRecord && regRecord->baseSymPtr) {
-    *symPtr = (void*)((uintptr_t)regRecord->baseSymPtr + (uintptr_t)data - (uintptr_t)regRecord->begAddr);
-    *outReg = regRecord;
-  }
-  return ncclSuccess;
-}
 
 #endif

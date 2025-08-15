@@ -162,13 +162,9 @@ ncclResult_t ncclRegisterCollBuffers(struct ncclComm* comm, struct ncclTaskColl*
 ncclResult_t ncclRegisterCollNvlsBuffers(struct ncclComm* comm, struct ncclTaskColl* info, void* outRegBufSend[NCCL_MAX_LOCAL_RANKS], void* outRegBufRecv[NCCL_MAX_LOCAL_RANKS], struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next>* cleanupQueue, bool* regNeedConnect);
 ncclResult_t ncclNvlsRegResourcesQuery(struct ncclComm* comm, struct ncclTaskColl* info, int* recChannels);
 
-ncclResult_t ncclIpcSymmetricInit(struct ncclComm* comm);
-ncclResult_t ncclIpcSymmetricMap(struct ncclComm* comm, size_t offset, size_t size, CUmemGenericAllocationHandle memHandle, void** symPtr);
-ncclResult_t ncclIpcSymmetricFree(struct ncclComm* comm, size_t size, void* symPtr);
-ncclResult_t ncclIpcSymmetricFinalize(struct ncclComm* comm);
-ncclResult_t ncclNvlsSymmetricInit(struct ncclComm* comm);
-ncclResult_t ncclNvlsSymmetricMap(struct ncclComm* comm, size_t offset, size_t ucsize, void* ucaddr);
-ncclResult_t ncclNvlsSymmetricFree(struct ncclComm* comm, size_t ucsize, void* ucaddr);
-ncclResult_t ncclNvlsSymmetricFinalize(struct ncclComm* comm);
+#if CUDART_VERSION >= 12010
+ncclResult_t ncclNvlsGroupCreate(struct ncclComm *comm, CUmulticastObjectProp *prop, int rank, unsigned int nranks, CUmemGenericAllocationHandle *mcHandle, char *shareableHandle);
+ncclResult_t ncclNvlsGroupConnect(struct ncclComm *comm, char *shareableHandle, int rank, CUmemGenericAllocationHandle *mcHandle);
+#endif
 
 #endif

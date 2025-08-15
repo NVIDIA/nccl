@@ -46,10 +46,15 @@ static ncclResult_t ncclTuner_getCollInfo(void* context, ncclFunc_t collType, si
   return ncclSuccess;
 }
 
-static ncclResult_t ncclTuner_init(size_t nRanks, size_t nNodes, ncclDebugLogger_t logfn, void** context) {
-  NCCLCHECK(ncclTuner_v2->init(nRanks, nNodes, logfn, context));
+static ncclResult_t ncclTuner_finalize(void* ctx) {
+  return ncclTuner_v2->destroy(ctx);
+}
+
+static ncclResult_t ncclTuner_init(void** ctx, uint64_t commId, size_t nRanks, size_t nNodes, ncclDebugLogger_t logfn,
+                                   ncclNvlDomainInfo_v5_t* nvlDomainInfo, ncclTunerConstants_t* /*constants*/) {
+  NCCLCHECK(ncclTuner_v2->init(nRanks, nNodes, logfn, ctx));
   ncclTuner.getCollInfo = ncclTuner_getCollInfo;
-  ncclTuner.destroy = ncclTuner_v2->destroy;
+  ncclTuner.finalize = ncclTuner_finalize;
   return ncclSuccess;
 }
 
@@ -58,9 +63,8 @@ ncclTuner_t* getNcclTuner_v2(void* lib) {
   if (ncclTuner_v2) {
     ncclTuner.name = ncclTuner_v2->name;
     ncclTuner.init = ncclTuner_init;
-    INFO(NCCL_ENV|NCCL_TUNING, "TUNER/Plugin: Using tuner plugin %s", ncclTuner_v2->name);
+    INFO(NCCL_INIT|NCCL_TUNING, "TUNER/Plugin: Using %s (v2)", ncclTuner_v2->name);
     return &ncclTuner;
   }
-  INFO(NCCL_ENV|NCCL_TUNING, "TUNER/Plugin: Failed to find ncclTunerPlugin_v2 symbol, using internal tuner instead.");
   return NULL;
 }

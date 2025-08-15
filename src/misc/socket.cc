@@ -377,11 +377,12 @@ ncclResult_t ncclFindInterfaces(char* ifNames, union ncclSocketAddress *ifAddrs,
         NCCLCHECK(ncclFindInterfaceMatchSubnet(ifNames, ifAddrs, &idAddr, ifNameMaxSize, nIfs));
       }
     }
-    // Then look for anything else (but not docker or lo)
-    if (*nIfs == 0) NCCLCHECK(findInterfaces("^docker,lo", ifNames, ifAddrs, sock_family, ifNameMaxSize, maxIfs, nIfs));
+    // Then look for anything else (but not docker,lo, or virtual)
+    if (*nIfs == 0) NCCLCHECK(findInterfaces("^docker,lo,virbr", ifNames, ifAddrs, sock_family, ifNameMaxSize, maxIfs, nIfs));
     // Finally look for docker, then lo.
     if (*nIfs == 0) NCCLCHECK(findInterfaces("docker", ifNames, ifAddrs, sock_family, ifNameMaxSize, maxIfs, nIfs));
     if (*nIfs == 0) NCCLCHECK(findInterfaces("lo", ifNames, ifAddrs, sock_family, ifNameMaxSize, maxIfs, nIfs));
+    if (*nIfs == 0) NCCLCHECK(findInterfaces("virbr", ifNames, ifAddrs, sock_family, ifNameMaxSize, maxIfs, nIfs));
   }
   return ncclSuccess;
 }

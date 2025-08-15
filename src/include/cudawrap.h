@@ -114,6 +114,12 @@ DECLARE_CUDA_PFN_EXTERN(cuMulticastCreate, 12010);
 DECLARE_CUDA_PFN_EXTERN(cuMulticastGetGranularity, 12010);
 DECLARE_CUDA_PFN_EXTERN(cuMulticastUnbind, 12010);
 #endif
+/* Stream-MemOp support */
+DECLARE_CUDA_PFN_EXTERN(cuStreamBatchMemOp, 11070);
+DECLARE_CUDA_PFN_EXTERN(cuStreamWaitValue32, 11070);
+DECLARE_CUDA_PFN_EXTERN(cuStreamWaitValue64, 11070);
+DECLARE_CUDA_PFN_EXTERN(cuStreamWriteValue32, 11070);
+DECLARE_CUDA_PFN_EXTERN(cuStreamWriteValue64, 11070);
 #endif
 
 ncclResult_t ncclCudaLibraryInit(void);

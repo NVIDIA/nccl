@@ -28,11 +28,47 @@ struct ncclProfilerProxy {
   struct ncclProxyConnector recvProxyConn[MAXCHANNELS];
 };
 
+enum groupApiState {
+  ncclProfilerGroupApiStartStateReset   = 0,
+  ncclProfilerGroupApiStartStateStarted = 1,
+  ncclProfilerGroupApiStartStateStopped = 2,
+};
+
+// Used by the profiler to track state for API events
+typedef struct ncclProfilerApiState {
+  int profilerGroupDepth;
+  int eActivationMask;
+  groupApiState state;
+  void *groupApiEventHandle;
+  // Tracks the latest API event handles for p2p/collectives
+  void* p2pApiEventHandle;
+  void *collApiEventHandle;
+} ncclProfilerApiState_t;
+
+extern __thread ncclProfilerApiState_t ncclProfilerApiState;
+
 extern int ncclProfilerEventMask;
 
 // Plugin Init/Finalize Wrappers
 ncclResult_t ncclProfilerPluginInit(struct ncclComm* comm);
 ncclResult_t ncclProfilerPluginFinalize(struct ncclComm* comm);
+
+// Profiler Start/Stop/Record wrappers for ncclGroupStart and ncclGroupEnd API calls
+ncclResult_t ncclProfilerStartGroupApiEvent(struct ncclInfo *info, bool isGraphCaptured);
+ncclResult_t ncclProfilerStopGroupApiEvent();
+ncclResult_t ncclProfilerRecordGroupApiEventState(ncclProfilerEventState_t eState);
+
+//Profiler Start/Stop wrappers for P2p API calls
+ncclResult_t ncclProfilerStartP2pApiEvent(struct ncclInfo *info, bool isGraphCaptured);
+ncclResult_t ncclProfilerStopP2pApiEvent();
+
+//Profiler Start/Stop wrappers for Collective API calls
+ncclResult_t ncclProfilerStartCollApiEvent(struct ncclInfo *info, bool isGraphCaptured);
+ncclResult_t ncclProfilerStopCollApiEvent();
+
+// Kernel Launch Start/Stop Event Wrappers
+ncclResult_t ncclProfilerStartKernelLaunchEvent(struct ncclKernelPlan* plan, cudaStream_t stream);
+ncclResult_t ncclProfilerStopKernelLaunchEvent(struct ncclKernelPlan* plan);
 
 // Profiler Start/Stop Group Wrappers
 ncclResult_t ncclProfilerStartGroupEvent(struct ncclKernelPlan* plan);

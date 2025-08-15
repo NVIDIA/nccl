@@ -8,6 +8,7 @@
 #include "cudawrap.h"
 #include "checks.h"
 #include "param.h"
+#include <mutex>
 
 #if CUDART_VERSION >= 13000
 #define cudaStreamGetCaptureInfo_v3 cudaStreamGetCaptureInfo
@@ -27,14 +28,14 @@ struct ncclStrongStreamCapture {
 ////////////////////////////////////////////////////////////////////////////////
 
 static ncclCudaContext* cxtListHead = nullptr;
-static pthread_mutex_t cxtListLock = PTHREAD_MUTEX_INITIALIZER;
+static std::mutex cxtListMutex;
 
 ncclResult_t ncclCudaContextTrack(struct ncclCudaContext** out) {
   ncclResult_t result = ncclSuccess;
   CUcontext hcontext;
   CUCHECK(cuCtxGetCurrent(&hcontext));
 
-  pthread_mutex_lock(&cxtListLock);
+  std::lock_guard<std::mutex> lock(cxtListMutex);
   struct ncclCudaContext* p = cxtListHead;
   while (1) {
     if (p == nullptr) {
@@ -53,13 +54,12 @@ ncclResult_t ncclCudaContextTrack(struct ncclCudaContext** out) {
     p = p->next;
   }
 leave:
-  pthread_mutex_unlock(&cxtListLock);
   *out = p;
   return ncclSuccess;
 }
 
 void ncclCudaContextDrop(struct ncclCudaContext* cxt) {
-  pthread_mutex_lock(&cxtListLock);
+  std::lock_guard<std::mutex> lock(cxtListMutex);
   if (0 == --cxt->refCount) {
     struct ncclCudaContext** pp = &cxtListHead;
     while (*pp != cxt) pp = &(*pp)->next;
@@ -68,7 +68,6 @@ void ncclCudaContextDrop(struct ncclCudaContext* cxt) {
     ncclStrongStreamDestruct(&cxt->launchOrder);
     free(cxt);
   }
-  pthread_mutex_unlock(&cxtListLock);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

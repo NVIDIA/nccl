@@ -11,6 +11,9 @@
 #include "channel.h"
 #include <assert.h>
 #include "bootstrap.h"
+#include "ce_coll.h"
+#include "profiler.h"
+#include "nvtx.h"
 
 #define GROUP_MAX_RECLAIM_STEPS 10
 
@@ -90,7 +93,7 @@ ncclResult_t ncclAsyncJobComplete(struct ncclAsyncJob* job) {
 NCCL_API(ncclResult_t, ncclGroupStart);
 ncclResult_t ncclGroupStart() {
   ncclResult_t ret = ncclSuccess;
-  NVTX3_FUNC_RANGE_IN(nccl_domain);
+  NCCL_NVTX3_FUNC_RANGE;
 
   NCCLCHECK(ncclGroupStartInternal());
   TRACE_CALL("ncclGroupStart()");
@@ -100,7 +103,7 @@ ncclResult_t ncclGroupStart() {
 NCCL_API(ncclResult_t, ncclGroupEnd);
 ncclResult_t ncclGroupEnd() {
   ncclResult_t ret = ncclSuccess;
-  NVTX3_FUNC_RANGE_IN(nccl_domain);
+  NCCL_NVTX3_FUNC_RANGE;
   NCCLCHECKGOTO(ncclGroupEndInternal(), ret, exit);
   TRACE_CALL("ncclGroupEnd()");
 exit:
@@ -110,7 +113,7 @@ exit:
 NCCL_API(ncclResult_t, ncclGroupSimulateEnd, ncclSimInfo_t* simInfo);
 ncclResult_t ncclGroupSimulateEnd(ncclSimInfo_t* simInfo) {
   ncclResult_t ret = ncclSuccess;
-  NVTX3_FUNC_RANGE_IN(nccl_domain);
+  NCCL_NVTX3_FUNC_RANGE;
   NCCLCHECKGOTO(ncclGroupEndInternal(simInfo), ret, exit);
   TRACE_CALL("ncclGroupSimulateEnd()");
 exit:
@@ -123,12 +126,76 @@ struct ncclPreconnectJob {
   bool* algoNeedConnect;
 };
 
+struct ncclPrepareTasksAndCollPreconnectJob {
+  struct ncclAsyncJob base;
+  struct ncclComm* comm;
+  ncclSimInfo_t* simInfo;
+};
+
 ncclResult_t ncclP2PPreconnectFunc(struct ncclAsyncJob* job_) {
   struct ncclPreconnectJob* job = (struct ncclPreconnectJob*)job_;
   struct ncclComm* comm = job->comm;
   CUDACHECK(cudaSetDevice(comm->cudaDev));
-  if (CPU_COUNT(&comm->cpuAffinity)) sched_setaffinity(0, sizeof(cpu_set_t), &comm->cpuAffinity);
+  if (!job_->isThreadMain && CPU_COUNT(&comm->cpuAffinity)) sched_setaffinity(0, sizeof(cpu_set_t), &comm->cpuAffinity);
   NCCLCHECK(ncclTransportP2pSetup(comm, NULL, 1));
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclCollPreconnect(struct ncclComm* comm, bool* algoNeedConnect) {
+  for (int i = 0; i < NCCL_NUM_ALGORITHMS; ++i) {
+    if (algoNeedConnect[i]) {
+      switch (i) {
+        case NCCL_ALGO_RING: {
+          NCCLCHECK(ncclTransportRingConnect(comm));
+          break;
+        }
+        case NCCL_ALGO_TREE: {
+          NCCLCHECK(ncclTransportTreeConnect(comm));
+          break;
+        }
+        case NCCL_ALGO_NVLS: {
+          /* If we are using NVLS_TREE algo, we must mark NVLS algo to set up
+           * NVLS intra-node buffer */
+          NCCLCHECK(ncclNvlsBufferSetup(comm));
+          break;
+        }
+        case NCCL_ALGO_NVLS_TREE: {
+          NCCLCHECK(ncclNvlsTreeConnect(comm));
+          break;
+        }
+        case NCCL_ALGO_COLLNET_CHAIN: {
+          NCCLCHECK(ncclCollNetChainBufferSetup(comm));
+          break;
+        }
+        case NCCL_ALGO_COLLNET_DIRECT: {
+          NCCLCHECK(ncclCollNetDirectBufferSetup(comm));
+          break;
+        }
+        case NCCL_ALGO_PAT: {
+          NCCLCHECK(ncclTransportPatConnect(comm));
+          break;
+        }
+        // Yes, it's a dead code.  That's fine...
+        // coverity[dead_error_begin]
+        default: {
+          NCCLCHECK(ncclInternalError);
+        }
+      }
+    }
+  }
+  return ncclSuccess;
+}
+
+ncclResult_t ncclPrepareTasksAndCollPreconnectFunc(struct ncclAsyncJob* job_) {
+  struct ncclPrepareTasksAndCollPreconnectJob* job = (ncclPrepareTasksAndCollPreconnectJob*)job_;
+  struct ncclComm* comm = job->comm;
+  bool needConnect;
+  bool algoNeedConnect[NCCL_NUM_ALGORITHMS];
+  memset(algoNeedConnect, 0, sizeof(bool)*NCCL_NUM_ALGORITHMS);
+  CUDACHECK(cudaSetDevice(comm->cudaDev));
+  if (!job_->isThreadMain && CPU_COUNT(&comm->cpuAffinity)) sched_setaffinity(0, sizeof(cpu_set_t), &comm->cpuAffinity);
+  NCCLCHECK(ncclPrepareTasks(comm, algoNeedConnect, &needConnect, job->simInfo));
+  if (comm->cuMemSupport && needConnect) NCCLCHECK(ncclCollPreconnect(comm, algoNeedConnect));
   return ncclSuccess;
 }
 
@@ -137,50 +204,9 @@ ncclResult_t ncclCollPreconnectFunc(struct ncclAsyncJob* job_) {
   struct ncclComm* comm = job->comm;
   ncclResult_t ret = ncclSuccess;
 
-  CUDACHECK(cudaSetDevice(comm->cudaDev));
-  if (CPU_COUNT(&comm->cpuAffinity)) sched_setaffinity(0, sizeof(cpu_set_t), &comm->cpuAffinity);
-  for (int i = 0; i < NCCL_NUM_ALGORITHMS; ++i) {
-    if (job->algoNeedConnect[i]) {
-      switch (i) {
-        case NCCL_ALGO_RING: {
-          NCCLCHECKGOTO(ncclTransportRingConnect(comm), ret, fail);
-          break;
-        }
-        case NCCL_ALGO_TREE: {
-          NCCLCHECKGOTO(ncclTransportTreeConnect(comm), ret, fail);
-          break;
-        }
-        case NCCL_ALGO_NVLS: {
-          /* If we are using NVLS_TREE algo, we must mark NVLS algo to set up
-           * NVLS intra-node buffer */
-          NCCLCHECKGOTO(ncclNvlsBufferSetup(comm), ret, fail);
-          break;
-        }
-        case NCCL_ALGO_NVLS_TREE: {
-          NCCLCHECKGOTO(ncclNvlsTreeConnect(comm), ret, fail);
-          break;
-        }
-        case NCCL_ALGO_COLLNET_CHAIN: {
-          NCCLCHECKGOTO(ncclCollNetChainBufferSetup(comm), ret, fail);
-          break;
-        }
-        case NCCL_ALGO_COLLNET_DIRECT: {
-          NCCLCHECKGOTO(ncclCollNetDirectBufferSetup(comm), ret, fail);
-          break;
-        }
-        case NCCL_ALGO_PAT: {
-          NCCLCHECKGOTO(ncclTransportPatConnect(comm), ret, fail);
-          break;
-        }
-        // Yes, it's a dead code.  That's fine...
-        // coverity[dead_error_begin]
-        default: {
-          ret = ncclInternalError;
-          goto fail;
-        }
-      }
-    }
-  }
+  if (!job_->isThreadMain) CUDACHECK(cudaSetDevice(comm->cudaDev));
+  if (!job_->isThreadMain && CPU_COUNT(&comm->cpuAffinity)) sched_setaffinity(0, sizeof(cpu_set_t), &comm->cpuAffinity);
+  NCCLCHECKGOTO(ncclCollPreconnect(comm, job->algoNeedConnect), ret, fail);
 
 exit:
   free(job->algoNeedConnect);
@@ -194,52 +220,24 @@ struct ncclGroupSymmetricJob {
   struct ncclComm* comm;
 };
 
-NCCL_PARAM(WinStride, "WIN_STRIDE", -1);
-
 ncclResult_t ncclCommGroupRegisterSymmetric(struct ncclAsyncJob* job_) {
   struct ncclGroupSymmetricJob* job = (struct ncclGroupSymmetricJob*)job_;
   struct ncclComm* comm = job->comm;
   ncclResult_t ret = ncclSuccess;
 
   CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), ret, fail);
-  if (comm->baseStride == 0) {
-    cudaStream_t hostStream;
-    // first time to allocate symmetric VA space.
-    // calling into this function means symmetric is supported.
-    struct ncclSymDevBase* symBase = NULL;
-    size_t size = ncclSymDevBase::size(comm->localRanks);
-    if (ncclParamWinStride() != -1) {
-      comm->baseStride = ncclParamWinStride();
-    } else {
-      size_t maxStride = 0;
-      for (int r = 0; r < comm->nRanks; ++r)
-        if (comm->peerInfo[r].totalGlobalMem > maxStride) maxStride = comm->peerInfo[r].totalGlobalMem;
-      comm->baseStride = maxStride;
-    }
-    INFO(NCCL_INIT, "rank %d base stride %zuGB total VM %zuGB", comm->rank, comm->baseStride >> 30, (comm->baseStride * comm->localRanks) >> 30);
-    NCCLCHECKGOTO(ncclIpcSymmetricInit(comm), ret, fail);
-    NCCLCHECKGOTO(ncclNvlsSymmetricInit(comm), ret, fail);
-    comm->symAllocHead = 0;
 
-    // Allocate symmetric memory for NCCL internal usage
-    NCCLCHECKGOTO(ncclCommSymmetricAllocInternal(comm, size, alignof(struct ncclSymDevBase), (void**)&symBase), ret, fail);
-    assert((void*)symBase == (void*)(comm->baseUCSymPtr + comm->localRank * comm->baseStride));
-    NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(), &comm->sharedRes->hostStream, /*concurrent=*/false, &hostStream), ret, fail);
-    CUDACHECKGOTO(cudaMemsetAsync(symBase, 0, size, hostStream), ret, fail);
-    CUDACHECKGOTO(cudaStreamSynchronize(hostStream), ret, fail);
-    NCCLCHECKGOTO(ncclStrongStreamRelease(ncclCudaGraphNone(), &comm->sharedRes->hostStream, /*concurrent=*/false), ret, fail);
-
-    comm->symDevComm.base = (struct ncclSymDevBase*)(comm->baseUCSymPtr + comm->localRank * comm->baseStride);
-    comm->symDevComm.baseMc = (struct ncclSymDevBase*)comm->baseMCSymPtr;
-    comm->symDevComm.nRanks = comm->localRanks;
-    comm->symDevComm.nRanks_rcp32 = idivRcp32(comm->localRanks);
-    comm->symDevComm.rank = comm->localRank;
-    comm->symDevComm.stride4G = comm->baseStride >> 32;
+  while (!ncclIntruQueueEmpty(&comm->devrState.regTaskQueue)) {
+    struct ncclDevrRegTask* task = ncclIntruQueueDequeue(&comm->devrState.regTaskQueue);
+    NCCLCHECKGOTO(ncclDevrWindowRegisterInGroup(
+      comm, task->userPtr, task->userSize, task->winFlags, task->outWinDev),
+      ret, fail);
+    free(task);
   }
 
-  while (!ncclIntruQueueEmpty(&comm->symRegTaskQueue)) {
-    struct ncclSymRegTask* task = ncclIntruQueueDequeue(&comm->symRegTaskQueue);
-    NCCLCHECKGOTO(ncclCommSymmetricRegisterInternal(comm, task->buff, task->baseSize, task->alignment, task->memHandle, task->regHandle), ret, fail);
+  while (!ncclIntruQueueEmpty(&comm->ceInitTaskQueue)) {
+    struct ncclCeInitTask* task = ncclIntruQueueDequeue(&comm->ceInitTaskQueue);
+    NCCLCHECKGOTO(ncclCeInit(task->comm), ret, fail);
     free(task);
   }
 
@@ -296,7 +294,11 @@ static ncclResult_t doLaunches(struct ncclComm* head) {
             comm->planner.unlaunchedPlansHead = plan->next;
             CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), result, failure);
             NCCLCHECKGOTO(ncclLaunchKernelBefore_NoUncapturedCuda(comm, plan), result, failure);
-            NCCLCHECKGOTO(ncclLaunchKernel(comm, plan), result, failure);
+            if (plan->isCeColl) {
+              NCCLCHECKGOTO(ncclLaunchCeColl(comm, plan), result, failure);
+            } else {
+              NCCLCHECKGOTO(ncclLaunchKernel(comm, plan), result, failure);
+            }
           }
           // Barrier reduction input indicates if we require further rounds.
           if (useBarrier) ncclCommIntraBarrierIn(comm, comm->planner.unlaunchedPlansHead != nullptr ? 1 : 0);
@@ -392,6 +394,12 @@ static ncclResult_t asyncJobLaunch(struct ncclIntruQueue<struct ncclAsyncJob, &n
 
   if (!ncclIntruQueueEmpty(asyncJobsMain)) {
     struct ncclAsyncJob* job = ncclIntruQueueHead(asyncJobsMain);
+    if (job->next == nullptr) {
+      job->isThreadMain = true;
+      ncclAsyncJobMain(job);
+      job->state = ncclGroupJobJoined;
+      return job->result;
+    }
     do {
       PTHREADCHECKGOTO(pthread_create(&job->thread, nullptr, ncclAsyncJobMain, job), "pthread_create", ret, fail);
       job = job->next;
@@ -442,6 +450,51 @@ exit:
   return ret;
 fail:
   goto exit;
+}
+
+NCCL_PARAM(SingleProcMemRegEnable, "SINGLE_PROC_MEM_REG_ENABLE", 0);
+
+static ncclResult_t ncclPrepareTasksAndCollPreconnect(struct ncclComm* comm, ncclSimInfo_t* simInfo, struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next>* asyncCollJobs) {
+  if (ncclParamSingleProcMemRegEnable()) {
+    struct ncclPrepareTasksAndCollPreconnectJob* job;
+    NCCLCHECK(ncclCalloc(&job, 1));
+    job->base.func = ncclPrepareTasksAndCollPreconnectFunc;
+    job->base.undo = nullptr;
+    job->base.destructor = free;
+    job->base.state = ncclGroupJobRunning;
+    job->base.abortFlag = comm->abortFlag;
+    job->base.abortFlagDev = comm->abortFlagDev;
+    job->comm = comm;
+    job->simInfo = simInfo;
+    ncclIntruQueueEnqueue(asyncCollJobs, &job->base);
+  } else {
+    bool needConnect = false;
+    bool algoNeedConnect[NCCL_NUM_ALGORITHMS];
+    memset(algoNeedConnect, 0, sizeof(bool) * NCCL_NUM_ALGORITHMS);
+
+    CUDACHECK(cudaSetDevice(comm->cudaDev));
+    NCCLCHECK(ncclPrepareTasks(comm, algoNeedConnect, &needConnect, simInfo));
+
+    if (comm->cuMemSupport && needConnect) {
+      ncclResult_t ret;
+      struct ncclPreconnectJob* job;
+      NCCLCHECK(ncclCalloc(&job, 1));
+      job->base.func = ncclCollPreconnectFunc;
+      job->base.undo = nullptr;
+      job->base.destructor = free;
+      job->base.state = ncclGroupJobRunning;
+      job->base.abortFlag = comm->abortFlag;
+      job->base.abortFlagDev = comm->abortFlagDev;
+      job->comm = comm;
+      if ((ret = ncclCalloc(&job->algoNeedConnect, NCCL_NUM_ALGORITHMS))) {
+        free(job);
+        NCCLCHECK(ret);
+      }
+      memcpy(job->algoNeedConnect, algoNeedConnect, sizeof(bool) * NCCL_NUM_ALGORITHMS);
+      ncclIntruQueueEnqueue(asyncCollJobs, &job->base);
+    }
+  }
+  return ncclSuccess;
 }
 
 static ncclResult_t groupLaunch(struct ncclAsyncJob *job_, ncclSimInfo_t* simInfo = NULL) {
@@ -518,27 +571,7 @@ static ncclResult_t groupLaunch(struct ncclAsyncJob *job_, ncclSimInfo_t* simInf
       // at the same time.
       comm = cliqueHead;
       do {
-        bool needConnect = false;
-        bool algoNeedConnect[NCCL_NUM_ALGORITHMS];
-        memset(algoNeedConnect, 0, sizeof(bool) * NCCL_NUM_ALGORITHMS);
-
-        CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), ret, fail);
-        NCCLCHECKGOTO(ncclPrepareTasks(comm, algoNeedConnect, &needConnect, simInfo), ret, fail);
-
-        if (comm->cuMemSupport && needConnect) {
-          struct ncclPreconnectJob* job;
-          NCCLCHECKGOTO(ncclCalloc(&job, 1), ret, fail);
-          job->base.func = ncclCollPreconnectFunc;
-          job->base.undo = nullptr;
-          job->base.destructor = free;
-          job->base.state = ncclGroupJobRunning;
-          job->base.abortFlag = comm->abortFlag;
-          job->base.abortFlagDev = comm->abortFlagDev;
-          job->comm = comm;
-          NCCLCHECKGOTO(ncclCalloc(&job->algoNeedConnect, NCCL_NUM_ALGORITHMS), ret, fail);
-          memcpy(job->algoNeedConnect, algoNeedConnect, sizeof(bool) * NCCL_NUM_ALGORITHMS);
-          ncclIntruQueueEnqueue(&asyncCollJobs, &job->base);
-        }
+        NCCLCHECKGOTO(ncclPrepareTasksAndCollPreconnect(comm, simInfo, &asyncCollJobs), ret, fail);
         comm = comm->groupNext[ncclGroupTaskTypeCollective];
       } while (comm != nullptr && comm->intraComm0 == cliqueHead->intraComm0);
       // connect
@@ -615,6 +648,13 @@ ncclResult_t ncclGroupEndInternal(ncclSimInfo_t* simInfo) {
     WARN("ncclGroupEnd: not in a group call.");
     ret = ncclInvalidUsage;
     goto exit;
+  }
+
+  if (ncclProfilerApiState.profilerGroupDepth > 0) {
+    ncclProfilerApiState.profilerGroupDepth--;
+  }
+  if (ncclProfilerApiState.profilerGroupDepth == 0) {
+    NCCLCHECK(ncclProfilerRecordGroupApiEventState(ncclProfilerGroupEndApiStart));
   }
 
   if ((--ncclGroupDepth) > 0) goto exit;
@@ -701,6 +741,8 @@ ncclResult_t ncclGroupEndInternal(ncclSimInfo_t* simInfo) {
   groupLocalResetJobState();
 
 exit:
+  // Profiler group API start is called inside taskAppend to get graph capture information for the event
+  NCCLCHECK(ncclProfilerStopGroupApiEvent());
   return ret;
 fail:
   if (groupJob) {

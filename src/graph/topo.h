@@ -190,12 +190,26 @@ ncclResult_t ncclTopoGetGpuMinPath(struct ncclTopoSystem* system, int type, int*
 ncclResult_t ncclTopoGetGpuMaxPath(struct ncclTopoSystem* system, int type, int* max);
 ncclResult_t ncclTopoSplitNvLink(struct ncclTopoSystem* system, int* splitNvLink);
 
-struct ncclTopoNetState {
-  int nVirtualNics;
-  int nPhysicalNics;
+struct ncclTopoNetInfo {
+  bool coll;
+  // communicator-specific information
+  int netPluginIndex;
+  bool dmaBufSupport;
+  // NIC fusion
+  int mergeLevel;
+  const char* forceMerge;
+  // dev count tracking functions (not part of ncclNet)
+  ncclResult_t (*getDevCount)(int, int*, int*);
+  ncclResult_t (*setVirtDevCount)(int, int);
+  // ncclNet API functions
   const char* name;
+  ncclResult_t (*getProperties)(int, ncclNetProperties_t*);
+  ncclResult_t (*makeVDevice)(int*, ncclNetVDeviceProps_t*);
+  ncclResult_t (*devices)(int*);
 };
-ncclResult_t ncclTopoProcessNet(ncclXml* xml, int coll, const char* dumpXmlFile, ncclTopoNetState* state, ncclResult_t (*getProperties)(int, ncclNetProperties_t*), ncclResult_t (*makeVDevice)(int*, ncclNetVDeviceProps_t*), ncclResult_t (*devices)(int*), const char* netName, bool dmaBufSupport);
+
+ncclResult_t ncclTopoProcessNet(ncclXml* xml, const char* dumpXmlFile, struct ncclTopoNetInfo* net);
+ncclResult_t ncclTopoGetFusionEnv(int* mergeLevel, const char** forceMerge);
 
 #define NCCL_TOPO_XML_MAX_NODES 256
 #define NCCL_GRAPH_XML_MAX_NODES 4096
@@ -239,6 +253,8 @@ static ncclResult_t ncclTopoDevToRank(struct ncclTopoSystem* system, int dev, in
   }
   return ncclInternalError;
 }
+
+extern struct kvDict nicPathKvList[];
 
 static ncclResult_t ncclTopoIdToNetDev(struct ncclTopoSystem* system, int64_t id, int* netDev) {
   *netDev = -1;

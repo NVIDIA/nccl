@@ -1,0 +1,49 @@
+# Compiled shared objects and binaries
+*.so
+*.o
+*.a
+*.out
+*.exe
+*.dll
+*.dylib
+*.bin
+*.elf
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Build and test artifacts
+/build/
+*.log
+*.tmp
+*.swp
+
+# Ignore all CSV files except scripts/sample_performance_data.csv
+*.csv
+!scripts/sample_performance_data.csv
+
+# Ignore all .conf files except nccl_tuner.conf
+*.conf
+!nccl_tuner.conf
+
+my_configs
+
+# Ignore test binary
+test/test_plugin
+
+# Editor/OS files
+.DS_Store
+Thumbs.db
+
+# Backup files
+*~
+*.bak
+
+# Ignore by convention
+*.old
+*.orig
+
+# Git
+.git/

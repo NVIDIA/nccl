@@ -1,32 +1,33 @@
-#include "symmetric.h"
-#include "symmetric/kernel.cuh"
-#include "symmetric/primitives.cuh"
+#include "sym_kernels.h"
+#include "kernel.cuh"
+#include "primitives.cuh"
 
 template<int BytePerPack, int UnrollPacks, int UnrollPeers>
 static __device__ void bcastDeep(
-    ncclSymPrims& prim, int tn, int t, bool waitNeeded,
-    char* inputHere, char* outputRank0, bool inPlace, int nIters
+    ncclSymkKernelStuff const& stuff, int tn, int t,
+    bool waitNeeded, ncclLsaBarrierSession<ncclCoopCta>& bar,
+    ncclSymPtr<char> input, ncclSymPtr<char> output, bool inPlace, int nIters
   ) {
   using Pack = BytePack<BytePerPack>;
   int wn = tn/WARP_SIZE;
   int w = t/WARP_SIZE;
   int lane = t%WARP_SIZE;
-  int const& rank = prim.rank;
-  int const& nRanks = prim.nRanks;
-  uint32_t const& stride4G = prim.stride4G;
-  Pack* inpHere = (Pack*)inputHere + intptr_t(w)*UnrollPacks*WARP_SIZE + lane;
-  Pack* outRank0 = (Pack*)outputRank0 + intptr_t(w)*UnrollPacks*WARP_SIZE + lane;
+  int const& rank = stuff.comm.rank;
+  int const& nRanks = stuff.comm.nRanks;
+
+  Pack* inpPacks = (Pack*)input.localPtr() + intptr_t(w)*UnrollPacks*WARP_SIZE + lane;
+  ncclSymPtr<Pack> outPacks = (ncclSymPtr<Pack>)output + intptr_t(w)*UnrollPacks*WARP_SIZE + lane;
   Pack tmp[UnrollPacks];
 
   nIters -= w;
   if (0 < nIters) {
     #pragma unroll
     for (int u=0; u < UnrollPacks; u++) {
-      tmp[u] = inpHere[u*WARP_SIZE];
+      tmp[u] = inpPacks[u*WARP_SIZE];
     }
   }
 
-  if (waitNeeded) prim.barrierWait(ncclCoopCta(), /*acquire=*/false);
+  if (waitNeeded) bar.wait(ncclCoopCta(), cuda::memory_order_relaxed);
 
   if (0 < nIters) {
     while (true) {
@@ -44,21 +45,21 @@ static __device__ void bcastDeep(
             if (partial && dr == nRanks) break;
             #pragma unroll UnrollPacks
             for (int u=0; u < UnrollPacks; u++) {
-              add4G(outRank0, r*stride4G)[u*WARP_SIZE] = tmp[u];
+              outPacks.lsaPtr(r)[u*WARP_SIZE] = tmp[u];
             }
             if (++r == nRanks) r = 0;
           }
         }
       }
-      inpHere += intptr_t(wn)*UnrollPacks*WARP_SIZE;
-      outRank0 += intptr_t(wn)*UnrollPacks*WARP_SIZE;
+      inpPacks += intptr_t(wn)*UnrollPacks*WARP_SIZE;
+      outPacks += intptr_t(wn)*UnrollPacks*WARP_SIZE;
       nIters -= wn;
       if (nIters <= 0) break;
 
       // Load data for next iteration.
       #pragma unroll
       for (int u=0; u < UnrollPacks; u++) {
-        tmp[u] = inpHere[u*WARP_SIZE];
+        tmp[u] = inpPacks[u*WARP_SIZE];
       }
     }
   }
@@ -66,18 +67,17 @@ static __device__ void bcastDeep(
 
 template<int UnrollPeers, typename T>
 static __device__ void bcastEnds(
-    ncclSymPrims& prim, int tn, int t,
-    T* inputHere, T* outputRank0, bool inPlace, size_t nElts, uint32_t nPreElts, size_t nSufElts
+    ncclSymkKernelStuff const& stuff, int tn, int t,
+    ncclSymPtr<T> input, ncclSymPtr<T> output, bool inPlace, size_t nElts, uint32_t nPreElts, size_t nSufElts
   ) {
-  int const& rank = prim.rank;
-  int const& nRanks = prim.nRanks;
-  uint32_t const& stride4G = prim.stride4G;
-  BytePack<sizeof(T)>* inpHere = (BytePack<sizeof(T)>*)inputHere;
-  BytePack<sizeof(T)>* outRank0 = (BytePack<sizeof(T)>*)outputRank0;
+  int const& rank = stuff.comm.rank;
+  int const& nRanks = stuff.comm.nRanks;
+  BytePack<sizeof(T)>* inpPacks = (BytePack<sizeof(T)>*)input.localPtr();
+  ncclSymPtr<BytePack<sizeof(T)>> outPacks = (ncclSymPtr<BytePack<sizeof(T)>>)output;
   #pragma unroll 1
   for (size_t i = t; i < nPreElts+nSufElts; i += tn) {
     size_t elt = i < nPreElts ? i : nElts-nPreElts-nSufElts+i;
-    BytePack<sizeof(T)> tmp = inpHere[elt];
+    BytePack<sizeof(T)> tmp = inpPacks[elt];
     int dr = inPlace ? 1 : 0;
     int r = rank + dr;
     if (r == nRanks) r = 0;
@@ -85,14 +85,14 @@ static __device__ void bcastEnds(
     for (; dr + UnrollPeers <= nRanks; dr += UnrollPeers) {
       #pragma unroll UnrollPeers
       for (int u=0; u < UnrollPeers; u++) {
-        *add4G(outRank0+elt, r*stride4G) = tmp;
+        outPacks.lsaPtr(r)[elt] = tmp;
         if (++r == nRanks) r = 0;
       }
     }
     #pragma unroll UnrollPeers
     for (int u=0; u < UnrollPeers; u++) {
       if (dr+u == nRanks) break;
-      *add4G(outRank0+elt, r*stride4G) = tmp;
+      outPacks.lsaPtr(r)[elt] = tmp;
       if (++r == nRanks) r = 0;
     }
   }
@@ -100,95 +100,98 @@ static __device__ void bcastEnds(
 
 template<typename T>
 static __device__ void bcast(
-    ncclSymPrims& prim, int tn, int t, bool waitNeeded, T* input, T* output, size_t nElts
+    ncclSymkKernelStuff const& stuff, int tn, int t, int nBlocks,
+    bool waitNeeded, ncclLsaBarrierSession<ncclCoopCta>& bar,
+    ncclSymPtr<T> input, ncclSymPtr<T> output, size_t nElts
   ) {
   bool inPlace = (input == output);
-  // Mpve to rank=0
-  output = prim.peerPtr(0, output);
-
-  uintptr_t inputUptr = reinterpret_cast<uintptr_t>(input);
-  uintptr_t outputUptr = reinterpret_cast<uintptr_t>(output);
   size_t nBytes = nElts*sizeof(T);
+  uint32_t nBlocks_rcp32 = nccl::utility::idivRcp32_upto64(nBlocks);
 
-  uint32_t nPreBytes = (128u - inputUptr)%128u;
+  uint32_t nPreBytes = (16 - input.offset)%16;
   nPreBytes = min((size_t)nPreBytes, nBytes);
   uintptr_t cursor = nPreBytes;
 
   constexpr int MinWarpPerBlock = 4;
 
-  if ((inputUptr-outputUptr)%16 == 0) {
+  if ((input.offset - output.offset)%16 == 0) {
     constexpr int BytePerPack = 16, UnrollPacks = 4, UnrollPeers = 2;
     constexpr int BytePerChunk = MinWarpPerBlock*UnrollPacks*WARP_SIZE*BytePerPack;
     uint32_t chunks = (nBytes-cursor)/BytePerChunk;
-    chunks -= imodFast32(chunks, prim.nBlocks, prim.nBlocks_rcp32);
+    chunks -= imodFast32(chunks, nBlocks, nBlocks_rcp32);
     if (chunks != 0) {
       uintptr_t cursorAfter = cursor + uintptr_t(chunks)*BytePerChunk;
       bcastDeep<BytePerPack, UnrollPacks, UnrollPeers>(
-        prim, tn, t, waitNeeded,
-        (char*)input + cursor, (char*)output + cursor, inPlace,
-        chunks*MinWarpPerBlock
+        stuff, tn, t, waitNeeded, bar,
+        (ncclSymPtr<char>)input + cursor,
+        (ncclSymPtr<char>)output + cursor,
+        inPlace, chunks*MinWarpPerBlock
       );
       cursor = cursorAfter;
       waitNeeded = false;
     }
   }
 
-  if (sizeof(T) == 4 || (sizeof(T) < 4 && (inputUptr-outputUptr)%4 == 0)) {
+  if (sizeof(T) == 4 || (sizeof(T) < 4 && (input.offset - output.offset)%4 == 0)) {
     constexpr int BytePerPack = 4, UnrollPacks = 4, UnrollPeers = 4;
     constexpr int BytePerChunk = MinWarpPerBlock*UnrollPacks*WARP_SIZE*BytePerPack;
     uint32_t chunks = (nBytes-cursor)/BytePerChunk;
-    chunks -= imodFast32(chunks, prim.nBlocks, prim.nBlocks_rcp32);
+    chunks -= imodFast32(chunks, nBlocks, nBlocks_rcp32);
     if (chunks != 0) {
       uintptr_t cursorAfter = cursor + uintptr_t(chunks)*BytePerChunk;
       bcastDeep<(sizeof(T) <= BytePerPack ? BytePerPack : 0), UnrollPacks, UnrollPeers>(
-        prim, tn, t, waitNeeded,
-        (char*)input + cursor, (char*)output + cursor, inPlace,
-        chunks*MinWarpPerBlock
+        stuff, tn, t, waitNeeded, bar,
+        (ncclSymPtr<char>)input + cursor,
+        (ncclSymPtr<char>)output + cursor,
+        inPlace, chunks*MinWarpPerBlock
       );
       cursor = cursorAfter;
       waitNeeded = false;
     }
   }
 
-  if (waitNeeded) prim.barrierWait(ncclCoopCta(), /*acquire=*/false);
+  if (waitNeeded) bar.wait(ncclCoopCta(), cuda::memory_order_relaxed);
 
   constexpr int UnrollPeers = 8;
   size_t nSufElts = (nBytes-cursor)/sizeof(T);
-  bcastEnds<UnrollPeers>(prim, tn, t, input, output, inPlace, nElts, nPreBytes/sizeof(T), nSufElts);
+  bcastEnds<UnrollPeers>(stuff, tn, t, input, output, inPlace, nElts, nPreBytes/sizeof(T), nSufElts);
 }
 
-__device__ __forceinline__ void ncclSymRun_AllGather_ST(ncclSymDevArgs const* args) {
-  ncclSymPrims prim(args->comm, ncclSymPrims_UseBarrier);
-  int const& rank = prim.rank;
+__device__ __forceinline__ void ncclSymkRun_AllGather_ST(ncclSymkDevWorkArgs const* args) {
+  ncclSymkKernelStuff stuff{args};
+  ncclLsaBarrierSession<ncclCoopCta> bar{
+    ncclCoopCta(), stuff.comm, ncclTeamTagLsa(), blockIdx.x
+  };
+  int const& rank = stuff.comm.rank;
+
+  bar.arrive(ncclCoopCta(), cuda::memory_order_relaxed);
+
+  bool waitNeeded = true;
+  NCCL_SYMK_GROUP_START(stuff, char);
 
   // Threads numbered over rank.
   int bt = flattenIx(threadIdx.x%WARP_SIZE, WARP_SIZE,
-                     prim.block, prim.nBlocks,
+                     ncclSymkGroupBlock, ncclSymkGroupNBlocks,
                      threadIdx.x/WARP_SIZE, blockDim.x/WARP_SIZE);
-  int btn = prim.nBlocks*blockDim.x;
+  int btn = ncclSymkGroupNBlocks*blockDim.x;
 
-  prim.barrierArrive(ncclCoopCta(), /*release=*/false);
-  //prim.barrierWait(ncclCoopCta(), /*acquire=*/false);
+  bcast(stuff, btn, bt, ncclSymkGroupNBlocks, waitNeeded, bar,
+        ncclSymkGroupInput, ncclSymkGroupOutput + rank*ncclSymkGroupNAllElts, ncclSymkGroupNElts);
 
-  bcast(prim, btn, bt, /*waitNeeded=*/true, (char*)args->input, (char*)args->output + rank*args->nElts, args->nElts);
+  waitNeeded = false;
+  NCCL_SYMK_GROUP_END;
 
-  prim.barrierArrive(ncclCoopCta(), /*release=*/true);
-  prim.barrierWait(ncclCoopCta(), /*acquire=*/false);
+  bar.sync(ncclCoopCta(), cuda::memory_order_release);
 }
-
 
 template<typename T>
 static __device__ void bcastMultimem(
-    ncclSymPrims& prim, int tn, int t, T* input, T* output, size_t nElts
+    ncclSymkKernelStuff& stuff, int tn, int t, ncclSymPtr<T> input, ncclSymPtr<T> output, size_t nElts
   ) {
-  // Move output to multimem
-  output = prim.multimemPtr(output);
-
-  uintptr_t inputUptr = reinterpret_cast<uintptr_t>(input);
-  uintptr_t outputUptr = reinterpret_cast<uintptr_t>(output);
   size_t nBytes = nElts*sizeof(T);
-
-  uint32_t nPreBytes = (16-inputUptr)%16;
+  uintptr_t inputUptr = reinterpret_cast<uintptr_t>(input.localPtr());
+  uintptr_t outputUptr = reinterpret_cast<uintptr_t>(output.multimemPtr(stuff.comm.multimem));
+  uint32_t nPreBytes = (16 - input.offset)%16;
   nPreBytes = min((size_t)nPreBytes, nBytes);
   uintptr_t nSufBytes;
 
@@ -227,51 +230,51 @@ static __device__ void bcastMultimem(
     uintptr_t cursor = i < nPreBytes ? i : nBytes-nSufBytes+(i-nPreBytes);
     BytePack<sizeof(T)> val = *reinterpret_cast<BytePack<sizeof(T)>*>(inputUptr + cursor);
     multimem_st_global(outputUptr + cursor, val);
-    cursor += tn*sizeof(T);
   }
 }
 
-__device__ __forceinline__ void ncclSymRun_AllGather_STMC(ncclSymDevArgs const* args) {
-  ncclSymPrims prim(args->comm, ncclSymPrims_UseBarrier|ncclSymPrims_UseMultimem);
-  int const& rank = prim.rank;
+__device__ __forceinline__ void ncclSymkRun_AllGather_STMC(ncclSymkDevWorkArgs const* args) {
+  ncclSymkKernelStuff stuff{args};
+  ncclLsaBarrierSession<ncclCoopCta> bar(
+    ncclCoopCta(), stuff.comm, ncclTeamTagLsa(), blockIdx.x, /*multimem=*/true
+  );
+  int const& rank = stuff.comm.rank;
 
-  char* input = args->input;
-  char* output = args->output;
-  size_t bytes = args->nElts;
+  bar.sync(ncclCoopCta(), cuda::memory_order_relaxed);
+
+  NCCL_SYMK_GROUP_START(stuff, char);
+
   // Round robin memory to blocks.
   int t = flattenIx(threadIdx.x%WARP_SIZE, WARP_SIZE,
-                    prim.block, prim.nBlocks,
+                    ncclSymkGroupBlock, ncclSymkGroupNBlocks,
                     threadIdx.x/WARP_SIZE, blockDim.x/WARP_SIZE);
-  int tn = prim.nBlocks*blockDim.x;
+  int tn = ncclSymkGroupNBlocks*blockDim.x;
 
-  prim.barrierArrive(ncclCoopCta(), /*release=*/false);
-  prim.barrierWait(ncclCoopCta(), /*acquire=*/false);
+  bcastMultimem(stuff, tn, t, ncclSymkGroupInput, ncclSymkGroupOutput + rank*ncclSymkGroupNAllElts, ncclSymkGroupNElts);
 
-  bcastMultimem(prim, tn, t, input, output + rank*bytes, bytes);
+  NCCL_SYMK_GROUP_END;
 
-  prim.barrierArrive(ncclCoopCta(), /*release=*/true);
-  prim.barrierWait(ncclCoopCta(), /*acquire=*/false);
+  bar.sync(ncclCoopCta(), cuda::memory_order_release);
 }
 
 template<typename EltType>
 static __device__ void allgather_LL_body(
-    ncclSymPrims &prim, EltType* input, EltType* output, int nElts, int nPacks, int nStrideElts
+    ncclSymkKernelStuff& stuff, ncclLLA2ASession<ncclCoopCta>& lla2a,
+    EltType* input, EltType* output, int nElts, int nPacks, int nStrideElts
   ) {
   using Pack = BytePack<8>;
   constexpr int EltPerPack = 8/sizeof(EltType);
-
-  ncclCoopCta cta;
-  int rank = prim.rank;
-  int nRanks = prim.nRanks;
-  constexpr int tn = ncclSymMaxThreads;
+  int const& rank = stuff.comm.rank;
+  int const& nRanks = stuff.comm.nRanks;
   int t = threadIdx.x;
+  constexpr int tn = ncclSymkMaxThreads;
 
   #pragma unroll 1
   while (0 < nElts) {
     int nIterPacks = min(nPacks, tn);
     if (t < nIterPacks) {
       Pack x = loadPack<Pack>(input, t*EltPerPack, nElts);
-      prim.bcastLL(/*slot=*/nIterPacks*rank + t, x);
+      lla2a.bcast(/*slot=*/nIterPacks*rank + t, x);
     }
 
     int tn_div_nPacks = tn/nIterPacks;
@@ -284,7 +287,7 @@ static __device__ void allgather_LL_body(
       #pragma unroll 1
       for (int i = t; i < (nRanks*nIterPacks & -(Unroll*tn)); i += Unroll*tn) {
         Pack got[Unroll];
-        prim.template recvLL<Unroll, Unroll>(i, Unroll, tn, /*&*/got);
+        lla2a.template recvUnrolled<Unroll, Unroll>(i, Unroll, tn, /*&*/got);
         #pragma unroll
         for (int u=0; u < Unroll; u++) {
           storePack<Pack>(output + peer*nStrideElts, pack*EltPerPack, nElts, got[u]);
@@ -299,7 +302,7 @@ static __device__ void allgather_LL_body(
       if (i + n*tn < nRanks*nIterPacks) n += 1;
       if (n != 0) {
         Pack got[Unroll];
-        prim.template recvLL<1, Unroll>(i, n, tn, /*&*/got);
+        lla2a.template recvUnrolled<1, Unroll>(i, n, tn, /*&*/got);
         #pragma unroll
         for (int u=0; u < Unroll; u++) {
           if (u != 0 && u == n) break;
@@ -313,7 +316,7 @@ static __device__ void allgather_LL_body(
       // The non-unrolled but "obviously correct" implementation for reference.
       #pragma unroll 1
       for (int i = t; i < nRanks*nIterPacks; i += tn) {
-        Pack got = prim.template recvLL<Pack>(i);
+        Pack got = lla2a.template recv<Pack>(i);
         storePack(output + peer*nStrideElts, pack*EltPerPack, nElts, got);
         peer += tn_div_nPacks;
         pack += tn_mod_nPacks;
@@ -321,7 +324,7 @@ static __device__ void allgather_LL_body(
       }
     #endif
 
-    prim.endLL(cta);
+    lla2a.endEpoch(ncclCoopCta());
 
     input += tn*EltPerPack;
     output += tn*EltPerPack;
@@ -330,38 +333,41 @@ static __device__ void allgather_LL_body(
   }
 }
 
-static __device__ void ncclSymRun_AllGather_LL_impl(ncclSymDevArgs const* args, bool multimem) {
-  ncclSymPrims prim(args->comm, ncclSymPrims_UseLL | multimem*ncclSymPrims_UseMultimem);
+static __device__ void ncclSymkRun_AllGather_LL_impl(ncclSymkDevWorkArgs const* args, bool multimem) {
+  ncclSymkKernelStuff stuff{args};
+  ncclLLA2ASession<ncclCoopCta> lla2a(
+    ncclCoopCta(), stuff.comm, ncclTeamTagLsa(), blockIdx.x, /*maxElts=*/ncclSymkMaxThreads, multimem
+  );
+
   using Pack = BytePack<8>;
   constexpr int BytePerPack = 8;
-  int nElts = args->nElts;
+
+  NCCL_SYMK_GROUP_NOFUSE_START(stuff, char);
+
+  int nElts = ncclSymkGroupNElts;
+  int nAllElts = ncclSymkGroupNAllElts;
   int nPacks = divUp(nElts, BytePerPack);
 
-  uint32_t nPackPerBlock, nPackModBlock;
-  idivmodFast32(&nPackPerBlock, &nPackModBlock, nPacks, prim.nBlocks, prim.nBlocks_rcp32);
-  int blockPackBegin = prim.block*nPackPerBlock + minval<int>(prim.block, nPackModBlock);
-  int blockPackEnd = blockPackBegin + nPackPerBlock + (prim.block < nPackModBlock ? 1 : 0);
-  int nBlockPacks = blockPackEnd - blockPackBegin;
-  int nBlockElts = nElts - blockPackBegin*BytePerPack;
-  nBlockElts = min(nBlockElts, nBlockPacks*BytePerPack);
-  char* blockInput = args->input + blockPackBegin*BytePerPack;
-  char* blockOutput = args->output + blockPackBegin*BytePerPack;
+  char* blockInput = ncclSymkGroupInput.localPtr();
+  char* blockOutput = ncclSymkGroupOutput.localPtr();
 
-  uint32_t lowBits = args->nElts;
-  lowBits |= (uint32_t)reinterpret_cast<uintptr_t>(args->input);
-  lowBits |= (uint32_t)reinterpret_cast<uintptr_t>(args->output);
+  uint32_t lowBits = nElts;
+  lowBits |= (uintptr_t)blockInput;
+  lowBits |= (uintptr_t)blockOutput;
   if (__builtin_expect(lowBits%8 == 0, true)) {
     // NOTE: Specializing for 8-byte alignment in one case help at size=65K: 8.9us vs 5.6us
-    allgather_LL_body(prim, (BytePack<8>*)blockInput, (BytePack<8>*)blockOutput, nBlockElts/8, nBlockPacks, nElts/8);
+    allgather_LL_body(stuff, lla2a, (BytePack<8>*)blockInput, (BytePack<8>*)blockOutput, nElts/8, nPacks, nAllElts/8);
   } else {
-    allgather_LL_body(prim, blockInput, blockOutput, nBlockElts, nBlockPacks, nElts);
+    allgather_LL_body(stuff, lla2a, blockInput, blockOutput, nElts, nPacks, nAllElts);
   }
+
+  NCCL_SYMK_GROUP_END;
 }
 
-__device__ __forceinline__ void ncclSymRun_AllGather_LL(ncclSymDevArgs const* args) {
-  ncclSymRun_AllGather_LL_impl(args, /*multimem=*/false);
+__device__ __forceinline__ void ncclSymkRun_AllGather_LL(ncclSymkDevWorkArgs const* args) {
+  ncclSymkRun_AllGather_LL_impl(args, /*multimem=*/false);
 }
 
-__device__ __forceinline__ void ncclSymRun_AllGather_LLMC(ncclSymDevArgs const* args) {
-  ncclSymRun_AllGather_LL_impl(args, /*multimem=*/true);
+__device__ __forceinline__ void ncclSymkRun_AllGather_LLMC(ncclSymkDevWorkArgs const* args) {
+  ncclSymkRun_AllGather_LL_impl(args, /*multimem=*/true);
 }

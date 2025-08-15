@@ -43,6 +43,7 @@ struct ncclAsyncJob {
   uint32_t* childAbortFlagDev; /* point to child abortFlagDev */
   ncclComm_t comm;
   int destroyFlag;
+  bool isThreadMain;
 };
 
 ncclResult_t ncclAsyncLaunch(

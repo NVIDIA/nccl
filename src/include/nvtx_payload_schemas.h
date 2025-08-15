@@ -90,6 +90,13 @@ NCCL_NVTX_DEFINE_STRUCT_WITH_SCHEMA_ENTRIES(NcclNvtxParamsAllGather, static cons
   )
 )
 
+NCCL_NVTX_DEFINE_STRUCT_WITH_SCHEMA_ENTRIES(NcclNvtxParamsAlltoAll, static constexpr,
+  NCCL_NVTX_PAYLOAD_ENTRIES(
+    (uint64_t, comm, TYPE_UINT64, nccl_nvtxCommStr),
+    (size_t, bytes, TYPE_SIZE, nccl_nvtxMsgSizeStr)
+  )
+)
+
 NCCL_NVTX_DEFINE_STRUCT_WITH_SCHEMA_ENTRIES(NcclNvtxParamsAllReduce, static constexpr,
   NCCL_NVTX_PAYLOAD_ENTRIES(
     (uint64_t, comm, TYPE_UINT64, nccl_nvtxCommStr),
@@ -99,6 +106,14 @@ NCCL_NVTX_DEFINE_STRUCT_WITH_SCHEMA_ENTRIES(NcclNvtxParamsAllReduce, static cons
 )
 
 NCCL_NVTX_DEFINE_STRUCT_WITH_SCHEMA_ENTRIES(NcclNvtxParamsBroadcast, static constexpr,
+  NCCL_NVTX_PAYLOAD_ENTRIES(
+    (uint64_t, comm, TYPE_UINT64, nccl_nvtxCommStr),
+    (size_t, bytes, TYPE_SIZE, nccl_nvtxMsgSizeStr),
+    (int, root, TYPE_INT, "Root")
+  )
+)
+
+NCCL_NVTX_DEFINE_STRUCT_WITH_SCHEMA_ENTRIES(NcclNvtxParamsGather, static constexpr,
   NCCL_NVTX_PAYLOAD_ENTRIES(
     (uint64_t, comm, TYPE_UINT64, nccl_nvtxCommStr),
     (size_t, bytes, TYPE_SIZE, nccl_nvtxMsgSizeStr),
@@ -120,6 +135,14 @@ NCCL_NVTX_DEFINE_STRUCT_WITH_SCHEMA_ENTRIES(NcclNvtxParamsReduceScatter, static 
     (uint64_t, comm, TYPE_UINT64, nccl_nvtxCommStr),
     (size_t, bytes, TYPE_SIZE, nccl_nvtxMsgSizeStr),
     (ncclRedOp_t, op, NCCL_REDOP, nccl_nvtxReductionOpStrpStr)
+  )
+)
+
+NCCL_NVTX_DEFINE_STRUCT_WITH_SCHEMA_ENTRIES(NcclNvtxParamsScatter, static constexpr,
+  NCCL_NVTX_PAYLOAD_ENTRIES(
+    (uint64_t, comm, TYPE_UINT64, nccl_nvtxCommStr),
+    (size_t, bytes, TYPE_SIZE, nccl_nvtxMsgSizeStr),
+    (int, root, TYPE_INT, "Root")
   )
 )
 

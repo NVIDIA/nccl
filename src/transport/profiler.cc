@@ -10,7 +10,7 @@
 
 static ncclResult_t profilerProxyConnect(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState, void* reqBuff, int reqSize, void* respBuff, int respSize, int* done) {
   connection->proxyAppendPtr = &connection->proxyAppend;
-  connection->shared = 1;
+  connection->shared = 0;
   return ncclSuccess;
 }
 

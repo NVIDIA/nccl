@@ -34,6 +34,7 @@ add_subdirectory(device)
 # === @begin: nccl library ===
 set(NCCL_SRC_FILES
     # === @begin: / ===
+    allocator.cc
     bootstrap.cc
     channel.cc
     collectives.cc
@@ -45,6 +46,7 @@ set(NCCL_SRC_FILES
     init.cc
     mnnvl.cc
     proxy.cc
+    symmetric.cc
     transport.cc
     # === @end: / ===
 
@@ -55,6 +57,8 @@ set(NCCL_SRC_FILES
     misc/ibvsymbols.cc
     misc/ibvwrap.cc
     misc/ipcsocket.cc
+    misc/mlx5dvsymbols.cc
+    misc/mlx5dvwrap.cc
     misc/nvmlwrap.cc
     misc/param.cc
     misc/shmutils.cc
@@ -72,6 +76,7 @@ set(NCCL_SRC_FILES
     plugin/profiler/profiler_v1.cc
     plugin/profiler/profiler_v2.cc
     plugin/profiler/profiler_v3.cc
+    plugin/profiler/profiler_v4.cc
     plugin/tuner/tuner_v2.cc
     plugin/tuner/tuner_v3.cc
     plugin/tuner/tuner_v4.cc
@@ -95,7 +100,7 @@ set(NCCL_SRC_FILES
 
     # === @begin: graph/ ===
     # === @begin: Header Files ===
-    # @TODO+:Slava_n_Ben:check either they are public or private. More likely, the latter.
+    # NOTE: these are private headers
     graph/rings.h
     graph/topo.h
     graph/xml.h
@@ -129,6 +134,7 @@ set_source_files_properties(
     plugin/profiler/profiler_v1.cc
     plugin/profiler/profiler_v2.cc
     plugin/profiler/profiler_v3.cc
+    plugin/profiler/profiler_v4.cc
     plugin/tuner/tuner_v2.cc
     plugin/tuner/tuner_v3.cc
     plugin/tuner/tuner_v4.cc

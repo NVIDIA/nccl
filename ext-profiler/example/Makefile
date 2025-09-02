@@ -5,18 +5,20 @@
 #
 .DEFAULT_GOAL: build
 include ../../makefiles/common.mk
-SRCDIR   ?= $(abspath ../..)
 BUILDDIR ?= .
 NCCLDIR  := $(BUILDDIR)
 
-SRC_FILES := $(wildcard *.c)
+SRC_FILES := $(wildcard *.cc)
+DST_DIR   := $(BUILDDIR)
+OBJ_FILES := $(SRC_FILES:%.cc=${DST_DIR}/%.o)
+DEP_FILES := $(OBJ_FILES:%.o=%.dep)
 
-build: ${BUILDDIR}/libnccl-profiler-example.so
+build: ${DST_DIR}/libnccl-profiler-example.so
 
-${BUILDDIR}/libnccl-profiler-example.so: ${SRC_FILES}
+${DST_DIR}/libnccl-profiler-example.so: ${SRC_FILES}
 	@printf "Compiling  %-35s > %s\n" $< $@
-	@mkdir -p ${BUILDDIR}
-	$(CC) -Inccl -fPIC -shared -o $@ $^
+	@mkdir -p ${DST_DIR}
+	$(CXX) -Inccl -I${CUDA_INC} -fPIC -shared -o $@ $^
 
 clean:
-	rm -f ${BUILDDIR}/libnccl-profiler-example.so
+	rm -f ${DST_DIR}/libnccl-profiler-example.so

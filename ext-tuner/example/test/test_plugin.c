@@ -97,12 +97,12 @@ int test_plugin_init() {
   void* context = NULL;
 
   // Test successful initialization
-  ncclResult_t result = pluginInit(8, 2, mock_logger, &context);
+  ncclResult_t result = pluginInit(&context, 0, 8, 2, mock_logger, NULL, NULL);
   TEST_ASSERT(result == ncclSuccess, "Plugin init should succeed");
   TEST_ASSERT(context != NULL, "Context should be allocated");
 
   // Clean up
-  pluginDestroy(context);
+  pluginFinalize(context);
   TEST_PASS();
 }
 
@@ -122,11 +122,11 @@ int test_config_parsing_valid() {
   setenv("NCCL_TUNER_CONFIG_FILE", "test_valid.conf", 1);
 
   void* context = NULL;
-  ncclResult_t result = pluginInit(16, 2, mock_logger, &context);
+  ncclResult_t result = pluginInit(&context, 0, 16, 2, mock_logger, NULL, NULL);
   TEST_ASSERT(result == ncclSuccess, "Plugin init with valid config should succeed");
 
   // Clean up
-  pluginDestroy(context);
+  pluginFinalize(context);
   unlink("test_valid.conf");
   unsetenv("NCCL_TUNER_CONFIG_FILE");
   TEST_PASS();
@@ -143,12 +143,12 @@ int test_config_parsing_invalid() {
   setenv("NCCL_TUNER_CONFIG_FILE", "test_invalid.conf", 1);
 
   void* context = NULL;
-  ncclResult_t result = pluginInit(8, 1, mock_logger, &context);
+  ncclResult_t result = pluginInit(&context, 0, 8, 1, mock_logger, NULL, NULL);
   // Should still succeed but with no valid configs loaded
   TEST_ASSERT(result == ncclSuccess, "Plugin init should succeed even with invalid config");
 
   // Clean up
-  pluginDestroy(context);
+  pluginFinalize(context);
   unlink("test_invalid.conf");
   unsetenv("NCCL_TUNER_CONFIG_FILE");
   TEST_PASS();
@@ -164,7 +164,7 @@ int test_collective_matching() {
   setenv("NCCL_TUNER_CONFIG_FILE", "test_match.conf", 1);
 
   void* context = NULL;
-  pluginInit(8, 1, mock_logger, &context);
+  pluginInit(&context, 0, 8, 1, mock_logger, NULL, NULL);
 
   // Create mock cost table
   float cost_table[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
@@ -208,7 +208,7 @@ int test_collective_matching() {
   TEST_ASSERT(nChannels == 4, "Should set 4 channels");
 
   // Clean up
-  pluginDestroy(context);
+  pluginFinalize(context);
   unlink("test_match.conf");
   unsetenv("NCCL_TUNER_CONFIG_FILE");
   TEST_PASS();
@@ -225,7 +225,7 @@ int test_size_matching() {
   setenv("NCCL_TUNER_CONFIG_FILE", "test_size.conf", 1);
 
   void* context = NULL;
-  pluginInit(8, 1, mock_logger, &context);
+  pluginInit(&context, 0, 8, 1, mock_logger, NULL, NULL);
 
   float cost_table[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
   float* cost_table_ptr[NCCL_NUM_ALGORITHMS];
@@ -279,7 +279,7 @@ int test_size_matching() {
   TEST_ASSERT(nChannels == 8, "Large: Should set 8 channels");
 
   // Clean up
-  pluginDestroy(context);
+  pluginFinalize(context);
   unlink("test_size.conf");
   unsetenv("NCCL_TUNER_CONFIG_FILE");
   TEST_PASS();
@@ -297,7 +297,7 @@ int test_topology_matching() {
 
   // Test with single node setup
   void* context1 = NULL;
-  pluginInit(8, 1, mock_logger, &context1);  // 8 ranks, 1 node
+  pluginInit(&context1, 0, 8, 1, mock_logger, NULL, NULL);  // 8 ranks, 1 node
 
   float cost_table[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
   float* cost_table_ptr[NCCL_NUM_ALGORITHMS];
@@ -315,11 +315,11 @@ int test_topology_matching() {
   TEST_ASSERT(cost_table[NCCL_ALGO_TREE][NCCL_PROTO_SIMPLE] == 0.0, "Single node: Should match tree config");
   TEST_ASSERT(nChannels == 2, "Single node: Should set 2 channels");
 
-  pluginDestroy(context1);
+  pluginFinalize(context1);
 
   // Test with 4 nodes, 32 ranks setup
   void* context2 = NULL;
-  pluginInit(32, 4, mock_logger, &context2);  // 32 ranks, 4 nodes
+  pluginInit(&context2, 0, 32, 4, mock_logger, NULL, NULL);  // 32 ranks, 4 nodes
 
   for (int i = 0; i < NCCL_NUM_ALGORITHMS; i++) {
     for (int j = 0; j < NCCL_NUM_PROTOCOLS; j++) {
@@ -348,7 +348,7 @@ int test_default_channels() {
   setenv("NCCL_TUNER_CONFIG_FILE", "test_default.conf", 1);
 
   void* context = NULL;
-  pluginInit(8, 1, mock_logger, &context);
+  pluginInit(&context, 0, 8, 1, mock_logger, NULL, NULL);
 
   float cost_table[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
   float* cost_table_ptr[NCCL_NUM_ALGORITHMS];
@@ -368,7 +368,7 @@ int test_default_channels() {
   TEST_ASSERT(nChannels == 1, "Should keep default channels (1) when config has -1");
 
   // Clean up
-  pluginDestroy(context);
+  pluginFinalize(context);
   unlink("test_default.conf");
   unsetenv("NCCL_TUNER_CONFIG_FILE");
   TEST_PASS();
@@ -385,7 +385,7 @@ int test_regbuff_matching() {
   setenv("NCCL_TUNER_CONFIG_FILE", "test_regbuff.conf", 1);
 
   void* context = NULL;
-  pluginInit(8, 1, mock_logger, &context);
+  pluginInit(&context, 0, 8, 1, mock_logger, NULL, NULL);
 
   float cost_table[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
   float* cost_table_ptr[NCCL_NUM_ALGORITHMS];
@@ -436,7 +436,7 @@ int test_regbuff_matching() {
   TEST_ASSERT(nChannels == 8, "Any regBuff: Should set 8 channels");
 
   // Clean up
-  pluginDestroy(context);
+  pluginFinalize(context);
   unlink("test_regbuff.conf");
   unsetenv("NCCL_TUNER_CONFIG_FILE");
   TEST_PASS();
@@ -453,7 +453,7 @@ int test_pipeops_matching() {
   setenv("NCCL_TUNER_CONFIG_FILE", "test_pipeops.conf", 1);
 
   void* context = NULL;
-  pluginInit(8, 1, mock_logger, &context);
+  pluginInit(&context, 0, 8, 1, mock_logger, NULL, NULL);
 
   float cost_table[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
   float* cost_table_ptr[NCCL_NUM_ALGORITHMS];
@@ -503,7 +503,7 @@ int test_pipeops_matching() {
   TEST_ASSERT(nChannels == 8, "Any pipeOps: Should set 8 channels");
 
   // Clean up
-  pluginDestroy(context);
+  pluginFinalize(context);
   unlink("test_pipeops.conf");
   unsetenv("NCCL_TUNER_CONFIG_FILE");
   TEST_PASS();
@@ -518,7 +518,7 @@ int test_no_match_fallback() {
   setenv("NCCL_TUNER_CONFIG_FILE", "test_fallback.conf", 1);
 
   void* context = NULL;
-  pluginInit(8, 1, mock_logger, &context);
+  pluginInit(&context, 0, 8, 1, mock_logger, NULL, NULL);
 
   float cost_table[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
   float* cost_table_ptr[NCCL_NUM_ALGORITHMS];
@@ -542,7 +542,7 @@ int test_no_match_fallback() {
   TEST_ASSERT(nChannels == 1, "Should use default channels");
 
   // Clean up
-  pluginDestroy(context);
+  pluginFinalize(context);
   unlink("test_fallback.conf");
   unsetenv("NCCL_TUNER_CONFIG_FILE");
   TEST_PASS();
@@ -592,7 +592,7 @@ int test_large_config() {
 
   // Initialize plugin with large config
   void* context = NULL;
-  ncclResult_t result = pluginInit(16, 4, mock_logger, &context);
+  ncclResult_t result = pluginInit(&context, 0, 16, 4, mock_logger, NULL, NULL);
   TEST_ASSERT(result == ncclSuccess, "Plugin init with large config should succeed");
   TEST_ASSERT(context != NULL, "Context should be allocated");
 
@@ -651,7 +651,7 @@ int test_large_config() {
   TEST_ASSERT(result == ncclSuccess, "GetCollInfo should work with large config set");
 
   // Clean up
-  pluginDestroy(context);
+  pluginFinalize(context);
   unlink(large_config_file);
   unsetenv("NCCL_TUNER_CONFIG_FILE");
 
@@ -683,7 +683,7 @@ int test_very_large_config_stress() {
 
   // Test initialization with stress config
   void* context = NULL;
-  ncclResult_t result = pluginInit(8, 2, mock_logger, &context);
+  ncclResult_t result = pluginInit(&context, 0, 8, 2, mock_logger, NULL, NULL);
   TEST_ASSERT(result == ncclSuccess, "Plugin should handle very large config files");
 
   TunerContext* ctx = (TunerContext*)context;
@@ -704,7 +704,7 @@ int test_very_large_config_stress() {
   }
 
   // Clean up
-  pluginDestroy(context);
+  pluginFinalize(context);
   unlink(stress_config_file);
   unsetenv("NCCL_TUNER_CONFIG_FILE");
 
@@ -725,7 +725,7 @@ int test_empty_config() {
   setenv("NCCL_TUNER_CONFIG_FILE", empty_config_file, 1);
 
   void* context = NULL;
-  ncclResult_t result = pluginInit(8, 2, mock_logger, &context);
+  ncclResult_t result = pluginInit(&context, 0, 8, 2, mock_logger, NULL, NULL);
   TEST_ASSERT(result == ncclSuccess, "Plugin should handle empty config files");
 
   TunerContext* ctx = (TunerContext*)context;
@@ -750,10 +750,131 @@ int test_empty_config() {
   TEST_ASSERT(result == ncclSuccess, "GetCollInfo should work with empty config");
 
   // Clean up
-  pluginDestroy(context);
+  pluginFinalize(context);
   unlink(empty_config_file);
   unsetenv("NCCL_TUNER_CONFIG_FILE");
 
+  TEST_PASS();
+}
+
+// Test NVLink domain info handling
+int test_nvl_domain_info() {
+  printf("Testing NVLink domain info handling...\n");
+
+  // Test NVLink domain structure with min/max ranks per domain
+  ncclNvlDomainInfo_v5_t nvl_domain = {
+    .nNvlDomains = 2, // 2 nodes = 2 domains
+    .minRanksPerNvlDomain = 3, // minimum ranks across all domains (bottleneck)
+    .maxRanksPerNvlDomain = 5  // maximum ranks across all domains (capacity)
+  };
+  
+  void* context = NULL;
+  ncclResult_t result = pluginInit(&context, 0, 8, 2, mock_logger, &nvl_domain, NULL);
+  TEST_ASSERT(result == ncclSuccess, "Plugin init with NVLink domains should succeed");
+  
+  // Validate NVLD info structure
+  TEST_ASSERT(nvl_domain.nNvlDomains == 2, "Should have 2 domains (nodes)");
+  TEST_ASSERT(nvl_domain.minRanksPerNvlDomain == 3, "Should have minimum 3 ranks per domain");
+  TEST_ASSERT(nvl_domain.maxRanksPerNvlDomain == 5, "Should have maximum 5 ranks per domain");
+  
+  // Clean up
+  pluginFinalize(context);
+  printf("NVLink domain info test passed!\n");
+  TEST_PASS();
+}
+
+int test_tuner_constants() {
+  // Initialize constants to -1.0 for testing purposes
+  ncclTunerConstants_v5_t constants = {
+    // Base latencies: [NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS]
+    .baseLatencies = {
+      {-1.0, -1.0, -1.0},    // NCCL_ALGO_TREE: LL, LL128, Simple
+      {-1.0, -1.0, -1.0},    // NCCL_ALGO_RING: LL, LL128, Simple
+      {-1.0, -1.0, -1.0},   // NCCL_ALGO_COLLNET_DIRECT
+      {-1.0, -1.0, -1.0},   // NCCL_ALGO_COLLNET_CHAIN
+      {-1.0, -1.0, -1.0},    // NCCL_ALGO_NVLS
+      {-1.0, -1.0, -1.0},    // NCCL_ALGO_NVLS_TREE
+      {-1.0, -1.0, -1.0}     // NCCL_ALGO_PAT
+    },
+
+    // Hardware latencies: [NCCL_NUM_HW_LINKS][NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS]
+    .hwLatencies = {
+      // NCCL_HW_NVLINK
+      {
+        {-1.0, -1.0, -1.0},    // TREE
+        {-1.0, -1.0, -1.0},    // RING
+        {-1.0, -1.0, -1.0},    // COLLNET_DIRECT
+        {-1.0, -1.0, -1.0},    // COLLNET_CHAIN
+        {-1.0, -1.0, -1.0},    // NVLS
+        {-1.0, -1.0, -1.0},    // NVLS_TREE
+        {-1.0, -1.0, -1.0}     // PAT
+      },
+      // NCCL_HW_PCI
+      {
+        {-1.0, -1.0, -1.0},   // TREE
+        {-1.0, -1.0, -1.0},    // RING
+        {-1.0, -1.0, -1.0},  // COLLNET_DIRECT
+        {-1.0, -1.0, -1.0},  // COLLNET_CHAIN
+        {-1.0, -1.0, -1.0},     // NVLS
+        {-1.0, -1.0, -1.0},   // NVLS_TREE
+        {-1.0, -1.0, -1.0}   // PAT
+      },
+      // NCCL_HW_NET
+      {
+        {-1.0, -1.0, -1.0},  // TREE
+        {-1.0, -1.0, -1.0},  // RING
+        {-1.0, -1.0, -1.0},  // COLLNET_DIRECT
+        {-1.0, -1.0, -1.0},  // COLLNET_CHAIN
+        {-1.0, -1.0, -1.0},  // NVLS
+        {-1.0, -1.0, -1.0},  // NVLS_TREE
+        {-1.0, -1.0, -1.0}   // PAT
+      }
+    },
+
+    // LL maximum bandwidths: [NCCL_NUM_COMPCAPS][NCCL_NUM_TUNING_SCALES]
+    .llMaxBws = {
+      {-1.0, -1.0, -1.0},  // Volta: 1node, 2nodes, 4nodes
+      {-1.0, -1.0, -1.0},  // Ampere: 1node, 2nodes, 4nodes
+      {-1.0, -1.0, -1.0},  // Hopper: 1node, 2nodes, 4nodes
+      {-1.0, -1.0, -1.0}   // Blackwell: 1node, 2nodes, 4nodes
+    },
+
+    // Per-channel maximum Ring LL128 bandwidths: [NCCL_NUM_COMPCAPS][NCCL_NUM_TUNING_SCALES]
+    .perChMaxRingLL128Bws = {
+      {-1.0, -1.0, -1.0},   // Volta: 1node, 2nodes, 4nodes
+      {-1.0, -1.0, -1.0},  // Ampere: 1node, 2nodes, 4nodes
+      {-1.0, -1.0, -1.0},  // Hopper: 1node, 2nodes, 4nodes
+      {-1.0, -1.0, -1.0}   // Blackwell: 1node, 2nodes, 4nodes
+    },
+
+    // Per-channel maximum Tree LL128 bandwidths: [NCCL_NUM_COMPCAPS][NCCL_NUM_TUNING_SCALES]
+    .perChMaxTreeLL128Bws = {
+      {-1.0, -1.0, -1.0},    // Volta: 1node, 2nodes, 4nodes
+      {-1.0, -1.0, -1.0},   // Ampere: 1node, 2nodes, 4nodes
+      {-1.0, -1.0, -1.0},  // Hopper: 1node, 2nodes, 4nodes
+      {-1.0, -1.0, -1.0}   // Blackwell: 1node, 2nodes, 4nodes
+    },
+
+    // Per-channel maximum Tree bandwidths: [NCCL_NUM_COMPCAPS][NCCL_NUM_TUNING_SCALES]
+    .perChMaxTreeBws = {
+      {-1.0, -1.0, -1.0},  // Volta: 1node, 2nodes, 4nodes
+      {-1.0, -1.0, -1.0},  // Ampere: 1node, 2nodes, 4nodes
+      {-1.0, -1.0, -1.0},  // Hopper: 1node, 2nodes, 4nodes
+      {-1.0, -1.0, -1.0}   // Blackwell: 1node, 2nodes, 4nodes
+    }
+  };
+
+  void* context = NULL;
+  ncclResult_t result = pluginInit(&context, 0, 8, 2, mock_logger, NULL, &constants);
+  TEST_ASSERT(result == ncclSuccess, "Plugin init with constants should succeed");
+
+  // Test that the constants were set correctly
+  TEST_ASSERT(constants.perChMaxTreeBws[NCCL_BLACKWELL_COMPCAP_IDX][NCCL_TUNING_SCALE_4NODES] == 15.0, "Tree bandwidth should be 15GB/s");
+  TEST_ASSERT(constants.perChMaxRingLL128Bws[NCCL_BLACKWELL_COMPCAP_IDX][NCCL_TUNING_SCALE_4NODES] == 20.0, "Ring bandwidth should be 20GB/s");
+  TEST_ASSERT(constants.hwLatencies[NCCL_HW_NET][NCCL_ALGO_NVLS][NCCL_PROTO_SIMPLE] == 24.0, "NVLSTree base network latency should be 24us");
+
+  // Clean up
+  pluginFinalize(context);
   TEST_PASS();
 }
 
@@ -782,6 +903,8 @@ TestCase test_cases[] = {
   {"large-config", test_large_config, "Large configuration files (dynamic allocation)"},
   {"stress-config", test_very_large_config_stress, "Very large configuration stress test"},
   {"empty-config", test_empty_config, "Empty configuration file handling"},
+  {"nvl-domain", test_nvl_domain_info, "NVL domain info handling"},
+  {"constants", test_tuner_constants, "Tuner constants initialization"},
   {NULL, NULL, NULL} // End marker
 };
 
@@ -825,6 +948,7 @@ int main(int argc, char* argv[]) {
   if (argc == 1) {
     // No arguments - run all tests
     for (int i = 0; test_cases[i].name != NULL; i++) {
+      printf("Running test: %s\n", test_cases[i].name);
       total++;
       passed += test_cases[i].func();
     }

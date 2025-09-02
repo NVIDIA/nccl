@@ -7,6 +7,7 @@
 #include "comm.h"
 #include "nccl_profiler.h"
 #include "checks.h"
+#include <dlfcn.h>
 
 static ncclProfiler_t ncclProfiler;
 static ncclProfiler_v2_t* ncclProfiler_v2;
@@ -20,6 +21,7 @@ static ncclResult_t ncclProfiler_startEvent(void* context, void** eHandle, ncclP
   switch(eDescr->type) {
     case ncclProfileGroup: break;
     case ncclProfileColl: {
+      eDescr_v2.parentObj = eDescr->coll.parentGroup; // Hierarchy changed in v5
       eDescr_v2.coll.name = nullptr; // removed in v4
       eDescr_v2.coll.commHash = 0; // removed in v4
       eDescr_v2.coll.seqNumber = eDescr->coll.seqNumber;
@@ -38,6 +40,7 @@ static ncclResult_t ncclProfiler_startEvent(void* context, void** eHandle, ncclP
     case ncclProfileP2p: {
       eDescr_v2.p2p.name = nullptr; // removed in v4
       eDescr_v2.p2p.commHash = 0; // removed in v4
+      eDescr_v2.parentObj = eDescr->p2p.parentGroup; // Hierarchy changed in v5
       eDescr_v2.p2p.func = eDescr->p2p.func;
       eDescr_v2.p2p.buff = eDescr->p2p.buff;
       eDescr_v2.p2p.count = eDescr->p2p.count;
@@ -83,7 +86,15 @@ static ncclResult_t ncclProfiler_recordEventState(void* eHandle, ncclProfilerEve
   return ncclProfiler_v2->recordEventState(eHandle, eState, &args);
 }
 
-static ncclResult_t ncclProfiler_init(void** context, int* eActivationMask, const char* commName, uint64_t commHash, int nNodes, int nranks, int rank, ncclDebugLogger_t logfn) {
+static ncclResult_t ncclProfiler_init(void** context,
+    uint64_t commId __attribute__((unused)),
+    int* eActivationMask __attribute__((unused)),
+    const char* commName __attribute__((unused)),
+    int nNodes __attribute__((unused)),
+    int nranks __attribute__((unused)),
+    int rank __attribute__((unused)),
+    ncclDebugLogger_t logfn __attribute__((unused))
+  ) {
   NCCLCHECK(ncclProfiler_v2->init(context, eActivationMask));
   ncclProfiler.startEvent = ncclProfiler_startEvent;
   ncclProfiler.stopEvent = ncclProfiler_v2->stopEvent;
@@ -97,9 +108,8 @@ ncclProfiler_t* getNcclProfiler_v2(void* lib) {
   if (ncclProfiler_v2) {
     ncclProfiler.name = ncclProfiler_v2->name;
     ncclProfiler.init = ncclProfiler_init;
-    INFO(NCCL_INIT|NCCL_ENV, "PROFILER/Plugin: loaded %s", ncclProfiler_v2->name);
+    INFO(NCCL_INIT, "PROFILER/Plugin: Loaded %s (v2)", ncclProfiler_v2->name);
     return &ncclProfiler;
   }
-  INFO(NCCL_INIT|NCCL_ENV, "PROFILER/Plugin: failed to find ncclProfiler_v2");
   return NULL;
 }

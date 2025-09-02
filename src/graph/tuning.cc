@@ -8,6 +8,7 @@
 #include "device.h"
 #include "comm.h"
 #include "topo.h"
+#include "nccl_tuner.h"
 
 NCCL_PARAM(Nthreads, "NTHREADS", -2);
 NCCL_PARAM(Ll128Nthreads, "LL128_NTHREADS", -2);
@@ -129,63 +130,72 @@ fail:
   goto exit;
 }
 
-// Latencies in us, Bandwidths in GB/s
-// Tree { LL, LL128, Simple } , Ring { LL, LL128, Simple }
-static const float baseLat  [NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS] = {
-       {  6.8, 14.0,  8.4 }, {  6.6, 14.0,  8.4 },  // Tree, Ring
-       {    0,    0,    0 }, {    0,    0,    0 },  // Collnet Direct, Chain
-       {    0,    0,    0 }, {    0,    0,    0 }}; // NVLS, NVLS Tree
+// NVLS efficiency factor.
+static const float nvlsEfficiency[NCCL_NUM_COMPCAPS] = {
+  0.0f, // Volta
+  0.0f, // Ampere
+  0.85f, // Hopper
+  0.74f, // Blackwell
+};
 
-// NVLink, PCI, Network
-#define NCCL_HW_NVLINK 0
-#define NCCL_HW_PCI 1
-#define NCCL_HW_NET 2
-static float hwLat [3][NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS] =
-{ /* NVLINK */
-  { /* Tree (LL/LL128/Simple)*/ { .6, 1.25, 4.0 }, /* Ring (LL/LL128/Simple)*/ { .6, 1.9, 3.4 },
-    /* CollNetDirect (Simple)*/ { 0, 0, 3.7 }, /* CollNetChain (Simple)*/ { 0, 0, 2.8 },
-    /* NVLS */ { 0, 0, 25 }, /* NVLSTree */ { 0, 0, 25 } },
+// Default tuner constants
+static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
+  .baseLatencies = {
+    {  6.8, 14.0,  8.4 }, {  6.6, 14.0,  8.4 },  // Tree, Ring
+    {    0,    0,    0 }, {    0,    0,    0 },  // Collnet Direct, Chain
+    {    0,    0,    0 }, {    0,    0,    0 },  // NVLS, NVLS Tree
+    {  8.0,  8.0,  8.0 }                         // PAT
+    },
+  .hwLatencies = {
+  /* NVLINK */
+  { { .6, 1.25, 4.0 }, { .6, 1.9, 3.4 }, /* Tree (LL/LL128/Simple), Ring (LL/LL128/Simple)*/
+    {  0,    0, 3.7 }, {  0,   0,  2.8 }, /* CollNetDirect (LL/LL128/Simple), CollNetChain (LL/LL128/Simple)*/
+    {  0,    0,  25 }, {  0,   0,  25 }, /* NVLS (LL/LL128/Simple), NVLSTree (LL/LL128/Simple)*/
+    {  0,    0, 4.0 } /* PAT (LL/LL128/Simple)*/
+    },
   /* PCI */
-  { /* Tree (LL/LL128/Simple)*/ { 1.0, 1.9, 4.0 }, /* Ring (LL/LL128/Simple)*/ { 1.0, 2.5, 5.7 },
-    /* CollNetDirect (Simple)*/ { 0, 0, 3.7 }, /* CollNetChain (Simple)*/ { 0, 0, 2.8 },
-    /* NVLS */ { 0, 0, 0 }, /* NVLSTree */ { 0, 0, 0 } },
+  { { 1.0, 1.9, 4.0 }, { 1.0, 2.5, 5.7 }, /* Tree (LL/LL128/Simple), Ring (LL/LL128/Simple)*/
+    {  0,    0, 3.7 }, {  0,   0,  2.8 }, /* CollNetDirect (LL/LL128/Simple), CollNetChain (LL/LL128/Simple)*/
+    {  0,    0,   0 }, {  0,   0,    0 }, /* NVLS (LL/LL128/Simple), NVLSTree (LL/LL128/Simple)*/
+    {  0,    0, 4.0 } /* PAT (LL/LL128/Simple)*/
+    },
   /* NET */
-  { /* Tree (LL/LL128/Simple)*/ { 5.0, 8.5, 14 }, /* Ring (LL/LL128/Simple)*/ { 2.7, 4.0, 14.0 },
-    /* CollNetDirect (Simple)*/ { 0, 0, 31 }, /* CollNetChain (Simple)*/ { 0, 0, 30 },
-    /* NVLS */ { 0, 0, 18 }, /* NVLSTree */ { 0, 0, 14 } }
-};
-
-/* Array indexes used below */
-#define VOLTA_COMPCAP_IDX 0
-#define AMPERE_COMPCAP_IDX 1
-#define HOPPER_COMPCAP_IDX 2
-#define BLACKWELL_COMPCAP_IDX 3
-
-// LL128 max BW per channel
-static const double llMaxBws[][3] = {
-  /* Volta-N1/Intel-N2/Intel-N4) */ {39.0, 39.0, 20.4},
-  /* Ampere-N1/AMD-N2/AMD-N4) */ {87.7, 22.5 /*avg of ring & tree*/, 19.0},
-  /* Hopper-N1/AMD-N2/AMD-N4) */ {141.0, 45.0 /*avg of ring & tree*/, 35.0},
-  /* Blackwell-N1/AMD-N2/AMD-N4) */ {2*141.0, 2*45.0 /*avg of ring & tree*/, 2*35.0},
-};
-
-static const double perChMaxRingLL128Bws[][3] = {
-  /* Volta (N1/N2/N4) */  {20.0, 20.0, 20.0},
-  /* Ampere (N1/N2/N4) */ {20.0, 20.0, 20.0},
-  /* Hopper (N1/N2/N4) */ {36.7, 36.7, 36.7},
-  /* Blackwell (N1/N2/N4) */ {2*36.7, 2*36.7, 2*36.7},
-};
-static const double perChMaxTreeLL128Bws[][3] = {
-  /* Volta (N1/N2/N4) */  {20.0, 20.0, 20.0},
-  /* Ampere (N1/N2/N4) */ {20.0, 20.0, 20.0},
-  /* Hopper (N1/N2/N4) */ {36.7, 36.7, 29.0},
-  /* Blackwell (N1/N2/N4) */ {2*36.7, 2*36.7, 2*29.0},
-};
-static const double perChMaxTreeBws[][3] = {
-  /* Volta (N1/N2/N4) */  {26.5, 18.5, 10.0},
-  /* Ampere (N1/N2/N4) */ {24.0, 23.6, 17.8},
-  /* Hopper (N1/N2/N4) */ {38.7, 41.4, 36.0},
-  /* Blackwell (N1/N2/N4) */ {2*38.7, 2*41.4, 2*36.0},
+  { { 5.0, 8.5, 14 }, { 2.7, 4.0, 14.0 }, /* Tree (LL/LL128/Simple), Ring (LL/LL128/Simple)*/
+    {   0,   0, 31 }, {   0,   0,   30 }, /* CollNetDirect (LL/LL128/Simple), CollNetChain (LL/LL128/Simple)*/
+    {   0,   0, 18 }, {   0,   0,   14 }, /* NVLS (LL/LL128/Simple), NVLSTree (LL/LL128/Simple)*/
+    {   0,   0, 14 } /* PAT (LL/LL128/Simple)*/
+    },
+  },
+  .llMaxBws = {
+     {39.0, 39.0, 20.4}, /* Volta-N1/Intel-N2/Intel-N4) */
+     {87.7, 22.5 /*avg of ring & tree*/, 19.0}, /* Ampere-N1/AMD-N2/AMD-N4) */
+     {141.0, 45.0 /*avg of ring & tree*/, 35.0}, /* Hopper-N1/AMD-N2/AMD-N4) */
+     {2*141.0, 2*45.0 /*avg of ring & tree*/, 2*35.0}, /* Blackwell-N1/AMD-N2/AMD-N4) */
+  },
+  .perChMaxRingLL128Bws = {
+    {20.0, 20.0, 20.0}, /* Volta (N1/N2/N4) */
+    {20.0, 20.0, 20.0}, /* Ampere (N1/N2/N4) */
+    {36.7, 36.7, 36.7}, /* Hopper (N1/N2/N4) */
+    {2*36.7, 2*36.7, 2*36.7}, /* Blackwell (N1/N2/N4) */
+  },
+  .perChMaxTreeLL128Bws = {
+    {20.0, 20.0, 20.0}, /* Volta (N1/N2/N4) */
+    {20.0, 20.0, 20.0}, /* Ampere (N1/N2/N4) */
+    {36.7, 36.7, 29.0}, /* Hopper (N1/N2/N4) */
+    {55.6, 31.67, 20.0}, /* Blackwell (N1/N2/N4) */
+  },
+  .perChMaxTreeBws = {
+    {26.5, 18.5, 10.0}, /* Volta (N1/N2/N4) */
+    {24.0, 23.6, 17.8}, /* Ampere (N1/N2/N4) */
+    {38.7, 41.4, 36.0}, /* Hopper (N1/N2/N4) */
+    {70.0, 42.8, 24.0}, /* Blackwell (N1/N2/N4) */
+  },
+  .perChMaxNVLSTreeBws = {
+    {26.5, 18.5, 10.0}, /* Volta (N1/N2/N4) */
+    {24.0, 23.6, 17.8}, /* Ampere (N1/N2/N4) */
+    {0.0, 57.7, 45.5}, /* Hopper (N1/N2/N4) */
+    {0.0, 96.0, 43.1} /* Blackwell (N1/N2/N4) */
+  }
 };
 
 NCCL_PARAM(PatEnable, "PAT_ENABLE", 2);
@@ -210,6 +220,13 @@ static float getNetOverhead(struct ncclComm* comm) {
 
 NCCL_PARAM(Ll128C2c, "LL128_C2C", 1);
 
+ncclResult_t ncclTopoInitTunerConstants(struct ncclComm* comm) {
+
+  comm->tunerConstants = ncclTunerConstantsDefaults;
+
+  return ncclSuccess;
+}
+
 ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCompCap, struct ncclTopoGraph** graphs) {
   int simpleDefaultThreads = (graphs[NCCL_ALGO_RING]->bwIntra*graphs[NCCL_ALGO_RING]->nChannels <= PCI_BW) ? 256 : NCCL_SIMPLE_MAX_NTHREADS;
   comm->maxThreads[NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] =
@@ -229,17 +246,18 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
   int nRanks = comm->nRanks;
   if (nRanks <= 1) return ncclSuccess;
 
-  int compCapIndex = minCompCap >= 100 ? BLACKWELL_COMPCAP_IDX : (minCompCap >= 90 ? HOPPER_COMPCAP_IDX : minCompCap >= 80 ? AMPERE_COMPCAP_IDX : VOLTA_COMPCAP_IDX);
+  int compCapIndex = minCompCap >= 100 ? NCCL_BLACKWELL_COMPCAP_IDX : (minCompCap >= 90 ? NCCL_HOPPER_COMPCAP_IDX : minCompCap >= 80 ? NCCL_AMPERE_COMPCAP_IDX : NCCL_VOLTA_COMPCAP_IDX);
   int index2 = nNodes <= 2 ? nNodes-1 : 2;
   // LL: for single node, we look at GPU type; for multi-node, we look at CPU type
   int index1 = nNodes == 1 ? compCapIndex :
                (comm->cpuVendor == NCCL_TOPO_CPU_VENDOR_AMD || comm->cpuVendor == NCCL_TOPO_CPU_VENDOR_MIXED) ? 1 : 0;
-  double llMaxBw = llMaxBws[index1][index2];
-  double perChMaxTreeBw = perChMaxTreeBws[compCapIndex][index2];
-  double perChMaxRingLL128Bw = perChMaxRingLL128Bws[compCapIndex][index2];
-  double perChMaxTreeLL128Bw = perChMaxTreeLL128Bws[compCapIndex][index2];
+  double llMaxBw = comm->tunerConstants.llMaxBws[index1][index2];
+  double perChMaxTreeBw = comm->tunerConstants.perChMaxTreeBws[compCapIndex][index2];
+  double perChMaxRingLL128Bw = comm->tunerConstants.perChMaxRingLL128Bws[compCapIndex][index2];
+  double perChMaxTreeLL128Bw = comm->tunerConstants.perChMaxTreeLL128Bws[compCapIndex][index2];
+  double perChMaxNVLSTreeBw = comm->tunerConstants.perChMaxNVLSTreeBws[compCapIndex][index2];
   // De-penalize Tree/Simple latency on Power systems to favor Tree than Ring
-  if (comm->cpuArch == NCCL_TOPO_CPU_ARCH_POWER) hwLat[NCCL_HW_PCI][NCCL_ALGO_TREE][NCCL_PROTO_SIMPLE] = hwLat[NCCL_HW_PCI][NCCL_ALGO_RING][NCCL_PROTO_SIMPLE];
+  if (comm->cpuArch == NCCL_TOPO_CPU_ARCH_POWER) comm->tunerConstants.hwLatencies[NCCL_HW_PCI][NCCL_ALGO_TREE][NCCL_PROTO_SIMPLE] = comm->tunerConstants.hwLatencies[NCCL_HW_PCI][NCCL_ALGO_RING][NCCL_PROTO_SIMPLE];
   float ppn = (float)nRanks / nNodes;
 
   int intraHw[NCCL_NUM_ALGORITHMS], hw[NCCL_NUM_ALGORITHMS];
@@ -264,15 +282,22 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
             && a == NCCL_ALGO_PAT && (p != NCCL_PROTO_SIMPLE || ncclPatEnable(comm) == 0)) continue;
         int collnet = (a == NCCL_ALGO_COLLNET_DIRECT || a == NCCL_ALGO_COLLNET_CHAIN) ? 1 : 0;
         float bw = nNodes <= 2 || collnet ? graphs[a]->bwIntra : graphs[a]->bwInter;
-        if (a == NCCL_ALGO_NVLS) {
+        if (a == NCCL_ALGO_NVLS_TREE || a == NCCL_ALGO_NVLS)
+        {
+          // NVLS/NVLStree needs at least 2 channels
+          if (graphs[a]->nChannels < 2 ) continue;
+          // Convert to NVLS busBW/channel
+          float intraBw = graphs[a]->bwIntra * nvlsEfficiency[compCapIndex] * (graphs[a]->nChannels - 1) / graphs[a]->nChannels;
+	  // AllReduce pipelines two operations.
           if (coll == ncclFuncAllReduce) {
-            bw = std::min(graphs[a]->bwIntra, graphs[a]->bwInter);
+            intraBw *= 2.0f;
           } else {
-            // allgather and reducescatter
-            bw = std::min(graphs[a]->bwIntra * (ppn - 1.0f) / ppn, graphs[a]->bwInter * 0.9f);
+            intraBw *= (ppn - 1) / ppn;
           }
-        }
-        if (a == NCCL_ALGO_NVLS_TREE) bw = std::min(graphs[a]->bwIntra, nNodes <= 2 ? graphs[a]->bwInter : graphs[a]->bwInter/2);
+          // Handle 2 node case of NVLSTree
+          float interBw = graphs[a]->bwInter * ((nNodes <= 2 && a == NCCL_ALGO_NVLS_TREE) ? 2 : 1);
+          bw = std::min( {intraBw, interBw, a == NCCL_ALGO_NVLS_TREE ? (float)perChMaxNVLSTreeBw : std::numeric_limits<float>::max()} );
+        };
         float busBw = graphs[a]->nChannels * bw;
 
         // Various model refinements
@@ -320,27 +345,26 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
         // Convert bus BW to algorithm BW
         if (!(a != NCCL_ALGO_RING && (coll == ncclFuncAllGather || coll == ncclFuncReduceScatter))) {
           float ratio = 1.0f;
-          if (a == NCCL_ALGO_RING) ratio *= (1.0 * nRanks) / nsteps;
-          else if (a == NCCL_ALGO_NVLS || a == NCCL_ALGO_NVLS_TREE) ratio *= 5.0/6.0;
+          if (a == NCCL_ALGO_RING || a == NCCL_ALGO_NVLS || a == NCCL_ALGO_NVLS_TREE) ratio *= (1.0 * nRanks) / nsteps;
           else ratio *= .5;
           busBw *= ratio;
         }
         comm->bandwidths[coll][a][p] = busBw;
-        comm->latencies[coll][a][p] = baseLat[a][p];
-        float intraLat = hwLat[intraHw[a]][a][p];
+        comm->latencies[coll][a][p] = comm->tunerConstants.baseLatencies[a][p];
+        float intraLat = comm->tunerConstants.hwLatencies[intraHw[a]][a][p];
         // With ppn=1 latencies are fully exposed, use the Tree network latency
-        float interLat = ppn == 1 ? hwLat[NCCL_HW_NET][NCCL_ALGO_TREE][p] : hwLat[NCCL_HW_NET][a][p];
+        float interLat = ppn == 1 ? comm->tunerConstants.hwLatencies[NCCL_HW_NET][NCCL_ALGO_TREE][p] : comm->tunerConstants.hwLatencies[NCCL_HW_NET][a][p];
         interLat += graphs[a]->latencyInter;
         // Also add the flush extra latency
         if (p == NCCL_PROTO_SIMPLE) interLat += graphs[a]->latencyInter;
 
         if (a == NCCL_ALGO_RING) {
-          float lat = hwLat[hw[a]][a][p];
+          float lat = comm->tunerConstants.hwLatencies[hw[a]][a][p];
           if ((coll == ncclFuncReduce || coll == ncclFuncBroadcast)) {
             if (graphs[a]->sameChannels) {
               comm->latencies[coll][a][p] += lat;
             } else {
-              if (p == NCCL_PROTO_SIMPLE) lat = hwLat[hw[a]][NCCL_ALGO_TREE][p]; // Add some chunk latency, waiting for proper chunk modeling
+              if (p == NCCL_PROTO_SIMPLE) lat = comm->tunerConstants.hwLatencies[hw[a]][NCCL_ALGO_TREE][p]; // Add some chunk latency, waiting for proper chunk modeling
               comm->latencies[coll][a][p] += nsteps*lat;
             }
           } else {
@@ -371,8 +395,7 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
           comm->latencies[coll][a][p] += intraLat + 2 * log2i(nNodes) * interLat;
         } else if (a == NCCL_ALGO_PAT) {
           if (coll == ncclFuncAllGather || coll == ncclFuncReduceScatter) {
-            comm->latencies[coll][a][p] = 8 // Base time
-              + log2i(nNodes) * (interLat/3.5) // Log latency
+            comm->latencies[coll][a][p] += log2i(nNodes) * (interLat/3.5) // Log latency
               + nRanks * 2.8; // Still a linear part; hopefully we'll manage to remove it at some point.
           }
         }

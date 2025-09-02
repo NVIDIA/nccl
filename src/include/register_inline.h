@@ -1,3 +1,9 @@
+/*************************************************************************
+ * Copyright (c) 2024-2025, NVIDIA CORPORATION. All rights reserved.
+ *
+ * See LICENSE.txt for license information
+ ************************************************************************/
+
 #ifndef NCCL_REGISTER_INLINE_H_
 #define NCCL_REGISTER_INLINE_H_
 
@@ -18,16 +24,5 @@ static inline ncclResult_t ncclRegFind(struct ncclComm* comm, const void* data, 
   }
 }
 
-static inline ncclResult_t ncclRegFindSymmetric(struct ncclComm* comm, const void* data, size_t size, void** symPtr, struct ncclReg** outReg) {
-  struct ncclReg* regRecord = NULL;
-  *symPtr = NULL;
-  *outReg = NULL;
-  NCCLCHECK(ncclRegFind(comm, data, size, &regRecord));
-  if (regRecord && regRecord->baseSymPtr) {
-    *symPtr = (void*)((uintptr_t)regRecord->baseSymPtr + (uintptr_t)data - (uintptr_t)regRecord->begAddr);
-    *outReg = regRecord;
-  }
-  return ncclSuccess;
-}
 
 #endif

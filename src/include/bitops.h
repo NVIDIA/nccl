@@ -41,6 +41,9 @@ constexpr static __host__ __device__ Int maxval(Int a, Int b, More ...more) {
   #endif
 }
 
+#define BIT(x) (1UL << (x))
+#define MASK(x) ((1UL << x) - 1UL)
+
 #define DIVUP(x, y) \
     (((x)+(y)-1)/(y))
 
@@ -68,14 +71,26 @@ static __host__ __device__ constexpr Z roundDown(X x, Y y) {
 }
 
 // assumes second argument is a power of 2
-template<typename X, typename Z = decltype(X()+int())>
-static __host__ __device__ constexpr Z alignUp(X x, int a) {
-  return (x + a-1) & Z(-a);
+template<typename X, typename Y, typename Z = decltype(X()+Y())>
+static __host__ __device__ constexpr Z alignUp(X x, Y a) {
+  return (x + a-1) & -Z(a);
 }
+template<typename T>
+static __host__ __device__ T* alignUp(T* x, size_t a) {
+  static_assert(sizeof(T) == 1, "Only single byte types allowed.");
+  return reinterpret_cast<T*>((reinterpret_cast<uintptr_t>(x) + a-1) & -uintptr_t(a));
+}
+
 // assumes second argument is a power of 2
-template<typename X, typename Z = decltype(X()+int())>
-static __host__ __device__ constexpr Z alignDown(X x, int a) {
-  return x & Z(-a);
+template<typename X, typename Y, typename Z = decltype(X()+Y())>
+static __host__ __device__ constexpr Z alignDown(X x, Y a) {
+  return x & -Z(a);
+}
+
+template<typename T>
+static __host__ __device__ T* alignDown(T* x, size_t a) {
+  static_assert(sizeof(T) == 1, "Only single byte types allowed.");
+  return reinterpret_cast<T*>(reinterpret_cast<uintptr_t>(x) & -uintptr_t(a));
 }
 
 template<typename Int>
@@ -341,7 +356,7 @@ static __host__ UInt reverseSubBits(UInt x) {
     default: static_assert(8*sizeof(UInt) <= 64, "Unsupported integer type.");
     }
     return reverseSubBits<UInt, 8>(x);
-  } else if (nSubBits == 1) {
+  } else if (nSubBits <= 1) {
     return x;
   } else {
     UInt m = UInt(-1)/((UInt(1)<<(nSubBits/2))+1);

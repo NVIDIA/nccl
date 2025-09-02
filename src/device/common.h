@@ -43,7 +43,7 @@ struct ncclShmemData {
   struct ncclDevKernelArgs args;
   int channelId;
   int aborted;
-  alignas(16) struct ncclDevComm comm;
+  alignas(16) struct ncclKernelComm comm;
   alignas(16) struct ncclDevChannel channel;
 
   int batchIx, nextBatchIx;
@@ -323,7 +323,7 @@ __device__ __forceinline__ void profiler(int action) {
         ncclShmem.comm.workCompleted[ncclShmem.channelId].data[wc%MAX_PROFILER_EVENTS_PER_CHANNEL].counter = wc;
       }
       ncclShmem.channel.workCounter += ncclShmem.nWorks;
-      if (action == FINI) ((ncclDevCommAndChannels*)ncclShmem.args.comm)->channels[ncclShmem.channelId].workCounter = ncclShmem.channel.workCounter;
+      if (action == FINI) ((ncclKernelCommAndChannels*)ncclShmem.args.comm)->channels[ncclShmem.channelId].workCounter = ncclShmem.channel.workCounter;
     }
   }
 }
@@ -351,7 +351,7 @@ __device__ __forceinline__ void ncclKernelMain(struct ncclDevKernelArgs const* a
   /* set abort flag to 0 */
   if (tid == 0) {
     ncclShmem.aborted = 0;
-    ncclShmem.channel.workCounter = ((ncclDevCommAndChannels*)ncclShmem.args.comm)->channels[ncclShmem.channelId].workCounter;
+    ncclShmem.channel.workCounter = ((ncclKernelCommAndChannels*)ncclShmem.args.comm)->channels[ncclShmem.channelId].workCounter;
   }
 
   // Use first 2 warps to load comm and channel, and remaining load work batch.
@@ -359,14 +359,14 @@ __device__ __forceinline__ void ncclKernelMain(struct ncclDevKernelArgs const* a
   case 0:
     { void* dst = &ncclShmem.comm;
       void* src = ncclShmem.args.comm;
-      int bytes = sizeof(ncclDevComm);
-      static_assert(sizeof(ncclDevComm) <= 16*WARP_SIZE, "ncclDevComm cannot be loaded by a single warp in one insn.");
+      int bytes = sizeof(ncclKernelComm);
+      static_assert(sizeof(ncclKernelComm) <= 16*WARP_SIZE, "ncclKernelComm cannot be loaded by a single warp in one insn.");
       copyToShmem16(tid, dst, src, bytes);
     } break;
   case 1:
-    { // Get address of channel without incurring indirect load from ncclDevComm::channels
+    { // Get address of channel without incurring indirect load from ncclKernelComm::channels
       void* dst = &ncclShmem.channel;
-      void* src = &((ncclDevCommAndChannels*)ncclShmem.args.comm)->channels[ncclShmem.channelId];
+      void* src = &((ncclKernelCommAndChannels*)ncclShmem.args.comm)->channels[ncclShmem.channelId];
       int bytes = sizeof(ncclDevChannel);
       static_assert(sizeof(ncclDevChannel) <= 16*WARP_SIZE, "ncclDevChannel cannot be loaded by a single warp in one insn.");
       copyToShmem16(tid-WARP_SIZE, dst, src, bytes);

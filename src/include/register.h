@@ -1,3 +1,9 @@
+/*************************************************************************
+ * Copyright (c) 2024-2025, NVIDIA CORPORATION. All rights reserved.
+ *
+ * See LICENSE.txt for license information
+ ************************************************************************/
+
 #ifndef NCCL_REGISTER_H_
 #define NCCL_REGISTER_H_
 
@@ -29,15 +35,6 @@ struct ncclRegNetHandles {
   struct ncclRegNetHandles* next;
 };
 
-struct ncclSymRegTask {
-  struct ncclSymRegTask *next;
-  void* buff;
-  size_t baseSize;
-  CUmemGenericAllocationHandle memHandle;
-  struct ncclReg* regHandle;
-  size_t alignment;
-};
-
 struct ncclReg {
   // common attributes
   uintptr_t begAddr, endAddr; // page aligned
@@ -58,10 +55,6 @@ struct ncclReg {
   // general ipc reg
   struct ncclPeerRegIpcAddr regIpcAddrs;
   struct ncclIpcRegInfo* ipcInfos[NCCL_MAX_LOCAL_RANKS];
-  // symmetric reg
-  void* baseSymPtr;
-  size_t symSize;
-  int winFlags;
 };
 
 struct ncclRegCache {
@@ -70,14 +63,9 @@ struct ncclRegCache {
   uintptr_t pageSize;
 };
 
-struct ncclWindow {
-  struct ncclReg* handle;
-};
-
 ncclResult_t ncclRegCleanup(struct ncclComm* comm);
 ncclResult_t ncclCommGraphRegister(const ncclComm_t comm, void* buff, size_t size, void** handle);
 ncclResult_t ncclCommGraphDeregister(const ncclComm_t comm, struct ncclReg *handle);
 ncclResult_t ncclRegLocalIsValid(struct ncclReg *reg, bool *isValid);
-ncclResult_t ncclCommSymmetricRegisterInternal(struct ncclComm* comm, void* buff, size_t baseSize, size_t alignment, CUmemGenericAllocationHandle memHandle, struct ncclReg* regHandle);
 
 #endif

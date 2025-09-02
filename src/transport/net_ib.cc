@@ -21,6 +21,7 @@
 #include <poll.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <mutex>
 #define ENABLE_TIMER 0
 #include "timer.h"
 
@@ -31,6 +32,8 @@
 #define MAXNAMESIZE (64 + MAXSUFFIXSIZE)
 static char ncclIbIfName[MAX_IF_NAME_SIZE+1];
 static union ncclSocketAddress ncclIbIfAddr;
+
+static ncclNetCommConfig_t ibContext;
 
 struct ncclIbMr {
   uintptr_t addr;
@@ -70,7 +73,7 @@ const char* ibProviderName[] = {
 
 static int ncclNIbDevs = -1;
 struct alignas(64) ncclIbDev {
-  pthread_mutex_t lock;
+  std::mutex mutex;
   int device;
   uint64_t guid;
   uint8_t portNum;
@@ -102,8 +105,15 @@ struct alignas(64) ncclIbDev {
 #define MAX_IB_VDEVS MAX_IB_DEVS*8
 struct ncclIbMergedDev ncclIbMergedDevs[MAX_IB_VDEVS];
 struct ncclIbDev ncclIbDevs[MAX_IB_DEVS];
-pthread_mutex_t ncclIbLock = PTHREAD_MUTEX_INITIALIZER;
+static std::mutex ncclIbMutex;
 static int ncclIbRelaxedOrderingEnabled = 0;
+
+// With ncclNet_v11_t the NCCL core initializes the network plugin per-communicator
+// rather than once for all communicators. However, the internal plugin implementation
+// still assumes the plugin is initialized only once across all communicators. The ref
+// counter makes sure the plugin internally initializes only once. When per communicator
+// context support is added to the plugin the ref counter can be removed.
+static int netRefCount;
 
 #define NCCL_IB_LLSTR(ll) (((ll) == IBV_LINK_LAYER_INFINIBAND) ? "IB" : (((ll) == IBV_LINK_LAYER_ETHERNET) ? "RoCE" : "UNSPECIFIED"))
 
@@ -183,6 +193,9 @@ static void* ncclIbAsyncThreadMain(void* args) {
     case IBV_EVENT_SRQ_ERR:
       // SRQ are not used in NCCL
       WARN("NET/IB : %s:%d async fatal event on SRQ, unused for now (%p): %s", dev->devName, dev->portNum, srq, str);
+      break;
+    case IBV_EVENT_GID_CHANGE:
+      WARN("NET/IB : %s:%d GID table changed", dev->devName, dev->portNum);
       break;
     case IBV_EVENT_PATH_MIG_ERR:
     case IBV_EVENT_PORT_ERR:
@@ -597,15 +610,22 @@ ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
 }
 
 ncclResult_t ncclIbMakeVDevice(int* d, ncclNetVDeviceProps_t* props) {
-  pthread_mutex_lock(&ncclIbLock);
+  std::lock_guard<std::mutex> lock(ncclIbMutex);
   ncclResult_t res = ncclIbMakeVDeviceInternal(d, props);
-  pthread_mutex_unlock(&ncclIbLock);
   return res;
+
+}
+
+ncclResult_t ncclIbSetNetAttr(void *ctx, ncclNetAttr_t *netAttr) {
+  (void)ctx;
+  (void)netAttr;
+  return ncclSuccess;
 }
 
 static ncclProfilerCallback_t ncclProfilerFunction;
 
-ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) {
+ncclResult_t ncclIbInit(void** ctx, uint64_t commId, ncclNetCommConfig_t* config, ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) {
+  if (netRefCount++) return ncclSuccess;
   ncclResult_t ret = ncclSuccess;
   ncclProfilerFunction = profFunction;
   if (ncclParamIbDisable()) return ncclInternalError;
@@ -614,7 +634,7 @@ ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction, ncclProfilerCallback_t pr
   if(wrap_mlx5dv_symbols() != ncclSuccess) { INFO(NCCL_NET, "NET/IB : Failed to open mlx5dv symbols. Advance features like CX-8 Direct-NIC will be disabled."); }
 
   if (ncclNIbDevs == -1) {
-    pthread_mutex_lock(&ncclIbLock);
+    std::lock_guard<std::mutex> lock(ncclIbMutex);
     wrap_ibv_fork_init();
     if (ncclNIbDevs == -1) {
       int nIpIfs = 0;
@@ -644,25 +664,15 @@ ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction, ncclProfilerCallback_t pr
       if (ncclSuccess != wrap_ibv_get_device_list(&devices, &nIbDevs)) { ret = ncclInternalError; goto fail; }
 
       for (int d=0; d<nIbDevs && ncclNIbDevs<MAX_IB_DEVS; d++) {
-        struct ibv_context * context;
+        struct ibv_context * context = NULL;
         if (ncclSuccess != wrap_ibv_open_device(&context, devices[d]) || context == NULL) {
           WARN("NET/IB : Unable to open device %s", devices[d]->name);
           continue;
         }
-        enum ncclIbProvider ibProvider = IB_PROVIDER_NONE;
-        char dataDirectDevicePath[PATH_MAX];
-        int dataDirectSupported = 0;
-        int skipNetDevForDataDirect = 0;
-        if (wrap_mlx5dv_is_supported(devices[d])) {
-          ibProvider = IB_PROVIDER_MLX5;
-          snprintf(dataDirectDevicePath, PATH_MAX, "/sys");
-          if((ncclMlx5dvDmaBufCapable(context)) && (wrap_mlx5dv_get_data_direct_sysfs_path(context, dataDirectDevicePath + 4, PATH_MAX - 4) == ncclSuccess)) {
-            INFO(NCCL_INIT|NCCL_NET, "NET/IB: Data Direct DMA Interface is detected for device:%s", devices[d]->name);
-            // Now check whether Data Direct has been disabled by the user
-            if(ncclParamIbDataDirect() == 1) { dataDirectSupported = 1; skipNetDevForDataDirect = 1; }
-            if(ncclParamIbDataDirect() == 2) { dataDirectSupported = 1; skipNetDevForDataDirect = 0; }
-          }
-        }
+        char dataDirectDevicePath[PATH_MAX] = "/sys";
+        int devCount = /*undefined*/-1, devOffset = 0;
+        enum ncclIbProvider ibProvider = wrap_mlx5dv_is_supported(devices[d]) ? IB_PROVIDER_MLX5 : IB_PROVIDER_NONE;
+
         int nPorts = 0;
         struct ibv_device_attr devAttr;
         memset(&devAttr, 0, sizeof(devAttr));
@@ -672,78 +682,99 @@ ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction, ncclProfilerCallback_t pr
           continue;
         }
         for (int port_num = 1; port_num <= devAttr.phys_port_cnt; port_num++) {
-          // dataDirect = 0 exposes the devices normally, dataDirect = 1 exposes the devices through direct NIC
-          for (int dataDirect = skipNetDevForDataDirect; dataDirect < 1 + dataDirectSupported; ++dataDirect) {
             struct ibv_port_attr portAttr;
             if (ncclSuccess != wrap_ibv_query_port(context, port_num, &portAttr)) {
               WARN("NET/IB : Unable to query port_num %d", port_num);
               continue;
             }
             if (portAttr.state != IBV_PORT_ACTIVE) continue;
-            if (portAttr.link_layer != IBV_LINK_LAYER_INFINIBAND
-                && portAttr.link_layer != IBV_LINK_LAYER_ETHERNET) continue;
+            if (portAttr.link_layer != IBV_LINK_LAYER_INFINIBAND && portAttr.link_layer != IBV_LINK_LAYER_ETHERNET) continue;
 
             // check against user specified HCAs/ports
             if (! (matchIfList(devices[d]->name, port_num, userIfs, nUserIfs, searchExact) ^ searchNot)) {
               continue;
             }
-            pthread_mutex_init(&ncclIbDevs[ncclNIbDevs].lock, NULL);
-            ncclIbDevs[ncclNIbDevs].device = d;
-            ncclIbDevs[ncclNIbDevs].ibProvider = ibProvider;
-            ncclIbDevs[ncclNIbDevs].guid = devAttr.sys_image_guid;
-            ncclIbDevs[ncclNIbDevs].portAttr = portAttr;
-            ncclIbDevs[ncclNIbDevs].portNum = port_num;
-            ncclIbDevs[ncclNIbDevs].link = portAttr.link_layer;
-            if (portAttr.active_speed_ex)
-              // A non-zero active_speed_ex indicates XDR rate (0x100) or higher
-              ncclIbDevs[ncclNIbDevs].speed = ncclIbSpeed(portAttr.active_speed_ex) * ncclIbWidth(portAttr.active_width);
-            else
-              ncclIbDevs[ncclNIbDevs].speed = ncclIbSpeed(portAttr.active_speed) * ncclIbWidth(portAttr.active_width);
-            ncclIbDevs[ncclNIbDevs].context = context;
-            ncclIbDevs[ncclNIbDevs].pdRefs = 0;
-            ncclIbDevs[ncclNIbDevs].pd = NULL;
-            if (!dataDirect) {
-              strncpy(ncclIbDevs[ncclNIbDevs].devName, devices[d]->name, MAXNAMESIZE);
-              NCCLCHECKGOTO(ncclIbGetPciPath(ncclIbDevs[ncclNIbDevs].devName, &ncclIbDevs[ncclNIbDevs].pciPath, &ncclIbDevs[ncclNIbDevs].realPort), ret, fail);
-            } else {
-              snprintf(ncclIbDevs[ncclNIbDevs].devName, MAXNAMESIZE, "%s_dma", devices[d]->name);
-              NCCLCHECK(ncclCalloc(&ncclIbDevs[ncclNIbDevs].pciPath, PATH_MAX));
-              strncpy(ncclIbDevs[ncclNIbDevs].pciPath, dataDirectDevicePath, PATH_MAX);
-              ncclIbDevs[ncclNIbDevs].capsProvider.mlx5.dataDirect = 1;
+
+            // check for mlx5 data direct support only once for a each device
+            if (devCount == -1) {
+              devCount = 1;
+              devOffset = 0;
+              if (ncclParamIbDataDirect() > 0 && ibProvider == IB_PROVIDER_MLX5 && ncclMlx5dvDmaBufCapable(context)) {
+                int pathLen = strlen(dataDirectDevicePath);
+                ncclResult_t res = wrap_mlx5dv_get_data_direct_sysfs_path(context, dataDirectDevicePath + pathLen, sizeof(dataDirectDevicePath) - pathLen);
+                if (res == ncclSuccess) {
+                  // data direct devices are exposed twice: with the C2C + PCIe link and with the data direct link
+                  devCount = 2;
+                  // by default only expose the data direct NIC (devOffset = 1), unless set to 2 by the user
+                  devOffset = (ncclParamIbDataDirect() == 2) ? 0 : 1;
+                  INFO(NCCL_INIT | NCCL_NET, "NET/IB: Data Direct DMA Interface is detected for device %s", devices[d]->name);
+                } else if (res == ncclInvalidArgument) {
+                  TRACE(NCCL_NET, "NET/IB: Device %s does not support Data Direct DMA.", devices[d]->name);
+                } else {
+                  WARN("NET/IB: Error in mlx5dv_get_data_direct_sysfs_path with device %s", devices[d]->name);
+                  return res;
+                }
+              }
             }
-            ncclIbDevs[ncclNIbDevs].maxQp = devAttr.max_qp;
-            ncclIbDevs[ncclNIbDevs].mrCache.capacity = 0;
-            ncclIbDevs[ncclNIbDevs].mrCache.population = 0;
-            ncclIbDevs[ncclNIbDevs].mrCache.slots = NULL;
-            NCCLCHECK(ncclIbStatsInit(&ncclIbDevs[ncclNIbDevs].stats));
+            for (int dev = devOffset; dev < devCount; ++dev) {
+              ncclIbDevs[ncclNIbDevs].device = d;
+              ncclIbDevs[ncclNIbDevs].ibProvider = ibProvider;
+              ncclIbDevs[ncclNIbDevs].guid = devAttr.sys_image_guid;
+              ncclIbDevs[ncclNIbDevs].portAttr = portAttr;
+              ncclIbDevs[ncclNIbDevs].portNum = port_num;
+              ncclIbDevs[ncclNIbDevs].link = portAttr.link_layer;
+              if (portAttr.active_speed_ex) {
+                // A non-zero active_speed_ex indicates XDR rate (0x100) or higher
+                ncclIbDevs[ncclNIbDevs].speed = ncclIbSpeed(portAttr.active_speed_ex) * ncclIbWidth(portAttr.active_width);
+              } else {
+                ncclIbDevs[ncclNIbDevs].speed = ncclIbSpeed(portAttr.active_speed) * ncclIbWidth(portAttr.active_width);
+              }
+              ncclIbDevs[ncclNIbDevs].context = context;
+              ncclIbDevs[ncclNIbDevs].pdRefs = 0;
+              ncclIbDevs[ncclNIbDevs].pd = NULL;
+              if (dev == 0) {
+                strncpy(ncclIbDevs[ncclNIbDevs].devName, devices[d]->name, MAXNAMESIZE);
+                NCCLCHECKGOTO(ncclIbGetPciPath(ncclIbDevs[ncclNIbDevs].devName, &ncclIbDevs[ncclNIbDevs].pciPath, &ncclIbDevs[ncclNIbDevs].realPort), ret, fail);
+              } else {
+                snprintf(ncclIbDevs[ncclNIbDevs].devName, MAXNAMESIZE, "%s_dma", devices[d]->name);
+                NCCLCHECK(ncclCalloc(&ncclIbDevs[ncclNIbDevs].pciPath, PATH_MAX));
+                strncpy(ncclIbDevs[ncclNIbDevs].pciPath, dataDirectDevicePath, PATH_MAX);
+                ncclIbDevs[ncclNIbDevs].capsProvider.mlx5.dataDirect = 1;
+              }
+              ncclIbDevs[ncclNIbDevs].maxQp = devAttr.max_qp;
+              ncclIbDevs[ncclNIbDevs].mrCache.capacity = 0;
+              ncclIbDevs[ncclNIbDevs].mrCache.population = 0;
+              ncclIbDevs[ncclNIbDevs].mrCache.slots = NULL;
+              NCCLCHECK(ncclIbStatsInit(&ncclIbDevs[ncclNIbDevs].stats));
 
-            // Enable ADAPTIVE_ROUTING by default on IB networks
-            // But allow it to be overloaded by an env parameter
-            ncclIbDevs[ncclNIbDevs].ar = (portAttr.link_layer == IBV_LINK_LAYER_INFINIBAND) ? 1 : 0;
-            if (ncclParamIbAdaptiveRouting() != -2) ncclIbDevs[ncclNIbDevs].ar = ncclParamIbAdaptiveRouting();
+              // Enable ADAPTIVE_ROUTING by default on IB networks
+              // But allow it to be overloaded by an env parameter
+              ncclIbDevs[ncclNIbDevs].ar = (portAttr.link_layer == IBV_LINK_LAYER_INFINIBAND) ? 1 : 0;
+              if (ncclParamIbAdaptiveRouting() != -2) ncclIbDevs[ncclNIbDevs].ar = ncclParamIbAdaptiveRouting();
 
-            INFO(NCCL_NET,"NET/IB: [%d] %s:%s:%d/%s provider=%s speed=%d context=%p pciPath=%s ar=%d", d, devices[d]->name, devices[d]->dev_name, ncclIbDevs[ncclNIbDevs].portNum,
-                NCCL_IB_LLSTR(portAttr.link_layer), ibProviderName[ncclIbDevs[ncclNIbDevs].ibProvider], ncclIbDevs[ncclNIbDevs].speed, context, ncclIbDevs[ncclNIbDevs].pciPath, ncclIbDevs[ncclNIbDevs].ar);
+              INFO(NCCL_NET, "NET/IB: [%d] %s:%s:%d/%s provider=%s speed=%d context=%p pciPath=%s ar=%d", d, devices[d]->name, devices[d]->dev_name,
+                   ncclIbDevs[ncclNIbDevs].portNum, NCCL_IB_LLSTR(portAttr.link_layer), ibProviderName[ncclIbDevs[ncclNIbDevs].ibProvider], ncclIbDevs[ncclNIbDevs].speed, context,
+                   ncclIbDevs[ncclNIbDevs].pciPath, ncclIbDevs[ncclNIbDevs].ar);
 
-            PTHREADCHECKGOTO(pthread_create(&ncclIbAsyncThread, NULL, ncclIbAsyncThreadMain, ncclIbDevs + ncclNIbDevs), "pthread_create", ret, fail);
-            ncclSetThreadName(ncclIbAsyncThread, "NCCL IbAsync %2d", ncclNIbDevs);
-            PTHREADCHECKGOTO(pthread_detach(ncclIbAsyncThread), "pthread_detach", ret, fail); // will not be pthread_join()'d
+              PTHREADCHECKGOTO(pthread_create(&ncclIbAsyncThread, NULL, ncclIbAsyncThreadMain, ncclIbDevs + ncclNIbDevs), "pthread_create", ret, fail);
+              ncclSetThreadName(ncclIbAsyncThread, "NCCL IbAsync %2d", ncclNIbDevs);
+              PTHREADCHECKGOTO(pthread_detach(ncclIbAsyncThread), "pthread_detach", ret, fail); // will not be pthread_join()'d
 
-            // Add this plain physical device to the list of virtual devices
-            int vDev;
-            ncclNetVDeviceProps_t vProps = {0};
-            vProps.ndevs = 1;
-            vProps.devs[0] = ncclNIbDevs;
-            NCCLCHECK(ncclIbMakeVDeviceInternal(&vDev, &vProps));
+              // Add this plain physical device to the list of virtual devices
+              int vDev;
+              ncclNetVDeviceProps_t vProps = {0};
+              vProps.ndevs = 1;
+              vProps.devs[0] = ncclNIbDevs;
+              NCCLCHECK(ncclIbMakeVDeviceInternal(&vDev, &vProps));
 
-            ncclNIbDevs++;
-            nPorts++;
-          }
+              ncclNIbDevs++;
+              nPorts++;
+            }
         }
         if (nPorts == 0 && ncclSuccess != wrap_ibv_close_device(context)) { ret = ncclInternalError; goto fail; }
       }
 
-      if (nIbDevs && (ncclSuccess != wrap_ibv_free_device_list(devices))) { ret = ncclInternalError; goto fail; };
+      if (nIbDevs && (ncclSuccess != wrap_ibv_free_device_list(devices))) { ret = ncclInternalError; goto fail; }
     }
     if (ncclNIbDevs == 0) {
       INFO(NCCL_INIT|NCCL_NET, "NET/IB : No device found.");
@@ -762,12 +793,12 @@ ncclResult_t ncclIbInit(ncclDebugLogger_t logFunction, ncclProfilerCallback_t pr
     INFO(NCCL_INIT|NCCL_NET, "NET/IB : Using%s %s; OOB %s:%s", line, ncclIbRelaxedOrderingEnabled ? "[RO]" : "",
           ncclIbIfName, ncclSocketToString(&ncclIbIfAddr, addrline));
 
-    pthread_mutex_unlock(&ncclIbLock);
   }
 exit:
+  ibContext.trafficClass = config->trafficClass;
+  *ctx = &ibContext;
   return ret;
 fail:
-  pthread_mutex_unlock(&ncclIbLock);
   goto exit;
 }
 
@@ -789,8 +820,8 @@ static void ibGdrSupportInitOnce() {
                           KNL_MODULE_LOADED("/sys/module/nvidia_peermem/version");
 }
 ncclResult_t ncclIbGdrSupport() {
-  static pthread_once_t once = PTHREAD_ONCE_INIT;
-  pthread_once(&once, ibGdrSupportInitOnce);
+  static std::once_flag once;
+  std::call_once(once, ibGdrSupportInitOnce);
   if (!ncclIbGdrModuleLoaded)
     return ncclSystemError;
   return ncclSuccess;
@@ -825,13 +856,10 @@ failure:
 // ncclSuccess : DMA-BUF support is available
 // ncclSystemError : DMA-BUF is not supported by the kernel
 ncclResult_t ncclIbDmaBufSupport(int dev) {
-  struct oncewrap {
-    pthread_once_t once = PTHREAD_ONCE_INIT;
-  };
-  static oncewrap onces[MAX_IB_DEVS];
+  static std::once_flag onces[MAX_IB_DEVS];
   // init the device only once
   ibDmaSupportInitDev = dev;
-  pthread_once(&onces[dev].once, ibDmaBufSupportInitOnce);
+  std::call_once(onces[dev], ibDmaBufSupportInitOnce);
   ncclIbMergedDev* mergedDev = ncclIbMergedDevs + ibDmaSupportInitDev;
   ncclIbDev* ibDev = ncclIbDevs + mergedDev->vProps.devs[0];
   int dmaBufSupported = ibDev->dmaBufSupported;
@@ -843,7 +871,7 @@ ncclResult_t ncclIbDmaBufSupport(int dev) {
 
 ncclResult_t ncclIbGetPhysProperties(int dev, ncclNetProperties_t* props) {
   struct ncclIbDev* ibDev = ncclIbDevs + dev;
-  pthread_mutex_lock(&ibDev->lock);
+  std::lock_guard<std::mutex> lock(ibDev->mutex);
   props->name = ibDev->devName;
   props->speed = ibDev->speed;
   props->pciPath = ibDev->pciPath;
@@ -867,7 +895,8 @@ ncclResult_t ncclIbGetPhysProperties(int dev, ncclNetProperties_t* props) {
   props->netDeviceType    = NCCL_NET_DEVICE_HOST;
   props->netDeviceVersion = NCCL_NET_DEVICE_INVALID_VERSION;
   props->maxP2pBytes = NCCL_MAX_NET_SIZE_BYTES;
-  pthread_mutex_unlock(&ibDev->lock);
+  props->maxCollBytes = MAX_COLLNET_SIZE;
+  props->maxMultiRequestSize = 1;
   return ncclSuccess;
 }
 
@@ -1132,18 +1161,13 @@ static void ncclIbAddEvent(struct ncclIbRequest* req, int devIndex, struct ncclI
 ncclResult_t ncclIbInitCommDevBase(int ibDevN, struct ncclIbNetCommDevBase* base, void* cq_context) {
   base->ibDevN = ibDevN;
   ncclIbDev* ibDev = ncclIbDevs + ibDevN;
-  pthread_mutex_lock(&ibDev->lock);
-  if (0 == ibDev->pdRefs++) {
-    ncclResult_t res;
-    NCCLCHECKGOTO(wrap_ibv_alloc_pd(&ibDev->pd, ibDev->context), res, failure);
-    if (0) {
-    failure:
-      pthread_mutex_unlock(&ibDev->lock);
-      return res;
+  {
+    std::lock_guard<std::mutex> lock(ibDev->mutex);
+    if (0 == ibDev->pdRefs++) {
+      NCCLCHECK(wrap_ibv_alloc_pd(&ibDev->pd, ibDev->context));
     }
+    base->pd = ibDev->pd;
   }
-  base->pd = ibDev->pd;
-  pthread_mutex_unlock(&ibDev->lock);
 
   // Recv requests can generate 2 completions (one for the post FIFO, one for the Recv).
   NCCLCHECK(wrap_ibv_create_cq(&base->cq, ibDev->context, 2*MAX_REQUESTS*ncclParamIbQpsPerConn(), cq_context, NULL, 0));
@@ -1152,17 +1176,13 @@ ncclResult_t ncclIbInitCommDevBase(int ibDevN, struct ncclIbNetCommDevBase* base
 }
 
 ncclResult_t ncclIbDestroyBase(struct ncclIbNetCommDevBase* base) {
-  ncclResult_t res;
   NCCLCHECK(wrap_ibv_destroy_cq(base->cq));
 
-  pthread_mutex_lock(&ncclIbDevs[base->ibDevN].lock);
+  std::lock_guard<std::mutex> lock(ncclIbDevs[base->ibDevN].mutex);
   if (0 == --ncclIbDevs[base->ibDevN].pdRefs) {
-    NCCLCHECKGOTO(wrap_ibv_dealloc_pd(ncclIbDevs[base->ibDevN].pd), res, returning);
+    NCCLCHECK(wrap_ibv_dealloc_pd(ncclIbDevs[base->ibDevN].pd));
   }
-  res = ncclSuccess;
-returning:
-  pthread_mutex_unlock(&ncclIbDevs[base->ibDevN].lock);
-  return res;
+  return ncclSuccess;
 }
 
 ncclResult_t ncclIbCreateQp(uint8_t ib_port, struct ncclIbNetCommDevBase* base, int access_flags, void* qp_context, struct ncclIbQp* qp) {
@@ -1250,7 +1270,7 @@ ncclResult_t ncclIbRtsQp(struct ibv_qp* qp) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclIbListen(int dev, void* opaqueHandle, void** listenComm) {
+ncclResult_t ncclIbListen(void* ctx, int dev, void* opaqueHandle, void** listenComm) {
   ncclResult_t ret = ncclSuccess;
   struct ncclIbListenComm* comm;
   NCCLCHECK(ncclCalloc(&comm, 1));
@@ -1271,7 +1291,7 @@ fail:
   goto exit;
 }
 
-ncclResult_t ncclIbConnect(int dev, ncclNetCommConfig_t* config, void* opaqueHandle, void** sendComm, ncclNetDeviceHandle_t** /*sendDevComm*/) {
+ncclResult_t ncclIbConnect(void* ctx, int dev, void* opaqueHandle, void** sendComm, ncclNetDeviceHandle_t** /*sendDevComm*/) {
   ncclResult_t ret = ncclSuccess;
   struct ncclIbHandle* handle = (struct ncclIbHandle*) opaqueHandle;
   struct ncclIbCommStage* stage = &handle->stage;
@@ -1333,6 +1353,7 @@ ib_recv_dev_list:
   if (stage->offset != sizeof(ncclNetVDeviceProps_t)) return ncclSuccess;
   stage->offset = 0;
   ncclNetVDeviceProps_t remoteVProps;
+  ncclNetCommConfig_t* config;
   memcpy(&remoteVProps, stage->buffer, sizeof(ncclNetVDeviceProps_t));
   mergedDev = ncclIbMergedDevs + dev;
   comm->base.vProps = mergedDev->vProps;
@@ -1425,6 +1446,7 @@ ib_recv_dev_list:
       return ncclInternalError;
     }
   }
+  config = (ncclNetCommConfig_t*)ctx;
   meta.fifoAddr = (uint64_t)comm->fifo;
   meta.sl = (ncclParamIbSl() != -1) ? ncclParamIbSl() : (config && config->trafficClass != NCCL_NET_TRAFFIC_CLASS_UNDEF) ? config->trafficClass : NCCL_IB_SL_DEFAULT;
   meta.tc = (ncclParamIbTc() != -1) ? ncclParamIbTc() : (config && config->trafficClass != NCCL_NET_TRAFFIC_CLASS_UNDEF) ? config->trafficClass : NCCL_IB_TC_DEFAULT;
@@ -1856,13 +1878,12 @@ ncclResult_t ncclIbRegMrDmaBufInternal(ncclIbNetCommDevBase* base, void* data, s
   struct ncclIbMrCache* cache = &ncclIbDevs[base->ibDevN].mrCache;
   uintptr_t addr = (uintptr_t)data & -pageSize;
   size_t pages = ((uintptr_t)data + size - addr + pageSize-1)/pageSize;
-  ncclResult_t res;
-  pthread_mutex_lock(&ncclIbDevs[base->ibDevN].lock);
+  std::lock_guard<std::mutex> lock(ncclIbDevs[base->ibDevN].mutex);
   for (int slot=0; /*true*/; slot++) {
     if (slot == cache->population || addr < cache->slots[slot].addr) { // didn't find in cache
       if (cache->population == cache->capacity) { // must grow cache
         cache->capacity = cache->capacity < 32 ? 32 : 2*cache->capacity;
-        NCCLCHECKGOTO(ncclRealloc(&cache->slots, cache->population, cache->capacity), res, returning);
+        NCCLCHECK(ncclRealloc(&cache->slots, cache->population, cache->capacity));
       }
       // Deregister / register
       struct ibv_mr* mr;
@@ -1871,17 +1892,17 @@ ncclResult_t ncclIbRegMrDmaBufInternal(ncclIbNetCommDevBase* base, void* data, s
       if (fd != -1) {
         /* DMA-BUF support */
         if (!ncclIbDevs[base->ibDevN].capsProvider.mlx5.dataDirect) {
-          NCCLCHECKGOTO(wrap_ibv_reg_dmabuf_mr(&mr, base->pd, offset, pages*pageSize, addr, fd, flags), res, returning);
+          NCCLCHECK(wrap_ibv_reg_dmabuf_mr(&mr, base->pd, offset, pages*pageSize, addr, fd, flags));
         } else {
-          NCCLCHECKGOTO(wrap_mlx5dv_reg_dmabuf_mr(&mr, base->pd, offset, pages*pageSize, addr, fd, flags, MLX5DV_REG_DMABUF_ACCESS_DATA_DIRECT), res, returning);
+          NCCLCHECK(wrap_mlx5dv_reg_dmabuf_mr(&mr, base->pd, offset, pages*pageSize, addr, fd, flags, MLX5DV_REG_DMABUF_ACCESS_DATA_DIRECT));
         }
       } else {
         if (ncclIbRelaxedOrderingEnabled) {
           // Use IBVERBS_1.8 API - needed for IBV_ACCESS_RELAXED_ORDERING support
-          NCCLCHECKGOTO(wrap_ibv_reg_mr_iova2(&mr, base->pd, (void*)addr, pages*pageSize, addr, flags), res, returning);
+          NCCLCHECK(wrap_ibv_reg_mr_iova2(&mr, base->pd, (void*)addr, pages*pageSize, addr, flags));
         }
         else {
-          NCCLCHECKGOTO(wrap_ibv_reg_mr(&mr, base->pd, (void*)addr, pages*pageSize, flags), res, returning);
+          NCCLCHECK(wrap_ibv_reg_mr(&mr, base->pd, (void*)addr, pages*pageSize, flags));
         }
       }
       TRACE(NCCL_INIT|NCCL_NET,"regAddr=0x%lx size=%lld rkey=0x%x lkey=0x%x fd=%d", (unsigned long)addr, (long long)pages*pageSize, mr->rkey, mr->lkey, fd);
@@ -1892,19 +1913,15 @@ ncclResult_t ncclIbRegMrDmaBufInternal(ncclIbNetCommDevBase* base, void* data, s
       cache->slots[slot].mr = mr;
       cache->population += 1;
       *mhandle = mr;
-      res = ncclSuccess;
-      goto returning;
+      return ncclSuccess;
     } else if ((addr >= cache->slots[slot].addr) &&
         ((addr-cache->slots[slot].addr)/pageSize+pages) <= cache->slots[slot].pages) {
       cache->slots[slot].refs += 1;
       *mhandle = cache->slots[slot].mr;
-      res = ncclSuccess;
-      goto returning;
+      return ncclSuccess;
     }
   }
-returning:
-  pthread_mutex_unlock(&ncclIbDevs[base->ibDevN].lock);
-  return res;
+  return ncclSuccess;
 }
 
 struct ncclIbNetCommDevBase* ncclIbGetNetCommDevBase(ncclIbNetCommBase* base, int devIndex) {
@@ -1942,8 +1959,7 @@ ncclResult_t ncclIbRegMr(void* comm, void* data, size_t size, int type, void** m
 
 ncclResult_t ncclIbDeregMrInternal(ncclIbNetCommDevBase* base, ibv_mr* mhandle) {
   struct ncclIbMrCache* cache = &ncclIbDevs[base->ibDevN].mrCache;
-  ncclResult_t res;
-  pthread_mutex_lock(&ncclIbDevs[base->ibDevN].lock);
+  std::lock_guard<std::mutex> lock(ncclIbDevs[base->ibDevN].mutex);
   for (int i=0; i < cache->population; i++) {
     if (mhandle == cache->slots[i].mr) {
       if (0 == --cache->slots[i].refs) {
@@ -1953,17 +1969,13 @@ ncclResult_t ncclIbDeregMrInternal(ncclIbNetCommDevBase* base, ibv_mr* mhandle) 
           cache->slots = NULL;
           cache->capacity = 0;
         }
-        NCCLCHECKGOTO(wrap_ibv_dereg_mr(mhandle), res, returning);
+        NCCLCHECK(wrap_ibv_dereg_mr(mhandle));
       }
-      res = ncclSuccess;
-      goto returning;
+      return ncclSuccess;
     }
   }
   WARN("NET/IB: could not find mr %p inside cache of %d entries", mhandle, cache->population);
-  res = ncclInternalError;
-returning:
-  pthread_mutex_unlock(&ncclIbDevs[base->ibDevN].lock);
-  return res;
+  return ncclInternalError;
 }
 
 ncclResult_t ncclIbDeregMr(void* comm, void* mhandle) {
@@ -2567,6 +2579,11 @@ ncclResult_t ncclIbCloseListen(void* listenComm) {
   return ncclSuccess;
 }
 
+ncclResult_t ncclIbFinalize(void* ctx) {
+  netRefCount--;
+  return ncclSuccess;
+}
+
 ncclNet_t ncclNetIb = {
   "IB",
   ncclIbInit,
@@ -2587,7 +2604,9 @@ ncclNet_t ncclNetIb = {
   ncclIbCloseListen,
   NULL /* getDeviceMr */,
   NULL /* irecvConsumed */,
-  ncclIbMakeVDevice
+  ncclIbMakeVDevice,
+  ncclIbFinalize,
+  ncclIbSetNetAttr,
 };
 
 /*

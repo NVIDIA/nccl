@@ -16,6 +16,7 @@
 
 #ifdef PROFAPI
 #define NCCL_API(ret, func, args...)        \
+    extern "C"                              \
     __attribute__ ((visibility("default"))) \
     __attribute__ ((alias(#func)))          \
     ret p##func (args);                     \

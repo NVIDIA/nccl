@@ -14,10 +14,13 @@ const char* ncclFuncToString(ncclFunc_t fn) {
   switch (fn) {
   case ncclFuncAllGather: return "AllGather";
   case ncclFuncAllReduce: return "AllReduce";
+  case ncclFuncAlltoAll: return "AlltoAll";
   case ncclFuncBroadcast: return "Broadcast";
+  case ncclFuncGather: return "Gather";
   case ncclFuncRecv: return "Recv";
   case ncclFuncReduce: return "Reduce";
   case ncclFuncReduceScatter: return "ReduceScatter";
+  case ncclFuncScatter: return "Scatter";
   case ncclFuncSendRecv: return "SendRecv";
   case ncclFuncSend: return "Send";
   default: return "Invalid";
@@ -88,6 +91,19 @@ ncclResult_t ncclAllGather(const void* sendbuff, void* recvbuff, size_t sendcoun
   return ncclEnqueueCheck(&info);
 }
 
+NCCL_API(ncclResult_t, ncclAlltoAll, const void* sendbuff, void* recvbuff, size_t count,
+    ncclDataType_t datatype, ncclComm* comm, cudaStream_t stream);
+ncclResult_t ncclAlltoAll(const void* sendbuff, void* recvbuff, size_t count,
+    ncclDataType_t datatype, ncclComm* comm, cudaStream_t stream) {
+  NVTX3_FUNC_WITH_PARAMS(AlltoAll, NcclNvtxParamsAlltoAll,
+    NVTX3_PAYLOAD(comm ? comm->commHash : 0, count * ncclTypeSize(datatype)));
+
+  struct ncclInfo info = { ncclFuncAlltoAll, "AlltoAll",
+    sendbuff, recvbuff, count, datatype, ncclSum, 0, comm, stream, /* Args */
+    ALLTOALL_CHUNKSTEPS, ALLTOALL_SLICESTEPS };
+  return ncclEnqueueCheck(&info);
+}
+
 NCCL_API(ncclResult_t, ncclAllReduce, const void* sendbuff, void* recvbuff, size_t count,
     ncclDataType_t datatype, ncclRedOp_t op, ncclComm* comm, cudaStream_t stream);
 ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
@@ -121,6 +137,19 @@ ncclResult_t ncclBcast(void* buff, size_t count, ncclDataType_t datatype, int ro
   return ncclBroadcast(buff, buff, count, datatype, root, comm, stream);
 }
 
+NCCL_API(ncclResult_t, ncclGather, const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype, int root,
+    ncclComm* comm, cudaStream_t stream);
+ncclResult_t ncclGather(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype, int root,
+    ncclComm* comm, cudaStream_t stream) {
+  NVTX3_FUNC_WITH_PARAMS(Gather, NcclNvtxParamsGather,
+    NVTX3_PAYLOAD(comm ? comm->commHash : 0, count * ncclTypeSize(datatype), root));
+
+  struct ncclInfo info = { ncclFuncGather, "Gather",
+    sendbuff, recvbuff, count, datatype, ncclSum, root, comm, stream, /* Args */
+    GATHER_CHUNKSTEPS, GATHER_SLICESTEPS };
+  return ncclEnqueueCheck(&info);
+}
+
 NCCL_API(ncclResult_t, ncclReduce, const void* sendbuff, void* recvbuff, size_t count,
     ncclDataType_t datatype, ncclRedOp_t op, int root, ncclComm_t comm, cudaStream_t stream);
 ncclResult_t ncclReduce(const void* sendbuff, void* recvbuff, size_t count,
@@ -144,6 +173,19 @@ ncclResult_t ncclReduceScatter(const void* sendbuff, void* recvbuff, size_t recv
   struct ncclInfo info = { ncclFuncReduceScatter, "ReduceScatter",
     sendbuff, recvbuff, recvcount, datatype, op, 0, comm, stream, /* Args */
     REDUCESCATTER_CHUNKSTEPS, REDUCESCATTER_SLICESTEPS };
+  return ncclEnqueueCheck(&info);
+}
+
+NCCL_API(ncclResult_t, ncclScatter, const void* sendbuff, void* recvbuff, size_t count,
+    ncclDataType_t datatype, int root, ncclComm* comm, cudaStream_t stream);
+ncclResult_t ncclScatter(const void* sendbuff, void* recvbuff, size_t count,
+    ncclDataType_t datatype, int root, ncclComm* comm, cudaStream_t stream) {
+  NVTX3_FUNC_WITH_PARAMS(Scatter, NcclNvtxParamsScatter,
+    NVTX3_PAYLOAD(comm ? comm->commHash : 0, count * ncclTypeSize(datatype), root));
+
+  struct ncclInfo info = { ncclFuncScatter, "Scatter",
+    sendbuff, recvbuff, count, datatype, ncclSum, root, comm, stream, /* Args */
+    SCATTER_CHUNKSTEPS, SCATTER_SLICESTEPS };
   return ncclEnqueueCheck(&info);
 }
 

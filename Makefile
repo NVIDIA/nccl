@@ -3,15 +3,14 @@
 #
 # See LICENSE.txt for license information
 #
-.PHONY : all clean
+.PHONY: all clean
 
-default : src.build
-install : src.install
+default: src.build
+install: src.install
 BUILDDIR ?= $(abspath ./build)
 ABSBUILDDIR := $(abspath $(BUILDDIR))
 TARGETS := src pkg
 clean: ${TARGETS:%=%.clean}
-test.build: src.build
 LICENSE_FILES := LICENSE.txt
 LICENSE_TARGETS := $(LICENSE_FILES:%=$(BUILDDIR)/%)
 lic: $(LICENSE_TARGETS)
@@ -19,7 +18,7 @@ lic: $(LICENSE_TARGETS)
 ${BUILDDIR}/%.txt: %.txt
 	@printf "Copying    %-35s > %s\n" $< $@
 	mkdir -p ${BUILDDIR}
-	cp $< $@
+	install -m 644 $< $@
 
 src.%:
 	${MAKE} -C src $* BUILDDIR=${ABSBUILDDIR}

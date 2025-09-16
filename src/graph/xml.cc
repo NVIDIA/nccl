@@ -635,7 +635,7 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
   NCCLCHECK(xmlGetAttr(pciNode, "vendor", &vendor));
   if (vendor != NULL && strcmp(vendor, "0x1000") == 0) { // BCM switch, look for P2P connections
     int nlinks;
-    char* peers;
+    char* peers = NULL;
     NCCLCHECK(getBcmLinks(busId, &nlinks, &peers));
     for (int l=0; l<nlinks; l++) {
       char* target = peers+l*BUSID_SIZE;
@@ -646,6 +646,7 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
         NCCLCHECK(xmlSetAttr(linkNode, "target", target));
       }
     }
+	free(peers);
   }
 
   struct ncclXmlNode* parent = pciNode->parent;

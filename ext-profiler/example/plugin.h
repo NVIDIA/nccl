@@ -7,7 +7,8 @@
 #ifndef PLUGIN_H_
 #define PLUGIN_H_
 
-int exampleProfilerStart(int eActivationMask);
-int exampleProfilerStop(void);
+__attribute__((visibility("default"))) int exampleProfilerStart(int eActivationMask, const char* name);
+__attribute__((visibility("default"))) int exampleProfilerStop(void);
+
 
 #endif

@@ -4,15 +4,6 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
-// Workaround for libstdc++ trying to force public visibility of std:: symbols.  We don't want to do that in libnccl.so.
-// @EUGO_CHANGE: removed since this is libstdc++ specific
-// #include <bits/c++config.h>#include <bits/c++config.h>
-
-// @begin:EUGO_CHANGE: commented out for now..
-// #undef _GLIBCXX_VISIBILITY
-// #define _GLIBCXX_VISIBILITY(V)
-// @end:EUGO_CHANGE
-
 #include <cstddef>
 #include <mutex>
 #include <poll.h>
@@ -81,7 +72,7 @@ static ncclResult_t rasNetSendNack(struct rasSocket* sock);
 
 static void* rasThreadMain(void*);
 
-static void rasTerminate() __attribute__((destructor));
+static void rasTerminate();
 
 NCCL_PARAM(RasTimeoutFactor, "RAS_TIMEOUT_FACTOR", 1);
 
@@ -116,6 +107,8 @@ ncclResult_t ncclRasCommInit(struct ncclComm* comm, struct rasRankInit* myRank) 
       ncclSetThreadName(rasThread, "NCCL RAS");
 
       rasInitialized = true;
+
+      atexit(rasTerminate);
     }
   }
   ncclAtomicRefCountIncrement(&rasInitRefCount);

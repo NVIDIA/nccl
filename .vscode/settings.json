@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "*.inc": "shell",
+        "cstdint": "cpp"
+    }
+}

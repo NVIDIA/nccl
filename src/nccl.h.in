@@ -12,16 +12,20 @@
 #if CUDART_VERSION >= 11000
 #include <cuda_bf16.h>
 #endif
-#if CUDART_VERSION >= 11080
+#if __cplusplus && CUDART_VERSION >= 11080
 #include <cuda_fp8.h>
 #endif
 
-#define NCCL_MAJOR ${nccl_Major}
-#define NCCL_MINOR ${nccl_Minor}
-#define NCCL_PATCH ${nccl_Patch}
-#define NCCL_SUFFIX "${nccl_Suffix}"
+// @EUGO_CHANGE: @begin:
+// Migrating to use `configure_file` CMake function instead of `sed` calls (lol).
+#define NCCL_MAJOR ${NCCL_MAJOR}
+#define NCCL_MINOR ${NCCL_MINOR}
+#define NCCL_PATCH ${NCCL_PATCH}
+#define NCCL_SUFFIX "${NCCL_SUFFIX}"
 
-#define NCCL_VERSION_CODE ${nccl_Version}
+#define NCCL_VERSION_CODE ${NCCL_VERSION_CODE}
+// @EUGO_CHANGE: @end
+
 #define NCCL_VERSION(X,Y,Z) (((X) <= 2 && (Y) <= 8) ? (X) * 1000 + (Y) * 100 + (Z) : (X) * 10000 + (Y) * 100 + (Z))
 
 #ifdef __cplusplus
@@ -29,8 +33,10 @@ extern "C" {
 #endif
 
 #include <limits.h>
+
 /* Opaque handle to communicator */
 typedef struct ncclComm* ncclComm_t;
+typedef struct ncclWindow_vidmem* ncclWindow_t;
 #define NCCL_COMM_NULL NULL
 
 #define NCCL_UNIQUE_ID_BYTES 128
@@ -52,9 +58,24 @@ typedef enum { ncclSuccess                 =  0,
 #define NCCL_SPLIT_NOCOLOR -1
 #define NCCL_UNDEF_FLOAT -1.0f
 
+/* Window Registration flags */
+#define NCCL_WIN_DEFAULT 0x00
+#define NCCL_WIN_COLL_SYMMETRIC 0x01
+
+#define NCCL_WIN_REQUIRED_ALIGNMENT 4096
+
+/* NCCL performance policy */
+#define NCCL_CTA_POLICY_DEFAULT 0x00
+#define NCCL_CTA_POLICY_EFFICIENCY 0x01
+#define NCCL_CTA_POLICY_ZERO 0x02
+
+/* ncclCommShrink flags*/
+#define NCCL_SHRINK_DEFAULT 0x00 /* shrink the parent communicator */
+#define NCCL_SHRINK_ABORT 0x01   /* First, terminate ongoing parent operations, and then shrink the parent communicator */
+
 /* Communicator configuration. Users can assign value to attributes to specify the
  * behavior of a communicator. */
-typedef struct ncclConfig_v21700 {
+typedef struct ncclConfig_v22800 {
   /* attributes that users should never touch. */
   size_t size;
   unsigned int magic;
@@ -67,6 +88,13 @@ typedef struct ncclConfig_v21700 {
   const char *netName;
   int splitShare;
   int trafficClass;
+  const char *commName;
+  int collnetEnable;
+  int CTAPolicy;
+  int shrinkShare;
+  int nvlsCTAs;
+  int nChannelsPerNetPeer;
+  int nvlinkCentricSched;
 } ncclConfig_t;
 
 /* Config initializer must be assigned to initialize config structure when it is created.
@@ -82,6 +110,13 @@ typedef struct ncclConfig_v21700 {
   NCCL_CONFIG_UNDEF_PTR,                    /* netName */               \
   NCCL_CONFIG_UNDEF_INT,                    /* splitShare */            \
   NCCL_CONFIG_UNDEF_INT,                    /* trafficClass */          \
+  NCCL_CONFIG_UNDEF_PTR,                    /* commName */              \
+  NCCL_CONFIG_UNDEF_INT,                    /* collnetEnable */         \
+  NCCL_CONFIG_UNDEF_INT,                    /* CTAPolicy */             \
+  NCCL_CONFIG_UNDEF_INT,                    /* shrinkShare */           \
+  NCCL_CONFIG_UNDEF_INT,                    /* nvlsCTAs */              \
+  NCCL_CONFIG_UNDEF_INT,                    /* nChannelsPerNetPeer */   \
+  NCCL_CONFIG_UNDEF_INT,                    /* nvlinkCentricSched */    \
 }
 
 /* This struct will be used by ncclGroupSimulateEnd() API to query information about simulation. */
@@ -173,6 +208,14 @@ ncclResult_t pncclCommAbort(ncclComm_t comm);
 ncclResult_t  ncclCommSplit(ncclComm_t comm, int color, int key, ncclComm_t *newcomm, ncclConfig_t* config);
 ncclResult_t pncclCommSplit(ncclComm_t comm, int color, int key, ncclComm_t *newcomm, ncclConfig_t* config);
 
+/* Shrink existing communicator.
+ * Ranks in excludeRanksList will be removed form the existing communicator.
+ * Within the new communicator, ranks will be re-ordered to fill the gap of removed ones.
+ * If config is NULL, the new communicator will inherit the original communicator's configuration
+ * The flag enables NCCL to adapt to various states of the parent communicator, see NCCL_SHRINK flags.*/
+ncclResult_t  ncclCommShrink(ncclComm_t comm, int* excludeRanksList, int excludeRanksCount, ncclComm_t* newcomm, ncclConfig_t* config, int shrinkFlags);
+ncclResult_t pncclCommShrink(ncclComm_t comm, int* excludeRanksList, int excludeRanksCount, ncclComm_t* newcomm, ncclConfig_t* config, int shrinkFlags);
+
 /* Creates a new communicator (multi thread/process version), similar to ncclCommInitRankConfig.
  * Allows to use more than one ncclUniqueId (up to one per rank), indicated by nId, to accelerate the init operation.
  * The number of ncclUniqueIds and their order must be the same for every rank.
@@ -189,7 +232,9 @@ const char*  ncclGetLastError(ncclComm_t comm);
 const char* pncclGetLastError(ncclComm_t comm);
 
 /* Reload environment variables that determine logging. */
+__attribute__ ((deprecated("ncclResetDebugInit is not supported as part of the NCCL API and will be removed in the future")))
 void  ncclResetDebugInit();
+__attribute__ ((deprecated("pncclResetDebugInit is not supported as part of the NCCL API and will be removed in the future")))
 void pncclResetDebugInit();
 
 /* Checks whether the comm has encountered any asynchronous errors */
@@ -215,6 +260,14 @@ ncclResult_t pncclCommRegister(const ncclComm_t comm, void* buff, size_t size, v
 /* Deregister CUDA buffer */
 ncclResult_t  ncclCommDeregister(const ncclComm_t comm, void* handle);
 ncclResult_t pncclCommDeregister(const ncclComm_t comm, void* handle);
+
+/* Register memory window  */
+ncclResult_t  ncclCommWindowRegister(ncclComm_t comm, void* buff, size_t size, ncclWindow_t* win, int winFlags);
+ncclResult_t pncclCommWindowRegister(ncclComm_t comm, void* buff, size_t size, ncclWindow_t* win, int winFlags);
+
+/* Deregister symmetric memory */
+ncclResult_t  ncclCommWindowDeregister(ncclComm_t comm, ncclWindow_t win);
+ncclResult_t pncclCommWindowDeregister(ncclComm_t comm, ncclWindow_t win);
 
 /* Reduction operation selector */
 typedef enum { ncclNumOps_dummy = 5 } ncclRedOp_dummy_t;
@@ -387,6 +440,49 @@ ncclResult_t  ncclAllGather(const void* sendbuff, void* recvbuff, size_t sendcou
     ncclDataType_t datatype, ncclComm_t comm, cudaStream_t stream);
 ncclResult_t pncclAllGather(const void* sendbuff, void* recvbuff, size_t sendcount,
     ncclDataType_t datatype, ncclComm_t comm, cudaStream_t stream);
+
+/*
+ * All-to-All
+ *
+ * Each device sends count values to all other devices and receives count values
+ * from all other devices. Data to send to destination rank j is taken from
+ * sendbuff+j*count and data received from source rank i is placed at
+ * recvbuff+i*count.
+ */
+ncclResult_t  ncclAlltoAll(const void* sendbuff, void* recvbuff, size_t count,
+    ncclDataType_t datatype, ncclComm_t comm, cudaStream_t stream);
+ncclResult_t pncclAlltoAll(const void* sendbuff, void* recvbuff, size_t count,
+    ncclDataType_t datatype, ncclComm_t comm, cudaStream_t stream);
+
+/*
+ * Gather
+ *
+ * Each rank sends count elements from sendbuff to the root rank.
+ * On the root rank, data from rank i is placed at recvbuff + i*count.
+ * On non-root ranks, recvbuff is not used.
+ * root is the rank where data will be gathered.
+ *
+ * In-place operations will happen if sendbuff == recvbuff + root * count.
+ */
+ncclResult_t  ncclGather(const void* sendbuff, void* recvbuff, size_t count,
+    ncclDataType_t datatype, int root, ncclComm_t comm, cudaStream_t stream);
+ncclResult_t pncclGather(const void* sendbuff, void* recvbuff, size_t count,
+    ncclDataType_t datatype, int root, ncclComm_t comm, cudaStream_t stream);
+
+/*
+ * Scatter
+ *
+ * On the root rank, count elements from sendbuff+i*count are sent to rank i.
+ * On non-root ranks, sendbuff is not used.
+ * Each rank receives count elements into recvbuff.
+ * root is the rank that will distribute the data.
+ *
+ * In-place operations will happen if recvbuff == sendbuff + root * count.
+ */
+ncclResult_t  ncclScatter(const void* sendbuff, void* recvbuff, size_t count,
+    ncclDataType_t datatype, int root, ncclComm_t comm, cudaStream_t stream);
+ncclResult_t pncclScatter(const void* sendbuff, void* recvbuff, size_t count,
+    ncclDataType_t datatype, int root, ncclComm_t comm, cudaStream_t stream);
 
 /*
  * Send

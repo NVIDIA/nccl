@@ -1,0 +1,15 @@
+name: NCCL question
+description: Ask the NCCL team a question
+title: "[Question]: "
+labels: ["question"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reaching out! To solve your problem, feel free to check out the [user guide](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/index.html), in particular the troubleshooting section, and also the [release notes](https://docs.nvidia.com/deeplearning/nccl/release-notes/index.html).
+        ---
+  - type: textarea
+    id: question
+    attributes:
+      label: Question

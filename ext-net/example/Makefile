@@ -3,15 +3,20 @@
 #
 # See LICENSE.txt for license information
 #
-NCCL_HOME:=../../build/
-CUDA_HOME:=/usr/local/cuda
-INC:= -I$(NCCL_HOME)/include -I$(CUDA_HOME)/include -Inccl
-PLUGIN_SO:=libnccl-net.so
+.DEFAULT_GOAL: build
+include ../../makefiles/common.mk
+SRCDIR   ?= $(abspath ../..)
+BUILDDIR ?= .
+NCCLDIR  := $(BUILDDIR)
 
-default: $(PLUGIN_SO)
+SRC_FILES := $(wildcard *.c)
 
-$(PLUGIN_SO): plugin.c
-	$(CC) $(INC) -fPIC -shared -o $@ -Wl,-soname,$(PLUGIN_SO) $^
+build: ${BUILDDIR}/libnccl-net-example.so
+
+${BUILDDIR}/libnccl-net-example.so: ${SRC_FILES}
+	@printf "Compiling  %-35s > %s\n" $< $@
+	@mkdir -p ${BUILDDIR}
+	$(CC) -Inccl -fPIC -shared -o $@ $^
 
 clean:
-	rm -f $(PLUGIN_SO)
+	rm -f ${BUILDDIR}/libnccl-net-example.so

@@ -1,5 +1,6 @@
 # Copyright (c) 2015-2016, NVIDIA CORPORATION. All rights reserved.
 /build
+/eugo_build
 *.gcov
 /coverage/
 .DS_Store

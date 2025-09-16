@@ -10,7 +10,7 @@ build : debian.build txz.build
 
 BUILDDIR ?= $(abspath ../build)
 ABSBUILDDIR := $(abspath $(BUILDDIR))
-TARGETS := debian txz
+TARGETS := debian txz doc
 all:   ${TARGETS:%=%.build}
 prep:  ${TARGETS:%=%.prep}
 build: ${TARGETS:%=%.build}

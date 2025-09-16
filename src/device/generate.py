@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-# fmt: off
-# ruff: noqa
 import os
 import sys
+import shutil
 
 # Order of redops, tys, protos, algos must match src/include/device.h
 all_colls =  ["Broadcast","Reduce","AllGather","ReduceScatter","AllReduce","SendRecv"]
@@ -19,9 +18,11 @@ gensrc = sys.argv[1]
 
 if os.path.exists(gensrc):
   for name in os.listdir(gensrc):
-    if not name == "CMakeFiles":  # @EUGO_CHANGE
-      os.remove(os.path.join(gensrc, name))
-      #os.truncate(os.path.join(gensrc, name), 0)
+    path = os.path.join(gensrc, name)
+    if os.path.isfile(path):
+      os.remove(path)
+    elif os.path.isdir(path):
+      shutil.rmtree(path)
 else:
   os.mkdir(gensrc)
 
@@ -216,7 +217,7 @@ with open(os.path.join(gensrc, "device_table.cu"), "w") as f:
       out("#endif\n")
   out("\n")
 
-  out("__device__ ncclDevFuncPtr_t ncclDevFuncTable[] = {\n");
+  out("__device__ ncclDevFuncPtr_t const ncclDevFuncTable[] = {\n");
   index = 0
   for fn in primary_funcs:
     sym = paste("_", "ncclDevFunc", *fn)
@@ -233,9 +234,8 @@ with open(os.path.join(gensrc, "device_table.cu"), "w") as f:
   out("// Workaround for https://reviews.llvm.org/D55580\n"
       "__device__ void ncclWorkaroundClangD55580() {}\n")
 
-# @EUGO_CHANGE: host_table.cc -> host_table.cu
-# Generate <gensrc>/host_table.cu
-with open(os.path.join(gensrc, "host_table.cu"), "w") as f:
+# Generate <gensrc>/host_table.cc
+with open(os.path.join(gensrc, "host_table.cc"), "w") as f:
   out = f.write
   out('#include "device.h"\n')
   out("\n")
@@ -269,45 +269,28 @@ with open(os.path.join(gensrc, "host_table.cu"), "w") as f:
 
   # List of all kernel function pointers.
   out("extern int const ncclDevKernelCount = %d;\n" % len(kernel_funcs))
-
+  out("extern void* const ncclDevKernelList[] = {\n")
   index = 0
   for kfn in kernel_funcs:
     cudart, _ = required_cuda(*kfn)
     sym = paste("_", "ncclDevKernel", *kfn)
     if cudart != 0: out("#if CUDART_VERSION >= %d\n" % cudart)
-    out("/*%4d*/ void* %s_ptr = (void*)%s;\n" % (index, sym, sym));
-    if cudart != 0:
-      out("#else\n/*%4d*/ void* %s_ptr = nullptr;\n#endif\n" % (index, sym));
-    index += 1
-
-  out("extern void* const ncclDevKernelList[] = {\n")
-  index = 0
-  for kfn in kernel_funcs:
-    sym = paste("_", "ncclDevKernel", *kfn)
-    out("/*%4d*/ %s_ptr,\n" % (index, sym));
+    out("/*%4d*/ (void*)%s,\n" % (index, sym));
+    if cudart != 0: out("#else\n" "/*%4d*/ nullptr,\n" "#endif\n" % index)
     index += 1
   out("nullptr};\n")
   out("\n")
 
   # Maps primary id to kernel function pointer.
-
+  out("extern void* const ncclDevKernelForFunc[] = {\n")
   index = 0
   for fn in primary_funcs:
     kfn = best_kernel(*fn)
     sym = paste("_", "ncclDevKernel", *kfn)
     cudart, _ = required_cuda(*kfn)
     if cudart != 0: out("#if CUDART_VERSION >= %d\n" % cudart)
-    out("/*%4d*/ void* %s_ptr_%d = (void*)%s;\n" % (index, sym, index, sym))
-    if cudart != 0:
-      out("#else\n" "/*%4d*/ void* %s_ptr_%d = nullptr;\n" "#endif\n" % (index, sym, index))
-    index += 1
-
-  out("extern void* const ncclDevKernelForFunc[] = {\n")
-  index = 0
-  for fn in primary_funcs:
-    kfn = best_kernel(*fn)
-    sym = paste("_", "ncclDevKernel", *kfn)
-    out("/*%4d*/ %s_ptr_%d,\n" % (index, sym, index))
+    out("/*%4d*/ (void*)%s,\n" % (index, sym))
+    if cudart != 0: out("#else\n" "/*%4d*/ nullptr,\n" "#endif\n" % index)
     index += 1
   out("nullptr};\n")
   out("\n")
@@ -343,13 +326,22 @@ def partition_by_name(fns):
 name_to_funcs = partition_by_name(fn for fn in primary_funcs if fn[0]!="Nop")
 name_to_kernels = partition_by_name(kfn for kfn in kernel_funcs if kfn[0]!="Generic")
 
+files = ""
+for name in sorted(name_to_funcs.keys()):
+    files += name + ";"
+files += "device_table.cu;"
+files += "host_table.cc"
+
+# Do not print files when running make
+if os.environ.get("NCCL_USE_CMAKE", "0") == "1":
+    print(files)
+
 # Generate <gensrc>/rules.mk
 with open(os.path.join(gensrc, "rules.mk"), "w") as f:
   out = f.write
   impl_names = sorted(name_to_funcs.keys())
-  # @EUGO_CHANGE: host_table.cc -> host_table.cu
-  names = impl_names + ["host_table.cu", "device_table.cu"]
-  out("LIB_OBJS_GEN = $(patsubst %, $(OBJDIR)/genobj/%.o, {names})\n"
+  names = impl_names + ["host_table.cc", "device_table.cu"]
+  out("LIB_OBJS_GEN = $(patsubst %,$(OBJDIR)/genobj/%.o,{names})\n"
       .format(names=" ".join(names)))
   out("\n")
 

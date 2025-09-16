@@ -1,3 +1,9 @@
+/*************************************************************************
+ * Copyright (c) 2024-2025, NVIDIA CORPORATION. All rights reserved.
+ *
+ * See LICENSE.txt for license information
+ ************************************************************************/
+
 #ifndef NCCL_REGISTER_H_
 #define NCCL_REGISTER_H_
 
@@ -31,16 +37,13 @@ struct ncclRegNetHandles {
 
 struct ncclReg {
   // common attributes
-  size_t pages;
+  uintptr_t begAddr, endAddr; // page aligned
   int localRefs;
   int graphRefs;
-  uintptr_t addr;
   uint32_t state;
   // net reg
   struct ncclRegNetHandles* netHandleHead;
   // nvls reg
-  uintptr_t baseAddr;
-  size_t baseSize;
   CUdeviceptr regAddr;
   size_t regUCSize, regMCSize;
   int dev;
@@ -61,7 +64,6 @@ struct ncclRegCache {
 };
 
 ncclResult_t ncclRegCleanup(struct ncclComm* comm);
-ncclResult_t ncclRegFind(struct ncclComm* comm, const void* data, size_t size, struct ncclReg** reg);
 ncclResult_t ncclCommGraphRegister(const ncclComm_t comm, void* buff, size_t size, void** handle);
 ncclResult_t ncclCommGraphDeregister(const ncclComm_t comm, struct ncclReg *handle);
 ncclResult_t ncclRegLocalIsValid(struct ncclReg *reg, bool *isValid);

@@ -49,9 +49,9 @@ of newer ones.
 The `nccl/` directory is populated with `profiler_vX.h` files extracting all relevant definitions
 from old API versions. It also provides error codes in `err.h`.
 
-# API (v3)
+# API (v5)
 
-Below is the main `ncclProfiler_v3` struct. Each function is explained in later sections.
+Below is the main `ncclProfiler_v5` struct. Each function is explained in later sections.
 
 ```
 typedef struct {
@@ -60,9 +60,15 @@ typedef struct {
   // init - initialize the profiler plugin
   // Input
   //  - context        : opaque profiler context object for separating profiler behavior across comms
+  //  - commId         : communicator id
+  //  - commName       : user assigned communicator name
+  //  - nNodes         : number of nodes in communicator
+  //  - nranks         : number of ranks in communicator
+  //  - rank           : rank identifier in communicator
+  //  - logfn          : logger function
   // Output
   //  - eActivationMask: bitmask of active events set by the plugin
-  ncclResult_t (*init)(void** context, int* eActivationMask);
+  ncclResult_t (*init)(void** context, uint64_t commId, int* eActivationMask, const char* commName, int nNodes, int nranks, int rank, ncclDebugLogger_t logfn);
 
   // startEvent - initialize and start a new event for the supplied event descriptor inside the eventset
   // Input
@@ -70,7 +76,7 @@ typedef struct {
   //  - eDescr : pointer to ncclProfilerEventDescr_t object
   // Output
   //  - eHandle: return event handle for supplied event descriptor object
-  ncclResult_t (*startEvent)(void* context, void** eHandle, ncclProfilerEventDescr_v3_t* eDescr);
+  ncclResult_t (*startEvent)(void* context, void** eHandle, ncclProfilerEventDescr_v5_t* eDescr);
 
   // stopEvent - stop/finalize an event inside and event set
   // Input
@@ -82,13 +88,13 @@ typedef struct {
   //  - eHandle   : handle to event object created through startEvent
   //  - eStateArgs: optional argument used to capture event attribute updates associated with the state transition
   //  - eState    : event state transition
-  ncclResult_t (*recordEventState)(void* eHandle, ncclProfilerEventState_v3_t eState, ncclProfilerEventStateArgs_v3_t* eStateArgs);
+  ncclResult_t (*recordEventState)(void* eHandle, ncclProfilerEventState_v5_t eState, ncclProfilerEventStateArgs_v5_t* eStateArgs);
 
   // finalize - finalize the profiler plugin
   // Input
   //  - context: opaque profiler context object
   ncclResult_t (*finalize)(void* context);
-} ncclProfiler_v3_t;
+} ncclProfiler_v5_t;
 ```
 
 ## Error codes
@@ -142,13 +148,38 @@ is the `ncclProfilerEventDescr_t` struct.
 
 ```
 typedef struct {
-  uint8_t type;             // event type (e.g., ncclProfileGroup, ncclProfileColl, ...)
-  void* parentObj;          // pointer to parent event used to expose the event hierarchy to the profiler
-  int rank;                 // rank that generated the event
+  uint64_t type;             // event type descriptor: ncclProfileGroupApi, ncclProfileCollApi, ...
+  void* parentObj;           // pointer to parent event used to expose the event hierarchy to the profiler
+  int rank;                  // rank that generated the event
   union {
+    struct {                 // GroupAPI event metadata
+      bool graphCaptured;    // Set to true if the Group API event is emitted inside a CUDA graph capture
+      int groupDepth;        // Determines the depth of a ncclGroup. A depth of 1 implies that the Group API call is implicit (internal to NCCL)
+                             // and not called by the user. Any depth greater than 1 means that the user made the Group API call.
+    } groupApi;
+
+    struct {                 // Collective API call metadata
+      const char* func;      // string containing name of the collective operation during
+      size_t count;          // data count
+      const char* datatype;  // string containing the name of the datatype
+      int root;              // root rank
+      void* stream;          // Opaque handle that points to the CUDA stream that the operation is enqueued in
+      bool graphCaptured;    // Set to true if the Collective API event is emitted inside a CUDA graph capture
+    } collApi;
+
+    struct {                // Point-to-point API call metadata
+      const char* func;     // string containing name of the p2p operation
+      size_t count;         // data count
+      const char* datatype; // string containing the name of the datatype
+      void* stream;         // Opaque handle that points to a CUDA stream object
+      bool graphCaptured;   // Set to true if the Collective API event is emitted inside a CUDA graph capture
+    } p2pApi;
+
+    struct {                // Kernel Launch event metadata
+      void* stream;         // Opaque handle that points to the CUDA stream that the operation is enqueued in
+    } kernelLaunch;
+
     struct {                // collective events metadata
-      const char* name;     // string containing name of the communicator
-      uint64_t commHash;    // unique hash/id for the communicator
       uint64_t seqNumber;   // sequence number of this collective operation in the communicator
       const char* func;     // string containing name of the collective
       void const* sendBuff; // address of send buffer
@@ -156,20 +187,21 @@ typedef struct {
       size_t count;         // data count
       int root;             // root rank
       const char* datatype; // string containing the name of the datatype
-      uint8_t nMaxChannels; // max number of channels for this collective
+      uint8_t nChannels;    // number of channels for this collective
       uint8_t nWarps;       // number of GPU warps for this collective
       const char* algo;     // string containing name of the algorithm for this collective
       const char* proto;    // string containing name of the protocol for this collective
+      void* parentGroup;    // for backward compatibility with v4 - this points to the legacy v4 group parent
     } coll;
 
     struct {                // point-to-point events metadata
-      const char* name;
-      uint64_t commHash;
       const char* func;
       void* buff;
       const char* datatype;
       size_t count;
       int peer;             // peer rank for this point-to-point
+      uint8_t nChannels;    // number of channels for this p2p
+      void* parentGroup;    // for backward compatibility with v4 - this points to the legacy v4 group parent
     } p2p;
 
     struct {                // proxyOp events metadata
@@ -178,7 +210,7 @@ typedef struct {
       int peer;             // peer rank
       int nSteps;           // number of network transfers/steps required by the `ncclProxyOp`
       int chunkSize;        // chunk size for this `ncclProxyOp`
-      int isSend;           // set to 1 for sends and 0 for recvs
+      int isSend;           // type of network operation
     } proxyOp;
 
     struct {                // proxyStep events metadata
@@ -187,6 +219,7 @@ typedef struct {
 
     struct {
       uint8_t channelId;    // id of the channel used by the kernel
+      uint64_t ptimer;      // kernel supplied timestamp
     } kernelCh;
 
     struct {
@@ -194,12 +227,12 @@ typedef struct {
       void* data;           // pointer to network plugin defined event
     } netPlugin;
   };
-} ncclProfilerEventDescr_v3_t;
+} ncclProfilerEventDescr_v5_t;
 ```
 
-NCCL defines the following events: `ncclProfileGroup`, `ncclProfileColl`, `ncclProfileP2p`,
-`ncclProfileProxyOp`, `ncclProfileProxyStep`, `ncclProfileProxyCtrl`, `ncclProfileKernelCh` and
-`ncclProfileNetPlugin`.
+NCCL defines the following events: `ncclProfileGroupApi`, `ncclProfileCollApi`, `ncclProfileP2pApi`, `ncclProfileKernelLaunch`,
+`ncclProfileGroup`, `ncclProfileColl`, `ncclProfileP2p`,`ncclProfileProxyOp`, `ncclProfileProxyStep`, `ncclProfileProxyCtrl`,
+`ncclProfileKernelCh` and `ncclProfileNetPlugin`.
 
 #### stopEvent
 
@@ -209,48 +242,72 @@ handle after `eventStop` is undefined behavior.
 
 #### recordEventState
 
-Some events can only be started and stopped. For example, `ncclProfileGroup`, `ncclProfileColl`,
-`ncclProfileP2p`, cannot be updated through calls to `recordEventState`.
+Some events can only be started and stopped. For example, `ncclProfileP2pApi`, `ncclProfileCollApi`, `ncclProfileGroup`,
+`ncclProfileColl`, `ncclProfileP2p` cannot be updated through calls to `recordEventState`.
 
-`ncclProfileProxyOp`, `ncclProfileProxyStep` and `ncclProfileProxyCtrl` can be updated through
-calls to `recordEventState`.
+`ncclProfileGroupApi`, `ncclProfileProxyOp`, `ncclProfileProxyStep`, `ncclProfileNetPlugin`, `ncclProfileKernelCh`, and
+`ncclProfileProxyCtrl` can be updated through calls to `recordEventState`.
 
-The state of proxy generated events can be updated, along with event attributes, using
-`recordEventState`. These events can go through several states during their lifecycle.
-The list of supported states for the proxy-defined events is reported below.
+The state of these events can be updated, along with event attributes, using `recordEventState`.
+These events can go through several states during their lifecycle.
+
+The list of supported states for the updatable events is reported below.
 
 ```
 typedef enum {
   // ncclProfileProxyOp event states
-  ncclProfilerProxyOpSendPosted,        // state marks the posting of send buffer to GPU for given network transfer/step
-  ncclProfilerProxyOpSendRemFifoWait,   // state marks the waiting of CTS credits from peer rank
-  ncclProfilerProxyOpSendTransmitted,   // state marks the sending of network transfer/step to peer rank
-  ncclProfilerProxyOpSendDone,          // state marks the ending  of network transfer/step
-  ncclProfilerProxyOpRecvPosted,        // state marks the posting of recv to network for given network transfer/step
-  ncclProfilerProxyOpRecvReceived,      // state marks the recving of network transfer/step from peer rank
-  ncclProfilerProxyOpRecvTransmitted,   // state marks the ending  of the network transfer/step
-  ncclProfilerProxyOpRecvDone,          // state marks the consuming of data from GPU
+  ncclProfilerProxyOpSendPosted        = 0, // deprecated in v4
+  ncclProfilerProxyOpSendRemFifoWait   = 1, // deprecated in v4
+  ncclProfilerProxyOpSendTransmitted   = 2, // deprecated in v4
+  ncclProfilerProxyOpSendDone          = 3, // deprecated in v4
+  ncclProfilerProxyOpRecvPosted        = 4, // deprecated in v4
+  ncclProfilerProxyOpRecvReceived      = 5, // deprecated in v4
+  ncclProfilerProxyOpRecvTransmitted   = 6, // deprecated in v4
+  ncclProfilerProxyOpRecvDone          = 7, // deprecated in v4
+  ncclProfilerProxyOpInProgress_v4     = 19,// state marks transition of proxy op to progress
 
   // ncclProfileProxyStep event states
-  ncclProfilerProxyStepSendGPUWait,     // state marks the waiting of send data from GPU for given network transfer/step
-  ncclProfilerProxyStepSendWait,        // state marks the waiting of send data from network for given network transfer/step
-  ncclProfilerProxyStepRecvWait,        // state marks the waiting of recv data from network for given network transfer/step
-  ncclProfilerProxyStepRecvFlushWait,   // state marks the waiting of recv data flush to GPU for given network transfer/step
-  ncclProfilerProxyStepRecvGPUWait,     // state marks the waiting of recv data consumption from GPU for given network transfer/step
+  ncclProfilerProxyStepSendGPUWait     = 8, // state marks the waiting of send data from GPU for given network transfer/step
+  ncclProfilerProxyStepSendPeerWait_v4 = 20,// state marks the waiting of recv clear to send credits for given network transfer/step
+  ncclProfilerProxyStepSendWait        = 9, // state marks the waiting of send data from network for given network transfer/step
+  ncclProfilerProxyStepRecvWait        = 10,// state marks the waiting of recv data from network for given network transfer/step
+  ncclProfilerProxyStepRecvFlushWait   = 11,// state marks the waiting of recv data flush to GPU for given network transfer/step
+  ncclProfilerProxyStepRecvGPUWait     = 12,// state marks the waiting of recv data consumption from GPU for given network transfer/step
 
   // ncclProfileProxyCtrl event states
-  ncclProfilerProxyCtrlIdle,            // state marks proxy progress thread idle
-  ncclProfilerProxyCtrlActive,          // state marks proxy progress thread active
-  ncclProfilerProxyCtrlSleep,           // state marks proxy progress thread sleeping
-  ncclProfilerProxyCtrlWakeup,          // state marks proxy progress thread waking up
-  ncclProfilerProxyCtrlAppend,          // state marks append of new network work item begin
-  ncclProfilerProxyCtrlAppendEnd,       // state marks append of new network work item end
-} ncclProfilerEventState_v3_t;
+  ncclProfilerProxyCtrlIdle            = 13,// state marks proxy progress thread idle
+  ncclProfilerProxyCtrlActive          = 14,// state marks proxy progress thread active
+  ncclProfilerProxyCtrlSleep           = 15,// state marks proxy progress thread sleeping
+  ncclProfilerProxyCtrlWakeup          = 16,// state marks proxy progress thread waking up
+  ncclProfilerProxyCtrlAppend          = 17,// state marks append of new network work item begin
+  ncclProfilerProxyCtrlAppendEnd       = 18,// state marks append of new network work item end
+
+  // ncclProfileNetPlugin event states
+  ncclProfilerNetPluginUpdate          = 21,// state marks update of network defined event
+
+  // ncclProfileKernelCh event states
+  ncclProfilerKernelChStop             = 22,// state marks stop of kernelCh event and timestamp update
+
+  // Group API States
+  ncclProfilerGroupStartApiStop        = 23,// state marks the end of a ncclGroupStart() API call
+  ncclProfilerEndGroupApiStart         = 24 // state marks the start of a ncclGroupEnd() API call
+} ncclProfilerEventState_v5_t;
 ```
+
+NCCL profile API events are generated when the API calls are made, right after NCCL checks
+for graph capture information. They parent collective, point-to-point and kernel launch events
+and persist across multiple operations in a group.
+
+`ncclProfileKernelLaunch` events are generated when the CUDA call to a kernel launch is made. In the
+case of graph capture, the event start indicates that the kernel launch operation has been recorded,
+not launched.
 
 `ncclProfileProxyOp` events are generated by the proxy progress thread while it is processing
 network requests for the GPU kernel. ProxyOp events are generated for every active channel and
-provide a summary of the activity of the proxy progress thread for that channel.
+provide a summary of the activity of the proxy progress thread for that channel. Most of the
+states for this event were duplicated with `ncclProfileProxyStep` events. Therefore, starting
+with version 4 of the profiler interface these states have been deprecated. The same level of
+information can still be obtained through the `ncclProfileProxyStep` events.
 
 `ncclProfileProxyStep` events are generated by the proxy progress thread while it is processing
 network requests for the GPU kernel. ProxyStep events describe individual network transfer in
@@ -348,15 +405,22 @@ reason the profiler defines the `ncclProfilerEventStateArgs_t` struct, reported 
 
 ```
 typedef union {
-  struct {                // attributes to update for ncclProfileProxyOp events
-    size_t transSize;     // data transferred thus far
-    int steps;            // network transfer/steps processed thus far
-  } proxyOp;
+  struct {                // attributes for update for ncclProfileProxyStep events
+    size_t transSize;     // transfer size field for this proxy step
+  } proxyStep;
 
-  struct {                // attributes to update for ncclProfileProxyCtrl
+  struct {                // attributes to update for ncclProfileProxyCtrl events
     int appendedProxyOps; // number of appended proxy ops thus far
   } proxyCtrl;
-} ncclProfilerEventStateArgs_v3_t;
+
+  struct {                // attributes to update for ncclProfileNetPlugin events
+    void* data;           // network plugin opaque update data field
+  } netPlugin;
+
+  struct {                // attribute to update for ncclProfileKernelCh events
+    uint64_t pTimer;      // timestamp provided by the NCCL kernel
+  } kernelCh;
+} ncclProfilerEventStateArgs_v5_t;
 ```
 
 The example profiler in `ext-profiler/example` contains details on how to capture and use the events above.
@@ -366,27 +430,33 @@ The example profiler in `ext-profiler/example` contains details on how to captur
 NCCL core events (reported above) are organized into a hierarchy as reported below:
 
 ```
-Group event
+Group API event
    |
-   +- Collective event
+   +- Collective API event
    |  |
-   |  +- ProxyOp event
-   |  |  |
-   |  |  +- ProxyStep event
-   |  |     |
-   |  |     +- NetPlugin event
-   |  |
-   |  +- KernelCh event
+   |  +- Collective event
+   |     |
+   |     +- ProxyOp event
+   |     |  |
+   |     |  +- ProxyStep event
+   |     |     |
+   |     |     +- NetPlugin event
+   |     |
+   |     +- KernelCh event
    |
-   +- Point-to-point event
-      |
-      +- ProxyOp event
-      |  |
-      |  +- ProxyStep event
-      |     |
-      |     +- NetPlugin event
-      |
-      +- KernelCh event
+   +- Point-to-point API event
+   |  |
+   |  +- Point-to-point event
+   |     |
+   |     +- ProxyOp event
+   |     |  |
+   |     |  +- ProxyStep event
+   |     |     |
+   |     |     +- NetPlugin event
+   |     |
+   |     +- KernelCh event
+   |
+   +- Kernel Launch event
 
 ProxyCtrl event
 ```
@@ -396,12 +466,12 @@ ProxyCtrl event
 ## Profiling of collective and p2p operations
 
 The NCCL code is instrumented with profiler callbacks at different levels to capture start/stop of groups,
-collective and point-to-point operations, as well as proxy progress activity. Due to the asynchronous nature
+collective and point-to-point operations, as well as proxy, kernel and network activity. Due to the asynchronous nature
 of NCCL operations, events associated to collective and point-to-point operations are not easy to delimit
 precisely. For example, without both proxy and/or kernel activity it is impossible for the profiler to
 figure out when a collective operation completes. Therefore, `stopEvent` for collectives simply indicates to
-the profiler that the collective has been enqueued. The profiler can leverage proxy event information, if
-these are enabled, to estimate when the collective ends. In this case, the profiler can look at the `stopEvent`
+the profiler that the collective has been enqueued. The profiler can leverage proxy and/or kernel event information, if
+these are enabled, to estimate when the collective ends. For example, the profiler can look at the `stopEvent`
 call of the last `ncclProfileProxyOp` event to mark the completion of the associated collective event. This
 can be achieved by reference counting the collective event and letting calls to `startEvent` and `stopEvent`
 increment and decrement the reference counter, respectively.
@@ -425,8 +495,14 @@ enqueue can be time stamped by the profiler (at start and stop) to reconstruct t
 collective. However, this time only represents the launch time of the collective and not the actual
 execution time. To reconstruct the execution time more accurately proxy and kernel events are provided.
 
+With version 3 of the profiler interface network activity is no longer required to do intra-node profiling.
 Kernel events instrumentation leverages counters exposed by the kernel to the host and the proxy progress
 thread. Thus, the proxy progress thread infrastructure is shared between the network and the profiler. If
 the proxy is serving network requests the kernel profiling probing can be delayed, causing loss of
 accuracy. Similarly, if the CPU is under heavy load and the scheduling of the proxy progress thread is
-delayed, a similar loss of accuracy can be encountered. Keep this in mind when using kernel events.
+delayed, a similar loss of accuracy can be encountered.
+
+To mitigate this effect, with version 4 of the profiler NCCL uses a per-channel ring buffer of 64 elements.
+Every counter is complemented by two timestamps (ptimers) supplied by the NCCL kernel (one for start and one
+for stop of the operation in the kernel). NCCL propagates these timestamps to the profiler plugin that it can
+convert them to CPU time domain.

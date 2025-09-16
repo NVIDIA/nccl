@@ -9,6 +9,7 @@
 #include "debug.h"
 #include "param.h"
 #include "cudawrap.h"
+#include <mutex>
 
 // This env var (NCCL_CUMEM_ENABLE) toggles cuMem API usage
 NCCL_PARAM(CuMemEnable, "CUMEM_ENABLE", -2);
@@ -105,54 +106,60 @@ error:
 #endif
 }
 
-#define DECLARE_CUDA_PFN(symbol) PFN_##symbol pfn_##symbol = nullptr
+#define DECLARE_CUDA_PFN(symbol,version) PFN_##symbol##_v##version pfn_##symbol = nullptr
 
 #if CUDART_VERSION >= 11030
 /* CUDA Driver functions loaded with cuGetProcAddress for versioning */
-DECLARE_CUDA_PFN(cuDeviceGet);
-DECLARE_CUDA_PFN(cuDeviceGetAttribute);
-DECLARE_CUDA_PFN(cuGetErrorString);
-DECLARE_CUDA_PFN(cuGetErrorName);
+DECLARE_CUDA_PFN(cuDeviceGet, 2000);
+DECLARE_CUDA_PFN(cuDeviceGetAttribute, 2000);
+DECLARE_CUDA_PFN(cuGetErrorString, 6000);
+DECLARE_CUDA_PFN(cuGetErrorName, 6000);
 /* enqueue.cc */
-DECLARE_CUDA_PFN(cuMemGetAddressRange);
-DECLARE_CUDA_PFN(cuLaunchKernel);
+DECLARE_CUDA_PFN(cuMemGetAddressRange, 3020);
+DECLARE_CUDA_PFN(cuLaunchKernel, 4000);
 #if CUDA_VERSION >= 11080
-DECLARE_CUDA_PFN(cuLaunchKernelEx);
+DECLARE_CUDA_PFN(cuLaunchKernelEx, 11060);
 #endif
 /* proxy.cc */
-DECLARE_CUDA_PFN(cuCtxCreate);
-DECLARE_CUDA_PFN(cuCtxDestroy);
-DECLARE_CUDA_PFN(cuCtxGetCurrent);
-DECLARE_CUDA_PFN(cuCtxSetCurrent);
-DECLARE_CUDA_PFN(cuCtxGetDevice);
+DECLARE_CUDA_PFN(cuCtxCreate, 11040);
+DECLARE_CUDA_PFN(cuCtxDestroy, 4000);
+DECLARE_CUDA_PFN(cuCtxGetCurrent, 4000);
+DECLARE_CUDA_PFN(cuCtxSetCurrent, 4000);
+DECLARE_CUDA_PFN(cuCtxGetDevice, 2000);
 /* cuMem API support */
-DECLARE_CUDA_PFN(cuMemAddressReserve);
-DECLARE_CUDA_PFN(cuMemAddressFree);
-DECLARE_CUDA_PFN(cuMemCreate);
-DECLARE_CUDA_PFN(cuMemGetAllocationGranularity);
-DECLARE_CUDA_PFN(cuMemExportToShareableHandle);
-DECLARE_CUDA_PFN(cuMemImportFromShareableHandle);
-DECLARE_CUDA_PFN(cuMemMap);
-DECLARE_CUDA_PFN(cuMemRelease);
-DECLARE_CUDA_PFN(cuMemRetainAllocationHandle);
-DECLARE_CUDA_PFN(cuMemSetAccess);
-DECLARE_CUDA_PFN(cuMemUnmap);
-DECLARE_CUDA_PFN(cuMemGetAllocationPropertiesFromHandle);
+DECLARE_CUDA_PFN(cuMemAddressReserve, 10020);
+DECLARE_CUDA_PFN(cuMemAddressFree, 10020);
+DECLARE_CUDA_PFN(cuMemCreate, 10020);
+DECLARE_CUDA_PFN(cuMemGetAllocationGranularity, 10020);
+DECLARE_CUDA_PFN(cuMemExportToShareableHandle, 10020);
+DECLARE_CUDA_PFN(cuMemImportFromShareableHandle, 10020);
+DECLARE_CUDA_PFN(cuMemMap, 10020);
+DECLARE_CUDA_PFN(cuMemRelease, 10020);
+DECLARE_CUDA_PFN(cuMemRetainAllocationHandle, 11000);
+DECLARE_CUDA_PFN(cuMemSetAccess, 10020);
+DECLARE_CUDA_PFN(cuMemUnmap, 10020);
+DECLARE_CUDA_PFN(cuMemGetAllocationPropertiesFromHandle, 10020);
 /* ncclMemAlloc/Free */
-DECLARE_CUDA_PFN(cuPointerGetAttribute);
+DECLARE_CUDA_PFN(cuPointerGetAttribute, 4000);
 #if CUDA_VERSION >= 11070
 /* transport/collNet.cc/net.cc*/
-DECLARE_CUDA_PFN(cuMemGetHandleForAddressRange); // DMA-BUF support
+DECLARE_CUDA_PFN(cuMemGetHandleForAddressRange, 11070); // DMA-BUF support
 #endif
 #if CUDA_VERSION >= 12010
 /* NVSwitch Multicast support */
-DECLARE_CUDA_PFN(cuMulticastAddDevice);
-DECLARE_CUDA_PFN(cuMulticastBindMem);
-DECLARE_CUDA_PFN(cuMulticastBindAddr);
-DECLARE_CUDA_PFN(cuMulticastCreate);
-DECLARE_CUDA_PFN(cuMulticastGetGranularity);
-DECLARE_CUDA_PFN(cuMulticastUnbind);
+DECLARE_CUDA_PFN(cuMulticastAddDevice, 12010);
+DECLARE_CUDA_PFN(cuMulticastBindMem, 12010);
+DECLARE_CUDA_PFN(cuMulticastBindAddr, 12010);
+DECLARE_CUDA_PFN(cuMulticastCreate, 12010);
+DECLARE_CUDA_PFN(cuMulticastGetGranularity, 12010);
+DECLARE_CUDA_PFN(cuMulticastUnbind, 12010);
 #endif
+/* Stream MemOp support */
+DECLARE_CUDA_PFN(cuStreamBatchMemOp, 11070);
+DECLARE_CUDA_PFN(cuStreamWaitValue32, 11070);
+DECLARE_CUDA_PFN(cuStreamWaitValue64, 11070);
+DECLARE_CUDA_PFN(cuStreamWriteValue32, 11070);
+DECLARE_CUDA_PFN(cuStreamWriteValue64, 11070);
 #endif
 
 #define CUDA_DRIVER_MIN_VERSION 11030
@@ -162,8 +169,17 @@ bool ncclCudaLaunchBlocking = false;
 
 #if CUDART_VERSION >= 11030
 
-#if CUDART_VERSION >= 12000
-#define LOAD_SYM(symbol, ignore) do {                                   \
+#if CUDART_VERSION >= 13000
+#define LOAD_SYM(symbol, version, ignore) do {                           \
+    cudaDriverEntryPointQueryResult driverStatus = cudaDriverEntryPointSymbolNotFound; \
+    res = cudaGetDriverEntryPointByVersion(#symbol, (void **) (&pfn_##symbol), version, cudaEnableDefault, &driverStatus); \
+    if (res != cudaSuccess || driverStatus != cudaDriverEntryPointSuccess) { \
+      if (!ignore) {                                                    \
+        WARN("Retrieve %s version %d failed with %d status %d", #symbol, version, res, driverStatus); \
+        return ncclSystemError; }                                       \
+    } } while(0)
+#elif CUDART_VERSION >= 12000
+#define LOAD_SYM(symbol, version, ignore) do {                           \
     cudaDriverEntryPointQueryResult driverStatus = cudaDriverEntryPointSymbolNotFound; \
     res = cudaGetDriverEntryPoint(#symbol, (void **) (&pfn_##symbol), cudaEnableDefault, &driverStatus); \
     if (res != cudaSuccess || driverStatus != cudaDriverEntryPointSuccess) { \
@@ -172,7 +188,7 @@ bool ncclCudaLaunchBlocking = false;
         return ncclSystemError; }                                       \
     } } while(0)
 #else
-#define LOAD_SYM(symbol, ignore) do {                                   \
+#define LOAD_SYM(symbol, version, ignore) do {                           \
     res = cudaGetDriverEntryPoint(#symbol, (void **) (&pfn_##symbol), cudaEnableDefault); \
     if (res != cudaSuccess) { \
       if (!ignore) {                                                    \
@@ -188,52 +204,58 @@ static ncclResult_t cudaPfnFuncLoader(void) {
 
   cudaError_t res;
 
-  LOAD_SYM(cuGetErrorString, 0);
-  LOAD_SYM(cuGetErrorName, 0);
-  LOAD_SYM(cuDeviceGet, 0);
-  LOAD_SYM(cuDeviceGetAttribute, 0);
-  LOAD_SYM(cuMemGetAddressRange, 1);
-  LOAD_SYM(cuCtxCreate, 1);
-  LOAD_SYM(cuCtxDestroy, 1);
-  LOAD_SYM(cuCtxGetCurrent, 1);
-  LOAD_SYM(cuCtxSetCurrent, 1);
-  LOAD_SYM(cuCtxGetDevice, 1);
-  LOAD_SYM(cuLaunchKernel, 1);
+  LOAD_SYM(cuGetErrorString, 6000, 0);
+  LOAD_SYM(cuGetErrorName, 6000, 0);
+  LOAD_SYM(cuDeviceGet, 2000, 0);
+  LOAD_SYM(cuDeviceGetAttribute, 2000, 0);
+  LOAD_SYM(cuMemGetAddressRange, 3020, 1);
+  LOAD_SYM(cuCtxCreate, 11040, 1);
+  LOAD_SYM(cuCtxDestroy, 4000, 1);
+  LOAD_SYM(cuCtxGetCurrent, 4000, 1);
+  LOAD_SYM(cuCtxSetCurrent, 4000, 1);
+  LOAD_SYM(cuCtxGetDevice, 2000, 1);
+  LOAD_SYM(cuLaunchKernel, 4000, 1);
 #if CUDA_VERSION >= 11080
-  LOAD_SYM(cuLaunchKernelEx, 1);
+  LOAD_SYM(cuLaunchKernelEx, 11060, 1);
 #endif
 /* cuMem API support */
-  LOAD_SYM(cuMemAddressReserve, 1);
-  LOAD_SYM(cuMemAddressFree, 1);
-  LOAD_SYM(cuMemCreate, 1);
-  LOAD_SYM(cuMemGetAllocationGranularity, 1);
-  LOAD_SYM(cuMemExportToShareableHandle, 1);
-  LOAD_SYM(cuMemImportFromShareableHandle, 1);
-  LOAD_SYM(cuMemMap, 1);
-  LOAD_SYM(cuMemRelease, 1);
-  LOAD_SYM(cuMemRetainAllocationHandle, 1);
-  LOAD_SYM(cuMemSetAccess, 1);
-  LOAD_SYM(cuMemUnmap, 1);
-  LOAD_SYM(cuMemGetAllocationPropertiesFromHandle, 1);
+  LOAD_SYM(cuMemAddressReserve, 10020, 1);
+  LOAD_SYM(cuMemAddressFree, 10020, 1);
+  LOAD_SYM(cuMemCreate, 10020, 1);
+  LOAD_SYM(cuMemGetAllocationGranularity, 10020, 1);
+  LOAD_SYM(cuMemExportToShareableHandle, 10020, 1);
+  LOAD_SYM(cuMemImportFromShareableHandle, 10020, 1);
+  LOAD_SYM(cuMemMap, 10020, 1);
+  LOAD_SYM(cuMemRelease, 10020, 1);
+  LOAD_SYM(cuMemRetainAllocationHandle, 11000, 1);
+  LOAD_SYM(cuMemSetAccess, 10020, 1);
+  LOAD_SYM(cuMemUnmap, 10020, 1);
+  LOAD_SYM(cuMemGetAllocationPropertiesFromHandle, 10020, 1);
 /* ncclMemAlloc/Free */
-  LOAD_SYM(cuPointerGetAttribute, 1);
+  LOAD_SYM(cuPointerGetAttribute, 4000, 1);
 #if CUDA_VERSION >= 11070
-  LOAD_SYM(cuMemGetHandleForAddressRange, 1); // DMA-BUF support
+  LOAD_SYM(cuMemGetHandleForAddressRange, 11070, 1); // DMA-BUF support
 #endif
 #if CUDA_VERSION >= 12010
 /* NVSwitch Multicast support */
-  LOAD_SYM(cuMulticastAddDevice, 1);
-  LOAD_SYM(cuMulticastBindMem, 1);
-  LOAD_SYM(cuMulticastBindAddr, 1);
-  LOAD_SYM(cuMulticastCreate, 1);
-  LOAD_SYM(cuMulticastGetGranularity, 1);
-  LOAD_SYM(cuMulticastUnbind, 1);
+  LOAD_SYM(cuMulticastAddDevice, 12010, 1);
+  LOAD_SYM(cuMulticastBindMem, 12010, 1);
+  LOAD_SYM(cuMulticastBindAddr, 12010, 1);
+  LOAD_SYM(cuMulticastCreate, 12010, 1);
+  LOAD_SYM(cuMulticastGetGranularity, 12010, 1);
+  LOAD_SYM(cuMulticastUnbind, 12010, 1);
 #endif
+/* Stream MemOp support */
+  LOAD_SYM(cuStreamBatchMemOp, 11070, 1);
+  LOAD_SYM(cuStreamWaitValue32, 11070, 1);
+  LOAD_SYM(cuStreamWaitValue64, 11070, 1);
+  LOAD_SYM(cuStreamWriteValue32, 11070, 1);
+  LOAD_SYM(cuStreamWriteValue64, 11070, 1);
   return ncclSuccess;
 }
 #endif
 
-static pthread_once_t initOnceControl = PTHREAD_ONCE_INIT;
+static std::once_flag initOnceFlag;
 static ncclResult_t initResult;
 
 static void initOnceFunc() {
@@ -286,6 +308,6 @@ error:
 }
 
 ncclResult_t ncclCudaLibraryInit() {
-  pthread_once(&initOnceControl, initOnceFunc);
+  std::call_once(initOnceFlag, initOnceFunc);
   return initResult;
 }

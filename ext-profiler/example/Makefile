@@ -3,14 +3,22 @@
 #
 # See LICENSE.txt for license information
 #
-NCCL_HOME := ../../build
-INC := -I$(NCCL_HOME)/include -I$(CUDA_HOME)/include -Inccl
-PLUGIN_SO := libnccl-profiler.so
+.DEFAULT_GOAL: build
+include ../../makefiles/common.mk
+BUILDDIR ?= .
+NCCLDIR  := $(BUILDDIR)
 
-default: $(PLUGIN_SO)
+SRC_FILES := $(wildcard *.cc)
+DST_DIR   := $(BUILDDIR)
+OBJ_FILES := $(SRC_FILES:%.cc=${DST_DIR}/%.o)
+DEP_FILES := $(OBJ_FILES:%.o=%.dep)
 
-$(PLUGIN_SO): plugin.c event.c print_event.c
-	$(CXX) $(INC) -g -fPIC -shared -o $@ -Wl,-soname,$(PLUGIN_SO) $^
+build: ${DST_DIR}/libnccl-profiler-example.so
+
+${DST_DIR}/libnccl-profiler-example.so: ${SRC_FILES}
+	@printf "Compiling  %-35s > %s\n" $< $@
+	@mkdir -p ${DST_DIR}
+	$(CXX) -Inccl -I${CUDA_INC} -fPIC -shared -o $@ $^
 
 clean:
-	rm -f $(PLUGIN_SO)
+	rm -f ${DST_DIR}/libnccl-profiler-example.so

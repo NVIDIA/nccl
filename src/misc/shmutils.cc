@@ -114,8 +114,11 @@ ncclResult_t ncclShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize, void
   }
 
   if (devShmPtr) {
+    cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
+    CUDACHECKGOTO(cudaThreadExchangeStreamCaptureMode(&mode), ret, fail);
     CUDACHECKGOTO(cudaHostRegister((void*)hptr, realShmSize, cudaHostRegisterPortable | cudaHostRegisterMapped), ret, fail);
     CUDACHECKGOTO(cudaHostGetDevicePointer(&dptr, (void*)hptr, 0), ret, fail);
+    CUDACHECKGOTO(cudaThreadExchangeStreamCaptureMode(&mode), ret, fail);
   }
 
   shmHandleInit(fd, shmPath, shmSize, realShmSize, hptr, dptr, create, tmphandle);
@@ -182,34 +185,36 @@ ncclResult_t ncclShmUnlink(ncclShmHandle_t handle) {
 
 ncclResult_t ncclShmemAllgather(struct ncclComm *comm, struct ncclShmemCollBuff *shmem, void *sendbuff, void *recvbuff, size_t typeSize) {
   ncclResult_t ret = ncclSuccess;
-  int curRound;
-  size_t mycnt;
+  int nextRound = shmem->round + 1;
+  int curIndex = shmem->round % 2;
+  bool done;
+  int index = 0;
+  size_t maxTypeSize = shmem->maxTypeSize;
 
-  if (comm == NULL || shmem == NULL || sendbuff == NULL || recvbuff == NULL || shmem->maxTypeSize < typeSize) {
+  if (comm == NULL || shmem == NULL || sendbuff == NULL || recvbuff == NULL || maxTypeSize < typeSize) {
     ret = ncclInvalidArgument;
     goto exit;
   }
 
-  curRound = shmem->round;
-  memcpy((char*)shmem->ptr[curRound] + comm->localRank * typeSize, sendbuff, typeSize);
-  /* sync among local ranks */
-  mycnt = __atomic_add_fetch(shmem->cnt[curRound], 1, __ATOMIC_ACQ_REL);
-  if (mycnt == comm->localRanks) {
-    *shmem->cnt[curRound ^ 1] = 0; /* prepare next round */
-    __atomic_store_n(shmem->cnt[curRound], comm->localRanks + 1, __ATOMIC_RELEASE); /* release everyone */
-  } else {
-    uint64_t t0 = clockNano();
-    while(__atomic_load_n(shmem->cnt[curRound], __ATOMIC_ACQUIRE) != comm->localRanks + 1) {
-      if (clockNano() - t0 >= 5 * 1000) sched_yield();
-      if (__atomic_load_n(comm->abortFlag, __ATOMIC_ACQUIRE) == 1) {
-        ret = ncclInternalError;
-        goto exit;
+  memcpy((char*)shmem->ptr[curIndex] + comm->localRank * maxTypeSize, sendbuff, typeSize);
+  /* reset the previous round and notify I arrive this round */
+  __atomic_store_n((int*)((char*)shmem->cnt[curIndex] + CACHE_LINE_SIZE * comm->localRank), nextRound, __ATOMIC_RELEASE);
+
+  do {
+    done = true;
+    for (int i = index; i < comm->localRanks; ++i) {
+      if (i != comm->localRank && __atomic_load_n((int*)((char*)shmem->cnt[curIndex] + CACHE_LINE_SIZE * i), __ATOMIC_ACQUIRE) < nextRound) {
+        done = false;
+        index = i;
+        break;
       }
     }
-  }
+  } while (!done);
 
-  memcpy(recvbuff, (const void*)shmem->ptr[curRound], comm->localRanks * typeSize);
-  shmem->round ^= 1;
+  for (int i = 0; i < comm->localRanks; ++i) {
+    memcpy((uint8_t*)recvbuff + i * typeSize, (uint8_t*)shmem->ptr[curIndex] + i * maxTypeSize, typeSize);
+  }
+  shmem->round = nextRound;
 
 exit:
   return ret;

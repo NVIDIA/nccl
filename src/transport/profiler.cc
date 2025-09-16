@@ -6,10 +6,11 @@
 #include "transport.h"
 #include "proxy.h"
 #include "profiler.h"
+#include "device.h"
 
 static ncclResult_t profilerProxyConnect(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState, void* reqBuff, int reqSize, void* respBuff, int respSize, int* done) {
   connection->proxyAppendPtr = &connection->proxyAppend;
-  connection->shared = 1;
+  connection->shared = 0;
   return ncclSuccess;
 }
 
@@ -29,15 +30,15 @@ static ncclResult_t profilerProxyProgress(struct ncclProxyState* proxyState, str
   if (args->state == ncclProxyOpProgress) {
     for (int s = 0; s < args->nsubs; s++) {
       struct ncclProxySubArgs* sub = args->subs + s;
-      uint64_t* workStarted = (uint64_t *)sub->sendbuff;
-      uint64_t* workCompleted = (uint64_t *)sub->recvbuff;
-      if (sub->posted < sub->nsteps && sub->base <= workStarted[sub->channelId]) {
-        ncclProfilerStartKernelChEvent(args, s);
+      struct ncclDevProfiler* workStarted = (struct ncclDevProfiler *)sub->sendbuff;
+      struct ncclDevProfiler* workCompleted = (struct ncclDevProfiler *)sub->recvbuff;
+      if (sub->posted < sub->nsteps && sub->base <= workStarted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].counter) {
+        ncclProfilerStartKernelChEvent(args, s, workStarted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp);
         sub->posted = sub->nsteps;
         continue; // allow events on every channel to start
       }
-      if (sub->transmitted < sub->nsteps && sub->base <= workCompleted[sub->channelId]) {
-        ncclProfilerStopKernelChEvent(args, s);
+      if (sub->transmitted < sub->nsteps && sub->base <= workCompleted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].counter) {
+        ncclProfilerStopKernelChEvent(args, s, workCompleted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp);
         sub->transmitted = sub->nsteps;
         args->done++;
       }

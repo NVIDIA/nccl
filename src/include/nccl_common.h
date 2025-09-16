@@ -7,6 +7,17 @@
 #ifndef NCCL_DEBUG_H_
 #define NCCL_DEBUG_H_
 
+// Workaround for libstdc++ trying to force public visibility of std:: symbols.  We don't want to do that in libnccl.so.
+// @EUGO_CHANGE: removed since this is libstdc++ specific
+// #include <bits/c++config.h>#include <bits/c++config.h>
+
+// @begin:EUGO_CHANGE: commented out for now..
+// #undef _GLIBCXX_VISIBILITY
+// #define _GLIBCXX_VISIBILITY(V)
+// @end:EUGO_CHANGE
+
+#include <cstdint>
+
 typedef enum {
   NCCL_LOG_NONE = 0,
   NCCL_LOG_VERSION = 1,
@@ -38,6 +49,16 @@ typedef enum {
 
 typedef void (*ncclDebugLogger_t)(ncclDebugLogLevel level, unsigned long flags, const char *file, int line, const char *fmt, ...);
 
+// NCCL core profiler callback for network defined events instrumentation
+enum {
+  ncclProfilerNetEventStart = 0,
+  ncclProfilerNetEventStop,
+  ncclProfilerNetEventUpdate,
+  ncclProfilerNetEventUpdateAndStop,
+};
+
+typedef ncclResult_t (*ncclProfilerCallback_t)(void** eHandle, int type, void* pHandle, int64_t pluginId, void* extData);
+
 #define NCCL_NUM_FUNCTIONS 5 // Send/Recv not included for now
 typedef enum {
   ncclFuncBroadcast = 0,
@@ -48,24 +69,11 @@ typedef enum {
   ncclFuncSendRecv = 5,
   ncclFuncSend = 6,
   ncclFuncRecv = 7,
-  ncclNumFuncs = 8
+  ncclFuncAlltoAll = 8,
+  ncclFuncScatter = 9,
+  ncclFuncGather = 10,
+  ncclNumFuncs = 11
 } ncclFunc_t;
 
-#define NCCL_NUM_ALGORITHMS 7 // Tree/Ring/CollNet*
-#define NCCL_ALGO_UNDEF -1
-#define NCCL_ALGO_TREE 0
-#define NCCL_ALGO_RING 1
-#define NCCL_ALGO_COLLNET_DIRECT 2
-#define NCCL_ALGO_COLLNET_CHAIN 3
-#define NCCL_ALGO_NVLS 4
-#define NCCL_ALGO_NVLS_TREE 5
-#define NCCL_ALGO_PAT 6
 
-#define NCCL_NUM_PROTOCOLS 3 // Simple/LL/LL128
-#define NCCL_PROTO_UNDEF -1
-#define NCCL_PROTO_LL 0
-#define NCCL_PROTO_LL128 1
-#define NCCL_PROTO_SIMPLE 2
-
-#define NCCL_ALGO_PROTO_IGNORE -1.0
 #endif

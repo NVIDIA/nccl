@@ -11,7 +11,7 @@
 
 int max_requests = NCCL_NET_MAX_REQUESTS;
 
-__hidden ncclResult_t pluginInit(ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) { return ncclSuccess; }
+__hidden ncclResult_t pluginInit(void** ctx, uint64_t commId, ncclNetCommConfig_t* config, ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) { return ncclSuccess; }
 __hidden ncclResult_t pluginDevices(int* ndev) { *ndev = 0; return ncclSuccess; }
 __hidden ncclResult_t pluginPciPath(int dev, char** path) { return ncclInternalError; }
 __hidden ncclResult_t pluginPtrSupport(int dev, int* supportedTypes) { return ncclInternalError; }
@@ -51,8 +51,8 @@ __hidden ncclResult_t pluginGetProperties(int dev, ncclNetProperties_t* props) {
   return ncclSuccess;
 }
 
-__hidden ncclResult_t pluginListen(int dev, void* handle, void** listenComm) { return ncclInternalError; }
-__hidden ncclResult_t pluginConnect(int dev, ncclNetCommConfig_t* config, void* handle, void** sendComm, ncclNetDeviceHandle_t** sendDevComm) { return ncclInternalError; }
+__hidden ncclResult_t pluginListen(void* ctx, int dev, void* handle, void** listenComm) { return ncclInternalError; }
+__hidden ncclResult_t pluginConnect(void* ctx, int dev, void* handle, void** sendComm, ncclNetDeviceHandle_t** sendDevComm) { return ncclInternalError; }
 __hidden ncclResult_t pluginAccept(void* listenComm, void** recvComm, ncclNetDeviceHandle_t** recvDevComm) { return ncclInternalError; }
 __hidden ncclResult_t pluginRegMr(void* collComm, void* data, size_t size, int type, void** mhandle) { return ncclInternalError; }
 __hidden ncclResult_t pluginRegMrDmaBuf(void* collComm, void* data, size_t size, int type, uint64_t offset, int fd, void** mhandle) { return ncclInternalError; }
@@ -67,10 +67,11 @@ __hidden ncclResult_t pluginCloseListen(void* listenComm) { return ncclInternalE
 __hidden ncclResult_t pluginIrecvConsumed(void* recvComm, int n, void* request) { return ncclInternalError; }
 __hidden ncclResult_t pluginGetDeviceMr(void* comm, void* mhandle, void** dptr_mhandle) { return ncclInternalError; }
 __hidden ncclResult_t pluginMakeVDevice(int* d, ncclNetVDeviceProps_t* props) { return ncclInternalError; }
+__hidden ncclResult_t pluginFinalize(void* ctx) { return ncclSuccess; }
 
 #define PLUGIN_NAME "Plugin"
 
-const ncclNet_v10_t ncclNetPlugin_v10 = {
+const ncclNet_v11_t ncclNetPlugin_v11 = {
   .name = PLUGIN_NAME,
   .init = pluginInit,
   .devices = pluginDevices,
@@ -91,18 +92,84 @@ const ncclNet_v10_t ncclNetPlugin_v10 = {
   .getDeviceMr = pluginGetDeviceMr,
   .irecvConsumed = pluginIrecvConsumed,
   .makeVDevice   = pluginMakeVDevice,
+  .finalize = pluginFinalize,
 };
 
+__hidden ncclResult_t pluginInit_v10(ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) { return ncclSuccess; }
+__hidden ncclResult_t pluginGetProperties_v10(int dev, ncclNetProperties_v10_t* props) {
+  // Below are default values, if unsure don't change.
+
+  props->name = "Example";
+  // Fill for proper topology detection, e.g. /sys/devices/pci0000:00/0000:00:10.0/0000:0b:00.0
+  props->pciPath = NULL;
+  // Only used to detect NICs with multiple PCI attachments.
+  props->guid = 0;
+  // Add NCCL_PTR_CUDA if GPU Direct RDMA is supported and regMr can take CUDA pointers.
+  props->ptrSupport = NCCL_PTR_HOST;
+  // If you regMr has a fast registration cache, set to 1. If set to 0, user buffer registration may be disabled.
+  props->regIsGlobal = 0;
+  // Force flush after receive. Needed if the control path and data path use a different path to the GPU
+  props->forceFlush = 0;
+  // Speed in *Mbps*. 100000 means 100G
+  props->speed = 100000;
+  // Port number, used in conjunction with guid
+  props->port = 0;
+  // Custom latency (used to help tuning if latency is high. If set to 0, use default NCCL values.
+  props->latency = 0;
+  // Maximum number of comm objects we can create.
+  props->maxComms = 1024*1024;
+  // Maximum number of receive operations taken by irecv().
+  props->maxRecvs = NCCL_PLUGIN_MAX_RECVS;
+  // Coupling with NCCL network device-side code.
+  props->netDeviceType = NCCL_NET_DEVICE_HOST;
+  props->netDeviceVersion = NCCL_NET_DEVICE_INVALID_VERSION;
+  // Used to tell NCCL core whether this is a virtual device fusing multiple physical devices.
+  props->vProps.ndevs = 1;
+  props->vProps.devs[0] = dev;
+  // maximum transfer sizes the plugin can handle
+  props->maxP2pBytes = NCCL_MAX_NET_SIZE_BYTES;
+  props->maxCollBytes = NCCL_MAX_NET_SIZE_BYTES;
+  return ncclSuccess;
+}
+
+__hidden ncclResult_t pluginListen_v10(int d, void* handle, void** listenComm) { return ncclInternalError; }
+__hidden ncclResult_t pluginConnect_v10(int dev, ncclNetCommConfig_v10_t* config, void* handle, void** sendComm, ncclNetDeviceHandle_v10_t** sendDevComm) { return ncclInternalError; }
+__hidden ncclResult_t pluginMakeVDevice_v10(int* d, ncclNetVDeviceProps_v10_t* props) { return ncclInternalError; }
+
+const ncclNet_v10_t ncclNetPlugin_v10 = {
+  .name = PLUGIN_NAME,
+  .init = pluginInit_v10,
+  .devices = pluginDevices,
+  .getProperties = pluginGetProperties_v10,
+  .listen = pluginListen_v10,
+  .connect = pluginConnect_v10,
+  .accept = pluginAccept,
+  .regMr = pluginRegMr,
+  .regMrDmaBuf = pluginRegMrDmaBuf,
+  .deregMr = pluginDeregMr,
+  .isend = pluginIsend,
+  .irecv = pluginIrecv,
+  .iflush = pluginIflush,
+  .test = pluginTest,
+  .closeSend = pluginCloseSend,
+  .closeRecv = pluginCloseRecv,
+  .closeListen = pluginCloseListen,
+  .getDeviceMr = pluginGetDeviceMr,
+  .irecvConsumed = pluginIrecvConsumed,
+  .makeVDevice   = pluginMakeVDevice_v10,
+};
+
+
 __hidden ncclResult_t pluginInit_v9(ncclDebugLogger_t logFunction) {
-  return pluginInit(logFunction, NULL);
+  return pluginInit_v10(logFunction, NULL);
 }
 
 __hidden ncclResult_t pluginGetProperties_v9(int dev, ncclNetProperties_v9_t* props) {
-  return pluginGetProperties(dev, (ncclNetProperties_t*)props);
+  return pluginGetProperties_v10(dev, (ncclNetProperties_v10_t*)props);
 }
 
 __hidden ncclResult_t pluginConnect_v9(int dev, void* handle, void** sendComm, ncclNetDeviceHandle_t** sendDevComm){
-  return pluginConnect(dev, NULL, handle, sendComm, sendDevComm);
+  return pluginConnect_v10(dev, NULL, handle, sendComm, sendDevComm);
 }
 
 __hidden ncclResult_t pluginIsend_v9(void* sendComm, void* data, size_t size, int tag, void* mhandle, void** request) {
@@ -120,7 +187,7 @@ const ncclNet_v9_t ncclNetPlugin_v9 = {
   .init = pluginInit_v9,
   .devices = pluginDevices,
   .getProperties = pluginGetProperties_v9,
-  .listen = pluginListen,
+  .listen = pluginListen_v10,
   .connect = pluginConnect_v9,
   .accept = pluginAccept,
   .regMr = pluginRegMr,
@@ -172,7 +239,7 @@ const ncclNet_v8_t ncclNetPlugin_v8 = {
   .init = pluginInit_v9,
   .devices = pluginDevices,
   .getProperties = pluginGetProperties_v8,
-  .listen = pluginListen,
+  .listen = pluginListen_v10,
   .connect = pluginConnect_v9,
   .accept = pluginAccept,
   .regMr = pluginRegMr,
@@ -216,7 +283,7 @@ const ncclNet_v7_t ncclNetPlugin_v7 = {
   .init = pluginInit_v9,
   .devices = pluginDevices,
   .getProperties = pluginGetProperties_v7,
-  .listen = pluginListen,
+  .listen = pluginListen_v10,
   .connect = pluginConnect_v9,
   .accept = pluginAccept,
   .regMr = pluginRegMr_v7,
@@ -257,7 +324,7 @@ const ncclNet_v6_t ncclNetPlugin_v6 = {
   .init = pluginInit_v9,
   .devices = pluginDevices,
   .getProperties = pluginGetProperties_v6,
-  .listen = pluginListen,
+  .listen = pluginListen_v10,
   .connect = pluginConnect_v6,
   .accept = pluginAccept_v6,
   .regMr = pluginRegMr_v7,
@@ -278,7 +345,7 @@ const ncclNet_v5_t ncclNetPlugin_v5 = {
   .init = pluginInit_v9,
   .devices = pluginDevices,
   .getProperties = pluginGetProperties_v6,
-  .listen = pluginListen,
+  .listen = pluginListen_v10,
   .connect = pluginConnect_v6,
   .accept = pluginAccept_v6,
   .regMr = pluginRegMr_v7,
@@ -320,7 +387,7 @@ static ncclResult_t pluginConnect_v4(int dev, void* handle, void** sendComm) {
   ncclResult_t ret;
   do {
     ncclNetDeviceHandle_v7_t* handle = NULL;
-    ret = pluginConnect(dev, NULL, handle, sendComm, &handle);
+    ret = pluginConnect_v10(dev, NULL, handle, sendComm, &handle);
   } while (ret == ncclSuccess && *sendComm == NULL);
   return ret;
 }
@@ -337,7 +404,7 @@ const ncclNet_v4_t ncclNetPlugin_v4 = {
   .init = pluginInit_v9,
   .devices = pluginDevices,
   .getProperties = pluginGetProperties_v4,
-  .listen = pluginListen,
+  .listen = pluginListen_v10,
   .connect = pluginConnect_v4,
   .accept = pluginAccept_v4,
   .regMr = pluginRegMr_v7,
@@ -363,12 +430,12 @@ static ncclResult_t pluginFlush(void* recvComm, void* data, int size, void* mhan
 }
 static ncclResult_t pluginInit_v3(ncclDebugLogger_t logFunction) {
   max_requests = NCCL_NET_MAX_REQUESTS_V3;
-  return pluginInit(logFunction, NULL);
+  return pluginInit_v10(logFunction, NULL);
 }
 #include <string.h>
 static ncclResult_t pluginListen_v3(int dev, void* handle, void** listenComm) {
   char pluginHandle[NCCL_NET_HANDLE_MAXSIZE];
-  ncclResult_t ret = pluginListen(dev, &pluginHandle, listenComm);
+  ncclResult_t ret = pluginListen_v10(dev, &pluginHandle, listenComm);
   memcpy(handle, &pluginHandle, NCCL_NET_HANDLE_MAXSIZE_V4);
   return ret;
 }
@@ -403,7 +470,7 @@ const ncclNet_v2_t ncclNetPlugin_v2 = {
   .devices = pluginDevices,
   .pciPath = pluginPciPath,
   .ptrSupport = pluginPtrSupport,
-  .listen = pluginListen,
+  .listen = pluginListen_v3,
   .connect = pluginConnect_v4,
   .accept = pluginAccept_v4,
   .regMr = pluginRegMr_v7,

@@ -125,7 +125,7 @@ class Primitives<
 
       void **ptrs = isSendNotRecv ? (ncclShmem.groups[group].dsts + Dst)
                                   : (ncclShmem.groups[group].srcs + Src);
-      if (flags & NetRegMode) {
+      if ((flags & NetRegMode) && ((!isSendNotRecv && DirectRecv) || (isSendNotRecv && DirectSend))) {
         if (P2p) {
           ptrs[index] = NULL;
         } else {
@@ -337,7 +337,7 @@ public:
   }
 
   template<int Recv, int Send, typename Fn>
-  __device__ __forceinline__ void process(Fn &&fn, uint32_t sendDirectFlag, uint32_t recvDirectFlag) {
+  __device__ __forceinline__ void process(Fn &&fn, uint32_t sendDirectFlag = 0, uint32_t recvDirectFlag = 0) {
     #pragma unroll 1
     for (int slice=0; slice < SlicePerChunk; slice++) {
       if (tid < nworkers) {
@@ -361,7 +361,7 @@ public:
               } else if (flags & DirectRead) {  // empty send
                 ptrs[index] = nullptr;
               } else {
-                ptrs[index] = connEltsFifo + (step%NCCL_STEPS)*stepSize;
+                ptrs[index] = connEltsFifo + (step%NCCL_STEPS)*connStepSize;
               }
             } else {
               if (flags & DirectRead) {
@@ -372,11 +372,11 @@ public:
                 else
                   ptrs[index] = nullptr;
               } else {
-                ptrs[index] = connEltsFifo + (step%NCCL_STEPS)*stepSize;
+                ptrs[index] = connEltsFifo + (step%NCCL_STEPS)*connStepSize;
               }
             }
           } else {
-            ptrs[index] = connEltsFifo + (step%NCCL_STEPS)*stepSize;
+            ptrs[index] = connEltsFifo + (step%NCCL_STEPS)*connStepSize;
           }
         }
         subBarrier();
@@ -391,7 +391,7 @@ public:
         } else {
           nsend = fan.nsend();
         }
-        fn.template operator() < SlicePerChunk, 0, Recv*MaxRecv, 0, Send*MaxSend >
+        fn.template operator()<SlicePerChunk, 0, Recv*MaxRecv, 0, Send*MaxSend, MultimemSrcs, MultimemDsts>
           (tid, nworkers, slice, stepSize * StepPerSlice,
             nrecv, ncclShmem.groups[group].srcs,
             nsend, ncclShmem.groups[group].dsts, ncclShmem.groups[group].dstSizes, sendDirectFlag, recvDirectFlag);
@@ -895,6 +895,12 @@ private:
   }
   __device__ __forceinline__ void directRecvDirectSend(intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false) {
     genericOp<1, 1, 1, 1, -1, -1>(inpIx, outIx, eltN, postOp);
+  }
+  __device__ __forceinline__ void recvDirectSend(intptr_t outIx, int eltN, bool postOp=false) {
+    genericOp<0, 1, 1, 1, -1, -1>(-1, outIx, eltN, postOp);
+  }
+  __device__ __forceinline__ void directRecvSend(intptr_t outIx, int eltN, bool postOp=false) {
+    genericOp<1, 0, 1, 1, -1, -1>(outIx, outIx, eltN, postOp);
   }
   __device__ __forceinline__ void recvCopyDirectSend(intptr_t outIx, int eltN, bool postOp=false) {
     genericOp<0, 1, 1, 1, -1, Output>(-1, outIx, eltN, postOp);

@@ -10,7 +10,7 @@
 #include "transport.h"
 
 #define SHM_PATH_MAX 128
-#define SHM_HANDLE_TYPE CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR
+#define SHM_HANDLE_TYPE ncclCuMemHandleType
 
 struct shmBuffInfo {
   void *hptr;

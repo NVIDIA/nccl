@@ -1,3 +1,9 @@
+/*************************************************************************
+ * Copyright (c) 2015-2025, NVIDIA CORPORATION. All rights reserved.
+ *
+ * See LICENSE.txt for license information
+ ************************************************************************/
+
 #include "comm.h"
 #include "transport.h"
 #include "bootstrap.h"

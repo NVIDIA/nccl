@@ -82,6 +82,10 @@ inline ncclResult_t ncclGroupStartInternal() {
   return ncclSuccess;
 }
 
+inline bool ncclGroupEnabled() {
+  return ncclGroupDepth != 0;
+}
+
 inline ncclResult_t ncclGroupErrCheck(ncclResult_t ret) {
   if (ncclGroupDepth > 0) {
     if (ret != ncclSuccess && ret != ncclInProgress) ncclGroupError = ret;

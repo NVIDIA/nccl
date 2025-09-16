@@ -6,7 +6,7 @@
 
 #ifndef _NCCL_DEVICE_MEM_BARRIER__FUNCS_H_
 #define _NCCL_DEVICE_MEM_BARRIER__FUNCS_H_
-#include "mem_barrier__types.h"
+#include "lsa_barrier__types.h"
 #include "comm__types.h"
 
 #if __CUDACC__

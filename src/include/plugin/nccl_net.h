@@ -9,7 +9,7 @@
 
 #include "nccl.h"
 #include "nccl_common.h"
-#include "net_device.h"
+#include "nccl_device/net_device.h"
 #include <stdint.h>
 
 #define NCCL_NET_HANDLE_MAXSIZE 128
@@ -24,6 +24,10 @@
 #define NCCL_PTR_HOST 0x1
 #define NCCL_PTR_CUDA 0x2
 #define NCCL_PTR_DMABUF 0x4
+
+#define NCCL_NET_MR_FLAG_FORCE_SO (1 << 0)
+#define NCCL_NET_SIGNAL_OP_INC 0x1
+#define NCCL_NET_SIGNAL_OP_ADD 0x2
 
 // Maximum number of requests per comm object
 #define NCCL_NET_MAX_REQUESTS 32
@@ -44,6 +48,7 @@
 
 typedef ncclNet_v11_t ncclNet_t;
 typedef ncclCollNet_v11_t ncclCollNet_t;
+typedef ncclGin_v11_t ncclGin_t;
 typedef ncclNetSGE_v11_t ncclNetSGE_t;
 typedef ncclNetProperties_v11_t ncclNetProperties_t;
 typedef ncclNetAttr_v11_t ncclNetAttr_t;

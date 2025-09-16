@@ -85,6 +85,8 @@ NVCUFLAGS  := -ccbin $(CXX) $(NVCC_GENCODE) $(CXXSTD) --expt-extended-lambda -Xp
 # Use addprefix so that we can specify more than one path
 NVLDFLAGS  := -L${CUDA_LIB} -lcudart -lrt
 
+NVCUFLAGS_SYM :=
+
 ########## GCOV ##########
 GCOV ?= 0 # disable by default.
 GCOV_FLAGS := $(if $(filter 0,${GCOV} ${DEBUG}),,--coverage) # only gcov=1 and debug =1
@@ -158,3 +160,8 @@ endif
 ifneq ($(MAX_EXT_NET_PLUGINS), 0)
 CXXFLAGS += -DNCCL_NET_MAX_PLUGINS=$(MAX_EXT_NET_PLUGINS)
 endif
+
+CXXFLAGS += -DNCCL_GIN_GDAKI_ENABLE=1 -DDOCA_VERBS_USE_CUDA_WRAPPER -DDOCA_VERBS_USE_NET_WRAPPER
+NVCUFLAGS += -DNCCL_GIN_GDAKI_ENABLE=1 -DDOCA_VERBS_USE_CUDA_WRAPPER -DDOCA_VERBS_USE_NET_WRAPPER
+
+CXXFLAGS += -DNCCL_GIN_PROXY_ENABLE=1

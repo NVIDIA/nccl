@@ -51,6 +51,9 @@ struct ncclReg {
   uintptr_t caddrs[NCCL_MAX_LOCAL_RANKS]; /* use to check if NVLS buffers match among intra-node ranks */
   // collnet reg
   void* collnetHandle;
+  // gin reg
+  void** ginMhandles;
+  void** ginHandles;
   struct ncclProxyConnector* collnetProxyconn;
   // general ipc reg
   struct ncclPeerRegIpcAddr regIpcAddrs;

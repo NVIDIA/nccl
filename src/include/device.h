@@ -53,7 +53,7 @@ extern const char* ncclProtoStr[NCCL_NUM_PROTOCOLS];
   #define NCCL_CUDA_ARCH_FAMILY_SPECIFIC 0
 #endif
 
-#include "net_device.h"
+#include "nccl_device/net_device.h"
 
 enum ncclDevRedOp_t {
   ncclDevSum, ncclDevProd, ncclDevMinMax,
@@ -153,6 +153,7 @@ struct ncclProxyConnector {
   int sameProcess;
   struct ncclProxyConnection* connection;
   ncclResult_t (*proxyProgress)(struct ncclProxyState* proxyState, struct ncclProxyArgs*); // Copied from transport if necessary
+  ncclResult_t (*proxyGinProgress)(struct ncclProxyState* proxyState);
 };
 
 struct ncclConnector {

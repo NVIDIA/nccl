@@ -23,12 +23,13 @@ INCFLAGS  = -I. -I.. -I$(BUILDDIR)/include -I../include -I../include/plugin
 NVCUFLAGS += $(INCFLAGS) --compiler-options "-fPIC -fvisibility=hidden"
 CXXFLAGS  += $(INCFLAGS)
 
-NVCUFLAGS_SYM := -ccbin $(CXX) $(CXXSTD) --expt-extended-lambda -Xptxas -maxrregcount=128 -Xfatbin -compress-all
+NVCUFLAGS_SYM += -ccbin $(CXX) $(CXXSTD) --expt-extended-lambda -Xptxas -maxrregcount=128 -Xfatbin -compress-all
 NVCUFLAGS_SYM += $(INCFLAGS) --compiler-options "-fPIC -fvisibility=hidden"
 
 SAY = @bash -c 'path="$$2"; [[ "$$(realpath "$$2")" =~ ^$(subst .,\.,$(abspath $(NCCLDIR)))/(.*)$$ ]] && path="$${BASH_REMATCH[1]}"; printf "%-15s %s\n" "$$1" "$$path"' SAY
 
 COMPILE.cu = $(NVCC) $(NVCUFLAGS) -dc $2 -o $1
+COMPILE.kernel = $(NVCC) $(NVCUFLAGS) -dw $2 -o $1
 COMPILE.cc = $(CXX) $(CXXFLAGS) -c $2 -o $1
 define COMPILE
 @$(SAY) "Compiling" $2;\

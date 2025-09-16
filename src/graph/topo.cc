@@ -1655,6 +1655,22 @@ ncclResult_t ncclTopoGetLocalNet(struct ncclTopoSystem* system, int rank, int ch
   return ncclSuccess;
 }
 
+ncclResult_t ncclTopoGetLocalNets(struct ncclTopoSystem* system, int rank, int64_t* localNets, int* localNetCount) {
+  int gpu;
+  NCCLCHECK(ncclTopoRankToIndex(system, rank, &gpu, /*showWarn=*/true));
+  int localNetIndexes[NCCL_TOPO_MAX_NODES];
+  NCCLCHECK(ncclTopoGetLocal(system, GPU, gpu, NET, localNetIndexes, localNetCount, NULL));
+
+  if (*localNetCount == 0) {
+    WARN("Could not find any local path from gpu %d to net.", gpu);
+    return ncclInternalError;
+  }
+  // Convert index to ids
+  for (int n=0; n<*localNetCount; n++) localNets[n] = system->nodes[NET].nodes[localNetIndexes[n]].id;
+  return ncclSuccess;
+}
+
+
 ncclResult_t ncclTopoGetLocalGpu(struct ncclTopoSystem* system, int64_t netId, int* gpuIndex) {
   ncclResult_t ret = ncclSuccess;
   int netIndex;

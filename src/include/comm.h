@@ -140,6 +140,9 @@ struct ncclSharedResources {
 
   /* proxy related shared res */
   struct ncclProxyState* proxyState;
+
+  // GIN state
+  struct ncclGinState ginState;
 };
 
 struct ncclChannel {

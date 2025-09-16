@@ -8,7 +8,7 @@ include ../makefiles/version.mk
 
 ##### src files
 INCEXPORTS  := nccl.h nccl_device.h \
-	$(patsubst include/%,%,$(wildcard include/nccl_device/*.h include/nccl_device/impl/*.h))
+	$(patsubst include/%,%,$(wildcard include/nccl_device/*.h include/nccl_device/*/*.h include/nccl_device/*/*/*.h))
 
 LIBSRCFILES := \
 	bootstrap.cc channel.cc collectives.cc debug.cc enqueue.cc group.cc \
@@ -16,6 +16,7 @@ LIBSRCFILES := \
 	$(wildcard graph/*.cc) \
 	$(wildcard misc/*.cc) \
 	$(wildcard transport/*.cc) \
+	$(wildcard transport/gdaki/*.cc) \
 	$(wildcard register/*.cc) \
 	$(wildcard plugin/*.cc) \
 	$(wildcard plugin/net/*.cc) \
@@ -23,6 +24,7 @@ LIBSRCFILES := \
 	$(wildcard plugin/profiler/*.cc) \
 	$(wildcard nccl_device/*.cc) \
 	$(wildcard scheduler/*.cc) \
+	$(wildcard gin/*.cc) \
 	$(filter-out ras/client.cc,$(wildcard ras/*.cc))
 BINSRCFILES := ras/client.cc
 
@@ -40,6 +42,7 @@ LIBDIR := $(BUILDDIR)/lib
 OBJDIR := $(BUILDDIR)/obj
 PKGDIR := $(BUILDDIR)/lib/pkgconfig
 BINDIR := $(BUILDDIR)/bin
+
 ##### target files
 CUDARTLIB  ?= cudart_static
 
@@ -60,6 +63,17 @@ LDFLAGS    += -L${CUDA_LIB} -l$(CUDARTLIB) -lpthread -lrt -ldl
 INCPLUGIN  := include/plugin
 
 DEVMANIFEST := $(BUILDDIR)/obj/device/manifest
+
+# DOCA GPUNetIO definitions
+DOCA_HOME        ?= transport/gdaki/doca-gpunetio
+DOCA_INC_INSTALL := $(INCDIR)/nccl_device/gin/gdaki/doca_gpunetio
+DOCA_OBJDIR      := $(OBJDIR)/transport/gdaki/doca-gpunetio
+DOCA_INCLUDES    := $(DOCA_HOME)/include/doca_gpunetio_device.h $(wildcard $(DOCA_HOME)/include/common/*.h) $(wildcard $(DOCA_HOME)/include/device/*.cuh)
+DOCA_INCTARGETS  := $(DOCA_INCLUDES:$(DOCA_HOME)/include/%=$(DOCA_INC_INSTALL)/%)
+INCTARGETS       += $(DOCA_INCTARGETS)
+DOCA_LIBSRC      := doca_verbs_qp.cpp doca_verbs_cq.cpp doca_verbs_device_attr.cpp doca_verbs_umem.cpp doca_verbs_srq.cpp doca_verbs_uar.cpp doca_gpunetio.cpp doca_gpunetio_log.cpp doca_gpunetio_high_level.cpp doca_verbs_cuda_wrapper.cpp doca_verbs_mlx5dv_wrapper.cpp doca_verbs_ibv_wrapper.cpp doca_gpunetio_gdrcopy.cpp
+DOCA_LIBOBJ      := $(DOCA_LIBSRC:%.cpp=$(DOCA_OBJDIR)/%.o)
+LIBOBJ           += $(DOCA_LIBOBJ)
 
 ##### rules
 build : lib staticlib binary
@@ -137,6 +151,36 @@ $(INCDIR)/nccl_device/impl/%.h: include/nccl_device/impl/%.h
 	mkdir -p $(INCDIR)/nccl_device/impl
 	install -m 644 $< $@
 
+$(INCDIR)/nccl_device/gin/%.h: include/nccl_device/gin/%.h
+	@printf "Grabbing   %-35s > %s\n" $< $@
+	mkdir -p $(INCDIR)/nccl_device/gin
+	install -m 644 $< $@
+
+$(INCDIR)/nccl_device/gin/gdaki/%.h: include/nccl_device/gin/gdaki/%.h
+	@printf "Grabbing   %-35s > %s\n" $< $@
+	mkdir -p $(INCDIR)/nccl_device/gin/gdaki
+	install -m 644 $< $@
+
+$(INCDIR)/nccl_device/gin/proxy/%.h: include/nccl_device/gin/proxy/%.h
+	@printf "Grabbing   %-35s > %s\n" $< $@
+	mkdir -p $(INCDIR)/nccl_device/gin/proxy
+	install -m 644 $< $@
+
+$(DOCA_INC_INSTALL)/%.h: $(DOCA_HOME)/include/%.h
+	@printf "Grabbing   %-35s > %s\n" $< $@
+	mkdir -p $(DOCA_INC_INSTALL)
+	install -m 644 $< $@
+
+$(DOCA_INC_INSTALL)/common/%.h: $(DOCA_HOME)/include/common/%.h
+	@printf "Grabbing   %-35s > %s\n" $< $@
+	mkdir -p $(DOCA_INC_INSTALL)/common
+	install -m 644 $< $@
+
+$(DOCA_INC_INSTALL)/device/%.cuh: $(DOCA_HOME)/include/device/%.cuh
+	@printf "Grabbing   %-35s > %s\n" $< $@
+	mkdir -p $(DOCA_INC_INSTALL)/device
+	install -m 644 $< $@
+
 $(PKGDIR)/%.pc : %.pc
 	@printf "Grabbing   %-35s > %s\n" $< $@
 	mkdir -p $(PKGDIR)
@@ -145,8 +189,18 @@ $(PKGDIR)/%.pc : %.pc
 $(OBJDIR)/%.o : %.cc $(INCTARGETS)
 	@printf "Compiling  %-35s > %s\n" $< $@
 	mkdir -p `dirname $@`
-	$(CXX) -I. -I$(INCDIR) $(CXXFLAGS) -Iinclude -I$(INCPLUGIN) -c $< -o $@
-	@$(CXX) -I. -I$(INCDIR) $(CXXFLAGS) -Iinclude -I$(INCPLUGIN) -M $< > $(@:%.o=%.d.tmp)
+	$(CXX) -I. -I$(INCDIR) $(CXXFLAGS) -Iinclude -I$(INCPLUGIN) -I$(DOCA_HOME)/include -c $< -o $@
+	@$(CXX) -I. -I$(INCDIR) $(CXXFLAGS) -Iinclude -I$(INCPLUGIN) -I$(DOCA_HOME)/include -M $< > $(@:%.o=%.d.tmp)
+	@sed "0,/^.*:/s//$(subst /,\/,$@):/" $(@:%.o=%.d.tmp) > $(@:%.o=%.d)
+	@sed -e 's/.*://' -e 's/\\$$//' < $(@:%.o=%.d.tmp) | fmt -1 | \
+                sed -e 's/^ *//' -e 's/$$/:/' >> $(@:%.o=%.d)
+	@rm -f $(@:%.o=%.d.tmp)
+
+$(DOCA_OBJDIR)/%.o : $(DOCA_HOME)/src/%.cpp
+	@printf "Compiling  %-35s > %s\n" $< $@
+	mkdir -p `dirname $@`
+	$(CXX) -I$(DOCA_HOME)/src -I$(DOCA_HOME)/include $(CXXFLAGS) -c $< -o $@
+	@$(CXX) -I$(DOCA_HOME)/src -I$(DOCA_HOME)/include $(CXXFLAGS) -M $< > $(@:%.o=%.d.tmp)
 	@sed "0,/^.*:/s//$(subst /,\/,$@):/" $(@:%.o=%.d.tmp) > $(@:%.o=%.d)
 	@sed -e 's/.*://' -e 's/\\$$//' < $(@:%.o=%.d.tmp) | fmt -1 | \
                 sed -e 's/^ *//' -e 's/$$/:/' >> $(@:%.o=%.d)

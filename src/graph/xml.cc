@@ -646,7 +646,7 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
         NCCLCHECK(xmlSetAttr(linkNode, "target", target));
       }
     }
-	free(peers);
+    free(peers);
   }
 
   struct ncclXmlNode* parent = pciNode->parent;

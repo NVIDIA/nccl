@@ -67,6 +67,16 @@ inline ncclResult_t getRandomData(void* buffer, size_t bytes) {
   return ret;
 }
 
+static inline int gcd(int a, int b) {
+  // use the euclidian algorithm
+  while (b != 0) {
+    int temp = b;
+    b = a % b;
+    a = temp;
+  }
+  return a;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 template<typename Int>

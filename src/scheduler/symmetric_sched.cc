@@ -16,6 +16,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
   int fnOpTySymIndices[ncclNumFuncs * ncclNumDevRedOps * ncclNumTypes];
   struct ncclKernelPlanner* planner = &comm->planner;
   struct ncclTaskColl* remainTasksTail = nullptr;
+  bool foundSymm = false;
 
   memset(tasksSymByFnOpTy, 0, sizeof(tasksSymByFnOpTy));
   *remainTasksHead = nullptr;
@@ -31,6 +32,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
       task->next = tasksSymByFnOpTy[index];
       tasksSymByFnOpTy[index] = task;
       planner->nTasksColl--;
+      foundSymm = true;
     } else {
       if (*remainTasksHead) {
         remainTasksTail->next = task;
@@ -42,6 +44,8 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
     task = next;
   }
   if (remainTasksTail) remainTasksTail->next = nullptr;
+
+  if (!foundSymm) goto exit;
 
   // make sure kernel args space can hold at least a single work
   assert(comm->workArgsBytes >= ncclSymkDevWorkArgs::calcArgsSize(MAXCHANNELS, 1));

@@ -5,7 +5,6 @@
  ************************************************************************/
 
 #include "nccl_net.h"
-#include "net_device.h"
 #include "proxy.h"
 #include "checks.h"
 #include <dlfcn.h>

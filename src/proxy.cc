@@ -1259,7 +1259,7 @@ fail:
   goto exit;
 }
 
-const char* ncclProxyMsgTypeStr[] = { "Unknown", "Init", "SharedInit", "Setup", "Connect", "Start", "Close", "Abort", "Stop", "GetFd", "QueryFd", "Register", "Deregister" };
+const char* ncclProxyMsgTypeStr[] = { "Unknown", "Init", "SharedInit", "Setup", "Connect", "Start", "Close", "Abort", "Stop", "GetFd", "QueryFd", "Register", "Deregister", "InitProgress" };
 ncclResult_t ncclProxyCallAsync(struct ncclComm* comm, struct ncclProxyConnector* proxyConn, int type, void* reqBuff, int reqSize, int respSize, void* opId) {
   struct ncclSocket* sock;
   ncclResult_t ret = ncclSuccess;
@@ -1506,6 +1506,9 @@ static ncclResult_t proxyProgressAsync(struct ncclProxyAsyncOp* op, struct ncclP
   else if (op->type == ncclProxyMsgInit) {
     TRACE(NCCL_PROXY, "proxyProgressAsync::ncclProxyMsgInit opId=%p op.reqBuff=%p", op->opId, op->reqBuff);
     res = proxyConnInit(peer, connectionPool, proxyState, (ncclProxyInitReq*) op->reqBuff, (ncclProxyInitResp*) op->respBuff, &op->connection);
+  } else if (op->type == ncclProxyMsgInitProgress) {
+    TRACE(NCCL_PROXY, "proxyProgressAsync::ncclProxyMsgInitProgress opId=%p op.reqBuff=%p", op->opId, op->reqBuff);
+    res = proxyProgressInit(proxyState);
   } else if (op->type == ncclProxyMsgRegister) {
     TRACE(NCCL_PROXY, "proxyProgressAsync::ncclProxyMsgRegister opId=%p op.reqBuff=%p, op->reqSize=%d, op->respSize=%d", op->opId, op->reqBuff, op->reqSize, op->respSize);
     res = op->connection->tcomm->proxyRegister(op->connection, proxyState, op->reqBuff, op->reqSize, op->respBuff, op->respSize, &done);
@@ -1586,6 +1589,7 @@ static bool proxyMatchOpType(int type) {
   switch (type) {
     case ncclProxyMsgInit:
     case ncclProxyMsgSharedInit:
+    case ncclProxyMsgInitProgress:
     case ncclProxyMsgSetup:
     case ncclProxyMsgConnect:
     case ncclProxyMsgGetFd:
@@ -1875,6 +1879,7 @@ ncclResult_t ncclProxyCreate(struct ncclComm* comm) {
     proxyState->dmaBufSupport = comm->dmaBufSupport;
     proxyState->ncclNet = comm->ncclNet;
     proxyState->ncclCollNet = comm->ncclCollNet;
+    proxyState->ginState = &comm->sharedRes->ginState;
     proxyState->netContext = comm->netContext;
     proxyState->collNetContext = comm->collNetContext;
     proxyState->profilerContext = comm->profilerContext;

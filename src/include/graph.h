@@ -73,6 +73,7 @@ ncclResult_t ncclTopoGetGpuCount(struct ncclTopoSystem* system, int* count);
 ncclResult_t ncclTopoGetNetCount(struct ncclTopoSystem* system, int* count);
 ncclResult_t ncclTopoGetNvsCount(struct ncclTopoSystem* system, int* count);
 ncclResult_t ncclTopoGetLocalNet(struct ncclTopoSystem* system, int rank, int channelId, int64_t* id, int* dev);
+ncclResult_t ncclTopoGetLocalNets(struct ncclTopoSystem* system, int rank, int64_t* localNets, int* localNetCount);
 ncclResult_t ncclTopoGetLocalGpu(struct ncclTopoSystem* system, int64_t netId, int* gpuIndex);
 ncclResult_t getLocalNetCountByBw(struct ncclTopoSystem* system, int gpu, int *count);
 

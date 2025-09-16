@@ -5,7 +5,7 @@
  ************************************************************************/
 
 #include "core.h"
-#include "nccl_device/impl/mem_barrier__funcs.h"
+#include "nccl_device/impl/lsa_barrier__funcs.h"
 
 NCCL_API(ncclResult_t, ncclLsaBarrierCreateRequirement, ncclTeam_t team, int nBarriers, ncclLsaBarrierHandle_t* outHandle, ncclDevResourceRequirements_t* outReq);
 ncclResult_t ncclLsaBarrierCreateRequirement(

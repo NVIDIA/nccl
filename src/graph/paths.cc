@@ -591,7 +591,7 @@ ncclResult_t ncclTopoGetPxnRanks(struct ncclComm* comm, int** intermediateRanks,
   struct ncclTopoSystem* system = comm->topo;
   *nranks = 0;
   *intermediateRanks = NULL;
-  if (system->nodes[NET].count == 0) return ncclSuccess;
+  if (system->inter == 0) return ncclSuccess;
 
   int nr = 0;
   int* ranks = NULL;
@@ -780,10 +780,7 @@ ncclResult_t ncclTopoTrimSystem(struct ncclTopoSystem* system, struct ncclComm* 
     NCCLCHECKGOTO(ncclTopoRemoveNode(system, GPU, g), ret, fail);
   }
 
-  if (system->nodes[GPU].count == comm->nRanks) {
-    for (int n=system->nodes[NET].count-1; n>=0; n--)
-      NCCLCHECKGOTO(ncclTopoRemoveNode(system, NET, n), ret, fail);
-  }
+  system->inter = system->nodes[GPU].count == comm->nRanks ? 0 : 1;
 exit:
   free(domains);
   if (ids) free(ids);

@@ -12,9 +12,14 @@
 
 // Arbitrary version number - A given NCCL build will only be compatible with a single device networking plugin
 // version. NCCL will check the supplied version number from net->getProperties() and compare to its internal version.
-#define NCCL_NET_DEVICE_UNPACK_VERSION 0x7
+#define NCCL_NET_DEVICE_UNPACK_VERSION 0x8
 
-typedef enum {NCCL_NET_DEVICE_HOST=0, NCCL_NET_DEVICE_UNPACK=1} ncclNetDeviceType;
+typedef enum {
+  NCCL_NET_DEVICE_HOST=0,
+  NCCL_NET_DEVICE_UNPACK=1,
+  NCCL_NET_DEVICE_GIN_PROXY=2,
+  NCCL_NET_DEVICE_GIN_GDAKI=3,
+} ncclNetDeviceType;
 
 typedef struct {
   ncclNetDeviceType netDeviceType; // Network offload type

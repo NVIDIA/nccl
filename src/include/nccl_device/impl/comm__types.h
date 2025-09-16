@@ -8,8 +8,9 @@
 #define _NCCL_DEVICE_COMM__TYPES_H_
 #include "../comm.h"
 #include "core__types.h"
-#include "mem_barrier__types.h"
 #include "ll_a2a__types.h"
+#include "lsa_barrier__types.h"
+#include "gin_barrier__types.h"
 
 struct ncclDevCommWindowTable;
 #if __cplusplus
@@ -35,6 +36,16 @@ struct ncclDevComm {
 
   ncclMultimemHandle_t lsaMultimem;
   ncclLsaBarrierHandle_t lsaBarrier;
+  ncclGinBarrierHandle_t railGinBarrier;
+
+  uint8_t ginContextCount;
+  uint8_t ginTypes[4];
+  void* ginHandles[4];
+  uint32_t ginSignalBase;
+  int ginSignalCount;
+  uint32_t ginCounterBase;
+  int ginCounterCount;
+  uint64_t* ginSignalShadows;
 };
 
 #endif // _NCCL_DEVICE_COMM__TYPES_H_

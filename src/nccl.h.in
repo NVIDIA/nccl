@@ -84,6 +84,8 @@ typedef struct ncclConfig_v22800 {
   const char *netName;
   int splitShare;
   int trafficClass;
+  int ginSupport;
+  int numGinCtxs;
   const char *commName;
   int collnetEnable;
   int CTAPolicy;
@@ -106,6 +108,8 @@ typedef struct ncclConfig_v22800 {
   NCCL_CONFIG_UNDEF_PTR,                    /* netName */               \
   NCCL_CONFIG_UNDEF_INT,                    /* splitShare */            \
   NCCL_CONFIG_UNDEF_INT,                    /* trafficClass */          \
+  NCCL_CONFIG_UNDEF_INT,                    /* ginSupport */            \
+  NCCL_CONFIG_UNDEF_INT,                    /* numGinCtxs */            \
   NCCL_CONFIG_UNDEF_PTR,                    /* commName */              \
   NCCL_CONFIG_UNDEF_INT,                    /* collnetEnable */         \
   NCCL_CONFIG_UNDEF_INT,                    /* CTAPolicy */             \

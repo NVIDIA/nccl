@@ -113,6 +113,8 @@ struct ncclTransportComm {
   ncclResult_t (*proxyProgress)(struct ncclProxyState* proxyState, struct ncclProxyArgs*);
   ncclResult_t (*proxyRegister)(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState, void* reqBuff, int reqSize, void* respBuff, int respSize, int* done);
   ncclResult_t (*proxyDeregister)(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState, void* reqBuff, int reqSize, int* done);
+  ncclResult_t (*proxyRegisterSym)(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState, void* reqBuff, int reqSize, void* respBuff, int respSize, int* done);
+  ncclResult_t (*proxyDeregisterSym)(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState, void* reqBuff, int reqSize, int* done);
 };
 
 struct ncclTransport {
@@ -166,5 +168,14 @@ ncclResult_t ncclNvlsRegResourcesQuery(struct ncclComm* comm, struct ncclTaskCol
 ncclResult_t ncclNvlsGroupCreate(struct ncclComm *comm, CUmulticastObjectProp *prop, int rank, unsigned int nranks, CUmemGenericAllocationHandle *mcHandle, char *shareableHandle);
 ncclResult_t ncclNvlsGroupConnect(struct ncclComm *comm, char *shareableHandle, int rank, CUmemGenericAllocationHandle *mcHandle);
 #endif
+
+ncclResult_t ncclIpcSymmetricInit(struct ncclComm* comm);
+ncclResult_t ncclIpcMapSymmetric(struct ncclComm* comm, size_t offset, size_t size, CUmemGenericAllocationHandle memHandle, void** symPtr);
+ncclResult_t ncclIpcFreeSymmetric(struct ncclComm* comm, size_t size, void* symPtr);
+ncclResult_t ncclIpcSymmetricFinalize(struct ncclComm* comm);
+ncclResult_t ncclNvlsSymmetricInit(struct ncclComm* comm);
+ncclResult_t ncclNvlsMapSymmetric(struct ncclComm* comm, size_t offset, size_t ucsize, void* ucaddr);
+ncclResult_t ncclNvlsFreeSymmetric(struct ncclComm* comm, size_t ucsize, void* ucaddr);
+ncclResult_t ncclNvlsSymmetricFinalize(struct ncclComm* comm);
 
 #endif

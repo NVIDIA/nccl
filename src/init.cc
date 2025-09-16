@@ -270,6 +270,9 @@ static ncclResult_t commFree(ncclComm_t comm) {
   for (int channel=0; channel<MAXCHANNELS; channel++)
     NCCLCHECK(freeChannel(comm->channels+channel, comm->nRanks, 1, comm->localRanks));
 
+  // GIN may use proxy. We need to finalize it before destroying the proxy.
+  NCCLCHECK(ncclGinFinalize(comm));
+
   if (comm->sharedRes) {
     if (ncclAtomicRefCountDecrement(&comm->sharedRes->refCount) == 0) {
       for (int c=0; c<MAXCHANNELS; c++) {
@@ -386,6 +389,24 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
   comm->rank = rank;
   comm->nRanks = ndev;
 
+  if (parent == NULL || !parent->shareResources) {
+    struct ncclSharedResources* sharedRes = NULL;
+    NCCLCHECK(ncclCalloc(&sharedRes, 1));
+    /* most of attributes are assigned later in initTransportsRank(). */
+    sharedRes->owner = comm;
+    sharedRes->tpNRanks = comm->nRanks;
+    NCCLCHECK(ncclCalloc(&sharedRes->tpRankToLocalRank, comm->nRanks));
+    NCCLCHECK(ncclStrongStreamConstruct(&sharedRes->deviceStream));
+    NCCLCHECK(ncclStrongStreamConstruct(&sharedRes->hostStream));
+    CUDACHECK(cudaEventCreateWithFlags(&sharedRes->launchEvent, cudaEventDisableTiming));
+    CUDACHECK(cudaEventCreateWithFlags(&sharedRes->scratchEvent, cudaEventDisableTiming));
+    comm->sharedRes = sharedRes;
+    sharedRes->refCount = 1;
+  } else {
+    comm->sharedRes = parent->sharedRes;
+    ncclAtomicRefCountIncrement(&parent->sharedRes->refCount);
+  }
+
   NCCLCHECK(ncclNetInit(comm));
   INFO(NCCL_INIT, "Using network %s", comm->ncclNet->name);
 
@@ -431,24 +452,6 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
 
   // Mark channels as non initialized.
   for (int c=0; c < MAXCHANNELS; c++) comm->channels[c].id = -1;
-
-  if (parent == NULL || !parent->shareResources) {
-    struct ncclSharedResources* sharedRes = NULL;
-    NCCLCHECK(ncclCalloc(&sharedRes, 1));
-    /* most of attributes are assigned later in initTransportsRank(). */
-    sharedRes->owner = comm;
-    sharedRes->tpNRanks = comm->nRanks;
-    NCCLCHECK(ncclCalloc(&sharedRes->tpRankToLocalRank, comm->nRanks));
-    NCCLCHECK(ncclStrongStreamConstruct(&sharedRes->deviceStream));
-    NCCLCHECK(ncclStrongStreamConstruct(&sharedRes->hostStream));
-    CUDACHECK(cudaEventCreateWithFlags(&sharedRes->launchEvent, cudaEventDisableTiming));
-    CUDACHECK(cudaEventCreateWithFlags(&sharedRes->scratchEvent, cudaEventDisableTiming));
-    comm->sharedRes = sharedRes;
-    sharedRes->refCount = 1;
-  } else {
-    comm->sharedRes = parent->sharedRes;
-    ncclAtomicRefCountIncrement(&parent->sharedRes->refCount);
-  }
 
   if (comm->topParentRanks == NULL) {
     NCCLCHECK(ncclCalloc(&comm->topParentRanks, comm->nRanks));
@@ -728,6 +731,8 @@ NCCL_PARAM(MNNVLEnable, "MNNVL_ENABLE", 2);
 #define TIMER_INIT_CONNECT 6
 #define TIMER_INIT_ALLOC 7
 #define TIMERS_INIT_COUNT 8
+
+extern int64_t ncclParamWinStride();
 
 static ncclResult_t initNvlDomainInfo(struct ncclComm* comm) {
   // Initialize NVLink domain info
@@ -1328,7 +1333,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     }
   }
 
-  comm->symmetricSupport = comm->isAllDirectP2p && comm->nNodes == 1 && ncclParamWinEnable() && ncclCuMemEnable();
+  comm->symmetricSupport = (comm->localRanks == 1 || comm->isAllDirectP2p) && ncclParamWinEnable() && ncclCuMemEnable();
   comm->devrState.bigSize = 0;
 
   comm->ceColl.baseUCSymReadyPtr = NULL;
@@ -1852,6 +1857,8 @@ static ncclResult_t parseCommConfig(ncclComm_t comm, ncclConfig_t *config) {
   NCCL_CONFIG_DEFAULT(internalConfigPtr, netName, NCCL_CONFIG_UNDEF_PTR, NULL, "Net name", "%s");
   NCCL_CONFIG_DEFAULT(internalConfigPtr, splitShare, NCCL_CONFIG_UNDEF_INT, 0, "Split share", "%d");
   NCCL_CONFIG_DEFAULT(internalConfigPtr, trafficClass, NCCL_CONFIG_UNDEF_INT, NCCL_CONFIG_UNDEF_INT, "Traffic class", "%d");
+  NCCL_CONFIG_DEFAULT(internalConfigPtr, ginSupport, NCCL_CONFIG_UNDEF_INT, NCCL_CONFIG_UNDEF_INT, "GIN Support", "%d");
+  NCCL_CONFIG_DEFAULT(internalConfigPtr, numGinCtxs, NCCL_CONFIG_UNDEF_INT, NCCL_CONFIG_UNDEF_INT, "Number of GIN GPU ctxs", "%d");
   NCCL_CONFIG_DEFAULT(internalConfigPtr, commName, NCCL_CONFIG_UNDEF_PTR, NULL, "Comm name", "%s");
   NCCL_CONFIG_DEFAULT(internalConfigPtr, collnetEnable, NCCL_CONFIG_UNDEF_INT, 0, "Collnet enable", "%d");
   NCCL_CONFIG_DEFAULT(internalConfigPtr, CTAPolicy, NCCL_CONFIG_UNDEF_INT, NCCL_CTA_POLICY_DEFAULT, "CTA policy flags", "%d");
@@ -1869,6 +1876,8 @@ static ncclResult_t parseCommConfig(ncclComm_t comm, ncclConfig_t *config) {
   comm->config.netName = internalConfigPtr->netName;
   comm->config.splitShare = internalConfigPtr->splitShare;
   comm->config.trafficClass = internalConfigPtr->trafficClass;
+  comm->config.ginSupport = internalConfigPtr->ginSupport;
+  comm->config.numGinCtxs = internalConfigPtr->numGinCtxs;
   comm->config.commName = internalConfigPtr->commName;
   comm->config.collnetEnable = internalConfigPtr->collnetEnable;
   comm->config.CTAPolicy = internalConfigPtr->CTAPolicy;
@@ -2232,6 +2241,7 @@ static ncclResult_t commReclaim(struct ncclAsyncJob* job_) {
   ncclComm_t comm = job->comm;
   ncclResult_t ret = ncclSuccess;
 
+
   if (comm->intraComm0 != NULL) {
     int curRankCnt;
     int curRank; /* Debug info */
@@ -2537,6 +2547,26 @@ ncclResult_t ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t *asyncError) {
 
   *asyncError = __atomic_load_n(&comm->asyncResult, __ATOMIC_ACQUIRE);
   if (*asyncError == ncclSuccess && comm->proxyState) *asyncError = __atomic_load_n(&comm->proxyState->asyncResult, __ATOMIC_ACQUIRE);
+
+  /* Check gin status */
+  if (*asyncError == ncclSuccess && comm->sharedRes && comm->sharedRes->ginState.ncclGin) {
+    struct ncclGinState* ginState = &comm->sharedRes->ginState;
+    // Gin progress thread status
+    if (ginState->needsProxyProgress) *asyncError = __atomic_load_n(&comm->sharedRes->ginState.asyncResult, __ATOMIC_ACQUIRE);
+    // Gin side errors, also works when we have no GIN progress thread.
+    if (*asyncError == ncclSuccess) {
+      bool ginError;
+      for (int c=0; c<comm->sharedRes->ginState.ginCommCount; c++) {
+        NCCLCHECK(ncclGinQueryLastError(&comm->sharedRes->ginState, &ginError));
+        if (ginError) {
+          WARN("GIN Error on gin context %d\n", c);
+          *asyncError = ncclRemoteError;
+          break;
+        }
+      }
+    }
+  }
+
   /* if there is linked group job, we should complete it. */
   if (*asyncError == ncclSuccess && comm->groupJob) {
     NCCLCHECK(ncclGroupJobComplete(comm->groupJob));

@@ -16,6 +16,7 @@
 #include "shmutils.h"
 #include "p2p.h"
 #include "collectives.h"
+#include "gin/gin_host.h"
 
 typedef enum : uint8_t {
   ncclPatternRing,
@@ -322,6 +323,8 @@ struct ncclProxyState {
   bool dmaBufSupport;
   ncclNet_t* ncclNet;
   ncclCollNet_t* ncclCollNet;
+  struct ncclGinState* ginState;
+
   uint32_t* abortFlag;
   bool directMode;
   // Service threads
@@ -407,7 +410,8 @@ enum ncclProxyMsgType {
   ncclProxyMsgGetFd = 9, // cuMem API support (UDS)
   ncclProxyMsgQueryFd = 10,
   ncclProxyMsgRegister = 11,
-  ncclProxyMsgDeregister = 12
+  ncclProxyMsgDeregister = 12,
+  ncclProxyMsgInitProgress = 13
 };
 
 // This function is called by a client of the proxy that needs to invoke any of the non-progress proxyOp types

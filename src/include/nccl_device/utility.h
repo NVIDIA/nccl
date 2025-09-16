@@ -3,7 +3,8 @@
  *
  * See LICENSE.txt for license information
  ************************************************************************/
-
+// @EUGO_CHANGE: Added `#include <type_traits>`
+#include <type_traits>
 #ifndef _NCCL_DEVICE_UTILITY_H_
 #define _NCCL_DEVICE_UTILITY_H_
 
@@ -37,10 +38,25 @@
 namespace nccl {
 namespace utility {
 
+// @EUGO_CHANGE: @begin - this is really tricky. They have code in here that should never actually be called at runtime.
+// Instead, we essentially create a proper CUDA-compatible, standard-compliant placeholder for type deduction, fixing both the __host__/__device__ problem and the standard type-trait issues.
+// NVIDIA was using a manual hack to create a declval function that returned an rvalue reference to type T with a body that always fails,
+// with the purpose **to never actually be called at runtime - it would only be used in unevaluated contexts, like decltype contexts for type deduction**
+// This caused crashes for us at compile time, like `src/include/nccl_device/impl/ll_a2a__funcs.h:192:24: error: no matching function for call to 'declval' using Acc = decltype(std::declval<EltToAcc>()(std::declval<Elt>()));`
+// So instead, we create a declaration only function that uses a more standard-compliant (`std::add_rvalue_reference<T>::type`) has no definition/body, includes CUDA qualifiers, and can never be called at runtime.
+// It seems they did this as a workaround for environments where std::declval might not be available or CUDA-compatible.
+// Our replacement provides the same functionality with better standards compliance and CUDA integration.
 template<typename T>
-T&& declval() noexcept {
-  static_assert(sizeof(T)!=sizeof(T), "You can't evaluate declval.");
-}
+#if defined(__CUDACC__)
+__host__ __device__
+#endif
+typename std::add_rvalue_reference<T>::type declval() noexcept;
+
+// template<typename T>
+// T&& declval() noexcept {
+//   static_assert(sizeof(T)!=sizeof(T), "You can't evaluate declval.");
+// }
+// @EUGO_CHANGE: @end
 
 template<typename X, typename Y, typename Z = decltype(X()+Y())>
 NCCL_HOST_DEVICE_INLINE constexpr Z divUp(X x, Y y) {

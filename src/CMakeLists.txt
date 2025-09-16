@@ -13,7 +13,7 @@ configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/nccl.h.in
     ${CONFIGURED_HEADERS_DIR}/nccl.h
 )
-# Ben :TODO+
+# NOTE: this is the NVIDIA_ORIGINAL. We can't place this in `nccl.h.in` file b/c it causes errors, so leaving it here for reference
 # #define NCCL_MAJOR ${nccl:Major}
 # #define NCCL_MINOR ${nccl:Minor}
 # #define NCCL_PATCH ${nccl:Patch}

@@ -10,6 +10,9 @@
 #include "comm__types.h"
 #include "../utility.h"
 
+// @EUGO_CHANGE: We need this to get more sophisticated variant of `declval`
+#include <cuda/std/type_traits>
+
 // @EUGO_CHANGE: `#if` -> `#ifdef`
 #ifdef __CUDACC__
 template<typename Coop>
@@ -188,8 +191,8 @@ template<typename Coop>
 template<int Unroll, typename Elt, typename EltToAcc, typename Reduce>
 NCCL_DEVICE_INLINE auto ncclLLA2ASession<Coop>::recvReduce(
     int eltStart, int eltCount, int eltStride, EltToAcc eltToAcc, Reduce reduce
-  ) -> decltype(eltToAcc(nccl::utility::declval<Elt>())) {
-  using Acc = decltype(eltToAcc(nccl::utility::declval<Elt>()));
+  ) -> decltype(eltToAcc(cuda::std::declval<Elt>())) { // @EUGO_CHANGE: `nccl::utility::declval` -> `cuda::std::declval`
+  using Acc = decltype(eltToAcc(cuda::std::declval<Elt>())); // @EUGO_CHANGE: `nccl::utility::declval` -> `cuda::std::declval`
   Acc acc;
   int i = 0;
   #pragma unroll 1

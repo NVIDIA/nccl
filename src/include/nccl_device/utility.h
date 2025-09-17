@@ -3,8 +3,7 @@
  *
  * See LICENSE.txt for license information
  ************************************************************************/
-// @EUGO_CHANGE: Added `#include <type_traits>`
-#include <type_traits>
+
 #ifndef _NCCL_DEVICE_UTILITY_H_
 #define _NCCL_DEVICE_UTILITY_H_
 
@@ -38,24 +37,48 @@
 namespace nccl {
 namespace utility {
 
-// @EUGO_CHANGE: @begin - this is really tricky. They have code in here that should never actually be called at runtime.
-// Instead, we essentially create a proper CUDA-compatible, standard-compliant placeholder for type deduction, fixing both the __host__/__device__ problem and the standard type-trait issues.
+// @EUGO_CHANGE: @begin
+// @Important:
+// While testing our solution, we've discovered that NVIDIA has already been solved that in `libcu++` (part of CCCL, which in turn is part of `native/cuda`) and made their implementation to be extremely efficient.
+// So we decided to use their version instead of our custom one and replaced all calls to `nccl::utility::declval` w/ `cuda::std::declval`.
+// We intentionally comment out the original NCCL implementation here so if they'd ever use it again in some other place, it will crash at
+// buildtime so we can fix it easier rather than brainstorming again why it happened as the underlying error message is really cryptic.
+//
+// @Important:
+// Partially, this issue relates to how `clang++` and `nvcc` treat device-side C++ lambdas. `clang++` has a built-in support for them, while `nvcc` provides it in a quite limited fashion and requies you to pass `--expt-extended-lambda` (`--extended-lambda`) if you want more comprehensive support.
+// Still, the rules which compilers apply to lambdas differ so it's why likely the original NCCL implementation choked here - `decltype` below is applied to the function and not the value type and NCCL uses C++ lambdas in a few places as an argument to that.
+// Anyway, as the official CCCL's `cuda::std::declval` works here w/ both `clang++` and `nvcc`, it's unlikely an issue on Eugo side but on NCCL one.
+//
+// @Original solution:
+// This is really tricky. They have code in here that should never actually be called at runtime.
+// Instead, we essentially create a proper CUDA-compatible, standard-compliant placeholder for type deduction, fixing both the `__host__` and `__device__` problem and the standard type-trait issues.
 // NVIDIA was using a manual hack to create a declval function that returned an rvalue reference to type T with a body that always fails,
 // with the purpose **to never actually be called at runtime - it would only be used in unevaluated contexts, like decltype contexts for type deduction**
 // This caused crashes for us at compile time, like `src/include/nccl_device/impl/ll_a2a__funcs.h:192:24: error: no matching function for call to 'declval' using Acc = decltype(std::declval<EltToAcc>()(std::declval<Elt>()));`
 // So instead, we create a declaration only function that uses a more standard-compliant (`std::add_rvalue_reference<T>::type`) has no definition/body, includes CUDA qualifiers, and can never be called at runtime.
 // It seems they did this as a workaround for environments where std::declval might not be available or CUDA-compatible.
 // Our replacement provides the same functionality with better standards compliance and CUDA integration.
-template<typename T>
-#if defined(__CUDACC__)
-__host__ __device__
-#endif
-typename std::add_rvalue_reference<T>::type declval() noexcept;
+//
+// References:
+// 1. https://en.cppreference.com/w/cpp/utility/declval.html
+// 2. https://sq.cppreference.com/w/cpp/language/decltype.html
+// 3. https://en.cppreference.com/w/cpp/header/type_traits.html
+// 4. https://github.com/NVIDIA/cccl/blob/main/libcudacxx/include/cuda/std/__utility/declval.h
+// 5. https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/
+// template<typename T>
+// @EUGO_ORIGINAL: @begin:
+// #if defined(__CUDACC__)
+// __host__ __device__
+// #endif
+// typename std::add_rvalue_reference<T>::type declval() noexcept;
+// @EUGO_ORIGINAL: @end:
 
+// @NVIDIA_ORIGINAL: @begin:
 // template<typename T>
 // T&& declval() noexcept {
 //   static_assert(sizeof(T)!=sizeof(T), "You can't evaluate declval.");
 // }
+// @NVIDIA_ORIGINAL: @end
 // @EUGO_CHANGE: @end
 
 template<typename X, typename Y, typename Z = decltype(X()+Y())>

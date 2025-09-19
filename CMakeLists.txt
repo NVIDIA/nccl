@@ -43,28 +43,23 @@ set(NCCL_VERSION "${NCCL_MAJOR}.${NCCL_MINOR}.${NCCL_PATCH}")
 # Unset CMAKE_CUDA_FLAGS to fix CMake bugs in detecting the CUDA toolchain
 set(CMAKE_CUDA_FLAGS "") # @EUGO_CHANGE: Added to fix CMake bugs in detecting the CUDA toolchain
 
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
+set(CMAKE_CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+#set(CMAKE_C_VISIBILITY_PRESET default)
+set(CMAKE_CXX_VISIBILITY_PRESET hidden)
+set(CMAKE_CUDA_VISIBILITY_PRESET hidden)
+
 # `C` language seems to not be used but we set that for the match w/ the original version (where it's used for `@/src/enhcompat.cc` which has a few functions w/ C linkage).
 project(nccl
     LANGUAGES CUDA CXX C
     VERSION ${NCCL_VERSION}
 )
 
-# @TODO+:return to 23, see other issue blah-blah (can delete as soon as we confirm works)
-# set(CMAKE_CXX_STANDARD 17)
-# set(CMAKE_CUDA_STANDARD 17)
-
-set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-
-set(CMAKE_CXX_VISIBILITY_PRESET hidden)
-
-set(CMAKE_CUDA_VISIBILITY_PRESET hidden)
-set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
-set(CMAKE_CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-
-# Reset CMAKE_CUDA_FLAGS to fix CMake bugs in detecting the CUDA toolchain
-string(APPEND CMAKE_CUDA_FLAGS
+set(CMAKE_CUDA_FLAGS
   " $ENV{CUDAFLAGS}"
 )
+
 
 # @HELP: Probably, we can remove them now
 set(CMAKE_CXX_FLAGS
@@ -118,12 +113,28 @@ add_compile_definitions(
 # @NVIDIA_ORIGINAL: @end
 # === @@end: CUDAToolkit ===
 
+
 # === @@begin: CCCL ===
 # This is also part of `CUDAToolkit` (`native/cuda`) but it's not found by `FindCUDAToolkit` as it's open-source and header-only library + this may even be installed separately.
 # Hence, we search it separately and use only the portion we need.
 find_package(cccl CONFIG REQUIRED)
 message(STATUS "[EUGO]: CCCL found: ${cccl_CONFIG}")
 # === @@end: CCCL ===
+
+
+# @EUGO_CHANGE:
+# In original implementation, these masterminds link their binaries against all `CUDAToolkit_LIBRARIES` which is an overkill. Based on our research, they only use `cudart` functions here to manage the GPU on the host side and directly access intrinsics (like `fp8`) on the device one.
+# They also rely on `CCCL` (in particular, `libcu++`/`libcudacxx`) but as it's the header only library, they just add that into include dirs list and don't explicitely search for it.
+#
+# In our NCCL implementation, we limit dependencies list to that is exactly used to avoid too tight dependency graph and reduce the number of unneeded libraries loaded at runtime.
+#
+# In theory, the best solution here is to check every built component (as we have 1 library, 1 (buildtime-only) object library, and 1 executable in this package) and determine on which CUDA parts they depend but it may be overly complicated due to how messy the headers chain in NCCL.
+# As after the build we're getting only 2 binaries - `libnccl` (library) and `ncclras` (executable) - and the latter links against former, it's safe and sound to define just a single list of CUDA dependencies for all of them.
+#
+# @Important:
+# Based on our research, NCCL doesn't directly depends on `libcuda` (`CUDA::driver_library`) so we don't add it here.
+set(NCCL_CUDA_DEPENDENCIES CCCL::libcudacxx CUDA::cudart)
+# @HELP: Is it passed implicitely? cudadevrt
 # === @end: dependencies/ ===
 
 

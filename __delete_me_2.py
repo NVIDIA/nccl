@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
+
 import os
-import shutil
 import sys
 
 # Order of redops, tys, protos, algos must match src/include/device.h
@@ -18,11 +18,9 @@ gensrc = sys.argv[1]
 
 if os.path.exists(gensrc):
     for name in os.listdir(gensrc):
-        path = os.path.join(gensrc, name)
-        if os.path.isfile(path):
-            os.remove(path)
-        elif os.path.isdir(path):
-            shutil.rmtree(path)
+        if not name == "CMakeFiles":  # @EUGO_CHANGE
+            os.remove(os.path.join(gensrc, name))
+            # os.truncate(os.path.join(gensrc, name), 0)
 else:
     os.mkdir(gensrc)
 
@@ -212,7 +210,6 @@ def validate(coll, redop, ty, algo, proto):
         return (coll, redop, ty, algo, proto)
     if valid:
         return ("Nop", None, None, None, None)
-
     return None
 
 
@@ -245,9 +242,7 @@ with open(os.path.join(gensrc, "device_table.cu"), "w") as f:
             out("#endif\n")
     out("\n")
 
-    out(
-        "__device__ ncclDevFuncPtr_t ncclDevFuncTable[] = {\n"
-    )  # @EUGO_CHANGE: removed `const` prior to `ncclDevFuncTable`
+    out("__device__ ncclDevFuncPtr_t ncclDevFuncTable[] = {\n")
     index = 0
     for fn in primary_funcs:
         sym = paste("_", "ncclDevFunc", *fn)
@@ -263,8 +258,9 @@ with open(os.path.join(gensrc, "device_table.cu"), "w") as f:
 
     out("// Workaround for https://reviews.llvm.org/D55580\n__device__ void ncclWorkaroundClangD55580() {}\n")
 
-# Generate <gensrc>/host_table.cu # @EUGO_CHANGE: .cc -> .cu
-with open(os.path.join(gensrc, "host_table.cu"), "w") as f:  # @EUGO_CHANGE: .cc -> .cu
+# @EUGO_CHANGE: host_table.cc -> host_table.cu
+# Generate <gensrc>/host_table.cu
+with open(os.path.join(gensrc, "host_table.cu"), "w") as f:
     out = f.write
     out('#include "device.h"\n')
     out("\n")
@@ -298,7 +294,6 @@ with open(os.path.join(gensrc, "host_table.cu"), "w") as f:  # @EUGO_CHANGE: .cc
             out("#endif\n")
     out("\n")
 
-    # @EUGO_CHANGE: @begin: changed this block with xla patch
     # List of all kernel function pointers.
     out("extern int const ncclDevKernelCount = %d;\n" % len(kernel_funcs))
 
@@ -345,7 +340,6 @@ with open(os.path.join(gensrc, "host_table.cu"), "w") as f:  # @EUGO_CHANGE: .cc
         index += 1
     out("nullptr};\n")
     out("\n")
-    # @EUGO_CHANGE: @end
 
     # Does the prior map use an explicitly specialized kernel.
     out("extern bool const ncclDevKernelForFuncIsSpecialized[] = {\n")
@@ -381,22 +375,13 @@ def partition_by_name(fns):
 name_to_funcs = partition_by_name(fn for fn in primary_funcs if fn[0] != "Nop")
 name_to_kernels = partition_by_name(kfn for kfn in kernel_funcs if kfn[0] != "Generic")
 
-files = ""
-for name in sorted(name_to_funcs.keys()):
-    files += name + ";"
-files += "device_table.cu;"
-files += "host_table.cu"  # @EUGO_CHANGE: .cc -> .cu
-
-# Do not print files when running make
-if os.environ.get("NCCL_USE_CMAKE", "0") == "1":
-    print(files)
-
 # Generate <gensrc>/rules.mk
 with open(os.path.join(gensrc, "rules.mk"), "w") as f:
     out = f.write
     impl_names = sorted(name_to_funcs.keys())
-    names = impl_names + ["host_table.cu", "device_table.cu"]  # @EUGO_CHANGE: .cc -> .cu
-    out("LIB_OBJS_GEN = $(patsubst %,$(OBJDIR)/genobj/%.o,{names})\n".format(names=" ".join(names)))
+    # @EUGO_CHANGE: host_table.cc -> host_table.cu
+    names = impl_names + ["host_table.cu", "device_table.cu"]
+    out("LIB_OBJS_GEN = $(patsubst %, $(OBJDIR)/genobj/%.o, {names})\n".format(names=" ".join(names)))
     out("\n")
 
     # For each <coll>_<op>_<ty>.cu compile to a .cu.o file. Notice the dependencies

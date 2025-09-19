@@ -13,7 +13,7 @@ configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/nccl.h.in
     ${CONFIGURED_HEADERS_DIR}/nccl.h
 )
-# NOTE: this is the NVIDIA_ORIGINAL. We can't place this in `nccl.h.in` file b/c it causes errors, so leaving it here for reference
+# NOTE: this is the NVIDIA_ORIGINAL and just for documentation purposes. We can't place this in `nccl.h.in` file b/c it causes errors, so leaving it here for reference
 # #define NCCL_MAJOR ${nccl:Major}
 # #define NCCL_MINOR ${nccl:Minor}
 # #define NCCL_PATCH ${nccl:Patch}
@@ -39,7 +39,7 @@ set(NCCL_SRC_FILES
     collectives.cc
     debug.cc
     dev_runtime.cc
-    # enhcompat.cc - only used with `libcudart_static.a` and intended for its old versions support. Current implementation looks extremely dangerous as it overrides the `cudart` symbols w/ its "crashing" stubs.
+    # enhcompat.cc # only used with `libcudart_static.a` and intended for its old versions support. Current implementation looks extremely dangerous as it overrides the `cudart` symbols w/ its "crashing" stubs.
     enqueue.cc
     group.cc
     init.cc
@@ -167,12 +167,21 @@ set(NCCL_SRC_FILES
     scheduler/symmetric_sched.cc
     # === @end: ./scheduler/ (`@/src/scheduler/CMakeLists.txt`) ===
 )
+# foreach(src_file IN LISTS NCCL_SRC_FILES)
+#   set_source_files_properties(${src_file} PROPERTIES LANGUAGE CUDA)
+# endforeach()
 
 add_library(nccl SHARED ${NCCL_SRC_FILES})
-target_link_libraries(nccl PRIVATE nccl_colldevice)
+target_link_libraries(nccl PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,nccl_colldevice>")
+#add_library(nccl SHARED ${NCCL_SRC_FILES} $<TARGET_OBJECTS:nccl_colldevice>)
+
+target_link_libraries(
+    nccl
+    PRIVATE CCCL::libcudacxx
+    INTERFACE CUDA::cudart
+)
 # rt pthread dl - @HELP: we probably shouldn't link them explicitely on latest `glibc`
 # @HELP: EXTRA_LIBS
-# @HELP: figure out which exact CUDAToolkit_LIBRARIES this boy depends on as they simply link them ... ALL which is definitely an overkill
 
 set_target_properties(
     nccl
@@ -180,6 +189,7 @@ set_target_properties(
         VERSION ${NCCL_VERSION}
         SOVERSION ${NCCL_MAJOR}
 )
+
 
 # @HELP: should we replace `$<BUILD_INTERFACE:${CONFIGURED_HEADERS_DIR}>` and `$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>` by simply `${INCEXPORTS}` or something similar? As they are public ones
 target_include_directories(

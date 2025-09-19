@@ -227,9 +227,8 @@ def prototype(k):
         form = (
             "#if {cudart_cond}\n"
             "  __global__ void {cname}(ncclSymkDevWorkArgs4K const);\n"
-            "  void* {cname}_ptr = (void*){cname};\n"  # @EUGO_CHANGE: (break the strong symbol dependency, crashing linkage on clang) Added the pointer proxy to be used instead of the original symbol
             "#else\n"
-            "  void* {cname}_ptr = nullptr;\n"  # @EUGO_CHANGE: (break the strong symbol dependency, crashing linkage on clang) Replaced constexpr w/ the pointer compatible w/ the right-above EUGO_CHANGE, set by default into nothing
+            "  constexpr void* {cname} = nullptr;\n"
             "#endif"
         )
     return form.format(cname=kernel_cname(k), cudart_cond=cudart_cond)
@@ -267,8 +266,8 @@ for (fname, coll), ks in kernels_by_file.items():
         for k in ks:
             emitln(f, instantiate(k))
 
-# Generate <gensrc>/sym_kernels_host.cu # @EUGO_CHANGE: .cc -> .cu
-with open(os.path.join(gensrc, "sym_kernels_host.cu"), "w") as f:  # @EUGO_CHANGE: .cc -> .cu
+# Generate <gensrc>/sym_kernels_host.cc
+with open(os.path.join(gensrc, "sym_kernels_host.cc"), "w") as f:
     emitln(f, '#include "sym_kernels.h"')
     emitln(f, '#include "device.h"')
     emitln(f, "")
@@ -280,9 +279,7 @@ with open(os.path.join(gensrc, "sym_kernels_host.cu"), "w") as f:  # @EUGO_CHANG
     emitln(f, "extern int const ncclSymkKernelCount = %d;" % len(list(enumerate_kernels())))
     emitln(f, "extern void* const ncclSymkKernelList[] = {")
     for k in enumerate_kernels():
-        emitln(
-            f, f"(void*){kernel_cname(k)}_ptr,"
-        )  # @EUGO_CHANGE: (break the strong symbol dependency, crashing linkage on clang) Using pointer-proxy in place of the strong symbol
+        emitln(f, f"(void*){kernel_cname(k)},")
     emitln(f, "nullptr};")
     emitln(f, "")
 
@@ -294,9 +291,7 @@ with open(os.path.join(gensrc, "sym_kernels_host.cu"), "w") as f:  # @EUGO_CHANG
         emitln(f, "case ncclSymkKernelId_" + coll + "_" + algo + ":")
         indents += 1
         if len(coll_algo_ks) == 1:
-            emitln(
-                f, "return (void*)" + kernel_cname(coll_algo_ks[0]) + "_ptr;"
-            )  # @EUGO_CHANGE: (break the strong symbol dependency, crashing linkage on clang) Removed `&` + using pointer-proxy in place of the strong symbol
+            emitln(f, "return (void*)&" + kernel_cname(coll_algo_ks[0]) + ";")
         else:
             emitln(f, "switch ((ncclDevRedOp_t)red) {")
             emitln(f, "default: return nullptr;")
@@ -306,10 +301,7 @@ with open(os.path.join(gensrc, "sym_kernels_host.cu"), "w") as f:  # @EUGO_CHANG
                 emitln(f, "switch (ty) {")
                 emitln(f, "default: return nullptr;")
                 for k in coll_algo_red_ks:
-                    emitln(
-                        f, "case " + ty_to_ncclDataType[k.ty] + ": return (void*)" + kernel_cname(k) + "_ptr;"
-                    )  # @EUGO_CHANGE: (break the strong symbol dependency, crashing linkage on clang) Replaced constexpr w/ the pointer compatible w/ the right-above EUGO_CHANGE, set by default into nothing
-
+                    emitln(f, "case " + ty_to_ncclDataType[k.ty] + ": return (void*)" + kernel_cname(k) + ";")
                 emitln(f, "}")
                 indents -= 1
             emitln(f, "}")
@@ -320,14 +312,14 @@ with open(os.path.join(gensrc, "sym_kernels_host.cu"), "w") as f:  # @EUGO_CHANG
 
 # Generate <gensrc>/rules.mk
 files_to_print += "rules.mk;"
-files_to_print += "sym_kernels_host.cu;"  # @EUGO_CHANGE: .cc -> .cu
+files_to_print += "sym_kernels_host.cc;"
 
 if os.environ.get("NCCL_USE_CMAKE", "0") == "1":
     print(files_to_print)
 
 with open(os.path.join(gensrc, "rules.mk"), "w") as f:
     inst_names = sorted(set(kernel_fname(k) for k in enumerate_kernels()))
-    names = inst_names + ["sym_kernels_host.cu"]  # @EUGO_CHANGE: .cc -> .cu
+    names = inst_names + ["sym_kernels_host.cc"]
     f.write("LIB_OBJS_SYM_GEN = $(patsubst %,$(OBJDIR)/genobj/symmetric/%.o,{names})\n".format(names=" ".join(names)))
     f.write("\n")
 

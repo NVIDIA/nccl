@@ -212,7 +212,6 @@ def validate(coll, redop, ty, algo, proto):
         return (coll, redop, ty, algo, proto)
     if valid:
         return ("Nop", None, None, None, None)
-
     return None
 
 
@@ -298,32 +297,24 @@ with open(os.path.join(gensrc, "host_table.cu"), "w") as f:  # @EUGO_CHANGE: .cc
             out("#endif\n")
     out("\n")
 
-    # @EUGO_CHANGE: @begin: changed this block with xla patch
     # List of all kernel function pointers.
     out("extern int const ncclDevKernelCount = %d;\n" % len(kernel_funcs))
-
+    out("extern void* const ncclDevKernelList[] = {\n")
     index = 0
     for kfn in kernel_funcs:
         cudart, _ = required_cuda(*kfn)
         sym = paste("_", "ncclDevKernel", *kfn)
         if cudart != 0:
             out("#if CUDART_VERSION >= %d\n" % cudart)
-        out("/*%4d*/ void* %s_ptr = (void*)%s;\n" % (index, sym, sym))
+        out("/*%4d*/ (void*)%s,\n" % (index, sym))
         if cudart != 0:
-            out("#else\n/*%4d*/ void* %s_ptr = nullptr;\n#endif\n" % (index, sym))
-        index += 1
-
-    out("extern void* const ncclDevKernelList[] = {\n")
-    index = 0
-    for kfn in kernel_funcs:
-        sym = paste("_", "ncclDevKernel", *kfn)
-        out("/*%4d*/ %s_ptr,\n" % (index, sym))
+            out("#else\n/*%4d*/ nullptr,\n#endif\n" % index)
         index += 1
     out("nullptr};\n")
     out("\n")
 
     # Maps primary id to kernel function pointer.
-
+    out("extern void* const ncclDevKernelForFunc[] = {\n")
     index = 0
     for fn in primary_funcs:
         kfn = best_kernel(*fn)
@@ -331,21 +322,12 @@ with open(os.path.join(gensrc, "host_table.cu"), "w") as f:  # @EUGO_CHANGE: .cc
         cudart, _ = required_cuda(*kfn)
         if cudart != 0:
             out("#if CUDART_VERSION >= %d\n" % cudart)
-        out("/*%4d*/ void* %s_ptr_%d = (void*)%s;\n" % (index, sym, index, sym))
+        out("/*%4d*/ (void*)%s,\n" % (index, sym))
         if cudart != 0:
-            out("#else\n/*%4d*/ void* %s_ptr_%d = nullptr;\n#endif\n" % (index, sym, index))
-        index += 1
-
-    out("extern void* const ncclDevKernelForFunc[] = {\n")
-    index = 0
-    for fn in primary_funcs:
-        kfn = best_kernel(*fn)
-        sym = paste("_", "ncclDevKernel", *kfn)
-        out("/*%4d*/ %s_ptr_%d,\n" % (index, sym, index))
+            out("#else\n/*%4d*/ nullptr,\n#endif\n" % index)
         index += 1
     out("nullptr};\n")
     out("\n")
-    # @EUGO_CHANGE: @end
 
     # Does the prior map use an explicitly specialized kernel.
     out("extern bool const ncclDevKernelForFuncIsSpecialized[] = {\n")

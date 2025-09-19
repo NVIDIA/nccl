@@ -9,7 +9,9 @@
 
 #if __CUDA_ARCH__ >= 700
 // __grid_constant__ appears to break cuda-gdb
-#define NCCL_GRID_CONSTANT __grid_constant__
+// @EUGO_CHANGE: to match the `common.h`
+//#define NCCL_GRID_CONSTANT __grid_constant__
+#define NCCL_GRID_CONSTANT
 #else
 #define NCCL_GRID_CONSTANT
 #endif

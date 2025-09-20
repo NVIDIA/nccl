@@ -20,7 +20,7 @@ NET_PROFILER ?= 0
 MLX5DV ?= 0
 MAX_EXT_NET_PLUGINS ?= 0
 
-NVCC = $(CUDA_HOME)/bin/nvcc
+NVCC ?= $(CUDA_HOME)/bin/nvcc
 
 CUDA_LIB ?= $(CUDA_HOME)/lib64
 CUDA_INC ?= $(CUDA_HOME)/include

@@ -147,7 +147,7 @@ ncclResult_t initCollnetChannel(struct ncclComm* comm, int channelId, struct ncc
 ncclResult_t freeChannel(struct ncclChannel* channel, int nRanks, int collnetNRanks, int nvlsNRanks) {
   int nPeers = nRanks + collnetNRanks + nvlsNRanks;
   /* channel peers are only valid when async init thread completes commAlloc() and
-   * the channel is intialized with initChannel(); if either is not done, this channel
+   * the channel is initialized with initChannel(); if either is not done, this channel
    * should never be free. */
   if (channel->id == -1 || channel->peers == NULL) return ncclSuccess;
 

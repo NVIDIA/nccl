@@ -36,7 +36,11 @@ ncclResult_t ncclMnnvlCheck(struct ncclComm* comm) {
     nvmlGpuFabricInfoV_t *fabricInfo2 = &comm->peerInfo[i].fabricInfo;
     // Check if the cluster UUID and cliqueId match
     // A zero UUID means we don't have MNNVL fabric info - disable MNNVL
-    if ((((long *)&fabricInfo2->clusterUuid)[0]|((long *)fabricInfo2->clusterUuid)[1]) == 0) return ncclSuccess;
+    unsigned long uuid0 = 0;
+    unsigned long uuid1 = 0;
+    memcpy(&uuid0, fabricInfo2->clusterUuid, sizeof(uuid0));
+    memcpy(&uuid1, fabricInfo2->clusterUuid + sizeof(uuid0), sizeof(uuid1));
+    if ((uuid0 | uuid1) == 0) return ncclSuccess;
     if ((memcmp(fabricInfo1->clusterUuid, fabricInfo2->clusterUuid, NVML_GPU_FABRIC_UUID_LEN) == 0) &&
         (fabricInfo1->cliqueId == fabricInfo2->cliqueId)) {
       if (i == comm->rank) {
@@ -58,7 +62,12 @@ ncclResult_t ncclMnnvlCheck(struct ncclComm* comm) {
 
     // Allocate FABRIC handle compatible memory
     ncclResult_t ret = ncclCuMemAlloc(&ptr, &handle, CU_MEM_HANDLE_TYPE_FABRIC, CUDA_IPC_MIN);
-    if (ret != ncclSuccess) return ncclSuccess;
+    if (ret != ncclSuccess) {
+      // Return an error if this is a MNNVL capable system but FABRIC handles are not supported
+      WARN("MNNVL (cliqueSize %d) is available but not working on this system. Check the IMEX channel configuration (/dev/nvidia-caps-imex-channels). Set NCCL_MNNVL_ENABLE=0 to ignore this issue.",
+           comm->clique.size);
+      return ncclSystemError;
+    }
     err = CUPFN(cuMemExportToShareableHandle(&cuDesc, handle, CU_MEM_HANDLE_TYPE_FABRIC, 0));
     if (err != CUDA_SUCCESS ||
         (err = CUPFN(cuMemImportFromShareableHandle(&handle, &cuDesc, CU_MEM_HANDLE_TYPE_FABRIC))) != CUDA_SUCCESS) {
@@ -66,7 +75,7 @@ ncclResult_t ncclMnnvlCheck(struct ncclComm* comm) {
       (void) pfn_cuGetErrorString(err, &errStr);
       NCCLCHECK(ncclCuMemFree(ptr));
       // Return an error if this is a MNNVL capable system but it's not working
-      WARN("MNNVL (cliqueSize %d) is available but not supported on this system. Check the IMEX configuration.",
+      WARN("MNNVL (cliqueSize %d) is available but not working on this system. Check the IMEX configuration (nvidia-imex-ctl -N). Set NCCL_MNNVL_ENABLE=0 to ignore this issue.",
           comm->clique.size);
       return ncclSystemError;
     }

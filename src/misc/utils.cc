@@ -10,6 +10,7 @@
 #include "nvmlwrap.h"
 
 #include <stdlib.h>
+#include <mutex>
 
 // Get current Compute Capability
 int ncclCudaCompCap() {
@@ -107,8 +108,8 @@ static void getHostHashOnce() {
   hostHashValue = getHash(hostHash, strlen(hostHash));
 }
 uint64_t getHostHash(void) {
-  static pthread_once_t once = PTHREAD_ONCE_INIT;
-  pthread_once(&once, getHostHashOnce);
+  static std::once_flag once;
+  std::call_once(once, getHostHashOnce);
   return hostHashValue;
 }
 
@@ -288,4 +289,29 @@ void ncclMemoryStackDestruct(struct ncclMemoryStack* me) {
     free(h);
     h = h1;
   }
+}
+
+/* return concatenated string representing each set bit */
+ncclResult_t ncclBitsToString(uint32_t bits, uint32_t mask, const char* (*toStr)(int), char *buf, size_t bufLen, const char *wildcard) {
+  if (!buf || !bufLen)
+    return ncclInvalidArgument;
+
+  bits &= mask;
+
+  // print wildcard value if all bits set
+  if (wildcard && bits == mask) {
+    snprintf(buf, bufLen, "%s", wildcard);
+    return ncclSuccess;
+  }
+
+  // Add each set bit to string
+  int pos = 0;
+  for (int i = 0; bits; i++, bits >>= 1) {
+    if (bits & 1) {
+      if (pos > 0) pos += snprintf(buf + pos, bufLen - pos, "|");
+      pos += snprintf(buf + pos, bufLen - pos, "%s", toStr(i));
+    }
+  }
+
+  return ncclSuccess;
 }

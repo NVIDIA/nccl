@@ -17,6 +17,10 @@
 #include "register.h"
 #include "graph.h"
 #include "profiler.h"
+#include "allocator.h"
+#include "dev_runtime.h"
+#include "sym_kernels.h"
+#include "ce_coll.h"
 
 #if CUDART_VERSION < 9000
 struct cudaLaunchParams {
@@ -131,7 +135,6 @@ struct ncclSharedResources {
   int* tpRankToLocalRank;
   // Internal streams
   struct ncclStrongStream deviceStream, hostStream;
-  int noncapturedRefs; // number of non-captured hostStreamPlanCallback on the stream
   int persistentRefs;
   cudaEvent_t launchEvent, scratchEvent;
 
@@ -198,12 +201,14 @@ struct ncclTaskColl {
   int32_t nMaxChannels:8;
   int32_t nWarps:8;
   int32_t algorithm:8, protocol:8;
-  uint32_t isCollnet:1, isNvls:1;
-  uint32_t devFuncId:30;
+  uint32_t isCollnet:1, isNvls:1, isSymLast:1;
+  uint32_t devFuncId:29;
   int regBufType;
   // number of elements in planner->ipcMemQueue associated with this collective
   int nCleanupQueueElts;
 
+  struct ncclDevrWindow* sendWin;
+  struct ncclDevrWindow* recvWin;
   void* sendMhandle;
   void* recvMhandle;
   void** sendNetHandles;
@@ -217,11 +222,16 @@ struct ncclTaskColl {
 
   // Profiler plugin
   int eActivationMask;
+  void* groupApiEventHandle;
+  void* collApiEventHandle;
   void* eventHandle;
+  uint8_t nChannels;
 };
+
 struct ncclTaskP2p {
   struct ncclTaskP2p* next;
   ncclFunc_t func;
+  ncclFunc_t collAPI;
   void* buff;
   size_t count;
   ncclDataType_t datatype;
@@ -230,7 +240,10 @@ struct ncclTaskP2p {
 
   // Profiler plugin
   int eActivationMask;
+  void* groupApiEventHandle;
+  void* p2pApiEventHandle;
   void* eventHandle;
+  uint8_t nChannels;
 };
 
 struct ncclKernelPlan {
@@ -243,10 +256,16 @@ struct ncclKernelPlan {
 
   bool persistent; // aka captured in a graph
   bool isHostCbEnq;
+  bool isSymColl;
+  bool isCeColl;
   enum ncclDevWorkStorageType workStorageType;
   bool kernelSpecialized;
-  void *kernelFn;
-  struct ncclDevKernelArgs* kernelArgs;
+  void* kernelFn;
+  union {
+    struct ncclDevKernelArgs* kernelArgs;
+    void* kernelSymArgs;
+    struct ncclCeCollArgs* ceCollArgs;
+  };
   size_t kernelArgsSize;
   uint64_t channelMask; // bitset of which channels are present
   bool hasProxyOps; // does any channel have a non-empty proxyOpQueue
@@ -264,6 +283,8 @@ struct ncclKernelPlan {
   struct ncclIntruQueue<struct ncclProxyOp, &ncclProxyOp::enqNext> proxyOpQueue;
 
   // Profiler plugin
+  void* groupApiEventHandle;
+  void* kernelLaunchEventHandle;
   void* groupEventHandle;
 };
 
@@ -354,8 +375,8 @@ struct ncclKernelPlanner {
   struct ncclTaskCollSorter collSorter;
   struct Peer* peers/*[nRanks]*/;
   int nTasksColl, nTasksP2p;
+  int nTasksP2pSend, nTasksP2pRecv;
   bool persistent;
-
   // The list of user streams aggregated over all tasks present.
   struct ncclCudaStreamList* streams;
   // The most recent user stream. Ignored if streams==nullptr
@@ -371,6 +392,8 @@ struct ncclKernelPlanner {
   //////////////////////////////////////////////////////////////////////////////
 
   struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next> collTaskQueue;
+  struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next> collCeTaskQueue;
+  struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next> collSymTaskQueue;
   struct ncclIntruQueue<struct ncclWorkList, &ncclWorkList::next> collWorkQueue;
   struct ncclIntruQueue<struct ncclWorkList, &ncclWorkList::next> tmpCollWorkQueue;
   struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next> collCleanupQueue;
@@ -404,6 +427,14 @@ struct ncclKernelPlanner {
 
 #define NCCL_MAGIC 0x0280028002800280 // Nickel atomic number is 28.
 
+typedef enum ncclGroupTaskType {
+  ncclGroupTaskTypeCollective = 0,
+  ncclGroupTaskTypeSymRegister = 1,
+  ncclGroupTaskTypeNum = 2,
+} ncclGroupTaskType_t;
+
+struct ncclCommSymTeams;
+
 struct ncclComm {
   uint64_t startMagic;
   struct ncclMemoryStack memPermanent, memScoped;
@@ -420,12 +451,15 @@ struct ncclComm {
   struct ncclTopoSystem* topo;
   struct ncclProxyConnector* gproxyConn;
   struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next> legacyRegCleanupQueue;
+  bool peerInfoValid;
 
-  int netPluginLoaded;
   ncclNet_t* ncclNet;
+  void* netContext;
+  int netPluginIndex;
   int ncclNetVer;
   ncclNetDeviceType netDeviceType;
   ncclCollNet_t* ncclCollNet;
+  void* collNetContext;
   void* bootstrap;
   // Bitmasks for ncclTransportP2pSetup
   uint64_t* connectSend;
@@ -439,7 +473,6 @@ struct ncclComm {
 
   uint64_t magic; // Magic number for all network communication. Not a security key -- only goal is to detect mismatches.
 
-  const char* commName;
   uint64_t commHash;
   int rank;    // my rank in the communicator
   int nRanks;  // number of GPUs in communicator
@@ -459,6 +492,7 @@ struct ncclComm {
   int localRank;
   int localRanks;
   int maxLocalRanks;
+  int minLocalRanks;
   int* rankToNode;
   int* rankToLocalRank;
   int* localRankToRank;
@@ -468,6 +502,9 @@ struct ncclComm {
   int MNNVL; // true when MNNVL is available
   struct cliqueInfo clique; // Our MNNVL clique information
   int cliqueRank; // Our rank within the MNNVL clique
+
+  // NVL Domain info
+  ncclNvlDomainInfo_v5_t nvlDomainInfo;
 
   bool checkPointers;
   bool dmaBufSupport;
@@ -495,7 +532,8 @@ struct ncclComm {
   int p2pChunkSize;
   int nvlsChunkSize;
 
-  // Algorithm/Protocols thresholds
+  // Tuner values
+  ncclTunerConstants_t tunerConstants;
   ssize_t threadThresholds[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
   float latencies[NCCL_NUM_FUNCTIONS][NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
   float bandwidths[NCCL_NUM_FUNCTIONS][NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
@@ -514,7 +552,7 @@ struct ncclComm {
   uint32_t destroyFlag;
 
   // Device side of the communicator (for cudaFree's)
-  struct ncclDevComm* devComm; // actually = &ncclDevCommAndChannels::comm
+  struct ncclKernelComm* devComm; // actually = &ncclKernelCommAndChannels::comm
 
   uint32_t workArgsBytes; // max size of kernel args
   uint32_t workFifoBytes; // size of workFifoBuf, power of 2
@@ -522,12 +560,10 @@ struct ncclComm {
   void* workFifoBufDev;
   void* workFifoBufGdrHandle;
 
-  // Monotonic number of bytes (mod 1<<32) consumed per channel. In cudaHost memory.
-  uint32_t* workFifoConsumed/*[MAXCHANNELS]*/;
-  // Last observed value of: min(workFifoConsumed[c] for c < MAXCHANNELS)
-  uint32_t workFifoConsumedLeast;
   // Monotonic number of bytes (mod 1<<32) sent to fifo.
   uint32_t workFifoProduced;
+  uint32_t workFifoProducedLastRecorded;
+  uint32_t workFifoConsumed;
 
   // Intra-process sync
   struct ncclComm* intraComm0; // leader of intra-process comms (self possible)
@@ -543,10 +579,8 @@ struct ncclComm {
   struct ncclProxyState* proxyState;
   int proxyRefCountOld; /* store proxy post-atomic-sub refcount */
   // Whether this communicator uses collNet
-  int collNetSupport;
   bool isOneRPN;
   uint8_t collNetSupportMatrix[4/*sum,prod,max,min*/][ncclNumTypes];
-  bool intraNodeP2pSupport;
   int* collNetHeads;
   int collNetHeadsNum;
   int* collNetDenseToUserRank;
@@ -568,7 +602,7 @@ struct ncclComm {
 
   // Next comm in this thread's active ncclGroup[Start|End](). Holds "0x1" when
   // this comm is not yet in a group.
-  struct ncclComm* groupNext;
+  struct ncclComm* groupNext[ncclGroupTaskTypeNum];
   // Subset of those in groupNext list. Holds 0x1 if not needing preconnect.
   struct ncclComm* preconnectNext;
   int localPersistentRefs; // number of persistent plan-lists capturing this comm
@@ -588,6 +622,7 @@ struct ncclComm {
   ncclUserRedOp *userRedOps;
 
   // Queue of things for the main thread to do
+  int reclaimSteps;
   struct ncclIntruQueueMpsc<struct ncclCommCallback, &ncclCommCallback::next> callbackQueue;
 
   ncclConfig_t config;
@@ -600,6 +635,9 @@ struct ncclComm {
   // group job to support multi-thread FT
   struct ncclGroupJob *groupJob;
 
+  // Flag indicating if this communicator shares resources with parent or children
+  bool shareResources;
+
   // Tuning plugin
   int tunerPluginLoaded;
   ncclTuner_t* tuner;
@@ -610,12 +648,22 @@ struct ncclComm {
   uint64_t seqNumber[NCCL_NUM_FUNCTIONS];
   struct ncclProfilerProxy profiler;
 
+  // CE Collective
+  struct ncclCeColl ceColl;
+  struct ncclIntruQueue<struct ncclCeInitTask, &ncclCeInitTask::next> ceInitTaskQueue;
+  
   // buffer registration cache
   struct ncclRegCache regCache;
   int isAllNvlink;
+  bool isAllDirectP2p;
+  int symmetricSupport;
   bool useNetPXN;
   bool useGdr;
   int splitCount;
+
+  struct ncclDevrState devrState; // The symmetric runtime state
+  struct ncclSymkState symkState; // The symmetric kernels state (built on previous)
+
   uint64_t endMagic;
 };
 
@@ -647,15 +695,21 @@ inline ncclResult_t ncclCommPollCallbacks(struct ncclComm* comm, bool waitSome) 
   return ncclSuccess;
 }
 
-inline ncclResult_t ncclCommPollEventCallbacks(struct ncclComm *comm) {
+inline ncclResult_t ncclCommPollEventCallbacks(struct ncclComm *comm, bool waitSome) {
   ncclResult_t result = ncclSuccess;
   cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
   CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
   while (true) {
     struct ncclCommEventCallback* cb = ncclIntruQueueHead(&comm->eventCallbackQueue);
     if (cb == nullptr) break;
-    cudaError_t ok = cudaEventSynchronize(cb->event);
-    if (ok == cudaErrorNotReady) break;
+    cudaError_t ok;
+    if (waitSome) {
+      ok = cudaEventSynchronize(cb->event);
+      waitSome = false;
+    } else {
+      ok = cudaEventQuery(cb->event);
+      if (ok == cudaErrorNotReady) break;
+    }
     ncclIntruQueueDequeue(&comm->eventCallbackQueue);
     if (ok == cudaSuccess) {
       NCCLCHECKGOTO(cb->fn(comm, cb), result, finish);

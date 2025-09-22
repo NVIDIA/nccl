@@ -71,7 +71,7 @@ NCCL_PARAM(ConnectRoundMaxPeers, "CONNECT_ROUND_MAX_PEERS", 128);
 NCCL_PARAM(ReportConnectProgress, "REPORT_CONNECT_PROGRESS", 0);
 #include <sys/time.h>
 
-ncclResult_t ncclTransportCheckP2pType(struct ncclComm* comm, bool* intraNodeP2pSupport, bool* directMode) {
+ncclResult_t ncclTransportCheckP2pType(struct ncclComm* comm, bool* isAllDirectP2p, bool* directMode) {
   bool supportFlag = true;
   bool directFlag = false;
   if (comm->localRanks == 1) {
@@ -84,8 +84,9 @@ ncclResult_t ncclTransportCheckP2pType(struct ncclComm* comm, bool* intraNodeP2p
         struct ncclPeerInfo* ipeerInfo = &comm->peerInfo[ipeer];
         struct ncclPeerInfo* jpeerInfo = &comm->peerInfo[jpeer];
         int canConnect = 0;
-        NCCLCHECK(ncclTransports[0]->canConnect(&canConnect, comm, NULL, ipeerInfo, jpeerInfo));
-        if (!canConnect && supportFlag == true) {
+        int intermediateRank = -1;
+        NCCLCHECK(ncclTopoCheckP2p(comm, comm->topo, ipeerInfo->rank, jpeerInfo->rank, &canConnect, NULL, &intermediateRank));
+        if (!canConnect || intermediateRank != -1) {
           supportFlag = false;
         }
         if (ipeerInfo->hostHash == jpeerInfo->hostHash && ipeerInfo->pidHash == jpeerInfo->pidHash) directFlag = true;
@@ -93,9 +94,9 @@ ncclResult_t ncclTransportCheckP2pType(struct ncclComm* comm, bool* intraNodeP2p
       }
     }
   }
-  *intraNodeP2pSupport = supportFlag;
+  *isAllDirectP2p = supportFlag;
   *directMode = directFlag;
-  if (comm->rank == 0) INFO(NCCL_INIT, "Check P2P Type intraNodeP2pSupport %d directMode %d", supportFlag, directFlag);
+  if (comm->rank == 0) INFO(NCCL_INIT, "Check P2P Type isAllDirectP2p %d directMode %d", supportFlag, directFlag);
   return ncclSuccess;
 }
 

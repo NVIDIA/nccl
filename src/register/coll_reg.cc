@@ -1,6 +1,13 @@
+/*************************************************************************
+ * Copyright (c) 2022-2025, NVIDIA CORPORATION. All rights reserved.
+ *
+ * See LICENSE.txt for license information
+ ************************************************************************/
+
 #include "register.h"
 #include "transport.h"
 #include "enqueue.h"
+#include "register_inline.h"
 
 static ncclResult_t registerCheckP2PConnection(struct ncclComm* comm, struct ncclConnector* conn, struct ncclTopoGraph* graph, int peer, bool* needReg) {
   if (conn->connected) {
@@ -61,32 +68,34 @@ ncclResult_t ncclRegisterCollNvlsBuffers(
 
     if (nvlsReged && comm->nNodes > 1 && info->algorithm == NCCL_ALGO_NVLS) {
       if (comm->planner.persistent && ncclParamGraphRegister()) {
-        ncclCollnetGraphRegisterBuffer(comm, info->recvbuff, recvbuffSize, collNetSend, &collnetReged, &sendHandle, cleanupQueue, &info->nCleanupQueueElts);
-        if (collnetReged) ncclCollnetGraphRegisterBuffer(comm, info->recvbuff, recvbuffSize, collNetRecv, &collnetReged, &recvHandle, cleanupQueue, &info->nCleanupQueueElts);
+        if (info->func == ncclFuncAllGather) {
+          ncclCollnetGraphRegisterBuffer(comm, info->sendbuff, sendbuffSize, collNetSend, &collnetReged, &sendHandle, cleanupQueue, &info->nCleanupQueueElts);
+        } else if (info->func == ncclFuncReduceScatter) {
+          ncclCollnetGraphRegisterBuffer(comm, info->recvbuff, recvbuffSize, collNetRecv, &collnetReged, &recvHandle, cleanupQueue, &info->nCleanupQueueElts);
+        } else if (info->func == ncclFuncAllReduce) {
+          ncclCollnetGraphRegisterBuffer(comm, info->recvbuff, recvbuffSize, collNetRecv, &collnetReged, &recvHandle, cleanupQueue, &info->nCleanupQueueElts);
+          if (collnetReged) ncclCollnetGraphRegisterBuffer(comm, info->recvbuff, recvbuffSize, collNetSend, &collnetReged, &sendHandle, cleanupQueue, &info->nCleanupQueueElts);
+        }
       }
 
       if (collnetReged == 0 && ncclParamLocalRegister()) {
-        ncclCollnetLocalRegisterBuffer(comm, info->recvbuff, recvbuffSize, collNetSend, &collnetReged, &sendHandle);
-        if (collnetReged) ncclCollnetLocalRegisterBuffer(comm, info->recvbuff, recvbuffSize, collNetRecv, &collnetReged, &recvHandle);
+        if (info->func == ncclFuncAllGather) {
+          ncclCollnetLocalRegisterBuffer(comm, info->sendbuff, sendbuffSize, collNetSend, &collnetReged, &sendHandle);
+        } else if (info->func == ncclFuncReduceScatter) {
+          ncclCollnetLocalRegisterBuffer(comm, info->recvbuff, recvbuffSize, collNetRecv, &collnetReged, &recvHandle);
+        } else if (info->func == ncclFuncAllReduce) {
+          ncclCollnetLocalRegisterBuffer(comm, info->recvbuff, recvbuffSize, collNetRecv, &collnetReged, &recvHandle);
+          if (collnetReged) ncclCollnetLocalRegisterBuffer(comm, info->recvbuff, recvbuffSize, collNetSend, &collnetReged, &sendHandle);
+        }
       }
     }
 
     if (nvlsReged) {
       *regNeedConnect = 0;
       /* tweak NVLS channels usage; for registered NVLS buffer to saturate bandwidth. */
-      if (comm->nNodes == 1) {
-        if (info->func == ncclFuncReduceScatter) {
-          // RS: Further tweaks for Blackwell with NVLS registered buffers
-          info->nMaxChannels = std::max(comm->config.minCTAs, std::min(comm->config.maxCTAs, (comm->compCap >= 100) ? 6 : 5));
-        }
-        else {
-          // AR/AG: Further tweaks for Blackwell with NVLS registered buffers
-          info->nMaxChannels = std::max(comm->config.minCTAs, std::min(comm->config.maxCTAs, (comm->compCap >= 100) ? 8 : 4));
-        }
-      } else {
-        // Further tweaks for Blackwell with NVLS registered buffers
-        info->nMaxChannels = std::max(comm->config.minCTAs, std::min(comm->config.maxCTAs, (comm->compCap >= 100) ? 7 : 6));
-      }
+      int recChannels;
+      NCCLCHECK(ncclNvlsRegResourcesQuery(comm, info, &recChannels));
+      info->nMaxChannels = recChannels;
       info->regBufType |= NCCL_NVLS_REG_BUFFER;
     }
 
@@ -173,7 +182,8 @@ ncclResult_t ncclRegisterCollBuffers(
     // IPC buffer registration
     if (info->func == ncclFuncReduceScatter && info->algorithm != NCCL_ALGO_COLLNET_DIRECT) goto exit;
     if (info->algorithm == NCCL_ALGO_RING && ((info->func == ncclFuncAllReduce && info->sendbuff == info->recvbuff) || info->func == ncclFuncReduce)) goto exit;
-    if ((info->algorithm == NCCL_ALGO_TREE || info->algorithm == NCCL_ALGO_COLLNET_CHAIN) && info->sendbuff == info->recvbuff) goto exit;
+    if (info->algorithm == NCCL_ALGO_TREE && info->sendbuff == info->recvbuff) goto exit;
+    if (info->algorithm == NCCL_ALGO_COLLNET_CHAIN && info->sendbuff == info->recvbuff && comm->maxLocalRanks > 1) goto exit;
     if (info->func == ncclFuncAllGather && info->algorithm == NCCL_ALGO_PAT) goto exit;
 
     int peerRanks[NCCL_MAX_LOCAL_RANKS];
@@ -188,7 +198,7 @@ ncclResult_t ncclRegisterCollBuffers(
       struct ncclChannel* channel = comm->channels;
       int ipcRegFlag = 0, netSendRegFlag = 0, netRecvRegFlag = 0;
       void *sendHandle, *recvHandle;
-      if (info->func != ncclFuncReduceScatter && comm->intraNodeP2pSupport) {
+      if (info->func != ncclFuncReduceScatter && comm->isAllDirectP2p) {
         for (int r = 0; r < NCCL_MAX_DIRECT_ARITY; ++r) {
           for (int down = 0; down < 2; ++down) {
             int peer = down ? channel->collnetDirect.down[r] : channel->collnetDirect.up[r];
@@ -308,7 +318,7 @@ ncclResult_t ncclRegisterCollBuffers(
           }
         }
       }
-      if (nPeers > 0 && comm->intraNodeP2pSupport) {
+      if (nPeers > 0 && comm->isAllDirectP2p) {
         if (comm->planner.persistent && ncclParamGraphRegister()) {
           ncclIpcGraphRegisterBuffer(comm, info->recvbuff, recvbuffSize, peerRanks, nPeers, NCCL_IPC_COLLECTIVE, &regBufFlag, &info->recvbuffOffset, &info->recvbuffRmtAddrs, cleanupQueue, &info->nCleanupQueueElts);
         }
@@ -365,7 +375,7 @@ ncclResult_t ncclRegisterCollBuffers(
       void *sendHandle, *recvHandle;
       NCCLCHECK(ncclRegFind(comm, info->recvbuff, recvbuffSize, &recvRegRecord));
       if (recvRegRecord == NULL && !(comm->planner.persistent && ncclParamGraphRegister())) goto exit;
-      if (comm->intraNodeP2pSupport) {
+      if (comm->isAllDirectP2p) {
         for (int c = 0; c < comm->nChannels; ++c) {
           struct ncclChannel* channel = comm->channels + c;
           struct ncclTree* tree = NULL;

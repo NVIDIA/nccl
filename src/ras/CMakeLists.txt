@@ -1,18 +1,24 @@
-# Create a static library target named "ncclras"
+# Create an executable target named "ncclras"
 add_executable(
   ncclras
 
-  # Header files
-  ras_internal.h  # Private! (as `libnccl` compiles even without `libncclras`)
-
   # Source files
-  client_support.cc
   client.cc
-  collectives.cc
-  peers.cc
-  ras.cc
-  rasnet.cc
+
+  # NOTE: Below is only used with `libnccl` and are not needed for `ncclras` executable!
+  # client_support.cc
+  # collectives.cc
+  # peers.cc
+  # ras.cc
+  # rasnet.cc
 )
 
-# Link ncclras privately (important! as it will crash with `ld.lld: error: undefined symbol: cudaDriverGetVersion` if not) to nccl
-target_link_libraries(ncclras PRIVATE nccl)
+
+# Header files - refactored to use target_include_directories()
+# ras_internal.h is Private! (as `libnccl` compiles even without `libncclras`)
+target_include_directories(ncclras PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+
+target_link_libraries(ncclras PRIVATE nccl CUDA::cudart)
+# @HELP: check if we need to explicitely link against CUDA libraries or it will transtively propagate from `nccl`
+# BEN NOTE: believe we do. it errored with `(cudaMalloc, cudaGetErrorString, cudaGetDevice` blah blah not found

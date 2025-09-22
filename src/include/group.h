@@ -9,9 +9,11 @@
 
 #include "nccl.h"
 #include "comm.h"
+#include "allocator.h"
+#include "register.h"
 
 ncclResult_t ncclGroupErrCheck(ncclResult_t ret);
-void ncclGroupCommJoin(struct ncclComm* comm);
+void ncclGroupCommJoin(struct ncclComm* comm, int type);
 void ncclGroupCommPreconnect(struct ncclComm* comm);
 ncclResult_t ncclGroupCommLeave(struct ncclComm* comm);
 ncclResult_t ncclGroupJobAbort(struct ncclGroupJob* groupJob);
@@ -41,6 +43,7 @@ struct ncclAsyncJob {
   uint32_t* childAbortFlagDev; /* point to child abortFlagDev */
   ncclComm_t comm;
   int destroyFlag;
+  bool isThreadMain;
 };
 
 ncclResult_t ncclAsyncLaunch(
@@ -52,13 +55,14 @@ ncclResult_t ncclAsyncLaunch(
 
 struct ncclGroupJob {
   struct ncclAsyncJob base;
-  struct ncclComm **groupCommHeadPtr;
-  struct ncclComm **groupCommPreconnectHeadPtr;
-  ncclResult_t *groupErrorPtr;
-  bool *abortFlagPtr;
-  int *groupBlockingPtr;
-  struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> *asyncJobsPtr;
-  bool initialized;
+  int groupRefCount;
+  bool nonBlockingInit;
+  bool joined;
+  struct ncclComm *groupCommHead[ncclGroupTaskTypeNum];
+  struct ncclComm *groupCommPreconnectHead;
+  ncclResult_t groupError;
+  bool abortFlag;
+  struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> asyncJobs;
 };
 
 ncclResult_t ncclGroupStartInternal();
@@ -69,27 +73,9 @@ ncclResult_t ncclAsyncJobComplete(struct ncclAsyncJob* job);
 
 extern __thread int ncclGroupDepth; // depth of ncclGroupStart nesting
 extern __thread ncclResult_t ncclGroupError;
-extern __thread struct ncclComm* ncclGroupCommHead;
+extern __thread struct ncclComm* ncclGroupCommHead[ncclGroupTaskTypeNum];
 extern __thread struct ncclComm* ncclGroupCommPreconnectHead;
 extern __thread int ncclGroupBlocking;
-extern __thread struct ncclGroupJob *ncclGroupJobMainPtr;
-extern __thread struct ncclGroupJob ncclGroupJobMain;
-
-static inline void groupResetJobState() {
-  ncclGroupBlocking = -1;
-  ncclGroupJobMainPtr = NULL;
-  memset(&ncclGroupJobMain, 0, sizeof(struct ncclGroupJob));
-  return;
-}
-
-static inline ncclResult_t groupJobComplete(struct ncclGroupJob* job) {
-  ncclResult_t ret = ncclSuccess;
-  if (job) {
-    ret = ncclAsyncJobComplete(&job->base);
-    groupResetJobState();
-  }
-  return ret;
-}
 
 inline ncclResult_t ncclGroupStartInternal() {
   ncclGroupDepth++;
@@ -104,31 +90,32 @@ inline ncclResult_t ncclGroupErrCheck(ncclResult_t ret) {
 }
 
 // Add comm to this thread's group
-inline void ncclGroupCommJoin(struct ncclComm* comm) {
-  if (comm->groupNext == reinterpret_cast<struct ncclComm*>(0x1)) {
+inline void ncclGroupCommJoin(struct ncclComm* comm, int type) {
+  if (comm->groupNext[type] == reinterpret_cast<struct ncclComm*>(0x1)) {
     // Insert comm into ncclGroupCommHead adjacent to sibling comms. This preserves
     // the users program order yet insures siblings occur consecutively. This
     // is required by doLaunches() in "group.cc".
-    struct ncclComm** pp = &ncclGroupCommHead;
+    struct ncclComm** pp = &ncclGroupCommHead[type];
     while (*pp != nullptr && comm->intraComm0 != (*pp)->intraComm0)
-      pp = &(*pp)->groupNext;
+      pp = &(*pp)->groupNext[type];
 
     // didn't find its clique, we need to insert it with ascending order based on commHash
     if (*pp == nullptr) {
-      pp = &ncclGroupCommHead;
-      while (*pp != nullptr && (*pp)->commHash < comm->commHash) pp = &(*pp)->groupNext;
+      pp = &ncclGroupCommHead[type];
+      while (*pp != nullptr && (*pp)->commHash < comm->commHash) pp = &(*pp)->groupNext[type];
     }
-    comm->groupNext = *pp;
+    comm->groupNext[type] = *pp;
     *pp = comm;
     // Comms gets a new memory stack scope upon joining. Each task batched for
     // this comm is allocated there.
     ncclMemoryStackPush(&comm->memScoped);
-    // Initialize planner
-    ncclKernelPlanner::Peer* tmp = comm->planner.peers;
-    memset(&comm->planner, 0, sizeof(comm->planner));
-    comm->planner.peers = tmp;
+    if (type == ncclGroupTaskTypeCollective) {
+      // Initialize planner
+      ncclKernelPlanner::Peer* tmp = comm->planner.peers;
+      memset(&comm->planner, 0, sizeof(comm->planner));
+      comm->planner.peers = tmp;
+    }
   }
-
   ncclGroupBlocking = comm->config.blocking;
 }
 
@@ -141,8 +128,8 @@ inline void ncclGroupCommPreconnect(struct ncclComm* comm) {
 }
 
 // Comm has left group
-inline ncclResult_t ncclGroupCommLeave(struct ncclComm* comm) {
-  comm->groupNext = reinterpret_cast<struct ncclComm*>(0x1);
+inline ncclResult_t ncclGroupCommLeave(struct ncclComm* comm, int type) {
+  comm->groupNext[type] = reinterpret_cast<struct ncclComm*>(0x1);
   ncclMemoryStackPop(&comm->memScoped);
   return ncclSuccess;
 }

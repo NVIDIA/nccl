@@ -365,15 +365,16 @@ ncclResult_t rasNetAcceptNewSocket() {
   NCCLCHECKGOTO(ncclSocketAccept(&sock->sock, &rasNetListeningSocket), ret, fail);
   NCCLCHECKGOTO(ncclSocketReady(&sock->sock, &ready), ret, fail);
 
-  if (sock->sock.fd != -1) {
-    NCCLCHECKGOTO(rasGetNewPollEntry(&sock->pfd), ret, fail);
-    rasPfds[sock->pfd].fd = sock->sock.fd;
-    rasPfds[sock->pfd].events = POLLIN; // Initially we'll just wait for a handshake from the other side.  This also
-                                        // helps the code tell the sides apart.
-    sock->status = RAS_SOCK_CONNECTING;
+  if (sock->sock.fd == -1)
+    goto fail; // We'll return ncclSuccess, but we need to clean up the incomplete socket first.
 
-    INFO(NCCL_RAS, "RAS new incoming socket connection from %s", ncclSocketToString(&sock->sock.addr, rasLine));
-  }
+  NCCLCHECKGOTO(rasGetNewPollEntry(&sock->pfd), ret, fail);
+  rasPfds[sock->pfd].fd = sock->sock.fd;
+  rasPfds[sock->pfd].events = POLLIN; // Initially we'll just wait for a handshake from the other side.  This also
+                                      // helps the code tell the sides apart.
+  sock->status = RAS_SOCK_CONNECTING;
+
+  INFO(NCCL_RAS, "RAS new incoming socket connection from %s", ncclSocketToString(&sock->sock.addr, rasLine));
 
 exit:
   return ret;
@@ -480,7 +481,10 @@ void rasSocksHandleTimeouts(int64_t now, int64_t* nextWakeup) {
 // Once we get an EOF when receiving data, we finalize the termination.
 // For not fully established sockets, we can terminate immediately as there's no useful data to extract.
 void rasSocketTerminate(struct rasSocket* sock, bool finalize, uint64_t startRetryOffset, bool retry) {
-  assert(sock->status != RAS_SOCK_CLOSED);
+  if (sock->status == RAS_SOCK_CLOSED) {
+    INFO(NCCL_RAS, "RAS socket in closed state passed for termination -- internal error?");
+    // The code below can actually handle such a case gracefully.
+  }
   if (sock->conn) {
     struct rasConnection* conn = sock->conn;
     // If the sock of the connection points back to us, it means that we are the current socket of this
@@ -542,8 +546,10 @@ void rasSocketTerminate(struct rasSocket* sock, bool finalize, uint64_t startRet
   } else {
     // Either the caller requested finalization or we cannot receive on it.
     (void)ncclSocketClose(&sock->sock);
-    rasPfds[sock->pfd].fd = -1;
-    rasPfds[sock->pfd].events = rasPfds[sock->pfd].revents = 0;
+    if (sock->pfd != -1) {
+      rasPfds[sock->pfd].fd = -1;
+      rasPfds[sock->pfd].events = rasPfds[sock->pfd].revents = 0;
+    }
     free(sock->recvMsg);
     freeSockEntry(sock);
   }

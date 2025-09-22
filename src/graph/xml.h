@@ -117,13 +117,26 @@ static ncclResult_t xmlGetAttrIntDefault(struct ncclXmlNode* node, const char* a
   return ncclSuccess;
 }
 
+static ncclResult_t xmlGetAttrUint64(struct ncclXmlNode* node, const char* attrName, uint64_t* value) {
+  const char* str;
+  NCCLCHECK(xmlGetAttrStr(node, attrName, &str));
+  *value = strtoull(str, NULL, 0);
+  return ncclSuccess;
+}
+
+static ncclResult_t xmlGetAttrUint64Default(struct ncclXmlNode* node, const char* attrName, uint64_t* value, uint64_t defaultValue) {
+  const char* str;
+  NCCLCHECK(xmlGetAttr(node, attrName, &str));
+  *value = str ? strtoull(str, NULL, 0) : defaultValue;
+  return ncclSuccess;
+}
+
 static ncclResult_t xmlGetAttrLong(struct ncclXmlNode* node, const char* attrName, int64_t* value) {
   const char* str;
   NCCLCHECK(xmlGetAttrStr(node, attrName, &str));
   *value = strtol(str, NULL, 0);
   return ncclSuccess;
 }
-
 
 static ncclResult_t xmlGetAttrFloat(struct ncclXmlNode* node, const char* attrName, float* value) {
   const char* str;
@@ -254,7 +267,6 @@ static ncclResult_t xmlSetAttrInt(struct ncclXmlNode* node, const char* attrName
     node->attrs[index].key[MAX_STR_LEN] = '\0';
   }
   snprintf(node->attrs[index].value, MAX_STR_LEN, "%d", value);
-  node->attrs[index].value[MAX_STR_LEN] = '\0';
   return ncclSuccess;
 }
 
@@ -267,7 +279,6 @@ static ncclResult_t xmlSetAttrFloat(struct ncclXmlNode* node, const char* attrNa
     node->attrs[index].key[MAX_STR_LEN] = '\0';
   }
   snprintf(node->attrs[index].value, MAX_STR_LEN, "%g", value);
-  node->attrs[index].value[MAX_STR_LEN] = '\0';
   return ncclSuccess;
 }
 
@@ -280,7 +291,6 @@ static ncclResult_t xmlSetAttrLong(struct ncclXmlNode* node, const char* attrNam
     node->attrs[index].key[MAX_STR_LEN] = '\0';
   }
   snprintf(node->attrs[index].value, MAX_STR_LEN, "%#lx", value);
-  node->attrs[index].value[MAX_STR_LEN] = '\0';
   return ncclSuccess;
 }
 

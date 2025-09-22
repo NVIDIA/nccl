@@ -7,10 +7,12 @@ include ../makefiles/common.mk
 include ../makefiles/version.mk
 
 ##### src files
-INCEXPORTS  := nccl.h
+INCEXPORTS  := nccl.h nccl_device.h \
+	$(patsubst include/%,%,$(wildcard include/nccl_device/*.h include/nccl_device/impl/*.h))
+
 LIBSRCFILES := \
 	bootstrap.cc channel.cc collectives.cc debug.cc enqueue.cc group.cc \
-	init.cc init_nvtx.cc proxy.cc transport.cc mnnvl.cc \
+	init.cc init_nvtx.cc proxy.cc transport.cc mnnvl.cc allocator.cc dev_runtime.cc sym_kernels.cc ce_coll.cc \
 	$(wildcard graph/*.cc) \
 	$(wildcard misc/*.cc) \
 	$(wildcard transport/*.cc) \
@@ -19,6 +21,8 @@ LIBSRCFILES := \
 	$(wildcard plugin/net/*.cc) \
 	$(wildcard plugin/tuner/*.cc) \
 	$(wildcard plugin/profiler/*.cc) \
+	$(wildcard nccl_device/*.cc) \
+	$(wildcard scheduler/*.cc) \
 	$(filter-out ras/client.cc,$(wildcard ras/*.cc))
 BINSRCFILES := ras/client.cc
 
@@ -123,6 +127,16 @@ $(INCDIR)/nccl_%.h : include/nccl_%.h
 	mkdir -p $(INCDIR)
 	install -m 644 $< $@
 
+$(INCDIR)/nccl_device/%.h: include/nccl_device/%.h
+	@printf "Grabbing   %-35s > %s\n" $< $@
+	mkdir -p $(INCDIR)/nccl_device
+	install -m 644 $< $@
+
+$(INCDIR)/nccl_device/impl/%.h: include/nccl_device/impl/%.h
+	@printf "Grabbing   %-35s > %s\n" $< $@
+	mkdir -p $(INCDIR)/nccl_device/impl
+	install -m 644 $< $@
+
 $(PKGDIR)/%.pc : %.pc
 	@printf "Grabbing   %-35s > %s\n" $< $@
 	mkdir -p $(PKGDIR)
@@ -149,7 +163,7 @@ install : build
 	mkdir -p $(PREFIX)/bin
 	cp -P -v $(BUILDDIR)/lib/lib* $(PREFIX)/lib/
 	cp -P -v $(BUILDDIR)/lib/pkgconfig/* $(PREFIX)/lib/pkgconfig/
-	cp -v $(BUILDDIR)/include/* $(PREFIX)/include/
+	cp -v -r $(BUILDDIR)/include/* $(PREFIX)/include/
 	cp -v $(BUILDDIR)/bin/ncclras $(PREFIX)/bin/
 
 FILESTOFORMAT := $(shell find . -name ".\#*" -prune -o \( -name "*.cc" -o -name "*.h" \) -print | grep -v -E 'ibvwrap.h|nvmlwrap.h|gdrwrap.h|nccl.h')

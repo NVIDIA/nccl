@@ -1,0 +1,77 @@
+name: NCCL issue or bug
+description: Report an issue or failure when running NCCL code
+title: "[Issue]: "
+labels: ["triage"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reaching out! Before reporting a new issue, please feel free to search for the behavior in the existing issues. If you found an issue which is already closed or you are unsure, open a new issue and reference the old one from it.
+        You can also check out the [troubleshooting section](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting.html) in our user guide.
+        
+        ---
+        
+        To ensure we can assist you quickly and accurately, we often need the following information:
+  - type: dropdown
+    id: type
+    attributes:
+      label: How is this issue impacting you?
+      description: What best describes your issue?
+      options:
+        - Lower performance than expected
+        - Application crash
+        - Data corruption
+        - Application hang
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Share Your Debug Logs
+      description: |
+
+        The logs and topo-files are a great tool to pin down issues. You can create them by setting these environment variables before the run.
+        * `NCCL_DEBUG=INFO` and `NCCL_DEBUG_FILE=ncclDebug.%h.%p` to produce one file per rank
+        * `NCCL_TOPO_DUMP_FILE=ncclSystem.txt`
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to Reproduce the Issue
+      description: |
+        * **Minimal Steps**: Please provide a simple way to recreate the issue (see [Minimal Bug Reports](https://matthewrocklin.com/minimal-bug-reports) for inspiration).
+        * **Environment Details**: Include software versions and relevant settings.
+        * **Intermittency**: Is this a sporadic issue? If so, how often does it occur?
+        * **Previous Success**: Did this work with an older NCCL version?
+
+        The easier we can reproduce on our side the more likely we are to be able to solve it in a timely manner.
+
+  - type: input
+    id: nccl_version
+    attributes:
+      label: NCCL Version
+      description: |
+        NCCL reports its version string in the debug logs.
+        You can also determine the version if you know which library was used by running `strings libnccl.so | grep 'NCCL version'`.
+      placeholder: "e.g. 2.27.1+cuda12.8"
+    validations:
+      required: true
+
+  - type: textarea
+    id: platform
+    attributes:
+      label: Your platform details
+      description: |
+        * **GPU & Network**: Share your architecture and topology (e.g., from `nvidia-smi`, `nvidia-smi topo -m`, `ibstatus`).
+        * **Environment**: Bare-metal, containers, or cloud?
+        * **Scalability**: Does this issue occur with a specific number of ranks/nodes?
+
+  - type: textarea
+    id: issue-description
+    attributes:
+      label: Error Message & Behavior
+      description: |
+        * **First Error**: What was the initial `NCCL WARN` message in your logs?
+        * **Expected vs. Actual**: Briefly describe the anticipated behavior versus what you're seeing.

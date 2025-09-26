@@ -13,14 +13,14 @@ configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/nccl.h.in
     ${CONFIGURED_HEADERS_DIR}/nccl.h
 )
-# NOTE: this is the NVIDIA_ORIGINAL and just for documentation purposes. We can't place this in `nccl.h.in` file b/c it causes errors, so leaving it here for reference
+# NOTE: this is the NVIDIA_ORIGINAL and just for documentation purposes.
+# We can't place this in `nccl.h.in` file b/c it causes errors, so leaving it here for reference
 # #define NCCL_MAJOR ${nccl:Major}
 # #define NCCL_MINOR ${nccl:Minor}
 # #define NCCL_PATCH ${nccl:Patch}
 # #define NCCL_SUFFIX "${nccl:Suffix}"
 #
 # #define NCCL_VERSION_CODE ${nccl:Version}
-
 # === @end: Headers Configuration ===
 
 
@@ -29,7 +29,7 @@ add_subdirectory(device)
 # === @end: device/ ===
 
 
-# === @begin: nccl library ===
+# === @begin: `libnccl` library ===
 set(NCCL_SRC_FILES
     # === @begin: ./ (`@/src/CMakeLists.txt`) ===
     allocator.cc
@@ -118,7 +118,7 @@ set(NCCL_SRC_FILES
 
     # === @begin: ./graph/ ===
     # === @begin: Private Header Files ===
-    # @HELP: probably we should refactor that into `target_include_directories()`
+    # @TODO: probably we should refactor that into `target_include_directories()`
     # Upstream implementation doesn't include these boys explicitely, but it works as they are stored in the same folder, but we want to be explicit and not rely on an accident in our build.
     graph/rings.h
     graph/topo.h
@@ -167,21 +167,45 @@ set(NCCL_SRC_FILES
     scheduler/symmetric_sched.cc
     # === @end: ./scheduler/ (`@/src/scheduler/CMakeLists.txt`) ===
 )
-# foreach(src_file IN LISTS NCCL_SRC_FILES)
-#   set_source_files_properties(${src_file} PROPERTIES LANGUAGE CUDA)
-# endforeach()
 
 add_library(nccl SHARED ${NCCL_SRC_FILES})
-target_link_libraries(nccl PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,nccl_colldevice>")
-#add_library(nccl SHARED ${NCCL_SRC_FILES} $<TARGET_OBJECTS:nccl_colldevice>)
 
+
+target_compile_definitions(
+    nccl
+    PUBLIC
+        ${NCCL_COMMON_COMPILE_DEFINITIONS}
+)
+
+
+# @NVIDIA_ORIGINAL: @begin:
+# @EUGO_CHANGE:
+# We preserved this snippet as they rely on `CUDA_MAJOR` and `CUDA_MINOR` definitions in their code.
+# To avoid collisions due to generic macro names used we renamed them into more standartized `CUDAToolkit_VERSION_MAJOR` and `CUDAToolkit_VERSION_MINOR`, respectively, set automatically by CMake after running `find_package(CUDAToolkit ...)`.
+# We also mark them `PRIVATE` to avoid leakage to downstream packages if we'd need different treatment for these macros.
+#
+# Add CUDA version definitions after find_package
+target_compile_definitions(
+    nccl
+    PRIVATE
+        CUDAToolkit_VERSION_MAJOR=${CUDAToolkit_VERSION_MAJOR}
+        CUDAToolkit_VERSION_MINOR=${CUDAToolkit_VERSION_MINOR}
+)
+# @NVIDIA_ORIGINAL: @end
+
+
+# `WHOLE_ARCHIVE` is needed as `nccl_colldevice` is a static library and we want to get all its symbols!
+target_link_libraries(nccl PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,nccl_colldevice>")
+
+
+# @Important:
+# We couldn't use `NCCL_DEPENDENCIES` list here, as `cudart` is used in `nccl` interface while `cccl` is a header-only library only used as an implementation detail, so they must go into different section to avoid breaking downstream packages build failures or runtime UB!
 target_link_libraries(
     nccl
     PRIVATE CCCL::libcudacxx
     INTERFACE CUDA::cudart
 )
-# rt pthread dl - @HELP: we probably shouldn't link them explicitely on latest `glibc`
-# @HELP: EXTRA_LIBS
+
 
 set_target_properties(
     nccl
@@ -191,7 +215,6 @@ set_target_properties(
 )
 
 
-# @HELP: should we replace `$<BUILD_INTERFACE:${CONFIGURED_HEADERS_DIR}>` and `$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>` by simply `${INCEXPORTS}` or something similar? As they are public ones
 target_include_directories(
     nccl
     PUBLIC
@@ -202,31 +225,13 @@ target_include_directories(
 )
 
 
-# @HELP(today) -> replace with proper target_link_libraries() - looks like this guy depends not only on `cudart` as to make CUDA work as a language but they also consume low-level functions from here directly.
-# Analogy: `cudart` is a dual-nature/-purpose library:
-# 1. `cudart` is like `libc++abi` & `libunwind` in that it's always linked by the `clang` if C++ code is built even if no C++ standard library functions are invoked.
-# 2. `cudart` is like `libc++` which provides actual implementations of C++ standard library functions. This may be not added by linker as a dependency if no `std::` symbols are used.
-# For instance, we can link `libstdc++` as C++ stdlib implementation while using `libc++abi` and `libunwind` AND other way round we can use `libc++` as a C++ stdlib together w/ `libgcc_s`.
-#
-# In most cases, we link only against `cudart` and do it implicitly (via `clang++` for CUDA) - i.e., we don't invoke `find_package(CUDAToolkit ...)` to use it as the actual code that uses its symbols (to interoperate w/ a driver) is not written by us but emitted by `clang++` (or `nvcc` as they work in the same way).
-# E.g., `clang++`/`nvcc` calls `cudart` functions to submit the `cubin` stored in the current binary into the CUDA driver for execution and gets the results back.
-# However, if we use `cudart` symbols explicitly in our own code and not the `clang++`-emitted one (like in `native/cuda_nccl`), we should explicitely express this dependency.
-#
-# In practice, I don't think exist the cases where we only want to use the inplicit `cudart` linkage as almost always when we invoke the device kernel, we need to talk w/ the driver explicitely - e.g., to pass the data to the device as this operation is always explicit and not emitted by the kernel itself (as kernel defines that happens on device).
-#
-# target_include_directories(
-#     nccl
-#     PUBLIC
-#         ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}
-# )
-
 # Only nccl.h and nccl_net.h are public headers and only they are installed!
-set(INCEXPORTS
+set(NCCL_PUBLIC_HEADERS
     ${CONFIGURED_HEADERS_DIR}/nccl.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin/nccl_net.h
     PARENT_SCOPE
 )
-# === @end: nccl library ===
+# === @end: `libnccl` library ===
 
 
 # === @begin: ras/ ===

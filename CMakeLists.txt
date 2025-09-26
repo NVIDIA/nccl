@@ -16,17 +16,19 @@ string(REGEX REPLACE ".*PKG_REVISION[ ]*:=[ ]*([0-9]+).*" "\\1" PKG_REVISION "${
 math(EXPR NCCL_VERSION_CODE "(${NCCL_MAJOR} * 10000) + (${NCCL_MINOR} * 100) + ${NCCL_PATCH}")
 
 # @EUGO_CHANGE:
-# 1. `NCCL_USE_CMAKE` -> `NCCL_USE_CMAKE=1` - this makes check work better as w/o value `-D` makes value to be defined as an empty string (yep, in C pre-processor it's distinct from undefined).
-# 2. @HELP(check if we actually need this or not - or probably we shouldn't pass that at all here? as we put that into `nccl.h`) Added `NCCL_SUFFIX` to match other variables.
+# 1. `NCCL_USE_CMAKE` - is only used in `@/src/device/generate.py` and `@/src/device/symmetric/generate.py`, so we shouldn't pass it as a compile definition but as an environment variable as done a few lines below!
+#    1. ~~@EUGO_CHANGE: `NCCL_USE_CMAKE` -> `NCCL_USE_CMAKE=1` - this makes check work better as w/o value `-D` makes value to be defined as an empty string (yep, in C pre-processor it's distinct from undefined).~~
+# 2. `NCCL_MAJOR`, `NCCL_MINOR`, `NCCL_PATCH`, and `NCCL_VERSION_CODE` are commented out here as they're set via `nccl.h` generated header and we shouldn't provide their definition twice to avoid build- and runtime ODR violation.
 #
 # Make version information available to C++ source files
-add_compile_definitions(
-    NCCL_USE_CMAKE=1
-    NCCL_MAJOR=${NCCL_MAJOR}
-    NCCL_MINOR=${NCCL_MINOR}
-    NCCL_PATCH=${NCCL_PATCH}
-    NCCL_VERSION_CODE=${NCCL_VERSION_CODE}
-)
+# add_compile_definitions(
+    # NCCL_USE_CMAKE=1
+
+    # NCCL_MAJOR=${NCCL_MAJOR}
+    # NCCL_MINOR=${NCCL_MINOR}
+    # NCCL_PATCH=${NCCL_PATCH}
+    # NCCL_VERSION_CODE=${NCCL_VERSION_CODE}
+# )
 
 # @EUGO_CHANGE:
 # This is used in `@/src/device/generate.py` and ``@/src/device/symmetric/generate.py` so we preserve it.
@@ -46,7 +48,7 @@ set(CMAKE_CUDA_FLAGS "") # @EUGO_CHANGE: Added to fix CMake bugs in detecting th
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
 set(CMAKE_CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-#set(CMAKE_C_VISIBILITY_PRESET default)
+#set(CMAKE_C_VISIBILITY_PRESET default) # Intentionally commented out
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 set(CMAKE_CUDA_VISIBILITY_PRESET hidden)
 
@@ -60,31 +62,76 @@ set(CMAKE_CUDA_FLAGS
   " $ENV{CUDAFLAGS}"
 )
 
-
-# @HELP: Probably, we can remove them now
-set(CMAKE_CXX_FLAGS
-    "${CMAKE_CXX_FLAGS} \
-    -Wall -Wvla \
-    -Wno-unused-function \
-    -Wno-sign-compare"
-)
+# @EUGO_CHANGE:
+# Disabled as we prefer to control warnings by using our global / shared flags.
+# set(CMAKE_CXX_FLAGS
+#     "${CMAKE_CXX_FLAGS} \
+#     -Wall -Wvla \
+#     -Wno-unused-function \
+#     -Wno-sign-compare"
+# )
 # === @end: General Configuration ===
 
 
+# === @begin: Warnings Configuration ===
+set(
+    EUGO_COMMON_WARNING_FLAGS
+    "-Wno-deprecated-this-capture \
+    -Wno-null-conversion \
+    -Wno-deprecated-enum-enum-conversion \
+    -Wno-deprecated-volatile"
+)
+
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EUGO_COMMON_WARNING_FLAGS}")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${EUGO_COMMON_WARNING_FLAGS}")
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} ${EUGO_COMMON_WARNING_FLAGS}")
+# === @end: Warnings Configuration ===
+
+
 # === @begin: Options ===
-option(VERBOSE "Enable verbose output" OFF)
-option(KEEP "Keep intermediate files" OFF)
-option(DEBUG "Enable debug build" OFF)
-# option(ASAN "Enable Address Sanitizer" OFF) -> not reimplementing as no value for Eugo right now
-# option(UBSAN "Enable Undefined Behavior Sanitizer" OFF) -> not reimplementing as no value for Eugo right now
-option(TRACE "Enable tracing" OFF)
-# option(WERROR "Treat warnings as errors" OFF) -> not reimplementing as no value for Eugo right now
-option(PROFAPI "Enable profiling API" ON)
-option(NVTX "Enable NVTX" ON)
-option(RDMA_CORE "Enable RDMA core" OFF)
-option(NET_PROFILER "Enable network profiler" OFF)
-option(MLX5DV "Enable MLX5DV" OFF)
-option(MAX_EXT_NET_PLUGINS "Maximum external network plugins" 0)
+set(NCCL_COMMON_COMPILE_DEFINITIONS
+    # VERBOSE=1 # "Enable verbose output" [there is no associated C/C++ macro], disabled as this only applies to Make/CMake verbosity in original implementation
+    # KEEP=1 # "Keep intermediate files" [there is no associated C/C++ macro], disabled as this only applies to original implementation and its Make/CMake execution
+    # ASAN=1 # "Enable Address Sanitizer" [there is no associated C/C++ macro], not yet supported in Eugo environment
+    # UBSAN=1 # "Enable Undefined Behavior Sanitizer" [there is no associated C/C++ macro], not yet supported in Eugo environment
+
+    # WERROR=1 # "Treat warnings as errors" [there is no associated C/C++ macro]
+    # We're not reimplementing this as it repeats the built-in CMake flags:
+    # 1. `CMAKE_COMPILE_WARNING_AS_ERROR`
+    #    1. https://cmake.org/cmake/help/latest/prop_tgt/COMPILE_WARNING_AS_ERROR.html
+    #    2. https://cmake.org/cmake/help/latest/variable/CMAKE_COMPILE_WARNING_AS_ERROR.html
+    # 2. `CMAKE_LINK_WARNING_AS_ERROR`
+    #    1. https://cmake.org/cmake/help/latest/prop_tgt/LINK_WARNING_AS_ERROR.html
+    #    2. https://cmake.org/cmake/help/latest/variable/CMAKE_LINK_WARNING_AS_ERROR.html
+
+    PROFAPI=1 # "Enable profiling API", @Important: this is not about "NCCL's API for profiling" but about "profiling NCCL's own API".
+    # If enabled, this causes every public NCCL function to be emitted as a weak symbol instead of a strong one w/ an extra strong alias symbol prefixed w/ `p`.
+    # E.g., instead of having just `strong` `ncclCommInitAll`, w/ `PROFAPI` enabled we'll have both `weak` `ncclCommInitAll` symbol and `strong` alias-symbol `pncclCommInitAll` pointing to `ncclCommncclCommInitAllInit`.
+    # This, in theory, should allow redirecting calls to the `NCCL_API`-marked functions to the ad-hoc stubs for profiling purposes w/o losing the access to original symbol.
+    # Yet, I'm not aware of the public code relying on that + I'm not sure if this is correct - usually, you define `alias` symbol to be `weak` and not its target, but who knows what they've meant here ... It's not the first confusing design choice we've seen so far.
+    # This setting is enabled in reference `NCCL` builds so we keep it too.
+    #
+    # References:
+    # 1. @/src/include/core.h#L17-32
+    # 2. https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html#index-alias-function-attribute
+
+    # NVTX=1 # "Enable NVTX" [there is no associated C/C++ macro]. In reference implementation. this is only used in negated logic - if this option is disabled, it sets `NVTX_DISABLE` macro, which causes vendored `native/cuda_nvtx` headers to contain no compilable symbols (some NVTX macros are used by NCCL regardless of this setting).
+
+    # NCCL_ENABLE_NET_PROFILING=1 # "Enable network profiler"  [option: `NET_PROFILER`], disabled by default + causes building an extra plugin which isn't easy to build and maintain + all 3 shipped plugins are considered tests/examples of NCCL usage and not something NCCL really needs to operate properly.
+    # NCCL_NET_MAX_PLUGINS=0 # "Maximum external network plugins" [option: `MAX_EXT_NET_PLUGINS=<int>`], this is set to `0` by default, meaning no extra plugins can be loaded, which makes sense as we're not building any of them.
+)
+
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    list(APPEND NCCL_COMMON_COMPILE_DEFINITIONS
+        # DEBUG=1 # "Enable debug build" [there is no associated C/C++ macro], this implies the following individual macros:
+        DEBUG_EVENTS=1
+        DEBUG_PROXY=1
+        NVTX_DEBUG_PRINT=1 # This macro isn't used in `native/cuda_nccl`, but in its vendored `native/cuda_nvtx` headers.
+
+        # TRACE=1 # "Enable tracing" [there is no associated C/C++ macro], this implies the following individual macros:
+        ENABLE_TRACE=1
+    )
+endif()
 # === @end: Options ===
 
 
@@ -92,25 +139,6 @@ option(MAX_EXT_NET_PLUGINS "Maximum external network plugins" 0)
 # === @@begin: CUDAToolkit ===
 find_package(CUDAToolkit REQUIRED)
 message(STATUS "[EUGO]: Find CUDAToolkit: ${CUDAToolkit_CONFIG}")
-
-
-# @NVIDIA_ORIGINAL: @begin:
-# @EUGO_CHANGE: We preserved this snippet as they rely on `CUDA_MAJOR` and `CUDA_MINOR` definitions in their code.
-
-# CUDA version detection
-string(REGEX MATCH "([0-9]+\\.[0-9]+)" CUDA_VERSION "${CUDAToolkit_VERSION}")
-
-# Extract major and minor version numbers
-string(REGEX MATCH "([0-9]+)" CUDA_MAJOR "${CUDA_VERSION}")
-string(REGEX MATCH "([0-9]+)$" CUDA_MINOR "${CUDA_VERSION}")
-string(REGEX REPLACE ".*\\.([0-9]+)$" "\\1" CUDA_MINOR "${CUDA_VERSION}")
-
-# Add CUDA version definitions after find_package
-add_compile_definitions(
-    CUDA_MAJOR=${CUDA_MAJOR}
-    CUDA_MINOR=${CUDA_MINOR}
-)
-# @NVIDIA_ORIGINAL: @end
 # === @@end: CUDAToolkit ===
 
 
@@ -122,8 +150,22 @@ message(STATUS "[EUGO]: CCCL found: ${cccl_CONFIG}")
 # === @@end: CCCL ===
 
 
+# === @@begin: glibc-merged libs ===
+# In reference implementation, all `native/cuda_nccl` are linked against `librt` (realtime, not runtime!), `libpthread`, and `libdl`.
+# However, in modern `glibc` versions they're all merged into main `libc.so` file and dedicated binaries are simply compatability stubs.
+# Hence, we don't have to lookup and link them explicitely.
+# === @@end: glibc-merged libs ===
+
+
+# === @@begin: Discarded dependencies ===
+# option(RDMA_CORE "Enable RDMA core" OFF) # Sets `NCCL_BUILD_RDMA_CORE=1` macro and links `libibverbs` (`native/rdma_core`)
+# option(MLX5DV "Enable MLX5DV" OFF) # Sets `NCCL_BUILD_MLX5DV=1` macro and links `libmlx5` (`native/rdma_core`)
+# === @@end: Discarded dependencies ===
+
+
+# === @@begin: Finalized dependencies list ===
 # @EUGO_CHANGE:
-# In original implementation, these masterminds link their binaries against all `CUDAToolkit_LIBRARIES` which is an overkill. Based on our research, they only use `cudart` functions here to manage the GPU on the host side and directly access intrinsics (like `fp8`) on the device one.
+# In original implementation, they link their binaries against all `CUDAToolkit_LIBRARIES` which is an overkill. Based on our research, they only use `cudart` functions here to manage the GPU on the host side and directly access intrinsics (like `fp8`) on the device one.
 # They also rely on `CCCL` (in particular, `libcu++`/`libcudacxx`) but as it's the header only library, they just add that into include dirs list and don't explicitely search for it.
 #
 # In our NCCL implementation, we limit dependencies list to that is exactly used to avoid too tight dependency graph and reduce the number of unneeded libraries loaded at runtime.
@@ -132,9 +174,9 @@ message(STATUS "[EUGO]: CCCL found: ${cccl_CONFIG}")
 # As after the build we're getting only 2 binaries - `libnccl` (library) and `ncclras` (executable) - and the latter links against former, it's safe and sound to define just a single list of CUDA dependencies for all of them.
 #
 # @Important:
-# Based on our research, NCCL doesn't directly depends on `libcuda` (`CUDA::driver_library`) so we don't add it here.
-set(NCCL_CUDA_DEPENDENCIES CCCL::libcudacxx CUDA::cudart)
-# @HELP: Is it passed implicitely? cudadevrt
+# Based on our research, NCCL doesn't directly depend on `libcuda` (`CUDA::driver_library`) so we don't add it here (or `cudadevrt`).
+set(NCCL_DEPENDENCIES CCCL::libcudacxx CUDA::cudart)
+# === @@end: Finalized dependencies list ===
 # === @end: dependencies/ ===
 
 
@@ -146,12 +188,11 @@ add_subdirectory(src)
 # === @begin: Install and Configuration Targets ===
 include(GNUInstallDirs)
 
-# @HELP: Probably do the same as we did for `python/torch`?
 # Install the headers into the include directory
-install(FILES ${INCEXPORTS} TYPE INCLUDE)
+install(FILES ${NCCL_PUBLIC_HEADERS} TYPE INCLUDE)
 
 install(
-    TARGETS nccl ncclras
+    TARGETS nccl ncclras # `nccl_colldevice` isn't installed separately but used as a private implementation detail for `nccl`
     EXPORT NCCLConfig
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -166,6 +207,14 @@ install(
     NAMESPACE NCCL::
 )
 
+# Configure pkg-config file
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/nccl.pc.in
+    ${CMAKE_BINARY_DIR}/lib/pkgconfig/nccl.pc
+    @ONLY
+)
+
+
 # NOTE: This is the install target output!
 # -- Installing: /usr/local/include/nccl.h
 # -- Up-to-date: /usr/local/include/nccl_net.h
@@ -175,5 +224,4 @@ install(
 # -- Installing: /usr/local/bin/ncclras
 # -- Installing: /usr/local/lib64/cmake/nccl/NCCLConfig.cmake
 # -- Installing: /usr/local/lib64/cmake/nccl/NCCLConfig-release.cmake
-
 # === @end: Install Targets ===

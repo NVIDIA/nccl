@@ -207,12 +207,18 @@ install(
     NAMESPACE NCCL::
 )
 
+# @EUGO_CHANGE: @begin:
+# Reference `NCCL` implementation doesn't have `nccl.pc.in` compatible w/ CMake - version and prefix are always left in placholder state, rendering it useless.
+# What's more, CMake itself doesn't fill interface dependencies and similar stuff, breaking downstream consumers further as not propagating the required dependencies.
+# It's hard for me to envision who would use `pkg-config` to discover `nccl` installation modern days as CUDA support is nearly absent in Make and other `pkg-config` fans, so we simply disable it.
+#
 # Configure pkg-config file
-configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/nccl.pc.in
-    ${CMAKE_BINARY_DIR}/lib/pkgconfig/nccl.pc
-    @ONLY
-)
+# configure_file(
+#     ${CMAKE_CURRENT_SOURCE_DIR}/src/nccl.pc.in
+#     ${CMAKE_BINARY_DIR}/lib/pkgconfig/nccl.pc
+#     @ONLY
+# )
+# @EUGO_CHANGE: @end
 
 
 # NOTE: This is the install target output!

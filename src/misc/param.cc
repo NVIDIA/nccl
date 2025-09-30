@@ -78,17 +78,21 @@ void ncclLoadParam(char const* env, int64_t deftVal, int64_t uninitialized, int6
   if (__atomic_load_n(cache, __ATOMIC_RELAXED) == uninitialized) {
     const char* str = ncclGetEnv(env);
     int64_t value = deftVal;
-    if (str && strlen(str) > 0) {
-      errno = 0;
-      value = strtoll(str, nullptr, 0);
-      if (errno) {
-        value = deftVal;
-        INFO(NCCL_ALL,"Invalid value %s for %s, using default %lld.", str, env, (long long)deftVal);
-      } else {
-        INFO(NCCL_ENV,"%s set by environment to %lld.", env, (long long)value);
-      }
+    if (!str || strlen(str) <= 0) {
+      __atomic_store_n(cache, value, __ATOMIC_RELAXED);
+      pthread_mutex_unlock(&mutex);
+      return;
     }
-    __atomic_store_n(cache, value, __ATOMIC_RELAXED);
+    errno = 0;
+    value = strtoll(str, nullptr, 0);
+    // To prevent deadlock issues caused by logging in a loop,
+    // so cache the value before the log operation.
+    __atomic_store_n(cache, errno ? deftVal : value, __ATOMIC_RELAXED);
+    if (errno) {
+      INFO(NCCL_ALL,"Invalid value %s for %s, using default %lld.", str, env, (long long)deftVal);
+    } else {
+      INFO(NCCL_ENV,"%s set by environment to %lld.", env, (long long)value);
+    }
   }
 }
 

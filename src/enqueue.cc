@@ -42,7 +42,7 @@ ncclResult_t ncclInitKernelsForDevice(int cudaArch, int maxSharedMem, size_t* ma
 
       cudaError_t errcode = cudaFuncGetAttributes(&attr, fn);
       if (errcode != cudaSuccess) {
-		  errorcode = cudaGetLastError(); // Drain error code
+		  cudaGetLastError(); // Drain error code
 		  continue; // Silently ignore failures
 	  }
       if (maxStackSize) {

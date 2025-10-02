@@ -490,10 +490,13 @@ static ncclResult_t rasClientRunInit(struct rasClient* client) {
   static int cudaDriver = -1, cudaRuntime = -1;
 
   TRACE(NCCL_RAS, "RAS: rasClientRunInit: starting");
-
   rasOutReset();
+
+  // @EUGO_CHANGE: @begin: See `@/CMakeLists.txt#129-138`
   rasOutAppend("NCCL version " STR(NCCL_MAJOR) "." STR(NCCL_MINOR) "." STR(NCCL_PATCH) NCCL_SUFFIX
-               " compiled with CUDA " STR(CUDA_MAJOR) "." STR(CUDA_MINOR) "\n");
+               " compiled with CUDA " STR(CUDAToolkit_VERSION_MAJOR) "." STR(CUDAToolkit_VERSION_MINOR) "\n");
+  // @EUGO_CHANGE: @end
+
   if (cudaRuntime == -1)
     cudaRuntimeGetVersion(&cudaRuntime);
   if (cudaDriver == -1)

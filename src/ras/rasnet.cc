@@ -4,7 +4,9 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
-#define NDEBUG // Comment out during development only!
+// @EUGO_CHANGE: Commented out as it must be set by the build system and/or toolchain!
+// #define NDEBUG // Comment out during development only!
+
 #include <cassert>
 
 #include "ras_internal.h"

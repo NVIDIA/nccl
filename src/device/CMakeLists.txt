@@ -16,16 +16,15 @@ set(COLLDEVICE_SRC_FILES
 # @EUGO_CHANGE:
 # 1. `files` -> `COLLDEVICE_GENSRC_FILES`
 # 2. `symmetric_files` -> `COLLDEVICE_GENSRC_SYMMETRIC_FILES`
-# set(ONLY_FUNCS "SendRecv") # @HELP # TODO+ remove me!!!
 execute_process(
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc ${ONLY_FUNCS}
     OUTPUT_VARIABLE COLLDEVICE_GENSRC_FILES
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 string(STRIP "${COLLDEVICE_GENSRC_FILES}" COLLDEVICE_GENSRC_FILES)
 list(TRANSFORM COLLDEVICE_GENSRC_FILES PREPEND ${CMAKE_CURRENT_BINARY_DIR}/gensrc/)
+list(FILTER COLLDEVICE_GENSRC_FILES INCLUDE REGEX "\\.cu$") # We need to keep only .cu **files** (there are generated .mk files and redundant/duplicative folders w/ .cu files we filter out)
 list(APPEND COLLDEVICE_SRC_FILES ${COLLDEVICE_GENSRC_FILES})
-# @HELP: Clean unused/dangerous paths! .mk and entire dirs
 
 execute_process(
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/symmetric/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc/symmetric
@@ -34,23 +33,18 @@ execute_process(
 )
 string(STRIP "${COLLDEVICE_GENSRC_SYMMETRIC_FILES}" COLLDEVICE_GENSRC_SYMMETRIC_FILES)
 list(TRANSFORM COLLDEVICE_GENSRC_SYMMETRIC_FILES PREPEND ${CMAKE_CURRENT_BINARY_DIR}/gensrc/symmetric/)
+list(FILTER COLLDEVICE_GENSRC_SYMMETRIC_FILES INCLUDE REGEX "\\.cu$") # We need to keep only .cu **files** (there are generated .mk files and redundant/duplicative folders w/ .cu files we filter out)
 list(APPEND COLLDEVICE_SRC_FILES ${COLLDEVICE_GENSRC_SYMMETRIC_FILES})
-# @HELP: Clean unused/dangerous paths! .mk and entire dirs
 # @NVIDIA_ORIGINAL: @end
-
-# @HELP+: remove after tests
-#file(GLOB_RECURSE GENERATED_COLLDEVICE_CU_FILES RELATIVE ${CMAKE_CURRENT_BINARY_DIR} "${CMAKE_CURRENT_BINARY_DIR}/*.cu")
-# file(GLOB GENERATED_COLLDEVICE_CU_FILES RELATIVE ${CMAKE_CURRENT_BINARY_DIR} "${CMAKE_CURRENT_BINARY_DIR}/**/*.cu")
-#list(APPEND COLLDEVICE_SRC_FILES ${GENERATED_COLLDEVICE_CU_FILES})
-# list(APPEND COLLDEVICE_SRC_FILES ${COLLDEVICE_GENSRC_SYMMETRIC_FILES})
 # === @end: Generated Sources ===
 
 
-# === @begin: nccl_colldevice library ===
+# === @begin: `libnccl_colldevice` library ===
 # @EUGO_CHANGE:
-# `nccl_device` -> `nccl_colldevice` - we renamed this library for clarity as they already have `@/src/nccl_device` folder which is not used for this library at all.
+# 1. `nccl_device` -> `nccl_colldevice` - we renamed this library for clarity as they already have `@/src/nccl_device` folder which is not used for this library at all.
+# 2. `OBJECT` -> `STATIC` - we changed the type of this sublibrary to make it self-contained (e.g., to not bother too much about visibility of `compiled_definitions`, `link_libraries`, and similar stuff).
 add_library(nccl_colldevice STATIC ${COLLDEVICE_SRC_FILES})
-message(WARNING "[EUGO]: ${COLLDEVICE_SRC_FILES}")
+# message(WARNING "[EUGO]: ${COLLDEVICE_SRC_FILES}")
 
 target_include_directories(
     nccl_colldevice
@@ -62,11 +56,10 @@ target_include_directories(
         ${CONFIGURED_HEADERS_DIR}
 )
 
+target_compile_definitions(nccl_colldevice PRIVATE ${NCCL_COMMON_COMPILE_DEFINITIONS})
 
 # @EUGO_CHANGE:
-# 1. `CUDAToolkit_INCLUDE_DIRS/cccl` (this folder even doesn't exist modern days) -> `target_link_libraries(nccl_colldevice PRIVATE ${NCCL_CUDA_DEPENDENCIES})`
-# 2. `CUDAToolkit_INCLUDE_DIRS` -> `target_link_libraries(nccl_colldevice PRIVATE ${NCCL_CUDA_DEPENDENCIES})`
-target_link_libraries(nccl_colldevice PRIVATE ${NCCL_CUDA_DEPENDENCIES})
-# === @end: nccl_colldevice library ===
-
-
+# 1. `CUDAToolkit_INCLUDE_DIRS/cccl` (this folder even doesn't exist modern days) -> `target_link_libraries(nccl_colldevice PRIVATE ${NCCL_DEPENDENCIES})`
+# 2. `CUDAToolkit_INCLUDE_DIRS` -> `target_link_libraries(nccl_colldevice PRIVATE ${NCCL_DEPENDENCIES})`
+target_link_libraries(nccl_colldevice PRIVATE ${NCCL_DEPENDENCIES})
+# === @end: `libnccl_colldevice` library ===

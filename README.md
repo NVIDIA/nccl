@@ -19,7 +19,7 @@ Testing ncclras
 
 ```bash
 bash-5.2# ncclras --version
-NCCL RAS client version 2.16.2
+NCCL RAS client version 2.28.3
 ```
 
 # NCCL

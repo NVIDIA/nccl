@@ -42,7 +42,7 @@ list(APPEND COLLDEVICE_SRC_FILES ${COLLDEVICE_GENSRC_SYMMETRIC_FILES})
 # === @begin: `libnccl_colldevice` library ===
 # @EUGO_CHANGE:
 # 1. `nccl_device` -> `nccl_colldevice` - we renamed this library for clarity as they already have `@/src/nccl_device` folder which is not used for this library at all.
-# 2. `OBJECT` -> `STATIC` - we changed the type of this sublibrary, as otherwise `CMake` uses `nvlink` for non-CUDA C++ sources, too, disabling most our optimizations like `LTO` as unsupported.
+# 2. `OBJECT` -> `STATIC` - we changed the type of this sublibrary to make it self-contained (e.g., to not bother too much about visibility of `compiled_definitions`, `link_libraries`, and similar stuff).
 add_library(nccl_colldevice STATIC ${COLLDEVICE_SRC_FILES})
 # message(WARNING "[EUGO]: ${COLLDEVICE_SRC_FILES}")
 

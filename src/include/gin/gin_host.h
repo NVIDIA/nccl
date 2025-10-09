@@ -9,7 +9,7 @@
 
 #include "allocator.h"
 #include "nccl.h"
-#include "nccl_net.h"
+#include "plugin/nccl_net.h"
 #include "nccl_device/gin/gin_device_host_common.h"
 #include <pthread.h>
 

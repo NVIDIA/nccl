@@ -6,6 +6,7 @@
 
 #include "param.h"
 #include "debug.h"
+#include "env.h"
 
 #include <algorithm>
 #include <errno.h>
@@ -93,6 +94,6 @@ void ncclLoadParam(char const* env, int64_t deftVal, int64_t uninitialized, int6
 }
 
 const char* ncclGetEnv(const char* name) {
-  initEnv();
-  return getenv(name);
+  ncclInitEnv();
+  return ncclEnvPluginGetEnv(name);
 }

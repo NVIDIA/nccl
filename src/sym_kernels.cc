@@ -55,6 +55,18 @@ constexpr uint32_t kernelMask_RS = 1<<ncclSymkKernelId_ReduceScatter_LD |
                                    1<<ncclSymkKernelId_ReduceScatter_LDMC |
                                    1<<ncclSymkKernelId_ReduceScatter_LL;
 
+constexpr uint32_t kernelMask_LSA = 1<<ncclSymkKernelId_AllReduce_AGxLL_R |
+                                    1<<ncclSymkKernelId_AllReduce_AGxLLMC_R |
+                                    1<<ncclSymkKernelId_AllReduce_RSxLD_AGxST |
+                                    1<<ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC |
+                                    1<<ncclSymkKernelId_AllGather_LL |
+                                    1<<ncclSymkKernelId_AllGather_LLMC |
+                                    1<<ncclSymkKernelId_AllGather_ST |
+                                    1<<ncclSymkKernelId_AllGather_STMC |
+                                    1<<ncclSymkKernelId_ReduceScatter_LL |
+                                    1<<ncclSymkKernelId_ReduceScatter_LD |
+                                    1<<ncclSymkKernelId_ReduceScatter_LDMC;
+
 static uint32_t kernelMask_coll(ncclFunc_t coll) {
   switch (coll) {
   case ncclFuncAllGather: return kernelMask_AG;
@@ -218,7 +230,9 @@ ncclResult_t ncclSymkInitOnce(struct ncclComm* comm) {
     lla2aReq.next = reqs.resourceRequirementsList;
     reqs.resourceRequirementsList = &lla2aReq;
 
-    NCCLCHECK(ncclDevrCommCreateInternal(comm, &reqs, &symk->kcomm.devComm));
+    if (comm->nNodes == 1) {
+      NCCLCHECK(ncclDevrCommCreateInternal(comm, &reqs, &symk->kcomm.devComm));
+    }
   }
   return ncclSuccess;
 }
@@ -296,6 +310,8 @@ static uint32_t ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int/*ncclDe
   // Any kernel might use 32-bit int to track unrolled loop chunks (which are going
   // to be at least 32 bytes per chunk)
   if (nBusBytes >= 32*(size_t(2)<<30)) kmask = 0;
+
+  if (comm->nNodes > 1) kmask &= ~kernelMask_LSA;
 
   return kmask;
 }

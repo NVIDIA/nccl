@@ -153,6 +153,38 @@ NCCL_DEVICE_INLINE void* ncclGetLsaMultimemPointer(ncclWindow_t w, size_t offset
 }
 #endif
 
+#if __CUDACC__
+template<typename Coop>
+NCCL_DEVICE_INLINE ncclWindow_t ncclFindWindow(Coop coop, ncclDevComm const& comm, void const *ptr) {
+  using nccl::utility::loadConst;
+  auto coalesced = ncclCoopCoalesced(coop);
+  ncclDevCommWindowTable* t = comm.windowTable;
+  while (true) {
+    bool found = false;
+    int index = coalesced.thread_rank();
+    #pragma unroll 1
+    while (index < 32) {
+      uintptr_t uptr = reinterpret_cast<uintptr_t>(ptr);
+      ncclDevCommWindowTable::Entry e = loadConst(&t->entries[index]);
+      if ((e.base != 0) && (e.size != 0) && (e.window != 0)) {
+        if (uptr - uintptr_t(e.base) < uintptr_t(e.size)) {
+          found = true;
+          break;
+        }
+      }
+      index += coalesced.size();
+    }
+    uint32_t mask = __ballot_sync(ncclCoopGetLaneMask(coalesced), found);
+    if (mask != 0) {
+      int source = __popc(mask-1);
+      index = __shfl_sync(ncclCoopGetLaneMask(coalesced), index, source);
+      return loadConst(&t->entries[index].window);
+    }
+    t = loadConst(&t->next);
+  }
+}
+#endif
+
 NCCL_HOST_DEVICE_INLINE size_t ncclGetResourceBufferOffset(ncclDevResourceHandle_t h) {
   return ((size_t)h)*128;
 }

@@ -778,7 +778,7 @@ struct FuncSumPostDiv {
   using UintType = typename std::conditional<sizeof(T)==8, uint64_t, uint32_t>::type;
   uint32_t divisor:31, isSigned:1;
   UintType recip;
-  
+
   __device__ __forceinline__ FuncSumPostDiv(uint64_t opArg=0) {
     isSigned = opArg & 1;
     divisor = opArg >> 1;

@@ -902,6 +902,29 @@ ncclResult_t ncclSocketSendRecv(struct ncclSocket* sendSock, void* sendPtr, int 
 }
 
 
+ncclResult_t ncclSocketMultiOp(struct ncclSocketOp* ops, int numOps) {
+  if (ops == NULL || numOps <= 0) {
+    WARN("ncclSocketMultiOp: invalid arguments ops=%p numOps=%d", ops, numOps);
+    return ncclInvalidArgument;
+  }
+
+  for (int i = 0; i < numOps; i++) {
+    if (ops[i].sock == NULL) {
+      WARN("ncclSocketMultiOp: invalid socket at index %d", i);
+      return ncclInvalidArgument;
+    }
+    ops[i].offset = 0;
+  }
+  int completedOps=0, i=0;
+  while(completedOps < numOps){
+    if (ops[i].offset < ops[i].size){
+      NCCLCHECK(socketProgress(ops[i].op, ops[i].sock, ops[i].ptr, ops[i].size, &ops[i].offset));
+      if(ops[i].offset >= ops[i].size) completedOps++;
+    }
+    i=(i+1)%numOps;
+  }
+  return ncclSuccess;
+}
 // Receive or detect connection closed
 ncclResult_t ncclSocketTryRecv(struct ncclSocket* sock, void* ptr, int size, int* closed, bool blocking) {
   int offset = 0;

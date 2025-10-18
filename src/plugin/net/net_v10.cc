@@ -5,7 +5,6 @@
  ************************************************************************/
 
 #include "nccl_net.h"
-#include "net_device.h"
 #include "proxy.h"
 #include "checks.h"
 #include <dlfcn.h>
@@ -192,7 +191,7 @@ static ncclResult_t ncclCollNet_init(void** ctx __attribute__((unused)),
   ncclCollNet.test = ncclCollNet_v10->test;
   ncclCollNet.closeColl = ncclCollNet_v10->closeColl;
   ncclCollNet.closeListen = ncclCollNet_v10->closeListen;
-  ncclCollNet.makeVDevice = ncclCollNet_makeVDevice;
+  ncclCollNet.makeVDevice = (ncclCollNet_v10->makeVDevice) ? ncclCollNet_makeVDevice : nullptr;
   ncclCollNet.finalize = ncclCollNet_finalize;
   return ncclSuccess;
 }

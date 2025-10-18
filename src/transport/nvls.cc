@@ -25,6 +25,7 @@ struct graphRegData {
 struct localRegData {
   struct ncclReg reg;
   intptr_t offset;
+  int handleTypes;
 };
 
 ncclResult_t nvlsCanConnect(int* ret, struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo* info1, struct ncclPeerInfo* info2) {
@@ -157,7 +158,7 @@ ncclResult_t ncclNvlsInit(struct ncclComm* comm) {
 
   int gpuCount;
   NCCLCHECK(ncclTopoGetGpuCount(comm->topo, &gpuCount));
-  if (!ncclParamNvlsEnable() || gpuCount <= 2) return ncclSuccess;
+  if (!ncclParamNvlsEnable() || gpuCount < 2) return ncclSuccess;
 
   CUdevice dev;
   int driverVersion;
@@ -542,11 +543,12 @@ ncclResult_t tryRegisterBuffer(struct ncclComm *comm, uintptr_t userBuff, size_t
   CUmulticastObjectProp mcprop;
   CUmemAllocationProp ucprop;
   char shareableHandle[NVLS_HANDLE_SIZE];
-  CUmemGenericAllocationHandle mcHandle;
+  CUmemGenericAllocationHandle mcHandle = 0;
   size_t minSize = SIZE_MAX;
   struct localRegData* regData = NULL;
   cudaPointerAttributes attr;
-  size_t ucgran, mcgran, ucsize, mcsize;
+  size_t ucgran, mcgran, ucsize = 0, mcsize = 0;
+  bool bindComplete = false, mapComplete = false;
 
   NCCLCHECKGOTO(ncclCalloc(&regData, comm->localRanks), ret, fail);
 
@@ -594,6 +596,10 @@ ncclResult_t tryRegisterBuffer(struct ncclComm *comm, uintptr_t userBuff, size_t
     if ((regData[i].reg.state & NVLS_REG_POSSIBLE) == 0) {
       goto fail;
     }
+    // We need to check whether the offsets are the same among ranks.
+    if (i > 0 && regData[i].offset != regData[i - 1].offset) {
+      goto fail;
+    }
     /* get minimal reg size of nvls buffers */
     if (minSize > regData[i].reg.regUCSize)
       minSize = regData[i].reg.regUCSize;
@@ -615,16 +621,35 @@ ncclResult_t tryRegisterBuffer(struct ncclComm *comm, uintptr_t userBuff, size_t
   }
 
   CUCHECKGOTO(cuMulticastAddDevice(mcHandle, comm->nvlsResources->dev), ret, fail);
+  // intra-node barrier to mitigate the possible hang in cuMulticastBindAddr during abort
+  // It also ensures that if cuMulticastBindAddr fails, the cleanup code won't race with the UDS proxy
+  NCCLCHECKGOTO(bootstrapIntraNodeBarrier(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, comm->localRankToRank[0]), ret, fail);
   // Coverity complains that regRecord could be NULL.  That won't in practice be the case because we've already checked
   // (regData[i].reg.state & NVLS_REG_POSSIBLE) of all local ranks, which would catch it and bail out.
   // coverity[var_deref_op]
-  CUCHECKGOTO(cuMulticastBindAddr(mcHandle, 0, (CUdeviceptr)regRecord->begAddr, ucsize, 0), ret, fail);
+  CUresult err;
+  err = CUPFN(cuMulticastBindAddr(mcHandle, 0, (CUdeviceptr)regRecord->begAddr, ucsize, 0));
+  if (err != CUDA_SUCCESS) {
+    // Don't print an error in case of buffers that are incompatible with MC.
+    if (err != CUDA_ERROR_INVALID_VALUE) {
+      const char *errStr;
+      CUCALL(cuGetErrorString(err, &errStr));
+      INFO(NCCL_REG, "Failed to multicast-bind user buffer: CUDA error %d '%s'", err, errStr);
+    }
+    goto fail;
+  }
+  bindComplete = true;
 
   // Create a VA for the NVLS
   CUCHECKGOTO(cuMemAddressReserve(&regPtr, mcsize, mcgran, 0U, 0), ret, fail);
   // Map the VA locally
   CUCHECKGOTO(cuMemMap(regPtr, mcsize, 0, mcHandle, 0), ret, fail);
+  mapComplete = true;
   CUCHECKGOTO(cuMemSetAccess(regPtr, mcsize, &comm->nvlsResources->accessDesc, 1), ret, fail);
+
+  /* get all buffer addresses */
+  regRecord->caddrs[comm->localRank] = regRecord->begAddr;
+  NCCLCHECKGOTO(ncclShmemAllgather(comm, &comm->nvlsResources->nvlsShmem, regRecord->caddrs + comm->localRank, regRecord->caddrs, sizeof(uintptr_t)), ret, fail);
 
   regRecord->regAddr = regPtr;
   regRecord->regUCSize = ucsize;
@@ -632,16 +657,6 @@ ncclResult_t tryRegisterBuffer(struct ncclComm *comm, uintptr_t userBuff, size_t
   regRecord->dev = comm->nvlsResources->dev;
   regRecord->mcHandle = mcHandle;
   regRecord->state |= NVLS_REG_COMPLETE;
-  /* get all buffer addresses */
-  regRecord->caddrs[comm->localRank] = regRecord->begAddr;
-  NCCLCHECKGOTO(ncclShmemAllgather(comm, &comm->nvlsResources->nvlsShmem, regRecord->caddrs + comm->localRank, regRecord->caddrs, sizeof(uintptr_t)), ret, fail);
-
-  /* Although registration is done, we still need to check whether the offsets are same among ranks. */
-  for (int i = 0; i < comm->localRanks - 1; ++i) {
-    if (regData[i].offset != regData[i + 1].offset) {
-      goto fail;
-    }
-  }
 
   *regAddr = (uintptr_t)regPtr + regData[comm->localRank].offset;
   *regUsed = 1;
@@ -649,6 +664,14 @@ exit:
   free(regData);
   return ret;
 fail:
+  if (regPtr) {
+    if (mapComplete) CUCALL(cuMemUnmap(regPtr, mcsize));
+    CUCALL(cuMemAddressFree(regPtr, mcsize));
+  }
+  if (mcHandle) {
+    if (bindComplete) CUCALL(cuMulticastUnbind(mcHandle, comm->nvlsResources->dev, 0/*mcOffset*/, ucsize));
+    CUCALL(cuMemRelease(mcHandle));
+  }
   *regUsed = 0;
   goto exit;
 }
@@ -667,10 +690,18 @@ static ncclResult_t nvlsRegisterBuffer(struct ncclComm *comm, const void *sendbu
     memcpy(&regData[comm->localRank * 2].reg, sendRegRecord, sizeof(struct ncclReg));
     regData[comm->localRank * 2].offset = (uintptr_t)sendbuff - sendRegRecord->begAddr;
   }
+  if (sendbuff) {
+    CUCHECKGOTO(cuPointerGetAttribute((void*)&regData[comm->localRank * 2].handleTypes,
+                                      CU_POINTER_ATTRIBUTE_ALLOWED_HANDLE_TYPES, (CUdeviceptr)sendbuff), ret, fail);
+  }
 
   if (recvRegRecord) {
     memcpy(&regData[comm->localRank * 2 + 1].reg, recvRegRecord, sizeof(struct ncclReg));
     regData[comm->localRank * 2 + 1].offset = (uintptr_t)recvbuff - recvRegRecord->begAddr;
+  }
+  if (recvbuff) {
+    CUCHECKGOTO(cuPointerGetAttribute((void*)&regData[comm->localRank * 2 + 1].handleTypes,
+                                      CU_POINTER_ATTRIBUTE_ALLOWED_HANDLE_TYPES, (CUdeviceptr)recvbuff), ret, fail);
   }
 
   NCCLCHECKGOTO(ncclShmemAllgather(comm, &comm->nvlsResources->nvlsShmem, regData + comm->localRank * 2, regData, sizeof(struct localRegData) * 2), ret, fail);
@@ -686,6 +717,11 @@ static ncclResult_t nvlsRegisterBuffer(struct ncclComm *comm, const void *sendbu
     }
 
     if ((regData[i * 2].reg.state & NVLS_REG_NO_SUPPORT) || (regData[i * 2 + 1].reg.state & NVLS_REG_NO_SUPPORT)) {
+      goto fail;
+    }
+
+    if ((sendbuff && (regData[i * 2].handleTypes & ncclCuMemHandleType) == 0) ||
+        (recvbuff && (regData[i * 2 + 1].handleTypes & ncclCuMemHandleType) == 0)) {
       goto fail;
     }
   }

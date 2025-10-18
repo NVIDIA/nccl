@@ -352,7 +352,7 @@ static __device__ void ncclSymkRun_AllGather_LL_impl(ncclSymkDevWorkArgs const* 
         char* blockInput = input.localPtr();
         char* blockOutput = output.localPtr();
 
-        uint32_t lowBits = nElts;
+        uint32_t lowBits = nAllElts;
         lowBits |= (uintptr_t)blockInput;
         lowBits |= (uintptr_t)blockOutput;
         if (__builtin_expect(lowBits%8 == 0, true)) {

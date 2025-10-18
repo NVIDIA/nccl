@@ -308,7 +308,7 @@ __hidden ncclResult_t pluginInit(void** context, uint64_t commId, size_t nRanks,
     // Set NVLSTree base network latency to 24us
     constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_NVLS][NCCL_PROTO_SIMPLE] = 24.0;
   }
-  
+
   TunerContext* ctx = (TunerContext*)malloc(sizeof(TunerContext));
   if (!ctx) return ncclSystemError;
 

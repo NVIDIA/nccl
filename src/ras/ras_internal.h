@@ -436,6 +436,13 @@ typedef enum {
   RAS_CLIENT_FINISHED = 99
 } rasClientStatus;
 
+// Output format enum for different data export types.
+// This is shared between client and server.
+typedef enum {
+  RAS_OUTPUT_TEXT = 0,    // Default human-readable format.
+  RAS_OUTPUT_JSON = 1     // JSON format (always verbose).
+} rasOutputFormat;
+
 // Describes a RAS client.
 struct rasClient {
   struct rasClient* next;
@@ -455,6 +462,8 @@ struct rasClient {
 
   int verbose;
   int64_t timeout;
+
+  rasOutputFormat outputFormat;  // TEXT or JSON output format.
 
   // State stored during asynchronous operations such as collectives.
   struct rasCollective* coll;

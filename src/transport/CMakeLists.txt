@@ -11,5 +11,16 @@ set(TRANSPORT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/generic.cc
 )
 
+add_subdirectory(gdaki)
+
 # Add transport sources to parent scope
 set(TRANSPORT_SOURCES ${TRANSPORT_SOURCES} PARENT_SCOPE)
+
+# Add DOCA device headers to parent scope
+set(DEVICE_DOCA_HEADERS ${DEVICE_DOCA_HEADERS} PARENT_SCOPE)
+
+# Add DOCA sources to parent scope
+set(DOCA_SOURCES ${DOCA_SOURCES} PARENT_SCOPE)
+
+# Add DOCA_HOME to parent scope
+set(DOCA_HOME ${DOCA_HOME} PARENT_SCOPE)

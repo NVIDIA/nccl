@@ -49,11 +49,12 @@ NCCL_NVTX_DEFINE_STRUCT_WITH_SCHEMA_ENTRIES(NcclNvtxParamsCommInitRank, static c
   )
 )
 // The typedef and payload schema for ncclCommInitRank is also used for,
-// ncclCommInitRankConfig, ncclCommInitRankScalable, ncclCommDestroy, and ncclCommAbort.
+// ncclCommInitRankConfig, ncclCommInitRankScalable, ncclCommDestroy, ncclCommAbort, and ncclCommRevoke.
 typedef NcclNvtxParamsCommInitRank NcclNvtxParamsCommInitRankConfig;
 typedef NcclNvtxParamsCommInitRank NcclNvtxParamsCommInitRankScalable;
 typedef NcclNvtxParamsCommInitRank NcclNvtxParamsCommAbort;
 typedef NcclNvtxParamsCommInitRank NcclNvtxParamsCommDestroy;
+typedef NcclNvtxParamsCommInitRank NcclNvtxParamsCommRevoke;
 
 NCCL_NVTX_DEFINE_STRUCT_WITH_SCHEMA_ENTRIES(NcclNvtxParamsCommSplit, static constexpr,
   NCCL_NVTX_PAYLOAD_ENTRIES(

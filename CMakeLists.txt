@@ -148,6 +148,10 @@ if(MAX_EXT_NET_PLUGINS GREATER 0)
     add_definitions(-DNCCL_NET_MAX_PLUGINS=${MAX_EXT_NET_PLUGINS})
 endif()
 
+add_definitions(-DDOCA_VERBS_USE_CUDA_WRAPPER)
+add_definitions(-DDOCA_VERBS_USE_NET_WRAPPER)
+add_definitions(-DNCCL_GIN_PROXY_ENABLE=1)
+
 # Library dependencies
 find_library(RT_LIBRARY NAMES rt)
 if(RT_LIBRARY)

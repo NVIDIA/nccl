@@ -269,7 +269,7 @@ with open(os.path.join(gensrc, "host_table.cc"), "w") as f:
 
   # List of all kernel function pointers.
   out("extern int const ncclDevKernelCount = %d;\n" % len(kernel_funcs))
-  out("extern void* const ncclDevKernelList[] = {\n")
+  out("void* ncclDevKernelList[] = {\n")
   index = 0
   for kfn in kernel_funcs:
     cudart, _ = required_cuda(*kfn)
@@ -279,6 +279,14 @@ with open(os.path.join(gensrc, "host_table.cc"), "w") as f:
     if cudart != 0: out("#else\n" "/*%4d*/ nullptr,\n" "#endif\n" % index)
     index += 1
   out("nullptr};\n")
+  out("\n")
+
+  out("int ncclDevKernelRequirements[] = {\n")
+  for index,kfn in enumerate(kernel_funcs):
+    cudart,_ = required_cuda(*kfn)
+    sym = paste("_", "ncclDevKernel", *kfn)
+    out("  %7d, /*%4d %s*/\n" % (cudart or 0, index, sym));
+  out("};\n")
   out("\n")
 
   # Maps primary id to kernel function pointer.

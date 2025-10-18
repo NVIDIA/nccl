@@ -66,7 +66,13 @@ struct ncclSocket {
   int finalizeCounter; // Used to keep track of initial handshake for async sockets.
   char finalizeBuffer[sizeof(uint64_t)]; // Used to keep track of initial handshake for async sockets.
 };
-
+struct ncclSocketOp {
+  int op;                    // NCCL_SOCKET_SEND or NCCL_SOCKET_RECV
+  struct ncclSocket* sock;   // Socket to operate on
+  void* ptr;                 // Data pointer
+  int size;                  // Size of data
+  int offset;                // Current progress offset
+};
 const char *ncclSocketToString(const union ncclSocketAddress *addr, char *buf, const int numericHostForm = 1);
 ncclResult_t ncclSocketGetAddrFromString(union ncclSocketAddress* ua, const char* ip_port_pair);
 ncclResult_t ncclFindInterfaceMatchSubnet(char* ifName, union ncclSocketAddress* localAddr,
@@ -96,6 +102,7 @@ ncclResult_t ncclSocketWait(int op, struct ncclSocket* sock, void* ptr, int size
 ncclResult_t ncclSocketSend(struct ncclSocket* sock, void* ptr, int size);
 ncclResult_t ncclSocketRecv(struct ncclSocket* sock, void* ptr, int size);
 ncclResult_t ncclSocketSendRecv(struct ncclSocket* sendSock, void* sendPtr, int sendSize, struct ncclSocket* recvSock, void* recvPtr, int recvSize);
+ncclResult_t ncclSocketMultiOp(struct ncclSocketOp* ops, int numOps);
 ncclResult_t ncclSocketTryRecv(struct ncclSocket* sock, void* ptr, int size, int* closed, bool blocking);
 ncclResult_t ncclSocketShutdown(struct ncclSocket* sock, int how);
 ncclResult_t ncclSocketClose(struct ncclSocket* sock, bool wait = false);

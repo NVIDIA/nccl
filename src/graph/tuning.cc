@@ -176,7 +176,7 @@ static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
     {20.0, 20.0, 20.0}, /* Volta (N1/N2/N4) */
     {20.0, 20.0, 20.0}, /* Ampere (N1/N2/N4) */
     {36.7, 36.7, 36.7}, /* Hopper (N1/N2/N4) */
-    {2*36.7, 2*36.7, 2*36.7}, /* Blackwell (N1/N2/N4) */
+    {2*36.7, 34.6, 2*36.7}, /* Blackwell (N1/N2/N4) */
   },
   .perChMaxTreeLL128Bws = {
     {20.0, 20.0, 20.0}, /* Volta (N1/N2/N4) */

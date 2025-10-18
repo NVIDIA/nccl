@@ -248,7 +248,7 @@ inline __device__ void ncclNetDeviceUnpackInner(
 
     for (int x = 0; x < iter_meta_cnt; x++) {
       int meta_idx = x + w * PPW;
-      
+
       // load page offs
       loadShmem128(shmemCvtPtr((uint64_t*) (s_meta + meta_idx)), meta.r64[0], meta.r64[1]);
 

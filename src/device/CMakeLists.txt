@@ -50,9 +50,9 @@ set_target_properties(nccl_device PROPERTIES
 # Set include directories for the target
 target_include_directories(nccl_device PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_BINARY_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/include
     ${CMAKE_SOURCE_DIR}/src/include/plugin
-    ${CMAKE_BINARY_DIR}/include
     ${CUDAToolkit_INCLUDE_DIRS}
     ${CUDAToolkit_INCLUDE_DIRS}/cccl
 )

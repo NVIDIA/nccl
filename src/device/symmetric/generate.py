@@ -249,10 +249,18 @@ with open(os.path.join(gensrc, "sym_kernels_host.cc"), "w") as f:
   emitln(f, '')
 
   emitln(f, 'extern int const ncclSymkKernelCount = %d;' % len(list(enumerate_kernels())))
-  emitln(f, 'extern void* const ncclSymkKernelList[] = {')
+  emitln(f, 'void* ncclSymkKernelList[] = {')
   for k in enumerate_kernels():
     emitln(f, '(void*){cname},'.format(cname=kernel_cname(k)))
   emitln(f, 'nullptr};')
+  emitln(f, '')
+
+  emitln(f, 'int ncclSymkKernelRequirements[] = {')
+  for index,k in enumerate(enumerate_kernels()):
+    cudart, _, _ = required_cuda(k)
+    sym = kernel_cname(k)
+    emitln(f, '  %7d, /*%4d %s*/' % (cudart or 0, index, sym));
+  emitln(f, '};')
   emitln(f, '')
 
   emitln(f, 'void* ncclSymkGetKernelPtr(ncclSymkKernelId id, int red, ncclDataType_t ty) {')

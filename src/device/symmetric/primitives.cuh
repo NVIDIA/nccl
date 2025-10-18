@@ -56,13 +56,14 @@ struct ncclSymkArgsHandler {
       workLo++;
       fracLo = 0;
     }
-    struct ncclSymkDevWork const& dw = devWork[workLo];
-    indexLo = ((fracLo * divUp(dw.nElts, EltPerCell)) >> 16) * EltPerCell;
+    struct ncclSymkDevWork const& dwLo = devWork[workLo];
+    indexLo = ((fracLo * divUp(dwLo.nElts, EltPerCell)) >> 16) * EltPerCell;
 
     // Where the work ends
     workHi = channelWorkRange[block].workHi;
     fracHi = channelWorkRange[block].fracHi + 1;
-    indexHi = min(((fracHi * divUp(dw.nElts, EltPerCell)) >> 16) * EltPerCell, dw.nElts);
+    struct ncclSymkDevWork const& dwHi = devWork[workHi];
+    indexHi = min(((fracHi * divUp(dwHi.nElts, EltPerCell)) >> 16) * EltPerCell, dwHi.nElts);
   }
 
   template<typename T>
@@ -78,7 +79,7 @@ struct ncclSymkArgsHandler {
     lastBlock = dw.sChannelId+dw.nChannels-1;
 
     // Where the work begins
-    fracLo = (dw.sChannelId==0) ? 0 : ((channelWorkRange[dw.sChannelId-1].fracHi + 1) & 0xFFFF);
+    fracLo = (dw.sChannelId>0 && channelWorkRange[dw.sChannelId-1].workHi == w) ? ((channelWorkRange[dw.sChannelId-1].fracHi + 1) & 0xFFFF) : 0;
     indexLo = ((fracLo * divUp(dw.nElts, EltPerCell)) >> 16) * EltPerCell;
     fracHi = (channelWorkRange[lastBlock].workHi == w) ? channelWorkRange[lastBlock].fracHi + 1 : 0x10000;
     indexHi = min(((fracHi * divUp(dw.nElts, EltPerCell)) >> 16) * EltPerCell, dw.nElts);
@@ -91,16 +92,16 @@ struct ncclSymkArgsHandler {
 
       getWorkRange<T>(blockIdx.x, workLo, indexLo, workHi, indexHi);
 
-      size_t currentIndexLo = indexLo;
       #pragma unroll 1
       for (int w = workLo; w <= workHi; w++) {
         struct ncclSymkDevWork const& dw = devWork[w];
         size_t const& nAllElts = dw.nElts;
-        size_t currentIndexHi;
+        size_t currentIndexLo, currentIndexHi;
         int block, nBlocks;
         if (blockIdx.x >= dw.sChannelId && blockIdx.x < dw.sChannelId + dw.nChannels) {
           getWorkRangeFused<T>(blockIdx.x, w, block, nBlocks, currentIndexLo, currentIndexHi);
         } else {
+          currentIndexLo = (w > workLo) ? 0 : indexLo;
           currentIndexHi = (w < workHi) ? nAllElts : indexHi;
           block = 0;
           nBlocks = 1;

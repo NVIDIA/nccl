@@ -16,6 +16,7 @@
 #include "shmutils.h"
 #include "p2p.h"
 #include "collectives.h"
+#include "gin/gin_host.h"
 
 typedef enum : uint8_t {
   ncclPatternRing,
@@ -322,6 +323,8 @@ struct ncclProxyState {
   bool dmaBufSupport;
   ncclNet_t* ncclNet;
   ncclCollNet_t* ncclCollNet;
+  struct ncclGinState* ginState;
+
   uint32_t* abortFlag;
   bool directMode;
   // Service threads

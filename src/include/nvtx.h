@@ -37,10 +37,11 @@
 #define NVTX_SID_AlltoAll             16
 #define NVTX_SID_Gather               17
 #define NVTX_SID_Scatter              18
+#define NVTX_SID_CommRevoke           19 // same schema as NVTX_SID_CommInitRank
 // When adding new schema IDs, DO NOT re-use/overlap with the enum schema ID below!
 
 // Define static schema ID for the reduction operation.
-#define NVTX_PAYLOAD_ENTRY_NCCL_REDOP 19 + NVTX_PAYLOAD_ENTRY_TYPE_SCHEMA_ID_STATIC_START
+#define NVTX_PAYLOAD_ENTRY_NCCL_REDOP 20 + NVTX_PAYLOAD_ENTRY_TYPE_SCHEMA_ID_STATIC_START
 
 extern const nvtxDomainHandle_t ncclNvtxDomainHandle;
 

@@ -7,6 +7,10 @@
 #ifndef NCCL_ALLOCATOR_H_
 #define NCCL_ALLOCATOR_H_
 
+#include "nccl.h"
+#include <stdint.h>
+#include <cuda_runtime.h>
+
 ////////////////////////////////////////////////////////////////////////////////
 // ncclSpace: Allocates contiguous segments of non-negative integers. Useful
 // as a memory allocator when we can't put allocator state within the memory

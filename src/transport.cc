@@ -71,32 +71,46 @@ NCCL_PARAM(ConnectRoundMaxPeers, "CONNECT_ROUND_MAX_PEERS", 128);
 NCCL_PARAM(ReportConnectProgress, "REPORT_CONNECT_PROGRESS", 0);
 #include <sys/time.h>
 
-ncclResult_t ncclTransportCheckP2pType(struct ncclComm* comm, bool* isAllDirectP2p, bool* directMode) {
-  bool supportFlag = true;
+// Tests communicator for CUDA P2P connectivity (local ranks only).
+// *isAllDirectP2p returns 1 if all local ranks have CUDA P2P connectivity with each other
+// and are no further than NCCL_P2P_LEVEL apart.
+// *directMode returns 1 if *any* two local ranks are managed by the same process.
+// *isAllCudaP2p returns 1 if all local ranks have CUDA P2P connectivity with each other, irrespective of the distance.
+ncclResult_t ncclTransportCheckP2pType(struct ncclComm* comm, bool* isAllDirectP2p, bool* directMode,
+                                       bool* isAllCudaP2p) {
+  bool ncclP2pFlag = true;
   bool directFlag = false;
-  if (comm->localRanks == 1) {
-    supportFlag = false;
-  } else {
-    for (int i = 0; i < comm->localRanks; ++i) {
-      for (int j = i + 1; j < comm->localRanks; ++j) {
-        int ipeer = comm->localRankToRank[i];
-        int jpeer = comm->localRankToRank[j];
-        struct ncclPeerInfo* ipeerInfo = &comm->peerInfo[ipeer];
-        struct ncclPeerInfo* jpeerInfo = &comm->peerInfo[jpeer];
-        int canConnect = 0;
-        int intermediateRank = -1;
-        NCCLCHECK(ncclTopoCheckP2p(comm, comm->topo, ipeerInfo->rank, jpeerInfo->rank, &canConnect, NULL, &intermediateRank));
-        if (!canConnect || intermediateRank != -1) {
-          supportFlag = false;
-        }
-        if (ipeerInfo->hostHash == jpeerInfo->hostHash && ipeerInfo->pidHash == jpeerInfo->pidHash) directFlag = true;
-        if (!supportFlag && directFlag) break;
+  bool cudaP2pFlag = true;
+  for (int i = 0; i < comm->localRanks; ++i) {
+    for (int j = i + 1; j < comm->localRanks; ++j) {
+      int ipeer = comm->localRankToRank[i];
+      int jpeer = comm->localRankToRank[j];
+      struct ncclPeerInfo* ipeerInfo = &comm->peerInfo[ipeer];
+      struct ncclPeerInfo* jpeerInfo = &comm->peerInfo[jpeer];
+      int canConnect = 0;
+      int intermediateRank = -1;
+      int cudaP2p = 0;
+      NCCLCHECK(ncclTopoCheckP2p(comm, comm->topo, ipeerInfo->rank, jpeerInfo->rank,
+                                 &canConnect, NULL, &intermediateRank, &cudaP2p));
+      if (!canConnect || intermediateRank != -1) {
+        ncclP2pFlag = false;
+      }
+      if (!cudaP2p) {
+        cudaP2pFlag = false;
+      }
+      if (ipeerInfo->hostHash == jpeerInfo->hostHash && ipeerInfo->pidHash == jpeerInfo->pidHash) {
+        directFlag = true;
+      }
+      if (!ncclP2pFlag && directFlag && !cudaP2pFlag) {
+        break;
       }
     }
   }
-  *isAllDirectP2p = supportFlag;
+  *isAllDirectP2p = ncclP2pFlag;
   *directMode = directFlag;
-  if (comm->rank == 0) INFO(NCCL_INIT, "Check P2P Type isAllDirectP2p %d directMode %d", supportFlag, directFlag);
+  *isAllCudaP2p = cudaP2pFlag;
+  INFO(NCCL_INIT, "Check P2P Type isAllDirectP2p %d directMode %d isAllCudaP2p %d",
+       *isAllDirectP2p, *directMode, *isAllCudaP2p);
   return ncclSuccess;
 }
 

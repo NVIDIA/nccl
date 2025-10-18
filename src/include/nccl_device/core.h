@@ -24,8 +24,14 @@ typedef struct ncclMultimemHandle ncclMultimemHandle_t;
 typedef uint32_t ncclDevResourceHandle;
 typedef ncclDevResourceHandle ncclDevResourceHandle_t;
 
+typedef uint32_t ncclGinSignal_t;
+typedef uint32_t ncclGinCounter_t;
+
 struct ncclLsaBarrierHandle;
 typedef struct ncclLsaBarrierHandle ncclLsaBarrierHandle_t;
+
+struct ncclGinBarrierHandle;
+typedef struct ncclGinBarrierHandle ncclGinBarrierHandle_t;
 
 struct ncclLLA2AHandle;
 typedef struct ncclLLA2AHandle ncclLLA2AHandle_t;
@@ -59,13 +65,26 @@ struct ncclDevCommRequirements {
 
   bool lsaMultimem; // Enable multimem on lsa team
 
+  int barrierCount;
   int lsaBarrierCount;
+  int railGinBarrierCount;
+
+  int lsaLLA2ABlockCount, lsaLLA2ASlotCount;
+
+  bool ginForceEnable;
+  int ginContextCount; // This is a hint, the actual context count in the devcomm may not match.
+  int ginSignalCount; // Guaranteed to start at id=0
+  int ginCounterCount; // Guaranteed to start at id=0
 };
 
 struct ncclDevResourceRequirements {
   ncclDevResourceRequirements_t* next;
   size_t bufferSize, bufferAlign;
   ncclDevResourceHandle_t* outBufferHandle; // If non-null, target assigned during ncclDevCommCreate.
+  int ginSignalCount;
+  int ginCounterCount;
+  ncclGinSignal_t* outGinSignalStart;
+  ncclGinCounter_t* outGinCounterStart;
 };
 
 struct ncclTeamRequirements {

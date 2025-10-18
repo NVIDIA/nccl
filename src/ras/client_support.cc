@@ -106,6 +106,9 @@ static char lineBuf[1024]; // Temporary buffer used for printing at most 10 (RAS
                            // Still, 1024 should normally be plenty (verbose output may make things more difficult,
                            // but we do check for overflows, so it will just be trimmed).
 
+// CUDA version information - shared across functions.
+static int cudaDriverVersion = -1, cudaRuntimeVersion = -1;
+
 
 static ncclResult_t getNewClientEntry(struct rasClient** pClient);
 static void rasClientEnqueueMsg(struct rasClient* client, char* msg, size_t msgLen);
@@ -134,6 +137,22 @@ static const char* rasCommRankGpuToString(const struct rasCollComms::comm::rank*
 static const char* ncclErrorToString(ncclResult_t err);
 static const char* ncclSocketToHost(const union ncclSocketAddress* addr, char* buf, size_t size);
 static bool rasCountIsOutlier(int count, bool verbose, int totalCount = -1);
+
+// CUDA version information - shared across functions.
+static void rasDumpCommsToJSON(struct rasClient* client, struct rasCollComms* commsData,
+                               struct rasCollective* coll, const int* peerIdxConv);
+static void jsonWriteHeader(const char* ncclVersion, int cudaRuntime, int cudaDriver,
+                            const char* timestamp, int commsCount);
+static void jsonStartCommunicator(unsigned long commHash, unsigned long hostHash, unsigned long pidHash,
+                                  int commSize, int ranksCount, int missingCount, bool firstComm);
+static void jsonWriteRankData(int rank, const char* host, int pid, int cudaDev, int nvmlDev,
+                              int initState, int asyncError, bool finalizeCalled, bool destroyFlag,
+                              bool abortFlag, const unsigned long* collCounts, bool firstRank);
+static void jsonStartMissingRanks();
+static void jsonWriteMissingRank(int rank, const char* host, int pid, int cudaDev, int nvmlDev,
+                                 bool unresponsive, bool dead, bool firstMissing);
+static void jsonEndCommunicator();
+static void jsonWriteFooter(double collectionTime, int timeoutsCount);
 
 
 ///////////////////////////////////
@@ -207,6 +226,7 @@ static ncclResult_t getNewClientEntry(struct rasClient** pClient) {
   client->sock = client->pfd = -1;
   ncclIntruQueueConstruct(&client->sendQ);
   client->timeout =  RAS_COLLECTIVE_LEG_TIMEOUT;
+  client->outputFormat = RAS_OUTPUT_TEXT;  // Initialize to default TEXT format.
 
   if (rasClientsHead) {
     rasClientsTail->next = client;
@@ -359,6 +379,24 @@ void rasClientEventLoop(struct rasClient* client, int pollIdx) {
         // We don't copy the terminating '\0', hence memcpy rather than strcpy.
         memcpy(msg, rasLine, msgLen);
         rasClientEnqueueMsg(client, msg, msgLen);
+      } else if (strncasecmp(cmd, "set format ", strlen("set format ")) == 0) {
+        char* format = cmd + strlen("set format ");
+        if (strcasecmp(format, "text") == 0) {
+          client->outputFormat = RAS_OUTPUT_TEXT;
+          strcpy(rasLine, "OK\n");
+        } else if (strcasecmp(format, "json") == 0) {
+          client->outputFormat = RAS_OUTPUT_JSON;
+          strcpy(rasLine, "OK\n");
+        } else {
+          snprintf(rasLine, sizeof(rasLine), "ERROR: Invalid format %s\n", format);
+        }
+        msgLen = strlen(rasLine);
+        if (rasClientAllocMsg(&msg, msgLen) != ncclSuccess) {
+          rasClientTerminate(client);
+          return;
+        }
+        memcpy(msg, rasLine, msgLen);
+        rasClientEnqueueMsg(client, msg, msgLen);
       } else if (strcasecmp(cmd, "status") == 0) {
         client->status = RAS_CLIENT_INIT;
         (void)rasClientRun(client);
@@ -487,23 +525,29 @@ static ncclResult_t rasClientRunInit(struct rasClient* client) {
   int firstIdx, nPeers;
   struct rasValCount valCounts[NCCL_MAX_LOCAL_RANKS];
   int nValCounts;
-  static int cudaDriver = -1, cudaRuntime = -1;
 
   TRACE(NCCL_RAS, "RAS: rasClientRunInit: starting");
 
   rasOutReset();
-  rasOutAppend("NCCL version " STR(NCCL_MAJOR) "." STR(NCCL_MINOR) "." STR(NCCL_PATCH) NCCL_SUFFIX
-               " compiled with CUDA " STR(CUDA_MAJOR) "." STR(CUDA_MINOR) "\n");
-  if (cudaRuntime == -1)
-    cudaRuntimeGetVersion(&cudaRuntime);
-  if (cudaDriver == -1)
-    cudaDriverGetVersion(&cudaDriver);
-  rasOutAppend("CUDA runtime version %d, driver version %d\n\n", cudaRuntime, cudaDriver);
-  msgLen = rasOutLength();
-  NCCLCHECKGOTO(rasClientAllocMsg(&msg, msgLen), ret, fail);
-  rasOutExtract(msg);
-  rasClientEnqueueMsg(client, msg, msgLen);
-  msg = nullptr;
+
+  // Get CUDA version info once for all output formats.
+  if (cudaRuntimeVersion == -1)
+    cudaRuntimeGetVersion(&cudaRuntimeVersion);
+  if (cudaDriverVersion == -1)
+    cudaDriverGetVersion(&cudaDriverVersion);
+
+  // For structured formats (JSON), skip the initial text output.
+  // It will be included in the structured output later.
+  if (client->outputFormat == RAS_OUTPUT_TEXT) {
+    rasOutAppend("NCCL version " STR(NCCL_MAJOR) "." STR(NCCL_MINOR) "." STR(NCCL_PATCH) NCCL_SUFFIX
+                 " compiled with CUDA " STR(CUDA_MAJOR) "." STR(CUDA_MINOR) "\n");
+    rasOutAppend("CUDA runtime version %d, driver version %d\n\n", cudaRuntimeVersion, cudaDriverVersion);
+    msgLen = rasOutLength();
+    NCCLCHECKGOTO(rasClientAllocMsg(&msg, msgLen), ret, fail);
+    rasOutExtract(msg);
+    rasClientEnqueueMsg(client, msg, msgLen);
+    msg = nullptr;
+  }
 
   totalGpus = totalNodes = 0;
   firstNGpusNode = 0; // #GPUs on the first peer of a node.
@@ -550,15 +594,17 @@ static ncclResult_t rasClientRunInit(struct rasClient* client) {
         consistentNPeersGlobal, consistentNGpusGlobal, consistentNGpusNode);
   TRACE(NCCL_RAS, "RAS: firstNPeersGlobal %d, firstNGpusGlobal %d", firstNPeersGlobal, firstNGpusGlobal);
 
-  rasOutAppend("Job summary\n"
-               "===========\n\n");
+  // Only output job summary for text format.
+  if (client->outputFormat == RAS_OUTPUT_TEXT) {
+    rasOutAppend("Job summary\n"
+                 "===========\n\n");
 
-  if (consistentNGpusNode && consistentNGpusGlobal && consistentNPeersGlobal) {
-    rasOutAppend("  Nodes  Processes         GPUs  Processes     GPUs\n"
-                 "(total)   per node  per process    (total)  (total)\n"
-                 "%7d"  "  %9d"    "  %11d"     "  %9d"    "  %7d\n",
-                 totalNodes, firstNPeersGlobal, firstNGpusGlobal, nRasPeers, totalGpus);
-  } else {
+    if (consistentNGpusNode && consistentNGpusGlobal && consistentNPeersGlobal) {
+      rasOutAppend("  Nodes  Processes         GPUs  Processes     GPUs\n"
+                   "(total)   per node  per process    (total)  (total)\n"
+                   "%7d"  "  %9d"    "  %11d"     "  %9d"    "  %7d\n",
+                   totalNodes, firstNPeersGlobal, firstNGpusGlobal, nRasPeers, totalGpus);
+    } else {
     // Gather the stats on the number of processes per node.  However, that number is not a property of a peer,
     // but of a group of peers, so calculating it is more involved.  We store the value in a temporary auxRasPeers
     // array.
@@ -704,8 +750,9 @@ static ncclResult_t rasClientRunInit(struct rasClient* client) {
           } // for (peerIdx)
         } // if (rasCountIsOutlier(vc->count))
       } // for (i)
-    } // !consistentNPeersGlobal
-  } // !consistentNGpusNode || !consistentNGpusGlobal || !consistentNPeersGlobal
+      } // !consistentNPeersGlobal
+    } // !consistentNGpusNode || !consistentNGpusGlobal || !consistentNPeersGlobal
+  } // TEXT format only
 
 #if 0 // Commented out for now to focus the summary status report on the information most relevant to the users.
       // To be revisited with future extensions to RAS.
@@ -726,12 +773,15 @@ static ncclResult_t rasClientRunInit(struct rasClient* client) {
       ret = ncclInProgress; // We need to wait for async. responses.
   }
 #endif
-  rasOutAppend("\nCommunicators...");
-  msgLen = rasOutLength();
-  NCCLCHECKGOTO(rasClientAllocMsg(&msg, msgLen), ret, fail);
-  rasOutExtract(msg);
-  rasClientEnqueueMsg(client, msg, msgLen);
-  msg = nullptr;
+  // Only send "Communicators..." message for text format.
+  if (client->outputFormat == RAS_OUTPUT_TEXT) {
+    rasOutAppend("\nCommunicators...");
+    msgLen = rasOutLength();
+    NCCLCHECKGOTO(rasClientAllocMsg(&msg, msgLen), ret, fail);
+    rasOutExtract(msg);
+    rasClientEnqueueMsg(client, msg, msgLen);
+    msg = nullptr;
+  }
   {
     struct rasCollRequest collReq = {};
     bool allDone = false;
@@ -770,7 +820,7 @@ static ncclResult_t rasClientRunConns(struct rasClient* client) {
   client->coll = nullptr;
 
   rasOutReset();
-  rasOutAppend(" obtained a result in %.2fs\n", (clockNano()-coll->startTime)/1e9);
+  rasOutAppend(" obtained a result in %.3fs\n", (clockNano()-coll->startTime)/1e9);
   if (coll->nLegTimeouts > 0) {
     rasOutAppend(" Warning: encountered %d communication timeout%s while gathering data\n", coll->nLegTimeouts,
                  (coll->nLegTimeouts > 1 ? "s" : ""));
@@ -827,7 +877,7 @@ static ncclResult_t rasClientRunConns(struct rasClient* client) {
     rasOutAppend(" Collected data about %d unidirectional connection%s\n",
                  connsData->nConns, (connsData->nConns > 1 ? "s" : ""));
     rasOutAppend(" Travel times (valid only if system clocks are synchronized between nodes):\n"
-                 "  Minimum %fs, maximum %fs, average %fs\n",
+                 "  Minimum %.3fs, maximum %.3fs, average %.3fs\n",
                  connsData->travelTimeMin/1e9, connsData->travelTimeMax/1e9,
                  connsData->travelTimeSum/(1e9*connsData->travelTimeCount));
   } else {
@@ -845,7 +895,7 @@ static ncclResult_t rasClientRunConns(struct rasClient* client) {
         int sourcePeerIdx = rasPeerFind(&negativeMin->source);
         int destPeerIdx = rasPeerFind(&negativeMin->dest);
         if (sourcePeerIdx != -1 && destPeerIdx != -1)
-          rasOutAppend("  From node %s process %d to node %s process %d: observed travel time of %fs\n",
+          rasOutAppend("  From node %s process %d to node %s process %d: observed travel time of %.3fs\n",
                        ncclSocketToHost(&negativeMin->source, rasLine, sizeof(rasLine)), rasPeers[sourcePeerIdx].pid,
                        ncclSocketToHost(&negativeMin->dest, lineBuf, sizeof(lineBuf)), rasPeers[destPeerIdx].pid,
                        negativeMin->travelTimeMin/1e9);
@@ -923,7 +973,6 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
   client->coll = nullptr;
 
   rasOutReset();
-  rasOutAppend(" (%.2fs)\n=============\n\n", (clockNano()-coll->startTime)/1e9);
 
   // Calculate the number of missing peers early as we rely on it for other things.
   nPeersMissing = nRasPeers - nRasDeadPeers - coll->nPeers;
@@ -954,6 +1003,21 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
   }
   // Sort coll->peers to match the ordering of rasPeers -- we may need it later...
   qsort(coll->peers, coll->nPeers, sizeof(*coll->peers), &ncclSocketsCompare);
+
+  // Check output format and call appropriate dump function for JSON.
+  if (client->outputFormat == RAS_OUTPUT_JSON) {
+    rasDumpCommsToJSON(client, commsData, coll, peerIdxConv);
+    msgLen = rasOutLength();
+    NCCLCHECKGOTO(rasClientAllocMsg(&msg, msgLen), ret, fail);
+    rasOutExtract(msg);
+    rasClientEnqueueMsg(client, msg, msgLen);
+    msg = nullptr;
+    client->status = RAS_CLIENT_FINISHED;
+    goto exit;
+  }
+
+  // Default TEXT format continues below.
+  rasOutAppend(" (%.3fs)\n=============\n\n", (clockNano()-coll->startTime)/1e9);
 
   // Fill in the remaining fields of auxComm's.
   for (int commIdx = 0; commIdx < commsData->nComms; commIdx++) {
@@ -1818,6 +1882,111 @@ static int rasAuxCommRanksValueCompare(const void* p1, const void* p2) {
 }
 
 
+//////////////////////////////////////////////////////////
+// JSON utility functions for structured output format. //
+//////////////////////////////////////////////////////////
+
+// Writes the JSON document header with metadata and opens the communicators array.
+static void jsonWriteHeader(const char* ncclVersion, int cudaRuntime, int cudaDriver,
+                            const char* timestamp, int commsCount) {
+  rasOutAppend("{\n");
+  rasOutAppend("  \"nccl_version\": \"%s\",\n", ncclVersion);
+  rasOutAppend("  \"cuda_runtime_version\": %d,\n", cudaRuntime);
+  rasOutAppend("  \"cuda_driver_version\": %d,\n", cudaDriver);
+  rasOutAppend("  \"timestamp\": \"%s\",\n", timestamp);
+  rasOutAppend("  \"communicators_count\": %d,\n", commsCount);
+  rasOutAppend("  \"communicators\": [\n");
+}
+
+// Starts a new communicator entry in the JSON output.
+static void jsonStartCommunicator(unsigned long commHash, unsigned long hostHash, unsigned long pidHash,
+                                  int commSize, int ranksCount, int missingCount, bool firstComm) {
+  if (!firstComm) rasOutAppend(",\n");
+  rasOutAppend("    {\n");
+  rasOutAppend("      \"hash\": \"0x%lx\",\n", commHash);
+  rasOutAppend("      \"secondary_hash\": \"0x%lx:0x%lx\",\n", hostHash, pidHash);
+  rasOutAppend("      \"size\": %d,\n", commSize);
+  rasOutAppend("      \"ranks_count\": %d,\n", ranksCount);
+  rasOutAppend("      \"missing_ranks_count\": %d,\n", missingCount);
+  rasOutAppend("      \"ranks\": [\n");
+}
+
+// Writes detailed rank information including status and collective operation counts.
+static void jsonWriteRankData(int rank, const char* host, int pid, int cudaDev, int nvmlDev,
+                              int initState, int asyncError, bool finalizeCalled, bool destroyFlag,
+                              bool abortFlag, const unsigned long* collCounts, bool firstRank) {
+  if (!firstRank) rasOutAppend(",\n");
+  rasOutAppend("        {\n");
+  rasOutAppend("          \"rank\": %d,\n", rank);
+  rasOutAppend("          \"host\": \"%s\",\n", host);
+  rasOutAppend("          \"pid\": %d,\n", pid);
+  rasOutAppend("          \"cuda_dev\": %d,\n", cudaDev);
+  rasOutAppend("          \"nvml_dev\": %d,\n", nvmlDev);
+
+  // Status object.
+  rasOutAppend("          \"status\": {\n");
+  rasOutAppend("            \"init_state\": %d,\n", initState);
+  rasOutAppend("            \"async_error\": %d,\n", asyncError);
+  rasOutAppend("            \"finalize_called\": %s,\n", finalizeCalled ? "true" : "false");
+  rasOutAppend("            \"destroy_flag\": %s,\n", destroyFlag ? "true" : "false");
+  rasOutAppend("            \"abort_flag\": %s\n", abortFlag ? "true" : "false");
+  rasOutAppend("          },\n");
+
+  // Collective counts object.
+  rasOutAppend("          \"collective_counts\": {\n");
+  for (int op = 0; op < NCCL_NUM_FUNCTIONS; op++) {
+    rasOutAppend("            \"%s\": %lu", ncclFuncToString((ncclFunc_t)op), collCounts[op]);
+    if (op < NCCL_NUM_FUNCTIONS - 1) rasOutAppend(",");
+    rasOutAppend("\n");
+  }
+  rasOutAppend("          }\n");
+  rasOutAppend("        }");
+}
+
+// Closes the ranks array and starts the missing ranks section.
+static void jsonStartMissingRanks() {
+  rasOutAppend("\n"
+               "      ],\n");
+
+  rasOutAppend("      \"missing_ranks\": [\n");
+}
+
+// Writes basic information for a missing rank.
+static void jsonWriteMissingRank(int rank, const char* host, int pid, int cudaDev, int nvmlDev,
+                                 bool unresponsive, bool dead, bool firstMissing) {
+  if (!firstMissing) rasOutAppend(",\n");
+  rasOutAppend("        {\n");
+  rasOutAppend("          \"rank\": %d,\n", rank);
+  rasOutAppend("          \"host\": \"%s\",\n", host);
+  rasOutAppend("          \"pid\": %d,\n", pid);
+  rasOutAppend("          \"cuda_dev\": %d,\n", cudaDev);
+  rasOutAppend("          \"nvml_dev\": %d\n", nvmlDev);
+
+  // Status object.
+  rasOutAppend("          \"status\": {\n");
+  rasOutAppend("            \"unresponsive\": %s,\n", unresponsive ? "true" : "false");
+  rasOutAppend("            \"considered_dead\": %s\n", dead ? "true" : "false");
+  rasOutAppend("          }\n");
+  rasOutAppend("        }");
+}
+
+// Closes the current communicator entry.
+static void jsonEndCommunicator() {
+  rasOutAppend("\n      ]\n");
+  rasOutAppend("    }");
+}
+
+// Writes the JSON document footer with RAS metadata and closes the document.
+static void jsonWriteFooter(double collectionTime, int timeoutsCount) {
+  rasOutAppend("\n  ],\n");
+  rasOutAppend("  \"ras\": {\n");
+  rasOutAppend("    \"collection_time_sec\": %.3f,\n", collectionTime);
+  rasOutAppend("    \"timeouts_count\": %d\n", timeoutsCount);
+  rasOutAppend("  }\n");
+  rasOutAppend("}\n");
+}
+
+
 ////////////////////////////////////////////////////////////
 // String formatting functions for various types of data. //
 ////////////////////////////////////////////////////////////
@@ -1885,6 +2054,81 @@ static const char* ncclSocketToHost(const union ncclSocketAddress* addr, char* b
       buf[0] = '\0';
     return buf;
   }
+}
+
+// Dump communicator data to JSON format - build JSON in output buffer.
+static void rasDumpCommsToJSON(struct rasClient* client, struct rasCollComms* commsData,
+                               struct rasCollective* coll, const int* peerIdxConv) {
+  char hostBuf[256], timeBuf[64];
+
+  time_t timestampSec = time(NULL);
+  struct tm tmBuffer;
+  struct tm* tmInfo = localtime_r(&timestampSec, &tmBuffer);
+  strftime(timeBuf, sizeof(timeBuf), "%F %T", tmInfo);
+
+  // Write JSON header with metadata.
+  jsonWriteHeader(STR(NCCL_MAJOR) "." STR(NCCL_MINOR) "." STR(NCCL_PATCH) NCCL_SUFFIX,
+                  cudaRuntimeVersion, cudaDriverVersion, timeBuf, commsData->nComms);
+
+  struct rasCollComms::comm* comm = commsData->comms;
+
+  // Iterate through communicators.
+  for (int commIdx = 0; commIdx < commsData->nComms; commIdx++) {
+    jsonStartCommunicator(comm->commId.commHash, comm->commId.hostHash, comm->commId.pidHash,
+                          comm->commNRanks, comm->nRanks, comm->nMissingRanks, (commIdx == 0));
+
+    // Add each rank.
+    for (int rankIdx = 0; rankIdx < comm->nRanks; rankIdx++) {
+      struct rasCollComms::comm::rank* rank = comm->ranks + rankIdx;
+
+      // Get host and pid information.
+      const char* host = "unknown";
+      int pid = -1;
+      if (rank->peerIdx >= 0 && peerIdxConv && peerIdxConv[rank->peerIdx] >= 0) {
+        int rasPeerIdx = peerIdxConv[rank->peerIdx];
+        host = ncclSocketToHost(&rasPeers[rasPeerIdx].addr, hostBuf, sizeof(hostBuf));
+        pid = rasPeers[rasPeerIdx].pid;
+      }
+
+      jsonWriteRankData(rank->commRank, host, pid, rank->cudaDev, rank->nvmlDev,
+                        rank->status.initState, rank->status.asyncError,
+                        rank->status.finalizeCalled, rank->status.destroyFlag, rank->status.abortFlag,
+                        rank->collOpCounts, (rankIdx == 0));
+    }
+
+    // Start missing ranks section.
+    jsonStartMissingRanks();
+
+    // Add missing ranks.
+    struct rasCollCommsMissingRank* missingRanks = (struct rasCollCommsMissingRank*)(comm->ranks + comm->nRanks);
+    for (int missingIdx = 0; missingIdx < comm->nMissingRanks; missingIdx++) {
+      struct rasCollCommsMissingRank* missingRank = missingRanks + missingIdx;
+
+      // Get host and pid for missing rank.
+      int rasPeerIdx = rasPeerFind(&missingRank->addr);
+      const char* host = "unknown";
+      int pid = -1;
+      bool unresponsive = (bsearch(&missingRank->addr, coll->peers, coll->nPeers, sizeof(*coll->peers),
+                                   ncclSocketsCompare) == nullptr);
+      bool dead = rasPeerIsDead(&missingRank->addr);
+      if (rasPeerIdx >= 0) {
+        host = ncclSocketToHost(&rasPeers[rasPeerIdx].addr, hostBuf, sizeof(hostBuf));
+        pid = rasPeers[rasPeerIdx].pid;
+      }
+
+      jsonWriteMissingRank(missingRank->commRank, host, pid, missingRank->cudaDev, missingRank->nvmlDev,
+                           unresponsive, dead, (missingIdx == 0));
+    }
+
+    jsonEndCommunicator();
+
+    // Move to the next communicator.
+    comm = (struct rasCollComms::comm*)(((char*)(comm+1)) + comm->nRanks * sizeof(*comm->ranks) +
+                                        comm->nMissingRanks * sizeof(struct rasCollCommsMissingRank));
+  }
+
+  // Write JSON footer with RAS metadata.
+  jsonWriteFooter((clockNano()-coll->startTime)/1e9, coll->nLegTimeouts);
 }
 
 // Determines if the given count constitutes an outlier.

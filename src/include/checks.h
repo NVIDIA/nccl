@@ -137,6 +137,21 @@
   } \
 } while (0)
 
+#define NCCLCHECKNOWARN(call, FLAGS) do { \
+  ncclResult_t RES; \
+  NOWARN(RES = call, FLAGS); \
+  if (RES != ncclSuccess && RES != ncclInProgress) { \
+    return RES; \
+  } \
+} while (0)
+
+#define NCCLCHECKGOTONOWARN(call, RES, label, FLAGS) do { \
+  NOWARN(RES = call, FLAGS); \
+  if (RES != ncclSuccess && RES != ncclInProgress) { \
+    goto label; \
+  } \
+} while (0)
+
 #define NCCLWAIT(call, cond, abortFlagPtr) do {         \
   uint32_t* tmpAbortFlag = (abortFlagPtr);     \
   ncclResult_t RES = call;                \

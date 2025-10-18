@@ -69,6 +69,9 @@ typedef enum { ncclSuccess                 =  0,
 #define NCCL_SHRINK_DEFAULT 0x00 /* shrink the parent communicator */
 #define NCCL_SHRINK_ABORT 0x01   /* First, terminate ongoing parent operations, and then shrink the parent communicator */
 
+/* ncclCommRevoke flags */
+#define NCCL_REVOKE_DEFAULT 0x00 /* reserved for future use; must be 0 */
+
 /* Communicator configuration. Users can assign value to attributes to specify the
  * behavior of a communicator. */
 typedef struct ncclConfig_v22800 {
@@ -193,6 +196,15 @@ ncclResult_t pncclCommDestroy(ncclComm_t comm);
  * that might still be running on the device. */
 ncclResult_t  ncclCommAbort(ncclComm_t comm);
 ncclResult_t pncclCommAbort(ncclComm_t comm);
+
+/* Revoke a communicator. ncclCommRevoke stops all in-flight operations
+ * and marks communicator state as ncclInProgress. The state will change to ncclSuccess
+ * when the communicator is quiescent; then, management operations (destroy, split,
+ * shrink) can proceed safely. Calling ncclCommFinalize after revoke is invalid.
+ * Additionally, resource sharing via splitShare/shrinkShare is disabled while revoked.
+ * revokeFlags must be NCCL_REVOKE_DEFAULT (0). */
+ncclResult_t  ncclCommRevoke(ncclComm_t comm, int revokeFlags);
+ncclResult_t pncclCommRevoke(ncclComm_t comm, int revokeFlags);
 
 /* Creates one or more communicators from an existing one.
  * Ranks with the same color will end up in the same communicator.

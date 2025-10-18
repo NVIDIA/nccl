@@ -55,13 +55,13 @@ fail:
 
 ncclResult_t ncclCeFinalize(struct ncclComm* comm) {
   ncclResult_t ret = ncclSuccess;
-  
+
   // Clean up ceInitTaskQueue
   while (!ncclIntruQueueEmpty(&comm->ceInitTaskQueue)) {
     struct ncclCeInitTask* task = ncclIntruQueueDequeue(&comm->ceInitTaskQueue);
     free(task);
   }
-  
+
   // Clean up CE resources
   if (comm->ceColl.baseUCSymReadyPtr != NULL) {
     if (comm->ceColl.ceSyncWin && comm->ceColl.ceSyncWin->vidmem) {
@@ -117,7 +117,7 @@ ncclResult_t ncclPrepMCSync(struct ncclComm* comm, bool isComplete, CUstreamBatc
   void* dstPtr = isComplete ? (void*)&completePtrs[comm->rank] : (void*)&readyPtrs[comm->rank];
   size_t offset = (uint8_t*)dstPtr - (uint8_t*)comm->ceColl.ceSyncWin->userPtr;
   NCCLCHECKGOTO(ncclDevrGetLsaTeamPtrMC(comm, comm->ceColl.ceSyncWin, offset, ncclTeamLsa(comm), &mcDstPtr), ret, fail);
-  
+
   // Write our own ready/complete flag to the multi-cast address
   CUDACHECKGOTO(cudaMemcpyAsync(
     mcDstPtr,
@@ -194,7 +194,7 @@ ncclResult_t ncclMemOpSync(struct ncclComm* comm, cudaStream_t stream) {
   // Get pointers to the ready and complete synchronization arrays
   uint32_t* readyPtrs = (uint32_t*)comm->ceColl.baseUCSymReadyPtr;
   uint32_t* completePtrs = (uint32_t*)comm->ceColl.baseUCSymComplPtr;
-  
+
   // Allocate enough slots for all possible ops
   size_t batchSize = (comm->nvlsSupport ? NCCL_CE_SYNC_OPS_PER_RANK_MC : NCCL_CE_SYNC_OPS_PER_RANK_UC) * comm->nRanks;
   size_t opIdx = 0;
@@ -220,7 +220,7 @@ ncclResult_t ncclMemOpSync(struct ncclComm* comm, cudaStream_t stream) {
       opIdx++;
     }
   }
-  
+
   // Execute all memory operations in a single batch
   CUCHECKGOTO(cuStreamBatchMemOp(stream, opIdx, batchParams, 0), ret, fail);
 
@@ -236,7 +236,7 @@ fail:
 
 ncclResult_t ncclCeInitBatchOpsParams(struct ncclCeBatchOpsParams* params, int nRanks) {
   ncclResult_t ret = ncclSuccess;
-  
+
   params->srcs = nullptr;
   params->dsts = nullptr;
   params->sizes = nullptr;
@@ -247,7 +247,7 @@ ncclResult_t ncclCeInitBatchOpsParams(struct ncclCeBatchOpsParams* params, int n
   params->attrIdxs = nullptr;
   params->numAttrs = 0;
 #endif
-  
+
   NCCLCHECKGOTO(ncclCalloc(&params->srcs, nRanks), ret, fail);
   NCCLCHECKGOTO(ncclCalloc(&params->dsts, nRanks), ret, fail);
   NCCLCHECKGOTO(ncclCalloc(&params->sizes, nRanks), ret, fail);
@@ -284,7 +284,7 @@ ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeBatchOpsPa
 
   int driverVersion;
   NCCLCHECKGOTO(ncclCudaDriverVersion(&driverVersion), ret, fail);
-    
+
   //--------------Graph capture--------------
   // cudaMemcpyBatchAsync is not supported during CUDA graph capture
   if (capturing) {
@@ -372,7 +372,7 @@ fail:
 
 ncclResult_t ncclCeAllGather(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
-  
+
   // Calculate the size of each rank's data chunk
   const size_t chunkBytes = args->nElts * args->eltSize;
   uint8_t* mySendBuff = (uint8_t*)args->sendBuff;
@@ -423,7 +423,7 @@ fail:
 
 ncclResult_t ncclCeAlltoAll(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
-  
+
   // Calculate the size of data each rank sends to every other rank
   const size_t chunkBytes = args->nElts * args->eltSize;
   uint8_t* mySendBuff = (uint8_t*)args->sendBuff;
@@ -442,7 +442,7 @@ ncclResult_t ncclCeAlltoAll(struct ncclComm* comm, struct ncclCeCollArgs* args, 
     int dstRank = (comm->rank + r) % comm->nRanks;
     uint8_t* srcPtr = mySendBuff + dstRank * chunkBytes;
     uint8_t* dstPtr = myRecvBuff + comm->rank * chunkBytes;
-    
+
     if (dstRank == comm->rank) {
       // Local copy for own data
       batchOpsParams.srcs[batchOpsParams.numOps] = (void*)srcPtr;
@@ -478,7 +478,7 @@ fail:
 
 ncclResult_t ncclCeScatter(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
-  
+
   // Calculate the size of data root sends to each rank
   const size_t chunkBytes = args->nElts * args->eltSize;
   uint8_t* mySendBuff = (uint8_t*)args->sendBuff;
@@ -538,7 +538,7 @@ fail:
 
 ncclResult_t ncclCeGather(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
-  
+
   // Calculate the size of data each rank sends to root
   const size_t chunkBytes = args->nElts * args->eltSize;
   uint8_t* mySendBuff = (uint8_t*)args->sendBuff;

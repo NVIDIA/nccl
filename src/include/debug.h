@@ -29,6 +29,14 @@ extern char ncclLastError[];
 #define VERSION(...) ncclDebugLog(NCCL_LOG_VERSION, NCCL_ALL, __FILE__, __LINE__, __VA_ARGS__)
 #define WARN(...) ncclDebugLog(NCCL_LOG_WARN, NCCL_ALL, __FILE__, __LINE__, __VA_ARGS__)
 
+#define NOWARN(EXPR, FLAGS) \
+  do { \
+    int oldNoWarn = ncclDebugNoWarn; \
+    ncclDebugNoWarn = FLAGS; \
+    (EXPR); \
+    ncclDebugNoWarn = oldNoWarn; \
+  } while(0)
+
 #define INFO(FLAGS, ...) \
     do{ \
         int level = __atomic_load_n(&ncclDebugLevel, __ATOMIC_ACQUIRE); \

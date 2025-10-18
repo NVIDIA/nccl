@@ -241,7 +241,7 @@ __device__ __forceinline__ void ncclSymkRun_ReduceScatter_LD(ncclSymkDevWorkArgs
                           threadIdx.x/WARP_SIZE, blockDim.x/WARP_SIZE);
         int tn = nBlocks*blockDim.x;
 
-        reduce(handler, tn, t, nBlocks, waitNeeded, bar, red, input + rank*nElts, output, nElts);
+        reduce(handler, tn, t, nBlocks, waitNeeded, bar, red, input + rank*nAllElts, output, nElts);
 
         waitNeeded = false;
       }
@@ -323,7 +323,7 @@ __device__ __forceinline__ void ncclSymkRun_ReduceScatter_LDMC(ncclSymkDevWorkAr
                           threadIdx.x/WARP_SIZE, blockDim.x/WARP_SIZE);
         int tn = nBlocks*blockDim.x;
 
-        reduceMultimem(tn, t, red, input.multimemPtr(multimem) + rank*nElts, output.localPtr(), nElts);
+        reduceMultimem(tn, t, red, input.multimemPtr(multimem) + rank*nAllElts, output.localPtr(), nElts);
       }
     );
 
@@ -402,7 +402,7 @@ __device__ __forceinline__ void ncclSymkRun_ReduceScatter_LL(ncclSymkDevWorkArgs
         T* input = (T*)inputPtr.localPtr();
         T* output = (T*)outputPtr.localPtr();
 
-        uint32_t lowBits = nElts*sizeof(T);
+        uint32_t lowBits = nAllElts*sizeof(T);
         lowBits |= (uintptr_t)input;
         lowBits |= (uintptr_t)output;
         if (__builtin_expect(lowBits%8 == 0, true)) {

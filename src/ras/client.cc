@@ -28,6 +28,7 @@ static const char* hostName = "localhost";
 static const char* port = STR(NCCL_RAS_CLIENT_PORT);
 static int timeout = -1;
 static bool verbose = false;
+static const char* format = "text";
 static int sock = -1;
 
 static void printUsage(const char* argv0) {
@@ -35,6 +36,7 @@ static void printUsage(const char* argv0) {
           "Usage: %s [OPTION]...\n"
           "Query the state of a running NCCL job.\n"
           "\nOptions:\n"
+          "  -f, --format=FMT    Output format: text or json (text by default)\n"
           "  -h, --host=HOST     Host name or IP address of the RAS client socket of the\n"
           "                      NCCL job to connect to (localhost by default)\n"
           "  -p, --port=PORT     TCP port of the RAS client socket of the NCCL job\n"
@@ -51,17 +53,25 @@ static void parseArgs(int argc, char** argv) {
   int c;
   int optIdx = 0;
   struct option longOpts[] = {
+    {"format",  required_argument, NULL, 'f'},
+    {"help",    no_argument,       NULL, 'e'},
     {"host",    required_argument, NULL, 'h'},
     {"port",    required_argument, NULL, 'p'},
     {"timeout", required_argument, NULL, 't'},
     {"verbose", no_argument,       NULL, 'v'},
-    {"help",    no_argument,       NULL, 'e'},
     {"version", no_argument,       NULL, 'r'},
     {0}
   };
 
-  while ((c = getopt_long(argc, argv, "h:p:t:v", longOpts, &optIdx)) != -1) {
+  while ((c = getopt_long(argc, argv, "f:h:p:t:v", longOpts, &optIdx)) != -1) {
     switch (c) {
+      case 'f':
+        format = optarg;
+        if (strcasecmp(format, "text") != 0 && strcasecmp(format, "json") != 0) {
+          fprintf(stderr, "Invalid format: %s (must be text or json)\n", format);
+          exit(1);
+        }
+        break;
       case 'h':
         hostName = optarg;
         break;
@@ -265,9 +275,51 @@ timeout:
   goto retry;
 }
 
+static int setOutputFormat() {
+  char msgBuf[4096];
+  int bytes;
+
+  // Only set format if it's not the default.
+  if (strcasecmp(format, "text") != 0) {
+    snprintf(msgBuf, sizeof(msgBuf), "SET FORMAT %s\n", format);
+    if (socketWrite(sock, msgBuf, strlen(msgBuf)) != strlen(msgBuf)) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK)
+        fprintf(stderr, "Connection timed out\n");
+      else
+        perror("write to socket");
+      return 1;
+    }
+    // Read response.
+    bytes = rasRead(sock, msgBuf, sizeof(msgBuf));
+    if (bytes < 0) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK)
+        fprintf(stderr, "Connection timed out\n");
+      else
+        perror("read socket");
+      return 1;
+    }
+    if (bytes == 0) {
+      fprintf(stderr, "NCCL unexpectedly closed the connection\n");
+      return 1;
+    }
+    if (strcasecmp(msgBuf, "OK\n")) {
+      fprintf(stderr, "Unexpected response from NCCL: %s\n", msgBuf);
+      return 1;
+    }
+  }
+  return 0;
+}
+
 int getNCCLStatus() {
   char msgBuf[4096];
   int bytes;
+
+  // Set the output format.
+  if (setOutputFormat() != 0) {
+    return 1;
+  }
+
+  // Send the status command.
   snprintf(msgBuf, sizeof(msgBuf), "%sSTATUS\n", (verbose ? "VERBOSE " : ""));
   if (socketWrite(sock, msgBuf, strlen(msgBuf)) != strlen(msgBuf)) {
     if (errno == EAGAIN || errno == EWOULDBLOCK)

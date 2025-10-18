@@ -39,6 +39,7 @@ add_subdirectory(device)
 add_subdirectory(nccl_device)
 add_subdirectory(ras)
 add_subdirectory(scheduler)
+add_subdirectory(gin)
 
 add_compile_options(-fmacro-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}/=)
 
@@ -52,6 +53,8 @@ list(APPEND LIBSRCFILES
     ${RAS_SOURCES}
     ${SYM_SOURCES}
     ${SCHEDULER_SOURCES}
+    ${GIN_SOURCES}
+    ${DOCA_SOURCES}
 )
 
 ###################### Create a shared NCCL library ############################
@@ -65,6 +68,7 @@ target_include_directories(nccl PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin
     ${CUDAToolkit_INCLUDE_DIRS}
+    ${DOCA_HOME}/include
     ${CUDAToolkit_INCLUDE_DIRS}/cccl
 )
 
@@ -80,9 +84,25 @@ add_custom_command(
     BYPRODUCTS ${CMAKE_BINARY_DIR}/include/nccl.h
 )
 
-add_custom_target(nccl_header DEPENDS ${CMAKE_BINARY_DIR}/include/nccl.h)
+file(GLOB_RECURSE SRC_DEVICE_HEADERS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_device/*.h)
+
+# Copy all device header files to the destination
+foreach(HEADER_FILE ${SRC_DEVICE_HEADERS})
+    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${HEADER_FILE} ${CMAKE_BINARY_DIR}/${HEADER_FILE} COPYONLY)
+    list(APPEND DEVICE_HEADERS ${CMAKE_BINARY_DIR}/${HEADER_FILE})
+endforeach()
+
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_device.h ${CMAKE_BINARY_DIR}/include/nccl_device.h COPYONLY)
+
+add_custom_target(nccl_header DEPENDS
+    ${CMAKE_BINARY_DIR}/include/nccl.h
+    ${CMAKE_BINARY_DIR}/include/nccl_device.h
+    ${DEVICE_HEADERS}
+    ${DEVICE_DOCA_HEADERS}
+)
 
 add_dependencies(nccl nccl_header)
+add_dependencies(nccl_device nccl_header)
 
 # Set version and output name
 set_target_properties(nccl PROPERTIES
@@ -109,6 +129,11 @@ target_link_libraries(nccl
     dl
     ${CUDAToolkit_LIBRARIES}
     ${EXTRA_LIBS}
+)
+
+# Add version script for symbol visibility control
+target_link_options(nccl PRIVATE
+    "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libnccl.map"
 )
 
 # Set output directories for nccl shared library
@@ -149,6 +174,7 @@ target_include_directories(nccl_static PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin
     ${CUDAToolkit_INCLUDE_DIRS}
+    transport/gdaki/doca-gpunetio/include
     ${CUDAToolkit_INCLUDE_DIRS}/cccl
 )
 

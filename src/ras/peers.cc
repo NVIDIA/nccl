@@ -493,7 +493,7 @@ ncclResult_t rasMsgHandlePeersUpdate(struct rasMsg* msg, struct rasSocket* sock)
   bool updatePeers, updateDeadPeers;
 
   INFO(NCCL_RAS, "RAS handling peersUpdate from %s (peersHash 0x%lx, deadPeersHash 0x%lx, nPeers %d, nDeadPeers %d)",
-       ncclSocketToString(&sock->sock.addr, rasLine), msg->peersUpdate.peersHash, msg->peersUpdate.deadPeersHash,
+       ncclSocketToString(&sock->sock.peerAddr, rasLine), msg->peersUpdate.peersHash, msg->peersUpdate.deadPeersHash,
        msg->peersUpdate.nPeers, msg->peersUpdate.nDeadPeers);
   INFO(NCCL_RAS, "RAS my old rasPeersHash 0x%lx, rasDeadPeersHash 0x%lx, nRasPeers %d, nRasDeadPeers %d",
        rasPeersHash, rasDeadPeersHash, nRasPeers, nRasDeadPeers);

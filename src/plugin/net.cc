@@ -206,6 +206,8 @@ static ncclResult_t ncclNetPluginInit(struct ncclComm* comm, netPluginLib_t* plu
       if (ncclGinIbGdaki.init(&throwAwayContext, comm->commHash, ncclDebugLog) == ncclSuccess) {
         if (ncclGinIbGdaki.devices(&ndev) == ncclSuccess && ndev > 0) {
           pluginLib->ncclGin = &ncclGinIbGdaki;
+        } else {
+          pluginLib->ncclGin = &ncclGinIbProxy;
         }
         ncclGinIbGdaki.finalize(throwAwayContext);
       }

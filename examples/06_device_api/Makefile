@@ -4,8 +4,8 @@
 # See LICENSE.txt for license information
 #
 
-# NCCL Shared Memory Examples
-EXAMPLES = 01_allreduce
+# NCCL Device API Examples
+EXAMPLES = 01_allreduce 02_gin_alltoall_pure 03_gin_alltoall_hybrid
 
 # Default target
 all: $(EXAMPLES)
@@ -39,9 +39,13 @@ help:
 	@echo "  help    - Show this help"
 	@echo ""
 	@echo "Examples:"
-	@echo "  01_allreduce - AllReduce collective operation"
+	@echo "  01_allreduce              - AllReduce collective operation"
+	@echo "  02_gin_alltoall_pure      - Pure GIN AlltoAll (network-only)"
+	@echo "  03_gin_alltoall_hybrid    - Hybrid GIN+LSA AlltoAll (optimized)"
 	@echo ""
 	@echo "To build/run individual examples:"
 	@echo "  make -C 01_allreduce"
+	@echo "  make -C 02_gin_alltoall_pure"
+	@echo "  make -C 03_gin_alltoall_hybrid"
 
 .PHONY: all clean test help $(EXAMPLES)

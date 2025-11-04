@@ -23,6 +23,28 @@ enabling users to perform inter-GPU communication within their own kernels.
   - Device kernels coordinating via LSA barriers
   - Host launches kernel; kernel performs AllReduce on-device
 
+### [02_gin_alltoall_pure](02_gin_alltoall_pure/)
+**Pure GIN AlltoAll - Network-Only Communication**
+- **Pattern**: GPU kernel performs AlltoAll using only GIN for all peers
+- **API**: `ncclDevCommCreate` with GIN support, `ncclGin`, GIN barriers and signals
+- **Use case**: Multi-node AlltoAll with consistent network-based communication
+- **Key features**:
+  - Pure GIN implementation (no LSA optimizations)
+  - Network barriers for cross-node synchronization
+  - Signal-based completion detection
+  - Baseline network performance measurements
+
+### [03_gin_alltoall_hybrid](03_gin_alltoall_hybrid/)
+**Hybrid AlltoAll - Optimized Communication**
+- **Pattern**: GPU kernel performs AlltoAll using LSA for local peers, GIN for remote
+- **API**: `ncclDevCommCreate` with both LSA and GIN support, peer classification
+- **Use case**: Multi-node AlltoAll with optimal performance across topologies
+- **Key features**:
+  - Hybrid implementation for optimal performance
+  - Intelligent peer classification (local vs remote)
+  - Combined LSA and GIN synchronization
+  - Production-ready optimized communication patterns
+
 ## Choosing the Right Pattern
 
 *Scenario* : Custom kernels fusing computation and communication.
@@ -52,6 +74,8 @@ myAllReduceKernel<<<grid, block>>>(win, devComm);
 ```shell
 # Build example by directory name
 make 01_allreduce
+make 02_gin_alltoall_pure
+make 03_gin_alltoall_hybrid
 ```
 
 ### **Individual Examples**
@@ -59,6 +83,14 @@ make 01_allreduce
 # Build and run the device API AllReduce
 cd 01_allreduce && make
 ./allreduce_device_api
+
+# Build and run the Pure GIN AlltoAll example
+cd 02_gin_alltoall_pure && make
+./gin_alltoall_pure_device_api
+
+# Build and run the Hybrid AlltoAll example
+cd 03_gin_alltoall_hybrid && make
+./gin_alltoall_hybrid_device_api
 ```
 
 ## References

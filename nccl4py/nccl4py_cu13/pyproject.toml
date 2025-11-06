@@ -1,0 +1,63 @@
+[project]
+name = "nccl4py-cu13"
+dynamic = ["version", "dependencies"]
+requires-python = ">=3.10"
+description = "Python bindings for NCCL"
+authors = [
+    { name = "NVIDIA Corporation" }
+]
+readme = "README.md"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "pytest-cov",
+    "pytest-mpi",
+    "mpi4py",
+    "ruff",
+    "pyright",
+    "ml-dtypes",
+]
+
+[build-system]
+requires = [
+    "setuptools>=64",
+    "setuptools_scm",
+    "wheel",
+    "Cython>=0.29.24"
+]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["nccl", "nccl.*"]
+exclude = ["__pycache__"]
+
+[tool.setuptools.package-data]
+"nccl.bindings" = ["*.pyi"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["__pycache__/*", "*.py[co]", "*.stamp", "*.pyx", "*.pxd", "*.cpp", "*.c"]
+
+[tool.setuptools_scm]
+version_file = "nccl/_version.py"
+# TODO: setuptools_scm is meant to use a git tag for the version
+# Once we have releases, we should move to that system
+fallback_version = "0.1.0"
+version_scheme = "guess-next-dev"
+
+[tool.ruff]
+line-length = 100
+
+[tool.pyright]
+include = ["nccl", "tests"]
+exclude = ["build", "dist", "*.egg-info"]
+pythonVersion = "3.10"
+typeCheckingMode = "basic"
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]

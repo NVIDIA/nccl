@@ -21,6 +21,7 @@
 #include "dev_runtime.h"
 #include "sym_kernels.h"
 #include "ce_coll.h"
+#include "rma/rma.h"
 
 #if CUDART_VERSION < 9000
 struct cudaLaunchParams {
@@ -249,6 +250,36 @@ struct ncclTaskP2p {
   uint8_t nChannels;
 };
 
+struct ncclTaskRma {
+  struct ncclTaskRma* next;
+  ncclFunc_t func;
+  int ctx;
+  size_t count;
+  ncclDataType_t datatype;
+  size_t bytes;
+
+  void const* srcBuff;
+  size_t srcWinOffset;
+  struct ncclDevrWindow* srcWinHost;
+
+  int peer;
+  size_t peerWinOffset;
+  struct ncclDevrWindow* peerWinHost;
+
+  // Signal operations
+  ncclSignalMode_t signalMode;
+  int*peers;
+  int*nsignals;
+  int npeers;
+
+  // Profiler plugin
+  int eActivationMask;
+  void* groupApiEventHandle;
+  void* rmaApiEventHandle;
+  void* eventHandle;
+  uint8_t nChannels;
+};
+
 struct ncclKernelPlan {
   // A kernel plan is also a callback that reclaims itself. Hence this must
   // be the first member.
@@ -261,6 +292,7 @@ struct ncclKernelPlan {
   bool isHostCbEnq;
   bool isSymColl;
   bool isCeColl;
+  bool isRma;
   enum ncclDevWorkStorageType workStorageType;
   bool kernelSpecialized;
   void* kernelFn;
@@ -268,6 +300,7 @@ struct ncclKernelPlan {
     struct ncclDevKernelArgs* kernelArgs;
     void* kernelSymArgs;
     struct ncclCeCollArgs* ceCollArgs;
+    struct ncclRmaArgs* rmaArgs;
   };
   size_t kernelArgsSize;
   uint64_t channelMask; // bitset of which channels are present
@@ -282,6 +315,8 @@ struct ncclKernelPlan {
   void* workBufPersistent;
 
   struct ncclIntruQueue<struct ncclTaskP2p, &ncclTaskP2p::next> p2pTaskQueue;
+  struct ncclIntruQueue<struct ncclTaskRma, &ncclTaskRma::next> rmaTaskQueueProxy;
+  struct ncclIntruQueue<struct ncclTaskRma, &ncclTaskRma::next> rmaTaskQueueCe;
   struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next> collTaskQueue;
   struct ncclIntruQueue<struct ncclProxyOp, &ncclProxyOp::enqNext> proxyOpQueue;
 
@@ -377,7 +412,7 @@ struct ncclKernelPlanner {
   };
   struct ncclTaskCollSorter collSorter;
   struct Peer* peers/*[nRanks]*/;
-  int nTasksColl, nTasksP2p;
+  int nTasksColl, nTasksP2p, nTasksRma;
   int nTasksP2pSend, nTasksP2pRecv;
   bool persistent;
   // The list of user streams aggregated over all tasks present.
@@ -396,6 +431,7 @@ struct ncclKernelPlanner {
 
   struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next> collTaskQueue;
   struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next> collCeTaskQueue;
+  struct ncclIntruQueue<struct ncclTaskRma, &ncclTaskRma::next> *rmaTaskQueues; // Per-context queue for RMA tasks
   struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next> collSymTaskQueue;
   struct ncclIntruQueue<struct ncclWorkList, &ncclWorkList::next> collWorkQueue;
   struct ncclIntruQueue<struct ncclWorkList, &ncclWorkList::next> tmpCollWorkQueue;
@@ -603,8 +639,10 @@ struct ncclComm {
   // pools backed by comm->memPermanent
   struct ncclMemoryPool memPool_ncclTaskColl;
   struct ncclMemoryPool memPool_ncclTaskP2p;
+  struct ncclMemoryPool memPool_ncclTaskRma;
   struct ncclMemoryPool memPool_ncclProxyOp;
   struct ncclMemoryPool memPool_ncclKernelPlan;
+  struct ncclMemoryPool memPool_ncclRmaProxyDesc;
 
   // Next comm in this thread's active ncclGroup[Start|End](). Holds "0x1" when
   // this comm is not yet in a group.
@@ -653,6 +691,10 @@ struct ncclComm {
   void* profilerContext;
   uint64_t seqNumber[NCCL_NUM_FUNCTIONS];
   struct ncclProfilerProxy profiler;
+
+  // RMA state
+  struct ncclRmaState rmaState;
+  struct ncclIntruQueue<struct ncclRmaCeInitTask, &ncclRmaCeInitTask::next> rmaCeInitTaskQueue;
 
   // CE Collective
   struct ncclCeColl ceColl;

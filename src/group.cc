@@ -14,6 +14,7 @@
 #include "ce_coll.h"
 #include "profiler.h"
 #include "nvtx.h"
+#include "rma/rma.h"
 
 #define GROUP_MAX_RECLAIM_STEPS 10
 
@@ -250,6 +251,12 @@ ncclResult_t ncclCommGroupRegisterSymmetric(struct ncclAsyncJob* job_) {
     free(task);
   }
 
+  while (!ncclIntruQueueEmpty(&comm->rmaCeInitTaskQueue)) {
+    struct ncclRmaCeInitTask* task = ncclIntruQueueDequeue(&comm->rmaCeInitTaskQueue);
+    NCCLCHECKGOTO(ncclRmaCeInit(task->comm), ret, fail);
+    free(task);
+  }
+
 exit:
   return ret;
 fail:
@@ -305,6 +312,8 @@ static ncclResult_t doLaunches(struct ncclComm* head) {
             NCCLCHECKGOTO(ncclLaunchKernelBefore_NoUncapturedCuda(comm, plan), result, failure);
             if (plan->isCeColl) {
               NCCLCHECKGOTO(ncclLaunchCeColl(comm, plan), result, failure);
+            } else if (plan->isRma) {
+              NCCLCHECKGOTO(ncclLaunchRma(comm, plan), result, failure);
             } else {
               NCCLCHECKGOTO(ncclLaunchKernel(comm, plan), result, failure);
             }
@@ -372,9 +381,20 @@ static void groupCleanup(struct ncclComm** groupCommHeadPtr, struct ncclIntruQue
 
         { // Reset comm->planner to empty.
           ncclKernelPlanner::Peer* tmp = comm->planner.peers;
+          ncclIntruQueue<ncclTaskRma, &ncclTaskRma::next>* tmpRmaQueues = comm->planner.rmaTaskQueues;
+          int numRmaCtx = comm->config.numRmaCtx;
+
           memset(&comm->planner, 0, sizeof(comm->planner));
+
           comm->planner.peers = tmp;
           if (comm->planner.peers != NULL) memset(comm->planner.peers, 0, comm->nRanks * sizeof(comm->planner.peers[0]));
+
+          comm->planner.rmaTaskQueues = tmpRmaQueues;
+          if (comm->planner.rmaTaskQueues != NULL) {
+            for (int i = 0; i < numRmaCtx; i++) {
+              ncclIntruQueueConstruct(&comm->planner.rmaTaskQueues[i]);
+            }
+          }
         }
       }
 

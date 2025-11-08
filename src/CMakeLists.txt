@@ -40,6 +40,7 @@ add_subdirectory(nccl_device)
 add_subdirectory(ras)
 add_subdirectory(scheduler)
 add_subdirectory(gin)
+add_subdirectory(rma)
 
 add_compile_options(-fmacro-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}/=)
 
@@ -55,6 +56,7 @@ list(APPEND LIBSRCFILES
     ${SCHEDULER_SOURCES}
     ${GIN_SOURCES}
     ${DOCA_SOURCES}
+    ${RMA_SOURCES}
 )
 
 ###################### Create a shared NCCL library ############################

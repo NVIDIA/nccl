@@ -134,7 +134,7 @@ NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::put(
   coop.sync();
   if (coop.thread_rank() == 0) {
     ncclGinCall<ncclGinApi_Put>(ctx,
-      coop, ncclTeamRankToWorld(this->comm, team, peer), /*hasWins=*/true,
+      ncclCoopThread(), ncclTeamRankToWorld(this->comm, team, peer), /*hasWins=*/true,
       loadConst(&dstWin->ginWins[this->contextId]),
       4096*size_t(loadConst(&dstWin->ginOffset4K)) + dstOffset,
       loadConst(&srcWin->ginWins[this->contextId]),
@@ -202,7 +202,7 @@ NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::putValue(
   coop.sync();
   if (coop.thread_rank() == 0) {
     ncclGinCall<ncclGinApi_PutValue>(this->_makeCtx(),
-      coop, ncclTeamRankToWorld(this->comm, team, peer),
+      ncclCoopThread(), ncclTeamRankToWorld(this->comm, team, peer),
       loadConst(&dstWin->ginWins[this->contextId]),
       4096*size_t(loadConst(&dstWin->ginOffset4K)) + dstOffset,
       value,
@@ -253,7 +253,7 @@ NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::signal(
   coop.sync();
   if (coop.thread_rank() == 0) {
     ncclGinCall<ncclGinApi_Put>(this->_makeCtx(),
-      coop, ncclTeamRankToWorld(this->comm, team, peer),
+      ncclCoopThread(), ncclTeamRankToWorld(this->comm, team, peer),
       /*hasWins=*/false, nullptr, 0, nullptr, 0, 0,
       ncclGin_isSignal(action),
       ncclGin_getSignalId(*this, action),

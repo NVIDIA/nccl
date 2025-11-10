@@ -162,7 +162,7 @@ static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
   /* NET */
   { { 5.0, 8.5, 14 }, { 2.7, 4.0, 14.0 }, /* Tree (LL/LL128/Simple), Ring (LL/LL128/Simple)*/
     {   0,   0, 31 }, {   0,   0,   30 }, /* CollNetDirect (LL/LL128/Simple), CollNetChain (LL/LL128/Simple)*/
-    {   0,   0, 18 }, {   0,   0,   14 }, /* NVLS (LL/LL128/Simple), NVLSTree (LL/LL128/Simple)*/
+    {   0,   0, 18 }, {   0,   0,   20.9 }, /* NVLS (LL/LL128/Simple), NVLSTree (LL/LL128/Simple)*/
     {   0,   0, 14 } /* PAT (LL/LL128/Simple)*/
     },
   },
@@ -194,7 +194,7 @@ static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
     {26.5, 18.5, 10.0}, /* Volta (N1/N2/N4) */
     {24.0, 23.6, 17.8}, /* Ampere (N1/N2/N4) */
     {0.0, 57.7, 45.5}, /* Hopper (N1/N2/N4) */
-    {0.0, 96.0, 43.1} /* Blackwell (N1/N2/N4) */
+    {0.0, 96.0, 43.8} /* Blackwell (N1/N2/N4) */
   }
 };
 

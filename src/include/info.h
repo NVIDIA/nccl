@@ -28,6 +28,14 @@ struct ncclInfo {
   // Algorithm details
   int chunkSteps;
   int sliceSteps;
+  // One-sided ops
+  size_t peerWinOffset;
+  ncclWindow_t peerWin;
+  ncclSignalMode_t signalMode;
+  int ctx;
+  int* peers;
+  int* nsignals;
+  int npeers;
 };
 
 #endif

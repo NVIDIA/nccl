@@ -26,6 +26,7 @@ LIBSRCFILES := \
 	$(wildcard nccl_device/*.cc) \
 	$(wildcard scheduler/*.cc) \
 	$(wildcard gin/*.cc) \
+	$(wildcard rma/*.cc) \
 	$(filter-out ras/client.cc,$(wildcard ras/*.cc))
 BINSRCFILES := ras/client.cc
 

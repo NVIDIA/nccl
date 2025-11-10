@@ -116,8 +116,16 @@ inline void ncclGroupCommJoin(struct ncclComm* comm, int type) {
     if (type == ncclGroupTaskTypeCollective) {
       // Initialize planner
       ncclKernelPlanner::Peer* tmp = comm->planner.peers;
+      ncclIntruQueue<ncclTaskRma, &ncclTaskRma::next>* tmpRmaQueues = comm->planner.rmaTaskQueues;
+      int numRmaCtx = comm->config.numRmaCtx;
       memset(&comm->planner, 0, sizeof(comm->planner));
       comm->planner.peers = tmp;
+      comm->planner.rmaTaskQueues = tmpRmaQueues;
+      if (comm->planner.rmaTaskQueues != NULL) {
+        for (int i = 0; i < numRmaCtx; i++) {
+          ncclIntruQueueConstruct(&comm->planner.rmaTaskQueues[i]);
+        }
+      }
     }
   }
   ncclGroupBlocking = comm->config.blocking;

@@ -94,6 +94,7 @@ typedef struct ncclConfig_v22800 {
   int nvlsCTAs;
   int nChannelsPerNetPeer;
   int nvlinkCentricSched;
+  int numRmaCtx;
 } ncclConfig_t;
 
 /* Config initializer must be assigned to initialize config structure when it is created.
@@ -116,6 +117,7 @@ typedef struct ncclConfig_v22800 {
   NCCL_CONFIG_UNDEF_INT,                    /* nvlsCTAs */              \
   NCCL_CONFIG_UNDEF_INT,                    /* nChannelsPerNetPeer */   \
   NCCL_CONFIG_UNDEF_INT,                    /* nvlinkCentricSched */    \
+  NCCL_CONFIG_UNDEF_INT,                    /* numRmaCtx */             \
 }
 
 /* This struct will be used by ncclGroupSimulateEnd() API to query information about simulation. */
@@ -525,6 +527,90 @@ ncclResult_t pncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype, in
     ncclComm_t comm, cudaStream_t stream);
 ncclResult_t  ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype, int peer,
     ncclComm_t comm, cudaStream_t stream);
+
+
+typedef enum {
+    NCCL_SIGNAL_NONE = 0,        // No signaling
+    NCCL_SIGNAL_AGGREGATE = 1,   // Signals can be aggregated/merged across peers
+    NCCL_SIGNAL_DISTINCT = 2     // Signals must remain distinct per-peer
+} ncclSignalMode_t;
+
+
+/*
+ * Put
+ *
+ * One-sided communication operation that writes data from the local buffer to a
+ * remote peer's registered memory window without explicit participation from the
+ * target process.
+ *
+ * Parameters:
+ *   ctx          - Context identifier for the operation
+ *   localbuff    - Local source buffer containing data to be transferred
+ *   count        - Number of elements to transfer
+ *   datatype     - NCCL data type of each element
+ *   peer         - Target rank to write data to
+ *   peerWinOffset- Offset in bytes from the start of peer's registered window
+ *   peerWin      - Memory window object registered by the target peer
+ *   signalMode   - Signaling behavior:
+ *                  NCCL_SIGNAL_NONE: No signaling after put operation
+ *                  NCCL_SIGNAL_AGGREGATE: Signal can be merged with others (use for barrier-like patterns)
+ *                  NCCL_SIGNAL_DISTINCT: Signal must remain separate per-peer (use when peer identity matters)
+ *   comm         - NCCL communicator
+ *   stream       - CUDA stream to enqueue the operation on
+ *
+ * Returns:
+ *   ncclSuccess on successful enqueue, error code otherwise
+ */
+ncclResult_t ncclPut(int ctx, const void* localbuff, size_t count, ncclDataType_t datatype, int peer,
+    size_t peerWinOffset, ncclWindow_t peerWin, ncclSignalMode_t signalMode, ncclComm_t comm, cudaStream_t stream);
+
+ncclResult_t pncclPut(int ctx, const void* localbuff, size_t count, ncclDataType_t datatype,
+    int peer, size_t peerWinOffset, ncclWindow_t peerWin, ncclSignalMode_t signalMode, ncclComm_t comm, cudaStream_t stream);
+
+/*
+ * Signal
+ *
+ * Sends a signal to the specified peer without transferring data.
+ *
+ * Parameters:
+ *   ctx          - Context identifier for the operation
+ *   peer         - Target rank to send signal to
+ *   signalMode   - Signaling behavior:
+ *                  NCCL_SIGNAL_AGGREGATE: Signal can be merged with others (use for barrier-like patterns)
+ *                  NCCL_SIGNAL_DISTINCT: Signal must remain separate per-peer (use when peer identity matters)
+ *                  Note: NCCL_SIGNAL_NONE is not valid for explicit signal operations
+ *   comm         - NCCL communicator
+ *   stream       - CUDA stream to enqueue the operation on
+ *
+ * Returns:
+ *   ncclSuccess on successful signal enqueue, error code otherwise
+ */
+ncclResult_t ncclSignal(int ctx, int peer, ncclSignalMode_t signalMode, ncclComm_t comm, cudaStream_t stream);
+ncclResult_t pncclSignal(int ctx, int peer, ncclSignalMode_t signalMode, ncclComm_t comm, cudaStream_t stream);
+
+/*
+ * Wait Signal
+ *
+ * Waits for specified number of signals from each peer.
+ *
+ * Parameters:
+ *   ctx          - Context identifier for the operation
+ *   peers        - Array of peer ranks to wait signals from
+ *   nsignals     - Array of signal counts, where nsignals[i] is the number of
+ *                  signals to wait for from peers[i]
+ *   npeers       - Number of peers (length of both peers and nsignals arrays)
+ *   signalMode   - Signaling behavior:
+ *                  NCCL_SIGNAL_AGGREGATE: Signals within same transport can be merged
+ *                  NCCL_SIGNAL_DISTINCT: All signals must remain separate per-peer
+ *                  Note: NCCL_SIGNAL_NONE is not valid for wait operations
+ *   comm         - NCCL communicator
+ *   stream       - CUDA stream to enqueue the operation on
+ *
+ * Returns:
+ *   ncclSuccess when all required signals received, error code otherwise
+ */
+ncclResult_t ncclWaitSignal(int ctx, int* peers, int* nsignals, int npeers, ncclSignalMode_t signalMode, ncclComm_t comm, cudaStream_t stream);
+ncclResult_t pncclWaitSignal(int ctx, int* peers, int* nsignals, int npeers, ncclSignalMode_t signalMode, ncclComm_t comm, cudaStream_t stream);
 
 /*
  * Group semantics

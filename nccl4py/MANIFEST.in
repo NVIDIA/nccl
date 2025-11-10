@@ -1,0 +1,16 @@
+include pyproject.toml
+include setup.py
+include README.md
+
+# Include Cython sources and headers for sdist only
+include nccl/bindings/_internal/*.pyx
+include nccl/bindings/_internal/*.pxd
+include nccl/bindings/*.pxd
+include nccl/bindings/*.pyx
+
+# Typing markers and stubs
+include nccl/bindings/*.pyi
+
+# Exclude build artifacts and cache
+prune nccl/__pycache__
+global-exclude __pycache__/* *.pyc *.pyo *.stamp *.cpp *.c

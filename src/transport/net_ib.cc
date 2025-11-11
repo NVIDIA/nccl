@@ -436,15 +436,13 @@ static ncclResult_t ncclUpdateGidIndex(struct ibv_context* context, uint8_t port
   bool gidCandidateMatchSubnet = matchGidAddrPrefix(usrFam, prefix, prefixlen, &gidCandidate);
 
   if (gidCandidateFam != gidFam && gidCandidateFam == usrFam && gidCandidateMatchSubnet) {
-    *gidIndex = gidIndexCandidate;
-  } else {
-    if (gidCandidateFam != usrFam || !validGid(&gidCandidate) || !gidCandidateMatchSubnet) {
-      return ncclSuccess;
-    }
     int usrRoceVer = roceVer;
     int gidRoceVerNum, gidRoceVerNumCandidate = -1;
     const char* deviceName = wrap_ibv_get_device_name(context->device);
-    NCCLCHECK(ncclIbRoceGetVersionNum(deviceName, portNum, *gidIndex, &gidRoceVerNum));
+
+    if (validGid(&gid)) {
+      NCCLCHECK(ncclIbRoceGetVersionNum(deviceName, portNum, *gidIndex, &gidRoceVerNum));
+    }
     NCCLCHECK(ncclIbRoceGetVersionNum(deviceName, portNum, gidIndexCandidate, &gidRoceVerNumCandidate));
     if ((gidRoceVerNum != gidRoceVerNumCandidate || !validGid(&gid)) && gidRoceVerNumCandidate == usrRoceVer) {
       *gidIndex = gidIndexCandidate;
@@ -498,8 +496,12 @@ static ncclResult_t ncclIbGetGidIndex(struct ibv_context *context, uint8_t portN
 
   *gidIndex = 0;
   for (int gidIndexNext = 1; gidIndexNext < gidTblLen; ++gidIndexNext) {
-    NCCLCHECK(ncclUpdateGidIndex(context, portNum, userAddrFamily, prefix, prefixlen, userRoceVersion, gidIndexNext, gidIndex));
+    // It is ok for this to return non-success. GID assignment is fully handled in the function
+    // We do not want to short-circuit this loop prematurely in the case of a GID table not starting at 1
+    ncclUpdateGidIndex(context, portNum, userAddrFamily, prefix, prefixlen, userRoceVersion, gidIndexNext, gidIndex);
   }
+
+  INFO(NCCL_INIT|NCCL_NET, "NET/IB : Using GID Index %d", *gidIndex);
 
   return ncclSuccess;
 }

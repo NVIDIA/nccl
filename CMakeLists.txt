@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25) # ipp6 is using 3.28
 
 # Version information
 # Read makefiles/version.mk file
-file(READ ${CMAKE_SOURCE_DIR}/makefiles/version.mk VERSION_CONTENT)
+file(READ ${CMAKE_CURRENT_LIST_DIR}/makefiles/version.mk VERSION_CONTENT)
 string(REGEX REPLACE ".*NCCL_MAJOR[ ]*:=[ ]*([0-9]+).*" "\\1" NCCL_MAJOR "${VERSION_CONTENT}")
 string(REGEX REPLACE ".*NCCL_MINOR[ ]*:=[ ]*([0-9]+).*" "\\1" NCCL_MINOR "${VERSION_CONTENT}")
 string(REGEX REPLACE ".*NCCL_PATCH[ ]*:=[ ]*([0-9]+).*" "\\1" NCCL_PATCH "${VERSION_CONTENT}")

@@ -982,7 +982,7 @@ void* ncclProxyProgress(void *proxyState_) {
         __atomic_store_n(&proxyState->asyncResult, ret, __ATOMIC_RELEASE);
         INFO(NCCL_ALL,"%s:%d -> %d [Progress Thread]", __FILE__, __LINE__, ret);
       }
-      if (added == 0) {
+      if (added == 0 && idle) {
         sched_yield(); // No request progressed. Let others run.
       }
     }

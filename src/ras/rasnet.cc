@@ -362,7 +362,7 @@ ncclResult_t rasNetAcceptNewSocket() {
   NCCLCHECKGOTO(ncclSocketInit(&sock->sock, nullptr, NCCL_SOCKET_MAGIC, ncclSocketTypeRasNetwork, nullptr,
                                /*asyncFlag*/1), ret, fail);
   socketInitialized = true;
-  NCCLCHECKGOTO(ncclSocketAccept(&sock->sock, &rasNetListeningSocket), ret, fail);
+  NCCLCHECKGOTO(ncclSocketAccept(&sock->sock, &rasNetListeningSocket, false), ret, fail);
   NCCLCHECKGOTO(ncclSocketReady(&sock->sock, &ready), ret, fail);
 
   if (sock->sock.fd == -1)

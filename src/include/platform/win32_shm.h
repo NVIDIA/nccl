@@ -625,6 +625,162 @@ static inline int munmap_win32(void *addr, size_t length)
 #define mmap mmap_win32
 #define munmap munmap_win32
 
+/* ===================== Memory Optimization Functions ===================== */
+
+/*
+ * Prefetch memory region for reading
+ * Useful for preparing buffers before copy operations
+ */
+static inline void ncclShmPrefetch(void *addr, size_t size)
+{
+    /* Use PrefetchVirtualMemory on Windows 8+ */
+    typedef BOOL(WINAPI * PrefetchVirtualMemoryFunc)(HANDLE, ULONG_PTR, PWIN32_MEMORY_RANGE_ENTRY, ULONG);
+    static PrefetchVirtualMemoryFunc pPrefetch = NULL;
+    static int initialized = 0;
+
+    if (!initialized)
+    {
+        HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
+        if (hKernel32)
+        {
+            pPrefetch = (PrefetchVirtualMemoryFunc)GetProcAddress(hKernel32, "PrefetchVirtualMemory");
+        }
+        initialized = 1;
+    }
+
+    if (pPrefetch != NULL)
+    {
+        WIN32_MEMORY_RANGE_ENTRY range;
+        range.VirtualAddress = addr;
+        range.NumberOfBytes = size;
+        pPrefetch(GetCurrentProcess(), 1, &range, 0);
+    }
+}
+
+/*
+ * Advise kernel about memory usage pattern
+ * Helps system optimize paging and caching
+ */
+#define NCCL_MADV_NORMAL 0
+#define NCCL_MADV_SEQUENTIAL 1
+#define NCCL_MADV_RANDOM 2
+#define NCCL_MADV_WILLNEED 3
+#define NCCL_MADV_DONTNEED 4
+
+static inline int ncclShmAdvise(void *addr, size_t size, int advice)
+{
+    /* Windows doesn't have direct madvise equivalent, but we can use
+     * VirtualAlloc with specific flags or OfferVirtualMemory for DONTNEED */
+
+    switch (advice)
+    {
+    case NCCL_MADV_WILLNEED:
+        /* Prefetch the memory */
+        ncclShmPrefetch(addr, size);
+        return 0;
+
+    case NCCL_MADV_DONTNEED:
+    {
+        /* On Windows 8.1+, we can offer memory back to the system */
+        typedef DWORD(WINAPI * OfferVirtualMemoryFunc)(PVOID, SIZE_T, OFFER_PRIORITY);
+        static OfferVirtualMemoryFunc pOffer = NULL;
+        static int initialized = 0;
+
+        if (!initialized)
+        {
+            HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
+            if (hKernel32)
+            {
+                pOffer = (OfferVirtualMemoryFunc)GetProcAddress(hKernel32, "OfferVirtualMemory");
+            }
+            initialized = 1;
+        }
+
+        if (pOffer != NULL)
+        {
+            pOffer(addr, size, VmOfferPriorityNormal);
+        }
+        return 0;
+    }
+
+    default:
+        /* Other advices are hints that Windows doesn't support directly */
+        return 0;
+    }
+}
+
+/*
+ * Lock memory pages in physical RAM
+ * Prevents paging which improves latency consistency
+ * Requires SeLockMemoryPrivilege
+ */
+static inline int ncclShmLock(void *addr, size_t size)
+{
+    return VirtualLock(addr, size) ? 0 : -1;
+}
+
+/*
+ * Unlock memory pages, allowing them to be paged
+ */
+static inline int ncclShmUnlock(void *addr, size_t size)
+{
+    return VirtualUnlock(addr, size) ? 0 : -1;
+}
+
+/*
+ * Touch memory pages to ensure they are physically allocated
+ * Useful to avoid page faults during critical operations
+ */
+static inline void ncclShmTouch(void *addr, size_t size)
+{
+    volatile char *p = (volatile char *)addr;
+    size_t pageSize = 4096; /* Standard page size */
+
+    /* Read one byte per page to force allocation */
+    for (size_t i = 0; i < size; i += pageSize)
+    {
+        (void)p[i];
+    }
+}
+
+/*
+ * Write-touch memory pages to ensure copy-on-write is resolved
+ */
+static inline void ncclShmTouchWrite(void *addr, size_t size)
+{
+    volatile char *p = (volatile char *)addr;
+    size_t pageSize = 4096;
+
+    /* Write to force page allocation and resolve COW */
+    for (size_t i = 0; i < size; i += pageSize)
+    {
+        p[i] = p[i];
+    }
+}
+
+/*
+ * Zero memory region efficiently
+ * Uses large pages if available
+ */
+static inline void ncclShmZero(void *addr, size_t size)
+{
+    /* Use ZeroMemory which may be optimized by the compiler/runtime */
+    ZeroMemory(addr, size);
+}
+
+/*
+ * Copy memory with prefetch
+ * Prefetches destination before copy for better performance
+ */
+static inline void ncclShmCopy(void *dst, const void *src, size_t size)
+{
+    /* Prefetch destination */
+    ncclShmPrefetch(dst, size);
+
+    /* Use RtlCopyMemory (memcpy) which is optimized */
+    RtlCopyMemory(dst, src, size);
+}
+
 #endif /* _WIN32 */
 
 #endif /* NCCL_WIN32_SHM_H_ */

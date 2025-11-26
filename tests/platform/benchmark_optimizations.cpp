@@ -556,8 +556,302 @@ void benchmark_numa_detection(void)
 /*                           MAIN                                       */
 /* =================================================================== */
 
+void benchmark_thread_priority(void)
+{
+    printf("\n");
+    printf("============================================================\n");
+    printf("Thread Priority Optimization Benchmark\n");
+    printf("============================================================\n");
+
+    double time_setprio = 0, time_getprio = 0, time_boost = 0;
+    HANDLE thread = GetCurrentThread();
+
+    /* Warmup */
+    for (int i = 0; i < WARMUP_ITERATIONS; i++)
+    {
+        ncclSetThreadPriority(thread, 1);
+        ncclGetThreadPriority(thread);
+        ncclSetThreadPriority(thread, 0);
+    }
+
+    /* Benchmark set priority */
+    double start = get_time_us();
+    for (int i = 0; i < BENCHMARK_ITERATIONS; i++)
+    {
+        ncclSetThreadPriority(thread, i % 4);
+    }
+    time_setprio = get_time_us() - start;
+    ncclSetThreadPriority(thread, 0); /* Reset */
+
+    /* Benchmark get priority */
+    start = get_time_us();
+    for (int i = 0; i < BENCHMARK_ITERATIONS; i++)
+    {
+        volatile int p = ncclGetThreadPriority(thread);
+        (void)p;
+    }
+    time_getprio = get_time_us() - start;
+
+    /* Benchmark priority boost toggle */
+    start = get_time_us();
+    for (int i = 0; i < BENCHMARK_ITERATIONS; i++)
+    {
+        ncclThreadPriorityBoost(i & 1);
+    }
+    time_boost = get_time_us() - start;
+    ncclThreadPriorityBoost(1); /* Re-enable */
+
+    printf("\nThread Priority Operations (%d iterations):\n", BENCHMARK_ITERATIONS);
+    printf("  SetThreadPriority:     %8.3f us/op\n", time_setprio / BENCHMARK_ITERATIONS);
+    printf("  GetThreadPriority:     %8.3f us/op\n", time_getprio / BENCHMARK_ITERATIONS);
+    printf("  PriorityBoost toggle:  %8.3f us/op\n", time_boost / BENCHMARK_ITERATIONS);
+}
+
+void benchmark_timer_resolution(void)
+{
+    printf("\n");
+    printf("============================================================\n");
+    printf("Timer Resolution Benchmark\n");
+    printf("============================================================\n");
+
+    ULONG minRes = 0, maxRes = 0, currentRes = 0;
+
+    /* Get current resolution */
+    if (ncclGetTimerResolution(&minRes, &maxRes, &currentRes) == 0)
+    {
+        printf("\nTimer Resolution (100ns units):\n");
+        printf("  Minimum (best):        %lu (%.3f ms)\n", minRes, minRes / 10000.0);
+        printf("  Maximum (worst):       %lu (%.3f ms)\n", maxRes, maxRes / 10000.0);
+        printf("  Current:               %lu (%.3f ms)\n", currentRes, currentRes / 10000.0);
+    }
+    else
+    {
+        printf("  Timer resolution query not available\n");
+    }
+
+    /* Test high resolution timer impact */
+    ULONG actualRes = 0;
+    if (ncclEnableHighResolutionTimer(&actualRes) == 0)
+    {
+        printf("\nHigh Resolution Timer Enabled:\n");
+        printf("  Actual resolution:     %lu (%.3f ms)\n", actualRes, actualRes / 10000.0);
+
+        /* Measure sleep accuracy */
+        double sleepTotal = 0;
+        int sleepCount = 100;
+        for (int i = 0; i < sleepCount; i++)
+        {
+            double start = get_time_us();
+            Sleep(1);
+            sleepTotal += get_time_us() - start;
+        }
+        printf("  Sleep(1) actual avg:   %.2f ms\n", sleepTotal / sleepCount / 1000.0);
+
+        ncclDisableHighResolutionTimer();
+    }
+    else
+    {
+        printf("\n  High resolution timer not available\n");
+    }
+
+    /* Measure without high res timer */
+    double sleepTotal = 0;
+    int sleepCount = 100;
+    for (int i = 0; i < sleepCount; i++)
+    {
+        double start = get_time_us();
+        Sleep(1);
+        sleepTotal += get_time_us() - start;
+    }
+    printf("  Sleep(1) default avg:  %.2f ms\n", sleepTotal / sleepCount / 1000.0);
+}
+
+void benchmark_advanced_socket(void)
+{
+    printf("\n");
+    printf("============================================================\n");
+    printf("Advanced Socket Optimizations Benchmark\n");
+    printf("============================================================\n");
+
+    WSADATA wsaData;
+    WSAStartup(MAKEWORD(2, 2), &wsaData);
+
+    /* Test loopback fast path */
+    SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
+    int fastpath_result = ncclSocketEnableLoopbackFastPath(sock);
+    printf("\nLoopback Fast Path: %s\n",
+           fastpath_result == 0 ? "Enabled" : "Not available");
+    closesocket(sock);
+
+    /* Test TCP Fast Open */
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    int fastopen_result = ncclSocketEnableFastOpen(sock);
+    printf("TCP Fast Open:      %s\n",
+           fastopen_result == 0 ? "Enabled" : "Not available");
+    closesocket(sock);
+
+    /* Benchmark different socket optimization modes */
+    double time_ultra = 0, time_max = 0;
+
+    double start = get_time_us();
+    for (int i = 0; i < BENCHMARK_ITERATIONS; i++)
+    {
+        SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
+        ncclSocketOptimizeUltraLowLatency(s);
+        closesocket(s);
+    }
+    time_ultra = get_time_us() - start;
+
+    start = get_time_us();
+    for (int i = 0; i < BENCHMARK_ITERATIONS; i++)
+    {
+        SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
+        ncclSocketOptimizeMaxThroughput(s);
+        closesocket(s);
+    }
+    time_max = get_time_us() - start;
+
+    printf("\nSocket Optimization Setup (%d iterations):\n", BENCHMARK_ITERATIONS);
+    printf("  Ultra-low latency:     %8.2f us/op\n", time_ultra / BENCHMARK_ITERATIONS);
+    printf("  Max throughput:        %8.2f us/op\n", time_max / BENCHMARK_ITERATIONS);
+
+    WSACleanup();
+}
+
+void benchmark_memory_prefetch(void)
+{
+    printf("\n");
+    printf("============================================================\n");
+    printf("Memory Prefetch and Touch Benchmark\n");
+    printf("============================================================\n");
+
+    const size_t size = 4 * 1024 * 1024; /* 4 MB */
+    const int iterations = 100;
+
+    void *buffer = malloc(size);
+    if (buffer == NULL)
+    {
+        printf("  Failed to allocate buffer\n");
+        return;
+    }
+
+    /* Benchmark memory touch */
+    double time_touch = 0, time_touchwrite = 0, time_prefetch = 0;
+
+    double start = get_time_us();
+    for (int i = 0; i < iterations; i++)
+    {
+        ncclShmTouch(buffer, size);
+    }
+    time_touch = get_time_us() - start;
+
+    start = get_time_us();
+    for (int i = 0; i < iterations; i++)
+    {
+        ncclShmTouchWrite(buffer, size);
+    }
+    time_touchwrite = get_time_us() - start;
+
+    start = get_time_us();
+    for (int i = 0; i < iterations; i++)
+    {
+        ncclShmPrefetch(buffer, size);
+    }
+    time_prefetch = get_time_us() - start;
+
+    printf("\nMemory Operations (4 MB buffer, %d iterations):\n", iterations);
+    printf("  Touch (read):          %8.2f us/op\n", time_touch / iterations);
+    printf("  Touch (write):         %8.2f us/op\n", time_touchwrite / iterations);
+    printf("  Prefetch:              %8.2f us/op\n", time_prefetch / iterations);
+
+    /* Benchmark memory copy with prefetch vs without */
+    void *src = malloc(size);
+    void *dst = malloc(size);
+    if (src && dst)
+    {
+        memset(src, 'A', size);
+
+        /* Without prefetch */
+        start = get_time_us();
+        for (int i = 0; i < iterations; i++)
+        {
+            memcpy(dst, src, size);
+        }
+        double time_copy = get_time_us() - start;
+
+        /* With prefetch copy */
+        start = get_time_us();
+        for (int i = 0; i < iterations; i++)
+        {
+            ncclShmCopy(dst, src, size);
+        }
+        double time_prefetch_copy = get_time_us() - start;
+
+        double bw_copy = (double)size * iterations / (time_copy / 1000000.0) / (1024 * 1024 * 1024);
+        double bw_prefetch = (double)size * iterations / (time_prefetch_copy / 1000000.0) / (1024 * 1024 * 1024);
+
+        printf("\nMemory Copy (4 MB):\n");
+        printf("  Standard memcpy:       %8.2f GB/s\n", bw_copy);
+        printf("  With prefetch:         %8.2f GB/s (%.1f%%)\n",
+               bw_prefetch, (bw_prefetch - bw_copy) / bw_copy * 100);
+
+        free(src);
+        free(dst);
+    }
+
+    free(buffer);
+}
+
+void benchmark_iocp(void)
+{
+    printf("\n");
+    printf("============================================================\n");
+    printf("I/O Completion Port Benchmark\n");
+    printf("============================================================\n");
+
+    struct ncclSocketIOCP iocp;
+    double time_create = 0, time_associate = 0, time_destroy = 0;
+    int iterations = 1000;
+
+    WSADATA wsaData;
+    WSAStartup(MAKEWORD(2, 2), &wsaData);
+
+    /* Benchmark IOCP creation */
+    double start = get_time_us();
+    for (int i = 0; i < iterations; i++)
+    {
+        ncclSocketIOCPCreate(&iocp, 0);
+        ncclSocketIOCPDestroy(&iocp);
+    }
+    time_create = get_time_us() - start;
+
+    /* Create IOCP for association test */
+    ncclSocketIOCPCreate(&iocp, 0);
+
+    /* Benchmark socket association */
+    start = get_time_us();
+    for (int i = 0; i < iterations; i++)
+    {
+        SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
+        ncclSocketIOCPAssociate(&iocp, sock, (ULONG_PTR)i);
+        closesocket(sock);
+    }
+    time_associate = get_time_us() - start;
+
+    ncclSocketIOCPDestroy(&iocp);
+
+    printf("\nIOCP Operations (%d iterations):\n", iterations);
+    printf("  Create/Destroy:        %8.2f us/op\n", time_create / iterations);
+    printf("  Associate socket:      %8.2f us/op\n", time_associate / iterations);
+
+    WSACleanup();
+}
+
 int main(int argc, char *argv[])
 {
+    (void)argc;
+    (void)argv;
+
     printf("================================================================\n");
     printf("NCCL Windows Platform Optimizations Benchmark\n");
     printf("Based on 'Demystifying NCCL' (arXiv:2507.04786v2)\n");
@@ -570,6 +864,13 @@ int main(int argc, char *argv[])
     benchmark_memory_access();
     benchmark_loopback_throughput();
 
+    /* New benchmarks */
+    benchmark_thread_priority();
+    benchmark_timer_resolution();
+    benchmark_advanced_socket();
+    benchmark_memory_prefetch();
+    benchmark_iocp();
+
     printf("\n================================================================\n");
     printf("Benchmark Complete\n");
     printf("================================================================\n");
@@ -581,6 +882,8 @@ int main(int argc, char *argv[])
 
 int main(int argc, char *argv[])
 {
+    (void)argc;
+    (void)argv;
     printf("This benchmark is Windows-specific.\n");
     return 0;
 }

@@ -432,6 +432,187 @@ static inline int pthread_setname_np(pthread_t thread, const char *name)
  * along with sched_setaffinity/sched_getaffinity are provided there.
  */
 
+/* ===================== Thread Priority Optimization ===================== */
+
+/*
+ * Set thread priority for performance-critical paths
+ * NCCL communication threads benefit from elevated priority
+ */
+static inline int ncclSetThreadPriority(pthread_t thread, int priority)
+{
+    int winPriority;
+
+    /* Map NCCL priority levels to Windows priority classes */
+    switch (priority)
+    {
+    case 3: /* Critical - communication hot path */
+        winPriority = THREAD_PRIORITY_TIME_CRITICAL;
+        break;
+    case 2: /* High - proxy threads */
+        winPriority = THREAD_PRIORITY_HIGHEST;
+        break;
+    case 1: /* Above normal - worker threads */
+        winPriority = THREAD_PRIORITY_ABOVE_NORMAL;
+        break;
+    case 0: /* Normal */
+    default:
+        winPriority = THREAD_PRIORITY_NORMAL;
+        break;
+    case -1: /* Below normal - background tasks */
+        winPriority = THREAD_PRIORITY_BELOW_NORMAL;
+        break;
+    }
+
+    return SetThreadPriority(thread, winPriority) ? 0 : -1;
+}
+
+/*
+ * Get current thread priority
+ */
+static inline int ncclGetThreadPriority(pthread_t thread)
+{
+    int winPriority = GetThreadPriority(thread);
+
+    switch (winPriority)
+    {
+    case THREAD_PRIORITY_TIME_CRITICAL:
+        return 3;
+    case THREAD_PRIORITY_HIGHEST:
+        return 2;
+    case THREAD_PRIORITY_ABOVE_NORMAL:
+        return 1;
+    case THREAD_PRIORITY_NORMAL:
+        return 0;
+    case THREAD_PRIORITY_BELOW_NORMAL:
+    case THREAD_PRIORITY_LOWEST:
+    case THREAD_PRIORITY_IDLE:
+        return -1;
+    default:
+        return 0;
+    }
+}
+
+/*
+ * Boost priority for the current thread temporarily
+ * Useful during latency-sensitive operations
+ */
+static inline int ncclThreadPriorityBoost(int enable)
+{
+    return SetThreadPriorityBoost(GetCurrentThread(), !enable) ? 0 : -1;
+}
+
+/*
+ * Pin thread to specific processor group (for >64 CPU systems)
+ * Windows supports up to 64 processors per group
+ */
+static inline int ncclSetThreadIdealProcessor(pthread_t thread, int processor)
+{
+    DWORD prev = SetThreadIdealProcessor(thread, (DWORD)processor);
+    return (prev == (DWORD)-1) ? -1 : 0;
+}
+
+/*
+ * Set thread affinity to a specific NUMA node
+ * Ensures thread runs on processors local to memory
+ */
+static inline int ncclSetThreadNumaNode(pthread_t thread, int numaNode)
+{
+    GROUP_AFFINITY affinity = {0};
+
+    /* Get the processor mask for this NUMA node */
+    ULONGLONG nodeMask = 0;
+    if (!GetNumaNodeProcessorMask((UCHAR)numaNode, &nodeMask))
+        return -1;
+
+    affinity.Mask = (KAFFINITY)nodeMask;
+    affinity.Group = 0;
+
+    return SetThreadGroupAffinity(thread, &affinity, NULL) ? 0 : -1;
+}
+
+/* ===================== High Resolution Timer ===================== */
+
+/*
+ * Request high resolution timer for accurate timing
+ * Windows default timer resolution is ~15.6ms; this can reduce to ~1ms
+ * Important for latency-sensitive communication
+ */
+typedef NTSTATUS(NTAPI *NtSetTimerResolutionFunc)(ULONG, BOOLEAN, PULONG);
+typedef NTSTATUS(NTAPI *NtQueryTimerResolutionFunc)(PULONG, PULONG, PULONG);
+
+static inline int ncclEnableHighResolutionTimer(ULONG *actualResolution)
+{
+    static NtSetTimerResolutionFunc pNtSetTimerResolution = NULL;
+    static int initialized = 0;
+
+    if (!initialized)
+    {
+        HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
+        if (hNtdll)
+        {
+            pNtSetTimerResolution = (NtSetTimerResolutionFunc)GetProcAddress(hNtdll, "NtSetTimerResolution");
+        }
+        initialized = 1;
+    }
+
+    if (pNtSetTimerResolution == NULL)
+        return -1;
+
+    /* Request 1ms (10000 * 100ns) timer resolution */
+    ULONG actual = 0;
+    NTSTATUS status = pNtSetTimerResolution(10000, TRUE, &actual);
+    if (actualResolution)
+        *actualResolution = actual;
+
+    return (status >= 0) ? 0 : -1;
+}
+
+static inline int ncclDisableHighResolutionTimer(void)
+{
+    static NtSetTimerResolutionFunc pNtSetTimerResolution = NULL;
+    static int initialized = 0;
+
+    if (!initialized)
+    {
+        HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
+        if (hNtdll)
+        {
+            pNtSetTimerResolution = (NtSetTimerResolutionFunc)GetProcAddress(hNtdll, "NtSetTimerResolution");
+        }
+        initialized = 1;
+    }
+
+    if (pNtSetTimerResolution == NULL)
+        return -1;
+
+    ULONG actual = 0;
+    NTSTATUS status = pNtSetTimerResolution(0, FALSE, &actual);
+    return (status >= 0) ? 0 : -1;
+}
+
+static inline int ncclGetTimerResolution(ULONG *minResolution, ULONG *maxResolution,
+                                         ULONG *currentResolution)
+{
+    static NtQueryTimerResolutionFunc pNtQueryTimerResolution = NULL;
+    static int initialized = 0;
+
+    if (!initialized)
+    {
+        HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
+        if (hNtdll)
+        {
+            pNtQueryTimerResolution = (NtQueryTimerResolutionFunc)GetProcAddress(hNtdll, "NtQueryTimerResolution");
+        }
+        initialized = 1;
+    }
+
+    if (pNtQueryTimerResolution == NULL)
+        return -1;
+
+    NTSTATUS status = pNtQueryTimerResolution(minResolution, maxResolution, currentResolution);
+    return (status >= 0) ? 0 : -1;
+}
+
 /* Define ETIMEDOUT if not defined */
 #ifndef ETIMEDOUT
 #define ETIMEDOUT 110

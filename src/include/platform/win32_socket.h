@@ -614,6 +614,212 @@ static inline int ncclGetInterfaceVendor(const char *ifName, char *vendor, size_
     return 0;
 }
 
+/* ===================== Advanced Optimizations ===================== */
+
+/*
+ * Enable loopback fast path (Windows 8+/Server 2012+)
+ * Bypasses kernel network stack for loopback connections
+ * Can significantly improve loopback performance
+ */
+#ifndef SIO_LOOPBACK_FAST_PATH
+#define SIO_LOOPBACK_FAST_PATH _WSAIOW(IOC_VENDOR, 16)
+#endif
+
+static inline int ncclSocketEnableLoopbackFastPath(SOCKET sock)
+{
+    int optval = 1;
+    DWORD bytesReturned = 0;
+
+    return WSAIoctl(sock, SIO_LOOPBACK_FAST_PATH, &optval, sizeof(optval),
+                    NULL, 0, &bytesReturned, NULL, NULL);
+}
+
+/*
+ * Enable TCP Fast Open (Windows 10+)
+ * Reduces connection establishment latency by sending data with SYN
+ */
+#ifndef TCP_FASTOPEN
+#define TCP_FASTOPEN 15
+#endif
+
+static inline int ncclSocketEnableFastOpen(SOCKET sock)
+{
+    int optval = 1;
+    return setsockopt(sock, IPPROTO_TCP, TCP_FASTOPEN, (const char *)&optval, sizeof(optval));
+}
+
+/*
+ * Set socket priority via IP_TOS (Type of Service)
+ * Higher priority for low-latency communication
+ */
+static inline int ncclSocketSetPriority(SOCKET sock, int priority)
+{
+    /* Map priority 0-7 to DSCP values */
+    /* 0 = best effort, 7 = highest priority */
+    int tos;
+    switch (priority)
+    {
+    case 7:
+        tos = 0xB8; /* DSCP EF (Expedited Forwarding) - voice */
+        break;
+    case 6:
+        tos = 0x80; /* DSCP CS4 */
+        break;
+    case 5:
+        tos = 0x60; /* DSCP CS3 */
+        break;
+    case 4:
+        tos = 0x40; /* DSCP CS2 */
+        break;
+    default:
+        tos = 0x00; /* Best effort */
+        break;
+    }
+    return setsockopt(sock, IPPROTO_IP, IP_TOS, (const char *)&tos, sizeof(tos));
+}
+
+/*
+ * Configure socket for ultra-low latency operation
+ * Combines multiple optimizations for latency-sensitive workloads
+ */
+static inline int ncclSocketOptimizeUltraLowLatency(SOCKET sock)
+{
+    int result = 0;
+    int optval;
+
+    /* Disable Nagle's algorithm */
+    optval = 1;
+    if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *)&optval, sizeof(optval)) != 0)
+        result = -1;
+
+    /* Very small buffers to minimize latency */
+    optval = 64 * 1024; /* 64 KB - minimal buffering */
+    setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (const char *)&optval, sizeof(optval));
+    setsockopt(sock, SOL_SOCKET, SO_RCVBUF, (const char *)&optval, sizeof(optval));
+
+    /* Enable fast path for loopback */
+    ncclSocketEnableLoopbackFastPath(sock);
+
+    /* Set high priority TOS */
+    ncclSocketSetPriority(sock, 6);
+
+    return result;
+}
+
+/*
+ * Configure socket for maximum throughput
+ * Combines buffer optimization with other Windows-specific tweaks
+ */
+static inline int ncclSocketOptimizeMaxThroughput(SOCKET sock)
+{
+    int result = 0;
+    int optval;
+
+    /* Disable Nagle - always good for large transfers */
+    optval = 1;
+    if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *)&optval, sizeof(optval)) != 0)
+        result = -1;
+
+    /* Maximum buffers for throughput (8 MB) */
+    optval = 8 * 1024 * 1024;
+    setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (const char *)&optval, sizeof(optval));
+    setsockopt(sock, SOL_SOCKET, SO_RCVBUF, (const char *)&optval, sizeof(optval));
+
+    /* Enable fast path for loopback */
+    ncclSocketEnableLoopbackFastPath(sock);
+
+    /* Enable keepalive for long connections */
+    optval = 1;
+    setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, (const char *)&optval, sizeof(optval));
+
+    return result;
+}
+
+/* ===================== I/O Completion Port (IOCP) Support ===================== */
+
+/*
+ * IOCP handle for scalable async I/O
+ * More efficient than overlapped events for handling many concurrent operations
+ */
+struct ncclSocketIOCP
+{
+    HANDLE hCompletionPort;
+    int refCount;
+};
+
+/*
+ * Create IOCP for socket operations
+ */
+static inline int ncclSocketIOCPCreate(struct ncclSocketIOCP *iocp, int concurrency)
+{
+    if (iocp == NULL)
+        return -1;
+
+    /* concurrency = 0 means use number of processors */
+    iocp->hCompletionPort = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0,
+                                                   (DWORD)concurrency);
+    if (iocp->hCompletionPort == NULL)
+        return -1;
+
+    iocp->refCount = 0;
+    return 0;
+}
+
+/*
+ * Associate socket with IOCP
+ */
+static inline int ncclSocketIOCPAssociate(struct ncclSocketIOCP *iocp, SOCKET sock,
+                                          ULONG_PTR completionKey)
+{
+    if (iocp == NULL || iocp->hCompletionPort == NULL)
+        return -1;
+
+    HANDLE h = CreateIoCompletionPort((HANDLE)sock, iocp->hCompletionPort,
+                                      completionKey, 0);
+    if (h == NULL)
+        return -1;
+
+    iocp->refCount++;
+    return 0;
+}
+
+/*
+ * Wait for I/O completion
+ */
+static inline int ncclSocketIOCPWait(struct ncclSocketIOCP *iocp, DWORD timeout,
+                                     DWORD *bytesTransferred, ULONG_PTR *completionKey,
+                                     LPOVERLAPPED *overlapped)
+{
+    if (iocp == NULL || iocp->hCompletionPort == NULL)
+        return -1;
+
+    BOOL result = GetQueuedCompletionStatus(iocp->hCompletionPort,
+                                            bytesTransferred, completionKey,
+                                            overlapped, timeout);
+
+    if (!result)
+    {
+        if (*overlapped == NULL)
+            return -1; /* Timeout or error */
+        return 1;      /* Completed with error */
+    }
+
+    return 0;
+}
+
+/*
+ * Destroy IOCP
+ */
+static inline void ncclSocketIOCPDestroy(struct ncclSocketIOCP *iocp)
+{
+    if (iocp != NULL && iocp->hCompletionPort != NULL)
+    {
+        CloseHandle(iocp->hCompletionPort);
+        iocp->hCompletionPort = NULL;
+        iocp->refCount = 0;
+    }
+}
+
 #endif /* _WIN32 */
 
 #endif /* NCCL_WIN32_SOCKET_H_ */

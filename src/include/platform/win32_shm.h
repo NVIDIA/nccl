@@ -127,7 +127,7 @@ static inline int ncclShmOpen(const char *name, size_t size, int create,
 {
     ncclShmHandle_win32_t handle;
     DWORD accessFlags = FILE_MAP_ALL_ACCESS;
-    DWORD highSize = (DWORD)((size >> 32) & 0xFFFFFFFF);
+    DWORD highSize = (DWORD)(((ULONGLONG)size >> 32) & 0xFFFFFFFF);
     DWORD lowSize = (DWORD)(size & 0xFFFFFFFF);
     char fullName[MAX_PATH];
 
@@ -274,7 +274,7 @@ static inline int ncclShmOpenAdvanced(const char *name, size_t size, int flags,
     handle->hFile = INVALID_HANDLE_VALUE;
     handle->isCreator = 1;
 
-    DWORD highSize = (DWORD)((allocSize >> 32) & 0xFFFFFFFF);
+    DWORD highSize = (DWORD)(((ULONGLONG)allocSize >> 32) & 0xFFFFFFFF);
     DWORD lowSize = (DWORD)(allocSize & 0xFFFFFFFF);
 
     /* Create file mapping with optional large page support */
@@ -293,7 +293,7 @@ static inline int ncclShmOpenAdvanced(const char *name, size_t size, int flags,
         {
             handle->useLargePages = 0;
             allocSize = size;
-            highSize = (DWORD)((allocSize >> 32) & 0xFFFFFFFF);
+            highSize = (DWORD)(((ULONGLONG)allocSize >> 32) & 0xFFFFFFFF);
             lowSize = (DWORD)(allocSize & 0xFFFFFFFF);
             handle->size = allocSize;
 
@@ -368,7 +368,7 @@ static inline int ncclShmOpenFile(const char *path, size_t size, int create,
 {
     ncclShmHandle_win32_t handle;
     DWORD accessFlags = FILE_MAP_ALL_ACCESS;
-    DWORD highSize = (DWORD)((size >> 32) & 0xFFFFFFFF);
+    DWORD highSize = (DWORD)(((ULONGLONG)size >> 32) & 0xFFFFFFFF);
     DWORD lowSize = (DWORD)(size & 0xFFFFFFFF);
 
     if (pHandle == NULL || pPtr == NULL)

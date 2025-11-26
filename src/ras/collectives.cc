@@ -323,7 +323,7 @@ ncclResult_t rasMsgHandleCollResp(struct rasMsg* msg, struct rasSocket* sock) {
   if (coll == nullptr) {
     INFO(NCCL_RAS, "RAS failed to find a matching ongoing collective for response %s:%ld from %s!",
          ncclSocketToString(&msg->collResp.rootAddr, line), msg->collResp.rootId,
-         ncclSocketToString(&sock->sock.addr, rasLine));
+         ncclSocketToString(&sock->sock.peerAddr, rasLine));
     goto exit;
   }
 

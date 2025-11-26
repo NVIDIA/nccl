@@ -354,7 +354,7 @@ ncclResult_t ncclNetSocketListen(void* ctx, int dev, void* opaqueHandle, void** 
   struct ncclNetSocketListenComm* comm;
   NCCLCHECK(ncclCalloc(&comm, 1));
   handle->magic = NCCL_SOCKET_MAGIC;
-  NCCLCHECKGOTO(ncclSocketInit(&comm->sock, &ncclNetSocketDevs[dev].addr, handle->magic, ncclSocketTypeNetSocket, NULL, 1), ret, fail);
+  NCCLCHECKGOTO(ncclSocketInit(&comm->sock, &ncclNetSocketDevs[dev].addr, NULL, handle->magic, ncclSocketTypeNetSocket, NULL, 1), ret, fail);
   NCCLCHECKGOTO(ncclSocketListen(&comm->sock), ret, fail);
   NCCLCHECKGOTO(ncclSocketGetAddr(&comm->sock, &handle->connectAddr), ret, fail);
   NCCLCHECKGOTO(ncclNetSocketGetNsockNthread(dev, &comm->nSocks, &comm->nThreads), ret, fail);
@@ -395,7 +395,7 @@ ncclResult_t ncclNetSocketConnect(void* ctx, int dev, void* opaqueHandle, void**
   CUDACHECK(cudaGetDevice(&comm->cudaDev));
   for (; i<comm->nSocks+1; i++) {
     sock = (i == comm->nSocks) ? &comm->ctrlSock : comm->socks+i;
-    NCCLCHECK(ncclSocketInit(sock, &handle->connectAddr, handle->magic, ncclSocketTypeNetSocket, NULL, 1));
+    NCCLCHECK(ncclSocketInit(sock, &ncclNetSocketDevs[dev].addr, &handle->connectAddr, handle->magic, ncclSocketTypeNetSocket, NULL, 1));
 
     stage->sock = sock;
     stage->state = ncclNetSocketCommStateConnect;
@@ -561,7 +561,7 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
       if (senderSize > r->size) {
         char line[SOCKET_NAME_MAXLEN + 1];
         union ncclSocketAddress addr;
-        NCCLCHECK(ncclSocketGetAddr(r->ctrlSock, &addr));
+        NCCLCHECK(ncclSocketGetAddr(r->ctrlSock, &addr,/*peer address*/1));
         WARN("NET/Socket : peer %s message truncated : receiving %d bytes instead of %d. If you believe your socket network is in a healthy state, "
              "there may be a mismatch in collective sizes or environment settings (e.g. NCCL_PROTO, NCCL_ALGO) between ranks",
              ncclSocketToString(&addr, line), senderSize, r->size);

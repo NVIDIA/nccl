@@ -1,3 +1,0 @@
-platform_standalone 5 0.0075936
-platform_full 5 0.010725
----

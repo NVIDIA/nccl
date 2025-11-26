@@ -1,4 +1,20 @@
 # Copyright (c) 2015-2016, NVIDIA CORPORATION. All rights reserved.
 /build
+/build_test
+**/build/
 *.gcov
 /coverage/
+
+# CMake build artifacts
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+*.ninja
+.ninja_*
+
+# Compiled binaries
+*.exe
+*.obj
+*.pdb
+*.ilk

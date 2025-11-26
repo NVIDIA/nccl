@@ -1,5 +1,0 @@
-C:/Users/adamm/dev/nervosys/utilities/nccl/build_test/CMakeFiles/test_platform_standalone.dir
-C:/Users/adamm/dev/nervosys/utilities/nccl/build_test/CMakeFiles/test_platform_full.dir
-C:/Users/adamm/dev/nervosys/utilities/nccl/build_test/CMakeFiles/test.dir
-C:/Users/adamm/dev/nervosys/utilities/nccl/build_test/CMakeFiles/edit_cache.dir
-C:/Users/adamm/dev/nervosys/utilities/nccl/build_test/CMakeFiles/rebuild_cache.dir

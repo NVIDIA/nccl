@@ -1,2 +1,0 @@
-#pragma code_page(65001)
-1 /* CREATEPROCESS_MANIFEST_RESOURCE_ID */ 24 /* RT_MANIFEST */ "C:/Users/adamm/dev/nervosys/utilities/nccl/build_test/CMakeFiles/test_platform_full.dir/embed.manifest"

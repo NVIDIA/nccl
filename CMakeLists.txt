@@ -90,16 +90,34 @@ if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES OR CMAKE_CUDA_ARCHITECTURES STREQUAL "")
 endif()
 message(STATUS "Using CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fvisibility=hidden -Wall -Wno-unused-function -Wno-sign-compare -Wvla -g")
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda -Xptxas -maxrregcount=96 -Xfatbin -compress-all -fPIC")
+# Platform-specific compiler flags
+if(WIN32)
+    # Windows (MSVC) compiler flags
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3 /EHsc")
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda -Xptxas -maxrregcount=96 -Xfatbin -compress-all")
+    
+    # Disable specific warnings on Windows
+    add_compile_options(/wd4996 /wd4267 /wd4244 /wd4018)
+    
+    # Define Windows macros
+    add_compile_definitions(
+        _CRT_SECURE_NO_WARNINGS
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+    )
+else()
+    # Linux/Unix (GCC/Clang) compiler flags
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fvisibility=hidden -Wall -Wno-unused-function -Wno-sign-compare -Wvla -g")
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda -Xptxas -maxrregcount=96 -Xfatbin -compress-all -fPIC")
+endif()
 
-# Sanitizer options
-if(ASAN)
+# Sanitizer options (Linux only)
+if(NOT WIN32 AND ASAN)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address -static-libasan")
 endif()
 
-if(UBSAN)
+if(NOT WIN32 AND UBSAN)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=undefined")
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=undefined -static-libubsan")
 endif()
@@ -114,7 +132,11 @@ if(NOT NVTX)
 endif()
 
 if(WERROR)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
+    if(WIN32)
+        add_compile_options(/WX)
+    else()
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
+    endif()
 endif()
 
 if(PROFAPI)
@@ -124,19 +146,21 @@ endif()
 set(EXTRA_LIBS)
 
 # RDMA and MLX5DV are Linux-specific features
-if(RDMA_CORE)
-    add_definitions(-DNCCL_BUILD_RDMA_CORE=1)
-    find_library(VERBS_LIBRARY NAMES verbs)
-    if(VERBS_LIBRARY)
-        list(APPEND EXTRA_LIBS ${VERBS_LIBRARY})
+if(NOT WIN32)
+    if(RDMA_CORE)
+        add_definitions(-DNCCL_BUILD_RDMA_CORE=1)
+        find_library(VERBS_LIBRARY NAMES verbs)
+        if(VERBS_LIBRARY)
+            list(APPEND EXTRA_LIBS ${VERBS_LIBRARY})
+        endif()
     endif()
-endif()
 
-if(MLX5DV)
-    add_definitions(-DNCCL_BUILD_MLX5DV=1)
-    find_library(MLX5_LIBRARY NAMES mlx5)
-    if(MLX5_LIBRARY)
-        list(APPEND EXTRA_LIBS ${MLX5_LIBRARY})
+    if(MLX5DV)
+        add_definitions(-DNCCL_BUILD_MLX5DV=1)
+        find_library(MLX5_LIBRARY NAMES mlx5)
+        if(MLX5_LIBRARY)
+            list(APPEND EXTRA_LIBS ${MLX5_LIBRARY})
+        endif()
     endif()
 endif()
 
@@ -152,19 +176,34 @@ add_definitions(-DDOCA_VERBS_USE_CUDA_WRAPPER)
 add_definitions(-DDOCA_VERBS_USE_NET_WRAPPER)
 add_definitions(-DNCCL_GIN_PROXY_ENABLE=1)
 
-# Library dependencies
-find_library(RT_LIBRARY NAMES rt)
-if(RT_LIBRARY)
-    list(APPEND EXTRA_LIBS ${RT_LIBRARY})
+# Library dependencies (Linux only)
+if(NOT WIN32)
+    find_library(RT_LIBRARY NAMES rt)
+    if(RT_LIBRARY)
+        list(APPEND EXTRA_LIBS ${RT_LIBRARY})
+    endif()
 endif()
 
 # Debug/Release specific flags
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -O0")
-set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS} -O0 -G -g")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3")
-set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS} -O3")
+if(WIN32)
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} /Od /Zi")
+    set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS} -O0 -G -g")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} /O2")
+    set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS} -O3")
+else()
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -O0")
+    set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS} -O0 -G -g")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3")
+    set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS} -O3")
+endif()
 
 add_subdirectory(ext-net)
 add_subdirectory(ext-profiler/example)
 add_subdirectory(ext-tuner/example)
 add_subdirectory(src)
+
+# Build tests if requested
+option(BUILD_TESTS "Build test suite" OFF)
+if(BUILD_TESTS)
+    add_subdirectory(tests)
+endif()

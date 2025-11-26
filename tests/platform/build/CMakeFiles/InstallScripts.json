@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"C:/Users/adamm/dev/nervosys/utilities/nccl/tests/platform/build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

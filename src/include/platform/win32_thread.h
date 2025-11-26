@@ -1,0 +1,458 @@
+/*************************************************************************
+ * Copyright (c) 2015-2025, NVIDIA CORPORATION. All rights reserved.
+ *
+ * See LICENSE.txt for license information
+ ************************************************************************/
+
+#ifndef NCCL_WIN32_THREAD_H_
+#define NCCL_WIN32_THREAD_H_
+
+#ifdef _WIN32
+
+#include "win32_defs.h"
+#include <process.h>
+#include <stdlib.h>
+#include <string.h>
+
+/*
+ * Windows implementation of pthread-like threading primitives
+ * Provides a thin wrapper around Windows threading APIs
+ */
+
+/* Thread handle type */
+typedef HANDLE pthread_t;
+
+/* Thread attributes (mostly ignored on Windows) */
+typedef struct
+{
+    DWORD dwStackSize;
+    int detached;
+} pthread_attr_t;
+
+/* Mutex types */
+typedef CRITICAL_SECTION pthread_mutex_t;
+
+typedef struct
+{
+    int type;
+} pthread_mutexattr_t;
+
+#define PTHREAD_MUTEX_INITIALIZER {0}
+
+/* Condition variable */
+typedef CONDITION_VARIABLE pthread_cond_t;
+
+typedef struct
+{
+    int dummy;
+} pthread_condattr_t;
+
+#define PTHREAD_COND_INITIALIZER {0}
+
+/* Read-write lock */
+typedef SRWLOCK pthread_rwlock_t;
+
+typedef struct
+{
+    int dummy;
+} pthread_rwlockattr_t;
+
+#define PTHREAD_RWLOCK_INITIALIZER SRWLOCK_INIT
+
+/* Once control */
+typedef INIT_ONCE pthread_once_t;
+#define PTHREAD_ONCE_INIT INIT_ONCE_STATIC_INIT
+
+/* Thread function wrapper for Windows _beginthreadex */
+typedef struct
+{
+    void *(*start_routine)(void *);
+    void *arg;
+} ncclThreadWrapper_t;
+
+static unsigned __stdcall ncclThreadWrapperFunc(void *arg)
+{
+    ncclThreadWrapper_t *wrapper = (ncclThreadWrapper_t *)arg;
+    void *(*start_routine)(void *) = wrapper->start_routine;
+    void *thread_arg = wrapper->arg;
+    free(wrapper);
+    start_routine(thread_arg);
+    return 0;
+}
+
+/* Thread creation */
+static inline int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
+                                 void *(*start_routine)(void *), void *arg)
+{
+    ncclThreadWrapper_t *wrapper = (ncclThreadWrapper_t *)malloc(sizeof(ncclThreadWrapper_t));
+    if (wrapper == NULL)
+        return ENOMEM;
+
+    wrapper->start_routine = start_routine;
+    wrapper->arg = arg;
+
+    DWORD stackSize = (attr != NULL) ? attr->dwStackSize : 0;
+
+    *thread = (HANDLE)_beginthreadex(NULL, stackSize, ncclThreadWrapperFunc, wrapper, 0, NULL);
+
+    if (*thread == NULL)
+    {
+        free(wrapper);
+        return EAGAIN;
+    }
+
+    return 0;
+}
+
+/* Thread join */
+static inline int pthread_join(pthread_t thread, void **retval)
+{
+    (void)retval;
+
+    if (WaitForSingleObject(thread, INFINITE) != WAIT_OBJECT_0)
+    {
+        return EINVAL;
+    }
+
+    CloseHandle(thread);
+    return 0;
+}
+
+/* Thread detach */
+static inline int pthread_detach(pthread_t thread)
+{
+    CloseHandle(thread);
+    return 0;
+}
+
+/* Get current thread */
+static inline pthread_t pthread_self(void)
+{
+    return GetCurrentThread();
+}
+
+/* Thread attributes */
+static inline int pthread_attr_init(pthread_attr_t *attr)
+{
+    if (attr == NULL)
+        return EINVAL;
+    attr->dwStackSize = 0;
+    attr->detached = 0;
+    return 0;
+}
+
+static inline int pthread_attr_destroy(pthread_attr_t *attr)
+{
+    (void)attr;
+    return 0;
+}
+
+static inline int pthread_attr_setstacksize(pthread_attr_t *attr, size_t stacksize)
+{
+    if (attr == NULL)
+        return EINVAL;
+    attr->dwStackSize = (DWORD)stacksize;
+    return 0;
+}
+
+static inline int pthread_attr_getstacksize(const pthread_attr_t *attr, size_t *stacksize)
+{
+    if (attr == NULL || stacksize == NULL)
+        return EINVAL;
+    /* Return default stack size if not set */
+    *stacksize = (attr->dwStackSize > 0) ? attr->dwStackSize : (1024 * 1024); /* 1MB default */
+    return 0;
+}
+
+/* Mutex operations */
+static inline int pthread_mutex_init(pthread_mutex_t *mutex, const pthread_mutexattr_t *attr)
+{
+    (void)attr;
+    InitializeCriticalSection(mutex);
+    return 0;
+}
+
+static inline int pthread_mutex_destroy(pthread_mutex_t *mutex)
+{
+    DeleteCriticalSection(mutex);
+    return 0;
+}
+
+static inline int pthread_mutex_lock(pthread_mutex_t *mutex)
+{
+    EnterCriticalSection(mutex);
+    return 0;
+}
+
+static inline int pthread_mutex_trylock(pthread_mutex_t *mutex)
+{
+    return TryEnterCriticalSection(mutex) ? 0 : EBUSY;
+}
+
+static inline int pthread_mutex_unlock(pthread_mutex_t *mutex)
+{
+    LeaveCriticalSection(mutex);
+    return 0;
+}
+
+/* Mutex attributes */
+static inline int pthread_mutexattr_init(pthread_mutexattr_t *attr)
+{
+    if (attr == NULL)
+        return EINVAL;
+    attr->type = 0;
+    return 0;
+}
+
+static inline int pthread_mutexattr_destroy(pthread_mutexattr_t *attr)
+{
+    (void)attr;
+    return 0;
+}
+
+/* Condition variable operations */
+static inline int pthread_cond_init(pthread_cond_t *cond, const pthread_condattr_t *attr)
+{
+    (void)attr;
+    InitializeConditionVariable(cond);
+    return 0;
+}
+
+static inline int pthread_cond_destroy(pthread_cond_t *cond)
+{
+    (void)cond;
+    /* Windows condition variables don't need explicit destruction */
+    return 0;
+}
+
+static inline int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex)
+{
+    if (!SleepConditionVariableCS(cond, mutex, INFINITE))
+    {
+        return EINVAL;
+    }
+    return 0;
+}
+
+static inline int pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex,
+                                         const struct timespec *abstime)
+{
+    DWORD timeout;
+
+    if (abstime == NULL)
+    {
+        timeout = INFINITE;
+    }
+    else
+    {
+        /* Calculate timeout in milliseconds from absolute time */
+        FILETIME ft;
+        ULARGE_INTEGER now;
+        ULARGE_INTEGER target;
+
+        GetSystemTimeAsFileTime(&ft);
+        now.LowPart = ft.dwLowDateTime;
+        now.HighPart = ft.dwHighDateTime;
+
+        /* Convert abstime to Windows FILETIME (100ns intervals since Jan 1, 1601) */
+        target.QuadPart = (ULONGLONG)abstime->tv_sec * 10000000ULL +
+                          (ULONGLONG)abstime->tv_nsec / 100ULL +
+                          116444736000000000ULL; /* Unix epoch offset */
+
+        if (target.QuadPart <= now.QuadPart)
+        {
+            timeout = 0;
+        }
+        else
+        {
+            timeout = (DWORD)((target.QuadPart - now.QuadPart) / 10000ULL); /* Convert to ms */
+        }
+    }
+
+    if (!SleepConditionVariableCS(cond, mutex, timeout))
+    {
+        if (GetLastError() == ERROR_TIMEOUT)
+        {
+            return ETIMEDOUT;
+        }
+        return EINVAL;
+    }
+    return 0;
+}
+
+static inline int pthread_cond_signal(pthread_cond_t *cond)
+{
+    WakeConditionVariable(cond);
+    return 0;
+}
+
+static inline int pthread_cond_broadcast(pthread_cond_t *cond)
+{
+    WakeAllConditionVariable(cond);
+    return 0;
+}
+
+/* Read-write lock operations */
+static inline int pthread_rwlock_init(pthread_rwlock_t *rwlock, const pthread_rwlockattr_t *attr)
+{
+    (void)attr;
+    InitializeSRWLock(rwlock);
+    return 0;
+}
+
+static inline int pthread_rwlock_destroy(pthread_rwlock_t *rwlock)
+{
+    (void)rwlock;
+    /* SRW locks don't need explicit destruction */
+    return 0;
+}
+
+static inline int pthread_rwlock_rdlock(pthread_rwlock_t *rwlock)
+{
+    AcquireSRWLockShared(rwlock);
+    return 0;
+}
+
+static inline int pthread_rwlock_wrlock(pthread_rwlock_t *rwlock)
+{
+    AcquireSRWLockExclusive(rwlock);
+    return 0;
+}
+
+static inline int pthread_rwlock_tryrdlock(pthread_rwlock_t *rwlock)
+{
+    return TryAcquireSRWLockShared(rwlock) ? 0 : EBUSY;
+}
+
+static inline int pthread_rwlock_trywrlock(pthread_rwlock_t *rwlock)
+{
+    return TryAcquireSRWLockExclusive(rwlock) ? 0 : EBUSY;
+}
+
+static inline int pthread_rwlock_unlock(pthread_rwlock_t *rwlock)
+{
+    /* SRW locks require knowing which type of lock to release */
+    /* This is a limitation - caller must use correct unlock function */
+    /* Assume write lock for compatibility */
+    ReleaseSRWLockExclusive(rwlock);
+    return 0;
+}
+
+static inline int pthread_rwlock_rd_unlock(pthread_rwlock_t *rwlock)
+{
+    ReleaseSRWLockShared(rwlock);
+    return 0;
+}
+
+static inline int pthread_rwlock_wr_unlock(pthread_rwlock_t *rwlock)
+{
+    ReleaseSRWLockExclusive(rwlock);
+    return 0;
+}
+
+/* Once control */
+static BOOL CALLBACK ncclOnceCallback(PINIT_ONCE once, PVOID param, PVOID *context)
+{
+    (void)once;
+    (void)context;
+    void (*init_routine)(void) = (void (*)(void))param;
+    init_routine();
+    return TRUE;
+}
+
+static inline int pthread_once(pthread_once_t *once_control, void (*init_routine)(void))
+{
+    if (!InitOnceExecuteOnce(once_control, ncclOnceCallback, (PVOID)init_routine, NULL))
+    {
+        return EINVAL;
+    }
+    return 0;
+}
+
+/* Thread-specific data (TLS) */
+typedef DWORD pthread_key_t;
+
+static inline int pthread_key_create(pthread_key_t *key, void (*destructor)(void *))
+{
+    (void)destructor; /* Windows TLS doesn't support destructors directly */
+    *key = TlsAlloc();
+    if (*key == TLS_OUT_OF_INDEXES)
+    {
+        return EAGAIN;
+    }
+    return 0;
+}
+
+static inline int pthread_key_delete(pthread_key_t key)
+{
+    return TlsFree(key) ? 0 : EINVAL;
+}
+
+static inline int pthread_setspecific(pthread_key_t key, const void *value)
+{
+    return TlsSetValue(key, (LPVOID)value) ? 0 : EINVAL;
+}
+
+static inline void *pthread_getspecific(pthread_key_t key)
+{
+    return TlsGetValue(key);
+}
+
+/* Thread naming (Windows 10+ / Server 2016+) */
+typedef HRESULT(WINAPI *SetThreadDescriptionFunc)(HANDLE, PCWSTR);
+
+static inline int pthread_setname_np(pthread_t thread, const char *name)
+{
+    static SetThreadDescriptionFunc pSetThreadDescription = NULL;
+    static int initialized = 0;
+
+    if (!initialized)
+    {
+        HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
+        if (hKernel32)
+        {
+            pSetThreadDescription = (SetThreadDescriptionFunc)GetProcAddress(hKernel32, "SetThreadDescription");
+        }
+        initialized = 1;
+    }
+
+    if (pSetThreadDescription != NULL)
+    {
+        wchar_t wname[256];
+        MultiByteToWideChar(CP_UTF8, 0, name, -1, wname, 256);
+        pSetThreadDescription(thread, wname);
+    }
+
+    return 0;
+}
+
+/*
+ * CPU affinity is defined in win32_misc.h with a more comprehensive implementation
+ * that supports up to 256 CPUs. The cpu_set_t type and CPU_SET/CPU_ZERO/etc macros
+ * along with sched_setaffinity/sched_getaffinity are provided there.
+ */
+
+/* Define ETIMEDOUT if not defined */
+#ifndef ETIMEDOUT
+#define ETIMEDOUT 110
+#endif
+
+#ifndef EBUSY
+#define EBUSY 16
+#endif
+
+#ifndef ENOMEM
+#define ENOMEM 12
+#endif
+
+#ifndef EAGAIN
+#define EAGAIN 11
+#endif
+
+#ifndef EINVAL
+#define EINVAL 22
+#endif
+
+#endif /* _WIN32 */
+
+#endif /* NCCL_WIN32_THREAD_H_ */

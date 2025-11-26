@@ -109,8 +109,12 @@ set_target_properties(nccl PROPERTIES
     VERSION ${NCCL_MAJOR}.${NCCL_MINOR}.${NCCL_PATCH}
     SOVERSION ${NCCL_MAJOR}
     OUTPUT_NAME "nccl"
-    PREFIX "lib"
 )
+
+# Platform-specific prefix
+if(NOT WIN32)
+    set_target_properties(nccl PROPERTIES PREFIX "lib")
+endif()
 
 # Set CUDA specific flags
 set_target_properties(nccl PROPERTIES
@@ -120,25 +124,44 @@ set_target_properties(nccl PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
 
-# Link libraries
-target_link_libraries(nccl
-    PRIVATE
-    nccl_device
-    pthread
-    rt
-    dl
-    ${CUDAToolkit_LIBRARIES}
-    ${EXTRA_LIBS}
-)
-
-# Add version script for symbol visibility control
-target_link_options(nccl PRIVATE
-    "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libnccl.map"
-)
+# Platform-specific link libraries
+if(WIN32)
+    target_link_libraries(nccl
+        PRIVATE
+        nccl_device
+        ws2_32
+        iphlpapi
+        bcrypt
+        ${CUDAToolkit_LIBRARIES}
+        ${EXTRA_LIBS}
+    )
+    # Add Windows-specific compile definitions
+    target_compile_definitions(nccl PRIVATE
+        NCCL_EXPORTS
+        _CRT_SECURE_NO_WARNINGS
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+    )
+else()
+    target_link_libraries(nccl
+        PRIVATE
+        nccl_device
+        pthread
+        rt
+        dl
+        ${CUDAToolkit_LIBRARIES}
+        ${EXTRA_LIBS}
+    )
+    # Add version script for symbol visibility control (Linux only)
+    target_link_options(nccl PRIVATE
+        "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libnccl.map"
+    )
+endif()
 
 # Set output directories for nccl shared library
 set_target_properties(nccl PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"  # For Windows DLLs
 )
 
 ###################### Create a ras binary executable ############################
@@ -153,12 +176,26 @@ target_include_directories(ncclras PUBLIC
 
 add_dependencies(ncclras nccl_header)
 
-target_link_libraries(ncclras
-    PRIVATE
-    pthread
-    rt
-    dl
-)
+# Platform-specific link libraries for ncclras
+if(WIN32)
+    target_link_libraries(ncclras
+        PRIVATE
+        ws2_32
+        iphlpapi
+    )
+    target_compile_definitions(ncclras PRIVATE
+        _CRT_SECURE_NO_WARNINGS
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+    )
+else()
+    target_link_libraries(ncclras
+        PRIVATE
+        pthread
+        rt
+        dl
+    )
+endif()
 
 # Set output directory for ncclras executable
 set_target_properties(ncclras PROPERTIES
@@ -181,16 +218,33 @@ target_include_directories(nccl_static PUBLIC
 # Add dependency on nccl_header
 add_dependencies(nccl_static nccl_header)
 
-# Link libraries
-target_link_libraries(nccl_static
-    PRIVATE
-    nccl_device
-    pthread
-    rt
-    dl
-    ${CUDAToolkit_LIBRARIES}
-    ${EXTRA_LIBS}
-)
+# Platform-specific link libraries for static library
+if(WIN32)
+    target_link_libraries(nccl_static
+        PRIVATE
+        nccl_device
+        ws2_32
+        iphlpapi
+        bcrypt
+        ${CUDAToolkit_LIBRARIES}
+        ${EXTRA_LIBS}
+    )
+    target_compile_definitions(nccl_static PRIVATE
+        _CRT_SECURE_NO_WARNINGS
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+    )
+else()
+    target_link_libraries(nccl_static
+        PRIVATE
+        nccl_device
+        pthread
+        rt
+        dl
+        ${CUDAToolkit_LIBRARIES}
+        ${EXTRA_LIBS}
+    )
+endif()
 
 # Set CUDA specific flags
 set_target_properties(nccl_static PROPERTIES

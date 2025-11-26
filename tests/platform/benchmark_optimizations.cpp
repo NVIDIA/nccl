@@ -847,6 +847,207 @@ void benchmark_iocp(void)
     WSACleanup();
 }
 
+void benchmark_spinlock(void)
+{
+    printf("\n");
+    printf("============================================================\n");
+    printf("Spinlock Benchmark\n");
+    printf("============================================================\n");
+
+    pthread_spinlock_t spinlock;
+    pthread_mutex_t mutex;
+    CRITICAL_SECTION cs;
+    double time_spin = 0, time_mutex = 0, time_cs = 0;
+
+    pthread_spin_init(&spinlock, PTHREAD_PROCESS_PRIVATE);
+    pthread_mutex_init(&mutex, NULL);
+    InitializeCriticalSection(&cs);
+
+    /* Benchmark spinlock */
+    double start = get_time_us();
+    for (int i = 0; i < BENCHMARK_ITERATIONS; i++)
+    {
+        pthread_spin_lock(&spinlock);
+        pthread_spin_unlock(&spinlock);
+    }
+    time_spin = get_time_us() - start;
+
+    /* Benchmark mutex (CRITICAL_SECTION wrapper) */
+    start = get_time_us();
+    for (int i = 0; i < BENCHMARK_ITERATIONS; i++)
+    {
+        pthread_mutex_lock(&mutex);
+        pthread_mutex_unlock(&mutex);
+    }
+    time_mutex = get_time_us() - start;
+
+    /* Benchmark raw CRITICAL_SECTION */
+    start = get_time_us();
+    for (int i = 0; i < BENCHMARK_ITERATIONS; i++)
+    {
+        EnterCriticalSection(&cs);
+        LeaveCriticalSection(&cs);
+    }
+    time_cs = get_time_us() - start;
+
+    pthread_spin_destroy(&spinlock);
+    pthread_mutex_destroy(&mutex);
+    DeleteCriticalSection(&cs);
+
+    printf("\nLock Operations (%d iterations, uncontended):\n", BENCHMARK_ITERATIONS);
+    printf("  Spinlock:              %8.3f ns/op\n", time_spin / BENCHMARK_ITERATIONS * 1000);
+    printf("  Mutex (CS wrapper):    %8.3f ns/op\n", time_mutex / BENCHMARK_ITERATIONS * 1000);
+    printf("  Raw CRITICAL_SECTION:  %8.3f ns/op\n", time_cs / BENCHMARK_ITERATIONS * 1000);
+}
+
+void benchmark_memory_barriers(void)
+{
+    printf("\n");
+    printf("============================================================\n");
+    printf("Memory Barrier and Atomic Operations Benchmark\n");
+    printf("============================================================\n");
+
+    volatile LONG value = 0;
+    volatile LONGLONG value64 = 0;
+    double time_fence = 0, time_load = 0, time_store = 0;
+    double time_add = 0, time_cas = 0, time_pause = 0;
+
+    /* Benchmark full memory fence */
+    double start = get_time_us();
+    for (int i = 0; i < BENCHMARK_ITERATIONS; i++)
+    {
+        ncclMemoryFence();
+    }
+    time_fence = get_time_us() - start;
+
+    /* Benchmark atomic load with acquire */
+    start = get_time_us();
+    for (int i = 0; i < BENCHMARK_ITERATIONS; i++)
+    {
+        volatile LONG v = ncclAtomicLoadAcquire(&value);
+        (void)v;
+    }
+    time_load = get_time_us() - start;
+
+    /* Benchmark atomic store with release */
+    start = get_time_us();
+    for (int i = 0; i < BENCHMARK_ITERATIONS; i++)
+    {
+        ncclAtomicStoreRelease(&value, (LONG)i);
+    }
+    time_store = get_time_us() - start;
+
+    /* Benchmark atomic add */
+    start = get_time_us();
+    for (int i = 0; i < BENCHMARK_ITERATIONS; i++)
+    {
+        ncclAtomicAdd(&value, 1);
+    }
+    time_add = get_time_us() - start;
+
+    /* Benchmark CAS */
+    value = 0;
+    start = get_time_us();
+    for (int i = 0; i < BENCHMARK_ITERATIONS; i++)
+    {
+        ncclAtomicCAS(&value, (LONG)i, (LONG)(i + 1));
+    }
+    time_cas = get_time_us() - start;
+
+    /* Benchmark CPU pause */
+    start = get_time_us();
+    for (int i = 0; i < BENCHMARK_ITERATIONS; i++)
+    {
+        ncclCpuPause();
+    }
+    time_pause = get_time_us() - start;
+
+    printf("\nMemory/Atomic Operations (%d iterations):\n", BENCHMARK_ITERATIONS);
+    printf("  Memory fence:          %8.3f ns/op\n", time_fence / BENCHMARK_ITERATIONS * 1000);
+    printf("  Atomic load (acquire): %8.3f ns/op\n", time_load / BENCHMARK_ITERATIONS * 1000);
+    printf("  Atomic store (release):%8.3f ns/op\n", time_store / BENCHMARK_ITERATIONS * 1000);
+    printf("  Atomic add:            %8.3f ns/op\n", time_add / BENCHMARK_ITERATIONS * 1000);
+    printf("  Atomic CAS:            %8.3f ns/op\n", time_cas / BENCHMARK_ITERATIONS * 1000);
+    printf("  CPU pause:             %8.3f ns/op\n", time_pause / BENCHMARK_ITERATIONS * 1000);
+}
+
+void benchmark_precision_sleep(void)
+{
+    printf("\n");
+    printf("============================================================\n");
+    printf("High-Precision Sleep Benchmark\n");
+    printf("============================================================\n");
+
+    int iterations = 100;
+    double time_sleep = 0, time_nano = 0, time_busy = 0;
+
+    /* Test target delays */
+    LONGLONG delays[] = {100, 500, 1000, 5000, 10000}; /* nanoseconds */
+    int num_delays = sizeof(delays) / sizeof(delays[0]);
+
+    printf("\nSleep Accuracy (target vs actual):\n");
+    printf("%-12s %12s %12s %12s\n", "Target", "Sleep(0)", "NanoSleep", "BusyWait");
+
+    for (int d = 0; d < num_delays; d++)
+    {
+        LONGLONG target_ns = delays[d];
+
+        /* Sleep(0) */
+        double start = get_time_us();
+        for (int i = 0; i < iterations; i++)
+        {
+            Sleep(0);
+        }
+        double sleep0_actual = (get_time_us() - start) / iterations * 1000; /* ns */
+
+        /* ncclNanoSleep */
+        start = get_time_us();
+        for (int i = 0; i < iterations; i++)
+        {
+            ncclNanoSleep(target_ns);
+        }
+        double nano_actual = (get_time_us() - start) / iterations * 1000;
+
+        /* ncclBusyWaitNanos */
+        start = get_time_us();
+        for (int i = 0; i < iterations; i++)
+        {
+            ncclBusyWaitNanos(target_ns);
+        }
+        double busy_actual = (get_time_us() - start) / iterations * 1000;
+
+        printf("%8lld ns  %8.0f ns  %8.0f ns  %8.0f ns\n",
+               target_ns, sleep0_actual, nano_actual, busy_actual);
+    }
+}
+
+void benchmark_processor_groups(void)
+{
+    printf("\n");
+    printf("============================================================\n");
+    printf("Processor Group Information\n");
+    printf("============================================================\n");
+
+    int groups = ncclGetProcessorGroupCount();
+    int total = ncclGetTotalProcessorCount();
+
+    printf("\nProcessor Topology:\n");
+    printf("  Processor groups:      %d\n", groups);
+    printf("  Total logical CPUs:    %d\n", total);
+
+    for (int g = 0; g < groups; g++)
+    {
+        int cpus = ncclGetProcessorCountInGroup(g);
+        printf("  Group %d processors:    %d\n", g, cpus);
+    }
+
+    int curGroup, curProc;
+    ncclGetCurrentProcessorInfo(&curGroup, &curProc);
+    printf("\nCurrent Thread:\n");
+    printf("  Processor group:       %d\n", curGroup);
+    printf("  Processor number:      %d\n", curProc);
+}
+
 int main(int argc, char *argv[])
 {
     (void)argc;
@@ -864,12 +1065,18 @@ int main(int argc, char *argv[])
     benchmark_memory_access();
     benchmark_loopback_throughput();
 
-    /* New benchmarks */
+    /* Thread and timer benchmarks */
     benchmark_thread_priority();
     benchmark_timer_resolution();
     benchmark_advanced_socket();
     benchmark_memory_prefetch();
     benchmark_iocp();
+
+    /* New low-level benchmarks */
+    benchmark_spinlock();
+    benchmark_memory_barriers();
+    benchmark_precision_sleep();
+    benchmark_processor_groups();
 
     printf("\n================================================================\n");
     printf("Benchmark Complete\n");

@@ -337,6 +337,157 @@ static inline void ncclWinsockCleanup()
     WSACleanup();
 }
 
+/* ===================== CPU Intrinsics for Spin Loops ===================== */
+
+/*
+ * CPU pause instruction for spin-wait loops
+ * Reduces power consumption and improves performance in busy loops
+ * Equivalent to _mm_pause() / __builtin_ia32_pause()
+ */
+#if defined(_M_X64) || defined(_M_IX86) || defined(_M_AMD64)
+#include <intrin.h>
+#define ncclCpuPause() _mm_pause()
+#elif defined(_M_ARM64)
+#define ncclCpuPause() __yield()
+#else
+#define ncclCpuPause() ((void)0)
+#endif
+
+/*
+ * Yield to other threads - use when spinning for longer periods
+ */
+static inline void ncclCpuYield(void)
+{
+    SwitchToThread();
+}
+
+/*
+ * Adaptive spin-wait with exponential backoff
+ * Efficient for contended resources
+ */
+static inline void ncclSpinWait(volatile LONG *flag, LONG expected, int maxSpins)
+{
+    int spins = 0;
+
+    while (*flag != expected)
+    {
+        if (spins < 16)
+        {
+            /* Initial fast spins with pause */
+            ncclCpuPause();
+        }
+        else if (spins < maxSpins)
+        {
+            /* Yield to other threads */
+            ncclCpuYield();
+        }
+        else
+        {
+            /* Fall back to sleep for very long waits */
+            Sleep(0);
+            spins = maxSpins - 1; /* Don't let spins overflow */
+        }
+        spins++;
+    }
+}
+
+/* ===================== Memory Barriers ===================== */
+
+/*
+ * Full memory fence - ensures all memory operations complete
+ * Equivalent to __sync_synchronize() / std::atomic_thread_fence(memory_order_seq_cst)
+ */
+#if defined(_M_X64) || defined(_M_AMD64)
+#define ncclMemoryFence() _mm_mfence()
+#define ncclLoadFence() _mm_lfence()
+#define ncclStoreFence() _mm_sfence()
+#elif defined(_M_ARM64)
+#define ncclMemoryFence() __dmb(_ARM64_BARRIER_SY)
+#define ncclLoadFence() __dmb(_ARM64_BARRIER_LD)
+#define ncclStoreFence() __dmb(_ARM64_BARRIER_ST)
+#else
+#define ncclMemoryFence() MemoryBarrier()
+#define ncclLoadFence() MemoryBarrier()
+#define ncclStoreFence() MemoryBarrier()
+#endif
+
+/*
+ * Compiler barrier - prevents compiler reordering
+ */
+#define ncclCompilerBarrier() _ReadWriteBarrier()
+
+/* ===================== Cache Line Alignment ===================== */
+
+/*
+ * Cache line size for avoiding false sharing
+ * Most modern x86/ARM64 CPUs use 64-byte cache lines
+ */
+#define NCCL_CACHE_LINE_SIZE 64
+
+/*
+ * Align data to cache line boundary
+ */
+#define NCCL_CACHE_ALIGN __declspec(align(NCCL_CACHE_LINE_SIZE))
+
+/*
+ * Pad structure to cache line size
+ */
+#define NCCL_CACHE_PAD(name, size) char name##_pad[NCCL_CACHE_LINE_SIZE - ((size) % NCCL_CACHE_LINE_SIZE)]
+
+/* ===================== Atomic Operations ===================== */
+
+/*
+ * Atomic load with acquire semantics
+ */
+static inline LONG ncclAtomicLoadAcquire(volatile LONG *ptr)
+{
+    LONG value = *ptr;
+    ncclLoadFence();
+    return value;
+}
+
+/*
+ * Atomic store with release semantics
+ */
+static inline void ncclAtomicStoreRelease(volatile LONG *ptr, LONG value)
+{
+    ncclStoreFence();
+    *ptr = value;
+}
+
+/*
+ * Atomic load 64-bit with acquire semantics
+ */
+static inline LONGLONG ncclAtomicLoad64Acquire(volatile LONGLONG *ptr)
+{
+    LONGLONG value = InterlockedCompareExchange64(ptr, 0, 0);
+    ncclLoadFence();
+    return value;
+}
+
+/*
+ * Atomic store 64-bit with release semantics
+ */
+static inline void ncclAtomicStore64Release(volatile LONGLONG *ptr, LONGLONG value)
+{
+    ncclStoreFence();
+    InterlockedExchange64(ptr, value);
+}
+
+/*
+ * Atomic add and return old value
+ */
+#define ncclAtomicAdd(ptr, val) InterlockedExchangeAdd((ptr), (val))
+#define ncclAtomicAdd64(ptr, val) InterlockedExchangeAdd64((ptr), (val))
+
+/*
+ * Atomic compare-and-swap
+ */
+#define ncclAtomicCAS(ptr, expected, desired) \
+    InterlockedCompareExchange((ptr), (desired), (expected))
+#define ncclAtomicCAS64(ptr, expected, desired) \
+    InterlockedCompareExchange64((ptr), (desired), (expected))
+
 #endif /* _WIN32 */
 
 #endif /* NCCL_WIN32_DEFS_H_ */

@@ -613,6 +613,203 @@ static inline int ncclGetTimerResolution(ULONG *minResolution, ULONG *maxResolut
     return (status >= 0) ? 0 : -1;
 }
 
+/* ===================== Spinlock Implementation ===================== */
+
+/*
+ * POSIX-compatible spinlock for Windows
+ * Uses InterlockedExchange for lock-free spinning
+ */
+typedef volatile LONG pthread_spinlock_t;
+
+#define PTHREAD_PROCESS_PRIVATE 0
+#define PTHREAD_PROCESS_SHARED 1
+
+static inline int pthread_spin_init(pthread_spinlock_t *lock, int pshared)
+{
+    (void)pshared;
+    if (lock == NULL)
+        return EINVAL;
+    *lock = 0;
+    return 0;
+}
+
+static inline int pthread_spin_destroy(pthread_spinlock_t *lock)
+{
+    (void)lock;
+    return 0;
+}
+
+static inline int pthread_spin_lock(pthread_spinlock_t *lock)
+{
+    int spins = 0;
+
+    while (InterlockedExchange(lock, 1) != 0)
+    {
+        /* Adaptive spinning */
+        if (spins < 16)
+        {
+            ncclCpuPause();
+        }
+        else if (spins < 1000)
+        {
+            ncclCpuYield();
+        }
+        else
+        {
+            /* Very long wait - yield time slice */
+            Sleep(0);
+        }
+        spins++;
+    }
+    return 0;
+}
+
+static inline int pthread_spin_trylock(pthread_spinlock_t *lock)
+{
+    return (InterlockedExchange(lock, 1) == 0) ? 0 : EBUSY;
+}
+
+static inline int pthread_spin_unlock(pthread_spinlock_t *lock)
+{
+    ncclStoreFence();
+    *lock = 0;
+    return 0;
+}
+
+/* ===================== High-Precision Sleep ===================== */
+
+/*
+ * Nanosecond-precision sleep using waitable timers
+ * More accurate than Sleep() for short durations
+ */
+static inline int ncclNanoSleep(LONGLONG nanoseconds)
+{
+    HANDLE hTimer;
+    LARGE_INTEGER dueTime;
+
+    if (nanoseconds <= 0)
+        return 0;
+
+    /* CreateWaitableTimer for high precision */
+    hTimer = CreateWaitableTimerEx(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+    if (hTimer == NULL)
+    {
+        /* Fall back to regular waitable timer */
+        hTimer = CreateWaitableTimer(NULL, TRUE, NULL);
+        if (hTimer == NULL)
+        {
+            /* Last resort: use Sleep */
+            DWORD ms = (DWORD)((nanoseconds + 999999) / 1000000);
+            if (ms == 0)
+                ms = 1;
+            Sleep(ms);
+            return 0;
+        }
+    }
+
+    /* Negative value = relative time in 100ns intervals */
+    dueTime.QuadPart = -(nanoseconds / 100);
+    if (dueTime.QuadPart == 0)
+        dueTime.QuadPart = -1;
+
+    SetWaitableTimer(hTimer, &dueTime, 0, NULL, NULL, FALSE);
+    WaitForSingleObject(hTimer, INFINITE);
+    CloseHandle(hTimer);
+
+    return 0;
+}
+
+/*
+ * Microsecond-precision sleep
+ */
+static inline int ncclMicroSleep(LONGLONG microseconds)
+{
+    return ncclNanoSleep(microseconds * 1000);
+}
+
+/*
+ * Busy-wait for very short delays (< 1 microsecond)
+ * Uses QueryPerformanceCounter for precision
+ */
+static inline void ncclBusyWaitNanos(LONGLONG nanoseconds)
+{
+    LARGE_INTEGER freq, start, current;
+
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&start);
+
+    LONGLONG targetTicks = (nanoseconds * freq.QuadPart) / 1000000000LL;
+    if (targetTicks <= 0)
+        return;
+
+    do
+    {
+        ncclCpuPause();
+        QueryPerformanceCounter(&current);
+    } while ((current.QuadPart - start.QuadPart) < targetTicks);
+}
+
+/* ===================== Processor Group Support ===================== */
+
+/*
+ * Get the number of processor groups (for >64 CPU systems)
+ */
+static inline int ncclGetProcessorGroupCount(void)
+{
+    return (int)GetActiveProcessorGroupCount();
+}
+
+/*
+ * Get the number of processors in a specific group
+ */
+static inline int ncclGetProcessorCountInGroup(int group)
+{
+    return (int)GetActiveProcessorCount((WORD)group);
+}
+
+/*
+ * Get total logical processor count across all groups
+ */
+static inline int ncclGetTotalProcessorCount(void)
+{
+    int total = 0;
+    int groups = ncclGetProcessorGroupCount();
+    for (int i = 0; i < groups; i++)
+    {
+        total += ncclGetProcessorCountInGroup(i);
+    }
+    return total;
+}
+
+/*
+ * Set thread affinity to a specific processor in a specific group
+ * Required for systems with more than 64 logical processors
+ */
+static inline int ncclSetThreadGroupAffinity(HANDLE thread, int group, KAFFINITY mask)
+{
+    GROUP_AFFINITY affinity = {0};
+    affinity.Group = (WORD)group;
+    affinity.Mask = mask;
+
+    return SetThreadGroupAffinity(thread, &affinity, NULL) ? 0 : -1;
+}
+
+/*
+ * Get the current processor group and number for the calling thread
+ */
+static inline int ncclGetCurrentProcessorInfo(int *group, int *processor)
+{
+    PROCESSOR_NUMBER procNum;
+    GetCurrentProcessorNumberEx(&procNum);
+
+    if (group)
+        *group = procNum.Group;
+    if (processor)
+        *processor = procNum.Number;
+
+    return 0;
+}
+
 /* Define ETIMEDOUT if not defined */
 #ifndef ETIMEDOUT
 #define ETIMEDOUT 110

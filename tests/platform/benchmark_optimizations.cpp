@@ -27,13 +27,13 @@
 
 /* Message sizes to test (matching NCCL protocol boundaries) */
 static const size_t message_sizes[] = {
-    64,           /* Tiny message */
-    1024,         /* 1 KB - LL protocol */
-    8 * 1024,     /* 8 KB - LL protocol */
-    64 * 1024,    /* 64 KB - transition point */
-    256 * 1024,   /* 256 KB - LL128 buffer size */
-    512 * 1024,   /* 512 KB - FIFO buffer size */
-    1024 * 1024,  /* 1 MB */
+    64,              /* Tiny message */
+    1024,            /* 1 KB - LL protocol */
+    8 * 1024,        /* 8 KB - LL protocol */
+    64 * 1024,       /* 64 KB - transition point */
+    256 * 1024,      /* 256 KB - LL128 buffer size */
+    512 * 1024,      /* 512 KB - FIFO buffer size */
+    1024 * 1024,     /* 1 MB */
     4 * 1024 * 1024, /* 4 MB - Simple protocol buffer */
 };
 static const int num_sizes = sizeof(message_sizes) / sizeof(message_sizes[0]);
@@ -57,47 +57,50 @@ void benchmark_socket_configuration(void)
     printf("============================================================\n");
     printf("Socket Configuration Benchmark\n");
     printf("============================================================\n");
-    
+
     WSADATA wsaData;
     WSAStartup(MAKEWORD(2, 2), &wsaData);
-    
+
     double time_default = 0, time_optimized = 0, time_lowlatency = 0;
-    
+
     /* Benchmark default socket creation */
     double start = get_time_us();
-    for (int i = 0; i < BENCHMARK_ITERATIONS; i++) {
+    for (int i = 0; i < BENCHMARK_ITERATIONS; i++)
+    {
         SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
         closesocket(sock);
     }
     time_default = get_time_us() - start;
-    
+
     /* Benchmark optimized socket creation (Simple protocol) */
     start = get_time_us();
-    for (int i = 0; i < BENCHMARK_ITERATIONS; i++) {
+    for (int i = 0; i < BENCHMARK_ITERATIONS; i++)
+    {
         SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
         ncclSocketOptimize(sock);
         closesocket(sock);
     }
     time_optimized = get_time_us() - start;
-    
+
     /* Benchmark low-latency socket creation (LL protocol) */
     start = get_time_us();
-    for (int i = 0; i < BENCHMARK_ITERATIONS; i++) {
+    for (int i = 0; i < BENCHMARK_ITERATIONS; i++)
+    {
         SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
         ncclSocketOptimizeLowLatency(sock);
         closesocket(sock);
     }
     time_lowlatency = get_time_us() - start;
-    
+
     printf("\nSocket Configuration (%d iterations):\n", BENCHMARK_ITERATIONS);
     printf("  Default socket:        %8.2f us/op\n", time_default / BENCHMARK_ITERATIONS);
-    printf("  Optimized (4MB buf):   %8.2f us/op (+%.1f%%)\n", 
+    printf("  Optimized (4MB buf):   %8.2f us/op (+%.1f%%)\n",
            time_optimized / BENCHMARK_ITERATIONS,
            (time_optimized - time_default) / time_default * 100);
     printf("  Low-latency (256KB):   %8.2f us/op (+%.1f%%)\n",
            time_lowlatency / BENCHMARK_ITERATIONS,
            (time_lowlatency - time_default) / time_default * 100);
-    
+
     WSACleanup();
 }
 
@@ -111,35 +114,38 @@ void benchmark_overlapped_io(void)
     printf("============================================================\n");
     printf("Overlapped I/O Setup/Teardown Benchmark\n");
     printf("============================================================\n");
-    
+
     char buffer[4096];
     double time_init = 0, time_free = 0;
-    
+
     /* Benchmark overlapped I/O initialization */
     struct ncclSocketOverlapped ov[100];
-    
+
     double start = get_time_us();
-    for (int i = 0; i < BENCHMARK_ITERATIONS; i++) {
+    for (int i = 0; i < BENCHMARK_ITERATIONS; i++)
+    {
         ncclSocketOverlappedInit(&ov[i % 100], buffer, sizeof(buffer));
     }
     time_init = get_time_us() - start;
-    
+
     /* Benchmark overlapped I/O cleanup */
     start = get_time_us();
-    for (int i = 0; i < BENCHMARK_ITERATIONS; i++) {
+    for (int i = 0; i < BENCHMARK_ITERATIONS; i++)
+    {
         ncclSocketOverlappedFree(&ov[i % 100]);
         /* Re-initialize for next iteration */
         if (i < BENCHMARK_ITERATIONS - 100)
             ncclSocketOverlappedInit(&ov[i % 100], buffer, sizeof(buffer));
     }
     time_free = get_time_us() - start;
-    
+
     /* Clean up remaining */
-    for (int i = 0; i < 100; i++) {
+    for (int i = 0; i < 100; i++)
+    {
         if (ov[i].overlapped.hEvent != NULL)
             ncclSocketOverlappedFree(&ov[i]);
     }
-    
+
     printf("\nOverlapped I/O (%d iterations):\n", BENCHMARK_ITERATIONS);
     printf("  Init (CreateEvent):    %8.2f us/op\n", time_init / BENCHMARK_ITERATIONS);
     printf("  Free (CloseHandle):    %8.2f us/op\n", time_free / BENCHMARK_ITERATIONS);
@@ -155,41 +161,46 @@ void benchmark_shared_memory(void)
     printf("============================================================\n");
     printf("Shared Memory Allocation Benchmark\n");
     printf("============================================================\n");
-    
+
     const int iterations = 1000; /* Fewer iterations due to resource limits */
-    
-    for (int s = 0; s < num_sizes; s++) {
+
+    for (int s = 0; s < num_sizes; s++)
+    {
         size_t size = message_sizes[s];
         double time_basic = 0, time_numa = 0;
         char name[64];
-        
+
         /* Skip very large allocations for many iterations */
         int iter = (size > 1024 * 1024) ? 100 : iterations;
-        
+
         /* Benchmark basic shared memory */
         double start = get_time_us();
-        for (int i = 0; i < iter; i++) {
+        for (int i = 0; i < iter; i++)
+        {
             ncclShmHandle_win32_t handle;
             void *ptr;
             snprintf(name, sizeof(name), "bench_basic_%d_%d", (int)size, i);
-            if (ncclShmOpen(name, size, 1, &handle, &ptr) == 0) {
+            if (ncclShmOpen(name, size, 1, &handle, &ptr) == 0)
+            {
                 ncclShmClose_win32(handle);
             }
         }
         time_basic = get_time_us() - start;
-        
+
         /* Benchmark NUMA-aware shared memory */
         start = get_time_us();
-        for (int i = 0; i < iter; i++) {
+        for (int i = 0; i < iter; i++)
+        {
             ncclShmHandle_win32_t handle;
             void *ptr;
             snprintf(name, sizeof(name), "bench_numa_%d_%d", (int)size, i);
-            if (ncclShmOpenAdvanced(name, size, NCCL_SHM_NUMA_AWARE, -1, &handle, &ptr) == 0) {
+            if (ncclShmOpenAdvanced(name, size, NCCL_SHM_NUMA_AWARE, -1, &handle, &ptr) == 0)
+            {
                 ncclShmClose_win32(handle);
             }
         }
         time_numa = get_time_us() - start;
-        
+
         const char *size_str;
         if (size >= 1024 * 1024)
             printf("  %4zu MB:  Basic: %8.2f us/op  NUMA-aware: %8.2f us/op\n",
@@ -213,89 +224,96 @@ void benchmark_memory_access(void)
     printf("============================================================\n");
     printf("Shared Memory Access Pattern Benchmark\n");
     printf("============================================================\n");
-    
+
     const size_t size = 4 * 1024 * 1024; /* 4 MB - NCCL Simple protocol buffer */
     const int iterations = 100;
-    
+
     /* Use unique names with timestamp to avoid conflicts */
     char name_basic[64], name_numa[64];
     DWORD pid = GetCurrentProcessId();
     snprintf(name_basic, sizeof(name_basic), "bench_mem_%lu_basic", (unsigned long)pid);
     snprintf(name_numa, sizeof(name_numa), "bench_mem_%lu_numa", (unsigned long)pid);
-    
+
     /* Create basic shared memory */
     ncclShmHandle_win32_t handle_basic;
     void *ptr_basic;
-    if (ncclShmOpen(name_basic, size, 1, &handle_basic, &ptr_basic) != 0) {
+    if (ncclShmOpen(name_basic, size, 1, &handle_basic, &ptr_basic) != 0)
+    {
         printf("  Failed to create basic shared memory (error %lu)\n", GetLastError());
         return;
     }
-    
+
     /* Create NUMA-aware shared memory */
     ncclShmHandle_win32_t handle_numa;
     void *ptr_numa;
-    if (ncclShmOpenAdvanced(name_numa, size, NCCL_SHM_NUMA_AWARE, -1, 
-                            &handle_numa, &ptr_numa) != 0) {
+    if (ncclShmOpenAdvanced(name_numa, size, NCCL_SHM_NUMA_AWARE, -1,
+                            &handle_numa, &ptr_numa) != 0)
+    {
         printf("  Failed to create NUMA-aware shared memory (error %lu)\n", GetLastError());
         ncclShmClose_win32(handle_basic);
         return;
     }
-    
+
     /* Warmup */
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 10; i++)
+    {
         memset(ptr_basic, i, size);
         memset(ptr_numa, i, size);
     }
-    
+
     /* Benchmark sequential write (memset) */
     double time_basic_write, time_numa_write;
-    
+
     double start = get_time_us();
-    for (int i = 0; i < iterations; i++) {
+    for (int i = 0; i < iterations; i++)
+    {
         memset(ptr_basic, i & 0xFF, size);
     }
     time_basic_write = get_time_us() - start;
-    
+
     start = get_time_us();
-    for (int i = 0; i < iterations; i++) {
+    for (int i = 0; i < iterations; i++)
+    {
         memset(ptr_numa, i & 0xFF, size);
     }
     time_numa_write = get_time_us() - start;
-    
+
     /* Benchmark sequential read (memcmp) */
     double time_basic_read, time_numa_read;
     char *temp = (char *)malloc(size);
-    
+
     start = get_time_us();
-    for (int i = 0; i < iterations; i++) {
+    for (int i = 0; i < iterations; i++)
+    {
         memcpy(temp, ptr_basic, size);
     }
     time_basic_read = get_time_us() - start;
-    
+
     start = get_time_us();
-    for (int i = 0; i < iterations; i++) {
+    for (int i = 0; i < iterations; i++)
+    {
         memcpy(temp, ptr_numa, size);
     }
     time_numa_read = get_time_us() - start;
-    
+
     free(temp);
-    
+
     /* Calculate bandwidth */
-    double bw_basic_write = (double)size * iterations / (time_basic_write / 1000000.0) / (1024*1024*1024);
-    double bw_numa_write = (double)size * iterations / (time_numa_write / 1000000.0) / (1024*1024*1024);
-    double bw_basic_read = (double)size * iterations / (time_basic_read / 1000000.0) / (1024*1024*1024);
-    double bw_numa_read = (double)size * iterations / (time_numa_read / 1000000.0) / (1024*1024*1024);
-    
+    double bw_basic_write = (double)size * iterations / (time_basic_write / 1000000.0) / (1024 * 1024 * 1024);
+    double bw_numa_write = (double)size * iterations / (time_numa_write / 1000000.0) / (1024 * 1024 * 1024);
+    double bw_basic_read = (double)size * iterations / (time_basic_read / 1000000.0) / (1024 * 1024 * 1024);
+    double bw_numa_read = (double)size * iterations / (time_numa_read / 1000000.0) / (1024 * 1024 * 1024);
+
     printf("\nMemory Access (4 MB buffer, %d iterations):\n", iterations);
     printf("  Sequential Write:\n");
     printf("    Basic:       %8.2f GB/s\n", bw_basic_write);
-    printf("    NUMA-aware:  %8.2f GB/s (%.1f%% vs basic)\n", 
+    printf("    NUMA-aware:  %8.2f GB/s (%.1f%% vs basic)\n",
            bw_numa_write, (bw_numa_write - bw_basic_write) / bw_basic_write * 100);
     printf("  Sequential Read:\n");
     printf("    Basic:       %8.2f GB/s\n", bw_basic_read);
     printf("    NUMA-aware:  %8.2f GB/s (%.1f%% vs basic)\n",
            bw_numa_read, (bw_numa_read - bw_basic_read) / bw_basic_read * 100);
-    
+
     ncclShmClose_win32(handle_basic);
     ncclShmClose_win32(handle_numa);
 }
@@ -304,7 +322,8 @@ void benchmark_memory_access(void)
 /*                    LOOPBACK THROUGHPUT BENCHMARK                     */
 /* =================================================================== */
 
-struct LoopbackArgs {
+struct LoopbackArgs
+{
     SOCKET server_sock;
     SOCKET client_sock;
     size_t msg_size;
@@ -317,24 +336,27 @@ DWORD WINAPI loopback_server_thread(LPVOID arg)
 {
     struct LoopbackArgs *args = (struct LoopbackArgs *)arg;
     char *buffer = (char *)malloc(args->msg_size);
-    
+
     /* Accept connection */
     struct sockaddr_in client_addr;
     int addr_len = sizeof(client_addr);
     SOCKET client = accept(args->server_sock, (struct sockaddr *)&client_addr, &addr_len);
-    
+
     args->ready = 1;
-    
+
     /* Receive data */
-    for (int i = 0; i < args->iterations; i++) {
+    for (int i = 0; i < args->iterations; i++)
+    {
         size_t received = 0;
-        while (received < args->msg_size) {
+        while (received < args->msg_size)
+        {
             int n = recv(client, buffer + received, (int)(args->msg_size - received), 0);
-            if (n <= 0) break;
+            if (n <= 0)
+                break;
             received += n;
         }
     }
-    
+
     closesocket(client);
     free(buffer);
     return 0;
@@ -346,23 +368,24 @@ void benchmark_loopback_throughput(void)
     printf("============================================================\n");
     printf("Loopback Socket Throughput Benchmark\n");
     printf("============================================================\n");
-    
+
     WSADATA wsaData;
     WSAStartup(MAKEWORD(2, 2), &wsaData);
-    
+
     printf("\n%-12s %12s %12s %12s\n", "Size", "Default", "Optimized", "Improvement");
     printf("%-12s %12s %12s %12s\n", "----", "-------", "---------", "-----------");
-    
+
     /* Test a subset of sizes for throughput */
-    size_t throughput_sizes[] = { 64*1024, 256*1024, 1024*1024, 4*1024*1024 };
+    size_t throughput_sizes[] = {64 * 1024, 256 * 1024, 1024 * 1024, 4 * 1024 * 1024};
     int num_throughput_sizes = 4;
-    
-    for (int s = 0; s < num_throughput_sizes; s++) {
+
+    for (int s = 0; s < num_throughput_sizes; s++)
+    {
         size_t msg_size = throughput_sizes[s];
-        int iterations = (msg_size >= 1024*1024) ? 100 : 1000;
-        
+        int iterations = (msg_size >= 1024 * 1024) ? 100 : 1000;
+
         double throughput_default = 0, throughput_optimized = 0;
-        
+
         /* Test with default sockets */
         {
             SOCKET server_sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -371,42 +394,44 @@ void benchmark_loopback_throughput(void)
             addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
             addr.sin_port = 0;
             bind(server_sock, (struct sockaddr *)&addr, sizeof(addr));
-            
+
             int addr_len = sizeof(addr);
             getsockname(server_sock, (struct sockaddr *)&addr, &addr_len);
             listen(server_sock, 1);
-            
+
             struct LoopbackArgs args = {0};
             args.server_sock = server_sock;
             args.msg_size = msg_size;
             args.iterations = iterations;
             args.ready = 0;
-            
+
             HANDLE thread = CreateThread(NULL, 0, loopback_server_thread, &args, 0, NULL);
-            
+
             SOCKET client_sock = socket(AF_INET, SOCK_STREAM, 0);
             connect(client_sock, (struct sockaddr *)&addr, sizeof(addr));
-            
-            while (!args.ready) Sleep(1);
-            
+
+            while (!args.ready)
+                Sleep(1);
+
             char *buffer = (char *)malloc(msg_size);
             memset(buffer, 'A', msg_size);
-            
+
             double start = get_time_us();
-            for (int i = 0; i < iterations; i++) {
+            for (int i = 0; i < iterations; i++)
+            {
                 send(client_sock, buffer, (int)msg_size, 0);
             }
             double elapsed = get_time_us() - start;
-            
-            throughput_default = (double)msg_size * iterations / (elapsed / 1000000.0) / (1024*1024);
-            
+
+            throughput_default = (double)msg_size * iterations / (elapsed / 1000000.0) / (1024 * 1024);
+
             WaitForSingleObject(thread, INFINITE);
             CloseHandle(thread);
             closesocket(client_sock);
             closesocket(server_sock);
             free(buffer);
         }
-        
+
         /* Test with optimized sockets */
         {
             SOCKET server_sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -416,53 +441,55 @@ void benchmark_loopback_throughput(void)
             addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
             addr.sin_port = 0;
             bind(server_sock, (struct sockaddr *)&addr, sizeof(addr));
-            
+
             int addr_len = sizeof(addr);
             getsockname(server_sock, (struct sockaddr *)&addr, &addr_len);
             listen(server_sock, 1);
-            
+
             struct LoopbackArgs args = {0};
             args.server_sock = server_sock;
             args.msg_size = msg_size;
             args.iterations = iterations;
             args.ready = 0;
-            
+
             HANDLE thread = CreateThread(NULL, 0, loopback_server_thread, &args, 0, NULL);
-            
+
             SOCKET client_sock = socket(AF_INET, SOCK_STREAM, 0);
             ncclSocketOptimize(client_sock);
             connect(client_sock, (struct sockaddr *)&addr, sizeof(addr));
-            
-            while (!args.ready) Sleep(1);
-            
+
+            while (!args.ready)
+                Sleep(1);
+
             char *buffer = (char *)malloc(msg_size);
             memset(buffer, 'A', msg_size);
-            
+
             double start = get_time_us();
-            for (int i = 0; i < iterations; i++) {
+            for (int i = 0; i < iterations; i++)
+            {
                 send(client_sock, buffer, (int)msg_size, 0);
             }
             double elapsed = get_time_us() - start;
-            
-            throughput_optimized = (double)msg_size * iterations / (elapsed / 1000000.0) / (1024*1024);
-            
+
+            throughput_optimized = (double)msg_size * iterations / (elapsed / 1000000.0) / (1024 * 1024);
+
             WaitForSingleObject(thread, INFINITE);
             CloseHandle(thread);
             closesocket(client_sock);
             closesocket(server_sock);
             free(buffer);
         }
-        
+
         double improvement = (throughput_optimized - throughput_default) / throughput_default * 100;
-        
-        if (msg_size >= 1024*1024)
+
+        if (msg_size >= 1024 * 1024)
             printf("%4zu MB      %8.1f MB/s %8.1f MB/s    %+.1f%%\n",
-                   msg_size / (1024*1024), throughput_default, throughput_optimized, improvement);
+                   msg_size / (1024 * 1024), throughput_default, throughput_optimized, improvement);
         else
             printf("%4zu KB      %8.1f MB/s %8.1f MB/s    %+.1f%%\n",
                    msg_size / 1024, throughput_default, throughput_optimized, improvement);
     }
-    
+
     WSACleanup();
 }
 
@@ -476,45 +503,49 @@ void benchmark_numa_detection(void)
     printf("============================================================\n");
     printf("NUMA Detection Benchmark\n");
     printf("============================================================\n");
-    
+
     double time_node = 0, time_count = 0, time_page = 0;
-    
+
     /* Warmup */
-    for (int i = 0; i < WARMUP_ITERATIONS; i++) {
+    for (int i = 0; i < WARMUP_ITERATIONS; i++)
+    {
         ncclShmGetCurrentNumaNode();
         ncclShmGetNumaNodeCount();
         ncclShmGetLargePageSize();
     }
-    
+
     /* Benchmark NUMA node detection */
     double start = get_time_us();
-    for (int i = 0; i < BENCHMARK_ITERATIONS; i++) {
+    for (int i = 0; i < BENCHMARK_ITERATIONS; i++)
+    {
         volatile int node = ncclShmGetCurrentNumaNode();
         (void)node;
     }
     time_node = get_time_us() - start;
-    
+
     /* Benchmark NUMA node count */
     start = get_time_us();
-    for (int i = 0; i < BENCHMARK_ITERATIONS; i++) {
+    for (int i = 0; i < BENCHMARK_ITERATIONS; i++)
+    {
         volatile int count = ncclShmGetNumaNodeCount();
         (void)count;
     }
     time_count = get_time_us() - start;
-    
+
     /* Benchmark large page size query */
     start = get_time_us();
-    for (int i = 0; i < BENCHMARK_ITERATIONS; i++) {
+    for (int i = 0; i < BENCHMARK_ITERATIONS; i++)
+    {
         volatile size_t size = ncclShmGetLargePageSize();
         (void)size;
     }
     time_page = get_time_us() - start;
-    
+
     printf("\nNUMA/Large Page Queries (%d iterations):\n", BENCHMARK_ITERATIONS);
     printf("  GetCurrentNumaNode:    %8.3f us/op\n", time_node / BENCHMARK_ITERATIONS);
     printf("  GetNumaNodeCount:      %8.3f us/op\n", time_count / BENCHMARK_ITERATIONS);
     printf("  GetLargePageSize:      %8.3f us/op\n", time_page / BENCHMARK_ITERATIONS);
-    
+
     printf("\nSystem Information:\n");
     printf("  Current NUMA node:     %d\n", ncclShmGetCurrentNumaNode());
     printf("  Total NUMA nodes:      %d\n", ncclShmGetNumaNodeCount());
@@ -531,18 +562,18 @@ int main(int argc, char *argv[])
     printf("NCCL Windows Platform Optimizations Benchmark\n");
     printf("Based on 'Demystifying NCCL' (arXiv:2507.04786v2)\n");
     printf("================================================================\n");
-    
+
     benchmark_socket_configuration();
     benchmark_overlapped_io();
     benchmark_numa_detection();
     benchmark_shared_memory();
     benchmark_memory_access();
     benchmark_loopback_throughput();
-    
+
     printf("\n================================================================\n");
     printf("Benchmark Complete\n");
     printf("================================================================\n");
-    
+
     return 0;
 }
 

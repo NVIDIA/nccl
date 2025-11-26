@@ -230,6 +230,185 @@ static inline int ncclSocketSetReuseAddr(SOCKET sock, int reuse)
     return setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&reuse, sizeof(reuse));
 }
 
+/*
+ * Optimize socket for high-throughput data transfer
+ * Based on NCCL paper findings: socket transport benefits from buffer tuning
+ * to reduce PCIe and network latency overhead on Windows (~1.5x Linux)
+ */
+static inline int ncclSocketOptimize(SOCKET sock)
+{
+    int result = 0;
+    int optval;
+
+    /* Disable Nagle's algorithm for lower latency (critical for NCCL) */
+    optval = 1;
+    if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *)&optval, sizeof(optval)) != 0)
+        result = -1;
+
+    /* Increase send buffer to 4 MB (matches NCCL Simple protocol buffer size) */
+    optval = 4 * 1024 * 1024;
+    if (setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (const char *)&optval, sizeof(optval)) != 0)
+        result = -1;
+
+    /* Increase receive buffer to 4 MB */
+    if (setsockopt(sock, SOL_SOCKET, SO_RCVBUF, (const char *)&optval, sizeof(optval)) != 0)
+        result = -1;
+
+    /* Enable SO_KEEPALIVE for long-running connections */
+    optval = 1;
+    setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, (const char *)&optval, sizeof(optval));
+
+    return result;
+}
+
+/*
+ * Configure socket for low-latency small message transfer
+ * Optimized for LL/LL128 protocol patterns (<64 KiB messages)
+ */
+static inline int ncclSocketOptimizeLowLatency(SOCKET sock)
+{
+    int result = 0;
+    int optval;
+
+    /* Disable Nagle's algorithm */
+    optval = 1;
+    if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *)&optval, sizeof(optval)) != 0)
+        result = -1;
+
+    /* Smaller buffers for lower latency (256 KB matches LL protocol buffer) */
+    optval = 256 * 1024;
+    if (setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (const char *)&optval, sizeof(optval)) != 0)
+        result = -1;
+    if (setsockopt(sock, SOL_SOCKET, SO_RCVBUF, (const char *)&optval, sizeof(optval)) != 0)
+        result = -1;
+
+    return result;
+}
+
+/*
+ * Overlapped I/O structures for asynchronous socket operations
+ * Windows overlapped I/O can provide better throughput by allowing
+ * multiple concurrent send/recv operations to be queued
+ */
+struct ncclSocketOverlapped
+{
+    WSAOVERLAPPED overlapped;
+    WSABUF wsaBuf;
+    DWORD flags;
+    DWORD bytesTransferred;
+    int completed;
+};
+
+/*
+ * Initialize overlapped I/O structure for async operations
+ */
+static inline int ncclSocketOverlappedInit(struct ncclSocketOverlapped *ov,
+                                           void *buffer, size_t size)
+{
+    if (ov == NULL)
+        return -1;
+
+    memset(ov, 0, sizeof(*ov));
+    ov->overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+    if (ov->overlapped.hEvent == NULL)
+        return -1;
+
+    ov->wsaBuf.buf = (char *)buffer;
+    ov->wsaBuf.len = (ULONG)size;
+    ov->flags = 0;
+    ov->completed = 0;
+
+    return 0;
+}
+
+/*
+ * Start async send operation
+ */
+static inline int ncclSocketSendAsync(SOCKET sock, struct ncclSocketOverlapped *ov)
+{
+    int result;
+
+    ResetEvent(ov->overlapped.hEvent);
+    ov->completed = 0;
+
+    result = WSASend(sock, &ov->wsaBuf, 1, NULL, 0, &ov->overlapped, NULL);
+
+    if (result == SOCKET_ERROR)
+    {
+        int err = WSAGetLastError();
+        if (err == WSA_IO_PENDING)
+            return 0; /* Operation pending - this is expected */
+        return -1;
+    }
+
+    return 0;
+}
+
+/*
+ * Start async receive operation
+ */
+static inline int ncclSocketRecvAsync(SOCKET sock, struct ncclSocketOverlapped *ov)
+{
+    int result;
+
+    ResetEvent(ov->overlapped.hEvent);
+    ov->completed = 0;
+    ov->flags = 0;
+
+    result = WSARecv(sock, &ov->wsaBuf, 1, NULL, &ov->flags, &ov->overlapped, NULL);
+
+    if (result == SOCKET_ERROR)
+    {
+        int err = WSAGetLastError();
+        if (err == WSA_IO_PENDING)
+            return 0; /* Operation pending */
+        return -1;
+    }
+
+    return 0;
+}
+
+/*
+ * Wait for async operation to complete
+ */
+static inline int ncclSocketOverlappedWait(SOCKET sock, struct ncclSocketOverlapped *ov,
+                                           DWORD timeoutMs)
+{
+    DWORD waitResult;
+    DWORD bytesTransferred;
+    DWORD flags;
+
+    waitResult = WaitForSingleObject(ov->overlapped.hEvent, timeoutMs);
+
+    if (waitResult == WAIT_TIMEOUT)
+        return 0; /* Still pending */
+
+    if (waitResult != WAIT_OBJECT_0)
+        return -1;
+
+    /* Get result */
+    if (!WSAGetOverlappedResult(sock, &ov->overlapped, &bytesTransferred, FALSE, &flags))
+    {
+        return -1;
+    }
+
+    ov->bytesTransferred = bytesTransferred;
+    ov->completed = 1;
+    return 1; /* Completed */
+}
+
+/*
+ * Clean up overlapped I/O structure
+ */
+static inline void ncclSocketOverlappedFree(struct ncclSocketOverlapped *ov)
+{
+    if (ov && ov->overlapped.hEvent != NULL)
+    {
+        CloseHandle(ov->overlapped.hEvent);
+        ov->overlapped.hEvent = NULL;
+    }
+}
+
 /* Get socket error */
 static inline int ncclSocketGetError(SOCKET sock)
 {

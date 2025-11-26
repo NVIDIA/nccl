@@ -301,6 +301,141 @@ void test_misc_functions(void)
     TEST(home != NULL, "getenv(PATH) returns value");
 }
 
+#if NCCL_PLATFORM_WINDOWS
+#include "platform/win32_shm.h"
+
+void test_socket_optimizations(void)
+{
+    printf("\n=== Socket Optimizations (NCCL Paper-based) ===\n");
+
+    WSADATA wsaData;
+    WSAStartup(MAKEWORD(2, 2), &wsaData);
+
+    SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
+    TEST(sock != INVALID_SOCKET, "Socket creation succeeds");
+
+    /* Test high-throughput optimization (Simple protocol) */
+    int ret = ncclSocketOptimize(sock);
+    TEST(ret == 0, "ncclSocketOptimize succeeds (4MB buffers)");
+
+    /* Verify buffer sizes were set */
+    int bufSize = 0;
+    int len = sizeof(bufSize);
+    getsockopt(sock, SOL_SOCKET, SO_SNDBUF, (char *)&bufSize, &len);
+    TEST(bufSize >= 256 * 1024, "Send buffer size increased");
+    printf("  [INFO] Send buffer size: %d bytes\n", bufSize);
+
+    getsockopt(sock, SOL_SOCKET, SO_RCVBUF, (char *)&bufSize, &len);
+    TEST(bufSize >= 256 * 1024, "Receive buffer size increased");
+    printf("  [INFO] Receive buffer size: %d bytes\n", bufSize);
+
+    /* Verify TCP_NODELAY */
+    int nodelay = 0;
+    len = sizeof(nodelay);
+    getsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (char *)&nodelay, &len);
+    TEST(nodelay == 1, "TCP_NODELAY enabled");
+    printf("  [INFO] TCP_NODELAY: %d\n", nodelay);
+
+    closesocket(sock);
+
+    /* Test low-latency optimization (LL/LL128 protocol) */
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    TEST(sock != INVALID_SOCKET, "Socket creation succeeds");
+
+    ret = ncclSocketOptimizeLowLatency(sock);
+    TEST(ret == 0, "ncclSocketOptimizeLowLatency succeeds (256KB buffers)");
+
+    closesocket(sock);
+    WSACleanup();
+}
+
+void test_overlapped_io(void)
+{
+    printf("\n=== Overlapped I/O (Async Socket Operations) ===\n");
+
+    struct ncclSocketOverlapped ov;
+    char buffer[1024] = {0};
+
+    int ret = ncclSocketOverlappedInit(&ov, buffer, sizeof(buffer));
+    TEST(ret == 0, "ncclSocketOverlappedInit succeeds");
+    TEST(ov.overlapped.hEvent != NULL, "Event handle created");
+    TEST(ov.wsaBuf.buf == buffer, "Buffer pointer set correctly");
+    TEST(ov.wsaBuf.len == sizeof(buffer), "Buffer size set correctly");
+
+    ncclSocketOverlappedFree(&ov);
+    TEST(ov.overlapped.hEvent == NULL, "Event handle freed");
+    printf("  [INFO] Overlapped I/O structures initialized correctly\n");
+}
+
+void test_shm_advanced(void)
+{
+    printf("\n=== Shared Memory Enhancements ===\n");
+
+    /* Test NUMA node detection */
+    int numaNode = ncclShmGetCurrentNumaNode();
+    TEST(numaNode >= 0, "ncclShmGetCurrentNumaNode returns valid node");
+    printf("  [INFO] Current NUMA node: %d\n", numaNode);
+
+    int numaCount = ncclShmGetNumaNodeCount();
+    TEST(numaCount >= 1, "ncclShmGetNumaNodeCount returns at least 1");
+    printf("  [INFO] System has %d NUMA node(s)\n", numaCount);
+
+    /* Test large page size query */
+    size_t largePageSize = ncclShmGetLargePageSize();
+    printf("  [INFO] Large page size: %zu bytes\n", largePageSize);
+    if (largePageSize > 0)
+    {
+        TEST(largePageSize >= 4096, "Large page size is reasonable");
+        TEST((largePageSize & (largePageSize - 1)) == 0, "Large page size is power of 2");
+    }
+    else
+    {
+        printf("  [INFO] Large pages not supported on this system\n");
+    }
+
+    /* Test basic shared memory (without advanced features) */
+    ncclShmHandle_win32_t handle = NULL;
+    void *ptr = NULL;
+    const char *name = "test_shm_advanced";
+    size_t size = 4096;
+
+    int ret = ncclShmOpen(name, size, 1, &handle, &ptr);
+    TEST(ret == 0, "ncclShmOpen succeeds");
+    TEST(handle != NULL, "Handle is valid");
+    TEST(ptr != NULL, "Mapped pointer is valid");
+
+    /* Test read/write */
+    if (ptr != NULL)
+    {
+        memset(ptr, 0xAB, size);
+        TEST(((unsigned char *)ptr)[0] == 0xAB, "Memory write succeeds");
+        TEST(((unsigned char *)ptr)[size - 1] == 0xAB, "Memory write covers full region");
+    }
+
+    /* Test NUMA-aware allocation (may not have elevated privileges for large pages) */
+    ncclShmHandle_win32_t numaHandle = NULL;
+    void *numaPtr = NULL;
+    const char *numaName = "test_shm_numa";
+
+    ret = ncclShmOpenAdvanced(numaName, size, NCCL_SHM_NUMA_AWARE, -1, &numaHandle, &numaPtr);
+    if (ret == 0)
+    {
+        TEST(numaHandle != NULL, "NUMA-aware handle is valid");
+        TEST(numaPtr != NULL, "NUMA-aware pointer is valid");
+        printf("  [INFO] NUMA-aware allocation succeeded on node %d\n", numaHandle->numaNode);
+
+        ncclShmClose_win32(numaHandle);
+    }
+    else
+    {
+        printf("  [INFO] NUMA-aware allocation not available (this is OK)\n");
+    }
+
+    /* Clean up */
+    ncclShmClose_win32(handle);
+}
+#endif
+
 /* =================================================================== */
 /*                           MAIN                                      */
 /* =================================================================== */
@@ -319,6 +454,12 @@ int main(int argc, char *argv[])
     test_dl_functions();
     test_atomic_operations();
     test_misc_functions();
+
+#if NCCL_PLATFORM_WINDOWS
+    test_socket_optimizations();
+    test_overlapped_io();
+    test_shm_advanced();
+#endif
 
     printf("\n========================================\n");
     printf("Results: %d run, %d passed, %d failed\n",

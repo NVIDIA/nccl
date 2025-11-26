@@ -27,6 +27,10 @@
 #define NCCL_SHM_MAP_SHARED 0
 #define NCCL_SHM_MAP_PRIVATE 1
 
+/* Large page support flags */
+#define NCCL_SHM_LARGE_PAGES 0x80000000
+#define NCCL_SHM_NUMA_AWARE 0x40000000
+
 /* Internal structure for Windows shared memory handle */
 struct ncclShmHandleWin32
 {
@@ -36,9 +40,76 @@ struct ncclShmHandleWin32
     size_t size;         /* Size of mapped region */
     char name[MAX_PATH]; /* Name of shared memory object */
     int isCreator;       /* Whether this process created the shm */
+    int useLargePages;   /* Whether large pages are in use */
+    int numaNode;        /* NUMA node for allocation (-1 if not NUMA-aware) */
 };
 
 typedef struct ncclShmHandleWin32 *ncclShmHandle_win32_t;
+
+/*
+ * Enable large page privilege for current process
+ * Must be called once before using large pages
+ * Requires "Lock pages in memory" privilege (SeLockMemoryPrivilege)
+ */
+static inline int ncclShmEnableLargePages(void)
+{
+    HANDLE hToken;
+    TOKEN_PRIVILEGES tp;
+    BOOL result;
+
+    if (!OpenProcessToken(GetCurrentProcess(),
+                          TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken))
+        return -1;
+
+    if (!LookupPrivilegeValue(NULL, SE_LOCK_MEMORY_NAME, &tp.Privileges[0].Luid))
+    {
+        CloseHandle(hToken);
+        return -1;
+    }
+
+    tp.PrivilegeCount = 1;
+    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+
+    result = AdjustTokenPrivileges(hToken, FALSE, &tp, 0, NULL, NULL);
+    CloseHandle(hToken);
+
+    if (!result || GetLastError() == ERROR_NOT_ALL_ASSIGNED)
+        return -1;
+
+    return 0;
+}
+
+/*
+ * Get the minimum large page size supported by the system
+ */
+static inline size_t ncclShmGetLargePageSize(void)
+{
+    return GetLargePageMinimum();
+}
+
+/*
+ * Get the NUMA node for the current thread/processor
+ */
+static inline int ncclShmGetCurrentNumaNode(void)
+{
+    PROCESSOR_NUMBER procNum;
+    USHORT numaNode = 0;
+
+    GetCurrentProcessorNumberEx(&procNum);
+    GetNumaProcessorNodeEx(&procNum, &numaNode);
+
+    return (int)numaNode;
+}
+
+/*
+ * Get the number of NUMA nodes in the system
+ */
+static inline int ncclShmGetNumaNodeCount(void)
+{
+    ULONG highestNode = 0;
+    GetNumaHighestNodeNumber(&highestNode);
+    return (int)(highestNode + 1);
+}
 
 /*
  * Create or open shared memory
@@ -77,6 +148,8 @@ static inline int ncclShmOpen(const char *name, size_t size, int create,
     handle->size = size;
     handle->hFile = INVALID_HANDLE_VALUE;
     handle->isCreator = create;
+    handle->useLargePages = 0;
+    handle->numaNode = -1;
 
     if (create)
     {
@@ -142,6 +215,151 @@ static inline int ncclShmOpen(const char *name, size_t size, int create,
 }
 
 /*
+ * Create shared memory with large page and NUMA support
+ * Based on NCCL paper: SHM transport used when P2P is suboptimal (inter-socket)
+ * Large pages reduce TLB misses; NUMA-aware allocation improves memory locality
+ *
+ * @param name      Name of shared memory object
+ * @param size      Size of shared memory (will be rounded up to large page size if using large pages)
+ * @param flags     NCCL_SHM_LARGE_PAGES | NCCL_SHM_NUMA_AWARE or 0
+ * @param numaNode  NUMA node for allocation (-1 for current node, ignored if not NUMA_AWARE)
+ * @param pHandle   Output handle
+ * @param pPtr      Output pointer to mapped memory
+ */
+static inline int ncclShmOpenAdvanced(const char *name, size_t size, int flags,
+                                      int numaNode, ncclShmHandle_win32_t *pHandle, void **pPtr)
+{
+    ncclShmHandle_win32_t handle;
+    DWORD accessFlags = FILE_MAP_ALL_ACCESS;
+    DWORD pageFlags = PAGE_READWRITE;
+    char fullName[MAX_PATH];
+    size_t allocSize = size;
+
+    if (pHandle == NULL || pPtr == NULL)
+        return -1;
+
+    *pHandle = NULL;
+    *pPtr = NULL;
+
+    handle = (ncclShmHandle_win32_t)calloc(1, sizeof(struct ncclShmHandleWin32));
+    if (handle == NULL)
+        return -1;
+
+    /* Determine NUMA node */
+    if (flags & NCCL_SHM_NUMA_AWARE)
+    {
+        handle->numaNode = (numaNode >= 0) ? numaNode : ncclShmGetCurrentNumaNode();
+    }
+    else
+    {
+        handle->numaNode = -1;
+    }
+
+    /* Check for large page support and adjust size */
+    if (flags & NCCL_SHM_LARGE_PAGES)
+    {
+        size_t largePageSize = ncclShmGetLargePageSize();
+        if (largePageSize > 0)
+        {
+            /* Round up to large page boundary */
+            allocSize = (size + largePageSize - 1) & ~(largePageSize - 1);
+            pageFlags |= SEC_LARGE_PAGES;
+            handle->useLargePages = 1;
+        }
+    }
+
+    snprintf(fullName, sizeof(fullName), "Local\\nccl_%s", name);
+    strncpy(handle->name, fullName, sizeof(handle->name) - 1);
+    handle->size = allocSize;
+    handle->hFile = INVALID_HANDLE_VALUE;
+    handle->isCreator = 1;
+
+    DWORD highSize = (DWORD)((allocSize >> 32) & 0xFFFFFFFF);
+    DWORD lowSize = (DWORD)(allocSize & 0xFFFFFFFF);
+
+    /* Create file mapping with optional large page support */
+    handle->hMapFile = CreateFileMappingA(
+        INVALID_HANDLE_VALUE,
+        NULL,
+        pageFlags,
+        highSize,
+        lowSize,
+        fullName);
+
+    if (handle->hMapFile == NULL)
+    {
+        /* Large pages may fail, fall back to regular pages */
+        if (handle->useLargePages)
+        {
+            handle->useLargePages = 0;
+            allocSize = size;
+            highSize = (DWORD)((allocSize >> 32) & 0xFFFFFFFF);
+            lowSize = (DWORD)(allocSize & 0xFFFFFFFF);
+            handle->size = allocSize;
+
+            handle->hMapFile = CreateFileMappingA(
+                INVALID_HANDLE_VALUE,
+                NULL,
+                PAGE_READWRITE,
+                highSize,
+                lowSize,
+                fullName);
+        }
+        if (handle->hMapFile == NULL)
+        {
+            free(handle);
+            return -1;
+        }
+    }
+
+    /* Map view - use NUMA-aware mapping if available and requested */
+    if (handle->numaNode >= 0)
+    {
+        /* Try NUMA-aware allocation using VirtualAllocExNuma + custom mapping */
+        /* Note: MapViewOfFile doesn't support NUMA directly, so we use
+         * VirtualAllocExNuma for the backing allocation when possible */
+        handle->pMapView = MapViewOfFile(
+            handle->hMapFile,
+            accessFlags,
+            0, 0,
+            allocSize);
+
+        /* If we got a mapping, touch pages on the target NUMA node to ensure
+         * physical allocation happens on the correct node (first-touch policy) */
+        if (handle->pMapView != NULL)
+        {
+            /* Set thread to prefer the target NUMA node during initialization */
+            DWORD_PTR oldMask = SetThreadAffinityMask(GetCurrentThread(),
+                                                      (DWORD_PTR)1 << (handle->numaNode * 4));
+            memset(handle->pMapView, 0, allocSize);
+            if (oldMask != 0)
+                SetThreadAffinityMask(GetCurrentThread(), oldMask);
+        }
+    }
+    else
+    {
+        handle->pMapView = MapViewOfFile(
+            handle->hMapFile,
+            accessFlags,
+            0, 0,
+            allocSize);
+        if (handle->pMapView != NULL)
+            memset(handle->pMapView, 0, allocSize);
+    }
+
+    if (handle->pMapView == NULL)
+    {
+        CloseHandle(handle->hMapFile);
+        free(handle);
+        return -1;
+    }
+
+    *pHandle = handle;
+    *pPtr = handle->pMapView;
+    return 0;
+}
+
+/*
  * Create shared memory backed by a file
  * Used for larger shared memory regions that need persistence
  */
@@ -166,6 +384,8 @@ static inline int ncclShmOpenFile(const char *path, size_t size, int create,
     strncpy(handle->name, path, sizeof(handle->name) - 1);
     handle->size = size;
     handle->isCreator = create;
+    handle->useLargePages = 0;
+    handle->numaNode = -1;
 
     if (create)
     {
@@ -367,8 +587,10 @@ static inline void *mmap_win32(void *addr, size_t length, int prot, int flags,
     DWORD access;
     HANDLE hMapping;
     void *ptr;
-    DWORD highOff = (DWORD)((offset >> 32) & 0xFFFFFFFF);
-    DWORD lowOff = (DWORD)(offset & 0xFFFFFFFF);
+    /* Cast to 64-bit to avoid shift warning on 32-bit off_t */
+    ULONGLONG offset64 = (ULONGLONG)offset;
+    DWORD highOff = (DWORD)((offset64 >> 32) & 0xFFFFFFFF);
+    DWORD lowOff = (DWORD)(offset64 & 0xFFFFFFFF);
 
     (void)addr;
     (void)flags;

@@ -100,6 +100,11 @@ The following platform abstraction headers are provided in `src/include/platform
 
 **Location:** `src/include/platform/win32_shm.h`
 
+**Optimizations (based on NCCL paper findings):**
+- Large page support via `SEC_LARGE_PAGES` (2MB pages reduce TLB misses)
+- NUMA-aware allocation for multi-socket systems
+- `ncclShmOpenAdvanced()` function with `NCCL_SHM_LARGE_PAGES` and `NCCL_SHM_NUMA_AWARE` flags
+
 ### 7. Time Functions
 
 **Limitation:** Linux uses `clock_gettime()` with `CLOCK_MONOTONIC`.
@@ -115,6 +120,49 @@ The following platform abstraction headers are provided in `src/include/platform
 **Workaround:** Windows implementation in `win32_dl.h`:
 - `LoadLibrary()` / `GetProcAddress()` / `FreeLibrary()`
 - `dlerror()` equivalent using `GetLastError()` and `FormatMessage()`
+
+## Performance Optimizations
+
+Based on findings from "Demystifying NCCL" (arXiv:2507.04786v2), the Windows port includes protocol-aware optimizations:
+
+### Socket Transport Tuning
+
+NCCL uses different protocols for different message sizes:
+- **Simple protocol**: High throughput for large messages (>64 KiB)
+- **LL/LL128 protocols**: Low latency for small messages (<64 KiB)
+
+Windows socket optimizations in `win32_socket.h`:
+
+| Function | Purpose | Buffer Size |
+|----------|---------|-------------|
+| `ncclSocketOptimize()` | High-throughput (Simple protocol) | 4 MB |
+| `ncclSocketOptimizeLowLatency()` | Low-latency (LL/LL128 protocol) | 256 KB |
+
+Both functions enable `TCP_NODELAY` to disable Nagle's algorithm.
+
+### Overlapped I/O
+
+Windows overlapped I/O enables asynchronous socket operations:
+
+```c
+struct ncclSocketOverlapped ov;
+ncclSocketOverlappedInit(&ov, buffer, size);
+ncclSocketSendAsync(sock, &ov);
+ncclSocketOverlappedWait(sock, &ov, timeout);
+ncclSocketOverlappedFree(&ov);
+```
+
+### NUMA-Aware Shared Memory
+
+For multi-socket systems where SHM transport is used:
+
+| Function | Purpose |
+|----------|---------|
+| `ncclShmOpenAdvanced()` | Create SHM with NUMA/large page support |
+| `ncclShmGetCurrentNumaNode()` | Get current thread's NUMA node |
+| `ncclShmGetNumaNodeCount()` | Get system NUMA node count |
+| `ncclShmGetLargePageSize()` | Get large page size (typically 2 MB) |
+| `ncclShmEnableLargePages()` | Enable large page privilege |
 
 ## Build Configuration
 

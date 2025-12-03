@@ -248,6 +248,7 @@ static ncclResult_t ncclNetPluginAssignToComm(struct ncclComm* comm, int pluginI
     if (netPluginLibs[pluginIndex].ncclGinPluginState >= ncclNetPluginStateEnabled) {
       INFO(NCCL_INIT|NCCL_NET, "Assigned GIN plugin %s to comm", netPluginLibs[pluginIndex].ncclGin->name);
       comm->sharedRes->ginState.ncclGin = netPluginLibs[pluginIndex].ncclGin;
+      comm->rmaState.rmaProxyState.ncclGin = netPluginLibs[pluginIndex].ncclGin;
     }
   }
 exit:

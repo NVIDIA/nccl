@@ -7,37 +7,49 @@
 #ifndef EVENT_H_
 #define EVENT_H_
 
-#include <sys/types.h>
 #include <stdint.h>
-#include <unistd.h>
 #include <cstring>
+
+/* Platform compatibility */
+#ifdef _WIN32
+#include <process.h>
+typedef int pid_t;
+#else
+#include <sys/types.h>
+#include <unistd.h>
+#endif
+
 #include "err.h"
 #include "profiler.h"
 #include "queue.h"
 #include <cuda_runtime.h>
 
-#define MAX_CHANNELS                     32
-#define MAX_STEPS                        1024
-#define MAX_OPS                          16 // Up to 64K ranks for PAT
-#define MAX_EVENTS_PER_REQ               (8)
+#define MAX_CHANNELS 32
+#define MAX_STEPS 1024
+#define MAX_OPS 16 // Up to 64K ranks for PAT
+#define MAX_EVENTS_PER_REQ (8)
 
 struct proxyOp;
 struct proxyStep;
 
-struct netPlugin {
+struct netPlugin
+{
   uint64_t type;
   int pluginType;
   int pluginVer;
   uint8_t pluginEvent;
-  union {
-    struct {
+  union
+  {
+    struct
+    {
       int device;
       int qpNum;
       int opcode;
       uint64_t wr_id;
       size_t length;
     } qp;
-    struct {
+    struct
+    {
       int fd;
       int op;
       size_t length;
@@ -45,13 +57,14 @@ struct netPlugin {
   };
   double startTs;
   double stopTs;
-  struct proxyStep* parent;
+  struct proxyStep *parent;
 };
 
-struct kernelCh {
+struct kernelCh
+{
   uint8_t type;
   uint8_t channelId;
-  struct taskEventBase* parent;
+  struct taskEventBase *parent;
   double startTs;
   double stopTs;
   uint64_t startGpuClk;
@@ -66,152 +79,163 @@ struct kernelCh {
 #define PROXY_STEP_RECV_GPU_WAIT 2
 #define PROXY_STEP_MAX_STATES 3
 
-struct proxyStep {
-  uint64_t type;                     // type of event: network transfer
+struct proxyStep
+{
+  uint64_t type; // type of event: network transfer
   int state;
-  int step;                         // network transfer id in given channel
-  int isSend;                       // send/recv channel operation
+  int step;   // network transfer id in given channel
+  int isSend; // send/recv channel operation
   double timestamp[PROXY_STEP_MAX_STATES];
   double startTs;
   double stopTs;
-  struct proxyOp* parent;
+  struct proxyOp *parent;
   struct netPlugin net[MAX_EVENTS_PER_REQ];
   int nNetEvents;
 };
 
-struct proxyOp {
-  uint64_t type;                     // type of event: proxy operation
-  uint8_t channelId;                // channel id for this proxy operation
+struct proxyOp
+{
+  uint64_t type;     // type of event: proxy operation
+  uint8_t channelId; // channel id for this proxy operation
   pid_t pid;
   int rank;
-  int peer;                         // peer rank for this proxy operation
-  int nSteps;                       // total number of network transfers for this proxy operation
-  int chunkSize;                    // chunk size for this proxy operation
-  int isSend;                       // send/recv channel operation
-  size_t transSize;                 // transfer data size for this proxy operation
+  int peer;         // peer rank for this proxy operation
+  int nSteps;       // total number of network transfers for this proxy operation
+  int chunkSize;    // chunk size for this proxy operation
+  int isSend;       // send/recv channel operation
+  size_t transSize; // transfer data size for this proxy operation
   double startTs;
-  double progrTs;                   // In progress state transition
+  double progrTs; // In progress state transition
   double stopTs;
   int stepCount;                    // last processed network operation for this proxy operation
   struct proxyStep step[MAX_STEPS]; // array of network transfer events
-  struct taskEventBase* parent;     // parent event p2p/collective
+  struct taskEventBase *parent;     // parent event p2p/collective
 };
 
 struct group;
 struct context;
 
-struct proxyCtrl {
+struct proxyCtrl
+{
   uint64_t type;
-  struct context* ctx;              // profiler context
+  struct context *ctx; // profiler context
   double startTs;
   double stopTs;
   int state;
-  int appended;                     // appended proxy operations
+  int appended; // appended proxy operations
 };
 
 // task level event base structure
-struct taskEventBase {
-  uint64_t type;                     // event type: collective/p2p
-  int rank;                         // rank of the operation in NCCL communicator
-  const char* func;                 // ncclFunc*
-  int refCount;                     // number of references for this operation
-  void* parent;                     // parent API event
-  struct taskEventBase* next;       // next top level event
+struct taskEventBase
+{
+  uint64_t type;              // event type: collective/p2p
+  int rank;                   // rank of the operation in NCCL communicator
+  const char *func;           // ncclFunc*
+  int refCount;               // number of references for this operation
+  void *parent;               // parent API event
+  struct taskEventBase *next; // next top level event
   double startTs;
   double stopTs;
 };
 
-struct collective {
-  struct taskEventBase base;        // base structure for this event
-  uint64_t seqNumber;               // sequence number for this collective in communicator
-  void const* sendBuff;
-  void* recvBuff;
+struct collective
+{
+  struct taskEventBase base; // base structure for this event
+  uint64_t seqNumber;        // sequence number for this collective in communicator
+  void const *sendBuff;
+  void *recvBuff;
   size_t count;
   int root;
-  const char* datatype;
+  const char *datatype;
   uint8_t nChannels;
-  const char* algo;
-  const char* proto;
+  const char *algo;
+  const char *proto;
   int nWarps;
-  struct proxyOp op[MAX_CHANNELS][2*MAX_OPS];
+  struct proxyOp op[MAX_CHANNELS][2 * MAX_OPS];
   int nProxyOps[MAX_CHANNELS];
   struct kernelCh kernel[MAX_CHANNELS];
 };
 
-struct p2p {
-  struct taskEventBase base;        // base structure for this event
+struct p2p
+{
+  struct taskEventBase base; // base structure for this event
   uint8_t func;
-  void const* buff;
+  void const *buff;
   size_t count;
-  const char* datatype;
+  const char *datatype;
   int peer;
   uint8_t nChannels;
   struct proxyOp op[MAX_CHANNELS];
   struct kernelCh kernel[MAX_CHANNELS];
 };
 
-struct group {
+struct group
+{
   uint64_t type;
-  struct context* ctx;              // profiler context
+  struct context *ctx; // profiler context
   int groupId;
   int refCount;
-  struct taskEventBase* eventHead;  // queue head for task events
-  struct taskEventBase* eventTail;  // queue tail for task events
+  struct taskEventBase *eventHead; // queue head for task events
+  struct taskEventBase *eventTail; // queue tail for task events
   double startTs;
   double stopTs;
-  struct group* next;               // next group event in queue
+  struct group *next; // next group event in queue
 };
 
-struct collApi {
+struct collApi
+{
   uint64_t type;
-  struct groupApi* parent;
-  struct context* ctx;              // profiler context
+  struct groupApi *parent;
+  struct context *ctx; // profiler context
   int collApiId;
   int refCount;
   cudaStream_t stream;
-  const char* func;
+  const char *func;
   size_t count;
-  const char* datatype;
+  const char *datatype;
   int root;
   bool graphCaptured;
-  struct taskEventBase* eventHead;  // queue head for task events
-  struct taskEventBase* eventTail;  // queue tail for task events
+  struct taskEventBase *eventHead; // queue head for task events
+  struct taskEventBase *eventTail; // queue tail for task events
   double startTs;
   double stopTs;
-  struct collApi* next;
+  struct collApi *next;
 };
 
-struct p2pApi {
+struct p2pApi
+{
   uint64_t type;
-  struct groupApi* parent;
-  struct context* ctx;              // profiler context
+  struct groupApi *parent;
+  struct context *ctx; // profiler context
   int p2pApiId;
   int refCount;
-  const char* func;
+  const char *func;
   cudaStream_t stream;
   size_t count;
-  const char* datatype;
+  const char *datatype;
   bool graphCaptured;
-  struct taskEventBase* eventHead;  // queue head for task events
-  struct taskEventBase* eventTail;  // queue tail for task events
+  struct taskEventBase *eventHead; // queue head for task events
+  struct taskEventBase *eventTail; // queue tail for task events
   double startTs;
   double stopTs;
-  struct p2pApi* next;
+  struct p2pApi *next;
 };
 
-struct kernelLaunch {
+struct kernelLaunch
+{
   uint64_t type;
-  struct groupApi* parent;
+  struct groupApi *parent;
   cudaStream_t stream;
   int kernelLaunchId;
   double startTs;
   double stopTs;
-  struct kernelLaunch* next;
+  struct kernelLaunch *next;
 };
 
-struct groupApi {
+struct groupApi
+{
   uint64_t type;
-  struct context* ctx;
+  struct context *ctx;
   int groupApiId;
   int refCount;
   bool graphCaptured;
@@ -223,12 +247,13 @@ struct groupApi {
   double startOfncclGroupEndTs;
   double startTs;
   double stopTs;
-  struct groupApi* next;
+  struct groupApi *next;
 };
 
 // arrays for different event objects
-struct context {
-  const char* commName;
+struct context
+{
+  const char *commName;
   uint64_t commHash;
   int nranks;
   int rank;
@@ -236,84 +261,96 @@ struct context {
   int groupApiPoolSize;
   int groupApiPoolBase;
   int groupApiPoolIndex;
-  struct groupApi* groupApiPool;
+  struct groupApi *groupApiPool;
 
   int collApiPoolSize;
   int collApiPoolBase;
   int collApiPoolIndex;
-  struct collApi* collApiPool;
+  struct collApi *collApiPool;
 
   int p2pApiPoolSize;
   int p2pApiPoolBase;
   int p2pApiPoolIndex;
-  struct p2pApi* p2pApiPool;
+  struct p2pApi *p2pApiPool;
 
   int kernelLaunchPoolSize;
   int kernelLaunchPoolBase;
   int kernelLaunchPoolIndex;
-  struct kernelLaunch* kernelLaunchPool;
+  struct kernelLaunch *kernelLaunchPool;
 
   int groupPoolSize;
   int groupPoolBase;
   int groupPoolIndex;
-  struct group* groupPool;
+  struct group *groupPool;
 
   int collPoolSize;
   int collPoolBase;
   int collPoolIndex;
-  struct collective* collPool;
+  struct collective *collPool;
 
   int p2pPoolSize;
   int p2pPoolBase;
   int p2pPoolIndex;
-  struct p2p* p2pPool;
+  struct p2p *p2pPool;
 
   int proxyCtrlPoolSize;
   int proxyCtrlPoolBase;
   int proxyCtrlPoolIndex;
-  struct proxyCtrl* proxyCtrlPool;
+  struct proxyCtrl *proxyCtrlPool;
 };
 
 template <typename T>
-inline int taskEventQueueEmpty(T *obj) {
+inline int taskEventQueueEmpty(T *obj)
+{
   return obj->eventHead == NULL;
 }
 
 template <typename T>
-inline void taskEventQueueEnqueue(T* obj, struct taskEventBase* event) {
+inline void taskEventQueueEnqueue(T *obj, struct taskEventBase *event)
+{
   event->next = NULL;
-  if (obj->eventHead) obj->eventTail->next = event;
-  else obj->eventHead = event;
+  if (obj->eventHead)
+    obj->eventTail->next = event;
+  else
+    obj->eventHead = event;
   obj->eventTail = event;
 }
 
 template <typename T>
-inline struct taskEventBase* taskEventQueueHead(T *obj) {
-    return obj->eventHead;
+inline struct taskEventBase *taskEventQueueHead(T *obj)
+{
+  return obj->eventHead;
 }
 
 template <typename T>
-inline struct taskEventBase* taskEventQueueDequeue(T* obj) {
-  struct taskEventBase* tmp = obj->eventHead;
+inline struct taskEventBase *taskEventQueueDequeue(T *obj)
+{
+  struct taskEventBase *tmp = obj->eventHead;
   obj->eventHead = obj->eventHead->next;
-  if (obj->eventHead == NULL) obj->eventTail = NULL;
+  if (obj->eventHead == NULL)
+    obj->eventTail = NULL;
   return tmp;
 }
 
 template <typename T>
-inline void resetTaskEvents(T *obj, struct context* ctx) {
-  while (!taskEventQueueEmpty(obj)) {
-    struct taskEventBase* base = taskEventQueueDequeue(obj);
-    if (base->type == ncclProfileColl) {
-      struct collective* c = (struct collective *)base;
+inline void resetTaskEvents(T *obj, struct context *ctx)
+{
+  while (!taskEventQueueEmpty(obj))
+  {
+    struct taskEventBase *base = taskEventQueueDequeue(obj);
+    if (base->type == ncclProfileColl)
+    {
+      struct collective *c = (struct collective *)base;
       // reset event proxyOps & proxySteps
-      memset(c->nProxyOps, 0, sizeof(int)*MAX_CHANNELS);
+      memset(c->nProxyOps, 0, sizeof(int) * MAX_CHANNELS);
       // release collective events in the group and return them to the collective pool
       __atomic_fetch_add(&ctx->collPoolBase, 1, __ATOMIC_RELAXED);
-    } else if (base->type == ncclProfileP2p) {
-      struct p2p* p = (struct p2p *)base;
+    }
+    else if (base->type == ncclProfileP2p)
+    {
+      struct p2p *p = (struct p2p *)base;
       // reset event proxyOp and proxySteps
-      memset(&p->op, 0, sizeof(struct proxyOp)*MAX_CHANNELS);
+      memset(&p->op, 0, sizeof(struct proxyOp) * MAX_CHANNELS);
       // release p2p events in the group and return them to the p2p pool
       __atomic_fetch_add(&ctx->p2pPoolBase, 1, __ATOMIC_RELAXED);
     }

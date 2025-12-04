@@ -308,6 +308,7 @@ struct extInfo
 #define NET_HANDLE(h, rank) ((h) + (rank * NCCL_NET_HANDLE_MAXSIZE))
 #define BOOTSTRAP_HANDLE(h, i) ((struct ncclBootstrapHandle *)((char *)h + i * NCCL_UNIQUE_ID_BYTES))
 
+#if !NCCL_PLATFORM_WINDOWS
 #include <sys/resource.h>
 
 static ncclResult_t setFilesLimit()
@@ -318,6 +319,10 @@ static ncclResult_t setFilesLimit()
   SYSCHECK(setrlimit(RLIMIT_NOFILE, &filesLimit), "setrlimit");
   return ncclSuccess;
 }
+#else
+/* On Windows, file descriptor limits are handled differently */
+static ncclResult_t setFilesLimit() { return ncclSuccess; }
+#endif
 
 static ncclResult_t rootSend(union ncclSocketAddress *addr, uint64_t magic, union ringConnectInfo *info)
 {
@@ -1006,7 +1011,9 @@ static ncclResult_t socketConnect(void *commState, int peer, int tag, struct ncc
   ncclResult_t ret = ncclSuccess;
   struct bootstrapState *state = (struct bootstrapState *)commState;
 
-  struct socketAckInfo ack = (struct socketAckInfo){.rank = state->rank, .tag = tag};
+  struct socketAckInfo ack;
+  ack.rank = state->rank;
+  ack.tag = tag;
   NCCLCHECKGOTO(ncclSocketInit(sock, state->peerP2pAddresses + peer, state->magic, ncclSocketTypeBootstrap, state->abortFlag), ret, fail);
   NCCLCHECKGOTO(ncclSocketConnect(sock), ret, fail);
   NCCLCHECKGOTO(socketSend(sock, &ack, sizeof(struct socketAckInfo)), ret, fail);

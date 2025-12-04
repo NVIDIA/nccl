@@ -1100,7 +1100,7 @@ ncclResult_t ncclIbGdrSupport()
   return ncclSuccess;
 }
 
-static __thread int ibDmaSupportInitDev; // which device to init, must be thread local
+static NCCL_THREAD_LOCAL int ibDmaSupportInitDev; // which device to init, must be thread local
 static void ibDmaBufSupportInitOnce()
 {
   ncclResult_t res;
@@ -2291,7 +2291,7 @@ ncclResult_t ncclIbTest(void *request, int *done, int *size);
 
 ncclResult_t ncclIbRegMrDmaBufInternal2(ncclIbNetCommDevBase *base, void *data, size_t size, int type, uint64_t offset, int fd, uint64_t mrFlags, ibv_mr **mhandle)
 {
-  static __thread uintptr_t pageSize = 0;
+  static NCCL_THREAD_LOCAL uintptr_t pageSize = 0;
   if (pageSize == 0)
     pageSize = sysconf(_SC_PAGESIZE);
   struct ncclIbMrCache *cache = &ncclIbDevs[base->ibDevN].mrCache;

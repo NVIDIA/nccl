@@ -10,15 +10,33 @@
 #ifdef _WIN32
 
 #include "win32_defs.h"
+#include <iphlpapi.h>
 #include <stdlib.h>
 #include <string.h>
 
-/*
- * Windows implementation of network interface enumeration
- * Equivalent to Linux getifaddrs()/freeifaddrs()
- */
+#pragma comment(lib, "iphlpapi.lib")
 
-/* Interface address structure (POSIX ifaddrs equivalent) */
+/* Interface flags (POSIX compatibility) */
+#ifndef IFF_UP
+#define IFF_UP 0x0001
+#endif
+#ifndef IFF_BROADCAST
+#define IFF_BROADCAST 0x0002
+#endif
+#ifndef IFF_LOOPBACK
+#define IFF_LOOPBACK 0x0008
+#endif
+#ifndef IFF_RUNNING
+#define IFF_RUNNING 0x0040
+#endif
+#ifndef IFF_MULTICAST
+#define IFF_MULTICAST 0x1000
+#endif
+
+/* ========================================================================== */
+/*                    Network Interface Enumeration                           */
+/* ========================================================================== */
+
 struct ncclIfaddrs
 {
     struct ncclIfaddrs *ifa_next;
@@ -28,19 +46,13 @@ struct ncclIfaddrs
     struct sockaddr *ifa_netmask;
     struct sockaddr *ifa_broadaddr;
     void *ifa_data;
-    /* Storage for address data */
     struct sockaddr_storage _addr_storage;
     struct sockaddr_storage _netmask_storage;
     char _name_storage[256];
 };
 
-/* Forward declaration */
 static inline void ncclFreeIfaddrs(struct ncclIfaddrs *ifa);
 
-/*
- * Get list of network interfaces on Windows
- * Uses IP Helper API (GetAdaptersAddresses)
- */
 static inline int ncclGetIfaddrs(struct ncclIfaddrs **ifap)
 {
     PIP_ADAPTER_ADDRESSES pAddresses = NULL;
@@ -51,7 +63,7 @@ static inline int ncclGetIfaddrs(struct ncclIfaddrs **ifap)
     struct ncclIfaddrs *head = NULL;
     struct ncclIfaddrs *tail = NULL;
     struct ncclIfaddrs *ifa;
-    int family = AF_UNSPEC; /* Get both IPv4 and IPv6 */
+    int family = AF_UNSPEC;
     ULONG flags = GAA_FLAG_INCLUDE_PREFIX | GAA_FLAG_SKIP_ANYCAST |
                   GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
     int attempt = 0;
@@ -60,7 +72,6 @@ static inline int ncclGetIfaddrs(struct ncclIfaddrs **ifap)
         return -1;
     *ifap = NULL;
 
-    /* Allocate initial buffer */
     do
     {
         pAddresses = (IP_ADAPTER_ADDRESSES *)malloc(outBufLen);
@@ -87,22 +98,20 @@ static inline int ncclGetIfaddrs(struct ncclIfaddrs **ifap)
         return -1;
     }
 
-    /* Iterate through adapters and their addresses */
-    for (pCurrAddresses = pAddresses; pCurrAddresses != NULL; pCurrAddresses = pCurrAddresses->Next)
+    for (pCurrAddresses = pAddresses; pCurrAddresses != NULL;
+         pCurrAddresses = pCurrAddresses->Next)
     {
-        /* Skip adapters that are not operational */
         if (pCurrAddresses->OperStatus != IfOperStatusUp)
             continue;
 
-        for (pUnicast = pCurrAddresses->FirstUnicastAddress; pUnicast != NULL; pUnicast = pUnicast->Next)
+        for (pUnicast = pCurrAddresses->FirstUnicastAddress; pUnicast != NULL;
+             pUnicast = pUnicast->Next)
         {
             struct sockaddr *sa = pUnicast->Address.lpSockaddr;
 
-            /* Only support IPv4 and IPv6 */
             if (sa->sa_family != AF_INET && sa->sa_family != AF_INET6)
                 continue;
 
-            /* Allocate new interface entry */
             ifa = (struct ncclIfaddrs *)calloc(1, sizeof(struct ncclIfaddrs));
             if (ifa == NULL)
             {
@@ -111,12 +120,10 @@ static inline int ncclGetIfaddrs(struct ncclIfaddrs **ifap)
                 return -1;
             }
 
-            /* Set interface name */
             WideCharToMultiByte(CP_UTF8, 0, pCurrAddresses->FriendlyName, -1,
                                 ifa->_name_storage, sizeof(ifa->_name_storage), NULL, NULL);
             ifa->ifa_name = ifa->_name_storage;
 
-            /* Set flags */
             ifa->ifa_flags = 0;
             if (pCurrAddresses->OperStatus == IfOperStatusUp)
             {
@@ -127,11 +134,9 @@ static inline int ncclGetIfaddrs(struct ncclIfaddrs **ifap)
                 ifa->ifa_flags |= IFF_LOOPBACK;
             }
 
-            /* Copy address */
             memcpy(&ifa->_addr_storage, sa, pUnicast->Address.iSockaddrLength);
             ifa->ifa_addr = (struct sockaddr *)&ifa->_addr_storage;
 
-            /* Get netmask (calculate from prefix length) */
             if (sa->sa_family == AF_INET)
             {
                 struct sockaddr_in *sin = (struct sockaddr_in *)&ifa->_netmask_storage;
@@ -169,7 +174,6 @@ static inline int ncclGetIfaddrs(struct ncclIfaddrs **ifap)
                 ifa->ifa_netmask = (struct sockaddr *)&ifa->_netmask_storage;
             }
 
-            /* Link to list */
             ifa->ifa_next = NULL;
             if (tail == NULL)
             {
@@ -188,9 +192,6 @@ static inline int ncclGetIfaddrs(struct ncclIfaddrs **ifap)
     return 0;
 }
 
-/*
- * Free interface list allocated by ncclGetIfaddrs
- */
 static inline void ncclFreeIfaddrs(struct ncclIfaddrs *ifa)
 {
     struct ncclIfaddrs *next;
@@ -202,80 +203,60 @@ static inline void ncclFreeIfaddrs(struct ncclIfaddrs *ifa)
     }
 }
 
-/* Compatibility macros for Linux code */
 #define ifaddrs ncclIfaddrs
 #define getifaddrs ncclGetIfaddrs
 #define freeifaddrs ncclFreeIfaddrs
 
-/*
- * Socket helper functions for Windows
- */
+/* ========================================================================== */
+/*                        Socket Helper Functions                             */
+/* ========================================================================== */
 
-/* Set socket to non-blocking mode */
 static inline int ncclSocketSetNonBlocking(SOCKET sock, int nonblocking)
 {
     u_long mode = nonblocking ? 1 : 0;
     return ioctlsocket(sock, FIONBIO, &mode);
 }
 
-/* Set TCP_NODELAY option */
 static inline int ncclSocketSetNoDelay(SOCKET sock, int nodelay)
 {
     return setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *)&nodelay, sizeof(nodelay));
 }
 
-/* Set SO_REUSEADDR option */
 static inline int ncclSocketSetReuseAddr(SOCKET sock, int reuse)
 {
     return setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&reuse, sizeof(reuse));
 }
 
-/*
- * Optimize socket for high-throughput data transfer
- * Based on NCCL paper findings: socket transport benefits from buffer tuning
- * to reduce PCIe and network latency overhead on Windows (~1.5x Linux)
- */
 static inline int ncclSocketOptimize(SOCKET sock)
 {
     int result = 0;
     int optval;
 
-    /* Disable Nagle's algorithm for lower latency (critical for NCCL) */
     optval = 1;
     if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *)&optval, sizeof(optval)) != 0)
         result = -1;
 
-    /* Increase send buffer to 4 MB (matches NCCL Simple protocol buffer size) */
     optval = 4 * 1024 * 1024;
     if (setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (const char *)&optval, sizeof(optval)) != 0)
         result = -1;
-
-    /* Increase receive buffer to 4 MB */
     if (setsockopt(sock, SOL_SOCKET, SO_RCVBUF, (const char *)&optval, sizeof(optval)) != 0)
         result = -1;
 
-    /* Enable SO_KEEPALIVE for long-running connections */
     optval = 1;
     setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, (const char *)&optval, sizeof(optval));
 
     return result;
 }
 
-/*
- * Configure socket for low-latency small message transfer
- * Optimized for LL/LL128 protocol patterns (<64 KiB messages)
- */
 static inline int ncclSocketOptimizeLowLatency(SOCKET sock)
 {
     int result = 0;
     int optval;
 
-    /* Disable Nagle's algorithm */
     optval = 1;
     if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *)&optval, sizeof(optval)) != 0)
         result = -1;
 
-    /* Smaller buffers for lower latency (256 KB matches LL protocol buffer) */
     optval = 256 * 1024;
     if (setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (const char *)&optval, sizeof(optval)) != 0)
         result = -1;
@@ -285,11 +266,10 @@ static inline int ncclSocketOptimizeLowLatency(SOCKET sock)
     return result;
 }
 
-/*
- * Overlapped I/O structures for asynchronous socket operations
- * Windows overlapped I/O can provide better throughput by allowing
- * multiple concurrent send/recv operations to be queued
- */
+/* ========================================================================== */
+/*                        Overlapped I/O Support                              */
+/* ========================================================================== */
+
 struct ncclSocketOverlapped
 {
     WSAOVERLAPPED overlapped;
@@ -299,9 +279,6 @@ struct ncclSocketOverlapped
     int completed;
 };
 
-/*
- * Initialize overlapped I/O structure for async operations
- */
 static inline int ncclSocketOverlappedInit(struct ncclSocketOverlapped *ov,
                                            void *buffer, size_t size)
 {
@@ -321,9 +298,6 @@ static inline int ncclSocketOverlappedInit(struct ncclSocketOverlapped *ov,
     return 0;
 }
 
-/*
- * Start async send operation
- */
 static inline int ncclSocketSendAsync(SOCKET sock, struct ncclSocketOverlapped *ov)
 {
     int result;
@@ -337,16 +311,12 @@ static inline int ncclSocketSendAsync(SOCKET sock, struct ncclSocketOverlapped *
     {
         int err = WSAGetLastError();
         if (err == WSA_IO_PENDING)
-            return 0; /* Operation pending - this is expected */
+            return 0;
         return -1;
     }
-
     return 0;
 }
 
-/*
- * Start async receive operation
- */
 static inline int ncclSocketRecvAsync(SOCKET sock, struct ncclSocketOverlapped *ov)
 {
     int result;
@@ -361,16 +331,12 @@ static inline int ncclSocketRecvAsync(SOCKET sock, struct ncclSocketOverlapped *
     {
         int err = WSAGetLastError();
         if (err == WSA_IO_PENDING)
-            return 0; /* Operation pending */
+            return 0;
         return -1;
     }
-
     return 0;
 }
 
-/*
- * Wait for async operation to complete
- */
 static inline int ncclSocketOverlappedWait(SOCKET sock, struct ncclSocketOverlapped *ov,
                                            DWORD timeoutMs)
 {
@@ -381,25 +347,18 @@ static inline int ncclSocketOverlappedWait(SOCKET sock, struct ncclSocketOverlap
     waitResult = WaitForSingleObject(ov->overlapped.hEvent, timeoutMs);
 
     if (waitResult == WAIT_TIMEOUT)
-        return 0; /* Still pending */
-
+        return 0;
     if (waitResult != WAIT_OBJECT_0)
         return -1;
 
-    /* Get result */
     if (!WSAGetOverlappedResult(sock, &ov->overlapped, &bytesTransferred, FALSE, &flags))
-    {
         return -1;
-    }
 
     ov->bytesTransferred = bytesTransferred;
     ov->completed = 1;
-    return 1; /* Completed */
+    return 1;
 }
 
-/*
- * Clean up overlapped I/O structure
- */
 static inline void ncclSocketOverlappedFree(struct ncclSocketOverlapped *ov)
 {
     if (ov && ov->overlapped.hEvent != NULL)
@@ -409,7 +368,10 @@ static inline void ncclSocketOverlappedFree(struct ncclSocketOverlapped *ov)
     }
 }
 
-/* Get socket error */
+/* ========================================================================== */
+/*                        Socket Error Handling                               */
+/* ========================================================================== */
+
 static inline int ncclSocketGetError(SOCKET sock)
 {
     int error = 0;
@@ -418,26 +380,22 @@ static inline int ncclSocketGetError(SOCKET sock)
     return error;
 }
 
-/* Check if socket error is "would block" */
 static inline int ncclSocketWouldBlock(int error)
 {
     return (error == WSAEWOULDBLOCK || error == WSAEINPROGRESS);
 }
 
-/* Check if socket error is connection reset */
 static inline int ncclSocketConnReset(int error)
 {
     return (error == WSAECONNRESET || error == WSAECONNABORTED);
 }
 
-/* Windows socket error to string */
 static inline const char *ncclSocketStrerror(int error)
 {
     static char buffer[256];
     FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
                    NULL, error, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
                    buffer, sizeof(buffer), NULL);
-    /* Remove trailing newline */
     size_t len = strlen(buffer);
     while (len > 0 && (buffer[len - 1] == '\n' || buffer[len - 1] == '\r'))
     {
@@ -446,19 +404,13 @@ static inline const char *ncclSocketStrerror(int error)
     return buffer;
 }
 
-/* Replace errno-based socket error handling */
 #define SOCKET_ERRNO WSAGetLastError()
 #define socket_strerror(e) ncclSocketStrerror(e)
 
-/*
- * poll() support is defined in win32_defs.h
- * Using WSAPOLLFD from winsock2.h and WSAPoll
- */
+/* ========================================================================== */
+/*                      Interface Speed and Vendor                            */
+/* ========================================================================== */
 
-/*
- * Get network interface speed in Mbps using Windows API
- * Returns the link speed of the specified interface
- */
 static inline int ncclGetInterfaceSpeed(const char *ifName, int *speedMbps)
 {
     PIP_ADAPTER_ADDRESSES pAddresses = NULL;
@@ -470,7 +422,6 @@ static inline int ncclGetInterfaceSpeed(const char *ifName, int *speedMbps)
 
     *speedMbps = 0;
 
-    /* Allocate buffer */
     pAddresses = (IP_ADAPTER_ADDRESSES *)malloc(outBufLen);
     if (pAddresses == NULL)
         return -1;
@@ -491,19 +442,16 @@ static inline int ncclGetInterfaceSpeed(const char *ifName, int *speedMbps)
         return -1;
     }
 
-    /* Find the matching interface */
-    for (pCurrAddresses = pAddresses; pCurrAddresses != NULL; pCurrAddresses = pCurrAddresses->Next)
+    for (pCurrAddresses = pAddresses; pCurrAddresses != NULL;
+         pCurrAddresses = pCurrAddresses->Next)
     {
         char friendlyName[256];
         WideCharToMultiByte(CP_UTF8, 0, pCurrAddresses->FriendlyName, -1,
                             friendlyName, sizeof(friendlyName), NULL, NULL);
 
-        /* Match by friendly name or adapter name */
         if (strcmp(friendlyName, ifName) == 0 ||
             strcmp(pCurrAddresses->AdapterName, ifName) == 0)
         {
-            /* ReceiveLinkSpeed and TransmitLinkSpeed are in bits per second */
-            /* Convert to Mbps (divide by 1,000,000) */
             ULONG64 linkSpeed = pCurrAddresses->ReceiveLinkSpeed;
             if (linkSpeed > 0)
             {
@@ -516,20 +464,14 @@ static inline int ncclGetInterfaceSpeed(const char *ifName, int *speedMbps)
 
     free(pAddresses);
 
-    /* If not found or speed is 0, return default */
     if (!found || *speedMbps <= 0)
     {
-        *speedMbps = 10000; /* Default to 10 Gbps */
+        *speedMbps = 10000;
         return 0;
     }
-
     return 0;
 }
 
-/*
- * Get network interface vendor ID
- * Returns vendor string (e.g., "Intel", "Mellanox", "AWS", "GCP")
- */
 static inline int ncclGetInterfaceVendor(const char *ifName, char *vendor, size_t vendorLen)
 {
     PIP_ADAPTER_ADDRESSES pAddresses = NULL;
@@ -540,10 +482,8 @@ static inline int ncclGetInterfaceVendor(const char *ifName, char *vendor, size_
 
     if (vendor == NULL || vendorLen == 0)
         return -1;
-
     vendor[0] = '\0';
 
-    /* Allocate buffer */
     pAddresses = (IP_ADAPTER_ADDRESSES *)malloc(outBufLen);
     if (pAddresses == NULL)
         return -1;
@@ -564,8 +504,8 @@ static inline int ncclGetInterfaceVendor(const char *ifName, char *vendor, size_
         return -1;
     }
 
-    /* Find the matching interface */
-    for (pCurrAddresses = pAddresses; pCurrAddresses != NULL; pCurrAddresses = pCurrAddresses->Next)
+    for (pCurrAddresses = pAddresses; pCurrAddresses != NULL;
+         pCurrAddresses = pCurrAddresses->Next)
     {
         char friendlyName[256];
         WideCharToMultiByte(CP_UTF8, 0, pCurrAddresses->FriendlyName, -1,
@@ -574,35 +514,32 @@ static inline int ncclGetInterfaceVendor(const char *ifName, char *vendor, size_
         if (strcmp(friendlyName, ifName) == 0 ||
             strcmp(pCurrAddresses->AdapterName, ifName) == 0)
         {
-            /* Extract vendor from description */
             char description[256];
             WideCharToMultiByte(CP_UTF8, 0, pCurrAddresses->Description, -1,
                                 description, sizeof(description), NULL, NULL);
 
-            /* Try to identify known vendors */
             if (strstr(description, "Amazon") || strstr(description, "ENA"))
             {
-                strncpy(vendor, "0x1d0f", vendorLen); /* AWS vendor ID */
+                strncpy(vendor, "0x1d0f", vendorLen);
             }
             else if (strstr(description, "Google") || strstr(description, "gVNIC"))
             {
-                strncpy(vendor, "0x1ae0", vendorLen); /* GCP vendor ID */
+                strncpy(vendor, "0x1ae0", vendorLen);
             }
             else if (strstr(description, "Mellanox") || strstr(description, "ConnectX"))
             {
-                strncpy(vendor, "0x15b3", vendorLen); /* Mellanox vendor ID */
+                strncpy(vendor, "0x15b3", vendorLen);
             }
             else if (strstr(description, "Intel"))
             {
-                strncpy(vendor, "0x8086", vendorLen); /* Intel vendor ID */
+                strncpy(vendor, "0x8086", vendorLen);
             }
             else if (strstr(description, "Broadcom"))
             {
-                strncpy(vendor, "0x14e4", vendorLen); /* Broadcom vendor ID */
+                strncpy(vendor, "0x14e4", vendorLen);
             }
             else
             {
-                /* Unknown vendor, use description */
                 strncpy(vendor, description, vendorLen);
             }
             vendor[vendorLen - 1] = '\0';
@@ -614,13 +551,10 @@ static inline int ncclGetInterfaceVendor(const char *ifName, char *vendor, size_
     return 0;
 }
 
-/* ===================== Advanced Optimizations ===================== */
+/* ========================================================================== */
+/*                       Advanced Optimizations                               */
+/* ========================================================================== */
 
-/*
- * Enable loopback fast path (Windows 8+/Server 2012+)
- * Bypasses kernel network stack for loopback connections
- * Can significantly improve loopback performance
- */
 #ifndef SIO_LOOPBACK_FAST_PATH
 #define SIO_LOOPBACK_FAST_PATH _WSAIOW(IOC_VENDOR, 16)
 #endif
@@ -629,15 +563,10 @@ static inline int ncclSocketEnableLoopbackFastPath(SOCKET sock)
 {
     int optval = 1;
     DWORD bytesReturned = 0;
-
     return WSAIoctl(sock, SIO_LOOPBACK_FAST_PATH, &optval, sizeof(optval),
                     NULL, 0, &bytesReturned, NULL, NULL);
 }
 
-/*
- * Enable TCP Fast Open (Windows 10+)
- * Reduces connection establishment latency by sending data with SYN
- */
 #ifndef TCP_FASTOPEN
 #define TCP_FASTOPEN 15
 #endif
@@ -648,114 +577,85 @@ static inline int ncclSocketEnableFastOpen(SOCKET sock)
     return setsockopt(sock, IPPROTO_TCP, TCP_FASTOPEN, (const char *)&optval, sizeof(optval));
 }
 
-/*
- * Set socket priority via IP_TOS (Type of Service)
- * Higher priority for low-latency communication
- */
 static inline int ncclSocketSetPriority(SOCKET sock, int priority)
 {
-    /* Map priority 0-7 to DSCP values */
-    /* 0 = best effort, 7 = highest priority */
     int tos;
     switch (priority)
     {
     case 7:
-        tos = 0xB8; /* DSCP EF (Expedited Forwarding) - voice */
+        tos = 0xB8;
         break;
     case 6:
-        tos = 0x80; /* DSCP CS4 */
+        tos = 0x80;
         break;
     case 5:
-        tos = 0x60; /* DSCP CS3 */
+        tos = 0x60;
         break;
     case 4:
-        tos = 0x40; /* DSCP CS2 */
+        tos = 0x40;
         break;
     default:
-        tos = 0x00; /* Best effort */
+        tos = 0x00;
         break;
     }
     return setsockopt(sock, IPPROTO_IP, IP_TOS, (const char *)&tos, sizeof(tos));
 }
 
-/*
- * Configure socket for ultra-low latency operation
- * Combines multiple optimizations for latency-sensitive workloads
- */
 static inline int ncclSocketOptimizeUltraLowLatency(SOCKET sock)
 {
     int result = 0;
     int optval;
 
-    /* Disable Nagle's algorithm */
     optval = 1;
     if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *)&optval, sizeof(optval)) != 0)
         result = -1;
 
-    /* Very small buffers to minimize latency */
-    optval = 64 * 1024; /* 64 KB - minimal buffering */
+    optval = 64 * 1024;
     setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (const char *)&optval, sizeof(optval));
     setsockopt(sock, SOL_SOCKET, SO_RCVBUF, (const char *)&optval, sizeof(optval));
 
-    /* Enable fast path for loopback */
     ncclSocketEnableLoopbackFastPath(sock);
-
-    /* Set high priority TOS */
     ncclSocketSetPriority(sock, 6);
 
     return result;
 }
 
-/*
- * Configure socket for maximum throughput
- * Combines buffer optimization with other Windows-specific tweaks
- */
 static inline int ncclSocketOptimizeMaxThroughput(SOCKET sock)
 {
     int result = 0;
     int optval;
 
-    /* Disable Nagle - always good for large transfers */
     optval = 1;
     if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *)&optval, sizeof(optval)) != 0)
         result = -1;
 
-    /* Maximum buffers for throughput (8 MB) */
     optval = 8 * 1024 * 1024;
     setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (const char *)&optval, sizeof(optval));
     setsockopt(sock, SOL_SOCKET, SO_RCVBUF, (const char *)&optval, sizeof(optval));
 
-    /* Enable fast path for loopback */
     ncclSocketEnableLoopbackFastPath(sock);
 
-    /* Enable keepalive for long connections */
     optval = 1;
     setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, (const char *)&optval, sizeof(optval));
 
     return result;
 }
 
-/* ===================== I/O Completion Port (IOCP) Support ===================== */
+/* ========================================================================== */
+/*                          IOCP Support                                      */
+/* ========================================================================== */
 
-/*
- * IOCP handle for scalable async I/O
- * More efficient than overlapped events for handling many concurrent operations
- */
 struct ncclSocketIOCP
 {
     HANDLE hCompletionPort;
     int refCount;
 };
 
-/*
- * Create IOCP for socket operations
- */
 static inline int ncclSocketIOCPCreate(struct ncclSocketIOCP *iocp, int concurrency)
 {
     if (iocp == NULL)
         return -1;
 
-    /* concurrency = 0 means use number of processors */
     iocp->hCompletionPort = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0,
                                                    (DWORD)concurrency);
     if (iocp->hCompletionPort == NULL)
@@ -765,17 +665,13 @@ static inline int ncclSocketIOCPCreate(struct ncclSocketIOCP *iocp, int concurre
     return 0;
 }
 
-/*
- * Associate socket with IOCP
- */
 static inline int ncclSocketIOCPAssociate(struct ncclSocketIOCP *iocp, SOCKET sock,
                                           ULONG_PTR completionKey)
 {
     if (iocp == NULL || iocp->hCompletionPort == NULL)
         return -1;
 
-    HANDLE h = CreateIoCompletionPort((HANDLE)sock, iocp->hCompletionPort,
-                                      completionKey, 0);
+    HANDLE h = CreateIoCompletionPort((HANDLE)sock, iocp->hCompletionPort, completionKey, 0);
     if (h == NULL)
         return -1;
 
@@ -783,9 +679,6 @@ static inline int ncclSocketIOCPAssociate(struct ncclSocketIOCP *iocp, SOCKET so
     return 0;
 }
 
-/*
- * Wait for I/O completion
- */
 static inline int ncclSocketIOCPWait(struct ncclSocketIOCP *iocp, DWORD timeout,
                                      DWORD *bytesTransferred, ULONG_PTR *completionKey,
                                      LPOVERLAPPED *overlapped)
@@ -800,16 +693,12 @@ static inline int ncclSocketIOCPWait(struct ncclSocketIOCP *iocp, DWORD timeout,
     if (!result)
     {
         if (*overlapped == NULL)
-            return -1; /* Timeout or error */
-        return 1;      /* Completed with error */
+            return -1;
+        return 1;
     }
-
     return 0;
 }
 
-/*
- * Destroy IOCP
- */
 static inline void ncclSocketIOCPDestroy(struct ncclSocketIOCP *iocp)
 {
     if (iocp != NULL && iocp->hCompletionPort != NULL)

@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2015-2025, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2024, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -9,160 +9,107 @@
 
 #ifdef _WIN32
 
-/* Prevent Windows headers from defining min/max macros */
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
+/*
+ * Windows POSIX compatibility definitions
+ * This header provides minimal POSIX compatibility for Windows.
+ * More complete implementations are in other win32_*.h headers.
+ */
 
-/* Reduce Windows header bloat */
+/* Windows headers must be included before any POSIX compatibility definitions */
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
 #endif
 
 #include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
-#include <iphlpapi.h>
-#include <mswsock.h>
 #include <io.h>
 #include <process.h>
-#include <stdint.h>
-#include <sys/types.h> /* For off_t, ino_t, dev_t */
-#include <time.h>      /* For struct timespec on newer Windows SDK */
-#include <errno.h>     /* For error codes on newer Windows SDK */
+#include <direct.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <stdarg.h>
 
+/* Link with Windows socket library */
 #pragma comment(lib, "ws2_32.lib")
-#pragma comment(lib, "iphlpapi.lib")
 
-/* POSIX compatibility definitions */
+/*
+ * Basic type definitions for POSIX compatibility
+ * Note: ssize_t is defined in platform.h, not here, to avoid redefinition
+ */
+typedef int pid_t;
+typedef int uid_t;
+typedef int gid_t;
+typedef int mode_t;
+typedef int socklen_t;
 
-/* File operations */
-#ifndef O_RDONLY
-#define O_RDONLY _O_RDONLY
-#endif
-#ifndef O_WRONLY
-#define O_WRONLY _O_WRONLY
-#endif
-#ifndef O_RDWR
-#define O_RDWR _O_RDWR
-#endif
-#ifndef O_CREAT
-#define O_CREAT _O_CREAT
-#endif
-#ifndef O_EXCL
-#define O_EXCL _O_EXCL
-#endif
-#ifndef O_TRUNC
-#define O_TRUNC _O_TRUNC
+/* Socket type compatibility */
+#ifndef SOCKET
+typedef UINT_PTR SOCKET;
 #endif
 
-/* Process/Thread IDs */
-#ifndef _PID_T_DEFINED
-typedef DWORD pid_t;
-#define _PID_T_DEFINED
-#endif
+/*
+ * POSIX I/O function compatibility
+ * Use inline functions instead of macros to avoid conflicts with C++ STL
+ * (e.g., std::basic_istream::read would conflict with a read macro)
+ */
+#define close(fd) _close(fd)
 
-/* off_t for file offsets */
-#ifndef _OFF_T_DEFINED
-typedef long off_t;
-#define _OFF_T_DEFINED
-#endif
-
-/* getpid/gettid as inline functions (not macros to avoid conflicts) */
-static inline pid_t nccl_getpid(void) { return (pid_t)GetCurrentProcessId(); }
-static inline pid_t nccl_gettid(void) { return (pid_t)GetCurrentThreadId(); }
-#ifndef getpid
-#define getpid nccl_getpid
-#endif
-#ifndef gettid
-#define gettid nccl_gettid
-#endif
-
-/* Network interface flags (IFF_*) */
-#ifndef IFF_UP
-#define IFF_UP 0x1
-#endif
-#ifndef IFF_RUNNING
-#define IFF_RUNNING 0x40
-#endif
-#ifndef IFF_LOOPBACK
-#define IFF_LOOPBACK 0x8
-#endif
-
-/* Socket constants */
-#ifndef MSG_NOSIGNAL
-#define MSG_NOSIGNAL 0
-#endif
-#ifndef MSG_DONTWAIT
-#define MSG_DONTWAIT 0
-#endif
-
-/* NI_* constants for getnameinfo */
-#ifndef NI_MAXHOST
-#define NI_MAXHOST 1025
-#endif
-#ifndef NI_MAXSERV
-#define NI_MAXSERV 32
-#endif
-
-/* Error number compatibility - only define if not already defined by errno.h */
-#ifndef EWOULDBLOCK
-#define EWOULDBLOCK WSAEWOULDBLOCK
-#endif
-#ifndef EINPROGRESS
-#define EINPROGRESS WSAEINPROGRESS
-#endif
-#ifndef ECONNRESET
-#define ECONNRESET WSAECONNRESET
-#endif
-/* Note: EPIPE may already be defined in errno.h, only define if missing */
-#ifndef EPIPE
-#define EPIPE WSAENOTCONN
-#endif
-
-/* Signal handling (minimal support) */
-typedef void (*sighandler_t)(int);
-#define SIGPIPE 0 /* Windows doesn't have SIGPIPE */
-
-static inline sighandler_t signal_noop(int sig, sighandler_t handler)
+static inline int nccl_read(int fd, void *buf, size_t len)
 {
-    (void)sig;
-    (void)handler;
-    return NULL;
+    return _read(fd, buf, (unsigned int)(len));
 }
-/* Only define signal macro if needed */
-#ifndef NCCL_NO_SIGNAL_OVERRIDE
-#define nccl_signal(sig, handler) signal_noop(sig, handler)
-#endif
 
-/* String functions */
-#ifndef strcasecmp
-#define strcasecmp _stricmp
-#endif
-#ifndef strncasecmp
-#define strncasecmp _strnicmp
-#endif
-#ifndef strdup
-#define strdup _strdup
-#endif
-/* Note: snprintf is standard in C99/C++11 */
+static inline int nccl_write(int fd, const void *buf, size_t len)
+{
+    return _write(fd, buf, (unsigned int)(len));
+}
+
+/* Socket-specific close (different from file close) */
+static inline int closesocket_compat(SOCKET s)
+{
+    return closesocket(s);
+}
 
 /* File descriptor operations */
-#ifndef close
-#define close(fd) _close(fd)
-#endif
-#ifndef read
-#define read(fd, buf, count) _read(fd, buf, (unsigned int)(count))
-#endif
-#ifndef write
-#define write(fd, buf, count) _write(fd, buf, (unsigned int)(count))
-#endif
-#ifndef unlink
-#define unlink(path) _unlink(path)
-#endif
-#ifndef access
-#define access(path, mode) _access(path, mode)
-#endif
+#define open _open
+#define O_RDONLY _O_RDONLY
+#define O_WRONLY _O_WRONLY
+#define O_RDWR _O_RDWR
+#define O_CREAT _O_CREAT
+#define O_TRUNC _O_TRUNC
+#define O_APPEND _O_APPEND
+#define O_BINARY _O_BINARY
+#define O_TEXT _O_TEXT
+
+/* File stat compatibility */
+#define stat _stat64
+#define fstat _fstat64
+#define lstat _stat64 /* Windows doesn't have symlinks in the same way */
+
+/* Directory operations */
+#define mkdir(path, mode) _mkdir(path)
+#define rmdir _rmdir
+#define getcwd _getcwd
+#define chdir _chdir
+
+/* Process operations */
+#define getpid _getpid
+static inline uid_t getuid(void) { return 0; }
+static inline gid_t getgid(void) { return 0; }
+static inline uid_t geteuid(void) { return 0; }
+static inline gid_t getegid(void) { return 0; }
+
+/* String operations */
+#define strcasecmp _stricmp
+#define strncasecmp _strnicmp
+#define strdup _strdup
+
+/* Access function modes */
 #ifndef F_OK
 #define F_OK 0
 #endif
@@ -172,321 +119,135 @@ static inline sighandler_t signal_noop(int sig, sighandler_t handler)
 #ifndef W_OK
 #define W_OK 2
 #endif
-
-/* Socket close function */
-#define closesocket_compat(s) closesocket(s)
-
-/* fcntl replacement for non-blocking sockets */
-#ifndef F_GETFL
-#define F_GETFL 0
+#ifndef X_OK
+#define X_OK 1
 #endif
-#ifndef F_SETFL
-#define F_SETFL 1
+#define access _access
+
+/* Pipe operations */
+#define pipe(fds) _pipe(fds, 4096, _O_BINARY)
+
+/* Memory mapping placeholders (actual implementations in win32_shm.h) */
+#define PROT_READ 0x1
+#define PROT_WRITE 0x2
+#define PROT_EXEC 0x4
+#define PROT_NONE 0x0
+
+#define MAP_PRIVATE 0x02
+#define MAP_SHARED 0x01
+#define MAP_ANONYMOUS 0x20
+#define MAP_ANON MAP_ANONYMOUS
+#define MAP_FAILED ((void *)-1)
+
+/* Shared memory constants */
+#define SHM_RDONLY 010000
+
+/* Unix domain socket path max length */
+#ifndef UNIX_PATH_MAX
+#define UNIX_PATH_MAX 108
 #endif
-#ifndef O_NONBLOCK
+
+/* Fcntl compatibility */
+#define F_GETFL 3
+#define F_SETFL 4
 #define O_NONBLOCK 0x0004
-#endif
 
-static inline int fcntl_socket(SOCKET s, int cmd, int arg)
+/* For Windows, fcntl is emulated using ioctlsocket for sockets */
+static inline int fcntl(SOCKET fd, int cmd, ...)
 {
-    if (cmd == F_SETFL)
-    {
-        u_long nonblocking = (arg & O_NONBLOCK) ? 1 : 0;
-        return ioctlsocket(s, FIONBIO, &nonblocking);
-    }
-    return 0;
-}
-#define fcntl(fd, cmd, ...) fcntl_socket((SOCKET)(fd), cmd, __VA_ARGS__)
-
-/*
- * Poll support - use WSAPoll on newer Windows SDKs
- * Only define our own pollfd if the SDK doesn't provide it
- */
-#ifndef POLLIN
-#define POLLIN 0x0001
-#endif
-#ifndef POLLOUT
-#define POLLOUT 0x0004
-#endif
-#ifndef POLLERR
-#define POLLERR 0x0008
-#endif
-#ifndef POLLHUP
-#define POLLHUP 0x0010
-#endif
-#ifndef POLLNVAL
-#define POLLNVAL 0x0020
-#endif
-
-/* Use WSAPOLLFD from winsock2.h as pollfd */
-#ifndef _STRUCT_POLLFD_DEFINED
-#define _STRUCT_POLLFD_DEFINED
-typedef WSAPOLLFD pollfd;
-#endif
-
-/* Use WSAPoll directly */
-#ifndef poll
-#define poll(fds, nfds, timeout) WSAPoll((LPWSAPOLLFD)(fds), (ULONG)(nfds), (INT)(timeout))
-#endif
-
-/* strerror_r is not available on Windows, use strerror_s */
-static inline int strerror_r_compat(int errnum, char *buf, size_t buflen)
-{
-    return strerror_s(buf, buflen, errnum);
-}
-#define strerror_r(errnum, buf, buflen) strerror_r_compat(errnum, buf, buflen)
-
-/* Random data generation */
-#include <bcrypt.h>
-#pragma comment(lib, "bcrypt.lib")
-
-/* NT_SUCCESS macro if not defined (normally in ntdef.h/ntddk.h) */
-#ifndef NT_SUCCESS
-#define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
-#endif
-
-static inline int getRandomData_win32(void *buffer, size_t bytes)
-{
-    NTSTATUS status = BCryptGenRandom(NULL, (PUCHAR)buffer, (ULONG)bytes, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
-    return NT_SUCCESS(status) ? 0 : -1;
-}
-
-/* High-resolution timing */
-static inline uint64_t clockNano_win32()
-{
-    LARGE_INTEGER freq, counter;
-    QueryPerformanceFrequency(&freq);
-    QueryPerformanceCounter(&counter);
-    return (uint64_t)((counter.QuadPart * 1000000000LL) / freq.QuadPart);
-}
-
-/* Sleep function (milliseconds) */
-static inline void msleep_win32(unsigned int time_msec)
-{
-    Sleep(time_msec);
-}
-
-/* Hostname */
-static inline int gethostname_compat(char *name, int namelen)
-{
-    DWORD size = (DWORD)namelen;
-    if (GetComputerNameExA(ComputerNameDnsHostname, name, &size))
+    if (cmd == F_GETFL)
     {
         return 0;
     }
-    /* Fallback to Winsock gethostname */
-    return gethostname(name, namelen);
-}
-
-/* Dynamic library loading */
-typedef HMODULE ncclDynLib_t;
-#define NCCL_DYNLIB_INVALID NULL
-
-static inline ncclDynLib_t ncclDynLibOpen(const char *path)
-{
-    return LoadLibraryA(path);
-}
-
-static inline void *ncclDynLibSym(ncclDynLib_t lib, const char *symbol)
-{
-    return (void *)GetProcAddress(lib, symbol);
-}
-
-static inline int ncclDynLibClose(ncclDynLib_t lib)
-{
-    return FreeLibrary(lib) ? 0 : -1;
-}
-
-static inline const char *ncclDynLibError()
-{
-    static char errbuf[256];
-    DWORD err = GetLastError();
-    FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                   NULL, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-                   errbuf, sizeof(errbuf), NULL);
-    return errbuf;
-}
-
-/* Environment variables */
-static inline const char *ncclGetEnv_win32(const char *name)
-{
-    static char buffer[32768]; /* Windows max env var size */
-    DWORD ret = GetEnvironmentVariableA(name, buffer, sizeof(buffer));
-    if (ret == 0 || ret >= sizeof(buffer))
-        return NULL;
-    return buffer;
-}
-
-/* Windows Socket initialization helper */
-static inline int ncclWinsockInit()
-{
-    static int initialized = 0;
-    if (!initialized)
+    else if (cmd == F_SETFL)
     {
-        WSADATA wsaData;
-        int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
-        if (result != 0)
-            return result;
-        initialized = 1;
+        /* Handle non-blocking mode via ioctlsocket */
+        va_list args;
+        va_start(args, cmd);
+        int flags = va_arg(args, int);
+        va_end(args);
+
+        if (flags & O_NONBLOCK)
+        {
+            u_long mode = 1; /* Non-blocking mode */
+            if (ioctlsocket(fd, FIONBIO, &mode) != 0)
+            {
+                return -1;
+            }
+        }
+        return 0;
     }
-    return 0;
+    return -1;
 }
 
-static inline void ncclWinsockCleanup()
+/* Poll compatibility (basic version, full implementation in win32_socket.h) */
+#ifndef POLLIN
+#define POLLIN 0x0001
+#define POLLOUT 0x0004
+#define POLLERR 0x0008
+#define POLLHUP 0x0010
+#define POLLNVAL 0x0020
+
+struct pollfd
+{
+    SOCKET fd;
+    short events;
+    short revents;
+};
+#endif
+
+/*
+ * poll() implementation for Windows using WSAPoll
+ * Note: winsock2.h defines POLLIN and struct pollfd, but not a poll() function.
+ * We always define poll() to wrap WSAPoll().
+ */
+#ifndef HAVE_POLL
+static inline int poll(struct pollfd *fds, unsigned long nfds, int timeout)
+{
+    return WSAPoll((WSAPOLLFD *)fds, nfds, timeout);
+}
+#define HAVE_POLL 1
+#endif
+
+/* IPC related constants */
+#define IPC_PRIVATE 0
+#define IPC_CREAT 01000
+#define IPC_EXCL 02000
+#define IPC_NOWAIT 04000
+#define IPC_RMID 0
+#define IPC_SET 1
+#define IPC_STAT 2
+
+/* Semaphore constants */
+#define SEM_FAILED ((void *)-1)
+#define GETVAL 12
+#define SETVAL 16
+#define GETALL 13
+#define SETALL 17
+
+/* For MSG_NOSIGNAL which doesn't exist on Windows */
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+
+/* Scattered I/O (basic definitions, full implementation elsewhere) */
+struct iovec
+{
+    void *iov_base;
+    size_t iov_len;
+};
+
+/* Initialize Winsock (call once at startup) */
+static inline int win32_socket_init(void)
+{
+    WSADATA wsaData;
+    return WSAStartup(MAKEWORD(2, 2), &wsaData);
+}
+
+static inline void win32_socket_cleanup(void)
 {
     WSACleanup();
 }
-
-/* ===================== CPU Intrinsics for Spin Loops ===================== */
-
-/*
- * CPU pause instruction for spin-wait loops
- * Reduces power consumption and improves performance in busy loops
- * Equivalent to _mm_pause() / __builtin_ia32_pause()
- */
-#if defined(_M_X64) || defined(_M_IX86) || defined(_M_AMD64)
-#include <intrin.h>
-#define ncclCpuPause() _mm_pause()
-#elif defined(_M_ARM64)
-#define ncclCpuPause() __yield()
-#else
-#define ncclCpuPause() ((void)0)
-#endif
-
-/*
- * Yield to other threads - use when spinning for longer periods
- */
-static inline void ncclCpuYield(void)
-{
-    SwitchToThread();
-}
-
-/*
- * Adaptive spin-wait with exponential backoff
- * Efficient for contended resources
- */
-static inline void ncclSpinWait(volatile LONG *flag, LONG expected, int maxSpins)
-{
-    int spins = 0;
-
-    while (*flag != expected)
-    {
-        if (spins < 16)
-        {
-            /* Initial fast spins with pause */
-            ncclCpuPause();
-        }
-        else if (spins < maxSpins)
-        {
-            /* Yield to other threads */
-            ncclCpuYield();
-        }
-        else
-        {
-            /* Fall back to sleep for very long waits */
-            Sleep(0);
-            spins = maxSpins - 1; /* Don't let spins overflow */
-        }
-        spins++;
-    }
-}
-
-/* ===================== Memory Barriers ===================== */
-
-/*
- * Full memory fence - ensures all memory operations complete
- * Equivalent to __sync_synchronize() / std::atomic_thread_fence(memory_order_seq_cst)
- */
-#if defined(_M_X64) || defined(_M_AMD64)
-#define ncclMemoryFence() _mm_mfence()
-#define ncclLoadFence() _mm_lfence()
-#define ncclStoreFence() _mm_sfence()
-#elif defined(_M_ARM64)
-#define ncclMemoryFence() __dmb(_ARM64_BARRIER_SY)
-#define ncclLoadFence() __dmb(_ARM64_BARRIER_LD)
-#define ncclStoreFence() __dmb(_ARM64_BARRIER_ST)
-#else
-#define ncclMemoryFence() MemoryBarrier()
-#define ncclLoadFence() MemoryBarrier()
-#define ncclStoreFence() MemoryBarrier()
-#endif
-
-/*
- * Compiler barrier - prevents compiler reordering
- */
-#define ncclCompilerBarrier() _ReadWriteBarrier()
-
-/* ===================== Cache Line Alignment ===================== */
-
-/*
- * Cache line size for avoiding false sharing
- * Most modern x86/ARM64 CPUs use 64-byte cache lines
- */
-#define NCCL_CACHE_LINE_SIZE 64
-
-/*
- * Align data to cache line boundary
- */
-#define NCCL_CACHE_ALIGN __declspec(align(NCCL_CACHE_LINE_SIZE))
-
-/*
- * Pad structure to cache line size
- */
-#define NCCL_CACHE_PAD(name, size) char name##_pad[NCCL_CACHE_LINE_SIZE - ((size) % NCCL_CACHE_LINE_SIZE)]
-
-/* ===================== Atomic Operations ===================== */
-
-/*
- * Atomic load with acquire semantics
- */
-static inline LONG ncclAtomicLoadAcquire(volatile LONG *ptr)
-{
-    LONG value = *ptr;
-    ncclLoadFence();
-    return value;
-}
-
-/*
- * Atomic store with release semantics
- */
-static inline void ncclAtomicStoreRelease(volatile LONG *ptr, LONG value)
-{
-    ncclStoreFence();
-    *ptr = value;
-}
-
-/*
- * Atomic load 64-bit with acquire semantics
- */
-static inline LONGLONG ncclAtomicLoad64Acquire(volatile LONGLONG *ptr)
-{
-    LONGLONG value = InterlockedCompareExchange64(ptr, 0, 0);
-    ncclLoadFence();
-    return value;
-}
-
-/*
- * Atomic store 64-bit with release semantics
- */
-static inline void ncclAtomicStore64Release(volatile LONGLONG *ptr, LONGLONG value)
-{
-    ncclStoreFence();
-    InterlockedExchange64(ptr, value);
-}
-
-/*
- * Atomic add and return old value
- */
-#define ncclAtomicAdd(ptr, val) InterlockedExchangeAdd((ptr), (val))
-#define ncclAtomicAdd64(ptr, val) InterlockedExchangeAdd64((ptr), (val))
-
-/*
- * Atomic compare-and-swap
- */
-#define ncclAtomicCAS(ptr, expected, desired) \
-    InterlockedCompareExchange((ptr), (desired), (expected))
-#define ncclAtomicCAS64(ptr, expected, desired) \
-    InterlockedCompareExchange64((ptr), (desired), (expected))
 
 #endif /* _WIN32 */
 

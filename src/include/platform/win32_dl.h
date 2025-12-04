@@ -31,7 +31,7 @@ static __thread char ncclDlError[256] = "";
 /* Open a dynamic library */
 static inline void *ncclDlOpen(const char *filename, int flags)
 {
-    (void)flags; // Windows doesn't have equivalent flags
+    (void)flags; /* Windows doesn't have equivalent flags */
     HMODULE handle = LoadLibraryA(filename);
     if (handle == NULL)
     {

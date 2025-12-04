@@ -60,10 +60,24 @@ enum ncclSocketType
   ncclSocketTypeRasNetwork = 5
 };
 
+/* Platform-specific socket file descriptor type */
+#if NCCL_PLATFORM_WINDOWS
+typedef SOCKET ncclSocketFd_t;
+#define NCCL_INVALID_SOCKET_FD INVALID_SOCKET
+#else
+typedef int ncclSocketFd_t;
+#define NCCL_INVALID_SOCKET_FD (-1)
+#endif
+
 struct ncclSocket
 {
+#if NCCL_PLATFORM_WINDOWS
+  SOCKET fd;
+  SOCKET acceptFd;
+#else
   int fd;
   int acceptFd;
+#endif
   int errorRetries;
   union ncclSocketAddress addr;
   volatile uint32_t *abortFlag;
@@ -102,8 +116,8 @@ ncclResult_t ncclSocketConnect(struct ncclSocket *sock);
 ncclResult_t ncclSocketReady(struct ncclSocket *sock, int *running);
 // Accept an incoming connection from listenSock->fd and keep the file descriptor in sock->fd, with the remote side IP/port in sock->addr.
 ncclResult_t ncclSocketAccept(struct ncclSocket *sock, struct ncclSocket *ulistenSock);
-ncclResult_t ncclSocketGetFd(struct ncclSocket *sock, int *fd);
-ncclResult_t ncclSocketSetFd(int fd, struct ncclSocket *sock);
+ncclResult_t ncclSocketGetFd(struct ncclSocket *sock, ncclSocketFd_t *fd);
+ncclResult_t ncclSocketSetFd(ncclSocketFd_t fd, struct ncclSocket *sock);
 
 #define NCCL_SOCKET_SEND 0
 #define NCCL_SOCKET_RECV 1

@@ -22,6 +22,11 @@ ncclNvmlDevicePairInfo ncclNvmlDevicePairs[ncclNvmlMaxDevices][ncclNvmlMaxDevice
 #else
 #if NCCL_PLATFORM_LINUX
 #include <dlfcn.h>
+#elif NCCL_PLATFORM_WINDOWS
+// Use LoadLibrary/GetProcAddress on Windows
+#define dlopen(name, flags) LoadLibraryA(name)
+#define dlsym(handle, name) GetProcAddress((HMODULE)handle, name)
+#define dlclose(handle) FreeLibrary((HMODULE)handle)
 #endif
 #define NCCL_NVML_FN(name, rettype, arglist) rettype(*pfn_##name) arglist = nullptr;
 #endif
@@ -79,6 +84,16 @@ ncclResult_t ncclNvmlEnsureInitialized()
 #if !NCCL_NVML_DIRECT
   if (pfn_nvmlInit == nullptr)
   {
+#if NCCL_PLATFORM_WINDOWS
+    // On Windows, NVML is typically in nvml.dll (shipped with NVIDIA drivers)
+    void *libhandle = dlopen("nvml.dll", 0);
+    if (libhandle == nullptr)
+    {
+      WARN("Failed to open nvml.dll");
+      initResult = ncclSystemError;
+      return initResult;
+    }
+#else
     void *libhandle = dlopen("libnvidia-ml.so.1", RTLD_NOW);
     if (libhandle == nullptr)
     {
@@ -86,6 +101,7 @@ ncclResult_t ncclNvmlEnsureInitialized()
       initResult = ncclSystemError;
       return initResult;
     }
+#endif
 
     struct Symbol
     {

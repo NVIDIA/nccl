@@ -10,7 +10,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#ifndef _WIN32
 #include <linux/types.h>
+#endif
 #include "nccl.h"
 #include "gin/gin_host.h"
 #include "plugin/nccl_net.h"

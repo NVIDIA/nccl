@@ -30,7 +30,11 @@ static uint64_t ncclDebugTimestampMaxSubseconds; // Max number of subseconds plu
 static int ncclDebugTimestampSubsecondDigits;    // Number of digits to display
 static int pid = -1;
 static char hostname[1024];
+#if NCCL_PLATFORM_WINDOWS
+__declspec(thread) int ncclDebugNoWarn = 0;
+#else
 thread_local int ncclDebugNoWarn = 0;
+#endif
 char ncclLastError[1024] = ""; // Global string for the last error in human readable form
 uint64_t ncclDebugMask = 0;
 FILE *ncclDebugFile = stdout;
@@ -38,7 +42,7 @@ static std::mutex ncclDebugMutex;
 static std::chrono::steady_clock::time_point ncclEpoch;
 static bool ncclWarnSetDebugInfo = false;
 
-static __thread int tid = -1;
+static NCCL_THREAD_LOCAL int tid = -1;
 
 typedef const char *(*ncclGetEnvFunc_t)(const char *);
 
@@ -362,7 +366,11 @@ static void ncclDebugInit()
       FILE *file = fopen(debugFn, "w");
       if (file != nullptr)
       {
+#if NCCL_PLATFORM_WINDOWS
+        setvbuf(file, NULL, _IOLBF, 0); // disable block buffering (line buffering)
+#else
         setlinebuf(file); // disable block buffering
+#endif
         ncclDebugFile = file;
       }
     }
@@ -498,7 +506,7 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
   {
     len += snprintf(buffer + len, sizeof(buffer) - len, "[%d] %s:%d NCCL WARN ", cudaDev, filefunc, line);
     if (ncclWarnSetDebugInfo)
-      __atomic_store_n(&ncclDebugLevel, NCCL_LOG_INFO, __ATOMIC_RELEASE);
+      __atomic_store_n(&ncclDebugLevel, (int)NCCL_LOG_INFO, __ATOMIC_RELEASE);
   }
   else if (level == NCCL_LOG_INFO)
   {

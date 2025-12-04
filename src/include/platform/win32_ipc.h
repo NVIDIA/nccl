@@ -10,6 +10,7 @@
 #ifdef _WIN32
 
 #include "win32_defs.h"
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 

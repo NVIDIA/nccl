@@ -7,14 +7,18 @@
 #ifndef NCCL_DEBUG_H_
 #define NCCL_DEBUG_H_
 
-// Workaround for libstdc++ trying to force public visibility of std:: symbols.  We don't want to do that in libnccl.so.
+// Workaround for libstdc++ trying to force public visibility of std:: symbols.
+// We don't want to do that in libnccl.so. This is GCC/libstdc++ specific.
+#if defined(__GNUC__) && !defined(_MSC_VER) && !defined(__clang__)
 #include <bits/c++config.h>
 #undef _GLIBCXX_VISIBILITY
 #define _GLIBCXX_VISIBILITY(V)
+#endif
 
 #include <cstdint>
 
-typedef enum {
+typedef enum
+{
   NCCL_LOG_NONE = 0,
   NCCL_LOG_VERSION = 1,
   NCCL_LOG_WARN = 2,
@@ -23,7 +27,8 @@ typedef enum {
   NCCL_LOG_TRACE = 5
 } ncclDebugLogLevel;
 
-typedef enum {
+typedef enum
+{
   NCCL_INIT = 0x1,
   NCCL_COLL = 0x2,
   NCCL_P2P = 0x4,
@@ -46,17 +51,19 @@ typedef enum {
 typedef void (*ncclDebugLogger_t)(ncclDebugLogLevel level, unsigned long flags, const char *file, int line, const char *fmt, ...);
 
 // NCCL core profiler callback for network defined events instrumentation
-enum {
+enum
+{
   ncclProfilerNetEventStart = 0,
   ncclProfilerNetEventStop,
   ncclProfilerNetEventUpdate,
   ncclProfilerNetEventUpdateAndStop,
 };
 
-typedef ncclResult_t (*ncclProfilerCallback_t)(void** eHandle, int type, void* pHandle, int64_t pluginId, void* extData);
+typedef ncclResult_t (*ncclProfilerCallback_t)(void **eHandle, int type, void *pHandle, int64_t pluginId, void *extData);
 
 #define NCCL_NUM_FUNCTIONS 5 // Send/Recv not included for now
-typedef enum {
+typedef enum
+{
   ncclFuncBroadcast = 0,
   ncclFuncReduce = 1,
   ncclFuncAllGather = 2,
@@ -70,6 +77,5 @@ typedef enum {
   ncclFuncGather = 10,
   ncclNumFuncs = 11
 } ncclFunc_t;
-
 
 #endif

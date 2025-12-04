@@ -105,20 +105,35 @@ ncclResult_t ncclShmOpen(char *shmPath, size_t shmPathSize, size_t shmSize, void
   DWORD highSize = (DWORD)((realShmSize >> 32) & 0xFFFFFFFF);
   DWORD lowSize = (DWORD)(realShmSize & 0xFFFFFFFF);
   char fullName[MAX_PATH];
+  const char *shmSuffix;
+  const char *prefix = "/dev/shm/nccl-";
 
   *handle = *shmPtr = NULL;
   EQCHECKGOTO(tmphandle = (struct shmHandleInternal *)calloc(1, sizeof(struct shmHandleInternal)), NULL, ret, fail);
+
+  // Strip "/dev/shm/nccl-" prefix if present to get just the suffix
+  shmSuffix = shmPath;
+  if (strncmp(shmPath, prefix, strlen(prefix)) == 0)
+  {
+    shmSuffix = shmPath + strlen(prefix);
+  }
 
   if (create)
   {
     if (shmPath[0] == '\0')
     {
-      /* Generate unique name */
+      /* Generate unique name - will fill XXXXXX template or generate new name */
       ncclShmMkstemp(shmPath, shmPathSize);
+      /* Re-check for prefix after generation */
+      shmSuffix = shmPath;
+      if (strncmp(shmPath, prefix, strlen(prefix)) == 0)
+      {
+        shmSuffix = shmPath + strlen(prefix);
+      }
     }
 
-    /* Use file-backed shared memory on Windows for persistence */
-    snprintf(fullName, sizeof(fullName), "Local\\nccl_%s", shmPath);
+    /* Use Windows named shared memory */
+    snprintf(fullName, sizeof(fullName), "Local\\nccl-%s", shmSuffix);
 
     hMapFile = CreateFileMappingA(
         INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
@@ -134,7 +149,7 @@ ncclResult_t ncclShmOpen(char *shmPath, size_t shmPathSize, size_t shmSize, void
   }
   else
   {
-    snprintf(fullName, sizeof(fullName), "Local\\nccl_%s", shmPath);
+    snprintf(fullName, sizeof(fullName), "Local\\nccl-%s", shmSuffix);
     hMapFile = OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, fullName);
     if (hMapFile == NULL)
     {

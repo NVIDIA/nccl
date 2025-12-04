@@ -23,18 +23,15 @@
 #include "nccl.h"
 
 #if NCCL_PLATFORM_WINDOWS
+// On Windows, dllexport is handled by NCCL_DECL in nccl.h
+// The NCCL_API macro just needs to provide the function declaration
+// Note: nccl.h already wraps everything in extern "C"
 #ifdef PROFAPI
 #define NCCL_API(ret, func, ...) \
-    extern "C"                   \
-        __declspec(dllexport)    \
-        ret                      \
-        func(__VA_ARGS__)
+    NCCL_DECL ret func(__VA_ARGS__)
 #else
 #define NCCL_API(ret, func, ...) \
-    extern "C"                   \
-        __declspec(dllexport)    \
-        ret                      \
-        func(__VA_ARGS__)
+    NCCL_DECL ret func(__VA_ARGS__)
 #endif // end PROFAPI
 #else
 #ifdef PROFAPI

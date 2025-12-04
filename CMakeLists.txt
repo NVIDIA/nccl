@@ -24,6 +24,10 @@ set(ENV{NCCL_USE_CMAKE} "1")
 project(NCCL VERSION ${NCCL_MAJOR}.${NCCL_MINOR}.${NCCL_PATCH}
         LANGUAGES CUDA CXX C)
 
+# Set C++ standard to C++20 for designated initializers support (required by NVTX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 # Make CMAKE_BUILD_TYPE to release by default if not set
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Release")
@@ -42,6 +46,9 @@ option(RDMA_CORE "Enable RDMA core" OFF)
 option(NET_PROFILER "Enable network profiler" OFF)
 option(MLX5DV "Enable MLX5DV" OFF)
 option(MAX_EXT_NET_PLUGINS "Maximum external network plugins" 0)
+
+# Find Python3 for code generation scripts
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 find_package(CUDAToolkit REQUIRED)
 
@@ -96,8 +103,13 @@ if(WIN32)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3 /EHsc")
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda -Xptxas -maxrregcount=96 -Xfatbin -compress-all")
     
-    # Disable specific warnings on Windows
-    add_compile_options(/wd4996 /wd4267 /wd4244 /wd4018)
+    # Fix CMake CUDA + MSVC PDB issue: CMake generates -Xcompiler=/Fd...,/FS which nvcc 
+    # interprets as multiple input files due to the comma. Disable automatic PDB for CUDA.
+    set(CMAKE_CUDA_COMPILE_OBJECT "<CMAKE_CUDA_COMPILER> ${_CMAKE_CUDA_EXTRA_FLAGS} <DEFINES> <INCLUDES> <FLAGS> ${_CMAKE_COMPILE_AS_CUDA_FLAG} -o <OBJECT> <SOURCE>")
+    
+    # Disable specific warnings on Windows (C/C++ only, not CUDA)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/wd4996> $<$<COMPILE_LANGUAGE:CXX>:/wd4267> $<$<COMPILE_LANGUAGE:CXX>:/wd4244> $<$<COMPILE_LANGUAGE:CXX>:/wd4018>)
+    add_compile_options($<$<COMPILE_LANGUAGE:C>:/wd4996> $<$<COMPILE_LANGUAGE:C>:/wd4267> $<$<COMPILE_LANGUAGE:C>:/wd4244> $<$<COMPILE_LANGUAGE:C>:/wd4018>)
     
     # Define Windows macros
     add_compile_definitions(
@@ -139,8 +151,14 @@ if(WERROR)
     endif()
 endif()
 
-if(PROFAPI)
+# NVTX profiler uses GCC-specific extensions not available on MSVC
+if(PROFAPI AND NOT WIN32)
     add_definitions(-DPROFAPI)
+endif()
+
+# Disable NVTX payload schemas on Windows (uses __typeof__ and compound literals)
+if(WIN32)
+    add_definitions(-DNVTX_DISABLE)
 endif()
 
 set(EXTRA_LIBS)

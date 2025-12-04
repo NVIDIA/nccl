@@ -201,6 +201,17 @@ kernel_funcs = sorted(set(best_kernel(*fn) for fn in primary_funcs))
 
 ################################################################################
 
+# Generate <gensrc>/device_table_size.h
+with open(os.path.join(gensrc, "device_table_size.h"), "w") as f:
+  out = f.write
+  out('#ifndef NCCL_DEVICE_TABLE_SIZE_H_\n')
+  out('#define NCCL_DEVICE_TABLE_SIZE_H_\n')
+  out('\n')
+  # +1 for the nullptr terminator
+  out('#define NCCL_DEV_FUNC_TABLE_SIZE %d\n' % (len(primary_funcs) + 1))
+  out('\n')
+  out('#endif // NCCL_DEVICE_TABLE_SIZE_H_\n')
+
 # Generate <gensrc>/device_table.cu
 with open(os.path.join(gensrc, "device_table.cu"), "w") as f:
   out = f.write

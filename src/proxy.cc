@@ -32,7 +32,9 @@ enum
   proxyRecv = 0,
   proxySend = 1
 };
+#if NCCL_PLATFORM_LINUX
 void *ncclProxyServiceUDS(void *_args);
+#endif
 
 static bool NeedProxy(int type, int pattern, int root, struct ncclRing *ring, int nranks)
 {
@@ -2202,7 +2204,8 @@ static ncclResult_t proxyUDSRecvReq(struct ncclProxyState *proxyState, int reqFd
   return ncclInternalError;
 }
 
-// UDS fd handle support
+#if NCCL_PLATFORM_LINUX
+// UDS fd handle support (Unix Domain Sockets - Linux only)
 void *ncclProxyServiceUDS(void *_args)
 {
   struct ncclProxyState *proxyState = (struct ncclProxyState *)_args;
@@ -2259,6 +2262,7 @@ void *ncclProxyServiceUDS(void *_args)
   INFO(NCCL_PROXY, "[Proxy Service UDS] exit: stop %d abortFlag %d", proxyState->stop, *proxyState->abortFlag);
   return NULL;
 }
+#endif // NCCL_PLATFORM_LINUX
 
 ncclResult_t ncclProxyInit(struct ncclComm *comm, struct ncclSocket *sock, union ncclSocketAddress *peerAddresses, uint64_t *peerAddressesUDS)
 {
@@ -2306,10 +2310,12 @@ ncclResult_t ncclProxyCreate(struct ncclComm *comm)
     PTHREADCHECK(pthread_create(&comm->proxyState->thread, NULL, ncclProxyService, comm->proxyState), "pthread_create");
     ncclSetThreadName(comm->proxyState->thread, "NCCL Service %2d", comm->cudaDev);
 
-    // UDS support
+#if NCCL_PLATFORM_LINUX
+    // UDS support (Unix Domain Sockets - Linux only)
     INFO(NCCL_PROXY, "UDS: Creating service thread comm %p rank %d", comm, comm->rank);
     PTHREADCHECK(pthread_create(&comm->proxyState->threadUDS, NULL, ncclProxyServiceUDS, comm->proxyState), "pthread_create");
     ncclSetThreadName(comm->proxyState->threadUDS, "NCCL UDS Service %2d", comm->cudaDev);
+#endif
   }
   return ncclSuccess;
 }
@@ -2340,9 +2346,9 @@ ncclResult_t ncclProxyStop(struct ncclComm *comm)
         int tplocalRanks = comm->sharedRes->tpNLocalRanks;
         for (int i = 0; i < tplocalRanks; i++)
         {
-          int fd;
+          ncclSocketFd_t fd;
           NCCLCHECK(ncclSocketGetFd(sharedProxyState->peerSocks + i, &fd));
-          if (fd >= 0)
+          if (fd != NCCL_INVALID_SOCKET_FD)
           {
             if (sharedProxyState->proxyOps[i].pool)
             {

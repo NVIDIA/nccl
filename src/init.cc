@@ -87,6 +87,10 @@ ncclResult_t initGdrCopy()
 
 static ncclResult_t setCpuStackSize()
 {
+#ifdef _WIN32
+  // Windows threads have different stack size handling - skip this
+  return ncclSuccess;
+#else
   if (ncclParamSetCpuStackSize() != 0)
   {
     // Query the stack size used for newly launched threads.
@@ -121,6 +125,7 @@ static ncclResult_t setCpuStackSize()
   }
 
   return ncclSuccess;
+#endif // _WIN32
 }
 
 static ncclResult_t initResult = ncclSuccess;

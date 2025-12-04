@@ -326,7 +326,7 @@ ncclResult_t ncclIpcSocketGetFd(struct ncclIpcSocket *handle, int *fd)
     return ncclInvalidArgument;
   }
   // On Windows, we can't return a file descriptor for a pipe handle
-  // Return -1 to indicate this is not a valid fd
+  // Return -1 to indicate this is not a valid socket
   if (fd)
     *fd = -1;
   return ncclSuccess;

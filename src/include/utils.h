@@ -57,13 +57,9 @@ static int compareInts(const void *a, const void *b)
 
 inline uint64_t clockNano()
 {
-#if NCCL_PLATFORM_LINUX
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return uint64_t(ts.tv_sec) * 1000 * 1000 * 1000 + ts.tv_nsec;
-#elif NCCL_PLATFORM_WINDOWS
-  return clockNanoWin32();
-#endif
 }
 
 /* get any bytes of random data from /dev/urandom, return ncclSuccess (0) if it succeeds. */
@@ -80,7 +76,7 @@ inline ncclResult_t getRandomData(void *buffer, size_t bytes)
     if (fp)
       fclose(fp);
 #elif NCCL_PLATFORM_WINDOWS
-    if (buffer == NULL || ncclGetRandomDataWin32(buffer, bytes) != 0)
+    if (buffer == NULL || ncclGetRandomData(buffer, bytes) != 0)
       ret = ncclSystemError;
 #endif
   }
@@ -201,7 +197,7 @@ void ncclThreadSignalConstruct(struct ncclThreadSignal *me);
 void ncclThreadSignalDestruct(struct ncclThreadSignal *me);
 
 // A convenience instance per-thread.
-extern __thread struct ncclThreadSignal ncclThreadSignalLocalInstance;
+extern NCCL_THREAD_LOCAL struct ncclThreadSignal ncclThreadSignalLocalInstance;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -597,8 +593,8 @@ T *ncclIntruQueueMpscDequeueAll(ncclIntruQueueMpsc<T, next> *me, bool waitSome)
     } while (head == nullptr);
   }
 
-  __atomic_store_n(&me->head, nullptr, __ATOMIC_RELAXED);
-  uintptr_t utail = __atomic_exchange_n(&me->tail, 0x0, __ATOMIC_ACQ_REL);
+  __atomic_store_n(&me->head, (T *)nullptr, __ATOMIC_RELAXED);
+  uintptr_t utail = __atomic_exchange_n(&me->tail, (uintptr_t)0x0, __ATOMIC_ACQ_REL);
   T *tail = utail <= 0x2 ? nullptr : reinterpret_cast<T *>(utail);
   T *x = head;
   while (x != tail)

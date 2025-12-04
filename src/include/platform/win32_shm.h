@@ -532,22 +532,42 @@ static inline int ncclShmUnlink_win32(ncclShmHandle_win32_t handle)
 
 /*
  * Generate a unique shared memory name
- * Equivalent to mkstemp behavior but for shared memory names
+ * Behaves like mkstemp: fills in the XXXXXX portion of a template like "/dev/shm/nccl-XXXXXX"
+ * If name is empty, generates "/dev/shm/nccl-XXXXXX" with unique suffix filled in
+ * This matches the expected format used by proxy.cc for suffix extraction
  */
 static inline int ncclShmMkstemp(char *name, size_t nameLen)
 {
     static volatile long counter = 0;
     DWORD pid = GetCurrentProcessId();
     DWORD tid = GetCurrentThreadId();
-    LARGE_INTEGER perfCounter;
     long cnt;
+    char suffix[8];
 
-    QueryPerformanceCounter(&perfCounter);
     cnt = InterlockedIncrement(&counter);
 
-    snprintf(name, nameLen, "%lx_%lx_%llx_%lx",
-             (unsigned long)pid, (unsigned long)tid,
-             (unsigned long long)perfCounter.QuadPart, (unsigned long)cnt);
+    /* Generate a unique 6-character suffix (hex characters) */
+    snprintf(suffix, sizeof(suffix), "%02x%02x%02x",
+             (unsigned int)(pid & 0xFF),
+             (unsigned int)(tid & 0xFF),
+             (unsigned int)(cnt & 0xFF));
+    suffix[6] = '\0';
+
+    /* Find and replace XXXXXX in the template, or create full path if empty */
+    char *xxpos = strstr(name, "XXXXXX");
+    if (xxpos != NULL)
+    {
+        /* Replace XXXXXX with our unique suffix */
+        memcpy(xxpos, suffix, 6);
+    }
+    else if (name[0] == '\0')
+    {
+        /* Empty string - generate full path in Linux format for compatibility
+         * proxy.cc extracts suffix via: shmPath + sizeof("/dev/shm/nccl-") - 1
+         * So we must provide the path in this exact format */
+        snprintf(name, nameLen, "/dev/shm/nccl-%s", suffix);
+    }
+    /* Otherwise leave name unchanged if it has content but no XXXXXX */
 
     return 0;
 }

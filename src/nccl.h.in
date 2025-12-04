@@ -24,6 +24,24 @@
 #define NCCL_VERSION_CODE ${nccl:Version}
 #define NCCL_VERSION(X,Y,Z) (((X) <= 2 && (Y) <= 8) ? (X) * 1000 + (Y) * 100 + (Z) : (X) * 10000 + (Y) * 100 + (Z))
 
+/* Cross-platform deprecated attribute */
+#ifdef _MSC_VER
+#define NCCL_DEPRECATED(msg) __declspec(deprecated(msg))
+#else
+#define NCCL_DEPRECATED(msg) __attribute__((deprecated(msg)))
+#endif
+
+/* Cross-platform DLL export/import */
+#ifdef _MSC_VER
+#ifdef NCCL_EXPORTS
+#define NCCL_DECL __declspec(dllexport)
+#else
+#define NCCL_DECL __declspec(dllimport)
+#endif
+#else
+#define NCCL_DECL
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -138,29 +156,29 @@ typedef struct ncclSimInfo_v22200 {
 /* NCCL malloc and free function for all types of NCCL optimizations
  * (e.g. user buffer registration). The actual allocated size might
  * be larger than requested due to granularity requirement. */
-ncclResult_t  ncclMemAlloc(void** ptr, size_t size);
-ncclResult_t pncclMemAlloc(void** ptr, size_t size);
+NCCL_DECL ncclResult_t  ncclMemAlloc(void** ptr, size_t size);
+NCCL_DECL ncclResult_t pncclMemAlloc(void** ptr, size_t size);
 
-ncclResult_t  ncclMemFree(void *ptr);
-ncclResult_t pncclMemFree(void *ptr);
+NCCL_DECL ncclResult_t  ncclMemFree(void *ptr);
+NCCL_DECL ncclResult_t pncclMemFree(void *ptr);
 
 /* Return the NCCL_VERSION_CODE of the NCCL library in the supplied integer.
  * This integer is coded with the MAJOR, MINOR and PATCH level of the
  * NCCL library
  */
-ncclResult_t  ncclGetVersion(int *version);
-ncclResult_t pncclGetVersion(int *version);
+NCCL_DECL ncclResult_t  ncclGetVersion(int *version);
+NCCL_DECL ncclResult_t pncclGetVersion(int *version);
 
 /* Generates an Id to be used in ncclCommInitRank. ncclGetUniqueId should be
  * called once and the Id should be distributed to all ranks in the
  * communicator before calling ncclCommInitRank. */
-ncclResult_t  ncclGetUniqueId(ncclUniqueId* uniqueId);
-ncclResult_t pncclGetUniqueId(ncclUniqueId* uniqueId);
+NCCL_DECL ncclResult_t  ncclGetUniqueId(ncclUniqueId* uniqueId);
+NCCL_DECL ncclResult_t pncclGetUniqueId(ncclUniqueId* uniqueId);
 
 /* Create a new communicator (multi thread/process version) with a configuration
  * set by users. */
-ncclResult_t  ncclCommInitRankConfig(ncclComm_t* comm, int nranks, ncclUniqueId commId, int rank, ncclConfig_t* config);
-ncclResult_t pncclCommInitRankConfig(ncclComm_t* comm, int nranks, ncclUniqueId commId, int rank, ncclConfig_t* config);
+NCCL_DECL ncclResult_t  ncclCommInitRankConfig(ncclComm_t* comm, int nranks, ncclUniqueId commId, int rank, ncclConfig_t* config);
+NCCL_DECL ncclResult_t pncclCommInitRankConfig(ncclComm_t* comm, int nranks, ncclUniqueId commId, int rank, ncclConfig_t* config);
 
 /* Creates a new communicator (multi thread/process version).
  * rank must be between 0 and nranks-1 and unique within a communicator clique.
@@ -168,8 +186,8 @@ ncclResult_t pncclCommInitRankConfig(ncclComm_t* comm, int nranks, ncclUniqueId 
  * ncclCommInitRank.
  * ncclCommInitRank implicitly syncronizes with other ranks, so it must be
  * called by different threads/processes or use ncclGroupStart/ncclGroupEnd. */
-ncclResult_t  ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId commId, int rank);
-ncclResult_t pncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId commId, int rank);
+NCCL_DECL ncclResult_t  ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId commId, int rank);
+NCCL_DECL ncclResult_t pncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId commId, int rank);
 
 /* Creates a clique of communicators (single process version).
  * This is a convenience function to create a single-process communicator clique.
@@ -177,25 +195,25 @@ ncclResult_t pncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId commId
  * comm should be pre-allocated with size at least ndev*sizeof(ncclComm_t).
  * If devlist is NULL, the first ndev CUDA devices are used.
  * Order of devlist defines user-order of processors within the communicator. */
-ncclResult_t  ncclCommInitAll(ncclComm_t* comm, int ndev, const int* devlist);
-ncclResult_t pncclCommInitAll(ncclComm_t* comm, int ndev, const int* devlist);
+NCCL_DECL ncclResult_t  ncclCommInitAll(ncclComm_t* comm, int ndev, const int* devlist);
+NCCL_DECL ncclResult_t pncclCommInitAll(ncclComm_t* comm, int ndev, const int* devlist);
 
 /* Finalize a communicator. ncclCommFinalize flushes all issued communications,
  * and marks communicator state as ncclInProgress. The state will change to ncclSuccess
  * when the communicator is globally quiescent and related resources are freed; then,
  * calling ncclCommDestroy can locally free the rest of the resources (e.g. communicator
  * itself) without blocking. */
-ncclResult_t  ncclCommFinalize(ncclComm_t comm);
-ncclResult_t pncclCommFinalize(ncclComm_t comm);
+NCCL_DECL ncclResult_t  ncclCommFinalize(ncclComm_t comm);
+NCCL_DECL ncclResult_t pncclCommFinalize(ncclComm_t comm);
 
 /* Frees local resources associated with communicator object. */
-ncclResult_t  ncclCommDestroy(ncclComm_t comm);
-ncclResult_t pncclCommDestroy(ncclComm_t comm);
+NCCL_DECL ncclResult_t  ncclCommDestroy(ncclComm_t comm);
+NCCL_DECL ncclResult_t pncclCommDestroy(ncclComm_t comm);
 
 /* Frees resources associated with communicator object and aborts any operations
  * that might still be running on the device. */
-ncclResult_t  ncclCommAbort(ncclComm_t comm);
-ncclResult_t pncclCommAbort(ncclComm_t comm);
+NCCL_DECL ncclResult_t  ncclCommAbort(ncclComm_t comm);
+NCCL_DECL ncclResult_t pncclCommAbort(ncclComm_t comm);
 
 /* Revoke a communicator. ncclCommRevoke stops all in-flight operations
  * and marks communicator state as ncclInProgress. The state will change to ncclSuccess
@@ -203,8 +221,8 @@ ncclResult_t pncclCommAbort(ncclComm_t comm);
  * shrink) can proceed safely. Calling ncclCommFinalize after revoke is invalid.
  * Additionally, resource sharing via splitShare/shrinkShare is disabled while revoked.
  * revokeFlags must be NCCL_REVOKE_DEFAULT (0). */
-ncclResult_t  ncclCommRevoke(ncclComm_t comm, int revokeFlags);
-ncclResult_t pncclCommRevoke(ncclComm_t comm, int revokeFlags);
+NCCL_DECL ncclResult_t  ncclCommRevoke(ncclComm_t comm, int revokeFlags);
+NCCL_DECL ncclResult_t pncclCommRevoke(ncclComm_t comm, int revokeFlags);
 
 /* Creates one or more communicators from an existing one.
  * Ranks with the same color will end up in the same communicator.
@@ -213,69 +231,69 @@ ncclResult_t pncclCommRevoke(ncclComm_t comm, int revokeFlags);
  * and will therefore return a NULL communicator.
  * If config is NULL, the new communicator will inherit the original communicator's
  * configuration*/
-ncclResult_t  ncclCommSplit(ncclComm_t comm, int color, int key, ncclComm_t *newcomm, ncclConfig_t* config);
-ncclResult_t pncclCommSplit(ncclComm_t comm, int color, int key, ncclComm_t *newcomm, ncclConfig_t* config);
+NCCL_DECL ncclResult_t  ncclCommSplit(ncclComm_t comm, int color, int key, ncclComm_t *newcomm, ncclConfig_t* config);
+NCCL_DECL ncclResult_t pncclCommSplit(ncclComm_t comm, int color, int key, ncclComm_t *newcomm, ncclConfig_t* config);
 
 /* Shrink existing communicator.
  * Ranks in excludeRanksList will be removed form the existing communicator.
  * Within the new communicator, ranks will be re-ordered to fill the gap of removed ones.
  * If config is NULL, the new communicator will inherit the original communicator's configuration
  * The flag enables NCCL to adapt to various states of the parent communicator, see NCCL_SHRINK flags.*/
-ncclResult_t  ncclCommShrink(ncclComm_t comm, int* excludeRanksList, int excludeRanksCount, ncclComm_t* newcomm, ncclConfig_t* config, int shrinkFlags);
-ncclResult_t pncclCommShrink(ncclComm_t comm, int* excludeRanksList, int excludeRanksCount, ncclComm_t* newcomm, ncclConfig_t* config, int shrinkFlags);
+NCCL_DECL ncclResult_t  ncclCommShrink(ncclComm_t comm, int* excludeRanksList, int excludeRanksCount, ncclComm_t* newcomm, ncclConfig_t* config, int shrinkFlags);
+NCCL_DECL ncclResult_t pncclCommShrink(ncclComm_t comm, int* excludeRanksList, int excludeRanksCount, ncclComm_t* newcomm, ncclConfig_t* config, int shrinkFlags);
 
 /* Creates a new communicator (multi thread/process version), similar to ncclCommInitRankConfig.
  * Allows to use more than one ncclUniqueId (up to one per rank), indicated by nId, to accelerate the init operation.
  * The number of ncclUniqueIds and their order must be the same for every rank.
  */
-ncclResult_t ncclCommInitRankScalable(ncclComm_t* newcomm, int nranks, int myrank, int nId, ncclUniqueId* commIds, ncclConfig_t* config);
-ncclResult_t pncclCommInitRankScalable(ncclComm_t* newcomm, int nranks, int myrank, int nId, ncclUniqueId* commIds, ncclConfig_t* config);
+NCCL_DECL ncclResult_t ncclCommInitRankScalable(ncclComm_t* newcomm, int nranks, int myrank, int nId, ncclUniqueId* commIds, ncclConfig_t* config);
+NCCL_DECL ncclResult_t pncclCommInitRankScalable(ncclComm_t* newcomm, int nranks, int myrank, int nId, ncclUniqueId* commIds, ncclConfig_t* config);
 
 /* Returns a string for each error code. */
-const char*  ncclGetErrorString(ncclResult_t result);
-const char* pncclGetErrorString(ncclResult_t result);
+NCCL_DECL const char*  ncclGetErrorString(ncclResult_t result);
+NCCL_DECL const char* pncclGetErrorString(ncclResult_t result);
 
 /* Returns a human-readable message of the last error that occurred. */
-const char*  ncclGetLastError(ncclComm_t comm);
-const char* pncclGetLastError(ncclComm_t comm);
+NCCL_DECL const char*  ncclGetLastError(ncclComm_t comm);
+NCCL_DECL const char* pncclGetLastError(ncclComm_t comm);
 
 /* Reload environment variables that determine logging. */
-__attribute__ ((deprecated("ncclResetDebugInit is not supported as part of the NCCL API and will be removed in the future")))
-void  ncclResetDebugInit();
-__attribute__ ((deprecated("pncclResetDebugInit is not supported as part of the NCCL API and will be removed in the future")))
-void pncclResetDebugInit();
+NCCL_DEPRECATED("ncclResetDebugInit is not supported as part of the NCCL API and will be removed in the future")
+NCCL_DECL void ncclResetDebugInit();
+NCCL_DEPRECATED("pncclResetDebugInit is not supported as part of the NCCL API and will be removed in the future")
+NCCL_DECL void pncclResetDebugInit();
 
 /* Checks whether the comm has encountered any asynchronous errors */
-ncclResult_t  ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t *asyncError);
-ncclResult_t pncclCommGetAsyncError(ncclComm_t comm, ncclResult_t *asyncError);
+NCCL_DECL ncclResult_t  ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t *asyncError);
+NCCL_DECL ncclResult_t pncclCommGetAsyncError(ncclComm_t comm, ncclResult_t *asyncError);
 
 /* Gets the number of ranks in the communicator clique. */
-ncclResult_t  ncclCommCount(const ncclComm_t comm, int* count);
-ncclResult_t pncclCommCount(const ncclComm_t comm, int* count);
+NCCL_DECL ncclResult_t  ncclCommCount(const ncclComm_t comm, int* count);
+NCCL_DECL ncclResult_t pncclCommCount(const ncclComm_t comm, int* count);
 
 /* Returns the cuda device number associated with the communicator. */
-ncclResult_t  ncclCommCuDevice(const ncclComm_t comm, int* device);
-ncclResult_t pncclCommCuDevice(const ncclComm_t comm, int* device);
+NCCL_DECL ncclResult_t  ncclCommCuDevice(const ncclComm_t comm, int* device);
+NCCL_DECL ncclResult_t pncclCommCuDevice(const ncclComm_t comm, int* device);
 
 /* Returns the user-ordered "rank" associated with the communicator. */
-ncclResult_t  ncclCommUserRank(const ncclComm_t comm, int* rank);
-ncclResult_t pncclCommUserRank(const ncclComm_t comm, int* rank);
+NCCL_DECL ncclResult_t  ncclCommUserRank(const ncclComm_t comm, int* rank);
+NCCL_DECL ncclResult_t pncclCommUserRank(const ncclComm_t comm, int* rank);
 
 /* Register CUDA buffer for zero-copy operation */
-ncclResult_t  ncclCommRegister(const ncclComm_t comm, void* buff, size_t size, void** handle);
-ncclResult_t pncclCommRegister(const ncclComm_t comm, void* buff, size_t size, void** handle);
+NCCL_DECL ncclResult_t  ncclCommRegister(const ncclComm_t comm, void* buff, size_t size, void** handle);
+NCCL_DECL ncclResult_t pncclCommRegister(const ncclComm_t comm, void* buff, size_t size, void** handle);
 
 /* Deregister CUDA buffer */
-ncclResult_t  ncclCommDeregister(const ncclComm_t comm, void* handle);
-ncclResult_t pncclCommDeregister(const ncclComm_t comm, void* handle);
+NCCL_DECL ncclResult_t  ncclCommDeregister(const ncclComm_t comm, void* handle);
+NCCL_DECL ncclResult_t pncclCommDeregister(const ncclComm_t comm, void* handle);
 
 /* Register memory window  */
-ncclResult_t  ncclCommWindowRegister(ncclComm_t comm, void* buff, size_t size, ncclWindow_t* win, int winFlags);
-ncclResult_t pncclCommWindowRegister(ncclComm_t comm, void* buff, size_t size, ncclWindow_t* win, int winFlags);
+NCCL_DECL ncclResult_t  ncclCommWindowRegister(ncclComm_t comm, void* buff, size_t size, ncclWindow_t* win, int winFlags);
+NCCL_DECL ncclResult_t pncclCommWindowRegister(ncclComm_t comm, void* buff, size_t size, ncclWindow_t* win, int winFlags);
 
 /* Deregister symmetric memory */
-ncclResult_t  ncclCommWindowDeregister(ncclComm_t comm, ncclWindow_t win);
-ncclResult_t pncclCommWindowDeregister(ncclComm_t comm, ncclWindow_t win);
+NCCL_DECL ncclResult_t  ncclCommWindowDeregister(ncclComm_t comm, ncclWindow_t win);
+NCCL_DECL ncclResult_t pncclCommWindowDeregister(ncclComm_t comm, ncclWindow_t win);
 
 /* Reduction operation selector */
 typedef enum { ncclNumOps_dummy = 5 } ncclRedOp_dummy_t;
@@ -333,8 +351,8 @@ typedef enum {
  * will be dereferenced. Upon return, the newly created operator's handle
  * is stored in *op*.
  */
-ncclResult_t  ncclRedOpCreatePreMulSum(ncclRedOp_t *op, void *scalar, ncclDataType_t datatype, ncclScalarResidence_t residence, ncclComm_t comm);
-ncclResult_t pncclRedOpCreatePreMulSum(ncclRedOp_t *op, void *scalar, ncclDataType_t datatype, ncclScalarResidence_t residence, ncclComm_t comm);
+NCCL_DECL ncclResult_t  ncclRedOpCreatePreMulSum(ncclRedOp_t *op, void *scalar, ncclDataType_t datatype, ncclScalarResidence_t residence, ncclComm_t comm);
+NCCL_DECL ncclResult_t pncclRedOpCreatePreMulSum(ncclRedOp_t *op, void *scalar, ncclDataType_t datatype, ncclScalarResidence_t residence, ncclComm_t comm);
 
 /*
  * ncclRedOpDestroy
@@ -343,8 +361,8 @@ ncclResult_t pncclRedOpCreatePreMulSum(ncclRedOp_t *op, void *scalar, ncclDataTy
  * ncclRedOpCreatePreMul with the matching communicator *comm*. An operator may be
  * destroyed as soon as the last NCCL function which is given that operator returns.
  */
-ncclResult_t ncclRedOpDestroy(ncclRedOp_t op, ncclComm_t comm);
-ncclResult_t pncclRedOpDestroy(ncclRedOp_t op, ncclComm_t comm);
+NCCL_DECL ncclResult_t ncclRedOpDestroy(ncclRedOp_t op, ncclComm_t comm);
+NCCL_DECL ncclResult_t pncclRedOpDestroy(ncclRedOp_t op, ncclComm_t comm);
 
 /*
  * Collective communication operations
@@ -370,9 +388,9 @@ ncclResult_t pncclRedOpDestroy(ncclRedOp_t op, ncclComm_t comm);
  *
  * In-place operation will happen if sendbuff == recvbuff.
  */
-ncclResult_t  ncclReduce(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype,
+NCCL_DECL ncclResult_t  ncclReduce(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype,
     ncclRedOp_t op, int root, ncclComm_t comm, cudaStream_t stream);
-ncclResult_t pncclReduce(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype,
+NCCL_DECL ncclResult_t pncclReduce(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype,
     ncclRedOp_t op, int root, ncclComm_t comm, cudaStream_t stream);
 
 /*
@@ -384,9 +402,9 @@ ncclResult_t pncclReduce(const void* sendbuff, void* recvbuff, size_t count, ncc
  *
  * This operation is implicitely in place.
  */
-ncclResult_t  ncclBcast(void* buff, size_t count, ncclDataType_t datatype, int root,
+NCCL_DECL ncclResult_t  ncclBcast(void* buff, size_t count, ncclDataType_t datatype, int root,
     ncclComm_t comm, cudaStream_t stream);
-ncclResult_t pncclBcast(void* buff, size_t count, ncclDataType_t datatype, int root,
+NCCL_DECL ncclResult_t pncclBcast(void* buff, size_t count, ncclDataType_t datatype, int root,
     ncclComm_t comm, cudaStream_t stream);
 
 /*
@@ -398,9 +416,9 @@ ncclResult_t pncclBcast(void* buff, size_t count, ncclDataType_t datatype, int r
  *
  * In-place operation will happen if sendbuff == recvbuff.
  */
-ncclResult_t  ncclBroadcast(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype, int root,
+NCCL_DECL ncclResult_t  ncclBroadcast(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype, int root,
     ncclComm_t comm, cudaStream_t stream);
-ncclResult_t pncclBroadcast(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype, int root,
+NCCL_DECL ncclResult_t pncclBroadcast(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype, int root,
     ncclComm_t comm, cudaStream_t stream);
 
 /*
@@ -411,9 +429,9 @@ ncclResult_t pncclBroadcast(const void* sendbuff, void* recvbuff, size_t count, 
  *
  * In-place operation will happen if sendbuff == recvbuff.
  */
-ncclResult_t  ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
+NCCL_DECL ncclResult_t  ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
     ncclDataType_t datatype, ncclRedOp_t op, ncclComm_t comm, cudaStream_t stream);
-ncclResult_t pncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
+NCCL_DECL ncclResult_t pncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
     ncclDataType_t datatype, ncclRedOp_t op, ncclComm_t comm, cudaStream_t stream);
 
 /*
@@ -427,10 +445,10 @@ ncclResult_t pncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
  *
  * In-place operations will happen if recvbuff == sendbuff + rank * recvcount.
  */
-ncclResult_t  ncclReduceScatter(const void* sendbuff, void* recvbuff,
+NCCL_DECL ncclResult_t  ncclReduceScatter(const void* sendbuff, void* recvbuff,
     size_t recvcount, ncclDataType_t datatype, ncclRedOp_t op, ncclComm_t comm,
     cudaStream_t stream);
-ncclResult_t pncclReduceScatter(const void* sendbuff, void* recvbuff,
+NCCL_DECL ncclResult_t pncclReduceScatter(const void* sendbuff, void* recvbuff,
     size_t recvcount, ncclDataType_t datatype, ncclRedOp_t op, ncclComm_t comm,
     cudaStream_t stream);
 
@@ -444,9 +462,9 @@ ncclResult_t pncclReduceScatter(const void* sendbuff, void* recvbuff,
  *
  * In-place operations will happen if sendbuff == recvbuff + rank * sendcount.
  */
-ncclResult_t  ncclAllGather(const void* sendbuff, void* recvbuff, size_t sendcount,
+NCCL_DECL ncclResult_t  ncclAllGather(const void* sendbuff, void* recvbuff, size_t sendcount,
     ncclDataType_t datatype, ncclComm_t comm, cudaStream_t stream);
-ncclResult_t pncclAllGather(const void* sendbuff, void* recvbuff, size_t sendcount,
+NCCL_DECL ncclResult_t pncclAllGather(const void* sendbuff, void* recvbuff, size_t sendcount,
     ncclDataType_t datatype, ncclComm_t comm, cudaStream_t stream);
 
 /*
@@ -457,9 +475,9 @@ ncclResult_t pncclAllGather(const void* sendbuff, void* recvbuff, size_t sendcou
  * sendbuff+j*count and data received from source rank i is placed at
  * recvbuff+i*count.
  */
-ncclResult_t  ncclAlltoAll(const void* sendbuff, void* recvbuff, size_t count,
+NCCL_DECL ncclResult_t  ncclAlltoAll(const void* sendbuff, void* recvbuff, size_t count,
     ncclDataType_t datatype, ncclComm_t comm, cudaStream_t stream);
-ncclResult_t pncclAlltoAll(const void* sendbuff, void* recvbuff, size_t count,
+NCCL_DECL ncclResult_t pncclAlltoAll(const void* sendbuff, void* recvbuff, size_t count,
     ncclDataType_t datatype, ncclComm_t comm, cudaStream_t stream);
 
 /*
@@ -472,9 +490,9 @@ ncclResult_t pncclAlltoAll(const void* sendbuff, void* recvbuff, size_t count,
  *
  * In-place operations will happen if sendbuff == recvbuff + root * count.
  */
-ncclResult_t  ncclGather(const void* sendbuff, void* recvbuff, size_t count,
+NCCL_DECL ncclResult_t  ncclGather(const void* sendbuff, void* recvbuff, size_t count,
     ncclDataType_t datatype, int root, ncclComm_t comm, cudaStream_t stream);
-ncclResult_t pncclGather(const void* sendbuff, void* recvbuff, size_t count,
+NCCL_DECL ncclResult_t pncclGather(const void* sendbuff, void* recvbuff, size_t count,
     ncclDataType_t datatype, int root, ncclComm_t comm, cudaStream_t stream);
 
 /*
@@ -487,9 +505,9 @@ ncclResult_t pncclGather(const void* sendbuff, void* recvbuff, size_t count,
  *
  * In-place operations will happen if recvbuff == sendbuff + root * count.
  */
-ncclResult_t  ncclScatter(const void* sendbuff, void* recvbuff, size_t count,
+NCCL_DECL ncclResult_t  ncclScatter(const void* sendbuff, void* recvbuff, size_t count,
     ncclDataType_t datatype, int root, ncclComm_t comm, cudaStream_t stream);
-ncclResult_t pncclScatter(const void* sendbuff, void* recvbuff, size_t count,
+NCCL_DECL ncclResult_t pncclScatter(const void* sendbuff, void* recvbuff, size_t count,
     ncclDataType_t datatype, int root, ncclComm_t comm, cudaStream_t stream);
 
 /*
@@ -504,9 +522,9 @@ ncclResult_t pncclScatter(const void* sendbuff, void* recvbuff, size_t count,
  * need to progress concurrently to complete, they must be fused within a ncclGroupStart/
  * ncclGroupEnd section.
  */
-ncclResult_t  ncclSend(const void* sendbuff, size_t count, ncclDataType_t datatype, int peer,
+NCCL_DECL ncclResult_t  ncclSend(const void* sendbuff, size_t count, ncclDataType_t datatype, int peer,
     ncclComm_t comm, cudaStream_t stream);
-ncclResult_t pncclSend(const void* sendbuff, size_t count, ncclDataType_t datatype, int peer,
+NCCL_DECL ncclResult_t pncclSend(const void* sendbuff, size_t count, ncclDataType_t datatype, int peer,
     ncclComm_t comm, cudaStream_t stream);
 
 /*
@@ -521,9 +539,9 @@ ncclResult_t pncclSend(const void* sendbuff, size_t count, ncclDataType_t dataty
  * need to progress concurrently to complete, they must be fused within a ncclGroupStart/
  * ncclGroupEnd section.
  */
-ncclResult_t pncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype, int peer,
+NCCL_DECL ncclResult_t pncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype, int peer,
     ncclComm_t comm, cudaStream_t stream);
-ncclResult_t  ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype, int peer,
+NCCL_DECL ncclResult_t  ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype, int peer,
     ncclComm_t comm, cudaStream_t stream);
 
 /*
@@ -555,8 +573,8 @@ ncclResult_t  ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype, in
  * a single NCCL operation. Nothing will be started on the CUDA stream until
  * ncclGroupEnd.
  */
-ncclResult_t  ncclGroupStart();
-ncclResult_t pncclGroupStart();
+NCCL_DECL ncclResult_t  ncclGroupStart();
+NCCL_DECL ncclResult_t pncclGroupStart();
 
 /*
  * Group End
@@ -565,16 +583,16 @@ ncclResult_t pncclGroupStart();
  * ncclGroupStart. Operations on the CUDA stream depending on the NCCL operations
  * need to be called after ncclGroupEnd.
  */
-ncclResult_t  ncclGroupEnd();
-ncclResult_t pncclGroupEnd();
+NCCL_DECL ncclResult_t  ncclGroupEnd();
+NCCL_DECL ncclResult_t pncclGroupEnd();
 
 /*
  * Group Simulate End
  *
  * Simulate a ncclGroupEnd() call and return NCCL's simulation info in a struct.
  */
-ncclResult_t  ncclGroupSimulateEnd(ncclSimInfo_t* simInfo);
-ncclResult_t pncclGroupSimulateEnd(ncclSimInfo_t* simInfo);
+NCCL_DECL ncclResult_t  ncclGroupSimulateEnd(ncclSimInfo_t* simInfo);
+NCCL_DECL ncclResult_t pncclGroupSimulateEnd(ncclSimInfo_t* simInfo);
 
 #ifdef __cplusplus
 } // end extern "C"

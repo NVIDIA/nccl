@@ -7,6 +7,7 @@
 #ifndef NCCL_CUDAWRAP_H_
 #define NCCL_CUDAWRAP_H_
 
+#include "platform.h"
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include "checks.h"
@@ -26,51 +27,65 @@ extern CUmemAllocationHandleType ncclCuMemHandleType;
 #define CUPFN(symbol) pfn_##symbol
 
 // Check CUDA PFN driver calls
-#define CUCHECK(cmd) do {				      \
-    CUresult err = pfn_##cmd;				      \
-    if( err != CUDA_SUCCESS ) {				      \
-      const char *errStr;				      \
-      (void) pfn_cuGetErrorString(err, &errStr);	      \
-      WARN("Cuda failure %d '%s'", err, errStr);	      \
-      return ncclUnhandledCudaError;			      \
-    }							      \
-} while(false)
+#define CUCHECK(cmd)                             \
+  do                                             \
+  {                                              \
+    CUresult err = pfn_##cmd;                    \
+    if (err != CUDA_SUCCESS)                     \
+    {                                            \
+      const char *errStr;                        \
+      (void)pfn_cuGetErrorString(err, &errStr);  \
+      WARN("Cuda failure %d '%s'", err, errStr); \
+      return ncclUnhandledCudaError;             \
+    }                                            \
+  } while (false)
 
-#define CUCALL(cmd) do {				      \
-    pfn_##cmd;				                \
-} while(false)
+#define CUCALL(cmd) \
+  do                \
+  {                 \
+    pfn_##cmd;      \
+  } while (false)
 
-#define CUCHECKGOTO(cmd, res, label) do {		      \
-    CUresult err = pfn_##cmd;				      \
-    if( err != CUDA_SUCCESS ) {				      \
-      const char *errStr;				      \
-      (void) pfn_cuGetErrorString(err, &errStr);	      \
-      WARN("Cuda failure %d '%s'", err, errStr);	      \
-      res = ncclUnhandledCudaError;			      \
-      goto label;					      \
-    }							      \
-} while(false)
+#define CUCHECKGOTO(cmd, res, label)             \
+  do                                             \
+  {                                              \
+    CUresult err = pfn_##cmd;                    \
+    if (err != CUDA_SUCCESS)                     \
+    {                                            \
+      const char *errStr;                        \
+      (void)pfn_cuGetErrorString(err, &errStr);  \
+      WARN("Cuda failure %d '%s'", err, errStr); \
+      res = ncclUnhandledCudaError;              \
+      goto label;                                \
+    }                                            \
+  } while (false)
 
 // Report failure but clear error and continue
-#define CUCHECKIGNORE(cmd) do {						\
-    CUresult err = pfn_##cmd;						\
-    if( err != CUDA_SUCCESS ) {						\
-      const char *errStr;						\
-      (void) pfn_cuGetErrorString(err, &errStr);			\
-      INFO(NCCL_ALL,"%s:%d Cuda failure %d '%s'", __FILE__, __LINE__, err, errStr); \
-    }									\
-} while(false)
+#define CUCHECKIGNORE(cmd)                                                           \
+  do                                                                                 \
+  {                                                                                  \
+    CUresult err = pfn_##cmd;                                                        \
+    if (err != CUDA_SUCCESS)                                                         \
+    {                                                                                \
+      const char *errStr;                                                            \
+      (void)pfn_cuGetErrorString(err, &errStr);                                      \
+      INFO(NCCL_ALL, "%s:%d Cuda failure %d '%s'", __FILE__, __LINE__, err, errStr); \
+    }                                                                                \
+  } while (false)
 
-#define CUCHECKTHREAD(cmd, args) do {					\
-    CUresult err = pfn_##cmd;						\
-    if (err != CUDA_SUCCESS) {						\
-      INFO(NCCL_INIT,"%s:%d -> %d [Async thread]", __FILE__, __LINE__, err); \
-      args->ret = ncclUnhandledCudaError;				\
-      return args;							\
-    }									\
-} while(0)
+#define CUCHECKTHREAD(cmd, args)                                              \
+  do                                                                          \
+  {                                                                           \
+    CUresult err = pfn_##cmd;                                                 \
+    if (err != CUDA_SUCCESS)                                                  \
+    {                                                                         \
+      INFO(NCCL_INIT, "%s:%d -> %d [Async thread]", __FILE__, __LINE__, err); \
+      args->ret = ncclUnhandledCudaError;                                     \
+      return args;                                                            \
+    }                                                                         \
+  } while (0)
 
-#define DECLARE_CUDA_PFN_EXTERN(symbol,version) extern PFN_##symbol##_v##version pfn_##symbol
+#define DECLARE_CUDA_PFN_EXTERN(symbol, version) extern PFN_##symbol##_v##version pfn_##symbol
 
 #if CUDART_VERSION >= 11030
 /* CUDA Driver functions loaded with cuGetProcAddress for versioning */
@@ -127,12 +142,23 @@ ncclResult_t ncclCudaLibraryInit(void);
 extern int ncclCudaDriverVersionCache;
 extern bool ncclCudaLaunchBlocking; // initialized by ncclCudaLibraryInit()
 
-inline ncclResult_t ncclCudaDriverVersion(int* driver) {
+inline ncclResult_t ncclCudaDriverVersion(int *driver)
+{
+#if NCCL_PLATFORM_WINDOWS
+  int version = (int)_InterlockedCompareExchange((volatile long *)&ncclCudaDriverVersionCache, 0, 0);
+  if (version == -1)
+  {
+    CUDACHECK(cudaDriverGetVersion(&version));
+    _InterlockedExchange((volatile long *)&ncclCudaDriverVersionCache, (long)version);
+  }
+#else
   int version = __atomic_load_n(&ncclCudaDriverVersionCache, __ATOMIC_RELAXED);
-  if (version == -1) {
+  if (version == -1)
+  {
     CUDACHECK(cudaDriverGetVersion(&version));
     __atomic_store_n(&ncclCudaDriverVersionCache, version, __ATOMIC_RELAXED);
   }
+#endif
   *driver = version;
   return ncclSuccess;
 }

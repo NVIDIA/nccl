@@ -16,20 +16,29 @@
 
 typedef char ncclNetHandle_t[NCCL_NET_HANDLE_MAXSIZE];
 
-ncclResult_t ncclNetInit(struct ncclComm* comm);
-ncclResult_t ncclNetInitFromParent(struct ncclComm* comm, struct ncclComm* parent);
-ncclResult_t ncclNetFinalize(struct ncclComm* comm);
-ncclResult_t ncclNetGetDevCount(int netPluginIndex, int* nPhysDev, int* nVirtDev);
+ncclResult_t ncclNetInit(struct ncclComm *comm);
+ncclResult_t ncclNetInitFromParent(struct ncclComm *comm, struct ncclComm *parent);
+ncclResult_t ncclNetFinalize(struct ncclComm *comm);
+ncclResult_t ncclNetGetDevCount(int netPluginIndex, int *nPhysDev, int *nVirtDev);
 ncclResult_t ncclNetSetVirtDevCount(int netPluginIndex, int nVirtDev);
-ncclResult_t ncclCollNetGetDevCount(int netPluginIndex, int* nPhysDev, int* nVirtDev);
+ncclResult_t ncclCollNetGetDevCount(int netPluginIndex, int *nPhysDev, int *nVirtDev);
 ncclResult_t ncclCollNetSetVirtDevCount(int netPluginIndex, int nVirtDev);
 
 // Test whether the current GPU support GPU Direct RDMA.
-ncclResult_t ncclGpuGdrSupport(struct ncclComm* comm, int* gdrSupport);
+ncclResult_t ncclGpuGdrSupport(struct ncclComm *comm, int *gdrSupport);
 
+// Platform-specific internal network plugins
+#ifdef _WIN32
+// Windows: Socket plugin for multi-node/multi-GPU operation
+extern ncclNet_t ncclNetSocket;
+// Windows: Loopback plugin for fallback single-node operation
+extern ncclNet_t ncclNetLoopback;
+#else
+// Linux: InfiniBand, Sockets, and GIN plugins
 extern ncclNet_t ncclNetIb;
 extern ncclNet_t ncclNetSocket;
 extern ncclGin_t ncclGinIbGdaki;
 extern ncclGin_t ncclGinIbProxy;
+#endif
 
 #endif

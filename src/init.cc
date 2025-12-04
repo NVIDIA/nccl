@@ -709,9 +709,15 @@ static ncclResult_t fillInfo(struct ncclComm *comm, struct ncclPeerInfo *info, u
   // Get the device MAJOR:MINOR of /dev/shm so we can use that
   // information to decide whether we can use SHM for inter-process
   // communication in a container environment
+#ifndef _WIN32
   struct stat statbuf;
   SYSCHECK(stat("/dev/shm", &statbuf), "stat");
   info->shmDev = statbuf.st_dev;
+#else
+  // Windows doesn't have /dev/shm - use a placeholder value
+  // SHM transport is not supported on Windows anyway
+  info->shmDev = 0;
+#endif
 
   info->busId = comm->busId;
 

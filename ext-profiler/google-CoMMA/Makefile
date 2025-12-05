@@ -3,7 +3,7 @@
 all: build-CoMMA
 
 build-CoMMA: clone-CoMMA
-	cd CoMMA && cargo build
+	cd CoMMA && cargo build --release
 
 clone-CoMMA:
 	@if [ ! -d CoMMA ] ; then \

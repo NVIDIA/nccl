@@ -39,7 +39,8 @@ enum ncclSocketState {
   ncclSocketStateTerminating = 8,
   ncclSocketStateClosed = 9,
   ncclSocketStateError = 10,
-  ncclSocketStateNum = 11
+  ncclSocketStateInvalidMagic = 11,
+  ncclSocketStateNum = 12
 };
 
 enum ncclSocketType {

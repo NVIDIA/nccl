@@ -17,6 +17,8 @@
 #include "p2p.h"
 #include "collectives.h"
 
+#include "meta/colltrace/ProxyTrace.h"
+
 typedef enum : uint8_t {
   ncclPatternRing,
   ncclPatternRingTwice,
@@ -103,6 +105,9 @@ struct ncclProxyOp {
   uint64_t workCounter;
 
   struct ncclProxyOp *enqNext;
+
+  // NCCLX - ProxyTrace
+  struct ProxyTraceArgs traceArgs;
 };
 
 struct ncclProxySubArgs;
@@ -155,6 +160,9 @@ struct ncclProxySubArgs {
 
   void* recvRequestsCache[NCCL_STEPS];
   int recvRequestsSubCount;
+
+  // NCCLX - ProxyTrace
+  struct ProxyTraceArgs traceArgs;
 };
 
 struct ncclProxyArgs {
@@ -343,6 +351,12 @@ struct ncclProxyState {
 
   // Queue of expected responses from the proxy
   struct ncclExpectedProxyResponse* expectedResponses;
+
+  // reference back to communicator used for logging purpose
+  ncclComm* owner{nullptr};
+
+  // NCCLX - ProxyTrace
+  std::shared_ptr<ProxyTrace> trace{nullptr};
 };
 
 enum proxyConnectState {
@@ -367,6 +381,9 @@ struct ncclProxyConnection {
   proxyConnectState state;
   struct ncclCollNetSharedRes* collNet;
   int needsProxyProgress;
+  int channelId;
+  int connIndex;
+  int peerRank;
 };
 
 typedef ncclResult_t (*threadFunc_t)(struct ncclProxyArgs*);

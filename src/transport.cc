@@ -11,6 +11,8 @@
 #include "timer.h"
 #include "transport.h"
 
+#include "meta/logger/EventsScubaUtil.h"
+
 struct ncclTransport* ncclTransports[NTRANSPORTS+1] = {
   &p2pTransport,
   &shmTransport,
@@ -101,6 +103,8 @@ ncclResult_t ncclTransportCheckP2pType(struct ncclComm* comm, bool* isAllDirectP
 }
 
 ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, int connIndex) {
+  auto sampleGuardBegin = EVENTS_SCUBA_UTIL_SAMPLE_GUARD("INIT");
+  sampleGuardBegin.sample().setCommunicatorMetadata(comm? &comm->logMetaData: nullptr);
   // Stream used during transport setup; need for P2P pre-connect + CUDA Graph
   ncclResult_t ret = ncclSuccess;
   struct ncclConnect** data; // Store intermediate send/recvData structs for connect

@@ -15,6 +15,8 @@
 #include "param.h"
 #include "ras.h"
 
+#include "meta/logger/EventsScubaUtil.h"
+
 #define BOOTSTRAP_N_CHECK_ABORT           10000
 #define BOOTSTRAP_TAG_CONNECT             (0x1 << 31)
 #define BOOTSTRAP_TAG_ALLGATHER           (0x1 << 30)
@@ -279,6 +281,11 @@ static void* bootstrapRoot(void* rargs) {
   struct extInfo info;
   union ringConnectInfo* rankInfo = NULL;
   union ncclSocketAddress* rankAddressesRoot = NULL; // for initial rank <-> root information exchange
+  auto DUMMY_HASH = 0xfaceb00c12345678; // Dummy placeholder value for commHash
+  auto noCommLogMetaData = CommLogData{0,  DUMMY_HASH, "", 0, nranks};
+  auto sampleGuardBegin = EVENTS_SCUBA_UTIL_SAMPLE_GUARD("INIT");
+  sampleGuardBegin.sample().setCommunicatorMetadata(&noCommLogMetaData);
+
   // get zeros for comparison
   char zeroHandle[NCCL_NET_HANDLE_MAXSIZE];
   union ncclSocketAddress zeroAddress;
@@ -375,6 +382,7 @@ out:
 }
 
 ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFromEnv) {
+  auto sampleGuardBegin = EVENTS_SCUBA_UTIL_SAMPLE_GUARD("INIT");
   ncclResult_t ret = ncclSuccess;
   struct ncclSocket* listenSock = NULL;
   struct bootstrapRootArgs* args = NULL;
@@ -463,6 +471,8 @@ struct bootstrapState {
   int nranks;
   uint64_t magic;
   volatile uint32_t* abortFlag;
+  // Reference to CommLogData to object to facilicate logging
+  struct CommLogData *logMetaDataPtr{nullptr};
 };
 #define STATE_RING(s, f) (s->ring.f)
 #define STATE_LISTEN(s, f) (s->listen.f)
@@ -620,6 +630,8 @@ NCCL_PARAM(StaggerThreshold, "UID_STAGGER_THRESHOLD", 256);
 NCCL_PARAM(RasEnable, "RAS_ENABLE", 1);
 
 ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm) {
+  auto sampleGuardBegin = EVENTS_SCUBA_UTIL_SAMPLE_GUARD("INIT");
+  sampleGuardBegin.sample().setCommunicatorMetadata(comm? &comm->logMetaData: nullptr);
   ncclResult_t result = ncclSuccess;
   int rank = comm->rank;
   int nranks = comm->nRanks;
@@ -640,6 +652,7 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm) {
   state->cudaDev = comm->cudaDev;
   state->abortFlag = comm->abortFlag;
   state->net = comm->ncclNet;
+  state->logMetaDataPtr = &comm->logMetaData;
   comm->bootstrap = state;
   comm->magic = state->magic = BOOTSTRAP_HANDLE(handles, 0)->magic; // state and comm magic set to the first magic ID
 
@@ -778,6 +791,8 @@ fail:
 }
 
 ncclResult_t bootstrapSplit(uint64_t magic, struct ncclComm* comm, struct ncclComm* parent, int color, int key, int* parentRanks) {
+  auto sampleGuardBegin = EVENTS_SCUBA_UTIL_SAMPLE_GUARD("INIT");
+  sampleGuardBegin.sample().setCommunicatorMetadata(comm? &comm->logMetaData: nullptr);
   ncclResult_t ret = ncclSuccess;
   int rank = comm->rank;
   int nranks = comm->nRanks;
@@ -1042,6 +1057,8 @@ ncclResult_t bootstrapAllGather(void* commState, void* allData, int size) {
   struct bootstrapState* state = (struct bootstrapState*)commState;
   int rank = state->rank;
   int nranks = state->nranks;
+  auto sampleGuardBegin = EVENTS_SCUBA_UTIL_SAMPLE_GUARD("INIT");
+  sampleGuardBegin.sample().setCommunicatorMetadata(state->logMetaDataPtr);
 
   TRACE(NCCL_BOOTSTRAP, "rank %d nranks %d size %d - AllGather", rank, nranks, size);
 
@@ -1098,6 +1115,9 @@ ncclResult_t bootstrapBarrier(void* commState, int rank, int nranks, int tag) {
 ncclResult_t bootstrapIntraNodeAllGather(void* commState, int* ranks, int rank, int nranks, void* allData, int size) {
   if (nranks == 1) return ncclSuccess;
   TRACE(NCCL_INIT, "rank %d nranks %d size %d - ENTER", rank, nranks, size);
+  struct bootstrapState* state = (struct bootstrapState*)commState;
+  auto sampleGuardBegin = EVENTS_SCUBA_UTIL_SAMPLE_GUARD("INIT");
+  sampleGuardBegin.sample().setCommunicatorMetadata(state->logMetaDataPtr);
 
   int prevRank = ranks[(rank - 1 + nranks) % nranks];
   int nextRank = ranks[(rank + 1) % nranks];
@@ -1179,6 +1199,9 @@ ncclResult_t bootstrapAbort(void* commState) {
   if (commState == NULL)
     return ncclSuccess;
   struct bootstrapState* state = (struct bootstrapState*)commState;
+  auto sampleGuardBegin = EVENTS_SCUBA_UTIL_SAMPLE_GUARD("TERMINATE");
+  sampleGuardBegin.sample().setCommunicatorMetadata(state->logMetaDataPtr);  
+
   // when aborting we need to close the proxy here (maybe?)
   free(state->peerProxyAddresses);
   free(state->peerProxyAddressesUDS);

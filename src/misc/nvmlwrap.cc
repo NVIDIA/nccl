@@ -12,6 +12,8 @@
 #include <memory>
 #include <mutex>
 
+#include "meta/logger/EventsScubaUtil.h"
+
 int ncclNvmlDeviceCount = 0;
 ncclNvmlDeviceInfo ncclNvmlDevices[ncclNvmlMaxDevices];
 ncclNvmlDevicePairInfo ncclNvmlDevicePairs[ncclNvmlMaxDevices][ncclNvmlMaxDevices];
@@ -66,6 +68,7 @@ ncclResult_t ncclNvmlEnsureInitialized() {
 
   if (initialized) return initResult;
   initialized = true;
+  auto sampleGuardBegin = EVENTS_SCUBA_UTIL_SAMPLE_GUARD("INIT");
 
   #if !NCCL_NVML_DIRECT
   if (pfn_nvmlInit == nullptr) {

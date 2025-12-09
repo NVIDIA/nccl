@@ -4,11 +4,16 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
-#include "alloc.h"
 #include "collectives.h"
 #include "common_kernel.h"
 #include "common.h"
+#include "checks.h"
 #include <cuda_runtime.h>
+
+template<typename T>
+constexpr size_t ncclSizeOfT() { return sizeof(T); }
+template<>
+constexpr size_t ncclSizeOfT<void>() { return 1; }
 
 namespace {
   template<typename RedOp>
@@ -43,6 +48,17 @@ namespace {
     reduceCopy<COLL_UNROLL, RedOp, T, 0,1,1, 0,1,1, /*PreOpSrcs=*/1>
       (tid, tn, redOpArg, &redOpArg, true, 1, &src, 1, &dst, i1-i0);
   }
+}
+
+template <typename T>
+ncclResult_t ncclCudaMemcpyAsync(T* dst, T* src, size_t nelem, cudaStream_t stream) {
+  ncclResult_t result = ncclSuccess;
+  cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
+  CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
+  CUDACHECKGOTO(cudaMemcpyAsync(dst, src, nelem*ncclSizeOfT<T>(), cudaMemcpyDefault, stream), result, finish);
+finish:
+  CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
+  return result;
 }
 
 ncclResult_t ncclLaunchOneRank(void* dst, void const* src, size_t nElts, struct ncclDevRedOpFull redOp, ncclDataType_t eltType, cudaStream_t stream) {

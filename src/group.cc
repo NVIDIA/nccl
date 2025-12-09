@@ -11,6 +11,7 @@
 #include "channel.h"
 #include <assert.h>
 #include "bootstrap.h"
+#include "meta/logger/EventsScubaUtil.h"
 
 #define GROUP_MAX_RECLAIM_STEPS 10
 
@@ -28,6 +29,7 @@ ncclResult_t ncclAsyncLaunch(
     void(*undo)(struct ncclAsyncJob*),
     void(*destructor)(void*), ncclComm_t comm
   ) {
+  auto sampleGuardBegin = EVENTS_SCUBA_UTIL_SAMPLE_GUARD("INIT");
   ncclResult_t ret = ncclSuccess;
 
   job->destroyFlag = comm->destroyFlag;
@@ -128,7 +130,10 @@ ncclResult_t ncclP2PPreconnectFunc(struct ncclAsyncJob* job_) {
   struct ncclComm* comm = job->comm;
   CUDACHECK(cudaSetDevice(comm->cudaDev));
   if (CPU_COUNT(&comm->cpuAffinity)) sched_setaffinity(0, sizeof(cpu_set_t), &comm->cpuAffinity);
+  NcclScubaEvent initEvent(&comm->logMetaData);
+  initEvent.lapAndRecord("p2pPreconnectFunc START");  
   NCCLCHECK(ncclTransportP2pSetup(comm, NULL, 1));
+  initEvent.lapAndRecord("p2pPreconnectFunc COMPLETE");
   return ncclSuccess;
 }
 
@@ -141,6 +146,9 @@ ncclResult_t ncclCollPreconnectFunc(struct ncclAsyncJob* job_) {
   if (CPU_COUNT(&comm->cpuAffinity)) sched_setaffinity(0, sizeof(cpu_set_t), &comm->cpuAffinity);
   for (int i = 0; i < NCCL_NUM_ALGORITHMS; ++i) {
     if (job->algoNeedConnect[i]) {
+      NcclScubaEvent initEvent(&job->comm->logMetaData);
+      const auto collpreStage = std::string("CollPreconnectFunc ") + std::string(ncclAlgoToString(i));
+      initEvent.lapAndRecord(collpreStage + " START");      
       switch (i) {
         case NCCL_ALGO_RING: {
           NCCLCHECKGOTO(ncclTransportRingConnect(comm), ret, fail);
@@ -179,6 +187,7 @@ ncclResult_t ncclCollPreconnectFunc(struct ncclAsyncJob* job_) {
           goto fail;
         }
       }
+      initEvent.lapAndRecord(collpreStage + " COMPLETE");
     }
   }
 

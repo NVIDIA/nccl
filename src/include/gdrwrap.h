@@ -8,6 +8,7 @@
 #define NCCL_GDRWRAP_H_
 
 #include "nccl.h"
+#include "comm.h"
 #include "alloc.h"
 #include <stdint.h> // for standard [u]intX_t types
 #include <stdio.h>
@@ -188,7 +189,7 @@ error:
 }
 
 template <typename T>
-static ncclResult_t ncclGdrCudaCalloc(T** ptr, T** devPtr, size_t nelem, void** gdrHandle) {
+static ncclResult_t ncclGdrCudaCalloc(T** ptr, T** devPtr, size_t nelem, void** gdrHandle, struct ncclComm* comm) {
   gdr_info_t info;
   size_t mapSize;
   gdr_mh_t mh;
@@ -200,6 +201,7 @@ static ncclResult_t ncclGdrCudaCalloc(T** ptr, T** devPtr, size_t nelem, void** 
   // GDRCOPY Pinned buffer has to be a minimum of a GPU_PAGE_SIZE
   ALIGN_SIZE(mapSize, GPU_PAGE_SIZE);
   // GDRCOPY Pinned buffer has to be GPU_PAGE_SIZE aligned too
+  memLogMetaData = comm->logMetaData;
   NCCLCHECK(ncclCudaCalloc(&devMem, mapSize+GPU_PAGE_SIZE-1));
   uint64_t alignedAddr = (((uint64_t) devMem) + GPU_PAGE_OFFSET) & GPU_PAGE_MASK;
   size_t align = alignedAddr - (uint64_t)devMem;

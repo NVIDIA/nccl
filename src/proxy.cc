@@ -20,6 +20,9 @@
 #include <sys/time.h>
 #include <sched.h>
 
+#include "meta/colltrace/ProxyTraceFunc.h"
+#include "meta/logger/EventsScubaUtil.h"
+
 #define NCCL_MAX_PROXY_CONNECTIONS (NCCL_MAX_LOCAL_RANKS+1)
 
 enum { proxyRecv=0, proxySend=1 };
@@ -360,6 +363,8 @@ static ncclResult_t ncclProxyOpToArgs(struct ncclProxyOp* op, struct ncclProxyAr
     WARN("Proxy append out of bounds");
     return ncclInternalError;
   }
+  PROXY_TRACE_OP_TO_SUBARGS(sub, op);
+
   //memset(sub, 0, sizeof(struct ncclProxySubArgs));
   sub->connection = op->connection;
   sub->channelId = op->channelId;
@@ -750,6 +755,15 @@ static ncclResult_t progressOps(struct ncclProxyState* proxyState, struct ncclPr
     ncclResult_t ret = op->progress(proxyState, op);
     if (op->idle) { TIME_STOP(1); TIME_CANCEL(0); } else { TIME_CANCEL(1); TIME_STOP(0); }
     *idle &= op->idle;
+    // NCCLX fix: Previously NCCL was not setting async error properly based on
+    // op->progress, add a hack to set it here. Not propagating the error to
+    // ncclProxyProgress as that will cause segfault during scheduling. That is
+    // likely another bug with NCCL, so added it here to make the minimal
+    // change needed.
+    if (ret != ncclSuccess) {
+      __atomic_store_n(&proxyState->asyncResult, ret, __ATOMIC_RELEASE);
+      WARN("%s:%d -> %d [Progress Thread]", __FILE__, __LINE__, ret);
+    }
     if (op->state == ncclProxyOpNone || ret != ncclSuccess) {
       TIME_START(2);
       NCCLCHECK(removeOp(state, &op, &prevOp));
@@ -1800,13 +1814,15 @@ void* ncclProxyServiceUDS(void* _args) {
 }
 
 ncclResult_t ncclProxyInit(struct ncclComm* comm, struct ncclSocket* sock, union ncclSocketAddress* peerAddresses, uint64_t *peerAddressesUDS) {
-  assert(comm->sharedRes->proxyState == NULL);
+  auto sampleGuardBegin = EVENTS_SCUBA_UTIL_SAMPLE_GUARD("INIT");
+  sampleGuardBegin.sample().setCommunicatorMetadata(comm? &comm->logMetaData: nullptr);  assert(comm->sharedRes->proxyState == NULL);
   NCCLCHECK(ncclCalloc(&comm->sharedRes->proxyState, 1));
   comm->proxyState = comm->sharedRes->proxyState;
   comm->proxyState->refCount = 1;
   comm->proxyState->listenSock = sock;
   comm->proxyState->peerAddresses = peerAddresses;
   comm->proxyState->peerAddressesUDS = peerAddressesUDS;
+  NCCLCHECK(ncclx::colltrace::proxyTraceInit(comm->proxyState, comm));
 
   // UDS support
   NCCLCHECK(ncclIpcSocketInit(&comm->proxyState->ipcSock, comm->rank, peerAddressesUDS[comm->rank], comm->abortFlag));
@@ -1814,7 +1830,8 @@ ncclResult_t ncclProxyInit(struct ncclComm* comm, struct ncclSocket* sock, union
 }
 
 ncclResult_t ncclProxyCreate(struct ncclComm* comm) {
-  /* proxyState is shared among parent comm and split comms. comm->proxyState->thread is
+  auto sampleGuardBegin = EVENTS_SCUBA_UTIL_SAMPLE_GUARD("INIT");
+  sampleGuardBegin.sample().setCommunicatorMetadata(comm? &comm->logMetaData: nullptr);  /* proxyState is shared among parent comm and split comms. comm->proxyState->thread is
    * pthread_join()'d by commFree() in init.cc when the refCount reduces down to 0. */
   struct ncclProxyState* proxyState = comm->proxyState;
   if (proxyState->refCount == 1) {
@@ -1843,10 +1860,13 @@ ncclResult_t ncclProxyCreate(struct ncclComm* comm) {
     PTHREADCHECK(pthread_create(&comm->proxyState->threadUDS, NULL, ncclProxyServiceUDS, comm->proxyState), "pthread_create");
     ncclSetThreadName(comm->proxyState->threadUDS, "NCCL UDS Service %2d", comm->cudaDev);
   }
+  proxyState->owner = comm;
   return ncclSuccess;
 }
 
 ncclResult_t ncclProxyStop(struct ncclComm* comm) {
+  auto sampleGuardBegin = EVENTS_SCUBA_UTIL_SAMPLE_GUARD("TERMINATE");
+  sampleGuardBegin.sample().setCommunicatorMetadata(comm? &comm->logMetaData: nullptr);
   if (comm->proxyState) {
     struct ncclProxyState* sharedProxyState = comm->proxyState;
 
@@ -1891,7 +1911,10 @@ ncclResult_t ncclProxyStop(struct ncclComm* comm) {
 }
 
 ncclResult_t ncclProxyDestroy(struct ncclComm* comm) {
+  auto sampleGuardBegin = EVENTS_SCUBA_UTIL_SAMPLE_GUARD("TERMINATE");
+  sampleGuardBegin.sample().setCommunicatorMetadata(comm? &comm->logMetaData: nullptr);
   struct ncclProxyState* sharedProxyState = comm->sharedRes->proxyState;
+  NCCLCHECK(ncclx::colltrace::proxyTraceDestroy(sharedProxyState));
 
   if (sharedProxyState) {
     assert(sharedProxyState->refCount == 0);

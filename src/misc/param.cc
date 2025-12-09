@@ -16,6 +16,39 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <pwd.h>
+#include <mutex>
+#include <folly/init/Init.h>
+#include <folly/logging/Init.h>
+#include <folly/logging/xlog.h>
+#include <folly/Singleton.h>
+#include <folly/synchronization/HazptrThreadPoolExecutor.h>
+
+std::once_flag initOnceFlag;
+
+// From meta/logger
+extern void initLogger();
+extern void ncclCvarInit();
+
+//using namespace meta::comms::colltrace;
+
+void initFolly() {
+  // Adapted from folly/init/Init.cpp
+  // We can't use folly::init directly because:
+  // - we don't have gflags
+  // - xlformers already initialized the signal handler
+
+  // Move from the registration phase to the "you can actually instantiate
+  // things now" phase.
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  auto const follyLoggingEnv = std::getenv(folly::kLoggingEnvVarName);
+  auto const follyLoggingEnvOr = follyLoggingEnv ? follyLoggingEnv : "";
+  folly::initLoggingOrDie(follyLoggingEnvOr);
+
+  // Set the default hazard pointer domain to use a thread pool executor
+  // for asynchronous reclamation
+  folly::enable_hazptr_thread_pool_executor();
+}
 
 const char* userHomeDir() {
   struct passwd *pwUser = getpwuid(getuid());
@@ -67,8 +100,12 @@ static void initEnvFunc() {
 }
 
 void initEnv() {
-  static pthread_once_t once = PTHREAD_ONCE_INIT;
-  pthread_once(&once, initEnvFunc);
+  std::call_once(initOnceFlag, [] {
+    initFolly();
+    initEnvFunc();
+    ncclCvarInit();
+    initLogger();
+  });
 }
 
 void ncclLoadParam(char const* env, int64_t deftVal, int64_t uninitialized, int64_t* cache) {

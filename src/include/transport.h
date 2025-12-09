@@ -24,6 +24,8 @@
 #include "comm.h"
 #include "bootstrap.h"
 
+constexpr auto kMaxHostNameLen = 127; // Extra byte for NUL
+
 extern struct ncclTransport p2pTransport;
 extern struct ncclTransport shmTransport;
 extern struct ncclTransport netTransport;
@@ -52,9 +54,10 @@ struct ncclPeerInfo {
   nvmlGpuFabricInfoV_t fabricInfo;
   int cuMemSupport;
   int version;
+  char hostname[kMaxHostNameLen+1];
 };
 
-#define CONNECT_SIZE 256
+#define CONNECT_SIZE 288
 #define NCCL_MAX_PAGE_SIZE (512L * 1024L * 1024L)
 #define NCCL_REC_PAGE_SIZE (2L * 1024L * 1024L)
 struct ncclConnect {

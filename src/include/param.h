@@ -27,4 +27,6 @@ void ncclLoadParam(char const* env, int64_t deftVal, int64_t uninitialized, int6
     return cache; \
   }
 
+void initNcclLogger();
+
 #endif

@@ -18,6 +18,10 @@
 #include "graph.h"
 #include "profiler.h"
 #include "allocator.h"
+#include "utils.h"
+
+#include "meta/logger/EventMgrHelperTypes.h"
+class CollTrace;
 
 #if CUDART_VERSION < 9000
 struct cudaLaunchParams {
@@ -639,6 +643,9 @@ struct ncclComm {
   size_t symAllocHead;
   CUmemGenericAllocationHandle symMCHandle;
   struct ncclIntruQueue<struct ncclSymRegTask, &ncclSymRegTask::next> symRegTaskQueue;
+
+  struct CommLogData logMetaData;
+  std::shared_ptr<CollTrace> collTrace;  
   uint64_t endMagic;
 };
 

@@ -29,13 +29,22 @@ extern "C" {
 #endif
 
 #include <limits.h>
-/* Opaque handle to communicator */
+#include <stdint.h>
+#define NCCL_COMM_DESCRIPTION // used for nccl-pg to set it https://fburl.com/code/th293cmh/* Opaque handle to communicator */
+#define NCCL_COMM_SPLIT_GROUP_RANKS_SUPPORTED
+#define NCCL_COMM_ALGO_CONTROL_SUPPORTED
+#define NCCL_COMM_GET_UNIQUE_HASH
 typedef struct ncclComm* ncclComm_t;
 typedef struct ncclWindow* ncclWindow_t;
 #define NCCL_COMM_NULL NULL
+extern ncclComm_t ncclCommWorld;
+#define NCCL_COMM_WORLD ncclCommWorld
 
 #define NCCL_UNIQUE_ID_BYTES 128
-typedef struct { char internal[NCCL_UNIQUE_ID_BYTES]; } ncclUniqueId;
+typedef struct ncclUniqueId { char internal[NCCL_UNIQUE_ID_BYTES] = {0};} ncclUniqueId;
+
+#define NCCL_RMA_SUPPORTED
+typedef struct ncclWin* ncclWin_t;
 
 /* Error type */
 typedef enum { ncclSuccess                 =  0,
@@ -85,6 +94,24 @@ typedef struct ncclConfig_v22700 {
   int CTAPolicy;
   int shrinkShare;
   int nvlsCTAs;
+
+  /*
+   * [NCCLX] Attributes following here are specific to NCCLX
+   */
+
+  // communicator process group information.
+  const char* commDesc;
+
+  // commSplit group ranks information
+  int* splitGroupRanks;
+  int splitGroupSize;
+
+  // control allgather algo at comm level
+  const char* ncclAllGatherAlgo{nullptr};
+
+  // control the lazy connect features
+  int lazyConnect{NCCL_CONFIG_UNDEF_INT};
+  int lazySetupChannels{NCCL_CONFIG_UNDEF_INT};  
 } ncclConfig_t;
 
 /* Config initializer must be assigned to initialize config structure when it is created.
@@ -105,6 +132,12 @@ typedef struct ncclConfig_v22700 {
   NCCL_CONFIG_UNDEF_INT,                    /* CTAPolicy */             \
   NCCL_CONFIG_UNDEF_INT,                    /* shrinkShare */           \
   NCCL_CONFIG_UNDEF_INT,                    /* nvlsCTAs */              \
+  NCCL_CONFIG_UNDEF_PTR,                    /* commDesc */              \
+  NCCL_CONFIG_UNDEF_PTR,                    /* splitGroupRanks */       \
+  NCCL_CONFIG_UNDEF_INT,                    /* splitGroupSize */        \
+  NCCL_CONFIG_UNDEF_PTR,                    /* ncclAllGatherAlgo */     \
+  NCCL_CONFIG_UNDEF_INT,                    /* lazyConnect */           \
+  NCCL_CONFIG_UNDEF_INT,                    /* lazySetupChannels */     \
 }
 
 /* This struct will be used by ncclGroupSimulateEnd() API to query information about simulation. */
@@ -273,6 +306,9 @@ typedef enum { ncclSum        = 0,
                 * maintain ABI compatibility. */
                ncclMaxRedOp   = 0x7fffffff>>(32-8*sizeof(ncclRedOp_dummy_t))
              } ncclRedOp_t;
+
+/* Comparison operation selector */
+typedef enum { ncclCmpEQ = 0, ncclCmpGE = 1, ncclCmpLE = 2, ncclNumCmpOps = 3} ncclCmpOp_t;
 
 /* Data types */
 typedef enum { ncclInt8       = 0, ncclChar       = 0,
@@ -511,8 +547,36 @@ ncclResult_t pncclGroupEnd();
 ncclResult_t  ncclGroupSimulateEnd(ncclSimInfo_t* simInfo);
 ncclResult_t pncclGroupSimulateEnd(ncclSimInfo_t* simInfo);
 
+/* Return the unique hash of the communicator.
+ * For all ranks in a given communicator, this hash will be the same.
+ */
+ncclResult_t  ncclCommGetUniqueHash(ncclComm_t comm, uint64_t* uniqueHash);
+ncclResult_t  pncclCommGetUniqueHash(ncclComm_t comm, uint64_t* uniqueHash);
+
+/*
+ * Return the description  of the communicator.
+ */
+ncclResult_t  ncclCommGetDesc(ncclComm_t comm, char* desc);
+ncclResult_t  pncclCommGetDesc(ncclComm_t comm, char* desc);
+
+
 #ifdef __cplusplus
 } // end extern "C"
+ 
+#define NCCL_COMM_DUMP
+#define NCCL_COMM_DUMP_ALL
+
+#include <unordered_map>
+#include <string>
+/* Dump NCCL current internal state for a given communicator in a key-value store format.
+ * define outside extern "C"{} to pass C++ template */
+ncclResult_t  ncclCommDump(ncclComm_t comm, std::unordered_map<std::string, std::string>& map);
+
+/* Dump NCCL current internal state for all the communicators.
+ * The returned map is in the format {commHash: {key: value}} where
+ * {key: value} is the result of ncclCommDump in the communicator with hash commHash.
+ */
+ncclResult_t ncclCommDumpAll(std::unordered_map<std::string, std::unordered_map<std::string, std::string>>& map);
 #endif
 
 #endif // end include guard

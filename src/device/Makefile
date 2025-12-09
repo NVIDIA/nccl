@@ -20,6 +20,9 @@ MANIFEST := $(OBJDIR)/manifest
 DEVGLUE_OBJ  := $(OBJDIR)/device_glue.o
 
 INCFLAGS  = -I. -I.. -I$(BUILDDIR)/include -I../include
+INCFLAGS  += -I../../
+INCFLAGS  += -I$(BASE_DIR)
+INCFLAGS  += -I$(CONDA_INCLUDE_DIR)
 NVCUFLAGS += $(INCFLAGS) --compiler-options "-fPIC -fvisibility=hidden"
 CXXFLAGS  += $(INCFLAGS)
 

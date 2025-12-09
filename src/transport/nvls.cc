@@ -268,6 +268,12 @@ static ncclResult_t nvlsAllocateMem(struct ncclComm* comm, const CUmemAccessDesc
   CUCHECKGOTO(cuMemMap((CUdeviceptr)*ucptr, ucsize, 0, *ucHandle, 0), ret, fail2);
   CUCHECKGOTO(cuMemSetAccess((CUdeviceptr)*ucptr, ucsize, desc, 1), ret, fail3);
   CUDACHECKGOTO(cudaMemset(*ucptr, 0, ucsize), ret, fail3);
+  logMemoryEvent(
+    comm->logMetaData,
+    "nvlsAllocateMem",
+    "cuMemCreate",
+    reinterpret_cast<uintptr_t>(*ucptr),
+    size);
 
   // intra-node barrier to mitigate the possible hang in cuMulticastBindMem during abort
   NCCLCHECKGOTO(bootstrapIntraNodeBarrier(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, comm->localRankToRank[0]), ret, fail3);

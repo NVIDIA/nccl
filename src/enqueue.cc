@@ -19,10 +19,15 @@
 #include <cinttypes> // PRIx64
 #include <cassert>
 
+#include "meta/colltrace/CollTraceFunc.h"
+#include "meta/colltrace/ProxyTraceFunc.h"
+#include "meta/logger/EventsScubaUtil.h"
+
 NCCL_PARAM(L1SharedMemoryCarveout, "L1_SHARED_MEMORY_CARVEOUT", 0);
 
 // Returns maximum kernel stack size of all CUDA kernels
 ncclResult_t ncclInitKernelsForDevice(int cudaArch, int maxSharedMem, size_t* maxStackSize) {
+  auto sampleGuardBegin = EVENTS_SCUBA_UTIL_SAMPLE_GUARD("INIT");
   ncclResult_t result = ncclSuccess;
 
   if (maxStackSize) *maxStackSize = 0;
@@ -87,6 +92,7 @@ static ncclResult_t addProxyOpIfNeeded(struct ncclComm* comm, struct ncclKernelP
   if (needed) {
     struct ncclProxyOp* q = ncclMemoryPoolAlloc<struct ncclProxyOp>(&comm->memPool_ncclProxyOp, &comm->memPermanent);
     *q = *op; // C++ struct assignment
+    ncclx::colltrace::proxyTraceInfoCopy(*q, comm);
     ncclIntruQueueEnqueue(&comm->planner.wipPlan.channels[op->channelId].proxyOpQueue, q);
   }
   return ncclSuccess;
@@ -599,6 +605,7 @@ static ncclResult_t scheduleCollTasksToPlan(
         proxyOp.incWorkCounter = true;
         addWorkBatchToPlan(comm, plan, c, workNode->workType, task->devFuncId, plan->workBytes);
         // Set pattern to profiler to add a proxy profiler for kernel events
+        ncclx::colltrace::proxyTraceAddBasicInfo(proxyOp, nChannels, proxyOp.task.coll->func);
         NCCLCHECK(addProxyOpIfNeeded(comm, plan, &proxyOp));
         NCCLCHECK(addProfilerProxyOpIfNeeded(comm, plan, &proxyOp));
       }
@@ -729,6 +736,7 @@ static ncclResult_t scheduleCollTasksToPlan(
         // Coverity reports "proxyOp->connection" as being possibly uninitialized.  It's hard to
         // determine if that's actually true but it's also not clear if that would be an issue.
         // coverity[uninit_use_in_call:FALSE]
+        ncclx::colltrace::proxyTraceAddBasicInfo(*proxyOp, nMaxChannels[kind], proxyOp->task.coll->func);
         NCCLCHECK(addProxyOpIfNeeded(comm, plan, proxyOp));
         NCCLCHECK(addProfilerProxyOpIfNeeded(comm, plan, proxyOp));
       }
@@ -950,6 +958,7 @@ static ncclResult_t addP2pToPlan(
     op->task.p2p = p2pTasks[dir];
     op->rank = comm->rank;
     op->eActivationMask = p2pTasks[dir] ? p2pTasks[dir]->eActivationMask : 0;
+    ncclx::colltrace::proxyTraceAddBasicInfo(*op, nChannels[dir], static_cast<ncclFunc_t>(op->coll));
     // The following are modified per channel part in addWorkToChannels():
     // op->buffer, op->nbytes, op->nsteps = ...;
   }
@@ -1548,6 +1557,9 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
     CU_LAUNCH_PARAM_END
   };
 
+  // CollTrace Injected code here
+  auto event = ncclx::colltrace::collTraceAquireEventBaseline(plan, launchStream);
+
   int driverVersion;
   NCCLCHECKGOTO(ncclCudaDriverVersion(&driverVersion), ret, do_return);
 
@@ -1620,11 +1632,15 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
     launchConfig.attrs = launchAttrs;
     launchConfig.numAttrs = attrs;
     launchConfig.hStream = launchStream;
+    ncclx::colltrace::collTraceRecordStartEvent(launchStream, event.get());
     CUCHECKGOTO(cuLaunchKernelEx(&launchConfig, fn, nullptr, extra), ret, do_return);
+    ncclx::colltrace::collTraceRecordEndEvent(comm, plan, launchStream, std::move(event));
   #endif
   } else {
     // Standard kernel launch
+    ncclx::colltrace::collTraceRecordStartEvent(launchStream, event.get());
     CUCHECKGOTO(cuLaunchKernel(fn, grid.x, grid.y, grid.z, block.x, block.y, block.z, smem, launchStream, nullptr, extra), ret, do_return);
+    ncclx::colltrace::collTraceRecordEndEvent(comm, plan, launchStream, std::move(event));
   }
 
 do_return:

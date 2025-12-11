@@ -242,14 +242,10 @@ static ncclResult_t socketInit(void **ctx, uint64_t commId, ncclNetCommConfig_v1
     (void)logFunction;
     (void)profFunction;
 
-    fprintf(stderr, "NET/Socket: socketInit called\n");
-    fflush(stderr);
 
     NCCLCHECK(findInterfaces());
     *ctx = NULL;
 
-    fprintf(stderr, "NET/Socket: socketInit completed, found %d interfaces\n", numSocketDevices);
-    fflush(stderr);
 
     return ncclSuccess;
 }
@@ -266,8 +262,6 @@ static ncclResult_t socketDevices_fn(int *ndev)
 
 static ncclResult_t socketGetProperties(int dev, ncclNetProperties_v11_t *props)
 {
-    fprintf(stderr, "NET/Socket: socketGetProperties called, dev=%d\n", dev);
-    fflush(stderr);
 
     if (dev < 0 || dev >= numSocketDevices || props == NULL)
         return ncclInvalidArgument;
@@ -298,8 +292,6 @@ static ncclResult_t socketListen(void *ctx, int dev, void *opaqueHandle, void **
     (void)ctx;
     static_assert(sizeof(struct ncclSocketHandle) <= NCCL_NET_HANDLE_MAXSIZE, "ncclSocketHandle size too large");
 
-    fprintf(stderr, "NET/Socket: socketListen called, dev=%d\n", dev);
-    fflush(stderr);
 
     if (dev < 0 || dev >= numSocketDevices)
         return ncclInvalidArgument;
@@ -380,8 +372,6 @@ static ncclResult_t socketListen(void *ctx, int dev, void *opaqueHandle, void **
 static ncclResult_t socketConnect(void *ctx, int dev, void *opaqueHandle, void **sendComm,
                                   ncclNetDeviceHandle_v11_t **sendDevComm)
 {
-    fprintf(stderr, "NET/Socket: socketConnect called dev=%d\n", dev);
-    fflush(stderr);
     (void)ctx;
     if (sendDevComm)
         *sendDevComm = NULL;
@@ -392,8 +382,6 @@ static ncclResult_t socketConnect(void *ctx, int dev, void *opaqueHandle, void *
     struct ncclSocketComm *comm = stage->comm;
 
     TRACE(NCCL_NET, "NET/Socket: socketConnect dev=%d stage->state=%d handle=%p", dev, stage->state, handle);
-    fprintf(stderr, "NET/Socket: socketConnect dev=%d stage->state=%d\n", dev, stage->state);
-    fflush(stderr);
 
     // Check if we're in the middle of connecting
     if (stage->state == ncclSocketCommStateConnect)
@@ -405,31 +393,23 @@ static ncclResult_t socketConnect(void *ctx, int dev, void *opaqueHandle, void *
         struct timeval tv = {0, 0};
 
         int result = select(0, NULL, &writefds, NULL, &tv);
-        fprintf(stderr, "NET/Socket: socketConnect polling result=%d\n", result);
-        fflush(stderr);
         if (result > 0)
         {
             // Check if connect succeeded
             int err = 0;
             int len = sizeof(err);
             getsockopt(stage->sock, SOL_SOCKET, SO_ERROR, (char *)&err, &len);
-            fprintf(stderr, "NET/Socket: socketConnect getsockopt err=%d\n", err);
-            fflush(stderr);
             if (err == 0)
             {
                 // Connect succeeded - keep socket non-blocking for async progress (isend/test pattern)
                 stage->state = ncclSocketCommStateReady;
                 *sendComm = comm;
                 INFO(NCCL_NET, "NET/Socket: Connected successfully");
-                fprintf(stderr, "NET/Socket: Connected successfully!\n");
-                fflush(stderr);
                 return ncclSuccess;
             }
             else
             {
                 WARN("NET/Socket: connect() failed with error: %d", err);
-                fprintf(stderr, "NET/Socket: connect() failed with error: %d\n", err);
-                fflush(stderr);
                 closesocket(stage->sock);
                 free(comm);
                 stage->comm = NULL;
@@ -440,15 +420,11 @@ static ncclResult_t socketConnect(void *ctx, int dev, void *opaqueHandle, void *
         else if (result == 0)
         {
             // Still connecting - return with NULL comm
-            fprintf(stderr, "NET/Socket: socketConnect still waiting\n");
-            fflush(stderr);
             return ncclSuccess;
         }
         else
         {
             WARN("NET/Socket: select() failed with error: %d", WSAGetLastError());
-            fprintf(stderr, "NET/Socket: select() failed with error: %d\n", WSAGetLastError());
-            fflush(stderr);
             closesocket(stage->sock);
             free(comm);
             stage->comm = NULL;
@@ -527,8 +503,6 @@ static ncclResult_t socketConnect(void *ctx, int dev, void *opaqueHandle, void *
 
 static ncclResult_t socketAccept(void *listenComm, void **recvComm, ncclNetDeviceHandle_v11_t **recvDevComm)
 {
-    fprintf(stderr, "NET/Socket: socketAccept called\n");
-    fflush(stderr);
     if (recvDevComm)
         *recvDevComm = NULL;
     *recvComm = NULL;
@@ -553,19 +527,13 @@ static ncclResult_t socketAccept(void *listenComm, void **recvComm, ncclNetDevic
         if (err == WSAEWOULDBLOCK)
         {
             // No connection yet - return with NULL comm
-            fprintf(stderr, "NET/Socket: socketAccept WSAEWOULDBLOCK, no connection yet\n");
-            fflush(stderr);
             return ncclSuccess;
         }
         WARN("NET/Socket: accept() failed with error: %d", err);
-        fprintf(stderr, "NET/Socket: accept() failed with error: %d\n", err);
-        fflush(stderr);
         return ncclSystemError;
     }
 
     // Got a connection!
-    fprintf(stderr, "NET/Socket: socketAccept got connection!\n");
-    fflush(stderr);
     comm = (struct ncclSocketComm *)calloc(1, sizeof(struct ncclSocketComm));
     if (!comm)
     {
@@ -624,8 +592,6 @@ static ncclResult_t socketIsend(void *sendComm, void *data, size_t size, int tag
     (void)mhandle;
     (void)phandle;
 
-    fprintf(stderr, "NET/Socket: socketIsend called size=%zu\n", size);
-    fflush(stderr);
 
     struct ncclSocketComm *comm = (struct ncclSocketComm *)sendComm;
 

@@ -149,8 +149,6 @@ __device__ __forceinline__ void loadWorkBatchToShmem(
 
   if (tid == 0 && blockIdx.x == 0)
   {
-    printf("[KERNEL] loadWorkBatchToShmem: workStorageType=%d, batchIx=%d\n",
-           (int)ncclShmem.args.workStorageType, batchIx);
   }
 
   while (true)
@@ -159,8 +157,6 @@ __device__ __forceinline__ void loadWorkBatchToShmem(
 
     if (tid == 0 && blockIdx.x == 0)
     {
-      printf("[KERNEL] loadWorkBatch: batch.offsetBase=%u, batch.offsetBitset=0x%llx, batch.workType=%d\n",
-             batch.offsetBase, (unsigned long long)batch.offsetBitset, batch.workType);
     }
 
     // fnsOfBitset[n] = index of n'th set bit in batch.offsetBitset.
@@ -254,8 +250,6 @@ __device__ __forceinline__ void loadWorkBatchToShmem(
         tmp = args4K->storage[storageIdx];
         if (blockIdx.x == 0 && tid < nPacks)
         {
-          printf("[KERNEL] tid=%d byteOffset=%d sizeof(nccl_ulong2_16)=%d storageIdx=%d tmp.x=0x%llx tmp.y=0x%llx\n",
-                 tid, byteOffset, (int)sizeof(nccl_ulong2_16), storageIdx, (unsigned long long)tmp.x, (unsigned long long)tmp.y);
         }
       }
       else
@@ -324,10 +318,6 @@ struct RunWorkBatch
   {
     int tid = threadIdx.x;
     int tn = blockDim.x;
-
-    if (tid == 0)
-      printf("[KERNEL] RunWorkBatch::run entry, nWorks=%d, workSize=%d\n", ncclShmem.nWorks, ncclShmem.workSize);
-
     if (RedOpArg<RedOp>::ArgUsed)
     {
       int nWorks = ncclShmem.nWorks;
@@ -346,8 +336,6 @@ struct RunWorkBatch
     for (int w = 0; w < ncclShmem.nWorks; w++)
     {
       struct ncclDevWorkColl *work = (struct ncclDevWorkColl *)(ncclShmem.workStorage + w * ncclShmem.workSize);
-      if (tid == 0)
-        printf("[KERNEL] RunWorkBatch::run loop w=%d, nWarps=%d\n", w, work->nWarps);
       if (w != 0)
       {
         struct ncclDevWorkColl *workPrev = (struct ncclDevWorkColl *)(ncclShmem.workStorage + (w - 1) * ncclShmem.workSize);
@@ -355,18 +343,12 @@ struct RunWorkBatch
           __syncthreads();
       }
       int subtn = work->nWarps * WARP_SIZE;
-      if (tid == 0)
-        printf("[KERNEL] RunWorkBatch::run: tid=%d, subtn=%d, about to call RunWorkColl\n", tid, subtn);
       // Coverity reports a possible thread divergence due to not all threads participating in the collective.
       // However, the code ensures that the participation is on a per-warp basis.
       // coverity[device_thread_diverged:FALSE]
       if (tid < subtn)
         RunWorkColl<Fn, T, RedOp, Algo, Proto>().run(tid, subtn, work);
-      if (tid == 0)
-        printf("[KERNEL] RunWorkBatch::run: RunWorkColl complete\n");
     }
-    if (tid == 0)
-      printf("[KERNEL] RunWorkBatch::run complete\n");
   }
 };
 
@@ -419,7 +401,6 @@ __device__ __forceinline__ void ncclKernelMain(struct ncclDevKernelArgs const *a
 
   if (tid == 0 && blockIdx.x == 0)
   {
-    printf("[KERNEL] ncclKernelMain entry, blockDim=%d\n", tn);
   }
 
   // Copy kernel args to shmem and then only read those. Otherwise the compiler

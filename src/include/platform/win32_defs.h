@@ -209,6 +209,16 @@ static inline int poll(struct pollfd *fds, unsigned long nfds, int timeout)
 #define HAVE_POLL 1
 #endif
 
+/*
+ * Socket validity macros for cross-platform compatibility
+ * On Windows, SOCKET is unsigned (UINT_PTR), so "fd >= 0" is always true.
+ * On Linux, socket fd is signed int, so "fd >= 0" works correctly.
+ * These macros provide portable invalid socket handling.
+ */
+#define NCCL_SOCKET_FD_INVALID INVALID_SOCKET
+#define NCCL_SOCKET_FD_IS_VALID(fd) ((fd) != INVALID_SOCKET)
+#define NCCL_SOCKET_FD_IS_INVALID(fd) ((fd) == INVALID_SOCKET)
+
 /* IPC related constants */
 #define IPC_PRIVATE 0
 #define IPC_CREAT 01000

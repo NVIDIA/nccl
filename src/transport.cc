@@ -24,6 +24,25 @@ static ncclResult_t selectTransport(struct ncclComm *comm, struct ncclTopoGraph 
 {
   struct ncclPeerInfo *myInfo = comm->peerInfo + comm->rank;
   struct ncclPeerInfo *peerInfo = comm->peerInfo + peer;
+
+
+  // Validate channel is initialized
+  if (comm->channels[channelId].id == -1)
+  {
+    fprintf(stderr, "ERROR: selectTransport channel %d not initialized!\n", channelId);
+    return ncclInternalError;
+  }
+  if (comm->channels[channelId].peers == NULL)
+  {
+    fprintf(stderr, "ERROR: selectTransport channel %d peers is NULL!\n", channelId);
+    return ncclInternalError;
+  }
+  if (comm->channels[channelId].peers[peer] == NULL)
+  {
+    fprintf(stderr, "ERROR: selectTransport channel %d peers[%d] is NULL!\n", channelId, peer);
+    return ncclInternalError;
+  }
+
   struct ncclConnector *connector = (type == 1) ? comm->channels[channelId].peers[peer]->send + connIndex : comm->channels[channelId].peers[peer]->recv + connIndex;
   for (int t = 0; t < NTRANSPORTS; t++)
   {
@@ -48,7 +67,11 @@ ncclResult_t ncclTransportP2pConnect(struct ncclComm *comm, int channelId, int n
 {
   TRACE(NCCL_INIT, "nsend %d nrecv %d", nsend, nrecv);
   struct ncclChannel *channel = &comm->channels[channelId];
-  uint64_t mask = 1UL << channel->id;
+  if (channel->id != channelId)
+  {
+    fprintf(stderr, "ERROR: P2pConnect channel id mismatch! channelId=%d channel->id=%d\n", channelId, channel->id);
+  }
+  uint64_t mask = 1ULL << channel->id;
   for (int i = 0; i < nrecv; i++)
   {
     int peer = peerRecv[i];
@@ -184,7 +207,7 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm *comm, struct ncclTopoGraph *
     TIME_START(0);
     for (int c = 0; c < MAXCHANNELS; c++)
     {
-      if (recvMask & (1UL << c))
+      if (recvMask & (1ULL << c))
       {
         NCCLCHECKGOTO(selectTransport<0>(comm, graph, recvData[p] + recvChannels++, c, recvPeer, connIndex, &type), ret, fail);
       }
@@ -194,7 +217,7 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm *comm, struct ncclTopoGraph *
     sendData[p] = recvData[p] + recvChannels;
     for (int c = 0; c < MAXCHANNELS; c++)
     {
-      if (sendMask & (1UL << c))
+      if (sendMask & (1ULL << c))
       {
         NCCLCHECKGOTO(selectTransport<1>(comm, graph, sendData[p] + sendChannels++, c, sendPeer, connIndex, &type), ret, fail);
       }
@@ -246,7 +269,7 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm *comm, struct ncclTopoGraph *
           for (int c = 0; c < MAXCHANNELS; c++)
           {
             TIME_START(3);
-            if (sendMask & (1UL << c))
+            if (sendMask & (1ULL << c))
             {
               struct ncclConnector *conn = comm->channels[c].peers[sendPeer]->send + connIndex;
               // This connector hasn't completed connection yet
@@ -270,7 +293,7 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm *comm, struct ncclTopoGraph *
 
             // Start with recv channels
             TIME_START(4);
-            if (recvMask & (1UL << c))
+            if (recvMask & (1ULL << c))
             {
               struct ncclConnector *conn = comm->channels[c].peers[recvPeer]->recv + connIndex;
               // This connector hasn't completed connection yet

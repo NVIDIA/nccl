@@ -25,7 +25,7 @@
 #include <assert.h>
 #include <algorithm>
 
-#define NCCL_MAX_PROXY_CONNECTIONS (NCCL_MAX_LOCAL_RANKS + 1)
+#define NCCL_MAX_PROXY_CONNECTIONS 257
 
 enum
 {
@@ -1566,7 +1566,9 @@ ncclResult_t ncclProxyCallAsync(struct ncclComm *comm, struct ncclProxyConnector
   struct ncclProxyState *sharedProxyState = comm->proxyState;
 
   if (sharedProxyState->peerSocks == NULL)
+  {
     return ncclInternalError;
+  }
 
   sock = sharedProxyState->peerSocks + proxyConn->tpLocalRank;
 
@@ -1609,9 +1611,10 @@ ncclResult_t ncclPollProxyResponse(struct ncclComm *comm, struct ncclProxyConnec
     struct ncclSocket *sock = sharedProxyState->peerSocks + proxyConn->tpLocalRank;
     ncclProxyRpcResponseHeader resp = {0};
     int offset = 0;
-    if (ncclSuccess != ncclSocketProgress(NCCL_SOCKET_RECV, sock, &resp, sizeof(resp), &offset))
+    ncclResult_t recvRes = ncclSocketProgress(NCCL_SOCKET_RECV, sock, &resp, sizeof(resp), &offset);
+    if (recvRes != ncclSuccess && recvRes != ncclInProgress)
     {
-      WARN("Socket recv failed while polling for opId=%p", opId);
+      WARN("Socket recv failed while polling for opId=%p res=%d", opId, recvRes);
       return ncclInternalError;
     }
 
@@ -1938,6 +1941,25 @@ fail:
 #include <poll.h>
 #endif
 
+#ifdef _WIN32
+// Windows socket poll compatibility
+// Windows uses WSAPoll which is similar to poll() but uses WSAPOLLFD
+#include <winsock2.h>
+#ifndef POLLHUP
+#define POLLHUP 0 // WSAPOLLFD doesn't have POLLHUP, ignore it
+#endif
+#ifndef POLLIN
+#define POLLIN POLLRDNORM
+#endif
+// Use WSAPOLLFD as the poll struct on Windows
+#define ncclPollfd WSAPOLLFD
+#define ncclPoll(fds, nfds, timeout) WSAPoll((fds), (ULONG)(nfds), (INT)(timeout))
+#else
+// Use standard pollfd on Linux
+#define ncclPollfd struct pollfd
+#define ncclPoll(fds, nfds, timeout) poll((fds), (nfds), (timeout))
+#endif
+
 static bool proxyMatchOpType(int type)
 {
   switch (type)
@@ -1967,10 +1989,14 @@ void *ncclProxyService(void *_args)
   struct ncclProxyState *proxyState = (struct ncclProxyState *)_args;
 
   // set the thread affinity before setting the cuda context
+#if NCCL_PLATFORM_LINUX
   pthread_once(&proxyCpusetOnce, proxyCpusetOnceFunc);
   if (CPU_COUNT(&proxyCpuset))
     sched_setaffinity(0, sizeof(cpu_set_t), &proxyCpuset);
   INFO(NCCL_INIT, "[Proxy Service] Device %d CPU core %d", proxyState->cudaDev, sched_getcpu());
+#else
+  INFO(NCCL_INIT, "[Proxy Service] Device %d", proxyState->cudaDev);
+#endif
 
   if (setProxyThreadContext(proxyState))
   {
@@ -1987,13 +2013,18 @@ void *ncclProxyService(void *_args)
   connectionPool.banks = 0;
   connectionPool.offset = NCCL_PROXY_CONN_POOL_SIZE;
 
-  struct pollfd pollfds[NCCL_MAX_PROXY_CONNECTIONS + 1]; // one extra for listenSock fd
+  ncclPollfd pollfds[NCCL_MAX_PROXY_CONNECTIONS + 1]; // one extra for listenSock fd
   struct ncclProxyLocalPeer peers[NCCL_MAX_PROXY_CONNECTIONS];
   memset(&peers, 0, sizeof(struct ncclProxyLocalPeer) * NCCL_MAX_PROXY_CONNECTIONS);
   for (int s = 0; s < NCCL_MAX_PROXY_CONNECTIONS; s++)
   {
-    pollfds[s].fd = -1;
+    pollfds[s].fd = NCCL_SOCKET_FD_INVALID;
+#ifdef _WIN32
+    // WSAPoll requires events=0 for entries to ignore (INVALID_SOCKET entries)
+    pollfds[s].events = 0;
+#else
     pollfds[s].events = POLLHUP | POLLIN;
+#endif
   }
   if (ncclSocketGetFd(proxyState->listenSock, &pollfds[NCCL_MAX_PROXY_CONNECTIONS].fd) != ncclSuccess)
   {
@@ -2018,7 +2049,18 @@ void *ncclProxyService(void *_args)
     do
     {
       // poll all fds including the listenSock
-      ret = poll(pollfds, NCCL_MAX_PROXY_CONNECTIONS + 1, asyncOpCount ? 0 : 500);
+      ret = ncclPoll(pollfds, NCCL_MAX_PROXY_CONNECTIONS + 1, asyncOpCount ? 0 : 500);
+#ifdef _WIN32
+      if (ret == SOCKET_ERROR)
+      {
+        int err = WSAGetLastError();
+        if (err != WSAEINTR)
+        {
+          break;
+        }
+        ret = -1; // treat as interrupted
+      }
+#endif
     } while (ret < 0 && errno == EINTR);
     if (ret < 0)
     {
@@ -2029,7 +2071,7 @@ void *ncclProxyService(void *_args)
     {
       // We got an event on the listenSock
       int s = 0;
-      while (s < NCCL_MAX_PROXY_CONNECTIONS && pollfds[s].fd >= 0)
+      while (s < NCCL_MAX_PROXY_CONNECTIONS && NCCL_SOCKET_FD_IS_VALID(pollfds[s].fd))
         s++;
       if (s == NCCL_MAX_PROXY_CONNECTIONS)
       {
@@ -2054,6 +2096,8 @@ void *ncclProxyService(void *_args)
           WARN("[Service thread] Get peers[%d].sock fd fails", s);
           return NULL;
         }
+        // Set events to poll for on this socket
+        pollfds[s].events = POLLIN;
         npeers++;
         peers[s].tpLocalRank = -1;
       }
@@ -2065,7 +2109,7 @@ void *ncclProxyService(void *_args)
       int closeConn = 0;
       int type = 0;
       ncclResult_t res = ncclSuccess;
-      if (pollfds[s].fd == -1)
+      if (NCCL_SOCKET_FD_IS_INVALID(pollfds[s].fd))
         continue;
 
       // Progress all ops for this ncclProxyLocalPeer
@@ -2153,7 +2197,8 @@ void *ncclProxyService(void *_args)
           asyncProxyOpDequeue(peer, op);
           asyncOpCount--;
         }
-        pollfds[s].fd = -1;
+        pollfds[s].fd = NCCL_SOCKET_FD_INVALID;
+        pollfds[s].events = 0; // Clear events for invalid socket
         npeers--;
       }
     }
@@ -2209,7 +2254,7 @@ static ncclResult_t proxyUDSRecvReq(struct ncclProxyState *proxyState, int reqFd
 void *ncclProxyServiceUDS(void *_args)
 {
   struct ncclProxyState *proxyState = (struct ncclProxyState *)_args;
-  struct pollfd pollfds[1];
+  ncclPollfd pollfds[1];
 
   // set the thread affinity before setting the cuda context
   pthread_once(&proxyCpusetOnce, proxyCpusetOnceFunc);
@@ -2239,7 +2284,7 @@ void *ncclProxyServiceUDS(void *_args)
     int ret;
     do
     {
-      ret = poll(pollfds, 1, 500);
+      ret = ncclPoll(pollfds, 1, 500);
     } while (ret < 0 && errno == EINTR);
     if (ret < 0)
     {

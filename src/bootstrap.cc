@@ -1011,6 +1011,7 @@ static ncclResult_t socketConnect(void *commState, int peer, int tag, struct ncc
   ncclResult_t ret = ncclSuccess;
   struct bootstrapState *state = (struct bootstrapState *)commState;
 
+
   struct socketAckInfo ack;
   ack.rank = state->rank;
   ack.tag = tag;
@@ -1106,11 +1107,14 @@ static ncclResult_t socketAccept(void *commState, int peer, int tag, struct nccl
   ncclResult_t ret = ncclSuccess;
   struct bootstrapState *state = (struct bootstrapState *)commState;
 
+
   // Search unexpected connections first
   int found;
   NCCLCHECK(unexpectedDequeue(state, peer, tag, sock, &found));
   if (found)
+  {
     return ncclSuccess;
+  }
 
   // Then look for new connections
   while (1)

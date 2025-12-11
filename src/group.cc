@@ -315,6 +315,7 @@ static ncclResult_t doLaunches(struct ncclComm *head)
   // This outer loop iterates over cliques of comms which are siblings of the
   // same global entity. We calculate a clique as all comms which have the same
   // `intraComm0` value.
+  int cliqueNum = 0;
   do
   {
     struct ncclComm *comm = cliqueHead;
@@ -325,7 +326,9 @@ static ncclResult_t doLaunches(struct ncclComm *head)
       CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), result, failure);
       NCCLCHECKGOTO(ncclLaunchPrepare(comm), result, failure);
       if (useBarrier)
+      {
         ncclCommIntraBarrierIn(comm, 1);
+      }
       comm = comm->groupNext[ncclGroupTaskTypeCollective];
     } while (comm != nullptr && comm->intraComm0 == cliqueHead->intraComm0);
     cliqueNextHead = comm;

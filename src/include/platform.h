@@ -474,6 +474,14 @@ typedef SOCKET ncclSocketHandle_t;
 typedef int ncclSocketHandle_t;
 #define NCCL_INVALID_SOCKET (-1)
 #define NCCL_SOCKET_ERROR (-1)
+/*
+ * Socket validity macros for cross-platform compatibility
+ * On Linux, socket fd is signed int, so these are straightforward.
+ * See win32_defs.h for Windows versions where SOCKET is unsigned.
+ */
+#define NCCL_SOCKET_FD_INVALID (-1)
+#define NCCL_SOCKET_FD_IS_VALID(fd) ((fd) >= 0)
+#define NCCL_SOCKET_FD_IS_INVALID(fd) ((fd) < 0)
 #endif
 
 /* Error code handling */

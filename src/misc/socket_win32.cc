@@ -420,14 +420,10 @@ static ncclResult_t socketFinalizeConnect(struct ncclSocket *sock)
     // Only transport sockets (NetSocket, NetIb, etc.) use the finalization handshake
     if (sock->type == ncclSocketTypeProxy || sock->type == ncclSocketTypeBootstrap)
     {
-        fprintf(stderr, "[socketFinalizeConnect] skipping finalization for type=%d\n", sock->type);
-        fflush(stderr);
         sock->state = ncclSocketStateReady;
         return ncclSuccess;
     }
 
-    fprintf(stderr, "[socketFinalizeConnect] type=%d asyncFlag=%d finalizeCounter=%d\n", sock->type, sock->asyncFlag, sock->finalizeCounter);
-    fflush(stderr);
 
     int sent;
     if (sock->asyncFlag == 0)
@@ -447,8 +443,6 @@ static ncclResult_t socketFinalizeConnect(struct ncclSocket *sock)
             int closed = 0;
             NCCLCHECK(socketProgressOpt(NCCL_SOCKET_SEND, sock, &sock->magic, sizeof(sock->magic), &sent, 0, &closed));
             sock->finalizeCounter = sent;
-            fprintf(stderr, "[socketFinalizeConnect] magic sent=%d\n", sent);
-            fflush(stderr);
             if (sent < sizeof(sock->magic))
                 return ncclSuccess; // Not ready yet
         }
@@ -456,8 +450,6 @@ static ncclResult_t socketFinalizeConnect(struct ncclSocket *sock)
         int closed = 0;
         NCCLCHECK(socketProgressOpt(NCCL_SOCKET_SEND, sock, &sock->type, sizeof(sock->type), &sent, 0, &closed));
         sock->finalizeCounter = sent + sizeof(sock->magic);
-        fprintf(stderr, "[socketFinalizeConnect] type sent=%d, state->Ready\n", sent);
-        fflush(stderr);
         if (sent < sizeof(sock->type))
             return ncclSuccess; // Not ready yet
     }
@@ -472,14 +464,10 @@ static ncclResult_t socketFinalizeAccept(struct ncclSocket *sock)
     // Proxy sockets don't use the magic/type handshake - they have their own message protocol
     if (sock->type == ncclSocketTypeProxy || sock->type == ncclSocketTypeBootstrap)
     {
-        fprintf(stderr, "[socketFinalizeAccept] skipping finalization for type=%d\n", sock->type);
-        fflush(stderr);
         sock->state = ncclSocketStateReady;
         return ncclSuccess;
     }
 
-    fprintf(stderr, "[socketFinalizeAccept] type=%d asyncFlag=%d finalizeCounter=%d\n", sock->type, sock->asyncFlag, sock->finalizeCounter);
-    fflush(stderr);
     {
         sock->state = ncclSocketStateReady;
         return ncclSuccess;

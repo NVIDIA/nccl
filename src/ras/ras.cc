@@ -776,18 +776,18 @@ ncclResult_t rasGetNewPollEntry(int *index)
 {
   int i;
   for (i = 0; i < nRasPfds; i++)
-    if (rasPfds[i].fd == -1)
+    if (NCCL_SOCKET_FD_IS_INVALID(rasPfds[i].fd))
       break;
   if (i == nRasPfds)
   {
     NCCLCHECK(ncclRealloc(&rasPfds, nRasPfds, nRasPfds + RAS_INCREMENT));
     nRasPfds += RAS_INCREMENT;
     for (int j = i; j < nRasPfds; j++)
-      rasPfds[j].fd = -1;
+      rasPfds[j].fd = NCCL_SOCKET_FD_INVALID;
   }
 
   memset(rasPfds + i, '\0', sizeof(*rasPfds));
-  rasPfds[i].fd = -1;
+  rasPfds[i].fd = NCCL_SOCKET_FD_INVALID;
 
   *index = i;
   return ncclSuccess;

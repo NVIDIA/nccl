@@ -21,13 +21,76 @@
 #include <cstring>   // std::memcpy
 #include <cinttypes> // PRIx64
 #include <cassert>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 NCCL_PARAM(L1SharedMemoryCarveout, "L1_SHARED_MEMORY_CARVEOUT", 0);
+
+// Windows: Use critical section to serialize kernel initialization
+// On Windows, concurrent cudaFuncGetAttributes calls from different threads can hang
+#ifdef _WIN32
+static CRITICAL_SECTION kernelInitLock;
+static INIT_ONCE kernelInitOnce = INIT_ONCE_STATIC_INIT;
+static volatile LONG kernelInitDone = 0;
+static BOOL CALLBACK initKernelLock(PINIT_ONCE initOnce, PVOID param, PVOID *context)
+{
+  InitializeCriticalSection(&kernelInitLock);
+  return TRUE;
+}
+#else
+#include <pthread.h>
+static pthread_mutex_t kernelInitLock = PTHREAD_MUTEX_INITIALIZER;
+static volatile int kernelInitDone = 0;
+#endif
+
+// Cached kernel attributes
+static size_t cachedMaxStackSize = 0;
 
 // Returns maximum kernel stack size of all CUDA kernels
 ncclResult_t ncclInitKernelsForDevice(int cudaArch, int maxSharedMem, size_t *maxStackSize)
 {
   ncclResult_t result = ncclSuccess;
+
+#ifdef _WIN32
+  InitOnceExecuteOnce(&kernelInitOnce, initKernelLock, NULL, NULL);
+
+  // Fast path - if already initialized, just return cached value
+  if (InterlockedCompareExchange(&kernelInitDone, 0, 0) == 1)
+  {
+    if (maxStackSize)
+      *maxStackSize = cachedMaxStackSize;
+    return ncclSuccess;
+  }
+
+  EnterCriticalSection(&kernelInitLock);
+
+  // Double-check after acquiring lock
+  if (InterlockedCompareExchange(&kernelInitDone, 0, 0) == 1)
+  {
+    LeaveCriticalSection(&kernelInitLock);
+    if (maxStackSize)
+      *maxStackSize = cachedMaxStackSize;
+    return ncclSuccess;
+  }
+#else
+  if (__atomic_load_n(&kernelInitDone, __ATOMIC_ACQUIRE) == 1)
+  {
+    if (maxStackSize)
+      *maxStackSize = cachedMaxStackSize;
+    return ncclSuccess;
+  }
+
+  pthread_mutex_lock(&kernelInitLock);
+
+  if (__atomic_load_n(&kernelInitDone, __ATOMIC_ACQUIRE) == 1)
+  {
+    pthread_mutex_unlock(&kernelInitLock);
+    if (maxStackSize)
+      *maxStackSize = cachedMaxStackSize;
+    return ncclSuccess;
+  }
+#endif
 
   if (maxStackSize)
     *maxStackSize = 0;
@@ -55,6 +118,20 @@ ncclResult_t ncclInitKernelsForDevice(int cudaArch, int maxSharedMem, size_t *ma
       if (fn == nullptr)
         continue;
 
+#ifdef _WIN32
+      // On Windows, cudaFuncGetAttributes can hang during multi-threaded initialization.
+      // Skip attribute query but still set required shared memory attribute.
+      // We won't track maxStackSize but that's only for debugging anyway.
+      if (ncclMaxSharedMem != 0)
+      {
+        cudaError_t setErr = cudaFuncSetAttribute(fn,
+                                                  cudaFuncAttributeMaxDynamicSharedMemorySize, ncclMaxSharedMem);
+        if (setErr != cudaSuccess)
+        {
+          cudaGetLastError(); // Drain error
+        }
+      }
+#else
       cudaError_t errcode = cudaFuncGetAttributes(&attr, fn);
       if (errcode != cudaSuccess)
       {
@@ -80,15 +157,31 @@ ncclResult_t ncclInitKernelsForDevice(int cudaArch, int maxSharedMem, size_t *ma
         {
           WARN("cudaArch %d ncclMaxSharedMem %d exceeds device/fn maxSharedMem %zu",
                cudaArch, sharedMemSize, maxSharedMem - attr.sharedSizeBytes);
+          pthread_mutex_unlock(&kernelInitLock);
           return ncclSystemError;
         }
         CUDACHECKGOTO(cudaFuncSetAttribute(fn,
                                            cudaFuncAttributeMaxDynamicSharedMemorySize, sharedMemSize),
                       result, next_kernel);
       }
+#endif
     next_kernel:;
     }
   }
+
+  // Cache the result and mark as done
+  if (maxStackSize)
+  {
+    cachedMaxStackSize = *maxStackSize;
+  }
+
+#ifdef _WIN32
+  InterlockedExchange(&kernelInitDone, 1);
+  LeaveCriticalSection(&kernelInitLock);
+#else
+  __atomic_store_n(&kernelInitDone, 1, __ATOMIC_RELEASE);
+  pthread_mutex_unlock(&kernelInitLock);
+#endif
   return result;
 }
 
@@ -1847,6 +1940,23 @@ ncclResult_t ncclLaunchKernel(struct ncclComm *comm, struct ncclKernelPlan *plan
   CUfunction fn;
   CUDACHECKGOTO(cudaGetFuncBySymbol(&fn, sym), ret, do_return);
 
+#ifdef _WIN32
+  // On Windows, we must set the max dynamic shared memory on the CUfunction
+  // in the current device context before launch
+  if (smem > 48 * 1024)
+  {
+    CUresult cuRes = pfn_cuFuncSetAttribute(fn, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, smem);
+    if (cuRes != CUDA_SUCCESS)
+    {
+      const char *errStr;
+      pfn_cuGetErrorString(cuRes, &errStr);
+      WARN("cuFuncSetAttribute for max dynamic shared memory failed: %d (%s)", cuRes, errStr ? errStr : "unknown");
+      ret = ncclUnhandledCudaError;
+      goto do_return;
+    }
+  }
+#endif
+
   if (CUDART_VERSION >= 11080 && driverVersion >= 11080)
   {
 #if CUDART_VERSION >= 11080
@@ -2865,7 +2975,7 @@ static ncclResult_t p2pTaskAppend(
             // shared comms together.
             comm->channels[channelId].peers[peer]->send[1].hasSeen = 1;
             comm->channels[channelId].peers[peer]->send[1].p2pOnly = 1;
-            comm->connectSend[peer] |= (1UL << channelId);
+            comm->connectSend[peer] |= (1ULL << channelId);
             ncclGroupCommPreconnect(comm);
           }
         }
@@ -2875,7 +2985,7 @@ static ncclResult_t p2pTaskAppend(
           { // P2P uses only 1 connector
             comm->channels[channelId].peers[peer]->recv[1].hasSeen = 1;
             comm->channels[channelId].peers[peer]->recv[1].p2pOnly = 1;
-            comm->connectRecv[peer] |= (1UL << channelId);
+            comm->connectRecv[peer] |= (1ULL << channelId);
             ncclGroupCommPreconnect(comm);
           }
         }

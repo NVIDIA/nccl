@@ -13,14 +13,6 @@ namespace
   template <typename T, typename RedOp, typename Proto>
   __device__ __forceinline__ void runRing(int tid, int nthreads, struct ncclDevWorkColl *work)
   {
-    if (tid == 0)
-      printf("[KERNEL] runRing entry, nthreads=%d, Proto::Id=%d\n", nthreads, Proto::Id);
-    if (tid == 0)
-      printf("[KERNEL] work: channelLo=%d channelHi=%d countLo=%lld countMid=%lld countHi=%lld chunkGrainsLo=%d\n",
-             work->channelLo, work->channelHi, (long long)work->cbd.countLo, (long long)work->cbd.countMid,
-             (long long)work->cbd.countHi, work->cbd.chunkGrainsLo);
-    if (tid == 0)
-      printf("[KERNEL] ncclShmem.channelId=%d\n", ncclShmem.channelId);
     ncclRing *ring = &ncclShmem.channel.ring;
     int ringIx = ring->index;
     const int nranks = ncclShmem.comm.nRanks;
@@ -28,22 +20,14 @@ namespace
     ssize_t channelCount;
     ssize_t chunkCount;
     ncclCollCbdPart(work, ncclShmem.channelId, Proto::Id, sizeof(T), (ssize_t *)nullptr, &gridOffset, &channelCount, &chunkCount);
-    if (tid == 0)
-      printf("[KERNEL] runRing: ringIx=%d, nranks=%d, channelCount=%lld, chunkCount=%lld\n", ringIx, nranks, (long long)channelCount, (long long)chunkCount);
     const ssize_t loopCount = nranks * chunkCount;
     ssize_t offset;
     int nelem;
     int chunk;
-
-    if (tid == 0)
-      printf("[KERNEL] runRing: about to construct Primitives, ring->prev=%d, ring->next=%d\n", ring->prev, ring->next);
     // Coverity reports that the callee treats &ring->next as an array.  However, due to the use of
     // FanSymmetric<1>, only the first element is ever accessed, so it's fine.
     // coverity[callee_ptr_arith:FALSE]
     Primitives<T, RedOp, FanSymmetric<1>, 1, Proto, 0> prims(tid, nthreads, &ring->prev, &ring->next, work->sendbuff, work->recvbuff, work->redOpArg, 0, 0, 0, work);
-    if (tid == 0)
-      printf("[KERNEL] runRing: Primitives constructed, channelCount=%lld\n", (long long)channelCount);
-
     for (ssize_t elemOffset = 0; elemOffset < channelCount; elemOffset += loopCount)
     {
       ssize_t remCount = channelCount - elemOffset;
@@ -62,12 +46,7 @@ namespace
       chunkOffset = chunk * chunkCount;
       offset = gridOffset + elemOffset + chunkOffset;
       nelem = (int)min(chunkCount, remCount - chunkOffset);
-      if (tid == 0)
-        printf("[KERNEL] runRing: calling directSend, offset=%lld, nelem=%d\n", (long long)offset, nelem);
       prims.directSend(offset, offset, nelem);
-      if (tid == 0)
-        printf("[KERNEL] runRing: directSend complete\n");
-
       // k-2 steps: reduce and copy to next GPU
       for (int j = 2; j < nranks; ++j)
       {

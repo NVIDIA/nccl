@@ -19,13 +19,14 @@ This paper presents a comprehensive analysis of NVIDIA's Collective Communicatio
 
 NCCL employs three communication protocols with different trade-offs:
 
-| Protocol | Design Goal | Synchronization | Payload | Bandwidth Utilization |
-|----------|-------------|-----------------|---------|----------------------|
-| **Simple** | High bandwidth | Memory fences (high overhead) | Data chunks | Near peak |
-| **LL** | Low latency | Flag-based | 4B data + 4B flag | ~25-50% of peak |
-| **LL128** | Low latency + high bandwidth | Flag-based | 120B data + 8B flag | ~95% of peak |
+| Protocol   | Design Goal                  | Synchronization               | Payload             | Bandwidth Utilization |
+| ---------- | ---------------------------- | ----------------------------- | ------------------- | --------------------- |
+| **Simple** | High bandwidth               | Memory fences (high overhead) | Data chunks         | Near peak             |
+| **LL**     | Low latency                  | Flag-based                    | 4B data + 4B flag   | ~25-50% of peak       |
+| **LL128**  | Low latency + high bandwidth | Flag-based                    | 120B data + 8B flag | ~95% of peak          |
 
 **Key insights:**
+
 - **Simple** excels for large messages but suffers high latency for small payloads
 - **LL** reduces latency using lightweight flag-based synchronization but limits bandwidth
 - **LL128** combines low latency with high throughput but requires atomic 128-byte writes (NVLink)
@@ -33,11 +34,13 @@ NCCL employs three communication protocols with different trade-offs:
 ### 2. Data Transfer Methods
 
 #### Intra-node Communication
+
 - **P2P Transport**: Prioritizes NVLink for direct GPU-to-GPU transfers
 - **P2P_DIRECT mode**: Bypasses IPC handles within same process, eliminates intermediate FIFO buffers
 - **Shared Memory (SHM)**: Used when P2P is unavailable or suboptimal (e.g., inter-socket PCIe)
 
 #### Inter-node Communication
+
 - **Socket Transport**: Uses host memory staging with cudaMemcpy, standard TCP/IP
 - **IB Verbs Transport**: Leverages RDMA for minimal CPU intervention
 - **GPUDirect RDMA**: NIC directly accesses GPU memory (requires same PCIe switch)
@@ -52,22 +55,25 @@ NCCL employs three communication protocols with different trade-offs:
 ### 4. Collective Algorithms
 
 #### Supported Algorithms
-| Operation | Ring | Tree | CollNet | NVLS |
-|-----------|------|------|---------|------|
-| AllReduce | ✓ | ✓ | ✓ | ✓ |
-| Broadcast | ✓ | ✗ | ✗ | ✗ |
-| Reduce | ✓ | ✗ | ✗ | ✗ |
-| ReduceScatter | ✓ | ✗ | ✗ | ✓ |
-| AllGather | ✓ | ✗ | ✗ | ✓ |
+
+| Operation     | Ring | Tree | CollNet | NVLS |
+| ------------- | ---- | ---- | ------- | ---- |
+| AllReduce     | ✓    | ✓    | ✓       | ✓    |
+| Broadcast     | ✓    | ✗    | ✗       | ✗    |
+| Reduce        | ✓    | ✗    | ✗       | ✗    |
+| ReduceScatter | ✓    | ✗    | ✗       | ✓    |
+| AllGather     | ✓    | ✗    | ✗       | ✓    |
 
 #### Algorithm Patterns
 
 **Non-pipelined (Ring):**
+
 - Ring AllReduce: 2k-1 steps (ReduceScatter + AllGather phases)
 - Ring AllGather: k-1 steps
 - Ring ReduceScatter: k steps
 
 **Pipelined (Tree):**
+
 - Tree AllReduce: Reduce phase (upward) + Broadcast phase (downward)
 - Uses double binary tree structure for bandwidth utilization
 
@@ -84,17 +90,20 @@ NCCL employs three communication protocols with different trade-offs:
 
 Testing on Alps supercomputer (16 nodes, NVIDIA GH200):
 
-### Inter-node Communication
+### Inter-node Performance
+
 - **Small messages (<64 KiB)**: LL and LL128 perform best
 - **Large messages (GB range)**: Simple protocol significantly outperforms LL/LL128
 - Flag-based synchronization overhead becomes prohibitive at scale
 
-### Intra-node Communication
+### Intra-node Performance
+
 - **LL128** provides consistent performance across all message sizes (NVLink advantage)
 - **Simple** best for large messages
 - **LL** best for small messages
 
 ### Algorithm Selection
+
 - **Ring**: Excels for large messages
 - **Tree**: Better for smaller messages
 
@@ -127,6 +136,6 @@ This analysis directly informs the Windows port of NCCL:
 
 ## References
 
-- NCCL GitHub: https://github.com/NVIDIA/nccl
+- NCCL GitHub: <https://github.com/NVIDIA/nccl>
 - ATLAHS Toolchain: Application-trace-driven network simulation for AI workloads
 - Analysis based on NCCL version 2.19.1

@@ -11,6 +11,7 @@ For more information on NCCL usage, please refer to the [NCCL documentation](htt
 ## Platform Support
 
 NCCL supports the following platforms:
+
 - **Linux** (primary, fully supported)
 - **Windows** (supported via platform abstraction layer)
 
@@ -19,6 +20,7 @@ NCCL supports the following platforms:
 Windows support is provided through a comprehensive platform abstraction layer that enables cross-platform compatibility while maintaining full functionality on Linux.
 
 **Supported Features on Windows:**
+
 - Full CUDA collective operations (AllReduce, AllGather, Broadcast, etc.)
 - TCP/IP socket-based networking via Winsock2
 - Multi-GPU single-node configurations
@@ -29,6 +31,7 @@ Windows support is provided through a comprehensive platform abstraction layer t
 - Dynamic library loading (dlopen/dlsym equivalents)
 
 **Limitations on Windows:**
+
 - InfiniBand (IB Verbs) transport is Linux-only
 - GPU Direct RDMA requires InfiniBand, so not available on Windows
 - Network interface auto-detection uses Windows APIs instead of sysfs
@@ -36,6 +39,7 @@ Windows support is provided through a comprehensive platform abstraction layer t
 
 **Future RDMA Support:**
 Windows RDMA could be implemented using Microsoft's Network Direct API instead of IB Verbs. This would require:
+
 - Network Direct Service Provider Interface (NDSPI) wrapper
 - Mellanox WinOF-2 drivers with ConnectX-4+ adapters
 - Windows Server 2016+ for GPU Direct RDMA support
@@ -44,40 +48,42 @@ Windows RDMA could be implemented using Microsoft's Network Direct API instead o
 For most use cases, TCP/IP socket transport provides sufficient performance on Windows.
 
 **Performance Characteristics:**
-| Operation | Windows vs Linux |
-|-----------|------------------|
-| Mutex lock/unlock | ~2x faster (CRITICAL_SECTION) |
-| Atomic operations | ~3x faster (Interlocked) |
-| clock_gettime | Comparable (QueryPerformanceCounter) |
-| Socket operations | ~1.5x slower (Winsock overhead) |
-| Thread create/join | ~2x slower |
+
+| Operation          | Windows vs Linux                     |
+| ------------------ | ------------------------------------ |
+| Mutex lock/unlock  | ~2x faster (CRITICAL_SECTION)        |
+| Atomic operations  | ~3x faster (Interlocked)             |
+| clock_gettime      | Comparable (QueryPerformanceCounter) |
+| Socket operations  | ~1.5x slower (Winsock overhead)      |
+| Thread create/join | ~2x slower                           |
 
 For detailed Windows support documentation, see [docs/WINDOWS_SUPPORT.md](docs/WINDOWS_SUPPORT.md).
 
 ## Build
 
-Note: the official and tested builds of NCCL can be downloaded from: https://developer.nvidia.com/nccl. You can skip the following build steps if you choose to use the official builds.
+Note: the official and tested builds of NCCL can be downloaded from: <https://developer.nvidia.com/nccl>. You can skip the following build steps if you choose to use the official builds.
 
 ### Linux Build
 
 To build the library :
 
 ```shell
-$ cd nccl
-$ make -j src.build
+cd nccl
+make -j src.build
 ```
 
 If CUDA is not installed in the default /usr/local/cuda path, you can define the CUDA path with :
 
 ```shell
-$ make src.build CUDA_HOME=<path to cuda install>
+make src.build CUDA_HOME=<path to cuda install>
 ```
 
 NCCL will be compiled and installed in `build/` unless `BUILDDIR` is set.
 
 By default, NCCL is compiled for all supported architectures. To accelerate the compilation and reduce the binary size, consider redefining `NVCC_GENCODE` (defined in `makefiles/common.mk`) to only include the architecture of the target platform :
+
 ```shell
-$ make -j src.build NVCC_GENCODE="-gencode=arch=compute_70,code=sm_70"
+make -j src.build NVCC_GENCODE="-gencode=arch=compute_70,code=sm_70"
 ```
 
 ### Windows Build (CMake)
@@ -107,38 +113,41 @@ Requirements for Windows build:
 To install NCCL on the system, create a package then install it as root.
 
 Debian/Ubuntu :
+
 ```shell
-$ # Install tools to create debian packages
-$ sudo apt install build-essential devscripts debhelper fakeroot
-$ # Build NCCL deb package
-$ make pkg.debian.build
-$ ls build/pkg/deb/
+# Install tools to create debian packages
+sudo apt install build-essential devscripts debhelper fakeroot
+# Build NCCL deb package
+make pkg.debian.build
+ls build/pkg/deb/
 ```
 
 RedHat/CentOS :
+
 ```shell
-$ # Install tools to create rpm packages
-$ sudo yum install rpm-build rpmdevtools
-$ # Build NCCL rpm package
-$ make pkg.redhat.build
-$ ls build/pkg/rpm/
+# Install tools to create rpm packages
+sudo yum install rpm-build rpmdevtools
+# Build NCCL rpm package
+make pkg.redhat.build
+ls build/pkg/rpm/
 ```
 
 OS-agnostic tarball :
+
 ```shell
-$ make pkg.txz.build
-$ ls build/pkg/txz/
+make pkg.txz.build
+ls build/pkg/txz/
 ```
 
 ## Tests
 
-Tests for NCCL are maintained separately at https://github.com/nvidia/nccl-tests.
+Tests for NCCL are maintained separately at <https://github.com/nvidia/nccl-tests>.
 
 ```shell
-$ git clone https://github.com/NVIDIA/nccl-tests.git
-$ cd nccl-tests
-$ make
-$ ./build/all_reduce_perf -b 8 -e 256M -f 2 -g <ngpus>
+git clone https://github.com/NVIDIA/nccl-tests.git
+cd nccl-tests
+make
+./build/all_reduce_perf -b 8 -e 256M -f 2 -g <ngpus>
 ```
 
 ### Platform Abstraction Tests (Windows)
@@ -157,6 +166,7 @@ ctest --output-on-failure
 ```
 
 Test coverage includes:
+
 - Platform detection and macros
 - Time functions (clock_gettime)
 - Threading (mutex, condition variables, threads)

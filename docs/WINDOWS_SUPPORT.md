@@ -9,6 +9,7 @@ NCCL has been ported to Windows with a platform abstraction layer that provides 
 ## Platform Detection
 
 Platform detection is handled in `src/include/platform.h`:
+
 - `NCCL_PLATFORM_WINDOWS` - Set to 1 on Windows
 - `NCCL_PLATFORM_LINUX` - Set to 1 on Linux/Unix
 - `NCCL_PLATFORM_POSIX` - Set to 1 on POSIX systems
@@ -17,15 +18,15 @@ Platform detection is handled in `src/include/platform.h`:
 
 The following platform abstraction headers are provided in `src/include/platform/`:
 
-| Header | Purpose |
-|--------|---------|
-| `win32_defs.h` | Basic Windows type definitions and compatibility macros |
-| `win32_misc.h` | Time functions, environment variables, random numbers, CPU affinity |
-| `win32_thread.h` | pthread-compatible threading primitives |
-| `win32_socket.h` | BSD sockets compatibility with Winsock2 |
-| `win32_dl.h` | Dynamic library loading (dlopen/dlsym equivalents) |
-| `win32_shm.h` | Shared memory (memory-mapped files) |
-| `win32_ipc.h` | Inter-process communication (Named Pipes) |
+| Header           | Purpose                                                             |
+| ---------------- | ------------------------------------------------------------------- |
+| `win32_defs.h`   | Basic Windows type definitions and compatibility macros             |
+| `win32_misc.h`   | Time functions, environment variables, random numbers, CPU affinity |
+| `win32_thread.h` | pthread-compatible threading primitives                             |
+| `win32_socket.h` | BSD sockets compatibility with Winsock2                             |
+| `win32_dl.h`     | Dynamic library loading (dlopen/dlsym equivalents)                  |
+| `win32_shm.h`    | Shared memory (memory-mapped files)                                 |
+| `win32_ipc.h`    | Inter-process communication (Named Pipes)                           |
 
 ## Workarounds for Linux-Specific Features
 
@@ -34,6 +35,7 @@ The following platform abstraction headers are provided in `src/include/platform
 **Limitation:** InfiniBand (IB) transport is not supported on Windows because the libibverbs and mlx5 libraries are Linux-specific.
 
 **Workaround:** The entire `net_ib.cc` implementation is wrapped in platform guards. On Windows:
+
 - `ncclNetIb` is defined with stub functions that return `ncclInternalError`
 - `ncclIbDevices()` returns 0 devices
 - Warning is logged when IB initialization is attempted
@@ -45,6 +47,7 @@ The following platform abstraction headers are provided in `src/include/platform
 **Limitation:** Linux uses sysfs (`/sys/class/net/<dev>/speed`) to query network interface speed.
 
 **Workaround:** Windows implementation uses the `GetIfTable2()` API from `iphlpapi.dll`:
+
 - `ncclGetInterfaceSpeed()` function queries `MIB_IF_TABLE2`
 - Returns `ReceiveLinkSpeed` from `MIB_IF_ROW2` structure
 - Falls back to default values if interface not found
@@ -56,6 +59,7 @@ The following platform abstraction headers are provided in `src/include/platform
 **Limitation:** Linux reads vendor IDs from sysfs (`/sys/class/net/<dev>/device/vendor`).
 
 **Workaround:** On Windows, vendor detection is disabled:
+
 - Default thread/socket configuration is used
 - `TRACE()` message indicates vendor detection is unavailable
 - Users can override via `NCCL_NTHREADS` and `NCCL_NSOCKS_PERTHREAD` environment variables
@@ -67,6 +71,7 @@ The following platform abstraction headers are provided in `src/include/platform
 **Limitation:** Linux uses `sched_setaffinity()`, `sched_getaffinity()`, and `cpu_set_t` from `<sched.h>`.
 
 **Workaround:** Full Windows implementation in `win32_misc.h`:
+
 - `cpu_set_t` - Structure supporting up to 1024 CPUs (16 processor groups)
 - `CPU_SET`, `CPU_ZERO`, `CPU_CLR`, `CPU_ISSET` - Macros matching Linux behavior
 - `CPU_COUNT`, `CPU_EQUAL`, `CPU_AND`, `CPU_OR` - Additional operations
@@ -81,6 +86,7 @@ The following platform abstraction headers are provided in `src/include/platform
 **Limitation:** Linux uses Unix Domain Sockets with `SCM_RIGHTS` for file descriptor passing.
 
 **Workaround:** Windows uses Named Pipes with `DuplicateHandle()`:
+
 - Named Pipes for local IPC communication
 - `DuplicateHandle()` for passing handles between processes
 - Requires target process handle for duplication
@@ -94,6 +100,7 @@ The following platform abstraction headers are provided in `src/include/platform
 **Limitation:** Linux uses POSIX shared memory (`shm_open`, `mmap`).
 
 **Workaround:** Windows uses memory-mapped files:
+
 - `CreateFileMapping()` / `OpenFileMapping()` for shared memory objects
 - `MapViewOfFile()` for memory mapping
 - Unique names derived from keys
@@ -101,6 +108,7 @@ The following platform abstraction headers are provided in `src/include/platform
 **Location:** `src/include/platform/win32_shm.h`
 
 **Optimizations (based on NCCL paper findings):**
+
 - Large page support via `SEC_LARGE_PAGES` (2MB pages reduce TLB misses)
 - NUMA-aware allocation for multi-socket systems
 - `ncclShmOpenAdvanced()` function with `NCCL_SHM_LARGE_PAGES` and `NCCL_SHM_NUMA_AWARE` flags
@@ -110,6 +118,7 @@ The following platform abstraction headers are provided in `src/include/platform
 **Limitation:** Linux uses `clock_gettime()` with `CLOCK_MONOTONIC`.
 
 **Workaround:** Windows implementation in `win32_misc.h`:
+
 - `QueryPerformanceCounter()` for high-resolution monotonic time
 - `GetSystemTimeAsFileTime()` for wall-clock time
 
@@ -118,6 +127,7 @@ The following platform abstraction headers are provided in `src/include/platform
 **Limitation:** Linux uses `dlopen()`, `dlsym()`, `dlclose()`.
 
 **Workaround:** Windows implementation in `win32_dl.h`:
+
 - `LoadLibrary()` / `GetProcAddress()` / `FreeLibrary()`
 - `dlerror()` equivalent using `GetLastError()` and `FormatMessage()`
 
@@ -128,15 +138,16 @@ Based on findings from "Demystifying NCCL" (arXiv:2507.04786v2), the Windows por
 ### Socket Transport Tuning
 
 NCCL uses different protocols for different message sizes:
+
 - **Simple protocol**: High throughput for large messages (>64 KiB)
 - **LL/LL128 protocols**: Low latency for small messages (<64 KiB)
 
 Windows socket optimizations in `win32_socket.h`:
 
-| Function | Purpose | Buffer Size |
-|----------|---------|-------------|
-| `ncclSocketOptimize()` | High-throughput (Simple protocol) | 4 MB |
-| `ncclSocketOptimizeLowLatency()` | Low-latency (LL/LL128 protocol) | 256 KB |
+| Function                         | Purpose                           | Buffer Size |
+| -------------------------------- | --------------------------------- | ----------- |
+| `ncclSocketOptimize()`           | High-throughput (Simple protocol) | 4 MB        |
+| `ncclSocketOptimizeLowLatency()` | Low-latency (LL/LL128 protocol)   | 256 KB      |
 
 Both functions enable `TCP_NODELAY` to disable Nagle's algorithm.
 
@@ -156,19 +167,20 @@ ncclSocketOverlappedFree(&ov);
 
 For multi-socket systems where SHM transport is used:
 
-| Function | Purpose |
-|----------|---------|
-| `ncclShmOpenAdvanced()` | Create SHM with NUMA/large page support |
-| `ncclShmGetCurrentNumaNode()` | Get current thread's NUMA node |
-| `ncclShmGetNumaNodeCount()` | Get system NUMA node count |
-| `ncclShmGetLargePageSize()` | Get large page size (typically 2 MB) |
-| `ncclShmEnableLargePages()` | Enable large page privilege |
+| Function                      | Purpose                                 |
+| ----------------------------- | --------------------------------------- |
+| `ncclShmOpenAdvanced()`       | Create SHM with NUMA/large page support |
+| `ncclShmGetCurrentNumaNode()` | Get current thread's NUMA node          |
+| `ncclShmGetNumaNodeCount()`   | Get system NUMA node count              |
+| `ncclShmGetLargePageSize()`   | Get large page size (typically 2 MB)    |
+| `ncclShmEnableLargePages()`   | Enable large page privilege             |
 
 ## Build Configuration
 
 ### CMake Support
 
 The CMakeLists.txt files support Windows builds:
+
 - Automatic platform detection
 - Conditional compilation for platform-specific code
 - Windows SDK/toolchain support
@@ -203,20 +215,21 @@ ctest --output-on-failure
 
 #### Test Files
 
-| File | Description |
-|------|-------------|
-| `test_platform_standalone.cpp` | Single-file comprehensive test |
-| `test_platform_detection.cpp` | Platform macro and type tests |
-| `test_time_functions.cpp` | clock_gettime, nanosleep tests |
-| `test_socket_abstraction.cpp` | Socket, poll, interface tests |
-| `test_thread_abstraction.cpp` | pthread mutex/cond/thread tests |
-| `test_cpu_affinity.cpp` | CPU set operations and affinity |
-| `test_misc_functions.cpp` | getpid, dlopen, atomic ops tests |
-| `validate_headers.cpp` | Header coexistence validation |
+| File                           | Description                      |
+| ------------------------------ | -------------------------------- |
+| `test_platform_standalone.cpp` | Single-file comprehensive test   |
+| `test_platform_detection.cpp`  | Platform macro and type tests    |
+| `test_time_functions.cpp`      | clock_gettime, nanosleep tests   |
+| `test_socket_abstraction.cpp`  | Socket, poll, interface tests    |
+| `test_thread_abstraction.cpp`  | pthread mutex/cond/thread tests  |
+| `test_cpu_affinity.cpp`        | CPU set operations and affinity  |
+| `test_misc_functions.cpp`      | getpid, dlopen, atomic ops tests |
+| `validate_headers.cpp`         | Header coexistence validation    |
 
 #### Validation Status
 
 All tests pass on Windows with:
+
 - Visual Studio 2019+
 - Windows 10 SDK 10.0.26100.0
 - MSVC 19.50+ compiler
@@ -231,6 +244,7 @@ When running NCCL on Windows:
 ## Contributing
 
 When adding new features:
+
 1. Use platform macros (`NCCL_PLATFORM_WINDOWS`, `NCCL_PLATFORM_LINUX`)
 2. Add Windows implementations to appropriate `win32_*.h` headers
 3. Add tests in `tests/platform/`

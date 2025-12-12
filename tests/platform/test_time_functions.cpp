@@ -51,7 +51,12 @@ void test_time_functions(void)
     TEST_ASSERT_GT(ts_real.tv_sec, 0, "Real time seconds should be positive");
     printf("  [INFO] Current time: %lld seconds since epoch\n", (long long)ts_real.tv_sec);
 
-    /* Test NULL pointer handling */
+#if NCCL_PLATFORM_WINDOWS
+    /* Test NULL pointer handling - only on Windows where our wrapper handles it */
+    /* On Linux, passing NULL to clock_gettime causes SIGSEGV (not caught by libc) */
     ret = clock_gettime(CLOCK_MONOTONIC, NULL);
     TEST_ASSERT_EQ(-1, ret, "clock_gettime with NULL should fail");
+#else
+    printf("  [INFO] Skipping NULL pointer test (would crash on native Linux syscall)\n");
+#endif
 }

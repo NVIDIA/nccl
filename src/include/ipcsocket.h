@@ -7,8 +7,12 @@
 #ifndef NCCL_IPCSOCKET_H
 #define NCCL_IPCSOCKET_H
 
+#include "platform.h"
 #include "nccl.h"
 #include <stdio.h>
+#include <inttypes.h>
+
+#if NCCL_PLATFORM_LINUX
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -18,19 +22,24 @@
 #include <sys/socket.h>
 #include <memory.h>
 #include <sys/un.h>
-#include <inttypes.h>
+#endif
 
 #define NCCL_IPC_SOCKNAME_LEN 64
 
-struct ncclIpcSocket {
+struct ncclIpcSocket
+{
+#if NCCL_PLATFORM_LINUX
   int fd;
+#elif NCCL_PLATFORM_WINDOWS
+  HANDLE hPipe;
+#endif
   char socketName[NCCL_IPC_SOCKNAME_LEN];
-  volatile uint32_t* abortFlag;
+  volatile uint32_t *abortFlag;
 };
 
-ncclResult_t ncclIpcSocketInit(struct ncclIpcSocket *handle, int rank, uint64_t hash, volatile uint32_t* abortFlag);
+ncclResult_t ncclIpcSocketInit(struct ncclIpcSocket *handle, int rank, uint64_t hash, volatile uint32_t *abortFlag);
 ncclResult_t ncclIpcSocketClose(struct ncclIpcSocket *handle);
-ncclResult_t ncclIpcSocketGetFd(struct ncclIpcSocket* handle, int* fd);
+ncclResult_t ncclIpcSocketGetFd(struct ncclIpcSocket *handle, int *fd);
 
 ncclResult_t ncclIpcSocketRecvFd(struct ncclIpcSocket *handle, int *fd);
 ncclResult_t ncclIpcSocketSendFd(struct ncclIpcSocket *handle, const int fd, int rank, uint64_t hash);

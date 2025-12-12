@@ -1,4 +1,36 @@
 # Copyright (c) 2015-2016, NVIDIA CORPORATION. All rights reserved.
 /build
+/build_test
+/build_cuda13
+/build_*/
+build_*/
+
+**/build/
 *.gcov
 /coverage/
+
+# CMake build artifacts
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+*.ninja
+.ninja_*
+
+# Compiled binaries
+*.exe
+*.obj
+*.pdb
+*.ilk
+
+# Generated device code directories (may have odd names from build system)
+/--help/
+
+# Local configuration (machine-specific paths)
+/cmake/
+configure.bat
+*.local
+*.log
+
+# Test files
+test.cu

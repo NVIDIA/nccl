@@ -5,15 +5,19 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
+#include "platform.h" /* For dlopen/dlsym on Windows */
+#ifndef _WIN32
 #include <dlfcn.h>
+#endif
 #include "debug.h"
 #include "checks.h"
 #include "nccl_tuner.h"
 
-static ncclTuner_v2_t* ncclTuner_v2;
+static ncclTuner_v2_t *ncclTuner_v2;
 static ncclTuner_t ncclTuner;
 
-static int hasNvlsSupport(float** collCostTable) {
+static int hasNvlsSupport(float **collCostTable)
+{
   // Requirements for support of different algorithms:
   //
   // - NVLS intra-node: nvlsSupport
@@ -27,43 +31,51 @@ static int hasNvlsSupport(float** collCostTable) {
   return (table[NCCL_ALGO_NVLS][NCCL_PROTO_SIMPLE] != NCCL_ALGO_PROTO_IGNORE || table[NCCL_ALGO_NVLS_TREE][NCCL_PROTO_SIMPLE] != NCCL_ALGO_PROTO_IGNORE) ? 1 : 0;
 }
 
-static int hasCollNetSupport(float** collCostTable) {
+static int hasCollNetSupport(float **collCostTable)
+{
   float (*table)[NCCL_NUM_PROTOCOLS] = (float (*)[NCCL_NUM_PROTOCOLS])collCostTable;
   return (table[NCCL_ALGO_COLLNET_CHAIN][NCCL_PROTO_SIMPLE] == NCCL_ALGO_PROTO_IGNORE) ? 0 : 1;
 }
 
-static ncclResult_t ncclTuner_getCollInfo(void* context, ncclFunc_t collType, size_t nBytes, int numPipeOps, float** collCostTable, int numAlgo __attribute__((unused)), int numProto __attribute__((unused)), int regBuff __attribute__((unused)), int* nChannels) {
+static ncclResult_t ncclTuner_getCollInfo(void *context, ncclFunc_t collType, size_t nBytes, int numPipeOps, float **collCostTable, int numAlgo __attribute__((unused)), int numProto __attribute__((unused)), int regBuff __attribute__((unused)), int *nChannels)
+{
   int algorithm = NCCL_ALGO_UNDEF;
   int protocol = NCCL_PROTO_UNDEF;
   int nvlsSupport = hasNvlsSupport(collCostTable);
   int collNetSupport = hasCollNetSupport(collCostTable);
   NCCLCHECK(ncclTuner_v2->getCollInfo(context, collType, nBytes, collNetSupport, nvlsSupport, numPipeOps, &algorithm, &protocol, nChannels));
   // set time to 0 below to make sure this algorithm/protocol is selected later on
-  if (algorithm >= 0 && algorithm < NCCL_NUM_ALGORITHMS && protocol >= 0 && protocol < NCCL_NUM_PROTOCOLS) {
+  if (algorithm >= 0 && algorithm < NCCL_NUM_ALGORITHMS && protocol >= 0 && protocol < NCCL_NUM_PROTOCOLS)
+  {
     float (*table)[NCCL_NUM_PROTOCOLS] = (float (*)[NCCL_NUM_PROTOCOLS])collCostTable;
-    if (table[algorithm][protocol] != NCCL_ALGO_PROTO_IGNORE) table[algorithm][protocol] = 0.0;
+    if (table[algorithm][protocol] != NCCL_ALGO_PROTO_IGNORE)
+      table[algorithm][protocol] = 0.0;
   }
   return ncclSuccess;
 }
 
-static ncclResult_t ncclTuner_finalize(void* ctx) {
+static ncclResult_t ncclTuner_finalize(void *ctx)
+{
   return ncclTuner_v2->destroy(ctx);
 }
 
-static ncclResult_t ncclTuner_init(void** ctx, uint64_t commId, size_t nRanks, size_t nNodes, ncclDebugLogger_t logfn,
-                                   ncclNvlDomainInfo_v5_t* nvlDomainInfo, ncclTunerConstants_t* /*constants*/) {
+static ncclResult_t ncclTuner_init(void **ctx, uint64_t commId, size_t nRanks, size_t nNodes, ncclDebugLogger_t logfn,
+                                   ncclNvlDomainInfo_v5_t *nvlDomainInfo, ncclTunerConstants_t * /*constants*/)
+{
   NCCLCHECK(ncclTuner_v2->init(nRanks, nNodes, logfn, ctx));
   ncclTuner.getCollInfo = ncclTuner_getCollInfo;
   ncclTuner.finalize = ncclTuner_finalize;
   return ncclSuccess;
 }
 
-ncclTuner_t* getNcclTuner_v2(void* lib) {
-  ncclTuner_v2 = (ncclTuner_v2_t*)dlsym(lib, "ncclTunerPlugin_v2");
-  if (ncclTuner_v2) {
+ncclTuner_t *getNcclTuner_v2(void *lib)
+{
+  ncclTuner_v2 = (ncclTuner_v2_t *)dlsym(lib, "ncclTunerPlugin_v2");
+  if (ncclTuner_v2)
+  {
     ncclTuner.name = ncclTuner_v2->name;
     ncclTuner.init = ncclTuner_init;
-    INFO(NCCL_INIT|NCCL_TUNING, "TUNER/Plugin: Using %s (v2)", ncclTuner_v2->name);
+    INFO(NCCL_INIT | NCCL_TUNING, "TUNER/Plugin: Using %s (v2)", ncclTuner_v2->name);
     return &ncclTuner;
   }
   return NULL;

@@ -10,14 +10,16 @@
 
 __shared__ ncclShmemData ncclShmem;
 #if __CUDA_ARCH__ < 700
-  __shared__ ulong2 ncclShmemPerWarp[ncclShmemScratchWarpSize()*(NCCL_MAX_NTHREADS/WARP_SIZE)/sizeof(ulong2)];
+__shared__ nccl_ulong2_16 ncclShmemPerWarp[ncclShmemScratchWarpSize() * (NCCL_MAX_NTHREADS / WARP_SIZE) / sizeof(nccl_ulong2_16)];
 #endif
 
-struct RunWorkNop {
+struct RunWorkNop
+{
   __device__ void run() {}
 };
 
-__global__ void ncclDevKernel_Generic(ncclDevKernelArgs4K NCCL_GRID_CONSTANT const args4K) {
+__global__ void ncclDevKernel_Generic(ncclDevKernelArgs4K NCCL_GRID_CONSTANT const args4K)
+{
   ncclKernelMain<-1, RunWorkNop>(&args4K.args);
 }
 

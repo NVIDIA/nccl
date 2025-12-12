@@ -8,7 +8,104 @@
 #include <mutex>
 
 #ifndef GDR_DIRECT
-#include "core.h"
+
+#ifdef _WIN32
+// Windows: GDR (GPUDirect RDMA) is not supported - provide stubs
+
+ncclResult_t wrap_gdr_symbols(void)
+{
+  return ncclInternalError; // GDR not available on Windows
+}
+
+gdr_t wrap_gdr_open(void)
+{
+  return NULL; // GDR not available
+}
+
+ncclResult_t wrap_gdr_close(gdr_t g)
+{
+  (void)g;
+  return ncclInternalError;
+}
+
+ncclResult_t wrap_gdr_pin_buffer(gdr_t g, unsigned long addr, size_t size, uint64_t p2p_token, uint32_t va_space, gdr_mh_t *handle)
+{
+  (void)g;
+  (void)addr;
+  (void)size;
+  (void)p2p_token;
+  (void)va_space;
+  (void)handle;
+  return ncclInternalError;
+}
+
+ncclResult_t wrap_gdr_unpin_buffer(gdr_t g, gdr_mh_t handle)
+{
+  (void)g;
+  (void)handle;
+  return ncclInternalError;
+}
+
+ncclResult_t wrap_gdr_get_info(gdr_t g, gdr_mh_t handle, gdr_info_t *info)
+{
+  (void)g;
+  (void)handle;
+  (void)info;
+  return ncclInternalError;
+}
+
+ncclResult_t wrap_gdr_map(gdr_t g, gdr_mh_t handle, void **va, size_t size)
+{
+  (void)g;
+  (void)handle;
+  (void)va;
+  (void)size;
+  return ncclInternalError;
+}
+
+ncclResult_t wrap_gdr_unmap(gdr_t g, gdr_mh_t handle, void *va, size_t size)
+{
+  (void)g;
+  (void)handle;
+  (void)va;
+  (void)size;
+  return ncclInternalError;
+}
+
+ncclResult_t wrap_gdr_runtime_get_version(int *major, int *minor)
+{
+  (void)major;
+  (void)minor;
+  return ncclInternalError;
+}
+
+ncclResult_t wrap_gdr_driver_get_version(gdr_t g, int *major, int *minor)
+{
+  (void)g;
+  (void)major;
+  (void)minor;
+  return ncclInternalError;
+}
+
+ncclResult_t wrap_gdr_copy_to_mapping(gdr_mh_t handle, void *map_d_ptr, const void *h_ptr, size_t size)
+{
+  (void)handle;
+  (void)map_d_ptr;
+  (void)h_ptr;
+  (void)size;
+  return ncclInternalError;
+}
+
+ncclResult_t wrap_gdr_copy_from_mapping(gdr_mh_t handle, void *h_ptr, const void *map_d_ptr, size_t size)
+{
+  (void)handle;
+  (void)h_ptr;
+  (void)map_d_ptr;
+  (void)size;
+  return ncclInternalError;
+}
+
+#else // !_WIN32 - Linux implementation
 
 /* Function pointers assigned from dlopen() */
 static gdr_t (*gdr_internal_open)(void);
@@ -23,41 +120,48 @@ static void (*gdr_internal_driver_get_version)(gdr_t g, int *major, int *minor);
 static int (*gdr_internal_copy_to_mapping)(gdr_mh_t handle, void *map_d_ptr, const void *h_ptr, size_t size);
 static int (*gdr_internal_copy_from_mapping)(gdr_mh_t handle, void *h_ptr, const void *map_d_ptr, size_t size);
 
-
 // Used to make the GDR library calls thread safe
 pthread_mutex_t gdrLock = PTHREAD_MUTEX_INITIALIZER;
 
 #define GDRAPI_LIBNAME "libgdrapi.so"
 
-#define LOAD_SYM(handle, symbol, funcptr) do {         \
-    cast = (void**)&funcptr;                             \
-    tmp = dlsym(handle, symbol);                         \
-    if (tmp == NULL) {                                   \
-      WARN("dlsym failed on %s - %s", symbol, dlerror());\
-      goto teardown;                                     \
-    }                                                    \
-    *cast = tmp;                                         \
+#define LOAD_SYM(handle, symbol, funcptr)                 \
+  do                                                      \
+  {                                                       \
+    cast = (void **)&funcptr;                             \
+    tmp = dlsym(handle, symbol);                          \
+    if (tmp == NULL)                                      \
+    {                                                     \
+      WARN("dlsym failed on %s - %s", symbol, dlerror()); \
+      goto teardown;                                      \
+    }                                                     \
+    *cast = tmp;                                          \
   } while (0)
 
-#define LOAD_SYM_OPTIONAL(handle, symbol, funcptr) do {\
-    cast = (void**)&funcptr;                             \
-    tmp = dlsym(handle, symbol);                         \
-    if (tmp == NULL) {                                   \
-      INFO(NCCL_INIT,"dlsym failed on %s, ignoring", symbol); \
-    }                                                    \
-    *cast = tmp;                                         \
+#define LOAD_SYM_OPTIONAL(handle, symbol, funcptr)             \
+  do                                                           \
+  {                                                            \
+    cast = (void **)&funcptr;                                  \
+    tmp = dlsym(handle, symbol);                               \
+    if (tmp == NULL)                                           \
+    {                                                          \
+      INFO(NCCL_INIT, "dlsym failed on %s, ignoring", symbol); \
+    }                                                          \
+    *cast = tmp;                                               \
   } while (0)
 
 static std::once_flag initOnceFlag;
 static ncclResult_t initResult;
 
-static void initOnceFunc(void) {
-  static void* gdrhandle = NULL;
-  void* tmp;
-  void** cast;
+static void initOnceFunc(void)
+{
+  static void *gdrhandle = NULL;
+  void *tmp;
+  void **cast;
 
-  gdrhandle=dlopen(GDRAPI_LIBNAME, RTLD_NOW);
-  if (!gdrhandle) {
+  gdrhandle = dlopen(GDRAPI_LIBNAME, RTLD_NOW);
+  if (!gdrhandle)
+  {
     WARN("Failed to open %s", GDRAPI_LIBNAME);
     goto teardown;
   }
@@ -91,110 +195,133 @@ teardown:
   gdr_internal_copy_to_mapping = NULL;
   gdr_internal_copy_from_mapping = NULL;
 
-  if (gdrhandle != NULL) dlclose(gdrhandle);
+  if (gdrhandle != NULL)
+    dlclose(gdrhandle);
   initResult = ncclSystemError;
   return;
 }
 
-
-ncclResult_t wrap_gdr_symbols(void) {
+ncclResult_t wrap_gdr_symbols(void)
+{
   std::call_once(initOnceFlag, initOnceFunc);
   return initResult;
 }
 
-gdr_t wrap_gdr_open(void) {
-  if (gdr_internal_open == NULL) {
+gdr_t wrap_gdr_open(void)
+{
+  if (gdr_internal_open == NULL)
+  {
     WARN("GDRCOPY lib wrapper not initialized.");
     return NULL;
   }
   return gdr_internal_open();
 }
 
-ncclResult_t wrap_gdr_close(gdr_t g) {
-  if (gdr_internal_close == NULL) {
+ncclResult_t wrap_gdr_close(gdr_t g)
+{
+  if (gdr_internal_close == NULL)
+  {
     WARN("GDRCOPY lib wrapper not initialized.");
     return ncclInternalError;
   }
   int ret = gdr_internal_close(g);
-  if (ret != 0) {
+  if (ret != 0)
+  {
     WARN("gdr_close() failed: %d", ret);
     return ncclSystemError;
   }
   return ncclSuccess;
 }
 
-ncclResult_t wrap_gdr_pin_buffer(gdr_t g, unsigned long addr, size_t size, uint64_t p2p_token, uint32_t va_space, gdr_mh_t *handle) {
-  if (gdr_internal_pin_buffer == NULL) {
+ncclResult_t wrap_gdr_pin_buffer(gdr_t g, unsigned long addr, size_t size, uint64_t p2p_token, uint32_t va_space, gdr_mh_t *handle)
+{
+  if (gdr_internal_pin_buffer == NULL)
+  {
     WARN("GDRCOPY lib wrapper not initialized.");
     return ncclInternalError;
   }
   int ret;
   GDRLOCKCALL(gdr_internal_pin_buffer(g, addr, size, p2p_token, va_space, handle), ret);
-  if (ret != 0) {
+  if (ret != 0)
+  {
     WARN("gdr_pin_buffer(addr %lx, size %zu) failed: %d", addr, size, ret);
     return ncclSystemError;
   }
   return ncclSuccess;
 }
 
-ncclResult_t wrap_gdr_unpin_buffer(gdr_t g, gdr_mh_t handle) {
-  if (gdr_internal_unpin_buffer == NULL) {
+ncclResult_t wrap_gdr_unpin_buffer(gdr_t g, gdr_mh_t handle)
+{
+  if (gdr_internal_unpin_buffer == NULL)
+  {
     WARN("GDRCOPY lib wrapper not initialized.");
     return ncclInternalError;
   }
   int ret;
   GDRLOCKCALL(gdr_internal_unpin_buffer(g, handle), ret);
-  if (ret != 0) {
+  if (ret != 0)
+  {
     WARN("gdr_unpin_buffer(handle %lx) failed: %d", handle.h, ret);
     return ncclSystemError;
   }
   return ncclSuccess;
 }
 
-ncclResult_t wrap_gdr_get_info(gdr_t g, gdr_mh_t handle, gdr_info_t *info) {
-  if (gdr_internal_get_info == NULL) {
+ncclResult_t wrap_gdr_get_info(gdr_t g, gdr_mh_t handle, gdr_info_t *info)
+{
+  if (gdr_internal_get_info == NULL)
+  {
     WARN("GDRCOPY lib wrapper not initialized.");
     return ncclInternalError;
   }
   int ret;
   GDRLOCKCALL(gdr_internal_get_info(g, handle, info), ret);
-  if (ret != 0) {
+  if (ret != 0)
+  {
     WARN("gdr_get_info(handle %lx) failed: %d", handle.h, ret);
     return ncclSystemError;
   }
   return ncclSuccess;
 }
 
-ncclResult_t wrap_gdr_map(gdr_t g, gdr_mh_t handle, void **va, size_t size) {
-  if (gdr_internal_map == NULL) {
+ncclResult_t wrap_gdr_map(gdr_t g, gdr_mh_t handle, void **va, size_t size)
+{
+  if (gdr_internal_map == NULL)
+  {
     WARN("GDRCOPY lib wrapper not initialized.");
     return ncclInternalError;
   }
   int ret;
   GDRLOCKCALL(gdr_internal_map(g, handle, va, size), ret);
-  if (ret != 0) {
+  if (ret != 0)
+  {
     WARN("gdr_map(handle %lx, size %zu) failed: %d", handle.h, size, ret);
     return ncclSystemError;
   }
   return ncclSuccess;
 }
 
-ncclResult_t wrap_gdr_unmap(gdr_t g, gdr_mh_t handle, void *va, size_t size) {
-  if (gdr_internal_unmap == NULL) {
+ncclResult_t wrap_gdr_unmap(gdr_t g, gdr_mh_t handle, void *va, size_t size)
+{
+  if (gdr_internal_unmap == NULL)
+  {
     WARN("GDRCOPY lib wrapper not initialized.");
     return ncclInternalError;
   }
   int ret;
   GDRLOCKCALL(gdr_internal_unmap(g, handle, va, size), ret);
-  if (ret != 0) {
+  if (ret != 0)
+  {
     WARN("gdr_unmap(handle %lx, va %p, size %zu) failed: %d", handle.h, va, size, ret);
     return ncclSystemError;
   }
   return ncclSuccess;
 }
 
-ncclResult_t wrap_gdr_runtime_get_version(int *major, int *minor) {
-  if (gdr_internal_runtime_get_version == NULL) {
+ncclResult_t wrap_gdr_runtime_get_version(int *major, int *minor)
+{
+  if (gdr_internal_runtime_get_version == NULL)
+  {
     WARN("GDRCOPY lib wrapper not initialized.");
     return ncclInternalError;
   }
@@ -202,8 +329,10 @@ ncclResult_t wrap_gdr_runtime_get_version(int *major, int *minor) {
   return ncclSuccess;
 }
 
-ncclResult_t wrap_gdr_driver_get_version(gdr_t g, int *major, int *minor) {
-  if (gdr_internal_driver_get_version == NULL) {
+ncclResult_t wrap_gdr_driver_get_version(gdr_t g, int *major, int *minor)
+{
+  if (gdr_internal_driver_get_version == NULL)
+  {
     WARN("GDRCOPY lib wrapper not initialized.");
     return ncclInternalError;
   }
@@ -211,32 +340,40 @@ ncclResult_t wrap_gdr_driver_get_version(gdr_t g, int *major, int *minor) {
   return ncclSuccess;
 }
 
-ncclResult_t wrap_gdr_copy_to_mapping(gdr_mh_t handle, void *map_d_ptr, const void *h_ptr, size_t size) {
-  if (gdr_internal_copy_to_mapping == NULL) {
+ncclResult_t wrap_gdr_copy_to_mapping(gdr_mh_t handle, void *map_d_ptr, const void *h_ptr, size_t size)
+{
+  if (gdr_internal_copy_to_mapping == NULL)
+  {
     WARN("GDRCOPY lib wrapper not initialized.");
     return ncclInternalError;
   }
   int ret;
   GDRLOCKCALL(gdr_internal_copy_to_mapping(handle, map_d_ptr, h_ptr, size), ret);
-  if (ret != 0) {
+  if (ret != 0)
+  {
     WARN("gdr_copy_to_mapping(handle %lx, map_d_ptr %p, h_ptr %p, size %zu) failed: %d", handle.h, map_d_ptr, h_ptr, size, ret);
     return ncclSystemError;
   }
   return ncclSuccess;
 }
 
-ncclResult_t wrap_gdr_copy_from_mapping(gdr_mh_t handle, void *h_ptr, const void *map_d_ptr, size_t size) {
-  if (gdr_internal_copy_from_mapping == NULL) {
+ncclResult_t wrap_gdr_copy_from_mapping(gdr_mh_t handle, void *h_ptr, const void *map_d_ptr, size_t size)
+{
+  if (gdr_internal_copy_from_mapping == NULL)
+  {
     WARN("GDRCOPY lib wrapper not initialized.");
     return ncclInternalError;
   }
   int ret;
   GDRLOCKCALL(gdr_internal_copy_from_mapping(handle, h_ptr, map_d_ptr, size), ret);
-  if (ret != 0) {
+  if (ret != 0)
+  {
     WARN("gdr_copy_from_mapping(handle %lx, h_ptr %p, map_d_ptr %p, size %zu) failed: %d", handle.h, h_ptr, map_d_ptr, size, ret);
     return ncclSystemError;
   }
   return ncclSuccess;
 }
+
+#endif // !_WIN32
 
 #endif /* !GDR_DIRECT */

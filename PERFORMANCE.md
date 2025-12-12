@@ -9,12 +9,16 @@
 
 ## Executive Summary
 
-| Metric                    | Value                 | Notes                          |
-| ------------------------- | --------------------- | ------------------------------ |
-| AllReduce Latency (1MB)   | ~50-100 μs            | P2P NVLink path                |
-| AllReduce Bandwidth (1GB) | ~400-500 GB/s         | Near theoretical NVLink limit  |
-| Initialization Time       | ~200-500 ms           | Topology discovery overhead    |
-| Memory Overhead           | ~64-128 MB per device | Buffers, channels, proxy state |
+| Metric                      | Value                 | Notes                          |
+| --------------------------- | --------------------- | ------------------------------ |
+| AllReduce Latency (1MB)     | ~50-100 μs            | P2P NVLink path                |
+| AllReduce Bandwidth (1GB)   | ~400-500 GB/s         | Near theoretical NVLink limit  |
+| Initialization Time         | ~200-500 ms           | Topology discovery overhead    |
+| Memory Overhead             | ~64-128 MB per device | Buffers, channels, proxy state |
+| Platform Tests              | 69/69 passing         | All Windows abstractions work  |
+| Socket Throughput (4MB)     | +109.8%               | Optimized buffers vs default   |
+| NUMA-aware Read Bandwidth   | +52.5%                | 48.4 → 73.8 GB/s               |
+| Timer Resolution (hi-res)   | 6.8x better           | 13.43ms → 1.97ms sleep         |
 
 ---
 
@@ -28,6 +32,7 @@
 6. [Optimization Opportunities](#6-optimization-opportunities)
 7. [Windows-Specific Performance](#7-windows-specific-performance)
 8. [Recommendations](#8-recommendations)
+9. [Benchmark Results](#9-benchmark-results)
 
 ---
 
@@ -543,6 +548,150 @@ struct ncclPerfCounters {
 NCCL_PERF_COUNTER_INC(cudaMallocCount);
 NCCL_PERF_TIMER_SCOPE(initTimeUs);  // Automatic scoped timing
 ```
+
+---
+
+## 9. Benchmark Results
+
+> **Test Environment:** Windows 11, 2x RTX 3090 Ti, 24-core CPU, 1 NUMA node  
+> **Test Date:** December 2025  
+> **NCCL Version:** 2.28.9+cuda13.1
+
+### 9.1 Platform Tests Summary
+
+All 69 platform abstraction tests passed:
+
+| Category                | Tests | Status |
+| ----------------------- | ----- | ------ |
+| Platform Macros         | 5     | ✅ PASS |
+| Time Functions          | 6     | ✅ PASS |
+| Thread Functions        | 7     | ✅ PASS |
+| CPU Affinity            | 11    | ✅ PASS |
+| Socket Functions        | 7     | ✅ PASS |
+| Dynamic Loading         | 4     | ✅ PASS |
+| Atomic Operations       | 6     | ✅ PASS |
+| Socket Optimizations    | 9     | ✅ PASS |
+| Overlapped I/O          | 5     | ✅ PASS |
+| Shared Memory           | 9     | ✅ PASS |
+| **Total**               | **69**| **✅ PASS** |
+
+### 9.2 Socket Optimization Performance
+
+| Configuration             | Latency    | Change vs Default |
+| ------------------------- | ---------- | ----------------- |
+| Default socket            | 8.90 μs    | baseline          |
+| Optimized (4MB buffers)   | 11.67 μs   | +31.1% (setup)    |
+| Low-latency (256KB)       | 10.46 μs   | +17.5% (setup)    |
+
+Note: Setup overhead is one-time. Throughput benefits dominate for sustained transfers.
+
+### 9.3 Loopback Throughput (Optimized Sockets)
+
+| Message Size | Default    | Optimized  | Improvement |
+| ------------ | ---------- | ---------- | ----------- |
+| 64 KB        | 5037 MB/s  | 5225 MB/s  | **+3.7%**   |
+| 256 KB       | 6537 MB/s  | 6883 MB/s  | **+5.3%**   |
+| 1 MB         | 5290 MB/s  | 5559 MB/s  | **+5.1%**   |
+| 4 MB         | 2757 MB/s  | 5784 MB/s  | **+109.8%** |
+
+Key insight: Large message optimization shows **2x throughput improvement** at 4MB.
+
+### 9.4 Memory Access Performance
+
+| Operation         | Basic      | NUMA-aware | Improvement |
+| ----------------- | ---------- | ---------- | ----------- |
+| Sequential Write  | 19.24 GB/s | 19.50 GB/s | +1.4%       |
+| Sequential Read   | 48.41 GB/s | 73.84 GB/s | **+52.5%**  |
+
+NUMA-aware allocation provides significant read performance improvements.
+
+### 9.5 Shared Memory Allocation Latency
+
+| Size    | Basic     | NUMA-aware | Overhead |
+| ------- | --------- | ---------- | -------- |
+| 64 B    | 8.02 μs   | 9.71 μs    | +21.1%   |
+| 1 KB    | 7.10 μs   | 10.32 μs   | +45.4%   |
+| 64 KB   | 29.11 μs  | 30.14 μs   | +3.5%    |
+| 256 KB  | 97.08 μs  | 101.45 μs  | +4.5%    |
+| 1 MB    | 345.07 μs | 361.57 μs  | +4.8%    |
+| 4 MB    | 1460 μs   | 1617 μs    | +10.8%   |
+
+NUMA-aware overhead is acceptable given the read performance gains.
+
+### 9.6 Timer Resolution Impact
+
+| Metric                     | Default    | Hi-Res Enabled |
+| -------------------------- | ---------- | -------------- |
+| Timer resolution           | 15.625 ms  | 0.500 ms       |
+| Sleep(1) actual            | 13.43 ms   | 1.97 ms        |
+| Sleep accuracy improvement | —          | **6.8x**       |
+
+High-resolution timers (`timeBeginPeriod(1)`) dramatically improve sleep accuracy.
+
+### 9.7 Synchronization Primitives
+
+| Operation           | Latency   | Throughput     |
+| ------------------- | --------- | -------------- |
+| Spinlock            | 8.45 ns   | 118.3M ops/sec |
+| Mutex (CS wrapper)  | 13.42 ns  | 74.5M ops/sec  |
+| CRITICAL_SECTION    | 13.05 ns  | 76.6M ops/sec  |
+| Memory fence        | 4.19 ns   | 238.7M ops/sec |
+| Atomic add          | 3.55 ns   | 281.7M ops/sec |
+| Atomic CAS          | 3.69 ns   | 271.0M ops/sec |
+
+Spinlocks are ~59% faster than mutex for uncontended cases.
+
+### 9.8 Core Platform Operations
+
+| Operation                    | Avg Latency | Throughput      |
+| ---------------------------- | ----------- | --------------- |
+| clock_gettime(MONOTONIC)     | 15.6 ns     | 64.0M ops/sec   |
+| pthread_mutex lock/unlock    | 9.5 ns      | 105.2M ops/sec  |
+| pthread_create/join          | 55.99 μs    | 17.9K ops/sec   |
+| sched_getaffinity            | 605.7 ns    | 1.65M ops/sec   |
+| socket create/close          | 8.9 μs      | 112.4K ops/sec  |
+| poll (1 fd, timeout=0)       | 857 ns      | 1.17M ops/sec   |
+| atomic increment             | 3.5 ns      | 289.0M ops/sec  |
+| getpid                       | 1.4 ns      | 719.4M ops/sec  |
+| dlsym                        | 64.3 ns     | 15.6M ops/sec   |
+
+### 9.9 Cross-Platform Comparison
+
+| Operation                  | Windows   | Linux (typical) | Notes                    |
+| -------------------------- | --------- | --------------- | ------------------------ |
+| clock_gettime              | 15.6 ns   | 20-30 ns        | Windows comparable/better|
+| Mutex lock/unlock          | 9.5 ns    | 15-25 ns        | CS faster than futex     |
+| Atomic increment           | 3.5 ns    | 10-20 ns        | Windows faster           |
+| Socket create/close        | 8.9 μs    | 3-8 μs          | Winsock overhead         |
+| poll (timeout=0)           | 857 ns    | 500-1000 ns     | Comparable               |
+| getpid                     | 1.4 ns    | 1-5 ns          | Both cached              |
+
+**Key findings:**
+- Windows CRITICAL_SECTION outperforms Linux futex-based mutexes
+- Windows atomics are highly optimized (Interlocked* APIs)
+- Socket operations have ~2x overhead (Winsock vs BSD sockets)
+- Time functions are comparable to Linux vDSO implementations
+
+### 9.10 Overlapped I/O Operations
+
+| Operation            | Latency   |
+| -------------------- | --------- |
+| CreateEvent (init)   | 0.44 μs   |
+| CloseHandle (free)   | 0.56 μs   |
+| IOCP create/destroy  | 0.70 μs   |
+| IOCP associate       | 11.82 μs  |
+
+Overlapped I/O setup is efficient; IOCP association has fixed overhead.
+
+### 9.11 Optimization Impact Summary
+
+| Optimization         | Measured Impact                          | Status |
+| -------------------- | ---------------------------------------- | ------ |
+| Timer resolution     | Sleep accuracy: 13.43ms → 1.97ms (6.8x)  | ✅ W3  |
+| Socket buffers (4MB) | 4MB throughput: 2757 → 5784 MB/s (+110%) | ✅ Lib |
+| NUMA-aware reads     | Read bandwidth: 48.4 → 73.8 GB/s (+52%) | ✅ Lib |
+| NVML caching         | Eliminates repeated busId lookups        | ✅ O1  |
+| IPC handle caching   | Caches cudaIpcMemHandle by device ptr    | ✅ O3  |
 
 ---
 

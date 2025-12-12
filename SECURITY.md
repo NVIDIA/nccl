@@ -1,9 +1,15 @@
 # NCCL Security Audit Report
 
 **Date:** December 11, 2025  
-**Version:** NCCL 2.28.9+cuda13.0  
+**Version:** NCCL 2.28.9+cuda13.1 (Windows Port)  
 **Scope:** Full codebase security analysis  
 **Frameworks:** CVE Analysis, NIST FIPS 140-3, MITRE ATT&CK, CMMC 2.0
+
+---
+
+## Remediation Status
+
+> **Note:** Initial security fixes (replacing `strcpy`→`strncpy`, `sprintf`→`snprintf`, `atoi`→`strtol`) were implemented but caused runtime hangs during AllReduce operations. The fixes have been reverted pending deeper investigation into the interaction between bounds-checking code and NCCL's communication paths. The issues documented below remain in the codebase and should be addressed with more careful implementation that preserves the timing-sensitive nature of collective operations.
 
 ---
 

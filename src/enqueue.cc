@@ -1940,9 +1940,10 @@ ncclResult_t ncclLaunchKernel(struct ncclComm *comm, struct ncclKernelPlan *plan
   CUfunction fn;
   CUDACHECKGOTO(cudaGetFuncBySymbol(&fn, sym), ret, do_return);
 
-#ifdef _WIN32
-  // On Windows, we must set the max dynamic shared memory on the CUfunction
-  // in the current device context before launch
+  // We must set the max dynamic shared memory on the CUfunction before launch
+  // when using more than the default 48KB. This applies to all platforms because
+  // cudaGetFuncBySymbol returns a handle that needs the attribute set in the
+  // current device context, regardless of what was set during kernel initialization.
   if (smem > 48 * 1024)
   {
     CUresult cuRes = pfn_cuFuncSetAttribute(fn, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, smem);
@@ -1955,7 +1956,6 @@ ncclResult_t ncclLaunchKernel(struct ncclComm *comm, struct ncclKernelPlan *plan
       goto do_return;
     }
   }
-#endif
 
   if (CUDART_VERSION >= 11080 && driverVersion >= 11080)
   {

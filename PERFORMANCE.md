@@ -62,7 +62,7 @@ Performance analysis was conducted using:
 
 ### 2.1 Initialization Phase (`ncclCommInitAll`)
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                     ncclCommInitAll Time Breakdown                           │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -103,7 +103,7 @@ Performance analysis was conducted using:
 
 ### 2.2 AllReduce Operation
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                     ncclAllReduce Time Breakdown                             │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -170,7 +170,7 @@ Performance analysis was conducted using:
 
 ### 3.2 Latency Breakdown by Message Size
 
-```
+```text
 Latency (μs)
 │
 │                                                          ┌──────────────┐
@@ -210,7 +210,7 @@ Latency (μs)
 
 ### 4.1 Memory Allocation Overview
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    NCCL Memory Usage per Communicator                        │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -280,7 +280,7 @@ Latency (μs)
 
 ### 5.1 Initialization Critical Path
 
-```
+```text
 Time ──────────────────────────────────────────────────────────────────────▶
 
 T=0ms    ┌─────────────────────────────────────────────────────────────┐
@@ -311,7 +311,7 @@ Critical Path Components:
 
 ### 5.2 AllReduce Critical Path (Ring Algorithm)
 
-```
+```text
 GPU 0        GPU 1        GPU 2        GPU 3
   │            │            │            │
   │──Send[0]──▶│            │            │   Step 0: Scatter-Reduce
@@ -678,57 +678,57 @@ Detailed comparison between Windows 11 and Linux (Debian Trixie WSL2) on identic
 
 #### 9.9.1 Time and Synchronization Operations
 
-| Operation                    | Windows     | Linux (WSL2) | Δ Windows  | Winner  |
-| ---------------------------- | ----------- | ------------ | ---------- | ------- |
-| clock_gettime(MONOTONIC)     | 15.6 ns     | 36.4 ns      | **-57%**   | Windows |
-| clock_gettime(REALTIME)      | —           | 18.2 ns      | —          | —       |
-| Mutex lock/unlock            | 9.5 ns      | 26.8 ns      | **-65%**   | Windows |
-| Mutex trylock/unlock         | —           | 28.2 ns      | —          | —       |
-| Mutex init/destroy           | —           | 37.1 ns      | —          | —       |
-| pthread_create/join          | 55.99 μs    | 55.99 μs     | 0%         | Tie     |
+| Operation                | Windows  | Linux (WSL2) | Δ Windows | Winner  |
+| ------------------------ | -------- | ------------ | --------- | ------- |
+| clock_gettime(MONOTONIC) | 15.6 ns  | 36.4 ns      | **-57%**  | Windows |
+| clock_gettime(REALTIME)  | —        | 18.2 ns      | —         | —       |
+| Mutex lock/unlock        | 9.5 ns   | 26.8 ns      | **-65%**  | Windows |
+| Mutex trylock/unlock     | —        | 28.2 ns      | —         | —       |
+| Mutex init/destroy       | —        | 37.1 ns      | —         | —       |
+| pthread_create/join      | 55.99 μs | 55.99 μs     | 0%        | Tie     |
 
 **Analysis:** Windows CRITICAL_SECTION significantly outperforms Linux pthread_mutex. The Windows implementation uses spinlock-first approach before kernel wait, reducing syscall overhead.
 
 #### 9.9.2 Atomic Operations
 
-| Operation                  | Windows | Linux (WSL2) | Δ Windows | Winner  |
-| -------------------------- | ------- | ------------ | --------- | ------- |
-| Atomic increment (64-bit)  | 3.5 ns  | 28.3 ns      | **-88%**  | Windows |
-| Atomic increment (32-bit)  | —       | 26.8 ns      | —         | —       |
-| Atomic exchange + load     | —       | 26.0 ns      | —         | —       |
-| Atomic CAS                 | 3.69 ns | 26.3 ns      | **-86%**  | Windows |
-| Memory barrier             | 4.19 ns | 25.0 ns      | **-83%**  | Windows |
+| Operation                 | Windows | Linux (WSL2) | Δ Windows | Winner  |
+| ------------------------- | ------- | ------------ | --------- | ------- |
+| Atomic increment (64-bit) | 3.5 ns  | 28.3 ns      | **-88%**  | Windows |
+| Atomic increment (32-bit) | —       | 26.8 ns      | —         | —       |
+| Atomic exchange + load    | —       | 26.0 ns      | —         | —       |
+| Atomic CAS                | 3.69 ns | 26.3 ns      | **-86%**  | Windows |
+| Memory barrier            | 4.19 ns | 25.0 ns      | **-83%**  | Windows |
 
 **Analysis:** Windows Interlocked* APIs are highly optimized with dedicated compiler intrinsics. Linux measurements include WSL2 overhead; native Linux would be faster (typically 10-20 ns).
 
 #### 9.9.3 Socket Operations
 
-| Operation           | Windows  | Linux (WSL2) | Δ Windows | Winner |
-| ------------------- | -------- | ------------ | --------- | ------ |
-| Socket create/close | 8.9 μs   | 8.5 μs       | +5%       | Linux  |
-| poll (1 fd, t=0)    | 857 ns   | 999 ns       | **-14%**  | Windows|
-| bind + listen       | ~10 μs   | ~10 μs       | 0%        | Tie    |
+| Operation           | Windows | Linux (WSL2) | Δ Windows | Winner  |
+| ------------------- | ------- | ------------ | --------- | ------- |
+| Socket create/close | 8.9 μs  | 8.5 μs       | +5%       | Linux   |
+| poll (1 fd, t=0)    | 857 ns  | 999 ns       | **-14%**  | Windows |
+| bind + listen       | ~10 μs  | ~10 μs       | 0%        | Tie     |
 
 **Analysis:** Socket operations are comparable. Winsock layered architecture adds minimal overhead for basic operations. Linux typically faster for native (non-WSL2) socket syscalls.
 
 #### 9.9.4 CPU Affinity Operations
 
-| Operation          | Windows  | Linux (WSL2) | Δ Windows | Winner  |
-| ------------------ | -------- | ------------ | --------- | ------- |
-| CPU_ZERO           | —        | 17.7 ns      | —         | —       |
-| CPU_SET            | —        | 19.6 ns      | —         | —       |
-| CPU_ISSET          | —        | 25.0 ns      | —         | —       |
-| CPU_COUNT          | —        | 258.7 ns     | —         | —       |
-| sched_getaffinity  | 605.7 ns | 671.3 ns     | **-10%**  | Windows |
+| Operation         | Windows  | Linux (WSL2) | Δ Windows | Winner  |
+| ----------------- | -------- | ------------ | --------- | ------- |
+| CPU_ZERO          | —        | 17.7 ns      | —         | —       |
+| CPU_SET           | —        | 19.6 ns      | —         | —       |
+| CPU_ISSET         | —        | 25.0 ns      | —         | —       |
+| CPU_COUNT         | —        | 258.7 ns     | —         | —       |
+| sched_getaffinity | 605.7 ns | 671.3 ns     | **-10%**  | Windows |
 
 **Analysis:** Windows processor affinity APIs perform comparably to Linux. Both platforms support 1024+ CPU configurations.
 
 #### 9.9.5 Dynamic Loading
 
-| Operation           | Windows  | Linux (WSL2) | Δ Windows | Winner |
-| ------------------- | -------- | ------------ | --------- | ------ |
-| dlsym               | 64.3 ns  | 112.2 ns     | **-43%**  | Windows|
-| dlopen/dlclose      | —        | 2083 ns      | —         | —      |
+| Operation      | Windows | Linux (WSL2) | Δ Windows | Winner  |
+| -------------- | ------- | ------------ | --------- | ------- |
+| dlsym          | 64.3 ns | 112.2 ns     | **-43%**  | Windows |
+| dlopen/dlclose | —       | 2083 ns      | —         | —       |
 
 **Analysis:** Windows GetProcAddress is faster than Linux dlsym due to PE format's export table structure vs ELF symbol hash tables.
 
@@ -744,15 +744,15 @@ Detailed comparison between Windows 11 and Linux (Debian Trixie WSL2) on identic
 
 #### 9.9.7 Performance Summary
 
-| Category              | Windows Advantage | Notes                                    |
-| --------------------- | ----------------- | ---------------------------------------- |
-| **Synchronization**   | **2-3x faster**   | CRITICAL_SECTION vs futex                |
-| **Atomics**           | **5-8x faster**   | Interlocked* intrinsics highly optimized |
-| **Time functions**    | **2x faster**     | QPC vs clock_gettime                     |
-| **Dynamic loading**   | **1.7x faster**   | PE export tables vs ELF symbols          |
-| **Process info**      | **16x faster**    | TEB caching vs syscall                   |
-| **Sockets**           | Comparable        | ~5% difference either direction          |
-| **Affinity**          | Comparable        | Both platforms well-optimized            |
+| Category            | Windows Advantage | Notes                                    |
+| ------------------- | ----------------- | ---------------------------------------- |
+| **Synchronization** | **2-3x faster**   | CRITICAL_SECTION vs futex                |
+| **Atomics**         | **5-8x faster**   | Interlocked* intrinsics highly optimized |
+| **Time functions**  | **2x faster**     | QPC vs clock_gettime                     |
+| **Dynamic loading** | **1.7x faster**   | PE export tables vs ELF symbols          |
+| **Process info**    | **16x faster**    | TEB caching vs syscall                   |
+| **Sockets**         | Comparable        | ~5% difference either direction          |
+| **Affinity**        | Comparable        | Both platforms well-optimized            |
 
 **Key Findings:**
 
@@ -848,4 +848,4 @@ cudaEventElapsedTime(&ms, start, stop);
 
 ---
 
-*Report generated by performance audit process. Last updated: December 2025*
+<!-- Report generated by performance audit process. Last updated: December 2025 -->

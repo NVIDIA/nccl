@@ -96,14 +96,18 @@ static bool ncclWinTimerInitialized = false;
 
 static ncclResult_t initWindowsTimer()
 {
-  if (!ncclWinTimerInitialized) {
+  if (!ncclWinTimerInitialized)
+  {
     // Request 1ms timer resolution to reduce sleep/wait granularity
     // from the default 15.6ms to 1ms for improved proxy thread scheduling
     MMRESULT result = timeBeginPeriod(1);
-    if (result == TIMERR_NOERROR) {
+    if (result == TIMERR_NOERROR)
+    {
       ncclWinTimerInitialized = true;
       INFO(NCCL_INIT, "Windows timer resolution set to 1ms for improved performance");
-    } else {
+    }
+    else
+    {
       WARN("Failed to set Windows timer resolution to 1ms (error %d)", result);
     }
   }
@@ -112,7 +116,8 @@ static ncclResult_t initWindowsTimer()
 
 static void cleanupWindowsTimer()
 {
-  if (ncclWinTimerInitialized) {
+  if (ncclWinTimerInitialized)
+  {
     timeEndPeriod(1);
     ncclWinTimerInitialized = false;
   }
@@ -1077,7 +1082,6 @@ static ncclResult_t initTransportsRank(struct ncclComm *comm, struct ncclComm *p
   // AllGather1 - end
   timers[TIMER_INIT_ALLGATHER] = clockNano() - timers[TIMER_INIT_ALLGATHER];
 
-
   // Check for MNNVL support
   NCCLCHECKGOTO(ncclGetUserP2pLevel(&p2pLevel), ret, fail);
   if ((nNodes > 1 && ncclParamMNNVLEnable() != 0 && p2pLevel != 0) || ncclParamMNNVLEnable() == 1)
@@ -1150,7 +1154,6 @@ static ncclResult_t initTransportsRank(struct ncclComm *comm, struct ncclComm *p
     comm->intraBarrierCounter = 0;
     comm->intraBarrierGate = 0;
   } while (0);
-
 
   timers[TIMER_INIT_TOPO] = clockNano();
 
@@ -1250,7 +1253,6 @@ static ncclResult_t initTransportsRank(struct ncclComm *comm, struct ncclComm *p
   // Initialize num P2P LL buffers for this communicator
   comm->allocP2pNetLLBuffers = ncclParamAllocP2pNetLLBuffers() == 1;
 
-
   if (comm->rank == ncclParamGraphDumpFileRank())
   {
     struct ncclTopoGraph *dumpGraphs[5] = {ringGraph, treeGraph, collNetDirectGraph, collNetChainGraph, nvlsGraph};
@@ -1282,7 +1284,6 @@ static ncclResult_t initTransportsRank(struct ncclComm *comm, struct ncclComm *p
   NCCLCHECKGOTO(ncclTopoPreset(comm, graphs, &allGather3Data[rank].topoRanks), ret, fail);
 
   NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, allGather3Data, sizeof(*allGather3Data)), ret, fail);
-
 
   // Determine nNodes, firstRanks, ...
   NCCLCHECKGOTO(ncclCalloc(&nodesFirstRank, nranks), ret, fail);
@@ -1423,7 +1424,6 @@ static ncclResult_t initTransportsRank(struct ncclComm *comm, struct ncclComm *p
   NCCLCHECKGOTO(ncclTopoPostset(comm, nodesFirstRank, nodesTreePatterns, allTopoRanks, rings, graphs, parent), ret, fail);
   // AllGather3 - end
   timers[TIMER_INIT_ALLGATHER] += clockNano() - timers[TIMER_INIT_CONNECT];
-
 
   TRACE(NCCL_INIT, "rank %d nranks %d - BUILT %d TREES/RINGS", rank, nranks, comm->nChannels);
 

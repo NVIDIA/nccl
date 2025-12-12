@@ -12,7 +12,7 @@
 #include <initializer_list>
 #include <memory>
 #include <mutex>
-#include <cctype>  // for tolower in O1 optimization
+#include <cctype> // for tolower in O1 optimization
 
 int ncclNvmlDeviceCount = 0;
 ncclNvmlDeviceInfo ncclNvmlDevices[ncclNvmlMaxDevices];
@@ -42,7 +42,7 @@ namespace
   NCCL_NVML_FN(nvmlDeviceGetHandleByPciBusId, nvmlReturn_t, (const char *pciBusId, nvmlDevice_t *device))
   NCCL_NVML_FN(nvmlDeviceGetHandleByIndex, nvmlReturn_t, (unsigned int index, nvmlDevice_t *device))
   NCCL_NVML_FN(nvmlDeviceGetIndex, nvmlReturn_t, (nvmlDevice_t device, unsigned *index))
-  NCCL_NVML_FN(nvmlDeviceGetPciInfo, nvmlReturn_t, (nvmlDevice_t device, nvmlPciInfo_t *pci))  // O1 optimization: cache busIds
+  NCCL_NVML_FN(nvmlDeviceGetPciInfo, nvmlReturn_t, (nvmlDevice_t device, nvmlPciInfo_t *pci)) // O1 optimization: cache busIds
   NCCL_NVML_FN(nvmlErrorString, char const *, (nvmlReturn_t r))
   NCCL_NVML_FN(nvmlDeviceGetNvLinkState, nvmlReturn_t, (nvmlDevice_t device, unsigned int link, nvmlEnableState_t *isActive))
   NCCL_NVML_FN(nvmlDeviceGetNvLinkRemotePciInfo, nvmlReturn_t, (nvmlDevice_t device, unsigned int link, nvmlPciInfo_t *pci))
@@ -119,7 +119,7 @@ ncclResult_t ncclNvmlEnsureInitialized()
         {(void **)&pfn_nvmlDeviceGetHandleByPciBusId, "nvmlDeviceGetHandleByPciBusId"},
         {(void **)&pfn_nvmlDeviceGetHandleByIndex, "nvmlDeviceGetHandleByIndex"},
         {(void **)&pfn_nvmlDeviceGetIndex, "nvmlDeviceGetIndex"},
-        {(void **)&pfn_nvmlDeviceGetPciInfo, "nvmlDeviceGetPciInfo"},  // O1 optimization
+        {(void **)&pfn_nvmlDeviceGetPciInfo, "nvmlDeviceGetPciInfo"}, // O1 optimization
         {(void **)&pfn_nvmlErrorString, "nvmlErrorString"},
         {(void **)&pfn_nvmlDeviceGetNvLinkState, "nvmlDeviceGetNvLinkState"},
         {(void **)&pfn_nvmlDeviceGetNvLinkRemotePciInfo, "nvmlDeviceGetNvLinkRemotePciInfo"},
@@ -204,7 +204,7 @@ ncclResult_t ncclNvmlEnsureInitialized()
       }
       else
       {
-        ncclNvmlDevices[a].busId[0] = '\0';  // Empty string indicates uncached
+        ncclNvmlDevices[a].busId[0] = '\0'; // Empty string indicates uncached
       }
     }
     else
@@ -271,7 +271,8 @@ ncclResult_t ncclNvmlEnsureInitialized()
 // NVML may return busIds with different cases (uppercase/lowercase hex digits)
 static bool busIdMatches(const char *cached, const char *query)
 {
-  if (cached[0] == '\0') return false;  // Not cached
+  if (cached[0] == '\0')
+    return false; // Not cached
   for (int i = 0; i < NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE && cached[i] != '\0' && query[i] != '\0'; i++)
   {
     if (tolower((unsigned char)cached[i]) != tolower((unsigned char)query[i]))

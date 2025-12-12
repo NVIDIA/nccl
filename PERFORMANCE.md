@@ -486,16 +486,16 @@ buffer = poolAlloc(pool, size);  // ~1μs
 
 > **Last Updated:** December 2025
 
-| Optimization            | Status         | Notes                                        |
-| ----------------------- | -------------- | -------------------------------------------- |
-| Memory pool (O5)        | ✅ Exists      | `ncclShadowPool` already implements pooling  |
-| NVML caching (O1)       | ⏳ Planned     | Requires careful invalidation handling       |
-| IPC handle pooling (O3) | ⏳ Planned     | Medium complexity                            |
-| Timer resolution (W3)   | ✅ Implemented | `timeBeginPeriod(1)` added in `init.cc`      |
-| Thread affinity (W2)    | ✅ Implemented | Extended to Windows in `proxy.cc`            |
-| Lazy channels (O2)      | ⏳ Planned     | High complexity, long-term                   |
-| Kernel fusion (O4)      | ⏳ Planned     | Very high complexity                         |
-| Performance counters    | ✅ Implemented | `src/include/perf_counters.h`                |
+| Optimization            | Status        | Notes                                          |
+| ----------------------- | ------------- | ---------------------------------------------- |
+| Memory pool (O5)        | ✅ Exists      | `ncclShadowPool` already implements pooling    |
+| NVML caching (O1)       | ✅ Implemented | BusId cache in `nvmlwrap.cc` avoids NVML calls |
+| IPC handle pooling (O3) | ⏳ Planned     | Medium complexity                              |
+| Timer resolution (W3)   | ✅ Implemented | `timeBeginPeriod(1)` added in `init.cc`        |
+| Thread affinity (W2)    | ✅ Implemented | Extended to Windows in `proxy.cc`              |
+| Lazy channels (O2)      | ⏳ Planned     | High complexity, long-term                     |
+| Kernel fusion (O4)      | ⏳ Planned     | Very high complexity                           |
+| Performance counters    | ✅ Implemented | `src/include/perf_counters.h`                  |
 
 ### 8.3 Implementation Roadmap
 
@@ -506,9 +506,9 @@ buffer = poolAlloc(pool, size);  // ~1μs
 - [x] Proxy thread affinity for Windows (`proxy.cc`)
 - [x] Performance counters infrastructure (`perf_counters.h/cc`)
 
-#### Phase 2: Medium-Term (1-2 months)
+#### Phase 2: Medium-Term (1-2 months) ✅ STARTED
 
-- [ ] Implement NVML topology caching
+- [x] NVML topology caching (`nvmlwrap.cc` - busId cache for device handles)- [ ] Implement NVML topology caching
 - [ ] Implement IPC handle batching
 - [ ] Profile and optimize Windows IPC paths
 
@@ -581,17 +581,18 @@ cudaEventElapsedTime(&ms, start, stop);
 
 ## Appendix B: Key Source Files for Optimization
 
-| Component         | File                              | Priority | Status      |
-| ----------------- | --------------------------------- | -------- | ----------- |
-| Initialization    | `src/init.cc`                     | High     | ✅ Modified |
-| Topology          | `src/graph/topo.cc`               | High     | ⏳ Planned  |
-| Transports        | `src/transport/*.cc`              | High     |             |
-| Kernel launch     | `src/enqueue.cc`                  | Medium   |             |
-| Memory alloc      | `src/allocator.cc`                | Medium   | ✅ Existing |
-| Proxy             | `src/proxy.cc`                    | Medium   | ✅ Modified |
-| Windows IPC       | `src/include/platform/win32_*`    | High     |             |
-| Perf Counters     | `src/include/perf_counters.h`     | Medium   | ✅ New      |
-| Perf Counters Imp | `src/perf_counters.cc`            | Medium   | ✅ New      |
+| Component         | File                           | Priority | Status     |
+| ----------------- | ------------------------------ | -------- | ---------- |
+| Initialization    | `src/init.cc`                  | High     | ✅ Modified |
+| Topology          | `src/graph/topo.cc`            | High     | ⏳ Planned  |
+| NVML Wrapper      | `src/misc/nvmlwrap.cc`         | High     | ✅ Modified |
+| Transports        | `src/transport/*.cc`           | High     |            |
+| Kernel launch     | `src/enqueue.cc`               | Medium   |            |
+| Memory alloc      | `src/allocator.cc`             | Medium   | ✅ Existing |
+| Proxy             | `src/proxy.cc`                 | Medium   | ✅ Modified |
+| Windows IPC       | `src/include/platform/win32_*` | High     |            |
+| Perf Counters     | `src/include/perf_counters.h`  | Medium   | ✅ New      |
+| Perf Counters Imp | `src/perf_counters.cc`         | Medium   | ✅ New      |
 
 ### Files Modified for Performance Optimizations
 
@@ -599,6 +600,8 @@ cudaEventElapsedTime(&ms, start, stop);
 2. **`src/proxy.cc`** - Extended proxy thread affinity to Windows via `sched_setaffinity`
 3. **`src/include/perf_counters.h`** - New performance counters header
 4. **`src/perf_counters.cc`** - Performance counters implementation
+5. **`src/misc/nvmlwrap.cc`** - Added NVML device handle caching by busId (O1 optimization)
+6. **`src/include/nvmlwrap.h`** - Added busId field to `ncclNvmlDeviceInfo` structure
 
 ---
 

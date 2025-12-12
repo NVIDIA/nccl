@@ -12,6 +12,7 @@
 #include <initializer_list>
 #include <memory>
 #include <mutex>
+#include <cctype>  // for tolower in O1 optimization
 
 int ncclNvmlDeviceCount = 0;
 ncclNvmlDeviceInfo ncclNvmlDevices[ncclNvmlMaxDevices];
@@ -41,6 +42,7 @@ namespace
   NCCL_NVML_FN(nvmlDeviceGetHandleByPciBusId, nvmlReturn_t, (const char *pciBusId, nvmlDevice_t *device))
   NCCL_NVML_FN(nvmlDeviceGetHandleByIndex, nvmlReturn_t, (unsigned int index, nvmlDevice_t *device))
   NCCL_NVML_FN(nvmlDeviceGetIndex, nvmlReturn_t, (nvmlDevice_t device, unsigned *index))
+  NCCL_NVML_FN(nvmlDeviceGetPciInfo, nvmlReturn_t, (nvmlDevice_t device, nvmlPciInfo_t *pci))  // O1 optimization: cache busIds
   NCCL_NVML_FN(nvmlErrorString, char const *, (nvmlReturn_t r))
   NCCL_NVML_FN(nvmlDeviceGetNvLinkState, nvmlReturn_t, (nvmlDevice_t device, unsigned int link, nvmlEnableState_t *isActive))
   NCCL_NVML_FN(nvmlDeviceGetNvLinkRemotePciInfo, nvmlReturn_t, (nvmlDevice_t device, unsigned int link, nvmlPciInfo_t *pci))
@@ -117,6 +119,7 @@ ncclResult_t ncclNvmlEnsureInitialized()
         {(void **)&pfn_nvmlDeviceGetHandleByPciBusId, "nvmlDeviceGetHandleByPciBusId"},
         {(void **)&pfn_nvmlDeviceGetHandleByIndex, "nvmlDeviceGetHandleByIndex"},
         {(void **)&pfn_nvmlDeviceGetIndex, "nvmlDeviceGetIndex"},
+        {(void **)&pfn_nvmlDeviceGetPciInfo, "nvmlDeviceGetPciInfo"},  // O1 optimization
         {(void **)&pfn_nvmlErrorString, "nvmlErrorString"},
         {(void **)&pfn_nvmlDeviceGetNvLinkState, "nvmlDeviceGetNvLinkState"},
         {(void **)&pfn_nvmlDeviceGetNvLinkRemotePciInfo, "nvmlDeviceGetNvLinkRemotePciInfo"},
@@ -188,6 +191,26 @@ ncclResult_t ncclNvmlEnsureInitialized()
       initResult = ncclSystemError;
       return initResult;
     }
+
+    // O1 optimization: Cache PCI bus ID for faster lookups in ncclNvmlDeviceGetHandleByPciBusId
+    if (pfn_nvmlDeviceGetPciInfo != nullptr)
+    {
+      nvmlPciInfo_t pciInfo;
+      res1 = pfn_nvmlDeviceGetPciInfo(ncclNvmlDevices[a].handle, &pciInfo);
+      if (res1 == NVML_SUCCESS)
+      {
+        strncpy(ncclNvmlDevices[a].busId, pciInfo.busId, NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE);
+        ncclNvmlDevices[a].busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE - 1] = '\0';
+      }
+      else
+      {
+        ncclNvmlDevices[a].busId[0] = '\0';  // Empty string indicates uncached
+      }
+    }
+    else
+    {
+      ncclNvmlDevices[a].busId[0] = '\0';
+    }
   }
 
   for (int a = 0; a < ncclNvmlDeviceCount; a++)
@@ -244,9 +267,36 @@ ncclResult_t ncclNvmlEnsureInitialized()
     }                                                                           \
   } while (0)
 
+// O1 optimization: Helper to compare busIds case-insensitively
+// NVML may return busIds with different cases (uppercase/lowercase hex digits)
+static bool busIdMatches(const char *cached, const char *query)
+{
+  if (cached[0] == '\0') return false;  // Not cached
+  for (int i = 0; i < NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE && cached[i] != '\0' && query[i] != '\0'; i++)
+  {
+    if (tolower((unsigned char)cached[i]) != tolower((unsigned char)query[i]))
+      return false;
+    if (cached[i] == '\0' || query[i] == '\0')
+      return cached[i] == query[i];
+  }
+  return true;
+}
+
 ncclResult_t ncclNvmlDeviceGetHandleByPciBusId(const char *pciBusId, nvmlDevice_t *device)
 {
   NCCLCHECK(ncclNvmlEnsureInitialized());
+
+  // O1 optimization: Check cached busIds first to avoid NVML call
+  for (int d = 0; d < ncclNvmlDeviceCount; d++)
+  {
+    if (busIdMatches(ncclNvmlDevices[d].busId, pciBusId))
+    {
+      *device = ncclNvmlDevices[d].handle;
+      return ncclSuccess;
+    }
+  }
+
+  // Cache miss - fall back to NVML call
   std::lock_guard<std::mutex> locked(lock);
   NVMLCHECK(nvmlDeviceGetHandleByPciBusId, pciBusId, device);
   return ncclSuccess;

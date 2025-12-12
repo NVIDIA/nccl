@@ -311,6 +311,7 @@ constexpr int ncclNvmlMaxDevices = 32;
 struct ncclNvmlDeviceInfo {
   nvmlDevice_t handle;
   int computeCapabilityMajor, computeCapabilityMinor;
+  char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE];  // Cached PCI bus ID for O1 optimization
 };
 struct ncclNvmlDevicePairInfo {
   nvmlGpuP2PStatus_t p2pStatusRead, p2pStatusWrite;

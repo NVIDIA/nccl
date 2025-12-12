@@ -1062,7 +1062,11 @@ static ncclResult_t ipcRegisterBuffer(ncclComm *comm, const void *userbuff, size
             // O3 optimization: Use IPC cache
             NCCL_PERF_COUNTER_INC(ipcHandleGetCount);
             cudaError_t cacheRes = NCCL_IPC_GET_HANDLE_CACHED(&ipcInfo.ipcDesc.devIpc, baseAddr);
-            if (cacheRes != cudaSuccess) { ret = ncclUnhandledCudaError; goto fail; }
+            if (cacheRes != cudaSuccess)
+            {
+              ret = ncclUnhandledCudaError;
+              goto fail;
+            }
             ipcInfo.legacyIpcCap = true;
             if (isLegacyIpc)
               *isLegacyIpc = true;
@@ -1107,7 +1111,11 @@ static ncclResult_t ipcRegisterBuffer(ncclComm *comm, const void *userbuff, size
           // O3 optimization: Use IPC cache
           NCCL_PERF_COUNTER_INC(ipcHandleGetCount);
           cudaError_t cacheRes = NCCL_IPC_GET_HANDLE_CACHED(&ipcInfo.ipcDesc.devIpc, baseAddr);
-          if (cacheRes != cudaSuccess) { ret = ncclUnhandledCudaError; goto fail; }
+          if (cacheRes != cudaSuccess)
+          {
+            ret = ncclUnhandledCudaError;
+            goto fail;
+          }
           ipcInfo.legacyIpcCap = true;
           if (isLegacyIpc)
             *isLegacyIpc = true;

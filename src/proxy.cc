@@ -1994,6 +1994,13 @@ void *ncclProxyService(void *_args)
   if (CPU_COUNT(&proxyCpuset))
     sched_setaffinity(0, sizeof(cpu_set_t), &proxyCpuset);
   INFO(NCCL_INIT, "[Proxy Service] Device %d CPU core %d", proxyState->cudaDev, sched_getcpu());
+#elif defined(_WIN32)
+  // Windows proxy thread affinity (W2 optimization)
+  // Apply thread affinity for improved scheduling on Windows
+  pthread_once(&proxyCpusetOnce, proxyCpusetOnceFunc);
+  if (CPU_COUNT(&proxyCpuset))
+    sched_setaffinity(0, sizeof(cpu_set_t), &proxyCpuset);
+  INFO(NCCL_INIT, "[Proxy Service] Device %d with CPU affinity", proxyState->cudaDev);
 #else
   INFO(NCCL_INIT, "[Proxy Service] Device %d", proxyState->cudaDev);
 #endif

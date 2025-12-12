@@ -44,12 +44,12 @@ Performance analysis was conducted using:
 
 ### 1.2 Test Configurations
 
-| Configuration      | Setup                      |
-| ------------------ | -------------------------- |
-| Intra-node         | 2x RTX 3090 Ti via PCIe    |
-| Message sizes      | 1KB, 1MB, 100MB, 1GB       |
-| Operations         | AllReduce, AllGather, Send/Recv |
-| Data types         | float32, float16, bfloat16 |
+| Configuration | Setup                           |
+| ------------- | ------------------------------- |
+| Intra-node    | 2x RTX 3090 Ti via PCIe         |
+| Message sizes | 1KB, 1MB, 100MB, 1GB            |
+| Operations    | AllReduce, AllGather, Send/Recv |
+| Data types    | float32, float16, bfloat16      |
 
 ---
 
@@ -131,23 +131,23 @@ Performance analysis was conducted using:
 
 ### 2.3 Function Timing Table
 
-| Function                           | Avg Time (μs) | % of Total | Calls/Op |
-| ---------------------------------- | ------------- | ---------- | -------- |
-| **Initialization**                 |               |            |          |
-| `ncclCommInitAll`                  | 350,000       | 100%       | 1        |
-| `ncclTopoGetSystem`                | 87,500        | 25%        | 1        |
-| `initTransportsRank`               | 140,000       | 40%        | 1        |
-| `p2pTransportSetup`                | 87,500        | 25%        | n-1      |
-| `cudaMalloc` (total)               | 35,000        | 10%        | ~20      |
-| **AllReduce (1MB)**                |               |            |          |
-| `ncclAllReduce` (host)             | 5             | 5%         | 1        |
-| `ncclEnqueueCheck`                 | 1             | 1%         | 1        |
-| `ncclSaveKernel`                   | 2             | 2%         | 1        |
-| `cudaLaunchKernel`                 | 2             | 2%         | 1        |
-| GPU kernel execution               | 90            | 90%        | 1        |
-| **AllReduce (1GB)**                |               |            |          |
-| Host-side overhead                 | 10            | <0.01%     | 1        |
-| GPU kernel execution               | 2,100,000     | 99.99%     | 1        |
+| Function               | Avg Time (μs) | % of Total | Calls/Op |
+| ---------------------- | ------------- | ---------- | -------- |
+| **Initialization**     |               |            |          |
+| `ncclCommInitAll`      | 350,000       | 100%       | 1        |
+| `ncclTopoGetSystem`    | 87,500        | 25%        | 1        |
+| `initTransportsRank`   | 140,000       | 40%        | 1        |
+| `p2pTransportSetup`    | 87,500        | 25%        | n-1      |
+| `cudaMalloc` (total)   | 35,000        | 10%        | ~20      |
+| **AllReduce (1MB)**    |               |            |          |
+| `ncclAllReduce` (host) | 5             | 5%         | 1        |
+| `ncclEnqueueCheck`     | 1             | 1%         | 1        |
+| `ncclSaveKernel`       | 2             | 2%         | 1        |
+| `cudaLaunchKernel`     | 2             | 2%         | 1        |
+| GPU kernel execution   | 90            | 90%        | 1        |
+| **AllReduce (1GB)**    |               |            |          |
+| Host-side overhead     | 10            | <0.01%     | 1        |
+| GPU kernel execution   | 2,100,000     | 99.99%     | 1        |
 
 ---
 
@@ -155,13 +155,13 @@ Performance analysis was conducted using:
 
 ### 3.1 Algorithmic Complexity
 
-| Operation       | Ring Algorithm    | Tree Algorithm    | Notes                     |
-| --------------- | ----------------- | ----------------- | ------------------------- |
-| AllReduce       | O(n × k)          | O(log(n) × k)     | n=ranks, k=elements       |
-| AllGather       | O(n × k)          | O(log(n) × k)     | Ring better for large msg |
-| ReduceScatter   | O(n × k)          | O(log(n) × k)     | Tree better for latency   |
-| Broadcast       | O(n × k)          | O(log(n) × k)     | Tree optimal              |
-| Reduce          | O(n × k)          | O(log(n) × k)     | Tree optimal              |
+| Operation     | Ring Algorithm | Tree Algorithm | Notes                     |
+| ------------- | -------------- | -------------- | ------------------------- |
+| AllReduce     | O(n × k)       | O(log(n) × k)  | n=ranks, k=elements       |
+| AllGather     | O(n × k)       | O(log(n) × k)  | Ring better for large msg |
+| ReduceScatter | O(n × k)       | O(log(n) × k)  | Tree better for latency   |
+| Broadcast     | O(n × k)       | O(log(n) × k)  | Tree optimal              |
+| Reduce        | O(n × k)       | O(log(n) × k)  | Tree optimal              |
 
 ### 3.2 Latency Breakdown by Message Size
 
@@ -248,26 +248,26 @@ Latency (μs)
 
 ### 4.2 Memory Scaling
 
-| Component              | Per-Device | Per-Peer | Per-Channel | Total (8 GPU) |
-| ---------------------- | ---------- | -------- | ----------- | ------------- |
-| Comm buffers           | 4 MB       | 4 MB     | 1 MB        | 256 MB        |
-| Work elements          | 1 MB       | -        | 0.5 MB      | 32 MB         |
-| IPC handles            | -          | 64 KB    | -           | 3.5 MB        |
-| Topology cache         | 4 MB       | -        | -           | 32 MB         |
-| Proxy state            | 0.5 MB     | -        | -           | 4 MB          |
-| **Total**              | **~10 MB** | **4 MB** | **1.5 MB**  | **~330 MB**   |
+| Component      | Per-Device | Per-Peer | Per-Channel | Total (8 GPU) |
+| -------------- | ---------- | -------- | ----------- | ------------- |
+| Comm buffers   | 4 MB       | 4 MB     | 1 MB        | 256 MB        |
+| Work elements  | 1 MB       | -        | 0.5 MB      | 32 MB         |
+| IPC handles    | -          | 64 KB    | -           | 3.5 MB        |
+| Topology cache | 4 MB       | -        | -           | 32 MB         |
+| Proxy state    | 0.5 MB     | -        | -           | 4 MB          |
+| **Total**      | **~10 MB** | **4 MB** | **1.5 MB**  | **~330 MB**   |
 
 ### 4.3 Key Structures and Sizes
 
-| Structure            | Size     | Count                   | Purpose                |
-| -------------------- | -------- | ----------------------- | ---------------------- |
-| `ncclComm`           | 64 KB    | n (ranks)               | Communicator state     |
-| `ncclChannel`        | 8 KB     | MAXCHANNELS (32)        | Channel metadata       |
-| `ncclWork`           | 512 B    | Thousands               | Kernel work descriptors|
-| `ncclPeerInfo`       | 1 KB     | n×(n-1)                 | Peer connection info   |
-| `ncclShmem`          | 48 KB    | 1 per SM                | Shared memory state    |
-| `ncclTopoSystem`     | 2 MB     | 1                       | Topology graph         |
-| `ncclProxyState`     | 512 KB   | n                       | Proxy thread state     |
+| Structure        | Size   | Count            | Purpose                 |
+| ---------------- | ------ | ---------------- | ----------------------- |
+| `ncclComm`       | 64 KB  | n (ranks)        | Communicator state      |
+| `ncclChannel`    | 8 KB   | MAXCHANNELS (32) | Channel metadata        |
+| `ncclWork`       | 512 B  | Thousands        | Kernel work descriptors |
+| `ncclPeerInfo`   | 1 KB   | n×(n-1)          | Peer connection info    |
+| `ncclShmem`      | 48 KB  | 1 per SM         | Shared memory state     |
+| `ncclTopoSystem` | 2 MB   | 1                | Topology graph          |
+| `ncclProxyState` | 512 KB | n                | Proxy thread state      |
 
 ---
 
@@ -337,13 +337,13 @@ Latency = 2 × (n-1) × (α + β × m/n)
 
 ### 6.1 High-Impact Optimizations
 
-| ID  | Area                     | Current Cost    | Potential Savings | Effort   |
-| --- | ------------------------ | --------------- | ----------------- | -------- |
-| O1  | NVML caching             | 50ms/init       | 40ms (80%)        | Medium   |
-| O2  | Lazy channel allocation  | 50ms/init       | 30ms (60%)        | High     |
-| O3  | IPC handle pooling       | 100ms/init      | 70ms (70%)        | Medium   |
-| O4  | Kernel fusion            | 2μs/op overhead | 1μs (50%)         | High     |
-| O5  | Memory pool              | 35ms/init       | 25ms (71%)        | Low      |
+| ID  | Area                    | Current Cost    | Potential Savings | Effort |
+| --- | ----------------------- | --------------- | ----------------- | ------ |
+| O1  | NVML caching            | 50ms/init       | 40ms (80%)        | Medium |
+| O2  | Lazy channel allocation | 50ms/init       | 30ms (60%)        | High   |
+| O3  | IPC handle pooling      | 100ms/init      | 70ms (70%)        | Medium |
+| O4  | Kernel fusion           | 2μs/op overhead | 1μs (50%)         | High   |
+| O5  | Memory pool             | 35ms/init       | 25ms (71%)        | Low    |
 
 ### 6.2 Optimization Details
 
@@ -430,12 +430,12 @@ buffer = poolAlloc(pool, size);  // ~1μs
 
 ### 6.3 Windows-Specific Optimizations
 
-| ID  | Area                   | Issue                        | Solution                    |
-| --- | ---------------------- | ---------------------------- | --------------------------- |
-| W1  | Named Pipe latency     | Higher than Unix sockets     | Use memory-mapped files     |
-| W2  | Thread affinity        | Default scheduler suboptimal | Pin proxy threads to cores  |
-| W3  | Timer resolution       | 15ms default quantum         | Use `timeBeginPeriod(1)`    |
-| W4  | Page locking           | Different API semantics      | Pre-pin frequently used mem |
+| ID  | Area               | Issue                        | Solution                    |
+| --- | ------------------ | ---------------------------- | --------------------------- |
+| W1  | Named Pipe latency | Higher than Unix sockets     | Use memory-mapped files     |
+| W2  | Thread affinity    | Default scheduler suboptimal | Pin proxy threads to cores  |
+| W3  | Timer resolution   | 15ms default quantum         | Use `timeBeginPeriod(1)`    |
+| W4  | Page locking       | Different API semantics      | Pre-pin frequently used mem |
 
 ---
 
@@ -443,21 +443,21 @@ buffer = poolAlloc(pool, size);  // ~1μs
 
 ### 7.1 IPC Mechanism Comparison
 
-| Mechanism            | Linux          | Windows          | Delta    |
-| -------------------- | -------------- | ---------------- | -------- |
-| Shared Memory Open   | 5 μs           | 15 μs            | +200%    |
-| IPC Handle Exchange  | 10 μs          | 25 μs            | +150%    |
-| Named Pipe/Socket    | 2 μs           | 8 μs             | +300%    |
-| Memory Map           | 3 μs           | 5 μs             | +67%     |
+| Mechanism           | Linux | Windows | Delta |
+| ------------------- | ----- | ------- | ----- |
+| Shared Memory Open  | 5 μs  | 15 μs   | +200% |
+| IPC Handle Exchange | 10 μs | 25 μs   | +150% |
+| Named Pipe/Socket   | 2 μs  | 8 μs    | +300% |
+| Memory Map          | 3 μs  | 5 μs    | +67%  |
 
 ### 7.2 Kernel Launch Overhead
 
-| Metric                    | Linux   | Windows | Notes              |
-| ------------------------- | ------- | ------- | ------------------ |
-| cudaLaunchKernel          | 1.5 μs  | 2.0 μs  | WDDM overhead      |
-| cudaEventRecord           | 0.3 μs  | 0.5 μs  | Minor difference   |
-| cudaStreamSynchronize     | 1.0 μs  | 1.5 μs  | WDDM overhead      |
-| cudaMemcpyAsync (launch)  | 0.5 μs  | 0.8 μs  | Minor difference   |
+| Metric                   | Linux  | Windows | Notes            |
+| ------------------------ | ------ | ------- | ---------------- |
+| cudaLaunchKernel         | 1.5 μs | 2.0 μs  | WDDM overhead    |
+| cudaEventRecord          | 0.3 μs | 0.5 μs  | Minor difference |
+| cudaStreamSynchronize    | 1.0 μs | 1.5 μs  | WDDM overhead    |
+| cudaMemcpyAsync (launch) | 0.5 μs | 0.8 μs  | Minor difference |
 
 ### 7.3 Windows Performance Recommendations
 
@@ -482,13 +482,29 @@ buffer = poolAlloc(pool, size);  // ~1μs
 | 6        | Lazy channels (O2)      | Medium | High   | ★★☆☆☆ |
 | 7        | Kernel fusion (O4)      | Low    | High   | ★☆☆☆☆ |
 
-### 8.2 Implementation Roadmap
+### 8.2 Implementation Status
 
-#### Phase 1: Quick Wins (1-2 weeks)
+> **Last Updated:** December 2025
 
-- [ ] Implement memory pool for communication buffers
-- [ ] Add Windows timer resolution optimization
-- [ ] Add proxy thread affinity hints
+| Optimization            | Status         | Notes                                        |
+| ----------------------- | -------------- | -------------------------------------------- |
+| Memory pool (O5)        | ✅ Exists      | `ncclShadowPool` already implements pooling  |
+| NVML caching (O1)       | ⏳ Planned     | Requires careful invalidation handling       |
+| IPC handle pooling (O3) | ⏳ Planned     | Medium complexity                            |
+| Timer resolution (W3)   | ✅ Implemented | `timeBeginPeriod(1)` added in `init.cc`      |
+| Thread affinity (W2)    | ✅ Implemented | Extended to Windows in `proxy.cc`            |
+| Lazy channels (O2)      | ⏳ Planned     | High complexity, long-term                   |
+| Kernel fusion (O4)      | ⏳ Planned     | Very high complexity                         |
+| Performance counters    | ✅ Implemented | `src/include/perf_counters.h`                |
+
+### 8.3 Implementation Roadmap
+
+#### Phase 1: Quick Wins (1-2 weeks) ✅ COMPLETE
+
+- [x] Memory pool for communication buffers (already existed as `ncclShadowPool`)
+- [x] Windows timer resolution optimization (`init.cc`)
+- [x] Proxy thread affinity for Windows (`proxy.cc`)
+- [x] Performance counters infrastructure (`perf_counters.h/cc`)
 
 #### Phase 2: Medium-Term (1-2 months)
 
@@ -502,21 +518,30 @@ buffer = poolAlloc(pool, size);  // ~1μs
 - [ ] Prototype kernel fusion for small messages
 - [ ] Explore Windows TCC mode support
 
-### 8.3 Monitoring Recommendations
+### 8.4 Monitoring Recommendations
 
-Add performance counters for:
+Performance counters are now implemented in `src/include/perf_counters.h`:
 
 ```cpp
 struct ncclPerfCounters {
-    uint64_t initTimeUs;
-    uint64_t topoDiscoveryUs;
-    uint64_t transportSetupUs;
-    uint64_t cudaMallocCount;
-    uint64_t cudaMallocBytes;
-    uint64_t ipcHandleCount;
-    uint64_t kernelLaunchCount;
-    uint64_t proxyWakeups;
+    std::atomic<uint64_t> initTimeUs;           // Total init time
+    std::atomic<uint64_t> topoDiscoveryUs;      // Topology discovery time
+    std::atomic<uint64_t> transportSetupUs;     // Transport setup time
+    std::atomic<uint64_t> channelInitUs;        // Channel allocation time
+    std::atomic<uint64_t> proxyInitUs;          // Proxy initialization time
+    std::atomic<uint64_t> cudaMallocCount;      // cudaMalloc call count
+    std::atomic<uint64_t> cudaMallocBytes;      // Total bytes allocated
+    std::atomic<uint64_t> ipcHandleGetCount;    // IPC handle get calls
+    std::atomic<uint64_t> ipcHandleOpenCount;   // IPC handle open calls
+    std::atomic<uint64_t> kernelLaunchCount;    // Kernel launches
+    std::atomic<uint64_t> collectiveCount;      // Collective operations
+    std::atomic<uint64_t> proxyWakeups;         // Proxy thread wakeups
+    // ... and more
 };
+
+// Usage:
+NCCL_PERF_COUNTER_INC(cudaMallocCount);
+NCCL_PERF_TIMER_SCOPE(initTimeUs);  // Automatic scoped timing
 ```
 
 ---
@@ -556,16 +581,25 @@ cudaEventElapsedTime(&ms, start, stop);
 
 ## Appendix B: Key Source Files for Optimization
 
-| Component       | File                           | Priority |
-| --------------- | ------------------------------ | -------- |
-| Initialization  | `src/init.cc`                  | High     |
-| Topology        | `src/graph/topo.cc`            | High     |
-| Transports      | `src/transport/*.cc`           | High     |
-| Kernel launch   | `src/enqueue.cc`               | Medium   |
-| Memory alloc    | `src/allocator.cc`             | Medium   |
-| Proxy           | `src/proxy.cc`                 | Medium   |
-| Windows IPC     | `src/include/platform/win32_*` | High     |
+| Component         | File                              | Priority | Status      |
+| ----------------- | --------------------------------- | -------- | ----------- |
+| Initialization    | `src/init.cc`                     | High     | ✅ Modified |
+| Topology          | `src/graph/topo.cc`               | High     | ⏳ Planned  |
+| Transports        | `src/transport/*.cc`              | High     |             |
+| Kernel launch     | `src/enqueue.cc`                  | Medium   |             |
+| Memory alloc      | `src/allocator.cc`                | Medium   | ✅ Existing |
+| Proxy             | `src/proxy.cc`                    | Medium   | ✅ Modified |
+| Windows IPC       | `src/include/platform/win32_*`    | High     |             |
+| Perf Counters     | `src/include/perf_counters.h`     | Medium   | ✅ New      |
+| Perf Counters Imp | `src/perf_counters.cc`            | Medium   | ✅ New      |
+
+### Files Modified for Performance Optimizations
+
+1. **`src/init.cc`** - Added Windows timer resolution optimization (`timeBeginPeriod(1)`)
+2. **`src/proxy.cc`** - Extended proxy thread affinity to Windows via `sched_setaffinity`
+3. **`src/include/perf_counters.h`** - New performance counters header
+4. **`src/perf_counters.cc`** - Performance counters implementation
 
 ---
 
-*Report generated by performance audit process. Last updated: December 11, 2025*
+*Report generated by performance audit process. Last updated: December 2025*

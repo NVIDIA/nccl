@@ -28,6 +28,10 @@
 #include <sys/resource.h>
 #include <unistd.h>
 #endif
+#ifdef _WIN32
+#include <timeapi.h>
+#pragma comment(lib, "winmm.lib")
+#endif
 #include <string.h>
 #include <errno.h>
 #include <assert.h>
@@ -85,6 +89,36 @@ ncclResult_t initGdrCopy()
 // The default Linux stack size (8MB) is safe.
 #define SAFE_STACK_SIZE (8192 * 1024)
 
+// Windows timer resolution optimization (W3)
+// Sets timer resolution to 1ms for improved scheduling precision
+#ifdef _WIN32
+static bool ncclWinTimerInitialized = false;
+
+static ncclResult_t initWindowsTimer()
+{
+  if (!ncclWinTimerInitialized) {
+    // Request 1ms timer resolution to reduce sleep/wait granularity
+    // from the default 15.6ms to 1ms for improved proxy thread scheduling
+    MMRESULT result = timeBeginPeriod(1);
+    if (result == TIMERR_NOERROR) {
+      ncclWinTimerInitialized = true;
+      INFO(NCCL_INIT, "Windows timer resolution set to 1ms for improved performance");
+    } else {
+      WARN("Failed to set Windows timer resolution to 1ms (error %d)", result);
+    }
+  }
+  return ncclSuccess;
+}
+
+static void cleanupWindowsTimer()
+{
+  if (ncclWinTimerInitialized) {
+    timeEndPeriod(1);
+    ncclWinTimerInitialized = false;
+  }
+}
+#endif
+
 static ncclResult_t setCpuStackSize()
 {
 #ifdef _WIN32
@@ -135,6 +169,10 @@ static void initOnceFunc()
 {
   setCpuStackSize();
   initGdrCopy();
+#ifdef _WIN32
+  // Initialize Windows timer resolution for improved performance (W3)
+  initWindowsTimer();
+#endif
   // Always initialize bootstrap network
   NCCLCHECKGOTO(bootstrapNetInit(), initResult, exit);
 

@@ -9,6 +9,7 @@ set(LIBSRCFILES
     group.cc
     init.cc
     init_nvtx.cc
+    perf_counters.cc
     proxy.cc
     transport.cc
     mnnvl.cc

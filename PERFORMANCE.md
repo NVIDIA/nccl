@@ -490,7 +490,7 @@ buffer = poolAlloc(pool, size);  // ~1μs
 | ----------------------- | ------------- | ---------------------------------------------- |
 | Memory pool (O5)        | ✅ Exists      | `ncclShadowPool` already implements pooling    |
 | NVML caching (O1)       | ✅ Implemented | BusId cache in `nvmlwrap.cc` avoids NVML calls |
-| IPC handle pooling (O3) | ⏳ Planned     | Medium complexity                              |
+| IPC handle caching (O3) | ✅ Implemented | `ipc_cache.h/cc` caches handles by device ptr  |
 | Timer resolution (W3)   | ✅ Implemented | `timeBeginPeriod(1)` added in `init.cc`        |
 | Thread affinity (W2)    | ✅ Implemented | Extended to Windows in `proxy.cc`              |
 | Lazy channels (O2)      | ⏳ Planned     | High complexity, long-term                     |
@@ -508,8 +508,8 @@ buffer = poolAlloc(pool, size);  // ~1μs
 
 #### Phase 2: Medium-Term (1-2 months) ✅ STARTED
 
-- [x] NVML topology caching (`nvmlwrap.cc` - busId cache for device handles)- [ ] Implement NVML topology caching
-- [ ] Implement IPC handle batching
+- [x] NVML topology caching (`nvmlwrap.cc` - busId cache for device handles)
+- [x] IPC handle caching (`ipc_cache.h/cc` - caches cudaIpcMemHandle by device pointer)
 - [ ] Profile and optimize Windows IPC paths
 
 #### Phase 3: Long-Term (3-6 months)
@@ -586,13 +586,15 @@ cudaEventElapsedTime(&ms, start, stop);
 | Initialization    | `src/init.cc`                  | High     | ✅ Modified |
 | Topology          | `src/graph/topo.cc`            | High     | ⏳ Planned  |
 | NVML Wrapper      | `src/misc/nvmlwrap.cc`         | High     | ✅ Modified |
-| Transports        | `src/transport/*.cc`           | High     |            |
+| Transports        | `src/transport/p2p.cc`         | High     | ✅ Modified |
 | Kernel launch     | `src/enqueue.cc`               | Medium   |            |
 | Memory alloc      | `src/allocator.cc`             | Medium   | ✅ Existing |
 | Proxy             | `src/proxy.cc`                 | Medium   | ✅ Modified |
 | Windows IPC       | `src/include/platform/win32_*` | High     |            |
 | Perf Counters     | `src/include/perf_counters.h`  | Medium   | ✅ New      |
 | Perf Counters Imp | `src/perf_counters.cc`         | Medium   | ✅ New      |
+| IPC Cache         | `src/include/ipc_cache.h`      | Medium   | ✅ New      |
+| IPC Cache Impl    | `src/misc/ipc_cache.cc`        | Medium   | ✅ New      |
 
 ### Files Modified for Performance Optimizations
 
@@ -602,6 +604,9 @@ cudaEventElapsedTime(&ms, start, stop);
 4. **`src/perf_counters.cc`** - Performance counters implementation
 5. **`src/misc/nvmlwrap.cc`** - Added NVML device handle caching by busId (O1 optimization)
 6. **`src/include/nvmlwrap.h`** - Added busId field to `ncclNvmlDeviceInfo` structure
+7. **`src/include/ipc_cache.h`** - New IPC handle cache header (O3 optimization)
+8. **`src/misc/ipc_cache.cc`** - IPC handle cache implementation
+9. **`src/transport/p2p.cc`** - Updated to use IPC cache and performance counters
 
 ---
 

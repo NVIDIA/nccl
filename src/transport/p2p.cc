@@ -14,6 +14,8 @@
 #include <assert.h>
 #include "shm.h"
 #include "register_inline.h"
+#include "ipc_cache.h"
+#include "perf_counters.h"
 
 enum p2pType
 {
@@ -273,7 +275,9 @@ ncclResult_t ncclP2pAllocateShareableBuffer(size_t size, int refcount, ncclIpcDe
   {
     // Allocate a CUDA buffer and generate an IPC handle for it
     NCCLCHECK(ncclCudaCalloc((char **)ptr, size));
-    cudaError_t res = cudaIpcGetMemHandle(&ipcDesc->devIpc, *ptr);
+    // O3 optimization: Use IPC cache to avoid redundant handle generation
+    cudaError_t res = NCCL_IPC_GET_HANDLE_CACHED(&ipcDesc->devIpc, *ptr);
+    NCCL_PERF_COUNTER_INC(ipcHandleGetCount);
     if (res != cudaSuccess)
     {
       WARN("cudaIpcGetMemHandle failed : %s", cudaGetErrorString(res));
@@ -347,6 +351,7 @@ ncclResult_t ncclP2pImportShareableBuffer(struct ncclComm *comm, int peer, size_
   else
   {
     // Legacy CUDA IPC
+    NCCL_PERF_COUNTER_INC(ipcHandleOpenCount);
     CUDACHECK(cudaIpcOpenMemHandle(devMemPtr, ipcDesc->devIpc, cudaIpcMemLazyEnablePeerAccess));
   }
 
@@ -1054,7 +1059,10 @@ static ncclResult_t ipcRegisterBuffer(ncclComm *comm, const void *userbuff, size
             // if cuMem* export fails, retry legacy export
             if (comm->directMode || !ncclParamLegacyCudaRegister())
               goto fail;
-            CUDACHECKGOTO(cudaIpcGetMemHandle(&ipcInfo.ipcDesc.devIpc, baseAddr), ret, fail);
+            // O3 optimization: Use IPC cache
+            NCCL_PERF_COUNTER_INC(ipcHandleGetCount);
+            cudaError_t cacheRes = NCCL_IPC_GET_HANDLE_CACHED(&ipcInfo.ipcDesc.devIpc, baseAddr);
+            if (cacheRes != cudaSuccess) { ret = ncclUnhandledCudaError; goto fail; }
             ipcInfo.legacyIpcCap = true;
             if (isLegacyIpc)
               *isLegacyIpc = true;
@@ -1096,7 +1104,10 @@ static ncclResult_t ipcRegisterBuffer(ncclComm *comm, const void *userbuff, size
           // legacy export
           if (comm->directMode || !ncclParamLegacyCudaRegister())
             goto fail;
-          CUDACHECKGOTO(cudaIpcGetMemHandle(&ipcInfo.ipcDesc.devIpc, baseAddr), ret, fail);
+          // O3 optimization: Use IPC cache
+          NCCL_PERF_COUNTER_INC(ipcHandleGetCount);
+          cudaError_t cacheRes = NCCL_IPC_GET_HANDLE_CACHED(&ipcInfo.ipcDesc.devIpc, baseAddr);
+          if (cacheRes != cudaSuccess) { ret = ncclUnhandledCudaError; goto fail; }
           ipcInfo.legacyIpcCap = true;
           if (isLegacyIpc)
             *isLegacyIpc = true;
@@ -1310,6 +1321,7 @@ static ncclResult_t p2pProxyRegister(struct ncclProxyConnection *connection, str
   if (ipcExpInfo->legacyIpcCap)
   {
     // legacy import
+    NCCL_PERF_COUNTER_INC(ipcHandleOpenCount);
     CUDACHECKGOTO(cudaIpcOpenMemHandle(&regAddr, ipcExpInfo->ipcDesc.devIpc, cudaIpcMemLazyEnablePeerAccess), ret, fail);
     regAddr = (void *)((uintptr_t)regAddr + ipcExpInfo->offset);
   }

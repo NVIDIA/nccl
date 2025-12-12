@@ -8,6 +8,7 @@ set(MISC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/argcheck.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/shmutils.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/gdrwrap.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/ipc_cache.cc
 )
 
 # Platform-specific sources

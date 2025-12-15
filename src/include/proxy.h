@@ -82,6 +82,10 @@ struct ncclProxyOp {
   uint8_t* recvbuff;
   int isOneRPN;
   RingAlgorithm *ringAlgo;
+
+  int nextRank;
+  int prevRank;
+
   union ncclProxyOpSpecifics specifics;
   int nChannels;
   int nPeers;
@@ -196,6 +200,11 @@ struct ncclProxyArgs {
   struct ncclProxyArgs** proxyAppendPtr;
 
   union ncclProxyOpSpecifics specifics;
+
+  int prevRank;
+  int nextRank;
+  int send;
+  int retry_total;
 };
 #define NCCL_MAX_NETDEVS 128
 

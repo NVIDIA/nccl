@@ -252,27 +252,27 @@ ncclResult_t getOpIndex(struct ncclProxyArgs* op, struct ncclProxyProgressState*
 }
 
 ncclResult_t printProxyOp(struct ncclProxyArgs* op, int poolIndex, int opIndex) {
-  printf("[%d-%d|%ld| %s", poolIndex, opIndex, op->opCount, op->pattern == ncclPatternSend ? "Send" : op->pattern == ncclPatternRecv ? "Recv" : "Coll");
+  printf("[%d-%d|%ld| %s", poolIndex, opIndex, op->opCount, ncclFuncToString((ncclFunc_t)op->coll));
   for (int s=0; s<op->nsubs; s++) {
     struct ncclProxySubArgs* sub = op->subs+s;
+    printf(" | %s channel %s/%02d", sub->connection->send ? "send" : "recv", ncclTransports[sub->connection->transport]->name, sub->channelId);
     if (op->state == ncclProxyOpProgress) {
       char status = ' ';
-      if (op->pattern == ncclPatternRecv) {
+      if (sub->connection->send) {
+        if (sub->posted < sub->nsteps && sub->posted < sub->done + NCCL_STEPS) status = 'I'; // Init
+        else if (sub->transmitted < sub->posted) status = 'G'; // Waiting on GPU
+        else if (sub->done < sub->transmitted) status = 'S'; // Sending
+        else status = 'D'; // Done
+        printf(": %d -> %d / status %c (nsteps %d, posted %ld, transmitted %ld, done %ld)", sub->rank, sub->peer, status, sub->nsteps, sub->posted, sub->transmitted, sub->done);
+      } else {
         if (sub->posted < sub->nsteps && sub->posted < sub->done + NCCL_STEPS) status = 'I'; // Init
         else if (sub->received < sub->posted) status = 'R'; // Receiving
         else if (sub->received < sub->transmitted) status = 'R'; // Receiving
         else if (sub->transmitted < sub->received) status = 'F'; // Flushing
         else if (sub->done < sub->transmitted) status = 'G'; // Waiting on GPU
         else status = 'D'; // Done
-      } else if (op->pattern == ncclPatternSend) {
-        if (sub->posted < sub->nsteps && sub->posted < sub->done + NCCL_STEPS) status = 'I'; // Init
-        else if (sub->transmitted < sub->posted) status = 'G'; // Waiting on GPU
-        else if (sub->done < sub->transmitted) status = 'S'; // Sending
-        else status = 'D'; // Done
+        printf(": %d <- %d / status %c (nsteps %d, posted %ld, received %ld, transmitted %ld, done %ld)", sub->rank, sub->peer, status, sub->nsteps, sub->posted, sub->received, sub->transmitted, sub->done);
       }
-      printf(" %d%c/%d", sub->peer, status, sub->channelId);
-    } else {
-      printf(" %d/%d", sub->peer, sub->channelId);
     }
   }
   printf("]");
@@ -858,7 +858,7 @@ process_nextops:
 }
 
 #include <signal.h>
-static ncclProxyProgressState* ncclLastProxyState;
+static __thread ncclProxyProgressState* ncclLastProxyState;
 void ncclDumpProxyState(int signal) {
   dumpProxyState(ncclLastProxyState);
 }

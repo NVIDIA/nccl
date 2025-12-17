@@ -466,8 +466,18 @@ static ncclResult_t sharedBuffersInit(struct ncclCollNetSharedRes *collNet, int 
   if (!cuda && collNet->hostBuff == NULL)
   {
     NCCLCHECK(ncclCudaHostCalloc(&collNet->hostBuff, *size));
+#ifdef _WIN32
+    // On Windows, store the device-accessible pointer for host memory
+    CUDACHECK(cudaHostGetDevicePointer((void **)&collNet->hostBuffGpu, collNet->hostBuff, 0));
+#endif
   }
-  *gpuPtr = *cpuPtr = cuda ? collNet->cudaBuff : collNet->hostBuff;
+  *cpuPtr = cuda ? collNet->cudaBuff : collNet->hostBuff;
+#ifdef _WIN32
+  // On Windows, use the device pointer for host memory
+  *gpuPtr = cuda ? collNet->cudaBuff : collNet->hostBuffGpu;
+#else
+  *gpuPtr = *cpuPtr;
+#endif
   return ncclSuccess;
 }
 
@@ -569,7 +579,14 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection *connection, str
   NCCL_NET_MAP_ADD_POINTER(map, 0, 0, sizeof(struct ncclRecvMem), recvMem);
 
   NCCLCHECK(ncclCudaHostCalloc(&map->mems[NCCL_NET_MAP_HOSTMEM].cpuPtr, map->mems[NCCL_NET_MAP_HOSTMEM].size));
+#ifdef _WIN32
+  // On Windows, cudaHostAlloc with cudaHostAllocMapped requires cudaHostGetDevicePointer
+  // to get the device-accessible address - it may differ from the host pointer
+  CUDACHECK(cudaHostGetDevicePointer((void **)&map->mems[NCCL_NET_MAP_HOSTMEM].gpuPtr,
+                                     map->mems[NCCL_NET_MAP_HOSTMEM].cpuPtr, 0));
+#else
   map->mems[NCCL_NET_MAP_HOSTMEM].gpuPtr = map->mems[NCCL_NET_MAP_HOSTMEM].cpuPtr;
+#endif
   if (ncclGdrCopy && ncclParamGdrCopySyncEnable())
   {
     uint64_t *cpuPtr, *gpuPtr;
@@ -660,7 +677,14 @@ static ncclResult_t recvProxyConnect(struct ncclProxyConnection *connection, str
   NCCL_NET_MAP_ADD_POINTER(map, 0, 0, sizeof(struct ncclRecvMem), recvMem);
 
   NCCLCHECK(ncclCudaHostCalloc(&map->mems[NCCL_NET_MAP_HOSTMEM].cpuPtr, map->mems[NCCL_NET_MAP_HOSTMEM].size));
+#ifdef _WIN32
+  // On Windows, cudaHostAlloc with cudaHostAllocMapped requires cudaHostGetDevicePointer
+  // to get the device-accessible address - it may differ from the host pointer
+  CUDACHECK(cudaHostGetDevicePointer((void **)&map->mems[NCCL_NET_MAP_HOSTMEM].gpuPtr,
+                                     map->mems[NCCL_NET_MAP_HOSTMEM].cpuPtr, 0));
+#else
   map->mems[NCCL_NET_MAP_HOSTMEM].gpuPtr = map->mems[NCCL_NET_MAP_HOSTMEM].cpuPtr;
+#endif
   if (ncclGdrCopy)
   {
     uint64_t *cpuPtr, *gpuPtr;

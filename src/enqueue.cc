@@ -2035,6 +2035,8 @@ ncclResult_t ncclLaunchKernel(struct ncclComm *comm, struct ncclKernelPlan *plan
   else
   {
     // Standard kernel launch
+    // NOTE: Do NOT call cudaDeviceSynchronize after launch - it causes deadlock in multi-GPU
+    // scenarios because kernels need all ranks to be launched before they can proceed.
     CUCHECKGOTO(cuLaunchKernel(fn, grid.x, grid.y, grid.z, block.x, block.y, block.z, smem, launchStream, nullptr, extra), ret, do_return);
   }
 

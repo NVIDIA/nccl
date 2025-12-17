@@ -682,32 +682,32 @@ Detailed comparison between Windows 11 and Linux (Debian Trixie WSL2) on identic
 
 #### 9.9.1 Time and Synchronization Operations
 
-| Operation                | Windows  | Linux (WSL2) | Δ Windows | Winner  |
-| ------------------------ | -------- | ------------ | --------- | ------- |
-| clock_gettime(MONOTONIC) | 15.8 ns  | 16.3 ns      | -3%       | ~Equal  |
-| Mutex lock/unlock        | 9.0 ns   | 3.1 ns       | +190%     | **Linux 2.9x** |
-| Spinlock                 | 8.3 ns   | 3.7 ns       | +124%     | **Linux 2.2x** |
+| Operation                | Windows | Linux (WSL2) | Δ Windows | Winner         |
+| ------------------------ | ------- | ------------ | --------- | -------------- |
+| clock_gettime(MONOTONIC) | 15.8 ns | 16.3 ns      | -3%       | ~Equal         |
+| Mutex lock/unlock        | 9.0 ns  | 3.1 ns       | +190%     | **Linux 2.9x** |
+| Spinlock                 | 8.3 ns  | 3.7 ns       | +124%     | **Linux 2.2x** |
 
 **Analysis:** Linux pthread_mutex with futex significantly outperforms Windows CRITICAL_SECTION in these tests. The Linux spinlock implementation is also faster due to optimized compiler intrinsics.
 
 #### 9.9.2 Atomic Operations
 
-| Operation                 | Windows | Linux (WSL2) | Δ Windows | Winner  |
-| ------------------------- | ------- | ------------ | --------- | ------- |
-| Atomic add                | 3.5 ns  | 3.7 ns       | -5%       | ~Equal  |
-| Atomic CAS                | 3.7 ns  | 3.6 ns       | +3%       | ~Equal  |
-| Memory fence              | 4.2 ns  | 3.6 ns       | +17%      | Linux   |
-| Atomic load (acquire)     | 4.3 ns  | 0.2 ns       | +2050%    | **Linux** |
-| Atomic store (release)    | 4.4 ns  | 0.2 ns       | +2100%    | **Linux** |
+| Operation              | Windows | Linux (WSL2) | Δ Windows | Winner    |
+| ---------------------- | ------- | ------------ | --------- | --------- |
+| Atomic add             | 3.5 ns  | 3.7 ns       | -5%       | ~Equal    |
+| Atomic CAS             | 3.7 ns  | 3.6 ns       | +3%       | ~Equal    |
+| Memory fence           | 4.2 ns  | 3.6 ns       | +17%      | Linux     |
+| Atomic load (acquire)  | 4.3 ns  | 0.2 ns       | +2050%    | **Linux** |
+| Atomic store (release) | 4.4 ns  | 0.2 ns       | +2100%    | **Linux** |
 
 **Analysis:** Core atomic operations (add, CAS) are comparable. Linux relaxed atomics (load/store with memory ordering) are significantly faster due to compiler optimizations.
 
 #### 9.9.3 Socket Operations
 
-| Operation           | Windows  | Linux (WSL2) | Δ Windows | Winner  |
-| ------------------- | -------- | ------------ | --------- | ------- |
-| Socket create/close | 9.2 μs   | 2.1 μs       | +338%     | **Linux 4.3x** |
-| poll (1 fd, t=0)    | 852 ns   | 87 ns        | +879%     | **Linux 9.8x** |
+| Operation           | Windows | Linux (WSL2) | Δ Windows | Winner         |
+| ------------------- | ------- | ------------ | --------- | -------------- |
+| Socket create/close | 9.2 μs  | 2.1 μs       | +338%     | **Linux 4.3x** |
+| poll (1 fd, t=0)    | 852 ns  | 87 ns        | +879%     | **Linux 9.8x** |
 
 **Analysis:** Linux socket syscalls are significantly faster than Winsock. This is expected due to kernel architecture differences. WSL2 provides near-native Linux performance.
 
@@ -723,44 +723,44 @@ Detailed comparison between Windows 11 and Linux (Debian Trixie WSL2) on identic
 
 #### 9.9.5 CPU Affinity Operations
 
-| Operation         | Windows  | Linux (WSL2) | Δ Windows | Winner  |
-| ----------------- | -------- | ------------ | --------- | ------- |
-| CPU_ZERO          | ~0 ns    | 8.9 ns       | —         | Windows |
-| sched_getaffinity | 592 ns   | 83 ns        | +613%     | **Linux 7.1x** |
+| Operation         | Windows | Linux (WSL2) | Δ Windows | Winner         |
+| ----------------- | ------- | ------------ | --------- | -------------- |
+| CPU_ZERO          | ~0 ns   | 8.9 ns       | —         | Windows        |
+| sched_getaffinity | 592 ns  | 83 ns        | +613%     | **Linux 7.1x** |
 
 **Analysis:** Linux sched_getaffinity syscall is highly optimized. Windows CPU_ZERO is inlined/optimized away in benchmarks.
 
 #### 9.9.6 Process/Thread Information
 
-| Operation | Windows | Linux (WSL2) | Δ Windows | Winner  |
-| --------- | ------- | ------------ | --------- | ------- |
+| Operation | Windows | Linux (WSL2) | Δ Windows | Winner          |
+| --------- | ------- | ------------ | --------- | --------------- |
 | getpid    | 1.4 ns  | 39.3 ns      | **-97%**  | **Windows 28x** |
 | gettid    | ~1.4 ns | 37.7 ns      | **-96%**  | **Windows 27x** |
-| getenv    | 4.66 μs | ~4.6 μs      | 0%        | Tie     |
+| getenv    | 4.66 μs | ~4.6 μs      | 0%        | Tie             |
 
 **Analysis:** Windows caches PID/TID in user-mode TEB (Thread Environment Block), avoiding syscalls entirely. Linux requires syscall for gettid.
 
 #### 9.9.7 Shared Memory Performance
 
-| Operation        | Windows    | Linux (WSL2) | Δ Windows | Winner  |
-| ---------------- | ---------- | ------------ | --------- | ------- |
-| SHM Read (4MB)   | 58.96 GB/s | 35.81 GB/s   | **+65%**  | **Windows** |
-| SHM Write (4MB)  | 21.49 GB/s | 134.48 GB/s  | -84%      | **Linux 6.3x** |
+| Operation       | Windows    | Linux (WSL2) | Δ Windows | Winner         |
+| --------------- | ---------- | ------------ | --------- | -------------- |
+| SHM Read (4MB)  | 58.96 GB/s | 35.81 GB/s   | **+65%**  | **Windows**    |
+| SHM Write (4MB) | 21.49 GB/s | 134.48 GB/s  | -84%      | **Linux 6.3x** |
 
 **Analysis:** Windows shows better read performance with NUMA-aware allocation, while Linux excels at write performance. This may be due to different memory subsystem implementations.
 
 #### 9.9.8 Performance Summary
 
-| Category                | Winner    | Factor    | Notes                              |
-| ----------------------- | --------- | --------- | ---------------------------------- |
-| **Mutex/Spinlock**      | Linux     | 2-3x      | futex-based implementation         |
-| **Atomics (add/CAS)**   | ~Equal    | —         | Both use hardware instructions     |
-| **Socket create/poll**  | Linux     | 4-10x     | Kernel syscall efficiency          |
-| **Socket throughput**   | Windows   | 1.2-1.3x  | Optimized buffers show more gain   |
-| **Process info**        | Windows   | 27-28x    | TEB caching vs syscall             |
-| **SHM Read**            | Windows   | 1.6x      | NUMA-aware allocation              |
-| **SHM Write**           | Linux     | 6.3x      | Memory subsystem differences       |
-| **sched_getaffinity**   | Linux     | 7x        | Optimized syscall                  |
+| Category               | Winner  | Factor   | Notes                            |
+| ---------------------- | ------- | -------- | -------------------------------- |
+| **Mutex/Spinlock**     | Linux   | 2-3x     | futex-based implementation       |
+| **Atomics (add/CAS)**  | ~Equal  | —        | Both use hardware instructions   |
+| **Socket create/poll** | Linux   | 4-10x    | Kernel syscall efficiency        |
+| **Socket throughput**  | Windows | 1.2-1.3x | Optimized buffers show more gain |
+| **Process info**       | Windows | 27-28x   | TEB caching vs syscall           |
+| **SHM Read**           | Windows | 1.6x     | NUMA-aware allocation            |
+| **SHM Write**          | Linux   | 6.3x     | Memory subsystem differences     |
+| **sched_getaffinity**  | Linux   | 7x       | Optimized syscall                |
 
 **Key Findings:**
 
@@ -783,16 +783,16 @@ Overlapped I/O setup is efficient; IOCP association has fixed overhead.
 
 ### 9.11 Optimization Impact Summary
 
-| Optimization         | Windows Impact                           | Linux Impact                    | Status |
-| -------------------- | ---------------------------------------- | ------------------------------- | ------ |
-| Timer resolution     | Sleep: 13.43ms → 1.97ms (6.8x)           | N/A (already high-res)          | ✅ W3   |
-| Socket buffers (4MB) | Throughput: 2757 → 5784 MB/s (+110%)     | Throughput: +37.4% at 4MB       | ✅ Lib  |
-| NUMA-aware reads     | Read bandwidth: 48.4 → 73.8 GB/s (+52%)  | Similar NUMA APIs               | ✅ Lib  |
-| NVML caching         | Eliminates repeated busId lookups        | Same implementation             | ✅ O1   |
-| IPC handle caching   | Caches cudaIpcMemHandle by device ptr    | Same implementation             | ✅ O3   |
-| TCP_QUICKACK         | N/A                                      | Faster ACKs for latency         | ✅ Linux |
-| SO_BUSY_POLL         | N/A                                      | Reduced poll syscall overhead   | ✅ Linux |
-| Huge pages           | Large page support (2MB)                 | MAP_HUGETLB (2MB/1GB)           | ✅ Both |
+| Optimization         | Windows Impact                          | Linux Impact                  | Status  |
+| -------------------- | --------------------------------------- | ----------------------------- | ------- |
+| Timer resolution     | Sleep: 13.43ms → 1.97ms (6.8x)          | N/A (already high-res)        | ✅ W3    |
+| Socket buffers (4MB) | Throughput: 2757 → 5784 MB/s (+110%)    | Throughput: +37.4% at 4MB     | ✅ Lib   |
+| NUMA-aware reads     | Read bandwidth: 48.4 → 73.8 GB/s (+52%) | Similar NUMA APIs             | ✅ Lib   |
+| NVML caching         | Eliminates repeated busId lookups       | Same implementation           | ✅ O1    |
+| IPC handle caching   | Caches cudaIpcMemHandle by device ptr   | Same implementation           | ✅ O3    |
+| TCP_QUICKACK         | N/A                                     | Faster ACKs for latency       | ✅ Linux |
+| SO_BUSY_POLL         | N/A                                     | Reduced poll syscall overhead | ✅ Linux |
+| Huge pages           | Large page support (2MB)                | MAP_HUGETLB (2MB/1GB)         | ✅ Both  |
 
 ### 9.12 Linux Platform Optimizations
 
@@ -800,32 +800,32 @@ New Linux-specific optimization headers added in this release:
 
 #### linux_socket.h
 
-| Function                          | Purpose                       | Performance Impact      |
-| --------------------------------- | ----------------------------- | ----------------------- |
-| `ncclSocketOptimize()`            | 4MB buffers, TCP_NODELAY      | +37% throughput at 4MB  |
-| `ncclSocketOptimizeLowLatency()`  | 256KB buffers, TCP_QUICKACK   | Reduced latency         |
-| `ncclSocketOptimizeUltraLowLatency()` | 64KB + busy polling       | Minimum latency         |
-| `ncclSocketOptimizeMaxThroughput()` | 8MB + zero-copy             | Maximum bandwidth       |
-| `ncclSocketEnableFastOpen()`      | TCP Fast Open                 | Faster connection setup |
-| `ncclSocketSetCpuAffinity()`      | SO_INCOMING_CPU               | NUMA locality           |
+| Function                              | Purpose                     | Performance Impact      |
+| ------------------------------------- | --------------------------- | ----------------------- |
+| `ncclSocketOptimize()`                | 4MB buffers, TCP_NODELAY    | +37% throughput at 4MB  |
+| `ncclSocketOptimizeLowLatency()`      | 256KB buffers, TCP_QUICKACK | Reduced latency         |
+| `ncclSocketOptimizeUltraLowLatency()` | 64KB + busy polling         | Minimum latency         |
+| `ncclSocketOptimizeMaxThroughput()`   | 8MB + zero-copy             | Maximum bandwidth       |
+| `ncclSocketEnableFastOpen()`          | TCP Fast Open               | Faster connection setup |
+| `ncclSocketSetCpuAffinity()`          | SO_INCOMING_CPU             | NUMA locality           |
 
 #### linux_shm.h
 
-| Function                    | Purpose                          | Performance Impact     |
-| --------------------------- | -------------------------------- | ---------------------- |
-| `ncclShmOpenAdvanced()`     | NUMA + huge page support         | Better memory locality |
-| `ncclShmGetCurrentNumaNode()` | Current thread's NUMA node     | NUMA-aware allocation  |
-| `ncclShmGetHugePageSize()`  | System huge page size            | 2MB/1GB page support   |
-| `ncclShmPrefetch()`         | madvise WILLNEED                 | Prefetch to cache      |
-| `ncclShmSetSequential()`    | madvise SEQUENTIAL               | Readahead optimization |
+| Function                      | Purpose                    | Performance Impact     |
+| ----------------------------- | -------------------------- | ---------------------- |
+| `ncclShmOpenAdvanced()`       | NUMA + huge page support   | Better memory locality |
+| `ncclShmGetCurrentNumaNode()` | Current thread's NUMA node | NUMA-aware allocation  |
+| `ncclShmGetHugePageSize()`    | System huge page size      | 2MB/1GB page support   |
+| `ncclShmPrefetch()`           | madvise WILLNEED           | Prefetch to cache      |
+| `ncclShmSetSequential()`      | madvise SEQUENTIAL         | Readahead optimization |
 
 #### linux_thread.h
 
-| Function                     | Purpose                         | Performance Impact     |
-| ---------------------------- | ------------------------------- | ---------------------- |
-| `ncclThreadSetPriority()`    | Real-time scheduling            | SCHED_FIFO/RR support  |
-| `ncclThreadBindToNumaNode()` | NUMA-aware thread binding       | Improved locality      |
-| `ncclSpinlock*`              | Fast spinlock implementation    | 3.7 ns (2.2x vs mutex) |
+| Function                     | Purpose                      | Performance Impact     |
+| ---------------------------- | ---------------------------- | ---------------------- |
+| `ncclThreadSetPriority()`    | Real-time scheduling         | SCHED_FIFO/RR support  |
+| `ncclThreadBindToNumaNode()` | NUMA-aware thread binding    | Improved locality      |
+| `ncclSpinlock*`              | Fast spinlock implementation | 3.7 ns (2.2x vs mutex) |
 
 ---
 
@@ -864,23 +864,23 @@ cudaEventElapsedTime(&ms, start, stop);
 
 ## Appendix B: Key Source Files for Optimization
 
-| Component            | File                                  | Priority | Status     |
-| -------------------- | ------------------------------------- | -------- | ---------- |
-| Initialization       | `src/init.cc`                         | High     | ✅ Modified |
-| Topology             | `src/graph/topo.cc`                   | High     | ⏳ Planned  |
-| NVML Wrapper         | `src/misc/nvmlwrap.cc`                | High     | ✅ Modified |
-| Transports           | `src/transport/p2p.cc`                | High     | ✅ Modified |
-| Kernel launch        | `src/enqueue.cc`                      | Medium   |            |
-| Memory alloc         | `src/allocator.cc`                    | Medium   | ✅ Existing |
-| Proxy                | `src/proxy.cc`                        | Medium   | ✅ Modified |
-| Windows IPC          | `src/include/platform/win32_*`        | High     | ✅ Complete |
-| Linux Socket Opt     | `src/include/platform/linux_socket.h` | High     | ✅ New      |
-| Linux SHM Opt        | `src/include/platform/linux_shm.h`    | High     | ✅ New      |
-| Linux Thread Opt     | `src/include/platform/linux_thread.h` | High     | ✅ New      |
-| Perf Counters        | `src/include/perf_counters.h`         | Medium   | ✅ New      |
-| Perf Counters Imp    | `src/perf_counters.cc`                | Medium   | ✅ New      |
-| IPC Cache            | `src/include/ipc_cache.h`             | Medium   | ✅ New      |
-| IPC Cache Impl       | `src/misc/ipc_cache.cc`               | Medium   | ✅ New      |
+| Component         | File                                  | Priority | Status     |
+| ----------------- | ------------------------------------- | -------- | ---------- |
+| Initialization    | `src/init.cc`                         | High     | ✅ Modified |
+| Topology          | `src/graph/topo.cc`                   | High     | ⏳ Planned  |
+| NVML Wrapper      | `src/misc/nvmlwrap.cc`                | High     | ✅ Modified |
+| Transports        | `src/transport/p2p.cc`                | High     | ✅ Modified |
+| Kernel launch     | `src/enqueue.cc`                      | Medium   |            |
+| Memory alloc      | `src/allocator.cc`                    | Medium   | ✅ Existing |
+| Proxy             | `src/proxy.cc`                        | Medium   | ✅ Modified |
+| Windows IPC       | `src/include/platform/win32_*`        | High     | ✅ Complete |
+| Linux Socket Opt  | `src/include/platform/linux_socket.h` | High     | ✅ New      |
+| Linux SHM Opt     | `src/include/platform/linux_shm.h`    | High     | ✅ New      |
+| Linux Thread Opt  | `src/include/platform/linux_thread.h` | High     | ✅ New      |
+| Perf Counters     | `src/include/perf_counters.h`         | Medium   | ✅ New      |
+| Perf Counters Imp | `src/perf_counters.cc`                | Medium   | ✅ New      |
+| IPC Cache         | `src/include/ipc_cache.h`             | Medium   | ✅ New      |
+| IPC Cache Impl    | `src/misc/ipc_cache.cc`               | Medium   | ✅ New      |
 
 ### Files Modified for Performance Optimizations
 

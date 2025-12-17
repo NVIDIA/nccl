@@ -247,6 +247,9 @@ struct ncclProxySharedP2p
   int size;
   char *cudaBuff;
   char *hostBuff;
+#ifdef _WIN32
+  char *hostBuffGpu; // Device-accessible pointer for host memory on Windows
+#endif
   // CUDA IPC
   ncclIpcDesc ipcDesc;
   struct ncclProxyArgs *proxyAppend[MAXCHANNELS]; // Separate send and recv

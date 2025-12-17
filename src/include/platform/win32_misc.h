@@ -646,7 +646,11 @@ static inline int ncclGetNumProcessors(void)
 
 static inline int sched_yield(void)
 {
-    SwitchToThread();
+    // Use Sleep(0) instead of SwitchToThread() for a stronger yield
+    // SwitchToThread() only yields to threads on the same processor
+    // Sleep(0) yields to any ready thread at the same or higher priority
+    // This helps prevent tight spinning in proxy threads causing deadlocks
+    Sleep(0);
     return 0;
 }
 

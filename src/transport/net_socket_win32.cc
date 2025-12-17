@@ -33,6 +33,7 @@
 #include <ws2tcpip.h>
 #include <iphlpapi.h>
 #include <mutex>
+#include <windows.h> // For SwitchToThread
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "iphlpapi.lib")
@@ -80,12 +81,8 @@ struct ncclSocketListenComm
     struct ncclSocketCommStage stage; // Staging for async accept
 };
 
-// Send/Recv comm structure
-struct ncclSocketComm
-{
-    SOCKET sock;
-    int dev;
-};
+// Forward declaration
+struct ncclSocketComm;
 
 // Request structure for async operations
 #define SOCKET_CTRL_SIZE 4 // Size header: 4 bytes for message size
@@ -102,6 +99,39 @@ struct ncclSocketRequest
     struct ncclSocketComm *comm;
     char sizeHeader[SOCKET_CTRL_SIZE]; // Buffer for size header
 };
+
+// Send/Recv comm structure
+struct ncclSocketComm
+{
+    SOCKET sock;
+    int dev;
+    struct ncclSocketRequest requests[MAX_REQUESTS]; // Request pool
+};
+
+// Get a free request from the pool
+static ncclResult_t socketGetRequest(struct ncclSocketComm *comm, int op, void *data, size_t size, struct ncclSocketRequest **req)
+{
+    for (int i = 0; i < MAX_REQUESTS; i++)
+    {
+        struct ncclSocketRequest *r = &comm->requests[i];
+        if (r->used == 0)
+        {
+            r->used = 1;
+            r->done = 0;
+            r->op = op;
+            r->data = data;
+            r->size = size;
+            r->actualSize = (op == 0) ? size : 0; // For send, actualSize = size; for recv, filled from header
+            r->offset = 0;
+            r->phase = 0; // Start with header phase
+            r->comm = comm;
+            *req = r;
+            return ncclSuccess;
+        }
+    }
+    WARN("NET/Socket: Unable to allocate request from pool");
+    return ncclInternalError;
+}
 
 // Device info
 struct ncclSocketDevice
@@ -242,10 +272,8 @@ static ncclResult_t socketInit(void **ctx, uint64_t commId, ncclNetCommConfig_v1
     (void)logFunction;
     (void)profFunction;
 
-
     NCCLCHECK(findInterfaces());
     *ctx = NULL;
-
 
     return ncclSuccess;
 }
@@ -291,7 +319,6 @@ static ncclResult_t socketListen(void *ctx, int dev, void *opaqueHandle, void **
 {
     (void)ctx;
     static_assert(sizeof(struct ncclSocketHandle) <= NCCL_NET_HANDLE_MAXSIZE, "ncclSocketHandle size too large");
-
 
     if (dev < 0 || dev >= numSocketDevices)
         return ncclInvalidArgument;
@@ -464,6 +491,11 @@ static ncclResult_t socketConnect(void *ctx, int dev, void *opaqueHandle, void *
         int yes = 1;
         setsockopt(comm->sock, IPPROTO_TCP, TCP_NODELAY, (char *)&yes, sizeof(yes));
 
+        // Set larger socket buffers to prevent buffer exhaustion during rapid operations
+        int bufSize = 4 * 1024 * 1024; // 4MB buffers
+        setsockopt(comm->sock, SOL_SOCKET, SO_SNDBUF, (char *)&bufSize, sizeof(bufSize));
+        setsockopt(comm->sock, SOL_SOCKET, SO_RCVBUF, (char *)&bufSize, sizeof(bufSize));
+
         // Set non-blocking mode for async connect
         u_long mode = 1;
         ioctlsocket(comm->sock, FIONBIO, &mode);
@@ -548,6 +580,11 @@ static ncclResult_t socketAccept(void *listenComm, void **recvComm, ncclNetDevic
     int yes = 1;
     setsockopt(comm->sock, IPPROTO_TCP, TCP_NODELAY, (char *)&yes, sizeof(yes));
 
+    // Set larger socket buffers to prevent buffer exhaustion during rapid operations
+    int bufSize = 4 * 1024 * 1024; // 4MB buffers
+    setsockopt(comm->sock, SOL_SOCKET, SO_SNDBUF, (char *)&bufSize, sizeof(bufSize));
+    setsockopt(comm->sock, SOL_SOCKET, SO_RCVBUF, (char *)&bufSize, sizeof(bufSize));
+
     // Keep socket non-blocking for async progress (irecv/test pattern)
     u_long mode = 1;
     ioctlsocket(comm->sock, FIONBIO, &mode);
@@ -592,22 +629,12 @@ static ncclResult_t socketIsend(void *sendComm, void *data, size_t size, int tag
     (void)mhandle;
     (void)phandle;
 
-
     struct ncclSocketComm *comm = (struct ncclSocketComm *)sendComm;
+    struct ncclSocketRequest *req;
 
-    struct ncclSocketRequest *req = (struct ncclSocketRequest *)calloc(1, sizeof(struct ncclSocketRequest));
-    if (!req)
-        return ncclSystemError;
-
-    req->used = 1;
-    req->data = data;
-    req->size = size;
-    req->actualSize = size;
-    req->offset = 0;
-    req->op = 0;    // send
-    req->phase = 0; // Start with header phase
-    req->comm = comm;
-    req->done = 0;
+    ncclResult_t ret = socketGetRequest(comm, 0 /* send */, data, size, &req);
+    if (ret != ncclSuccess)
+        return ret;
 
     // Prepare size header
     memcpy(req->sizeHeader, &size, SOCKET_CTRL_SIZE);
@@ -630,20 +657,11 @@ static ncclResult_t socketIrecv(void *recvComm, int n, void **data, size_t *size
     }
 
     struct ncclSocketComm *comm = (struct ncclSocketComm *)recvComm;
+    struct ncclSocketRequest *req;
 
-    struct ncclSocketRequest *req = (struct ncclSocketRequest *)calloc(1, sizeof(struct ncclSocketRequest));
-    if (!req)
-        return ncclSystemError;
-
-    req->used = 1;
-    req->data = data[0];
-    req->size = sizes[0]; // Max buffer size
-    req->actualSize = 0;  // Will be filled from header
-    req->offset = 0;
-    req->op = 1;    // recv
-    req->phase = 0; // Start with header phase
-    req->comm = comm;
-    req->done = 0;
+    ncclResult_t ret = socketGetRequest(comm, 1 /* recv */, data[0], sizes[0], &req);
+    if (ret != ncclSuccess)
+        return ret;
 
     *request = req;
     return ncclSuccess;
@@ -711,6 +729,9 @@ static ncclResult_t socketTest(void *request, int *done, int *sizes)
                     WARN("NET/Socket: %s header failed with error: %d", req->op == 0 ? "send" : "recv", err);
                     return ncclSystemError;
                 }
+                // Yield to other threads to prevent tight spinning and potential deadlock
+                // Use Sleep(0) instead of SwitchToThread() for stronger yield
+                Sleep(0);
                 *done = 0;
                 return ncclSuccess;
             }
@@ -774,6 +795,9 @@ static ncclResult_t socketTest(void *request, int *done, int *sizes)
                     WARN("NET/Socket: %s data failed with error: %d", req->op == 0 ? "send" : "recv", err);
                     return ncclSystemError;
                 }
+                // Yield to other threads to prevent tight spinning and potential deadlock
+                // Use Sleep(0) instead of SwitchToThread() for stronger yield
+                Sleep(0);
                 *done = 0;
                 return ncclSuccess;
             }
@@ -792,6 +816,10 @@ static ncclResult_t socketTest(void *request, int *done, int *sizes)
             *done = 1;
             if (sizes)
                 *sizes = (int)dataSize;
+            // Mark request as unused - can be reused from pool
+            // Note: For recv requests, irecvConsumed will be called but we handle
+            // the case where used is already 0 there
+            req->used = 0;
         }
         else
         {
@@ -847,8 +875,9 @@ static ncclResult_t socketIrecvConsumed(void *recvComm, int n, void *request)
 {
     (void)recvComm;
     (void)n;
-    if (request)
-        free(request);
+    // Request is already marked unused in socketTest when done
+    // This function is called for compatibility but we don't need to do anything
+    (void)request;
     return ncclSuccess;
 }
 
@@ -898,7 +927,7 @@ ncclNet_t ncclNetSocket = {
     .closeRecv = socketCloseRecv,
     .closeListen = socketCloseListen,
     .getDeviceMr = socketGetDeviceMr,
-    .irecvConsumed = socketIrecvConsumed,
+    .irecvConsumed = NULL, // Like Linux, we release requests in test() when done
     .makeVDevice = socketMakeVDevice,
     .finalize = socketFinalize,
     .setNetAttr = socketSetNetAttr,

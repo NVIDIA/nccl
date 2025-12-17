@@ -386,12 +386,6 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload> : public Pri
       sendConnHeadCache = *sendConnHeadPtr;
       sendConnHead = sendConn->step;
       sendConnFifo = sendConn->connFifo;
-      // Debug: print connFifo pointer
-      if (tid == 0)
-      {
-        printf("[prims_ll] rank=%d tid=0 sendConnFifo=%p sendConnHeadPtr=%p\n",
-               ncclShmem.comm.rank, (void *)sendConnFifo, (void *)sendConnHeadPtr);
-      }
     }
   }
 
@@ -405,11 +399,6 @@ public:
                                                                      stepLines(ncclShmem.comm.buffSizes[NCCL_PROTO_LL] / NCCL_STEPS / sizeof(ncclLLFifoLine))
   {
     auto *channel = &ncclShmem.channel;
-    if (tid == 0)
-    {
-      printf("[prims_ll ctor] rank=%d recvPeers[0]=%d sendPeers[0]=%d MaxSend=%d channel=%p\n",
-             ncclShmem.comm.rank, recvPeers[0], sendPeers[0], MaxSend, (void *)channel);
-    }
     // If we are going to support oneshot collNet + LL, then we would need to add connector index here
     int nrecv = 0, nsend = 0;
     // We compare with Fan::MaxRecv here because this->MaxRecv is always at least 1
@@ -425,10 +414,6 @@ public:
     {
       loadSendConn(&channel->peers[sendPeers[nsend]]->send[connIndexSend], nsend);
       nsend++;
-    }
-    if (tid == 0)
-    {
-      printf("[prims_ll ctor] rank=%d nrecv=%d nsend=%d\n", ncclShmem.comm.rank, nrecv, nsend);
     }
     this->fan = Fan(nrecv, nsend);
     // Coverity reports recvConn and sendConn being possibly NULL at this point but that won't actually

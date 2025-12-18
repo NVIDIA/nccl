@@ -41,7 +41,7 @@
 // Plugin metadata
 #define NCCL_NET_SOCKET_WIN_NAME "Socket"
 #define MAX_IFS 16
-#define MAX_REQUESTS 32
+#define MAX_REQUESTS 64 // Doubled from 32 for better stability with many concurrent operations
 
 // Use existing definitions from socket.h for MAX_IF_NAME_SIZE, SOCKET_NAME_MAXLEN, NCCL_SOCKET_MAGIC
 

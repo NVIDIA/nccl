@@ -14,6 +14,15 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+// Windows uses LLP64 where 'unsigned long' is 32-bit, so ulong2 is only 8 bytes.
+// Linux uses LP64 where 'unsigned long' is 64-bit, so ulong2 is 16 bytes.
+// We need a 16-byte vector type for kernel args storage, so use ulonglong2 on Windows.
+#if defined(_MSC_VER) || defined(_WIN32)
+typedef ulonglong2 nccl_ulong2_16;  // 16 bytes (8+8)
+#else
+typedef ulong2 nccl_ulong2_16;      // 16 bytes on LP64 systems
+#endif
+
 extern const char* ncclFuncStr[NCCL_NUM_FUNCTIONS];
 
 extern const char* ncclAlgoStr[NCCL_NUM_ALGORITHMS];
@@ -84,7 +93,7 @@ union ncclLLFifoLine {
 
 #define WARP_SIZE 32
 #define MAXCHANNELS 64
-#define NCCL_MAX_LOCAL_RANKS 72
+#define NCCL_MAX_LOCAL_RANKS 256
 #define NCCL_MAX_NTHREADS 640
 #define NCCL_MIN_NTHREADS (4*WARP_SIZE)
 #define NCCL_SIMPLE_MAX_NTHREADS 512
@@ -461,7 +470,7 @@ template<size_t capacity>
 struct alignas(16) ncclDevKernelArgsStorage {
   union {
     struct ncclDevKernelArgs args;
-    ulong2 storage[capacity/sizeof(ulong2)];
+    nccl_ulong2_16 storage[capacity/sizeof(nccl_ulong2_16)];
   };
 };
 

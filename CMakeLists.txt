@@ -24,6 +24,10 @@ set(ENV{NCCL_USE_CMAKE} "1")
 project(NCCL VERSION ${NCCL_MAJOR}.${NCCL_MINOR}.${NCCL_PATCH}
         LANGUAGES CUDA CXX C)
 
+# Set C++ standard to C++20 for designated initializers support (required by NVTX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 # Make CMAKE_BUILD_TYPE to release by default if not set
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Release")
@@ -42,6 +46,9 @@ option(RDMA_CORE "Enable RDMA core" OFF)
 option(NET_PROFILER "Enable network profiler" OFF)
 option(MLX5DV "Enable MLX5DV" OFF)
 option(MAX_EXT_NET_PLUGINS "Maximum external network plugins" 0)
+
+# Find Python3 for code generation scripts
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 find_package(CUDAToolkit REQUIRED)
 
@@ -90,16 +97,39 @@ if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES OR CMAKE_CUDA_ARCHITECTURES STREQUAL "")
 endif()
 message(STATUS "Using CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fvisibility=hidden -Wall -Wno-unused-function -Wno-sign-compare -Wvla -g")
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda -Xptxas -maxrregcount=96 -Xfatbin -compress-all -fPIC")
+# Platform-specific compiler flags
+if(WIN32)
+    # Windows (MSVC) compiler flags
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3 /EHsc")
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda -Xptxas -maxrregcount=96 -Xfatbin -compress-all")
+    
+    # Fix CMake CUDA + MSVC PDB issue: CMake generates -Xcompiler=/Fd...,/FS which nvcc 
+    # interprets as multiple input files due to the comma. Disable automatic PDB for CUDA.
+    set(CMAKE_CUDA_COMPILE_OBJECT "<CMAKE_CUDA_COMPILER> ${_CMAKE_CUDA_EXTRA_FLAGS} <DEFINES> <INCLUDES> <FLAGS> ${_CMAKE_COMPILE_AS_CUDA_FLAG} -o <OBJECT> <SOURCE>")
+    
+    # Disable specific warnings on Windows (C/C++ only, not CUDA)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/wd4996> $<$<COMPILE_LANGUAGE:CXX>:/wd4267> $<$<COMPILE_LANGUAGE:CXX>:/wd4244> $<$<COMPILE_LANGUAGE:CXX>:/wd4018>)
+    add_compile_options($<$<COMPILE_LANGUAGE:C>:/wd4996> $<$<COMPILE_LANGUAGE:C>:/wd4267> $<$<COMPILE_LANGUAGE:C>:/wd4244> $<$<COMPILE_LANGUAGE:C>:/wd4018>)
+    
+    # Define Windows macros
+    add_compile_definitions(
+        _CRT_SECURE_NO_WARNINGS
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+    )
+else()
+    # Linux/Unix (GCC/Clang) compiler flags
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fvisibility=hidden -Wall -Wno-unused-function -Wno-sign-compare -Wvla -g")
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda -Xptxas -maxrregcount=96 -Xfatbin -compress-all -fPIC")
+endif()
 
-# Sanitizer options
-if(ASAN)
+# Sanitizer options (Linux only)
+if(NOT WIN32 AND ASAN)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address -static-libasan")
 endif()
 
-if(UBSAN)
+if(NOT WIN32 AND UBSAN)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=undefined")
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=undefined -static-libubsan")
 endif()
@@ -114,29 +144,41 @@ if(NOT NVTX)
 endif()
 
 if(WERROR)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
+    if(WIN32)
+        add_compile_options(/WX)
+    else()
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
+    endif()
 endif()
 
-if(PROFAPI)
+# NVTX profiler uses GCC-specific extensions not available on MSVC
+if(PROFAPI AND NOT WIN32)
     add_definitions(-DPROFAPI)
+endif()
+
+# Disable NVTX payload schemas on Windows (uses __typeof__ and compound literals)
+if(WIN32)
+    add_definitions(-DNVTX_DISABLE)
 endif()
 
 set(EXTRA_LIBS)
 
 # RDMA and MLX5DV are Linux-specific features
-if(RDMA_CORE)
-    add_definitions(-DNCCL_BUILD_RDMA_CORE=1)
-    find_library(VERBS_LIBRARY NAMES verbs)
-    if(VERBS_LIBRARY)
-        list(APPEND EXTRA_LIBS ${VERBS_LIBRARY})
+if(NOT WIN32)
+    if(RDMA_CORE)
+        add_definitions(-DNCCL_BUILD_RDMA_CORE=1)
+        find_library(VERBS_LIBRARY NAMES verbs)
+        if(VERBS_LIBRARY)
+            list(APPEND EXTRA_LIBS ${VERBS_LIBRARY})
+        endif()
     endif()
-endif()
 
-if(MLX5DV)
-    add_definitions(-DNCCL_BUILD_MLX5DV=1)
-    find_library(MLX5_LIBRARY NAMES mlx5)
-    if(MLX5_LIBRARY)
-        list(APPEND EXTRA_LIBS ${MLX5_LIBRARY})
+    if(MLX5DV)
+        add_definitions(-DNCCL_BUILD_MLX5DV=1)
+        find_library(MLX5_LIBRARY NAMES mlx5)
+        if(MLX5_LIBRARY)
+            list(APPEND EXTRA_LIBS ${MLX5_LIBRARY})
+        endif()
     endif()
 endif()
 
@@ -152,19 +194,34 @@ add_definitions(-DDOCA_VERBS_USE_CUDA_WRAPPER)
 add_definitions(-DDOCA_VERBS_USE_NET_WRAPPER)
 add_definitions(-DNCCL_GIN_PROXY_ENABLE=1)
 
-# Library dependencies
-find_library(RT_LIBRARY NAMES rt)
-if(RT_LIBRARY)
-    list(APPEND EXTRA_LIBS ${RT_LIBRARY})
+# Library dependencies (Linux only)
+if(NOT WIN32)
+    find_library(RT_LIBRARY NAMES rt)
+    if(RT_LIBRARY)
+        list(APPEND EXTRA_LIBS ${RT_LIBRARY})
+    endif()
 endif()
 
 # Debug/Release specific flags
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -O0")
-set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS} -O0 -G -g")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3")
-set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS} -O3")
+if(WIN32)
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} /Od /Zi")
+    set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS} -O0 -G -g")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} /O2")
+    set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS} -O3")
+else()
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -O0")
+    set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS} -O0 -G -g")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3")
+    set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS} -O3")
+endif()
 
 add_subdirectory(ext-net)
 add_subdirectory(ext-profiler/example)
 add_subdirectory(ext-tuner/example)
 add_subdirectory(src)
+
+# Build tests if requested
+option(BUILD_TESTS "Build test suite" OFF)
+if(BUILD_TESTS)
+    add_subdirectory(tests)
+endif()

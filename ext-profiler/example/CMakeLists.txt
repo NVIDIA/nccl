@@ -1,3 +1,6 @@
+# ext-profiler example is Linux-only (uses pthreads, sys/syscall.h, linux/limits.h)
+if(NOT WIN32)
+
 # Find all C source files in current directory
 set(SRC_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/plugin.cc
@@ -32,3 +35,6 @@ add_custom_target(clean-profiler-lib
     COMMAND ${CMAKE_COMMAND} -E remove -f ${CMAKE_BINARY_DIR}/test/unit/plugins/libnccl-profiler-example.so
     COMMENT "Cleaning libnccl-profiler-example.so"
 )
+
+endif() # NOT WIN32
+

@@ -7,18 +7,26 @@
 #ifndef _NCCL_DEVICE_GIN_GDAKI_DEVICE_HOST_COMMON_H_
 #define _NCCL_DEVICE_GIN_GDAKI_DEVICE_HOST_COMMON_H_
 
+#ifdef _WIN32
+#include <stdint.h>
+// Windows doesn't have linux/types.h, define __be32 as big-endian uint32
+typedef uint32_t __be32;
+#else
 #include <linux/types.h>
+#endif
 
 #define NCCL_GIN_GDAKI_VERSION 100
 
 template <typename T>
-struct ncclGinGdakiGlobalGPUBufferTable {
+struct ncclGinGdakiGlobalGPUBufferTable
+{
   T *buffer;
   __be32 *rkeys;
   __be32 lkey;
 };
 
-struct ncclGinGdakiGPUContext {
+struct ncclGinGdakiGPUContext
+{
   struct doca_gpu_dev_verbs_qp *gdqp;
   struct doca_gpu_dev_verbs_qp *companion_gdqp;
   struct ncclGinGdakiGlobalGPUBufferTable<uint64_t> counters_table;
@@ -28,7 +36,8 @@ struct ncclGinGdakiGPUContext {
   __be32 sink_buffer_lkey;
 };
 
-struct ncclGinGdakiMemHandle {
+struct ncclGinGdakiMemHandle
+{
   __be32 *rkeys;
   __be32 lkey;
 };

@@ -20,7 +20,8 @@
 #endif
 
 #ifndef NCCL_GIN_GDAKI_ENABLE
-#if CUDA_VERSION >= 12020 && __CUDA_ARCH__ >= 700
+// GDAKI requires DOCA SDK which is Linux-only (for BlueField DPUs)
+#if CUDA_VERSION >= 12020 && __CUDA_ARCH__ >= 700 && !defined(_WIN32)
 #define NCCL_GIN_GDAKI_ENABLE 1
 #else
 #define NCCL_GIN_GDAKI_ENABLE 0
@@ -31,23 +32,28 @@
   (((NCCL_GIN_PROXY_ENABLE) ? 1u : 0u) << (unsigned)NCCL_NET_DEVICE_GIN_PROXY | \
    ((NCCL_GIN_GDAKI_ENABLE) ? 1u : 0u) << (unsigned)NCCL_NET_DEVICE_GIN_GDAKI)
 
-struct ncclGinCtx {
+struct ncclGinCtx
+{
   ncclNetDeviceType backend;
   int rank;
   int nRanks;
-  void* handle;
+  void *handle;
 };
 
 template <unsigned backendMask>
-struct ncclGinCtx_M : ncclGinCtx {};
+struct ncclGinCtx_M : ncclGinCtx
+{
+};
 
-struct ncclGinDescriptorSmem {
+struct ncclGinDescriptorSmem
+{
   alignas(16) char space[64];
 };
 
 #if __CUDACC__
 template <ncclNetDeviceType backend>
-struct ncclGinApi_Put {
+struct ncclGinApi_Put
+{
   template <typename Coop>
   NCCL_DEVICE_INLINE static void call(ncclGinCtx, Coop coop, int peer, bool hasWins,
                                       ncclGinWindow_t dstWin, size_t dstOff, ncclGinWindow_t srcWin,
@@ -55,42 +61,48 @@ struct ncclGinApi_Put {
                                       ncclGinSignal_t signalId, ncclGinSignalOp_t signalOp,
                                       uint64_t signalOpArg, bool hasCounter,
                                       ncclGinCounter_t counterId, bool hasDescriptor,
-                                      ncclGinDescriptorSmem* descriptor,
+                                      ncclGinDescriptorSmem *descriptor,
                                       cuda::thread_scope required, cuda::thread_scope given);
 };
 
 template <ncclNetDeviceType backend>
-struct ncclGinApi_PutValue {
+struct ncclGinApi_PutValue
+{
   template <typename Coop, typename T>
   NCCL_DEVICE_INLINE static void call(ncclGinCtx, Coop coop, int peer, ncclGinWindow_t dstWin,
                                       size_t dstOff, T srcData, bool hasSignal,
                                       ncclGinSignal_t signalId, ncclGinSignalOp_t signalOp,
                                       uint64_t signalOpArg, bool hasDescriptor,
-                                      ncclGinDescriptorSmem* descriptor,
+                                      ncclGinDescriptorSmem *descriptor,
                                       cuda::thread_scope required, cuda::thread_scope given);
 };
 
 template <ncclNetDeviceType backend>
-struct ncclGinApi_GetSignalPtr {
-  NCCL_DEVICE_INLINE static uint64_t* call(ncclGinCtx, int peer, ncclGinSignal_t signalId);
+struct ncclGinApi_GetSignalPtr
+{
+  NCCL_DEVICE_INLINE static uint64_t *call(ncclGinCtx, int peer, ncclGinSignal_t signalId);
 };
 template <ncclNetDeviceType backend>
-struct ncclGinApi_GetCounterPtr {
-  NCCL_DEVICE_INLINE static uint64_t* call(ncclGinCtx, int peer, ncclGinCounter_t counterId);
+struct ncclGinApi_GetCounterPtr
+{
+  NCCL_DEVICE_INLINE static uint64_t *call(ncclGinCtx, int peer, ncclGinCounter_t counterId);
 };
 
 template <ncclNetDeviceType backend>
-struct ncclGinApi_ResetSignal {
+struct ncclGinApi_ResetSignal
+{
   NCCL_DEVICE_INLINE static void call(ncclGinCtx, ncclGinSignal_t signalId);
 };
 
 template <ncclNetDeviceType backend>
-struct ncclGinApi_ResetCounter {
+struct ncclGinApi_ResetCounter
+{
   NCCL_DEVICE_INLINE static void call(ncclGinCtx, ncclGinCounter_t counterId);
 };
 
 template <ncclNetDeviceType backend>
-struct ncclGinApi_Flush {
+struct ncclGinApi_Flush
+{
   template <typename Coop>
   NCCL_DEVICE_INLINE static void call(ncclGinCtx, Coop, cuda::memory_order ord);
 };
@@ -98,21 +110,25 @@ struct ncclGinApi_Flush {
 
 #if __CUDACC__
 template <template <ncclNetDeviceType> typename ApiFn, unsigned beMask, typename... Arg>
-NCCL_DEVICE_INLINE static decltype(auto) ncclGinCall(ncclGinCtx_M<beMask> ctx, Arg&&... arg) {
-  bool singleton = (beMask & (beMask - 1)) == 0;  // Only one bit set
-  switch (singleton ? __popc(beMask - 1) : (int)ctx.backend) {
+NCCL_DEVICE_INLINE static decltype(auto) ncclGinCall(ncclGinCtx_M<beMask> ctx, Arg &&...arg)
+{
+  bool singleton = (beMask & (beMask - 1)) == 0; // Only one bit set
+  switch (singleton ? __popc(beMask - 1) : (int)ctx.backend)
+  {
 #if NCCL_GIN_PROXY_ENABLE
-    case (int)NCCL_NET_DEVICE_GIN_PROXY:
-      if (!(1 & (beMask >> (int)NCCL_NET_DEVICE_GIN_PROXY))) __builtin_unreachable();
-      return ApiFn<NCCL_NET_DEVICE_GIN_PROXY>::call(ctx, static_cast<Arg&&>(arg)...);
+  case (int)NCCL_NET_DEVICE_GIN_PROXY:
+    if (!(1 & (beMask >> (int)NCCL_NET_DEVICE_GIN_PROXY)))
+      __builtin_unreachable();
+    return ApiFn<NCCL_NET_DEVICE_GIN_PROXY>::call(ctx, static_cast<Arg &&>(arg)...);
 #endif
 #if NCCL_GIN_GDAKI_ENABLE
-    case (int)NCCL_NET_DEVICE_GIN_GDAKI:
-      if (!(1 & (beMask >> (int)NCCL_NET_DEVICE_GIN_GDAKI))) __builtin_unreachable();
-      return ApiFn<NCCL_NET_DEVICE_GIN_GDAKI>::call(ctx, static_cast<Arg&&>(arg)...);
-#endif
-    default:
+  case (int)NCCL_NET_DEVICE_GIN_GDAKI:
+    if (!(1 & (beMask >> (int)NCCL_NET_DEVICE_GIN_GDAKI)))
       __builtin_unreachable();
+    return ApiFn<NCCL_NET_DEVICE_GIN_GDAKI>::call(ctx, static_cast<Arg &&>(arg)...);
+#endif
+  default:
+    __builtin_unreachable();
   }
 }
 #endif

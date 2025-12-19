@@ -19,7 +19,7 @@ OBJDIR := $(BUILDDIR)/obj/device
 MANIFEST := $(OBJDIR)/manifest
 DEVGLUE_OBJ  := $(OBJDIR)/device_glue.o
 
-INCFLAGS  = -I. -I.. -I$(BUILDDIR)/include -I../include -I../include/plugin
+INCFLAGS  = -I. -I.. -I$(BUILDDIR)/include -I../include -I../include/plugin -I$(OBJDIR)/gensrc
 NVCUFLAGS += $(INCFLAGS) --compiler-options "-fPIC -fvisibility=hidden"
 CXXFLAGS  += $(INCFLAGS)
 

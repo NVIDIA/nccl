@@ -1,6 +1,6 @@
 # Run the scripts once during configuration to get the file lists
 execute_process(
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc "${ONLY_FUNCS}"
+    COMMAND ${CMAKE_COMMAND} -E env "NCCL_USE_CMAKE=1" ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc "${ONLY_FUNCS}"
     OUTPUT_VARIABLE files
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
@@ -8,7 +8,7 @@ string(STRIP "${files}" files)
 list(TRANSFORM files PREPEND ${CMAKE_CURRENT_BINARY_DIR}/gensrc/)
 
 execute_process(
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/symmetric/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc/symmetric "${ONLY_FUNCS}"
+    COMMAND ${CMAKE_COMMAND} -E env "NCCL_USE_CMAKE=1" ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/symmetric/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc/symmetric "${ONLY_FUNCS}"
     OUTPUT_VARIABLE symmetric_files
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
@@ -18,8 +18,7 @@ list(TRANSFORM symmetric_files PREPEND ${CMAKE_CURRENT_BINARY_DIR}/gensrc/symmet
 # Create custom commands to generate source files with proper dependencies
 add_custom_command(
     OUTPUT  ${files}
-    BYPRODUCTS ${files}
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc "${ONLY_FUNCS}"
+    COMMAND ${CMAKE_COMMAND} -E env "NCCL_USE_CMAKE=1" ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc "${ONLY_FUNCS}"
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/generate.py
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMENT "Generating device source files"
@@ -27,8 +26,7 @@ add_custom_command(
 
 add_custom_command(
     OUTPUT  ${symmetric_files}
-    BYPRODUCTS ${symmetric_files}
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/symmetric/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc/symmetric "${ONLY_FUNCS}"
+    COMMAND ${CMAKE_COMMAND} -E env "NCCL_USE_CMAKE=1" ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/symmetric/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc/symmetric "${ONLY_FUNCS}"
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/symmetric/generate.py
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMENT "Generating symmetric device source files"
@@ -44,12 +42,20 @@ add_library(nccl_device OBJECT
 
 set_target_properties(nccl_device PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
-    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS OFF
+)
+
+# Add relocatable device code flag explicitly for Windows
+# Also add /FS to allow parallel compilation with shared PDB
+target_compile_options(nccl_device PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:-dc>
+    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<BOOL:${MSVC}>>:-Xcompiler=/FS>
 )
 
 # Set include directories for the target
 target_include_directories(nccl_device PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}/gensrc
     ${CMAKE_BINARY_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/include
     ${CMAKE_SOURCE_DIR}/src/include/plugin

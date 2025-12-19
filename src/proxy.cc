@@ -252,7 +252,7 @@ ncclResult_t getOpIndex(struct ncclProxyArgs* op, struct ncclProxyProgressState*
 }
 
 ncclResult_t printProxyOp(struct ncclProxyArgs* op, int poolIndex, int opIndex) {
-  printf("[%d-%d|%ld| %s", poolIndex, opIndex, op->opCount, ncclFuncToString((ncclFunc_t)op->coll));
+  printf("[0x%lx|%d-%d|%ld| %s", op->commHash, poolIndex, opIndex, op->opCount, ncclFuncToString((ncclFunc_t)op->coll));
   for (int s=0; s<op->nsubs; s++) {
     struct ncclProxySubArgs* sub = op->subs+s;
     printf(" | %s channel %s/%02d", sub->connection->send ? "send" : "recv", ncclTransports[sub->connection->transport]->name, sub->channelId);
@@ -406,6 +406,7 @@ static ncclResult_t ncclProxyOpToArgs(struct ncclProxyOp* op, struct ncclProxyAr
   }
   //memset(&args->progress, 0, sizeof(struct ncclProxyArgs)-offsetof(struct ncclProxyArgs, progress));
   args->done = 0;
+  args->commHash = op->commHash;
   args->opCount = op->opCount;
   args->sliceSteps = op->sliceSteps;
   args->chunkSteps = op->chunkSteps;
@@ -564,7 +565,7 @@ static ncclResult_t SaveProxyProfiler(struct ncclComm* comm, struct ncclProxyOp*
 
 static ncclResult_t SaveProxy(struct ncclComm* comm, struct ncclChannel* channel, int type, int peer, struct ncclProxyOp* op, int connIndex, bool* justInquire) {
   if (peer < 0) return ncclSuccess;
-
+  op->commHash = comm->commHash;
   struct ncclChannelPeer* peerComm = channel->peers[peer];
   struct ncclConnector* connector = type == proxyRecv ? peerComm->recv+connIndex : peerComm->send+connIndex;
   if (connector->transportComm == NULL) {

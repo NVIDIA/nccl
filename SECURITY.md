@@ -754,30 +754,30 @@ grep -rn "getenv|dlopen|LoadLibrary" --include="*.cc" --include="*.h" --include=
 
 ### D.6 Windows-Specific Security Tests
 
-| Test Category | Tests | Status |
-|---------------|-------|--------|
-| Platform Macros | 5 | ✅ Pass |
-| Time Functions | 5 | ✅ Pass |
-| Thread Functions | 7 | ✅ Pass |
-| CPU Affinity | 11 | ✅ Pass |
-| Socket Functions | 7 | ✅ Pass |
-| Dynamic Loading | 4 | ✅ Pass |
-| Atomic Operations | 6 | ✅ Pass |
-| Miscellaneous | 5 | ✅ Pass |
-| Socket Optimizations | 10 | ✅ Pass |
-| Overlapped I/O | 5 | ✅ Pass |
-| Shared Memory | 14 | ✅ Pass |
-| **TOTAL** | **69** | **69 Pass** |
+| Test Category        | Tests  | Status      |
+| -------------------- | ------ | ----------- |
+| Platform Macros      | 5      | ✅ Pass      |
+| Time Functions       | 5      | ✅ Pass      |
+| Thread Functions     | 7      | ✅ Pass      |
+| CPU Affinity         | 11     | ✅ Pass      |
+| Socket Functions     | 7      | ✅ Pass      |
+| Dynamic Loading      | 4      | ✅ Pass      |
+| Atomic Operations    | 6      | ✅ Pass      |
+| Miscellaneous        | 5      | ✅ Pass      |
+| Socket Optimizations | 10     | ✅ Pass      |
+| Overlapped I/O       | 5      | ✅ Pass      |
+| Shared Memory        | 14     | ✅ Pass      |
+| **TOTAL**            | **69** | **69 Pass** |
 
 ### D.7 Cross-Platform Security Comparison
 
-| Security Aspect | Linux | Windows | Notes |
-|-----------------|-------|---------|-------|
-| Memory Protection | ASLR, NX | ASLR, DEP | Both enabled |
-| IPC Security | Unix sockets | Named pipes + security attributes | Platform-appropriate |
-| DLL/SO Loading | dlopen w/ RTLD_NOW | LoadLibrary w/ path validation | ✅ Secure |
-| Handle Cleanup | close() + resource tracking | CloseHandle() + destructor patterns | ✅ Verified |
-| Thread Safety | pthread_mutex (futex) | CRITICAL_SECTION | Both thread-safe |
+| Security Aspect   | Linux                       | Windows                             | Notes                |
+| ----------------- | --------------------------- | ----------------------------------- | -------------------- |
+| Memory Protection | ASLR, NX                    | ASLR, DEP                           | Both enabled         |
+| IPC Security      | Unix sockets                | Named pipes + security attributes   | Platform-appropriate |
+| DLL/SO Loading    | dlopen w/ RTLD_NOW          | LoadLibrary w/ path validation      | ✅ Secure             |
+| Handle Cleanup    | close() + resource tracking | CloseHandle() + destructor patterns | ✅ Verified           |
+| Thread Safety     | pthread_mutex (futex)       | CRITICAL_SECTION                    | Both thread-safe     |
 
 ---
 

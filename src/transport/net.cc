@@ -1791,7 +1791,7 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState *proxyState, struct 
                   continue;
                 sub->regBufferReady = 1;
                 ptrs[subCount] = sub->recvbuff + sub->posted * NCCL_MAX_NET_SIZE;
-                sizes[subCount] = std::min(NCCL_MAX_NET_SIZE, (ssize_t)(sub->nbytes - sub->posted * NCCL_MAX_NET_SIZE));
+                sizes[subCount] = std::min((ssize_t)NCCL_MAX_NET_SIZE, (ssize_t)(sub->nbytes - sub->posted * NCCL_MAX_NET_SIZE));
               }
               else
               {

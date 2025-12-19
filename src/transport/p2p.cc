@@ -307,8 +307,9 @@ ncclResult_t ncclP2pImportShareableBuffer(struct ncclComm *comm, int peer, size_
 // Setting this to non zero causes P2P to use Reads rather than Writes
 NCCL_PARAM(P2pReadEnable, "P2P_READ_ENABLE", -2);
 NCCL_PARAM(P2pDirectDisable, "P2P_DIRECT_DISABLE", 0);
+NCCL_PARAM(P2pAllowCrossPid, "P2P_ALLOW_CROSS_PID", 0);
 
-#define P2P_SAME_PID(MYINFO, PEERINFO) ((MYINFO->hostHash == PEERINFO->hostHash) && (MYINFO->pidHash == PEERINFO->pidHash))
+#define P2P_SAME_PID(MYINFO, PEERINFO) ((MYINFO->hostHash == PEERINFO->hostHash) && ((MYINFO->pidHash == PEERINFO->pidHash) || ncclParamP2pAllowCrossPid()))
 
 static ncclResult_t p2pGetInfo(struct ncclComm* comm, struct ncclPeerInfo* info1, struct ncclPeerInfo* info2, int* read, int* intermediateRank) {
   int p2p;
@@ -365,6 +366,9 @@ ncclResult_t p2pSendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, st
   send->transportResources = resources;
   int useRead, intermediateRank;
   NCCLCHECK(p2pGetInfo(comm, myInfo, peerInfo, &useRead, &intermediateRank));
+  if (ncclParamP2pAllowCrossPid() && myInfo->pidHash != peerInfo->pidHash) {
+    INFO(NCCL_INIT|NCCL_P2P, "NCCL_P2P_ALLOW_CROSS_PID set, allowing P2P connection between processes with different PIDs. This is not a recommended configuration.");
+  }
   if (useMemcpy) useRead = 0;
 
   static_assert(sizeof(struct p2pConnectInfo) <= sizeof(struct ncclConnect), "p2p Connect Info is too big");

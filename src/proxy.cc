@@ -263,7 +263,7 @@ ncclResult_t printProxyOp(struct ncclProxyArgs* op, int poolIndex, int opIndex) 
         else if (sub->transmitted < sub->posted) status = 'G'; // Waiting on GPU
         else if (sub->done < sub->transmitted) status = 'S'; // Sending
         else status = 'D'; // Done
-        printf(": %d -> %d / status %c (nsteps %d, posted %ld, transmitted %ld, done %ld)", sub->rank, sub->peer, status, sub->nsteps, sub->posted, sub->transmitted, sub->done);
+        printf(": %d -> %d / status %c (nsteps %d, posted %lu, transmitted %lu, done %lu)", sub->rank, sub->peer, status, sub->nsteps, sub->posted, sub->transmitted, sub->done);
       } else {
         if (sub->posted < sub->nsteps && sub->posted < sub->done + NCCL_STEPS) status = 'I'; // Init
         else if (sub->received < sub->posted) status = 'R'; // Receiving
@@ -271,7 +271,7 @@ ncclResult_t printProxyOp(struct ncclProxyArgs* op, int poolIndex, int opIndex) 
         else if (sub->transmitted < sub->received) status = 'F'; // Flushing
         else if (sub->done < sub->transmitted) status = 'G'; // Waiting on GPU
         else status = 'D'; // Done
-        printf(": %d <- %d / status %c (nsteps %d, posted %ld, received %ld, transmitted %ld, done %ld)", sub->rank, sub->peer, status, sub->nsteps, sub->posted, sub->received, sub->transmitted, sub->done);
+        printf(": %d <- %d / status %c (nsteps %d, posted %lu, received %lu, transmitted %lu, done %lu)", sub->rank, sub->peer, status, sub->nsteps, sub->posted, sub->received, sub->transmitted, sub->done);
       }
     }
   }

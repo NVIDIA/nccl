@@ -887,6 +887,132 @@ New Linux-specific optimization headers added in this release:
 | `ncclThreadBindToNumaNode()` | NUMA-aware thread binding    | Improved locality      |
 | `ncclSpinlock*`              | Fast spinlock implementation | 3.7 ns (2.2x vs mutex) |
 
+### 9.13 Windows Platform Benchmark Results (December 18, 2025)
+
+Complete Windows native benchmark results captured from `benchmark_platform.exe`, `benchmark_comparison.exe`, and `benchmark_optimizations.exe`.
+
+#### 9.13.1 Core Platform Operations
+
+| Operation                      | Avg Latency | Throughput      | Notes                |
+| ------------------------------ | ----------- | --------------- | -------------------- |
+| clock_gettime(CLOCK_MONOTONIC) | 33.5 ns     | 29.81M ops/sec  | QueryPerformanceCounter |
+| clock_gettime(CLOCK_REALTIME)  | 20.2 ns     | 49.47M ops/sec  | GetSystemTimePreciseAsFileTime |
+| mutex lock/unlock              | 28.0 ns     | 35.75M ops/sec  | CRITICAL_SECTION     |
+| mutex trylock/unlock           | 28.3 ns     | 35.35M ops/sec  | TryEnterCriticalSection |
+| mutex init/destroy             | 39.9 ns     | 25.08M ops/sec  | InitializeCriticalSection |
+
+#### 9.13.2 CPU Affinity Operations
+
+| Operation                | Avg Latency | Throughput     |
+| ------------------------ | ----------- | -------------- |
+| CPU_ZERO                 | 17.4 ns     | 57.34M ops/sec |
+| CPU_SET                  | 18.2 ns     | 54.92M ops/sec |
+| CPU_ISSET                | 24.2 ns     | 41.37M ops/sec |
+| CPU_COUNT (full set)     | 255.1 ns    | 3.92M ops/sec  |
+| sched_getaffinity        | 621.3 ns    | 1.61M ops/sec  |
+
+#### 9.13.3 Atomic Operations
+
+| Operation                   | Avg Latency | Throughput      |
+| --------------------------- | ----------- | --------------- |
+| InterlockedIncrement64      | 24.7 ns     | 40.49M ops/sec  |
+| InterlockedIncrement (32)   | 25.2 ns     | 39.73M ops/sec  |
+| InterlockedExchange64+load  | 25.1 ns     | 39.86M ops/sec  |
+| InterlockedCompareExchange64| 30.3 ns     | 32.97M ops/sec  |
+| MemoryBarrier               | 25.4 ns     | 39.42M ops/sec  |
+
+#### 9.13.4 Socket Operations
+
+| Operation           | Avg Latency | Throughput    |
+| ------------------- | ----------- | ------------- |
+| socket create/close | 12.48 μs    | 0.08M ops/sec |
+| poll (1 fd, t=0)    | 923.9 ns    | 1.08M ops/sec |
+
+#### 9.13.5 System Functions
+
+| Operation | Avg Latency | Throughput      |
+| --------- | ----------- | --------------- |
+| getpid    | 21.7 ns     | 46.12M ops/sec  |
+| gettid    | 21.4 ns     | 46.79M ops/sec  |
+| dlsym     | 94.6 ns     | 10.57M ops/sec  |
+| getenv    | 1088.5 ns   | 0.92M ops/sec   |
+| dlopen/dlclose | 2119.2 ns | 0.47M ops/sec |
+
+#### 9.13.6 Windows Optimization Benchmarks
+
+**Socket Configuration Performance:**
+
+| Configuration        | Latency/op | vs Default |
+| -------------------- | ---------- | ---------- |
+| Default socket       | 19.18 μs   | baseline   |
+| Optimized (4MB buf)  | 25.06 μs   | +30.7%     |
+| Low-latency (256KB)  | 20.57 μs   | +7.2%      |
+
+**Loopback Socket Throughput:**
+
+| Size   | Default    | Optimized   | Improvement |
+| ------ | ---------- | ----------- | ----------- |
+| 64 KB  | 3085.2 MB/s| 3032.8 MB/s | -1.7%       |
+| 256 KB | 1427.1 MB/s| 5664.5 MB/s | **+296.9%** |
+| 1 MB   | 962.2 MB/s | 2718.0 MB/s | **+182.5%** |
+| 4 MB   | 1304.3 MB/s| 1293.0 MB/s | -0.9%       |
+
+**Memory Operations (4 MB buffer):**
+
+| Operation            | Basic     | NUMA-aware | Improvement |
+| -------------------- | --------- | ---------- | ----------- |
+| Sequential Write     | 11.42 GB/s| 13.20 GB/s | +15.6%      |
+| Sequential Read      | 49.95 GB/s| 64.15 GB/s | **+28.4%**  |
+
+**Lock Performance (uncontended):**
+
+| Lock Type            | Latency    |
+| -------------------- | ---------- |
+| Spinlock             | 8.61 ns    |
+| Mutex (CS wrapper)   | 13.87 ns   |
+| Raw CRITICAL_SECTION | 13.48 ns   |
+
+**Timer Resolution:**
+
+| Mode              | Sleep(1) Actual | Improvement |
+| ----------------- | --------------- | ----------- |
+| Default           | 10.20 ms        | baseline    |
+| High Resolution   | 1.97 ms         | **5.2x**    |
+
+#### 9.13.7 NUMA and Memory Configuration
+
+| Metric                  | Value      |
+| ----------------------- | ---------- |
+| Current NUMA node       | 0          |
+| Total NUMA nodes        | 1          |
+| Large page size         | 2048 KB    |
+| GetCurrentNumaNode      | 0.623 μs   |
+| GetNumaNodeCount        | 0.289 μs   |
+| GetLargePageSize        | 0.002 μs   |
+
+#### 9.13.8 I/O Completion Ports
+
+| Operation          | Latency    |
+| ------------------ | ---------- |
+| IOCP Create/Destroy| 0.84 μs    |
+| IOCP Associate socket | 24.24 μs |
+
+#### 9.13.9 High-Precision Sleep Accuracy
+
+| Target    | Sleep(0) | Busy Wait | Accuracy  |
+| --------- | -------- | --------- | --------- |
+| 100 ns    | 225 ns   | 101 ns    | 1% error  |
+| 1000 ns   | 268 ns   | 1000 ns   | 0% error  |
+| 10000 ns  | 194 ns   | 10000 ns  | 0% error  |
+
+#### 9.13.10 Processor Topology
+
+| Metric               | Value |
+| -------------------- | ----- |
+| Processor groups     | 1     |
+| Total logical CPUs   | 24    |
+| Group 0 processors   | 24    |
+
 ---
 
 ## Appendix A: Profiling Commands

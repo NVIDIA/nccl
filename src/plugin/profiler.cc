@@ -13,21 +13,24 @@
 #include "profiler.h"
 #include "transport.h"
 #include "plugin.h"
+#include "compiler.h"
 #include <mutex>
+#include "os.h"
 
 extern ncclProfiler_t* getNcclProfiler_v1(void* lib);
 extern ncclProfiler_t* getNcclProfiler_v2(void* lib);
 extern ncclProfiler_t* getNcclProfiler_v3(void* lib);
 extern ncclProfiler_t* getNcclProfiler_v4(void* lib);
 extern ncclProfiler_t* getNcclProfiler_v5(void* lib);
+extern ncclProfiler_t* getNcclProfiler_v6(void* lib);
 
 static std::mutex profilerMutex;
 static int profilerPluginRefCount;
 static void* profilerPluginLib;
 static ncclProfiler_t* ncclProfiler;
 
-extern __thread int ncclGroupDepth;
-__thread ncclProfilerApiState_t ncclProfilerApiState;
+extern thread_local int ncclGroupDepth;
+thread_local ncclProfilerApiState_t ncclProfilerApiState;
 
 #define MAX_STR_LEN 256
 
@@ -67,7 +70,10 @@ static ncclResult_t ncclProfilerPluginLoad(void) {
     profilerName = ncclPluginLibPaths[ncclPluginTypeProfiler];
   }
 
-  ncclProfiler = getNcclProfiler_v5(profilerPluginLib);
+  ncclProfiler = getNcclProfiler_v6(profilerPluginLib);
+  if (ncclProfiler == nullptr) {
+    ncclProfiler = getNcclProfiler_v5(profilerPluginLib);
+  }
   if (ncclProfiler == nullptr) {
     ncclProfiler = getNcclProfiler_v4(profilerPluginLib);
   }
@@ -93,7 +99,7 @@ static ncclResult_t ncclProfilerPluginLoad(void) {
   // This is attached to the proxyOp event descriptor
   // so the plugin can figure out if the parent event
   // is in the same address space or not
-  pid = getpid();
+  pid = ncclOsGetpid();
 
 exit:
   return ncclSuccess;
@@ -107,7 +113,7 @@ fail:
 static ncclResult_t ncclProfilerPluginUnload(void) {
   std::lock_guard<std::mutex> lock(profilerMutex);
   if (0 == (--profilerPluginRefCount)) {
-    if (__builtin_expect(ncclProfiler != NULL, 0)) {
+    if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
       INFO(NCCL_INIT, "PROFILER/Plugin: Closing profiler plugin %s", ncclProfiler->name);
     }
     NCCLCHECK(ncclClosePluginLib(profilerPluginLib, ncclPluginTypeProfiler));
@@ -145,36 +151,36 @@ static double proxyStepStartTs[2], proxyStepStopTs[2];
 static double proxyCtrlStartTs[2], proxyCtrlStopTs[2];
 static double proxyOpRecordTs[2], proxyStepRecordTs[2], proxyCtrlRecordTs[2];
 
-#define TIME_START_EVENT(event) do { \
-  (event ## Count)++; \
-  (event ## Ts)[0] = gettime(); \
-} while(0)
+#define TIME_START_EVENT(event) do {            \
+    (event ## Count)++;                         \
+    (event ## Ts)[0] = gettime();               \
+  } while(0)
 
-#define TIME_STOP_EVENT(event) do { \
-  double val = gettime() - (event ## Ts)[0]; \
-  (event ## Ts)[1] += val; \
-} while(0)
+#define TIME_STOP_EVENT(event) do {             \
+    double val = gettime() - (event ## Ts)[0];  \
+    (event ## Ts)[1] += val;                    \
+  } while(0)
 
-#define TIME_PRINT_EVENTS(name) do { \
-  printf("%s ", name); \
-  if (elapsedCount)         printf("[elapsed] %g/%ld = %g ", elapsedTs[1], elapsedCount, elapsedTs[1]/elapsedCount); \
-  if (initCount)            printf("[init] %g/%ld = %g ", initTs[1], initCount, initTs[1]/initCount); \
-  if (finalizeCount)        printf("[finalize] %g/%ld = %g ", finalizeTs[1], finalizeCount, finalizeTs[1]/finalizeCount); \
-  if (groupStartCount)      printf("[groupStart] %g/%ld = %g ", groupStartTs[1], groupStartCount, groupStartTs[1]/groupStartCount); \
-  if (groupStopCount)       printf("[groupStop] %g/%ld = %g ", groupStopTs[1], groupStopCount, groupStopTs[1]/groupStopCount); \
-  if (taskStartCount)       printf("[taskStart] %g/%ld = %g ", taskStartTs[1], taskStartCount, taskStartTs[1]/taskStartCount); \
-  if (taskStopCount)        printf("[taskStop] %g/%ld = %g ", taskStopTs[1], taskStopCount, taskStopTs[1]/taskStopCount); \
-  if (proxyOpStartCount)    printf("[proxyOpStart] %g/%ld = %g ", proxyOpStartTs[1], proxyOpStartCount, proxyOpStartTs[1]/proxyOpStartCount); \
-  if (proxyOpStopCount)     printf("[proxyOpStop] %g/%ld = %g ", proxyOpStopTs[1], proxyOpStopCount, proxyOpStopTs[1]/proxyOpStopCount); \
-  if (proxyStepStartCount)  printf("[proxyStepStart] %g/%ld = %g ", proxyStepStartTs[1], proxyStepStartCount, proxyStepStartTs[1]/proxyStepStartCount); \
-  if (proxyStepStopCount)   printf("[proxyStepStop] %g/%ld = %g ", proxyStepStopTs[1], proxyStepStopCount, proxyStepStopTs[1]/proxyStepStopCount); \
-  if (proxyCtrlStartCount)  printf("[proxyCtrlStart] %g/%ld = %g ", proxyCtrlStartTs[1], proxyCtrlStartCount, proxyCtrlStartTs[1]/proxyCtrlStartCount); \
-  if (proxyCtrlStopCount)   printf("[proxyCtrlStop] %g/%ld = %g ", proxyCtrlStopTs[1], proxyCtrlStopCount, proxyCtrlStopTs[1]/proxyCtrlStopCount); \
-  if (proxyOpRecordCount)   printf("[proxyOpRecord] %g/%ld = %g ", proxyOpRecordTs[1], proxyOpRecordCount, proxyOpRecordTs[1]/proxyOpRecordCount); \
-  if (proxyStepRecordCount) printf("[proxyStepRecord] %g/%ld = %g ", proxyStepRecordTs[1], proxyStepRecordCount, proxyStepRecordTs[1]/proxyStepRecordCount); \
-  if (proxyCtrlRecordCount) printf("[proxyCtrlRecord] %g/%ld = %g", proxyCtrlRecordTs[1], proxyCtrlRecordCount, proxyCtrlRecordTs[1]/proxyCtrlRecordCount); \
-  printf("\n"); \
-} while(0)
+#define TIME_PRINT_EVENTS(name) do {                                    \
+    printf("%s ", name);                                                \
+    if (elapsedCount)         printf("[elapsed] %g/%ld = %g ", elapsedTs[1], elapsedCount, elapsedTs[1]/elapsedCount); \
+    if (initCount)            printf("[init] %g/%ld = %g ", initTs[1], initCount, initTs[1]/initCount); \
+    if (finalizeCount)        printf("[finalize] %g/%ld = %g ", finalizeTs[1], finalizeCount, finalizeTs[1]/finalizeCount); \
+    if (groupStartCount)      printf("[groupStart] %g/%ld = %g ", groupStartTs[1], groupStartCount, groupStartTs[1]/groupStartCount); \
+    if (groupStopCount)       printf("[groupStop] %g/%ld = %g ", groupStopTs[1], groupStopCount, groupStopTs[1]/groupStopCount); \
+    if (taskStartCount)       printf("[taskStart] %g/%ld = %g ", taskStartTs[1], taskStartCount, taskStartTs[1]/taskStartCount); \
+    if (taskStopCount)        printf("[taskStop] %g/%ld = %g ", taskStopTs[1], taskStopCount, taskStopTs[1]/taskStopCount); \
+    if (proxyOpStartCount)    printf("[proxyOpStart] %g/%ld = %g ", proxyOpStartTs[1], proxyOpStartCount, proxyOpStartTs[1]/proxyOpStartCount); \
+    if (proxyOpStopCount)     printf("[proxyOpStop] %g/%ld = %g ", proxyOpStopTs[1], proxyOpStopCount, proxyOpStopTs[1]/proxyOpStopCount); \
+    if (proxyStepStartCount)  printf("[proxyStepStart] %g/%ld = %g ", proxyStepStartTs[1], proxyStepStartCount, proxyStepStartTs[1]/proxyStepStartCount); \
+    if (proxyStepStopCount)   printf("[proxyStepStop] %g/%ld = %g ", proxyStepStopTs[1], proxyStepStopCount, proxyStepStopTs[1]/proxyStepStopCount); \
+    if (proxyCtrlStartCount)  printf("[proxyCtrlStart] %g/%ld = %g ", proxyCtrlStartTs[1], proxyCtrlStartCount, proxyCtrlStartTs[1]/proxyCtrlStartCount); \
+    if (proxyCtrlStopCount)   printf("[proxyCtrlStop] %g/%ld = %g ", proxyCtrlStopTs[1], proxyCtrlStopCount, proxyCtrlStopTs[1]/proxyCtrlStopCount); \
+    if (proxyOpRecordCount)   printf("[proxyOpRecord] %g/%ld = %g ", proxyOpRecordTs[1], proxyOpRecordCount, proxyOpRecordTs[1]/proxyOpRecordCount); \
+    if (proxyStepRecordCount) printf("[proxyStepRecord] %g/%ld = %g ", proxyStepRecordTs[1], proxyStepRecordCount, proxyStepRecordTs[1]/proxyStepRecordCount); \
+    if (proxyCtrlRecordCount) printf("[proxyCtrlRecord] %g/%ld = %g", proxyCtrlRecordTs[1], proxyCtrlRecordCount, proxyCtrlRecordTs[1]/proxyCtrlRecordCount); \
+    printf("\n");                                                       \
+  } while(0)
 #else
 #define TIME_START_EVENT(event) do {} while(0)
 #define TIME_STOP_EVENT(event)  do {} while(0)
@@ -184,15 +190,41 @@ static double proxyOpRecordTs[2], proxyStepRecordTs[2], proxyCtrlRecordTs[2];
 
 int ncclProfilerEventMask;       // Set by profiler
 
+// Print enabled profiler event types
+static void printProfilerEventMask(int mask) {
+  if (!mask) return;
+
+  char enabled[512] = {0};
+  int pos = 0;
+  if (mask & ncclProfileGroup)        pos += sprintf(enabled + pos, "Group ");
+  if (mask & ncclProfileColl)         pos += sprintf(enabled + pos, "Coll ");
+  if (mask & ncclProfileP2p)          pos += sprintf(enabled + pos, "P2p ");
+  if (mask & ncclProfileProxyOp)      pos += sprintf(enabled + pos, "ProxyOp ");
+  if (mask & ncclProfileProxyStep)    pos += sprintf(enabled + pos, "ProxyStep ");
+  if (mask & ncclProfileProxyCtrl)    pos += sprintf(enabled + pos, "ProxyCtrl ");
+  if (mask & ncclProfileKernelCh)     pos += sprintf(enabled + pos, "KernelCh ");
+  if (mask & ncclProfileNetPlugin)    pos += sprintf(enabled + pos, "NetPlugin ");
+  if (mask & ncclProfileGroupApi)     pos += sprintf(enabled + pos, "GroupApi ");
+  if (mask & ncclProfileCollApi)      pos += sprintf(enabled + pos, "CollApi ");
+  if (mask & ncclProfileP2pApi)       pos += sprintf(enabled + pos, "P2pApi ");
+  if (mask & ncclProfileKernelLaunch) pos += sprintf(enabled + pos, "KernelLaunch ");
+  if (mask & ncclProfileCeColl)       pos += sprintf(enabled + pos, "CeColl ");
+  if (mask & ncclProfileCeSync)       pos += sprintf(enabled + pos, "CeSync ");
+  if (mask & ncclProfileCeBatch)      pos += sprintf(enabled + pos, "CeBatch ");
+  INFO(NCCL_INIT, "Profiler event mask: 0x%x (%d) - Enabled: %s", mask, mask, enabled);
+}
+
 ncclResult_t ncclProfilerPluginInit(struct ncclComm* comm) {
   TIME_START_EVENT(elapsed);
   TIME_START_EVENT(init);
   ncclProfilerPluginLoad();
-  if (__builtin_expect(ncclProfiler != NULL, 0)) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
     int err = ncclProfiler->init(&comm->profilerContext, comm->commHash, &ncclProfilerEventMask, comm->config.commName, comm->nNodes, comm->nRanks, comm->rank, ncclDebugLog);
     if (err) {
       INFO(NCCL_INIT, "Profiler init failed with error '%d': %s. Continue without profiler.", err, strerror(errno));
     }
+
+    printProfilerEventMask(ncclProfilerEventMask);
   }
   TIME_STOP_EVENT(init);
   return ncclSuccess;
@@ -200,7 +232,7 @@ ncclResult_t ncclProfilerPluginInit(struct ncclComm* comm) {
 
 ncclResult_t ncclProfilerPluginFinalize(struct ncclComm* comm) {
   TIME_START_EVENT(finalize);
-  if (__builtin_expect(ncclProfiler != NULL, 0) && comm->profilerContext) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && comm->profilerContext) {
     ncclProfiler->finalize(comm->profilerContext);
   }
   ncclProfilerPluginUnload();
@@ -215,10 +247,11 @@ ncclResult_t ncclProfilerStartGroupApiEvent(struct ncclInfo* info, bool isGraphC
   eDescr.type = ncclProfileGroupApi;
   eDescr.groupApi.graphCaptured = isGraphCaptured;
 
-  ncclProfilerApiState.eActivationMask = __atomic_load_n(&ncclProfilerEventMask, __ATOMIC_RELAXED);
-  int groupApiMask = ncclProfileGroupApi | ncclProfileP2pApi | ncclProfileCollApi | ncclProfileKernelLaunch | ncclProfileGroup | ncclProfileColl | ncclProfileP2p | ncclProfileProxyOp | ncclProfileProxyStep | ncclProfileKernelCh | ncclProfileNetPlugin;
+  ncclProfilerApiState.eActivationMask = COMPILER_ATOMIC_LOAD(&ncclProfilerEventMask, std::memory_order_relaxed);
+  int groupApiMask = ncclProfileGroupApi | ncclProfileP2pApi | ncclProfileCollApi | ncclProfileKernelLaunch | ncclProfileGroup | ncclProfileColl | ncclProfileP2p | ncclProfileProxyOp | ncclProfileProxyStep | ncclProfileKernelCh | ncclProfileNetPlugin | ncclProfileCeColl | ncclProfileCeSync | ncclProfileCeBatch;
+
   // Only count outermost groups when emitting group API events
-  if (__builtin_expect(ncclProfiler != NULL, 0) && (ncclProfilerApiState.eActivationMask & groupApiMask)) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && (ncclProfilerApiState.eActivationMask & groupApiMask)) {
     if (ncclProfilerApiState.profilerGroupDepth == 0) {
       eDescr.groupApi.groupDepth = ncclGroupDepth;
       ncclProfiler->startEvent(info->comm->profilerContext, &ncclProfilerApiState.groupApiEventHandle, &eDescr);
@@ -231,7 +264,7 @@ ncclResult_t ncclProfilerStartGroupApiEvent(struct ncclInfo* info, bool isGraphC
 
 ncclResult_t ncclProfilerStopGroupApiEvent() {
   void* groupApiEventHandle = ncclProfilerApiState.groupApiEventHandle;
-  if (__builtin_expect(ncclProfiler != NULL, 0) && groupApiEventHandle && ncclProfilerApiState.profilerGroupDepth == 0) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && groupApiEventHandle && ncclProfilerApiState.profilerGroupDepth == 0) {
     ncclProfiler->stopEvent(groupApiEventHandle);
     ncclProfilerApiState.groupApiEventHandle = nullptr;
   }
@@ -249,7 +282,7 @@ ncclResult_t ncclProfilerRecordGroupApiEventState(ncclProfilerEventState_t eStat
     shouldRecord = true;
   }
 
-  if (__builtin_expect(ncclProfiler != NULL, 0) && groupApiEventHandle && shouldRecord) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && groupApiEventHandle && shouldRecord) {
     ncclProfiler->recordEventState(groupApiEventHandle, eState, NULL);
   }
   return ncclSuccess;
@@ -265,14 +298,17 @@ ncclResult_t ncclProfilerStartP2pApiEvent(struct ncclInfo *info, bool isGraphCap
   eDescr.p2pApi.stream = (void *) info->stream;
   eDescr.p2pApi.graphCaptured = isGraphCaptured;
   int p2pApiMask = ncclProfileP2pApi | ncclProfileP2p | ncclProfileProxyOp | ncclProfileProxyStep | ncclProfileKernelCh | ncclProfileNetPlugin;
-  if (__builtin_expect(ncclProfiler != NULL, 0) && (ncclProfilerApiState.eActivationMask & p2pApiMask)) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && (ncclProfilerApiState.eActivationMask & p2pApiMask)) {
     ncclProfiler->startEvent(info->comm->profilerContext, &ncclProfilerApiState.p2pApiEventHandle, &eDescr);
+  }
+  if (isGraphCaptured && info->comm->config.graphUsageMode == 0) {
+    INFO(NCCL_P2P | NCCL_ENV, "Comm config graphUsageMode is set to %d but the user is capturing graphs on the stream. Violating graphUsageMode semantics can lead to hangs!", info->comm->config.graphUsageMode);
   }
   return ncclSuccess;
 }
 
 ncclResult_t ncclProfilerStopP2pApiEvent() {
-  if (__builtin_expect(ncclProfiler != NULL, 0) && ncclProfilerApiState.p2pApiEventHandle) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && ncclProfilerApiState.p2pApiEventHandle) {
     ncclProfiler->stopEvent(ncclProfilerApiState.p2pApiEventHandle);
     ncclProfilerApiState.p2pApiEventHandle = nullptr;
   }
@@ -289,15 +325,18 @@ ncclResult_t ncclProfilerStartCollApiEvent(struct ncclInfo *info, bool isGraphCa
   eDescr.collApi.stream = (void *) info->stream;
   eDescr.collApi.root = info->root;
   eDescr.collApi.graphCaptured = isGraphCaptured;
-  int collApiMask = ncclProfileCollApi | ncclProfileColl | ncclProfileProxyOp | ncclProfileProxyStep | ncclProfileKernelCh | ncclProfileNetPlugin;
-  if (__builtin_expect(ncclProfiler != NULL, 0) && (ncclProfilerApiState.eActivationMask & collApiMask)) {
+  int collApiMask = ncclProfileCollApi | ncclProfileColl | ncclProfileProxyOp | ncclProfileProxyStep | ncclProfileKernelCh | ncclProfileNetPlugin | ncclProfileCeColl | ncclProfileCeSync | ncclProfileCeBatch;
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && (ncclProfilerApiState.eActivationMask & collApiMask)) {
     ncclProfiler->startEvent(info->comm->profilerContext, &ncclProfilerApiState.collApiEventHandle, &eDescr);
+  }
+  if (isGraphCaptured && info->comm->config.graphUsageMode == 0) {
+    INFO(NCCL_COLL | NCCL_ENV, "Comm config graphUsageMode is set to %d but the user is capturing graphs on the stream. Violating graphUsageMode semantics can lead to hangs!", info->comm->config.graphUsageMode);
   }
   return ncclSuccess;
 }
 
 ncclResult_t ncclProfilerStopCollApiEvent() {
-  if (__builtin_expect(ncclProfiler != NULL, 0) && ncclProfilerApiState.collApiEventHandle) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && ncclProfilerApiState.collApiEventHandle) {
     ncclProfiler->stopEvent(ncclProfilerApiState.collApiEventHandle);
   }
   return ncclSuccess;
@@ -305,7 +344,7 @@ ncclResult_t ncclProfilerStopCollApiEvent() {
 
 ncclResult_t ncclProfilerStartKernelLaunchEvent(struct ncclKernelPlan* plan, cudaStream_t stream) {
   ncclProfilerEventDescr_t eDescr = { 0 };
-  if (__builtin_expect(ncclProfiler != NULL, 0)) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
     void* groupApiEventHandle = NULL;
     // Check if any collective in the plan has a set event activation mask
     struct ncclTaskColl* ct = ncclIntruQueueHead(&plan->collTaskQueue);
@@ -341,7 +380,7 @@ ncclResult_t ncclProfilerStartKernelLaunchEvent(struct ncclKernelPlan* plan, cud
 }
 
 ncclResult_t ncclProfilerStopKernelLaunchEvent(struct ncclKernelPlan* plan) {
-  if (__builtin_expect(ncclProfiler != NULL, 0) && plan->kernelLaunchEventHandle) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && plan->kernelLaunchEventHandle) {
     ncclProfiler->stopEvent(plan->kernelLaunchEventHandle);
   }
   return ncclSuccess;
@@ -349,7 +388,7 @@ ncclResult_t ncclProfilerStopKernelLaunchEvent(struct ncclKernelPlan* plan) {
 
 ncclResult_t ncclProfilerStartGroupEvent(struct ncclKernelPlan* plan) {
   TIME_START_EVENT(groupStart);
-  if (__builtin_expect(ncclProfiler != NULL, 0)) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
     // Check if any collective in the plan has a set event activation mask
     struct ncclTaskColl* ct = ncclIntruQueueHead(&plan->collTaskQueue);
     struct ncclTaskP2p* pt = ncclIntruQueueHead(&plan->p2pTaskQueue);
@@ -383,7 +422,7 @@ ncclResult_t ncclProfilerStartGroupEvent(struct ncclKernelPlan* plan) {
 
 ncclResult_t ncclProfilerStopGroupEvent(struct ncclKernelPlan* plan) {
   TIME_START_EVENT(groupStop);
-  if (__builtin_expect(ncclProfiler != NULL, 0) && plan->groupEventHandle) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && plan->groupEventHandle) {
     ncclProfiler->stopEvent(plan->groupEventHandle);
   }
   TIME_STOP_EVENT(groupStop);
@@ -394,7 +433,7 @@ ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan) {
   TIME_START_EVENT(taskStart);
   struct ncclTaskColl* ct = ncclIntruQueueHead(&plan->collTaskQueue);
   while (ct) {
-    if (__builtin_expect(ncclProfiler != NULL, 0)) {
+    if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
       int enable = ct->eActivationMask & (ncclProfileColl | ncclProfileProxyOp | ncclProfileProxyStep | ncclProfileKernelCh | ncclProfileNetPlugin);
       if (enable) {
         ncclProfilerEventDescr_t eDescr = { 0 };
@@ -422,12 +461,12 @@ ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan) {
     // reports from RAS.  Instead, we choose not to include graph-captured collectives in our counts.  An exception is
     // made if ncclProfileKernelCh profiler events are active, as they result in proxy events always being added, which
     // gives the consistency.
-    if (!plan->persistent || (__builtin_expect(ncclProfiler != NULL, 0) && (plan->groupEventHandle || ct->collApiEventHandle) &&
+    if (!plan->persistent || (COMPILER_EXPECT(ncclProfiler != NULL, 0) && (plan->groupEventHandle || ct->collApiEventHandle) &&
                               (ct->eActivationMask & ncclProfileKernelCh)))
-      __atomic_fetch_add(&plan->comm->seqNumber[ct->func], 1, __ATOMIC_RELAXED);
+      COMPILER_ATOMIC_FETCH_ADD(&plan->comm->seqNumber[ct->func], 1, std::memory_order_relaxed);
     ct = ct->next;
   }
-  if (__builtin_expect(ncclProfiler != NULL, 0)) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
     struct ncclTaskP2p* pt = ncclIntruQueueHead(&plan->p2pTaskQueue);
     while (pt) {
       int enable = pt->eActivationMask & (ncclProfileP2p | ncclProfileProxyOp | ncclProfileProxyStep | ncclProfileKernelCh | ncclProfileNetPlugin);
@@ -454,7 +493,7 @@ ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan) {
 
 ncclResult_t ncclProfilerStopTaskEvents(struct ncclKernelPlan* plan) {
   TIME_START_EVENT(taskStop);
-  if (__builtin_expect(ncclProfiler != NULL, 0)) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
     struct ncclTaskColl* ct = ncclIntruQueueHead(&plan->collTaskQueue);
     while (ct) {
       if (ct->eventHandle) ncclProfiler->stopEvent(ct->eventHandle);
@@ -478,7 +517,7 @@ ncclResult_t ncclProfilerStopTaskEvents(struct ncclKernelPlan* plan) {
 ncclResult_t ncclProfilerStartProxyOpEvent(int s, struct ncclProxyArgs* args) {
   TIME_START_EVENT(proxyOpStart);
   struct ncclProxySubArgs* sub = &args->subs[s];
-  if (__builtin_expect(ncclProfiler != NULL, 0)) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
     if (sub->eActivationMask & (ncclProfileProxyOp | ncclProfileProxyStep | ncclProfileNetPlugin)) {
       ncclProfilerEventDescr_t eDescr = { 0 };
       eDescr.type = ncclProfileProxyOp;
@@ -500,7 +539,7 @@ ncclResult_t ncclProfilerStartProxyOpEvent(int s, struct ncclProxyArgs* args) {
 ncclResult_t ncclProfilerStopProxyOpEvent(int s, struct ncclProxyArgs* args) {
   TIME_START_EVENT(proxyOpStop);
   struct ncclProxySubArgs* sub = &args->subs[s];
-  if (__builtin_expect(ncclProfiler != NULL, 0) && sub->opEventHandle) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && sub->opEventHandle) {
     ncclProfiler->stopEvent(sub->opEventHandle);
     sub->opEventHandle = NULL;
   }
@@ -512,7 +551,7 @@ ncclResult_t ncclProfilerStartSendProxyStepEvent(int s, struct ncclProxyArgs* ar
   TIME_START_EVENT(proxyStepStart);
   struct ncclProxySubArgs* sub = &args->subs[s];
   int step_ = DIVUP(stepId, args->sliceSteps);
-  if (__builtin_expect(ncclProfiler != NULL, 0)) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
     if (sub->eActivationMask & (ncclProfileProxyStep | ncclProfileNetPlugin)) {
       ncclProfilerEventDescr_t eDescr = { 0 };
       eDescr.type = ncclProfileProxyStep;
@@ -531,7 +570,7 @@ ncclResult_t ncclProfilerStartRecvProxyStepEvent(int s, struct ncclProxyArgs* ar
   TIME_START_EVENT(proxyStepStart);
   struct ncclProxySubArgs* sub = &args->subs[s];
   int step_ = DIVUP(stepId, args->sliceSteps);
-  if (__builtin_expect(ncclProfiler != NULL, 0)) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
     if (sub->eActivationMask & (ncclProfileProxyStep | ncclProfileNetPlugin)) {
       ncclProfilerEventDescr_t eDescr = { 0 };
       eDescr.type = ncclProfileProxyStep;
@@ -549,7 +588,7 @@ ncclResult_t ncclProfilerStartRecvProxyStepEvent(int s, struct ncclProxyArgs* ar
 ncclResult_t ncclProfilerStopProxyStepEvent(int s, struct ncclProxyArgs* args, int stepId) {
   TIME_START_EVENT(proxyStepStop);
   struct ncclProxySubArgs* sub = &args->subs[s];
-  if (__builtin_expect(ncclProfiler != NULL, 0)) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
     int step_ = DIVUP(stepId, args->sliceSteps);
     if (sub->pHandles[step_%NCCL_STEPS].stepEventHandle) {
       ncclProfiler->stopEvent(sub->pHandles[step_%NCCL_STEPS].stepEventHandle);
@@ -562,9 +601,9 @@ ncclResult_t ncclProfilerStopProxyStepEvent(int s, struct ncclProxyArgs* args, i
 
 ncclResult_t ncclProfilerStartProxyCtrlEvent(void* profilerContext, void** eHandle) {
   TIME_START_EVENT(proxyCtrlStart);
-  if (__builtin_expect(ncclProfiler != NULL, 0)) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
     // for proxy control events we allow profiling mode to change on a per event basis
-    int eActivationMaskProxy = __atomic_load_n(&ncclProfilerEventMask, __ATOMIC_RELAXED);
+    int eActivationMaskProxy = COMPILER_ATOMIC_LOAD(&ncclProfilerEventMask, std::memory_order_relaxed);
     if (eActivationMaskProxy & ncclProfileProxyCtrl) {
       ncclProfilerEventDescr_t eDescr = { 0 };
       eDescr.type = ncclProfileProxyCtrl;
@@ -580,7 +619,7 @@ ncclResult_t ncclProfilerStartProxyCtrlEvent(void* profilerContext, void** eHand
 
 ncclResult_t ncclProfilerStopProxyCtrlEvent(void* eHandle) {
   TIME_START_EVENT(proxyCtrlStop);
-  if (__builtin_expect(ncclProfiler != NULL, 0) && eHandle) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && eHandle) {
     ncclProfiler->stopEvent(eHandle);
   }
   TIME_STOP_EVENT(proxyCtrlStop);
@@ -588,7 +627,7 @@ ncclResult_t ncclProfilerStopProxyCtrlEvent(void* eHandle) {
 }
 
 ncclResult_t ncclProfilerStartKernelChEvent(struct ncclProxyArgs* args, int s, uint64_t start) {
-  if (__builtin_expect(ncclProfiler != NULL, 0)) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
     struct ncclProxySubArgs* sub = &args->subs[s];
     if (sub->eActivationMask & ncclProfileKernelCh) {
       ncclProfilerEventDescr_t eDescr = { };
@@ -603,7 +642,7 @@ ncclResult_t ncclProfilerStartKernelChEvent(struct ncclProxyArgs* args, int s, u
 }
 
 ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProxyArgs* args, int s, uint64_t stop) {
-  if (__builtin_expect(ncclProfiler != NULL, 0)) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
     struct ncclProxySubArgs* sub = &args->subs[s];
     if (sub->kernelEventHandle) {
       ncclProfilerEventStateArgs_t a = { };
@@ -618,7 +657,7 @@ ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProxyArgs* args, int s, ui
 ncclResult_t ncclProfilerRecordProxyOpEventState(int s, struct ncclProxyArgs* args, ncclProfilerEventState_t eState) {
   TIME_START_EVENT(proxyOpRecord);
   struct ncclProxySubArgs* sub = &args->subs[s];
-  if (__builtin_expect(ncclProfiler != NULL, 0) && sub->opEventHandle) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && sub->opEventHandle) {
     ncclProfilerEventStateArgs_t a = { };
     ncclProfiler->recordEventState(sub->opEventHandle, eState, &a);
   }
@@ -629,7 +668,7 @@ ncclResult_t ncclProfilerRecordProxyOpEventState(int s, struct ncclProxyArgs* ar
 ncclResult_t ncclProfilerRecordProxyStepEventState(int s, struct ncclProxyArgs* args, int stepId, ncclProfilerEventState_t eState) {
   TIME_START_EVENT(proxyStepRecord);
   struct ncclProxySubArgs* sub = &args->subs[s];
-  if (__builtin_expect(ncclProfiler != NULL, 0) && sub->opEventHandle) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && sub->opEventHandle) {
     int step_ = DIVUP(stepId, args->sliceSteps);
     if (sub->pHandles[step_%NCCL_STEPS].stepEventHandle) {
       ncclProfilerEventStateArgs_t a = { };
@@ -643,7 +682,7 @@ ncclResult_t ncclProfilerRecordProxyStepEventState(int s, struct ncclProxyArgs* 
 
 ncclResult_t ncclProfilerRecordProxyCtrlEventState(void* eHandle, int appended, ncclProfilerEventState_t eState) {
   TIME_START_EVENT(proxyCtrlRecord);
-  if (__builtin_expect(ncclProfiler != NULL, 0) && eHandle && __atomic_load_n(&ncclProfilerEventMask, __ATOMIC_RELAXED) & ncclProfileProxyCtrl) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && eHandle && COMPILER_ATOMIC_LOAD(&ncclProfilerEventMask, std::memory_order_relaxed) & ncclProfileProxyCtrl) {
     ncclProfilerEventStateArgs_t args = { };
     args.proxyCtrl.appendedProxyOps = appended;
     ncclProfiler->recordEventState(eHandle, eState, &args);
@@ -681,11 +720,11 @@ bool ncclProfilerNeedsProxy(struct ncclComm* comm, struct ncclProxyOp* op) {
 }
 
 bool ncclProfilerPluginLoaded(void) {
-  return (__builtin_expect(ncclProfiler != NULL, 0));
+  return (COMPILER_EXPECT(ncclProfiler != NULL, 0));
 }
 
 ncclResult_t ncclProfilerCallback(void** eHandle, int type, void* pHandle, int64_t pluginId, void* extData) {
-  if (__builtin_expect(ncclProfiler != NULL, 0)) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
     if (type == ncclProfilerNetEventStart) { // start
       struct ncclProxyEventHandle* p = (struct ncclProxyEventHandle*)pHandle;
       struct ncclProxySubArgs* sub = p->subArgPtr;
@@ -713,3 +752,129 @@ ncclResult_t ncclProfilerCallback(void** eHandle, int type, void* pHandle, int64
   }
   return ncclSuccess;
 }
+
+// ============================================================================
+// CE Profiler Functions (Simple Wrappers)
+// ============================================================================
+
+/*
+ * CE Collective start event - calls plugin startEvent callback
+ */
+ncclResult_t ncclProfilerStartCeCollEvent(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
+    // Check if CE Coll events are enabled (or child events CeSync/CeBatch which need CeColl)
+    int ceCollMask = ncclProfileCeColl | ncclProfileCeSync | ncclProfileCeBatch;
+    if (__atomic_load_n(&ncclProfilerEventMask, __ATOMIC_RELAXED) & ceCollMask) {
+      ncclProfilerEventDescr_t eDescr = { 0 };
+      eDescr.type = ncclProfileCeColl;
+      eDescr.parentObj = args->collApiEventHandle;
+      eDescr.rank = comm->rank;
+
+      eDescr.ceColl.seqNumber = comm->ceColl.ceSeqNum;
+      eDescr.ceColl.func = ncclFuncToString(args->func);
+      eDescr.ceColl.sendBuff = args->sendBuff;
+      eDescr.ceColl.recvBuff = args->recvBuff;
+      eDescr.ceColl.count = args->nElts;
+      eDescr.ceColl.root = args->rootRank;
+      eDescr.ceColl.datatype = ncclDatatypeToString(args->datatype);
+      eDescr.ceColl.syncStrategy = comm->nvlsSupport ? "MC" : "UC";
+      eDescr.ceColl.intraBatchSync = false;
+      eDescr.ceColl.batchSize = 0;
+      eDescr.ceColl.numBatches = 0;
+      eDescr.ceColl.ceSeqNum = comm->ceColl.ceSeqNum;
+      eDescr.ceColl.stream = (void*)stream;
+
+      ncclProfiler->startEvent(comm->profilerContext, &args->ceCollProfHandle, &eDescr);
+    }
+  }
+  return ncclSuccess;
+}
+
+/*
+ * CE Collective stop event - calls plugin stopEvent callback
+ */
+ncclResult_t ncclProfilerStopCeCollEvent(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
+    if (args && args->ceCollProfHandle) {
+      ncclProfiler->stopEvent(args->ceCollProfHandle);
+    }
+  }
+  return ncclSuccess;
+}
+
+/*
+ * CE Sync start event - calls plugin startEvent callback
+ */
+ncclResult_t ncclProfilerStartCeSyncEvent(struct ncclComm* comm, struct ncclCeCollArgs* args,
+                                          cudaStream_t stream, void** ceSyncHandle) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
+    if (args && args->ceCollProfHandle && (__atomic_load_n(&ncclProfilerEventMask, __ATOMIC_RELAXED) & ncclProfileCeSync)) {
+      // CeSync only needs to check if it's enabled; parent CeColl is implicitly started via ceCollMask
+      ncclProfilerEventDescr_t eDescr = { 0 };
+      eDescr.type = ncclProfileCeSync;
+      eDescr.parentObj = args->ceCollProfHandle;
+      eDescr.rank = comm->rank;
+
+      eDescr.ceCollSync.isComplete = comm->ceColl.useCompletePtr;
+      eDescr.ceCollSync.nRanks = comm->nRanks;
+
+      ncclProfiler->startEvent(comm->profilerContext, ceSyncHandle, &eDescr);
+    }
+  }
+  return ncclSuccess;
+}
+
+/*
+ * CE Sync stop event - calls plugin stopEvent callback
+ */
+ncclResult_t ncclProfilerStopCeSyncEvent(struct ncclComm* comm, void* ceSyncHandle,
+                                         cudaStream_t stream) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && ceSyncHandle) {
+    ncclProfiler->stopEvent(ceSyncHandle);
+  }
+  return ncclSuccess;
+}
+
+/*
+ * CE Batch start event - calls plugin startEvent callback
+ */
+ncclResult_t ncclProfilerStartCeBatchEvent(struct ncclComm* comm,
+                                           struct ncclCeCollArgs* args,
+                                           struct ncclCeBatchOpsParams* params,
+                                           cudaStream_t stream,
+                                           void** ceBatchHandle) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
+    if (args && args->ceCollProfHandle) {
+      // CeBatch only needs to check if it's enabled; parent CeColl is implicitly started via ceCollMask
+      if (__atomic_load_n(&ncclProfilerEventMask, __ATOMIC_RELAXED) & ncclProfileCeBatch) {
+        ncclProfilerEventDescr_t eDescr = { 0 };
+        eDescr.type = ncclProfileCeBatch;
+        eDescr.parentObj = args->ceCollProfHandle;
+        eDescr.rank = comm->rank;
+
+        eDescr.ceCollBatch.numOps = params->numOps;
+
+        size_t totalBytes = 0;
+        for (int i = 0; i < params->numOps; i++) {
+          totalBytes += params->sizes[i];
+        }
+        eDescr.ceCollBatch.totalBytes = totalBytes;
+        eDescr.ceCollBatch.useIntraSync = params->intraBatchSync;
+
+        ncclProfiler->startEvent(comm->profilerContext, ceBatchHandle, &eDescr);
+      }
+    }
+  }
+  return ncclSuccess;
+}
+
+/*
+ * CE Batch stop event - calls plugin stopEvent callback
+ */
+ncclResult_t ncclProfilerStopCeBatchEvent(struct ncclComm* comm, void* ceBatchHandle, cudaStream_t stream) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && ceBatchHandle) {
+    ncclProfiler->stopEvent(ceBatchHandle);
+  }
+  return ncclSuccess;
+}
+

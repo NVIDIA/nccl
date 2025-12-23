@@ -1,0 +1,14 @@
+# Include nccl package with all source files
+recursive-include nccl *.pyx *.pxd
+
+# Exclude directories not needed in sdist
+prune examples
+prune *.egg-info
+
+# Exclude development files from root and subdirectoriese x
+exclude Makefile
+exclude uv.lock
+global-exclude .gitignore .gitattributes
+
+# Exclude compiled/generated files
+global-exclude *.so *.cpp *.c

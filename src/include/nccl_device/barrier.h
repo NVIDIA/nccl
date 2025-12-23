@@ -10,7 +10,7 @@
 #include "impl/lsa_barrier__types.h"
 #include "impl/gin_barrier__types.h"
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 template<typename Coop>
 struct ncclBarrierSession_internal;
 

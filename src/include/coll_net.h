@@ -7,6 +7,7 @@
 #ifndef COLL_NET_H_
 #define COLL_NET_H_
 
+#include "comm.h"
 #include "nccl.h"
 #include "nccl_net.h"
 

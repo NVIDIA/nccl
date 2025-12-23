@@ -172,7 +172,7 @@ bool ncclCudaLaunchBlocking = false;
 #if CUDART_VERSION >= 13000
 #define LOAD_SYM(symbol, version, ignore) do {                           \
     cudaDriverEntryPointQueryResult driverStatus = cudaDriverEntryPointSymbolNotFound; \
-    res = cudaGetDriverEntryPointByVersion(#symbol, (void **) (&pfn_##symbol), version, cudaEnableDefault, &driverStatus); \
+    res = CUDACLEARERROR(cudaGetDriverEntryPointByVersion(#symbol, (void **) (&pfn_##symbol), version, cudaEnableDefault, &driverStatus)); \
     if (res != cudaSuccess || driverStatus != cudaDriverEntryPointSuccess) { \
       if (!ignore) {                                                    \
         WARN("Retrieve %s version %d failed with %d status %d", #symbol, version, res, driverStatus); \
@@ -181,7 +181,7 @@ bool ncclCudaLaunchBlocking = false;
 #elif CUDART_VERSION >= 12000
 #define LOAD_SYM(symbol, version, ignore) do {                           \
     cudaDriverEntryPointQueryResult driverStatus = cudaDriverEntryPointSymbolNotFound; \
-    res = cudaGetDriverEntryPoint(#symbol, (void **) (&pfn_##symbol), cudaEnableDefault, &driverStatus); \
+    res = CUDACLEARERROR(cudaGetDriverEntryPoint(#symbol, (void **) (&pfn_##symbol), cudaEnableDefault, &driverStatus)); \
     if (res != cudaSuccess || driverStatus != cudaDriverEntryPointSuccess) { \
       if (!ignore) {                                                    \
         WARN("Retrieve %s failed with %d status %d", #symbol, res, driverStatus); \
@@ -189,7 +189,7 @@ bool ncclCudaLaunchBlocking = false;
     } } while(0)
 #else
 #define LOAD_SYM(symbol, version, ignore) do {                           \
-    res = cudaGetDriverEntryPoint(#symbol, (void **) (&pfn_##symbol), cudaEnableDefault); \
+    res = CUDACLEARERROR(cudaGetDriverEntryPoint(#symbol, (void **) (&pfn_##symbol), cudaEnableDefault)); \
     if (res != cudaSuccess) { \
       if (!ignore) {                                                    \
         WARN("Retrieve %s failed with %d", #symbol, res);               \
@@ -310,4 +310,20 @@ error:
 ncclResult_t ncclCudaLibraryInit() {
   std::call_once(initOnceFlag, initOnceFunc);
   return initResult;
+}
+
+// Wrapper for cuStreamBatchMemOp that handles the 255 operations per call limit
+ncclResult_t ncclCuStreamBatchMemOp(cudaStream_t stream, unsigned int numOps, CUstreamBatchMemOpParams* batchParams) {
+  ncclResult_t ret = ncclSuccess;
+  const unsigned int maxOpsPerBatch = 255;
+
+  for (unsigned int offset = 0; offset < numOps; offset += maxOpsPerBatch) {
+    unsigned int opsInThisChunk = (numOps - offset < maxOpsPerBatch) ? (numOps - offset) : maxOpsPerBatch;
+    CUCHECKGOTO(cuStreamBatchMemOp(stream, opsInThisChunk, &batchParams[offset], 0), ret, fail);
+  }
+
+exit:
+  return ret;
+fail:
+  goto exit;
 }

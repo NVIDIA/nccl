@@ -12,11 +12,12 @@ INCEXPORTS  := nccl.h nccl_device.h \
 
 LIBSRCFILES := \
 	bootstrap.cc channel.cc collectives.cc debug.cc enqueue.cc group.cc \
-	init.cc init_nvtx.cc proxy.cc transport.cc mnnvl.cc allocator.cc dev_runtime.cc sym_kernels.cc ce_coll.cc \
+	init.cc proxy.cc transport.cc mnnvl.cc allocator.cc dev_runtime.cc sym_kernels.cc ce_coll.cc \
 	$(wildcard graph/*.cc) \
 	$(wildcard misc/*.cc) \
 	$(wildcard transport/*.cc) \
-	$(wildcard transport/gdaki/*.cc) \
+	$(wildcard transport/net_ib/*.cc) \
+	$(wildcard transport/net_ib/gdaki/*.cc) \
 	$(wildcard register/*.cc) \
 	$(wildcard plugin/*.cc) \
 	$(wildcard plugin/net/*.cc) \
@@ -26,8 +27,19 @@ LIBSRCFILES := \
 	$(wildcard nccl_device/*.cc) \
 	$(wildcard scheduler/*.cc) \
 	$(wildcard gin/*.cc) \
+	$(wildcard rma/*.cc) \
 	$(filter-out ras/client.cc,$(wildcard ras/*.cc))
 BINSRCFILES := ras/client.cc
+
+ifeq ($(NCCL_OS_LINUX), 1)
+	LIBSRCFILES += os/linux.cc
+else ifeq ($(NCCL_OS_WINDOWS), 1)
+	LIBSRCFILES += os/windows.cc
+endif
+
+ifneq ($(NVTX), 0)
+	LIBSRCFILES += init_nvtx.cc
+endif
 
 ##### lib files
 LIBNAME     := libnccl.so
@@ -65,10 +77,16 @@ INCPLUGIN  := include/plugin
 
 DEVMANIFEST := $(BUILDDIR)/obj/device/manifest
 
+
+GIT_VERSION_FILE := $(BUILDDIR)/include/git_version.h
+$(GIT_VERSION_FILE): ALWAYS_REBUILD
+	@mkdir -p $(dir $@)
+	@./misc/generate_git_version.py $@
+
 # DOCA GPUNetIO definitions
-DOCA_HOME        ?= transport/gdaki/doca-gpunetio
+DOCA_HOME        ?= transport/net_ib/gdaki/doca-gpunetio
 DOCA_INC_INSTALL := $(INCDIR)/nccl_device/gin/gdaki/doca_gpunetio
-DOCA_OBJDIR      := $(OBJDIR)/transport/gdaki/doca-gpunetio
+DOCA_OBJDIR      := $(OBJDIR)/transport/net_ib/gdaki/doca-gpunetio
 DOCA_INCLUDES    := $(DOCA_HOME)/include/doca_gpunetio_device.h $(wildcard $(DOCA_HOME)/include/common/*.h) $(wildcard $(DOCA_HOME)/include/device/*.cuh)
 DOCA_INCTARGETS  := $(DOCA_INCLUDES:$(DOCA_HOME)/include/%=$(DOCA_INC_INSTALL)/%)
 INCTARGETS       += $(DOCA_INCTARGETS)
@@ -89,7 +107,7 @@ $(DEVMANIFEST): ALWAYS_REBUILD $(INCTARGETS)
 	$(MAKE) -C ./device
 
 # Empty target to force rebuild
-ALWAYS_REBUILD:
+.PHONY: ALWAYS_REBUILD
 
 -include $(DEPFILES)
 $(LIBDIR)/$(LIBTARGET) $(LIBDIR)/$(STATICLIBTARGET) : $(LIBOBJ)
@@ -190,12 +208,14 @@ $(PKGDIR)/%.pc : %.pc
 $(OBJDIR)/%.o : %.cc $(INCTARGETS)
 	@printf "Compiling  %-35s > %s\n" $< $@
 	mkdir -p `dirname $@`
-	$(CXX) -I. -I$(INCDIR) $(CXXFLAGS) -Iinclude -I$(INCPLUGIN) -I$(DOCA_HOME)/include -c $< -o $@
-	@$(CXX) -I. -I$(INCDIR) $(CXXFLAGS) -Iinclude -I$(INCPLUGIN) -I$(DOCA_HOME)/include -M $< > $(@:%.o=%.d.tmp)
+	$(CXX) -I. -I$(INCDIR) $(CXXFLAGS) -Iinclude -Iinclude/os -I$(INCPLUGIN) -I$(DOCA_HOME)/include -c $< -o $@
+	@$(CXX) -I. -I$(INCDIR) $(CXXFLAGS) -Iinclude -Iinclude/os -I$(INCPLUGIN) -I$(DOCA_HOME)/include -M $< > $(@:%.o=%.d.tmp)
 	@sed "0,/^.*:/s//$(subst /,\/,$@):/" $(@:%.o=%.d.tmp) > $(@:%.o=%.d)
 	@sed -e 's/.*://' -e 's/\\$$//' < $(@:%.o=%.d.tmp) | fmt -1 | \
                 sed -e 's/^ *//' -e 's/$$/:/' >> $(@:%.o=%.d)
 	@rm -f $(@:%.o=%.d.tmp)
+
+$(OBJDIR)/misc/git_version.o: $(GIT_VERSION_FILE)
 
 $(DOCA_OBJDIR)/%.o : $(DOCA_HOME)/src/%.cpp
 	@printf "Compiling  %-35s > %s\n" $< $@

@@ -55,7 +55,7 @@ namespace {
       inputBuf = inputBuf + gridOffset;
       outputBuf = outputBuf + gridOffset;
       reduceCopy<COLL_UNROLL, RedOp, T, 0, 1, 1, 0, 1, 1, /*PreOpSrcs=*/0>
-        (tid - workNthreads, nthreads - workNthreads, work->redOpArg, &work->redOpArg, false, 1, (void**)&inputBuf, 1, (void**)&outputBuf, channelCount);
+        (tid - workNthreads, nthreads - workNthreads, work->redOpArg, false, 1, (void**)&inputBuf, 1, (void**)&outputBuf, channelCount);
     }
     if (isNetOffload) barrier_sync(14, nthreads);
   }

@@ -35,12 +35,15 @@ struct ncclCeInitTask {
 struct alignas(16) ncclCeCollArgs {
   ncclFunc_t func;
   int rootRank;
+  ncclDataType_t datatype;
   size_t nElts;
   size_t eltSize;
   uint8_t* sendBuff;
   uint8_t* recvBuff;
   struct ncclDevrWindow* sendWin;
   struct ncclDevrWindow* recvWin;
+  void* collApiEventHandle;  // Parent API event handle for profiler hierarchy
+  void* ceCollProfHandle;     // CE collective profiler event handle
 };
 
 struct ncclCeBatchOpsParams {
@@ -56,13 +59,13 @@ struct ncclCeBatchOpsParams {
 #endif
 };
 
-bool ncclCeImplemented(ncclFunc_t coll, int/*ncclDevRedOp_t*/ red, ncclDataType_t ty);
+bool ncclCeAvailable(struct ncclComm* comm, ncclFunc_t coll, int/*ncclDevRedOp_t*/ red, ncclDataType_t ty, ncclSymRegType_t winRegType);
 
 ncclResult_t ncclCeInit(struct ncclComm* comm);
 
 ncclResult_t ncclCeFinalize(struct ncclComm* comm);
 
-ncclResult_t ncclMemOpSync(struct ncclComm* comm, cudaStream_t stream);
+ncclResult_t ncclMemOpSync(struct ncclComm* comm, cudaStream_t stream, void* ceCollHandle);
 
 ncclResult_t ncclLaunchCeColl(struct ncclComm* comm, struct ncclKernelPlan* plan);
 

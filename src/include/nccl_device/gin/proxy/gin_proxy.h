@@ -33,7 +33,6 @@ NCCL_DEVICE_INLINE void flush(ncclGinProxyGpuCtx_t* proxyCtx, uint32_t pe, cuda:
   while (!rollingLessEq<uint32_t>(p, ci.load(ord))) continue;
 }
 
-
 template <typename Coop>
 NCCL_DEVICE_INLINE void postGfd(Coop coop, ncclGinProxyGpuCtx_t* proxyCtx, ncclGinProxyGfd_t* gfd,
                                 uint32_t pe) {
@@ -137,6 +136,18 @@ NCCL_DEVICE_INLINE void put(Coop coop, ncclGinProxyGfd_t* gfd, ncclGinProxyGpuCt
                             cuda::thread_scope required, cuda::thread_scope given) {
   if ((int)given > (int)cuda::thread_scope_system) {
     cuda::atomic_thread_fence(cuda::memory_order_release, cuda::thread_scope_system);
+  }
+  constexpr size_t chunkSize = 1ULL << 30;
+  while (bytes > chunkSize) {
+    ncclGinProxyOp_t op;
+    constructProxyOp(op, /*hasInline*/false, /*hasSignal*/false, signalOp, /*hasCounter*/false);
+    nccl::gin::proxy::buildGfd(gfd, op, /*srcVal*/0, /*hasInline*/false, srcOff, srcWnd,
+                               dstOff, dstWnd, chunkSize, /*counterId*/0, /*signalId*/0,
+                               /*signalVal*/0);
+    nccl::gin::proxy::postGfd<Coop>(coop, proxyCtx, gfd, peer);
+    bytes -= chunkSize;
+    srcOff += chunkSize;
+    dstOff += chunkSize;
   }
   ncclGinProxyOp_t op;
   constructProxyOp(op, hasInline, hasSignal, signalOp, hasCounter);

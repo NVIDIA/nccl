@@ -13,6 +13,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <stdint.h>
+#include <mutex>
 
 // ncclCudaContext: wraps a CUDA context with per-context state.
 struct ncclCudaContext;
@@ -30,15 +31,17 @@ struct ncclCudaGraph {
   cudaStream_t origin;
   cudaGraph_t graph;
   unsigned long long graphId;
+  int graphUsageMode;
 #endif
 };
 
-inline struct ncclCudaGraph ncclCudaGraphNone() {
+inline struct ncclCudaGraph ncclCudaGraphNone(int graphUsageMode) {
   struct ncclCudaGraph tmp;
   #if CUDART_VERSION >= 11030
     tmp.origin = nullptr;
     tmp.graph = nullptr;
     tmp.graphId = ULLONG_MAX;
+    tmp.graphUsageMode = graphUsageMode;
   #endif
   return tmp;
 }
@@ -59,7 +62,7 @@ inline bool ncclCudaGraphSame(struct ncclCudaGraph a, struct ncclCudaGraph b) {
   #endif
 }
 
-ncclResult_t ncclCudaGetCapturingGraph(struct ncclCudaGraph* graph, cudaStream_t stream);
+ncclResult_t ncclCudaGetCapturingGraph(struct ncclCudaGraph* graph, cudaStream_t stream, int graphUsageMode);
 ncclResult_t ncclCudaGraphAddDestructor(struct ncclCudaGraph graph, cudaHostFn_t fn, void* arg);
 
 /* ncclStrongStream: An abstraction over CUDA streams that do not lose their
@@ -119,7 +122,7 @@ struct ncclStrongStream {
 #if CUDART_VERSION >= 11030
   // This stream ever appeared in a graph capture.
   bool everCaptured;
-  pthread_mutex_t lock;
+  std::mutex mutex;
   struct ncclStrongStreamCapture* captureHead;
   // The event used to establish order between graphs and streams. During acquire
   // this event is waited on, during release it is recorded to.

@@ -14,7 +14,7 @@ struct ncclLsaBarrierHandle {
   int nBarriers;
 };
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 template<typename Coop>
 struct ncclLsaBarrierSession_internal {
   Coop coop;

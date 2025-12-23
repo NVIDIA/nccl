@@ -16,6 +16,7 @@
 #include <chrono>
 #include "param.h"
 #include <mutex>
+#include "os.h"
 #include "env.h"
 
 #define NCCL_DEBUG_RESET_TRIGGERED (-2)
@@ -36,13 +37,31 @@ static std::mutex ncclDebugMutex;
 static std::chrono::steady_clock::time_point ncclEpoch;
 static bool ncclWarnSetDebugInfo = false;
 
-static __thread int tid = -1;
+static thread_local int tid = -1;
 
 typedef const char* (*ncclGetEnvFunc_t)(const char*);
 
+static ncclResult_t getHostNameForLog(char* hostname, int maxlen, const char delim) {
+  ncclResult_t ret = getHostName(hostname, maxlen, delim);
+  if (ret != ncclSuccess) return ret;
+
+  for (int i = 0; i < maxlen-1 && hostname[i]; ++i) {
+    // Replace special characters in hostnames with dashes
+    switch (hostname[i]) {
+    case '%':
+    case '/':
+      hostname[i] = '-';
+      break;
+    default:
+      break;
+    }
+  }
+  return ncclSuccess;
+}
+
 // This function must be called with ncclDebugLock locked!
 static void ncclDebugInit() {
-  ncclGetEnvFunc_t getEnvFunc = ncclEnvPluginInitialized() ? ncclGetEnv : (ncclGetEnvFunc_t)getenv;
+  ncclGetEnvFunc_t getEnvFunc = ncclEnvPluginInitialized() ? ncclGetEnv : (ncclGetEnvFunc_t)std::getenv;
   const char* nccl_debug = getEnvFunc("NCCL_DEBUG");
   int tempNcclDebugLevel = -1;
   uint64_t tempNcclDebugMask = NCCL_INIT | NCCL_BOOTSTRAP | NCCL_ENV; // Default debug sub-system mask
@@ -214,8 +233,8 @@ static void ncclDebugInit() {
   }
 
   // Cache pid and hostname
-  getHostName(hostname, 1024, '.');
-  pid = getpid();
+  getHostNameForLog(hostname, 1024, '.');
+  pid = ncclOsGetpid();
 
   /* Parse and expand the NCCL_DEBUG_FILE path and
    * then create the debug file. But don't bother unless the
@@ -267,7 +286,7 @@ static void ncclDebugInit() {
 
   ncclEpoch = std::chrono::steady_clock::now();
   ncclDebugMask = tempNcclDebugMask;
-  __atomic_store_n(&ncclDebugLevel, tempNcclDebugLevel, __ATOMIC_RELEASE);
+  COMPILER_ATOMIC_STORE(&ncclDebugLevel, tempNcclDebugLevel, std::memory_order_release);
 }
 
 /* Common logging function used by the INFO, WARN and TRACE macros
@@ -275,7 +294,7 @@ static void ncclDebugInit() {
  * they can share the debugging mechanisms and output files
  */
 void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *filefunc, int line, const char *fmt, ...) {
-  int gotLevel = __atomic_load_n(&ncclDebugLevel, __ATOMIC_ACQUIRE);
+  int gotLevel = COMPILER_ATOMIC_LOAD(&ncclDebugLevel, std::memory_order_acquire);
 
   if (ncclDebugNoWarn != 0 && level == NCCL_LOG_WARN) { level = NCCL_LOG_INFO; flags = ncclDebugNoWarn; }
 
@@ -355,34 +374,34 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
     (void)cudaGetDevice(&cudaDev);
   }
 
-  // Add level specific formatting.
+  // Add level specific formatting. The format string from the call site is incorporated into this prefix.
   if (level == NCCL_LOG_WARN) {
-    len += snprintf(buffer+len, sizeof(buffer)-len, "[%d] %s:%d NCCL WARN ", cudaDev, filefunc, line);
-    if (ncclWarnSetDebugInfo) __atomic_store_n(&ncclDebugLevel, NCCL_LOG_INFO, __ATOMIC_RELEASE);
+    len += snprintf(buffer+len, sizeof(buffer)-len, "[%d] %s:%d NCCL WARN %s\n", cudaDev, filefunc, line, fmt);
+    if (ncclWarnSetDebugInfo) COMPILER_ATOMIC_STORE(&ncclDebugLevel, NCCL_LOG_INFO, std::memory_order_release);
   } else if (level == NCCL_LOG_INFO) {
-    len += snprintf(buffer+len, sizeof(buffer)-len, "[%d] NCCL INFO ", cudaDev);
+    len += snprintf(buffer+len, sizeof(buffer)-len, "[%d] NCCL INFO %s\n", cudaDev, fmt);
   } else if (level == NCCL_LOG_TRACE && flags == NCCL_CALL) {
-    len += snprintf(buffer+len, sizeof(buffer)-len, "NCCL CALL ");
+    len += snprintf(buffer+len, sizeof(buffer)-len, "NCCL CALL %s\n", fmt);
   } else if (level == NCCL_LOG_TRACE) {
     auto delta = std::chrono::steady_clock::now() - ncclEpoch;
     double timestamp = std::chrono::duration_cast<std::chrono::duration<double>>(delta).count()*1000;
-    len += snprintf(buffer+len, sizeof(buffer)-len, "[%d] %f %s:%d NCCL TRACE ", cudaDev, timestamp, filefunc, line);
+    len += snprintf(buffer+len, sizeof(buffer)-len, "[%d] %f %s:%d NCCL TRACE %s\n", cudaDev, timestamp, filefunc, line, fmt);
+  } else {
+    len += snprintf(buffer+len, sizeof(buffer)-len, "%s\n", fmt);
   }
-  len = std::min(len, sizeof(buffer)-1);  // prevent overflows
+
+  // If the prefixed format string overflows, make sure it is still terminated with a newline.
+  if (len > sizeof(buffer)-1) {
+    // snprintf already placed a \0 at sizeof(buffer)-1
+    buffer[sizeof(buffer)-2] = '\n';
+  }
 
   // Add the message as given by the call site.
+  // The call site's format string has been incorporated into `buffer` along with our prefix.
   va_list vargs;
   va_start(vargs, fmt);
-  len += vsnprintf(buffer+len, sizeof(buffer)-len, fmt, vargs);
+  (void) vfprintf(ncclDebugFile, buffer, vargs);
   va_end(vargs);
-  // vsnprintf may return len >= sizeof(buffer) in the case of a truncated output.
-  // Rewind len so that we can replace the final \0 by "\n"
-  len = std::min(len, sizeof(buffer)-1);  // prevent overflows
-
-  // Add a newline and write it to the debug file. No terminating null is
-  // necessary since we write bytes instead of the string.
-  buffer[len++] = '\n';
-  fwrite(buffer, 1, len, ncclDebugFile);
 }
 
 // Non-deprecated version for internal use.
@@ -393,7 +412,7 @@ void ncclResetDebugInitInternal() {
   // Use this after changing NCCL_DEBUG and related parameters in the environment.
   std::lock_guard<std::mutex> lock(ncclDebugMutex);
   // Let ncclDebugInit() know to complete the reset.
-  __atomic_store_n(&ncclDebugLevel, NCCL_DEBUG_RESET_TRIGGERED, __ATOMIC_RELEASE);
+  COMPILER_ATOMIC_STORE(&ncclDebugLevel, NCCL_DEBUG_RESET_TRIGGERED, std::memory_order_release);
 }
 
 // In place of: NCCL_API(void, ncclResetDebugInit);
@@ -416,7 +435,7 @@ void ncclResetDebugInit() {
 
 NCCL_PARAM(SetThreadName, "SET_THREAD_NAME", 0);
 
-void ncclSetThreadName(pthread_t thread, const char *fmt, ...) {
+void ncclSetThreadName(std::thread& thread, const char *fmt, ...) {
   // pthread_setname_np is nonstandard GNU extension
   // needs the following feature test macro
 #ifdef _GNU_SOURCE
@@ -426,6 +445,6 @@ void ncclSetThreadName(pthread_t thread, const char *fmt, ...) {
   va_start(vargs, fmt);
   vsnprintf(threadName, NCCL_THREAD_NAMELEN, fmt, vargs);
   va_end(vargs);
-  pthread_setname_np(thread, threadName);
+  pthread_setname_np(thread.native_handle(), threadName);
 #endif
 }

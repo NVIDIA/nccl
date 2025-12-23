@@ -6,12 +6,15 @@
 .PHONY: all clean
 
 default: src.build
+default: ir.build
+
 install: src.install
 BUILDDIR ?= $(abspath ./build)
 ABSBUILDDIR := $(abspath $(BUILDDIR))
-TARGETS := src pkg
+TARGETS := src pkg nccl4py ir
 clean: ${TARGETS:%=%.clean}
 examples.build: src.build
+ir.build: src.build
 LICENSE_FILES := LICENSE.txt
 LICENSE_TARGETS := $(LICENSE_FILES:%=$(BUILDDIR)/%)
 lic: $(LICENSE_TARGETS)
@@ -29,6 +32,13 @@ examples: src.build
 
 pkg.%:
 	${MAKE} -C pkg $* BUILDDIR=${ABSBUILDDIR}
+
+nccl4py.%:
+	${MAKE} -C nccl4py $* BUILDDIR=${ABSBUILDDIR}
+
+# IR generation requires src.build first
+ir.%:
+	${MAKE} -C ir $* BUILDDIR=${ABSBUILDDIR}
 
 pkg.debian.prep: lic
 pkg.txz.prep: lic

@@ -11,7 +11,7 @@
 #include "gin_barrier__funcs.h"
 #include "../utility.h"
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 template<typename Coop>
 NCCL_DEVICE_INLINE ncclBarrierSession<Coop>::ncclBarrierSession(
     Coop coop, ncclTeam innerTeam, ncclTeam outerTeam, ncclGin gin,
@@ -26,7 +26,7 @@ NCCL_DEVICE_INLINE ncclBarrierSession<Coop>::ncclBarrierSession(
 }
 #endif
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 template<typename Coop>
 NCCL_DEVICE_INLINE ncclBarrierSession<Coop>::ncclBarrierSession(
     Coop coop, ncclTeamTagWorld, ncclGin gin, uint32_t index, bool multimem
@@ -39,7 +39,7 @@ NCCL_DEVICE_INLINE ncclBarrierSession<Coop>::ncclBarrierSession(
 }
 #endif
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 template<typename Coop>
 NCCL_DEVICE_INLINE ncclBarrierSession<Coop>::ncclBarrierSession(
     Coop coop, ncclTeamTagLsa, ncclDevComm const& comm, uint32_t index, bool multimem
@@ -52,7 +52,7 @@ NCCL_DEVICE_INLINE ncclBarrierSession<Coop>::ncclBarrierSession(
 }
 #endif
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 template<typename Coop>
 NCCL_DEVICE_INLINE ncclBarrierSession<Coop>::ncclBarrierSession(
     Coop coop, ncclTeamTagRail, ncclGin gin, uint32_t index
@@ -65,21 +65,21 @@ NCCL_DEVICE_INLINE ncclBarrierSession<Coop>::ncclBarrierSession(
 }
 #endif
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 template<typename Coop>
 NCCL_DEVICE_INLINE ncclLsaBarrierSession<Coop>& ncclBarrierSession<Coop>::lsaBarrier() {
   return this->innerLsaBar.thing;
 }
 #endif
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 template<typename Coop>
 NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>& ncclBarrierSession<Coop>::ginBarrier() {
   return this->outerGinBar.thing;
 }
 #endif
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 template<typename Coop>
 NCCL_DEVICE_INLINE void ncclBarrierSession<Coop>::sync(Coop, cuda::memory_order ord, ncclGinFenceLevel fence) {
   if (this->innerLsaBar.present) {

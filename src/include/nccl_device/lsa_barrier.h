@@ -12,7 +12,7 @@ struct ncclLsaBarrierHandle;
 
 NCCL_EXTERN_C __host__ ncclResult_t ncclLsaBarrierCreateRequirement(ncclTeam_t, int nBarriers, ncclLsaBarrierHandle_t* outHandle, ncclDevResourceRequirements_t* outReq);
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 template<typename Coop>
 struct ncclLsaBarrierSession_internal;
 

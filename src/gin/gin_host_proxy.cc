@@ -13,6 +13,7 @@
 #include "gdrwrap.h"
 #include "plugin/nccl_net.h"
 #include "nccl_device/gin/proxy/gin_proxy_device_host_common.h"
+#include "compiler.h"
 
 NCCL_PARAM(GinProxyQueueSize, "GIN_PROXY_QUEUE_SIZE", -1);
 extern int64_t ncclParamIbDataDirect();
@@ -137,8 +138,8 @@ static ncclResult_t proxyGinPollCompletions(ncclGin_t *ginComm, void *collComm,
                 state->request);
           // update the counter specified in the GFD
           if (state->op & ncclGinProxyOpWithCounter) {
-            __atomic_store_n(&ctx->counters[state->counterId], ctx->counters[state->counterId] + 1,
-                             __ATOMIC_RELAXED);
+            COMPILER_ATOMIC_STORE(&ctx->counters[state->counterId], ctx->counters[state->counterId] + 1,
+                              std::memory_order_relaxed);
             TRACE(NCCL_NET, "Updated counter %d to %ld", state->counterId,
                   ctx->counters[state->counterId]);
           }
@@ -147,8 +148,8 @@ static ncclResult_t proxyGinPollCompletions(ncclGin_t *ginComm, void *collComm,
       // allow holes in the CI space to get resolved
       if (state->done && i == hostGpuCtx->cisShadow[targetRank]) {
         // tell the GPU that we have consumed the GFD
-        __atomic_store_n(&hostGpuCtx->cis[targetRank], ++hostGpuCtx->cisShadow[targetRank],
-                         __ATOMIC_RELAXED);
+        COMPILER_ATOMIC_STORE(&hostGpuCtx->cis[targetRank], ++hostGpuCtx->cisShadow[targetRank],
+                          std::memory_order_relaxed);
         TRACE(NCCL_NET, "Updated cis[%u] to %u", targetRank, hostGpuCtx->cisShadow[targetRank]);
       }
     }
@@ -162,7 +163,7 @@ static int proxyGinPollGfd(struct ginProxyCtx *ctx, ginProxyHostGpuCtx *hostGpuC
   ncclGinProxyGfd_t *q = hostGpuCtx->queues + targetRank * hostGpuCtx->queueSize;
   uint32_t idx = hostGpuCtx->sis[targetRank] & (hostGpuCtx->queueSize - 1);
   ncclGinProxyQword_t qword;
-  __atomic_load(&q[idx].qword[ncclGinProxyGfdHeader].raw, &qword.raw, __ATOMIC_RELAXED);
+  COMPILER_ATOMIC_LOAD_DEST(&q[idx].qword[ncclGinProxyGfdHeader].raw, &qword.raw, std::memory_order_relaxed);
   if (qword.flag.v == 0) {
     return 0;
   }
@@ -172,7 +173,7 @@ static int proxyGinPollGfd(struct ginProxyCtx *ctx, ginProxyHostGpuCtx *hostGpuC
   // Wait for and copy the other qwords.
   for (int k = 1; k < ncclGinProxyGfdQwords; k++) {
     do {
-      __atomic_load(&q[idx].qword[k].raw, &qword.raw, __ATOMIC_RELAXED);
+      COMPILER_ATOMIC_LOAD_DEST(&q[idx].qword[k].raw, &qword.raw, std::memory_order_relaxed);
     } while (qword.flag.v == 0);
     gfd->qword[k] = qword;
   }
@@ -180,7 +181,7 @@ static int proxyGinPollGfd(struct ginProxyCtx *ctx, ginProxyHostGpuCtx *hostGpuC
 
   // Reset the GFD in the queue. This lets the producer know that the GFD is consumed.
   for (int k = 0; k < ncclGinProxyGfdQwords; k++) {
-    __atomic_store_n(&q[idx].qword[k].raw, 0, __ATOMIC_RELAXED);
+    COMPILER_ATOMIC_STORE(&q[idx].qword[k].raw, 0, std::memory_order_relaxed);
   }
 
   // set the counter_id into the state

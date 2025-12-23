@@ -15,12 +15,15 @@
 #include "param.h"
 #include "ras.h"
 #include <mutex>
+#include "os.h"
+#include <thread>
 
 #define BOOTSTRAP_N_CHECK_ABORT           10000
 #define BOOTSTRAP_TAG_CONNECT             (0x1 << 31)
 #define BOOTSTRAP_TAG_ALLGATHER           (0x1 << 30)
 #define BOOTSTRAP_TAG_COMMSPLIT           (0x1 << 29)
 #define BOOTSTRAP_TAG_INTRANODE_ALLGATHER (0x1 << 28)
+#define BOOTSTRAP_TAG_GROW_BOUNDARY       (0x1 << 27)
 
 #define BOOTSTRAP_INIT_TIME_CREATE 0
 #define BOOTSTRAP_INIT_TIME_SEND   1
@@ -45,12 +48,19 @@
 #define BOOTSTRAP_PID(i, n) (((i) + (n)) % (n))
 // returns the first rank associated to the root. must have root >=0
 // if root >= n_roots, it does NOT assume periodicity
-static int firstRankFromRoot(int root, int n_ranks, int nRoots) {
-  return root * (n_ranks / nRoots) + std::min(root, n_ranks % nRoots);
+static int firstRankFromRoot(int root, int n_ranks, int nRoots,int offset) {
+  if (root == -1) return 0;
+  // only distribute the n_ranks - offset on the roots
+  n_ranks -= offset;
+  return offset + root * (n_ranks / nRoots) + std::min(root, n_ranks % nRoots);
 }
 // returns the root of a rank, must have rank >=0
 // if rank >= n_ranks, it does NOT assume periodicity
-static int rootIdFromRank(int rank, int nRanks, int nRoots) {
+static int rootIdFromRank(int rank, int nRanks, int nRoots, int offset) {
+  // ranks < offset have no root (id = -1), ranks above the offset will get assigned to their respective root
+  if(nRoots == 0 || rank < offset) return -1;
+  nRanks -= offset;
+  rank -= offset;
   int rmr = nRanks % nRoots; // rank mod root
   int rpr = nRanks / nRoots; // rank per root
   int D = rmr * (rpr + 1);
@@ -60,7 +70,9 @@ static int rootIdFromRank(int rank, int nRanks, int nRoots) {
     return (rank - D) / rpr + rmr;
 }
 // return the number of child for a root, root will be periodized
-static int nRankFromRoot(int root, int nRanks, int nRoots) {
+static int nRankFromRoot(int root, int nRanks, int nRoots, int offset) {
+  if(root == -1) return 0;
+  nRanks -= offset;
   int ir = BOOTSTRAP_PID(root, nRoots);
   int rmr = nRanks % nRoots; // rank mod root
   int rpr = nRanks / nRoots; // rank per root
@@ -68,13 +80,15 @@ static int nRankFromRoot(int root, int nRanks, int nRoots) {
 }
 // return the local id of a given rank for a given root
 // root will be periodize, rank will not
-static int localIdFromRoot(int rank, int root, int nRanks, int nRoots) {
+static int localIdFromRoot(int rank, int root, int nRanks, int nRoots, int offset) {
+  // any rank for root -1 has a local id that is the rank id
+  if(root == -1) return rank;
   int ir = BOOTSTRAP_PID(root, nRoots);
-  return rank - firstRankFromRoot(ir, nRanks, nRoots);
+  return rank - firstRankFromRoot(ir, nRanks, nRoots, offset);
 }
 // Check if the given rank is the first rank from the root
-static int isFirstFromRoot(int rank, int root, int nRanks, int nRoots) {
-  return (rank == firstRankFromRoot(root, nRanks, nRoots));
+static int isFirstFromRoot(int rank, int root, int nRanks, int nRoots, int offset) {
+  return (rank == firstRankFromRoot(root, nRanks, nRoots, offset));
 }
 
 struct bootstrapRootArgs {
@@ -131,7 +145,7 @@ enum bootstrapInterface_t { findSubnetIf = -1, dontCareIf = -2 };
 // check abort function
 static ncclResult_t checkAbort(volatile uint32_t* flag, int* cntr) {
   if ((*cntr % BOOTSTRAP_N_CHECK_ABORT) == 0) {
-    if (flag && __atomic_load_n(flag, __ATOMIC_ACQUIRE)) {
+    if (flag && COMPILER_ATOMIC_LOAD(flag, std::memory_order_acquire)) {
       TRACE(NCCL_BOOTSTRAP, "bootstrap: abort called");
       return ncclInternalError;
     }
@@ -251,6 +265,7 @@ struct extInfo {
   int nranks;                                // total number of ranks
   int iroot;                                 // current root index
   int nroots;                                // total number of roots
+  int offset;                                // offset for rank distribution
   union ncclSocketAddress listenRootAddress; // address of my listenSocket for the root
   union ringConnectInfo connectInfo;
 };
@@ -287,7 +302,7 @@ static void* bootstrapRoot(void* rargs) {
   ncclResult_t res = ncclSuccess;
   int nranks = 0, c = 0;
   int iroot = 0, nroots = 0, localId = 0;
-  int nrecv = 0, n2send = 0;
+  int nrecv = 0, n2send = 0, offset = 0;
   struct extInfo info;
   union ringConnectInfo* rankInfo = NULL;
   union ncclSocketAddress* rankAddressesRoot = NULL; // for initial rank <-> root information exchange
@@ -316,19 +331,26 @@ static void* bootstrapRoot(void* rargs) {
       nranks = info.nranks;
       iroot = info.iroot;
       nroots = info.nroots;
+      offset  = info.offset;
       // if the number of root > 1, we will receive one extra info from the first local_id of the next root
-      n2send = nRankFromRoot(iroot, nranks, nroots);
-      nrecv = n2send + ((nroots > 1) ? 1 : 0);
+      n2send = nRankFromRoot(iroot, nranks, nroots, offset);
+      // offset>0 automatically means that we need to switch to the multiroot logic
+      nrecv = n2send + ((offset > 0 || nroots > 1) ? 1 : 0);
       NCCLCHECKGOTO(ncclCalloc(&rankInfo, nrecv), res, out);
       NCCLCHECKGOTO(ncclCalloc(&rankAddressesRoot, nrecv), res, out);
     }
 
-    if (nranks != info.nranks || nroots != info.nroots || iroot != info.iroot) {
-      WARN("Bootstrap Root : mismatch in info from procs, nranks %d vs %d, nroots %d vs %d, iroot %d vs %d", nranks, info.nranks, nroots, info.nroots, iroot, info.iroot);
-      goto out;
+    if (nranks != info.nranks || nroots != info.nroots || iroot != info.iroot || offset != info.offset) {
+      WARN("Bootstrap Root : mismatch in info from procs, nranks %d vs %d, nroots %d vs %d, iroot %d vs %d, offset %d vs %d",
+        nranks, info.nranks, nroots, info.nroots, iroot, info.iroot, offset, info.offset);
+        goto out;
     }
 
-    localId = localIdFromRoot(info.rank, iroot, nranks, nroots);
+    localId = localIdFromRoot(info.rank, iroot, nranks, nroots, offset);
+    if (localId < 0 || localId >= nrecv) {
+      WARN("Bootstrap Root : localId %d is out of range", localId);
+      goto out;
+    }
     if (memcmp(&zeroAddress, &rankAddressesRoot[localId], sizeof(union ncclSocketAddress)) != 0 ||
         memcmp(&zeroInfo, &rankInfo[localId], sizeof(union ringConnectInfo)) != 0) {
       WARN("Bootstrap Root : rank %d of %d ranks has already checked in", info.rank, nranks);
@@ -390,7 +412,7 @@ ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFrom
   ncclResult_t ret = ncclSuccess;
   struct ncclSocket* listenSock = NULL;
   struct bootstrapRootArgs* args = NULL;
-  pthread_t thread;
+  std::thread thread;
 
   NCCLCHECK(ncclCalloc(&listenSock, 1));
   NCCLCHECKGOTO(ncclSocketInit(listenSock, &handle->addr, handle->magic, ncclSocketTypeBootstrap, NULL, 0), ret, fail);
@@ -400,9 +422,9 @@ ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFrom
   NCCLCHECKGOTO(ncclCalloc(&args, 1), ret, fail);
   args->listenSock = listenSock;
   args->magic = handle->magic;
-  PTHREADCHECKGOTO(pthread_create(&thread, NULL, bootstrapRoot, (void*)args), "pthread_create", ret, fail);
+  thread = std::thread(bootstrapRoot, args);
   ncclSetThreadName(thread, "NCCL BootstrapR");
-  PTHREADCHECKGOTO(pthread_detach(thread), "pthread_detach", ret, fail); // will not be pthread_join()'d
+  thread.detach();
 exit:
   return ret;
 fail:
@@ -411,11 +433,17 @@ fail:
   goto exit;
 }
 
-ncclResult_t bootstrapGetUniqueId(struct ncclBootstrapHandle* handle) {
+ncclResult_t bootstrapGetUniqueId(struct ncclBootstrapHandle* handle, struct ncclComm* comm) {
   memset(handle, 0, sizeof(ncclBootstrapHandle));
 
   const char* env = ncclGetEnv("NCCL_COMM_ID");
   if (env) {
+    // If comm is provided (grow operation), NCCL_COMM_ID should not be set
+    if (comm) {
+      WARN("ncclCommGetUniqueId should not be called when NCCL_COMM_ID is set");
+      return ncclInvalidUsage;
+    }
+    // Normal init: use NCCL_COMM_ID from environment
     INFO(NCCL_ENV, "NCCL_COMM_ID set by environment to %s", env);
     if (ncclSocketGetAddrFromString(&handle->addr, env) != ncclSuccess) {
       WARN("Invalid NCCL_COMM_ID, please use format: <ipv4>:<port> or [<ipv6>]:<port> or <hostname>:<port>");
@@ -423,9 +451,33 @@ ncclResult_t bootstrapGetUniqueId(struct ncclBootstrapHandle* handle) {
     }
     handle->magic = NCCL_MAGIC;
   } else {
-    NCCLCHECK(getRandomData(&handle->magic, sizeof(handle->magic)));
+    if (comm) {
+      // comm->childCount will be increment in ncclCommGrow for all existing ranks, use +1 here
+      handle->magic = hashCombine(comm->magic, comm->childCount + 1);
+    } else {
+      NCCLCHECK(getRandomData(&handle->magic, sizeof(handle->magic)));
+    }
+    handle->nRanks = comm ? comm->nRanks : 0;
     memcpy(&handle->addr, &bootstrapNetIfAddr, sizeof(union ncclSocketAddress));
     NCCLCHECK(bootstrapCreateRoot(handle, false));
+  }
+
+  return ncclSuccess;
+}
+
+ncclResult_t bcastGrowHandle(struct ncclBootstrapHandle* handle, struct ncclComm* parent, bool isRoot) {
+  if (!parent || !handle) {
+    WARN("bcastGrowHandle: parent comm and handle must be provided");
+    return ncclInvalidArgument;
+  }
+
+  // Single rank parent already has the handle, no need to broadcast
+  if (parent->nRanks == 1) return ncclSuccess;
+  if (isRoot) {
+    NCCLCHECK(bootstrapSend(parent->bootstrap, 0, BOOTSTRAP_TAG_GROW_BOUNDARY, handle, sizeof(struct ncclBootstrapHandle)));
+    NCCLCHECK(bootstrapSend(parent->bootstrap, parent->nRanks - 1, BOOTSTRAP_TAG_GROW_BOUNDARY, handle, sizeof(struct ncclBootstrapHandle)));
+  } else {
+    NCCLCHECK(bootstrapRecv(parent->bootstrap, -1, BOOTSTRAP_TAG_GROW_BOUNDARY, handle, sizeof(struct ncclBootstrapHandle)));
   }
 
   return ncclSuccess;
@@ -629,7 +681,7 @@ NCCL_PARAM(StaggerThreshold, "UID_STAGGER_THRESHOLD", 256);
 
 NCCL_PARAM(RasEnable, "RAS_ENABLE", 1);
 
-ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm) {
+ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, struct ncclComm* parent) {
   ncclResult_t result = ncclSuccess;
   int rank = comm->rank;
   int nranks = comm->nRanks;
@@ -651,7 +703,17 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm) {
   state->abortFlag = comm->abortFlag;
   state->net = comm->ncclNet;
   comm->bootstrap = state;
-  comm->magic = state->magic = BOOTSTRAP_HANDLE(handles, 0)->magic; // state and comm magic set to the first magic ID
+
+  // Set magic: for grow existing ranks, receive from coordinator; otherwise use handle magic.
+  // This is consistent with the magic created in ncclCommGetUniqueId.
+  if (handles != NULL) {
+    comm->magic = state->magic = BOOTSTRAP_HANDLE(handles, 0)->magic; // state and comm magic set to the first magic ID
+  } else if (parent != NULL) {
+    comm->magic = state->magic = hashCombine(parent->magic, parent->childCount);
+  } else {
+    WARN("bootstrapInit: handles and parent are NULL");
+    return ncclSystemError;
+  }
 
   TRACE(NCCL_BOOTSTRAP, "rank %d nranks %d", rank, nranks);
 
@@ -672,17 +734,32 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm) {
     NCCLCHECK(createListenSocket(comm, comm->magic, &STATE_LISTEN(state, socket), &info.connectInfo.addr, ncclSocketTypeBootstrap));
   }
   // Create socket for root to contact me using the root's magic
-  int curr_root = rootIdFromRank(rank, nranks, nHandles);
-  NCCLCHECK(createListenSocket(comm, BOOTSTRAP_HANDLE(handles, curr_root)->magic, &listenSockRoot, &info.listenRootAddress, ncclSocketTypeBootstrap));
+  // For grow operations, offset is parent->nRanks - 1 (last existing rank joins the root)
+  // For normal init, offset is 0
+  int offset = 0;
+  if(comm->isGrow) {
+    if(parent != NULL) {
+      offset = parent->nRanks - 1;
+    } else {
+      if(handles != NULL) {
+        offset = BOOTSTRAP_HANDLE(handles, 0)->nRanks - 1;
+      } else {
+        WARN("bootstrapInit: handles and parent are NULL");
+        return ncclSystemError;
+      }
+    }
+  }
+  int curr_root = rootIdFromRank(rank, nranks, nHandles, offset);
+  if(curr_root >= 0) NCCLCHECK(createListenSocket(comm, BOOTSTRAP_HANDLE(handles, curr_root)->magic, &listenSockRoot, &info.listenRootAddress, ncclSocketTypeBootstrap));
   BOOTSTRAP_PROF_CLOSE(timers[BOOTSTRAP_INIT_TIME_CREATE]);
 
   // stagger connection times to avoid an overload of the root
   BOOTSTRAP_PROF_OPEN(timers[BOOTSTRAP_INIT_TIME_DELAY]);
-  int nRankRoot = nRankFromRoot(curr_root, nranks, nHandles);
+  int nRankRoot = nRankFromRoot(curr_root, nranks, nHandles, offset);
   if (nRankRoot > ncclParamStaggerThreshold()) {
     // for socket the message rate in microsec
     double msg_rate = ncclParamStaggerRate() / 1.0e6;
-    long musec = localIdFromRoot(rank, curr_root, nranks, nHandles) / msg_rate;
+    long musec = localIdFromRoot(rank, curr_root, nranks, nHandles, offset) / msg_rate;
     struct timespec tv;
     long c_1e6 = 1e6;
     tv.tv_sec = musec / c_1e6;
@@ -697,24 +774,37 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm) {
   // send contact info to my own root
   info.rank = rank;
   info.iroot = curr_root;
-  NCCLCHECK(sendToRoot(BOOTSTRAP_HANDLE(handles, curr_root), comm, &info));
+  info.offset = offset;
+  if(curr_root >= 0) NCCLCHECK(sendToRoot(BOOTSTRAP_HANDLE(handles, curr_root), comm, &info));
+  if(parent && comm->isGrow && rank != 0) {
+    // Grow: Ranks 1 to N-1 use the parent bootstrap to send connection information to the previous rank
+    NCCLCHECK(bootstrapSend(parent->bootstrap, rank - 1, 0, &info.connectInfo, sizeof(info.connectInfo)));
+  }
   // if needed, send the connection info to the previous root
-  if (nHandles > 1 && isFirstFromRoot(rank, curr_root, nranks, nHandles)) {
+  // commGrow with more than = 1 rank in the parent comm is a special case of multiroot
+  if (((comm->isGrow && parent && (parent->nRanks > 1)) || nHandles > 1) && isFirstFromRoot(rank, curr_root, nranks, nHandles, offset)) {
     int prev_rank = BOOTSTRAP_PID(rank - 1, nranks);
-    int prev_root = rootIdFromRank(prev_rank, nranks, nHandles);
+    int prev_root = rootIdFromRank(prev_rank, nranks, nHandles, offset);
     info.rank = prev_rank + 1; // my rank as seen by the previous root
     info.iroot = prev_root;
-    NCCLCHECK(sendToRoot(BOOTSTRAP_HANDLE(handles, prev_root), comm, &info));
+    // only send if the root is valid, existing rank N-1 will use the bootstrapSend just above
+    if(prev_root >= 0) NCCLCHECK(sendToRoot(BOOTSTRAP_HANDLE(handles, prev_root), comm, &info));
   }
   BOOTSTRAP_PROF_CLOSE(timers[BOOTSTRAP_INIT_TIME_SEND]);
 
   // get info on my "next" rank in the bootstrap ring from root
   BOOTSTRAP_PROF_OPEN(timers[BOOTSTRAP_INIT_TIME_RECV]);
-  NCCLCHECK(ncclSocketInit(&sock));
-  NCCLCHECK(ncclSocketAccept(&sock, &listenSockRoot));
-  NCCLCHECK(socketRecv(&sock, &nextPeer, sizeof(nextPeer)));
-  NCCLCHECK(ncclSocketClose(&sock));
-  NCCLCHECK(ncclSocketClose(&listenSockRoot));
+  if(curr_root >= 0){
+    NCCLCHECK(ncclSocketInit(&sock));
+    NCCLCHECK(ncclSocketAccept(&sock, &listenSockRoot));
+    NCCLCHECK(socketRecv(&sock, &nextPeer, sizeof(nextPeer)));
+    NCCLCHECK(ncclSocketClose(&sock));
+    NCCLCHECK(ncclSocketClose(&listenSockRoot));
+  }
+  if (parent && comm->isGrow && rank != parent->nRanks - 1) {
+    // Grow: Ranks 0 to N-2 use the parent bootstrap to recv connection information to the next rank. This is consistent with the bootstrapSend above.
+    NCCLCHECK(bootstrapRecv(parent->bootstrap, rank + 1, 0, &nextPeer, sizeof(nextPeer)));
+  }
   BOOTSTRAP_PROF_CLOSE(timers[BOOTSTRAP_INIT_TIME_RECV]);
 
   // accept and connect the ring network
@@ -746,7 +836,7 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm) {
     // The RAS thread will take care of freeing the memory allocated below.
     NCCLCHECK(ncclCalloc(&rasRanks, nranks));
     memcpy(&rasRanks[rank].addr, &bootstrapNetIfAddr, sizeof(rasRanks[rank].addr));
-    rasRanks[rank].pid = getpid();
+    rasRanks[rank].pid = ncclOsGetpid();
     rasRanks[rank].cudaDev = comm->cudaDev;
     rasRanks[rank].nvmlDev = comm->nvmlDev;
     rasRanks[rank].hostHash = getHostHash();
@@ -922,7 +1012,8 @@ static ncclResult_t unexpectedDequeue(struct bootstrapState* state, int peer, in
   struct unexConn* prev = NULL;
   *found = 0;
   while (elem) {
-    if (elem->peer == peer && elem->tag == tag) {
+    // peer < 0 means wildcard (accept from any peer)
+    if ((peer < 0 || elem->peer == peer) && elem->tag == tag) {
       if (prev == NULL) {
         state->unexpectedConnections = elem->next;
       } else {
@@ -967,7 +1058,9 @@ static ncclResult_t socketAccept(void* commState, int peer, int tag, struct nccl
     NCCLCHECKGOTO(ncclSocketInit(sock), ret, fail);
     NCCLCHECKGOTO(ncclSocketAccept(sock, &STATE_LISTEN(state, peerSocket)), ret, fail);
     NCCLCHECKGOTO(socketRecv(sock, &ack, sizeof(struct socketAckInfo)), ret, fail);
-    if (ack.rank == peer && ack.tag == tag) return ncclSuccess;
+    // Match: tag must match, and peer must match (peer < 0 means wildcard)
+    if (ack.tag == tag && (peer < 0 || ack.rank == peer)) return ncclSuccess;
+    // No match: queue for later and try next connection
     NCCLCHECKGOTO(unexpectedEnqueue(state, ack.rank, ack.tag, sock), ret, fail);
   }
   return ncclSuccess;
@@ -1180,7 +1273,7 @@ ncclResult_t bootstrapClose(void* commState) {
   // close unexpected and return an error if we are not aborting and still operations in the pipe
   if (state->unexpectedConnections != NULL) {
     unexpectedFree(state);
-    if (__atomic_load_n(state->abortFlag, __ATOMIC_ACQUIRE) == 0) {
+    if (COMPILER_ATOMIC_LOAD(state->abortFlag, std::memory_order_acquire) == 0) {
       WARN("Unexpected connections are not empty");
       return ncclInternalError;
     }

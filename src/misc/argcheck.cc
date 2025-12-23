@@ -25,7 +25,7 @@ ncclResult_t CudaPtrCheck(const void* pointer, struct ncclComm* comm, const char
   return ncclSuccess;
 }
 
-ncclResult_t PtrCheck(void* ptr, const char* opname, const char* ptrname) {
+ncclResult_t PtrCheck(const void* ptr, const char* opname, const char* ptrname) {
   if (ptr == NULL) {
     WARN("%s : %s argument is NULL", opname, ptrname);
     return ncclInvalidArgument;

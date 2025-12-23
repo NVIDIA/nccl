@@ -9,25 +9,35 @@
 
 #include "scheduler.h"
 
+extern int64_t ncclParamSingleProcMemRegEnable();
+
+NCCL_PARAM(SymNoWinEnable, "SYM_NOWIN_ENABLE", 0);
+
 ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskColl* task, struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next>* symTaskQueue, struct ncclTaskColl** remainTasksHead) {
   ncclResult_t ret = ncclSuccess;
   int fnOpTySymCount = 0;
-  struct ncclTaskColl* tasksSymByFnOpTy[ncclNumFuncs * ncclNumDevRedOps * ncclNumTypes];
-  int fnOpTySymIndices[ncclNumFuncs * ncclNumDevRedOps * ncclNumTypes];
+  struct ncclTaskColl* tasksSymByFnOpTy[ncclNumFuncs * ncclNumDevRedOps * ncclNumTypes * ncclNumSymRegTypes];
+  int fnOpTySymIndices[ncclNumFuncs * ncclNumDevRedOps * ncclNumTypes * ncclNumSymRegTypes];
   struct ncclKernelPlanner* planner = &comm->planner;
   struct ncclTaskColl* remainTasksTail = nullptr;
   bool foundSymm = false;
 
   memset(tasksSymByFnOpTy, 0, sizeof(tasksSymByFnOpTy));
   *remainTasksHead = nullptr;
+  if (task) {
+    NCCLCHECK(ncclDevrInitOnce(comm));
+  }
   while (task != nullptr) {
-    int index = ((int)task->func*ncclNumDevRedOps + (int)task->opDev.op)*ncclNumTypes + (int)task->datatype;
+    int index;
     struct ncclTaskColl* next = task->next;
-    NCCLCHECK(ncclDevrFindWindow(comm, task->sendbuff, &task->sendWin));
-    NCCLCHECK(ncclDevrFindWindow(comm, task->recvbuff, &task->recvWin));
     bool symAvailable = ncclSymkAvailable(comm, task->func, task->opDev.op, task->datatype, task->count);
 
-    if (task->sendWin && task->recvWin && (task->sendWin->winFlags & task->recvWin->winFlags & NCCL_WIN_COLL_SYMMETRIC) && symAvailable) {
+    if (symAvailable) {
+      NCCLCHECK(ncclDevrFindWindow(comm, task->sendbuff, &task->sendWin));
+      NCCLCHECK(ncclDevrFindWindow(comm, task->recvbuff, &task->recvWin));
+      NCCLCHECK(ncclGetSymRegType(task->sendWin, task->recvWin, &task->winRegType));
+
+      index = (((int)task->func * ncclNumDevRedOps + (int)task->opDev.op) * ncclNumTypes + (int)task->datatype) * ncclNumSymRegTypes + (int)task->winRegType;
       if (tasksSymByFnOpTy[index] == nullptr) fnOpTySymIndices[fnOpTySymCount++] = index;
       task->next = tasksSymByFnOpTy[index];
       tasksSymByFnOpTy[index] = task;
@@ -36,7 +46,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
     } else {
       if (*remainTasksHead) {
         remainTasksTail->next = task;
-       remainTasksTail = task;
+        remainTasksTail = task;
       } else {
         *remainTasksHead = remainTasksTail = task;
       }
@@ -62,6 +72,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
       size_t countTotal = 0, countMax = 0;
       struct ncclTaskColl* headTask = task;
       size_t cellCount = NCCL_SYM_KERNEL_CELL_SIZE / ncclTypeSize(headTask->datatype);
+      bool forced = false;
       // For now we assume higher kernel id means a kernel for larger data size
       while (task != nullptr) {
         size_t count;
@@ -76,17 +87,59 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
         task = task->next;
       }
       NCCLCHECK(ncclSymkPickKernel(comm, headTask->func, headTask->opDev.op, headTask->datatype,
-                                   countTotal, countMax, nWorks,
-                                   &estTimeUs, &kernelId, &nChannels, &nWarps));
-      if (kernelId == ncclSymkKernelId_Count) {
-        char const* name = ncclGetEnv("NCCL_SYM_KERNEL");
-        WARN("Error: no symmetric kernel available for function %s.%s%s",
-             ncclFuncToString(headTask->func), (name ? " NCCL_SYM_KERNEL was set to " : ""), (name ? name: ""));
-        ret = (name ? ncclInvalidUsage : ncclInternalError);
-        goto fail;
-      }
-      // set all symmetric tasks to the same kernel
+                                   countTotal, countMax, nWorks, headTask->winRegType,
+                                   &estTimeUs, &kernelId, &nChannels, &nWarps, &forced));
       task = headTask;
+      bool isLLKernel = (1 << kernelId) & ncclSymkLLKernelMask();
+      bool isOneThreadMultiGpus = comm->intraRanks > 1 && !ncclParamSingleProcMemRegEnable();
+      bool isLegacyLLKernel = false;
+      bool needFallback = false;
+      // Check if it is worth picking symmetric LL kernels
+      if (isLLKernel) {
+        // First query legacy tuning
+        int collNetSupport = 0;
+        int nvlsSupport = comm->nvlsSupport && (ncclNvlsSupported(headTask->opDev.op, headTask->datatype) || headTask->func == ncclFuncAllGather);
+        NCCLCHECK(ncclGetCollNetSupport(comm, headTask, &collNetSupport));
+        NCCLCHECK(ncclGetAlgoInfo(comm, headTask, collNetSupport, nvlsSupport, 1));
+        if (headTask->protocol == NCCL_PROTO_LL) {
+          isLegacyLLKernel = true;
+        }
+      }
+
+      // If the symmetric kernel is forced, we will only fallback when running symmetric LL kernels is not possible;
+      // If not, when legacy kernel is not LL and users does not symmetrically register the buffers, we will also fallback.
+      if (forced) {
+        needFallback = isLLKernel && isOneThreadMultiGpus && headTask->winRegType == ncclSymSendNonregRecvNonreg;
+      } else {
+        needFallback = isLLKernel && (isOneThreadMultiGpus || !isLegacyLLKernel ||
+                       (headTask->winRegType == ncclSymSendNonregRecvNonreg && !ncclParamSymNoWinEnable()));
+      }
+
+      if (kernelId == ncclSymkKernelId_Count || needFallback) {
+        // cannot find appropriate symmetric kernel for the tasks
+        // fallback to legacy kernels
+        while (task != nullptr) {
+          struct ncclTaskColl* next = task->next;
+          int isSymLast = task->isSymLast;
+          if (*remainTasksHead) {
+            remainTasksTail->next = task;
+            remainTasksTail = task;
+          } else {
+            *remainTasksHead = remainTasksTail = task;
+          }
+          planner->nTasksColl++;
+          task = next;
+          if (isSymLast) break;
+        }
+        continue;
+      }
+
+      // initialize symmetric objects for LL kernels
+      if (isLLKernel && headTask->winRegType == ncclSymSendNonregRecvNonreg) {
+        NCCLCHECK(ncclSymkInitOnce(comm));
+      }
+
+      // set all symmetric tasks to the same kernel
       while (task != nullptr) {
         struct ncclTaskColl* next = task->next;
         int isSymLast = task->isSymLast;
@@ -102,8 +155,6 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
 
 exit:
   return ret;
-fail:
-  goto exit;
 }
 
 ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm, struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next>* symTaskQueue, struct ncclKernelPlan* plan) {

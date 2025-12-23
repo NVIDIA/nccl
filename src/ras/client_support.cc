@@ -6,13 +6,16 @@
 
 #include <cstdarg>
 #include <cstddef>
+#include <ctime>
 
 #include "alloc.h"
 #include "checks.h"
 #include "comm.h"
+#include "compiler.h"
 #include "nccl.h"
 #include "utils.h"
 #include "ras_internal.h"
+#include "compiler.h"
 
 // Outlier count above which we don't print individual details about each of them.
 #define RAS_CLIENT_DETAIL_THRESHOLD 10
@@ -135,7 +138,6 @@ static int rasAuxCommRanksValueCompare(const void* p1, const void* p2);
 static const char* rasGpuToString(int cudaDev, int nvmlDev, char* buf, size_t size);
 static const char* rasCommRankGpuToString(const struct rasCollComms::comm::rank* rank, char* buf, size_t size);
 static const char* ncclErrorToString(ncclResult_t err);
-static const char* ncclSocketToHost(const union ncclSocketAddress* addr, char* buf, size_t size);
 static bool rasCountIsOutlier(int count, bool verbose, int totalCount = -1);
 
 // CUDA version information - shared across functions.
@@ -226,7 +228,8 @@ static ncclResult_t getNewClientEntry(struct rasClient** pClient) {
   client->sock = client->pfd = -1;
   ncclIntruQueueConstruct(&client->sendQ);
   client->timeout =  RAS_COLLECTIVE_LEG_TIMEOUT;
-  client->outputFormat = RAS_OUTPUT_TEXT;  // Initialize to default TEXT format.
+  client->outputFormat = RAS_OUTPUT_TEXT;
+  client->monitorMask = 0; // Not in monitor mode.
 
   if (rasClientsHead) {
     rasClientsTail->next = client;
@@ -269,7 +272,7 @@ static void rasClientEnqueueMsg(struct rasClient* client, char* msg, size_t msgL
 // Terminates a connection with a RAS client.
 static void rasClientTerminate(struct rasClient* client) {
   (void)close(client->sock);
-  rasPfds[client->pfd].fd = -1;
+  rasPfds[client->pfd].fd = NCCL_INVALID_SOCKET;
   rasPfds[client->pfd].events = rasPfds[client->pfd].revents = 0;
   while (struct rasMsgMeta* meta = ncclIntruQueueTryDequeue(&client->sendQ)) {
     free(meta);
@@ -404,6 +407,49 @@ void rasClientEventLoop(struct rasClient* client, int pollIdx) {
         client->status = RAS_CLIENT_INIT;
         client->verbose = 1;
         (void)rasClientRun(client);
+      } else if (strcasecmp(cmd, "monitor") == 0 || strncasecmp(cmd, "monitor ", strlen("monitor ")) == 0) {
+        // Parse optional event groups after MONITOR command.
+        char* eventSpec = cmd + strlen("monitor");
+        while (*eventSpec == ' ') eventSpec++;
+        bool parseError = false;
+        const char* errorToken = nullptr;
+        uint8_t newMask = 0;
+        if (*eventSpec) {
+          // Event groups specified, parse them.
+          char* savePtr = nullptr;
+          char* token = strtok_r(eventSpec, ",", &savePtr);
+          while (token) {
+            if (strcasecmp(token, "lifecycle") == 0) {
+              newMask |= RAS_EVENT_LIFECYCLE;
+            } else if (strcasecmp(token, "trace") == 0) {
+              newMask |= RAS_EVENT_TRACE;
+            } else if (strcasecmp(token, "all") == 0) {
+              newMask |= RAS_EVENT_ALL;
+            } else {
+              errorToken = token;
+              parseError = true;
+              break;
+            }
+            token = strtok_r(nullptr, ",", &savePtr);
+          } // while (token)
+        }
+        if (parseError) {
+          snprintf(rasLine, sizeof(rasLine), "ERROR: Invalid event group '%s'\n", errorToken);
+        } else {
+          if (newMask != 0) {
+            client->monitorMask = newMask;
+          } else {
+            client->monitorMask = RAS_EVENT_LIFECYCLE;
+          }
+          strcpy(rasLine, "OK\n");
+        }
+        msgLen = strlen(rasLine);
+        if (rasClientAllocMsg(&msg, msgLen) != ncclSuccess) {
+          rasClientTerminate(client);
+          return;
+        }
+        memcpy(msg, rasLine, msgLen);
+        rasClientEnqueueMsg(client, msg, msgLen);
       } else {
         snprintf(rasLine, sizeof(rasLine), "ERROR: Unknown command %s\n", cmd);
         msgLen = strlen(rasLine);
@@ -558,7 +604,7 @@ static ncclResult_t rasClientRunInit(struct rasClient* client) {
   nPeers = 0; // #peers on a node.
   firstNPeersGlobal = 0; // #peers on the first node.
   for (int peerIdx = 0; peerIdx < nRasPeers; peerIdx++) {
-    int nGpus = __builtin_popcountll(rasPeers[peerIdx].cudaDevs);
+    int nGpus = COMPILER_POPCOUNT64(rasPeers[peerIdx].cudaDevs);
     totalGpus += nGpus;
     if (peerIdx == 0) {
       totalNodes = 1;
@@ -685,10 +731,10 @@ static ncclResult_t rasClientRunInit(struct rasClient* client) {
       // We calculate and print the GPUs/process separately.  This is required for !consistentNGpusNode and
       // it also makes our life easier above for !consistentNGpusGlobal (which could require a larger valCounts).
 
-      // Sort peers by the GPU count, to simplify data extraction.  Not sure how fast __builtin_popcountll is so we
+      // Sort peers by the GPU count, to simplify data extraction.  Not sure how fast COMPILER_POPCOUNT64 is so we
       // may just as well cache it...
       for (int peerIdx = 0; peerIdx < nRasPeers; peerIdx++) {
-        auxRasPeers[peerIdx].value = __builtin_popcountll(auxRasPeers[peerIdx].peer->cudaDevs);
+        auxRasPeers[peerIdx].value = COMPILER_POPCOUNT64(auxRasPeers[peerIdx].peer->cudaDevs);
         TRACE(NCCL_RAS, "RAS: node %s pid %d: nGpus %d",
               ncclSocketToHost(&auxRasPeers[peerIdx].peer->addr, rasLine, sizeof(rasLine)),
               auxRasPeers[peerIdx].peer->pid, auxRasPeers[peerIdx].value);
@@ -863,7 +909,7 @@ static ncclResult_t rasClientRunConns(struct rasClient* client) {
       for (int peerIdx = 0; peerIdx < nPeersBuf; peerIdx++) {
         rasOutAppend("  Process %d on node %s managing GPU%s %s\n", peersBuf[peerIdx].pid,
                      ncclSocketToHost(&peersBuf[peerIdx].addr, rasLine, sizeof(rasLine)),
-                     (__builtin_popcountll(peersBuf[peerIdx].cudaDevs) > 1 ? "s" : ""),
+                     (COMPILER_POPCOUNT64(peersBuf[peerIdx].cudaDevs) > 1 ? "s" : ""),
                      rasGpuDevsToString(peersBuf[peerIdx].cudaDevs, peersBuf[peerIdx].nvmlDevs, lineBuf,
                                         sizeof(lineBuf)));
       }
@@ -990,7 +1036,8 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
     if (maxCommSize < comm->commNRanks)
       maxCommSize = comm->commNRanks;
     auxComms[commIdx].comm = comm;
-    comm = (struct rasCollComms::comm*)(((char*)(comm+1)) + comm->nRanks * sizeof(*comm->ranks));
+    comm = (struct rasCollComms::comm*)(((char*)(comm+1)) + comm->nRanks * sizeof(*comm->ranks) +
+                                        comm->nMissingRanks * sizeof(struct rasCollCommsMissingRank));
   }
   NCCLCHECKGOTO(ncclCalloc(&auxCommRanks, maxCommSize), ret, fail);
   TRACE(NCCL_RAS, "RAS: maxCommSize %d", maxCommSize);
@@ -1135,7 +1182,7 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
         auxComm->errors |= RAS_ACE_ERROR;
     } // for (rankIdx)
 
-    if (__builtin_popcount(auxComm->status) > 1) {
+    if (COMPILER_POPCOUNT32(auxComm->status) > 1) {
       // We've got a status mismatch between ranks.
       auxComm->errors |= RAS_ACE_MISMATCH;
     }
@@ -1155,8 +1202,8 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
     if (commIdx == 0 ||
         auxComms[commIdx].comm->commNRanks != auxComms[commIdx-1].comm->commNRanks ||
         auxComms[commIdx].nNodes != auxComms[commIdx-1].nNodes ||
-        // __builtin_clz returns the number of leading 0-bits, which is a proxy for the index of the highest 1-bit.
-        __builtin_clz(auxComms[commIdx].status) != __builtin_clz(auxComms[commIdx-1].status) ||
+        // COMPILER_CLZ returns the number of leading 0-bits, which is a proxy for the index of the highest 1-bit.
+        COMPILER_CLZ(auxComms[commIdx].status) != COMPILER_CLZ(auxComms[commIdx-1].status) ||
         auxComms[commIdx].errors != auxComms[commIdx-1].errors) {
       valCounts[nValCounts].value = 0; // We have many distinguishing values but only one field to store them.
                                        // It doesn't really matter, given that we can extract them via firstIdx.
@@ -1205,16 +1252,16 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
     }
     ranksTotal = 0;
     for (int peerIdx = 0; peerIdx < coll->nPeers; peerIdx++)
-      ranksTotal += __builtin_popcountll(peerNvmlDevs[peerIdx]);
+      ranksTotal += COMPILER_POPCOUNT64(peerNvmlDevs[peerIdx]);
     if (ranksPerNodeMin == ranksPerNodeMax)
       snprintf(rasLine, sizeof(rasLine), "%d", ranksPerNodeMin);
     else
       snprintf(rasLine, sizeof(rasLine), "%d-%d", ranksPerNodeMin, ranksPerNodeMax);
     rasOutAppend("%5d  %8d  %8d  %8s  %8d  %8d  %8s  %6s\n",
                  vcIdx, vc->count, auxComm->nNodes, rasLine, auxComm->comm->commNRanks, ranksTotal,
-                 // __builtin_clz returns the number of leading 0-bits.  This makes it possible to translate the
+                 // COMPILER_CLZ returns the number of leading 0-bits.  This makes it possible to translate the
                  // status (which is a bitmask) into an array index.
-                 statusStr[(sizeof(unsigned int)*8-1)-__builtin_clz(auxComm->status)], errorStr[auxComm->errors]);
+                 statusStr[(sizeof(unsigned int)*8-1)-COMPILER_CLZ(auxComm->status)], errorStr[auxComm->errors]);
   }
   msgLen = rasOutLength();
   NCCLCHECKGOTO(rasClientAllocMsg(&msg, msgLen), ret, fail);
@@ -1279,7 +1326,7 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
         struct rasAuxPeerInfo* auxPeer = auxPeersBuf+peerIdx;
         rasOutAppend("  Process %d on node %s managing GPU%s %s\n", auxPeer->peer->pid,
                      ncclSocketToHost(&auxPeer->peer->addr, rasLine, sizeof(rasLine)),
-                     (__builtin_popcountll(auxPeer->peer->cudaDevs) > 1 ? "s" : ""),
+                     (COMPILER_POPCOUNT64(auxPeer->peer->cudaDevs) > 1 ? "s" : ""),
                      rasGpuDevsToString(auxPeer->peer->cudaDevs, auxPeer->peer->nvmlDevs, lineBuf,
                                         sizeof(lineBuf)));
       }
@@ -1312,7 +1359,7 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
         struct rasAuxPeerInfo* auxPeer = auxPeersBuf+peerIdx;
         rasOutAppend("  Process %d on node %s managing GPU%s %s\n", auxPeer->peer->pid,
                      ncclSocketToHost(&auxPeer->peer->addr, rasLine, sizeof(rasLine)),
-                     (__builtin_popcountll(auxPeer->peer->cudaDevs) > 1 ? "s" : ""),
+                     (COMPILER_POPCOUNT64(auxPeer->peer->cudaDevs) > 1 ? "s" : ""),
                      rasGpuDevsToString(auxPeer->peer->cudaDevs, auxPeer->peer->nvmlDevs, lineBuf,
                                         sizeof(lineBuf)));
       }
@@ -1419,7 +1466,7 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
           NCCLCHECKGOTO(ncclCalloc(&collOpCounts, comm->commNRanks), ret, fail);
         }
 
-        if (__builtin_popcount(auxComm->status) > 1) {
+        if (COMPILER_POPCOUNT32(auxComm->status) > 1) {
           rasOutAppend("  Communicator ranks have different status\n");
 
           // We need to sort the ranks by status.  However, status is normally calculated from other fields.
@@ -1443,11 +1490,11 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
           int nCollOpCounts = 0;
           for (int rankIdx = 0; rankIdx < comm->nRanks; rankIdx++) {
             if (rankIdx == 0 || auxCommRanks[rankIdx].value != auxCommRanks[rankIdx-1].value) {
-              // __builtin_clz returns the number of leading 0-bits.  This makes it possible to translate the
+              // COMPILER_CLZ returns the number of leading 0-bits.  This makes it possible to translate the
               // status (which is a bitmask) into an array index.  The argument is an unsigned int (there is no
               // 64-bit version seemingly, but we don't actually need one here).
               collOpCounts[nCollOpCounts].value =
-                (sizeof(unsigned int)*8-1) - __builtin_clz((unsigned int)auxCommRanks[rankIdx].value);
+                (sizeof(unsigned int)*8-1) - COMPILER_CLZ((unsigned int)auxCommRanks[rankIdx].value);
               collOpCounts[nCollOpCounts].count = 1;
               collOpCounts[nCollOpCounts].firstIdx = rankIdx;
               nCollOpCounts++;
@@ -1533,7 +1580,7 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
               } // vcc->firstIdx == -1
             } // if (rasCountIsOutlier(vcc->count))
           } // for (coc)
-        } // if (__builtin_popcount(auxComm->status) > 1)
+        } // if (COMPILER_POPCOUNT32(auxComm->status) > 1)
 
         for (int collIdx = 0; collIdx < NCCL_NUM_FUNCTIONS; collIdx++) {
           bool inconsistent = false;
@@ -1842,11 +1889,11 @@ static int rasAuxCommsCompareRev(const void* p1, const void* p2) {
     if (c1->nNodes == c2->nNodes) {
       // We don't want to compare the status values directly because they could be bitmasks and we are only
       // interested in the highest bit set.
-      // __builtin_clz returns the number of leading 0-bits, so in our case the value will be the *smallest*
+      // COMPILER_CLZ returns the number of leading 0-bits, so in our case the value will be the *smallest*
       // if RAS_ACS_ABORT (8) is set and the *largest* if only RAS_ACS_INIT (1) is set, so we reverse the
       // comparison to get the desired sorting order.
-      int s1 = __builtin_clz(c1->status);
-      int s2 = __builtin_clz(c2->status);
+      int s1 = COMPILER_CLZ(c1->status);
+      int s2 = COMPILER_CLZ(c2->status);
       if (s1 == s2) {
         if (c1->errors == c2->errors) {
           if (c1->comm->nRanks == c2->comm->nRanks) {
@@ -1960,7 +2007,7 @@ static void jsonWriteMissingRank(int rank, const char* host, int pid, int cudaDe
   rasOutAppend("          \"host\": \"%s\",\n", host);
   rasOutAppend("          \"pid\": %d,\n", pid);
   rasOutAppend("          \"cuda_dev\": %d,\n", cudaDev);
-  rasOutAppend("          \"nvml_dev\": %d\n", nvmlDev);
+  rasOutAppend("          \"nvml_dev\": %d,\n", nvmlDev);
 
   // Status object.
   rasOutAppend("          \"status\": {\n");
@@ -2044,7 +2091,7 @@ static const char* ncclErrorToString(ncclResult_t err) {
 }
 
 // Converts the IP number of a NCCL address to a string (the port part is ignored and no DNS resolution is attempted).
-static const char* ncclSocketToHost(const union ncclSocketAddress* addr, char* buf, size_t size) {
+const char* ncclSocketToHost(const union ncclSocketAddress* addr, char* buf, size_t size) {
   if (addr->sa.sa_family > 0)
     return inet_ntop(addr->sa.sa_family,
                      (addr->sa.sa_family == AF_INET ? (void*)&addr->sin.sin_addr : (void*)&addr->sin6.sin6_addr),
@@ -2140,6 +2187,120 @@ static bool rasCountIsOutlier(int count, bool verbose, int totalCount) {
   } else {
     return count <= RAS_CLIENT_DETAIL_THRESHOLD &&
            (totalCount == -1 || count <= totalCount * RAS_CLIENT_OUTLIER_FRACTION);
+  }
+}
+
+// Notifies all connected monitoring clients about an event.
+// Iterates through the client list and sends formatted notifications to clients
+// whose monitor mask matches the event group.
+void rasClientsNotifyEvent(rasEventGroup group, const struct rasEventNotification* event) {
+  char* msg;
+  char formattedNotification[2048];
+  time_t currentTime;
+  struct tm timeInfo;
+  char timeStr[64];
+  int msgLen;
+  time(&currentTime);
+  localtime_r(&currentTime, &timeInfo);
+  strftime(timeStr, sizeof(timeStr), "%F %T", &timeInfo);
+  for (struct rasClient* client = rasClientsHead; client; client = client->next) {
+    if (client->status == RAS_CLIENT_CONNECTED && (client->monitorMask & group)) {
+      if (client->outputFormat == RAS_OUTPUT_JSON) {
+        const char* groupStr = (group == RAS_EVENT_LIFECYCLE) ? "LIFECYCLE" : "TRACE";
+        const struct rasPeerInfo* peer = event->peerInfo;
+        if (peer == nullptr && event->peerAddr) {
+          int peerIdx = rasPeerFind(event->peerAddr);
+          if (peerIdx >= 0) {
+            peer = rasPeers + peerIdx;
+          }
+        }
+        if (peer) {
+          char hostBuf[SOCKET_NAME_MAXLEN+1];
+          char cudaDevs[256], nvmlDevs[256];
+          ncclSocketToHost(&peer->addr, hostBuf, sizeof(hostBuf));
+          // Build cuda_devs array.
+          int offset = 0;
+          snprintf(cudaDevs + offset, sizeof(cudaDevs) - offset, "[");
+          offset = strlen(cudaDevs);
+          for (int i = 0; i < sizeof(peer->cudaDevs)*8; i++) {
+            if (peer->cudaDevs & (1ULL << i)) {
+              snprintf(cudaDevs + offset, sizeof(cudaDevs) - offset, "%s%d", (offset > 1 ? "," : ""), i);
+              offset = strlen(cudaDevs);
+            }
+          }
+          snprintf(cudaDevs + offset, sizeof(cudaDevs) - offset, "]");
+          // Build nvml_devs array.
+          offset = 0;
+          snprintf(nvmlDevs + offset, sizeof(nvmlDevs) - offset, "[");
+          offset = strlen(nvmlDevs);
+          for (int i = 0; i < sizeof(peer->nvmlDevs)*8; i++) {
+            if (peer->nvmlDevs & (1ULL << i)) {
+              snprintf(nvmlDevs + offset, sizeof(nvmlDevs) - offset, "%s%d", (offset > 1 ? "," : ""), i);
+              offset = strlen(nvmlDevs);
+            }
+          }
+          snprintf(nvmlDevs + offset, sizeof(nvmlDevs) - offset, "]");
+          snprintf(formattedNotification, sizeof(formattedNotification),
+                   "{\n"
+                   "  \"timestamp\": \"%s\",\n"
+                   "  \"group\": \"%s\",\n"
+                   "  \"event\": \"%s\",\n"
+                   "  \"peer\": {\n"
+                   "    \"host\": \"%s\",\n"
+                   "    \"pid\": %d,\n"
+                   "    \"cuda_devs\": %s,\n"
+                   "    \"nvml_devs\": %s\n"
+                   "  },\n"
+                   "  \"details\": \"%s\"\n"
+                   "}\n",
+                   timeStr, groupStr, event->eventType, hostBuf, peer->pid, cudaDevs, nvmlDevs, event->details);
+        } else if (event->peerAddr) {
+          // Peer not found, just use address.
+          char addrStr[SOCKET_NAME_MAXLEN+1];
+          ncclSocketToString(event->peerAddr, addrStr, sizeof(addrStr));
+          snprintf(formattedNotification, sizeof(formattedNotification),
+                   "{\n"
+                   "  \"timestamp\": \"%s\",\n"
+                   "  \"group\": \"%s\",\n"
+                   "  \"event\": \"%s\",\n"
+                   "  \"peer\": {\n"
+                   "    \"addr\": \"%s\"\n"
+                   "  },\n"
+                   "  \"details\": \"%s\"\n"
+                   "}\n",
+                   timeStr, groupStr, event->eventType, addrStr, event->details);
+        } else {
+          snprintf(formattedNotification, sizeof(formattedNotification),
+                   "{\n"
+                   "  \"timestamp\": \"%s\",\n"
+                   "  \"group\": \"%s\",\n"
+                   "  \"event\": \"%s\",\n"
+                   "  \"details\": \"%s\"\n"
+                   "}\n",
+                   timeStr, groupStr, event->eventType, event->details);
+        }
+      } else { // client->outputFormat == RAS_OUTPUT_TEXT
+        char peerStr[512] = "";
+        if (event->peerInfo) {
+          rasPeerInfoToString(event->peerInfo, peerStr, sizeof(peerStr));
+        } else if (event->peerAddr) {
+          rasPeerToString(event->peerAddr, peerStr, sizeof(peerStr));
+        }
+        if (strlen(peerStr) > 0) {
+          snprintf(formattedNotification, sizeof(formattedNotification),
+                   "[%s] %s: %s %s\n", timeStr, event->eventType, peerStr, event->details);
+        } else {
+          snprintf(formattedNotification, sizeof(formattedNotification),
+                   "[%s] %s: %s\n", timeStr, event->eventType, event->details);
+        }
+      }
+
+      msgLen = strlen(formattedNotification);
+      if (rasClientAllocMsg(&msg, msgLen) == ncclSuccess) {
+        memcpy(msg, formattedNotification, msgLen);
+        rasClientEnqueueMsg(client, msg, msgLen);
+      }
+    }
   }
 }
 

@@ -224,6 +224,7 @@ static ncclResult_t nvlsAllocateMem(struct ncclComm* comm, const CUmemAccessDesc
   char shareableHandle[NVLS_HANDLE_SIZE];
   CUmulticastObjectProp mcprop;
   CUmemAllocationProp ucprop;
+  CUresult err;
   ncclResult_t ret = ncclSuccess;
   size_t mcsize;
   size_t ucsize;
@@ -275,22 +276,14 @@ static ncclResult_t nvlsAllocateMem(struct ncclComm* comm, const CUmemAccessDesc
   // Bind physical memory to the Multicast group
   // NB: It will block until all ranks have been added to the Group
   // This is where we normally see issues if the system NVLS/Multicast support is broken
-  {
-    CUresult err = CUPFN(cuMulticastBindMem(*mcHandle, 0/*mcOffset*/, *ucHandle, 0/*memOffset*/, ucsize, 0/*flags*/));
-    if (err != CUDA_SUCCESS) {
-      const char *errStr;						\
-      (void) pfn_cuGetErrorString(err, &errStr);			\
-      if (ncclParamNvlsEnable() == 1) {
-        // Fail the job as NVLS support is not available
-        WARN("Failed to bind NVLink SHARP (NVLS) Multicast memory of size %ld : CUDA error %d '%s'.\nThis is usually caused by a system or configuration error in the Fabric Manager or NVSwitches.\nDo not force-enable NVLS (NCCL_NVLS_ENABLE=1) if you wish to avoid this error in the future.", ucsize, err, errStr );
-        ret = ncclUnhandledCudaError;
-      } else {
-        // Continue without NVLS support (returns ncclSuccess)
-        INFO(NCCL_INIT|NCCL_NVLS, "Failed to bind NVLink SHARP (NVLS) Multicast memory of size %ld : CUDA error %d '%s'. Proceeding without NVLS support.", ucsize, err, errStr);
-      }
-      comm->nvlsSupport = comm->nvlsChannels = 0;
-      goto fail3;
-   }
+  err = CUPFN(cuMulticastBindMem(*mcHandle, 0/*mcOffset*/, *ucHandle, 0/*memOffset*/, ucsize, 0/*flags*/));
+  if (err != CUDA_SUCCESS) {
+    const char *errStr;                                                 \
+    (void) pfn_cuGetErrorString(err, &errStr);                          \
+    // Fail the job as NVLS support is not functional
+    WARN("Failed to bind NVLink SHARP (NVLS) Multicast memory of size %ld : CUDA error %d '%s'.\nThis is usually caused by a system or configuration error in the Fabric Manager or NVSwitches.\nDisable NVLS (NCCL_NVLS_ENABLE=0) if you wish to avoid this error in the future.", ucsize, err, errStr );
+    ret = ncclUnhandledCudaError;
+    goto fail3;
   }
 
   // Map mc virtual address
@@ -342,8 +335,8 @@ ncclResult_t ncclNvlsBufferSetup(struct ncclComm* comm) {
 
   NCCLCHECKGOTO(nvlsAllocateMem(comm, &resources->accessDesc, nvlsTotalSize, &resources->ucBuffHandle, &resources->mcBuffHandle, (void**)&resources->ucBuff, (void**)&resources->mcBuff, &resources->buffUCSize, &resources->buffMCSize), res, fail);
 
-  NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(), &comm->sharedRes->hostStream, /*concurrent=*/false, &hostStream), res, fail);
-  NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(), &comm->sharedRes->deviceStream, /*concurrent=*/false, &deviceStream), res, fail);
+  NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->hostStream, /*concurrent=*/false, &hostStream), res, fail);
+  NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->deviceStream, /*concurrent=*/false, &deviceStream), res, fail);
   for (int h = 0; h < nHeads; h++) {
     int nvlsPeer = comm->nRanks + 1 + h;
     for (int c = 0; c < nChannels; c++) {
@@ -366,8 +359,8 @@ ncclResult_t ncclNvlsBufferSetup(struct ncclComm* comm) {
   }
 
   NCCLCHECKGOTO(ncclStreamWaitStream(deviceStream, hostStream, comm->sharedRes->scratchEvent), res, fail);
-  NCCLCHECKGOTO(ncclStrongStreamRelease(ncclCudaGraphNone(), &comm->sharedRes->deviceStream, /*concurrent=*/false), res, fail);
-  NCCLCHECKGOTO(ncclStrongStreamRelease(ncclCudaGraphNone(), &comm->sharedRes->hostStream, /*concurrent=*/false), res, fail);
+  NCCLCHECKGOTO(ncclStrongStreamRelease(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->deviceStream, /*concurrent=*/false), res, fail);
+  NCCLCHECKGOTO(ncclStrongStreamRelease(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->hostStream, /*concurrent=*/false), res, fail);
   // For now, the barrier is a must that guarantees all buffers are mc-mapped before accessing peer's buffer
   NCCLCHECKGOTO(bootstrapIntraNodeBarrier(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, comm->localRankToRank[0]), res, fail);
   comm->nvlsResources->inited = true;
@@ -434,8 +427,8 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
     NCCLCHECKGOTO(nvlsAllocateMem(comm, &resources->accessDesc, creditSize, &resources->ucCreditHandle, &resources->mcCreditHandle, (void**)&resources->ucCredit, (void**)&resources->mcCredit, &resources->creditUCSize, &resources->creditMCSize), res, fail);
 
     // Set up head and tail only for now
-    NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(), &comm->sharedRes->hostStream, /*concurrent=*/false, &hostStream), res, fail);
-    NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(), &comm->sharedRes->deviceStream, /*concurrent=*/false, &deviceStream), res, fail);
+    NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->hostStream, /*concurrent=*/false, &hostStream), res, fail);
+    NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->deviceStream, /*concurrent=*/false, &deviceStream), res, fail);
     for (int h = 0; h < nHeads; h++) {
       int nvlsPeer = comm->nRanks + 1 + h;
       for (int c = 0; c < nChannels; c++) {
@@ -480,8 +473,8 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
       }
     }
     NCCLCHECKGOTO(ncclStreamWaitStream(deviceStream, hostStream, comm->sharedRes->scratchEvent), res, fail);
-    NCCLCHECKGOTO(ncclStrongStreamRelease(ncclCudaGraphNone(), &comm->sharedRes->hostStream, /*concurrent=*/false), res, fail);
-    NCCLCHECKGOTO(ncclStrongStreamRelease(ncclCudaGraphNone(), &comm->sharedRes->deviceStream, /*concurrent=*/false), res, fail);
+    NCCLCHECKGOTO(ncclStrongStreamRelease(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->hostStream, /*concurrent=*/false), res, fail);
+    NCCLCHECKGOTO(ncclStrongStreamRelease(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->deviceStream, /*concurrent=*/false), res, fail);
   }
 
   // MNNVL does not support NVLS buffer registration
@@ -797,11 +790,9 @@ ncclResult_t ncclNvlsLocalRegisterBuffer(struct ncclComm *comm, const void *send
     NCCLCHECK(ncclRegFind(comm, sendbuff, sendbuffSize, &sendRegRecord));
     NCCLCHECK(ncclRegLocalIsValid(sendRegRecord, &sendIsValid));
     if (sendIsValid) {
-      CUCHECK(cuMemGetAddressRange((CUdeviceptr *)&baseSend, &baseSendSize, (CUdeviceptr)sendbuff));
-      if ((uint64_t)baseSend + baseSendSize < (uint64_t)sendbuff + sendbuffSize) {
-        // the virtual address is backed by multiple physical memory regions, just fall back to non-UB path
-        goto exit;
-      }
+      int numSegments = 0;
+      NCCLCHECK(ncclCuMemGetAddressRange((CUdeviceptr) sendbuff, sendbuffSize, (CUdeviceptr*)&baseSend, &baseSendSize, &numSegments));
+      if (numSegments > 1 && !ncclParamMultiSegmentRegister()) goto exit;
     }
   } else {
     sendIsValid = true;
@@ -811,11 +802,9 @@ ncclResult_t ncclNvlsLocalRegisterBuffer(struct ncclComm *comm, const void *send
     NCCLCHECK(ncclRegFind(comm, recvbuff, recvbuffSize, &recvRegRecord));
     NCCLCHECK(ncclRegLocalIsValid(recvRegRecord, &recvIsValid));
     if (recvIsValid) {
-      CUCHECK(cuMemGetAddressRange((CUdeviceptr *)&baseRecv, &baseRecvSize, (CUdeviceptr)recvbuff));
-      if ((uint64_t)baseRecv + baseRecvSize < (uint64_t)recvbuff + recvbuffSize) {
-        // the virtual address is backed by multiple physical memory regions, just fall back to non-UB path
-        goto exit;
-      }
+      int numSegments = 0;
+      NCCLCHECK(ncclCuMemGetAddressRange((CUdeviceptr) recvbuff, recvbuffSize, (CUdeviceptr *)&baseRecv, &baseRecvSize, &numSegments));
+      if (numSegments > 1 && !ncclParamMultiSegmentRegister()) goto exit;
     }
   } else {
     recvIsValid = true;
@@ -857,20 +846,16 @@ ncclResult_t ncclNvlsGraphRegisterBuffer(
 
   *outRegBufUsed = 0;
   if (sendbuff) {
-    CUCHECK(cuMemGetAddressRange((CUdeviceptr *)&baseSend, &baseSendSize, (CUdeviceptr)sendbuff));
-    if ((uint64_t)baseSend + baseSendSize < (uint64_t)sendbuff + sendbuffSize) {
-      // the virtual address is backed by multiple physical memory regions, just fall back to non-UB path
-      goto exit;
-    }
+    int numSegments = 0;
+    NCCLCHECK(ncclCuMemGetAddressRange((CUdeviceptr) sendbuff, sendbuffSize, (CUdeviceptr*)&baseSend, &baseSendSize, &numSegments));
+    if (numSegments > 1 && !ncclParamMultiSegmentRegister()) goto exit;
     NCCLCHECK(ncclCommGraphRegister(comm, baseSend, baseSendSize, (void**)&sendRegRecord));
   }
 
   if (recvbuff) {
-    CUCHECK(cuMemGetAddressRange((CUdeviceptr *)&baseRecv, &baseRecvSize, (CUdeviceptr)recvbuff));
-    if ((uint64_t)baseRecv + baseRecvSize < (uint64_t)recvbuff + recvbuffSize) {
-      // the virtual address is backed by multiple physical memory regions, just fall back to non-UB path
-      goto exit;
-    }
+    int numSegments = 0;
+    NCCLCHECK(ncclCuMemGetAddressRange((CUdeviceptr) recvbuff, recvbuffSize, (CUdeviceptr*)&baseRecv, &baseRecvSize, &numSegments));
+    if (numSegments > 1 && !ncclParamMultiSegmentRegister()) goto exit;
     NCCLCHECK(ncclCommGraphRegister(comm, baseRecv, baseRecvSize, (void**)&recvRegRecord));
   }
 

@@ -40,7 +40,7 @@ ncclResult_t ncclBuildRings(int nrings, int* rings, int rank, int nranks, int* p
 
     int current = rank;
     for (int i=0; i<nranks; i++) {
-      rankFound[current/64] |= (1<<(current%64));
+      rankFound[current/64] |= (1UL<<(current%64));
       rings[r*nranks+i] = current;
       current = next[r*nranks+current];
     }

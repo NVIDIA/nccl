@@ -39,7 +39,7 @@ struct ncclDevComm {
   ncclGinBarrierHandle_t railGinBarrier;
 
   uint8_t ginContextCount;
-  uint8_t ginTypes[4];
+  uint8_t ginNetDeviceTypes[4];
   void* ginHandles[4];
   uint32_t ginSignalBase;
   int ginSignalCount;

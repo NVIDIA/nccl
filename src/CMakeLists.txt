@@ -8,7 +8,6 @@ set(LIBSRCFILES
     enqueue.cc
     group.cc
     init.cc
-    init_nvtx.cc
     proxy.cc
     transport.cc
     mnnvl.cc
@@ -16,6 +15,11 @@ set(LIBSRCFILES
     sym_kernels.cc
     dev_runtime.cc
 )
+
+# Add NVTX support if enabled
+if(NVTX)
+    list(APPEND LIBSRCFILES init_nvtx.cc)
+endif()
 
 # Add compatibility shim if using static cudart
 if(CUDARTLIB STREQUAL "cudart_static")
@@ -39,7 +43,9 @@ add_subdirectory(device)
 add_subdirectory(nccl_device)
 add_subdirectory(ras)
 add_subdirectory(scheduler)
+add_subdirectory(os)
 add_subdirectory(gin)
+add_subdirectory(rma)
 
 add_compile_options(-fmacro-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}/=)
 
@@ -53,8 +59,10 @@ list(APPEND LIBSRCFILES
     ${RAS_SOURCES}
     ${SYM_SOURCES}
     ${SCHEDULER_SOURCES}
+    ${OS_SOURCES}
     ${GIN_SOURCES}
     ${DOCA_SOURCES}
+    ${RMA_SOURCES}
 )
 
 ###################### Create a shared NCCL library ############################
@@ -67,6 +75,7 @@ target_include_directories(nccl PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/device
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/os
     ${CUDAToolkit_INCLUDE_DIRS}
     ${DOCA_HOME}/include
     ${CUDAToolkit_INCLUDE_DIRS}/cccl
@@ -81,7 +90,6 @@ add_custom_command(
                 -e "s/\\\$$\\{nccl:Suffix\\}/${NCCL_SUFFIX}/g"
                 -e "s/\\\$$\\{nccl:Version\\}/${NCCL_VERSION_CODE}/g"
                 ${CMAKE_CURRENT_SOURCE_DIR}/nccl.h.in > ${CMAKE_BINARY_DIR}/include/nccl.h
-    BYPRODUCTS ${CMAKE_BINARY_DIR}/include/nccl.h
 )
 
 file(GLOB_RECURSE SRC_DEVICE_HEADERS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_device/*.h)
@@ -111,6 +119,18 @@ set_target_properties(nccl PROPERTIES
     OUTPUT_NAME "nccl"
     PREFIX "lib"
 )
+
+#
+# Generate git_version.h
+#
+set(GIT_VERSION_FILE "${CMAKE_BINARY_DIR}/include/git_version.h")
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/include")
+add_custom_target(generate_git_version ALL
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/src/misc/generate_git_version.py ${GIT_VERSION_FILE}
+  COMMENT "Checking git version"
+  BYPRODUCTS ${GIT_VERSION_FILE}
+)
+add_dependencies(nccl generate_git_version)
 
 # Set CUDA specific flags
 set_target_properties(nccl PROPERTIES
@@ -173,13 +193,15 @@ target_include_directories(nccl_static PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/device
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/os
     ${CUDAToolkit_INCLUDE_DIRS}
-    transport/gdaki/doca-gpunetio/include
+    transport/net_ib/gdaki/doca-gpunetio/include
     ${CUDAToolkit_INCLUDE_DIRS}/cccl
 )
 
 # Add dependency on nccl_header
 add_dependencies(nccl_static nccl_header)
+add_dependencies(nccl_static generate_git_version)
 
 # Link libraries
 target_link_libraries(nccl_static

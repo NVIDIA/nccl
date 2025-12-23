@@ -9,6 +9,7 @@
 
 #include "nccl.h"
 #include "device.h"
+#include "os/os.h"
 #include <limits.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -24,12 +25,15 @@ ncclResult_t ncclTopoSortSystem(struct ncclTopoSystem* system);
 ncclResult_t ncclTopoPrint(struct ncclTopoSystem* system);
 
 ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclComm* comm);
+ncclResult_t ncclTopoCheckCrossNicSupport(bool* supported);
+ncclResult_t ncclTopoCheckNicFused(struct ncclComm* comm, bool* fused);
 void ncclTopoFree(struct ncclTopoSystem* system);
 ncclResult_t ncclTopoTrimSystem(struct ncclTopoSystem* system, struct ncclComm* comm);
 ncclResult_t ncclTopoComputeP2pChannels(struct ncclComm* comm);
+ncclResult_t ncclTopoComputeP2pChannelsPerPeer(struct ncclComm* comm);
 ncclResult_t ncclTopoGetNvbGpus(struct ncclTopoSystem* system, int rank, int* nranks, int** ranks);
 ncclResult_t ncclTopoPathAllNVLink(struct ncclTopoSystem* system, int* allNvLink);
-
+ncclResult_t ncclTopoPathAllDirectNVLink(struct ncclTopoSystem* system, bool* allNvlinkConnected);
 ncclResult_t ncclTopoComputeCommCPU(struct ncclComm* comm);
 
 // Query topology
@@ -53,7 +57,7 @@ ncclResult_t ncclGetLocalCpu(struct ncclTopoSystem* system, int gpu, int* retCpu
 ncclResult_t ncclGetUserP2pLevel(int* level);
 
 // Find CPU affinity
-ncclResult_t ncclTopoGetCpuAffinity(struct ncclTopoSystem* system, int rank, cpu_set_t* affinity);
+ncclResult_t ncclTopoGetCpuAffinity(struct ncclTopoSystem* system, int rank, ncclAffinity* affinity);
 
 #define NCCL_TOPO_CPU_ARCH_X86 1
 #define NCCL_TOPO_CPU_ARCH_POWER 2
@@ -75,7 +79,7 @@ ncclResult_t ncclTopoGetNvsCount(struct ncclTopoSystem* system, int* count);
 ncclResult_t ncclTopoGetLocalNet(struct ncclTopoSystem* system, int rank, int channelId, int64_t* id, int* dev);
 ncclResult_t ncclTopoGetLocalNets(struct ncclTopoSystem* system, int rank, int64_t* localNets, int* localNetCount);
 ncclResult_t ncclTopoGetLocalGpu(struct ncclTopoSystem* system, int64_t netId, int* gpuIndex);
-ncclResult_t getLocalNetCountByBw(struct ncclTopoSystem* system, int gpu, int *count);
+ncclResult_t getLocalNetCountByBw(struct ncclTopoSystem* system, int gpu, int *count, float* bw);
 
 enum netDevsPolicy {
   NETDEVS_POLICY_AUTO = 0x0,

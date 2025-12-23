@@ -18,6 +18,7 @@
 #include <pthread.h>
 #include <mutex>
 #include <pwd.h>
+#include "os.h"
 
 const char* userHomeDir() {
   struct passwd *pwUser = getpwuid(getuid());
@@ -44,7 +45,7 @@ void setEnvFile(const char* fileName) {
     s++;
     strncpy(envValue, line+s, 1023);
     envValue[1023]='\0';
-    setenv(envVar, envValue, 0);
+    ncclOsSetEnv(envVar, envValue);
     //printf("%s : %s->%s\n", fileName, envVar, envValue);
   }
   if (line) free(line);
@@ -53,7 +54,7 @@ void setEnvFile(const char* fileName) {
 
 static void initEnvFunc() {
   char confFilePath[1024];
-  const char* userFile = getenv("NCCL_CONF_FILE");
+  const char* userFile = std::getenv("NCCL_CONF_FILE");
   if (userFile && strlen(userFile) > 0) {
     snprintf(confFilePath, sizeof(confFilePath), "%s", userFile);
     setEnvFile(confFilePath);
@@ -76,7 +77,7 @@ void initEnv() {
 void ncclLoadParam(char const* env, int64_t deftVal, int64_t uninitialized, int64_t* cache) {
   static std::mutex mutex;
   std::lock_guard<std::mutex> lock(mutex);
-  if (__atomic_load_n(cache, __ATOMIC_RELAXED) == uninitialized) {
+  if (COMPILER_ATOMIC_LOAD(cache, std::memory_order_relaxed) == uninitialized) {
     const char* str = ncclGetEnv(env);
     int64_t value = deftVal;
     if (str && strlen(str) > 0) {
@@ -89,7 +90,7 @@ void ncclLoadParam(char const* env, int64_t deftVal, int64_t uninitialized, int6
         INFO(NCCL_ENV,"%s set by environment to %lld.", env, (long long)value);
       }
     }
-    __atomic_store_n(cache, value, __ATOMIC_RELAXED);
+    COMPILER_ATOMIC_STORE(cache, value, std::memory_order_relaxed);
   }
 }
 

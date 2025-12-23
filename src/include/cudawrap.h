@@ -10,6 +10,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include "checks.h"
+#include "compiler.h"
 
 // Is cuMem API usage enabled
 extern int ncclCuMemEnable();
@@ -128,12 +129,15 @@ extern int ncclCudaDriverVersionCache;
 extern bool ncclCudaLaunchBlocking; // initialized by ncclCudaLibraryInit()
 
 inline ncclResult_t ncclCudaDriverVersion(int* driver) {
-  int version = __atomic_load_n(&ncclCudaDriverVersionCache, __ATOMIC_RELAXED);
+  int version = COMPILER_ATOMIC_LOAD(&ncclCudaDriverVersionCache, std::memory_order_relaxed);
   if (version == -1) {
     CUDACHECK(cudaDriverGetVersion(&version));
-    __atomic_store_n(&ncclCudaDriverVersionCache, version, __ATOMIC_RELAXED);
+    COMPILER_ATOMIC_STORE(&ncclCudaDriverVersionCache, version, std::memory_order_relaxed);
   }
   *driver = version;
   return ncclSuccess;
 }
+
+ncclResult_t ncclCuStreamBatchMemOp(cudaStream_t stream, unsigned int numOps, CUstreamBatchMemOpParams* batchParams);
+
 #endif

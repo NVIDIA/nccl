@@ -272,7 +272,7 @@ struct RunWorkColl<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NCCL_P
 
     if (tid >= tidStartScatter && tid < tidStartReduce && hasUp) {
       // Scatter
-      Primitives<T, RedOp, FanAsymmetric<0, NCCL_MAX_DIRECT_ARITY>, /*Direct=*/1, Proto, 0>
+      Primitives<T, RedOp, FanAsymmetric<0, NCCL_MAX_DIRECT_ARITY>, /*Direct=*/0, Proto, 0>
         prims(tid-tidStartScatter, nThreadsScatter, NULL, direct->up, work->sendbuff, work->recvbuff,
            work->redOpArg, 2*Proto::MaxGroupWidth, 1, 1, work);
       ssize_t offsetBase, peerOffset;
@@ -299,7 +299,7 @@ struct RunWorkColl<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NCCL_P
     } else if (tid >= tidStartReduce && direct->out != -1) {
       if (hasDn) {
         // Reduce, send to network
-        Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_DIRECT_ARITY, 1>, /*Direct=*/1, Proto, 0>
+        Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_DIRECT_ARITY, 1>, /*Direct=*/0, Proto, 0>
           prims(tid-tidStartReduce, nThreadsReduce, direct->down, &direct->out, work->sendbuff, work->recvbuff,
              work->redOpArg, 3*Proto::MaxGroupWidth, 1, 1, work);
         for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
@@ -328,7 +328,7 @@ struct RunWorkColl<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NCCL_P
       }
     } else if (tid < tidStartBcast && hasUp) {
       // Gather
-      Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_DIRECT_ARITY, 0>, /*Direct=*/1, Proto, 0>
+      Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_DIRECT_ARITY, 0>, /*Direct=*/0, Proto, 0>
         prims(tid, nThreadsGather, direct->up, NULL, work->sendbuff, work->recvbuff,
            work->redOpArg, 0*Proto::MaxGroupWidth, 0, 0, work);
       ssize_t offsetBase, peerOffset;
@@ -353,7 +353,7 @@ struct RunWorkColl<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NCCL_P
         // Coverity complains about a possible overrun inside the class below, but that's actually
         // a false positive.
         // coverity[identity_transfer:FALSE]
-        Primitives<T, RedOp, FanAsymmetric<1, NCCL_MAX_DIRECT_ARITY>, /*Direct=*/1, Proto, 0>
+        Primitives<T, RedOp, FanAsymmetric<1, NCCL_MAX_DIRECT_ARITY>, /*Direct=*/0, Proto, 0>
           prims(tid-tidStartBcast, nThreadsBcast, &direct->out, direct->down, work->sendbuff, work->recvbuff,
              work->redOpArg, 1*Proto::MaxGroupWidth, 0, 0, work);
         for (ssize_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {

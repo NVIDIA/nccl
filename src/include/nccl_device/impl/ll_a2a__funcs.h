@@ -10,7 +10,7 @@
 #include "comm__types.h"
 #include "../utility.h"
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 template<typename Coop>
 NCCL_DEVICE_INLINE ncclLLA2ASession<Coop>::ncclLLA2ASession(
     Coop coop, ncclDevComm const& comm, ncclTeam team,
@@ -28,7 +28,7 @@ NCCL_DEVICE_INLINE ncclLLA2ASession<Coop>::ncclLLA2ASession(
 }
 #endif
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 template<typename Coop>
 NCCL_DEVICE_INLINE ncclLLA2ASession<Coop>::~ncclLLA2ASession() {
   uint4* line = (uint4*)ncclGetResourceBufferLocalPointer(this->comm, this->handle.bufHandle);
@@ -38,7 +38,7 @@ NCCL_DEVICE_INLINE ncclLLA2ASession<Coop>::~ncclLLA2ASession() {
 }
 #endif
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 template<typename Coop>
 template<typename T>
 NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::send(int peer, int elt, T data) {
@@ -57,7 +57,7 @@ NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::send(int peer, int elt, T data) 
 }
 #endif
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 template<typename Coop>
 template<typename T>
 NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::bcast(int elt, T data) {
@@ -115,7 +115,7 @@ NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::bcast(int elt, T data) {
 }
 #endif
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 template<typename Coop>
 template<typename T>
 NCCL_DEVICE_INLINE T ncclLLA2ASession<Coop>::recv(int elt) {
@@ -125,7 +125,7 @@ NCCL_DEVICE_INLINE T ncclLLA2ASession<Coop>::recv(int elt) {
 }
 #endif
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 template<typename Coop>
 template<int MinEltCount, int MaxEltCount, typename T>
 NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::recvUnrolled(int eltStart, int eltCount, int eltStride, T(&elts)[MaxEltCount]) {
@@ -176,7 +176,7 @@ NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::recvUnrolled(int eltStart, int e
 }
 #endif
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 template<typename Coop>
 template<int Unroll, typename Elt, typename EltToAcc, typename Reduce>
 NCCL_DEVICE_INLINE auto ncclLLA2ASession<Coop>::recvReduce(
@@ -208,7 +208,7 @@ NCCL_DEVICE_INLINE auto ncclLLA2ASession<Coop>::recvReduce(
 }
 #endif
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 template<typename Coop>
 NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::endEpoch(Coop) {
   if (__builtin_expect(this->epoch >= -2u, false)) {

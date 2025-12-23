@@ -14,7 +14,7 @@ struct ncclLLA2AHandle {
   uint32_t nSlots;
 };
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 template<typename Coop>
 struct ncclLLA2ASession_internal {
   Coop coop;

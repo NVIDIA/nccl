@@ -11,41 +11,61 @@
 #include "register_inline.h"
 #include "gin/gin_host.h"
 #include "gin/gin_host_proxy.h"
+#include "compiler.h"
 
 NCCL_PARAM(GinEnable, "GIN_ENABLE", 1);
 NCCL_PARAM(GinType, "GIN_TYPE", -1);
 NCCL_PARAM(GinSignalPoolSize, "GIN_SIGNAL_POOL_SIZE", 64 << 10);
 NCCL_PARAM(GinCounterPoolSize, "GIN_COUNTER_POOL_SIZE", 64 << 10);
 
-void* ncclGinProgress(void* ginState_) {
+ncclResult_t getGinType(struct ncclComm* comm, ncclGinType_t* ginType) {
+  if (comm == nullptr || ginType == nullptr) {
+    return ncclInternalError;
+  }
+  if (!comm->ginSupport) {
+    *ginType = NCCL_GIN_TYPE_NONE;
+    return ncclSuccess;
+  }
+  ncclNetProperties_t props;
+  NCCLCHECK(comm->sharedRes->ginState.ncclGin->getProperties(0, &props));
+  if (props.netDeviceType == NCCL_NET_DEVICE_GIN_PROXY) {
+    *ginType = NCCL_GIN_TYPE_PROXY;
+    return ncclSuccess;
+  }
+  if (props.netDeviceType == NCCL_NET_DEVICE_GIN_GDAKI) {
+    *ginType = NCCL_GIN_TYPE_GDAKI;
+    return ncclSuccess;
+  }
+  WARN("Cannot get gin type: ncclGin is not null but net device type (%d) is not a gin type", props.netDeviceType);
+  return ncclInternalError;
+}
+
+void* ncclGinProgress(struct ncclGinState* ginState_) {
   struct ncclGinState* ginState = (struct ncclGinState*)ginState_;
   while (1) {
-    pthread_mutex_lock(&ginState->threadLock);
+    std::unique_lock<std::mutex> lock(ginState->mutex);
     if (ginState->ginProgress == 1) {
-      pthread_mutex_unlock(&ginState->threadLock);
+      lock.unlock();
       for (int n=0; n<ginState->ginCommCount; n++) {
         ncclResult_t ret;
-        if (ginState->ginType == NCCL_NET_DEVICE_GIN_PROXY) {
+        if (ginState->ginType == NCCL_GIN_TYPE_PROXY) {
           ret = ncclGinProxyProgress(ginState->ncclGin, ginState->ginCtx[n]);
         } else {
           ret = ginState->ncclGin->ginProgress(ginState->ginComms[n]);
         }
         if (ret != ncclSuccess) {
-          __atomic_store_n(&ginState->asyncResult, ret, __ATOMIC_RELEASE);
+          COMPILER_ATOMIC_STORE(&ginState->asyncResult, ret, std::memory_order_release);
           INFO(NCCL_ALL,"%s:%d -> %d [GIN Progress Thread]", __FILE__, __LINE__, ret);
           ginState->ginProgress = -2;
           return NULL;
         }
       }
-      sched_yield();
+      std::this_thread::yield();
     } else if (ginState->ginProgress == -1) {
-      pthread_mutex_unlock(&ginState->threadLock);
       return NULL;
     } else if (ginState->ginProgress == 0) {
-      pthread_cond_wait(&ginState->threadCond, &ginState->threadLock);
-      pthread_mutex_unlock(&ginState->threadLock);
+      ginState->cond.wait(lock);
     } else {
-      pthread_mutex_unlock(&ginState->threadLock);
       INFO(NCCL_ALL,"%s:%d -> [GIN Progress Thread] state unknown %d", __FILE__, __LINE__, ginState->ginProgress);
       ginState->ginProgress = -2;
       return NULL;
@@ -77,9 +97,7 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
     return ncclInternalError;
   }
 
-  ncclNetProperties_t props;
-  NCCLCHECK(ginState->ncclGin->getProperties(0, &props));
-  ginState->ginType = props.netDeviceType;
+  NCCLCHECK(getGinType(comm, &ginState->ginType));
   if ((ncclParamGinType() != -1) && (ginState->ginType != ncclParamGinType())) {
     WARN("GIN-capable device type mismatch.");
     return ncclInternalError;
@@ -120,7 +138,7 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
     NCCLCHECKGOTO(ginState->ncclGin->connect(comm->ginContext, handles, comm->nRanks, comm->rank,
                                              listenComm, ginState->ginComms + n),
                   ret, fail);
-    if (ginState->ginType == NCCL_NET_DEVICE_GIN_PROXY) {
+    if (ginState->ginType == NCCL_GIN_TYPE_PROXY) {
       NCCLCHECKGOTO(ncclGinProxyCreateContext(comm, ginState->ginComms[n], localNets[n%nLocalNets],
                                               ginState->signalSpaceSize, ginState->counterSpaceSize,
                                               &ginState->ginCtx[n], &ginState->ginDevHandles[n]),
@@ -145,9 +163,7 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
   }
   if (ginState->needsProxyProgress) {
     ginState->ginProgress = 1;
-    pthread_mutex_init(&ginState->threadLock, NULL);
-    pthread_cond_init(&ginState->threadCond, NULL);
-    PTHREADCHECK(pthread_create(&ginState->thread, NULL, ncclGinProgress, ginState), "pthread_create");
+    ginState->thread = std::thread(ncclGinProgress, ginState);
     ncclSetThreadName(ginState->thread, "NCCL GIN Progress%2d", comm->cudaDev);
   }
 
@@ -168,14 +184,15 @@ ncclResult_t ncclGinFinalize(struct ncclComm* comm) {
   if (!ginState->connected) return ncclSuccess;
 
   if (ginState->needsProxyProgress) {
-    pthread_mutex_lock(&ginState->threadLock);
-    comm->sharedRes->ginState.ginProgress = -1;
-    pthread_cond_signal(&ginState->threadCond);
-    pthread_mutex_unlock(&ginState->threadLock);
-    PTHREADCHECK(pthread_join(ginState->thread, NULL), "pthread_join");
+    {
+      std::lock_guard<std::mutex> lock(ginState->mutex);
+      comm->sharedRes->ginState.ginProgress = -1;
+      ginState->cond.notify_one();
+    }
+    ginState->thread.join();
   }
 
-  if (ginState->ginType == NCCL_NET_DEVICE_GIN_PROXY) {
+  if (ginState->ginType == NCCL_GIN_TYPE_PROXY) {
     for (int n = 0; n < ginState->ginCommCount; n++) {
       if (ginState->ginCtx[n] != NULL) {
         NCCLCHECK(ncclGinProxyDestroyContext(ginState->ncclGin, ginState->ginCtx[n]));
@@ -195,7 +212,7 @@ ncclResult_t ncclGinFinalize(struct ncclComm* comm) {
     }
   }
   NCCLCHECK(ginState->ncclGin->finalize(ginState->ginInstance));
-  memset(ginState, 0, sizeof(*ginState));
+  memset((void*)ginState, 0, sizeof(*ginState));
   return ncclSuccess;
 }
 
@@ -204,7 +221,7 @@ ncclResult_t ncclGinRegister(struct ncclComm* comm, void* address, size_t size,
                              ncclGinWindow_t ginDevWins[NCCL_GIN_MAX_CONTEXTS]) {
   struct ncclGinState* ginState = &comm->sharedRes->ginState;
   for (int n = 0; n < ginState->ginCommCount; n++) {
-    if (ginState->ginType == NCCL_NET_DEVICE_GIN_PROXY) {
+    if (ginState->ginType == NCCL_GIN_TYPE_PROXY) {
       NCCLCHECK(ncclGinProxyRegister(ginState->ncclGin, ginState->ginCtx[n], address, size,
                                      NCCL_PTR_CUDA, 0, &ginHostWins[n], &ginDevWins[n]));
     } else {
@@ -222,7 +239,7 @@ ncclResult_t ncclGinRegister(struct ncclComm* comm, void* address, size_t size,
 ncclResult_t ncclGinDeregister(struct ncclComm* comm, void* ginHostWins[NCCL_GIN_MAX_CONTEXTS]) {
   struct ncclGinState* ginState = &comm->sharedRes->ginState;
   for (int n = 0; n < ginState->ginCommCount; n++) {
-    if (ginState->ginType == NCCL_NET_DEVICE_GIN_PROXY) {
+    if (ginState->ginType == NCCL_GIN_TYPE_PROXY) {
       NCCLCHECK(ncclGinProxyDeregister(ginState->ncclGin, ginState->ginCtx[n], ginHostWins[n]));
     } else {
       NCCLCHECK(ginState->ncclGin->deregMrSym(ginState->ginComms[n], ginHostWins[n]));
@@ -266,7 +283,7 @@ ncclResult_t ncclGinFreeSignalsCounters(struct ncclComm* comm, uint32_t signal0,
 ncclResult_t ncclGinQueryLastError(struct ncclGinState* ginState, bool* hasError) {
   bool hasError_ = false;
   for (int n = 0; n < ginState->ginCommCount; n++) {
-    if (ginState->ginType == NCCL_NET_DEVICE_GIN_PROXY)
+    if (ginState->ginType == NCCL_GIN_TYPE_PROXY)
       NCCLCHECK(ncclGinProxyQueryLastError(ginState->ncclGin, ginState->ginCtx[n], &hasError_));
     else
       NCCLCHECK(ginState->ncclGin->queryLastError(ginState->ginCtx[n], &hasError_));

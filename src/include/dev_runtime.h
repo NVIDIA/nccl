@@ -24,7 +24,9 @@ struct ncclDevrWindow {
   size_t bigOffset; // Offset in big VA space.
   int winFlags;
   void* localRegHandle;
-  struct ncclWindow_vidmem* vidmem;
+  struct ncclWindow_vidmem* vidmem; // key for intrusive map
+  struct ncclDevrWindow* next; // next for intrusive map
+  struct ncclComm* comm; // comm for intrusive map window <> comm look up
 };
 struct ncclDevrWindowSorted;
 struct ncclDevrTeam;
@@ -53,6 +55,7 @@ struct ncclDevrState {
 
   size_t granularity; // cuMemGetAllocationGranularity
   bool ginEnabled;
+  bool rmaProxyEnabled;
   struct ncclDevrMemory* memHead;
   struct ncclDevrWindowSorted* winSorted;
   int winSortedCapacity, winSortedCount;
@@ -87,6 +90,9 @@ void freeDevCommRequirements(
 
 // Get the corresponding pointer in another lsa rank's symmetric memory window
 ncclResult_t ncclDevrGetLsaRankPtr(struct ncclComm* comm, struct ncclDevrWindow* winHost, size_t offset, int lsaRank, void** outPtr);
+
+// Get the RMA device window handle for a specific context
+ncclGinWindow_t ncclDevrGetRmaDevWin(struct ncclDevrWindow* winHost, int ctx);
 
 // Get the multicast address for a given team
 ncclResult_t ncclDevrGetLsaTeamPtrMC(struct ncclComm* comm, struct ncclDevrWindow* winHost, size_t offset, struct ncclTeam lsaTeam, void** outPtr);

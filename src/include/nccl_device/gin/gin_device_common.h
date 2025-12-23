@@ -32,6 +32,7 @@
    ((NCCL_GIN_GDAKI_ENABLE) ? 1u : 0u) << (unsigned)NCCL_NET_DEVICE_GIN_GDAKI)
 
 struct ncclGinCtx {
+  unsigned backendMask;
   ncclNetDeviceType backend;
   int rank;
   int nRanks;
@@ -45,7 +46,7 @@ struct ncclGinDescriptorSmem {
   alignas(16) char space[64];
 };
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 template <ncclNetDeviceType backend>
 struct ncclGinApi_Put {
   template <typename Coop>
@@ -96,9 +97,9 @@ struct ncclGinApi_Flush {
 };
 #endif
 
-#if __CUDACC__
-template <template <ncclNetDeviceType> typename ApiFn, unsigned beMask, typename... Arg>
-NCCL_DEVICE_INLINE static decltype(auto) ncclGinCall(ncclGinCtx_M<beMask> ctx, Arg&&... arg) {
+#if NCCL_CHECK_CUDACC
+template <template <ncclNetDeviceType> typename ApiFn, typename... Arg>
+NCCL_DEVICE_INLINE static decltype(auto) ncclGinCallImpl(unsigned beMask, ncclGinCtx ctx, Arg&&... arg) {
   bool singleton = (beMask & (beMask - 1)) == 0;  // Only one bit set
   switch (singleton ? __popc(beMask - 1) : (int)ctx.backend) {
 #if NCCL_GIN_PROXY_ENABLE
@@ -114,6 +115,16 @@ NCCL_DEVICE_INLINE static decltype(auto) ncclGinCall(ncclGinCtx_M<beMask> ctx, A
     default:
       __builtin_unreachable();
   }
+}
+
+template <template <ncclNetDeviceType> typename ApiFn, typename... Arg>
+NCCL_DEVICE_INLINE static decltype(auto) ncclGinCall(ncclGinCtx ctx, Arg&&... arg) {
+  return ncclGinCallImpl<ApiFn>(ctx.backendMask, ctx, static_cast<Arg&&>(arg)...);
+}
+
+template <template <ncclNetDeviceType> typename ApiFn, unsigned beMask, typename... Arg>
+NCCL_DEVICE_INLINE static decltype(auto) ncclGinCall(ncclGinCtx_M<beMask> ctx, Arg&&... arg) {
+  return ncclGinCallImpl<ApiFn>(beMask, ctx, static_cast<Arg&&>(arg)...);
 }
 #endif
 

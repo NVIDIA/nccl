@@ -7,9 +7,31 @@
 #ifndef _NCCL_DEVICE_UTILITY_H_
 #define _NCCL_DEVICE_UTILITY_H_
 
-#if __CUDACC__
-  #define NCCL_DEVICE_INLINE __device__ __forceinline__
-  #define NCCL_HOST_DEVICE_INLINE __host__ __device__ __forceinline__
+// compiler specific check for __CUDACC__
+#ifndef NCCL_CHECK_CUDACC
+    #if defined(__clang__)
+        #ifdef __CUDACC__
+            #define NCCL_CHECK_CUDACC 1
+        #else
+            #define NCCL_CHECK_CUDACC 0
+        #endif
+    #else
+        #if __CUDACC__
+            #define NCCL_CHECK_CUDACC 1
+        #else
+            #define NCCL_CHECK_CUDACC 0
+        #endif
+    #endif
+#endif
+
+#if NCCL_CHECK_CUDACC
+  #if defined(NCCL_HOSTLIB_ONLY) || defined(__clang_llvm_bitcode_lib__)
+    #define NCCL_DEVICE_INLINE __device__ __attribute__((always_inline))
+    #define NCCL_HOST_DEVICE_INLINE __host__ __device__ __attribute__((always_inline))
+  #else
+    #define NCCL_DEVICE_INLINE __device__ __forceinline__
+    #define NCCL_HOST_DEVICE_INLINE __host__ __device__ __forceinline__
+  #endif
 #else
   #ifndef __host__
     #define __host__
@@ -24,10 +46,16 @@
 #define NCCL_EXTERN_C
 #endif
 
+#ifdef __clang_llvm_bitcode_lib__
+#define NCCL_IR_EXTERN_C extern "C"
+#else
+#define NCCL_IR_EXTERN_C
+#endif
+
 #include <stdint.h>
 #include <stdbool.h>
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 #include <cuda/atomic>
 #endif
 
@@ -45,7 +73,7 @@ struct ValueAsType { static constexpr T value = value_; };
 
 // Returns the value zero but the compiler cannot prove that it is zero so it
 // is useful to inhibit compiler optimizations.
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 template<typename=void>
 NCCL_DEVICE_INLINE int opaqueZero() {
   __device__ static int zero = 0;
@@ -203,7 +231,7 @@ NCCL_HOST_DEVICE_INLINE uint32_t imodFast64(uint64_t x, uint64_t y, uint64_t yrc
   return r;
 }
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 // Precomputed integer reciprocoals for denominator values 1..64 inclusive.
 // Pass these to idivFast64() for fast division on the GPU.
 NCCL_DEVICE_INLINE uint64_t idivRcp64_upto64(int x) {
@@ -230,13 +258,13 @@ NCCL_DEVICE_INLINE uint64_t idivRcp64_upto64(int x) {
 }
 #endif
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 NCCL_DEVICE_INLINE uint32_t idivRcp32_upto64(int x) {
   return idivRcp64_upto64(x)>>32;
 }
 #endif
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 NCCL_DEVICE_INLINE cuda::memory_order acquireOrderOf(cuda::memory_order ord) {
   return ord == cuda::memory_order_release ? cuda::memory_order_relaxed :
          ord == cuda::memory_order_acq_rel ? cuda::memory_order_acquire :
@@ -249,7 +277,7 @@ NCCL_DEVICE_INLINE cuda::memory_order releaseOrderOf(cuda::memory_order ord) {
 }
 #endif
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 template<typename T>
 NCCL_DEVICE_INLINE T atomicLoad(T* ptr, cuda::memory_order ord, cuda::thread_scope scope) {
   switch (scope) {
@@ -266,7 +294,7 @@ NCCL_DEVICE_INLINE T atomicLoad(T* ptr, cuda::memory_order ord, cuda::thread_sco
 }
 #endif
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 template<typename T>
 NCCL_DEVICE_INLINE void atomicStore(T* ptr, T val, cuda::memory_order ord, cuda::thread_scope scope) {
   switch (scope) {
@@ -287,7 +315,7 @@ NCCL_DEVICE_INLINE void atomicStore(T* ptr, T val, cuda::memory_order ord, cuda:
 }
 #endif
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 NCCL_DEVICE_INLINE int lane() {
   int ret;
   asm("mov.u32 %0, %%laneid;" : "=r"(ret));
@@ -300,7 +328,7 @@ NCCL_DEVICE_INLINE unsigned int lanemask_lt() {
 }
 #endif
 
-#if __CUDACC__
+#if NCCL_CHECK_CUDACC
 // Load anything, but cache like its constant memory.
 template<typename T>
 NCCL_DEVICE_INLINE T loadConst(T const *p) {
@@ -389,7 +417,7 @@ struct Optional {
   // Construct with present thing:
   template<typename ...Arg>
   NCCL_HOST_DEVICE_INLINE Optional(Present<Arg...> args):
-    Optional(args, IntSeqUpTo<sizeof...(Arg), 0>::Type()) {
+    Optional(args, typename IntSeqUpTo<sizeof...(Arg), 0>::Type()) {
   }
 
   NCCL_HOST_DEVICE_INLINE ~Optional() {

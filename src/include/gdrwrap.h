@@ -12,16 +12,13 @@
 #include <stdint.h> // for standard [u]intX_t types
 #include <stdio.h>
 #include <stdlib.h>
+#include <mutex>
 
 // These can be used if the GDR library isn't thread safe
-#include <pthread.h>
-extern pthread_mutex_t gdrLock;
-#define GDRLOCK() pthread_mutex_lock(&gdrLock)
-#define GDRUNLOCK() pthread_mutex_unlock(&gdrLock)
+std::mutex& getGdrMutex();
 #define GDRLOCKCALL(cmd, ret) do {                      \
-    GDRLOCK();                                          \
+    std::lock_guard<std::mutex> lock(getGdrMutex());   \
     ret = cmd;                                          \
-    GDRUNLOCK();                                        \
 } while(false)
 
 #define GDRCHECK(cmd) do {                              \

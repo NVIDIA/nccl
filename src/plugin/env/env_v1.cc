@@ -29,12 +29,12 @@ static ncclResult_t ncclEnvFinalize(void) {
 }
 
 static const char* ncclEnvGetEnv(const char* name) {
-  return getenv(name);
+  return std::getenv(name);
 }
 
 ncclEnv_v1_t ncclIntEnv_v1 = {
-  .name = "ncclEnvDefault",
-  .init = ncclEnvInit,
-  .finalize = ncclEnvFinalize,
-  .getEnv = ncclEnvGetEnv,
+  "ncclEnvDefault",
+  ncclEnvInit,
+  ncclEnvFinalize,
+  ncclEnvGetEnv,
 };

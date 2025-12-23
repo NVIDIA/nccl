@@ -36,6 +36,8 @@ struct ncclRing;
 struct ncclConnector;
 struct ncclComm;
 
+int64_t ncclParamMultiSegmentRegister();
+
 struct ncclPeerInfo {
   int rank;
   int cudaDev;

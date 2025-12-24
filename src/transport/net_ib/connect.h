@@ -69,4 +69,6 @@ ncclResult_t ncclIbQpInit(struct ncclIbQp* qp);
 ncclResult_t ncclIbQpRtr(struct ncclIbQp* qp);
 ncclResult_t ncclIbQpRts(struct ncclIbQp* qp);
 
+ncclResult_t ncclIbPostReceiveWorkRequestsOnQp(struct ncclIbRecvComm* recvComm, ncclIbQp* dataQp);
+
 #endif // NET_IB_CONNECT_H_

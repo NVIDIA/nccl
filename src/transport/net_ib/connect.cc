@@ -1101,18 +1101,22 @@ static ncclResult_t ncclIbReceiverQpsCreateToRts(ncclIbRecvComm* rComm, struct n
   return ncclSuccess;
 }
 
-ncclResult_t ncclIbReceiverPrePostReceiveWorkRequests(struct ncclIbRecvComm* recvComm) {
+ncclResult_t ncclIbPostReceiveWorkRequestsOnQp(struct ncclIbRecvComm* recvComm, ncclIbQp* dataQp) {
   uint32_t nRecvWorkRequestsPerQp = NET_IB_MAX_REQUESTS;
+  if (recvComm->base.resiliency) {
+    ncclIbResiliencyDataRqSizeGet(recvComm->base.resiliency, dataQp->devIndex, &nRecvWorkRequestsPerQp);
+  }
+  INFO(NCCL_NET, "NET/IB: %s: Pre-posting %d Receive WQEs on QP (qp_num=%d, comm=%p)", __func__, nRecvWorkRequestsPerQp, dataQp->qp->qp_num, recvComm);
+  for (int j = 0; j < nRecvWorkRequestsPerQp; j++) {
+    NCCLCHECK(ncclIbPostRecvWorkRequest(dataQp->qp, &recvComm->ibRecvWorkRequest));
+  }
+  return ncclSuccess;
+}
+
+ncclResult_t ncclIbReceiverPrePostReceiveWorkRequests(struct ncclIbRecvComm* recvComm) {
   int nqps = recvComm->base.nqps;
   for (int i = 0; i < nqps; i++) {
-    struct ncclIbQp* dataQp = &recvComm->base.qps[i];
-    if (recvComm->base.resiliency) {
-      ncclIbResiliencyDataRqSizeGet(recvComm->base.resiliency, dataQp->devIndex, &nRecvWorkRequestsPerQp);
-    }
-    INFO(NCCL_NET, "NET/IB: %s: Pre-posting %d Receive WQEs on QP %d (qp_num=%d, comm=%p) (out of total %d QPs)", __func__, nRecvWorkRequestsPerQp, i, dataQp->qp->qp_num, recvComm, nqps);
-    for (int j = 0; j < nRecvWorkRequestsPerQp; j++) {
-      NCCLCHECK(ncclIbPostRecvWorkRequest(dataQp->qp, &recvComm->ibRecvWorkRequest));
-    }
+    NCCLCHECK(ncclIbPostReceiveWorkRequestsOnQp(recvComm, &recvComm->base.qps[i]));
   }
   return ncclSuccess;
 }

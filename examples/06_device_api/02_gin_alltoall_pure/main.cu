@@ -166,8 +166,8 @@ void* pureGinAlltoAll(int my_rank, int total_ranks, int local_device, int device
 
   // Create device communicator with GIN support
   ncclDevComm devComm;
-  ncclDevCommRequirements reqs;
-  memset(&reqs, 0, sizeof(reqs));
+  // It must be initialized via NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER
+  ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
   reqs.railGinBarrierCount = NCCL_DEVICE_CTA_COUNT;  // GIN barriers for network synchronization
   reqs.ginSignalCount = 1;  // GIN signals for completion detection
   NCCLCHECK(ncclDevCommCreate(comm, &reqs, &devComm));

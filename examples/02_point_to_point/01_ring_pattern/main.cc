@@ -253,6 +253,7 @@ int main(int argc, char *argv[]) {
 
   // Destroy communicators and streams
   for (int i = 0; i < num_gpus; i++) {
+    NCCLCHECK(ncclCommFinalize(comms[i]));
     NCCLCHECK(ncclCommDestroy(comms[i]));
     CUDACHECK(cudaSetDevice(devices[i]));
     CUDACHECK(cudaStreamDestroy(streams[i]));

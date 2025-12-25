@@ -109,6 +109,7 @@ void *thread_worker(void *arg) {
   // Destroy NCCL communicator FIRST (before CUDA resources)
   // This is important - NCCL cleanup should happen before CUDA cleanup
   if (data->comms[thread_id] != NULL) {
+    NCCLCHECK(ncclCommFinalize(data->comms[thread_id]));
     NCCLCHECK(ncclCommDestroy(data->comms[thread_id]));
     printf("  Thread %d: Destroyed NCCL communicator\n", comm_thread_id);
   }

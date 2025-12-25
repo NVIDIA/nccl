@@ -16,7 +16,7 @@ This example showcases **hybrid communication** that intelligently selects the o
 ## What This Example Does
 
 1. **Creates hybrid device communicators** using `ncclDevCommCreate` with both LSA and GIN support for optimal peer communication
-2. **Registers symmetric memory windows** with `ncclCommWindowRegister` for both LSA direct access and GIN network operations  
+2. **Registers symmetric memory windows** with `ncclCommWindowRegister` for both LSA direct access and GIN network operations
 3. **Launches GPU kernel** that performs AlltoAll operations using LSA for local peers and GIN for remote peers
 4. **Demonstrates hybrid synchronization** coordinating both LSA barriers and GIN signals for correctness
 
@@ -31,12 +31,12 @@ make [MPI=1] [MPI_HOME=<path-to-mpi>] [NCCL_HOME=<path-to-nccl>] [CUDA_HOME=<pat
 
 ### Run when compiled for pthreads (default)
 ```bash
-[NTHREADS=N] ./gin_alltoall_hybrid_device_api
+[NTHREADS=N] ./alltoall_hybrid
 ```
 
 ### Run when compiled for MPI
 ```bash
-mpirun -np <num_processes> ./gin_alltoall_hybrid_device_api
+mpirun -np <num_processes> ./alltoall_hybrid
 ```
 
 ## Code Walk-through
@@ -46,11 +46,10 @@ The `ncclDevComm` is the core component enabling GPU kernels to perform both loc
 
 ```cpp
 ncclDevComm devComm;
-ncclDevCommRequirements reqs;
-memset(&reqs, 0, sizeof(reqs));
+ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
 // LSA barriers enable direct memory access coordination for local peers
 reqs.lsaBarrierCount = NCCL_DEVICE_CTA_COUNT;
-// GIN barriers enable cross-node synchronization over the network  
+// GIN barriers enable cross-node synchronization over the network
 reqs.railGinBarrierCount = NCCL_DEVICE_CTA_COUNT;
 // GIN signals provide completion notifications for asynchronous network operations
 reqs.ginSignalCount = 1;
@@ -76,7 +75,7 @@ Hybrid barriers coordinate both local LSA operations and remote GIN operations. 
 
 ```cpp
 // Hybrid barriers coordinate both LSA and GIN operations across all ranks
-ncclBarrierSession<ncclCoopCta> bar { 
+ncclBarrierSession<ncclCoopCta> bar {
     ncclCoopCta(),              // Barrier scope: entire CTA (thread block)
     ncclTeamTagWorld(),         // Team spanning all ranks (local + remote)
     gin,                        // GIN context for network coordination
@@ -119,10 +118,10 @@ make
 ### Run with pthread mode (default)
 ```bash
 # Run with all available GPUs
-./gin_alltoall_hybrid_device_api
+./alltoall_hybrid
 
 # Run with specific number of GPUs
-NTHREADS=4 ./gin_alltoall_hybrid_device_api
+NTHREADS=4 ./alltoall_hybrid
 ```
 
 ### Run with MPI mode
@@ -131,7 +130,7 @@ NTHREADS=4 ./gin_alltoall_hybrid_device_api
 make MPI=1
 
 # Run with MPI across multiple nodes
-mpirun -np 4 --hostfile hosts ./gin_alltoall_hybrid_device_api
+mpirun -np 4 --hostfile hosts ./alltoall_hybrid
 ```
 
 ### Test
@@ -173,15 +172,14 @@ Hybrid AlltoAll result: PASSED
 
 ## When to Use
 
-- **Multi-node training**: Mixed local/remote communication patterns
-- **Large-scale inference**: Optimized for various topologies
+- **Multi-node usage**: Mixed local/remote communication patterns
 - **Production workloads**: Where performance is critical
 - **Heterogeneous clusters**: Different node configurations
 
 ## Performance Considerations
 
 **Advantages:**
-- **Reduced Latency**: LSA provides ultra-low latency for local communication
+- **Reduced Latency**: LSA provides low latency for local communication
 - **Optimal Bandwidth**: GIN efficiently handles remote communication
 - **Reduced Network Load**: Local traffic stays off the network
 - **Scalable Design**: Efficient across different node configurations
@@ -199,12 +197,6 @@ Hybrid AlltoAll result: PASSED
 
 ### Issue: Hybrid synchronization failures
 **Solution:** Ensure both `lsaBarrierCount` and `railGinBarrierCount` match the number of thread blocks in kernel launch configuration
-
-### Issue: Peer classification errors
-**Solution:** Verify LSA team setup and ensure symmetric memory allocation is properly configured for all ranks
-
-### Issue: Mixed communication performance issues
-**Solution:** Profile LSA vs GIN usage patterns and optimize barrier configurations for your specific topology
 
 ## Performance Notes
 

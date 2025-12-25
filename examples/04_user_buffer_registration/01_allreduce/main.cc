@@ -193,12 +193,12 @@ void *allReduce(int my_rank, int total_ranks, int local_device,
   NCCLCHECK(ncclMemFree(d_sendbuff));
   NCCLCHECK(ncclMemFree(d_recvbuff));
 
-  // Destroy CUDA stream
-  CUDACHECK(cudaStreamDestroy(stream));
-
   // Finalize and destroy NCCL communicator
   NCCLCHECK(ncclCommFinalize(comm));
   NCCLCHECK(ncclCommDestroy(comm));
+
+  // Destroy CUDA stream
+  CUDACHECK(cudaStreamDestroy(stream));
 
   if (my_rank == 0) {
     printf("All resources cleaned up successfully\n");

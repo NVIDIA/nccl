@@ -13,7 +13,7 @@
 #include <string.h>
 #include <sys/time.h>
 #include <unistd.h>
- 
+
 /*
  * NCCL Device API Hybrid AlltoAll Example
  *
@@ -46,12 +46,12 @@
  * - Reduced network traffic for local operations
  * - Optimal bandwidth utilization across communication types
  */
- 
+
 // Device API kernel launch configuration
 // CTA count must match railGinBarrierCount for proper barrier synchronization
 #define NCCL_DEVICE_CTA_COUNT 16
 #define NCCL_DEVICE_THREADS_PER_CTA 512
- 
+
 // ==========================================================================
 // Device Kernel Implementation
 // ==========================================================================
@@ -59,8 +59,8 @@
 // Hybrid AlltoAll kernel - optimizes by using LSA for local peers, GIN for remote
 // This kernel demonstrates performance optimization using both communication methods
 template <typename T>
-__global__ void HybridAlltoAllKernel(ncclWindow_t sendwin, size_t sendoffset, 
-                                      ncclWindow_t recvwin, size_t recvoffset, 
+__global__ void HybridAlltoAllKernel(ncclWindow_t sendwin, size_t sendoffset,
+                                      ncclWindow_t recvwin, size_t recvoffset,
                                       size_t count, int root, struct ncclDevComm devComm) {
   int ginContext = 0;
   unsigned int signalIndex = 0;
@@ -112,11 +112,11 @@ __global__ void HybridAlltoAllKernel(ncclWindow_t sendwin, size_t sendoffset,
   // Final synchronization barrier
   bar.sync(ncclCoopCta(), cuda::memory_order_release, ncclGinFenceLevel::Relaxed);
 }
- 
+
  // ==========================================================================
  // Host-Side Setup and Device API Initialization
  // ==========================================================================
- 
+
 void* hybridAlltoAll(int my_rank, int total_ranks, int local_device, int devices_per_rank) {
   ncclComm_t comm;
   ncclUniqueId nccl_unique_id;
@@ -136,7 +136,7 @@ void* hybridAlltoAll(int my_rank, int total_ranks, int local_device, int devices
   // Set device context for this rank
   CUDACHECK(cudaSetDevice(local_device));
   printf("  Rank %d using GPU device %d\n", my_rank, local_device);
- 
+
   // ==========================================================================
   // STEP 2: Initialize NCCL Communicator and Allocate Memory
   // ==========================================================================
@@ -177,7 +177,7 @@ void* hybridAlltoAll(int my_rank, int total_ranks, int local_device, int devices
   }
   CUDACHECK(cudaMemcpy(d_sendbuff, h_sendbuff, size_bytes, cudaMemcpyHostToDevice));
   printf("  Rank %d initialized send data\n", my_rank);
- 
+
   // ==========================================================================
   // STEP 4: Create Device Communicator with Hybrid Support
   // ==========================================================================
@@ -188,8 +188,7 @@ void* hybridAlltoAll(int my_rank, int total_ranks, int local_device, int devices
 
   // Create device communicator with both LSA and GIN support
   ncclDevComm devComm;
-  ncclDevCommRequirements reqs;
-  memset(&reqs, 0, sizeof(reqs));
+  ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
   reqs.lsaBarrierCount = NCCL_DEVICE_CTA_COUNT;  // LSA barriers for local synchronization
   reqs.railGinBarrierCount = NCCL_DEVICE_CTA_COUNT;  // GIN barriers for network synchronization
   reqs.ginSignalCount = 1;  // GIN signals for completion detection
@@ -234,7 +233,7 @@ void* hybridAlltoAll(int my_rank, int total_ranks, int local_device, int devices
       float expected = (float)(src_rank * 1000 + my_rank * 100 + i);
       if (h_recvbuff[recv_idx] != expected) {
         hybrid_success = false;
-        printf("  Rank %d: Hybrid mismatch at [%d][%zu]: got %.0f, expected %.0f\n", 
+        printf("  Rank %d: Hybrid mismatch at [%d][%zu]: got %.0f, expected %.0f\n",
                my_rank, src_rank, i, h_recvbuff[recv_idx], expected);
         break;
       }
@@ -248,30 +247,30 @@ void* hybridAlltoAll(int my_rank, int total_ranks, int local_device, int devices
       printf("✓ All %zu elements correctly exchanged using hybrid communication\n", total_elements);
     }
   }
- 
+
   // ==========================================================================
   // STEP 7: Cleanup Resources
   // ==========================================================================
- 
+
     // Cleanup host memory
     free(h_sendbuff);
     free(h_recvbuff);
-  
+
     // Device API specific cleanup
     NCCLCHECK(ncclDevCommDestroy(comm, &devComm));
     NCCLCHECK(ncclCommWindowDeregister(comm, send_win));
     NCCLCHECK(ncclCommWindowDeregister(comm, recv_win));
     NCCLCHECK(ncclMemFree(d_sendbuff));
     NCCLCHECK(ncclMemFree(d_recvbuff));
-  
+
     // Standard NCCL cleanup
-    CUDACHECK(cudaStreamDestroy(stream));
     NCCLCHECK(ncclCommFinalize(comm));
     NCCLCHECK(ncclCommDestroy(comm));
-  
+    CUDACHECK(cudaStreamDestroy(stream));
+
     return NULL;
 }
- 
+
 int main(int argc, char* argv[]) {
   // Run example using the provided utility framework
   return run_example(argc, argv, hybridAlltoAll);

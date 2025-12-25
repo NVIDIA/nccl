@@ -226,6 +226,7 @@ int main(int argc, char *argv[]) {
   // Destroy NCCL communicator FIRST (before CUDA resources)
   // This is important - NCCL cleanup should happen before CUDA cleanup
   if (comm != NULL) {
+    NCCLCHECK(ncclCommFinalize(comm));
     NCCLCHECK(ncclCommDestroy(comm));
     printf("  Rank %d destroyed NCCL communicator\n", mpi_rank);
   }

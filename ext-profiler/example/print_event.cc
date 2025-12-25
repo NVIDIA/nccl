@@ -18,7 +18,7 @@
 // category that matches the type of event (GROUP API, COLL API, P2P API, GROUP, COLL, P2P, PROXY, NET)
 static __thread int groupApiId;
 __hidden void printGroupApiEventHeader(FILE* fh, struct groupApi* event) {
-  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"GROUP_API\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"groupApiId\": %d, \"groupDepth\":%d}},\n",
+  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"GROUP_API\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"groupApiId\": %d, \"groupDepth\": %d}},\n",
           "Group API", groupApiId, getpid(), 1, event->startTs, event->groupApiId, event->groupDepth);
 }
 
@@ -29,8 +29,8 @@ __hidden void printGroupApiEventTrailer(FILE* fh, struct groupApi* event) {
 
 static __thread int p2pApiId;
 __hidden void printP2pApiEventHeader(FILE* fh, struct p2pApi* event) {
-  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"P2P_API\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"count\": %lu, \"datatype\": %s, \"GraphCaptured\":%d, \"Stream\": %p}},\n",
-      event->func, p2pApiId, getpid(), 1, event->startTs, event->count, event->datatype, event->graphCaptured, event->stream);
+  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"P2P_API\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"count\": %lu, \"datatype\": \"%s\", \"GraphCaptured\": %d, \"Stream\": \"%p\"}},\n",
+          event->func, p2pApiId, getpid(), 1, event->startTs, event->count, event->datatype, event->graphCaptured, event->stream);
 }
 
 __hidden void printP2pApiEventTrailer(FILE* fh, struct p2pApi* event) {
@@ -40,18 +40,18 @@ __hidden void printP2pApiEventTrailer(FILE* fh, struct p2pApi* event) {
 
 static __thread int collApiId;
 __hidden void printCollApiEventHeader(FILE* fh, struct collApi* event) {
-  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"COLL_API\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"count\": %lu, \"datatype\": %s, \"root\": %d, \"GraphCaptured\":%d, \"Stream\": %p}},\n",
-      event->func, collApiId, getpid(), 1, event->startTs, event->count, event->datatype, event->root, event->graphCaptured, event->stream);
+  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"COLL_API\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"count\": %lu, \"datatype\": \"%s\", \"root\": %d, \"GraphCaptured\": %d, \"Stream\": \"%p\"}},\n",
+          event->func, collApiId, getpid(), 1, event->startTs, event->count, event->datatype, event->root, event->graphCaptured, event->stream);
 }
 
 __hidden void printCollApiEventTrailer(FILE* fh, struct collApi* event) {
   fprintf(fh, "{\"name\": \"%s\", \"cat\": \"COLL_API\", \"ph\": \"e\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f},\n",
-      event->func, collApiId++, getpid(), 1, event->stopTs);
+          event->func, collApiId++, getpid(), 1, event->stopTs);
 }
 
 static __thread int kernelLaunchId;
 __hidden void printKernelLaunchEventHeader(FILE* fh, struct kernelLaunch* event) {
-  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"KERNEL_LAUNCH\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"groupId\": %d, \"Stream\": %p}},\n", "KernelLaunch", kernelLaunchId, getpid(), 1, event->startTs, event->kernelLaunchId, event->stream);
+  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"KERNEL_LAUNCH\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"groupId\": %d, \"Stream\": \"%p\"}},\n", "KernelLaunch", kernelLaunchId, getpid(), 1, event->startTs, event->kernelLaunchId, event->stream);
 }
 
 __hidden void printKernelLaunchEventTrailer(FILE* fh, struct kernelLaunch* event) {
@@ -212,6 +212,50 @@ __hidden void printNetPluginEvent(FILE* fh, struct netPlugin* event) {
 }
 
 //#define DEBUG_EVENTS
+// Debug helper functions for CE events
+#ifdef DEBUG_EVENTS
+static void debugCeCollEvent(FILE* fh, struct ceColl* event, const char* tag) {
+  fprintf(fh, "CeColl event %p tag = %s {\n", event, tag);
+  fprintf(fh, "  func              = %s\n", event->base.func);
+  fprintf(fh, "  eventId           = %lu\n", event->eventId);
+  fprintf(fh, "  timingMode        = %s\n", event->timingMode == CE_TIMING_GPU ? "gpu" : "cpu");
+  fprintf(fh, "  startCompleted    = %d\n", event->startCompleted);
+  fprintf(fh, "  stopCompleted     = %d\n", event->stopCompleted);
+  fprintf(fh, "  startTs           = %f\n", event->base.startTs);
+  fprintf(fh, "  stopTs            = %f\n", event->base.stopTs);
+  fprintf(fh, "  cpuDuration       = %lu us\n", event->cpuDuration);
+  fprintf(fh, "  elapsedTime       = %lu us\n", event->elapsedTime);
+  fprintf(fh, "}\n");
+}
+
+static void debugCeSyncEvent(FILE* fh, struct ceSync* event, const char* tag) {
+  fprintf(fh, "CeSync event %p tag = %s {\n", event, tag);
+  fprintf(fh, "  syncType          = %s\n", event->isComplete ? "Complete" : "Ready");
+  fprintf(fh, "  eventId           = %lu\n", event->eventId);
+  fprintf(fh, "  timingMode        = %s\n", event->timingMode == CE_TIMING_GPU ? "gpu" : "cpu");
+  fprintf(fh, "  startCompleted    = %d\n", event->startCompleted);
+  fprintf(fh, "  stopCompleted     = %d\n", event->stopCompleted);
+  fprintf(fh, "  startTs           = %f\n", event->base.startTs);
+  fprintf(fh, "  stopTs            = %f\n", event->base.stopTs);
+  fprintf(fh, "  cpuDuration       = %lu us\n", event->cpuDuration);
+  fprintf(fh, "}\n");
+}
+
+static void debugCeBatchEvent(FILE* fh, struct ceBatch* event, const char* tag) {
+  fprintf(fh, "CeBatch event %p tag = %s {\n", event, tag);
+  fprintf(fh, "  numOps            = %d\n", event->numOps);
+  fprintf(fh, "  totalBytes        = %lu\n", event->totalBytes);
+  fprintf(fh, "  eventId           = %lu\n", event->eventId);
+  fprintf(fh, "  timingMode        = %s\n", event->timingMode == CE_TIMING_GPU ? "gpu" : "cpu");
+  fprintf(fh, "  startCompleted    = %d\n", event->startCompleted);
+  fprintf(fh, "  stopCompleted     = %d\n", event->stopCompleted);
+  fprintf(fh, "  startTs           = %f\n", event->base.startTs);
+  fprintf(fh, "  stopTs            = %f\n", event->base.stopTs);
+  fprintf(fh, "  cpuDuration       = %lu us\n", event->cpuDuration);
+  fprintf(fh, "}\n");
+}
+#endif
+
 void debugEvent(void* eHandle, const char* tag) {
 #ifdef DEBUG_EVENTS
   char filename[64] = { 0 };
@@ -278,9 +322,65 @@ void debugEvent(void* eHandle, const char* tag) {
     fprintf(fh, "  startTs           = %f\n", event->startTs);
     fprintf(fh, "  stopTs            = %f\n", event->stopTs);
     fprintf(fh, "}\n");
+  } else if (type == ncclProfileCeColl) {
+    debugCeCollEvent(fh, (struct ceColl*)eHandle, tag);
+  } else if (type == ncclProfileCeSync) {
+    debugCeSyncEvent(fh, (struct ceSync*)eHandle, tag);
+  } else if (type == ncclProfileCeBatch) {
+    debugCeBatchEvent(fh, (struct ceBatch*)eHandle, tag);
   }
   fclose(fh);
 #endif
+}
+
+// CE event print functions
+static int ceCollId = 0;
+static void printCeCollEvent(FILE* fh, struct ceColl* event) {
+  if (event->timingMode == CE_TIMING_GPU) {
+    fprintf(fh, "{\"name\": \"%s\", \"cat\": \"CE_COLL\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"eventId\": %lu, \"count\": %lu, \"datatype\": \"%s\", \"strategy\": \"%s\", \"start_ts_cpu\": %f, \"stop_ts_cpu\": %f, \"duration_cpu_us\": %f, \"duration_gpu_us\": %lu}},\n",
+            event->base.func, ceCollId, getpid(), 1, event->base.startTs, event->eventId, event->count, event->datatype, event->syncStrategy, event->cpuStartTime, event->cpuStopTime, event->cpuDuration, event->elapsedTime);
+  } else {
+    fprintf(fh, "{\"name\": \"%s\", \"cat\": \"CE_COLL\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"eventId\": %lu, \"count\": %lu, \"datatype\": \"%s\", \"strategy\": \"%s\", \"start_ts_cpu\": %f, \"stop_ts_cpu\": %f, \"duration_cpu_us\": %f}},\n",
+            event->base.func, ceCollId, getpid(), 1, event->base.startTs, event->eventId, event->count, event->datatype, event->syncStrategy, event->cpuStartTime, event->cpuStopTime, event->cpuDuration);
+  }
+
+  // Print child events (CeSync and CeBatch)
+  struct taskEventBase* child = taskEventQueueHead(event);
+  while (child) {
+    struct taskEventBase* next = child->next;
+    printEvent(fh, child);
+    child = next;
+  }
+
+  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"CE_COLL\", \"ph\": \"e\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f},\n",
+          event->base.func, ceCollId++, getpid(), 1, event->base.stopTs);
+}
+
+static int ceSyncId = 0;
+static void printCeSyncEvent(FILE* fh, struct ceSync* event) {
+  const char* syncTypeStr = event->isComplete ? "Complete" : "Ready";
+  if (event->timingMode == CE_TIMING_GPU) {
+    fprintf(fh, "{\"name\": \"CeSync\", \"cat\": \"CE_SYNC\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"eventId\": %lu, \"type\": \"%s\", \"strategy\": \"%s\", \"nRanks\": %d, \"start_ts_cpu\": %f, \"stop_ts_cpu\": %f, \"duration_cpu_us\": %f, \"duration_gpu_us\": %lu}},\n",
+            ceSyncId, getpid(), 1, event->base.startTs, event->eventId, syncTypeStr, event->parent->syncStrategy, event->nRanks, event->cpuStartTime, event->cpuStopTime, event->cpuDuration, event->elapsedTime);
+  } else {
+    fprintf(fh, "{\"name\": \"CeSync\", \"cat\": \"CE_SYNC\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"eventId\": %lu, \"type\": \"%s\", \"strategy\": \"%s\", \"nRanks\": %d, \"start_ts_cpu\": %f, \"stop_ts_cpu\": %f, \"duration_cpu_us\": %f}},\n",
+            ceSyncId, getpid(), 1, event->base.startTs, event->eventId, syncTypeStr, event->parent->syncStrategy, event->nRanks, event->cpuStartTime, event->cpuStopTime, event->cpuDuration);
+  }
+  fprintf(fh, "{\"name\": \"CeSync\", \"cat\": \"CE_SYNC\", \"ph\": \"e\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f},\n",
+          ceSyncId++, getpid(), 1, event->base.stopTs);
+}
+
+static int ceBatchId = 0;
+static void printCeBatchEvent(FILE* fh, struct ceBatch* event) {
+  if (event->timingMode == CE_TIMING_GPU) {
+    fprintf(fh, "{\"name\": \"CeBatch\", \"cat\": \"CE_BATCH\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"eventId\": %lu, \"numOps\": %d, \"totalBytes\": %lu, \"start_ts_cpu\": %f, \"stop_ts_cpu\": %f, \"duration_cpu_us\": %f, \"duration_gpu_us\": %lu}},\n",
+            ceBatchId, getpid(), 1, event->base.startTs, event->eventId, event->numOps, event->totalBytes, event->cpuStartTime, event->cpuStopTime, event->cpuDuration, event->elapsedTime);
+  } else {
+    fprintf(fh, "{\"name\": \"CeBatch\", \"cat\": \"CE_BATCH\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"eventId\": %lu, \"numOps\": %d, \"totalBytes\": %lu, \"start_ts_cpu\": %f, \"stop_ts_cpu\": %f, \"duration_cpu_us\": %f}},\n",
+            ceBatchId, getpid(), 1, event->base.startTs, event->eventId, event->numOps, event->totalBytes, event->cpuStartTime, event->cpuStopTime, event->cpuDuration);
+  }
+  fprintf(fh, "{\"name\": \"CeBatch\", \"cat\": \"CE_BATCH\", \"ph\": \"e\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f},\n",
+          ceBatchId++, getpid(), 1, event->base.stopTs);
 }
 
 void printEvent(FILE* fh, void* handle) {
@@ -376,6 +476,15 @@ void printEvent(FILE* fh, void* handle) {
   } else if (type == ncclProfileProxyCtrl) {
     struct proxyCtrl* p = (struct proxyCtrl *)handle;
     printProxyCtrlEvent(fh, p);
+  } else if (type == ncclProfileCeColl) {
+    struct ceColl* ce = (struct ceColl*)handle;
+    printCeCollEvent(fh, ce);
+  } else if (type == ncclProfileCeSync) {
+    struct ceSync* ce = (struct ceSync*)handle;
+    printCeSyncEvent(fh, ce);
+  } else if (type == ncclProfileCeBatch) {
+    struct ceBatch* ce = (struct ceBatch*)handle;
+    printCeBatchEvent(fh, ce);
   }
   return;
 }

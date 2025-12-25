@@ -177,8 +177,7 @@ void* allReduce(int my_rank, int total_ranks, int local_device, int devices_per_
   // Create device communicator - this is the key Device API component
   // Requirements specify resources to allocate (e.g., one barrier per CTA)
   ncclDevComm devComm;
-  ncclDevCommRequirements reqs;
-  memset(&reqs, 0, sizeof(reqs));
+  ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
   reqs.lsaBarrierCount = NCCL_DEVICE_CTA_COUNT; // Must match kernel launch config
   NCCLCHECK(ncclDevCommCreate(comm, &reqs, &devComm));
   printf("  Rank %d created device communicator with %d LSA barriers\n", my_rank, NCCL_DEVICE_CTA_COUNT);
@@ -238,9 +237,9 @@ void* allReduce(int my_rank, int total_ranks, int local_device, int devices_per_
   NCCLCHECK(ncclMemFree(d_recvbuff));
 
   // Standard NCCL cleanup
-  CUDACHECK(cudaStreamDestroy(stream));
   NCCLCHECK(ncclCommFinalize(comm));
   NCCLCHECK(ncclCommDestroy(comm));
+  CUDACHECK(cudaStreamDestroy(stream));
 
   return NULL;
 }

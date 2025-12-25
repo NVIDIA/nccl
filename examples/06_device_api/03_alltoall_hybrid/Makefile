@@ -9,7 +9,7 @@ include ../../../makefiles/common.mk
 include ../../../makefiles/examples.mk
 
 # Target executable
-TARGET = gin_alltoall_pure_device_api
+TARGET = alltoall_hybrid
 
 # Common utilities
 COMMON_INC = ../../common/include
@@ -68,11 +68,12 @@ install: $(TARGET)
 
 # Help
 help:
-	@echo "NCCL Example: Pure GIN AlltoAll Device API"
-	@echo "=============================================="
+	@echo "NCCL Example: Hybrid AlltoAll Device API"
+	@echo "========================================="
 	@echo ""
-	@echo "This example demonstrates pure GPU-Initiated Networking (GIN)"
-	@echo "for AlltoAll operations without LSA optimizations."
+	@echo "This example demonstrates hybrid communication combining"
+	@echo "GPU-Initiated Networking (GIN) for remote peers with"
+	@echo "Load Store Access (LSA) for local peers."
 	@echo ""
 	@echo "Targets:"
 	@echo "  all       - Build the example (default)"

@@ -1,6 +1,11 @@
-#pragma once
+#ifndef INSPECTOR_INSPECTOR_H_
+#define INSPECTOR_INSPECTOR_H_
 
 #include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <vector>
 
 #include "json.h"
 #include "common.h"
@@ -8,14 +13,49 @@
 
 #define MAX_CHANNELS                     64
 
+#define INS_CHK(call)                                                   \
+  do {                                                                  \
+    inspectorResult_t res = call;                                       \
+    if (inspectorSuccess != res) {                                      \
+      INFO_INSPECTOR("%s:%d -> error %d: %s", __FILE__, __LINE__, res,  \
+                     inspectorErrorString(res));                        \
+      return res;                                                       \
+    }                                                                   \
+  } while (0);
+
 #define INS_CHK_GOTO(call, res, label)                                  \
   do {                                                                  \
     res = call;                                                         \
     if (inspectorSuccess != res) {                                      \
-      INFO(NCCL_INSPECTOR, "%s:%d -> error %d: %s", __FILE__, __LINE__, res, \
-           inspectorErrorString(res));                                  \
+      INFO_INSPECTOR("%s:%d -> error %d: %s", __FILE__, __LINE__, res,  \
+                     inspectorErrorString(res));                        \
       goto label;                                                       \
     }                                                                   \
+  } while (0);
+
+// Lock convenience macros
+#define INSPECTOR_LOCK_RD_FLAG(lockRef, lockFlag, debug)        \
+  do {                                                          \
+    if (!lockFlag) {                                            \
+      INS_CHK(inspectorLockRd(lockRef));                        \
+    }                                                           \
+    lockFlag = true;                                            \
+  } while (0);
+
+#define INSPECTOR_LOCK_WR_FLAG(lockRef, lockFlag, debug)        \
+  do {                                                          \
+    if (!lockFlag) {                                            \
+      INS_CHK(inspectorLockWr(lockRef));                        \
+    }                                                           \
+    lockFlag = true;                                            \
+  } while (0);
+
+#define INSPECTOR_UNLOCK_RW_LOCK_FLAG(lockRef, lockFlag, debug) \
+  do {                                                          \
+    if (lockFlag) {                                             \
+      INS_CHK(inspectorUnlockRWLock(lockRef));                  \
+    }                                                           \
+    lockFlag = false;                                           \
   } while (0);
 
 
@@ -110,10 +150,50 @@ struct inspectorCommInfo {
   int rank;
   int nranks;
   int nnodes;
+  int cudaDeviceId;     // CUDA device ID for this communicator
+  char deviceUuidStr[37]; // Pre-computed device UUID string for filename generation
+  char cachedStaticLabels[256]; // Cached static parts of Prometheus labels (hostname, job, comm, rank, etc.)
 
   bool dump;
   struct inspectorCompletedCollInfo completedCollInfo;
   pthread_rwlock_t guard;
+};
+
+// Structure to track flush times and file handles per device UUID
+struct deviceFlushInfo {
+  char deviceUuidStr[37];
+  uint64_t lastFlushTime;
+  FILE* fileHandle;           // Open file handle for this device
+  bool needsCreation;         // Whether file needs to be created/flushed
+  char filename[1024];        // Store filename for cleanup
+};
+
+struct inspectorDumpThread {
+  bool run{false};
+  jsonFileOutput* jfo;
+  char* outputRoot;
+  uint64_t sampleIntervalUsecs;
+  std::vector<deviceFlushInfo> deviceFlushEntries;
+  pthread_t pthread;
+  pthread_rwlock_t guard;
+
+  // Constructor and destructor implemented in inspector.cc where dependencies are available
+  inspectorDumpThread(const char* _outputRoot, uint64_t _sampleIntervalUsecs);
+  ~inspectorDumpThread();
+
+  /*
+   * Gets or creates a file handle for a device UUID, handling flushing as needed.
+   */
+  FILE* getOrCreateFileHandle(const char* deviceUuidStr,
+                              const char* filename,
+                              uint64_t currentTime);
+
+  void startThread();
+  void stopThread();
+  inspectorResult_t inspectorStateDump(const char* output_root);
+  inspectorResult_t inspectorStateDumpJSON(const char* output_root);
+  inspectorResult_t inspectorStateDumpProm(const char* output_root);
+  static void* dumpMain(void* arg);
 };
 
 struct inspectorKernelChInfo {
@@ -144,12 +224,26 @@ struct inspectorCollInfo {
   struct inspectorEventTrkCollInfo collEvtTrk;
 };
 
+struct inspectorCommInfoList {
+  struct inspectorCommInfo* comms;
+  uint32_t ncomms;
+  pthread_rwlock_t guard;
+};
+
+struct inspectorState {
+  struct inspectorCommInfoList liveComms;
+  struct inspectorCommInfoList deletedComms;
+};
+
 
 
 extern ncclDebugLogger_t logFn;
 #define VERSION(...) logFn(NCCL_LOG_VERSION, NCCL_ALL, __FILE__, __LINE__, __VA_ARGS__)
 #define INFO(FLAGS, ...) logFn(NCCL_LOG_INFO, (FLAGS), __func__, __LINE__, __VA_ARGS__)
-#define WARN(...) logFn(NCCL_LOG_WARN, NCCL_ALL, __FILE__, __LINE__, __VA_ARGS__)
+
+// Use NCCL_PROFILE for inspector messages so they can be filtered with NCCL_DEBUG_SUBSYS=PROFILE
+#define INFO_INSPECTOR(...) logFn(NCCL_LOG_INFO, NCCL_PROFILE, __func__, __LINE__, __VA_ARGS__)
+#define TRACE_INSPECTOR(...) logFn(NCCL_LOG_TRACE, NCCL_PROFILE, __func__, __LINE__, __VA_ARGS__)
 
 inline int ncclTypeSize(ncclDataType_t type) {
   switch (type) {
@@ -184,6 +278,7 @@ inspectorResult_t inspectorUnlockRWLock(pthread_rwlock_t* lockRef);
 inspectorResult_t inspectorGlobalInit(int rank);
 inspectorResult_t inspectorGlobalFinalize();
 uint64_t inspectorGetTime();
+inspectorResult_t inspectorGetTimeUTC(char* buffer, size_t bufferSize);
 inspectorResult_t inspectorAddComm(struct inspectorCommInfo **commInfo,
                                    const char* commName, uint64_t commHash,
                                    int nNodes, int nranks, int rank);
@@ -196,3 +291,13 @@ ncclDataType_t inspectorStringToDatatype(const char* str);
 void inspectorComputeCollBw(struct inspectorCommInfo *commInfo,
                             struct inspectorCompletedCollInfo *completedColl,
                             ncclFunc_t collType);
+
+// Utility functions exposed for Prometheus module
+const char* inspectorTimingSourceToString(inspectorTimingSource_t timingSource);
+inspectorResult_t inspectorCommInfoListFinalize(struct inspectorCommInfoList* commList);
+const char* ncclFuncToString(ncclFunc_t fn);
+
+// Global state
+extern struct inspectorState g_state;
+
+#endif  // INSPECTOR_INSPECTOR_H_

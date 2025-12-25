@@ -15,5 +15,4 @@ typedef enum { ncclSuccess                 =  0,
                ncclInvalidArgument         =  4,
                ncclInvalidUsage            =  5,
                ncclRemoteError             =  6 } ncclResult_t;
-
 #endif

@@ -173,7 +173,8 @@ int main(int argc, char *argv[]) {
 
   // Destroy NCCL communicators
   for (int i = 0; i < num_gpus; i++) {
-    ncclCommDestroy(comms[i]);
+    NCCLCHECK(ncclCommFinalize(comms[i]));
+    NCCLCHECK(ncclCommDestroy(comms[i]));
   }
 
   // Free device memory and destroy streams

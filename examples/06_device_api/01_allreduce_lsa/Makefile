@@ -9,7 +9,7 @@ include ../../../makefiles/common.mk
 include ../../../makefiles/examples.mk
 
 # Target executable
-TARGET = allreduce_device_api
+TARGET = allreduce_lsa
 
 # Common utilities
 COMMON_INC = ../../common/include

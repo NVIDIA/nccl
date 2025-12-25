@@ -41,12 +41,12 @@ make [MPI=1] [MPI_HOME=<path-to-mpi>] [NCCL_HOME=<path-to-nccl>] [CUDA_HOME=<pat
 
 ### Run when compiled for pthreads (default)
 ```shell
-[NTHREADS=N] ./allreduce_device_api
+[NTHREADS=N] ./allreduce_lsa
 ```
 
 ### Run when compiled for MPI
 ```shell
-mpirun -np <num_processes> ./allreduce_device_api
+mpirun -np <num_processes> ./allreduce_lsa
 ```
 
 ## Code Walk-through
@@ -61,7 +61,7 @@ synchronization.
 
 ```cpp
 ncclDevComm devComm;
-ncclDevCommRequirements reqs;
+ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
 // Allocate one barrier per CTA we intend to launch
 reqs.lsaBarrierCount = NCCL_DEVICE_CTA_COUNT;
 

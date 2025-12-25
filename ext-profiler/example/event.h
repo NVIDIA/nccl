@@ -16,8 +16,14 @@
 #include "queue.h"
 #include <cuda_runtime.h>
 
+// CE timing modes
+typedef enum {
+  CE_TIMING_CPU = 0,
+  CE_TIMING_GPU = 1
+} CeTimingMode_t;
+
 #define MAX_CHANNELS                     32
-#define MAX_STEPS                        1024
+#define MAX_STEPS                        32
 #define MAX_OPS                          16 // Up to 64K ranks for PAT
 #define MAX_EVENTS_PER_REQ               (8)
 
@@ -209,6 +215,92 @@ struct kernelLaunch {
   struct kernelLaunch* next;
 };
 
+// CE event structures
+struct ceColl {
+  struct taskEventBase base;  // Must be first for task event queue (uses base.next)
+  struct collApi* parent;
+  int ceCollId;
+  uint64_t seqNumber;
+  size_t count;
+  const char* datatype;
+  int root;
+  const char* syncStrategy;
+  cudaStream_t stream;
+  uint64_t eventId;
+  int timingMode;
+  // Timing fields:
+  // - cpuStartTime/cpuStopTime: Captured using CLOCK_MONOTONIC (via gettime()), units: microseconds (double)
+  // - cpuDuration: Always CPU-measured time difference (cpuStopTime - cpuStartTime), units: microseconds (double)
+  // - elapsedTime: Final reported timing, units: microseconds (uint64_t)
+  //   * If timingMode==CE_TIMING_GPU: GPU-measured time from cudaEventElapsedTime (converted from ms to us)
+  //   * If timingMode==CE_TIMING_CPU: Same as cpuDuration (CPU-measured)
+  double cpuStartTime;
+  double cpuStopTime;
+  double cpuDuration;
+  uint64_t elapsedTime;
+  // Child events (CeSync and CeBatch)
+  struct taskEventBase* eventHead;
+  struct taskEventBase* eventTail;
+  // Plugin-managed CUDA events for timing
+  cudaEvent_t startEvent;
+  cudaEvent_t stopEvent;
+  bool startCompleted;
+  bool stopCompleted;
+  struct ceColl* pollerNext;  // For poller tracking list (separate from base.next)
+};
+
+struct ceSync {
+  struct taskEventBase base;  // For parent CeColl's event queue
+  struct ceColl* parent;
+  int ceSyncId;
+  bool isComplete;
+  uint32_t seqNumber;
+  int nRanks;
+  cudaStream_t stream;
+  uint64_t eventId;
+  int timingMode;
+  // Timing fields: See ceColl struct for detailed clock/unit documentation
+  // - cpuStartTime/cpuStopTime: CLOCK_MONOTONIC, microseconds (double)
+  // - cpuDuration: CPU-measured (cpuStopTime - cpuStartTime), microseconds (double)
+  // - elapsedTime: GPU or CPU-measured depending on timingMode, microseconds (uint64_t)
+  double cpuStartTime;
+  double cpuStopTime;
+  double cpuDuration;
+  uint64_t elapsedTime;
+  // Plugin-managed CUDA events for timing
+  cudaEvent_t startEvent;
+  cudaEvent_t stopEvent;
+  bool startCompleted;
+  bool stopCompleted;
+  struct ceSync* pollerNext;  // For poller tracking list
+};
+
+struct ceBatch {
+  struct taskEventBase base;  // For parent CeColl's event queue
+  struct ceColl* parent;
+  int ceBatchId;
+  int numOps;
+  size_t totalBytes;
+  bool useIntraSync;
+  cudaStream_t stream;
+  uint64_t eventId;
+  int timingMode;
+  // Timing fields: See ceColl struct for detailed clock/unit documentation
+  // - cpuStartTime/cpuStopTime: CLOCK_MONOTONIC, microseconds (double)
+  // - cpuDuration: CPU-measured (cpuStopTime - cpuStartTime), microseconds (double)
+  // - elapsedTime: GPU or CPU-measured depending on timingMode, microseconds (uint64_t)
+  double cpuStartTime;
+  double cpuStopTime;
+  double cpuDuration;
+  uint64_t elapsedTime;
+  // Plugin-managed CUDA events for timing
+  cudaEvent_t startEvent;
+  cudaEvent_t stopEvent;
+  bool startCompleted;
+  bool stopCompleted;
+  struct ceBatch* pollerNext;  // For poller tracking list
+};
+
 struct groupApi {
   uint64_t type;
   struct context* ctx;
@@ -226,12 +318,23 @@ struct groupApi {
   struct groupApi* next;
 };
 
+// CE event poller tracking
+struct ceEventList {
+  struct ceColl* ceCollHead;
+  struct ceSync* ceSyncHead;
+  struct ceBatch* ceBatchHead;
+  pthread_mutex_t mutex;
+};
+
 // arrays for different event objects
 struct context {
   const char* commName;
   uint64_t commHash;
   int nranks;
   int rank;
+
+  // CE event tracking for poller
+  struct ceEventList ceEvents;
 
   int groupApiPoolSize;
   int groupApiPoolBase;
@@ -272,6 +375,22 @@ struct context {
   int proxyCtrlPoolBase;
   int proxyCtrlPoolIndex;
   struct proxyCtrl* proxyCtrlPool;
+
+  // CE event pools
+  int ceCollPoolSize;
+  int ceCollPoolBase;
+  int ceCollPoolIndex;
+  struct ceColl* ceCollPool;
+
+  int ceSyncPoolSize;
+  int ceSyncPoolBase;
+  int ceSyncPoolIndex;
+  struct ceSync* ceSyncPool;
+
+  int ceBatchPoolSize;
+  int ceBatchPoolBase;
+  int ceBatchPoolIndex;
+  struct ceBatch* ceBatchPool;
 };
 
 template <typename T>

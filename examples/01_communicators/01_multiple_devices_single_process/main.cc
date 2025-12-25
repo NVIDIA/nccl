@@ -230,6 +230,7 @@ int main(int argc, char *argv[]) {
   // This must be done before destroying CUDA resources they depend on
   printf("Destroying NCCL communicators...\n");
   for (int i = 0; i < num_gpus; i++) {
+    NCCLCHECK(ncclCommFinalize(comms[i]));
     NCCLCHECK(ncclCommDestroy(comms[i]));
   }
   printf("All NCCL communicators destroyed\n");

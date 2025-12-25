@@ -11,7 +11,7 @@ This example demonstrates NCCL's GPU-Initiated Networking (GIN) capabilities for
 This example showcases **pure GIN communication** where all data exchange happens through the network, without any Load Store Access (LSA) optimizations. This is particularly useful for:
 
 - Multi-node environments where ranks cannot use LSA
-- Testing network performance without local optimizations  
+- Testing network performance without local optimizations
 - Understanding the baseline GIN communication patterns
 - Scenarios where all communication must go through the network
 
@@ -32,12 +32,12 @@ make [MPI=1] [MPI_HOME=<path-to-mpi>] [NCCL_HOME=<path-to-nccl>] [CUDA_HOME=<pat
 
 ### Run when compiled for pthreads (default)
 ```bash
-[NTHREADS=N] ./gin_alltoall_pure_device_api
+[NTHREADS=N] ./alltoall_gin
 ```
 
 ### Run when compiled for MPI
 ```bash
-mpirun -np <num_processes> ./gin_alltoall_pure_device_api
+mpirun -np <num_processes> ./alltoall_gin
 ```
 
 ## Code Walk-through
@@ -47,10 +47,9 @@ The `ncclDevComm` is the core component enabling GPU kernels to perform network 
 
 ```cpp
 ncclDevComm devComm;
-ncclDevCommRequirements reqs;
-memset(&reqs, 0, sizeof(reqs));
+ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
 // GIN barriers enable cross-node synchronization over the network
-reqs.railGinBarrierCount = NCCL_DEVICE_CTA_COUNT;  
+reqs.railGinBarrierCount = NCCL_DEVICE_CTA_COUNT;
 // GIN signals provide completion notifications for asynchronous operations
 reqs.ginSignalCount = 1;
 
@@ -75,7 +74,7 @@ GIN barriers enable cross-node synchronization from device code over the network
 
 ```cpp
 // GIN barriers coordinate GPU threads across different nodes over network
-ncclGinBarrierSession<ncclCoopCta> bar { 
+ncclGinBarrierSession<ncclCoopCta> bar {
     ncclCoopCta(),                    // Barrier scope: entire CTA (thread block)
     gin,                              // GIN context for network operations
     ncclTeamWorld(devComm),          // Team spanning all ranks
@@ -131,9 +130,7 @@ Pure GIN AlltoAll result: PASSED
 ## When to Use
 
 - **Multi-node environments**: When ranks cannot use LSA
-- **Testing network performance**: Without local optimizations  
-- **Understanding the baseline GIN communication patterns**
-- **Scenarios where all communication must go through the network**
+- **Testing network performance**: Without local optimizations
 
 ## Performance Considerations
 
@@ -147,7 +144,7 @@ Pure GIN AlltoAll result: PASSED
 ### Issue: Deadlock at util_broadcast
 **Solution:** Ensure you're running with multiple GPUs/processes
 ```bash
-NTHREADS=2 ./gin_alltoall_pure_device_api  # For 2 GPUs
+NTHREADS=2 ./alltoall_gin  # For 2 GPUs
 ```
 
 ### Issue: CUDA out of memory
@@ -172,7 +169,6 @@ The example uses comprehensive error checking for CUDA, NCCL, and GIN operations
 ## Next Steps
 
 After understanding this example, explore:
-- **Custom network protocols**: Implement specialized communication patterns using GIN
 - **Performance optimization**: Fine-tune GIN context usage and signal management
 - **Hybrid approaches**: Combine GIN with LSA for topology-aware optimizations
 - **Integration with compute**: Fuse network communication with computation kernels

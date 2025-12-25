@@ -13,7 +13,7 @@
  #include <string.h>
  #include <sys/time.h>
  #include <unistd.h>
- 
+
 /*
  * NCCL Device API Pure GIN AlltoAll Example
  *
@@ -48,21 +48,21 @@
  * - Signal-based completion detection enables asynchronous operation
  * - Multiple GIN contexts can improve parallel communication performance
  */
- 
+
 // Device API kernel launch configuration
 // CTA count must match railGinBarrierCount for proper barrier synchronization
  #define NCCL_DEVICE_CTA_COUNT 1
  #define NCCL_DEVICE_THREADS_PER_CTA 512
- 
+
  // ==========================================================================
  // Device Kernel Implementations
  // ==========================================================================
- 
+
 // Pure GIN AlltoAll kernel - uses GIN for all peer communication
 // This kernel demonstrates network-based AlltoAll using GPU-initiated networking
 template <typename T>
-__global__ void PureGinAlltoAllKernel(ncclWindow_t sendwin, size_t sendoffset, 
-                                      ncclWindow_t recvwin, size_t recvoffset, 
+__global__ void PureGinAlltoAllKernel(ncclWindow_t sendwin, size_t sendoffset,
+                                      ncclWindow_t recvwin, size_t recvoffset,
                                       size_t count, int root, struct ncclDevComm devComm) {
   int ginContext = 0;
   unsigned int signalIndex = 0;
@@ -90,11 +90,11 @@ __global__ void PureGinAlltoAllKernel(ncclWindow_t sendwin, size_t sendoffset,
   gin.waitSignal(ncclCoopCta(), signalIndex, signalValue + devComm.nRanks);
   gin.flush(ncclCoopCta());
 }
- 
+
  // ==========================================================================
  // Host-Side Setup and Device API Initialization
  // ==========================================================================
- 
+
 void* pureGinAlltoAll(int my_rank, int total_ranks, int local_device, int devices_per_rank) {
   ncclComm_t comm;
   ncclUniqueId nccl_unique_id;
@@ -166,8 +166,7 @@ void* pureGinAlltoAll(int my_rank, int total_ranks, int local_device, int device
 
   // Create device communicator with GIN support
   ncclDevComm devComm;
-  ncclDevCommRequirements reqs;
-  memset(&reqs, 0, sizeof(reqs));
+  ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
   reqs.railGinBarrierCount = NCCL_DEVICE_CTA_COUNT;  // GIN barriers for network synchronization
   reqs.ginSignalCount = 1;  // GIN signals for completion detection
   NCCLCHECK(ncclDevCommCreate(comm, &reqs, &devComm));
@@ -210,7 +209,7 @@ void* pureGinAlltoAll(int my_rank, int total_ranks, int local_device, int device
       float expected = (float)(src_rank * 1000 + my_rank * 100 + i);
       if (h_recvbuff[recv_idx] != expected) {
         gin_success = false;
-        printf("  Rank %d: Pure GIN mismatch at [%d][%zu]: got %.0f, expected %.0f\n", 
+        printf("  Rank %d: Pure GIN mismatch at [%d][%zu]: got %.0f, expected %.0f\n",
                 my_rank, src_rank, i, h_recvbuff[recv_idx], expected);
         break;
       }
@@ -238,13 +237,13 @@ void* pureGinAlltoAll(int my_rank, int total_ranks, int local_device, int device
   NCCLCHECK(ncclMemFree(d_recvbuff));
 
   // Standard NCCL cleanup
-  CUDACHECK(cudaStreamDestroy(stream));
   NCCLCHECK(ncclCommFinalize(comm));
   NCCLCHECK(ncclCommDestroy(comm));
+  CUDACHECK(cudaStreamDestroy(stream));
 
   return NULL;
 }
- 
+
 int main(int argc, char* argv[]) {
   // Run example using the provided utility framework
   return run_example(argc, argv, pureGinAlltoAll);

@@ -2,6 +2,7 @@
 set(SRC_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/plugin.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/print_event.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/profiler_plugin_ce.cc
 )
 
 # Create shared library

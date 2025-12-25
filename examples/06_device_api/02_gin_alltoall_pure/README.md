@@ -47,8 +47,8 @@ The `ncclDevComm` is the core component enabling GPU kernels to perform network 
 
 ```cpp
 ncclDevComm devComm;
-ncclDevCommRequirements reqs;
-memset(&reqs, 0, sizeof(reqs));
+// It must be initialized via NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER
+ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
 // GIN barriers enable cross-node synchronization over the network
 reqs.railGinBarrierCount = NCCL_DEVICE_CTA_COUNT;  
 // GIN signals provide completion notifications for asynchronous operations

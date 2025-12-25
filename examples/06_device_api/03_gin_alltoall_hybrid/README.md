@@ -46,8 +46,8 @@ The `ncclDevComm` is the core component enabling GPU kernels to perform both loc
 
 ```cpp
 ncclDevComm devComm;
-ncclDevCommRequirements reqs;
-memset(&reqs, 0, sizeof(reqs));
+// It must be initialized via NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER
+ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
 // LSA barriers enable direct memory access coordination for local peers
 reqs.lsaBarrierCount = NCCL_DEVICE_CTA_COUNT;
 // GIN barriers enable cross-node synchronization over the network  

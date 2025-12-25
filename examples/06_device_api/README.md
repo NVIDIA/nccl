@@ -57,7 +57,9 @@ The device API allows NCCL communication within CUDA kernels, fusing communicati
 // Host:
 // 1) Create device communicator + requirements
 // 2) Register symmetric memory window for peer access
-ncclDevComm devComm; ncclDevCommRequirements reqs{};
+ncclDevComm devComm;
+// It must be initialized via NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER
+ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
 reqs.lsaBarrierCount = NCCL_DEVICE_CTA_COUNT;
 NCCLCHECK(ncclDevCommCreate(comm, &reqs, &devComm));
 NCCLCHECK(ncclCommWindowRegister(comm, buffer, size, &win, NCCL_WIN_COLL_SYMMETRIC));

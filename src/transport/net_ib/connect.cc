@@ -382,13 +382,17 @@ ncclResult_t ncclIbQpCreate(struct ncclIbQp* qp, struct ncclIbQpCreateAttr* crea
 ncclResult_t ncclIbQpRtr(struct ncclIbQp* qp) {
   struct ncclIbQpRtrAttr* rtrAttr = &qp->rtrAttr;
   struct ibv_qp_attr qpAttr;
+  int attrMask = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN;
   memset(&qpAttr, 0, sizeof(struct ibv_qp_attr));
   qpAttr.qp_state = IBV_QPS_RTR;
   qpAttr.path_mtu = rtrAttr->mtu;
   qpAttr.dest_qp_num = rtrAttr->remoteQpNum;
   qpAttr.rq_psn = 0;
-  qpAttr.max_dest_rd_atomic = 1;
-  qpAttr.min_rnr_timer = 12;
+  if (qp->qp->qp_type != IBV_QPT_UC) {
+    qpAttr.max_dest_rd_atomic = 1;
+    qpAttr.min_rnr_timer = 12;
+    attrMask |= IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
+  }
   if (rtrAttr->linkLayer == IBV_LINK_LAYER_ETHERNET) {
     qpAttr.ah_attr.is_global = 1;
     qpAttr.ah_attr.grh.dgid.global.subnet_prefix = rtrAttr->remoteGid.global.subnet_prefix;
@@ -422,21 +426,25 @@ ncclResult_t ncclIbQpRtr(struct ncclIbQp* qp) {
   qpAttr.ah_attr.src_path_bits = 0;
   qpAttr.ah_attr.port_num = rtrAttr->localIbPort;
   TRACE(NCCL_NET, "NET/IB: %s: qpn=%u mtu=%d dst=%u ll=%u port=%u sl: %d tc: %d", __func__, qp->qp->qp_num, qpAttr.path_mtu, qpAttr.dest_qp_num, rtrAttr->linkLayer, qpAttr.ah_attr.port_num, qpAttr.ah_attr.sl, qpAttr.ah_attr.grh.traffic_class);
-  NCCLCHECK(wrap_ibv_modify_qp(qp->qp, &qpAttr, IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN | IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER));
+  NCCLCHECK(wrap_ibv_modify_qp(qp->qp, &qpAttr, attrMask));
   return ncclSuccess;
 }
 
 ncclResult_t ncclIbQpRts(struct ncclIbQp* qp) {
   struct ncclIbQpRtsAttr* rtsAttr = &qp->rtsAttr;
   struct ibv_qp_attr qpAttr;
+  int attrMask = IBV_QP_STATE | IBV_QP_SQ_PSN;
   memset(&qpAttr, 0, sizeof(struct ibv_qp_attr));
   qpAttr.qp_state = IBV_QPS_RTS;
-  qpAttr.timeout = rtsAttr->timeout;
-  qpAttr.retry_cnt = rtsAttr->retryCnt;
-  qpAttr.rnr_retry = 7;
+  if (qp->qp->qp_type != IBV_QPT_UC) {
+    qpAttr.timeout = rtsAttr->timeout;
+    qpAttr.retry_cnt = rtsAttr->retryCnt;
+    qpAttr.rnr_retry = 7;
+    qpAttr.max_rd_atomic = 1;
+    attrMask |= IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY | IBV_QP_MAX_QP_RD_ATOMIC;
+  }
   qpAttr.sq_psn = 0;
-  qpAttr.max_rd_atomic = 1;
-  NCCLCHECK(wrap_ibv_modify_qp(qp->qp, &qpAttr, IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC));
+  NCCLCHECK(wrap_ibv_modify_qp(qp->qp, &qpAttr, attrMask));
   return ncclSuccess;
 }
 

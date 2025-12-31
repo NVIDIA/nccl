@@ -8,6 +8,7 @@
 #include "p2p_resiliency.h"
 #include "p2p.h" // For replay (ncclIbMultiSend() and ncclIbPostFifo())
 #include "connect.h" // For ncclIbQpCreate()
+#include "p2p_resiliency_recovery.h"
 
 NCCL_PARAM(IbResiliencyPortFailover, "IB_RESILIENCY_PORT_FAILOVER", 0);
 NCCL_PARAM(IbResiliencyPortFailoverMaxAttempts, "IB_RESILIENCY_PORT_FAILOVER_MAX_ATTEMPTS", 1);
@@ -25,7 +26,8 @@ static ncclResult_t ncclIbResiliencyCheckErrorNotFatal(struct ncclIbResiliency* 
   bool fatalCompletionStatus = true;
   const char* failureReason = NULL;
   for (int i = 0; i < resCtx->ndevs; i++) {
-    if (i == devIndex || resCtx->devs[i].state != ncclIbResiliencyDevStateOk) {
+    enum ncclIbResiliencyDevState devState = resCtx->devs[i].state.load(std::memory_order_acquire);
+    if (i == devIndex || devState != ncclIbResiliencyDevStateOk) {
       nFailedDevices++;
     }
   }
@@ -87,7 +89,7 @@ static ncclResult_t ncclIbResiliencyReplaceQps(struct ncclIbResiliency* resCtx, 
 
       // Check if the new QP is on a functional device
       newDevIndex = resCtx->baseComm->qps[newQpIndex].devIndex;
-      newDevState = resCtx->devs[newDevIndex].state;
+      newDevState = resCtx->devs[newDevIndex].state.load(std::memory_order_acquire);
       if (newDevState != ncclIbResiliencyDevStateOk) {
         offset++;
         WARN("NET/IB: %s: Cannot replace QP with qpIndex=%d because the new QP (qpIndex=%d, devIndex=%d) is not on a functional device (state=%d)", __func__, failedQpIndex, newQpIndex, newDevIndex, newDevState);
@@ -317,10 +319,26 @@ static ncclResult_t ncclIbResiliencyHandleCompletionErrorSender(struct ncclIbRes
 
 // Mark the device as failed and replace its QPs.
 static ncclResult_t ncclIbResiliencyHandleDeviceFailure(struct ncclIbResiliency* resCtx, int devIndex) {
-  if (resCtx->devs[devIndex].state == ncclIbResiliencyDevStateOk) {
-    WARN("NET/IB: %s: Device %d marked as failed. (%s comm=%p)", __func__, devIndex, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
-    resCtx->devs[devIndex].state = ncclIbResiliencyDevStateError;
+  ncclResult_t res = ncclSuccess;
+  enum ncclIbResiliencyDevState devState = resCtx->devs[devIndex].state.load(std::memory_order_acquire);
+  if (devState == ncclIbResiliencyDevStateOk) {
+    WARN("NET/IB: %s: Device %d marked as failed. Initiating recovery? %s (%s comm=%p, outstandingRecovery=%d)", __func__, devIndex, resCtx->recoveryEnabled ? "Yes" : "No", resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm, resCtx->outstandingRecovery);
+    resCtx->devs[devIndex].state.store(ncclIbResiliencyDevStateError, std::memory_order_release);
     NCCLCHECK(ncclIbResiliencyReplaceQps(resCtx, devIndex));
+    if (resCtx->recoveryEnabled) {
+      resCtx->devs[devIndex].state.store(ncclIbResiliencyDevStateRecoveryInProgress, std::memory_order_release);
+      res = ncclIbPortRecoveryHandleFailure(resCtx, devIndex);
+      if (res == ncclSuccess) {
+        resCtx->outstandingRecovery++;
+        resCtx->inProgress = true;
+      } else {
+        for (int i = 0; i < resCtx->ndevs; i++) {
+          if (i != devIndex) continue;
+          INFO(NCCL_NET, "NET/IB: %s: Marking device %d as permanently failed (%s comm=%p)", __func__, i, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
+          resCtx->devs[i].state.store(ncclIbResiliencyDevStateErrorPermanent, std::memory_order_release);
+        }
+      }
+    }
   } else {
     INFO(NCCL_NET, "NET/IB: %s: Device %d was already marked as failed.", __func__, devIndex);
   }
@@ -392,9 +410,11 @@ static ncclResult_t ncclIbResiliencyProbePost(struct ncclIbResiliencySend* sendR
 
   INFO(NCCL_NET, "NET/IB: %s: Probe delay elapsed (%llu ms) for request %p, posting the probe", __func__, elapsedTime / MSEC_TO_NSEC, failedSendRequest->request);
 
+  // Iterate over devices until a functional device is found to send a probe
   int devIndex = 0;
   for (devIndex = 0; devIndex < sendResCtx->base.ndevs; devIndex++) {
-    if (sendResCtx->base.devs[devIndex].state == ncclIbResiliencyDevStateOk) {
+    enum ncclIbResiliencyDevState devState = sendResCtx->base.devs[devIndex].state.load(std::memory_order_acquire);
+    if (devState == ncclIbResiliencyDevStateOk) {
       // This device is functional. Use it to post the probe.
       break;
     }
@@ -528,7 +548,16 @@ ncclResult_t ncclIbResiliencyInit(struct ncclIbNetCommBase* baseComm, struct ncc
     memset(sendResCtx->probingResults, 0, sizeof(sendResCtx->probingResults));
     memset(sendResCtx->remCmplRecordsInfo, 0, sizeof(sendResCtx->remCmplRecordsInfo));
   }
-  INFO(NCCL_NET, "NET/IB: %s: Resiliency context was initialized on the %s communicator (%p)", __func__, baseComm->isSend ? "send" : "recv", baseComm);
+
+  NCCLCHECK(ncclIbPortRecoveryInit(baseCtx));
+  if (baseCtx->recoveryEnabled) {
+    INFO(NCCL_NET, "NET/IB: %s: Port recovery is enabled for the resiliency context on the %s communicator (comm=%p)", __func__, baseComm->isSend ? "send" : "recv", baseComm);
+    baseCtx->outstandingRecovery = 0;
+  } else {
+    INFO(NCCL_NET, "NET/IB: %s: Port recovery is disabled for the resiliency context on the %s communicator (comm=%p)", __func__, baseComm->isSend ? "send" : "recv", baseComm);
+  }
+
+  INFO(NCCL_NET, "NET/IB: %s: Resiliency context was initialized on the %s communicator (comm=%p)", __func__, baseComm->isSend ? "send" : "recv", baseComm);
   return ncclSuccess;
 }
 
@@ -546,7 +575,7 @@ ncclResult_t ncclIbResiliencyDevInit(struct ncclIbResiliency* resCtx, uint devIn
   INFO(NCCL_NET, "NET/IB: %s: Initializing resiliency context on devIndex %d for %s communicator (comm=%p)", __func__, devIndex, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
   assert(devIndex < resCtx->ndevs);
   struct ncclIbResiliencyDev* resDev = &resCtx->devs[devIndex];
-  resDev->state = ncclIbResiliencyDevStateOk;
+  resDev->state.store(ncclIbResiliencyDevStateOk, std::memory_order_release);
   void* cqContext = (void*)&resCtx->baseComm->stats;
   int cqSize = -1;
   if (resCtx->baseComm->isSend) {
@@ -563,6 +592,10 @@ ncclResult_t ncclIbResiliencyDevInit(struct ncclIbResiliency* resCtx, uint devIn
   INFO(NCCL_NET, "NET/IB: %s: Creating probing CQ on device %d for resiliency context (%s comm=%p, cq_size=%d)", __func__, devIndex, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm, cqSize);
   NCCLCHECK(wrap_ibv_create_cq(&resDev->probingCq, ibDev->context, cqSize, cqContext, NULL, 0));
   INFO(NCCL_NET, "NET/IB: %s: Created probing CQ (cq=%p) on device %d for resiliency context (%s comm=%p, cq_size=%d)", __func__, resDev->probingCq, devIndex, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm, cqSize);
+
+  if (resCtx->recoveryEnabled) {
+    NCCLCHECK(ncclIbPortRecoveryDevInit(resCtx, devIndex, ibDev));
+  }
   return ncclSuccess;
 }
 
@@ -573,6 +606,11 @@ ncclResult_t ncclIbResiliencyDevDestroy(struct ncclIbResiliency* resCtx, uint de
     NCCLCHECK(wrap_ibv_destroy_cq(resDev->probingCq));
     INFO(NCCL_NET, "NET/IB: %s: Destroyed probing CQ (cq=%p) on device %d for resiliency context (comm=%p)", __func__, resDev->probingCq, devIndex, resCtx->baseComm);
   }
+
+  if (resCtx->recoveryEnabled) {
+    NCCLCHECK(ncclIbPortRecoveryDevDestroy(resCtx, devIndex));
+  }
+
   if (resCtx->baseComm->isSend) {
     struct ncclIbResiliencySend* sendResCtx = (struct ncclIbResiliencySend*)resCtx;
     if (resDev->probingResultMr) {
@@ -655,6 +693,13 @@ ncclResult_t ncclIbResiliencyDeviceNumSet(struct ncclIbResiliency* resCtx, int n
     WARN("NET/IB: %s: Resiliency is enabled on a %s communicator (comm=%p) with a single device. This does not make sense since there is no other device to fail over to.", __func__, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
   }
   INFO(NCCL_NET, "NET/IB: %s: Resiliency context (comm=%p) is configured with %d probing QPs", __func__, resCtx->baseComm, resCtx->nProbingQps);
+  if (resCtx->recoveryEnabled) {
+    resCtx->nPortRecoveryQps = std::max(nLocalDevs, nRemDevs);
+  } else {
+    resCtx->nPortRecoveryQps = 0;
+  }
+  assert(resCtx->nPortRecoveryQps <= NCCL_IB_MAX_DEVS_PER_NIC);
+  INFO(NCCL_NET, "NET/IB: %s: Resiliency context (comm=%p) is configured with %d recovery QPs", __func__, resCtx->baseComm, resCtx->nPortRecoveryQps);
   return ncclSuccess;
 }
 
@@ -692,6 +737,11 @@ ncclResult_t ncclIbResiliencySenderCreateQps(struct ncclIbResiliency* resCtx, st
     initAttr->qpAccessFlags = IBV_ACCESS_LOCAL_WRITE;
     NCCLCHECK(ncclIbQpInit(localQp));
   }
+
+  if (resCtx->recoveryEnabled) {
+    NCCLCHECK(ncclIbPortRecoverySenderQpsCreate(resCtx, localResiliencyInfo->portRecoveryQpsInfo, resCtx->nPortRecoveryQps));
+  }
+
   return ncclSuccess;
 }
 
@@ -729,6 +779,10 @@ ncclResult_t ncclIbResiliencySenderQpsToRts(struct ncclIbResiliency* resCtx, str
     rtsAttr->retryCnt = ncclParamIbRetryCnt();
     NCCLCHECK(ncclIbQpRts(localQp));
     INFO(NCCL_NET, "NET/IB: %s: Send to RTS done on probing QP (index=%d, qp_num=%u, dest_qp_num=%u, deviceIndex=%d, comm=%p)", __func__, localQpIndex, localQp->qp->qp_num, rtrAttr->remoteQpNum, localDevIndex, resCtx->baseComm);
+  }
+
+  if (resCtx->recoveryEnabled) {
+    NCCLCHECK(ncclIbPortRecoverySenderQpsToRts(resCtx, remInfo, resCtx->nPortRecoveryQps));
   }
   return ncclSuccess;
 }
@@ -789,14 +843,22 @@ ncclResult_t ncclIbResiliencyReceiverQpsCreateToRts(struct ncclIbResiliency* res
     NCCLCHECK(ncclIbQpRts(localQp));
     INFO(NCCL_NET, "NET/IB: %s: Recv to RTS done on probing QP (index=%d, qp_num=%u, dest_qp_num=%u, deviceIndex=%d, comm=%p)", __func__, localQpIndex, localQp->qp->qp_num, rtrAttr->remoteQpNum, localDevIndex, resCtx->baseComm);
   }
+
+  if (resCtx->recoveryEnabled) {
+    NCCLCHECK(ncclIbPortRecoveryReceiverQpsCreateToRts(resCtx, remInfo, localResiliencyInfo->portRecoveryQpsInfo, resCtx->nPortRecoveryQps));
+  }
+
   return ncclSuccess;
 }
 
 ncclResult_t ncclIbResiliencyClose(struct ncclIbResiliency* resCtx) {
   if (resCtx == NULL) {
+    WARN("NET/IB: %s: Resiliency context is NULL. Nothing to destroy.", __func__);
     return ncclSuccess;
   }
-  INFO(NCCL_NET, "NET/IB: %s: Destroying %d probing QPs for resiliency context (comm=%p)", __func__, resCtx->nProbingQps, resCtx->baseComm);
+  INFO(NCCL_NET, "NET/IB: %s: Resiliency context close for %s communicator (comm=%p)", __func__, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
+
+  INFO(NCCL_NET, "NET/IB: %s: Destroying %d probing QPs for resiliency context (%s comm=%p)", __func__, resCtx->nProbingQps, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
   for (int qpIndex = 0; qpIndex < resCtx->nProbingQps; qpIndex++) {
     struct ncclIbQp* probingQp = &resCtx->probingQps[qpIndex];
     if (probingQp->qp == NULL) {
@@ -804,6 +866,13 @@ ncclResult_t ncclIbResiliencyClose(struct ncclIbResiliency* resCtx) {
     }
     INFO(NCCL_NET, "NET/IB: %s: Destroying probing QP (index=%d, qp=%p, qp_num=%u) for resiliency context (comm=%p)", __func__, qpIndex, probingQp->qp, probingQp->qp->qp_num, resCtx->baseComm);
     NCCLCHECK(wrap_ibv_destroy_qp(probingQp->qp));
+  }
+  if (resCtx->recoveryEnabled) {
+    if (resCtx->outstandingRecovery > 0) {
+      WARN("NET/IB: %s: There are still %d outstanding recovery operations on the resiliency context (comm=%p) being destroyed.", __func__, resCtx->outstandingRecovery, resCtx->baseComm);
+    }
+    NCCLCHECK(ncclIbPortRecoveryClose(resCtx));
+    NCCLCHECK(ncclIbPortRecoveryQpsDestroy(resCtx, resCtx->nPortRecoveryQps));
   }
   return ncclSuccess;
 }
@@ -880,37 +949,68 @@ ncclResult_t ncclIbResiliencyHandleCompletionError(struct ncclIbResiliency* resC
   return ncclSuccess;
 }
 
+static ncclResult_t ncclIbResiliencyActiveQpsRestore(struct ncclIbResiliency* resCtx, int restoredDevIndex) {
+  for (int qpIndex = 0; qpIndex < resCtx->baseComm->nqps; qpIndex++) {
+    ncclIbQp* qpToRestore = &resCtx->baseComm->qps[qpIndex];
+    if (qpToRestore->devIndex != restoredDevIndex) {
+      continue;
+    }
+    INFO(NCCL_NET, "NET/IB: %s: Restoring QP (index=%d, qp_num=%u) on device %d (comm=%p)", __func__, qpIndex, qpToRestore->qp->qp_num, restoredDevIndex, resCtx->baseComm);
+    resCtx->baseComm->activeQps[qpIndex] = qpToRestore;
+  }
+  return ncclSuccess;
+}
+
 ncclResult_t ncclIbResiliencyProgress(struct ncclIbResiliency* resCtx) {
   if (resCtx->inProgress == false) {
     // No operations needs to be done
     return ncclSuccess;
   }
-  if (!resCtx->baseComm->isSend) {
-    // No operations are needed on the receiver side for now.
-    return ncclSuccess;
-  }
 
-  struct ncclIbResiliencySend* sendResCtx = (struct ncclIbResiliencySend*)resCtx;
+  if (resCtx->baseComm->isSend) {
+    struct ncclIbResiliencySend* sendResCtx = (struct ncclIbResiliencySend*)resCtx;
 
-  NCCLCHECK(ncclIbResiliencyProbeProgress(sendResCtx));
+    NCCLCHECK(ncclIbResiliencyProbeProgress(sendResCtx));
 
-  // Iterate over all failed requests and progress them.
-  for (int i = 0; i < NET_IB_MAX_REQUESTS; i++) {
-    struct ncclIbResiliencyRequestSend* failedRequest = &sendResCtx->failedRequests[i];
-    if (failedRequest->request == NULL) {
-      continue;
-    }
-    if (failedRequest->state == ncclIbResiliencyRequestStatePending) {
-      NCCLCHECK(ncclIbResiliencyProbePost(sendResCtx, failedRequest));
-      continue;
-    }
-    if (failedRequest->state == ncclIbResiliencyRequestStateProbeCompleted) {
-      NCCLCHECK(ncclIbResiliencyHandleProbeCompleted(sendResCtx, failedRequest));
-      NCCLCHECK(ncclIbResiliencySendRequestFree(sendResCtx, failedRequest));
-      continue;
+    // Iterate over all failed requests and progress them.
+    for (int i = 0; i < NET_IB_MAX_REQUESTS; i++) {
+      struct ncclIbResiliencyRequestSend* failedRequest = &sendResCtx->failedRequests[i];
+      if (failedRequest->request == NULL) {
+        continue;
+      }
+      if (failedRequest->state == ncclIbResiliencyRequestStatePending) {
+        NCCLCHECK(ncclIbResiliencyProbePost(sendResCtx, failedRequest));
+        continue;
+      }
+      if (failedRequest->state == ncclIbResiliencyRequestStateProbeCompleted) {
+        NCCLCHECK(ncclIbResiliencyHandleProbeCompleted(sendResCtx, failedRequest));
+        NCCLCHECK(ncclIbResiliencySendRequestFree(sendResCtx, failedRequest));
+        continue;
+      }
     }
   }
-  if (resCtx->outstandingRequests == 0) {
+
+  if (resCtx->outstandingRecovery > 0) {
+    // Check if recovery operations are completed.
+    for (int devIndex = 0; devIndex < resCtx->ndevs; devIndex++) {
+      enum ncclIbResiliencyDevState devState = resCtx->devs[devIndex].state.load(std::memory_order_acquire);
+      TRACE(NCCL_NET, "NET/IB: %s: Checking dev state for device %d: state=%d (comm=%p).", __func__, devIndex, devState, resCtx->baseComm);
+      if (devState == ncclIbResiliencyDevStateRecovered) {
+        resCtx->outstandingRecovery--;
+        INFO(NCCL_NET, "NET/IB: %s: Device %d has been recovered for resiliency context (%s comm=%p, outstandingRecovery=%d)", __func__, devIndex, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm, resCtx->outstandingRecovery);
+        ncclIbResiliencyActiveQpsRestore(resCtx, devIndex);
+        resCtx->devs[devIndex].state.store(ncclIbResiliencyDevStateOk, std::memory_order_release);
+      }
+      if (devState == ncclIbResiliencyDevStateRecoveryFailed) {
+        resCtx->outstandingRecovery--;
+        INFO(NCCL_NET, "NET/IB: %s: Device %d will not be attempted to be recovered any more (%s comm=%p, outstandingRecovery=%d).", __func__, devIndex, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm, resCtx->outstandingRecovery);
+        resCtx->devs[devIndex].state.store(ncclIbResiliencyDevStateErrorPermanent, std::memory_order_release);
+        continue;
+      }
+    }
+  }
+
+  if (resCtx->outstandingRequests == 0 && resCtx->outstandingRecovery == 0) {
     INFO(NCCL_NET, "NET/IB: %s: All resiliency operations are completed for resiliency context (%s comm=%p). Marking progress as completed.", __func__, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
     resCtx->inProgress = false;
   }

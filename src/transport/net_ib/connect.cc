@@ -448,6 +448,22 @@ ncclResult_t ncclIbQpRts(struct ncclIbQp* qp) {
   return ncclSuccess;
 }
 
+ncclResult_t ncclIbQpReset(struct ncclIbQp* qp) {
+  struct ibv_qp_attr attr;
+  memset(&attr, 0, sizeof(attr));
+  attr.qp_state = IBV_QPS_RESET;
+  NCCLCHECK(wrap_ibv_modify_qp(qp->qp, &attr, IBV_QP_STATE));
+  return ncclSuccess;
+}
+
+ncclResult_t ncclIbQpError(struct ncclIbQp* qp) {
+  struct ibv_qp_attr attr;
+  memset(&attr, 0, sizeof(attr));
+  attr.qp_state = IBV_QPS_ERR;
+  NCCLCHECK(wrap_ibv_modify_qp(qp->qp, &attr, IBV_QP_STATE));
+  return ncclSuccess;
+}
+
 ncclResult_t ncclIbListen(void* ctx, int dev, void* opaqueHandle, void** listenComm) {
   ncclResult_t ret = ncclSuccess;
   struct ncclIbListenComm* comm;

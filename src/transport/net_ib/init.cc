@@ -6,6 +6,7 @@
  *************************************************************************/
 
 #include "common.h"
+#include "p2p_resiliency_recovery.h"
 
 NCCL_PARAM(IbPciRelaxedOrdering, "IB_PCI_RELAXED_ORDERING", 2);
 NCCL_PARAM(IbAdaptiveRouting, "IB_ADAPTIVE_ROUTING", -2);
@@ -445,6 +446,7 @@ ncclResult_t ncclIbInit(void** ctx, uint64_t commId, ncclNetCommConfig_t* config
   ncclResult_t ret = ncclSuccess;
   ncclNetCommConfig_t* netCommConfig = nullptr;
   NCCLCHECK(ncclIbInitDevices(logFunction, profFunction));
+  NCCLCHECK(ncclIbPortRecoveryThreadStart());
   NCCLCHECK(ncclCalloc(&netCommConfig, 1));
   netCommConfig->trafficClass = config->trafficClass;
   *ctx = (void *)netCommConfig;
@@ -505,5 +507,6 @@ ncclResult_t ncclIbGetProperties(int dev, ncclNetProperties_t* props) {
 
 ncclResult_t ncclIbFinalize(void* ctx) {
   free(ctx);
+  NCCLCHECK(ncclIbPortRecoveryThreadStop());
   return ncclIbFinalizeDevices();
 }

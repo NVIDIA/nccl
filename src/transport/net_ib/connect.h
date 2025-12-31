@@ -38,6 +38,8 @@ struct ncclIbQpInfo {
 struct ncclIbResiliencyInfo {
   // QPs used for probing of data transfers in case of QP/device failures.
   struct ncclIbQpInfo probingQpsInfo[NCCL_IB_MAX_DEVS_PER_NIC];
+  // QPs used for recovery protocol after QP/device failures.
+  struct ncclIbQpInfo portRecoveryQpsInfo[NCCL_IB_MAX_DEVS_PER_NIC];
 };
 
 // Structure used to hold information needed to establish the communication
@@ -68,6 +70,8 @@ ncclResult_t ncclIbQpCreate(struct ncclIbQp* qp, struct ncclIbQpCreateAttr* crea
 ncclResult_t ncclIbQpInit(struct ncclIbQp* qp);
 ncclResult_t ncclIbQpRtr(struct ncclIbQp* qp);
 ncclResult_t ncclIbQpRts(struct ncclIbQp* qp);
+ncclResult_t ncclIbQpReset(struct ncclIbQp* qp);
+ncclResult_t ncclIbQpError(struct ncclIbQp* qp);
 
 ncclResult_t ncclIbPostReceiveWorkRequestsOnQp(struct ncclIbRecvComm* recvComm, ncclIbQp* dataQp);
 

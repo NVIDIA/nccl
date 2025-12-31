@@ -16,12 +16,19 @@ enum ncclIbResiliencyDevState {
   ncclIbResiliencyDevStateOk = 0,
   // The device encountered an error and and can be tried to be recovered.
   ncclIbResiliencyDevStateError,
-  // The device was determined to be failed and will not be used anymore.
+  // The device is currently undergoing recovery.
+  ncclIbResiliencyDevStateRecoveryInProgress,
+  // The device recovery failed.
+  ncclIbResiliencyDevStateRecoveryFailed,
+  // The device was recovered.
+  ncclIbResiliencyDevStateRecovered,
+  // The device will not be attempted to be recovered any more.
   ncclIbResiliencyDevStateErrorPermanent
 };
 
 struct ncclIbResiliencyDev {
-  enum ncclIbResiliencyDevState state;
+  // Atomic to allow lock-free access from multiple threads (main + recovery).
+  std::atomic<ncclIbResiliencyDevState> state;
   // CQ to get CQEs on the sender side for probing operations.
   // Receiver side is not expected to get any CQEs on the this CQ but Verbs
   // requires a CQ to be associated with a QP.
@@ -32,11 +39,15 @@ struct ncclIbResiliencyDev {
   // the receiver side as the memory is only used as a target for RDMA Read
   // operations initiated by the sender side.
   struct ibv_mr* probingResultMr;
+  // CQ to get CQEs for recovery protocol messages.
+  struct ibv_cq* portRecoveryCq;
 };
 
 struct ncclIbResiliency {
   // Back pointer to the base communicator.
   struct ncclIbNetCommBase* baseComm;
+
+  bool recoveryEnabled;
 
   struct ncclIbResiliencyDev devs[NCCL_IB_MAX_DEVS_PER_NIC];
   int ndevs;
@@ -60,6 +71,13 @@ struct ncclIbResiliency {
   // Number of requests that are currently being handled by the resiliency
   // module.
   int outstandingRequests;
+
+  // QPs used for recovery protocol messages.
+  struct ncclIbQp portRecoveryQps[NCCL_IB_MAX_DEVS_PER_NIC];
+  int nPortRecoveryQps;
+
+  // Number of outstanding devices that are currently undergoing recovery.
+  int outstandingRecovery;
 };
 
 enum ncclIbResiliencyRequestSendState {

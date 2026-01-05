@@ -283,7 +283,7 @@ class GdakiGlobalGPUBufferTable {
   uint32_t *get_rkeys_d() { return this->rkeys_hd_mhandle.gpu_buf; }
 
   GdakiGlobalGPUBufferTable()
-    : gpu_ptr(nullptr), mr(nullptr), cumemhandle(nullptr), num_elements(0), next_unused_idx(0){};
+    : gpu_ptr(nullptr), mr(nullptr), cumemhandle(0), num_elements(0), next_unused_idx(0){};
   GdakiGlobalGPUBufferTable(unsigned int num_elements, unsigned int num_ranks) {
     this->allocate(num_elements, num_ranks);
   };

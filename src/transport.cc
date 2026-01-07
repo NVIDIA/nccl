@@ -25,7 +25,6 @@ static ncclResult_t selectTransport(struct ncclComm *comm, struct ncclTopoGraph 
   struct ncclPeerInfo *myInfo = comm->peerInfo + comm->rank;
   struct ncclPeerInfo *peerInfo = comm->peerInfo + peer;
 
-
   // Validate channel is initialized
   if (comm->channels[channelId].id == -1)
   {
@@ -103,6 +102,9 @@ void dumpData(struct ncclConnect *data, int ndata)
 
 NCCL_PARAM(ConnectRoundMaxPeers, "CONNECT_ROUND_MAX_PEERS", 128);
 NCCL_PARAM(ReportConnectProgress, "REPORT_CONNECT_PROGRESS", 0);
+#define EXTERN_NCCL_PARAM(name) extern int ncclParam##name();
+EXTERN_NCCL_PARAM(DisableTrapAlgos)
+#undef EXTERN_NCCL_PARAM
 #ifndef _WIN32
 #include <sys/time.h>
 #endif
@@ -115,6 +117,15 @@ NCCL_PARAM(ReportConnectProgress, "REPORT_CONNECT_PROGRESS", 0);
 ncclResult_t ncclTransportCheckP2pType(struct ncclComm *comm, bool *isAllDirectP2p, bool *directMode,
                                        bool *isAllCudaP2p)
 {
+  if (ncclParamDisableTrapAlgos())
+  {
+    *isAllDirectP2p = false;
+    *directMode = false;
+    *isAllCudaP2p = false;
+    INFO(NCCL_INIT, "Check P2P Type disabled by DISABLE_TRAP_ALGOS=1");
+    return ncclSuccess;
+  }
+
   bool ncclP2pFlag = true;
   bool directFlag = false;
   bool cudaP2pFlag = true;

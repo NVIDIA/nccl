@@ -9,6 +9,10 @@
 #include "shm.h"
 #include "transport.h"
 
+#define EXTERN_NCCL_PARAM(name) extern int ncclParam##name();
+EXTERN_NCCL_PARAM(DisableTrapAlgos)
+#undef EXTERN_NCCL_PARAM
+
 #define SHM_PATH_MAX 128
 #define SHM_HANDLE_TYPE ncclCuMemHandleType
 
@@ -81,6 +85,8 @@ static void initCeOperation();
 static ncclResult_t shmCanConnect(int *ret, struct ncclComm *comm, struct ncclTopoGraph *graph, struct ncclPeerInfo *info1, struct ncclPeerInfo *info2)
 {
   *ret = 0;
+  if (ncclParamDisableTrapAlgos())
+    return ncclSuccess;
   initCeOperation();
 
   if (ncclParamShmDisable() == 1)

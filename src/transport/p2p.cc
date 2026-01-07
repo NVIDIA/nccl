@@ -11,6 +11,9 @@
 #include "shmutils.h"
 #include "p2p.h"
 #include "transport.h"
+#define EXTERN_NCCL_PARAM(name) extern int ncclParam##name();
+EXTERN_NCCL_PARAM(DisableTrapAlgos)
+#undef EXTERN_NCCL_PARAM
 #include <assert.h>
 #include "shm.h"
 #include "register_inline.h"
@@ -144,6 +147,12 @@ extern int64_t ncclParamMNNVLEnable();
 /* Determine if two peers can communicate through p2p */
 ncclResult_t p2pCanConnect(int *ret, struct ncclComm *comm, struct ncclTopoGraph *graph, struct ncclPeerInfo *info1, struct ncclPeerInfo *info2)
 {
+  if (ncclParamDisableTrapAlgos())
+  {
+    *ret = 0;
+    return ncclSuccess;
+  }
+
   initCeOperation();
 
   // Check topology / p2p level.

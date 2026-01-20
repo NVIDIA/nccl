@@ -25,15 +25,11 @@ typedef struct {
   int devices_per_rank; // Number of devices per rank or thread
   int local_device;     // Node local rank or thread id (0 to total_ranks-1)
   int my_rank;          // Rank or thread id for NCCL
-  ncclUniqueId nccl_id; // NCCL unique ID
-  ncclComm_t comm;      // NCCL communicator (single for all modes)
-  ncclUniqueId *nccl_unique_id; // NCCL unique ID pointer
   void *func;
 
   // pthread-specific variables
 #ifndef MPI_SUPPORT
   pthread_t *threads; // Thread array
-  int *thread_ranks;  // Thread rank array
 #endif
 } context_t;
 
@@ -194,13 +190,9 @@ int initialize(int argc, char *argv[], context_t *ctx) {
   // Thread synchronization needed for unique ID sharing later on
   pthread_barrier_init(&barrier, NULL, ctx->total_ranks);
 
-  // Generate NCCL unique ID (shared across all threads)
-  NCCLCHECK(ncclGetUniqueId(&ctx->nccl_id));
-
   // Allocate thread resources
   ctx->threads = (pthread_t *)malloc(ctx->total_ranks * sizeof(pthread_t));
-  ctx->thread_ranks = (int *)malloc(ctx->total_ranks * sizeof(int));
-  if (ctx->threads == NULL || ctx->thread_ranks == NULL) {
+  if (ctx->threads == NULL) {
     printf("Failed to allocate memory for threads\n");
     return 1;
   }
@@ -249,21 +241,16 @@ int run_parallel(context_t *ctx, void *(*ncclExample)(int, int, int, int)) {
     printf("Failed to allocate thread contexts\n");
     return 1;
   }
-  ncclUniqueId *nccl_unique_id =
-      (ncclUniqueId *)calloc(1, sizeof(ncclUniqueId));
 
   for (int i = 0; i < ctx->total_ranks; i++) {
     // Copy main context to thread context
     memcpy(&thread_contexts[i], ctx, sizeof(context_t));
     thread_contexts[i].threads = NULL;
-    thread_contexts[i].thread_ranks = NULL;
     thread_contexts[i].my_rank = i; // Set NCCL rank to thread id
     thread_contexts[i].local_device = i;
     thread_contexts[i].total_ranks = ctx->total_ranks;
     thread_contexts[i].devices_per_rank = 1;
     thread_contexts[i].func = (void *)ncclExample;
-    thread_contexts[i].nccl_unique_id = nccl_unique_id;
-    ctx->thread_ranks[i] = i;
     pthread_create(&ctx->threads[i], NULL, thread_wrapper, &thread_contexts[i]);
   }
 
@@ -328,7 +315,6 @@ void cleanup(context_t *ctx) {
   MPICHECK(MPI_Finalize());
 #else
   free(ctx->threads);
-  free(ctx->thread_ranks);
   pthread_barrier_destroy(&barrier);
 #endif
 }

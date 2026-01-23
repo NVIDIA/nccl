@@ -19,6 +19,7 @@ body:
       label: How is this issue impacting you?
       description: What best describes your issue?
       options:
+        - -- Please specify --
         - Lower performance than expected
         - Application crash
         - Data corruption

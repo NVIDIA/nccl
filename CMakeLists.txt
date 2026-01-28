@@ -194,34 +194,3 @@ add_subdirectory(ext-tuner/example)
 add_subdirectory(ext-env/example)
 add_subdirectory(src)
 
-# Add package building subdirectories
-if(BUILD_DEBIAN_PACKAGE OR BUILD_PACKAGES)
-  add_subdirectory(pkg/debian)
-endif()
-
-if(BUILD_REDHAT_PACKAGE OR BUILD_PACKAGES)
-  add_subdirectory(pkg/redhat)
-endif()
-
-if(BUILD_TXZ_PACKAGE OR BUILD_PACKAGES)
-  add_subdirectory(pkg/txz)
-endif()
-
-if(BUILD_CONDA_PACKAGE OR BUILD_PACKAGES)
-  add_subdirectory(pkg/conda)
-endif()
-
-if(BUILD_SRCTXZ_PACKAGE OR BUILD_PACKAGES)
-  add_subdirectory(pkg/srctxz)
-endif()
-
-if(BUILD_DOC_PACKAGE OR BUILD_PACKAGES)
-  add_subdirectory(pkg/doc)
-endif()
-
-if(EMIT_LLVM_IR)
-    add_subdirectory(ir)
-    add_dependencies(llvm_ir nccl_header)
-    add_custom_target(nccl_with_ir ALL DEPENDS nccl llvm_ir)
-    message(STATUS "LLVM IR generation will be included in default build")
-endif()

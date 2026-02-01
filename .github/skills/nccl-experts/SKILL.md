@@ -38,18 +38,10 @@ Use NCCL when you need to:
 
 **Platform**: Linux (x86_64, aarch64, ppc64le)
 
-**Required Dependencies**:
-- NVIDIA GPU with Compute Capability 3.5+ (Kepler or newer)
-- CUDA Toolkit 9.0 or later (11.0+ recommended)
-- NVIDIA Driver 418+ (470+ recommended)
-- GCC 4.8+ or compatible C++ compiler
-
 **Optional Dependencies**:
 - InfiniBand Verbs (libibverbs) for RDMA support
 - RDMA-capable NICs (Mellanox ConnectX-5/6/7)
 - UCX (Unified Communication X) for advanced RDMA features
-- hwloc for topology detection
-- libxml2 for configuration parsing
 
 **Network Requirements**:
 - PCIe 3.0+ (for intra-node)

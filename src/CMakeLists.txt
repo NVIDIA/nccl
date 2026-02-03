@@ -29,7 +29,7 @@ endif()
 # Configure pkg-config file
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/nccl.pc.in
-    ${CMAKE_BINARY_DIR}/lib/pkgconfig/nccl.pc
+    ${PROJECT_BINARY_DIR}/lib/pkgconfig/nccl.pc
     @ONLY
 )
 
@@ -82,29 +82,29 @@ target_include_directories(nccl PUBLIC
 )
 
 add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/include/nccl.h
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/include
+    OUTPUT ${PROJECT_BINARY_DIR}/include/nccl.h
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${PROJECT_BINARY_DIR}/include
     COMMAND sed -e "s/\\\$$\\{nccl:Major\\}/${NCCL_MAJOR}/g"
                 -e "s/\\\$$\\{nccl:Minor\\}/${NCCL_MINOR}/g"
                 -e "s/\\\$$\\{nccl:Patch\\}/${NCCL_PATCH}/g"
                 -e "s/\\\$$\\{nccl:Suffix\\}/${NCCL_SUFFIX}/g"
                 -e "s/\\\$$\\{nccl:Version\\}/${NCCL_VERSION_CODE}/g"
-                ${CMAKE_CURRENT_SOURCE_DIR}/nccl.h.in > ${CMAKE_BINARY_DIR}/include/nccl.h
+                ${CMAKE_CURRENT_SOURCE_DIR}/nccl.h.in > ${PROJECT_BINARY_DIR}/include/nccl.h
 )
 
 file(GLOB_RECURSE SRC_DEVICE_HEADERS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_device/*.h)
 
 # Copy all device header files to the destination
 foreach(HEADER_FILE ${SRC_DEVICE_HEADERS})
-    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${HEADER_FILE} ${CMAKE_BINARY_DIR}/${HEADER_FILE} COPYONLY)
-    list(APPEND DEVICE_HEADERS ${CMAKE_BINARY_DIR}/${HEADER_FILE})
+    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${HEADER_FILE} ${PROJECT_BINARY_DIR}/${HEADER_FILE} COPYONLY)
+    list(APPEND DEVICE_HEADERS ${PROJECT_BINARY_DIR}/${HEADER_FILE})
 endforeach()
 
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_device.h ${CMAKE_BINARY_DIR}/include/nccl_device.h COPYONLY)
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_device.h ${PROJECT_BINARY_DIR}/include/nccl_device.h COPYONLY)
 
 add_custom_target(nccl_header DEPENDS
-    ${CMAKE_BINARY_DIR}/include/nccl.h
-    ${CMAKE_BINARY_DIR}/include/nccl_device.h
+    ${PROJECT_BINARY_DIR}/include/nccl.h
+    ${PROJECT_BINARY_DIR}/include/nccl_device.h
     ${DEVICE_HEADERS}
     ${DEVICE_DOCA_HEADERS}
 )
@@ -123,10 +123,10 @@ set_target_properties(nccl PROPERTIES
 #
 # Generate git_version.h
 #
-set(GIT_VERSION_FILE "${CMAKE_BINARY_DIR}/include/git_version.h")
-file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/include")
+set(GIT_VERSION_FILE "${PROJECT_BINARY_DIR}/include/git_version.h")
+file(MAKE_DIRECTORY "${PROJECT_BINARY_DIR}/include")
 add_custom_target(generate_git_version ALL
-  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/src/misc/generate_git_version.py ${GIT_VERSION_FILE}
+  COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/src/misc/generate_git_version.py ${GIT_VERSION_FILE}
   COMMENT "Checking git version"
   BYPRODUCTS ${GIT_VERSION_FILE}
 )
@@ -158,7 +158,7 @@ target_link_options(nccl PRIVATE
 
 # Set output directories for nccl shared library
 set_target_properties(nccl PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+    LIBRARY_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/lib"
 )
 
 ###################### Create a ras binary executable ############################
@@ -167,7 +167,7 @@ set(RAS_BINSRCFILES ras/client.cc)
 add_executable(ncclras ${RAS_BINSRCFILES})
 
 target_include_directories(ncclras PUBLIC
-    ${CMAKE_BINARY_DIR}/include
+    ${PROJECT_BINARY_DIR}/include
     ${CUDAToolkit_INCLUDE_DIRS}
 )
 
@@ -182,7 +182,7 @@ target_link_libraries(ncclras
 
 # Set output directory for ncclras executable
 set_target_properties(ncclras PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/bin"
 )
 
 ###################### Create a static NCCL library ############################
@@ -224,5 +224,5 @@ set_target_properties(nccl_static PROPERTIES
 
 # Set output directory for nccl_static library
 set_target_properties(nccl_static PROPERTIES
-    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+    ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/lib"
 )

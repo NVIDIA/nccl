@@ -2,9 +2,9 @@
 
 # Source and output configuration
 set(LLVM_SRC ${CMAKE_CURRENT_SOURCE_DIR}/nccl_device_wrapper__impl.h)
-set(OBJDIR ${CMAKE_BINARY_DIR}/obj/llvm_ir)
-set(LIBDIR ${CMAKE_BINARY_DIR}/lib)
-set(INCLUDEDIR ${CMAKE_BINARY_DIR}/include)
+set(OBJDIR ${PROJECT_BINARY_DIR}/obj/llvm_ir)
+set(LIBDIR ${PROJECT_BINARY_DIR}/lib)
+set(INCLUDEDIR ${PROJECT_BINARY_DIR}/include)
 
 # Output files (all aux files in obj/llvm_ir)
 set(UNOPTIMIZED_BC ${OBJDIR}/libnccl_device.bc.unoptimized)
@@ -32,10 +32,10 @@ find_program(LLVM_AS_EXECUTABLE llvm-as REQUIRED)
 
 # Include paths
 set(NCCL_INCLUDES
-    -I${CMAKE_BINARY_DIR}/include
-    -I${CMAKE_SOURCE_DIR}/src/include
-    -I${CMAKE_SOURCE_DIR}/src/include/nccl_device
-    -I${CMAKE_SOURCE_DIR}/src/device
+    -I${PROJECT_BINARY_DIR}/include
+    -I${PROJECT_SOURCE_DIR}/src/include
+    -I${PROJECT_SOURCE_DIR}/src/include/nccl_device
+    -I${PROJECT_SOURCE_DIR}/src/device
 )
 
 set(CUDA_INCLUDES

@@ -19,17 +19,17 @@ set_target_properties(nccl-profiler-example PROPERTIES
     OUTPUT_NAME "nccl-profiler-example"
     PREFIX "lib"
     POSITION_INDEPENDENT_CODE ON
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
+    LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib
 )
 
 add_custom_command(TARGET nccl-profiler-example POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/test/unit/plugins
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/lib/libnccl-profiler-example.so ${CMAKE_BINARY_DIR}/test/unit/plugins
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${PROJECT_BINARY_DIR}/test/unit/plugins
+    COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_BINARY_DIR}/lib/libnccl-profiler-example.so ${PROJECT_BINARY_DIR}/test/unit/plugins
 )
 
 # Add custom target for clean (equivalent to Makefile clean target)
 add_custom_target(clean-profiler-lib
-    COMMAND ${CMAKE_COMMAND} -E remove -f ${CMAKE_BINARY_DIR}/lib/libnccl-profiler-example.so
-    COMMAND ${CMAKE_COMMAND} -E remove -f ${CMAKE_BINARY_DIR}/test/unit/plugins/libnccl-profiler-example.so
+    COMMAND ${CMAKE_COMMAND} -E remove -f ${PROJECT_BINARY_DIR}/lib/libnccl-profiler-example.so
+    COMMAND ${CMAKE_COMMAND} -E remove -f ${PROJECT_BINARY_DIR}/test/unit/plugins/libnccl-profiler-example.so
     COMMENT "Cleaning libnccl-profiler-example.so"
 )

@@ -16,7 +16,7 @@ set_target_properties(nccl-tuner-example PROPERTIES
     OUTPUT_NAME "nccl-tuner-example"
     PREFIX "lib"
     POSITION_INDEPENDENT_CODE ON
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/test/unit/plugins
+    LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/unit/plugins
 )
 
 # Add custom target for clean (equivalent to Makefile clean target)

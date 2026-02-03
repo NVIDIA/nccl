@@ -15,5 +15,5 @@ set_target_properties(nccl-net-example PROPERTIES
     OUTPUT_NAME "nccl-net-example"
     PREFIX "lib"
     POSITION_INDEPENDENT_CODE ON
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/test/unit/plugins
+    LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/unit/plugins
 )

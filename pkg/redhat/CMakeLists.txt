@@ -4,8 +4,8 @@ find_program(RPMBUILD_EXECUTABLE rpmbuild)
 find_program(SED_EXECUTABLE sed)
 
 # Set package directories
-set(RPMPREPDIR "${CMAKE_BINARY_DIR}/redhat")
-set(PKGDIR "${CMAKE_BINARY_DIR}/pkg/rpm")
+set(RPMPREPDIR "${PROJECT_BINARY_DIR}/redhat")
+set(PKGDIR "${PROJECT_BINARY_DIR}/pkg/rpm")
 set(RPMGEN_IN nccl.spec.in)
 set(RPMGEN nccl.spec)
 set(RPMFILES ${RPMGEN})
@@ -58,11 +58,11 @@ add_custom_command(
 # Build the package
 add_custom_target(redhat_build
   COMMAND ${CMAKE_COMMAND} -E make_directory ${PKGDIR}
-  COMMAND ${RPMBUILD_EXECUTABLE} --define "_sourcedir ${CMAKE_BINARY_DIR}/pkg/txz"
+  COMMAND ${RPMBUILD_EXECUTABLE} --define "_sourcedir ${PROJECT_BINARY_DIR}/pkg/txz"
                                  --define "_rpmdir ${PKGDIR}"
                                  --define "_builddir ${PKGDIR}/build/"
                                  --define "_buildrootdir ${PKGDIR}/buildroot/"
-                                 -bb ${CMAKE_BINARY_DIR}/redhat/nccl.spec
+                                 -bb ${PROJECT_BINARY_DIR}/redhat/nccl.spec
   WORKING_DIRECTORY ${RPMPREPDIR}
   DEPENDS redhat_prep nccl_static txz_build
   COMMENT "Building Redhat package with rpmbuild"

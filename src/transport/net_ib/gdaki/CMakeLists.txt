@@ -7,7 +7,7 @@ endif()
 
 # Copy DOCA GPUNetIO headers to build directory
 set(DOCA_INCLUDE_SOURCE_DIR ${DOCA_HOME}/include)
-set(DOCA_INCLUDE_DEST_DIR ${CMAKE_BINARY_DIR}/include/nccl_device/gin/gdaki/doca_gpunetio)
+set(DOCA_INCLUDE_DEST_DIR ${PROJECT_BINARY_DIR}/include/nccl_device/gin/gdaki/doca_gpunetio)
 
 # Get all header files from the source directory, including subfolders
 file(GLOB DOCA_HEADER_TOP ${DOCA_INCLUDE_SOURCE_DIR}/doca_gpunetio_device.h)

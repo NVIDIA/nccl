@@ -3,8 +3,8 @@
 find_program(SED_EXECUTABLE sed)
 
 # Set package directories
-set(TXZPREPDIR "${CMAKE_BINARY_DIR}/srctxz")
-set(PKGDIR "${CMAKE_BINARY_DIR}/pkg/srctxz")
+set(TXZPREPDIR "${PROJECT_BINARY_DIR}/srctxz")
+set(PKGDIR "${PROJECT_BINARY_DIR}/pkg/srctxz")
 set(TXZGEN_IN create_srctxz.sh.in)
 set(TXZGEN create_srctxz.sh)
 set(TXZTARGETS ${TXZPREPDIR}/${TXZGEN})
@@ -34,10 +34,10 @@ add_custom_command(
 
 # Build the package
 add_custom_target(srctxz_build
-  COMMAND ${CMAKE_COMMAND} -E chdir ${CMAKE_SOURCE_DIR}/src ${CMAKE_COMMAND} --build . --target clean
-  COMMAND cd ${CMAKE_BINARY_DIR} && SRCTXZ_APITESTS=${SRCTXZ_APITESTS} bash srctxz/create_srctxz.sh
+  COMMAND ${CMAKE_COMMAND} -E chdir ${PROJECT_SOURCE_DIR}/src ${CMAKE_COMMAND} --build . --target clean
+  COMMAND cd ${PROJECT_BINARY_DIR} && SRCTXZ_APITESTS=${SRCTXZ_APITESTS} bash srctxz/create_srctxz.sh
   COMMAND ${CMAKE_COMMAND} -E make_directory ${PKGDIR}
-  COMMAND mv ${CMAKE_SOURCE_DIR}/../nccl-src*.txz ${PKGDIR}
+  COMMAND mv ${PROJECT_SOURCE_DIR}/../nccl-src*.txz ${PKGDIR}
   WORKING_DIRECTORY ${TXZPREPDIR}
   DEPENDS srctxz_prep
   COMMENT "Building Source TXZ package with create_srctxz.sh"

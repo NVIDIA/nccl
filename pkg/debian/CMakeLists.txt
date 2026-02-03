@@ -4,8 +4,8 @@ find_program(DEBUILD_EXECUTABLE debuild)
 find_program(SED_EXECUTABLE sed)
 
 # Set package directories
-set(DEBPREPDIR "${CMAKE_BINARY_DIR}/debian")
-set(PKGDIR "${CMAKE_BINARY_DIR}/pkg/deb")
+set(DEBPREPDIR "${PROJECT_BINARY_DIR}/debian")
+set(PKGDIR "${PROJECT_BINARY_DIR}/pkg/deb")
 set(DEBGENFILES libnccl-dev.install libnccl2.install control changelog)
 set(DEBFILES compat copyright rules $(DEBGENFILES))
 
@@ -59,9 +59,9 @@ endforeach()
 
 # Build the package
 add_custom_target(debian_build
-  COMMAND cd ${CMAKE_BINARY_DIR} && ${DEBUILD_EXECUTABLE} -eLD_LIBRARY_PATH -uc -us -d -b -Zxz
+  COMMAND cd ${PROJECT_BINARY_DIR} && ${DEBUILD_EXECUTABLE} -eLD_LIBRARY_PATH -uc -us -d -b -Zxz
   COMMAND ${CMAKE_COMMAND} -E make_directory ${PKGDIR}
-  COMMAND mv ${CMAKE_SOURCE_DIR}/libnccl*.deb ${PKGDIR}
+  COMMAND mv ${PROJECT_SOURCE_DIR}/libnccl*.deb ${PKGDIR}
   WORKING_DIRECTORY ${DEBPREPDIR}
   DEPENDS debian_prep
   COMMENT "Building Debian package with debuild"

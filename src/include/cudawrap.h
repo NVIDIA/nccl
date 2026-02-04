@@ -32,7 +32,7 @@ extern CUmemAllocationHandleType ncclCuMemHandleType;
     if( err != CUDA_SUCCESS ) {				      \
       const char *errStr;				      \
       (void) pfn_cuGetErrorString(err, &errStr);	      \
-      WARN("Cuda failure %d '%s'", err, errStr);	      \
+      WARN("Cuda failure %d '%s' from %s", err, errStr, #cmd);	      \
       return ncclUnhandledCudaError;			      \
     }							      \
 } while(false)
@@ -46,7 +46,7 @@ extern CUmemAllocationHandleType ncclCuMemHandleType;
     if( err != CUDA_SUCCESS ) {				      \
       const char *errStr;				      \
       (void) pfn_cuGetErrorString(err, &errStr);	      \
-      WARN("Cuda failure %d '%s'", err, errStr);	      \
+      WARN("Cuda failure %d '%s' from %s", err, errStr, #cmd);	      \
       res = ncclUnhandledCudaError;			      \
       goto label;					      \
     }							      \
@@ -58,7 +58,7 @@ extern CUmemAllocationHandleType ncclCuMemHandleType;
     if( err != CUDA_SUCCESS ) {						\
       const char *errStr;						\
       (void) pfn_cuGetErrorString(err, &errStr);			\
-      INFO(NCCL_ALL,"%s:%d Cuda failure %d '%s'", __FILE__, __LINE__, err, errStr); \
+      INFO(NCCL_ALL,"%s:%d Cuda failure %d '%s' from %s", __FILE__, __LINE__, err, errStr, #cmd); \
     }									\
 } while(false)
 

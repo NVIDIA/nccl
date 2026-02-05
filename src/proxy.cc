@@ -16,6 +16,7 @@
 #include "cpuset.h"
 #include "compiler.h"
 #include "os.h"
+#include "utils.h"
 
 #include <sys/syscall.h>
 #include <assert.h>
@@ -26,6 +27,15 @@
 #include <mutex>
 
 #define NCCL_MAX_PROXY_CONNECTIONS (NCCL_MAX_LOCAL_RANKS+1)
+
+// Spin duration in nanoseconds before yielding when waiting for free ops.
+// Default 1000ns (1us) - reduces sched_yield syscall overhead.
+// Set to 0 to always yield immediately.
+NCCL_PARAM(ProxySpinTimeNs, "PROXY_SPIN_TIME_NS", 1000);
+
+// Spin duration for progress loop when idle (no ops to process).
+// Default 1000ns (1us). Set to 0 to always yield immediately.
+NCCL_PARAM(ProxyProgressSpinTimeNs, "PROXY_PROGRESS_SPIN_TIME_NS", 1000);
 
 enum { proxyRecv=0, proxySend=1 };
 void* ncclProxyServiceUDS(void* _args);
@@ -496,9 +506,18 @@ static ncclResult_t ncclLocalOpAppend(struct ncclComm* comm, struct ncclProxyCon
   } else {
     // Read the freeOps value and wait for a value different than -1. Once not -1, read the value with acquire and reset -1
     int freeOp = -1;
+    uint64_t t0 = clockNano();
+    int64_t spinTimeNs = ncclParamProxySpinTimeNs();
     while (freeOp == -1) {
       freeOp = COMPILER_ATOMIC_EXCHANGE(&pool->freeOps[tpLocalRank], -1, std::memory_order_acquire);
-      if (freeOp == -1) sched_yield();
+      if (freeOp == -1) {
+        if (clockNano() - t0 < (uint64_t)spinTimeNs) {
+          ncclCpuRelax();
+        } else {
+          sched_yield();
+          t0 = clockNano();  // Reset timer after yield
+        }
+      }
     }
     opIndex = freeOp;
     op = pool->ops+opIndex;
@@ -994,7 +1013,18 @@ void* ncclProxyProgress(void *proxyState_) {
         INFO(NCCL_ALL,"%s:%d -> %d [Progress Thread]", __FILE__, __LINE__, ret);
       }
       if (added == 0) {
-        std::this_thread::yield(); // No request progressed. Let others run.
+        // Time-based spinning before yield to reduce syscall overhead
+        static thread_local uint64_t idleStartTime = 0;
+        static thread_local int64_t progressSpinTimeNs = ncclParamProxyProgressSpinTimeNs();
+        if (idleStartTime == 0) {
+          idleStartTime = clockNano();
+        }
+        if (clockNano() - idleStartTime < (uint64_t)progressSpinTimeNs) {
+          ncclCpuRelax();
+        } else {
+          std::this_thread::yield();
+          idleStartTime = 0;  // Reset after yield to re-spin next iteration
+        }
       }
     }
     lastIdle = idle;

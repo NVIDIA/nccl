@@ -57,6 +57,19 @@
 #define GPU_PAGE_SIZE (1UL << GPU_PAGE_SHIFT)
 #define GPU_FULL_ASYNC_STORE_RELEASE_SUPPORT_COMPUTE_CAP_MAJOR 10
 
+// Low-power spin-wait hint to CPU
+static inline void cpuRelax() {
+#if defined(__x86_64__) || defined(__i386__)
+  __asm__ __volatile__("pause" ::: "memory");
+#elif defined(__aarch64__)
+  __asm__ __volatile__("yield" ::: "memory");
+#elif defined(__PPC__) || defined(__ppc__) || defined(__powerpc__)
+  __asm__ __volatile__("or 27,27,27" ::: "memory");
+#else
+  __asm__ __volatile__("" ::: "memory");
+#endif
+}
+
 struct doca_gpu_mtable {
     uintptr_t base_addr;
     size_t size_orig;
@@ -829,7 +842,7 @@ static void *priv_service_mainloop(void *args) {
             }
         }
         pthread_rwlock_unlock(&service->service_lock);
-        sched_yield();
+        cpuRelax();
     }
 
     return nullptr;

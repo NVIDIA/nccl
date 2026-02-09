@@ -30,13 +30,15 @@ namespace {
 struct ncclSymkArgsHandler {
   ncclDevComm const& comm;
   ncclLLA2AHandle const& lsaLLA2A;
+  ncclGinSyncHandle const& ginSyncHandle;
   struct ncclSymkChannelWorkRange* channelWorkRange;
   struct ncclSymkDevWork* devWork;
   uint32_t nRanks_rcp32;
 
   __device__ ncclSymkArgsHandler(ncclSymkDevWorkArgs const* args):
     comm(args->kcomm.devComm),
-    lsaLLA2A(args->kcomm.lsaLLA2A) {
+    lsaLLA2A(args->kcomm.lsaLLA2A),
+    ginSyncHandle(args->kcomm.ginSyncHandle) {
     channelWorkRange = args->getWorkRange();
 
     devWork = args->getWorks(args->nMaxChannels);
@@ -58,13 +60,14 @@ struct ncclSymkArgsHandler {
       workLo++;
       fracLo = 0;
     }
-    struct ncclSymkDevWork const& dw = devWork[workLo];
-    indexLo = ((fracLo * divUp(dw.nElts, EltPerCell)) >> 16) * EltPerCell;
+    struct ncclSymkDevWork const& dwLo = devWork[workLo];
+    indexLo = ((fracLo * divUp(dwLo.nElts, EltPerCell)) >> 16) * EltPerCell;
 
     // Where the work ends
     workHi = channelWorkRange[block].workHi;
     fracHi = channelWorkRange[block].fracHi + 1;
-    indexHi = min(((fracHi * divUp(dw.nElts, EltPerCell)) >> 16) * EltPerCell, dw.nElts);
+    struct ncclSymkDevWork const& dwHi = devWork[workHi];
+    indexHi = min(((fracHi * divUp(dwHi.nElts, EltPerCell)) >> 16) * EltPerCell, dwHi.nElts);
   }
 
   template<typename T>
@@ -80,7 +83,7 @@ struct ncclSymkArgsHandler {
     lastBlock = dw.sChannelId+dw.nChannels-1;
 
     // Where the work begins
-    fracLo = (dw.sChannelId==0) ? 0 : ((channelWorkRange[dw.sChannelId-1].fracHi + 1) & 0xFFFF);
+    fracLo = (dw.sChannelId>0 && channelWorkRange[dw.sChannelId-1].workHi == w) ? ((channelWorkRange[dw.sChannelId-1].fracHi + 1) & 0xFFFF) : 0;
     indexLo = ((fracLo * divUp(dw.nElts, EltPerCell)) >> 16) * EltPerCell;
     fracHi = (channelWorkRange[lastBlock].workHi == w) ? channelWorkRange[lastBlock].fracHi + 1 : 0x10000;
     indexHi = min(((fracHi * divUp(dw.nElts, EltPerCell)) >> 16) * EltPerCell, dw.nElts);
@@ -93,16 +96,16 @@ struct ncclSymkArgsHandler {
 
       getWorkRange<T>(blockIdx.x, workLo, indexLo, workHi, indexHi);
 
-      size_t currentIndexLo = indexLo;
       #pragma unroll 1
       for (int w = workLo; w <= workHi; w++) {
         struct ncclSymkDevWork const& dw = devWork[w];
         size_t const& nAllElts = dw.nElts;
-        size_t currentIndexHi;
+        size_t currentIndexLo, currentIndexHi;
         int block, nBlocks;
         if (blockIdx.x >= dw.sChannelId && blockIdx.x < dw.sChannelId + dw.nChannels) {
           getWorkRangeFused<T>(blockIdx.x, w, block, nBlocks, currentIndexLo, currentIndexHi);
         } else {
+          currentIndexLo = (w > workLo) ? 0 : indexLo;
           currentIndexHi = (w < workHi) ? nAllElts : indexHi;
           block = 0;
           nBlocks = 1;
@@ -129,6 +132,27 @@ struct ncclSymkArgsHandler {
          ncclSymPtr<T>(dw.inputWin, dw.inputOff) + indexLo,
          ncclSymPtr<T>(dw.outputWin, dw.outputOff) + indexLo);
   }
+
+  template<typename T, typename Fn>
+    __device__ void forEachWorkNoFusion(Fn const& fn) {
+      uint16_t workLo, workHi;
+      size_t indexLo, indexHi;
+
+      getWorkRange<T>(blockIdx.x, workLo, indexLo, workHi, indexHi);
+
+      #pragma unroll 1
+      for (int w = workLo; w <= workHi; w++) {
+        struct ncclSymkDevWork const& dw = devWork[w];
+        size_t const& nAllElts = dw.nElts;
+        size_t currentIndexLo, currentIndexHi;
+        currentIndexLo = (w > workLo) ? 0 : indexLo;
+        currentIndexHi = (w < workHi) ? nAllElts : indexHi;
+
+        fn(currentIndexHi - currentIndexLo, nAllElts,
+           ncclSymPtr<T>(dw.inputWin, dw.inputOff) + currentIndexLo,
+           ncclSymPtr<T>(dw.outputWin, dw.outputOff) + currentIndexLo);
+      }
+  }
 };
 }
 
@@ -146,4 +170,54 @@ template<> struct ncclSymkAccumType<FuncSum, __nv_bfloat16, false> { using Type 
 template<> struct ncclSymkAccumType<FuncSum, __nv_fp8_e4m3, false> { using Type = float; };
 template<> struct ncclSymkAccumType<FuncSum, __nv_fp8_e5m2, false> { using Type = float; };
 #endif
+
+template<typename T>
+static __device__ void bcastMultimem(
+    ncclSymkArgsHandler& handler, int tn, int t, ncclSymPtr<T> input, ncclSymPtr<T> output, size_t nElts
+  ) {
+  size_t nBytes = nElts*sizeof(T);
+  uintptr_t inputUptr = reinterpret_cast<uintptr_t>(input.localPtr());
+  uintptr_t outputUptr = reinterpret_cast<uintptr_t>(output.multimemPtr(handler.comm.lsaMultimem));
+  uint32_t nPreBytes = (16 - input.offset)%16;
+  nPreBytes = min((size_t)nPreBytes, nBytes);
+  uintptr_t nSufBytes;
+
+  if ((inputUptr-outputUptr)%16 == 0) {
+    constexpr int BytePerPack = 16, UnrollPacks = 8;
+    constexpr int BytePerChunk = UnrollPacks*WARP_SIZE*BytePerPack;
+    uintptr_t cursor = nPreBytes;
+    uint32_t nChunks = (nBytes-cursor)/BytePerChunk;
+    uintptr_t cursorAfter = cursor + uintptr_t(nChunks)*BytePerChunk;
+    nSufBytes = nBytes - cursorAfter;
+    cursor += (t/WARP_SIZE)*UnrollPacks*WARP_SIZE*BytePerPack;
+    cursor += (t%WARP_SIZE)*BytePerPack;
+    int nIters = nChunks - t/WARP_SIZE;
+    #pragma unroll 1
+    while (0 < nIters) {
+      BytePack<BytePerPack> tmp[UnrollPacks];
+      #pragma unroll
+      for (int u=0; u < UnrollPacks; u++) {
+        tmp[u] = *reinterpret_cast<BytePack<BytePerPack>*>(inputUptr + cursor + u*WARP_SIZE*BytePerPack);
+      }
+      #pragma unroll
+      for (int u=0; u < UnrollPacks; u++) {
+        multimem_st_global(outputUptr + cursor + u*WARP_SIZE*BytePerPack, tmp[u]);
+      }
+      cursor += tn*UnrollPacks*BytePerPack;
+      nIters -= tn/WARP_SIZE;
+    }
+  } else {
+    nPreBytes = 0;
+    nSufBytes = nBytes;
+  }
+
+  // Get the prefix+suffix element one at a time.
+  #pragma unroll 4
+  for (uintptr_t i = t*sizeof(T); i < nPreBytes + nSufBytes; i += tn*sizeof(T)) {
+    uintptr_t cursor = i < nPreBytes ? i : nBytes-nSufBytes+(i-nPreBytes);
+    BytePack<sizeof(T)> val = *reinterpret_cast<BytePack<sizeof(T)>*>(inputUptr + cursor);
+    multimem_st_global(outputUptr + cursor, val);
+  }
+}
+
 #endif

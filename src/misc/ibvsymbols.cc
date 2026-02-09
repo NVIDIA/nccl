@@ -50,7 +50,7 @@ ncclResult_t buildIbvSymbols(struct ncclIbvSymbols* ibvSymbols) {
   ASSIGN_SYM(ibvSymbols, ibv_destroy_qp, ibv_internal_destroy_qp);
   ASSIGN_SYM(ibvSymbols, ibv_fork_init, ibv_internal_fork_init);
   ASSIGN_SYM(ibvSymbols, ibv_event_type_str, ibv_internal_event_type_str);
-  
+
   ASSIGN_SYM(ibvSymbols, ibv_query_ece, ibv_internal_query_ece);
   ASSIGN_SYM(ibvSymbols, ibv_set_ece, ibv_internal_set_ece);
 

@@ -10,8 +10,8 @@
 #include "nccl.h"
 #include "nccl_common.h"
 #include <stdio.h>
-
-#include <pthread.h>
+#include <thread>
+#include "compiler.h"
 
 // Conform to pthread and NVTX standard
 #define NCCL_THREAD_NAMELEN 16
@@ -29,16 +29,24 @@ extern char ncclLastError[];
 #define VERSION(...) ncclDebugLog(NCCL_LOG_VERSION, NCCL_ALL, __FILE__, __LINE__, __VA_ARGS__)
 #define WARN(...) ncclDebugLog(NCCL_LOG_WARN, NCCL_ALL, __FILE__, __LINE__, __VA_ARGS__)
 
+#define NOWARN(EXPR, FLAGS) \
+  do { \
+    int oldNoWarn = ncclDebugNoWarn; \
+    ncclDebugNoWarn = FLAGS; \
+    (EXPR); \
+    ncclDebugNoWarn = oldNoWarn; \
+  } while(0)
+
 #define INFO(FLAGS, ...) \
     do{ \
-        int level = __atomic_load_n(&ncclDebugLevel, __ATOMIC_ACQUIRE); \
+        int level = COMPILER_ATOMIC_LOAD(&ncclDebugLevel, std::memory_order_acquire); \
         if((level >= NCCL_LOG_INFO && ((unsigned long)(FLAGS) & ncclDebugMask)) || (level < 0)) \
             ncclDebugLog(NCCL_LOG_INFO, (unsigned long)(FLAGS), __func__, __LINE__, __VA_ARGS__); \
     } while(0)
 
 #define TRACE_CALL(...) \
     do { \
-        int level = __atomic_load_n(&ncclDebugLevel, __ATOMIC_ACQUIRE); \
+        int level = COMPILER_ATOMIC_LOAD(&ncclDebugLevel, std::memory_order_acquire); \
         if((level >= NCCL_LOG_TRACE && (NCCL_CALL & ncclDebugMask)) || (level < 0)) { \
             ncclDebugLog(NCCL_LOG_TRACE, NCCL_CALL, __func__, __LINE__, __VA_ARGS__); \
         } \
@@ -47,7 +55,7 @@ extern char ncclLastError[];
 #ifdef ENABLE_TRACE
 #define TRACE(FLAGS, ...) \
     do { \
-        int level = __atomic_load_n(&ncclDebugLevel, __ATOMIC_ACQUIRE); \
+        int level = COMPILER_ATOMIC_LOAD(&ncclDebugLevel, std::memory_order_acquire); \
         if ((level >= NCCL_LOG_TRACE && ((unsigned long)(FLAGS) & ncclDebugMask)) || (level < 0)) { \
             ncclDebugLog(NCCL_LOG_TRACE, (unsigned long)(FLAGS), __func__, __LINE__, __VA_ARGS__); \
         } \
@@ -56,7 +64,7 @@ extern char ncclLastError[];
 #define TRACE(...)
 #endif
 
-void ncclSetThreadName(pthread_t thread, const char *fmt, ...);
+void ncclSetThreadName(std::thread& thread, const char *fmt, ...);
 
 void ncclResetDebugInit();
 

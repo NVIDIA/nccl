@@ -8,13 +8,14 @@
 #include "transport.h"
 #include "group.h"
 #include "nvtx.h"
+#include "utils.h"
 
 NCCL_API(ncclResult_t, ncclMemAlloc, void **ptr, size_t size);
 ncclResult_t  ncclMemAlloc(void **ptr, size_t size) {
   NCCL_NVTX3_FUNC_RANGE;
   ncclResult_t ret = ncclSuccess;
 
-#if CUDART_VERSION >= 12010
+#if CUDART_VERSION >= 11030
   size_t memGran = 0;
   CUdevice currentDev;
   CUmemAllocationProp memprop = {};
@@ -34,10 +35,12 @@ ncclResult_t  ncclMemAlloc(void **ptr, size_t size) {
   if (ncclCuMemEnable()) {
     size_t handleSize = size;
     int requestedHandleTypes = CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
+#if CUDART_VERSION >= 12030
     // Query device to see if FABRIC handle support is available
     flag = 0;
     (void) CUPFN(cuDeviceGetAttribute(&flag, CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_FABRIC_SUPPORTED, currentDev));
     if (flag) requestedHandleTypes |= CU_MEM_HANDLE_TYPE_FABRIC;
+#endif
     memprop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
     memprop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
     memprop.requestedHandleTypes = (CUmemAllocationHandleType) requestedHandleTypes;
@@ -50,6 +53,7 @@ ncclResult_t  ncclMemAlloc(void **ptr, size_t size) {
     CUDACHECK(cudaGetDeviceCount(&dcnt));
     ALIGN_SIZE(handleSize, memGran);
 
+#if CUDART_VERSION >= 12030
     if (requestedHandleTypes & CU_MEM_HANDLE_TYPE_FABRIC) {
       /* First try cuMemCreate() with FABRIC handle support and then remove if it fails */
       CUresult err = CUPFN(cuMemCreate(&handle, handleSize, &memprop, 0));
@@ -62,7 +66,9 @@ ncclResult_t  ncclMemAlloc(void **ptr, size_t size) {
         // Catch and report any error from above
         CUCHECK(cuMemCreate(&handle, handleSize, &memprop, 0));
       }
-    } else {
+    } else
+#endif
+    {
       /* Allocate the physical memory on the device */
       CUCHECK(cuMemCreate(&handle, handleSize, &memprop, 0));
     }
@@ -73,7 +79,7 @@ ncclResult_t  ncclMemAlloc(void **ptr, size_t size) {
     /* Now allow RW access to the newly mapped memory */
     for (int i = 0; i < dcnt; ++i) {
       int p2p = 0;
-      if (i == cudaDev || ((cudaDeviceCanAccessPeer(&p2p, i, cudaDev) == cudaSuccess) && p2p)) {
+      if (i == cudaDev || (CUDASUCCESS(cudaDeviceCanAccessPeer(&p2p, i, cudaDev)) && p2p)) {
         accessDesc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
         accessDesc.location.id = i;
         accessDesc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
@@ -104,7 +110,7 @@ ncclResult_t  ncclMemFree(void *ptr) {
   int saveDevice;
 
   CUDACHECK(cudaGetDevice(&saveDevice));
-#if CUDART_VERSION >= 12010
+#if CUDART_VERSION >= 11030
   CUdevice ptrDev = 0;
 
   if (ptr == NULL) goto fallback;
@@ -312,15 +318,8 @@ ncclResult_t ncclShadowPoolDestruct(struct ncclShadowPool* pool) {
   return ncclSuccess;
 }
 
-static int hashBucket(int hbits, void* devObj) {
-  uintptr_t h = reinterpret_cast<uintptr_t>(devObj);
-  h ^= h>>32;
-  h *= 0x9e3779b97f4a7c13;
-  return (uint64_t)h >> (64-hbits);
-}
-
 static void hashInsert(struct ncclShadowPool* pool, struct ncclShadowObject* obj) {
-  int b = hashBucket(pool->hbits, obj->devObj);
+  uint64_t b = ncclHashPointer(pool->hbits, obj->devObj);
   obj->next = pool->table[b];
   pool->table[b] = obj;
 }
@@ -418,7 +417,7 @@ ncclResult_t ncclShadowPoolAlloc(
 ncclResult_t ncclShadowPoolFree(struct ncclShadowPool* pool, void* devObj, cudaStream_t stream) {
   if (devObj == nullptr) return ncclSuccess;
 
-  int b = hashBucket(pool->hbits, devObj);
+  uint64_t b = ncclHashPointer(pool->hbits, devObj);
   struct ncclShadowObject** pobj = &pool->table[b];
   while (true) {
     if (*pobj == nullptr) {
@@ -451,7 +450,7 @@ ncclResult_t ncclShadowPoolToHost(struct ncclShadowPool* pool, void* devObj, voi
     return ncclSuccess;
   }
 
-  int b = hashBucket(pool->hbits, devObj);
+  uint64_t b = ncclHashPointer(pool->hbits, devObj);
   struct ncclShadowObject* obj = pool->table[b];
   while (true) {
     if (obj == nullptr) {

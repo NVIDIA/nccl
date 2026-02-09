@@ -165,7 +165,7 @@ NVTX_LINKONCE_DEFINE_FUNCTION int NVTX_VERSIONED_IDENTIFIER(nvtxExtLoadInjection
             size_t bytesRead;
             size_t pos;
 
-            pid = (int)getpid();
+            pid = (int)ncclOsGetpid();
             count = snprintf(cmdlineBuf, sizeof(cmdlineBuf), "/proc/%d/cmdline", pid);
             if (count <= 0 || count >= (int)sizeof(cmdlineBuf))
             {

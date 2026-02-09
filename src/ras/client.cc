@@ -28,6 +28,9 @@ static const char* hostName = "localhost";
 static const char* port = STR(NCCL_RAS_CLIENT_PORT);
 static int timeout = -1;
 static bool verbose = false;
+static bool monitorMode = false;
+static const char* format = nullptr;
+static const char* events = nullptr;
 static int sock = -1;
 
 static void printUsage(const char* argv0) {
@@ -35,8 +38,12 @@ static void printUsage(const char* argv0) {
           "Usage: %s [OPTION]...\n"
           "Query the state of a running NCCL job.\n"
           "\nOptions:\n"
+          "  -f, --format=FMT    Output format: text or json (text by default)\n"
           "  -h, --host=HOST     Host name or IP address of the RAS client socket of the\n"
           "                      NCCL job to connect to (localhost by default)\n"
+          "  -m, --monitor[=GROUPS] Monitor mode: continuously watch for peer changes.\n"
+          "                      Optional GROUPS: lifecycle, trace, all, or\n"
+          "                      combinations like lifecycle,trace (lifecycle by default)\n"
           "  -p, --port=PORT     TCP port of the RAS client socket of the NCCL job\n"
           "                      (" STR(NCCL_RAS_CLIENT_PORT) " by default)\n"
           "  -t, --timeout=SECS  Maximum time for the local NCCL process to wait for\n"
@@ -51,19 +58,34 @@ static void parseArgs(int argc, char** argv) {
   int c;
   int optIdx = 0;
   struct option longOpts[] = {
+    {"format",  required_argument, NULL, 'f'},
+    {"help",    no_argument,       NULL, 'e'},
     {"host",    required_argument, NULL, 'h'},
+    {"monitor", optional_argument, NULL, 'm'},
     {"port",    required_argument, NULL, 'p'},
     {"timeout", required_argument, NULL, 't'},
     {"verbose", no_argument,       NULL, 'v'},
-    {"help",    no_argument,       NULL, 'e'},
     {"version", no_argument,       NULL, 'r'},
     {0}
   };
 
-  while ((c = getopt_long(argc, argv, "h:p:t:v", longOpts, &optIdx)) != -1) {
+  while ((c = getopt_long(argc, argv, "f:h:m::p:t:v", longOpts, &optIdx)) != -1) {
     switch (c) {
+      case 'f':
+        format = optarg;
+        if (strcasecmp(format, "text") != 0 && strcasecmp(format, "json") != 0) {
+          fprintf(stderr, "Invalid format: %s (must be text or json)\n", format);
+          exit(1);
+        }
+        break;
       case 'h':
         hostName = optarg;
+        break;
+      case 'm':
+        monitorMode = true;
+        if (optarg) {
+          events = optarg;
+        }
         break;
       case 'p':
         port = optarg;
@@ -265,9 +287,46 @@ timeout:
   goto retry;
 }
 
-int getNCCLStatus() {
+static int setOutputFormat() {
   char msgBuf[4096];
   int bytes;
+
+  // Only set format if the user explicitly specified it.
+  if (format) {
+    snprintf(msgBuf, sizeof(msgBuf), "SET FORMAT %s\n", format);
+    if (socketWrite(sock, msgBuf, strlen(msgBuf)) != strlen(msgBuf)) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK)
+        fprintf(stderr, "Connection timed out\n");
+      else
+        perror("write to socket");
+      return 1;
+    }
+    // Read response.
+    bytes = rasRead(sock, msgBuf, sizeof(msgBuf));
+    if (bytes < 0) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK)
+        fprintf(stderr, "Connection timed out\n");
+      else
+        perror("read socket");
+      return 1;
+    }
+    if (bytes == 0) {
+      fprintf(stderr, "NCCL unexpectedly closed the connection\n");
+      return 1;
+    }
+    if (strcasecmp(msgBuf, "OK\n")) {
+      fprintf(stderr, "Unexpected response from NCCL: %s\n", msgBuf);
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static int getNCCLStatus() {
+  char msgBuf[4096];
+  int bytes;
+
+  // Send the status command.
   snprintf(msgBuf, sizeof(msgBuf), "%sSTATUS\n", (verbose ? "VERBOSE " : ""));
   if (socketWrite(sock, msgBuf, strlen(msgBuf)) != strlen(msgBuf)) {
     if (errno == EAGAIN || errno == EWOULDBLOCK)
@@ -299,13 +358,118 @@ int getNCCLStatus() {
   return 0;
 }
 
+static int monitorNCCLEvents() {
+  char msgBuf[4096];
+  int bytes;
+  struct timeval tv = {0, 0}; // No timeout for monitor mode.
+
+  // Send the monitor command with optional event levels.
+  if (events) {
+    snprintf(msgBuf, sizeof(msgBuf), "MONITOR %s\n", events);
+  } else {
+    snprintf(msgBuf, sizeof(msgBuf), "MONITOR\n");
+  }
+  if (socketWrite(sock, msgBuf, strlen(msgBuf)) != strlen(msgBuf)) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK)
+      fprintf(stderr, "Connection timed out\n");
+    else
+      perror("Failed to send monitor command");
+    return 1;
+  }
+
+  // Wait for initial response confirming monitor mode is activated.
+  bytes = rasRead(sock, msgBuf, sizeof(msgBuf));
+  if (bytes < 0) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK)
+      fprintf(stderr, "Connection timed out\n");
+    else
+      perror("read socket");
+    return 1;
+  }
+  if (bytes == 0) {
+    fprintf(stderr, "Connection closed by server\n");
+    return 1;
+  }
+
+  if (bytes < 3 || strncasecmp(msgBuf, "OK\n", 3) != 0) {
+    fprintf(stderr, "Monitor mode activation failed: %.*s", bytes, msgBuf);
+    return 1;
+  }
+
+  // Disable receive timeout for monitor mode (wait indefinitely for notifications).
+  if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) != 0) {
+    perror("Failed to disable socket timeout for monitor mode");
+    return 1;
+  }
+
+  fprintf(stderr, "RAS Monitor Mode - watching for peer changes (Ctrl+C to exit)...\n");
+  fprintf(stderr, "================================================================\n");
+
+  // Find the first newline after "OK" to determine where the response ends.
+  char* okEnd = strchr(msgBuf, '\n');
+  if (okEnd && okEnd < msgBuf + bytes - 1) {
+    // There's data after the OK response, output it.
+    int okLen = okEnd - msgBuf + 1;
+    int remainingBytes = bytes - okLen;
+    if (fwrite(msgBuf + okLen, 1, remainingBytes, stdout) != remainingBytes) {
+      fprintf(stderr, "fwrite to stdout failed!\n");
+      return 1;
+    }
+    if (fflush(stdout) != 0) {
+      perror("fflush stdout");
+      return 1;
+    }
+  }
+
+  // Continuous monitoring loop.
+  for (;;) {
+    bytes = rasRead(sock, msgBuf, sizeof(msgBuf));
+    if (bytes < 0) {
+      if (errno == EINTR) {
+        // Handle Ctrl+C gracefully.
+        fprintf(stderr, "\nMonitoring stopped by user.\n");
+        break;
+      }
+      perror("read socket");
+      return 1;
+    }
+    if (bytes == 0) {
+      fprintf(stderr, "Connection closed by the NCCL job.\n");
+      break;
+    }
+
+    if (fwrite(msgBuf, 1, bytes, stdout) != bytes) {
+      fprintf(stderr, "fwrite to stdout failed!\n");
+      return 1;
+    }
+    if (fflush(stdout) != 0) {
+      perror("fflush stdout");
+      return 1;
+    }
+  }
+  return 0;
+}
+
 int main(int argc, char** argv) {
   parseArgs(argc, argv);
 
   if (connectToNCCL())
     return 1;
 
-  if (getNCCLStatus()) {
+  // Set the output format.
+  if (setOutputFormat() != 0) {
+    (void)close(sock);
+    return 1;
+  }
+
+  int result;
+  if (monitorMode) {
+    result = monitorNCCLEvents();
+  } else {
+    result = getNCCLStatus();
+  }
+
+  if (result != 0) {
     (void)close(sock);
     return 1;
   }

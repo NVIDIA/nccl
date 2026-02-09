@@ -34,7 +34,8 @@ def emitln(f, lines):
 
 
 def indent(s):
-    return "\n".join("  " + l for l in s.splitlines())
+    endl = "\n" if s.endswith("\n") else ""
+    return "\n".join("  " + l for l in s.splitlines()) + endl
 
 
 class Rec:
@@ -64,6 +65,7 @@ class Rec:
 reductions = ["AllReduce", "ReduceScatter"]
 all_reds = ["sum"]
 all_tys = ["f32", "f16", "bf16", "f8e4m3", "f8e5m2"]
+gin_algos = ["GinHier_MCRing"]
 
 nvls_algos_by_coll = {"AllReduce": ["AGxLLMC_R", "RSxLDMC_AGxSTMC"], "ReduceScatter": ["LDMC"]}
 ldmc_algos = ["RSxLDMC_AGxSTMC", "LDMC"]
@@ -90,7 +92,7 @@ ty_to_cxxtype = {
 
 
 def enumerate_kernels():
-    for algo in ["LL", "LLMC", "ST", "STMC"]:
+    for algo in ["LL", "LLMC", "ST", "STMC", "GinHier_MCRing"]:
         yield Rec(coll="AllGather", algo=algo)
     for red in all_reds:
         for ty in all_tys:
@@ -122,18 +124,20 @@ def required_cuda(k):
 ################################################################################
 
 
-def kernel_fdep(k):
-    return coll_to_lower[k.coll] + ".cu"
+def kernel_fbase(k):
+    return coll_to_lower[k.coll] + ("_gin" if k.algo in gin_algos else "")
 
 
 def kernel_fname(k):
+    parts = [coll_to_lower[k.coll]]
+    if k.algo in gin_algos:
+        parts += ["gin"]
     if k.coll in reductions:
         if k.algo in ldmc_algos and k.ty.startswith("f8"):
-            return paste("_", coll_to_lower[k.coll], k.red, k.ty, k.algo) + ".cu"
+            parts += [k.red, k.ty, k.algo]
         else:
-            return paste("_", coll_to_lower[k.coll], k.red, k.ty) + ".cu"
-    else:
-        return coll_to_lower[k.coll] + ".cu"
+            parts += [k.red, k.ty]
+    return paste("_", *parts) + ".cu"
 
 
 def kernel_gencode(k):
@@ -248,26 +252,26 @@ def partition(vals, keyfn):
     return ans
 
 
-kernels_by_file = partition(enumerate_kernels(), lambda k: (kernel_fname(k), k.coll))
+kernels_by_file = partition(enumerate_kernels(), lambda k: (kernel_fname(k), kernel_fbase(k)))
 
 # Add dependency only files (e.g. allreduce.cu)
-for coll in set(k.coll for k in enumerate_kernels()):
-    fname = coll_to_lower[coll] + ".cu"
-    if (fname, coll) not in kernels_by_file:
-        kernels_by_file[fname, coll] = []
+for fbase in set(kernel_fbase(k) for k in enumerate_kernels()):
+    fname = fbase + ".cu"
+    if (fname, fbase) not in kernels_by_file:
+        kernels_by_file[fname, fbase] = []
 
 files_to_print = ""
 # Generate each kernel instantiation file
-for (fname, coll), ks in kernels_by_file.items():
+for (fname, fbase), ks in kernels_by_file.items():
     files_to_print += fname + ";"
     with open(os.path.join(gensrc, fname), "w") as f:
         emitln(f, '#include "sym_kernels.h"')
         emitln(f, '#include "symmetric/kernel.cuh"')
-        emitln(f, f'#include "symmetric/{coll_to_lower[coll]}.cuh"')
+        emitln(f, f'#include "symmetric/{fbase}.cuh"')
         for k in ks:
             emitln(f, instantiate(k))
 
-# Generate <gensrc>/sym_kernels_host.cu # @EUGO_CHANGE: .cc -> .cu
+# Generate <gensrc>/sym_kernels_host.cu  # @EUGO_CHANGE: .cc -> .cu
 with open(os.path.join(gensrc, "sym_kernels_host.cu"), "w") as f:  # @EUGO_CHANGE: .cc -> .cu
     emitln(f, '#include "sym_kernels.h"')
     emitln(f, '#include "device.h"')
@@ -278,12 +282,18 @@ with open(os.path.join(gensrc, "sym_kernels_host.cu"), "w") as f:  # @EUGO_CHANG
     emitln(f, "")
 
     emitln(f, "extern int const ncclSymkKernelCount = %d;" % len(list(enumerate_kernels())))
-    emitln(f, "extern void* const ncclSymkKernelList[] = {")
+    emitln(f, "void* ncclSymkKernelList[] = {")
     for k in enumerate_kernels():
-        emitln(
-            f, f"(void*){kernel_cname(k)}_ptr,"
-        )  # @EUGO_CHANGE: (break the strong symbol dependency, crashing linkage on clang) Using pointer-proxy in place of the strong symbol
+        emitln(f, f"(void*){kernel_cname(k)}_ptr,")  # @EUGO_CHANGE: pointer proxy
     emitln(f, "nullptr};")
+    emitln(f, "")
+
+    emitln(f, "int ncclSymkKernelRequirements[] = {")
+    for index, k in enumerate(enumerate_kernels()):
+        cudart, _, _ = required_cuda(k)
+        sym = kernel_cname(k)
+        emitln(f, "  %7d, /*%4d %s*/" % (cudart or 0, index, sym))
+    emitln(f, "};")
     emitln(f, "")
 
     emitln(f, "void* ncclSymkGetKernelPtr(ncclSymkKernelId id, int red, ncclDataType_t ty) {")
@@ -294,9 +304,7 @@ with open(os.path.join(gensrc, "sym_kernels_host.cu"), "w") as f:  # @EUGO_CHANG
         emitln(f, "case ncclSymkKernelId_" + coll + "_" + algo + ":")
         indents += 1
         if len(coll_algo_ks) == 1:
-            emitln(
-                f, "return (void*)" + kernel_cname(coll_algo_ks[0]) + "_ptr;"
-            )  # @EUGO_CHANGE: (break the strong symbol dependency, crashing linkage on clang) Removed `&` + using pointer-proxy in place of the strong symbol
+            emitln(f, "return (void*)" + kernel_cname(coll_algo_ks[0]) + "_ptr;")  # @EUGO_CHANGE: pointer proxy
         else:
             emitln(f, "switch ((ncclDevRedOp_t)red) {")
             emitln(f, "default: return nullptr;")
@@ -308,8 +316,7 @@ with open(os.path.join(gensrc, "sym_kernels_host.cu"), "w") as f:  # @EUGO_CHANG
                 for k in coll_algo_red_ks:
                     emitln(
                         f, "case " + ty_to_ncclDataType[k.ty] + ": return (void*)" + kernel_cname(k) + "_ptr;"
-                    )  # @EUGO_CHANGE: (break the strong symbol dependency, crashing linkage on clang) Replaced constexpr w/ the pointer compatible w/ the right-above EUGO_CHANGE, set by default into nothing
-
+                    )  # @EUGO_CHANGE: pointer proxy
                 emitln(f, "}")
                 indents -= 1
             emitln(f, "}")
@@ -318,24 +325,26 @@ with open(os.path.join(gensrc, "sym_kernels_host.cu"), "w") as f:  # @EUGO_CHANG
     indents -= 1
     emitln(f, "}")
 
-# Generate <gensrc>/rules.mk
-files_to_print += "rules.mk;"
+# Output file list for CMake (excludes rules.mk since it's not generated for CMake)
 files_to_print += "sym_kernels_host.cu;"  # @EUGO_CHANGE: .cc -> .cu
-
-if os.environ.get("NCCL_USE_CMAKE", "0") == "1":
+if os.environ.get("NCCL_USE_CMAKE", "1") == "1":
     print(files_to_print)
 
-with open(os.path.join(gensrc, "rules.mk"), "w") as f:
-    inst_names = sorted(set(kernel_fname(k) for k in enumerate_kernels()))
-    names = inst_names + ["sym_kernels_host.cu"]  # @EUGO_CHANGE: .cc -> .cu
-    f.write("LIB_OBJS_SYM_GEN = $(patsubst %,$(OBJDIR)/genobj/symmetric/%.o,{names})\n".format(names=" ".join(names)))
-    f.write("\n")
-
-    inst_names = sorted(set((k.coll, kernel_fname(k), kernel_gencode(k)) for k in enumerate_kernels()))
-    for coll, name, gencode in inst_names:
+# Generate <gensrc>/rules.mk (only needed for Makefile builds, not CMake)
+if os.environ.get("NCCL_USE_CMAKE", "1") != "1":
+    with open(os.path.join(gensrc, "rules.mk"), "w") as f:
+        inst_names = sorted(set(kernel_fname(k) for k in enumerate_kernels()))
+        names = inst_names + ["sym_kernels_host.cu"]  # @EUGO_CHANGE: .cc -> .cu
         f.write(
-            f"$(OBJDIR)/genobj/symmetric/{name}.o: $(OBJDIR)/gensrc/symmetric $(OBJDIR)/genobj/symmetric/{coll_to_lower[coll]}.cu.d\n"
-            "\t"
-            f"$(call COMPILE_SYM,$@,$(OBJDIR)/gensrc/symmetric/{name},{gencode})\n"
-            "\n"
+            "LIB_OBJS_SYM_GEN = $(patsubst %,$(OBJDIR)/genobj/symmetric/%.o,{names})\n".format(names=" ".join(names))
         )
+        f.write("\n")
+
+        inst_names = sorted(set((kernel_fname(k), kernel_fbase(k), kernel_gencode(k)) for k in enumerate_kernels()))
+        for fname, fbase, gencode in inst_names:
+            f.write(
+                f"$(OBJDIR)/genobj/symmetric/{fname}.o: $(OBJDIR)/gensrc/symmetric $(OBJDIR)/genobj/symmetric/{fbase}.cu.d\n"
+                "\t"
+                f"$(call COMPILE_SYM,$@,$(OBJDIR)/gensrc/symmetric/{fname},{gencode})\n"
+                "\n"
+            )

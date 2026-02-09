@@ -41,7 +41,7 @@ namespace {
       }
     }
     reduceCopy<COLL_UNROLL, RedOp, T, 0,1,1, 0,1,1, /*PreOpSrcs=*/1>
-      (tid, tn, redOpArg, &redOpArg, true, 1, &src, 1, &dst, i1-i0);
+      (tid, tn, redOpArg, true, 1, &src, 1, &dst, i1-i0);
   }
 }
 

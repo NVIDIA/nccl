@@ -4,11 +4,11 @@ import shutil
 import sys
 
 # Order of redops, tys, protos, algos must match src/include/device.h
-all_colls = ["Broadcast", "Reduce", "AllGather", "ReduceScatter", "AllReduce", "SendRecv"]
-all_redops = ["Sum", "Prod", "MinMax", "PreMulSum", "SumPostDiv"]
-all_tys = ["i8", "u8", "i32", "u32", "i64", "u64", "f16", "f32", "f64", "bf16", "f8e4m3", "f8e5m2"]
-all_protos = ["LL", "LL128", "SIMPLE"]
-all_algos = ["TREE", "RING", "COLLNET_DIRECT", "COLLNET_CHAIN", "NVLS", "NVLS_TREE", "PAT"]
+all_colls =  ["Broadcast","Reduce","AllGather","AllGatherV", "ReduceScatter","AllReduce","SendRecv"]
+all_redops = ["Sum","Prod","MinMax","PreMulSum","SumPostDiv"]
+all_tys =    ["i8","u8","i32","u32","i64","u64","f16","f32","f64","bf16","f8e4m3","f8e5m2"]
+all_protos = ["LL","LL128","SIMPLE"]
+all_algos =  ["TREE","RING","COLLNET_DIRECT","COLLNET_CHAIN","NVLS","NVLS_TREE","PAT"]
 
 ################################################################################
 # The first command line argument is the path to the directory to generate and
@@ -83,21 +83,23 @@ else:
 ################################################################################
 
 algos_of_coll = {
-    "AllGather": ["RING", "COLLNET_DIRECT", "NVLS", "PAT"],
-    "AllReduce": ["TREE", "RING", "COLLNET_DIRECT", "COLLNET_CHAIN", "NVLS", "NVLS_TREE"],
-    "Broadcast": ["RING"],
-    "Reduce": ["RING"],
-    "ReduceScatter": ["RING", "COLLNET_DIRECT", "NVLS", "PAT"],
-    "SendRecv": [None],
+  "AllGather":     ["RING","COLLNET_DIRECT","NVLS","PAT"],
+  "AllGatherV":    ["RING"],
+  "AllReduce":     ["TREE","RING","COLLNET_DIRECT","COLLNET_CHAIN","NVLS","NVLS_TREE"],
+  "Broadcast":     ["RING"],
+  "Reduce":        ["RING"],
+  "ReduceScatter": ["RING","COLLNET_DIRECT","NVLS","PAT"],
+  "SendRecv":      [None]
 }
 
 coll_camel_to_lower = {
-    "AllGather": "all_gather",
-    "AllReduce": "all_reduce",
-    "Broadcast": "broadcast",
-    "Reduce": "reduce",
-    "ReduceScatter": "reduce_scatter",
-    "SendRecv": "sendrecv",
+  "AllGather":     "all_gather",
+  "AllGatherV":    "all_gather_v",
+  "AllReduce":     "all_reduce",
+  "Broadcast":     "broadcast",
+  "Reduce":        "reduce",
+  "ReduceScatter": "reduce_scatter",
+  "SendRecv":      "sendrecv"
 }
 coll_lower_to_camel = {coll_camel_to_lower[x]: x for x in coll_camel_to_lower}
 
@@ -158,29 +160,30 @@ def equivalent_primary(coll, redop, ty, algo, proto):
 # returned will instantiate a ncclDevKernel specialized to run this func
 # without function call overhead.
 def best_kernel(coll, redop, ty, algo, proto):
-    def best(coll, redop, ty, algo, proto):
-        # Modify this logic to control how many kernels are specialized.
-        if coll == "Nop":
-            return ("Generic", None, None, None, None)
-        if coll == "SendRecv":
-            return ("SendRecv", None, None, None, None)
-        if coll in ("AllGather", "Broadcast"):
-            return (coll, None, None, "RING", "LL")
-        return (coll, "Sum", ty, ("TREE" if algo == "TREE" else "RING"), "LL")
-
-    # Need to ensure kernel is specialize for a primary function
-    kfn = equivalent_primary(*best(coll, redop, ty, algo, proto))
-    # And isn't filtered out.
-    if not func_filter(*kfn):
-        return ("Generic", None, None, None, None)
-    return kfn
-
+  def best(coll, redop, ty, algo, proto):
+    # Modify this logic to control how many kernels are specialized.
+    if coll=="Nop": return ("Generic", None, None, None, None)
+    if coll=="SendRecv": return ("SendRecv", None, None, None, None)
+    if coll in ("AllGather","Broadcast","AllGatherV"): return (coll, None, None, "RING", "LL")
+    return (coll, "Sum", ty, ("TREE" if algo=="TREE" else "RING"), "LL")
+  # Need to ensure kernel is specialize for a primary function
+  kfn = equivalent_primary(*best(coll, redop, ty, algo, proto))
+  # And isn't filtered out.
+  if not func_filter(*kfn): return ("Generic", None, None, None, None)
+  return kfn
 
 # Order rows are enumerated must match formula of `ncclDevFuncId()`:
 def enumerate_func_rows():
-    yield ("SendRecv", None, None, None, None)
-    for coll in ("AllGather", "Broadcast"):
-        algos = algos_of_coll[coll]
+  yield ("SendRecv", None, None, None, None)
+  for coll in ("AllGather", "Broadcast", "AllGatherV"):
+    algos = algos_of_coll[coll]
+    for algo in algos:
+      for proto in all_protos:
+        yield (coll, None, None, algo, proto)
+  for coll in ("AllReduce", "Reduce", "ReduceScatter"):
+    algos = algos_of_coll[coll]
+    for redop in all_redops:
+      for ty in all_tys:
         for algo in algos:
             for proto in all_protos:
                 yield (coll, None, None, algo, proto)
@@ -298,64 +301,69 @@ with open(os.path.join(gensrc, "host_table.cu"), "w") as f:  # @EUGO_CHANGE: .cc
             out("#endif\n")
     out("\n")
 
-    # @EUGO_CHANGE: @begin: changed this block with xla patch
-    # List of all kernel function pointers.
-    out("extern int const ncclDevKernelCount = %d;\n" % len(kernel_funcs))
+  # @EUGO_CHANGE: @begin: separate pointer variables for clang global initializer workaround (xla patch as inspo)
+  # List of all kernel function pointers.
+  out("extern int const ncclDevKernelCount = %d;\n" % len(kernel_funcs))
 
-    index = 0
-    for kfn in kernel_funcs:
-        cudart, _ = required_cuda(*kfn)
-        sym = paste("_", "ncclDevKernel", *kfn)
-        if cudart != 0:
-            out("#if CUDART_VERSION >= %d\n" % cudart)
-        out("/*%4d*/ void* %s_ptr = (void*)%s;\n" % (index, sym, sym))
-        if cudart != 0:
-            out("#else\n/*%4d*/ void* %s_ptr = nullptr;\n#endif\n" % (index, sym))
-        index += 1
+  index = 0
+  for kfn in kernel_funcs:
+    cudart, _ = required_cuda(*kfn)
+    sym = paste("_", "ncclDevKernel", *kfn)
+    if cudart != 0: out("#if CUDART_VERSION >= %d\n" % cudart)
+    out("/*%4d*/ void* %s_ptr = (void*)%s;\n" % (index, sym, sym))
+    if cudart != 0: out("#else\n" "/*%4d*/ void* %s_ptr = nullptr;\n" "#endif\n" % (index, sym))
+    index += 1
 
-    out("extern void* const ncclDevKernelList[] = {\n")
-    index = 0
-    for kfn in kernel_funcs:
-        sym = paste("_", "ncclDevKernel", *kfn)
-        out("/*%4d*/ %s_ptr,\n" % (index, sym))
-        index += 1
-    out("nullptr};\n")
-    out("\n")
+  out("void* ncclDevKernelList[] = {\n")
+  index = 0
+  for kfn in kernel_funcs:
+    sym = paste("_", "ncclDevKernel", *kfn)
+    out("/*%4d*/ %s_ptr,\n" % (index, sym))
+    index += 1
+  out("nullptr};\n")
+  out("\n")
+  # @EUGO_CHANGE: @end
 
-    # Maps primary id to kernel function pointer.
+  out("int ncclDevKernelRequirements[] = {\n")
+  for index,kfn in enumerate(kernel_funcs):
+    cudart,_ = required_cuda(*kfn)
+    sym = paste("_", "ncclDevKernel", *kfn)
+    out("  %7d, /*%4d %s*/\n" % (cudart or 0, index, sym));
+  out("};\n")
+  out("\n")
 
-    index = 0
-    for fn in primary_funcs:
-        kfn = best_kernel(*fn)
-        sym = paste("_", "ncclDevKernel", *kfn)
-        cudart, _ = required_cuda(*kfn)
-        if cudart != 0:
-            out("#if CUDART_VERSION >= %d\n" % cudart)
-        out("/*%4d*/ void* %s_ptr_%d = (void*)%s;\n" % (index, sym, index, sym))
-        if cudart != 0:
-            out("#else\n/*%4d*/ void* %s_ptr_%d = nullptr;\n#endif\n" % (index, sym, index))
-        index += 1
+  # @EUGO_CHANGE: @begin: separate pointer variables for clang global initializer workaround
+  # Maps primary id to kernel function pointer.
+  index = 0
+  for fn in primary_funcs:
+    kfn = best_kernel(*fn)
+    sym = paste("_", "ncclDevKernel", *kfn)
+    cudart, _ = required_cuda(*kfn)
+    if cudart != 0: out("#if CUDART_VERSION >= %d\n" % cudart)
+    out("/*%4d*/ void* %s_ptr_%d = (void*)%s;\n" % (index, sym, index, sym))
+    if cudart != 0: out("#else\n" "/*%4d*/ void* %s_ptr_%d = nullptr;\n" "#endif\n" % (index, sym, index))
+    index += 1
 
-    out("extern void* const ncclDevKernelForFunc[] = {\n")
-    index = 0
-    for fn in primary_funcs:
-        kfn = best_kernel(*fn)
-        sym = paste("_", "ncclDevKernel", *kfn)
-        out("/*%4d*/ %s_ptr_%d,\n" % (index, sym, index))
-        index += 1
-    out("nullptr};\n")
-    out("\n")
-    # @EUGO_CHANGE: @end
+  out("extern void* const ncclDevKernelForFunc[] = {\n")
+  index = 0
+  for fn in primary_funcs:
+    kfn = best_kernel(*fn)
+    sym = paste("_", "ncclDevKernel", *kfn)
+    out("/*%4d*/ %s_ptr_%d,\n" % (index, sym, index))
+    index += 1
+  out("nullptr};\n")
+  out("\n")
+  # @EUGO_CHANGE: @end
 
-    # Does the prior map use an explicitly specialized kernel.
-    out("extern bool const ncclDevKernelForFuncIsSpecialized[] = {\n")
-    index = 0
-    for fn in primary_funcs:
-        kfn = best_kernel(*fn)
-        specialized = "1" if fn == kfn else "0"
-        out("/*%4d*/ %s,\n" % (index, specialized))
-        index += 1
-    out("0};\n")
+  # Does the prior map use an explicitly specialized kernel.
+  out("extern bool const ncclDevKernelForFuncIsSpecialized[] = {\n")
+  index = 0
+  for fn in primary_funcs:
+    kfn = best_kernel(*fn)
+    specialized = "1" if fn == kfn else "0"
+    out("/*%4d*/ %s,\n" % (index, specialized))
+    index += 1
+  out("0};\n")
 
 
 # Maps to .cu filename which implements this func. The only constraint is that
@@ -387,28 +395,30 @@ for name in sorted(name_to_funcs.keys()):
 files += "device_table.cu;"
 files += "host_table.cu"  # @EUGO_CHANGE: .cc -> .cu
 
-# Do not print files when running make
-if os.environ.get("NCCL_USE_CMAKE", "0") == "1":
+# Output file list for CMake (excludes rules.mk since it's not generated for CMake)
+if os.environ.get("NCCL_USE_CMAKE", "1") == "1":
     print(files)
 
-# Generate <gensrc>/rules.mk
-with open(os.path.join(gensrc, "rules.mk"), "w") as f:
+# Generate <gensrc>/rules.mk (only needed for Makefile builds, not CMake)
+if os.environ.get("NCCL_USE_CMAKE", "1") != "1":
+  with open(os.path.join(gensrc, "rules.mk"), "w") as f:
     out = f.write
     impl_names = sorted(name_to_funcs.keys())
-    names = impl_names + ["host_table.cu", "device_table.cu"]  # @EUGO_CHANGE: .cc -> .cu
-    out("LIB_OBJS_GEN = $(patsubst %,$(OBJDIR)/genobj/%.o,{names})\n".format(names=" ".join(names)))
+    names = impl_names + ["host_table.cu", "device_table.cu"] # @EUGO_CHANGE: .cc -> .cu
+    out("LIB_OBJS_GEN = $(patsubst %,$(OBJDIR)/genobj/%.o,{names})\n"
+        .format(names=" ".join(names)))
     out("\n")
 
     # For each <coll>_<op>_<ty>.cu compile to a .cu.o file. Notice the dependencies
     # come from the suffix-erased file (e.g. 'gensrc/all_reduce.cu')
     for name in impl_names:
-        coll = name_to_funcs[name][0]
-        out(
-            f"$(OBJDIR)/genobj/{name}.o: $(OBJDIR)/gensrc $(OBJDIR)/genobj/{coll_camel_to_lower[coll]}.cu.d\n"
-            "\t"
-            f"$(call COMPILE,$@,$(OBJDIR)/gensrc/{name})\n"
-            "\n"
-        )
+      coll = name_to_funcs[name][0]
+      out(
+        "$(OBJDIR)/genobj/{name}.o: $(OBJDIR)/gensrc $(OBJDIR)/genobj/{lower_coll}.cu.d\n"
+        "\t" "$(call COMPILE,$@,$(OBJDIR)/gensrc/{name})\n"
+        "\n"
+        .format(name=name, lower_coll=coll_camel_to_lower[coll])
+      )
 
 # Add the suffix-erased .cu's which are used only for dependency scraping.
 for coll in set(coll for (coll, _, _, _, _) in primary_funcs if coll != "Nop"):

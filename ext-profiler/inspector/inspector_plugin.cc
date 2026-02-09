@@ -96,27 +96,27 @@ __hidden ncclResult_t inspectorPluginInit(void** context, uint64_t commHash,
   if (++gInitialized == 1) {
     res = inspectorGlobalInit(rank);
     if (res != inspectorSuccess) {
-      WARN("Inspector Init Failed %s:%d -> error %d: %s",__FILE__, __LINE__, res,
+      INFO_INSPECTOR("Inspector Init Failed %s:%d -> error %d: %s",__FILE__, __LINE__, res,
            inspectorErrorString(res));
       gInitialized = 0;
       pthread_mutex_unlock(&gLock);
-      return ncclInternalError;
+      return ncclSuccess;
     }
   }
   pthread_mutex_unlock(&gLock);
 
-  INS_CHK_GOTO(inspectorAddComm((struct inspectorCommInfo **)context,
-                                commName, commHash,
-                                nNodes, nranks, rank), res, success);
+  res = inspectorAddComm((struct inspectorCommInfo **)context,
+                         commName, commHash,
+                         nNodes, nranks, rank);
+  if (res != inspectorSuccess) {
+    INFO_INSPECTOR("%s:%d -> error %d: %s", __FILE__, __LINE__, res,
+                   inspectorErrorString(res));
+    return ncclSuccess;
+  }
   *eActivationMask = ncclProfileColl | ncclProfileKernelCh;
   INFO(NCCL_INIT, "PROFILER/Plugin: init commName: %s commHash: %lu nranks: %d rank: %d",
        commName ? commName : "", commHash, nranks, rank);
-success:
-  if (res != inspectorSuccess) {
-    return ncclInternalError;
-  } else {
-    return ncclSuccess;
-  }
+  return ncclSuccess;
 }
 
 /*
@@ -205,7 +205,7 @@ static void inspectorPluginCollInfoInit(struct inspectorCollInfo **collInfo,
   struct inspectorCollInfo *collInfoPtr
     = (struct inspectorCollInfo*)calloc(1, sizeof(struct inspectorCollInfo));
   if (collInfoPtr == nullptr) {
-    WARN("Inspector: Failed to allocate memory for collective info structure");
+    INFO_INSPECTOR("Inspector: Failed to allocate memory for collective info structure");
     *collInfo = nullptr;
     return;
   }
@@ -394,7 +394,7 @@ __hidden ncclResult_t inspectorPluginStopEvent(void *eHandle) {
 
       res = inspectorPluginCollInfoDeRef(collInfo);
       if (res == inspectorReturn) {
-        WARN("NCCL Inspector unnatural return: inspectorPluginStopEvent:ncclProfileKernelCh");
+        INFO_INSPECTOR("NCCL Inspector unnatural return: inspectorPluginStopEvent:ncclProfileKernelCh");
         return ncclSuccess;
       }
       if ((collInfo->nKernelChCompleted == collInfo->nKernelChStarted)
@@ -473,7 +473,7 @@ __hidden ncclResult_t inspectorPluginRecordEventState(void* eHandle,
       if (kernelChInfo->startGpuClk != 0) {
         res = inspectorPluginCollInfoDeRef(collInfo);
         if (res == inspectorReturn) {
-          WARN("NCCL Inspector unnatural return: inspectorPluginRecordEventState");
+          INFO_INSPECTOR("NCCL Inspector unnatural return: inspectorPluginRecordEventState");
           return ncclSuccess;
         }
       }

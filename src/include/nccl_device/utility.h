@@ -7,10 +7,33 @@
 #ifndef _NCCL_DEVICE_UTILITY_H_
 #define _NCCL_DEVICE_UTILITY_H_
 
+// compiler specific check for __CUDACC__
 // @EUGO_CHANGE: `#if` -> `#ifdef`
 #ifdef __CUDACC__
-  #define NCCL_DEVICE_INLINE __device__ __forceinline__
-  #define NCCL_HOST_DEVICE_INLINE __host__ __device__ __forceinline__
+    #if defined(__clang__)
+        #ifdef __CUDACC__
+            #define NCCL_CHECK_CUDACC 1
+        #else
+            #define NCCL_CHECK_CUDACC 0
+        #endif
+    #else
+        #if __CUDACC__
+            #define NCCL_CHECK_CUDACC 1
+        #else
+            #define NCCL_CHECK_CUDACC 0
+        #endif
+    #endif
+#endif
+
+// @EUGO_CHANGE: `#if` -> `#ifdef`
+#ifdef __CUDACC__
+  #if defined(NCCL_HOSTLIB_ONLY) || defined(__clang_llvm_bitcode_lib__)
+    #define NCCL_DEVICE_INLINE __device__ __attribute__((always_inline))
+    #define NCCL_HOST_DEVICE_INLINE __host__ __device__ __attribute__((always_inline))
+  #else
+    #define NCCL_DEVICE_INLINE __device__ __forceinline__
+    #define NCCL_HOST_DEVICE_INLINE __host__ __device__ __forceinline__
+  #endif
 #else
   #ifndef __host__
     #define __host__
@@ -23,6 +46,12 @@
 #define NCCL_EXTERN_C extern "C"
 #else
 #define NCCL_EXTERN_C
+#endif
+
+#ifdef __clang_llvm_bitcode_lib__
+#define NCCL_IR_EXTERN_C extern "C"
+#else
+#define NCCL_IR_EXTERN_C
 #endif
 
 #include <stdint.h>
@@ -81,6 +110,19 @@ namespace utility {
 // @NVIDIA_ORIGINAL: @end
 // @EUGO_CHANGE: @end
 
+template<typename T, T value_>
+struct ValueAsType { static constexpr T value = value_; };
+
+// Returns the value zero but the compiler cannot prove that it is zero so it
+// is useful to inhibit compiler optimizations.
+#if NCCL_CHECK_CUDACC
+template<typename=void>
+NCCL_DEVICE_INLINE int opaqueZero() {
+  __device__ static int zero = 0;
+  return __ldg(&zero);
+}
+#endif
+
 template<typename X, typename Y, typename Z = decltype(X()+Y())>
 NCCL_HOST_DEVICE_INLINE constexpr Z divUp(X x, Y y) {
   return (x+y-1)/y;
@@ -137,6 +179,17 @@ NCCL_HOST_DEVICE_INLINE T add4G(T base, int delta4G) {
 template<typename Int>
 NCCL_HOST_DEVICE_INLINE constexpr bool isPow2(Int x) {
   return (x & (x-1)) == 0;
+}
+
+template<typename Uint>
+NCCL_HOST_DEVICE_INLINE bool rollingLessEq(Uint a, Uint b, int nBits = 8*sizeof(Uint)) {
+  static_assert(Uint(0) < Uint(-1), "Uint must be unsigned.");
+  Uint m = Uint(-1) >> (8*sizeof(Uint) - nBits);
+  return ((b-a) & m) <= m>>1;
+}
+template<typename Uint>
+NCCL_HOST_DEVICE_INLINE bool rollingLessThan(Uint a, Uint b, int nBits = 8*sizeof(Uint)) {
+  return !rollingLessEq(b, a, nBits);
 }
 
 // Produce the reciprocal of x for use in idivByRcp
@@ -252,19 +305,6 @@ NCCL_DEVICE_INLINE uint64_t idivRcp64_upto64(int x) {
 #ifdef __CUDACC__
 NCCL_DEVICE_INLINE uint32_t idivRcp32_upto64(int x) {
   return idivRcp64_upto64(x)>>32;
-}
-#endif
-
-// @EUGO_CHANGE: `#if` -> `#ifdef`
-#ifdef __CUDACC__
-NCCL_DEVICE_INLINE void fenceAcquireGpu() {
-  static __device__ int dummy;
-  int tmp;
-  asm volatile("ld.acquire.gpu.s32 %0,[%1];" : "=r"(tmp) : "l"(&dummy) : "memory");
-  dummy = tmp;
-}
-NCCL_DEVICE_INLINE void fenceReleaseGpu() {
-  cuda::atomic_thread_fence(cuda::memory_order_release, cuda::thread_scope_device);
 }
 #endif
 
@@ -386,7 +426,7 @@ struct Optional {
   // Construct with present thing:
   template<typename ...Arg>
   NCCL_HOST_DEVICE_INLINE Optional(Present<Arg...> args):
-    Optional(args, IntSeqUpTo<sizeof...(Arg), 0>::Type()) {
+    Optional(args, typename IntSeqUpTo<sizeof...(Arg), 0>::Type()) {
   }
 
   NCCL_HOST_DEVICE_INLINE ~Optional() {

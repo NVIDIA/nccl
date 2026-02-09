@@ -15,6 +15,7 @@
 #include <time.h>
 #include "event.h"
 #include "print_event.h"
+#include "profiler_plugin_ce.h"
 
 #define __hidden __attribute__ ((visibility("hidden")))
 
@@ -22,15 +23,18 @@ static int initialized;             // initialization counter for profiler
 static double startTime;            // profiler start time
 
 static const int defaultEActivationMask = ncclProfileColl | ncclProfileP2p;
-static const int defaultGroupApiPoolSize = 256;
-static const int defaultCollApiPoolSize = 256;
-static const int defaultP2pApiPoolSize = 256;
-static const int defaultKernelLaunchPoolSize = 256;
-static const int defaultGroupPoolSize = 256;
-static const int defaultCollPoolSize = 256;
-static const int defaultP2pPoolSize = 256;
+static const int defaultGroupApiPoolSize = 8;
+static const int defaultCollApiPoolSize = 8;
+static const int defaultP2pApiPoolSize = 8;
+static const int defaultKernelLaunchPoolSize = 8;
+static const int defaultGroupPoolSize = 8;
+static const int defaultCeCollPoolSize = 8;
+static const int defaultCeSyncPoolSize = 8;
+static const int defaultCeBatchPoolSize = 8;
+static const int defaultCollPoolSize = 8;
+static const int defaultP2pPoolSize = 8;
 static const int defaultProxyCtrlPoolSize = 16;
-static const int defaultDetachPoolSize = 256;
+static const int defaultDetachPoolSize = 8;
 
 static int groupApiPoolSize;
 static int collApiPoolSize;
@@ -40,6 +44,9 @@ static int groupPoolSize;
 static int collPoolSize;
 static int p2pPoolSize;
 static int proxyCtrlPoolSize;
+static int ceCollPoolSize;
+static int ceSyncPoolSize;
+static int ceBatchPoolSize;
 static int detachPoolSize;
 static int detachPoolBase;
 static int detachPoolIndex;
@@ -55,109 +62,115 @@ __hidden double gettime(void) {
   return (t.tv_sec*1e6 + (t.tv_nsec*1e-3));
 }
 
+// Export startTime for CE profiler
+double getProfilerStartTime(void) {
+  return startTime;
+}
+
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pid_t pid;
 static int* eActivationMaskPtr;
 
-__hidden ncclResult_t exampleProfilerInit(void** context, uint64_t commId, int* eActivationMask, const char* commName, int nNodes, int nranks, int rank, ncclDebugLogger_t logfn) {
-  pthread_mutex_lock(&lock);
-  if (__atomic_fetch_add(&initialized, 1, __ATOMIC_RELAXED) == 0) {
-    // first thread initializes event mask, environment and detach pool
-    const char* str;
-    str = getenv("NCCL_PROFILE_EVENT_MASK");
-    __atomic_store_n(eActivationMask, str ? atoi(str) : 0, __ATOMIC_RELAXED);
+// Initialize pool sizes from environment variables
+static void initPoolSizes(void) {
+  const char* str;
 
-    str = getenv("NCCL_PROFILE_GROUP_API_POOL_SIZE");
-    groupApiPoolSize = str ? atoi(str) : defaultGroupApiPoolSize;
+  str = getenv("NCCL_PROFILE_GROUP_API_POOL_SIZE");
+  groupApiPoolSize = str ? atoi(str) : defaultGroupApiPoolSize;
 
-    str = getenv("NCCL_PROFILE_COLL_API_POOL_SIZE");
-    collApiPoolSize = str ? atoi(str) : defaultCollApiPoolSize;
+  str = getenv("NCCL_PROFILE_COLL_API_POOL_SIZE");
+  collApiPoolSize = str ? atoi(str) : defaultCollApiPoolSize;
 
-    str = getenv("NCCL_PROFILE_P2P_API_POOL_SIZE");
-    p2pApiPoolSize = str ? atoi(str) : defaultP2pApiPoolSize;
+  str = getenv("NCCL_PROFILE_P2P_API_POOL_SIZE");
+  p2pApiPoolSize = str ? atoi(str) : defaultP2pApiPoolSize;
 
-    str = getenv("NCCL_PROFILE_KERNEL_LAUNCH_POOL_SIZE");
-    kernelLaunchPoolSize = str ? atoi(str) : defaultKernelLaunchPoolSize;
+  str = getenv("NCCL_PROFILE_KERNEL_LAUNCH_POOL_SIZE");
+  kernelLaunchPoolSize = str ? atoi(str) : defaultKernelLaunchPoolSize;
 
-    str = getenv("NCCL_PROFILE_GROUP_POOL_SIZE");
-    groupPoolSize = str ? atoi(str) : defaultGroupPoolSize;
+  str = getenv("NCCL_PROFILE_GROUP_POOL_SIZE");
+  groupPoolSize = str ? atoi(str) : defaultGroupPoolSize;
 
-    str = getenv("NCCL_PROFILE_COLL_POOL_SIZE");
-    collPoolSize = str ? atoi(str) : defaultCollPoolSize;
+  str = getenv("NCCL_PROFILE_COLL_POOL_SIZE");
+  collPoolSize = str ? atoi(str) : defaultCollPoolSize;
 
-    str = getenv("NCCL_PROFILE_P2P_POOL_SIZE");
-    p2pPoolSize = str ? atoi(str) : defaultP2pPoolSize;
+  str = getenv("NCCL_PROFILE_P2P_POOL_SIZE");
+  p2pPoolSize = str ? atoi(str) : defaultP2pPoolSize;
 
-    str = getenv("NCCL_PROFILE_PROXY_CTRL_POOL_SIZE");
-    proxyCtrlPoolSize = str ? atoi(str) : defaultProxyCtrlPoolSize;
+  str = getenv("NCCL_PROFILE_PROXY_CTRL_POOL_SIZE");
+  proxyCtrlPoolSize = str ? atoi(str) : defaultProxyCtrlPoolSize;
 
-    str = getenv("NCCL_PROFILE_PROXY_DETACH_POOL_SIZE");
-    detachPoolSize = str ? atoi(str) : defaultDetachPoolSize;
+  str = getenv("NCCL_PROFILE_CE_COLL_POOL_SIZE");
+  ceCollPoolSize = str ? atoi(str) : defaultCeCollPoolSize;
 
-    // detach pool is used to store PXN proxyOps and is shared among threads
-    detachPool = (struct proxyOp *)calloc(detachPoolSize, sizeof(*detachPool));
-    if (detachPool == NULL) {
-      pthread_mutex_unlock(&lock);
-      return ncclSystemError;
-    }
-    // Pid of the process initializing the profiler first.
-    // This is compared against the pid of proxyOp events
-    // to figure out if they have a parent event in this
-    // process address space.
-    pid = getpid();
+  str = getenv("NCCL_PROFILE_CE_SYNC_POOL_SIZE");
+  ceSyncPoolSize = str ? atoi(str) : defaultCeSyncPoolSize;
 
-    startTime = gettime();
+  str = getenv("NCCL_PROFILE_CE_BATCH_POOL_SIZE");
+  ceBatchPoolSize = str ? atoi(str) : defaultCeBatchPoolSize;
+
+  str = getenv("NCCL_PROFILE_PROXY_DETACH_POOL_SIZE");
+  detachPoolSize = str ? atoi(str) : defaultDetachPoolSize;
+}
+
+// Allocate global shared pools
+static ncclResult_t allocateGlobalPools(void) {
+  detachPool = (struct proxyOp *)calloc(detachPoolSize, sizeof(*detachPool));
+  if (detachPool == NULL) {
+    return ncclSystemError;
   }
-  pthread_mutex_unlock(&lock);
+  return ncclSuccess;
+}
 
-  // store pointer to activation mask globally
-  eActivationMaskPtr = eActivationMask;
-
-  // pre-allocate memory for event object pools in dedicated profiler context
-  struct context* ctx = (struct context *)calloc(1, sizeof(*ctx));
-  ctx->commName = commName;
-  ctx->commHash = commId;
-  ctx->nranks = nranks;
-  ctx->rank = rank;
-  logFn = logfn;
-  INFO(NCCL_INIT, "PROFILER/Plugin: init commName: %s commHash: %lu nranks: %d rank: %d", commName ? commName : "", commId, nranks, rank);
-
+// Allocate event pools for a context
+static ncclResult_t allocateContextPools(struct context* ctx) {
   ctx->groupApiPool = (struct groupApi *)calloc(groupApiPoolSize, sizeof(*ctx->groupApiPool));
-  if (ctx->groupApiPool == NULL) goto fail;
+  if (!ctx->groupApiPool) goto fail;
 
   ctx->collApiPool = (struct collApi *)calloc(collApiPoolSize, sizeof(*ctx->collApiPool));
-  if (ctx->collApiPool == NULL) goto fail;
+  if (!ctx->collApiPool) goto fail;
 
   ctx->p2pApiPool = (struct p2pApi *)calloc(p2pApiPoolSize, sizeof(*ctx->p2pApiPool));
-  if (ctx->p2pApiPool == NULL) goto fail;
+  if (!ctx->p2pApiPool) goto fail;
 
   ctx->kernelLaunchPool = (struct kernelLaunch *)calloc(kernelLaunchPoolSize, sizeof(*ctx->kernelLaunchPool));
-  if (ctx->kernelLaunchPool == NULL) goto fail;
+  if (!ctx->kernelLaunchPool) goto fail;
 
   ctx->groupPool = (struct group *)calloc(groupPoolSize, sizeof(*ctx->groupPool));
-  if (ctx->groupPool == NULL) goto fail;
+  if (!ctx->groupPool) goto fail;
 
   ctx->collPool = (struct collective *)calloc(collPoolSize, sizeof(*ctx->collPool));
-  if (ctx->collPool == NULL) goto fail;
+  if (!ctx->collPool) goto fail;
 
   ctx->p2pPool = (struct p2p *)calloc(p2pPoolSize, sizeof(*ctx->p2pPool));
-  if (ctx->p2pPool == NULL) goto fail;
+  if (!ctx->p2pPool) goto fail;
 
   ctx->proxyCtrlPool = (struct proxyCtrl *)calloc(proxyCtrlPoolSize, sizeof(*ctx->proxyCtrlPool));
-  if (ctx->proxyCtrlPool == NULL) goto fail;
+  if (!ctx->proxyCtrlPool) goto fail;
 
-  // Print event pool sizes for debugging
-  //fprintf(stdout, "Profiler: Group pool size (bytes): %lu\n", sizeof(struct group)*groupPoolSize);
-  //fprintf(stdout, "Profiler: Coll  pool size (bytes): %lu\n", sizeof(struct collective)*collPoolSize);
-  //fprintf(stdout, "Profiler: P2p   pool size (bytes): %lu\n", sizeof(struct p2p)*p2pPoolSize);
-  //fprintf(stdout, "Profiler: Proxy pool size (bytes): %lu\n", sizeof(struct proxyCtrl)*proxyCtrlPoolSize);
-  //fprintf(stdout, "Profiler: PXN   pool size (bytes): %lu\n", sizeof(struct proxyOp)*detachPoolSize);
+  ctx->ceCollPool = (struct ceColl *)calloc(ceCollPoolSize, sizeof(*ctx->ceCollPool));
+  if (!ctx->ceCollPool) goto fail;
+  ctx->ceCollPoolSize = ceCollPoolSize;
+  ctx->ceCollPoolBase = 0;
+  ctx->ceCollPoolIndex = 0;
 
-  *context = ctx;
+  ctx->ceSyncPool = (struct ceSync *)calloc(ceSyncPoolSize, sizeof(*ctx->ceSyncPool));
+  if (!ctx->ceSyncPool) goto fail;
+  ctx->ceSyncPoolSize = ceSyncPoolSize;
+  ctx->ceSyncPoolBase = 0;
+  ctx->ceSyncPoolIndex = 0;
+
+  ctx->ceBatchPool = (struct ceBatch *)calloc(ceBatchPoolSize, sizeof(*ctx->ceBatchPool));
+  if (!ctx->ceBatchPool) goto fail;
+  ctx->ceBatchPoolSize = ceBatchPoolSize;
+  ctx->ceBatchPoolBase = 0;
+  ctx->ceBatchPoolIndex = 0;
+
   return ncclSuccess;
 
 fail:
-  // cleanup resources
+  if (ctx->ceBatchPool) free(ctx->ceBatchPool);
+  if (ctx->ceSyncPool) free(ctx->ceSyncPool);
+  if (ctx->ceCollPool) free(ctx->ceCollPool);
   if (ctx->proxyCtrlPool) free(ctx->proxyCtrlPool);
   if (ctx->p2pPool) free(ctx->p2pPool);
   if (ctx->collPool) free(ctx->collPool);
@@ -166,40 +179,130 @@ fail:
   if (ctx->p2pApiPool) free(ctx->p2pApiPool);
   if (ctx->kernelLaunchPool) free(ctx->kernelLaunchPool);
   if (ctx->groupApiPool) free(ctx->groupApiPool);
-  free(ctx);
-  if (detachPool) free(detachPool);
   return ncclSystemError;
+}
+
+// One-time global profiler initialization
+static ncclResult_t initGlobalProfiler(int* eActivationMask) {
+  const char* str = getenv("NCCL_PROFILE_EVENT_MASK");
+  __atomic_store_n(eActivationMask, str ? atoi(str) : 0, __ATOMIC_RELAXED);
+
+  initPoolSizes();
+
+  ncclResult_t ret = allocateGlobalPools();
+  if (ret != ncclSuccess) {
+    return ret;
+  }
+
+  pid = getpid();
+  startTime = gettime();
+
+  // Only start CE poller thread if CE events are enabled AND at least one CE pool is allocated
+  if ((*eActivationMask & (ncclProfileCeColl | ncclProfileCeSync | ncclProfileCeBatch)) &&
+      (ceCollPoolSize > 0 || ceSyncPoolSize > 0 || ceBatchPoolSize > 0)) {
+    ncclResult_t ret = ceProfilerInitGlobal();
+    if (ret != ncclSuccess) {
+      return ret;
+    }
+  }
+
+  return ncclSuccess;
+}
+
+__hidden ncclResult_t exampleProfilerInit(void** context, uint64_t commId,
+                                          int* eActivationMask,
+                                          const char* commName, int nNodes,
+                                          int nranks, int rank,
+                                          ncclDebugLogger_t logfn) {
+  if (pthread_mutex_trylock(&lock) != 0) {
+    *context = NULL;
+    return ncclSuccess;
+  }
+
+  if (__atomic_fetch_add(&initialized, 1, __ATOMIC_RELAXED) == 0) {
+    ncclResult_t ret = initGlobalProfiler(eActivationMask);
+    if (ret != ncclSuccess) {
+      pthread_mutex_unlock(&lock);
+      return ret;
+    }
+  }
+  pthread_mutex_unlock(&lock);
+
+  eActivationMaskPtr = eActivationMask;
+
+  struct context* ctx = (struct context *)calloc(1, sizeof(*ctx));
+  if (!ctx) return ncclSystemError;
+
+  ctx->commName = commName;
+  ctx->commHash = commId;
+  ctx->nranks = nranks;
+  ctx->rank = rank;
+  logFn = logfn;
+  INFO(NCCL_INIT,
+       "PROFILER/Plugin: init commName: %s commHash: %lu nranks: %d rank: %d",
+       commName ? commName : "", commId, nranks, rank);
+
+  ncclResult_t ret = allocateContextPools(ctx);
+  if (ret != ncclSuccess) {
+    free(ctx);
+    return ret;
+  }
+
+  ceProfilerRegisterContext(ctx);
+
+  *context = ctx;
+  return ncclSuccess;
 }
 
 static const char* profilerDumpFile;
 
-__hidden ncclResult_t exampleProfilerFinalize(void* context) {
-  FILE* fh = NULL;
-  char filename[PATH_MAX] = { 0 };
-  struct context* ctx = (struct context *)context;
+// Open trace file for writing
+static FILE* openTraceFile(struct context* ctx, char* filename, size_t filenameSize) {
   const char* dump = profilerDumpFile ? profilerDumpFile : getenv("NCCL_PROFILE_DUMP_FILE");
-  if (dump) {
-    sprintf(filename, "%s_%lu_%d.json", dump, ctx->commHash, ctx->rank);
-    fh = fopen(filename, "w");
+  if (!dump) return NULL;
+
+  snprintf(filename, filenameSize, "%s_%lu_%d.json", dump, ctx->commHash, ctx->rank);
+  FILE* fh = fopen(filename, "w");
+  if (fh) {
     fprintf(fh, "[\n");
   }
-  INFO(NCCL_INIT, "PROFILER/Plugin: finalize commName: %s commHash: %lu nranks: %d rank: %d", ctx->commName ? ctx->commName : "", ctx->commHash, ctx->nranks, ctx->rank);
+  return fh;
+}
 
-  // print last N groups/collectives/p2ps
-  // Note that since the v5 version of the profiler, group API events are now at the top of the hierarchy.
-  // Legacy Group events from v4 are still emitted for compatibility purposes when using the v4 profiler but excluded from this example.
-  int start = (ctx->groupApiPoolIndex - groupApiPoolSize >= 0) ? ctx->groupApiPoolIndex - groupApiPoolSize : 0;
-  int end = ctx->groupApiPoolIndex;
+// Print all events to trace file
+static void printAllEvents(FILE* fh, struct context* ctx) {
+  if (!fh) return;
+
+  int start, end;
+
+  start = (ctx->groupApiPoolIndex - groupApiPoolSize >= 0) ? ctx->groupApiPoolIndex - groupApiPoolSize : 0;
+  end = ctx->groupApiPoolIndex;
   for (int i = start; i < end; i++) {
-    printEvent(fh, &ctx->groupApiPool[i%groupApiPoolSize]);
+    printEvent(fh, &ctx->groupApiPool[i % groupApiPoolSize]);
   }
 
   start = (ctx->proxyCtrlPoolIndex - proxyCtrlPoolSize >= 0) ? ctx->proxyCtrlPoolIndex - proxyCtrlPoolSize : 0;
   end = ctx->proxyCtrlPoolIndex;
   for (int i = start; i < end; i++) {
-    printEvent(fh, &ctx->proxyCtrlPool[i%proxyCtrlPoolSize]);
+    printEvent(fh, &ctx->proxyCtrlPool[i % proxyCtrlPoolSize]);
   }
 
+  // Print orphan CeColl events (those without CollApi parent)
+  start = (ctx->ceCollPoolIndex - ctx->ceCollPoolSize >= 0) ? ctx->ceCollPoolIndex - ctx->ceCollPoolSize : 0;
+  end = ctx->ceCollPoolIndex;
+  for (int i = start; i < end; i++) {
+    struct ceColl* event = &ctx->ceCollPool[i % ctx->ceCollPoolSize];
+    // Only print if no parent (orphan) AND completed
+    if (!event->parent && event->stopCompleted) {
+      printEvent(fh, event);
+    }
+  }
+
+  // CeSync and CeBatch are printed via their CeColl parent
+}
+
+// Free all context pools
+static void freeContextPools(struct context* ctx) {
   free(ctx->groupPool);
   free(ctx->collApiPool);
   free(ctx->p2pApiPool);
@@ -208,16 +311,61 @@ __hidden ncclResult_t exampleProfilerFinalize(void* context) {
   free(ctx->collPool);
   free(ctx->p2pPool);
   free(ctx->proxyCtrlPool);
+  free(ctx->ceCollPool);
+  free(ctx->ceSyncPool);
+  free(ctx->ceBatchPool);
+}
+
+// Global cleanup on last thread
+static void finalizeGlobalProfiler(FILE* fh) {
+  if (fh) {
+    int start = (detachPoolIndex - detachPoolSize >= 0) ? detachPoolIndex - detachPoolSize : 0;
+    int end = detachPoolIndex;
+    for (int i = start; i < end; i++) {
+      printEvent(fh, &detachPool[i % detachPoolSize]);
+    }
+  }
+  free(detachPool);
+
+  ceProfilerFinalizeGlobal(fh);
+}
+
+__hidden ncclResult_t exampleProfilerFinalize(void* context) {
+  struct context* ctx = (struct context *)context;
+
+  if (ctx == NULL) {
+    return ncclSuccess;
+  }
+  char filename[PATH_MAX] = { 0 };
+  FILE* fh = openTraceFile(ctx, filename, sizeof(filename));
+
+  INFO(NCCL_INIT, "PROFILER/Plugin: finalize commName: %s commHash: %lu nranks: %d rank: %d traceFile: %s",
+       ctx->commName ? ctx->commName : "", ctx->commHash, ctx->nranks, ctx->rank,
+       filename[0] ? filename : "none");
+
+  // Wait for poller to complete pending events
+  usleep(10000);
+
+  // Check how many completed events we have
+  int completedCount = 0;
+  int totalCount = 0;
+  for (int i = 0; i < ctx->ceCollPoolSize && i < ctx->ceCollPoolIndex; i++) {
+    totalCount++;
+    if (ctx->ceCollPool[i].stopCompleted) completedCount++;
+  }
+  INFO(NCCL_INIT, "PROFILER/Plugin: CeColl events - total=%d completed=%d", totalCount, completedCount);
+
+  // Print events first (while pools are still valid)
+  printAllEvents(fh, ctx);
+
+  // Then cleanup and free resources
+  ceProfilerCleanupPendingEvents(ctx);
+  ceProfilerDeregisterContext(ctx);
+  freeContextPools(ctx);
   free(ctx);
 
-  // last thread cleans up shared detach pool
   if (__atomic_sub_fetch(&initialized, 1, __ATOMIC_RELAXED) == 0) {
-    start = (detachPoolIndex - detachPoolSize >= 0) ? detachPoolIndex - detachPoolSize : 0;
-    end = detachPoolIndex;
-    for (int i = start; i < end; i++) {
-      printEvent(fh, &detachPool[i%detachPoolSize]);
-    }
-    free(detachPool);
+    finalizeGlobalProfiler(fh);
   }
 
   if (fh) fprintf(fh, "{}]\n");
@@ -231,6 +379,9 @@ __hidden void updateEvent(void* handle);
 __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, ncclProfilerEventDescr_t* eDescr) {
   *eHandle = NULL;
   struct context* ctx = (struct context *)context;
+  if (ctx == NULL) {
+    return ncclSuccess;
+  }
   if (eDescr->type == ncclProfileGroupApi) {
     struct groupApi* event;
     int groupApiId = __atomic_fetch_add(&ctx->groupApiPoolIndex, 1, __ATOMIC_RELAXED);
@@ -748,9 +899,9 @@ __hidden ncclResult_t exampleProfilerRecordEventState(void* eHandle, ncclProfile
   uint64_t type = *(uint64_t *)eHandle;
   if (type == ncclProfileGroupApi) {
     struct groupApi* event = (struct groupApi*) eHandle;
-    if (eState == ncclProfilerEndGroupApiStart) {
+    if (eState == ncclProfilerGroupEndApiStart) {
       event->endOfncclGroupStartTs = gettime() - startTime;
-    } else if (eState == ncclProfilerBeginGroupApiEnd) {
+    } else if (eState == ncclProfilerGroupStartApiStop) {
       event->startOfncclGroupEndTs = gettime() - startTime;
     }
   } else if (type == ncclProfileProxyOp) {
@@ -762,31 +913,31 @@ __hidden ncclResult_t exampleProfilerRecordEventState(void* eHandle, ncclProfile
     struct proxyStep* event = (struct proxyStep *)eHandle;
     struct proxyOp* parent = event->parent;
     switch (eState) {
-      case ncclProfilerProxyStepSendGPUWait:
-        event->timestamp[PROXY_STEP_SEND_GPU_WAIT] = gettime() - startTime;
-        break;
-      case ncclProfilerProxyStepSendPeerWait_v4:
-        // do not update step event if in SendPeerWait
-        if (event->state == ncclProfilerProxyStepSendPeerWait_v4) break;
-        event->timestamp[PROXY_STEP_SEND_PEER_WAIT] = gettime() - startTime;
-        event->state = ncclProfilerProxyStepSendPeerWait_v4;
-        break;
-      case ncclProfilerProxyStepSendWait:
-        event->timestamp[PROXY_STEP_SEND_WAIT] = gettime() - startTime;
-        parent->transSize += eStateArgs->proxyStep.transSize;
-        break;
-      case ncclProfilerProxyStepRecvWait:
-        event->timestamp[PROXY_STEP_RECV_WAIT] = gettime() - startTime;
-        break;
-      case ncclProfilerProxyStepRecvFlushWait:
-        event->timestamp[PROXY_STEP_RECV_FLUSH_WAIT] = gettime() - startTime;
-        parent->transSize += eStateArgs->proxyStep.transSize;
-        break;
-      case ncclProfilerProxyStepRecvGPUWait:
-        event->timestamp[PROXY_STEP_RECV_GPU_WAIT] = gettime() - startTime;
-        break;
-      default:
-        break;
+    case ncclProfilerProxyStepSendGPUWait:
+      event->timestamp[PROXY_STEP_SEND_GPU_WAIT] = gettime() - startTime;
+      break;
+    case ncclProfilerProxyStepSendPeerWait_v4:
+      // do not update step event if in SendPeerWait
+      if (event->state == ncclProfilerProxyStepSendPeerWait_v4) break;
+      event->timestamp[PROXY_STEP_SEND_PEER_WAIT] = gettime() - startTime;
+      event->state = ncclProfilerProxyStepSendPeerWait_v4;
+      break;
+    case ncclProfilerProxyStepSendWait:
+      event->timestamp[PROXY_STEP_SEND_WAIT] = gettime() - startTime;
+      parent->transSize += eStateArgs->proxyStep.transSize;
+      break;
+    case ncclProfilerProxyStepRecvWait:
+      event->timestamp[PROXY_STEP_RECV_WAIT] = gettime() - startTime;
+      break;
+    case ncclProfilerProxyStepRecvFlushWait:
+      event->timestamp[PROXY_STEP_RECV_FLUSH_WAIT] = gettime() - startTime;
+      parent->transSize += eStateArgs->proxyStep.transSize;
+      break;
+    case ncclProfilerProxyStepRecvGPUWait:
+      event->timestamp[PROXY_STEP_RECV_GPU_WAIT] = gettime() - startTime;
+      break;
+    default:
+      break;
     }
   } else if (type == ncclProfileProxyCtrl) {
     struct proxyCtrl* event = (struct proxyCtrl *)eHandle;
@@ -827,3 +978,69 @@ __attribute__((visibility("default"))) int exampleProfilerStop(void) {
   }
   return ncclSuccess;
 }
+
+// ============================================================================
+// v6 implementation with CE events support
+// ============================================================================
+
+#include "nccl/profiler_v6.h"
+
+__hidden ncclResult_t exampleProfilerStartEvent_v6(void* context, void** eHandle, ncclProfilerEventDescr_v6_t* eDescr) {
+  struct context* ctx = (struct context*)context;
+
+  if (ctx == NULL) {
+    *eHandle = NULL;
+    return ncclSuccess;
+  }
+  if (eDescr->type == ncclProfileCeColl) {
+    return ceProfilerStartCeCollEvent(ctx, eHandle, eDescr, startTime);
+  }
+
+  if (eDescr->type == ncclProfileCeSync) {
+    return ceProfilerStartCeSyncEvent(ctx, eHandle, eDescr, startTime);
+  }
+
+  if (eDescr->type == ncclProfileCeBatch) {
+    return ceProfilerStartCeBatchEvent(ctx, eHandle, eDescr, startTime);
+  }
+
+  return exampleProfilerStartEvent(context, eHandle, (ncclProfilerEventDescr_t*)eDescr);
+}
+
+__hidden ncclResult_t exampleProfilerStopEvent_v6(void* eHandle) {
+  if (!eHandle) return ncclSuccess;
+
+  uint64_t type = *(uint64_t*)eHandle;
+
+  // Handle CE events - record stop event to stream
+  if (type == ncclProfileCeColl) {
+    return ceProfilerStopCeCollEvent(eHandle);
+  }
+
+  if (type == ncclProfileCeSync) {
+    return ceProfilerStopCeSyncEvent(eHandle);
+  }
+
+  if (type == ncclProfileCeBatch) {
+    return ceProfilerStopCeBatchEvent(eHandle);
+  }
+
+  // Fall through to v5 handling for non-CE events
+  return exampleProfilerStopEvent(eHandle);
+}
+
+__hidden ncclResult_t exampleProfilerRecordEventState_v6(void* eHandle, ncclProfilerEventState_v6_t eState, ncclProfilerEventStateArgs_v6_t* eStateArgs) {
+  // CE events don't use recordEventState - poller handles all timing
+  // Just fall through to v5 for non-CE events
+  return exampleProfilerRecordEventState(eHandle, (ncclProfilerEventState_t)eState, (ncclProfilerEventStateArgs_t*)eStateArgs);
+}
+
+ncclProfiler_v6_t ncclProfiler_v6 = {
+  "Example-profiler-v6",
+  exampleProfilerInit,
+  exampleProfilerStartEvent_v6,
+  exampleProfilerStopEvent_v6,
+  exampleProfilerRecordEventState_v6,
+  exampleProfilerFinalize,
+};
+

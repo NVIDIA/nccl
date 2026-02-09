@@ -26,6 +26,11 @@ void dumpLine(int* values, int nranks, const char* prefix) {
 }
 
 ncclResult_t ncclBuildRings(int nrings, int* rings, int rank, int nranks, int* prev, int* next) {
+  ncclResult_t ret = ncclSuccess;
+  uint64_t* rankFound;
+  int rankFoundSize = DIVUP(nranks, 64);
+  NCCLCHECK(ncclCalloc(&rankFound, rankFoundSize));
+
   for (int r=0; r<nrings; r++) {
     char prefix[40];
     /*sprintf(prefix, "[%d] Channel %d Prev : ", rank, r);
@@ -35,6 +40,7 @@ ncclResult_t ncclBuildRings(int nrings, int* rings, int rank, int nranks, int* p
 
     int current = rank;
     for (int i=0; i<nranks; i++) {
+      rankFound[current/64] |= (1UL<<(current%64));
       rings[r*nranks+i] = current;
       current = next[r*nranks+current];
     }
@@ -42,22 +48,23 @@ ncclResult_t ncclBuildRings(int nrings, int* rings, int rank, int nranks, int* p
     if (rank == 0) dumpLine(rings+r*nranks, nranks, prefix);
     if (current != rank) {
       WARN("Error : ring %d does not loop back to start (%d != %d)", r, current, rank);
-      return ncclInternalError;
+      ret = ncclInternalError;
+      goto end;
     }
     // Check that all ranks are there
     for (int i=0; i<nranks; i++) {
-      int found = 0;
-      for (int j=0; j<nranks; j++) {
-        if (rings[r*nranks+j] == i) {
-          found = 1;
-          break;
-        }
-      }
-      if (found == 0) {
+      uint64_t bits = rankFound[i/64], mask = 1<<(i%64);
+      // Fast check 64 ranks at a time
+      if (mask == 1 && bits == 0xffffffffffffffff) { i += 63; continue; }
+      if ((bits & mask) == 0) {
         WARN("Error : ring %d does not contain rank %d", r, i);
-        return ncclInternalError;
+        ret = ncclInternalError;
+        goto end;
       }
     }
+    memset(rankFound, 0, rankFoundSize*sizeof(uint64_t));
   }
-  return ncclSuccess;
+end:
+  free(rankFound);
+  return ret;
 }

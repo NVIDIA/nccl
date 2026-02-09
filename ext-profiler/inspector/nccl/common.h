@@ -63,7 +63,6 @@ typedef enum {
   NCCL_REG = 0x2000,
   NCCL_PROFILE = 0x4000,
   NCCL_RAS = 0x8000,
-  NCCL_INSPECTOR = 0x100000, // big number to avoid short-term conflicts
   NCCL_ALL = ~0
 } ncclDebugLogSubSys;
 

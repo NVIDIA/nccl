@@ -141,7 +141,7 @@ static ncclResult_t connectTrees(struct ncclComm* comm, int* treeToParent, int* 
   // cases
   int depth = comm->nRanks/nNodes - 1 + log2i(nNodes);
 
-  int t0u, t0d0, t0d1, t0ChildType, t1u, t1d0, t1d1, t1ChildType;
+  int t0u, t0d0, t0d1, t0ChildType = 0, t1u, t1d0, t1d1, t1ChildType = 0;
   int* ttp, *ttc0, *ttc1;
   NCCLCHECK(ncclGetDtree(nNodes, node, &t0u, &t0d0, &t0d1, &t0ChildType, &t1u, &t1d0, &t1d1, &t1ChildType));
   for (int c=0; c<nChannels; c++) {

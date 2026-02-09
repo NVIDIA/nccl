@@ -17,8 +17,7 @@
 
 #if __CUDA_ARCH__ >= 700
 // __grid_constant__ appears to break cuda-gdb
-//#define NCCL_GRID_CONSTANT __grid_constant__
-#define NCCL_GRID_CONSTANT
+#define NCCL_GRID_CONSTANT __grid_constant__
 #else
 #define NCCL_GRID_CONSTANT
 #endif
@@ -37,6 +36,7 @@ struct ncclShmemGroup {
     unpackGroupShmem unpack;
   } devicePlugin;
   int32_t dstSizes[NCCL_MAX_ARITY+1];
+  uint64_t redOpArgs;
 };
 
 struct ncclShmemData {
@@ -55,9 +55,8 @@ struct ncclShmemData {
   uint64_t workCounter;
   bool profilerEnabled;
   struct ncclShmemGroup groups[NCCL_MAX_GROUPS];
-  uint64_t redOpArgs[NCCL_MAX_NVLS_ARITY+1];
 
-  alignas(16) char workStorage[1024];
+  alignas(16) char workStorage[ncclMaxDevWorkBatchBytes()];
 
   alignas(16) union {
     unpackShmem unpack;
@@ -171,6 +170,12 @@ __device__ __forceinline__ void loadWorkBatchToShmem(
       packInWork = tid%(workSize/16);
       dstWork = tid/(workSize/16);
       break;
+    case (int)ncclDevWorkTypeBcast:
+      workSize = sizeof(struct ncclDevWorkBcast);
+      nPacks = nWorks*(workSize/16);
+      packInWork = tid%(workSize/16);
+      dstWork = tid/(workSize/16);
+      break;
     case (int)ncclDevWorkTypeCollReg:
     default:
       workSize = sizeof(struct ncclDevWorkCollReg);
@@ -259,6 +264,9 @@ struct RunWorkBatch;
 // Specialized for P2p in sendrecv.h
 template<typename T, typename RedOp>
 struct RunWorkBatch<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPLE>;
+
+template<typename T, typename RedOp, int Proto>
+struct RunWorkBatch<ncclFuncAllGatherV, T, RedOp, NCCL_ALGO_RING, Proto>;
 
 // Specialized here for non-P2p (Coll and CollReg)
 template<ncclFunc_t Fn, typename T, typename RedOp, int Algo, int Proto>

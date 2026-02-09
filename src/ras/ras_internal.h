@@ -436,12 +436,33 @@ typedef enum {
   RAS_CLIENT_FINISHED = 99
 } rasClientStatus;
 
+// Output format enum for different data export types.
+// This is shared between client and server.
+typedef enum {
+  RAS_OUTPUT_TEXT = 0,    // Default human-readable format.
+  RAS_OUTPUT_JSON = 1     // JSON format (always verbose).
+} rasOutputFormat;
+
+// Event group for monitoring notifications.
+// Used to filter what events are shown to monitoring clients.
+typedef enum {
+  RAS_EVENT_LIFECYCLE = 0x01,  // Lifecycle events (peer join/leave/death).
+  RAS_EVENT_TRACE = 0x02,      // Trace events (connection attempts, timeouts, retries, detailed diagnostics).
+  RAS_EVENT_ALL = 0xFF         // All events.
+} rasEventGroup;
+
+struct rasEventNotification {
+  const char* eventType;
+  const char* details;
+  const struct rasPeerInfo* peerInfo;  // If non-NULL, peer information (used when peer not yet in global array).
+  const union ncclSocketAddress* peerAddr;  // If non-NULL and peerInfo is NULL, peer address to look up.
+};
 // Describes a RAS client.
 struct rasClient {
   struct rasClient* next;
   struct rasClient* prev;
 
-  int sock; // File descriptor
+  int sock; // File descriptor.
 
   rasClientStatus status;
 
@@ -455,6 +476,9 @@ struct rasClient {
 
   int verbose;
   int64_t timeout;
+
+  rasOutputFormat outputFormat;
+  uint8_t monitorMask; // If 0, not in monitor mode; otherwise, contains the event mask.
 
   // State stored during asynchronous operations such as collectives.
   struct rasCollective* coll;
@@ -520,6 +544,7 @@ ncclResult_t rasMsgHandlePeersUpdate(struct rasMsg* msg, struct rasSocket* sock)
 int rasLinkCalculatePeer(const struct rasLink* link, int peerIdx, bool isFallback = false);
 ncclResult_t rasPeerDeclareDead(const union ncclSocketAddress* addr);
 bool rasPeerIsDead(const union ncclSocketAddress* addr);
+const char* rasPeerToString(const union ncclSocketAddress* addr, char* buf, size_t size);
 int ncclSocketsCompare(const void* p1, const void* p2);
 bool ncclSocketsSameNode(const union ncclSocketAddress* a1, const union ncclSocketAddress* a2);
 void rasPeersTerminate();
@@ -550,6 +575,9 @@ ncclResult_t rasClientAcceptNewSocket();
 ncclResult_t rasClientResume(struct rasCollective* coll);
 void rasClientEventLoop(struct rasClient* client, int pollIdx);
 const char* rasGpuDevsToString(uint64_t cudaDevs, uint64_t nvmlDevs, char* buf, size_t size);
+const char* ncclSocketToHost(const union ncclSocketAddress* addr, char* buf, size_t size);
+const char* rasPeerInfoToString(const struct rasPeerInfo* peer, char* buf, size_t size);
+void rasClientsNotifyEvent(rasEventGroup group, const struct rasEventNotification* event);
 void rasClientSupportTerminate();
 
 #endif // !NCCL_RAS_CLIENT

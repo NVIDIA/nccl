@@ -144,12 +144,17 @@ ncclResult_t wrap_ibv_query_device(struct ibv_context *context, struct ibv_devic
 }
 
 ncclResult_t wrap_ibv_query_port(struct ibv_context *context, uint8_t port_num, struct ibv_port_attr *port_attr) {
+#ifndef NCCL_BUILD_RDMA_CORE
   // First try and query the extended port attributes (e.g. active_speed_ex)
   if (ibv_query_port_ex(context, port_num, port_attr) != 0) {
     // Fall back to the original attribute API call, but zero all members first
     memset(port_attr, 0, sizeof(*port_attr));
     IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_query_port, ibv_internal_query_port(context, port_num, port_attr), 0, "ibv_query_port");
   }
+#else
+  // When using system rdma-core, use the regular ibv_query_port
+  IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_query_port, ibv_internal_query_port(context, port_num, port_attr), 0, "ibv_query_port");
+#endif
   return ncclSuccess;
 }
 

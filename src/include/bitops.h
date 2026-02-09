@@ -9,6 +9,7 @@
 
 #include <stdint.h>
 #include <string.h>
+#include "compiler.h"
 
 #if !__CUDA_ARCH__
   #ifndef __host__
@@ -224,11 +225,11 @@ static __host__ __device__ int countOneBits(Int x) {
   }
 #else
   if (sizeof(Int) <= sizeof(unsigned int)) {
-    return __builtin_popcount((unsigned int)x);
+    return COMPILER_POPCOUNT32((unsigned int)x);
   } else if (sizeof(Int) <= sizeof(unsigned long)) {
-    return __builtin_popcountl((unsigned long)x);
+    return COMPILER_POPCOUNT64((unsigned long)x);
   } else if (sizeof(Int) <= sizeof(unsigned long long)) {
-    return __builtin_popcountll((unsigned long long)x);
+    return COMPILER_POPCOUNT64((unsigned long long)x);
   } else {
     static_assert(sizeof(Int) <= sizeof(unsigned long long), "Unsupported integer size.");
     return -1;
@@ -250,11 +251,11 @@ static __host__ __device__ int firstOneBit(Int mask) {
   }
 #else
   if (sizeof(Int) <= sizeof(int)) {
-    i = __builtin_ffs((int)mask);
+    i = COMPILER_FFS((int)mask);
   } else if (sizeof(Int) <= sizeof(long)) {
-    i = __builtin_ffsl((long)mask);
+    i = COMPILER_FFSL((long)mask);
   } else if (sizeof(Int) <= sizeof(long long)) {
-    i = __builtin_ffsll((long long)mask);
+    i = COMPILER_FFSLL((long long)mask);
   } else {
     static_assert(sizeof(Int) <= sizeof(long long), "Unsupported integer size.");
   }
@@ -287,13 +288,13 @@ static __host__ __device__ int log2Down(Int x) {
     return -1;
   } else if (sizeof(Int) <= sizeof(unsigned int)) {
     w = 8*sizeof(unsigned int);
-    n = __builtin_clz((unsigned int)x);
+    n = COMPILER_CLZ((unsigned int)x);
   } else if (sizeof(Int) <= sizeof(unsigned long)) {
     w = 8*sizeof(unsigned long);
-    n = __builtin_clzl((unsigned long)x);
+    n = COMPILER_CLZL((unsigned long)x);
   } else if (sizeof(Int) <= sizeof(unsigned long long)) {
     w = 8*sizeof(unsigned long long);
-    n = __builtin_clzll((unsigned long long)x);
+    n = COMPILER_CLZLL((unsigned long long)x);
   } else {
     static_assert(sizeof(Int) <= sizeof(unsigned long long), "Unsupported integer size.");
   }
@@ -320,13 +321,13 @@ static __host__ __device__ int log2Up(Int x) {
     return 0;
   } else if (sizeof(Int) <= sizeof(unsigned int)) {
     w = 8*sizeof(unsigned int);
-    n = __builtin_clz((unsigned int)x);
+    n = COMPILER_CLZ((unsigned int)x);
   } else if (sizeof(Int) <= sizeof(unsigned long)) {
     w = 8*sizeof(unsigned long);
-    n = __builtin_clzl((unsigned long)x);
+    n = COMPILER_CLZL((unsigned long)x);
   } else if (sizeof(Int) <= sizeof(unsigned long long)) {
     w = 8*sizeof(unsigned long long);
-    n = __builtin_clzll((unsigned long long)x);
+    n = COMPILER_CLZLL((unsigned long long)x);
   } else {
     static_assert(sizeof(Int) <= sizeof(unsigned long long), "Unsupported integer size.");
   }
@@ -350,9 +351,9 @@ template<typename UInt, int nSubBits>
 static __host__ UInt reverseSubBits(UInt x) {
   if (nSubBits >= 16 && 8*sizeof(UInt) == nSubBits) {
     switch (8*sizeof(UInt)) {
-    case 16: x = __builtin_bswap16(x); break;
-    case 32: x = __builtin_bswap32(x); break;
-    case 64: x = __builtin_bswap64(x); break;
+    case 16: x = COMPILER_BSWAP16(x); break;
+    case 32: x = COMPILER_BSWAP32(x); break;
+    case 64: x = COMPILER_BSWAP64(x); break;
     default: static_assert(8*sizeof(UInt) <= 64, "Unsupported integer type.");
     }
     return reverseSubBits<UInt, 8>(x);
@@ -409,7 +410,7 @@ static __host__ __device__ uint32_t u32fpEncode(uint32_t x, int bitsPerPow2) {
   #if __CUDA_ARCH__
     log2x = 31-__clz(x|1);
   #else
-    log2x = 31-__builtin_clz(x|1);
+    log2x = 31-COMPILER_CLZ(x|1);
   #endif
   uint32_t mantissa = x>>(log2x >= bitsPerPow2 ? log2x-bitsPerPow2 : 0) & ((1u<<bitsPerPow2)-1);
   uint32_t exponent = log2x >= bitsPerPow2 ? log2x-(bitsPerPow2-1) : 0;

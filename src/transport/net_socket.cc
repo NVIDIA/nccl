@@ -10,6 +10,7 @@
 #include "net.h"
 #include "param.h"
 #include "profiler/net_socket.h"
+#include "os.h"
 
 #include <pthread.h>
 #include <stdlib.h>
@@ -225,7 +226,7 @@ struct ncclNetSocketComm {
   int nextSock;
   void* inlineData;
   struct ncclNetSocketRequest requests[MAX_REQUESTS];
-  pthread_t helperThread[MAX_THREADS];
+  std::thread helperThread[MAX_THREADS];
   struct ncclNetSocketThreadResources threadResources[MAX_THREADS];
 };
 
@@ -251,7 +252,7 @@ void* persistentSocketThread(void *args_) {
             if (!eHandle[i+j]) {
               ncclProfilerNetSockDescr_v1_t data;
               data.type = ncclProfileSocket;
-              data.sock.fd = r->sock->fd;
+              data.sock.fd = r->sock->socketDescriptor;
               data.sock.op = r->op;
               data.sock.length = r->size;
               ncclProfilerFunction(&eHandle[i+j], ncclProfilerNetEventStart, resource->pInfo->pHandle, NCCL_PROFILER_NET_TYPE_SOCK | 1, &data);
@@ -508,7 +509,7 @@ ncclResult_t ncclNetSocketGetTask(struct ncclNetSocketComm* comm, struct ncclPro
 #ifdef NCCL_ENABLE_NET_PROFILING
     res->pInfo = pInfo;
 #endif
-    PTHREADCHECK(pthread_create(comm->helperThread+tid, NULL, persistentSocketThread, res), "pthread_create");
+    comm->helperThread[tid] = std::thread(persistentSocketThread, res);
     ncclSetThreadName(comm->helperThread[tid], "NCCL Sock%c%1u%2u%2u", op == NCCL_SOCKET_SEND ? 'S' : 'R', comm->dev, tid, comm->cudaDev);
   }
   struct ncclNetSocketTask* r = queue->tasks+queue->next;
@@ -617,7 +618,7 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
       if (!r->pInfo.eHandle) {
         ncclProfilerNetSockDescr_v1_t data;
         data.type = ncclProfileSocket;
-        data.sock.fd = r->ctrlSock->fd;
+        data.sock.fd = r->ctrlSock->socketDescriptor;
         data.sock.op = r->op;
         data.sock.length = r->size;
         ncclProfilerFunction(&r->pInfo.eHandle, ncclProfilerNetEventStart, r->pInfo.pHandle, NCCL_PROFILER_NET_TYPE_SOCK | 1, &data);
@@ -689,13 +690,13 @@ ncclResult_t ncclNetSocketClose(void* opaqueComm) {
   if (comm) {
     for (int i=0; i<comm->nThreads; i++) {
       struct ncclNetSocketThreadResources* res = comm->threadResources+i;
-      if (comm->helperThread[i]) {
+      if (comm->helperThread[i].joinable()) {
         {
           std::lock_guard<std::mutex> lock(res->threadMutex);
           res->stop = 1;
           res->threadCond.notify_one();
         }
-        PTHREADCHECK(pthread_join(comm->helperThread[i], NULL), "pthread_join");
+        comm->helperThread[i].join();
       }
       free(res->threadTaskQueue.tasks);
     }

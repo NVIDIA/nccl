@@ -76,6 +76,32 @@ export NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS=500
   Sets the output directory for logs. If not set, defaults to `nccl-inspector-unknown-jobid` or `nccl-inspector-<slurm_job_id>` if running under SLURM.
 - `NCCL_INSPECTOR_DUMP_VERBOSE=<0|1>` (optional)
   Enables verbose output including event trace information. Set to `1` to enable, `0` to disable (default).
+- `NCCL_INSPECTOR_PROM_DUMP=<0|1>` (optional)
+  Enables Prometheus format for textfile node exporter output instead of custom JSON. Set to `1` to enable, `0` to disable (default).
+
+### Debugging
+
+To see detailed Inspector plugin messages, use NCCL's debug subsystem filtering. The Inspector uses the `PROFILE` subsystem:
+
+```bash
+# Show only Inspector messages
+export NCCL_DEBUG=INFO
+export NCCL_DEBUG_SUBSYS=PROFILE
+
+# Show Inspector messages along with other subsystems
+export NCCL_DEBUG=INFO
+export NCCL_DEBUG_SUBSYS=INIT,PROFILE
+
+# Show all debug messages (including Inspector)
+export NCCL_DEBUG=INFO
+export NCCL_DEBUG_SUBSYS=ALL
+```
+
+Inspector messages will appear with your configured NCCL_DEBUG level and will show:
+- Plugin initialization and configuration
+- Dump thread status and intervals
+- File creation and locations (with device UUIDs for Prometheus mode)
+- Error conditions and warnings
 
 ### Example Usage
 
@@ -98,6 +124,26 @@ export NCCL_INSPECTOR_DUMP_DIR=/path/to/logs/${SLURM_JOB_ID}/
 # Then run your normal NCCL application
 srun your_nccl_application
 ```
+
+**Prometheus Output Mode(For Node exporter)**
+
+**Example Prometheus Setup:**
+```bash
+export NCCL_PROFILER_PLUGIN=/path/to/nccl/ext-profiler/inspector/libnccl-profiler-inspector.so
+export NCCL_INSPECTOR_ENABLE=1
+export NCCL_INSPECTOR_PROM_DUMP=1
+export NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS=30000000  # 30 seconds
+export NCCL_INSPECTOR_DUMP_DIR=/var/lib/node_exporter/nccl_inspector/
+```
+
+**Exported Metrics:**
+- `nccl_algorithm_bandwidth_gbs` - NCCL algorithm bandwidth in GB/s
+- `nccl_bus_bandwidth_gbs` - NCCL bus bandwidth in GB/s
+- `nccl_collective_exec_time_microseconds` - Execution time in microseconds
+
+All metrics include labels: `comm_id`, `collective`, `hostname`, `rank`, `slurm_job`, `slurm_job_id`, `pid`, `n_ranks`, `n_nodes`, `coll_sn`, `coll_timing_source`.
+e.g.:
+comm_id="0xd152c00f111816",collective="AllReduce",hostname="pool0-0002",rank="4",slurm_job="unknown",slurm_job_id="unknown",n_ranks="8",n_nodes="1",coll_sn="228924",timestamp="2025-10-17T03:31:47Z",gpu_device_id="GPU4",message_size="2.00GB"
 
 ## Example Scripts
 
@@ -204,10 +250,33 @@ Multiple such JSON objects are written, one per collective operation per communi
 
 ## Output Directory
 
-- By default, output files are written to:
-  - `nccl-inspector-unknown-jobid` (if no SLURM job ID is present)
-  - `nccl-inspector-<slurm_job_id>` (if running under SLURM)
+- By default, output directory is auto-generated based on:
+  - `nccl-inspector-<jobid>` if `SLURM_JOBID` is set
+  - `nccl-inspector-unknown-jobid` otherwise
 - You can override this with the `NCCL_INSPECTOR_DUMP_DIR` environment variable.
+- For Prometheus integration, set it to a directory where Prometheus exporter can scrape it from (e.g., `NCCL_INSPECTOR_DUMP_DIR=/var/lib/node_exporter/nccl_inspector`).
+
+## Output File Size Estimates
+
+The size of output files depends on the output format and usage patterns:
+
+**JSON Mode** (`NCCL_INSPECTOR_PROM_DUMP=0`, default):
+- File size **grows continuously** throughout the application lifetime
+- Each collective operation adds a new JSON entry to the log file
+- File size is proportional to:
+  - Total number of collective operations executed
+  - Number of parallel/overlapping communicators the process (PID) participates in
+- Estimate: ~200-500 bytes per collective operation
+- Example: A workload with 1M collectives across 4 communicators ≈ 200-500 MB per process
+
+**Prometheus Mode** (`NCCL_INSPECTOR_PROM_DUMP=1`):
+- File size is **bounded** (does not grow indefinitely)
+- Files are rewritten periodically (default: every 30 seconds based on `NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS`)
+- File size is proportional to:
+  - Number of parallel/overlapping communicators using the same GPU device
+- Each file contains only the most recent metrics snapshot
+- Estimate: ~500-1000 bytes per communicator per metric
+- Example: 8 communicators on one GPU with 3 metrics ≈ 12-24 KB per GPU (fixed size)
 
 ## Additional Notes
 

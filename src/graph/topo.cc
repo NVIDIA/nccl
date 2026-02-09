@@ -17,6 +17,7 @@
 #include "cpuset.h"
 #include "bootstrap.h"
 #include <mutex>
+#include <float.h>
 
 #define BUSID_SIZE (sizeof("0000:00:00.0"))
 #define BUSID_REDUCED_SIZE (sizeof("0000:00"))
@@ -353,29 +354,52 @@ ncclResult_t ncclTopoSortSystem(struct ncclTopoSystem* system) {
   return ncclSuccess;
 }
 
+ncclResult_t ncclTopoGetMinNetBw(struct ncclTopoSystem* system, float* bw) {
+  float minBw = FLT_MAX;
+  for (int n = 0; n < system->nodes[NET].count; n++) {
+    struct ncclTopoNode* net = system->nodes[NET].nodes + n;
+    if (net->net.bw < minBw) minBw = net->net.bw;
+  }
+  *bw = minBw;
+  return ncclSuccess;
+}
+
 ncclResult_t ncclTopoAddNet(struct ncclXmlNode* xmlNet, struct ncclTopoSystem* system, struct ncclTopoNode* nic, int systemId) {
   int dev;
   NCCLCHECK(xmlGetAttrInt(xmlNet, "dev", &dev));
 
+  int64_t netId = NCCL_TOPO_ID(systemId, dev);
   struct ncclTopoNode* net;
-  NCCLCHECK(ncclTopoCreateNode(system, &net, NET, NCCL_TOPO_ID(systemId, dev)));
+  NCCLCHECK(ncclTopoCreateNode(system, &net, NET, netId));
   net->net.dev = dev;
   const char* str;
+  // if not guid is present use the net->id unique id instead, which will be unique within the node/NVLD
   NCCLCHECK(xmlGetAttr(xmlNet, "guid", &str));
-  if (str) sscanf(str, "0x%lx", &net->net.asic);
-  else net->net.asic = dev;
+  net->net.asic = (str) ? strtoull(str, NULL, 16) : netId;
 
-  ncclDebugNoWarn = NCCL_GRAPH;
+
   int mbps;
-  NCCLCHECK(xmlGetAttrIntDefault(xmlNet, "speed", &mbps, 0));
+  NCCLCHECKNOWARN(xmlGetAttrIntDefault(xmlNet, "speed", &mbps, 0), NCCL_GRAPH);
   if (mbps <= 0) mbps = 10000; // Some NICs define speed = -1
   net->net.bw = mbps / 8000.0;
-  if (xmlGetAttrFloat(xmlNet, "latency", &net->net.latency) != ncclSuccess) net->net.latency = 0;
-  NCCLCHECK(xmlGetAttrIntDefault(xmlNet, "port", &net->net.port, 0));
-  NCCLCHECK(xmlGetAttrIntDefault(xmlNet, "gdr", &net->net.gdrSupport, 0));
-  NCCLCHECK(xmlGetAttrIntDefault(xmlNet, "maxconn", &net->net.maxChannels, MAXCHANNELS));
-  NCCLCHECK(xmlGetAttrIntDefault(xmlNet, "coll", &net->net.collSupport, 0));
-  ncclDebugNoWarn = 0;
+  ncclResult_t ret;
+  NOWARN(ret = xmlGetAttrFloat(xmlNet, "latency", &net->net.latency), NCCL_GRAPH);
+  if (ret != ncclSuccess) net->net.latency = 0;
+  NCCLCHECKNOWARN(xmlGetAttrIntDefault(xmlNet, "port", &net->net.port, 0), NCCL_GRAPH);
+  NCCLCHECKNOWARN(xmlGetAttrIntDefault(xmlNet, "gdr", &net->net.gdrSupport, 0), NCCL_GRAPH);
+  NCCLCHECKNOWARN(xmlGetAttrIntDefault(xmlNet, "maxconn", &net->net.maxChannels, MAXCHANNELS), NCCL_GRAPH);
+  NCCLCHECKNOWARN(xmlGetAttrIntDefault(xmlNet, "coll", &net->net.collSupport, 0), NCCL_GRAPH);
+
+  // build the PCI id using the parent PCI link
+  uint64_t hacc[2] = {1, 1};
+  const char* busId = NULL;
+  struct ncclXmlNode* parent = xmlNet->parent;
+  while (parent != NULL && strcmp(parent->name, "pci") != 0) parent = parent->parent;
+  if (parent) NCCLCHECK(xmlGetAttr(parent, "busid", &busId));
+  // If we fail to find the PCIe path, we use the GUID instead.
+  if (busId) eatHash(hacc, busId, strlen(busId));
+  else eatHash(hacc, &net->net.asic);
+  net->net.pciId = digestHash(hacc);
 
   NCCLCHECK(ncclTopoConnectNodes(nic, net, LINK_NET, net->net.bw));
   NCCLCHECK(ncclTopoConnectNodes(net, nic, LINK_NET, net->net.bw));
@@ -998,7 +1022,8 @@ ncclResult_t ncclTopoMakeVnic(struct ncclXml* xml, struct ncclTopoNetInfo* netIn
 
   // Trigger the merge, then get the new device's properties
   int vDevIndex = 0;
-  ncclResult_t ret = netInfo->makeVDevice(&vDevIndex, vProps);
+  ncclResult_t ret;
+  NOWARN(ret = netInfo->makeVDevice(&vDevIndex, vProps), NCCL_GRAPH|NCCL_INIT|NCCL_NET);
   if (ret != ncclSuccess) {
     INFO(NCCL_GRAPH|NCCL_INIT|NCCL_NET, "TOPO/NET : Tried merging multiple devices together and failed. vProps={ndevs=%d, devs=[%d %d %d %d]}. Set NCCL_NET_MERGE_LEVEL=LOC to disable NIC fusion.",
       vProps->ndevs, vProps->devs[0], vProps->devs[1], vProps->devs[2], vProps->devs[3]);
@@ -1559,39 +1584,36 @@ ncclResult_t ncclTopoGetLocal(struct ncclTopoSystem* system, int type, int index
   return ncclSuccess;
 }
 
-ncclResult_t getLocalNetCountByBw(struct ncclTopoSystem* system, int gpu, int *count) {
-  int localNetCount = 0, netCountByBw = 0;
-  int localNets[NCCL_TOPO_MAX_NODES];
-  float totalNetBw = 0, gpuBw = 0;
+ncclResult_t getLocalNetCountByBw(struct ncclTopoSystem* system, int gpu, int *count, float* bw) {
+  // Assuming BW to CPU reflects the GPU bandwidth via P2P or C2C.
+  // Caveat, this could be wrong if there is a PCIe switch, and a narrower link to the CPU.
+  int c;
+  NCCLCHECK(ncclGetLocalCpu(system, gpu, &c));
+  float gpuBw = system->nodes[GPU].nodes[gpu].paths[CPU][c].bw;
+  int rank = system->nodes[GPU].nodes[gpu].gpu.rank;
 
-  for (int l=0; l<system->nodes[GPU].nodes[gpu].nlinks; l++) {
-    //assuming BW to CPU reflects the GPU bandwidth via P2P or C2C
-    //caveat, this could be wrong if there is a PCIe switch,
-    //and a narrower link to the CPU
-    if (system->nodes[GPU].nodes[gpu].links[l].remNode->type == CPU) {
-       gpuBw = system->nodes[GPU].nodes[gpu].links[l].bw;
-    }
-  }
+  int netCountByBw = 0;
+  float totalNetBw = 0;
+  int64_t firstNetId = 0;
+  for (int c = 0; c < MAXCHANNELS; c++) {
+    int net;
+    int64_t netId;
+    NCCLCHECK(ncclTopoGetLocalNet(system, rank, c, &netId, NULL));
+    NCCLCHECK(ncclTopoIdToIndex(system, NET, netId, &net));
+    if(c == 0) firstNetId = netId;
+    else if(firstNetId == netId) break;
 
-  NCCLCHECK(ncclTopoGetLocal(system, GPU, gpu, NET, localNets, &localNetCount, NULL));
-  for (int l=0; (l < localNetCount) && (totalNetBw < gpuBw); l++, netCountByBw++) {
-     totalNetBw += system->nodes[GPU].nodes[gpu].paths[NET][localNets[l]].bw;
+    totalNetBw += system->nodes[GPU].nodes[gpu].paths[NET][net].bw;
+    netCountByBw++;
+    if(totalNetBw >= gpuBw) break;
   }
   *count = netCountByBw;
-
+  *bw = totalNetBw;
   return ncclSuccess;
 }
 
-enum netDevsPolicy {
-  NETDEVS_POLICY_AUTO = 0x0,
-  NETDEVS_POLICY_ALL = 0x1,
-  NETDEVS_POLICY_MAX = 0x2,
-  NETDEVS_POLICY_UNDEF = 0xffffffff
-};
-
-static enum netDevsPolicy netDevsPolicy = NETDEVS_POLICY_UNDEF;
 static int netDevsPolicyNum = -1;
-
+static enum netDevsPolicy netDevsPolicy = NETDEVS_POLICY_UNDEF;
 static void getNetDevsPolicyOnce() {
   const char* envStr = ncclGetEnv("NCCL_NETDEVS_POLICY");
   if (envStr) {
@@ -1614,6 +1636,18 @@ static void getNetDevsPolicyOnce() {
   if (netDevsPolicy == NETDEVS_POLICY_UNDEF) netDevsPolicy = NETDEVS_POLICY_AUTO;
 }
 
+ncclResult_t ncclTopoGetNetDevsPolicy(enum netDevsPolicy* policy, int* policyNum) {
+  static std::once_flag onceFlag;
+  std::call_once(onceFlag, getNetDevsPolicyOnce);
+  if (netDevsPolicy == NETDEVS_POLICY_MAX && netDevsPolicyNum <= 0) {
+    WARN("Invalid number of network devices = %d for policy MAX", netDevsPolicyNum);
+    return ncclInternalError;
+  }
+  if (policy) *policy = netDevsPolicy;
+  if (policyNum && netDevsPolicyNum >= 0) *policyNum = netDevsPolicyNum;
+  return ncclSuccess;
+}
+
 ncclResult_t ncclTopoGetLocalNet(struct ncclTopoSystem* system, int rank, int channelId, int64_t* id, int* dev) {
   int gpu;
   NCCLCHECK(ncclTopoRankToIndex(system, rank, &gpu, /*showWarn=*/true));
@@ -1626,22 +1660,19 @@ ncclResult_t ncclTopoGetLocalNet(struct ncclTopoSystem* system, int rank, int ch
     return ncclInternalError;
   }
 
-  static pthread_once_t once = PTHREAD_ONCE_INIT;
-  pthread_once(&once,getNetDevsPolicyOnce);
   int netsPerGpu = 0;
-  if (netDevsPolicy == NETDEVS_POLICY_AUTO) {
+  int policyCount = 0;
+  enum netDevsPolicy policy;
+  NCCLCHECK(ncclTopoGetNetDevsPolicy(&policy, &policyCount));
+  if (policy == NETDEVS_POLICY_AUTO) {
     int localGpus[NCCL_TOPO_MAX_NODES];
     int localGpuCount;
     NCCLCHECK(ncclTopoGetLocal(system, NET, localNets[0], GPU, localGpus, &localGpuCount, NULL));
     netsPerGpu = DIVUP(localNetCount, localGpuCount);
-  } else if (netDevsPolicy == NETDEVS_POLICY_ALL) {
+  } else if (policy == NETDEVS_POLICY_ALL) {
     netsPerGpu = localNetCount;
-  } else if (netDevsPolicy == NETDEVS_POLICY_MAX) {
-    if (netDevsPolicyNum <= 0) {
-      WARN("Invalid number of network devices = %d for policy MAX", netDevsPolicyNum);
-      return ncclInternalError;
-    }
-    netsPerGpu = std::min(netDevsPolicyNum, localNetCount);
+  } else if (policy == NETDEVS_POLICY_MAX) {
+    netsPerGpu = std::min(policyCount, localNetCount);
   } else {
     WARN("Unknown netDevs policy");
     return ncclInternalError;
@@ -1652,6 +1683,21 @@ ncclResult_t ncclTopoGetLocalNet(struct ncclTopoSystem* system, int rank, int ch
   net += channelId%(netsPerGpu);
   if (id) *id = system->nodes[NET].nodes[localNets[net%localNetCount]].id;
   if (dev) *dev = system->nodes[NET].nodes[localNets[net%localNetCount]].net.dev;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclTopoGetLocalNets(struct ncclTopoSystem* system, int rank, int64_t* localNets, int* localNetCount) {
+  int gpu;
+  NCCLCHECK(ncclTopoRankToIndex(system, rank, &gpu, /*showWarn=*/true));
+  int localNetIndexes[NCCL_TOPO_MAX_NODES];
+  NCCLCHECK(ncclTopoGetLocal(system, GPU, gpu, NET, localNetIndexes, localNetCount, NULL));
+
+  if (*localNetCount == 0) {
+    WARN("Could not find any local path from gpu %d to net.", gpu);
+    return ncclInternalError;
+  }
+  // Convert index to ids
+  for (int n=0; n<*localNetCount; n++) localNets[n] = system->nodes[NET].nodes[localNetIndexes[n]].id;
   return ncclSuccess;
 }
 
@@ -1695,7 +1741,7 @@ ncclResult_t ncclTopoCpuType(struct ncclTopoSystem* system, int* arch, int* vend
 
 NCCL_PARAM(IgnoreCpuAffinity, "IGNORE_CPU_AFFINITY", 0);
 
-ncclResult_t ncclTopoGetCpuAffinity(struct ncclTopoSystem* system, int rank, cpu_set_t* affinity) {
+ncclResult_t ncclTopoGetCpuAffinity(struct ncclTopoSystem* system, int rank, ncclAffinity* affinity) {
   struct ncclTopoNode* cpu = NULL, *gpu = NULL;
   int gpuIndex, cpuIndex;
   NCCLCHECK(ncclTopoRankToIndex(system, rank, &gpuIndex, /*showWarn=*/true));
@@ -1704,27 +1750,27 @@ ncclResult_t ncclTopoGetCpuAffinity(struct ncclTopoSystem* system, int rank, cpu
   cpu = system->nodes[CPU].nodes+cpuIndex;
 
   // Query the CPU affinity set we were provided
-  cpu_set_t mask;
-  SYSCHECK(sched_getaffinity(0, sizeof(cpu_set_t), &mask), "sched_getaffinity");
+  ncclAffinity mask;
+  NCCLCHECK(ncclOsGetAffinity(&mask));
 
   // Get the affinity of the CPU close to our GPU.
-  cpu_set_t cpuMask = cpu->cpu.affinity;
+  ncclAffinity cpuMask = cpu->cpu.affinity;
 
   // Get the final affinity
-  cpu_set_t finalMask;
+  ncclAffinity finalMask;
   if (ncclParamIgnoreCpuAffinity())
     // Ignore the CPU affinity set and use the GPU one instead
     finalMask = cpuMask;
   else
     // Use a subset of the GPU affinity set
-    CPU_AND(&finalMask, &mask, &cpuMask);
+    finalMask = ncclOsCpuAnd(mask, cpuMask);
 
-  memcpy(affinity, &finalMask, sizeof(cpu_set_t));
+  memcpy(affinity, &finalMask, sizeof(ncclAffinity));
 
   // display the final affinity
   char msg[1024] = "";
   snprintf(msg + strlen(msg), sizeof(msg) - strlen(msg), "Affinity for GPU %d is ", gpu->gpu.dev);
-  if (CPU_COUNT(&finalMask)) {
+  if (ncclOsCpuCount(finalMask)) {
     (void)ncclCpusetToRangeStr(&finalMask, msg + strlen(msg), sizeof(msg) - strlen(msg));
   } else {
     snprintf(msg + strlen(msg), sizeof(msg) - strlen(msg), "empty, ignoring");

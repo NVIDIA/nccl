@@ -1,0 +1,15 @@
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Cython compiled outputs
+nccl/bindings/**/*.cpp
+nccl/bindings/**/*.so
+
+__pycache__
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/

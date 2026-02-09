@@ -1,0 +1,115 @@
+[project]
+name = "nccl4py"
+dynamic = ["version"]
+requires-python = ">=3.10"
+description = "NCCL4Py: Python bindings for NCCL"
+readme = {file = "DESCRIPTION.rst", content-type = "text/x-rst"}
+license = "BSD-3-Clause"
+license-files = ["LICENSE.txt"]
+authors = [
+    { name = "NVIDIA Corporation" }
+]
+classifiers = [
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: End Users/Desktop",
+    "Natural Language :: English",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Education",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries",
+    "Programming Language :: Cython",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Environment :: GPU :: NVIDIA CUDA",
+    "Environment :: GPU :: NVIDIA CUDA :: 12",
+    "Environment :: GPU :: NVIDIA CUDA :: 13",
+]
+
+dependencies = [
+    "packaging",
+    "numpy",
+    "cuda.core>=0.4.1,<1.0",
+    "cuda-pathfinder~=1.1",
+]
+
+[project.optional-dependencies]
+cu12 = [
+    "nvidia-nccl-cu12",
+    "cuda-bindings~=12.0",
+]
+cu13 = [
+    "nvidia-nccl-cu13",
+    "cuda-bindings~=13.0",
+]
+
+[dependency-groups]
+test = [
+    "pytest",
+    "pytest-cov",
+    "pytest-mpi",
+    "mpi4py",
+    "ml-dtypes",
+]
+
+[project.urls]
+homepage = "https://developer.nvidia.com/nccl"
+documentation = "https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/index.html"
+repository = "https://github.com/NVIDIA/nccl"
+issues = "https://github.com/NVIDIA/nccl/issues"
+
+[build-system]
+requires = [
+    "setuptools>=77.0.3",
+    "Cython>=0.29.24"
+]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+include = ["nccl*"]
+
+[tool.setuptools.package-data]
+"nccl.bindings" = ["cynccl.pxd"]
+
+[tool.setuptools.dynamic]
+version = { attr = "nccl._version.__version__" }
+
+[tool.ruff]
+line-length = 100
+
+[tool.pyright]
+include = ["nccl", "tests"]
+exclude = ["build", "dist", "*.egg-info"]
+pythonVersion = "3.10"
+typeCheckingMode = "basic"
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.cibuildwheel]
+build = "cp310-* cp311-* cp312-* cp313-* cp314-*"
+skip = "*-musllinux_*"
+build-verbosity = 1
+
+[tool.cibuildwheel.linux]
+archs = ["native"]  # Fast local builds; override in CI for multi-arch
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
+
+[tool.uv]
+conflicts = [
+    [
+        { extra = "cu12" },
+        { extra = "cu13" },
+    ]
+]

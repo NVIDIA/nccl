@@ -17,6 +17,7 @@
 typedef char ncclNetHandle_t[NCCL_NET_HANDLE_MAXSIZE];
 
 ncclResult_t ncclNetInit(struct ncclComm* comm);
+ncclResult_t ncclNetInitFromParent(struct ncclComm* comm, struct ncclComm* parent);
 ncclResult_t ncclNetFinalize(struct ncclComm* comm);
 ncclResult_t ncclNetGetDevCount(int netPluginIndex, int* nPhysDev, int* nVirtDev);
 ncclResult_t ncclNetSetVirtDevCount(int netPluginIndex, int nVirtDev);
@@ -28,5 +29,7 @@ ncclResult_t ncclGpuGdrSupport(struct ncclComm* comm, int* gdrSupport);
 
 extern ncclNet_t ncclNetIb;
 extern ncclNet_t ncclNetSocket;
+extern ncclGin_t ncclGinIbGdaki;
+extern ncclGin_t ncclGinIbProxy;
 
 #endif

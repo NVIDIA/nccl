@@ -14,7 +14,7 @@ typedef struct {
   int rank;                     // originating rank
   union {
     struct {
-      int graphCaptured;
+      bool graphCaptured;
       int groupDepth;
     } groupApi;
 

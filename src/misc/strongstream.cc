@@ -9,6 +9,7 @@
 #include "checks.h"
 #include "param.h"
 #include <mutex>
+#include <memory>
 
 #if CUDART_VERSION >= 13000
 #define cudaStreamGetCaptureInfo_v3 cudaStreamGetCaptureInfo
@@ -39,7 +40,7 @@ ncclResult_t ncclCudaContextTrack(struct ncclCudaContext** out) {
   struct ncclCudaContext* p = cxtListHead;
   while (1) {
     if (p == nullptr) {
-      p = (struct ncclCudaContext*)calloc(1, sizeof(struct ncclCudaContext));
+      p = new ncclCudaContext{};
       p->refCount = 1;
       p->hcontext = hcontext;
       p->next = cxtListHead;
@@ -66,14 +67,14 @@ void ncclCudaContextDrop(struct ncclCudaContext* cxt) {
     *pp = cxt->next; // remove from list
     // Destroy resources held in cxt
     ncclStrongStreamDestruct(&cxt->launchOrder);
-    free(cxt);
+    delete cxt;
   }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
 ncclResult_t ncclCudaGetCapturingGraph(
-    struct ncclCudaGraph* graph, cudaStream_t stream
+    struct ncclCudaGraph* graph, cudaStream_t stream, int graphUsageMode
   ) {
   #if CUDART_VERSION >= 10000 // cudaStreamGetCaptureInfo
     int driver;
@@ -85,6 +86,7 @@ ncclResult_t ncclCudaGetCapturingGraph(
         graph->origin = nullptr;
         graph->graph = nullptr;
         graph->graphId = ULLONG_MAX;
+        graph->graphUsageMode = graphUsageMode;
       #endif
       if (status != cudaStreamCaptureStatusNone) {
         WARN("NCCL cannot be captured in a graph if either it wasn't built with CUDA runtime >= 11.3 or if the installed CUDA driver < R465.");
@@ -105,6 +107,7 @@ ncclResult_t ncclCudaGetCapturingGraph(
         } else {
           graph->origin = stream;
         }
+        graph->graphUsageMode = graphUsageMode;
       #endif
     }
   #endif
@@ -132,7 +135,6 @@ ncclResult_t ncclStrongStreamConstruct(struct ncclStrongStream* ss) {
   #if CUDART_VERSION >= 11030
     ss->everCaptured = false;
     ss->captureHead = nullptr;
-    pthread_mutex_init(&ss->lock, nullptr);
     CUDACHECK(cudaEventCreateWithFlags(&ss->serialEvent, cudaEventDisableTiming));
   #endif
   return ncclSuccess;
@@ -149,16 +151,14 @@ ncclResult_t ncclStrongStreamDestruct(struct ncclStrongStream* ss) {
       cap = next;
     }
     CUDACHECK(cudaEventDestroy(ss->serialEvent));
-    pthread_mutex_destroy(&ss->lock);
   #endif
   return ncclSuccess;
 }
 
-NCCL_PARAM(GraphMixingSupport, "GRAPH_MIXING_SUPPORT", 1)
 NCCL_PARAM(LaunchRaceFatal, "LAUNCH_RACE_FATAL", 1);
 constexpr char const* launchRaceFatalMsg = "Fatal: host threads racing to launch NCCL on same device.";
 
-static __thread char threadIdMarker;
+static thread_local char threadIdMarker;
 static void* localThreadId() { return &threadIdMarker; }
 
 ncclResult_t ncclStrongStreamAcquire(
@@ -166,19 +166,20 @@ ncclResult_t ncclStrongStreamAcquire(
    cudaStream_t* workStream
   ) {
   #if CUDART_VERSION >= 11030
-    bool mixing = ncclParamGraphMixingSupport();
+    bool mixing = graph.graphUsageMode == 2;
     if (graph.graphId == ULLONG_MAX) {
       *workStream = ss->liveStream;
       ss->liveAcquiredBy = localThreadId();
-      if (mixing && __atomic_load_n(&ss->everCaptured, __ATOMIC_RELAXED)) {
+      if (mixing && COMPILER_ATOMIC_LOAD(&ss->everCaptured, std::memory_order_relaxed)) {
         CUDACHECK(cudaStreamWaitEvent(ss->liveStream, ss->serialEvent, 0));
       }
     } else {
       bool firstCapture = !ss->everCaptured;
-      __atomic_store_n(&ss->everCaptured, true, __ATOMIC_RELAXED);
+      COMPILER_ATOMIC_STORE(&ss->everCaptured, true, std::memory_order_relaxed);
 
       ncclResult_t ret = ncclSuccess;
-      if (concurrent) pthread_mutex_lock(&ss->lock);
+      std::unique_lock<std::mutex> lock(ss->mutex, std::defer_lock);
+      if (concurrent) lock.lock();
 
       // Look for capture in our list of active captures.
       struct ncclStrongStreamCapture** pcap = &ss->captureHead;
@@ -189,7 +190,6 @@ ncclResult_t ncclStrongStreamAcquire(
         if (cap->graphId == graph.graphId) { // Capture node already exists.
           *workStream = cap->captureStream;
           cap->acquiredBy = localThreadId();
-          if (concurrent) pthread_mutex_unlock(&ss->lock);
           return ncclSuccess;
         } else {
           cudaStreamCaptureStatus status;
@@ -220,7 +220,7 @@ ncclResult_t ncclStrongStreamAcquire(
       ss->captureHead = cap;
 
     do_unlock:
-      if (concurrent) pthread_mutex_unlock(&ss->lock);
+      if (concurrent) lock.unlock();
       if (ret != ncclSuccess) return ret;
 
       *workStream = cap->captureStream;
@@ -257,11 +257,11 @@ ncclResult_t ncclStrongStreamAcquiredWorkStream(
     if (graph.graphId == ULLONG_MAX) {
       *workStream = ss->liveStream;
     } else {
-      if (concurrent) pthread_mutex_lock(&ss->lock);
+      std::unique_lock<std::mutex> lock(ss->mutex, std::defer_lock);
+      if (concurrent) lock.lock();
       struct ncclStrongStreamCapture* cap = ss->captureHead;
       while (cap->graphId != graph.graphId) cap = cap->next;
       *workStream = cap->captureStream;
-      if (concurrent) pthread_mutex_unlock(&ss->lock);
     }
   #else
     *workStream = ss->liveStream
@@ -273,10 +273,10 @@ ncclResult_t ncclStrongStreamRelease(
     struct ncclCudaGraph graph, struct ncclStrongStream* ss, bool concurrent
   ) {
   #if CUDART_VERSION >= 11030
-    bool mixing = ncclParamGraphMixingSupport();
+    bool mixing = graph.graphUsageMode == 2;
     if (mixing) {
       if (graph.graphId == ULLONG_MAX) {
-        if (__atomic_load_n(&ss->everCaptured, __ATOMIC_RELAXED)) {
+        if (COMPILER_ATOMIC_LOAD(&ss->everCaptured, std::memory_order_relaxed)) {
           CUDACHECK(cudaEventRecord(ss->serialEvent, ss->liveStream));
         }
         if (ss->liveAcquiredBy != localThreadId() && ncclParamLaunchRaceFatal()) {
@@ -284,10 +284,11 @@ ncclResult_t ncclStrongStreamRelease(
           return ncclInvalidUsage;
         }
       } else {
-        if (concurrent) pthread_mutex_lock(&ss->lock);
+        std::unique_lock<std::mutex> lock(ss->mutex, std::defer_lock);
+        if (concurrent) lock.lock();
         struct ncclStrongStreamCapture* cap = ss->captureHead;
         while (cap->graphId != graph.graphId) cap = cap->next;
-        if (concurrent) pthread_mutex_unlock(&ss->lock);
+        if (concurrent) lock.unlock();
 
         // Add event record node with dependencies added further down.
         cudaGraphNode_t recordNode;

@@ -439,20 +439,20 @@ jsonResult_t jsonDouble(jsonFileOutput* jfo, const double val) {
 // ./json_test
 // if something fails, it will print out the error
 // if it all works, print out "output matches reference"
-#define JSONCHECK(expr)                                                                            \
-  do {                                                                                             \
-    const jsonResult_t res = (expr);                                                               \
-    if (res != jsonSuccess) {                                                                      \
-      fprintf(stderr, "jsonError: %s\n", jsonErrorString(res));                                    \
-      exit(1);                                                                                     \
-    }                                                                                              \
+#define JSONCHECK(expr)                                         \
+  do {                                                          \
+    const jsonResult_t res = (expr);                            \
+    if (res != jsonSuccess) {                                   \
+      fprintf(stderr, "jsonError: %s\n", jsonErrorString(res)); \
+      exit(1);                                                  \
+    }                                                           \
   } while (0)
 
 int main() {
 
   const char refstr[] =
-      "{\"number\":123,\"utfstring\":\"∮ E⋅da = Q,  n → ∞, ∑ f(i) = ∏ g(i), ∀x∈ℝ: ⌈x⌉ = −⌊−x⌋, α ∧ "
-      "¬β = ¬(¬α ∨ β),\",\"list\":[\"true\",null,9423812381231,3123111,0.694234]}";
+    "{\"number\":123,\"utfstring\":\"∮ E⋅da = Q,  n → ∞, ∑ f(i) = ∏ g(i), ∀x∈ℝ: ⌈x⌉ = −⌊−x⌋, α ∧ "
+    "¬β = ¬(¬α ∨ β),\",\"list\":[\"true\",null,9423812381231,3123111,0.694234]}";
 
   jsonFileOutput* jfo;
   JSONCHECK(jsonInitFileOutput(&jfo, "test.json"));
@@ -461,7 +461,7 @@ int main() {
   JSONCHECK(jsonInt(jfo, 123));
   JSONCHECK(jsonKey(jfo, "utfstring"));
   JSONCHECK(
-      jsonStr(jfo, "∮ E⋅da = Q,  n → ∞, ∑ f(i) = ∏ g(i), ∀x∈ℝ: ⌈x⌉ = −⌊−x⌋, α ∧ ¬β = ¬(¬α ∨ β),"));
+    jsonStr(jfo, "∮ E⋅da = Q,  n → ∞, ∑ f(i) = ∏ g(i), ∀x∈ℝ: ⌈x⌉ = −⌊−x⌋, α ∧ ¬β = ¬(¬α ∨ β),"));
   JSONCHECK(jsonKey(jfo, "list"));
   JSONCHECK(jsonStartList(jfo));
   JSONCHECK(jsonBool(jfo, true));

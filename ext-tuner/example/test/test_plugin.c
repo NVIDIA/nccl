@@ -767,16 +767,16 @@ int test_nvl_domain_info() {
     .minRanksPerNvlDomain = 3, // minimum ranks across all domains (bottleneck)
     .maxRanksPerNvlDomain = 5  // maximum ranks across all domains (capacity)
   };
-  
+
   void* context = NULL;
   ncclResult_t result = pluginInit(&context, 0, 8, 2, mock_logger, &nvl_domain, NULL);
   TEST_ASSERT(result == ncclSuccess, "Plugin init with NVLink domains should succeed");
-  
+
   // Validate NVLD info structure
   TEST_ASSERT(nvl_domain.nNvlDomains == 2, "Should have 2 domains (nodes)");
   TEST_ASSERT(nvl_domain.minRanksPerNvlDomain == 3, "Should have minimum 3 ranks per domain");
   TEST_ASSERT(nvl_domain.maxRanksPerNvlDomain == 5, "Should have maximum 5 ranks per domain");
-  
+
   // Clean up
   pluginFinalize(context);
   printf("NVLink domain info test passed!\n");

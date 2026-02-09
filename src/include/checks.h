@@ -10,31 +10,49 @@
 #include "debug.h"
 
 // Check CUDA RT calls
-#define CUDACHECK(cmd) do {                                 \
-    cudaError_t err = cmd;                                  \
-    if( err != cudaSuccess ) {                              \
-        WARN("Cuda failure '%s'", cudaGetErrorString(err)); \
-        return ncclUnhandledCudaError;                      \
-    }                                                       \
-} while(false)
+#define CUDACHECK(cmd)                                                         \
+  do {                                                                         \
+    cudaError_t err = cmd;                                                     \
+    if (err != cudaSuccess) {                                                  \
+      WARN("Cuda failure '%s'", cudaGetErrorString(err));                      \
+      (void)cudaGetLastError();                                                \
+      return ncclUnhandledCudaError;                                           \
+    }                                                                          \
+  } while (false)
 
-#define CUDACHECKGOTO(cmd, RES, label) do {                 \
-    cudaError_t err = cmd;                                  \
-    if( err != cudaSuccess ) {                              \
-        WARN("Cuda failure '%s'", cudaGetErrorString(err)); \
-        RES = ncclUnhandledCudaError;                       \
-        goto label;                                         \
-    }                                                       \
-} while(false)
+#define CUDACHECKGOTO(cmd, RES, label)                                         \
+  do {                                                                         \
+    cudaError_t err = cmd;                                                     \
+    if (err != cudaSuccess) {                                                  \
+      WARN("Cuda failure '%s'", cudaGetErrorString(err));                      \
+      (void)cudaGetLastError();                                                \
+      RES = ncclUnhandledCudaError;                                            \
+      goto label;                                                              \
+    }                                                                          \
+  } while (false)
 
 // Report failure but clear error and continue
-#define CUDACHECKIGNORE(cmd) do {  \
-    cudaError_t err = cmd;         \
-    if( err != cudaSuccess ) {     \
-        INFO(NCCL_ALL,"%s:%d Cuda failure '%s'", __FILE__, __LINE__, cudaGetErrorString(err)); \
-        (void) cudaGetLastError(); \
-    }                              \
-} while(false)
+#define CUDACHECKIGNORE(cmd)                                                   \
+  do {                                                                         \
+    cudaError_t err = cmd;                                                     \
+    if (err != cudaSuccess) {                                                  \
+      INFO(NCCL_ALL, "%s:%d Cuda failure '%s'", __FILE__, __LINE__,            \
+           cudaGetErrorString(err));                                           \
+      (void)cudaGetLastError();                                                \
+    }                                                                          \
+  } while (false)
+
+// Use inline function to clear CUDA error inside expressions
+static inline cudaError_t cuda_clear(cudaError_t err) {
+  if (err != cudaSuccess)
+    (void)cudaGetLastError();
+  return err;
+}
+
+// Check if cudaSuccess & clear CUDA error
+#define CUDASUCCESS(cmd) cuda_clear(cmd) == cudaSuccess
+// Clear CUDA error, return CUDA return code
+#define CUDACLEARERROR(cmd) cuda_clear(cmd)
 
 #include <errno.h>
 // Check system calls
@@ -137,6 +155,21 @@
   } \
 } while (0)
 
+#define NCCLCHECKNOWARN(call, FLAGS) do { \
+  ncclResult_t RES; \
+  NOWARN(RES = call, FLAGS); \
+  if (RES != ncclSuccess && RES != ncclInProgress) { \
+    return RES; \
+  } \
+} while (0)
+
+#define NCCLCHECKGOTONOWARN(call, RES, label, FLAGS) do { \
+  NOWARN(RES = call, FLAGS); \
+  if (RES != ncclSuccess && RES != ncclInProgress) { \
+    goto label; \
+  } \
+} while (0)
+
 #define NCCLWAIT(call, cond, abortFlagPtr) do {         \
   uint32_t* tmpAbortFlag = (abortFlagPtr);     \
   ncclResult_t RES = call;                \
@@ -144,7 +177,7 @@
     if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, RES);    \
     return ncclInternalError;             \
   }                                       \
-  if (__atomic_load(tmpAbortFlag, __ATOMIC_ACQUIRE)) NEQCHECK(*tmpAbortFlag, 0); \
+  if (COMPILER_ATOMIC_LOAD(tmpAbortFlag, std::memory_order_acquire)) NEQCHECK(*tmpAbortFlag, 0); \
 } while (!(cond))
 
 #define NCCLWAITGOTO(call, cond, abortFlagPtr, RES, label) do { \
@@ -154,7 +187,7 @@
     if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, RES);    \
     goto label;                           \
   }                                       \
-  if (__atomic_load(tmpAbortFlag, __ATOMIC_ACQUIRE)) NEQCHECKGOTO(*tmpAbortFlag, 0, RES, label); \
+  if (COMPILER_ATOMIC_LOAD(tmpAbortFlag, std::memory_order_acquire)) NEQCHECKGOTO(*tmpAbortFlag, 0, RES, label); \
 } while (!(cond))
 
 #define NCCLCHECKTHREAD(a, args) do { \
@@ -169,6 +202,39 @@
     INFO(NCCL_INIT,"%s:%d -> %d [Async thread]", __FILE__, __LINE__, args->ret); \
     args->ret = ncclUnhandledCudaError; \
     return args; \
+  } \
+} while(0)
+
+// Common thread creation implementation with error handling
+#define STDTHREADCREATE_IMPL(var, func, error_action, ...) do { \
+  try { \
+    (var) = std::thread(func, __VA_ARGS__); \
+  } catch (const std::exception& e) { \
+    WARN("Thread creation failed: %s", e.what()); \
+    error_action; \
+  } \
+} while(0)
+
+#define STDTHREADCREATE(var, func, ...) \
+  STDTHREADCREATE_IMPL(var, func, return ncclSystemError, __VA_ARGS__)
+
+#define STDTHREADCREATE_GOTO(var, func, RES, label, ...) \
+  STDTHREADCREATE_IMPL(var, func, do { RES = ncclSystemError; goto label; } while(0), __VA_ARGS__)
+
+#define NEW_NOTHROW(var, x) do { \
+  (var) = new (std::nothrow) x{}; \
+  if (!(var)) { \
+    WARN("Allocation failed at %s:%d", __FILE__, __LINE__); \
+    return ncclSystemError; \
+  } \
+} while(0)
+
+#define NEW_NOTHROW_GOTO(var, x, RES, label) do { \
+  (var) = new (std::nothrow) x{}; \
+  if (!(var)) { \
+    WARN("Allocation failed at %s:%d", __FILE__, __LINE__); \
+    RES = ncclSystemError; \
+    goto label; \
   } \
 } while(0)
 

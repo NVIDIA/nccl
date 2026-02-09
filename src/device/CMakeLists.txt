@@ -17,7 +17,7 @@ set(COLLDEVICE_SRC_FILES
 # 1. `files` -> `COLLDEVICE_GENSRC_FILES`
 # 2. `symmetric_files` -> `COLLDEVICE_GENSRC_SYMMETRIC_FILES`
 execute_process(
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc ${ONLY_FUNCS}
+    COMMAND ${CMAKE_COMMAND} -E env NCCL_USE_CMAKE=1 ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc "${ONLY_FUNCS}"
     OUTPUT_VARIABLE COLLDEVICE_GENSRC_FILES
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
@@ -27,7 +27,7 @@ list(FILTER COLLDEVICE_GENSRC_FILES INCLUDE REGEX "\\.cu$") # We need to keep on
 list(APPEND COLLDEVICE_SRC_FILES ${COLLDEVICE_GENSRC_FILES})
 
 execute_process(
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/symmetric/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc/symmetric
+    COMMAND ${CMAKE_COMMAND} -E env NCCL_USE_CMAKE=1 ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/symmetric/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc/symmetric "${ONLY_FUNCS}"
     OUTPUT_VARIABLE COLLDEVICE_GENSRC_SYMMETRIC_FILES
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
@@ -54,6 +54,8 @@ target_include_directories(
         ${CMAKE_SOURCE_DIR}/src/include
         ${CMAKE_SOURCE_DIR}/src/include/plugin
         ${CONFIGURED_HEADERS_DIR}
+        # @EUGO_CHANGE: Needed for DOCA headers copied to build dir and generated git_version.h
+        ${CMAKE_BINARY_DIR}/include
 )
 
 target_compile_definitions(nccl_colldevice PRIVATE ${NCCL_COMMON_COMPILE_DEFINITIONS})
@@ -62,4 +64,7 @@ target_compile_definitions(nccl_colldevice PRIVATE ${NCCL_COMMON_COMPILE_DEFINIT
 # 1. `CUDAToolkit_INCLUDE_DIRS/cccl` (this folder even doesn't exist modern days) -> `target_link_libraries(nccl_colldevice PRIVATE ${NCCL_DEPENDENCIES})`
 # 2. `CUDAToolkit_INCLUDE_DIRS` -> `target_link_libraries(nccl_colldevice PRIVATE ${NCCL_DEPENDENCIES})`
 target_link_libraries(nccl_colldevice PRIVATE ${NCCL_DEPENDENCIES})
+
+# @EUGO_CHANGE: Ensure configured nccl.h header is generated before device compilation
+add_dependencies(nccl_colldevice nccl_header)
 # === @end: `libnccl_colldevice` library ===

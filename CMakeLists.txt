@@ -40,6 +40,16 @@ set(ENV{NCCL_USE_CMAKE} "1")
 set(NCCL_VERSION "${NCCL_MAJOR}.${NCCL_MINOR}.${NCCL_PATCH}")
 # === @end: Reading version dynamically (from the file) ===
 
+# Detect OS
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    set(NCCL_OS_WINDOWS ON)
+    add_definitions(-DNCCL_OS_WINDOWS)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(NCCL_OS_LINUX ON)
+    add_definitions(-DNCCL_OS_LINUX)
+else()
+    message(FATAL_ERROR "Unsupported OS: ${CMAKE_SYSTEM_NAME}")
+endif()
 
 # === @begin: General Configuration ===
 # Unset CMAKE_CUDA_FLAGS to fix CMake bugs in detecting the CUDA toolchain
@@ -85,11 +95,20 @@ set(
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EUGO_COMMON_WARNING_FLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${EUGO_COMMON_WARNING_FLAGS}")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} ${EUGO_COMMON_WARNING_FLAGS}")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3")
+set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS} -O3")
 # === @end: Warnings Configuration ===
 
 
 # === @begin: Options ===
 set(NCCL_COMMON_COMPILE_DEFINITIONS
+    # BUILD_DEBIAN_PACKAGE=OFF # Build Debian package
+    # BUILD_REDHAT_PACKAGE=OFF # Build Redhat package
+    # BUILD_TXZ_PACKAGE=OFF # Build TXZ package
+    # BUILD_CONDA_PACKAGE=OFF # Build Conda package
+    # BUILD_SRCTXZ_PACKAGE=OFF # Build source tarball package
+    # BUILD_DOC_PACKAGE=OFF # Build documentation package
+    # BUILD_PACKAGES=OFF # Build all packages
     # VERBOSE=1 # "Enable verbose output" [there is no associated C/C++ macro], disabled as this only applies to Make/CMake verbosity in original implementation
     # KEEP=1 # "Keep intermediate files" [there is no associated C/C++ macro], disabled as this only applies to original implementation and its Make/CMake execution
     # ASAN=1 # "Enable Address Sanitizer" [there is no associated C/C++ macro], not yet supported in Eugo environment
@@ -119,7 +138,52 @@ set(NCCL_COMMON_COMPILE_DEFINITIONS
 
     # NCCL_ENABLE_NET_PROFILING=1 # "Enable network profiler"  [option: `NET_PROFILER`], disabled by default + causes building an extra plugin which isn't easy to build and maintain + all 3 shipped plugins are considered tests/examples of NCCL usage and not something NCCL really needs to operate properly.
     # NCCL_NET_MAX_PLUGINS=0 # "Maximum external network plugins" [option: `MAX_EXT_NET_PLUGINS=<int>`], this is set to `0` by default, meaning no extra plugins can be loaded, which makes sense as we're not building any of them.
+
+    EMIT_LLVM_IR=1 # Generate LLVM IR for device APIs" [option: `EMIT_LLVM_IR`], this is used in `@/ir` subdirectory to generate LLVM IR for device APIs, which is then used in `@/src/device/generate.py` and `@/src/device/symmetric/generate.py` to generate device code for supported architectures.
 )
+
+# === @begin:Options conditionals ===
+# NOTE: all of these are commented out because we don't build them
+# if(MAX_EXT_NET_PLUGINS GREATER 0)
+#     add_definitions(-DNCCL_NET_MAX_PLUGINS=${MAX_EXT_NET_PLUGINS})
+# endif()
+# Add package building subdirectories (commented out as not needed in Eugo environment, but preserved for the reference implementation)
+# if(BUILD_DEBIAN_PACKAGE OR BUILD_PACKAGES)
+# add_subdirectory(pkg/debian)
+# endif()
+
+# if(BUILD_REDHAT_PACKAGE OR BUILD_PACKAGES)
+# add_subdirectory(pkg/redhat)
+# endif()
+
+# if(BUILD_TXZ_PACKAGE OR BUILD_PACKAGES)
+# add_subdirectory(pkg/txz)
+# endif()
+
+# if(BUILD_CONDA_PACKAGE OR BUILD_PACKAGES)
+# add_subdirectory(pkg/conda)
+# endif()
+
+# if(BUILD_SRCTXZ_PACKAGE OR BUILD_PACKAGES)
+# add_subdirectory(pkg/srctxz)
+# endif()
+
+# if(BUILD_DOC_PACKAGE OR BUILD_PACKAGES)
+# add_subdirectory(pkg/doc)
+# endif()
+
+if(EMIT_LLVM_IR)
+    add_subdirectory(ir)
+    add_dependencies(llvm_ir nccl_header)
+    add_custom_target(nccl_with_ir ALL DEPENDS nccl llvm_ir)
+    message(STATUS "LLVM IR generation will be included in default build")
+endif()
+
+if(EMIT_LLVM_IR)
+    add_definitions(-DEMIT_LLVM_IR=1)
+endif()
+# === @end:Options conditionals ===
+
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     list(APPEND NCCL_COMMON_COMPILE_DEFINITIONS
@@ -130,6 +194,8 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 
         # TRACE=1 # "Enable tracing" [there is no associated C/C++ macro], this implies the following individual macros:
         ENABLE_TRACE=1
+        set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -O0")
+        set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS} -O0 -G -g")
     )
 endif()
 # === @end: Options ===
@@ -165,7 +231,7 @@ message(STATUS "[EUGO]: CCCL found: ${cccl_CONFIG}")
 
 # === @@begin: Finalized dependencies list ===
 # @EUGO_CHANGE:
-# In original implementation, they link their binaries against all `CUDAToolkit_LIBRARIES` which is an overkill. Based on our research, they only use `cudart` functions here to manage the GPU on the host side and directly access intrinsics (like `fp8`) on the device one.
+# In original implementation, they link their binaries against all `CUDAToolkit_LIBRARIES` which is overkill. Based on our research, they only use `cudart` functions here to manage the GPU on the host side and directly access intrinsics (like `fp8`) on the device one.
 # They also rely on `CCCL` (in particular, `libcu++`/`libcudacxx`) but as it's the header only library, they just add that into include dirs list and don't explicitely search for it.
 #
 # In our NCCL implementation, we limit dependencies list to that is exactly used to avoid too tight dependency graph and reduce the number of unneeded libraries loaded at runtime.
@@ -175,14 +241,41 @@ message(STATUS "[EUGO]: CCCL found: ${cccl_CONFIG}")
 #
 # @Important:
 # Based on our research, NCCL doesn't directly depend on `libcuda` (`CUDA::driver_library`) so we don't add it here (or `cudadevrt`).
+# NCCL dynamically loads the CUDA driver API — it never links against it directly. This is a common pattern for libraries that want to support multiple versions of CUDA without requiring users to have a specific version of the CUDA driver installed at build time.
+# For example, `DECLARE_CUDA_PFN_EXTERN(cuMemGetHandleForAddressRange, 11070); // expands to: extern PFN_cuMemGetHandleForAddressRange_v11070 pfn_cuMemGetHandleForAddressRange` is just a pointer declaration for a function that may be loaded at runtime if available, but it's not linked against `libcuda` at build time.
 set(NCCL_DEPENDENCIES CCCL::libcudacxx CUDA::cudart)
 # === @@end: Finalized dependencies list ===
 # === @end: dependencies/ ===
 
-
 # === @begin: src/ ===
 add_subdirectory(src)
 # === @end: src/ ===
+
+# === @end: ext-mixed/ ===
+add_subdirectory(ext-mixed/example)
+# === @end: ext-mixed/ ===
+
+# === @end: ext-net/ ===
+add_subdirectory(ext-net)
+# === @end: ext-net/ ===
+
+# === @begin: ext-profiler/ ===
+add_subdirectory(ext-profiler/example)
+# === @end: ext-profiler/ ===
+
+# === @begin: ext-tuner/ ===
+add_subdirectory(ext-tuner/example)
+# === @end: ext-tuner/ ===
+
+# === @begin: ext-env/ ===
+add_subdirectory(ext-env/example)
+# === @end: ext-env/ ===
+
+# === @begin: DOCA Definitions ===
+add_definitions(-DDOCA_VERBS_USE_CUDA_WRAPPER)
+add_definitions(-DDOCA_VERBS_USE_NET_WRAPPER)
+add_definitions(-DNCCL_GIN_PROXY_ENABLE=1)
+# === @end: DOCA Definitions ===
 
 
 # === @begin: Install and Configuration Targets ===
@@ -200,7 +293,7 @@ install(
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 
-# @HELP: Implement pkg-config guy and adjust our cmake stuff in a compatible way!
+# @TODO+: Implement pkg-config guy and adjust our cmake stuff in a compatible way!
 install(
     EXPORT NCCLConfig
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/nccl
@@ -231,3 +324,4 @@ install(
 # -- Installing: /usr/local/lib64/cmake/nccl/NCCLConfig.cmake
 # -- Installing: /usr/local/lib64/cmake/nccl/NCCLConfig-release.cmake
 # === @end: Install Targets ===
+

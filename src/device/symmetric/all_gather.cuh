@@ -185,55 +185,6 @@ __device__ __forceinline__ void ncclSymkRun_AllGather_ST(ncclSymkDevWorkArgs con
   bar.sync(ncclCoopCta(), cuda::memory_order_release);
 }
 
-template<typename T>
-static __device__ void bcastMultimem(
-    ncclSymkArgsHandler& handler, int tn, int t, ncclSymPtr<T> input, ncclSymPtr<T> output, size_t nElts
-  ) {
-  size_t nBytes = nElts*sizeof(T);
-  uintptr_t inputUptr = reinterpret_cast<uintptr_t>(input.localPtr());
-  uintptr_t outputUptr = reinterpret_cast<uintptr_t>(output.multimemPtr(handler.comm.lsaMultimem));
-  uint32_t nPreBytes = (16 - input.offset)%16;
-  nPreBytes = min((size_t)nPreBytes, nBytes);
-  uintptr_t nSufBytes;
-
-  if ((inputUptr-outputUptr)%16 == 0) {
-    constexpr int BytePerPack = 16, UnrollPacks = 8;
-    constexpr int BytePerChunk = UnrollPacks*WARP_SIZE*BytePerPack;
-    uintptr_t cursor = nPreBytes;
-    uint32_t nChunks = (nBytes-cursor)/BytePerChunk;
-    uintptr_t cursorAfter = cursor + uintptr_t(nChunks)*BytePerChunk;
-    nSufBytes = nBytes - cursorAfter;
-    cursor += (t/WARP_SIZE)*UnrollPacks*WARP_SIZE*BytePerPack;
-    cursor += (t%WARP_SIZE)*BytePerPack;
-    int nIters = nChunks - t/WARP_SIZE;
-    #pragma unroll 1
-    while (0 < nIters) {
-      BytePack<BytePerPack> tmp[UnrollPacks];
-      #pragma unroll
-      for (int u=0; u < UnrollPacks; u++) {
-        tmp[u] = *reinterpret_cast<BytePack<BytePerPack>*>(inputUptr + cursor + u*WARP_SIZE*BytePerPack);
-      }
-      #pragma unroll
-      for (int u=0; u < UnrollPacks; u++) {
-        multimem_st_global(outputUptr + cursor + u*WARP_SIZE*BytePerPack, tmp[u]);
-      }
-      cursor += tn*UnrollPacks*BytePerPack;
-      nIters -= tn/WARP_SIZE;
-    }
-  } else {
-    nPreBytes = 0;
-    nSufBytes = nBytes;
-  }
-
-  // Get the prefix+suffix element one at a time.
-  #pragma unroll 4
-  for (uintptr_t i = t*sizeof(T); i < nPreBytes + nSufBytes; i += tn*sizeof(T)) {
-    uintptr_t cursor = i < nPreBytes ? i : nBytes-nSufBytes+(i-nPreBytes);
-    BytePack<sizeof(T)> val = *reinterpret_cast<BytePack<sizeof(T)>*>(inputUptr + cursor);
-    multimem_st_global(outputUptr + cursor, val);
-  }
-}
-
 __device__ __forceinline__ void ncclSymkRun_AllGather_STMC(ncclSymkDevWorkArgs const* args) {
   ncclSymkArgsHandler handler{args};
   ncclLsaBarrierSession<ncclCoopCta> bar(
@@ -352,7 +303,7 @@ static __device__ void ncclSymkRun_AllGather_LL_impl(ncclSymkDevWorkArgs const* 
         char* blockInput = input.localPtr();
         char* blockOutput = output.localPtr();
 
-        uint32_t lowBits = nElts;
+        uint32_t lowBits = nAllElts;
         lowBits |= (uintptr_t)blockInput;
         lowBits |= (uintptr_t)blockOutput;
         if (__builtin_expect(lowBits%8 == 0, true)) {

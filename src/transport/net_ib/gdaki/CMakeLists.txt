@@ -38,6 +38,7 @@ endforeach()
 # Add DOCA device headers to parent scope
 set(DEVICE_DOCA_HEADERS ${DEVICE_DOCA_HEADERS} PARENT_SCOPE)
 
+# @EUGO_CHANGE: We moved all DOCA sources to `src/CMakeLists.txt` for better modularity and maintainability. --- IGNORE ---
 # DOCA sources
 # set(DOCA_SOURCES
 #     ${DOCA_HOME}/src/doca_verbs_qp.cpp

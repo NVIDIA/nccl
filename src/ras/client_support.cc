@@ -575,10 +575,7 @@ static ncclResult_t rasClientRunInit(struct rasClient* client) {
   TRACE(NCCL_RAS, "RAS: rasClientRunInit: starting");
   rasOutReset();
 
-  // @EUGO_CHANGE: @begin: See `@/CMakeLists.txt#129-138`
-  rasOutAppend("NCCL version " STR(NCCL_MAJOR) "." STR(NCCL_MINOR) "." STR(NCCL_PATCH) NCCL_SUFFIX
-               " compiled with CUDA " STR(CUDAToolkit_VERSION_MAJOR) "." STR(CUDAToolkit_VERSION_MINOR) "\n");
-  // @EUGO_CHANGE: @end
+
 
   // Get CUDA version info once for all output formats.
   if (cudaRuntimeVersion == -1)
@@ -589,8 +586,10 @@ static ncclResult_t rasClientRunInit(struct rasClient* client) {
   // For structured formats (JSON), skip the initial text output.
   // It will be included in the structured output later.
   if (client->outputFormat == RAS_OUTPUT_TEXT) {
+    // @EUGO_CHANGE: @begin: See `@/CMakeLists.txt#129-138` (`CUDAMAJOR` -> `CUDAToolkit_VERSION_MAJOR`, `CUDAMINOR` -> `CUDAToolkit_VERSION_MINOR`)
     rasOutAppend("NCCL version " STR(NCCL_MAJOR) "." STR(NCCL_MINOR) "." STR(NCCL_PATCH) NCCL_SUFFIX
-                 " compiled with CUDA " STR(CUDA_MAJOR) "." STR(CUDA_MINOR) "\n");
+                 " compiled with CUDA " STR(CUDAToolkit_VERSION_MAJOR) "." STR(CUDAToolkit_VERSION_MINOR) "\n");
+    // @EUGO_CHANGE: @end
     rasOutAppend("CUDA runtime version %d, driver version %d\n\n", cudaRuntimeVersion, cudaDriverVersion);
     msgLen = rasOutLength();
     NCCLCHECKGOTO(rasClientAllocMsg(&msg, msgLen), ret, fail);

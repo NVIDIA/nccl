@@ -251,31 +251,31 @@ set(NCCL_DEPENDENCIES CCCL::libcudacxx CUDA::cudart)
 add_subdirectory(src)
 # === @end: src/ ===
 
-# === @end: ext-mixed/ ===
+# === @end: ext-mixed/ @NVIDIA_ORIGINAL: @begin: ===
 add_subdirectory(ext-mixed/example)
-# === @end: ext-mixed/ ===
+# === @end: ext-mixed/ @NVIDIA_ORIGINAL: @end ===
 
-# === @end: ext-net/ ===
+# === @end: ext-net/ @NVIDIA_ORIGINAL: @begin: ===
 add_subdirectory(ext-net)
-# === @end: ext-net/ ===
+# === @end: ext-net/ @NVIDIA_ORIGINAL: @end ===
 
-# === @begin: ext-profiler/ ===
+# === @begin: ext-profiler/ @NVIDIA_ORIGINAL: @begin: ===
 add_subdirectory(ext-profiler/example)
-# === @end: ext-profiler/ ===
+# === @end: ext-profiler/ @NVIDIA_ORIGINAL: @end ===
 
-# === @begin: ext-tuner/ ===
+# === @begin: ext-tuner/ @NVIDIA_ORIGINAL: @begin: ===
 add_subdirectory(ext-tuner/example)
-# === @end: ext-tuner/ ===
+# === @end: ext-tuner/ @NVIDIA_ORIGINAL: @end ===
 
-# === @begin: ext-env/ ===
+# === @begin: ext-env/ @NVIDIA_ORIGINAL: @begin: ===
 add_subdirectory(ext-env/example)
-# === @end: ext-env/ ===
+# === @end: ext-env/ @NVIDIA_ORIGINAL: @end ===
 
-# === @begin: DOCA Definitions ===
+# === @begin: DOCA Definitions / @NVIDIA_ORIGINAL: @begin: ===
 add_definitions(-DDOCA_VERBS_USE_CUDA_WRAPPER)
 add_definitions(-DDOCA_VERBS_USE_NET_WRAPPER)
 add_definitions(-DNCCL_GIN_PROXY_ENABLE=1)
-# === @end: DOCA Definitions ===
+# === @end: DOCA Definitions / @NVIDIA_ORIGINAL: @end ===
 
 
 # === @begin: Install and Configuration Targets ===

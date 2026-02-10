@@ -1395,6 +1395,7 @@ static ncclResult_t hostStreamPlanTask(struct ncclComm* comm, struct ncclKernelP
     // Notify main thread of our reclaiming. This will reclaim plan concurrently.
     ncclIntruQueueMpscEnqueue(&comm->callbackQueue, &plan->reclaimer);
   }
+  comm->opCount++;
   return ncclSuccess;
 }
 

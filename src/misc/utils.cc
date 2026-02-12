@@ -45,6 +45,18 @@ ncclResult_t busIdToInt64(const char* busId, int64_t* id) {
   return ncclSuccess;
 }
 
+// Get an int64 from a PCI path. For example, sys/class/pci0000:00/0000:00:02.0/0000:02:00.0/ will return 0x000002000.
+ncclResult_t pciPathToInt64(char* path, int64_t* id) {
+  char* str = path+strlen(path)-1;
+  // Remove trailing "/"
+  if (*str == '/') str--;
+  // Find next /
+  while (*str != '/') str--;
+  str++;
+  NCCLCHECK(busIdToInt64(str, id));
+  return ncclSuccess;
+}
+
 // Convert a logical cudaDev index to the NVML device minor number
 ncclResult_t getBusId(int cudaDev, int64_t *busId) {
   // On most systems, the PCI bus ID comes back as in the 0000:00:00.0
@@ -130,7 +142,7 @@ uint64_t hashCombine(uint64_t baseHash, uint64_t value) {
 uint64_t getPidHash(void) {
   char pname[1024];
   // Start off with our pid ($$)
-  sprintf(pname, "%ld", (long) ncclOsGetpid());
+  sprintf(pname, "%ld", (long) ncclOsGetPid());
   int plen = strlen(pname);
   int len = readlink("/proc/self/ns/pid", pname+plen, sizeof(pname)-1-plen);
   if (len < 0) len = 0;

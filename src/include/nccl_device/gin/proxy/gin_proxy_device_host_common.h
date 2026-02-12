@@ -18,7 +18,7 @@ typedef enum {
   ncclGinProxyOpWithCounter = 1 << 2,
   ncclGinProxyOpWithSignalInc = 1 << 3,
   ncclGinProxyOpWithSignalAdd = 1 << 4,
-  ncclGinProxyOpComplMask = ~ncclGinProxyOpPut,
+  ncclGinProxyOpVASignal = 1 << 5, // VA signals do not include put.
 } ncclGinProxyOp_t;
 
 static_assert(sizeof(void *) == sizeof(uint64_t) && sizeof(size_t) == sizeof(uint64_t),
@@ -46,6 +46,16 @@ typedef union {
     uint64_t flag : 1;
     uint64_t srcHandle : 63;
   } __attribute__((packed)) srcHandle;
+  struct {
+    // the last bit is the flag, so we support 63 bit VAs
+    uint64_t flag : 1;
+    uint64_t vaSignalOff : 63;
+  } __attribute__((packed)) vaSignalOff;
+  struct {
+    // the last bit is the flag, so we support 63 bit VAs
+    uint64_t flag : 1;
+    uint64_t vaSignalHandle : 63;
+  } __attribute__((packed)) vaSignalHandle;
   struct {
     uint8_t flag : 1;
     uint8_t resv : 7;
@@ -94,8 +104,10 @@ typedef enum {
   ncclGinProxyGfdHeader = 0,
   ncclGinProxyGfdInlineLow = 1,
   ncclGinProxyGfdInlineHigh = 2,
-  ncclGinProxyGfdSrcOff = 1,
-  ncclGinProxyGfdSrcHandle = 2,
+  ncclGinProxyGfdSrcOff = 1, // re-uses the inline word
+  ncclGinProxyGfdSrcHandle = 2, // re-uses the inline word
+  ncclGinProxyGfdVASignalOff = 1, // re-uses the inline word, VA signals with PUT must be split into two GFDs
+  ncclGinProxyGfdVASignalHandle = 2, // re-uses the inline word, VA signals with PUT must be split into two GFDs
   ncclGinProxyGfdDstOff = 3,
   ncclGinProxyGfdDstHandle = 4,
   ncclGinProxyGfdCompletion = 5,

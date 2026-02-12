@@ -211,6 +211,17 @@ enum doca_gpu_dev_verbs_mem_type {
 };
 
 /**
+ * @enum doca_gpu_verbs_send_dbr_mode_ext
+ * @brief Send DBR mode
+ */
+enum doca_gpu_verbs_send_dbr_mode_ext {
+    DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_VALID_DBR = 0,  ///< Valid DBR mode
+    DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_HW = 1,  ///< No DBR mode with hardware support
+    DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED =
+        2,  ///< No DBR mode using software emulation
+};
+
+/**
  * @enum doca_gpu_dev_verbs_mem_type
  * @brief Memory type of the buffer.
  */
@@ -231,6 +242,7 @@ enum doca_gpu_dev_verbs_sync_scope {
     DOCA_GPUNETIO_VERBS_SYNC_SCOPE_SYS = 0,       ///< System synchronization scope
     DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU = 1,       ///< GPU synchronization scope
     DOCA_GPUNETIO_VERBS_SYNC_SCOPE_CTA = 2,       ///< CTA synchronization scope
+    DOCA_GPUNETIO_VERBS_SYNC_SCOPE_THREAD = 3,    ///< Thread synchronization scope
     DOCA_GPUNETIO_VERBS_SYNC_SCOPE_MAX = INT_MAX  ///< Sentinel value
 };
 
@@ -248,16 +260,30 @@ enum doca_gpu_dev_verbs_resource_sharing_mode {
     DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_MAX = INT_MAX  ///< Sentinel value
 };
 
+enum {
+    DOCA_GPUNETIO_VERBS_NIC_HANDLER_FLAG_CPU_PROXY = 1 << 0,
+    DOCA_GPUNETIO_VERBS_NIC_HANDLER_FLAG_GPU_SM = 1 << 1,
+    DOCA_GPUNETIO_VERBS_NIC_HANDLER_FLAG_BF = 1 << 2,
+    DOCA_GPUNETIO_VERBS_NIC_HANDLER_FLAG_NO_DBR = 1 << 3,
+};
+
 /**
  * @enum doca_gpu_dev_verbs_nic_handler
  * @brief The processor that handles the NIC.
  */
 enum doca_gpu_dev_verbs_nic_handler {
     DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO = 0,  ///< Automatically select the most performant handler
-    DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY = 1,  ///< CPU Proxy
-    DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB = 2,  ///< GPU SM, regular DB
-    DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_BF = 3,  ///< GPU SM, BlueFlame DB
-    DOCA_GPUNETIO_VERBS_NIC_HANDLER_TYPE_MAX,       ///< Sentinel value
+    DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY =
+        DOCA_GPUNETIO_VERBS_NIC_HANDLER_FLAG_CPU_PROXY,  ///< CPU Proxy
+    DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB =
+        DOCA_GPUNETIO_VERBS_NIC_HANDLER_FLAG_GPU_SM,  ///< GPU SM, regular DB
+    DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_BF =
+        DOCA_GPUNETIO_VERBS_NIC_HANDLER_FLAG_GPU_SM |
+        DOCA_GPUNETIO_VERBS_NIC_HANDLER_FLAG_BF,  ///< GPU SM, BlueFlame DB
+    DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_NO_DBR =
+        DOCA_GPUNETIO_VERBS_NIC_HANDLER_FLAG_GPU_SM |
+        DOCA_GPUNETIO_VERBS_NIC_HANDLER_FLAG_NO_DBR,  ///< GPU SM, no need to update the DBREC
+    DOCA_GPUNETIO_VERBS_NIC_HANDLER_TYPE_MAX,         ///< Sentinel value
 };
 
 /**
@@ -268,7 +294,10 @@ enum doca_gpu_dev_verbs_gpu_code_opt {
     DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT = 0,  ///< Use default code optimization
     DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_ASYNC_STORE_RELEASE = (1 << 0),  ///< Use store.async.release
                                                                       ///< code optimization
-    DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_MAX = INT_MAX                    ///< Sentinel value
+    DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_SKIP_AVAILABILITY_CHECK =
+        (1 << 1),                                                 ///< Skip availability check
+    DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_SKIP_DB_RINGING = (1 << 2),  ///< Skip DB ringing
+    DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_MAX = INT_MAX                ///< Sentinel value
 };
 
 enum doca_gpu_dev_verbs_signal_op {

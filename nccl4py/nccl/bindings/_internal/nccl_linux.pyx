@@ -94,6 +94,8 @@ cdef void* __ncclGather = NULL
 cdef void* __ncclScatter = NULL
 cdef void* __ncclSend = NULL
 cdef void* __ncclRecv = NULL
+cdef void* __ncclSignal = NULL
+cdef void* __ncclWaitSignal = NULL
 cdef void* __ncclGroupStart = NULL
 cdef void* __ncclGroupEnd = NULL
 cdef void* __ncclGroupSimulateEnd = NULL
@@ -374,6 +376,20 @@ cdef int _check_or_init_nccl() except -1 nogil:
                 handle = load_library()
             __ncclRecv = dlsym(handle, 'ncclRecv')
 
+        global __ncclSignal
+        __ncclSignal = dlsym(RTLD_DEFAULT, 'ncclSignal')
+        if __ncclSignal == NULL:
+            if handle == NULL:
+                handle = load_library()
+            __ncclSignal = dlsym(handle, 'ncclSignal')
+
+        global __ncclWaitSignal
+        __ncclWaitSignal = dlsym(RTLD_DEFAULT, 'ncclWaitSignal')
+        if __ncclWaitSignal == NULL:
+            if handle == NULL:
+                handle = load_library()
+            __ncclWaitSignal = dlsym(handle, 'ncclWaitSignal')
+
         global __ncclGroupStart
         __ncclGroupStart = dlsym(RTLD_DEFAULT, 'ncclGroupStart')
         if __ncclGroupStart == NULL:
@@ -516,6 +532,12 @@ cpdef dict _inspect_function_pointers():
 
     global __ncclRecv
     data["__ncclRecv"] = <intptr_t>__ncclRecv
+
+    global __ncclSignal
+    data["__ncclSignal"] = <intptr_t>__ncclSignal
+
+    global __ncclWaitSignal
+    data["__ncclWaitSignal"] = <intptr_t>__ncclWaitSignal
 
     global __ncclGroupStart
     data["__ncclGroupStart"] = <intptr_t>__ncclGroupStart
@@ -899,6 +921,26 @@ cdef ncclResult_t _ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatyp
             raise FunctionNotFoundError("function ncclRecv is not found")
     return (<ncclResult_t (*)(void*, size_t, ncclDataType_t, int, ncclComm_t, cudaStream_t) noexcept nogil>__ncclRecv)(
         recvbuff, count, datatype, peer, comm, stream)
+
+
+cdef ncclResult_t _ncclSignal(int peer, int sigIdx, int ctx, unsigned int flags, ncclComm_t comm, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
+    global __ncclSignal
+    _check_or_init_nccl()
+    if __ncclSignal == NULL:
+        with gil:
+            raise FunctionNotFoundError("function ncclSignal is not found")
+    return (<ncclResult_t (*)(int, int, int, unsigned int, ncclComm_t, cudaStream_t) noexcept nogil>__ncclSignal)(
+        peer, sigIdx, ctx, flags, comm, stream)
+
+
+cdef ncclResult_t _ncclWaitSignal(int nDesc, ncclWaitSignalDesc_t* signalDescs, ncclComm_t comm, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
+    global __ncclWaitSignal
+    _check_or_init_nccl()
+    if __ncclWaitSignal == NULL:
+        with gil:
+            raise FunctionNotFoundError("function ncclWaitSignal is not found")
+    return (<ncclResult_t (*)(int, ncclWaitSignalDesc_t*, ncclComm_t, cudaStream_t) noexcept nogil>__ncclWaitSignal)(
+        nDesc, signalDescs, comm, stream)
 
 
 cdef ncclResult_t _ncclGroupStart() except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:

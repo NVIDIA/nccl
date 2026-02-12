@@ -7,8 +7,6 @@
 #ifndef NCCL_CORE_H_
 #define NCCL_CORE_H_
 
-#include <pthread.h>
-#include <unistd.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <algorithm> // For std::min/std::max

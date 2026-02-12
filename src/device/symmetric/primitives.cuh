@@ -6,6 +6,7 @@
 #include "collectives.h"
 #include "../op128.h"
 #include "../reduce_kernel.h"
+#include "gin_scratch.h"
 
 #if __CUDA_ARCH__ >= 700
 // __grid_constant__ appears to break cuda-gdb
@@ -13,6 +14,19 @@
 #else
 #define NCCL_GRID_CONSTANT
 #endif
+
+template<bool val> struct BoolTag { static constexpr bool value = val; };
+
+// A cheap approximation of std::decay
+template<typename T> struct ncclDecayType { using Type = T; };
+template<typename T> struct ncclDecayType<T&> { using Type = T; };
+template<typename T> struct ncclDecayType<T&&> { using Type = T; };
+template<typename T> struct ncclDecayType<T const> { using Type = T; };
+template<typename T> struct ncclDecayType<T volatile> { using Type = T; };
+
+template<typename T>
+using ncclDecayType_t = typename ncclDecayType<T>::Type;
+
 
 // flattenIx(pos0, dim0, pos1, dim1, pos2, dim2, ...)
 // Given a position vector `pos` in a rectangular index space with lengths in the `dim`
@@ -24,10 +38,31 @@ static __device__ Int0 flattenIx(Int0 pos, Int1 size, Ints ...more) {
   return pos + size*flattenIx(more...);
 }
 
+template<typename T>
+static __device__ void partitionElts(
+    unsigned nParts, unsigned part,
+    size_t* nElts, ncclSymPtr<T>* inPtr, ncclSymPtr<T>* outPtr
+  ) {
+  constexpr int eltPerB16 = 16/sizeof(T);
+  size_t nB16 = (*nElts + eltPerB16-1)/eltPerB16;
+  size_t beginB16 = part*(nB16/nParts) + min(part, uint32_t(nB16%nParts));
+  *inPtr += beginB16*eltPerB16;
+  *outPtr += beginB16*eltPerB16;
+  if (part < nParts-1) {
+    nB16 = nB16/nParts + (part < nB16%nParts ? 1 : 0);
+    *nElts = nB16*eltPerB16;
+  } else {
+    *nElts = *nElts - beginB16*eltPerB16;
+  }
+}
+
 namespace {
 struct ncclSymkArgsHandler {
   ncclDevComm const& comm;
   ncclLLA2AHandle const& lsaLLA2A;
+  ncclGinOutboxHandle const& ginOutbox;
+  ncclGinInboxA2AHandle const& ginInboxRail;
+  ncclGinCounter_t ginCounterPerBlock;
   ncclGinSyncHandle const& ginSyncHandle;
   struct ncclSymkChannelWorkRange* channelWorkRange;
   struct ncclSymkDevWork* devWork;
@@ -36,6 +71,9 @@ struct ncclSymkArgsHandler {
   __device__ ncclSymkArgsHandler(ncclSymkDevWorkArgs const* args):
     comm(args->kcomm.devComm),
     lsaLLA2A(args->kcomm.lsaLLA2A),
+    ginOutbox(args->kcomm.ginOutbox),
+    ginInboxRail(args->kcomm.ginInboxRail),
+    ginCounterPerBlock(args->kcomm.ginCounterPerBlock),
     ginSyncHandle(args->kcomm.ginSyncHandle) {
     channelWorkRange = args->getWorkRange();
 
@@ -44,8 +82,7 @@ struct ncclSymkArgsHandler {
   }
 
   template<typename T>
-    __device__ void getWorkRange(int block,
-                                 uint16_t& workLo, size_t& indexLo, uint16_t& workHi, size_t& indexHi) {
+  __device__ void getWorkRange(int block, uint16_t& workLo, size_t& indexLo, uint16_t& workHi, size_t& indexHi) {
     constexpr int EltPerCell = NCCL_SYM_KERNEL_CELL_SIZE / sizeof(T);
     uint32_t fracLo, fracHi;
 
@@ -69,8 +106,7 @@ struct ncclSymkArgsHandler {
   }
 
   template<typename T>
-    __device__ void getWorkRangeFused(int blockIdx, int w,
-                                      int& block, int& nBlocks, size_t& indexLo, size_t& indexHi) {
+  __device__ void getWorkRangeFused(int blockIdx, int w, int& block, int& nBlocks, size_t& indexLo, size_t& indexHi) {
     constexpr int EltPerCell = NCCL_SYM_KERNEL_CELL_SIZE / sizeof(T);
     struct ncclSymkDevWork const& dw = devWork[w];
     uint32_t fracLo, fracHi;
@@ -88,47 +124,47 @@ struct ncclSymkArgsHandler {
   }
 
   template<typename T, typename Fn>
-    __device__ void forEachWork(Fn const& fn) {
-      uint16_t workLo, workHi;
-      size_t indexLo, indexHi;
+  __device__ void forEachWork(Fn const& fn) {
+    uint16_t workLo, workHi;
+    size_t indexLo, indexHi;
 
-      getWorkRange<T>(blockIdx.x, workLo, indexLo, workHi, indexHi);
+    getWorkRange<T>(blockIdx.x, workLo, indexLo, workHi, indexHi);
 
-      #pragma unroll 1
-      for (int w = workLo; w <= workHi; w++) {
-        struct ncclSymkDevWork const& dw = devWork[w];
-        size_t const& nAllElts = dw.nElts;
-        size_t currentIndexLo, currentIndexHi;
-        int block, nBlocks;
-        if (blockIdx.x >= dw.sChannelId && blockIdx.x < dw.sChannelId + dw.nChannels) {
-          getWorkRangeFused<T>(blockIdx.x, w, block, nBlocks, currentIndexLo, currentIndexHi);
-        } else {
-          currentIndexLo = (w > workLo) ? 0 : indexLo;
-          currentIndexHi = (w < workHi) ? nAllElts : indexHi;
-          block = 0;
-          nBlocks = 1;
-        }
-
-        fn(block, nBlocks, currentIndexHi - currentIndexLo, nAllElts,
-           ncclSymPtr<T>(dw.inputWin, dw.inputOff) + currentIndexLo,
-           ncclSymPtr<T>(dw.outputWin, dw.outputOff) + currentIndexLo);
-
-        currentIndexLo = 0;
+    #pragma unroll 1
+    for (int w = workLo; w <= workHi; w++) {
+      struct ncclSymkDevWork const& dw = devWork[w];
+      size_t const& nAllElts = dw.nElts;
+      size_t currentIndexLo, currentIndexHi;
+      int block, nBlocks;
+      if (blockIdx.x >= dw.sChannelId && blockIdx.x < dw.sChannelId + dw.nChannels) {
+        getWorkRangeFused<T>(blockIdx.x, w, block, nBlocks, currentIndexLo, currentIndexHi);
+      } else {
+        currentIndexLo = (w > workLo) ? 0 : indexLo;
+        currentIndexHi = (w < workHi) ? nAllElts : indexHi;
+        block = 0;
+        nBlocks = 1;
       }
+
+      fn(block, nBlocks, currentIndexHi - currentIndexLo, nAllElts,
+         ncclSymPtr<T>(dw.inputWin, dw.inputOff) + currentIndexLo,
+         ncclSymPtr<T>(dw.outputWin, dw.outputOff) + currentIndexLo);
+
+      currentIndexLo = 0;
+    }
   }
 
   template<typename T, typename Fn>
-    __device__ void singleWork(Fn const& fn) {
-      uint16_t w;
-      size_t indexLo, indexHi;
+  __device__ void singleWork(Fn const& fn) {
+    uint16_t w;
+    size_t indexLo, indexHi;
 
-      getWorkRange<T>(blockIdx.x, w, indexLo, w, indexHi);
+    getWorkRange<T>(blockIdx.x, w, indexLo, w, indexHi);
 
-      struct ncclSymkDevWork const& dw = devWork[w];
+    struct ncclSymkDevWork const& dw = devWork[w];
 
-      fn(indexHi - indexLo, dw.nElts,
-         ncclSymPtr<T>(dw.inputWin, dw.inputOff) + indexLo,
-         ncclSymPtr<T>(dw.outputWin, dw.outputOff) + indexLo);
+    fn(indexHi - indexLo, dw.nElts,
+       ncclSymPtr<T>(dw.inputWin, dw.inputOff) + indexLo,
+       ncclSymPtr<T>(dw.outputWin, dw.outputOff) + indexLo);
   }
 
   template<typename T, typename Fn>
@@ -169,6 +205,24 @@ template<> struct ncclSymkAccumType<FuncSum, __nv_fp8_e4m3, false> { using Type 
 template<> struct ncclSymkAccumType<FuncSum, __nv_fp8_e5m2, false> { using Type = float; };
 #endif
 
+// Accumulator type held in smem for GIN algos.
+template<template<typename> typename Red, typename T>
+struct ncclSymkGinAccumType { using Type = T; };
+
+template<> struct ncclSymkGinAccumType<FuncSum, __half> { using Type = float; };
+#if defined(__CUDA_BF16_TYPES_EXIST__)
+template<> struct ncclSymkGinAccumType<FuncSum, __nv_bfloat16> { using Type = float; };
+#endif
+
+#if defined(__CUDA_FP8_TYPES_EXIST__)
+// fp8 types accumulate in fp16. Multimem algo sends fp8 on wire because it's
+// impossible to get fp16 accumulator from switch. Non-multimem sends fp16 to
+// give users a higher precision alternative.
+template<> struct ncclSymkGinAccumType<FuncSum, __nv_fp8_e4m3> { using Type = __half; };
+template<> struct ncclSymkGinAccumType<FuncSum, __nv_fp8_e5m2> { using Type = __half; };
+#endif
+
+// TODO: move this into data_ops.cuh
 template<typename T>
 static __device__ void bcastMultimem(
     ncclSymkArgsHandler& handler, int tn, int t, ncclSymPtr<T> input, ncclSymPtr<T> output, size_t nElts
@@ -215,7 +269,43 @@ static __device__ void bcastMultimem(
     uintptr_t cursor = i < nPreBytes ? i : nBytes-nSufBytes+(i-nPreBytes);
     BytePack<sizeof(T)> val = *reinterpret_cast<BytePack<sizeof(T)>*>(inputUptr + cursor);
     multimem_st_global(outputUptr + cursor, val);
+
   }
 }
 
-#endif
+extern __shared__ ulong2 ncclSymkSmem[];
+
+static __device__ void ncclSymkSmemPartition_help(int bumper) {}
+template<typename T, typename ...More>
+static __device__ void ncclSymkSmemPartition_help(int bumper, T** ptr, int size, More ...more) {
+  T *ans = reinterpret_cast<T*>(ncclSymkSmem + bumper);
+  __builtin_assume(__isShared(ans)); // Let compiler know this is shared memory (reinterpret_cast obscured as much).
+  __builtin_assume_aligned(ans, sizeof(ulong2));
+  *ptr = ans;
+  bumper += (size*sizeof(T) + sizeof(ulong2)-1)/sizeof(ulong2);
+  ncclSymkSmemPartition_help(bumper, more...);
+}
+
+template<typename ...Arg>
+static __device__ void ncclSymkSmemPartition(Arg ...args) {
+  ncclSymkSmemPartition_help(/*bumper=*/0, args...);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Extensions to nccl_device.h needed to help compiler make good SASS:
+////////////////////////////////////////////////////////////////////////////////
+
+template<typename T>
+struct ncclLsaPointerGetter {
+  void* base;
+  uint32_t stride4G;
+  __device__ ncclLsaPointerGetter(ncclSymPtr<T> ptr) {
+    base = (char*)nccl::utility::loadConst(&ptr.window->lsaFlatBase);
+    base = (char*)base + ptr.offset;
+    stride4G = nccl::utility::loadConst(&ptr.window->stride4G);
+  }
+  __device__ T* operator()(int lsaPeer) const {
+    return (T*)nccl::utility::add4G(base, lsaPeer*stride4G);
+  }
+};
+#endif // NCCL_DEVICE_SYMMETRIC_PRIMITIVES_H_

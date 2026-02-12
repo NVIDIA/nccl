@@ -52,6 +52,7 @@ struct ncclDevrState {
   int lsaSelf;
   int lsaSize;
   int* lsaRankList;
+  int nLsaTeams;
 
   size_t granularity; // cuMemGetAllocationGranularity
   bool ginEnabled;
@@ -70,6 +71,9 @@ struct ncclDevrState {
   struct ncclIntruQueue<struct ncclDevrCommCreateTask, &ncclDevrCommCreateTask::next> commCreateTaskQueue;
 };
 
+// Check if GIN resources have been requested as part of `reqs`.
+bool ncclGinResourcesRequested(struct ncclDevCommRequirements const* reqs);
+
 // We assume ncclComm has a `ncclDevrState symState` member.
 ncclResult_t ncclDevrInitOnce(struct ncclComm* comm);
 ncclResult_t ncclDevrFinalize(struct ncclComm* comm);
@@ -82,7 +86,7 @@ ncclResult_t ncclDevrWindowRegisterInGroup(
 );
 
 ncclResult_t ncclDevrCommCreateInternal(
-  struct ncclComm* comm, struct ncclDevCommRequirements const* reqs, struct ncclDevComm* outDevComm
+  struct ncclComm* comm, struct ncclDevCommRequirements const* reqs, struct ncclDevComm* outDevComm, bool isInternal = false
 );
 void freeDevCommRequirements(
   struct ncclDevCommRequirements* reqs

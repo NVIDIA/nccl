@@ -90,6 +90,7 @@ struct doca_verbs_device_attr {
     uint8_t m_port_type{};
     uint8_t m_is_rts2rts_qp_dscp_supported{};
     uint8_t m_phys_port_cnt{};
+    uint8_t m_send_dbr_mode_no_dbr_ext{};
 
    private:
     doca_verbs_device_attr &operator=(doca_verbs_device_attr const &) = delete;

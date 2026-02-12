@@ -145,14 +145,6 @@ All metrics include labels: `comm_id`, `collective`, `hostname`, `rank`, `slurm_
 e.g.:
 comm_id="0xd152c00f111816",collective="AllReduce",hostname="pool0-0002",rank="4",slurm_job="unknown",slurm_job_id="unknown",n_ranks="8",n_nodes="1",coll_sn="228924",timestamp="2025-10-17T03:31:47Z",gpu_device_id="GPU4",message_size="2.00GB"
 
-## Example Scripts
-
-For detailed example scripts showing how to integrate NCCL Inspector with different workloads, see the **[test/examples/](test/examples/)** directory:
-
-- **Single Node Example**: Basic NCCL performance testing with inspector
-- **Multi-Node SLURM Example**: Comprehensive multi-node testing with various collective operations
-- **Training Workload Example**: Integration with distributed training workloads
-
 ## Output Example
 
 Each output file contains JSON objects with the following structure:

@@ -69,6 +69,33 @@ NCCLCHECK(ncclCommWindowRegister(comm, buffer, size, &win, NCCL_WIN_COLL_SYMMETR
 myAllReduceKernel<<<grid, block>>>(win, devComm);
 ```
 
+### Checking for Device API and GIN Support
+
+To check for the required Device API and GIN support, the communicator properties are queried via `ncclCommQueryProperties`:
+
+```cpp
+ncclCommProperties_t props = NCCL_COMM_PROPERTIES_INITIALIZER;
+NCCLCHECK(ncclCommQueryProperties(comm, &props));
+
+// Check for Device API support
+if (!props.deviceApiSupport) {
+    printf("ERROR: communicator does not support Device API!\n");
+    // Exit gracefully...
+}
+
+// Check for GIN support (ginType should not be NCCL_GIN_TYPE_NONE)
+if (props.ginType == NCCL_GIN_TYPE_NONE) {
+    printf("ERROR: communicator does not support GIN!\n");
+    // Exit gracefully...
+}
+
+// For pure LSA examples, ensure a single team where all ranks can access each other
+if (props.nLsaTeams != 1) {
+    printf("ERROR: expected 1 LSA team for pure LSA example!\n");
+    // Exit gracefully...
+}
+```
+
 ## Building
 
 ### **Quick Start**

@@ -15,8 +15,3 @@ This module provides utilities for integrating NCCL4Py with PyTorch and CuPy:
 - Memory allocation backed by NCCL allocator
 - Buffer resolution utilities
 """
-
-import nccl.core.interop.cupy as cupy
-import nccl.core.interop.torch as torch
-
-__all__ = ["cupy", "torch"]

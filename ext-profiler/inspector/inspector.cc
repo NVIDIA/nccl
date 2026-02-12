@@ -12,6 +12,8 @@
 #include <unistd.h>
 #include <errno.h>
 #include <cstring>
+#include <chrono>
+#include <thread>
 #include <cuda_runtime.h>
 
 #include "common.h"
@@ -880,10 +882,7 @@ void inspectorDumpThread::stopThread() {
   inspectorLockWr(&guard);
   run = false;
   inspectorUnlockRWLock(&guard);
-  struct timespec ts;
-  ts.tv_sec = 0;
-  ts.tv_nsec = 1000000; // 1ms
-  nanosleep(&ts, NULL);
+  std::this_thread::sleep_for(std::chrono::milliseconds(1));
   INFO_INSPECTOR( "NCCL Inspector inspectorDumpThread: stopped");
 }
 
@@ -951,9 +950,6 @@ inspectorResult_t inspectorDumpThread::inspectorStateDumpProm(const char* output
 void* inspectorDumpThread::dumpMain(void* arg) {
   inspectorDumpThread* dumper = (inspectorDumpThread*)arg;
   inspectorResult_t res = inspectorSuccess;
-  struct timespec ts;
-  ts.tv_sec = dumper->sampleIntervalUsecs / 1000000;
-  ts.tv_nsec = dumper->sampleIntervalUsecs % 1000000;
 
   while (dumper->run) {
     inspectorLockWr(&dumper->guard);
@@ -968,7 +964,7 @@ void* inspectorDumpThread::dumpMain(void* arg) {
     }
     inspectorUnlockRWLock(&dumper->guard);
 
-    nanosleep(&ts, NULL);
+    std::this_thread::sleep_for(std::chrono::microseconds(dumper->sampleIntervalUsecs));
   }
 
   return 0;

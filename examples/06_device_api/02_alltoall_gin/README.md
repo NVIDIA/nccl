@@ -52,6 +52,8 @@ ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
 reqs.railGinBarrierCount = NCCL_DEVICE_CTA_COUNT;
 // GIN signals provide completion notifications for asynchronous operations
 reqs.ginSignalCount = 1;
+// Enable full GIN connectivity, i.e., connect each rank to all other ranks
+reqs.ginConnectionType = NCCL_GIN_CONNECTION_FULL;
 
 // Create device communicator with pure GIN support
 NCCLCHECK(ncclDevCommCreate(comm, &reqs, &devComm));

@@ -7,12 +7,11 @@
 #include <stdio.h>
 #include <pthread.h>
 #include <cstring>
+#include <chrono>
 #include <linux/limits.h>
-#include <sys/time.h>
 #include <sys/types.h>
 #include <sys/syscall.h>
 #include <unistd.h>
-#include <time.h>
 #include "event.h"
 #include "print_event.h"
 #include "profiler_plugin_ce.h"
@@ -57,9 +56,9 @@ ncclDebugLogger_t logFn;
 #define INFO(FLAGS, ...) logFn(NCCL_LOG_INFO, (FLAGS), __func__, __LINE__, __VA_ARGS__)
 
 __hidden double gettime(void) {
-  struct timespec t;
-  clock_gettime(CLOCK_MONOTONIC, &t);
-  return (t.tv_sec*1e6 + (t.tv_nsec*1e-3));
+  using namespace std::chrono;
+  auto now = steady_clock::now();
+  return duration_cast<duration<double, std::micro>>(now.time_since_epoch()).count();
 }
 
 // Export startTime for CE profiler

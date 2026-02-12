@@ -99,7 +99,7 @@ static ncclResult_t getDmaBufFd(void *addr, size_t length, int *fd,
   if (ncclParamDmaBufEnable() == 0) return ncclInvalidUsage;
 
 #if CUDA_VERSION >= 11070
-  static size_t hostPageSize = sysconf(_SC_PAGESIZE);
+  static size_t hostPageSize = ncclOsGetPageSize();
   size_t alignedSize = length;
   ALIGN_SIZE(alignedSize, hostPageSize);
 
@@ -157,34 +157,6 @@ static ncclResult_t ncclRmaProxyRegMrSym(ncclGin_t *ginComm, void *ginCollComm, 
 
   return ncclSuccess;
 }
-
-// Depending on GDR, allocate memory on the CPU or GPU.
-// host_flags is not used for now, but it is here for future use.
-template <typename T>
-static ncclResult_t allocMemCPUAccessible(T **ptr, T **devPtr, size_t nelem, int host_flags,
-                                          void **gdrHandle, bool forceHost = false) {
-  if (ncclGdrCopy && !forceHost) {
-    NCCLCHECK(ncclGdrCudaCalloc(ptr, devPtr, nelem, gdrHandle));
-  } else {
-    NCCLCHECK(ncclCuMemHostAlloc((void **)ptr, NULL, nelem * sizeof(T)));
-    memset((void *)*ptr, 0, nelem * sizeof(T));
-    *devPtr = *ptr;
-    if (gdrHandle) *gdrHandle = NULL;  // Mark as host allocated by nulling GDR handle
-  }
-  return ncclSuccess;
-}
-
-// Depending on GDR, free memory on the CPU or GPU.
-template <typename T>
-static ncclResult_t freeMemCPUAccessible(T *ptr, void *gdrHandle) {
-  if (gdrHandle != NULL) {  // If a GDR handle exists, it was GDR memory
-    NCCLCHECK(ncclGdrCudaFree(gdrHandle));
-  } else {  // Otherwise, it was host memory (or GDR was off)
-    NCCLCHECK(ncclCuMemHostFree(ptr));
-  }
-  return ncclSuccess;
-}
-
 static uint64_t isPowerOfTwo(uint64_t n) { return (n > 0) && ((n & (n - 1)) == 0); }
 
 ncclResult_t ncclRmaProxyCreateContext(struct ncclComm *comm, void *collComm, ncclNetProperties_t props,
@@ -204,7 +176,7 @@ ncclResult_t ncclRmaProxyCreateContext(struct ncclComm *comm, void *collComm, nc
   // Enforcing strong ordering on the signals mr is vital to ensure ordering between puts and signals.
   size_t signalsBufSize = (comm->nRanks + 1) * sizeof(uint64_t);
   NCCLCHECK(ncclCuMemAlloc((void **)&rmaProxyCtx->signalsDev, &rmaProxyCtx->signalsCumemhandle,
-                           CU_MEM_HANDLE_TYPE_NONE, signalsBufSize));
+                           CU_MEM_HANDLE_TYPE_NONE, signalsBufSize, comm->memManager));
   CUDACHECK(cudaMemset(rmaProxyCtx->signalsDev, 0, signalsBufSize));
   NCCLCHECK(ncclRmaProxyRegMrSym(ginComm, rmaProxyCtx->ginCollComm, rmaProxyCtx->props, rmaProxyCtx->signalsDev, signalsBufSize,
                                  NCCL_PTR_CUDA, NCCL_NET_MR_FLAG_FORCE_SO,
@@ -216,11 +188,11 @@ ncclResult_t ncclRmaProxyCreateContext(struct ncclComm *comm, void *collComm, nc
   // Allocate the sequence numbers for the per-rank network function descriptors
   // These are allocated as CPU-accessible memory (either GDR or host memory)
   NCCLCHECK(allocMemCPUAccessible(&rmaProxyCtx->opSeqs, &rmaProxyCtx->opSeqsDev,
-                                  comm->nRanks, 0, &rmaProxyCtx->opSeqsGdrHandle));
+                                  comm->nRanks, 0, &rmaProxyCtx->opSeqsGdrHandle, comm->memManager));
   NCCLCHECK(allocMemCPUAccessible(&rmaProxyCtx->readySeqs, &rmaProxyCtx->readySeqsDev,
-                                  comm->nRanks, 0, &rmaProxyCtx->readySeqsGdrHandle));
+                                  comm->nRanks, 0, &rmaProxyCtx->readySeqsGdrHandle, comm->memManager));
   NCCLCHECK(allocMemCPUAccessible(&rmaProxyCtx->doneSeqs, &rmaProxyCtx->doneSeqsDev,
-                                  comm->nRanks, 0, &rmaProxyCtx->doneSeqsGdrHandle));
+                                  comm->nRanks, 0, &rmaProxyCtx->doneSeqsGdrHandle, comm->memManager));
 
   // Sanitize and set up the lock-free circular buffer queue size
   uint64_t queueSize = ncclParamRmaProxyQueueSize();
@@ -331,14 +303,14 @@ static ncclResult_t ncclRmaProxyPollDesc(ncclGin_t *ncclGin, struct ncclRmaProxy
         NCCLCHECK(ncclGin->iput(ctx->ginCollComm,
           pendingDesc->srcOff, pendingDesc->srcHandle, pendingDesc->size,
           pendingDesc->dstOff, pendingDesc->dstHandle,
-          pendingDesc->targetRank, &pendingDesc->request));
+          pendingDesc->targetRank, 0, &pendingDesc->request));
       } else {
         // Signal operation needed
         NCCLCHECK(ncclGin->iputSignal(ctx->ginCollComm,
           pendingDesc->srcOff, pendingDesc->srcHandle, pendingDesc->size,
           pendingDesc->dstOff, pendingDesc->dstHandle,
           pendingDesc->targetRank, pendingDesc->signal.offset, pendingDesc->signal.signalMhandle,
-          pendingDesc->signal.val, pendingDesc->signal.op, &pendingDesc->request));
+          pendingDesc->signal.val, pendingDesc->signal.op, 0, &pendingDesc->request));
       }
 
       // Enqueue to InProgress queue (no lock needed - progress thread only)
@@ -408,14 +380,14 @@ ncclResult_t ncclRmaProxyDestroyContext(ncclGin_t* ginComm, void* rmaProxyCtx){
   }
 
   // Free counters (using GDR-aware deallocation)
-  if (ctx->opSeqs) freeMemCPUAccessible(ctx->opSeqs, ctx->opSeqsGdrHandle);
-  if (ctx->readySeqs) freeMemCPUAccessible(ctx->readySeqs, ctx->readySeqsGdrHandle);
-  if (ctx->doneSeqs) freeMemCPUAccessible(ctx->doneSeqs, ctx->doneSeqsGdrHandle);
+  if (ctx->opSeqs) freeMemCPUAccessible(ctx->opSeqs, ctx->opSeqsGdrHandle, ctx->comm->memManager);
+  if (ctx->readySeqs) freeMemCPUAccessible(ctx->readySeqs, ctx->readySeqsGdrHandle, ctx->comm->memManager);
+  if (ctx->doneSeqs) freeMemCPUAccessible(ctx->doneSeqs, ctx->doneSeqsGdrHandle, ctx->comm->memManager);
 
   // Free signals
   if (ginComm && ctx->ginCollComm && ctx->signalsMhandle)
     ginComm->deregMrSym(ctx->ginCollComm, ctx->signalsMhandle);
-  if (ctx->signalsDev) ncclCudaFree(ctx->signalsDev);
+  if (ctx->signalsDev) ncclCudaFree(ctx->signalsDev, ctx->comm->memManager);
 
   // Free host signals buffer
   if (ctx->signalsHost) free(ctx->signalsHost);
@@ -433,8 +405,8 @@ ncclResult_t ncclRmaProxyDestroyContext(ncclGin_t* ginComm, void* rmaProxyCtx){
 
 
 ncclResult_t ncclRmaProxyRegister(struct ncclComm* comm, void* address, size_t size,
-    void* rmaHostWins[NCCL_GIN_MAX_CONTEXTS],
-    ncclGinWindow_t rmaDevWins[NCCL_GIN_MAX_CONTEXTS]){
+    void* rmaHostWins[NCCL_GIN_MAX_CONNECTIONS],
+    ncclGinWindow_t rmaDevWins[NCCL_GIN_MAX_CONNECTIONS]){
       struct ncclRmaProxyState* rmaProxyState = &comm->rmaState.rmaProxyState;
       for (int n = 0; n < rmaProxyState->ginCommCount; n++) {
           NCCLCHECK(ncclRmaProxyRegMrSym(rmaProxyState->ncclGin, rmaProxyState->ginComms[n], rmaProxyState->props[n], address, size,
@@ -447,7 +419,7 @@ ncclResult_t ncclRmaProxyRegister(struct ncclComm* comm, void* address, size_t s
       return ncclSuccess;
 }
 
-ncclResult_t ncclRmaProxyDeregister(struct ncclComm* comm, void* rmaHostWins[NCCL_GIN_MAX_CONTEXTS]){
+ncclResult_t ncclRmaProxyDeregister(struct ncclComm* comm, void* rmaHostWins[NCCL_GIN_MAX_CONNECTIONS]){
   struct ncclRmaProxyState* rmaProxyState = &comm->rmaState.rmaProxyState;
   for (int n = 0; n < rmaProxyState->ginCommCount; n++) {
     NCCLCHECK(rmaProxyState->ncclGin->deregMrSym(rmaProxyState->ginComms[n], rmaHostWins[n]));
@@ -518,9 +490,9 @@ ncclResult_t ncclRmaProxyConnectOnce(struct ncclComm* comm) {
   }
 
   int ginCommCount;
-  int64_t localNets[NCCL_TOPO_MAX_NODES];
-  NCCLCHECK(ncclTopoGetLocalNets(comm->topo, comm->rank, localNets, &rmaProxyState->ginCommCount));
-  ginCommCount = std::min<int>(rmaProxyState->ginCommCount, NCCL_GIN_MAX_CONTEXTS);
+  int localGinDevs[NCCL_TOPO_MAX_NODES];
+  NCCLCHECK(ncclTopoGetLocalGinDevs(comm, localGinDevs, &rmaProxyState->ginCommCount));
+  ginCommCount = std::min<int>(rmaProxyState->ginCommCount, NCCL_GIN_MAX_CONNECTIONS);
   ginCommCount = std::min<int>(ginCommCount, ndev);
 
   int* allCommCounts = NULL;
@@ -551,15 +523,18 @@ ncclResult_t ncclRmaProxyConnectOnce(struct ncclComm* comm) {
   for (int n = 0; n < ginCommCount; n++) {
     void* listenComm;
     NCCLCHECKGOTO(
-      rmaProxyState->ncclGin->listen(rmaProxyState->ginInstance, localNets[n],
+      rmaProxyState->ncclGin->listen(rmaProxyState->ginInstance, localGinDevs[n],
                                 allHandles + NCCL_NET_HANDLE_MAXSIZE * comm->rank, &listenComm),
       ret, fail);
     NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, allHandles, NCCL_NET_HANDLE_MAXSIZE), ret,
                   fail);
-    NCCLCHECKGOTO(rmaProxyState->ncclGin->connect(comm->netContext, handles, comm->nRanks, comm->rank,
-                                             listenComm, rmaProxyState->ginComms + n),
-                  ret, fail);
-    NCCLCHECKGOTO(rmaProxyState->ncclGin->getProperties(localNets[n], &rmaProxyState->props[n]), ret, fail);
+    NCCLCHECKGOTO(
+      rmaProxyState->ncclGin->connect(comm->netContext, handles, comm->nRanks, comm->rank, 1, 0,
+                                      ncclGinRequirementFlagOptionsNotRequired,
+                                      ncclGinRequirementFlagOptionsNotRequired, listenComm,
+                                      rmaProxyState->ginComms + n),
+      ret, fail);
+    NCCLCHECKGOTO(rmaProxyState->ncclGin->getProperties(localGinDevs[n], &rmaProxyState->props[n]), ret, fail);
     NCCLCHECKGOTO(rmaProxyState->ncclGin->closeListen(listenComm), ret, fail);
   }
   free(handles);

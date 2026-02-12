@@ -101,4 +101,13 @@ static inline const char* ibvGetGidStr(union ibv_gid* gid, char* gidStr, size_t 
   return inet_ntop(AF_INET6, gid->raw, gidStr, strLen);
 }
 
+// Helper function to convert IB work completion status to string
+const char* ibvWcStatusStr(enum ibv_wc_status status);
+
+// Helper function to convert IB work completion opcode to string
+const char* ibvWcOpcodeStr(enum ibv_wc_opcode opcode);
+
+// Helper function to convert IB work request opcode to string
+const char* ibvWrOpcodeStr(enum ibv_wr_opcode opcode);
+
 #endif //End include guard

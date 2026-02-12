@@ -907,8 +907,8 @@ ncclResult_t ncclTopoGetSubsystem(const char* sysPath, char* subSys) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclTopoFillNet(struct ncclXml* xml, const char* pciPath, const char* netName, struct ncclXmlNode** netNode, struct ncclXmlNode* forceParent) {
-  NCCLCHECK(xmlFindTagKv(xml, "net", netNode, "name", netName));
+ncclResult_t ncclTopoFillNet(struct ncclXml* xml, const char* tagName, const char* pciPath, const char* netName, struct ncclXmlNode** netNode, struct ncclXmlNode* forceParent) {
+  NCCLCHECK(xmlFindTagKv(xml, tagName, netNode, "name", netName));
 
   if (*netNode != NULL) return ncclSuccess;
 
@@ -949,7 +949,7 @@ ncclResult_t ncclTopoFillNet(struct ncclXml* xml, const char* pciPath, const cha
 
   // We know that this net does not exist yet (we searched for it at the
   // beginning of this function), so we can add it.
-  NCCLCHECK(xmlAddNode(xml, nicNode, "net", netNode));
+  NCCLCHECK(xmlAddNode(xml, nicNode, tagName, netNode));
   NCCLCHECK(xmlSetAttr(*netNode, "name", netName));
   return ncclSuccess;
 }
@@ -962,7 +962,7 @@ ncclResult_t ncclTopoTrimXmlRec(struct ncclXmlNode* node, int* keep) {
     *keep = 1;
   } else {
     // Copy nSubs and subs as they could change as we trim recursively.
-    struct ncclXmlNode* subs[MAX_SUBS];
+    struct ncclXmlNode** subs = (struct ncclXmlNode**)malloc(MAX_SUBS * sizeof(struct ncclXmlNode*));
     int nSubs = node->nSubs;
     memcpy(subs, node->subs, node->nSubs*sizeof(struct ncclXmlNode*));
     *keep = 0;
@@ -971,6 +971,7 @@ ncclResult_t ncclTopoTrimXmlRec(struct ncclXmlNode* node, int* keep) {
       NCCLCHECK(ncclTopoTrimXmlRec(subs[s], &k));
       *keep += k;
     }
+    free(subs);
     // Remove node if it has no children and no keep attribute
     if (*keep == 0 && // Trim PCI switches, CPUs with no used GPU/NIC under them, or pruned NICs
         (strcmp(node->name, "pci") == 0 || strcmp(node->name, "cpu") == 0 || strcmp(node->name, "nic") == 0 || strcmp(node->name, "net") == 0)) {

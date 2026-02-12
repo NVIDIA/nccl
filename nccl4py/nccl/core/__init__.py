@@ -35,9 +35,6 @@ from nccl.core.utils import *
 # Memory management
 from nccl.core.buffer import *
 
-# Interop modules - import as submodules for nccl.core.cupy.array, etc.
-from nccl.core.interop import *
-
 # The following __all__ exports define the stable, public API surface of NCCL4Py.
 # Semantic versioning guarantees apply only to the symbols explicitly listed below.
 # All other modules, functions, and symbols are internal implementation details and are subject to change without notice.
@@ -83,6 +80,7 @@ __all__ = [
     # Communicator
     "Communicator",
     "NCCLConfig",
+    "WaitSignalDesc",
     # Resources
     "RegisteredBufferHandle",
     "RegisteredWindowHandle",
@@ -102,7 +100,18 @@ __all__ = [
     # Memory
     "mem_alloc",
     "mem_free",
-    # Interop modules
+    # Interop modules (lazy-loaded)
     "cupy",
     "torch",
 ]
+
+
+def __getattr__(name):
+    """Lazy-load interop submodules on first access to avoid importing cupy/torch unless needed."""
+    if name == "cupy":
+        import nccl.core.interop.cupy
+        return nccl.core.interop.cupy
+    elif name == "torch":
+        import nccl.core.interop.torch
+        return nccl.core.interop.torch
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

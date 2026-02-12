@@ -131,7 +131,7 @@ An example commit message is:
 Comment          | Commit message
 -----------------|--------------------------------------------------------
 Title            | Fix crash in proxy on systems with more than 2 GPUs
-Blank line       | 
+Blank line       |
 Problem          | When a system has more than 2 GPUs, the table we use to
                  | store addresses overflows.
 Solution         | This fix increases the size of the table to the maximum
@@ -180,4 +180,3 @@ We're committed to helping contributors succeed!
 We truly appreciate your time and effort in contributing to NCCL.
 
 Happy coding!
-

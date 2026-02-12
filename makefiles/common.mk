@@ -182,3 +182,11 @@ endif
 ifneq ($(EMIT_LLVM_IR), 0)
   CXXFLAGS += -DEMIT_LLVM_IR=1
 endif
+
+# Git version overrides (set via command line: make NCCL_GIT_BRANCH=xxx NCCL_GIT_COMMIT_HASH=yyy)
+ifneq ($(NCCL_GIT_BRANCH),)
+  CXXFLAGS += -DNCCL_GIT_BRANCH='"$(NCCL_GIT_BRANCH)"'
+endif
+ifneq ($(NCCL_GIT_COMMIT_HASH),)
+  CXXFLAGS += -DNCCL_GIT_COMMIT_HASH='"$(NCCL_GIT_COMMIT_HASH)"'
+endif

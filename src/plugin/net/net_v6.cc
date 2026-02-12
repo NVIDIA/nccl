@@ -45,7 +45,7 @@ static ncclResult_t ncclNet_getProperties(int dev, ncclNetProperties_t* props) {
 }
 
 static ncclResult_t ncclNet_regMr(void* comm, void* data, size_t size, int type, void** mhandle) {
-  if (size >= 1UL<<31) return ncclInternalError;
+  if (size >= 1ULL<<31) return ncclInternalError;
   return ncclNet_v6->regMr(comm, data, (int) size, type, mhandle);
 }
 
@@ -124,7 +124,7 @@ static ncclResult_t ncclCollNet_listen(void* ctx __attribute__((unused)),
 }
 
 static ncclResult_t ncclCollNet_regMr(void* comm, void* data, size_t size, int type, void** mhandle) {
-  if (size >= 1UL<<31) return ncclInternalError;
+  if (size >= 1ULL<<31) return ncclInternalError;
   return ncclCollNet_v6->regMr(comm, data, (int) size, type, mhandle);
 }
 

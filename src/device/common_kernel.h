@@ -21,7 +21,8 @@ inline __device__ int min(int a, ssize_t b) { return (a < b) ? a : b; }
 inline __device__ int loadInt(int* ptr) {
   int v;
   asm volatile("ld.volatile.global.u32 %0, [%1];"
-      : "=r"(v) : "l"(ptr));
+      : "=r"(v) : "l"(ptr)
+      : "memory");
   return v;
 }
 

@@ -17,6 +17,7 @@ initialization, and error string utilities for NCCL operations.
 
 from __future__ import annotations
 
+import ctypes as _ctypes
 import numpy as _np
 from packaging.version import Version as _Version
 
@@ -117,12 +118,12 @@ class UniqueId:
         return f"<UniqueId: {hex_str}>"
 
     @staticmethod
-    def from_bytes(b: bytes) -> UniqueId:
+    def from_bytes(b: bytes | bytearray | memoryview) -> UniqueId:
         """
         Creates a UniqueId from bytes.
 
         Args:
-            - b (bytes): Bytes representation of a UniqueId.
+            - b (bytes | bytearray | memoryview): Bytes representation of a UniqueId.
 
         Returns:
             ``UniqueId``: Reconstructed UniqueId object.
@@ -164,7 +165,14 @@ class UniqueId:
         Returns:
             ``np.ndarray``: Array containing the unique ID data.
         """
-        return self._internal._data
+        size = int(_nccl_bindings.unique_id_dtype.itemsize)
+        # Create a live, zero-copy view into the backing UniqueId storage.
+        # Keep the Cython object alive via an attribute on the ctypes buffer.
+        buf = (_ctypes.c_char * size).from_address(int(self.ptr))
+        # Use setattr to avoid relying on ctypes Array stubs having this attribute.
+        setattr(buf, "_keepalive", self._internal)
+        arr = _np.ndarray((1,), dtype=_nccl_bindings.unique_id_dtype, buffer=buf)
+        return arr.view(_np.recarray)
 
     @property
     def as_bytes(self) -> bytes:
@@ -174,7 +182,8 @@ class UniqueId:
         Returns:
             ``bytes``: Unique ID as bytes (for serialization/broadcast).
         """
-        return self._internal._data.tobytes()
+        size = int(_nccl_bindings.unique_id_dtype.itemsize)
+        return _ctypes.string_at(int(self.ptr), size)
 
 
 def get_unique_id(empty: bool = False) -> UniqueId:

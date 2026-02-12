@@ -145,6 +145,22 @@ void* hybridAlltoAll(int my_rank, int total_ranks, int local_device, int devices
   NCCLCHECK(ncclCommInitRank(&comm, total_ranks, nccl_unique_id, my_rank));
   printf("  Rank %d initialized NCCL communicator for %d total ranks\n", my_rank, total_ranks);
 
+  // Check for Device API and GIN support
+  ncclCommProperties_t props = NCCL_COMM_PROPERTIES_INITIALIZER;
+  NCCLCHECK(ncclCommQueryProperties(comm, &props));
+  if (!props.deviceApiSupport) {
+    printf("ERROR: rank %d communicator does not support Device API!\n", my_rank);
+    NCCLCHECK(ncclCommFinalize(comm));
+    NCCLCHECK(ncclCommDestroy(comm));
+    return NULL;
+  }
+  if (props.ginType == NCCL_GIN_TYPE_NONE) {
+    printf("ERROR: rank %d communicator does not support GIN!\n", my_rank);
+    NCCLCHECK(ncclCommFinalize(comm));
+    NCCLCHECK(ncclCommDestroy(comm));
+    return NULL;
+  }
+
   // Allocate memory for AlltoAll operation
   size_t count = 1024; // Elements per rank
   size_t total_elements = count * total_ranks;
@@ -192,6 +208,7 @@ void* hybridAlltoAll(int my_rank, int total_ranks, int local_device, int devices
   reqs.lsaBarrierCount = NCCL_DEVICE_CTA_COUNT;  // LSA barriers for local synchronization
   reqs.railGinBarrierCount = NCCL_DEVICE_CTA_COUNT;  // GIN barriers for network synchronization
   reqs.ginSignalCount = 1;  // GIN signals for completion detection
+  reqs.ginConnectionType = NCCL_GIN_CONNECTION_FULL;  // Enable full GIN connectivity
   NCCLCHECK(ncclDevCommCreate(comm, &reqs, &devComm));
   printf("  Rank %d created device communicator with hybrid support\n", my_rank);
 

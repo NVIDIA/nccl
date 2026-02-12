@@ -18,7 +18,7 @@ struct ncclWindow_vidmem {
   uint32_t stride4G;
   uint32_t mcOffset4K;
   uint32_t ginOffset4K;
-  ncclGinWindow_t ginWins[NCCL_GIN_MAX_CONTEXTS];
+  ncclGinWindow_t ginWins[NCCL_GIN_MAX_CONNECTIONS];
 };
 
 struct ncclMultimemHandle {

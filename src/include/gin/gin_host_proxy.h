@@ -13,11 +13,11 @@
 #include <linux/types.h>
 #include "nccl.h"
 #include "gin/gin_host.h"
-#include "plugin/nccl_net.h"
+#include "plugin/nccl_gin.h"
 
 ncclResult_t ncclGinProxyCreateContext(struct ncclComm *comm, void *collComm, int devId,
-                                       int nSignals, int nCounters, void **outGinCtx,
-                                       ncclNetDeviceHandle_v11_t **outDevHandle);
+                                       int nSignals, int nCounters, int nContexts, void **outGinCtx,
+                                       ncclNetDeviceHandle_t **outDevHandle);
 ncclResult_t ncclGinProxyRegister(ncclGin_t *ginComm, void *ginCtx, void *addr, size_t size,
                                   int type, int mr_flags, void **mhandle, void **ginHandle);
 ncclResult_t ncclGinProxyDeregister(ncclGin_t *ginComm, void *ginCtx, void *mhandle);

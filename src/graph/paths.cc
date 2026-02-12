@@ -152,6 +152,9 @@ ncclResult_t ncclTopoPrintPaths(struct ncclTopoSystem* system) {
   for (int i=0; i<system->nodes[NET].count; i++) {
     printNodePaths(system, system->nodes[NET].nodes+i);
   }
+  for (int i=0; i<system->nodes[GIN].count; i++) {
+    printNodePaths(system, system->nodes[GIN].nodes+i);
+  }
   return ncclSuccess;
 }
 
@@ -661,6 +664,11 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclComm
   // Set direct paths to NICs.
   for (int n=0; n<system->nodes[NET].count; n++) {
     NCCLCHECK(ncclTopoSetPaths(system->nodes[NET].nodes+n, system));
+  }
+
+  // Set direct paths to GIN devices.
+  for (int n=0; n<system->nodes[GIN].count; n++) {
+    NCCLCHECK(ncclTopoSetPaths(system->nodes[GIN].nodes+n, system));
   }
 
   // Set direct paths to NVSwitches.

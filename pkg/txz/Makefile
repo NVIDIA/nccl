@@ -21,6 +21,7 @@ prep: $(TXZTARGETS)
 
 build: prep
 	$(MAKE) -C ../.. src.build BUILDDIR=$(BUILDDIR)
+	$(MAKE) -C ../.. ir.build BUILDDIR=$(BUILDDIR)
 	@printf "Building tar.xz package\n"
 	(cd $(BUILDDIR); bash txz/create_txz.sh)
 	mkdir -p $(PKGDIR)

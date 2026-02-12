@@ -66,9 +66,9 @@ NCCL_DEVICE_INLINE void ncclLsaBarrierSession<Coop>::arrive(Coop, cuda::memory_o
     if (this->coop.thread_rank() == 0) {
       uint32_t* inbox = this->mcInbox(/*multimem=*/true);
       if (nccl::utility::releaseOrderOf(order) != cuda::memory_order_relaxed) {
-        asm volatile("multimem.red.release.sys.add.u32 [%0],1;" :: "l"(inbox));
+        asm volatile("multimem.red.release.sys.add.u32 [%0],1;" :: "l"(inbox) : "memory");
       } else {
-        asm volatile("multimem.red.relaxed.sys.add.u32 [%0],1;" :: "l"(inbox));
+        asm volatile("multimem.red.relaxed.sys.add.u32 [%0],1;" :: "l"(inbox) : "memory");
       }
     }
   #endif
@@ -86,12 +86,14 @@ NCCL_DEVICE_INLINE void ncclLsaBarrierSession<Coop>::arrive(Coop, cuda::memory_o
 #if NCCL_CHECK_CUDACC
 template<typename Coop>
 NCCL_DEVICE_INLINE void ncclLsaBarrierSession<Coop>::wait(Coop, cuda::memory_order order) {
+  using nccl::utility::testAbort;
+  uint32_t steps = 0;
   if (this->multimem) {
   #if __CUDA_ARCH__ >= 900
     if (this->coop.thread_rank() == 0) {
       cuda::atomic_ref<uint32_t> inbox(*this->mcInbox(/*multimem=*/false));
       #pragma unroll 1
-      while (true) {
+      while (!testAbort(this->comm.abortFlag, steps)) {
         uint32_t got = inbox.load(nccl::utility::acquireOrderOf(order));
         if (got - (this->epoch + this->team.nRanks) <= uint32_t(-1)>>1) break;
       }
@@ -104,7 +106,7 @@ NCCL_DEVICE_INLINE void ncclLsaBarrierSession<Coop>::wait(Coop, cuda::memory_ord
       int peer = i + (this->team.rank <= i ? 1 : 0);
       cuda::atomic_ref<uint32_t> inbox(*this->ucInbox(this->team.rank, peer));
       #pragma unroll 1
-      while (true) {
+      while (!testAbort(this->comm.abortFlag, steps)) {
         uint32_t got = inbox.load(nccl::utility::acquireOrderOf(order));
         if (got - (this->epoch + 1) <= uint32_t(-1)>>1) break;
       }

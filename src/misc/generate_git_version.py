@@ -37,11 +37,11 @@ def main(output_path):
 #ifndef NCCL_GIT_VERSION_H
 #define NCCL_GIT_VERSION_H
 
-#ifndef GIT_BRANCH
-#define GIT_BRANCH "{git_branch}"
+#ifndef NCCL_GIT_BRANCH
+#define NCCL_GIT_BRANCH "{git_branch}"
 #endif
-#ifndef GIT_COMMIT_HASH
-#define GIT_COMMIT_HASH "{git_hash}"
+#ifndef NCCL_GIT_COMMIT_HASH
+#define NCCL_GIT_COMMIT_HASH "{git_hash}"
 #endif
 
 #endif /* NCCL_GIT_VERSION_H */

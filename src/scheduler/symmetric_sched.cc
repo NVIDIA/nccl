@@ -54,7 +54,6 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
     task = next;
   }
   if (remainTasksTail) remainTasksTail->next = nullptr;
-
   if (!foundSymm) goto exit;
 
   // make sure kernel args space can hold at least a single work
@@ -180,7 +179,11 @@ ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm, struct ncclIntruQ
   plan->isSymColl = true;
   plan->threadPerBlock = headTask->nWarps * WARP_SIZE;
   plan->hasProxyOps = false;
-  plan->kernelFn = ncclSymkGetKernelPtr((ncclSymkKernelId)headTask->devFuncId, headTask->opDev.op, headTask->datatype);
+  ncclSymkKernelId kernelId = (ncclSymkKernelId)headTask->devFuncId;
+  int kernelIndex = ncclSymkGetKernelIndex(kernelId, headTask->opDev.op, headTask->datatype);
+  plan->kernelFn = ncclSymkKernelList[kernelIndex];
+  int maxDynamicSmem = ncclSymkKernelMaxDynamicSmem[kernelIndex];
+  plan->kernelDynSmem = (1 & ncclSymkDynamicSmemKernelMask()>>(int)kernelId) ? maxDynamicSmem : 0;
   task = headTask;
   while (task != nullptr && task->devFuncId == devFuncId) {
     workCount++;
@@ -197,6 +200,7 @@ ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm, struct ncclIntruQ
   workRangePtr = argsBuf->getWorkRange();
   workBufPtr = argsBuf->getWorks(nMaxChannels);
   argsBuf->nMaxChannels = nMaxChannels;
+  argsBuf->maxDynamicSmem = maxDynamicSmem;
 
   while (!ncclIntruQueueEmpty(symTaskQueue)) {
     struct ncclSymkDevWork devWork = {};

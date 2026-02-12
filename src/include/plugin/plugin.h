@@ -11,12 +11,14 @@
 
 enum ncclPluginType {
   ncclPluginTypeNet,
+  ncclPluginTypeGin,
   ncclPluginTypeTuner,
   ncclPluginTypeProfiler,
   ncclPluginTypeEnv,
 };
 
 void* ncclOpenNetPluginLib(const char* name);
+void* ncclOpenGinPluginLib(const char* name);
 void* ncclOpenTunerPluginLib(const char* name);
 void* ncclOpenProfilerPluginLib(const char* name);
 void* ncclOpenEnvPluginLib(const char* name);

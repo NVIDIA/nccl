@@ -1462,7 +1462,13 @@ struct mlx5_ifc_cmd_hca_cap_2_bits {
     u8 log_reserved_qpn_granularity[0x5];
     u8 reserved_at_98[0x8];
 
-    u8 reserved_at_a0[0x760];
+    u8 reserved_at_a0[0x240];
+
+    u8 reserved_at_2e0[0x1];
+    u8 send_dbr_mode_no_dbr_ext[0x1];
+    u8 reserved_at_2e2[0x1e];
+
+    u8 reserved_at_300[0x500];
 };
 
 enum {
@@ -3475,7 +3481,8 @@ struct mlx5_ifc_qpc_bits {
     u8 counter_set_id[0x8];
     u8 uar_page[0x18];
 
-    u8 reserved_at_80[0x8];
+    u8 send_dbr_mode[0x2];
+    u8 reserved_at_82[0x6];
     u8 user_index[0x18];
 
     u8 reserved_at_a0[0x3];

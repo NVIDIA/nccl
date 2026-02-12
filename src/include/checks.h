@@ -155,6 +155,16 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
   } \
 } while (0)
 
+// Report failure but continue - useful for cleanup paths where we want to
+// attempt all cleanup steps. Preserves the first error in RES.
+#define NCCLCHECKIGNORE(call, RES) do { \
+  ncclResult_t TMPRES = call; \
+  if (TMPRES != ncclSuccess && TMPRES != ncclInProgress) { \
+    if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, TMPRES); \
+    if (RES == ncclSuccess) RES = TMPRES; \
+  } \
+} while (0)
+
 #define NCCLCHECKNOWARN(call, FLAGS) do { \
   ncclResult_t RES; \
   NOWARN(RES = call, FLAGS); \

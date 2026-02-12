@@ -4,7 +4,9 @@
  * See LICENSE.txt for license information
  ************************************************************************/
 
+#include "connect.h"
 #include "common.h"
+#include "p2p_resiliency.h"
 
 NCCL_PARAM(IbGidIndex, "IB_GID_INDEX", -1);
 NCCL_PARAM(IbRoutableFlidIbGidIndex, "IB_ROUTABLE_FLID_GID_INDEX", 1);
@@ -17,40 +19,6 @@ NCCL_PARAM(IbSl, "IB_SL", -1);
 NCCL_PARAM(IbTc, "IB_TC", -1);
 NCCL_PARAM(IbFifoTc, "IB_FIFO_TC", -1);
 NCCL_PARAM(IbEceEnable,"IB_ECE_ENABLE",1);
-NCCL_PARAM(IbSplitDataOnQps, "IB_SPLIT_DATA_ON_QPS", 0);
-
-// Per-QP connection metatdata
-struct ncclIbQpInfo {
-  uint32_t qpn;
-
-  // Fields needed for ece (enhanced connection establishment)
-  struct ibv_ece ece;
-  int ece_supported;
-  int devIndex;
-};
-
-// Structure used to hold information needed to establish the communication
-// between the sender and receiver.
-// The structure is populated during the connection establishment phase and
-// populated by each side of the connection before being sent to the remote
-// peer. The remote peer uses the information passed to it from its peer to
-// create and initialize its local resources.
-struct ncclIbConnectionMetadata {
-  struct ncclIbQpInfo qpInfo[NCCL_IB_MAX_QPS];
-  struct ncclIbDevInfo devs[NCCL_IB_MAX_DEVS_PER_NIC];
-  char devName[MAX_MERGED_DEV_NAME];
-  // An address for a registered memory to be accessed by the peer. The address
-  // can be accessed using RDMA using the key specified in ncclIbDevInfo::rkey.
-  // The sender side gets in this member, from the receiver, the address of the
-  // memory to which the sender writes the sizes of the data transfers that
-  // the sender sends.
-  // The receiver side gets in this member, from the sender, the address of the
-  // memory to which the receiver writes the CTS messages.
-  uint64_t addr;
-  int ndevs;
-  int tc;
-  int sl;
-};
 
 enum ncclIbCommState {
   ncclIbCommStateStart = 0,
@@ -80,7 +48,7 @@ struct ncclIbHandle {
 
 NCCL_PARAM(IbQpsPerConn, "IB_QPS_PER_CONNECTION", 1);
 
-ncclResult_t ncclIbInitCommDevBase(int ibDevN, struct ncclIbNetCommDevBase* base, void* cq_context) {
+ncclResult_t ncclIbInitCommDevBase(int ibDevN, struct ncclIbNetCommDevBase* base, void* cq_context, int cqSize) {
   base->ibDevN = ibDevN;
   ncclIbDev* ibDev = ncclIbDevs + ibDevN;
   {
@@ -91,8 +59,7 @@ ncclResult_t ncclIbInitCommDevBase(int ibDevN, struct ncclIbNetCommDevBase* base
     base->pd = ibDev->pd;
   }
 
-  // Recv requests can generate 2 completions (one for the post FIFO, one for the Recv).
-  NCCLCHECK(wrap_ibv_create_cq(&base->cq, ibDev->context, 2*NET_IB_MAX_REQUESTS*ncclParamIbQpsPerConn(), cq_context, NULL, 0));
+  NCCLCHECK(wrap_ibv_create_cq(&base->cq, ibDev->context, cqSize, cq_context, NULL, 0));
 
   return ncclSuccess;
 }
@@ -347,29 +314,26 @@ ncclResult_t ncclIbGetGidIndex(struct ibv_context *context, uint8_t portNum, str
   return ncclSuccess;
 }
 
-ncclResult_t ncclIbCreateQp(uint8_t ib_port, struct ncclIbNetCommDevBase* base, int access_flags, void* qp_context, struct ncclIbQp* qp) {
+ncclResult_t ncclIbCreateQp(struct ncclIbQpCreateAttr* createQpAttrs, void* qp_context, struct ncclIbQp* qp) {
   struct ibv_qp_init_attr qpInitAttr;
   memset(&qpInitAttr, 0, sizeof(struct ibv_qp_init_attr));
   qpInitAttr.qp_context = qp_context;
-  qpInitAttr.send_cq = base->cq;
-  qpInitAttr.recv_cq = base->cq;
-  qpInitAttr.qp_type = IBV_QPT_RC;
-  // We might send 2 messages per send (RDMA and RDMA_WITH_IMM)
-  qpInitAttr.cap.max_send_wr = 2*NET_IB_MAX_REQUESTS;
-  qpInitAttr.cap.max_recv_wr = NET_IB_MAX_REQUESTS;
+  qpInitAttr.send_cq = createQpAttrs->cq;
+  qpInitAttr.recv_cq = createQpAttrs->cq;
+  qpInitAttr.qp_type = createQpAttrs->type;
+  qpInitAttr.cap.max_recv_wr = createQpAttrs->maxRecvWorkRequest;
+  qpInitAttr.cap.max_send_wr = createQpAttrs->maxSendWorkRequest;
   qpInitAttr.cap.max_send_sge = 1;
   qpInitAttr.cap.max_recv_sge = 1;
   qpInitAttr.cap.max_inline_data = ncclParamIbUseInline() ? sizeof(struct ncclIbSendFifo) : 0;
-  NCCLCHECK(wrap_ibv_create_qp(&qp->qp, base->pd, &qpInitAttr));
+  NCCLCHECK(wrap_ibv_create_qp(&qp->qp, createQpAttrs->pd, &qpInitAttr));
   struct ibv_qp_attr qpAttr;
   memset(&qpAttr, 0, sizeof(struct ibv_qp_attr));
   qpAttr.qp_state = IBV_QPS_INIT;
   qpAttr.pkey_index = ncclParamIbPkey();
-  qpAttr.port_num = ib_port;
-  qpAttr.qp_access_flags = access_flags;
+  qpAttr.port_num = createQpAttrs->ibPort;
+  qpAttr.qp_access_flags = createQpAttrs->accessFlags;
   NCCLCHECK(wrap_ibv_modify_qp(qp->qp, &qpAttr, IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS));
-  TRACE(NCCL_NET, "NET/IB : ncclIbCreateQp port=%d dev=%d devName=%s ndevs=%d nmdevs=%d qpn=%u pkey=%u pd=%p",
-    ib_port, base->ibDevN, ncclIbDevs[base->ibDevN].devName, ncclNIbDevs, ncclNMergedIbDevs, qp->qp->qp_num, qpAttr.pkey_index, base->pd);
   return ncclSuccess;
 }
 
@@ -393,28 +357,28 @@ ncclResult_t ncclIbRtrQp(struct ibv_qp* qp, struct ncclIbGidInfo* sGidInfo, uint
   } else {
     //pick lid if subnet prefixs are same, FLID if they are not
     if (ncclIbExtractLocalSubnetPrefix(sGidInfo->localGid.global.subnet_prefix) ==
-		    ncclIbExtractLocalSubnetPrefix(info->gid.global.subnet_prefix)) {
-        qpAttr.ah_attr.is_global = 0;
-        qpAttr.ah_attr.dlid = info->lid;
+        ncclIbExtractLocalSubnetPrefix(info->gid.global.subnet_prefix)) {
+      qpAttr.ah_attr.is_global = 0;
+      qpAttr.ah_attr.dlid = info->lid;
     } else {
-	uint16_t flid = ncclIbExtractFlid(&info->gid);
-        if (flid == 0) {
-          WARN("Warning: remote FLID configured as zero even when endpoints are on different subnets, using dlid as fallback");
-          qpAttr.ah_attr.dlid = info->lid;
-	} else {
-          qpAttr.ah_attr.dlid = ncclIbExtractFlid(&info->gid);
-	}
-        qpAttr.ah_attr.is_global = 1;
-        qpAttr.ah_attr.grh.dgid.global.subnet_prefix = info->gid.global.subnet_prefix;
-        qpAttr.ah_attr.grh.dgid.global.interface_id = info->gid.global.interface_id;
-        qpAttr.ah_attr.grh.sgid_index = sGidInfo->localGidIndex;
-	qpAttr.ah_attr.grh.hop_limit = 255;
+      uint16_t flid = ncclIbExtractFlid(&info->gid);
+      if (flid == 0) {
+        WARN("Warning: remote FLID configured as zero even when endpoints are on different subnets, using dlid as fallback");
+        qpAttr.ah_attr.dlid = info->lid;
+      } else {
+        qpAttr.ah_attr.dlid = ncclIbExtractFlid(&info->gid);
+      }
+      qpAttr.ah_attr.is_global = 1;
+      qpAttr.ah_attr.grh.dgid.global.subnet_prefix = info->gid.global.subnet_prefix;
+      qpAttr.ah_attr.grh.dgid.global.interface_id = info->gid.global.interface_id;
+      qpAttr.ah_attr.grh.sgid_index = sGidInfo->localGidIndex;
+      qpAttr.ah_attr.grh.hop_limit = 255;
     }
   }
   qpAttr.ah_attr.sl = sl;
   qpAttr.ah_attr.src_path_bits = 0;
   qpAttr.ah_attr.port_num = info->ib_port;
-  TRACE(NCCL_NET, "NET/IB : ncclIbRtrQp qpn=%u mtu=%d dst=%u ll=%u port=%u sl: %d tc: %d", qp->qp_num, info->mtu, dest_qp_num, info->link_layer, info->ib_port, qpAttr.ah_attr.sl, qpAttr.ah_attr.grh.traffic_class);
+  TRACE(NCCL_NET, "NET/IB: %s: qpn=%u mtu=%d dst=%u ll=%u port=%u sl: %d tc: %d", __func__, qp->qp_num, qpAttr.path_mtu, qpAttr.dest_qp_num, info->link_layer, qpAttr.ah_attr.port_num, qpAttr.ah_attr.sl, qpAttr.ah_attr.grh.traffic_class);
   NCCLCHECK(wrap_ibv_modify_qp(qp, &qpAttr, IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN | IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER));
   return ncclSuccess;
 }
@@ -465,6 +429,12 @@ fail:
 // establishment process.
 static ncclResult_t ncclIbSenderQpsCreate(ncclIbSendComm* comm, struct ncclIbConnectionMetadata* meta) {
   uint nqps = comm->base.nqps;
+  struct ncclIbQpCreateAttr qpCreateAttrs = {0};
+  qpCreateAttrs.type = IBV_QPT_RC;
+  qpCreateAttrs.accessFlags = IBV_ACCESS_REMOTE_WRITE;
+  qpCreateAttrs.maxRecvWorkRequest = 0;
+  // Send requests are sent using at most 2 messages (RDMA Write and RDMA Write with Immediate)
+  qpCreateAttrs.maxSendWorkRequest = 2*NET_IB_MAX_REQUESTS;
   for (int qpIndex = 0; qpIndex < nqps; qpIndex++) {
     // The QPs are created in a "striped" manner across the available devices.
     // For example, if there are 2 devices and 4 QPs, the QPs will be created
@@ -476,9 +446,21 @@ static ncclResult_t ncclIbSenderQpsCreate(ncclIbSendComm* comm, struct ncclIbCon
     ncclIbDev* ibDev = &ncclIbDevs[commDev->base.ibDevN];
     ncclIbQp* localQp = &comm->base.qps[qpIndex];
     ncclIbQpInfo* localQpInfo = &meta->qpInfo[qpIndex];
-    int qpAccessFlags = IBV_ACCESS_REMOTE_WRITE;
 
-    NCCLCHECK(ncclIbCreateQp(ibDev->portNum, &commDev->base, qpAccessFlags, &comm->base.stats, localQp));
+    qpCreateAttrs.ibPort = ibDev->portNum;
+    qpCreateAttrs.cq = commDev->base.cq;
+    qpCreateAttrs.pd = commDev->base.pd;
+    NCCLCHECK(ncclIbCreateQp(&qpCreateAttrs, &comm->base.stats, localQp));
+    INFO(NCCL_NET, "NET/IB: %s: QP created: port=%d dev=%d devName=%s ndevs=%d nmdevs=%d qp_num=%u pkey=%u pd=%p",
+        __func__,
+        ibDev->portNum,
+        commDev->base.ibDevN,
+        ncclIbDevs[commDev->base.ibDevN].devName,
+        ncclNIbDevs,
+        ncclNMergedIbDevs,
+        localQp->qp->qp_num,
+        (uint16_t)ncclParamIbPkey(),
+        commDev->base.pd);
     localQp->devIndex = devIndex;
 
     // Populate the metadata that will be delivered to the remote peer
@@ -492,6 +474,11 @@ static ncclResult_t ncclIbSenderQpsCreate(ncclIbSendComm* comm, struct ncclIbCon
       localQpInfo->ece_supported = 0;
     }
   }
+
+  if (comm->base.resiliency) {
+    ncclIbResiliencySenderCreateQps(comm->base.resiliency, &meta->resiliencyInfo);
+  }
+
   return ncclSuccess;
 }
 
@@ -502,7 +489,7 @@ static ncclResult_t ncclIbSenderQpsCreate(ncclIbSendComm* comm, struct ncclIbCon
 // Note that if ECE is supported, the function sets up the reduced ECE (which
 // was delivered from the receiver side) on the QPs before modifying the QPs
 // to RTR.
-static ncclResult_t ncclIbSenderQpsToRts(ncclIbSendComm* comm, int dev, struct ncclIbConnectionMetadata* remMeta) {
+static ncclResult_t ncclIbSenderQpsToRts(ncclIbSendComm* comm, struct ncclIbConnectionMetadata* remMeta) {
   uint nqps = comm->base.nqps;
   for (int qpIndex = 0; qpIndex < nqps; qpIndex++) {
     ncclIbQp* localQp = &comm->base.qps[qpIndex];
@@ -515,8 +502,7 @@ static ncclResult_t ncclIbSenderQpsToRts(ncclIbSendComm* comm, int dev, struct n
 
     if (remQpInfo->ece_supported) {
       // Set the reduced ECE received from the receiver side
-      INFO(NCCL_NET,"NET/IB: IbDev %d Port %d qpn %d set_ece={supported=%d, vendor_id=0x%x, options=0x%x, comp_mask=0x%x}",
-        commDev->base.ibDevN, ibDev->portNum, localQp->qp->qp_num, remQpInfo->ece_supported, remQpInfo->ece.vendor_id, remQpInfo->ece.options, remQpInfo->ece.comp_mask);
+      INFO(NCCL_NET,"NET/IB: %s: Set ECE: IbDev %d Port %d qp_num %d set_ece={supported=%d, vendor_id=0x%x, options=0x%x, comp_mask=0x%x}", __func__, commDev->base.ibDevN, ibDev->portNum, localQp->qp->qp_num, remQpInfo->ece_supported, remQpInfo->ece.vendor_id, remQpInfo->ece.options, remQpInfo->ece.comp_mask);
       NCCLCHECK(wrap_ibv_set_ece(localQp->qp, &remQpInfo->ece, &remQpInfo->ece_supported));
     }
 
@@ -524,6 +510,11 @@ static ncclResult_t ncclIbSenderQpsToRts(ncclIbSendComm* comm, int dev, struct n
     NCCLCHECK(ncclIbRtrQp(localQp->qp, &commDev->base.gidInfo, remQpInfo->qpn, remDevInfo, false, remMeta->tc, remMeta->sl));
     NCCLCHECK(ncclIbRtsQp(localQp->qp));
   }
+
+  if (comm->base.resiliency) {
+    NCCLCHECK(ncclIbResiliencySenderQpsToRts(comm->base.resiliency, remMeta));
+  }
+
   return ncclSuccess;
 }
 
@@ -549,6 +540,7 @@ ncclResult_t ncclIbConnect(void* ctx, int dev, void* opaqueHandle, void** sendCo
   stage->buffer = NULL;
 
   NCCLCHECK(ncclIbMalloc((void**)&comm, sizeof(struct ncclIbSendComm)));
+  NCCLCHECKGOTO(ncclIbSendCommInit(comm), ret, fail);
   NCCLCHECKGOTO(ncclIbStatsInit(&comm->base.stats), ret, fail);
   NCCLCHECKGOTO(ncclSocketInit(&comm->base.sock, &handle->connectAddr, handle->magic, ncclSocketTypeNetIb, NULL, 1), ret, fail);
   stage->comm = comm;
@@ -569,7 +561,6 @@ ib_connect_check:
 
   mergedDev = ncclIbMergedDevs + dev;
   comm->base.vProps = mergedDev->vProps;
-  comm->base.isSend = true;
   stage->state = ncclIbCommStateSendDevList;
   stage->offset = 0;
   struct ncclIbConnectionMetadata meta;
@@ -598,12 +589,28 @@ ib_recv_dev_list:
   remoteNqps = ncclParamIbQpsPerConn() * remoteVProps.ndevs;
   comm->base.nqps = remoteNqps > localNqps ? remoteNqps : localNqps; // Select max nqps (local or remote)
 
+  comm->base.nDataQps = std::max(comm->base.vProps.ndevs, remoteVProps.ndevs);
+
+  if (comm->base.resiliency) {
+    NCCLCHECK(ncclIbResiliencyDeviceNumSet(comm->base.resiliency, comm->base.vProps.ndevs, remoteVProps.ndevs));
+  }
+
   // Init PD, Ctx for each IB device
   comm->ar = 1; // Set to 1 for logic
+  // Sender's CQ size needs to accomodate the upper bound of number of send
+  // requests multiplied by the number of QPs used per request.
+  int cqSize;
+  cqSize = NET_IB_MAX_REQUESTS*ncclParamIbQpsPerConn();
   for (int i = 0; i < comm->base.vProps.ndevs; i++) {
     int ibDevN = comm->base.vProps.devs[i];
-    NCCLCHECKGOTO(ncclIbInitCommDevBase(ibDevN, &comm->devs[i].base, &comm->base.stats), ret, fail);
+    if (comm->base.resiliency) {
+      ncclIbResiliencyDataCqSizeGet(comm->base.resiliency, i, &cqSize);
+    }
+    NCCLCHECKGOTO(ncclIbInitCommDevBase(ibDevN, &comm->devs[i].base, &comm->base.stats, cqSize), ret, fail);
     comm->ar = comm->ar && ncclIbDevs[ibDevN].ar; // ADAPTIVE_ROUTING - if all merged devs have it enabled
+    if (comm->base.resiliency) {
+      NCCLCHECKGOTO(ncclIbResiliencyDevInit(comm->base.resiliency, i, &ncclIbDevs[ibDevN]), ret, fail);
+    }
   }
 
   memset(&meta, 0, sizeof(meta));
@@ -641,12 +648,12 @@ ib_recv_dev_list:
       // Print just the QPs for this dev
       if (comm->base.qps[q].devIndex == i) {
         if (devInfo->link_layer == IBV_LINK_LAYER_INFINIBAND) { // IB
-          INFO(NCCL_NET,"NET/IB: %s %d IbDev %d Port %d qpn %d mtu %d LID %d subnet-prefix %lu  FLID %d ctsFifoRkey=0x%x ctsFifoLkey=0x%x",
+          INFO(NCCL_NET,"NET/IB: %s: %s %d IbDev %d Port %d qp_num %d mtu %d LID %d subnet-prefix %lu  FLID %d ctsFifoRkey=0x%x ctsFifoLkey=0x%x", __func__,
                comm->base.vProps.ndevs > 2 ? "NCCL MergedDev" : "NCCL Dev",
                dev, commDev->base.ibDevN, ibDev->portNum, meta.qpInfo[q].qpn, devInfo->mtu, devInfo->lid,
                (uint64_t)devInfo->gid.global.subnet_prefix, ncclIbExtractFlid(&devInfo->gid), commDev->ctsFifoMr->rkey, commDev->ctsFifoMr->lkey);
         } else { // RoCE
-          INFO(NCCL_NET,"NET/IB: %s %d IbDev %d Port %d qpn %d mtu %d GID %ld (%lX/%lX) ctsFifoRkey=0x%x ctsFifoLkey=0x%x",
+          INFO(NCCL_NET,"NET/IB: %s: %s %d IbDev %d Port %d qp_num %d mtu %d GID %ld (%lX/%lX) ctsFifoRkey=0x%x ctsFifoLkey=0x%x", __func__,
                comm->base.vProps.ndevs > 2 ? "NCCL MergedDev" : "NCCL Dev", dev,
                commDev->base.ibDevN, ibDev->portNum, meta.qpInfo[q].qpn, devInfo->mtu,
                (int64_t)commDev->base.gidInfo.localGidIndex,
@@ -654,7 +661,7 @@ ib_recv_dev_list:
         }
         // Log ECE info
         if (meta.qpInfo[q].ece_supported) {
-          INFO(NCCL_NET,"NET/IB: IbDev %d Port %d qpn %d query_ece={supported=%d, vendor_id=0x%x, options=0x%x, comp_mask=0x%x}",
+          INFO(NCCL_NET,"NET/IB: %s: IbDev %d Port %d qp_num %d query_ece={supported=%d, vendor_id=0x%x, options=0x%x, comp_mask=0x%x}", __func__,
                commDev->base.ibDevN, ibDev->portNum, meta.qpInfo[q].qpn,
                meta.qpInfo[q].ece_supported, meta.qpInfo[q].ece.vendor_id, meta.qpInfo[q].ece.options, meta.qpInfo[q].ece.comp_mask);
         }
@@ -695,8 +702,6 @@ ib_connect:
 
   memcpy(&remMeta, stage->buffer, sizeof(ncclIbConnectionMetadata));
 
-  comm->base.nRemDevs = remMeta.ndevs;
-
   // ensure that the remote devices have the same link layer than the local devices used in the connection.
   if (comm->base.vProps.ndevs > 0) {
     int ibDev0 = comm->devs[0].base.ibDevN;
@@ -710,31 +715,34 @@ ib_connect:
     }
   }
 
-  // Copy remDevInfo for things like remGidInfo, remCmplsRecordsFifoAddr, etc.
-  for (int i = 0; i < remMeta.ndevs; i++) {
+  // Store the number of remote devices
+  comm->base.nRemDevs = remMeta.ndevs;
+
+  // Store the remote GID information per-device provided by the remote peer
+  for (int i = 0; i < comm->base.nRemDevs; i++) {
     comm->base.remDevs[i] = remMeta.devs[i];
     comm->base.remDevs[i].remoteGid.global.interface_id = comm->base.remDevs[i].gid.global.interface_id;
     comm->base.remDevs[i].remoteGid.global.subnet_prefix = comm->base.remDevs[i].gid.global.subnet_prefix;
   }
 
-  // Retain remote completion records info and prepare RDMA ops
+  // Store the completion records info provided by the remote
   comm->remCmplsRecords.addr = remMeta.addr;
-  for (int i = 0; i < remMeta.ndevs; i++) {
+  for (int i = 0; i < comm->base.nRemDevs; i++) {
     comm->remCmplsRecords.rkeys[i] = remMeta.devs[i].rkey;
+    if (comm->base.resiliency) {
+      NCCLCHECKGOTO(ncclIbResiliencyRemoteCompletionRecordsSet(comm->base.resiliency, comm->remCmplsRecords.rkeys[i], comm->remCmplsRecords.addr, i), ret, fail);
+    }
   }
+
   for (int i=0; i < comm->base.vProps.ndevs; i++) {
     ncclIbSendCommDev* commDev = comm->devs + i;
     NCCLCHECKGOTO(wrap_ibv_reg_mr(&commDev->cmplsRecordsMr, comm->devs[i].base.pd, &comm->remCmplsRecords.elems, sizeof(comm->remCmplsRecords.elems), IBV_ACCESS_REMOTE_WRITE|IBV_ACCESS_LOCAL_WRITE|IBV_ACCESS_REMOTE_READ), ret, fail);
     comm->devs[i].sge.lkey = comm->devs[i].cmplsRecordsMr->lkey;
   }
-  comm->base.nRemDevs = remMeta.ndevs;
 
-  NCCLCHECKGOTO(ncclIbSenderQpsToRts(comm, dev, &remMeta), ret, fail);
-
-  comm->base.nDataQps = std::max(comm->base.vProps.ndevs, comm->base.nRemDevs);
+  NCCLCHECKGOTO(ncclIbSenderQpsToRts(comm, &remMeta), ret, fail);
 
   comm->base.ready = 1;
-  comm->base.splitDataOnQps = ncclParamIbSplitDataOnQps();
   stage->state = ncclIbCommStateConnected;
   stage->offset = 0;
 
@@ -803,6 +811,17 @@ ncclResult_t ncclIbCheckVProps(ncclNetVDeviceProps_t* vProps1, ncclNetVDevicePro
 // side (sender) as part of the connection establishment process.
 static ncclResult_t ncclIbReceiverQpsCreateToRts(ncclIbRecvComm* rComm, struct ncclIbConnectionMetadata* remMeta, struct ncclIbConnectionMetadata* meta) {
   uint nqps = rComm->base.nqps;
+  struct ncclIbQpCreateAttr qpCreateAttrs = {0};
+  qpCreateAttrs.type = IBV_QPT_RC;
+  // Remote Atomic operations are used for GIN!
+  qpCreateAttrs.accessFlags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
+  qpCreateAttrs.maxRecvWorkRequest = NET_IB_MAX_REQUESTS;
+  // CTS messages are posted using send work requests.
+  // Note that because only specific CTS messages are signaled, the send queue
+  // size needs to be double the number of max requests.
+  // When resiliency is enabled, the number of send work requests is as the
+  // number of max requests because every CTS message is signaled.
+  qpCreateAttrs.maxSendWorkRequest = NET_IB_MAX_REQUESTS * (rComm->base.resiliency ? 1 : 2);
   for (int qpIndex = 0; qpIndex < nqps; qpIndex++) {
     // The QPs are created in a "striped" manner across the available devices.
     // For example, if there are 2 devices and 4 QPs, the QPs will be created
@@ -821,7 +840,23 @@ static ncclResult_t ncclIbReceiverQpsCreateToRts(ncclIbRecvComm* rComm, struct n
     localQp->remDevIdx = remDevIndex;
     localQp->devIndex = devIndex;
 
-    NCCLCHECK(ncclIbCreateQp(ibDev->portNum, &rCommDev->base, IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC, &rComm->base.stats, localQp));
+    qpCreateAttrs.ibPort = ibDev->portNum;
+    qpCreateAttrs.cq = rCommDev->base.cq;
+    qpCreateAttrs.pd = rCommDev->base.pd;
+    if (rComm->base.resiliency) {
+      ncclIbResiliencyDataRqSizeGet(rComm->base.resiliency, devIndex, &qpCreateAttrs.maxRecvWorkRequest);
+    }
+    NCCLCHECK(ncclIbCreateQp(&qpCreateAttrs, &rComm->base.stats, localQp));
+    INFO(NCCL_NET, "NET/IB: %s: QP created: port=%d dev=%d devName=%s ndevs=%d nmdevs=%d qp_num=%u pkey=%u pd=%p",
+        __func__,
+        ibDev->portNum,
+        rCommDev->base.ibDevN,
+        ncclIbDevs[rCommDev->base.ibDevN].devName,
+        ncclNIbDevs,
+        ncclNMergedIbDevs,
+        localQp->qp->qp_num,
+        (uint16_t)ncclParamIbPkey(),
+        rCommDev->base.pd);
 
     localQpInfo->qpn      = localQp->qp->qp_num;
     localQpInfo->devIndex = localQp->devIndex;
@@ -844,6 +879,63 @@ static ncclResult_t ncclIbReceiverQpsCreateToRts(ncclIbRecvComm* rComm, struct n
     // to return it to the requestor (sender).
     if (remQpInfo->ece_supported && localQpInfo->ece_supported) {
       NCCLCHECK(wrap_ibv_query_ece(localQp->qp, &localQpInfo->ece, &localQpInfo->ece_supported));
+    }
+  }
+
+  if (rComm->flushEnabled) {
+    for (int i = 0; i < rComm->base.vProps.ndevs; i++) {
+      ncclIbRecvCommDev* rCommDev = &rComm->devs[i];
+      ncclIbDev* ibDev = &ncclIbDevs[rCommDev->base.ibDevN];
+
+      struct ncclIbQpCreateAttr qpCreateAttrs = {0};
+      qpCreateAttrs.type = IBV_QPT_RC;
+      qpCreateAttrs.ibPort = ibDev->portNum;
+      qpCreateAttrs.cq = rCommDev->base.cq;
+      qpCreateAttrs.pd = rCommDev->base.pd;
+      qpCreateAttrs.accessFlags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ;
+      qpCreateAttrs.maxRecvWorkRequest = 0;
+      qpCreateAttrs.maxSendWorkRequest = NET_IB_MAX_REQUESTS;
+      NCCLCHECK(ncclIbCreateQp(&qpCreateAttrs, &rComm->base.stats, &rCommDev->gpuFlush.qp));
+      INFO(NCCL_NET, "NET/IB: %s: QP created: port=%d dev=%d devName=%s ndevs=%d nmdevs=%d qp_num=%u pkey=%u pd=%p",
+          __func__,
+          ibDev->portNum,
+          rCommDev->base.ibDevN,
+          ncclIbDevs[rCommDev->base.ibDevN].devName,
+          ncclNIbDevs,
+          ncclNMergedIbDevs,
+          rCommDev->gpuFlush.qp.qp->qp_num,
+          (uint16_t)ncclParamIbPkey(),
+          rCommDev->base.pd);
+      struct ncclIbDevInfo devInfo;
+      devInfo.lid         = ibDev->portAttr.lid;
+      devInfo.link_layer  = ibDev->portAttr.link_layer;
+      devInfo.ib_port     = ibDev->portNum;
+      devInfo.gid.global.subnet_prefix        = rCommDev->base.gidInfo.localGid.global.subnet_prefix;
+      devInfo.gid.global.interface_id         = rCommDev->base.gidInfo.localGid.global.interface_id;
+      devInfo.mtu         = ibDev->portAttr.active_mtu;
+      NCCLCHECK(ncclIbRtrQp(rCommDev->gpuFlush.qp.qp, &rCommDev->base.gidInfo, rCommDev->gpuFlush.qp.qp->qp_num, &devInfo, false, remMeta->tc, remMeta->sl));
+      NCCLCHECK(ncclIbRtsQp(rCommDev->gpuFlush.qp.qp));
+    }
+  }
+
+  if (rComm->base.resiliency) {
+    NCCLCHECK(ncclIbResiliencyReceiverQpsCreateToRts(rComm->base.resiliency, remMeta, &meta->resiliencyInfo));
+  }
+
+  return ncclSuccess;
+}
+
+ncclResult_t ncclIbReceiverPrePostReceiveWorkRequests(struct ncclIbRecvComm* recvComm) {
+  uint32_t nRecvWorkRequestsPerQp = NET_IB_MAX_REQUESTS;
+  int nqps = recvComm->base.nqps;
+  for (int i = 0; i < nqps; i++) {
+    struct ncclIbQp* dataQp = &recvComm->base.qps[i];
+    if (recvComm->base.resiliency) {
+      ncclIbResiliencyDataRqSizeGet(recvComm->base.resiliency, dataQp->devIndex, &nRecvWorkRequestsPerQp);
+    }
+    INFO(NCCL_NET, "NET/IB: %s: Pre-posting %d Receive WQEs on QP %d (qp_num=%d, comm=%p) (out of total %d QPs)", __func__, nRecvWorkRequestsPerQp, i, dataQp->qp->qp_num, recvComm, nqps);
+    for (int j = 0; j < nRecvWorkRequestsPerQp; j++) {
+      NCCLCHECK(ncclIbPostRecvWorkRequest(dataQp->qp, &recvComm->ibRecvWorkRequest));
     }
   }
   return ncclSuccess;
@@ -876,6 +968,7 @@ ncclResult_t ncclIbAccept(void* listenComm, void** recvComm, ncclNetDeviceHandle
   }
 
   NCCLCHECK(ncclIbMalloc((void**)&rComm, sizeof(struct ncclIbRecvComm)));
+  NCCLCHECKGOTO(ncclIbRecvCommInit(rComm), ret, fail);
   NCCLCHECKGOTO(ncclIbStatsInit(&rComm->base.stats), ret, fail);
   stage->comm = rComm;
   stage->state = ncclIbCommStateAccept;
@@ -910,11 +1003,16 @@ ib_recv_dev_list:
   NCCLCHECK(ncclIbCheckVProps(&mergedDev->vProps, &remoteVProps));
   rComm->base.vProps = mergedDev->vProps;
   memcpy(stage->buffer, &rComm->base.vProps, sizeof(ncclNetVDeviceProps_t));
-  rComm->base.isSend = false;
   int localNqps, remoteNqps;
   localNqps  = ncclParamIbQpsPerConn() * rComm->base.vProps.ndevs; // We must have at least 1 qp per-device
   remoteNqps = ncclParamIbQpsPerConn() * remoteVProps.ndevs;
   rComm->base.nqps = remoteNqps > localNqps ? remoteNqps : localNqps; // Select max nqps (local or remote)
+
+  rComm->base.nDataQps = std::max(rComm->base.vProps.ndevs, remoteVProps.ndevs);
+
+  if (rComm->base.resiliency) {
+    NCCLCHECK(ncclIbResiliencyDeviceNumSet(rComm->base.resiliency, rComm->base.vProps.ndevs, remoteVProps.ndevs));
+  }
 
   stage->offset = 0;
   stage->state = ncclIbCommStateSendDevList;
@@ -940,19 +1038,30 @@ ib_recv:
   struct ncclIbRecvCommDev* rCommDev;
 
   mergedDev = ncclIbMergedDevs + lComm->dev;
-  rComm->base.nRemDevs = remMeta.ndevs;
-  if (rComm->base.nRemDevs != rComm->base.vProps.ndevs) {
+
+  if (remMeta.ndevs != rComm->base.vProps.ndevs) {
     INFO(NCCL_NET, "NET/IB : Local mergedDev %s has a different number of devices=%d as remote %s %d",
-      mergedDev->devName, rComm->base.vProps.ndevs, remMeta.devName, rComm->base.nRemDevs);
+      mergedDev->devName, rComm->base.vProps.ndevs, remMeta.devName, remMeta.ndevs);
   }
 
   // Metadata to send back to requestor (sender)
   struct ncclIbConnectionMetadata meta;
   memset(&meta, 0, sizeof(meta));
+  // Receiver's CQ size needs to accomodate receive requests that can generate
+  // up to 2 completions (one for the CTS message and one for the completion
+  // of a receive request) per QP, in the worst case.
+  int cqSize;
+  cqSize = 2*NET_IB_MAX_REQUESTS*ncclParamIbQpsPerConn();
   for (int i = 0; i < rComm->base.vProps.ndevs; i++) {
     rCommDev = rComm->devs + i;
     ibDevN = rComm->base.vProps.devs[i];
-    NCCLCHECKGOTO(ncclIbInitCommDevBase(ibDevN, &rCommDev->base, &rComm->base.stats), ret, fail);
+    if (rComm->base.resiliency) {
+      ncclIbResiliencyDataCqSizeGet(rComm->base.resiliency, i, &cqSize);
+    }
+    NCCLCHECKGOTO(ncclIbInitCommDevBase(ibDevN, &rCommDev->base, &rComm->base.stats, cqSize), ret, fail);
+    if (rComm->base.resiliency) {
+      NCCLCHECKGOTO(ncclIbResiliencyDevInit(rComm->base.resiliency, i, &ncclIbDevs[ibDevN]), ret, fail);
+    }
     ibDev = ncclIbDevs + ibDevN;
     NCCLCHECKGOTO(ncclIbGetGidIndex(ibDev->context, ibDev->portNum, &ibDev->portAttr, &rCommDev->base.gidInfo.localGidIndex), ret, fail);
     NCCLCHECKGOTO(wrap_ibv_query_gid(ibDev->context, ibDev->portNum, rCommDev->base.gidInfo.localGidIndex, &rCommDev->base.gidInfo.localGid), ret, fail);
@@ -965,11 +1074,9 @@ ib_recv:
     }
   }
 
-  // Copy remGidInfo, remCtsFifoAddr, etc.
+  // Before assigning information about remote devices provided by the remote,
+  // ensure that they are compatible with local devices
   for (int i = 0; i < remMeta.ndevs; i++) {
-    rComm->base.remDevs[i] = remMeta.devs[i];
-    rComm->base.remDevs[i].remoteGid.global.interface_id  = rComm->base.remDevs[i].gid.global.interface_id;
-    rComm->base.remDevs[i].remoteGid.global.subnet_prefix = rComm->base.remDevs[i].gid.global.subnet_prefix;
     if (remMeta.devs[i].link_layer != link_layer) {
       int ibDev0 = rComm->devs[0].base.ibDevN;
       WARN("NET/IB : Remote %s device is incompatible with the local [%d]%s:%d/%s. Try selecting NICs of only one link type using NCCL_IB_HCA",
@@ -978,23 +1085,39 @@ ib_recv:
     }
   }
 
-  NCCLCHECKGOTO(ncclIbReceiverQpsCreateToRts(rComm, &remMeta, &meta), ret, fail);
+  // Store the number of remote devices provided by the remote peer
+  rComm->base.nRemDevs = remMeta.ndevs;
 
+  // Store the remote GID information per-device provided by the remote peer
+  for (int i = 0; i < rComm->base.nRemDevs; i++) {
+    rComm->base.remDevs[i] = remMeta.devs[i];
+    rComm->base.remDevs[i].remoteGid.global.interface_id  = rComm->base.remDevs[i].gid.global.interface_id;
+    rComm->base.remDevs[i].remoteGid.global.subnet_prefix = rComm->base.remDevs[i].gid.global.subnet_prefix;
+  }
+
+  // Determine if Flush is enabled for this Comm. Must be done before creating
+  // QPs. If Flush is enabled, extra QPs will be created for Flush operations.
   rComm->flushEnabled = ((ncclIbGdrSupport() == ncclSuccess || ncclIbDmaBufSupport(lComm->dev) == ncclSuccess)
                             && (ncclParamIbGdrFlushDisable() == 0)) ? 1 : 0;
 
-  // Retain remote CTS FIFO info and prepare my RDMA ops
+  NCCLCHECKGOTO(ncclIbReceiverQpsCreateToRts(rComm, &remMeta, &meta), ret, fail);
+  if (rComm->prepostReceiveWorkRequests) {
+    NCCLCHECKGOTO(ncclIbReceiverPrePostReceiveWorkRequests(rComm), ret, fail);
+  }
+
+  // Store the remote CTS FIFO info provided by the remote peer
   rComm->remCtsFifo.addr = remMeta.addr;
-  for (int i = 0; i < remMeta.ndevs; i++) {
+  for (int i = 0; i < rComm->base.nRemDevs; i++) {
     rComm->remCtsFifo.rkeys[i] = remMeta.devs[i].rkey;
   }
+
   for (int i = 0; i < rComm->base.vProps.ndevs; i++) {
     rCommDev = rComm->devs + i;
 
     NCCLCHECKGOTO(wrap_ibv_reg_mr(&rCommDev->ctsFifoMr, rCommDev->base.pd, &rComm->remCtsFifo.elems, sizeof(rComm->remCtsFifo.elems), IBV_ACCESS_REMOTE_WRITE|IBV_ACCESS_LOCAL_WRITE|IBV_ACCESS_REMOTE_READ), ret, fail);
     rCommDev->sge.lkey = rCommDev->ctsFifoMr->lkey;
 
-    // Prepare completion records
+    // Register completion records
     NCCLCHECKGOTO(wrap_ibv_reg_mr(&rCommDev->cmplsRecordsMr, rCommDev->base.pd, &rComm->cmplsRecords, sizeof(rComm->cmplsRecords), IBV_ACCESS_LOCAL_WRITE|IBV_ACCESS_REMOTE_WRITE|IBV_ACCESS_REMOTE_READ), ret, fail);
     meta.devs[i].rkey = rCommDev->cmplsRecordsMr->rkey;
 
@@ -1011,16 +1134,6 @@ ib_recv:
       rCommDev->gpuFlush.sge.addr = (uint64_t)&rComm->gpuFlushHostMem;
       rCommDev->gpuFlush.sge.length = 1;
       rCommDev->gpuFlush.sge.lkey = rCommDev->gpuFlush.hostMr->lkey;
-      NCCLCHECKGOTO(ncclIbCreateQp(ibDev->portNum, &rCommDev->base, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ, &rComm->base.stats, &rCommDev->gpuFlush.qp), ret, fail);
-      struct ncclIbDevInfo devInfo;
-      devInfo.lid         = ibDev->portAttr.lid;
-      devInfo.link_layer  = ibDev->portAttr.link_layer;
-      devInfo.ib_port     = ibDev->portNum;
-      devInfo.gid.global.subnet_prefix        = rCommDev->base.gidInfo.localGid.global.subnet_prefix;
-      devInfo.gid.global.interface_id         = rCommDev->base.gidInfo.localGid.global.interface_id;
-      devInfo.mtu         = ibDev->portAttr.active_mtu;
-      NCCLCHECKGOTO(ncclIbRtrQp(rCommDev->gpuFlush.qp.qp, &rCommDev->base.gidInfo, rCommDev->gpuFlush.qp.qp->qp_num, &devInfo, false, remMeta.tc, remMeta.sl), ret, fail);
-      NCCLCHECKGOTO(ncclIbRtsQp(rCommDev->gpuFlush.qp.qp), ret, fail);
     }
 
     // Fill Handle
@@ -1037,7 +1150,6 @@ ib_recv:
 
   meta.ndevs = rComm->base.vProps.ndevs;
   strncpy(meta.devName, mergedDev->devName, MAX_MERGED_DEV_NAME);
-  rComm->base.nDataQps = std::max(rComm->base.vProps.ndevs, rComm->base.nRemDevs);
 
   stage->state = ncclIbCommStateSend;
   stage->offset = 0;
@@ -1059,8 +1171,6 @@ ib_recv_ready:
   NCCLCHECKGOTO(ncclSocketProgress(NCCL_SOCKET_RECV,  &rComm->base.sock, &rComm->base.ready, sizeof(int), &stage->offset), ret, fail);
   if (stage->offset != sizeof(int)) return ncclSuccess;
 
-  rComm->base.splitDataOnQps = ncclParamIbSplitDataOnQps();
-
   *recvComm = rComm;
 exit:
   /* reset lComm stage */
@@ -1081,15 +1191,24 @@ ncclResult_t ncclIbCloseSend(void* sendComm) {
     for (int q = 0; q < comm->base.nqps; q++)
       if (comm->base.qps[q].qp != NULL) NCCLCHECK(wrap_ibv_destroy_qp(comm->base.qps[q].qp));
 
+    if (comm->base.resiliency) {
+      NCCLCHECK(ncclIbResiliencyClose(comm->base.resiliency));
+    }
+
     for (int i = 0; i < comm->base.vProps.ndevs; i++) {
       struct ncclIbSendCommDev* commDev = comm->devs + i;
       if (commDev->ctsFifoMr != NULL) NCCLCHECK(wrap_ibv_dereg_mr(commDev->ctsFifoMr));
       if (commDev->cmplsRecordsMr != NULL) NCCLCHECK(wrap_ibv_dereg_mr(commDev->cmplsRecordsMr));
       if (commDev->putSignalScratchpadMr != NULL)
         NCCLCHECK(wrap_ibv_dereg_mr(commDev->putSignalScratchpadMr));
+      if (comm->base.resiliency) {
+         NCCLCHECK(ncclIbResiliencyDevDestroy(comm->base.resiliency, i));
+      }
       NCCLCHECK(ncclIbDestroyBase(&commDev->base));
     }
-
+    if (comm->base.resiliency) {
+      NCCLCHECK(ncclIbResiliencyDestroy(&comm->base.resiliency));
+    }
     free(comm);
   }
   TIME_PRINT("IB");
@@ -1104,6 +1223,10 @@ ncclResult_t ncclIbCloseRecv(void* recvComm) {
     for (int q = 0; q < comm->base.nqps; q++)
       if (comm->base.qps[q].qp != NULL) NCCLCHECK(wrap_ibv_destroy_qp(comm->base.qps[q].qp));
 
+    if (comm->base.resiliency) {
+      NCCLCHECK(ncclIbResiliencyClose(comm->base.resiliency));
+    }
+
     for (int i = 0; i < comm->base.vProps.ndevs; i++) {
       struct ncclIbRecvCommDev* commDev = comm->devs + i;
       if (comm->flushEnabled) {
@@ -1112,7 +1235,13 @@ ncclResult_t ncclIbCloseRecv(void* recvComm) {
       }
       if (commDev->ctsFifoMr != NULL) NCCLCHECK(wrap_ibv_dereg_mr(commDev->ctsFifoMr));
       if (commDev->cmplsRecordsMr != NULL) NCCLCHECK(wrap_ibv_dereg_mr(commDev->cmplsRecordsMr));
+      if (comm->base.resiliency) {
+        ncclIbResiliencyDevDestroy(comm->base.resiliency, i);
+      }
       NCCLCHECK(ncclIbDestroyBase(&commDev->base));
+    }
+    if (comm->base.resiliency) {
+      NCCLCHECK(ncclIbResiliencyDestroy(&comm->base.resiliency));
     }
     free(comm);
   }

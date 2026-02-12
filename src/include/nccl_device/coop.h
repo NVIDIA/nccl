@@ -148,7 +148,7 @@ struct ncclCoopCta {
   NCCL_DEVICE_INLINE int thread_rank() const { return threadIdx.x; }
   NCCL_DEVICE_INLINE int size() const { return blockDim.x; }
   NCCL_DEVICE_INLINE int num_threads() const { return blockDim.x; }
-  NCCL_DEVICE_INLINE void sync() { __syncthreads(); }
+  NCCL_DEVICE_INLINE void sync() { __barrier_sync(0); }
 };
 #endif
 

@@ -35,8 +35,7 @@ ncclResult_t ncclInitKernelsForDevice(int cudaArch, int maxSharedMem, size_t* ma
 
   if (maxStackSize) *maxStackSize = 0;
   int carveout = ncclParamL1SharedMemoryCarveout();
-  int ncclMaxSharedMem = ncclShmemDynamicSize(cudaArch);
-
+  int maxDynamicSmem = 1<<30;
   int driverVersion;
   NCCLCHECK(ncclCudaDriverVersion(&driverVersion));
 
@@ -65,19 +64,24 @@ ncclResult_t ncclInitKernelsForDevice(int cudaArch, int maxSharedMem, size_t* ma
           result, ignore1);
       ignore1:;
       }
-      if (ncclMaxSharedMem != 0) {
-        int sharedMemSize = ncclMaxSharedMem;
-        if (sharedMemSize > (maxSharedMem-attr.sharedSizeBytes)) {
-          WARN("cudaArch %d ncclMaxSharedMem %d exceeds device/fn maxSharedMem %zu",
-               cudaArch, sharedMemSize, maxSharedMem-attr.sharedSizeBytes);
-          return ncclSystemError;
+      { int dynSmem = maxSharedMem - attr.sharedSizeBytes;
+        if (sym) {
+          ncclSymkKernelMaxDynamicSmem[k] = dynSmem;
+        } else {
+          maxDynamicSmem = std::min(maxDynamicSmem, dynSmem);
         }
         CUDACHECKGOTO(cudaFuncSetAttribute(fn,
-          cudaFuncAttributeMaxDynamicSharedMemorySize, sharedMemSize),
+          cudaFuncAttributeMaxDynamicSharedMemorySize, dynSmem),
           result, next_kernel);
       }
     next_kernel:;
     }
+  }
+
+  if (ncclShmemDynamicSize(cudaArch) > maxDynamicSmem) {
+    WARN("cudaArch %d dynamic smem %d exceeds device/fn maxSharedMem %d",
+         cudaArch, ncclShmemDynamicSize(cudaArch), maxDynamicSmem);
+    return ncclSystemError;
   }
   return result;
 }
@@ -389,7 +393,8 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
   int fnOpTyIndices[ncclNumFuncs*ncclNumDevRedOps*ncclNumTypes];
   int fnOpTyCount = 0;
 
-  if (comm->symmetricSupport) {
+  bool oneLsaTeam = ncclTeamLsa(comm).nRanks == comm->nRanks;
+  if (comm->symmetricSupport && (comm->globalGinSupport == NCCL_GIN_CONNECTION_FULL || oneLsaTeam)) {
     NCCLCHECK(ncclMakeSymmetricTaskList(comm, task, &planner->collSymTaskQueue, &task));
   }
 
@@ -1199,7 +1204,7 @@ namespace {
       struct ncclComm* comm, struct ncclCommEventCallback* cb
     ) {
     struct uploadWork_cleanup_t* me = (struct uploadWork_cleanup_t*)cb;
-    free(me->hostBuf);
+    ncclOsAlignedFree(me->hostBuf);
     CUDACHECK(cudaEventDestroy(me->base.event));
     free(me);
     return ncclSuccess;
@@ -1231,7 +1236,7 @@ static ncclResult_t uploadWork(struct ncclComm* comm, struct ncclKernelPlan* pla
   case ncclDevWorkStorageTypePersistent:
     // We rely on 16-byte alignment
     #if __cplusplus >= 201103L
-    fifoBufHost = aligned_alloc(16, ROUNDUP(workBytes, 16));
+    fifoBufHost = ncclOsAlignedAlloc(16, ROUNDUP(workBytes, 16));
     #else
     static_assert(16 <= alignof(max_align_t), "We rely on 16-byte alignment.");
     fifoBufHost = malloc(workBytes);
@@ -1312,7 +1317,7 @@ static ncclResult_t uploadWork(struct ncclComm* comm, struct ncclKernelPlan* pla
       if (mode != cudaStreamCaptureModeRelaxed) (void)cudaThreadExchangeStreamCaptureMode(&mode);
       return result;
     fail:
-      if (!cleanup) free(fifoBufHost);
+      if (!cleanup) ncclOsAlignedFree(fifoBufHost);
       goto finish_scope;
     } break;
   default: break;
@@ -1676,7 +1681,7 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
   void* sym = plan->kernelFn;
   dim3 grid = {(unsigned)nChannels, 1, 1};
   dim3 block = {(unsigned)plan->threadPerBlock, 1, 1};
-  int smem = ncclShmemDynamicSize(comm->cudaArch);
+  int smem = plan->isSymColl ? plan->kernelDynSmem : ncclShmemDynamicSize(comm->cudaArch);
   cudaStream_t launchStream = planner->streams->stream;
 
   NCCLCHECK(ncclProfilerStartKernelLaunchEvent(plan, launchStream));
@@ -2539,14 +2544,14 @@ static ncclResult_t p2pTaskAppend(
             // shared comms together.
             comm->channels[channelId].peers[peer]->send[1].hasSeen = 1;
             comm->channels[channelId].peers[peer]->send[1].p2pOnly = 1;
-            comm->connectSend[peer] |= (1UL<<channelId);
+            comm->connectSend[peer] |= (1ULL<<channelId);
             ncclGroupCommPreconnect(comm);
           }
         } else {
           if (comm->channels[channelId].peers[peer]->recv[1].hasSeen == 0) { // P2P uses only 1 connector
             comm->channels[channelId].peers[peer]->recv[1].hasSeen = 1;
             comm->channels[channelId].peers[peer]->recv[1].p2pOnly = 1;
-            comm->connectRecv[peer] |= (1UL<<channelId);
+            comm->connectRecv[peer] |= (1ULL<<channelId);
             ncclGroupCommPreconnect(comm);
           }
         }
@@ -2688,13 +2693,8 @@ static ncclResult_t rmaTaskAppend(
 
   void const* srcBuff = info->sendbuff;
 
-  if (!comm->symmetricSupport){
-    WARN("One sided RMA: symmetric registration is not supported in this communicator.");
-    return ncclInvalidArgument;
-  }
-
-  if (!comm->rmaProxySupport && comm->nNodes > 1) {
-    WARN("One sided RMA: RMA proxy is not supported in this communicator.");
+  if (!comm->hostRmaSupport) {
+    WARN("One sided RMA: host RMA is not supported in this communicator.");
     return ncclInvalidArgument;
   }
 
@@ -2995,10 +2995,12 @@ ncclResult_t ncclEnqueueCheck(struct ncclInfo* info) {
   // Check whether communicator is ready to communicate
   NCCLCHECKGOTO(ncclCommEnsureReady(info->comm), ret, fail);
 
-  if (info->comm->checkPointers) {
+  if (info->comm->checkMode != ncclCheckModeDefault) {
     CUDACHECKGOTO(cudaGetDevice(&devOld), ret, fail);
     CUDACHECKGOTO(cudaSetDevice(info->comm->cudaDev), ret, fail);
   }
+  // If info->comm->checkMode == ncclCheckModeDebugGlobal, ArgsCheck will enqueue info
+  // for collectives and the pairs of peers for sendrecv for global check later
   NCCLCHECKGOTO(ArgsCheck(info), ret, fail);
 
   INFO(NCCL_COLL,"%s: opCount %lx sendbuff %p recvbuff %p count %zu datatype %d op %d root %d comm %p [nranks=%d] stream %p",

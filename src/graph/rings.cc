@@ -40,7 +40,7 @@ ncclResult_t ncclBuildRings(int nrings, int* rings, int rank, int nranks, int* p
 
     int current = rank;
     for (int i=0; i<nranks; i++) {
-      rankFound[current/64] |= (1UL<<(current%64));
+      rankFound[current/64] |= (1ULL<<(current%64));
       rings[r*nranks+i] = current;
       current = next[r*nranks+current];
     }
@@ -53,7 +53,7 @@ ncclResult_t ncclBuildRings(int nrings, int* rings, int rank, int nranks, int* p
     }
     // Check that all ranks are there
     for (int i=0; i<nranks; i++) {
-      uint64_t bits = rankFound[i/64], mask = 1<<(i%64);
+      uint64_t bits = rankFound[i/64], mask = 1ULL<<(i%64);
       // Fast check 64 ranks at a time
       if (mask == 1 && bits == 0xffffffffffffffff) { i += 63; continue; }
       if ((bits & mask) == 0) {

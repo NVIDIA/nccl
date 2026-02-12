@@ -165,6 +165,14 @@ enum doca_verbs_qp_atomic_type {
 };
 
 /**
+ * @brief DOCA Verbs QP Send DBR Mode.
+ */
+enum doca_verbs_qp_send_dbr_mode {
+    DOCA_VERBS_QP_SEND_DBR_MODE_DBR_VALID = 0x0,
+    DOCA_VERBS_QP_SEND_DBR_MODE_NO_DBR_EXT = 0x1,
+};
+
+/**
  * @brief Verbs QP attributes
  *
  * @details These defines can be used with doca_verbs_qp_modify() to set QP attributes.
@@ -814,6 +822,53 @@ doca_error_t doca_verbs_qp_init_attr_set_core_direct_master(
  * min_rnr_timer attribute.
  */
 uint8_t doca_verbs_qp_init_attr_get_core_direct_master(
+    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr);
+
+/**
+ * @brief Set Send DBR Mode for verbs_qp_init_attr
+ *
+ * @param [in] verbs_qp_init_attr
+ * Pointer to verbs_qp_init_attr instance.
+ * @param [in] send_dbr_mode
+ * Send DBR Mode attribute.
+ */
+doca_error_t doca_verbs_qp_init_attr_set_send_dbr_mode(
+    struct doca_verbs_qp_init_attr *verbs_qp_init_attr,
+    enum doca_verbs_qp_send_dbr_mode send_dbr_mode);
+
+/**
+ * @brief Get Send DBR Mode attribute from verbs_qp_init_attr
+ *
+ * @param [in] verbs_qp_init_attr
+ * Pointer to verbs_qp_init_attr instance.
+ *
+ * @return
+ * Send DBR Mode attribute.
+ */
+enum doca_verbs_qp_send_dbr_mode doca_verbs_qp_init_attr_get_send_dbr_mode(
+    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr);
+
+/**
+ * @brief Set the emulate no dbr ext flag for verbs_qp_init_attr
+ *
+ * @param [in] verbs_qp_init_attr
+ * Pointer to verbs_qp_init_attr instance.
+ * @param [in] emulate_no_dbr_ext
+ * The emulate no dbr ext flag.
+ */
+doca_error_t doca_verbs_qp_init_attr_set_emulate_no_dbr_ext(
+    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, bool emulate_no_dbr_ext);
+
+/**
+ * @brief Get the emulate no dbr ext flag from verbs_qp_init_attr
+ *
+ * @param [in] verbs_qp_init_attr
+ * Pointer to verbs_qp_init_attr instance.
+ *
+ * @return
+ * The emulate no dbr ext flag.
+ */
+bool doca_verbs_qp_init_attr_get_emulate_no_dbr_ext(
     const struct doca_verbs_qp_init_attr *verbs_qp_init_attr);
 
 /**
@@ -1653,6 +1708,29 @@ void *doca_verbs_qp_get_uar_addr(const struct doca_verbs_qp *verbs_qp);
 uint32_t doca_verbs_qp_get_qpn(const struct doca_verbs_qp *verbs_qp);
 
 /**
+ * @brief Get the send dbr mode of a DOCA Verbs Queue Pair instance.
+ *
+ * @param [in] verbs_qp
+ * Pointer to verbs_qp instance.
+ *
+ * @return
+ * The send dbr mode.
+ */
+enum doca_verbs_qp_send_dbr_mode doca_verbs_qp_get_send_dbr_mode(
+    const struct doca_verbs_qp *verbs_qp);
+
+/**
+ * @brief Get the emulate no dbr ext flag of a DOCA Verbs Queue Pair instance.
+ *
+ * @param [in] verbs_qp
+ * Pointer to verbs_qp instance.
+ *
+ * @return
+ * The emulate no dbr ext flag.
+ */
+bool doca_verbs_qp_get_emulate_no_dbr_ext(const struct doca_verbs_qp *verbs_qp);
+
+/**
  * @brief Create a DOCA Verbs CQ Attributes instance.
  *
  * @param [out] verbs_cq_attr
@@ -2310,6 +2388,18 @@ doca_error_t doca_verbs_device_attr_get_is_qp_type_supported(
     const struct doca_verbs_device_attr *verbs_device_attr, uint32_t qp_type);
 
 /**
+ * @brief Get the no DBR-ext support flag of the device.
+ *
+ * @param [in] verbs_device_attr
+ * Pointer to doca_verbs_device_attr instance.
+ *
+ * @return
+ * The no DBR-ext support flag.
+ */
+uint8_t doca_verbs_device_attr_get_send_dbr_mode_no_dbr_ext(
+    const struct doca_verbs_device_attr *verbs_device_attr);
+
+/**
  * @brief Create an instance of DOCA Verbs UMEM.
  *
  * @param [in] context
@@ -2459,6 +2549,17 @@ doca_error_t doca_verbs_uar_id_get(const struct doca_verbs_uar *uar, uint32_t *i
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
 doca_error_t doca_verbs_uar_reg_addr_get(const struct doca_verbs_uar *uar_obj, void **reg_addr);
+
+/**
+ * @brief This method retrieves the dbr less address
+ *
+ * @param [in] uar
+ * UAR object
+ * @param [out] dbr_less_addr
+ * The dbr less address
+ */
+doca_error_t doca_verbs_uar_dbr_less_addr_get(const struct doca_verbs_uar *uar_obj,
+                                              void **dbr_less_addr);
 
 #ifdef __cplusplus
 }

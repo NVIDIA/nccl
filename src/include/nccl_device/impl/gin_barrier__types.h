@@ -12,7 +12,7 @@
 
 struct ncclGinBarrierHandle {
   ncclGinSignal_t signal0;
-  ncclDevResourceHandle_t bufHandle;
+  ncclDevResourceHandle_t unused;
 };
 
 #if NCCL_CHECK_CUDACC
@@ -23,7 +23,6 @@ struct ncclGinBarrierSession_internal {
   ncclTeam team;
   ncclGinBarrierHandle handle;
   int index;
-  uint32_t epoch;
   ncclGinSignal_t signal;
 };
 #endif

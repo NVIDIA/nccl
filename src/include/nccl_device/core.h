@@ -62,6 +62,18 @@ typedef struct ncclTeamRequirements ncclTeamRequirements_t;
 struct ncclCommProperties;
 typedef struct ncclCommProperties ncclCommProperties_t;
 
+typedef enum {
+  NCCL_GIN_CONNECTION_NONE,
+  NCCL_GIN_CONNECTION_FULL,
+  NCCL_GIN_CONNECTION_RAIL,
+} ncclGinConnectionType_t;
+
+typedef enum : uint32_t {
+  NCCL_REQUIREMENT_FLAG_OPTION_NOT_REQUIRED = 0,
+  NCCL_REQUIREMENT_FLAG_OPTION_OPTIONAL = 1,
+  NCCL_REQUIREMENT_FLAG_OPTION_REQUIRED = 2,
+} ncclRequirementFlagOptions_t;
+
 struct ncclDevCommRequirements {
   /* attributes that users should never touch. */
   size_t size;
@@ -81,9 +93,15 @@ struct ncclDevCommRequirements {
   int lsaLLA2ABlockCount, lsaLLA2ASlotCount;
 
   bool ginForceEnable;
+
   int ginContextCount; // This is a hint, the actual context count in the devcomm may not match.
   int ginSignalCount; // Guaranteed to start at id=0
   int ginCounterCount; // Guaranteed to start at id=0
+  ncclGinConnectionType_t ginConnectionType;
+  bool ginExclusiveContexts;
+  int ginQueueDepth;
+  ncclRequirementFlagOptions_t ginUseReliableDB;
+  ncclRequirementFlagOptions_t ginUseExpertControl;
 };
 
 #define NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER {                 \
@@ -98,10 +116,15 @@ struct ncclDevCommRequirements {
     0,                                           /* railGinBarrierCount */     \
     0,                                           /* lsaLLA2ABlockCount */      \
     0,                                           /* lsaLLA2ASlotCount */       \
-    0,                                           /* ginForceEnable */          \
+    false,                                       /* ginForceEnable */          \
     4,                                           /* ginContextCount */         \
     0,                                           /* ginSignalCount */          \
     0,                                           /* ginCounterCount */         \
+    NCCL_GIN_CONNECTION_NONE,                    /* ginConnectionType */       \
+    false,                                       /* ginExclusiveContexts */    \
+    0,                                           /* ginQueueDepth */           \
+    NCCL_REQUIREMENT_FLAG_OPTION_NOT_REQUIRED,   /* ginUseReliableDB */        \
+    NCCL_REQUIREMENT_FLAG_OPTION_NOT_REQUIRED,   /* ginUseExpertControl */     \
 }
 
 struct ncclDevResourceRequirements {
@@ -147,6 +170,9 @@ struct ncclCommProperties {
   bool deviceApiSupport;
   bool multimemSupport;
   ncclGinType_t ginType;
+  int nLsaTeams;
+  bool hostRmaSupport;
+  ncclGinType_t railedGinType;
 };
 
 NCCL_EXTERN_C __host__ ncclResult_t ncclCommQueryProperties(ncclComm_t, ncclCommProperties_t*);

@@ -34,11 +34,11 @@ ncclResult_t nvlsCanConnect(int* ret, struct ncclComm* comm, struct ncclTopoGrap
   return ncclSuccess;
 }
 
-ncclResult_t nvlsSendFree(struct ncclConnector* send) {
+ncclResult_t nvlsSendFree(struct ncclComm* comm, struct ncclConnector* send) {
   return ncclSuccess;
 }
 
-ncclResult_t nvlsRecvFree(struct ncclConnector* recv) {
+ncclResult_t nvlsRecvFree(struct ncclComm* comm, struct ncclConnector* recv) {
   return ncclSuccess;
 }
 
@@ -270,6 +270,8 @@ static ncclResult_t nvlsAllocateMem(struct ncclComm* comm, const CUmemAccessDesc
   CUCHECKGOTO(cuMemMap((CUdeviceptr)*ucptr, ucsize, 0, *ucHandle, 0), ret, fail2);
   CUCHECKGOTO(cuMemSetAccess((CUdeviceptr)*ucptr, ucsize, desc, 1), ret, fail3);
   CUDACHECKGOTO(cudaMemset(*ucptr, 0, ucsize), ret, fail3);
+  // Track NVLS buffer as persistent memory
+  NCCLCHECKGOTO(ncclMemTrack(comm->memManager, *ucptr, ucsize, *ucHandle, ncclCuMemHandleType, ncclMemPersist), ret, fail3);
 
   // intra-node barrier to mitigate the possible hang in cuMulticastBindMem during abort
   NCCLCHECKGOTO(bootstrapIntraNodeBarrier(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks, comm->localRankToRank[0]), ret, fail3);
@@ -292,6 +294,7 @@ static ncclResult_t nvlsAllocateMem(struct ncclComm* comm, const CUmemAccessDesc
   CUCHECKGOTO(cuMemSetAccess((CUdeviceptr)*mcptr, mcsize, desc, 1), ret, fail);
   *ucsizePtr = ucsize;
   *mcsizePtr = mcsize;
+
   INFO(NCCL_NVLS, "NVLS rank %d (dev %d) alloc done, ucptr %p ucgran %ld mcptr %p mcgran %ld ucsize %ld mcsize %ld (inputsize %ld)", comm->rank, comm->cudaDev, *ucptr, ucgran, *mcptr, mcgran, ucsize, mcsize, size);
 
 exit:

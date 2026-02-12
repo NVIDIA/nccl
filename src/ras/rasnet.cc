@@ -903,7 +903,7 @@ static void rasConnSendKeepAlive(struct rasConnection* conn, bool nack) {
     if (linkConn && !linkConn->external)
       msg->keepAlive.linkMask |= 1; // Our rasPrevLink should be the peer's rasNextLink.
 
-    (void)clock_gettime(CLOCK_REALTIME, &msg->keepAlive.realTime);
+    clockRealtime(&msg->keepAlive.realTime);
 
     rasConnEnqueueMsg(conn, msg, msgLen);
   }
@@ -921,7 +921,7 @@ ncclResult_t rasMsgHandleKeepAlive(const struct rasMsg* msg, struct rasSocket* s
          "internal error?", ncclSocketToString(&sock->sock.addr, rasLine), sock->status);
     return ncclInternalError;
   }
-  SYSCHECK(clock_gettime(CLOCK_REALTIME, &currentTime), "clock_gettime");
+  clockRealtime(&currentTime);
   travelTime = (currentTime.tv_sec-msg->keepAlive.realTime.tv_sec)*1000*1000*1000 +
     (currentTime.tv_nsec-msg->keepAlive.realTime.tv_nsec);
 

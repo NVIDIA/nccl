@@ -89,6 +89,13 @@ struct doca_verbs_uar {
     void *get_reg_addr() const noexcept { return m_reg_addr; }
 
     /**
+     * @brief Get DBR-less DB address
+     *
+     * @return DBR-less DB address
+     */
+    void *get_dbr_less_addr() const noexcept { return m_dbr_less_addr; }
+
+    /**
      * @brief Get UAR memory allocation type
      *
      * @return UAR memory allocation type
@@ -103,6 +110,7 @@ struct doca_verbs_uar {
     };
     uint32_t m_uar_id{};
     void *m_reg_addr{};
+    void *m_dbr_less_addr{};
 
     doca_verbs_uar(doca_verbs_uar const &) = delete;
     doca_verbs_uar &operator=(doca_verbs_uar const &) = delete;

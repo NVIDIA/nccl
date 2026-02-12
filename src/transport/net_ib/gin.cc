@@ -12,13 +12,110 @@
 const int NCCL_GIN_IB_ALLGATHER_TAG = 0xa0;
 const int NCCL_GIN_IB_ALLTOALL_TAG = 0xa1;
 
-ncclResult_t ncclGinIbInit(void** ctx, uint64_t commId, ncclDebugLogger_t logFunction) {
-  ncclNetCommConfig_t* netCommConfig = nullptr;
+// Check GDR support for GIN. This is run at init, so we don't know yet whether the GPU will support DMA-BUF.
+static ncclResult_t ncclGinIbGdrSupport(bool* gdrSupport, bool gdaki) {
+  *gdrSupport = true;
+  bool peerMemSupport =
+     gdaki ? ncclIbPeerMemSupport() == ncclSuccess : // GDAKI does not support nv_peer_mem.
+     ncclIbGdrSupport() == ncclSuccess;
+  if (peerMemSupport) return ncclSuccess;
+
+  if (ncclIbDmaBufSupport(0) == ncclSuccess) return ncclSuccess;
+
+  *gdrSupport = false;
+  INFO(NCCL_NET, "Unable to use GIN: Peermem is not supported, nor DMA-BUF.");
+  return ncclSuccess;
+}
+
+// Check the current GPU supports GDR for GIN. This is run during connect().
+static ncclResult_t ncclGinIbGdrGpuSupport(bool gdaki) {
+  bool peerMemSupport =
+     gdaki ? ncclIbPeerMemSupport() == ncclSuccess : // GDAKI does not support nv_peer_mem.
+     ncclIbGdrSupport() == ncclSuccess;
+  if (peerMemSupport) return ncclSuccess;
+
+  int cudaDev;
+  CUDACHECK(cudaGetDevice(&cudaDev));
+  int dmaBufSupportOnDevice = 1;
+  CUCHECK(cuDeviceGetAttribute(&dmaBufSupportOnDevice, CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED, cudaDev));
+  if (dmaBufSupportOnDevice == 1) return ncclSuccess;
+
+  WARN("Unable to use GIN: Peermem is not supported, and device %d does not support DMA-BUF.", cudaDev);
+  return ncclInvalidUsage;
+}
+
+NCCL_PARAM(GinType, "GIN_TYPE", -1);
+
+static std::mutex ncclGinIbGdakiLockMutex;
+static int ncclGinIbGdakiNDevs = -1;
+int ncclGinIbGdakiDevIndexes[MAX_IB_DEVS];
+
+ncclResult_t ncclGinIbGdakiInit() {
+  std::lock_guard<std::mutex> lock(ncclGinIbGdakiLockMutex);
+  if (ncclGinIbGdakiNDevs == -1) {
+    int ndevs = 0;
+    for (int i = 0; i < ncclNIbDevs; i++) {
+      if (ncclIbDevs[i].ibProvider == IB_PROVIDER_MLX5) {
+        ncclGinIbGdakiDevIndexes[ndevs] = i;
+        ++ndevs;
+      }
+    }
+    ncclGinIbGdakiNDevs = ndevs;
+  }
+  return ncclSuccess;
+}
+
+extern ncclGin_t ncclGinIb;
+extern ncclGin_t ncclGinIbGdaki;
+extern ncclGin_t ncclGinIbProxy;
+
+// Initlialize GDAKI or PROXY backend. ginType can force a particular backend.
+// If provided, overwrite ginIb with the backend (generic ginIb case).
+ncclResult_t ncclGinIbInitType(void** ctx, uint64_t commId, ncclDebugLogger_t logFunction, int ginType, ncclGin_t* ginIb) {
   NCCLCHECK(ncclIbInitDevices(logFunction, nullptr));
+  if (ncclNIbDevs == 0) return ncclInternalError; // Caught in plugin init code, not propagated to user.
+
+  if (ginType == NCCL_GIN_TYPE_GDAKI) goto try_gdaki;
+  if (ginType == NCCL_GIN_TYPE_PROXY) goto try_proxy;
+  if (ginType != -1) {
+    INFO(NCCL_INIT|NCCL_NET, "NET_IB: no support for GIN type %ld", ncclParamGinType());
+    return ncclInternalError;
+  }
+
+  bool gdrSupport;
+
+  // First try GDAKI
+try_gdaki:
+  NCCLCHECK(ncclGinIbGdakiInit());
+  if (ncclGinIbGdakiNDevs == 0 && ginType == -1) goto try_proxy;
+  NCCLCHECK(ncclGinIbGdrSupport(&gdrSupport, /*gdaki*/ true));
+  if (!gdrSupport && ginType == -1) goto try_proxy;
+  if (!gdrSupport) return ncclInternalError;
+  if (ginIb) memcpy(ginIb, &ncclGinIbGdaki, sizeof(ncclGinIb));
+  goto end;
+
+  // Then Proxy
+try_proxy:
+  NCCLCHECK(ncclGinIbGdrSupport(&gdrSupport, /*gdaki*/ false));
+  if (!gdrSupport) return ncclInternalError;
+  if (ginIb) memcpy(ginIb, &ncclGinIbProxy, sizeof(ncclGinIb));
+
+end:
+  ncclNetCommConfig_t* netCommConfig = nullptr;
   NCCLCHECK(ncclCalloc(&netCommConfig, 1));
   *ctx = netCommConfig;
   return ncclSuccess;
 }
+ncclResult_t ncclGinIbInit(void** ctx, uint64_t commId, ncclDebugLogger_t logFunction) {
+  return ncclGinIbInitType(ctx, commId, logFunction, ncclParamGinType(), &ncclGinIb);
+}
+
+// GIN Entry point, which will then morph into either the GDAKI or PROXY backend
+ncclGin_t ncclGinIb = {
+  "GIN_IB",
+  ncclGinIbInit,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+};
 
 ncclResult_t ncclGinIbFinalize(void *ctx) {
   if (ctx) free(ctx);
@@ -114,109 +211,106 @@ ncclResult_t ncclGinIbP2PBarrier(struct ncclGinIbCollComm *cComm) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinIbConnect(void* ctx, void* handles[], int nranks, int rank, void* listenComm, void** collComm) {
+ncclResult_t ncclGinIbConnect(void *ctx, void *handles[], int nranks, int rank, int nConnections,
+                              int queueDepth, ncclGinRequirementFlagOptions_t useReliableDB,
+                              ncclGinRequirementFlagOptions_t useExpertControl, void *listenComm,
+                              void **collComm) {
   struct ncclIbListenComm *lComm = (struct ncclIbListenComm *)listenComm;
-  struct ncclGinIbCollComm *cComm = nullptr;
+  struct ncclGinIbCollComm *cCommArray = nullptr;
   int next;
 
   *collComm = NULL;
-  NCCLCHECK(ncclIbMalloc((void **)&cComm, sizeof(*cComm)));
-  NCCLCHECK(ncclIbMalloc((void**)&cComm->fullSendComm, sizeof(void *) * nranks));
-  NCCLCHECK(ncclIbMalloc((void**)&cComm->fullRecvComm, sizeof(void *) * nranks));
+  NCCLCHECK(ncclIbMalloc((void **)&cCommArray, sizeof(*cCommArray) * nConnections));
 
-  cComm->nranks = nranks;
-  cComm->rank = rank;
+  for (int connectionId = 0; connectionId < nConnections; connectionId++) {
+    struct ncclGinIbCollComm *cComm = cCommArray + connectionId;
+    NCCLCHECK(ncclIbMalloc((void**)&cComm->fullSendComm, sizeof(void *) * nranks));
+    NCCLCHECK(ncclIbMalloc((void**)&cComm->fullRecvComm, sizeof(void *) * nranks));
 
-  next = (cComm->rank + 1) % nranks;
-  do
-  {
-    if (cComm->sendComm == NULL) {
-      NCCLCHECK(ncclNetIb.connect(ctx, lComm->dev, handles[next], &cComm->sendComm, NULL));
-    }
-    if (cComm->recvComm == NULL)
-      NCCLCHECK(ncclNetIb.accept(lComm, &cComm->recvComm, NULL));
-  } while (cComm->sendComm == NULL || cComm->recvComm == NULL);
+    cComm->nranks = nranks;
+    cComm->rank = rank;
+    cComm->connectionId = connectionId;
+    cComm->nConnections = nConnections;
 
-  cComm->getProperties = (ncclResult_t(*)(int dev, void *props))ncclIbGetProperties;
-  cComm->allGather = ncclGinIbAllGather;
-  cComm->allToAll = ncclGinIbAllToAll;
-  cComm->getGidIndex = ncclIbGetGidIndex;
-  cComm->dev = lComm->dev;
-
-  for (int i = 0; i < nranks; i++)
-  {
-    int connectPeer = (cComm->rank + i) % nranks;
-    int acceptPeer = (cComm->rank - i + nranks) % nranks;
+    next = (cComm->rank + 1) % nranks;
     do
     {
-      if (cComm->fullSendComm[connectPeer] == NULL)
-        NCCLCHECK(ncclNetIb.connect(ctx, lComm->dev, handles[connectPeer], &cComm->fullSendComm[connectPeer], NULL));
-      if (cComm->fullRecvComm[acceptPeer] == NULL)
-        NCCLCHECK(ncclNetIb.accept(lComm, &cComm->fullRecvComm[acceptPeer], NULL));
-    } while ((cComm->fullSendComm[connectPeer] == NULL) || (cComm->fullRecvComm[acceptPeer] == NULL));
-    NCCLCHECK(ncclGinIbP2PBarrier(cComm));
+      if (cComm->sendComm == NULL) {
+        NCCLCHECK(ncclNetIb.connect(ctx, lComm->dev, handles[next], &cComm->sendComm, NULL));
+      }
+      if (cComm->recvComm == NULL)
+        NCCLCHECK(ncclNetIb.accept(lComm, &cComm->recvComm, NULL));
+    } while (cComm->sendComm == NULL || cComm->recvComm == NULL);
+
+    cComm->getProperties = (ncclResult_t(*)(int dev, void *props))ncclIbGetProperties;
+    cComm->allGather = ncclGinIbAllGather;
+    cComm->allToAll = ncclGinIbAllToAll;
+    cComm->getGidIndex = ncclIbGetGidIndex;
+    cComm->dev = lComm->dev;
+    cComm->queueDepth = queueDepth;
+    cComm->useReliableDB = useReliableDB;
+    cComm->useExpertControl = useExpertControl;
+
+    for (int i = 0; i < nranks; i++) {
+      int connectPeer = (cComm->rank + i) % nranks;
+      int acceptPeer = (cComm->rank - i + nranks) % nranks;
+      do {
+        if (cComm->fullSendComm[connectPeer] == NULL)
+          NCCLCHECK(ncclNetIb.connect(ctx, lComm->dev, handles[connectPeer], &cComm->fullSendComm[connectPeer], NULL));
+        if (cComm->fullRecvComm[acceptPeer] == NULL)
+          NCCLCHECK(ncclNetIb.accept(lComm, &cComm->fullRecvComm[acceptPeer], NULL));
+      } while ((cComm->fullSendComm[connectPeer] == NULL) ||
+               (cComm->fullRecvComm[acceptPeer] == NULL));
+      NCCLCHECK(ncclGinIbP2PBarrier(cComm));
+    }
   }
 
-  *collComm = cComm;
+  *collComm = cCommArray;
   return ncclSuccess;
 }
 
 ncclResult_t ncclGinIbCloseColl(void* collComm) {
-  struct ncclGinIbCollComm* cComm = (struct ncclGinIbCollComm*)collComm;
-  if (!cComm) return ncclSuccess;
+  struct ncclGinIbCollComm* cCommArray = (struct ncclGinIbCollComm*)collComm;
+  if (!cCommArray) return ncclSuccess;
 
-  if (cComm->fullRecvComm) {
-    for (int i=0; i<cComm->nranks; i++) {
-      NCCLCHECK(ncclNetIb.closeRecv(cComm->fullRecvComm[i]));
+  for (int connectionId = 0; connectionId < cCommArray->nConnections; connectionId++) {
+    struct ncclGinIbCollComm *cComm = cCommArray + connectionId;
+    if (cComm->fullRecvComm) {
+      for (int i=0; i<cComm->nranks; i++) {
+        NCCLCHECK(ncclNetIb.closeRecv(cComm->fullRecvComm[i]));
+      }
+      free(cComm->fullRecvComm);
+      cComm->fullRecvComm = NULL;
     }
-    free(cComm->fullRecvComm);
-    cComm->fullRecvComm = NULL;
-  }
 
-  if (cComm->fullSendComm) {
-    for (int i=0; i<cComm->nranks; i++) {
-      NCCLCHECK(ncclNetIb.closeSend(cComm->fullSendComm[i]));
+    if (cComm->fullSendComm) {
+      for (int i=0; i<cComm->nranks; i++) {
+        NCCLCHECK(ncclNetIb.closeSend(cComm->fullSendComm[i]));
+      }
+      free(cComm->fullSendComm);
+      cComm->fullSendComm = NULL;
     }
-    free(cComm->fullSendComm);
-    cComm->fullSendComm = NULL;
+
+    if (cComm->recvComm) {
+      NCCLCHECK(ncclNetIb.closeRecv(cComm->recvComm));
+      cComm->recvComm = NULL;
+    }
+
+    if (cComm->sendComm) {
+      NCCLCHECK(ncclNetIb.closeSend(cComm->sendComm));
+      cComm->sendComm = NULL;
+    }
+    memset(cComm, 0, sizeof(*cComm));
   }
 
-  if (cComm->recvComm) {
-    NCCLCHECK(ncclNetIb.closeRecv(cComm->recvComm));
-    cComm->recvComm = NULL;
-  }
-
-  if (cComm->sendComm) {
-    NCCLCHECK(ncclNetIb.closeSend(cComm->sendComm));
-    cComm->sendComm = NULL;
-  }
-
-  memset(cComm, 0, sizeof(*cComm));
-
-  free(cComm);
+  free(cCommArray);
   return ncclSuccess;
 }
 
 #include "gdaki/gin_host_gdaki.h"
 
-static std::mutex ncclGinIbGdakiLockMutex;
-static int ncclGinIbGdakiNDevs = -1;
-int ncclGinIbGdakiDevIndexes[MAX_IB_DEVS];
-
 ncclResult_t ncclGinIbGdakiInit(void** ctx, uint64_t commId, ncclDebugLogger_t logFunction) {
-  NCCLCHECK(ncclGinIbInit(ctx, commId, logFunction));
-  std::lock_guard<std::mutex> lock(ncclGinIbGdakiLockMutex);
-  if (ncclGinIbGdakiNDevs == -1) {
-    int ndevs = 0;
-    for (int i = 0; i < ncclNIbDevs; i++) {
-      if (ncclIbDevs[i].ibProvider == IB_PROVIDER_MLX5) {
-        ncclGinIbGdakiDevIndexes[ndevs] = i;
-        ++ndevs;
-      }
-    }
-    ncclGinIbGdakiNDevs = ndevs;
-  }
-  return ncclSuccess;
+  return ncclGinIbInitType(ctx, commId, logFunction, NCCL_GIN_TYPE_GDAKI, NULL);
 }
 
 ncclResult_t ncclGinIbGdakiDevices(int* ndev) {
@@ -243,8 +337,15 @@ ncclResult_t ncclGinIbGdakiListen(void* ctx, int dev, void* opaqueHandle, void**
   return ncclNetIb.listen(ctx, ncclGinIbGdakiDevIndexes[dev], opaqueHandle, listenComm);
 }
 
-ncclResult_t ncclGinIbGdakiConnect(void* ctx, void* handles[], int nranks, int rank, void* listenComm, void** collComm) {
-  NCCLCHECK(ncclGinIbConnect(ctx, handles, nranks, rank, listenComm, collComm));
+ncclResult_t ncclGinIbGdakiConnect(void *ctx, void *handles[], int nranks, int rank, int nContexts,
+                                   int queueDepth, ncclGinRequirementFlagOptions_t useReliableDB,
+                                   ncclGinRequirementFlagOptions_t useExpertControl,
+                                   void *listenComm, void **collComm) {
+  // Check the current GPU supports GDR
+  NCCLCHECK(ncclGinIbGdrGpuSupport(/*gdaki*/ true));
+
+  NCCLCHECK(
+    ncclGinIbConnect(ctx, handles, nranks, rank, 1, queueDepth, useReliableDB, useExpertControl, listenComm, collComm));
 
   struct ncclGinIbCollComm *cComm = (struct ncclGinIbCollComm *)*collComm;
   cComm->getProperties = (ncclResult_t(*)(int dev, void *props))ncclGinIbGdakiGetProperties;
@@ -253,16 +354,16 @@ ncclResult_t ncclGinIbGdakiConnect(void* ctx, void* handles[], int nranks, int r
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinIbGdakiCreateContext(void* collComm, int nSignals, int nCounters, void **ginCtx, ncclNetDeviceHandle_v11_t** devHandle) {
+ncclResult_t ncclGinIbGdakiCreateContext(void* collComm, int nSignals, int nCounters, int nContexts, void **ginCtx, ncclNetDeviceHandle_t** devHandle) {
   struct ncclGinIbCollComm* cComm = (struct ncclGinIbCollComm*)collComm;
 
-  NCCLCHECK(ncclGinGdakiCreateContext(cComm, nSignals, nCounters, ginCtx, devHandle));
+  NCCLCHECK(ncclGinGdakiCreateContext(cComm, nSignals, nCounters, nContexts, ginCtx, devHandle));
 
   return ncclSuccess;
 }
 
 ncclResult_t ncclGinIbGdakiRegMrSym(void* collComm, void* data, size_t size, int type, uint64_t mr_flags, void** mhandle, void **ginHandle) {
-  return ncclGinGdakiRegMrSym((struct ncclGinIbCollComm *)collComm, data, size, type, mhandle, ginHandle);
+  return ncclGinGdakiRegMrSym((struct ncclGinIbCollComm *)collComm, data, size, type, mr_flags, mhandle, ginHandle);
 }
 
 ncclResult_t ncclGinIbGdakiDeregMrSym(void* collComm, void* mhandle) {
@@ -311,9 +412,40 @@ struct ncclIbGinProxyMrHandle {
   uint32_t *rkeys;
 };
 
+ncclResult_t ncclGinIbProxyInit(void** ctx, uint64_t commId, ncclDebugLogger_t logFunction) {
+  return ncclGinIbInitType(ctx, commId, logFunction, NCCL_GIN_TYPE_PROXY, NULL);
+}
+
 ncclResult_t ncclGinIbProxyGetProperties(int dev, ncclNetProperties_t* props) {
   NCCLCHECK(ncclNetIb.getProperties(dev, props));
   props->netDeviceType = NCCL_NET_DEVICE_GIN_PROXY;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclGinIbProxyConnect(void *ctx, void *handles[], int nranks, int rank, int nContexts,
+                                   int queueDepth, ncclGinRequirementFlagOptions_t useReliableDB,
+                                   ncclGinRequirementFlagOptions_t useExpertControl,
+                                   void *listenComm, void **collComm) {
+  if (queueDepth != 0) {
+    WARN("GIN_IB_PROXY does not support specifying qp depth");
+    return ncclInvalidUsage;
+  }
+  if (useReliableDB > ncclGinRequirementFlagOptionsNotRequired) {
+    WARN("GIN_IB_PROXY does not support reliable db");
+    return ncclInvalidUsage;
+  }
+  if (useExpertControl > ncclGinRequirementFlagOptionsNotRequired) {
+    WARN("GIN_IB_PROXY does not support expert control");
+    return ncclInvalidUsage;
+  }
+
+  // Check the current GPU supports GDR
+  NCCLCHECK(ncclGinIbGdrGpuSupport(/*gdaki*/ false));
+
+  // Connect.
+  NCCLCHECK(
+    ncclGinIbConnect(ctx, handles, nranks, rank, nContexts, queueDepth, useReliableDB, useExpertControl, listenComm, collComm));
+
   return ncclSuccess;
 }
 
@@ -357,9 +489,9 @@ ncclResult_t ncclGinIbProxyCloseColl(void* collComm) {
 }
 
 ncclResult_t ncclGinIbProxyIPut(void *collComm, uint64_t srcOff, void *srcMhandle, size_t size,
-                                uint64_t dstOff, void *dstMhandle, uint32_t rank, void **request)
-{
-  struct ncclGinIbCollComm* cComm = (struct ncclGinIbCollComm*)collComm;
+                                uint64_t dstOff, void *dstMhandle, uint32_t rank, int connectionId,
+                                void **request) {
+  struct ncclGinIbCollComm* cComm = &((struct ncclGinIbCollComm*)collComm)[connectionId];
 
   struct ncclIbGinProxyMrHandle *srcMrHandle = (struct ncclIbGinProxyMrHandle *)srcMhandle;
   struct ncclIbGinProxyMrHandle *dstMrHandle = (struct ncclIbGinProxyMrHandle *)dstMhandle;
@@ -374,6 +506,7 @@ ncclResult_t ncclGinIbProxyIPut(void *collComm, uint64_t srcOff, void *srcMhandl
 
   struct ncclIbRequest* req;
   NCCLCHECK(ncclIbGetRequest(&comm->base, &req));
+  req->connectionId = connectionId;
   req->type = NCCL_NET_IB_REQ_GIN_IPUT;
   req->sock = &comm->base.sock;
   req->iput.rank = rank;
@@ -408,16 +541,15 @@ ncclResult_t ncclGinIbProxyIPut(void *collComm, uint64_t srcOff, void *srcMhandl
 }
 
 ncclResult_t ncclGinIbProxyIPutSignal(void *collComm, uint64_t srcOff, void *srcMhandle,
-                                      size_t size, uint64_t dstOff, void *dstMhandle,
-                                      uint32_t rank, uint64_t signalOff, void *signalMhandle,
-                                      uint64_t signalValue, uint32_t signalOp, void **request)
-{
+                                      size_t size, uint64_t dstOff, void *dstMhandle, uint32_t rank,
+                                      uint64_t signalOff, void *signalMhandle, uint64_t signalValue,
+                                      uint32_t signalOp, int connectionId, void **request) {
   if (signalOp != NCCL_NET_SIGNAL_OP_INC && signalOp != NCCL_NET_SIGNAL_OP_ADD) {
     WARN("ncclGinIbProxyIPutSignal: Unsupported signalOp %u", signalOp);
     return ncclInvalidArgument;
   }
 
-  struct ncclGinIbCollComm* cComm = (struct ncclGinIbCollComm*)collComm;
+  struct ncclGinIbCollComm* cComm = &((struct ncclGinIbCollComm*)collComm)[connectionId];
 
   struct ncclIbGinProxyMrHandle *srcMrHandle = (struct ncclIbGinProxyMrHandle *)srcMhandle;
   struct ncclIbGinProxyMrHandle *dstMrHandle = (struct ncclIbGinProxyMrHandle *)dstMhandle;
@@ -429,6 +561,7 @@ ncclResult_t ncclGinIbProxyIPutSignal(void *collComm, uint64_t srcOff, void *src
 
   struct ncclIbRequest* req;
   NCCLCHECK(ncclIbGetRequest(&comm->base, &req));
+  req->connectionId = connectionId;
   req->type = NCCL_NET_IB_REQ_GIN_IPUT;
   req->sock = &comm->base.sock;
   req->iput.rank = rank;
@@ -490,8 +623,8 @@ ncclResult_t ncclGinIbProxyIPutSignal(void *collComm, uint64_t srcOff, void *src
 }
 
 ncclResult_t ncclGinIbProxyTest(void *collComm, void *request, int *done) {
-  struct ncclGinIbCollComm* cComm = (struct ncclGinIbCollComm*)collComm;
   struct ncclIbRequest* req = (struct ncclIbRequest*)request;
+  struct ncclGinIbCollComm* cComm = &((struct ncclGinIbCollComm*)collComm)[req->connectionId];
   int rank = req->iput.rank;
   *done = 0;
 
@@ -539,11 +672,11 @@ ncclResult_t ncclGinIbProxyTest(void *collComm, void *request, int *done) {
 // No support for NCCL_IB_SPLIT_DATA_ON_QPS or NCCL_IB_MERGE_NICS
 ncclGin_t ncclGinIbProxy = {
   "GIN_IB_PROXY",
-  ncclGinIbInit,
+  ncclGinIbProxyInit,
   ncclIbDevices,
   ncclGinIbProxyGetProperties,
   ncclIbListen,
-  ncclGinIbConnect,
+  ncclGinIbProxyConnect,
   NULL,
   ncclGinIbProxyRegMrSym,
   ncclGinIbProxyRegMrSymDmaBuf,

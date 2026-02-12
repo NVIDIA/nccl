@@ -318,6 +318,7 @@ struct ncclIpcHdr {
 
 struct ncclProxyState {
   int refCount;
+  struct ncclComm* comm;
   int tpRank;
   int tpnRanks;
   int tpLocalnRanks;
@@ -334,6 +335,7 @@ struct ncclProxyState {
 
   uint32_t* abortFlag;
   bool directMode;
+  struct ncclMemManager* memManager;  // Shared memory manager for proxy allocations
   // Service threads
   std::thread thread;
   std::thread threadUDS;

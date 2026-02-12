@@ -29,7 +29,5 @@ ncclResult_t ncclGpuGdrSupport(struct ncclComm* comm, int* gdrSupport);
 
 extern ncclNet_t ncclNetIb;
 extern ncclNet_t ncclNetSocket;
-extern ncclGin_t ncclGinIbGdaki;
-extern ncclGin_t ncclGinIbProxy;
 
 #endif

@@ -11,6 +11,7 @@
 
 #include <condition_variable>
 #include <cstdint>
+#include <ctime>
 #include <mutex>
 
 #ifdef NCCL_OS_WINDOWS
@@ -32,9 +33,16 @@ typedef int ncclSocketDescriptor;
 typedef SOCKET ncclSocketDescriptor;
 #endif
 
-uint64_t ncclOsGetpid();
-void ncclOsSleep(unsigned int time_msec);
-ncclResult_t ncclOsSetCpuStackSize();
+uint64_t ncclOsGetPid();
+uint64_t ncclOsGetTid();
+size_t ncclOsGetPageSize();
+ncclResult_t ncclOsInitialize();
+
+/* Aligned memory allocation */
+void* ncclOsAlignedAlloc(size_t alignment, size_t size);
+void ncclOsAlignedFree(void* ptr);
+
+std::tm* ncclOsLocaltime(const time_t* timer, std::tm* buf);
 
 void ncclOsSetEnv(const char* name, const char* value);
 

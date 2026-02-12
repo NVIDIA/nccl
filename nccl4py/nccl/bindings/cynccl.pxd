@@ -76,6 +76,7 @@ ctypedef void* ncclComm_t 'ncclComm_t'
 ctypedef void* ncclWindow_t 'ncclWindow_t'
 ctypedef struct ncclUniqueId 'ncclUniqueId':
     char internal[128]
+
 ctypedef struct ncclConfig_t 'ncclConfig_t':
     size_t size
     unsigned int magic
@@ -94,11 +95,21 @@ ctypedef struct ncclConfig_t 'ncclConfig_t':
     int nvlsCTAs
     int nChannelsPerNetPeer
     int nvlinkCentricSched
+    int graphUsageMode
+    int numRmaCtx
+
 ctypedef struct ncclSimInfo_t 'ncclSimInfo_t':
     size_t size
     unsigned int magic
     unsigned int version
     float estimatedTime
+
+ctypedef struct ncclWaitSignalDesc_t 'ncclWaitSignalDesc_t':
+    int opCnt
+    int peer
+    int sigIdx
+    int ctx
+
 
 
 ###############################################################################
@@ -141,6 +152,8 @@ cdef ncclResult_t ncclGather(const void* sendbuff, void* recvbuff, size_t count,
 cdef ncclResult_t ncclScatter(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype, int root, ncclComm_t comm, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclSend(const void* sendbuff, size_t count, ncclDataType_t datatype, int peer, ncclComm_t comm, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype, int peer, ncclComm_t comm, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
+cdef ncclResult_t ncclSignal(int peer, int sigIdx, int ctx, unsigned int flags, ncclComm_t comm, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
+cdef ncclResult_t ncclWaitSignal(int nDesc, ncclWaitSignalDesc_t* signalDescs, ncclComm_t comm, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclGroupStart() except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclGroupEnd() except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclGroupSimulateEnd(ncclSimInfo_t* simInfo) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil

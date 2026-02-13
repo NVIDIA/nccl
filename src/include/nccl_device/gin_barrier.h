@@ -37,6 +37,7 @@ struct ncclGinBarrierSession: ncclGinBarrierSession_internal<Coop> {
   ncclGinBarrierSession(ncclGinBarrierSession const&) = delete; // Sessions are not copyable
 
   NCCL_DEVICE_INLINE void sync(Coop, cuda::memory_order, ncclGinFenceLevel);
+  NCCL_DEVICE_INLINE ncclResult_t sync(Coop, cuda::memory_order, ncclGinFenceLevel, uint64_t timeoutCycles);
 };
 #endif
 

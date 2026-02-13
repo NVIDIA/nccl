@@ -30,6 +30,8 @@ struct ncclLsaBarrierSession: ncclLsaBarrierSession_internal<Coop> {
   NCCL_DEVICE_INLINE void arrive(Coop, cuda::memory_order);
   NCCL_DEVICE_INLINE void wait(Coop, cuda::memory_order);
   NCCL_DEVICE_INLINE void sync(Coop, cuda::memory_order);
+  NCCL_DEVICE_INLINE ncclResult_t wait(Coop, cuda::memory_order, uint64_t timeoutCycles);
+  NCCL_DEVICE_INLINE ncclResult_t sync(Coop, cuda::memory_order, uint64_t timeoutCycles);
 };
 #endif
 

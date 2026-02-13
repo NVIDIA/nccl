@@ -3230,6 +3230,7 @@ const char* ncclGetErrorString(ncclResult_t code) {
     case ncclInvalidUsage           : return "invalid usage (run with NCCL_DEBUG=WARN for details)";
     case ncclRemoteError            : return "remote process exited or there was a network error";
     case ncclInProgress             : return "NCCL operation in progress";
+    case ncclTimeout                : return "timeout";
     default                         : return "unknown result code";
   }
 }

@@ -1,0 +1,57 @@
+[project]
+name = "nccl_checkpoint"
+dynamic = ["version"]
+requires-python = ">=3.8"
+description = "Low-level Python bindings for the NCCL checkpoint shim"
+readme = "README.md"
+license = "BSD-3-Clause"
+license-files = ["LICENSE.txt"]
+authors = [
+    { name = "NVIDIA Corporation" }
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: English",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+
+dependencies = []
+
+[project.optional-dependencies]
+test = [
+    "mpi4py",
+    "pytest",
+    "pytest-mpi",
+]
+
+[project.urls]
+homepage = "https://developer.nvidia.com/nccl"
+repository = "https://github.com/NVIDIA/nccl"
+issues = "https://github.com/NVIDIA/nccl/issues"
+
+[build-system]
+requires = ["setuptools>=77.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+include = ["nccl_checkpoint*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "nccl_checkpoint._version.__version__" }
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]

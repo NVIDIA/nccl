@@ -59,6 +59,20 @@ inline uint64_t clockNano() {
   return uint64_t(ts.tv_sec)*1000*1000*1000 + ts.tv_nsec;
 }
 
+// Low-power spin-wait hint to CPU
+// ~43 cycles on x86, allows other hyperthreads to run
+static inline void ncclCpuRelax() {
+#if defined(__x86_64__) || defined(__i386__)
+  __asm__ __volatile__("pause" ::: "memory");
+#elif defined(__aarch64__)
+  __asm__ __volatile__("yield" ::: "memory");
+#elif defined(__PPC__) || defined(__ppc__) || defined(__powerpc__)
+  __asm__ __volatile__("or 27,27,27" ::: "memory");
+#else
+  __asm__ __volatile__("" ::: "memory");
+#endif
+}
+
 /* get any bytes of random data from /dev/urandom, return ncclSuccess (0) if it succeeds. */
 inline ncclResult_t getRandomData(void* buffer, size_t bytes) {
   ncclResult_t ret = ncclSuccess;

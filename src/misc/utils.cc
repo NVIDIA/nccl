@@ -165,8 +165,10 @@ int parseStringList(const char* string, struct netIf* ifList, int maxList) {
         ifNum++; ifC = 0;
       }
     } else {
-      ifList[ifNum].prefix[ifC] = c;
-      ifC++;
+      if (ifC < sizeof(ifList[ifNum].prefix) - 1) {
+        ifList[ifNum].prefix[ifC] = c;
+        ifC++;
+      }
     }
     ptr++;
   } while (ifNum < maxList && c);

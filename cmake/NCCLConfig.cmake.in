@@ -1,0 +1,25 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(CUDAToolkit)
+find_dependency(Threads)
+
+include("${CMAKE_CURRENT_LIST_DIR}/NCCLTargets.cmake")
+
+if(TARGET CUDA::cudart)
+  get_target_property(_nccl_cuda_includes CUDA::cudart INTERFACE_INCLUDE_DIRECTORIES)
+  if(_nccl_cuda_includes)
+    foreach(_t NCCL::nccl NCCL::nccl_static)
+      if(TARGET ${_t})
+        set_property(TARGET ${_t} APPEND PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${_nccl_cuda_includes}")
+      endif()
+    endforeach()
+  endif()
+  unset(_nccl_cuda_includes)
+endif()
+
+set(NCCL_VERSION "@PROJECT_VERSION@")
+set(NCCL_INCLUDE_DIRS "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_INCLUDEDIR@")
+set(NCCL_LIBRARIES NCCL::nccl)
+

@@ -1,7 +1,8 @@
 #
-# Copyright (c) 2015-2019, NVIDIA CORPORATION. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2015-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 #
-# See LICENSE.txt for license information
+# See LICENSE.txt for more license information
 #
 
 include ../../makefiles/common.mk
@@ -21,6 +22,7 @@ prep: $(TXZTARGETS)
 
 build: prep
 	$(MAKE) -C ../.. src.build BUILDDIR=$(BUILDDIR)
+	$(MAKE) -C ../.. ir.build BUILDDIR=$(BUILDDIR)
 	@printf "Building tar.xz package\n"
 	(cd $(BUILDDIR); bash txz/create_txz.sh)
 	mkdir -p $(PKGDIR)

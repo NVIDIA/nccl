@@ -29,7 +29,7 @@ NCCL will be compiled and installed in `build/` unless `BUILDDIR` is set.
 
 By default, NCCL is compiled for all supported architectures. To accelerate the compilation and reduce the binary size, consider redefining `NVCC_GENCODE` (defined in `makefiles/common.mk`) to only include the architecture of the target platform :
 ```shell
-$ make -j src.build NVCC_GENCODE="-gencode=arch=compute_70,code=sm_70"
+$ make -j src.build NVCC_GENCODE="-gencode=arch=compute_90,code=sm_90"
 ```
 
 ## Install

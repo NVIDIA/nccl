@@ -62,6 +62,7 @@ struct ncclPeerInfo {
   bool rmaPluginAvailable;
   bool cuMemGdrSupport;
   int mloPart; // MLOPart partition index, or -1 if not an MLOPart GPU
+  int cudaDriverVersion;
 };
 
 #define CONNECT_SIZE 256

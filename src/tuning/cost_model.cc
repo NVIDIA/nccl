@@ -9,6 +9,7 @@
 #include "tuning.h"
 #include "cost_model.h"
 #include "comm.h"
+#include "cudawrap.h"
 
 // Parse a map of prefixes to a list of elements. The first prefix is
 // optional and, if not present, the list of elements will be applied
@@ -115,11 +116,11 @@ fail:
 
 NCCL_PARAM(Ll128C2c, "LL128_C2C", 1);
 
-static int isLL128Enabled(int minCompCap, int maxCompCap, int interType, int intraType, int nRanks, int func,
-                          int algo) {
+static int isLL128Enabled(int minCompCap, int maxCompCap, int interType, int intraType, int nRanks, int func, int algo,
+                          int minDriverVersion) {
   int ret = 1;
-  if (ncclParamLl128C2c() && minCompCap >= 90) {
-    // Enable LL128 by default only on Hopper/Blackwell for all connections up to P2C and PXN.
+  if (ncclParamLl128C2c() && minCompCap >= 90 && (!RUBIN_AND_LATER(minCompCap) || minDriverVersion >= 13030)) {
+    // Rubin, Blackwell, and Hopper: Enable LL128 for all P2C and PXN if CUDA supports it.
     ret &= (interType <= PATH_PXN);
   } else {
     // Enable LL128 only up to PXB. Don't enable LL128 over PxN because PxN can encapsulate PxB or P2C links.
@@ -356,7 +357,7 @@ ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
       // protoEnable[..] == 2 indicates that user did not set NCCL_PROTO=LL128 explicitly.
       if (proto == NCCL_PROTO_LL128 && protoEnable[f * NCCL_NUM_PROTOCOLS + proto] == 2 &&
           !isLL128Enabled(comm->minCompCap, comm->maxCompCap, comm->graphs[algo].typeInter,
-                          comm->graphs[algo].typeIntra, comm->nRanks, f, algo)) {
+                          comm->graphs[algo].typeIntra, comm->nRanks, f, algo, comm->minDriverVersion)) {
         comm->tuningContext.enabled[i][f] = 0;
       }
       //  Check the user env vars only for functions that have a forced configuration and not already disabled.

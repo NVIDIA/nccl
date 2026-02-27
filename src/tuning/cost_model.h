@@ -10,7 +10,6 @@
 #define NCCL_INT_COST_MODEL_H_
 
 #include "tuning_int.h"
-#include "cudawrap.h"
 
 // Init and finalize to support context memory allocation and deallocaiton on comm creation/finalize
 typedef ncclResult_t (*ncclTuningModelInitFn_t)(struct ncclComm* comm, int id, int enabled[NCCL_NUM_FUNCTIONS]);

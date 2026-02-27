@@ -765,6 +765,7 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
                                    currentDev));
   CUDACHECK(cudaGetDeviceProperties(&prop, comm->cudaDev));
   info->totalGlobalMem = ROUNDUP(prop.totalGlobalMem, (1ULL << 32));
+  NCCLCHECK(ncclCudaDriverVersion(&info->cudaDriverVersion));
   const char* mlopartStr = strstr(prop.name, "MLOPart");
   info->mloPart = mlopartStr ? atoi(mlopartStr + strlen("MLOPart")) : NCCL_TOPO_UNDEF;
 
@@ -1098,6 +1099,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
 
   comm->cuMemSupport = 1;
   comm->gpuCftSupport = comm->peerInfo[0].gpuCftSupport;
+  comm->minDriverVersion = comm->peerInfo[0].cudaDriverVersion;
   comm->contiguousRanksPerHost = 0;
   currentHostSize = 0;
   prevHostHash = comm->peerInfo[0].hostHash;
@@ -1151,6 +1153,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     globalCrossNicSupport &= comm->peerInfo[i].crossNicSupport;
     globalRmaPluginSupport &= comm->peerInfo[i].rmaPluginAvailable;
     globalCuMemGdrSupport &= comm->peerInfo[i].cuMemGdrSupport;
+    comm->minDriverVersion = std::min(comm->peerInfo[i].cudaDriverVersion, comm->minDriverVersion);
   }
   // AllGather1 - end
   timers[TIMER_INIT_ALLGATHER] = clockNano() - timers[TIMER_INIT_ALLGATHER];

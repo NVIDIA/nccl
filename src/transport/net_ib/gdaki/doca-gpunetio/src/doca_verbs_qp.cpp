@@ -37,6 +37,7 @@
 #include <time.h>
 #include <string.h>
 
+#include "host/doca_verbs.h"
 #include "host/mlx5_prm.h"
 #include "host/mlx5_ifc.h"
 
@@ -663,6 +664,8 @@ doca_error_t doca_verbs_qp::create_qp_obj(
 
     void *qpc = MLX5_ADDR_OF(create_qp_in, create_in, qpc);
 
+    const bool use_rq = ((m_rq_size > 0) || (verbs_qp_init_attr.srq != nullptr));
+
     DEVX_SET(create_qp_in, create_in, opcode, MLX5_CMD_OP_CREATE_QP);
     DEVX_SET(qpc, qpc, st, MLX5_QPC_ST_RC);
 
@@ -695,7 +698,7 @@ doca_error_t doca_verbs_qp::create_qp_obj(
         DEVX_SET(qpc, qpc, no_sq, 1);
     }
 
-    if ((m_rq_size > 0) || (verbs_qp_init_attr.srq != nullptr)) {
+    if (use_rq) {
         if (verbs_qp_init_attr.receive_cq == nullptr) {
             DOCA_LOG(LOG_ERR, "Failed to create QP. Receive CQ is null");
             return DOCA_ERROR_INVALID_VALUE;
@@ -722,9 +725,11 @@ doca_error_t doca_verbs_qp::create_qp_obj(
     // DEVX_SET(qpc, qpc, cs_req, 0);            // Disable CS Request
     // DEVX_SET(qpc, qpc, cs_res, 0);            // Disable CS Response
 
+    DEVX_SET(qpc, qpc, send_dbr_mode, verbs_qp_init_attr.send_dbr_mode);
     DEVX_SET(qpc, qpc, dbr_umem_valid, 1);
     DEVX_SET(qpc, qpc, dbr_umem_id, dbr_umem_id);
     DEVX_SET64(qpc, qpc, dbr_addr, dbr_umem_offset);
+
     DEVX_SET64(qpc, qpc, cd_master, verbs_qp_init_attr.core_direct_master);
     DEVX_SET(create_qp_in, create_in, wq_umem_id, wq_umem_id);
     DEVX_SET(create_qp_in, create_in, wq_umem_valid, 1);
@@ -1224,6 +1229,8 @@ doca_error_t doca_verbs_qp::query_qp(struct doca_verbs_qp_attr &verbs_qp_attr,
     verbs_qp_init_attr.external_umem = m_init_attr.external_umem;
     verbs_qp_init_attr.external_umem_offset = m_init_attr.external_umem_offset;
     verbs_qp_init_attr.external_uar = m_init_attr.external_uar;
+    verbs_qp_init_attr.core_direct_master = m_init_attr.core_direct_master;
+    verbs_qp_init_attr.send_dbr_mode = m_init_attr.send_dbr_mode;
 
     return DOCA_SUCCESS;
 }
@@ -1248,6 +1255,18 @@ void doca_verbs_qp::create(struct ibv_context *ibv_ctx) {
 
     if (m_init_attr.qp_type != DOCA_VERBS_QP_TYPE_RC) {
         DOCA_LOG(LOG_ERR, "QP type is not valid");
+        throw DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if ((m_init_attr.send_dbr_mode == DOCA_VERBS_QP_SEND_DBR_MODE_NO_DBR_EXT) &&
+        (m_verbs_device_attr->m_send_dbr_mode_no_dbr_ext == 0)) {
+        DOCA_LOG(LOG_ERR, "No DBR-ext support is not supported by the device");
+        throw DOCA_ERROR_NOT_SUPPORTED;
+    }
+
+    if (m_init_attr.emulate_no_dbr_ext &&
+        m_init_attr.send_dbr_mode == DOCA_VERBS_QP_SEND_DBR_MODE_NO_DBR_EXT) {
+        DOCA_LOG(LOG_ERR, "emulate_no_dbr_ext and send_dbr_mode NO_DBR_EXT are not compatible");
         throw DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -1389,7 +1408,11 @@ void doca_verbs_qp::create(struct ibv_context *ibv_ctx) {
         }
 
         void *reg_addr{};
-        status = doca_verbs_uar_reg_addr_get(m_init_attr.external_uar, &reg_addr);
+        if (m_init_attr.send_dbr_mode == DOCA_VERBS_QP_SEND_DBR_MODE_DBR_VALID) {
+            status = doca_verbs_uar_reg_addr_get(m_init_attr.external_uar, &reg_addr);
+        } else {
+            status = doca_verbs_uar_dbr_less_addr_get(m_init_attr.external_uar, &reg_addr);
+        }
         if (status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to get external UAR reg_addr");
             throw status;
@@ -1558,6 +1581,14 @@ uint32_t doca_verbs_qp::get_sq_size_wqebb() const noexcept { return m_sq_size_wq
 uint32_t doca_verbs_qp::get_rq_size() const noexcept { return m_rq_size; }
 
 uint32_t doca_verbs_qp::get_rcv_wqe_size() const noexcept { return m_rcv_wqe_size; }
+
+enum doca_verbs_qp_send_dbr_mode doca_verbs_qp::get_send_dbr_mode() const noexcept {
+    return static_cast<enum doca_verbs_qp_send_dbr_mode>(m_init_attr.send_dbr_mode);
+}
+
+bool doca_verbs_qp::get_emulate_no_dbr_ext() const noexcept {
+    return m_init_attr.emulate_no_dbr_ext;
+}
 
 /**********************************************************************************************************************
  * Public API functions
@@ -1994,6 +2025,50 @@ uint8_t doca_verbs_qp_init_attr_get_core_direct_master(
     }
 
     return verbs_qp_init_attr->core_direct_master;
+}
+
+doca_error_t doca_verbs_qp_init_attr_set_send_dbr_mode(
+    struct doca_verbs_qp_init_attr *verbs_qp_init_attr,
+    enum doca_verbs_qp_send_dbr_mode send_dbr_mode) {
+    if (verbs_qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set send_dbr_mode: parameter verbs_qp_init_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    verbs_qp_init_attr->send_dbr_mode = static_cast<uint8_t>(send_dbr_mode);
+    return DOCA_SUCCESS;
+}
+
+enum doca_verbs_qp_send_dbr_mode doca_verbs_qp_init_attr_get_send_dbr_mode(
+    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr) {
+    if (verbs_qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get send_dbr_mode: parameter verbs_qp_init_attr is NULL");
+        return DOCA_VERBS_QP_SEND_DBR_MODE_DBR_VALID;
+    }
+
+    return static_cast<enum doca_verbs_qp_send_dbr_mode>(verbs_qp_init_attr->send_dbr_mode);
+}
+
+doca_error_t doca_verbs_qp_init_attr_set_emulate_no_dbr_ext(
+    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, bool emulate_no_dbr_ext) {
+    if (verbs_qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set emulate_no_dbr_ext: parameter verbs_qp_init_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    verbs_qp_init_attr->emulate_no_dbr_ext = emulate_no_dbr_ext;
+
+    return DOCA_SUCCESS;
+}
+
+bool doca_verbs_qp_init_attr_get_emulate_no_dbr_ext(
+    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr) {
+    if (verbs_qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get emulate_no_dbr_ext: parameter verbs_qp_init_attr is NULL");
+        return false;
+    }
+
+    return verbs_qp_init_attr->emulate_no_dbr_ext;
 }
 
 doca_error_t doca_verbs_qp_attr_create(struct doca_verbs_qp_attr **verbs_qp_attr) {
@@ -2741,4 +2816,13 @@ struct doca_verbs_srq *doca_verbs_qp_init_attr_get_srq(
     }
 
     return verbs_qp_init_attr->srq;
+}
+
+enum doca_verbs_qp_send_dbr_mode doca_verbs_qp_get_send_dbr_mode(
+    const struct doca_verbs_qp *verbs_qp) {
+    return verbs_qp->get_send_dbr_mode();
+}
+
+bool doca_verbs_qp_get_emulate_no_dbr_ext(const struct doca_verbs_qp *verbs_qp) {
+    return verbs_qp->get_emulate_no_dbr_ext();
 }

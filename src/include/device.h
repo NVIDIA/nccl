@@ -1,13 +1,15 @@
 /*************************************************************************
- * Copyright (c) 2015-2022, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2015-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #ifndef NCCL_DEVICE_H_
 #define NCCL_DEVICE_H_
 
 #include "nccl.h"
+#include "nccl_device/core.h"
 #include "nccl_tuner.h"
 #include "bitops.h"
 #include <algorithm>
@@ -642,5 +644,7 @@ inline int ncclDevFuncId(int coll, int devRedOp, int type, int algo, int proto) 
 }
 
 inline int ncclDevFuncId_P2p() { return ncclDevFuncRowToId[0]; }
+
+ncclResult_t ncclGinResetSignalsAndCounters(struct ncclComm* comm, ncclDevComm_t const* devComm);
 
 #endif

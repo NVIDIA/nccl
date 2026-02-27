@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #ifndef NCCL_DEVICE_RUNTIME_H_
 #define NCCL_DEVICE_RUNTIME_H_
@@ -43,6 +44,7 @@ struct ncclDevrCommCreateTask {
   struct ncclDevrCommCreateTask *next;
   struct ncclDevCommRequirements* reqs;
   struct ncclDevComm* outDevComm;
+  ncclResult_t (*outDevCommCopyCB)(struct ncclDevComm const* tmpDevComm, void* out);
 };
 
 struct ncclDevrState {
@@ -52,6 +54,7 @@ struct ncclDevrState {
   int lsaSelf;
   int lsaSize;
   int* lsaRankList;
+  int nLsaTeams;
 
   size_t granularity; // cuMemGetAllocationGranularity
   bool ginEnabled;
@@ -70,6 +73,9 @@ struct ncclDevrState {
   struct ncclIntruQueue<struct ncclDevrCommCreateTask, &ncclDevrCommCreateTask::next> commCreateTaskQueue;
 };
 
+// Check if GIN resources have been requested as part of `reqs`.
+bool ncclGinResourcesRequested(struct ncclDevCommRequirements const* reqs);
+
 // We assume ncclComm has a `ncclDevrState symState` member.
 ncclResult_t ncclDevrInitOnce(struct ncclComm* comm);
 ncclResult_t ncclDevrFinalize(struct ncclComm* comm);
@@ -82,7 +88,8 @@ ncclResult_t ncclDevrWindowRegisterInGroup(
 );
 
 ncclResult_t ncclDevrCommCreateInternal(
-  struct ncclComm* comm, struct ncclDevCommRequirements const* reqs, struct ncclDevComm* outDevComm
+  struct ncclComm* comm, struct ncclDevCommRequirements const* reqs, struct ncclDevComm* outDevComm,
+  bool isInternal = false, ncclResult_t (*outDevCommCopyCB)(struct ncclDevComm const* tmpDevComm, void* out) = nullptr
 );
 void freeDevCommRequirements(
   struct ncclDevCommRequirements* reqs

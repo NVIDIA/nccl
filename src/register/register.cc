@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include "argcheck.h" // Need some checks here since we access comm
 #include "nccl.h"
@@ -31,7 +32,7 @@ ncclResult_t ncclRegister(struct ncclComm* comm, void* data, size_t size, bool i
   uintptr_t begAddr = (uintptr_t)data & -pageSize;
   uintptr_t endAddr = ((uintptr_t)data + size + pageSize-1) & -pageSize;
 
-  if (comm->checkPointers) NCCLCHECK(CudaPtrCheck(data, comm, "buff", "ncclCommRegister"));
+  if (comm->checkMode != ncclCheckModeDefault) NCCLCHECK(CudaPtrCheck(data, comm, "buff", "ncclCommRegister"));
   INFO(NCCL_REG, "register comm %p buffer %p size %zi", comm, data, size);
 
   for (int slot=0; /*true*/; slot++) {
@@ -69,7 +70,7 @@ static ncclResult_t regCleanup(struct ncclComm* comm, struct ncclReg* reg) {
     struct ncclRegNetHandles* netHandlePrev;
     while(netHandle) {
       if (ncclNetDeregBuffer(comm, netHandle->proxyConn, netHandle->handle) != ncclSuccess) {
-        WARN("rank %d deregister NET buffer handle %p proxy rank %d failed\n", comm->rank, netHandle->handle, netHandle->proxyConn->rank);
+        WARN("rank %d deregister NET buffer handle %p proxy rank %d failed", comm->rank, netHandle->handle, netHandle->proxyConn->rank);
       }
       netHandlePrev = netHandle;
       netHandle = netHandle->next;
@@ -96,7 +97,7 @@ static ncclResult_t regCleanup(struct ncclComm* comm, struct ncclReg* reg) {
         free(reg->ipcInfos[i]);
       }
     if (reg->regIpcAddrs.hostPeerRmtAddrs) free(reg->regIpcAddrs.hostPeerRmtAddrs);
-    if (reg->regIpcAddrs.devPeerRmtAddrs) NCCLCHECK(ncclCudaFree(reg->regIpcAddrs.devPeerRmtAddrs));
+    if (reg->regIpcAddrs.devPeerRmtAddrs) NCCLCHECK(ncclCudaFree(reg->regIpcAddrs.devPeerRmtAddrs, comm->memManager));
   }
   return ncclSuccess;
 }

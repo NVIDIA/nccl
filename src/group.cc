@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2015-2022, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2015-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include "group.h"
 #include "debug.h"
@@ -16,6 +17,7 @@
 #include "nvtx.h"
 #include "compiler.h"
 #include "rma/rma.h"
+#include "argcheck.h"
 
 #define GROUP_MAX_RECLAIM_STEPS 10
 
@@ -222,6 +224,27 @@ struct ncclGroupSymmetricJob {
   struct ncclComm* comm;
 };
 
+struct ncclGroupDebugJob {
+  struct ncclAsyncJob base;
+  struct ncclComm* comm;
+};
+
+ncclResult_t ncclCommGroupArgsGlobalCheck(struct ncclAsyncJob* job_) {
+  struct ncclGroupDebugJob* job = (struct ncclGroupDebugJob*)job_;
+  struct ncclComm* comm = job->comm;
+  ncclResult_t ret = ncclSuccess;
+  while (!ncclIntruQueueEmpty(&comm->argsInfoQueue)) {
+    struct ncclArgsInfo* argsInfo = ncclIntruQueueDequeue(&comm->argsInfoQueue);
+    NCCLCHECKGOTO(ncclArgsGlobalCheck(argsInfo), ret, fail);
+    free(argsInfo);
+  }
+
+exit:
+  return ret;
+fail:
+  goto exit;
+}
+
 ncclResult_t ncclCommGroupRegisterSymmetric(struct ncclAsyncJob* job_) {
   struct ncclGroupSymmetricJob* job = (struct ncclGroupSymmetricJob*)job_;
   struct ncclComm* comm = job->comm;
@@ -240,7 +263,7 @@ ncclResult_t ncclCommGroupRegisterSymmetric(struct ncclAsyncJob* job_) {
   while (!ncclIntruQueueEmpty(&comm->devrState.commCreateTaskQueue)) {
     struct ncclDevrCommCreateTask* task = ncclIntruQueueDequeue(&comm->devrState.commCreateTaskQueue);
     NCCLCHECKGOTO(ncclDevrCommCreateInternal(
-      comm, (struct ncclDevCommRequirements const*)task->reqs, task->outDevComm),
+      comm, (struct ncclDevCommRequirements const*)task->reqs, task->outDevComm, /*isInternal=*/false, task->outDevCommCopyCB),
       ret, fail);
     freeDevCommRequirements(task->reqs); // free additional task memory for reqs
     free(task);
@@ -611,7 +634,9 @@ static ncclResult_t groupLaunch(struct ncclAsyncJob *job_, ncclSimInfo_t* simInf
     struct ncclComm* cliqueHead = groupCommHeadMain[ncclGroupTaskTypeCollective];
     struct ncclComm* comm = NULL;
     struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> asyncCollJobs;
+    struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> asyncDebugJobs;
     ncclIntruQueueConstruct(&asyncCollJobs);
+    ncclIntruQueueConstruct(&asyncDebugJobs);
     do {
       // We need to preconnect connections for collectives clique by clique to avoid
       // race condition for split shared comms which can connect the same connections
@@ -637,6 +662,33 @@ static ncclResult_t groupLaunch(struct ncclAsyncJob *job_, ncclSimInfo_t* simInf
       NCCLCHECKGOTO(ncclTasksRegAndEnqueue(comm), ret, fail);
       comm = comm->groupNext[ncclGroupTaskTypeCollective];
     } while (comm);
+
+    // debug check
+    cliqueHead = groupCommHeadMain[ncclGroupTaskTypeCollective];
+    do {
+      comm = cliqueHead;
+      do {
+        if (comm->checkMode == ncclCheckModeDebugGlobal) {
+          struct ncclGroupSymmetricJob* job;
+          NCCLCHECK(ncclCalloc(&job, 1));
+          job->base.func = ncclCommGroupArgsGlobalCheck;
+          job->base.undo = nullptr;
+          job->base.destructor = free;
+          job->base.state = ncclGroupJobRunning;
+          job->base.abortFlag = comm->abortFlag;
+          job->base.abortFlagDev = comm->abortFlagDev;
+          job->comm = comm;
+          ncclIntruQueueEnqueue(&asyncDebugJobs, (struct ncclAsyncJob*)job);
+        }
+        comm = comm->groupNext[ncclGroupTaskTypeCollective];
+      } while (comm != nullptr && comm->intraComm0 == cliqueHead->intraComm0);
+      NCCLCHECKGOTO(asyncJobLaunch(&asyncDebugJobs, groupAbortFlag), ret, fail);
+      while (!ncclIntruQueueEmpty(&asyncDebugJobs)) {
+        struct ncclAsyncJob* job = ncclIntruQueueDequeue(&asyncDebugJobs);
+        if (job->destructor) job->destructor((void*)job);
+      }
+      cliqueHead = comm;
+    } while (cliqueHead != nullptr);
   }
 
   if ((!simInfo) && (groupCommHeadMain[ncclGroupTaskTypeCollective] != nullptr)) {
@@ -783,6 +835,9 @@ ncclResult_t ncclGroupEndInternal(ncclSimInfo_t* simInfo) {
       if (simInfo) memcpy((void*)simInfo, (void*)internalSimInfoPtr, realSize);
       delete groupJob;
     }
+  } else {
+    // Free when not needed (single rank case)
+    delete groupJob;
   }
   /* Reset the job state for the next group call. */
   groupLocalResetJobState();

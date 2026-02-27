@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include "comm.h"
 #include "register_inline.h"
@@ -23,10 +24,10 @@ static const uint64_t CE_COLL_INTRA_BATCH_SYNC_MSG_THRESHOLD = 512*1024*1024;
 ncclResult_t ncclCeInit(struct ncclComm* comm) {
   ncclResult_t ret = ncclSuccess;
 
-  uint8_t* ceDevBase;
+  uint8_t* ceDevBase = nullptr;
   size_t ceDevBaseSize = alignUp(comm->nRanks*sizeof(uint32_t), 16) * 2;
-  ncclWindow_vidmem* ceWinDev;
-  ncclWindow_vidmem* ceWinDevHost;
+  ncclWindow_vidmem* ceWinDev = nullptr;
+  ncclWindow_vidmem* ceWinDevHost = nullptr;
 
   // Ensure symmetric memory runtime is initialized
   NCCLCHECKGOTO(ncclDevrInitOnce(comm), ret, fail);
@@ -50,6 +51,9 @@ ncclResult_t ncclCeInit(struct ncclComm* comm) {
 exit:
   return ret;
 fail:
+  // Clean up partial initialization - both functions handle null safely
+  ncclCommWindowDeregister(comm, ceWinDev);
+  ncclMemFree(ceDevBase);
   goto exit;
 }
 
@@ -62,21 +66,16 @@ ncclResult_t ncclCeFinalize(struct ncclComm* comm) {
     free(task);
   }
 
-  // Clean up CE resources
-  if (comm->ceColl.baseUCSymReadyPtr != NULL) {
-    if (comm->ceColl.ceSyncWin && comm->ceColl.ceSyncWin->vidmem) {
-      NCCLCHECKGOTO(ncclCommWindowDeregister(comm, comm->ceColl.ceSyncWin->vidmem), ret, fail);
-      NCCLCHECKGOTO(ncclMemFree(comm->ceColl.baseUCSymReadyPtr), ret, fail);
-    }
-    comm->ceColl.baseUCSymReadyPtr = NULL;
-    comm->ceColl.baseUCSymComplPtr = NULL;
-    comm->ceColl.ceSyncWin = NULL;
-  }
+  // Clean up CE resources - continue cleanup even on errors to avoid leaks
+  // Note: both functions handle null safely
+  NCCLCHECKIGNORE(ncclCommWindowDeregister(comm, comm->ceColl.ceSyncWin ? comm->ceColl.ceSyncWin->vidmem : nullptr), ret);
+  NCCLCHECKIGNORE(ncclMemFree(comm->ceColl.baseUCSymReadyPtr), ret);
 
-exit:
+  comm->ceColl.baseUCSymReadyPtr = nullptr;
+  comm->ceColl.baseUCSymComplPtr = nullptr;
+  comm->ceColl.ceSyncWin = nullptr;
+
   return ret;
-fail:
-  goto exit;
 }
 
 bool ncclCeImplemented(ncclFunc_t coll, int/*ncclDevRedOp_t*/ red, ncclDataType_t ty) {
@@ -217,14 +216,14 @@ ncclResult_t ncclMemOpSync(struct ncclComm* comm, struct ncclCeCollArgs* args, c
   // Allocate enough slots for all possible ops
   size_t batchSize = (comm->nvlsSupport ? NCCL_CE_SYNC_OPS_PER_RANK_MC : NCCL_CE_SYNC_OPS_PER_RANK_UC) * comm->nRanks;
   size_t opIdx = 0;
-
-  // Prepare batch memory operations for synchronization
   CUstreamBatchMemOpParams* batchParams = nullptr;
-  NCCLCHECKGOTO(ncclCalloc(&batchParams, batchSize), ret, fail);
 
   // Start CE sync profiling
   NCCLCHECKGOTO(ncclProfilerStartCeSyncEvent(comm, args, stream, &ceSyncHandle),
                 ret, fail);
+
+  // Prepare batch memory operations for synchronization
+  NCCLCHECKGOTO(ncclCalloc(&batchParams, batchSize), ret, fail);
 
   if (comm->nvlsSupport) {
     NCCLCHECKGOTO(ncclPrepMCSync(comm, comm->ceColl.useCompletePtr, batchParams, &opIdx, stream), ret, fail);
@@ -250,11 +249,9 @@ ncclResult_t ncclMemOpSync(struct ncclComm* comm, struct ncclCeCollArgs* args, c
   // Toggle the flag for next call
   comm->ceColl.useCompletePtr = !comm->ceColl.useCompletePtr;
 
-  // Stop CE sync profiling
-  NCCLCHECKGOTO(ncclProfilerStopCeSyncEvent(comm, ceSyncHandle, stream),
-                ret, fail);
-
 exit:
+  // Stop CE sync profiling - always attempt if started, even on error
+  ncclProfilerStopCeSyncEvent(comm, ceSyncHandle, stream);
   if (batchParams) free(batchParams);
   return ret;
 fail:
@@ -264,37 +261,65 @@ fail:
 ncclResult_t ncclCeInitBatchOpsParams(struct ncclCeBatchOpsParams* params, int nRanks) {
   ncclResult_t ret = ncclSuccess;
 
-  params->srcs = nullptr;
-  params->dsts = nullptr;
-  params->sizes = nullptr;
+  void** srcs = nullptr;
+  void** dsts = nullptr;
+  size_t* sizes = nullptr;
+#if CUDART_VERSION >= 12080
+  cudaMemcpyAttributes* attrs = nullptr;
+  size_t* attrIdxs = nullptr;
+#endif
+
+  NCCLCHECKGOTO(ncclCalloc(&srcs, nRanks), ret, fail);
+  NCCLCHECKGOTO(ncclCalloc(&dsts, nRanks), ret, fail);
+  NCCLCHECKGOTO(ncclCalloc(&sizes, nRanks), ret, fail);
+#if CUDART_VERSION >= 12080
+  NCCLCHECKGOTO(ncclCalloc(&attrs, nRanks), ret, fail);
+  NCCLCHECKGOTO(ncclCalloc(&attrIdxs, nRanks), ret, fail);
+#endif
+
+exit:
+  params->srcs = srcs;
+  params->dsts = dsts;
+  params->sizes = sizes;
   params->numOps = 0;
   params->intraBatchSync = false;
 #if CUDART_VERSION >= 12080
-  params->attrs = nullptr;
-  params->attrIdxs = nullptr;
+  params->attrs = attrs;
+  params->attrIdxs = attrIdxs;
   params->numAttrs = 0;
 #endif
-
-  NCCLCHECKGOTO(ncclCalloc(&params->srcs, nRanks), ret, fail);
-  NCCLCHECKGOTO(ncclCalloc(&params->dsts, nRanks), ret, fail);
-  NCCLCHECKGOTO(ncclCalloc(&params->sizes, nRanks), ret, fail);
-#if CUDART_VERSION >= 12080
-  NCCLCHECKGOTO(ncclCalloc(&params->attrs, nRanks), ret, fail);
-  NCCLCHECKGOTO(ncclCalloc(&params->attrIdxs, nRanks), ret, fail);
-#endif
-exit:
   return ret;
 fail:
+  if (srcs) free(srcs);
+  srcs = nullptr;
+  if (dsts) free(dsts);
+  dsts = nullptr;
+  if (sizes) free(sizes);
+  sizes = nullptr;
+#if CUDART_VERSION >= 12080
+  if (attrs) free(attrs);
+  attrs = nullptr;
+  if (attrIdxs) free(attrIdxs);
+  attrIdxs = nullptr;
+#endif
   goto exit;
 }
 
 void ncclCeFreeBatchOpsParams(struct ncclCeBatchOpsParams* params) {
   if (params->srcs) free(params->srcs);
+  params->srcs = nullptr;
   if (params->dsts) free(params->dsts);
+  params->dsts = nullptr;
   if (params->sizes) free(params->sizes);
+  params->sizes = nullptr;
+  params->numOps = 0;
+  params->intraBatchSync = false;
 #if CUDART_VERSION >= 12080
   if (params->attrs) free(params->attrs);
+  params->attrs = nullptr;
   if (params->attrIdxs) free(params->attrIdxs);
+  params->attrIdxs = nullptr;
+  params->numAttrs = 0;
 #endif
 }
 
@@ -305,23 +330,26 @@ ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeCollArgs* 
   int driverVersion;
   void* ceBatchHandle = NULL;
 
+  // cudaMemcpyBatchAsync does not accept the legacy null stream (e.g. PyTorch null stream).
+  // Fall back to cudaMemcpyAsync per-op when stream is NULL.
+  bool isLegacyStream;
+  NCCLCHECKGOTO(ncclCudaStreamIsLegacyNull(stream, &isLegacyStream), ret, fail);
+
+  // Start CE batch profiling
+  NCCLCHECKGOTO(ncclProfilerStartCeBatchEvent(comm, args, params, stream, &ceBatchHandle),
+                ret, fail);
+
   // Check if there are any operations to perform
-  if (params->numOps == 0) {
-    return ncclSuccess;
-  }
+  if (params->numOps == 0) goto exit;
 
   // Check if we are in a CUDA graph capture
   capturing = ncclCudaGraphValid(comm->planner.capturingGraph);
 
   NCCLCHECKGOTO(ncclCudaDriverVersion(&driverVersion), ret, fail);
 
-  // Start CE batch profiling
-  NCCLCHECKGOTO(ncclProfilerStartCeBatchEvent(comm, args, params, stream, &ceBatchHandle),
-                ret, fail);
-
-  //--------------Graph capture--------------
-  // cudaMemcpyBatchAsync is not supported during CUDA graph capture
-  if (capturing) {
+  //--------------Graph capture / legacy stream--------------
+  // cudaMemcpyBatchAsync is not supported during CUDA graph capture or with legacy stream
+  if (capturing || isLegacyStream) {
     for (int i =0; i < params->numOps; i++) {
       CUDACHECKGOTO(cudaMemcpyAsync(
         (void*)params->dsts[i],
@@ -335,7 +363,7 @@ ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeCollArgs* 
       }
     }
   }
-  //--------------No graph capture--------------
+  //--------------No graph capture / not legacy stream--------------
   else {
     if (CUDART_VERSION >= 12080 && driverVersion >= 12080) {
 #if CUDART_VERSION >= 12080
@@ -360,13 +388,17 @@ ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeCollArgs* 
       size_t chunkSize = comm->ceColl.intraBatchSyncMsgThreshold / params->numOps;
       int numRounds = (maxSize + chunkSize - 1) / chunkSize;
 
+      size_t numTmpOps = params->numOps * numRounds;
+
       // Allocate temporary arrays for all chunked operations
-      void** tmpDsts = nullptr;
-      void** tmpSrcs = nullptr;
-      size_t* tmpSizes = nullptr;
-      NCCLCHECKGOTO(ncclCalloc(&tmpDsts, params->numOps * numRounds), ret, fail);
-      NCCLCHECKGOTO(ncclCalloc(&tmpSrcs, params->numOps * numRounds), ret, fail);
-      NCCLCHECKGOTO(ncclCalloc(&tmpSizes, params->numOps * numRounds), ret, fail);
+      // Use ncclUniqueArrayPtr for automatic cleanup on any exit path
+      ncclUniqueArrayPtr<void*> tmpDsts{nullptr};
+      ncclUniqueArrayPtr<void*> tmpSrcs{nullptr};
+      ncclUniqueArrayPtr<size_t> tmpSizes{nullptr};
+
+      NCCLCHECKGOTO(ncclCalloc(tmpDsts, numTmpOps), ret, fail);
+      NCCLCHECKGOTO(ncclCalloc(tmpSrcs, numTmpOps), ret, fail);
+      NCCLCHECKGOTO(ncclCalloc(tmpSizes, numTmpOps), ret, fail);
 
       int opIdx = 0;
       for (int round = 0; round < numRounds; round++) {
@@ -390,19 +422,14 @@ ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeCollArgs* 
       if (opIdx > 0) {
         #if CUDART_VERSION >= 13000
         CUDACHECKGOTO(cudaMemcpyBatchAsync(
-          tmpDsts, tmpSrcs, tmpSizes, opIdx,
+          tmpDsts.get(), tmpSrcs.get(), tmpSizes.get(), opIdx,
           params->attrs, params->attrIdxs, params->numAttrs, stream), ret, fail);
         #else
         CUDACHECKGOTO(cudaMemcpyBatchAsync(
-          tmpDsts, tmpSrcs, tmpSizes, opIdx,
+          tmpDsts.get(), tmpSrcs.get(), tmpSizes.get(), opIdx,
           params->attrs, params->attrIdxs, params->numAttrs, nullptr, stream), ret, fail);
         #endif
       }
-
-      // Free temporary arrays
-      if (tmpDsts) free(tmpDsts);
-      if (tmpSrcs) free(tmpSrcs);
-      if (tmpSizes) free(tmpSizes);
     } else {
       // Use single batch for all operations
       #if CUDART_VERSION >= 13000
@@ -433,11 +460,9 @@ ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeCollArgs* 
     }
   }
 
-  // Stop CE batch profiling
-  NCCLCHECKGOTO(ncclProfilerStopCeBatchEvent(comm, ceBatchHandle, stream),
-                ret, fail);
-
 exit:
+  // Stop CE batch profiling - always attempt if started, even on error
+  ncclProfilerStopCeBatchEvent(comm, ceBatchHandle, stream);
   return ret;
 fail:
   goto exit;
@@ -687,11 +712,9 @@ ncclResult_t ncclLaunchCeColl(struct ncclComm* comm, struct ncclKernelPlan* plan
       ret = ncclInvalidUsage;
   }
 
-  // Stop CE collective profiling
-  NCCLCHECKGOTO(ncclProfilerStopCeCollEvent(comm, args, stream),
-                ret, fail);
-
 exit:
+  // Stop CE collective profiling - always attempt if started, even on error
+  ncclProfilerStopCeCollEvent(comm, args, stream);
   return ret;
 fail:
   goto exit;

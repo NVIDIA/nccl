@@ -1,13 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2004, 2005 Topspin Communications.  All rights reserved.
- * Copyright (c) 2004, 2011-2012 Intel Corporation.  All rights reserved.
- * Copyright (c) 2005, 2006, 2007 Cisco Systems, Inc.  All rights reserved.
- * Copyright (c) 2005 PathScale, Inc.  All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2015-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * Copyright (c) 2015-2022, NVIDIA CORPORATION. All rights reserved.
- *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #ifndef NCCL_MLX5DVWRAP_H_
 #define NCCL_MLX5DVWRAP_H_

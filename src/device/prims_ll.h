@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2016-2022, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2016-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 template<typename T, typename RedOp, typename Fan, int Direct, int P2p, bool isNetOffload>
 class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>:

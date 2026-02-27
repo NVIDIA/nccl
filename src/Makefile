@@ -1,7 +1,8 @@
 #
-# Copyright (c) 2015-2022, NVIDIA CORPORATION. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2015-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 #
-# See LICENSE.txt for license information
+# See LICENSE.txt for more license information
 #
 include ../makefiles/common.mk
 include ../makefiles/version.mk
@@ -12,7 +13,7 @@ INCEXPORTS  := nccl.h nccl_device.h \
 
 LIBSRCFILES := \
 	bootstrap.cc channel.cc collectives.cc debug.cc enqueue.cc group.cc \
-	init.cc proxy.cc transport.cc mnnvl.cc allocator.cc dev_runtime.cc sym_kernels.cc ce_coll.cc \
+	init.cc proxy.cc transport.cc mnnvl.cc allocator.cc dev_runtime.cc sym_kernels.cc ce_coll.cc mem_manager.cc \
 	$(wildcard graph/*.cc) \
 	$(wildcard misc/*.cc) \
 	$(wildcard transport/*.cc) \
@@ -21,6 +22,7 @@ LIBSRCFILES := \
 	$(wildcard register/*.cc) \
 	$(wildcard plugin/*.cc) \
 	$(wildcard plugin/net/*.cc) \
+	$(wildcard plugin/gin/*.cc) \
 	$(wildcard plugin/tuner/*.cc) \
 	$(wildcard plugin/profiler/*.cc) \
 	$(wildcard plugin/env/*.cc) \
@@ -78,7 +80,7 @@ INCPLUGIN  := include/plugin
 DEVMANIFEST := $(BUILDDIR)/obj/device/manifest
 
 
-GIT_VERSION_FILE := $(BUILDDIR)/include/git_version.h
+GIT_VERSION_FILE := $(OBJDIR)/include/nccl_git_version.h
 $(GIT_VERSION_FILE): ALWAYS_REBUILD
 	@mkdir -p $(dir $@)
 	@./misc/generate_git_version.py $@
@@ -208,8 +210,8 @@ $(PKGDIR)/%.pc : %.pc
 $(OBJDIR)/%.o : %.cc $(INCTARGETS)
 	@printf "Compiling  %-35s > %s\n" $< $@
 	mkdir -p `dirname $@`
-	$(CXX) -I. -I$(INCDIR) $(CXXFLAGS) -Iinclude -Iinclude/os -I$(INCPLUGIN) -I$(DOCA_HOME)/include -c $< -o $@
-	@$(CXX) -I. -I$(INCDIR) $(CXXFLAGS) -Iinclude -Iinclude/os -I$(INCPLUGIN) -I$(DOCA_HOME)/include -M $< > $(@:%.o=%.d.tmp)
+	$(CXX) -I. -I$(INCDIR) -I$(OBJDIR)/include $(CXXFLAGS) -Iinclude -I$(INCPLUGIN) -I$(DOCA_HOME)/include -c $< -o $@
+	@$(CXX) -I. -I$(INCDIR) -I$(OBJDIR)/include $(CXXFLAGS) -Iinclude -I$(INCPLUGIN) -I$(DOCA_HOME)/include -M $< > $(@:%.o=%.d.tmp)
 	@sed "0,/^.*:/s//$(subst /,\/,$@):/" $(@:%.o=%.d.tmp) > $(@:%.o=%.d)
 	@sed -e 's/.*://' -e 's/\\$$//' < $(@:%.o=%.d.tmp) | fmt -1 | \
                 sed -e 's/^ *//' -e 's/$$/:/' >> $(@:%.o=%.d)

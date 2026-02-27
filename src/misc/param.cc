@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2019-2022, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2019-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include "param.h"
 #include "debug.h"
@@ -13,11 +14,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <string>
 #include <sys/types.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <mutex>
 #include <pwd.h>
+#include <unordered_set>
 #include "os.h"
 
 const char* userHomeDir() {
@@ -74,24 +77,61 @@ void initEnv() {
   std::call_once(once, initEnvFunc);
 }
 
-void ncclLoadParam(char const* env, int64_t deftVal, int64_t uninitialized, int64_t* cache) {
+static std::unordered_set<std::string> noCacheSet;
+static bool noCacheAll = false;
+
+static void ncclGetEnvNoCacheOnce() {
+  const char* envNoCache = ncclGetEnv("NCCL_NO_CACHE");
+  if (envNoCache == NULL || strlen(envNoCache) == 0) return;
+
+  char* copy = strdup(envNoCache);
+  char* token = strtok(copy, ",");
+  while (token != NULL) {
+    if (strcmp(token, "ALL") == 0) {
+      noCacheAll = true;
+      break;
+    } else {
+      noCacheSet.insert(token);
+    }
+    token = strtok(NULL, ",");
+  }
+  free(copy);
+}
+
+static void ncclGetCachePolicy(char const* env, int8_t* noCache) {
+  *noCache = (noCacheAll || noCacheSet.count(env) > 0) ? /*noCache*/ 1 : /*cache*/ 0;
+  if (*noCache) INFO(NCCL_ENV, "Disabling caching for environment variable %s.", env);
+}
+
+int64_t ncclLoadParam(char const* env, int64_t deftVal, int64_t uninitialized, int64_t* cache, int8_t* noCache) {
+  static std::once_flag once;
+  std::call_once(once, ncclGetEnvNoCacheOnce);
+
   static std::mutex mutex;
   std::lock_guard<std::mutex> lock(mutex);
-  if (COMPILER_ATOMIC_LOAD(cache, std::memory_order_relaxed) == uninitialized) {
-    const char* str = ncclGetEnv(env);
-    int64_t value = deftVal;
-    if (str && strlen(str) > 0) {
-      errno = 0;
-      value = strtoll(str, nullptr, 0);
-      if (errno) {
-        value = deftVal;
-        INFO(NCCL_ALL,"Invalid value %s for %s, using default %lld.", str, env, (long long)deftVal);
-      } else {
-        INFO(NCCL_ENV,"%s set by environment to %lld.", env, (long long)value);
-      }
+
+  // noCache is only load/stored within the mutex, no need for atomic
+  if (*noCache == /*uninitialized*/ -1) ncclGetCachePolicy(env, noCache);
+
+  if (COMPILER_ATOMIC_LOAD(cache, std::memory_order_relaxed) != uninitialized) return COMPILER_ATOMIC_LOAD(cache, std::memory_order_relaxed);
+
+  // Read the environment variable
+  const char* str = ncclGetEnv(env);
+  int64_t value = deftVal;
+
+  if (str && strlen(str) > 0) {
+    errno = 0;
+    value = strtoll(str, nullptr, 0);
+    if (errno) {
+      value = deftVal;
+      INFO(NCCL_ALL, "Invalid value %s for %s, using default %lld.", str, env, (long long)deftVal);
+    } else {
+      INFO(NCCL_ENV, "%s set by environment to %lld.", env, (long long)value);
     }
-    COMPILER_ATOMIC_STORE(cache, value, std::memory_order_relaxed);
   }
+
+  if (*noCache == /*cache*/ 0) COMPILER_ATOMIC_STORE(cache, value, std::memory_order_relaxed);
+  return value;
 }
 
 const char* ncclGetEnv(const char* name) {

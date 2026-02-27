@@ -1,10 +1,12 @@
 /*************************************************************************
- * Copyright (c) 2016-2022, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2016-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include "common.h"
+#include "p2p_resiliency.h"
 
 char ncclIbIfName[MAX_IF_NAME_SIZE+1];
 union ncclSocketAddress ncclIbIfAddr;
@@ -17,11 +19,13 @@ int ncclIbRelaxedOrderingEnabled = 0;
 
 ncclProfilerCallback_t ncclProfilerFunction;
 
+NCCL_PARAM(IbSplitDataOnQps, "IB_SPLIT_DATA_ON_QPS", 0);
+NCCL_PARAM(IbPrepostReceiveWorkRequests, "IB_PREPOST_RECEIVE_WORK_REQUESTS", 0);
 NCCL_PARAM(IbAsyncEvents,"IB_RETURN_ASYNC_EVENTS",1);
 
 ncclResult_t ncclIbStatsCheckFatalCount(struct ncclIbStats* stat, const char* funcName) {
   if (ncclParamIbAsyncEvents() && COMPILER_ATOMIC_LOAD(&stat->fatalErrorCount, std::memory_order_relaxed)) {
-    WARN("communicator encountered a fatal error (detected in %s)\n", funcName);
+    WARN("communicator encountered a fatal error (detected in %s)", funcName);
     return ncclSystemError;
   }
   return ncclSuccess;
@@ -35,6 +39,48 @@ struct ncclIbNetCommDevBase* ncclIbGetNetCommDevBase(ncclIbNetCommBase* base, in
     struct ncclIbRecvComm* rComm = (struct ncclIbRecvComm*) base;
     return &rComm->devs[devIndex].base;
   }
+}
+
+ncclResult_t ncclIbBaseCommInit(struct ncclIbNetCommBase* baseComm, bool isSend) {
+  for (int i = 0; i < NCCL_IB_MAX_QPS; i++) {
+    baseComm->qps[i].devIndex= -1;
+    baseComm->qps[i].remDevIdx= -1;
+    baseComm->activeQps[i] = &baseComm->qps[i];
+  }
+  baseComm->nqps = -1;
+  baseComm->splitDataOnQps = ncclParamIbSplitDataOnQps();
+  baseComm->nDataQps = -1;
+  baseComm->isSend = isSend;
+  baseComm->ready = 0;
+
+  NCCLCHECK(ncclIbResiliencyInit(baseComm, &baseComm->resiliency));
+
+  return ncclSuccess;
+}
+
+ncclResult_t ncclIbRecvCommInit(struct ncclIbRecvComm* recvComm) {
+  NCCLCHECK(ncclIbBaseCommInit(&recvComm->base, false));
+  recvComm->ibRecvWorkRequest = {
+    .wr_id = NCCL_IB_RECV_WR_ID_DUMMY,
+    .next = NULL,
+    .sg_list = NULL,
+    .num_sge = 0
+  };
+  if (recvComm->base.resiliency) {
+    if (ncclParamIbPrepostReceiveWorkRequests() == 0) {
+      WARN("NET/IB: %s: Resiliency requires pre-posted receive work requests. Enabling pre-posting.", __func__);
+    }
+    recvComm->prepostReceiveWorkRequests = true;
+  } else {
+    recvComm->prepostReceiveWorkRequests = (ncclParamIbPrepostReceiveWorkRequests() == 1);
+  }
+  INFO(NCCL_NET, "NET/IB: %s: Receive work requests will be %s", __func__, recvComm->prepostReceiveWorkRequests ? "pre-posted" : "posted on-demand");
+  return ncclSuccess;
+}
+
+ncclResult_t ncclIbSendCommInit(struct ncclIbSendComm* sendComm) {
+  NCCLCHECK(ncclIbBaseCommInit(&sendComm->base, true));
+  return ncclSuccess;
 }
 
 std::thread ncclIbAsyncThread;

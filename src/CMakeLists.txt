@@ -14,6 +14,7 @@ set(LIBSRCFILES
     allocator.cc
     sym_kernels.cc
     dev_runtime.cc
+    mem_manager.cc
 )
 
 # Add NVTX support if enabled
@@ -47,7 +48,9 @@ add_subdirectory(os)
 add_subdirectory(gin)
 add_subdirectory(rma)
 
-add_compile_options(-fmacro-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}/=)
+if(NCCL_OS_LINUX)
+    add_compile_options(-fmacro-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}/=)
+endif()
 
 # Add all source files
 list(APPEND LIBSRCFILES
@@ -69,16 +72,21 @@ list(APPEND LIBSRCFILES
 add_library(nccl SHARED)
 
 target_sources(nccl PRIVATE ${LIBSRCFILES})
+target_sources(nccl PRIVATE $<TARGET_OBJECTS:nccl_device>)
 
 # Include directories
-target_include_directories(nccl PUBLIC
+target_include_directories(nccl
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/device
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/os
-    ${CUDAToolkit_INCLUDE_DIRS}
     ${DOCA_HOME}/include
+    ${CUDAToolkit_INCLUDE_DIRS}
     ${CUDAToolkit_INCLUDE_DIRS}/cccl
+    ${CMAKE_BINARY_DIR}/obj/include
 )
 
 add_custom_command(
@@ -90,6 +98,7 @@ add_custom_command(
                 -e "s/\\\$$\\{nccl:Suffix\\}/${NCCL_SUFFIX}/g"
                 -e "s/\\\$$\\{nccl:Version\\}/${NCCL_VERSION_CODE}/g"
                 ${CMAKE_CURRENT_SOURCE_DIR}/nccl.h.in > ${CMAKE_BINARY_DIR}/include/nccl.h
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/nccl.h.in
 )
 
 file(GLOB_RECURSE SRC_DEVICE_HEADERS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_device/*.h)
@@ -121,16 +130,26 @@ set_target_properties(nccl PROPERTIES
 )
 
 #
-# Generate git_version.h
+# Generate nccl_git_version.h
 #
-set(GIT_VERSION_FILE "${CMAKE_BINARY_DIR}/include/git_version.h")
-file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/include")
+set(GIT_VERSION_FILE "${CMAKE_BINARY_DIR}/obj/include/nccl_git_version.h")
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/obj/include")
 add_custom_target(generate_git_version ALL
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/src/misc/generate_git_version.py ${GIT_VERSION_FILE}
   COMMENT "Checking git version"
   BYPRODUCTS ${GIT_VERSION_FILE}
 )
 add_dependencies(nccl generate_git_version)
+
+# Git version overrides (set via cmake -DNCCL_GIT_BRANCH=xxx -DNCCL_GIT_COMMIT_HASH=yyy)
+set(NCCL_GIT_BRANCH "" CACHE STRING "Override git branch name")
+set(NCCL_GIT_COMMIT_HASH "" CACHE STRING "Override git commit hash")
+if(NCCL_GIT_BRANCH)
+    target_compile_definitions(nccl PRIVATE NCCL_GIT_BRANCH="${NCCL_GIT_BRANCH}")
+endif()
+if(NCCL_GIT_COMMIT_HASH)
+    target_compile_definitions(nccl PRIVATE NCCL_GIT_COMMIT_HASH="${NCCL_GIT_COMMIT_HASH}")
+endif()
 
 # Set CUDA specific flags
 set_target_properties(nccl PROPERTIES
@@ -143,11 +162,9 @@ set_target_properties(nccl PROPERTIES
 # Link libraries
 target_link_libraries(nccl
     PRIVATE
-    nccl_device
-    pthread
-    rt
-    dl
-    ${CUDAToolkit_LIBRARIES}
+    Threads::Threads
+    ${CMAKE_DL_LIBS}
+    CUDA::cudart
     ${EXTRA_LIBS}
 )
 
@@ -166,8 +183,11 @@ set(RAS_BINSRCFILES ras/client.cc)
 
 add_executable(ncclras ${RAS_BINSRCFILES})
 
-target_include_directories(ncclras PUBLIC
-    ${CMAKE_BINARY_DIR}/include
+target_include_directories(ncclras
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE
     ${CUDAToolkit_INCLUDE_DIRS}
 )
 
@@ -176,8 +196,7 @@ add_dependencies(ncclras nccl_header)
 target_link_libraries(ncclras
     PRIVATE
     pthread
-    rt
-    dl
+    ${CMAKE_DL_LIBS}
 )
 
 # Set output directory for ncclras executable
@@ -187,30 +206,41 @@ set_target_properties(ncclras PROPERTIES
 
 ###################### Create a static NCCL library ############################
 add_library(nccl_static STATIC ${LIBSRCFILES})
+target_sources(nccl_static PRIVATE $<TARGET_OBJECTS:nccl_device>)
 
 # Include directories
-target_include_directories(nccl_static PUBLIC
+target_include_directories(nccl_static
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/device
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/os
-    ${CUDAToolkit_INCLUDE_DIRS}
     transport/net_ib/gdaki/doca-gpunetio/include
+    ${CUDAToolkit_INCLUDE_DIRS}
     ${CUDAToolkit_INCLUDE_DIRS}/cccl
+    ${CMAKE_BINARY_DIR}/obj/include
 )
 
 # Add dependency on nccl_header
 add_dependencies(nccl_static nccl_header)
 add_dependencies(nccl_static generate_git_version)
 
+# Git version overrides for static lib
+if(NCCL_GIT_BRANCH)
+    target_compile_definitions(nccl_static PRIVATE NCCL_GIT_BRANCH="${NCCL_GIT_BRANCH}")
+endif()
+if(NCCL_GIT_COMMIT_HASH)
+    target_compile_definitions(nccl_static PRIVATE NCCL_GIT_COMMIT_HASH="${NCCL_GIT_COMMIT_HASH}")
+endif()
+
 # Link libraries
 target_link_libraries(nccl_static
-    PRIVATE
-    nccl_device
-    pthread
-    rt
-    dl
-    ${CUDAToolkit_LIBRARIES}
+    PUBLIC
+    Threads::Threads
+    ${CMAKE_DL_LIBS}
+    CUDA::cudart
     ${EXTRA_LIBS}
 )
 
@@ -225,4 +255,27 @@ set_target_properties(nccl_static PROPERTIES
 # Set output directory for nccl_static library
 set_target_properties(nccl_static PROPERTIES
     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+)
+
+###################### Install targets / headers / pkg-config ############################
+install(TARGETS nccl nccl_static
+  EXPORT NCCLTargets
+  RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+  LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+  ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+)
+
+# Install tools, but do not export them as linkable imported targets.
+install(TARGETS ncclras
+  RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+)
+
+# Install generated + copied public headers from the build tree.
+install(DIRECTORY "${CMAKE_BINARY_DIR}/include/"
+  DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+)
+
+# Install pkg-config metadata generated during configure.
+install(FILES "${CMAKE_BINARY_DIR}/lib/pkgconfig/nccl.pc"
+  DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig"
 )

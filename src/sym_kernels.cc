@@ -1,12 +1,14 @@
 /*************************************************************************
- * Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include "sym_kernels.h"
 #include "comm.h"
 #include "device.h"
+#include "nccl_device/core.h"
 #include "transport.h"
 #include <cmath>
 #include <cfloat>
@@ -17,15 +19,16 @@ constexpr char const* kernelName[] = {
   "AllReduce_AGxLLMC_R",
   "AllReduce_RSxLD_AGxST",
   "AllReduce_RSxLDMC_AGxSTMC",
-  "AllReduce_RSxNet_ARxMC_AGxNet",
   "AllGather_LL",
   "AllGather_LLMC",
   "AllGather_ST",
   "AllGather_STMC",
+  "AllGather_RailRing_LsaSTMC",
   "ReduceScatter_LL",
   "ReduceScatter_LD",
   "ReduceScatter_LDMC",
-  "AllGather_GinHier_MCRing"
+  "ReduceScatter_RailA2A_LsaLD",
+  "ReduceScatter_RailA2A_LsaLDMC"
 };
 
 constexpr uint32_t kernelMask_STMC = 1<<ncclSymkKernelId_AllGather_LLMC |
@@ -33,10 +36,11 @@ constexpr uint32_t kernelMask_STMC = 1<<ncclSymkKernelId_AllGather_LLMC |
                                      1<<ncclSymkKernelId_AllReduce_AGxLLMC_R |
                                      1<<ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC |
                                      1<<ncclSymkKernelId_ReduceScatter_LDMC |
-                                     1<<ncclSymkKernelId_AllGather_GinHier_MCRing;
+                                     1<<ncclSymkKernelId_AllGather_RailRing_LsaSTMC;
 
 constexpr uint32_t kernelMask_LDMC = 1<<ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC |
-                                     1<<ncclSymkKernelId_ReduceScatter_LDMC;
+                                     1<<ncclSymkKernelId_ReduceScatter_LDMC |
+                                     1<<ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC;
 
 constexpr uint32_t kernelMask_LL = 1<<ncclSymkKernelId_AllReduce_AGxLL_R |
                                    1<<ncclSymkKernelId_AllReduce_AGxLLMC_R |
@@ -48,7 +52,7 @@ constexpr uint32_t kernelMask_AG = 1<<ncclSymkKernelId_AllGather_LL |
                                    1<<ncclSymkKernelId_AllGather_LLMC |
                                    1<<ncclSymkKernelId_AllGather_ST |
                                    1<<ncclSymkKernelId_AllGather_STMC |
-                                   1<<ncclSymkKernelId_AllGather_GinHier_MCRing;
+                                   1<<ncclSymkKernelId_AllGather_RailRing_LsaSTMC;
 
 constexpr uint32_t kernelMask_AR = 1<<ncclSymkKernelId_AllReduce_AGxLLMC_R |
                                    1<<ncclSymkKernelId_AllReduce_AGxLL_R |
@@ -57,7 +61,9 @@ constexpr uint32_t kernelMask_AR = 1<<ncclSymkKernelId_AllReduce_AGxLLMC_R |
 
 constexpr uint32_t kernelMask_RS = 1<<ncclSymkKernelId_ReduceScatter_LD |
                                    1<<ncclSymkKernelId_ReduceScatter_LDMC |
-                                   1<<ncclSymkKernelId_ReduceScatter_LL;
+                                   1<<ncclSymkKernelId_ReduceScatter_LL |
+                                   1<<ncclSymkKernelId_ReduceScatter_RailA2A_LsaLD |
+                                   1<<ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC;
 
 constexpr uint32_t kernelMask_LSA = 1<<ncclSymkKernelId_AllReduce_AGxLL_R |
                                     1<<ncclSymkKernelId_AllReduce_AGxLLMC_R |
@@ -71,12 +77,18 @@ constexpr uint32_t kernelMask_LSA = 1<<ncclSymkKernelId_AllReduce_AGxLL_R |
                                     1<<ncclSymkKernelId_ReduceScatter_LD |
                                     1<<ncclSymkKernelId_ReduceScatter_LDMC;
 
+constexpr uint32_t kernelMask_Gin = 1<<ncclSymkKernelId_ReduceScatter_RailA2A_LsaLD |
+                                    1<<ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC |
+                                    1<<ncclSymkKernelId_AllGather_RailRing_LsaSTMC;
 
-constexpr uint32_t kernelMask_Gin = 1<<ncclSymkKernelId_AllGather_GinHier_MCRing;
+constexpr uint32_t kernelMask_DynamicSmem = kernelMask_Gin & kernelMask_RS;
 
 int ncclSymkLLKernelMask() {
   return kernelMask_LL;
 }
+int ncclSymkDynamicSmemKernelMask() {
+  return kernelMask_DynamicSmem;
+};
 
 static uint32_t kernelMask_coll(ncclFunc_t coll) {
   switch (coll) {
@@ -113,6 +125,7 @@ static uint32_t kernelMask_user() {
 }
 
 NCCL_PARAM(SymCTAs, "SYM_CTAS", 0)
+NCCL_PARAM(SymGinKernelsEnable, "SYM_GIN_KERNELS_ENABLE", 1)
 
 static double softmin(double x, double ceiling, double softness) {
   // looks like a smooth version of: min(x, ceiling)
@@ -154,27 +167,146 @@ static const float nvlinkBws[NCCL_NVLINK_BW_IDX_NUM] = {
   720.0f, // Blackwell
 };
 
-static void queryModel_gin(struct ncclComm* comm, ncclSymkKernelId k, size_t nBytes, float* timeUs, int* nBlocks) {
+static double getLsaBw(struct ncclComm* comm) {
   int compCapIndex = comm->minCompCap >= 100 ? NCCL_NVLINK_BW_IDX_BLACKWELL : NCCL_NVLINK_BW_IDX_HOPPER;
+  return (/*byte/sec*/1.e9)*nvlinkBws[compCapIndex];
+}
+
+static double getGinLat(struct ncclComm* comm) {
+  return (/*sec/usec*/1.e-6)*comm->tunerConstants.hwLatencies[NCCL_HW_NET][NCCL_ALGO_RING][NCCL_PROTO_SIMPLE];
+}
+
+static double getGinBw(struct ncclComm* comm) {
+  return (/*byte/sec*/1.e9)*comm->minNetBw;
+}
+
+// Bus multipliers count number of times data is sent through that widget.
+static void getBusMul_ReduceScatter_RailA2A(
+    struct ncclComm* comm, bool ldmc,
+    // Bus multipliers per bottleneck
+    double* out_smMul, double* out_lsaMul, double* out_ginMul
+  ) {
+  int lsaRanks = ncclTeamLsa(comm).nRanks;
+  int railRanks = ncclTeamRail(comm).nRanks;
+  // LSA
+  *out_lsaMul = std::max(
+    /*inbound*/(ldmc ? lsaRanks : lsaRanks-1)*railRanks,
+    /*outbound*/(lsaRanks-1)*railRanks
+  );
+  // GIN
+  *out_ginMul = railRanks-1; // inbound == outbound
+  // SM. Inbound (reads) only because it dominates outbound (writes).
+  *out_smMul =
+    /*stage 0*/(lsaRanks == 1 ? 0 : (ldmc ? 1 : lsaRanks)*(railRanks-1)) +
+    /*stage 1*/(ldmc ? 1 : lsaRanks) + (railRanks-1);
+}
+
+static double getSmBw_ReduceScatter_RailA2A(struct ncclComm* comm, bool ldmc) {
+  // Empirically calculated as effbw/nctas where effbw is reported by TUNING
+  // debug logging (from getRequirements_gin()) and nctas is the number of ctas
+  // that appear to saturate bandwidth.
+  if (100 <= comm->minCompCap) {
+    return ldmc ? 2.25e9 : 5.0e9;
+  } else {
+    return ldmc ? 9.85e9 : 14.5e9;
+  }
+}
+
+static double getSmLat_ReduceScatter_RailA2A(struct ncclComm* comm, bool ldmc) {
+  // Processing delay. Larger value means bigger network buffers.
+  return 10.e-6;
+}
+
+// Calculate saturation block count:
+static int calcSatBlocks_ReduceScatter_RailA2A(struct ncclComm* comm, bool ldmc) {
+  double lsaBw = getLsaBw(comm);
+  double ginBw = getGinBw(comm);
+  double smBw = getSmBw_ReduceScatter_RailA2A(comm, ldmc);
+  double smMul, lsaMul, ginMul;
+  getBusMul_ReduceScatter_RailA2A(comm, ldmc, &smMul, &lsaMul, &ginMul);
+  // Effective Bandwidth: EffBw = Bw/Mul
+  // Let smsEffBw = smEffBw*nBlocks
+  // Set smsEffBw = min(lsaEffBw, ginEffBw)
+  // Solve for nBlocks:
+  double minLsaGinEffBw = std::min(lsaBw/lsaMul, ginBw/ginMul);
+  return std::ceil(std::min(double(1<<30), minLsaGinEffBw/(smBw/smMul)));
+}
+
+static void getRequirements_gin(struct ncclComm* comm, int* out_nBlocks, size_t* out_bufSize ) {
+  *out_nBlocks = 0;
+  *out_bufSize = 0;
+  for (int ldmc = 0; ldmc <= 1; ldmc++) {
+    double lsaBw = getLsaBw(comm);
+    double ginBw = getGinBw(comm);
+    double ginLat = getGinLat(comm);
+    double smLat = getSmLat_ReduceScatter_RailA2A(comm, ldmc);
+    double smMul, lsaMul, ginMul;
+    getBusMul_ReduceScatter_RailA2A(comm, ldmc, &smMul, &lsaMul, &ginMul);
+    // GIN could be throttled by LSA work
+    double ginBwRenorm = std::min(lsaBw/lsaMul, ginBw/ginMul)*ginMul;
+    size_t bufSize = ginBwRenorm*(ginLat + smLat);
+    int nBlocks = calcSatBlocks_ReduceScatter_RailA2A(comm, ldmc);
+    if (comm->rank == 0) {
+      double minLsaGinEffBw = std::min(lsaBw/lsaMul, ginBw/ginMul);
+      INFO(NCCL_TUNING, "ReduceScatter_RailA2A_Lsa%s : satblocks=%d bufsize=%d effbw=%g", ldmc ? "LDMC" : "LD", nBlocks, (int)bufSize, minLsaGinEffBw*smMul);
+    }
+    *out_nBlocks = std::max(*out_nBlocks, nBlocks);
+    *out_bufSize = std::max(*out_bufSize, bufSize);
+  }
+}
+
+static void queryModel_gin(struct ncclComm* comm, ncclSymkKernelId k, size_t nBytes, float* timeUs, int* nBlocks) {
+  struct ncclSymkState* symk = &comm->symkState;
+  //ncclTeam world = ncclTeamWorld(comm);
+  //ncclTeam lsa = ncclTeamLsa(comm);
   ncclTeam rail = ncclTeamRail(comm);
-  const size_t railChunkSize = ncclSymkGinRailBufSize;
-  float netLatency = comm->tunerConstants.hwLatencies[NCCL_HW_NET][NCCL_ALGO_RING][NCCL_PROTO_SIMPLE];
+  double lsaBw = getLsaBw(comm);
+  double ginLat = getGinLat(comm);
+  double ginBw = getGinBw(comm);
+  int nMaxBlocks = std::min<int>(comm->config.maxCTAs, ncclSymkMaxBlocks);
+  if (k == ncclSymkKernelId_AllGather_RailRing_LsaSTMC) {
+    nMaxBlocks = std::min<int>(nMaxBlocks, divUp((comm->cudaArch < 1000 ? 16 : 32), comm->nvlsResources->nHeads));
+  }
+  int nMinBlocks = comm->config.minCTAs;
+  int nUserCTAs = std::min<int>(ncclSymkMaxBlocks, ncclParamSymCTAs());
+  if (nUserCTAs > 0) nMinBlocks = nMaxBlocks = nUserCTAs;
+
   *timeUs = FLT_MAX;
   *nBlocks = 0;
   switch (k) {
-    case ncclSymkKernelId_AllGather_GinHier_MCRing: {
-        int requiredBlocks = (int)std::min(DIVUP(nBytes, railChunkSize), (size_t)ncclSymkMaxBlocks);
-        int factor = comm->compCap >= 100 ? 32 : 16;
-        int maxBlocks = DIVUP(factor, comm->nvlsResources->nHeads);
-        float intraBw = nvlinkBws[compCapIndex];
-        float interBw = comm->minNetBw;
-        float intraTime = (float)(nBytes * comm->nRanks) / intraBw;
-        float interTime = (float)(nBytes * (rail.nRanks - 1)) / interBw;
-        uint32_t steps = DIVUP(nBytes, railChunkSize) * (rail.nRanks - 1);
-        *timeUs = steps * netLatency + std::max(intraTime, interTime);
-        *nBlocks = std::max(comm->config.minCTAs, std::min(comm->config.maxCTAs, std::min(requiredBlocks, maxBlocks)));
-        break;
-      }
+  case ncclSymkKernelId_AllGather_RailRing_LsaSTMC: {
+      constexpr int railChunkSize = ncclSymkAllGather_RailRing_ChunkSize;
+      int requiredBlocks = DIVUP(nBytes, railChunkSize);
+      float intraBw = lsaBw;
+      float interBw = ginBw;
+      float intraTime = (float)(nBytes * comm->nRanks) / intraBw;
+      float interTime = (float)(nBytes * (rail.nRanks - 1)) / interBw;
+      uint32_t steps = DIVUP(nBytes, railChunkSize) * (rail.nRanks - 1);
+      *timeUs = steps * ginLat + std::max(intraTime, interTime);
+      *nBlocks = std::max(nMinBlocks, std::min(nMaxBlocks, requiredBlocks));
+    } break;
+  case ncclSymkKernelId_ReduceScatter_RailA2A_LsaLD:
+  case ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC: {
+      bool ldmc = k == ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC;
+      nMaxBlocks = std::min(nMaxBlocks, symk->maxGinInboxBlocks);
+      nMaxBlocks = std::min(nMaxBlocks, calcSatBlocks_ReduceScatter_RailA2A(comm, ldmc));
+      constexpr int chunkSize = 64<<10;
+      double smBw = getSmBw_ReduceScatter_RailA2A(comm, ldmc);
+      double smMul, lsaMul, ginMul;
+      getBusMul_ReduceScatter_RailA2A(comm, ldmc, &smMul, &lsaMul, &ginMul);
+      *nBlocks = divUp(nBytes, chunkSize);
+      // max against nMinBlocks last since we may have nMaxBlocks < nMinBlocks
+      *nBlocks = std::max(nMinBlocks, std::min(nMaxBlocks, *nBlocks));
+      double effBw = (*nBlocks)*(smBw/smMul);
+      effBw = std::min(effBw, lsaBw/lsaMul);
+      effBw = std::min(effBw, ginBw/ginMul);
+      double time = nBytes/effBw;
+      // Delayed by LSA processing of first chunk.
+      time += std::min<size_t>(nBytes, chunkSize*(*nBlocks))*(lsaMul/lsaBw + ginMul/ginBw);
+      // Delay by GIN latency of first chunk.
+      time += ginLat;
+      *timeUs = (/*usec/sec=*/1.e6)*time;
+    } break;
   default: break;
   }
 }
@@ -272,12 +404,16 @@ static void queryModel_lsa(struct ncclComm* comm, ncclSymkKernelId k, size_t nBy
 }
 
 ncclResult_t ncclSymkInitOnce(struct ncclComm* comm) {
+  // ncclTeamLsa() below calls this internally but drops the error code so we do it here.
+  NCCLCHECK(ncclDevrInitOnce(comm));
+
   struct ncclSymkState* symk = &comm->symkState;
   if (!symk->initialized) {
     symk->initialized = true;
     struct ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
-    reqs.lsaMultimem = comm->nvlsSupport;
-    reqs.barrierCount = ncclSymkMaxBlocks;
+    symk->hasLsaMultimem = comm->nvlsSupport && ncclTeamLsa(comm).nRanks > 2;
+    reqs.lsaMultimem = symk->hasLsaMultimem;
+    reqs.lsaBarrierCount = ncclSymkMaxBlocks;
 
     struct ncclDevResourceRequirements lla2aReq;
     ncclLLA2ACreateRequirement(
@@ -287,20 +423,53 @@ ncclResult_t ncclSymkInitOnce(struct ncclComm* comm) {
     lla2aReq.next = reqs.resourceRequirementsList;
     reqs.resourceRequirementsList = &lla2aReq;
 
+    struct ncclDevResourceRequirements ginInboxRailReq = {};
+    struct ncclDevResourceRequirements ginOutboxReq = {};
     struct ncclDevResourceRequirements railSignalReq = {};
-    if (comm->nNodes > 1) {
+    if (ncclParamSymGinKernelsEnable() && ncclTeamLsa(comm).nRanks < comm->nRanks) {
+      int maxBlocks;
+      size_t bufSize;
+      getRequirements_gin(comm, &maxBlocks, &bufSize);
+
+      maxBlocks = std::max(maxBlocks, comm->config.minCTAs);
+      maxBlocks = std::min(maxBlocks, comm->config.maxCTAs);
+      if (ncclParamSymCTAs() >= 1) maxBlocks = ncclParamSymCTAs();
+      maxBlocks = std::min(maxBlocks, ncclSymkMaxBlocks);
+      symk->maxGinInboxBlocks = maxBlocks;
+
+      ncclGinInboxA2ACreateRequirement(
+        ncclTeamRail(comm), maxBlocks, log2Up(bufSize),
+        &symk->kcomm.ginInboxRail, &ginInboxRailReq
+      );
+      ginInboxRailReq.next = reqs.resourceRequirementsList;
+      reqs.resourceRequirementsList = &ginInboxRailReq;
+
+      ncclGinOutboxCreateRequirement(
+        maxBlocks, log2Up(bufSize),
+        &symk->kcomm.ginOutbox, &ginOutboxReq
+      );
+      ginOutboxReq.next = reqs.resourceRequirementsList;
+      reqs.resourceRequirementsList = &ginOutboxReq;
+
       uint32_t railSignalCount = ncclTeamRail(comm).nRanks * ncclSymkMaxBlocks;
 
       railSignalReq.bufferSize = 0;
       railSignalReq.bufferAlign = 0;
       railSignalReq.outBufferHandle = nullptr;
       railSignalReq.ginSignalCount = railSignalCount;
-      railSignalReq.ginCounterCount = 0;
       railSignalReq.outGinSignalStart = &symk->kcomm.ginSyncHandle.railSignals;
+      railSignalReq.ginCounterCount = ncclSymkMaxBlocks;
+      railSignalReq.outGinCounterStart = &symk->kcomm.ginCounterPerBlock;
       railSignalReq.next = reqs.resourceRequirementsList;
       reqs.resourceRequirementsList = &railSignalReq;
+      reqs.railGinBarrierCount = ncclSymkMaxBlocks;
+
+      bool railedGinInitialized = (comm->sharedRes->ginState.connected &&
+                                    comm->sharedRes->ginState.ginConnectionType == NCCL_GIN_CONNECTION_RAIL);
+      reqs.ginConnectionType = railedGinInitialized ? NCCL_GIN_CONNECTION_RAIL : comm->globalGinSupport;
     }
-    NCCLCHECK(ncclDevrCommCreateInternal(comm, &reqs, &symk->kcomm.devComm));
+
+    NCCLCHECK(ncclDevrCommCreateInternal(comm, &reqs, &symk->kcomm.devComm, true));
   }
   return ncclSuccess;
 }
@@ -344,9 +513,9 @@ static uint32_t ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int/*ncclDe
   uint32_t kmask = kernelMask_coll(coll);
   kmask &= kernelMask_user();
 
-  bool hasSTMC = comm->nvlsSupport;
+  bool hasSTMC = comm->symkState.hasLsaMultimem;
   bool hasLDMC = false;
-  if (comm->nvlsSupport) {
+  if (comm->symkState.hasLsaMultimem) {
     switch (ty) {
     case ncclInt32:
     case ncclUint32:
@@ -379,8 +548,10 @@ static uint32_t ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int/*ncclDe
   // to be at least 32 bytes per chunk)
   if (nBusBytes >= 32*(size_t(2)<<30)) kmask = 0;
 
-  kmask &= (comm->nNodes > 1) ? kernelMask_Gin : ~kernelMask_Gin;
-
+  bool hasGin = ncclParamSymGinKernelsEnable() != 0;
+  if (!hasGin) kmask &= ~kernelMask_Gin;
+  bool needGin = ncclTeamLsa(comm).nRanks < comm->nRanks;
+  kmask &= needGin ? kernelMask_Gin : ~kernelMask_Gin;
   return kmask;
 }
 
@@ -448,6 +619,14 @@ const char* ncclSymkKernelIdToString(int kernelId) {
   return kernelName[kernelId];
 }
 
+int ncclSymkMaxChunkElts(struct ncclComm* comm, ncclSymkKernelId kernelId, int/*ncclDevRedOp_t*/ red, ncclDataType_t ty) {
+  bool isReduce = 1 & ((kernelMask_AR|kernelMask_RS) >> (int)kernelId);
+  int eltSize = ncclTypeSize(ty);
+  int accMult = !isReduce ? 1 : eltSize < 4 ? 2 : 1;
+  int kernelIndex = ncclSymkGetKernelIndex(kernelId, red, ty);
+  return ncclSymkKernelMaxDynamicSmem[kernelIndex]/(eltSize*accMult);
+}
+
 /* this function fills in the devWork except nextWorkOffset */
 ncclResult_t ncclSymkMakeDevWork(struct ncclComm* comm, struct ncclTaskColl* task, struct ncclSymkDevWork* outDevWork) {
   outDevWork->rootRank = task->root;
@@ -461,7 +640,6 @@ ncclResult_t ncclSymkMakeDevWork(struct ncclComm* comm, struct ncclTaskColl* tas
   outDevWork->nChannels = 0;
   return ncclSuccess;
 }
-
 
 ncclResult_t ncclGetSymRegType(struct ncclDevrWindow* sendWin, struct ncclDevrWindow* recvWin, ncclSymRegType_t* winRegType) {
   bool isSendSymmReg = false;

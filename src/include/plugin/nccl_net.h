@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2017-2022, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2017-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #ifndef NCCL_NET_H_
 #define NCCL_NET_H_
@@ -48,7 +49,6 @@
 
 typedef ncclNet_v11_t ncclNet_t;
 typedef ncclCollNet_v11_t ncclCollNet_t;
-typedef ncclGin_v11_t ncclGin_t;
 typedef ncclNetSGE_v11_t ncclNetSGE_t;
 typedef ncclNetProperties_v11_t ncclNetProperties_t;
 typedef ncclNetAttr_v11_t ncclNetAttr_t;

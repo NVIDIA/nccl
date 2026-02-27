@@ -1262,7 +1262,7 @@ NVTX_DECLSPEC void NVTX_API nvtxNameCategoryW(uint32_t category, const wchar_t* 
  * \code
  * #include <unistd.h>
  * nvtxNameOsThreadA(gettid(), "Current thread");
- * nvtxNameOsThreadA(ncclOsGetpid(), "Main thread");
+ * nvtxNameOsThreadA(ncclOsGetPid(), "Main thread");
  * \endcode
  *
  * Linux:
@@ -1272,7 +1272,7 @@ NVTX_DECLSPEC void NVTX_API nvtxNameCategoryW(uint32_t category, const wchar_t* 
  * \endcode
  * \code
  * #include <unistd.h>
- * nvtxNameOsThreadA(ncclOsGetpid(), "Main thread");
+ * nvtxNameOsThreadA(ncclOsGetPid(), "Main thread");
  * \endcode
  *
  * OS X:

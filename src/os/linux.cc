@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include "os.h"
 
@@ -25,17 +26,42 @@
 #include "param.h"
 #include <pthread.h>
 #include <sys/resource.h>
+#include <sys/syscall.h>
 #include <atomic>
 
 // Process Management
-uint64_t ncclOsGetpid() {
+uint64_t ncclOsGetPid() {
   return (uint64_t)getpid();
+}
+
+std::tm* ncclOsLocaltime(const time_t* timer, std::tm* buf) {
+  return localtime_r(timer, buf);
+}
+
+uint64_t ncclOsGetTid() {
+  return (uint64_t)syscall(SYS_gettid);
+}
+
+size_t ncclOsGetPageSize() {
+  return (size_t)sysconf(_SC_PAGESIZE);
+}
+
+void* ncclOsAlignedAlloc(size_t alignment, size_t size) {
+    return aligned_alloc(alignment, size);
+}
+
+void ncclOsAlignedFree(void* ptr) {
+    free(ptr);
+}
+
+void ncclOsSetEnv(const char* name, const char* value) {
+  setenv(name, value, 0);
 }
 
 // The default Linux stack size (8MB) is safe.
 #define SAFE_STACK_SIZE (8192*1024)
 
-ncclResult_t ncclOsSetCpuStackSize() {
+static ncclResult_t setCpuStackSize() {
   // Query the stack size used for newly launched threads.
   pthread_attr_t attr;
   size_t stackSize;
@@ -66,17 +92,13 @@ ncclResult_t ncclOsSetCpuStackSize() {
   return ncclSuccess;
 }
 
-void ncclOsSetEnv(const char* name, const char* value) {
-  setenv(name, value, 0);
-}
+extern int ncclParamSetCpuStackSize();
 
-void ncclOsSleep(unsigned int time_msec) {
-  const long c_1e6 = 1e6;
-  struct timespec tv = (struct timespec){
-    .tv_sec = time_msec / 1000,
-    .tv_nsec = (time_msec % 1000) * c_1e6,
-  };
-  nanosleep(&tv, NULL);
+ncclResult_t ncclOsInitialize() {
+  if (ncclParamSetCpuStackSize() != 0) {
+    NCCLCHECK(setCpuStackSize());
+  }
+  return ncclSuccess;
 }
 
 bool ncclOsSocketDescriptorIsValid(ncclSocketDescriptor sockDescriptor) {
@@ -204,7 +226,7 @@ static ncclResult_t socketConnectCheck(struct ncclSocket* sock, int errCode, con
       INFO(NCCL_NET|NCCL_INIT, "%s: connect to %s returned %s, retrying (%d/%ld) after sleep for %u msec",
            funcName, ncclSocketToString(&sock->addr, line), strerror(errCode),
            sock->errorRetries, ncclParamRetryCnt(), sleepTime);
-      ncclOsSleep(sleepTime);
+      std::this_thread::sleep_for(std::chrono::milliseconds(sleepTime));
     }
     NCCLCHECK(ncclOsSocketResetFd(sock)); /* in case of failure in connect, socket state is unspecified */
     sock->state = ncclSocketStateConnecting;

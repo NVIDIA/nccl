@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2016-2022, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2016-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include "comm.h"
 #include "info.h"
@@ -959,7 +960,7 @@ void* ncclProxyProgress(void *proxyState_) {
   ncclLastProxyState = state;
   char threadName[NCCL_THREAD_NAMELEN];
   snprintf(threadName, NCCL_THREAD_NAMELEN, "NCCL Progress%2d", proxyState->cudaDev);
-  nvtxNameOsThreadA(syscall(SYS_gettid), threadName);
+  nvtxNameOsThreadA(ncclOsGetTid(), threadName);
 
   int lastIdle = 0;
   /* Too frequent call of ncclProxyGetPostedOps() will result in perf regression for small message
@@ -1438,6 +1439,7 @@ static ncclResult_t proxyConnInit(struct ncclProxyLocalPeer* peer, struct ncclPr
   (*connection)->send = req->send;
   (*connection)->tpLocalRank = req->tpLocalRank;
   (*connection)->sameProcess = req->sameProcess;
+  ncclIntruQueueConstruct(&(*connection)->proxyMemHandleQueue);
   peer->tpLocalRank = req->tpLocalRank;
   peer->tpRank = req->tpRank;
 
@@ -1872,6 +1874,8 @@ ncclResult_t ncclProxyCreate(struct ncclComm* comm) {
   struct ncclProxyState* proxyState = comm->proxyState;
   if (proxyState->refCount == 1) {
     /* we have to make sure all following fields in comm have been initialized. */
+    proxyState->comm = comm;
+    proxyState->memManager = comm->memManager;  // Set shared memory manager for proxy allocations
     proxyState->tpRank = comm->rank;
     proxyState->tpnRanks = comm->nRanks;
     proxyState->tpLocalnRanks = comm->localRanks;

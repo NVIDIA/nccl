@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2022-2024, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include "param.h"
 #include "checks.h"
@@ -99,7 +100,7 @@ static ncclResult_t ncclProfilerPluginLoad(void) {
   // This is attached to the proxyOp event descriptor
   // so the plugin can figure out if the parent event
   // is in the same address space or not
-  pid = ncclOsGetpid();
+  pid = ncclOsGetPid();
 
 exit:
   return ncclSuccess;

@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2015-2022, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2015-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #ifndef NCCL_COMM_H_
 #define NCCL_COMM_H_
@@ -22,6 +23,8 @@
 #include "sym_kernels.h"
 #include "ce_coll.h"
 #include "rma/rma.h"
+#include "argcheck.h"
+#include "mem_manager.h"
 
 #if CUDART_VERSION < 9000
 struct cudaLaunchParams {
@@ -93,6 +96,7 @@ struct cliqueInfo {
 struct ncclDestructor {
   struct ncclDestructor* next;
   void* obj;
+  struct ncclComm* comm;
   ncclResult_t(*fn)(struct ncclDestructor* me);
 };
 
@@ -309,6 +313,7 @@ struct ncclKernelPlan {
   bool isRma;
   enum ncclDevWorkStorageType workStorageType;
   bool kernelSpecialized;
+  int kernelDynSmem; // only for symmetric kernels
   void* kernelFn;
   union {
     struct ncclDevKernelArgs* kernelArgs;
@@ -501,6 +506,15 @@ typedef enum ncclGroupTaskType {
 
 struct ncclCommSymTeams;
 
+// NCCL_CHECK_MODE=DEBUG_LOCAL/DEBUG_GLOBAL
+// ncclCheckModeDebugLocal : check the input args/pointers locally, it replaces ncclParamCheckPointers()
+// ncclCheckModeDebugGlobal : check the input args globally such as symmetric buffer check, etc.
+typedef enum ncclCheckMode {
+  ncclCheckModeDefault = 0,
+  ncclCheckModeDebugLocal = 1,
+  ncclCheckModeDebugGlobal = 2,
+} ncclCheckMode_t;
+
 struct ncclComm {
   uint64_t startMagic;
   struct ncclMemoryStack memPermanent, memScoped;
@@ -524,6 +538,7 @@ struct ncclComm {
   void* netContext;
   void* ginContext;
   int netPluginIndex;
+  int ginPluginIndex;
   int ncclNetVer;
   ncclNetDeviceType netDeviceType;
   ncclCollNet_t* ncclCollNet;
@@ -575,7 +590,7 @@ struct ncclComm {
   // NVL Domain info
   ncclNvlDomainInfo_v5_t nvlDomainInfo;
 
-  bool checkPointers;
+  ncclCheckMode_t checkMode;
   bool dmaBufSupport;
   bool ccEnable;
 
@@ -728,6 +743,9 @@ struct ncclComm {
   struct ncclRmaState rmaState;
   struct ncclIntruQueue<struct ncclRmaCeInitTask, &ncclRmaCeInitTask::next> rmaCeInitTaskQueue;
 
+  // Debug check
+  struct ncclIntruQueue<struct ncclArgsInfo, &ncclArgsInfo::next> argsInfoQueue;
+
   // CE Collective
   struct ncclCeColl ceColl;
   struct ncclIntruQueue<struct ncclCeInitTask, &ncclCeInitTask::next> ceInitTaskQueue;
@@ -741,12 +759,15 @@ struct ncclComm {
   int symmetricSupport;
   bool useNetPXN;
   bool useGdr;
-  bool ginSupport;
-  bool rmaProxySupport;
+  ncclGinConnectionType_t globalGinSupport;
+  bool globalRmaProxySupport;
+  bool hostRmaSupport;
   int childCount;
 
   struct ncclDevrState devrState; // The symmetric runtime state
   struct ncclSymkState symkState; // The symmetric kernels state (built on previous)
+
+  struct ncclMemManager* memManager;  // Memory manager
 
   uint64_t endMagic;
 };

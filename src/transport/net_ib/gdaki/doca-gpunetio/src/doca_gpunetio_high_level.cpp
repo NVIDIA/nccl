@@ -47,6 +47,7 @@
 #include "host/doca_verbs.h"
 #include "doca_verbs_qp.hpp"
 #include "common/doca_gpunetio_verbs_dev.h"
+#include "doca_gpunetio.hpp"
 
 #define DBR_SIZE (8)
 #define MAX_SEND_SEGS (1)
@@ -69,7 +70,7 @@ static uint32_t align_up_uint32(uint32_t value, uint32_t alignment) {
 
 static doca_error_t create_uar(struct ibv_context *ibctx,
                                enum doca_gpu_dev_verbs_nic_handler nic_handler,
-                               struct doca_verbs_uar **external_uar, bool bf_supported) {
+                               struct doca_verbs_uar **external_uar) {
     doca_error_t status = DOCA_SUCCESS;
 
     if (nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_BF) {
@@ -89,9 +90,8 @@ static doca_error_t create_uar(struct ibv_context *ibctx,
             return DOCA_SUCCESS;
     }
 
-    if (bf_supported &&
-        (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_BF ||
-         (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO && status != DOCA_SUCCESS))) {
+    if ((nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_BF) ||
+        (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO && status != DOCA_SUCCESS)) {
         status =
             doca_verbs_uar_create(ibctx, DOCA_VERBS_UAR_ALLOCATION_TYPE_BLUEFLAME, external_uar);
         if (status != DOCA_SUCCESS) {
@@ -362,15 +362,14 @@ static uint32_t calc_qp_external_umem_size(uint32_t sq_nwqes) {
     return align_up_uint32(sq_ring_size, priv_get_page_size());
 }
 
-static doca_error_t create_qp(struct doca_gpu *gpu_dev, struct ibv_pd *ibpd,
-                              enum doca_gpu_verbs_mem_reg_type mreg_type,
-                              struct doca_verbs_cq *cq_sq, uint32_t sq_nwqe,
-                              void **gpu_umem_dev_ptr, struct doca_verbs_umem **gpu_umem,
-                              void **gpu_umem_dbr_dev_ptr, struct doca_verbs_umem **gpu_umem_dbr,
-                              struct doca_verbs_uar *external_uar,
-                              enum doca_gpu_dev_verbs_nic_handler req_nic_handler,
-                              bool set_core_direct, struct doca_verbs_qp **verbs_qp,
-                              enum doca_gpu_dev_verbs_nic_handler *out_nic_handler) {
+static doca_error_t create_qp(
+    struct doca_gpu *gpu_dev, struct ibv_pd *ibpd, enum doca_gpu_verbs_mem_reg_type mreg_type,
+    struct doca_verbs_cq *cq_sq, uint32_t sq_nwqe, void **gpu_umem_dev_ptr,
+    struct doca_verbs_umem **gpu_umem, void **gpu_umem_dbr_dev_ptr,
+    struct doca_verbs_umem **gpu_umem_dbr, struct doca_verbs_uar *external_uar,
+    enum doca_gpu_dev_verbs_nic_handler req_nic_handler, bool set_core_direct,
+    enum doca_gpu_verbs_send_dbr_mode_ext send_dbr_mode_ext, struct doca_verbs_qp **verbs_qp,
+    enum doca_gpu_dev_verbs_nic_handler *out_nic_handler) {
     doca_error_t status = DOCA_SUCCESS, tmp_status = DOCA_SUCCESS;
     struct doca_verbs_qp_init_attr *verbs_qp_init_attr = NULL;
     struct doca_verbs_qp *new_qp = NULL;
@@ -403,6 +402,11 @@ static doca_error_t create_qp(struct doca_gpu *gpu_dev, struct ibv_pd *ibpd,
                                    : DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY;
     }
 
+    if (send_dbr_mode_ext > DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_VALID_DBR &&
+        nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB) {
+        nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_NO_DBR;
+    }
+
     external_umem_size = calc_qp_external_umem_size(sq_nwqe);
 
     status = doca_gpu_mem_alloc(gpu_dev, external_umem_size, priv_get_page_size(),
@@ -425,7 +429,8 @@ static doca_error_t create_qp(struct doca_gpu *gpu_dev, struct ibv_pd *ibpd,
         goto destroy_resources;
     }
 
-    if (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY) {
+    if ((nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY) ||
+        (send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED)) {
         *gpu_umem_dbr_dev_ptr = calloc(dbr_umem_align_sz, sizeof(uint8_t));
         if (*gpu_umem_dbr_dev_ptr == nullptr) {
             DOCA_LOG(LOG_ERR, "Failed to alloc gpu memory for external umem qp");
@@ -503,6 +508,15 @@ static doca_error_t create_qp(struct doca_gpu *gpu_dev, struct ibv_pd *ibpd,
         }
     }
 
+    if (send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_HW) {
+        status = doca_verbs_qp_init_attr_set_send_dbr_mode(verbs_qp_init_attr,
+                                                           DOCA_VERBS_QP_SEND_DBR_MODE_NO_DBR_EXT);
+        if (status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to set send_dbr_mode");
+            goto destroy_resources;
+        }
+    }
+
     status = doca_verbs_qp_create(ibctx, verbs_qp_init_attr, &new_qp);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to create doca verbs QP");
@@ -535,16 +549,19 @@ destroy_resources:
     if (*gpu_umem != NULL) {
         tmp_status = doca_verbs_umem_destroy(*gpu_umem);
         if (tmp_status != DOCA_SUCCESS) DOCA_LOG(LOG_ERR, "Failed to destroy gpu umem");
+        *gpu_umem = nullptr;
     }
 
     if ((*gpu_umem_dev_ptr) != 0) {
         tmp_status = doca_gpu_mem_free(gpu_dev, (*gpu_umem_dev_ptr));
         if (tmp_status != DOCA_SUCCESS) DOCA_LOG(LOG_ERR, "Failed to destroy gpu memory of umem");
+        *gpu_umem_dev_ptr = 0;
     }
 
     if (*gpu_umem_dbr != NULL) {
         tmp_status = doca_verbs_umem_destroy(*gpu_umem_dbr);
         if (tmp_status != DOCA_SUCCESS) DOCA_LOG(LOG_ERR, "Failed to destroy gpu umem");
+        *gpu_umem_dbr = nullptr;
     }
 
     if ((*gpu_umem_dbr_dev_ptr) != 0) {
@@ -555,6 +572,7 @@ destroy_resources:
             if (tmp_status != DOCA_SUCCESS)
                 DOCA_LOG(LOG_ERR, "Failed to destroy gpu memory of umem");
         }
+        *gpu_umem_dbr_dev_ptr = 0;
     }
 
     // Immediately close dmabuf_fd after registration.
@@ -563,94 +581,24 @@ destroy_resources:
     return status;
 }
 
-doca_error_t doca_gpu_verbs_create_qp_hl(struct doca_gpu_verbs_qp_init_attr_hl *qp_init_attr,
-                                         struct doca_gpu_verbs_qp_hl **qp) {
-    doca_error_t status = DOCA_SUCCESS, tmp_status = DOCA_SUCCESS;
-
-    if (qp_init_attr == nullptr || qp == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid input value: qp_init_attr %p qp %p", (void *)qp_init_attr,
-                 (void *)*qp);
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-
-    if (qp_init_attr->gpu_dev == nullptr || qp_init_attr->ibpd == nullptr ||
-        qp_init_attr->sq_nwqe == 0) {
-        DOCA_LOG(LOG_ERR, "Invalid input value: gpu_dev %p ibpd %p sq_nwqe %d",
-                 (void *)qp_init_attr->gpu_dev, (void *)qp_init_attr->ibpd, qp_init_attr->sq_nwqe);
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-
-    struct doca_gpu_verbs_qp_hl *qp_ =
-        (struct doca_gpu_verbs_qp_hl *)calloc(1, sizeof(struct doca_gpu_verbs_qp_hl));
-    if (qp_ == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed alloc memory for high-level qp");
-        return DOCA_ERROR_NO_MEMORY;
-    }
-
-    qp_->gpu_dev = qp_init_attr->gpu_dev;
-
-    if (qp_init_attr->sq_nwqe > 0) {
-        qp_init_attr->sq_nwqe =
-            (uint32_t)doca_internal_utils_next_power_of_two(qp_init_attr->sq_nwqe);
-
-        status = create_cq(qp_->gpu_dev, qp_init_attr->ibpd, qp_init_attr->mreg_type,
-                           qp_init_attr->sq_nwqe, &qp_->cq_sq_umem_gpu_ptr, &qp_->cq_sq_umem,
-                           &qp_->cq_sq_umem_dbr_gpu_ptr, &qp_->cq_sq_umem_dbr, NULL, &qp_->cq_sq);
-        if (status != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR, "Failed to create doca verbs cq");
-            goto exit_error;
-        }
-    }
-
-    qp_->nic_handler = qp_init_attr->nic_handler;
-
-    status = create_uar(qp_init_attr->ibpd->context, qp_->nic_handler, &qp_->external_uar, true);
-    if (status != DOCA_SUCCESS) {
-        DOCA_LOG(LOG_ERR, "Failed to create doca verbs uar");
-        goto exit_error;
-    }
-
-    status = create_qp(qp_->gpu_dev, qp_init_attr->ibpd, qp_init_attr->mreg_type, qp_->cq_sq,
-                       qp_init_attr->sq_nwqe, &qp_->qp_umem_gpu_ptr, &qp_->qp_umem,
-                       &qp_->qp_umem_dbr_gpu_ptr, &qp_->qp_umem_dbr, qp_->external_uar,
-                       qp_init_attr->nic_handler, false, &qp_->qp, &qp_->nic_handler);
-    if (status != DOCA_SUCCESS) {
-        DOCA_LOG(LOG_ERR, "Failed to create doca verbs qp");
-        goto exit_error;
-    }
-
-    status = doca_gpu_verbs_export_qp(qp_->gpu_dev, qp_->qp, qp_->nic_handler, qp_->qp_umem_gpu_ptr,
-                                      qp_->cq_sq, &qp_->qp_gverbs);
-    if (status != DOCA_SUCCESS) {
-        DOCA_LOG(LOG_ERR, "Failed to create GPU verbs QP");
-        return status;
-    }
-
-    *qp = qp_;
-
-    return DOCA_SUCCESS;
-
-exit_error:
-    if (qp_->external_uar != NULL) {
-        tmp_status = doca_verbs_uar_destroy(qp_->external_uar);
-        if (tmp_status != DOCA_SUCCESS) DOCA_LOG(LOG_ERR, "Failed to destroy doca verbs UAR");
-    }
-
-    free(qp_);
-    return status;
-}
-
 static doca_error_t doca_gpu_verbs_destroy_qp_hl_internal(struct doca_gpu_verbs_qp_hl *qp) {
     doca_error_t status;
 
     if (qp == nullptr) return DOCA_ERROR_INVALID_VALUE;
 
-    status = doca_gpu_verbs_unexport_qp(qp->gpu_dev, qp->qp_gverbs);
-    if (status != DOCA_SUCCESS)
-        DOCA_LOG(LOG_ERR, "Failed to destroy doca gpu thread argument cq memory");
+    const uint8_t emulate_no_dbr_ext =
+        (qp->send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED);
 
-    status = doca_verbs_qp_destroy(qp->qp);
-    if (status != DOCA_SUCCESS) DOCA_LOG(LOG_ERR, "Failed to destroy doca verbs QP");
+    if (qp->qp_gverbs != nullptr) {
+        status = doca_gpu_verbs_unexport_qp(qp->gpu_dev, qp->qp_gverbs);
+        if (status != DOCA_SUCCESS)
+            DOCA_LOG(LOG_ERR, "Failed to destroy doca gpu thread argument cq memory");
+    }
+
+    if (qp->qp != nullptr) {
+        status = doca_verbs_qp_destroy(qp->qp);
+        if (status != DOCA_SUCCESS) DOCA_LOG(LOG_ERR, "Failed to destroy doca verbs QP");
+    }
 
     if (qp->qp_umem != NULL) {
         status = doca_verbs_umem_destroy(qp->qp_umem);
@@ -669,7 +617,7 @@ static doca_error_t doca_gpu_verbs_destroy_qp_hl_internal(struct doca_gpu_verbs_
     }
 
     if (qp->qp_umem_dbr_gpu_ptr != NULL) {
-        if (qp->nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY) {
+        if (qp->nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY || emulate_no_dbr_ext) {
             free(qp->qp_umem_dbr_gpu_ptr);
         } else {
             status = doca_gpu_mem_free(qp->gpu_dev, qp->qp_umem_dbr_gpu_ptr);
@@ -717,6 +665,99 @@ static doca_error_t doca_gpu_verbs_destroy_qp_hl_internal(struct doca_gpu_verbs_
     return DOCA_SUCCESS;
 }
 
+doca_error_t doca_gpu_verbs_create_qp_hl(struct doca_gpu_verbs_qp_init_attr_hl *qp_init_attr,
+                                         struct doca_gpu_verbs_qp_hl **qp) {
+    doca_error_t status = DOCA_SUCCESS;
+
+    if (qp_init_attr == nullptr || qp == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid input value: qp_init_attr %p qp %p", (void *)qp_init_attr,
+                 (void *)*qp);
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (qp_init_attr->gpu_dev == nullptr || qp_init_attr->ibpd == nullptr ||
+        qp_init_attr->sq_nwqe == 0) {
+        DOCA_LOG(LOG_ERR, "Invalid input value: gpu_dev %p ibpd %p sq_nwqe %d",
+                 (void *)qp_init_attr->gpu_dev, (void *)qp_init_attr->ibpd, qp_init_attr->sq_nwqe);
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if ((qp_init_attr->send_dbr_mode_ext ==
+         DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED) &&
+        !qp_init_attr->gpu_dev->support_gdrcopy) {
+        DOCA_LOG(LOG_ERR, "SW-emulated no DBR feature is not supported without GDRCopy");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (qp_init_attr->nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO &&
+        qp_init_attr->nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY &&
+        qp_init_attr->nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB &&
+        qp_init_attr->nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_BF) {
+        DOCA_LOG(LOG_ERR, "nic_handler must be AUTO, CPU_PROXY, GPU_SM_DB, or GPU_SM_BF");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    struct doca_gpu_verbs_qp_hl *qp_ =
+        (struct doca_gpu_verbs_qp_hl *)calloc(1, sizeof(struct doca_gpu_verbs_qp_hl));
+    if (qp_ == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed alloc memory for high-level qp");
+        return DOCA_ERROR_NO_MEMORY;
+    }
+
+    qp_->gpu_dev = qp_init_attr->gpu_dev;
+    qp_->send_dbr_mode_ext = qp_init_attr->send_dbr_mode_ext;
+
+    if (qp_init_attr->sq_nwqe > 0) {
+        qp_init_attr->sq_nwqe =
+            (uint32_t)doca_internal_utils_next_power_of_two(qp_init_attr->sq_nwqe);
+
+        status = create_cq(qp_->gpu_dev, qp_init_attr->ibpd, qp_init_attr->mreg_type,
+                           qp_init_attr->sq_nwqe, &qp_->cq_sq_umem_gpu_ptr, &qp_->cq_sq_umem,
+                           &qp_->cq_sq_umem_dbr_gpu_ptr, &qp_->cq_sq_umem_dbr, NULL, &qp_->cq_sq);
+        if (status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to create doca verbs cq");
+            goto exit_error;
+        }
+    }
+
+    qp_->nic_handler = qp_init_attr->nic_handler;
+
+    status = create_uar(qp_init_attr->ibpd->context, qp_->nic_handler, &qp_->external_uar);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to create doca verbs uar");
+        goto exit_error;
+    }
+
+    status = create_qp(qp_->gpu_dev, qp_init_attr->ibpd, qp_init_attr->mreg_type, qp_->cq_sq,
+                       qp_init_attr->sq_nwqe, &qp_->qp_umem_gpu_ptr, &qp_->qp_umem,
+                       &qp_->qp_umem_dbr_gpu_ptr, &qp_->qp_umem_dbr, qp_->external_uar,
+                       qp_init_attr->nic_handler, false, qp_init_attr->send_dbr_mode_ext, &qp_->qp,
+                       &qp_->nic_handler);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to create doca verbs qp");
+        goto exit_error;
+    }
+
+    status = doca_gpu_verbs_export_qp(qp_->gpu_dev, qp_->qp, qp_->nic_handler, qp_->qp_umem_gpu_ptr,
+                                      qp_->cq_sq, qp_->send_dbr_mode_ext, &qp_->qp_gverbs);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to create GPU verbs QP");
+        return status;
+    }
+
+    *qp = qp_;
+
+    return DOCA_SUCCESS;
+
+exit_error:
+    if (qp_) {
+        doca_gpu_verbs_destroy_qp_hl_internal(qp_);
+    }
+
+    free(qp_);
+    return status;
+}
+
 doca_error_t doca_gpu_verbs_destroy_qp_hl(struct doca_gpu_verbs_qp_hl *qp) {
     if (qp == nullptr) return DOCA_ERROR_INVALID_VALUE;
 
@@ -728,7 +769,7 @@ doca_error_t doca_gpu_verbs_destroy_qp_hl(struct doca_gpu_verbs_qp_hl *qp) {
 
 doca_error_t doca_gpu_verbs_create_qp_group_hl(struct doca_gpu_verbs_qp_init_attr_hl *qp_init_attr,
                                                struct doca_gpu_verbs_qp_group_hl **qpg) {
-    doca_error_t status = DOCA_SUCCESS, tmp_status = DOCA_SUCCESS;
+    doca_error_t status = DOCA_SUCCESS;
 
     if (qp_init_attr == nullptr || qpg == nullptr) {
         DOCA_LOG(LOG_ERR, "Invalid input value: qp_init_attr %p qp %p", (void *)qp_init_attr,
@@ -743,8 +784,17 @@ doca_error_t doca_gpu_verbs_create_qp_group_hl(struct doca_gpu_verbs_qp_init_att
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    if (qp_init_attr->nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_BF) {
-        DOCA_LOG(LOG_ERR, "BlueFlame not supported with QP group");
+    if (qp_init_attr->nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO &&
+        qp_init_attr->nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY &&
+        qp_init_attr->nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB) {
+        DOCA_LOG(LOG_ERR, "nic_handler must be AUTO, CPU_PROXY, or GPU_SM_DB");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if ((qp_init_attr->send_dbr_mode_ext ==
+         DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED) &&
+        !qp_init_attr->gpu_dev->support_gdrcopy) {
+        DOCA_LOG(LOG_ERR, "SW-emulated no DBR feature is not supported without GDRCopy");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -758,9 +808,10 @@ doca_error_t doca_gpu_verbs_create_qp_group_hl(struct doca_gpu_verbs_qp_init_att
     /********** Create main QP **********/
 
     qpg_->qp_main.gpu_dev = qp_init_attr->gpu_dev;
+    qpg_->qp_main.send_dbr_mode_ext = qp_init_attr->send_dbr_mode_ext;
 
     status = create_uar(qp_init_attr->ibpd->context, qpg_->qp_main.nic_handler,
-                        &qpg_->qp_main.external_uar, true);
+                        &qpg_->qp_main.external_uar);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to create doca verbs uar");
         goto exit_error;
@@ -781,19 +832,21 @@ doca_error_t doca_gpu_verbs_create_qp_group_hl(struct doca_gpu_verbs_qp_init_att
         }
     }
 
-    status = create_qp(
-        qpg_->qp_main.gpu_dev, qp_init_attr->ibpd, qp_init_attr->mreg_type, qpg_->qp_main.cq_sq,
-        qp_init_attr->sq_nwqe, &qpg_->qp_main.qp_umem_gpu_ptr, &qpg_->qp_main.qp_umem,
-        &qpg_->qp_main.qp_umem_dbr_gpu_ptr, &qpg_->qp_main.qp_umem_dbr, qpg_->qp_main.external_uar,
-        qp_init_attr->nic_handler, false, &qpg_->qp_main.qp, &qpg_->qp_main.nic_handler);
+    status = create_qp(qpg_->qp_main.gpu_dev, qp_init_attr->ibpd, qp_init_attr->mreg_type,
+                       qpg_->qp_main.cq_sq, qp_init_attr->sq_nwqe, &qpg_->qp_main.qp_umem_gpu_ptr,
+                       &qpg_->qp_main.qp_umem, &qpg_->qp_main.qp_umem_dbr_gpu_ptr,
+                       &qpg_->qp_main.qp_umem_dbr, qpg_->qp_main.external_uar,
+                       qp_init_attr->nic_handler, false, qp_init_attr->send_dbr_mode_ext,
+                       &qpg_->qp_main.qp, &qpg_->qp_main.nic_handler);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to create doca verbs qp");
         goto exit_error;
     }
 
-    status = doca_gpu_verbs_export_qp(qpg_->qp_main.gpu_dev, qpg_->qp_main.qp,
-                                      qpg_->qp_main.nic_handler, qpg_->qp_main.qp_umem_gpu_ptr,
-                                      qpg_->qp_main.cq_sq, &qpg_->qp_main.qp_gverbs);
+    status =
+        doca_gpu_verbs_export_qp(qpg_->qp_main.gpu_dev, qpg_->qp_main.qp, qpg_->qp_main.nic_handler,
+                                 qpg_->qp_main.qp_umem_gpu_ptr, qpg_->qp_main.cq_sq,
+                                 qpg_->qp_main.send_dbr_mode_ext, &qpg_->qp_main.qp_gverbs);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to create GPU verbs QP");
         return status;
@@ -803,6 +856,7 @@ doca_error_t doca_gpu_verbs_create_qp_group_hl(struct doca_gpu_verbs_qp_init_att
 
     qpg_->qp_companion.gpu_dev = qp_init_attr->gpu_dev;
     qpg_->qp_companion.external_uar = qpg_->qp_main.external_uar;
+    qpg_->qp_companion.send_dbr_mode_ext = qpg_->qp_main.send_dbr_mode_ext;
 
     if (qp_init_attr->sq_nwqe > 0) {
         qp_init_attr->sq_nwqe =
@@ -825,16 +879,17 @@ doca_error_t doca_gpu_verbs_create_qp_group_hl(struct doca_gpu_verbs_qp_init_att
                        &qpg_->qp_companion.qp_umem_gpu_ptr, &qpg_->qp_companion.qp_umem,
                        &qpg_->qp_companion.qp_umem_dbr_gpu_ptr, &qpg_->qp_companion.qp_umem_dbr,
                        qpg_->qp_companion.external_uar, qp_init_attr->nic_handler, true,
-                       &qpg_->qp_companion.qp, &qpg_->qp_companion.nic_handler);
+                       qp_init_attr->send_dbr_mode_ext, &qpg_->qp_companion.qp,
+                       &qpg_->qp_companion.nic_handler);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to create doca verbs qp");
         goto exit_error;
     }
 
-    status =
-        doca_gpu_verbs_export_qp(qpg_->qp_companion.gpu_dev, qpg_->qp_companion.qp,
-                                 qpg_->qp_companion.nic_handler, qpg_->qp_companion.qp_umem_gpu_ptr,
-                                 qpg_->qp_companion.cq_sq, &qpg_->qp_companion.qp_gverbs);
+    status = doca_gpu_verbs_export_qp(
+        qpg_->qp_companion.gpu_dev, qpg_->qp_companion.qp, qpg_->qp_companion.nic_handler,
+        qpg_->qp_companion.qp_umem_gpu_ptr, qpg_->qp_companion.cq_sq,
+        qpg_->qp_companion.send_dbr_mode_ext, &qpg_->qp_companion.qp_gverbs);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to create GPU verbs QP");
         return status;
@@ -845,9 +900,10 @@ doca_error_t doca_gpu_verbs_create_qp_group_hl(struct doca_gpu_verbs_qp_init_att
     return DOCA_SUCCESS;
 
 exit_error:
-    if (qpg_->qp_main.external_uar != NULL) {
-        tmp_status = doca_verbs_uar_destroy(qpg_->qp_main.external_uar);
-        if (tmp_status != DOCA_SUCCESS) DOCA_LOG(LOG_ERR, "Failed to destroy doca verbs UAR");
+    if (qpg_) {
+        doca_gpu_verbs_destroy_qp_hl_internal(&qpg_->qp_main);
+        qpg_->qp_companion.external_uar = nullptr;
+        doca_gpu_verbs_destroy_qp_hl_internal(&qpg_->qp_companion);
     }
 
     free(qpg_);

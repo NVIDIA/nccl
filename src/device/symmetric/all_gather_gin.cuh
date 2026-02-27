@@ -1,14 +1,21 @@
+/*************************************************************************
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * See LICENSE.txt for more license information
+ *************************************************************************/
+
 #include "sym_kernels.h"
 #include "kernel.cuh"
 #include "primitives.cuh"
 #include "gin_scratch__types.h"
 
-__device__ __forceinline__ void ncclSymkRun_AllGather_GinHier_MCRing(struct ncclSymkDevWorkArgs const* args) {
+__device__ __forceinline__ void ncclSymkRun_AllGather_RailRing_LsaSTMC(struct ncclSymkDevWorkArgs const* args) {
   ncclCoopCta cta;
   ncclSymkArgsHandler handler(args);
   ncclTeam rail = ncclTeamRail(handler.comm);
-  ncclGin gin(handler.comm, (int)blockIdx.x);
-  constexpr int chunkSize = ncclSymkGinRailBufSize;
+  ncclGin gin(handler.comm, blockIdx.x % handler.comm.ginContextCount);
+  constexpr int chunkSize = ncclSymkAllGather_RailRing_ChunkSize;
   ncclGinSignal_t railSignals = handler.ginSyncHandle.railSignals + blockIdx.x * rail.nRanks;
   ncclBarrierSession<ncclCoopCta> bar(cta, ncclTeamTagWorld(), gin, blockIdx.x, /*multimem=*/true);
   int nextPeer = (rail.rank + 1) % rail.nRanks;

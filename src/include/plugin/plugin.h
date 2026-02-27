@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2024-2025, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #ifndef NCCL_PLUGIN_H_
 #define NCCL_PLUGIN_H_
@@ -11,12 +12,14 @@
 
 enum ncclPluginType {
   ncclPluginTypeNet,
+  ncclPluginTypeGin,
   ncclPluginTypeTuner,
   ncclPluginTypeProfiler,
   ncclPluginTypeEnv,
 };
 
 void* ncclOpenNetPluginLib(const char* name);
+void* ncclOpenGinPluginLib(const char* name);
 void* ncclOpenTunerPluginLib(const char* name);
 void* ncclOpenProfilerPluginLib(const char* name);
 void* ncclOpenEnvPluginLib(const char* name);

@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2016-2024, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2016-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include <cstdarg>
 #include <cstddef>
@@ -1247,7 +1248,7 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
         ranksPerNodeMax = auxComm[commIdx].ranksPerNodeMax;
       for (int rankIdx = 0; rankIdx < auxComm[commIdx].comm->nRanks; rankIdx++) {
         struct rasCollComms::comm::rank* rank = auxComm[commIdx].comm->ranks+rankIdx;
-        peerNvmlDevs[rank->peerIdx] |= (1UL << rank->nvmlDev);
+        peerNvmlDevs[rank->peerIdx] |= (1ULL << rank->nvmlDev);
       }
     }
     ranksTotal = 0;
@@ -2043,7 +2044,7 @@ const char* rasGpuDevsToString(uint64_t cudaDevs, uint64_t nvmlDevs, char* buf, 
   bool first = true;
   buf[0] = '\0';
   for (int i = 0; i < sizeof(cudaDevs)*8; i++)
-    if (cudaDevs & (1UL << i)) {
+    if (cudaDevs & (1ULL << i)) {
       snprintf(buf+strlen(buf), size-strlen(buf), "%s%d", (first ? "" : ","), i);
       first = false;
     }
@@ -2051,7 +2052,7 @@ const char* rasGpuDevsToString(uint64_t cudaDevs, uint64_t nvmlDevs, char* buf, 
     snprintf(buf+strlen(buf), size-strlen(buf), " (NVML ");
     first = true;
     for (int i = 0; i < sizeof(nvmlDevs)*8; i++)
-      if (nvmlDevs & (1UL << i)) {
+      if (nvmlDevs & (1ULL << i)) {
         snprintf(buf+strlen(buf), size-strlen(buf), "%s%d", (first ? "" : ","), i);
         first = false;
       }

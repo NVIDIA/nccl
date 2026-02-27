@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2016-2022, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2016-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include "comm.h"
 #include "core.h"
@@ -984,7 +985,7 @@ float sm90SpeedArrayInter[] = { 48.0, 45.0, 42.0, 40.0, 30.0, 24.0, 22.0, 20.0, 
 #define NSPEEDSINTER_SM90 (sizeof(sm90SpeedArrayInter)/sizeof(float))
 
 float sm100SpeedArrayIntra[] = { 90.0, 80.0, 70.0, 60.0, 50.0, 45.0, 40.0, 30.0, 24.0, 20.0, 19.0, 18.0 };
-float sm100SpeedArrayInter[] = { 96.0, 48.0, 45.1, 42.0, 40.0, 30.0, 24.0, 22.0, 20.0, 17.5, 15.0, 12.0, 6.0, 3.0, 2.4, 1.2, 0.24, 0.12 };
+float sm100SpeedArrayInter[] = { 96.0, 80.0, 48.0, 45.1, 42.0, 40.0, 30.0, 24.0, 22.0, 20.0, 17.5, 15.0, 12.0, 6.0, 3.0, 2.4, 1.2, 0.24, 0.12 };
 #define NSPEEDSINTRA_SM100 (sizeof(sm100SpeedArrayIntra)/sizeof(float))
 #define NSPEEDSINTER_SM100 (sizeof(sm100SpeedArrayInter)/sizeof(float))
 
@@ -1238,11 +1239,14 @@ done:
   return ncclSuccess;
 }
 
+// Max chars per GPU entry: " GPU/xxxxxxxxxxxxxxxx-xxxxxxxxxxxxxxxx" (~40 chars)
+#define CHARS_PER_GPU_ENTRY 48
+
 ncclResult_t ncclTopoPrintGraph(struct ncclTopoSystem* system, struct ncclTopoGraph* graph) {
   INFO(NCCL_GRAPH, "Pattern %d, crossNic %d, nChannels %d, bw %f/%f, type %s/%s, sameChannels %d", graph->pattern, graph->crossNic, graph->nChannels, graph->bwIntra, graph->bwInter, topoPathTypeStr[graph->typeIntra], topoPathTypeStr[graph->typeInter], graph->sameChannels);
   int ngpus = system->nodes[GPU].count;
 
-  char line[1024];
+  char* line = (char*)malloc(ngpus * CHARS_PER_GPU_ENTRY);
   for (int c=0; c<graph->nChannels; c++) {
     sprintf(line, "%2d :", c);
     int offset = strlen(line);
@@ -1264,6 +1268,7 @@ ncclResult_t ncclTopoPrintGraph(struct ncclTopoSystem* system, struct ncclTopoGr
     }
     INFO(NCCL_GRAPH, "%s", line);
   }
+  free(line);
   return ncclSuccess;
 }
 

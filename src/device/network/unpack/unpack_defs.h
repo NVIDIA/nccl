@@ -1,9 +1,11 @@
 /*************************************************************************
- * Copyright (c) 2023, Google LLC.  All rights reserved.
- * Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2023 Google LLC.  All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0 and BSD-3
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
+
 #ifndef NET_DEVICE_UNPACK_DEFS_H
 #define NET_DEVICE_UNPACK_DEFS_H
 

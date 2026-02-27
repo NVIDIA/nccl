@@ -91,16 +91,45 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_wait_until_slot_availa
  */
 template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
-          enum doca_gpu_dev_verbs_qp_type qp_type = DOCA_GPUNETIO_VERBS_QP_SQ,
-          bool wait_for_availability = true>
+          enum doca_gpu_dev_verbs_qp_type qp_type = DOCA_GPUNETIO_VERBS_QP_SQ>
 __device__ static __forceinline__ uint64_t
-doca_gpu_dev_verbs_reserve_wq_slots(struct doca_gpu_dev_verbs_qp *qp, uint32_t count) {
+doca_gpu_dev_verbs_reserve_wq_slots(struct doca_gpu_dev_verbs_qp *qp, uint32_t count,
+                                    uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
     uint64_t wqe_idx =
         doca_gpu_dev_verbs_atomic_add<uint64_t, resource_sharing_mode>(&qp->sq_rsvd_index, count);
-    if (wait_for_availability)
+    if (!(code_opt & DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_SKIP_AVAILABILITY_CHECK))
         doca_gpu_dev_verbs_wait_until_slot_available<resource_sharing_mode>(qp,
                                                                             wqe_idx + count - 1);
     return wqe_idx;
+}
+
+/**
+ * @brief Mark the WQEs in the range [from_wqe_idx, to_wqe_idx] as ready.
+ *
+ * @param ready_index - Ready WQE sequence index to advance
+ * @param from_wqe_idx - Starting WQE index
+ * @param to_wqe_idx - Ending WQE index
+ */
+template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
+              DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU>
+__device__ static __forceinline__ void doca_gpu_dev_common_mark_wqes_ready(uint64_t &ready_index,
+                                                                           uint64_t from_wqe_idx,
+                                                                           uint64_t to_wqe_idx) {
+    if (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_EXCLUSIVE)
+        ready_index = to_wqe_idx + 1;
+    else if (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_CTA) {
+        doca_gpu_dev_verbs_fence_release<DOCA_GPUNETIO_VERBS_SYNC_SCOPE_CTA>();
+        cuda::atomic_ref<uint64_t, cuda::thread_scope_block> ready_index_aref(ready_index);
+        while (ready_index_aref.load(cuda::memory_order_relaxed) != from_wqe_idx) continue;
+        doca_gpu_dev_verbs_fence_acquire<DOCA_GPUNETIO_VERBS_SYNC_SCOPE_CTA>();
+        ready_index_aref.store(to_wqe_idx + 1, cuda::memory_order_relaxed);
+    } else if (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU) {
+        doca_gpu_dev_verbs_fence_release<DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU>();
+        cuda::atomic_ref<uint64_t, cuda::thread_scope_device> ready_index_aref(ready_index);
+        while (ready_index_aref.load(cuda::memory_order_relaxed) != from_wqe_idx) continue;
+        doca_gpu_dev_verbs_fence_acquire<DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU>();
+        ready_index_aref.store(to_wqe_idx + 1, cuda::memory_order_relaxed);
+    }
 }
 
 /**
@@ -115,21 +144,8 @@ template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
           enum doca_gpu_dev_verbs_qp_type qp_type = DOCA_GPUNETIO_VERBS_QP_SQ>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_mark_wqes_ready(
     struct doca_gpu_dev_verbs_qp *qp, uint64_t from_wqe_idx, uint64_t to_wqe_idx) {
-    if (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_EXCLUSIVE)
-        qp->sq_ready_index = to_wqe_idx + 1;
-    else if (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_CTA) {
-        doca_gpu_dev_verbs_fence_release<DOCA_GPUNETIO_VERBS_SYNC_SCOPE_CTA>();
-        cuda::atomic_ref<uint64_t, cuda::thread_scope_block> ready_index_aref(qp->sq_ready_index);
-        while (ready_index_aref.load(cuda::memory_order_relaxed) != from_wqe_idx) continue;
-        doca_gpu_dev_verbs_fence_acquire<DOCA_GPUNETIO_VERBS_SYNC_SCOPE_CTA>();
-        ready_index_aref.store(to_wqe_idx + 1, cuda::memory_order_relaxed);
-    } else if (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU) {
-        doca_gpu_dev_verbs_fence_release<DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU>();
-        cuda::atomic_ref<uint64_t, cuda::thread_scope_device> ready_index_aref(qp->sq_ready_index);
-        while (ready_index_aref.load(cuda::memory_order_relaxed) != from_wqe_idx) continue;
-        doca_gpu_dev_verbs_fence_acquire<DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU>();
-        ready_index_aref.store(to_wqe_idx + 1, cuda::memory_order_relaxed);
-    }
+    doca_gpu_dev_common_mark_wqes_ready<resource_sharing_mode>(qp->sq_ready_index, from_wqe_idx,
+                                                               to_wqe_idx);
 }
 
 /* *********** QP DBR/DB *********** */
@@ -163,6 +179,20 @@ __device__ static __forceinline__ __be32 doca_gpu_dev_verbs_prepare_dbr(uint32_t
 }
 
 /**
+ * @brief Update the NIC DBR (Doorbell Record)
+ *
+ * @param dbrec - Pointer to doorbell record (DBR)
+ * @param prod_index - Producer index
+ */
+__device__ static __forceinline__ void doca_gpu_dev_common_update_dbr(uint32_t *dbrec,
+                                                                      uint32_t prod_index) {
+    uint32_t dbrec_val = doca_gpu_dev_verbs_prepare_dbr(prod_index);
+
+    cuda::atomic_ref<uint32_t, cuda::thread_scope_system> dbrec_ptr_aref(*dbrec);
+    dbrec_ptr_aref.store(dbrec_val, cuda::memory_order_relaxed);
+}
+
+/**
  * @brief [Internal] Update the NIC DBR (Doorbell Record).
  * This function does not guarantee the ordering.
  *
@@ -172,11 +202,7 @@ __device__ static __forceinline__ __be32 doca_gpu_dev_verbs_prepare_dbr(uint32_t
 template <enum doca_gpu_dev_verbs_qp_type qp_type = DOCA_GPUNETIO_VERBS_QP_SQ>
 __device__ static __forceinline__ void doca_priv_gpu_dev_verbs_update_dbr(
     struct doca_gpu_dev_verbs_qp *qp, uint32_t prod_index) {
-    __be32 dbrec_val = doca_gpu_dev_verbs_prepare_dbr(prod_index);
-    __be32 *dbrec_ptr = (__be32 *)__ldg((uintptr_t *)&qp->sq_dbrec);
-
-    cuda::atomic_ref<__be32, cuda::thread_scope_system> dbrec_ptr_aref(*dbrec_ptr);
-    dbrec_ptr_aref.store(dbrec_val, cuda::memory_order_relaxed);
+    doca_gpu_dev_common_update_dbr((uint32_t *)__ldg((uintptr_t *)&qp->sq_dbrec), prod_index);
 }
 
 /**
@@ -186,16 +212,16 @@ __device__ static __forceinline__ void doca_priv_gpu_dev_verbs_update_dbr(
  * @param prod_index - Producer index
  */
 template <enum doca_gpu_dev_verbs_sync_scope sync_scope = DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU,
-          enum doca_gpu_dev_verbs_gpu_code_opt code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT,
           enum doca_gpu_dev_verbs_qp_type qp_type = DOCA_GPUNETIO_VERBS_QP_SQ>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_update_dbr(
-    struct doca_gpu_dev_verbs_qp *qp, uint32_t prod_index) {
+    struct doca_gpu_dev_verbs_qp *qp, uint32_t prod_index,
+    uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
     __be32 dbrec_val = doca_gpu_dev_verbs_prepare_dbr(prod_index);
     __be32 *dbrec_ptr = (__be32 *)__ldg((uintptr_t *)&qp->sq_dbrec);
 
 #ifdef DOCA_GPUNETIO_VERBS_HAS_ASYNC_STORE_RELEASE
     if (code_opt & DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_ASYNC_STORE_RELEASE) {
-        doca_gpu_dev_verbs_async_store_release<sync_scope>(dbrec_ptr, dbrec_val);
+        doca_gpu_dev_verbs_async_store_release(dbrec_ptr, dbrec_val);
     } else
 #endif
     {
@@ -207,21 +233,78 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_update_dbr(
 /**
  * @brief Prepare the DB (Doorbell)
  *
+ * @param qpn_ds - QP number with 8bit lshift in big-endian
+ * @param prod_index - Producer index
+ * @return DB value
+ */
+__device__ static __forceinline__ __be64 doca_gpu_dev_common_prepare_db(uint32_t qpn_ds,
+                                                                        uint64_t prod_index) {
+    struct doca_gpu_dev_verbs_wqe_ctrl_seg ctrl_seg = {0};
+
+    // The only ctrl segment fields that are inspected while ringing
+    // the DB are QP number and WQE index
+    ctrl_seg.qpn_ds = qpn_ds;
+    ctrl_seg.opmod_idx_opcode =
+        doca_gpu_dev_verbs_bswap32((prod_index << DOCA_GPUNETIO_VERBS_WQE_IDX_SHIFT));
+
+    return *(uint64_t *)&ctrl_seg;
+}
+
+/**
+ * @brief Write the DB (Doorbell)
+ *
+ * @param db - Pointer to doorbell (DB)
+ * @param db_val - Value to write
+ */
+template <enum doca_gpu_dev_verbs_sync_scope sync_scope = DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU>
+__device__ static __forceinline__ void doca_gpu_dev_common_write_db(
+    uint64_t *db_ptr, uint64_t db_val,
+    uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
+#ifdef DOCA_GPUNETIO_VERBS_HAS_ASYNC_STORE_RELEASE
+    if (code_opt & DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_ASYNC_STORE_RELEASE) {
+        doca_gpu_dev_verbs_async_store_release((uint64_t *)db_ptr, db_val);
+    } else
+#endif
+#ifdef DOCA_GPUNETIO_VERBS_HAS_STORE_RELAXED_MMIO
+    {
+        doca_gpu_dev_verbs_fence_release<sync_scope>();
+        doca_gpu_dev_verbs_store_relaxed_mmio(db_ptr, db_val);
+    }
+#else
+    {
+        cuda::atomic_ref<uint64_t, cuda::thread_scope_system> db_ptr_aref(*((uint64_t *)db_ptr));
+        doca_gpu_dev_verbs_fence_release<sync_scope>();
+        db_ptr_aref.store(db_val, cuda::memory_order_relaxed);
+    }
+#endif
+}
+
+/**
+ * @brief Ring the DB (Doorbell)
+ *
+ * @param db - Pointer to doorbell (DB)
+ * @param qpn_ds - QP number with 8bit lshift in big-endian
+ * @param prod_index - Producer index
+ */
+template <enum doca_gpu_dev_verbs_sync_scope sync_scope = DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU>
+__device__ static __forceinline__ void doca_gpu_dev_common_ring_db(
+    uint64_t *db_ptr, uint32_t qpn_ds, uint64_t prod_index,
+    uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
+    uint64_t db_val = doca_gpu_dev_common_prepare_db(qpn_ds, prod_index);
+    doca_gpu_dev_common_write_db<sync_scope>(db_ptr, db_val, code_opt);
+}
+
+/**
+ * @brief Prepare the DB (Doorbell)
+ *
  * @param qp - Queue Pair (QP)
  * @param prod_index - Producer index
  * @return DB value
  */
 __device__ static __forceinline__ __be64
 doca_gpu_dev_verbs_prepare_db(struct doca_gpu_dev_verbs_qp *qp, uint64_t prod_index) {
-    struct doca_gpu_dev_verbs_wqe_ctrl_seg ctrl_seg = {0};
-
-    // The only ctrl segment fields that are inspected while ringing
-    // the DB are QP number and WQE index
-    ctrl_seg.qpn_ds = __ldg(&qp->sq_num_shift8_be);
-    ctrl_seg.opmod_idx_opcode =
-        doca_gpu_dev_verbs_bswap32((prod_index << DOCA_GPUNETIO_VERBS_WQE_IDX_SHIFT));
-
-    return *(uint64_t *)&ctrl_seg;
+    uint32_t qpn_ds = __ldg(&qp->sq_num_shift8_be);
+    return doca_gpu_dev_common_prepare_db(qpn_ds, prod_index);
 }
 
 /* *************************** Ring Doorbell *************************** */
@@ -232,30 +315,13 @@ doca_gpu_dev_verbs_prepare_db(struct doca_gpu_dev_verbs_qp *qp, uint64_t prod_in
  * @param qp - Queue Pair (QP)
  * @param prod_index - Producer index
  */
-template <enum doca_gpu_dev_verbs_sync_scope sync_scope = DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU,
-          enum doca_gpu_dev_verbs_gpu_code_opt code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT>
-__device__ static __forceinline__ void doca_gpu_dev_verbs_ring_db(struct doca_gpu_dev_verbs_qp *qp,
-                                                                  uint64_t prod_index) {
-    __be64 *db_ptr = (__be64 *)__ldg((uintptr_t *)&qp->sq_db);
-    __be64 db_val = doca_gpu_dev_verbs_prepare_db(qp, prod_index);
-
-#ifdef DOCA_GPUNETIO_VERBS_HAS_ASYNC_STORE_RELEASE
-    if (code_opt & DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_ASYNC_STORE_RELEASE) {
-        doca_gpu_dev_verbs_async_store_release<sync_scope>((uint64_t *)db_ptr, (uint64_t)db_val);
-    } else
-#endif
-#ifdef DOCA_GPUNETIO_VERBS_HAS_STORE_RELAXED_MMIO
-    {
-        doca_gpu_dev_verbs_fence_release<sync_scope>();
-        doca_gpu_dev_verbs_store_relaxed_mmio((uint64_t *)db_ptr, (uint64_t)db_val);
-    }
-#else
-    {
-        cuda::atomic_ref<uint64_t, cuda::thread_scope_system> db_ptr_aref(*((uint64_t *)db_ptr));
-        doca_gpu_dev_verbs_fence_release<sync_scope>();
-        db_ptr_aref.store(db_val, cuda::memory_order_relaxed);
-    }
-#endif
+template <enum doca_gpu_dev_verbs_sync_scope sync_scope = DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU>
+__device__ static __forceinline__ void doca_gpu_dev_verbs_ring_db(
+    struct doca_gpu_dev_verbs_qp *qp, uint64_t prod_index,
+    uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
+    uint64_t db_val = doca_gpu_dev_verbs_prepare_db(qp, prod_index);
+    doca_gpu_dev_common_write_db<sync_scope>((uint64_t *)__ldg((uintptr_t *)&qp->sq_db), db_val,
+                                             code_opt);
 }
 
 #ifdef DOCA_GPUNETIO_VERBS_HAS_TMA_COPY
@@ -274,7 +340,7 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_ring_bf(
     doca_gpu_dev_verbs_fence_release<sync_scope>();
     asm volatile("cp.async.bulk.global.shared::cta.bulk_group [%0], [%1], 64;"
                  :
-                 : "l"(bf_ptr), "l"(*wqe));
+                 : "l"(bf_ptr), "l"(wqe));
 }
 #endif
 
@@ -320,6 +386,28 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_ring_proxy(
 }
 
 /**
+ * @brief Submit a work request to the NIC using the DB protocol without updating DBREC.
+ *
+ * @param qp - Queue Pair (QP)
+ * @param prod_index - Producer index
+ */
+template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
+              DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
+          enum doca_gpu_dev_verbs_sync_scope sync_scope = DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU,
+          enum doca_gpu_dev_verbs_qp_type qp_type = DOCA_GPUNETIO_VERBS_QP_SQ>
+__device__ static inline void doca_gpu_dev_verbs_submit_db_no_dbr(
+    struct doca_gpu_dev_verbs_qp *qp, uint64_t prod_index,
+    uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
+    if (!(code_opt & DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_SKIP_DB_RINGING)) {
+        uint64_t old_prod_index =
+            doca_gpu_dev_verbs_atomic_max<uint64_t, resource_sharing_mode, true>(&qp->sq_wqe_pi,
+                                                                                 prod_index);
+        if (old_prod_index < prod_index)
+            doca_gpu_dev_verbs_ring_db<sync_scope>(qp, prod_index, code_opt);
+    }
+}
+
+/**
  * @brief Submit a work request to the NIC using the DB protocol.
  *
  * @param qp - Queue Pair (QP)
@@ -328,24 +416,34 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_ring_proxy(
 template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
           enum doca_gpu_dev_verbs_sync_scope sync_scope = DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU,
-          enum doca_gpu_dev_verbs_gpu_code_opt code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT,
           enum doca_gpu_dev_verbs_qp_type qp_type = DOCA_GPUNETIO_VERBS_QP_SQ>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_submit_db(
-    struct doca_gpu_dev_verbs_qp *qp, uint64_t prod_index) {
-    doca_gpu_dev_verbs_lock<resource_sharing_mode>(&qp->sq_lock);
+    struct doca_gpu_dev_verbs_qp *qp, uint64_t prod_index,
+    uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
+    if (!(code_opt & DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_SKIP_DB_RINGING)) {
+        doca_gpu_dev_verbs_lock<resource_sharing_mode>(&qp->sq_lock);
 
-    uint64_t old_prod_index = doca_gpu_dev_verbs_atomic_max<uint64_t, resource_sharing_mode, true>(
-        &qp->sq_wqe_pi, prod_index);
-    if (old_prod_index < prod_index) {
-        // Early rining of the DB to push WQEs to the NIC ASAP.
-        doca_gpu_dev_verbs_ring_db<sync_scope, code_opt>(qp, prod_index);
+        uint64_t old_prod_index =
+            doca_gpu_dev_verbs_atomic_max<uint64_t, resource_sharing_mode, true>(&qp->sq_wqe_pi,
+                                                                                 prod_index);
+        if (old_prod_index < prod_index) {
+            // Early rining of the DB to push WQEs to the NIC ASAP.
+            doca_gpu_dev_verbs_ring_db<sync_scope>(qp, prod_index, code_opt);
 
-        // In case the recovery path is triggered, the later DB ringing will cover for correctness.
-        doca_priv_gpu_dev_verbs_update_dbr<qp_type>(qp, prod_index);
-        doca_gpu_dev_verbs_ring_db<sync_scope, code_opt>(qp, prod_index);
+            // In case the recovery path is triggered, the later DB ringing will cover for
+            // correctness.
+            doca_priv_gpu_dev_verbs_update_dbr<qp_type>(qp, prod_index);
+
+            // Use at least either GPU or Sys synchronization scope for the second DB ringing.
+            constexpr enum doca_gpu_dev_verbs_sync_scope second_db_sync_scope =
+                (sync_scope <= DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU)
+                    ? sync_scope
+                    : DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU;
+            doca_gpu_dev_verbs_ring_db<second_db_sync_scope>(qp, prod_index, code_opt);
+        }
+
+        doca_gpu_dev_verbs_unlock<resource_sharing_mode>(&qp->sq_lock);
     }
-
-    doca_gpu_dev_verbs_unlock<resource_sharing_mode>(&qp->sq_lock);
 }
 
 /**
@@ -359,11 +457,10 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_submit_db(
  */
 template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
-          enum doca_gpu_dev_verbs_sync_scope sync_scope = DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU,
-          enum doca_gpu_dev_verbs_gpu_code_opt code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT>
+          enum doca_gpu_dev_verbs_sync_scope sync_scope = DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_submit_bf(
-    struct doca_gpu_dev_verbs_qp *qp, uint64_t prod_index,
-    struct doca_gpu_dev_verbs_wqe *smem_wqe) {
+    struct doca_gpu_dev_verbs_qp *qp, uint64_t prod_index, struct doca_gpu_dev_verbs_wqe *smem_wqe,
+    uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
 #ifdef DOCA_GPUNETIO_VERBS_HAS_TMA_COPY
     doca_gpu_dev_verbs_lock<resource_sharing_mode>(&qp->sq_lock);
     unsigned long long int old_prod_index =
@@ -372,12 +469,15 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_submit_bf(
     if (old_prod_index < prod_index) {
         doca_gpu_dev_verbs_ring_bf<sync_scope>(qp, smem_wqe);
         doca_priv_gpu_dev_verbs_update_dbr<DOCA_GPUNETIO_VERBS_QP_SQ>(qp, prod_index);
-        doca_gpu_dev_verbs_ring_db<sync_scope, code_opt>(qp, prod_index);
+        constexpr enum doca_gpu_dev_verbs_sync_scope second_db_sync_scope =
+            (sync_scope <= DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU) ? sync_scope
+                                                               : DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU;
+        doca_gpu_dev_verbs_ring_db<second_db_sync_scope>(qp, prod_index, code_opt);
     }
     doca_gpu_dev_verbs_unlock<resource_sharing_mode>(&qp->sq_lock);
 #else
-    doca_gpu_dev_verbs_submit_db<resource_sharing_mode, sync_scope, code_opt,
-                                 DOCA_GPUNETIO_VERBS_QP_SQ>(qp, prod_index);
+    doca_gpu_dev_verbs_submit_db<resource_sharing_mode, sync_scope, DOCA_GPUNETIO_VERBS_QP_SQ>(
+        qp, prod_index, code_opt);
 #endif
 }
 
@@ -392,10 +492,10 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_submit_bf(
  */
 template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
-          enum doca_gpu_dev_verbs_sync_scope sync_scope = DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU,
-          enum doca_gpu_dev_verbs_gpu_code_opt code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT>
+          enum doca_gpu_dev_verbs_sync_scope sync_scope = DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_submit_bf_warp(
-    struct doca_gpu_dev_verbs_qp *qp, uint64_t prod_index, struct doca_gpu_dev_verbs_wqe *wqe) {
+    struct doca_gpu_dev_verbs_qp *qp, uint64_t prod_index, struct doca_gpu_dev_verbs_wqe *wqe,
+    uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
     unsigned int lane_id = doca_gpu_dev_verbs_get_lane_id();
     unsigned long long int old_prod_index;
     if (lane_id == 0) {
@@ -411,7 +511,11 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_submit_bf_warp(
         __syncwarp();
         if (lane_id == 0) {
             doca_priv_gpu_dev_verbs_update_dbr<DOCA_GPUNETIO_VERBS_QP_SQ>(qp, prod_index);
-            doca_gpu_dev_verbs_ring_db<sync_scope, code_opt>(qp, prod_index);
+            constexpr enum doca_gpu_dev_verbs_sync_scope second_db_sync_scope =
+                (sync_scope <= DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU)
+                    ? sync_scope
+                    : DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU;
+            doca_gpu_dev_verbs_ring_db<second_db_sync_scope>(qp, prod_index, code_opt);
         }
     }
     if (lane_id == 0) doca_gpu_dev_verbs_unlock<resource_sharing_mode>(&qp->sq_lock);
@@ -438,21 +542,26 @@ template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
           enum doca_gpu_dev_verbs_sync_scope sync_scope = DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU,
           enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
           enum doca_gpu_dev_verbs_qp_type qp_type = DOCA_GPUNETIO_VERBS_QP_SQ>
-__device__ static __forceinline__ void doca_gpu_dev_verbs_submit(struct doca_gpu_dev_verbs_qp *qp,
-                                                                 uint64_t prod_index) {
+__device__ static __forceinline__ void doca_gpu_dev_verbs_submit(
+    struct doca_gpu_dev_verbs_qp *qp, uint64_t prod_index,
+    uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
     const enum doca_gpu_dev_verbs_nic_handler qp_nic_handler =
         (enum doca_gpu_dev_verbs_nic_handler)__ldg((int *)&qp->nic_handler);
     if (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO) {
         if (qp_nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB)
-            doca_gpu_dev_verbs_submit_db<resource_sharing_mode, sync_scope,
-                                         DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT, qp_type>(
-                qp, prod_index);
+            doca_gpu_dev_verbs_submit_db<resource_sharing_mode, sync_scope, qp_type>(qp, prod_index,
+                                                                                     code_opt);
+        else if (qp_nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_NO_DBR)
+            doca_gpu_dev_verbs_submit_db_no_dbr<resource_sharing_mode, sync_scope, qp_type>(
+                qp, prod_index, code_opt);
         else
             doca_gpu_dev_verbs_submit_proxy<resource_sharing_mode, sync_scope>(qp, prod_index);
     } else if (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB) {
-        doca_gpu_dev_verbs_submit_db<resource_sharing_mode, sync_scope,
-                                     DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT, qp_type>(qp,
-                                                                                        prod_index);
+        doca_gpu_dev_verbs_submit_db<resource_sharing_mode, sync_scope, qp_type>(qp, prod_index,
+                                                                                 code_opt);
+    } else if (qp_nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_NO_DBR) {
+        doca_gpu_dev_verbs_submit_db_no_dbr<resource_sharing_mode, sync_scope, qp_type>(
+            qp, prod_index, code_opt);
     } else {
         doca_gpu_dev_verbs_submit_proxy<resource_sharing_mode, sync_scope>(qp, prod_index);
     }

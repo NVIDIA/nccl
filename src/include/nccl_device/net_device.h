@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2023-2023, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #ifndef NCCL_NET_DEVICE_H_
 #define NCCL_NET_DEVICE_H_
@@ -33,6 +34,7 @@ typedef ncclNetDeviceHandle_v7_t ncclNetDeviceHandle_v8_t;
 typedef ncclNetDeviceHandle_v8_t ncclNetDeviceHandle_v9_t;
 typedef ncclNetDeviceHandle_v9_t ncclNetDeviceHandle_v10_t;
 typedef ncclNetDeviceHandle_v10_t ncclNetDeviceHandle_v11_t;
-typedef ncclNetDeviceHandle_v11_t ncclNetDeviceHandle_t;
+typedef ncclNetDeviceHandle_v11_t ncclNetDeviceHandle_v12_t;
+typedef ncclNetDeviceHandle_v12_t ncclNetDeviceHandle_t;
 
 #endif

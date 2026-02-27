@@ -94,6 +94,7 @@ doca_verbs_device_attr::doca_verbs_device_attr(struct ibv_context *ibv_ctx) {
 
 void doca_verbs_device_attr::query_caps(struct ibv_context *ibv_ctx) {
     struct ibv_device_attr device_attr {};
+    bool has_hca_cap_2 = false;
     auto ret = doca_verbs_wrapper_ibv_query_device(ibv_ctx, &device_attr);
     if (ret != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to query device attr");
@@ -113,6 +114,7 @@ void doca_verbs_device_attr::query_caps(struct ibv_context *ibv_ctx) {
     m_max_srq_sge = device_attr.max_srq_sge;
     m_max_pkeys = device_attr.max_pkeys;
     m_phys_port_cnt = device_attr.phys_port_cnt;
+    m_send_dbr_mode_no_dbr_ext = 0;
 
     uint32_t in[MLX5_ST_SZ_DW(query_hca_cap_in)] = {0};
     uint32_t out[MLX5_ST_SZ_DW(query_hca_cap_out)] = {0};
@@ -138,6 +140,8 @@ void doca_verbs_device_attr::query_caps(struct ibv_context *ibv_ctx) {
     m_max_rq_desc_size = DEVX_GET(query_hca_cap_out, out, capability.cmd_hca_cap.max_wqe_sz_rq);
     m_max_send_wqebb = 1 << DEVX_GET(query_hca_cap_out, out, capability.cmd_hca_cap.log_max_qp_sz);
 
+    has_hca_cap_2 = DEVX_GET(query_hca_cap_out, out, capability.cmd_hca_cap.hca_cap_2);
+
     memset(in, 0, sizeof(in));
     memset(out, 0, sizeof(out));
 
@@ -158,6 +162,25 @@ void doca_verbs_device_attr::query_caps(struct ibv_context *ibv_ctx) {
         DEVX_GET(query_hca_cap_out, out, capability.roce_caps.r_roce_min_src_udp_port);
     m_max_udp_sport =
         DEVX_GET(query_hca_cap_out, out, capability.roce_caps.r_roce_max_src_udp_port);
+
+    if (has_hca_cap_2) {
+        memset(in, 0, sizeof(in));
+        memset(out, 0, sizeof(out));
+
+        DEVX_SET(query_hca_cap_in, in, opcode, MLX5_CMD_OP_QUERY_HCA_CAP);
+        DEVX_SET(
+            query_hca_cap_in, in, op_mod,
+            PRIV_DOCA_MLX5_HCA_CAP_OPMOD_GET_CUR | MLX5_SET_HCA_CAP_OP_MOD_GENERAL_DEVICE_CAP_2);
+
+        ret = doca_verbs_wrapper_mlx5dv_devx_general_cmd(ibv_ctx, in, sizeof(in), out, sizeof(out));
+        if (ret != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to query ROCE capabilities");
+            throw ret;
+        }
+
+        m_send_dbr_mode_no_dbr_ext =
+            DEVX_GET(query_hca_cap_out, out, capability.cmd_hca_cap_2.send_dbr_mode_no_dbr_ext);
+    }
 }
 
 /**********************************************************************************************************************
@@ -263,4 +286,9 @@ doca_error_t doca_verbs_device_attr_get_is_qp_type_supported(
 
     // Shouldn't reach this
     return DOCA_ERROR_UNEXPECTED;
+}
+
+uint8_t doca_verbs_device_attr_get_send_dbr_mode_no_dbr_ext(
+    const struct doca_verbs_device_attr *verbs_device_attr) {
+    return verbs_device_attr->m_send_dbr_mode_no_dbr_ext;
 }

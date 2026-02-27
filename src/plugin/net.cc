@@ -74,8 +74,12 @@ static ncclResult_t ncclNetPluginUnload(netPluginLib_t* pluginLib) {
   if ((pluginLib->dlHandle) && ((pluginLib->ncclNetPluginRefCount) == 0)) {
     INFO(NCCL_INIT|NCCL_NET, "Unloading plugin %s", pluginLib->name);
     NCCLCHECK(ncclClosePluginLib(pluginLib->dlHandle, ncclPluginTypeNet));
+    char savedName[sizeof(pluginLib->name)];
+    strcpy(savedName,pluginLib->name);
     // memset will reset the status to ncllNetPluginStateLoadReady
     memset(pluginLib, 0, sizeof(netPluginLib_t));
+    // reset plugin name
+    strcpy(pluginLib->name, savedName);
     // reset the count of devices to UNDEF_DEV_COUNT
     pluginLib->netPhysDevs = pluginLib->netVirtDevs = NCCL_UNDEF_DEV_COUNT;
     pluginLib->collNetPhysDevs = pluginLib->collNetVirtDevs = NCCL_UNDEF_DEV_COUNT;

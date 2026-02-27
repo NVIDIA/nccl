@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2016-2022, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2016-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include "common.h"
 
@@ -22,6 +23,7 @@ static int netRefCount;
 NCCL_PARAM(IbDisable, "IB_DISABLE", 0);
 NCCL_PARAM(IbMergeVfs, "IB_MERGE_VFS", 1);
 NCCL_PARAM(IbMergeNics, "IB_MERGE_NICS", 1);
+NCCL_PARAM(IbDevicePciOrder, "IB_DEVICE_PCI_ORDER", 1);
 
 // Returns 0 if this is the path of two VFs of the same physical device
 static int ncclIbMatchVfPath(char* path1, char* path2) {
@@ -33,10 +35,28 @@ static int ncclIbMatchVfPath(char* path1, char* path2) {
   }
 }
 
-static ncclResult_t ncclIbGetPciPath(char* devName, char** path, int* realPort) {
+static int ncclIbCompareDevs(const void* dev1, const void* dev2) {
+  // Compare devices using the last component of the PCI path.
+  // Note: fullPciPath is never NULL but empty if not found by realpath.
+  char* path1 = ((struct ncclIbDev*)dev1)->fullPciPath;
+  char* path2 = ((struct ncclIbDev*)dev2)->fullPciPath;
+
+  // if a path is empty, order the devices to the back of the list
+  if (strlen(path1) == 0 || strlen(path2) == 0) return strlen(path2) - strlen(path1);
+
+  int64_t id1, id2;
+  pciPathToInt64(path1, &id1);
+  pciPathToInt64(path2, &id2);
+
+  return (id1 < id2) ? -1 : ((id1 == id2) ? 0 : 1);
+}
+
+static ncclResult_t ncclIbGetPciPath(char* devName, char** path, char* fullPath) {
   char devicePath[PATH_MAX];
   snprintf(devicePath, PATH_MAX, "/sys/class/infiniband/%s/device", devName);
   char* p = realpath(devicePath, NULL);
+  // set fullPath to empty if realpath returned NULL
+  snprintf(fullPath, PATH_MAX, "%s", p ? p : "");
   if (p == NULL) {
     WARN("Could not find real path of %s (%s)", devName, devicePath);
   } else {
@@ -44,13 +64,19 @@ static ncclResult_t ncclIbGetPciPath(char* devName, char** path, int* realPort) 
     p[strlen(p)-1] = '0';
     // Also merge virtual functions (VF) into the same device
     if (ncclParamIbMergeVfs()) p[strlen(p)-3] = p[strlen(p)-4] = '0';
-    // Keep the real port aside (the ibv port is always 1 on recent cards)
-    *realPort = 0;
-    for (int d=0; d<ncclNIbDevs; d++) {
-      if (ncclIbMatchVfPath(p, ncclIbDevs[d].pciPath)) (*realPort)++;
-    }
   }
-  *path = p;
+  if (path) *path = p;
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclIbGetRealPort(char* pciPath, int* realPort, int devIdx) {
+  *realPort = 0;
+  if (pciPath == NULL) return ncclSuccess;
+  // Keep the real port aside (the ibv port is always 1 on recent cards)
+  // Count only devices before the current device index to assign unique port numbers
+  for (int d = 0; d < devIdx; d++) {
+    if (ncclIbMatchVfPath(pciPath, ncclIbDevs[d].pciPath)) (*realPort)++;
+  }
   return ncclSuccess;
 }
 
@@ -296,15 +322,16 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
               ncclIbDevs[ncclNIbDevs].context = context;
               ncclIbDevs[ncclNIbDevs].pdRefs = 0;
               ncclIbDevs[ncclNIbDevs].pd = NULL;
-              if (dev == 0) {
-                strncpy(ncclIbDevs[ncclNIbDevs].devName, devices[d]->name, MAXNAMESIZE);
-                NCCLCHECKGOTO(ncclIbGetPciPath(ncclIbDevs[ncclNIbDevs].devName, &ncclIbDevs[ncclNIbDevs].pciPath, &ncclIbDevs[ncclNIbDevs].realPort), ret, fail);
-              } else {
+              // for dev==1 (data direct device), pciPath is given by mlx5
+              strncpy(ncclIbDevs[ncclNIbDevs].devName, devices[d]->name, MAXNAMESIZE);
+              NCCLCHECKGOTO(ncclIbGetPciPath(ncclIbDevs[ncclNIbDevs].devName, (dev == 1) ? NULL : &ncclIbDevs[ncclNIbDevs].pciPath, ncclIbDevs[ncclNIbDevs].fullPciPath), ret, fail);
+              if (dev == 1) {
                 snprintf(ncclIbDevs[ncclNIbDevs].devName, MAXNAMESIZE, "%s_dma", devices[d]->name);
                 NCCLCHECK(ncclCalloc(&ncclIbDevs[ncclNIbDevs].pciPath, PATH_MAX));
                 strncpy(ncclIbDevs[ncclNIbDevs].pciPath, dataDirectDevicePath, PATH_MAX);
                 ncclIbDevs[ncclNIbDevs].capsProvider.mlx5.dataDirect = 1;
               }
+
               ncclIbDevs[ncclNIbDevs].maxQp = devAttr.max_qp;
               ncclIbDevs[ncclNIbDevs].mrCache.capacity = 0;
               ncclIbDevs[ncclNIbDevs].mrCache.population = 0;
@@ -324,13 +351,6 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
               ncclSetThreadName(ncclIbAsyncThread, "NCCL IbAsync %2d", ncclNIbDevs);
               ncclIbAsyncThread.detach();
 
-              // Add this plain physical device to the list of virtual devices
-              int vDev;
-              ncclNetVDeviceProps_t vProps = {0};
-              vProps.ndevs = 1;
-              vProps.devs[0] = ncclNIbDevs;
-              NCCLCHECK(ncclIbMakeVDeviceInternal(&vDev, &vProps));
-
               ncclNIbDevs++;
               nPorts++;
             }
@@ -343,20 +363,26 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
     if (ncclNIbDevs == 0) {
       INFO(NCCL_INIT|NCCL_NET, "NET/IB : No device found.");
     }
-
-    // Print out all net devices to the user (in the same format as before)
-    char line[2048];
-    line[0] = '\0';
     // Determine whether RELAXED_ORDERING is enabled and possible
     ncclIbRelaxedOrderingEnabled = ncclIbRelaxedOrderingCapable();
+    // sort devices to ensure a consistent order across nodes
+    if (ncclParamIbDevicePciOrder()) qsort(ncclIbDevs, ncclNIbDevs, sizeof(struct ncclIbDev), ncclIbCompareDevs);
+    // Once sorted, get the realPort ID and create the virtual devices.
+    // Doing it after sorting ensures that devices will have consistent realPort ids across nodes.
+    char line[2048] = "";
     for (int d = 0; d < ncclNIbDevs; d++) {
-        snprintf(line+strlen(line), sizeof(line)-strlen(line), " [%d]%s:%d/%s", d, ncclIbDevs[d].devName,
-          ncclIbDevs[d].portNum, NCCL_IB_LLSTR(ncclIbDevs[d].link));
+      NCCLCHECKGOTO(ncclIbGetRealPort(ncclIbDevs[d].pciPath, &ncclIbDevs[d].realPort, d), ret, fail);
+      snprintf(line + strlen(line), sizeof(line) - strlen(line), " [%d]%s:%d/%s", d, ncclIbDevs[d].devName, ncclIbDevs[d].portNum, NCCL_IB_LLSTR(ncclIbDevs[d].link));
+
+      // Add this plain physical device to the list of virtual devices (after sorting)
+      int vDev;
+      ncclNetVDeviceProps_t vProps = {0};
+      vProps.ndevs = 1;
+      vProps.devs[0] = d;
+      NCCLCHECK(ncclIbMakeVDeviceInternal(&vDev, &vProps));
     }
     char addrline[SOCKET_NAME_MAXLEN+1];
-    INFO(NCCL_INIT|NCCL_NET, "NET/IB : Using%s %s; OOB %s:%s", line, ncclIbRelaxedOrderingEnabled ? "[RO]" : "",
-          ncclIbIfName, ncclSocketToString(&ncclIbIfAddr, addrline));
-
+    INFO(NCCL_INIT | NCCL_NET, "NET/IB : Using%s %s; OOB %s:%s", line, ncclIbRelaxedOrderingEnabled ? "[RO]" : "", ncclIbIfName, ncclSocketToString(&ncclIbIfAddr, addrline));
   }
 exit:
   return ret;

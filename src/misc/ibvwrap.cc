@@ -1,13 +1,16 @@
 /*************************************************************************
- * Copyright (c) 2015-2022, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2015-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include "ibvwrap.h"
 #include <sys/types.h>
 #include <unistd.h>
+#include <chrono>
 #include <mutex>
+#include <thread>
 
 #ifdef NCCL_BUILD_RDMA_CORE
 #include <infiniband/verbs.h>
@@ -296,8 +299,7 @@ ncclResult_t wrap_ibv_modify_qp(struct ibv_qp* qp, struct ibv_qp_attr* attr, int
       ibvModifyQpLog(qp, attr->qp_state, attr, attr_mask, qpMsg, sizeof(qpMsg));
       INFO(NCCL_NET, "Call to ibv_modify_qp failed with %d %s, %s, retrying %d/%d after %u msec of sleep", ret, strerror(ret), qpMsg, attempts, maxCnt, sleepTime);
       // sleep before retrying
-      struct timespec tv = {.tv_sec = sleepTime / 1000, .tv_nsec = (sleepTime % 1000) * ((long)1e6)};
-      nanosleep(&tv, NULL);
+      std::this_thread::sleep_for(std::chrono::milliseconds(sleepTime));
     }
     ret = ibvSymbols.ibv_internal_modify_qp(qp, attr, attr_mask);
     attempts++;
@@ -321,4 +323,61 @@ ncclResult_t wrap_ibv_set_ece(struct ibv_qp *qp, struct ibv_ece *ece, int* suppo
 ncclResult_t wrap_ibv_event_type_str(char **ret, enum ibv_event_type event) {
   *ret = (char *) ibvSymbols.ibv_internal_event_type_str(event);
   return ncclSuccess;
+}
+
+// Helper function to convert IB work completion status to string
+const char* ibvWcStatusStr(enum ibv_wc_status status) {
+  switch (status) {
+    case IBV_WC_SUCCESS:            return "IBV_WC_SUCCESS";
+    case IBV_WC_LOC_LEN_ERR:        return "IBV_WC_LOC_LEN_ERR";
+    case IBV_WC_LOC_QP_OP_ERR:      return "IBV_WC_LOC_QP_OP_ERR";
+    case IBV_WC_LOC_EEC_OP_ERR:     return "IBV_WC_LOC_EEC_OP_ERR";
+    case IBV_WC_LOC_PROT_ERR:       return "IBV_WC_LOC_PROT_ERR";
+    case IBV_WC_WR_FLUSH_ERR:       return "IBV_WC_WR_FLUSH_ERR";
+    case IBV_WC_MW_BIND_ERR:        return "IBV_WC_MW_BIND_ERR";
+    case IBV_WC_BAD_RESP_ERR:       return "IBV_WC_BAD_RESP_ERR";
+    case IBV_WC_LOC_ACCESS_ERR:     return "IBV_WC_LOC_ACCESS_ERR";
+    case IBV_WC_REM_INV_REQ_ERR:    return "IBV_WC_REM_INV_REQ_ERR";
+    case IBV_WC_REM_ACCESS_ERR:     return "IBV_WC_REM_ACCESS_ERR";
+    case IBV_WC_REM_OP_ERR:         return "IBV_WC_REM_OP_ERR";
+    case IBV_WC_RETRY_EXC_ERR:      return "IBV_WC_RETRY_EXC_ERR";
+    case IBV_WC_RNR_RETRY_EXC_ERR:  return "IBV_WC_RNR_RETRY_EXC_ERR";
+    case IBV_WC_LOC_RDD_VIOL_ERR:   return "IBV_WC_LOC_RDD_VIOL_ERR";
+    case IBV_WC_REM_INV_RD_REQ_ERR: return "IBV_WC_REM_INV_RD_REQ_ERR";
+    case IBV_WC_REM_ABORT_ERR:      return "IBV_WC_REM_ABORT_ERR";
+    case IBV_WC_INV_EECN_ERR:       return "IBV_WC_INV_EECN_ERR";
+    case IBV_WC_INV_EEC_STATE_ERR:  return "IBV_WC_INV_EEC_STATE_ERR";
+    case IBV_WC_FATAL_ERR:          return "IBV_WC_FATAL_ERR";
+    case IBV_WC_RESP_TIMEOUT_ERR:   return "IBV_WC_RESP_TIMEOUT_ERR";
+    case IBV_WC_GENERAL_ERR:        return "IBV_WC_GENERAL_ERR";
+    default:                        return "UNKNOWN_STATUS";
+  }
+}
+
+// Helper function to convert IB work completion opcode to string
+const char* ibvWcOpcodeStr(enum ibv_wc_opcode opcode) {
+  switch (opcode) {
+    case IBV_WC_SEND:               return "IBV_WC_SEND";
+    case IBV_WC_RDMA_WRITE:         return "IBV_WC_RDMA_WRITE";
+    case IBV_WC_RDMA_READ:          return "IBV_WC_RDMA_READ";
+    case IBV_WC_COMP_SWAP:          return "IBV_WC_COMP_SWAP";
+    case IBV_WC_FETCH_ADD:          return "IBV_WC_FETCH_ADD";
+    case IBV_WC_BIND_MW:            return "IBV_WC_BIND_MW";
+    case IBV_WC_RECV:               return "IBV_WC_RECV";
+    case IBV_WC_RECV_RDMA_WITH_IMM: return "IBV_WC_RECV_RDMA_WITH_IMM";
+    default:                        return "UNKNOWN_OPCODE";
+  }
+}
+
+const char* ibvWrOpcodeStr(enum ibv_wr_opcode opcode) {
+  switch (opcode) {
+    case IBV_WR_RDMA_WRITE:          return "IBV_WR_RDMA_WRITE";
+    case IBV_WR_RDMA_WRITE_WITH_IMM: return "IBV_WR_RDMA_WRITE_WITH_IMM";
+    case IBV_WR_SEND:                return "IBV_WR_SEND";
+    case IBV_WR_SEND_WITH_IMM:       return "IBV_WR_SEND_WITH_IMM";
+    case IBV_WR_RDMA_READ:           return "IBV_WR_RDMA_READ";
+    case IBV_WR_ATOMIC_CMP_AND_SWP:  return "IBV_WR_ATOMIC_CMP_AND_SWP";
+    case IBV_WR_ATOMIC_FETCH_AND_ADD: return "IBV_WR_ATOMIC_FETCH_AND_ADD";
+    default:                          return "UNKNOWN_OPCODE";
+  }
 }

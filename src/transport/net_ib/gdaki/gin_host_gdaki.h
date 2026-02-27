@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #ifndef _GIN_HOST_GDAKI_H_
 #define _GIN_HOST_GDAKI_H_
@@ -24,10 +25,10 @@
 #include "nccl.h"
 #include "gin/gin_host.h"
 
-ncclResult_t ncclGinGdakiCreateContext(void *collComm, int nSignals, int nCounters,
-                                       void **outGinCtx, ncclNetDeviceHandle_v11_t **outDevHandle);
+ncclResult_t ncclGinGdakiCreateContext(void *collComm, int nSignals, int nCounters, int nContexts,
+                                       void **outGinCtx, ncclNetDeviceHandle_t **outDevHandle);
 ncclResult_t ncclGinGdakiDestroyContext(void *ginCtx);
-ncclResult_t ncclGinGdakiRegMrSym(void *collComm, void *data, size_t size, int type, void **mhandle,
+ncclResult_t ncclGinGdakiRegMrSym(void *collComm, void *data, size_t size, int type, uint64_t mr_flags, void **mhandle,
                                   void **ginHandle);
 ncclResult_t ncclGinGdakiDeregMrSym(void *collComm, void *mhandle);
 ncclResult_t ncclGinGdakiProgress(void *ginCtx);

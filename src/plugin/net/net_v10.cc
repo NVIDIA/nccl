@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2022-2023, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include "nccl_net.h"
 #include "proxy.h"
@@ -54,7 +55,7 @@ static ncclResult_t ncclNet_connect(void* ctx, int dev, void* handle, void** sen
   return ncclNet_v10->connect(dev, (ncclNetCommConfig_v10_t *)ctx, handle, sendComm, sendDevComm);
 }
 
-static ncclResult_t ncclNet_makeVDevice(int* d, ncclNetVDeviceProps_v11_t* props) {
+static ncclResult_t ncclNet_makeVDevice(int* d, ncclNetVDeviceProps_t* props) {
   return ncclNet_v10->makeVDevice(d, (ncclNetVDeviceProps_v10_t *)props);
 }
 
@@ -70,15 +71,15 @@ static ncclResult_t ncclNet_init(void** ctx, uint64_t commId __attribute__((unus
   // this allows the config to be passed only once, instead of multiple times (once per connect). To preserve the
   // ncclNet_v10 behavior, in the compat layer, we store the config in the context pointer and pass it to the connect
   // function.
+  ncclResult_t ret = ncclSuccess;
   ncclNetCommConfig_v10_t* config_v10 = nullptr;
-  NCCLCHECK(ncclCalloc(&config_v10, 1));
+  NCCLCHECKGOTO(ncclCalloc(&config_v10, 1), ret, fail);
   config_v10->trafficClass = config->trafficClass;
-  *ctx = config_v10;
   // before ncclNet_v11 the net plugin was initialized only once. With ncclNet_v11 this is no longer the case.
   // The compat layer preserves the ncclNet_v10 behavior using a refCount to track the number of times the plugin
   // is initialized, and avoid initializing it multiple times.
-  if (refCount[NET_INDEX]++) return ncclSuccess;
-  NCCLCHECK(ncclNet_v10->init(logfn, proffn));
+  if (refCount[NET_INDEX]) goto success;
+  NCCLCHECKGOTO(ncclNet_v10->init(logfn, proffn), ret, fail);
   ncclNet.devices = ncclNet_v10->devices;
   ncclNet.getProperties = ncclNet_getProperties;
   ncclNet.listen = ncclNet_listen;
@@ -99,7 +100,15 @@ static ncclResult_t ncclNet_init(void** ctx, uint64_t commId __attribute__((unus
   ncclNet.makeVDevice = (ncclNet_v10->makeVDevice) ? ncclNet_makeVDevice : nullptr;
   ncclNet.finalize = ncclNet_finalize;
   ncclNet.setNetAttr = nullptr;
-  return ncclSuccess;
+success:
+  refCount[NET_INDEX]++;
+exit:
+  *ctx = config_v10;
+  return ret;
+fail:
+  free(config_v10);
+  config_v10 = nullptr;
+  goto exit;
 }
 
 ncclNet_t* getNcclNet_v10(void* lib) {
@@ -174,7 +183,7 @@ static ncclResult_t ncclCollNet_init(void** ctx __attribute__((unused)),
   // before ncclCollNet_v11 the collnet plugin was initialized only once. With ncclCollNet_v11 this is no longer the case.
   // The compat layer preserves the ncclCollNet_v10 behavior using a refCount to track the number of times the plugin
   // is initialized, and avoid initializing it multiple times.
-  if (refCount[COLLNET_INDEX]++) return ncclSuccess;
+  if (refCount[COLLNET_INDEX]) goto exit;
   NCCLCHECK(ncclCollNet_v10->init(logfn));
   ncclCollNet.devices = ncclCollNet_v10->devices;
   ncclCollNet.getProperties = ncclCollNet_getProperties;
@@ -193,6 +202,8 @@ static ncclResult_t ncclCollNet_init(void** ctx __attribute__((unused)),
   ncclCollNet.closeListen = ncclCollNet_v10->closeListen;
   ncclCollNet.makeVDevice = (ncclCollNet_v10->makeVDevice) ? ncclCollNet_makeVDevice : nullptr;
   ncclCollNet.finalize = ncclCollNet_finalize;
+exit:
+  refCount[COLLNET_INDEX]++;
   return ncclSuccess;
 }
 

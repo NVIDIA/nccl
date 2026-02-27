@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #ifndef _NCCL_DEVICE_COMM__TYPES_H_
 #define _NCCL_DEVICE_COMM__TYPES_H_
@@ -38,14 +39,20 @@ struct ncclDevComm {
   ncclLsaBarrierHandle_t lsaBarrier;
   ncclGinBarrierHandle_t railGinBarrier;
 
-  uint8_t ginContextCount;
-  uint8_t ginNetDeviceTypes[4];
-  void* ginHandles[4];
+  uint8_t ginConnectionCount;
+  uint8_t ginNetDeviceTypes[NCCL_GIN_MAX_CONNECTIONS];
+  void* ginHandles[NCCL_GIN_MAX_CONNECTIONS];
   uint32_t ginSignalBase;
   int ginSignalCount;
   uint32_t ginCounterBase;
   int ginCounterCount;
   uint64_t* ginSignalShadows;
+  uint32_t ginContextCount;
+  uint32_t ginContextBase;
+  bool ginIsRailed; // Whether the GIN connections are railed
+
+  // FT related
+  uint32_t* abortFlag;
 };
 
 #endif // _NCCL_DEVICE_COMM__TYPES_H_

@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2018-2022, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2018-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include "core.h"
 #include "graph.h"
@@ -151,6 +152,9 @@ ncclResult_t ncclTopoPrintPaths(struct ncclTopoSystem* system) {
   }
   for (int i=0; i<system->nodes[NET].count; i++) {
     printNodePaths(system, system->nodes[NET].nodes+i);
+  }
+  for (int i=0; i<system->nodes[GIN].count; i++) {
+    printNodePaths(system, system->nodes[GIN].nodes+i);
   }
   return ncclSuccess;
 }
@@ -661,6 +665,11 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclComm
   // Set direct paths to NICs.
   for (int n=0; n<system->nodes[NET].count; n++) {
     NCCLCHECK(ncclTopoSetPaths(system->nodes[NET].nodes+n, system));
+  }
+
+  // Set direct paths to GIN devices.
+  for (int n=0; n<system->nodes[GIN].count; n++) {
+    NCCLCHECK(ncclTopoSetPaths(system->nodes[GIN].nodes+n, system));
   }
 
   // Set direct paths to NVSwitches.

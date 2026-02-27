@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2016-2024, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2016-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include "alloc.h"
 #include "checks.h"
@@ -136,8 +137,8 @@ static ncclResult_t rasRanksConvertToPeers(struct rasRankInit* ranks, int nranks
     // (possible if there are multiple ranks with the same address).
     if (rankPeerIdx > 0 && memcmp(&rank->addr, &rankPeer[-1].addr, sizeof(rank->addr)) == 0) {
       // Merge into the previous entry in peers.
-      rankPeer[-1].cudaDevs |= (1UL << rank->cudaDev);
-      rankPeer[-1].nvmlDevs |= (1UL << rank->nvmlDev);
+      rankPeer[-1].cudaDevs |= (1ULL << rank->cudaDev);
+      rankPeer[-1].nvmlDevs |= (1ULL << rank->nvmlDev);
       continue;
     }
 
@@ -148,8 +149,8 @@ static ncclResult_t rasRanksConvertToPeers(struct rasRankInit* ranks, int nranks
     }
     memcpy(&rankPeer->addr, &rank->addr, sizeof(rankPeer->addr));
     rankPeer->pid = rank->pid;
-    rankPeer->cudaDevs = (1UL << rank->cudaDev);
-    rankPeer->nvmlDevs = (1UL << rank->nvmlDev);
+    rankPeer->cudaDevs = (1ULL << rank->cudaDev);
+    rankPeer->nvmlDevs = (1ULL << rank->nvmlDev);
     rankPeer->hostHash = rank->hostHash;
     rankPeer->pidHash = rank->pidHash;
     rankPeerIdx++;

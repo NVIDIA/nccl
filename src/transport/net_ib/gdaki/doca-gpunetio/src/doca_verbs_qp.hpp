@@ -72,6 +72,8 @@ struct doca_verbs_qp_init_attr {
     uint32_t send_cqn{};
     uint32_t receive_cqn{};
     uint8_t core_direct_master{};
+    uint8_t send_dbr_mode{};
+    bool emulate_no_dbr_ext{};
 };
 
 struct doca_verbs_qp_attr {
@@ -136,6 +138,10 @@ struct doca_verbs_qp {
     void *get_uar_addr() const noexcept;
 
     enum doca_verbs_uar_allocation_type get_uar_mtype() const noexcept;
+
+    enum doca_verbs_qp_send_dbr_mode get_send_dbr_mode() const noexcept;
+
+    bool get_emulate_no_dbr_ext() const noexcept;
 
     doca_error_t create_qp_obj(uint32_t uar_id, uint32_t log_rq_size, uint32_t log_sq_size,
                                uint32_t log_stride, uint64_t dbr_umem_offset, uint32_t dbr_umem_id,

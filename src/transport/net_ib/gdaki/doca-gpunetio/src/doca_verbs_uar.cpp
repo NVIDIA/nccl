@@ -93,6 +93,8 @@ doca_verbs_uar::doca_verbs_uar(struct ibv_context *context,
 
 doca_verbs_uar::~doca_verbs_uar() { static_cast<void>(destroy()); }
 
+static const off64_t DOCA_VERBS_UAR_DBR_LESS_DB_OFFSET = 0x600LLU;
+
 void doca_verbs_uar::create() {
     uint32_t mlx5_uar_type{};
     auto status = convert_doca_verbs_uar_type_to_mlx5_uar_type(m_allocation_type, mlx5_uar_type);
@@ -110,6 +112,8 @@ void doca_verbs_uar::create() {
 
     m_uar_id = m_uar_obj->page_id;
     m_reg_addr = m_uar_obj->reg_addr;
+    m_dbr_less_addr = reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(m_uar_obj->base_addr) +
+                                               DOCA_VERBS_UAR_DBR_LESS_DB_OFFSET);
 }
 
 doca_error_t doca_verbs_uar::destroy() noexcept {
@@ -192,6 +196,22 @@ doca_error_t doca_verbs_uar_reg_addr_get(const struct doca_verbs_uar *uar_obj, v
     }
 
     *reg_addr = uar_obj->get_reg_addr();
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_uar_dbr_less_addr_get(const struct doca_verbs_uar *uar_obj,
+                                              void **reg_addr) {
+    if (uar_obj == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get uar reg_addr: parameter uar_obj is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+    if (reg_addr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get uar reg_addr: parameter reg_addr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    *reg_addr = uar_obj->get_dbr_less_addr();
 
     return DOCA_SUCCESS;
 }

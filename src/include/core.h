@@ -1,14 +1,13 @@
 /*************************************************************************
- * Copyright (c) 2015-2021, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2015-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #ifndef NCCL_CORE_H_
 #define NCCL_CORE_H_
 
-#include <pthread.h>
-#include <unistd.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <algorithm> // For std::min/std::max

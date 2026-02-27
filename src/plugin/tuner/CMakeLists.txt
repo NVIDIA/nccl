@@ -1,3 +1,10 @@
+#
+# SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# See LICENSE.txt for more license information
+#
+
 # Tuner plugin sources
 set(PLUGIN_TUNER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/tuner_v2.cc

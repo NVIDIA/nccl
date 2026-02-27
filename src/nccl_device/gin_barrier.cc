@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include "core.h"
 #include "nccl_device/impl/gin_barrier__funcs.h"
@@ -13,10 +14,7 @@ ncclResult_t ncclGinBarrierCreateRequirement(
     ncclGinBarrierHandle_t* outHandle, ncclDevResourceRequirements_t* outReq
   ) {
   memset(outReq, 0, sizeof(*outReq));
-  outReq->bufferSize = nBarriers*NCCL_GIN_MAX_CONTEXTS*sizeof(uint32_t);
-  outReq->bufferAlign = alignof(uint32_t);
-  outReq->outBufferHandle = &outHandle->bufHandle;
-  outReq->ginSignalCount = nBarriers;
+  outReq->ginSignalCount = nBarriers * team.nRanks;
   outReq->outGinSignalStart = &outHandle->signal0;
   return ncclSuccess;
 }

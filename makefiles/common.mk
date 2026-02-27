@@ -1,7 +1,8 @@
 #
-# Copyright (c) 2015-2022, NVIDIA CORPORATION. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2015-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 #
-# See LICENSE.txt for license information
+# See LICENSE.txt for more license information
 #
 
 CUDA_HOME ?= /usr/local/cuda
@@ -181,4 +182,12 @@ endif
 # Check and enable LLVM IR generation
 ifneq ($(EMIT_LLVM_IR), 0)
   CXXFLAGS += -DEMIT_LLVM_IR=1
+endif
+
+# Git version overrides (set via command line: make NCCL_GIT_BRANCH=xxx NCCL_GIT_COMMIT_HASH=yyy)
+ifneq ($(NCCL_GIT_BRANCH),)
+  CXXFLAGS += -DNCCL_GIT_BRANCH='"$(NCCL_GIT_BRANCH)"'
+endif
+ifneq ($(NCCL_GIT_COMMIT_HASH),)
+  CXXFLAGS += -DNCCL_GIT_COMMIT_HASH='"$(NCCL_GIT_COMMIT_HASH)"'
 endif

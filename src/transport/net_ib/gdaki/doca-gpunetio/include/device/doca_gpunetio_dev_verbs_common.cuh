@@ -142,18 +142,22 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_fence_acquire() {
         asm volatile("fence.acquire.cta;");
     else if (sync_scope == DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU)
         asm volatile("fence.acquire.gpu;");
-    else
+    else if (sync_scope == DOCA_GPUNETIO_VERBS_SYNC_SCOPE_SYS)
         asm volatile("fence.acquire.sys;");
+    else
+        ;  // no-op
 #else
     // fence.acquire is not available in PTX. Emulate that with st.release.
     uint32_t dummy;
-    const uint32_t val = 0;
+    uint32_t val = 0;
     if (sync_scope == DOCA_GPUNETIO_VERBS_SYNC_SCOPE_CTA)
-        asm volatile("ld.acquire.cta.b32 %0, [%1];" : : "r"(val), "l"(&dummy));
+        asm volatile("ld.acquire.cta.b32 %0, [%1];" : "=r"(val) : "l"(&dummy));
     else if (sync_scope == DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU)
-        asm volatile("ld.acquire.gpu.b32 %0, [%1];" : : "r"(val), "l"(&dummy));
-    else
-        asm volatile("ld.acquire.sys.b32 %0, [%1];" : : "r"(val), "l"(&dummy));
+        asm volatile("ld.acquire.gpu.b32 %0, [%1];" : "=r"(val) : "l"(&dummy));
+    else if (sync_scope == DOCA_GPUNETIO_VERBS_SYNC_SCOPE_SYS)
+        asm volatile("ld.acquire.sys.b32 %0, [%1];" : "=r"(val) : "l"(&dummy));
+    else if (sync_scope == DOCA_GPUNETIO_VERBS_SYNC_SCOPE_THREAD)
+        ;  // no-op
 #endif
 }
 
@@ -164,8 +168,10 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_fence_release() {
         asm volatile("fence.release.cta;");
     else if (sync_scope == DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU)
         asm volatile("fence.release.gpu;");
-    else
+    else if (sync_scope == DOCA_GPUNETIO_VERBS_SYNC_SCOPE_SYS)
         asm volatile("fence.release.sys;");
+    else if (sync_scope == DOCA_GPUNETIO_VERBS_SYNC_SCOPE_THREAD)
+        ;  // no-op
 #else
     // fence.release is not available in PTX. Emulate that with st.release.
     uint32_t dummy;
@@ -174,28 +180,22 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_fence_release() {
         asm volatile("st.release.cta.u32 [%0], %1;" : : "l"(&dummy), "r"(val));
     else if (sync_scope == DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU)
         asm volatile("st.release.gpu.u32 [%0], %1;" : : "l"(&dummy), "r"(val));
-    else
+    else if (sync_scope == DOCA_GPUNETIO_VERBS_SYNC_SCOPE_SYS)
         asm volatile("st.release.sys.u32 [%0], %1;" : : "l"(&dummy), "r"(val));
+    else if (sync_scope == DOCA_GPUNETIO_VERBS_SYNC_SCOPE_THREAD)
+        ;  // no-op
 #endif
 }
 
 #ifdef DOCA_GPUNETIO_VERBS_HAS_ASYNC_STORE_RELEASE
-template <enum doca_gpu_dev_verbs_sync_scope sync_scope>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_async_store_release(uint32_t *ptr,
                                                                               uint32_t val) {
-    if (sync_scope == DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU)
-        asm volatile("st.async.mmio.release.gpu.b32 [%0], %1;" : : "l"(ptr), "r"(val));
-    else
-        asm volatile("st.async.mmio.release.sys.global.b32 [%0], %1;" : : "l"(ptr), "r"(val));
+    asm volatile("st.async.release.sys.global.b32 [%0], %1;" : : "l"(ptr), "r"(val));
 }
 
-template <enum doca_gpu_dev_verbs_sync_scope sync_scope>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_async_store_release(uint64_t *ptr,
                                                                               uint64_t val) {
-    if (sync_scope == DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU)
-        asm volatile("st.async.mmio.release.gpu.global.b64 [%0], %1;" : : "l"(ptr), "l"(val));
-    else
-        asm volatile("st.async.mmio.release.sys.global.b64 [%0], %1;" : : "l"(ptr), "l"(val));
+    asm volatile("st.async.mmio.release.sys.global.b64 [%0], %1;" : : "l"(ptr), "l"(val));
 }
 #endif
 

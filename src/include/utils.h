@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2016-2022, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2016-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #ifndef NCCL_UTILS_H_
 #define NCCL_UTILS_H_
@@ -14,18 +15,20 @@
 #include "compiler.h"
 #include <stdint.h>
 #include <time.h>
-#include <sched.h>
 #include <algorithm>
 #include <new>
 #include <type_traits>
 #include <mutex>
 #include <condition_variable>
+#include <random>
+#include <chrono>
 
 int ncclCudaCompCap();
 
 // PCI Bus ID <-> int64 conversion functions
 ncclResult_t int64ToBusId(int64_t id, char* busId);
 ncclResult_t busIdToInt64(const char* busId, int64_t* id);
+ncclResult_t pciPathToInt64(char* path, int64_t* id);
 
 ncclResult_t getBusId(int cudaDev, int64_t *busId);
 
@@ -54,21 +57,37 @@ static int compareInts(const void *a, const void *b) {
 }
 
 inline uint64_t clockNano() {
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return uint64_t(ts.tv_sec)*1000*1000*1000 + ts.tv_nsec;
+  auto now = std::chrono::steady_clock::now();
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
 }
 
-/* get any bytes of random data from /dev/urandom, return ncclSuccess (0) if it succeeds. */
+inline void clockRealtime(struct timespec* ts) {
+  using namespace std::chrono;
+  auto now = system_clock::now();
+  auto secs = time_point_cast<seconds>(now);
+  ts->tv_sec = secs.time_since_epoch().count();
+  ts->tv_nsec = duration_cast<nanoseconds>(now - secs).count();
+}
+
+/* get any bytes of random data from system RNG, return ncclSuccess (0) if it succeeds. */
 inline ncclResult_t getRandomData(void* buffer, size_t bytes) {
-  ncclResult_t ret = ncclSuccess;
   if (bytes > 0) {
-    const size_t one = 1UL;
-    FILE* fp = fopen("/dev/urandom", "r");
-    if (buffer == NULL || fp == NULL || fread(buffer, bytes, one, fp) != one) ret = ncclSystemError;
-    if (fp) fclose(fp);
+    if (buffer == NULL) {
+      WARN("getRandomData: buffer is NULL");
+      return ncclSystemError;
+    }
+    try {
+      std::random_device rd;
+      unsigned char* buf = static_cast<unsigned char*>(buffer);
+      for (size_t i = 0; i < bytes; ++i) {
+        buf[i] = static_cast<unsigned char>(rd());
+      }
+    } catch (const std::exception& e) {
+      WARN("getRandomData: std::random_device failed: %s", e.what());
+      return ncclSystemError;
+    }
   }
-  return ret;
+  return ncclSuccess;
 }
 
 static inline int gcd(int a, int b) {
@@ -163,6 +182,8 @@ template<typename T, T *T::*next>
 T* ncclIntruQueueTryDequeue(ncclIntruQueue<T,next> *me);
 template<typename T, T *T::*next>
 void ncclIntruQueueTransfer(ncclIntruQueue<T,next> *dst, ncclIntruQueue<T,next> *src);
+template<typename T, T *T::*next>
+inline T* ncclIntruQueueDelete(ncclIntruQueue<T,next> *me, T *x, bool (*cmp)(T*, T*));
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -389,13 +410,13 @@ inline T* ncclIntruQueueDequeue(ncclIntruQueue<T,next> *me) {
 }
 
 template<typename T, T *T::*next>
-inline bool ncclIntruQueueDelete(ncclIntruQueue<T,next> *me, T *x) {
+inline T* ncclIntruQueueDelete(ncclIntruQueue<T,next> *me, T *x, bool (*cmp)(T*, T*)) {
   T *prev = nullptr;
   T *cur = me->head;
   bool found = false;
 
   while (cur) {
-    if (cur == x) {
+    if (cmp(cur, x)) {
       found = true;
       break;
     }
@@ -411,7 +432,7 @@ inline bool ncclIntruQueueDelete(ncclIntruQueue<T,next> *me, T *x) {
     if (cur == me->tail)
       me->tail = prev;
   }
-  return found;
+  return cur;
 }
 
 template<typename T, T *T::*next>

@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2016-2022, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2016-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include "common.h"
 
@@ -18,10 +19,26 @@ static void ibGdrSupportInitOnce() {
                           KNL_MODULE_LOADED("/sys/kernel/mm/memory_peers/nv_mem_nc/version") ||
                           KNL_MODULE_LOADED("/sys/module/nvidia_peermem/version");
 }
+
+// Returns ncclSuccess if any of the peermem modules are loaded.
 ncclResult_t ncclIbGdrSupport() {
   static std::once_flag once;
   std::call_once(once, ibGdrSupportInitOnce);
   if (!ncclIbGdrModuleLoaded)
+    return ncclSystemError;
+  return ncclSuccess;
+}
+
+static int ncclIbPeerMemModuleLoaded = 0; // 1 = true, 0 = false
+static void ibPeerMemSupportInitOnce() {
+  ncclIbPeerMemModuleLoaded = KNL_MODULE_LOADED("/sys/module/nvidia_peermem/version");
+}
+
+// Returns ncclSuccess if nvidia_peermem module is loaded. Does not check legacy implementations of nv_peer_mem (e.g. nv_mem, nv_mem_nc)
+ncclResult_t ncclIbPeerMemSupport() {
+  static std::once_flag once;
+  std::call_once(once, ibPeerMemSupportInitOnce);
+  if (!ncclIbPeerMemModuleLoaded)
     return ncclSystemError;
   return ncclSuccess;
 }

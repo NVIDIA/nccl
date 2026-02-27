@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2016-2022, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2016-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #ifndef _NCCL_RMA_PROXY_H_
 #define _NCCL_RMA_PROXY_H_
@@ -102,8 +103,8 @@ struct ncclRmaProxyState {
 
   // Physical GIN communicator contexts
   int ginCommCount;
-  void* ginComms[NCCL_GIN_MAX_CONTEXTS];
-  ncclNetProperties_t props[NCCL_GIN_MAX_CONTEXTS];
+  void* ginComms[NCCL_GIN_MAX_CONNECTIONS];
+  ncclNetProperties_t props[NCCL_GIN_MAX_CONNECTIONS];
 
   // Virtual RMA proxy contexts
   int rmaProxyCtxCount;
@@ -134,9 +135,9 @@ ncclResult_t ncclRmaProxyProgress(ncclGin_t* ncclGin, void* rmaProxyCtx);
 
 // RMA Proxy memory registration
 ncclResult_t ncclRmaProxyRegister(struct ncclComm* comm, void* address, size_t size,
-                                  void* rmaHostWins[NCCL_GIN_MAX_CONTEXTS],
-                                  ncclGinWindow_t rmaDevWins[NCCL_GIN_MAX_CONTEXTS]);
-ncclResult_t ncclRmaProxyDeregister(struct ncclComm* comm, void* rmaHostWins[NCCL_GIN_MAX_CONTEXTS]);
+                                  void* rmaHostWins[NCCL_GIN_MAX_CONNECTIONS],
+                                  ncclGinWindow_t rmaDevWins[NCCL_GIN_MAX_CONNECTIONS]);
+ncclResult_t ncclRmaProxyDeregister(struct ncclComm* comm, void* rmaHostWins[NCCL_GIN_MAX_CONNECTIONS]);
 
 // Progress thread function
 void* ncclRmaProxyProgressThread(struct ncclRmaProxyState* rmaProxyState_);

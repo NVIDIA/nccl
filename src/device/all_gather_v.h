@@ -1,8 +1,9 @@
 /*************************************************************************
-* Copyright (c) 2015-2022, NVIDIA CORPORATION. All rights reserved.
-*
-* See LICENSE.txt for license information
-************************************************************************/
+ * SPDX-FileCopyrightText: Copyright (c) 2015-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include "device.h"
 #include "collectives.h"

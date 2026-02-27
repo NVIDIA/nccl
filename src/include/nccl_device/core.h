@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #ifndef _NCCL_DEVICE_CORE_H_
 #define _NCCL_DEVICE_CORE_H_
@@ -62,6 +63,12 @@ typedef struct ncclTeamRequirements ncclTeamRequirements_t;
 struct ncclCommProperties;
 typedef struct ncclCommProperties ncclCommProperties_t;
 
+typedef enum {
+  NCCL_GIN_CONNECTION_NONE,
+  NCCL_GIN_CONNECTION_FULL,
+  NCCL_GIN_CONNECTION_RAIL,
+} ncclGinConnectionType_t;
+
 struct ncclDevCommRequirements {
   /* attributes that users should never touch. */
   size_t size;
@@ -81,9 +88,13 @@ struct ncclDevCommRequirements {
   int lsaLLA2ABlockCount, lsaLLA2ASlotCount;
 
   bool ginForceEnable;
+
   int ginContextCount; // This is a hint, the actual context count in the devcomm may not match.
   int ginSignalCount; // Guaranteed to start at id=0
   int ginCounterCount; // Guaranteed to start at id=0
+  ncclGinConnectionType_t ginConnectionType;
+  bool ginExclusiveContexts;
+  int ginQueueDepth;
 };
 
 #define NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER {                 \
@@ -98,10 +109,13 @@ struct ncclDevCommRequirements {
     0,                                           /* railGinBarrierCount */     \
     0,                                           /* lsaLLA2ABlockCount */      \
     0,                                           /* lsaLLA2ASlotCount */       \
-    0,                                           /* ginForceEnable */          \
+    false,                                       /* ginForceEnable */          \
     4,                                           /* ginContextCount */         \
     0,                                           /* ginSignalCount */          \
     0,                                           /* ginCounterCount */         \
+    NCCL_GIN_CONNECTION_NONE,                    /* ginConnectionType */       \
+    false,                                       /* ginExclusiveContexts */    \
+    0,                                           /* ginQueueDepth */           \
 }
 
 struct ncclDevResourceRequirements {
@@ -127,7 +141,7 @@ struct ncclTeamRequirements {
   NCCL_VERSION(NCCL_MAJOR, NCCL_MINOR, NCCL_PATCH),  /* version */         \
 }
 
-typedef enum : uint8_t {
+typedef enum {
   NCCL_GIN_TYPE_NONE = 0,
   NCCL_GIN_TYPE_PROXY = 2, // intentially not 1. Must match NCCL_NET_DEVICE_GIN_PROXY for backward compatibility
   NCCL_GIN_TYPE_GDAKI = 3, // intentially not 2. Must match NCCL_NET_DEVICE_GIN_GDAKI for backward compatibility
@@ -147,6 +161,9 @@ struct ncclCommProperties {
   bool deviceApiSupport;
   bool multimemSupport;
   ncclGinType_t ginType;
+  int nLsaTeams;
+  bool hostRmaSupport;
+  ncclGinType_t railedGinType;
 };
 
 NCCL_EXTERN_C __host__ ncclResult_t ncclCommQueryProperties(ncclComm_t, ncclCommProperties_t*);

@@ -4,6 +4,7 @@ set(SYM_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ll_a2a.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/lsa_barrier.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/gin_barrier.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/gin_scratch.cc
 )
 
 # Add register sources to parent scope

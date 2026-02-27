@@ -1,8 +1,9 @@
-/*
- * Copyright (c) 2016-2023, NVIDIA CORPORATION. All rights reserved.
+/*************************************************************************
+ * SPDX-FileCopyrightText: Copyright (c) 2016-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See COPYRIGHT for license information
- */
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #ifndef NCCL_IPCSOCKET_H
 #define NCCL_IPCSOCKET_H

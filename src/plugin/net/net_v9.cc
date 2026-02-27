@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2022-2023, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include "nccl_net.h"
 #include "proxy.h"
@@ -139,7 +140,7 @@ static ncclResult_t ncclNet_init(void** ctx __attribute__((unused)),
   // before ncclNet_v11 the net plugin was initialized only once. With ncclNet_v11 this is no longer the case.
   // The compat layer preserves the ncclNet_v9 behavior using a refCount to track the number of times the plugin
   // is initialized, and avoid initializing it multiple times.
-  if (refCount[NET_INDEX]++) return ncclSuccess;
+  if (refCount[NET_INDEX]) goto exit;
   NCCLCHECK(ncclNet_v9->init(logfn));
   ncclNet.devices = ncclNet_v9->devices;
   ncclNet.getProperties = ncclNet_getProperties;
@@ -161,6 +162,8 @@ static ncclResult_t ncclNet_init(void** ctx __attribute__((unused)),
   ncclNet.makeVDevice = (ncclNet_v9->makeVDevice) ? ncclNet_makeVDevice : nullptr;
   ncclNet.finalize = ncclNet_finalize;
   ncclNet.setNetAttr = nullptr;
+exit:
+  refCount[NET_INDEX]++;
   return ncclSuccess;
 }
 
@@ -181,7 +184,7 @@ static ncclResult_t ncclCollNet_init(void** ctx __attribute__((unused)),
   // before ncclCollNet_v11 the collnet plugin was initialized only once. With ncclCollNet_v11 this is no longer the case.
   // The compat layer preserves the ncclCollNet_v9 behavior using a refCount to track the number of times the plugin
   // is initialized, and avoid initializing it multiple times.
-  if (refCount[COLLNET_INDEX]++) return ncclSuccess;
+  if (refCount[COLLNET_INDEX]) goto exit;
   NCCLCHECK(ncclCollNet_v9->init(logfn));
   ncclCollNet.devices = ncclCollNet_v9->devices;
   ncclCollNet.getProperties = ncclCollNet_getProperties;
@@ -200,6 +203,8 @@ static ncclResult_t ncclCollNet_init(void** ctx __attribute__((unused)),
   ncclCollNet.closeListen = ncclCollNet_v9->closeListen;
   ncclCollNet.makeVDevice = (ncclCollNet_v9->makeVDevice) ? ncclCollNet_makeVDevice : nullptr;
   ncclCollNet.finalize = ncclCollNet_finalize;
+exit:
+  refCount[COLLNET_INDEX]++;
   return ncclSuccess;
 }
 

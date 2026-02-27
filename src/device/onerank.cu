@@ -1,8 +1,9 @@
 /*************************************************************************
- * Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
- ************************************************************************/
+ * See LICENSE.txt for more license information
+ *************************************************************************/
 
 #include "alloc.h"
 #include "collectives.h"
@@ -22,8 +23,8 @@ namespace {
 
     // each block/channel gets a roughly equal segment of 16 byte packs
     constexpr int EltPerPack = 16/sizeof(T);
-    intptr_t i0 = (bid+0)*alignUp(nElts/bn, EltPerPack);
-    intptr_t i1 = (bid+1)*alignUp(nElts/bn, EltPerPack);
+    intptr_t i0 = (bid+0)*alignUp(divUp(nElts, bn), EltPerPack);
+    intptr_t i1 = (bid+1)*alignUp(divUp(nElts, bn), EltPerPack);
     i0 = min(i0, nElts);
     i1 = min(i1, nElts);
     src = (T*)src + i0;

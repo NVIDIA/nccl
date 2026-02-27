@@ -1934,7 +1934,10 @@ ncclResult_t ncclProxyStop(struct ncclComm* comm) {
             if (sharedProxyState->sharedDevMems[i]) {
               if (!ncclCuMemEnable()) {
                 CUDACHECK(cudaIpcCloseMemHandle(sharedProxyState->sharedDevMems[i]));
+              } else {
+                NCCLCHECK(ncclCudaFree((char*)sharedProxyState->sharedDevMems[i]));
               }
+              sharedProxyState->sharedDevMems[i] = NULL;
             }
             int type = ncclProxyMsgClose;
             (void)ncclSocketSend(sharedProxyState->peerSocks + i, &type, sizeof(int));

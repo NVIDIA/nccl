@@ -69,13 +69,22 @@ __device__ __forceinline__ void buildGfd(ncclGinProxyGfd_t* gfd, ncclGinProxyOp_
   gfd->qword[ncclGinProxyGfdHeader].header.size = (uint64_t)size;
 
   if (hasInline) {
+    // Use bit_cast to preserve bit pattern for float/double types
+    uint64_t srcValBits;
+    static_assert(sizeof(T) <= sizeof(uint64_t), "T must be <= 8 bytes");
+    __builtin_memcpy(&srcValBits, &srcVal, sizeof(T));
+    // Zero out upper bits if T is smaller than uint64_t
+    if (sizeof(T) < sizeof(uint64_t)) {
+      srcValBits &= ((1ULL << (sizeof(T) * 8)) - 1);
+    }
+
     gfd->qword[ncclGinProxyGfdInlineLow].inlineLow.flag = 1;
-    gfd->qword[ncclGinProxyGfdInlineLow].inlineLow.inlineValLow = (uint32_t)srcVal;
+    gfd->qword[ncclGinProxyGfdInlineLow].inlineLow.inlineValLow = (uint32_t)(srcValBits & 0xFFFFFFFF);
     gfd->qword[ncclGinProxyGfdInlineHigh].inlineHigh.flag = 1;
     if (sizeof(T) > 4)
-      gfd->qword[ncclGinProxyGfdInlineLow].inlineLow.inlineValLow2 = (uint64_t)srcVal >> 32;
+      gfd->qword[ncclGinProxyGfdInlineLow].inlineLow.inlineValLow2 = (uint16_t)((srcValBits >> 32) & 0xFFFF);
     if (sizeof(T) > 6)
-      gfd->qword[ncclGinProxyGfdInlineHigh].inlineHigh.inlineValHigh = (uint64_t)srcVal >> 48;
+      gfd->qword[ncclGinProxyGfdInlineHigh].inlineHigh.inlineValHigh = (uint16_t)((srcValBits >> 48) & 0xFFFF);
   } else {
     gfd->qword[ncclGinProxyGfdSrcOff].srcOff.flag = 1;
     gfd->qword[ncclGinProxyGfdSrcOff].srcOff.srcOff = (uint64_t)srcOff;

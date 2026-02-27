@@ -1,0 +1,63 @@
+[project]
+name = "nccl_ep"
+dynamic = ["version"]
+requires-python = ">=3.8"
+description = "NCCL EP: Low-level Python bindings (ctypes) for NCCL EP C API"
+readme = "README.md"
+license = "BSD-3-Clause"
+license-files = ["LICENSE.txt"]
+authors = [
+    { name = "NVIDIA Corporation" }
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: English",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Environment :: GPU :: NVIDIA CUDA",
+    "Environment :: GPU :: NVIDIA CUDA :: 12",
+]
+
+dependencies = []
+
+[project.optional-dependencies]
+torch = [
+    "torch>=2.0.0",
+]
+
+[project.urls]
+homepage = "https://developer.nvidia.com/nccl"
+repository = "https://github.com/NVIDIA/nccl"
+issues = "https://github.com/NVIDIA/nccl/issues"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+include = ["nccl_ep*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "nccl_ep._version.__version__" }
+
+[tool.ruff]
+line-length = 100
+
+[tool.pyright]
+include = ["nccl_ep"]
+exclude = ["build", "dist", "*.egg-info"]
+pythonVersion = "3.8"
+typeCheckingMode = "basic"

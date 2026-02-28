@@ -261,7 +261,7 @@ struct Apply_Cast<float ,__nv_bfloat16, /*EltPerPack=*/2> {
   template<> \
   struct Apply_Cast<A, B, EltPerPack> { \
     __device__ __forceinline__ static BytePack<sizeof(B)*EltPerPack> cast(BytePack<sizeof(A)*EltPerPack> a) { \
-      return toPack(VecB(fromPack<VecA>(a))); \
+      return toPack(static_cast<VecB>(fromPack<VecA>(a))); \
     } \
   }; \
   template<> \

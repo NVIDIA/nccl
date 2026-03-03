@@ -136,7 +136,7 @@ void ncclOsSetEnv(const char* name, const char* value) {
   if (result == 0) {
     BOOL res = SetEnvironmentVariableA(name, value);
     if (!res) {
-      WARN("Failed to set environment variable %s to %s: error %lu", name, value, GetLastError());
+      ATTN("Failed to set environment variable %s to %s: error %lu", name, value, GetLastError());
     }
   }
 }

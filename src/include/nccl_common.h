@@ -30,7 +30,9 @@ typedef enum {
   NCCL_LOG_WARN = 2,
   NCCL_LOG_INFO = 3,
   NCCL_LOG_ABORT = 4,
-  NCCL_LOG_TRACE = 5
+  NCCL_LOG_TRACE = 5,
+  // Appended for ABI compatibility; logically between WARN and INFO.
+  NCCL_LOG_ATTN = 6
 } ncclDebugLogLevel;
 
 typedef enum {

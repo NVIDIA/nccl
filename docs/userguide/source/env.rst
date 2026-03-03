@@ -688,11 +688,41 @@ Values accepted
 ^^^^^^^^^^^^^^^
 VERSION - Prints the NCCL version at the start of the program.
 
-WARN - Prints an explicit error message whenever any NCCL call errors out.
+WARN - Prints error messages when NCCL calls return an error code.
+
+ATTN (Attention) - Prints WARN messages plus informational notices (cleanup failures, configuration overrides, error backtraces, async event notifications). (since 2.32)
 
 INFO - Prints debug information.
 
 TRACE - Prints replayable trace information on every call.
+
+.. _NCCL_DEBUG_LEVELS:
+
+NCCL_DEBUG_LEVELS
+-----------------
+(since 2.32)
+
+The ``NCCL_DEBUG_LEVELS`` variable adds individual levels to the inclusive
+selection made by ``NCCL_DEBUG``. The effective selection is the logical union
+of the levels selected by both variables. The value is a comma-separated list
+of ``VERSION``, ``WARN``, ``ATTN``, ``INFO``, ``ABORT``, ``TRACE``, or ``ALL``.
+
+For example, the following maintains ``WARN`` as the baseline while adding
+``ATTN`` on NCCL versions that support this variable. ``NCCL_DEBUG=WARN``
+selects ``VERSION`` and ``WARN``; adding ``ATTN`` produces an effective
+selection of ``VERSION,WARN,ATTN``:
+
+.. code:: shell
+
+    NCCL_DEBUG=WARN NCCL_DEBUG_LEVELS=ATTN ./my_app
+
+Older NCCL versions ignore ``NCCL_DEBUG_LEVELS`` and retain the ``WARN``
+baseline. Unknown level names are ignored so a site-wide setting can include
+levels introduced by a newer NCCL version without disabling recognized levels.
+
+Do not set ``NCCL_DEBUG=ATTN`` as a site-wide setting in a mixed-version
+deployment. NCCL versions before 2.32 do not recognize ``ATTN`` and fall back
+to no debug logging. Use ``NCCL_DEBUG=WARN NCCL_DEBUG_LEVELS=ATTN`` instead.
 
 .. _NCCL_DEBUG_FILE:
 
@@ -789,13 +819,13 @@ which log lines get a timestamp depending upon the level of the log.
 Value accepted
 ^^^^^^^^^^^^^^
 The value should be a comma separated list of the levels which should
-have the timestamp. Valid levels are: ``VERSION``, ``WARN``, ``INFO``,
-``ABORT``, and ``TRACE``. In addition, ``ALL`` can be used to turn it
-on for all levels. Setting it to an empty value disables it for all
-levels. If the value is prefixed with a caret (``^``) then the listed
-levels will NOT log a timestamp, and the rest will.
-The default is to enable timestamps for ``WARN``, but disable it for
-the rest.
+have the timestamp. Valid levels are: ``VERSION``, ``WARN``, ``ATTN``,
+``INFO``, ``ABORT``, and ``TRACE``. In addition, ``ALL`` can be used to
+turn it on for all levels. Setting it to an empty value disables it for
+all levels. If the value is prefixed with a caret (``^``) then the
+listed levels will NOT log a timestamp, and the rest will.
+The default is to enable timestamps for ``WARN`` and ``ATTN``, but
+disable it for the rest.
 
 For example, ``NCCL_DEBUG_TIMESTAMP_LEVELS=WARN,INFO,TRACE`` will turn
 it on for warnings, info logs, and traces. Or,

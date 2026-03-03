@@ -754,7 +754,7 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
               memcpy(&localInfos[idx].fabricHandle, &entry->desc.local.shareableHandle.fabricHandle,
                      sizeof(CUmemFabricHandle));
             } else {
-              WARN("MemManager: FABRIC handle not valid for entry ptr=%p", entry->ptr);
+              ATTN("MemManager: FABRIC handle not valid for entry ptr=%p", entry->ptr);
             }
           } else {
             // For POSIX FD: store the cuMem handle (for FD conversion via proxy)
@@ -836,7 +836,7 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
       }
 
       if (matchedInfo == nullptr) {
-        WARN("MemManager: Could not find matching handle info for ptr=%p from rank %d", entry->ptr,
+        ATTN("MemManager: Could not find matching handle info for ptr=%p from rank %d", entry->ptr,
              entry->desc.imported.ownerRank);
         entry = entry->next;
         continue;
@@ -852,7 +852,7 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
         // POSIX FD handles only work within the same node - check hostHash
         if (comm->peerInfo && comm->peerInfoValid &&
             comm->peerInfo[entry->desc.imported.ownerRank].hostHash != comm->peerInfo[comm->rank].hostHash) {
-          WARN("MemManager: Cannot re-import peer buffer from rank %d (different node) using POSIX FD - skipping",
+          ATTN("MemManager: Cannot re-import peer buffer from rank %d (different node) using POSIX FD - skipping",
                entry->desc.imported.ownerRank);
           entry = entry->next;
           continue;
@@ -865,7 +865,7 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
         // The handleData contains the cuMem handle - request FD conversion
         ret = ncclProxyClientGetFdBlocking(comm, entry->desc.imported.ownerRank, &matchedInfo->handleData, &fd);
         if (ret != ncclSuccess || fd < 0) {
-          WARN("MemManager: Failed to get FD from rank %d for ptr=%p", entry->desc.imported.ownerRank, entry->ptr);
+          ATTN("MemManager: Failed to get FD from rank %d for ptr=%p", entry->desc.imported.ownerRank, entry->ptr);
           entry = entry->next;
           continue;
         }
@@ -878,13 +878,13 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
         curet =
           CUPFN(cuMemImportFromShareableHandle(&newHandle, &matchedInfo->fabricHandle, CU_MEM_HANDLE_TYPE_FABRIC));
       } else {
-        WARN("MemManager: Unknown handle type %d for peer import", matchedInfo->handleType);
+        ATTN("MemManager: Unknown handle type %d for peer import", matchedInfo->handleType);
         entry = entry->next;
         continue;
       }
 
       if (curet != CUDA_SUCCESS) {
-        WARN("MemManager: cuMemImportFromShareableHandle failed for ptr=%p (curet=%d)", entry->ptr, curet);
+        ATTN("MemManager: cuMemImportFromShareableHandle failed for ptr=%p (curet=%d)", entry->ptr, curet);
         entry = entry->next;
         continue;
       }
@@ -894,7 +894,7 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
       if (mapResult != ncclSuccess) {
         CUCHECKIGNORE(cuMemRelease(newHandle));
         entry->handle = 0;
-        WARN("MemManager: ncclCuMemMapAndSetAccess failed for re-imported ptr=%p", entry->ptr);
+        ATTN("MemManager: ncclCuMemMapAndSetAccess failed for re-imported ptr=%p", entry->ptr);
         entry = entry->next;
         continue;
       }

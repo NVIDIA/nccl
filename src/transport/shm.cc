@@ -295,7 +295,7 @@ static void initShmLocality() {
   if (!init) {
     shmLocality = ncclParamShmLocality();
     if (shmLocality != SHM_SEND_SIDE && shmLocality != SHM_RECV_SIDE) {
-      WARN("Ignoring SHM locality, must be 1 (sender side) or 2 (receiver side, default)");
+      ATTN("Ignoring SHM locality, must be 1 (sender side) or 2 (receiver side, default)");
       shmLocality = SHM_RECV_SIDE;
     }
     init = 1;

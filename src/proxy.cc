@@ -294,7 +294,7 @@ ncclResult_t dumpProxyState(struct ncclProxyProgressState* state) {
   while (op) {
     NCCLCHECK(getOpIndex(op, state, &poolIndex, &opIndex));
     if (op->state & OP_SEEN) {
-      WARN("List loop at element %d-%d", poolIndex, opIndex);
+      ATTN("List loop at element %d-%d", poolIndex, opIndex);
     }
     NCCLCHECK(printProxyOp(op, poolIndex, opIndex));
     op->state |= OP_SEEN;
@@ -303,14 +303,14 @@ ncclResult_t dumpProxyState(struct ncclProxyProgressState* state) {
     while (nextOp) {
       NCCLCHECK(getOpIndex(nextOp, state, &poolIndex, &opIndex));
       if (nextOp->state & OP_SEEN) {
-        WARN("List loop at element %d-%d", poolIndex, opIndex);
+        ATTN("List loop at element %d-%d", poolIndex, opIndex);
       }
       printf("| `-> ");
       NCCLCHECK(printProxyOp(nextOp, poolIndex, opIndex));
       nextOp->state |= OP_SEEN;
       printf("\n");
       if (nextOp->next) {
-        WARN("Inactive op has next set!");
+        ATTN("Inactive op has next set!");
       }
       nextOp = nextOp->nextPeer;
     }
@@ -326,7 +326,7 @@ ncclResult_t dumpProxyState(struct ncclProxyProgressState* state) {
   while (op) {
     NCCLCHECK(getOpIndex(op, state, &poolIndex, &opIndex));
     if (op->state & OP_SEEN) {
-      WARN("List loop at element %d-%d", poolIndex, opIndex);
+      ATTN("List loop at element %d-%d", poolIndex, opIndex);
     }
     NCCLCHECK(printProxyOp(op, poolIndex, opIndex));
     op->state |= OP_SEEN;
@@ -339,7 +339,7 @@ ncclResult_t dumpProxyState(struct ncclProxyProgressState* state) {
   while (op) {
     NCCLCHECK(getOpIndex(op, state, &poolIndex, &opIndex));
     if (op->state & OP_SEEN) {
-      WARN("List loop at element %d-%d", poolIndex, opIndex);
+      ATTN("List loop at element %d-%d", poolIndex, opIndex);
     }
     op->state |= OP_SEEN;
     op = op->next;
@@ -953,7 +953,7 @@ void* ncclProxyProgress(void* proxyState_) {
   // This thread is created by proxyService, therefore setting the affinity is not needed.
   INFO(NCCL_INIT, "[Proxy Progress] Device %d CPU core %d", proxyState->cudaDev, ncclOsGetCpu());
   if (!CUDASUCCESS(cudaSetDevice(proxyState->cudaDev))) {
-    WARN("[Proxy Progress] Failed to set CUDA device %d", proxyState->cudaDev);
+    ATTN("[Proxy Progress] Failed to set CUDA device %d", proxyState->cudaDev);
   }
 
   struct ncclProxyProgressState* state = &proxyState->progressState;
@@ -1532,7 +1532,7 @@ static void proxyOpsFree(struct ncclProxyState* proxyState) {
     ncclOsUnsetMutexCondShared(state->opsPool->mutex, state->opsPool->cond, &state->opsPool->syncObjectsInitialized);
   }
   if (ncclShmClose(state->handle) != ncclSuccess) {
-    WARN("[Service thread] shm close failed");
+    ATTN("[Service thread] shm close failed");
   }
   state->opsPool = NULL;
   state->handle = NULL;
@@ -1543,7 +1543,7 @@ ncclResult_t ncclProxyShmUnlink(struct ncclComm* comm) {
   if (state->opsPool == NULL) return ncclSuccess;
 
   if (ncclShmUnlink(state->handle) != ncclSuccess) {
-    WARN("[Service thread] proxy ops shm unlink failed");
+    ATTN("[Service thread] proxy ops shm unlink failed");
   }
   return ncclSuccess;
 }
@@ -1794,7 +1794,7 @@ void* ncclProxyService(void* _args) {
   INFO(NCCL_INIT, "[Proxy Service] Device %d CPU core %d", proxyState->cudaDev, ncclOsGetCpu());
 
   if (!CUDASUCCESS(cudaSetDevice(proxyState->cudaDev))) {
-    WARN("[Proxy Service] Failed to set CUDA device %d", proxyState->cudaDev);
+    ATTN("[Proxy Service] Failed to set CUDA device %d", proxyState->cudaDev);
   }
 
   // Prepare poll descriptor
@@ -1891,7 +1891,7 @@ void* ncclProxyService(void* _args) {
       if (maxnpeers < s + 1) maxnpeers = s + 1;
       NCCLCHECKGOTO(ncclSocketInit(&peers[s].sock), ret, fail);
       if (ncclSocketAccept(&peers[s].sock, proxyState->listenSock, /*retry=*/false) != ncclSuccess) {
-        INFO(NCCL_PROXY, "[Service thread] Accept failed %s", strerror(errno));
+        ATTN("[Service thread] Accept failed %s", strerror(errno));
       } else {
         NCCLCHECKGOTO(ncclSocketGetFd(&peers[s].sock, &pollfds[s].fd), ret, fail);
         if (pollfds[s].fd == NCCL_INVALID_SOCKET) {
@@ -1944,7 +1944,7 @@ void* ncclProxyService(void* _args) {
         res = ncclSocketTryRecv(sock, &type, sizeof(int), &closed, false /*blocking*/);
         if (res != ncclSuccess && res != ncclInProgress) {
           if (!COMPILER_ATOMIC_LOAD(proxyState->abortFlag, std::memory_order_relaxed)) {
-            WARN("[Service thread] Could not receive type from localRank %d, res=%u, closed=%d", peer->tpLocalRank, res,
+            ATTN("[Service thread] Could not receive type from localRank %d, res=%u, closed=%d", peer->tpLocalRank, res,
                  closed);
           }
           closeConn = 1;
@@ -1962,7 +1962,7 @@ void* ncclProxyService(void* _args) {
           } else if (proxyMatchOpType(type)) {
             res = proxyServiceInitOp(type, peers + s, &connectionPool, proxyState, &asyncOpCount);
           } else {
-            WARN("[Service thread] Unknown command %d from localRank %d", type, peer->tpLocalRank);
+            ATTN("[Service thread] Unknown command %d from localRank %d", type, peer->tpLocalRank);
             closeConn = 1;
           }
 
@@ -1998,7 +1998,7 @@ void* ncclProxyService(void* _args) {
 
   // Wait for all operations to complete and stop progress thread before freeing any resource
   if (ncclProxyProgressDestroy(proxyState) != ncclSuccess) {
-    WARN("[Proxy Service] proxyDestroy failed");
+    ATTN("[Proxy Service] proxyDestroy failed");
   }
   for (int s = 0; s < maxnpeers; s++) {
     (void)ncclSocketClose(&peers[s].sock);
@@ -2051,7 +2051,7 @@ void* ncclProxyServiceUDS(void* _args) {
   INFO(NCCL_INIT, "[Proxy Service UDS] Device %d CPU core %d", proxyState->cudaDev, ncclOsGetCpu());
 
   if (!CUDASUCCESS(cudaSetDevice(proxyState->cudaDev))) {
-    WARN("[Proxy Service UDS] Failed to set CUDA device %d", proxyState->cudaDev);
+    ATTN("[Proxy Service UDS] Failed to set CUDA device %d", proxyState->cudaDev);
   }
 
   ncclIpcFd ipcFd;

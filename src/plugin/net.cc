@@ -117,8 +117,14 @@ static ncclResult_t ncclNetPluginLoad(netPluginLib_t* pluginLib) {
 
   // if we fail to find a net, exit
   if (pluginLib->ncclNet == nullptr) {
-    INFO(NCCL_INIT | NCCL_NET, "External network plugin %s is unsupported",
-         (ncclPluginLibPaths[ncclPluginTypeNet] ? ncclPluginLibPaths[ncclPluginTypeNet] : pluginLib->name));
+    const char* netPlugin = ncclGetEnv("NCCL_NET_PLUGIN");
+    if (netPlugin) {
+      ATTN("External network plugin %s is unsupported",
+           (ncclPluginLibPaths[ncclPluginTypeNet] ? ncclPluginLibPaths[ncclPluginTypeNet] : pluginLib->name));
+    } else {
+      INFO(NCCL_INIT | NCCL_NET, "External network plugin %s is unsupported",
+           (ncclPluginLibPaths[ncclPluginTypeNet] ? ncclPluginLibPaths[ncclPluginTypeNet] : pluginLib->name));
+    }
     goto fail;
   }
 
@@ -224,7 +230,7 @@ static ncclResult_t ncclNetPluginInit(struct ncclComm* comm, netPluginLib_t* plu
 exit:
   return ncclSuccess;
 fail:
-  INFO(NCCL_INIT | NCCL_NET, "Failed to initialize NET plugin %s", pluginLib->ncclNet->name);
+  ATTN("Failed to initialize NET plugin %s", pluginLib->ncclNet->name);
   if (initCompleted) pluginLib->ncclNet->finalize(comm->netContext);
   pluginLib->netPhysDevs = pluginLib->netVirtDevs = NCCL_UNDEF_DEV_COUNT;
   pluginLib->collNetPhysDevs = pluginLib->collNetVirtDevs = NCCL_UNDEF_DEV_COUNT;

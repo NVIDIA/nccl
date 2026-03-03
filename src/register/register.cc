@@ -98,7 +98,7 @@ static ncclResult_t regCleanup(struct ncclComm* comm, struct ncclReg* reg) {
     struct ncclRegNetHandles* netHandlePrev;
     while (netHandle) {
       if (ncclNetDeregBuffer(comm, netHandle->proxyConn, netHandle->handle) != ncclSuccess) {
-        WARN("rank %d deregister NET buffer handle %p proxy rank %d failed", comm->rank, netHandle->handle,
+        ATTN("rank %d deregister NET buffer handle %p proxy rank %d failed", comm->rank, netHandle->handle,
              netHandle->proxyConn->rank);
       }
       netHandlePrev = netHandle;
@@ -108,7 +108,7 @@ static ncclResult_t regCleanup(struct ncclComm* comm, struct ncclReg* reg) {
   }
   if (reg->state & NVLS_REG_COMPLETE) {
     if (ncclNvlsDeregBuffer(comm, reg) != ncclSuccess) {
-      WARN("rank %d deregister NVLS buffer failed", comm->rank);
+      ATTN("rank %d deregister NVLS buffer failed", comm->rank);
     }
     // A failed dereg left the record owned here; its range stays reserved until teardown.
     free(reg->nvlsUbReg);
@@ -116,7 +116,7 @@ static ncclResult_t regCleanup(struct ncclComm* comm, struct ncclReg* reg) {
   }
   if (reg->state & COLLNET_REG_COMPLETE) {
     if (ncclCollnetDeregBuffer(comm, reg->collnetProxyconn, reg->collnetHandle) != ncclSuccess) {
-      WARN("rank %d deregister COLLNET buffer handle %p proxy rank %d failed", comm->rank, reg->collnetHandle,
+      ATTN("rank %d deregister COLLNET buffer handle %p proxy rank %d failed", comm->rank, reg->collnetHandle,
            reg->collnetProxyconn->rank);
     }
   }
@@ -125,7 +125,7 @@ static ncclResult_t regCleanup(struct ncclComm* comm, struct ncclReg* reg) {
       for (int i = 0; i < reg->ipcInfosSize; ++i)
         if (reg->ipcInfos[i]) {
           if (ncclIpcDeregBuffer(comm, reg->ipcInfos[i]) != ncclSuccess) {
-            WARN("rank %d deregister IPC buffer %p peerRank %d failed", comm->rank, reg->ipcInfos[i]->baseAddr,
+            ATTN("rank %d deregister IPC buffer %p peerRank %d failed", comm->rank, reg->ipcInfos[i]->baseAddr,
                  reg->ipcInfos[i]->peerRank);
           }
           free(reg->ipcInfos[i]);

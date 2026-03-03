@@ -94,7 +94,8 @@ static int profilerPluginStatus = profilerPluginLoadReady;
 static pid_t pid;
 
 static ncclResult_t ncclProfilerPluginLoad(void) {
-  const char* profilerName;
+  const char* profilerName = nullptr;
+  bool profilerPluginRequested = false;
   if (profilerPluginLoadFailed == profilerPluginStatus) {
     return ncclSuccess;
   }
@@ -106,6 +107,7 @@ static ncclResult_t ncclProfilerPluginLoad(void) {
   }
 
   if ((profilerName = ncclGetEnv("NCCL_PROFILER_PLUGIN")) != nullptr) {
+    profilerPluginRequested = true;
     INFO(NCCL_ENV, "NCCL_PROFILER_PLUGIN set by environment to %s", profilerName);
     if (strcasecmp(profilerName, "none") == 0) goto fail;
   }
@@ -140,7 +142,10 @@ static ncclResult_t ncclProfilerPluginLoad(void) {
     ncclProfiler = getNcclProfiler_v1(profilerPluginLib);
   }
   if (ncclProfiler == NULL) {
-    if (profilerName) INFO(NCCL_INIT, "External profiler plugin %s is unsupported", profilerName);
+    if (profilerName) {
+      if (profilerPluginRequested) ATTN("External profiler plugin %s is unsupported", profilerName);
+      else INFO(NCCL_INIT, "External profiler plugin %s is unsupported", profilerName);
+    }
     goto fail;
   }
   if (profilerName) INFO(NCCL_INIT, "Successfully loaded external profiler plugin %s", profilerName);
@@ -337,7 +342,7 @@ ncclResult_t ncclProfilerPluginInit(struct ncclComm* comm) {
                                  comm->nNodes, comm->nRanks, comm->rank, ncclDebugLog);
     if (err) {
       ncclProfilerPluginUnload();
-      INFO(NCCL_INIT, "Profiler init failed with error '%d': %s. Continue without profiler.", err, strerror(errno));
+      ATTN("Profiler init failed with error '%d': %s. Continue without profiler.", err, strerror(errno));
     }
 
     // KernelPhase requires KernelCh; enable it implicitly (logs if it changes the mask).

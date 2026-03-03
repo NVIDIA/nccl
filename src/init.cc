@@ -696,8 +696,7 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
   } else {
     comm->workFifoBytes = ncclParamWorkFifoBytes();
     if (0 != (comm->workFifoBytes & (comm->workFifoBytes - 1))) {
-      INFO(NCCL_INIT | NCCL_ENV, "NCCL_WORK_FIFO_BYTES=%d is being ignored because it is not a power of 2",
-           comm->workFifoBytes);
+      ATTN("NCCL_WORK_FIFO_BYTES=%d is being ignored because it is not a power of 2", comm->workFifoBytes);
       comm->workFifoBytes = NCCL_WORK_FIFO_BYTES_DEFAULT;
     }
     comm->workFifoBytes = std::min(comm->workFifoBytes, 1u << 30);
@@ -785,7 +784,8 @@ fail:
     "+cuda" STR(CUDA_MAJOR) "." STR(CUDA_MINOR)
 extern const char* ncclGetGitVersion(void);
 static void showVersion() {
-  if (ncclDebugLevel == NCCL_LOG_VERSION || ncclDebugLevel == NCCL_LOG_WARN) {
+  uint32_t levelMask = COMPILER_ATOMIC_LOAD(&ncclDebugLevelMask, std::memory_order_acquire);
+  if ((levelMask & (1u << NCCL_LOG_INFO)) == 0) {
     VERSION("%s", VERSION_STRING);
   } else {
     INFO(NCCL_ALL, "%s", VERSION_STRING);
@@ -2411,8 +2411,7 @@ static ncclResult_t envConfigOverride(ncclComm_t comm) {
 
   // If POLICY_ZERO and POLICY_EFFICIENCY are set in CTAPolicy, unset POLICY_EFFICIENCY.
   if ((comm->config.CTAPolicy & NCCL_CTA_POLICY_ZERO) && (comm->config.CTAPolicy & NCCL_CTA_POLICY_EFFICIENCY)) {
-    INFO(NCCL_ENV,
-         "Both NCCL_CTA_POLICY_ZERO and NCCL_CTA_POLICY_EFFICIENCY are set in CTAPolicy (%d). "
+    ATTN("Both NCCL_CTA_POLICY_ZERO and NCCL_CTA_POLICY_EFFICIENCY are set in CTAPolicy (%d). "
          "Unsetting POLICY_EFFICIENCY",
          comm->config.CTAPolicy);
     comm->config.CTAPolicy &= ~NCCL_CTA_POLICY_EFFICIENCY;
@@ -2747,10 +2746,12 @@ static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm, int nranks, int nId
   ncclComm_t comm = NULL;
   struct ncclCommInitRankAsyncJob* job = NULL;
   bool launchedJob = false;
+  uint32_t levelMask;
   // first call ncclInit, this will setup the environment
   NCCLCHECKGOTO(ncclInit(), res, fail);
 
-  if (ncclDebugLevel > NCCL_LOG_WARN || (ncclDebugLevel != NCCL_LOG_NONE && myrank == 0)) {
+  levelMask = COMPILER_ATOMIC_LOAD(&ncclDebugLevelMask, std::memory_order_acquire);
+  if ((levelMask & (1u << NCCL_LOG_INFO)) || ((levelMask & (1u << NCCL_LOG_VERSION)) && myrank == 0)) {
     static std::once_flag once;
     std::call_once(once, showVersion);
   }
@@ -3017,10 +3018,12 @@ static ncclResult_t commDestroySync(struct ncclAsyncJob* job_) {
 
   if (comm->initState == ncclSuccess) {
     if ((ret = ncclStrongStreamSynchronize(&comm->sharedRes->hostStream)) != ncclSuccess) {
-      INFO(NCCL_DESTROY, "commDestroySync: comm %p rank %d sync hostStream error %d", comm, comm->rank, ret);
+      INFO(NCCL_DESTROY, "commDestroySync: comm 0x%" PRIx64 " rank %d sync hostStream error %d", comm->commHash,
+           comm->rank, ret);
     }
     if ((ret = ncclStrongStreamSynchronize(&comm->sharedRes->deviceStream)) != ncclSuccess) {
-      INFO(NCCL_DESTROY, "commDestroySync: comm %p rank %d sync deviceStream error %d", comm, comm->rank, ret);
+      INFO(NCCL_DESTROY, "commDestroySync: comm 0x%" PRIx64 " rank %d sync deviceStream error %d", comm->commHash,
+           comm->rank, ret);
     }
 
     NCCLCHECKGOTO(ncclCommPollEventCallbacks(comm, true), ret, fail);
@@ -3032,8 +3035,8 @@ static ncclResult_t commDestroySync(struct ncclAsyncJob* job_) {
     while (!ncclIntruQueueEmpty(&comm->legacyRegCleanupQueue)) {
       struct ncclCommCallback* cb = ncclIntruQueueDequeue(&comm->legacyRegCleanupQueue);
       if (cb->fn(comm, cb) != ncclSuccess) {
-        INFO(NCCL_DESTROY | NCCL_REG, "Legacy IPC cleanup callback failed comm %p (rank = %d) cb %p", comm, comm->rank,
-             cb);
+        INFO(NCCL_DESTROY | NCCL_REG, "Legacy IPC cleanup callback failed for comm 0x%" PRIx64 " rank %d",
+             comm->commHash, comm->rank);
       }
     }
     if (*comm->abortFlag == 0) {
@@ -3051,16 +3054,20 @@ static ncclResult_t commDestroySync(struct ncclAsyncJob* job_) {
           hostRanks[nHostRanks++] = comm->localRankToRank[i];
         }
       }
-      if ((ret = bootstrapIntraNodeBarrier(comm->bootstrap, hostRanks, hostRank, nHostRanks, hostRanks[0])) !=
-          ncclSuccess) {
-        INFO(NCCL_DESTROY, "commDestroySync: comm %p rank %d intranode barrier error %d", comm, comm->rank, ret);
+      ncclResult_t barrierRet = ncclSuccess;
+      NCCLCHECKIGNORE(bootstrapIntraNodeBarrier(comm->bootstrap, hostRanks, hostRank, nHostRanks, hostRanks[0]),
+                      barrierRet);
+      if (barrierRet != ncclSuccess) {
+        INFO(NCCL_DESTROY, "comm 0x%" PRIx64 " rank %d intranode barrier error %d", comm->commHash, comm->rank,
+             barrierRet);
+        if (ret == ncclSuccess) ret = barrierRet;
       }
       free(hostRanks);
     }
   }
 
   if ((ret = ncclProxyStop(comm)) != ncclSuccess) {
-    INFO(NCCL_DESTROY | NCCL_PROXY, "commDestroySync: comm %p (rank = %d) proxy stop error %d", comm, comm->rank, ret);
+    INFO(NCCL_DESTROY | NCCL_PROXY, "comm 0x%" PRIx64 " rank %d proxy stop error %d", comm->commHash, comm->rank, ret);
   } else if (comm->finalizeCalled) {
     TRACE_CALL("ncclCommFinalize(%p)", comm);
     INFO(NCCL_DESTROY, "comm %p rank %d nranks %d cudaDev %d busId %lx commId 0x%" PRIx64 " - Finalize COMPLETE", comm,
@@ -3166,8 +3173,7 @@ static ncclResult_t commReclaim(struct ncclAsyncJob* job_) {
             // commDestroySync calls cudaSetDevice so we don't need to do it here.
             NOWARN(ret = commDestroySync((struct ncclAsyncJob*)&job), NCCL_DESTROY);
             if (ret != ncclSuccess) {
-              INFO(NCCL_DESTROY, "commReclaim: comm %p (rank = %d) in commDestroySync, error %d", curIntraComm, curRank,
-                   ret);
+              ATTN("comm 0x%" PRIx64 " rank %d commDestroySync error %d", curIntraComm->commHash, curRank, ret);
             }
           };
           // Don't launch in the background if this is the last comm (takes care of 1 GPU/process as well).
@@ -3192,14 +3198,12 @@ static ncclResult_t commReclaim(struct ncclAsyncJob* job_) {
       while (nextIntraComm) {
         curIntraComm = nextIntraComm;
         curRank = curIntraComm->rank;
+        uint64_t commHash = curIntraComm->commHash;
         nextIntraComm = nextIntraComm->intraNext;
 
         NOWARN(ret = commCleanup(curIntraComm), NCCL_DESTROY);
         if (ret != ncclSuccess) {
-          // We pass a freed pointer, but we don't dereference; we merely print its value, so it's OK.
-          // coverity[pass_freed_arg]
-          INFO(NCCL_DESTROY, "commReclaim: cleanup comm %p rank %d failed in destroy/abort, error %d", curIntraComm,
-               curRank, ret);
+          ATTN("cleanup comm 0x%" PRIx64 " rank %d failed in destroy/abort, error %d", commHash, curRank, ret);
         }
       }
     }
@@ -3284,8 +3288,8 @@ static ncclResult_t commRevokeAsync(struct ncclAsyncJob* job_) {
   {
     ncclResult_t _tmpret = ncclSuccess;
     if ((_tmpret = ncclProxyStop(comm)) != ncclSuccess) {
-      INFO(NCCL_DESTROY | NCCL_PROXY, "ncclProxyStop: comm %p (rank = %d) destroys proxy resource error %d", comm,
-           comm->rank, _tmpret);
+      INFO(NCCL_DESTROY | NCCL_PROXY, "comm 0x%" PRIx64 " rank %d proxy stop error %d", comm->commHash, comm->rank,
+           _tmpret);
     }
     if (comm->proxyState && comm->proxyRefCountOld == 0 && comm->proxyState->thread.joinable()) {
       comm->proxyState->thread.join();
@@ -3649,7 +3653,8 @@ ncclResult_t ncclCommGrow(ncclComm_t comm, int nRanks, const ncclUniqueId* uniqu
     NCCLCHECKGOTO(ncclInitEnv(), res, exit); // Environment plugins
     (void)ncclCudaLibraryInit(); // CUDA driver and dlsym hooks
     NCCLCHECKGOTO(ncclInit(), res, exit); // Bootstrap network, CPU stack, GDR
-    if (ncclDebugLevel > NCCL_LOG_WARN || (ncclDebugLevel != NCCL_LOG_NONE && rank == 0)) {
+    uint32_t levelMask = COMPILER_ATOMIC_LOAD(&ncclDebugLevelMask, std::memory_order_acquire);
+    if ((levelMask & (1u << NCCL_LOG_INFO)) || ((levelMask & (1u << NCCL_LOG_VERSION)) && rank == 0)) {
       static std::once_flag once;
       std::call_once(once, showVersion); // Version display
     }

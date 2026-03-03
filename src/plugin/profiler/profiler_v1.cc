@@ -42,6 +42,7 @@ static uint8_t ncclStringToProto(const char* proto) {
 
 static uint8_t ncclStringToDatatype(const char* dt) {
   if (0 == strcmp(dt, "ncclInt8")) return ncclInt8;
+  if (0 == strcmp(dt, "ncclUint8")) return ncclUint8;
   if (0 == strcmp(dt, "ncclInt32")) return ncclInt32;
   if (0 == strcmp(dt, "ncclUint32")) return ncclUint32;
   if (0 == strcmp(dt, "ncclInt64")) return ncclInt64;

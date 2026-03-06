@@ -13,6 +13,7 @@
 #include "register_inline.h"
 #include "gin/gin_host.h"
 #include "gin/gin_host_proxy.h"
+#include "transport/net_ib/gdaki/gin_host_gdaki.h"
 #include "compiler.h"
 #include <cmath>
 
@@ -70,6 +71,20 @@ ncclResult_t setLocalGinType(struct ncclComm* comm) {
   WARN("Cannot get gin type: ncclGin is not null but net device type (%d) is not a gin type",
        props.netDeviceType);
   return ncclInternalError;
+}
+
+static void ncclGinPauseProgress(struct ncclGinState* ginState) {
+  if (ginState->needsProxyProgress && ginState->ginProgress == 1) {
+    std::lock_guard<std::mutex> lock(ginState->mutex);
+    ginState->ginProgress = 0;
+    ginState->cond.notify_one();
+  }
+}
+
+static void ncclGinResumeProgress(struct ncclGinState* ginState) {
+  std::lock_guard<std::mutex> lock(ginState->mutex);
+  ginState->ginProgress = 1;
+  ginState->cond.notify_one();
 }
 
 void* ncclGinProgress(struct ncclGinState* ginState_) {
@@ -320,15 +335,15 @@ ncclResult_t ncclGinHostFinalize(struct ncclComm* comm) {
 
 ncclResult_t ncclGinRegister(struct ncclComm* comm, void* address, size_t size,
                              void* ginHostWins[NCCL_GIN_MAX_CONNECTIONS],
-                             ncclGinWindow_t ginDevWins[NCCL_GIN_MAX_CONNECTIONS], int winFlags) {
+                             ncclGinWindow_t ginDevWins[NCCL_GIN_MAX_CONNECTIONS], int winFlags, int memType) {
   struct ncclGinState* ginState = &comm->sharedRes->ginState;
   int mrFlags = (winFlags & NCCL_WIN_STRICT_ORDERING) ? NCCL_NET_MR_FLAG_FORCE_SO : 0;
   for (int n = 0; n < ginState->ginCommCount; n++) {
     if (ginState->ginType == NCCL_GIN_TYPE_PROXY) {
       NCCLCHECK(ncclGinProxyRegister(ginState->ncclGin, ginState->ginCtx[n], address, size,
-                                     NCCL_PTR_CUDA, mrFlags, &ginHostWins[n], &ginDevWins[n]));
+                                     memType, mrFlags, &ginHostWins[n], &ginDevWins[n]));
     } else {
-      NCCLCHECK(ginState->ncclGin->regMrSym(ginState->ginComms[n], address, size, NCCL_PTR_CUDA, mrFlags,
+      NCCLCHECK(ginState->ncclGin->regMrSym(ginState->ginComms[n], address, size, memType, mrFlags,
                                             &ginHostWins[n], &ginDevWins[n]));
     }
     if (ginHostWins[n] == NULL) {
@@ -393,5 +408,43 @@ ncclResult_t ncclGinQueryLastError(struct ncclGinState* ginState, bool* hasError
     if (hasError_) break;
   }
   *hasError = hasError_;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclGinUpdateQosParams(struct ncclComm* comm, ncclDevComm_t* devComm, const int trafficClass) {
+  if (!comm) {
+    WARN("Invalid comm argument");
+    return ncclInvalidArgument;
+  }
+  if (!devComm) {
+    WARN("Invalid devComm argument");
+    return ncclInvalidArgument;
+  }
+  int trafficClassMinValue = 0;
+  int trafficClassMaxValue = 255;
+  if (trafficClass < trafficClassMinValue || trafficClass > trafficClassMaxValue) {
+    WARN("Invalid TrafficClass value %d (must be 0-255)", trafficClass);
+    return ncclInvalidArgument;
+  }
+
+  struct ncclGinState* ginState = &comm->sharedRes->ginState;
+  if (ginState->ginCommCount == 0) {
+    WARN("No GIN contexts available");
+    return ncclInvalidUsage;
+  }
+  int nContextsPerComm = ginState->ginContextCount / ginState->ginCommCount;
+  for (int n = devComm->ginContextBase; n < devComm->ginContextBase + devComm->ginContextCount; n++) {
+    int commIdx = n / nContextsPerComm;
+    if (ginState->ginType == NCCL_GIN_TYPE_GDAKI) {
+      NCCLCHECK(ginState->ncclGin->updateContextQosParams(ginState->ginComms[commIdx], n, trafficClass));
+    } else if (ginState->ginType == NCCL_GIN_TYPE_PROXY) {
+      WARN("GIN_PROXY mode does not support updating QoS parameters");
+      return ncclInvalidUsage;
+    } else {
+      WARN("Invalid GIN type %d", ginState->ginType);
+      return ncclInvalidUsage;
+    }
+  }
+
   return ncclSuccess;
 }

@@ -77,9 +77,8 @@ template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
 __device__ static __forceinline__ void doca_gpu_dev_verbs_wait_until_slot_available(
     struct doca_gpu_dev_verbs_qp *qp, uint64_t wqe_idx) {
     const uint16_t nwqes = __ldg(&qp->sq_wqe_num);
-    [[likely]] if (wqe_idx >= nwqes)
-        doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode, qp_type>(&(qp->cq_sq),
-                                                                      wqe_idx - nwqes);
+    [[likely]] if (wqe_idx >= nwqes) doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode, qp_type>(
+        &(qp->cq_sq), wqe_idx - nwqes);
 }
 
 /**
@@ -580,6 +579,31 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_wqe_prepare_nop(
     cseg.fm_ce_se = ctrl_flags;
 
     doca_gpu_dev_verbs_store_wqe_seg((uint64_t *)&(wqe_ptr->dseg0), (uint64_t *)&(cseg));
+}
+
+__device__ static inline void doca_gpu_dev_verbs_wqe_prepare_dump(
+    struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_wqe *wqe_ptr,
+    const uint16_t wqe_idx, enum doca_gpu_dev_verbs_wqe_ctrl_flags ctrl_flags, const uint64_t laddr,
+    const uint32_t lkey, const uint32_t bytes) {
+    struct doca_gpu_dev_verbs_wqe_ctrl_seg cseg;
+    struct doca_gpunetio_ib_mlx5_wqe_data_seg dseg;
+
+    cseg.opmod_idx_opcode =
+        doca_gpu_dev_verbs_bswap32(((uint32_t)wqe_idx << DOCA_GPUNETIO_VERBS_WQE_IDX_SHIFT) |
+                                   DOCA_GPUNETIO_IB_MLX5_OPCODE_DUMP);
+    cseg.qpn_ds = __ldg(&qp->sq_num_shift8_be_2ds);
+    cseg.fm_ce_se = ctrl_flags;
+
+    dseg.byte_count = doca_gpu_dev_verbs_bswap32(bytes);
+#if DOCA_GPUNETIO_VERBS_MKEY_SWAPPED == 1
+    dseg.lkey = lkey;
+#else
+    dseg.lkey = doca_gpu_dev_verbs_bswap32(lkey);
+#endif
+    dseg.addr = doca_gpu_dev_verbs_bswap64(laddr);
+
+    doca_gpu_dev_verbs_store_wqe_seg((uint64_t *)&(wqe_ptr->dseg0), (uint64_t *)&(cseg));
+    doca_gpu_dev_verbs_store_wqe_seg((uint64_t *)&(wqe_ptr->dseg1), (uint64_t *)&(dseg));
 }
 
 __device__ static __forceinline__ void doca_gpu_dev_verbs_wqe_prepare_write(

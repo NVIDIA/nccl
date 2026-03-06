@@ -814,8 +814,8 @@ static ncclResult_t ncclIbReceiverQpsCreateToRts(ncclIbRecvComm* rComm, struct n
   uint nqps = rComm->base.nqps;
   struct ncclIbQpCreateAttr qpCreateAttrs = {0};
   qpCreateAttrs.type = IBV_QPT_RC;
-  // Remote Atomic operations are used for GIN!
-  qpCreateAttrs.accessFlags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
+  // Remote Atomic operations are used for GIN! REMOTE_READ is required for GIN Get (RDMA READ).
+  qpCreateAttrs.accessFlags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC | IBV_ACCESS_REMOTE_READ;
   qpCreateAttrs.maxRecvWorkRequest = NET_IB_MAX_REQUESTS;
   // CTS messages are posted using send work requests.
   // Note that because only specific CTS messages are signaled, the send queue

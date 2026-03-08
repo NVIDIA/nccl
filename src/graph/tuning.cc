@@ -481,8 +481,13 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
     if (pEnable == 2 && p == NCCL_PROTO_LL128) {
       pEnable = 1;
       if (ncclParamLl128C2c() && minCompCap >= 90) {
-        // Enable LL128 by default only on Hopper/Blackwell for all connections up to P2C and PXN.
-        pEnable &= (graphs[a]->typeInter <= PATH_PXN);
+        // Enable LL128 by default on Hopper/Blackwell.
+        // On AMD systems with high Infinity Fabric bandwidth, also enable over SYS links.
+        if (comm->cpuVendor == NCCL_TOPO_CPU_VENDOR_AMD && graphs[a]->typeInter == PATH_SYS) {
+          pEnable &= (graphs[a]->bwInter >= AMD_ZEN34_BW);
+        } else {
+          pEnable &= (graphs[a]->typeInter <= PATH_PXN);
+        }
       } else {
         // Enable LL128 only up to PXB. Don't enable LL128 over PxN because PxN can encapsulate PxB or P2C links.
         pEnable &= (graphs[a]->typeInter <= PATH_PXB);

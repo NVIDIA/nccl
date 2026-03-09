@@ -80,13 +80,24 @@ ncclResult_t buildIbvSymbols(struct ncclIbvSymbols* ibvSymbols) {
   static void* ibvhandle = NULL;
   void* tmp;
   void** cast;
+  const char* abs_libibverbs_so;
 
-  ibvhandle=dlopen("libibverbs.so", RTLD_NOW);
-  if (!ibvhandle) {
-    ibvhandle=dlopen("libibverbs.so.1", RTLD_NOW);
+  if ((abs_libibverbs_so = ncclGetEnv("NCCL_LIBIBVERBS_SO")) != nullptr) {
+    INFO(NCCL_ENV|NCCL_INIT, "NCCL_LIBIBVERBS_SO set by environment to %s", abs_libibverbs_so);
+    ibvhandle = dlopen(abs_libibverbs_so, RTLD_NOW);
     if (!ibvhandle) {
-      INFO(NCCL_INIT, "Failed to open libibverbs.so[.1]");
+      INFO(NCCL_INIT, "Failed to open %s", abs_libibverbs_so);
       goto teardown;
+    }
+  }
+  else {
+    ibvhandle=dlopen("libibverbs.so", RTLD_NOW);
+    if (!ibvhandle) {
+      ibvhandle=dlopen("libibverbs.so.1", RTLD_NOW);
+      if (!ibvhandle) {
+        INFO(NCCL_INIT, "Failed to open libibverbs.so[.1]");
+        goto teardown;
+      }
     }
   }
 

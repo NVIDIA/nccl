@@ -807,13 +807,13 @@ struct combine_kernel_param_t{
 // __syncthreads(); will use the 0 named barriers, so we want to avoid that.
 // We want to use 1 for intra-node reduction warp group, >= 2 for inter-node reduction warp group,
 // RDMA warp group currently only contains 1 warp so does not use named bar yet, if it need to use, it should use 2 + NUM_OF_DATA_PIPELINE_PER_BLOCK.
-inline __device__ void arrive_and_wait(uint32_t num_threads, uint32_t barrier_id = 0) {
+__forceinline__ __device__ void arrive_and_wait(uint32_t num_threads, uint32_t barrier_id = 0) {
     asm volatile("bar.sync %0, %1;" : : "r"(barrier_id), "r"(num_threads));
 }
 
 // Helper to compute communicator index and context index from global channel
 // Used for 6-comm x 4-ctx GIN configuration (6 communicators with 4 contexts each = 24 total channels)
-inline __device__ void get_comm_ctx(int global_channel, int num_ctx_per_comm,
+__forceinline__ __device__ void get_comm_ctx(int global_channel, int num_ctx_per_comm,
                                     int& comm_idx, int& ctx_idx) {
     comm_idx = global_channel / num_ctx_per_comm;
     ctx_idx = global_channel % num_ctx_per_comm;
@@ -831,7 +831,7 @@ template<typename INTER_NODE_GROUP,
          int NUM_OF_NODES,
          int NUM_OF_BLOCKS,
          bool FORWARD_DISPATCH>
-inline __device__ void N2N_warp_group_device_function(const int local_rank,
+__forceinline__ __device__ void N2N_warp_group_device_function(const int local_rank,
                                                       const int node_rank,
                                                       const int num_of_tokens_per_rank,
                                                       const int num_of_ranks_per_node,
@@ -1099,7 +1099,7 @@ template<typename INTRA_NODE_G2S_GROUP,
          int NUM_OF_NODES,
          int NUM_OF_BLOCKS,
          bool FORWARD_DISPATCH>
-inline __device__ void G2S_warp_group_device_function(const int local_rank,
+__forceinline__ __device__ void G2S_warp_group_device_function(const int local_rank,
                                                       const int node_rank,
                                                       const int num_of_tokens_per_rank,
                                                       const int num_of_ranks_per_node,
@@ -1363,7 +1363,7 @@ template<typename INTRA_NODE_S2G_GROUP,
          int NUM_OF_NODES,
          int NUM_OF_BLOCKS,
          bool FORWARD_DISPATCH>
-inline __device__ void S2G_warp_group_device_function(const int local_rank,
+__forceinline__ __device__ void S2G_warp_group_device_function(const int local_rank,
                                                       const int node_rank,
                                                       const int num_of_tokens_per_rank,
                                                       const int num_of_ranks_per_node,
@@ -1610,7 +1610,7 @@ template<typename SMEM_TYPE,
          int NUM_OF_NODES,
          int NUM_OF_BLOCKS,
          bool BACKWARD_COMBINE>
-inline __device__ void intra_node_G2S_warp_group_device_function(const int node_rank,
+__forceinline__ __device__ void intra_node_G2S_warp_group_device_function(const int node_rank,
                                                                  const int num_of_tokens_per_rank,
                                                                  const int num_of_ranks_per_node,
                                                                  const bool* rdma_to_attn_map,
@@ -1790,7 +1790,7 @@ template<typename INTRA_NODE_RED_GROUP,
          int NUM_OF_BLOCKS,
          int NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
          bool BACKWARD_COMBINE>
-inline __device__ void intra_node_red_warp_group_device_function(const int node_rank,
+__forceinline__ __device__ void intra_node_red_warp_group_device_function(const int node_rank,
                                                                  const int num_of_tokens_per_rank,
                                                                  const int num_of_ranks_per_node,
                                                                  const bool* rdma_to_attn_map,
@@ -2211,7 +2211,7 @@ template<typename INTER_NODE_RDMA_GROUP,
          int NUM_OF_NODES,
          int NUM_OF_BLOCKS,
          bool BACKWARD_COMBINE>
-inline __device__ void inter_node_N2N_warp_group_device_function(const int local_rank,
+__forceinline__ __device__ void inter_node_N2N_warp_group_device_function(const int local_rank,
                                                                  const int node_rank,
                                                                  const int num_of_tokens_per_rank,
                                                                  const int num_of_ranks_per_node,
@@ -2376,7 +2376,7 @@ template<typename SMEM_TYPE,
          int NUM_OF_BLOCKS,
          int NUM_OF_TOKENS_PER_GROUP,
          bool BACKWARD_COMBINE>
-inline __device__ void inter_node_G2S_warp_group_device_function(const int local_rank,
+__forceinline__ __device__ void inter_node_G2S_warp_group_device_function(const int local_rank,
                                                                  const int node_rank,
                                                                  const int num_of_tokens_per_rank,
                                                                  const int num_of_ranks_per_node,
@@ -2807,7 +2807,7 @@ template<typename SMEM_TYPE,
          int NUM_OF_BLOCKS,
          int NUM_OF_TOKENS_PER_GROUP,
          bool BACKWARD_COMBINE>
-inline __device__ void inter_node_red_warp_group_device_function(const int node_rank,
+__forceinline__ __device__ void inter_node_red_warp_group_device_function(const int node_rank,
                                                                  const int num_of_tokens_per_rank,
                                                                  const int num_of_ranks_per_node,
                                                                  const bool* rdma_to_attn_map,

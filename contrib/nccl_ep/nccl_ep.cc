@@ -1642,7 +1642,7 @@ ncclResult_t ncclEpCreateHandle(
 
         assert((ep_group->config.max_tokens_per_rank * handle->group->num_local_experts) % 4 == 0 and "TMA requires the number of tokens to be multiple of 4");
 
-        handle->ll.layout = nccl_ep::LowLatencyLayout(handle->group->rdma_buffer, handle->group->config.max_tokens_per_rank, handle->group->hidden, handle->group->nRanks, handle->group->config.num_experts);
+        handle->ll.layout = nccl_ep::LowLatencyLayout(handle->group->rdma_buffer, handle->group->config.max_tokens_per_rank, handle->group->hidden, handle->group->nRanks, handle->group->config.num_experts, handle->num_topk);
 
         assert(handle->ll.layout.total_bytes <= handle->group->config.rdma_buffer_size);
     } else { // HT

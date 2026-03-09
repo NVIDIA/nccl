@@ -10,6 +10,12 @@
 #include "../core.h"
 #include "nccl_device/gin/gin_device_host_common.h"
 
+struct segmentWindow {
+  ncclGinWindow_t ginWins[NCCL_GIN_MAX_CONNECTIONS];
+  size_t segmentSize;
+  int memType;
+};
+
 // nccl.h has: typedef ncclWindow_vidmem* ncclWindow_t;
 struct ncclWindow_vidmem {
   void* winHost;
@@ -20,6 +26,8 @@ struct ncclWindow_vidmem {
   uint32_t mcOffset4K;
   uint32_t ginOffset4K;
   ncclGinWindow_t ginWins[NCCL_GIN_MAX_CONNECTIONS];
+  struct segmentWindow* segmentWindows;
+  uint16_t numSegments;
 };
 
 struct ncclMultimemHandle {

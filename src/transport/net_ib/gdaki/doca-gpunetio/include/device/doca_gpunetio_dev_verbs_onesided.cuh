@@ -78,7 +78,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_thread(
                 DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE, 0,
                 raddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), raddr.key,
                 laddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), laddr.key, size_);
-        } else {
+        }
+        else {
             doca_gpu_dev_verbs_wqe_prepare_nop(qp, wqe_ptr, wqe_idx,
                                                DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE);
         }
@@ -311,7 +312,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_signal_thread(
                 DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE, 0,
                 raddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), raddr.key,
                 laddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), laddr.key, size_);
-        } else {
+        }
+        else {
             doca_gpu_dev_verbs_wqe_prepare_nop(qp, wqe_ptr, wqe_idx,
                                                DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE);
         }
@@ -531,7 +533,285 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_signal(
         qp, sig_raddr, sig_laddr, sig_val, &ticket, code_opt);
 }
 
-/* **************************************** OTHERS **************************************** */
+/* **************************************** GET **************************************** */
+/**
+ * @brief Get shared QP function. Every thread posts a different RDMA Read in a different WQE
+ * position. Every thread submits the WQE. On some GPU architectures/systems, and RDMA Read (as well
+ * as RDMA Recv) may require to post a WQE Dump before accessing the read/received data to ensure
+ * GPU memory consistency. Application may decide function's behaviour about the WQE Dump via the
+ * mcst_mode template parameter.
+ *
+ * @param[in] qp - Queue Pair (QP)
+ * @param[in] raddr - RDMA Read remote info
+ * @param[in] laddr - RDMA Read local info
+ * @param[in] size - RDMA Read size (bytes)
+ * @param[in] daddr - Dump local address. Used only if needed.
+ * @param[in] out_ticket - WQE index of the RDMA Read or the WQE Dump
+ */
+template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
+              DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
+          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
+          enum doca_gpu_dev_verbs_mcst_mode mcst_mode = DOCA_GPUNETIO_VERBS_MCST_DISABLED,
+          enum doca_gpu_dev_verbs_blocking_mode blocking_mode =
+              DOCA_GPUNETIO_VERBS_BLOCKING_MODE_DISABLED>
+__device__ static inline void doca_gpu_dev_verbs_get_thread(
+    struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr raddr,
+    struct doca_gpu_dev_verbs_addr laddr, size_t size, struct doca_gpu_dev_verbs_addr daddr,
+    doca_gpu_dev_verbs_ticket_t *out_ticket,
+    uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
+    struct doca_gpu_dev_verbs_wqe *wqe_ptr;
+    uint64_t base_wqe_idx;
+    uint64_t wqe_idx;
+    size_t remaining_size = size;
+    size_t size_;
+    uint32_t num_chunks = doca_gpu_dev_verbs_div_ceil_aligned_pow2_32bits(
+        size, DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE_SHIFT);
+    DOCA_GPUNETIO_VERBS_ASSERT(qp != NULL);
+
+    if (mcst_mode == DOCA_GPUNETIO_VERBS_MCST_ENABLED)
+        base_wqe_idx =
+            doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(qp, num_chunks + 1);
+    else
+        base_wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(qp, num_chunks);
+
+#pragma unroll 1
+    for (uint64_t i = 0; i < num_chunks; i++) {
+        wqe_idx = base_wqe_idx + i;
+        size_ = remaining_size > DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE
+                    ? DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE
+                    : remaining_size;
+
+        wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(qp, wqe_idx);
+        doca_gpu_dev_verbs_wqe_prepare_read(
+            qp, wqe_ptr, wqe_idx, DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE,
+            raddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), raddr.key,
+            laddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), laddr.key, size_);
+        remaining_size -= size_;
+    }
+
+    if (mcst_mode == DOCA_GPUNETIO_VERBS_MCST_ENABLED) {
+        wqe_idx++;  // Use the reserved slot after all chunks
+        wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(qp, wqe_idx);
+
+        doca_gpu_dev_verbs_wqe_prepare_dump(qp, wqe_ptr, wqe_idx,
+                                            DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE, daddr.addr,
+                                            daddr.key, 1);
+    }
+
+    doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(qp, base_wqe_idx, wqe_idx);
+    // mark_wqes_ready has already called fence.release with sufficiently strong scope. No need to
+    // call it again in submit.
+    constexpr enum doca_gpu_dev_verbs_sync_scope submit_sync_scope =
+        (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU)
+            ? DOCA_GPUNETIO_VERBS_SYNC_SCOPE_THREAD
+            : DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU;
+    doca_gpu_dev_verbs_submit<resource_sharing_mode, submit_sync_scope, nic_handler>(
+        qp, wqe_idx + 1, code_opt);
+
+    // Wait for the actual last WQE we submitted (either last GET chunk or DUMP)
+    if (blocking_mode == DOCA_GPUNETIO_VERBS_BLOCKING_MODE_ENABLED)
+        doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode>(doca_gpu_dev_verbs_qp_get_cq_sq(qp),
+                                                             wqe_idx);
+
+    // The actual last WQE we submitted could be either last READ chunk or DUMP
+    *out_ticket = wqe_idx;
+}
+
+/**
+ * @brief Get shared QP function. Every thread in the warp posts a different RDMA Read in a
+ * different WQE position. Only thread with lane_idx = 0 submits all the WQE posted by the warp. On
+ * some GPU architectures/systems, and RDMA Read (as well as RDMA Recv) may require to post a WQE
+ * Dump before accessing the read/received data to ensure GPU memory consistency. Application may
+ * decide function's behaviour about the WQE Dump via the mcst_mode template parameter.
+ *
+ * @param[in] qp - Queue Pair (QP)
+ * @param[in] raddr - RDMA Read remote info
+ * @param[in] laddr - RDMA Read local info
+ * @param[in] size - RDMA Read size (bytes)
+ * @param[in] daddr - Dump local address. Used only if needed.
+ * @param[in] out_ticket - WQE index of the RDMA Read or the WQE Dump
+ */
+template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
+              DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
+          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
+          enum doca_gpu_dev_verbs_mcst_mode mcst_mode = DOCA_GPUNETIO_VERBS_MCST_DISABLED,
+          enum doca_gpu_dev_verbs_blocking_mode blocking_mode =
+              DOCA_GPUNETIO_VERBS_BLOCKING_MODE_DISABLED>
+__device__ static inline void doca_gpu_dev_verbs_get_warp(
+    struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr raddr,
+    struct doca_gpu_dev_verbs_addr laddr, size_t size, struct doca_gpu_dev_verbs_addr daddr,
+    doca_gpu_dev_verbs_ticket_t *out_ticket,
+    uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
+#if __CUDA_ARCH__ >= 800
+    struct doca_gpu_dev_verbs_wqe *wqe_ptr;
+    uint32_t base_wqe_idx_0 = 0, base_wqe_idx_1 = 0;
+    uint64_t base_wqe_idx = 0;
+    uint64_t wqe_idx;
+    uint32_t lane_idx = doca_gpu_dev_verbs_get_lane_id();
+
+    DOCA_GPUNETIO_VERBS_ASSERT(size <= DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE);
+    DOCA_GPUNETIO_VERBS_ASSERT(out_ticket != NULL);
+    DOCA_GPUNETIO_VERBS_ASSERT(qp != NULL);
+
+    if (lane_idx == 0) {
+        if (mcst_mode == DOCA_GPUNETIO_VERBS_MCST_ENABLED)
+            base_wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(
+                qp, DOCA_GPUNETIO_VERBS_WARP_SIZE + 1);
+        else
+            base_wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(
+                qp, DOCA_GPUNETIO_VERBS_WARP_SIZE);
+
+        base_wqe_idx_0 = (uint32_t)base_wqe_idx;
+        base_wqe_idx_1 = (uint32_t)(base_wqe_idx >> 32);
+    }
+    __syncwarp();
+
+    base_wqe_idx_0 = __reduce_max_sync(DOCA_GPUNETIO_VERBS_WARP_FULL_MASK, base_wqe_idx_0);
+    base_wqe_idx_1 = __reduce_max_sync(DOCA_GPUNETIO_VERBS_WARP_FULL_MASK, base_wqe_idx_1);
+    base_wqe_idx = ((uint64_t)base_wqe_idx_1) << 32 | base_wqe_idx_0;
+
+    wqe_idx = base_wqe_idx + lane_idx;
+    wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(qp, wqe_idx);
+    doca_gpu_dev_verbs_wqe_prepare_read(qp, wqe_ptr, wqe_idx,
+                                        DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE, raddr.addr,
+                                        raddr.key, laddr.addr, laddr.key, size);
+    __syncwarp();
+
+    if (lane_idx == 0) {
+        if (mcst_mode == DOCA_GPUNETIO_VERBS_MCST_ENABLED) {
+            wqe_idx = base_wqe_idx +
+                      DOCA_GPUNETIO_VERBS_WARP_SIZE;  // Use the reserved slot after all chunks
+            wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(qp, wqe_idx);
+
+            doca_gpu_dev_verbs_wqe_prepare_dump(qp, wqe_ptr, wqe_idx,
+                                                DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE,
+                                                daddr.addr, daddr.key, 1);
+            doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(qp, base_wqe_idx, wqe_idx);
+            doca_gpu_dev_verbs_submit<resource_sharing_mode, DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU,
+                                      nic_handler>(qp, wqe_idx + 1);
+            // Wait for the actual last WQE we submitted (either last GET chunk or DUMP)
+            if (blocking_mode == DOCA_GPUNETIO_VERBS_BLOCKING_MODE_ENABLED)
+                doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode>(
+                    doca_gpu_dev_verbs_qp_get_cq_sq(qp), wqe_idx);
+        } else {
+            doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(
+                qp, base_wqe_idx, base_wqe_idx + DOCA_GPUNETIO_VERBS_WARP_SIZE - 1);
+
+            // mark_wqes_ready has already called fence.release with sufficiently strong scope. No
+            // need to call it again in submit.
+            constexpr enum doca_gpu_dev_verbs_sync_scope submit_sync_scope =
+                (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU)
+                    ? DOCA_GPUNETIO_VERBS_SYNC_SCOPE_THREAD
+                    : DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU;
+            doca_gpu_dev_verbs_submit<resource_sharing_mode, submit_sync_scope, nic_handler>(
+                qp, base_wqe_idx + DOCA_GPUNETIO_VERBS_WARP_SIZE, code_opt);
+
+            // Wait for the actual last WQE we submitted (either last GET chunk or DUMP)
+            if (blocking_mode == DOCA_GPUNETIO_VERBS_BLOCKING_MODE_ENABLED)
+                doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode>(
+                    doca_gpu_dev_verbs_qp_get_cq_sq(qp),
+                    base_wqe_idx + DOCA_GPUNETIO_VERBS_WARP_SIZE - 1);
+        }
+    }
+    __syncwarp();
+
+    // The actual last WQE we submitted could be either last READ chunk or DUMP
+    *out_ticket = wqe_idx;
+#else
+    printf("__CUDA_ARCH__ < 800, WARP mode not enabled\n");
+    *out_ticket = 0;
+#endif
+}
+
+/**
+ * @brief Get shared QP switch function. Redirect to thread or warp scope.
+ *
+ * @param[in] qp - Queue Pair (QP)
+ * @param[in] raddr - RDMA Read remote info
+ * @param[in] laddr - RDMA Read local info
+ * @param[in] size - RDMA Read size (bytes)
+ * @param[in] daddr - Dump local address. Used only if needed.
+ * @param[in] out_ticket - WQE index of the RDMA Read or the WQE Dump
+ */
+template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
+              DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
+          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
+          enum doca_gpu_dev_verbs_exec_scope exec_scope = DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD,
+          enum doca_gpu_dev_verbs_mcst_mode mcst_mode = DOCA_GPUNETIO_VERBS_MCST_DISABLED,
+          enum doca_gpu_dev_verbs_blocking_mode blocking_mode =
+              DOCA_GPUNETIO_VERBS_BLOCKING_MODE_DISABLED>
+__device__ static inline void doca_gpu_dev_verbs_get(
+    struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr raddr,
+    struct doca_gpu_dev_verbs_addr laddr, size_t size, struct doca_gpu_dev_verbs_addr daddr,
+    doca_gpu_dev_verbs_ticket_t *out_ticket,
+    uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
+    if (exec_scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD)
+        doca_gpu_dev_verbs_get_thread<resource_sharing_mode, nic_handler, mcst_mode, blocking_mode>(
+            qp, raddr, laddr, size, daddr, out_ticket);
+    if (exec_scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_WARP)
+        doca_gpu_dev_verbs_get_warp<resource_sharing_mode, nic_handler, mcst_mode, blocking_mode>(
+            qp, raddr, laddr, size, daddr, out_ticket);
+}
+
+/* **************************************** GET WAIT **************************************** */
+
+template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
+              DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
+          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
+          enum doca_gpu_dev_verbs_mcst_mode mcst_mode = DOCA_GPUNETIO_VERBS_MCST_DISABLED>
+__device__ static inline void doca_priv_gpu_dev_verbs_get_wait(
+    struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr daddr,
+    doca_gpu_dev_verbs_ticket_t *ticket) {
+    struct doca_gpu_dev_verbs_wqe *wqe_ptr;
+    uint64_t wqe_idx = 0;
+
+    if (mcst_mode == DOCA_GPUNETIO_VERBS_MCST_ENABLED) {
+        uint64_t new_ticket;
+        wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(qp, 1);
+        wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(qp, wqe_idx);
+
+        doca_gpu_dev_verbs_wqe_prepare_dump(qp, wqe_ptr, wqe_idx,
+                                            DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE, daddr.addr,
+                                            daddr.key, 1);
+
+        doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(qp, wqe_idx, wqe_idx);
+        doca_gpu_dev_verbs_submit<resource_sharing_mode, DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU,
+                                  nic_handler>(qp, wqe_idx + 1);
+        new_ticket = (wqe_idx >= *ticket) ? wqe_idx : *ticket;
+        doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode>(doca_gpu_dev_verbs_qp_get_cq_sq(qp),
+                                                             new_ticket);
+    } else
+        doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode>(doca_gpu_dev_verbs_qp_get_cq_sq(qp),
+                                                             *ticket);
+}
+
+template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
+              DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
+          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
+          enum doca_gpu_dev_verbs_mcst_mode mcst_mode = DOCA_GPUNETIO_VERBS_MCST_DISABLED>
+__device__ static inline void doca_gpu_dev_verbs_get_wait(struct doca_gpu_dev_verbs_qp *qp,
+                                                          struct doca_gpu_dev_verbs_addr daddr,
+                                                          doca_gpu_dev_verbs_ticket_t *ticket) {
+    doca_priv_gpu_dev_verbs_get_wait<resource_sharing_mode, nic_handler, mcst_mode>(qp, daddr,
+                                                                                    ticket);
+}
+
+template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
+              DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
+          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
+          enum doca_gpu_dev_verbs_mcst_mode mcst_mode = DOCA_GPUNETIO_VERBS_MCST_DISABLED>
+__device__ static inline void doca_gpu_dev_verbs_get_wait(struct doca_gpu_dev_verbs_qp *qp,
+                                                          struct doca_gpu_dev_verbs_addr daddr) {
+    uint64_t ticket =
+        doca_gpu_dev_verbs_atomic_read<uint64_t, resource_sharing_mode>(&qp->sq_rsvd_index);
+    [[unlikely]] if (ticket == 0) return;
+    --ticket;
+
+    doca_priv_gpu_dev_verbs_get_wait<resource_sharing_mode, nic_handler, mcst_mode>(qp, daddr,
+                                                                                    &ticket);
+}
+
+/* **************************************** WAIT **************************************** */
 
 template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
@@ -548,12 +828,13 @@ template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
 __device__ static __forceinline__ void doca_gpu_dev_verbs_wait(struct doca_gpu_dev_verbs_qp *qp) {
     uint64_t ticket =
         doca_gpu_dev_verbs_atomic_read<uint64_t, resource_sharing_mode>(&qp->sq_rsvd_index);
-    [[unlikely]] if (ticket == 0)
-        return;
+    [[unlikely]] if (ticket == 0) return;
     --ticket;
     doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode>(doca_gpu_dev_verbs_qp_get_cq_sq(qp),
                                                          ticket);
 }
+
+/* **************************************** OTHERS **************************************** */
 
 template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,

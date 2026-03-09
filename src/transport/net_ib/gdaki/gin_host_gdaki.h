@@ -33,5 +33,6 @@ ncclResult_t ncclGinGdakiRegMrSym(void *collComm, void *data, size_t size, int t
 ncclResult_t ncclGinGdakiDeregMrSym(void *collComm, void *mhandle);
 ncclResult_t ncclGinGdakiProgress(void *ginCtx);
 ncclResult_t ncclGinGdakiQueryLastError(void *ginCtx, bool *hasError);
+ncclResult_t ncclGinGdakiUpdateQosParams(void *ginCtx, const int contextIndex, const int trafficClass);
 
 #endif

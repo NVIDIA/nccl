@@ -203,7 +203,6 @@ out:
 }
 
 ncclResult_t ncclGinIbP2PBarrier(struct ncclGinIbCollComm *cComm) {
-  // TODO: move allocation to init or use zero-byte allgather
   int *dummy;
   NCCLCHECK(ncclIbMalloc((void **)&dummy, cComm->nranks * sizeof(int)));
   NCCLCHECK(ncclGinIbAllGather(cComm, dummy + cComm->rank, dummy, sizeof(int)));
@@ -356,6 +355,10 @@ ncclResult_t ncclGinIbGdakiCreateContext(void* collComm, int nSignals, int nCoun
   return ncclSuccess;
 }
 
+ncclResult_t ncclGinIbGdakiUpdateQosParams(void *collComm, const int contextIndex, const int trafficClass) {
+  return ncclGinGdakiUpdateQosParams(collComm, contextIndex, trafficClass);
+}
+
 ncclResult_t ncclGinIbGdakiRegMrSym(void* collComm, void* data, size_t size, int type, uint64_t mr_flags, void** mhandle, void **ginHandle) {
   return ncclGinGdakiRegMrSym((struct ncclGinIbCollComm *)collComm, data, size, type, mr_flags, mhandle, ginHandle);
 }
@@ -385,12 +388,15 @@ ncclGin_t ncclGinIbGdaki = {
   ncclGinIbGdakiListen,
   ncclGinIbGdakiConnect,
   ncclGinIbGdakiCreateContext,
+  ncclGinIbGdakiUpdateQosParams,
   ncclGinIbGdakiRegMrSym,
   NULL, // regMrSymDmaBuf
   ncclGinIbGdakiDeregMrSym,
   ncclGinIbGdakiDestroyContext,
   ncclGinIbCloseColl,
   ncclIbCloseListen,
+  NULL,
+  NULL,
   NULL,
   NULL,
   NULL,
@@ -524,6 +530,58 @@ ncclResult_t ncclGinIbProxyIPut(void *collComm, uint64_t srcOff, void *srcMhandl
   return ncclSuccess;
 }
 
+ncclResult_t ncclGinIbProxyIGet(void *collComm, uint64_t remoteOffset, void *remoteMhandle,
+                                 size_t size, uint64_t localOffset, void *localMhandle, uint32_t rank,
+                                 int connectionId, void **request) {
+  struct ncclGinIbCollComm* cComm = &((struct ncclGinIbCollComm*)collComm)[connectionId];
+
+  struct ncclIbGinProxyMrHandle *remoteMrHandle = (struct ncclIbGinProxyMrHandle *)remoteMhandle;
+  struct ncclIbGinProxyMrHandle *localMrHandle = (struct ncclIbGinProxyMrHandle *)localMhandle;
+
+  struct ncclIbSendComm* comm = (struct ncclIbSendComm*)cComm->fullSendComm[rank];
+  struct ncclIbQp *qp = &comm->base.qps[0];
+
+  struct ncclIbRequest* req;
+  NCCLCHECK(ncclIbGetRequest(&comm->base, &req));
+  req->connectionId = connectionId;
+  req->type = NCCL_NET_IB_REQ_GIN_IGET;
+  req->sock = &comm->base.sock;
+  req->iget.rank = rank;
+  for (int i = 0; i < comm->base.vProps.ndevs; i++) {
+    req->devBases[i] = &comm->devs[i].base;
+  }
+
+  void *remotePtr = (void *)(remoteMrHandle->base_vas[rank] + remoteOffset);
+  void *localPtr = (void *)(localMrHandle->base_vas[cComm->rank] + localOffset);
+  uint32_t rkey = remoteMrHandle->rkeys[rank];
+  uint32_t lkey = localMrHandle->mrHandle->mrs[0]->lkey;
+
+  struct ibv_send_wr wr;
+  memset(&wr, 0, sizeof(wr));
+  struct ibv_sge sge;
+  memset(&sge, 0, sizeof(sge));
+
+  wr.opcode                  = IBV_WR_RDMA_READ;
+  wr.send_flags              = IBV_SEND_SIGNALED;
+  wr.wr_id                   = req - comm->base.reqs;
+  wr.next                    = NULL;
+  wr.wr.rdma.remote_addr     = (uint64_t)remotePtr;
+  wr.wr.rdma.rkey            = rkey;
+  wr.sg_list = &sge;
+  wr.num_sge = 1;
+
+  sge.addr = (uintptr_t)localPtr;
+  sge.length = size; 
+  sge.lkey = lkey; 
+
+  struct ibv_send_wr* bad_wr;
+  NCCLCHECK(wrap_ibv_post_send(qp->qp, &wr, &bad_wr));
+  ncclIbAddEvent(req, qp->devIndex);
+
+  *request = req;
+  return ncclSuccess;
+}
+
 ncclResult_t ncclGinIbProxyIPutSignal(void *collComm, uint64_t srcOff, void *srcMhandle,
                                       size_t size, uint64_t dstOff, void *dstMhandle, uint32_t rank,
                                       uint64_t signalOff, void *signalMhandle, uint64_t signalValue,
@@ -619,9 +677,19 @@ ncclResult_t ncclGinIbProxyTest(void *collComm, void *request, int *done) {
   }
   int wrDone = 0;
   struct ibv_wc wc[4];
-
-  struct ncclIbSendComm* comm = (struct ncclIbSendComm*)cComm->fullSendComm[rank];
-  NCCLCHECK(wrap_ibv_poll_cq(comm->devs[0].base.cq, 4, wc, &wrDone));
+  
+  ncclIbNetCommBase* commBase;
+  ncclIbNetCommDevBase* devBase;
+  if (req->type == NCCL_NET_IB_REQ_FLUSH) {
+    struct ncclIbRecvComm* comm = (struct ncclIbRecvComm*)cComm->recvComm;
+    commBase = &comm->base;
+    devBase = &comm->devs[0].base;
+  } else {
+    struct ncclIbSendComm* comm = (struct ncclIbSendComm*)cComm->fullSendComm[rank];
+    commBase = &comm->base;
+    devBase = &comm->devs[0].base;
+  }
+  NCCLCHECK(wrap_ibv_poll_cq(devBase->cq, 4, wc, &wrDone));
   for (int i = 0; i < wrDone; i++) {
     if (wc[i].status != IBV_WC_SUCCESS) {
       union ncclSocketAddress addr;
@@ -630,19 +698,19 @@ ncclResult_t ncclGinIbProxyTest(void *collComm, void *request, int *done) {
       char remoteGidString[INET6_ADDRSTRLEN] = "";
       const char* localGidStr = NULL, *remoteGidStr = NULL;
       if (req->devBases[i]->gidInfo.link_layer == IBV_LINK_LAYER_ETHERNET) {
-        localGidStr = ibvGetGidStr(&req->devBases[i]->gidInfo.localGid, localGidString, sizeof(localGidString));
-        remoteGidStr = ibvGetGidStr(&req->base->remDevs[i].remoteGid, remoteGidString, sizeof(remoteGidString));
+        localGidStr = ibvGetGidStr(&devBase->gidInfo.localGid, localGidString, sizeof(localGidString));
+        remoteGidStr = ibvGetGidStr(&commBase->remDevs[i].remoteGid, remoteGidString, sizeof(remoteGidString));
       }
 
       char line[SOCKET_NAME_MAXLEN+1];
-      char *hcaName = req->devBases[i]->pd->context->device->name;
+      char *hcaName = devBase->pd->context->device->name;
       WARN("NET/IB/GIN: Got completion from peer %s with status=%d opcode=%d len=%u vendor err %u (%s)%s%s%s%s hca %s",
           ncclSocketToString(&addr, line), wc[i].status, wc[i].opcode, wc[i].byte_len, wc[i].vendor_err, ncclIbReqTypeStr[req->type],
           localGidStr ?  " localGid ":"", localGidString, remoteGidStr ? " remoteGids":"", remoteGidString, hcaName);
       return ncclRemoteError;
     }
 
-    struct ncclIbRequest* wcReq = comm->base.reqs + wc[i].wr_id;
+    struct ncclIbRequest* wcReq = commBase->reqs + wc[i].wr_id;
 
     wcReq->events[0]--;
     if (wcReq == req && wcReq->events[0] == 0) {
@@ -651,6 +719,45 @@ ncclResult_t ncclGinIbProxyTest(void *collComm, void *request, int *done) {
     }
   }
   return ncclSuccess;
+}
+
+ncclResult_t ncclGinIbProxyIFlush(void *collComm, int connectionId, void* mhandle, void **request) {
+  struct ncclGinIbCollComm* cComm = &((struct ncclGinIbCollComm*)collComm)[connectionId];
+  struct ncclIbRecvComm* comm = (struct ncclIbRecvComm*)cComm->recvComm;
+  struct ncclIbGinProxyMrHandle *ginMrHandle = (struct ncclIbGinProxyMrHandle *)mhandle;
+  struct ncclIbQp *qp = &comm->devs[0].gpuFlush.qp;
+
+  struct ncclIbRequest* req;
+  NCCLCHECK(ncclIbGetRequest(&comm->base, &req));
+  req->type = NCCL_NET_IB_REQ_FLUSH;
+  req->sock = &comm->base.sock;
+  req->iput.rank = cComm->rank;
+
+  struct ibv_send_wr wr;
+  memset(&wr, 0, sizeof(wr));
+  wr.wr_id = req - comm->base.reqs;
+
+  void *flushPtr = (void *)(ginMrHandle->base_vas[cComm->rank] );
+  wr.wr.rdma.remote_addr = (uint64_t)flushPtr;
+  wr.wr.rdma.rkey = ginMrHandle->rkeys[cComm->rank];
+  wr.sg_list = &comm->devs[qp->devIndex].gpuFlush.sge;
+  wr.num_sge = 1;
+  wr.opcode = IBV_WR_RDMA_READ;
+  wr.send_flags = IBV_SEND_SIGNALED;
+
+  TRACE(NCCL_NET, "NET/IB: %s: Posting a flush request (req=%p, comm=%p, wr_id=%ld)", __func__, req, req->base, wr.wr_id);
+  TIME_START(4);
+  struct ibv_send_wr* bad_wr;
+  NCCLCHECK(wrap_ibv_post_send(qp->qp, &wr, &bad_wr));
+  TIME_STOP(4);
+
+  ncclIbAddEvent(req, qp->devIndex);
+
+  TRACE(NCCL_NET, "NET/IB: %s: Flush request posted (req=%p, comm=%p, wr_id=%ld)", __func__, req, req->base, wr.wr_id);
+
+  *request = req;
+  return ncclSuccess;
+  
 }
 
 // No support for NCCL_IB_SPLIT_DATA_ON_QPS or NCCL_IB_MERGE_NICS
@@ -662,6 +769,7 @@ ncclGin_t ncclGinIbProxy = {
   ncclIbListen,
   ncclGinIbProxyConnect,
   NULL,
+  NULL,
   ncclGinIbProxyRegMrSym,
   ncclGinIbProxyRegMrSymDmaBuf,
   ncclGinIbProxyDeregMrSym,
@@ -670,6 +778,8 @@ ncclGin_t ncclGinIbProxy = {
   ncclIbCloseListen,
   ncclGinIbProxyIPut,
   ncclGinIbProxyIPutSignal,
+  ncclGinIbProxyIGet,
+  ncclGinIbProxyIFlush,
   ncclGinIbProxyTest,
   NULL,
   NULL,

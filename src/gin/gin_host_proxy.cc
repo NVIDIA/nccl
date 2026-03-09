@@ -136,6 +136,20 @@ static ncclResult_t proxyGinPollCompletions(ncclGin_t *ginComm, void *collComm,
   return ncclSuccess;
 }
 
+static inline uint64_t extractSignalVal(ncclGinProxyGfd_t *gfd) {
+  uint64_t signalVal = gfd->qword[ncclGinProxyGfdCompletion].completion.signalValLow;
+  signalVal |= (uint64_t)gfd->qword[ncclGinProxyGfdSignalVal].signalVal.signalValLow2 << 16;
+  signalVal |= (uint64_t)gfd->qword[ncclGinProxyGfdSignalVal].signalVal.signalValHigh << 32;
+  return signalVal;
+}
+
+static ncclGinProxyOp_t extractOp(ncclGinProxyGfd_t *gfd) {
+  uint64_t op = gfd->qword[ncclGinProxyGfdHeader].header.opLow;
+  op |= (uint64_t)gfd->qword[ncclGinProxyGfdHeaderExt].headerExt.opHigh << 6;
+  return (ncclGinProxyOp_t)op;
+}
+
+
 static int proxyGinPollGfd(struct ginProxyCtx *ctx, ginProxyHostGpuCtx *hostGpuCtx, int targetRank,
                            ncclGinProxyGfd_t *gfd, struct ginProxyGfdState **state) {
   ncclGinProxyGfd_t *q = hostGpuCtx->queues + targetRank * hostGpuCtx->queueSize;
@@ -165,7 +179,7 @@ static int proxyGinPollGfd(struct ginProxyCtx *ctx, ginProxyHostGpuCtx *hostGpuC
   // set the counter_id into the state
   uint32_t stateIdx = targetRank * hostGpuCtx->queueSize + idx;
   *state = &hostGpuCtx->states[stateIdx];
-  (*state)->op = (ncclGinProxyOp_t)(gfd->qword[ncclGinProxyGfdHeader].header.op);
+  (*state)->op = extractOp(gfd);
   (*state)->counterId = gfd->qword[ncclGinProxyGfdCompletion].completion.counterId;
   (*state)->done = 0;
   (*state)->request = NULL;
@@ -173,7 +187,7 @@ static int proxyGinPollGfd(struct ginProxyCtx *ctx, ginProxyHostGpuCtx *hostGpuC
   TRACE(NCCL_NET,
         "GFD on context %d to target PE %d raw idx: %u, idx: %u - op: %#lx, size: %lu, srcOff: %lu, dstOff: %lu, "
         "srcHandle: %lu, dstHandle: %lu, counterId: %u, signalId: %u, stateIdx: %u",
-        hostGpuCtx->contextId, targetRank, hostGpuCtx->sis[targetRank], idx, gfd->qword[ncclGinProxyGfdHeader].header.op,
+        hostGpuCtx->contextId, targetRank, hostGpuCtx->sis[targetRank], idx, extractOp(gfd),
         gfd->qword[ncclGinProxyGfdHeader].header.size,
         gfd->qword[ncclGinProxyGfdSrcOff].srcOff.srcOff,
         gfd->qword[ncclGinProxyGfdDstOff].dstOff.dstOff,
@@ -188,7 +202,7 @@ static int proxyGinPollGfd(struct ginProxyCtx *ctx, ginProxyHostGpuCtx *hostGpuC
 }
 
 static int mapGfdOpToSignalOp(ncclGinProxyGfd_t *gfd) {
-  uint8_t op = gfd->qword[ncclGinProxyGfdHeader].header.op;
+  ncclGinProxyOp_t op = extractOp(gfd);
   uint8_t signalOp = op & (ncclGinProxyOpWithSignalInc | ncclGinProxyOpWithSignalAdd);
   switch (signalOp) {
     case ncclGinProxyOpWithSignalInc:
@@ -200,13 +214,6 @@ static int mapGfdOpToSignalOp(ncclGinProxyGfd_t *gfd) {
   }
 }
 
-static inline uint64_t extractSignalVal(ncclGinProxyGfd_t *gfd) {
-  uint64_t signalVal = gfd->qword[ncclGinProxyGfdCompletion].completion.signalValLow;
-  signalVal |= (uint64_t)gfd->qword[ncclGinProxyGfdSignalVal].signalVal.signalValLow2 << 16;
-  signalVal |= (uint64_t)gfd->qword[ncclGinProxyGfdSignalVal].signalVal.signalValHigh << 32;
-  return signalVal;
-}
-
 static ncclResult_t proxyGinProcessGfd(ncclGin_t *ginComm, void *collComm, struct ginProxyCtx *ctx,
                                        struct ginProxyHostGpuCtx *hostGpuCtx, int targetRank,
                                        ncclGinProxyGfd_t *gfd, struct ginProxyGfdState *state) {
@@ -214,7 +221,7 @@ static ncclResult_t proxyGinProcessGfd(ncclGin_t *ginComm, void *collComm, struc
   uint64_t signalVal;
 
   // Handle VA Signal operations (signal-only, no PUT)
-  if (gfd->qword[ncclGinProxyGfdHeader].header.op & ncclGinProxyOpVASignal) {
+  if (extractOp(gfd) & ncclGinProxyOpVASignal) {
     uint64_t signalOff = gfd->qword[ncclGinProxyGfdVASignalOff].vaSignalOff.vaSignalOff;
     void *signalHandle = (void *)(uint64_t)gfd->qword[ncclGinProxyGfdVASignalHandle].vaSignalHandle.vaSignalHandle;
     signalVal = extractSignalVal(gfd);
@@ -225,10 +232,26 @@ static ncclResult_t proxyGinProcessGfd(ncclGin_t *ginComm, void *collComm, struc
     return ncclSuccess;
   }
 
+  if (extractOp(gfd) & ncclGinProxyOpGet) {
+    uint64_t srcOff = gfd->qword[ncclGinProxyGfdSrcOff].srcOff.srcOff;
+    void *srcHandle = (void *)(uint64_t)gfd->qword[ncclGinProxyGfdSrcHandle].srcHandle.srcHandle;
+    uint64_t dstOff = gfd->qword[ncclGinProxyGfdDstOff].dstOff.dstOff;
+    void *dstHandle = (void *)(uint64_t)gfd->qword[ncclGinProxyGfdDstHandle].dstHandle.dstHandle;
+    uint64_t size = gfd->qword[ncclGinProxyGfdHeader].header.size;
+    NCCLCHECK(ginComm->iget(collComm, srcOff, srcHandle, size, dstOff, dstHandle,
+                              targetRank, hostGpuCtx->contextId, &state->request));
+    return ncclSuccess;
+  }
+
+  if (extractOp(gfd) & ncclGinProxyOpFlush) {
+    NCCLCHECK(ginComm->iflush(collComm, hostGpuCtx->contextId, ctx->signalsGinHandle, &state->request));
+    return ncclSuccess;
+  }
+
   uint64_t size = gfd->qword[ncclGinProxyGfdHeader].header.size;
   uint64_t srcOff;
   void *srcHandle;
-  if (gfd->qword[ncclGinProxyGfdHeader].header.op & ncclGinProxyOpWithInline) {
+  if (extractOp(gfd) & ncclGinProxyOpWithInline) {
     uint64_t *inlineVal = &hostGpuCtx->inlines[state - hostGpuCtx->states];
     srcOff = (uint64_t)&inlineVal[0] - (uint64_t)hostGpuCtx->inlines;
     // reconstruct the inline value from the two qwords
@@ -244,8 +267,9 @@ static ncclResult_t proxyGinProcessGfd(ncclGin_t *ginComm, void *collComm, struc
   }
   uint64_t dstOff = gfd->qword[ncclGinProxyGfdDstOff].dstOff.dstOff;
   void *dstHandle = (void *)(uint64_t)gfd->qword[ncclGinProxyGfdDstHandle].dstHandle.dstHandle;
-
-  switch (gfd->qword[ncclGinProxyGfdHeader].header.op & ncclGinProxyOpBaseMask) {
+  
+  ncclGinProxyOp_t op = extractOp(gfd);
+  switch (op & ncclGinProxyOpBaseMask) {
     case ncclGinProxyOpPut:
       signalOp = mapGfdOpToSignalOp(gfd);
       if (signalOp == -1) {

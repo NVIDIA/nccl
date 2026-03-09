@@ -102,7 +102,7 @@ static size_t priv_get_page_size() {
 
 doca_error_t doca_gpu_create(const char *gpu_bus_id, struct doca_gpu **gpu_dev) {
     struct doca_gpu *gpu_dev_;
-    int dmabuf_supported;
+    int dmabuf_supported, order = 0;
     CUresult res_drv = CUDA_SUCCESS;
     cudaError_t res_cuda = cudaSuccess;
 
@@ -135,11 +135,19 @@ doca_error_t doca_gpu_create(const char *gpu_bus_id, struct doca_gpu **gpu_dev) 
     (dmabuf_supported == 1 ? (gpu_dev_->support_dmabuf = true)
                            : (gpu_dev_->support_dmabuf = false));
 
-    // status = gdaki_map_uar(guar);
-    // device_attr->support_uar_gpumem = (status == 0);
-    // did_map_uar = (status == 0);
+    res_drv = doca_verbs_wrapper_cuDeviceGetAttribute(
+        &order, CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WRITES_ORDERING, gpu_dev_->cuda_dev);
+    if (res_drv != CUDA_SUCCESS) {
+        DOCA_LOG(
+            LOG_ERR,
+            "cuDeviceGetAttribute CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WRITES_ORDERING returned %d.",
+            res_drv);
+        goto exit_error;
+    }
 
-    // TBD
+    gpu_dev_->need_mcst = true;
+    if (order >= CU_FLUSH_GPU_DIRECT_RDMA_WRITES_TO_OWNER) gpu_dev_->need_mcst = false;
+
     gpu_dev_->support_wq_gpumem = true;
     gpu_dev_->support_cq_gpumem = true;
     gpu_dev_->support_uar_gpumem = true;
@@ -239,6 +247,7 @@ doca_error_t doca_gpu_mem_alloc(struct doca_gpu *gpu_dev, size_t size, size_t al
             err_string = cudaGetErrorString(res);
             DOCA_LOG(LOG_ERR, "cudaMalloc current failed with %s size %zd", err_string,
                      mentry->size_orig);
+            status = DOCA_ERROR_DRIVER;
             goto error;
         }
 
@@ -1124,4 +1133,91 @@ doca_error_t doca_gpu_verbs_query_last_error(struct doca_gpu_verbs_qp *qp,
     error_info->has_error = (qp_attr.current_state == DOCA_VERBS_QP_STATE_ERR);
 
     return DOCA_SUCCESS;
+}
+
+doca_error_t doca_gpu_verbs_reset_tracking_and_memory(struct doca_gpu_verbs_qp *qp_gverbs) {
+    doca_error_t status = DOCA_SUCCESS;
+    cudaError_t cuda_status = cudaSuccess;
+
+    struct doca_gpu_dev_verbs_qp qp_gpu_h;
+
+    if (qp_gverbs == nullptr) {
+        status = DOCA_ERROR_INVALID_VALUE;
+        goto out;
+    }
+
+    assert(qp_gverbs->qp_gpu);
+    cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaMemcpy(&qp_gpu_h, qp_gverbs->qp_gpu,
+                                                              sizeof(struct doca_gpu_dev_verbs_qp),
+                                                              cudaMemcpyDeviceToHost));
+    if (cuda_status != cudaSuccess) {
+        DOCA_LOG(LOG_ERR, "Failed to copy qp_gpu to qp_gpu_h");
+        status = DOCA_ERROR_DRIVER;
+        goto out;
+    }
+
+    assert(qp_gverbs->qp_cpu);
+
+    qp_gverbs->qp_cpu->sq_wqe_pi = 0;
+    qp_gverbs->qp_cpu->sq_rsvd_index = 0;
+    qp_gverbs->qp_cpu->sq_ready_index = 0;
+    qp_gverbs->qp_cpu->sq_lock = 0;
+
+    qp_gverbs->qp_cpu->cq_sq.cqe_ci = 0;
+    qp_gverbs->qp_cpu->cq_sq.cqe_rsvd = qp_gpu_h.sq_rsvd_index;
+
+    qp_gverbs->sq_wqe_pi_last = 0;
+
+    if (qp_gverbs->cpu_proxy) {
+        assert(qp_gverbs->sq_dbrec);
+        *qp_gverbs->sq_dbrec = 0;
+    } else {
+        assert(qp_gverbs->qp_cpu->sq_dbrec);
+        cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(
+            cudaMemset(qp_gverbs->qp_cpu->sq_dbrec, 0, sizeof(uint32_t)));
+        if (cuda_status != cudaSuccess) {
+            DOCA_LOG(LOG_ERR, "Failed to reset sq_dbrec");
+            status = DOCA_ERROR_DRIVER;
+            goto out;
+        }
+    }
+
+    assert(qp_gverbs->qp_cpu->cq_sq.cqe_daddr);
+    cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(
+        cudaMemset(qp_gverbs->qp_cpu->cq_sq.cqe_daddr, 0xff,
+                   qp_gverbs->qp_cpu->cq_sq.cqe_num * qp_gverbs->qp_cpu->cq_sq.cqe_size));
+    if (cuda_status != cudaSuccess) {
+        DOCA_LOG(LOG_ERR, "Failed to reset cqe_daddr");
+        status = DOCA_ERROR_DRIVER;
+        goto out;
+    }
+
+    assert(qp_gverbs->qp_cpu->sq_wqe_daddr);
+    cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(
+        cudaMemset(qp_gverbs->qp_cpu->sq_wqe_daddr, 0,
+                   qp_gverbs->qp_cpu->sq_wqe_num * sizeof(struct doca_gpu_dev_verbs_wqe)));
+    if (cuda_status != cudaSuccess) {
+        DOCA_LOG(LOG_ERR, "Failed to reset sq_wqe_daddr");
+        status = DOCA_ERROR_DRIVER;
+        goto out;
+    }
+
+    cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaMemcpy(qp_gverbs->qp_gpu, qp_gverbs->qp_cpu,
+                                                              sizeof(struct doca_gpu_dev_verbs_qp),
+                                                              cudaMemcpyHostToDevice));
+    if (cuda_status != cudaSuccess) {
+        DOCA_LOG(LOG_ERR, "Failed to update qp_gpu");
+        status = DOCA_ERROR_DRIVER;
+        goto out;
+    }
+
+    cuda_status = cudaDeviceSynchronize();
+    if (cuda_status != cudaSuccess) {
+        DOCA_LOG(LOG_ERR, "Failed to synchronize");
+        status = DOCA_ERROR_DRIVER;
+        goto out;
+    }
+
+out:
+    return status;
 }

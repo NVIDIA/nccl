@@ -64,6 +64,10 @@ extern int64_t ncclParamDmaBufEnable();
 
 static const int NCCL_IB_SL_DEFAULT = 0;
 static const int NCCL_IB_TC_DEFAULT = 0;
+static const int NCCL_IB_SL_MIN = 0;
+static const int NCCL_IB_SL_MAX = 15; // 0-15
+static const int NCCL_IB_TC_MIN = 0;
+static const int NCCL_IB_TC_MAX = 255; // 0-255
 
 static inline bool gdakiRelaxedOrderingEnabled() {
   static bool hasCheckedRelaxedOrdering = false;
@@ -355,6 +359,32 @@ static void gdakiFillExchInfo(struct gdaki_exch_info *exch_info, struct gdaki_co
   exch_info->gid_index = gdaki_ctx->gid_index;
 }
 
+// Extract peer info from an already-configured QP by querying it (for use when reconnecting
+// after RST so we use the same peer parameters as the standard gdakiConnectQp flow).
+static ncclResult_t gdakiExtractPeerInfoFromQp(struct gdaki_context *gdaki_ctx,
+                                               struct doca_gpu_verbs_qp_hl *gqp,
+                                               struct doca_verbs_qp_attr *query_qp_attr,
+                                               struct doca_verbs_qp_init_attr *query_qp_init_attr,
+                                               struct doca_verbs_ah_attr *query_ah_attr,
+                                               struct gdaki_exch_info *peer_info) {
+  ncclResult_t status = ncclSuccess;
+  doca_error_t docaStatus = DOCA_SUCCESS;
+  struct doca_verbs_ah_attr* qah = nullptr;
+  struct doca_verbs_gid dest_gid;
+  DOCACHECKGOTO(doca_verbs_qp_query(gqp->qp, query_qp_attr, query_qp_init_attr),
+                docaStatus, status, out);
+  qah = doca_verbs_qp_attr_get_ah_attr(query_qp_attr);
+  assert(qah != nullptr);
+  peer_info->qpn = doca_verbs_qp_attr_get_dest_qp_num(query_qp_attr);
+  peer_info->lid = (int)doca_verbs_ah_get_dlid(qah);
+  dest_gid = doca_verbs_ah_get_gid(qah);
+  memcpy(peer_info->vgid.raw, dest_gid.raw, sizeof(struct doca_verbs_gid));
+  memcpy(peer_info->gid.raw, dest_gid.raw, sizeof(peer_info->gid.raw));
+  peer_info->gid_index = gdaki_ctx->gid_index;
+out:
+  return status;
+}
+
 static ncclResult_t gdakiCreateVerbsAh(struct gdaki_context *ctx, int ib_sl, int ib_tc,
                                        int ib_gid_index) {
   ncclResult_t status = ncclSuccess;
@@ -382,6 +412,23 @@ static ncclResult_t gdakiCreateVerbsAh(struct gdaki_context *ctx, int ib_sl, int
 destroy_verbs_ah:
   DOCACHECK(doca_verbs_ah_attr_destroy(ctx->ah));
   return status;
+}
+
+static ncclResult_t gdakiUpdateAhQos(struct gdaki_context *ctx, const int trafficClass) {
+  if (ctx->port_attr.link_layer == 1) { // IB
+    if (trafficClass < NCCL_IB_SL_MIN || trafficClass > NCCL_IB_SL_MAX) {
+      WARN("Invalid IB SL for traffic class, expected 0-15, got %d", trafficClass);
+      return ncclInvalidArgument;
+    }
+    DOCACHECK(doca_verbs_ah_attr_set_sl(ctx->ah, trafficClass));
+  } else {
+    if (trafficClass < NCCL_IB_TC_MIN || trafficClass > NCCL_IB_TC_MAX) {
+      WARN("Invalid RoCE TC for traffic class, expected 0-255, got %d", trafficClass);
+      return ncclInvalidArgument;
+    }
+    DOCACHECK(doca_verbs_ah_attr_set_traffic_class(ctx->ah, trafficClass));
+  }
+  return ncclSuccess;
 }
 
 static ncclResult_t gdakiConnectQp(struct gdaki_context *ctx, struct doca_gpu_verbs_qp_hl *gqp,
@@ -716,6 +763,7 @@ retry_create_qp_group_hl:
     for (int qp_idx = 0; qp_idx < nranks; qp_idx++) {
       gverbs_qps[qp_idx] = gdaki_ctx->gqps[(ctx_idx * nranks) + qp_idx]->qp_gverbs;
       need_cpu_proxy |= (gverbs_qps[qp_idx]->cpu_proxy);
+      INFO(NCCL_NET, "gverbs_qps[qp_idx]->cpu_proxy = %d", gverbs_qps[qp_idx]->cpu_proxy);
     }
     DOCACHECKGOTO(doca_gpu_verbs_export_multi_qps_dev(gdaki_ctx->gdev, gverbs_qps, nranks,
                                                       &gin_gdaki_gpu_ctx->gdqp),
@@ -1046,4 +1094,88 @@ ncclResult_t ncclGinGdakiQueryLastError(void *ginCtx, bool *hasError) {
 exit:
   *hasError = hasError_;
   return ncclSuccess;
+}
+
+static ncclResult_t updateQosParamsForQp(struct gdaki_context* gdaki_ctx, \
+  struct doca_gpu_verbs_qp_hl *gqp, \
+  struct doca_verbs_qp_attr *qp_attr, \
+  struct gdaki_exch_info *peer_info) {
+  DOCACHECK(doca_verbs_qp_attr_set_next_state(qp_attr, DOCA_VERBS_QP_STATE_RST));
+  DOCACHECK(doca_verbs_qp_modify(gqp->qp, qp_attr, DOCA_VERBS_QP_ATTR_NEXT_STATE));
+  DOCACHECK(doca_gpu_verbs_reset_tracking_and_memory(gqp->qp_gverbs));
+  NCCLCHECK(gdakiConnectQp(gdaki_ctx, gqp, peer_info));
+  return ncclSuccess;
+}
+
+ncclResult_t ncclGinGdakiUpdateQosParams(void *collComm, const int contextIndex, const int trafficClass) {
+  ncclResult_t status = ncclSuccess;
+  doca_error_t docaStatus = DOCA_SUCCESS;
+
+  struct ncclGinIbCollComm *cComm = (struct ncclGinIbCollComm *)collComm;
+  if (!cComm) {
+    WARN("Invalid collComm");
+    return ncclInvalidArgument;
+  }
+  struct gdaki_context* gdaki_ctx = (struct gdaki_context*)cComm->ginCtx;
+  if (!gdaki_ctx) {
+    WARN("Invalid GDAKI context");
+    return ncclInvalidArgument;
+  }
+
+  const int nranks = cComm->nranks;
+  const int qp_start = contextIndex * nranks;
+  const int old_sl = (int)doca_verbs_ah_get_sl(gdaki_ctx->ah);
+  const int old_tc = (int)doca_verbs_ah_get_traffic_class(gdaki_ctx->ah);
+  const int old_traffic_class = (gdaki_ctx->port_attr.link_layer == 1) ? old_sl : old_tc;
+
+  struct doca_verbs_qp_attr* qp_attr = nullptr; // used for modify
+  struct doca_verbs_qp_attr* query_qp_attr = nullptr; // used for query info
+  struct doca_verbs_qp_init_attr* query_qp_init_attr = nullptr; // used for query info
+  struct doca_verbs_ah_attr* query_ah_attr = nullptr; // used for query info
+
+  NCCLCHECKGOTO(gdakiUpdateAhQos(gdaki_ctx, trafficClass), status, restore_ah);
+  DOCACHECKGOTO(doca_verbs_qp_attr_create(&qp_attr), docaStatus, status, restore_ah);
+  DOCACHECKGOTO(doca_verbs_qp_attr_create(&query_qp_attr), docaStatus, status, cleanup_qp_attr);
+  DOCACHECKGOTO(doca_verbs_qp_init_attr_create(&query_qp_init_attr), docaStatus, status, cleanup_query_attr);
+  DOCACHECKGOTO(doca_verbs_ah_attr_create(gdaki_ctx->ib_ctx, &query_ah_attr), docaStatus, status, cleanup_query_attr);
+  DOCACHECKGOTO(doca_verbs_qp_attr_set_ah_attr(query_qp_attr, query_ah_attr), docaStatus, status, cleanup_query_ah);
+
+  // Main QPs: follow standard setup (RST, reset_tracking, gdakiConnectQp). Extract peer info
+  // from each already-configured QP so RTR/RTS modify use the same parameters as at create time.
+  for (int rank_idx = 0; rank_idx < nranks; rank_idx++) {
+    int qp_idx = qp_start + rank_idx;
+    struct doca_gpu_verbs_qp_hl* qp_hl = gdaki_ctx->gqps[qp_idx];
+    if (!qp_hl) continue;
+
+    struct gdaki_exch_info peer_info = {};
+    NCCLCHECKGOTO(gdakiExtractPeerInfoFromQp(gdaki_ctx, qp_hl, query_qp_attr, query_qp_init_attr,
+                                             query_ah_attr, &peer_info), status, cleanup_query_ah);
+    NCCLCHECKGOTO(updateQosParamsForQp(gdaki_ctx, qp_hl, qp_attr, &peer_info), status, cleanup_query_ah);
+  }
+
+  if (query_ah_attr) doca_verbs_ah_attr_destroy(query_ah_attr);
+  if (query_qp_init_attr) doca_verbs_qp_init_attr_destroy(query_qp_init_attr);
+  if (query_qp_attr) doca_verbs_qp_attr_destroy(query_qp_attr);
+  doca_verbs_qp_attr_destroy(qp_attr);
+  INFO(NCCL_NET, "[Rank %d] Successfully updated QoS for GDAKI context", cComm->rank);
+  return ncclSuccess;
+
+cleanup_query_ah:
+  if (query_ah_attr) {
+    doca_verbs_ah_attr_destroy(query_ah_attr);
+    query_ah_attr = nullptr;
+  }
+cleanup_query_attr:
+  if (query_ah_attr) {
+    doca_verbs_ah_attr_destroy(query_ah_attr);
+    query_ah_attr = nullptr;
+  }
+  if (query_qp_init_attr) doca_verbs_qp_init_attr_destroy(query_qp_init_attr);
+  if (query_qp_attr) doca_verbs_qp_attr_destroy(query_qp_attr);
+cleanup_qp_attr:
+  if (qp_attr) doca_verbs_qp_attr_destroy(qp_attr);
+restore_ah:
+  NCCLCHECK(gdakiUpdateAhQos(gdaki_ctx, old_traffic_class));
+  WARN("[Rank %d] Failed to update QoS for GDAKI context: %d", gdaki_ctx->collComm->rank, status);
+  return status;
 }

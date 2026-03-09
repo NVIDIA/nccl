@@ -31,11 +31,35 @@ __forceinline__ __device__ bool isRankMasked(int* rankMask, int rank) {
 }
 __device__ __constant__ bool dP2pDisabled = false;
 
+__device__ __forceinline__ int getCommId(int hashKey) {
+    return hashKey / MAX_NCCL_GIN_CTX_PER_COMM;
+}
+
+__device__ __forceinline__ int getCtxId(int hashKey) {
+    return hashKey % MAX_NCCL_GIN_CTX_PER_COMM;
+}
+
+__device__ __forceinline__ int getLocalExpertIdx(int expertIdx, int numLocalExperts) {
+    return (expertIdx >= 0) ? expertIdx % numLocalExperts : -1;
+}
+
+__device__ __forceinline__ int getExpertRankIdx(int expertIdx, int numLocalExperts) {
+    return (expertIdx >= 0) ? expertIdx / numLocalExperts : -1;
+}
+
+__device__ __forceinline__ void syncSmGroup(int groupIdx, int nThreads) {
+    asm volatile("bar.sync %0, %1;" :: "r"(groupIdx), "r"(nThreads));
+}
+
+#define SYNC_DISP_SEND_COPY 1
+#define SYNC_DISP_SEND_COMM(idx) (SYNC_DISP_SEND_COPY + idx)
+#define SYNC_DISP_RECV_COPY(topK, idx) (SYNC_DISP_SEND_COMM(topK) + idx)
+
 __forceinline__ __device__ uint64_t ncclGetP2pPtr(const uint64_t& dstPtr,
     const size_t& offset,
     const int& rank,
     const int& dstRank,
-    const int& expertIdx,
+    const int& hashKey,
     const ncclWindow_t* ncclWindows,
     ncclDevComm* devComms) {
     // Local rank, no need for peer mapping
@@ -50,7 +74,7 @@ __forceinline__ __device__ uint64_t ncclGetP2pPtr(const uint64_t& dstPtr,
 
     // P2P/NVLink only works between ranks on the same node (LSA team)
     // Use NCCL team APIs to check if dstRank is in the same LSA team
-    auto commId = expertIdx / MAX_NCCL_GIN_CTX_PER_COMM;
+    auto commId = getCommId(hashKey);
     ncclTeam lsa = ncclTeamLsa(devComms[commId]);
     ncclTeam world = ncclTeamWorld(devComms[commId]);
     if (!ncclTeamRankIsMember(lsa, world, dstRank))
@@ -121,14 +145,14 @@ __forceinline__ __device__ void castAndWriteToSendBuf(
 
 // Send a token via RDMA or P2P
 __forceinline__ __device__ void sendToken(
-    const int* sendBufSrcIdx,
+    const uint8_t* sendBufSrcIdx,
     uint64_t recvPtr,
     size_t expectedDstOffset,
     int tokenIdx,
     size_t sendOff,
     size_t numBytesPerMsg,
     int dstRank,
-    int dstExpertLocalIdx,
+    int hashKey,
     int currRank,
     int* rankMask,
     const ncclWindow_t* windows,
@@ -136,14 +160,14 @@ __forceinline__ __device__ void sendToken(
     int laneId,
     size_t numInt4PerMsg) {
     const auto dstP2pPtr = ncclGetP2pPtr(recvPtr, expectedDstOffset, currRank,
-                                         dstRank, dstExpertLocalIdx, windows, devComms);
+                                         dstRank, hashKey, windows, devComms);
 
     if (not isRankMasked<true>(rankMask, dstRank)) {
         if (dstP2pPtr == 0) {
             if (laneId == 0) {
                 size_t expectedSrcOffset = sendOff + tokenIdx * numBytesPerMsg;
-                auto commId = dstExpertLocalIdx / MAX_NCCL_GIN_CTX_PER_COMM;
-                auto ctxId = dstExpertLocalIdx % MAX_NCCL_GIN_CTX_PER_COMM;
+                auto commId = getCommId(hashKey);
+                auto ctxId = getCtxId(hashKey);
                 ncclGin net(devComms[commId], ctxId);
                 ncclTeam world = ncclTeamWorld(devComms[commId]);
                 auto ncclWindow = windows[commId];
@@ -230,8 +254,8 @@ __forceinline__ __device__ void sendExpertCount(
 
     if (not isRankMasked(rankMask, dstRank)) {
         if (dstP2pPtr == 0) {
-            auto commId = dstExpertLocalIdx / MAX_NCCL_GIN_CTX_PER_COMM;
-            auto ctxId = dstExpertLocalIdx % MAX_NCCL_GIN_CTX_PER_COMM;
+            auto commId = getCommId(dstExpertLocalIdx);
+            auto ctxId = getCtxId(dstExpertLocalIdx);
             auto signalId = signalsBase + dstExpertLocalIdx * numRanks + currRank;
             ncclGin net(devComms[commId], ctxId);
             ncclTeam world = ncclTeamWorld(devComms[commId]);
@@ -253,7 +277,8 @@ __forceinline__ __device__ void sendExpertCount(
 }
 
 // Wait for receive tokens to arrive and return count
-__forceinline__ __device__ int waitForRecvTokens(
+// Note that this function doesn't guarantee acquire semantics
+__forceinline__ __device__ int waitForRecvTokensRelaxed(
     int srcRank,
     int localExpertIdx,
     int currRank,
@@ -275,18 +300,22 @@ __forceinline__ __device__ int waitForRecvTokens(
         auto srcP2pPtr = ncclGetP2pPtr(0x01, srcOffset, currRank, srcRank, localExpertIdx, windows, devComms);
 
         if (srcP2pPtr == 0) {
-            auto commId = localExpertIdx / MAX_NCCL_GIN_CTX_PER_COMM;
-            auto ctxId = localExpertIdx % MAX_NCCL_GIN_CTX_PER_COMM;
+            auto commId = getCommId(localExpertIdx);
+            auto ctxId = getCtxId(localExpertIdx);
             ncclGin net(devComms[commId], ctxId);
+
             uint64_t curValue;
+            ncclGinSignal_t signalId = signalsBase + localExpertIdx * numRanks + srcRank;
             do {
                 curValue = net.readSignal(signalsBase + localExpertIdx * numRanks + srcRank);
             } while (curValue < 1                                                       // data not arrived
                      && (waitRecvCost = clock64() - startTime) <= NUM_TIMEOUT_CYCLES  // not timeout
             );
-            net.resetSignal(signalsBase + localExpertIdx * numRanks + srcRank);
+            net.resetSignal(signalId);
             numRecvTokens = -(int)curValue;
         } else {
+            // TODO: Double check that we can rely on this + __threadfence_system() in dispatch?
+            // to ensure consistency on "another" SM that's going to access the data buffer protected by this atomic
             while ((numRecvTokens = ld_acquire_sys_global((recvCntBuf + localExpertIdx * numRanks + srcRank))) ==
                        0                                                               // data not arrived
                    && (waitRecvCost = clock64() - startTime) <= NUM_TIMEOUT_CYCLES  // not timeout
@@ -319,18 +348,67 @@ __forceinline__ __device__ int waitForRecvTokens(
 }
 
 // Copy received token data and scales
+__forceinline__ __device__ int 
+findNthToken(
+            int myRank,
+            int smId,
+            int subWarpId,
+            int srcRank,
+            const uint8_t* recvBufUint8,
+            int dispatch_hdr_sz,
+            int numTopk,
+            int numBytesPerMsg,
+            int laneId,
+            int expertId,
+            int curRecvIdx,
+            int maxRecvIdx,
+            int lastExpertIdx,
+            int tgtExpertIdx,
+            uint16_t *tokenId,
+            uint16_t *topkPos
+){
+    int resultIdx = -1;
+    
+    // Copy source info
+    while (curRecvIdx < maxRecvIdx && lastExpertIdx < tgtExpertIdx) {
+        const auto recvBufHdrPtr = recvBufUint8 + curRecvIdx * numBytesPerMsg;
+        const auto recvBufHdr = reinterpret_cast<const DispatchHdr*>(recvBufHdrPtr);
+
+        int match = 0;
+        for (int i = laneId; i < numTopk; i += 32) {
+            if (recvBufHdr->rtr[i].expert_id == expertId) {
+                match = i + 1;
+            }
+        }
+        match = warp_reduce_sum(match);
+        if (match > 0) {
+           // FIXME: check that max # of tokens fits uint16!
+           *topkPos = (uint16_t)(match - 1);
+           *tokenId = (uint16_t)recvBufHdr->token_id;
+           lastExpertIdx++;
+           resultIdx = curRecvIdx;
+        }
+        curRecvIdx++;
+    }
+
+    assert(lastExpertIdx == tgtExpertIdx);
+    return resultIdx;
+}
+
+// Copy received token data and scales
 template<bool kUseFP8, bool kUseUE8M0>
 __forceinline__ __device__ void copyRecvTokenData(
     const uint8_t* recvBufUint8,
+    int recvIdx,
     int tokenIdx,
     int recvTokenBeginIdx,
     int4* outDataInt4,
-    int* outSrcInfo,
     typename std::conditional<kUseUE8M0, uint8_t, float>::type* outScales,
     int hiddenInt4,
     int hiddenBytes,
     int numScales,
     int numBytesPerMsg,
+    int dispatch_hdr_sz,
     int maxTokensPerRank,
     int numRanks,
     int laneId) {
@@ -338,14 +416,12 @@ __forceinline__ __device__ void copyRecvTokenData(
     using packed_t = std::conditional_t<kUseUE8M0, uint32_t, float>;
 
     // Copy source info
-    const auto recvBufSrcIdx = reinterpret_cast<const int*>(recvBufUint8 + tokenIdx * numBytesPerMsg);
-    if (laneId == 0)
-        outSrcInfo[recvTokenBeginIdx + tokenIdx] = ld_nc_global(recvBufSrcIdx);
-    __syncwarp();
+    const auto recvBufHdrPtr = recvBufUint8 + recvIdx * numBytesPerMsg;
 
     // Copy data
     // NOTES: only 2 load iterations for 7K hidden with 7 unrolls
-    const auto recvDataInt4 = reinterpret_cast<const int4*>(reinterpret_cast<const uint8_t*>(recvBufSrcIdx) + sizeof(int4));
+    const auto recvDataInt4 = reinterpret_cast<const int4*>(recvBufHdrPtr + dispatch_hdr_sz);
+
     const auto outDataInt4Ptr = outDataInt4 + (recvTokenBeginIdx + tokenIdx) * hiddenInt4;
     UNROLLED_WARP_COPY(7, laneId, hiddenInt4, outDataInt4Ptr, recvDataInt4, ld_nc_global, st_na_global);
 
@@ -391,7 +467,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(// INPUT
                                                     size_t sendOff,
                                                     size_t recvOff,
                                                     size_t recvCntOff,
-                                                    int* expertCnt,
+                                                    int* rankCountersBase,
                                                     int* expertDone,
                                                     int* nextRecvCntBuf,
                                                     int nextRecvCntBufSize,
@@ -422,6 +498,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(// INPUT
     const auto subWarpId = warpId % numWarpsPerGroup;
     const auto responsibleExpertIdx = smId * numWarpGroups + warpGroupId;
 
+    auto rankSentCnt = rankCountersBase;
+    auto rankArrivedCnt = rankCountersBase + numRanks;
+
     // May extract UE8M0 from the scales
     using scale_t = std::conditional_t<kUseUE8M0, uint8_t, float>;
     using packed_t = std::conditional_t<kUseUE8M0, uint32_t, float>;
@@ -433,10 +512,14 @@ __global__ __launch_bounds__(1024, 1) void dispatch(// INPUT
     const size_t hiddenBytes = kHidden * (kUseFP8 ? sizeof(__nv_fp8_storage_t) : sizeof(nv_bfloat16));
     const size_t hiddenInt4 = hiddenBytes / sizeof(int4);
 
-    // Message package: index at source (int), 3 reserved int fields, hidden data, FP8 scales
-    // NOTES: currently we have 3 reserved int fields for future use
+    // Message package: header, hidden data, FP8 scales
+    // NOTES: header contains token_id + expert_id per topk
     using vec_t = std::conditional_t<kUseFP8, int2, int4>;
-    const size_t numBytesPerMsg = sizeof(int4) + (kUseFP8 ? (kHidden + numScales * sizeof(float)) : (kHidden * sizeof(nv_bfloat16)));
+    const size_t dispatch_hdr_sz = get_dispatch_hdr_sz(numTopk);
+    const size_t numBytesPerMsg = dispatch_hdr_sz + (kUseFP8 ?
+                                                     (kHidden + numScales * sizeof(float)) :
+                                                     (kHidden * sizeof(nv_bfloat16)));
+
     const size_t numInt4PerMsg = numBytesPerMsg / sizeof(int4);
     EP_DEVICE_ASSERT(numBytesPerMsg % sizeof(int4) == 0);
 
@@ -455,47 +538,81 @@ __global__ __launch_bounds__(1024, 1) void dispatch(// INPUT
         constexpr int kNumElemsPerRead = sizeof(int4) / sizeof(nv_bfloat16);
         EP_STATIC_ASSERT(kHidden % (32 * kNumElemsPerRead) == 0, "Invalid hidden");
         EP_STATIC_ASSERT(kNumElemsPerRead * 32 % kNumPerChannels == 0, "Invalid vectorization");
-        const auto numThreads = (numWarps - 1) * 32;
+        const auto numWritingThreads = (numWarps - 1) * 32;
         const size_t hiddenBf16Int4 = kHidden / kNumElemsPerRead;
 
+        // Split token processing across SMs
         for (int tokenIdx = smId; tokenIdx < numTokens; tokenIdx += numSms) {
             const auto srcDataInt4 = static_cast<const int4*>(inData) + tokenIdx * hiddenBf16Int4;
-            const auto sendBufSrcIdx = reinterpret_cast<int*>(static_cast<uint8_t*>(sendBuf) + tokenIdx * numBytesPerMsg);
-            const auto sendBufVec = reinterpret_cast<vec_t*>(reinterpret_cast<uint8_t*>(sendBufSrcIdx) + sizeof(int4));
+
+            // Optimized path: Get the idx of sendBuf for header, data(sendBufVec), and scale(sendBufScales)
+            auto* sendBufBase = static_cast<uint8_t*>(sendBuf) + tokenIdx * numBytesPerMsg;
+            const auto sendBufVec = reinterpret_cast<vec_t*>(sendBufBase + dispatch_hdr_sz);
             const auto sendBufScales = reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(sendBufVec) + hiddenBytes);
 
-            // Overlap top-k index read and source token index writes
+
+            // Each expert is handled by a different warp in the SM.
             auto dstExpertIdx = warpId < numTopk ? static_cast<int>(__ldg(inTopkIdx + tokenIdx * numTopk + warpId)) : -1;
-            threadId == 0 ? (*sendBufSrcIdx = tokenIdx) : 0;
+            auto dstRank = getExpertRankIdx(dstExpertIdx, numLocalExperts);
+            
+            // Write token_id and routing information
+            auto* sendBufHdr = reinterpret_cast<DispatchHdr*>(sendBufBase);
+            // Only lane0's of warps responsible for sending the token are
+            // writing the header.
+            if (warpId < numTopk and laneId == 0) {
+                // Ensure that token_id is written only once.
+                if (warpId == 0) {
+                    sendBufHdr->token_id = tokenIdx;
+                }
+                sendBufHdr->rtr[warpId].expert_id = static_cast<uint16_t>(dstExpertIdx);
+            }
 
             // Cast and write data to send buffer
             castAndWriteToSendBuf<kUseFP8>(
                 srcDataInt4, sendBufVec, sendBufScales,
-                threadId, numThreads, laneId, hiddenBf16Int4, roundScale);
-            asm volatile("bar.sync 1, %0;" :: "r"(numThreads));
+                threadId, numWritingThreads, laneId, hiddenBf16Int4, roundScale);
 
-            // Issue IBGDA sends
+
+            // Make sure that all working warps in the SM have completed the header writing.
+            syncSmGroup(SYNC_DISP_SEND_COPY, numWritingThreads);
+
+            // Do filtering to avoid duplicate sending of tokens to the same rank.
             if (dstExpertIdx >= 0) {
-                int slotIdx = laneId == 0 ? atomicAdd(expertCnt + dstExpertIdx, 1) : 0;
-                slotIdx = __shfl_sync(0xffffffff, slotIdx, 0);
-                const auto dstRank = dstExpertIdx / numLocalExperts;
-                const auto dstExpertLocalIdx = dstExpertIdx % numLocalExperts;
-                const auto recvPtr = reinterpret_cast<uint64_t>(recvBuf) +
-                                     dstExpertLocalIdx * numRanks * maxTokensPerRank * numBytesPerMsg +
-                                     currRank * maxTokensPerRank * numBytesPerMsg +
-                                     slotIdx * numBytesPerMsg;
-                size_t expectedDstOffset = recvOff +
-                                             dstExpertLocalIdx * numRanks * maxTokensPerRank * numBytesPerMsg +
-                                             currRank * maxTokensPerRank * numBytesPerMsg + slotIdx * numBytesPerMsg;
+                // Optimized: rank-level slot allocation (aggregates across experts)
+                int minTopkIdx = numTopk;
+                for (int i = laneId; i < numTopk; i += 32) {
+                    const auto otherExpertIdx = sendBufHdr->rtr[i].expert_id;
+                    const auto otherRank = getExpertRankIdx(otherExpertIdx, numLocalExperts);
+                    // if another expert is located on the same rank - disqualify this warp
+                    // from sending the token to avoid duplication
+                    if (otherRank == dstRank) {
+                        minTopkIdx = min(minTopkIdx, i);
+                    }
+                }
+                minTopkIdx = warp_reduce_min(minTopkIdx);
 
-                sendToken(
-                    sendBufSrcIdx, recvPtr, expectedDstOffset, tokenIdx,
-                    sendOff, numBytesPerMsg, dstRank, dstExpertLocalIdx,
-                    currRank, rankMask, windows, devComms, laneId, numInt4PerMsg);
+                // If this warp is the first in topK for the dstRank, send the token.
+                if (minTopkIdx == warpId) {
+                    int slotIdx = laneId == 0 ? atomicAdd(rankSentCnt + dstRank, 1) : 0;
+                    slotIdx = __shfl_sync(0xffffffff, slotIdx, 0);
+
+                    // Calculate receive buffer pointer and offset
+                    const auto dstExpertLocalIdx = dstExpertIdx % numLocalExperts;
+                    const size_t recvRelOffset = currRank * maxTokensPerRank * numBytesPerMsg +
+                                                slotIdx * numBytesPerMsg;
+                    const auto recvPtr = reinterpret_cast<uint64_t>(recvBuf) + recvRelOffset;
+                    sendToken(sendBufBase, recvPtr, recvOff + recvRelOffset, tokenIdx,
+                        sendOff, numBytesPerMsg, dstRank, dstExpertLocalIdx,
+                        currRank, rankMask, windows, devComms, laneId, numInt4PerMsg);
+                }
 
                 // Increase counter after finishing
-                __syncwarp();
-                laneId == 0 ? atomic_add_release_global(expertDone + dstExpertIdx, 1) : 0;
+                // NOTE: we don't need to wait for the (warpId == minTopkIdx) to finish,
+                // because on the receive side we are waiting for all QPs to the target
+                // rankto drain (by waiting for `rankArrivedCnt[dstRank]` to reach numLocalExperts)
+                if (laneId == 0) {
+                    atomic_add_release_global(expertDone + dstExpertIdx, 1);
+                }
             }
         }
     } else if (warpId == numWarps - 1) {
@@ -530,13 +647,12 @@ __global__ __launch_bounds__(1024, 1) void dispatch(// INPUT
         auto recvCntPtr = reinterpret_cast<uint64_t>(recvCntBuf + dstExpertLocalIdx * numRanks + currRank);
         size_t recvCntOffset = recvCntOff + (dstExpertLocalIdx * numRanks + currRank) * sizeof(int);
 
-        sendExpertCount(
-            numTokensSent, dstRank, dstExpertLocalIdx, currRank, numRanks,
+
+        sendExpertCount(numTokensSent, dstRank, dstExpertLocalIdx, currRank, numRanks,
             recvCntPtr, recvCntOffset, recvCntBuf, rankMask, signalsBase,
             windows, devComms);
 
         // Clean workspace for next use
-        expertCnt[responsibleExpertIdx] = 0;
         expertDone[responsibleExpertIdx] = 0;
 
         // Clean `packed_recv_count`
@@ -544,6 +660,11 @@ __global__ __launch_bounds__(1024, 1) void dispatch(// INPUT
             outCnt[dstExpertLocalIdx] = 0;
     }
     __syncwarp();
+
+    // Resent dispatch/recvcounters for the next dispatch
+    if (responsibleExpertIdx < numRanks) {
+        rankArrivedCnt[responsibleExpertIdx] = 0;
+    }
 
 // Receiving phase
 LOW_LATENCY_DISPATCH_RECV:
@@ -554,13 +675,21 @@ LOW_LATENCY_DISPATCH_RECV:
     if (phases & LOW_LATENCY_SEND_PHASE)
         cg::this_grid().sync();
 
+    // Resent counters for the next dispatch
+    if (responsibleExpertIdx < numRanks) {
+        rankSentCnt[responsibleExpertIdx] = 0;
+    }
+
     // Receiving and packing
     if (responsibleExpertIdx < numExperts) {
+        // responsibleExpertIdx defines 2 things:
+        // 1. the source rank of tokens
+        // 2. the local expert index within the target (this) rank
         const auto srcRank = responsibleExpertIdx / numLocalExperts;
         const auto localExpertIdx = responsibleExpertIdx % numLocalExperts;
-        const auto recvBufUint8 = static_cast<uint8_t*>(recvBuf) +
-                localExpertIdx * numRanks * maxTokensPerRank * numBytesPerMsg +
-                srcRank * maxTokensPerRank * numBytesPerMsg;
+        const auto globalExpertIdx = currRank * numLocalExperts + localExpertIdx;
+
+        const auto recvBufUint8 = static_cast<uint8_t*>(recvBuf) + srcRank * maxTokensPerRank * numBytesPerMsg;
         const auto outDataInt4 = static_cast<int4*>(outDataBuf) +
                 localExpertIdx * numRanks * maxTokensPerRank * hiddenInt4;
         const auto recvSrcInfo = outSrcInfo + localExpertIdx * numRanks * maxTokensPerRank;
@@ -576,26 +705,57 @@ LOW_LATENCY_DISPATCH_RECV:
         int numRecvTokens, recvTokenBeginIdx;
         EP_DEVICE_ASSERT(numWarpsPerGroup > 1 and numWarpGroups < 15);
         if (subWarpId == 1 and laneId == 0) {
-            numRecvTokens = waitForRecvTokens(
+            numRecvTokens = waitForRecvTokensRelaxed(
                 srcRank, localExpertIdx, currRank, numRanks, recvCntOff,
                 recvCntBuf, rankMask, signalsBase, windows, devComms,
                 recvStats, waitStats);
             recvTokenBeginIdx = atomicAdd(outCnt + localExpertIdx, numRecvTokens);
+            atomic_add_release_global(rankArrivedCnt + srcRank, 1);
+
             sharedNumRecvTokens[warpGroupId] = numRecvTokens;
             sharedRecvTokenBeginIdx[warpGroupId] = recvTokenBeginIdx;
             recvRange[srcRank] = pack2<int, int64_t>(numRecvTokens, recvTokenBeginIdx);
         }
-        asm volatile("bar.sync %0, %1;" :: "r"(warpGroupId + 2), "r"(numWarpsPerGroup * 32));
+
+        // Wait for all counts from a specific rank to arrive
+        // TODO: use relaxed semantics instead of acquire
+        while (ld_acquire_sys_global(rankArrivedCnt + srcRank) != numLocalExperts);
+        //(void)ld_acquire_sys_global(rankArrivedCnt + srcRank);
+
         numRecvTokens = sharedNumRecvTokens[warpGroupId];
         recvTokenBeginIdx = sharedRecvTokenBeginIdx[warpGroupId];
 
         // Copy tokens
         EP_DEVICE_ASSERT(numScales <= 64);
+        int ridx = 0;
+        int prev = -1;
         for (int i = subWarpId; i < numRecvTokens; i += numWarpsPerGroup) {
+            uint16_t topkPos = 0;
+            uint16_t tokenId = 0;
+
+            // Find the index of the next token
+            ridx = findNthToken(currRank, smId, subWarpId, srcRank, recvBufUint8, dispatch_hdr_sz, numTopk, numBytesPerMsg, 
+                                laneId, globalExpertIdx, ridx, maxTokensPerRank, prev, i, &tokenId, &topkPos);
+            assert(ridx >= 0);
+            prev = i;
+
+            // Encode both token id and expert's position in topK in the 
+            if (laneId == 0) {
+                recvSrcInfo[recvTokenBeginIdx + i] = pack2<uint16_t, int>(tokenId, topkPos);
+            }
+            __syncwarp();
+    
+            // MEMOPT: Possibly we need to fix it
             copyRecvTokenData<kUseFP8, kUseUE8M0>(
-                recvBufUint8, i, recvTokenBeginIdx, outDataInt4, recvSrcInfo, outScales,
-                hiddenInt4, hiddenBytes, numScales, numBytesPerMsg,
+                recvBufUint8, ridx, i,
+                recvTokenBeginIdx, outDataInt4, outScales,
+                hiddenInt4, hiddenBytes, numScales, numBytesPerMsg, dispatch_hdr_sz,
                 maxTokensPerRank, numRanks, laneId);
+
+            __syncwarp();
+            // Move to the next token to start the search
+            ridx++;
+            assert(ridx <= maxTokensPerRank);
         }
     }
 }
@@ -646,9 +806,11 @@ void dispatch(const void* inData,
     EP_HOST_ASSERT(numTopk <= kNumMaxTopK);
 
     // Workspace checks
-    auto expertCnt = static_cast<int*>(workspace);
-    auto expertDone = expertCnt + numExperts;
-    EP_HOST_ASSERT(numExperts * sizeof(int) * 2 <= NUM_WORKSPACE_BYTES);
+    // rankCountersBase is used to track the number of tokens sent & received by each rank.
+    // expertDone is used to track the number of tokens sent to each expert.
+    auto rankCountersBase = static_cast<int*>(workspace);
+    auto expertDone = rankCountersBase + 2 * numRanks /* Using 2 arrays of per-rank flags */;
+    EP_HOST_ASSERT((2 * numRanks + numExperts) * sizeof(int) <= NUM_WORKSPACE_BYTES);
 
     // FP8 checks
     if (useUe8m0)
@@ -675,7 +837,7 @@ LAUNCH_KERNEL(&cfg, dispatchFunc, \
               sendOff, \
               recvOff, \
               recvCntOff, \
-              expertCnt, \
+              rankCountersBase, \
               expertDone, \
               nextRecvCntBuf, \
               nextRecvCntBufSize, \
@@ -983,14 +1145,15 @@ __forceinline__ __device__ void sendTokenViaRdma(
     int numRanks,
     int maxTokensPerRank,
     int tokenIdx,
-    int srcIdx,
+    int rcvTokenOffset,
     size_t sendOff,
     size_t recvOff,
     size_t numBytesPerSlot,
     int hidden,
     ncclDevComm* devComms,
     const ncclWindow_t* windows) {
-    const auto expectedDstOffset = recvOff + (globalExpertIdx * maxTokensPerRank + srcIdx) * numBytesPerSlot;
+
+    const auto expectedDstOffset = recvOff + rcvTokenOffset;
     const auto expectedBufOffset = sendOff +
         (localExpertIdx * numRanks * maxTokensPerRank * numBytesPerSlot) +
         tokenIdx * numBytesPerSlot;
@@ -1017,7 +1180,7 @@ template<bool kUseLogFMT, int kHidden, int kNumSendUnrolls, int kNumStages, int 
          typename TmaBuffersT, typename FullBarriersT, typename TmaLoadAndArriveT, typename GetNumTmaBytesT>
 __forceinline__ __device__ void processAndSendToken(
     int tokenIdx,
-    int srcIdx,
+    int rcvTokenOffset,
     const int4* srcDataInt4Ptr,
     int64_t sendBufPtr,
     uint64_t recvPtr,
@@ -1113,7 +1276,7 @@ __forceinline__ __device__ void processAndSendToken(
         if (laneId == 0) {
             sendTokenViaRdma(
                 globalExpertIdx, dstRank, localExpertIdx, currRank, numRanks,
-                maxTokensPerRank, tokenIdx, srcIdx, sendOff, recvOff,
+                maxTokensPerRank, tokenIdx, rcvTokenOffset, sendOff, recvOff,
                 numBytesPerSlot, hidden, devComms, windows);
         }
     }
@@ -1250,18 +1413,20 @@ __global__ __launch_bounds__(1024, 1) void combine(// INPUT
                 const auto sendBufDataRow = reinterpret_cast<uint8_t*>(sendBufTypeRow);
 
                 // Copy directly to local rank, or copy to buffer and issue RDMA
-                const auto srcIdx = __shfl_sync(0xffffffff, __ldg(localSrcInfo + tokenIdx), 0);
-                const auto sendBufPtr = reinterpret_cast<int64_t>(sendBufDataRow);
-                const auto recvPtr = reinterpret_cast<uint64_t>(recvBuf) +
-                    (globalExpertIdx * maxTokensPerRank + srcIdx) * numBytesPerSlot;
+                const auto packedSrcInfo = __shfl_sync(0xffffffff, __ldg(localSrcInfo + tokenIdx), 0);
+                uint16_t dstIdx, dstTopkPos;
+                unpack2<uint16_t, int>(packedSrcInfo, dstIdx, dstTopkPos);
 
-                const auto expectedDstOffset =
-                    recvOff + (globalExpertIdx * maxTokensPerRank + srcIdx) * numBytesPerSlot;
+                const auto sendBufPtr = reinterpret_cast<int64_t>(sendBufDataRow);
+                int rcvTokenOffset = (dstIdx * numTopk + dstTopkPos) * numBytesPerSlot;
+                const auto recvPtr = reinterpret_cast<uint64_t>(recvBuf) + rcvTokenOffset;
+
+                const auto expectedDstOffset = recvOff + rcvTokenOffset;
                 const auto dstP2pPtr =
                     ncclGetP2pPtr(recvPtr, expectedDstOffset, currRank, dstRank, localExpertIdx, windows, devComms);
 
                 processAndSendToken<kUseLogFMT, kHidden, kNumSendUnrolls, kNumStages, kNumPrefetch>(
-                    tokenIdx, srcIdx, srcDataInt4Ptr, sendBufPtr, recvPtr,
+                    tokenIdx, rcvTokenOffset, srcDataInt4Ptr, sendBufPtr, recvPtr,
                     recvOff, sendOff, globalExpertIdx, dstRank, localExpertIdx,
                     currRank, numRanks, maxTokensPerRank, numBytesPerSlot,
                     hidden, hiddenBf16Int4, hiddenBf16Int4Pad, kNumMetaBytes,
@@ -1273,6 +1438,8 @@ __global__ __launch_bounds__(1024, 1) void combine(// INPUT
 
         // Put the finishing flag
         EP_DEVICE_ASSERT(numWarpsPerGroup > 1 and numWarpGroups < 16);
+        
+        // TODO use the new sync primitive
         asm volatile("bar.sync %0, %1;" :: "r"(warpGroupId + 1), "r"(numWarpsPerGroup * 32));
         if (subWarpId == 1 and laneId == 0) {
             while (ld_acquire_global(atomicCleanFlag) == 0);
@@ -1371,7 +1538,7 @@ LOW_LATENCY_COMBINE_RECV:
                         continue;
 
                     mbarrier_wait<true>(emptyBarriers[stageIdx], tmaPhase, stageIdx);
-                    auto recvBufData = static_cast<uint8_t*>(recvBuf) + (topkIdxReg * maxTokensPerRank + tokenIdx) * numBytesPerSlot;
+                    auto recvBufData = static_cast<uint8_t*>(recvBuf) + (tokenIdx * numTopk + i) * numBytesPerSlot;
                     if constexpr (kUseLogFMT) {
                         logfmtCheckAmaxmin<kNumDivisions / 2, kNumSendUnrolls, kNumRecvUnrolls>(
                             recvBufData,

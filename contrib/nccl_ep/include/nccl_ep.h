@@ -32,8 +32,6 @@ typedef enum {
     NCCL_EP_TENSOR_TAG_RECV_EXPERT_COUNTER_DEVICE = 5,
     // Tensor containing tokens received per expert (pinned host memory)
     NCCL_EP_TENSOR_TAG_RECV_EXPERT_COUNTER_HOST = 6,
-    // Tensor containing per-expert token counts
-    NCCL_EP_TENSOR_TAG_TOKENS_PER_EXPERTS = 7,
 } ncclEpTensorTag_t;
 
 

@@ -147,13 +147,25 @@ static inspectorResult_t inspectorPromGetLabels(char* labels,
   inspectorFormatHumanReadableSize(collInfo->msgSizeBytes, msgSizeStr, sizeof(msgSizeStr));
 
 
-  int ret = snprintf(labels, labelSize,
-                     "%s,collective=\"%s\",coll_sn=\"%lu\",timestamp=\"%s\",message_size=\"%s\"",
-                     commInfo->cachedStaticLabels,
-                     ncclFuncToString(collInfo->func),
-                     collInfo->sn,
-                     datetimeStr,
-                     msgSizeStr);
+  int ret;
+  if (collInfo->userTag[0] != '\0') {
+    ret = snprintf(labels, labelSize,
+                   "%s,collective=\"%s\",coll_sn=\"%lu\",timestamp=\"%s\",message_size=\"%s\",user_tag=\"%s\"",
+                   commInfo->cachedStaticLabels,
+                   ncclFuncToString(collInfo->func),
+                   collInfo->sn,
+                   datetimeStr,
+                   msgSizeStr,
+                   collInfo->userTag);
+  } else {
+    ret = snprintf(labels, labelSize,
+                   "%s,collective=\"%s\",coll_sn=\"%lu\",timestamp=\"%s\",message_size=\"%s\"",
+                   commInfo->cachedStaticLabels,
+                   ncclFuncToString(collInfo->func),
+                   collInfo->sn,
+                   datetimeStr,
+                   msgSizeStr);
+  }
 
   if (ret < 0 || (size_t)ret >= labelSize) {
     return inspectorMemoryError;

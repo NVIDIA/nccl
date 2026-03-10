@@ -25,6 +25,8 @@ enum {
   ncclProfileCeColl         = (1 << 12), // CE collective operation
   ncclProfileCeSync         = (1 << 13), // CE synchronization operation
   ncclProfileCeBatch        = (1 << 14), // CE batch operation
+  // User-defined tag events (v7)
+  ncclProfileUserTag        = (1 << 15), // User-defined tag annotation
 };
 
 typedef enum {
@@ -79,8 +81,13 @@ typedef ncclProfilerEventState_t ncclProfilerEventState_v3_t;
 typedef ncclProfilerEventState_t ncclProfilerEventState_v4_t;
 typedef ncclProfilerEventState_t ncclProfilerEventState_v5_t;
 typedef ncclProfilerEventState_t ncclProfilerEventState_v6_t;
+typedef ncclProfilerEventState_t ncclProfilerEventState_v7_t;
 
 #include <cstdint>
+
+#define NCCL_TAG_MAX_LEN 32
+
+#include "profiler/profiler_v7.h"
 #include "profiler/profiler_v6.h"
 #include "profiler/profiler_v5.h"
 #include "profiler/profiler_v4.h"
@@ -88,11 +95,11 @@ typedef ncclProfilerEventState_t ncclProfilerEventState_v6_t;
 #include "profiler/profiler_v2.h"
 #include "profiler/profiler_v1.h"
 
-// Use v6 as default to support CE events
-// v5 and earlier versions are still supported for backward compatibility
-typedef ncclProfiler_v6_t ncclProfiler_t;
-typedef ncclProfilerEventDescr_v6_t ncclProfilerEventDescr_t;
-typedef ncclProfilerEventStateArgs_v6_t ncclProfilerEventStateArgs_t;
+// Use v7 as default to support UserTag events
+// v6 and earlier versions are still supported for backward compatibility
+typedef ncclProfiler_v7_t ncclProfiler_t;
+typedef ncclProfilerEventDescr_v7_t ncclProfilerEventDescr_t;
+typedef ncclProfilerEventStateArgs_v7_t ncclProfilerEventStateArgs_t;
 
 #define NCCL_PROFILER_NET_VER_BITS  (16)
 #define NCCL_PROFILER_NET_VER_MASK  (~0U >> NCCL_PROFILER_NET_VER_BITS)

@@ -13,7 +13,7 @@ INCEXPORTS  := nccl.h nccl_device.h \
 
 LIBSRCFILES := \
 	bootstrap.cc channel.cc collectives.cc debug.cc enqueue.cc group.cc \
-	init.cc proxy.cc transport.cc mnnvl.cc allocator.cc dev_runtime.cc sym_kernels.cc ce_coll.cc mem_manager.cc \
+	init.cc notify.cc proxy.cc transport.cc mnnvl.cc allocator.cc dev_runtime.cc sym_kernels.cc ce_coll.cc mem_manager.cc \
 	$(wildcard graph/*.cc) \
 	$(wildcard misc/*.cc) \
 	$(wildcard transport/*.cc) \

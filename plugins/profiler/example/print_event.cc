@@ -486,6 +486,10 @@ void printEvent(FILE* fh, void* handle) {
   } else if (type == ncclProfileCeBatch) {
     struct ceBatch* ce = (struct ceBatch*)handle;
     printCeBatchEvent(fh, ce);
+  } else if (type == ncclProfileUserTag) {
+    struct userTag* ut = (struct userTag*)handle;
+    fprintf(fh, "{\"name\": \"UserTag\", \"cat\": \"USER_TAG\", \"ph\": \"i\", \"s\": \"g\", \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"tag\": \"%s\", \"rank\": %d}},\n",
+            getpid(), 1, ut->startTs, ut->tag, ut->rank);
   }
   return;
 }

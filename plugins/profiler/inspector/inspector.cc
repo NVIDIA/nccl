@@ -503,6 +503,10 @@ static inline inspectorResult_t inspectorCompletedColl(jsonFileOutput* jfo,
 
     JSON_CHK(jsonKey(jfo, "coll_busbw_gbs")); JSON_CHK(jsonDouble(jfo, collInfo->busBwGbs));
 
+    if (collInfo->userTag[0] != '\0') {
+      JSON_CHK(jsonKey(jfo, "user_tag")); JSON_CHK(jsonStr(jfo, collInfo->userTag));
+    }
+
     if (enableNcclInspectorDumpVerbose) {
       INS_CHK(inspectorCompletedCollVerbose(jfo, collInfo));
     }
@@ -1709,6 +1713,7 @@ void inspectorUpdateCollPerf(struct inspectorCompletedCollInfo *completedColl,
   completedColl->msgSizeBytes = collInfo->msgSizeBytes;
   completedColl->execTimeUsecs =
     calculateMaxKernelExecTimeUsecs(collInfo, &completedColl->timingSource);
+  memcpy(completedColl->userTag, collInfo->userTag, NCCL_TAG_MAX_LEN);
   completedColl->collEvtTrk = collInfo->collEvtTrk;
 }
 

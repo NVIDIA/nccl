@@ -17,6 +17,7 @@
 #include "json.h"
 #include "common.h"
 #include "version.h"
+#include "nccl/profiler.h"
 
 #define MAX_CHANNELS                     64
 
@@ -140,6 +141,7 @@ struct inspectorCompletedCollInfo {
   inspectorTimingSource_t timingSource;
   double algoBwGbs;
   double busBwGbs;
+  char userTag[NCCL_TAG_MAX_LEN]; // User tag active when collective was enqueued
   // Event trace information
   struct inspectorEventTrkCollInfo collEvtTrk;
 };
@@ -160,6 +162,8 @@ struct inspectorCommInfo {
   int cudaDeviceId;     // CUDA device ID for this communicator
   char deviceUuidStr[37]; // Pre-computed device UUID string for filename generation
   char cachedStaticLabels[256]; // Cached static parts of Prometheus labels (hostname, job, comm, rank, etc.)
+
+  char activeTag[NCCL_TAG_MAX_LEN]; // Current user tag, set by UserTag events
 
   bool dump;
   struct inspectorCompletedCollInfo completedCollInfo;
@@ -226,6 +230,7 @@ struct inspectorCollInfo {
   uint32_t nChannels;
   uint32_t nKernelChStarted;
   uint32_t nKernelChCompleted;
+  char userTag[NCCL_TAG_MAX_LEN]; // Tag captured at collective insertion time
   pthread_rwlock_t guard;
   struct inspectorKernelChInfo kernelCh[MAX_CHANNELS];
   struct inspectorEventTrkCollInfo collEvtTrk;

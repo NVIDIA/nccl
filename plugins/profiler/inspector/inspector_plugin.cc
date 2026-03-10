@@ -114,7 +114,7 @@ __hidden ncclResult_t inspectorPluginInit(void** context, uint64_t commHash,
                    inspectorErrorString(res));
     return ncclSuccess;
   }
-  *eActivationMask = ncclProfileColl | ncclProfileKernelCh;
+  *eActivationMask = ncclProfileColl | ncclProfileKernelCh | ncclProfileUserTag;
   INFO(NCCL_INIT, "PROFILER/Plugin: init commName: %s commHash: %lu nranks: %d rank: %d",
        commName ? commName : "", commHash, nranks, rank);
   return ncclSuccess;
@@ -225,6 +225,12 @@ static void inspectorPluginCollInfoInit(struct inspectorCollInfo **collInfo,
 
 
   collInfoPtr->commInfo = commInfo;
+  // Capture active tag at collective insertion time
+  if (commInfo->activeTag[0] != '\0') {
+    memcpy(collInfoPtr->userTag, commInfo->activeTag, NCCL_TAG_MAX_LEN);
+  } else {
+    collInfoPtr->userTag[0] = '\0';
+  }
   collInfoPtr->collEvtTrk.sn = 0;
   collInfoPtr->collEvtTrk.nChannels = collInfoPtr->nChannels;
   inspectorRecordEventTrace(collInfoPtr->collEvtTrk.evntTrace,
@@ -484,11 +490,55 @@ __hidden ncclResult_t inspectorPluginRecordEventState(void* eHandle,
   return ncclSuccess;
 }
 
-ncclProfiler_t ncclProfiler_v5 = {
+ncclProfiler_v5_t ncclProfiler_v5 = {
   "Inspector",
   inspectorPluginInit,
-  inspectorPluginStartEvent,
+  (ncclResult_t (*)(void*, void**, ncclProfilerEventDescr_v5_t*))inspectorPluginStartEvent,
   inspectorPluginStopEvent,
-  inspectorPluginRecordEventState,
+  (ncclResult_t (*)(void*, ncclProfilerEventState_v5_t, ncclProfilerEventStateArgs_v5_t*))inspectorPluginRecordEventState,
+  inspectorPluginFinalize,
+};
+
+// ============================================================================
+// v7 implementation with UserTag support
+// ============================================================================
+
+__hidden ncclResult_t inspectorPluginStartEvent_v7(void* context,
+                                                   void** eHandle,
+                                                   ncclProfilerEventDescr_v7_t* eDescr) {
+  if (context == nullptr || eDescr == nullptr) {
+    return ncclSuccess;
+  }
+
+  if (eDescr->type == ncclProfileUserTag) {
+    struct inspectorCommInfo *commInfo = (struct inspectorCommInfo *)context;
+    if (eDescr->userTag.tag) {
+      strncpy(commInfo->activeTag, eDescr->userTag.tag, NCCL_TAG_MAX_LEN - 1);
+      commInfo->activeTag[NCCL_TAG_MAX_LEN - 1] = '\0';
+    } else {
+      commInfo->activeTag[0] = '\0';
+    }
+    *eHandle = NULL;
+    return ncclSuccess;
+  }
+
+  // Delegate all other events to the base handler
+  return inspectorPluginStartEvent(context, eHandle, (ncclProfilerEventDescr_t*)eDescr);
+}
+
+__hidden ncclResult_t inspectorPluginRecordEventState_v7(void* eHandle,
+                                                         ncclProfilerEventState_v7_t eState,
+                                                         ncclProfilerEventStateArgs_v7_t* eStateArgs) {
+  return inspectorPluginRecordEventState(eHandle,
+                                          (ncclProfilerEventState_t)eState,
+                                          (ncclProfilerEventStateArgs_t*)eStateArgs);
+}
+
+ncclProfiler_v7_t ncclProfiler_v7 = {
+  "Inspector-v7",
+  inspectorPluginInit,
+  inspectorPluginStartEvent_v7,
+  inspectorPluginStopEvent,
+  inspectorPluginRecordEventState_v7,
   inspectorPluginFinalize,
 };

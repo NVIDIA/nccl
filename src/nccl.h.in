@@ -731,6 +731,17 @@ ncclResult_t pncclGroupEnd();
 ncclResult_t  ncclGroupSimulateEnd(ncclSimInfo_t* simInfo);
 ncclResult_t pncclGroupSimulateEnd(ncclSimInfo_t* simInfo);
 
+/*
+ * User-defined tag annotation for profiler plugins.
+ *
+ * Notifies the profiler plugin of a user-defined tag string.
+ * The tag is delivered to the profiler plugin via a start/stop event pair.
+ * The tag pointer must remain valid for the duration of the call.
+ * Maximum tag length is 32 bytes including null terminator (NCCL_TAG_MAX_LEN).
+ */
+ncclResult_t  ncclNotifyTag(const char* tag, ncclComm_t comm, cudaStream_t stream);
+ncclResult_t pncclNotifyTag(const char* tag, ncclComm_t comm, cudaStream_t stream);
+
 #ifdef __cplusplus
 } // end extern "C"
 #endif

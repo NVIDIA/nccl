@@ -31,6 +31,7 @@ static const int defaultGroupPoolSize = 8;
 static const int defaultCeCollPoolSize = 8;
 static const int defaultCeSyncPoolSize = 8;
 static const int defaultCeBatchPoolSize = 8;
+static const int defaultUserTagPoolSize = 8;
 static const int defaultCollPoolSize = 8;
 static const int defaultP2pPoolSize = 8;
 static const int defaultProxyCtrlPoolSize = 16;
@@ -47,6 +48,7 @@ static int proxyCtrlPoolSize;
 static int ceCollPoolSize;
 static int ceSyncPoolSize;
 static int ceBatchPoolSize;
+static int userTagPoolSize;
 static int detachPoolSize;
 static int detachPoolBase;
 static int detachPoolIndex;
@@ -110,6 +112,9 @@ static void initPoolSizes(void) {
 
   str = getenv("NCCL_PROFILE_PROXY_DETACH_POOL_SIZE");
   detachPoolSize = str ? atoi(str) : defaultDetachPoolSize;
+
+  str = getenv("NCCL_PROFILE_USER_TAG_POOL_SIZE");
+  userTagPoolSize = str ? atoi(str) : defaultUserTagPoolSize;
 }
 
 // Allocate global shared pools
@@ -165,9 +170,16 @@ static ncclResult_t allocateContextPools(struct context* ctx) {
   ctx->ceBatchPoolBase = 0;
   ctx->ceBatchPoolIndex = 0;
 
+  ctx->userTagPool = (struct userTag *)calloc(userTagPoolSize, sizeof(*ctx->userTagPool));
+  if (!ctx->userTagPool) goto fail;
+  ctx->userTagPoolSize = userTagPoolSize;
+  ctx->userTagPoolBase = 0;
+  ctx->userTagPoolIndex = 0;
+
   return ncclSuccess;
 
 fail:
+  if (ctx->userTagPool) free(ctx->userTagPool);
   if (ctx->ceBatchPool) free(ctx->ceBatchPool);
   if (ctx->ceSyncPool) free(ctx->ceSyncPool);
   if (ctx->ceCollPool) free(ctx->ceCollPool);
@@ -299,6 +311,13 @@ static void printAllEvents(FILE* fh, struct context* ctx) {
   }
 
   // CeSync and CeBatch are printed via their CeColl parent
+
+  // Print UserTag events
+  start = (ctx->userTagPoolIndex - ctx->userTagPoolSize >= 0) ? ctx->userTagPoolIndex - ctx->userTagPoolSize : 0;
+  end = ctx->userTagPoolIndex;
+  for (int i = start; i < end; i++) {
+    printEvent(fh, &ctx->userTagPool[i % ctx->userTagPoolSize]);
+  }
 }
 
 // Free all context pools
@@ -314,6 +333,7 @@ static void freeContextPools(struct context* ctx) {
   free(ctx->ceCollPool);
   free(ctx->ceSyncPool);
   free(ctx->ceBatchPool);
+  free(ctx->userTagPool);
 }
 
 // Global cleanup on last thread
@@ -1041,6 +1061,73 @@ ncclProfiler_v6_t ncclProfiler_v6 = {
   exampleProfilerStartEvent_v6,
   exampleProfilerStopEvent_v6,
   exampleProfilerRecordEventState_v6,
+  exampleProfilerFinalize,
+};
+
+// ============================================================================
+// v7 implementation with UserTag support
+// ============================================================================
+
+#include "nccl/profiler_v7.h"
+
+__hidden ncclResult_t exampleProfilerStartEvent_v7(void* context, void** eHandle, ncclProfilerEventDescr_v7_t* eDescr) {
+  struct context* ctx = (struct context*)context;
+
+  if (ctx == NULL) {
+    *eHandle = NULL;
+    return ncclSuccess;
+  }
+
+  if (eDescr->type == ncclProfileUserTag) {
+    struct userTag* event;
+    int tagId = __atomic_fetch_add(&ctx->userTagPoolIndex, 1, __ATOMIC_RELAXED);
+    if ((tagId - __atomic_load_n(&ctx->userTagPoolBase, __ATOMIC_RELAXED)) < ctx->userTagPoolSize) {
+      event = &ctx->userTagPool[tagId % ctx->userTagPoolSize];
+    } else {
+      __atomic_fetch_sub(&ctx->userTagPoolIndex, 1, __ATOMIC_RELAXED);
+      return ncclSuccess;
+    }
+    event->type = ncclProfileUserTag;
+    event->ctx = ctx;
+    event->rank = eDescr->rank;
+    if (eDescr->userTag.tag) {
+      strncpy(event->tag, eDescr->userTag.tag, NCCL_TAG_MAX_LEN - 1);
+      event->tag[NCCL_TAG_MAX_LEN - 1] = '\0';
+    } else {
+      event->tag[0] = '\0';
+    }
+    event->startTs = gettime() - startTime;
+    *eHandle = event;
+    return ncclSuccess;
+  }
+
+  // Delegate all other events to v6
+  return exampleProfilerStartEvent_v6(context, eHandle, (ncclProfilerEventDescr_v6_t*)eDescr);
+}
+
+__hidden ncclResult_t exampleProfilerStopEvent_v7(void* eHandle) {
+  if (!eHandle) return ncclSuccess;
+
+  uint64_t type = *(uint64_t*)eHandle;
+  if (type == ncclProfileUserTag) {
+    struct userTag* event = (struct userTag*)eHandle;
+    event->stopTs = gettime() - startTime;
+    return ncclSuccess;
+  }
+
+  return exampleProfilerStopEvent_v6(eHandle);
+}
+
+__hidden ncclResult_t exampleProfilerRecordEventState_v7(void* eHandle, ncclProfilerEventState_v7_t eState, ncclProfilerEventStateArgs_v7_t* eStateArgs) {
+  return exampleProfilerRecordEventState_v6(eHandle, (ncclProfilerEventState_v6_t)eState, (ncclProfilerEventStateArgs_v6_t*)eStateArgs);
+}
+
+ncclProfiler_v7_t ncclProfiler_v7 = {
+  "Example-profiler-v7",
+  exampleProfilerInit,
+  exampleProfilerStartEvent_v7,
+  exampleProfilerStopEvent_v7,
+  exampleProfilerRecordEventState_v7,
   exampleProfilerFinalize,
 };
 

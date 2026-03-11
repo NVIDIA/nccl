@@ -54,6 +54,7 @@ option(MLX5DV "Enable MLX5DV" OFF)
 option(MAX_EXT_NET_PLUGINS "Maximum external network plugins" 0)
 option(EMIT_LLVM_IR "Generate LLVM IR for device APIs" OFF)
 option(BUILD_NCCL4PY "Enable nccl4py Python bindings targets" OFF)
+option(BUILD_NCCL_EP "Build NCCL EP contrib library" OFF)
 
 # Detect OS
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
@@ -282,6 +283,10 @@ endif()
 
 if(BUILD_NCCL4PY)
   add_subdirectory(bindings/nccl4py)
+endif()
+
+if(BUILD_NCCL_EP)
+  add_subdirectory(contrib/nccl_ep)
 endif()
 
 ###################### CMake package config for find_package(NCCL) ######################

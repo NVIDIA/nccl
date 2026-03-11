@@ -61,6 +61,8 @@ set(NCCL_EP_INCLUDE_DIRS
     ${CUDAToolkit_INCLUDE_DIRS}/cccl
 )
 
+# Allow device code to call host constexpr with --expt-relaxed-constexpr
+# Hides all symbols by default in the host compiled object files with -fvisibility=hidden
 foreach(t IN LISTS NCCL_EP_TARGETS)
     target_compile_options(${t} PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
@@ -75,7 +77,7 @@ file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/include")
 configure_file(include/nccl_ep.h "${CMAKE_BINARY_DIR}/include/nccl_ep.h" COPYONLY)
 
 # Install to custom prefix
-install(FILES 
+install(FILES
     include/nccl_ep.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )

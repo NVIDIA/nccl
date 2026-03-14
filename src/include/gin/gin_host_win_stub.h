@@ -68,18 +68,6 @@ typedef struct ncclGinHostPlugin ncclGin_t;
 typedef struct ncclGin ncclGin_t;
 #endif
 
-typedef enum {
-  NCCL_GIN_TYPE_NONE = 0,
-  NCCL_GIN_TYPE_PROXY = 2,
-  NCCL_GIN_TYPE_GDAKI = 3,
-} ncclGinType_t;
-
-typedef enum {
-  NCCL_GIN_CONNECTION_NONE,
-  NCCL_GIN_CONNECTION_FULL,
-  NCCL_GIN_CONNECTION_RAIL,
-} ncclGinConnectionType_t;
-
 struct ncclGinStateDevComm {
   int contextCount;
   void* ginCtx[NCCL_GIN_MAX_CONNECTIONS];

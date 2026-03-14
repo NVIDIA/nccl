@@ -11,9 +11,6 @@
 #include "coop.h"
 #include "utility.h"
 
-#if defined(NCCL_OS_WINDOWS)
-#include "gin/gin_host_win_stub.h"
-#endif
 struct ncclDevComm;
 typedef struct ncclDevComm ncclDevComm_t;
 
@@ -67,13 +64,11 @@ typedef struct ncclTeamRequirements ncclTeamRequirements_t;
 struct ncclCommProperties;
 typedef struct ncclCommProperties ncclCommProperties_t;
 
-#if defined(NCCL_OS_LINUX)
 typedef enum {
   NCCL_GIN_CONNECTION_NONE,
   NCCL_GIN_CONNECTION_FULL,
   NCCL_GIN_CONNECTION_RAIL,
 } ncclGinConnectionType_t;
-#endif
 
 struct ncclDevCommRequirements {
   /* attributes that users should never touch. */
@@ -150,13 +145,11 @@ struct ncclTeamRequirements {
   NCCL_VERSION_CODE,                             /* version */       \
 }
 
-#if defined(NCCL_OS_LINUX)
 typedef enum {
   NCCL_GIN_TYPE_NONE = 0,
   NCCL_GIN_TYPE_PROXY = 2, // intentially not 1. Must match NCCL_NET_DEVICE_GIN_PROXY for backward compatibility
   NCCL_GIN_TYPE_GDAKI = 3, // intentially not 2. Must match NCCL_NET_DEVICE_GIN_GDAKI for backward compatibility
 } ncclGinType_t;
-#endif
 
 struct ncclCommProperties {
   /* internal use only */

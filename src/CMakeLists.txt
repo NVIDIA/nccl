@@ -137,6 +137,7 @@ endforeach()
 if(NCCL_OS_WINDOWS)
     configure_file(${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_device/gin_win_stub.h ${CMAKE_BINARY_DIR}/include/nccl_device/gin_win_stub.h COPYONLY)
     list(APPEND DEVICE_HEADERS ${CMAKE_BINARY_DIR}/include/nccl_device/gin_win_stub.h)
+    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/include/gin/gin_host_win_stub.h ${CMAKE_BINARY_DIR}/include/gin/gin_host_win_stub.h COPYONLY)
 endif()
 
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_device.h ${CMAKE_BINARY_DIR}/include/nccl_device.h COPYONLY)
@@ -161,12 +162,16 @@ add_dependencies(nccl nccl_header)
 add_dependencies(nccl_device nccl_header)
 
 # Set version and output name
+# On Windows, use nccl.dll/nccl.lib (no "lib" prefix) so the import library matches what linkers expect
+# On Linux, use libnccl.so (PREFIX "lib" for Unix convention)
 set_target_properties(nccl PROPERTIES
     VERSION ${NCCL_MAJOR}.${NCCL_MINOR}.${NCCL_PATCH}
     SOVERSION ${NCCL_MAJOR}
     OUTPUT_NAME "nccl"
-    PREFIX "lib"
 )
+if(NCCL_OS_LINUX)
+    set_target_properties(nccl PROPERTIES PREFIX "lib")
+endif()
 
 #
 # Generate nccl_git_version.h
@@ -216,6 +221,11 @@ target_link_options(nccl PRIVATE
 set_target_properties(nccl PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
 )
+
+# On Windows, export all symbols to generate import library (nccl.lib) for DLL linking
+if(NCCL_OS_WINDOWS)
+    set_target_properties(nccl PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+endif()
 
 ###################### Create a ras binary executable ############################
 if(NOT NCCL_OS_WINDOWS)

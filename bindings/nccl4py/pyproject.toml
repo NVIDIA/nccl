@@ -66,7 +66,7 @@ issues = "https://github.com/NVIDIA/nccl/issues"
 [build-system]
 requires = [
     "setuptools>=77.0.3",
-    "Cython>=0.29.24"
+    "Cython>=3.1"
 ]
 build-backend = "setuptools.build_meta"
 
@@ -97,7 +97,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 
 [tool.cibuildwheel]
-build = "cp310-* cp311-* cp312-* cp313-* cp314-*"
+build = "cp310-* cp311-* cp312-* cp313-* cp314-* cp314t-*"
 skip = "*-musllinux_*"
 build-verbosity = 1
 

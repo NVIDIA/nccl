@@ -87,7 +87,7 @@ def calculate_modules(module: str):
 ext_modules = [e for ext in ext_modules for e in calculate_modules(ext)]
 
 
-compiler_directives = {"embedsignature": True, "show_performance_hints": True}
+compiler_directives = {"embedsignature": True, "show_performance_hints": True, "freethreading_compatible": True}
 
 
 setup(

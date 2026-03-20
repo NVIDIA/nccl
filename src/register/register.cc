@@ -27,13 +27,35 @@ ncclResult_t ncclRegLocalIsValid(struct ncclReg *reg, bool *isValid) {
 
 ncclResult_t ncclRegister(struct ncclComm* comm, void* data, size_t size, bool isGraph, void** handle) {
   NCCLCHECK(CommCheck(comm, "ncclCommRegister", "comm"));
+
   struct ncclRegCache* cache = &comm->regCache;
   uintptr_t pageSize = cache->pageSize;
   uintptr_t begAddr = (uintptr_t)data & -pageSize;
   uintptr_t endAddr = ((uintptr_t)data + size + pageSize-1) & -pageSize;
 
   if (comm->checkMode != ncclCheckModeDefault) NCCLCHECK(CudaPtrCheck(data, comm, "buff", "ncclCommRegister"));
-  INFO(NCCL_REG, "register comm %p buffer %p size %zi", comm, data, size);
+
+  bool hasSysmemSegment = false;
+  if (ncclCuMemEnable()) {
+      CUdeviceptr base;
+      size_t baseSize;
+      int numSegments;
+      int legacyIpcCap;
+      // Checks for a Sysmem segment is only valid with cuMem based allocators, so a IS_LEGACY_CUDA_IPC check is required to ensure
+      // that we're calling ncclCuMemGetAddressRange only when necessary.
+      CUCHECK(cuMemGetAddressRange(&base, &baseSize, (CUdeviceptr) data));
+      CUCHECK(cuPointerGetAttribute((void*)&legacyIpcCap, CU_POINTER_ATTRIBUTE_IS_LEGACY_CUDA_IPC_CAPABLE, (CUdeviceptr) base));
+      if (!legacyIpcCap) {
+        NCCLCHECK(ncclCuMemGetAddressRange((CUdeviceptr) data, size, (CUdeviceptr *)&base, &baseSize, &numSegments, &hasSysmemSegment));
+      }
+  }
+  if (hasSysmemSegment) {
+    INFO(NCCL_REG, "Skipping registration for buffer %p size %zi since it contains segments backed by CPU memory",
+        data, size);
+    return ncclSuccess;
+  } else {
+    INFO(NCCL_REG, "register comm %p buffer %p size %zi", comm, data, size);
+  }
 
   for (int slot=0; /*true*/; slot++) {
     if ((slot == cache->population) || (begAddr < cache->slots[slot]->begAddr)) {

@@ -27,7 +27,7 @@
 
 NCCL_PARAM(WinStride, "WIN_STRIDE", -1);
 NCCL_PARAM(EnableVersionCheck, "ENABLE_VERSION_CHECK", 1);
-NCCL_PARAM(ElasticBufferRegister, "ELASTIC_BUFFER_REGISTER", 0);
+NCCL_PARAM(ElasticBufferRegister, "ELASTIC_BUFFER_REGISTER", 1);
 
 // Global window map using intrusive address map
 // Uses ncclDevrWindow directly (vidmem as key, next pointer embedded in struct)
@@ -1358,6 +1358,14 @@ ncclResult_t ncclDevrFindWindow(
     *outWin = nullptr;
   }
   return ncclSuccess;
+}
+
+bool ncclDevrWindowIsMultiSegment(struct ncclDevrWindow* win) {
+  return win != NULL && win->memory->maxGlobalNumSegments > 1;
+}
+
+bool ncclDevrWindowHasSysmemSegment(struct ncclDevrWindow* win) {
+  return win != NULL && win->memory->hasSysmemSegment;
 }
 
 // Returns ncclInvalidUsage if the compiled version is greater than the runtime version and NCCL_ENABLE_VERSION_CHECK=0 is not set

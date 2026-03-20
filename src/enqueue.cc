@@ -2752,6 +2752,18 @@ static ncclResult_t rmaTaskAppend(
       return ncclInvalidArgument;
     }
     srcWinOffset = (char*)srcBuff - (char*)srcWinHost->userPtr;
+
+    bool isMultiSegment = ncclDevrWindowIsMultiSegment(srcWinHost) || ncclDevrWindowIsMultiSegment(peerWinHost);
+    bool hasSysmemSegment = ncclDevrWindowHasSysmemSegment(srcWinHost) || ncclDevrWindowHasSysmemSegment(peerWinHost);
+
+    if (isMultiSegment) {
+      WARN("ncclPutSignal currently does not support VAs backed by multiple physical cuMem segments");
+      return ncclInvalidArgument;
+    }
+    if (hasSysmemSegment) {
+      WARN("ncclPutSignal currently does not support VAs with host-backed cuMem segments");
+      return ncclInvalidArgument;
+    }
   }
   else if (info->coll == ncclFuncSignal) {
     // Check if count is valid
@@ -2926,7 +2938,10 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info) {
       ncclSymRegType_t winRegType;
       NCCLCHECK(ncclGetSymRegType(sendWin, recvWin, &winRegType));
       bool ceAvailable = ncclCeAvailable(comm, info->coll, info->op, info->datatype, winRegType);
-      if ((comm->config.CTAPolicy & NCCL_CTA_POLICY_ZERO) && ceAvailable) {
+      bool isMultiSegment = ncclDevrWindowIsMultiSegment(sendWin) || ncclDevrWindowIsMultiSegment(recvWin);
+      bool hasSysmemSegment = ncclDevrWindowHasSysmemSegment(sendWin) || ncclDevrWindowHasSysmemSegment(recvWin);
+
+      if ((comm->config.CTAPolicy & NCCL_CTA_POLICY_ZERO) && ceAvailable && !hasSysmemSegment && !isMultiSegment) {
         NCCLCHECK(ceCollTaskAppend(comm, info, sendWin, recvWin, opDev));
       }
       // Append kernel-based collective

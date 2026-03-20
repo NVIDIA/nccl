@@ -164,6 +164,14 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
         }
       }
 
+      // Override needFallback when buffers are registered but VAs are backed by multiple cuMem segments, or if VAs contain sysmem segments.
+      // The below functions return false when the window is NULL, so this covers non-reg cases as well.
+      if (!needFallback) {
+        bool isMultiSegment = ncclDevrWindowIsMultiSegment(headTask->sendWin) || ncclDevrWindowIsMultiSegment(headTask->recvWin);
+        bool hasSysmemSegment = ncclDevrWindowHasSysmemSegment(headTask->sendWin) || ncclDevrWindowHasSysmemSegment(headTask->recvWin);
+        needFallback = isMultiSegment || hasSysmemSegment;
+      }
+
       if (kernelId == ncclSymkKernelId_Count || needFallback) {
         // cannot find appropriate symmetric kernel for the tasks
         // fallback to legacy kernels

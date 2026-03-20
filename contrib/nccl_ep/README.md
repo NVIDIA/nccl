@@ -120,11 +120,14 @@ This section provides a high-level overview of the input, output, and local tens
 
 #### LL mode (same data type)
 
-| Operation | Tensor Index | Input tag | Input dims  | Output tag | Output dims | Local tags | Local dims |
-|:---------:|:------------:|:---------:|:-----------:|:----------:|:-----------:|:----------:|:----------:|
-| Dispatch  | 0            | TOKEN     | [B x H]     | TOKENS     | [L x B x H] | CNTR_D     | [L]        |
-| Combine   | 0            | TOKEN     | [L x B x H] | TOKENS     | [B x H]     |            |            |
-|           | 1            | WEIGHTS   | [B x K]     |            |             |            |            |
+| Operation | Tensor | Tag     | Dims         |
+|:---------:|:------:|:-------:|:------------:|
+| Dispatch  | Input  | TOKENS  | [B x H]      |
+|           | Output | TOKENS  | [L x B x H]  |
+|           | Local  | CNTR_D  | [L]          |
+| Combine   | Input  | TOKENS  | [L x B x H]  |
+|           | Output | TOKENS  | [B x H]      |
+|           | Local  | WEIGHTS | [B x K]      |
 
 
 #### HT mode (same data type)
@@ -138,45 +141,71 @@ This section provides a high-level overview of the input, output, and local tens
 
 **Forward pass**
 
-| Operation | Tensor Index | Input tag | Input dims  | Output tag | Output dims | Local tags | Local dims |
-|:---------:|:------------:|:---------:|:-----------:|:----------:|:-----------:|:----------:|:----------:|
-| Dispatch  | 0            | TOKEN     | [B x H]     | TOKENS     | [N(r) x H]  |            |            |
-|           | 1            | WEIGHTS   | [B x K]     | WEIGHTS    | [N(r) x K]  |            |            |
-|           | 2            | INDEX     | [B x K]     | INDEX      | [N(r) x K]  |            |            |
-| Combine   | 0            | TOKEN     | [[N(r) x H] | TOKENS     | [B x H]     |            |            |
-|           | 1            | WEIGHTS   | [N(r) x H]  |            |             |            |            |
+| Operation | Tensor | Tag     | Dims         |
+|:---------:|:------:|:-------:|:------------:|
+| Dispatch  | Input  | TOKENS  | [B x H]      |
+|           | Input  | WEIGHTS | [B x K]      |
+|           | Input  | INDEX   | [B x K]      |
+|           | Output | TOKENS  | [N(r) x H]   |
+|           | Output | WEIGHTS | [N(r) x K]   |
+|           | Output | INDEX   | [N(r) x K]   |
+| Combine   | Input  | TOKENS  | [N(r) x H]   |
+|           | Output | TOKENS  | [B x H]      |
 
 **Backward pass**
 
-| Operation | Tensor Index | Input tag | Input dims  | Output tag | Output dims | Local tags | Local dims |
-|:---------:|:------------:|:---------:|:-----------:|:----------:|:-----------:|:----------:|:----------:|
-| Dispatch  | 0            | TOKEN     | [B x H]     | TOKENS     | [N(r) x H]  |            |            |
-|           | 1            | WEIGHTS   | [B x K]     | WEIGHTS    | [N(r) x K]  |            |            |
-|           | 2            | INDEX     | [B x K]     | INDEX      | [N(r) x K]  |            |            |
-| Combine   | 0            | TOKEN     | [[N(r) x H] | TOKENS     | [B x H]     |            |            |
-|           | 1            | WEIGHTS   | [N(r) x H]  | **WEIGHTS**| [B x K]     |            |            |
+Compared to the Forward pass, the Backward pass requires `WEIGHTS` tensors to be passed as input and output for Combine operation
+
+| Operation | Tensor | Tag         | Dims         |
+|:---------:|:------:|:-----------:|:------------:|
+| Dispatch  | Input  | TOKEN       | [B x H]      |
+|           | Input  | WEIGHTS     | [B x K]      |
+|           | Input  | INDEX       | [B x K]      |
+|           | Output | TOKEN       | [N(r) x H]   |
+|           | Output | WEIGHTS     | [N(r) x K]   |
+|           | Output | INDEX       | [N(r) x K]   |
+| Combine   | Input  | TOKENS      | [N(r) x H]   |
+|           | Input  | **WEIGHTS** | [N(r) x K]   |
+|           | Output | TOKENS      | [B x H]      |
+|           | Output | **WEIGHTS** | [B x K]      |
 
 #### LL mode (FP16 -> FP8 conversion - NOT SUPPORTED)
 
-| Operation | Tensor Index | Input tag | Input dims  | Output tag | Output dims | Local tags | Local dims |
-|:---------:|:------------:|:---------:|:-----------:|:----------:|:-----------:|:----------:|:----------:|
-| Dispatch  | 0            | TOKEN     | [B x H]     | TOKENS     | [L x B x H] | CNTR_D     | [L]        |
-|           | 1            |           |             | **SCALES** | [L x B x S] |            |            |
-| Combine   | 0            | TOKEN     | [L x B x H] | TOKENS     | [B x H]     |            |            |
-|           | 1            | WEIGHTS   | [B x K]     |            |             |            |            |
+In the token data type conversion scenario,
+in LL mode, the Dispatch operation will perform precision reduction and 
+return lower-precision tokens via `TOKENS` tensor.
+In addition, the `SCALES` output tensor must be provided to return the scaling information.
+
+| Operation | Tensor | Tag        | Dims         |
+|:---------:|:------:|:----------:|:------------:|
+| Dispatch  | Input  | TOKENS     | [B x H]      |
+|           | Output | TOKENS     | [L x B x H]  |
+|           | Output | **SCALES** | [L x B x S]  |
+|           | Local  | CNTR_D     | [L]          |
+| Combine   | Input  | TOKENS     | [L x B x H]  |
+|           | Output | TOKENS     | [B x H]      |
+|           | Local  | WEIGHTS    | [B x K]      |
 
 #### HT mode (FP16 -> FP8 conversion - NOT SUPPORTED)
 
 **Forward pass**
 
-| Operation | Tensor Index | Input tag | Input dims  | Output tag | Output dims | Local tags | Local dims |
-|:---------:|:------------:|:---------:|:-----------:|:----------:|:-----------:|:----------:|:----------:|
-| Dispatch  | 0            | TOKEN     | [B x H]     | TOKENS     | [N(r) x H]  |            |            |
-|           | 1            | WEIGHTS   | [B x K]     | WEIGHTS    | [N(r) x K]  |            |            |
-|           | 2            | INDEX     | [B x K]     | INDEX      | [N(r) x K]  |            |            |
-|           | 3            | **SCALES**| [B x S]     | **SCALES** | [N(r) x S]  |            |            |
-| Combine   | 0            | TOKEN     | [[N(r) x H] | TOKENS     | [B x H]     |            |            |
-|           | 1            | WEIGHTS   | [N(r) x H]  |            |             |            |            |
+In the HT case, `SCALES` tensors are expected to be calculated by the user and passed as an input `SCALES` for the Dispatch operation.
+NCCL EP will communicate along with the token data and will return via the output `SCALES` tensor.
+
+| Operation | Tensor | Tag        | Dims         |
+|:---------:|:------:|:----------:|:------------:|
+| Dispatch  | Input  | TOKENS     | [B x H]      |
+|           | Input  | WEIGHTS    | [B x K]      |
+|           | Input  | INDEX      | [B x K]      |
+|           | Input  | **SCALES** | [B x S]      |
+|           | Output | TOKENS     | [N(r) x H]   |
+|           | Output | WEIGHTS    | [N(r) x K]   |
+|           | Output | INDEX      | [N(r) x K]   |
+|           | Output | **SCALES** | [N(r) x S]   |
+| Combine   | Input  | TOKENS     | [N(r) x H]   |
+|           | Input  | WEIGHTS    | [N(r) x K]   |
+|           | Output | TOKENS     | [B x H]      |
 
 # Usage
 

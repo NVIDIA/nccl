@@ -631,6 +631,10 @@ ncclResult_t ncclShmImportShareableBuffer(struct ncclComm *comm, int proxyRank, 
     if (dptr) *dptr = (void *)hostptr;
     INFO(NCCL_SHM, "CUMEM imported shareable host buffer from proxyRank %d size %zi ptr %p, granularity %ld", proxyRank, desc->shmci.size, descOut->shmci.ptr, granularity);
   } else {
+    if (! desc->legacy) {
+      WARN("Invalid SHM - received CUMEM while expecting MMAP. This can happen with memoryless NUMA domains. Set NCCL_CUMEM_HOST_ENABLE=0.");
+      return ncclInternalError;
+    }
     char shmPath[SHM_PATH_MAX];
     snprintf(shmPath, sizeof(shmPath), "/dev/shm/nccl-%s", desc->shmli.shmSuffix);
     NCCLCHECK(ncclShmOpen(shmPath, sizeof(shmPath), desc->shmli.shmSize, hptr, dptr, -1, &descOut->shmli.handle));

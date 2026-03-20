@@ -48,7 +48,9 @@ COMMON_CLANG_FLAGS := -std=$(BITCODE_CXX_STD) -x cuda \
                		  --cuda-gpu-arch=$(BITCODE_LIB_ARCH) \
                		  $(NCCL_INCLUDES) $(CUDA_INCLUDES) \
                		  -D__clang_llvm_bitcode_lib__ \
-               		  -DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR)
+               		  -DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR) \
+               		  -D_NV_RSQRT_SPECIFIER=
+
 CLANG_FLAGS := -c -emit-llvm -O1 $(COMMON_CLANG_FLAGS)
 
 # Optimization passes

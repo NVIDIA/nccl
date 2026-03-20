@@ -213,12 +213,16 @@ struct ncclSymkAccumType { using Type = T; };
 // accumulator type. At the moment this excludes integer min/max, sumpostdiv,
 // and premulsum.
 template<> struct ncclSymkAccumType<FuncSum, __half, false> { using Type = float; };
+template<> struct ncclSymkAccumType<FuncSumPostDiv, __half, false> { using Type = float; };
 #if defined(__CUDA_BF16_TYPES_EXIST__)
 template<> struct ncclSymkAccumType<FuncSum, __nv_bfloat16, false> { using Type = float; };
+template<> struct ncclSymkAccumType<FuncSumPostDiv, __nv_bfloat16, false> { using Type = float; };
 #endif
 #if defined(__CUDA_FP8_TYPES_EXIST__)
 template<> struct ncclSymkAccumType<FuncSum, __nv_fp8_e4m3, false> { using Type = float; };
 template<> struct ncclSymkAccumType<FuncSum, __nv_fp8_e5m2, false> { using Type = float; };
+template<> struct ncclSymkAccumType<FuncSumPostDiv, __nv_fp8_e4m3, false> { using Type = __half; };
+template<> struct ncclSymkAccumType<FuncSumPostDiv, __nv_fp8_e5m2, false> { using Type = __half; };
 #endif
 
 // Accumulator type held in smem for GIN algos.

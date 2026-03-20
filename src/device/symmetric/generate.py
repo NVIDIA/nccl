@@ -105,8 +105,6 @@ def enumerate_kernels():
           continue
         yield Rec(coll="AllReduce", algo=algo, red=red, ty=ty)
       for algo in ["LL","LD","LDMC","RailA2A_LsaLD","RailA2A_LsaLDMC"]:
-        if red == "avg" and algo not in gin_algos:
-          continue
         yield Rec(coll="ReduceScatter", algo=algo, red=red, ty=ty)
 
 def required_cuda(k):

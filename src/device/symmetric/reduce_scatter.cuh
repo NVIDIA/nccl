@@ -152,6 +152,11 @@ static __device__ void reduceDeep(
 
       #pragma unroll
       for (int u=0; u < UnrollPacks; u++) {
+        acc1[u] = applyPostOp(red, acc1[u]);
+      }
+
+      #pragma unroll
+      for (int u=0; u < UnrollPacks; u++) {
         if NCCL_IF_CONSTEXPR (EnableTma) {
           tmaSmem->buff[0][lane+WARP_SIZE*u] = applyCast<Acc, T>(acc1[u]);
         } else {
@@ -249,6 +254,7 @@ static __device__ void reduceEnds(
       }
     }
 
+    acc1 = applyPostOp(red, acc1);
     acc0 = applyCast<Acc, T>(acc1);
     outPacks.localPtr()[elt] = acc0;
   }
@@ -385,7 +391,7 @@ static __device__ void reduceMultimem(
       BytePack<BytePerPack> tmp[UnrollPacks];
       #pragma unroll
       for (int u=0; u < UnrollPacks; u++) {
-        tmp[u] = applyLoadMultimem<Red, BytePerPack>(red, inputUptr + cursor + u*WARP_SIZE*BytePerPack);
+        tmp[u] = applyPostOp(red, applyLoadMultimem<Red, BytePerPack>(red, inputUptr + cursor + u*WARP_SIZE*BytePerPack));
       }
       #pragma unroll
       for (int u=0; u < UnrollPacks; u++) {
@@ -403,7 +409,7 @@ static __device__ void reduceMultimem(
   #pragma unroll 4
   for (uintptr_t i = t*sizeof(T); i < nPreBytes + nSufBytes; i += tn*sizeof(T)) {
     uintptr_t cursor = i < nPreBytes ? i : nBytes-nSufBytes+(i-nPreBytes);
-    BytePack<sizeof(T)> val = applyLoadMultimem<Red, sizeof(T)>(red, inputUptr + cursor);
+    BytePack<sizeof(T)> val = applyPostOp(red, applyLoadMultimem<Red, sizeof(T)>(red, inputUptr + cursor));
     *reinterpret_cast<BytePack<sizeof(T)>*>(outputUptr + cursor) = val;
   }
 }
@@ -480,6 +486,7 @@ __device__ __forceinline__ void ncclSymkRun_ReduceScatter_LL_body(
           return applyReduce(red, a, b);
         }
       );
+      got = applyPostOp(red, got);
       storePack(output, t*EltPerPack, nElts, applyCast<Acc, T>(got));
     }
     lla2a.endEpoch(cta);

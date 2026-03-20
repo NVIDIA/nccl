@@ -965,6 +965,48 @@ struct Apply_PostOp<FuncSumPostDiv<half>, /*EltPerPack=*/1> {
   };
 #endif
 
+#if defined(__CUDA_FP8_TYPES_EXIST__)
+#if __CUDA_ARCH__ >= 900
+  template<>
+  struct Apply_PostOp<FuncSumPostDiv<__nv_fp8_e4m3>, /*EltPerPack=*/1> {
+    static constexpr bool IsIdentity = false;
+    __device__ __forceinline__ static BytePack<sizeof(__nv_fp8_e4m3)> postOp(
+        FuncSumPostDiv<__nv_fp8_e4m3> fn, BytePack<sizeof(__nv_fp8_e4m3)> a
+      ) {
+      return toPack<__nv_fp8_e4m3>(__nv_fp8_e4m3(__hmul(__half(fromPack<__nv_fp8_e4m3>(a)), fn.scalar2.x)));
+    }
+  };
+  template<>
+  struct Apply_PostOp<FuncSumPostDiv<__nv_fp8_e4m3>, /*EltPerPack=*/2> {
+    static constexpr bool IsIdentity = false;
+    __device__ __forceinline__ static BytePack<sizeof(__nv_fp8x2_e4m3)> postOp(
+        FuncSumPostDiv<__nv_fp8_e4m3> fn, BytePack<sizeof(__nv_fp8x2_e4m3)> a
+      ) {
+      return toPack<__nv_fp8x2_e4m3>(__nv_fp8x2_e4m3(__hmul2(__half2(fromPack<__nv_fp8x2_e4m3>(a)), fn.scalar2)));
+    }
+  };
+
+  template<>
+  struct Apply_PostOp<FuncSumPostDiv<__nv_fp8_e5m2>, /*EltPerPack=*/1> {
+    static constexpr bool IsIdentity = false;
+    __device__ __forceinline__ static BytePack<sizeof(__nv_fp8_e5m2)> postOp(
+        FuncSumPostDiv<__nv_fp8_e5m2> fn, BytePack<sizeof(__nv_fp8_e5m2)> a
+      ) {
+      return toPack<__nv_fp8_e5m2>(__nv_fp8_e5m2(__hmul(__half(fromPack<__nv_fp8_e5m2>(a)), fn.scalar2.x)));
+    }
+  };
+  template<>
+  struct Apply_PostOp<FuncSumPostDiv<__nv_fp8_e5m2>, /*EltPerPack=*/2> {
+    static constexpr bool IsIdentity = false;
+    __device__ __forceinline__ static BytePack<sizeof(__nv_fp8x2_e5m2)> postOp(
+        FuncSumPostDiv<__nv_fp8_e5m2> fn, BytePack<sizeof(__nv_fp8x2_e5m2)> a
+      ) {
+      return toPack<__nv_fp8x2_e5m2>(__nv_fp8x2_e5m2(__hmul2(__half2(fromPack<__nv_fp8x2_e5m2>(a)), fn.scalar2)));
+    }
+  };
+#endif
+#endif
+
 template<typename T>
 struct Apply_PostOp<FuncSumPostDiv<T>, /*EltPerPack=*/1> {
   static constexpr bool IsIdentity = false;

@@ -30,6 +30,10 @@ ncclDevRedOp_t symkRedOp(ncclRedOp_t redOp, ncclDevRedOp_t devRedOp) {
 void convertCollTaskToSymmetricTask(struct ncclComm* comm,struct ncclTaskColl* task) {
   task->opDev.op = symkRedOp(task->opHost, task->opDev.op);
   if (task->opDev.op == ncclDevSumPostDiv) {
+    // LDMC uses the same accumulator type as data type. Do not re-pack the scalar.
+    if (task->devFuncId == (uint32_t)ncclSymkKernelId_ReduceScatter_LDMC) {
+      return;
+    }
     union {
       __half f16; float f32; uint64_t u64;
       void *ptr;
@@ -45,12 +49,11 @@ void convertCollTaskToSymmetricTask(struct ncclComm* comm,struct ncclTaskColl* t
         task->opDev.scalarArg = u64;
         return;
 #if defined(__CUDA_FP8_TYPES_EXIST__)
-        // fp8 types accumulate in half
       case ncclFloat8e4m3:
       case ncclFloat8e5m2:
-        f16 = __float2half(float(1.0/comm->nRanks));  // ncclDevSumPostDiv actually multiplies by the scalar, not divides.
+        f16 = __float2half(float(1.0/comm->nRanks));
         task->opDev.scalarArg = u64;
-        break;
+        return;
 #endif
       default:
         break;
@@ -349,5 +352,5 @@ exit:
 fail:
   goto exit;
 }
-
 #endif // NCCL_SYMMETRIC_SCHED_H_
+

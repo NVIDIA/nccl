@@ -492,7 +492,7 @@ ncclResult_t ncclSymkFinalize(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
-static bool ncclSymkImplemented(ncclFunc_t coll, int/*ncclDevRedOp_t*/ red, ncclDataType_t ty, bool needGin) {
+static bool ncclSymkImplemented(ncclFunc_t coll, int/*ncclDevRedOp_t*/ red, ncclDataType_t ty) {
   bool isFloat;
   switch (ty) {
   case ncclFloat64:
@@ -513,10 +513,8 @@ static bool ncclSymkImplemented(ncclFunc_t coll, int/*ncclDevRedOp_t*/ red, nccl
     return true;
   case ncclFuncAllReduce:
   case ncclFuncReduceScatter:
-    if (red == ncclDevSum) {
+    if (red == ncclDevSum || red == ncclDevSumPostDiv) {
       return isFloat && ty != ncclFloat64;
-    } else if (red == ncclDevSumPostDiv) {
-      return isFloat && ty != ncclFloat64 && needGin; // avg not supported on non-GIN kernels
     }
   default:
     return false;
@@ -571,10 +569,9 @@ static uint32_t ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int/*ncclDe
 
 bool ncclSymkAvailable(struct ncclComm* comm, ncclFunc_t coll, int/*ncclDevRedOp_t*/ red,
                        ncclDataType_t ty, size_t nElts) {
-  bool needGin = ncclTeamLsa(comm).nRanks < comm->nRanks;
   if (!comm->isAllDirectNvlink)
     return false;
-  if (!ncclSymkImplemented(coll, red, ty, needGin))
+  if (!ncclSymkImplemented(coll, red, ty))
     return false;
 
   return (ncclSymkMask(comm, coll, red, ty, nElts) != 0);

@@ -385,6 +385,7 @@ static doca_error_t create_qp(
     size_t dbr_umem_align_sz = align_up_uint32(DBR_SIZE, priv_get_page_size());
     struct ibv_context *ibctx = ibpd->context;
     enum doca_gpu_dev_verbs_nic_handler nic_handler = req_nic_handler;
+    enum doca_gpu_verbs_mem_reg_type dbr_mreg_type;
 
     status = doca_verbs_qp_init_attr_create(&verbs_qp_init_attr);
     if (status != DOCA_SUCCESS) {
@@ -453,8 +454,14 @@ static doca_error_t create_qp(
         }
     }
 
-    status = create_gpu_umem(gpu_dev, ibpd, mreg_type, dbr_umem_align_sz, *gpu_umem_dbr_dev_ptr,
-                             gpu_umem_dbr);
+    /* DBR is host-allocated in CPU Proxy path; use PEERMEM for host memory (DMABUF is for GPU mem). */
+    dbr_mreg_type =
+        ((nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY) ||
+         (send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED))
+            ? DOCA_GPUNETIO_VERBS_MEM_REG_TYPE_CUDA_PEERMEM
+            : mreg_type;
+    status = create_gpu_umem(gpu_dev, ibpd, dbr_mreg_type, dbr_umem_align_sz,
+                             *gpu_umem_dbr_dev_ptr, gpu_umem_dbr);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "create_gpu_umem failed with %d", status);
         goto destroy_resources;

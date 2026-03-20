@@ -10,7 +10,8 @@
 
 #include <linux/types.h>
 
-#define NCCL_GIN_GDAKI_VERSION 100
+// Compat with doca-gpunetio device code v2.0.0.
+#define NCCL_GIN_GDAKI_VERSION 200
 
 template <typename T>
 struct ncclGinGdakiGlobalGPUBufferTable {

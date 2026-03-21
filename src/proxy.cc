@@ -1014,7 +1014,6 @@ ncclResult_t ncclProxyStart(struct ncclComm* comm) {
     ops->nextOps = ops->nextOpsEnd = -1;
     ops->count = 0;
   }
-  comm->opCount++;
   TIME_STOP(1);
   return ncclSuccess;
 }

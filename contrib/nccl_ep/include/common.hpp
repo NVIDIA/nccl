@@ -20,6 +20,7 @@
 #define NUM_MAX_LOCAL_EXPERTS 1024
 #define NUM_BUFFER_ALIGNMENT_BYTES 128
 #define MAX_HIDDEN_DIM 16384
+#define MAX_NUM_TOPK 32
 #define MAX_NCCL_GIN_CTX_PER_COMM 4
 #define FINISHED_SUM_TAG 1024
 #define NUM_WAIT_NANOSECONDS 500
@@ -81,6 +82,31 @@ namespace nccl_ep {
 
 // Internode low-latency kernels
 namespace internode_ll {
+
+
+// Helper function for alignment (host/device compatible)
+template <typename dtype_t>
+__host__ __device__ constexpr dtype_t align(dtype_t a, dtype_t b) {
+    return ((a + b - 1) / b) * b;
+}
+
+// Dispatch message header structures (optimized path)
+struct DispatchRouter {
+    uint16_t expert_id;
+};
+
+struct DispatchHdr {
+    int token_id;
+    DispatchRouter rtr[];  // Flexible array member
+};
+
+// Calculate dispatch header size aligned to int4 boundary (16 bytes) for compatibility
+__host__ __device__ __forceinline__
+size_t get_dispatch_hdr_sz(int num_topk) {
+    const size_t base_sz = sizeof(DispatchHdr) + num_topk * sizeof(DispatchRouter);
+    // Align to int4 (16 bytes) to maintain compatibility with existing vectorized operations
+    return align<size_t>(base_sz, sizeof(int4));
+}
 
 void clean_low_latency_buffer(int* clean_0, int num_clean_int_0,
                               int* clean_1, int num_clean_int_1,
@@ -196,7 +222,7 @@ struct LowLatencyLayout {
         return reinterpret_cast<out_ptr_t>(reinterpret_cast<count_ptr_t>(ptr) + count);
     }
 
-    LowLatencyLayout(void* rdma_buffer, int num_max_dispatch_tokens_per_rank, int hidden, int num_ranks, int num_experts) {
+    LowLatencyLayout(void* rdma_buffer, int num_max_dispatch_tokens_per_rank, int hidden, int num_ranks, int num_experts, int num_topk) {
         const int num_scales = hidden / 128;
 
         // Dispatch and combine layout:
@@ -208,7 +234,10 @@ struct LowLatencyLayout {
         // NOTES: you should add a control `int4` for combine messages if you want to do data transformation
         // NOTES: `num_scales * sizeof(nv_bfloat162)` means the per-128-channel min/max
         EP_HOST_ASSERT(num_scales * sizeof(float) <= hidden);
-        size_t num_bytes_per_dispatch_msg = sizeof(int4) + std::max(hidden * sizeof(nv_bfloat16), hidden + num_scales * sizeof(float));
+
+        size_t disp_hdr_sz = internode_ll::get_dispatch_hdr_sz(num_topk);
+        size_t num_bytes_per_dispatch_msg = disp_hdr_sz + std::max(hidden * sizeof(nv_bfloat16),
+                                                                          hidden + num_scales * sizeof(float));
         size_t num_bytes_per_combine_msg = num_scales * sizeof(nv_bfloat162) + hidden * sizeof(nv_bfloat16);
 
         // Send buffer
@@ -219,8 +248,8 @@ struct LowLatencyLayout {
         total_bytes += send_buffer_bytes * 2;
 
         // Symmetric receive buffers
-        size_t dispatch_recv_data_buffer_bytes = num_experts * num_max_dispatch_tokens_per_rank * num_bytes_per_dispatch_msg;
-        size_t combine_recv_buffer_bytes = num_experts * num_max_dispatch_tokens_per_rank * num_bytes_per_combine_msg;
+        size_t dispatch_recv_data_buffer_bytes = num_ranks * num_max_dispatch_tokens_per_rank * num_bytes_per_dispatch_msg;
+        size_t combine_recv_buffer_bytes = num_max_dispatch_tokens_per_rank * num_bytes_per_combine_msg * num_topk;
         size_t recv_buffer_bytes = std::max(dispatch_recv_data_buffer_bytes, combine_recv_buffer_bytes);
         EP_HOST_ASSERT(recv_buffer_bytes % sizeof(int4) == 0);
         total_bytes += recv_buffer_bytes * 2;
@@ -251,7 +280,7 @@ struct LowLatencyLayout {
 };
 
 inline unsigned long int get_low_latency_rdma_size_hint(int num_max_dispatch_tokens_per_rank, int hidden, int num_ranks, int num_experts) {
-    auto num_bytes = LowLatencyLayout(nullptr, num_max_dispatch_tokens_per_rank, hidden, num_ranks, num_experts).total_bytes;
+    auto num_bytes = LowLatencyLayout(nullptr, num_max_dispatch_tokens_per_rank, hidden, num_ranks, num_experts, MAX_NUM_TOPK).total_bytes;
     return ((num_bytes + NUM_BUFFER_ALIGNMENT_BYTES) / NUM_BUFFER_ALIGNMENT_BYTES) * NUM_BUFFER_ALIGNMENT_BYTES;
 }
 

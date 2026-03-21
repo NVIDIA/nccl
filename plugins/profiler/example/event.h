@@ -302,6 +302,15 @@ struct ceBatch {
   struct ceBatch* pollerNext;  // For poller tracking list
 };
 
+struct userTag {
+  uint64_t type;
+  struct context* ctx;
+  int rank;
+  char tag[NCCL_TAG_MAX_LEN];
+  double startTs;
+  double stopTs;
+};
+
 struct groupApi {
   uint64_t type;
   struct context* ctx;
@@ -392,6 +401,11 @@ struct context {
   int ceBatchPoolBase;
   int ceBatchPoolIndex;
   struct ceBatch* ceBatchPool;
+
+  int userTagPoolSize;
+  int userTagPoolBase;
+  int userTagPoolIndex;
+  struct userTag* userTagPool;
 };
 
 template <typename T>

@@ -125,4 +125,7 @@ ncclResult_t ncclProfilerStopCeSyncEvent(struct ncclComm* comm, void* ceSyncHand
 ncclResult_t ncclProfilerStartCeBatchEvent(struct ncclComm* comm, struct ncclCeCollArgs* args, struct ncclCeBatchOpsParams* params, cudaStream_t stream, void** ceBatchHandle);
 ncclResult_t ncclProfilerStopCeBatchEvent(struct ncclComm* comm, void* ceBatchHandle, cudaStream_t stream);
 
+// UserTag event
+ncclResult_t ncclProfilerUserTagEvent(struct ncclComm* comm, const char* tag);
+
 #endif

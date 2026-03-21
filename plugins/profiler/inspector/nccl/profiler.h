@@ -26,6 +26,12 @@ enum {
   ncclProfileCollApi        = (1 << 9),  // Collective API events
   ncclProfileP2pApi         = (1 << 10), // Point-to-Point API events
   ncclProfileKernelLaunch   = (1 << 11), // Kernel launch events
+  // CE events (v6)
+  ncclProfileCeColl         = (1 << 12), // CE collective operation
+  ncclProfileCeSync         = (1 << 13), // CE synchronization operation
+  ncclProfileCeBatch        = (1 << 14), // CE batch operation
+  // User-defined tag events (v7)
+  ncclProfileUserTag        = (1 << 15), // User-defined tag annotation
 };
 
 typedef enum {
@@ -71,7 +77,13 @@ typedef ncclProfilerEventState_t ncclProfilerEventState_v2_t;
 typedef ncclProfilerEventState_t ncclProfilerEventState_v3_t;
 typedef ncclProfilerEventState_t ncclProfilerEventState_v4_t;
 typedef ncclProfilerEventState_t ncclProfilerEventState_v5_t;
+typedef ncclProfilerEventState_t ncclProfilerEventState_v6_t;
+typedef ncclProfilerEventState_t ncclProfilerEventState_v7_t;
 
+#define NCCL_TAG_MAX_LEN 32
+
+#include "profiler_v7.h"
+#include "profiler_v6.h"
 #include "profiler_v5.h"
 #include "profiler_v4.h"
 #include "profiler_v3.h"
@@ -79,8 +91,9 @@ typedef ncclProfilerEventState_t ncclProfilerEventState_v5_t;
 #include "profiler_v1.h"
 #include "profiler_net.h"
 
-typedef ncclProfiler_v5_t ncclProfiler_t;
-typedef ncclProfilerEventDescr_v5_t ncclProfilerEventDescr_t;
-typedef ncclProfilerEventStateArgs_v5_t ncclProfilerEventStateArgs_t;
+// Use v7 as default to support UserTag events
+typedef ncclProfiler_v7_t ncclProfiler_t;
+typedef ncclProfilerEventDescr_v7_t ncclProfilerEventDescr_t;
+typedef ncclProfilerEventStateArgs_v7_t ncclProfilerEventStateArgs_t;
 
 #endif // end include guard

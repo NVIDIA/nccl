@@ -24,6 +24,7 @@ extern ncclProfiler_t* getNcclProfiler_v3(void* lib);
 extern ncclProfiler_t* getNcclProfiler_v4(void* lib);
 extern ncclProfiler_t* getNcclProfiler_v5(void* lib);
 extern ncclProfiler_t* getNcclProfiler_v6(void* lib);
+extern ncclProfiler_t* getNcclProfiler_v7(void* lib);
 
 static std::mutex profilerMutex;
 static int profilerPluginRefCount;
@@ -71,7 +72,10 @@ static ncclResult_t ncclProfilerPluginLoad(void) {
     profilerName = ncclPluginLibPaths[ncclPluginTypeProfiler];
   }
 
-  ncclProfiler = getNcclProfiler_v6(profilerPluginLib);
+  ncclProfiler = getNcclProfiler_v7(profilerPluginLib);
+  if (ncclProfiler == nullptr) {
+    ncclProfiler = getNcclProfiler_v6(profilerPluginLib);
+  }
   if (ncclProfiler == nullptr) {
     ncclProfiler = getNcclProfiler_v5(profilerPluginLib);
   }
@@ -875,6 +879,28 @@ ncclResult_t ncclProfilerStartCeBatchEvent(struct ncclComm* comm,
 ncclResult_t ncclProfilerStopCeBatchEvent(struct ncclComm* comm, void* ceBatchHandle, cudaStream_t stream) {
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && ceBatchHandle) {
     ncclProfiler->stopEvent(ceBatchHandle);
+  }
+  return ncclSuccess;
+}
+
+// ============================================================================
+// UserTag Profiler Function
+// ============================================================================
+
+ncclResult_t ncclProfilerUserTagEvent(struct ncclComm* comm, const char* tag) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
+    int eActivationMask = COMPILER_ATOMIC_LOAD(&ncclProfilerEventMask, std::memory_order_relaxed);
+    if (eActivationMask & ncclProfileUserTag) {
+      ncclProfilerEventDescr_t eDescr = { 0 };
+      eDescr.type = ncclProfileUserTag;
+      eDescr.rank = comm->rank;
+      eDescr.userTag.tag = tag;
+      void* eHandle = NULL;
+      ncclProfiler->startEvent(comm->profilerContext, &eHandle, &eDescr);
+      if (eHandle) {
+        ncclProfiler->stopEvent(eHandle);
+      }
+    }
   }
   return ncclSuccess;
 }

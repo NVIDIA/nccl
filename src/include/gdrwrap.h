@@ -39,7 +39,7 @@ static inline void wc_store_fence(void) { asm volatile("sync" : : : "memory"); }
 #elif defined(__x86_64__)
 #include <immintrin.h>
 static inline void wc_store_fence(void) { _mm_sfence(); }
-#elif defined(__aarch64__)
+#elif defined(__aarch64__) || defined(__riscv)
 #ifdef __cplusplus
 #include <atomic>
 static inline void wc_store_fence(void) { std::atomic_thread_fence(std::memory_order_release); }

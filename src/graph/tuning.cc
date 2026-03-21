@@ -481,8 +481,15 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
     if (pEnable == 2 && p == NCCL_PROTO_LL128) {
       pEnable = 1;
       if (ncclParamLl128C2c() && minCompCap >= 90) {
-        // Enable LL128 by default only on Hopper/Blackwell for all connections up to P2C and PXN.
-        pEnable &= (graphs[a]->typeInter <= PATH_PXN);
+        // Enable LL128 on Hopper/Blackwell for PXN inter-node paths (e.g. NVLink switch
+        // fabrics) where write ordering is guaranteed. Explicitly exclude PATH_P2C even
+        // though P2C < PXN: on GH200 the NIC writes to GPU HBM via PCIe->NVLink-C2C and
+        // PCIe posted writes through the C2C interconnect do not guarantee sequential
+        // visibility at 128-byte granularity, so the LL128 flag (last 8B of a 128B chunk)
+        // can become visible to the GPU before the preceding data bytes, causing corruption.
+        pEnable &= (graphs[a]->typeInter <= PATH_PXB || graphs[a]->typeInter == PATH_PXN);
+        if (graphs[a]->typeInter == PATH_P2C)
+          INFO(NCCL_GRAPH, "Disabling LL128 over P2C inter-node path: NIC->GPU writes via PCIe->NVLink-C2C do not guarantee 128-byte write ordering required by LL128.");
       } else {
         // Enable LL128 only up to PXB. Don't enable LL128 over PxN because PxN can encapsulate PxB or P2C links.
         pEnable &= (graphs[a]->typeInter <= PATH_PXB);

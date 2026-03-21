@@ -19,9 +19,27 @@
 #include "../gin_device_host_common.h"
 #include "gin_proxy_device_host_common.h"
 
+struct ncclGinCpuProxyRequest {
+  int peer;
+  uint32_t gfdIdx;
+};
+static_assert(sizeof(ncclGinCpuProxyRequest) <= sizeof(ncclGinRequest_t), "ncclGinCpuProxyRequest must fit in ncclGinRequest_t");
+
 namespace nccl {
 namespace gin {
 namespace proxy {
+
+NCCL_DEVICE_INLINE void waitForGfdComplete(ncclGinProxyGpuCtx_t* proxyCtx, uint32_t pe, uint32_t gfdIdx) {
+  using nccl::utility::loadConst;
+  using nccl::utility::rollingLessEq;
+  using nccl::utility::testAbort;
+  cuda::atomic_ref<uint32_t, cuda::thread_scope_system> ci(loadConst(&proxyCtx->cis)[pe]);
+  // The PI and CI can keep moving because of concurrent threads posting GFDs to this queue, and the CPU consuming them.
+  // Therefore, to prevent overflow issues in the while statement, we need to use a special comparison function.
+  #pragma unroll 1
+  while (!rollingLessEq<uint32_t>(gfdIdx + 1, ci.load(cuda::memory_order_relaxed))) continue;
+}
+
 NCCL_DEVICE_INLINE void flush(ncclGinProxyGpuCtx_t* proxyCtx, uint32_t pe, cuda::memory_order ord, uint32_t* abortFlag) {
   using nccl::utility::loadConst;
   using nccl::utility::rollingLessEq;
@@ -33,21 +51,23 @@ NCCL_DEVICE_INLINE void flush(ncclGinProxyGpuCtx_t* proxyCtx, uint32_t pe, cuda:
   // Therefore, to prevent overflow issues in the while statement, we need to use a special comparison function.
   uint32_t p = pi.load(cuda::memory_order_relaxed);
 #pragma unroll 1
-  while (!rollingLessEq<uint32_t>(p, ci.load(ord)) && !testAbort(abortFlag, steps)) continue;
+  while (!rollingLessEq<uint32_t>(p, ci.load(ord)) && !testAbort(abortFlag, steps)) continue; 
 }
 
 template <typename Coop>
 NCCL_DEVICE_INLINE void postGfd(Coop coop, ncclGinProxyGpuCtx_t* proxyCtx, ncclGinProxyGfd_t* gfd,
-                                uint32_t pe) {
+                                uint32_t pe, uint32_t* gfdIdx = nullptr) {
   using nccl::utility::loadConst;
   cuda::atomic_ref<uint32_t, cuda::thread_scope_system> pi(loadConst(&proxyCtx->pis)[pe]);
   cuda::atomic_ref<uint32_t, cuda::thread_scope_system> ci(loadConst(&proxyCtx->cis)[pe]);
   ncclGinProxyGfd_t* q = &loadConst(&proxyCtx->queues)[pe * proxyCtx->queueSize];
   uint32_t queueSize = loadConst(&proxyCtx->queueSize);
-
   if (coop.thread_rank() == 0) {
     // claim a slot in the gfd queue
     uint32_t idx = pi.fetch_add(1, cuda::memory_order_relaxed);
+    if (gfdIdx != nullptr) {
+      *gfdIdx = idx;
+    }
     // wait for credits
     while (queueSize <= idx - ci.load(cuda::memory_order_relaxed)) {
     }
@@ -69,55 +89,63 @@ __device__ __forceinline__ void buildGfd(ncclGinProxyGfd_t* gfd, ncclGinProxyOp_
                                          ncclGinCounter_t counterId, ncclGinSignal_t signalId,
                                          uint64_t signalVal, ncclGinWindow_t signalWindow,
                                          size_t signalOff) {
-  gfd->qword[ncclGinProxyGfdHeader].header.flag = 1;
-  gfd->qword[ncclGinProxyGfdHeader].header.op = op;
+
+  for (int i = 0; i < ncclGinProxyGfdQwords; i++) {
+    gfd->qword[i].flag.v = 1;
+  }
+
+  gfd->qword[ncclGinProxyGfdHeader].header.opLow = (uint64_t)op;
   gfd->qword[ncclGinProxyGfdHeader].header.size = (uint64_t)size;
+  gfd->qword[ncclGinProxyGfdHeaderExt].headerExt.flag = 1;
+  gfd->qword[ncclGinProxyGfdHeaderExt].headerExt.opHigh = (uint64_t)op >> 6;
+
+  if (op & ncclGinProxyOpFlush) {
+    return;
+  }
 
   if (hasInline) {
     uint64_t srcValBits = 0;
     memcpy(&srcValBits, &srcVal, sizeof(T));
 
-    gfd->qword[ncclGinProxyGfdInlineLow].inlineLow.flag = 1;
     gfd->qword[ncclGinProxyGfdInlineLow].inlineLow.inlineValLow = (uint32_t)srcValBits;
-    gfd->qword[ncclGinProxyGfdInlineHigh].inlineHigh.flag = 1;
     if (sizeof(T) > 4)
       gfd->qword[ncclGinProxyGfdInlineLow].inlineLow.inlineValLow2 = (uint64_t)srcValBits >> 32;
     if (sizeof(T) > 6)
       gfd->qword[ncclGinProxyGfdInlineHigh].inlineHigh.inlineValHigh = (uint64_t)srcValBits >> 48;
   } else if (op & ncclGinProxyOpVASignal) {
-    gfd->qword[ncclGinProxyGfdVASignalOff].vaSignalOff.flag = 1;
     gfd->qword[ncclGinProxyGfdVASignalOff].vaSignalOff.vaSignalOff = (uint64_t)signalOff;
-    gfd->qword[ncclGinProxyGfdVASignalHandle].vaSignalHandle.flag = 1;
     gfd->qword[ncclGinProxyGfdVASignalHandle].vaSignalHandle.vaSignalHandle = (uint64_t)signalWindow;
   } else {
-    gfd->qword[ncclGinProxyGfdSrcOff].srcOff.flag = 1;
     gfd->qword[ncclGinProxyGfdSrcOff].srcOff.srcOff = (uint64_t)srcOff;
-    gfd->qword[ncclGinProxyGfdSrcHandle].srcHandle.flag = 1;
     gfd->qword[ncclGinProxyGfdSrcHandle].srcHandle.srcHandle = (uint64_t)srcHandle;
   }
 
-  gfd->qword[ncclGinProxyGfdDstOff].dstOff.flag = 1;
   gfd->qword[ncclGinProxyGfdDstOff].dstOff.dstOff = (uint64_t)dstOff;
-  gfd->qword[ncclGinProxyGfdDstHandle].dstHandle.flag = 1;
   gfd->qword[ncclGinProxyGfdDstHandle].dstHandle.dstHandle = (uint64_t)dstHandle;
 
-  gfd->qword[ncclGinProxyGfdCompletion].completion.flag = 1;
-  gfd->qword[ncclGinProxyGfdCompletion].completion.counterId = counterId;
-  gfd->qword[ncclGinProxyGfdCompletion].completion.signalId = signalId;
+  gfd->qword[ncclGinProxyGfdCompletion].completion.counterId = (uint16_t)counterId;
+  gfd->qword[ncclGinProxyGfdCompletion].completion.signalId = (uint16_t)signalId;
 
   // The signal value is split between two qwords, as the signal value is a full 64 bits
   gfd->qword[ncclGinProxyGfdCompletion].completion.signalValLow = (uint16_t)signalVal;
-  gfd->qword[ncclGinProxyGfdSignalVal].signalVal.flag = 1;
   gfd->qword[ncclGinProxyGfdSignalVal].signalVal.signalValLow2 = (uint16_t)(signalVal >> 16);
   gfd->qword[ncclGinProxyGfdSignalVal].signalVal.signalValHigh = (uint32_t)(signalVal >> 32);
-
-  gfd->qword[ncclGinProxyGfdReserved].flag.v = 1;
 }
 
-__device__ __forceinline__ void constructProxyOp(ncclGinProxyOp_t& op, bool hasInline,
+__device__ __forceinline__ void constructProxyOp(ncclGinProxyOp_t& op, bool isGet, bool isFlush, bool hasInline,
                                                  ncclGinSignalType signalType, ncclGinSignalOp_t signalOp,
                                                  bool hasCounter) {
   op = (ncclGinProxyOp_t)(0);
+  if (isGet) {
+    op = static_cast<ncclGinProxyOp_t>(static_cast<uint8_t>(op) | static_cast<uint8_t>(ncclGinProxyOpGet));
+    return;
+  }
+
+  if (isFlush) {
+    op = static_cast<ncclGinProxyOp_t>(static_cast<uint8_t>(op) | static_cast<uint8_t>(ncclGinProxyOpFlush));
+    return;
+  }
+
   if (signalType != NCCL_GIN_SIGNAL_TYPE_NONE) {
     switch (signalOp) {
       case ncclGinSignalInc:
@@ -143,6 +171,35 @@ __device__ __forceinline__ void constructProxyOp(ncclGinProxyOp_t& op, bool hasI
                                        static_cast<uint8_t>(ncclGinProxyOpWithCounter));
 }
 
+template <typename Coop>
+NCCL_DEVICE_INLINE void get(Coop coop, ncclGinProxyGpuCtx_t* proxyCtx,
+                            int peer, ncclGinWindow_t remoteWnd, size_t remoteOff,
+                            ncclGinWindow_t localWnd, size_t localOff, size_t bytes,
+                            bool hasDescriptor, ncclGinDescriptorSmem* descriptor,
+                            ncclGinRequest_t* outRequest) {
+  constexpr size_t chunkSize = 1ULL << 30;
+
+  while (bytes > 0) {
+    size_t sendSize = min(bytes, chunkSize);
+    ncclGinProxyGfd_t gfd;
+    ncclGinProxyOp_t op;
+    constructProxyOp(op, /*isGet*/true, /*isFlush*/false, /*hasInline*/false, NCCL_GIN_SIGNAL_TYPE_NONE, ncclGinSignalInc, /*hasCounter*/false);
+    nccl::gin::proxy::buildGfd(&gfd, op, /*srcVal*/0, /*hasInline*/false, remoteOff, remoteWnd,
+                               localOff, localWnd, sendSize, /*counterId*/0, /*signalId*/0,
+                               /*signalVal*/0, nullptr, 0);
+    uint32_t gfdIdx;
+    nccl::gin::proxy::postGfd<Coop>(coop, proxyCtx, &gfd, peer, &gfdIdx);
+    if (outRequest != nullptr) {
+      ncclGinCpuProxyRequest* req = (ncclGinCpuProxyRequest*)outRequest;
+      req->peer = peer;
+      req->gfdIdx = gfdIdx;
+    }
+    bytes -= sendSize;
+    remoteOff += sendSize;
+    localOff += sendSize;
+  }
+}
+
 template <typename Coop, typename T>
 NCCL_DEVICE_INLINE void put(Coop coop, ncclGinProxyGfd_t* gfd, ncclGinProxyGpuCtx_t* proxyCtx,
                             int peer, ncclGinWindow_t dstWnd, size_t dstOff, T srcVal,
@@ -157,7 +214,7 @@ NCCL_DEVICE_INLINE void put(Coop coop, ncclGinProxyGfd_t* gfd, ncclGinProxyGpuCt
   constexpr size_t chunkSize = 1ULL << 30;
   while (bytes > chunkSize) {
     ncclGinProxyOp_t op;
-    constructProxyOp(op, /*hasInline*/false, NCCL_GIN_SIGNAL_TYPE_NONE, signalOp, /*hasCounter*/false);
+    constructProxyOp(op, /*isGet*/false, /*isFlush*/false, /*hasInline*/false, NCCL_GIN_SIGNAL_TYPE_NONE, signalOp, /*hasCounter*/false);
     nccl::gin::proxy::buildGfd(gfd, op, /*srcVal*/0, /*hasInline*/false, srcOff, srcWnd,
                                dstOff, dstWnd, chunkSize, /*counterId*/0, /*signalId*/0,
                                /*signalVal*/0, nullptr, 0);
@@ -187,7 +244,7 @@ NCCL_DEVICE_INLINE void put(Coop coop, ncclGinProxyGfd_t* gfd, ncclGinProxyGpuCt
   }
   if (hasInline || hasCounter || srcWnd != nullptr || putSignalType != NCCL_GIN_SIGNAL_TYPE_NONE) {
     ncclGinProxyOp_t op;
-    constructProxyOp(op, hasInline, putSignalType, signalOp, hasCounter);
+    constructProxyOp(op, /*isGet*/false, /*isFlush*/false, hasInline, putSignalType, signalOp, hasCounter);
     nccl::gin::proxy::buildGfd(gfd, op, srcVal, hasInline, srcOff, srcWnd, dstOff, dstWnd, bytes,
                               hasCounter ? counterId : 0, putSignalId, putSignalVal, nullptr, 0);
     nccl::gin::proxy::postGfd<Coop>(coop, proxyCtx, gfd, peer);
@@ -196,7 +253,7 @@ NCCL_DEVICE_INLINE void put(Coop coop, ncclGinProxyGfd_t* gfd, ncclGinProxyGpuCt
   // Handle additional GFD for VA signals.
   if (signal.type == NCCL_GIN_SIGNAL_TYPE_VA) {
     ncclGinProxyOp_t op;
-    constructProxyOp(op, false, NCCL_GIN_SIGNAL_TYPE_VA, signalOp, false);
+    constructProxyOp(op, /*isGet*/false, /*isFlush*/false, /*hasInline*/false, NCCL_GIN_SIGNAL_TYPE_VA, signalOp, /*hasCounter*/false);
     nccl::gin::proxy::buildGfd(gfd, op, /*srcVal*/0, /*hasInline*/false, 0, nullptr,
                                0, nullptr, 0, 0, 0, signalVal, signal.vaSignal.signalWindow, signal.vaSignal.signalOffset);
     nccl::gin::proxy::postGfd<Coop>(coop, proxyCtx, gfd, peer);
@@ -205,6 +262,38 @@ NCCL_DEVICE_INLINE void put(Coop coop, ncclGinProxyGfd_t* gfd, ncclGinProxyGpuCt
 }  // namespace proxy
 }  // namespace gin
 }  // namespace nccl
+
+template <>
+struct ncclGinApi_Get<NCCL_NET_DEVICE_GIN_PROXY> {
+  template <typename Coop>
+  NCCL_DEVICE_INLINE static void call(ncclGinCtx ctx, Coop coop, int peer, ncclGinWindow_t remoteWin, size_t remoteOff,
+                                      ncclGinWindow_t localWin, size_t localOff, size_t bytes,
+                                      bool hasDescriptor, ncclGinDescriptorSmem* descriptor,
+                                      ncclGinRequest_t* outRequest, uint32_t optFlags) {
+    ncclGinProxyGpuCtx_t* proxyCtx = &((ncclGinProxyGpuCtx_t*)ctx.handle)[ctx.contextId];
+    nccl::gin::proxy::get<Coop>(coop, proxyCtx, peer, remoteWin, remoteOff, localWin, localOff, bytes,
+                                hasDescriptor, descriptor, outRequest);
+  }
+};
+
+template <>
+struct ncclGinApi_Wait<NCCL_NET_DEVICE_GIN_PROXY> {
+  NCCL_DEVICE_INLINE static void call(ncclGinCtx ctx, ncclGinRequest_t* outRequest) {
+    ncclGinCpuProxyRequest* req = (ncclGinCpuProxyRequest*)outRequest;
+    ncclGinProxyGpuCtx_t* proxyCtx = &((ncclGinProxyGpuCtx_t*)ctx.handle)[ctx.contextId];
+    int peer = req->peer;
+
+    nccl::gin::proxy::waitForGfdComplete(proxyCtx, peer, req->gfdIdx);
+    ncclGinProxyGfd_t gfd;
+    ncclGinProxyOp_t op;
+    uint32_t flushGfdIdx;
+    nccl::gin::proxy::constructProxyOp(op, /*isGet*/false, /*isFlush*/true, /*hasInline*/false, NCCL_GIN_SIGNAL_TYPE_NONE, ncclGinSignalInc, /*hasCounter*/false);
+    nccl::gin::proxy::buildGfd(&gfd, op, /*srcVal*/0, /*hasInline*/false, 0, nullptr,
+                               0, nullptr, 0, 0, 0, 0, nullptr, 0);
+    nccl::gin::proxy::postGfd(ncclCoopThread(), proxyCtx, &gfd, peer, &flushGfdIdx);
+    nccl::gin::proxy::waitForGfdComplete(proxyCtx, peer, flushGfdIdx);
+  }
+};
 
 template <>
 struct ncclGinApi_GetCounterPtr<NCCL_NET_DEVICE_GIN_PROXY> {

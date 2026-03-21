@@ -55,9 +55,18 @@ typedef enum CUpointer_attribute_enum {
 } CUpointer_attribute;
 
 typedef enum CUdevice_attribute_enum {
+    CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WRITES_ORDERING =
+        118, /**< GPUDirect RDMA writes to the device do not need to be flushed for consumers within
+                the scope indicated by the returned attribute. See ::CUGPUDirectRDMAWritesOrdering
+                for the numerical values returned here. */
     CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED =
         124, /**< Device supports buffer sharing with dma_buf mechanism. */
 } CUdevice_attribute;
+
+typedef enum CUflushGPUDirectRDMAWritesScope_enum {
+    CU_FLUSH_GPU_DIRECT_RDMA_WRITES_TO_OWNER       = 100, /**< Blocks until remote writes are visible to the CUDA device context owning the data. */
+    CU_FLUSH_GPU_DIRECT_RDMA_WRITES_TO_ALL_DEVICES = 200  /**< Blocks until remote writes are visible to all CUDA device contexts. */
+} CUflushGPUDirectRDMAWritesScope;
 
 typedef void *CUcontext;
 

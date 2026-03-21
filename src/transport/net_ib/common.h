@@ -153,6 +153,7 @@ struct ncclProfilerInfo {
 #define NCCL_NET_IB_REQ_RECV 2
 #define NCCL_NET_IB_REQ_FLUSH 3
 #define NCCL_NET_IB_REQ_GIN_IPUT 4
+#define NCCL_NET_IB_REQ_GIN_IGET 5
 extern const char* ncclIbReqTypeStr[];
 
 // Maximal number of QPs a communicator can have for data transfers
@@ -214,6 +215,9 @@ struct ncclIbRequest {
     struct {
       int rank;
     } iput;
+    struct {
+      int rank;
+    } iget;
   };
   int connectionId;
 };

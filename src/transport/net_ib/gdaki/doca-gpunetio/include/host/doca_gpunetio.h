@@ -431,6 +431,18 @@ doca_error_t doca_gpu_verbs_unexport_multi_qps_dev(struct doca_gpu *gpu_dev,
                                                    unsigned int num_qps,
                                                    struct doca_gpu_dev_verbs_qp *qp_gpus);
 
+/**
+ * Reset tracking and memory of a GPUNetIO QP
+ *
+ * @param [in] qp_gverbs
+ * GPUNetIO QP object
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure
+ */
+doca_error_t doca_gpu_verbs_reset_tracking_and_memory(struct doca_gpu_verbs_qp *qp_gverbs);
+
 #ifdef __cplusplus
 }
 #endif

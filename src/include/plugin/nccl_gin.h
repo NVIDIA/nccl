@@ -24,11 +24,12 @@
 #define NCCL_GIN_SIGNAL_OP_INC 0x1
 #define NCCL_GIN_SIGNAL_OP_ADD 0x2
 
+#include "gin/gin_v13.h"
 #include "gin/gin_v12.h"
 #include "gin/gin_v11.h"
 
-typedef ncclGin_v12_t ncclGin_t;
+typedef ncclGin_v13_t ncclGin_t;
 
-#define NCCL_GIN_PLUGIN_SYMBOL ncclGinPlugin_v12
+#define NCCL_GIN_PLUGIN_SYMBOL ncclGinPlugin_v13
 
 #endif // end include guard

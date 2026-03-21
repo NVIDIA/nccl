@@ -315,7 +315,7 @@ static inline ncclResult_t ncclCuMemFree(void *ptr, struct ncclMemManager* manag
 }
 
 // Get the base and size of all segments that span a given user buffer
-static inline ncclResult_t ncclCuMemGetAddressRange(CUdeviceptr userBuff, size_t userBuffSize, CUdeviceptr* mappedPtrBase, size_t* totalMappedBufferSize, int* numSegments) {
+static inline ncclResult_t ncclCuMemGetAddressRange(CUdeviceptr userBuff, size_t userBuffSize, CUdeviceptr* mappedPtrBase, size_t* totalMappedBufferSize, int* numSegments, bool* hasSysmemSegment = nullptr) {
   *totalMappedBufferSize = 0;
   *mappedPtrBase = 0;
   if (numSegments) *numSegments = 0;
@@ -325,14 +325,39 @@ static inline ncclResult_t ncclCuMemGetAddressRange(CUdeviceptr userBuff, size_t
   CUdeviceptr baseSend;
   size_t baseSendSize;
 
+  if (hasSysmemSegment != nullptr) {
+    *hasSysmemSegment = false;
+  }
+
   while (mappedPtrEnd < userBuffEnd) {
     CUCHECK(cuMemGetAddressRange(&baseSend, &baseSendSize, mappedPtrEnd));
 
+    if (hasSysmemSegment != nullptr && *hasSysmemSegment == false) {
+      CUmemGenericAllocationHandle handle;
+      CUmemAllocationProp prop;
+      CUCHECK(cuMemRetainAllocationHandle(&handle, (void *) mappedPtrEnd));
+      CUCHECK(cuMemGetAllocationPropertiesFromHandle(&prop, handle));
+      if (prop.location.type == CU_MEM_LOCATION_TYPE_HOST_NUMA) {
+        *hasSysmemSegment = true;
+      }
+      CUCHECK(cuMemRelease(handle));
+    }
+
     if (*totalMappedBufferSize == 0) {
-      *mappedPtrBase = baseSend;
+      // Workaround for CPU backed buffers since baseSend can be 0 in some CUDA driver versions
+      if (baseSend == 0) {
+        *mappedPtrBase = userBuffStart;
+      } else {
+        *mappedPtrBase = baseSend;
+      }
     }
     *totalMappedBufferSize += baseSendSize;
-    mappedPtrEnd = baseSend + baseSendSize;
+    // Workaround for CPU backed buffers since baseSend can be 0 in some CUDA driver versions
+    if (baseSend == 0) {
+      mappedPtrEnd = mappedPtrEnd + baseSendSize;
+    } else {
+      mappedPtrEnd = baseSend + baseSendSize;
+    }
 
     if (numSegments) *numSegments = *numSegments + 1;
   }

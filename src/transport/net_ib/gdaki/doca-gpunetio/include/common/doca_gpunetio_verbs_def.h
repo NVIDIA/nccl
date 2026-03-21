@@ -304,6 +304,30 @@ enum doca_gpu_dev_verbs_signal_op {
     DOCA_GPUNETIO_VERBS_SIGNAL_OP_ADD = 0,  ///< Signal operation - Add
 };
 
+enum doca_gpu_dev_verbs_dump_mode {
+    DOCA_GPUNETIO_VERBS_DUMP = 0,
+    DOCA_GPUNETIO_VERBS_NODUMP = 1,
+    DOCA_GPUNETIO_VERBS_DUMP_AUTO = 2,
+};
+
+/**
+ * @enum doca_gpu_dev_verbs_blocking_mode
+ * @brief Type of execution mode: blocking waiting for an event or non-blocking
+ */
+enum doca_gpu_dev_verbs_blocking_mode {
+    DOCA_GPUNETIO_VERBS_BLOCKING_MODE_DISABLED = 0,
+    DOCA_GPUNETIO_VERBS_BLOCKING_MODE_ENABLED = 1,
+};
+
+/**
+ * @enum doca_gpu_dev_verbs_mcst_mode
+ * @brief How to enable the dump in case or RDMA Get or Recv
+ */
+enum doca_gpu_dev_verbs_mcst_mode {
+    DOCA_GPUNETIO_VERBS_MCST_DISABLED = 0, /**< Post a dump WQE after the Get/Recv */
+    DOCA_GPUNETIO_VERBS_MCST_ENABLED = 1,  /**< Don't post a dump WQE after the Get/Recv */
+};
+
 enum {
     DOCA_GPUNETIO_VERBS_WQE_SEG_CNT_RDMA_WRITE_INL_MIN = 3,
     DOCA_GPUNETIO_VERBS_WQE_SEG_CNT_RDMA_WRITE_INL_MAX = 4,

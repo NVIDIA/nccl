@@ -27,6 +27,9 @@ typedef ncclDevResourceHandle ncclDevResourceHandle_t;
 
 typedef uint32_t ncclGinSignal_t;
 typedef uint32_t ncclGinCounter_t;
+typedef struct {
+  char opaque[16];
+} ncclGinRequest_t;
 
 struct ncclLsaBarrierHandle;
 typedef struct ncclLsaBarrierHandle ncclLsaBarrierHandle_t;
@@ -95,6 +98,7 @@ struct ncclDevCommRequirements {
   ncclGinConnectionType_t ginConnectionType;
   bool ginExclusiveContexts;
   int ginQueueDepth;
+  int ginTrafficClass; // only support for GDAKI mode with exclusive contexts, value range depends on network type, IB 0-15, RoCE 0-255, -1 = don't apply at devComm create
 };
 
 #define NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER {                 \
@@ -116,6 +120,7 @@ struct ncclDevCommRequirements {
     NCCL_GIN_CONNECTION_NONE,                    /* ginConnectionType */       \
     false,                                       /* ginExclusiveContexts */    \
     0,                                           /* ginQueueDepth */           \
+    -1,                                         /* ginTrafficClass */          \
 }
 
 struct ncclDevResourceRequirements {

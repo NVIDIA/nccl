@@ -14,7 +14,7 @@ extern int64_t ncclParamSingleProcMemRegEnable();
 
 NCCL_PARAM(SymNoWinEnable, "SYM_NOWIN_ENABLE", 0);
 
-ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskColl* task, struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next>* symTaskQueue, struct ncclTaskColl** remainTasksHead) {
+ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskColl* task, struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next>* /*symTaskQueue*/, struct ncclTaskColl** remainTasksHead) {
   ncclResult_t ret = ncclSuccess;
   int fnOpTySymCount = 0;
   struct ncclTaskColl* tasksSymByFnOpTy[ncclNumFuncs * ncclNumDevRedOps * ncclNumTypes * ncclNumSymRegTypes];
@@ -62,7 +62,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
 
   // Determine symmetric tasks kernels
   for (int cursor = 0; cursor < fnOpTySymCount; cursor++) {
-    struct ncclTaskColl* task = tasksSymByFnOpTy[fnOpTySymIndices[cursor]];
+    task = tasksSymByFnOpTy[fnOpTySymIndices[cursor]];
     while (task != NULL) {
       ncclSymkKernelId kernelId = ncclSymkKernelId_Count;
       int nChannels = MAXCHANNELS;
@@ -87,8 +87,8 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
         task = task->next;
       }
       NCCLCHECK(ncclSymkPickKernel(comm, headTask->func, headTask->opDev.op, headTask->datatype,
-                                   countTotal, countMax, nWorks, headTask->winRegType,
-                                   &estTimeUs, &kernelId, &nChannels, &nWarps, &forced));
+        countTotal, countMax, nWorks, headTask->winRegType,
+        &estTimeUs, &kernelId, &nChannels, &nWarps, &forced));
       task = headTask;
       bool isLLKernel = (1 << kernelId) & ncclSymkLLKernelMask();
       bool isOneThreadMultiGpus = comm->intraRanks > 1 && !ncclParamSingleProcMemRegEnable();
@@ -219,7 +219,7 @@ ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm, struct ncclIntruQ
     NCCLCHECKGOTO(ncclSymkMakeDevWork(comm, task, &devWork), ret, fail);
 
     cellLeft = taskCell = DIVUP(task->count, cellCount);
-    for (;curChannel < nMaxChannels;) {
+    for (; curChannel < nMaxChannels;) {
       workRangePtr[curChannel].workHi = workIndex;
       if (curChannelWork == 0) {
         if (devWork.nChannels == 0) {
@@ -272,7 +272,7 @@ ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm, struct ncclIntruQ
     if (isSymLast == 1) break;
     if (curChannel == nMaxChannels) {
       WARN("ncclSymmetricTaskScheduler ran out of channel space (nMaxChannels=%d, workCount=%d, workIndex=%d)",
-           nMaxChannels, workCount, workIndex);
+        nMaxChannels, workCount, workIndex);
       goto fail;
     }
   }
@@ -286,7 +286,7 @@ ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm, struct ncclIntruQ
 
   if (comm->rank == 0) {
     INFO(NCCL_TUNING, "%s [Symmetric]: %ld Bytes -> Kernel %s nchannels %d nthreads %d nWorks %d", funcName,
-         logCount * ncclTypeSize(headTask->datatype), kernelName, curChannel, plan->threadPerBlock, workCount);
+        logCount * ncclTypeSize(headTask->datatype), kernelName, curChannel, plan->threadPerBlock, workCount);
   }
 
 exit:

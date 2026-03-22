@@ -29,28 +29,28 @@ struct localRegData {
   int handleTypes;
 };
 
-ncclResult_t nvlsCanConnect(int* ret, struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo* info1, struct ncclPeerInfo* info2) {
+ncclResult_t nvlsCanConnect(int* ret, struct ncclComm* /*comm*/, struct ncclTopoGraph* /*graph*/, struct ncclPeerInfo* /*info1*/, struct ncclPeerInfo* /*info2*/) {
   // This transport cannot be used for p2p
   *ret = 0;
   return ncclSuccess;
 }
 
-ncclResult_t nvlsSendFree(struct ncclComm* comm, struct ncclConnector* send) {
+ncclResult_t nvlsSendFree(struct ncclComm* /*comm*/, struct ncclConnector* /*send*/) {
   return ncclSuccess;
 }
 
-ncclResult_t nvlsRecvFree(struct ncclComm* comm, struct ncclConnector* recv) {
+ncclResult_t nvlsRecvFree(struct ncclComm* /*comm*/, struct ncclConnector* /*recv*/) {
   return ncclSuccess;
 }
 
 struct ncclTransport nvlsTransport = {
   "NVLS",
   nvlsCanConnect,
-  { NULL, NULL, nvlsSendFree, NULL, NULL, NULL, NULL, NULL },
-  { NULL, NULL, nvlsRecvFree, NULL, NULL, NULL, NULL, NULL }
+  { NULL, NULL, nvlsSendFree, NULL, NULL, NULL, NULL, NULL, NULL, NULL },
+  { NULL, NULL, nvlsRecvFree, NULL, NULL, NULL, NULL, NULL, NULL, NULL }
 };
 
-ncclResult_t ncclNvlsGroupCreate(struct ncclComm *comm, CUmulticastObjectProp *prop, int rank, unsigned int nranks, CUmemGenericAllocationHandle *mcHandle, char *shareableHandle) {
+ncclResult_t ncclNvlsGroupCreate(struct ncclComm */*comm*/, CUmulticastObjectProp *prop, int rank, unsigned int nranks, CUmemGenericAllocationHandle *mcHandle, char *shareableHandle) {
   CUmemAllocationHandleType type = ncclCuMemHandleType;
   size_t size = prop->size;
 
@@ -62,8 +62,7 @@ ncclResult_t ncclNvlsGroupCreate(struct ncclComm *comm, CUmulticastObjectProp *p
   if (type == CU_MEM_HANDLE_TYPE_FABRIC) {
     // Get a handle to pass to other ranks
     CUCHECK(cuMemExportToShareableHandle(shareableHandle, *mcHandle, ncclCuMemHandleType, 0));
-  }
-  else {
+  } else {
     memcpy(shareableHandle, mcHandle, sizeof(CUmemGenericAllocationHandle));
   }
 
@@ -122,7 +121,7 @@ ncclResult_t ncclNvlsDeregBuffer(struct ncclComm* comm, CUmemGenericAllocationHa
   return ncclSuccess;
 }
 
-ncclResult_t nvlsGroupUnmapMem(struct ncclComm *comm, size_t ucsize, void* ucptr, CUmemGenericAllocationHandle* ucHandle, size_t mcsize, void* mcptr, CUmemGenericAllocationHandle* mcHandle) {
+ncclResult_t nvlsGroupUnmapMem(struct ncclComm */*comm*/, size_t ucsize, void* ucptr, CUmemGenericAllocationHandle* ucHandle, size_t mcsize, void* mcptr, CUmemGenericAllocationHandle* mcHandle) {
   INFO(NCCL_NVLS, "NVLS Unmap mem UC handle 0x%llx(%p) ucsize %zu MC handle 0x%llx(%p) mcsize %zd", *ucHandle, ucptr, ucsize, *mcHandle, mcptr, mcsize);
 
   // Release the UC memory and mapping
@@ -200,7 +199,7 @@ ncclResult_t ncclNvlsInit(struct ncclComm* comm) {
     comm->nvlsChannels = std::max(comm->config.minCTAs, std::min(comm->config.maxCTAs, channels));
   }
   INFO(NCCL_INIT, "NVLS multicast support is %savailable on dev %d (NVLS_NCHANNELS %d)",
-       comm->nvlsSupport ? "" : "not ", dev, comm->nvlsChannels);
+    comm->nvlsSupport ? "" : "not ", dev, comm->nvlsChannels);
   return ncclSuccess;
 }
 
@@ -335,7 +334,7 @@ ncclResult_t ncclNvlsBufferSetup(struct ncclComm* comm) {
   nvlsTotalSize = nvlsPerRankSize * nHeads;
 
   INFO(NCCL_INIT | NCCL_NVLS, "NVLS comm %p headRank %d nHeads %d nvlsRanks %d buffSize %zu nvlsPerRankSize %zu nvlsTotalSize %zu",
-       comm, headRank, nHeads, comm->localRanks, buffSize, nvlsPerRankSize, nvlsTotalSize);
+      comm, headRank, nHeads, comm->localRanks, buffSize, nvlsPerRankSize, nvlsTotalSize);
 
   NCCLCHECKGOTO(nvlsAllocateMem(comm, &resources->accessDesc, nvlsTotalSize, &resources->ucBuffHandle, &resources->mcBuffHandle, (void**)&resources->ucBuff, (void**)&resources->mcBuff, &resources->buffUCSize, &resources->buffMCSize), res, fail);
 
@@ -689,7 +688,7 @@ static ncclResult_t nvlsRegisterBuffer(struct ncclComm *comm, const void *sendbu
   }
   if (sendbuff) {
     CUCHECKGOTO(cuPointerGetAttribute((void*)&regData[comm->localRank * 2].handleTypes,
-                                      CU_POINTER_ATTRIBUTE_ALLOWED_HANDLE_TYPES, (CUdeviceptr)sendbuff), ret, fail);
+      CU_POINTER_ATTRIBUTE_ALLOWED_HANDLE_TYPES, (CUdeviceptr)sendbuff), ret, fail);
   }
 
   if (recvRegRecord) {
@@ -698,7 +697,7 @@ static ncclResult_t nvlsRegisterBuffer(struct ncclComm *comm, const void *sendbu
   }
   if (recvbuff) {
     CUCHECKGOTO(cuPointerGetAttribute((void*)&regData[comm->localRank * 2 + 1].handleTypes,
-                                      CU_POINTER_ATTRIBUTE_ALLOWED_HANDLE_TYPES, (CUdeviceptr)recvbuff), ret, fail);
+      CU_POINTER_ATTRIBUTE_ALLOWED_HANDLE_TYPES, (CUdeviceptr)recvbuff), ret, fail);
   }
 
   NCCLCHECKGOTO(ncclShmemAllgather(comm, &comm->nvlsResources->nvlsShmem, regData + comm->localRank * 2, regData, sizeof(struct localRegData) * 2), ret, fail);
@@ -718,7 +717,7 @@ static ncclResult_t nvlsRegisterBuffer(struct ncclComm *comm, const void *sendbu
     }
 
     if ((sendbuff && (regData[i * 2].handleTypes & ncclCuMemHandleType) == 0) ||
-        (recvbuff && (regData[i * 2 + 1].handleTypes & ncclCuMemHandleType) == 0)) {
+      (recvbuff && (regData[i * 2 + 1].handleTypes & ncclCuMemHandleType) == 0)) {
       goto fail;
     }
   }
@@ -827,7 +826,7 @@ struct ncclNvlsCleanupCallback {
   struct ncclComm *comm;
 };
 
-static ncclResult_t cleanupNvls(struct ncclComm* comm, struct ncclCommCallback* cb) {
+static ncclResult_t cleanupNvls(struct ncclComm* /*comm*/, struct ncclCommCallback* cb) {
   struct ncclNvlsCleanupCallback* obj = (struct ncclNvlsCleanupCallback*)cb;
   NCCLCHECK(ncclCommGraphDeregister(obj->comm, obj->reg));
   free(obj);
@@ -838,7 +837,7 @@ ncclResult_t ncclNvlsGraphRegisterBuffer(
     struct ncclComm *comm, const void *sendbuff, void *recvbuff, size_t sendbuffSize, size_t recvbuffSize,
     int *outRegBufUsed, void **outRegBufSend, void **outRegBufRecv,
     struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next>* cleanupQueue, int* nCleanupQueueEltsAdded
-  ) {
+) {
   struct ncclNvlsCleanupCallback* sendRecord = NULL;
   struct ncclNvlsCleanupCallback* recvRecord = NULL;
   void *baseSend = NULL;
@@ -966,7 +965,7 @@ ncclResult_t ncclNvlsGraphRegisterBuffer(
     struct ncclComm *comm, const void *sendbuff, void *recvbuff, size_t sendbuffSize, size_t recvbuffSize,
     int *outRegBufUsed, void **outRegBufSend, void **outRegBufRecv,
     struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next>* cleanupQueue, int* nCleanupQueueEltsAdded
-  ) {
+) {
   *outRegBufUsed = false;
   return ncclSuccess;
 }

@@ -119,7 +119,7 @@ ncclResult_t bootstrapNetInit() {
           return ncclInvalidArgument;
         }
         NCCLCHECK(ncclFindInterfaceMatchSubnet(bootstrapNetIfName, &bootstrapNetIfAddr, &remoteAddr, MAX_IF_NAME_SIZE,
-                                               &nIfs));
+          &nIfs));
         if (nIfs <= 0) {
           WARN("NET/Socket : No usable listening interface found");
           return ncclSystemError;
@@ -166,7 +166,7 @@ static ncclResult_t netDereg(ncclNet_t* net, void* comm, void** handle) {
   return ncclSuccess;
 }
 static ncclResult_t netIsend(ncclNet_t* net, void* sendComm, void* data, int size, void* dataHandle, int tag, void** sendReq,
-                             int* done) {
+    int* done) {
   if (*done) return ncclSuccess;
   if (!*sendReq) {
     NCCLCHECK(net->isend(sendComm, data, (size_t)size, tag, dataHandle, NULL, sendReq));
@@ -180,7 +180,7 @@ static ncclResult_t netIsend(ncclNet_t* net, void* sendComm, void* data, int siz
   return ncclSuccess;
 }
 static ncclResult_t netIrecv(ncclNet_t* net, void* recvComm, void* data, int size, void* dataHandle, int tag, void** recvReq,
-                             int* done) {
+    int* done) {
   if (*done) return ncclSuccess;
   if (!*recvReq) {
     size_t size64 = size;
@@ -195,7 +195,7 @@ static ncclResult_t netIrecv(ncclNet_t* net, void* recvComm, void* data, int siz
   return ncclSuccess;
 }
 static ncclResult_t netSendRecv(ncclNet_t* net, void* sendComm, void* sendData, int sendSize, void* sendDataHandle, void* recvComm,
-                                void* recvData, int recvSize, void* recvDataHandle, int tag, volatile uint32_t* abortFlag) {
+    void* recvData, int recvSize, void* recvDataHandle, int tag, volatile uint32_t* abortFlag) {
   int abortCounter = 0;
   int doneSend = 0, doneRecv = 0;
   void *sendReq = NULL, *recvReq = NULL;
@@ -231,7 +231,7 @@ static ncclResult_t socketRecv(struct ncclSocket* sock, void* data, int size) {
   return ncclSuccess;
 }
 static ncclResult_t socketSendRecv(struct ncclSocket* sendSock, void* sendData, int sendSize, struct ncclSocket* recvSock,
-                                   void* recvData, int recvSize) {
+    void* recvData, int recvSize) {
   int senderRecvSize;
   NCCLCHECK(ncclSocketSendRecv(sendSock, &sendSize, sizeof(int), recvSock, &senderRecvSize, sizeof(int)));
   if (senderRecvSize > recvSize) {
@@ -297,7 +297,7 @@ fail:
   return res;
 }
 static void* bootstrapRoot(void* rargs) {
-  uint64_t timers[BOOTSTRAP_INIT_ROOT_N] = {0};
+  uint64_t timers[BOOTSTRAP_INIT_ROOT_N] = {};
   struct bootstrapRootArgs* args = (struct bootstrapRootArgs*)rargs;
   struct ncclSocket* listenSock = args->listenSock;
   uint64_t magic = args->magic;
@@ -344,8 +344,8 @@ static void* bootstrapRoot(void* rargs) {
 
     if (nranks != info.nranks || nroots != info.nroots || iroot != info.iroot || offset != info.offset) {
       WARN("Bootstrap Root : mismatch in info from procs, nranks %d vs %d, nroots %d vs %d, iroot %d vs %d, offset %d vs %d",
-        nranks, info.nranks, nroots, info.nroots, iroot, info.iroot, offset, info.offset);
-        goto out;
+          nranks, info.nranks, nroots, info.nroots, iroot, info.iroot, offset, info.offset);
+      goto out;
     }
 
     localId = localIdFromRoot(info.rank, iroot, nranks, nroots, offset);
@@ -354,7 +354,7 @@ static void* bootstrapRoot(void* rargs) {
       goto out;
     }
     if (memcmp(&zeroAddress, &rankAddressesRoot[localId], sizeof(union ncclSocketAddress)) != 0 ||
-        memcmp(&zeroInfo, &rankInfo[localId], sizeof(union ringConnectInfo)) != 0) {
+      memcmp(&zeroInfo, &rankInfo[localId], sizeof(union ringConnectInfo)) != 0) {
       WARN("Bootstrap Root : rank %d of %d ranks has already checked in", info.rank, nranks);
       goto out;
     }
@@ -389,7 +389,7 @@ static void* bootstrapRoot(void* rargs) {
     // use nrecv to periodize: if 1 root, we will send the first one to the last one, if >1 roots we will send the additional one we have received
     int next = BOOTSTRAP_PID(r + 1, nrecv);
     if (memcmp(&zeroAddress, &rankAddressesRoot[r], sizeof(union ncclSocketAddress)) != 0 &&
-        memcmp(&zeroInfo, &rankInfo[next], sizeof(union ringConnectInfo)) != 0) {
+      memcmp(&zeroInfo, &rankInfo[next], sizeof(union ringConnectInfo)) != 0) {
       NCCLCHECKGOTO(rootSend(&rankAddressesRoot[r], magic, &rankInfo[next]), res, out);
     }
   }
@@ -410,7 +410,7 @@ out:
   return NULL;
 }
 
-ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFromEnv) {
+ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool /*idFromEnv*/) {
   ncclResult_t ret = ncclSuccess;
   struct ncclSocket* listenSock = NULL;
   struct bootstrapRootArgs* args = NULL;
@@ -535,7 +535,7 @@ struct bootstrapState {
 
 // helper functions
 static ncclResult_t createListenSocket(struct ncclComm* comm, uint64_t magic, struct ncclSocket* socket, union ncclSocketAddress* addr,
-                                       ncclSocketType type) {
+    ncclSocketType type) {
   NCCLCHECK(ncclSocketInit(socket, &bootstrapNetIfAddr, magic, type, comm->abortFlag));
   NCCLCHECK(ncclSocketListen(socket));
   NCCLCHECK(ncclSocketGetAddr(socket, addr));
@@ -548,7 +548,7 @@ static ncclResult_t getUDS(uint64_t* peerUDS) {
   return ncclSuccess;
 }
 #define MAX_OOB_DEVS 16
-static ncclResult_t netGetDevice(int rank, struct ncclComm* comm, int* dev) {
+static ncclResult_t netGetDevice(int /*rank*/, struct ncclComm* comm, int* dev) {
   static int devOOB = -1;
   if (devOOB < 0) {
     std::lock_guard<std::mutex> lock(bootstrapNetMutex);
@@ -600,8 +600,8 @@ static ncclResult_t netGetDevice(int rank, struct ncclComm* comm, int* dev) {
 }
 
 static ncclResult_t netRingConnect(void* ctx, ncclNet_t* net, struct bootstrapListen_t* listen, char peerHandle[NCCL_NET_HANDLE_MAXSIZE],
-                                   void** sendComm, ncclNetDeviceHandle_t** sendDevHandle,
-                                   void** recvComm, ncclNetDeviceHandle_t** recvDevHandle, volatile uint32_t* abortFlag) {
+    void** sendComm, ncclNetDeviceHandle_t** sendDevHandle,
+    void** recvComm, ncclNetDeviceHandle_t** recvDevHandle, volatile uint32_t* abortFlag) {
 
   int abortCounter = 0;
   do {
@@ -621,9 +621,9 @@ static ncclResult_t socketRingConnect(ncclSocketAddress* addr, struct ncclSocket
   return ncclSuccess;
 }
 static ncclResult_t ringAllInfo(struct ncclComm* comm, struct bootstrapState* state,
-                                union ncclSocketAddress* peerAddresss,
-                                union ncclSocketAddress* peerProxy, uint64_t* peerUDS,
-                                struct rasRankInit* rasRanks) {
+    union ncclSocketAddress* peerAddresss,
+    union ncclSocketAddress* peerProxy, uint64_t* peerUDS,
+    struct rasRankInit* rasRanks) {
   ncclResult_t res = ncclSuccess;
   int rank = comm->rank;
   int nRanks = comm->nRanks;
@@ -691,12 +691,12 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
   struct bootstrapState* state;
   struct ncclSocket* proxySocket;
   struct ncclSocket sock, listenSockRoot;
-  struct extInfo info = {0};
+  struct extInfo info = {};
   union ringConnectInfo nextPeer;
   bool performRasAddRanks = true;
   struct rasRankInit* rasRanks = nullptr;
 
-  uint64_t timers[BOOTSTRAP_INIT_TIME_N] = {0};
+  uint64_t timers[BOOTSTRAP_INIT_TIME_N] = {};
 
   NCCLCHECK(ncclCalloc(&state, 1));
   state->rank = rank;
@@ -792,7 +792,7 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
 
   // get info on my "next" rank in the bootstrap ring from root
   BOOTSTRAP_PROF_OPEN(timers[BOOTSTRAP_INIT_TIME_RECV]);
-  if(curr_root >= 0){
+  if(curr_root >= 0) {
     NCCLCHECK(ncclSocketInit(&sock));
     NCCLCHECK(ncclSocketAccept(&sock, &listenSockRoot));
     NCCLCHECK(socketRecv(&sock, &nextPeer, sizeof(nextPeer)));
@@ -808,8 +808,8 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
   // accept and connect the ring network
   if (ncclParamBootstrapNetEnable()) {
     NCCLCHECK(netRingConnect(comm->netContext, state->net, &state->listen, nextPeer.handle,
-                             &STATE_RING(state, net.sendComm), &STATE_RING(state, net.sendDevHandle),
-                             &STATE_RING(state, net.recvComm), &STATE_RING(state, net.recvDevHandle), state->abortFlag));
+      &STATE_RING(state, net.sendComm), &STATE_RING(state, net.sendDevHandle),
+      &STATE_RING(state, net.recvComm), &STATE_RING(state, net.recvDevHandle), state->abortFlag));
   } else {
     NCCLCHECK(socketRingConnect(&nextPeer.addr, &STATE_RING(state, socket.send), &STATE_LISTEN(state, socket), &STATE_RING(state, socket.recv), comm->magic, state->abortFlag));
   }
@@ -863,11 +863,11 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
   BOOTSTRAP_PROF_CLOSE(timers[BOOTSTRAP_INIT_TIME_TOTAL]);
   TRACE(NCCL_BOOTSTRAP, "rank %d nranks %d - DONE", rank, nranks);
   INFO(NCCL_BOOTSTRAP | NCCL_PROFILE, "Bootstrap timings total %f (create %f, send %f, recv %f, ring %f, delay %f)", timers[BOOTSTRAP_INIT_TIME_TOTAL] / 1e9,
-       timers[BOOTSTRAP_INIT_TIME_CREATE] / 1e9,
-       timers[BOOTSTRAP_INIT_TIME_SEND] / 1e9,
-       timers[BOOTSTRAP_INIT_TIME_RECV] / 1e9,
-       timers[BOOTSTRAP_INIT_TIME_RING] / 1e9,
-       timers[BOOTSTRAP_INIT_TIME_DELAY] / 1e9);
+    timers[BOOTSTRAP_INIT_TIME_CREATE] / 1e9,
+    timers[BOOTSTRAP_INIT_TIME_SEND] / 1e9,
+    timers[BOOTSTRAP_INIT_TIME_RECV] / 1e9,
+    timers[BOOTSTRAP_INIT_TIME_RING] / 1e9,
+    timers[BOOTSTRAP_INIT_TIME_DELAY] / 1e9);
 exit:
   return result;
 fail:
@@ -875,7 +875,7 @@ fail:
   goto exit;
 }
 
-ncclResult_t bootstrapSplit(uint64_t magic, struct ncclComm* comm, struct ncclComm* parent, int color, int key, int* parentRanks) {
+ncclResult_t bootstrapSplit(uint64_t magic, struct ncclComm* comm, struct ncclComm* parent, int /*color*/, int /*key*/, int* parentRanks) {
   ncclResult_t ret = ncclSuccess;
   int rank = comm->rank;
   int nranks = comm->nRanks;
@@ -920,9 +920,9 @@ ncclResult_t bootstrapSplit(uint64_t magic, struct ncclComm* comm, struct ncclCo
   NCCLCHECKGOTO(bootstrapRecv(parent->bootstrap, next, BOOTSTRAP_TAG_COMMSPLIT, &nextPeer, sizeof(union ringConnectInfo)), ret, fail);
   if (ncclParamBootstrapNetEnable()) {
     NCCLCHECKGOTO(netRingConnect(comm->netContext, state->net, &state->listen, nextPeer.handle,
-                                 &STATE_RING(state, net.sendComm), &STATE_RING(state, net.sendDevHandle),
-                                 &STATE_RING(state, net.recvComm), &STATE_RING(state, net.recvDevHandle), state->abortFlag),
-                  ret, fail);
+      &STATE_RING(state, net.sendComm), &STATE_RING(state, net.sendDevHandle),
+      &STATE_RING(state, net.recvComm), &STATE_RING(state, net.recvDevHandle), state->abortFlag),
+      ret, fail);
   } else {
     NCCLCHECK(socketRingConnect(&nextPeer.addr, &STATE_RING(state, socket.send), &STATE_LISTEN(state, socket), &STATE_RING(state, socket.recv), comm->magic, state->abortFlag));
   }
@@ -947,7 +947,7 @@ ncclResult_t bootstrapSplit(uint64_t magic, struct ncclComm* comm, struct ncclCo
   }
 
   TRACE(NCCL_BOOTSTRAP, "bootstrapSplit: comm %p parent %p rank %d nranks %d color %d key %d prev %d next %d - DONE", comm, parent, rank, nranks,
-        color, key, prev, next);
+      color, key, prev, next);
 
 exit:
   return ret;
@@ -964,7 +964,7 @@ static ncclResult_t socketConnect(void* commState, int peer, int tag, struct ncc
   ncclResult_t ret = ncclSuccess;
   struct bootstrapState* state = (struct bootstrapState*)commState;
 
-  struct socketAckInfo ack = (struct socketAckInfo){.rank = state->rank, .tag = tag};
+  struct socketAckInfo ack = (struct socketAckInfo) {.rank = state->rank, .tag = tag};
   NCCLCHECKGOTO(ncclSocketInit(sock, state->peerP2pAddresses + peer, state->magic, ncclSocketTypeBootstrap, state->abortFlag), ret, fail);
   NCCLCHECKGOTO(ncclSocketConnect(sock), ret, fail);
   NCCLCHECKGOTO(socketSend(sock, &ack, sizeof(struct socketAckInfo)), ret, fail);
@@ -1052,7 +1052,7 @@ static ncclResult_t socketAccept(void* commState, int peer, int tag, struct nccl
 
   // Then look for new connections
   while (1) {
-    struct socketAckInfo ack = {0};
+    struct socketAckInfo ack = {};
     NCCLCHECKGOTO(ncclSocketInit(sock), ret, fail);
     NCCLCHECKGOTO(ncclSocketAccept(sock, &STATE_LISTEN(state, peerSocket)), ret, fail);
     NCCLCHECKGOTO(socketRecv(sock, &ack, sizeof(struct socketAckInfo)), ret, fail);
@@ -1186,7 +1186,7 @@ static ncclResult_t bootstrapP2PBarrier(void* commState, int* ranks, int rank, i
    * Based on the dissemination algorithm by Debra Hensgen, Raphael Finkel, and Udi Manbet,
    * "Two Algorithms for Barrier Synchronization," International Journal of Parallel Programming, 17(1):1-17, 1988"
    */
-  int data[1] = {0};
+  int data[1] = {};
   for (int mask = 1; mask < nranks; mask <<= 1) {
     int src = (rank - mask + nranks) % nranks;
     int dst = (rank + mask) % nranks;

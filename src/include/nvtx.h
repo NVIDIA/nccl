@@ -8,7 +8,10 @@
 #ifndef NCCL_NVTX_H_
 #define NCCL_NVTX_H_
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #include "nvtx3/nvtx3.hpp"
+#pragma GCC diagnostic pop
 
 #include "param.h"
 
@@ -50,7 +53,7 @@
 
 extern const nvtxDomainHandle_t ncclNvtxDomainHandle;
 
-struct nccl_domain{static constexpr char const* name{"NCCL"};};
+struct nccl_domain {static constexpr char const* name{"NCCL"};};
 
 extern int64_t ncclParamNvtxDisable();
 
@@ -58,8 +61,7 @@ extern int64_t ncclParamNvtxDisable();
 class payload_schema {
  public:
   explicit payload_schema(const nvtxPayloadSchemaEntry_t entries[], size_t numEntries,
-    const uint64_t schemaId, const size_t size) noexcept
-  {
+      const uint64_t schemaId, const size_t size) noexcept {
     schema_attr.payloadStaticSize = size;
     schema_attr.entries = entries;
     schema_attr.numEntries = numEntries;
@@ -87,8 +89,7 @@ class payload_schema {
     nullptr, 0, 0, 0, 0, nullptr};
 };
 
-class ncclOptionalNvtxScopedRange
-{
+class ncclOptionalNvtxScopedRange {
  public:
   void push(const nvtx3::event_attributes& attr) noexcept {
     // pushed must not be true already, but it's too expensive to check
@@ -164,8 +165,7 @@ class ncclOptionalNvtxPayloadRange {
     }
   }
 
-  void setPayloadData(const uint64_t schemaId) noexcept
-  {
+  void setPayloadData(const uint64_t schemaId) noexcept {
     payloadData = {schemaId, sizeof(PayloadType), &payload};
   }
 

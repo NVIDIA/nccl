@@ -32,54 +32,54 @@ constexpr char const* kernelName[] = {
 };
 
 constexpr uint32_t kernelMask_STMC = 1<<ncclSymkKernelId_AllGather_LLMC |
-                                     1<<ncclSymkKernelId_AllGather_STMC |
-                                     1<<ncclSymkKernelId_AllReduce_AGxLLMC_R |
-                                     1<<ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC |
-                                     1<<ncclSymkKernelId_ReduceScatter_LDMC |
-                                     1<<ncclSymkKernelId_AllGather_RailRing_LsaSTMC;
+    1<<ncclSymkKernelId_AllGather_STMC |
+    1<<ncclSymkKernelId_AllReduce_AGxLLMC_R |
+    1<<ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC |
+    1<<ncclSymkKernelId_ReduceScatter_LDMC |
+    1<<ncclSymkKernelId_AllGather_RailRing_LsaSTMC;
 
 constexpr uint32_t kernelMask_LDMC = 1<<ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC |
-                                     1<<ncclSymkKernelId_ReduceScatter_LDMC |
-                                     1<<ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC;
+    1<<ncclSymkKernelId_ReduceScatter_LDMC |
+    1<<ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC;
 
 constexpr uint32_t kernelMask_LL = 1<<ncclSymkKernelId_AllReduce_AGxLL_R |
-                                   1<<ncclSymkKernelId_AllReduce_AGxLLMC_R |
-                                   1<<ncclSymkKernelId_AllGather_LL |
-                                   1<<ncclSymkKernelId_AllGather_LLMC |
-                                   1<<ncclSymkKernelId_ReduceScatter_LL;
+    1<<ncclSymkKernelId_AllReduce_AGxLLMC_R |
+    1<<ncclSymkKernelId_AllGather_LL |
+    1<<ncclSymkKernelId_AllGather_LLMC |
+    1<<ncclSymkKernelId_ReduceScatter_LL;
 
 constexpr uint32_t kernelMask_AG = 1<<ncclSymkKernelId_AllGather_LL |
-                                   1<<ncclSymkKernelId_AllGather_LLMC |
-                                   1<<ncclSymkKernelId_AllGather_ST |
-                                   1<<ncclSymkKernelId_AllGather_STMC |
-                                   1<<ncclSymkKernelId_AllGather_RailRing_LsaSTMC;
+    1<<ncclSymkKernelId_AllGather_LLMC |
+    1<<ncclSymkKernelId_AllGather_ST |
+    1<<ncclSymkKernelId_AllGather_STMC |
+    1<<ncclSymkKernelId_AllGather_RailRing_LsaSTMC;
 
 constexpr uint32_t kernelMask_AR = 1<<ncclSymkKernelId_AllReduce_AGxLLMC_R |
-                                   1<<ncclSymkKernelId_AllReduce_AGxLL_R |
-                                   1<<ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC |
-                                   1<<ncclSymkKernelId_AllReduce_RSxLD_AGxST;
+    1<<ncclSymkKernelId_AllReduce_AGxLL_R |
+    1<<ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC |
+    1<<ncclSymkKernelId_AllReduce_RSxLD_AGxST;
 
 constexpr uint32_t kernelMask_RS = 1<<ncclSymkKernelId_ReduceScatter_LD |
-                                   1<<ncclSymkKernelId_ReduceScatter_LDMC |
-                                   1<<ncclSymkKernelId_ReduceScatter_LL |
-                                   1<<ncclSymkKernelId_ReduceScatter_RailA2A_LsaLD |
-                                   1<<ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC;
+    1<<ncclSymkKernelId_ReduceScatter_LDMC |
+    1<<ncclSymkKernelId_ReduceScatter_LL |
+    1<<ncclSymkKernelId_ReduceScatter_RailA2A_LsaLD |
+    1<<ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC;
 
 constexpr uint32_t kernelMask_LSA = 1<<ncclSymkKernelId_AllReduce_AGxLL_R |
-                                    1<<ncclSymkKernelId_AllReduce_AGxLLMC_R |
-                                    1<<ncclSymkKernelId_AllReduce_RSxLD_AGxST |
-                                    1<<ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC |
-                                    1<<ncclSymkKernelId_AllGather_LL |
-                                    1<<ncclSymkKernelId_AllGather_LLMC |
-                                    1<<ncclSymkKernelId_AllGather_ST |
-                                    1<<ncclSymkKernelId_AllGather_STMC |
-                                    1<<ncclSymkKernelId_ReduceScatter_LL |
-                                    1<<ncclSymkKernelId_ReduceScatter_LD |
-                                    1<<ncclSymkKernelId_ReduceScatter_LDMC;
+    1<<ncclSymkKernelId_AllReduce_AGxLLMC_R |
+    1<<ncclSymkKernelId_AllReduce_RSxLD_AGxST |
+    1<<ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC |
+    1<<ncclSymkKernelId_AllGather_LL |
+    1<<ncclSymkKernelId_AllGather_LLMC |
+    1<<ncclSymkKernelId_AllGather_ST |
+    1<<ncclSymkKernelId_AllGather_STMC |
+    1<<ncclSymkKernelId_ReduceScatter_LL |
+    1<<ncclSymkKernelId_ReduceScatter_LD |
+    1<<ncclSymkKernelId_ReduceScatter_LDMC;
 
 constexpr uint32_t kernelMask_Gin = 1<<ncclSymkKernelId_ReduceScatter_RailA2A_LsaLD |
-                                    1<<ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC |
-                                    1<<ncclSymkKernelId_AllGather_RailRing_LsaSTMC;
+    1<<ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC |
+    1<<ncclSymkKernelId_AllGather_RailRing_LsaSTMC;
 
 constexpr uint32_t kernelMask_DynamicSmem = kernelMask_Gin & kernelMask_RS;
 
@@ -92,10 +92,10 @@ int ncclSymkDynamicSmemKernelMask() {
 
 static uint32_t kernelMask_coll(ncclFunc_t coll) {
   switch (coll) {
-  case ncclFuncAllGather: return kernelMask_AG;
-  case ncclFuncAllReduce: return kernelMask_AR;
-  case ncclFuncReduceScatter: return kernelMask_RS;
-  default: return 0;
+    case ncclFuncAllGather: return kernelMask_AG;
+    case ncclFuncAllReduce: return kernelMask_AR;
+    case ncclFuncReduceScatter: return kernelMask_RS;
+    default: return 0;
   }
 }
 
@@ -185,20 +185,20 @@ static void getBusMul_ReduceScatter_RailA2A(
     struct ncclComm* comm, bool ldmc,
     // Bus multipliers per bottleneck
     double* out_smMul, double* out_lsaMul, double* out_ginMul
-  ) {
+) {
   int lsaRanks = ncclTeamLsa(comm).nRanks;
   int railRanks = ncclTeamRail(comm).nRanks;
   // LSA
   *out_lsaMul = std::max(
-    /*inbound*/(ldmc ? lsaRanks : lsaRanks-1)*railRanks,
-    /*outbound*/(lsaRanks-1)*railRanks
-  );
+          /*inbound*/(ldmc ? lsaRanks : lsaRanks-1)*railRanks,
+          /*outbound*/(lsaRanks-1)*railRanks
+      );
   // GIN
   *out_ginMul = railRanks-1; // inbound == outbound
   // SM. Inbound (reads) only because it dominates outbound (writes).
   *out_smMul =
-    /*stage 0*/(lsaRanks == 1 ? 0 : (ldmc ? 1 : lsaRanks)*(railRanks-1)) +
-    /*stage 1*/(ldmc ? 1 : lsaRanks) + (railRanks-1);
+      /*stage 0*/(lsaRanks == 1 ? 0 : (ldmc ? 1 : lsaRanks)*(railRanks-1)) +
+      /*stage 1*/(ldmc ? 1 : lsaRanks) + (railRanks-1);
 }
 
 static double getSmBw_ReduceScatter_RailA2A(struct ncclComm* comm, bool ldmc) {
@@ -212,7 +212,7 @@ static double getSmBw_ReduceScatter_RailA2A(struct ncclComm* comm, bool ldmc) {
   }
 }
 
-static double getSmLat_ReduceScatter_RailA2A(struct ncclComm* comm, bool ldmc) {
+static double getSmLat_ReduceScatter_RailA2A(struct ncclComm* /*comm*/, bool /*ldmc*/) {
   // Processing delay. Larger value means bigger network buffers.
   return 10.e-6;
 }
@@ -274,7 +274,7 @@ static void queryModel_gin(struct ncclComm* comm, ncclSymkKernelId k, size_t nBy
   *timeUs = FLT_MAX;
   *nBlocks = 0;
   switch (k) {
-  case ncclSymkKernelId_AllGather_RailRing_LsaSTMC: {
+    case ncclSymkKernelId_AllGather_RailRing_LsaSTMC: {
       constexpr int railChunkSize = ncclSymkAllGather_RailRing_ChunkSize;
       int requiredBlocks = DIVUP(nBytes, railChunkSize);
       float intraBw = lsaBw;
@@ -285,8 +285,8 @@ static void queryModel_gin(struct ncclComm* comm, ncclSymkKernelId k, size_t nBy
       *timeUs = steps * ginLat + std::max(intraTime, interTime);
       *nBlocks = std::max(nMinBlocks, std::min(nMaxBlocks, requiredBlocks));
     } break;
-  case ncclSymkKernelId_ReduceScatter_RailA2A_LsaLD:
-  case ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC: {
+    case ncclSymkKernelId_ReduceScatter_RailA2A_LsaLD:
+    case ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC: {
       bool ldmc = k == ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC;
       nMaxBlocks = std::min(nMaxBlocks, symk->maxGinInboxBlocks);
       nMaxBlocks = std::min(nMaxBlocks, calcSatBlocks_ReduceScatter_RailA2A(comm, ldmc));
@@ -307,7 +307,7 @@ static void queryModel_gin(struct ncclComm* comm, ncclSymkKernelId k, size_t nBy
       time += ginLat;
       *timeUs = (/*usec/sec=*/1.e6)*time;
     } break;
-  default: break;
+    default: break;
   }
 }
 
@@ -321,53 +321,53 @@ static void queryModel_lsa(struct ncclComm* comm, ncclSymkKernelId k, size_t nBy
   double busMultiplier = 1;
 
   switch (k) {
-  default:
-    busBytes = size_t(1)<<50;
-    break;
+    default:
+      busBytes = size_t(1)<<50;
+      break;
 
-  case ncclSymkKernelId_AllReduce_AGxLL_R:
-    busBytes = nRanks*nBytes*LL_BusFactor;
-    break;
-  case ncclSymkKernelId_AllReduce_AGxLLMC_R:
-    busBytes = nRanks*nBytes*LL_BusFactor;
-    busMultiplier = 1.1; // To beat non-MC LL
-    break;
-  case ncclSymkKernelId_AllReduce_RSxLD_AGxST:
-    busBytes = 2*nBytes*(nRanks-1)/nRanks;
-    break;
-  case ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC:
-    busBytes = nBytes/nRanks + nBytes;
-    busMultiplier = nRanks;
-    nMaxBlocks = nMaxBlocksNvls;
-    break;
+    case ncclSymkKernelId_AllReduce_AGxLL_R:
+      busBytes = nRanks*nBytes*LL_BusFactor;
+      break;
+    case ncclSymkKernelId_AllReduce_AGxLLMC_R:
+      busBytes = nRanks*nBytes*LL_BusFactor;
+      busMultiplier = 1.1; // To beat non-MC LL
+      break;
+    case ncclSymkKernelId_AllReduce_RSxLD_AGxST:
+      busBytes = 2*nBytes*(nRanks-1)/nRanks;
+      break;
+    case ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC:
+      busBytes = nBytes/nRanks + nBytes;
+      busMultiplier = nRanks;
+      nMaxBlocks = nMaxBlocksNvls;
+      break;
 
-  case ncclSymkKernelId_AllGather_LL:
-    busBytes = nRanks*nBytes*LL_BusFactor;
-    break;
-  case ncclSymkKernelId_AllGather_LLMC:
-    busBytes = nRanks*nBytes*LL_BusFactor;
-    busMultiplier = 1.1; // To beat non-MC LL
-    break;
-  case ncclSymkKernelId_AllGather_ST:
-    busBytes = (nRanks-1)*nBytes;
-    break;
-  case ncclSymkKernelId_AllGather_STMC:
-    busBytes = (nRanks-1)*nBytes; // Wrong. Should be nRanks*nBytes but we want to beat non-MC.
-    busMultiplier = 0.55*nRanks;
-    nMaxBlocks = nMaxBlocksNvls;
-    break;
+    case ncclSymkKernelId_AllGather_LL:
+      busBytes = nRanks*nBytes*LL_BusFactor;
+      break;
+    case ncclSymkKernelId_AllGather_LLMC:
+      busBytes = nRanks*nBytes*LL_BusFactor;
+      busMultiplier = 1.1; // To beat non-MC LL
+      break;
+    case ncclSymkKernelId_AllGather_ST:
+      busBytes = (nRanks-1)*nBytes;
+      break;
+    case ncclSymkKernelId_AllGather_STMC:
+      busBytes = (nRanks-1)*nBytes; // Wrong. Should be nRanks*nBytes but we want to beat non-MC.
+      busMultiplier = 0.55*nRanks;
+      nMaxBlocks = nMaxBlocksNvls;
+      break;
 
-  case ncclSymkKernelId_ReduceScatter_LL:
-    busBytes = nRanks*nBytes*LL_BusFactor;
-    break;
-  case ncclSymkKernelId_ReduceScatter_LD:
-    busBytes = (nRanks-1)*nBytes;
-    break;
-  case ncclSymkKernelId_ReduceScatter_LDMC:
-    busBytes = (nRanks-1)*nBytes; // Wrong. Should be nRanks*nBytes but we want to beat non-MC.
-    busMultiplier = 0.55*nRanks;
-    nMaxBlocks = nMaxBlocksNvls;
-    break;
+    case ncclSymkKernelId_ReduceScatter_LL:
+      busBytes = nRanks*nBytes*LL_BusFactor;
+      break;
+    case ncclSymkKernelId_ReduceScatter_LD:
+      busBytes = (nRanks-1)*nBytes;
+      break;
+    case ncclSymkKernelId_ReduceScatter_LDMC:
+      busBytes = (nRanks-1)*nBytes; // Wrong. Should be nRanks*nBytes but we want to beat non-MC.
+      busMultiplier = 0.55*nRanks;
+      nMaxBlocks = nMaxBlocksNvls;
+      break;
   }
 
   nMaxBlocks = std::min<int>(nMaxBlocks, comm->config.maxCTAs);
@@ -417,8 +417,8 @@ ncclResult_t ncclSymkInitOnce(struct ncclComm* comm) {
 
     struct ncclDevResourceRequirements lla2aReq;
     ncclLLA2ACreateRequirement(
-      ncclSymkMaxBlocks, ncclLLA2ACalcSlots(ncclTeamLsa(comm).nRanks*ncclSymkMaxThreads, ncclSymkLLMaxEltSize),
-      &symk->kcomm.lsaLLA2A, &lla2aReq
+        ncclSymkMaxBlocks, ncclLLA2ACalcSlots(ncclTeamLsa(comm).nRanks*ncclSymkMaxThreads, ncclSymkLLMaxEltSize),
+        &symk->kcomm.lsaLLA2A, &lla2aReq
     );
     lla2aReq.next = reqs.resourceRequirementsList;
     reqs.resourceRequirementsList = &lla2aReq;
@@ -438,15 +438,15 @@ ncclResult_t ncclSymkInitOnce(struct ncclComm* comm) {
       symk->maxGinInboxBlocks = maxBlocks;
 
       ncclGinInboxA2ACreateRequirement(
-        ncclTeamRail(comm), maxBlocks, log2Up(bufSize),
-        &symk->kcomm.ginInboxRail, &ginInboxRailReq
+          ncclTeamRail(comm), maxBlocks, log2Up(bufSize),
+          &symk->kcomm.ginInboxRail, &ginInboxRailReq
       );
       ginInboxRailReq.next = reqs.resourceRequirementsList;
       reqs.resourceRequirementsList = &ginInboxRailReq;
 
       ncclGinOutboxCreateRequirement(
-        maxBlocks, log2Up(bufSize),
-        &symk->kcomm.ginOutbox, &ginOutboxReq
+          maxBlocks, log2Up(bufSize),
+          &symk->kcomm.ginOutbox, &ginOutboxReq
       );
       ginOutboxReq.next = reqs.resourceRequirementsList;
       reqs.resourceRequirementsList = &ginOutboxReq;
@@ -465,7 +465,7 @@ ncclResult_t ncclSymkInitOnce(struct ncclComm* comm) {
       reqs.railGinBarrierCount = ncclSymkMaxBlocks;
 
       bool railedGinInitialized = (comm->sharedRes->ginState.connected &&
-                                    comm->sharedRes->ginState.ginConnectionType == NCCL_GIN_CONNECTION_RAIL);
+              comm->sharedRes->ginState.ginConnectionType == NCCL_GIN_CONNECTION_RAIL);
       reqs.ginConnectionType = railedGinInitialized ? NCCL_GIN_CONNECTION_RAIL : comm->globalGinSupport;
     }
 
@@ -485,27 +485,27 @@ ncclResult_t ncclSymkFinalize(struct ncclComm* comm) {
 static bool ncclSymkImplemented(ncclFunc_t coll, int/*ncclDevRedOp_t*/ red, ncclDataType_t ty) {
   bool isFloat;
   switch (ty) {
-  case ncclFloat64:
-  case ncclFloat32:
-  case ncclFloat16:
-  case ncclBfloat16:
-  case ncclFloat8e4m3:
-  case ncclFloat8e5m2:
-    isFloat = true;
-    break;
-  default:
-    isFloat = false;
-    break;
+    case ncclFloat64:
+    case ncclFloat32:
+    case ncclFloat16:
+    case ncclBfloat16:
+    case ncclFloat8e4m3:
+    case ncclFloat8e5m2:
+      isFloat = true;
+      break;
+    default:
+      isFloat = false;
+      break;
   }
 
   switch (coll) {
-  case ncclFuncAllGather:
-    return true;
-  case ncclFuncAllReduce:
-  case ncclFuncReduceScatter:
-    return red == ncclDevSum && isFloat && ty != ncclFloat64;
-  default:
-    return false;
+    case ncclFuncAllGather:
+      return true;
+    case ncclFuncAllReduce:
+    case ncclFuncReduceScatter:
+      return red == ncclDevSum && isFloat && ty != ncclFloat64;
+    default:
+      return false;
   }
 }
 
@@ -517,24 +517,24 @@ static uint32_t ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int/*ncclDe
   bool hasLDMC = false;
   if (comm->symkState.hasLsaMultimem) {
     switch (ty) {
-    case ncclInt32:
-    case ncclUint32:
-    case ncclInt64:
-    case ncclUint64:
-    case ncclFloat16:
-    case ncclBfloat16:
-      hasLDMC = red == ncclDevSum || red == ncclDevMinMax;
-      break;
-    case ncclFloat8e4m3:
-    case ncclFloat8e5m2:
-      hasLDMC = red == ncclDevSum || red == ncclDevMinMax;
-      hasLDMC &= comm->compCap >= 100;
-      break;
-    case ncclFloat:
-    case ncclDouble:
-      hasLDMC = red == ncclDevSum;
-      break;
-    default: break;
+      case ncclInt32:
+      case ncclUint32:
+      case ncclInt64:
+      case ncclUint64:
+      case ncclFloat16:
+      case ncclBfloat16:
+        hasLDMC = red == ncclDevSum || red == ncclDevMinMax;
+        break;
+      case ncclFloat8e4m3:
+      case ncclFloat8e5m2:
+        hasLDMC = red == ncclDevSum || red == ncclDevMinMax;
+        hasLDMC &= comm->compCap >= 100;
+        break;
+      case ncclFloat:
+      case ncclDouble:
+        hasLDMC = red == ncclDevSum;
+        break;
+      default: break;
     }
   }
   if (!hasSTMC) kmask &= ~kernelMask_STMC;
@@ -556,7 +556,7 @@ static uint32_t ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int/*ncclDe
 }
 
 bool ncclSymkAvailable(struct ncclComm* comm, ncclFunc_t coll, int/*ncclDevRedOp_t*/ red,
-                       ncclDataType_t ty, size_t nElts) {
+    ncclDataType_t ty, size_t nElts) {
   if (!comm->isAllDirectNvlink)
     return false;
   if (!ncclSymkImplemented(coll, red, ty))
@@ -569,7 +569,7 @@ ncclResult_t ncclSymkPickKernel(
     struct ncclComm* comm, ncclFunc_t coll, int/*ncclDevRedOp_t*/ red, ncclDataType_t ty,
     size_t nEltsTotal, size_t nEltsMax, int nWorks, ncclSymRegType_t winRegType,
     float* estTimeUs, ncclSymkKernelId* kernelId, int* nBlocks, int* nWarps, bool* forced
-  ) {
+) {
   uint32_t kmask = ncclSymkMask(comm, coll, red, ty, nEltsMax);
 
   *forced = !(kernelMask_user() == (1<<(int)ncclSymkKernelId_Count)-1);
@@ -619,7 +619,7 @@ const char* ncclSymkKernelIdToString(int kernelId) {
   return kernelName[kernelId];
 }
 
-int ncclSymkMaxChunkElts(struct ncclComm* comm, ncclSymkKernelId kernelId, int/*ncclDevRedOp_t*/ red, ncclDataType_t ty) {
+int ncclSymkMaxChunkElts(struct ncclComm* /*comm*/, ncclSymkKernelId kernelId, int/*ncclDevRedOp_t*/ red, ncclDataType_t ty) {
   bool isReduce = 1 & ((kernelMask_AR|kernelMask_RS) >> (int)kernelId);
   int eltSize = ncclTypeSize(ty);
   int accMult = !isReduce ? 1 : eltSize < 4 ? 2 : 1;
@@ -628,7 +628,7 @@ int ncclSymkMaxChunkElts(struct ncclComm* comm, ncclSymkKernelId kernelId, int/*
 }
 
 /* this function fills in the devWork except nextWorkOffset */
-ncclResult_t ncclSymkMakeDevWork(struct ncclComm* comm, struct ncclTaskColl* task, struct ncclSymkDevWork* outDevWork) {
+ncclResult_t ncclSymkMakeDevWork(struct ncclComm* /*comm*/, struct ncclTaskColl* task, struct ncclSymkDevWork* outDevWork) {
   outDevWork->rootRank = task->root;
   outDevWork->redOpArg = task->opDev.scalarArg;
   outDevWork->nElts = task->count;

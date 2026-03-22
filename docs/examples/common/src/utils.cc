@@ -166,6 +166,8 @@ int initialize(int argc, char *argv[], context_t *ctx) {
   MPI_Comm_free(&node_comm);
 
 #else
+  (void)argc;
+  (void)argv;
 
   // Get number of devices (threads) from environment or default to available
   // GPUs

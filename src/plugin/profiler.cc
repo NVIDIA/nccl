@@ -195,7 +195,7 @@ int ncclProfilerEventMask;       // Set by profiler
 static void printProfilerEventMask(int mask) {
   if (!mask) return;
 
-  char enabled[512] = {0};
+  char enabled[512] = {};
   int pos = 0;
   if (mask & ncclProfileGroup)        pos += sprintf(enabled + pos, "Group ");
   if (mask & ncclProfileColl)         pos += sprintf(enabled + pos, "Coll ");
@@ -244,7 +244,7 @@ ncclResult_t ncclProfilerPluginFinalize(struct ncclComm* comm) {
 }
 
 ncclResult_t ncclProfilerStartGroupApiEvent(struct ncclInfo* info, bool isGraphCaptured) {
-  ncclProfilerEventDescr_t eDescr = { 0 };
+  ncclProfilerEventDescr_t eDescr = {};
   eDescr.type = ncclProfileGroupApi;
   eDescr.groupApi.graphCaptured = isGraphCaptured;
 
@@ -290,7 +290,7 @@ ncclResult_t ncclProfilerRecordGroupApiEventState(ncclProfilerEventState_t eStat
 }
 
 ncclResult_t ncclProfilerStartP2pApiEvent(struct ncclInfo *info, bool isGraphCaptured) {
-  ncclProfilerEventDescr_t eDescr = { 0 };
+  ncclProfilerEventDescr_t eDescr = {};
   eDescr.type = ncclProfileP2pApi;
   eDescr.parentObj = ncclProfilerApiState.groupApiEventHandle;
   eDescr.p2pApi.func = ncclFuncToString(info->coll);
@@ -317,7 +317,7 @@ ncclResult_t ncclProfilerStopP2pApiEvent() {
 }
 
 ncclResult_t ncclProfilerStartCollApiEvent(struct ncclInfo *info, bool isGraphCaptured) {
-  ncclProfilerEventDescr_t eDescr = { 0 };
+  ncclProfilerEventDescr_t eDescr = {};
   eDescr.type = ncclProfileCollApi;
   eDescr.parentObj = ncclProfilerApiState.groupApiEventHandle;
   eDescr.collApi.func = ncclFuncToString(info->coll);
@@ -344,7 +344,7 @@ ncclResult_t ncclProfilerStopCollApiEvent() {
 }
 
 ncclResult_t ncclProfilerStartKernelLaunchEvent(struct ncclKernelPlan* plan, cudaStream_t stream) {
-  ncclProfilerEventDescr_t eDescr = { 0 };
+  ncclProfilerEventDescr_t eDescr = {};
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
     void* groupApiEventHandle = NULL;
     // Check if any collective in the plan has a set event activation mask
@@ -369,7 +369,7 @@ ncclResult_t ncclProfilerStartKernelLaunchEvent(struct ncclKernelPlan* plan, cud
       pt = pt->next;
     }
 
-  startKernelLaunchEvent:
+startKernelLaunchEvent:
     if (eActivationMask_ & ncclProfileKernelLaunch) {
       eDescr.type = ncclProfileKernelLaunch;
       eDescr.parentObj = groupApiEventHandle;
@@ -410,9 +410,9 @@ ncclResult_t ncclProfilerStartGroupEvent(struct ncclKernelPlan* plan) {
       pt = pt->next;
     }
 
-  startGroup:
+startGroup:
     if (eActivationMask_ & (ncclProfileGroup | ncclProfileColl | ncclProfileP2p | ncclProfileProxyOp | ncclProfileProxyStep | ncclProfileKernelCh | ncclProfileNetPlugin)) {
-      ncclProfilerEventDescr_t eDescr = { 0 };
+      ncclProfilerEventDescr_t eDescr = {};
       eDescr.type = ncclProfileGroup;
       ncclProfiler->startEvent(plan->comm->profilerContext, &plan->groupEventHandle, &eDescr);
     }
@@ -437,7 +437,7 @@ ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan) {
     if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
       int enable = ct->eActivationMask & (ncclProfileColl | ncclProfileProxyOp | ncclProfileProxyStep | ncclProfileKernelCh | ncclProfileNetPlugin);
       if (enable) {
-        ncclProfilerEventDescr_t eDescr = { 0 };
+        ncclProfilerEventDescr_t eDescr = {};
         eDescr.type = ncclProfileColl;
         eDescr.coll.parentGroup = plan->groupEventHandle;
         eDescr.parentObj = ct->collApiEventHandle;
@@ -463,7 +463,7 @@ ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan) {
     // made if ncclProfileKernelCh profiler events are active, as they result in proxy events always being added, which
     // gives the consistency.
     if (!plan->persistent || (COMPILER_EXPECT(ncclProfiler != NULL, 0) && (plan->groupEventHandle || ct->collApiEventHandle) &&
-                              (ct->eActivationMask & ncclProfileKernelCh)))
+      (ct->eActivationMask & ncclProfileKernelCh)))
       COMPILER_ATOMIC_FETCH_ADD(&plan->comm->seqNumber[ct->func], 1, std::memory_order_relaxed);
     ct = ct->next;
   }
@@ -472,7 +472,7 @@ ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan) {
     while (pt) {
       int enable = pt->eActivationMask & (ncclProfileP2p | ncclProfileProxyOp | ncclProfileProxyStep | ncclProfileKernelCh | ncclProfileNetPlugin);
       if (enable) {
-        ncclProfilerEventDescr_t eDescr = { 0 };
+        ncclProfilerEventDescr_t eDescr = {};
         eDescr.type = ncclProfileP2p;
         eDescr.p2p.parentGroup = plan->groupEventHandle;
         eDescr.parentObj = pt->p2pApiEventHandle;
@@ -520,7 +520,7 @@ ncclResult_t ncclProfilerStartProxyOpEvent(int s, struct ncclProxyArgs* args) {
   struct ncclProxySubArgs* sub = &args->subs[s];
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
     if (sub->eActivationMask & (ncclProfileProxyOp | ncclProfileProxyStep | ncclProfileNetPlugin)) {
-      ncclProfilerEventDescr_t eDescr = { 0 };
+      ncclProfilerEventDescr_t eDescr = {};
       eDescr.type = ncclProfileProxyOp;
       eDescr.parentObj = sub->taskEventHandle;
       eDescr.rank = sub->rank;
@@ -554,7 +554,7 @@ ncclResult_t ncclProfilerStartSendProxyStepEvent(int s, struct ncclProxyArgs* ar
   int step_ = DIVUP(stepId, args->sliceSteps);
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
     if (sub->eActivationMask & (ncclProfileProxyStep | ncclProfileNetPlugin)) {
-      ncclProfilerEventDescr_t eDescr = { 0 };
+      ncclProfilerEventDescr_t eDescr = {};
       eDescr.type = ncclProfileProxyStep;
       eDescr.parentObj = sub->opEventHandle;
       eDescr.rank = sub->rank;
@@ -573,7 +573,7 @@ ncclResult_t ncclProfilerStartRecvProxyStepEvent(int s, struct ncclProxyArgs* ar
   int step_ = DIVUP(stepId, args->sliceSteps);
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
     if (sub->eActivationMask & (ncclProfileProxyStep | ncclProfileNetPlugin)) {
-      ncclProfilerEventDescr_t eDescr = { 0 };
+      ncclProfilerEventDescr_t eDescr = {};
       eDescr.type = ncclProfileProxyStep;
       eDescr.parentObj = sub->opEventHandle;
       eDescr.rank = sub->rank;
@@ -606,7 +606,7 @@ ncclResult_t ncclProfilerStartProxyCtrlEvent(void* profilerContext, void** eHand
     // for proxy control events we allow profiling mode to change on a per event basis
     int eActivationMaskProxy = COMPILER_ATOMIC_LOAD(&ncclProfilerEventMask, std::memory_order_relaxed);
     if (eActivationMaskProxy & ncclProfileProxyCtrl) {
-      ncclProfilerEventDescr_t eDescr = { 0 };
+      ncclProfilerEventDescr_t eDescr = {};
       eDescr.type = ncclProfileProxyCtrl;
       ncclProfiler->startEvent(profilerContext, eHandle, &eDescr);
       TIME_STOP_EVENT(proxyCtrlStart);
@@ -699,7 +699,7 @@ ncclResult_t ncclProfilerAddPidToProxyOp(struct ncclProxyOp* op) {
 
 static std::mutex proxyProfilerConnectMutex;
 
-static ncclResult_t proxyProfilerConnect(struct ncclComm* comm, struct ncclProxyOp* op) {
+static ncclResult_t proxyProfilerConnect(struct ncclComm* comm, struct ncclProxyOp* /*op*/) {
   ncclResult_t ret = ncclSuccess;
   std::lock_guard<std::mutex> lock(proxyProfilerConnectMutex);
   if (comm->profiler.initialized) goto exit;
@@ -730,7 +730,7 @@ ncclResult_t ncclProfilerCallback(void** eHandle, int type, void* pHandle, int64
       struct ncclProxyEventHandle* p = (struct ncclProxyEventHandle*)pHandle;
       struct ncclProxySubArgs* sub = p->subArgPtr;
       if (sub->eActivationMask & ncclProfileNetPlugin) {
-        ncclProfilerEventDescr_t eDescr = { 0 };
+        ncclProfilerEventDescr_t eDescr = {};
         eDescr.type = ncclProfileNetPlugin;
         eDescr.parentObj = p->stepEventHandle;
         eDescr.rank = sub->rank;
@@ -766,7 +766,7 @@ ncclResult_t ncclProfilerStartCeCollEvent(struct ncclComm* comm, struct ncclCeCo
     // Check if CE Coll events are enabled (or child events CeSync/CeBatch which need CeColl)
     int ceCollMask = ncclProfileCeColl | ncclProfileCeSync | ncclProfileCeBatch;
     if (__atomic_load_n(&ncclProfilerEventMask, __ATOMIC_RELAXED) & ceCollMask) {
-      ncclProfilerEventDescr_t eDescr = { 0 };
+      ncclProfilerEventDescr_t eDescr = {};
       eDescr.type = ncclProfileCeColl;
       eDescr.parentObj = args->collApiEventHandle;
       eDescr.rank = comm->rank;
@@ -794,7 +794,7 @@ ncclResult_t ncclProfilerStartCeCollEvent(struct ncclComm* comm, struct ncclCeCo
 /*
  * CE Collective stop event - calls plugin stopEvent callback
  */
-ncclResult_t ncclProfilerStopCeCollEvent(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream) {
+ncclResult_t ncclProfilerStopCeCollEvent(struct ncclComm* /*comm*/, struct ncclCeCollArgs* args, cudaStream_t /*stream*/) {
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
     if (args && args->ceCollProfHandle) {
       ncclProfiler->stopEvent(args->ceCollProfHandle);
@@ -807,11 +807,11 @@ ncclResult_t ncclProfilerStopCeCollEvent(struct ncclComm* comm, struct ncclCeCol
  * CE Sync start event - calls plugin startEvent callback
  */
 ncclResult_t ncclProfilerStartCeSyncEvent(struct ncclComm* comm, struct ncclCeCollArgs* args,
-                                          cudaStream_t stream, void** ceSyncHandle) {
+    cudaStream_t /*stream*/, void** ceSyncHandle) {
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
     if (args && args->ceCollProfHandle && (__atomic_load_n(&ncclProfilerEventMask, __ATOMIC_RELAXED) & ncclProfileCeSync)) {
       // CeSync only needs to check if it's enabled; parent CeColl is implicitly started via ceCollMask
-      ncclProfilerEventDescr_t eDescr = { 0 };
+      ncclProfilerEventDescr_t eDescr = {};
       eDescr.type = ncclProfileCeSync;
       eDescr.parentObj = args->ceCollProfHandle;
       eDescr.rank = comm->rank;
@@ -828,8 +828,8 @@ ncclResult_t ncclProfilerStartCeSyncEvent(struct ncclComm* comm, struct ncclCeCo
 /*
  * CE Sync stop event - calls plugin stopEvent callback
  */
-ncclResult_t ncclProfilerStopCeSyncEvent(struct ncclComm* comm, void* ceSyncHandle,
-                                         cudaStream_t stream) {
+ncclResult_t ncclProfilerStopCeSyncEvent(struct ncclComm* /*comm*/, void* ceSyncHandle,
+    cudaStream_t /*stream*/) {
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && ceSyncHandle) {
     ncclProfiler->stopEvent(ceSyncHandle);
   }
@@ -840,15 +840,15 @@ ncclResult_t ncclProfilerStopCeSyncEvent(struct ncclComm* comm, void* ceSyncHand
  * CE Batch start event - calls plugin startEvent callback
  */
 ncclResult_t ncclProfilerStartCeBatchEvent(struct ncclComm* comm,
-                                           struct ncclCeCollArgs* args,
-                                           struct ncclCeBatchOpsParams* params,
-                                           cudaStream_t stream,
-                                           void** ceBatchHandle) {
+    struct ncclCeCollArgs* args,
+    struct ncclCeBatchOpsParams* params,
+    cudaStream_t /*stream*/,
+    void** ceBatchHandle) {
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
     if (args && args->ceCollProfHandle) {
       // CeBatch only needs to check if it's enabled; parent CeColl is implicitly started via ceCollMask
       if (__atomic_load_n(&ncclProfilerEventMask, __ATOMIC_RELAXED) & ncclProfileCeBatch) {
-        ncclProfilerEventDescr_t eDescr = { 0 };
+        ncclProfilerEventDescr_t eDescr = {};
         eDescr.type = ncclProfileCeBatch;
         eDescr.parentObj = args->ceCollProfHandle;
         eDescr.rank = comm->rank;
@@ -872,7 +872,7 @@ ncclResult_t ncclProfilerStartCeBatchEvent(struct ncclComm* comm,
 /*
  * CE Batch stop event - calls plugin stopEvent callback
  */
-ncclResult_t ncclProfilerStopCeBatchEvent(struct ncclComm* comm, void* ceBatchHandle, cudaStream_t stream) {
+ncclResult_t ncclProfilerStopCeBatchEvent(struct ncclComm* /*comm*/, void* ceBatchHandle, cudaStream_t /*stream*/) {
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && ceBatchHandle) {
     ncclProfiler->stopEvent(ceBatchHandle);
   }

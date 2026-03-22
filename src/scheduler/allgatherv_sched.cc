@@ -82,7 +82,7 @@ ncclResult_t ncclScheduleBcastTasksToPlan(
 
     // Break each bcast into nParts evenly, each part assigned to a channel.
     int nParts = nChannels;
-    uint32_t channelWorkBytes[MAXCHANNELS] = {0};
+    uint32_t channelWorkBytes[MAXCHANNELS] = {};
     for (int part=0; part < nParts; part++) {
       // Sort tasks according to ring depth upstream from us.
       int nTasks = batchTasks;
@@ -155,7 +155,7 @@ ncclResult_t ncclScheduleBcastTasksToPlan(
           ncclAddWorkBatchToPlan(comm, plan, channelId, ncclDevWorkTypeBcast, funcIndex, plan->workBytes, /*p2pEpoch=*/-1, /*p2pRound=*/-1, newBatch);
           newBatch = false;
           plan->workBytes += sizeof(ncclDevWorkBcast);
-      }
+        }
       }
 
       // calculate proxy for this channel

@@ -36,23 +36,23 @@ static int sock = -1;
 
 static void printUsage(const char* argv0) {
   fprintf(stderr,
-          "Usage: %s [OPTION]...\n"
-          "Query the state of a running NCCL job.\n"
-          "\nOptions:\n"
-          "  -f, --format=FMT    Output format: text or json (text by default)\n"
-          "  -h, --host=HOST     Host name or IP address of the RAS client socket of the\n"
-          "                      NCCL job to connect to (localhost by default)\n"
-          "  -m, --monitor[=GROUPS] Monitor mode: continuously watch for peer changes.\n"
-          "                      Optional GROUPS: lifecycle, trace, all, or\n"
-          "                      combinations like lifecycle,trace (lifecycle by default)\n"
-          "  -p, --port=PORT     TCP port of the RAS client socket of the NCCL job\n"
-          "                      (" STR(NCCL_RAS_CLIENT_PORT) " by default)\n"
-          "  -t, --timeout=SECS  Maximum time for the local NCCL process to wait for\n"
-          "                      responses from other NCCL processes\n"
-          "                      (" STR(RAS_COLLECTIVE_LEG_TIMEOUT_SEC) " secs by default; 0 disables the timeout)\n"
-          "  -v, --verbose       Increase the verbosity level of the RAS output\n"
-          "      --help          Print this help and exit\n"
-          "      --version       Print the version number and exit\n", argv0);
+      "Usage: %s [OPTION]...\n"
+      "Query the state of a running NCCL job.\n"
+      "\nOptions:\n"
+      "  -f, --format=FMT    Output format: text or json (text by default)\n"
+      "  -h, --host=HOST     Host name or IP address of the RAS client socket of the\n"
+      "                      NCCL job to connect to (localhost by default)\n"
+      "  -m, --monitor[=GROUPS] Monitor mode: continuously watch for peer changes.\n"
+      "                      Optional GROUPS: lifecycle, trace, all, or\n"
+      "                      combinations like lifecycle,trace (lifecycle by default)\n"
+      "  -p, --port=PORT     TCP port of the RAS client socket of the NCCL job\n"
+      "                      (" STR(NCCL_RAS_CLIENT_PORT) " by default)\n"
+      "  -t, --timeout=SECS  Maximum time for the local NCCL process to wait for\n"
+      "                      responses from other NCCL processes\n"
+      "                      (" STR(RAS_COLLECTIVE_LEG_TIMEOUT_SEC) " secs by default; 0 disables the timeout)\n"
+      "  -v, --verbose       Increase the verbosity level of the RAS output\n"
+      "      --help          Print this help and exit\n"
+      "      --version       Print the version number and exit\n", argv0);
 }
 
 static void parseArgs(int argc, char** argv) {
@@ -67,7 +67,7 @@ static void parseArgs(int argc, char** argv) {
     {"timeout", required_argument, NULL, 't'},
     {"verbose", no_argument,       NULL, 'v'},
     {"version", no_argument,       NULL, 'r'},
-    {0}
+    {0, 0, 0, 0}
   };
 
   while ((c = getopt_long(argc, argv, "f:h:m::p:t:v", longOpts, &optIdx)) != -1) {
@@ -108,7 +108,7 @@ static void parseArgs(int argc, char** argv) {
         exit(0);
       case 'r':
         fprintf(stderr, "NCCL RAS client version " STR(NCCL_MAJOR) "." STR(NCCL_MINOR) "."
-                STR(NCCL_PATCH) NCCL_SUFFIX "\n");
+          STR(NCCL_PATCH) NCCL_SUFFIX "\n");
         exit(0);
       default:
         printUsage(argv[0]);
@@ -157,7 +157,7 @@ static ssize_t rasRead(int fd, void* buf, size_t count, bool untilNewline = true
 }
 
 static int connectToNCCL() {
-  struct addrinfo hints = {0};
+  struct addrinfo hints = {};
   struct addrinfo* addrInfo = nullptr;
   int ret;
   char msgBuf[1024];
@@ -181,7 +181,7 @@ retry:
     }
     // Initially start with a small, 1-sec timeout to quickly eliminate non-responsive processes...
     if (timeout && (setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv) != 0 ||
-                    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) != 0)) {
+      setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) != 0)) {
       perror("setsockopt");
       // Non-fatal; fall through.
     }
@@ -189,7 +189,7 @@ retry:
       break;
     err = errno;
     if (getnameinfo(ai->ai_addr, ai->ai_addrlen, hostBuf, sizeof(hostBuf), portBuf, sizeof(portBuf),
-                    NI_NUMERICHOST | NI_NUMERICSERV) != 0) {
+      NI_NUMERICHOST | NI_NUMERICSERV) != 0) {
       strcpy(hostBuf, hostName);
       strcpy(portBuf, port);
     }
@@ -202,11 +202,11 @@ retry:
 
   if (sock == -1) {
     fprintf(stderr, "Failed to connect to the NCCL RAS service!\n"
-            "Please make sure that the NCCL job has the RAS service enabled and that\n"
-            "%s.\n",
-            (strcmp(hostName, "localhost") || strcmp(port, STR(NCCL_RAS_CLIENT_PORT)) ?
-            "the host/port arguments are correct and match NCCL_RAS_ADDR" :
-            "the RAS client was started on a node where the NCCL job is running"));
+                    "Please make sure that the NCCL job has the RAS service enabled and that\n"
+                    "%s.\n",
+        (strcmp(hostName, "localhost") || strcmp(port, STR(NCCL_RAS_CLIENT_PORT)) ?
+                      "the host/port arguments are correct and match NCCL_RAS_ADDR" :
+                      "the RAS client was started on a node where the NCCL job is running"));
     goto fail;
   }
 
@@ -237,7 +237,7 @@ retry:
   }
   if (strtol(msgBuf+strlen("SERVER PROTOCOL "), nullptr, 10) != NCCL_RAS_CLIENT_PROTOCOL) {
     fprintf(stderr, "NCCL RAS protocol version mismatch (NCCL: %s; RAS client: %d)!\n"
-            "Will try to continue in spite of that...\n", msgBuf+strlen("SERVER PROTOCOL "), NCCL_RAS_CLIENT_PROTOCOL);
+                    "Will try to continue in spite of that...\n", msgBuf+strlen("SERVER PROTOCOL "), NCCL_RAS_CLIENT_PROTOCOL);
   }
 
   if (timeout >= 0) {
@@ -362,7 +362,7 @@ static int getNCCLStatus() {
 static int monitorNCCLEvents() {
   char msgBuf[4096];
   int bytes;
-  struct timeval tv = {0, 0}; // No timeout for monitor mode.
+  struct timeval tv = {}; // No timeout for monitor mode.
 
   // Send the monitor command with optional event levels.
   if (events) {

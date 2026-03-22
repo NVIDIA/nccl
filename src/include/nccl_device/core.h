@@ -139,6 +139,16 @@ struct ncclTeamRequirements {
   sizeof(ncclCommProperties_t),                    /* size */            \
   NCCL_API_MAGIC,                                    /* magic */           \
   NCCL_VERSION(NCCL_MAJOR, NCCL_MINOR, NCCL_PATCH),  /* version */         \
+  0,                                                 /* rank */            \
+  0,                                                 /* nRanks */          \
+  0,                                                 /* cudaDev */         \
+  0,                                                 /* nvmlDev */         \
+  false,                                             /* deviceApiSupport */\
+  false,                                             /* multimemSupport */ \
+  NCCL_GIN_TYPE_NONE,                                /* ginType */         \
+  0,                                                 /* nLsaTeams */       \
+  false,                                             /* hostRmaSupport */  \
+  NCCL_GIN_TYPE_NONE,                                /* railedGinType */   \
 }
 
 typedef enum {

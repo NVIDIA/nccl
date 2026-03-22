@@ -147,6 +147,7 @@ static inline ncclResult_t ncclCudaHostFree(void* ptr) {
 
 template <typename T>
 ncclResult_t ncclCallocDebug(T** ptr, size_t nelem, const char *filefunc, int line) {
+  (void)filefunc; (void)line;
   if (nelem > 0) {
     T* p = (T*)malloc(nelem*ncclSizeOfT<T>());
     if (p == NULL) {
@@ -206,8 +207,8 @@ ncclResult_t ncclRealloc(T** ptr, size_t oldNelem, size_t nelem) {
 
 // Helper function to map memory and set access permissions for a device
 static inline ncclResult_t ncclCuMemMapAndSetAccess(void *ptr, size_t size,
-  CUmemGenericAllocationHandle handle,
-  int cudaDev) {
+    CUmemGenericAllocationHandle handle,
+    int cudaDev) {
   ncclResult_t result = ncclSuccess;
   // Map the virtual address range to the physical allocation
   CUCHECK(cuMemMap((CUdeviceptr)ptr, size, 0, handle, 0));
@@ -253,9 +254,9 @@ static inline ncclResult_t ncclCuMemFreeAddr(void *ptr, int numSegments = 1) {
 }
 
 static inline ncclResult_t ncclCuMemAlloc(void **ptr, CUmemGenericAllocationHandle *handlep,
-                                          CUmemAllocationHandleType type, size_t size,
-                                          struct ncclMemManager* manager,
-                                          ncclMemType_t memType = ncclMemPersist) {
+    CUmemAllocationHandleType type, size_t size,
+    struct ncclMemManager* manager,
+    ncclMemType_t memType = ncclMemPersist) {
   ncclResult_t result = ncclSuccess;
   size_t granularity = 0;
   CUdevice currentDev;
@@ -344,7 +345,7 @@ static inline ncclResult_t ncclCuMemGetAddressRange(CUdeviceptr userBuff, size_t
 extern int ncclCuMemEnable();
 
 static inline ncclResult_t ncclCuMemAlloc(void **ptr, void *handlep, int type, size_t size,
-                                          struct ncclMemManager* manager, ncclMemType_t memType = ncclMemScratch) {
+    struct ncclMemManager* manager, ncclMemType_t memType = ncclMemScratch) {
   WARN("CUMEM not supported prior to CUDA 11.3");
   return ncclInternalError;
 }
@@ -372,7 +373,7 @@ static inline ncclResult_t ncclCuMemGetAddressRange(CUdeviceptr userBuff, size_t
 
 template <typename T>
 ncclResult_t ncclCudaMallocDebug(T** ptr, size_t nelem, const char *filefunc, int line,
-                                  struct ncclMemManager* manager, ncclMemType_t memType = ncclMemPersist) {
+    struct ncclMemManager* manager, ncclMemType_t memType = ncclMemPersist) {
   ncclResult_t result = ncclSuccess;
   cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
   *ptr = nullptr;
@@ -394,7 +395,7 @@ finish:
 
 template <typename T>
 ncclResult_t ncclCudaCallocDebug(T** ptr, size_t nelem, const char *filefunc, int line,
-                                  struct ncclMemManager* manager, ncclMemType_t memType = ncclMemPersist) {
+    struct ncclMemManager* manager, ncclMemType_t memType = ncclMemPersist) {
   ncclResult_t result = ncclSuccess;
   cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
   *ptr = nullptr;
@@ -422,7 +423,7 @@ finish:
 
 template <typename T>
 ncclResult_t ncclCudaCallocAsyncDebug(T** ptr, size_t nelem, cudaStream_t stream, const char *filefunc, int line,
-                                       struct ncclMemManager* manager, ncclMemType_t memType = ncclMemPersist) {
+    struct ncclMemManager* manager, ncclMemType_t memType = ncclMemPersist) {
   ncclResult_t result = ncclSuccess;
   cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
   *ptr = nullptr;
@@ -494,7 +495,7 @@ ncclResult_t ncclCudaFree(T* ptr, struct ncclMemManager* manager, int numSegment
   CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
   if (ncclCuMemEnable()) {
     NCCLCHECKGOTO(ncclCuMemFree((void *)ptr, manager, numSegments), result, finish);
-  } else{
+  } else {
     if (numSegments > 1) {
       result = ncclUnhandledCudaError;
       goto finish;

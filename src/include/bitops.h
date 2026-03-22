@@ -13,34 +13,34 @@
 #include "compiler.h"
 
 #if !__NVCC__
-  #ifndef __host__
-    #define __host__
-  #endif
-  #ifndef __device__
-    #define __device__
-  #endif
+#ifndef __host__
+#define __host__
+#endif
+#ifndef __device__
+#define __device__
+#endif
 #endif
 
 template<typename Int>
 constexpr static __host__ __device__ Int minval(Int a) { return a; }
 template<typename Int, typename ...More>
 constexpr static __host__ __device__ Int minval(Int a, Int b, More ...more) {
-  #if __CUDA_ARCH__
-    return minval(min(a, b), more...);
-  #else
-    return minval(a < b ? a : b, more...);
-  #endif
+#if __CUDA_ARCH__
+  return minval(min(a, b), more...);
+#else
+  return minval(a < b ? a : b, more...);
+#endif
 }
 
 template<typename Int>
 constexpr static __host__ __device__ Int maxval(Int a) { return a; }
 template<typename Int, typename ...More>
 constexpr static __host__ __device__ Int maxval(Int a, Int b, More ...more) {
-  #if __CUDA_ARCH__
-    return maxval(max(a, b), more...);
-  #else
-    return maxval(a > b ? a : b, more...);
-  #endif
+#if __CUDA_ARCH__
+  return maxval(max(a, b), more...);
+#else
+  return maxval(a > b ? a : b, more...);
+#endif
 }
 
 #define BIT(x) (1UL << (x))
@@ -151,7 +151,7 @@ static __host__ __device__ uint64_t mul64hi(uint64_t a, uint64_t b) {
 
 // Produce the reciprocal of x*y given their respective reciprocals. This incurs
 // no integer division on device.
-static __host__ __device__ uint32_t imulRcp32(uint32_t x, uint32_t xrcp, uint32_t y, uint32_t yrcp) {
+static inline __host__ __device__ uint32_t imulRcp32(uint32_t x, uint32_t xrcp, uint32_t y, uint32_t yrcp) {
   if (xrcp == 0) return yrcp;
   if (yrcp == 0) return xrcp;
   uint32_t rcp = mul32hi(xrcp, yrcp);
@@ -159,7 +159,7 @@ static __host__ __device__ uint32_t imulRcp32(uint32_t x, uint32_t xrcp, uint32_
   if (x*y <= rem) rcp += 1;
   return rcp;
 }
-static __host__ __device__ uint64_t imulRcp64(uint64_t x, uint64_t xrcp, uint64_t y, uint64_t yrcp) {
+static inline __host__ __device__ uint64_t imulRcp64(uint64_t x, uint64_t xrcp, uint64_t y, uint64_t yrcp) {
   if (xrcp == 0) return yrcp;
   if (yrcp == 0) return xrcp;
   uint64_t rcp = mul64hi(xrcp, yrcp);
@@ -191,23 +191,23 @@ static __host__ __device__ void idivmodFast64(uint64_t *quo, uint64_t *rem, uint
   *rem = r;
 }
 
-static __host__ __device__ uint32_t idivFast32(uint32_t x, uint32_t y, uint32_t yrcp) {
+static inline __host__ __device__ uint32_t idivFast32(uint32_t x, uint32_t y, uint32_t yrcp) {
   uint32_t q, r;
   idivmodFast32(&q, &r, x, y, yrcp);
   return q;
 }
-static __host__ __device__ uint32_t idivFast64(uint64_t x, uint64_t y, uint64_t yrcp) {
+static inline __host__ __device__ uint32_t idivFast64(uint64_t x, uint64_t y, uint64_t yrcp) {
   uint64_t q, r;
   idivmodFast64(&q, &r, x, y, yrcp);
   return q;
 }
 
-static __host__ __device__ uint32_t imodFast32(uint32_t x, uint32_t y, uint32_t yrcp) {
+static inline __host__ __device__ uint32_t imodFast32(uint32_t x, uint32_t y, uint32_t yrcp) {
   uint32_t q, r;
   idivmodFast32(&q, &r, x, y, yrcp);
   return r;
 }
-static __host__ __device__ uint32_t imodFast64(uint64_t x, uint64_t y, uint64_t yrcp) {
+static inline __host__ __device__ uint32_t imodFast64(uint64_t x, uint64_t y, uint64_t yrcp) {
   uint64_t q, r;
   idivmodFast64(&q, &r, x, y, yrcp);
   return r;
@@ -352,10 +352,10 @@ template<typename UInt, int nSubBits>
 static __host__ UInt reverseSubBits(UInt x) {
   if (nSubBits >= 16 && 8*sizeof(UInt) == nSubBits) {
     switch (8*sizeof(UInt)) {
-    case 16: x = COMPILER_BSWAP16(x); break;
-    case 32: x = COMPILER_BSWAP32(x); break;
-    case 64: x = COMPILER_BSWAP64(x); break;
-    default: static_assert(8*sizeof(UInt) <= 64, "Unsupported integer type.");
+      case 16: x = COMPILER_BSWAP16(x); break;
+      case 32: x = COMPILER_BSWAP32(x); break;
+      case 64: x = COMPILER_BSWAP64(x); break;
+      default: static_assert(8*sizeof(UInt) <= 64, "Unsupported integer type.");
     }
     return reverseSubBits<UInt, 8>(x);
   } else if (nSubBits <= 1) {
@@ -386,17 +386,17 @@ static __host__ __device__ Int reverseBits(Int x, int nBits) {
   using UInt = typename ncclToUnsigned<Int>::type;
   union { UInt ux; Int sx; };
   sx = x;
-  #if __CUDA_ARCH__
-    if (sizeof(Int) <= sizeof(unsigned int)) {
-      ux = __brev(ux);
-    } else if (sizeof(Int) <= sizeof(unsigned long long)) {
-      ux = __brevll(ux);
-    } else {
-      static_assert(sizeof(Int) <= sizeof(unsigned long long), "Unsupported integer type.");
-    }
-  #else
-    ux = reverseSubBits<UInt, 8*sizeof(UInt)>(ux);
-  #endif
+#if __CUDA_ARCH__
+  if (sizeof(Int) <= sizeof(unsigned int)) {
+    ux = __brev(ux);
+  } else if (sizeof(Int) <= sizeof(unsigned long long)) {
+    ux = __brevll(ux);
+  } else {
+    static_assert(sizeof(Int) <= sizeof(unsigned long long), "Unsupported integer type.");
+  }
+#else
+  ux = reverseSubBits<UInt, 8*sizeof(UInt)>(ux);
+#endif
   ux = nBits==0 ? 0 : ux>>(8*sizeof(UInt)-nBits);
   return sx;
 }
@@ -408,11 +408,11 @@ static __host__ __device__ Int reverseBits(Int x, int nBits) {
 
 static __host__ __device__ uint32_t u32fpEncode(uint32_t x, int bitsPerPow2) {
   int log2x;
-  #if __CUDA_ARCH__
-    log2x = 31-__clz(x|1);
-  #else
-    log2x = 31-COMPILER_CLZ(x|1);
-  #endif
+#if __CUDA_ARCH__
+  log2x = 31-__clz(x|1);
+#else
+  log2x = 31-COMPILER_CLZ(x|1);
+#endif
   uint32_t mantissa = x>>(log2x >= bitsPerPow2 ? log2x-bitsPerPow2 : 0) & ((1u<<bitsPerPow2)-1);
   uint32_t exponent = log2x >= bitsPerPow2 ? log2x-(bitsPerPow2-1) : 0;
   return exponent<<bitsPerPow2 | mantissa;
@@ -427,10 +427,10 @@ static __host__ __device__ uint32_t u32fpDecode(uint32_t x, int bitsPerPow2) {
 
 constexpr uint32_t u32fp8MaxValue() { return 0xf0000000; }
 
-static __host__ __device__ uint8_t u32fp8Encode(uint32_t x) {
+static inline __host__ __device__ uint8_t u32fp8Encode(uint32_t x) {
   return u32fpEncode(x, 3);
 }
-static __host__ __device__ uint32_t u32fp8Decode(uint8_t x) {
+static inline __host__ __device__ uint32_t u32fp8Decode(uint8_t x) {
   return u32fpDecode(x, 3);
 }
 

@@ -63,9 +63,9 @@ static char* getLibPath(void* handle) {
 
 static void* openPluginLib(enum ncclPluginType type, const char* libName) {
   int openErr, len = PATH_MAX;
-  char libName_[MAX_STR_LEN] = { 0 };
-  char openErrStr[MAX_STR_LEN + 1] = { 0 };
-  char eNoEntNameList[PATH_MAX] = { 0 };
+  char libName_[MAX_STR_LEN] = {};
+  char openErrStr[MAX_STR_LEN + 1] = {};
+  char eNoEntNameList[PATH_MAX] = {};
 
   if (libName && strlen(libName)) {
     snprintf(libName_, MAX_STR_LEN, "%s", libName);
@@ -87,8 +87,8 @@ static void* openPluginLib(enum ncclPluginType type, const char* libName) {
 
   // libName can't be a relative or absolute path (start with '.' or contain any '/'). It can't be a library name either (start with 'lib' or end with '.so')
   if (libName && strlen(libName) && strchr(libName, '/') == nullptr &&
-      (strncmp(libName, "lib", strlen("lib")) || strlen(libName) < strlen(".so") ||
-       strncmp(libName + strlen(libName) - strlen(".so"), ".so", strlen(".so")))) {
+    (strncmp(libName, "lib", strlen("lib")) || strlen(libName) < strlen(".so") ||
+    strncmp(libName + strlen(libName) - strlen(".so"), ".so", strlen(".so")))) {
     snprintf(libName_, MAX_STR_LEN, "%s-%s.so", pluginPrefix[type], libName);
 
     libHandles[type] = tryOpenLib(libName_, &openErr, openErrStr);
@@ -106,7 +106,7 @@ static void* openPluginLib(enum ncclPluginType type, const char* libName) {
 
   if (strlen(eNoEntNameList)) {
     INFO(subsys[type], "%s/Plugin: Could not find:%s%s%s", pluginNames[type], eNoEntNameList,
-         (strlen(pluginFallback[type]) > 0 ? ". " : ""), pluginFallback[type]);
+        (strlen(pluginFallback[type]) > 0 ? ". " : ""), pluginFallback[type]);
   } else if (strlen(pluginFallback[type])) {
     INFO(subsys[type], "%s/Plugin: %s", pluginNames[type], pluginFallback[type]);
   }

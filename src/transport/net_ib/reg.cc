@@ -7,7 +7,7 @@
 
 #include "common.h"
 
-ncclResult_t ncclIbRegMrDmaBufInternal2(ncclIbNetCommDevBase* base, void* data, size_t size, int type, uint64_t offset, int fd, uint64_t mrFlags, ibv_mr** mhandle) {
+ncclResult_t ncclIbRegMrDmaBufInternal2(ncclIbNetCommDevBase* base, void* data, size_t size, int /*type*/, uint64_t offset, int fd, uint64_t mrFlags, ibv_mr** mhandle) {
   static thread_local uintptr_t pageSize = 0;
   if (pageSize == 0) pageSize = sysconf(_SC_PAGESIZE);
   struct ncclIbMrCache* cache = &ncclIbDevs[base->ibDevN].mrCache;
@@ -36,8 +36,7 @@ ncclResult_t ncclIbRegMrDmaBufInternal2(ncclIbNetCommDevBase* base, void* data, 
         if (relaxedOrdering) {
           // Use IBVERBS_1.8 API - needed for IBV_ACCESS_RELAXED_ORDERING support
           NCCLCHECK(wrap_ibv_reg_mr_iova2(&mr, base->pd, (void*)addr, pages*pageSize, addr, flags));
-        }
-        else {
+        } else {
           NCCLCHECK(wrap_ibv_reg_mr(&mr, base->pd, (void*)addr, pages*pageSize, flags));
         }
       }
@@ -51,7 +50,7 @@ ncclResult_t ncclIbRegMrDmaBufInternal2(ncclIbNetCommDevBase* base, void* data, 
       *mhandle = mr;
       return ncclSuccess;
     } else if ((addr >= cache->slots[slot].addr) &&
-        ((addr-cache->slots[slot].addr)/pageSize+pages) <= cache->slots[slot].pages) {
+      ((addr-cache->slots[slot].addr)/pageSize+pages) <= cache->slots[slot].pages) {
       cache->slots[slot].refs += 1;
       *mhandle = cache->slots[slot].mr;
       return ncclSuccess;

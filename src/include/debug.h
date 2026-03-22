@@ -40,15 +40,15 @@ extern char ncclLastError[];
 
 #define INFO(FLAGS, ...) \
     do{ \
-        int level = COMPILER_ATOMIC_LOAD(&ncclDebugLevel, std::memory_order_acquire); \
-        if((level >= NCCL_LOG_INFO && ((unsigned long)(FLAGS) & ncclDebugMask)) || (level < 0)) \
+        int _ncclDbgLevel = COMPILER_ATOMIC_LOAD(&ncclDebugLevel, std::memory_order_acquire); \
+        if((_ncclDbgLevel >= NCCL_LOG_INFO && ((unsigned long)(FLAGS) & ncclDebugMask)) || (_ncclDbgLevel < 0)) \
             ncclDebugLog(NCCL_LOG_INFO, (unsigned long)(FLAGS), __func__, __LINE__, __VA_ARGS__); \
     } while(0)
 
 #define TRACE_CALL(...) \
     do { \
-        int level = COMPILER_ATOMIC_LOAD(&ncclDebugLevel, std::memory_order_acquire); \
-        if((level >= NCCL_LOG_TRACE && (NCCL_CALL & ncclDebugMask)) || (level < 0)) { \
+        int _ncclDbgLevel = COMPILER_ATOMIC_LOAD(&ncclDebugLevel, std::memory_order_acquire); \
+        if((_ncclDbgLevel >= NCCL_LOG_TRACE && (NCCL_CALL & ncclDebugMask)) || (_ncclDbgLevel < 0)) { \
             ncclDebugLog(NCCL_LOG_TRACE, NCCL_CALL, __func__, __LINE__, __VA_ARGS__); \
         } \
     } while (0)
@@ -56,8 +56,8 @@ extern char ncclLastError[];
 #ifdef ENABLE_TRACE
 #define TRACE(FLAGS, ...) \
     do { \
-        int level = COMPILER_ATOMIC_LOAD(&ncclDebugLevel, std::memory_order_acquire); \
-        if ((level >= NCCL_LOG_TRACE && ((unsigned long)(FLAGS) & ncclDebugMask)) || (level < 0)) { \
+        int _ncclDbgLevel = COMPILER_ATOMIC_LOAD(&ncclDebugLevel, std::memory_order_acquire); \
+        if ((_ncclDbgLevel >= NCCL_LOG_TRACE && ((unsigned long)(FLAGS) & ncclDebugMask)) || (_ncclDbgLevel < 0)) { \
             ncclDebugLog(NCCL_LOG_TRACE, (unsigned long)(FLAGS), __func__, __LINE__, __VA_ARGS__); \
         } \
     } while (0)

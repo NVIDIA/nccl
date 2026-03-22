@@ -59,13 +59,13 @@ static ncclResult_t ncclNet_irecv(void* recvComm, int n, void** data, size_t* si
 }
 
 static ncclResult_t ncclNet_listen(void* ctx __attribute__((unused)),
-    int dev, void* handle, void** listenComm) {
+  int dev, void* handle, void** listenComm) {
   return ncclNet_v9->listen(dev, handle, listenComm);
 }
 
 static ncclResult_t ncclNet_connect(void* ctx __attribute__((unused)),
-    int dev,
-    void* handle, void** sendComm, ncclNetDeviceHandle_t** sendDevComm) {
+  int dev,
+  void* handle, void** sendComm, ncclNetDeviceHandle_t** sendDevComm) {
   return ncclNet_v9->connect(dev, handle, sendComm, sendDevComm);
 }
 
@@ -105,23 +105,23 @@ static ncclResult_t ncclCollNet_getProperties(int dev, ncclNetProperties_t* prop
 }
 
 static ncclResult_t ncclCollNet_listen(void* ctx __attribute__((unused)),
-    int d, void* handle, void** listenComm) {
+  int d, void* handle, void** listenComm) {
   return ncclCollNet_v9->listen(d, handle, listenComm);
 }
 
 static ncclResult_t ncclCollNet_iallgather(void* collComm, void* sendData, int nRecvParts, ncclNetSGE_t* recvParts,
-                             size_t bytesPerRank, size_t windowOffset, size_t windowBytes,
-                             void* sendMhandle, void** request) {
+    size_t bytesPerRank, size_t windowOffset, size_t windowBytes,
+    void* sendMhandle, void** request) {
   return ncclCollNet_v9->iallgather(collComm, sendData, nRecvParts, (ncclNetSGE_v9_t*)recvParts, bytesPerRank,
-                             windowOffset, windowBytes, sendMhandle, request);
+    windowOffset, windowBytes, sendMhandle, request);
 }
 
 static ncclResult_t ncclCollNet_ireducescatter(void* collComm, int nSendParts, ncclNetSGE_t* sendParts, void* recvData,
-                                 size_t bytesPerRank, size_t windowOffset, size_t windowBytes,
-                                 ncclDataType_t dataType, ncclRedOp_t redOp,
-                                 void* recvMhandle, void** request) {
+    size_t bytesPerRank, size_t windowOffset, size_t windowBytes,
+    ncclDataType_t dataType, ncclRedOp_t redOp,
+    void* recvMhandle, void** request) {
   return ncclCollNet_v9->ireducescatter(collComm, nSendParts, (ncclNetSGE_v9_t*)sendParts, recvData, bytesPerRank,
-                                 windowOffset, windowBytes, dataType, redOp, recvMhandle, request);
+    windowOffset, windowBytes, dataType, redOp, recvMhandle, request);
 }
 
 static ncclResult_t ncclCollNet_makeVDevice(int* d, ncclNetVDeviceProps_t* props) {
@@ -134,9 +134,9 @@ static ncclResult_t ncclCollNet_finalize(void* ctx __attribute__((unused))) {
 }
 
 static ncclResult_t ncclNet_init(void** ctx __attribute__((unused)),
-    uint64_t commId __attribute__((unused)),
-    ncclNetCommConfig_t* config __attribute__((unused)),
-    ncclDebugLogger_t logfn, ncclProfilerCallback_t proffn) {
+  uint64_t commId __attribute__((unused)),
+  ncclNetCommConfig_t* config __attribute__((unused)),
+  ncclDebugLogger_t logfn, ncclProfilerCallback_t /*proffn*/) {
   // before ncclNet_v11 the net plugin was initialized only once. With ncclNet_v11 this is no longer the case.
   // The compat layer preserves the ncclNet_v9 behavior using a refCount to track the number of times the plugin
   // is initialized, and avoid initializing it multiple times.
@@ -179,8 +179,8 @@ ncclNet_t* getNcclNet_v9(void* lib) {
 }
 
 static ncclResult_t ncclCollNet_init(void** ctx __attribute__((unused)),
-    uint64_t commId __attribute__((unused)),
-    ncclDebugLogger_t logfn) {
+  uint64_t commId __attribute__((unused)),
+  ncclDebugLogger_t logfn) {
   // before ncclCollNet_v11 the collnet plugin was initialized only once. With ncclCollNet_v11 this is no longer the case.
   // The compat layer preserves the ncclCollNet_v9 behavior using a refCount to track the number of times the plugin
   // is initialized, and avoid initializing it multiple times.

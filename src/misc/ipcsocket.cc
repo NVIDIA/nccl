@@ -105,7 +105,7 @@ ncclResult_t ncclIpcSocketClose(ncclIpcSocket *handle) {
 }
 
 ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, int *recvFd) {
-  struct msghdr msg = {0, 0, 0, 0, 0, 0, 0};
+  struct msghdr msg = {};
   struct iovec iov[1];
 
   // Union to guarantee alignment requirements for control array
@@ -144,7 +144,7 @@ ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
     if (((cmptr = CMSG_FIRSTHDR(&msg)) != NULL) && (cmptr->cmsg_len == CMSG_LEN(sizeof(int)))) {
       if ((cmptr->cmsg_level != SOL_SOCKET) || (cmptr->cmsg_type != SCM_RIGHTS)) {
         WARN("UDS: Receiving data over socket failed");
-      return ncclSystemError;
+        return ncclSystemError;
       }
 
       memmove(recvFd, CMSG_DATA(cmptr), sizeof(*recvFd));
@@ -163,7 +163,7 @@ ncclResult_t ncclIpcSocketRecvFd(ncclIpcSocket *handle, int *recvFd) {
 }
 
 ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, const int sendFd, int rank, uint64_t hash) {
-  struct msghdr msg = {0, 0, 0, 0, 0, 0, 0};
+  struct msghdr msg = {};
   struct iovec iov[1];
   char temp[NCCL_IPC_SOCKNAME_LEN];
 

@@ -26,33 +26,33 @@ extern const char* ncclProtoStr[NCCL_NUM_PROTOCOLS];
 #define NCCL_STEPS 8
 
 #ifdef __CUDA_ARCH__
-  #define NCCL_CUDA_ARCH __CUDA_ARCH__
+#define NCCL_CUDA_ARCH __CUDA_ARCH__
 #else
-  #define NCCL_CUDA_ARCH 0
+#define NCCL_CUDA_ARCH 0
 #endif
 
 #ifdef __CUDA_ARCH_SPECIFIC__
-  #define NCCL_CUDA_ARCH_SPECIFIC __CUDA_ARCH_SPECIFIC__
+#define NCCL_CUDA_ARCH_SPECIFIC __CUDA_ARCH_SPECIFIC__
 #elif defined(__CUDA_ARCH_HAS_FEATURE__)
-  #if __CUDA_ARCH_HAS_FEATURE__(SM90_ALL)
-    #define NCCL_CUDA_ARCH_SPECIFIC 900
-  #elif __CUDA_ARCH_HAS_FEATURE__(SM100_ALL)
-    #define NCCL_CUDA_ARCH_SPECIFIC 1000
-  #elif __CUDA_ARCH_HAS_FEATURE__(SM101_ALL)
-    #define NCCL_CUDA_ARCH_SPECIFIC 1010
-  #elif __CUDA_ARCH_HAS_FEATURE__(SM120_ALL)
-    #define NCCL_CUDA_ARCH_SPECIFIC 1200
-  #else
-    #define NCCL_CUDA_ARCH_SPECIFIC 0
-  #endif
+#if __CUDA_ARCH_HAS_FEATURE__(SM90_ALL)
+#define NCCL_CUDA_ARCH_SPECIFIC 900
+#elif __CUDA_ARCH_HAS_FEATURE__(SM100_ALL)
+#define NCCL_CUDA_ARCH_SPECIFIC 1000
+#elif __CUDA_ARCH_HAS_FEATURE__(SM101_ALL)
+#define NCCL_CUDA_ARCH_SPECIFIC 1010
+#elif __CUDA_ARCH_HAS_FEATURE__(SM120_ALL)
+#define NCCL_CUDA_ARCH_SPECIFIC 1200
 #else
-  #define NCCL_CUDA_ARCH_SPECIFIC 0
+#define NCCL_CUDA_ARCH_SPECIFIC 0
+#endif
+#else
+#define NCCL_CUDA_ARCH_SPECIFIC 0
 #endif
 
 #ifdef __CUDA_ARCH_FAMILY_SPECIFIC__
-  #define NCCL_CUDA_ARCH_FAMILY_SPECIFIC __CUDA_ARCH_FAMILY_SPECIFIC__
+#define NCCL_CUDA_ARCH_FAMILY_SPECIFIC __CUDA_ARCH_FAMILY_SPECIFIC__
 #else
-  #define NCCL_CUDA_ARCH_FAMILY_SPECIFIC 0
+#define NCCL_CUDA_ARCH_FAMILY_SPECIFIC 0
 #endif
 
 #include "nccl_device/net_device.h"
@@ -256,13 +256,13 @@ struct alignas(16) ncclDevWorkP2p {
 // Compute the subset of the data transfer corresponding to the given part index.
 inline __host__ __device__ void ncclP2pPartBounds(int nParts, int part, size_t bytes, size_t* partBeg, size_t* partEnd) {
   size_t partBytes = alignUp(divUp(bytes, nParts), 4<<10);
-  #if __CUDA_ARCH__
-    *partBeg = min((part+0)*partBytes, bytes);
-    *partEnd = min((part+1)*partBytes, bytes);
-  #else
-    *partBeg = std::min<size_t>((part+0)*partBytes, bytes);
-    *partEnd = std::min<size_t>((part+1)*partBytes, bytes);
-  #endif
+#if __CUDA_ARCH__
+  *partBeg = min((part+0)*partBytes, bytes);
+  *partEnd = min((part+1)*partBytes, bytes);
+#else
+  *partBeg = std::min<size_t>((part+0)*partBytes, bytes);
+  *partEnd = std::min<size_t>((part+1)*partBytes, bytes);
+#endif
 }
 
 // implemented in channel.h
@@ -321,16 +321,16 @@ struct alignas(16) ncclDevWorkBcast {
 
 __host__ __device__ constexpr int ncclProtoGrainSize(int proto) {
   return proto == NCCL_PROTO_LL ? 16 :
-         proto == NCCL_PROTO_LL128 ? WARP_SIZE*NCCL_LL128_SHMEM_ELEMS_PER_THREAD/NCCL_LL128_LINEELEMS*NCCL_LL128_DATAELEMS*sizeof(uint64_t) :
-         proto == NCCL_PROTO_SIMPLE ? 512 :
-         -1;
+      proto == NCCL_PROTO_LL128 ? WARP_SIZE*NCCL_LL128_SHMEM_ELEMS_PER_THREAD/NCCL_LL128_LINEELEMS*NCCL_LL128_DATAELEMS*sizeof(uint64_t) :
+      proto == NCCL_PROTO_SIMPLE ? 512 :
+      -1;
 }
 
 template<typename Int>
 __host__ __device__ inline void ncclCollCbdPart(
     struct ncclDevWorkColl* work, uint32_t channelId, int proto, int eltSize,
     Int* count, Int* partOffset, Int* partCount, Int* chunkCount
-  ) {
+) {
   int eltPerGrain = ncclProtoGrainSize(proto)/eltSize;
   int nMidChannels = work->channelHi - work->channelLo - 1;
   // We can assum that nMidChannels<0 implies countMid==0, which let's us assume
@@ -370,15 +370,15 @@ enum ncclDevWorkType: uint8_t {
 
 constexpr size_t ncclDevWorkSize(enum ncclDevWorkType type) {
   return type == ncclDevWorkTypeP2p ? sizeof(ncclDevWorkP2p) :
-         type == ncclDevWorkTypeColl ? sizeof(ncclDevWorkColl) :
-         type == ncclDevWorkTypeCollReg ? sizeof(ncclDevWorkCollReg) :
-         type == ncclDevWorkTypeBcast ? sizeof(ncclDevWorkBcast): 0;
+      type == ncclDevWorkTypeColl ? sizeof(ncclDevWorkColl) :
+      type == ncclDevWorkTypeCollReg ? sizeof(ncclDevWorkCollReg) :
+      type == ncclDevWorkTypeBcast ? sizeof(ncclDevWorkBcast): 0;
 }
 
 __host__ __device__ constexpr int ncclMaxDevWorkBatchBytes(int cudaArch = NCCL_CUDA_ARCH) {
   return cudaArch < 800 ? (1<<10) :
-    cudaArch < 900 ? (8<<10) :
-    (16<<10);
+      cudaArch < 900 ? (8<<10) :
+      (16<<10);
 }
 
 #define NCCL_MAX_DEV_WORK_BATCH_BYTES 1024
@@ -474,7 +474,7 @@ struct alignas(16) ncclDevKernelArgs {
   // struct ncclDevWorkBatch batches[];
 };
 
-__host__ __device__ constexpr int ncclMaxKernelArgsSize(/*int cudaDriver, */int cudaArch=NCCL_CUDA_ARCH) {
+__host__ __device__ constexpr int ncclMaxKernelArgsSize(/*int cudaDriver, */int /*cudaArch*/=NCCL_CUDA_ARCH) {
   //return (cudaArch < 700 || cudaDriver < 12010) ? 4<<10 : (32<<10)-4;
   return 4<<10;
 }
@@ -526,8 +526,8 @@ __host__ __device__ constexpr int ncclCollUnroll(int cudaArch = NCCL_CUDA_ARCH) 
   return cudaArch >= 800 ? (cudaArch / 100 == 12 ? 6 : 8) : 4;
 }
 
-__host__ __device__ constexpr int ncclNvlsUnrollBytes(int cudaArch = NCCL_CUDA_ARCH) { return 4*16; }
-__host__ __device__ constexpr int ncclNvlsUnrollInsns(int cudaArch = NCCL_CUDA_ARCH) { return 16; }
+__host__ __device__ constexpr int ncclNvlsUnrollBytes(int /*cudaArch*/ = NCCL_CUDA_ARCH) { return 4*16; }
+__host__ __device__ constexpr int ncclNvlsUnrollInsns(int /*cudaArch*/ = NCCL_CUDA_ARCH) { return 16; }
 
 __host__ __device__ constexpr int ncclNvlsUnroll(int bytePerPack, int cudaArch = NCCL_CUDA_ARCH) {
   return ncclCalcUnroll(bytePerPack, ncclNvlsUnrollInsns(cudaArch), ncclNvlsUnrollBytes(cudaArch));
@@ -536,11 +536,11 @@ __host__ __device__ constexpr int ncclNvlsUnroll(int bytePerPack, int cudaArch =
 // The amount of dynamic shmem per warp
 __host__ __device__ constexpr int ncclShmemScratchWarpSize(int cudaArch = NCCL_CUDA_ARCH) {
   return (max_constexpr<int>(
-      /*LL    */0,
-      /*LL128 */(NCCL_LL128_SHMEM_ELEMS_PER_THREAD*WARP_SIZE)*sizeof(uint64_t),
-      /*SIMPLE*/(ncclCollUnroll(cudaArch)*WARP_SIZE + 1)*16,
-      // NVLS needs an extra 16B to read unaligned data.
-      /*NVLS  */WARP_SIZE*(cudaArch >= 900 ? ncclNvlsUnrollBytes(cudaArch) : 0) + 16
+    /*LL    */0,
+    /*LL128 */(NCCL_LL128_SHMEM_ELEMS_PER_THREAD*WARP_SIZE)*sizeof(uint64_t),
+    /*SIMPLE*/(ncclCollUnroll(cudaArch)*WARP_SIZE + 1)*16,
+    // NVLS needs an extra 16B to read unaligned data.
+    /*NVLS  */WARP_SIZE*(cudaArch >= 900 ? ncclNvlsUnrollBytes(cudaArch) : 0) + 16
     ) + 15) & -16; // pad to 16 bytes
 }
 
@@ -565,18 +565,18 @@ ncclResult_t ncclLaunchOneRank(void* dst, void const* src, size_t nElts, struct 
 // `ncclNvlsSupported()` needs to be in sync with "func_valid" in "src/device/generate.py"
 inline bool ncclNvlsSupported(int devRedOp, int type) {
   switch (type) {
-  case ncclInt32:
-  case ncclUint32:
-  case ncclInt64:
-  case ncclUint64:
-  case ncclFloat16:
-  case ncclBfloat16:
-    return devRedOp == ncclDevSum || devRedOp == ncclDevMinMax;
-  case ncclFloat:
-  case ncclDouble:
-    return devRedOp == ncclDevSum;
-  default:
-    return false;
+    case ncclInt32:
+    case ncclUint32:
+    case ncclInt64:
+    case ncclUint64:
+    case ncclFloat16:
+    case ncclBfloat16:
+      return devRedOp == ncclDevSum || devRedOp == ncclDevMinMax;
+    case ncclFloat:
+    case ncclDouble:
+      return devRedOp == ncclDevSum;
+    default:
+      return false;
   }
 }
 
@@ -592,9 +592,9 @@ inline int ncclDevFuncId(int coll, int devRedOp, int type, int algo, int proto) 
     int nAlgos = 4;
     if (coll == ncclFuncAllGather) {
       int algo1 = algo == NCCL_ALGO_RING ? 0 :
-                  algo == NCCL_ALGO_COLLNET_DIRECT ? 1 :
-                  algo == NCCL_ALGO_NVLS ? 2 :
-                /*algo == NCCL_ALGO_PAT*/ 3;
+          algo == NCCL_ALGO_COLLNET_DIRECT ? 1 :
+          algo == NCCL_ALGO_NVLS ? 2 :
+          /*algo == NCCL_ALGO_PAT*/ 3;
       row += algo1*NCCL_NUM_PROTOCOLS + proto;
       break;
     }
@@ -631,9 +631,9 @@ inline int ncclDevFuncId(int coll, int devRedOp, int type, int algo, int proto) 
     nAlgos = 4;
     if (coll == ncclFuncReduceScatter) {
       int algo1 = algo == NCCL_ALGO_RING ? 0 :
-                  algo == NCCL_ALGO_COLLNET_DIRECT ? 1 :
-                  algo == NCCL_ALGO_NVLS ? 2 :
-                /*algo == NCCL_ALGO_PAT*/ 3;
+          algo == NCCL_ALGO_COLLNET_DIRECT ? 1 :
+          algo == NCCL_ALGO_NVLS ? 2 :
+          /*algo == NCCL_ALGO_PAT*/ 3;
       row += ((devRedOp*NumTypes + type)*nAlgos + algo1)*NCCL_NUM_PROTOCOLS + proto;
       break;
     }

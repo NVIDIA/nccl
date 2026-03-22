@@ -56,7 +56,7 @@ static uint8_t ncclStringToDatatype(const char* dt) {
 
 static ncclResult_t ncclProfiler_startEvent(void* context, void** eHandle, ncclProfilerEventDescr_t* eDescr) {
   *eHandle = NULL;
-  ncclProfilerEventDescr_v1_t eDescr_v1 = { 0 };
+  ncclProfilerEventDescr_v1_t eDescr_v1 = {};
   eDescr_v1.type = eDescr->type;
   eDescr_v1.parentObj = eDescr->parentObj;
   eDescr_v1.rank = eDescr->rank;
@@ -137,7 +137,7 @@ static ncclResult_t ncclProfiler_init(void** context,
     int nranks __attribute__((unused)),
     int rank __attribute__((unused)),
     ncclDebugLogger_t logfn __attribute__((unused))
-  ) {
+) {
   NCCLCHECK(ncclProfiler_v1->init(context, eActivationMask));
   ncclProfiler.startEvent = ncclProfiler_startEvent;
   ncclProfiler.stopEvent = ncclProfiler_v1->stopEvent;

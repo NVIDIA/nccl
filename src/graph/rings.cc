@@ -26,7 +26,7 @@ void dumpLine(int* values, int nranks, const char* prefix) {
   INFO(NCCL_INIT, "%s", line);
 }
 
-ncclResult_t ncclBuildRings(int nrings, int* rings, int rank, int nranks, int* prev, int* next) {
+ncclResult_t ncclBuildRings(int nrings, int* rings, int rank, int nranks, int* /*prev*/, int* next) {
   ncclResult_t ret = ncclSuccess;
   uint64_t* rankFound;
   int rankFoundSize = DIVUP(nranks, 64);

@@ -49,7 +49,7 @@ static ncclProfilerCallback_t ncclProfilerFunction;
 // context support is added to the plugin the ref counter can be removed.
 static int netRefCount;
 
-ncclResult_t ncclNetSocketInit(void** ctx, uint64_t commId, ncclNetCommConfig_t* config, ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) {
+ncclResult_t ncclNetSocketInit(void** /*ctx*/, uint64_t /*commId*/, ncclNetCommConfig_t* /*config*/, ncclDebugLogger_t /*logFunction*/, ncclProfilerCallback_t profFunction) {
   if (netRefCount++) return ncclSuccess;
   ncclProfilerFunction = profFunction;
   if (ncclNetIfs == -1) {
@@ -62,7 +62,7 @@ ncclResult_t ncclNetSocketInit(void** ctx, uint64_t commId, ncclNetCommConfig_t*
         WARN("NET/Socket : no interface found");
         return ncclInternalError;
       } else {
-        #define MAX_LINE_LEN (2047)
+#define MAX_LINE_LEN (2047)
         char line[MAX_LINE_LEN+1];
         char addrline[SOCKET_NAME_MAXLEN+1];
         line[0] = '\0';
@@ -72,7 +72,7 @@ ncclResult_t ncclNetSocketInit(void** ctx, uint64_t commId, ncclNetCommConfig_t*
           memcpy(&ncclNetSocketDevs[i].addr, addrs+i, sizeof(union ncclSocketAddress));
           NCCLCHECK(ncclNetSocketGetPciPath(ncclNetSocketDevs[i].devName, &ncclNetSocketDevs[i].pciPath));
           snprintf(line+strlen(line), MAX_LINE_LEN-strlen(line), " [%d]%s:%s", i, names+i*MAX_IF_NAME_SIZE,
-              ncclSocketToString(&addrs[i], addrline));
+            ncclSocketToString(&addrs[i], addrline));
         }
         line[MAX_LINE_LEN] = '\0';
         INFO(NCCL_INIT|NCCL_NET,"NET/Socket : Using%s", line);
@@ -239,7 +239,7 @@ void* persistentSocketThread(void *args_) {
   struct ncclNetSocketTaskQueue* myQueue = &resource->threadTaskQueue;
   int nSocksPerThread = comm->nSocks / comm->nThreads;
 #ifdef NCCL_ENABLE_NET_PROFILING
-  void* eHandle[MAX_REQUESTS*MAX_SOCKETS] = { 0 };
+  void* eHandle[MAX_REQUESTS*MAX_SOCKETS] = {};
 #endif
   while (1) {
     int idle = 1;
@@ -346,7 +346,7 @@ fail:
   goto exit;
 }
 
-ncclResult_t ncclNetSocketListen(void* ctx, int dev, void* opaqueHandle, void** listenComm) {
+ncclResult_t ncclNetSocketListen(void* /*ctx*/, int dev, void* opaqueHandle, void** listenComm) {
   if (dev < 0 || dev >= ncclNetIfs) { // data transfer socket is based on specified dev
     WARN("NET/Socket : ncclNetSocketListen dev=%d ncclNetIfs=%d", dev, ncclNetIfs);
     return ncclInternalError;
@@ -375,7 +375,7 @@ fail:
 }
 
 #define SOCKET_CTRL_SIZE (sizeof(int))
-ncclResult_t ncclNetSocketConnect(void* ctx, int dev, void* opaqueHandle, void** sendComm, ncclNetDeviceHandle_t** /*sendDevComm*/) {
+ncclResult_t ncclNetSocketConnect(void* /*ctx*/, int dev, void* opaqueHandle, void** sendComm, ncclNetDeviceHandle_t** /*sendDevComm*/) {
   if (dev < 0 || dev >= ncclNetIfs) { // data transfer socket is based on specified dev
     return ncclInternalError;
   }
@@ -497,6 +497,9 @@ ncclResult_t ncclNetSocketGetRequest(struct ncclNetSocketComm* comm, int op, voi
 }
 
 ncclResult_t ncclNetSocketGetTask(struct ncclNetSocketComm* comm, struct ncclProfilerInfo* pInfo, int op, void* data, int size, struct ncclNetSocketTask** req) {
+#ifndef NCCL_ENABLE_NET_PROFILING
+  (void)pInfo;
+#endif
   int tid = comm->nextSock % comm->nThreads;
   struct ncclNetSocketThreadResources* res = comm->threadResources+tid;
   struct ncclNetSocketTaskQueue* queue = &res->threadTaskQueue;
@@ -568,7 +571,7 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
         NCCLCHECK(ncclSocketGetAddr(r->ctrlSock, &addr));
         WARN("NET/Socket : peer %s message truncated : receiving %d bytes instead of %d. If you believe your socket network is in a healthy state, "
              "there may be a mismatch in collective sizes or environment settings (e.g. NCCL_PROTO, NCCL_ALGO) between ranks",
-             ncclSocketToString(&addr, line), senderSize, r->size);
+            ncclSocketToString(&addr, line), senderSize, r->size);
         return ncclInvalidUsage;
       }
       // copy to the data buffer if we have received some inline data already
@@ -644,23 +647,25 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclNetSocketRegMr(void* comm, void* data, size_t size, int type, void** mhandle) {
+ncclResult_t ncclNetSocketRegMr(void* /*comm*/, void* /*data*/, size_t /*size*/, int type, void** /*mhandle*/) {
   return (type != NCCL_PTR_HOST) ? ncclInternalError : ncclSuccess;
 }
-ncclResult_t ncclNetSocketDeregMr(void* comm, void* mhandle) { return ncclSuccess; }
+ncclResult_t ncclNetSocketDeregMr(void* /*comm*/, void* /*mhandle*/) { return ncclSuccess; }
 
-ncclResult_t ncclNetSocketIsend(void* sendComm, void* data, size_t size, int tag, void* mhandle, void* phandle, void** request) {
+ncclResult_t ncclNetSocketIsend(void* sendComm, void* data, size_t size, int /*tag*/, void* /*mhandle*/, void* phandle, void** request) {
   struct ncclNetSocketComm* comm = (struct ncclNetSocketComm*)sendComm;
   NCCLCHECK(ncclNetSocketGetRequest(comm, NCCL_SOCKET_SEND, data, (int) size, (struct ncclNetSocketRequest**)request));
 #ifdef NCCL_ENABLE_NET_PROFILING
   // NCCL core profiler callback
   struct ncclNetSocketRequest* req = *(struct ncclNetSocketRequest **)request;
   req->pInfo.pHandle = phandle;
+#else
+  (void)phandle;
 #endif
   return ncclSuccess;
 }
 
-ncclResult_t ncclNetSocketIrecv(void* recvComm, int n, void** data, size_t* sizes, int* tags, void** mhandles, void** phandles, void** request) {
+ncclResult_t ncclNetSocketIrecv(void* recvComm, int n, void** data, size_t* sizes, int* /*tags*/, void** /*mhandles*/, void** phandles, void** request) {
   struct ncclNetSocketComm* comm = (struct ncclNetSocketComm*)recvComm;
   if (n != 1) return ncclInternalError;
   NCCLCHECK(ncclNetSocketGetRequest(comm, NCCL_SOCKET_RECV, data[0], (int)sizes[0], (struct ncclNetSocketRequest**)request));
@@ -668,11 +673,13 @@ ncclResult_t ncclNetSocketIrecv(void* recvComm, int n, void** data, size_t* size
   // NCCL core profiler callback
   struct ncclNetSocketRequest* req = *(struct ncclNetSocketRequest **)request;
   if (phandles) req->pInfo.pHandle = phandles[0];
+#else
+  (void)phandles;
 #endif
   return ncclSuccess;
 }
 
-ncclResult_t ncclNetSocketIflush(void* recvComm, int n, void** data, int* sizes, void** mhandles, void** request) {
+ncclResult_t ncclNetSocketIflush(void* /*recvComm*/, int /*n*/, void** /*data*/, int* /*sizes*/, void** /*mhandles*/, void** /*request*/) {
   // We don't support CUDA pointers, so we don't need a flush operation
   return ncclInternalError;
 }
@@ -716,7 +723,7 @@ ncclResult_t ncclNetSocketClose(void* opaqueComm) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclNetSocketFinalize(void* ctx) {
+ncclResult_t ncclNetSocketFinalize(void* /*ctx*/) {
   netRefCount--;
   return ncclSuccess;
 }

@@ -27,7 +27,7 @@ static float getMaxBw(struct ncclTopoSystem* system, struct ncclTopoNode* gpu, i
   }
   return maxBw;
 }
-static float getTotalBw(struct ncclTopoSystem* system, struct ncclTopoNode* gpu) {
+static float getTotalBw(struct ncclTopoSystem* /*system*/, struct ncclTopoNode* gpu) {
   float nvlinkBw = 0.0, pciBw = 0.0;
   for (int l=0; l<gpu->nlinks; l++) {
     struct ncclTopoLink* link = gpu->links+l;
@@ -141,9 +141,9 @@ static ncclResult_t ncclTopoFollowPath(struct ncclTopoSystem* system, struct ncc
   if (path->type >= PATH_DIS) return ncclSuccess;
   if (mult == 1 && (path->type > type)) return ncclSuccess;
   if (mult == 1 && (graph->pattern == NCCL_TOPO_PATTERN_BALANCED_TREE ||
-        graph->pattern == NCCL_TOPO_PATTERN_TREE ||
-        graph->pattern == NCCL_TOPO_PATTERN_SPLIT_TREE) &&
-      (revPath->type > type)) return ncclSuccess;
+    graph->pattern == NCCL_TOPO_PATTERN_TREE ||
+    graph->pattern == NCCL_TOPO_PATTERN_SPLIT_TREE) &&
+    (revPath->type > type)) return ncclSuccess;
 
   bw *= mult;
 
@@ -168,8 +168,8 @@ static int gpuPciBw(struct ncclTopoNode* gpu) {
     struct ncclTopoLink* gpuLink = gpu->links+l;
     if (gpuLink->type != LINK_PCI) continue;
     struct ncclTopoNode* pci = gpuLink->remNode;
-    for (int l=0; l<pci->nlinks; l++) {
-      struct ncclTopoLink* pciLink = pci->links+l;
+    for (int pl=0; pl<pci->nlinks; pl++) {
+      struct ncclTopoLink* pciLink = pci->links+pl;
       if (pciLink->remNode != gpu) continue;
       return std::min(gpuLink->bw, pciLink->bw);
     }
@@ -190,15 +190,15 @@ struct ncclGpuScore {
 };
 
 static int cmpScore(const void * g1, const void * g2) {
-   struct ncclGpuScore *s1 = (struct ncclGpuScore*)g1;
-   struct ncclGpuScore *s2 = (struct ncclGpuScore*)g2;
-   int d;
-   if ((d = (s2->interBw - s1->interBw))) return d;
-   if ((d = (s2->interPciBw - s1->interPciBw))) return d;
-   if ((d = (s1->interNhops - s2->interNhops))) return d;
-   if ((d = (s2->intraBw - s1->intraBw))) return d;
-   if ((d = (s1->intraNhops - s2->intraNhops))) return d;
-   return s1->startIndex - s2->startIndex;
+  struct ncclGpuScore *s1 = (struct ncclGpuScore*)g1;
+  struct ncclGpuScore *s2 = (struct ncclGpuScore*)g2;
+  int d;
+  if ((d = (s2->interBw - s1->interBw))) return d;
+  if ((d = (s2->interPciBw - s1->interPciBw))) return d;
+  if ((d = (s1->interNhops - s2->interNhops))) return d;
+  if ((d = (s2->intraBw - s1->intraBw))) return d;
+  if ((d = (s1->intraNhops - s2->intraNhops))) return d;
+  return s1->startIndex - s2->startIndex;
 }
 
 static int cmpIntraScores(struct ncclGpuScore* scores, int count) {
@@ -327,9 +327,9 @@ ncclResult_t ncclTopoReplayGetGpu(struct ncclTopoSystem* system, struct ncclTopo
   int ngpus = system->nodes[GPU].count;
   int nextRank = graph->intra[(graph->nChannels-1)*ngpus+step+1];
   for (int i=0; i<ngpus; i++) if (system->nodes[GPU].nodes[i].gpu.rank == nextRank) {
-    *g = i;
-    return ncclSuccess;
-  }
+      *g = i;
+      return ncclSuccess;
+    }
   return ncclInternalError;
 }
 
@@ -452,8 +452,8 @@ static ncclResult_t ncclTopoPrefNetsGpuFirst(struct ncclTopoSystem* system, int 
       if (gpuIds[g] == -1) continue;
       int localNet;
       int64_t netId;
-      struct ncclTopoNode* gpu = system->nodes[GPU].nodes + gpuIds[g];
-      NCCLCHECK(ncclTopoGetLocalNet(system, gpu->gpu.rank, c, &netId, NULL));
+      struct ncclTopoNode* gpuNode = system->nodes[GPU].nodes + gpuIds[g];
+      NCCLCHECK(ncclTopoGetLocalNet(system, gpuNode->gpu.rank, c, &netId, NULL));
       NCCLCHECK(ncclTopoIdToIndex(system, NET, netId, &localNet));
       // store the first net found for each GPU in case of duplicates
       if(c == 0) firstNets[g] = localNet;
@@ -478,10 +478,10 @@ static ncclResult_t ncclTopoPrefNetsChannelFirst(struct ncclTopoSystem* system, 
   for (int g = 0; g < system->nodes[GPU].count; g++) {
     if (gpu != -1 && gpu != g) continue;
     int localNetCount = 0, localNets[MAXCHANNELS];
-    struct ncclTopoNode* gpu = system->nodes[GPU].nodes + g;
+    struct ncclTopoNode* gpuNode = system->nodes[GPU].nodes + g;
     for (int c = 0; c < MAXCHANNELS; c++) {
       int64_t netId;
-      NCCLCHECK(ncclTopoGetLocalNet(system, gpu->gpu.rank, c, &netId, NULL));
+      NCCLCHECK(ncclTopoGetLocalNet(system, gpuNode->gpu.rank, c, &netId, NULL));
       NCCLCHECK(ncclTopoIdToIndex(system, NET, netId, localNets + localNetCount));
       if (localNetCount > 0 && localNets[localNetCount] == localNets[0]) break;
       localNetCount++;
@@ -534,8 +534,8 @@ ncclResult_t ncclTopoSelectNets(struct ncclTopoSystem* system, int typeInter, in
       // do not consider this GPU is it's not the GPU we asked for
       if (gpu != -1 && gpu != g) continue;
       int localNetCount = 0, localNets[MAXCHANNELS];
-      struct ncclTopoNode* gpu = system->nodes[GPU].nodes+g;
-      struct ncclTopoLinkList* paths = gpu->paths[NET];
+      struct ncclTopoNode* gpuNode = system->nodes[GPU].nodes+g;
+      struct ncclTopoLinkList* paths = gpuNode->paths[NET];
       for (int n=0; n<system->nodes[NET].count && n<MAXCHANNELS; n++) {
         if (paths[n].type == t) localNets[localNetCount++] = n;
       }
@@ -685,10 +685,10 @@ ncclResult_t ncclTopoSearchRecNet(struct ncclTopoSystem* system, struct ncclTopo
     graph->inter[graph->nChannels*2] = net->id;
     graph->latencyInter = net->net.latency;
 
-    for (int i=0; i<system->nodes[NET].count; i++) {
-      if ((system->nodes[NET].nodes[i].net.asic == net->net.asic) &&
-          (system->nodes[NET].nodes[i].net.port == net->net.port)) {
-        system->nodes[NET].nodes[i].net.bw -= bw;
+    for (int j=0; j<system->nodes[NET].count; j++) {
+      if ((system->nodes[NET].nodes[j].net.asic == net->net.asic) &&
+        (system->nodes[NET].nodes[j].net.port == net->net.port)) {
+        system->nodes[NET].nodes[j].net.bw -= bw;
       }
     }
 
@@ -741,10 +741,10 @@ ncclResult_t ncclTopoSearchRecNet(struct ncclTopoSystem* system, struct ncclTopo
       }
     }
 
-    for (int i=0; i<system->nodes[NET].count; i++) {
-      if ((system->nodes[NET].nodes[i].net.asic == net->net.asic) &&
-          (system->nodes[NET].nodes[i].net.port == net->net.port)) {
-        system->nodes[NET].nodes[i].net.bw += bw;
+    for (int j=0; j<system->nodes[NET].count; j++) {
+      if ((system->nodes[NET].nodes[j].net.asic == net->net.asic) &&
+        (system->nodes[NET].nodes[j].net.port == net->net.port)) {
+        system->nodes[NET].nodes[j].net.bw += bw;
       }
     }
   }
@@ -844,9 +844,9 @@ ncclResult_t ncclTopoGetChannelFromXml(struct ncclXmlNode *xmlChannel, int c, st
       inter[n++] = dev;
     } else if (strcmp(sub->name, "gpu") == 0) {
       int rank = -1;
-      for (int g=0; g<ngpus; g++) {
-        int systemId = NCCL_TOPO_ID_SYSTEM_ID(system->nodes[GPU].nodes[g].id);
-        if (NCCL_TOPO_ID(systemId, system->nodes[GPU].nodes[g].gpu.dev) == dev) rank = system->nodes[GPU].nodes[g].gpu.rank;
+      for (int gi=0; gi<ngpus; gi++) {
+        int systemId = NCCL_TOPO_ID_SYSTEM_ID(system->nodes[GPU].nodes[gi].id);
+        if (NCCL_TOPO_ID(systemId, system->nodes[GPU].nodes[gi].gpu.dev) == dev) rank = system->nodes[GPU].nodes[gi].gpu.rank;
       }
       if (rank == -1) {
         WARN("XML Import Channel : dev %ld not found.", dev);
@@ -1018,7 +1018,7 @@ ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph
 
   int ngpus = system->nodes[GPU].count;
   int crossNic = (system->nodes[NET].count > 1) &&
-	 (graph->pattern == NCCL_TOPO_PATTERN_RING ||
+      (graph->pattern == NCCL_TOPO_PATTERN_RING ||
           graph->pattern == NCCL_TOPO_PATTERN_BALANCED_TREE ||
           graph->pattern == NCCL_TOPO_PATTERN_SPLIT_TREE) ? ncclParamCrossNic() : 0;
   graph->crossNic = crossNic == 1 ? 1 : 0;
@@ -1105,7 +1105,7 @@ ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph
 
 search:
   int time = tmpGraph.sameChannels ? NCCL_SEARCH_TIMEOUT_SAMECHANNELS :
-    tmpGraph.pattern == NCCL_TOPO_PATTERN_TREE ? NCCL_SEARCH_TIMEOUT_TREE : NCCL_SEARCH_TIMEOUT;
+      tmpGraph.pattern == NCCL_TOPO_PATTERN_TREE ? NCCL_SEARCH_TIMEOUT_TREE : NCCL_SEARCH_TIMEOUT;
   tmpGraph.nChannels = 0;
   globalTimeout -= time;
 

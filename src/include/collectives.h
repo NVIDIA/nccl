@@ -43,24 +43,24 @@ const char* ncclProtoToString(int proto);
 
 inline int ncclTypeSize(ncclDataType_t type) {
   switch (type) {
-  case ncclInt8:
-  case ncclUint8:
-  case ncclFloat8e4m3:
-  case ncclFloat8e5m2:
-    return 1;
-  case ncclFloat16:
-  case ncclBfloat16:
-    return 2;
-  case ncclInt32:
-  case ncclUint32:
-  case ncclFloat32:
-    return 4;
-  case ncclInt64:
-  case ncclUint64:
-  case ncclFloat64:
-    return 8;
-  default:
-    return -1;
+    case ncclInt8:
+    case ncclUint8:
+    case ncclFloat8e4m3:
+    case ncclFloat8e5m2:
+      return 1;
+    case ncclFloat16:
+    case ncclBfloat16:
+      return 2;
+    case ncclInt32:
+    case ncclUint32:
+    case ncclFloat32:
+      return 4;
+    case ncclInt64:
+    case ncclUint64:
+    case ncclFloat64:
+      return 8;
+    default:
+      return -1;
   }
 }
 
@@ -79,7 +79,7 @@ struct ncclConnFifo {
 #include <stdio.h>
 
 class RingAlgorithm {
-protected:
+ protected:
   int refCount;
   int nRanks;
   int nStepsPerLoop;
@@ -93,7 +93,7 @@ protected:
   void *sendMhandle;
   void *recvMhandle;
   void *srecvMhandle;
-public:
+ public:
   // this ring class is used by proxy thread to retrieve the send and recv buffer, size as well as corresponding
   // mem handle based on the current step of the proxy args. The derived ring algo class is AR, AG, and BC which
   // would be allocated during enqueue stage and copied to proxy side through shared memory. For each copy, we will
@@ -113,12 +113,12 @@ public:
 };
 
 class RingARAlgorithm : public RingAlgorithm {
-private:
+ private:
   int ringIndex;
   int elemSize;
   ssize_t chunkSize;
   int slicePerChunk;
-public:
+ public:
   void getNextSendAddr(int curStep, uint8_t **sendbuffOut, size_t *sizeOut, void **mhandleOut) {
     int curLoop = curStep / nStepsPerLoop;
     int curLoopStage = (curStep % nStepsPerLoop) / chunkSteps;
@@ -228,12 +228,12 @@ public:
 };
 
 class RingAGAlgorithm : public RingAlgorithm {
-private:
+ private:
   int *ringRanks;
   int elemSize;
   ssize_t sendSize;
   int slicePerChunk;
-public:
+ public:
   void getNextSendAddr(int curStep, uint8_t **sendbuffOut, size_t *sizeOut, void **mhandleOut) {
     int curLoop = curStep / nStepsPerLoop;
     int chunkStage = (curStep % nStepsPerLoop) / chunkSteps;
@@ -318,11 +318,11 @@ public:
 };
 
 class RingBCAlgorithm : public RingAlgorithm {
-private:
+ private:
   int root;
   int rank;
   int nextRank;
-public:
+ public:
   void getNextSendAddr(int curStep, uint8_t **sendbuffOut, size_t *sizeOut, void **mhandleOut) {
     int curLoop = curStep / nStepsPerLoop;
     int sliceStage = (curStep % chunkSteps) / sliceSteps;
@@ -372,7 +372,7 @@ public:
     return;
   }
 
-  RingBCAlgorithm(const void* sendbuff, void* recvbuff, int rank, int root, int nRanks, int *ringRanks, int chunkSteps, int sliceSteps, size_t chunkSize, size_t sliceSize, size_t gridOffset, size_t channelSize, void *sendMhandle, void *recvMhandle, void *srecvMhandle) {
+  RingBCAlgorithm(const void* sendbuff, void* recvbuff, int rank, int root, int /*nRanks*/, int *ringRanks, int chunkSteps, int sliceSteps, size_t chunkSize, size_t sliceSize, size_t gridOffset, size_t channelSize, void *sendMhandle, void *recvMhandle, void *srecvMhandle) {
     this->root = root;
     this->rank = rank;
     this->nextRank = ringRanks[1];
@@ -407,15 +407,15 @@ struct ncclPatStep {
 };
 
 struct ncclPatPeer {
-    uint64_t step;
-    struct ncclConnInfo* conn;
-    struct ncclConnFifo* connFifo;
-    void* buff;
-    uint64_t *headPtr;
-    uint64_t *tailPtr;
-    uint64_t stepCache;
-    long long int accSize;
-    int connStepSize;
+  uint64_t step;
+  struct ncclConnInfo* conn;
+  struct ncclConnFifo* connFifo;
+  void* buff;
+  uint64_t *headPtr;
+  uint64_t *tailPtr;
+  uint64_t stepCache;
+  long long int accSize;
+  int connStepSize;
 };
 
 #define NCCL_SHMEM_PAT_STEPS 32
@@ -428,7 +428,7 @@ struct ncclPatShmem {
 };
 
 template<typename T>
-class PatRSAlgorithm{
+class PatRSAlgorithm {
   size_t offset;
   size_t end;
   size_t count;
@@ -468,9 +468,9 @@ class PatRSAlgorithm{
   __device__ __host__ int firstBitSet(int i, int max) {
     int ffs =
 #ifdef __CUDA_ARCH__
-      __ffs(i);
+        __ffs(i);
 #else
-      COMPILER_FFS(i);
+        COMPILER_FFS(i);
 #endif
     return ffs ? ffs-1 : max;
   }
@@ -494,9 +494,9 @@ class PatRSAlgorithm{
   __device__ __host__ int nBitsSet(int i) {
     int nbits =
 #ifdef __CUDA_ARCH__
-      __popc(i);
+        __popc(i);
 #else
-      COMPILER_POPCOUNT32(i);
+        COMPILER_POPCOUNT32(i);
 #endif
     return nbits;
   }
@@ -508,9 +508,9 @@ class PatRSAlgorithm{
     return nBitsSet((i ^ (pow2-1)) + 1) == 1 ? 1 : 0;
   }
 
-public:
-   __device__ __host__ PatRSAlgorithm(int stepSize, int stepDepth, int maxParallelFactor, size_t offset, size_t end, size_t count, int chunkCount, int rank, int nranks):
-     offset(offset), end(end), count(count), chunkCount(chunkCount), rank(rank), nranks(nranks) {
+ public:
+  __device__ __host__ PatRSAlgorithm(int stepSize, int stepDepth, int maxParallelFactor, size_t offset, size_t end, size_t count, int chunkCount, int rank, int nranks):
+    offset(offset), end(end), count(count), chunkCount(chunkCount), rank(rank), nranks(nranks) {
     parallelFactor = maxParallelFactor;
     aggDelta = nrPow2 = (1<<log2Up(nranks));
 
@@ -653,11 +653,11 @@ public:
       if (p == 1) as--;
       if (p == 3) scale *= 2;
       phase =
-        p == 0 ? as == 1 ? (aggFactor > 1 ? 2 : 4) : 1 :
-        p == 1 ? as % 2 == 1 ? 0 : 1 :
-        p == 2 ? 3 :
-        p == 3 ? scale < aggFactor ? 2 : 4 :
-        5;
+          p == 0 ? as == 1 ? (aggFactor > 1 ? 2 : 4) : 1 :
+          p == 1 ? as % 2 == 1 ? 0 : 1 :
+          p == 2 ? 3 :
+          p == 3 ? scale < aggFactor ? 2 : 4 :
+          5;
       if (p == 4) {
         if (offset >= end) {
           ps->last = 2;
@@ -681,7 +681,7 @@ public:
 };
 
 template<typename T>
-class PatAGAlgorithm{
+class PatAGAlgorithm {
   size_t offset;
   size_t end;
   size_t count;
@@ -725,9 +725,9 @@ class PatAGAlgorithm{
   __device__ __host__ int firstBitSet(int i, int max) {
     int ffs =
 #ifdef __CUDA_ARCH__
-      __ffs(i);
+        __ffs(i);
 #else
-      COMPILER_FFS(i);
+        COMPILER_FFS(i);
 #endif
     return ffs ? ffs-1 : max;
   }
@@ -772,9 +772,9 @@ class PatAGAlgorithm{
   }
 
 
-public:
-   __device__ __host__ PatAGAlgorithm(int stepSize, int stepDepth, int maxParallelFactor, size_t offset, size_t end, size_t count, int chunkCount, int rank, int nranks):
-     offset(offset), end(end), count(count), chunkCount(chunkCount), rank(rank), nranks(nranks) {
+ public:
+  __device__ __host__ PatAGAlgorithm(int stepSize, int stepDepth, int maxParallelFactor, size_t offset, size_t end, size_t count, int chunkCount, int rank, int nranks):
+    offset(offset), end(end), count(count), chunkCount(chunkCount), rank(rank), nranks(nranks) {
     parallelFactor = maxParallelFactor;
     aggDelta = nrPow2 = (1<<log2Up(nranks));
 
@@ -821,7 +821,7 @@ public:
       ps->stepOffset = 0;
       ps->postRecv = (a % postFreq == postFreq-1) || ((a+1)*aggDelta+as >= nranks) ? 1 : 0;
       ps->postSend = 0;
-   } else if (phase == 1) {
+    } else if (phase == 1) {
       int s = a*aggDelta + as;
       if (s >= nranks) skip = 1;
       ps->sendDim = firstBitSet(s, nrPow2);
@@ -875,9 +875,9 @@ public:
       int p = phase;
       if (p == 2) scale /= 2;
       phase =
-        p == 2 ? scale ? 2 : 1 :
-        p == 1 ? as % 2 == 1 ? 0 : 1 :
-        1;
+          p == 2 ? scale ? 2 : 1 :
+          p == 1 ? as % 2 == 1 ? 0 : 1 :
+          1;
       if (p == 0 || (p == 1 && as % 2 == 0)) as = nextAs();
       if (p == 0 && as == aggDelta/2) {
         offset += chunkCount;

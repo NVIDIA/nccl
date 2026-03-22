@@ -29,11 +29,11 @@ extern CUmemAllocationHandleType ncclCuMemHandleType;
 
 // Check CUDA PFN driver calls
 #define CUCHECK(cmd) do {				      \
-    CUresult err = pfn_##cmd;				      \
-    if( err != CUDA_SUCCESS ) {				      \
+    CUresult _cudaErr = pfn_##cmd;			      \
+    if( _cudaErr != CUDA_SUCCESS ) {			      \
       const char *errStr;				      \
-      (void) pfn_cuGetErrorString(err, &errStr);	      \
-      WARN("Cuda failure %d '%s'", err, errStr);	      \
+      (void) pfn_cuGetErrorString(_cudaErr, &errStr);	      \
+      WARN("Cuda failure %d '%s'", _cudaErr, errStr);	      \
       return ncclUnhandledCudaError;			      \
     }							      \
 } while(false)
@@ -43,11 +43,11 @@ extern CUmemAllocationHandleType ncclCuMemHandleType;
 } while(false)
 
 #define CUCHECKGOTO(cmd, res, label) do {		      \
-    CUresult err = pfn_##cmd;				      \
-    if( err != CUDA_SUCCESS ) {				      \
+    CUresult _cudaErr = pfn_##cmd;			      \
+    if( _cudaErr != CUDA_SUCCESS ) {			      \
       const char *errStr;				      \
-      (void) pfn_cuGetErrorString(err, &errStr);	      \
-      WARN("Cuda failure %d '%s'", err, errStr);	      \
+      (void) pfn_cuGetErrorString(_cudaErr, &errStr);	      \
+      WARN("Cuda failure %d '%s'", _cudaErr, errStr);	      \
       res = ncclUnhandledCudaError;			      \
       goto label;					      \
     }							      \
@@ -55,18 +55,18 @@ extern CUmemAllocationHandleType ncclCuMemHandleType;
 
 // Report failure but clear error and continue
 #define CUCHECKIGNORE(cmd) do {						\
-    CUresult err = pfn_##cmd;						\
-    if( err != CUDA_SUCCESS ) {						\
+    CUresult _cudaErr = pfn_##cmd;					\
+    if( _cudaErr != CUDA_SUCCESS ) {					\
       const char *errStr;						\
-      (void) pfn_cuGetErrorString(err, &errStr);			\
-      INFO(NCCL_ALL,"%s:%d Cuda failure %d '%s'", __FILE__, __LINE__, err, errStr); \
+      (void) pfn_cuGetErrorString(_cudaErr, &errStr);			\
+      INFO(NCCL_ALL,"%s:%d Cuda failure %d '%s'", __FILE__, __LINE__, _cudaErr, errStr); \
     }									\
 } while(false)
 
 #define CUCHECKTHREAD(cmd, args) do {					\
-    CUresult err = pfn_##cmd;						\
-    if (err != CUDA_SUCCESS) {						\
-      INFO(NCCL_INIT,"%s:%d -> %d [Async thread]", __FILE__, __LINE__, err); \
+    CUresult _cudaErr = pfn_##cmd;					\
+    if (_cudaErr != CUDA_SUCCESS) {					\
+      INFO(NCCL_INIT,"%s:%d -> %d [Async thread]", __FILE__, __LINE__, _cudaErr); \
       args->ret = ncclUnhandledCudaError;				\
       return args;							\
     }									\
@@ -136,7 +136,7 @@ inline ncclResult_t ncclCudaStreamIsLegacyNull(cudaStream_t stream, bool* isLega
   CUDACHECK(cudaStreamGetId(NULL, &nullStreamId));
   CUDACHECK(cudaStreamGetId(cudaStreamLegacy, &legacyNullStreamId));
   *isLegacy = (stream == cudaStreamLegacy) ||
-              ((stream == NULL) && (nullStreamId == legacyNullStreamId));
+      ((stream == NULL) && (nullStreamId == legacyNullStreamId));
 #else
   *isLegacy = (stream == NULL) || (stream == cudaStreamLegacy);
 #endif

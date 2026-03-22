@@ -125,7 +125,7 @@ void *thread_worker(void *arg) {
   return NULL;
 }
 
-int main(int argc, char *argv[]) {
+int main(int /*argc*/, char */*argv*/[]) {
   int num_gpus;
   pthread_t *threads;
   threadData_t *threadData;

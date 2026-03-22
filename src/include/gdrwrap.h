@@ -114,13 +114,13 @@ typedef struct gdr_mh_s {
 } gdr_mh_t;
 
 struct gdr_info {
-    uint64_t va;
-    uint64_t mapped_size;
-    uint32_t page_size;
-    uint64_t tm_cycles;
-    uint32_t cycles_per_ms;
-    unsigned mapped:1;
-    unsigned wc_mapping:1;
+  uint64_t va;
+  uint64_t mapped_size;
+  uint32_t page_size;
+  uint64_t tm_cycles;
+  uint32_t cycles_per_ms;
+  unsigned mapped:1;
+  unsigned wc_mapping:1;
 };
 typedef struct gdr_info gdr_info_t;
 
@@ -174,8 +174,7 @@ static gdr_t ncclGdrInit() {
       // Only support GDRAPI 2.1 and later
       if (libMajor < 2 || (libMajor == 2 && libMinor < 1) || drvMajor < 2 || (drvMajor == 2 && drvMinor < 1)) {
         goto error;
-      }
-      else
+      } else
         INFO(NCCL_INIT, "GDRCOPY enabled library %d.%d driver %d.%d", libMajor, libMinor, drvMajor, drvMinor);
     }
   }
@@ -226,7 +225,7 @@ static ncclResult_t ncclGdrCudaCalloc(T** ptr, T** devPtr, size_t nelem, void** 
   if (devPtr) *devPtr = (T *)(devMem+off+align);
 
   TRACE(NCCL_INIT, "GDRCOPY : allocated devMem %p gdrMap %p offset %lx mh %lx mapSize %zu at %p",
-       md->gdrDevMem, md->gdrMap, md->gdrOffset, md->gdrMh.h, md->gdrMapSize, *ptr);
+      md->gdrDevMem, md->gdrMap, md->gdrOffset, md->gdrMh.h, md->gdrMapSize, *ptr);
 
   return ncclSuccess;
 }
@@ -250,8 +249,8 @@ static ncclResult_t ncclGdrCudaFree(void* gdrHandle, struct ncclMemManager* mana
 
 // Helper: Allocate memory accessible from CPU (either GDR or host memory)
 template <typename T>
-static ncclResult_t allocMemCPUAccessible(T **ptr, T **devPtr, size_t nelem, int host_flags,
-                                          void **gdrHandle, struct ncclMemManager* manager, bool forceHost = false) {
+static ncclResult_t allocMemCPUAccessible(T **ptr, T **devPtr, size_t nelem, int /*host_flags*/,
+    void **gdrHandle, struct ncclMemManager* manager, bool forceHost = false) {
   if (ncclGdrCopy && !forceHost) {
     NCCLCHECK(ncclGdrCudaCalloc(ptr, devPtr, nelem, gdrHandle, manager));
   } else {

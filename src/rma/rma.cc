@@ -21,7 +21,7 @@ static bool isLsaAccessible(struct ncclComm* comm, int rank) {
   return false;
 }
 
-ncclResult_t ncclRmaWaitSignal(struct ncclComm* comm, struct ncclKernelPlan* plan, cudaStream_t stream){
+ncclResult_t ncclRmaWaitSignal(struct ncclComm* comm, struct ncclKernelPlan* plan, cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
 
   // If we have both proxy and CE tasks, execute them in parallel
@@ -42,11 +42,9 @@ ncclResult_t ncclRmaWaitSignal(struct ncclComm* comm, struct ncclKernelPlan* pla
     // Synchronize streams
     CUDACHECKGOTO(cudaEventRecord(ceEvent, ceStream), ret, fail);
     CUDACHECKGOTO(cudaStreamWaitEvent(stream, ceEvent, 0), ret, fail);
-  }
-  else if (plan->rmaArgs->nRmaTasksProxy > 0) {
+  } else if (plan->rmaArgs->nRmaTasksProxy > 0) {
     NCCLCHECKGOTO(ncclRmaWaitSignalProxy(comm, plan, stream), ret, fail);
-  }
-  else if (plan->rmaArgs->nRmaTasksCe > 0) {
+  } else if (plan->rmaArgs->nRmaTasksCe > 0) {
     NCCLCHECKGOTO(ncclRmaWaitSignalCe(comm, plan, stream), ret, fail);
   }
 
@@ -57,7 +55,7 @@ fail:
 }
 
 
-ncclResult_t ncclRmaPut(struct ncclComm* comm, struct ncclKernelPlan* plan, cudaStream_t stream){
+ncclResult_t ncclRmaPut(struct ncclComm* comm, struct ncclKernelPlan* plan, cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
 
   // If we have both proxy and CE tasks, execute them in parallel
@@ -78,11 +76,9 @@ ncclResult_t ncclRmaPut(struct ncclComm* comm, struct ncclKernelPlan* plan, cuda
     // Synchronize streams
     CUDACHECKGOTO(cudaEventRecord(ceEvent, ceStream), ret, fail);
     CUDACHECKGOTO(cudaStreamWaitEvent(stream, ceEvent, 0), ret, fail);
-  }
-  else if (plan->rmaArgs->nRmaTasksProxy > 0) {
+  } else if (plan->rmaArgs->nRmaTasksProxy > 0) {
     NCCLCHECKGOTO(ncclRmaPutProxy(comm, plan, stream), ret, fail);
-  }
-  else if (plan->rmaArgs->nRmaTasksCe > 0) {
+  } else if (plan->rmaArgs->nRmaTasksCe > 0) {
     NCCLCHECKGOTO(ncclRmaPutCe(comm, plan, stream), ret, fail);
   }
 
@@ -260,11 +256,11 @@ ncclResult_t scheduleRmaTasksToPlan(struct ncclComm* comm, struct ncclKernelPlan
         break;
       }
 
-      bool lsaAccessible = isLsaAccessible(comm, task->peer);
+      bool taskLsaAccessible = isLsaAccessible(comm, task->peer);
 
       // If the task can be batched, remove from context queue and add to plan
       ncclIntruQueueDequeue(ctxQueue);
-      if (lsaAccessible) {
+      if (taskLsaAccessible) {
         ncclIntruQueueEnqueue(&plan->rmaTaskQueueCe, task);
         plan->rmaArgs->nRmaTasksCe++;
       } else {
@@ -277,7 +273,7 @@ ncclResult_t scheduleRmaTasksToPlan(struct ncclComm* comm, struct ncclKernelPlan
   }
 
   INFO(NCCL_COLL, "scheduleRmaTasksToPlan: rank=%d ctx=%d func=%d nRmaTasks=%d nRmaTasksProxy=%d nRmaTasksCe=%d",
-    comm->rank, ctx, plan->rmaArgs->func, plan->rmaArgs->nRmaTasks, plan->rmaArgs->nRmaTasksProxy, plan->rmaArgs->nRmaTasksCe);
+      comm->rank, ctx, plan->rmaArgs->func, plan->rmaArgs->nRmaTasks, plan->rmaArgs->nRmaTasksProxy, plan->rmaArgs->nRmaTasksCe);
 
   return ret;
 }

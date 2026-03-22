@@ -21,7 +21,7 @@ ncclEnv_t* getNcclEnv_v1(void* lib) {
   return nullptr;
 }
 
-static ncclResult_t ncclEnvInit(uint8_t ncclMajor, uint8_t ncclMinor, uint8_t ncclPatch, const char* suffix) {
+static ncclResult_t ncclEnvInit(uint8_t /*ncclMajor*/, uint8_t /*ncclMinor*/, uint8_t /*ncclPatch*/, const char* /*suffix*/) {
   return ncclSuccess;
 }
 

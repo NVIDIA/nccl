@@ -25,7 +25,7 @@
 #define CPU_SET_N_U32 (CPU_SETSIZE / U32_LEN)
 
 static ncclResult_t ncclStrToCpuset(const char* maskStr, ncclAffinity* set) {
-  uint32_t cpumasks[CPU_SET_N_U32] = {0};
+  uint32_t cpumasks[CPU_SET_N_U32] = {};
 
   // transform the string into an array of 32 bit masks, starting with the highest mask
   int m = CPU_SET_N_U32;

@@ -23,9 +23,9 @@
 
 #define CUDACHECKGOTO(cmd, RES, label)                                         \
   do {                                                                         \
-    cudaError_t err = cmd;                                                     \
-    if (err != cudaSuccess) {                                                  \
-      WARN("Cuda failure '%s'", cudaGetErrorString(err));                      \
+    cudaError_t _cudaChkErr = cmd;                                             \
+    if (_cudaChkErr != cudaSuccess) {                                          \
+      WARN("Cuda failure '%s'", cudaGetErrorString(_cudaChkErr));              \
       (void)cudaGetLastError();                                                \
       RES = ncclUnhandledCudaError;                                            \
       goto label;                                                              \
@@ -35,10 +35,10 @@
 // Report failure but clear error and continue
 #define CUDACHECKIGNORE(cmd)                                                   \
   do {                                                                         \
-    cudaError_t err = cmd;                                                     \
-    if (err != cudaSuccess) {                                                  \
+    cudaError_t _cudaChkErr = cmd;                                             \
+    if (_cudaChkErr != cudaSuccess) {                                          \
       INFO(NCCL_ALL, "%s:%d Cuda failure '%s'", __FILE__, __LINE__,            \
-           cudaGetErrorString(err));                                           \
+           cudaGetErrorString(_cudaChkErr));                                   \
       (void)cudaGetLastError();                                                \
     }                                                                          \
   } while (false)

@@ -116,7 +116,7 @@ static int ncclIbRelaxedOrderingCapable(void) {
   return r == ncclInternalError ? 0 : 1;
 }
 
-static bool ncclMlx5dvDmaBufCapable(ibv_context *context){
+static bool ncclMlx5dvDmaBufCapable(ibv_context *context) {
   ncclResult_t res;
   int dev_fail = 0;
 
@@ -143,8 +143,8 @@ ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
   }
 
   if (props->ndevs == 0) {
-      WARN("NET/IB : Can't make virtual NIC with 0 devices");
-      return ncclInvalidUsage;
+    WARN("NET/IB : Can't make virtual NIC with 0 devices");
+    return ncclInvalidUsage;
   }
 
   if (ncclNMergedIbDevs == MAX_IB_VDEVS) {
@@ -165,7 +165,7 @@ ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
     // Each successive time, copy the name '+' new name
     if (mDev->vProps.ndevs > 1) {
       snprintf(mDev->devName + strlen(mDev->devName), sizeof(mDev->devName) - strlen(mDev->devName), "+%s", dev->devName);
-    // First time, copy the plain name
+      // First time, copy the plain name
     } else {
       strncpy(mDev->devName, dev->devName, MAXNAMESIZE);
     }
@@ -181,7 +181,7 @@ ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
     ncclIbDev* dev = ncclIbDevs + props->devs[i];
     if (dev->link != dev0->link) {
       WARN("NET/IB : Attempted to merge incompatible devices: [%d]%s:%d/%s and [%d]%s:%d/%s. Try selecting NICs of only one link type using NCCL_IB_HCA",
-        props->devs[0], dev0->devName, dev0->portNum, NCCL_IB_LLSTR(dev0->link), props->devs[i], dev->devName, dev->portNum, NCCL_IB_LLSTR(dev->link));
+          props->devs[0], dev0->devName, dev0->portNum, NCCL_IB_LLSTR(dev0->link), props->devs[i], dev->devName, dev->portNum, NCCL_IB_LLSTR(dev->link));
       return ncclInvalidUsage;
     }
   }
@@ -214,7 +214,7 @@ ncclResult_t ncclIbFinalizeDevices(void) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) {
+ncclResult_t ncclIbInitDevices(ncclDebugLogger_t /*logFunction*/, ncclProfilerCallback_t profFunction) {
   ncclResult_t ret = ncclSuccess;
   if (netRefCount++) return ret;
   ncclProfilerFunction = profFunction;
@@ -272,88 +272,88 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
           continue;
         }
         for (int port_num = 1; port_num <= devAttr.phys_port_cnt; port_num++) {
-            struct ibv_port_attr portAttr;
-            if (ncclSuccess != wrap_ibv_query_port(context, port_num, &portAttr)) {
-              WARN("NET/IB : Unable to query port_num %d", port_num);
-              continue;
-            }
-            if (portAttr.state != IBV_PORT_ACTIVE) continue;
-            if (portAttr.link_layer != IBV_LINK_LAYER_INFINIBAND && portAttr.link_layer != IBV_LINK_LAYER_ETHERNET) continue;
+          struct ibv_port_attr portAttr;
+          if (ncclSuccess != wrap_ibv_query_port(context, port_num, &portAttr)) {
+            WARN("NET/IB : Unable to query port_num %d", port_num);
+            continue;
+          }
+          if (portAttr.state != IBV_PORT_ACTIVE) continue;
+          if (portAttr.link_layer != IBV_LINK_LAYER_INFINIBAND && portAttr.link_layer != IBV_LINK_LAYER_ETHERNET) continue;
 
-            // check against user specified HCAs/ports
-            if (! (matchIfList(devices[d]->name, port_num, userIfs, nUserIfs, searchExact) ^ searchNot)) {
-              continue;
-            }
+          // check against user specified HCAs/ports
+          if (! (matchIfList(devices[d]->name, port_num, userIfs, nUserIfs, searchExact) ^ searchNot)) {
+            continue;
+          }
 
-            // check for mlx5 data direct support only once for a each device
-            if (devCount == -1) {
-              devCount = 1;
-              devOffset = 0;
-              if (ncclParamIbDataDirect() > 0 && ibProvider == IB_PROVIDER_MLX5 && ncclMlx5dvDmaBufCapable(context)) {
-                int pathLen = strlen(dataDirectDevicePath);
-                ncclResult_t res = wrap_mlx5dv_get_data_direct_sysfs_path(context, dataDirectDevicePath + pathLen, sizeof(dataDirectDevicePath) - pathLen);
-                if (res == ncclSuccess) {
-                  // data direct devices are exposed twice: with the C2C + PCIe link and with the data direct link
-                  devCount = 2;
-                  // by default only expose the data direct NIC (devOffset = 1), unless set to 2 by the user
-                  devOffset = (ncclParamIbDataDirect() == 2) ? 0 : 1;
-                  INFO(NCCL_INIT | NCCL_NET, "NET/IB: Data Direct DMA Interface is detected for device %s", devices[d]->name);
-                } else if (res == ncclInvalidArgument) {
-                  TRACE(NCCL_NET, "NET/IB: Device %s does not support Data Direct DMA.", devices[d]->name);
-                } else {
-                  WARN("NET/IB: Error in mlx5dv_get_data_direct_sysfs_path with device %s", devices[d]->name);
-                  return res;
-                }
-              }
-            }
-            for (int dev = devOffset; dev < devCount; ++dev) {
-              ncclIbDevs[ncclNIbDevs].device = d;
-              ncclIbDevs[ncclNIbDevs].ibProvider = ibProvider;
-              ncclIbDevs[ncclNIbDevs].guid = devAttr.sys_image_guid;
-              ncclIbDevs[ncclNIbDevs].portAttr = portAttr;
-              ncclIbDevs[ncclNIbDevs].portNum = port_num;
-              ncclIbDevs[ncclNIbDevs].link = portAttr.link_layer;
-              if (portAttr.active_speed_ex) {
-                // A non-zero active_speed_ex indicates XDR rate (0x100) or higher
-                ncclIbDevs[ncclNIbDevs].speed = ncclIbSpeed(portAttr.active_speed_ex) * ncclIbWidth(portAttr.active_width);
+          // check for mlx5 data direct support only once for a each device
+          if (devCount == -1) {
+            devCount = 1;
+            devOffset = 0;
+            if (ncclParamIbDataDirect() > 0 && ibProvider == IB_PROVIDER_MLX5 && ncclMlx5dvDmaBufCapable(context)) {
+              int pathLen = strlen(dataDirectDevicePath);
+              ncclResult_t res = wrap_mlx5dv_get_data_direct_sysfs_path(context, dataDirectDevicePath + pathLen, sizeof(dataDirectDevicePath) - pathLen);
+              if (res == ncclSuccess) {
+                // data direct devices are exposed twice: with the C2C + PCIe link and with the data direct link
+                devCount = 2;
+                // by default only expose the data direct NIC (devOffset = 1), unless set to 2 by the user
+                devOffset = (ncclParamIbDataDirect() == 2) ? 0 : 1;
+                INFO(NCCL_INIT | NCCL_NET, "NET/IB: Data Direct DMA Interface is detected for device %s", devices[d]->name);
+              } else if (res == ncclInvalidArgument) {
+                TRACE(NCCL_NET, "NET/IB: Device %s does not support Data Direct DMA.", devices[d]->name);
               } else {
-                ncclIbDevs[ncclNIbDevs].speed = ncclIbSpeed(portAttr.active_speed) * ncclIbWidth(portAttr.active_width);
+                WARN("NET/IB: Error in mlx5dv_get_data_direct_sysfs_path with device %s", devices[d]->name);
+                return res;
               }
-              ncclIbDevs[ncclNIbDevs].context = context;
-              ncclIbDevs[ncclNIbDevs].pdRefs = 0;
-              ncclIbDevs[ncclNIbDevs].pd = NULL;
-              // for dev==1 (data direct device), pciPath is given by mlx5
-              strncpy(ncclIbDevs[ncclNIbDevs].devName, devices[d]->name, MAXNAMESIZE);
-              NCCLCHECKGOTO(ncclIbGetPciPath(ncclIbDevs[ncclNIbDevs].devName, (dev == 1) ? NULL : &ncclIbDevs[ncclNIbDevs].pciPath, ncclIbDevs[ncclNIbDevs].fullPciPath), ret, fail);
-              if (dev == 1) {
-                snprintf(ncclIbDevs[ncclNIbDevs].devName, MAXNAMESIZE, "%s_dma", devices[d]->name);
-                NCCLCHECK(ncclCalloc(&ncclIbDevs[ncclNIbDevs].pciPath, PATH_MAX));
-                strncpy(ncclIbDevs[ncclNIbDevs].pciPath, dataDirectDevicePath, PATH_MAX);
-                ncclIbDevs[ncclNIbDevs].capsProvider.mlx5.dataDirect = 1;
-              }
-
-              ncclIbDevs[ncclNIbDevs].maxQp = devAttr.max_qp;
-              ncclIbDevs[ncclNIbDevs].mrCache.capacity = 0;
-              ncclIbDevs[ncclNIbDevs].mrCache.population = 0;
-              ncclIbDevs[ncclNIbDevs].mrCache.slots = NULL;
-              NCCLCHECK(ncclIbStatsInit(&ncclIbDevs[ncclNIbDevs].stats));
-
-              // Enable ADAPTIVE_ROUTING by default on IB networks
-              // But allow it to be overloaded by an env parameter
-              ncclIbDevs[ncclNIbDevs].ar = (portAttr.link_layer == IBV_LINK_LAYER_INFINIBAND) ? 1 : 0;
-              if (ncclParamIbAdaptiveRouting() != -2) ncclIbDevs[ncclNIbDevs].ar = ncclParamIbAdaptiveRouting();
-
-              INFO(NCCL_NET, "NET/IB: [%d] %s:%s:%d/%s provider=%s speed=%d context=%p pciPath=%s ar=%d", d, devices[d]->name, devices[d]->dev_name,
-                   ncclIbDevs[ncclNIbDevs].portNum, NCCL_IB_LLSTR(portAttr.link_layer), ibProviderName[ncclIbDevs[ncclNIbDevs].ibProvider], ncclIbDevs[ncclNIbDevs].speed, context,
-                   ncclIbDevs[ncclNIbDevs].pciPath, ncclIbDevs[ncclNIbDevs].ar);
-
-              ncclIbAsyncThread = std::thread(ncclIbAsyncThreadMain, ncclIbDevs + ncclNIbDevs);
-              ncclSetThreadName(ncclIbAsyncThread, "NCCL IbAsync %2d", ncclNIbDevs);
-              ncclIbAsyncThread.detach();
-
-              ncclNIbDevs++;
-              nPorts++;
             }
+          }
+          for (int dev = devOffset; dev < devCount; ++dev) {
+            ncclIbDevs[ncclNIbDevs].device = d;
+            ncclIbDevs[ncclNIbDevs].ibProvider = ibProvider;
+            ncclIbDevs[ncclNIbDevs].guid = devAttr.sys_image_guid;
+            ncclIbDevs[ncclNIbDevs].portAttr = portAttr;
+            ncclIbDevs[ncclNIbDevs].portNum = port_num;
+            ncclIbDevs[ncclNIbDevs].link = portAttr.link_layer;
+            if (portAttr.active_speed_ex) {
+              // A non-zero active_speed_ex indicates XDR rate (0x100) or higher
+              ncclIbDevs[ncclNIbDevs].speed = ncclIbSpeed(portAttr.active_speed_ex) * ncclIbWidth(portAttr.active_width);
+            } else {
+              ncclIbDevs[ncclNIbDevs].speed = ncclIbSpeed(portAttr.active_speed) * ncclIbWidth(portAttr.active_width);
+            }
+            ncclIbDevs[ncclNIbDevs].context = context;
+            ncclIbDevs[ncclNIbDevs].pdRefs = 0;
+            ncclIbDevs[ncclNIbDevs].pd = NULL;
+            // for dev==1 (data direct device), pciPath is given by mlx5
+            strncpy(ncclIbDevs[ncclNIbDevs].devName, devices[d]->name, MAXNAMESIZE);
+            NCCLCHECKGOTO(ncclIbGetPciPath(ncclIbDevs[ncclNIbDevs].devName, (dev == 1) ? NULL : &ncclIbDevs[ncclNIbDevs].pciPath, ncclIbDevs[ncclNIbDevs].fullPciPath), ret, fail);
+            if (dev == 1) {
+              snprintf(ncclIbDevs[ncclNIbDevs].devName, MAXNAMESIZE, "%s_dma", devices[d]->name);
+              NCCLCHECK(ncclCalloc(&ncclIbDevs[ncclNIbDevs].pciPath, PATH_MAX));
+              strncpy(ncclIbDevs[ncclNIbDevs].pciPath, dataDirectDevicePath, PATH_MAX);
+              ncclIbDevs[ncclNIbDevs].capsProvider.mlx5.dataDirect = 1;
+            }
+
+            ncclIbDevs[ncclNIbDevs].maxQp = devAttr.max_qp;
+            ncclIbDevs[ncclNIbDevs].mrCache.capacity = 0;
+            ncclIbDevs[ncclNIbDevs].mrCache.population = 0;
+            ncclIbDevs[ncclNIbDevs].mrCache.slots = NULL;
+            NCCLCHECK(ncclIbStatsInit(&ncclIbDevs[ncclNIbDevs].stats));
+
+            // Enable ADAPTIVE_ROUTING by default on IB networks
+            // But allow it to be overloaded by an env parameter
+            ncclIbDevs[ncclNIbDevs].ar = (portAttr.link_layer == IBV_LINK_LAYER_INFINIBAND) ? 1 : 0;
+            if (ncclParamIbAdaptiveRouting() != -2) ncclIbDevs[ncclNIbDevs].ar = ncclParamIbAdaptiveRouting();
+
+            INFO(NCCL_NET, "NET/IB: [%d] %s:%s:%d/%s provider=%s speed=%d context=%p pciPath=%s ar=%d", d, devices[d]->name, devices[d]->dev_name,
+                ncclIbDevs[ncclNIbDevs].portNum, NCCL_IB_LLSTR(portAttr.link_layer), ibProviderName[ncclIbDevs[ncclNIbDevs].ibProvider], ncclIbDevs[ncclNIbDevs].speed, context,
+                ncclIbDevs[ncclNIbDevs].pciPath, ncclIbDevs[ncclNIbDevs].ar);
+
+            ncclIbAsyncThread = std::thread(ncclIbAsyncThreadMain, ncclIbDevs + ncclNIbDevs);
+            ncclSetThreadName(ncclIbAsyncThread, "NCCL IbAsync %2d", ncclNIbDevs);
+            ncclIbAsyncThread.detach();
+
+            ncclNIbDevs++;
+            nPorts++;
+          }
         }
         if (nPorts == 0 && ncclSuccess != wrap_ibv_close_device(context)) { ret = ncclInternalError; goto fail; }
       }
@@ -376,7 +376,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
 
       // Add this plain physical device to the list of virtual devices (after sorting)
       int vDev;
-      ncclNetVDeviceProps_t vProps = {0};
+      ncclNetVDeviceProps_t vProps = {};
       vProps.ndevs = 1;
       vProps.devs[0] = d;
       NCCLCHECK(ncclIbMakeVDeviceInternal(&vDev, &vProps));
@@ -390,7 +390,7 @@ fail:
   goto exit;
 }
 
-ncclResult_t ncclIbInit(void** ctx, uint64_t commId, ncclNetCommConfig_t* config, ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) {
+ncclResult_t ncclIbInit(void** ctx, uint64_t /*commId*/, ncclNetCommConfig_t* config, ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) {
   ncclResult_t ret = ncclSuccess;
   ncclNetCommConfig_t* netCommConfig = nullptr;
   NCCLCHECK(ncclIbInitDevices(logFunction, profFunction));

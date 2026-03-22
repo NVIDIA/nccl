@@ -45,7 +45,7 @@ option(DEBUG "Enable debug build" OFF)
 option(ASAN "Enable Address Sanitizer" OFF)
 option(UBSAN "Enable Undefined Behavior Sanitizer" OFF)
 option(TRACE "Enable tracing" OFF)
-option(WERROR "Treat warnings as errors" OFF)
+option(WERROR "Treat warnings as errors" ON)
 option(PROFAPI "Enable profiling API" ON)
 option(NVTX "Enable NVTX" ON)
 option(RDMA_CORE "Enable RDMA core" OFF)
@@ -141,7 +141,7 @@ message(STATUS "Using CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
 # Compiler-specific flags
 if(NCCL_COMPILER_GCC)
     # GCC/Clang-specific flags
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fvisibility=hidden -Wall -Wno-unused-function -Wno-sign-compare -Wvla -g")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fvisibility=hidden -Wall -Wextra -Wshadow=local -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough -Wno-unused-function -Wno-sign-compare -Wvla -g")
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda -Xptxas -maxrregcount=96 -Xfatbin -compress-all -fPIC")
 elseif(NCCL_COMPILER_MSVC)
     # MSVC-specific flags

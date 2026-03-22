@@ -35,7 +35,7 @@
  * examples in 01_communicators.
  */
 void *allReduce(int my_rank, int total_ranks, int local_device,
-                int devices_per_rank) {
+                int /*devices_per_rank*/) {
 
   // ========================================================================
   // STEP 1: Initialize NCCL Communicator and Setup

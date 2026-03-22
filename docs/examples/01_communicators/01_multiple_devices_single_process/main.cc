@@ -84,7 +84,7 @@
 // MAIN FUNCTION - NCCL Communicator Lifecycle Example
 // =============================================================================
 
-int main(int argc, char *argv[]) {
+int main(int /*argc*/, char */*argv*/[]) {
   // Variables for managing multiple GPU communicators
   int num_gpus;                 // Number of available CUDA devices
   ncclComm_t *comms = NULL;     // Array of NCCL communicators (one per GPU)

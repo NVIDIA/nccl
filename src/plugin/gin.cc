@@ -48,7 +48,7 @@ typedef struct ginPluginLib {
 } ginPluginLib_t;
 
 static int pluginCount = 0;
-static ginPluginLib_t ginPluginLibs[NCCL_GIN_MAX_PLUGINS] = { 0 };
+static ginPluginLib_t ginPluginLibs[NCCL_GIN_MAX_PLUGINS] = {};
 static std::mutex ginPluginMutex;
 static std::once_flag initPluginLibsOnceFlag;
 
@@ -82,7 +82,7 @@ static ncclResult_t ncclGinPluginLoad(ginPluginLib_t* pluginLib) {
     pluginLib->ncclGinPluginState = ncclGinPluginStateInitReady;
 
   INFO(NCCL_INIT|NCCL_NET, "Successfully loaded external gin plugin %s",
-       (ncclPluginLibPaths[ncclPluginTypeGin] ? ncclPluginLibPaths[ncclPluginTypeGin] : pluginLib->name));
+      (ncclPluginLibPaths[ncclPluginTypeGin] ? ncclPluginLibPaths[ncclPluginTypeGin] : pluginLib->name));
 exit:
   return ncclSuccess;
 fail:
@@ -99,7 +99,7 @@ static ncclResult_t ncclGinPluginInit(struct ncclComm* comm, ginPluginLib_t* plu
   // Init must be called for each new comm to set the right context
   if (pluginLib->ncclGinPluginState == ncclGinPluginStateInitReady && pluginLib->ncclGin) {
     if (pluginLib->ncclGin->init(&comm->ginContext, comm->commHash, ncclDebugLog) != ncclSuccess ||
-        pluginLib->ncclGin->devices(&ndev) != ncclSuccess || ndev <= 0) {
+      pluginLib->ncclGin->devices(&ndev) != ncclSuccess || ndev <= 0) {
       pluginLib->ncclGinPluginState = ncclGinPluginStateDisabled;
     } else {
       pluginLib->ginPhysDevs = ndev;
@@ -110,7 +110,7 @@ static ncclResult_t ncclGinPluginInit(struct ncclComm* comm, ginPluginLib_t* plu
   // Initialize RMA plugin
   if (pluginLib->ncclRmaPluginState == ncclGinPluginStateInitReady && pluginLib->ncclRma) {
     if (pluginLib->ncclRma->init(&comm->ginContext, comm->commHash, ncclDebugLog) != ncclSuccess ||
-        pluginLib->ncclRma->devices(&ndev) != ncclSuccess || ndev <= 0) {
+      pluginLib->ncclRma->devices(&ndev) != ncclSuccess || ndev <= 0) {
       pluginLib->ncclRmaPluginState = ncclGinPluginStateDisabled;
     } else {
       pluginLib->ncclRmaPluginState = ncclGinPluginStateEnabled;
@@ -141,7 +141,7 @@ static ncclResult_t ncclGinPluginAssignToComm(struct ncclComm* comm, int pluginI
 static ncclResult_t ncclGinPluginDisableOtherExternal(int pluginIndex) {
   // Only if an external plugin is enabled, disable other external plugins
   if (pluginIndex >= (pluginCount - NCCL_GIN_NUM_INTERNAL_PLUGINS)) return ncclSuccess;
-  char names[MAX_STR_LEN*(NCCL_GIN_MAX_PLUGINS - NCCL_GIN_NUM_INTERNAL_PLUGINS)] = { 0 };
+  char names[MAX_STR_LEN*(NCCL_GIN_MAX_PLUGINS - NCCL_GIN_NUM_INTERNAL_PLUGINS)] = {};
   for (int i = 0; i < (pluginCount - NCCL_GIN_NUM_INTERNAL_PLUGINS); i++) {
     if (i != pluginIndex) {
       // Append all disabled plugin names to a string
@@ -263,9 +263,9 @@ ncclResult_t ncclGinFinalize(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinGetDevCount(int ginPluginIndex, int* nPhysDevs, int* nVirtDevs) {
+ncclResult_t ncclGinGetDevCount(int ginPluginIndex, int* nPhysDevs, int* /*nVirtDevs*/) {
   if (ginPluginLibs[ginPluginIndex].ncclGinPluginState != ncclGinPluginStateEnabled ||
-     ginPluginLibs[ginPluginIndex].ginPhysDevs == 0) goto fail;
+      ginPluginLibs[ginPluginIndex].ginPhysDevs == 0) goto fail;
   // lock not needed as it's called within a lock already in ncclTopoGetSystem
   *nPhysDevs = ginPluginLibs[ginPluginIndex].ginPhysDevs;
   return ncclSuccess;

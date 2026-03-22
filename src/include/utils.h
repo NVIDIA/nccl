@@ -46,14 +46,14 @@ struct netIf {
 int parseStringList(const char* string, struct netIf* ifList, int maxList);
 bool matchIfList(const char* string, int port, struct netIf* ifList, int listSize, bool matchExact);
 
-static long log2i(long n) {
+static inline long log2i(long n) {
   return log2Down(n);
 }
 
 // Comparator function for qsort/bsearch to compare integers
-static int compareInts(const void *a, const void *b) {
-    int ia = *(const int*)a, ib = *(const int*)b;
-    return (ia > ib) - (ia < ib);
+static inline int compareInts(const void *a, const void *b) {
+  int ia = *(const int*)a, ib = *(const int*)b;
+  return (ia > ib) - (ia < ib);
 }
 
 inline uint64_t clockNano() {
@@ -649,19 +649,19 @@ static inline void ncclIntruAddressMapDestruct(struct ncclIntruAddressMap<Obj, K
 
 // Internal untyped function prototypes
 ncclResult_t ncclIntruAddressMapInsert_untyped(
-  struct ncclIntruAddressMap_untyped* map,
-  int keySize, int keyFieldOffset, int nextFieldOffset,
-  uintptr_t key, void* object);
+    struct ncclIntruAddressMap_untyped* map,
+    int keySize, int keyFieldOffset, int nextFieldOffset,
+    uintptr_t key, void* object);
 
 ncclResult_t ncclIntruAddressMapFind_untyped(
-  struct ncclIntruAddressMap_untyped* map,
-  int keySize, int keyFieldOffset, int nextFieldOffset,
-  uintptr_t key, void** object);
+    struct ncclIntruAddressMap_untyped* map,
+    int keySize, int keyFieldOffset, int nextFieldOffset,
+    uintptr_t key, void** object);
 
 ncclResult_t ncclIntruAddressMapRemove_untyped(
-  struct ncclIntruAddressMap_untyped* map,
-  int keySize, int keyFieldOffset, int nextFieldOffset,
-  uintptr_t key);
+    struct ncclIntruAddressMap_untyped* map,
+    int keySize, int keyFieldOffset, int nextFieldOffset,
+    uintptr_t key);
 
 // Typed template implementations (type-erasing wrappers)
 template<typename Obj, typename Key, Key Obj::*keyField, Obj* Obj::*nextField>
@@ -674,8 +674,8 @@ static inline ncclResult_t ncclIntruAddressMapInsert(
   int keyFieldOffset = (char*)&(dummy.*keyField) - (char*)&dummy;
   int nextFieldOffset = (char*)&(dummy.*nextField) - (char*)&dummy;
   return ncclIntruAddressMapInsert_untyped(
-    &map->base, (int)sizeof(Key), keyFieldOffset, nextFieldOffset,
-    reinterpret_cast<uintptr_t>(key), object);
+          &map->base, (int)sizeof(Key), keyFieldOffset, nextFieldOffset,
+          reinterpret_cast<uintptr_t>(key), object);
 }
 
 template<typename Obj, typename Key, Key Obj::*keyField, Obj* Obj::*nextField>
@@ -687,8 +687,8 @@ static inline ncclResult_t ncclIntruAddressMapFind(
   int nextFieldOffset = (char*)&(dummy.*nextField) - (char*)&dummy;
   void* tmp;
   ncclResult_t ret = ncclIntruAddressMapFind_untyped(
-    &map->base, (int)sizeof(Key), keyFieldOffset, nextFieldOffset,
-    reinterpret_cast<uintptr_t>(key), &tmp);
+          &map->base, (int)sizeof(Key), keyFieldOffset, nextFieldOffset,
+          reinterpret_cast<uintptr_t>(key), &tmp);
   *object = (Obj*)tmp;
   return ret;
 }
@@ -701,8 +701,8 @@ static inline ncclResult_t ncclIntruAddressMapRemove(
   int keyFieldOffset = (char*)&(dummy.*keyField) - (char*)&dummy;
   int nextFieldOffset = (char*)&(dummy.*nextField) - (char*)&dummy;
   return ncclIntruAddressMapRemove_untyped(
-    &map->base, (int)sizeof(Key), keyFieldOffset, nextFieldOffset,
-    reinterpret_cast<uintptr_t>(key));
+          &map->base, (int)sizeof(Key), keyFieldOffset, nextFieldOffset,
+          reinterpret_cast<uintptr_t>(key));
 }
 
 inline ncclResult_t ncclThreadJoin(std::thread& thread) {

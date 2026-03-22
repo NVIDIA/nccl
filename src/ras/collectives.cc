@@ -39,13 +39,13 @@ struct rasCollective* rasCollectivesTail;
 
 static ncclResult_t getNewCollEntry(struct rasCollective** pColl);
 static ncclResult_t rasLinkSendCollReq(struct rasLink* link, struct rasCollective* coll,
-                                       const struct rasCollRequest* req, size_t reqLen, struct rasConnection* fromConn);
+    const struct rasCollRequest* req, size_t reqLen, struct rasConnection* fromConn);
 static ncclResult_t rasConnSendCollReq(struct rasConnection* conn, const struct rasCollRequest* req, size_t reqLen);
 static ncclResult_t rasCollReadyResp(struct rasCollective* coll);
 static ncclResult_t rasConnSendCollResp(struct rasConnection* conn,
-                                        const union ncclSocketAddress* rootAddr, uint64_t rootId,
-                                        const union ncclSocketAddress* peers, int nPeers,
-                                        const char* data, int nData, int nLegTimeouts);
+    const union ncclSocketAddress* rootAddr, uint64_t rootId,
+    const union ncclSocketAddress* peers, int nPeers,
+    const char* data, int nData, int nLegTimeouts);
 
 static ncclResult_t rasCollConnsInit(struct rasCollRequest** pReq, size_t* pReqLen, char** pData, int* pNData);
 static ncclResult_t rasCollConnsMerge(struct rasCollective* coll, struct rasMsg* msg);
@@ -107,7 +107,7 @@ void rasCollReqInit(struct rasCollRequest* req) {
 // pColl provides on return a pointer to the allocated rasCollective structure to track this collective (unless
 // it's a broadcast, which require no such tracking).
 ncclResult_t rasNetSendCollReq(const struct rasCollRequest* req, bool* pAllDone,
-                               struct rasCollective** pColl, struct rasConnection* fromConn) {
+    struct rasCollective** pColl, struct rasConnection* fromConn) {
   struct rasCollective* coll = nullptr;
   struct rasCollRequest* reqMod = (struct rasCollRequest*)req;
   size_t reqLen = 0;
@@ -135,7 +135,7 @@ ncclResult_t rasNetSendCollReq(const struct rasCollRequest* req, bool* pAllDone,
     // Add the info to the collective message history.
     nRasCollHistory = std::min(nRasCollHistory+1, COLL_HISTORY_SIZE);
     memcpy(&rasCollHistory[rasCollHistNextIdx].rootAddr, &req->rootAddr,
-           sizeof(rasCollHistory[rasCollHistNextIdx].rootAddr));
+        sizeof(rasCollHistory[rasCollHistNextIdx].rootAddr));
     rasCollHistory[rasCollHistNextIdx].rootId = req->rootId;
     rasCollHistNextIdx = (rasCollHistNextIdx + 1) % COLL_HISTORY_SIZE;
 
@@ -165,8 +165,8 @@ exit:
 // Sends the collective message through all connections associated with this link (with the exception of the one
 // the message came from, if any).
 static ncclResult_t rasLinkSendCollReq(struct rasLink* link, struct rasCollective* coll,
-                                       const struct rasCollRequest* req, size_t reqLen,
-                                       struct rasConnection* fromConn) {
+    const struct rasCollRequest* req, size_t reqLen,
+    struct rasConnection* fromConn) {
   for (struct rasLinkConn* linkConn = link->conns; linkConn; linkConn = linkConn->next) {
     if (linkConn->conn && linkConn->conn != fromConn && !linkConn->conn->linkFlag) {
       // We send collective messages through fully established and operational connections only.
@@ -205,8 +205,8 @@ ncclResult_t rasMsgHandleCollReq(struct rasMsg* msg, struct rasSocket* sock) {
   char line[SOCKET_NAME_MAXLEN+1];
 
   INFO(NCCL_RAS, "RAS handling collReq from %s (root %s:%ld, timeout %ld, type %d)",
-       ncclSocketToString(&sock->sock.addr, rasLine), ncclSocketToString(&msg->collReq.rootAddr, line),
-       msg->collReq.rootId, msg->collReq.timeout/CLOCK_UNITS_PER_SEC, msg->collReq.type);
+    ncclSocketToString(&sock->sock.addr, rasLine), ncclSocketToString(&msg->collReq.rootAddr, line),
+    msg->collReq.rootId, msg->collReq.timeout/CLOCK_UNITS_PER_SEC, msg->collReq.type);
   if (sock->conn == nullptr) {
     INFO(NCCL_RAS, "RAS socket lacks a connection: status %d -- internal error?", sock->status);
     return ncclInternalError;
@@ -217,13 +217,13 @@ ncclResult_t rasMsgHandleCollReq(struct rasMsg* msg, struct rasSocket* sock) {
     // In principle we can use i to index the array but we convert it so that we check the most recent entries first.
     int collHistIdx = (rasCollHistNextIdx + COLL_HISTORY_SIZE - 1 - i) % COLL_HISTORY_SIZE;
     if (memcmp(&msg->collReq.rootAddr, &rasCollHistory[collHistIdx].rootAddr, sizeof(msg->collReq.rootAddr)) == 0 &&
-        msg->collReq.rootId == rasCollHistory[collHistIdx].rootId) {
+      msg->collReq.rootId == rasCollHistory[collHistIdx].rootId) {
       INFO(NCCL_RAS, "RAS found a duplicate finished collective");
       if (msg->collReq.type >= RAS_COLL_CONNS) {
         // Send an empty response so that the sender can account for it.  The non-empty response has already been
         // sent through the connection that we received the request through first.
         NCCLCHECK(rasConnSendCollResp(sock->conn, &msg->collReq.rootAddr, msg->collReq.rootId,
-                                      /*peers*/nullptr, /*nPeers*/0, /*data*/nullptr, /*nData*/0, /*nLegTimeouts*/0));
+          /*peers*/nullptr, /*nPeers*/0, /*data*/nullptr, /*nData*/0, /*nLegTimeouts*/0));
       }
       goto exit;
     }
@@ -233,18 +233,18 @@ ncclResult_t rasMsgHandleCollReq(struct rasMsg* msg, struct rasSocket* sock) {
     // Check if we're currently handling this collective request.
     for (coll = rasCollectivesHead; coll; coll = coll->next) {
       if (memcmp(&msg->collReq.rootAddr, &coll->rootAddr, sizeof(msg->collReq.rootAddr)) == 0 &&
-          msg->collReq.rootId == coll->rootId) {
+        msg->collReq.rootId == coll->rootId) {
         if (msg->collReq.type == coll->type) {
           INFO(NCCL_RAS, "RAS found a duplicate ongoing collective");
           // Send an empty response so that the sender can account for it.  The non-empty response will be
           // sent through the connection that we received the request through first.
           NCCLCHECK(rasConnSendCollResp(sock->conn, &msg->collReq.rootAddr, msg->collReq.rootId,
-                                        /*peers*/nullptr, /*nPeers*/0, /*data*/nullptr, /*nData*/0, /*nLegTimeouts*/0));
+            /*peers*/nullptr, /*nPeers*/0, /*data*/nullptr, /*nData*/0, /*nLegTimeouts*/0));
           goto exit;
         } else {
           // Should never happen.
           INFO(NCCL_RAS, "RAS collective type mismatch: request %d, ongoing %d -- internal error?",
-               msg->collReq.type, coll->type);
+              msg->collReq.type, coll->type);
         }
       } // if match
     } // for (coll)
@@ -275,12 +275,12 @@ static ncclResult_t rasCollReadyResp(struct rasCollective* coll) {
   if (coll->fromConn) {
     // For remotely-initiated collectives, send the response back.
     NCCLCHECK(rasConnSendCollResp(coll->fromConn, &coll->rootAddr, coll->rootId,
-                                  coll->peers, coll->nPeers, coll->data, coll->nData, coll->nLegTimeouts));
+      coll->peers, coll->nPeers, coll->data, coll->nData, coll->nLegTimeouts));
 
     // Add the identifying info to the collective message history.
     nRasCollHistory = std::min(nRasCollHistory+1, COLL_HISTORY_SIZE);
     memcpy(&rasCollHistory[rasCollHistNextIdx].rootAddr, &coll->rootAddr,
-           sizeof(rasCollHistory[rasCollHistNextIdx].rootAddr));
+        sizeof(rasCollHistory[rasCollHistNextIdx].rootAddr));
     rasCollHistory[rasCollHistNextIdx].rootId = coll->rootId;
     rasCollHistNextIdx = (rasCollHistNextIdx + 1) % COLL_HISTORY_SIZE;
 
@@ -295,9 +295,9 @@ static ncclResult_t rasCollReadyResp(struct rasCollective* coll) {
 // Sends a collective response via the connection we originally received the request from.  The message should be
 // a cumulative response from this process and all the processes that we forwarded the request to.
 static ncclResult_t rasConnSendCollResp(struct rasConnection* conn,
-                                        const union ncclSocketAddress* rootAddr, uint64_t rootId,
-                                        const union ncclSocketAddress* peers, int nPeers,
-                                        const char* data, int nData, int nLegTimeouts) {
+    const union ncclSocketAddress* rootAddr, uint64_t rootId,
+    const union ncclSocketAddress* peers, int nPeers,
+    const char* data, int nData, int nLegTimeouts) {
   struct rasMsg* msg = nullptr;
   int msgLen = rasMsgLength(RAS_MSG_COLLRESP) + nPeers*sizeof(*peers);
   int dataOffset = 0;
@@ -333,12 +333,12 @@ ncclResult_t rasMsgHandleCollResp(struct rasMsg* msg, struct rasSocket* sock) {
   char line[SOCKET_NAME_MAXLEN+1];
 
   INFO(NCCL_RAS, "RAS handling collResp from %s (root %s:%ld, nPeers %d, nData %d, nLegTimeouts %d)",
-       ncclSocketToString(&sock->sock.addr, rasLine), ncclSocketToString(&msg->collResp.rootAddr, line),
-       msg->collResp.rootId, msg->collResp.nPeers, msg->collResp.nData, msg->collResp.nLegTimeouts);
+    ncclSocketToString(&sock->sock.addr, rasLine), ncclSocketToString(&msg->collResp.rootAddr, line),
+    msg->collResp.rootId, msg->collResp.nPeers, msg->collResp.nData, msg->collResp.nLegTimeouts);
 
   for (coll = rasCollectivesHead; coll; coll = coll->next) {
     if (memcmp(&msg->collResp.rootAddr, &coll->rootAddr, sizeof(msg->collResp.rootAddr)) == 0 &&
-        msg->collResp.rootId == coll->rootId)
+      msg->collResp.rootId == coll->rootId)
       break;
   }
   if (coll == nullptr) {
@@ -389,8 +389,8 @@ void rasCollsPurgeConn(struct rasConnection* conn) {
     char line[SOCKET_NAME_MAXLEN+1];
     if (coll->fromConn == conn) {
       INFO(NCCL_RAS, "RAS purging collective %s:%ld because it comes from %s",
-           ncclSocketToString(&coll->rootAddr, line), coll->rootId,
-           ncclSocketToString(&conn->addr, rasLine));
+          ncclSocketToString(&coll->rootAddr, line), coll->rootId,
+          ncclSocketToString(&conn->addr, rasLine));
       rasCollFree(coll);
     } else {
       for (int i = 0; i < coll->nFwdSent; i++) {
@@ -399,9 +399,9 @@ void rasCollsPurgeConn(struct rasConnection* conn) {
           coll->nFwdRecv++;
           coll->nLegTimeouts++;
           INFO(NCCL_RAS, "RAS not waiting for response from %s to collective %s:%ld "
-               "(nFwdSent %d, nFwdRecv %d, nLegTimeouts %d)",
-               ncclSocketToString(&conn->addr, rasLine), ncclSocketToString(&coll->rootAddr, line), coll->rootId,
-               coll->nFwdSent, coll->nFwdRecv, coll->nLegTimeouts);
+                         "(nFwdSent %d, nFwdRecv %d, nLegTimeouts %d)",
+              ncclSocketToString(&conn->addr, rasLine), ncclSocketToString(&coll->rootAddr, line), coll->rootId,
+              coll->nFwdSent, coll->nFwdRecv, coll->nLegTimeouts);
           if (coll->nFwdSent == coll->nFwdRecv)
             (void)rasCollReadyResp(coll);
           break;
@@ -451,8 +451,8 @@ void rasCollsHandleTimeouts(int64_t now, int64_t* nextWakeup) {
         // We've exceeded the leg timeout.  For all outstanding responses, check their connections.
         if (!coll->timeoutWarned) {
           INFO(NCCL_RAS, "RAS collective %s:%ld timeout warning (%lds) -- %d responses missing",
-               ncclSocketToString(&coll->rootAddr, rasLine), coll->rootId,
-               (now - coll->startTime) / CLOCK_UNITS_PER_SEC, coll->nFwdSent - coll->nFwdRecv);
+            ncclSocketToString(&coll->rootAddr, rasLine), coll->rootId,
+            (now - coll->startTime) / CLOCK_UNITS_PER_SEC, coll->nFwdSent - coll->nFwdRecv);
           coll->timeoutWarned = true;
         }
         for (int i = 0; i < coll->nFwdSent; i++) {
@@ -468,9 +468,9 @@ void rasCollsHandleTimeouts(int64_t now, int64_t* nextWakeup) {
             }
             // In all other cases we declare a timeout so that we can (hopefully) recover.
             INFO(NCCL_RAS, "RAS not waiting for response from %s to collective %s:%ld "
-                 "(nFwdSent %d, nFwdRecv %d, nLegTimeouts %d)",
-                 ncclSocketToString(&conn->addr, rasLine), ncclSocketToString(&coll->rootAddr, line),
-                 coll->rootId, coll->nFwdSent, coll->nFwdRecv, coll->nLegTimeouts);
+                           "(nFwdSent %d, nFwdRecv %d, nLegTimeouts %d)",
+                ncclSocketToString(&conn->addr, rasLine), ncclSocketToString(&coll->rootAddr, line),
+                coll->rootId, coll->nFwdSent, coll->nFwdRecv, coll->nLegTimeouts);
             coll->fwdConns[i] = nullptr;
             coll->nFwdRecv++;
             coll->nLegTimeouts++;
@@ -486,8 +486,8 @@ void rasCollsHandleTimeouts(int64_t now, int64_t* nextWakeup) {
             // We've exceeded even the longer timeout, which is unexpected.  Try to return whatever we have (though
             // the originator of the collective, if it's not us, may have timed out already anyway).
             INFO(NCCL_RAS, "RAS collective %s:%ld timeout error (%lds) -- giving up on %d missing responses",
-                 ncclSocketToString(&coll->rootAddr, rasLine), coll->rootId,
-                 (now - coll->startTime) / CLOCK_UNITS_PER_SEC, coll->nFwdSent - coll->nFwdRecv);
+              ncclSocketToString(&coll->rootAddr, rasLine), coll->rootId,
+              (now - coll->startTime) / CLOCK_UNITS_PER_SEC, coll->nFwdSent - coll->nFwdRecv);
             coll->nLegTimeouts += coll->nFwdSent - coll->nFwdRecv;
             coll->nFwdRecv = coll->nFwdSent;
             (void)rasCollReadyResp(coll);
@@ -513,8 +513,10 @@ void rasCollsHandleTimeouts(int64_t now, int64_t* nextWakeup) {
 // For this particular collective, we keep some reduced statistical data (min/max/avg travel time) as well
 // as connection-specific info in case we observed a negative min travel time (which, ideally, shouldn't happen,
 // but the system clocks may not be perfectly in sync).
-static ncclResult_t rasCollConnsInit(struct rasCollRequest** pReq, size_t* pReqLen, char** pData, int* pNData) {
-  struct rasCollConns connsData = {.travelTimeMin = INT64_MAX, .travelTimeMax = INT64_MIN};
+static ncclResult_t rasCollConnsInit(struct rasCollRequest** /*pReq*/, size_t* pReqLen, char** pData, int* pNData) {
+  struct rasCollConns connsData = {};
+  connsData.travelTimeMin = INT64_MAX;
+  connsData.travelTimeMax = INT64_MIN;
   struct rasCollConns* pConnsData;
 
   *pReqLen = rasCollDataLength(RAS_COLL_CONNS);
@@ -547,7 +549,7 @@ static ncclResult_t rasCollConnsInit(struct rasCollRequest** pReq, size_t* pReqL
         if (negMinsIdx >= connsData.nNegativeMins) {
           // Should never happen;
           INFO(NCCL_RAS, "RAS overflow of negativeMins: connsData.nNegativeMins %d, negMinsIdx %d -- internal error?",
-               connsData.nNegativeMins, negMinsIdx);
+              connsData.nNegativeMins, negMinsIdx);
           break;
         }
         memcpy(&negativeMin->source, &rasNetListeningSocket.addr, sizeof(negativeMin->source));
@@ -583,11 +585,11 @@ static ncclResult_t rasCollConnsMerge(struct rasCollective* coll, struct rasMsg*
   // Append the info about negative minimums.
   if (msgData->nNegativeMins > 0) {
     int nData = sizeof(*collData) +
-      (collData->nNegativeMins+msgData->nNegativeMins) * sizeof(*collData->negativeMins);
+        (collData->nNegativeMins+msgData->nNegativeMins) * sizeof(*collData->negativeMins);
     NCCLCHECK(ncclRealloc(&coll->data, coll->nData, nData));
     collData = (struct rasCollConns*)coll->data;
     memcpy(coll->data+coll->nData, msgData->negativeMins,
-           msgData->nNegativeMins * sizeof(*collData->negativeMins));
+        msgData->nNegativeMins * sizeof(*collData->negativeMins));
     coll->nData = nData;
     collData->nNegativeMins += msgData->nNegativeMins;
   }
@@ -621,7 +623,7 @@ static ncclResult_t rasCollCommsInit(struct rasCollRequest** pReq, size_t* pReqL
   int firstNewSkipMissingIdx = -1;
 
   *pReqLen = rasCollDataLength(RAS_COLL_COMMS) +
-    (*pReq)->comms.nSkipMissingRanksComms * sizeof(*(*pReq)->comms.skipMissingRanksComms);
+      (*pReq)->comms.nSkipMissingRanksComms * sizeof(*(*pReq)->comms.skipMissingRanksComms);
   *pData = nullptr;
 
   // Start by counting the communicators so that we know how much space to allocate.
@@ -673,7 +675,7 @@ static ncclResult_t rasCollCommsInit(struct rasCollRequest** pReq, size_t* pReqL
   // This is extra complicated because of the "hidden" array of struct rasCollCommsMissingRank following the
   // ranks array for each communicator.
   *pNData = sizeof(*commsData) + nComms * sizeof(*commsData->comms) + nRanks * sizeof(*commsData->comms[0].ranks) +
-    nMissingRanks * sizeof(struct rasCollCommsMissingRank);
+      nMissingRanks * sizeof(struct rasCollCommsMissingRank);
   NCCLCHECKGOTO(ncclCalloc(pData, *pNData), ret, fail);
   commsData = (struct rasCollComms*)*pData;
   commsData->nComms = nComms;
@@ -689,7 +691,7 @@ static ncclResult_t rasCollCommsInit(struct rasCollRequest** pReq, size_t* pReqL
     if ((char*)(comm+1) - (char*)commsData > *pNData) {
       // Should never happen.
       INFO(NCCL_RAS, "RAS overflow of commsData: collCommIdx %d, nComms %d, pNData %d, needs %td -- internal error?",
-           collCommIdx, nComms, *pNData, (char*)(comm+1) - (char*)commsData);
+          collCommIdx, nComms, *pNData, (char*)(comm+1) - (char*)commsData);
       break;
     }
 
@@ -701,15 +703,15 @@ static ncclResult_t rasCollCommsInit(struct rasCollRequest** pReq, size_t* pReqL
 
     // Fill in the comm->ranks array.
     for (; commIdx < nNcclComms && ncclComms[commIdx] && ncclComms[commIdx]->commHash == comm->commId.commHash;
-         commIdx++) {
+        commIdx++) {
       ncclComm = ncclComms[commIdx];
       struct rasCollComms::comm::rank* rank = comm->ranks+comm->nRanks;
 
       if ((char*)(rank+1) - (char*)commsData > *pNData) {
         // Should never happen.
         INFO(NCCL_RAS, "RAS overflow of commsData: collCommIdx %d, nComms %d, rank %d, commIdx %d, pNData %d, "
-             "needs %td -- internal error?",
-             collCommIdx, nComms, comm->nRanks, commIdx, *pNData, (char*)(rank+1) - (char*)commsData);
+                       "needs %td -- internal error?",
+            collCommIdx, nComms, comm->nRanks, commIdx, *pNData, (char*)(rank+1) - (char*)commsData);
         break;
       }
 
@@ -731,7 +733,7 @@ static ncclResult_t rasCollCommsInit(struct rasCollRequest** pReq, size_t* pReqL
     } // for (commIdx)
 
     if (COMPILER_ATOMIC_LOAD(&ncclComm->peerInfoValid, std::memory_order_acquire) && firstNewSkipMissingIdx != -1 &&
-        memcmp(req->comms.skipMissingRanksComms+firstNewSkipMissingIdx, &comm->commId, sizeof(comm->commId)) == 0) {
+      memcmp(req->comms.skipMissingRanksComms+firstNewSkipMissingIdx, &comm->commId, sizeof(comm->commId)) == 0) {
       // Fill in the missingRanks array that follows the comm->ranks.
       struct rasCollCommsMissingRank* missingRanks = (struct rasCollCommsMissingRank*)(comm->ranks+comm->nRanks);
 
@@ -754,9 +756,9 @@ static ncclResult_t rasCollCommsInit(struct rasCollRequest** pReq, size_t* pReqL
         if ((char*)(missingRank+1) - (char*)commsData > *pNData) {
           // Should never happen.
           INFO(NCCL_RAS, "RAS overflow of commsData: collCommIdx %d, nComms %d, nRanks %d, missingRankIdx %d, "
-               "nMissingRanks %d, pNData %d, needs %td -- internal error?",
-               collCommIdx, nComms, comm->nRanks, missingRankIdx, comm->nMissingRanks, *pNData,
-               (char*)(missingRank+1) - (char*)commsData);
+                         "nMissingRanks %d, pNData %d, needs %td -- internal error?",
+              collCommIdx, nComms, comm->nRanks, missingRankIdx, comm->nMissingRanks, *pNData,
+              (char*)(missingRank+1) - (char*)commsData);
           break;
         }
 
@@ -780,15 +782,15 @@ static ncclResult_t rasCollCommsInit(struct rasCollRequest** pReq, size_t* pReqL
     } // if need to fill in the missingRanks
 
     comm = (struct rasCollComms::comm*)((char*)(comm+1) + comm->nRanks * sizeof(*comm->ranks) +
-                                        comm->nMissingRanks * sizeof(struct rasCollCommsMissingRank));
+      comm->nMissingRanks * sizeof(struct rasCollCommsMissingRank));
   } // for (collCommIdx)
 
   if (req) {
     // Finish updating the request.
     *pReqLen = rasCollDataLength(RAS_COLL_COMMS) +
-      req->comms.nSkipMissingRanksComms * sizeof(*req->comms.skipMissingRanksComms);
+        req->comms.nSkipMissingRanksComms * sizeof(*req->comms.skipMissingRanksComms);
     qsort(req->comms.skipMissingRanksComms, req->comms.nSkipMissingRanksComms,
-          sizeof(*req->comms.skipMissingRanksComms), rasCommIdCompare);
+        sizeof(*req->comms.skipMissingRanksComms), rasCommIdCompare);
   }
 ret:
   free(peersReSorted);
@@ -831,8 +833,8 @@ static ncclResult_t rasCollCommsMerge(struct rasCollective* coll, struct rasMsg*
       if ((char*)(newComm+1) - (char*)newData > nNewData) {
         // Should never happen.
         INFO(NCCL_RAS, "RAS overflow of newData: newIdx %d, collIdx %d, msgIdx %d, nNewData %d, "
-             "needs %td -- internal error?",
-             newData->nComms, collIdx, msgIdx, nNewData, (char*)(newComm+1) - (char*)newData);
+                       "needs %td -- internal error?",
+            newData->nComms, collIdx, msgIdx, nNewData, (char*)(newComm+1) - (char*)newData);
         break;
       }
       if (collIdx < collData->nComms &&
@@ -840,9 +842,9 @@ static ncclResult_t rasCollCommsMerge(struct rasCollective* coll, struct rasMsg*
           collComm->nMissingRanks * sizeof(struct rasCollCommsMissingRank) - (char*)collData > coll->nData) {
         // Should never happen.
         INFO(NCCL_RAS, "RAS overflow of collData: collIdx %d, nComms %d, nData %d, needs %td -- internal error?",
-             collIdx, collData->nComms, coll->nData,
-             (char*)(collComm+1) + collComm->nRanks * sizeof(*collComm->ranks) +
-             collComm->nMissingRanks * sizeof(struct rasCollCommsMissingRank) - (char*)collData);
+            collIdx, collData->nComms, coll->nData,
+            (char*)(collComm+1) + collComm->nRanks * sizeof(*collComm->ranks) +
+            collComm->nMissingRanks * sizeof(struct rasCollCommsMissingRank) - (char*)collData);
         break;
       }
       if (msgIdx < msgData->nComms &&
@@ -850,9 +852,9 @@ static ncclResult_t rasCollCommsMerge(struct rasCollective* coll, struct rasMsg*
           msgComm->nMissingRanks * sizeof(struct rasCollCommsMissingRank) - (char*)msgData > msg->collResp.nData) {
         // Should never happen.
         INFO(NCCL_RAS, "RAS overflow of msgData: msgIdx %d, nComms %d, nData %d, needs %td -- internal error?",
-             msgIdx, msgData->nComms, msg->collResp.nData,
-             (char*)(msgComm+1) + msgComm->nRanks * sizeof(*msgComm->ranks) +
-             msgComm->nMissingRanks * sizeof(struct rasCollCommsMissingRank) - (char*)msgData);
+            msgIdx, msgData->nComms, msg->collResp.nData,
+            (char*)(msgComm+1) + msgComm->nRanks * sizeof(*msgComm->ranks) +
+            msgComm->nMissingRanks * sizeof(struct rasCollCommsMissingRank) - (char*)msgData);
         break;
       }
 
@@ -863,8 +865,8 @@ static ncclResult_t rasCollCommsMerge(struct rasCollective* coll, struct rasMsg*
 
       if (cmp == 0 && collComm->commNRanks != msgComm->commNRanks) {
         INFO(NCCL_RAS, "RAS encountered inconsistent communicator data: size %d != %d -- "
-             "possible hash collision (0x%lx, 0x%lx, 0x%lx)", collComm->commNRanks, msgComm->commNRanks,
-             collComm->commId.commHash, collComm->commId.hostHash, collComm->commId.pidHash);
+                       "possible hash collision (0x%lx, 0x%lx, 0x%lx)", collComm->commNRanks, msgComm->commNRanks,
+            collComm->commId.commHash, collComm->commId.hostHash, collComm->commId.pidHash);
         cmp = (collComm->commNRanks < msgComm->commNRanks ? -1 : 1);
         // We try to preserve them both separately...
       }
@@ -875,9 +877,9 @@ static ncclResult_t rasCollCommsMerge(struct rasCollective* coll, struct rasMsg*
         newComm->commNRanks = collComm->commNRanks;
         if (collComm->nRanks + msgComm->nRanks > collComm->commNRanks) {
           INFO(NCCL_RAS,
-               "RAS encountered more ranks (%d) than the communicator size (%d) -- possible hash collision "
-               "(0x%lx, 0x%lx, 0x%lx)", collComm->nRanks + msgComm->nRanks, newComm->commNRanks,
-               collComm->commId.commHash, collComm->commId.hostHash, collComm->commId.pidHash);
+              "RAS encountered more ranks (%d) than the communicator size (%d) -- possible hash collision "
+              "(0x%lx, 0x%lx, 0x%lx)", collComm->nRanks + msgComm->nRanks, newComm->commNRanks,
+              collComm->commId.commHash, collComm->commId.hostHash, collComm->commId.pidHash);
           newComm->nRanks = newComm->commNRanks;
           // We'll skip the extras in the loop below.
         } else {
@@ -885,14 +887,14 @@ static ncclResult_t rasCollCommsMerge(struct rasCollective* coll, struct rasMsg*
         }
         // Merge the ranks.
         for (int newRankIdx = 0, collRankIdx = 0, msgRankIdx = 0;
-             collRankIdx < collComm->nRanks || msgRankIdx < msgComm->nRanks;
-             newRankIdx++) {
+            collRankIdx < collComm->nRanks || msgRankIdx < msgComm->nRanks;
+            newRankIdx++) {
           int cmpRank;
           if (newRankIdx == newComm->commNRanks)
             break; // Short of failing, the best we can do is skip...
           if (collRankIdx < collComm->nRanks && msgRankIdx < msgComm->nRanks) {
             cmpRank = (collComm->ranks[collRankIdx].commRank < msgComm->ranks[msgRankIdx].commRank ? -1 :
-                       (collComm->ranks[collRankIdx].commRank > msgComm->ranks[msgRankIdx].commRank ? 1 : 0));
+                    (collComm->ranks[collRankIdx].commRank > msgComm->ranks[msgRankIdx].commRank ? 1 : 0));
           } else {
             cmpRank = (collRankIdx < collComm->nRanks ? -1 : 1);
           }
@@ -900,19 +902,19 @@ static ncclResult_t rasCollCommsMerge(struct rasCollective* coll, struct rasMsg*
           // There shouldn't be any overlaps in ranks between different sources.
           if (cmpRank == 0) {
             INFO(NCCL_RAS, "RAS encountered duplicate data for rank %d -- possible hash collision "
-                 "(0x%lx, 0x%lx, 0x%lx)", collComm->ranks[collRankIdx].commRank,
-                 newComm->commId.commHash, newComm->commId.hostHash, newComm->commId.pidHash);
+                           "(0x%lx, 0x%lx, 0x%lx)", collComm->ranks[collRankIdx].commRank,
+                newComm->commId.commHash, newComm->commId.hostHash, newComm->commId.pidHash);
             msgRankIdx++; // Short of failing, the best we can do is skip...
           }
           if ((char*)(newComm->ranks+newRankIdx+1) - (char*)newData <= nNewData) {
             memcpy(newComm->ranks+newRankIdx, (cmpRank <= 0 ? collComm->ranks+collRankIdx++ :
-                                               msgComm->ranks+msgRankIdx++), sizeof(*newComm->ranks));
+              msgComm->ranks+msgRankIdx++), sizeof(*newComm->ranks));
           } else {
             // Should never happen.
             INFO(NCCL_RAS, "RAS overflow of newData: newIdx %d, collIdx %d, msgIdx %d, newRankIdx %d, collRankIdx %d, "
-                 "msgRankIdx %d, newNRanks %d, collNranks %d, msgNranks %d, nNewData %d, needs %td -- internal error?",
-                 newData->nComms, collIdx, msgIdx, newRankIdx, collRankIdx, msgRankIdx, newComm->nRanks,
-                 collComm->nRanks, msgComm->nRanks, nNewData, (char*)(newComm->ranks+newRankIdx+1) - (char*)newData);
+                           "msgRankIdx %d, newNRanks %d, collNranks %d, msgNranks %d, nNewData %d, needs %td -- internal error?",
+                newData->nComms, collIdx, msgIdx, newRankIdx, collRankIdx, msgRankIdx, newComm->nRanks,
+                collComm->nRanks, msgComm->nRanks, nNewData, (char*)(newComm->ranks+newRankIdx+1) - (char*)newData);
             break;
           }
           if (cmpRank > 0) {
@@ -923,10 +925,10 @@ static ncclResult_t rasCollCommsMerge(struct rasCollective* coll, struct rasMsg*
               // Remove the corresponding entry from missingRanks.
               struct rasCollCommsMissingRank* missingRank;
               missingRank = (struct rasCollCommsMissingRank*)bsearch(&newComm->ranks[newRankIdx].commRank,
-                                                                     collComm->ranks+collComm->nRanks,
-                                                                     collComm->nMissingRanks,
-                                                                     sizeof(struct rasCollCommsMissingRank),
-                                                                     rasCollCommsMissingRankSearch);
+                collComm->ranks+collComm->nRanks,
+                collComm->nMissingRanks,
+                sizeof(struct rasCollCommsMissingRank),
+                rasCollCommsMissingRankSearch);
               if (missingRank) {
                 // Mark the entry as no longer needed.
                 memset(&missingRank->addr, '\0', sizeof(missingRank->addr));
@@ -952,9 +954,9 @@ static ncclResult_t rasCollCommsMerge(struct rasCollective* coll, struct rasMsg*
               } else {
                 // Should never happen.
                 INFO(NCCL_RAS, "RAS overflow of newData: newIdx %d, collIdx %d, msgIdx %d, newRankIdx %d, "
-                     "collRankIdx %d, collNMissingRanks %d, nNewData %d, needs %td -- internal error?",
-                     newData->nComms, collIdx, msgIdx, newRankIdx, collRankIdx, collComm->nMissingRanks,
-                     nNewData, (char*)(newMissingRanks + newRankIdx+1) - (char*)newData);
+                               "collRankIdx %d, collNMissingRanks %d, nNewData %d, needs %td -- internal error?",
+                    newData->nComms, collIdx, msgIdx, newRankIdx, collRankIdx, collComm->nMissingRanks,
+                    nNewData, (char*)(newMissingRanks + newRankIdx+1) - (char*)newData);
                 break;
               }
             }
@@ -963,29 +965,29 @@ static ncclResult_t rasCollCommsMerge(struct rasCollective* coll, struct rasMsg*
           if (newComm->nRanks + newComm->nMissingRanks != newComm->commNRanks) {
             // Should never happen.
             INFO(NCCL_RAS, "RAS collective comms merge mismatch for newIdx %d: nRanks %d, nMissingRanks %d, "
-                 "commNRanks %d -- internal error?",
-                 newData->nComms, newComm->nRanks, newComm->nMissingRanks, newComm->commNRanks);
+                           "commNRanks %d -- internal error?",
+                newData->nComms, newComm->nRanks, newComm->nMissingRanks, newComm->commNRanks);
           }
         }
         newComm = (struct rasCollComms::comm*)(((char*)(newComm+1)) + newComm->nRanks * sizeof(*newComm->ranks) +
-                                               newComm->nMissingRanks * sizeof(struct rasCollCommsMissingRank));
+          newComm->nMissingRanks * sizeof(struct rasCollCommsMissingRank));
         collComm = (struct rasCollComms::comm*)(((char*)(collComm+1)) + collComm->nRanks * sizeof(*collComm->ranks) +
-                                                collComm->nMissingRanks * sizeof(struct rasCollCommsMissingRank));
+          collComm->nMissingRanks * sizeof(struct rasCollCommsMissingRank));
         collIdx++;
         msgComm = (struct rasCollComms::comm*)(((char*)(msgComm+1)) + msgComm->nRanks * sizeof(*msgComm->ranks) +
-                                               msgComm->nMissingRanks * sizeof(struct rasCollCommsMissingRank));
+          msgComm->nMissingRanks * sizeof(struct rasCollCommsMissingRank));
         msgIdx++;
       } else if (cmp < 0) {
         // Copy from collComm.
         int commSize = sizeof(*collComm) + collComm->nRanks * sizeof(*collComm->ranks) +
-          collComm->nMissingRanks * sizeof(struct rasCollCommsMissingRank);
+            collComm->nMissingRanks * sizeof(struct rasCollCommsMissingRank);
         if ((char*)newComm + commSize - (char*)newData <= nNewData) {
           memcpy(newComm, collComm, commSize);
         } else {
           // Should never happen.
           INFO(NCCL_RAS, "RAS overflow of newData: newIdx %d, collIdx %d, msgIdx %d, nNewData %d, "
-               "needs %td -- internal error?",
-               newData->nComms, collIdx, msgIdx, nNewData, (char*)newComm + commSize - (char*)newData);
+                         "needs %td -- internal error?",
+              newData->nComms, collIdx, msgIdx, nNewData, (char*)newComm + commSize - (char*)newData);
           break;
         }
         newComm = (struct rasCollComms::comm*)(((char*)(newComm)) + commSize);
@@ -994,14 +996,14 @@ static ncclResult_t rasCollCommsMerge(struct rasCollective* coll, struct rasMsg*
       } else { // cmp > 0
         // Copy from msgComm.
         int commSize = sizeof(*msgComm) + msgComm->nRanks * sizeof(*msgComm->ranks) +
-          msgComm->nMissingRanks * sizeof(struct rasCollCommsMissingRank);
+            msgComm->nMissingRanks * sizeof(struct rasCollCommsMissingRank);
         if ((char*)newComm + commSize - (char*)newData <= nNewData) {
           memcpy(newComm, msgComm, commSize);
         } else {
           // Should never happen.
           INFO(NCCL_RAS, "RAS overflow of newData: newIdx %d, collIdx %d, msgIdx %d, nNewData %d, "
-               "needs %td -- internal error?",
-               newData->nComms, collIdx, msgIdx, nNewData, (char*)newComm + commSize - (char*)newData);
+                         "needs %td -- internal error?",
+              newData->nComms, collIdx, msgIdx, nNewData, (char*)newComm + commSize - (char*)newData);
           break;
         }
         for (int i = 0; i < newComm->nRanks; i++) {
@@ -1030,7 +1032,7 @@ static bool rasCollCommsSkipMissing(const struct rasCollRequest* req, struct ncc
   id.hostHash = comm->peerInfo->hostHash;
   id.pidHash = comm->peerInfo->pidHash;
   return (bsearch(&id, req->comms.skipMissingRanksComms, req->comms.nSkipMissingRanksComms,
-                  sizeof(*req->comms.skipMissingRanksComms), rasCommIdCompare) != nullptr);
+    sizeof(*req->comms.skipMissingRanksComms), rasCommIdCompare) != nullptr);
 }
 
 // Sorting callback for the ncclComms array.

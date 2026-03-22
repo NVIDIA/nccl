@@ -155,7 +155,7 @@ static ncclResult_t ncclIbResiliencySendRequestFree(struct ncclIbResiliencySend*
   // freed.
   failedSendRequest->state = ncclIbResiliencyRequestStatePending;
   failedSendRequest->request = NULL;
-  failedSendRequest->errorInfo = {0};
+  failedSendRequest->errorInfo = {};
   failedSendRequest->failedAttempts = 0;
 
   sendResCtx->base.outstandingRequests--;
@@ -170,43 +170,43 @@ static ncclResult_t ncclIbResiliencyRepostRequest(struct ncclIbRequest* request)
   }
   int slot = request->id % NET_IB_MAX_REQUESTS;
   if (request->type == NCCL_NET_IB_REQ_SEND) {
-      struct ncclIbResiliencySend* sendResCtx = (struct ncclIbResiliencySend*)request->base->resiliency;
-      struct ncclIbSendComm* sendComm = (struct ncclIbSendComm*)request->base;
-      struct ncclIbRequest** sendReqs = sendComm->sendReqs[slot];
-      for (int r = 0; r < request->nreqs; r++) {
-        // Clear all event counters and later on increment only the required
-        // ones based on the probing results on which QP a retransmission is
-        // required.
-        memset(sendReqs[r]->events, 0, sizeof(sendReqs[r]->events));
+    struct ncclIbResiliencySend* sendResCtx = (struct ncclIbResiliencySend*)request->base->resiliency;
+    struct ncclIbSendComm* sendComm = (struct ncclIbSendComm*)request->base;
+    struct ncclIbRequest** sendReqs = sendComm->sendReqs[slot];
+    for (int r = 0; r < request->nreqs; r++) {
+      // Clear all event counters and later on increment only the required
+      // ones based on the probing results on which QP a retransmission is
+      // required.
+      memset(sendReqs[r]->events, 0, sizeof(sendReqs[r]->events));
 
-        // Populate events
-        int nqps = ncclIbCommBaseGetNqpsPerRequest(sendReqs[r]->base);
-        int qpIndex = -1;
-        ncclIbQp* qp = NULL;
-        for (int i = 0; i < nqps; i++) {
-          // TODO: This code does not handle the case where a send request fails twice!
-          // If that device that is used for retransmission fails during retransmission,
-          // the logic here will retrieve the QP that was used for the first send attempt
-          // and not the QP that was used for the second send attempt! Causing
-          // probably data corruption or a hang.
-          NCCLCHECK(ncclIbCommBaseGetQpForRequest(sendReqs[r]->base, sendReqs[r]->id, i, &qp, &qpIndex));
+      // Populate events
+      int nqps = ncclIbCommBaseGetNqpsPerRequest(sendReqs[r]->base);
+      int qpIndex = -1;
+      ncclIbQp* qp = NULL;
+      for (int i = 0; i < nqps; i++) {
+        // TODO: This code does not handle the case where a send request fails twice!
+        // If that device that is used for retransmission fails during retransmission,
+        // the logic here will retrieve the QP that was used for the first send attempt
+        // and not the QP that was used for the second send attempt! Causing
+        // probably data corruption or a hang.
+        NCCLCHECK(ncclIbCommBaseGetQpForRequest(sendReqs[r]->base, sendReqs[r]->id, i, &qp, &qpIndex));
 
-          // Selective Retransmission:
-          // If the probing result shows that the data was delivered successfully on this QP,
-          // we don't need to retransmit it.
-          if (sendResCtx->probingResults[slot][qpIndex] == true) {
-            INFO(NCCL_NET, "NET/IB: %s: Skipping retransmission on QP index %d (req=%p, comm=%p, id=%ld, slot=%d) as it was already delivered.", __func__, qpIndex, sendReqs[r], sendReqs[r]->base, sendReqs[r]->id, slot);
-            continue;
-          }
-
-          INFO(NCCL_NET, "NET/IB: %s: Retransmitting reqIndex=%d on qp_num=%u (req=%p, comm=%p, id=%ld, slot=%d) as it was not delivered.", __func__, r, qp->qp->qp_num, sendReqs[r], sendReqs[r]->base, sendReqs[r]->id, slot);
-          // Reset the sentData for this QP since we are going to retransmit it.
-          sendReqs[r]->send.sentData[qpIndex] = false;
-          ncclIbAddEvent(sendReqs[r], qp->devIndex);
+        // Selective Retransmission:
+        // If the probing result shows that the data was delivered successfully on this QP,
+        // we don't need to retransmit it.
+        if (sendResCtx->probingResults[slot][qpIndex] == true) {
+          INFO(NCCL_NET, "NET/IB: %s: Skipping retransmission on QP index %d (req=%p, comm=%p, id=%ld, slot=%d) as it was already delivered.", __func__, qpIndex, sendReqs[r], sendReqs[r]->base, sendReqs[r]->id, slot);
+          continue;
         }
+
+        INFO(NCCL_NET, "NET/IB: %s: Retransmitting reqIndex=%d on qp_num=%u (req=%p, comm=%p, id=%ld, slot=%d) as it was not delivered.", __func__, r, qp->qp->qp_num, sendReqs[r], sendReqs[r]->base, sendReqs[r]->id, slot);
+        // Reset the sentData for this QP since we are going to retransmit it.
+        sendReqs[r]->send.sentData[qpIndex] = false;
+        ncclIbAddEvent(sendReqs[r], qp->devIndex);
       }
-      INFO(NCCL_NET, "NET/IB: %s: Reposting send request (request=%p, comm=%p, id=%ld, slot=%ld, nreqs=%d)", __func__, request, request->base, request->id, request->id % NET_IB_MAX_REQUESTS, request->nreqs);
-      NCCLCHECK(ncclIbMultiSend((struct ncclIbSendComm*)request->base, slot));
+    }
+    INFO(NCCL_NET, "NET/IB: %s: Reposting send request (request=%p, comm=%p, id=%ld, slot=%ld, nreqs=%d)", __func__, request, request->base, request->id, request->id % NET_IB_MAX_REQUESTS, request->nreqs);
+    NCCLCHECK(ncclIbMultiSend((struct ncclIbSendComm*)request->base, slot));
   } else if (request->type == NCCL_NET_IB_REQ_RECV) {
     INFO(NCCL_NET, "NET/IB: %s: Reposting CTS (request=%p, comm=%p, id=%ld, slot=%ld)", __func__, request, request->base, request->id, request->id % NET_IB_MAX_REQUESTS);
     NCCLCHECK(ncclIbPostFifo((struct ncclIbRecvComm*)request->base, request, slot));
@@ -219,7 +219,7 @@ static ncclResult_t ncclIbResiliencyRepostRequest(struct ncclIbRequest* request)
 
 static ncclResult_t ncclIbResiliencyHandleCompletionErrorReceiver(struct ncclIbResiliency* resCtx, struct ibv_wc* wc, int devIndex) {
   INFO(NCCL_NET,"NET/IB: %s: Handling an error on the receiver side (comm %p)", __func__, resCtx->baseComm);
-  bool inRecvRange = (wc->wr_id >= 0 && wc->wr_id <= NET_IB_MAX_REQUESTS);
+  bool inRecvRange = (wc->wr_id <= NET_IB_MAX_REQUESTS);
   bool inFlushRange = (wc->wr_id >= NCCL_IB_FLUSH_REQ_WR_ID_OFFSET && wc->wr_id < (NCCL_IB_FLUSH_REQ_WR_ID_OFFSET + NET_IB_MAX_REQUESTS));
   if (!inRecvRange && !inFlushRange && (wc->wr_id != NCCL_IB_RECV_WR_ID_DUMMY)) {
     WARN("NET/IB: %s: Invalid wr_id (%ld). Unable to retrieve a request on the receiver side (comm=%p)", __func__, wc->wr_id, resCtx->baseComm);
@@ -400,8 +400,8 @@ static ncclResult_t ncclIbResiliencyProbePost(struct ncclIbResiliencySend* sendR
   struct ncclIbResiliencyDev* resDev = &resCtx->devs[devIndex];
   struct ncclIbQp* probingQp = &resCtx->probingQps[devIndex];
 
-  struct ibv_send_wr probeWr = {0};
-  struct ibv_sge sge = {0};
+  struct ibv_send_wr probeWr = {};
+  struct ibv_sge sge = {};
 
   int slot = failedSendRequest->request->id % NET_IB_MAX_REQUESTS;
 
@@ -592,7 +592,7 @@ ncclResult_t ncclIbResiliencyDataCqSizeGet(struct ncclIbResiliency* resCtx, uint
   return ncclSuccess;
 }
 
-ncclResult_t ncclIbResiliencyDataRqSizeGet(struct ncclIbResiliency* resCtx, uint devIndex, uint32_t* rqSize) {
+ncclResult_t ncclIbResiliencyDataRqSizeGet(struct ncclIbResiliency* resCtx, uint /*devIndex*/, uint32_t* rqSize) {
   assert(rqSize != NULL);
   // This API should only be called on the receiver side.
   assert(resCtx->baseComm->isSend == 0);
@@ -648,7 +648,7 @@ ncclResult_t ncclIbResiliencyDeviceNumSet(struct ncclIbResiliency* resCtx, int n
 ncclResult_t ncclIbResiliencySenderCreateQps(struct ncclIbResiliency* resCtx, struct ncclIbResiliencyInfo* localResiliencyInfo) {
   ncclIbSendComm* sendComm = (ncclIbSendComm*)resCtx->baseComm;
   void* qpContext = (void*)&sendComm->base.stats;
-  struct ncclIbQpCreateAttr qpCreateAttrs = {0};
+  struct ncclIbQpCreateAttr qpCreateAttrs = {};
   qpCreateAttrs.type = IBV_QPT_RC;
   // Probing QPs on the sender side do not require any remote permissions.
   qpCreateAttrs.accessFlags = IBV_ACCESS_LOCAL_WRITE;
@@ -698,7 +698,7 @@ ncclResult_t ncclIbResiliencySenderQpsToRts(struct ncclIbResiliency* resCtx, str
 ncclResult_t ncclIbResiliencyReceiverQpsCreateToRts(struct ncclIbResiliency* resCtx, struct ncclIbConnectionMetadata* remInfo, struct ncclIbResiliencyInfo* localResiliencyInfo) {
   ncclIbRecvComm* recvComm = (ncclIbRecvComm*)resCtx->baseComm;
   void* qpContext = (void*)&recvComm->base.stats;
-  struct ncclIbQpCreateAttr qpCreateAttrs = {0};
+  struct ncclIbQpCreateAttr qpCreateAttrs = {};
   qpCreateAttrs.type = IBV_QPT_RC;
   // On the receiver side, probing QPs do not need to send/receive any messages.
   // They are only used as targets of RDMA Read operations.

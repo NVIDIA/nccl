@@ -60,26 +60,26 @@ static ncclResult_t ncclIbPrintWr(struct ibv_send_wr* wr, char* wrStr) {
   switch (wr->opcode) {
     case IBV_WR_RDMA_WRITE:
       sprintf(wrStr, "wr=%p, wr_id=%ld, opcode=%s, num_sge=%d, sge[0].length=%" PRIu32 ", sge[0].addr=0x%016" PRIx64 ", rdma.remote_addr=0x%016" PRIx64 ", rdma.rkey=0x%x",
-        wr,
-        wr->wr_id,
-        opcodeStr,
-        wr->num_sge,
-        (wr->num_sge > 0 && wr->sg_list) ? wr->sg_list->length : 0,
-        (wr->num_sge > 0 && wr->sg_list) ? wr->sg_list->addr : 0,
-        wr->wr.rdma.remote_addr,
-        wr->wr.rdma.rkey);
+          wr,
+          wr->wr_id,
+          opcodeStr,
+          wr->num_sge,
+          (wr->num_sge > 0 && wr->sg_list) ? wr->sg_list->length : 0,
+          (wr->num_sge > 0 && wr->sg_list) ? wr->sg_list->addr : 0,
+          wr->wr.rdma.remote_addr,
+          wr->wr.rdma.rkey);
       break;
     case IBV_WR_RDMA_WRITE_WITH_IMM:
       sprintf(wrStr, "wr=%p, wr_id=%ld, opcode=%s, num_sge=%d, sge[0].length=%" PRIu32 ", sge[0].addr=0x%016" PRIx64 ", rdma.remote_addr=0x%016" PRIx64 ",  rdma.rkey=0x%x, imm_data=0x%x",
-        wr,
-        wr->wr_id,
-        opcodeStr,
-        wr->num_sge,
-        (wr->num_sge > 0 && wr->sg_list) ? wr->sg_list->length : 0,
-        (wr->num_sge > 0 && wr->sg_list) ? wr->sg_list->addr : 0,
-        wr->wr.rdma.remote_addr,
-        wr->wr.rdma.rkey,
-        wr->imm_data);
+          wr,
+          wr->wr_id,
+          opcodeStr,
+          wr->num_sge,
+          (wr->num_sge > 0 && wr->sg_list) ? wr->sg_list->length : 0,
+          (wr->num_sge > 0 && wr->sg_list) ? wr->sg_list->addr : 0,
+          wr->wr.rdma.remote_addr,
+          wr->wr.rdma.rkey,
+          wr->imm_data);
       break;
     default:
       WARN("NET/IB: %s: No format specified for opcode=%d", __func__, wr->opcode);
@@ -156,7 +156,7 @@ ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
   lastWr->next = NULL;
   lastWr->send_flags = IBV_SEND_SIGNALED;
 
-  uint32_t sendOffsets[NCCL_NET_IB_MAX_RECVS] = {0};
+  uint32_t sendOffsets[NCCL_NET_IB_MAX_RECVS] = {};
   int qpIndex = -1;
   ncclIbQp* qp = NULL;
   for (int i = 0; i < nqps; i++) {
@@ -256,7 +256,7 @@ ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclIbIsend(void* sendComm, void* data, size_t size, int tag, void* mhandle, void* phandle, void** request) {
+ncclResult_t ncclIbIsend(void* sendComm, void* data, size_t size, int tag, void* mhandle, void* /*phandle*/, void** request) {
   struct ncclIbSendComm* comm = (struct ncclIbSendComm*)sendComm;
   if (comm->base.ready == 0) {
     WARN("NET/IB: ncclIbIsend() called when comm->base.ready == 0");
@@ -285,12 +285,12 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, size_t size, int tag, void*
 
     if (size > slots[r].size) size = slots[r].size;
     // Sanity checks
-    if (slots[r].size < 0 || slots[r].addr == 0 || slots[r].rkeys[0] == 0) {
+    if (slots[r].addr == 0 || slots[r].rkeys[0] == 0) {
       char line[SOCKET_NAME_MAXLEN + 1];
       union ncclSocketAddress addr;
       ncclSocketGetAddr(&comm->base.sock, &addr);
       WARN("NET/IB : req %d/%d tag %x peer %s posted incorrect receive info: size %ld addr %lx rkeys[0]=%x",
-        r, nreqs, tag, ncclSocketToString(&addr, line), slots[r].size, slots[r].addr, slots[r].rkeys[0]);
+          r, nreqs, tag, ncclSocketToString(&addr, line), slots[r].size, slots[r].addr, slots[r].rkeys[0]);
       return ncclInternalError;
     }
 
@@ -409,7 +409,7 @@ ncclResult_t ncclIbPostFifo(struct ncclIbRecvComm* comm, struct ncclIbRequest* r
   return ncclSuccess;
 }
 
-ncclResult_t ncclIbIrecv(void* recvComm, int n, void** data, size_t* sizes, int* tags, void** mhandles, void** phandles, void** request) {
+ncclResult_t ncclIbIrecv(void* recvComm, int n, void** data, size_t* sizes, int* tags, void** mhandles, void** /*phandles*/, void** request) {
   struct ncclIbRecvComm* comm = (struct ncclIbRecvComm*)recvComm;
   if (comm->base.ready == 0) {
     WARN("NET/IB: ncclIbIrecv() called when comm->base.ready == 0");
@@ -611,11 +611,11 @@ static inline ncclResult_t ncclIbRequestComplete(struct ncclIbRequest* r, int* d
     TRACE(NCCL_NET, "NET/IB: %s: Send request completed (req=%p, comm=%p, id=%ld)", __func__, r, r->base, r->id);
     if (sizes) {
       sizes[0] = r->send.size;
-  #ifdef NCCL_ENABLE_NET_PROFILING
+#ifdef NCCL_ENABLE_NET_PROFILING
       for (int j = 0; j < r->pInfo[0].nEventHandles; j++) {
         NCCLCHECK(ncclProfilerFunction(&r->pInfo[0].qpEventHandles[j], ncclProfilerNetEventStop, NULL, 0, NULL));
       }
-  #endif
+#endif
     }
     int slot = r->id % NET_IB_MAX_REQUESTS;
     struct ncclIbSendComm* sendComm = (struct ncclIbSendComm*)r->base;
@@ -649,9 +649,9 @@ static ncclResult_t ncclIbLogCompletionWithError(struct ncclIbNetCommBase* commB
   ncclSocketToString(&addr, sockStr);
   char *hcaName = devBase->pd->context->device->name;
   WARN("NET/IB: Got completion from peer %s with status=%s(%d) opcode=%s(%d) vendor_err=%u %s%s%s%s hca %s",
-      sockStr, ibvWcStatusStr(wc->status), wc->status,
-      ibvWcOpcodeStr(wc->opcode), wc->opcode, wc->vendor_err,
-      localGidStr ?  " localGid ":"", localGidString, remoteGidStr ? " remoteGids":"", remoteGidString, hcaName);
+    sockStr, ibvWcStatusStr(wc->status), wc->status,
+    ibvWcOpcodeStr(wc->opcode), wc->opcode, wc->vendor_err,
+    localGidStr ?  " localGid ":"", localGidString, remoteGidStr ? " remoteGids":"", remoteGidString, hcaName);
   return ncclSuccess;
 }
 
@@ -666,11 +666,11 @@ static inline ncclResult_t ncclIbCompletionEventProcess(struct ncclIbNetCommBase
     return ncclInternalError;
   }
 
-  #ifdef ENABLE_TRACE
+#ifdef ENABLE_TRACE
   char line[SOCKET_NAME_MAXLEN+1];
   TRACE(NCCL_NET, "Got completion from peer %s with status=%d opcode=%d len=%u wr_id=%lu r=%p type=%d events={%d,%d,%d,%d}, devIndex=%d",
-    ncclSocketToString(&addr, line), wc->status, wc->opcode,wc->byte_len, wc->wr_id, req, req->type, req->events[0], req->events[1], req->events[2], req->events[3], devIndex);
-  #endif
+      ncclSocketToString(&addr, line), wc->status, wc->opcode,wc->byte_len, wc->wr_id, req, req->type, req->events[0], req->events[1], req->events[2], req->events[3], devIndex);
+#endif
 
   if (commBase->isSend) {
     if (req->type != NCCL_NET_IB_REQ_SEND) {

@@ -13,7 +13,7 @@ DEBUG ?= 0
 ASAN ?= 0
 UBSAN ?= 0
 TRACE ?= 0
-WERROR ?= 0
+WERROR ?= 1
 PROFAPI ?= 1
 NVTX ?= 1
 RDMA_CORE ?= 0
@@ -77,7 +77,8 @@ else
 endif
 
 CXXFLAGS   := -DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR) -fPIC -fvisibility=hidden \
-              -Wall -Wno-unused-function -Wno-sign-compare $(CXXSTD) -Wvla \
+              -Wall -Wextra -Wshadow=local -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough \
+              -Wno-unused-function -Wno-sign-compare $(CXXSTD) -Wvla \
               -I $(CUDA_INC) -I $(CUDA_INC)/cccl \
               $(CXXFLAGS)
 # Maxrregcount needs to be set accordingly to NCCL_MAX_NTHREADS (otherwise it will cause kernel launch errors)
@@ -122,7 +123,6 @@ endif
 
 ifneq ($(VERBOSE), 0)
 NVCUFLAGS += -Xptxas -v -Xcompiler -Wall,-Wextra,-Wno-unused-parameter
-CXXFLAGS  += -Wall -Wextra
 else
 .SILENT:
 endif

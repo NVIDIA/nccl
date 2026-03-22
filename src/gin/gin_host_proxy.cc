@@ -73,7 +73,7 @@ struct ginProxyCtx {
   int nSignalsPerContext;
 };
 static ncclResult_t getDmaBufFd(void *addr, size_t length, int *fd,
-                                bool forceNonDataDirect = false) {
+    bool forceNonDataDirect = false) {
   if (ncclParamDmaBufEnable() == 0) return ncclInvalidUsage;
 
 #if CUDA_VERSION >= 11070
@@ -84,13 +84,13 @@ static ncclResult_t getDmaBufFd(void *addr, size_t length, int *fd,
 #if CUDA_VERSION >= 12080
   if (ncclParamIbDataDirect() && !forceNonDataDirect) {
     CUresult status = pfn_cuMemGetHandleForAddressRange(
-      (void *)fd, (CUdeviceptr)addr, alignedSize, CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD,
-      CU_MEM_RANGE_FLAG_DMA_BUF_MAPPING_TYPE_PCIE);
+            (void *)fd, (CUdeviceptr)addr, alignedSize, CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD,
+            CU_MEM_RANGE_FLAG_DMA_BUF_MAPPING_TYPE_PCIE);
     if (status == CUDA_SUCCESS) return ncclSuccess;
   }
 #endif
   CUresult status = pfn_cuMemGetHandleForAddressRange((void *)fd, (CUdeviceptr)addr, alignedSize,
-                                                      CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD, 0);
+    CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD, 0);
   if (status == CUDA_SUCCESS) return ncclSuccess;
 #endif
 
@@ -98,28 +98,28 @@ static ncclResult_t getDmaBufFd(void *addr, size_t length, int *fd,
 }
 
 static ncclResult_t proxyGinPollCompletions(ncclGin_t *ginComm, void *collComm,
-                                            struct ginProxyCtx *ctx,
-                                            struct ginProxyHostGpuCtx *hostGpuCtx) {
+    struct ginProxyCtx *ctx,
+    struct ginProxyHostGpuCtx *hostGpuCtx) {
   for (int targetRank = 0; targetRank < ctx->comm->nRanks; targetRank++) {
     // loop on all seen but unconsumed GFDs
     for (uint32_t i = hostGpuCtx->cisShadow[targetRank]; i < hostGpuCtx->sis[targetRank]; i++) {
       uint32_t idx = i & (hostGpuCtx->queueSize - 1);
       struct ginProxyGfdState *state =
-        &hostGpuCtx->states[targetRank * hostGpuCtx->queueSize + idx];
+            &hostGpuCtx->states[targetRank * hostGpuCtx->queueSize + idx];
       // no need to poll if already done
       if (!state->done) {
         ginComm->test(collComm, state->request, &state->done);
         if (state->done) {
           TRACE(NCCL_NET, "GFD completed - contextId: %d, stateIdx: %lu, request: %p", hostGpuCtx->contextId, state - hostGpuCtx->states,
-                state->request);
+              state->request);
           // update the counter specified in the GFD
           if (state->op & ncclGinProxyOpWithCounter) {
             int contextId = hostGpuCtx->contextId;
             uint64_t* counterPtr = &ctx->counters[contextId * ctx->nCountersPerContext + state->counterId];
             COMPILER_ATOMIC_STORE(counterPtr, *counterPtr + 1,
-                              std::memory_order_relaxed);
+                std::memory_order_relaxed);
             TRACE(NCCL_NET, "Updated counter %d to %ld for context %d", state->counterId,
-                  *counterPtr, contextId);
+                *counterPtr, contextId);
           }
         }
       }
@@ -127,7 +127,7 @@ static ncclResult_t proxyGinPollCompletions(ncclGin_t *ginComm, void *collComm,
       if (state->done && i == hostGpuCtx->cisShadow[targetRank]) {
         // tell the GPU that we have consumed the GFD
         COMPILER_ATOMIC_STORE(&hostGpuCtx->cis[targetRank], ++hostGpuCtx->cisShadow[targetRank],
-                          std::memory_order_relaxed);
+            std::memory_order_relaxed);
         TRACE(NCCL_NET, "Updated cis[%u] to %u for context %d", targetRank, hostGpuCtx->cisShadow[targetRank], hostGpuCtx->contextId);
       }
     }
@@ -136,8 +136,8 @@ static ncclResult_t proxyGinPollCompletions(ncclGin_t *ginComm, void *collComm,
   return ncclSuccess;
 }
 
-static int proxyGinPollGfd(struct ginProxyCtx *ctx, ginProxyHostGpuCtx *hostGpuCtx, int targetRank,
-                           ncclGinProxyGfd_t *gfd, struct ginProxyGfdState **state) {
+static int proxyGinPollGfd(struct ginProxyCtx */*ctx*/, ginProxyHostGpuCtx *hostGpuCtx, int targetRank,
+    ncclGinProxyGfd_t *gfd, struct ginProxyGfdState **state) {
   ncclGinProxyGfd_t *q = hostGpuCtx->queues + targetRank * hostGpuCtx->queueSize;
   uint32_t idx = hostGpuCtx->sis[targetRank] & (hostGpuCtx->queueSize - 1);
   ncclGinProxyQword_t qword;
@@ -171,16 +171,16 @@ static int proxyGinPollGfd(struct ginProxyCtx *ctx, ginProxyHostGpuCtx *hostGpuC
   (*state)->request = NULL;
 
   TRACE(NCCL_NET,
-        "GFD on context %d to target PE %d raw idx: %u, idx: %u - op: %#lx, size: %lu, srcOff: %lu, dstOff: %lu, "
-        "srcHandle: %lu, dstHandle: %lu, counterId: %u, signalId: %u, stateIdx: %u",
-        hostGpuCtx->contextId, targetRank, hostGpuCtx->sis[targetRank], idx, gfd->qword[ncclGinProxyGfdHeader].header.op,
-        gfd->qword[ncclGinProxyGfdHeader].header.size,
-        gfd->qword[ncclGinProxyGfdSrcOff].srcOff.srcOff,
-        gfd->qword[ncclGinProxyGfdDstOff].dstOff.dstOff,
-        gfd->qword[ncclGinProxyGfdSrcHandle].srcHandle.srcHandle,
-        gfd->qword[ncclGinProxyGfdDstHandle].dstHandle.dstHandle,
-        gfd->qword[ncclGinProxyGfdCompletion].completion.counterId,
-        gfd->qword[ncclGinProxyGfdCompletion].completion.signalId, stateIdx);
+      "GFD on context %d to target PE %d raw idx: %u, idx: %u - op: %#lx, size: %lu, srcOff: %lu, dstOff: %lu, "
+      "srcHandle: %lu, dstHandle: %lu, counterId: %u, signalId: %u, stateIdx: %u",
+      hostGpuCtx->contextId, targetRank, hostGpuCtx->sis[targetRank], idx, gfd->qword[ncclGinProxyGfdHeader].header.op,
+      gfd->qword[ncclGinProxyGfdHeader].header.size,
+      gfd->qword[ncclGinProxyGfdSrcOff].srcOff.srcOff,
+      gfd->qword[ncclGinProxyGfdDstOff].dstOff.dstOff,
+      gfd->qword[ncclGinProxyGfdSrcHandle].srcHandle.srcHandle,
+      gfd->qword[ncclGinProxyGfdDstHandle].dstHandle.dstHandle,
+      gfd->qword[ncclGinProxyGfdCompletion].completion.counterId,
+      gfd->qword[ncclGinProxyGfdCompletion].completion.signalId, stateIdx);
 
   hostGpuCtx->sis[targetRank]++;
 
@@ -208,8 +208,8 @@ static inline uint64_t extractSignalVal(ncclGinProxyGfd_t *gfd) {
 }
 
 static ncclResult_t proxyGinProcessGfd(ncclGin_t *ginComm, void *collComm, struct ginProxyCtx *ctx,
-                                       struct ginProxyHostGpuCtx *hostGpuCtx, int targetRank,
-                                       ncclGinProxyGfd_t *gfd, struct ginProxyGfdState *state) {
+    struct ginProxyHostGpuCtx *hostGpuCtx, int targetRank,
+    ncclGinProxyGfd_t *gfd, struct ginProxyGfdState *state) {
   int signalOp;
   uint64_t signalVal;
 
@@ -220,8 +220,8 @@ static ncclResult_t proxyGinProcessGfd(ncclGin_t *ginComm, void *collComm, struc
     signalVal = extractSignalVal(gfd);
     signalOp = mapGfdOpToSignalOp(gfd);
     NCCLCHECK(ginComm->iputSignal(collComm, 0, nullptr, 0, 0, nullptr,
-                                  targetRank, signalOff, signalHandle, signalVal,
-                                  signalOp, hostGpuCtx->contextId, &state->request));
+      targetRank, signalOff, signalHandle, signalVal,
+      signalOp, hostGpuCtx->contextId, &state->request));
     return ncclSuccess;
   }
 
@@ -251,15 +251,15 @@ static ncclResult_t proxyGinProcessGfd(ncclGin_t *ginComm, void *collComm, struc
       if (signalOp == -1) {
         // First cast from 63 bits to 64 bits and then to void * to avoid warnings
         NCCLCHECK(ginComm->iput(collComm, srcOff, srcHandle, size, dstOff, dstHandle,
-                                targetRank, hostGpuCtx->contextId, &state->request));
+          targetRank, hostGpuCtx->contextId, &state->request));
       } else {
         // Reconstruct the signal value
         signalVal = extractSignalVal(gfd);
         uint64_t signalOff = (gfd->qword[ncclGinProxyGfdCompletion].completion.signalId +
-                              hostGpuCtx->contextId * ctx->nSignalsPerContext) * sizeof(uint64_t);
+                hostGpuCtx->contextId * ctx->nSignalsPerContext) * sizeof(uint64_t);
         NCCLCHECK(ginComm->iputSignal(collComm, srcOff, srcHandle, size, dstOff, dstHandle,
-                                      targetRank, signalOff, ctx->signalsGinHandle, signalVal,
-                                      signalOp, hostGpuCtx->contextId, &state->request));
+          targetRank, signalOff, ctx->signalsGinHandle, signalVal,
+          signalOp, hostGpuCtx->contextId, &state->request));
       }
       break;
     default:
@@ -267,7 +267,7 @@ static ncclResult_t proxyGinProcessGfd(ncclGin_t *ginComm, void *collComm, struc
       assert(0);
   }
   TRACE(NCCL_NET, "GFD submitted into GIN plugin - contextId: %d, stateIdx: %lu, request: %p",
-        hostGpuCtx->contextId, state - hostGpuCtx->states, state->request);
+      hostGpuCtx->contextId, state - hostGpuCtx->states, state->request);
   return ncclSuccess;
 }
 
@@ -276,8 +276,8 @@ static uint64_t isPowerOfTwo(uint64_t n) { return (n > 0) && ((n & (n - 1)) == 0
 // Check if the GIN plugin supports DMA-BUF, if so we can try to get the DMA-BUF handle from CUDA,
 // if that fails we fallback to non-DMA-BUF
 static ncclResult_t ncclGinProxyRegMrSym(ncclGin_t *ginComm, struct ginProxyCtx *ctx, void *addr,
-                                         size_t size, int type, int mr_flags, void **mhandle,
-                                         void **ginHandle) {
+    size_t size, int type, int mr_flags, void **mhandle,
+    void **ginHandle) {
   if (type == NCCL_PTR_HOST) {
     NCCLCHECK(ginComm->regMrSym(ctx->collComm, addr, size, type, mr_flags, mhandle, ginHandle));
   } else if (type == NCCL_PTR_CUDA) {
@@ -288,7 +288,7 @@ static ncclResult_t ncclGinProxyRegMrSym(ncclGin_t *ginComm, struct ginProxyCtx 
       dmabufResult = getDmaBufFd(addr, size, &dmabufFd);
       if (dmabufResult == ncclSuccess) {
         registrationResult = ginComm->regMrSymDmaBuf(ctx->collComm, addr, size, type, 0, dmabufFd,
-                                                     mr_flags, mhandle, ginHandle);
+                mr_flags, mhandle, ginHandle);
         close(dmabufFd);
       }
       if (registrationResult != ncclSuccess) {
@@ -296,7 +296,7 @@ static ncclResult_t ncclGinProxyRegMrSym(ncclGin_t *ginComm, struct ginProxyCtx 
         dmabufResult = getDmaBufFd(addr, size, &dmabufFd, true);
         if (dmabufResult == ncclSuccess) {
           NCCLCHECK(ginComm->regMrSymDmaBuf(ctx->collComm, addr, size, type, 0, dmabufFd,
-                                            mr_flags, mhandle, ginHandle));
+            mr_flags, mhandle, ginHandle));
           close(dmabufFd);
         }
       }
@@ -313,8 +313,8 @@ static ncclResult_t ncclGinProxyRegMrSym(ncclGin_t *ginComm, struct ginProxyCtx 
 }
 
 ncclResult_t ncclGinProxyCreateContext(struct ncclComm *comm, void *collComm, int devId,
-                                       int nSignals, int nCounters, int nContexts, void **outGinCtx,
-                                       ncclNetDeviceHandle_t **outDevHandle) {
+    int nSignals, int nCounters, int nContexts, void **outGinCtx,
+    ncclNetDeviceHandle_t **outDevHandle) {
   ncclGin_t *ginComm = (ncclGin_t *)comm->sharedRes->ginState.ncclGin;
   ncclGinProxyGpuCtx_t *devGpuCtxArray_h = nullptr;
 
@@ -337,27 +337,27 @@ ncclResult_t ncclGinProxyCreateContext(struct ncclComm *comm, void *collComm, in
   }
   if (queueSize > maxRequests) {
     INFO(NCCL_NET,
-         "NCCL_GIN_PROXY_QUEUE_SIZE is greater than the maximum outstanding requests in the GIN "
-         "plugin (%d), using the default/maximum value instead",
-         maxRequests);
+        "NCCL_GIN_PROXY_QUEUE_SIZE is greater than the maximum outstanding requests in the GIN "
+        "plugin (%d), using the default/maximum value instead",
+        maxRequests);
     queueSize = maxRequests;
   }
   if (queueSize < 1) {
     INFO(NCCL_NET,
-         "NCCL_GIN_PROXY_QUEUE_SIZE is less than 1, using the default/maximum value instead");
+        "NCCL_GIN_PROXY_QUEUE_SIZE is less than 1, using the default/maximum value instead");
     queueSize = maxRequests;
   }
   if (!isPowerOfTwo(queueSize)) {
     INFO(
-      NCCL_NET,
-      "NCCL_GIN_PROXY_QUEUE_SIZE is not a power of two, using the default/maximum value instead");
+        NCCL_NET,
+        "NCCL_GIN_PROXY_QUEUE_SIZE is not a power of two, using the default/maximum value instead");
     queueSize = maxRequests;
   }
 
   // Allocate the counters on the GPU or CPU depending on GDR
   NCCLCHECK(allocMemCPUAccessible(&proxyCtx->counters, &proxyCtx->countersDev,
-                                  nCounters * nContexts, CU_MEMHOSTALLOC_WRITECOMBINED,
-                                  &proxyCtx->countersGdrHandle, comm->memManager));
+    nCounters * nContexts, CU_MEMHOSTALLOC_WRITECOMBINED,
+    &proxyCtx->countersGdrHandle, comm->memManager));
   proxyCtx->nCountersPerContext = nCounters;
 
   // Allocate the signals on the GPU and then register the memory region with the GIN plugin.
@@ -365,11 +365,11 @@ ncclResult_t ncclGinProxyCreateContext(struct ncclComm *comm, void *collComm, in
   // signals.
   size_t signalsBufSize = nSignals * nContexts * sizeof(uint64_t);
   NCCLCHECK(ncclCuMemAlloc((void **)&proxyCtx->signalsDev, &proxyCtx->signalsCumemhandle,
-                           CU_MEM_HANDLE_TYPE_NONE, signalsBufSize, comm->memManager));
+    CU_MEM_HANDLE_TYPE_NONE, signalsBufSize, comm->memManager));
   CUDACHECK(cudaMemset(proxyCtx->signalsDev, 0, signalsBufSize));
   NCCLCHECK(ncclGinProxyRegMrSym(ginComm, proxyCtx, proxyCtx->signalsDev, signalsBufSize,
-                                 NCCL_PTR_CUDA, NCCL_NET_MR_FLAG_FORCE_SO,
-                                 &proxyCtx->signalsMhandle, &proxyCtx->signalsGinHandle));
+    NCCL_PTR_CUDA, NCCL_NET_MR_FLAG_FORCE_SO,
+    &proxyCtx->signalsMhandle, &proxyCtx->signalsGinHandle));
   proxyCtx->nSignalsPerContext = nSignals;
 
   NCCLCHECK(ncclCalloc(&proxyCtx->hostGpuCtx, nContexts));
@@ -384,8 +384,8 @@ ncclResult_t ncclGinProxyCreateContext(struct ncclComm *comm, void *collComm, in
     NCCLCHECK(ncclCalloc(&hostGpuCtx->sis, comm->nRanks));
     NCCLCHECK(ncclCalloc(&hostGpuCtx->inlines, queuesLength));
     NCCLCHECK(ncclGinProxyRegMrSym(ginComm, proxyCtx, hostGpuCtx->inlines,
-                                   queuesLength * sizeof(uint64_t), NCCL_PTR_HOST, 0,
-                                   &hostGpuCtx->inlinesMhandle, &hostGpuCtx->inlinesGinHandle));
+      queuesLength * sizeof(uint64_t), NCCL_PTR_HOST, 0,
+      &hostGpuCtx->inlinesMhandle, &hostGpuCtx->inlinesGinHandle));
 
     ncclGinProxyGpuCtx_t *devGpuCtx_h = devGpuCtxArray_h + contextId;
     devGpuCtx_h->nranks = comm->nRanks;
@@ -397,9 +397,9 @@ ncclResult_t ncclGinProxyCreateContext(struct ncclComm *comm, void *collComm, in
     // Allocate the GFD queues, CIs, counters, signals and test/wait variables on the either the CPU
     // or GPU.
     NCCLCHECK(allocMemCPUAccessible(&hostGpuCtx->queues, &devGpuCtx_h->queues, queuesLength, 0, NULL,
-                                    comm->memManager, true /*forceHost*/));
+      comm->memManager, true /*forceHost*/));
     NCCLCHECK(allocMemCPUAccessible(&hostGpuCtx->cis, &devGpuCtx_h->cis, comm->nRanks,
-                                    CU_MEMHOSTALLOC_WRITECOMBINED, &hostGpuCtx->cisGdrHandle, comm->memManager));
+      CU_MEMHOSTALLOC_WRITECOMBINED, &hostGpuCtx->cisGdrHandle, comm->memManager));
   }
 
   ncclGinProxyGpuCtx_t *devGpuCtx_d = NULL;
@@ -426,7 +426,7 @@ ncclResult_t ncclGinProxyCreateContext(struct ncclComm *comm, void *collComm, in
 }
 
 ncclResult_t ncclGinProxyRegister(ncclGin_t *ginComm, void *ginCtx, void *addr, size_t size,
-                                  int type, int mr_flags, void **mhandle, void **ginHandle) {
+    int type, int mr_flags, void **mhandle, void **ginHandle) {
   struct ginProxyCtx *ctx = (struct ginProxyCtx *)ginCtx;
   // Register the memory region with the GIN plugin
   NCCLCHECK(ncclGinProxyRegMrSym(ginComm, ctx, addr, size, type, mr_flags, mhandle, ginHandle));
@@ -495,7 +495,7 @@ ncclResult_t ncclGinProxyProgress(ncclGin_t *ginComm, void *ginCtx) {
       struct ginProxyGfdState *state = NULL;
       if (proxyGinPollGfd(ctx, hostGpuCtx, targetRank, &gfd, &state)) {
         ncclResult_t ret =
-          proxyGinProcessGfd(ginComm, ctx->collComm, ctx, hostGpuCtx, targetRank, &gfd, state);
+            proxyGinProcessGfd(ginComm, ctx->collComm, ctx, hostGpuCtx, targetRank, &gfd, state);
         if (ret) ctx->hasError = ret;
         NCCLCHECK(ret);
       }
@@ -506,7 +506,7 @@ ncclResult_t ncclGinProxyProgress(ncclGin_t *ginComm, void *ginCtx) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinProxyQueryLastError(ncclGin_t *ginComm, void *ginCtx, bool *hasError) {
+ncclResult_t ncclGinProxyQueryLastError(ncclGin_t */*ginComm*/, void *ginCtx, bool *hasError) {
   struct ginProxyCtx *ctx = (struct ginProxyCtx *)ginCtx;
   *hasError = ctx->hasError;
   return ncclSuccess;

@@ -9,6 +9,10 @@
 #ifndef NVTX_EXT_PAYLOAD_HELPER_INTERNAL_H
 #define NVTX_EXT_PAYLOAD_HELPER_INTERNAL_H
 
+#ifdef __GNUC__
+#pragma GCC system_header
+#endif
+
 /* General helper macros */
 #include "nvtxExtHelperMacros.h"
 

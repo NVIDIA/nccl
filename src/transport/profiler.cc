@@ -9,7 +9,7 @@
 #include "profiler.h"
 #include "device.h"
 
-static ncclResult_t profilerProxyConnect(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState, void* reqBuff, int reqSize, void* respBuff, int respSize, int* done) {
+static ncclResult_t profilerProxyConnect(struct ncclProxyConnection* connection, struct ncclProxyState* /*proxyState*/, void* /*reqBuff*/, int /*reqSize*/, void* /*respBuff*/, int /*respSize*/, int* /*done*/) {
   connection->proxyAppendPtr = &connection->proxyAppend;
   connection->shared = 0;
   return ncclSuccess;
@@ -19,7 +19,7 @@ static ncclResult_t profilerProxyConnect(struct ncclProxyConnection* connection,
 // - base       : is set to the current value of workCounter[channelId]
 // - posted     : is set to sub->nsteps to indicate that the profiler has started the event
 // - transmitted: is set to sub->nsteps to indicate that the profiler has stopped the event
-static ncclResult_t profilerProxyProgress(struct ncclProxyState* proxyState, struct ncclProxyArgs* args) {
+static ncclResult_t profilerProxyProgress(struct ncclProxyState* /*proxyState*/, struct ncclProxyArgs* args) {
   if (args->state == ncclProxyOpReady) {
     for (int s = 0; s < args->nsubs; s++) {
       struct ncclProxySubArgs* sub = args->subs + s;

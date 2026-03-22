@@ -229,7 +229,7 @@ static ncclResult_t xmlSetAttr(struct ncclXmlNode* node, const char* attrName, c
   return ncclSuccess;
 }
 
-static ncclResult_t xmlPrintNodeRecursive(struct ncclXmlNode* node, const char* name) {
+static ncclResult_t xmlPrintNodeRecursive(struct ncclXmlNode* node, const char* /*name*/) {
   while (node) {
     char line[1024*8];
     int cursor = 0;

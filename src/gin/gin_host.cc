@@ -359,8 +359,18 @@ ncclResult_t ncclGinHostFinalize(struct ncclComm* comm) {
 
 ncclResult_t ncclGinRegister(struct ncclComm* comm, void* address, size_t size,
                              void* ginHostWins[NCCL_GIN_MAX_CONNECTIONS],
-                             ncclGinWindow_t ginDevWins[NCCL_GIN_MAX_CONNECTIONS], int winFlags) {
+                             ncclGinWindow_t ginDevWins[NCCL_GIN_MAX_CONNECTIONS], int winFlags,
+                             bool multiSegment) {
   struct ncclGinState* ginState = &comm->sharedRes->ginState;
+  if (multiSegment) {
+    // Multi-segment GIN registration requires DMABUF support on all GIN connections
+    for (int n = 0; n < ginState->ginCommCount; n++) {
+      if (!(ginState->ginProps[n].ptrSupport & NCCL_PTR_DMABUF)) {
+        WARN("Window registration of addresses that span multiple physical segments requires DMABUF support with GIN.");
+        return ncclInvalidArgument;
+      }
+    }
+  }
   int mrFlags = (winFlags & NCCL_WIN_STRICT_ORDERING) ? NCCL_NET_MR_FLAG_FORCE_SO : 0;
   for (int n = 0; n < ginState->ginCommCount; n++) {
     NCCLCHECK(ginState->ncclGin->regMrSym(ginState->ginComms[n], address, size, NCCL_PTR_CUDA, mrFlags,

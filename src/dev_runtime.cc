@@ -61,6 +61,8 @@ struct ncclDevrMemory {
   int maxLsaNumSegments;
   int numSegments;
   bool hasSysmemSegment;
+  // True if any rank in the communicator has a sysmem segment
+  bool globalHasSysmemSegment;
   size_t* segmentSizes;
   int* segmentCounts;
 };
@@ -356,7 +358,7 @@ static ncclResult_t symBindTeamMemory(
   if (comm->nvlsSupport && tm->mcBasePtr != nullptr) {
   #if CUDART_VERSION >= 12010
       // Multimem teams are currently unsupported for memory containing CPU-backed physical segments
-      if (mem->hasSysmemSegment) {
+      if (mem->globalHasSysmemSegment) {
         INFO(NCCL_NVLS, "Skipping bind multicast for maxGlobalNumSegments = %d, big=%lx, team {%d x %d}", mem->maxGlobalNumSegments, mem->bigOffset, tm->team.nRanks, tm->team.stride);
       } else {
         INFO(NCCL_NVLS, "Binding multicast memory at big=%lx to team {%d x %d}", mem->bigOffset, tm->team.nRanks, tm->team.stride);
@@ -370,7 +372,7 @@ static ncclResult_t symBindTeamMemory(
 static ncclResult_t symUnbindTeamMemory(
     struct ncclComm* comm, struct ncclDevrTeam* tm, struct ncclDevrMemory* mem
   ) {
-  if (comm->nvlsSupport && tm->mcBasePtr != nullptr && !mem->hasSysmemSegment) {
+  if (comm->nvlsSupport && tm->mcBasePtr != nullptr && !mem->globalHasSysmemSegment) {
   #if CUDART_VERSION >= 12010
       CUCHECK(cuMulticastUnbind(tm->mcHandle, comm->cudaDev, mem->bigOffset, mem->size));
   #endif
@@ -504,11 +506,12 @@ static void symTeamDestroyAll(struct ncclComm* comm) {
 }
 
 static ncclResult_t symMemoryRegisterGin(struct ncclComm* comm, struct ncclDevrMemory* mem) {
-  if (mem->maxGlobalNumSegments > 1 || mem->hasSysmemSegment) {
-    WARN("Window registration of addresses that span multiple physical segments or contain CPU-backed physical segments is currently not supported with GIN.");
+  if (mem->hasSysmemSegment) {
+    WARN("Window registration of addresses that contain CPU-backed physical segments is currently not supported with GIN.");
     return ncclInvalidArgument;
   }
-  NCCLCHECK(ncclGinRegister(comm, mem->primaryAddr, mem->size, mem->ginHostWins, mem->ginDevWins, mem->winFlags));
+  NCCLCHECK(ncclGinRegister(comm, mem->primaryAddr, mem->size, mem->ginHostWins, mem->ginDevWins, mem->winFlags,
+                            mem->maxGlobalNumSegments > 1));
   return ncclSuccess;
 }
 
@@ -528,7 +531,8 @@ static ncclResult_t symMemoryObtain(
   ncclResult_t ret = ncclSuccess;
   struct ncclDevrState* devr = &comm->devrState;
   int64_t bigOffset = 0;
-  int* globalNumSegments = nullptr;
+  struct segmentInfo { int numSegments; bool hasSysmemSegment; };
+  struct segmentInfo* globalSegmentInfo = nullptr;
   const int globalLsaTeamBaseIdx = devr->lsaSize * (comm->rank / devr->lsaSize);
 
   struct ncclDevrMemory* mem = devr->memHead;
@@ -563,7 +567,7 @@ static ncclResult_t symMemoryObtain(
   mem->numSegments = numSegments;
 
   NCCLCHECKGOTO(ncclCalloc(&mem->segmentSizes, numSegments), ret, fail_mem);
-  NCCLCHECKGOTO(ncclCalloc(&globalNumSegments, comm->nRanks), ret, fail_mem);
+  NCCLCHECKGOTO(ncclCalloc(&globalSegmentInfo, comm->nRanks), ret, fail_mem);
 
   if (numSegments > 1) {
     size_t offset = 0;
@@ -578,18 +582,21 @@ static ncclResult_t symMemoryObtain(
     mem->segmentSizes[0] = size;
   }
 
-  // We need the maxSegments to selectively disable some features if numSegments > 1 on any rank
-  globalNumSegments[comm->rank] = numSegments;
-  NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, globalNumSegments, sizeof(int)), ret, fail_mem);
+  // We need max segments and global sysmem info to selectively disable some features
+  globalSegmentInfo[comm->rank].numSegments = numSegments;
+  globalSegmentInfo[comm->rank].hasSysmemSegment = hasSysmemSegment;
+  NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, globalSegmentInfo, sizeof(*globalSegmentInfo)), ret, fail_mem);
+  mem->globalHasSysmemSegment = false;
   for (int r = 0; r < comm->nRanks; r++) {
-    if (mem->maxGlobalNumSegments < globalNumSegments[r]) {
-      mem->maxGlobalNumSegments = globalNumSegments[r];
+    if (mem->maxGlobalNumSegments < globalSegmentInfo[r].numSegments) {
+      mem->maxGlobalNumSegments = globalSegmentInfo[r].numSegments;
     }
+    if (globalSegmentInfo[r].hasSysmemSegment) mem->globalHasSysmemSegment = true;
   }
 
   NCCLCHECKGOTO(ncclCalloc(&mem->segmentCounts, devr->lsaSize), ret, fail_mem);
   for (int r = 0; r < devr->lsaSize; r++) {
-    mem->segmentCounts[r] = globalNumSegments[globalLsaTeamBaseIdx + r];
+    mem->segmentCounts[r] = globalSegmentInfo[globalLsaTeamBaseIdx + r].numSegments;
   }
 
   // Grab offset in the big space.
@@ -627,7 +634,7 @@ static ncclResult_t symMemoryObtain(
 leave:
   mem->refCount += 1;
   *outMem = mem;
-  free(globalNumSegments);
+  free(globalSegmentInfo);
   return ret;
 
 fail_mem_space_teams:
@@ -643,7 +650,7 @@ fail_mem:
     free(mem->segmentCounts);
   }
   free(mem);
-  free(globalNumSegments);
+  free(globalSegmentInfo);
 //fail:
   return ret;
 }
@@ -1379,7 +1386,7 @@ bool ncclDevrWindowIsMultiSegment(struct ncclDevrWindow* win) {
 }
 
 bool ncclDevrWindowHasSysmemSegment(struct ncclDevrWindow* win) {
-  return win != NULL && win->memory->hasSysmemSegment;
+  return win != NULL && win->memory->globalHasSysmemSegment;
 }
 
 // Returns ncclInvalidUsage if the compiled version is greater than the runtime version and NCCL_ENABLE_VERSION_CHECK=0 is not set

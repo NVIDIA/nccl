@@ -6,10 +6,11 @@
 #define _WIN32_WINNT 0x0600
 #endif
 
-/* Skip winsock.h so we use winsock2.h only (avoid redefinition errors).
+/* WIN32_LEAN_AND_MEAN prevents windows.h from pulling in winsock.h, so
+ * _WINSOCKAPI_ is only defined once (by winsock2.h) and C4005 is avoided.
  * For device (.cu) builds this is also set via target_compile_definitions. */
-#ifndef _WINSOCKAPI_
-#define _WINSOCKAPI_
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
 #endif
 
 // Include standard C headers first

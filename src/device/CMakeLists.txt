@@ -76,10 +76,11 @@ if(NCCL_OS_LINUX)
     target_compile_definitions(nccl_device PRIVATE NCCL_OS_LINUX)
 endif()
 
-# Prevent windows.h from including winsock.h so we can use winsock2.h without redefinition errors
+# WIN32_LEAN_AND_MEAN prevents windows.h from pulling in winsock.h, so _WINSOCKAPI_
+# is only defined once (by winsock2.h) and C4005 redefinition warnings are avoided.
 # Skip GIN/DOCA (GDAKI) on Windows: doca_gpunetio headers are not available and GIN backend is Linux-only.
 if(NCCL_OS_WINDOWS)
-    target_compile_definitions(nccl_device PRIVATE _WINSOCKAPI_ NCCL_GIN_GDAKI_ENABLE=0)
+    target_compile_definitions(nccl_device PRIVATE WIN32_LEAN_AND_MEAN NCCL_GIN_GDAKI_ENABLE=0)
 endif()
 
 # Export-safe includes: only INSTALL_INTERFACE in PUBLIC; build paths in PRIVATE so export does not see source/build dirs.

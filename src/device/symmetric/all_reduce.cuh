@@ -65,7 +65,7 @@ static __device__ __forceinline__ void allreduceDeep(
 
   if (0 < nIters) {
     while (true) {
-      tmaSize = tileSize;
+      if NCCL_IF_CONSTEXPR (EnableTma) tmaSize = tileSize;
       AccPack acc1[UnrollPacks];
       int r = rank;
       if (++r == nRanks) r = 0;

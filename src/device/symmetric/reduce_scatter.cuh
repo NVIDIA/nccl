@@ -62,7 +62,7 @@ static __device__ void reduceDeep(
 
   if (0 < nIters) {
     while (true) {
-      tmaSize = tileSize;
+      if NCCL_IF_CONSTEXPR (EnableTma) tmaSize = tileSize;
       AccPack acc1[UnrollPacks];
       int r = rank+1;
       if (r == nRanks) r = 0;

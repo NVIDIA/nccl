@@ -226,6 +226,7 @@ template<template<typename> typename Red, typename T>
 struct ncclSymkGinAccumType { using Type = T; };
 
 template<> struct ncclSymkGinAccumType<FuncSum, __half> { using Type = float; };
+template<> struct ncclSymkGinAccumType<FuncSumPostDiv, __half> { using Type = float; };
 #if defined(__CUDA_BF16_TYPES_EXIST__)
 template<> struct ncclSymkGinAccumType<FuncSum, __nv_bfloat16> { using Type = float; };
 template<> struct ncclSymkGinAccumType<FuncSumPostDiv, __nv_bfloat16> { using Type = float; };

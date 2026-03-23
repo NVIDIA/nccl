@@ -55,9 +55,9 @@ NCCL_DEVICE_INLINE void postGfd(Coop coop, ncclGinProxyGpuCtx_t* proxyCtx, ncclG
     while (queueSize <= idx - ci.load(cuda::memory_order_relaxed)) {
     }
     idx &= queueSize - 1;
-// 4x16 byte store with the write-through cache hint
+// 16 byte stores with the write-through cache hint
 #pragma unroll
-    for (uint8_t i = 0; i < 4; i++) {
+    for (uint8_t i = 0; i < sizeof(ncclGinProxyGfd_t) / sizeof(uint4); i++) {
       __stwt((uint4*)&q[idx] + i, ((uint4*)gfd)[i]);
     }
   }
@@ -77,9 +77,9 @@ __device__ __forceinline__ void buildGfd(ncclGinProxyGfd_t* gfd, ncclGinProxyOp_
     gfd->qword[i].flag.v = 1;
   }
 
-  gfd->qword[ncclGinProxyGfdHeader].header.opLow = (uint64_t)op;
+  gfd->qword[ncclGinProxyGfdHeader].header.version = (uint64_t)NCCL_GIN_PROXY_GFD_VERSION;
   gfd->qword[ncclGinProxyGfdHeader].header.size = (uint64_t)size;
-  gfd->qword[ncclGinProxyGfdHeaderExt].headerExt.opHigh = (uint64_t)op >> 6;
+  gfd->qword[ncclGinProxyGfdHeaderExt].headerExt.op = (uint16_t)op;
 
   if (op & ncclGinProxyOpFlush) {
     return;

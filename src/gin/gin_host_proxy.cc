@@ -148,11 +148,7 @@ static inline uint64_t extractSignalVal(ncclGinProxyGfd_t *gfd) {
 }
 
 static ncclGinProxyOp_t extractOp(ncclGinProxyGfd_t *gfd) {
-  uint64_t op = gfd->qword[ncclGinProxyGfdHeader].header.opLow;
-  // Backwards compat: only look at extra bits if opLow is 0
-  if (op == 0)
-    op = (uint64_t)gfd->qword[ncclGinProxyGfdHeaderExt].headerExt.opHigh << 6;
-  return (ncclGinProxyOp_t)op;
+  return (ncclGinProxyOp_t)gfd->qword[ncclGinProxyGfdHeaderExt].headerExt.op;
 }
 
 static int proxyGinPollGfd(struct ginProxyCtx *ctx, ginProxyHostGpuCtx *hostGpuCtx, int targetRank,

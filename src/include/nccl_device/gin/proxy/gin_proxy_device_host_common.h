@@ -11,6 +11,7 @@
 #include <stddef.h>
 
 #define NCCL_GIN_PROXY_VERSION 100
+#define NCCL_GIN_PROXY_GFD_VERSION 1
 
 typedef enum {
   ncclGinProxyOpPut = 1 << 0,
@@ -20,7 +21,6 @@ typedef enum {
   ncclGinProxyOpWithSignalInc = 1 << 3,
   ncclGinProxyOpWithSignalAdd = 1 << 4,
   ncclGinProxyOpVASignal = 1 << 5, // VA signals do not include put.
-  // Backwards compat: ops >= 6 may not be combined with ops < 6.
   ncclGinProxyOpGet = 1 << 6,
   ncclGinProxyOpFlush = 1 << 7,
 } ncclGinProxyOp_t;
@@ -37,7 +37,8 @@ typedef union {
   } __attribute__((packed)) flag;
   struct {
     uint64_t flag : 1;
-    uint64_t opLow : 6;
+    uint64_t version : 4;
+    uint64_t resv : 2;
     uint64_t size : 57;
   } __attribute__((packed)) header;
   struct {
@@ -104,13 +105,15 @@ typedef union {
   struct {
     uint8_t flag : 1;
     uint8_t resv : 7;
-    uint8_t opHigh;
-    uint16_t resv2;
+    uint16_t op;
+    uint8_t resv2;
     uint32_t resv3;
   } __attribute__((packed)) headerExt;
 } ncclGinProxyQword_t;
 static_assert(sizeof(ncclGinProxyQword_t) == sizeof(uint64_t),
               "sizeof(ncclGinProxyQword_t) != sizeof(uint64_t)");
+static_assert(NCCL_GIN_PROXY_GFD_VERSION < (1 << 4),
+              "NCCL_GIN_PROXY_GFD_VERSION must be less than 2^4");
 
 typedef enum {
   ncclGinProxyGfdHeader = 0,
@@ -125,14 +128,14 @@ typedef enum {
   ncclGinProxyGfdCompletion = 5,
   ncclGinProxyGfdSignalVal = 6,
   ncclGinProxyGfdHeaderExt = 7,
-  ncclGinProxyGfdQwords = 8,
+  ncclGinProxyGfdQwords = 16,
 } ncclGinProxyGfdQwordIdx_t;
 
 typedef struct __attribute__((packed)) {
   ncclGinProxyQword_t qword[ncclGinProxyGfdQwords];
 } ncclGinProxyGfd_t;
-static_assert(sizeof(ncclGinProxyGfd_t) == 64,
-              "sizeof(ncclGinProxyGfd_t) != 64 - it is crucial the GFD is 64 bytes!");
+static_assert(sizeof(ncclGinProxyGfd_t) == 128,
+              "sizeof(ncclGinProxyGfd_t) != 128 - Backwards compat requires ncclGinProxyGfd to be 128 bytes!");
 
 typedef struct {
   int nranks;

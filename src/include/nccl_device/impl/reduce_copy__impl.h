@@ -54,10 +54,7 @@ NCCL_DEVICE_INLINE IntCount reduceCopyLoopCoreImpl(
   using AccEltType = std::conditional_t<SINGLE_SRC, PackEltType, BaseAccEltType>;
   using AccPackType = EltPack<AccEltType, Pack::Count>;
 
-  // Create accumulator reduction operator from RedOp
-  // Maps RedOp (e.g., OpSum<T>) to accumulator reduction operator (e.g., OpSum<AccEltType>)
   using AccRedOpType = typename AccRedOp<RedOp, AccEltType>::Type;
-  AccRedOpType accRedOp{};
 
   AccPackType acc[UNROLL_PACKS];
 
@@ -72,6 +69,7 @@ NCCL_DEVICE_INLINE IntCount reduceCopyLoopCoreImpl(
         acc[u] = castPack<AccEltType, PackEltType, Pack::Count>(loaded);
       }
     } else {
+      AccRedOpType accRedOp{};
       Pack loaded[UNROLL_SOURCE][UNROLL_PACKS];
 
       // Preseed acc[] with source 0 to avoid inner-loop branching.
@@ -138,6 +136,7 @@ NCCL_DEVICE_INLINE IntCount reduceCopyLoopCoreImpl(
         acc[u] = castPack<AccEltType, PackEltType, Pack::Count>(loaded);
       }
     } else {
+      AccRedOpType accRedOp{};
       Pack loaded[UNROLL_SOURCE][UNROLL_PACKS];
 
       // Preseed acc[] with source 0 to avoid inner-loop branching.
@@ -169,8 +168,8 @@ NCCL_DEVICE_INLINE IntCount reduceCopyLoopCoreImpl(
 
       #pragma unroll UNROLL_PACKS
       for (int u = 0; u < UNROLL_PACKS; u++) {
-        IntCount packIdx = groupLanePackIdx + u * runtimeStride;
         if NCCL_IF_CONSTEXPR (CHECK_BOUNDS) {
+          IntCount packIdx = groupLanePackIdx + u * runtimeStride;
           if (packIdx >= totalPacks) break;
         }
         #pragma unroll UNROLL_SOURCE
@@ -198,8 +197,8 @@ NCCL_DEVICE_INLINE IntCount reduceCopyLoopCoreImpl(
 
         #pragma unroll UNROLL_PACKS
         for (int u = 0; u < UNROLL_PACKS; u++) {
-          IntCount packIdx = groupLanePackIdx + u * runtimeStride;
           if NCCL_IF_CONSTEXPR (CHECK_BOUNDS) {
+            IntCount packIdx = groupLanePackIdx + u * runtimeStride;
             if (packIdx >= totalPacks) break;
           }
           #pragma unroll UNROLL_SOURCE

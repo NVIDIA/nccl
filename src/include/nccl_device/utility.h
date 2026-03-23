@@ -256,7 +256,7 @@ NCCL_HOST_DEVICE_INLINE void idivmodFast32(uint32_t *quo, uint32_t *rem, uint32_
 NCCL_HOST_DEVICE_INLINE void idivmodFast64(uint64_t *quo, uint64_t *rem, uint64_t x, uint64_t y, uint64_t yrcp) {
   uint32_t q = (uint32_t)(yrcp == 0 ? x : mul64hi(x, yrcp));
   uint32_t r = (uint32_t)(x - y*q);
-  if (r >= y) { q += 1; r -= y; }
+  if (r >= y) { q += 1; r -= (uint32_t)y; }
   *quo = q;
   *rem = r;
 }

@@ -261,7 +261,7 @@ inline void ncclMemoryStackConstruct(struct ncclMemoryStack* me) {
 }
 
 inline void* ncclMemoryStack::allocate(struct ncclMemoryStack* me, size_t size, size_t align) {
-  uintptr_t o = (me->topFrame.bumper + align-1) & -uintptr_t(align);
+  uintptr_t o = (me->topFrame.bumper + align-1) & ~(uintptr_t(align) - 1);
   void* obj;
   if (COMPILER_EXPECT(o + size <= me->topFrame.end, true)) {
     me->topFrame.bumper = o + size;

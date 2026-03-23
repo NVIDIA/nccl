@@ -99,7 +99,7 @@ typedef ncclCoopTile<32> ncclCoopWarp;
 struct ncclCoopLanes { // Some lanes of this warp.
   uint32_t lmask;
 
-  NCCL_DEVICE_INLINE constexpr ncclCoopLanes(uint32_t lmask=-1u): lmask(lmask) {}
+  NCCL_DEVICE_INLINE constexpr ncclCoopLanes(uint32_t lmask=~0u): lmask(lmask) {}
 
   NCCL_DEVICE_INLINE int thread_rank() const {
     return __popc(lmask & nccl::utility::lanemask_lt());

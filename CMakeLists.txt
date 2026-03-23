@@ -156,7 +156,8 @@ elseif(NCCL_COMPILER_MSVC)
     # /wd4018 disables "signed/unsigned mismatch" - safe comparisons where signed value is always positive
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3 /wd4267 /wd4244 /wd4996 /wd4146 /wd4197 /wd5105 /wd4805 /wd4018 /FS /Zc:preprocessor")
     # --compress-mode=balance is not supported by ptxas in CUDA 13.1 on Windows; omit for compatibility.
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda --compress-mode=balance --ptxas-options=-maxrregcount=96")
+    # -Xcompiler /Zc:preprocessor passes the conformant preprocessor flag to cl.exe when invoked by nvcc
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda --compress-mode=balance --ptxas-options=-maxrregcount=96 -Xcompiler /Zc:preprocessor")
 endif()
 
 # Sanitizer options (GCC/Clang only)

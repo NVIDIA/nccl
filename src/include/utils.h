@@ -70,8 +70,8 @@ inline void clockRealtime(struct timespec* ts) {
   using namespace std::chrono;
   auto now = system_clock::now();
   auto secs = time_point_cast<seconds>(now);
-  ts->tv_sec = secs.time_since_epoch().count();
-  ts->tv_nsec = duration_cast<nanoseconds>(now - secs).count();
+  ts->tv_sec = static_cast<decltype(ts->tv_sec)>(secs.time_since_epoch().count());
+  ts->tv_nsec = static_cast<decltype(ts->tv_nsec)>(duration_cast<nanoseconds>(now - secs).count());
 }
 
 /* get any bytes of random data from system RNG, return ncclSuccess (0) if it succeeds. */

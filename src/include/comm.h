@@ -383,7 +383,8 @@ inline void ncclTaskCollSorterInsert(
   constexpr size_t MaxSize = ncclTaskCollSorter::MaxSize;
   constexpr int BitsPerPow2 = ncclTaskCollSorter::BitsPerPow2;
   constexpr int BinCount = ncclTaskCollSorter::BinCount;
-  int bin = u32fpEncode(std::min(MaxSize, size)>>UnitLog2, BitsPerPow2);
+  // Value is bounded by MaxSize>>UnitLog2 which fits in uint32_t
+  int bin = u32fpEncode(static_cast<uint32_t>(std::min(MaxSize, size)>>UnitLog2), BitsPerPow2);
   bin = BinCount-1 - bin; // descending bin
 
   if (me->bins[bin] == nullptr) {

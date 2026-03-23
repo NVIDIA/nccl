@@ -569,12 +569,16 @@ ncclResult_t ncclIbResiliencyDevInit(struct ncclIbResiliency* resCtx, uint devIn
 ncclResult_t ncclIbResiliencyDevDestroy(struct ncclIbResiliency* resCtx, uint devIndex) {
   assert(resCtx != NULL);
   struct ncclIbResiliencyDev* resDev = &resCtx->devs[devIndex];
-  NCCLCHECK(wrap_ibv_destroy_cq(resDev->probingCq));
-  INFO(NCCL_NET, "NET/IB: %s: Destroyed probing CQ (cq=%p) on device %d for resiliency context (comm=%p)", __func__, resDev->probingCq, devIndex, resCtx->baseComm);
+  if (resDev->probingCq) {
+    NCCLCHECK(wrap_ibv_destroy_cq(resDev->probingCq));
+    INFO(NCCL_NET, "NET/IB: %s: Destroyed probing CQ (cq=%p) on device %d for resiliency context (comm=%p)", __func__, resDev->probingCq, devIndex, resCtx->baseComm);
+  }
   if (resCtx->baseComm->isSend) {
     struct ncclIbResiliencySend* sendResCtx = (struct ncclIbResiliencySend*)resCtx;
-    NCCLCHECK(wrap_ibv_dereg_mr(resDev->probingResultMr));
-    INFO(NCCL_NET, "NET/IB: %s: Deregistered probing results memory (%p) on device %d for resiliency context (comm=%p)", __func__, &sendResCtx->probingResults, devIndex, resCtx->baseComm);
+    if (resDev->probingResultMr) {
+      NCCLCHECK(wrap_ibv_dereg_mr(resDev->probingResultMr));
+      INFO(NCCL_NET, "NET/IB: %s: Deregistered probing results memory (%p) on device %d for resiliency context (comm=%p)", __func__, &sendResCtx->probingResults, devIndex, resCtx->baseComm);
+    }
   }
   return ncclSuccess;
 }
@@ -795,8 +799,9 @@ ncclResult_t ncclIbResiliencyClose(struct ncclIbResiliency* resCtx) {
   INFO(NCCL_NET, "NET/IB: %s: Destroying %d probing QPs for resiliency context (comm=%p)", __func__, resCtx->nProbingQps, resCtx->baseComm);
   for (int qpIndex = 0; qpIndex < resCtx->nProbingQps; qpIndex++) {
     struct ncclIbQp* probingQp = &resCtx->probingQps[qpIndex];
-    assert(probingQp != NULL);
-    assert(probingQp->qp != NULL);
+    if (probingQp->qp == NULL) {
+      continue;
+    }
     INFO(NCCL_NET, "NET/IB: %s: Destroying probing QP (index=%d, qp=%p, qp_num=%u) for resiliency context (comm=%p)", __func__, qpIndex, probingQp->qp, probingQp->qp->qp_num, resCtx->baseComm);
     NCCLCHECK(wrap_ibv_destroy_qp(probingQp->qp));
   }

@@ -11,6 +11,8 @@
 #include "nvtx.h"
 #include "utils.h"
 
+NCCL_PARAM(ShadowMempoolMaxSize, "SHADOW_MEMPOOL_MAX_SIZE", 1LL << 30);
+
 NCCL_API(ncclResult_t, ncclMemAlloc, void **ptr, size_t size);
 ncclResult_t  ncclMemAlloc(void **ptr, size_t size) {
   NCCL_NVTX3_FUNC_RANGE;
@@ -342,6 +344,7 @@ ncclResult_t ncclShadowPoolAlloc(
     props.handleTypes = cudaMemHandleTypeNone;
     props.location.type = cudaMemLocationTypeDevice;
     cudaGetDevice(&props.location.id);
+    props.maxSize = (size_t)ncclParamShadowMempoolMaxSize();
     CUDACHECK(cudaMemPoolCreate(&pool->memPool, &props));
 
     pool->hbits = hbits = 4;

@@ -1554,7 +1554,6 @@ end:
 NCCL_API(ncclResult_t, ncclWinGetUserPtr, ncclComm_t comm, ncclWindow_t win, void** outUserPtr);
 ncclResult_t ncclWinGetUserPtr(struct ncclComm* comm, struct ncclWindow_vidmem* win, void** outUserPtr) {
   NCCLCHECK(CommCheck(comm, __func__, "comm"));
-  NCCLCHECK(PtrCheck(win, __func__, "win"));
   NCCLCHECK(PtrCheck(outUserPtr, __func__, "outUserPtr"));
 
   if (!comm->symmetricSupport) {
@@ -1563,8 +1562,10 @@ ncclResult_t ncclWinGetUserPtr(struct ncclComm* comm, struct ncclWindow_vidmem* 
     return ncclSuccess;
   }
 
-  struct ncclDevrWindow* winHost = NULL;
-  struct ncclWindow_vidmem* winDevHost = NULL;
+  NCCLCHECK(PtrCheck(win, __func__, "win"));
+
+  struct ncclDevrWindow* winHost = nullptr;
+  struct ncclWindow_vidmem* winDevHost = nullptr;
   NCCLCHECK(ncclShadowPoolToHost(&comm->devrState.shadows, win, &winDevHost));
 
   winHost = (struct ncclDevrWindow*)winDevHost->winHost;

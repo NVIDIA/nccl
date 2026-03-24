@@ -1078,19 +1078,21 @@ void printHighThroughputResults(
     bool is_multinode = (ht_bytes.rdma_send_bytes > 0);
 
     // Print per-rank results
+    // total_recv_bw = NVLink + RDMA inbound, equivalent to HybridEP's NVL recv BW metric
+    // rdma_recv_bw  = inter-node (RDMA only), equivalent to HybridEP's IB recv BW metric
     if (is_multinode) {
-        printf("[Rank %d] Dispatch:         avg=%.2f us, recv(RDMA+NVL)=%.2f GB/s, ib=%.2f GB/s\n",
+        printf("[Rank %d] Dispatch:         avg=%.2f us, total_recv_bw=%.2f GB/s, rdma_recv_bw=%.2f GB/s\n",
                myRank, dispatch_result.avg_ms * 1000, local_dispatch_tp, local_ib_tp);
     } else {
-        printf("[Rank %d] Dispatch:         avg=%.2f us, recv(RDMA+NVL)=%.2f GB/s\n",
+        printf("[Rank %d] Dispatch:         avg=%.2f us, total_recv_bw=%.2f GB/s\n",
                myRank, dispatch_result.avg_ms * 1000, local_dispatch_tp);
     }
 
     if (is_multinode) {
-        printf("[Rank %d] Combine:          avg=%.2f us, recv(RDMA+NVL)=%.2f GB/s, ib=%.2f GB/s\n",
+        printf("[Rank %d] Combine:          avg=%.2f us, total_recv_bw=%.2f GB/s, rdma_recv_bw=%.2f GB/s\n",
                myRank, combine_result.avg_ms * 1000, local_combine_tp, local_combine_ib_tp);
     } else {
-        printf("[Rank %d] Combine:          avg=%.2f us, recv(RDMA+NVL)=%.2f GB/s\n",
+        printf("[Rank %d] Combine:          avg=%.2f us, total_recv_bw=%.2f GB/s\n",
                myRank, combine_result.avg_ms * 1000, local_combine_tp);
     }
 
@@ -1178,19 +1180,21 @@ void printHighThroughputResults(
                global_total_avg * 1000,
                global_total_min * 1000,
                global_total_max * 1000);
-        printf("\nDispatch Recv BW (RDMA+NVL): min=%.2f GB/s (rank %d), max=%.2f GB/s (rank %d)\n",
+        // Total Recv BW = NVLink + RDMA inbound — equivalent to HybridEP's NVL recv BW metric
+        // RDMA Recv BW  = inter-node only       — equivalent to HybridEP's IB recv BW metric
+        printf("\nDispatch Total Recv BW: min=%.2f GB/s (rank %d), max=%.2f GB/s (rank %d)\n",
                global_dispatch_tp_min.value, global_dispatch_tp_min.rank,
                global_dispatch_tp_max.value, global_dispatch_tp_max.rank);
         if (global_rdma_bytes > 0) {
-            printf("Dispatch IB BW:              min=%.2f GB/s (rank %d), max=%.2f GB/s (rank %d)\n",
+            printf("Dispatch RDMA Recv BW:  min=%.2f GB/s (rank %d), max=%.2f GB/s (rank %d)\n",
                    global_ib_tp_min.value, global_ib_tp_min.rank,
                    global_ib_tp_max.value, global_ib_tp_max.rank);
         }
-        printf("Combine Recv BW (RDMA+NVL): min=%.2f GB/s (rank %d), max=%.2f GB/s (rank %d)\n",
+        printf("Combine  Total Recv BW: min=%.2f GB/s (rank %d), max=%.2f GB/s (rank %d)\n",
                global_combine_tp_min.value, global_combine_tp_min.rank,
                global_combine_tp_max.value, global_combine_tp_max.rank);
         if (global_rdma_bytes > 0) {
-            printf("Combine IB BW:              min=%.2f GB/s (rank %d), max=%.2f GB/s (rank %d)\n",
+            printf("Combine  RDMA Recv BW:  min=%.2f GB/s (rank %d), max=%.2f GB/s (rank %d)\n",
                    global_combine_ib_tp_min.value, global_combine_ib_tp_min.rank,
                    global_combine_ib_tp_max.value, global_combine_ib_tp_max.rank);
         }

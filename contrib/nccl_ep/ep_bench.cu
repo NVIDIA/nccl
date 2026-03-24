@@ -860,21 +860,9 @@ LowLatencyBytes calculateLowLatencyBytes(
 
 // Structure to hold High Throughput byte breakdown for bandwidth reporting.
 //
-// Bandwidth metric rationale (HT mode):
-//   We report unidirectional RECEIVE bandwidth (total_recv_bytes / time), matching
-//   HybridEP's "NVL" metric in test_hybrid_ep.py (dispatch_bf16_nvl_recv_bytes / t).
-//   This is intentional for fair apple-to-apple comparison:
-//
-//   - Receive bandwidth directly answers "when can expert GEMM start?" — it is the
-//     metric that determines training step latency, not the send side.
-//   - The NIC's rated bandwidth (e.g. 400 Gbps = 50 GB/s on IB HDR) is a per-direction
-//     number; comparing against it requires a per-direction metric.
-//   - Counting send+receive would double-count the same physical transfer and inflate
-//     reported numbers by ~2x relative to HybridEP's published figures, making direct
-//     comparison misleading.
-//
-//   rdma_send_bytes is still tracked and printed in the byte breakdown for diagnostics,
-//   but is NOT included in the throughput numerator.
+// HT bandwidth = total_recv_bytes / time (RDMA+NVL receive, unidirectional), matching
+// test_hybrid_ep.py dispatch_bf16_nvl_recv_bytes / t for apple-to-apple comparison.
+// send+receive would double-count (~2x inflation); rdma_send_bytes reported separately as IB BW.
 struct HighThroughputBytes {
     size_t rdma_send_bytes;    // Bytes sent to remote nodes (RDMA send) — diagnostic only
     size_t total_recv_bytes;   // Total bytes received from all sources — used for bandwidth
@@ -1074,9 +1062,6 @@ void printLowLatencyResults(
 }
 
 // Print benchmark results for High Throughput mode.
-// Throughput = total_recv_bytes / time (unidirectional receive), matching
-// test_hybrid_ep.py dispatch_bf16_nvl_recv_bytes / t for fair comparison.
-// See HighThroughputBytes comment for full rationale.
 void printHighThroughputResults(
     int myRank,
     int nRanks,
@@ -1085,18 +1070,23 @@ void printHighThroughputResults(
     const BenchResult& combined_result,
     const HighThroughputBytes& ht_bytes
 ) {
-    // Throughput numerator = receive-side bytes only (unidirectional).
-    // rdma_send_bytes is excluded — see HighThroughputBytes comment for rationale.
+    // Unidirectional receive — rdma_send_bytes excluded (see struct comment).
     size_t dispatch_bytes = ht_bytes.total_recv_bytes;
     size_t combine_bytes = dispatch_bytes;  // Combine is symmetric (recv on dispatch == send on combine)
     double local_dispatch_tp = (dispatch_bytes / 1e9) / (dispatch_result.avg_ms / 1000.0);
     double local_combine_tp = (combine_bytes / 1e9) / (combine_result.avg_ms / 1000.0);
     double local_total_tp = ((dispatch_bytes + combine_bytes) / 1e9) / (combined_result.avg_ms / 1000.0);
+    double local_ib_tp = (ht_bytes.rdma_send_bytes / 1e9) / (dispatch_result.avg_ms / 1000.0);
+    bool is_multinode = (ht_bytes.rdma_send_bytes > 0);
 
-    // Print per-rank results (throughput kept for reductions, not printed)
-    printf("[Rank %d] Dispatch:         avg=%.2f us\n",
-           myRank,
-           dispatch_result.avg_ms * 1000);
+    // Print per-rank results
+    if (is_multinode) {
+        printf("[Rank %d] Dispatch:         avg=%.2f us, recv(RDMA+NVL)=%.2f GB/s, ib=%.2f GB/s\n",
+               myRank, dispatch_result.avg_ms * 1000, local_dispatch_tp, local_ib_tp);
+    } else {
+        printf("[Rank %d] Dispatch:         avg=%.2f us, recv(RDMA+NVL)=%.2f GB/s\n",
+               myRank, dispatch_result.avg_ms * 1000, local_dispatch_tp);
+    }
 
     printf("[Rank %d] Combine:          avg=%.2f us\n",
            myRank,
@@ -1149,6 +1139,12 @@ void printHighThroughputResults(
     MPI_Reduce(&local_tp_struct, &global_total_tp_min, 1, MPI_DOUBLE_INT, MPI_MINLOC, 0, MPI_COMM_WORLD);
     MPI_Reduce(&local_tp_struct, &global_total_tp_max, 1, MPI_DOUBLE_INT, MPI_MAXLOC, 0, MPI_COMM_WORLD);
 
+    struct { double value; int rank; } global_ib_tp_min, global_ib_tp_max;
+    local_tp_struct.value = local_ib_tp;
+    local_tp_struct.rank = myRank;
+    MPI_Reduce(&local_tp_struct, &global_ib_tp_min, 1, MPI_DOUBLE_INT, MPI_MINLOC, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&local_tp_struct, &global_ib_tp_max, 1, MPI_DOUBLE_INT, MPI_MAXLOC, 0, MPI_COMM_WORLD);
+
     // Aggregate RDMA/RECV bytes across ranks for summary
     size_t global_rdma_bytes, global_recv_bytes;
     MPI_Reduce(&ht_bytes.rdma_send_bytes, &global_rdma_bytes, 1, MPI_UNSIGNED_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
@@ -1174,6 +1170,14 @@ void printHighThroughputResults(
                global_total_avg * 1000,
                global_total_min * 1000,
                global_total_max * 1000);
+        printf("\nDispatch Recv BW (RDMA+NVL): min=%.2f GB/s (rank %d), max=%.2f GB/s (rank %d)\n",
+               global_dispatch_tp_min.value, global_dispatch_tp_min.rank,
+               global_dispatch_tp_max.value, global_dispatch_tp_max.rank);
+        if (global_rdma_bytes > 0) {
+            printf("Dispatch IB BW:              min=%.2f GB/s (rank %d), max=%.2f GB/s (rank %d)\n",
+                   global_ib_tp_min.value, global_ib_tp_min.rank,
+                   global_ib_tp_max.value, global_ib_tp_max.rank);
+        }
         printf("\nByte breakdown (per rank avg): RDMA_send=%.2f MB (%u tokens), total_recv=%.2f MB (%u tokens)\n",
                static_cast<double>(global_rdma_bytes) / nRanks / 1e6, ht_bytes.rdma_tokens,
                static_cast<double>(global_recv_bytes) / nRanks / 1e6, ht_bytes.recv_tokens);
@@ -1706,9 +1710,7 @@ int main(int argc, char* argv[]) {
         dispatch_data_bytes = ll_bytes.dispatch_bytes;
         combine_data_bytes = ll_bytes.combine_bytes;
     } else {
-        // HT mode: unidirectional receive bytes only, matching test_hybrid_ep.py
-        // (dispatch_bf16_nvl_recv_bytes / t) for apple-to-apple comparison.
-        // See HighThroughputBytes struct comment for full rationale.
+        // HT: unidirectional receive, matches test_hybrid_ep.py dispatch_bf16_nvl_recv_bytes / t.
         dispatch_data_bytes = ht_bytes.total_recv_bytes;
         combine_data_bytes = dispatch_data_bytes;  // Symmetric
     }

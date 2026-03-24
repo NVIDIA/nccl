@@ -5,23 +5,91 @@
  * See LICENSE.txt for more license information
  *************************************************************************/
 
+/* Force Vista+ so IP Helper API is declared (project may set lower _WIN32_WINNT) */
+#ifdef _WIN32_WINNT
+#undef _WIN32_WINNT
+#endif
+#define _WIN32_WINNT 0x0600
+
+/* GetAdaptersAddresses and IP_ADAPTER_ADDRESSES require winsock2 before iphlpapi */
+#ifndef _WINSOCKAPI_
+#define _WINSOCKAPI_
+#endif
+#include <winsock2.h>
+#include <ws2ipdef.h>
+#include <Iptypes.h>
+#include <Iphlpapi.h>
+#pragma comment(lib, "iphlpapi.lib")
+
 #include "os.h"
 #include <cstring>
 #include <cstdbool>
 #include "socket.h"
 #include "utils.h"
-#include "os.h"
 #include "checks.h"
 #include "param.h"
 #include <atomic>
 #include <chrono>
 #include <thread>
 #include <nmmintrin.h>
+#include <cstdint>
+
+// WSAEAGAIN not in winsock2.h; use WSAEWOULDBLOCK equivalent
+#ifndef WSAEAGAIN
+#define WSAEAGAIN WSAEWOULDBLOCK
+#endif
 
 // Windows-specific definitions for constants not available in Windows
 #ifndef IFNAMSIZ
 #define IFNAMSIZ 16
 #endif
+
+static thread_local char ncclDlErrorBuf[256] = {0};
+
+static void saveDlError() {
+  DWORD err = GetLastError();
+  if (err != 0) {
+    DWORD len = FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                               NULL, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                               ncclDlErrorBuf, sizeof(ncclDlErrorBuf), NULL);
+    if (len == 0) {
+      snprintf(ncclDlErrorBuf, sizeof(ncclDlErrorBuf), "GetLastError=%lu", err);
+    }
+  } else {
+    ncclDlErrorBuf[0] = '\0';
+  }
+}
+
+ncclOsLibraryHandle ncclOsDlopen(const char* filename) {
+  ncclOsLibraryHandle handle = (ncclOsLibraryHandle)LoadLibraryA(filename);
+  if (handle == NULL) {
+    saveDlError();
+    INFO(NCCL_INIT, "ncclOsDlopen(%s) failed: %s", filename, ncclDlErrorBuf);
+  }
+  return handle;
+}
+
+void* ncclOsDlsym(ncclOsLibraryHandle handle, const char* symbol) {
+  void* ptr = (void*)GetProcAddress((HMODULE)handle, symbol);
+  if (ptr == NULL) {
+    saveDlError();
+    INFO(NCCL_INIT, "ncclOsDlsym(%s) failed: %s", symbol, ncclDlErrorBuf);
+  }
+  return ptr;
+}
+
+const char* ncclOsDlerror() {
+  return ncclDlErrorBuf;
+}
+
+ncclOsLibraryHandle ncclOsDlopen(const char* path, int mode) {
+  (void)mode;
+  return (ncclOsLibraryHandle)LoadLibraryA(path);
+}
+
+void ncclOsDlclose(ncclOsLibraryHandle handle) {
+  if (handle) FreeLibrary((HMODULE)handle);
+}
 
 uint64_t ncclOsGetPid() {
   return (uint64_t)GetCurrentProcessId();
@@ -74,6 +142,10 @@ ncclResult_t ncclOsInitialize() {
   INFO(NCCL_INIT|NCCL_NET, "WSAStartup succeeded, Winsock version %d.%d",
        LOBYTE(wsaData.wVersion), HIBYTE(wsaData.wVersion));
   return ncclSuccess;
+}
+
+ncclResult_t ncclOsSetFilesLimit() {
+    return ncclSuccess;
 }
 
 bool ncclOsSocketDescriptorIsValid(ncclSocketDescriptor sockDescriptor) {
@@ -245,7 +317,7 @@ ncclResult_t ncclOsSocketStartConnect(struct ncclSocket* sock) {
 ncclResult_t ncclOsSocketPollConnect(struct ncclSocket* sock) {
   WSAPOLLFD pfd;
   int timeout = 1, ret;
-  socklen_t rlen = sizeof(int);
+  int optlen = sizeof(int);  /* Windows getsockopt expects int* for optlen */
   char line[SOCKET_NAME_MAXLEN+1];
 
   memset(&pfd, 0, sizeof(WSAPOLLFD));
@@ -262,7 +334,7 @@ ncclResult_t ncclOsSocketPollConnect(struct ncclSocket* sock) {
   }
 
   /* check socket status */
-  SYSCHECK(getsockopt(sock->socketDescriptor, SOL_SOCKET, SO_ERROR, (void*)&ret, &rlen), "getsockopt");
+  SYSCHECK(getsockopt(sock->socketDescriptor, SOL_SOCKET, SO_ERROR, (char*)&ret, &optlen), "getsockopt");
   return socketConnectCheck(sock, ret, __func__);
 }
 
@@ -593,7 +665,7 @@ void ncclOsCpuZero(ncclAffinity& affinity) {
   affinity = 0;
 }
 
-int ncclOsCpuCount(const ncclAffinity affinity) {
+int ncclOsCpuCount(const ncclAffinity& affinity) {
   return _mm_popcnt_u64(affinity);
 }
 
@@ -601,7 +673,7 @@ void ncclOsCpuSet(ncclAffinity& affinity, int cpu) {
   affinity |= (1ULL << cpu);
 }
 
-bool ncclOsCpuIsSet(const ncclAffinity affinity, int cpu) {
+bool ncclOsCpuIsSet(const ncclAffinity& affinity, int cpu) {
   return (affinity & (1ULL << cpu)) != 0;
 }
 
@@ -620,7 +692,7 @@ ncclResult_t ncclOsGetAffinity(ncclAffinity* affinity) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclOsSetAffinity(const ncclAffinity affinity) {
+ncclResult_t ncclOsSetAffinity(const ncclAffinity& affinity) {
   BOOL result = SetProcessAffinityMask(GetCurrentProcess(), affinity);
   if (result == FALSE) {
     WARN("SetProcessAffinityMask failed with error: %ld", GetLastError());
@@ -631,4 +703,254 @@ ncclResult_t ncclOsSetAffinity(const ncclAffinity affinity) {
 
 int ncclOsGetCpu() {
   return GetCurrentProcessorNumber();
+}
+
+ncclResult_t ncclOsNvmlOpen(ncclOsLibraryHandle* handle) {
+  *handle = nullptr;
+
+  // On Windows, try multiple possible locations for nvml.dll
+  const char* nvmlPaths[] = {
+    "nvml.dll",  // System PATH or current directory
+    "C:\\Windows\\System32\\nvml.dll",  // Common system location
+    nullptr
+  };
+
+  for (int i = 0; nvmlPaths[i] != nullptr && *handle == nullptr; i++) {
+    *handle = ncclOsDlopen(nvmlPaths[i]);
+    if (*handle != nullptr) {
+      INFO(NCCL_INIT, "Loaded NVML from %s", nvmlPaths[i]);
+    }
+  }
+
+  if (*handle == nullptr) {
+    DWORD err = GetLastError();
+    WARN("Failed to load nvml.dll, error code: %lu", err);
+    return ncclSystemError;
+  }
+
+  return ncclSuccess;
+}
+
+
+char* ncclOsRealpath(const char* path, char* resolved_path) {
+  if (path == NULL) {
+    errno = EINVAL;
+    return NULL;
+  }
+
+  // If resolved_path is provided, use it. Otherwise allocate a buffer.
+  char* buffer = resolved_path;
+  if (buffer == NULL) {
+    buffer = (char*)malloc(PATH_MAX);
+    if (buffer == NULL) {
+      errno = ENOMEM;
+      return NULL;
+    }
+  }
+
+  // Use Windows _fullpath to resolve the path
+  char* result = _fullpath(buffer, path, PATH_MAX);
+  if (result == NULL) {
+    // _fullpath failed
+    if (resolved_path == NULL) {
+      free(buffer);
+    }
+    // errno is already set by _fullpath
+    return NULL;
+  }
+
+  return buffer;
+}
+
+// Shared memory implementation for Windows
+#include "comm.h"
+#include <string.h>
+#include <stdlib.h>
+
+void ncclOsShmHandleInit(ncclShmDescriptor shmDesc, char* shmPath, size_t shmSize, size_t realShmSize,
+                         char* hptr, void* dptr, bool create,
+                         struct ncclShmHandleInternal* handle) {
+  handle->shmDesc = shmDesc;
+  handle->shmPtr = hptr;
+  handle->devShmPtr = dptr;
+  handle->shmSize = shmSize;
+  handle->realShmSize = realShmSize;
+  handle->refcount = (hptr != NULL) ? (int*)(hptr + shmSize) : NULL;
+  if (create) {
+    int slen = strlen(shmPath);
+    handle->shmPath = (char*)malloc(slen + 1);
+    memcpy(handle->shmPath, shmPath, slen + 1);
+    if (hptr) memset(hptr, 0, shmSize);
+  } else {
+    handle->shmPath = NULL;
+  }
+}
+
+ncclResult_t ncclOsShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize,
+                           void** shmPtr, void** devShmPtr, int refcount,
+                           struct ncclShmHandleInternal** handle) {
+  HANDLE hMapFile = NULL;
+  char* hptr = NULL;
+  void* dptr = NULL;
+  ncclResult_t ret = ncclSuccess;
+  struct ncclShmHandleInternal* tmphandle;
+  bool create = refcount > 0 ? true : false;
+  const size_t refSize = sizeof(uint64_t);
+  const size_t realShmSize = shmSize + refSize;
+
+  *handle = NULL;
+  *shmPtr = NULL;
+  EQCHECKGOTO(tmphandle = (struct ncclShmHandleInternal*)calloc(1, sizeof(struct ncclShmHandleInternal)), NULL, ret, fail);
+
+  if (create) {
+    if (shmPath[0] == '\0') {
+      // Generate unique shared memory name using process ID and timestamp
+      uint64_t timestamp = clockNano();
+      snprintf(shmPath, shmPathSize, "Local\\nccl-shm-%llu-%llu",
+               (unsigned long long)GetCurrentProcessId(),
+               (unsigned long long)timestamp);
+    }
+
+    // Create file mapping object
+    hMapFile = CreateFileMappingA(
+      INVALID_HANDLE_VALUE,    // use paging file
+      NULL,                    // default security
+      PAGE_READWRITE,          // read/write access
+      (DWORD)((realShmSize >> 32) & 0xFFFFFFFF),  // high-order DWORD of size
+      (DWORD)(realShmSize & 0xFFFFFFFF),          // low-order DWORD of size
+      shmPath);                // name of mapping object
+
+    if (hMapFile == NULL) {
+      WARN("Error: failed to create shared memory mapping %s, error code: %lu", shmPath, GetLastError());
+      ret = ncclSystemError;
+      goto fail;
+    }
+
+    INFO(NCCL_ALLOC, "Created shared memory mapping %s with %ld bytes", shmPath, realShmSize);
+  } else {
+    // Open existing file mapping object
+    hMapFile = OpenFileMappingA(
+      FILE_MAP_ALL_ACCESS,   // read/write access
+      FALSE,                 // do not inherit the name
+      shmPath);              // name of mapping object
+
+    if (hMapFile == NULL) {
+      WARN("Error: failed to open shared memory mapping %s, error code: %lu", shmPath, GetLastError());
+      ret = ncclSystemError;
+      goto fail;
+    }
+  }
+
+  // Map view of the file mapping into address space
+  hptr = (char*)MapViewOfFile(
+    hMapFile,            // handle to map object
+    FILE_MAP_ALL_ACCESS, // read/write permission
+    0,                   // high-order DWORD of offset
+    0,                   // low-order DWORD of offset
+    realShmSize);        // number of bytes to map
+
+  if (hptr == NULL) {
+    WARN("Error: Could not map view of file %s size %zu, error code: %lu", shmPath, realShmSize, GetLastError());
+    ret = ncclSystemError;
+    goto fail;
+  }
+
+  if (create) {
+    *(int*)(hptr + shmSize) = refcount;
+  } else {
+    int remref = ncclAtomicRefCountDecrement((int*)(hptr + shmSize));
+    if (remref == 0) {
+      INFO(NCCL_ALLOC, "Last reference to shared memory %s released", shmPath);
+    }
+  }
+
+  if (devShmPtr) {
+    INFO(NCCL_ALLOC, "SHM legacy: sharing buffer with GPU via cudaHostRegister + cudaHostGetDevicePointer (host %p size %ld)", (void*)hptr, (long)realShmSize);
+    cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
+    cudaError_t regRes = cudaThreadExchangeStreamCaptureMode(&mode);
+    if (regRes == cudaSuccess)
+      regRes = cudaHostRegister((void*)hptr, realShmSize, cudaHostRegisterPortable | cudaHostRegisterMapped);
+    if (regRes == cudaSuccess)
+      regRes = cudaHostGetDevicePointer(&dptr, (void*)hptr, 0);
+    if (regRes == cudaSuccess)
+      regRes = cudaThreadExchangeStreamCaptureMode(&mode);
+    /* cudaHostRegister on MapViewOfFile memory often fails (driver limitation).
+     * Do not fail the open; leave dptr unset so transport can use staging path. */
+    if (regRes != cudaSuccess) {
+      INFO(NCCL_ALLOC, "SHM legacy: cudaHostRegister/cudaHostGetDevicePointer failed: %s; segment will be used unpinned (staging path)", cudaGetErrorString(regRes));
+      dptr = NULL;
+    }
+  }
+
+  ncclOsShmHandleInit(hMapFile, shmPath, shmSize, realShmSize, hptr, dptr, create, tmphandle);
+exit:
+  *shmPtr = hptr;
+  if (devShmPtr) *devShmPtr = dptr;
+  *handle = tmphandle;
+  return ret;
+fail:
+  WARN("Error while %s shared memory segment %s (size %ld)", create ? "creating" : "attaching to",
+       shmPath, shmSize);
+  if (tmphandle) {
+    ncclOsShmHandleInit(hMapFile, shmPath, shmSize, realShmSize, hptr, dptr, create, tmphandle);
+    (void)ncclOsShmClose(tmphandle);
+    tmphandle = NULL;
+  }
+  hptr = NULL;
+  dptr = NULL;
+  goto exit;
+}
+
+ncclResult_t ncclOsShmClose(struct ncclShmHandleInternal* handle) {
+  ncclResult_t ret = ncclSuccess;
+  if (handle) {
+    if (handle->shmPtr) {
+      // if (handle->devShmPtr) CUDACHECK(cudaHostUnregister(handle->shmPtr));
+      if (!UnmapViewOfFile(handle->shmPtr)) {
+        WARN("UnmapViewOfFile of shared memory %p size %ld failed, error code: %lu",
+             handle->shmPtr, handle->realShmSize, GetLastError());
+        ret = ncclSystemError;
+      }
+    }
+
+    if (handle->shmDesc != NULL) {
+      if (!CloseHandle(handle->shmDesc)) {
+        WARN("CloseHandle for shared memory %s failed, error code: %lu",
+             handle->shmPath ? handle->shmPath : "(null)", GetLastError());
+        ret = ncclSystemError;
+      }
+      free(handle->shmPath);
+    }
+
+    free(handle);
+  }
+  return ret;
+}
+
+ncclResult_t ncclOsShmUnlink(struct ncclShmHandleInternal* handle) {
+  ncclResult_t ret = ncclSuccess;
+  if (handle) {
+    // On Windows, shared memory is automatically cleaned up when all handles are closed
+    if (handle->shmPath != NULL && handle->refcount != NULL && *handle->refcount > 0) {
+      INFO(NCCL_ALLOC, "Unlinking shared memory %s (Windows will clean up automatically)", handle->shmPath);
+      free(handle->shmPath);
+      handle->shmPath = NULL;
+    }
+  }
+  return ret;
+}
+
+/* gettimeofday() replacement for Windows (struct timeval is in winsock2.h via os.h) */
+int gettimeofday(struct timeval* tv, void* tz) {
+  (void)tz;
+  FILETIME ft;
+  GetSystemTimeAsFileTime(&ft);
+  ULARGE_INTEGER uli;
+  uli.LowPart = ft.dwLowDateTime;
+  uli.HighPart = ft.dwHighDateTime;
+  ULONGLONG ns100 = uli.QuadPart;
+  ns100 -= 116444736000000000ULL; /* 1601 to 1970 in 100ns units */
+  tv->tv_sec = (long)(ns100 / 10000000ULL);
+  tv->tv_usec = (int)((ns100 % 10000000ULL) / 10ULL);
+  return 0;
 }

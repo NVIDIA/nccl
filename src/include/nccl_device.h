@@ -12,8 +12,10 @@
 #include "nccl_device/impl/core__funcs.h"
 #include "nccl_device/impl/ll_a2a__funcs.h"
 #include "nccl_device/impl/lsa_barrier__funcs.h"
+#if !defined(NCCL_OS_WINDOWS)
 #include "nccl_device/impl/gin__funcs.h"
 #include "nccl_device/impl/gin_barrier__funcs.h"
+#endif
 #include "nccl_device/impl/ptr__funcs.h"
 #include "nccl_device/impl/reduce_copy__funcs.h"
 #else

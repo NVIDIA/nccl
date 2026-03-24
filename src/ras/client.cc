@@ -11,10 +11,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <getopt.h>
-#include <netdb.h>
-#include <unistd.h>
 
+#include "os.h"
 #include "nccl.h"
 #define NCCL_RAS_CLIENT // Only pull client-specific definitions from the header file below.
 #include "ras_internal.h"
@@ -180,10 +178,18 @@ retry:
       continue;
     }
     // Initially start with a small, 1-sec timeout to quickly eliminate non-responsive processes...
-    if (timeout && (setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv) != 0 ||
-                    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) != 0)) {
-      perror("setsockopt");
-      // Non-fatal; fall through.
+    if (timeout) {
+#if defined(NCCL_OS_LINUX)
+      if (setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv) != 0 ||
+          setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) != 0) {
+#elif defined(NCCL_OS_WINDOWS)
+      DWORD timeout_ms = tv.tv_sec * 1000 + tv.tv_usec / 1000;
+      if (setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout_ms, sizeof(timeout_ms)) != 0 ||
+          setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout_ms, sizeof(timeout_ms)) != 0) {
+#endif
+        perror("setsockopt");
+        // Non-fatal; fall through.
+      }
     }
     if (connect(sock, ai->ai_addr, ai->ai_addrlen) == 0)
       break;
@@ -269,7 +275,12 @@ retry:
   if (timeout) {
     // Increase the socket timeout to accommodate NCCL timeout.
     tv.tv_sec += (timeout > 0 ? timeout : RAS_COLLECTIVE_LEG_TIMEOUT_SEC) + RAS_COLLECTIVE_EXTRA_TIMEOUT_SEC;
+#if defined (NCCL_OS_LINUX)
     if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) != 0) {
+#elif defined (NCCL_OS_WINDOWS)
+    DWORD timeout_ms = tv.tv_sec * 1000 + tv.tv_usec / 1000;
+    if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout_ms, sizeof(timeout_ms)) != 0) {
+#endif
       perror("setsockopt");
       // Non-fatal; fall through.
     }

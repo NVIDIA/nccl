@@ -22,7 +22,7 @@ static int ncclCuMemSupported = 0;
 
 // Determine whether CUMEM & VMM RDMA is supported on this platform
 int ncclIsCuMemSupported() {
-#if CUDART_VERSION < 11030
+#if CUDART_VERSION < 11030 || defined (NCCL_OS_WINDOWS)
   return 0;
 #else
   CUdevice currentDev;

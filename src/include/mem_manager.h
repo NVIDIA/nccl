@@ -130,6 +130,11 @@ typedef struct ncclMemManager {
   int               commCudaDev;
 } ncclMemManager;
 
+struct ncclMemManagerTask {
+  struct ncclMemManagerTask* next;
+  struct ncclComm* comm;
+};
+
 // Initialize memory manager
 ncclResult_t ncclMemManagerInit(struct ncclComm* comm);
 

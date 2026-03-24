@@ -8,7 +8,13 @@
 #ifndef _NCCL_DEVICE_CORE__TYPES_H_
 #define _NCCL_DEVICE_CORE__TYPES_H_
 #include "../core.h"
+#if defined(NCCL_OS_WINDOWS)
+/* Minimal types instead of nccl_device/gin/gin_device_host_common.h (GIN is Linux-only) */
+#define NCCL_GIN_MAX_CONNECTIONS 4
+typedef void *ncclGinWindow_t;
+#else
 #include "nccl_device/gin/gin_device_host_common.h"
+#endif
 
 // nccl.h has: typedef ncclWindow_vidmem* ncclWindow_t;
 struct ncclWindow_vidmem {

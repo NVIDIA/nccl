@@ -9,7 +9,7 @@ NCCL constants and enums.
 This module centralizes all NCCL constants for easy access and organization.
 """
 
-from enum import IntEnum
+from enum import IntEnum, IntFlag
 
 __all__ = [
     "NCCL_UNDEF_INT",
@@ -17,6 +17,7 @@ __all__ = [
     "NCCL_SPLIT_NOCOLOR",
     "CTAPolicy",
     "CommShrinkFlag",
+    "CommSuspendFlag",
     "WindowFlag",
 ]
 
@@ -31,11 +32,18 @@ NCCL_UNDEF_FLOAT: float = -1.0
 NCCL_SPLIT_NOCOLOR: int = -1
 """Color value for ncclCommSplit to indicate rank will not be part of any group."""
 
+# NCCL magic number
+NCCL_MAGIC: int = 0xCAFEBEEF
+"""magic number for NCCL structs."""
+
 
 # CTA (Cooperative Thread Array) Policy flags
-class CTAPolicy(IntEnum):
+class CTAPolicy(IntFlag):
     """
     NCCL performance policy for CTA scheduling.
+
+    Policies can be combined with ``|`` so that NCCL can use different
+    scheduling in various cases.
     """
 
     Default = 0x00
@@ -58,8 +66,18 @@ class CommShrinkFlag(IntEnum):
     """First terminate ongoing parent operations, then shrink the parent communicator."""
 
 
+# Communicator suspend flags
+class CommSuspendFlag(IntFlag):
+    """
+    Flags for ncclCommSuspend behavior.
+    """
+
+    Mem = 0x01
+    """Suspend memory (release dynamic GPU memory allocations)."""
+
+
 # Window registration flags
-class WindowFlag(IntEnum):
+class WindowFlag(IntFlag):
     """
     Flags for window registration.
     """
@@ -68,3 +86,5 @@ class WindowFlag(IntEnum):
     """Default window registration."""
     CollSymmetric = 0x01
     """Collective symmetric window registration."""
+    StrictOrdering = 0x02
+    """Strict ordering for window operations."""

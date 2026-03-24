@@ -20,6 +20,9 @@
 
 #define MAX_CHANNELS                     64
 
+// Bump when ncclProfiler_t alias changes to a new interface version.
+#define NCCL_PROFILER_INTERFACE_VERSION 5
+
 #define INS_CHK(call)                                                   \
   do {                                                                  \
     inspectorResult_t res = call;                                       \
@@ -75,10 +78,12 @@ typedef enum {
   ncclFuncSendRecv = 5,
   ncclFuncSend = 6,
   ncclFuncRecv = 7,
-  ncclNumFuncs = 8
+  ncclFuncAll2All = 8,
+  ncclFuncAllGatherV = 9,
+  ncclNumFuncs = 10
 } ncclFunc_t;
 
-typedef enum {
+enum inspectorResult_t : int {
   inspectorSuccess = 0,
   inspectorUninitializedError,
   inspectorMemoryError,
@@ -95,7 +100,7 @@ typedef enum {
   inspectorNullTally,
   inspectorGlobalInitError,
   inspectorReturn,
-} inspectorResult_t;
+};
 
 typedef enum {
   inspectorTimingSourceKernelGpu = 0,
@@ -109,10 +114,10 @@ struct inspectorEventTraceInfo {
 };
 
 typedef enum {
-  NCCL_INSP_EVT_TRK_COLL_START = 0,
-  NCCL_INSP_EVT_TRK_COLL_STOP = 1,
-  NCCL_INSP_EVT_TRK_COLL_NEVT = 2,
-} inspectorEventTrkColl_t;
+  NCCL_INSP_EVT_TRK_OP_START = 0,
+  NCCL_INSP_EVT_TRK_OP_STOP  = 1,
+  NCCL_INSP_EVT_TRK_OP_NEVT  = 2,
+} inspectorEventTrkOp_t;
 
 typedef enum {
   NCCL_INSP_EVT_TRK_KERNEL_START = 0,
@@ -125,14 +130,19 @@ struct inspectorEventTrkKernelInfo {
   struct inspectorEventTraceInfo evntTrace[NCCL_INSP_EVT_TRK_KERNEL_NEVT];
 };
 
-struct inspectorEventTrkCollInfo {
+// Unified event tracking for both collective and P2P operations.
+struct inspectorEventTrkOpInfo {
   int sn;
   uint32_t nChannels;
-  struct inspectorEventTraceInfo evntTrace[NCCL_INSP_EVT_TRK_COLL_NEVT];
+  struct inspectorEventTraceInfo evntTrace[NCCL_INSP_EVT_TRK_OP_NEVT];
   struct inspectorEventTrkKernelInfo kernelCh[MAX_CHANNELS];
 };
 
-struct inspectorCompletedCollInfo {
+// Unified record stored in the completed ring buffer for both collective and
+// P2P operations.  The isP2p discriminator selects which op-type-specific
+// fields (algo/proto vs peer) are valid.
+struct inspectorCompletedOpInfo {
+  bool isP2p;
   ncclFunc_t func;
   uint64_t sn;
   size_t msgSizeBytes;
@@ -140,18 +150,24 @@ struct inspectorCompletedCollInfo {
   inspectorTimingSource_t timingSource;
   double algoBwGbs;
   double busBwGbs;
-  // Event trace information
-  struct inspectorEventTrkCollInfo collEvtTrk;
+  const char* algo;   // coll only (nullptr for P2P)
+  const char* proto;  // coll only (nullptr for P2P)
+  int peer;           // P2P only (unused for coll)
+  struct inspectorEventTrkOpInfo evtTrk;
 };
 
+#include "inspector_ring.h"
+
 enum {
-  NCCL_COMM_HASH_LENGTH = 17
+  NCCL_COMM_HASH_LENGTH = 17,
+  NCCL_COMM_NAME_MAX = 256
 };
 
 struct inspectorCommInfo {
   struct inspectorCommInfo* next;
 
   const char* commName;
+  char commNameStr[NCCL_COMM_NAME_MAX];
   uint64_t commHash;
   char commHashStr[NCCL_COMM_HASH_LENGTH];
   int rank;
@@ -159,10 +175,12 @@ struct inspectorCommInfo {
   int nnodes;
   int cudaDeviceId;     // CUDA device ID for this communicator
   char deviceUuidStr[37]; // Pre-computed device UUID string for filename generation
-  char cachedStaticLabels[256]; // Cached static parts of Prometheus labels (hostname, job, comm, rank, etc.)
 
-  bool dump;
-  struct inspectorCompletedCollInfo completedCollInfo;
+  bool dump_coll;
+  bool dump_p2p;
+  struct inspectorCompletedRing completedCollRing;
+  struct inspectorCompletedRing completedP2pRing;
+  uint64_t p2pSeqNum;
   pthread_rwlock_t guard;
 };
 
@@ -179,13 +197,13 @@ struct inspectorDumpThread {
   bool run{false};
   jsonFileOutput* jfo;
   char* outputRoot;
-  uint64_t sampleIntervalUsecs;
+  int64_t sampleIntervalUsecs;
   std::vector<deviceFlushInfo> deviceFlushEntries;
   pthread_t pthread;
   pthread_rwlock_t guard;
 
   // Constructor and destructor implemented in inspector.cc where dependencies are available
-  inspectorDumpThread(const char* _outputRoot, uint64_t _sampleIntervalUsecs);
+  inspectorDumpThread(const char* _outputRoot, int64_t _sampleIntervalUsecs);
   ~inspectorDumpThread();
 
   /*
@@ -206,7 +224,8 @@ struct inspectorDumpThread {
 struct inspectorKernelChInfo {
   uint64_t type;
   int refCount; /*unused*/
-  struct inspectorCollInfo *collInfo;
+  uint64_t parentType;  // ncclProfileColl or ncclProfileP2p
+  void* parentObj;      // Pointer to either inspectorCollInfo or inspectorP2pInfo
   uint8_t channelId;
   uint64_t tsStartUsec;
   uint64_t tsCompletedUsec;
@@ -215,6 +234,25 @@ struct inspectorKernelChInfo {
 };
 
 struct inspectorCollInfo {
+  uint64_t type;
+  int refCount;
+  struct inspectorCommInfo *commInfo;
+  const char* func;
+  const char* algo;
+  const char* proto;
+  uint64_t sn;
+  size_t msgSizeBytes;
+  uint64_t tsStartUsec;
+  uint64_t tsCompletedUsec;
+  uint32_t nChannels;
+  uint32_t nKernelChStarted;
+  uint32_t nKernelChCompleted;
+  pthread_rwlock_t guard;
+  struct inspectorKernelChInfo kernelCh[MAX_CHANNELS];
+  struct inspectorEventTrkOpInfo collEvtTrk;
+};
+
+struct inspectorP2pInfo {
   uint64_t type;
   int refCount;
   struct inspectorCommInfo *commInfo;
@@ -228,7 +266,8 @@ struct inspectorCollInfo {
   uint32_t nKernelChCompleted;
   pthread_rwlock_t guard;
   struct inspectorKernelChInfo kernelCh[MAX_CHANNELS];
-  struct inspectorEventTrkCollInfo collEvtTrk;
+  struct inspectorEventTrkOpInfo p2pEvtTrk;
+  int peer;
 };
 
 struct inspectorCommInfoList {
@@ -251,6 +290,12 @@ extern ncclDebugLogger_t logFn;
 // Use NCCL_PROFILE for inspector messages so they can be filtered with NCCL_DEBUG_SUBSYS=PROFILE
 #define INFO_INSPECTOR(...) logFn(NCCL_LOG_INFO, NCCL_PROFILE, __func__, __LINE__, __VA_ARGS__)
 #define TRACE_INSPECTOR(...) logFn(NCCL_LOG_TRACE, NCCL_PROFILE, __func__, __LINE__, __VA_ARGS__)
+// Set NCCL_INSPECTOR_ENABLE_WARN=1 to enable WARN-level inspector logging (default: 0 -> INFO)
+#if NCCL_INSPECTOR_ENABLE_WARN
+#define WARN_INSPECTOR(...) logFn(NCCL_LOG_WARN, NCCL_PROFILE, __func__, __LINE__, __VA_ARGS__)
+#else
+#define WARN_INSPECTOR(...) INFO_INSPECTOR(__VA_ARGS__)
+#endif
 
 inline int ncclTypeSize(ncclDataType_t type) {
   switch (type) {
@@ -275,6 +320,14 @@ inline int ncclTypeSize(ncclDataType_t type) {
   }
 }
 
+// Global flag to control P2P tracking
+extern bool enableNcclInspectorP2p;
+extern bool requireKernelTiming;
+// Minimum message size (bytes) to be `tracked by inspector
+extern size_t ncclInspectorDumpMinSizeBytes;
+
+bool inspectorIsDumpVerboseEnabled();
+
 const char* inspectorErrorString(inspectorResult_t result);
 
 inspectorResult_t inspectorLockInit(pthread_rwlock_t* lockRef);
@@ -291,18 +344,20 @@ inspectorResult_t inspectorAddComm(struct inspectorCommInfo **commInfo,
                                    int nNodes, int nranks, int rank);
 inspectorResult_t inspectorDelComm(struct inspectorCommInfo *commInfo);
 
-void inspectorUpdateCollPerf(struct inspectorCompletedCollInfo *completedColl,
+void inspectorUpdateCollPerf(struct inspectorCompletedOpInfo *completedOp,
                              struct inspectorCollInfo *collInfo);
+void inspectorUpdateP2pPerf(struct inspectorCompletedOpInfo *completedOp,
+                            struct inspectorP2pInfo *p2pInfo);
 ncclDataType_t inspectorStringToDatatype(const char* str);
 
-void inspectorComputeCollBw(struct inspectorCommInfo *commInfo,
-                            struct inspectorCompletedCollInfo *completedColl,
-                            ncclFunc_t collType);
+void inspectorComputeOpBw(struct inspectorCommInfo *commInfo,
+                          struct inspectorCompletedOpInfo *op);
 
 // Utility functions exposed for Prometheus module
 const char* inspectorTimingSourceToString(inspectorTimingSource_t timingSource);
 inspectorResult_t inspectorCommInfoListFinalize(struct inspectorCommInfoList* commList);
 const char* ncclFuncToString(ncclFunc_t fn);
+ncclFunc_t ncclStringToFunc(const char* str);
 
 // Global state
 extern struct inspectorState g_state;

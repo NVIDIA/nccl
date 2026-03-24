@@ -49,6 +49,9 @@ __hidden ncclResult_t pluginGetProperties(int dev, ncclNetProperties_t* props) {
   // maximum transfer sizes the plugin can handle
   props->maxP2pBytes = NCCL_MAX_NET_SIZE_BYTES;
   props->maxCollBytes = NCCL_MAX_NET_SIZE_BYTES;
+  // Set to NCCL_NET_ID_UNDEF will lead NCCL to ignore the value
+  props->railId = NCCL_NET_ID_UNDEF;
+  props->planeId = NCCL_NET_ID_UNDEF;
   return ncclSuccess;
 }
 
@@ -72,7 +75,7 @@ __hidden ncclResult_t pluginFinalize(void* ctx) { return ncclSuccess; }
 
 #define PLUGIN_NAME "Plugin"
 
-const ncclNet_v11_t ncclNetPlugin_v11 = {
+const ncclNet_v12_t ncclNetPlugin_v12 = {
   .name = PLUGIN_NAME,
   .init = pluginInit,
   .devices = pluginDevices,
@@ -93,6 +96,72 @@ const ncclNet_v11_t ncclNetPlugin_v11 = {
   .getDeviceMr = pluginGetDeviceMr,
   .irecvConsumed = pluginIrecvConsumed,
   .makeVDevice   = pluginMakeVDevice,
+  .finalize = pluginFinalize,
+};
+
+__hidden ncclResult_t pluginGetProperties_v11(int dev, ncclNetProperties_v11_t* props) {
+  // Below are default values, if unsure don't change.
+
+  props->name = "Example";
+  // Fill for proper topology detection, e.g. /sys/devices/pci0000:00/0000:00:10.0/0000:0b:00.0
+  props->pciPath = NULL;
+  // Only used to detect NICs with multiple PCI attachments.
+  props->guid = 0;
+  // Add NCCL_PTR_CUDA if GPU Direct RDMA is supported and regMr can take CUDA pointers.
+  props->ptrSupport = NCCL_PTR_HOST;
+  // If you regMr has a fast registration cache, set to 1. If set to 0, user buffer registration may be disabled.
+  props->regIsGlobal = 0;
+  // Force flush after receive. Needed if the control path and data path use a different path to the GPU
+  props->forceFlush = 0;
+  // Speed in *Mbps*. 100000 means 100G
+  props->speed = 100000;
+  // Port number, used in conjunction with guid
+  props->port = 0;
+  // Custom latency (used to help tuning if latency is high. If set to 0, use default NCCL values.
+  props->latency = 0;
+  // Maximum number of comm objects we can create.
+  props->maxComms = 1024*1024;
+  // Maximum number of receive operations taken by irecv().
+  props->maxRecvs = NCCL_PLUGIN_MAX_RECVS;
+  // Coupling with NCCL network device-side code.
+  props->netDeviceType = NCCL_NET_DEVICE_HOST;
+  props->netDeviceVersion = NCCL_NET_DEVICE_INVALID_VERSION;
+  // Used to tell NCCL core whether this is a virtual device fusing multiple physical devices.
+  props->vProps.ndevs = 1;
+  props->vProps.devs[0] = dev;
+  // maximum transfer sizes the plugin can handle
+  props->maxP2pBytes = NCCL_MAX_NET_SIZE_BYTES;
+  props->maxCollBytes = NCCL_MAX_NET_SIZE_BYTES;
+  return ncclSuccess;
+}
+
+__hidden ncclResult_t pluginInit_v11(void** ctx, uint64_t commId, ncclNetCommConfig_v11_t* config, ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) {
+  return pluginInit(ctx, commId, (ncclNetCommConfig_t*)config, logFunction, profFunction);
+}
+
+__hidden ncclResult_t pluginMakeVDevice_v11(int* d, ncclNetVDeviceProps_v11_t* props) { return ncclInternalError; }
+
+const ncclNet_v11_t ncclNetPlugin_v11 = {
+  .name = PLUGIN_NAME,
+  .init = pluginInit_v11,
+  .devices = pluginDevices,
+  .getProperties = pluginGetProperties_v11,
+  .listen = pluginListen,
+  .connect = pluginConnect,
+  .accept = pluginAccept,
+  .regMr = pluginRegMr,
+  .regMrDmaBuf = pluginRegMrDmaBuf,
+  .deregMr = pluginDeregMr,
+  .isend = pluginIsend,
+  .irecv = pluginIrecv,
+  .iflush = pluginIflush,
+  .test = pluginTest,
+  .closeSend = pluginCloseSend,
+  .closeRecv = pluginCloseRecv,
+  .closeListen = pluginCloseListen,
+  .getDeviceMr = pluginGetDeviceMr,
+  .irecvConsumed = pluginIrecvConsumed,
+  .makeVDevice   = pluginMakeVDevice_v11,
   .finalize = pluginFinalize,
 };
 

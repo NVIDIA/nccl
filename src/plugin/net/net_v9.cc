@@ -8,7 +8,7 @@
 #include "nccl_net.h"
 #include "proxy.h"
 #include "checks.h"
-#include <dlfcn.h>
+#include "os.h"
 
 static ncclNet_t ncclNet;
 static ncclCollNet_t ncclCollNet;
@@ -43,6 +43,9 @@ static ncclResult_t ncclNet_getProperties(int dev, ncclNetProperties_t* props) {
   props->maxP2pBytes = props_v9.maxP2pBytes;
   props->maxCollBytes = props_v9.maxCollBytes;
   props->maxMultiRequestSize = 1;
+  // Undefined to be ignore in NCCL core
+  props->railId = NCCL_NET_ID_UNDEF;
+  props->planeId = NCCL_NET_ID_UNDEF;
   return ncclSuccess;
 }
 
@@ -70,6 +73,7 @@ static ncclResult_t ncclNet_connect(void* ctx __attribute__((unused)),
 }
 
 static ncclResult_t ncclNet_makeVDevice(int* d, ncclNetVDeviceProps_t* props) {
+  // Safe cast: devs[] is at the end of the struct and NCCL limits ndevs to NCCL_NET_MAX_DEVS_PER_NIC_V11 for v9 plugins.
   return ncclNet_v9->makeVDevice(d, (ncclNetVDeviceProps_v9_t*)props);
 }
 
@@ -125,6 +129,7 @@ static ncclResult_t ncclCollNet_ireducescatter(void* collComm, int nSendParts, n
 }
 
 static ncclResult_t ncclCollNet_makeVDevice(int* d, ncclNetVDeviceProps_t* props) {
+  // Safe cast: devs[] is at the end of the struct and NCCL limits ndevs to NCCL_NET_MAX_DEVS_PER_NIC_V11 for v9 plugins.
   return ncclCollNet_v9->makeVDevice(d, (ncclNetVDeviceProps_v9_t *)props);
 }
 
@@ -168,7 +173,7 @@ exit:
 }
 
 ncclNet_t* getNcclNet_v9(void* lib) {
-  ncclNet_v9 = (ncclNet_v9_t*)dlsym(lib, "ncclNetPlugin_v9");
+  ncclNet_v9 = (ncclNet_v9_t*)ncclOsDlsym(lib, "ncclNetPlugin_v9");
   if (ncclNet_v9) {
     ncclNet.name = ncclNet_v9->name;
     ncclNet.init = ncclNet_init;
@@ -209,7 +214,7 @@ exit:
 }
 
 ncclCollNet_t* getNcclCollNet_v9(void* lib) {
-  ncclCollNet_v9 = (ncclCollNet_v9_t*)dlsym(lib, "ncclCollNetPlugin_v9");
+  ncclCollNet_v9 = (ncclCollNet_v9_t*)ncclOsDlsym(lib, "ncclCollNetPlugin_v9");
   if (ncclCollNet_v9) {
     ncclCollNet.name = ncclCollNet_v9->name;
     ncclCollNet.init = ncclCollNet_init;

@@ -26,6 +26,11 @@ CXXFLAGS  += $(INCFLAGS)
 
 NVCUFLAGS_SYM += -ccbin $(CXX) $(CXXSTD) --expt-extended-lambda -Xptxas -maxrregcount=128 -Xfatbin -compress-all
 NVCUFLAGS_SYM += $(INCFLAGS) --compiler-options "-fPIC -fvisibility=hidden"
+# So that nccl_device.h includes gin__funcs.h and common.cu / symmetric GIN kernels get ncclGin_BackendMask<12> definition
+ifeq ($(NCCL_OS_LINUX), 1)
+NVCUFLAGS += -DNCCL_OS_LINUX
+NVCUFLAGS_SYM += -DNCCL_OS_LINUX -DDOCA_VERBS_USE_CUDA_WRAPPER -DDOCA_VERBS_USE_NET_WRAPPER
+endif
 #NVCUFLAGS_SYM += --ptx
 
 SAY = @bash -c 'path="$$2"; [[ "$$(realpath "$$2")" =~ ^$(subst .,\.,$(abspath $(NCCLDIR)))/(.*)$$ ]] && path="$${BASH_REMATCH[1]}"; printf "%-15s %s\n" "$$1" "$$path"' SAY
@@ -98,6 +103,12 @@ $(OBJDIR)/gensrc/symmetric/rules.mk: $(OBJDIR)/gensrc/symmetric ;
 
 SRCS = common.cu onerank.cu
 
+# GIN symbol flow (how ncclGin_BackendMask<...> reaches the test):
+#   - common.cu uses ncclGin and is built with the default rule below (no -G).
+#   - Without -G, the template is implicitly instantiated; the ctor/members are emitted in common.cu.o.
+#   - common.cu.o is in LIB_OBJS -> device link (dlink) -> DEVGLUE_OBJ -> MANIFEST.
+#   - src/Makefile links libnccl.so with $$(cat $(DEVMANIFEST)), so device objs (incl. common.cu.o) are in the .so.
+#   - test/perf links with -lnccl; the test's device code references the symbol; it is resolved from the .so.
 LIB_OBJS = $(patsubst %, $(OBJDIR)/%.o, $(SRCS)) $(LIB_OBJS_GEN) $(LIB_OBJS_SYM_GEN)
 
 $(OBJDIR)/%.o: % $(OBJDIR)/%.d
@@ -118,9 +129,11 @@ $(OBJDIR)/genobj/%.d: $(OBJDIR)/gensrc/%
 $(OBJDIR)/genobj/symmetric/%.d: $(OBJDIR)/gensrc/symmetric/%
 	$(call DEPENDS,$@,$<)
 
+# Device link: combine all device .o (incl. common.cu.o with GIN symbol) into device_glue.o
 $(DEVGLUE_OBJ): $(LIB_OBJS)
 	$(NVCC) $(NVCUFLAGS) -dlink $^ -o $@
 
+# Manifest lists device objs for src/Makefile; they get linked into libnccl.so so tests can resolve device symbols
 $(MANIFEST): $(LIB_OBJS) $(DEVGLUE_OBJ)
 	@echo $^ > $@
 

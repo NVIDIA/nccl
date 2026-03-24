@@ -103,10 +103,10 @@ public:
   virtual void getNextSendAddr(int curStep, uint8_t **sendbuffOut, size_t *sizeOut, void **mhandleOut) = 0;
   virtual void getNextRecvAddr(int curStep, uint8_t **recvbuffOut, size_t *sizeOut, void **mhandleOut) = 0;
   int incRefCount() {
-    return COMPILER_ATOMIC_ADD_FETCH(&refCount, 1, std::memory_order_relaxed);
+    return (int)COMPILER_ATOMIC_ADD_FETCH(&refCount, 1, std::memory_order_relaxed);
   }
   int decRefCount() {
-    return COMPILER_ATOMIC_SUB_FETCH(&refCount, 1, std::memory_order_release);
+    return (int)COMPILER_ATOMIC_SUB_FETCH(&refCount, 1, std::memory_order_release);
   }
   RingAlgorithm() { refCount = 0; }
   virtual ~RingAlgorithm() {};

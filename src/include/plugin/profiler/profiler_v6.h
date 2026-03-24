@@ -69,7 +69,7 @@ typedef struct {
     } p2p;
 
     struct {
-      pid_t pid;
+      ncclPid_t pid;
       uint8_t channelId;
       int peer;
       int nSteps;

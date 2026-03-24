@@ -19,6 +19,8 @@ ncclResult_t buildMlx5dvSymbols(struct ncclMlx5dvSymbols* mlx5dvSymbols) {
   ASSIGN_SYM(mlx5dvSymbols, mlx5dv_is_supported, mlx5dv_internal_is_supported);
   ASSIGN_SYM(mlx5dvSymbols, mlx5dv_get_data_direct_sysfs_path, mlx5dv_internal_get_data_direct_sysfs_path);
   ASSIGN_SYM(mlx5dvSymbols, mlx5dv_reg_dmabuf_mr, mlx5dv_internal_reg_dmabuf_mr);
+  ASSIGN_SYM(mlx5dvSymbols, mlx5dv_query_device, mlx5dv_internal_query_device);
+  ASSIGN_SYM(mlx5dvSymbols, mlx5dv_create_qp, mlx5dv_internal_create_qp);
   return ncclSuccess;
 }
 
@@ -69,6 +71,10 @@ ncclResult_t buildMlx5dvSymbols(struct ncclMlx5dvSymbols* mlx5dvSymbols) {
   LOAD_SYM_VERSION(mlx5dvhandle, "mlx5dv_get_data_direct_sysfs_path", mlx5dvSymbols->mlx5dv_internal_get_data_direct_sysfs_path, "MLX5_1.25");
   // Cherry-pick the ibv_reg_dmabuf_mr API from MLX5 1.25
   LOAD_SYM_VERSION(mlx5dvhandle, "mlx5dv_reg_dmabuf_mr", mlx5dvSymbols->mlx5dv_internal_reg_dmabuf_mr, "MLX5_1.25");
+  // mlx5dv_query_device is versioned at MLX5_1.0
+  LOAD_SYM_VERSION(mlx5dvhandle, "mlx5dv_query_device", mlx5dvSymbols->mlx5dv_internal_query_device, "MLX5_1.0");
+  // mlx5dv_create_qp is versioned at MLX5_1.3
+  LOAD_SYM_VERSION(mlx5dvhandle, "mlx5dv_create_qp", mlx5dvSymbols->mlx5dv_internal_create_qp, "MLX5_1.3");
 
   return ncclSuccess;
 
@@ -76,6 +82,8 @@ teardown:
   mlx5dvSymbols->mlx5dv_internal_is_supported = NULL;
   mlx5dvSymbols->mlx5dv_internal_get_data_direct_sysfs_path = NULL;
   mlx5dvSymbols->mlx5dv_internal_reg_dmabuf_mr = NULL;
+  mlx5dvSymbols->mlx5dv_internal_query_device = NULL;
+  mlx5dvSymbols->mlx5dv_internal_create_qp = NULL;
 
   if (mlx5dvhandle != NULL) dlclose(mlx5dvhandle);
   return ncclSystemError;

@@ -21,7 +21,14 @@ extern int ncclDebugLevel;
 extern uint64_t ncclDebugMask;
 extern FILE *ncclDebugFile;
 
+#ifdef NCCL_OS_LINUX
 void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *filefunc, int line, const char *fmt, ...) __attribute__ ((format (printf, 5, 6)));
+#elif defined(NCCL_OS_WINDOWS)
+void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *filefunc, int line, const char *fmt, ...);
+#else
+/* Fallback so headers (e.g. alloc.h via checks.h) compile when OS is not set (e.g. unit tests with MPI). */
+void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *filefunc, int line, const char *fmt, ...);
+#endif
 
 // Let code temporarily downgrade WARN into INFO
 extern thread_local int ncclDebugNoWarn;
@@ -66,7 +73,15 @@ extern char ncclLastError[];
 #endif
 
 void ncclSetThreadName(std::thread& thread, const char *fmt, ...);
-
+#ifdef __cplusplus
+extern "C" {
+#endif
+#ifdef ncclResetDebugInit
+#undef ncclResetDebugInit
+#endif
 void ncclResetDebugInit();
+#ifdef __cplusplus
+}
+#endif
 
 #endif

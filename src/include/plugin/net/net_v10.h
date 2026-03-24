@@ -10,7 +10,7 @@
 
 typedef struct {
   int ndevs;
-  int devs[NCCL_NET_MAX_DEVS_PER_NIC];
+  int devs[NCCL_NET_MAX_DEVS_PER_NIC_V11];
 } ncclNetVDeviceProps_v10_t;
 
 #define NCCL_NET_TRAFFIC_CLASS_UNDEF -1

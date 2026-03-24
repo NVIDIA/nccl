@@ -523,4 +523,78 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_signal_counter(
                                         nic_handler>(qps, prod_indices, code_opt);
 }
 
+template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
+              DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
+          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>
+__device__ static __forceinline__ void doca_gpu_dev_verbs_get_counter(
+    struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr raddr,
+    struct doca_gpu_dev_verbs_addr laddr, size_t size, struct doca_gpu_dev_verbs_qp *companion_qp,
+    struct doca_gpu_dev_verbs_addr counter_raddr, struct doca_gpu_dev_verbs_addr counter_laddr,
+    uint64_t counter_val, uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
+    constexpr unsigned int num_qps = 2;
+    struct doca_gpu_dev_verbs_wqe *wqe_ptr;
+    uint64_t base_wqe_idx;
+    uint64_t wqe_idx;
+    size_t remaining_size = size;
+    size_t size_;
+    uint64_t num_chunks =
+        doca_gpu_dev_verbs_div_ceil_aligned_pow2(size, DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE_SHIFT);
+    num_chunks = num_chunks > 1 ? num_chunks : 1;
+
+    base_wqe_idx =
+        doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(qp, num_chunks, code_opt);
+#pragma unroll 1
+    for (uint64_t i = 0; i < num_chunks; i++) {
+        wqe_idx = base_wqe_idx + i;
+        size_ = remaining_size > DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE
+                    ? DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE
+                    : remaining_size;
+        wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(qp, wqe_idx);
+
+        [[likely]] if (size_ > 0) {
+            doca_gpu_dev_verbs_wqe_prepare_read(
+                qp, wqe_ptr, wqe_idx,
+                DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE,
+                raddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), raddr.key,
+                laddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), laddr.key, size_);
+        } else {
+            doca_gpu_dev_verbs_wqe_prepare_nop(qp, wqe_ptr, wqe_idx,
+                                               DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE);
+        }
+        remaining_size -= size_;
+    }
+
+    doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(qp, base_wqe_idx, wqe_idx);
+
+    uint64_t companion_base_wqe_idx =
+        doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(companion_qp, 2, code_opt);
+    uint64_t companion_wqe_idx = companion_base_wqe_idx;
+
+    wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(companion_qp, companion_wqe_idx);
+    doca_gpu_dev_verbs_wqe_prepare_wait(companion_qp, wqe_ptr, companion_wqe_idx,
+                                        DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE, wqe_idx,
+                                        qp->cq_sq.cq_num);
+
+    ++companion_wqe_idx;
+    wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(companion_qp, companion_wqe_idx);
+    doca_gpu_dev_verbs_wqe_prepare_atomic(
+        companion_qp, wqe_ptr, companion_wqe_idx, DOCA_GPUNETIO_IB_MLX5_OPCODE_ATOMIC_FA,
+        DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE, counter_raddr.addr, counter_raddr.key,
+        counter_laddr.addr, counter_laddr.key, sizeof(uint64_t), counter_val, 0);
+    doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(companion_qp, companion_base_wqe_idx,
+                                                              companion_wqe_idx);
+
+    doca_gpu_dev_verbs_qp *qps[num_qps] = {qp, companion_qp};
+    uint64_t prod_indices[num_qps] = {wqe_idx + 1, companion_wqe_idx + 1};
+
+    // mark_wqes_ready has already called fence.release with sufficiently strong scope. No need to
+    // call it again in submit.
+    constexpr enum doca_gpu_dev_verbs_sync_scope submit_sync_scope =
+        (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU)
+            ? DOCA_GPUNETIO_VERBS_SYNC_SCOPE_THREAD
+            : DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU;
+    doca_gpu_dev_verbs_submit_multi_qps<num_qps, resource_sharing_mode, submit_sync_scope,
+                                        nic_handler>(qps, prod_indices, code_opt);
+}
+
 #endif /* DOCA_GPUNETIO_DEV_VERBS_COUNTER_CUH */

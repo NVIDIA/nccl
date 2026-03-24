@@ -81,7 +81,16 @@ constexpr uint32_t kernelMask_Gin = 1<<ncclSymkKernelId_ReduceScatter_RailA2A_Ls
                                     1<<ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC |
                                     1<<ncclSymkKernelId_AllGather_RailRing_LsaSTMC;
 
-constexpr uint32_t kernelMask_DynamicSmem = kernelMask_Gin & kernelMask_RS;
+constexpr uint32_t kernelMask_DynamicSmem = (kernelMask_Gin & kernelMask_RS) |
+#if defined(ENABLE_TMA)
+                                            1<<ncclSymkKernelId_AllGather_ST |
+                                            1<<ncclSymkKernelId_AllGather_STMC |
+                                            1<<ncclSymkKernelId_ReduceScatter_LD |
+                                            1<<ncclSymkKernelId_AllReduce_RSxLD_AGxST |
+                                            1<<ncclSymkKernelId_AllGather_RailRing_LsaSTMC;
+#else
+                                            0;
+#endif
 
 int ncclSymkLLKernelMask() {
   return kernelMask_LL;
@@ -113,7 +122,7 @@ static uint32_t kernelMask_user() {
       got = 0;
       for (int k=0; k < (int)ncclSymkKernelId_Count; k++) {
         if (strcmp(kernelName[k], name) == 0) {
-          COMPILER_ATOMIC_STORE(&cache, 1<<k, std::memory_order_relaxed);
+          COMPILER_ATOMIC_STORE(&cache, uint32_t(1<<k), std::memory_order_relaxed);
           got = 1<<k;
           break;
         }
@@ -411,7 +420,8 @@ ncclResult_t ncclSymkInitOnce(struct ncclComm* comm) {
   if (!symk->initialized) {
     symk->initialized = true;
     struct ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
-    symk->hasLsaMultimem = comm->nvlsSupport && ncclTeamLsa(comm).nRanks > 2;
+    // Disable LSA multicast for cross-clique since NVLS isn't available across cliques
+    symk->hasLsaMultimem = comm->nvlsSupport && ncclTeamLsa(comm).nRanks > 2 && !comm->p2pCrossClique;
     reqs.lsaMultimem = symk->hasLsaMultimem;
     reqs.lsaBarrierCount = ncclSymkMaxBlocks;
 
@@ -462,7 +472,7 @@ ncclResult_t ncclSymkInitOnce(struct ncclComm* comm) {
       railSignalReq.outGinCounterStart = &symk->kcomm.ginCounterPerBlock;
       railSignalReq.next = reqs.resourceRequirementsList;
       reqs.resourceRequirementsList = &railSignalReq;
-      reqs.railGinBarrierCount = ncclSymkMaxBlocks;
+      reqs.barrierCount = ncclSymkMaxBlocks;
 
       bool railedGinInitialized = (comm->sharedRes->ginState.connected &&
                                     comm->sharedRes->ginState.ginConnectionType == NCCL_GIN_CONNECTION_RAIL);
@@ -482,7 +492,7 @@ ncclResult_t ncclSymkFinalize(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
-static bool ncclSymkImplemented(ncclFunc_t coll, int/*ncclDevRedOp_t*/ red, ncclDataType_t ty) {
+static bool ncclSymkImplemented(ncclFunc_t coll, int/*ncclDevRedOp_t*/ red, ncclDataType_t ty, bool needGin) {
   bool isFloat;
   switch (ty) {
   case ncclFloat64:
@@ -503,7 +513,11 @@ static bool ncclSymkImplemented(ncclFunc_t coll, int/*ncclDevRedOp_t*/ red, nccl
     return true;
   case ncclFuncAllReduce:
   case ncclFuncReduceScatter:
-    return red == ncclDevSum && isFloat && ty != ncclFloat64;
+    if (red == ncclDevSum) {
+      return isFloat && ty != ncclFloat64;
+    } else if (red == ncclDevSumPostDiv) {
+      return isFloat && ty != ncclFloat64 && needGin; // avg not supported on non-GIN kernels
+    }
   default:
     return false;
   }
@@ -523,16 +537,16 @@ static uint32_t ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int/*ncclDe
     case ncclUint64:
     case ncclFloat16:
     case ncclBfloat16:
-      hasLDMC = red == ncclDevSum || red == ncclDevMinMax;
+      hasLDMC = red == ncclDevSum || red == ncclDevMinMax || red == ncclDevSumPostDiv;
       break;
     case ncclFloat8e4m3:
     case ncclFloat8e5m2:
-      hasLDMC = red == ncclDevSum || red == ncclDevMinMax;
+      hasLDMC = red == ncclDevSum || red == ncclDevMinMax || red == ncclDevSumPostDiv;
       hasLDMC &= comm->compCap >= 100;
       break;
     case ncclFloat:
     case ncclDouble:
-      hasLDMC = red == ncclDevSum;
+      hasLDMC = red == ncclDevSum || red == ncclDevSumPostDiv;
       break;
     default: break;
     }
@@ -557,9 +571,10 @@ static uint32_t ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int/*ncclDe
 
 bool ncclSymkAvailable(struct ncclComm* comm, ncclFunc_t coll, int/*ncclDevRedOp_t*/ red,
                        ncclDataType_t ty, size_t nElts) {
+  bool needGin = ncclTeamLsa(comm).nRanks < comm->nRanks;
   if (!comm->isAllDirectNvlink)
     return false;
-  if (!ncclSymkImplemented(coll, red, ty))
+  if (!ncclSymkImplemented(coll, red, ty, needGin))
     return false;
 
   return (ncclSymkMask(comm, coll, red, ty, nElts) != 0);

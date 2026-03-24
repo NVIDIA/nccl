@@ -37,6 +37,11 @@
 extern char ncclIbIfName[MAX_IF_NAME_SIZE+1];
 extern union ncclSocketAddress ncclIbIfAddr;
 
+enum ncclIbRequestMatchingScheme {
+  BY_INDEX=0,
+  BY_ID=1,
+};
+
 struct ncclIbMr {
   uintptr_t addr;
   size_t pages;
@@ -50,7 +55,7 @@ struct ncclIbMrCache {
 };
 
 extern int ncclNMergedIbDevs;
-#define NCCL_IB_MAX_DEVS_PER_NIC 4
+#define NCCL_IB_MAX_DEVS_PER_NIC NCCL_NET_MAX_DEVS_PER_NIC
 #define MAX_MERGED_DEV_NAME (MAXNAMESIZE*NCCL_IB_MAX_DEVS_PER_NIC)+NCCL_IB_MAX_DEVS_PER_NIC
 struct alignas(64) ncclIbMergedDev {
   ncclNetVDeviceProps_t vProps;
@@ -87,6 +92,7 @@ struct alignas(64) ncclIbDev {
   float latency;
   struct ncclIbMrCache mrCache;
   int ar; // ADAPTIVE_ROUTING
+  uint32_t oooRqSize;  // valid only when ar=1
   struct ibv_port_attr portAttr;
   struct ncclIbStats stats;
   int dmaBufSupported;
@@ -153,6 +159,7 @@ struct ncclProfilerInfo {
 #define NCCL_NET_IB_REQ_RECV 2
 #define NCCL_NET_IB_REQ_FLUSH 3
 #define NCCL_NET_IB_REQ_GIN_IPUT 4
+#define NCCL_NET_IB_REQ_GIN_IGET 5
 extern const char* ncclIbReqTypeStr[];
 
 // Maximal number of QPs a communicator can have for data transfers
@@ -214,8 +221,11 @@ struct ncclIbRequest {
     struct {
       int rank;
     } iput;
+    struct {
+      int rank;
+    } iget;
   };
-  int connectionId;
+  void* ginProxyCtx;
 };
 
 struct ncclIbNetCommDevBase {
@@ -233,13 +243,51 @@ struct ncclIbSendFifo {
   uint32_t nreqs;
   uint32_t tag;
   uint64_t idx;
-  char padding[16];
+};
+
+struct ncclIbQpInitAttr {
+  ibv_qp_state state;
+  int pkeyIndex;
+  uint8_t portNum;
+  int qpAccessFlags;
+};
+
+struct ncclIbQpRtrAttr {
+  enum ibv_mtu mtu;
+  uint8_t linkLayer;
+  uint8_t tc;
+  int sl;
+
+  uint32_t remoteQpNum;
+  uint32_t remoteLid;
+  union ibv_gid remoteGid;
+
+  uint8_t localIbPort;
+  union ibv_gid localGid;
+  int32_t localGidIndex;
+};
+
+struct ncclIbQpRtsAttr {
+  int timeout;
+  int retryCnt;
 };
 
 struct ncclIbQp {
   struct ibv_qp* qp;
   // The index of the device on which this QP was created on.
   int devIndex;
+
+  // The ECE (enhanced connection establishment) used on this QP.
+  // Note: This is the reduced ECE exchanged between the sender and receiver.
+  struct ibv_ece ece;
+  int eceSupported;
+
+  // Stores the attributes used to configure the QP to allow QP restore after
+  // failure.
+  struct ncclIbQpInitAttr initAttr;
+  struct ncclIbQpRtrAttr rtrAttr;
+  struct ncclIbQpRtsAttr rtsAttr;
+
   // The index of the device on the remote side to which this QP is connected
   // to.
   int remDevIdx;
@@ -297,6 +345,9 @@ struct alignas(32) ncclIbNetCommBase {
   int ready;
   // Track necessary remDevInfo here
   int nRemDevs;
+  bool remOooRq;
+  bool localOooRq;
+  int recvMatchingScheme;
   int nDataQps;
   struct ncclIbDevInfo remDevs[NCCL_IB_MAX_DEVS_PER_NIC];
   // statistics about the comm

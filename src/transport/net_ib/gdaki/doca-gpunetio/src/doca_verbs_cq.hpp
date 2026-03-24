@@ -46,6 +46,7 @@ struct doca_verbs_cq_attr {
     uint64_t external_umem_dbr_offset{};
     struct doca_verbs_uar *external_uar{};
     enum doca_verbs_cq_overrun cq_overrun;
+    uint8_t cq_collapsed;
 };
 
 /**
@@ -86,7 +87,8 @@ struct doca_verbs_cq {
     void create(struct doca_verbs_cq_attr &cq_attr);
 
     doca_error_t create_cq_obj(uint32_t uar_id, uint32_t log_nb_cqes, uint64_t db_umem_offset,
-                               uint32_t db_umem_id, uint32_t wq_umem_id, bool cq_overrun) noexcept;
+                               uint32_t db_umem_id, uint32_t wq_umem_id, bool cq_overrun,
+                               uint8_t cq_collapsed) noexcept;
 
     /**
      * @brief Get CQ number

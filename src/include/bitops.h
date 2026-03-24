@@ -75,24 +75,24 @@ static __host__ __device__ constexpr Z roundDown(X x, Y y) {
 // assumes second argument is a power of 2
 template<typename X, typename Y, typename Z = decltype(X()+Y())>
 static __host__ __device__ constexpr Z alignUp(X x, Y a) {
-  return (x + a-1) & -Z(a);
+  return (x + a-1) & ((Z)0 - Z(a));
 }
 template<typename T>
 static __host__ __device__ T* alignUp(T* x, size_t a) {
   static_assert(sizeof(T) == 1, "Only single byte types allowed.");
-  return reinterpret_cast<T*>((reinterpret_cast<uintptr_t>(x) + a-1) & -uintptr_t(a));
+  return reinterpret_cast<T*>((reinterpret_cast<uintptr_t>(x) + a-1) & ((uintptr_t)0 - (uintptr_t)(a)));
 }
 
 // assumes second argument is a power of 2
 template<typename X, typename Y, typename Z = decltype(X()+Y())>
 static __host__ __device__ constexpr Z alignDown(X x, Y a) {
-  return x & -Z(a);
+  return x & ((Z)0 - Z(a));
 }
 
 template<typename T>
 static __host__ __device__ T* alignDown(T* x, size_t a) {
   static_assert(sizeof(T) == 1, "Only single byte types allowed.");
-  return reinterpret_cast<T*>(reinterpret_cast<uintptr_t>(x) & -uintptr_t(a));
+  return reinterpret_cast<T*>(reinterpret_cast<uintptr_t>(x) & ((uintptr_t)0 - (uintptr_t)(a)));
 }
 
 template<typename Int>
@@ -144,6 +144,8 @@ static __host__ __device__ uint32_t mul32hi(uint32_t a, uint32_t b) {
 static __host__ __device__ uint64_t mul64hi(uint64_t a, uint64_t b) {
 #if __CUDA_ARCH__
   return __umul64hi(a, b);
+#elif defined(NCCL_OS_WINDOWS)
+  return __umulh(a, b);
 #else
   return (uint64_t)(((unsigned __int128)a)*b >> 64);
 #endif
@@ -155,7 +157,7 @@ static __host__ __device__ uint32_t imulRcp32(uint32_t x, uint32_t xrcp, uint32_
   if (xrcp == 0) return yrcp;
   if (yrcp == 0) return xrcp;
   uint32_t rcp = mul32hi(xrcp, yrcp);
-  uint32_t rem = -x*y*rcp;
+  uint32_t rem = 0u - x*y*rcp;
   if (x*y <= rem) rcp += 1;
   return rcp;
 }
@@ -163,7 +165,7 @@ static __host__ __device__ uint64_t imulRcp64(uint64_t x, uint64_t xrcp, uint64_
   if (xrcp == 0) return yrcp;
   if (yrcp == 0) return xrcp;
   uint64_t rcp = mul64hi(xrcp, yrcp);
-  uint64_t rem = -x*y*rcp;
+  uint64_t rem = 0ULL - x*y*rcp;
   if (x*y <= rem) rcp += 1;
   return rcp;
 }
@@ -199,7 +201,7 @@ static __host__ __device__ uint32_t idivFast32(uint32_t x, uint32_t y, uint32_t 
 static __host__ __device__ uint32_t idivFast64(uint64_t x, uint64_t y, uint64_t yrcp) {
   uint64_t q, r;
   idivmodFast64(&q, &r, x, y, yrcp);
-  return q;
+  return (uint32_t)q;
 }
 
 static __host__ __device__ uint32_t imodFast32(uint32_t x, uint32_t y, uint32_t yrcp) {
@@ -210,7 +212,7 @@ static __host__ __device__ uint32_t imodFast32(uint32_t x, uint32_t y, uint32_t 
 static __host__ __device__ uint32_t imodFast64(uint64_t x, uint64_t y, uint64_t yrcp) {
   uint64_t q, r;
   idivmodFast64(&q, &r, x, y, yrcp);
-  return r;
+  return (uint32_t)r;
 }
 
 template<typename Int>

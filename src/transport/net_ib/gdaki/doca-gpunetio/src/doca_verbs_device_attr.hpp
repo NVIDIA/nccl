@@ -91,6 +91,8 @@ struct doca_verbs_device_attr {
     uint8_t m_is_rts2rts_qp_dscp_supported{};
     uint8_t m_phys_port_cnt{};
     uint8_t m_send_dbr_mode_no_dbr_ext{};
+    uint8_t m_max_qp_init_rd_atom{};
+    uint8_t m_max_qp_rd_atom{};
 
    private:
     doca_verbs_device_attr &operator=(doca_verbs_device_attr const &) = delete;

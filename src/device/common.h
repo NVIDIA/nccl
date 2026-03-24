@@ -24,7 +24,12 @@
 #endif
 
 typedef void(*ncclDevFuncPtr_t)();
+#if defined(NCCL_OS_WINDOWS)
+/* MSVC C2133: extern array of unknown size needs a complete type; use pointer instead. */
+extern __device__ ncclDevFuncPtr_t const * ncclDevFuncTable;
+#else
 extern __device__ ncclDevFuncPtr_t const ncclDevFuncTable[];
+#endif
 
 struct ncclShmemGroup {
   ncclConnInfo *recvConns[NCCL_MAX_ARITY];
@@ -236,7 +241,7 @@ __device__ __forceinline__ void loadWorkBatchToShmem(
     } else {
       if (tid == 0) {
         ncclShmem.batchIx = batchIx;
-        ncclShmem.nextBatchIx = (batch.nextJump == 0) ? -1 : batchIx + batch.nextJump;
+        ncclShmem.nextBatchIx = (batch.nextJump == 0) ? -1 : (int)(batchIx + batch.nextJump);
         ncclShmem.workType = (enum ncclDevWorkType)batch.workType;
         ncclShmem.nWorks = workCursor;
         ncclShmem.funcId = batch.funcId;

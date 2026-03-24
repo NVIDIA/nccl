@@ -8,11 +8,55 @@
 #ifndef NCCL_SYMMETRIC_SCHED_H_
 #define NCCL_SYMMETRIC_SCHED_H_
 
+#include "device.h"
+#include "nccl.h"
 #include "scheduler.h"
+#include <cuda_fp16.h>
+#if defined(__CUDA_FP8_TYPES_EXIST__)
+#include <cuda_fp8.h>
+#endif
 
 extern int64_t ncclParamSingleProcMemRegEnable();
 
 NCCL_PARAM(SymNoWinEnable, "SYM_NOWIN_ENABLE", 0);
+
+ncclDevRedOp_t symkRedOp(ncclRedOp_t redOp, ncclDevRedOp_t devRedOp) {
+  if (redOp == ncclAvg) {
+    return ncclDevSumPostDiv;
+  }
+  return devRedOp;
+}
+
+void convertCollTaskToSymmetricTask(struct ncclComm* comm,struct ncclTaskColl* task) {
+  task->opDev.op = symkRedOp(task->opHost, task->opDev.op);
+  if (task->opDev.op == ncclDevSumPostDiv) {
+    union {
+      __half f16; float f32; uint64_t u64;
+      void *ptr;
+    };
+    u64 = 0;
+    switch (task->datatype) {
+      // 16-bit floats use float accumulator
+      case ncclFloat16:
+#if defined(__CUDA_BF16_TYPES_EXIST__)
+      case ncclBfloat16:
+#endif
+        f32 = float(1.0/comm->nRanks);  // ncclDevSumPostDiv actually multiplies by the scalar, not divides.
+        task->opDev.scalarArg = u64;
+        return;
+#if defined(__CUDA_FP8_TYPES_EXIST__)
+        // fp8 types accumulate in half
+      case ncclFloat8e4m3:
+      case ncclFloat8e5m2:
+        f16 = __float2half(float(1.0/comm->nRanks));  // ncclDevSumPostDiv actually multiplies by the scalar, not divides.
+        task->opDev.scalarArg = u64;
+        break;
+#endif
+      default:
+        break;
+      }
+  }
+}
 
 ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskColl* task, struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next>* symTaskQueue, struct ncclTaskColl** remainTasksHead) {
   ncclResult_t ret = ncclSuccess;
@@ -31,14 +75,15 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
   while (task != nullptr) {
     int index;
     struct ncclTaskColl* next = task->next;
-    bool symAvailable = ncclSymkAvailable(comm, task->func, task->opDev.op, task->datatype, task->count);
+    ncclDevRedOp_t symkOp = symkRedOp(task->opHost, task->opDev.op);
+    bool symAvailable = ncclSymkAvailable(comm, task->func, symkOp, task->datatype, task->count);
 
     if (symAvailable) {
       NCCLCHECK(ncclDevrFindWindow(comm, task->sendbuff, &task->sendWin));
       NCCLCHECK(ncclDevrFindWindow(comm, task->recvbuff, &task->recvWin));
       NCCLCHECK(ncclGetSymRegType(task->sendWin, task->recvWin, &task->winRegType));
 
-      index = (((int)task->func * ncclNumDevRedOps + (int)task->opDev.op) * ncclNumTypes + (int)task->datatype) * ncclNumSymRegTypes + (int)task->winRegType;
+      index = (((int)task->func * ncclNumDevRedOps + symkOp) * ncclNumTypes + (int)task->datatype) * ncclNumSymRegTypes + (int)task->winRegType;
       if (tasksSymByFnOpTy[index] == nullptr) fnOpTySymIndices[fnOpTySymCount++] = index;
       task->next = tasksSymByFnOpTy[index];
       tasksSymByFnOpTy[index] = task;
@@ -73,6 +118,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
       struct ncclTaskColl* headTask = task;
       size_t cellCount = NCCL_SYM_KERNEL_CELL_SIZE / ncclTypeSize(headTask->datatype);
       bool forced = false;
+      ncclDevRedOp_t symkOp = symkRedOp(task->opHost, task->opDev.op);
       // For now we assume higher kernel id means a kernel for larger data size
       while (task != nullptr) {
         size_t count;
@@ -86,7 +132,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
         }
         task = task->next;
       }
-      NCCLCHECK(ncclSymkPickKernel(comm, headTask->func, headTask->opDev.op, headTask->datatype,
+      NCCLCHECK(ncclSymkPickKernel(comm, headTask->func, symkOp, headTask->datatype,
                                    countTotal, countMax, nWorks, headTask->winRegType,
                                    &estTimeUs, &kernelId, &nChannels, &nWarps, &forced));
       task = headTask;
@@ -110,7 +156,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
           if (!needFallback) {
             // First query legacy tuning
             int collNetSupport = 0;
-            int nvlsSupport = comm->nvlsSupport && (ncclNvlsSupported(headTask->opDev.op, headTask->datatype) || headTask->func == ncclFuncAllGather);
+            int nvlsSupport = comm->nvlsSupport && (ncclNvlsSupported(task->opDev.op, headTask->datatype) || headTask->func == ncclFuncAllGather);
             NCCLCHECK(ncclGetCollNetSupport(comm, headTask, &collNetSupport));
             NCCLCHECK(ncclGetAlgoInfo(comm, headTask, collNetSupport, nvlsSupport, 1));
             needFallback = (headTask->protocol != NCCL_PROTO_LL);
@@ -149,6 +195,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
         task->devFuncId = (uint32_t)kernelId;
         task->nMaxChannels = nChannels;
         task->nWarps = nWarps;
+        convertCollTaskToSymmetricTask(comm, task);
         ncclIntruQueueEnqueue(&planner->collSymTaskQueue, task);
         task = next;
         if (isSymLast) break;

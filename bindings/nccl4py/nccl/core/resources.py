@@ -25,6 +25,7 @@ __all__ = [
     "RegisteredBufferHandle",
     "RegisteredWindowHandle",
     "CustomRedOp",
+    "DevCommResource",
 ]
 
 
@@ -204,6 +205,7 @@ class RegisteredWindowHandle(CommResource):
     Attributes:
         handle (int): Window handle for NCCL operations.
         size (int): Size of registered window in bytes.
+        user_ptr (int): Original user buffer pointer registered with this window.
         is_valid (bool): Whether the window registration is still valid.
 
     Notes:
@@ -287,6 +289,81 @@ class RegisteredWindowHandle(CommResource):
             ``int``: Window size in bytes.
         """
         return self._size
+
+    @property
+    def user_ptr(self) -> int:
+        """
+        Original user buffer pointer registered with this window.
+
+        Returns:
+            ``int``: The user buffer pointer.
+
+        Raises:
+            - ``RuntimeError``: If window has been deregistered.
+        """
+        self._check_valid()
+        return self._buffer_ptr
+
+    def get_lsa_multimem_device_pointer(self, offset: int = 0) -> int | None:
+        """Get the LSA multicast device pointer for this window.
+
+        Returns a device pointer suitable for multicast operations over the
+        LSA (Load/Store Accessible) team. The pointer is valid as long as the
+        window and communicator remain alive.
+
+        Args:
+            offset: Byte offset within the window buffer. Defaults to 0.
+
+        Returns:
+            Device pointer as int, or ``None`` if multimem is not supported.
+
+        Raises:
+            - ``RuntimeError``: If window has been closed.
+        """
+        self._check_valid()
+        ptr = _nccl_bindings.get_lsa_multimem_device_pointer(self._handle, offset)
+        return ptr if ptr != 0 else None
+
+    def get_lsa_device_pointer(self, lsa_rank: int, offset: int = 0) -> int:
+        """Get the LSA device pointer for a peer within the LSA team.
+
+        Returns a device pointer to the peer's window buffer addressable
+        from the local GPU via LSA (Load/Store Accessible) mapping.
+
+        Args:
+            lsa_rank: Rank within the LSA team (0 to lsa_size - 1).
+            offset: Byte offset within the window buffer. Defaults to 0.
+
+        Returns:
+            Device pointer as int.
+
+        Raises:
+            - ``RuntimeError``: If window has been closed.
+            - ``NCCLError``: If lsa_rank or offset is out of bounds.
+        """
+        self._check_valid()
+        return _nccl_bindings.get_lsa_device_pointer(self._handle, offset, lsa_rank)
+
+    def get_peer_device_pointer(self, peer: int, offset: int = 0) -> int | None:
+        """Get a device pointer to a peer's window buffer by world rank.
+
+        Returns a device pointer to the specified peer's window buffer.
+        If the peer is not reachable via LSA, returns ``None``.
+
+        Args:
+            peer: World rank of the peer (0 to nRanks - 1).
+            offset: Byte offset within the window buffer. Defaults to 0.
+
+        Returns:
+            Device pointer as int, or ``None`` if the peer is not reachable via LSA.
+
+        Raises:
+            - ``RuntimeError``: If window has been closed.
+            - ``NCCLError``: If peer or offset is out of bounds.
+        """
+        self._check_valid()
+        ptr = _nccl_bindings.get_peer_device_pointer(self._handle, offset, peer)
+        return ptr if ptr != 0 else None
 
     def __repr__(self) -> str:
         if not self.is_valid:
@@ -385,12 +462,69 @@ class CustomRedOp(CommResource):
         Raises:
             - ``RuntimeError``: If operator has been destroyed or is invalid.
         """
-        self._check_valid()
-        if self._op is None:
-            raise RuntimeError("RedOp is invalid")
-        return self._op
+        return self.op
 
     def __repr__(self) -> str:
         if not self.is_valid:
             return "<CustomRedOp: closed>"
         return f"<CustomRedOp: type=PreMulSum, dtype={self._datatype}, residence={self._residence.name}, op={self._op}>"
+
+
+class DevCommResource(CommResource):
+    """
+    NCCL device communicator resource for device-side operations.
+
+    Wraps ncclDevComm_t and manages its lifecycle. The device communicator
+    is automatically destroyed when the parent communicator is destroyed or aborted.
+
+    Attributes:
+        dev_comm: The underlying DevComm Cython object.
+        ptr: Pointer to the ncclDevComm_t structure.
+    """
+
+    def __init__(self, comm_ptr: int, requirements_ptr: int):
+        """
+        Creates a device communicator from an existing host communicator.
+
+        Args:
+            - comm_ptr (int): NCCL communicator raw pointer.
+            - requirements_ptr (int): Pointer to ncclDevCommRequirements_t structure.
+
+        Raises:
+            - ``NcclInvalid``: If comm_ptr is 0 (invalid communicator).
+        """
+        self._requirements_ptr = requirements_ptr
+        self._dev_comm: _nccl_bindings.DevComm | None = None
+        super().__init__(comm_ptr)
+        self._allocate()
+
+    def _allocate(self) -> None:
+        """Creates device communicator via ncclDevCommCreate."""
+        # Allocate DevComm struct first
+        self._dev_comm = _nccl_bindings.DevComm()
+        # Pass pointer to dev_comm_create to initialize it
+        _nccl_bindings.dev_comm_create(self._comm_ptr, self._requirements_ptr, self._dev_comm.ptr)
+
+    def _deallocate(self) -> None:
+        """Destroys device communicator via ncclDevCommDestroy."""
+        if self._dev_comm is not None:
+            _nccl_bindings.dev_comm_destroy(self._comm_ptr, self._dev_comm.ptr)
+            self._dev_comm = None
+
+    @property
+    def dev_comm(self) -> _nccl_bindings.DevComm:
+        """DevComm object wrapping ncclDevComm_t."""
+        self._check_valid()
+        if self._dev_comm is None:
+            raise RuntimeError("DevComm is invalid")
+        return self._dev_comm
+
+    @property
+    def ptr(self) -> int:
+        """Pointer to the ncclDevComm_t structure."""
+        return self.dev_comm.ptr
+
+    def __repr__(self) -> str:
+        if not self.is_valid:
+            return "<DevCommResource: closed>"
+        return f"<DevCommResource: ptr={self.ptr:#x}>"

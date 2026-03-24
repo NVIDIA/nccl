@@ -72,7 +72,7 @@ fail:
 
 static ncclResult_t ncclEnvPluginUnload(void) {
   if (ncclEnvPlugin) {
-    INFO(NCCL_INIT, "ENV/Plugin: Closing env plugin %s", ncclEnvPlugin->name);
+    INFO(NCCL_DESTROY, "ENV/Plugin: Closing env plugin %s", ncclEnvPlugin->name);
   }
   if (ncclEnvPlugins[EXT_ENV_PLUGIN]) {
     ncclEnvPlugin = ncclEnvPlugins[INT_ENV_PLUGIN];

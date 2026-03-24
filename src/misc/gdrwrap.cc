@@ -10,8 +10,9 @@
 
 #ifndef GDR_DIRECT
 #include "core.h"
+#include "os.h"
 
-/* Function pointers assigned from dlopen() */
+/* Function pointers assigned from dynamic library (os layer) */
 static gdr_t (*gdr_internal_open)(void);
 static int (*gdr_internal_close)(gdr_t g);
 static int (*gdr_internal_pin_buffer)(gdr_t g, unsigned long addr, size_t size, uint64_t p2p_token, uint32_t va_space, gdr_mh_t *handle);
@@ -31,13 +32,17 @@ std::mutex& getGdrMutex() {
   return gdrMutex;
 }
 
+#if defined(NCCL_OS_WINDOWS)
+#define GDRAPI_LIBNAME "gdrapi.dll"
+#else
 #define GDRAPI_LIBNAME "libgdrapi.so"
+#endif
 
 #define LOAD_SYM(handle, symbol, funcptr) do {         \
     cast = (void**)&funcptr;                             \
-    tmp = dlsym(handle, symbol);                         \
+    tmp = ncclOsDlsym(handle, symbol);                   \
     if (tmp == NULL) {                                   \
-      WARN("dlsym failed on %s - %s", symbol, dlerror());\
+      WARN("ncclOsDlsym failed on %s - %s", symbol, ncclOsDlerror()); \
       goto teardown;                                     \
     }                                                    \
     *cast = tmp;                                         \
@@ -45,9 +50,9 @@ std::mutex& getGdrMutex() {
 
 #define LOAD_SYM_OPTIONAL(handle, symbol, funcptr) do {\
     cast = (void**)&funcptr;                             \
-    tmp = dlsym(handle, symbol);                         \
+    tmp = ncclOsDlsym(handle, symbol);                   \
     if (tmp == NULL) {                                   \
-      INFO(NCCL_INIT,"dlsym failed on %s, ignoring", symbol); \
+      INFO(NCCL_INIT,"ncclOsDlsym failed on %s, ignoring", symbol); \
     }                                                    \
     *cast = tmp;                                         \
   } while (0)
@@ -60,9 +65,9 @@ static void initOnceFunc(void) {
   void* tmp;
   void** cast;
 
-  gdrhandle=dlopen(GDRAPI_LIBNAME, RTLD_NOW);
+  gdrhandle = ncclOsDlopen(GDRAPI_LIBNAME, NCCL_OS_DL_NOW);
   if (!gdrhandle) {
-    WARN("Failed to open %s", GDRAPI_LIBNAME);
+    WARN("Failed to open %s - %s", GDRAPI_LIBNAME, ncclOsDlerror());
     goto teardown;
   }
 
@@ -95,7 +100,7 @@ teardown:
   gdr_internal_copy_to_mapping = NULL;
   gdr_internal_copy_from_mapping = NULL;
 
-  if (gdrhandle != NULL) dlclose(gdrhandle);
+  if (gdrhandle != NULL) ncclOsDlclose(gdrhandle);
   initResult = ncclSystemError;
   return;
 }

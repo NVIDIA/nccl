@@ -6,14 +6,14 @@
  *************************************************************************/
 
 #include <stdlib.h>
-#include <dlfcn.h>
+#include "os.h"
 #include "debug.h"
 #include "nccl_env.h"
 
 static ncclEnv_v1_t* ncclEnv_v1;
 
 ncclEnv_t* getNcclEnv_v1(void* lib) {
-  ncclEnv_v1 = (ncclEnv_v1_t*)dlsym(lib, "ncclEnvPlugin_v1");
+  ncclEnv_v1 = (ncclEnv_v1_t*)ncclOsDlsym(lib, "ncclEnvPlugin_v1");
   if (ncclEnv_v1) {
     INFO(NCCL_INIT|NCCL_ENV, "ENV/Plugin: Using %s (v1)", ncclEnv_v1->name);
     return ncclEnv_v1;

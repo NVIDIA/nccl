@@ -103,7 +103,7 @@ fail:
 ncclResult_t ncclTunerPluginUnload(struct ncclComm* comm) {
   std::lock_guard<std::mutex> lock(tunerPluginMutex);
   if (comm->tunerPluginLoaded && 0 == (--tunerPluginRefCount)) {
-    INFO(NCCL_INIT|NCCL_TUNING, "TUNER/Plugin: Closing tuner: '%s'", tunerSymbol->name);
+    INFO(NCCL_DESTROY|NCCL_TUNING, "TUNER/Plugin: Closing tuner: '%s'", tunerSymbol->name);
     NCCLCHECK(ncclClosePluginLib(tunerPluginLib, ncclPluginTypeTuner));
     tunerPluginLib = nullptr;
     tunerSymbol = nullptr;

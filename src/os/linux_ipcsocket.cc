@@ -12,10 +12,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <inttypes.h>
 
 NCCL_PARAM(IpcUseAbstractSocket, "IPC_USE_ABSTRACT_SOCKET", 1);
 
-#define NCCL_IPC_SOCKNAME_STR "/tmp/nccl-socket-%d-%lx"
+#define NCCL_IPC_SOCKNAME_STR "/tmp/nccl-socket-%d-%" PRIx64
 
 /*
  * Create a Unix Domain Socket
@@ -36,12 +41,12 @@ ncclResult_t ncclIpcSocketInit(ncclIpcSocket *handle, int rank, uint64_t hash, v
     return ncclSystemError;
   }
 
-  bzero(&cliaddr, sizeof(cliaddr));
+  memset(&cliaddr, 0, sizeof(cliaddr));
   cliaddr.sun_family = AF_UNIX;
 
   // Create unique name for the socket.
   int len = snprintf(temp, NCCL_IPC_SOCKNAME_LEN, NCCL_IPC_SOCKNAME_STR, rank, hash);
-  if (len > (sizeof(cliaddr.sun_path) - 1)) {
+  if (len > (int)(sizeof(cliaddr.sun_path) - 1)) {
     WARN("UDS: Cannot bind provided name to socket. Name too large");
     close(fd);
     return ncclInternalError;
@@ -177,7 +182,7 @@ ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
   struct sockaddr_un cliaddr;
 
   // Construct client address to send this shareable handle to
-  bzero(&cliaddr, sizeof(cliaddr));
+  memset(&cliaddr, 0, sizeof(cliaddr));
   cliaddr.sun_family = AF_UNIX;
 
   int len = snprintf(temp, NCCL_IPC_SOCKNAME_LEN, NCCL_IPC_SOCKNAME_STR, rank, hash);

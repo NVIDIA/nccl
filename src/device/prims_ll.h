@@ -10,9 +10,14 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>:
   public PrimitivesWithoutDirect<Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>> {
 
   // In the case of Fan::MaxRecv == 0, we need to force MaxRecv to 1 for this to compile
-  // This is because of a recv buffer which is allocated to MaxRecv length in send-only cases
+  // This is because of a recv buffer which is allocated to MaxRecv length in send-only cases.
   static constexpr int MaxRecv = Fan::MaxRecv > 1 ? Fan::MaxRecv : 1;
+#if defined(NCCL_OS_WINDOWS)
+  // MSVC rejects zero-length arrays; clamp to 1 on Windows only.
+  static constexpr int MaxSend = Fan::MaxSend > 1 ? Fan::MaxSend : 1;
+#else
   static constexpr int MaxSend = Fan::MaxSend;
+#endif
   static constexpr int Input=0, Output=1;
   RedOp redOp;
   const int tid;

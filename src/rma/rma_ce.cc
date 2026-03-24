@@ -16,12 +16,15 @@
 
 ncclResult_t ncclRmaCeInit(struct ncclComm* comm){
   ncclResult_t ret = ncclSuccess;
+  uint64_t* signalsDevBase = nullptr;
+  uint64_t* ackInitHost = nullptr;
 
   // Ensure symmetric memory runtime is initialized
   NCCLCHECKGOTO(ncclDevrInitOnce(comm), ret, fail);
 
   comm->rmaState.rmaCeState.rmaCeCtxCount = comm->config.numRmaCtx;
 
+  NCCLCHECKGOTO(ncclCalloc(&ackInitHost, comm->nRanks), ret, fail);
   NCCLCHECKGOTO(ncclCalloc(&comm->rmaState.rmaCeState.rmaCeCtxs, comm->rmaState.rmaCeState.rmaCeCtxCount), ret, fail);
   for (int i = 0; i < comm->rmaState.rmaCeState.rmaCeCtxCount; i++) {
     // Allocate the RMA CE context
@@ -33,9 +36,8 @@ ncclResult_t ncclRmaCeInit(struct ncclComm* comm){
     ceCtx->comm = comm;
 
     // Allocate and register symmetric memory for signals
-    // Signal buffer layout: [0..nRanks-1] per-rank signals, [nRanks] aggregate signal
-    size_t signalsBufSize = (comm->nRanks + 1) * sizeof(uint64_t);
-    uint64_t* signalsDevBase;
+    int nRanks = comm->nRanks;
+    size_t signalsBufSize = (3 * nRanks + 2) * sizeof(uint64_t);
     ncclWindow_vidmem* signalsWinDev;
     ncclWindow_vidmem* signalsWinDevHost;
 
@@ -46,9 +48,28 @@ ncclResult_t ncclRmaCeInit(struct ncclComm* comm){
     // Get the ncclDevrWindow from the winHost field
     ceCtx->signalsWin = (struct ncclDevrWindow*)signalsWinDevHost->winHost;
     ceCtx->signalsDev = signalsDevBase;
+    ceCtx->graphSignalsDev = signalsDevBase + nRanks + 1;
+    ceCtx->graphAckDev = signalsDevBase + 2 * nRanks + 2;
+    signalsDevBase = nullptr;
+    ceCtx->signalOffset = 0;
+    ceCtx->graphSignalOffset = (nRanks + 1) * sizeof(uint64_t);
+    ceCtx->graphAckOffset = (2 * nRanks + 2) * sizeof(uint64_t);
 
-    // Allocate host buffer to track expected signal values
-    NCCLCHECKGOTO(ncclCalloc(&ceCtx->signalsHost, signalsBufSize), ret, fail);
+    // Initialize ack flags to 1
+    for (int r = 0; r < nRanks; r++) ackInitHost[r] = 1;
+    CUDACHECKGOTO(cudaMemcpy(ceCtx->graphAckDev, ackInitHost, nRanks * sizeof(uint64_t), cudaMemcpyHostToDevice), ret, fail);
+
+    // Allocate device-resident constants for graph-safe D2D signal/ack writes
+    NCCLCHECKGOTO(ncclMemAlloc((void**)&ceCtx->signalConstDev, 2 * sizeof(uint64_t)), ret, fail);
+    ceCtx->signalConstZeroDev = &ceCtx->signalConstDev[0];
+    ceCtx->signalConstOneDev = &ceCtx->signalConstDev[1];
+    {
+      uint64_t zeroone[] = {0, 1};
+      CUDACHECKGOTO(cudaMemcpy(ceCtx->signalConstDev, zeroone, sizeof(zeroone), cudaMemcpyHostToDevice), ret, fail);
+    }
+
+    // Allocate host buffer to track expected non-graph signal values
+    NCCLCHECKGOTO(ncclCalloc(&ceCtx->signalsHost, nRanks + 1), ret, fail);
 
     // Allocate per-rank operation sequence counters
     NCCLCHECKGOTO(ncclCalloc(&ceCtx->signalOpSeqs, comm->nRanks), ret, fail);
@@ -66,8 +87,10 @@ ncclResult_t ncclRmaCeInit(struct ncclComm* comm){
   comm->rmaState.rmaCeState.initialized = true;
 
 exit:
+  free(ackInitHost);
   return ret;
 fail:
+  if (signalsDevBase) ncclMemFree(signalsDevBase);
   goto exit;
 }
 
@@ -100,6 +123,9 @@ ncclResult_t ncclRmaCeFinalize(struct ncclComm* comm){
     // Free host signals buffer
     if (ceCtx->signalsHost) free(ceCtx->signalsHost);
 
+    // Free device-resident constants
+    if (ceCtx->signalConstDev) NCCLCHECKGOTO(ncclMemFree(ceCtx->signalConstDev), ret, fail);
+
     // Deregister and free signal window
     if (ceCtx->signalsWin) NCCLCHECKGOTO(ncclCommWindowDeregister(comm, ceCtx->signalsWin->vidmem), ret, fail);
 
@@ -124,7 +150,7 @@ fail:
   goto exit;
 }
 
-ncclResult_t ncclRmaPutCe(struct ncclComm* comm, struct ncclKernelPlan* plan, cudaStream_t stream){
+ncclResult_t ncclRmaCePutLaunch(struct ncclComm* comm, struct ncclKernelPlan* plan, cudaStream_t stream){
   ncclResult_t ret = ncclSuccess;
 
   // Make sure the RMA CE is initialized
@@ -133,6 +159,7 @@ ncclResult_t ncclRmaPutCe(struct ncclComm* comm, struct ncclKernelPlan* plan, cu
     return ncclInternalError;
   }
 
+  bool persistent = plan->persistent;
   int nRmaTasksCe = plan->rmaArgs->nRmaTasksCe;
   int ctx = plan->rmaArgs->ctx;
   struct ncclRmaCeCtx* ceCtx = (struct ncclRmaCeCtx*)comm->rmaState.rmaCeState.rmaCeCtxs[ctx];
@@ -141,11 +168,25 @@ ncclResult_t ncclRmaPutCe(struct ncclComm* comm, struct ncclKernelPlan* plan, cu
     struct ncclTaskRma* task = ncclIntruQueueHead(&plan->rmaTaskQueueCe);
     ncclIntruQueueDequeue(&plan->rmaTaskQueueCe);
 
-    // Convert global peer rank to LSA rank index
-    // LSA rank is computed as: peer % lsaSize (see dev_runtime.cc)
-    int peerLsaRank = task->peer % comm->devrState.lsaSize;
+    int peerLsaRank;
+    NCCLCHECKGOTO(ncclDevrWorldToLsaRank(comm, task->peer, &peerLsaRank), ret, fail);
 
     size_t bytes = task->count * ncclTypeSize(task->datatype);
+
+    // Graph: wait for receiver's ack, then reset ack flag
+    if (persistent) {
+      CUdeviceptr ackAddr = (CUdeviceptr)&ceCtx->graphAckDev[task->peer];
+      CUstreamBatchMemOpParams ackOps[2] = {};
+      ackOps[0].waitValue.operation = CU_STREAM_MEM_OP_WAIT_VALUE_64;
+      ackOps[0].waitValue.address = ackAddr;
+      ackOps[0].waitValue.value64 = 1;
+      ackOps[0].waitValue.flags = CU_STREAM_WAIT_VALUE_GEQ;
+      ackOps[1].writeValue.operation = CU_STREAM_MEM_OP_WRITE_VALUE_64;
+      ackOps[1].writeValue.address = ackAddr;
+      ackOps[1].writeValue.value64 = 0;
+      ackOps[1].writeValue.flags = CU_STREAM_WRITE_VALUE_DEFAULT;
+      NCCLCHECKGOTO(ncclCuStreamBatchMemOp(stream, 2, ackOps), ret, fail);
+    }
 
     if (bytes > 0) {
       // Get the peer buffer from the peer window
@@ -166,17 +207,20 @@ ncclResult_t ncclRmaPutCe(struct ncclComm* comm, struct ncclKernelPlan* plan, cu
     // Write signal if needed for the target rank
     // CE over NVL only supports distinct signal
     if (task->signalMode != NCCL_SIGNAL_NONE) {
-      // Get the signal location in peer's signal buffer where we write to notify them
-      // We write to offset [comm->rank] in peer's signal buffer, same as proxy version
-      // So peer waits on their signalsDev[comm->rank] to see our signals
-      void* peerSignal;
-      NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, ceCtx->signalsWin, comm->rank * sizeof(uint64_t), peerLsaRank, &peerSignal), ret, fail);
+      size_t rankSlot = comm->rank * sizeof(uint64_t);
 
-      // Increment our sequence number for operations to this peer
-      ceCtx->signalOpSeqs[task->peer]++;
-
-      // Write the absolute sequence number - peer will wait for this value
-      CUDACHECKGOTO(cudaMemcpyAsync(peerSignal, &ceCtx->signalOpSeqs[task->peer], sizeof(uint64_t), cudaMemcpyHostToDevice, stream), ret, fail);
+      if (!persistent) {
+        // Non-graph: write incrementing sequence to peer's signalsDev
+        void* peerSignal;
+        NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, ceCtx->signalsWin, ceCtx->signalOffset + rankSlot, peerLsaRank, &peerSignal), ret, fail);
+        ceCtx->signalOpSeqs[task->peer]++;
+        CUDACHECKGOTO(cudaMemcpyAsync(peerSignal, &ceCtx->signalOpSeqs[task->peer], sizeof(uint64_t), cudaMemcpyHostToDevice, stream), ret, fail);
+      } else {
+        // Graph: write signal=1 to peer's graphSignalsDev (separate from non-graph signals)
+        void* peerGraphSignal;
+        NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, ceCtx->signalsWin, ceCtx->graphSignalOffset + rankSlot, peerLsaRank, &peerGraphSignal), ret, fail);
+        CUDACHECKGOTO(cudaMemcpyAsync(peerGraphSignal, ceCtx->signalConstOneDev, sizeof(uint64_t), cudaMemcpyDeviceToDevice, stream), ret, fail);
+      }
     }
 
     // Free the task after processing
@@ -190,8 +234,9 @@ fail:
 }
 
 
-ncclResult_t ncclRmaWaitSignalCe(struct ncclComm* comm, struct ncclKernelPlan* plan, cudaStream_t stream){
+ncclResult_t ncclRmaCeWaitLaunch(struct ncclComm* comm, struct ncclKernelPlan* plan, cudaStream_t stream){
   ncclResult_t ret = ncclSuccess;
+  CUstreamBatchMemOpParams* batchParams = nullptr;
 
   // Make sure the RMA CE is initialized
   if (!comm->rmaState.rmaCeState.initialized) {
@@ -199,6 +244,7 @@ ncclResult_t ncclRmaWaitSignalCe(struct ncclComm* comm, struct ncclKernelPlan* p
     return ncclInternalError;
   }
 
+  bool persistent = plan->persistent;
   int ctx = plan->rmaArgs->ctx;
   struct ncclRmaCeCtx* ceCtx = (struct ncclRmaCeCtx*)comm->rmaState.rmaCeState.rmaCeCtxs[ctx];
 
@@ -212,35 +258,51 @@ ncclResult_t ncclRmaWaitSignalCe(struct ncclComm* comm, struct ncclKernelPlan* p
   // Assert the plan has exactly one RMA CE task
   assert(plan->rmaArgs->nRmaTasksCe == 1);
 
-  size_t opIdx = 0;
-  CUstreamBatchMemOpParams* batchParams = nullptr;
-
-  NCCLCHECK(ncclCalloc(&batchParams, task->npeers));
-
-  // NVL only supports per-rank signal
   if (task->signalMode == NCCL_SIGNAL) {
-    for (int i = 0; i < task->npeers; i++) {
-      int peerRank = task->peers[i];
+    if (!persistent) {
+      // Non-graph: batch one cuStreamWaitValue per peer with incrementing expected value
+      NCCLCHECKGOTO(ncclCalloc(&batchParams, task->npeers), ret, fail);
+      size_t opIdx = 0;
+      for (int i = 0; i < task->npeers; i++) {
+        int peerRank = task->peers[i];
+        uint64_t waitValue = ceCtx->signalsHost[peerRank] + task->nsignals[i];
+        ceCtx->signalsHost[peerRank] = waitValue;
 
-      // Calculate the expected signal value from this peer
-      // We wait on signalsDev[peerRank] where peerRank writes their sequence numbers
-      uint64_t waitValue = ceCtx->signalsHost[peerRank] + task->nsignals[i];
-
-      // Update our expectation for future waits
-      ceCtx->signalsHost[peerRank] = waitValue;
-
-      // Add wait operation to batch
-      // Wait on our local signal buffer at offset [peerRank] where peer writes to us
-      batchParams[opIdx] = {};
-      batchParams[opIdx].waitValue.operation = CU_STREAM_MEM_OP_WAIT_VALUE_64;
-      batchParams[opIdx].waitValue.address = (CUdeviceptr)&ceCtx->signalsDev[peerRank];
-      batchParams[opIdx].waitValue.value64 = waitValue;
-      batchParams[opIdx].waitValue.flags = CU_STREAM_WAIT_VALUE_GEQ;
-      opIdx++;
+        CUdeviceptr signalAddr = (CUdeviceptr)&ceCtx->signalsDev[peerRank];
+        batchParams[opIdx].waitValue.operation = CU_STREAM_MEM_OP_WAIT_VALUE_64;
+        batchParams[opIdx].waitValue.address = signalAddr;
+        batchParams[opIdx].waitValue.value64 = waitValue;
+        batchParams[opIdx].waitValue.flags = CU_STREAM_WAIT_VALUE_GEQ;
+        opIdx++;
+      }
+      NCCLCHECKGOTO(ncclCuStreamBatchMemOp(stream, opIdx, batchParams), ret, fail);
     }
+    else {
+      // Graph: wait-reset-ack cycle using separate graphSignalsDev (isolated from non-graph)
+      for (int i = 0; i < task->npeers; i++) {
+        int peerRank = task->peers[i];
+        int peerLsaRank;
+        NCCLCHECKGOTO(ncclDevrWorldToLsaRank(comm, peerRank, &peerLsaRank), ret, fail);
 
-    // Execute all wait operations in a single batch
-    NCCLCHECKGOTO(ncclCuStreamBatchMemOp(stream, opIdx, batchParams), ret, fail);
+        for (int s = 0; s < task->nsignals[i]; s++) {
+          CUdeviceptr graphSignalAddr = (CUdeviceptr)&ceCtx->graphSignalsDev[peerRank];
+          CUstreamBatchMemOpParams signalOps[2] = {};
+          signalOps[0].waitValue.operation = CU_STREAM_MEM_OP_WAIT_VALUE_64;
+          signalOps[0].waitValue.address = graphSignalAddr;
+          signalOps[0].waitValue.value64 = 1;
+          signalOps[0].waitValue.flags = CU_STREAM_WAIT_VALUE_GEQ;
+          signalOps[1].writeValue.operation = CU_STREAM_MEM_OP_WRITE_VALUE_64;
+          signalOps[1].writeValue.address = graphSignalAddr;
+          signalOps[1].writeValue.value64 = 0;
+          signalOps[1].writeValue.flags = CU_STREAM_WRITE_VALUE_DEFAULT;
+          NCCLCHECKGOTO(ncclCuStreamBatchMemOp(stream, 2, signalOps), ret, fail);
+
+          void* peerAck;
+          NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, ceCtx->signalsWin, ceCtx->graphAckOffset + comm->rank * sizeof(uint64_t), peerLsaRank, &peerAck), ret, fail);
+          CUDACHECKGOTO(cudaMemcpyAsync(peerAck, ceCtx->signalConstOneDev, sizeof(uint64_t), cudaMemcpyDeviceToDevice, stream), ret, fail);
+        }
+      }
+    }
   }
 
   // Free the task

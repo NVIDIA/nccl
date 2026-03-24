@@ -58,7 +58,8 @@ struct ncclReg {
   struct ncclProxyConnector* collnetProxyconn;
   // general ipc reg
   struct ncclPeerRegIpcAddr regIpcAddrs;
-  struct ncclIpcRegInfo* ipcInfos[NCCL_MAX_LOCAL_RANKS];
+  struct ncclIpcRegInfo** ipcInfos;  // Dynamically allocated, sized to ipcInfosSize
+  int ipcInfosSize;                  // Size of ipcInfos array (localRanks or nRanks for cross-clique)
 };
 
 struct ncclRegCache {

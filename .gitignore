@@ -1,4 +1,24 @@
 # Copyright (c) 2015-2016, NVIDIA CORPORATION. All rights reserved.
-/build
+/build*
+failed/
+junits/
+*.xml
+/ext-net/ib_sharp/build/
+/ext-net/example/*.so
+/ext-mixed/example/*.so
+/ext-net/mock/*.so
 *.gcov
 /coverage/
+tags
+*.swp
+
+# Example build artifacts
+*.o
+examples/**/multiple_devices_single_process
+examples/**/one_device_per_pthread
+examples/**/one_device_per_process_mpi
+examples/**/ring_pattern
+examples/**/allreduce
+examples/**/allreduce_ub
+examples/**/allreduce_sm
+examples/**/allreduce_device_api

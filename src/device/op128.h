@@ -417,21 +417,23 @@ __device__ __forceinline__ Pack loadPack(T* ptr, int ix, int end) {
   if (alignof(T) == Size && sizeof(T) == Size) {
     return *(Pack*)ptr;
   } else if ((Size+3)/4 + 1 < Size/sizeof(T)) {
-    union { Pack ans; uint32_t part[Size/4]; };
+    union { Pack ans; uint32_t part[Size/4+1]; };
     int misalign = reinterpret_cast<uintptr_t>(ptr) % 4;
     uint32_t* down = reinterpret_cast<uint32_t*>(reinterpret_cast<uintptr_t>(ptr) & -uintptr_t(4));
+    // ndiv holds the number of aligned 4-byte loads needed to cover the entire input
+    int ndiv = (n*sizeof(T)+misalign+3)/4;
+    int imax = min(Size/4 + (misalign > 0), ndiv);
     int i;
     #pragma unroll
-    for (i=0; i < Size/4; i++) {
-      if (i*4/sizeof(T) < 1 || i*4/sizeof(T) < n) part[i] = down[i];
+    for (i=0; i < Size/4 + 1; i++) {
+      if (i < imax) part[i] = down[i];
     }
-    uint32_t extra;
-    if (misalign) extra = down[i];
-    #pragma unroll
-    for (i=0; i < Size/4; i++) {
-      part[i] = __funnelshift_r(part[i], part[i+1], 8*misalign);
+    if (misalign > 0) {
+      #pragma unroll
+      for (i=0; i < Size/4; i++) {
+        part[i] = __funnelshift_r(part[i], part[i+1], 8*misalign);
+      }
     }
-    if (misalign) part[i] = __funnelshift_r(part[i], extra, 8*misalign);
     return ans;
   } else {
     union { Pack ans; BytePack<sizeof(T)> part[Size/sizeof(T)]; };

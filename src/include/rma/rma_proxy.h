@@ -11,7 +11,11 @@
 #include "nccl.h"
 #include "nccl_net.h"
 #include "nccl_common.h"
+#if defined(NCCL_OS_WINDOWS)
+#include "gin/gin_host_win_stub.h"
+#else
 #include "gin/gin_host.h"
+#endif
 #include "alloc.h"
 #include <thread>
 #include <mutex>
@@ -28,13 +32,17 @@ struct ncclRmaSignal_t {
 };
 
 typedef enum ncclRmaDescState_t {
-  ncclRmaDescStatePending = 0,
-  ncclRmaDescStateInProgress,
+  ncclRmaDescStateInit = 0,
+  ncclRmaDescStateReady = 1,
+  ncclRmaDescStateInProgress = 2,
 } ncclRmaDescState_t;
 
-struct ncclRmaProxyDesc {
-  struct ncclRmaProxyDesc *next;
+typedef enum ncclRmaDescType_t {
+  ncclRmaDescTypePutSignal = 0,
+  ncclRmaDescTypeWaitSignal,
+} ncclRmaDescType_t;
 
+struct ncclRmaPutSignalDesc {
   // Network function descriptor
   uint64_t srcOff;
   void *srcHandle;
@@ -44,14 +52,42 @@ struct ncclRmaProxyDesc {
   int targetRank;
   ncclRmaSignal_t signal;
 
-  // Sequence number for the network operation
-  uint64_t seq;
+  // Request handle for the network operation
+  void* request;
+};
 
-  // State of the network function descriptor
+struct ncclRmaWaitSignalDesc {
+  int npeers;
+  int* waitPeers;
+  int* waitSignals;
+  // Local flush in graph mode
+  int needFlush;
+};
+
+struct ncclRmaProxyDesc {
+  struct ncclRmaProxyDesc *next;
+  ncclRmaDescType_t rmaDescType;
   ncclRmaDescState_t rmaDescState;
 
-  // Request handle for the network operation
-  void * request;
+  union {
+    struct ncclRmaPutSignalDesc putSignal;
+    struct ncclRmaWaitSignalDesc waitSignal;
+  };
+
+  // Non graph mode, desc does not own the sequence allocations but points to the ctx's sequence allocations
+  // Graph mode, desc owns the per-descriptor sequence allocations and this needs to be freed when the desc is destroyed
+  uint64_t opSeq;
+  uint64_t* readySeq;
+  uint64_t* readySeqDev;
+  void* readySeqGdrHandle;
+  uint64_t* doneSeq;
+  uint64_t* doneSeqDev;
+  void* doneSeqGdrHandle;
+
+  // Graph capture fields
+  struct ncclKernelPlan* persistPlan; // Back reference to persistent plan during clean up
+  bool persistDescValid; // Persistent descriptor is valid
+
 };
 
 struct ncclRmaProxyCtx {
@@ -59,17 +95,20 @@ struct ncclRmaProxyCtx {
 
   // GIN context for the RMA proxy context
   void *ginCollComm;
+  void *ginCtx;
   ncclNetDeviceHandle_t *devHandle;
   ncclNetProperties_t props;
 
+  //---------Non-graph descriptor queues and synchronization---------
+
   // Lock-free circular buffer for pending Descs
   size_t queueSize;  // Power of 2 size for pending queue
-  struct ncclRmaProxyDesc** pendingQueues;  // Pre-allocated arrays per peer
+  struct ncclRmaProxyDesc** circularBuffers;  // Lock-free circular buffer per peer
   uint32_t* pis;  // Producer Indices per peer
   uint32_t* cis;  // Consumer Indices per peer
 
-  // Per-rank rmaProxyInProgressQueues: Descs with issued network operations waiting for completion
-  struct ncclIntruQueue<struct ncclRmaProxyDesc, &ncclRmaProxyDesc::next>* rmaProxyInProgressQueues;
+  // Per-rank inProgressQueues: Descs with issued network operations waiting for completion
+  struct ncclIntruQueue<struct ncclRmaProxyDesc, &ncclRmaProxyDesc::next>* inProgressQueues;
 
   // Per-rank sequence number and counters
   uint64_t* opSeqs;
@@ -92,6 +131,25 @@ struct ncclRmaProxyCtx {
   void *signalsGinHandle;
   uint64_t *signalsDev;
   uint64_t* signalsHost; // Host buffer to track the expected values of the signals
+
+  //---------Graph descriptor queues and synchronization---------
+
+  // Per-rank persistent descriptor queue: Descs from all live graphs
+  struct ncclIntruQueue<struct ncclRmaProxyDesc, &ncclRmaProxyDesc::next>* persistentQueues;
+
+  // CPU-accessible signal is required as proxy needs to poll on the signal values
+  void *cpuAccessSignalsGdrHandle;
+  void *cpuAccessSignalsMhandle;
+  void *cpuAccessSignalsGinHandle;
+  uint64_t *cpuAccessSignals;
+  uint64_t *cpuAccessSignalsDev;
+  uint64_t* cpuAccessSignalsHost; // Host buffer to track the expected values of the signals
+
+  // Local flush buffer
+  CUmemGenericAllocationHandle flushBufCumemhandle;
+  void *flushBufMhandle;
+  void *flushBufGinHandle;
+  uint64_t *flushBufDev;
 };
 
 struct ncclRmaProxyState {
@@ -120,8 +178,9 @@ struct ncclRmaProxyState {
 };
 
 // Proxy-specific function declarations
-ncclResult_t ncclRmaPutProxy(struct ncclComm* comm, struct ncclKernelPlan* plan, cudaStream_t stream);
-ncclResult_t ncclRmaWaitSignalProxy(struct ncclComm* comm, struct ncclKernelPlan* plan, cudaStream_t stream);
+ncclResult_t ncclRmaProxyPutLaunch(struct ncclComm* comm, struct ncclKernelPlan* plan, cudaStream_t stream);
+ncclResult_t ncclRmaProxyWaitLaunch(struct ncclComm* comm, struct ncclKernelPlan* plan, cudaStream_t stream);
+ncclResult_t ncclRmaProxyReclaimPlan(struct ncclComm* comm, struct ncclKernelPlan* plan);
 
 // RMA Proxy lifecycle functions
 ncclResult_t ncclRmaProxyConnectOnce(struct ncclComm* comm);
@@ -139,7 +198,14 @@ ncclResult_t ncclRmaProxyRegister(struct ncclComm* comm, void* address, size_t s
                                   ncclGinWindow_t rmaDevWins[NCCL_GIN_MAX_CONNECTIONS]);
 ncclResult_t ncclRmaProxyDeregister(struct ncclComm* comm, void* rmaHostWins[NCCL_GIN_MAX_CONNECTIONS]);
 
+// Circular buffer helpers
+bool ncclRmaProxyCircularBufFull(struct ncclRmaProxyCtx* ctx, int peer);
+bool ncclRmaProxyCircularBufEmpty(struct ncclRmaProxyCtx* ctx, int peer);
+
+// Descriptor destruction
+ncclResult_t ncclRmaProxyDestroyDescNonPersistent(struct ncclRmaProxyDesc* desc);
+ncclResult_t ncclRmaProxyDestroyDescPersistent(struct ncclComm* comm, struct ncclRmaProxyDesc* desc);
+
 // Progress thread function
 void* ncclRmaProxyProgressThread(struct ncclRmaProxyState* rmaProxyState_);
-
 #endif

@@ -28,7 +28,7 @@
                                                       (ver << 24U))
 
 typedef struct nvmlDevice_st* nvmlDevice_t;
-#define NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE   16
+#define NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE   32
 
 typedef enum nvmlEnableState_enum
 {

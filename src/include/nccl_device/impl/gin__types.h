@@ -7,5 +7,7 @@
 
 #ifndef _NCCL_DEVICE_GIN_SESSION__TYPES_H_
 #define _NCCL_DEVICE_GIN_SESSION__TYPES_H_
+#if defined(NCCL_OS_LINUX)
 #include "../gin.h"
+#endif
 #endif

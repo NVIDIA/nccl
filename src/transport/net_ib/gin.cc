@@ -211,55 +211,38 @@ ncclResult_t ncclGinIbP2PBarrier(struct ncclGinIbCollComm *cComm) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinIbConnect(void *ctx, void *handles[], int nranks, int rank, int nConnections,
-                              int queueDepth, void *listenComm, void **collComm) {
+ncclResult_t ncclGinIbConnect(void *ctx, void *handles[], int nranks, int rank,
+                              void *listenComm, void **collComm) {
   struct ncclIbListenComm *lComm = (struct ncclIbListenComm *)listenComm;
   struct ncclGinIbCollComm *cCommArray = nullptr;
   int next;
 
   *collComm = NULL;
-  NCCLCHECK(ncclIbMalloc((void **)&cCommArray, sizeof(*cCommArray) * nConnections));
+  NCCLCHECK(ncclIbMalloc((void **)&cCommArray, sizeof(*cCommArray)));
 
-  for (int connectionId = 0; connectionId < nConnections; connectionId++) {
-    struct ncclGinIbCollComm *cComm = cCommArray + connectionId;
-    NCCLCHECK(ncclIbMalloc((void**)&cComm->fullSendComm, sizeof(void *) * nranks));
-    NCCLCHECK(ncclIbMalloc((void**)&cComm->fullRecvComm, sizeof(void *) * nranks));
+  struct ncclGinIbCollComm *cComm = cCommArray;
+  cComm->ctx = ctx;
+  cComm->nranks = nranks;
+  cComm->rank = rank;
 
-    cComm->nranks = nranks;
-    cComm->rank = rank;
-    cComm->connectionId = connectionId;
-    cComm->nConnections = nConnections;
-
-    next = (cComm->rank + 1) % nranks;
-    do
-    {
-      if (cComm->sendComm == NULL) {
-        NCCLCHECK(ncclNetIb.connect(ctx, lComm->dev, handles[next], &cComm->sendComm, NULL));
-      }
-      if (cComm->recvComm == NULL)
-        NCCLCHECK(ncclNetIb.accept(lComm, &cComm->recvComm, NULL));
-    } while (cComm->sendComm == NULL || cComm->recvComm == NULL);
-
-    cComm->getProperties = (ncclResult_t(*)(int dev, void *props))ncclIbGetProperties;
-    cComm->allGather = ncclGinIbAllGather;
-    cComm->allToAll = ncclGinIbAllToAll;
-    cComm->getGidIndex = ncclIbGetGidIndex;
-    cComm->dev = lComm->dev;
-    cComm->queueDepth = queueDepth;
-
-    for (int i = 0; i < nranks; i++) {
-      int connectPeer = (cComm->rank + i) % nranks;
-      int acceptPeer = (cComm->rank - i + nranks) % nranks;
-      do {
-        if (cComm->fullSendComm[connectPeer] == NULL)
-          NCCLCHECK(ncclNetIb.connect(ctx, lComm->dev, handles[connectPeer], &cComm->fullSendComm[connectPeer], NULL));
-        if (cComm->fullRecvComm[acceptPeer] == NULL)
-          NCCLCHECK(ncclNetIb.accept(lComm, &cComm->fullRecvComm[acceptPeer], NULL));
-      } while ((cComm->fullSendComm[connectPeer] == NULL) ||
-               (cComm->fullRecvComm[acceptPeer] == NULL));
-      NCCLCHECK(ncclGinIbP2PBarrier(cComm));
+  next = (cComm->rank + 1) % nranks;
+  do
+  {
+    if (cComm->sendComm == NULL) {
+      NCCLCHECK(ncclNetIb.connect(ctx, lComm->dev, handles[next], &cComm->sendComm, NULL));
     }
-  }
+    if (cComm->recvComm == NULL)
+      NCCLCHECK(ncclNetIb.accept(lComm, &cComm->recvComm, NULL));
+  } while (cComm->sendComm == NULL || cComm->recvComm == NULL);
+
+  cComm->getProperties = (ncclResult_t(*)(int dev, void *props))ncclIbGetProperties;
+  cComm->allGather = ncclGinIbAllGather;
+  cComm->allToAll = ncclGinIbAllToAll;
+  cComm->getGidIndex = ncclIbGetGidIndex;
+  cComm->dev = lComm->dev;
+
+  cComm->ib.context = ncclIbDevs[cComm->dev].context;
+  cComm->ib.pd = ncclIbDevs[cComm->dev].pd;
 
   *collComm = cCommArray;
   return ncclSuccess;
@@ -269,35 +252,18 @@ ncclResult_t ncclGinIbCloseColl(void* collComm) {
   struct ncclGinIbCollComm* cCommArray = (struct ncclGinIbCollComm*)collComm;
   if (!cCommArray) return ncclSuccess;
 
-  for (int connectionId = 0; connectionId < cCommArray->nConnections; connectionId++) {
-    struct ncclGinIbCollComm *cComm = cCommArray + connectionId;
-    if (cComm->fullRecvComm) {
-      for (int i=0; i<cComm->nranks; i++) {
-        NCCLCHECK(ncclNetIb.closeRecv(cComm->fullRecvComm[i]));
-      }
-      free(cComm->fullRecvComm);
-      cComm->fullRecvComm = NULL;
-    }
-
-    if (cComm->fullSendComm) {
-      for (int i=0; i<cComm->nranks; i++) {
-        NCCLCHECK(ncclNetIb.closeSend(cComm->fullSendComm[i]));
-      }
-      free(cComm->fullSendComm);
-      cComm->fullSendComm = NULL;
-    }
-
-    if (cComm->recvComm) {
-      NCCLCHECK(ncclNetIb.closeRecv(cComm->recvComm));
-      cComm->recvComm = NULL;
-    }
-
-    if (cComm->sendComm) {
-      NCCLCHECK(ncclNetIb.closeSend(cComm->sendComm));
-      cComm->sendComm = NULL;
-    }
-    memset(cComm, 0, sizeof(*cComm));
+  struct ncclGinIbCollComm *cComm = cCommArray;
+  if (cComm->recvComm) {
+    NCCLCHECK(ncclNetIb.closeRecv(cComm->recvComm));
+    cComm->recvComm = NULL;
   }
+
+  if (cComm->sendComm) {
+    NCCLCHECK(ncclNetIb.closeSend(cComm->sendComm));
+    cComm->sendComm = NULL;
+  }
+
+  memset(cComm, 0, sizeof(*cComm));
 
   free(cCommArray);
   return ncclSuccess;
@@ -333,25 +299,23 @@ ncclResult_t ncclGinIbGdakiListen(void* ctx, int dev, void* opaqueHandle, void**
   return ncclNetIb.listen(ctx, ncclGinIbGdakiDevIndexes[dev], opaqueHandle, listenComm);
 }
 
-ncclResult_t ncclGinIbGdakiConnect(void *ctx, void *handles[], int nranks, int rank, int nContexts,
-                                   int queueDepth, void *listenComm, void **collComm) {
+ncclResult_t ncclGinIbGdakiConnect(void *ctx, void *handles[], int nranks, int rank,
+                                   void *listenComm, void **collComm) {
   // Check the current GPU supports GDR
   NCCLCHECK(ncclGinIbGdrGpuSupport(/*gdaki*/ true));
 
   NCCLCHECK(
-    ncclGinIbConnect(ctx, handles, nranks, rank, nContexts, queueDepth, listenComm, collComm));
+    ncclGinIbConnect(ctx, handles, nranks, rank, listenComm, collComm));
 
   struct ncclGinIbCollComm *cComm = (struct ncclGinIbCollComm *)*collComm;
   cComm->getProperties = (ncclResult_t(*)(int dev, void *props))ncclGinIbGdakiGetProperties;
-  cComm->ibvCtx = ncclIbDevs[ncclGinIbGdakiDevIndexes[cComm->dev]].context;
-
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinIbGdakiCreateContext(void* collComm, int nSignals, int nCounters, int nContexts, void **ginCtx, ncclNetDeviceHandle_t** devHandle) {
+ncclResult_t ncclGinIbGdakiCreateContext(void* collComm, ncclGinConfig_v13_t* config, void **ginCtx, ncclNetDeviceHandle_t** devHandle) {
   struct ncclGinIbCollComm* cComm = (struct ncclGinIbCollComm*)collComm;
 
-  NCCLCHECK(ncclGinGdakiCreateContext(cComm, nSignals, nCounters, nContexts, ginCtx, devHandle));
+  NCCLCHECK(ncclGinGdakiCreateContext(cComm, config->nSignals, config->nCounters, config->nContexts, config->queueDepth, ginCtx, devHandle));
 
   return ncclSuccess;
 }
@@ -394,6 +358,8 @@ ncclGin_t ncclGinIbGdaki = {
   NULL,
   NULL,
   NULL,
+  NULL,
+  NULL,
   ncclGinIbGdakiProgress,
   ncclGinIbGdakiQueryLastError,
   ncclGinIbFinalize
@@ -416,20 +382,98 @@ ncclResult_t ncclGinIbProxyGetProperties(int dev, ncclNetProperties_t* props) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinIbProxyConnect(void *ctx, void *handles[], int nranks, int rank, int nContexts,
-                                   int queueDepth, void *listenComm, void **collComm) {
-  if (queueDepth != 0) {
-    WARN("GIN_IB_PROXY does not support specifying qp depth");
-    return ncclInvalidUsage;
-  }
-
+ncclResult_t ncclGinIbProxyConnect(void *ctx, void *handles[], int nranks, int rank,
+                                   void *listenComm, void **collComm) {
   // Check the current GPU supports GDR
   NCCLCHECK(ncclGinIbGdrGpuSupport(/*gdaki*/ false));
 
   // Connect.
   NCCLCHECK(
-    ncclGinIbConnect(ctx, handles, nranks, rank, nContexts, queueDepth, listenComm, collComm));
+    ncclGinIbConnect(ctx, handles, nranks, rank, listenComm, collComm));
 
+  return ncclSuccess;
+}
+
+struct ncclGinIbProxyCtx {
+  void**        fullRecvComm;
+  void**        fullSendComm;
+  int rank, nranks;
+  int nContexts;
+};
+
+ncclResult_t ncclGinIbProxyCreateContext(void* collComm, ncclGinConfig_v13_t* config, void** ginCtx, ncclNetDeviceHandle_v11_t** devHandle) {
+  ncclResult_t ret = ncclSuccess;
+  struct ncclGinIbCollComm *cComm = (struct ncclGinIbCollComm *)collComm;
+
+  if (config->queueDepth != 0) {
+    WARN("GIN_IB_PROXY does not support specifying qp depth");
+    return ncclInvalidUsage;
+  }
+
+  int nranks;
+  struct ncclGinIbProxyCtx* ginProxyCtx = NULL;
+  *ginCtx = NULL;
+  NCCLCHECK(ncclCalloc(&ginProxyCtx, config->nContexts));
+  ginProxyCtx[0].nContexts = config->nContexts;
+  ginProxyCtx[0].nranks = nranks = cComm->nranks;
+
+  void *lComm = NULL;
+  char* handle = NULL, *handles = NULL;
+  NCCLCHECKGOTO(ncclIbMalloc((void**)&handles, NCCL_NET_HANDLE_MAXSIZE*cComm->nranks), ret, end);
+  handle = handles + NCCL_NET_HANDLE_MAXSIZE*cComm->rank;
+
+  NCCLCHECKGOTO(ncclNetIb.listen(cComm->ctx, cComm->dev, handle, &lComm), ret, end);
+  NCCLCHECKGOTO(cComm->allGather(cComm, handle, handles, NCCL_NET_HANDLE_MAXSIZE), ret, end);
+
+  for (int c=0; c<config->nContexts; c++) {
+    struct ncclGinIbProxyCtx* gc = ginProxyCtx+c;
+    NCCLCHECKGOTO(ncclIbMalloc((void**)&gc->fullSendComm, sizeof(void *) * nranks), ret, end);
+    NCCLCHECKGOTO(ncclIbMalloc((void**)&gc->fullRecvComm, sizeof(void *) * nranks), ret, end);
+    gc->rank = cComm->rank;
+
+    for (int i = 0; i < nranks; i++) {
+      int connectPeer = (cComm->rank + i) % nranks;
+      int acceptPeer = (cComm->rank - i + nranks) % nranks;
+      do {
+        if (gc->fullSendComm[connectPeer] == NULL)
+          NCCLCHECKGOTO(ncclNetIb.connect(cComm->ctx, cComm->dev, handles+NCCL_NET_HANDLE_MAXSIZE*connectPeer, &gc->fullSendComm[connectPeer], NULL), ret, end);
+        if (gc->fullRecvComm[acceptPeer] == NULL)
+          NCCLCHECKGOTO(ncclNetIb.accept(lComm, &gc->fullRecvComm[acceptPeer], NULL), ret, end);
+      } while ((gc->fullSendComm[connectPeer] == NULL) ||
+          (gc->fullRecvComm[acceptPeer] == NULL));
+      NCCLCHECKGOTO(ncclGinIbP2PBarrier(cComm), ret, end);
+    }
+  }
+
+end:
+  free(handles);
+  if (lComm) ncclNetIb.closeListen(lComm);
+  if (ret != ncclSuccess) free(ginProxyCtx);
+  else *ginCtx = ginProxyCtx;
+  return ret;
+}
+
+ncclResult_t ncclGinIbProxyDestroyContext(void* ginCtx) {
+  struct ncclGinIbProxyCtx* gc = (struct ncclGinIbProxyCtx*)ginCtx;
+  int nContexts = gc[0].nContexts;
+  int nranks = gc[0].nranks;
+  for (int c=0; c<nContexts; c++) {
+    if (gc[c].fullRecvComm) {
+      for (int i=0; i<nranks; i++) {
+        NCCLCHECK(ncclNetIb.closeRecv(gc[c].fullRecvComm[i]));
+      }
+      free(gc[c].fullRecvComm);
+      gc[c].fullRecvComm = NULL;
+    }
+
+    if (gc[c].fullSendComm) {
+      for (int i=0; i<nranks; i++) {
+        NCCLCHECK(ncclNetIb.closeSend(gc[c].fullSendComm[i]));
+      }
+      free(gc[c].fullSendComm);
+      gc[c].fullSendComm = NULL;
+    }
+  }
   return ncclSuccess;
 }
 
@@ -472,25 +516,25 @@ ncclResult_t ncclGinIbProxyCloseColl(void* collComm) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinIbProxyIPut(void *collComm, uint64_t srcOff, void *srcMhandle, size_t size,
-                                uint64_t dstOff, void *dstMhandle, uint32_t rank, int connectionId,
+ncclResult_t ncclGinIbProxyIPut(void *ginCtx, int context, uint64_t srcOff, void *srcMhandle, size_t size,
+                                uint64_t dstOff, void *dstMhandle, uint32_t rank,
                                 void **request) {
-  struct ncclGinIbCollComm* cComm = &((struct ncclGinIbCollComm*)collComm)[connectionId];
+  struct ncclGinIbProxyCtx* ginProxyCtx = &((struct ncclGinIbProxyCtx*)ginCtx)[context];
 
   struct ncclIbGinProxyMrHandle *srcMrHandle = (struct ncclIbGinProxyMrHandle *)srcMhandle;
   struct ncclIbGinProxyMrHandle *dstMrHandle = (struct ncclIbGinProxyMrHandle *)dstMhandle;
 
-  void *srcPtr = (void *)(srcMrHandle->base_vas[cComm->rank] + srcOff);
+  void *srcPtr = (void *)(srcMrHandle->base_vas[ginProxyCtx->rank] + srcOff);
   void *dstPtr = (void *)(dstMrHandle->base_vas[rank] + dstOff);
   uint32_t lkey = srcMrHandle->mrHandle->mrs[0]->lkey;
   uint32_t rkey = dstMrHandle->rkeys[rank];
 
-  struct ncclIbSendComm* comm = (struct ncclIbSendComm*)cComm->fullSendComm[rank];
+  struct ncclIbSendComm* comm = (struct ncclIbSendComm*)ginProxyCtx->fullSendComm[rank];
   struct ncclIbQp *qp = &comm->base.qps[0];
 
   struct ncclIbRequest* req;
   NCCLCHECK(ncclIbGetRequest(&comm->base, &req));
-  req->connectionId = connectionId;
+  req->ginProxyCtx = ginProxyCtx;
   req->type = NCCL_NET_IB_REQ_GIN_IPUT;
   req->sock = &comm->base.sock;
   req->iput.rank = rank;
@@ -524,28 +568,80 @@ ncclResult_t ncclGinIbProxyIPut(void *collComm, uint64_t srcOff, void *srcMhandl
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinIbProxyIPutSignal(void *collComm, uint64_t srcOff, void *srcMhandle,
+ncclResult_t ncclGinIbProxyIGet(void *ginCtx, int context, uint64_t remoteOffset, void *remoteMhandle,
+                                 size_t size, uint64_t localOffset, void *localMhandle, uint32_t rank,
+                                 void **request) {
+  struct ncclGinIbProxyCtx* ginProxyCtx = &((struct ncclGinIbProxyCtx*)ginCtx)[context];
+
+  struct ncclIbGinProxyMrHandle *remoteMrHandle = (struct ncclIbGinProxyMrHandle *)remoteMhandle;
+  struct ncclIbGinProxyMrHandle *localMrHandle = (struct ncclIbGinProxyMrHandle *)localMhandle;
+
+  struct ncclIbSendComm* comm = (struct ncclIbSendComm*)ginProxyCtx->fullSendComm[rank];
+  struct ncclIbQp *qp = &comm->base.qps[0];
+
+  struct ncclIbRequest* req;
+  NCCLCHECK(ncclIbGetRequest(&comm->base, &req));
+  req->ginProxyCtx = ginProxyCtx;
+  req->type = NCCL_NET_IB_REQ_GIN_IGET;
+  req->sock = &comm->base.sock;
+  req->iget.rank = rank;
+  for (int i = 0; i < comm->base.vProps.ndevs; i++) {
+    req->devBases[i] = &comm->devs[i].base;
+  }
+
+  void *remotePtr = (void *)(remoteMrHandle->base_vas[rank] + remoteOffset);
+  void *localPtr = (void *)(localMrHandle->base_vas[ginProxyCtx->rank] + localOffset);
+  uint32_t rkey = remoteMrHandle->rkeys[rank];
+  uint32_t lkey = localMrHandle->mrHandle->mrs[0]->lkey;
+
+  struct ibv_send_wr wr;
+  memset(&wr, 0, sizeof(wr));
+  struct ibv_sge sge;
+  memset(&sge, 0, sizeof(sge));
+
+  wr.opcode                  = IBV_WR_RDMA_READ;
+  wr.send_flags              = IBV_SEND_SIGNALED; // TODO: Potentially optimize this?
+  wr.wr_id                   = req - comm->base.reqs;
+  wr.next                    = NULL;
+  wr.wr.rdma.remote_addr     = (uint64_t)remotePtr;
+  wr.wr.rdma.rkey            = rkey;
+  wr.sg_list = &sge;
+  wr.num_sge = 1;
+
+  sge.addr = (uintptr_t)localPtr;
+  sge.length = size;
+  sge.lkey = lkey;
+
+  struct ibv_send_wr* bad_wr;
+  NCCLCHECK(wrap_ibv_post_send(qp->qp, &wr, &bad_wr));
+  ncclIbAddEvent(req, qp->devIndex);
+
+  *request = req;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclGinIbProxyIPutSignal(void *ginCtx, int context, uint64_t srcOff, void *srcMhandle,
                                       size_t size, uint64_t dstOff, void *dstMhandle, uint32_t rank,
                                       uint64_t signalOff, void *signalMhandle, uint64_t signalValue,
-                                      uint32_t signalOp, int connectionId, void **request) {
+                                      uint32_t signalOp, void **request) {
   if (signalOp != NCCL_NET_SIGNAL_OP_INC && signalOp != NCCL_NET_SIGNAL_OP_ADD) {
     WARN("ncclGinIbProxyIPutSignal: Unsupported signalOp %u", signalOp);
     return ncclInvalidArgument;
   }
 
-  struct ncclGinIbCollComm* cComm = &((struct ncclGinIbCollComm*)collComm)[connectionId];
+  struct ncclGinIbProxyCtx* ginProxyCtx = &((struct ncclGinIbProxyCtx*)ginCtx)[context];
 
   struct ncclIbGinProxyMrHandle *srcMrHandle = (struct ncclIbGinProxyMrHandle *)srcMhandle;
   struct ncclIbGinProxyMrHandle *dstMrHandle = (struct ncclIbGinProxyMrHandle *)dstMhandle;
   struct ncclIbGinProxyMrHandle *signalMrHandle = (struct ncclIbGinProxyMrHandle *)signalMhandle;
 
-  struct ncclIbSendComm* comm = (struct ncclIbSendComm*)cComm->fullSendComm[rank];
+  struct ncclIbSendComm* comm = (struct ncclIbSendComm*)ginProxyCtx->fullSendComm[rank];
   struct ncclIbQp *qp = &comm->base.qps[0];
   int devIndex = qp->devIndex;
 
   struct ncclIbRequest* req;
   NCCLCHECK(ncclIbGetRequest(&comm->base, &req));
-  req->connectionId = connectionId;
+  req->ginProxyCtx = ginProxyCtx;
   req->type = NCCL_NET_IB_REQ_GIN_IPUT;
   req->sock = &comm->base.sock;
   req->iput.rank = rank;
@@ -560,7 +656,7 @@ ncclResult_t ncclGinIbProxyIPutSignal(void *collComm, uint64_t srcOff, void *src
 
   // If size is 0, we only need to send the signal. srcMrHandle must be non-NULL
   if (size > 0 && dstMrHandle) {
-    void *srcPtr = (void *)(srcMrHandle->base_vas[cComm->rank] + srcOff);
+    void *srcPtr = (void *)(srcMrHandle->base_vas[ginProxyCtx->rank] + srcOff);
     void *dstPtr = (void *)(dstMrHandle->base_vas[rank] + dstOff);
     uint32_t lkey = srcMrHandle->mrHandle->mrs[0]->lkey;
     uint32_t rkey = dstMrHandle->rkeys[rank];
@@ -606,9 +702,9 @@ ncclResult_t ncclGinIbProxyIPutSignal(void *collComm, uint64_t srcOff, void *src
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinIbProxyTest(void *collComm, void *request, int *done) {
+ncclResult_t ncclGinIbProxyTest(void* collComm, void *request, int *done) {
   struct ncclIbRequest* req = (struct ncclIbRequest*)request;
-  struct ncclGinIbCollComm* cComm = &((struct ncclGinIbCollComm*)collComm)[req->connectionId];
+  struct ncclGinIbProxyCtx* ginProxyCtx = (struct ncclGinIbProxyCtx*)req->ginProxyCtx;
   int rank = req->iput.rank;
   *done = 0;
 
@@ -620,8 +716,18 @@ ncclResult_t ncclGinIbProxyTest(void *collComm, void *request, int *done) {
   int wrDone = 0;
   struct ibv_wc wc[4];
 
-  struct ncclIbSendComm* comm = (struct ncclIbSendComm*)cComm->fullSendComm[rank];
-  NCCLCHECK(wrap_ibv_poll_cq(comm->devs[0].base.cq, 4, wc, &wrDone));
+  ncclIbNetCommBase* commBase;
+  ncclIbNetCommDevBase* devBase;
+  if (req->type == NCCL_NET_IB_REQ_FLUSH) {
+    struct ncclIbRecvComm* comm = (struct ncclIbRecvComm*)ginProxyCtx->fullRecvComm[rank];
+    commBase = &comm->base;
+    devBase = &comm->devs[0].base;
+  } else {
+    struct ncclIbSendComm* comm = (struct ncclIbSendComm*)ginProxyCtx->fullSendComm[rank];
+    commBase = &comm->base;
+    devBase = &comm->devs[0].base;
+  }
+  NCCLCHECK(wrap_ibv_poll_cq(devBase->cq, 4, wc, &wrDone));
   for (int i = 0; i < wrDone; i++) {
     if (wc[i].status != IBV_WC_SUCCESS) {
       union ncclSocketAddress addr;
@@ -630,19 +736,19 @@ ncclResult_t ncclGinIbProxyTest(void *collComm, void *request, int *done) {
       char remoteGidString[INET6_ADDRSTRLEN] = "";
       const char* localGidStr = NULL, *remoteGidStr = NULL;
       if (req->devBases[i]->gidInfo.link_layer == IBV_LINK_LAYER_ETHERNET) {
-        localGidStr = ibvGetGidStr(&req->devBases[i]->gidInfo.localGid, localGidString, sizeof(localGidString));
-        remoteGidStr = ibvGetGidStr(&req->base->remDevs[i].remoteGid, remoteGidString, sizeof(remoteGidString));
+        localGidStr = ibvGetGidStr(&devBase->gidInfo.localGid, localGidString, sizeof(localGidString));
+        remoteGidStr = ibvGetGidStr(&commBase->remDevs[i].remoteGid, remoteGidString, sizeof(remoteGidString));
       }
 
       char line[SOCKET_NAME_MAXLEN+1];
-      char *hcaName = req->devBases[i]->pd->context->device->name;
+      char *hcaName = devBase->pd->context->device->name;
       WARN("NET/IB/GIN: Got completion from peer %s with status=%d opcode=%d len=%u vendor err %u (%s)%s%s%s%s hca %s",
           ncclSocketToString(&addr, line), wc[i].status, wc[i].opcode, wc[i].byte_len, wc[i].vendor_err, ncclIbReqTypeStr[req->type],
           localGidStr ?  " localGid ":"", localGidString, remoteGidStr ? " remoteGids":"", remoteGidString, hcaName);
       return ncclRemoteError;
     }
 
-    struct ncclIbRequest* wcReq = comm->base.reqs + wc[i].wr_id;
+    struct ncclIbRequest* wcReq = commBase->reqs + wc[i].wr_id;
 
     wcReq->events[0]--;
     if (wcReq == req && wcReq->events[0] == 0) {
@@ -650,6 +756,45 @@ ncclResult_t ncclGinIbProxyTest(void *collComm, void *request, int *done) {
       NCCLCHECK(ncclIbFreeRequest(wcReq));
     }
   }
+  return ncclSuccess;
+}
+
+ncclResult_t ncclGinIbProxyIFlush(void *ginCtx, int context, void* mhandle, uint32_t rank, void **request) {
+  struct ncclGinIbProxyCtx* ginProxyCtx = &((struct ncclGinIbProxyCtx*)ginCtx)[context];
+  struct ncclIbRecvComm* comm = (struct ncclIbRecvComm*)ginProxyCtx->fullRecvComm[rank];
+  struct ncclIbGinProxyMrHandle *ginMrHandle = (struct ncclIbGinProxyMrHandle *)mhandle;
+  struct ncclIbQp *qp = &comm->devs[0].gpuFlush.qp;
+
+  struct ncclIbRequest* req;
+  NCCLCHECK(ncclIbGetRequest(&comm->base, &req));
+  req->type = NCCL_NET_IB_REQ_FLUSH;
+  req->sock = &comm->base.sock;
+  req->iput.rank = rank;
+  req->ginProxyCtx = ginProxyCtx;
+
+  struct ibv_send_wr wr;
+  memset(&wr, 0, sizeof(wr));
+  wr.wr_id = req - comm->base.reqs;
+
+  void *flushPtr = (void *)(ginMrHandle->base_vas[rank]);
+  wr.wr.rdma.remote_addr = (uint64_t)flushPtr;
+  wr.wr.rdma.rkey = ginMrHandle->rkeys[rank];
+  wr.sg_list = &comm->devs[qp->devIndex].gpuFlush.sge;
+  wr.num_sge = 1;
+  wr.opcode = IBV_WR_RDMA_READ;
+  wr.send_flags = IBV_SEND_SIGNALED;
+
+  TRACE(NCCL_NET, "NET/IB: %s: Posting a flush request (req=%p, comm=%p, wr_id=%ld)", __func__, req, req->base, wr.wr_id);
+  TIME_START(4);
+  struct ibv_send_wr* bad_wr;
+  NCCLCHECK(wrap_ibv_post_send(qp->qp, &wr, &bad_wr));
+  TIME_STOP(4);
+
+  ncclIbAddEvent(req, qp->devIndex);
+
+  TRACE(NCCL_NET, "NET/IB: %s: Flush request posted (req=%p, comm=%p, wr_id=%ld)", __func__, req, req->base, wr.wr_id);
+
+  *request = req;
   return ncclSuccess;
 }
 
@@ -661,15 +806,17 @@ ncclGin_t ncclGinIbProxy = {
   ncclGinIbProxyGetProperties,
   ncclIbListen,
   ncclGinIbProxyConnect,
-  NULL,
+  ncclGinIbProxyCreateContext,
   ncclGinIbProxyRegMrSym,
   ncclGinIbProxyRegMrSymDmaBuf,
   ncclGinIbProxyDeregMrSym,
-  NULL,
+  ncclGinIbProxyDestroyContext,
   ncclGinIbCloseColl,
   ncclIbCloseListen,
   ncclGinIbProxyIPut,
   ncclGinIbProxyIPutSignal,
+  ncclGinIbProxyIGet,
+  ncclGinIbProxyIFlush,
   ncclGinIbProxyTest,
   NULL,
   NULL,

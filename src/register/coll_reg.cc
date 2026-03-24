@@ -183,7 +183,8 @@ ncclResult_t ncclRegisterCollBuffers(
     // IPC buffer registration
     if (info->func == ncclFuncReduceScatter && info->algorithm != NCCL_ALGO_COLLNET_DIRECT) goto exit;
     if (info->algorithm == NCCL_ALGO_RING && ((info->func == ncclFuncAllReduce && info->sendbuff == info->recvbuff) || info->func == ncclFuncReduce)) goto exit;
-    if (info->algorithm == NCCL_ALGO_TREE && info->sendbuff == info->recvbuff) goto exit;
+    // Disable buffer registration for TREE in-place and for cross-clique due to buffer conflicts
+    if (info->algorithm == NCCL_ALGO_TREE && (info->sendbuff == info->recvbuff || comm->p2pCrossClique)) goto exit;
     if (info->algorithm == NCCL_ALGO_COLLNET_CHAIN && info->sendbuff == info->recvbuff && comm->maxLocalRanks > 1) goto exit;
     if (info->func == ncclFuncAllGather && info->algorithm == NCCL_ALGO_PAT) goto exit;
 

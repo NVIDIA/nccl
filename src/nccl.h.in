@@ -102,14 +102,15 @@ typedef struct ncclConfig_v22800 {
   int nvlinkCentricSched;
   int graphUsageMode;
   int numRmaCtx;
+  int maxP2pPeers;
 } ncclConfig_t;
 
 /* Config initializer must be assigned to initialize config structure when it is created.
  * Not initialized config will result in NCCL error. */
 #define NCCL_CONFIG_INITIALIZER {                                       \
-  sizeof(ncclConfig_t),                              /* size */         \
-  NCCL_API_MAGIC,                                    /* magic */        \
-  NCCL_VERSION(NCCL_MAJOR, NCCL_MINOR, NCCL_PATCH),  /* version */      \
+  sizeof(ncclConfig_t),                     /* size */                  \
+  NCCL_API_MAGIC,                           /* magic */                 \
+  NCCL_VERSION_CODE,                        /* version */               \
   NCCL_CONFIG_UNDEF_INT,                    /* blocking */              \
   NCCL_CONFIG_UNDEF_INT,                    /* cgaClusterSize */        \
   NCCL_CONFIG_UNDEF_INT,                    /* minCTAs */               \
@@ -126,6 +127,7 @@ typedef struct ncclConfig_v22800 {
   NCCL_CONFIG_UNDEF_INT,                    /* nvlinkCentricSched */    \
   NCCL_CONFIG_UNDEF_INT,                    /* graphUsageMode */        \
   NCCL_CONFIG_UNDEF_INT,                    /* numRmaCtx */             \
+  NCCL_CONFIG_UNDEF_INT,                    /* maxP2pPeers */           \
 }
 
 /* This struct will be used by ncclGroupSimulateEnd() API to query information about simulation. */
@@ -138,11 +140,11 @@ typedef struct ncclSimInfo_v22200 {
 
 /* NCCL_SIM_INFO_INITIALIZER must be assigned to initialize simInfo structure when it is created.
  * Not initialized simInfo will result in NCCL error. */
-#define NCCL_SIM_INFO_INITIALIZER {                                         \
-  sizeof(ncclSimInfo_t),                            /* size */              \
-  0x74685283,                                       /* magic */             \
-  NCCL_VERSION(NCCL_MAJOR, NCCL_MINOR, NCCL_PATCH), /* version */           \
-  NCCL_UNDEF_FLOAT                                  /* estimated time */    \
+#define NCCL_SIM_INFO_INITIALIZER {                                  \
+  sizeof(ncclSimInfo_t),                     /* size */              \
+  0x74685283,                                /* magic */             \
+  NCCL_VERSION_CODE,                         /* version */           \
+  NCCL_UNDEF_FLOAT                           /* estimated time */    \
 }
 
 /* NCCL malloc and free function for all types of NCCL optimizations
@@ -266,11 +268,16 @@ const char* pncclGetErrorString(ncclResult_t result);
 const char*  ncclGetLastError(ncclComm_t comm);
 const char* pncclGetLastError(ncclComm_t comm);
 
-/* Reload environment variables that determine logging. */
-__attribute__ ((deprecated("ncclResetDebugInit is not supported as part of the NCCL API and will be removed in the future")))
-void  ncclResetDebugInit();
-__attribute__ ((deprecated("pncclResetDebugInit is not supported as part of the NCCL API and will be removed in the future")))
-void pncclResetDebugInit();
+#ifdef NCCL_OS_LINUX
+  /* Reload environment variables that determine logging. */
+  __attribute__ ((deprecated("ncclResetDebugInit is not supported as part of the NCCL API and will be removed in the future")))
+  void  ncclResetDebugInit();
+  __attribute__ ((deprecated("pncclResetDebugInit is not supported as part of the NCCL API and will be removed in the future")))
+  void pncclResetDebugInit();
+#else
+  #define ncclResetDebugInit()
+  #define pncclResetDebugInit()
+#endif
 
 /* Checks whether the comm has encountered any asynchronous errors */
 ncclResult_t  ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t *asyncError);

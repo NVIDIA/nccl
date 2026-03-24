@@ -139,17 +139,19 @@ static const float nvlsEfficiency[NCCL_NUM_COMPCAPS] = {
   0.74f, // Blackwell
 };
 
-// Default tuner constants
+// Default tuner constants (positional initializers for C++17 compatibility)
 static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
-  .baseLatencies = {
+  // baseLatencies
+  {
     {  6.8, 14.0,  8.4 }, {  6.6, 14.0,  8.4 },  // Tree, Ring
     {    0,    0,    0 }, {    0,    0,    0 },  // Collnet Direct, Chain
     {    0,    0,    0 }, {    0,    0,    0 },  // NVLS, NVLS Tree
     {  8.0,  8.0,  8.0 }                         // PAT
-    },
-  .hwLatencies = {
+  },
+  // hwLatencies
+  {
   /* NVLINK */
-  { { .6, 1.25, 4.0 }, { .6, 1.9, 3.4 }, /* Tree (LL/LL128/Simple), Ring (LL/LL128/Simple)*/
+  { { 0.6, 1.25, 4.0 }, { 0.6, 1.9, 3.4 }, /* Tree (LL/LL128/Simple), Ring (LL/LL128/Simple)*/
     {  0,    0, 3.7 }, {  0,   0,  2.8 }, /* CollNetDirect (LL/LL128/Simple), CollNetChain (LL/LL128/Simple)*/
     {  0,    0,  25 }, {  0,   0,  25 }, /* NVLS (LL/LL128/Simple), NVLSTree (LL/LL128/Simple)*/
     {  0,    0, 4.0 } /* PAT (LL/LL128/Simple)*/
@@ -167,35 +169,40 @@ static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
     {   0,   0, 14 } /* PAT (LL/LL128/Simple)*/
     },
   },
-  .llMaxBws = {
+  // llMaxBws
+  {
      {39.0, 39.0, 20.4}, /* Volta-N1/Intel-N2/Intel-N4) */
      {87.7, 22.5 /*avg of ring & tree*/, 19.0}, /* Ampere-N1/AMD-N2/AMD-N4) */
      {141.0, 45.0 /*avg of ring & tree*/, 35.0}, /* Hopper-N1/AMD-N2/AMD-N4) */
      {2*141.0, 2*45.0 /*avg of ring & tree*/, 2*35.0}, /* Blackwell-N1/AMD-N2/AMD-N4) */
   },
-  .perChMaxRingLL128Bws = {
+  // perChMaxRingLL128Bws
+  {
     {20.0, 20.0, 20.0}, /* Volta (N1/N2/N4) */
     {20.0, 20.0, 20.0}, /* Ampere (N1/N2/N4) */
     {36.7, 36.7, 36.7}, /* Hopper (N1/N2/N4) */
     {40.0, 40.0, 40.0}, /* Blackwell (N1/N2/N4) */
   },
-  .perChMaxTreeLL128Bws = {
+  // perChMaxTreeLL128Bws
+  {
     {20.0, 20.0, 20.0}, /* Volta (N1/N2/N4) */
     {20.0, 20.0, 20.0}, /* Ampere (N1/N2/N4) */
     {36.7, 36.7, 29.0}, /* Hopper (N1/N2/N4) */
     {55.6, 31.67, 20.0}, /* Blackwell (N1/N2/N4) */
   },
-  .perChMaxTreeBws = {
+  // perChMaxTreeBws
+  {
     {26.5, 18.5, 10.0}, /* Volta (N1/N2/N4) */
     {24.0, 23.6, 17.8}, /* Ampere (N1/N2/N4) */
     {38.7, 41.4, 36.0}, /* Hopper (N1/N2/N4) */
     {70.0, 42.8, 24.0}, /* Blackwell (N1/N2/N4) */
   },
-  .perChMaxNVLSTreeBws = {
+  // perChMaxNVLSTreeBws
+  {
     {26.5, 18.5, 10.0}, /* Volta (N1/N2/N4) */
     {24.0, 23.6, 17.8}, /* Ampere (N1/N2/N4) */
     {0.0, 57.7, 45.5}, /* Hopper (N1/N2/N4) */
-    {0.0, 96.0, 43.8} /* Blackwell (N1/N2/N4) */
+    {0.0, 96.0, 80.0} /* Blackwell (N1/N2/N4) */
   }
 };
 
@@ -490,7 +497,8 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
           INFO(NCCL_GRAPH, "Disabling LL128 over all PxN connections (PXB and C2C). This ensures that no C2C link will be used by LL128.");
       }
       pEnable &= (graphs[a]->typeIntra <= PATH_NVB);
-      pEnable &= (minCompCap == maxCompCap);
+      // Enable LL128 for interoperability between GPUs with different compcap (Hopper and above)
+      pEnable &= (minCompCap == maxCompCap || minCompCap >= 90);
       pEnable &= !(minCompCap < 70 || (minCompCap == 90 && CUDART_VERSION == 11080 && c == ncclFuncAllReduce && a == NCCL_ALGO_RING && comm->nRanks == 2));
     }
     if (pEnable == 0) comm->bandwidths[c][a][p] = 0;
@@ -561,8 +569,6 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
       }
     }
   }
-
-  NCCLCHECK(ncclTopoGetMinNetBw(comm->topo, &comm->minNetBw));
 
   INFO(NCCL_INIT, "threadThresholds %ld/%ld/%ld | %ld/%ld/%ld | %ld | %ld",
       comm->threadThresholds[NCCL_ALGO_TREE][NCCL_PROTO_LL],

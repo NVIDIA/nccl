@@ -16,8 +16,14 @@
 #include "shmutils.h"
 #include "p2p.h"
 #include "collectives.h"
+#if defined(NCCL_OS_WINDOWS)
+#include "gin/gin_host_win_stub.h"
+#else
 #include "gin/gin_host.h"
+#endif
+#include "os.h"
 
+#include <atomic>
 #include <mutex>
 #include <condition_variable>
 
@@ -110,7 +116,7 @@ struct ncclProxyOp {
   void* taskEventHandle;
   int rank;
   int peer;
-  pid_t pid;
+  ncclPid_t pid;
   void* profilerContext;
   uint64_t workCounter;
 
@@ -156,7 +162,7 @@ struct ncclProxySubArgs {
   // Profiler plugin
   int eActivationMask;
   int rank;
-  pid_t pid;
+  ncclPid_t pid;
   void* profilerContext;
   void* taskEventHandle;
   void* opEventHandle;
@@ -260,7 +266,7 @@ struct ncclProxyProgressState {
   // Used by main threads to send work to progress thread
   struct ncclProxyOpsPool* opsPool;
   ncclShmHandle_t handle;
-  char opsPoolShmSuffix[6];
+  char opsPoolShmSuffix[16];
 
   std::thread thread;
   volatile int stop;
@@ -333,7 +339,6 @@ struct ncclProxyState {
   ncclNet_t* ncclNet;
   ncclCollNet_t* ncclCollNet;
   struct ncclGinState* ginState;
-
   uint32_t* abortFlag;
   bool directMode;
   struct ncclMemManager* memManager;  // Shared memory manager for proxy allocations
@@ -351,6 +356,7 @@ struct ncclProxyState {
   struct ncclSocket* peerSocks;
   struct ncclProxyOps* proxyOps;
   void** sharedDevMems;
+  int peerArraySize;  // Size of peerSocks/proxyOps/sharedDevMems arrays (nRanks for cross-clique, tpNLocalRanks otherwise)
   struct ncclIpcSocket peerIpcSock; // cuMEM API support (UDS)
   uint64_t *peerAddressesUDS; // cuMem API support (UDS)
 

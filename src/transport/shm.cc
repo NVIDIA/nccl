@@ -549,7 +549,12 @@ ncclResult_t ncclShmAllocateShareableBuffer(size_t size, bool legacy, ncclShmIpc
     char shmPath[SHM_PATH_MAX] = { '\0' };
     desc->shmli.shmSize = size;
     NCCLCHECK(ncclShmOpen(shmPath, sizeof(shmPath), size, hptr, dptr, 1, &desc->shmli.handle));
-    memcpy(desc->shmli.shmSuffix, shmPath + sizeof("/dev/shm/nccl-") - 1, sizeof(desc->shmli.shmSuffix));
+#if defined(NCCL_OS_LINUX)
+    static const char shmPrefix[] = "/dev/shm/nccl-";
+#elif defined(NCCL_OS_WINDOWS)
+    static const char shmPrefix[] = "Local\\nccl-shm-";
+#endif
+    memcpy(desc->shmli.shmSuffix, shmPath + sizeof(shmPrefix) - 1, sizeof(desc->shmli.shmSuffix));
     desc->legacy = true;
     INFO(NCCL_SHM, "MMAP allocated shareable host buffer %s size %zi ptr %p", shmPath, desc->shmli.shmSize, *hptr);
   }
@@ -557,7 +562,12 @@ ncclResult_t ncclShmAllocateShareableBuffer(size_t size, bool legacy, ncclShmIpc
   char shmPath[SHM_PATH_MAX] = { '\0' };
   desc->shmli.shmSize = size;
   NCCLCHECK(ncclShmOpen(shmPath, sizeof(shmPath), size, hptr, dptr, 1, &desc->shmli.handle));
-  memcpy(desc->shmli.shmSuffix, shmPath + sizeof("/dev/shm/nccl-") - 1, sizeof(desc->shmli.shmSuffix));
+#if defined(NCCL_OS_LINUX)
+  static const char shmPrefix[] = "/dev/shm/nccl-";
+#elif defined(NCCL_OS_WINDOWS)
+  static const char shmPrefix[] = "Local\\nccl-shm-";
+#endif
+  memcpy(desc->shmli.shmSuffix, shmPath + sizeof(shmPrefix) - 1, sizeof(desc->shmli.shmSuffix));
   desc->legacy = true;
   INFO(NCCL_SHM, "MMAP allocated shareable host buffer %s size %zi ptr %p", shmPath, size, *hptr);
 #endif /* CUDART_VERSION >= 12020 */
@@ -632,14 +642,22 @@ ncclResult_t ncclShmImportShareableBuffer(struct ncclComm *comm, int proxyRank, 
     INFO(NCCL_SHM, "CUMEM imported shareable host buffer from proxyRank %d size %zi ptr %p, granularity %ld", proxyRank, desc->shmci.size, descOut->shmci.ptr, granularity);
   } else {
     char shmPath[SHM_PATH_MAX];
+#if defined(NCCL_OS_LINUX)
     snprintf(shmPath, sizeof(shmPath), "/dev/shm/nccl-%s", desc->shmli.shmSuffix);
+#elif defined(NCCL_OS_WINDOWS)
+    snprintf(shmPath, sizeof(shmPath), "Local\\nccl-shm-%s", desc->shmli.shmSuffix);
+#endif
     NCCLCHECK(ncclShmOpen(shmPath, sizeof(shmPath), desc->shmli.shmSize, hptr, dptr, -1, &descOut->shmli.handle));
     descOut->legacy = true;
     INFO(NCCL_SHM, "MMAP imported shareable host buffer %s size %zi ptr %p", shmPath, desc->shmli.shmSize, *hptr);
   }
 #else /* CUDART_VERSION >= 12020 */
   char shmPath[SHM_PATH_MAX];
+#if defined(NCCL_OS_LINUX)
   snprintf(shmPath, sizeof(shmPath), "/dev/shm/nccl-%s", desc->shmli.shmSuffix);
+#elif defined(NCCL_OS_WINDOWS)
+  snprintf(shmPath, sizeof(shmPath), "Local\\nccl-shm-%s", desc->shmli.shmSuffix);
+#endif
   NCCLCHECK(ncclShmOpen(shmPath, sizeof(shmPath), desc->shmli.shmSize, hptr, dptr, -1, &descOut->shmli.handle));
   descOut->legacy = true;
   INFO(NCCL_SHM, "MMAP imported shareable host buffer %s size %zi ptr %p", shmPath, desc->shmli.shmSize, *hptr);

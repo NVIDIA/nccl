@@ -78,13 +78,14 @@ doca_verbs_cq::~doca_verbs_cq() { static_cast<void>(destroy()); }
 
 doca_error_t doca_verbs_cq::create_cq_obj(uint32_t uar_id, uint32_t log_nb_cqes,
                                           uint64_t db_umem_offset, uint32_t db_umem_id,
-                                          uint32_t wq_umem_id, bool cq_overrun) noexcept {
+                                          uint32_t wq_umem_id, bool cq_overrun,
+                                          uint8_t cq_collapsed) noexcept {
     create_cq_in create_in{0};
     create_cq_out create_out{0};
 
     DEVX_SET(create_cq_in, create_in, opcode, MLX5_CMD_OP_CREATE_CQ);
     DEVX_SET(create_cq_in, create_in, cq_context.cqe_sz, MLX5_CQC_CQE_SZ_BYTES_64);
-    DEVX_SET(create_cq_in, create_in, cq_context.cc, 0x0);  // Disable collapsed CQ
+    DEVX_SET(create_cq_in, create_in, cq_context.cc, cq_collapsed);  // Enable/Disable collapsed CQ
     DEVX_SET(create_cq_in, create_in, cq_context.oi,
              static_cast<uint8_t>(cq_overrun));                              // Enable overrun
     DEVX_SET(create_cq_in, create_in, cq_context.log_cq_size, log_nb_cqes);  //<--
@@ -250,7 +251,7 @@ void doca_verbs_cq::create(struct doca_verbs_cq_attr &cq_attr) {
 
     /* Create CQ object */
     status = create_cq_obj(uar_id, log_nb_cqes, dbr_umem_offset, dbr_umem_id, umem_id,
-                           cq_attr.cq_overrun);
+                           cq_attr.cq_overrun, cq_attr.cq_collapsed);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to create CQ object");
         throw DOCA_ERROR_DRIVER;
@@ -408,11 +409,28 @@ doca_error_t doca_verbs_cq_attr_set_external_uar(struct doca_verbs_cq_attr *cq_a
 doca_error_t doca_verbs_cq_attr_set_cq_overrun(struct doca_verbs_cq_attr *cq_attr,
                                                enum doca_verbs_cq_overrun overrun) {
     if (cq_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set external_uar: parameter cq_attr is NULL");
+        DOCA_LOG(LOG_ERR, "Failed to set cq_overrun: parameter cq_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
     cq_attr->cq_overrun = overrun;
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_cq_attr_set_cq_collapsed(struct doca_verbs_cq_attr *cq_attr,
+                                                 uint8_t collapsed) {
+    if (cq_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set cq_collapsed: parameter cq_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (collapsed != 0 && collapsed != 1) {
+        DOCA_LOG(LOG_ERR, "Failed to set cq_collapsed: value collapsed can only be 0 or 1");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    cq_attr->cq_collapsed = collapsed;
 
     return DOCA_SUCCESS;
 }

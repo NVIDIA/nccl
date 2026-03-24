@@ -30,6 +30,15 @@ NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::ncclGinBarrierSession(
 
 #if NCCL_CHECK_CUDACC
 template<typename Coop>
+NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::ncclGinBarrierSession(
+    Coop coop, ncclGin net, ncclTeamTagWorld, uint32_t barrierIndex
+  ):
+  ncclGinBarrierSession(coop, net, ncclTeamWorld(net.comm), net.comm.worldGinBarrier, barrierIndex) {
+}
+#endif
+
+#if NCCL_CHECK_CUDACC
+template<typename Coop>
 NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::~ncclGinBarrierSession() {
 }
 #endif

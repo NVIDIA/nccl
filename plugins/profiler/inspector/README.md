@@ -70,14 +70,35 @@ export NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS=500
   Loads the Inspector plugin into NCCL.
 - `NCCL_INSPECTOR_ENABLE=1`
   Enables the Inspector plugin.
-- `NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS=<interval>`
-  Sets the interval (in microseconds) for the internal dump thread to write output. Example: `500`.
-- `NCCL_INSPECTOR_DUMP_DIR=<output_dir>` (optional)
+
+### Optional Environment Variables
+
+- `NCCL_INSPECTOR_ENABLE_P2P=<0|1>` (default: `1`)
+  Enables or disables P2P tracking.
+- `NCCL_INSPECTOR_DUMP_THREAD_ENABLE=<0|1>` (default: `1`)
+  Enables or disables the internal dump thread.
+- `NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS=<interval>` (default: `-1`)
+  Sets the interval (in microseconds) for the internal dump thread to write output. A value of `-1` (default) disables periodic dumping — output is written only at communicator teardown/finalization. A value of `0` enables continuous dumping (dumps as fast as possible). Set to a positive value to enable periodic dumps at the specified interval (e.g., `500` for every 500 µs). When Prometheus mode is enabled (`NCCL_INSPECTOR_PROM_DUMP=1`), a minimum of `30000000` (30 seconds) is enforced to align with the node exporter polling interval.
+- `NCCL_INSPECTOR_DUMP_DIR=<output_dir>`
   Sets the output directory for logs. If not set, defaults to `nccl-inspector-unknown-jobid` or `nccl-inspector-<slurm_job_id>` if running under SLURM.
-- `NCCL_INSPECTOR_DUMP_VERBOSE=<0|1>` (optional)
-  Enables verbose output including event trace information. Set to `1` to enable, `0` to disable (default).
-- `NCCL_INSPECTOR_PROM_DUMP=<0|1>` (optional)
-  Enables Prometheus format for textfile node exporter output instead of custom JSON. Set to `1` to enable, `0` to disable (default).
+- `NCCL_INSPECTOR_DUMP_VERBOSE=<0|1>` (default: `0`)
+  Enables verbose output including event trace information.
+- `NCCL_INSPECTOR_PROM_DUMP=<0|1>` (default: `0`)
+  Enables Prometheus format for textfile node exporter output instead of custom JSON.
+- `NCCL_INSPECTOR_DUMP_MIN_SIZE_BYTES=<bytes>` (default: `8192`)
+  Minimum message size (bytes) to be tracked by inspector.
+- `NCCL_INSPECTOR_DUMP_COLL_RING_SIZE=<entries>` (default: `1024`)
+  Per-communicator completed-collective ring buffer capacity.
+- `NCCL_INSPECTOR_DUMP_P2P_RING_SIZE=<entries>` (default: `1024`)
+  Per-communicator completed-P2P ring buffer capacity.
+- `NCCL_INSPECTOR_COLL_POOL_SIZE=<entries>` (default: `256`)
+  Collective pool initial size/stride.
+- `NCCL_INSPECTOR_P2P_POOL_SIZE=<entries>` (default: `256`)
+  P2P pool initial size/stride.
+- `NCCL_INSPECTOR_COMM_POOL_SIZE=<entries>` (default: `256`)
+  Comm pool initial size/stride.
+- `NCCL_INSPECTOR_REQUIRE_KERNEL_TIMING=<0|1>` (default: `1`)
+  When enabled (default), only events with GPU-based kernel timing (`kernel_gpu`) are recorded. Events that fall back to CPU-measured timing (`kernel_cpu` or `collective_cpu`) are silently discarded. Set to `0` to restore the previous fallback behaviour and retain all events regardless of timing source.
 
 ### Debugging
 
@@ -125,7 +146,7 @@ export NCCL_INSPECTOR_DUMP_DIR=/path/to/logs/${SLURM_JOB_ID}/
 srun your_nccl_application
 ```
 
-**Prometheus Output Mode(For Node exporter)**
+**Prometheus Output Mode (for node exporter)**
 
 **Example Prometheus Setup:**
 ```bash
@@ -136,14 +157,29 @@ export NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS=30000000  # 30 seconds
 export NCCL_INSPECTOR_DUMP_DIR=/var/lib/node_exporter/nccl_inspector/
 ```
 
-**Exported Metrics:**
-- `nccl_algorithm_bandwidth_gbs` - NCCL algorithm bandwidth in GB/s
-- `nccl_bus_bandwidth_gbs` - NCCL bus bandwidth in GB/s
-- `nccl_collective_exec_time_microseconds` - Execution time in microseconds
+Note: Prometheus mode enforces a minimum dump interval of 30 seconds (30,000,000 microseconds) to align with the node exporter polling interval.
 
-All metrics include labels: `comm_id`, `collective`, `hostname`, `rank`, `slurm_job`, `slurm_job_id`, `pid`, `n_ranks`, `n_nodes`, `coll_sn`, `coll_timing_source`.
-e.g.:
-comm_id="0xd152c00f111816",collective="AllReduce",hostname="pool0-0002",rank="4",slurm_job="unknown",slurm_job_id="unknown",n_ranks="8",n_nodes="1",coll_sn="228924",timestamp="2025-10-17T03:31:47Z",gpu_device_id="GPU4",message_size="2.00GB"
+**Exported Metrics:**
+- `nccl_bus_bandwidth_gbs` - NCCL bus bandwidth in GB/s (collectives)
+- `nccl_collective_exec_time_microseconds` - Execution time in microseconds (collectives)
+- `nccl_p2p_bus_bandwidth_gbs` - NCCL P2P bus bandwidth in GB/s
+- `nccl_p2p_exec_time_microseconds` - P2P execution time in microseconds
+
+When P2P tracking is enabled (`NCCL_INSPECTOR_ENABLE_P2P=1`), Prometheus output includes P2P metrics with a `p2p_operation` label (e.g., `Send`, `Recv`).
+
+**Labels:**
+- Collectives: `version`, `slurm_job_id`, `node`, `gpu`, `comm_name`, `n_nodes`, `nranks`, `collective`, `message_size`, `algo_proto`
+- P2P: `version`, `slurm_job_id`, `node`, `gpu`, `comm_name`, `n_nodes`, `nranks`, `p2p_operation`, `message_size`
+
+`message_size` is a bucketed range string (for example `4-5GB`).
+
+**Current Metric Format Examples:**
+```
+nccl_bus_bandwidth_gbs{version="v5.1",slurm_job_id="unknown",node="nvl72004-T01",gpu="GPU0",comm_name="DP Group 0",n_nodes="1",nranks="4",collective="AllReduce",message_size="4-5GB",algo_proto="Ring_ll"} 678.263
+nccl_collective_exec_time_microseconds{version="v5.1",slurm_job_id="unknown",node="nvl72004-T01",gpu="GPU0",comm_name="DP Group 0",n_nodes="1",nranks="4",collective="AllReduce",message_size="4-5GB",algo_proto="Ring_ll"} 9498.47
+nccl_p2p_bus_bandwidth_gbs{version="v5.1",slurm_job_id="unknown",node="nvl72004-T01",gpu="GPU0",comm_name="DP Group 0",n_nodes="1",nranks="4",p2p_operation="Send",message_size="512-513MB"} 464.9
+nccl_p2p_exec_time_microseconds{version="v5.1",slurm_job_id="unknown",node="nvl72004-T01",gpu="GPU0",comm_name="DP Group 0",n_nodes="1",nranks="4",p2p_operation="Send",message_size="512-513MB"} 1154.87
+```
 
 ## Output Example
 

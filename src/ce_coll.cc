@@ -102,8 +102,8 @@ bool ncclCeAvailable(struct ncclComm* comm, ncclFunc_t coll, int/*ncclDevRedOp_t
     TRACE(NCCL_TUNING, "Skipping CE collective: not implemented");
     return false;
   }
-  if (comm->nNodes > 1) {
-    TRACE(NCCL_TUNING, "Skipping CE collective: comm is not a single node");
+  if (ncclTeamLsa(comm).nRanks < comm->nRanks) {
+    TRACE(NCCL_TUNING, "Skipping CE collective: not all ranks have NVLink connectivity");
     return false;
   }
   if (!comm->symmetricSupport) {
@@ -214,7 +214,9 @@ ncclResult_t ncclMemOpSync(struct ncclComm* comm, struct ncclCeCollArgs* args, c
   uint32_t* completePtrs = (uint32_t*)comm->ceColl.baseUCSymComplPtr;
 
   // Allocate enough slots for all possible ops
-  size_t batchSize = (comm->nvlsSupport ? NCCL_CE_SYNC_OPS_PER_RANK_MC : NCCL_CE_SYNC_OPS_PER_RANK_UC) * comm->nRanks;
+  // For cross-clique, NVLS multicast isn't available across cliques - use unicast sync instead
+  bool useMCSync = comm->nvlsSupport && !comm->p2pCrossClique;
+  size_t batchSize = (useMCSync ? NCCL_CE_SYNC_OPS_PER_RANK_MC : NCCL_CE_SYNC_OPS_PER_RANK_UC) * comm->nRanks;
   size_t opIdx = 0;
   CUstreamBatchMemOpParams* batchParams = nullptr;
 
@@ -225,7 +227,7 @@ ncclResult_t ncclMemOpSync(struct ncclComm* comm, struct ncclCeCollArgs* args, c
   // Prepare batch memory operations for synchronization
   NCCLCHECKGOTO(ncclCalloc(&batchParams, batchSize), ret, fail);
 
-  if (comm->nvlsSupport) {
+  if (useMCSync) {
     NCCLCHECKGOTO(ncclPrepMCSync(comm, comm->ceColl.useCompletePtr, batchParams, &opIdx, stream), ret, fail);
   } else {
     NCCLCHECKGOTO(ncclPrepUCSync(comm, comm->ceColl.useCompletePtr, batchParams, &opIdx, stream), ret, fail);

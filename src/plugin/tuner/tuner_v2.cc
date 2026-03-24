@@ -6,7 +6,7 @@
  * See LICENSE.txt for more license information
  *************************************************************************/
 
-#include <dlfcn.h>
+#include "os.h"
 #include "debug.h"
 #include "checks.h"
 #include "nccl_tuner.h"
@@ -60,7 +60,7 @@ static ncclResult_t ncclTuner_init(void** ctx, uint64_t commId, size_t nRanks, s
 }
 
 ncclTuner_t* getNcclTuner_v2(void* lib) {
-  ncclTuner_v2 = (ncclTuner_v2_t*)dlsym(lib, "ncclTunerPlugin_v2");
+  ncclTuner_v2 = (ncclTuner_v2_t*)ncclOsDlsym(lib, "ncclTunerPlugin_v2");
   if (ncclTuner_v2) {
     ncclTuner.name = ncclTuner_v2->name;
     ncclTuner.init = ncclTuner_init;

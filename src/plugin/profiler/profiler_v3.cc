@@ -8,7 +8,7 @@
 #include "comm.h"
 #include "nccl_profiler.h"
 #include "checks.h"
-#include <dlfcn.h>
+#include "os.h"
 
 static ncclProfiler_t ncclProfiler;
 static ncclProfiler_v3_t* ncclProfiler_v3;
@@ -111,7 +111,7 @@ static ncclResult_t ncclProfiler_init(void** context,
 }
 
 ncclProfiler_t* getNcclProfiler_v3(void* lib) {
-  ncclProfiler_v3 = (ncclProfiler_v3_t*)dlsym(lib, "ncclProfiler_v3");
+  ncclProfiler_v3 = (ncclProfiler_v3_t*)ncclOsDlsym(lib, "ncclProfiler_v3");
   if (ncclProfiler_v3) {
     ncclProfiler.name = ncclProfiler_v3->name;
     ncclProfiler.init = ncclProfiler_init;

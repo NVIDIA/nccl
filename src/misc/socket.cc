@@ -10,9 +10,6 @@
 #include "os.h"
 #include <stdlib.h>
 
-#include <unistd.h>
-#include <ifaddrs.h>
-#include <net/if.h>
 #include "param.h"
 #include <time.h>
 #include <atomic>
@@ -98,9 +95,16 @@ ncclResult_t ncclSocketListen(struct ncclSocket* sock) {
   if (ncclSocketToPort(&sock->addr)) {
     // Port is forced by env. Make sure we get the port.
     int opt = 1;
+#if defined(NCCL_OS_LINUX)
     SYSCHECK(setsockopt(sock->socketDescriptor, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)), "setsockopt");
 #if defined(SO_REUSEPORT)
     SYSCHECK(setsockopt(sock->socketDescriptor, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt)), "setsockopt");
+#endif
+#elif defined(NCCL_OS_WINDOWS)
+    SYSCHECK(setsockopt(sock->socketDescriptor, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt)), "setsockopt");
+#if defined(SO_REUSEPORT)
+    SYSCHECK(setsockopt(sock->socketDescriptor, SOL_SOCKET, SO_REUSEPORT, (char*)&opt, sizeof(opt)), "setsockopt");
+#endif
 #endif
   }
 
@@ -261,7 +265,7 @@ ncclResult_t ncclSocketGetAddrFromString(union ncclSocketAddress* ua, const char
     }
     bool global_scope = (j == -1 ? true : false);     // If no % found, global scope; otherwise, link scope
 
-    char ip_str[NI_MAXHOST], port_str[NI_MAXSERV], if_name[IFNAMSIZ];
+    char ip_str[NI_MAXHOST], port_str[NI_MAXSERV], if_name[16];
     memset(ip_str, '\0', sizeof(ip_str));
     memset(port_str, '\0', sizeof(port_str));
     memset(if_name, '\0', sizeof(if_name));

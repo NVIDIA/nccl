@@ -13,7 +13,16 @@
 #include "collectives.h"
 #include "../op128.h"
 #include "../reduce_kernel.h"
+#if !defined(NCCL_OS_WINDOWS)
 #include "gin_scratch.h"
+#endif
+#include "tma_ptx.cuh"
+
+template<typename Pack, int UnrollPacks, int UnrollPeers = 1>
+struct tmaSmemStruct {
+  alignas(16) Pack buff[UnrollPeers][UnrollPacks*WARP_SIZE];
+  alignas(8) __mbarrier_t bar;
+};
 
 #if __CUDA_ARCH__ >= 700
 // __grid_constant__ appears to break cuda-gdb
@@ -219,6 +228,7 @@ struct ncclSymkGinAccumType { using Type = T; };
 template<> struct ncclSymkGinAccumType<FuncSum, __half> { using Type = float; };
 #if defined(__CUDA_BF16_TYPES_EXIST__)
 template<> struct ncclSymkGinAccumType<FuncSum, __nv_bfloat16> { using Type = float; };
+template<> struct ncclSymkGinAccumType<FuncSumPostDiv, __nv_bfloat16> { using Type = float; };
 #endif
 
 #if defined(__CUDA_FP8_TYPES_EXIST__)
@@ -227,40 +237,71 @@ template<> struct ncclSymkGinAccumType<FuncSum, __nv_bfloat16> { using Type = fl
 // give users a higher precision alternative.
 template<> struct ncclSymkGinAccumType<FuncSum, __nv_fp8_e4m3> { using Type = __half; };
 template<> struct ncclSymkGinAccumType<FuncSum, __nv_fp8_e5m2> { using Type = __half; };
+template<> struct ncclSymkGinAccumType<FuncSumPostDiv, __nv_fp8_e4m3> { using Type = __half; };
+template<> struct ncclSymkGinAccumType<FuncSumPostDiv, __nv_fp8_e5m2> { using Type = __half; };
 #endif
 
+static __device__ __forceinline__ void tmaLoadStoreMc(void* dest, void* smem, void* source, size_t size, __mbarrier_t* bar) {
+  cp_async_bulk_global_to_shared(smem, source, bar, size);
+  __mbarrier_token_t token = barrier_arrive1_tx_relaxed(bar, size);
+  while (!barrier_try_wait_token_relaxed(bar, token)) {}
+  multimem_cp_async_bulk_shared_to_global(dest, smem, size);
+  cp_async_bulk_commit_group();
+  cp_async_bulk_wait_all_read();
+}
+
 // TODO: move this into data_ops.cuh
-template<typename T>
+template<typename T, bool EnableTma = false>
 static __device__ void bcastMultimem(
     ncclSymkArgsHandler& handler, int tn, int t, ncclSymPtr<T> input, ncclSymPtr<T> output, size_t nElts
   ) {
   size_t nBytes = nElts*sizeof(T);
   uintptr_t inputUptr = reinterpret_cast<uintptr_t>(input.localPtr());
   uintptr_t outputUptr = reinterpret_cast<uintptr_t>(output.multimemPtr(handler.comm.lsaMultimem));
-  uint32_t nPreBytes = (16 - input.offset)%16;
+  uint32_t alignment = uint32_t(inputUptr - outputUptr);
+  uint32_t nPreBytes = (EnableTma && alignment%256 == 0) ? (256 - input.offset)%256
+                                                         : (16 - input.offset)%16;
   nPreBytes = min((size_t)nPreBytes, nBytes);
   uintptr_t nSufBytes;
 
-  if ((inputUptr-outputUptr)%16 == 0) {
+  int lane = t%WARP_SIZE;
+  int lw = threadIdx.x / WARP_SIZE;
+  extern __shared__ char smemScratch[];
+
+  if (alignment%16 == 0) {
     constexpr int BytePerPack = 16, UnrollPacks = 8;
     constexpr int BytePerChunk = UnrollPacks*WARP_SIZE*BytePerPack;
     uintptr_t cursor = nPreBytes;
     uint32_t nChunks = (nBytes-cursor)/BytePerChunk;
     uintptr_t cursorAfter = cursor + uintptr_t(nChunks)*BytePerChunk;
+
+    // Initialize share memory pointer and barrier
+    constexpr size_t tileSize = UnrollPacks*WARP_SIZE*BytePerPack;
+    using tmaSmemStruct_t = tmaSmemStruct<BytePack<BytePerPack>, UnrollPacks>;
+    constexpr int smemSizePerWarp = ncclTmaShmemScratchWarpSize();
+    tmaSmemStruct_t* tmaSmem = reinterpret_cast<tmaSmemStruct_t*>(smemScratch+lw*smemSizePerWarp);
+    if NCCL_IF_CONSTEXPR (EnableTma) {
+      if (lane == 0) __mbarrier_init(&tmaSmem->bar, 1);
+    }
+
     nSufBytes = nBytes - cursorAfter;
     cursor += (t/WARP_SIZE)*UnrollPacks*WARP_SIZE*BytePerPack;
     cursor += (t%WARP_SIZE)*BytePerPack;
     int nIters = nChunks - t/WARP_SIZE;
     #pragma unroll 1
     while (0 < nIters) {
-      BytePack<BytePerPack> tmp[UnrollPacks];
-      #pragma unroll
-      for (int u=0; u < UnrollPacks; u++) {
-        tmp[u] = *reinterpret_cast<BytePack<BytePerPack>*>(inputUptr + cursor + u*WARP_SIZE*BytePerPack);
-      }
-      #pragma unroll
-      for (int u=0; u < UnrollPacks; u++) {
-        multimem_st_global(outputUptr + cursor + u*WARP_SIZE*BytePerPack, tmp[u]);
+      if NCCL_IF_CONSTEXPR (EnableTma) {
+        if (lane == 0) tmaLoadStoreMc((void*)(outputUptr+cursor), tmaSmem->buff[0], (void*)(inputUptr+cursor), tileSize, &tmaSmem->bar);
+      } else {
+        BytePack<BytePerPack> tmp[UnrollPacks];
+        #pragma unroll
+        for (int u=0; u < UnrollPacks; u++) {
+          tmp[u] = *reinterpret_cast<BytePack<BytePerPack>*>(inputUptr + cursor + u*WARP_SIZE*BytePerPack);
+        }
+        #pragma unroll
+        for (int u=0; u < UnrollPacks; u++) {
+          multimem_st_global(outputUptr + cursor + u*WARP_SIZE*BytePerPack, tmp[u]);
+        }
       }
       cursor += tn*UnrollPacks*BytePerPack;
       nIters -= tn/WARP_SIZE;

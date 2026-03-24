@@ -11,7 +11,7 @@
 #include "comm.h"
 
 struct shmLegacyIpc {
-  char shmSuffix[7];
+  char shmSuffix[32];
   ncclShmHandle_t handle;
   size_t shmSize;
 };

@@ -66,20 +66,28 @@ NCCL_DEVICE_INLINE void ncclGinInitCommon(GinType* gin, ncclDevComm const& comm,
 }
 
 template<unsigned beMask>
-NCCL_DEVICE_INLINE ncclGin_BackendMask<beMask>::ncclGin_BackendMask(ncclDevComm const& comm, int contextIndex):
-  comm(comm) {
+NCCL_DEVICE_INLINE ncclGin_BackendMask<beMask>::ncclGin_BackendMask(
+    ncclDevComm const& comm, int contextIndex, ncclGinResourceSharingMode resourceSharingMode_):
+  comm(comm), resourceSharingMode(resourceSharingMode_) {
   ncclGinInitCommon(this, comm, contextIndex);
 }
 
 NCCL_DEVICE_INLINE ncclGin_C::ncclGin_C(
-    ncclDevComm const& comm, unsigned backendMask, int contextIndex)
-  : comm(comm), backendMask(backendMask) {
+    ncclDevComm const& comm, unsigned backendMask, int contextIndex,
+    ncclGinResourceSharingMode resourceSharingMode)
+  : comm(comm), resourceSharingMode(resourceSharingMode), backendMask(backendMask) {
   ncclGinInitCommon(this, comm, contextIndex);
 }
 
 NCCL_DEVICE_INLINE void ncclGin_C_init(
     ncclGin_C* net, unsigned backendMask, ncclDevComm const& comm, int contextIndex) {
-  ::new (net) ncclGin_C(comm, backendMask, contextIndex);
+  ::new (net) ncclGin_C(comm, backendMask, contextIndex, NCCL_GIN_RESOURCE_SHARING_GPU);
+}
+
+NCCL_DEVICE_INLINE void ncclGin_C_initWithResourceSharingMode(
+    ncclGin_C* net, unsigned backendMask, ncclDevComm const& comm, int contextIndex,
+    ncclGinResourceSharingMode resourceSharingMode) {
+  ::new (net) ncclGin_C(comm, backendMask, contextIndex, resourceSharingMode);
 }
 #endif
 
@@ -98,6 +106,7 @@ NCCL_DEVICE_INLINE ncclGinCtx_M<beMask> ncclGin_BackendMask<beMask>::_makeCtx() 
   }
   ans.handle = _ginHandle;
   ans.contextId = contextId;
+  ans.resourceSharingMode = (uint8_t)this->resourceSharingMode;
   return ans;
 }
 
@@ -115,6 +124,7 @@ NCCL_DEVICE_INLINE ncclGinCtx ncclGin_C_makeCtx(ncclGin_C* net) {
   }
   ans.handle = net->_ginHandle;
   ans.contextId = net->contextId;
+  ans.resourceSharingMode = (uint8_t)net->resourceSharingMode;
   return ans;
 }
 #endif
@@ -210,12 +220,12 @@ NCCL_DEVICE_INLINE constexpr uint64_t ncclGin_getSignalOpArg(ncclGin_VASignalAdd
 template<typename LocalAction>
 NCCL_DEVICE_INLINE constexpr bool ncclGin_isCounter(LocalAction) { return false; }
 template<typename LocalAction>
-NCCL_DEVICE_INLINE constexpr ncclGinSignal_t ncclGin_getCounterId(ncclGin const&, LocalAction) { return -1u; }
+NCCL_DEVICE_INLINE constexpr ncclGinCounter_t ncclGin_getCounterId(ncclGin const&, LocalAction) { return -1u; }
 #endif
 
 #if NCCL_CHECK_CUDACC
 NCCL_DEVICE_INLINE constexpr bool ncclGin_isCounter(ncclGin_CounterInc) { return true; }
-NCCL_DEVICE_INLINE constexpr ncclGinSignal_t ncclGin_getCounterId(ncclGin const& net, ncclGin_CounterInc arg) { return net.comm.ginCounterBase + arg.counter; }
+NCCL_DEVICE_INLINE constexpr ncclGinCounter_t ncclGin_getCounterId(ncclGin const& net, ncclGin_CounterInc arg) { return net.comm.ginCounterBase + arg.counter; }
 #endif
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -696,6 +706,62 @@ NCCL_DEVICE_INLINE uint64_t ncclGinReadSignal(
   uint64_t* ptr = ncclGinCall<ncclGinApi_GetSignalPtr>(ctx, net->comm.ginSignalBase + signal);
   uint64_t mask = uint64_t(-1)>>(64-bits);
   return mask & cuda::atomic_ref<uint64_t>{*ptr}.load(ord);
+}
+#endif
+
+#if NCCL_CHECK_CUDACC
+
+template<unsigned beMask>
+template<
+  typename Coop,
+  typename DescriptorSmem
+>
+NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::get(
+    ncclTeam team, int peer,
+    ncclWindow_t remoteWnd, size_t remoteOffset,
+    ncclWindow_t localWnd, size_t localOffset,
+    size_t bytes, Coop coop,
+    DescriptorSmem descriptor,
+    uint32_t optFlags) const {
+  using nccl::utility::loadConst;
+  using nccl::gin::internal::teamRankToGinRank;
+  coop.sync();
+  ncclGinCall<ncclGinApi_Get>(this->_makeCtx(), coop,
+      teamRankToGinRank(this->comm, team, peer),
+      loadConst(&remoteWnd->ginWins[this->connectionId]),
+      4096*size_t(loadConst(&remoteWnd->ginOffset4K)) + remoteOffset,
+      loadConst(&localWnd->ginWins[this->connectionId]),
+      4096*size_t(loadConst(&localWnd->ginOffset4K)) + localOffset, bytes,
+      ncclGin_isDescriptor(descriptor),
+      ncclGin_getDescriptor(descriptor),
+      optFlags);
+  coop.sync();
+}
+
+NCCL_DEVICE_INLINE void ncclGinGet(
+  ncclGin_C* net,
+  ncclTeam team, int peer,
+  ncclWindow_t remoteWnd, size_t remoteOffset,
+  ncclWindow_t localWnd, size_t localOffset, size_t bytes,
+  ncclCoopAny coop,
+  bool isDescriptor,
+  ncclGinDescriptorSmem* descriptor,
+  uint32_t optFlags
+) {
+  using nccl::utility::loadConst;
+  using nccl::gin::internal::teamRankToGinRank;
+  coop.sync();
+  ncclGinCtx ctx = ncclGin_C_makeCtx(net);
+  ncclGinCall<ncclGinApi_Get>(ctx, coop,
+      teamRankToGinRank(net->comm, team, peer),
+      loadConst(&remoteWnd->ginWins[net->connectionId]),
+      4096*size_t(loadConst(&remoteWnd->ginOffset4K)) + remoteOffset,
+      loadConst(&localWnd->ginWins[net->connectionId]),
+      4096*size_t(loadConst(&localWnd->ginOffset4K)) + localOffset, bytes,
+      ncclGin_isDescriptor(descriptor),
+      ncclGin_getDescriptor(descriptor),
+      optFlags);
+  coop.sync();
 }
 #endif
 

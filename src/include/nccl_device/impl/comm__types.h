@@ -13,7 +13,6 @@
 #include "lsa_barrier__types.h"
 #include "gin_barrier__types.h"
 
-struct ncclDevCommWindowTable;
 #if __cplusplus
 struct ncclDevCommWindowTable {
   struct Entry {
@@ -23,6 +22,7 @@ struct ncclDevCommWindowTable {
   struct ncclDevCommWindowTable* next;
 };
 #endif
+typedef struct ncclDevCommWindowTable* ncclDevCommWindowTable_t;
 
 struct ncclDevComm {
   int rank, nRanks;
@@ -30,10 +30,10 @@ struct ncclDevComm {
   int lsaRank, lsaSize;
   uint32_t lsaSize_rcp32;
 
-  struct ncclDevCommWindowTable* windowTable;
+  ncclDevCommWindowTable_t windowTable;
 
   ncclWindow_t resourceWindow;
-  struct ncclWindow_vidmem resourceWindow_inlined;
+  ncclWindow_vidmem_t resourceWindow_inlined;
 
   ncclMultimemHandle_t lsaMultimem;
   ncclLsaBarrierHandle_t lsaBarrier;
@@ -53,6 +53,11 @@ struct ncclDevComm {
 
   // FT related
   uint32_t* abortFlag;
+
+  ncclLsaBarrierHandle_t hybridLsaBarrier;
+  ncclGinBarrierHandle_t hybridRailGinBarrier;
+
+  ncclGinBarrierHandle_t worldGinBarrier;
 };
 
 #endif // _NCCL_DEVICE_COMM__TYPES_H_

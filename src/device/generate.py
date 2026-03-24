@@ -27,8 +27,6 @@ if os.path.exists(gensrc):
     path = os.path.join(gensrc, name)
     if os.path.isfile(path):
       os.remove(path)
-    elif os.path.isdir(path):
-      shutil.rmtree(path)
 else:
   os.mkdir(gensrc)
 
@@ -225,7 +223,14 @@ with open(os.path.join(gensrc, "device_table.cu"), "w") as f:
       out("#endif\n")
   out("\n")
 
-  out("__device__ ncclDevFuncPtr_t const ncclDevFuncTable[] = {\n");
+  # On Windows/MSVC, extern arrays of unknown size are invalid (C2133), so we use
+  # an internal array + pointer alias.  On Linux/GCC the array is named directly
+  # to avoid an extra device-memory indirection on every kernel dispatch.
+  out("#if defined(NCCL_OS_WINDOWS)\n")
+  out("__device__ ncclDevFuncPtr_t const ncclDevFuncTableData[] = {\n")
+  out("#else\n")
+  out("__device__ ncclDevFuncPtr_t const ncclDevFuncTable[] = {\n")
+  out("#endif\n")
   index = 0
   for fn in primary_funcs:
     sym = paste("_", "ncclDevFunc", *fn)
@@ -237,6 +242,10 @@ with open(os.path.join(gensrc, "device_table.cu"), "w") as f:
       out("#else\n" "/*%4d*/ nullptr,\n" "#endif\n" % index)
     index += 1
   out("nullptr};\n")
+  out("\n")
+  out("#if defined(NCCL_OS_WINDOWS)\n")
+  out("__device__ ncclDevFuncPtr_t const * ncclDevFuncTable = ncclDevFuncTableData;\n")
+  out("#endif\n")
   out("\n")
 
   out("// Workaround for https://reviews.llvm.org/D55580\n"

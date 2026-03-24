@@ -9,7 +9,7 @@
 #include "kernel.cuh"
 #include "primitives.cuh"
 
-template<int BytePerPack, int UnrollPacks, int UnrollPeers>
+template<int BytePerPack, int UnrollPacks, int UnrollPeers, bool EnableTma>
 static __device__ void bcastDeep(
     ncclSymkArgsHandler const& handler, int tn, int t,
     bool waitNeeded, ncclLsaBarrierSession<ncclCoopCta>& bar,
@@ -21,16 +21,42 @@ static __device__ void bcastDeep(
   int lane = t%WARP_SIZE;
   int const& rank = handler.comm.rank;
   int const& nRanks = handler.comm.nRanks;
+  constexpr size_t tileSize = UnrollPacks*WARP_SIZE*BytePerPack;
 
-  Pack* inpPacks = (Pack*)input.localPtr() + intptr_t(w)*UnrollPacks*WARP_SIZE + lane;
-  ncclSymPtr<Pack> outPacks = (ncclSymPtr<Pack>)output + intptr_t(w)*UnrollPacks*WARP_SIZE + lane;
+  Pack* inpPacks = (Pack*)input.localPtr() + intptr_t(w)*UnrollPacks*WARP_SIZE + (EnableTma ? 0 : lane);
+  ncclSymPtr<Pack> outPacks = (ncclSymPtr<Pack>)output + intptr_t(w)*UnrollPacks*WARP_SIZE + (EnableTma ? 0 : lane);
   Pack tmp[UnrollPacks];
+
+  int lw = threadIdx.x / WARP_SIZE;
+  extern __shared__ char smemScratch[];
+  using tmaSmemStruct_t = tmaSmemStruct<Pack, UnrollPacks>;
+  constexpr int smemSizePerWarp = ncclTmaShmemScratchWarpSize();
+  tmaSmemStruct_t* tmaSmem = reinterpret_cast<tmaSmemStruct_t*>(smemScratch+lw*smemSizePerWarp);
+  bool skip = false; // all lanes issue loads/stores
+
+  if NCCL_IF_CONSTEXPR (EnableTma) {
+    if (lane == 0) {
+      // lane0 issues async.cp.bulk commands
+      __mbarrier_init(&tmaSmem->bar, 1);
+    } else {
+      // other lanes can skip the loop
+      skip = true;
+    }
+  }
 
   nIters -= w;
   if (0 < nIters) {
-    #pragma unroll
-    for (int u=0; u < UnrollPacks; u++) {
-      tmp[u] = inpPacks[u*WARP_SIZE];
+    if NCCL_IF_CONSTEXPR (EnableTma) {
+      if (lane == 0) {
+        cp_async_bulk_global_to_shared(tmaSmem->buff[0], inpPacks, &tmaSmem->bar, tileSize);
+        __mbarrier_token_t token = barrier_arrive1_tx_relaxed(&tmaSmem->bar, tileSize);
+        while (!barrier_try_wait_token_relaxed(&tmaSmem->bar, token)) {}
+      }
+    } else {
+      #pragma unroll
+      for (int u=0; u < UnrollPacks; u++) {
+        tmp[u] = inpPacks[u*WARP_SIZE];
+      }
     }
   }
 
@@ -42,7 +68,7 @@ static __device__ void bcastDeep(
       int r = rank + dr;
       if (r == nRanks) r = 0;
       #pragma unroll 2
-      for (int partial=0; partial <= 1; partial++) {
+      for (int partial=0; partial <= 1 && !skip; partial++) {
         #pragma unroll 1
         for (int i = 0;
              partial ? i < 1 : (dr + UnrollPeers <= nRanks);
@@ -50,11 +76,21 @@ static __device__ void bcastDeep(
           #pragma unroll
           for (int ur=0; ur < UnrollPeers-partial; ur++) {
             if (partial && dr == nRanks) break;
-            #pragma unroll UnrollPacks
-            for (int u=0; u < UnrollPacks; u++) {
-              outPacks.lsaPtr(r)[u*WARP_SIZE] = tmp[u];
+            if NCCL_IF_CONSTEXPR (EnableTma) {
+              cp_async_bulk_shared_to_global(outPacks.lsaPtr(r), tmaSmem->buff[0], tileSize);
+            } else {
+              #pragma unroll UnrollPacks
+              for (int u=0; u < UnrollPacks; u++) {
+                outPacks.lsaPtr(r)[u*WARP_SIZE] = tmp[u];
+              }
             }
             if (++r == nRanks) r = 0;
+          }
+          if NCCL_IF_CONSTEXPR (EnableTma) {
+            if (lane == 0) {
+              cp_async_bulk_commit_group();
+              cp_async_bulk_wait_all_read();
+            }
           }
         }
       }
@@ -62,11 +98,17 @@ static __device__ void bcastDeep(
       outPacks += intptr_t(wn)*UnrollPacks*WARP_SIZE;
       nIters -= wn;
       if (nIters <= 0) break;
-
-      // Load data for next iteration.
-      #pragma unroll
-      for (int u=0; u < UnrollPacks; u++) {
-        tmp[u] = inpPacks[u*WARP_SIZE];
+      if NCCL_IF_CONSTEXPR (EnableTma) {
+        if (lane == 0) {
+          cp_async_bulk_global_to_shared(tmaSmem->buff[0], inpPacks, &tmaSmem->bar, tileSize);
+          __mbarrier_token_t token = barrier_arrive1_tx_relaxed(&tmaSmem->bar, tileSize);
+          while (!barrier_try_wait_token_relaxed(&tmaSmem->bar, token)) {}
+        }
+      } else {
+        #pragma unroll
+        for (int u=0; u < UnrollPacks; u++) {
+          tmp[u] = inpPacks[u*WARP_SIZE];
+        }
       }
     }
   }
@@ -105,7 +147,7 @@ static __device__ void bcastEnds(
   }
 }
 
-template<typename T>
+template<typename T, bool EnableTma>
 static __device__ void bcast(
     ncclSymkArgsHandler const& handler, int tn, int t, int nBlocks,
     bool waitNeeded, ncclLsaBarrierSession<ncclCoopCta>& bar,
@@ -115,20 +157,22 @@ static __device__ void bcast(
   size_t nBytes = nElts*sizeof(T);
   uint32_t nBlocks_rcp32 = nccl::utility::idivRcp32_upto64(nBlocks);
 
-  uint32_t nPreBytes = (16 - input.offset)%16;
+  uint32_t alignment = uint32_t(input.offset - output.offset);
+  uint32_t nPreBytes = (EnableTma && alignment%256 == 0) ? (256 - input.offset)%256
+                                                         : (16 - input.offset)%16;
   nPreBytes = min((size_t)nPreBytes, nBytes);
   uintptr_t cursor = nPreBytes;
 
   constexpr int MinWarpPerBlock = 4;
 
-  if ((input.offset - output.offset)%16 == 0) {
+  if (alignment%16 == 0) {
     constexpr int BytePerPack = 16, UnrollPacks = 4, UnrollPeers = 2;
     constexpr int BytePerChunk = MinWarpPerBlock*UnrollPacks*WARP_SIZE*BytePerPack;
     uint32_t chunks = (nBytes-cursor)/BytePerChunk;
     chunks -= imodFast32(chunks, nBlocks, nBlocks_rcp32);
     if (chunks != 0) {
       uintptr_t cursorAfter = cursor + uintptr_t(chunks)*BytePerChunk;
-      bcastDeep<BytePerPack, UnrollPacks, UnrollPeers>(
+      bcastDeep<BytePerPack, UnrollPacks, UnrollPeers, EnableTma>(
         handler, tn, t, waitNeeded, bar,
         (ncclSymPtr<char>)input + cursor,
         (ncclSymPtr<char>)output + cursor,
@@ -139,14 +183,14 @@ static __device__ void bcast(
     }
   }
 
-  if (sizeof(T) == 4 || (sizeof(T) < 4 && (input.offset - output.offset)%4 == 0)) {
+  if (sizeof(T) == 4 || (sizeof(T) < 4 && alignment%4 == 0)) {
     constexpr int BytePerPack = 4, UnrollPacks = 4, UnrollPeers = 4;
     constexpr int BytePerChunk = MinWarpPerBlock*UnrollPacks*WARP_SIZE*BytePerPack;
     uint32_t chunks = (nBytes-cursor)/BytePerChunk;
     chunks -= imodFast32(chunks, nBlocks, nBlocks_rcp32);
     if (chunks != 0) {
       uintptr_t cursorAfter = cursor + uintptr_t(chunks)*BytePerChunk;
-      bcastDeep<(sizeof(T) <= BytePerPack ? BytePerPack : 0), UnrollPacks, UnrollPeers>(
+      bcastDeep<(sizeof(T) <= BytePerPack ? BytePerPack : 0), UnrollPacks, UnrollPeers, false>(
         handler, tn, t, waitNeeded, bar,
         (ncclSymPtr<char>)input + cursor,
         (ncclSymPtr<char>)output + cursor,
@@ -182,9 +226,11 @@ __device__ __forceinline__ void ncclSymkRun_AllGather_ST(ncclSymkDevWorkArgs con
                            block, nBlocks,
                            threadIdx.x/WARP_SIZE, blockDim.x/WARP_SIZE);
         int btn = nBlocks*blockDim.x;
-
-        bcast(handler, btn, bt, nBlocks, waitNeeded, bar, input, output + rank*nAllElts, nElts);
-
+#if __CUDA_ARCH__ >= 1000 && defined(ENABLE_TMA)
+        bcast<char, true>(handler, btn, bt, nBlocks, waitNeeded, bar, input, output + rank*nAllElts, nElts);
+#else
+        bcast<char, false>(handler, btn, bt, nBlocks, waitNeeded, bar, input, output + rank*nAllElts, nElts);
+#endif
         waitNeeded = false;
       }
     );
@@ -209,8 +255,11 @@ __device__ __forceinline__ void ncclSymkRun_AllGather_STMC(ncclSymkDevWorkArgs c
                           block, nBlocks,
                           threadIdx.x/WARP_SIZE, blockDim.x/WARP_SIZE);
         int tn = nBlocks*blockDim.x;
-
-        bcastMultimem(handler, tn, t, input, output + rank*nAllElts, nElts);
+#if __CUDA_ARCH__ >= 1000 && defined(ENABLE_TMA)
+        bcastMultimem<char, true>(handler, tn, t, input, output + rank*nAllElts, nElts);
+#else
+        bcastMultimem<char, false>(handler, tn, t, input, output + rank*nAllElts, nElts);
+#endif
       }
     );
 

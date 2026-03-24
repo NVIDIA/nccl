@@ -12,6 +12,7 @@ NVCC ?= nvcc
 DEBUG ?= 0
 ASAN ?= 0
 UBSAN ?= 0
+NCCL_INSPECTOR_ENABLE_WARN ?= 0
 
 # CUDA paths - default to /usr/local/cuda or require explicit CUDA_HOME
 CUDA_HOME ?= $(shell \
@@ -37,7 +38,7 @@ OBJDIR := obj
 SRCDIR := .
 
 # Compiler flags
-CXXFLAGS := $(CXXSTD) -fPIC -Wall -Wextra -O2
+CXXFLAGS := $(CXXSTD) -fPIC -Wall -Wextra -O2 -DNCCL_INSPECTOR_ENABLE_WARN=$(NCCL_INSPECTOR_ENABLE_WARN)
 INCLUDES := -I$(CUDA_INC) -I$(SRCDIR) -I$(SRCDIR)/nccl
 LDFLAGS := -shared -L$(CUDA_LIB)
 LIBS := -lcudart -ldl -lpthread
@@ -60,9 +61,12 @@ endif
 
 # Source files
 SRCS := inspector.cc \
+	inspector_json.cc \
 	inspector_prom.cc \
 	inspector_plugin.cc \
 	inspector_cudawrap.cc \
+	inspector_ring.cc \
+	inspector_event_pool.cc \
 	json.cc \
 	version.cc
 
@@ -144,9 +148,10 @@ help:
 	@echo "  help    - Show this help"
 	@echo ""
 	@echo "Options:"
-	@echo "  DEBUG=1   - Enable debug build"
-	@echo "  ASAN=1    - Enable address sanitizer"
-	@echo "  UBSAN=1   - Enable undefined behavior sanitizer"
+	@echo "  DEBUG=1                      - Enable debug build"
+	@echo "  ASAN=1                       - Enable address sanitizer"
+	@echo "  UBSAN=1                      - Enable undefined behavior sanitizer"
+	@echo "  NCCL_INSPECTOR_ENABLE_WARN=1 - Emit inspector messages at WARN level (default: INFO)"
 	@echo ""
 	@echo "Environment Variables:"
 	@echo "  CUDA_HOME - Path to CUDA installation (default: /usr/local/cuda)"

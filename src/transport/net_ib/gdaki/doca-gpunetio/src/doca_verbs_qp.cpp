@@ -144,13 +144,13 @@ int init2init_optional_attr[DOCA_VERBS_QP_TYPE_RC + 1] = {
 int init2rtr_optional_attr[DOCA_VERBS_QP_TYPE_RC + 1] = {
     /* [DOCA_VERBS_QP_TYPE_RC] */
     QP_ATTR(CURRENT_STATE) | QP_ATTR(NEXT_STATE) | QP_ATTR(PKEY_INDEX) |
-        QP_ATTR(ALLOW_REMOTE_WRITE) | QP_ATTR(ALLOW_REMOTE_READ),
+        QP_ATTR(ALLOW_REMOTE_WRITE) | QP_ATTR(ALLOW_REMOTE_READ) | QP_ATTR(MAX_DEST_RD_ATOMIC),
 };
 
 int rtr2rts_optional_attr[DOCA_VERBS_QP_TYPE_RC + 1] = {
     /* [DOCA_VERBS_QP_TYPE_RC] */
     QP_ATTR(CURRENT_STATE) | QP_ATTR(NEXT_STATE) | QP_ATTR(MIN_RNR_TIMER) |
-        QP_ATTR(ALLOW_REMOTE_WRITE),
+        QP_ATTR(ALLOW_REMOTE_WRITE) | QP_ATTR(MAX_QP_RD_ATOMIC),
 };
 
 int rts2rts_optional_attr[DOCA_VERBS_QP_TYPE_RC + 1] = {
@@ -191,6 +191,10 @@ const char *qp_attr_to_string(int attr) {
             return "RNR_RETRY";
         case DOCA_VERBS_QP_ATTR_AH_ATTR:
             return "AH_ATTR";
+        case DOCA_VERBS_QP_ATTR_MAX_QP_RD_ATOMIC:
+            return "MAX_QP_RD_ATOMIC";
+        case DOCA_VERBS_QP_ATTR_MAX_DEST_RD_ATOMIC:
+            return "MAX_DEST_RD_ATOMIC";
         default:
             break;
     }
@@ -207,6 +211,8 @@ void print_if_missing_attr(int required_attr_mask, int attr_mask, int attr_to_ch
 void print_missing_attrs(int required_attr_mask, int attr_mask) {
     print_if_missing_attr(required_attr_mask, attr_mask, DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_WRITE);
     print_if_missing_attr(required_attr_mask, attr_mask, DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_READ);
+    print_if_missing_attr(required_attr_mask, attr_mask, DOCA_VERBS_QP_ATTR_MAX_QP_RD_ATOMIC);
+    print_if_missing_attr(required_attr_mask, attr_mask, DOCA_VERBS_QP_ATTR_MAX_DEST_RD_ATOMIC);
     print_if_missing_attr(required_attr_mask, attr_mask, DOCA_VERBS_QP_ATTR_PKEY_INDEX);
     print_if_missing_attr(required_attr_mask, attr_mask, DOCA_VERBS_QP_ATTR_MIN_RNR_TIMER);
     print_if_missing_attr(required_attr_mask, attr_mask, DOCA_VERBS_QP_ATTR_PORT_NUM);
@@ -953,6 +959,9 @@ doca_error_t doca_verbs_qp::init2rtr(struct doca_verbs_qp_attr &verbs_qp_attr,
         DEVX_SET(qpc, qpc, atomic_mode, verbs_qp_attr.allow_remote_atomic);
     }
 
+    if (attr_mask & DOCA_VERBS_QP_ATTR_MAX_DEST_RD_ATOMIC)
+        DEVX_SET(qpc, qpc, log_rra_max, doca_internal_utils_log2(verbs_qp_attr.max_dest_rd_atomic));
+
     int mlx5_opt_param_mask{0};
     convert_doca_verbs_qp_attr_mask_to_legal_mlx5_qp_opt_param_mask(attr_mask, mlx5_opt_param_mask,
                                                                     DOCA_VERBS_QP_INIT2RTR);
@@ -1003,6 +1012,9 @@ doca_error_t doca_verbs_qp::rtr2rts(struct doca_verbs_qp_attr &verbs_qp_attr,
         DEVX_SET(qpc, qpc, rae, 1);
         DEVX_SET(qpc, qpc, atomic_mode, verbs_qp_attr.allow_remote_atomic);
     }
+
+    if (attr_mask & DOCA_VERBS_QP_ATTR_MAX_QP_RD_ATOMIC)
+        DEVX_SET(qpc, qpc, log_sra_max, doca_internal_utils_log2(verbs_qp_attr.max_rd_atomic));
 
     DEVX_SET(qpc, qpc, log_ack_req_freq, 0x0);  // 8
 
@@ -1198,6 +1210,8 @@ doca_error_t doca_verbs_qp::query_qp(struct doca_verbs_qp_attr &verbs_qp_attr,
     verbs_qp_attr.allow_remote_write = DEVX_GET(qpc, qpc, rwe);
     verbs_qp_attr.allow_remote_read = DEVX_GET(qpc, qpc, rre);
     // verbs_qp_attr.allow_remote_atomic = DEVX_GET(qpc, qpc, rae);
+    verbs_qp_attr.max_rd_atomic = 1 << DEVX_GET(qpc, qpc, log_sra_max);
+    verbs_qp_attr.max_dest_rd_atomic = 1 << DEVX_GET(qpc, qpc, log_rra_max);
 
     if (verbs_qp_attr.ah_attr != nullptr) {
         verbs_qp_attr.ah_attr->addr_type = m_addr_type;
@@ -2445,6 +2459,42 @@ uint16_t doca_verbs_qp_attr_get_min_rnr_timer(const struct doca_verbs_qp_attr *v
     }
 
     return verbs_qp_attr->min_rnr_timer;
+}
+
+doca_error_t doca_verbs_qp_attr_set_max_rd_atomic(struct doca_verbs_qp_attr *verbs_qp_attr,
+                                                  uint8_t max_rd_atomic) {
+    if (verbs_qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set max_rd_atomic: parameter verbs_qp_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (!doca_internal_utils_next_power_of_two(max_rd_atomic)) {
+        DOCA_LOG(LOG_ERR, "Failed to set max_rd_atomic (%d) as it is not a power of 2",
+                 max_rd_atomic);
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    verbs_qp_attr->max_rd_atomic = max_rd_atomic;
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_qp_attr_set_max_dest_rd_atomic(struct doca_verbs_qp_attr *verbs_qp_attr,
+                                                       uint8_t max_dest_rd_atomic) {
+    if (verbs_qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set max_dest_rd_atomic: parameter verbs_qp_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (!doca_internal_utils_next_power_of_two(max_dest_rd_atomic)) {
+        DOCA_LOG(LOG_ERR, "Failed to set max_dest_rd_atomic (%d) as it is not a power of 2",
+                 max_dest_rd_atomic);
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    verbs_qp_attr->max_dest_rd_atomic = max_dest_rd_atomic;
+
+    return DOCA_SUCCESS;
 }
 
 doca_error_t doca_verbs_ah_attr_create(struct ibv_context *context,

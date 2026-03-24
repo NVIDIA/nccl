@@ -9,7 +9,11 @@
 
 #define PLUGIN_NAME "Plugin"
 
+#if defined(NCCL_OS_LINUX)
 #define __hidden __attribute__ ((visibility("hidden")))
+#elif defined(NCCL_OS_WINDOWS)
+#define __hidden
+#endif
 #define NCCL_PLUGIN_MAX_RECVS 1
 
 int max_requests = NCCL_NET_MAX_REQUESTS;
@@ -51,6 +55,9 @@ __hidden ncclResult_t pluginGetProperties(int dev, ncclNetProperties_t* props) {
   // maximum transfer sizes the plugin can handle
   props->maxP2pBytes = NCCL_MAX_NET_SIZE_BYTES;
   props->maxCollBytes = NCCL_MAX_NET_SIZE_BYTES;
+  // Set to NCCL_NET_ID_UNDEF will lead NCCL to ignore the value
+  props->railId = NCCL_NET_ID_UNDEF;
+  props->planeId = NCCL_NET_ID_UNDEF;
   return ncclSuccess;
 }
 
@@ -72,7 +79,7 @@ __hidden ncclResult_t pluginGetDeviceMr(void* comm, void* mhandle, void** dptr_m
 __hidden ncclResult_t pluginMakeVDevice(int* d, ncclNetVDeviceProps_t* props) { return ncclInternalError; }
 __hidden ncclResult_t pluginFinalize(void* ctx) { return ncclSuccess; }
 
-const ncclNet_v11_t ncclNetPlugin_v11 = {
+const ncclNet_v12_t ncclNetPlugin_v12 = {
   .name = PLUGIN_NAME,
   .init = pluginInit,
   .devices = pluginDevices,

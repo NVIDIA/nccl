@@ -2,6 +2,8 @@
 set(RMA_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/rma.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/rma_proxy.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/rma_proxy_progress.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/rma_proxy_launch.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/rma_ce.cc
 )
 

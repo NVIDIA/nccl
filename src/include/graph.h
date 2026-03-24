@@ -15,7 +15,6 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <stdio.h>
-#include <sched.h>
 
 ncclResult_t ncclTopoCudaPath(int cudaDev, char** path);
 
@@ -35,12 +34,13 @@ ncclResult_t ncclTopoComputeP2pChannelsPerPeer(struct ncclComm* comm);
 ncclResult_t ncclTopoGetNvbGpus(struct ncclTopoSystem* system, int rank, int* nranks, int** ranks);
 ncclResult_t ncclTopoPathAllNVLink(struct ncclTopoSystem* system, int* allNvLink);
 ncclResult_t ncclTopoPathAllDirectNVLink(struct ncclTopoSystem* system, bool* allNvlinkConnected);
+ncclResult_t ncclCheckMultiRank(struct ncclComm* comm);
 ncclResult_t ncclTopoComputeCommCPU(struct ncclComm* comm);
 
 // Query topology
 ncclResult_t ncclTopoGetNetDev(struct ncclComm* comm, int rank, struct ncclTopoGraph* graph, int channelId, int peerRank, int64_t* id, int* dev, int* proxyRank);
 ncclResult_t ncclTopoCheckP2p(struct ncclComm* comm, struct ncclTopoSystem* system, int rank1, int rank2, int* p2p, int *read, int* intermediateRank, int* cudaP2p);
-ncclResult_t ncclTopoCheckMNNVL(struct ncclTopoSystem* system, struct ncclPeerInfo* info1, struct ncclPeerInfo* info2, int* ret);
+ncclResult_t ncclTopoCheckMNNVL(struct ncclComm* comm, struct ncclPeerInfo* info1, struct ncclPeerInfo* info2, int* ret);
 enum ncclTopoGdrMode {
   ncclTopoGdrModeDisable = 0,
   ncclTopoGdrModeDefault = 1,
@@ -49,6 +49,7 @@ enum ncclTopoGdrMode {
 };
 ncclResult_t ncclTopoCheckGdr(struct ncclTopoSystem* topo, int rank, int64_t netId, int read, enum ncclTopoGdrMode* gdrMode);
 ncclResult_t ncclTopoNeedFlush(struct ncclComm* comm, int64_t netId, int netDev, int rank, int* flush);
+ncclResult_t ncclTopoGetMinNetBw(struct ncclTopoSystem* system, int rank, float* bw);
 ncclResult_t ncclTopoIsGdrAvail(struct ncclTopoSystem* system, int rank, bool *avail);
 ncclResult_t ncclTopoCheckNet(struct ncclTopoSystem* system, int rank1, int rank2, int* net);
 int ncclPxnDisable(struct ncclComm* comm);
@@ -93,6 +94,46 @@ ncclResult_t ncclTopoGetNetDevsPolicy(enum netDevsPolicy* policy, int* policyNum
 // Allows for up to 576 GPUs (e.g., NVLD144) with headroom for internal operations
 #define NCCL_TOPO_MAX_NODES 640
 ncclResult_t ncclTopoGetLocal(struct ncclTopoSystem* system, int type, int index, int resultType, int locals[NCCL_TOPO_MAX_NODES], int* localCount, int* pathType);
+
+// Local (myself)
+#define PATH_LOC 0
+
+// Connection traversing NVLink
+#define PATH_NVL 1
+
+// Connection through NVLink using an intermediate GPU
+#define PATH_NVB 2
+
+// Connection through C2C
+#define PATH_C2C 3
+
+// Connection traversing at most a single PCIe bridge
+#define PATH_PIX 4
+
+// Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
+#define PATH_PXB 5
+
+// Connection between a GPU and a NIC using the C2C connection to the CPU and the PCIe connection to the NIC
+#define PATH_P2C 6
+
+// Connection between a GPU and a NIC using an intermediate GPU. Used to enable rail-local, aggregated network send/recv operations.
+#define PATH_PXN 7
+
+// Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
+#define PATH_PHB 8
+
+// Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
+#define PATH_SYS 9
+
+// Connection through the network
+#define PATH_NET 10
+
+// New type of path which should precede PATH_PIX
+#define PATH_PORT PATH_NVL
+
+// Disconnected
+#define PATH_DIS 11
+extern const char* topoPathTypeStr[];
 
 // Init search. Needs to be done before calling ncclTopoCompute
 ncclResult_t ncclTopoSearchInit(struct ncclTopoSystem* system);

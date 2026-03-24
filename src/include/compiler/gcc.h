@@ -25,6 +25,10 @@
 } while(0)
 #define COMPILER_ATOMIC_STORE(ptr, val, order) \
   __atomic_store_n((ptr), (val), NCCL_CONVERT_ORDER(order))
+#define COMPILER_ATOMIC_LOAD_32(ptr, order) \
+  __atomic_load_n((ptr), NCCL_CONVERT_ORDER(order))
+#define COMPILER_ATOMIC_STORE_32(ptr, val, order) \
+  __atomic_store_n((ptr), (val), NCCL_CONVERT_ORDER(order))
 #define COMPILER_ATOMIC_EXCHANGE(ptr, val, order) \
   __atomic_exchange_n((ptr), (val), NCCL_CONVERT_ORDER(order))
 #define COMPILER_ATOMIC_COMPARE_EXCHANGE(ptr, expected, desired, success_order, failure_order) \
@@ -58,5 +62,7 @@
 
 // Compiler hints
 #define COMPILER_ASSUME_ALIGNED(ptr, alignment) __builtin_assume_aligned((ptr), (alignment))
+
+#define COMPILER_ATTRIBUTE_UNUSED __attribute__((unused))
 
 #endif // NCCL_COMPILER_GCC_H

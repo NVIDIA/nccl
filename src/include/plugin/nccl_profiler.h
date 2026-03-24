@@ -80,6 +80,8 @@ typedef ncclProfilerEventState_t ncclProfilerEventState_v4_t;
 typedef ncclProfilerEventState_t ncclProfilerEventState_v5_t;
 typedef ncclProfilerEventState_t ncclProfilerEventState_v6_t;
 
+/* profiler_v*.h use ncclPid_t, defined in os.h (os/linux.h or os/windows.h) */
+#include "os.h"
 #include <cstdint>
 #include "profiler/profiler_v6.h"
 #include "profiler/profiler_v5.h"

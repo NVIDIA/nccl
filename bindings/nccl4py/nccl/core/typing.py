@@ -38,12 +38,20 @@ except ImportError:
                 ...
 
 
-from nccl import bindings as _nccl_bindings
-from nccl.bindings import DataType, RedOp
+from nccl.bindings import (
+    DataType,
+    RedOp,
+    GinType as NcclGinType,
+    GinConnectionType as NcclGinConnectionType,
+    CommMemStat as NcclCommMemStat,
+)
 
 __all__ = [
     "NcclDataType",
     "NcclRedOp",
+    "NcclGinType",
+    "NcclGinConnectionType",
+    "NcclCommMemStat",
     "NcclBufferSpec",
     "NcclScalarSpec",
     "NcclDeviceSpec",
@@ -83,6 +91,10 @@ _DeviceID: TypeAlias = int
 class NcclInvalid(Exception):
     def __init__(self, msg):
         self.msg = msg
+        super().__init__(msg)
+
+    def __reduce__(self):
+        return (type(self), (self.msg,))
 
     def __repr__(self):
         return f"<NcclInvalid: {self.msg}>"
@@ -304,17 +316,9 @@ class NcclRedOp:
         Raises:
             - ``NcclInvalid``: If the reduction operator value is invalid.
         """
-        try:
-            _ro = getattr(_nccl_bindings, "RedOp")
-            # Access a few known attributes to ensure class exists
-            _ = getattr(_ro, "Sum")
-        except Exception:
-            raise NcclInvalid("NCCL bindings error: NcclRedOp bindings not found")
-
         # Validate that the value corresponds to a valid reduction operator
         try:
-            self._redop_value = _ro(value)
-            self._redop_name = self._redop_value.name
+            self._redop_value = RedOp(value)
         except Exception:
             raise NcclInvalid(
                 f"Invalid reduction operator: value {value} is not a valid NCCL reduction operator"
@@ -324,10 +328,10 @@ class NcclRedOp:
         return int(self._redop_value)
 
     def __str__(self) -> str:
-        return self._redop_name
+        return self._redop_value.name
 
     def __repr__(self) -> str:
-        return f"<NcclRedOp: {self._redop_name}>"
+        return f"<NcclRedOp: {self._redop_value.name}>"
 
     @property
     def value(self) -> int:
@@ -347,7 +351,7 @@ class NcclRedOp:
         Returns:
             ``str``: Operator name (e.g., "Sum", "Max").
         """
-        return self._redop_name
+        return self._redop_value.name
 
 
 SUM = NcclRedOp(RedOp.Sum)

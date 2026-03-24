@@ -36,9 +36,9 @@
 #ifndef DOCA_GPUNETIO_H
 #define DOCA_GPUNETIO_H
 
-#include "host/doca_error.h"
-#include "doca_gpunetio_config.h"
-#include "common/doca_gpunetio_verbs_def.h"
+#include "doca_error.h"
+#include "../doca_gpunetio_config.h"
+#include "../common/doca_gpunetio_verbs_def.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -321,13 +321,15 @@ doca_error_t doca_gpu_verbs_unexport_uar(uint64_t *uar_addr_gpu);
  *
  * @param [in] qp_cpu
  * QP to progress
+ * @param [out] out_progressed
+ * Whether the QP has been progressed. NULL if not needed.
  *
  * @return
  * DOCA_SUCCESS - in case of success.
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
  */
-doca_error_t doca_gpu_verbs_cpu_proxy_progress(struct doca_gpu_verbs_qp *qp_cpu);
+doca_error_t doca_gpu_verbs_cpu_proxy_progress(struct doca_gpu_verbs_qp *qp_cpu, bool *out_progressed);
 
 /**
  * Create a service object.
@@ -430,6 +432,57 @@ doca_error_t doca_gpu_verbs_unexport_multi_qps_dev(struct doca_gpu *gpu_dev,
                                                    struct doca_gpu_verbs_qp **qps,
                                                    unsigned int num_qps,
                                                    struct doca_gpu_dev_verbs_qp *qp_gpus);
+
+/**
+ * Reset tracking and memory of a GPUNetIO QP
+ *
+ * @param [in] qp_gverbs
+ * GPUNetIO QP object
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure
+ */
+doca_error_t doca_gpu_verbs_reset_tracking_and_memory(struct doca_gpu_verbs_qp *qp_gverbs);
+
+/**
+ * Get the library version
+ *
+ * @param [out] version
+ * Library version
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ */
+doca_error_t doca_gpu_verbs_get_library_version(uint32_t *version);
+
+/**
+ * Check if the library is compatible with the device code version
+ *
+ * @param [in] device_code_version
+ * Device code version
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
+ * - DOCA_ERROR_NOT_SUPPORTED - if the library is not compatible with the device code version
+ */
+doca_error_t doca_gpu_verbs_check_device_code_compatibility(uint32_t device_code_version);
+
+/**
+ * Check if the library is compatible with the host code version
+ *
+ * @param [in] host_code_version
+ * Host code version
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
+ * - DOCA_ERROR_NOT_SUPPORTED - if the library is not compatible with the host code version
+ */
+doca_error_t doca_gpu_verbs_check_host_code_compatibility(uint32_t host_code_version);
 
 #ifdef __cplusplus
 }

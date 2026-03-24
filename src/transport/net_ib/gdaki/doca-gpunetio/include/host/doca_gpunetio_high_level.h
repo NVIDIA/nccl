@@ -54,10 +54,14 @@ struct doca_gpu_verbs_qp_init_attr_hl {
     struct doca_gpu *gpu_dev;
     struct ibv_pd *ibpd;
     uint16_t sq_nwqe;
+    uint8_t reserved1[2];
     enum doca_gpu_dev_verbs_nic_handler nic_handler;
     enum doca_gpu_verbs_mem_reg_type mreg_type;
     enum doca_gpu_verbs_send_dbr_mode_ext send_dbr_mode_ext;
-};
+    bool cq_collapsed;
+    uint8_t reserved2[3];
+    uint8_t reserved3[16];
+} __attribute__((__aligned__(8))) __attribute__((__packed__));
 
 struct doca_gpu_verbs_qp_hl {
     struct doca_gpu *gpu_dev; /* DOCA GPU device to use */

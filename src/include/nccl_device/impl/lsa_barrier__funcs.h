@@ -74,11 +74,14 @@ NCCL_DEVICE_INLINE void ncclLsaBarrierSession<Coop>::arrive(Coop, cuda::memory_o
     }
   #endif
   } else {
+    if (this->team.nRanks > 1) {
+      cuda::atomic_thread_fence(nccl::utility::releaseOrderOf(order));
+    }
     #pragma unroll 1
     for (int i = this->coop.thread_rank(); i < this->team.nRanks-1; i += this->coop.size()) {
       int peer = i + (this->team.rank <= i ? 1 : 0);
       cuda::atomic_ref<uint32_t> inbox(*this->ucInbox(peer, this->team.rank));
-      inbox.store(this->epoch+1, nccl::utility::releaseOrderOf(order));
+      inbox.store(this->epoch+1, cuda::memory_order_relaxed);
     }
   }
 }

@@ -23,6 +23,11 @@
 #include <random>
 #include <chrono>
 
+// On Windows, strtok_s is equivalent to POSIX strtok_r with same signature
+#ifdef NCCL_OS_WINDOWS
+#define strtok_r strtok_s
+#endif
+
 int ncclCudaCompCap();
 
 // PCI Bus ID <-> int64 conversion functions
@@ -104,12 +109,12 @@ static inline int gcd(int a, int b) {
 
 template<typename Int>
 inline void ncclAtomicRefCountIncrement(Int* refs) {
-  COMPILER_ATOMIC_FETCH_ADD(refs, 1, std::memory_order_relaxed);
+  COMPILER_ATOMIC_FETCH_ADD(refs, static_cast<Int>(1), std::memory_order_relaxed);
 }
 
 template<typename Int>
 inline Int ncclAtomicRefCountDecrement(Int* refs) {
-  return COMPILER_ATOMIC_SUB_FETCH(refs, 1, std::memory_order_acq_rel);
+  return COMPILER_ATOMIC_SUB_FETCH(refs, static_cast<Int>(1), std::memory_order_acq_rel);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -476,7 +481,7 @@ bool ncclIntruQueueMpscEmpty(struct ncclIntruQueueMpsc<T,next>* me) {
 
 template<typename T, T *T::*next>
 bool ncclIntruQueueMpscEnqueue(ncclIntruQueueMpsc<T,next>* me, T* x) {
-  COMPILER_ATOMIC_STORE(&(x->*next), nullptr, std::memory_order_relaxed);
+  COMPILER_ATOMIC_STORE(&(x->*next), static_cast<T*>(nullptr), std::memory_order_relaxed);
   uintptr_t utail = COMPILER_ATOMIC_EXCHANGE(&me->tail, reinterpret_cast<uintptr_t>(x), std::memory_order_acq_rel);
   T* prev = reinterpret_cast<T*>(utail);
   T** prevNext = utail <= 0x2 ? &me->head : &(prev->*next);
@@ -517,8 +522,8 @@ T* ncclIntruQueueMpscDequeueAll(ncclIntruQueueMpsc<T,next>* me, bool waitSome) {
     } while (head == nullptr);
   }
 
-  COMPILER_ATOMIC_STORE(&me->head, nullptr, std::memory_order_relaxed);
-  uintptr_t utail = COMPILER_ATOMIC_EXCHANGE(&me->tail, 0x0, std::memory_order_acq_rel);
+  COMPILER_ATOMIC_STORE(&me->head, static_cast<T*>(nullptr), std::memory_order_relaxed);
+  uintptr_t utail = COMPILER_ATOMIC_EXCHANGE(&me->tail, uintptr_t(0), std::memory_order_acq_rel);
   T* tail = utail <= 0x2 ? nullptr : reinterpret_cast<T*>(utail);
   T *x = head;
   while (x != tail) {
@@ -537,7 +542,7 @@ T* ncclIntruQueueMpscDequeueAll(ncclIntruQueueMpsc<T,next>* me, bool waitSome) {
 template<typename T, T *T::*next>
 T* ncclIntruQueueMpscAbandon(ncclIntruQueueMpsc<T,next>* me) {
   uintptr_t expected = 0x0;
-  if (COMPILER_ATOMIC_COMPARE_EXCHANGE(&me->tail, &expected, /*desired=*/0x2, std::memory_order_relaxed, std::memory_order_relaxed)) {
+  if (COMPILER_ATOMIC_COMPARE_EXCHANGE(&me->tail, &expected, /*desired=*/uintptr_t(0x2), std::memory_order_relaxed, std::memory_order_relaxed)) {
     return nullptr;
   } else {
     int spins = 0;
@@ -547,8 +552,8 @@ T* ncclIntruQueueMpscAbandon(ncclIntruQueueMpsc<T,next>* me) {
       if (head != nullptr) break;
       if (++spins == 1024) { spins = 1024-1; std::this_thread::yield(); }
     }
-    COMPILER_ATOMIC_STORE(&me->head, nullptr, std::memory_order_relaxed);
-    uintptr_t utail = COMPILER_ATOMIC_EXCHANGE(&me->tail, 0x2, std::memory_order_acq_rel);
+    COMPILER_ATOMIC_STORE(&me->head, static_cast<T*>(nullptr), std::memory_order_relaxed);
+    uintptr_t utail = COMPILER_ATOMIC_EXCHANGE(&me->tail, uintptr_t(0x2), std::memory_order_acq_rel);
     T* tail = utail <= 0x2 ? nullptr : reinterpret_cast<T*>(utail);
     T *x = head;
     while (x != tail) {

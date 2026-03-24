@@ -49,6 +49,7 @@ struct ncclGin_C {
   ncclDevComm const& comm;
   uint32_t nConnections:8, connectionId:8, _ginBackend:8;
   uint32_t contextId;
+  ncclGinResourceSharingMode resourceSharingMode;
 
   //////////////////////////////////////////////////////////////////////////////
   // internal:
@@ -56,12 +57,18 @@ struct ncclGin_C {
   uint64_t* _signalShadows;
   unsigned backendMask;
 
-  NCCL_DEVICE_INLINE ncclGin_C(ncclDevComm const& comm_, unsigned backendMask_, int contextIndex);
+  NCCL_DEVICE_INLINE ncclGin_C(ncclDevComm const& comm_, unsigned backendMask_, int contextIndex,
+                               ncclGinResourceSharingMode resourceSharingMode_ = NCCL_GIN_RESOURCE_SHARING_GPU);
 };
 
 // Helper init function that wraps placement new
 NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void ncclGin_C_init(
   ncclGin_C* net, unsigned backendMask, ncclDevComm const& comm, int contextIndex);
+
+// Helper init function with explicit resource sharing mode.
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void ncclGin_C_initWithResourceSharingMode(
+  ncclGin_C* net, unsigned backendMask, ncclDevComm const& comm, int contextIndex,
+  ncclGinResourceSharingMode resourceSharingMode);
 
 NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void ncclGinPut(
   ncclGin_C* net,
@@ -174,9 +181,25 @@ struct ncclGin_BackendMask {
   ncclDevComm const& comm;
   uint32_t nConnections:8, connectionId:8, _ginBackend:8;
   uint32_t contextId;
+  // Runtime-selected resource sharing mode for this context.
+  ncclGinResourceSharingMode resourceSharingMode;
 
   // Loads GIN context into registers. Each context has one QP per peer.
-  NCCL_DEVICE_INLINE ncclGin_BackendMask(ncclDevComm const&, int contextIndex);
+  NCCL_DEVICE_INLINE ncclGin_BackendMask(
+    ncclDevComm const&, int contextIndex,
+    ncclGinResourceSharingMode resourceSharingMode_ = NCCL_GIN_RESOURCE_SHARING_GPU);
+
+  template<
+    typename Coop = ncclCoopThread,
+    typename DescriptorSmem = ncclGin_None
+  >
+  NCCL_DEVICE_INLINE void get(
+    ncclTeam, int peer,
+    ncclWindow_t remoteWnd, size_t remoteOffset,
+    ncclWindow_t localWnd, size_t localOffset,
+    size_t bytes, Coop coop = ncclCoopThread{},
+    DescriptorSmem descriptor = ncclGin_None{},
+    uint32_t optFlags = ncclGinOptFlagsDefault) const;
 
   template<
     // Action to take on peer when put completes. If a signalling action is used

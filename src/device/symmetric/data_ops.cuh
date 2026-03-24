@@ -519,9 +519,9 @@ static __device__ void reduceLsa(
     comm, multimemTag);
 }
 
-template<typename Coop, typename DstT, typename SrcT>
+template<typename Coop, typename DstT, typename SrcT, typename Transform>
 static __device__ void copy(
-    Coop coop, int nElts, GMemTag dstMem, DstT* dst, SMemTag srcMem, SrcT* src
+    Coop coop, int nElts, GMemTag dstMem, DstT* dst, SMemTag srcMem, SrcT* src, Transform transformFn
   ) {
   static_assert(sizeof(DstT) <= sizeof(SrcT), "Required");
   __builtin_assume(__isShared(src));
@@ -541,7 +541,7 @@ static __device__ void copy(
     #pragma unroll 1
     for (int p = t; p < nPacks; p += tn) {
       SrcPack srcPack = ((SrcPack*)(src + nPreElts))[p];
-      stcs(GMemTag(), (DstPack*)(dst + nPreElts) + p,  applyCast<SrcT, DstT>(srcPack));
+      stcs(GMemTag(), (DstPack*)(dst + nPreElts) + p,  applyCast<SrcT, DstT>(transformFn(srcPack)));
     }
   } else {
     unsigned srcAlign4 = srcAlign16%4;
@@ -558,13 +558,13 @@ static __device__ void copy(
         #pragma unroll
         for (i = 0; i < nWordPerPack; i++) w[i] = __funnelshift_r(w[i], w[i+1], 8*srcAlign4);
       }
-      stcs(GMemTag(), (DstPack*)(dst + nPreElts) + p,  applyCast<SrcT, DstT>(srcPack));
+      stcs(GMemTag(), (DstPack*)(dst + nPreElts) + p,  applyCast<SrcT, DstT>(transformFn(srcPack)));
     }
   }
 
   #pragma unroll 1
   for (int i = t; i < nPreElts + nSufElts; i += tn) {
     int e = i < nPreElts ? i : nElts - nSufElts + (i - nPreElts);
-    stcs(GMemTag(), dst + e, (DstT)src[e]);
+    stcs(GMemTag(), dst + e, (DstT)(transformFn((src[e]))));
   }
 }

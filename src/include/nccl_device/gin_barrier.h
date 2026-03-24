@@ -8,7 +8,11 @@
 #ifndef _NCCL_DEVICE_GIN_BARRIER_H_
 #define _NCCL_DEVICE_GIN_BARRIER_H_
 #include "core.h"
+#if defined(NCCL_OS_WINDOWS)
+#include "gin_win_stub.h"
+#else
 #include "gin.h"
+#endif
 
 struct ncclGinBarrierHandle;
 
@@ -26,6 +30,7 @@ template<typename Coop>
 struct ncclGinBarrierSession: ncclGinBarrierSession_internal<Coop> {
   NCCL_DEVICE_INLINE ncclGinBarrierSession(Coop, ncclGin, ncclTeam, ncclGinBarrierHandle, uint32_t index);
   NCCL_DEVICE_INLINE ncclGinBarrierSession(Coop, ncclGin, ncclTeamTagRail, uint32_t index);
+  NCCL_DEVICE_INLINE ncclGinBarrierSession(Coop, ncclGin, ncclTeamTagWorld, uint32_t index);
 
   NCCL_DEVICE_INLINE ~ncclGinBarrierSession();
 

@@ -13,9 +13,7 @@
 #include "profiler/net_socket.h"
 #include "os.h"
 
-#include <pthread.h>
 #include <stdlib.h>
-#include <poll.h>
 #include <limits.h>
 #include <fcntl.h>
 #include <mutex>
@@ -36,7 +34,7 @@ static ncclResult_t ncclNetSocketGetPciPath(char* devName, char** pciPath) {
   char devicePath[PATH_MAX];
   snprintf(devicePath, PATH_MAX, "/sys/class/net/%s/device", devName);
   // May return NULL if the file doesn't exist.
-  *pciPath = realpath(devicePath, NULL);
+  *pciPath = ncclOsRealpath(devicePath, NULL);
   return ncclSuccess;
 }
 
@@ -90,6 +88,58 @@ ncclResult_t ncclNetSocketDevices(int* ndev) {
 static ncclResult_t ncclNetSocketGetSpeed(char* devName, int* speed) {
   ncclResult_t ret = ncclSuccess;
   *speed = 0;
+
+  #if defined(NCCL_OS_WINDOWS)
+  // On Windows, use GetAdaptersAddresses to get network interface speed
+  ULONG bufferSize = 15000;
+  IP_ADAPTER_ADDRESSES* adapterAddresses = NULL;
+  ULONG result;
+  int attempts = 0;
+
+  do {
+    adapterAddresses = (IP_ADAPTER_ADDRESSES*)malloc(bufferSize);
+    if (adapterAddresses == NULL) {
+      WARN("Failed to allocate memory for adapter addresses");
+      *speed = 10000;
+      return ncclSuccess;
+    }
+
+    result = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_PREFIX, NULL, adapterAddresses, &bufferSize);
+    if (result == ERROR_BUFFER_OVERFLOW) {
+      free(adapterAddresses);
+      adapterAddresses = NULL;
+    }
+    attempts++;
+  } while (result == ERROR_BUFFER_OVERFLOW && attempts < 3);
+
+  if (result == NO_ERROR) {
+    // Iterate through adapters to find the matching one
+    for (IP_ADAPTER_ADDRESSES* adapter = adapterAddresses; adapter != NULL; adapter = adapter->Next) {
+      // Convert adapter friendly name to UTF-8 for comparison
+      char adapterName[MAX_IF_NAME_SIZE];
+      WideCharToMultiByte(CP_UTF8, 0, adapter->FriendlyName, -1, adapterName, sizeof(adapterName), NULL, NULL);
+
+      // Check if this is the adapter we're looking for
+      if (strstr(adapterName, devName) != NULL || strstr(devName, adapterName) != NULL) {
+        // TransmitLinkSpeed is in bits per second, convert to Mbps
+        if (adapter->TransmitLinkSpeed > 0) {
+          *speed = (int)(adapter->TransmitLinkSpeed / 1000000);
+          INFO(NCCL_NET, "Found network interface %s with speed %d Mbps", devName, *speed);
+          break;
+        }
+      }
+    }
+  }
+
+  if (adapterAddresses) {
+    free(adapterAddresses);
+  }
+
+  if (*speed <= 0) {
+    INFO(NCCL_NET, "Could not get speed for interface %s. Defaulting to 10 Gbps.", devName);
+    *speed = 10000;
+  }
+#elif defined(NCCL_OS_LINUX)
   char speedPath[PATH_MAX];
   snprintf(speedPath, sizeof(speedPath), "/sys/class/net/%s/speed", devName);
   int fd = -1;
@@ -108,6 +158,7 @@ static ncclResult_t ncclNetSocketGetSpeed(char* devName, int* speed) {
     *speed = 10000;
   }
   if (fd != -1) SYSCHECK(close(fd), "close");
+#endif
   return ret;
 }
 
@@ -128,6 +179,8 @@ ncclResult_t ncclNetSocketGetProperties(int dev, ncclNetProperties_t* props) {
   props->maxP2pBytes = NCCL_MAX_NET_SIZE_BYTES;
   props->maxCollBytes = MAX_COLLNET_SIZE;
   props->maxMultiRequestSize = 1;
+  props->railId = NCCL_NET_ID_UNDEF;
+  props->planeId = NCCL_NET_ID_UNDEF;
   props->vProps.ndevs = 1;
   props->vProps.devs[0] = dev;
   return ncclSuccess;
@@ -307,7 +360,7 @@ ncclResult_t ncclNetSocketGetNsockNthread(int dev, int* ns, int* nt) {
     snprintf(vendorPath, PATH_MAX, "/sys/class/net/%s/device/vendor", ncclNetSocketDevs[dev].devName);
     // Coverity is wrong.  NULL second argument to realpath() is OK by POSIX.1-2008.
     // coverity[alias_transfer:FALSE]
-    char* rPath = realpath(vendorPath, NULL);
+    char* rPath = ncclOsRealpath(vendorPath, NULL);
     fd = open(rPath, O_RDONLY);
     free(rPath);
     if (fd == -1) {

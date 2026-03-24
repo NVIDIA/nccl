@@ -70,7 +70,8 @@ void dumpData(struct ncclConnect* data, int ndata) {
 
 NCCL_PARAM(ConnectRoundMaxPeers, "CONNECT_ROUND_MAX_PEERS", 128);
 NCCL_PARAM(ReportConnectProgress, "REPORT_CONNECT_PROGRESS", 0);
-#include <sys/time.h>
+
+#include "os.h"
 
 // Tests communicator for CUDA P2P connectivity (local ranks only).
 // *isAllDirectP2p returns 1 if all local ranks have CUDA P2P connectivity with each other

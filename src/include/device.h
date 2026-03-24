@@ -285,8 +285,10 @@ struct alignas(16) ncclDevWorkColl {
   uint32_t redOpArgIsPtr:1, regUsed:1, netRegUsed:1, oneNode:1, direct:2, isOneRPN:1;
   uint32_t profilerEnabled:1;
   uint32_t root;
+  uint8_t pad1[12];  // pad to 16-byte boundary (20 bytes above -> 32)
   void* recvbuff;
   void* sendbuff;
+  uint64_t pad0;     // pad to 16-byte boundary (16 bytes above -> 32)
   uintptr_t sendbuffOffset;
   uintptr_t recvbuffOffset;
   uintptr_t* sendbuffRmtAddrs;
@@ -306,6 +308,7 @@ struct alignas(16) ncclDevWorkColl {
     } collnet;
   };
   uint64_t redOpArg;
+  uint8_t pad2[8];   // pad struct to multiple of 16
 };
 
 
@@ -437,6 +440,7 @@ struct ncclKernelComm {
   int nNodes;
   int buffSizes[NCCL_NUM_PROTOCOLS];
   int p2pChunkSize;
+  bool p2pCrossClique;
   int isAllNvlink;
 
   int* collNetDenseToUserRank;
@@ -505,7 +509,7 @@ __host__ __device__ constexpr T max_constexpr(T a, T b, Ts ...c) {
 }
 
 constexpr int ncclDevMaxChannelsForArgsBytes(size_t argsBytes) {
-  return min_constexpr<size_t>(MAXCHANNELS, (argsBytes - sizeof(struct ncclDevKernelArgs))/sizeof(struct ncclDevWorkBatch));
+  return (int)min_constexpr<size_t>(MAXCHANNELS, (argsBytes - sizeof(struct ncclDevKernelArgs))/sizeof(struct ncclDevWorkBatch));
 }
 
 // Calculate the unroll factor given:
@@ -542,6 +546,10 @@ __host__ __device__ constexpr int ncclShmemScratchWarpSize(int cudaArch = NCCL_C
       // NVLS needs an extra 16B to read unaligned data.
       /*NVLS  */WARP_SIZE*(cudaArch >= 900 ? ncclNvlsUnrollBytes(cudaArch) : 0) + 16
     ) + 15) & -16; // pad to 16 bytes
+}
+
+__host__ __device__ constexpr int ncclTmaShmemScratchWarpSize(void) {
+  return 10 << 10;
 }
 
 // The amount of dynamic shmem per block
@@ -644,7 +652,5 @@ inline int ncclDevFuncId(int coll, int devRedOp, int type, int algo, int proto) 
 }
 
 inline int ncclDevFuncId_P2p() { return ncclDevFuncRowToId[0]; }
-
-ncclResult_t ncclGinResetSignalsAndCounters(struct ncclComm* comm, ncclDevComm_t const* devComm);
 
 #endif

@@ -110,7 +110,7 @@ def group_simulate_end(sim_info: GroupSimInfo | None) -> None:
     """
     if sim_info is None:
         return _nccl_bindings.group_simulate_end(None)
-    return _nccl_bindings.group_simulate_end(int(sim_info.ptr))
+    return _nccl_bindings.group_simulate_end(sim_info.ptr)
 
 
 @contextlib.contextmanager

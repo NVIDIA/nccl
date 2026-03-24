@@ -39,6 +39,7 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <cuda.h>
 #include <cuda/atomic>
 #include <math.h>
 

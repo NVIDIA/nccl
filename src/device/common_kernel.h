@@ -10,6 +10,7 @@
 
 #include "device.h"
 #include "op128.h"
+#include "nccl_device/utility.h"
 #include "reduce_kernel.h"
 #include <cstdio>
 #include <cstdint>
@@ -227,11 +228,7 @@ __device__ __forceinline__ void reduceCopy(
   IntBytes nBytesBehind = 0;
   IntBytes nBytesAhead = nElts*sizeof(T);
 
-  #if __cpp_if_constexpr
-  if constexpr (BigPackSize > sizeof(T)) {
-  #else
-  if (BigPackSize > sizeof(T)) {
-  #endif
+  if NCCL_IF_CONSTEXPR (BigPackSize > sizeof(T)) {
     // Check that all pointers are BigPackSize aligned.
     bool aligned = true;
     if (lane < nSrcs) aligned &= 0 == cvta_to_global(srcPtrFn(lane)) % (BigPackSize + !BigPackSize);

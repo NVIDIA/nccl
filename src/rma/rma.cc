@@ -36,18 +36,18 @@ ncclResult_t ncclRmaWaitSignal(struct ncclComm* comm, struct ncclKernelPlan* pla
     CUDACHECKGOTO(cudaStreamWaitEvent(ceStream, ceEvent, 0), ret, fail);
 
     // Launch both operations
-    NCCLCHECKGOTO(ncclRmaWaitSignalProxy(comm, plan, stream), ret, fail);
-    NCCLCHECKGOTO(ncclRmaWaitSignalCe(comm, plan, ceStream), ret, fail);
+    NCCLCHECKGOTO(ncclRmaProxyWaitLaunch(comm, plan, stream), ret, fail);
+    NCCLCHECKGOTO(ncclRmaCeWaitLaunch(comm, plan, ceStream), ret, fail);
 
     // Synchronize streams
     CUDACHECKGOTO(cudaEventRecord(ceEvent, ceStream), ret, fail);
     CUDACHECKGOTO(cudaStreamWaitEvent(stream, ceEvent, 0), ret, fail);
   }
   else if (plan->rmaArgs->nRmaTasksProxy > 0) {
-    NCCLCHECKGOTO(ncclRmaWaitSignalProxy(comm, plan, stream), ret, fail);
+    NCCLCHECKGOTO(ncclRmaProxyWaitLaunch(comm, plan, stream), ret, fail);
   }
   else if (plan->rmaArgs->nRmaTasksCe > 0) {
-    NCCLCHECKGOTO(ncclRmaWaitSignalCe(comm, plan, stream), ret, fail);
+    NCCLCHECKGOTO(ncclRmaCeWaitLaunch(comm, plan, stream), ret, fail);
   }
 
 exit:
@@ -72,18 +72,18 @@ ncclResult_t ncclRmaPut(struct ncclComm* comm, struct ncclKernelPlan* plan, cuda
     CUDACHECKGOTO(cudaStreamWaitEvent(ceStream, ceEvent, 0), ret, fail);
 
     // Launch both operations
-    NCCLCHECKGOTO(ncclRmaPutProxy(comm, plan, stream), ret, fail);
-    NCCLCHECKGOTO(ncclRmaPutCe(comm, plan, ceStream), ret, fail);
+    NCCLCHECKGOTO(ncclRmaProxyPutLaunch(comm, plan, stream), ret, fail);
+    NCCLCHECKGOTO(ncclRmaCePutLaunch(comm, plan, ceStream), ret, fail);
 
     // Synchronize streams
     CUDACHECKGOTO(cudaEventRecord(ceEvent, ceStream), ret, fail);
     CUDACHECKGOTO(cudaStreamWaitEvent(stream, ceEvent, 0), ret, fail);
   }
   else if (plan->rmaArgs->nRmaTasksProxy > 0) {
-    NCCLCHECKGOTO(ncclRmaPutProxy(comm, plan, stream), ret, fail);
+    NCCLCHECKGOTO(ncclRmaProxyPutLaunch(comm, plan, stream), ret, fail);
   }
   else if (plan->rmaArgs->nRmaTasksCe > 0) {
-    NCCLCHECKGOTO(ncclRmaPutCe(comm, plan, stream), ret, fail);
+    NCCLCHECKGOTO(ncclRmaCePutLaunch(comm, plan, stream), ret, fail);
   }
 
 exit:
@@ -142,6 +142,8 @@ static inline bool canBatchRmaTasks(struct ncclTaskRma* task1, struct ncclTaskRm
 // - Consecutive put/signal operation can be batched into the same plan
 ncclResult_t scheduleRmaTasksToPlan(struct ncclComm* comm, struct ncclKernelPlan* plan) {
   ncclResult_t ret = ncclSuccess;
+  int* peersProxy = nullptr;
+  int* nsignalsProxy = nullptr;
   struct ncclKernelPlanner* planner = &comm->planner;
 
   // Find the first non-empty context queue
@@ -175,8 +177,8 @@ ncclResult_t scheduleRmaTasksToPlan(struct ncclComm* comm, struct ncclKernelPlan
     // Allocate temporary arrays to hold peers and nsignals for both proxy and CE paths
     int* peersCe = ncclMemoryStackAlloc<int>(&comm->memScoped, firstTask->npeers);
     int* nsignalsCe = ncclMemoryStackAlloc<int>(&comm->memScoped, firstTask->npeers);
-    int* peersProxy = ncclMemoryStackAlloc<int>(&comm->memScoped, firstTask->npeers);
-    int* nsignalsProxy = ncclMemoryStackAlloc<int>(&comm->memScoped, firstTask->npeers);
+    NCCLCHECKGOTO(ncclCalloc(&peersProxy, firstTask->npeers), ret, fail);
+    NCCLCHECKGOTO(ncclCalloc(&nsignalsProxy, firstTask->npeers), ret, fail);
 
     int npeersCe = 0;
     int npeersProxy = 0;
@@ -226,6 +228,10 @@ ncclResult_t scheduleRmaTasksToPlan(struct ncclComm* comm, struct ncclKernelPlan
       ncclIntruQueueEnqueue(&plan->rmaTaskQueueProxy, waitSignalTaskProxy);
       plan->rmaArgs->nRmaTasksProxy = 1;
     } else {
+      free(peersProxy);
+      peersProxy = nullptr;
+      free(nsignalsProxy);
+      nsignalsProxy = nullptr;
       plan->rmaArgs->nRmaTasksProxy = 0;
     }
 
@@ -279,5 +285,10 @@ ncclResult_t scheduleRmaTasksToPlan(struct ncclComm* comm, struct ncclKernelPlan
   INFO(NCCL_COLL, "scheduleRmaTasksToPlan: rank=%d ctx=%d func=%d nRmaTasks=%d nRmaTasksProxy=%d nRmaTasksCe=%d",
     comm->rank, ctx, plan->rmaArgs->func, plan->rmaArgs->nRmaTasks, plan->rmaArgs->nRmaTasksProxy, plan->rmaArgs->nRmaTasksCe);
 
+exit:
   return ret;
+fail:
+  free(peersProxy);
+  free(nsignalsProxy);
+  goto exit;
 }

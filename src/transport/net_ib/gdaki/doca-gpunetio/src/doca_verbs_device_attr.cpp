@@ -114,6 +114,8 @@ void doca_verbs_device_attr::query_caps(struct ibv_context *ibv_ctx) {
     m_max_srq_sge = device_attr.max_srq_sge;
     m_max_pkeys = device_attr.max_pkeys;
     m_phys_port_cnt = device_attr.phys_port_cnt;
+    m_max_qp_init_rd_atom = device_attr.max_qp_init_rd_atom;
+    m_max_qp_rd_atom = device_attr.max_qp_rd_atom;
     m_send_dbr_mode_no_dbr_ext = 0;
 
     uint32_t in[MLX5_ST_SZ_DW(query_hca_cap_in)] = {0};
@@ -291,4 +293,14 @@ doca_error_t doca_verbs_device_attr_get_is_qp_type_supported(
 uint8_t doca_verbs_device_attr_get_send_dbr_mode_no_dbr_ext(
     const struct doca_verbs_device_attr *verbs_device_attr) {
     return verbs_device_attr->m_send_dbr_mode_no_dbr_ext;
+}
+
+uint8_t doca_verbs_device_attr_get_max_qp_init_rd_atom(
+    const struct doca_verbs_device_attr *verbs_device_attr) {
+    return verbs_device_attr->m_max_qp_init_rd_atom;
+}
+
+uint8_t doca_verbs_device_attr_get_max_qp_rd_atom(
+    const struct doca_verbs_device_attr *verbs_device_attr) {
+    return verbs_device_attr->m_max_qp_rd_atom;
 }

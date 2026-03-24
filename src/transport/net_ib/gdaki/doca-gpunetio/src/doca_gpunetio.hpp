@@ -55,4 +55,6 @@ struct doca_gpu {
                                        ///< async store release is supported
     bool support_bf_uar;               ///< Boolean value that indicates if BlueFlame
                                        ///< is supported
+    bool need_mcst;                    ///< Boolean value that indicates if memory consistency
+                                       ///< algorithm is required for igress GPU data
 };

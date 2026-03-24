@@ -286,6 +286,17 @@ enum doca_verbs_qp_send_dbr_mode {
 #define DOCA_VERBS_QP_ATTR_AH_ATTR (1 << 14)
 
 /**
+ * @brief The maximum number of outstanding RDMA Read/Atomic requests that a single QP is allowed to
+ * initiate concurrently.
+ */
+#define DOCA_VERBS_QP_ATTR_MAX_QP_RD_ATOMIC (1 << 16)
+/**
+ * @brief The maximum number of incoming RDMA Read/Atomic requests that a single QP can handle
+ * concurrently as a responder.
+ */
+#define DOCA_VERBS_QP_ATTR_MAX_DEST_RD_ATOMIC (1 << 17)
+
+/**
  * @brief Specifies the length of a GID (Global ID) in bytes.
  */
 #define DOCA_VERBS_GID_BYTE_LENGTH 16
@@ -1338,6 +1349,37 @@ doca_error_t doca_verbs_qp_attr_set_min_rnr_timer(struct doca_verbs_qp_attr *ver
 uint16_t doca_verbs_qp_attr_get_min_rnr_timer(const struct doca_verbs_qp_attr *verbs_qp_attr);
 
 /**
+ * @brief Set max_rd_atomic attribute for verbs_qp_attr
+ *
+ * @param [in] verbs_qp_attr
+ * Pointer to verbs_qp_attr instance.
+ * @param [in] max_rd_atomic
+ * max_rd_atomic attribute.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
+ */
+doca_error_t doca_verbs_qp_attr_set_max_rd_atomic(struct doca_verbs_qp_attr *verbs_qp_attr,
+                                                  uint8_t max_rd_atomic);
+
+/**
+ * @brief Set max_dest_rd_atomic attribute for verbs_qp_attr
+ *
+ * @param [in] verbs_qp_attr
+ * Pointer to verbs_qp_attr instance.
+ * @param [in] max_dest_rd_atomic
+ * max_dest_rd_atomic attribute.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
+ */
+doca_error_t doca_verbs_qp_attr_set_max_dest_rd_atomic(struct doca_verbs_qp_attr *verbs_qp_attr,
+                                                       uint8_t max_dest_rd_atomic);
+/**
  * @brief Create a DOCA Verbs AH instance.
  *
  * @param [in] context
@@ -1868,6 +1910,21 @@ doca_error_t doca_verbs_cq_attr_set_external_uar(struct doca_verbs_cq_attr *cq_a
  */
 doca_error_t doca_verbs_cq_attr_set_cq_overrun(struct doca_verbs_cq_attr *cq_attr,
                                                enum doca_verbs_cq_overrun overrun);
+
+/**
+ * @brief Enable cq_overrun attribute for doca_verbs_cq_attr.
+ *
+ * @param [in] cq_attr
+ * Pointer to doca_verbs_cq_attr instance.
+ * @param [in] cc
+ * enable or disable collapsed cq
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
+ */
+doca_error_t doca_verbs_cq_attr_set_cq_collapsed(struct doca_verbs_cq_attr *cq_attr, uint8_t cc);
 /**
  * @brief Create a DOCA Verbs Completion Queue instance.
  *
@@ -2397,6 +2454,32 @@ doca_error_t doca_verbs_device_attr_get_is_qp_type_supported(
  * The no DBR-ext support flag.
  */
 uint8_t doca_verbs_device_attr_get_send_dbr_mode_no_dbr_ext(
+    const struct doca_verbs_device_attr *verbs_device_attr);
+
+/**
+ * @brief Get the maximum number of outstanding RDMA Read or Atomic requests that a single QP is
+ * allowed to initiate concurrently, as supported by the device.
+ *
+ * @param [in] verbs_device_attr
+ * Pointer to doca_verbs_device_attr instance.
+ *
+ * @return
+ * The maximum number of outstanding RDMA Read or Atomic requests supported by the device.
+ */
+uint8_t doca_verbs_device_attr_get_max_qp_rd_atom(
+    const struct doca_verbs_device_attr *verbs_device_attr);
+
+/**
+ * @brief Get the maximum number of incoming RDMA Read or Atomic requests that a single QP can
+ * handle concurrently as a responder, as supported by the device.
+ *
+ * @param [in] verbs_device_attr
+ * Pointer to doca_verbs_device_attr instance.
+ *
+ * @return
+ * The maximum number of incoming RDMA Read or Atomic requests supported by the device.
+ */
+uint8_t doca_verbs_device_attr_get_max_qp_init_rd_atom(
     const struct doca_verbs_device_attr *verbs_device_attr);
 
 /**

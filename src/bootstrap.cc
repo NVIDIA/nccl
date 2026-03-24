@@ -10,8 +10,6 @@
 #include "utils.h"
 #include "bootstrap.h"
 #include "net.h"
-#include <unistd.h>
-#include <sys/types.h>
 #include "proxy.h"
 #include "param.h"
 #include "ras.h"
@@ -274,16 +272,6 @@ struct extInfo {
 #define NET_HANDLE(h, rank)    ((h) + (rank * NCCL_NET_HANDLE_MAXSIZE))
 #define BOOTSTRAP_HANDLE(h, i) ((struct ncclBootstrapHandle*)((char*)h + i * NCCL_UNIQUE_ID_BYTES))
 
-#include <sys/resource.h>
-
-static ncclResult_t setFilesLimit() {
-  struct rlimit filesLimit;
-  SYSCHECK(getrlimit(RLIMIT_NOFILE, &filesLimit), "getrlimit");
-  filesLimit.rlim_cur = filesLimit.rlim_max;
-  SYSCHECK(setrlimit(RLIMIT_NOFILE, &filesLimit), "setrlimit");
-  return ncclSuccess;
-}
-
 static ncclResult_t rootSend(union ncclSocketAddress* addr, uint64_t magic, union ringConnectInfo* info) {
   ncclResult_t res = ncclSuccess;
   struct ncclSocket sock;
@@ -315,7 +303,7 @@ static void* bootstrapRoot(void* rargs) {
   memset(&zeroAddress, 0, sizeof(union ncclSocketAddress));
   memset(&zeroHandle, 0, NCCL_NET_HANDLE_MAXSIZE);
   memset(&zeroInfo, 0, sizeof(union ringConnectInfo));
-  setFilesLimit();
+  ncclOsSetFilesLimit();
 
   TRACE(NCCL_BOOTSTRAP, "BEGIN");
   BOOTSTRAP_PROF_OPEN(timers[BOOTSTRAP_INIT_ROOT_WAIT]);
@@ -964,7 +952,7 @@ static ncclResult_t socketConnect(void* commState, int peer, int tag, struct ncc
   ncclResult_t ret = ncclSuccess;
   struct bootstrapState* state = (struct bootstrapState*)commState;
 
-  struct socketAckInfo ack = (struct socketAckInfo){.rank = state->rank, .tag = tag};
+  struct socketAckInfo ack = (struct socketAckInfo){ state->rank, tag };
   NCCLCHECKGOTO(ncclSocketInit(sock, state->peerP2pAddresses + peer, state->magic, ncclSocketTypeBootstrap, state->abortFlag), ret, fail);
   NCCLCHECKGOTO(ncclSocketConnect(sock), ret, fail);
   NCCLCHECKGOTO(socketSend(sock, &ack, sizeof(struct socketAckInfo)), ret, fail);

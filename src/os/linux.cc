@@ -11,23 +11,65 @@
 #include "utils.h"
 
 #include <cstdint>
+#include <dlfcn.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <cstring>
 #include <cstdbool>
 #include "socket.h"
 #include "utils.h"
-#include "os.h"
 #include "checks.h"
 #include "param.h"
 #include <pthread.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
 #include <atomic>
+
+static thread_local char ncclDlErrorBuf[256] = {0};
+
+static void saveDlError() {
+  const char* err = dlerror();
+  if (err) {
+    snprintf(ncclDlErrorBuf, sizeof(ncclDlErrorBuf), "%s", err);
+  } else {
+    ncclDlErrorBuf[0] = '\0';
+  }
+}
+
+ncclOsLibraryHandle ncclOsDlopen(const char* filename) {
+  ncclOsLibraryHandle handle = dlopen(filename, RTLD_NOW | RTLD_LOCAL);
+  if (handle == NULL) {
+    saveDlError();
+    INFO(NCCL_INIT, "ncclOsDlopen(%s) failed: %s", filename, ncclDlErrorBuf);
+  }
+  return handle;
+}
+
+void* ncclOsDlsym(ncclOsLibraryHandle handle, const char* symbol) {
+  void* ptr = dlsym(handle, symbol);
+  if (ptr == NULL) {
+    saveDlError();
+    INFO(NCCL_INIT, "ncclOsDlsym(%s) failed: %s", symbol, ncclDlErrorBuf);
+  }
+  return ptr;
+}
+
+const char* ncclOsDlerror() {
+  return ncclDlErrorBuf;
+}
+
+ncclOsLibraryHandle ncclOsDlopen(const char* path, int mode) {
+  return (ncclOsLibraryHandle)dlopen(path, (mode == NCCL_OS_DL_NOW) ? RTLD_NOW : RTLD_LAZY);
+}
+
+void ncclOsDlclose(ncclOsLibraryHandle handle) {
+  if (handle) dlclose(handle);
+}
 
 // Process Management
 uint64_t ncclOsGetPid() {
@@ -56,6 +98,10 @@ void ncclOsAlignedFree(void* ptr) {
 
 void ncclOsSetEnv(const char* name, const char* value) {
   setenv(name, value, 0);
+}
+
+char* ncclOsRealpath(const char* path, char* resolved_path) {
+  return realpath(path, resolved_path);
 }
 
 // The default Linux stack size (8MB) is safe.
@@ -98,6 +144,14 @@ ncclResult_t ncclOsInitialize() {
   if (ncclParamSetCpuStackSize() != 0) {
     NCCLCHECK(setCpuStackSize());
   }
+  return ncclSuccess;
+}
+
+ncclResult_t ncclOsSetFilesLimit() {
+  struct rlimit filesLimit;
+  SYSCHECK(getrlimit(RLIMIT_NOFILE, &filesLimit), "getrlimit");
+  filesLimit.rlim_cur = filesLimit.rlim_max;
+  SYSCHECK(setrlimit(RLIMIT_NOFILE, &filesLimit), "setrlimit");
   return ncclSuccess;
 }
 
@@ -491,7 +545,7 @@ void ncclOsCpuZero(ncclAffinity& affinity) {
   CPU_ZERO(&affinity);
 }
 
-int ncclOsCpuCount(const ncclAffinity affinity) {
+int ncclOsCpuCount(const ncclAffinity& affinity) {
   return CPU_COUNT(&affinity);
 }
 
@@ -499,7 +553,7 @@ void ncclOsCpuSet(ncclAffinity& affinity, int cpu) {
   CPU_SET(cpu, &affinity);
 }
 
-bool ncclOsCpuIsSet(const ncclAffinity affinity, int cpu) {
+bool ncclOsCpuIsSet(const ncclAffinity& affinity, int cpu) {
   return CPU_ISSET(cpu, &affinity);
 }
 
@@ -518,7 +572,7 @@ ncclResult_t ncclOsGetAffinity(ncclAffinity* affinity) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclOsSetAffinity(const ncclAffinity affinity) {
+ncclResult_t ncclOsSetAffinity(const ncclAffinity& affinity) {
   int result = sched_setaffinity(0, sizeof(ncclAffinity), &affinity);
   if (result == -1) {
     WARN("sched_setaffinity failed with error: %s", strerror(errno));
@@ -529,4 +583,183 @@ ncclResult_t ncclOsSetAffinity(const ncclAffinity affinity) {
 
 int ncclOsGetCpu() {
   return sched_getcpu();
+}
+
+ncclResult_t ncclOsNvmlOpen(ncclOsLibraryHandle* handle) {
+  *handle = nullptr;
+
+  *handle = ncclOsDlopen("libnvidia-ml.so.1");
+  if (*handle == nullptr) {
+    WARN("Failed to open libnvidia-ml.so.1: %s", ncclOsDlerror());
+    return ncclSystemError;
+  }
+
+  INFO(NCCL_INIT, "Loaded NVML from libnvidia-ml.so.1");
+  return ncclSuccess;
+}
+
+
+// Shared memory implementation for Linux
+#include "comm.h"
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <sys/mman.h>
+#include <string.h>
+#include <stdlib.h>
+
+void ncclOsShmHandleInit(ncclShmDescriptor shmDesc, char* shmPath, size_t shmSize, size_t realShmSize,
+                         char* hptr, void* dptr, bool create,
+                         struct ncclShmHandleInternal* handle) {
+  handle->shmDesc = shmDesc;
+  handle->shmPtr = hptr;
+  handle->devShmPtr = dptr;
+  handle->shmSize = shmSize;
+  handle->realShmSize = realShmSize;
+  handle->refcount = (hptr != NULL) ? (int*)(hptr + shmSize) : NULL;
+  if (create) {
+    int slen = strlen(shmPath);
+    handle->shmPath = (char*)malloc(slen + 1);
+    memcpy(handle->shmPath, shmPath, slen + 1);
+    if (hptr) memset(hptr, 0, shmSize);
+  } else {
+    handle->shmPath = NULL;
+  }
+}
+
+ncclResult_t ncclOsShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize,
+                           void** shmPtr, void** devShmPtr, int refcount,
+                           struct ncclShmHandleInternal** handle) {
+  int fd = -1;
+  char* hptr = NULL;
+  void* dptr = NULL;
+  ncclResult_t ret = ncclSuccess;
+  struct ncclShmHandleInternal* tmphandle;
+  bool create = refcount > 0 ? true : false;
+  const size_t refSize = sizeof(int);
+  const size_t realShmSize = shmSize + refSize;
+
+  *handle = NULL;
+  *shmPtr = NULL;
+  EQCHECKGOTO(tmphandle = (struct ncclShmHandleInternal*)calloc(1, sizeof(struct ncclShmHandleInternal)), NULL, ret, fail);
+
+  if (create) {
+    if (shmPath[0] == '\0') {
+      snprintf(shmPath, shmPathSize, "/dev/shm/nccl-XXXXXX");
+    retry_mkstemp:
+      fd = mkstemp(shmPath);
+      if (fd < 0) {
+        if (errno == EINTR) {
+          INFO(NCCL_ALL, "mkstemp: Failed to create %s, error: %s (%d) - retrying", shmPath, strerror(errno), errno);
+          goto retry_mkstemp;
+        }
+        WARN("Error: failed to create shared memory file %s, error %s (%d)", shmPath, strerror(errno), errno);
+        ret = ncclSystemError;
+        goto fail;
+      }
+    } else {
+      SYSCHECKGOTO(fd = open(shmPath, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR), "open", ret, fail);
+    }
+
+  retry_fallocate:
+    if (fallocate(fd, 0, 0, realShmSize) != 0) {
+      if (errno == EINTR) {
+        INFO(NCCL_ALL, "fallocate: Failed to extend %s to %ld bytes, error: %s (%d) - retrying", shmPath, realShmSize, strerror(errno), errno);
+        goto retry_fallocate;
+      }
+      WARN("Error: failed to extend %s to %ld bytes, error: %s (%d)", shmPath, realShmSize, strerror(errno), errno);
+      ret = ncclSystemError;
+      goto fail;
+    }
+    INFO(NCCL_ALLOC, "Allocated %ld bytes of shared memory in %s", realShmSize, shmPath);
+  } else {
+    SYSCHECKGOTO(fd = open(shmPath, O_RDWR, S_IRUSR | S_IWUSR), "open", ret, fail);
+  }
+
+  hptr = (char*)mmap(NULL, realShmSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  if (hptr == MAP_FAILED) {
+    WARN("Error: Could not map %s size %zu, error: %s (%d)", shmPath, realShmSize, strerror(errno), errno);
+    ret = ncclSystemError;
+    hptr = NULL;
+    goto fail;
+  }
+
+  if (create) {
+    *(int*)(hptr + shmSize) = refcount;
+  } else {
+    int remref = ncclAtomicRefCountDecrement((int*)(hptr + shmSize));
+    if (remref == 0) {
+      if (unlink(shmPath) != 0) {
+        INFO(NCCL_ALLOC, "unlink shared memory %s failed, error: %s (%d)", shmPath, strerror(errno), errno);
+      }
+    }
+  }
+
+  if (devShmPtr) {
+    INFO(NCCL_ALLOC, "SHM legacy: sharing buffer with GPU via cudaHostRegister + cudaHostGetDevicePointer (host %p size %ld)", (void*)hptr, (long)realShmSize);
+    cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
+    CUDACHECKGOTO(cudaThreadExchangeStreamCaptureMode(&mode), ret, fail);
+    CUDACHECKGOTO(cudaHostRegister((void*)hptr, realShmSize, cudaHostRegisterPortable | cudaHostRegisterMapped), ret, fail);
+    CUDACHECKGOTO(cudaHostGetDevicePointer(&dptr, (void*)hptr, 0), ret, fail);
+    CUDACHECKGOTO(cudaThreadExchangeStreamCaptureMode(&mode), ret, fail);
+  }
+
+  ncclOsShmHandleInit(fd, shmPath, shmSize, realShmSize, hptr, dptr, create, tmphandle);
+exit:
+  *shmPtr = hptr;
+  if (devShmPtr) *devShmPtr = dptr;
+  *handle = tmphandle;
+  return ret;
+fail:
+  WARN("Error while %s shared memory segment %s (size %ld), error: %s (%d)", create ? "creating" : "attaching to",
+       shmPath, shmSize, strerror(errno), errno);
+  if (tmphandle) {
+    ncclOsShmHandleInit(fd, shmPath, shmSize, realShmSize, hptr, dptr, create, tmphandle);
+    (void)ncclOsShmClose(tmphandle);
+    tmphandle = NULL;
+  }
+  hptr = NULL;
+  dptr = NULL;
+  goto exit;
+}
+
+ncclResult_t ncclOsShmClose(struct ncclShmHandleInternal* handle) {
+  ncclResult_t ret = ncclSuccess;
+  if (handle) {
+    if (handle->shmDesc >= 0) {
+      close(handle->shmDesc);
+      if (handle->shmPath != NULL && handle->refcount != NULL && *handle->refcount > 0) {
+        if (unlink(handle->shmPath) != 0) {
+          WARN("unlink shared memory %s failed, error: %s (%d)", handle->shmPath, strerror(errno), errno);
+          ret = ncclSystemError;
+        }
+      }
+      free(handle->shmPath);
+    }
+
+    if (handle->shmPtr) {
+      if (handle->devShmPtr) CUDACHECK(cudaHostUnregister(handle->shmPtr));
+      if (munmap(handle->shmPtr, handle->realShmSize) != 0) {
+        WARN("munmap of shared memory %p size %ld failed, error: %s (%d)", handle->shmPtr, handle->realShmSize, strerror(errno), errno);
+        ret = ncclSystemError;
+      }
+    }
+    free(handle);
+  }
+  return ret;
+}
+
+ncclResult_t ncclOsShmUnlink(struct ncclShmHandleInternal* handle) {
+  ncclResult_t ret = ncclSuccess;
+  if (handle) {
+    if (handle->shmPath != NULL && handle->refcount != NULL && *handle->refcount > 0) {
+      if (unlink(handle->shmPath) != 0) {
+        WARN("unlink shared memory %s failed, error: %s (%d)", handle->shmPath, strerror(errno), errno);
+        ret = ncclSystemError;
+      }
+      free(handle->shmPath);
+      handle->shmPath = NULL;
+    }
+  }
+  return ret;
 }

@@ -255,7 +255,9 @@ static __device__ void rsAlgoHier(ncclSymkDevWorkArgs const* args, BoolTag<multi
               if (roleIsWorker) {
                 copy(coopRole, nChunkElts,
                   /*dstMem=*/GMemTag(), /*dst=*/outPtr.localPtr(),
-                  /*srcMem=*/SMemTag(), /*src=*/accum);
+                  /*srcMem=*/SMemTag(), /*src=*/accum,
+                  [&]__device__(auto x) { return applyPostOp(red, x); }
+                );
                 coopRole.sync(); // prevent initFn from trampling accum
               }
             }

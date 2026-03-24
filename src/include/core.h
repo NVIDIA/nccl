@@ -13,6 +13,7 @@
 #include <algorithm> // For std::min/std::max
 #include "nccl.h"
 
+#if defined(NCCL_OS_LINUX)
 #ifdef PROFAPI
 #define NCCL_API(ret, func, args...)        \
     extern "C"                              \
@@ -29,6 +30,12 @@
     __attribute__ ((visibility("default"))) \
     ret func(args)
 #endif // end PROFAPI
+#else
+/* Windows and other non-Linux: use standard variadic macro (no visibility attribute) */
+#define NCCL_API(ret, func, ...)            \
+    extern "C"                              \
+    ret func(__VA_ARGS__)
+#endif // end NCCL_OS_LINUX
 
 #include "debug.h"
 #include "checks.h"

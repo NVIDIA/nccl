@@ -339,7 +339,7 @@ __hidden ncclResult_t exampleProfilerFinalize(void* context) {
   char filename[PATH_MAX] = { 0 };
   FILE* fh = openTraceFile(ctx, filename, sizeof(filename));
 
-  INFO(NCCL_INIT, "PROFILER/Plugin: finalize commName: %s commHash: %lu nranks: %d rank: %d traceFile: %s",
+  INFO(NCCL_DESTROY, "PROFILER/Plugin: finalize commName: %s commHash: %lu nranks: %d rank: %d traceFile: %s",
        ctx->commName ? ctx->commName : "", ctx->commHash, ctx->nranks, ctx->rank,
        filename[0] ? filename : "none");
 

@@ -67,7 +67,7 @@ ncclResult_t ncclScheduleBcastTasksToPlan(
 
 
     // Determine thread count per block
-    int threadPerBlock = std::max((unsigned long)(tcoll.nWarps * WARP_SIZE), 64 * sizeof(ncclDevWorkBcast) / 16 + 3 * WARP_SIZE);
+    int threadPerBlock = (int)std::max((int)(tcoll.nWarps * WARP_SIZE), (int)(64 * sizeof(ncclDevWorkBcast) / 16 + 3 * WARP_SIZE));
     plan->threadPerBlock = threadPerBlock;
 
     // Choose kernel for plan. Based on proto, algo=ring

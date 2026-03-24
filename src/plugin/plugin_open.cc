@@ -8,8 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-#include <link.h>
-#include <dlfcn.h>
+#include "os.h"
 
 #include "debug.h"
 #include "plugin.h"
@@ -35,13 +34,18 @@ static void* tryOpenLib(char* name, int* err, char* errStr) {
     name = nullptr;
   }
 
-  void *handle = dlopen(name, RTLD_NOW | RTLD_LOCAL);
+  void *handle = ncclOsDlopen(name);
   if (nullptr == handle) {
-    strncpy(errStr, dlerror(), MAX_STR_LEN);
-    errStr[MAX_STR_LEN] = '\0';
+    const char* dlErr = ncclOsDlerror();
+    if (dlErr) {
+      strncpy(errStr, dlErr, MAX_STR_LEN);
+      errStr[MAX_STR_LEN] = '\0';
+    } else {
+      errStr[0] = '\0';
+    }
     // "handle" and "name" won't be NULL at the same time.
     // coverity[var_deref_model]
-    if (strstr(errStr, name) && strstr(errStr, "No such file or directory")) {
+    if (name && strstr(errStr, name) && strstr(errStr, "No such file or directory")) {
       *err = ENOENT;
     }
   }
@@ -53,6 +57,7 @@ static void appendNameToList(char* nameList, int *leftChars, char* name) {
   *leftChars -= strlen(name) + 1;
 }
 
+#if defined(NCCL_OS_LINUX)
 static char* getLibPath(void* handle) {
   struct link_map* lm;
   if (dlinfo(handle, RTLD_DI_LINKMAP, &lm) != 0)
@@ -60,6 +65,15 @@ static char* getLibPath(void* handle) {
   else
     return strdup(lm->l_name);
 }
+#elif defined(NCCL_OS_WINDOWS)
+static char* getLibPath(void* handle) {
+  char path[PATH_MAX];
+  DWORD len = GetModuleFileNameA((HMODULE)handle, path, PATH_MAX);
+  if (len == 0 || len >= PATH_MAX)
+    return nullptr;
+  return strdup(path);
+}
+#endif
 
 static void* openPluginLib(enum ncclPluginType type, const char* libName) {
   int openErr, len = PATH_MAX;
@@ -138,14 +152,14 @@ void* ncclGetNetPluginLib(enum ncclPluginType type) {
     // increment the reference counter of the net library
     libNames[type] = strdup(libNames[ncclPluginTypeNet]);
     ncclPluginLibPaths[type] = strdup(ncclPluginLibPaths[ncclPluginTypeNet]);
-    libHandles[type] = dlopen(libNames[ncclPluginTypeNet], RTLD_NOW | RTLD_LOCAL);
+    libHandles[type] = ncclOsDlopen(libNames[ncclPluginTypeNet]);
   }
   return libHandles[type];
 }
 
 ncclResult_t ncclClosePluginLib(void* handle, enum ncclPluginType type) {
   if (handle && libHandles[type] == handle) {
-    dlclose(handle);
+    ncclOsDlclose(handle);
     libHandles[type] = nullptr;
     free(ncclPluginLibPaths[type]);
     ncclPluginLibPaths[type] = nullptr;

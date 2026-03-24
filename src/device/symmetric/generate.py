@@ -6,6 +6,7 @@
 # See LICENSE.txt for more license information
 
 import os
+import platform
 import sys
 import shutil
 
@@ -20,10 +21,11 @@ if os.path.exists(gensrc):
     path = os.path.join(gensrc, name)
     if os.path.isfile(path):
       os.remove(path)
-    elif os.path.isdir(path):
-      shutil.rmtree(path)
 else:
   os.mkdir(gensrc)
+
+# On Windows, GIN device code is excluded; do not generate or build any GIN kernels.
+exclude_gin = platform.system() == "Windows"
 
 def paste(sep, *args):
   return sep.join(args)
@@ -53,7 +55,7 @@ class Rec(object):
 # Edit this region for introducing new algos etc
 
 reductions = ["AllReduce","ReduceScatter"]
-all_reds = ["sum"]
+all_reds = ["sum", "avg"]
 all_tys = ["f32","f16","bf16","f8e4m3","f8e5m2"]
 gin_algos = ["RailA2A_LsaLD", "RailA2A_LsaLDMC", "RailRing_LsaSTMC"]
 
@@ -70,10 +72,12 @@ coll_to_lower = {
 }
 
 red_to_ncclDevRedOp = {
-  "sum": "ncclDevSum"
+  "sum": "ncclDevSum",
+  "avg": "ncclDevSumPostDiv"
 }
 red_to_Func = {
-  "sum": "FuncSum"
+  "sum": "FuncSum",
+  "avg": "FuncSumPostDiv"
 }
 
 ty_to_ncclDataType = {
@@ -81,14 +85,14 @@ ty_to_ncclDataType = {
   "f16": "ncclFloat16",
   "bf16": "ncclBfloat16",
   "f8e4m3": "ncclFloat8e4m3",
-  "f8e5m2": "ncclFloat8e5m2"
+  "f8e5m2": "ncclFloat8e5m2",
 }
 ty_to_cxxtype = {
   "f32": "float",
   "f16": "half",
   "bf16": "__nv_bfloat16",
   "f8e4m3": "__nv_fp8_e4m3",
-  "f8e5m2": "__nv_fp8_e5m2"
+  "f8e5m2": "__nv_fp8_e5m2",
 }
 
 def enumerate_kernels():
@@ -97,8 +101,12 @@ def enumerate_kernels():
   for red in all_reds:
     for ty in all_tys:
       for algo in ["AGxLL_R","AGxLLMC_R","RSxLD_AGxST","RSxLDMC_AGxSTMC"]:
+        if red == "avg":
+          continue
         yield Rec(coll="AllReduce", algo=algo, red=red, ty=ty)
       for algo in ["LL","LD","LDMC","RailA2A_LsaLD","RailA2A_LsaLDMC"]:
+        if red == "avg" and algo not in gin_algos:
+          continue
         yield Rec(coll="ReduceScatter", algo=algo, red=red, ty=ty)
 
 def required_cuda(k):
@@ -224,16 +232,18 @@ def partition(vals, keyfn):
   return ans
 
 
-kernels_by_file = partition(enumerate_kernels(), lambda k: (kernel_fname(k), kernel_fbase(k)))
+# When exclude_gin (Windows), do not generate or reference any GIN kernels.
+kernels_to_build = [k for k in enumerate_kernels() if not (exclude_gin and k.algo in gin_algos)]
+kernels_by_file = partition(kernels_to_build, lambda k: (kernel_fname(k), kernel_fbase(k)))
 
 # Add dependency only files (e.g. allreduce.cu)
-for fbase in set(kernel_fbase(k) for k in enumerate_kernels()):
+for fbase in set(kernel_fbase(k) for k in kernels_to_build):
   fname = fbase + '.cu'
   if (fname, fbase) not in kernels_by_file:
     kernels_by_file[fname, fbase] = []
 
 files_to_print = ""
-# Generate each kernel instantiation file
+# Generate each kernel instantiation file (no GIN .cu files when exclude_gin)
 for (fname, fbase), ks in kernels_by_file.items():
   files_to_print += fname + ";"
   with open(os.path.join(gensrc, fname), "w") as f:
@@ -243,13 +253,14 @@ for (fname, fbase), ks in kernels_by_file.items():
     for k in ks:
       emitln(f, instantiate(k))
 
-# Generate <gensrc>/sym_kernels_host.cc
+# Generate <gensrc>/sym_kernels_host.cc (kernel list already excludes GIN when exclude_gin)
 with open(os.path.join(gensrc, "sym_kernels_host.cc"), "w") as f:
   emitln(f, '#include "sym_kernels.h"')
   emitln(f, '#include "device.h"')
+  emitln(f, '#include "debug.h"')
   emitln(f, '')
 
-  kernel_list = list(enumerate_kernels())
+  kernel_list = kernels_to_build
   for k in kernel_list:
     emitln(f, prototype(k))
   emitln(f, '')
@@ -275,7 +286,7 @@ with open(os.path.join(gensrc, "sym_kernels_host.cc"), "w") as f:
   emitln(f, 'int ncclSymkGetKernelIndex(ncclSymkKernelId id, int red, ncclDataType_t ty) {')
   indents += 1
   emitln(f, 'switch (id) {')
-  emitln(f, 'default: return -1;')
+  emitln(f, 'default: WARN("ncclSymkGetKernelIndex: unknown kernel id %d", (int)id); return -1;')
   for (coll, algo), coll_algo_ks in partition(kernel_list, lambda k: (k.coll, k.algo)).items():
     emitln(f, 'case ncclSymkKernelId_'+coll+'_'+algo+':')
     indents += 1
@@ -283,12 +294,12 @@ with open(os.path.join(gensrc, "sym_kernels_host.cc"), "w") as f:
       emitln(f, 'return %d;' % kernel_list.index(coll_algo_ks[0]))
     else:
       emitln(f, 'switch ((ncclDevRedOp_t)red) {')
-      emitln(f, 'default: return -1;')
+      emitln(f, 'default: WARN("ncclSymkGetKernelIndex: unknown red op %d for id %d", red, (int)id); return -1;')
       for red, coll_algo_red_ks in partition(coll_algo_ks, lambda k: k.red).items():
         emitln(f, 'case '+red_to_ncclDevRedOp[red]+':')
         indents += 1
         emitln(f, 'switch (ty) {')
-        emitln(f, 'default: return -1;')
+        emitln(f, 'default: WARN("ncclSymkGetKernelIndex: unknown type %d for id %d red %d", (int)ty, (int)id, red); return -1;')
         for k in coll_algo_red_ks:
           emitln(f, 'case %s: return %d;' % (ty_to_ncclDataType[k.ty], kernel_list.index(k)))
         emitln(f, '}')
@@ -307,13 +318,13 @@ if os.environ.get("NCCL_USE_CMAKE", "0") == "1":
 # Generate <gensrc>/rules.mk (only needed for Makefile builds, not CMake)
 if os.environ.get("NCCL_USE_CMAKE", "0") != "1":
   with open(os.path.join(gensrc, "rules.mk"), "w") as f:
-    inst_names = sorted(set(kernel_fname(k) for k in enumerate_kernels()))
+    inst_names = sorted(set(kernel_fname(k) for k in kernels_to_build))
     names = inst_names + ["sym_kernels_host.cc"]
     f.write("LIB_OBJS_SYM_GEN = $(patsubst %,$(OBJDIR)/genobj/symmetric/%.o,{names})\n"
             .format(names=" ".join(names)))
     f.write("\n")
 
-    inst_names = sorted(set((kernel_fname(k), kernel_fbase(k), kernel_gencode(k)) for k in enumerate_kernels()))
+    inst_names = sorted(set((kernel_fname(k), kernel_fbase(k), kernel_gencode(k)) for k in kernels_to_build))
     for fname, fbase, gencode in inst_names:
       f.write(
         "$(OBJDIR)/genobj/symmetric/{fname}.o: $(OBJDIR)/gensrc/symmetric $(OBJDIR)/genobj/symmetric/{fbase}.cu.d\n"
@@ -321,3 +332,4 @@ if os.environ.get("NCCL_USE_CMAKE", "0") != "1":
         "\n"
         .format(fname=fname, fbase=fbase, gencode=gencode)
       )
+

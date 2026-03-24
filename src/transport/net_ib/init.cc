@@ -11,6 +11,9 @@ NCCL_PARAM(IbPciRelaxedOrdering, "IB_PCI_RELAXED_ORDERING", 2);
 NCCL_PARAM(IbAdaptiveRouting, "IB_ADAPTIVE_ROUTING", -2);
 NCCL_PARAM(IbDataDirect,"IB_DATA_DIRECT",1);
 
+// default to 0 to disable ooo rq, if set to 1, ooo rq will be enabled or failed
+NCCL_PARAM(IbOooRq,"IB_OOO_RQ", 0)
+
 static std::mutex ncclIbMutex;
 
 // With ncclNet_v11_t the NCCL core initializes the network plugin per-communicator
@@ -24,6 +27,8 @@ NCCL_PARAM(IbDisable, "IB_DISABLE", 0);
 NCCL_PARAM(IbMergeVfs, "IB_MERGE_VFS", 1);
 NCCL_PARAM(IbMergeNics, "IB_MERGE_NICS", 1);
 NCCL_PARAM(IbDevicePciOrder, "IB_DEVICE_PCI_ORDER", 1);
+
+extern int64_t ncclParamIbArThreshold();
 
 // Returns 0 if this is the path of two VFs of the same physical device
 static int ncclIbMatchVfPath(char* path1, char* path2) {
@@ -65,7 +70,11 @@ static ncclResult_t ncclIbGetPciPath(char* devName, char** path, char* fullPath)
     // Also merge virtual functions (VF) into the same device
     if (ncclParamIbMergeVfs()) p[strlen(p)-3] = p[strlen(p)-4] = '0';
   }
-  if (path) *path = p;
+  if (path) {
+    *path = p;
+  } else {
+    free(p);
+  }
   return ncclSuccess;
 }
 
@@ -134,6 +143,31 @@ static bool ncclMlx5dvDmaBufCapable(ibv_context *context){
   return true;
 failure:
   return false;
+}
+
+extern int64_t ncclParamIbPrepostReceiveWorkRequests();
+extern int64_t ncclParamIbReceiverSideMatchingScheme();
+
+static ncclResult_t ncclIbQueryOooRqSize(struct ibv_context* ibvCtx, const char *devName, uint32_t* oooRqSize) {
+  ncclResult_t ret;
+  if (!oooRqSize) return ncclInvalidArgument;
+  *oooRqSize = 0;
+
+  if (ncclParamIbOooRq() == 0) return ncclSuccess;
+
+  // out-of-order recv prerequisite: device capability
+  struct mlx5dv_context dvCtx;
+  *oooRqSize = 0;
+  dvCtx.comp_mask = MLX5DV_CONTEXT_MASK_OOO_RECV_WRS;
+  NCCLCHECKGOTO(wrap_mlx5dv_query_device(ibvCtx, &dvCtx), ret, fail);
+  if ((dvCtx.comp_mask & MLX5DV_CONTEXT_MASK_OOO_RECV_WRS) && dvCtx.ooo_recv_wrs_caps.max_rc > 0) {
+    *oooRqSize = dvCtx.ooo_recv_wrs_caps.max_rc;
+  }
+
+
+  return ncclSuccess;
+fail:
+  return ncclInternalError;
 }
 
 ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
@@ -214,6 +248,7 @@ ncclResult_t ncclIbFinalizeDevices(void) {
   return ncclSuccess;
 }
 
+extern int64_t ncclIbArThreshold;
 ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) {
   ncclResult_t ret = ncclSuccess;
   if (netRefCount++) return ret;
@@ -261,7 +296,12 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
         }
         char dataDirectDevicePath[PATH_MAX] = "/sys";
         int devCount = /*undefined*/-1, devOffset = 0;
+
+        uint32_t oooRqSize = 0;
         enum ncclIbProvider ibProvider = wrap_mlx5dv_is_supported(devices[d]) ? IB_PROVIDER_MLX5 : IB_PROVIDER_NONE;
+        if (ibProvider == IB_PROVIDER_MLX5 && ncclParamIbOooRq()) {
+          NCCLCHECKGOTO(ncclIbQueryOooRqSize(context, devices[d]->name, &oooRqSize), ret, fail);
+        }
 
         int nPorts = 0;
         struct ibv_device_attr devAttr;
@@ -333,6 +373,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
               }
 
               ncclIbDevs[ncclNIbDevs].maxQp = devAttr.max_qp;
+              ncclIbDevs[ncclNIbDevs].oooRqSize = oooRqSize;
               ncclIbDevs[ncclNIbDevs].mrCache.capacity = 0;
               ncclIbDevs[ncclNIbDevs].mrCache.population = 0;
               ncclIbDevs[ncclNIbDevs].mrCache.slots = NULL;
@@ -343,9 +384,10 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
               ncclIbDevs[ncclNIbDevs].ar = (portAttr.link_layer == IBV_LINK_LAYER_INFINIBAND) ? 1 : 0;
               if (ncclParamIbAdaptiveRouting() != -2) ncclIbDevs[ncclNIbDevs].ar = ncclParamIbAdaptiveRouting();
 
-              INFO(NCCL_NET, "NET/IB: [%d] %s:%s:%d/%s provider=%s speed=%d context=%p pciPath=%s ar=%d", d, devices[d]->name, devices[d]->dev_name,
+
+              INFO(NCCL_NET, "NET/IB: [%d] %s:%s:%d/%s provider=%s speed=%d context=%p pciPath=%s ar=%d oooRqSize=%d", d, devices[d]->name, devices[d]->dev_name,
                    ncclIbDevs[ncclNIbDevs].portNum, NCCL_IB_LLSTR(portAttr.link_layer), ibProviderName[ncclIbDevs[ncclNIbDevs].ibProvider], ncclIbDevs[ncclNIbDevs].speed, context,
-                   ncclIbDevs[ncclNIbDevs].pciPath, ncclIbDevs[ncclNIbDevs].ar);
+                   ncclIbDevs[ncclNIbDevs].pciPath, ncclIbDevs[ncclNIbDevs].ar, ncclIbDevs[ncclNIbDevs].oooRqSize);
 
               ncclIbAsyncThread = std::thread(ncclIbAsyncThreadMain, ncclIbDevs + ncclNIbDevs);
               ncclSetThreadName(ncclIbAsyncThread, "NCCL IbAsync %2d", ncclNIbDevs);
@@ -358,13 +400,22 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
         if (nPorts == 0 && ncclSuccess != wrap_ibv_close_device(context)) { ret = ncclInternalError; goto fail; }
       }
 
-      if (nIbDevs && (ncclSuccess != wrap_ibv_free_device_list(devices))) { ret = ncclInternalError; goto fail; }
+      if (devices && (ncclSuccess != wrap_ibv_free_device_list(devices))) { ret = ncclInternalError; goto fail; }
     }
     if (ncclNIbDevs == 0) {
       INFO(NCCL_INIT|NCCL_NET, "NET/IB : No device found.");
     }
     // Determine whether RELAXED_ORDERING is enabled and possible
     ncclIbRelaxedOrderingEnabled = ncclIbRelaxedOrderingCapable();
+
+    // Default value for ncclIbArThreshold is 8192
+    if (ncclParamIbArThreshold() != -2) {
+      if (ncclParamIbOooRq()) {
+        INFO(NCCL_NET, "NET/IB: OOO RQ is enabled, AR threshold will be ignored.");
+      } else {
+        ncclIbArThreshold = ncclParamIbArThreshold();  // set explicitly by user
+      }
+    }
     // sort devices to ensure a consistent order across nodes
     if (ncclParamIbDevicePciOrder()) qsort(ncclIbDevs, ncclNIbDevs, sizeof(struct ncclIbDev), ncclIbCompareDevs);
     // Once sorted, get the realPort ID and create the virtual devices.
@@ -433,6 +484,8 @@ ncclResult_t ncclIbGetPhysProperties(int dev, ncclNetProperties_t* props) {
   props->maxP2pBytes = NCCL_MAX_NET_SIZE_BYTES;
   props->maxCollBytes = MAX_COLLNET_SIZE;
   props->maxMultiRequestSize = 1;
+  props->railId = NCCL_NET_ID_UNDEF;
+  props->planeId = NCCL_NET_ID_UNDEF;
   return ncclSuccess;
 }
 

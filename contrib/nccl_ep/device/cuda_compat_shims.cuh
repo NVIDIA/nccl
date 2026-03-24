@@ -28,9 +28,7 @@
 #include <cuda/ptx>
 
 // Only provide shims for CUDA versions that need them
-#if !defined(__CUDACC_VER_MAJOR__) || (__CUDACC_VER_MAJOR__ < 13) || \
-  ((__CUDACC_VER_MAJOR__ == 13) &&                                   \
-   (!defined(__CUDACC_VER_MINOR__) || (__CUDACC_VER_MINOR__ < 1)))
+#if !defined(__CUDACC_VER_MAJOR__) || (__CUDACC_VER_MAJOR__ < 13)
 
 namespace cuda { namespace ptx {
 

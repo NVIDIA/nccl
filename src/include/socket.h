@@ -9,15 +9,37 @@
 #define NCCL_SOCKET_H_
 
 #include "nccl.h"
-#include <arpa/inet.h>
-#include <netinet/tcp.h>
-#include <netdb.h>
-#include <fcntl.h>
-#include <poll.h>
 #include "os.h"
+
+#if !defined(__CUDA_ARCH__)
+/* Ensure full socket types are visible when this header is included from .cu or other TU without os.h socket context. */
+#if defined(NCCL_OS_WINDOWS)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#elif defined(NCCL_OS_LINUX)
+#include <sys/socket.h>
+#include <netinet/in.h>
+#endif
+#endif
 
 #define MAX_IFS 16
 #define MAX_IF_NAME_SIZE 16
+#if defined(__CUDA_ARCH__) || (!defined(NCCL_OS_WINDOWS) && !defined(NCCL_OS_LINUX))
+/* Device compilation or stub build (no OS): no system socket headers; use placeholder for union size. */
+#ifndef NI_MAXHOST
+#define NI_MAXHOST 1024
+#endif
+#ifndef NI_MAXSERV
+#define NI_MAXSERV 32
+#endif
+#define SOCKET_NAME_MAXLEN (NI_MAXHOST+NI_MAXSERV)
+#define NCCL_SOCKET_MAGIC 0x564ab9f2fc4b9d6cULL
+
+/* Placeholder; real definition needs sockaddr from system headers */
+union ncclSocketAddress {
+  char _storage[28];
+};
+#else
 #define SOCKET_NAME_MAXLEN (NI_MAXHOST+NI_MAXSERV)
 #define NCCL_SOCKET_MAGIC 0x564ab9f2fc4b9d6cULL
 
@@ -27,6 +49,7 @@ union ncclSocketAddress {
   struct sockaddr_in sin;
   struct sockaddr_in6 sin6;
 };
+#endif
 
 enum ncclSocketState {
   ncclSocketStateNone = 0,

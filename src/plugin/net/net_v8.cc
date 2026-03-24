@@ -8,7 +8,7 @@
 #include "nccl_net.h"
 #include "proxy.h"
 #include "checks.h"
-#include <dlfcn.h>
+#include "os.h"
 
 static ncclNet_t ncclNet;
 static ncclCollNet_t ncclCollNet;
@@ -42,6 +42,9 @@ static ncclResult_t ncclNet_getProperties(int dev, ncclNetProperties_t* props) {
   props->maxP2pBytes = MAX_NET_SIZE;
   props->maxCollBytes = MAX_COLLNET_SIZE;
   props->maxMultiRequestSize = 1;
+  // Undefined to be ignore in NCCL core
+  props->railId = NCCL_NET_ID_UNDEF;
+  props->planeId = NCCL_NET_ID_UNDEF;
   return ncclSuccess;
 }
 
@@ -197,7 +200,7 @@ exit:
 }
 
 ncclNet_t* getNcclNet_v8(void* lib) {
-  ncclNet_v8 = (ncclNet_v8_t*)dlsym(lib, "ncclNetPlugin_v8");
+  ncclNet_v8 = (ncclNet_v8_t*)ncclOsDlsym(lib, "ncclNetPlugin_v8");
   if (ncclNet_v8) {
     ncclNet.name = ncclNet_v8->name;
     ncclNet.init = ncclNet_init;
@@ -238,7 +241,7 @@ exit:
 }
 
 ncclCollNet_t* getNcclCollNet_v8(void* lib) {
-  ncclCollNet_v8 = (ncclCollNet_v8_t*)dlsym(lib, "ncclCollNetPlugin_v8");
+  ncclCollNet_v8 = (ncclCollNet_v8_t*)ncclOsDlsym(lib, "ncclCollNetPlugin_v8");
   if (ncclCollNet_v8) {
     ncclCollNet.name = ncclCollNet_v8->name;
     ncclCollNet.init = ncclCollNet_init;

@@ -11,7 +11,11 @@
 #include "nccl_device.h"
 #include "nccl_common.h"
 #include "device.h"
+#if !defined(NCCL_OS_WINDOWS)
 #include "../device/symmetric/gin_scratch.h"
+#else
+#include "nccl_device/gin_win_stub.h"
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 // ncclSymk[Foo]: Kernels built on the device API

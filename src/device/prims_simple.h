@@ -757,7 +757,8 @@ private:
           if (P2p) {
             exchgPtr = (T*)outputBuf;
           } else {
-            int localPeer = ncclShmem.comm.rankToLocalRank[peer];
+            // For cross-clique P2P, use peer rank directly to avoid localRank conflicts between cliques
+            int localPeer = ncclShmem.comm.p2pCrossClique ? peer : ncclShmem.comm.rankToLocalRank[peer];
             // coverity[deref_parm:FALSE] => work cannot be NULL if ipcReg != NULL
             exchgPtr = (T*)(work->coll.recvbuffOffset + work->coll.recvbuffRmtAddrs[localPeer]);
           }
@@ -794,7 +795,8 @@ private:
           if (P2p) {
             exchgPtr = MaxRecv == 0 ? (T*)inputBuf : (T*)outputBuf;
           } else {
-            int localPeer = ncclShmem.comm.rankToLocalRank[peer];
+            // For cross-clique P2P, use peer rank directly to avoid localRank conflicts between cliques
+            int localPeer = ncclShmem.comm.p2pCrossClique ? peer : ncclShmem.comm.rankToLocalRank[peer];
             if (MaxRecv == 0)
               // coverity[var_deref_op]
               exchgPtr = (T*)(work->coll.sendbuffOffset + work->coll.sendbuffRmtAddrs[localPeer]);

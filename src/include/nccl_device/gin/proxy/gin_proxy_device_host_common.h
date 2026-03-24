@@ -20,6 +20,9 @@ typedef enum {
   ncclGinProxyOpWithSignalInc = 1 << 3,
   ncclGinProxyOpWithSignalAdd = 1 << 4,
   ncclGinProxyOpVASignal = 1 << 5, // VA signals do not include put.
+  // Backwards compat: ops >= 6 may not be combined with ops < 6.
+  ncclGinProxyOpGet = 1 << 6,
+  ncclGinProxyOpFlush = 1 << 7,
 } ncclGinProxyOp_t;
 
 static_assert(sizeof(void *) == sizeof(uint64_t) && sizeof(size_t) == sizeof(uint64_t),
@@ -34,7 +37,7 @@ typedef union {
   } __attribute__((packed)) flag;
   struct {
     uint64_t flag : 1;
-    uint64_t op : 6;
+    uint64_t opLow : 6;
     uint64_t size : 57;
   } __attribute__((packed)) header;
   struct {
@@ -98,6 +101,13 @@ typedef union {
     uint16_t signalValLow2;
     uint32_t signalValHigh;
   } __attribute__((packed)) signalVal;
+  struct {
+    uint8_t flag : 1;
+    uint8_t resv : 7;
+    uint8_t opHigh;
+    uint16_t resv2;
+    uint32_t resv3;
+  } __attribute__((packed)) headerExt;
 } ncclGinProxyQword_t;
 static_assert(sizeof(ncclGinProxyQword_t) == sizeof(uint64_t),
               "sizeof(ncclGinProxyQword_t) != sizeof(uint64_t)");
@@ -114,7 +124,7 @@ typedef enum {
   ncclGinProxyGfdDstHandle = 4,
   ncclGinProxyGfdCompletion = 5,
   ncclGinProxyGfdSignalVal = 6,
-  ncclGinProxyGfdReserved = 7,
+  ncclGinProxyGfdHeaderExt = 7,
   ncclGinProxyGfdQwords = 8,
 } ncclGinProxyGfdQwordIdx_t;
 

@@ -94,6 +94,8 @@ struct doca_verbs_qp_attr {
     uint8_t rnr_retry{};
     uint8_t min_rnr_timer{};
     uint8_t core_direct_master{};
+    uint8_t max_rd_atomic{};
+    uint8_t max_dest_rd_atomic{};
 };
 
 /**

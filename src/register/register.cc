@@ -89,13 +89,16 @@ static ncclResult_t regCleanup(struct ncclComm* comm, struct ncclReg* reg) {
     }
   }
   if (reg->state & IPC_REG_COMPLETE) {
-    for (int i = 0; i < NCCL_MAX_LOCAL_RANKS; ++i)
-      if (reg->ipcInfos[i]) {
-        if (ncclIpcDeregBuffer(comm, reg->ipcInfos[i]) != ncclSuccess) {
-          WARN("rank %d deregister IPC buffer %p peerRank %d failed", comm->rank, reg->ipcInfos[i]->baseAddr, reg->ipcInfos[i]->peerRank);
+    if (reg->ipcInfos) {
+      for (int i = 0; i < reg->ipcInfosSize; ++i)
+        if (reg->ipcInfos[i]) {
+          if (ncclIpcDeregBuffer(comm, reg->ipcInfos[i]) != ncclSuccess) {
+            WARN("rank %d deregister IPC buffer %p peerRank %d failed", comm->rank, reg->ipcInfos[i]->baseAddr, reg->ipcInfos[i]->peerRank);
+          }
+          free(reg->ipcInfos[i]);
         }
-        free(reg->ipcInfos[i]);
-      }
+      free(reg->ipcInfos);
+    }
     if (reg->regIpcAddrs.hostPeerRmtAddrs) free(reg->regIpcAddrs.hostPeerRmtAddrs);
     if (reg->regIpcAddrs.devPeerRmtAddrs) NCCLCHECK(ncclCudaFree(reg->regIpcAddrs.devPeerRmtAddrs, comm->memManager));
   }
@@ -106,7 +109,7 @@ ncclResult_t ncclRegCleanup(struct ncclComm* comm) {
   struct ncclRegCache* cache = &comm->regCache;
   for (int i = 0; i < cache->population; i++) {
     struct ncclReg* reg = cache->slots[i];
-    INFO(NCCL_INIT, "Cleanup buffer %p pages %lx", (void*)reg->begAddr, (reg->endAddr-reg->begAddr)/cache->pageSize);
+    INFO(NCCL_DESTROY, "Cleanup buffer %p pages %lx", (void*)reg->begAddr, (reg->endAddr-reg->begAddr)/cache->pageSize);
     NCCLCHECK(regCleanup(comm, reg));
     free(reg);
   }

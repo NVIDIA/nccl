@@ -6,6 +6,7 @@ set(PLUGIN_NET_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/net_v8.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/net_v10.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/net_v11.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/net_v12.cc
 )
 
 # Add net plugin sources to parent scope

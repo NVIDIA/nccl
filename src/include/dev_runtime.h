@@ -76,6 +76,10 @@ struct ncclDevrState {
 // Check if GIN resources have been requested as part of `reqs`.
 bool ncclGinResourcesRequested(struct ncclDevCommRequirements const* reqs);
 
+// Check if there is only one LSA team. This function uses the cached value of comm or computes the
+// value from the comm topology.
+bool ncclDevrIsOneLsaTeam(struct ncclComm* comm);
+
 // We assume ncclComm has a `ncclDevrState symState` member.
 ncclResult_t ncclDevrInitOnce(struct ncclComm* comm);
 ncclResult_t ncclDevrFinalize(struct ncclComm* comm);
@@ -97,6 +101,9 @@ void freeDevCommRequirements(
 
 // Get the corresponding pointer in another lsa rank's symmetric memory window
 ncclResult_t ncclDevrGetLsaRankPtr(struct ncclComm* comm, struct ncclDevrWindow* winHost, size_t offset, int lsaRank, void** outPtr);
+
+// Convert a world rank to an LSA rank.
+ncclResult_t ncclDevrWorldToLsaRank(struct ncclComm* comm, int peerWorldRank, int* peerLsaRank);
 
 // Get the RMA device window handle for a specific context
 ncclGinWindow_t ncclDevrGetRmaDevWin(struct ncclDevrWindow* winHost, int ctx);

@@ -13,6 +13,7 @@
 #include "checks.h"
 #include "alloc.h"
 #include <stdlib.h>
+#include <cinttypes>
 
 // A few constraints to make the implementation easy
 #define MAX_STR_LEN 255
@@ -291,7 +292,7 @@ static ncclResult_t xmlSetAttrLong(struct ncclXmlNode* node, const char* attrNam
     strncpy(node->attrs[index].key, attrName, MAX_STR_LEN);
     node->attrs[index].key[MAX_STR_LEN] = '\0';
   }
-  snprintf(node->attrs[index].value, MAX_STR_LEN, "%#lx", value);
+  snprintf(node->attrs[index].value, MAX_STR_LEN, "%#" PRIx64, (uint64_t)value);
   return ncclSuccess;
 }
 

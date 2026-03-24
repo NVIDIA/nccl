@@ -10,6 +10,7 @@
 #define NCCL_REDUCE_KERNEL_H_
 
 #include "op128.h"
+#include "nccl_device/utility.h"
 #include <limits>
 #include <type_traits>
 
@@ -467,11 +468,7 @@ struct Apply_PreOp {
   static constexpr bool IsIdentity = Apply_PreOp<Fn, EltPerPack/2>::IsIdentity;
   template<int Size>
   __device__ __forceinline__ static BytePack<Size> preOp(Fn fn, BytePack<Size> a) {
-    #if __cpp_if_constexpr
-    if constexpr(!IsIdentity) {
-    #else
-    if (!IsIdentity) {
-    #endif
+    if NCCL_IF_CONSTEXPR (!IsIdentity) {
       // The `if (!IsIdentity)` condition is not strictly necessary, but it may help
       // compiler in that it won't have to tear a register apart for no reason
       // just to put it back together again.
@@ -508,11 +505,7 @@ struct Apply_PostOp {
   static constexpr bool IsIdentity = Apply_PostOp<Fn, EltPerPack/2>::IsIdentity;
   template<int Size>
   __device__ __forceinline__ static BytePack<Size> postOp(Fn fn, BytePack<Size> a) {
-    #if __cpp_if_constexpr
-    if constexpr(!IsIdentity) {
-    #else
-    if (!IsIdentity) {
-    #endif
+    if NCCL_IF_CONSTEXPR (!IsIdentity) {
       // The `if (!IsIdentity)` condition is not strictly necessary, but it may help
       // compiler in that it won't have to tear a register apart for no reason
       // just to put it back together again.
@@ -772,6 +765,100 @@ struct RedOpArg<FuncSumPostDiv<T>> {
   }
 };
 
+#if defined(__CUDA_BF16_TYPES_EXIST__)
+template<>
+struct FuncSumPostDiv<__nv_bfloat16> {
+  using EltType = __nv_bfloat16;
+#if __CUDA_ARCH__ >= 800
+  __nv_bfloat162 scalar;
+  __device__ __forceinline__ FuncSumPostDiv(uint64_t opArg) {
+    union { uint64_t u64; __nv_bfloat16 val; };
+    u64 = opArg;
+    scalar.x = val;
+    scalar.y = val;
+  }
+#else
+  float scalar;
+  __device__ __forceinline__ FuncSumPostDiv(uint64_t opArg) {
+    union { uint64_t u64; __nv_bfloat16 val; };
+    u64 = opArg;
+    scalar = __bfloat162float(val);
+  }
+#endif
+};
+#endif
+
+template<>
+struct FuncSumPostDiv<half> {
+  using EltType = half;
+#if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
+  __half2 scalar;
+  __device__ __forceinline__ FuncSumPostDiv(uint64_t opArg=0) {
+    union { uint64_t u64; __half val; };
+    u64 = opArg;
+    scalar.x = val;
+    scalar.y = val;
+  }
+#else
+  float scalar;
+  __device__ __forceinline__ FuncSumPostDiv(uint64_t opArg=0) {
+    union { uint64_t u64; __half val; };
+    u64 = opArg;
+    scalar = (float)val;
+  }
+#endif
+};
+
+template<>
+struct FuncSumPostDiv<float> {
+  using EltType = float;
+  float scalar;
+  __device__ __forceinline__ FuncSumPostDiv(uint64_t opArg) {
+    union { uint64_t u64; float val; };
+    u64 = opArg;
+    scalar = val;
+  }
+};
+
+template<>
+struct FuncSumPostDiv<double> {
+  using EltType = double;
+  double scalar;
+  __device__ __forceinline__ FuncSumPostDiv(uint64_t opArg) {
+    union { uint64_t u64; double val; };
+    u64 = opArg;
+    scalar = val;
+  }
+};
+
+#if defined(__CUDA_FP8_TYPES_EXIST__)
+#if __CUDA_ARCH__ >= 900
+template<>
+struct FuncSumPostDiv<__nv_fp8_e4m3> {
+  using EltType = __nv_fp8_e4m3;
+  __half2 scalar2;
+  __device__ __forceinline__ FuncSumPostDiv(uint64_t opArg) {
+    union { uint64_t u64; __nv_fp8_storage_t val; };
+    u64 = opArg;
+    scalar2.x = __half(__nv_cvt_fp8_to_halfraw(val, __NV_E4M3));
+    scalar2.y = scalar2.x;
+  }
+};
+
+template<>
+struct FuncSumPostDiv<__nv_fp8_e5m2> {
+  using EltType = __nv_fp8_e5m2;
+  __half2 scalar2;
+  __device__ __forceinline__ FuncSumPostDiv(uint64_t opArg) {
+    union { uint64_t u64; __nv_fp8_storage_t val; };
+    u64 = opArg;
+    scalar2.x = __half(__nv_cvt_fp8_to_halfraw(val, __NV_E5M2));
+    scalar2.y = scalar2.x;
+  }
+};
+#endif
+#endif
+
 template<typename T>
 struct FuncSumPostDiv {
   static_assert(T(0) < T(-1), "FuncSumPostDiv is only for implementing ncclAvg on uint types.");
@@ -812,6 +899,71 @@ struct Apply_Reduce<FuncSumPostDiv<T>, EltPerPack>:
     return Apply_Reduce<FuncSum<T>, EltPerPack>::reduce(FuncSum<T>(), a, b);
   }
 };
+
+
+// Confusingly, these functions multiply by the scalar, not divide by it. This is okay because we set the scalar to be
+// 1/n when creating the FuncSumPostDiv object.
+template<>
+struct Apply_PostOp<FuncSumPostDiv<float>, /*EltPerPack=*/1> {
+  static constexpr bool IsIdentity = false;
+  __device__ __forceinline__ static BytePack<sizeof(float)> postOp(FuncSumPostDiv<float> fn, BytePack<sizeof(float)> a) {
+    return toPack<float>(fromPack<float>(a) * fn.scalar);
+  }
+};
+
+template<>
+struct Apply_PostOp<FuncSumPostDiv<double>, /*EltPerPack=*/1> {
+  static constexpr bool IsIdentity = false;
+  __device__ __forceinline__ static BytePack<sizeof(double)> postOp(FuncSumPostDiv<double> fn, BytePack<sizeof(double)> a) {
+    return toPack<double>(fromPack<double>(a) * fn.scalar);
+  }
+};
+
+#if defined(__CUDA_BF16_TYPES_EXIST__)
+template<>
+struct Apply_PostOp<FuncSumPostDiv<__nv_bfloat16>, /*EltPerPack=*/1> {
+  static constexpr bool IsIdentity = false;
+  __device__ __forceinline__ static BytePack<sizeof(__nv_bfloat16)> postOp(FuncSumPostDiv<__nv_bfloat16> fn, BytePack<sizeof(__nv_bfloat16)> a) {
+#if __CUDA_ARCH__ >= 800
+    return toPack<__nv_bfloat16>(__hmul(fromPack<__nv_bfloat16>(a), fn.scalar.x));
+#else
+    return toPack<__nv_bfloat16>(__float2bfloat16(__bfloat162float(fromPack<__nv_bfloat16>(a)) * fn.scalar));
+#endif
+  }
+};
+
+#if __CUDA_ARCH__ >= 800
+template<>
+struct Apply_PostOp<FuncSumPostDiv<__nv_bfloat16>, /*EltPerPack=*/2> {
+  static constexpr bool IsIdentity = false;
+  __device__ __forceinline__ static BytePack<sizeof(__nv_bfloat162)> postOp(FuncSumPostDiv<__nv_bfloat16> fn, BytePack<sizeof(__nv_bfloat162)> a) {
+    return toPack<__nv_bfloat162>(__hmul2(fromPack<__nv_bfloat162>(a), fn.scalar));
+  }
+};
+#endif // __CUDA_ARCH__ >= 800
+#endif
+
+template<>
+struct Apply_PostOp<FuncSumPostDiv<half>, /*EltPerPack=*/1> {
+  static constexpr bool IsIdentity = false;
+  __device__ __forceinline__ static BytePack<sizeof(half)> postOp(FuncSumPostDiv<half> fn, BytePack<sizeof(half)> a) {
+#if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
+    return toPack<half>(__hmul(fromPack<half>(a), fn.scalar.x));
+#else
+    return toPack<half>(__float2half(__half2float(fromPack<half>(a)) * fn.scalar));
+#endif
+  }
+};
+
+#if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
+  template<>
+  struct Apply_PostOp<FuncSumPostDiv<half>, /*EltPerPack=*/2> {
+    static constexpr bool IsIdentity = false;
+    __device__ __forceinline__ static BytePack<sizeof(half2)> postOp(FuncSumPostDiv<half> fn, BytePack<sizeof(half2)> a) {
+      return toPack<half2>(__hmul2(fromPack<half2>(a), fn.scalar));
+    }
+  };
+#endif
 
 template<typename T>
 struct Apply_PostOp<FuncSumPostDiv<T>, /*EltPerPack=*/1> {
@@ -1016,6 +1168,15 @@ struct Apply_LoadMultimem {
     DEFINE_Apply_LoadMultimem_sum_v4_and_xparts(__nv_fp8_e5m2, e5m2x4, 4)
     DEFINE_Apply_LoadMultimem_minmax_v4_and_xparts(__nv_fp8_e5m2, e5m2x4, 4)
   #endif
+
+  // FuncSumPostDiv multimem: load with FuncSum (add)
+  template<typename T, int PackSize>
+  struct Apply_LoadMultimem<FuncSumPostDiv<T>, PackSize> {
+    static constexpr int EltPerPack = PackSize / (int)sizeof(T);
+    __device__ __forceinline__ static BytePack<PackSize> load(FuncSumPostDiv<T> fn, uintptr_t addr) {
+      return Apply_LoadMultimem<FuncSum<T>, PackSize>::load(FuncSum<T>(), addr);
+    }
+  };
 #else
   template<typename Fn>
   struct LoadMultimem_BigPackSize {

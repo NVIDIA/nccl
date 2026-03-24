@@ -44,7 +44,7 @@ typedef struct {
     } p2p;
 
     struct {
-      pid_t pid;                // pid of the originating process
+      ncclPid_t pid;            // pid of the originating process
       uint8_t channelId;        // channel id for this proxy operation
       int peer;                 // remote rank for send/recv
       int nSteps;               // number of steps for this proxy operation

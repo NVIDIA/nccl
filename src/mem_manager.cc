@@ -16,11 +16,12 @@
 #include "transport.h"
 #include "nvtx.h"
 #include "param.h"
+#include "group.h"
+#include "compiler.h"
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <string.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <mutex>
 
 // Internal parameter to disable memory manager for testing
@@ -49,7 +50,7 @@ ncclResult_t ncclMemManagerInit(struct ncclComm* comm) {
   mgr->cpuBackupUsage = 0;
   mgr->commCudaDev = comm->cudaDev;
 
-  __atomic_store_n(&mgr->initialized, 1, __ATOMIC_RELEASE);
+  COMPILER_ATOMIC_STORE(&mgr->initialized, 1, std::memory_order_release);
 
   comm->memManager = mgr;
 
@@ -65,7 +66,7 @@ ncclResult_t ncclMemManagerDestroy(struct ncclComm* comm) {
 
   ncclMemManager* mgr = comm->memManager;
 
-  if (!__atomic_load_n(&mgr->initialized, __ATOMIC_ACQUIRE)) {
+  if (!COMPILER_ATOMIC_LOAD(&mgr->initialized, std::memory_order_acquire)) {
     comm->memManager = nullptr;
     return ncclSuccess;
   }
@@ -82,7 +83,7 @@ ncclResult_t ncclMemManagerDestroy(struct ncclComm* comm) {
 
   // refCount == 0, at this point proxy threads should be joined
   INFO(NCCL_ALLOC, "MemManager: Destroying (refCount=0)");
-  __atomic_store_n(&mgr->initialized, 0, __ATOMIC_RELEASE);
+  COMPILER_ATOMIC_STORE(&mgr->initialized, 0, std::memory_order_release);
 
   ncclDynMemEntry* entry = mgr->entries;
   while (entry != nullptr) {
@@ -141,7 +142,7 @@ static ncclResult_t ncclMemTrackInternal(
 ) {
   if (ncclParamMemManagerDisable()) return ncclSuccess;
   if (manager == nullptr || ptr == nullptr) return ncclInternalError;
-  if (!__atomic_load_n(&manager->initialized, __ATOMIC_ACQUIRE)) {
+  if (!COMPILER_ATOMIC_LOAD(&manager->initialized, std::memory_order_acquire)) {
     WARN("MemManager: Cannot track allocation ptr=%p, manager not initialized", ptr);
     return ncclInternalError;
   }
@@ -149,11 +150,11 @@ static ncclResult_t ncclMemTrackInternal(
   // Persistent memory: atomic update only
   if (memType == ncclMemPersist) {
     if (isImportedFromPeer) {
-      __atomic_fetch_add(&manager->totalPersistImported, size, __ATOMIC_RELAXED);
+      (void)COMPILER_ATOMIC_ADD_FETCH(&manager->totalPersistImported, size, std::memory_order_relaxed);
       TRACE(NCCL_ALLOC, "MemManager: Track Persistent Import ptr=%p size=%zu from rank=%d",
             ptr, size, ownerRank);
     } else {
-      __atomic_fetch_add(&manager->totalPersist, size, __ATOMIC_RELAXED);
+      (void)COMPILER_ATOMIC_ADD_FETCH(&manager->totalPersist, size, std::memory_order_relaxed);
       TRACE(NCCL_ALLOC, "MemManager: Track Persistent ptr=%p size=%zu dev=%d",
             ptr, size, manager->commCudaDev);
     }
@@ -205,17 +206,17 @@ static ncclResult_t ncclMemTrackInternal(
   // Update statistics
   if (isImportedFromPeer) {
     if (memType == ncclMemScratch) {
-      __atomic_fetch_add(&manager->totalScratchImported, size, __ATOMIC_RELAXED);
+      (void)COMPILER_ATOMIC_ADD_FETCH(&manager->totalScratchImported, size, std::memory_order_relaxed);
     } else if (memType == ncclMemOffload) {
-      __atomic_fetch_add(&manager->totalOffloadImported, size, __ATOMIC_RELAXED);
+      (void)COMPILER_ATOMIC_ADD_FETCH(&manager->totalOffloadImported, size, std::memory_order_relaxed);
     }
     TRACE(NCCL_ALLOC, "MemManager: Track imported ptr=%p size=%zu type=%d from rank=%d entries=%d",
           ptr, size, memType, ownerRank, manager->numEntries);
   } else {
     if (memType == ncclMemScratch) {
-      __atomic_fetch_add(&manager->totalScratch, size, __ATOMIC_RELAXED);
+      (void)COMPILER_ATOMIC_ADD_FETCH(&manager->totalScratch, size, std::memory_order_relaxed);
     } else if (memType == ncclMemOffload) {
-      __atomic_fetch_add(&manager->totalOffload, size, __ATOMIC_RELAXED);
+      (void)COMPILER_ATOMIC_ADD_FETCH(&manager->totalOffload, size, std::memory_order_relaxed);
     }
     TRACE(NCCL_ALLOC, "MemManager: Track ptr=%p size=%zu type=%d dev=%d entries=%d",
           ptr, size, memType, manager->commCudaDev, manager->numEntries);
@@ -259,14 +260,14 @@ ncclResult_t ncclMemUntrack(struct ncclMemManager* manager, void* ptr, size_t si
   if (manager == nullptr || ptr == nullptr) return ncclInternalError;
 
   // Atomic check to avoid locking destroyed mutex
-  if (!__atomic_load_n(&manager->initialized, __ATOMIC_ACQUIRE)) {
+  if (!COMPILER_ATOMIC_LOAD(&manager->initialized, std::memory_order_acquire)) {
     WARN("MemManager: Cannot untrack allocation ptr=%p, manager not initialized", ptr);
     return ncclInternalError;
   }
 
   // Variables to save values before releasing lock
   size_t entrySize = 0;
-  int numEntries __attribute__((unused)) = 0;  // May be unused if TRACE compiled out
+  int numEntries COMPILER_ATTRIBUTE_UNUSED = 0;  // May be unused if TRACE compiled out
   bool isImportedFromPeer = false;
   ncclMemType_t memType = ncclMemScratch;
 
@@ -331,15 +332,15 @@ ncclResult_t ncclMemUntrack(struct ncclMemManager* manager, void* ptr, size_t si
     // Entry found in linked list
     if (isImportedFromPeer) {
       if (memType == ncclMemScratch) {
-        __atomic_fetch_sub(&manager->totalScratchImported, entrySize, __ATOMIC_RELAXED);
+        (void)COMPILER_ATOMIC_SUB_FETCH(&manager->totalScratchImported, entrySize, std::memory_order_relaxed);
       } else if (memType == ncclMemOffload) {
-        __atomic_fetch_sub(&manager->totalOffloadImported, entrySize, __ATOMIC_RELAXED);
+        (void)COMPILER_ATOMIC_SUB_FETCH(&manager->totalOffloadImported, entrySize, std::memory_order_relaxed);
       }
     } else {
       if (memType == ncclMemScratch) {
-        __atomic_fetch_sub(&manager->totalScratch, entrySize, __ATOMIC_RELAXED);
+        (void)COMPILER_ATOMIC_SUB_FETCH(&manager->totalScratch, entrySize, std::memory_order_relaxed);
       } else if (memType == ncclMemOffload) {
-        __atomic_fetch_sub(&manager->totalOffload, entrySize, __ATOMIC_RELAXED);
+        (void)COMPILER_ATOMIC_SUB_FETCH(&manager->totalOffload, entrySize, std::memory_order_relaxed);
       }
     }
 
@@ -347,7 +348,7 @@ ncclResult_t ncclMemUntrack(struct ncclMemManager* manager, void* ptr, size_t si
           ptr, entrySize, numEntries);
   } else {
     // Entry not found in linked list - must be persistent memory
-    __atomic_fetch_sub(&manager->totalPersist, size, __ATOMIC_RELAXED);
+    (void)COMPILER_ATOMIC_SUB_FETCH(&manager->totalPersist, size, std::memory_order_relaxed);
     TRACE(NCCL_ALLOC, "MemManager: Untrack Persistent ptr=%p size=%zu", ptr, size);
   }
 
@@ -361,7 +362,7 @@ ncclResult_t ncclMemUntrack(struct ncclMemManager* manager, void* ptr, size_t si
 ncclResult_t ncclDynMemMarkExportToPeer(struct ncclMemManager* manager, void* ptr, int peerRank) {
   if (ncclParamMemManagerDisable()) return ncclSuccess;
   if (manager == nullptr || ptr == nullptr) return ncclInternalError;
-  if (!__atomic_load_n(&manager->initialized, __ATOMIC_ACQUIRE)) {
+  if (!COMPILER_ATOMIC_LOAD(&manager->initialized, std::memory_order_acquire)) {
     WARN("MemManager: Cannot mark export for ptr=%p, manager not initialized", ptr);
     return ncclInternalError;
   }
@@ -457,9 +458,12 @@ ncclResult_t ncclCommMemSuspend(struct ncclComm* comm) {
       // Unmap our local mapping of the peer's memory
       CUCHECKIGNORE(cuMemUnmap((CUdeviceptr)entry->ptr, entry->size));
 
-      // Release our reference to the peer's handle
-      CUCHECKIGNORE(cuMemRelease(entry->handle));
-      entry->handle = 0;  // Clear invalid handle
+      // Release our reference to the peer's handle if we have one
+      // For same-process imports, handle may be 0 if the reference was already released after mapping
+      if (entry->handle != 0) {
+        CUCHECKIGNORE(cuMemRelease(entry->handle));
+        entry->handle = 0;  // Clear invalid handle
+      }
 
       entry->state = ncclDynMemStateReleased;
       releasedPeerImport += entry->size;
@@ -959,22 +963,42 @@ ncclResult_t ncclCommSuspend(ncclComm_t comm, int flags) {
   NCCLCHECK(CommCheck(comm, "ncclCommSuspend", "comm"));
   NCCLCHECK(ncclCommEnsureReady(comm));
 
+  ncclResult_t ret = ncclSuccess;
+  int saveDev;
+  CUDACHECK(cudaGetDevice(&saveDev));
+  NCCLCHECK(ncclGroupStartInternal());
+  CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), ret, fail);
+
   if (flags & NCCL_SUSPEND_MEM) {
     if (ncclParamMemManagerDisable())
     {
       WARN("MemManager: Suspend not supported, memory manager is disabled");
-      return ncclInvalidUsage;
+      ret = ncclInvalidUsage;
+      goto fail;
     }
     // Check if manager is shared
     if (comm->memManager && comm->memManager->refCount > 1) {
       WARN("Memory suspend not supported with split_share communicators (refCount=%d)",
            comm->memManager->refCount);
-      return ncclInvalidUsage;
+      ret = ncclInvalidUsage;
+      goto fail;
     }
     INFO(NCCL_INIT, "ncclCommSuspend: rank %d suspending memory", comm->rank);
-    NCCLCHECK(ncclCommMemSuspend(comm));
+    struct ncclMemManagerTask* task;
+    NCCLCHECKGOTO(ncclCalloc(&task, 1), ret, fail);
+    task->comm = comm;
+    ncclIntruQueueEnqueue(&comm->suspendTaskQueue, task);
+    ncclGroupCommJoin(comm, ncclGroupTaskTypeSymRegister); // Reuse to avoid creating a new task type
   }
-  return ncclSuccess;
+
+exit:
+  ncclGroupErrCheck(ret);
+  NCCLCHECK(ncclGroupEndInternal());
+  if (comm && !comm->config.blocking) { NCCLCHECK(ncclCommGetAsyncError(comm, &ret)); }
+  CUDACHECK(cudaSetDevice(saveDev));
+  return ret;
+fail:
+  goto exit;
 }
 
 NCCL_API(ncclResult_t, ncclCommResume, ncclComm_t comm);
@@ -984,20 +1008,40 @@ ncclResult_t ncclCommResume(ncclComm_t comm) {
   NCCLCHECK(CommCheck(comm, "ncclCommResume", "comm"));
   NCCLCHECK(ncclCommEnsureReady(comm));
 
+  ncclResult_t ret = ncclSuccess;
+  int saveDev;
+  CUDACHECK(cudaGetDevice(&saveDev));
+  NCCLCHECK(ncclGroupStartInternal());
+  CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), ret, fail);
+
   if (ncclParamMemManagerDisable())
   {
     WARN("MemManager: Resume not supported, memory manager is disabled");
-    return ncclInvalidUsage;
+    ret = ncclInvalidUsage;
+    goto fail;
   }
   // Check if manager is shared
   if (comm->memManager && comm->memManager->refCount > 1) {
     WARN("Memory resume not supported with split_share communicators (refCount=%d)",
          comm->memManager->refCount);
-    return ncclInvalidUsage;
+    ret = ncclInvalidUsage;
+    goto fail;
   }
   INFO(NCCL_INIT, "ncclCommResume: rank %d resuming all resources", comm->rank);
-  NCCLCHECK(ncclCommMemResume(comm));
-  return ncclSuccess;
+  struct ncclMemManagerTask* task;
+  NCCLCHECKGOTO(ncclCalloc(&task, 1), ret, fail);
+  task->comm = comm;
+  ncclIntruQueueEnqueue(&comm->resumeTaskQueue, task);
+  ncclGroupCommJoin(comm, ncclGroupTaskTypeSymRegister); // Reuse to avoid creating a new task type
+
+exit:
+  ncclGroupErrCheck(ret);
+  NCCLCHECK(ncclGroupEndInternal());
+  if (comm && !comm->config.blocking) { NCCLCHECK(ncclCommGetAsyncError(comm, &ret)); }
+  CUDACHECK(cudaSetDevice(saveDev));
+  return ret;
+fail:
+  goto exit;
 }
 
 NCCL_API(ncclResult_t, ncclCommMemStats, ncclComm_t comm, ncclCommMemStat_t stat, uint64_t* value);
@@ -1021,16 +1065,16 @@ ncclResult_t ncclCommMemStats(ncclComm_t comm, ncclCommMemStat_t stat, uint64_t*
   ncclMemManager* manager = comm->memManager;
   switch (stat) {
     case ncclStatGpuMemTotal:
-      *value = __atomic_load_n(&manager->totalPersist, __ATOMIC_RELAXED) +
-               __atomic_load_n(&manager->totalScratch, __ATOMIC_RELAXED) +
-               __atomic_load_n(&manager->totalOffload, __ATOMIC_RELAXED);
+      *value = COMPILER_ATOMIC_LOAD(&manager->totalPersist, std::memory_order_relaxed) +
+               COMPILER_ATOMIC_LOAD(&manager->totalScratch, std::memory_order_relaxed) +
+               COMPILER_ATOMIC_LOAD(&manager->totalOffload, std::memory_order_relaxed);
       return ncclSuccess;
     case ncclStatGpuMemPersist:
-      *value = __atomic_load_n(&manager->totalPersist, __ATOMIC_RELAXED);
+      *value = COMPILER_ATOMIC_LOAD(&manager->totalPersist, std::memory_order_relaxed);
       return ncclSuccess;
     case ncclStatGpuMemSuspend:
-      *value = __atomic_load_n(&manager->totalScratch, __ATOMIC_RELAXED) +
-               __atomic_load_n(&manager->totalOffload, __ATOMIC_RELAXED);
+      *value = COMPILER_ATOMIC_LOAD(&manager->totalScratch, std::memory_order_relaxed) +
+               COMPILER_ATOMIC_LOAD(&manager->totalOffload, std::memory_order_relaxed);
       return ncclSuccess;
     case ncclStatGpuMemSuspended:
       // Boolean: 0=active, 1=suspended

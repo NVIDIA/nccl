@@ -28,7 +28,7 @@ from nccl.core.typing import (
 )
 
 
-__all__ = ["mem_alloc", "mem_free", "NcclBuffer"]
+__all__ = ["mem_alloc", "mem_free"]
 
 
 def mem_alloc(size: int, device: NcclDeviceSpec | None = None) -> Buffer:
@@ -139,12 +139,13 @@ class NcclBuffer:
         except (ImportError, ModuleNotFoundError, NcclInvalid):
             pass
 
-        try:
-            from nccl.core.interop.cupy import resolve_array
+        if resolved is None:
+            try:
+                from nccl.core.interop.cupy import resolve_array
 
-            resolved = resolve_array(buffer)
-        except (ImportError, ModuleNotFoundError, NcclInvalid):
-            pass
+                resolved = resolve_array(buffer)
+            except (ImportError, ModuleNotFoundError, NcclInvalid):
+                pass
 
         if resolved is not None:
             self._ptr = resolved[0]

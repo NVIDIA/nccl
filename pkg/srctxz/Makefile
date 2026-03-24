@@ -23,7 +23,7 @@ prep: $(TXZTARGETS)
 build: prep
 	$(MAKE) -C ../../src clean
 	@printf "Building source tar.xz package\n"
-	(cd $(BUILDDIR); SRCTXZ_APITESTS=$(SRCTXZ_APITESTS) bash srctxz/create_srctxz.sh)
+	(cd $(BUILDDIR); bash srctxz/create_srctxz.sh)
 	mkdir -p $(PKGDIR)
 	mv $(BUILDDIR)/../../nccl-src*.txz $(PKGDIR)
 

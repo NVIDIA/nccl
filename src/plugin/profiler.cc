@@ -115,7 +115,7 @@ static ncclResult_t ncclProfilerPluginUnload(void) {
   std::lock_guard<std::mutex> lock(profilerMutex);
   if (0 == (--profilerPluginRefCount)) {
     if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
-      INFO(NCCL_INIT, "PROFILER/Plugin: Closing profiler plugin %s", ncclProfiler->name);
+      INFO(NCCL_DESTROY, "PROFILER/Plugin: Closing profiler plugin %s", ncclProfiler->name);
     }
     NCCLCHECK(ncclClosePluginLib(profilerPluginLib, ncclPluginTypeProfiler));
     profilerPluginLib = nullptr;
@@ -464,7 +464,7 @@ ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan) {
     // gives the consistency.
     if (!plan->persistent || (COMPILER_EXPECT(ncclProfiler != NULL, 0) && (plan->groupEventHandle || ct->collApiEventHandle) &&
                               (ct->eActivationMask & ncclProfileKernelCh)))
-      COMPILER_ATOMIC_FETCH_ADD(&plan->comm->seqNumber[ct->func], 1, std::memory_order_relaxed);
+      COMPILER_ATOMIC_FETCH_ADD(&plan->comm->seqNumber[ct->func], 1ULL, std::memory_order_relaxed);
     ct = ct->next;
   }
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
@@ -778,7 +778,8 @@ ncclResult_t ncclProfilerStartCeCollEvent(struct ncclComm* comm, struct ncclCeCo
       eDescr.ceColl.count = args->nElts;
       eDescr.ceColl.root = args->rootRank;
       eDescr.ceColl.datatype = ncclDatatypeToString(args->datatype);
-      eDescr.ceColl.syncStrategy = comm->nvlsSupport ? "MC" : "UC";
+      // NVLS multicast isn't available across cliques - report UC for cross-clique
+      eDescr.ceColl.syncStrategy = (comm->nvlsSupport && !comm->p2pCrossClique) ? "MC" : "UC";
       eDescr.ceColl.intraBatchSync = false;
       eDescr.ceColl.batchSize = 0;
       eDescr.ceColl.numBatches = 0;

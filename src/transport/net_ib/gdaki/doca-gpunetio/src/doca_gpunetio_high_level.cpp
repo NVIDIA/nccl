@@ -190,7 +190,7 @@ static doca_error_t create_cq(struct doca_gpu *gpu_dev, struct ibv_pd *ibpd,
                               enum doca_gpu_verbs_mem_reg_type mreg_type, uint32_t ncqes,
                               void **gpu_umem_dev_ptr, struct doca_verbs_umem **gpu_umem,
                               void **gpu_umem_dbr_dev_ptr, struct doca_verbs_umem **gpu_umem_dbr,
-                              struct doca_verbs_uar *external_uar,
+                              struct doca_verbs_uar *external_uar, bool cq_collapsed,
                               struct doca_verbs_cq **verbs_cq) {
     doca_error_t status = DOCA_SUCCESS, tmp_status = DOCA_SUCCESS;
     cudaError_t status_cuda = cudaSuccess;
@@ -287,6 +287,14 @@ static doca_error_t create_cq(struct doca_gpu *gpu_dev, struct ibv_pd *ibpd,
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to set doca verbs cq size");
         goto destroy_resources;
+    }
+
+    if (cq_collapsed == true) {
+        status = doca_verbs_cq_attr_set_cq_collapsed(verbs_cq_attr, 1);
+        if (status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to set doca verbs cq collapsed");
+            goto destroy_resources;
+        }
     }
 
     if (external_uar != NULL) {
@@ -693,7 +701,7 @@ doca_error_t doca_gpu_verbs_create_qp_hl(struct doca_gpu_verbs_qp_init_attr_hl *
         qp_init_attr->nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY &&
         qp_init_attr->nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB &&
         qp_init_attr->nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_BF) {
-        DOCA_LOG(LOG_ERR, "nic_handler must be AUTO, CPU_PROXY, GPU_SM_DB, or GPU_SM_BF");
+        DOCA_LOG(LOG_ERR, "nic_handler (%d) must be AUTO %d, CPU_PROXY %d, GPU_SM_DB %d, or GPU_SM_BF %d", qp_init_attr->nic_handler, DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO, DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY, DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB, DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_BF);
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -713,7 +721,8 @@ doca_error_t doca_gpu_verbs_create_qp_hl(struct doca_gpu_verbs_qp_init_attr_hl *
 
         status = create_cq(qp_->gpu_dev, qp_init_attr->ibpd, qp_init_attr->mreg_type,
                            qp_init_attr->sq_nwqe, &qp_->cq_sq_umem_gpu_ptr, &qp_->cq_sq_umem,
-                           &qp_->cq_sq_umem_dbr_gpu_ptr, &qp_->cq_sq_umem_dbr, NULL, &qp_->cq_sq);
+                           &qp_->cq_sq_umem_dbr_gpu_ptr, &qp_->cq_sq_umem_dbr, NULL,
+                           qp_init_attr->cq_collapsed, &qp_->cq_sq);
         if (status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to create doca verbs cq");
             goto exit_error;
@@ -787,7 +796,7 @@ doca_error_t doca_gpu_verbs_create_qp_group_hl(struct doca_gpu_verbs_qp_init_att
     if (qp_init_attr->nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO &&
         qp_init_attr->nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY &&
         qp_init_attr->nic_handler != DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB) {
-        DOCA_LOG(LOG_ERR, "nic_handler must be AUTO, CPU_PROXY, or GPU_SM_DB");
+        DOCA_LOG(LOG_ERR, "nic_handler (%d) must be AUTO %d, CPU_PROXY %d, GPU_SM_DB %d, or GPU_SM_BF %d", qp_init_attr->nic_handler, DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO, DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY, DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB, DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_BF);
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -825,7 +834,7 @@ doca_error_t doca_gpu_verbs_create_qp_group_hl(struct doca_gpu_verbs_qp_init_att
                            qp_init_attr->sq_nwqe, &qpg_->qp_main.cq_sq_umem_gpu_ptr,
                            &qpg_->qp_main.cq_sq_umem, &qpg_->qp_main.cq_sq_umem_dbr_gpu_ptr,
                            &qpg_->qp_main.cq_sq_umem_dbr, qpg_->qp_main.external_uar,
-                           &qpg_->qp_main.cq_sq);
+                           qp_init_attr->cq_collapsed, &qpg_->qp_main.cq_sq);
         if (status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to create doca verbs cq");
             goto exit_error;
@@ -867,7 +876,7 @@ doca_error_t doca_gpu_verbs_create_qp_group_hl(struct doca_gpu_verbs_qp_init_att
                       qp_init_attr->sq_nwqe, &qpg_->qp_companion.cq_sq_umem_gpu_ptr,
                       &qpg_->qp_companion.cq_sq_umem, &qpg_->qp_companion.cq_sq_umem_dbr_gpu_ptr,
                       &qpg_->qp_companion.cq_sq_umem_dbr, qpg_->qp_companion.external_uar,
-                      &qpg_->qp_companion.cq_sq);
+                      qp_init_attr->cq_collapsed, &qpg_->qp_companion.cq_sq);
         if (status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to create doca verbs cq");
             goto exit_error;

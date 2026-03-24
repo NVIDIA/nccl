@@ -8,8 +8,7 @@
 #ifndef NCCL_TIMER_H_
 #define NCCL_TIMER_H_
 #if ENABLE_TIMER
-#include <unistd.h>
-#include <sys/time.h>
+#include "os.h"
 #include <x86intrin.h>
 static double freq = -1;
 static void calibrate() {

@@ -237,8 +237,6 @@ ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequir
 
   devComm->ginSignalCount = reqs->ginSignalCount;
   devComm->ginCounterCount = reqs->ginCounterCount;
-  devComm->ginSignalBase = 0;
-  devComm->ginCounterBase = 0;
 
   // Allocate contexts
   int nContextsTotal = reqs->ginContextCount;
@@ -246,7 +244,6 @@ ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequir
     nContextsTotal = ginState->ginCommCount;
   }
   devComm->ginContextCount = nContextsTotal;
-  devComm->ginContextBase = 0; // No longer used.
   devComm->ginConnectionCount = ginState->ginCommCount;
 
   if (!reqs->ginExclusiveContexts) {

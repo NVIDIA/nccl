@@ -25,6 +25,10 @@ struct ncclDevCommWindowTable {
 typedef struct ncclDevCommWindowTable* ncclDevCommWindowTable_t;
 
 struct ncclDevComm {
+  // Internal NCCL structure versioning metadata.  Do not modify.
+  unsigned int magic;
+  unsigned int version;
+
   int rank, nRanks;
   uint32_t nRanks_rcp32;
   int lsaRank, lsaSize;
@@ -42,13 +46,10 @@ struct ncclDevComm {
   uint8_t ginConnectionCount;
   uint8_t ginNetDeviceTypes[NCCL_GIN_MAX_CONNECTIONS];
   void* ginHandles[NCCL_GIN_MAX_CONNECTIONS];
-  uint32_t ginSignalBase;
   int ginSignalCount;
-  uint32_t ginCounterBase;
   int ginCounterCount;
   uint64_t* ginSignalShadows;
   uint32_t ginContextCount;
-  uint32_t ginContextBase;
   bool ginIsRailed; // Whether the GIN connections are railed
 
   // FT related

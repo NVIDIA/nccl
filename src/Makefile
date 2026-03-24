@@ -37,6 +37,7 @@ LIBSRCFILES := \
 	$(wildcard scheduler/*.cc) \
 	$(wildcard gin/*.cc) \
 	$(wildcard rma/*.cc) \
+	$(wildcard devcomm/*.cc) \
 	$(filter-out param/ncclparam.cc,$(wildcard param/*.cc)) \
 	$(filter-out ras/client.cc,$(wildcard ras/*.cc))
 BINSRCFILES := ras/client.cc

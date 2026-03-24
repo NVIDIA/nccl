@@ -44,7 +44,7 @@ struct ncclDevrCommCreateTask {
   struct ncclDevrCommCreateTask *next;
   struct ncclDevCommRequirements* reqs;
   struct ncclDevComm* outDevComm;
-  ncclResult_t (*outDevCommCopyCB)(struct ncclDevComm const* tmpDevComm, void* out);
+  struct ncclDevCommCompat* devCompat;
 };
 
 struct ncclDevrState {
@@ -73,6 +73,14 @@ struct ncclDevrState {
   struct ncclIntruQueue<struct ncclDevrCommCreateTask, &ncclDevrCommCreateTask::next> commCreateTaskQueue;
 };
 
+struct ncclDevCommCompat {
+  int minVersion, maxVersion;
+  ncclResult_t (*commPropertiesFilter)(ncclComm_t comm, struct ncclCommProperties* props);
+  ncclResult_t (*devCommRequirementsFilter)(ncclComm_t comm, ncclDevCommRequirements_t* reqs);
+  ncclResult_t (*devCommCopyNewToOld)(ncclComm_t comm, void* oldDevComm, struct ncclDevComm const* newDevComm);
+  ncclResult_t (*devCommCopyOldToNew)(ncclComm_t comm, struct ncclDevComm* newDevComm, void const* oldDevComm);
+};
+
 // Check if GIN resources have been requested as part of `reqs`.
 bool ncclGinResourcesRequested(struct ncclDevCommRequirements const* reqs);
 
@@ -92,8 +100,8 @@ ncclResult_t ncclDevrWindowRegisterInGroup(
 );
 
 ncclResult_t ncclDevrCommCreateInternal(
-  struct ncclComm* comm, struct ncclDevCommRequirements const* reqs, struct ncclDevComm* outDevComm,
-  bool isInternal = false, ncclResult_t (*outDevCommCopyCB)(struct ncclDevComm const* tmpDevComm, void* out) = nullptr
+  struct ncclComm* comm, struct ncclDevCommRequirements* reqs, struct ncclDevComm* outDevComm,
+  bool isInternal = false, struct ncclDevCommCompat* devCompat = nullptr
 );
 void freeDevCommRequirements(
   struct ncclDevCommRequirements* reqs
@@ -113,4 +121,7 @@ ncclGinWindow_t ncclDevrGetRmaDevWin(struct ncclDevrWindow* winHost, int ctx);
 
 // Get the multicast address for a given team
 ncclResult_t ncclDevrGetLsaTeamPtrMC(struct ncclComm* comm, struct ncclDevrWindow* winHost, size_t offset, struct ncclTeam lsaTeam, void** outPtr);
+
+// Copies the devComm data from "rank" to "lsaBarrier".  Assumes the same memory layout at source and destination.
+void ncclDevCommCopyLsaData(void* dstRankPtr, void const* srcRankPtr);
 #endif

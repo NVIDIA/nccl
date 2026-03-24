@@ -420,15 +420,19 @@ static ncclResult_t rasMsgHandleConnInit(const struct rasMsg* msg, struct rasSoc
   struct rasMsg* newMsg = nullptr;
   int newMsgLen;
   char line[SOCKET_NAME_MAXLEN+1];
+  char versionLocal[16], versionRemote[16];
 
-  INFO(NCCL_RAS, "RAS handling connInit from %s (version %d, listeningAddr %s, peersHash 0x%lx, deadPeersHash 0x%lx)",
-       ncclSocketToString(&sock->sock.addr, rasLine), msg->connInit.ncclVersion,
+  INFO(NCCL_RAS, "RAS handling connInit from %s (version %s, listeningAddr %s, peersHash 0x%lx, deadPeersHash 0x%lx)",
+       ncclSocketToString(&sock->sock.addr, rasLine),
+       ncclVersionToString(msg->connInit.ncclVersion, versionRemote, sizeof(versionRemote)),
        ncclSocketToString(&msg->connInit.listeningAddr, line), msg->connInit.peersHash, msg->connInit.deadPeersHash);
 
   if (msg->connInit.ncclVersion != NCCL_VERSION_CODE) {
     // Close any such sockets immediately!  This is basically unrecoverable...
-    WARN("NCCL version mismatch with remote peer %s (local: %d, remote %d)",
-         ncclSocketToString(&sock->sock.addr, rasLine), NCCL_VERSION_CODE, msg->connInit.ncclVersion);
+    WARN("NCCL version mismatch with remote peer %s (local: %s, remote %s)",
+         ncclSocketToString(&sock->sock.addr, rasLine),
+         ncclVersionToString(NCCL_VERSION_CODE, versionLocal, sizeof(versionLocal)),
+         ncclVersionToString(msg->connInit.ncclVersion, versionRemote, sizeof(versionRemote)));
     rasNetSendNack(sock);
     rasSocketTerminate(sock, /*finalize*/true);
     ret = ncclInvalidUsage;

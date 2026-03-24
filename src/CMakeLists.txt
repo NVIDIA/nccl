@@ -51,6 +51,7 @@ add_subdirectory(scheduler)
 add_subdirectory(os)
 add_subdirectory(rma)
 add_subdirectory(param)
+add_subdirectory(devcomm)
 
 # GIN is Linux-only (requires InfiniBand verbs)
 if(NCCL_OS_LINUX)
@@ -75,6 +76,7 @@ list(APPEND LIBSRCFILES
     ${DOCA_SOURCES}
     ${RMA_SOURCES}
     ${PARAM_SOURCES}
+    ${DEVCOMM_SOURCES}
 )
 
 # Add GIN sources only on Linux

@@ -720,4 +720,10 @@ inline ncclResult_t ncclThreadJoin(std::thread& thread) {
   }
 }
 
+// Convert NCCL numeric version to x.yy.zz string
+static inline const char* ncclVersionToString(int version, char* buf, size_t bufSize) {
+  snprintf(buf, bufSize, "%d.%d.%d", version / 10000, (version % 10000) / 100, version % 100);
+  return buf;
+}
+
 #endif

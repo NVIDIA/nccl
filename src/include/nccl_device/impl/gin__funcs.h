@@ -48,7 +48,6 @@ NCCL_DEVICE_INLINE int teamRankToGinRank(ncclDevComm const& comm, ncclTeam team,
 template<typename GinType>
 NCCL_DEVICE_INLINE void ncclGinInitCommon(GinType* gin, ncclDevComm const& comm, int contextIndex) {
   gin->nConnections = comm.ginConnectionCount;
-  contextIndex += comm.ginContextBase;
 
   static_assert(NCCL_GIN_MAX_CONNECTIONS == 4, "Required for following modulo hack to work.");
   // this->connectionId = contextIndex % comm.ginConnectionCount;
@@ -162,7 +161,7 @@ NCCL_DEVICE_INLINE constexpr ncclGinSignalDescriptor ncclGin_getSignalDescriptor
 NCCL_DEVICE_INLINE constexpr ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin const& net, ncclGin_SignalInc arg) {
   ncclGinSignalDescriptor desc{};
   desc.type = NCCL_GIN_SIGNAL_TYPE_INDEXED;
-  desc.indexedSignal.signalId = net.comm.ginSignalBase + arg.signal;
+  desc.indexedSignal.signalId = arg.signal;
   return desc;
 }
 NCCL_DEVICE_INLINE constexpr ncclGinSignalOp_t ncclGin_getSignalOp(ncclGin_SignalInc) { return ncclGinSignalInc; }
@@ -173,7 +172,7 @@ NCCL_DEVICE_INLINE constexpr uint64_t ncclGin_getSignalOpArg(ncclGin_SignalInc) 
 NCCL_DEVICE_INLINE constexpr ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin const& net, ncclGin_SignalAdd arg) {
   ncclGinSignalDescriptor desc{};
   desc.type = NCCL_GIN_SIGNAL_TYPE_INDEXED;
-  desc.indexedSignal.signalId = net.comm.ginSignalBase + arg.signal;
+  desc.indexedSignal.signalId = arg.signal;
   return desc;
 }
 NCCL_DEVICE_INLINE constexpr ncclGinSignalOp_t ncclGin_getSignalOp(ncclGin_SignalAdd) {
@@ -225,7 +224,7 @@ NCCL_DEVICE_INLINE constexpr ncclGinCounter_t ncclGin_getCounterId(ncclGin const
 
 #if NCCL_CHECK_CUDACC
 NCCL_DEVICE_INLINE constexpr bool ncclGin_isCounter(ncclGin_CounterInc) { return true; }
-NCCL_DEVICE_INLINE constexpr ncclGinCounter_t ncclGin_getCounterId(ncclGin const& net, ncclGin_CounterInc arg) { return net.comm.ginCounterBase + arg.counter; }
+NCCL_DEVICE_INLINE constexpr ncclGinCounter_t ncclGin_getCounterId(ncclGin const& net, ncclGin_CounterInc arg) { return arg.counter; }
 #endif
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -251,7 +250,7 @@ NCCL_DEVICE_INLINE void ncclGinPut_v2(
   signal.type = NCCL_GIN_SIGNAL_TYPE_NONE;
   if (isSignal) {
     signal.type = NCCL_GIN_SIGNAL_TYPE_INDEXED;
-    signal.indexedSignal.signalId = net->comm.ginSignalBase + signalId;
+    signal.indexedSignal.signalId = signalId;
   }
   if (coop.thread_rank() == 0) {
     ncclGinCall<ncclGinApi_Put>(ctx,
@@ -264,7 +263,7 @@ NCCL_DEVICE_INLINE void ncclGinPut_v2(
       signalOp,
       signalOpArg,
       isCounter,
-      net->comm.ginCounterBase + counterId,
+      counterId,
       isDescriptor,
       descriptor,
       requiredRelease,
@@ -419,7 +418,7 @@ NCCL_DEVICE_INLINE void ncclGinPutValue_v2(
     signal.type = NCCL_GIN_SIGNAL_TYPE_NONE;
     if (isSignal) {
       signal.type = NCCL_GIN_SIGNAL_TYPE_INDEXED;
-      signal.indexedSignal.signalId = net->comm.ginSignalBase + signalId;
+      signal.indexedSignal.signalId = signalId;
     }
     ncclGinCtx ctx = ncclGin_C_makeCtx(net);
     // Dispatch based on size to call with appropriate type
@@ -543,7 +542,7 @@ NCCL_DEVICE_INLINE void ncclGinSignal_v2(
   signal.type = NCCL_GIN_SIGNAL_TYPE_NONE;
   if (isSignal) {
     signal.type = NCCL_GIN_SIGNAL_TYPE_INDEXED;
-    signal.indexedSignal.signalId = net->comm.ginSignalBase + signalId;
+    signal.indexedSignal.signalId = signalId;
   }
   if (coop.thread_rank() == 0) {
     ncclGinCtx ctx = ncclGin_C_makeCtx(net);
@@ -607,7 +606,7 @@ NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::waitCounter(
   uint32_t steps = 0;
   coop.sync();
   if (coop.thread_rank() == 0) {
-    uint64_t* ptr = ncclGinCall<ncclGinApi_GetCounterPtr>(this->_makeCtx(), this->comm.ginCounterBase + counter);
+    uint64_t* ptr = ncclGinCall<ncclGinApi_GetCounterPtr>(this->_makeCtx(), counter);
     uint64_t got;
     #pragma unroll 1
     do got = cuda::atomic_ref<uint64_t>{*ptr}.load(ord);
@@ -629,7 +628,7 @@ NCCL_DEVICE_INLINE void ncclGinWaitCounter(
   coop.sync();
   if (coop.thread_rank() == 0) {
     ncclGinCtx ctx = ncclGin_C_makeCtx(net);
-    uint64_t* ptr = ncclGinCall<ncclGinApi_GetCounterPtr>(ctx, net->comm.ginCounterBase + counter);
+    uint64_t* ptr = ncclGinCall<ncclGinApi_GetCounterPtr>(ctx, counter);
     uint64_t got;
     #pragma unroll 1
     do got = cuda::atomic_ref<uint64_t>{*ptr}.load(ord);
@@ -642,7 +641,7 @@ NCCL_DEVICE_INLINE void ncclGinWaitCounter(
 #if NCCL_CHECK_CUDACC
 template<unsigned beMask>
 NCCL_DEVICE_INLINE uint64_t ncclGin_BackendMask<beMask>::readCounter(ncclGinCounter_t counter, int bits, cuda::memory_order ord) const {
-  uint64_t* ptr = ncclGinCall<ncclGinApi_GetCounterPtr>(this->_makeCtx(), this->comm.ginCounterBase + counter);
+  uint64_t* ptr = ncclGinCall<ncclGinApi_GetCounterPtr>(this->_makeCtx(), counter);
   uint64_t mask = uint64_t(-1)>>(64-bits);
   return mask & cuda::atomic_ref<uint64_t>{*ptr}.load(ord);
 }
@@ -654,7 +653,7 @@ NCCL_DEVICE_INLINE uint64_t ncclGinReadCounter(
     cuda::memory_order ord
   ) {
   ncclGinCtx ctx = ncclGin_C_makeCtx(net);
-  uint64_t* ptr = ncclGinCall<ncclGinApi_GetCounterPtr>(ctx, net->comm.ginCounterBase + counter);
+  uint64_t* ptr = ncclGinCall<ncclGinApi_GetCounterPtr>(ctx, counter);
   uint64_t mask = uint64_t(-1)>>(64-bits);
   return mask & cuda::atomic_ref<uint64_t>{*ptr}.load(ord);
 }
@@ -684,7 +683,7 @@ NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::increaseSignalShadow(ncclGi
 #if NCCL_CHECK_CUDACC
 template<unsigned beMask>
 NCCL_DEVICE_INLINE uint64_t ncclGin_BackendMask<beMask>::readSignal(ncclGinSignal_t signal, int bits, cuda::memory_order ord) const {
-  uint64_t* ptr = ncclGinCall<ncclGinApi_GetSignalPtr>(this->_makeCtx(), this->comm.ginSignalBase + signal);
+  uint64_t* ptr = ncclGinCall<ncclGinApi_GetSignalPtr>(this->_makeCtx(), signal);
   uint64_t mask = uint64_t(-1)>>(64-bits);
   return mask & cuda::atomic_ref<uint64_t>{*ptr}.load(ord);
 }
@@ -703,7 +702,7 @@ NCCL_DEVICE_INLINE uint64_t ncclGinReadSignal(
     cuda::memory_order ord
   ) {
   ncclGinCtx ctx = ncclGin_C_makeCtx(net);
-  uint64_t* ptr = ncclGinCall<ncclGinApi_GetSignalPtr>(ctx, net->comm.ginSignalBase + signal);
+  uint64_t* ptr = ncclGinCall<ncclGinApi_GetSignalPtr>(ctx, signal);
   uint64_t mask = uint64_t(-1)>>(64-bits);
   return mask & cuda::atomic_ref<uint64_t>{*ptr}.load(ord);
 }
@@ -773,7 +772,7 @@ NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::waitSignal(Coop coop, ncclG
   uint32_t steps = 0;
   coop.sync();
   if (coop.thread_rank() == 0) {
-    uint64_t* ptr = ncclGinCall<ncclGinApi_GetSignalPtr>(this->_makeCtx(), this->comm.ginSignalBase + signal);
+    uint64_t* ptr = ncclGinCall<ncclGinApi_GetSignalPtr>(this->_makeCtx(), signal);
     uint64_t got;
     #pragma unroll 1
     do got = cuda::atomic_ref<uint64_t>{*ptr}.load(ord);
@@ -813,7 +812,7 @@ NCCL_DEVICE_INLINE void ncclGinWaitSignal(
   coop.sync();
   if (coop.thread_rank() == 0) {
     ncclGinCtx ctx = ncclGin_C_makeCtx(net);
-    uint64_t* ptr = ncclGinCall<ncclGinApi_GetSignalPtr>(ctx, net->comm.ginSignalBase + signal);
+    uint64_t* ptr = ncclGinCall<ncclGinApi_GetSignalPtr>(ctx, signal);
     uint64_t got;
     #pragma unroll 1
     do got = cuda::atomic_ref<uint64_t>{*ptr}.load(ord);
@@ -831,7 +830,7 @@ NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::waitSignalMeetShadow(Coop c
   uint32_t steps = 0;
   coop.sync();
   if (coop.thread_rank() == 0) {
-    uint64_t* ptr = ncclGinCall<ncclGinApi_GetSignalPtr>(this->_makeCtx(), this->comm.ginSignalBase + signal);
+    uint64_t* ptr = ncclGinCall<ncclGinApi_GetSignalPtr>(this->_makeCtx(), signal);
     uint64_t least = this->_signalShadows[signal];
     uint64_t got;
     #pragma unroll 1
@@ -852,7 +851,7 @@ NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::waitSignalFollowShadow(Coop
   uint64_t before64 = this->_signalShadows[signal];
   uint64_t after64;
   if (coop.thread_rank() == 0) {
-    uint64_t* ptr = ncclGinCall<ncclGinApi_GetSignalPtr>(this->_makeCtx(), this->comm.ginSignalBase + signal);
+    uint64_t* ptr = ncclGinCall<ncclGinApi_GetSignalPtr>(this->_makeCtx(), signal);
     #pragma unroll 1
     do after64 = cuda::atomic_ref<uint64_t>{*ptr}.load(ord);
     while (!nccl::utility::rollingLessEq(before64 + leastDelta, after64, bits) && !testAbort(this->comm.abortFlag, steps));
@@ -875,7 +874,7 @@ NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::waitSignalFollowShadow(Coop
 #if NCCL_CHECK_CUDACC
 template<unsigned beMask>
 NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::resetCounter(ncclGinCounter_t counter) const {
-  ncclGinCall<ncclGinApi_ResetCounter>(this->_makeCtx(), this->comm.ginCounterBase + counter);
+  ncclGinCall<ncclGinApi_ResetCounter>(this->_makeCtx(), counter);
 }
 
 NCCL_DEVICE_INLINE void ncclGinResetCounter(
@@ -883,7 +882,7 @@ NCCL_DEVICE_INLINE void ncclGinResetCounter(
     ncclGinCounter_t counter
   ) {
   ncclGinCtx ctx = ncclGin_C_makeCtx(net);
-  ncclGinCall<ncclGinApi_ResetCounter>(ctx, net->comm.ginCounterBase + counter);
+  ncclGinCall<ncclGinApi_ResetCounter>(ctx, counter);
 }
 #endif
 
@@ -892,7 +891,7 @@ template<unsigned beMask>
 NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::resetSignal(ncclGinSignal_t signal) const {
   ncclGinSignalDescriptor signalDesc;
   signalDesc.type = NCCL_GIN_SIGNAL_TYPE_INDEXED;
-  signalDesc.indexedSignal.signalId = this->comm.ginSignalBase + signal;
+  signalDesc.indexedSignal.signalId = signal;
   ncclGinCall<ncclGinApi_ResetSignal>(this->_makeCtx(), signalDesc);
   this->_signalShadows[signal] = 0;
 }
@@ -914,7 +913,7 @@ NCCL_DEVICE_INLINE void ncclGinResetSignal(
   ncclGinCtx ctx = ncclGin_C_makeCtx(net);
   ncclGinSignalDescriptor signalDesc{};
   signalDesc.type = NCCL_GIN_SIGNAL_TYPE_INDEXED;
-  signalDesc.indexedSignal.signalId = net->comm.ginSignalBase + signal;
+  signalDesc.indexedSignal.signalId = signal;
   ncclGinCall<ncclGinApi_ResetSignal>(ctx, signalDesc);
   net->_signalShadows[signal] = 0;
 }

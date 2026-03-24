@@ -858,13 +858,26 @@ LowLatencyBytes calculateLowLatencyBytes(
     return bytes;
 }
 
-// Structure to hold High Throughput RDMA/NVL byte breakdown
-// Matches DeepEP test_internode.py methodology:
-//   - rdma_send_bytes = tokens SENT to other nodes (send-side)
-//   - total_recv_bytes = ALL tokens RECEIVED (receive-side, matches DeepEP's nvl_recv_bytes)
+// Structure to hold High Throughput byte breakdown for bandwidth reporting.
+//
+// Bandwidth metric rationale (HT mode):
+//   We report unidirectional RECEIVE bandwidth (total_recv_bytes / time), matching
+//   HybridEP's "NVL" metric in test_hybrid_ep.py (dispatch_bf16_nvl_recv_bytes / t).
+//   This is intentional for fair apple-to-apple comparison:
+//
+//   - Receive bandwidth directly answers "when can expert GEMM start?" — it is the
+//     metric that determines training step latency, not the send side.
+//   - The NIC's rated bandwidth (e.g. 400 Gbps = 50 GB/s on IB HDR) is a per-direction
+//     number; comparing against it requires a per-direction metric.
+//   - Counting send+receive would double-count the same physical transfer and inflate
+//     reported numbers by ~2x relative to HybridEP's published figures, making direct
+//     comparison misleading.
+//
+//   rdma_send_bytes is still tracked and printed in the byte breakdown for diagnostics,
+//   but is NOT included in the throughput numerator.
 struct HighThroughputBytes {
-    size_t rdma_send_bytes;    // Bytes sent to remote nodes (RDMA send)
-    size_t total_recv_bytes;   // Total bytes received from all sources (matches DeepEP nvl_recv_bytes)
+    size_t rdma_send_bytes;    // Bytes sent to remote nodes (RDMA send) — diagnostic only
+    size_t total_recv_bytes;   // Total bytes received from all sources — used for bandwidth
     unsigned int rdma_tokens;  // Number of tokens sent over RDMA
     unsigned int recv_tokens;  // Total tokens received (set after handle creation)
     bool is_fp8;               // Whether dispatch uses FP8
@@ -1060,10 +1073,10 @@ void printLowLatencyResults(
     }
 }
 
-// Print benchmark results for High Throughput mode
-// Matches DeepEP test_internode.py methodology:
-//   - RDMA = bytes sent to other nodes (send-side)
-//   - RECV = total bytes received (receive-side, labeled as "NVL" in DeepEP but actually total)
+// Print benchmark results for High Throughput mode.
+// Throughput = total_recv_bytes / time (unidirectional receive), matching
+// test_hybrid_ep.py dispatch_bf16_nvl_recv_bytes / t for fair comparison.
+// See HighThroughputBytes comment for full rationale.
 void printHighThroughputResults(
     int myRank,
     int nRanks,
@@ -1072,9 +1085,10 @@ void printHighThroughputResults(
     const BenchResult& combined_result,
     const HighThroughputBytes& ht_bytes
 ) {
-    // Calculate local throughput: RDMA_send + total_recv (matches DeepEP)
-    size_t dispatch_bytes = ht_bytes.rdma_send_bytes + ht_bytes.total_recv_bytes;
-    size_t combine_bytes = dispatch_bytes;  // Combine is symmetric
+    // Throughput numerator = receive-side bytes only (unidirectional).
+    // rdma_send_bytes is excluded — see HighThroughputBytes comment for rationale.
+    size_t dispatch_bytes = ht_bytes.total_recv_bytes;
+    size_t combine_bytes = dispatch_bytes;  // Combine is symmetric (recv on dispatch == send on combine)
     double local_dispatch_tp = (dispatch_bytes / 1e9) / (dispatch_result.avg_ms / 1000.0);
     double local_combine_tp = (combine_bytes / 1e9) / (combine_result.avg_ms / 1000.0);
     double local_total_tp = ((dispatch_bytes + combine_bytes) / 1e9) / (combined_result.avg_ms / 1000.0);
@@ -1692,8 +1706,10 @@ int main(int argc, char* argv[]) {
         dispatch_data_bytes = ll_bytes.dispatch_bytes;
         combine_data_bytes = ll_bytes.combine_bytes;
     } else {
-        // HT mode: RDMA_send + total_recv (matches DeepEP methodology)
-        dispatch_data_bytes = ht_bytes.rdma_send_bytes + ht_bytes.total_recv_bytes;
+        // HT mode: unidirectional receive bytes only, matching test_hybrid_ep.py
+        // (dispatch_bf16_nvl_recv_bytes / t) for apple-to-apple comparison.
+        // See HighThroughputBytes struct comment for full rationale.
+        dispatch_data_bytes = ht_bytes.total_recv_bytes;
         combine_data_bytes = dispatch_data_bytes;  // Symmetric
     }
 

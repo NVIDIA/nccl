@@ -1678,7 +1678,7 @@ void* ncclProxyService(void* _args) {
 
   pollfds[maxProxyConnections].events = NCCL_POLLIN;
   pollfds[maxProxyConnections].revents = 0;
-  
+
   // Initialize peer sockets starting at index 1
   for (int s=0; s<maxProxyConnections; s++) {
     pollfds[s].fd = NCCL_INVALID_SOCKET;
@@ -1715,7 +1715,7 @@ void* ncclProxyService(void* _args) {
     if (ret < 0) {
       WARN("[Proxy Service] Poll failed: %s", strerror(errno));
       goto fail;
-    }    
+    }
     if (pollfds[maxProxyConnections].revents) {
       // We got an event on the listenSock
       int s = 0;

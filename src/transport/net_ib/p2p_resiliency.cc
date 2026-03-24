@@ -771,7 +771,7 @@ ncclResult_t ncclIbResiliencySenderQpsToRts(struct ncclIbResiliency* resCtx, str
     rtrAttr->remoteGid = remDevInfo->gid;
     rtrAttr->localIbPort = remDevInfo->ib_port;
     rtrAttr->localGid = sendCommDev->base.gidInfo.localGid;
-    rtrAttr->localGidIndex = sendCommDev->base.gidInfo.localGidIndex;    
+    rtrAttr->localGidIndex = sendCommDev->base.gidInfo.localGidIndex;
     NCCLCHECK(ncclIbQpRtr(localQp));
 
     struct ncclIbQpRtsAttr* rtsAttr = &localQp->rtsAttr;
@@ -824,7 +824,7 @@ ncclResult_t ncclIbResiliencyReceiverQpsCreateToRts(struct ncclIbResiliency* res
 
     ncclIbQpInfo* remQpInfo = &remInfo->resiliencyInfo.probingQpsInfo[localQpIndex];
     ncclIbDevInfo* remDevInfo = &remInfo->devs[remQpInfo->devIndex];
-    struct ncclIbQpRtrAttr* rtrAttr = &localQp->rtrAttr; 
+    struct ncclIbQpRtrAttr* rtrAttr = &localQp->rtrAttr;
     rtrAttr->mtu = std::min(remDevInfo->mtu, ibDev->portAttr.active_mtu);
     rtrAttr->linkLayer = remDevInfo->link_layer;
     rtrAttr->tc = (remDevInfo->link_layer == IBV_LINK_LAYER_ETHERNET) ? remInfo->tc : -1;
@@ -834,7 +834,7 @@ ncclResult_t ncclIbResiliencyReceiverQpsCreateToRts(struct ncclIbResiliency* res
     rtrAttr->remoteGid = remDevInfo->gid;
     rtrAttr->localIbPort = remDevInfo->ib_port;
     rtrAttr->localGid = recvCommDev->base.gidInfo.localGid;
-    rtrAttr->localGidIndex = recvCommDev->base.gidInfo.localGidIndex;  
+    rtrAttr->localGidIndex = recvCommDev->base.gidInfo.localGidIndex;
     NCCLCHECK(ncclIbQpRtr(localQp));
 
     struct ncclIbQpRtsAttr* rtsAttr = &localQp->rtsAttr;

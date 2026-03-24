@@ -124,11 +124,11 @@ ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
   // Read message with retry logic for abort flag
   while (TRUE) {
     success = ReadFile(hPipe, &msg, sizeof(msg), &bytesRead, NULL);
-    
+
     if (success && bytesRead > 0) {
       break;  // Successfully read data
     }
-    
+
     DWORD error = GetLastError();
     if (error == ERROR_NO_DATA || error == ERROR_BROKEN_PIPE) {
       // Check abort flag
@@ -138,7 +138,7 @@ ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
       }
       continue;
     }
-    
+
     WARN("IPC: ReadFile failed: error %d", error);
     return ncclSystemError;
   }

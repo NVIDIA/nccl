@@ -172,7 +172,7 @@ Compared to the Forward pass, the Backward pass requires `WEIGHTS` tensors to be
 #### LL mode (FP16 -> FP8 conversion - NOT SUPPORTED)
 
 In the token data type conversion scenario,
-in LL mode, the Dispatch operation will perform precision reduction and 
+in LL mode, the Dispatch operation will perform precision reduction and
 return lower-precision tokens via `TOKENS` tensor.
 In addition, the `SCALES` output tensor must be provided to return the scaling information.
 

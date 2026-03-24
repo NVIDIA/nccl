@@ -291,7 +291,9 @@ static ncclResult_t xmlSetAttrLong(struct ncclXmlNode* node, const char* attrNam
     strncpy(node->attrs[index].key, attrName, MAX_STR_LEN);
     node->attrs[index].key[MAX_STR_LEN] = '\0';
   }
-  snprintf(node->attrs[index].value, MAX_STR_LEN, "%#lx", value);
+  // Use %#llx so the full 64-bit value is written on all platforms.
+  // MSVC defines long as 32 bits, so %#lx would silently truncate int64_t.
+  snprintf(node->attrs[index].value, MAX_STR_LEN, "%#llx", (unsigned long long)(uint64_t)value);
   return ncclSuccess;
 }
 

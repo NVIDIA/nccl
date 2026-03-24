@@ -23,7 +23,9 @@
 
 #include "../gin_device_common.h"
 #include "gin_gdaki_device_host_common.h"
+#ifndef _WIN32
 #include "doca_gpunetio/doca_gpunetio_device.h"
+#endif
 
 #ifdef NCCL_DEVICE_GIN_GDAKI_ENABLE_DEBUG
 #include <stdio.h>
@@ -46,6 +48,7 @@ NCCL_DEVICE_INLINE static void putImpl(ncclGinCtx ctx, Coop coop, int peer, bool
                                               uint32_t optFlags) {
   using nccl::utility::loadConst;
   coop.sync();
+#ifndef _WIN32 // DOCA GPUNetIO is Linux-only; unreachable on Windows
   if (coop.thread_rank() == 0) {
     ncclGinGdakiGPUContext* gdaki = &((struct ncclGinGdakiGPUContext*)ctx.handle)[ctx.contextId];
     doca_gpu_dev_verbs_qp* qp = loadConst(&gdaki->gdqp) + peer;
@@ -115,6 +118,7 @@ NCCL_DEVICE_INLINE static void putImpl(ncclGinCtx ctx, Coop coop, int peer, bool
     if (hasCounter) doca_gpu_dev_verbs_wait(companion_qp);
 #endif
   }
+#endif // !_WIN32
   coop.sync();
 }
 
@@ -129,6 +133,7 @@ NCCL_DEVICE_INLINE static void putValueImpl(ncclGinCtx ctx, Coop coop, int peer,
   using nccl::utility::loadConst;
 
   coop.sync();
+#ifndef _WIN32 // DOCA GPUNetIO is Linux-only; unreachable on Windows
   if (coop.thread_rank() == 0) {
     ncclGinGdakiGPUContext* gdaki = &((struct ncclGinGdakiGPUContext*)ctx.handle)[ctx.contextId];
     doca_gpu_dev_verbs_qp* qp = loadConst(&gdaki->gdqp) + peer;
@@ -166,6 +171,7 @@ NCCL_DEVICE_INLINE static void putValueImpl(ncclGinCtx ctx, Coop coop, int peer,
     doca_gpu_dev_verbs_wait(qp);
 #endif
   }
+#endif // !_WIN32
   coop.sync();
 }
 
@@ -286,7 +292,7 @@ struct ncclGinApi_Flush<NCCL_NET_DEVICE_GIN_GDAKI> {
   NCCL_DEVICE_INLINE static void call(ncclGinCtx ctx, Coop coop, cuda::memory_order ord, uint32_t* abortFlag) {
     using nccl::utility::loadConst;
     using nccl::utility::testAbort;
-
+#ifndef _WIN32 // DOCA GPUNetIO is Linux-only; unreachable on Windows
     ncclGinGdakiGPUContext* gdaki = &((struct ncclGinGdakiGPUContext*)ctx.handle)[ctx.contextId];
     doca_gpu_dev_verbs_qp* qps = loadConst(&gdaki->gdqp);
 
@@ -309,6 +315,7 @@ struct ncclGinApi_Flush<NCCL_NET_DEVICE_GIN_GDAKI> {
         doca_gpu_dev_verbs_wait(qps + peer);
       }
     }
+#endif // !_WIN32
   }
 };
 

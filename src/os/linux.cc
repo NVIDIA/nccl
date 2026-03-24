@@ -92,7 +92,7 @@ static ncclResult_t setCpuStackSize() {
   return ncclSuccess;
 }
 
-extern int ncclParamSetCpuStackSize();
+extern int64_t ncclParamSetCpuStackSize();
 
 ncclResult_t ncclOsInitialize() {
   if (ncclParamSetCpuStackSize() != 0) {
@@ -109,8 +109,8 @@ bool ncclOsSocketIsValid(struct ncclSocket* sock) {
   return ncclOsSocketDescriptorIsValid(sock->socketDescriptor);
 }
 
-extern int ncclParamPollTimeOut();
-extern int ncclParamRetryTimeOut();
+extern int64_t ncclParamPollTimeOut();
+extern int64_t ncclParamRetryTimeOut();
 
 void ncclOsPollSocket(int socketDescriptor, int op) {
   struct pollfd pfd;
@@ -120,7 +120,7 @@ void ncclOsPollSocket(int socketDescriptor, int op) {
   (void) poll(&pfd, 1, ncclParamPollTimeOut());
 }
 
-extern long int ncclParamRetryCnt();
+extern int64_t ncclParamRetryCnt();
 
 ncclResult_t ncclOsSocketTryAccept(struct ncclSocket* sock) {
   socklen_t socklen = sizeof(union ncclSocketAddress);
@@ -144,8 +144,8 @@ ncclResult_t ncclOsSocketTryAccept(struct ncclSocket* sock) {
   return ncclSuccess;
 }
 
-extern int ncclParamSocketMaxRecvBuff();
-extern int ncclParamSocketMaxSendBuff();
+extern int64_t ncclParamSocketMaxRecvBuff();
+extern int64_t ncclParamSocketMaxSendBuff();
 
 ncclResult_t ncclOsSocketSetFlags(struct ncclSocket* sock) {
   ncclResult_t ret = ncclSuccess;

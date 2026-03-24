@@ -15,17 +15,25 @@
 #include <stdlib.h>
 #include <string.h>
 #include <string>
+#ifndef NCCL_OS_WINDOWS
 #include <sys/types.h>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 #include <pthread.h>
-#include <mutex>
 #include <pwd.h>
+#endif
+#include <mutex>
 #include <unordered_set>
 #include "os.h"
 
 const char* userHomeDir() {
+#ifdef NCCL_OS_WINDOWS
+  return getenv("USERPROFILE");
+#else
   struct passwd *pwUser = getpwuid(getuid());
   return pwUser == NULL ? NULL : pwUser->pw_dir;
+#endif
 }
 
 void setEnvFile(const char* fileName) {

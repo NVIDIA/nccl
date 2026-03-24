@@ -22,6 +22,10 @@
 #ifndef IFNAMSIZ
 #define IFNAMSIZ 16
 #endif
+/* WSAEAGAIN is not defined by Winsock headers; use WSAEWOULDBLOCK as the equivalent */
+#ifndef WSAEAGAIN
+#define WSAEAGAIN WSAEWOULDBLOCK
+#endif
 
 uint64_t ncclOsGetPid() {
   return (uint64_t)GetCurrentProcessId();
@@ -84,8 +88,8 @@ bool ncclOsSocketIsValid(struct ncclSocket* sock) {
   return ncclOsSocketDescriptorIsValid(sock->socketDescriptor);
 }
 
-extern int ncclParamPollTimeOut();
-extern int ncclParamRetryTimeOut();
+extern int64_t ncclParamPollTimeOut();
+extern int64_t ncclParamRetryTimeOut();
 
 void ncclOsPollSocket(SOCKET sock, int op) {
   WSAPOLLFD pfd;
@@ -103,7 +107,7 @@ static const char* getWSAErrorMessage(int error) {
   return errorMsg;
 }
 
-extern long int ncclParamRetryCnt();
+extern int64_t ncclParamRetryCnt();
 
 ncclResult_t ncclOsSocketTryAccept(struct ncclSocket* sock) {
   int socklen = sizeof(union ncclSocketAddress);
@@ -129,8 +133,8 @@ ncclResult_t ncclOsSocketTryAccept(struct ncclSocket* sock) {
   return ncclSuccess;
 }
 
-extern int ncclParamSocketMaxRecvBuff();
-extern int ncclParamSocketMaxSendBuff();
+extern int64_t ncclParamSocketMaxRecvBuff();
+extern int64_t ncclParamSocketMaxSendBuff();
 
 ncclResult_t ncclOsSocketSetFlags(struct ncclSocket* sock) {
   const int one = 1;
@@ -262,7 +266,7 @@ ncclResult_t ncclOsSocketPollConnect(struct ncclSocket* sock) {
   }
 
   /* check socket status */
-  SYSCHECK(getsockopt(sock->socketDescriptor, SOL_SOCKET, SO_ERROR, (void*)&ret, &rlen), "getsockopt");
+  SYSCHECK(getsockopt(sock->socketDescriptor, SOL_SOCKET, SO_ERROR, (char*)&ret, &rlen), "getsockopt");
   return socketConnectCheck(sock, ret, __func__);
 }
 
@@ -326,6 +330,7 @@ ncclResult_t ncclOsFindInterfaces(const char* prefixList, char* names, union ncc
   if (searchExact) prefixList++;
   int nUserIfs = parseStringList(prefixList, userIfs, MAX_IFS);
   ncclResult_t ret = ncclSuccess;
+  IP_ADAPTER_ADDRESSES* adapterAddresses = NULL; // must be declared before any goto
   *found = 0;
 
   // Get adapter addresses using Windows API
@@ -337,7 +342,7 @@ ncclResult_t ncclOsFindInterfaces(const char* prefixList, char* names, union ncc
     goto exit;
   }
 
-  IP_ADAPTER_ADDRESSES* adapterAddresses = (IP_ADAPTER_ADDRESSES*)malloc(bufferSize);
+  adapterAddresses = (IP_ADAPTER_ADDRESSES*)malloc(bufferSize);
   if (adapterAddresses == NULL) {
     WARN("Failed to allocate memory for adapter addresses");
     ret = ncclSystemError;
@@ -489,6 +494,7 @@ ncclResult_t ncclFindInterfaceMatchSubnet(char* ifName, union ncclSocketAddress*
   char line_a[SOCKET_NAME_MAXLEN+1];
 #endif
   ncclResult_t ret = ncclSuccess;
+  IP_ADAPTER_ADDRESSES* adapterAddresses = NULL; // must be declared before any goto
   *found = 0;
 
   // Get adapter addresses using Windows API
@@ -500,7 +506,7 @@ ncclResult_t ncclFindInterfaceMatchSubnet(char* ifName, union ncclSocketAddress*
     goto exit;
   }
 
-  IP_ADAPTER_ADDRESSES* adapterAddresses = (IP_ADAPTER_ADDRESSES*)malloc(bufferSize);
+  adapterAddresses = (IP_ADAPTER_ADDRESSES*)malloc(bufferSize);
   if (adapterAddresses == NULL) {
     WARN("Failed to allocate memory for adapter addresses");
     ret = ncclSystemError;

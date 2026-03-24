@@ -10,9 +10,17 @@
 #include "os.h"
 #include <stdlib.h>
 
+#ifndef NCCL_OS_WINDOWS
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 #include <ifaddrs.h>
 #include <net/if.h>
+#else
+#ifndef IFNAMSIZ
+#define IFNAMSIZ 16
+#endif
+#endif
 #include "param.h"
 #include <time.h>
 #include <atomic>
@@ -98,9 +106,9 @@ ncclResult_t ncclSocketListen(struct ncclSocket* sock) {
   if (ncclSocketToPort(&sock->addr)) {
     // Port is forced by env. Make sure we get the port.
     int opt = 1;
-    SYSCHECK(setsockopt(sock->socketDescriptor, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)), "setsockopt");
+    SYSCHECK(setsockopt(sock->socketDescriptor, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt)), "setsockopt");
 #if defined(SO_REUSEPORT)
-    SYSCHECK(setsockopt(sock->socketDescriptor, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt)), "setsockopt");
+    SYSCHECK(setsockopt(sock->socketDescriptor, SOL_SOCKET, SO_REUSEPORT, (const char*)&opt, sizeof(opt)), "setsockopt");
 #endif
   }
 

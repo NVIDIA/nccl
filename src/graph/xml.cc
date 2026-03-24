@@ -7,8 +7,28 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 #include <fcntl.h>
+#ifdef _WIN32
+#include <stdlib.h>
+#include <io.h>
+/* realpath(path, NULL) -> _fullpath(NULL, path, 0) on Windows with an existence
+ * check to match POSIX realpath() semantics (returns NULL for non-existent paths).
+ * Without the check, _fullpath() returns a normalised string for sysfs paths that
+ * don't exist on Windows, causing the parent-traversal loop in ncclTopoGetXmlFromSys
+ * to find no '/' separators and crash on a NULL parent pointer. */
+static inline char* realpath(const char* path, char* resolved) {
+  (void)resolved;
+  char* result = _fullpath(nullptr, path, 0);
+  if (result != nullptr && _access(result, 0) != 0) {
+    free(result);
+    result = nullptr;
+  }
+  return result;
+}
+#endif
 #include <ctype.h>
 #include <float.h>
 #include "core.h"
@@ -16,6 +36,8 @@
 #include "xml.h"
 #if defined(__x86_64__)
 #include <cpuid.h>
+#elif defined(_M_X64)
+#include <intrin.h>
 #endif
 
 // Arbitrarily large number for constructing virtual topology string
@@ -423,8 +445,13 @@ static ncclResult_t getPciPath(const char* busId, char** path) {
   return ncclSuccess;
 }
 
+#ifndef _WIN32
 #include <dirent.h>
+#endif
 static ncclResult_t getBcmLinks(const char* busId, int* nlinks, char** peers) {
+#ifdef _WIN32
+  *nlinks = 0; *peers = NULL; return ncclSuccess;
+#else
   *nlinks = 0;
   *peers = NULL;
   char dirPath[] = "/sys/kernel/pci_switch_link/virtual_switch_links/0000:00:00.0";
@@ -443,6 +470,7 @@ static ncclResult_t getBcmLinks(const char* busId, int* nlinks, char** peers) {
     closedir(dir);
   }
   return ncclSuccess;
+#endif // !_WIN32
 }
 
 ncclResult_t ncclTopoGetStrFromSys(const char* path, const char* fileName, char* strValue) {
@@ -495,16 +523,27 @@ ncclResult_t ncclTopoGetXmlFromCpu(struct ncclXmlNode* cpuNode, struct ncclXml* 
     // Fill CPU type / vendor / model
 #if defined(__PPC__)
     NCCLCHECK(xmlSetAttr(cpuNode, "arch", "ppc64"));
-#elif defined(__aarch64__)
+#elif defined(__aarch64__) || defined(_M_ARM64)
     NCCLCHECK(xmlSetAttr(cpuNode, "arch", "arm64"));
-#elif defined(__x86_64__)
+#elif defined(__x86_64__) || defined(_M_X64)
     NCCLCHECK(xmlSetAttr(cpuNode, "arch", "x86_64"));
 #endif
   }
 
-#if defined(__x86_64__)
+#if defined(__x86_64__) || defined(_M_X64)
   NCCLCHECK(xmlGetAttrIndex(cpuNode, "vendor", &index));
   if (index == -1) {
+#if defined(_MSC_VER)
+    // MSVC uses void __cpuid(int[4], int) from <intrin.h>
+    int cpuInfo[4];
+    __cpuid(cpuInfo, 0);
+    char vendor[13];
+    memcpy(vendor,   &cpuInfo[1], 4); // ebx
+    memcpy(vendor+4, &cpuInfo[3], 4); // edx
+    memcpy(vendor+8, &cpuInfo[2], 4); // ecx
+    vendor[12] = '\0';
+    NCCLCHECK(xmlSetAttr(cpuNode, "vendor", vendor));
+#else
     union {
       struct {
         // CPUID 0 String register order
@@ -521,10 +560,35 @@ ncclResult_t ncclTopoGetXmlFromCpu(struct ncclXmlNode* cpuNode, struct ncclXml* 
     strncpy(vendor, cpuid0.vendor, 12);
     vendor[12] = '\0';
     NCCLCHECK(xmlSetAttr(cpuNode, "vendor", vendor));
+#endif
   }
 
   NCCLCHECK(xmlGetAttrIndex(cpuNode, "familyid", &index));
   if (index == -1) {
+#if defined(_MSC_VER)
+    int cpuInfo[4];
+    __cpuid(cpuInfo, 1);
+    unsigned eax = (unsigned)cpuInfo[0];
+    union {
+      struct {
+        unsigned steppingId:4;
+        unsigned modelId:4;
+        unsigned familyId:4;
+        unsigned processorType:2;
+        unsigned resv0:2;
+        unsigned extModelId:4;
+        unsigned extFamilyId:8;
+        unsigned resv1:4;
+      };
+      uint32_t val;
+    } cpuid1;
+    cpuid1.val = eax;
+    int familyId = cpuid1.familyId + (cpuid1.extFamilyId << 4);
+    int modelId = cpuid1.modelId + (cpuid1.extModelId << 4);
+    NCCLCHECK(xmlSetAttrInt(cpuNode, "familyid", familyId));
+    NCCLCHECK(xmlSetAttrInt(cpuNode, "modelid", modelId));
+  }
+#else
     union {
       struct {
         unsigned steppingId:4;
@@ -545,7 +609,8 @@ ncclResult_t ncclTopoGetXmlFromCpu(struct ncclXmlNode* cpuNode, struct ncclXml* 
     NCCLCHECK(xmlSetAttrInt(cpuNode, "familyid", familyId));
     NCCLCHECK(xmlSetAttrInt(cpuNode, "modelid", modelId));
   }
-#endif
+#endif // _MSC_VER
+#endif // __x86_64__ || _M_X64
   return ncclSuccess;
 }
 

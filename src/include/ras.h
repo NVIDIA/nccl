@@ -9,6 +9,13 @@
 #define NCCL_RAS_H_
 
 #include "socket.h"
+#ifdef _WIN32
+#include <cstdint>
+#ifndef _PID_T_DEFINED
+#define _PID_T_DEFINED
+typedef int pid_t;
+#endif
+#endif
 
 // Structure used to communicate data about NCCL ranks from NCCL threads to RAS.
 struct rasRankInit {

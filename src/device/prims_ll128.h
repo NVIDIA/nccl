@@ -13,7 +13,9 @@ template<typename T, typename RedOp, typename Fan, int Direct, int P2p, bool isN
 class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>:
   public PrimitivesWithoutDirect<Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>> {
 
-  static constexpr int MaxRecv = Fan::MaxRecv, MaxSend = Fan::MaxSend;
+  // MSVC/nvcc rejects zero-length arrays (GCC extension); force minimum 1.
+  static constexpr int MaxRecv = Fan::MaxRecv > 0 ? Fan::MaxRecv : 1;
+  static constexpr int MaxSend = Fan::MaxSend > 0 ? Fan::MaxSend : 1;
   static constexpr int Input=0, Output=1;
   RedOp redOp;
   const int tid; // thread index in primitives group

@@ -5,8 +5,10 @@
  * See LICENSE.txt for more license information
  *************************************************************************/
 
+#ifndef NCCL_OS_WINDOWS
 #include <sys/types.h>
 #include <unistd.h>
+#endif
 
 #include "ibvsymbols.h"
 
@@ -70,7 +72,7 @@ ncclResult_t buildIbvSymbols(struct ncclIbvSymbols* ibvSymbols) {
 #else
 /* RDMA-core dynamic loading mode. Symbols are loaded from shared objects. */
 
-#include <dlfcn.h>
+#include "dlfcn_win.h"
 #include "core.h"
 
 // IBVERBS Library versioning

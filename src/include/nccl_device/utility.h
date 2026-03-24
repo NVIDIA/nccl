@@ -8,6 +8,10 @@
 #ifndef _NCCL_DEVICE_UTILITY_H_
 #define _NCCL_DEVICE_UTILITY_H_
 
+#ifdef _MSC_VER
+#include <intrin.h>  // _umul128 for mul64hi
+#endif
+
 // compiler specific check for __CUDACC__
 #ifndef NCCL_CHECK_CUDACC
     #if defined(__clang__)
@@ -38,7 +42,11 @@
     #define __host__
   #endif
   #define NCCL_DEVICE_INLINE
-  #define NCCL_HOST_DEVICE_INLINE inline __attribute__((always_inline))
+  #ifdef _MSC_VER
+    #define NCCL_HOST_DEVICE_INLINE __forceinline
+  #else
+    #define NCCL_HOST_DEVICE_INLINE inline __attribute__((always_inline))
+  #endif
 #endif
 
 // Macro for conditional constexpr support
@@ -209,6 +217,10 @@ NCCL_HOST_DEVICE_INLINE uint32_t mul32hi(uint32_t a, uint32_t b) {
 NCCL_HOST_DEVICE_INLINE uint64_t mul64hi(uint64_t a, uint64_t b) {
 #if __CUDA_ARCH__
   return __umul64hi(a, b);
+#elif defined(_MSC_VER)
+  unsigned __int64 hi;
+  _umul128(a, b, &hi);
+  return hi;
 #else
   return (uint64_t)(((unsigned __int128)a)*b >> 64);
 #endif

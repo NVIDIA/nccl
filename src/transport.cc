@@ -70,7 +70,20 @@ void dumpData(struct ncclConnect* data, int ndata) {
 
 NCCL_PARAM(ConnectRoundMaxPeers, "CONNECT_ROUND_MAX_PEERS", 128);
 NCCL_PARAM(ReportConnectProgress, "REPORT_CONNECT_PROGRESS", 0);
+#ifdef NCCL_OS_WINDOWS
+#include <windows.h>
+static inline int gettimeofday(struct timeval* tv, void* /*tz*/) {
+  FILETIME ft;
+  GetSystemTimeAsFileTime(&ft);
+  uint64_t t = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+  t -= 116444736000000000ULL; // offset from 1601 to 1970 in 100ns units
+  tv->tv_sec  = (long)(t / 10000000ULL);
+  tv->tv_usec = (long)((t % 10000000ULL) / 10);
+  return 0;
+}
+#else
 #include <sys/time.h>
+#endif
 
 // Tests communicator for CUDA P2P connectivity (local ranks only).
 // *isAllDirectP2p returns 1 if all local ranks have CUDA P2P connectivity with each other

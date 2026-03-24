@@ -6,8 +6,10 @@
  *************************************************************************/
 
 #include "mlx5/mlx5dvwrap.h"
+#ifndef NCCL_OS_WINDOWS
 #include <sys/types.h>
 #include <unistd.h>
+#endif
 #include <mutex>
 
 #ifdef NCCL_BUILD_MLX5DV

@@ -28,9 +28,10 @@ if os.path.exists(gensrc):
     if os.path.isfile(path):
       os.remove(path)
     elif os.path.isdir(path):
-      shutil.rmtree(path)
+      # Skip subdirectories (e.g. 'symmetric') managed by their own generate script
+      pass
 else:
-  os.mkdir(gensrc)
+  os.makedirs(gensrc, exist_ok=True)
 
 ################################################################################
 # The second  command line argument is used as a regex to filter the functions

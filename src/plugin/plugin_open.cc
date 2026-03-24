@@ -8,8 +8,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include "dlfcn_win.h"
+#ifndef _WIN32
 #include <link.h>
-#include <dlfcn.h>
+#endif
 
 #include "debug.h"
 #include "plugin.h"
@@ -54,11 +56,17 @@ static void appendNameToList(char* nameList, int *leftChars, char* name) {
 }
 
 static char* getLibPath(void* handle) {
+#ifdef _WIN32
+  char path[MAX_PATH];
+  if (GetModuleFileNameA((HMODULE)handle, path, MAX_PATH) == 0)
+    return nullptr;
+  return _strdup(path);
+#else
   struct link_map* lm;
   if (dlinfo(handle, RTLD_DI_LINKMAP, &lm) != 0)
     return nullptr;
-  else
-    return strdup(lm->l_name);
+  return strdup(lm->l_name);
+#endif
 }
 
 static void* openPluginLib(enum ncclPluginType type, const char* libName) {
@@ -70,7 +78,11 @@ static void* openPluginLib(enum ncclPluginType type, const char* libName) {
   if (libName && strlen(libName)) {
     snprintf(libName_, MAX_STR_LEN, "%s", libName);
   } else {
+#ifdef _WIN32
+    snprintf(libName_, MAX_STR_LEN, "%s.dll", pluginPrefix[type]);
+#else
     snprintf(libName_, MAX_STR_LEN, "%s.so", pluginPrefix[type]);
+#endif
   }
 
   libHandles[type] = tryOpenLib(libName_, &openErr, openErrStr);
@@ -85,11 +97,18 @@ static void* openPluginLib(enum ncclPluginType type, const char* libName) {
     INFO(subsys[type], "%s/Plugin: %s: %s", pluginNames[type], libName_, openErrStr);
   }
 
-  // libName can't be a relative or absolute path (start with '.' or contain any '/'). It can't be a library name either (start with 'lib' or end with '.so')
+  /* libName can't be a relative or absolute path or a full library name ending in .so/.dll */
+#ifdef _WIN32
+  if (libName && strlen(libName) && strchr(libName, '/') == nullptr && strchr(libName, '\\') == nullptr &&
+      (strncmp(libName, "lib", strlen("lib")) || strlen(libName) < strlen(".dll") ||
+       strncmp(libName + strlen(libName) - strlen(".dll"), ".dll", strlen(".dll")))) {
+    snprintf(libName_, MAX_STR_LEN, "%s-%s.dll", pluginPrefix[type], libName);
+#else
   if (libName && strlen(libName) && strchr(libName, '/') == nullptr &&
       (strncmp(libName, "lib", strlen("lib")) || strlen(libName) < strlen(".so") ||
        strncmp(libName + strlen(libName) - strlen(".so"), ".so", strlen(".so")))) {
     snprintf(libName_, MAX_STR_LEN, "%s-%s.so", pluginPrefix[type], libName);
+#endif
 
     libHandles[type] = tryOpenLib(libName_, &openErr, openErrStr);
     if (libHandles[type]) {

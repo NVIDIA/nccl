@@ -13,11 +13,25 @@
 #include "profiler/net_socket.h"
 #include "os.h"
 
+#ifndef NCCL_OS_WINDOWS
 #include <pthread.h>
-#include <stdlib.h>
 #include <poll.h>
-#include <limits.h>
 #include <fcntl.h>
+#else
+#include <stdlib.h>  // _fullpath
+#include <io.h>      // _access
+static inline char* realpath(const char* path, char* resolved) {
+  (void)resolved;
+  char* result = _fullpath(nullptr, path, 0);
+  if (result != nullptr && _access(result, 0) != 0) {
+    free(result);
+    result = nullptr;
+  }
+  return result;
+}
+#endif
+#include <stdlib.h>
+#include <limits.h>
 #include <mutex>
 #include <condition_variable>
 
@@ -88,8 +102,9 @@ ncclResult_t ncclNetSocketDevices(int* ndev) {
 }
 
 static ncclResult_t ncclNetSocketGetSpeed(char* devName, int* speed) {
-  ncclResult_t ret = ncclSuccess;
   *speed = 0;
+#ifndef NCCL_OS_WINDOWS
+  ncclResult_t ret = ncclSuccess;
   char speedPath[PATH_MAX];
   snprintf(speedPath, sizeof(speedPath), "/sys/class/net/%s/speed", devName);
   int fd = -1;
@@ -109,6 +124,11 @@ static ncclResult_t ncclNetSocketGetSpeed(char* devName, int* speed) {
   }
   if (fd != -1) SYSCHECK(close(fd), "close");
   return ret;
+#else
+  INFO(NCCL_NET, "Could not get speed from sysfs (Windows). Defaulting to 10 Gbps.");
+  *speed = 10000;
+  return ncclSuccess;
+#endif
 }
 
 ncclResult_t ncclNetSocketGetProperties(int dev, ncclNetProperties_t* props) {
@@ -303,6 +323,7 @@ ncclResult_t ncclNetSocketGetNsockNthread(int dev, int* ns, int* nt) {
   if (nThreads == -2 || nSocksPerThread == -2) {
     // Auto-detection
     int autoNt=0, autoNs=1; // By default, we only use the main thread and do not spawn extra threads
+#ifndef NCCL_OS_WINDOWS
     char vendorPath[PATH_MAX];
     snprintf(vendorPath, PATH_MAX, "/sys/class/net/%s/device/vendor", ncclNetSocketDevs[dev].devName);
     // Coverity is wrong.  NULL second argument to realpath() is OK by POSIX.1-2008.
@@ -327,6 +348,7 @@ ncclResult_t ncclNetSocketGetNsockNthread(int dev, int* ns, int* nt) {
       autoNs = 1;
     }
 end:
+#endif // !NCCL_OS_WINDOWS
     if (nThreads == -2) nThreads = autoNt;
     if (nSocksPerThread == -2) nSocksPerThread = autoNs;
   }

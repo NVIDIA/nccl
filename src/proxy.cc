@@ -18,11 +18,14 @@
 #include "compiler.h"
 #include "os.h"
 
-#include <sys/syscall.h>
 #include <assert.h>
+#ifndef NCCL_OS_WINDOWS
+#include <sys/syscall.h>
 #include <unistd.h>
 #include <sys/time.h>
 #include <sched.h>
+#endif
+#include <thread>
 #include <algorithm>
 #include <mutex>
 
@@ -499,7 +502,7 @@ static ncclResult_t ncclLocalOpAppend(struct ncclComm* comm, struct ncclProxyCon
     int freeOp = -1;
     while (freeOp == -1) {
       freeOp = COMPILER_ATOMIC_EXCHANGE(&pool->freeOps[tpLocalRank], -1, std::memory_order_acquire);
-      if (freeOp == -1) sched_yield();
+      if (freeOp == -1) std::this_thread::yield();
     }
     opIndex = freeOp;
     op = pool->ops+opIndex;
@@ -575,7 +578,13 @@ static ncclResult_t SaveProxy(struct ncclComm* comm, struct ncclChannel* channel
         type == proxyRecv ? "recv" : "send", peer, channel->id, connIndex);
     return ncclInternalError;
   }
-  if (connector->proxyConn.proxyProgress == NULL) return ncclSuccess;
+  if (connector->proxyConn.proxyProgress == NULL) {
+    INFO(NCCL_PROXY, "SaveProxy rank %d: proxyProgress NULL for %s peer %d ch %d", comm->rank,
+        type == proxyRecv ? "recv" : "send", peer, channel->id);
+    return ncclSuccess;
+  }
+  INFO(NCCL_PROXY, "SaveProxy rank %d: submitting %s proxy op for peer %d ch %d", comm->rank,
+      type == proxyRecv ? "recv" : "send", peer, channel->id);
 
   if (justInquire) *justInquire = true;
   else {
@@ -1591,7 +1600,13 @@ fail:
   goto exit;
 }
 
+#ifndef _WIN32
 #include <poll.h>
+#else
+/* On Windows, WSAPoll / WSAPOLLFD provide the same interface as poll / pollfd */
+#define poll(fds, nfds, timeout) WSAPoll((WSAPOLLFD*)(fds), (nfds), (timeout))
+typedef WSAPOLLFD pollfd;
+#endif
 
 static bool proxyMatchOpType(int type) {
   switch (type) {
@@ -1639,7 +1654,13 @@ void* ncclProxyService(void* _args) {
   memset(&peers, 0, sizeof(struct ncclProxyLocalPeer)*NCCL_MAX_PROXY_CONNECTIONS);
   for (int s=0; s<NCCL_MAX_PROXY_CONNECTIONS; s++) {
     pollfds[s].fd = NCCL_INVALID_SOCKET;
+    // On Windows, WSAPoll rejects INVALID_SOCKET entries unless events=0.
+    // POLLIN|POLLHUP are set dynamically when a real socket is assigned.
+#ifdef _WIN32
+    pollfds[s].events = 0;
+#else
     pollfds[s].events = POLLHUP|POLLIN;
+#endif
   }
   if (ncclSocketGetFd(proxyState->listenSock, &pollfds[NCCL_MAX_PROXY_CONNECTIONS].fd) != ncclSuccess) {
     WARN("[Proxy Service] Get listenSock fd fails");
@@ -1658,18 +1679,51 @@ void* ncclProxyService(void* _args) {
     if (COMPILER_ATOMIC_LOAD(proxyState->abortFlag, std::memory_order_acquire) != 0) stop = PROXY_ABORT;
     /* never let proxy service thread blocks in poll, or it cannot receive abortFlag. */
     int ret;
+#ifdef _WIN32
+    // WSAPoll returns WSAEINVAL when the fd array contains INVALID_SOCKET entries
+    // (unlike POSIX poll which silently ignores fd=-1).  Build a compact array of
+    // only valid sockets and map revents back to the original pollfds slots.
+    {
+      int compactSlots[NCCL_MAX_PROXY_CONNECTIONS+1];
+      struct pollfd compactPfds[NCCL_MAX_PROXY_CONNECTIONS+1];
+      int compactN = 0;
+      // Always include the listenSock (last slot).
+      compactPfds[compactN] = pollfds[NCCL_MAX_PROXY_CONNECTIONS];
+      compactSlots[compactN++] = NCCL_MAX_PROXY_CONNECTIONS;
+      for (int s = 0; s < NCCL_MAX_PROXY_CONNECTIONS; s++) {
+        if (pollfds[s].fd != (decltype(pollfds[s].fd))NCCL_INVALID_SOCKET) {
+          compactPfds[compactN] = pollfds[s];
+          compactSlots[compactN++] = s;
+        }
+      }
+      do {
+        ret = poll(compactPfds, compactN, asyncOpCount ? 0 : 500);
+      } while (ret < 0 && errno == EINTR);
+      // Copy revents back so the rest of the loop can use pollfds[] as usual.
+      for (int i = 0; i < compactN; i++)
+        pollfds[compactSlots[i]].revents = compactPfds[i].revents;
+    }
+#else
     do {
       // poll all fds including the listenSock
       ret = poll(pollfds, NCCL_MAX_PROXY_CONNECTIONS+1, asyncOpCount ? 0 : 500);
     } while (ret < 0 && errno == EINTR);
+#endif
     if (ret < 0) {
+#ifdef _WIN32
+      WARN("[Proxy Service] Poll failed: WSAGetLastError=%d", WSAGetLastError());
+#else
       WARN("[Proxy Service] Poll failed: %s", strerror(errno));
+#endif
       return NULL;
     }
     if (pollfds[NCCL_MAX_PROXY_CONNECTIONS].revents) {
       // We got an event on the listenSock
       int s = 0;
-      while (s < NCCL_MAX_PROXY_CONNECTIONS && pollfds[s].fd >= 0) s++;
+      // Use != NCCL_INVALID_SOCKET instead of >= 0: on Windows, WSAPOLLFD.fd is
+      // SOCKET (unsigned), so INVALID_SOCKET (~0) compares as >= 0 and the loop
+      // would never find a free slot.
+      while (s < NCCL_MAX_PROXY_CONNECTIONS && pollfds[s].fd != (decltype(pollfds[s].fd))NCCL_INVALID_SOCKET) s++;
       if (s == NCCL_MAX_PROXY_CONNECTIONS) {
         WARN("[Proxy service] Too many connections (%d max)", NCCL_MAX_PROXY_CONNECTIONS);
         return NULL;
@@ -1686,6 +1740,14 @@ void* ncclProxyService(void* _args) {
           WARN("[Service thread] Get peers[%d].sock fd fails", s);
           return NULL;
         }
+        // POLLHUP is output-only on Windows: setting it in events causes WSAPoll to
+        // return WSAEINVAL (10022).  Use POLLIN only; WSAPoll still reports POLLHUP
+        // in revents when the peer closes the connection.
+#ifdef _WIN32
+        pollfds[s].events = POLLIN;
+#else
+        pollfds[s].events = POLLHUP|POLLIN;
+#endif
         npeers++;
         peers[s].tpLocalRank = -1;
       }
@@ -1761,6 +1823,7 @@ void* ncclProxyService(void* _args) {
           asyncOpCount--;
         }
         pollfds[s].fd = NCCL_INVALID_SOCKET;
+        pollfds[s].events = 0; // clear events on Windows so WSAPoll ignores this slot
         npeers--;
       }
     }
@@ -1806,7 +1869,8 @@ static ncclResult_t proxyUDSRecvReq(struct ncclProxyState* proxyState, int reqFd
   return ncclInternalError;
 }
 
-// UDS fd handle support
+// UDS fd handle support (Linux only — uses poll/POSIX fds)
+#ifndef NCCL_OS_WINDOWS
 void* ncclProxyServiceUDS(void* _args) {
   struct ncclProxyState* proxyState =  (struct ncclProxyState*) _args;
   struct pollfd pollfds[1];
@@ -1852,6 +1916,7 @@ void* ncclProxyServiceUDS(void* _args) {
   INFO(NCCL_PROXY, "[Proxy Service UDS] exit: stop %d abortFlag %d", proxyState->stop, *proxyState->abortFlag);
   return NULL;
 }
+#endif // !NCCL_OS_WINDOWS
 
 ncclResult_t ncclProxyInit(struct ncclComm* comm, struct ncclSocket* sock, union ncclSocketAddress* peerAddresses, uint64_t *peerAddressesUDS) {
   assert(comm->sharedRes->proxyState == nullptr);
@@ -1898,10 +1963,12 @@ ncclResult_t ncclProxyCreate(struct ncclComm* comm) {
     comm->proxyState->thread = std::thread(ncclProxyService, comm->proxyState);
     ncclSetThreadName(comm->proxyState->thread, "NCCL Service %2d", comm->cudaDev);
 
-    // UDS support
+#ifndef NCCL_OS_WINDOWS
+    // UDS support (Linux only)
     INFO(NCCL_PROXY, "UDS: Creating service thread comm %p rank %d", comm, comm->rank);
     comm->proxyState->threadUDS = std::thread(ncclProxyServiceUDS, comm->proxyState);
     ncclSetThreadName(comm->proxyState->threadUDS, "NCCL UDS Service %2d", comm->cudaDev);
+#endif
   }
   return ncclSuccess;
 }
@@ -1925,9 +1992,9 @@ ncclResult_t ncclProxyStop(struct ncclComm* comm) {
       if (sharedProxyState->peerSocks) {
         int tplocalRanks = comm->sharedRes->tpNLocalRanks;
         for (int i = 0; i < tplocalRanks; i++) {
-          int fd;
+          ncclSocketDescriptor fd;
           NCCLCHECK(ncclSocketGetFd(sharedProxyState->peerSocks + i, &fd));
-          if (fd >= 0) {
+          if (ncclOsSocketDescriptorIsValid(fd)) {
             if (sharedProxyState->proxyOps[i].pool) {
               NCCLCHECK(ncclShmClose(sharedProxyState->proxyOps[i].handle));
             }

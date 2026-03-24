@@ -277,6 +277,10 @@ struct rasCollConns {
 };
 
 // Collective data in RAS_COLL_COMMS responses.
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4200) // nonstandard extension: zero-sized array in struct/union
+#endif
 struct rasCollComms {
   int nComms;
   struct comm {
@@ -302,6 +306,9 @@ struct rasCollComms {
     // struct rasCollCommsMissingRank missingRanks[0]; // Variable length.  Sorted by commRank.
   } comms[0]; // Variable length.  Sorted by commId.
 };
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 
 // Provides info about missing ranks.  An array of these structures can be part of struct rasCollComms above.
 // Because the arrays are of variable length, we can't describe them in C.  To ensure that adding

@@ -22,6 +22,17 @@ if(NVTX)
     list(APPEND LIBSRCFILES init_nvtx.cc)
 endif()
 
+# /Zc:preprocessor is required by the NVTX3 payload helper macros in nvtx_payload_schemas.h
+# (multi-level variadic dispatch using __VA_OPT__), but breaks CCCL's msvc_to_builtins.h
+# (C2146/C2677) when applied globally.  Apply it only to the two files that need it.
+if(NCCL_COMPILER_MSVC)
+    set_source_files_properties(
+        ${CMAKE_CURRENT_SOURCE_DIR}/collectives.cc
+        ${CMAKE_CURRENT_SOURCE_DIR}/init.cc
+        PROPERTIES COMPILE_OPTIONS "/Zc:preprocessor"
+    )
+endif()
+
 # Add compatibility shim if using static cudart
 if(CUDARTLIB STREQUAL "cudart_static")
     list(APPEND LIBSRCFILES enhcompat.cc)
@@ -85,20 +96,20 @@ target_include_directories(nccl
     ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin
     ${DOCA_HOME}/include
     ${CUDAToolkit_INCLUDE_DIRS}
-    ${CUDAToolkit_INCLUDE_DIRS}/cccl
+    $<$<NOT:$<BOOL:${NCCL_OS_WINDOWS}>>:${CUDAToolkit_INCLUDE_DIRS}/cccl>
     ${CMAKE_BINARY_DIR}/obj/include
 )
 
 add_custom_command(
     OUTPUT ${CMAKE_BINARY_DIR}/include/nccl.h
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/include
-    COMMAND sed -e "s/\\\$$\\{nccl:Major\\}/${NCCL_MAJOR}/g"
-                -e "s/\\\$$\\{nccl:Minor\\}/${NCCL_MINOR}/g"
-                -e "s/\\\$$\\{nccl:Patch\\}/${NCCL_PATCH}/g"
-                -e "s/\\\$$\\{nccl:Suffix\\}/${NCCL_SUFFIX}/g"
-                -e "s/\\\$$\\{nccl:Version\\}/${NCCL_VERSION_CODE}/g"
-                ${CMAKE_CURRENT_SOURCE_DIR}/nccl.h.in > ${CMAKE_BINARY_DIR}/include/nccl.h
+    COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/misc/gen_nccl_h.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/nccl.h.in
+        ${CMAKE_BINARY_DIR}/include/nccl.h
+        ${NCCL_MAJOR} ${NCCL_MINOR} ${NCCL_PATCH} ${NCCL_SUFFIX} ${NCCL_VERSION_CODE}
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/nccl.h.in
+            ${CMAKE_CURRENT_SOURCE_DIR}/misc/gen_nccl_h.py
 )
 
 file(GLOB_RECURSE SRC_DEVICE_HEADERS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_device/*.h)
@@ -121,13 +132,23 @@ add_custom_target(nccl_header DEPENDS
 add_dependencies(nccl nccl_header)
 add_dependencies(nccl_device nccl_header)
 
-# Set version and output name
-set_target_properties(nccl PROPERTIES
-    VERSION ${NCCL_MAJOR}.${NCCL_MINOR}.${NCCL_PATCH}
-    SOVERSION ${NCCL_MAJOR}
-    OUTPUT_NAME "nccl"
-    PREFIX "lib"
-)
+# Set version and output name.
+# On Linux keep the "lib" prefix so the .so is named libnccl.so.
+# On Windows omit the prefix so the DLL is named nccl.dll, which matches
+# what MSVC embeds in the import library (nccl.lib → nccl.dll).
+if(NCCL_OS_WINDOWS)
+    set_target_properties(nccl PROPERTIES
+        OUTPUT_NAME "nccl"
+        PREFIX ""
+    )
+else()
+    set_target_properties(nccl PROPERTIES
+        VERSION ${NCCL_MAJOR}.${NCCL_MINOR}.${NCCL_PATCH}
+        SOVERSION ${NCCL_MAJOR}
+        OUTPUT_NAME "nccl"
+        PREFIX "lib"
+    )
+endif()
 
 #
 # Generate nccl_git_version.h
@@ -168,16 +189,36 @@ target_link_libraries(nccl
     ${EXTRA_LIBS}
 )
 
-# Add version script for symbol visibility control
-target_link_options(nccl PRIVATE
-    "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libnccl.map"
-)
+if(NCCL_OS_WINDOWS)
+    # DLL export define + Windows socket/adapter libraries
+    target_compile_definitions(nccl PRIVATE NCCL_EXPORTS)
+    target_link_libraries(nccl PRIVATE Ws2_32 iphlpapi)
+    # Use module definition file to export API symbols without __declspec(dllexport)
+    # on every definition (which would cause C2375 linkage conflicts with nccl.h's extern "C")
+    target_link_options(nccl PRIVATE "/DEF:${CMAKE_CURRENT_SOURCE_DIR}/nccl.def"
+        "/MAP:${CMAKE_BINARY_DIR}/nccl.map")
+else()
+    # Add version script for symbol visibility control (Linux/GCC only)
+    target_link_options(nccl PRIVATE
+        "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libnccl.map"
+    )
+endif()
 
 # Set output directories for nccl shared library
-set_target_properties(nccl PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
-)
+# On Windows the DLL is a RUNTIME artifact; put it in bin/ so test executables
+# that live there can find it without PATH manipulation.
+if(NCCL_OS_WINDOWS)
+    set_target_properties(nccl PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+    )
+else()
+    set_target_properties(nccl PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+    )
+endif()
 
+if(NCCL_OS_LINUX)
 ###################### Create a ras binary executable ############################
 set(RAS_BINSRCFILES ras/client.cc)
 
@@ -203,6 +244,7 @@ target_link_libraries(ncclras
 set_target_properties(ncclras PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+endif() # NCCL_OS_LINUX
 
 ###################### Create a static NCCL library ############################
 add_library(nccl_static STATIC ${LIBSRCFILES})
@@ -266,9 +308,11 @@ install(TARGETS nccl nccl_static
 )
 
 # Install tools, but do not export them as linkable imported targets.
+if(NCCL_OS_LINUX)
 install(TARGETS ncclras
   RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
 )
+endif()
 
 # Install generated + copied public headers from the build tree.
 install(DIRECTORY "${CMAKE_BINARY_DIR}/include/"

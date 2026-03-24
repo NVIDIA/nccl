@@ -7,7 +7,7 @@
 
 #include "nccl_gin.h"
 #include "proxy.h"
-#include <dlfcn.h>
+#include "dlfcn_win.h"
 
 static ncclGin_v11_t* ncclGin_v11;
 static ncclGin_t ncclGin;

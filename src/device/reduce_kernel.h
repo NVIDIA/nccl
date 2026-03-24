@@ -272,11 +272,16 @@ struct Apply_Cast<float ,__nv_bfloat16, /*EltPerPack=*/2> {
   };
 
 #if defined(__CUDA_FP8_TYPES_EXIST__)
+/* FP8 vector<->float2/4 conversions require the float2/4 constructors from FP8 vector types,
+ * which are only defined in device code for SM >= 89 (Ada Lovelace / Hopper).
+ * On older architectures, omit these specializations. */
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 890)
 EASY_CAST(__nv_fp8_e5m2, float, 2, __nv_fp8x2_e5m2, float2)
 EASY_CAST(__nv_fp8_e5m2, float, 4, __nv_fp8x4_e5m2, float4)
 
 EASY_CAST(__nv_fp8_e4m3, float, 2, __nv_fp8x2_e4m3, float2)
 EASY_CAST(__nv_fp8_e4m3, float, 4, __nv_fp8x4_e4m3, float4)
+#endif
 #endif
 #undef EASY_CAST
 

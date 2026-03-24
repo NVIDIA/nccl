@@ -17,7 +17,9 @@
 struct ncclComm;
 #include "os.h"
 #include <memory>
+#ifndef NCCL_OS_WINDOWS
 #include <unistd.h>
+#endif
 #include <stdlib.h>
 #include <string.h>
 
@@ -514,10 +516,15 @@ inline ncclResult_t ncclIbMallocDebug(void** ptr, size_t size, const char *filef
   if (size > 0) {
     long page_size = ncclOsGetPageSize();
     if (page_size < 0) return ncclSystemError;
-    void* p;
     int size_aligned = ROUNDUP(size, page_size);
+#ifdef _WIN32
+    void* p = _aligned_malloc(size_aligned, page_size);
+    if (!p) return ncclSystemError;
+#else
+    void* p;
     int ret = posix_memalign(&p, page_size, size_aligned);
     if (ret != 0) return ncclSystemError;
+#endif
     memset(p, 0, size);
     *ptr = p;
   } else {

@@ -36,9 +36,11 @@ std::mutex& getGdrMutex();
 #if !defined(__NVCC__)
 #if defined(__PPC__)
 static inline void wc_store_fence(void) { asm volatile("sync" : : : "memory"); }
-#elif defined(__x86_64__)
+#elif defined(__x86_64__) || defined(_M_X64)
+#ifndef _MSC_VER  // msvc.h already defines wc_store_fence via compiler.h
 #include <immintrin.h>
 static inline void wc_store_fence(void) { _mm_sfence(); }
+#endif
 #elif defined(__aarch64__)
 #ifdef __cplusplus
 #include <atomic>

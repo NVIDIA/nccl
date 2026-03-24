@@ -144,6 +144,10 @@ static __host__ __device__ uint32_t mul32hi(uint32_t a, uint32_t b) {
 static __host__ __device__ uint64_t mul64hi(uint64_t a, uint64_t b) {
 #if __CUDA_ARCH__
   return __umul64hi(a, b);
+#elif defined(_MSC_VER)
+  unsigned __int64 hi;
+  _umul128(a, b, &hi);
+  return hi;
 #else
   return (uint64_t)(((unsigned __int128)a)*b >> 64);
 #endif

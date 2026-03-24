@@ -8,7 +8,15 @@
 #ifndef _NCCL_DEVICE_GIN_GDAKI_DEVICE_HOST_COMMON_H_
 #define _NCCL_DEVICE_GIN_GDAKI_DEVICE_HOST_COMMON_H_
 
+#ifndef _WIN32
 #include <linux/types.h>
+#else
+#include <cstdint>
+typedef uint32_t __be32;
+// Forward-declare DOCA type so pointer members in ncclGinGdakiGPUContext compile.
+// DOCA GPUNetIO is Linux-only; complete type definitions are not available on Windows.
+struct doca_gpu_dev_verbs_qp;
+#endif
 
 #define NCCL_GIN_GDAKI_VERSION 100
 

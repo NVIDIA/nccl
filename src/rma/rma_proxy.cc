@@ -6,10 +6,15 @@
  *************************************************************************/
 
 #include <assert.h>
+/* On Windows, winsock2.h must precede any header that pulls in windows.h
+ * (including cuda_runtime.h).  Include nccl.h first since nccl.h.in sets up
+ * the WIN32_LEAN_AND_MEAN + winsock2.h preamble before cuda_runtime.h. */
+#include "nccl.h"
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 #include <cuda_runtime.h>
 #include <cuda.h>
-#include "nccl.h"
 #include "alloc.h"
 #include "checks.h"
 #include "gdrwrap.h"

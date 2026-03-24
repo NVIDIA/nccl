@@ -20,7 +20,19 @@
 #include <cuda_runtime.h>
 #include <string.h>
 #include <stdlib.h>
+#ifndef NCCL_OS_WINDOWS
+#ifndef _WIN32
 #include <unistd.h>
+#endif
+#else
+#include <io.h>
+// POSIX_FILE_DESCRIPTOR paths are never reached on Windows; provide a stub so
+// the code compiles.
+#ifndef NCCL_CLOSE_DEFINED
+#define NCCL_CLOSE_DEFINED
+static inline int close(int fd) { return _close(fd); }
+#endif
+#endif
 #include <mutex>
 
 // Internal parameter to disable memory manager for testing

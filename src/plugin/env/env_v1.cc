@@ -6,7 +6,7 @@
  *************************************************************************/
 
 #include <stdlib.h>
-#include <dlfcn.h>
+#include "dlfcn_win.h"
 #include "debug.h"
 #include "nccl_env.h"
 

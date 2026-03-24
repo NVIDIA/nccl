@@ -20,7 +20,7 @@ ncclNvmlDevicePairInfo ncclNvmlDevicePairs[ncclNvmlMaxDevices][ncclNvmlMaxDevice
 #if NCCL_NVML_DIRECT
   #define NCCL_NVML_FN(name, rettype, arglist) constexpr rettype(*pfn_##name)arglist = name;
 #else
-  #include <dlfcn.h>
+  #include "dlfcn_win.h"
   #define NCCL_NVML_FN(name, rettype, arglist) rettype(*pfn_##name)arglist = nullptr;
 #endif
 
@@ -71,9 +71,14 @@ ncclResult_t ncclNvmlEnsureInitialized() {
 
   #if !NCCL_NVML_DIRECT
   if (pfn_nvmlInit == nullptr) {
-    void *libhandle = dlopen("libnvidia-ml.so.1", RTLD_NOW);
+    #ifdef NCCL_OS_WINDOWS
+    const char* nvmlLibName = "nvml.dll";
+    #else
+    const char* nvmlLibName = "libnvidia-ml.so.1";
+    #endif
+    void *libhandle = dlopen(nvmlLibName, RTLD_NOW);
     if (libhandle == nullptr) {
-      WARN("Failed to open libnvidia-ml.so.1");
+      WARN("Failed to open %s", nvmlLibName);
       initResult = ncclSystemError;
       return initResult;
     }

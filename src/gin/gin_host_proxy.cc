@@ -14,6 +14,10 @@
 #include "gdrwrap.h"
 #include "nccl_device/gin/proxy/gin_proxy_device_host_common.h"
 #include "compiler.h"
+#ifdef _WIN32
+#include <io.h>
+#define close _close
+#endif
 
 NCCL_PARAM(GinProxyQueueSize, "GIN_PROXY_QUEUE_SIZE", -1);
 extern int64_t ncclParamIbDataDirect();

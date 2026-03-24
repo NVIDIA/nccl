@@ -9,11 +9,16 @@
 #define NCCL_SOCKET_H_
 
 #include "nccl.h"
+#ifdef NCCL_OS_WINDOWS
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
 #include <netdb.h>
 #include <fcntl.h>
 #include <poll.h>
+#endif
 #include "os.h"
 
 #define MAX_IFS 16

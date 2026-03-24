@@ -8,6 +8,21 @@
 #ifndef NCCL_H_
 #define NCCL_H_
 
+/* On Windows, winsock2.h must be included before windows.h (which cuda_runtime.h
+ * pulls in).  Defining WIN32_LEAN_AND_MEAN prevents windows.h from including the
+ * old winsock.h, avoiding sockaddr/fd_set redefinition errors in translation
+ * units that also include socket networking headers. */
+#if defined(_WIN32) || defined(_WIN64)
+# ifndef WIN32_LEAN_AND_MEAN
+#   define WIN32_LEAN_AND_MEAN
+# endif
+# ifndef NOMINMAX
+#   define NOMINMAX
+# endif
+# include <winsock2.h>
+# include <ws2tcpip.h>
+#endif
+
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #if CUDART_VERSION >= 11000
@@ -24,6 +39,13 @@
 
 #define NCCL_VERSION_CODE ${nccl:Version}
 #define NCCL_VERSION(X,Y,Z) (((X) <= 2 && (Y) <= 8) ? (X) * 1000 + (Y) * 100 + (Z) : (X) * 10000 + (Y) * 100 + (Z))
+
+/* Cross-platform deprecated attribute */
+#if defined(_MSC_VER)
+#define NCCL_DEPRECATED(msg) __declspec(deprecated(msg))
+#else
+#define NCCL_DEPRECATED(msg) __attribute__((deprecated(msg)))
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -267,9 +289,9 @@ const char*  ncclGetLastError(ncclComm_t comm);
 const char* pncclGetLastError(ncclComm_t comm);
 
 /* Reload environment variables that determine logging. */
-__attribute__ ((deprecated("ncclResetDebugInit is not supported as part of the NCCL API and will be removed in the future")))
+NCCL_DEPRECATED("ncclResetDebugInit is not supported as part of the NCCL API and will be removed in the future")
 void  ncclResetDebugInit();
-__attribute__ ((deprecated("pncclResetDebugInit is not supported as part of the NCCL API and will be removed in the future")))
+NCCL_DEPRECATED("pncclResetDebugInit is not supported as part of the NCCL API and will be removed in the future")
 void pncclResetDebugInit();
 
 /* Checks whether the comm has encountered any asynchronous errors */

@@ -12,8 +12,10 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#ifndef _WIN32
 #include <strings.h>
 #include <sys/syscall.h>
+#endif
 #include <chrono>
 #include "param.h"
 #include <mutex>
@@ -280,7 +282,11 @@ static void ncclDebugInit() {
     if (debugFn[0] != '\0') {
       FILE *file = fopen(debugFn, "w");
       if (file != nullptr) {
+#ifndef _WIN32
         setlinebuf(file); // disable block buffering
+#else
+        setvbuf(file, nullptr, _IONBF, 0); // disable buffering on Windows
+#endif
         ncclDebugFile = file;
       }
     }

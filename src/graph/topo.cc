@@ -545,7 +545,10 @@ ncclResult_t ncclTopoAddCpu(struct ncclXmlNode* xmlCpu, struct ncclTopoSystem* s
     NCCLCHECK(ncclStrToCpuset(str, &cpu->cpu.affinity));
   }
 
-  NCCLCHECK(xmlGetAttrStr(xmlCpu, "arch", &str));
+  // arch may be absent on Windows (topology XML generator doesn't emit it);
+  // default to x86_64 which is always correct for supported Windows targets.
+  NCCLCHECK(xmlGetAttr(xmlCpu, "arch", &str));
+  if (str == NULL) str = "x86_64";
   NCCLCHECK(kvConvertToInt(str, &cpu->cpu.arch, kvDictCpuArch));
   if (cpu->cpu.arch == NCCL_TOPO_CPU_ARCH_X86) {
     NCCLCHECK(xmlGetAttrStr(xmlCpu, "vendor", &str));

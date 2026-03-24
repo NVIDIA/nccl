@@ -9,7 +9,7 @@
 #include "nccl_profiler.h"
 #include "plugin/profiler/profiler_v6.h"
 #include "checks.h"
-#include <dlfcn.h>
+#include "dlfcn_win.h"
 
 static ncclProfiler_v6_t* ncclProfiler_v6;
 

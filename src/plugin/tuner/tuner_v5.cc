@@ -6,7 +6,7 @@
  * See LICENSE.txt for more license information
  *************************************************************************/
 
-#include <dlfcn.h>
+#include "dlfcn_win.h"
 #include "debug.h"
 #include "nccl_tuner.h"
 

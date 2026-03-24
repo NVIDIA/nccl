@@ -7,8 +7,10 @@
 
 #include <cstddef>
 #include <mutex>
+#ifndef _WIN32
 #include <poll.h>
 #include <unistd.h>
+#endif
 
 #include "alloc.h"
 #include "checks.h"

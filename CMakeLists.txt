@@ -59,6 +59,7 @@ option(BUILD_NCCL4PY "Enable nccl4py Python bindings targets" OFF)
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     set(NCCL_OS_WINDOWS ON)
     add_definitions(-DNCCL_OS_WINDOWS)
+    add_definitions(-DNOMINMAX)  # Prevent windows.h from defining min/max macros
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(NCCL_OS_LINUX ON)
     add_definitions(-DNCCL_OS_LINUX)
@@ -95,8 +96,15 @@ add_compile_definitions(
     CUDA_MINOR=${CUDA_MINOR}
 )
 
-# CUDA 13.0 requires C++17
-if(${CUDA_MAJOR} GREATER_EQUAL 13)
+# Use C++17 for both host and device on Windows/MSVC.
+# CUDA 12.6's CCCL headers cause C1060 (compiler out of heap space) under C++20
+# because C++20 enables a much larger set of CCCL templates than C++17.
+# The one designated initializer in bootstrap.cc has been replaced with explicit
+# assignments so no C++20-exclusive host-side features remain.
+if(MSVC)
+    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CUDA_STANDARD 17)
+elseif(${CUDA_MAJOR} GREATER_EQUAL 13)
     set(CMAKE_CXX_STANDARD 17)
     set(CMAKE_CUDA_STANDARD 17)
 else()
@@ -145,14 +153,26 @@ if(NCCL_COMPILER_GCC)
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda -Xptxas -maxrregcount=96 -Xfatbin -compress-all -fPIC")
 elseif(NCCL_COMPILER_MSVC)
     # MSVC-specific flags
-    # /Zc:preprocessor enables conformant preprocessor for proper variadic macro handling (needed for NVTX)
+    # NOTE: /Zc:preprocessor is NOT set globally here; it is applied only to the two source files
+    # (collectives.cc and init.cc) that include nvtx_payload_schemas.h, which uses NVTX3 payload
+    # helper macros requiring the C11-conformant preprocessor (__VA_OPT__, multi-level variadic
+    # dispatch in nvToolsExtPayloadHelper.h).  Enabling /Zc:preprocessor globally breaks CCCL's
+    # msvc_to_builtins.h in translation units that include CUDA headers, causing C2146/C2677 errors.
+    # See set_source_files_properties calls in src/CMakeLists.txt for the per-file application.
     # /wd4146 disables "unary minus on unsigned" warning - intentional for two's complement and alignment masks
     # /wd4197 disables "top-level volatile in cast ignored" - benign when using atomic intrinsics
     # /wd5105 disables "macro expansion producing 'defined'" - triggered by Windows SDK headers (winbase.h)
     # /wd4805 disables "unsafe mix of type 'bool' and type 'int'" - intentional bool/int mixing for flags
     # /wd4018 disables "signed/unsigned mismatch" - safe comparisons where signed value is always positive
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3 /wd4267 /wd4244 /wd4996 /wd4146 /wd4197 /wd5105 /wd4805 /wd4018 /FS /Zc:preprocessor")
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda -Xptxas -maxrregcount=96 --compress-mode=balance")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3 /wd4267 /wd4244 /wd4996 /wd4146 /wd4197 /wd5105 /wd4805 /wd4018 /FS")
+    # /Zm2000 increases MSVC's internal compiler heap to 2000% of default (~2 GB).
+    # CUDA 12.6's CCCL template machinery (even in C++17) exhausts MSVC's default
+    # heap when nvcc invokes cl.exe for the host-side pass of .cu device files.
+    # NOTE: --compress-mode is intentionally omitted.  CUDA 12.6 nvlink on Windows
+    # fails with "Uncompress failed / elfLink fatbinary error" when relocatable device
+    # objects compiled with --compress-mode=balance are linked in the -dlink step.
+    # Uncompressed fat binaries link cleanly; the binary size trade-off is acceptable.
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda -Xptxas -maxrregcount=96 -Xcompiler=/Zm2000")
 endif()
 
 # Sanitizer options (GCC/Clang only)
@@ -241,12 +261,16 @@ endif()
 set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS} -O0 -G -g")
 set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS} -O3")
 
-add_subdirectory(plugins/mixed/example)
-add_subdirectory(plugins/net)
-add_subdirectory(plugins/profiler/example)
-add_subdirectory(plugins/tuner/example)
-add_subdirectory(plugins/env/example)
+if(NOT NCCL_OS_WINDOWS)
+    add_subdirectory(plugins/mixed/example)
+    add_subdirectory(plugins/net)
+    add_subdirectory(plugins/profiler/example)
+    add_subdirectory(plugins/tuner/example)
+    add_subdirectory(plugins/env/example)
+endif()
 add_subdirectory(src)
+add_subdirectory(tests)
+add_subdirectory(samples)
 
 # Add package building subdirectories
 if(BUILD_DEBIAN_PACKAGE OR BUILD_PACKAGES)

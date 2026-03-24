@@ -16,10 +16,54 @@
 #include <mutex>
 
 #ifdef NCCL_OS_WINDOWS
-#include <windows.h>
+/* Prevent windows.h from defining min/max macros that conflict with std::min/max */
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+/* ssize_t: defined by some MSVC CRT versions but not all */
+#ifndef _SSIZE_T_DEFINED
+#define _SSIZE_T_DEFINED
+typedef __int64 ssize_t;
+#endif
+/* winsock2.h must be included before windows.h to avoid winsock.h conflicts */
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <iphlpapi.h>
+#include <windows.h>
+/* POSIX shutdown() direction flags: map to Winsock SD_* equivalents */
+#ifndef SHUT_RD
+#define SHUT_RD   SD_RECEIVE
+#endif
+#ifndef SHUT_WR
+#define SHUT_WR   SD_SEND
+#endif
+#ifndef SHUT_RDWR
+#define SHUT_RDWR SD_BOTH
+#endif
+/* POSIX close(fd) for file descriptors (not sockets — those use closesocket) */
+#include <io.h>
+#ifndef NCCL_CLOSE_DEFINED
+#define NCCL_CLOSE_DEFINED
+static inline int close(int fd) { return _close(fd); }
+#endif
+/* usleep: POSIX microsecond sleep; map to Windows Sleep(ms) */
+#include <synchapi.h>
+static inline void usleep(unsigned int usec) { Sleep((usec + 999U) / 1000U); }
+/* localtime_r: thread-safe localtime */
+#include <time.h>
+static inline struct tm* localtime_r(const time_t* t, struct tm* buf) {
+  localtime_s(buf, t); return buf;
+}
+/* Receive flags not available on Windows — silently ignored */
+#ifndef MSG_DONTWAIT
+#define MSG_DONTWAIT 0
+#endif
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
 #endif
 
 #ifdef NCCL_OS_LINUX
@@ -77,5 +121,35 @@ ncclAffinity ncclOsCpuAnd(const ncclAffinity& a, const ncclAffinity& b);
 ncclResult_t ncclOsGetAffinity(ncclAffinity* affinity);
 ncclResult_t ncclOsSetAffinity(const ncclAffinity affinity);
 int ncclOsGetCpu();
+
+#ifdef NCCL_OS_WINDOWS
+/* POSIX getline implementation for Windows */
+#include <stdio.h>
+#include <stdlib.h>
+static inline ssize_t getline(char **lineptr, size_t *n, FILE *stream) {
+  if (!lineptr || !n || !stream) return -1;
+  if (!*lineptr || *n == 0) {
+    *n = 256;
+    *lineptr = (char*)malloc(*n);
+    if (!*lineptr) return -1;
+  }
+  size_t pos = 0;
+  int c;
+  while ((c = fgetc(stream)) != EOF) {
+    if (pos + 2 > *n) {
+      size_t newsz = *n * 2;
+      char *tmp = (char*)realloc(*lineptr, newsz);
+      if (!tmp) return -1;
+      *lineptr = tmp;
+      *n = newsz;
+    }
+    (*lineptr)[pos++] = (char)c;
+    if (c == '\n') break;
+  }
+  if (pos == 0) return -1;
+  (*lineptr)[pos] = '\0';
+  return (ssize_t)pos;
+}
+#endif // NCCL_OS_WINDOWS
 
 #endif

@@ -18,6 +18,10 @@
 #include "gin/gin_host.h"
 #include "argcheck.h"
 #include <mutex>
+#ifdef _WIN32
+#include <io.h>
+#define close _close
+#endif
 
 NCCL_PARAM(WinStride, "WIN_STRIDE", -1);
 NCCL_PARAM(EnableVersionCheck, "ENABLE_VERSION_CHECK", 1);

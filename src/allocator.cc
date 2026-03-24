@@ -295,7 +295,11 @@ ncclResult_t ncclShadowPoolDestruct(struct ncclShadowPool* pool) {
               pool->pages = page;
             }
           } else {
-            cudaFreeAsync(obj->devObj, stream);
+            if (pool->memPool) {
+              cudaFreeAsync(obj->devObj, stream);
+            } else {
+              cudaFree(obj->devObj);
+            }
           }
           struct ncclShadowObject* next = obj->next;
           free(obj);
@@ -306,7 +310,11 @@ ncclResult_t ncclShadowPoolDestruct(struct ncclShadowPool* pool) {
     free(pool->table);
 
     while (pool->pages != nullptr) {
-      cudaFreeAsync(pool->pages->devObjs, stream);
+      if (pool->memPool) {
+        cudaFreeAsync(pool->pages->devObjs, stream);
+      } else {
+        cudaFree(pool->pages->devObjs);
+      }
       struct ncclShadowPage* next = pool->pages->next;
       free(pool->pages);
       pool->pages = next;
@@ -314,7 +322,7 @@ ncclResult_t ncclShadowPoolDestruct(struct ncclShadowPool* pool) {
 
     cudaStreamSynchronize(stream);
     cudaStreamDestroy(stream);
-    cudaMemPoolDestroy(pool->memPool);
+    if (pool->memPool) cudaMemPoolDestroy(pool->memPool);
   }
   return ncclSuccess;
 }
@@ -342,7 +350,16 @@ ncclResult_t ncclShadowPoolAlloc(
     props.handleTypes = cudaMemHandleTypeNone;
     props.location.type = cudaMemLocationTypeDevice;
     cudaGetDevice(&props.location.id);
-    CUDACHECK(cudaMemPoolCreate(&pool->memPool, &props));
+    cudaError_t poolErr = cudaMemPoolCreate(&pool->memPool, &props);
+    if (poolErr != cudaSuccess) {
+      cudaGetLastError();
+      poolErr = cudaDeviceGetDefaultMemPool(&pool->memPool, props.location.id);
+      if (poolErr != cudaSuccess) {
+        // Device does not support CUDA memory pools; fall back to cudaMalloc.
+        cudaGetLastError();
+        pool->memPool = nullptr;
+      }
+    }
 
     pool->hbits = hbits = 4;
     pool->table = (struct ncclShadowObject**)malloc(sizeof(struct ncclShadowObject*)<<hbits);
@@ -383,7 +400,11 @@ ncclResult_t ncclShadowPoolAlloc(
         page->freeMask = uint64_t(-1)>>(64 - pageSize/pageObjSize);
         page->next = pool->pages;
         pool->pages = page;
-        CUDACHECK(cudaMallocFromPoolAsync(&page->devObjs, pageSize, pool->memPool, stream));
+        if (pool->memPool) {
+          CUDACHECK(cudaMallocFromPoolAsync(&page->devObjs, pageSize, pool->memPool, stream));
+        } else {
+          CUDACHECK(cudaMalloc(&page->devObjs, pageSize));
+        }
         CUDACHECK(cudaMemsetAsync(page->devObjs, 0, pageSize, stream));
         // fall through...
       }
@@ -397,7 +418,11 @@ ncclResult_t ncclShadowPoolAlloc(
     }
   } else {
     page = nullptr;
-    CUDACHECK(cudaMallocFromPoolAsync(&devObj, size, pool->memPool, stream));
+    if (pool->memPool) {
+      CUDACHECK(cudaMallocFromPoolAsync(&devObj, size, pool->memPool, stream));
+    } else {
+      CUDACHECK(cudaMalloc(&devObj, size));
+    }
     CUDACHECK(cudaMemsetAsync(devObj, 0, size, stream));
   }
 
@@ -438,7 +463,11 @@ ncclResult_t ncclShadowPoolFree(struct ncclShadowPool* pool, void* devObj, cudaS
     int slot = ((char*)obj->devObj - (char*)obj->page->devObjs)/obj->page->objSize;
     obj->page->freeMask |= uint64_t(1)<<slot;
   } else {
-    CUDACHECK(cudaFreeAsync(devObj, stream));
+    if (pool->memPool) {
+      CUDACHECK(cudaFreeAsync(devObj, stream));
+    } else {
+      CUDACHECK(cudaFree(devObj));
+    }
   }
   free(obj);
   pool->count -= 1;

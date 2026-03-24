@@ -523,7 +523,11 @@ __host__ __device__ constexpr int ncclCalcUnroll(int bytePerPack, int insns, int
 
 __host__ __device__ constexpr int ncclCollUnroll(int cudaArch = NCCL_CUDA_ARCH) {
   // Our collective unroll should move to the same bytes&insns model as NVLS.
-  return cudaArch >= 800 ? (cudaArch / 100 == 12 ? 6 : 8) : 4;
+  // SM_120 (workstation Blackwell) has only 53120 bytes max shared memory per
+  // block (vs 164KB+ for data center GPUs). Unroll=8 requires 82240 bytes;
+  // unroll=5 requires 51520 bytes but causes ring hangs; unroll=4 (same as
+  // pre-SM80) requires 41280 bytes and works correctly on this hardware.
+  return cudaArch >= 800 ? (cudaArch / 100 == 12 ? 4 : 8) : 4;
 }
 
 __host__ __device__ constexpr int ncclNvlsUnrollBytes(int cudaArch = NCCL_CUDA_ARCH) { return 4*16; }

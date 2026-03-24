@@ -64,7 +64,12 @@ inline int ncclTypeSize(ncclDataType_t type) {
   }
 }
 
+#ifdef NCCL_OS_WINDOWS
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#else
 #include <sys/types.h>
+#endif
 
 #define NCCL_MODE_NORMAL 0
 #define NCCL_MODE_OFFSET 1

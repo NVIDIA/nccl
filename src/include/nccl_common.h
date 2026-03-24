@@ -9,11 +9,21 @@
 #define NCCL_DEBUG_H_
 
 // Workaround for libstdc++ trying to force public visibility of std:: symbols.  We don't want to do that in libnccl.so.
+#ifndef _WIN32
 #include <bits/c++config.h>
 #undef _GLIBCXX_VISIBILITY
 #define _GLIBCXX_VISIBILITY(V)
+#endif
 
 #include <cstdint>
+
+#ifdef _WIN32
+/* pid_t is not defined by MSVC CRT headers */
+#ifndef _PID_T_DEFINED
+#define _PID_T_DEFINED
+typedef int pid_t;
+#endif
+#endif
 
 typedef enum {
   NCCL_LOG_NONE = 0,

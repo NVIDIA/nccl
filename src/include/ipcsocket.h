@@ -10,16 +10,18 @@
 
 #include "nccl.h"
 #include <stdio.h>
+#include <errno.h>
+#include <inttypes.h>
+#ifndef _WIN32
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
-#include <errno.h>
 #include <sys/wait.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <memory.h>
 #include <sys/un.h>
-#include <inttypes.h>
+#endif
 
 #define NCCL_IPC_SOCKNAME_LEN 64
 

@@ -5,8 +5,10 @@
  * See LICENSE.txt for more license information
  *************************************************************************/
 
+#ifndef NCCL_OS_WINDOWS
 #include <sys/types.h>
 #include <unistd.h>
+#endif
 
 #include "mlx5/mlx5dvsymbols.h"
 
@@ -25,7 +27,7 @@ ncclResult_t buildMlx5dvSymbols(struct ncclMlx5dvSymbols* mlx5dvSymbols) {
 #else
 /* Mlx5dv dynamic loading mode. Symbols are loaded from shared objects. */
 
-#include <dlfcn.h>
+#include "dlfcn_win.h"
 #include "core.h"
 
 // MLX5DV Library versioning

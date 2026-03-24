@@ -23,7 +23,9 @@
 #include "compiler.h"
 #include "profiler.h"
 #include "mnnvl.h"
+#ifndef NCCL_OS_WINDOWS
 #include <sys/stat.h>
+#endif
 #include "param.h"
 #include "nvtx_payload_schemas.h"
 #include "utils.h"
@@ -533,9 +535,24 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
     props.handleTypes = cudaMemHandleTypeNone;
     props.location.type = cudaMemLocationTypeDevice;
     props.location.id = comm->cudaDev;
-    CUDACHECK(cudaMemPoolCreate(&comm->memPool, &props));
-    uint64_t releaseThreshold = ~uint64_t(0);
-    CUDACHECK(cudaMemPoolSetAttribute(comm->memPool, cudaMemPoolAttrReleaseThreshold, &releaseThreshold));
+    cudaError_t poolErr = cudaMemPoolCreate(&comm->memPool, &props);
+    if (poolErr != cudaSuccess) {
+      cudaGetLastError();
+      // Fall back to the device's default memory pool (always exists if pools are supported).
+      poolErr = cudaDeviceGetDefaultMemPool(&comm->memPool, comm->cudaDev);
+      if (poolErr != cudaSuccess) {
+        // Device does not support CUDA memory pools at all (e.g. V100/TCC on Windows).
+        // Leave comm->memPool = NULL; CUDA-graph persistent work storage will fall back
+        // to cudaMalloc when this path is taken.
+        cudaGetLastError();
+        INFO(NCCL_INIT, "Device %d does not support CUDA memory pools; "
+            "persistent work storage will use cudaMalloc fallback", comm->cudaDev);
+        comm->memPool = nullptr;
+      }
+    } else {
+      uint64_t releaseThreshold = ~uint64_t(0);
+      CUDACHECK(cudaMemPoolSetAttribute(comm->memPool, cudaMemPoolAttrReleaseThreshold, &releaseThreshold));
+    }
   } while (0);
 
   ncclIntruQueueConstruct(&comm->eventCallbackQueue);
@@ -564,7 +581,22 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
   tmpCommAndChans.comm.nRanks = nRanks;
   tmpCommAndChans.comm.node = comm->node;
   tmpCommAndChans.comm.nNodes = comm->nNodes;
+#ifdef NCCL_OS_WINDOWS
+  {
+    // On WDDM, UVA is not available: CPU VA != device VA.  abortFlagDev was
+    // allocated via ncclCudaHostCalloc (cudaHostAllocMapped) and returns the
+    // CPU VA.  The GPU kernel reads *ncclShmem.comm.abortFlag every
+    // NCCL_SPINS_BEFORE_CHECK_ABORT iterations; if the CPU VA is used as a
+    // device address the GPU reads garbage → non-zero → checkAbort fires →
+    // workSize=0 → all collectives return 0.  Use cudaHostGetDevicePointer to
+    // obtain the valid device VA.
+    void* abortFlagDevPtr = NULL;
+    CUDACHECKGOTO(cudaHostGetDevicePointer(&abortFlagDevPtr, (void*)comm->abortFlagDev, 0), ret, fail);
+    tmpCommAndChans.comm.abortFlag = (volatile uint32_t*)abortFlagDevPtr;
+  }
+#else
   tmpCommAndChans.comm.abortFlag = comm->abortFlagDev;
+#endif
   tmpCommAndChans.comm.isAllNvlink = comm->isAllNvlink;
   for (int p=0; p < NCCL_NUM_PROTOCOLS; p++) {
     tmpCommAndChans.comm.buffSizes[p] = comm->buffSizes[p];
@@ -601,7 +633,18 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
     comm->workFifoBufGdrHandle = nullptr;
     NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->workFifoBuf, comm->workFifoBytes), ret, fail);
     ncclCommPushCudaHostFree(comm, comm->workFifoBuf);
+#ifdef NCCL_OS_WINDOWS
+    // On WDDM, UVA is not available: CPU VA != device VA.  workFifoBuf is
+    // allocated via cudaHostAllocMapped; the GPU kernel reads work items from
+    // workFifoBufDev.  Use cudaHostGetDevicePointer to get the valid device VA.
+    {
+      void* workFifoBufDevPtr = NULL;
+      CUDACHECKGOTO(cudaHostGetDevicePointer(&workFifoBufDevPtr, comm->workFifoBuf, 0), ret, fail);
+      comm->workFifoBufDev = workFifoBufDevPtr;
+    }
+#else
     comm->workFifoBufDev = comm->workFifoBuf;
+#endif
   }
 
   comm->workFifoProduced = 0;
@@ -675,9 +718,13 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
   // Get the device MAJOR:MINOR of /dev/shm so we can use that
   // information to decide whether we can use SHM for inter-process
   // communication in a container environment
+#ifndef NCCL_OS_WINDOWS
   struct stat statbuf;
   SYSCHECK(stat("/dev/shm", &statbuf), "stat");
   info->shmDev = statbuf.st_dev;
+#else
+  info->shmDev = 0; // /dev/shm doesn't exist on Windows; shared mem uses temp files
+#endif
 
   info->busId = comm->busId;
 
@@ -1053,19 +1100,27 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   }
 
   // Topo detection / System graph creation
+  INFO(NCCL_INIT, "Rank %d: entering ncclTopoGetSystem", comm->rank);
   NCCLCHECKGOTO(ncclTopoGetSystem(comm, &comm->topo), ret, fail);
   // Compute paths between GPUs and NICs
+  INFO(NCCL_INIT, "Rank %d: entering ncclTopoComputePaths (1)", comm->rank);
   NCCLCHECKGOTO(ncclTopoComputePaths(comm->topo, comm), ret, fail);
   // Remove inaccessible GPUs and unused NICs
+  INFO(NCCL_INIT, "Rank %d: entering ncclTopoTrimSystem", comm->rank);
   NCCLCHECKGOTO(ncclTopoTrimSystem(comm->topo, comm), ret, fail);
   // Recompute paths after trimming
+  INFO(NCCL_INIT, "Rank %d: entering ncclTopoComputePaths (2)", comm->rank);
   NCCLCHECKGOTO(ncclTopoComputePaths(comm->topo, comm), ret, fail);
   // Init search
+  INFO(NCCL_INIT, "Rank %d: entering ncclTopoSearchInit", comm->rank);
   NCCLCHECKGOTO(ncclTopoSearchInit(comm->topo), ret, fail);
   // Decide on comm's CPU architecture.
+  INFO(NCCL_INIT, "Rank %d: entering ncclTopoComputeCommCPU", comm->rank);
   NCCLCHECKGOTO(ncclTopoComputeCommCPU(comm), ret, fail);
   // Print final topology
+  INFO(NCCL_INIT, "Rank %d: entering ncclTopoPrint", comm->rank);
   NCCLCHECKGOTO(ncclTopoPrint(comm->topo), ret, fail);
+  INFO(NCCL_INIT, "Rank %d: topo detection complete", comm->rank);
   timers[TIMER_INIT_TOPO] = clockNano() - timers[TIMER_INIT_TOPO];
 
   // Set Affinity to a CPU local the our GPU, so that all memory we allocate
@@ -1893,8 +1948,8 @@ static ncclResult_t envConfigOverride(ncclComm_t comm) {
     }
   }
 
-  static pthread_once_t onceEnvCtaPolicy = PTHREAD_ONCE_INIT;
-  pthread_once(&onceEnvCtaPolicy, getEnvCtaPolicyOnce);
+  static std::once_flag onceEnvCtaPolicy;
+  std::call_once(onceEnvCtaPolicy, getEnvCtaPolicyOnce);
   if (ctaPolicyEnv != NCCL_CONFIG_UNDEF_INT) {
     if (comm->config.CTAPolicy != NCCL_CONFIG_UNDEF_INT)
       INFO(NCCL_ENV, "Comm config CTAPolicy reset to NCCL_CTA_POLICY=%d", ctaPolicyEnv);

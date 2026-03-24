@@ -140,62 +140,64 @@ static const float nvlsEfficiency[NCCL_NUM_COMPCAPS] = {
 };
 
 // Default tuner constants
+/* C++17-compatible initializer: designated initializers (.field=) require C++20 on MSVC.
+ * Values are in the same order as the struct fields so plain aggregate init is equivalent. */
 static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
-  .baseLatencies = {
+  /* baseLatencies */ {
     {  6.8, 14.0,  8.4 }, {  6.6, 14.0,  8.4 },  // Tree, Ring
     {    0,    0,    0 }, {    0,    0,    0 },  // Collnet Direct, Chain
     {    0,    0,    0 }, {    0,    0,    0 },  // NVLS, NVLS Tree
     {  8.0,  8.0,  8.0 }                         // PAT
     },
-  .hwLatencies = {
+  /* hwLatencies */ {
   /* NVLINK */
-  { { .6, 1.25, 4.0 }, { .6, 1.9, 3.4 }, /* Tree (LL/LL128/Simple), Ring (LL/LL128/Simple)*/
-    {  0,    0, 3.7 }, {  0,   0,  2.8 }, /* CollNetDirect (LL/LL128/Simple), CollNetChain (LL/LL128/Simple)*/
+  { { .6f, 1.25f, 4.0f }, { .6f, 1.9f, 3.4f }, /* Tree (LL/LL128/Simple), Ring (LL/LL128/Simple)*/
+    {  0,    0, 3.7f }, {  0,   0,  2.8f }, /* CollNetDirect (LL/LL128/Simple), CollNetChain (LL/LL128/Simple)*/
     {  0,    0,  25 }, {  0,   0,  25 }, /* NVLS (LL/LL128/Simple), NVLSTree (LL/LL128/Simple)*/
-    {  0,    0, 4.0 } /* PAT (LL/LL128/Simple)*/
+    {  0,    0, 4.0f } /* PAT (LL/LL128/Simple)*/
     },
   /* PCI */
-  { { 1.0, 1.9, 4.0 }, { 1.0, 2.5, 5.7 }, /* Tree (LL/LL128/Simple), Ring (LL/LL128/Simple)*/
-    {  0,    0, 3.7 }, {  0,   0,  2.8 }, /* CollNetDirect (LL/LL128/Simple), CollNetChain (LL/LL128/Simple)*/
+  { { 1.0f, 1.9f, 4.0f }, { 1.0f, 2.5f, 5.7f }, /* Tree (LL/LL128/Simple), Ring (LL/LL128/Simple)*/
+    {  0,    0, 3.7f }, {  0,   0,  2.8f }, /* CollNetDirect (LL/LL128/Simple), CollNetChain (LL/LL128/Simple)*/
     {  0,    0,   0 }, {  0,   0,    0 }, /* NVLS (LL/LL128/Simple), NVLSTree (LL/LL128/Simple)*/
-    {  0,    0, 4.0 } /* PAT (LL/LL128/Simple)*/
+    {  0,    0, 4.0f } /* PAT (LL/LL128/Simple)*/
     },
   /* NET */
-  { { 5.0, 8.5, 14 }, { 2.7, 4.0, 14.0 }, /* Tree (LL/LL128/Simple), Ring (LL/LL128/Simple)*/
+  { { 5.0f, 8.5f, 14 }, { 2.7f, 4.0f, 14.0f }, /* Tree (LL/LL128/Simple), Ring (LL/LL128/Simple)*/
     {   0,   0, 31 }, {   0,   0,   30 }, /* CollNetDirect (LL/LL128/Simple), CollNetChain (LL/LL128/Simple)*/
-    {   0,   0, 18 }, {   0,   0,   20.9 }, /* NVLS (LL/LL128/Simple), NVLSTree (LL/LL128/Simple)*/
+    {   0,   0, 18 }, {   0,   0,   20.9f }, /* NVLS (LL/LL128/Simple), NVLSTree (LL/LL128/Simple)*/
     {   0,   0, 14 } /* PAT (LL/LL128/Simple)*/
     },
   },
-  .llMaxBws = {
-     {39.0, 39.0, 20.4}, /* Volta-N1/Intel-N2/Intel-N4) */
-     {87.7, 22.5 /*avg of ring & tree*/, 19.0}, /* Ampere-N1/AMD-N2/AMD-N4) */
-     {141.0, 45.0 /*avg of ring & tree*/, 35.0}, /* Hopper-N1/AMD-N2/AMD-N4) */
-     {2*141.0, 2*45.0 /*avg of ring & tree*/, 2*35.0}, /* Blackwell-N1/AMD-N2/AMD-N4) */
+  /* llMaxBws */ {
+     {39.0f, 39.0f, 20.4f}, /* Volta-N1/Intel-N2/Intel-N4) */
+     {87.7f, 22.5f /*avg of ring & tree*/, 19.0f}, /* Ampere-N1/AMD-N2/AMD-N4) */
+     {141.0f, 45.0f /*avg of ring & tree*/, 35.0f}, /* Hopper-N1/AMD-N2/AMD-N4) */
+     {2*141.0f, 2*45.0f /*avg of ring & tree*/, 2*35.0f}, /* Blackwell-N1/AMD-N2/AMD-N4) */
   },
-  .perChMaxRingLL128Bws = {
-    {20.0, 20.0, 20.0}, /* Volta (N1/N2/N4) */
-    {20.0, 20.0, 20.0}, /* Ampere (N1/N2/N4) */
-    {36.7, 36.7, 36.7}, /* Hopper (N1/N2/N4) */
-    {40.0, 40.0, 40.0}, /* Blackwell (N1/N2/N4) */
+  /* perChMaxRingLL128Bws */ {
+    {20.0f, 20.0f, 20.0f}, /* Volta (N1/N2/N4) */
+    {20.0f, 20.0f, 20.0f}, /* Ampere (N1/N2/N4) */
+    {36.7f, 36.7f, 36.7f}, /* Hopper (N1/N2/N4) */
+    {40.0f, 40.0f, 40.0f}, /* Blackwell (N1/N2/N4) */
   },
-  .perChMaxTreeLL128Bws = {
-    {20.0, 20.0, 20.0}, /* Volta (N1/N2/N4) */
-    {20.0, 20.0, 20.0}, /* Ampere (N1/N2/N4) */
-    {36.7, 36.7, 29.0}, /* Hopper (N1/N2/N4) */
-    {55.6, 31.67, 20.0}, /* Blackwell (N1/N2/N4) */
+  /* perChMaxTreeLL128Bws */ {
+    {20.0f, 20.0f, 20.0f}, /* Volta (N1/N2/N4) */
+    {20.0f, 20.0f, 20.0f}, /* Ampere (N1/N2/N4) */
+    {36.7f, 36.7f, 29.0f}, /* Hopper (N1/N2/N4) */
+    {55.6f, 31.67f, 20.0f}, /* Blackwell (N1/N2/N4) */
   },
-  .perChMaxTreeBws = {
-    {26.5, 18.5, 10.0}, /* Volta (N1/N2/N4) */
-    {24.0, 23.6, 17.8}, /* Ampere (N1/N2/N4) */
-    {38.7, 41.4, 36.0}, /* Hopper (N1/N2/N4) */
-    {70.0, 42.8, 24.0}, /* Blackwell (N1/N2/N4) */
+  /* perChMaxTreeBws */ {
+    {26.5f, 18.5f, 10.0f}, /* Volta (N1/N2/N4) */
+    {24.0f, 23.6f, 17.8f}, /* Ampere (N1/N2/N4) */
+    {38.7f, 41.4f, 36.0f}, /* Hopper (N1/N2/N4) */
+    {70.0f, 42.8f, 24.0f}, /* Blackwell (N1/N2/N4) */
   },
-  .perChMaxNVLSTreeBws = {
-    {26.5, 18.5, 10.0}, /* Volta (N1/N2/N4) */
-    {24.0, 23.6, 17.8}, /* Ampere (N1/N2/N4) */
-    {0.0, 57.7, 45.5}, /* Hopper (N1/N2/N4) */
-    {0.0, 96.0, 43.8} /* Blackwell (N1/N2/N4) */
+  /* perChMaxNVLSTreeBws */ {
+    {26.5f, 18.5f, 10.0f}, /* Volta (N1/N2/N4) */
+    {24.0f, 23.6f, 17.8f}, /* Ampere (N1/N2/N4) */
+    {0.0f, 57.7f, 45.5f}, /* Hopper (N1/N2/N4) */
+    {0.0f, 96.0f, 43.8f} /* Blackwell (N1/N2/N4) */
   }
 };
 
@@ -427,6 +429,18 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
     INFO(NCCL_ENV, "NCCL_ALGO set by environment to %s", algoStr);
     NCCLCHECK(parseList(algoStr, ncclFuncStr, NCCL_NUM_FUNCTIONS, ncclAlgoStr, NCCL_NUM_ALGORITHMS, algoEnable));
   }
+
+#ifdef NCCL_OS_WINDOWS
+  // LL and LL128 use direct GPU-to-SHM writes, which are not coherent across
+  // GPUs on WDDM (no hardware cross-GPU cache coherency for host memory).
+  // Force Simple protocol so all intra-node transfers go through CE proxies.
+  for (int f=0; f<NCCL_NUM_FUNCTIONS; f++) {
+    protoEnable[f*NCCL_NUM_PROTOCOLS+NCCL_PROTO_LL]   = 0;
+    protoEnable[f*NCCL_NUM_PROTOCOLS+NCCL_PROTO_LL128] = 0;
+  }
+  if (comm->rank == 0)
+    INFO(NCCL_INIT, "WDDM: LL and LL128 protocols disabled (not coherent on WDDM)");
+#endif
 
   if (comm->rank == 0 && (algoStr||protoStr)) {
     constexpr int strLength = 1024;

@@ -145,8 +145,12 @@ uint64_t getPidHash(void) {
   // Start off with our pid ($$)
   sprintf(pname, "%ld", (long) ncclOsGetPid());
   int plen = strlen(pname);
+#ifndef _WIN32
   int len = readlink("/proc/self/ns/pid", pname+plen, sizeof(pname)-1-plen);
   if (len < 0) len = 0;
+#else
+  int len = 0; // No procfs namespace on Windows
+#endif
 
   pname[plen+len]='\0';
   TRACE(NCCL_INIT,"unique PID '%s'", pname);

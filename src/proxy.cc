@@ -1179,8 +1179,8 @@ ncclResult_t ncclProxyConnect(struct ncclComm* comm, int transport, int send, in
   if (tcomm->proxyProgress) {
 
 #if defined(NCCL_OS_LINUX)
-    char poolPath[] = "/dev/shm/nccl-XXXXXX";
-    strncpy(poolPath+sizeof("/dev/shm/nccl-")-1, resp.devShmPath, sizeof("XXXXXX")-1);
+    char poolPath[sizeof("/dev/shm/nccl-XXXXXX")];
+    snprintf(poolPath, sizeof(poolPath), "/dev/shm/nccl-%.6s", resp.devShmPath);
 #elif defined(NCCL_OS_WINDOWS)
     char poolPath[64];
     snprintf(poolPath, sizeof(poolPath), "Local\\nccl-shm-%s", resp.devShmPath);

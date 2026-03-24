@@ -864,18 +864,18 @@ LowLatencyBytes calculateLowLatencyBytes(
 // test_hybrid_ep.py dispatch_bf16_nvl_recv_bytes / t for apple-to-apple comparison.
 // send+receive would double-count (~2x inflation); rdma_send_bytes reported separately as IB BW.
 struct HighThroughputBytes {
-    size_t rdma_send_bytes;    // Bytes sent to remote nodes (RDMA send) — diagnostic only
+    size_t rdma_send_bytes;    // Bytes sent to remote nodes (IB/RDMA only, local excluded) — IB BW metric
     size_t total_recv_bytes;   // Total bytes received from all sources — used for bandwidth
     unsigned int rdma_tokens;  // Number of tokens sent over RDMA
     unsigned int recv_tokens;  // Total tokens received (set after handle creation)
     bool is_fp8;               // Whether dispatch uses FP8
 };
 
-// Calculate RDMA send bytes from topk_idx for High Throughput mode
-// Matches DeepEP test_internode.py methodology exactly:
-//   - rdma_send_bytes = ALL unique node destinations per token (includes local node)
-//   - This matches DeepEP's: rdma_idx = topk_idx // (num_experts // num_nodes), then count all non -1
-//   - total_recv_bytes = set later from ncclEpHandleGetNumRecvTokens (all received tokens)
+// Calculate RDMA send bytes from topk_idx for High Throughput mode.
+// rdma_send_bytes counts remote-node tokens only (IB/RDMA path), matching
+// test_hybrid_ep.py count_rdma_send_from_routing_map(routing_map, local_node_id, ...).
+// Local-node tokens go via NVLink (INTRA_NODE_S2G_GROUP) and are excluded.
+// total_recv_bytes is set later from ncclEpHandleGetNumRecvTokens.
 HighThroughputBytes calculateHighThroughputBytes(
     const int64_t* topk_idx_host,
     unsigned int num_tokens,
@@ -891,25 +891,22 @@ HighThroughputBytes calculateHighThroughputBytes(
 
     int num_nodes = (nRanks + num_ranks_per_node - 1) / num_ranks_per_node;
     unsigned int num_experts_per_node = static_cast<unsigned int>(num_experts / num_nodes);
+    int local_node = myRank / num_ranks_per_node;
 
-    // Count RDMA tokens: for each token, count ALL unique nodes it's sent to
-    // This matches DeepEP's methodology exactly:
-    //   rdma_idx = topk_idx // (num_experts // num_nodes)
-    //   inplace_unique(rdma_idx, num_nodes)
-    //   num_rdma_token_sent = rdma_idx.ne(-1).sum().item()
-    // Note: DeepEP counts ALL node destinations, not just remote nodes
+    // Count RDMA tokens: unique remote-node destinations per token (local node excluded).
+    // Matches test_hybrid_ep.py: count_rdma_send_from_routing_map(routing_map, local_node_id, ...)
     for (unsigned int t = 0; t < num_tokens; t++) {
-        std::set<int> nodes_for_token;
+        std::set<int> remote_nodes_for_token;
 
         for (unsigned int k = 0; k < top_k; k++) {
             int64_t expert_id = topk_idx_host[t * top_k + k];
-            if (expert_id < 0) continue;  // Skip masked entries
+            if (expert_id < 0) continue;
 
             int target_node = static_cast<int>(expert_id / num_experts_per_node);
+            if (target_node == local_node) continue;  // NVLink path, not RDMA
 
-            // Count ALL unique nodes this token is sent to (including local node)
-            if (nodes_for_token.find(target_node) == nodes_for_token.end()) {
-                nodes_for_token.insert(target_node);
+            if (remote_nodes_for_token.find(target_node) == remote_nodes_for_token.end()) {
+                remote_nodes_for_token.insert(target_node);
                 bytes.rdma_tokens++;
             }
         }
@@ -918,7 +915,7 @@ HighThroughputBytes calculateHighThroughputBytes(
     // Calculate RDMA send bytes
     // BF16: hidden * 2, FP8: BF16 * fp8_factor
     const size_t bf16_bytes_per_token = hidden * 2;
-    const double fp8_factor = (1.0 + 4.0 / 128.0) / 2.0;  // From test_internode.py
+    const double fp8_factor = (1.0 + 4.0 / 128.0) / 2.0;  // FP8 + scale factor overhead
     const size_t bytes_per_token = use_fp8 ?
         static_cast<size_t>(bf16_bytes_per_token * fp8_factor) : bf16_bytes_per_token;
 

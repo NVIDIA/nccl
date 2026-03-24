@@ -1074,6 +1074,7 @@ void printHighThroughputResults(
     double local_combine_tp = (combine_bytes / 1e9) / (combine_result.avg_ms / 1000.0);
     double local_total_tp = ((dispatch_bytes + combine_bytes) / 1e9) / (combined_result.avg_ms / 1000.0);
     double local_ib_tp = (ht_bytes.rdma_send_bytes / 1e9) / (dispatch_result.avg_ms / 1000.0);
+    double local_combine_ib_tp = (ht_bytes.rdma_send_bytes / 1e9) / (combine_result.avg_ms / 1000.0);
     bool is_multinode = (ht_bytes.rdma_send_bytes > 0);
 
     // Print per-rank results
@@ -1085,9 +1086,13 @@ void printHighThroughputResults(
                myRank, dispatch_result.avg_ms * 1000, local_dispatch_tp);
     }
 
-    printf("[Rank %d] Combine:          avg=%.2f us\n",
-           myRank,
-           combine_result.avg_ms * 1000);
+    if (is_multinode) {
+        printf("[Rank %d] Combine:          avg=%.2f us, recv(RDMA+NVL)=%.2f GB/s, ib=%.2f GB/s\n",
+               myRank, combine_result.avg_ms * 1000, local_combine_tp, local_combine_ib_tp);
+    } else {
+        printf("[Rank %d] Combine:          avg=%.2f us, recv(RDMA+NVL)=%.2f GB/s\n",
+               myRank, combine_result.avg_ms * 1000, local_combine_tp);
+    }
 
     printf("[Rank %d] Dispatch+Combine: avg=%.2f us\n",
            myRank,
@@ -1142,6 +1147,12 @@ void printHighThroughputResults(
     MPI_Reduce(&local_tp_struct, &global_ib_tp_min, 1, MPI_DOUBLE_INT, MPI_MINLOC, 0, MPI_COMM_WORLD);
     MPI_Reduce(&local_tp_struct, &global_ib_tp_max, 1, MPI_DOUBLE_INT, MPI_MAXLOC, 0, MPI_COMM_WORLD);
 
+    struct { double value; int rank; } global_combine_ib_tp_min, global_combine_ib_tp_max;
+    local_tp_struct.value = local_combine_ib_tp;
+    local_tp_struct.rank = myRank;
+    MPI_Reduce(&local_tp_struct, &global_combine_ib_tp_min, 1, MPI_DOUBLE_INT, MPI_MINLOC, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&local_tp_struct, &global_combine_ib_tp_max, 1, MPI_DOUBLE_INT, MPI_MAXLOC, 0, MPI_COMM_WORLD);
+
     // Aggregate RDMA/RECV bytes across ranks for summary
     size_t global_rdma_bytes, global_recv_bytes;
     MPI_Reduce(&ht_bytes.rdma_send_bytes, &global_rdma_bytes, 1, MPI_UNSIGNED_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
@@ -1174,6 +1185,14 @@ void printHighThroughputResults(
             printf("Dispatch IB BW:              min=%.2f GB/s (rank %d), max=%.2f GB/s (rank %d)\n",
                    global_ib_tp_min.value, global_ib_tp_min.rank,
                    global_ib_tp_max.value, global_ib_tp_max.rank);
+        }
+        printf("Combine Recv BW (RDMA+NVL): min=%.2f GB/s (rank %d), max=%.2f GB/s (rank %d)\n",
+               global_combine_tp_min.value, global_combine_tp_min.rank,
+               global_combine_tp_max.value, global_combine_tp_max.rank);
+        if (global_rdma_bytes > 0) {
+            printf("Combine IB BW:              min=%.2f GB/s (rank %d), max=%.2f GB/s (rank %d)\n",
+                   global_combine_ib_tp_min.value, global_combine_ib_tp_min.rank,
+                   global_combine_ib_tp_max.value, global_combine_ib_tp_max.rank);
         }
         printf("\nByte breakdown (per rank avg): RDMA_send=%.2f MB (%u tokens), total_recv=%.2f MB (%u tokens)\n",
                static_cast<double>(global_rdma_bytes) / nRanks / 1e6, ht_bytes.rdma_tokens,

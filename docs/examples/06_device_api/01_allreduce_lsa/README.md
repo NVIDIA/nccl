@@ -103,7 +103,7 @@ ncclLsaBarrierSession<ncclCoopCta> bar {
     devComm, ncclTeamLsa(devComm), devComm.lsaBarrier,
     blockIdx.x               // Barrier index: matches our CTA index (0 to lsaBarrierCount-1)
 };
-bar.sync(ncclCoopCta(), cuda::memory_order_relaxed);
+bar.sync(ncclCoopCta(), cuda::memory_order_acquire);
 
 // ...
 
@@ -193,7 +193,7 @@ and all ranks use identical buffer sizes.
 
 ### Issue: Incomplete results or race conditions
 **Solution:** Use proper memory ordering in LSA barriers
-(`cuda::memory_order_relaxed` vs `cuda::memory_order_release`).
+(`cuda::memory_order_acquire` vs `cuda::memory_order_release`).
 
 ## Performance Notes
 

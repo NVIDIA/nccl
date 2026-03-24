@@ -67,7 +67,7 @@ __global__ void simpleAllReduceKernel(ncclWindow_t sendwin, size_t sendoffset,
   // Barrier index: blockIdx.x selects this CTA's dedicated barrier (one barrier per CTA)
   ncclLsaBarrierSession<ncclCoopCta> bar { ncclCoopCta(), devComm, ncclTeamLsa(devComm),
                                            devComm.lsaBarrier, blockIdx.x };
-  bar.sync(ncclCoopCta(), cuda::memory_order_relaxed);
+  bar.sync(ncclCoopCta(), cuda::memory_order_acquire);
 
   const int rank = devComm.rank, nRanks = devComm.nRanks;
 

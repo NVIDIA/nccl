@@ -86,7 +86,7 @@ ncclBarrierSession<ncclCoopCta> bar {
     gin,                        // GIN context for network coordination
     blockIdx.x                  // Barrier index: matches our CTA index
 };
-bar.sync(ncclCoopCta(), cuda::memory_order_relaxed, ncclGinFenceLevel::Relaxed);
+bar.sync(ncclCoopCta(), cuda::memory_order_acquire, ncclGinFenceLevel::Relaxed);
 ```
 
 ### Peer Classification (Device-side)

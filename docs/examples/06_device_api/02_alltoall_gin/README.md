@@ -86,7 +86,7 @@ ncclGinBarrierSession<ncclCoopCta> bar {
     devComm.railGinBarrier,          // GIN barrier handle
     blockIdx.x                       // Barrier index: matches our CTA index
 };
-bar.sync(ncclCoopCta(), cuda::memory_order_relaxed, ncclGinFenceLevel::Relaxed);
+bar.sync(ncclCoopCta(), cuda::memory_order_acquire, ncclGinFenceLevel::Relaxed);
 ```
 
 ### GIN Put Operations (Device-side)

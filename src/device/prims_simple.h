@@ -101,6 +101,18 @@ class Primitives<
       return ans;
     }
     #endif
+#ifdef NCCL_OS_WINDOWS
+    // WDDM: the recv proxy signals via CE H2D (writes VRAM DRAM, bypasses SM L2).
+    // For RoleWaitRecv only: ld.cv.global bypasses L1+L2 and reads VRAM DRAM directly,
+    // making the recv proxy's tail write visible. Requires ceRecvMemDev VRAM shadow to
+    // be initialized to 0 before first use (see shmRecvProxyConnect).
+    // All other roles keep ld.volatile.global (L2 stale-0 is fine for WaitSend credits).
+    if (flags & RoleWaitRecv) {
+      uint64_t ans;
+      asm volatile("ld.cv.global.u64 %0, [%1];" : "=l"(ans) : "l"(cvta_to_global(ptr)) : "memory");
+      return ans;
+    }
+#endif
     // volatile is faster than acquire but not as correct. Make sure reduceCopy
     // loads data using volatile so it doesn't see stale data in L1.
     return ld_volatile_global(ptr);
@@ -121,8 +133,16 @@ class Primitives<
     }
 
     if (flags & (Recv*RoleWaitRecv | Send*RoleWaitSend)) {
-      if ((flags & ConnFifoEnabled) && (flags & (Send * RoleWaitSend)))
+      if ((flags & ConnFifoEnabled) && (flags & (Send * RoleWaitSend))) {
+#ifdef NCCL_OS_WINDOWS
+        // On WDDM, regular stores go to GPU L2. atomicExch_system bypasses L2 and writes
+        // directly to VRAM DRAM, making the value visible to the CPU proxy.
+        (void)atomicExch_system((unsigned long long*)&connFifo[step%NCCL_STEPS].size,
+                                (unsigned long long)(nelts*sizeof(T)));
+#else
         connFifo[step%NCCL_STEPS].size = nelts*sizeof(T);
+#endif
+      }
 
       void **ptrs = isSendNotRecv ? (ncclShmem.groups[group].dsts + Dst)
                                   : (ncclShmem.groups[group].srcs + Src);
@@ -177,7 +197,19 @@ class Primitives<
       if (Send && (flags & RolePostSend) && (dataStored||(flags&ConnFifoEnabled))) {
         fence_acq_rel_sys();
       }
+#ifdef NCCL_OS_WINDOWS
+      // On WDDM, GPU SM stores (including st.relaxed.sys) go to GPU L2, not host DRAM.
+      // CPU reads from cudaHostAlloc(Mapped) memory see only host DRAM, bypassing GPU L2.
+      // atomicExch_system bypasses L2 entirely and writes directly to DRAM,
+      // making the step value immediately visible to the CPU proxy.
+      if (Send && (flags & RolePostSend)) {
+        (void)atomicExch_system((unsigned long long*)connStepPtr, (unsigned long long)step);
+      } else {
+        st_relaxed_sys_global(connStepPtr, step);
+      }
+#else
       st_relaxed_sys_global(connStepPtr, step);
+#endif
     }
   }
 
@@ -403,7 +435,14 @@ public:
         // coverity[dead_error_begin]
         dstSize = ncclShmem.groups[group].dstSizes[index];
         ncclShmem.groups[group].dstSizes[index] = 0;
-        if (flags & ConnFifoEnabled) connFifo[step%NCCL_STEPS].size = dstSize*sizeof(T);
+        if (flags & ConnFifoEnabled) {
+#ifdef NCCL_OS_WINDOWS
+          (void)atomicExch_system((unsigned long long*)&connFifo[step%NCCL_STEPS].size,
+                                  (unsigned long long)(dstSize*sizeof(T)));
+#else
+          connFifo[step%NCCL_STEPS].size = dstSize*sizeof(T);
+#endif
+        }
       }
       barrier();
       if (flags & (Recv*(RoleWaitRecv|RolePostRecv) | Send*(RoleWaitSend|RolePostSend))) {
@@ -413,7 +452,15 @@ public:
         if (Send && (!Recv || (flags & RolePostSend)) && (dstSize!=0 || (flags&ConnFifoEnabled))) {
           fence_acq_rel_sys();
         }
+#ifdef NCCL_OS_WINDOWS
+        if (Send && (!Recv || (flags & RolePostSend))) {
+          (void)atomicExch_system((unsigned long long*)connStepPtr, (unsigned long long)step);
+        } else {
+          st_relaxed_sys_global(connStepPtr, step);
+        }
+#else
         st_relaxed_sys_global(connStepPtr, step);
+#endif
       }
     }
   }

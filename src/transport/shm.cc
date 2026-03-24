@@ -26,6 +26,7 @@ struct shmConnectInfo {
 };
 
 struct shmSendResources {
+  bool legacy; // same-process (pidHash match): reuse peer's hptr directly
   struct ncclRecvMem* remHostMem;
   struct ncclRecvMem* devRemHostMem;
   ncclShmIpcDesc_t remDesc;
@@ -34,6 +35,7 @@ struct shmSendResources {
 };
 
 struct shmRecvResources {
+  bool legacy; // same-process (pidHash match): reuse peer's hptr directly
   struct ncclSendMem* remHostMem;
   struct ncclSendMem* devRemHostMem;
   ncclShmIpcDesc_t remDesc;
@@ -42,7 +44,8 @@ struct shmRecvResources {
 };
 
 struct shmProxyInfo {
-  struct ncclRecvMem* ceRecvMem;
+  struct ncclRecvMem* ceRecvMem;    // CPU-readable signal shadow (host memory)
+  struct ncclRecvMem* ceRecvMemDev; // GPU writes tail/connFifo here (device mem on WDDM, == ceRecvMem on Linux)
   char* devFifo;
   char* shmFifo;
   struct ncclSendMem* sendMem;
@@ -52,6 +55,10 @@ struct shmProxyInfo {
   uint64_t step;
   cudaStream_t stream;
   cudaEvent_t events[NCCL_STEPS];
+#ifdef NCCL_OS_WINDOWS
+  int deviceId;       // device on which devFifo/ceRecvMemDev were allocated
+  char* devFifoHost;  // CPU-accessible host VA for devFifo (cudaHostAlloc Mapped); devFifo holds device VA
+#endif
 
   // ipc desc
   ncclShmIpcDesc_t desc;
@@ -124,9 +131,9 @@ static ncclResult_t shmSendSetup(struct ncclComm* comm, struct ncclTopoGraph* gr
   NCCLCHECK(ncclProxyCallBlocking(comm, &send->proxyConn, ncclProxyMsgSetup, (void*)&req, sizeof(struct shmRequest), (void*)info, sizeof(struct shmConnectInfo)));
 
   info->rank = comm->rank;
+  resources->legacy = req.legacy;
   resources->hostMem = (struct ncclSendMem*)info->buf.hptr;
   resources->devHostMem = (struct ncclSendMem*)info->buf.dptr;
-
   INFO(NCCL_INIT|NCCL_SHM,"Channel %02d : %d[%d] -> %d[%d] via SHM/%s/%s", channelId, myInfo->rank, myInfo->nvmlDev, peerInfo->rank, peerInfo->nvmlDev, useMemcpySend?"CE":"direct", useMemcpyRecv?"CE":"direct");
   return ncclSuccess;
 }
@@ -155,9 +162,9 @@ static ncclResult_t shmRecvSetup(struct ncclComm* comm, struct ncclTopoGraph* gr
   NCCLCHECK(ncclProxyCallBlocking(comm, &recv->proxyConn, ncclProxyMsgSetup, (void*)&req, sizeof(struct shmRequest), (void*)info, sizeof(struct shmConnectInfo)));
 
   info->rank = comm->rank;
+  resources->legacy = req.legacy;
   resources->hostMem = (struct ncclRecvMem*)info->buf.hptr;
   resources->devHostMem = (struct ncclRecvMem*)info->buf.dptr;
-
   return ncclSuccess;
 }
 
@@ -168,6 +175,30 @@ static ncclResult_t shmSendConnect(struct ncclComm* comm, struct ncclConnect* co
   struct shmSendResources* resources = (struct shmSendResources*)send->transportResources;
   char* buff;
 
+#ifdef NCCL_OS_WINDOWS
+  // For same-process connections on Windows, reuse the peer's existing CPU mapping
+  // rather than creating a second MapViewOfFile of the same section.  Two different
+  // MapViewOfFile views of the same pagefile-backed section can produce separate
+  // WDDM cache entries, causing writes through one VA to be invisible to reads
+  // through the other.  Using a single CPU VA (info->buf.hptr, already registered
+  // with cudaHostRegisterPortable) and deriving the device pointer from it for the
+  // current device avoids this coherency hazard.
+  if (resources->legacy) {
+    resources->remHostMem = (struct ncclRecvMem*)info->buf.hptr;
+    void* dptr = NULL;
+    CUDACHECK(cudaHostGetDevicePointer(&dptr, info->buf.hptr, 0));
+    resources->devRemHostMem = (struct ncclRecvMem*)dptr;
+    memset(&resources->remDesc, 0, sizeof(resources->remDesc));
+    // Re-derive devHostMem for the current device.  The proxy allocated the
+    // shared buffer (ncclShmAllocateShareableBuffer) without calling
+    // cudaSetDevice, so info->buf.dptr may be a device VA for the wrong GPU.
+    // cudaHostAlloc(Portable) memory needs cudaHostGetDevicePointer to be
+    // called for each device that will access it.
+    void* hdptr = NULL;
+    CUDACHECK(cudaHostGetDevicePointer(&hdptr, resources->hostMem, 0));
+    resources->devHostMem = (struct ncclSendMem*)hdptr;
+  } else
+#endif
   NCCLCHECK(ncclShmImportShareableBuffer(comm, info->rank, &info->desc, (void**)&resources->remHostMem, (void**)&resources->devRemHostMem, &resources->remDesc));
 
   buff = shmLocality == SHM_SEND_SIDE ? (char*)(resources->devHostMem + 1) : (char*)(resources->devRemHostMem + 1);
@@ -183,11 +214,31 @@ static ncclResult_t shmSendConnect(struct ncclComm* comm, struct ncclConnect* co
     send->conn.connFifo = resources->devRemHostMem->connFifo;
   }
   if (useMemcpySend) {
-    struct shmProxyInfo proxyInfo = { NULL, NULL, send->conn.buffs[NCCL_PROTO_SIMPLE], resources->hostMem, resources->remHostMem };
+    // shmFifo must be the CPU VA of the recv SHM data area so the proxy can
+    // pass it to cudaMemcpyDeviceToHost.  On Linux/UVA this equals the device
+    // VA; on WDDM they differ, so always pass the CPU VA explicitly.
+    struct shmProxyInfo proxyInfo = { NULL, NULL, NULL,
+                                      (char*)(resources->remHostMem + 1),
+                                      resources->hostMem, resources->remHostMem };
+#ifdef NCCL_OS_WINDOWS
+    // Tell the proxy which GPU device this rank uses, so it allocates devFifo
+    // and ceRecvMem on the correct device.  On WDDM, cudaMalloc'd memory is
+    // not peer-accessible, so devFifo must live on the same device as the
+    // rank's kernel that writes into it.
+    CUDACHECK(cudaGetDevice(&proxyInfo.deviceId));
+#endif
     NCCLCHECK(ncclProxyCallBlocking(comm, &send->proxyConn, ncclProxyMsgConnect, &proxyInfo, sizeof(struct shmProxyInfo), &proxyInfo, sizeof(struct shmProxyInfo)));
     send->conn.buffs[NCCL_PROTO_SIMPLE] = proxyInfo.devFifo;
-    send->conn.tail = &proxyInfo.ceRecvMem->tail;
-    send->conn.connFifo = proxyInfo.ceRecvMem->connFifo;
+    // ceRecvMemDev is the device VA of ceRecvMem (equals ceRecvMem on Linux).
+    // The GPU writes tail/connFifo through these device VAs; the CPU proxy
+    // reads them back through the CPU VA (ceRecvMem).
+    send->conn.tail = &proxyInfo.ceRecvMemDev->tail;
+    send->conn.connFifo = proxyInfo.ceRecvMemDev->connFifo;
+    // On WDDM, LL protocol is incoherent across GPU L2 caches: st.volatile.global
+    // writes stay in the sender GPU's L2 and are invisible to the receiver GPU's
+    // ld.volatile.global.  Force Simple protocol (devFifo/proxy path) for all P2P.
+    send->conn.buffs[NCCL_PROTO_LL] = nullptr;
+    send->conn.buffs[NCCL_PROTO_LL128] = nullptr;
   }
 
   // We must assign the proxyConn's proxyProgress property for proper checking at enqueue-time
@@ -202,6 +253,20 @@ static ncclResult_t shmRecvConnect(struct ncclComm* comm, struct ncclConnect* co
   struct shmConnectInfo* info = (struct shmConnectInfo*)connectInfo;
   char* buff;
 
+#ifdef NCCL_OS_WINDOWS
+  // Same-process optimisation: see shmSendConnect for rationale.
+  if (resources->legacy) {
+    resources->remHostMem = (struct ncclSendMem*)info->buf.hptr;
+    void* dptr = NULL;
+    CUDACHECK(cudaHostGetDevicePointer(&dptr, info->buf.hptr, 0));
+    resources->devRemHostMem = (struct ncclSendMem*)dptr;
+    memset(&resources->remDesc, 0, sizeof(resources->remDesc));
+    // Re-derive devHostMem for the current device (same reason as shmSendConnect).
+    void* hdptr = NULL;
+    CUDACHECK(cudaHostGetDevicePointer(&hdptr, resources->hostMem, 0));
+    resources->devHostMem = (struct ncclRecvMem*)hdptr;
+  } else
+#endif
   NCCLCHECK(ncclShmImportShareableBuffer(comm, info->rank, &info->desc, (void**)&resources->remHostMem, (void**)&resources->devRemHostMem, &resources->remDesc));
 
   buff = shmLocality == SHM_RECV_SIDE ? (char*)(resources->devHostMem + 1) : (char*)(resources->devRemHostMem + 1);
@@ -214,10 +279,21 @@ static ncclResult_t shmRecvConnect(struct ncclComm* comm, struct ncclConnect* co
   recv->conn.stepSize = comm->buffSizes[NCCL_PROTO_SIMPLE]/NCCL_STEPS;
 
   if (useMemcpyRecv) {
-    struct shmProxyInfo proxyInfo = { NULL, NULL, recv->conn.buffs[NCCL_PROTO_SIMPLE], resources->remHostMem, resources->hostMem };
+    // shmFifo must be the CPU VA of the recv SHM data area (own SHM, since
+    // shmLocality == SHM_RECV_SIDE) so the proxy can pass it to
+    // cudaMemcpyHostToDevice.
+    struct shmProxyInfo proxyInfo = { NULL, NULL, NULL,
+                                      (char*)(resources->hostMem + 1),
+                                      resources->remHostMem, resources->hostMem };
+#ifdef NCCL_OS_WINDOWS
+    CUDACHECK(cudaGetDevice(&proxyInfo.deviceId));
+#endif
     NCCLCHECK(ncclProxyCallBlocking(comm, &recv->proxyConn, ncclProxyMsgConnect, &proxyInfo, sizeof(struct shmProxyInfo), &proxyInfo, sizeof(struct shmProxyInfo)));
     recv->conn.buffs[NCCL_PROTO_SIMPLE] = proxyInfo.devFifo;
-    recv->conn.tail = &proxyInfo.ceRecvMem->tail;
+    recv->conn.tail = &proxyInfo.ceRecvMemDev->tail;
+    // Same reasoning as shmSendConnect: force Simple protocol on WDDM.
+    recv->conn.buffs[NCCL_PROTO_LL] = nullptr;
+    recv->conn.buffs[NCCL_PROTO_LL128] = nullptr;
   }
 
   // We must assign the proxyConn's proxyProgress property for proper checking at enqueue-time
@@ -256,12 +332,55 @@ static ncclResult_t shmSendProxyConnect(struct ncclProxyConnection* connection, 
   proxyInfo->shmFifo = reqInfo->shmFifo;
   proxyInfo->sendMem = reqInfo->sendMem;
   proxyInfo->recvMem = reqInfo->recvMem;
+#ifdef NCCL_OS_WINDOWS
+  {
+    // On WDDM, the CUDA context serializes all GPU work, so CE DMA copies deadlock with
+    // the persistent NCCL kernel. Use zero-copy mapped pinned host memory for devFifo so
+    // the proxy can transfer data with plain CPU memcpy — no CUDA DMA needed.
+    // ceRecvMem/ceRecvMemDev: host-pinned mapped memory; GPU writes tail via atomicExch_system
+    // (CPU-visible), and GPU reads ceRecvMemDev->tail via ld.cv.global (cache-bypassing).
+    int savedDev = -1;
+    proxyInfo->deviceId = reqInfo->deviceId;
+    proxyInfo->devFifoHost = nullptr;
+    CUDACHECKGOTO(cudaGetDevice(&savedDev), ret, fail);
+    if (savedDev != proxyInfo->deviceId)
+      CUDACHECKGOTO(cudaSetDevice(proxyInfo->deviceId), ret, fail);
+    // Allocate devFifo as mapped pinned host memory so GPU accesses via device VA
+    // and the proxy reads via host VA — no DMA copy required.
+    {
+      void* hptr = nullptr;
+      CUDACHECKGOTO(cudaHostAlloc(&hptr, proxyState->buffSizes[NCCL_PROTO_SIMPLE],
+                                  cudaHostAllocPortable | cudaHostAllocMapped),
+                    ret, win_restore);
+      proxyInfo->devFifoHost = (char*)hptr;
+      void* dptr = nullptr;
+      CUDACHECKGOTO(cudaHostGetDevicePointer(&dptr, hptr, 0), ret, win_restore);
+      proxyInfo->devFifo = (char*)dptr;
+    }
+    proxyInfo->ceRecvMem = (struct ncclRecvMem*)malloc(sizeof(struct ncclRecvMem));
+    if (!proxyInfo->ceRecvMem) { ret = ncclSystemError; goto win_restore; }
+    memset(proxyInfo->ceRecvMem, 0, sizeof(struct ncclRecvMem));
+    CUDACHECKGOTO(cudaHostRegister(proxyInfo->ceRecvMem, sizeof(struct ncclRecvMem),
+                                   cudaHostRegisterPortable | cudaHostRegisterMapped),
+                  ret, win_restore);
+    {
+      void* devPtr = nullptr;
+      CUDACHECKGOTO(cudaHostGetDevicePointer(&devPtr, proxyInfo->ceRecvMem, 0), ret, win_restore);
+      proxyInfo->ceRecvMemDev = (struct ncclRecvMem*)devPtr;
+    }
+win_restore:
+    if (savedDev != -1 && savedDev != proxyInfo->deviceId) (void)cudaSetDevice(savedDev);
+    if (ret != ncclSuccess) goto fail;
+  }
+#else
   NCCLCHECKGOTO(ncclCudaCalloc(&proxyInfo->devFifo, proxyState->buffSizes[NCCL_PROTO_SIMPLE], proxyState->memManager), ret, fail);
   NCCLCHECKGOTO(ncclCudaHostCalloc(&proxyInfo->ceRecvMem, 1), ret, fail);
+  proxyInfo->ceRecvMemDev = proxyInfo->ceRecvMem;
   CUDACHECKGOTO(cudaStreamCreateWithFlags(&proxyInfo->stream, cudaStreamNonBlocking), ret, fail);
   for (int i=0; i<NCCL_STEPS; i++) {
     CUDACHECKGOTO(cudaEventCreate(proxyInfo->events+i), ret, fail);
   }
+#endif
   connection->proxyAppendPtr = &connection->proxyAppend;
   connection->transportResources = proxyInfo;
   if (respSize != sizeof(struct shmProxyInfo)) return ncclInternalError;
@@ -270,8 +389,13 @@ static ncclResult_t shmSendProxyConnect(struct ncclProxyConnection* connection, 
 exit:
   return ret;
 fail:
-  if (proxyInfo->ceRecvMem) ncclCudaHostFree(proxyInfo->ceRecvMem);
+#ifdef NCCL_OS_WINDOWS
+  if (proxyInfo->devFifoHost) (void)cudaFreeHost(proxyInfo->devFifoHost);
+  if (proxyInfo->ceRecvMem) { (void)cudaHostUnregister(proxyInfo->ceRecvMem); free(proxyInfo->ceRecvMem); }
+#else
+  if (proxyInfo->ceRecvMem) (void)ncclCudaHostFree(proxyInfo->ceRecvMem);
   if (proxyInfo->devFifo) (void)ncclCudaFree(proxyInfo->devFifo, proxyState->memManager);
+#endif
   free(proxyInfo);
   goto exit;
 }
@@ -286,20 +410,63 @@ static ncclResult_t shmRecvProxyConnect(struct ncclProxyConnection* connection, 
   proxyInfo->shmFifo = reqInfo->shmFifo;
   proxyInfo->sendMem = reqInfo->sendMem;
   proxyInfo->recvMem = reqInfo->recvMem;
+#ifdef NCCL_OS_WINDOWS
+  {
+    // Recv proxy transfers data via CPU memcpy using zero-copy mapped devFifo.
+    // GPU reads ceRecvMemDev->tail via ld.cv.global; CPU writes ceRecvMem->tail directly.
+    int savedDev = -1;
+    proxyInfo->deviceId = reqInfo->deviceId;
+    proxyInfo->devFifoHost = nullptr;
+    CUDACHECKGOTO(cudaGetDevice(&savedDev), ret, fail);
+    if (savedDev != proxyInfo->deviceId)
+      CUDACHECKGOTO(cudaSetDevice(proxyInfo->deviceId), ret, fail);
+    {
+      void* hptr = nullptr;
+      CUDACHECKGOTO(cudaHostAlloc(&hptr, proxyState->buffSizes[NCCL_PROTO_SIMPLE],
+                                  cudaHostAllocPortable | cudaHostAllocMapped),
+                    ret, win_restore);
+      proxyInfo->devFifoHost = (char*)hptr;
+      void* dptr = nullptr;
+      CUDACHECKGOTO(cudaHostGetDevicePointer(&dptr, hptr, 0), ret, win_restore);
+      proxyInfo->devFifo = (char*)dptr;
+    }
+    proxyInfo->ceRecvMem = (struct ncclRecvMem*)malloc(sizeof(struct ncclRecvMem));
+    if (!proxyInfo->ceRecvMem) { ret = ncclSystemError; goto win_restore; }
+    memset(proxyInfo->ceRecvMem, 0, sizeof(struct ncclRecvMem));
+    CUDACHECKGOTO(cudaHostRegister(proxyInfo->ceRecvMem, sizeof(struct ncclRecvMem),
+                                   cudaHostRegisterPortable | cudaHostRegisterMapped),
+                  ret, win_restore);
+    {
+      void* devPtr = nullptr;
+      CUDACHECKGOTO(cudaHostGetDevicePointer(&devPtr, proxyInfo->ceRecvMem, 0), ret, win_restore);
+      proxyInfo->ceRecvMemDev = (struct ncclRecvMem*)devPtr;
+    }
+win_restore:
+    if (savedDev != -1 && savedDev != proxyInfo->deviceId) (void)cudaSetDevice(savedDev);
+    if (ret != ncclSuccess) goto fail;
+  }
+#else
   NCCLCHECKGOTO(ncclCudaCalloc(&proxyInfo->devFifo, proxyState->buffSizes[NCCL_PROTO_SIMPLE], proxyState->memManager), ret, fail);
   NCCLCHECKGOTO(ncclCudaHostCalloc(&proxyInfo->ceRecvMem, 1), ret, fail);
+  proxyInfo->ceRecvMemDev = proxyInfo->ceRecvMem;
   CUDACHECKGOTO(cudaStreamCreateWithFlags(&proxyInfo->stream, cudaStreamNonBlocking), ret, fail);
   for (int i=0; i<NCCL_STEPS; i++) {
     CUDACHECKGOTO(cudaEventCreate(proxyInfo->events+i), ret, fail);
   }
+#endif
   connection->proxyAppendPtr = &connection->proxyAppend;
   memcpy(respBuff, proxyInfo, respSize);
   *done = 1;
 exit:
   return ret;
 fail:
-  if (proxyInfo->ceRecvMem) ncclCudaHostFree(proxyInfo->ceRecvMem);
+#ifdef NCCL_OS_WINDOWS
+  if (proxyInfo->devFifoHost) (void)cudaFreeHost(proxyInfo->devFifoHost);
+  if (proxyInfo->ceRecvMem) { (void)cudaHostUnregister(proxyInfo->ceRecvMem); free(proxyInfo->ceRecvMem); }
+#else
+  if (proxyInfo->ceRecvMem) (void)cudaFreeHost(proxyInfo->ceRecvMem);
   if (proxyInfo->devFifo) (void)ncclCudaFree(proxyInfo->devFifo, proxyState->memManager);
+#endif
   free(proxyInfo);
   goto exit;
 }
@@ -309,12 +476,17 @@ static ncclResult_t shmSendProxyFree(struct ncclProxyConnection* connection, str
 
   if (resources) {
     if (useMemcpySend) {
+#ifdef NCCL_OS_WINDOWS
+      if (resources->devFifoHost) { (void)cudaFreeHost(resources->devFifoHost); resources->devFifoHost = NULL; }
+      if (resources->ceRecvMem) { CUDACHECK(cudaHostUnregister(resources->ceRecvMem)); free(resources->ceRecvMem); resources->ceRecvMem = NULL; resources->ceRecvMemDev = NULL; }
+#else
       CUDACHECK(cudaStreamDestroy(resources->stream));
       NCCLCHECK(ncclCudaFree(resources->devFifo, proxyState->memManager));
       NCCLCHECK(ncclCudaHostFree(resources->ceRecvMem));
       for (int i=0; i<NCCL_STEPS; i++) {
         CUDACHECK(cudaEventDestroy(resources->events[i]));
       }
+#endif
     }
     NCCLCHECK(ncclShmIpcClose(&resources->desc));
     free(connection->transportResources);
@@ -328,12 +500,17 @@ static ncclResult_t shmRecvProxyFree(struct ncclProxyConnection* connection, str
 
   if (resources) {
     if (useMemcpyRecv) {
+#ifdef NCCL_OS_WINDOWS
+      if (resources->devFifoHost) { (void)cudaFreeHost(resources->devFifoHost); resources->devFifoHost = NULL; }
+      if (resources->ceRecvMem) { CUDACHECK(cudaHostUnregister(resources->ceRecvMem)); free(resources->ceRecvMem); resources->ceRecvMem = NULL; }
+#else
       CUDACHECK(cudaStreamDestroy(resources->stream));
       NCCLCHECK(ncclCudaFree(resources->devFifo, proxyState->memManager));
       NCCLCHECK(ncclCudaHostFree(resources->ceRecvMem));
       for (int i=0; i<NCCL_STEPS; i++) {
         CUDACHECK(cudaEventDestroy(resources->events[i]));
       }
+#endif
     }
     NCCLCHECK(ncclShmIpcClose(&resources->desc));
     free(connection->transportResources);
@@ -367,10 +544,38 @@ static ncclResult_t shmSendProxyProgress(struct ncclProxyState* proxyState, stru
       }
       if (sub->transmitted < sub->done + NCCL_STEPS && sub->transmitted < sub->nsteps) {
         int buffSlot = (sub->base+sub->transmitted)%NCCL_STEPS;
+        uint64_t needed = sub->base+sub->transmitted;
+#ifdef NCCL_OS_WINDOWS
+        // On WDDM, CUDA context serializes all GPU work, so CE DMA copies deadlock with
+        // the persistent NCCL kernel. devFifo is zero-copy mapped pinned memory, so the
+        // proxy can read it via devFifoHost (CPU VA) using plain memcpy — no CUDA calls.
+        // GPU writes connFifo.size and tail via atomicExch_system (CPU-visible after acquire).
+        {
+          uint64_t recvTail = __atomic_load_n(&resources->ceRecvMem->tail, __ATOMIC_ACQUIRE);
+          if (recvTail > needed) {
+            int size = (int)__atomic_load_n(
+                (volatile uint64_t*)&resources->ceRecvMem->connFifo[buffSlot].size,
+                __ATOMIC_ACQUIRE);
+            // CPU memcpy: devFifoHost (zero-copy mapped VA) → shmFifo (SHM region).
+            // The system fence in GPU's PostSend guarantees devFifoHost data is visible.
+            memcpy(resources->shmFifo + buffSlot*stepSize,
+                   resources->devFifoHost + buffSlot*stepSize, size);
+            sub->transmitted += args->sliceSteps;
+            sub->done = sub->transmitted;
+            resources->recvMem->connFifo[buffSlot].size = size;
+            std::atomic_thread_fence(std::memory_order_seq_cst);
+            resources->recvMem->tail = sub->base + sub->done;
+            if (sub->done == sub->nsteps) {
+              resources->step = sub->base + sub->nsteps;
+              args->done++;
+            }
+          }
+        }
+#else
         volatile struct ncclConnFifo* connFifo = resources->ceRecvMem->connFifo;
         volatile uint64_t* recvTail = &resources->ceRecvMem->tail;
         // Check GPU has sent everything
-        if ((*recvTail > sub->base+sub->transmitted)) {
+        if ((*recvTail > needed)) {
           int size = connFifo[buffSlot].size;
           CUDACHECK(cudaMemcpyAsync(resources->shmFifo+buffSlot*stepSize, resources->devFifo+buffSlot*stepSize, size, cudaMemcpyDeviceToHost, resources->stream));
           CUDACHECK(cudaEventRecord(resources->events[buffSlot], resources->stream));
@@ -378,14 +583,15 @@ static ncclResult_t shmSendProxyProgress(struct ncclProxyState* proxyState, stru
           std::atomic_thread_fence(std::memory_order_seq_cst); // make sure connFifo[].size is visible
           sub->transmitted += args->sliceSteps;
         }
+#endif
       }
+#ifndef NCCL_OS_WINDOWS
       if (sub->done < sub->transmitted) {
         int buffSlot = (sub->base+sub->done)%NCCL_STEPS;
         cudaError_t res = CUDACLEARERROR(cudaEventQuery(resources->events[buffSlot]));
         if (res != cudaErrorNotReady) CUDACHECK(res);
         if (res == cudaSuccess) {
           sub->done += args->sliceSteps;
-          // Notify SHM
           resources->recvMem->tail = sub->base + sub->done;
         }
         if (sub->done == sub->nsteps) {
@@ -393,6 +599,7 @@ static ncclResult_t shmSendProxyProgress(struct ncclProxyState* proxyState, stru
           args->done++;
         }
       }
+#endif
     }
     if (args->done == args->nsubs) {
       args->state = ncclProxyOpNone;
@@ -428,14 +635,33 @@ static ncclResult_t shmRecvProxyProgress(struct ncclProxyState* proxyState, stru
         int buffSlot = (sub->base+sub->transmitted)%NCCL_STEPS;
         volatile struct ncclConnFifo* connFifo = resources->recvMem->connFifo;
         volatile uint64_t* recvTail = &resources->recvMem->tail;
+        uint64_t needed = sub->base+sub->transmitted;
         // Check data is ready in SHM
-        if ((*recvTail > sub->base+sub->transmitted)) {
+        if ((*recvTail > needed)) {
           int size = connFifo[buffSlot].size;
+#ifdef NCCL_OS_WINDOWS
+          // devFifoHost is CPU-accessible (zero-copy mapped pinned); no CUDA DMA needed.
+          // Write devFifoHost directly via CPU memcpy, then signal GPU via ceRecvMem->tail.
+          // GPU reads ceRecvMemDev->tail via ld.cv.global (cache-bypassing), so a plain
+          // CPU store to ceRecvMem->tail is immediately visible to the GPU.
+          memcpy(resources->devFifoHost + buffSlot*stepSize,
+                 resources->shmFifo + buffSlot*stepSize, size);
+          sub->transmitted += args->sliceSteps;
+          sub->done = sub->transmitted;
+          __atomic_store_n(&resources->ceRecvMem->tail, sub->base + sub->done, __ATOMIC_RELEASE);
+          if (sub->done == sub->nsteps) {
+            resources->step = sub->base + sub->nsteps;
+            args->done++;
+          }
+#else
           CUDACHECK(cudaMemcpyAsync(resources->devFifo+buffSlot*stepSize, resources->shmFifo+buffSlot*stepSize, size, cudaMemcpyHostToDevice, resources->stream));
           CUDACHECK(cudaEventRecord(resources->events[buffSlot], resources->stream));
           sub->transmitted += args->sliceSteps;
+#endif
         }
       }
+#ifndef NCCL_OS_WINDOWS
+      // On Windows: done == transmitted always (sync path above), so this block is skipped.
       if (sub->done < sub->transmitted) {
         int buffSlot = (sub->base+sub->done)%NCCL_STEPS;
         cudaError_t res = CUDACLEARERROR(cudaEventQuery(resources->events[buffSlot]));
@@ -450,6 +676,7 @@ static ncclResult_t shmRecvProxyProgress(struct ncclProxyState* proxyState, stru
           args->done++;
         }
       }
+#endif
     }
     if (args->done == args->nsubs) {
       args->state = ncclProxyOpNone;
@@ -503,8 +730,19 @@ fail:
 static void initCeOperation() {
   static int init = 0;
   if (!init) {
+#ifdef NCCL_OS_WINDOWS
+    // On WDDM, GPU writes to host-pinned memory from one GPU are not reliably
+    // visible to another GPU's ld.volatile reads (no hardware cross-GPU
+    // coherency for host memory, unlike Linux/TCC).  Force CE (Copy Engine)
+    // mode so all data passes through CPU proxies using cudaMemcpy, routing
+    // SHM data transfers host→device and device→host within each GPU's own
+    // device context instead of cross-GPU direct writes.
+    useMemcpySend = 1;
+    useMemcpyRecv = 1;
+#else
     useMemcpySend = ncclParamShmUseCudaMemcpy() && (ncclParamShmMemcpyMode() & 1);
     useMemcpyRecv = ncclParamShmUseCudaMemcpy() && (ncclParamShmMemcpyMode() & 2);
+#endif
     if (useMemcpySend) {
       shmTransport.send.proxyConnect = shmSendProxyConnect;
       shmTransport.send.proxyProgress = shmSendProxyProgress;
@@ -549,7 +787,12 @@ ncclResult_t ncclShmAllocateShareableBuffer(size_t size, bool legacy, ncclShmIpc
     char shmPath[SHM_PATH_MAX] = { '\0' };
     desc->shmli.shmSize = size;
     NCCLCHECK(ncclShmOpen(shmPath, sizeof(shmPath), size, hptr, dptr, 1, &desc->shmli.handle));
+    // On Windows ncclShmOpen sets shmPath to a 6-char token (no "/dev/shm/nccl-" prefix).
+#ifdef NCCL_OS_WINDOWS
+    memcpy(desc->shmli.shmSuffix, shmPath, sizeof(desc->shmli.shmSuffix));
+#else
     memcpy(desc->shmli.shmSuffix, shmPath + sizeof("/dev/shm/nccl-") - 1, sizeof(desc->shmli.shmSuffix));
+#endif
     desc->legacy = true;
     INFO(NCCL_SHM, "MMAP allocated shareable host buffer %s size %zi ptr %p", shmPath, desc->shmli.shmSize, *hptr);
   }
@@ -557,7 +800,11 @@ ncclResult_t ncclShmAllocateShareableBuffer(size_t size, bool legacy, ncclShmIpc
   char shmPath[SHM_PATH_MAX] = { '\0' };
   desc->shmli.shmSize = size;
   NCCLCHECK(ncclShmOpen(shmPath, sizeof(shmPath), size, hptr, dptr, 1, &desc->shmli.handle));
+#ifdef NCCL_OS_WINDOWS
+  memcpy(desc->shmli.shmSuffix, shmPath, sizeof(desc->shmli.shmSuffix));
+#else
   memcpy(desc->shmli.shmSuffix, shmPath + sizeof("/dev/shm/nccl-") - 1, sizeof(desc->shmli.shmSuffix));
+#endif
   desc->legacy = true;
   INFO(NCCL_SHM, "MMAP allocated shareable host buffer %s size %zi ptr %p", shmPath, size, *hptr);
 #endif /* CUDART_VERSION >= 12020 */
@@ -632,14 +879,25 @@ ncclResult_t ncclShmImportShareableBuffer(struct ncclComm *comm, int proxyRank, 
     INFO(NCCL_SHM, "CUMEM imported shareable host buffer from proxyRank %d size %zi ptr %p, granularity %ld", proxyRank, desc->shmci.size, descOut->shmci.ptr, granularity);
   } else {
     char shmPath[SHM_PATH_MAX];
+    // On Windows shmSuffix is the 6-char named-section token (no "/dev/shm/nccl-" prefix).
+#ifdef NCCL_OS_WINDOWS
+    memcpy(shmPath, desc->shmli.shmSuffix, sizeof(desc->shmli.shmSuffix));
+    shmPath[sizeof(desc->shmli.shmSuffix)] = '\0';
+#else
     snprintf(shmPath, sizeof(shmPath), "/dev/shm/nccl-%s", desc->shmli.shmSuffix);
+#endif
     NCCLCHECK(ncclShmOpen(shmPath, sizeof(shmPath), desc->shmli.shmSize, hptr, dptr, -1, &descOut->shmli.handle));
     descOut->legacy = true;
     INFO(NCCL_SHM, "MMAP imported shareable host buffer %s size %zi ptr %p", shmPath, desc->shmli.shmSize, *hptr);
   }
 #else /* CUDART_VERSION >= 12020 */
   char shmPath[SHM_PATH_MAX];
+#ifdef NCCL_OS_WINDOWS
+  memcpy(shmPath, desc->shmli.shmSuffix, sizeof(desc->shmli.shmSuffix));
+  shmPath[sizeof(desc->shmli.shmSuffix)] = '\0';
+#else
   snprintf(shmPath, sizeof(shmPath), "/dev/shm/nccl-%s", desc->shmli.shmSuffix);
+#endif
   NCCLCHECK(ncclShmOpen(shmPath, sizeof(shmPath), desc->shmli.shmSize, hptr, dptr, -1, &descOut->shmli.handle));
   descOut->legacy = true;
   INFO(NCCL_SHM, "MMAP imported shareable host buffer %s size %zi ptr %p", shmPath, desc->shmli.shmSize, *hptr);

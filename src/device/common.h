@@ -197,7 +197,6 @@ __device__ __forceinline__ void loadWorkBatchToShmem(
     // here which is the per batch maximum.
     if (tid < nPacks) {
       int srcWork = fnsOfBitset[dstWork]; // find n'th set bit in batch.offsetBitset
-      ulong2 tmp;
       // The loads done in these two cases must be kept separate since we are
       // relying on the compiler to use "ld.param" in the first one. The parameter
       // space is not generically addressable, so any attempt to load through
@@ -216,6 +215,26 @@ __device__ __forceinline__ void loadWorkBatchToShmem(
       //   src = &global_variable;
       // }
       // memcpy(dst, src, n);
+#ifdef NCCL_OS_WINDOWS
+      // On Windows WDDM, ld.v2.u64 (16-byte vector loads) returns .y=0 for every
+      // access. Use two separate scalar loads via volatile to avoid the merged
+      // instruction. The two cases must still remain separate (see comment above).
+      uint64_t lo, hi;
+      if (ncclShmem.args.workStorageType == ncclDevWorkStorageTypeArgs) {
+        volatile uint64_t const* src = (volatile uint64_t const*)((char*)args + (batch.offsetBase + srcWork*workSize + packInWork*16));
+        lo = src[0];
+        hi = src[1];
+      } else {
+        volatile uint64_t const* src = (volatile uint64_t const*)((char*)ncclShmem.args.workBuf + ((batch.offsetBase + srcWork*workSize + packInWork*16) & ncclShmem.args.workMask));
+        lo = src[0];
+        hi = src[1];
+      }
+      char* dst = ncclShmem.workStorage;
+      dst += (workCursor + dstWork)*workSize + packInWork*16;
+      *(uint64_t*)dst = lo;
+      *(uint64_t*)(dst + 8) = hi;
+#else
+      ulong2 tmp;
       if (ncclShmem.args.workStorageType == ncclDevWorkStorageTypeArgs) {
         char* src = (char*)args + (batch.offsetBase + srcWork*workSize + packInWork*16);
         tmp = *(ulong2*)src; // becomes ld.param.v2.u64
@@ -226,6 +245,7 @@ __device__ __forceinline__ void loadWorkBatchToShmem(
       char* dst = ncclShmem.workStorage;
       dst += (workCursor + dstWork)*workSize + packInWork*16;
       *(ulong2*)dst = tmp;
+#endif
     }
     workCursor += nWorks;
 

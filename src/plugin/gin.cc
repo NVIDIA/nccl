@@ -21,10 +21,12 @@ extern getNcclGin_t getNcclGin_v13;
 extern getNcclGin_t getNcclGin_v11;
 extern getNcclGin_t getNcclGin_v12;
 extern getNcclGin_t getNcclGin_v13;
+extern getNcclGin_t getNcclRma_v13;
 NCCL_PARAM(GinPluginRefCount, "GIN_PLUGIN_REF_COUNT", 0);
 #define NCCL_GIN_VERSION_COUNT 3
 int ncclGinVersion[NCCL_GIN_VERSION_COUNT] = {13, 12, 11};
 getNcclGin_t* getNcclGin[NCCL_GIN_VERSION_COUNT] = {getNcclGin_v13, getNcclGin_v12, getNcclGin_v11};
+getNcclGin_t* getNcclRma[NCCL_GIN_VERSION_COUNT] = {getNcclRma_v13, getNcclGin_v12, getNcclGin_v11};
 
 #define NCCL_GIN_NUM_INTERNAL_PLUGINS 1
 
@@ -82,6 +84,7 @@ static ncclResult_t ncclGinPluginLoad(ginPluginLib_t* pluginLib) {
   for (int i = 0; i < NCCL_GIN_VERSION_COUNT; i++) {
     pluginLib->ncclGinVersion = ncclGinVersion[i];
     pluginLib->ncclGin = getNcclGin[i](pluginLib->dlHandle);
+    pluginLib->ncclRma = getNcclRma[i](pluginLib->dlHandle);
     if (pluginLib->ncclGin) break;
   }
 

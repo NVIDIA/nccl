@@ -19,3 +19,14 @@ ncclGin_t* getNcclGin_v13(void* lib) {
   }
   return nullptr;
 }
+
+static ncclGin_v13_t* ncclRma_v13;
+
+ncclGin_t* getNcclRma_v13(void* lib) {
+  ncclRma_v13 = (ncclGin_v13_t*)dlsym(lib, "ncclRmaPlugin_v13");
+  if (ncclRma_v13) {
+    INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Loaded rma plugin %s (v13)", ncclRma_v13->name);
+    return ncclRma_v13;
+  }
+  return nullptr;
+}

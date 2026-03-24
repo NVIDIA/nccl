@@ -207,9 +207,13 @@ static void finishPlan(struct ncclComm* comm, struct ncclKernelPlan* plan) {
   plan->threadPerBlock = std::max(plan->threadPerBlock, NCCL_MIN_NTHREADS);
 
   // If we can fit everything into the kernel args we do so.
+  // On Windows WDDM, ld.param.v2.u64 is broken (returns .y=0), so we cannot
+  // use the Args storage type. Keep Fifo (ld.global) instead.
+#ifndef NCCL_OS_WINDOWS
   if (sizeof(ncclDevKernelArgs) + batchBytes + workBytes <= comm->workArgsBytes) {
     plan->workStorageType = ncclDevWorkStorageTypeArgs;
   }
+#endif
   plan->kernelArgsSize = sizeof(struct ncclDevKernelArgs) + batchBytes;
   plan->kernelArgsSize += (plan->workStorageType == ncclDevWorkStorageTypeArgs) ? workBytes : 0;
   plan->kernelArgsSize = alignUp(plan->kernelArgsSize, 16);
@@ -848,7 +852,12 @@ static ncclResult_t addP2pToPlan(
   // recv: dir=0, send: dir=1
   void* addrs[2] = {recvAddr, sendAddr};
   ssize_t bytes[2] = {recvBytes, sendBytes};
+#ifdef NCCL_OS_WINDOWS
+  // WDDM: LL protocol has coherence issues over P2P/IPC; force SIMPLE for all P2P sendrecv.
+  bool protoLL[2] = {false, false};
+#else
   bool protoLL[2] = {!selfSend, !selfSend};
+#endif
   bool network[2] = {false, false};
   bool proxySameProcess[2] = {true, true};
   void** handles[2] = {NULL, NULL};
@@ -1235,7 +1244,7 @@ static ncclResult_t uploadWork(struct ncclComm* comm, struct ncclKernelPlan* pla
     break;
   case ncclDevWorkStorageTypePersistent:
     // We rely on 16-byte alignment
-    #if __cplusplus >= 201103L
+    #if __cplusplus >= 201103L || (defined(_MSC_VER) && _MSVC_LANG >= 201103L)
     fifoBufHost = ncclOsAlignedAlloc(16, ROUNDUP(workBytes, 16));
     #else
     static_assert(16 <= alignof(max_align_t), "We rely on 16-byte alignment.");
@@ -1294,7 +1303,11 @@ static ncclResult_t uploadWork(struct ncclComm* comm, struct ncclKernelPlan* pla
       // acquires the deviceStream, it will observe this upload.
       NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->deviceStream, /*concurrent=*/false, &deviceStream), result, fail);
 
-      CUDACHECKGOTO(cudaMallocAsync(&fifoBufDev, workBytes, comm->memPool, deviceStream), result, fail);
+      if (comm->memPool) {
+        CUDACHECKGOTO(cudaMallocAsync(&fifoBufDev, workBytes, comm->memPool, deviceStream), result, fail);
+      } else {
+        CUDACHECKGOTO(cudaMalloc(&fifoBufDev, workBytes), result, fail);
+      }
       plan->workBufPersistent = fifoBufDev;
       plan->kernelArgs->workBuf = fifoBufDev;
 

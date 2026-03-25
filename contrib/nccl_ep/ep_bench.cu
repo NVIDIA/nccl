@@ -1610,18 +1610,21 @@ int main(int argc, char* argv[]) {
     int64_t *topk_idx_host = new int64_t[num_tokens * top_k];
 
     if (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) {
-        // Use simple random mode (matching ep_test): first expert random, rest consecutive
-        // This avoids duplicate experts and works reliably with HT mode
-        srand(myRank + 42);
+        // Use randperm-style routing matching HybridEP's test_hybrid_ep.py:
+        //   selected_experts = torch.randperm(num_of_experts)[:topk]
+        // This gives a uniform distribution across all experts (including remote nodes),
+        // producing representative RDMA traffic for a fair bandwidth comparison.
+        std::mt19937 gen(myRank + 42);
+        std::vector<int64_t> expert_perm(num_experts);
+        std::iota(expert_perm.begin(), expert_perm.end(), 0);
         for (unsigned int i = 0; i < num_tokens; i++) {
-            int64_t first_expert = rand() % num_experts;
-            topk_idx_host[i * top_k + 0] = first_expert;
-            for (unsigned int j = 1; j < top_k; j++) {
-                topk_idx_host[i * top_k + j] = (first_expert + j) % num_experts;
+            std::shuffle(expert_perm.begin(), expert_perm.end(), gen);
+            for (unsigned int j = 0; j < top_k; j++) {
+                topk_idx_host[i * top_k + j] = expert_perm[j];
             }
         }
         if (myRank == 0) {
-            printf("Using simple random topk_idx for HT mode (first random, rest consecutive)\n\n");
+            printf("Using randperm topk_idx for HT mode (uniform distribution, matches HybridEP)\n\n");
         }
     } else {
         generateRandomTopkIndicesLL(topk_idx_host, num_tokens, num_experts, top_k, myRank);

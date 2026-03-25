@@ -209,10 +209,10 @@ static __host__ __device__ uint32_t imodFast32(uint32_t x, uint32_t y, uint32_t 
   idivmodFast32(&q, &r, x, y, yrcp);
   return r;
 }
-static __host__ __device__ uint32_t imodFast64(uint64_t x, uint64_t y, uint64_t yrcp) {
+static __host__ __device__ uint64_t imodFast64(uint64_t x, uint64_t y, uint64_t yrcp) {
   uint64_t q, r;
   idivmodFast64(&q, &r, x, y, yrcp);
-  return (uint32_t)r;
+  return r;
 }
 
 template<typename Int>

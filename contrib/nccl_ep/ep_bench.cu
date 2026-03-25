@@ -930,21 +930,27 @@ HighThroughputBytes calculateHighThroughputBytes(
         }
     }
 
-    // Recv side: simulate each remote rank's routing to count tokens that hit our local experts.
-    // Uses the same randperm seed (rank + 42) as the main topk generation loop.
+    // Recv side: simulate ALL source ranks' routing to count unique (src_rank, token) pairs
+    // where at least one of the k selected experts belongs to myRank.
+    // This matches HybridEP's dispatched_hidden.numel() * 2 methodology exactly.
+    //   total_recv_tokens: all source ranks (NVLink + RDMA)   ≡ HybridEP "NVL BW" numerator
+    //   rdma_recv_tokens:  remote source ranks only            ≡ inter-node inbound
+    //   nvl_recv_tokens derived as: total_recv - rdma_recv
+    unsigned int num_experts_per_rank = num_experts / static_cast<unsigned int>(nRanks);
     std::vector<int64_t> src_perm(num_experts);
     for (int src_rank = 0; src_rank < nRanks; src_rank++) {
         int src_node = src_rank / num_ranks_per_node;
-        if (src_node == local_node) continue;  // local ranks use NVLink, skip
+        bool is_rdma = (src_node != local_node);
 
         std::mt19937 src_gen(src_rank + 42);
         std::iota(src_perm.begin(), src_perm.end(), 0);
         for (unsigned int t = 0; t < num_tokens; t++) {
             std::shuffle(src_perm.begin(), src_perm.end(), src_gen);
             for (unsigned int k = 0; k < top_k; k++) {
-                int expert_node = static_cast<int>(src_perm[k] / num_experts_per_node);
-                if (expert_node == local_node) {
-                    bytes.rdma_recv_tokens++;  // this token from src_rank lands on our node
+                int target_rank = static_cast<int>(src_perm[k] / num_experts_per_rank);
+                if (target_rank == myRank) {
+                    bytes.recv_tokens++;
+                    if (is_rdma) bytes.rdma_recv_tokens++;
                     break;
                 }
             }
@@ -958,26 +964,10 @@ HighThroughputBytes calculateHighThroughputBytes(
 
     bytes.total_send_bytes = bytes.total_send_tokens * bytes_per_token;
     bytes.rdma_send_bytes  = bytes.rdma_send_tokens  * bytes_per_token;
+    bytes.total_recv_bytes = bytes.recv_tokens       * bytes_per_token;
     bytes.rdma_recv_bytes  = bytes.rdma_recv_tokens  * bytes_per_token;
-    // total_recv_bytes set after handle creation via ncclEpHandleGetNumRecvTokens
-    bytes.total_recv_bytes = 0;
-    bytes.recv_tokens = 0;
 
     return bytes;
-}
-
-// Update HighThroughputBytes with actual received token count (call after handle creation)
-void updateHighThroughputRecvBytes(
-    HighThroughputBytes& bytes,
-    unsigned int recv_tokens,
-    unsigned int hidden
-) {
-    bytes.recv_tokens = recv_tokens;
-    const size_t bf16_bytes_per_token = hidden * 2;
-    const double fp8_factor = (1.0 + 4.0 / 128.0) / 2.0;
-    const size_t bytes_per_token = bytes.is_fp8 ?
-        static_cast<size_t>(bf16_bytes_per_token * fp8_factor) : bf16_bytes_per_token;
-    bytes.total_recv_bytes = recv_tokens * bytes_per_token;
 }
 
 // Print benchmark results with MPI aggregation across ranks
@@ -1732,14 +1722,12 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Update HT bytes with actual received token count (matches DeepEP methodology)
-    if (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) {
-        updateHighThroughputRecvBytes(ht_bytes, num_recv_tokens, hidden);
-        if (myRank == 0) {
-            printf("[DEBUG] HT bytes updated: RDMA_send=%u tokens, total_recv=%u tokens\n",
-                   ht_bytes.rdma_send_tokens, ht_bytes.recv_tokens);
-            fflush(stdout);
-        }
+    // HT recv bytes are pre-computed in calculateHighThroughputBytes via routing simulation
+    if (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT && myRank == 0) {
+        printf("[DEBUG] HT bytes: send=%u tokens, rdma_send=%u, total_recv=%u tokens, rdma_recv=%u\n",
+               ht_bytes.total_send_tokens, ht_bytes.rdma_send_tokens,
+               ht_bytes.recv_tokens, ht_bytes.rdma_recv_tokens);
+        fflush(stdout);
     }
 
     // Setup benchmark tensors based on algorithm mode

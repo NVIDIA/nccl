@@ -860,21 +860,43 @@ LowLatencyBytes calculateLowLatencyBytes(
 
 // Structure to hold High Throughput byte breakdown for bandwidth reporting.
 //
-// HT bandwidth = total_recv_bytes / time (RDMA+NVL receive, unidirectional), matching
-// test_hybrid_ep.py dispatch_bf16_nvl_recv_bytes / t for apple-to-apple comparison.
-// send+receive would double-count (~2x inflation); rdma_send_bytes reported separately as IB BW.
+// Six bandwidth metrics, all dividing by the same measured time t:
+//
+//  Send-side (this rank dispatching tokens to experts):
+//   total_send  = total_send_bytes / t   — all destinations (NVL+RDMA) ≡ HybridEP "IB BW"
+//   nvl_send    = nvl_send_bytes / t     — local node only (NVLink)
+//   rdma_send   = rdma_send_bytes / t    — remote nodes only (RDMA outbound)
+//
+//  Recv-side (this rank's experts receiving tokens):
+//   total_recv  = total_recv_bytes / t   — all sources (NVL+RDMA)      ≡ HybridEP "NVL BW"
+//   nvl_recv    = nvl_recv_bytes / t     — from local ranks (NVLink)
+//   rdma_recv   = rdma_recv_bytes / t    — from remote ranks (RDMA inbound)
+//
+//  Derived: nvl_send = total_send - rdma_send
+//           nvl_recv = total_recv - rdma_recv
+//  Under uniform routing: rdma_send ≈ rdma_recv (symmetric)
 struct HighThroughputBytes {
-    size_t rdma_send_bytes;    // Bytes sent to remote nodes (IB/RDMA only, local excluded) — IB BW metric
-    size_t total_recv_bytes;   // Total bytes received from all sources — used for bandwidth
-    unsigned int rdma_tokens;  // Number of tokens sent over RDMA
-    unsigned int recv_tokens;  // Total tokens received (set after handle creation)
-    bool is_fp8;               // Whether dispatch uses FP8
+    // Send side
+    size_t total_send_bytes;     // NVL + RDMA outbound  ≡ HybridEP "IB BW"
+    size_t rdma_send_bytes;      // RDMA outbound only
+    // Recv side
+    size_t total_recv_bytes;     // NVL + RDMA inbound   ≡ HybridEP "NVL BW"
+    size_t rdma_recv_bytes;      // RDMA inbound only (from remote ranks)
+    // Token counts
+    unsigned int total_send_tokens;
+    unsigned int rdma_send_tokens;
+    unsigned int rdma_recv_tokens;
+    unsigned int recv_tokens;
+    bool is_fp8;
 };
 
-// Calculate RDMA send bytes from topk_idx for High Throughput mode.
-// rdma_send_bytes counts remote-node tokens only (IB/RDMA path), matching
-// test_hybrid_ep.py count_rdma_send_from_routing_map(routing_map, local_node_id, ...).
-// Local-node tokens go via NVLink (INTRA_NODE_S2G_GROUP) and are excluded.
+// Calculate send byte metrics from topk_idx for High Throughput mode.
+//
+// total_send_tokens: unique (token, node) pairs for ALL nodes (local + remote).
+//   Matches HybridEP's count_rdma_send_from_routing_map which does NOT exclude local node.
+//
+// rdma_tokens: unique (token, node) pairs for REMOTE nodes only (true IB traffic).
+//
 // total_recv_bytes is set later from ncclEpHandleGetNumRecvTokens.
 HighThroughputBytes calculateHighThroughputBytes(
     const int64_t* topk_idx_host,
@@ -887,40 +909,57 @@ HighThroughputBytes calculateHighThroughputBytes(
     bool use_fp8,
     int num_ranks_per_node = 8  // Typically 8 GPUs per node
 ) {
-    HighThroughputBytes bytes = {0, 0, 0, 0, use_fp8};
+    HighThroughputBytes bytes = {0, 0, 0, 0, 0, 0, 0, 0, use_fp8};
 
     int num_nodes = (nRanks + num_ranks_per_node - 1) / num_ranks_per_node;
     unsigned int num_experts_per_node = static_cast<unsigned int>(num_experts / num_nodes);
     int local_node = myRank / num_ranks_per_node;
 
-    // Count RDMA tokens: unique remote-node destinations per token (local node excluded).
-    // Matches test_hybrid_ep.py: count_rdma_send_from_routing_map(routing_map, local_node_id, ...)
+    // Send side: count unique (token, node) pairs this rank sends to
     for (unsigned int t = 0; t < num_tokens; t++) {
-        std::set<int> remote_nodes_for_token;
-
+        std::set<int> nodes_for_token;
         for (unsigned int k = 0; k < top_k; k++) {
             int64_t expert_id = topk_idx_host[t * top_k + k];
             if (expert_id < 0) continue;
-
             int target_node = static_cast<int>(expert_id / num_experts_per_node);
-            if (target_node == local_node) continue;  // NVLink path, not RDMA
-
-            if (remote_nodes_for_token.find(target_node) == remote_nodes_for_token.end()) {
-                remote_nodes_for_token.insert(target_node);
-                bytes.rdma_tokens++;
+            if (nodes_for_token.insert(target_node).second) {
+                bytes.total_send_tokens++;
+                if (target_node != local_node)
+                    bytes.rdma_send_tokens++;
             }
         }
     }
 
-    // Calculate RDMA send bytes
-    // BF16: hidden * 2, FP8: BF16 * fp8_factor
+    // Recv side: simulate each remote rank's routing to count tokens that hit our local experts.
+    // Uses the same randperm seed (rank + 42) as the main topk generation loop.
+    std::vector<int64_t> src_perm(num_experts);
+    for (int src_rank = 0; src_rank < nRanks; src_rank++) {
+        int src_node = src_rank / num_ranks_per_node;
+        if (src_node == local_node) continue;  // local ranks use NVLink, skip
+
+        std::mt19937 src_gen(src_rank + 42);
+        std::iota(src_perm.begin(), src_perm.end(), 0);
+        for (unsigned int t = 0; t < num_tokens; t++) {
+            std::shuffle(src_perm.begin(), src_perm.end(), src_gen);
+            for (unsigned int k = 0; k < top_k; k++) {
+                int expert_node = static_cast<int>(src_perm[k] / num_experts_per_node);
+                if (expert_node == local_node) {
+                    bytes.rdma_recv_tokens++;  // this token from src_rank lands on our node
+                    break;
+                }
+            }
+        }
+    }
+
     const size_t bf16_bytes_per_token = hidden * 2;
-    const double fp8_factor = (1.0 + 4.0 / 128.0) / 2.0;  // FP8 + scale factor overhead
+    const double fp8_factor = (1.0 + 4.0 / 128.0) / 2.0;
     const size_t bytes_per_token = use_fp8 ?
         static_cast<size_t>(bf16_bytes_per_token * fp8_factor) : bf16_bytes_per_token;
 
-    bytes.rdma_send_bytes = bytes.rdma_tokens * bytes_per_token;
-    // total_recv_bytes will be set after handle creation using ncclEpHandleGetNumRecvTokens
+    bytes.total_send_bytes = bytes.total_send_tokens * bytes_per_token;
+    bytes.rdma_send_bytes  = bytes.rdma_send_tokens  * bytes_per_token;
+    bytes.rdma_recv_bytes  = bytes.rdma_recv_tokens  * bytes_per_token;
+    // total_recv_bytes set after handle creation via ncclEpHandleGetNumRecvTokens
     bytes.total_recv_bytes = 0;
     bytes.recv_tokens = 0;
 
@@ -1067,144 +1106,145 @@ void printHighThroughputResults(
     const BenchResult& combined_result,
     const HighThroughputBytes& ht_bytes
 ) {
-    // Unidirectional receive — rdma_send_bytes excluded (see struct comment).
-    size_t dispatch_bytes = ht_bytes.total_recv_bytes;
-    size_t combine_bytes = dispatch_bytes;  // Combine is symmetric (recv on dispatch == send on combine)
-    double local_dispatch_tp = (dispatch_bytes / 1e9) / (dispatch_result.avg_ms / 1000.0);
-    double local_combine_tp = (combine_bytes / 1e9) / (combine_result.avg_ms / 1000.0);
-    double local_total_tp = ((dispatch_bytes + combine_bytes) / 1e9) / (combined_result.avg_ms / 1000.0);
-    double local_ib_tp = (ht_bytes.rdma_send_bytes / 1e9) / (dispatch_result.avg_ms / 1000.0);
-    double local_combine_ib_tp = (ht_bytes.rdma_send_bytes / 1e9) / (combine_result.avg_ms / 1000.0);
-    bool is_multinode = (ht_bytes.rdma_send_bytes > 0);
+    // Six bandwidth perspectives per operation:
+    //   Dispatch (rank → experts):
+    //     total_recv = bytes received at experts (NVL+RDMA)   ≡ HybridEP "NVL BW"
+    //     nvl_recv   = NVLink portion of expert recv
+    //     rdma_recv  = RDMA portion of expert recv (inter-node)
+    //     total_send = bytes sent by rank (NVL+RDMA)          ≡ HybridEP "IB BW"
+    //     nvl_send   = NVLink portion of rank send
+    //     rdma_send  = RDMA portion of rank send (inter-node)
+    //   Combine (experts → rank): same byte counts with roles reversed, different time.
 
-    // Print per-rank results
-    // Dispatch: experts receive tokens  → total_recv_bw (NVL+RDMA), rdma_recv_bw (inter-node only)
-    //           equivalent to HybridEP's NVL recv BW and IB recv BW metrics
-    // Combine:  experts send results back → total_send_bw (NVL+RDMA), rdma_send_bw (inter-node only)
-    //           symmetric in bytes to dispatch; equivalent to HybridEP's NVL send BW and IB send BW metrics
+    // Derived NVLink bytes (total - rdma)
+    size_t nvl_send_bytes = ht_bytes.total_send_bytes > ht_bytes.rdma_send_bytes ?
+        ht_bytes.total_send_bytes - ht_bytes.rdma_send_bytes : 0;
+    size_t nvl_recv_bytes = ht_bytes.total_recv_bytes > ht_bytes.rdma_recv_bytes ?
+        ht_bytes.total_recv_bytes - ht_bytes.rdma_recv_bytes : 0;
+
+    double d_t = dispatch_result.avg_ms / 1000.0;
+    double c_t = combine_result.avg_ms  / 1000.0;
+
+    // Dispatch BW (rank sends to experts)
+    double local_d_total_recv = (ht_bytes.total_recv_bytes / 1e9) / d_t;
+    double local_d_nvl_recv   = (nvl_recv_bytes             / 1e9) / d_t;
+    double local_d_rdma_recv  = (ht_bytes.rdma_recv_bytes   / 1e9) / d_t;
+    double local_d_total_send = (ht_bytes.total_send_bytes  / 1e9) / d_t;
+    double local_d_nvl_send   = (nvl_send_bytes             / 1e9) / d_t;
+    double local_d_rdma_send  = (ht_bytes.rdma_send_bytes   / 1e9) / d_t;
+
+    // Combine BW (experts send back to rank; bytes are dispatch recv reversed)
+    double local_c_total_send = (ht_bytes.total_recv_bytes / 1e9) / c_t;  // experts send what they received
+    double local_c_nvl_send   = (nvl_recv_bytes            / 1e9) / c_t;
+    double local_c_rdma_send  = (ht_bytes.rdma_recv_bytes  / 1e9) / c_t;
+    double local_c_total_recv = (ht_bytes.total_send_bytes / 1e9) / c_t;  // rank receives what it sent
+    double local_c_nvl_recv   = (nvl_send_bytes            / 1e9) / c_t;
+    double local_c_rdma_recv  = (ht_bytes.rdma_send_bytes  / 1e9) / c_t;
+
+    bool is_multinode = (ht_bytes.rdma_send_bytes > 0 || ht_bytes.rdma_recv_bytes > 0);
+
+    // Per-rank output
     if (is_multinode) {
-        printf("[Rank %d] Dispatch:         avg=%.2f us, total_recv_bw=%.2f GB/s, rdma_recv_bw=%.2f GB/s\n",
-               myRank, dispatch_result.avg_ms * 1000, local_dispatch_tp, local_ib_tp);
+        printf("[Rank %d] Dispatch: avg=%.2f us | recv: total=%.2f nvl=%.2f rdma=%.2f GB/s | send: total=%.2f nvl=%.2f rdma=%.2f GB/s\n",
+               myRank, dispatch_result.avg_ms * 1000,
+               local_d_total_recv, local_d_nvl_recv, local_d_rdma_recv,
+               local_d_total_send, local_d_nvl_send, local_d_rdma_send);
+        printf("[Rank %d] Combine:  avg=%.2f us | send: total=%.2f nvl=%.2f rdma=%.2f GB/s | recv: total=%.2f nvl=%.2f rdma=%.2f GB/s\n",
+               myRank, combine_result.avg_ms * 1000,
+               local_c_total_send, local_c_nvl_send, local_c_rdma_send,
+               local_c_total_recv, local_c_nvl_recv, local_c_rdma_recv);
     } else {
-        printf("[Rank %d] Dispatch:         avg=%.2f us, total_recv_bw=%.2f GB/s\n",
-               myRank, dispatch_result.avg_ms * 1000, local_dispatch_tp);
+        printf("[Rank %d] Dispatch: avg=%.2f us | recv: total=%.2f GB/s | send: total=%.2f GB/s\n",
+               myRank, dispatch_result.avg_ms * 1000, local_d_total_recv, local_d_total_send);
+        printf("[Rank %d] Combine:  avg=%.2f us | send: total=%.2f GB/s | recv: total=%.2f GB/s\n",
+               myRank, combine_result.avg_ms * 1000, local_c_total_send, local_c_total_recv);
     }
 
-    if (is_multinode) {
-        printf("[Rank %d] Combine:          avg=%.2f us, total_send_bw=%.2f GB/s, rdma_send_bw=%.2f GB/s\n",
-               myRank, combine_result.avg_ms * 1000, local_combine_tp, local_combine_ib_tp);
-    } else {
-        printf("[Rank %d] Combine:          avg=%.2f us, total_send_bw=%.2f GB/s\n",
-               myRank, combine_result.avg_ms * 1000, local_combine_tp);
-    }
+    printf("[Rank %d] Dispatch+Combine: avg=%.2f us\n", myRank, combined_result.avg_ms * 1000);
 
-    printf("[Rank %d] Dispatch+Combine: avg=%.2f us\n",
-           myRank,
-           combined_result.avg_ms * 1000);
-
-    // Aggregate latency results across ranks
-    double local_dispatch_avg = dispatch_result.avg_ms;
-    double local_dispatch_min = dispatch_result.min_ms;
-    double local_dispatch_max = dispatch_result.max_ms;
-    double local_combine_avg = combine_result.avg_ms;
-    double local_combine_min = combine_result.min_ms;
-    double local_combine_max = combine_result.max_ms;
-    double local_total_avg = combined_result.avg_ms;
-    double local_total_min = combined_result.min_ms;
-    double local_total_max = combined_result.max_ms;
-
+    // Aggregate latency across ranks
+    double local_dispatch_avg = dispatch_result.avg_ms, local_dispatch_min = dispatch_result.min_ms, local_dispatch_max = dispatch_result.max_ms;
+    double local_combine_avg  = combine_result.avg_ms,  local_combine_min  = combine_result.min_ms,  local_combine_max  = combine_result.max_ms;
+    double local_total_avg    = combined_result.avg_ms, local_total_min    = combined_result.min_ms, local_total_max    = combined_result.max_ms;
     double global_dispatch_avg, global_dispatch_min, global_dispatch_max;
-    double global_combine_avg, global_combine_min, global_combine_max;
-    double global_total_avg, global_total_min, global_total_max;
+    double global_combine_avg,  global_combine_min,  global_combine_max;
+    double global_total_avg,    global_total_min,    global_total_max;
 
     MPI_Reduce(&local_dispatch_avg, &global_dispatch_avg, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
     MPI_Reduce(&local_dispatch_min, &global_dispatch_min, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
     MPI_Reduce(&local_dispatch_max, &global_dispatch_max, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&local_combine_avg, &global_combine_avg, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&local_combine_min, &global_combine_min, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&local_combine_max, &global_combine_max, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&local_total_avg, &global_total_avg, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&local_total_min, &global_total_min, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&local_total_max, &global_total_max, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&local_combine_avg,  &global_combine_avg,  1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&local_combine_min,  &global_combine_min,  1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&local_combine_max,  &global_combine_max,  1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&local_total_avg,    &global_total_avg,    1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&local_total_min,    &global_total_min,    1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&local_total_max,    &global_total_max,    1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
 
-    // Gather throughput min/max with rank info using MPI_MINLOC/MPI_MAXLOC
-    struct { double value; int rank; } local_tp_struct, global_dispatch_tp_min, global_dispatch_tp_max;
-    struct { double value; int rank; } global_combine_tp_min, global_combine_tp_max;
-    struct { double value; int rank; } global_total_tp_min, global_total_tp_max;
+    // Aggregate byte counts for summary BW (avg BW = global_bytes/nRanks / global_avg_time)
+    size_t global_total_send, global_rdma_send, global_rdma_recv, global_total_recv;
+    MPI_Reduce(&ht_bytes.total_send_bytes, &global_total_send, 1, MPI_UNSIGNED_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&ht_bytes.rdma_send_bytes,  &global_rdma_send,  1, MPI_UNSIGNED_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&ht_bytes.rdma_recv_bytes,  &global_rdma_recv,  1, MPI_UNSIGNED_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&ht_bytes.total_recv_bytes, &global_total_recv, 1, MPI_UNSIGNED_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
 
-    local_tp_struct.value = local_dispatch_tp;
-    local_tp_struct.rank = myRank;
-    MPI_Reduce(&local_tp_struct, &global_dispatch_tp_min, 1, MPI_DOUBLE_INT, MPI_MINLOC, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&local_tp_struct, &global_dispatch_tp_max, 1, MPI_DOUBLE_INT, MPI_MAXLOC, 0, MPI_COMM_WORLD);
-
-    local_tp_struct.value = local_combine_tp;
-    MPI_Reduce(&local_tp_struct, &global_combine_tp_min, 1, MPI_DOUBLE_INT, MPI_MINLOC, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&local_tp_struct, &global_combine_tp_max, 1, MPI_DOUBLE_INT, MPI_MAXLOC, 0, MPI_COMM_WORLD);
-
-    local_tp_struct.value = local_total_tp;
-    MPI_Reduce(&local_tp_struct, &global_total_tp_min, 1, MPI_DOUBLE_INT, MPI_MINLOC, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&local_tp_struct, &global_total_tp_max, 1, MPI_DOUBLE_INT, MPI_MAXLOC, 0, MPI_COMM_WORLD);
-
-    struct { double value; int rank; } global_ib_tp_min, global_ib_tp_max;
-    local_tp_struct.value = local_ib_tp;
-    local_tp_struct.rank = myRank;
-    MPI_Reduce(&local_tp_struct, &global_ib_tp_min, 1, MPI_DOUBLE_INT, MPI_MINLOC, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&local_tp_struct, &global_ib_tp_max, 1, MPI_DOUBLE_INT, MPI_MAXLOC, 0, MPI_COMM_WORLD);
-
-    struct { double value; int rank; } global_combine_ib_tp_min, global_combine_ib_tp_max;
-    local_tp_struct.value = local_combine_ib_tp;
-    local_tp_struct.rank = myRank;
-    MPI_Reduce(&local_tp_struct, &global_combine_ib_tp_min, 1, MPI_DOUBLE_INT, MPI_MINLOC, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&local_tp_struct, &global_combine_ib_tp_max, 1, MPI_DOUBLE_INT, MPI_MAXLOC, 0, MPI_COMM_WORLD);
-
-    // Aggregate RDMA/RECV bytes across ranks for summary
-    size_t global_rdma_bytes, global_recv_bytes;
-    MPI_Reduce(&ht_bytes.rdma_send_bytes, &global_rdma_bytes, 1, MPI_UNSIGNED_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&ht_bytes.total_recv_bytes, &global_recv_bytes, 1, MPI_UNSIGNED_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
-
-    // Print summary on rank 0
     if (myRank == 0) {
         global_dispatch_avg /= nRanks;
-        global_combine_avg /= nRanks;
-        global_total_avg /= nRanks;
+        global_combine_avg  /= nRanks;
+        global_total_avg    /= nRanks;
+
+        // Per-rank average bytes
+        double avg_total_send = static_cast<double>(global_total_send) / nRanks;
+        double avg_rdma_send  = static_cast<double>(global_rdma_send)  / nRanks;
+        double avg_rdma_recv  = static_cast<double>(global_rdma_recv)  / nRanks;
+        double avg_total_recv = static_cast<double>(global_total_recv) / nRanks;
+        double avg_nvl_send   = avg_total_send - avg_rdma_send;
+        double avg_nvl_recv   = avg_total_recv - avg_rdma_recv;
+
+        double d_avg_s = global_dispatch_avg / 1000.0;
+        double c_avg_s = global_combine_avg  / 1000.0;
+
+        // Avg BW = global avg bytes / global avg time
+        double d_total_recv_bw = (avg_total_recv / 1e9) / d_avg_s;
+        double d_nvl_recv_bw   = (avg_nvl_recv   / 1e9) / d_avg_s;
+        double d_rdma_recv_bw  = (avg_rdma_recv  / 1e9) / d_avg_s;
+        double d_total_send_bw = (avg_total_send / 1e9) / d_avg_s;
+        double d_nvl_send_bw   = (avg_nvl_send   / 1e9) / d_avg_s;
+        double d_rdma_send_bw  = (avg_rdma_send  / 1e9) / d_avg_s;
+
+        double c_total_send_bw = (avg_total_recv / 1e9) / c_avg_s;  // experts send what they received
+        double c_nvl_send_bw   = (avg_nvl_recv   / 1e9) / c_avg_s;
+        double c_rdma_send_bw  = (avg_rdma_recv  / 1e9) / c_avg_s;
+        double c_total_recv_bw = (avg_total_send / 1e9) / c_avg_s;  // rank receives what it sent
+        double c_nvl_recv_bw   = (avg_nvl_send   / 1e9) / c_avg_s;
+        double c_rdma_recv_bw  = (avg_rdma_send  / 1e9) / c_avg_s;
 
         printf("\n=== Summary (High Throughput %s, across %d ranks) ===\n",
                ht_bytes.is_fp8 ? "FP8" : "BF16", nRanks);
-        printf("Dispatch:         avg=%.2f us, min=%.2f us, max=%.2f us\n",
-               global_dispatch_avg * 1000,
-               global_dispatch_min * 1000,
-               global_dispatch_max * 1000);
-        printf("Combine:          avg=%.2f us, min=%.2f us, max=%.2f us\n",
-               global_combine_avg * 1000,
-               global_combine_min * 1000,
-               global_combine_max * 1000);
-        printf("Total (D+C):      avg=%.2f us, min=%.2f us, max=%.2f us\n",
-               global_total_avg * 1000,
-               global_total_min * 1000,
-               global_total_max * 1000);
-        // Dispatch: experts receive tokens  — Total Recv BW (NVL+RDMA) ≡ HybridEP NVL recv BW
-        //                                  — RDMA Recv BW (inter-node) ≡ HybridEP IB recv BW
-        // Combine:  experts send results back — Total Send BW (NVL+RDMA) ≡ HybridEP NVL send BW
-        //                                    — RDMA Send BW (inter-node) ≡ HybridEP IB send BW
-        printf("\nDispatch Total Recv BW: min=%.2f GB/s (rank %d), max=%.2f GB/s (rank %d)\n",
-               global_dispatch_tp_min.value, global_dispatch_tp_min.rank,
-               global_dispatch_tp_max.value, global_dispatch_tp_max.rank);
-        if (global_rdma_bytes > 0) {
-            printf("Dispatch RDMA Recv BW:  min=%.2f GB/s (rank %d), max=%.2f GB/s (rank %d)\n",
-                   global_ib_tp_min.value, global_ib_tp_min.rank,
-                   global_ib_tp_max.value, global_ib_tp_max.rank);
-        }
-        printf("Combine  Total Send BW: min=%.2f GB/s (rank %d), max=%.2f GB/s (rank %d)\n",
-               global_combine_tp_min.value, global_combine_tp_min.rank,
-               global_combine_tp_max.value, global_combine_tp_max.rank);
-        if (global_rdma_bytes > 0) {
-            printf("Combine  RDMA Send BW:  min=%.2f GB/s (rank %d), max=%.2f GB/s (rank %d)\n",
-                   global_combine_ib_tp_min.value, global_combine_ib_tp_min.rank,
-                   global_combine_ib_tp_max.value, global_combine_ib_tp_max.rank);
-        }
-        printf("\nByte breakdown (per rank avg): RDMA_send=%.2f MB (%u tokens), total_recv=%.2f MB (%u tokens)\n",
-               static_cast<double>(global_rdma_bytes) / nRanks / 1e6, ht_bytes.rdma_tokens,
-               static_cast<double>(global_recv_bytes) / nRanks / 1e6, ht_bytes.recv_tokens);
+        printf("Dispatch:    avg=%.2f us, min=%.2f us, max=%.2f us\n",
+               global_dispatch_avg * 1000, global_dispatch_min * 1000, global_dispatch_max * 1000);
+        printf("Combine:     avg=%.2f us, min=%.2f us, max=%.2f us\n",
+               global_combine_avg * 1000, global_combine_min * 1000, global_combine_max * 1000);
+        printf("Total (D+C): avg=%.2f us, min=%.2f us, max=%.2f us\n",
+               global_total_avg * 1000, global_total_min * 1000, global_total_max * 1000);
+
+        printf("\n--- Dispatch BW (rank → experts) ---\n");
+        printf("  total_recv=%.2f  nvl_recv=%.2f  rdma_recv=%.2f GB/s  [≡ HybridEP NVL BW]\n",
+               d_total_recv_bw, d_nvl_recv_bw, d_rdma_recv_bw);
+        printf("  total_send=%.2f  nvl_send=%.2f  rdma_send=%.2f GB/s  [≡ HybridEP IB BW]\n",
+               d_total_send_bw, d_nvl_send_bw, d_rdma_send_bw);
+
+        printf("\n--- Combine BW (experts → rank) ---\n");
+        printf("  total_send=%.2f  nvl_send=%.2f  rdma_send=%.2f GB/s\n",
+               c_total_send_bw, c_nvl_send_bw, c_rdma_send_bw);
+        printf("  total_recv=%.2f  nvl_recv=%.2f  rdma_recv=%.2f GB/s\n",
+               c_total_recv_bw, c_nvl_recv_bw, c_rdma_recv_bw);
+
+        printf("\nByte counts (per rank avg): total_send=%.2f MB (%u tokens), rdma_send=%.2f MB (%u tokens), "
+               "rdma_recv=%.2f MB (%u tokens), total_recv=%.2f MB (%u tokens)\n",
+               avg_total_send / 1e6, ht_bytes.total_send_tokens,
+               avg_rdma_send  / 1e6, ht_bytes.rdma_send_tokens,
+               avg_rdma_recv  / 1e6, ht_bytes.rdma_recv_tokens,
+               avg_total_recv / 1e6, ht_bytes.recv_tokens);
     }
 }
 
@@ -1697,7 +1737,7 @@ int main(int argc, char* argv[]) {
         updateHighThroughputRecvBytes(ht_bytes, num_recv_tokens, hidden);
         if (myRank == 0) {
             printf("[DEBUG] HT bytes updated: RDMA_send=%u tokens, total_recv=%u tokens\n",
-                   ht_bytes.rdma_tokens, ht_bytes.recv_tokens);
+                   ht_bytes.rdma_send_tokens, ht_bytes.recv_tokens);
             fflush(stdout);
         }
     }

@@ -3013,9 +3013,15 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info) {
         NCCLCHECK(ncclCudaGetCapturingGraph(&graph, info->stream, comm->config.graphUsageMode));
         captured = ncclCudaGraphValid(graph);
         if (info->coll == ncclFuncAlltoAll) {
+          bool sendLocalValid = false;
+          bool recvLocalValid = false;
           NCCLCHECK(ncclRegFind(comm, info->sendbuff, comm->nRanks * info->count * ncclTypeSize(info->datatype), &sendReg));
           NCCLCHECK(ncclRegFind(comm, info->recvbuff, comm->nRanks * info->count * ncclTypeSize(info->datatype), &recvReg));
-          allowUB = captured || (sendReg != NULL && recvReg != NULL);
+          if (sendReg) NCCLCHECK(ncclRegLocalIsValid(sendReg, &sendLocalValid));
+          if (recvReg) NCCLCHECK(ncclRegLocalIsValid(recvReg, &recvLocalValid));
+          // In non-captured mode, UB requires local-valid registration on both
+          // sides; graph-only registration visibility must not enable UB.
+          allowUB = captured || (sendLocalValid && recvLocalValid);
           for (int r=0; r<comm->nRanks; r++) {
             NCCLCHECK(p2pTaskAppend(comm, info, ncclFuncSend, collAPI, (void*)((char*)info->sendbuff+r*info->count*ncclTypeSize(info->datatype)), info->count, info->datatype, r, allowUB));
             NCCLCHECK(p2pTaskAppend(comm, info, ncclFuncRecv, collAPI, (void*)((char*)info->recvbuff+r*info->count*ncclTypeSize(info->datatype)), info->count, info->datatype, r, allowUB));

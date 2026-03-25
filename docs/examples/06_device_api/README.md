@@ -17,7 +17,7 @@ enabling users to perform inter-GPU communication within their own kernels.
 **AllReduce with Device Kernel Implementation**
 - **Pattern**: GPU kernel performs collectives using device communicators
 - **API**: `ncclDevCommCreate`, `ncclCommWindowRegister`, device-side LSA
-  barriers, `ncclAllReduce`
+  barriers, `ncclGetLsaPointer` (manual reduction in-kernel)
 - **Use case**: Allreduce operations with custom operations, fusing allreduce
   operation with previous/next compute operation.
 - **Key features**:
@@ -33,7 +33,7 @@ enabling users to perform inter-GPU communication within their own kernels.
 - **Use case**: Multi-node AlltoAll with consistent network-based communication
 - **Key features**:
   - Pure GIN implementation (no LSA optimizations)
-  - Network barriers for cross-node synchronization
+  - Network barriers for cross-node synchronization (acquire before puts, release after flush)
   - Signal-based completion detection
   - Baseline network performance measurements
 
@@ -59,17 +59,19 @@ The device API allows NCCL communication within CUDA kernels, fusing communicati
 ```cpp
 // Host:
 // 1) Create device communicator + requirements
-// 2) Register symmetric memory window for peer access
+// 2) Register symmetric memory windows for peer access (send + recv)
 ncclDevComm devComm;
 ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
 reqs.lsaBarrierCount = NCCL_DEVICE_CTA_COUNT;
 NCCLCHECK(ncclDevCommCreate(comm, &reqs, &devComm));
-NCCLCHECK(ncclCommWindowRegister(comm, buffer, size, &win, NCCL_WIN_COLL_SYMMETRIC));
+NCCLCHECK(ncclCommWindowRegister(comm, d_sendbuff, size_bytes, &send_win, NCCL_WIN_COLL_SYMMETRIC));
+NCCLCHECK(ncclCommWindowRegister(comm, d_recvbuff, size_bytes, &recv_win, NCCL_WIN_COLL_SYMMETRIC));
 
 // Device:
-// - Use barriers for cross-GPU synchronization
-// - Access peers via symmetric window (LSA pointers)
-myAllReduceKernel<<<grid, block>>>(win, devComm);
+// - Use LSA barriers for cross-GPU synchronization
+// - Access peers via symmetric windows (ncclGetLsaPointer); reduce in-kernel
+simpleAllReduceKernel<<<NCCL_DEVICE_CTA_COUNT, NCCL_DEVICE_THREADS_PER_CTA, 0, stream>>>(
+    send_win, 0, recv_win, 0, count, devComm);
 ```
 
 ### Checking for Device API and GIN Support
@@ -121,7 +123,7 @@ cd 02_alltoall_gin && make
 
 # Build and run the Hybrid AlltoAll example
 cd 03_alltoall_hybrid && make
-./allreduce_hybrid
+./alltoall_hybrid
 ```
 
 ## References

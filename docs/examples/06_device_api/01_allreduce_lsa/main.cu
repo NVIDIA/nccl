@@ -61,7 +61,7 @@
 // This kernel demonstrates direct NCCL communication from GPU threads
 __global__ void simpleAllReduceKernel(ncclWindow_t sendwin, size_t sendoffset,
                                       ncclWindow_t recvwin, size_t recvoffset,
-                                      size_t count, int root, struct ncclDevComm devComm) {
+                                      size_t count, struct ncclDevComm devComm) {
   // LSA barriers enable coordination between GPU threads across different ranks
   // Barrier scope: CTA (all threads in this block participate)
   // Barrier index: blockIdx.x selects this CTA's dedicated barrier (one barrier per CTA)
@@ -79,7 +79,7 @@ __global__ void simpleAllReduceKernel(ncclWindow_t sendwin, size_t sendoffset,
 
   // Grid stride loop over all elements with the globalThreads
   for (size_t offset = globalTid; offset < count; offset += globalNthreads) {
-    float v = 0;
+    float v = 0.0f;
     // Access remote (and local [peer==rank]) memory and reduce locally
     for (int peer=0; peer<nRanks; peer++) {
       // Access peer memory directly using LSA (Load/Store Accessible) pointers
@@ -114,7 +114,6 @@ void* allReduce(int my_rank, int total_ranks, int local_device, int devices_per_
   if (my_rank == 0) {
     printf("Starting Device API AllReduce initialization\n");
   }
-
 
   // Standard NCCL communicator initialization (same as Host API)
   if (my_rank == 0) {
@@ -214,8 +213,7 @@ void* allReduce(int my_rank, int total_ranks, int local_device, int devices_per_
 
   // Launch device kernel to perform AllReduce
   // This kernel will directly access peer memory and perform collective operation
-  simpleAllReduceKernel<<<NCCL_DEVICE_CTA_COUNT, NCCL_DEVICE_THREADS_PER_CTA, 0, stream>>>(
-                                                                                           send_win, 0, recv_win, 0, count, 0, devComm);
+  simpleAllReduceKernel<<<NCCL_DEVICE_CTA_COUNT, NCCL_DEVICE_THREADS_PER_CTA, 0, stream>>>(send_win, 0, recv_win, 0, count, devComm);
 
   // Wait for completion - kernel performs AllReduce.
   CUDACHECK(cudaStreamSynchronize(stream));

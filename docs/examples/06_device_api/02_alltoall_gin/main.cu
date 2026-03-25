@@ -5,15 +5,15 @@
  * See LICENSE.txt for more license information
  *************************************************************************/
 
- #include "cuda_runtime.h"
- #include "nccl.h"
- #include "nccl_device.h"
- #include "utils.h"
- #include <stdio.h>
- #include <stdlib.h>
- #include <string.h>
- #include <sys/time.h>
- #include <unistd.h>
+#include "cuda_runtime.h"
+#include "nccl.h"
+#include "nccl_device.h"
+#include "utils.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/time.h>
+#include <unistd.h>
 
 /*
  * NCCL Device API Pure GIN AlltoAll Example
@@ -48,37 +48,45 @@
  * - All communication goes through the network (no local optimizations)
  * - Signal-based completion detection enables asynchronous operation
  * - Multiple GIN contexts can improve parallel communication performance
+ *
+ * Device setup (this example):
+ * - worldGinBarrierCount and ginSignalCount: one per CTA (grid dimension x).
+ * - ginConnectionType NCCL_GIN_CONNECTION_FULL: full GIN connectivity (each rank to all peers).
+ * - ncclGinBarrierSession for cross-rank barriers before the puts.
+ * - A single GIN context (index 0) is used for simplicity; production code may
+ *   use multiple contexts for throughput.
+ *
+ * Kernel notes:
+ * - signalIndex is blockIdx.x; all puts targeting a given rank use the same
+ *   signal index, so only the CTA receivingCta must waitSignal for nRanks.
+ * - After flush, a release ncclGinBarrierSession::sync pairs with the acquire
+ *   at entry so ranks do not exit the kernel before the collective completes.
  */
 
-// Device API kernel launch configuration
-// CTA count must match railGinBarrierCount for proper barrier synchronization
- #define NCCL_DEVICE_CTA_COUNT 1
- #define NCCL_DEVICE_THREADS_PER_CTA 512
+// Grid width (CTAs). Must match reqs.worldGinBarrierCount and reqs.ginSignalCount.
+#define NCCL_DEVICE_CTA_COUNT 16
+#define NCCL_DEVICE_THREADS_PER_CTA 512
 
- // ==========================================================================
- // Device Kernel Implementations
- // ==========================================================================
+// ==========================================================================
+// Device Kernel Implementations
+// ==========================================================================
 
-// Pure GIN AlltoAll kernel - uses GIN for all peer communication
-// This kernel demonstrates network-based AlltoAll using GPU-initiated networking
+// Pure GIN alltoall: one put per (src rank, peer) partitioned across threads.
 template <typename T>
 __global__ void PureGinAlltoAllKernel(ncclWindow_t sendwin, size_t sendoffset,
                                       ncclWindow_t recvwin, size_t recvoffset,
-                                      size_t count, int root, struct ncclDevComm devComm) {
-  int ginContext = 0;
-  unsigned int signalIndex = 0;
+                                      size_t count, struct ncclDevComm devComm) {
+  int ginContext = 0; // single context for simplicity
+  unsigned int signalIndex = blockIdx.x;
   ncclGin gin { devComm, ginContext };
   uint64_t signalValue = gin.readSignal(signalIndex);
 
-  // GIN barriers enable coordination between GPU threads across different ranks over network
-  ncclGinBarrierSession<ncclCoopCta> bar { ncclCoopCta(), gin, ncclTeamWorld(devComm),
-                                           devComm.railGinBarrier, blockIdx.x };
+  ncclGinBarrierSession<ncclCoopCta> bar { ncclCoopCta(), gin, ncclTeamTagWorld(), blockIdx.x };
   bar.sync(ncclCoopCta(), cuda::memory_order_acquire, ncclGinFenceLevel::Relaxed);
 
   int tid = threadIdx.x + blockIdx.x * blockDim.x;
   int nthreads = blockDim.x * gridDim.x;
 
-  // Send to all peers via GIN (GPU-initiated networking)
   const size_t size = count * sizeof(T);
   for (int r = tid; r < devComm.nRanks; r += nthreads) {
     gin.put(ncclTeamWorld(devComm), r,
@@ -87,14 +95,18 @@ __global__ void PureGinAlltoAllKernel(ncclWindow_t sendwin, size_t sendoffset,
         size, ncclGin_SignalInc{signalIndex});
   }
 
-  // Wait for all remote puts to complete using signal-based synchronization
-  gin.waitSignal(ncclCoopCta(), signalIndex, signalValue + devComm.nRanks);
+  // Wait only on the CTA whose blockIdx.x (signalIndex) accumulates all puts to this rank.
+  int receivingCta = (devComm.rank % nthreads) / blockDim.x;
+  if (blockIdx.x == receivingCta)
+    gin.waitSignal(ncclCoopCta(), signalIndex, signalValue + devComm.nRanks);
+
   gin.flush(ncclCoopCta());
+  bar.sync(ncclCoopCta(), cuda::memory_order_release, ncclGinFenceLevel::Relaxed);
 }
 
- // ==========================================================================
- // Host-Side Setup and Device API Initialization
- // ==========================================================================
+// ==========================================================================
+// Host-Side Setup and Device API Initialization
+// ==========================================================================
 
 void* pureGinAlltoAll(int my_rank, int total_ranks, int local_device, int devices_per_rank) {
   ncclComm_t comm;
@@ -184,9 +196,9 @@ void* pureGinAlltoAll(int my_rank, int total_ranks, int local_device, int device
   // Create device communicator with GIN support
   ncclDevComm devComm;
   ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
-  reqs.railGinBarrierCount = NCCL_DEVICE_CTA_COUNT;  // GIN barriers for network synchronization
-  reqs.ginSignalCount = 1;  // GIN signals for completion detection
-  reqs.ginConnectionType = NCCL_GIN_CONNECTION_FULL;  // Enable full GIN connectivity
+  reqs.worldGinBarrierCount = NCCL_DEVICE_CTA_COUNT;  // ncclGinBarrierSession (world team)
+  reqs.ginSignalCount = NCCL_DEVICE_CTA_COUNT; // one signal index per CTA (blockIdx.x)
+  reqs.ginConnectionType = NCCL_GIN_CONNECTION_FULL;  // full GIN connectivity: each rank to all peers
   NCCLCHECK(ncclDevCommCreate(comm, &reqs, &devComm));
   printf("  Rank %d created device communicator with GIN support\n", my_rank);
 
@@ -208,7 +220,7 @@ void* pureGinAlltoAll(int my_rank, int total_ranks, int local_device, int device
 
   // Launch pure GIN AlltoAll kernel
   PureGinAlltoAllKernel<float><<<NCCL_DEVICE_CTA_COUNT, NCCL_DEVICE_THREADS_PER_CTA, 0, stream>>>(
-      send_win, 0, recv_win, 0, count, 0, devComm);
+      send_win, 0, recv_win, 0, count, devComm);
 
   // Wait for completion
   CUDACHECK(cudaStreamSynchronize(stream));

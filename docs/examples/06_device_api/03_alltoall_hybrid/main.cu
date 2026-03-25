@@ -29,11 +29,11 @@
  * - See performance optimization through intelligent peer selection
  *
  * Key Hybrid Concepts:
- * - **LSA (Load Store Access)**: Direct memory access for local peers
- * - **GIN (GPU-Initiated Networking)**: Network communication for remote peers
- * - **Peer classification**: Distinguishing between local and remote peers
- * - **Hybrid synchronization**: Combining LSA and GIN completion mechanisms
- * - **Performance optimization**: Using the fastest method for each peer type
+ * - LSA (Load Store Access): Direct memory access for local peers
+ * - GIN (GPU-Initiated Networking): Network communication for remote peers
+ * - Peer classification: Distinguishing between local and remote peers
+ * - Hybrid synchronization: Combining LSA and GIN completion mechanisms
+ * - Performance optimization: Using the fastest method for each peer type
  *
  * When to Use Hybrid:
  * - Multi-node environments with both local and remote peers
@@ -46,10 +46,22 @@
  * - GIN handles remote communication efficiently
  * - Reduced network traffic for local operations
  * - Optimal bandwidth utilization across communication types
+ *
+ * Implementation notes (this example):
+ * - GIN for peers outside the LSA team; LSA stores for peers on the same node.
+ * - ginConnectionType NCCL_GIN_CONNECTION_FULL: full GIN connectivity (each rank to all peers).
+ * - Uses ncclBarrierSession (world team + GIN), not ncclGinBarrierSession, so
+ *   reqs sets barrierCount, not worldGinBarrierCount.
+ *
+ * Kernel flow:
+ * - Acquire barrier before remote puts and local LSA copies.
+ * - waitSignal only on receivingCta; threshold is numRemotePeers (not nRanks).
+ * - Final release barrier after flush so LSA and GIN participants align.
+ * - A single GIN context (index 0) is used for simplicity; production code may
+ *   use multiple contexts for throughput.
  */
 
-// Device API kernel launch configuration
-// CTA count must match railGinBarrierCount for proper barrier synchronization
+// Grid width (CTAs). Must match reqs.barrierCount and reqs.ginSignalCount.
 #define NCCL_DEVICE_CTA_COUNT 16
 #define NCCL_DEVICE_THREADS_PER_CTA 512
 
@@ -57,18 +69,16 @@
 // Device Kernel Implementation
 // ==========================================================================
 
-// Hybrid AlltoAll kernel - optimizes by using LSA for local peers, GIN for remote
-// This kernel demonstrates performance optimization using both communication methods
+// Hybrid alltoall: GIN puts for non-LSA ranks; LSA stores for the LSA team.
 template <typename T>
 __global__ void HybridAlltoAllKernel(ncclWindow_t sendwin, size_t sendoffset,
                                       ncclWindow_t recvwin, size_t recvoffset,
-                                      size_t count, int root, struct ncclDevComm devComm) {
-  int ginContext = 0;
-  unsigned int signalIndex = 0;
+                                      size_t count, struct ncclDevComm devComm) {
+  int ginContext = 0; // single context for simplicity
+  unsigned int signalIndex = blockIdx.x;
   ncclGin gin { devComm, ginContext };
   uint64_t signalValue = gin.readSignal(signalIndex);
 
-  // GIN barriers for cross-node synchronization
   ncclBarrierSession<ncclCoopCta> bar { ncclCoopCta(), ncclTeamTagWorld(), gin, blockIdx.x };
   bar.sync(ncclCoopCta(), cuda::memory_order_acquire, ncclGinFenceLevel::Relaxed);
 
@@ -80,8 +90,9 @@ __global__ void HybridAlltoAllKernel(ncclWindow_t sendwin, size_t sendoffset,
   const int startLsa = world.rank - lsa.rank;
   const int lsaSize = lsa.nRanks;
 
-  // Handle remote peers (i.e., non-LSA) using GIN for network communication
   const size_t size = count * sizeof(T);
+
+  // Remote ranks: world ranks below and above the LSA range (split loops for clarity).
   for (int r = tid; r < startLsa; r += nthreads) {
     gin.put(world, r,
         recvwin, recvoffset + world.rank * size,
@@ -95,7 +106,7 @@ __global__ void HybridAlltoAllKernel(ncclWindow_t sendwin, size_t sendoffset,
         size, ncclGin_SignalInc{signalIndex});
   }
 
-  // Handle local peers with LSA (Load Store Access) for optimal performance
+  // Local ranks: LSA ranks (single loop for clarity).
   T* sendLocal = (T*)ncclGetLocalPointer(sendwin, sendoffset);
   for (size_t offset = tid; offset < count; offset += nthreads) {
     for (int lp = 0; lp < lsa.nRanks; lp++) {
@@ -105,18 +116,20 @@ __global__ void HybridAlltoAllKernel(ncclWindow_t sendwin, size_t sendoffset,
     }
   }
 
-  // Wait for remote GIN operations to complete
   int numRemotePeers = world.nRanks - lsa.nRanks;
-  gin.waitSignal(ncclCoopCta(), signalIndex, signalValue + numRemotePeers);
+  // Wait only on the CTA whose signalIndex sees all GIN puts targeting this rank.
+  int receivingCta = (world.rank % nthreads) / blockDim.x;
+  if (blockIdx.x == receivingCta)
+    gin.waitSignal(ncclCoopCta(), signalIndex, signalValue + numRemotePeers);
+
   gin.flush(ncclCoopCta());
 
-  // Final synchronization barrier
   bar.sync(ncclCoopCta(), cuda::memory_order_release, ncclGinFenceLevel::Relaxed);
 }
 
- // ==========================================================================
- // Host-Side Setup and Device API Initialization
- // ==========================================================================
+// ==========================================================================
+// Host-Side Setup and Device API Initialization
+// ==========================================================================
 
 void* hybridAlltoAll(int my_rank, int total_ranks, int local_device, int devices_per_rank) {
   ncclComm_t comm;
@@ -206,9 +219,9 @@ void* hybridAlltoAll(int my_rank, int total_ranks, int local_device, int devices
   // Create device communicator with both LSA and GIN support
   ncclDevComm devComm;
   ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
-  reqs.barrierCount = NCCL_DEVICE_CTA_COUNT;  // Barriers for synchronization
-  reqs.ginSignalCount = 1;  // GIN signals for completion detection
-  reqs.ginConnectionType = NCCL_GIN_CONNECTION_FULL;  // Enable full GIN connectivity
+  reqs.barrierCount = NCCL_DEVICE_CTA_COUNT;       // ncclBarrierSession (world + GIN)
+  reqs.ginSignalCount = NCCL_DEVICE_CTA_COUNT;       // one signal index per CTA
+  reqs.ginConnectionType = NCCL_GIN_CONNECTION_FULL;  // full GIN connectivity: each rank to all peers
   NCCLCHECK(ncclDevCommCreate(comm, &reqs, &devComm));
   printf("  Rank %d created device communicator with hybrid support\n", my_rank);
 
@@ -231,7 +244,7 @@ void* hybridAlltoAll(int my_rank, int total_ranks, int local_device, int devices
 
   // Launch hybrid AlltoAll kernel
   HybridAlltoAllKernel<float><<<NCCL_DEVICE_CTA_COUNT, NCCL_DEVICE_THREADS_PER_CTA, 0, stream>>>(
-      send_win, 0, recv_win, 0, count, 0, devComm);
+      send_win, 0, recv_win, 0, count, devComm);
 
   // Wait for completion
   CUDACHECK(cudaStreamSynchronize(stream));

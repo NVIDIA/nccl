@@ -7,7 +7,7 @@
 
 # NCCL Device API Hybrid AlltoAll Example
 
-This example shows how to implement AlltoAll operations using a hybrid approach that combines Load Store Access (LSA) for local peers with GPU-Initiated Networking (GIN) for remote peers. We create a device communicator with `ncclDevCommCreate` supporting both LSA and GIN capabilities, enabling optimal communication performance across different peer types.
+This example shows how to implement AlltoAll operations using a hybrid approach that combines Load Store Access (LSA) for local peers with GPU-Initiated Networking (GIN) for remote peers. We create a device communicator with `ncclDevCommCreate` supporting both LSA and GIN capabilities, enabling optimal communication performance across different peer types. **Local** means ranks in the LSA team (`ncclTeamLsa`, typically same node or same NVLink domain); **remote** means other world ranks, which use `gin.put`.
 
 ## Overview
 
@@ -50,12 +50,10 @@ The `ncclDevComm` is the core component enabling GPU kernels to perform both loc
 ```cpp
 ncclDevComm devComm;
 ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
-// LSA barriers enable direct memory access coordination for local peers
-reqs.lsaBarrierCount = NCCL_DEVICE_CTA_COUNT;
-// GIN barriers enable cross-node synchronization over the network
-reqs.railGinBarrierCount = NCCL_DEVICE_CTA_COUNT;
+// world-team barrier slots (ncclBarrierSession with GIN)
+reqs.barrierCount = NCCL_DEVICE_CTA_COUNT;
 // GIN signals provide completion notifications for asynchronous network operations
-reqs.ginSignalCount = 1;
+reqs.ginSignalCount = NCCL_DEVICE_CTA_COUNT;
 // Enable full GIN connectivity, i.e., connect each rank to all other ranks
 reqs.ginConnectionType = NCCL_GIN_CONNECTION_FULL;
 
@@ -104,14 +102,41 @@ const int lsaSize = lsa.nRanks;              // Number of local peers
 `ncclGetLsaPointer` allows CUDA kernels to directly access other GPUs' memory within the LSA team, while `gin.put` handles remote communication over the network. The hybrid approach uses the most efficient method for each peer type.
 
 ```cpp
-// Handle local peers using direct memory access (LSA)
-T* sendLocal = (T*)ncclGetLocalPointer(sendwin, sendoffset);
-T* recvPtr = (T*)ncclGetLsaPointer(recvwin, recvoffset, lp);
+  const size_t size = count * sizeof(T);
+  for (int r = tid; r < startLsa; r += nthreads) {
+    gin.put(world, r,
+        recvwin, recvoffset + world.rank * size,
+        sendwin, sendoffset + r * size,
+        size, ncclGin_SignalInc{signalIndex});
+  }
+  for (int r = startLsa + lsaSize + tid; r < world.nRanks; r += nthreads) {
+    gin.put(world, r,
+        recvwin, recvoffset + world.rank * size,
+        sendwin, sendoffset + r * size,
+        size, ncclGin_SignalInc{signalIndex});
+  }
+  T* sendLocal = (T*)ncclGetLocalPointer(sendwin, sendoffset);
+  for (size_t offset = tid; offset < count; offset += nthreads) {
+    for (int lp = 0; lp < lsa.nRanks; lp++) {
+      int wr = startLsa + lp;
+      T* recvPtr = (T*)ncclGetLsaPointer(recvwin, recvoffset, lp);
+      recvPtr[world.rank * count + offset] = sendLocal[wr * count + offset];
+    }
+  }
+  int numRemotePeers = world.nRanks - lsa.nRanks;
+  // Wait only on the CTA whose signalIndex sees all GIN puts targeting this rank.
+  int receivingCta = (world.rank % nthreads) / blockDim.x;
+  if (blockIdx.x == receivingCta)
+    gin.waitSignal(ncclCoopCta(), signalIndex, signalValue + numRemotePeers);
 
-// Handle remote peers using network operations (GIN)
-gin.put(world, r, recvwin, recvoffset + world.rank * size,
-        sendwin, sendoffset + r * size, size, ncclGin_SignalInc{signalIndex});
+  gin.flush(ncclCoopCta());
+
+  bar.sync(ncclCoopCta(), cuda::memory_order_release, ncclGinFenceLevel::Relaxed);
 ```
+
+### Receiving CTA (Device-side)
+
+`signalIndex` is `blockIdx.x`, so each `gin.put` increments the destination rank's signal for that sender CTA index. Only the CTA with `blockIdx.x == receivingCta` calls `waitSignal`; `receivingCta = (world.rank % nthreads) / blockDim.x` picks one waiting CTA per destination rank (same idea as the pure GIN AlltoAll example). The wait uses `signalValue + numRemotePeers` because only **remote** peers contribute GIN puts toward this rank; LSA peers do not.
 
 ## Building and Running
 
@@ -201,7 +226,7 @@ Hybrid AlltoAll result: PASSED
 **Solution:** Verify GPU topology with `nvidia-smi topo -m` and ensure proper LSA-capable connections
 
 ### Issue: Hybrid synchronization failures
-**Solution:** Ensure both `lsaBarrierCount` and `railGinBarrierCount` match the number of thread blocks in kernel launch configuration
+**Solution:** Ensure `barrierCount` and `ginSignalCount` match `NCCL_DEVICE_CTA_COUNT` (kernel grid x dimension).
 
 ## Performance Notes
 

@@ -183,7 +183,7 @@ ncclResult_t ArgsCheck(struct ncclInfo* info) {
     } else if (info->coll == ncclFuncPutSignal || info->coll == ncclFuncSignal || info->coll == ncclFuncWaitSignal) {
       // One-sided RMA ops specify the remote destination via peerWin, not sendbuff/recvbuff,
       // so the standard CUDA pointer checks do not apply here.
-      WARN("%s : skipping sendbuff/recvbuff pointer check (one-sided RMA uses peerWin)", info->opName);
+      INFO(NCCL_COLL, "%s : skipping sendbuff/recvbuff pointer check (one-sided RMA uses peerWin)", info->opName);
     } else {
       // Check CUDA device pointers
       if (info->coll != ncclFuncBroadcast || info->comm->rank == info->root) {

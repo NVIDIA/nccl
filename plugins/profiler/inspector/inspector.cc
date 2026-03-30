@@ -612,6 +612,7 @@ void inspectorDumpThread::startThread() {
       "NCCL Inspector inspectorDumpThread: couldn't create dump thread!");
     return;
   }
+  threadStarted = true;
   TRACE_INSPECTOR("NCCL Inspector inspectorDumpThread: created");
 }
 
@@ -620,7 +621,10 @@ void inspectorDumpThread::stopThread() {
   inspectorLockWr(&guard);
   run = false;
   inspectorUnlockRWLock(&guard);
-  std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  if (threadStarted) {
+    pthread_join(pthread, nullptr);
+    threadStarted = false;
+  }
   INFO_INSPECTOR( "NCCL Inspector inspectorDumpThread: stopped");
 }
 

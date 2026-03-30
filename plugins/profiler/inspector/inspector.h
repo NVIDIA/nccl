@@ -195,6 +195,7 @@ struct deviceFlushInfo {
 
 struct inspectorDumpThread {
   bool run{false};
+  bool threadStarted{false};
   jsonFileOutput* jfo;
   char* outputRoot;
   int64_t sampleIntervalUsecs;

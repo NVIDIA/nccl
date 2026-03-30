@@ -485,6 +485,8 @@ ncclResult_t ncclGinGdakiCreateContext(void *collComm, int nSignals, int nCounte
                                        void **outGinCtx, ncclNetDeviceHandle_t **outDevHandle) {
   ncclResult_t status = ncclSuccess;
 
+  static std::mutex lockMutex;
+
   struct ncclGinIbCollComm *cComm = (struct ncclGinIbCollComm *)collComm;
 
   char pciBusId[MAX_PCI_ADDRESS_LEN];
@@ -601,6 +603,9 @@ ncclResult_t ncclGinGdakiCreateContext(void *collComm, int nSignals, int nCounte
   else
     qp_init_attr.send_dbr_mode_ext = DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_VALID_DBR;
 
+
+  lockMutex.lock();
+
   for (int qp_idx = 0; qp_idx < nqps_for_comm; qp_idx++) {
 retry_create_qp_group_hl:
     doca_error_t docaStatus = doca_gpu_verbs_create_qp_group_hl(&qp_init_attr, &gdaki_ctx->gqp_groups[qp_idx]);
@@ -650,6 +655,8 @@ retry_create_qp_group_hl:
     INFO(NCCL_NET, "[%d] Created a self-loop peer companion QP: qp_idx=%d, qpn=%#x", rank, qp_idx,
          doca_verbs_qp_get_qpn(gdaki_ctx->companion_gqps[qp_idx]->qp));
   }
+
+  lockMutex.unlock();
 
   for (int ctx_idx = 0; ctx_idx < ncontexts; ctx_idx++) {
     // Prepare information for exchange with peers

@@ -42,8 +42,8 @@ struct ncclLsaBarrierSession_internal {
     return state + 3*handle.nBarriers + index*team.nRanks + peer;
   }
 
-  template<typename Fn>
-  NCCL_DEVICE_INLINE ncclResult_t waitInternal(Coop, cuda::memory_order order, Fn const& fn);
+  template<bool EnableTimeout>
+  NCCL_DEVICE_INLINE ncclResult_t waitInternal(Coop, cuda::memory_order order, uint64_t timeoutCycles);
 };
 #endif
 

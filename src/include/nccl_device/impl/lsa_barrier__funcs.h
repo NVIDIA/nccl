@@ -89,11 +89,18 @@ NCCL_DEVICE_INLINE void ncclLsaBarrierSession<Coop>::arrive(Coop, cuda::memory_o
 
 #if NCCL_CHECK_CUDACC
 template<typename Coop>
-template<typename Fn>
+template<bool EnableTimeout>
 NCCL_DEVICE_INLINE ncclResult_t ncclLsaBarrierSession_internal<Coop>::waitInternal(Coop, cuda::memory_order order,
-                                                                                   Fn const& fn) {
+                                                                                   uint64_t timeoutCycles) {
   using nccl::utility::testAbort;
+  uint32_t steps;
+  uint64_t startCycle;
   ncclResult_t ret = ncclSuccess;
+  if NCCL_IF_CONSTEXPR (EnableTimeout) {
+    startCycle = clock64();
+  } else {
+    steps = 0;
+  }
   if (this->multimem) {
   #if __CUDA_ARCH__ >= 900
     if (this->coop.thread_rank() == 0) {
@@ -103,8 +110,14 @@ NCCL_DEVICE_INLINE ncclResult_t ncclLsaBarrierSession_internal<Coop>::waitIntern
         uint32_t got = inbox.load(nccl::utility::acquireOrderOf(order));
         if (got - (this->epoch + this->team.nRanks) <= uint32_t(-1)>>1) break;
 
-        ret = fn();
-        if (ret != ncclSuccess) goto exit;
+        if NCCL_IF_CONSTEXPR (EnableTimeout) {
+          if (clock64() - startCycle >= timeoutCycles) {
+            ret = ncclTimeout;
+            goto exit;
+          }
+        } else {
+          if (testAbort(this->comm.abortFlag, steps)) break;
+        }
       }
       this->epoch += this->team.nRanks;
     }
@@ -119,12 +132,19 @@ NCCL_DEVICE_INLINE ncclResult_t ncclLsaBarrierSession_internal<Coop>::waitIntern
         uint32_t got = inbox.load(nccl::utility::acquireOrderOf(order));
         if (got - (this->epoch + 1) <= uint32_t(-1)>>1) break;
 
-        ret = fn();
-        if (ret != ncclSuccess) goto exit;
+        if NCCL_IF_CONSTEXPR (EnableTimeout) {
+          if (clock64() - startCycle >= timeoutCycles) {
+            ret = ncclTimeout;
+            goto exit;
+          }
+        } else {
+          if (testAbort(this->comm.abortFlag, steps)) break;
+        }
       }
     }
     this->epoch += 1;
   }
+  goto exit; // Silence a compiler warning.
 exit:
   this->coop.sync();
   return ret;
@@ -134,12 +154,7 @@ exit:
 #if NCCL_CHECK_CUDACC
 template<typename Coop>
 NCCL_DEVICE_INLINE void ncclLsaBarrierSession<Coop>::wait(Coop coop, cuda::memory_order order) {
-  using nccl::utility::testAbort;
-  uint32_t steps = 0;
-  (void)waitInternal(coop, order, [&]__device__() {
-        return testAbort(this->comm.abortFlag, steps) ? ncclInternalError : ncclSuccess;
-      }
-    );
+  (void)(this->waitInternal</*EnableTimeout=*/false>(coop, order, 0ULL));
 }
 #endif
 
@@ -148,11 +163,7 @@ template<typename Coop>
 NCCL_DEVICE_INLINE ncclResult_t ncclLsaBarrierSession<Coop>::wait(
     Coop coop, cuda::memory_order order, uint64_t timeoutCycles) {
   this->coop.sync();
-  uint64_t startCycle = clock64();
-  return waitInternal(coop, order, [&]__device__() {
-        return (clock64() - startCycle >= timeoutCycles) ? ncclTimeout : ncclSuccess;
-      }
-    );
+  return this->waitInternal</*EnableTimeout=*/true>(coop, order, timeoutCycles);
 }
 #endif
 

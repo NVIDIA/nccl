@@ -45,11 +45,15 @@ NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::~ncclGinBarrierSession() {
 
 #if NCCL_CHECK_CUDACC
 template<typename Coop>
-template<typename Fn>
+template<bool EnableTimeout>
 NCCL_DEVICE_INLINE ncclResult_t ncclGinBarrierSession_internal<Coop>::syncInternal(Coop, cuda::memory_order ord,
-                                                                      ncclGinFenceLevel fence, Fn const& fn) {
+                                                                      ncclGinFenceLevel fence, uint64_t timeoutCycles) {
+  uint64_t startCycle;
   ncclResult_t ret = ncclSuccess;
   this->coop.sync();
+  if NCCL_IF_CONSTEXPR (EnableTimeout) {
+    startCycle = clock64();
+  }
   #pragma unroll 1
   for (int i=this->coop.thread_rank(); i < this->team.nRanks-1; i += this->coop.size()) {
     // Use a rotating pattern to avoid hot spots
@@ -68,11 +72,21 @@ NCCL_DEVICE_INLINE ncclResult_t ncclGinBarrierSession_internal<Coop>::syncIntern
     uint32_t* shadowPtr = (uint32_t*)this->net.getSignalShadowPtr(this->signal + peer);
     int waitVal = ++*shadowPtr;
 
-    ret = fn(this->signal + peer, waitVal);
-    if (ret != ncclSuccess) {
-      break;
+    if NCCL_IF_CONSTEXPR (EnableTimeout) {
+      while (true) {
+        uint64_t got = this->net.readSignal(this->signal + peer, 32, nccl::utility::acquireOrderOf(ord));
+        if (nccl::utility::rollingLessEq(static_cast<uint64_t>(waitVal), got, 32)) break;
+        if (clock64() - startCycle >= timeoutCycles) {
+          ret = ncclTimeout;
+          goto exit;
+        }
+      }
+    } else {
+      this->net.waitSignal(ncclCoopThread(), this->signal + peer, waitVal, 32, nccl::utility::acquireOrderOf(ord));
     }
   }
+  goto exit; // Silence a compiler warning.
+exit:
   this->coop.sync();
   return ret;
 }
@@ -82,11 +96,7 @@ NCCL_DEVICE_INLINE ncclResult_t ncclGinBarrierSession_internal<Coop>::syncIntern
 #if NCCL_CHECK_CUDACC
 template<typename Coop>
 NCCL_DEVICE_INLINE void ncclGinBarrierSession<Coop>::sync(Coop coop, cuda::memory_order ord, ncclGinFenceLevel fence) {
-  (void)syncInternal(coop, ord, fence, [&]__device__(ncclGinSignal_t signal, int waitVal) {
-        this->net.waitSignal(ncclCoopThread(), signal, waitVal, 32, nccl::utility::acquireOrderOf(ord));
-        return ncclSuccess;
-      }
-    );
+  (void)(this->syncInternal</*EnableTimeout=*/false>(coop, ord, fence, 0ULL));
 }
 #endif
 
@@ -94,20 +104,7 @@ NCCL_DEVICE_INLINE void ncclGinBarrierSession<Coop>::sync(Coop coop, cuda::memor
 template<typename Coop>
 NCCL_DEVICE_INLINE ncclResult_t ncclGinBarrierSession<Coop>::sync(
     Coop coop, cuda::memory_order ord, ncclGinFenceLevel fence, uint64_t timeoutCycles) {
-  return syncInternal(coop, ord, fence, [&]__device__(ncclGinSignal_t signal, int waitVal) {
-        // Wait for GIN signal with timeout
-        uint64_t startCycle = clock64();
-        while (true) {
-          uint64_t got = this->net.readSignal(signal, 32, nccl::utility::acquireOrderOf(ord));
-          if (nccl::utility::rollingLessEq(static_cast<uint64_t>(waitVal), got, 32)) {
-            return ncclSuccess;
-          }
-          if (clock64() - startCycle >= timeoutCycles) {
-            return ncclTimeout;
-          }
-        }
-      }
-    );
+  return this->syncInternal</*EnableTimeout=*/true>(coop, ord, fence, timeoutCycles);
 }
 #endif
 

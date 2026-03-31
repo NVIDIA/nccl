@@ -13,6 +13,7 @@ source-oriented, repository-local walkthroughs.
 ## Quick links
 
 - English deep dive: [docs/en/README.md](en/README.md)
+- Chinese deep dive: [docs/zh/README.md](zh/README.md)
 - Runnable examples: [docs/examples/README.md](examples/README.md)
 
 ```mermaid
@@ -23,8 +24,8 @@ flowchart TD
 
 The English track is optimized for readers who want to answer questions such as
 "why did NCCL pick ring instead of tree?" or "which file should I open after
-`ncclAllReduce`?". A mirrored Chinese track will follow in a second commit on the
-same branch so the final PR becomes bilingual.
+`ncclAllReduce`?". A mirrored Chinese track now lives under `docs/zh/`, so the branch provides
+a bilingual learning path with the same structure in both languages.
 
 ## What is different from the official documentation?
 

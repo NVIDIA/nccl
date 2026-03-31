@@ -72,7 +72,10 @@ static ncclResult_t ncclTopoGetInterCpuBw(struct ncclTopoNode* cpu, float* bw) {
       BDW_QPI_BW;
   }
   if (cpu->cpu.arch == NCCL_TOPO_CPU_ARCH_X86 && cpu->cpu.vendor == NCCL_TOPO_CPU_VENDOR_AMD) {
-    *bw = AMD_BW;
+    *bw =
+      cpu->cpu.model == NCCL_TOPO_CPU_MODEL_AMD_ZEN5  ? AMD_ZEN5_BW :
+      cpu->cpu.model == NCCL_TOPO_CPU_MODEL_AMD_ZEN34 ? AMD_ZEN34_BW :
+      AMD_ZEN12_BW;
   }
   if (cpu->cpu.arch == NCCL_TOPO_CPU_ARCH_X86 && cpu->cpu.vendor == NCCL_TOPO_CPU_VENDOR_ZHAOXIN) {
     *bw = cpu->cpu.model ==  NCCL_TOPO_CPU_MODEL_YONGFENG ? YONGFENG_ZPI_BW : ZPI_BW;
@@ -559,6 +562,17 @@ ncclResult_t ncclTopoAddCpu(struct ncclXmlNode* xmlCpu, struct ncclTopoSystem* s
         (familyId == 6 && modelId >= 0x8F) ? NCCL_TOPO_CPU_MODEL_INTEL_SRP :
         (familyId == 6 && modelId >= 0x55) ? NCCL_TOPO_CPU_MODEL_INTEL_SKL :
         NCCL_TOPO_CPU_MODEL_INTEL_BDW;
+    } else if (cpu->cpu.vendor == NCCL_TOPO_CPU_VENDOR_AMD) {
+      int familyId, modelId;
+      NCCLCHECK(xmlGetAttrInt(xmlCpu, "familyid", &familyId));
+      NCCLCHECK(xmlGetAttrInt(xmlCpu, "modelid", &modelId));
+      // AMD Zen 1/2 (Naples/Rome):  CPUID Family 17h = 23
+      // AMD Zen 3/4 (Milan/Genoa):  CPUID Family 19h = 25
+      // AMD Zen 5   (Turin):        CPUID Family 1Ah = 26
+      cpu->cpu.model =
+        (familyId >= 26) ? NCCL_TOPO_CPU_MODEL_AMD_ZEN5 :
+        (familyId >= 25) ? NCCL_TOPO_CPU_MODEL_AMD_ZEN34 :
+        NCCL_TOPO_CPU_MODEL_AMD_ZEN12;
     } else if (cpu->cpu.vendor == NCCL_TOPO_CPU_VENDOR_ZHAOXIN) {
       int familyId, modelId;
       NCCLCHECK(xmlGetAttrInt(xmlCpu, "familyid", &familyId));

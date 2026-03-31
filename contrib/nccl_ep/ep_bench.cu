@@ -731,11 +731,13 @@ PairedBenchResult runPairedBenchmark(
     // Create events for dispatch, combine, and total timing
     std::vector<cudaEvent_t> dispatch_start(num_iters);
     std::vector<cudaEvent_t> dispatch_end(num_iters);
+    std::vector<cudaEvent_t> combine_start(num_iters);
     std::vector<cudaEvent_t> combine_end(num_iters);
 
     for (int i = 0; i < num_iters; i++) {
         CUDACHECK(cudaEventCreate(&dispatch_start[i]));
         CUDACHECK(cudaEventCreate(&dispatch_end[i]));
+        CUDACHECK(cudaEventCreate(&combine_start[i]));
         CUDACHECK(cudaEventCreate(&combine_end[i]));
     }
 
@@ -746,10 +748,11 @@ PairedBenchResult runPairedBenchmark(
     for (int i = 0; i < num_iters; i++) {
         CUDACHECK(cudaEventRecord(dispatch_start[i], stream));
         dispatch_fn();
-        CUDACHECK(cudaEventRecord(dispatch_end[i], stream));  // Record before sync
-        CUDACHECK(cudaStreamSynchronize(stream));             // Sync outside timing
+        CUDACHECK(cudaEventRecord(dispatch_end[i], stream));    // Record before sync
+        CUDACHECK(cudaStreamSynchronize(stream));              // Sync outside timing
+        CUDACHECK(cudaEventRecord(combine_start[i], stream));  // Record after sync, before combine
         combine_fn();
-        CUDACHECK(cudaEventRecord(combine_end[i], stream));   // Record before sync
+        CUDACHECK(cudaEventRecord(combine_end[i], stream));    // Record before sync
         CUDACHECK(cudaStreamSynchronize(stream));             // Sync outside timing
         MPICHECK(MPI_Barrier(MPI_COMM_WORLD));
     }
@@ -761,7 +764,7 @@ PairedBenchResult runPairedBenchmark(
 
     for (int i = 0; i < num_iters; i++) {
         CUDACHECK(cudaEventElapsedTime(&dispatch_times[i], dispatch_start[i], dispatch_end[i]));
-        CUDACHECK(cudaEventElapsedTime(&combine_times[i], dispatch_end[i], combine_end[i]));
+        CUDACHECK(cudaEventElapsedTime(&combine_times[i], combine_start[i], combine_end[i]));
         CUDACHECK(cudaEventElapsedTime(&total_times[i], dispatch_start[i], combine_end[i]));
     }
 
@@ -769,6 +772,7 @@ PairedBenchResult runPairedBenchmark(
     for (int i = 0; i < num_iters; i++) {
         CUDACHECK(cudaEventDestroy(dispatch_start[i]));
         CUDACHECK(cudaEventDestroy(dispatch_end[i]));
+        CUDACHECK(cudaEventDestroy(combine_start[i]));
         CUDACHECK(cudaEventDestroy(combine_end[i]));
     }
 
@@ -869,7 +873,7 @@ struct HighThroughputBytes {
     unsigned int total_send_tokens;
     unsigned int rdma_send_tokens;
     unsigned int rdma_recv_tokens;
-    unsigned int recv_tokens;
+    unsigned int total_recv_tokens;
     bool is_fp8;
 };
 
@@ -882,7 +886,7 @@ struct HighThroughputBytes {
 // Recv side: simulate all source ranks' randperm routing (deterministic from
 // seed = src_rank + 42) to count unique (src_rank, token) pairs where at least
 // one selected expert belongs to myRank.
-//   recv_tokens      = all source ranks (NVL + RDMA)
+//   total_recv_tokens = all source ranks (NVL + RDMA)
 //   rdma_recv_tokens = remote source ranks only
 HighThroughputBytes calculateHighThroughputBytes(
     const int64_t* topk_idx_host,
@@ -932,7 +936,7 @@ HighThroughputBytes calculateHighThroughputBytes(
             for (unsigned int k = 0; k < top_k; k++) {
                 int target_rank = static_cast<int>(src_perm[k] / num_experts_per_rank);
                 if (target_rank == myRank) {
-                    bytes.recv_tokens++;
+                    bytes.total_recv_tokens++;
                     if (is_rdma) bytes.rdma_recv_tokens++;
                     break;
                 }
@@ -947,7 +951,7 @@ HighThroughputBytes calculateHighThroughputBytes(
 
     bytes.total_send_bytes = bytes.total_send_tokens * bytes_per_token;
     bytes.rdma_send_bytes  = bytes.rdma_send_tokens  * bytes_per_token;
-    bytes.total_recv_bytes = bytes.recv_tokens        * bytes_per_token;
+    bytes.total_recv_bytes = bytes.total_recv_tokens   * bytes_per_token;
     bytes.rdma_recv_bytes  = bytes.rdma_recv_tokens   * bytes_per_token;
 
     return bytes;
@@ -1188,7 +1192,7 @@ void printHighThroughputResults(
                avg_total_send / 1e6, ht_bytes.total_send_tokens,
                avg_rdma_send  / 1e6, ht_bytes.rdma_send_tokens,
                avg_rdma_recv  / 1e6, ht_bytes.rdma_recv_tokens,
-               avg_total_recv / 1e6, ht_bytes.recv_tokens);
+               avg_total_recv / 1e6, ht_bytes.total_recv_tokens);
     }
 }
 
@@ -1620,7 +1624,7 @@ int main(int argc, char* argv[]) {
     if (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT && myRank == 0) {
         printf("[DEBUG] HT bytes: send=%u tokens, rdma_send=%u, total_recv=%u tokens, rdma_recv=%u (buffer=%u)\n",
                ht_bytes.total_send_tokens, ht_bytes.rdma_send_tokens,
-               ht_bytes.recv_tokens, ht_bytes.rdma_recv_tokens, num_recv_tokens);
+               ht_bytes.total_recv_tokens, ht_bytes.rdma_recv_tokens, num_recv_tokens);
         fflush(stdout);
     }
 

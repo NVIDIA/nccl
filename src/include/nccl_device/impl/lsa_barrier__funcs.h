@@ -154,7 +154,7 @@ exit:
 #if NCCL_CHECK_CUDACC
 template<typename Coop>
 NCCL_DEVICE_INLINE void ncclLsaBarrierSession<Coop>::wait(Coop coop, cuda::memory_order order) {
-  (void)(this->waitInternal</*EnableTimeout=*/false>(coop, order, 0ULL));
+  (void)(this->template waitInternal</*EnableTimeout=*/false>(coop, order, 0ULL));
 }
 #endif
 
@@ -163,7 +163,7 @@ template<typename Coop>
 NCCL_DEVICE_INLINE ncclResult_t ncclLsaBarrierSession<Coop>::wait(
     Coop coop, cuda::memory_order order, uint64_t timeoutCycles) {
   this->coop.sync();
-  return this->waitInternal</*EnableTimeout=*/true>(coop, order, timeoutCycles);
+  return this->template waitInternal</*EnableTimeout=*/true>(coop, order, timeoutCycles);
 }
 #endif
 

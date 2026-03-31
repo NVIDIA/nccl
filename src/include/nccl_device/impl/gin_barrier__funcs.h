@@ -96,7 +96,7 @@ exit:
 #if NCCL_CHECK_CUDACC
 template<typename Coop>
 NCCL_DEVICE_INLINE void ncclGinBarrierSession<Coop>::sync(Coop coop, cuda::memory_order ord, ncclGinFenceLevel fence) {
-  (void)(this->syncInternal</*EnableTimeout=*/false>(coop, ord, fence, 0ULL));
+  (void)(this->template syncInternal</*EnableTimeout=*/false>(coop, ord, fence, 0ULL));
 }
 #endif
 
@@ -104,7 +104,7 @@ NCCL_DEVICE_INLINE void ncclGinBarrierSession<Coop>::sync(Coop coop, cuda::memor
 template<typename Coop>
 NCCL_DEVICE_INLINE ncclResult_t ncclGinBarrierSession<Coop>::sync(
     Coop coop, cuda::memory_order ord, ncclGinFenceLevel fence, uint64_t timeoutCycles) {
-  return this->syncInternal</*EnableTimeout=*/true>(coop, ord, fence, timeoutCycles);
+  return this->template syncInternal</*EnableTimeout=*/true>(coop, ord, fence, timeoutCycles);
 }
 #endif
 

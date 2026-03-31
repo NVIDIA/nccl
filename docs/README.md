@@ -19,6 +19,7 @@ source-oriented, repository-local walkthroughs.
 ```mermaid
 flowchart TD
     Docs[docs/] --> EN[en/: source-driven architecture guides]
+    Docs --> ZH[zh/: mirrored Chinese deep dives]
     Docs --> EX[examples/: runnable sample programs]
 ```
 
@@ -35,6 +36,6 @@ actually arrives at its decisions.
 
 ## Suggested starting point
 
-1. Read the [English landing page](en/README.md).
-2. Continue with [quick-start.md](en/quick-start.md).
+1. Choose your language: [English](en/README.md) or [Chinese](zh/README.md).
+2. Continue with the matching `quick-start.md` in that language directory.
 3. Keep [examples](examples/README.md) open for runnable reference code.

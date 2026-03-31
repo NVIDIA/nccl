@@ -324,8 +324,13 @@ ncclResult_t ncclTopoCheckP2p(struct ncclComm* comm, struct ncclTopoSystem* syst
 
   int arch, vendor, model;
   NCCLCHECK(ncclTopoCpuType(system, &arch, &vendor, &model));
-  // Allow P2P between pairs of GPUs on AMD systems
-  if ((arch == NCCL_TOPO_CPU_ARCH_X86 && vendor == NCCL_TOPO_CPU_VENDOR_AMD) && system->nodes[GPU].count <= 2) p2pLevel = PATH_SYS;
+  // Allow P2P on AMD systems: SYS level for ≤2 GPUs (original behavior),
+  // PHB level for >2 GPUs to enable same-socket P2P through the PCIe Host Bridge.
+  // Without this, GPUs under separate root complexes on the same NUMA node
+  // (PATH_PHB) fall back to shared memory transport, losing 24-46% bandwidth.
+  if (arch == NCCL_TOPO_CPU_ARCH_X86 && vendor == NCCL_TOPO_CPU_VENDOR_AMD) {
+    p2pLevel = (system->nodes[GPU].count <= 2) ? PATH_SYS : PATH_PHB;
+  }
 
   // User override
   NCCLCHECK(ncclGetUserP2pLevel(&p2pLevel));

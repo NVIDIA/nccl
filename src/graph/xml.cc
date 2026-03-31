@@ -540,8 +540,10 @@ ncclResult_t ncclTopoGetXmlFromCpu(struct ncclXmlNode* cpuNode, struct ncclXml* 
     } cpuid1;
     unsigned unused;
     __cpuid(1, cpuid1.val, unused, unused, unused);
-    int familyId = cpuid1.familyId + (cpuid1.extFamilyId << 4);
-    int modelId = cpuid1.modelId + (cpuid1.extModelId << 4);
+    int familyId = cpuid1.familyId;
+    int modelId = cpuid1.modelId;
+    if (familyId == 15 || familyId == 6) modelId += cpuid1.extModelId << 4;
+    if (familyId == 15) familyId += cpuid1.extFamilyId;
     NCCLCHECK(xmlSetAttrInt(cpuNode, "familyid", familyId));
     NCCLCHECK(xmlSetAttrInt(cpuNode, "modelid", modelId));
   }

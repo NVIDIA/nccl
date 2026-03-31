@@ -8,6 +8,12 @@ NCCL (pronounced "Nickel") is a stand-alone library of standard communication ro
 
 For more information on NCCL usage, please refer to the [NCCL documentation](https://docs.nvidia.com/deeplearning/sdk/nccl-developer-guide/index.html).
 
+## Repository-local Learning Guides
+
+For source-oriented walkthroughs maintained in this repository, see
+[`docs/README.md`](docs/README.md). For runnable examples, see
+[`docs/examples/README.md`](docs/examples/README.md).
+
 ## Build
 
 Note: the official and tested builds of NCCL can be downloaded from: https://developer.nvidia.com/nccl. You can skip the following build steps if you choose to use the official builds.

@@ -37,18 +37,9 @@ typedef enum {
 } ncclEpTensorTag_t;
 
 
-// N-dimensional tensor used to describe various user inputs
+// Opaque N-dimensional tensor handle used to describe various user inputs
 // (i.e., tokens, top-k indices, weights, scales, etc.)
-typedef struct {
-    unsigned int version;             // Structure version (set to 1.0.0)
-    unsigned int ndim;                // Number of dimensions
-    unsigned int* sizes;              // Dimension sizes [ndim]
-    unsigned int* strides;            // Strides in elements [ndim]
-    ncclDataType_t datatype;          // Element data type
-    void* data;                       // Pointer to tensor data
-    unsigned int tag;                 // Tensor identification tag
-    ncclEpTensorFlags_t flags;       // Tensor flags (set to 0)
-} ncclNDTensor_t;
+typedef struct ncclNDTensor* ncclNDTensor_t;
 
 // Communication algorithm (mode)
 typedef enum {
@@ -125,9 +116,13 @@ ncclResult_t ncclEpGroupDestroy(
 );
 
 
-// Create a tensor with the given dimensions and data type using the EP group's allocator.
+// Create a tensor with the given dimensions and data type.
 //   The implementation guarantees that the tensor is contiguous in memory (including accordingly
 //   setting the strides to 1 for all dimensions).
+//
+//   When data is nullptr, memory is allocated using the EP group's allocator and the tensor
+//   owns the memory (freed on destroy). When data is non-null, the tensor wraps the user-provided
+//   pointer without taking ownership (data is NOT freed on destroy).
 //
 // Arguments:
 //   ep_group     - [IN]  EP group to create the tensor for
@@ -135,6 +130,7 @@ ncclResult_t ncclEpGroupDestroy(
 //   ndim         - [IN]  Number of dimensions
 //   datatype     - [IN]  Data type
 //   tag          - [IN]  Tensor identification tag
+//   data         - [IN]  nullptr = library allocates, non-null = user-managed pointer
 //   size0..size4 - [IN]  Dimension sizes
 //
 // Returns: ncclResult_t error code
@@ -145,6 +141,7 @@ ncclResult_t ncclEpTensorCreate(
     unsigned int ndim,
     ncclDataType_t datatype,
     ncclEpTensorTag_t tag,
+    void* data,
     unsigned int size0,
     unsigned int size1 = 1,
     unsigned int size2 = 1,
@@ -153,17 +150,20 @@ ncclResult_t ncclEpTensorCreate(
 );
 
 
-// Destroy a tensor and free its memory using the group's allocator.
+// Destroy a tensor and free its handle.
+//   If the tensor owns its data (created with data=nullptr), the data is freed
+//   using the group's allocator. If the tensor wraps user-provided data, only the
+//   handle is freed; the data pointer is NOT freed.
 //
 // Arguments:
-//   ep_group     - [IN]  EP group to destroy the tensor for
-//   tensor       - [IN] Pointer to the tensor to destroy
+//   ep_group     - [IN]  EP group the tensor belongs to
+//   tensor       - [IN]  Tensor handle to destroy
 //
 // Returns: ncclResult_t error code
 
 ncclResult_t ncclEpTensorDestroy(
     ncclEpGroup_t ep_group,
-    ncclNDTensor_t* tensor
+    ncclNDTensor_t tensor
 );
 
 // Opaque type forward declaration
@@ -199,8 +199,8 @@ typedef struct ncclEpHandleConfig* ncclEpHandleConfig_t;  // Reserved for future
 ncclResult_t ncclEpCreateHandle(
     ncclEpHandle_t* handle,
     ncclEpGroup_t ep_group,
-    const ncclNDTensor_t* topk_idx,
-    ncclNDTensor_t* const* local_tensors,
+    ncclNDTensor_t topk_idx,
+    const ncclNDTensor_t* local_tensors,
     unsigned int num_local_tensors,
     const ncclEpHandleConfig_t* config,  // Reserved, should be set to NULL
     cudaStream_t stream,
@@ -275,11 +275,11 @@ typedef struct {
 
 ncclResult_t ncclEpDispatch(
     ncclEpHandle_t handle,
-    const ncclNDTensor_t* const* inputs,
+    const ncclNDTensor_t* inputs,
     unsigned int num_inputs,
-    ncclNDTensor_t* const* outputs,
+    const ncclNDTensor_t* outputs,
     unsigned int num_outputs,
-    ncclNDTensor_t* const* local_tensors,
+    const ncclNDTensor_t* local_tensors,
     unsigned int num_local_tensors,
     unsigned int send_only,
     const ncclEpDispatchConfig_t* config,
@@ -327,11 +327,11 @@ typedef struct ncclEpCombineConfig ncclEpCombineConfig_t;
 
 ncclResult_t ncclEpCombine(
     ncclEpHandle_t handle,
-    const ncclNDTensor_t* const* inputs,
+    const ncclNDTensor_t* inputs,
     unsigned int num_inputs,
-    ncclNDTensor_t* const* outputs,
+    const ncclNDTensor_t* outputs,
     unsigned int num_outputs,
-    ncclNDTensor_t* const* local_tensors,
+    const ncclNDTensor_t* local_tensors,
     unsigned int num_local_tensors,
     unsigned int send_only,
     const ncclEpCombineConfig_t* config,
@@ -379,6 +379,34 @@ ncclResult_t ncclEpComplete(
 ncclResult_t ncclEpHandleGetNumRecvTokens(
     ncclEpHandle_t handle,
     unsigned int* num_recv_tokens
+);
+
+// Get the data pointer from a tensor.
+//
+// Arguments:
+//   tensor   - [IN]   Tensor handle
+//   data     - [OUT]  Pointer to receive the data pointer
+//
+// Returns: ncclResult_t error code
+
+ncclResult_t ncclEpTensorGetData(
+    ncclNDTensor_t tensor,
+    void** data
+);
+
+// Get the sizes and number of dimensions of a tensor.
+//
+// Arguments:
+//   tensor   - [IN]   Tensor handle
+//   sizes    - [OUT]  Pointer to receive the sizes array pointer (not a copy)
+//   ndim     - [OUT]  Pointer to receive the number of dimensions
+//
+// Returns: ncclResult_t error code
+
+ncclResult_t ncclEpTensorGetSizes(
+    ncclNDTensor_t tensor,
+    const unsigned int** sizes,
+    unsigned int* ndim
 );
 
 

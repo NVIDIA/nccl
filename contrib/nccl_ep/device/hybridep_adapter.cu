@@ -22,44 +22,42 @@ namespace hybridep {
 // Kernel: Convert sparse topk_idx to dense routing map
 // ============================================================================
 __global__ void convert_topk_to_routing_map_kernel(
-    const int64_t* __restrict__ topk_idx,  // [num_tokens, num_topk]
-    bool* __restrict__ routing_map,         // [num_tokens, num_experts]
+    const int64_t* __restrict__ topk_idx,    // [num_tokens, num_topk]
+    uint8_t* __restrict__ routing_bitmap,     // [num_tokens, num_experts_packed]
     int num_tokens,
     int num_topk,
-    int num_experts // column count
+    int num_experts_packed                    // = ceil(num_experts / 8)
 ) {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    int token = tid / num_experts;
-    int expert = tid % num_experts;
+    int token = blockIdx.x * blockDim.x + threadIdx.x;
     if (token >= num_tokens) return;
 
-    bool selected = false;
+    // Buffer is pre-zeroed by per-iteration memset; just OR in set bits.
+    // Each thread exclusively owns its row -- no atomics needed.
+    uint8_t* row = routing_bitmap + token * num_experts_packed;
     for (int k = 0; k < num_topk; k++) {
-        if (topk_idx[token * num_topk + k] == expert) {
-            selected = true;
-            break;
+        int expert = static_cast<int>(topk_idx[token * num_topk + k]);
+        if (expert >= 0) {
+            row[expert / 8] |= (1u << (expert % 8));
         }
     }
-    routing_map[token * num_experts + expert] = selected;
 }
 
 // ============================================================================
-// Convert topk to dense routing map
+// Convert topk to bitmap routing map
 // ============================================================================
 void convert_topk_to_routing_map(
     const int64_t* topk_idx,
-    bool* routing_map,
+    uint8_t* routing_bitmap,
     int num_tokens,
     int num_topk,
-    int num_experts,
+    int num_experts_packed,
     cudaStream_t stream
 ) {
-    int total_elements = num_tokens * num_experts;
     int block_size = 256;
-    int grid_size = (total_elements + block_size - 1) / block_size;
+    int grid_size = (num_tokens + block_size - 1) / block_size;
 
     convert_topk_to_routing_map_kernel<<<grid_size, block_size, 0, stream>>>(
-        topk_idx, routing_map, num_tokens, num_topk, num_experts);
+        topk_idx, routing_bitmap, num_tokens, num_topk, num_experts_packed);
 }
 
 // ============================================================================
@@ -221,7 +219,7 @@ __global__ void dense_to_sparse_prob_kernel(
 // Each thread handles one token.
 __global__ void dense_to_sparse_prob_combine_kernel(
     const float* __restrict__ dense_prob,         // [num_tokens, num_experts]
-    const bool* __restrict__ local_routing_map,   // [num_tokens, num_experts]
+    const uint8_t* __restrict__ routing_bitmap,   // [num_tokens, ceil(num_experts / 8)]
     float* __restrict__ combined_topk_weights,    // [num_tokens, topk]
     int64_t* __restrict__ combined_topk_idx,      // [num_tokens, topk] (optional, can be nullptr)
     int num_tokens,
@@ -231,11 +229,12 @@ __global__ void dense_to_sparse_prob_combine_kernel(
     int token = blockIdx.x * blockDim.x + threadIdx.x;
     if (token >= num_tokens) return;
 
+    int packed_cols = (num_experts + 7) / 8;
     int k_out = 0;
 
     // Scan all experts in order (matches original dispatch input order)
     for (int e = 0; e < num_experts && k_out < topk; e++) {
-        if (local_routing_map[token * num_experts + e]) {
+        if ((routing_bitmap[token * packed_cols + e / 8] >> (e % 8)) & 1) {
             // This expert is active for this token
             float weight = dense_prob[token * num_experts + e];
 
@@ -261,7 +260,7 @@ __global__ void dense_to_sparse_prob_combine_kernel(
 // ============================================================================
 void dense_to_sparse_prob_combine(
     const float* dense_prob,
-    const bool* local_routing_map,
+    const uint8_t* routing_bitmap,
     float* combined_topk_weights,
     int64_t* combined_topk_idx,
     int num_tokens,
@@ -273,56 +272,10 @@ void dense_to_sparse_prob_combine(
     int grid_size = (num_tokens + block_size - 1) / block_size;
 
     dense_to_sparse_prob_combine_kernel<<<grid_size, block_size, 0, stream>>>(
-        dense_prob, local_routing_map, combined_topk_weights, combined_topk_idx,
+        dense_prob, routing_bitmap, combined_topk_weights, combined_topk_idx,
         num_tokens, topk, num_experts);
 }
 
-// ============================================================================
-// Kernel: Compute per-expert token counts from local_expert_routing_map
-// ============================================================================
-// Uses shared memory reduction to minimize global memory atomics
-__global__ void compute_per_expert_counts_kernel(
-    const bool* local_expert_routing_map,   // [max_tokens, num_experts]
-    int32_t* per_expert_counts,            // [num_experts]
-    const int32_t* total_tokens,           // [1]
-    int num_experts
-) {
-    int expert_id = blockIdx.x * blockDim.x + threadIdx.x;
-    if (expert_id >= num_experts) return;
-
-    int total = *total_tokens;
-    int count = 0;
-
-    // Count tokens routed to this expert
-    for (int token_idx = 0; token_idx < total; token_idx++) {
-        if (local_expert_routing_map[token_idx * num_experts + expert_id]) {
-            count++;
-        }
-    }
-
-    per_expert_counts[expert_id] = count;
-}
-
-// ============================================================================
-// Compute per-expert token counts from local_expert_routing_map
-// ============================================================================
-void compute_per_expert_counts(
-    const bool* local_expert_routing_map,
-    int32_t* per_expert_counts,
-    const int32_t* total_tokens,
-    int num_experts,
-    cudaStream_t stream
-) {
-    // Initialize counts to 0
-    CUDA_CHECK(cudaMemsetAsync(per_expert_counts, 0, num_experts * sizeof(int32_t), stream));
-
-    // Launch kernel to count tokens per expert
-    int block_size = 256;
-    int grid_size = (num_experts + block_size - 1) / block_size;
-
-    compute_per_expert_counts_kernel<<<grid_size, block_size, 0, stream>>>(
-        local_expert_routing_map, per_expert_counts, total_tokens, num_experts);
-}
 
 // ============================================================================
 // Dense to sparse prob
@@ -351,13 +304,15 @@ void dense_to_sparse_prob(
 // Call metadata preprocessing
 // ============================================================================
 void call_metadata_preprocessing(
-    const bool* global_routing_map,
+    const uint8_t* global_routing_map,
     int32_t* sparse_to_dense_map,
     bool* rdma_to_attn_map,
     bool* attn_to_rdma_map,
+    uint8_t* token_rank_mask,
     int32_t* num_tokens_for_experts,
     bool* local_expert_routing_map,
     int32_t* per_expert_token_counts,
+    void* scan_tmp,
     int node_rank,
     int local_rank,
     int num_tokens_per_rank,
@@ -367,9 +322,11 @@ void call_metadata_preprocessing(
     int experts_per_rank,
     cudaStream_t stream
 ) {
-    void* scan_tmp = nullptr;
-    size_t scan_tmp_size = HYBRIDEP_NUM_BLOCKS_PREPROCESSING * num_ranks_per_node * sizeof(::hybrid_ep::tmp_state_t);
-    CUDA_CHECK(cudaMalloc(&scan_tmp, scan_tmp_size));
+    if (per_expert_token_counts != nullptr) {
+        // Fused scan path accumulates counts with atomicAdd.
+        CUDA_CHECK(cudaMemsetAsync(
+            per_expert_token_counts, 0, experts_per_rank * sizeof(int32_t), stream));
+    }
 
     HYBRIDEP_SWITCH_NUM_NODES(num_nodes, {
             using HybridEPType = ::hybrid_ep::hybrid_ep<MAX_SUPPORTED_TOKENS_PER_RANK, NUM_NODES>;
@@ -380,8 +337,10 @@ void call_metadata_preprocessing(
                 sparse_to_dense_map,
                 rdma_to_attn_map,
                 attn_to_rdma_map,
+                token_rank_mask,
                 num_tokens_for_experts,
                 local_expert_routing_map,
+                per_expert_token_counts,
                 node_rank,
                 local_rank,
                 num_tokens_per_rank,
@@ -390,19 +349,10 @@ void call_metadata_preprocessing(
                 stream
             );
         });
+}
 
-    CUDA_CHECK(cudaFree(scan_tmp));
-
-    // Compute per-expert token counts for NCCL API compatibility if requested
-    // This is done after metadata_preprocessing because we need the populated local_expert_routing_map
-    if (per_expert_token_counts != nullptr) {
-        compute_per_expert_counts(
-            local_expert_routing_map,
-            per_expert_token_counts,
-            num_tokens_for_experts,
-            experts_per_rank,
-            stream);
-    }
+size_t get_preprocessing_scan_tmp_size(int num_ranks_per_node) {
+    return HYBRIDEP_NUM_BLOCKS_PREPROCESSING * num_ranks_per_node * sizeof(::hybrid_ep::tmp_state_t);
 }
 
 // ============================================================================
@@ -442,6 +392,7 @@ build_dispatch_param(const DispatchParams& params) {
     kp.expected_intra_node_flag_value = params.expected_intra_node_flag_value;
     kp.rdma_inter_node_group_flags = params.rdma_inter_node_group_flags;
     kp.intra_node_write_completion_flags = params.intra_node_write_completion_flags;
+    kp.dispatch_grid_barrier_counter = params.dispatch_grid_barrier_counter;
 
     // Runtime config
     kp.local_rank = params.local_rank;
@@ -450,7 +401,7 @@ build_dispatch_param(const DispatchParams& params) {
 
     // Pass device communicators and windows
     kp.dcomms = params.dcomms;
-    kp.nccl_windows = params.nccl_windows;
+    kp.nccl_window = params.nccl_window;
     kp.num_gin_comms = params.num_gin_comms;
     kp.num_ctx_per_comm = params.num_ctx_per_comm;
     kp.gin_base_ptr = params.gin_base_ptr;
@@ -458,15 +409,11 @@ build_dispatch_param(const DispatchParams& params) {
     // Use offsets relative to gin_base_ptr
     kp.mr_info = {
                .attn_input_token_offset = params.mr_info.attn_input_token_offset,
-               .rdma_inter_node_group_token_offset = params.mr_info.rdma_inter_node_group_token_offset,
                .attn_input_prob_offset = params.mr_info.attn_input_prob_offset,
-               .rdma_inter_node_group_prob_offset = params.mr_info.rdma_inter_node_group_prob_offset,
                .attn_input_scaling_factor_offset = params.mr_info.attn_input_scaling_factor_offset,
-               .rdma_inter_node_group_scaling_factor_offset = params.mr_info.rdma_inter_node_group_scaling_factor_offset,
-               // Batched staging parameters
+               // Batched staging parameters (packed layout)
                .rdma_send_staging_offset = params.mr_info.rdma_send_staging_offset,
                .rdma_inter_node_group_packed_offset = params.mr_info.rdma_inter_node_group_packed_offset,
-               .rdma_batch_size = params.mr_info.rdma_batch_size,
                .bytes_per_entry = params.mr_info.bytes_per_entry,
                .max_tokens_per_dest = params.mr_info.max_tokens_per_dest,
                // Streaming signal parameters
@@ -582,7 +529,7 @@ build_combine_param(const CombineParams& params) {
 
     // Pass device communicators and windows
     kp.dcomms = params.dcomms;
-    kp.nccl_windows = params.nccl_windows;
+    kp.nccl_window = params.nccl_window;
     kp.num_gin_comms = params.num_gin_comms;
     kp.num_ctx_per_comm = params.num_ctx_per_comm;
     kp.gin_base_ptr = params.gin_base_ptr;

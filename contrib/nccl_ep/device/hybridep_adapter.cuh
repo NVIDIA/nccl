@@ -35,13 +35,13 @@ namespace hybridep {
 // Kernel: Convert sparse topk_idx to dense routing map
 // ============================================================================
 // NCCL API uses sparse format: topk_idx[token][k] = expert_id
-// HT uses dense format: routing_map[token][expert] = true/false
+// HT uses bitmap format: routing_bitmap[token][expert/8] has bit (expert%8) set
 void convert_topk_to_routing_map(
     const int64_t* topk_idx,
-    bool* routing_map,
+    uint8_t* routing_bitmap,
     int num_tokens,
     int num_topk,
-    int num_experts,
+    int num_experts_packed,    // = ceil(num_experts / 8)
     cudaStream_t stream);
 
 // ============================================================================
@@ -104,7 +104,7 @@ void dense_to_sparse_prob(
 // Uses local_routing_map (original tokens → global experts) for the conversion.
 void dense_to_sparse_prob_combine(
     const float* dense_prob,              // [num_tokens, num_experts] - from kernel output
-    const bool* local_routing_map,        // [num_tokens, num_experts] - original routing map
+    const uint8_t* routing_bitmap,        // [num_tokens, ceil(num_experts / 8)] - bitmap routing map
     float* combined_topk_weights,         // [num_tokens, topk] - output sparse weights
     int64_t* combined_topk_idx,           // [num_tokens, topk] - output GLOBAL expert indices (optional, can be nullptr)
     int num_tokens,
@@ -153,16 +153,18 @@ void dense_to_sparse_prob_combine(
 // Helper to call metadata_preprocessing with resolved template parameters
 // Note: MAX_NUM_OF_TOKENS_PER_RANK is not used by metadata_preprocessing,
 // so we use a fixed dummy value for class instantiation.
-// Note: Temp buffer for scan is allocated/freed internally - caller doesn't need to manage it.
+// Note: Caller must provide a pre-allocated scan temp buffer (see get_preprocessing_scan_tmp_size).
 // Also computes per-expert token counts for NCCL API compatibility when requested.
 void call_metadata_preprocessing(
-    const bool* global_routing_map,     // Already allgathered routing map
+    const uint8_t* global_routing_map,  // Already allgathered bitmap routing map
     int32_t* sparse_to_dense_map,       // Output: token→rank→position mapping
     bool* rdma_to_attn_map,             // Output: which tokens come from RDMA
     bool* attn_to_rdma_map,             // Output: which tokens go to RDMA
+    uint8_t* token_rank_mask,           // Scratch: cached per-token rank mask [tokens * ranks_per_node * nodes]
     int32_t* num_tokens_for_experts,    // Output: total tokens for local experts
     bool* local_expert_routing_map,     // Output: per-expert routing for local tokens
     int32_t* per_expert_token_counts,   // Optional output: per-expert counts (nullptr to skip)
+    void* scan_tmp,                     // Pre-allocated temp buffer (from get_preprocessing_scan_tmp_size)
     int node_rank,                      // This node's rank (0 to num_nodes-1)
     int local_rank,                     // Rank within node (0 to num_ranks_per_node-1)
     int num_tokens_per_rank,            // Actual tokens per rank this iteration (runtime)
@@ -171,6 +173,10 @@ void call_metadata_preprocessing(
     int num_ranks_per_node,             // Ranks per node (NVLink domain size, 1-8)
     int experts_per_rank,               // Experts per GPU
     cudaStream_t stream);
+
+// Returns required size in bytes for the scan temp buffer used by call_metadata_preprocessing.
+// Caller must allocate at least this many bytes and pass the pointer to call_metadata_preprocessing.
+size_t get_preprocessing_scan_tmp_size(int num_ranks_per_node);
 
 // ============================================================================
 // Memory region info structs for GIN
@@ -181,15 +187,11 @@ void call_metadata_preprocessing(
 struct dispatch_memory_region_info_t {
     // Offsets relative to gin_base_ptr for RDMA operations
     size_t attn_input_token_offset;            // Offset of token staging buffer from gin_base_ptr
-    size_t rdma_inter_node_group_token_offset; // Offset of rdma token buffer from gin_base_ptr
     size_t attn_input_prob_offset;             // Offset of prob staging buffer from gin_base_ptr
-    size_t rdma_inter_node_group_prob_offset;  // Offset of rdma prob buffer from gin_base_ptr
     size_t attn_input_scaling_factor_offset;   // Offset of scaling factor staging buffer
-    size_t rdma_inter_node_group_scaling_factor_offset; // Offset of rdma scaling factor buffer
-    // Batched RDMA staging
+    // Batched RDMA staging (packed layout: token+prob+sf per entry)
     size_t rdma_send_staging_offset;           // Offset of per-destination staging buffer
     size_t rdma_inter_node_group_packed_offset;// Offset of packed receive buffer (token+prob+sf per entry)
-    int rdma_batch_size;                       // Tokens per batch (default: 6)
     size_t bytes_per_entry;                    // Size of packed entry (token + prob + sf)
     size_t max_tokens_per_dest;                // Max tokens that can be staged per destination
     // Streaming RDMA signals
@@ -231,15 +233,17 @@ struct DispatchParams {
     const bool* attn_to_rdma_map;
     const int32_t* sparse_to_dense_map;
 
-    // Sync state (from ep_group->doca_config, group-level monotonic counters)
-    uint64_t* expected_rdma_flag_value;
-    uint32_t* expected_intra_node_flag_value;
+    // Sync state (group-level monotonic counters, computed on host)
+    uint64_t expected_rdma_flag_value;
+    uint32_t expected_intra_node_flag_value;
     uint64_t* rdma_inter_node_group_flags;
     uint32_t* intra_node_write_completion_flags;
+    // Grid barrier counter for fused device_sync in dispatch tail
+    uint32_t* dispatch_grid_barrier_counter;
 
     // GIN context (from ep_group, multi-node only)
     ncclDevComm_t* dcomms;           // Device communicators array
-    ncclWindow_t* nccl_windows;      // Windows array (one per comm)
+    ncclWindow_t nccl_window;        // Single registered window handle (by value)
     int num_gin_comms;               // Number of GIN communicators
     int num_ctx_per_comm;            // Number of contexts per communicator
     void* gin_base_ptr;              // Base pointer for offset calculations
@@ -292,15 +296,15 @@ struct CombineParams {
     const bool* attn_to_rdma_map;                      // For multi-node RDMA routing
     const bool* local_expert_routing_map;              // For backward gradient routing
 
-    // Sync state (from ep_group, group-level monotonic counters)
-    uint64_t* combine_expected_rdma_flag_value;
-    uint32_t* combine_expected_intra_node_flag_value;
+    // Sync state (group-level monotonic counters, computed on host)
+    uint64_t combine_expected_rdma_flag_value;
+    uint32_t combine_expected_intra_node_flag_value;
     uint64_t* combine_rdma_inter_node_group_flags;
     uint32_t* combine_intra_node_write_completion_flags;
 
     // GIN context (multi-node only)
     ncclDevComm_t* dcomms;           // Device communicators array
-    ncclWindow_t* nccl_windows;      // Windows array (one per comm)
+    ncclWindow_t nccl_window;        // Single registered window handle (by value)
     int num_gin_comms;               // Number of GIN communicators
     int num_ctx_per_comm;            // Number of contexts per communicator
     void* gin_base_ptr;              // Base pointer for offset calculations

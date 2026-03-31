@@ -109,17 +109,8 @@ class ncclEpAlgorithm_t:
     NCCL_EP_ALGO_HIGH_THROUGHPUT = 1
 
 
-class ncclNDTensor_t(ctypes.Structure):
-    _fields_ = [
-        ("version", ctypes.c_uint),
-        ("ndim", ctypes.c_uint),
-        ("sizes", ctypes.POINTER(ctypes.c_uint)),
-        ("strides", ctypes.POINTER(ctypes.c_uint)),
-        ("datatype", ctypes.c_int),
-        ("data", ctypes.c_void_p),
-        ("tag", ctypes.c_uint),
-        ("flags", ctypes.c_int),
-    ]
+# ncclNDTensor_t is an opaque pointer type
+ncclNDTensor_t = ctypes.c_void_p
 
 
 class ncclEpGroupConfig_t(ctypes.Structure):
@@ -173,8 +164,8 @@ class NCCLLibrary:
         Function("ncclEpGroupDestroy", ncclResult_t, [ncclEpGroup_t, cudaStream_t]),
         Function("ncclEpCreateHandle", ncclResult_t, [
             ctypes.POINTER(ncclEpHandle_t), ncclEpGroup_t,
-            ctypes.POINTER(ncclNDTensor_t),  # topk_idx
-            ctypes.POINTER(ctypes.POINTER(ncclNDTensor_t)),  # local_tensors array
+            ncclNDTensor_t,  # topk_idx (opaque handle)
+            ctypes.POINTER(ncclNDTensor_t),  # local_tensors array
             ctypes.c_uint,  # num_local_tensors
             ctypes.POINTER(ncclEpHandleConfig_t),
             cudaStream_t,
@@ -183,17 +174,17 @@ class NCCLLibrary:
         Function("ncclEpHandleDestroy", ncclResult_t, [ncclEpHandle_t]),
         Function("ncclEpDispatch", ncclResult_t, [
             ncclEpHandle_t,
-            ctypes.POINTER(ctypes.POINTER(ncclNDTensor_t)), ctypes.c_uint,
-            ctypes.POINTER(ctypes.POINTER(ncclNDTensor_t)), ctypes.c_uint,
-            ctypes.POINTER(ctypes.POINTER(ncclNDTensor_t)), ctypes.c_uint,
+            ctypes.POINTER(ncclNDTensor_t), ctypes.c_uint,
+            ctypes.POINTER(ncclNDTensor_t), ctypes.c_uint,
+            ctypes.POINTER(ncclNDTensor_t), ctypes.c_uint,
             ctypes.c_uint, ctypes.POINTER(ncclEpDispatchConfig_t),
             cudaStream_t
         ]),
         Function("ncclEpCombine", ncclResult_t, [
             ncclEpHandle_t,
-            ctypes.POINTER(ctypes.POINTER(ncclNDTensor_t)), ctypes.c_uint,
-            ctypes.POINTER(ctypes.POINTER(ncclNDTensor_t)), ctypes.c_uint,
-            ctypes.POINTER(ctypes.POINTER(ncclNDTensor_t)), ctypes.c_uint,
+            ctypes.POINTER(ncclNDTensor_t), ctypes.c_uint,
+            ctypes.POINTER(ncclNDTensor_t), ctypes.c_uint,
+            ctypes.POINTER(ncclNDTensor_t), ctypes.c_uint,
             ctypes.c_uint, ctypes.POINTER(ncclEpCombineConfig_t), cudaStream_t
         ]),
         Function("ncclEpHandleGetNumRecvTokens", ncclResult_t, [
@@ -202,13 +193,41 @@ class NCCLLibrary:
         Function("ncclEpComplete", ncclResult_t, [
             ncclEpHandle_t, ctypes.c_void_p, cudaStream_t
         ]),
+        Function("ncclEpTensorCreate", ncclResult_t, [
+            ncclEpGroup_t,
+            ctypes.POINTER(ncclNDTensor_t),  # OUT tensor handle
+            ctypes.c_uint,  # ndim
+            ctypes.c_int,   # datatype
+            ctypes.c_int,   # tag
+            ctypes.c_void_p,  # data (nullptr = library allocates)
+            ctypes.c_uint,  # size0
+            ctypes.c_uint,  # size1
+            ctypes.c_uint,  # size2
+            ctypes.c_uint,  # size3
+            ctypes.c_uint,  # size4
+        ]),
+        Function("ncclEpTensorDestroy", ncclResult_t, [
+            ncclEpGroup_t,
+            ncclNDTensor_t,  # tensor handle
+        ]),
+        Function("ncclEpTensorGetData", ncclResult_t, [
+            ncclNDTensor_t,  # tensor handle
+            ctypes.POINTER(ctypes.c_void_p),  # OUT data pointer
+        ]),
+        Function("ncclEpTensorGetSizes", ncclResult_t, [
+            ncclNDTensor_t,  # tensor handle
+            ctypes.POINTER(ctypes.POINTER(ctypes.c_uint)),  # OUT sizes
+            ctypes.POINTER(ctypes.c_uint),  # OUT ndim
+        ]),
     ]
 
     ep_function_names = [
         "ncclEpCreateGroup", "ncclEpGroupDestroy",
         "ncclEpCreateHandle", "ncclEpHandleDestroy",
         "ncclEpDispatch", "ncclEpCombine", "ncclEpHandleGetNumRecvTokens",
-        "ncclEpComplete"
+        "ncclEpComplete",
+        "ncclEpTensorCreate", "ncclEpTensorDestroy",
+        "ncclEpTensorGetData", "ncclEpTensorGetSizes",
     ]
 
     path_to_library_cache = {}
@@ -453,15 +472,15 @@ class NCCLLibrary:
             local_tensors_ptr = None
             num_local_tensors = 0
         else:
-            # Create array of pointers to ncclNDTensor_t
-            tensor_ptrs = (ctypes.POINTER(ncclNDTensor_t) * len(local_tensors))()
+            # Create array of opaque tensor handles
+            tensor_arr = (ncclNDTensor_t * len(local_tensors))()
             for i, tensor in enumerate(local_tensors):
-                tensor_ptrs[i] = ctypes.pointer(tensor)
-            local_tensors_ptr = ctypes.cast(tensor_ptrs, ctypes.POINTER(ctypes.POINTER(ncclNDTensor_t)))
+                tensor_arr[i] = tensor
+            local_tensors_ptr = ctypes.cast(tensor_arr, ctypes.POINTER(ncclNDTensor_t))
             num_local_tensors = len(local_tensors)
 
         self.NCCL_CHECK(self._funcs["ncclEpCreateHandle"](
-            ctypes.byref(handle), ep_group, ctypes.byref(topk_tensor),
+            ctypes.byref(handle), ep_group, topk_tensor,
             local_tensors_ptr, num_local_tensors, config_ptr, stream, use_fp8
         ))
         return handle

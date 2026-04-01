@@ -348,9 +348,11 @@ ncclResult_t ncclTopoCheckP2p(struct ncclComm* comm, struct ncclTopoSystem* syst
   // Compute the PCI distance and compare with the p2pLevel.
   if (path->type <= p2pLevel) *p2p = 1;
 
-  // NCCL_IGNORE_DISABLED_P2P=2 is used by unit tests that don't want to
-  // validate against NVML at all since they are pretending to be on other hw.
-  bool checkNvml = (ncclParamIgnoreDisabledP2p() != 2 && g1 != g2 &&
+  // Use parent pointer comparison to handle multi-rank-per-GPU case:
+  // Different topology indices (g1 != g2) may point to the same physical GPU
+  // when multiple ranks share one device. Skip NVML P2P validation for same device.
+  bool checkNvml = (ncclParamIgnoreDisabledP2p() != 2 &&
+                    system->nodes[GPU].nodes[g1].gpu.parent != system->nodes[GPU].nodes[g2].gpu.parent &&
                     (comm == NULL || (info1->hostHash == comm->peerInfo[comm->rank].hostHash &&
                                       info1->hostHash == info2->hostHash)));
   if (*p2p == 1) {

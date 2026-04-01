@@ -24,9 +24,8 @@
 namespace hybrid_ep{
 
 
-// Single source of truth for "max ranks per node" used for compile-time sizing only.
-// Runtime value is `param.num_of_ranks_per_node`.
-constexpr int MAX_RANKS_PER_NODE = NUM_MAX_NVL_PEERS;
+// MAX_RANKS_PER_NODE is now the LSA_TEAM_SIZE template parameter on hybrid_ep.
+// Removed as a free-standing constant; each instantiation sizes arrays exactly.
 
 // Register head size for combine (BF16 tokens). Tail (if any) accumulates in shared memory.
 constexpr int COMBINE_REG_HEAD_HIDDEN_DIM = 4096;
@@ -1716,8 +1715,8 @@ __forceinline__ __device__ void intra_node_red_warp_group_device_function(const 
   // Backward-combine probability vectors stay in float (no BF16 packing).
   const int NUM_OF_PROB_VEC_ELEMENT_PER_THREAD =
       ((experts_per_rank * num_of_ranks_per_node - 1) / INTRA_NODE_RED_GROUP::size()) + 1;
-  // Worst-case per-thread size for compile-time local storage.
-  constexpr int MAX_NUM_OF_PROB_VEC_ELEMENT_PER_THREAD = ((NUM_MAX_LOCAL_EXPERTS * NUM_MAX_NVL_PEERS - 1) / INTRA_NODE_RED_GROUP::size()) + 1;
+  // Compile-time upper bound sized exactly to this instantiation's LSA team.
+  constexpr int MAX_NUM_OF_PROB_VEC_ELEMENT_PER_THREAD = ((NUM_MAX_LOCAL_EXPERTS * LSA_TEAM_SIZE - 1) / INTRA_NODE_RED_GROUP::size()) + 1;
 
   // This warp group emits chunks in the same per-destination order consumed by the RDMA warp group:
   // chunk 0 for node + 1, node + 2, ... node - 1, then chunk 1 for node + 1, ...
@@ -2966,9 +2965,9 @@ __forceinline__ __device__ void inter_node_red_warp_group_device_function(const 
   const int NUM_OF_PROB_VEC_ELEMENT_PER_THREAD =
       ((experts_per_rank * num_of_ranks_per_node - 1) / NUM_OF_THREADS_PER_PIPELINE) + 1;
 
-  // Maximum prob vector elements per thread (worst case: max experts, max ranks, actual pipeline width)
+  // Compile-time upper bound sized exactly to this instantiation's LSA team.
   constexpr int MAX_NUM_OF_PROB_VEC_ELEMENT_PER_THREAD =
-      ((NUM_MAX_LOCAL_EXPERTS * NUM_MAX_NVL_PEERS - 1) / NUM_OF_THREADS_PER_PIPELINE) + 1;
+      ((NUM_MAX_LOCAL_EXPERTS * LSA_TEAM_SIZE - 1) / NUM_OF_THREADS_PER_PIPELINE) + 1;
 
   // The inter node reduction warp group of each CUDA block produce a token group of a chunk at a time. Token groups of each chunk assigned to each CUDA block in interleave pattern.
   // The chunk order is: i.e. chunk 0, then chunk 1, ... the last chunk of attn output buffer.
@@ -3991,6 +3990,7 @@ static __device__ __forceinline__ uint8_t bitmap_row_to_rank_mask(
 template<int NUM_THREADS_PER_BLOCK,
          int NUM_OF_BLOCKS,
          int NUM_OF_NODES,
+         int LSA_TEAM_SIZE,
          bool ENABLE_PER_EXPERT_COUNTS>
 __launch_bounds__(NUM_THREADS_PER_BLOCK, 1)
 __global__ void scan(const uint8_t* input_routing_map,
@@ -4017,7 +4017,7 @@ __global__ void scan(const uint8_t* input_routing_map,
   constexpr int NUM_OF_TOTAL_THREADS = NUM_THREADS_PER_BLOCK * NUM_OF_BLOCKS;
 
   // Maximum ranks per node for compile-time sizing of per-thread arrays
-  constexpr int MAX_RANKS_PER_NODE_SCAN = NUM_MAX_NVL_PEERS;
+  constexpr int MAX_RANKS_PER_NODE_SCAN = LSA_TEAM_SIZE;
 
   // Calculate the number of tokens belong to each CUDA block, warp and thread.
   // We assign 1 token(row in routing map) to 1 thread.
@@ -4374,7 +4374,11 @@ template<
         // The max num of attn tokens output by a rank/GPU. Used by combine API.
         int MAX_NUM_OF_TOKENS_PER_RANK,
         // Number of total NVLink domain, i.e. the size of RDMA domain.
-        int NUM_OF_NODES>
+        int NUM_OF_NODES,
+        // LSA team size: number of ranks reachable via NVLink/LSA from this rank.
+        // Used for compile-time register-file array sizing; queried at runtime via
+        // ncclTeamLsa(comm).nRanks and dispatched via HYBRIDEP_SWITCH_LSA_TEAM_SIZE.
+        int LSA_TEAM_SIZE>
 class hybrid_ep{
 public:
 
@@ -4432,7 +4436,7 @@ public:
         (num_of_ranks_per_node * sizeof(int32_t));
     if (per_expert_token_counts != nullptr) {
       cfg.dynamicSmemBytes = scan_base_smem_size + (experts_per_rank * sizeof(int32_t));
-      auto scan_kernel_ptr = scan<NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, NUM_OF_NODES, true>;
+      auto scan_kernel_ptr = scan<NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, NUM_OF_NODES, LSA_TEAM_SIZE, true>;
       LAUNCH_KERNEL(&cfg, scan_kernel_ptr,
                     input_routing_map, preprocessing_tmp, sparse_to_dense_map,
                     rdma_to_attn_map, attn_to_rdma_map, token_rank_mask, num_of_tokens_for_experts,
@@ -4440,7 +4444,7 @@ public:
                     num_of_tokens_per_rank, num_of_ranks_per_node, experts_per_rank);
     } else {
       cfg.dynamicSmemBytes = scan_base_smem_size;
-      auto scan_kernel_ptr = scan<NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, NUM_OF_NODES, false>;
+      auto scan_kernel_ptr = scan<NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, NUM_OF_NODES, LSA_TEAM_SIZE, false>;
       LAUNCH_KERNEL(&cfg, scan_kernel_ptr,
                     input_routing_map, preprocessing_tmp, sparse_to_dense_map,
                     rdma_to_attn_map, attn_to_rdma_map, token_rank_mask, num_of_tokens_for_experts,

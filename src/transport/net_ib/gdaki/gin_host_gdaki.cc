@@ -486,7 +486,6 @@ ncclResult_t ncclGinGdakiCreateContext(void *collComm, int nSignals, int nCounte
   ncclResult_t status = ncclSuccess;
 
   static std::mutex lockMutex;
-  std::unique_lock<std::mutex> lock(lockMutex, std::defer_lock);
 
   struct ncclGinIbCollComm *cComm = (struct ncclGinIbCollComm *)collComm;
 
@@ -605,7 +604,7 @@ ncclResult_t ncclGinGdakiCreateContext(void *collComm, int nSignals, int nCounte
     qp_init_attr.send_dbr_mode_ext = DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_VALID_DBR;
 
 
-  lock.lock();
+  lockMutex.lock();
 
   for (int qp_idx = 0; qp_idx < nqps_for_comm; qp_idx++) {
 retry_create_qp_group_hl:
@@ -657,7 +656,7 @@ retry_create_qp_group_hl:
          doca_verbs_qp_get_qpn(gdaki_ctx->companion_gqps[qp_idx]->qp));
   }
 
-  lock.unlock();
+  lockMutex.unlock();
 
   for (int ctx_idx = 0; ctx_idx < ncontexts; ctx_idx++) {
     // Prepare information for exchange with peers

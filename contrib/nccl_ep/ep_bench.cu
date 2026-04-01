@@ -897,7 +897,7 @@ HighThroughputBytes calculateHighThroughputBytes(
     int myRank,
     int nRanks,
     bool use_fp8,
-    int num_ranks_per_node = 8
+    int num_ranks_per_node
 ) {
     HighThroughputBytes bytes = {0, 0, 0, 0, 0, 0, 0, 0, use_fp8};
 
@@ -1572,7 +1572,8 @@ int main(int argc, char* argv[]) {
         ll_bytes = calculateLowLatencyBytes(topk_idx_host, num_tokens, top_k, hidden, use_fp8);
     } else {
         ht_bytes = calculateHighThroughputBytes(
-            topk_idx_host, num_tokens, top_k, num_experts, hidden, myRank, nRanks, use_fp8);
+            topk_idx_host, num_tokens, top_k, num_experts, hidden, myRank, nRanks, use_fp8,
+            ncclTeamLsa(comm).nRanks);
     }
 
     {

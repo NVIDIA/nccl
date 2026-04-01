@@ -20,15 +20,14 @@ namespace nccl_ep {
 namespace hybridep {
 
 // ============================================================================
-// Maximum constants from configs.cuh (for array sizing/validation only):
-//   NUM_MAX_NVL_PEERS = 8       (max ranks per node)
-//   NUM_MAX_RDMA_PEERS = 20     (max number of nodes)
-//   NUM_MAX_LOCAL_EXPERTS = 1024 (max experts per rank)
+// Runtime constants (from ep_group, not hardcoded):
+//   lsa_team_size  - ncclTeamLsa(comm).nRanks  (up to 72 for MNNVL/NVL72)
+//   rdma_ranks     - nRanks / lsa_team_size
+//   num_local_experts, hidden
 //
-// Actual runtime values come from ep_group:
-//   num_nvl_ranks, rdma_ranks, num_local_experts, hidden
 // Use HYBRIDEP_SWITCH_* macros to instantiate templates with runtime values.
-//
+// LSA team size is dispatched in steps of 4 up to 72; each instantiation
+// sizes its own register-file arrays via the LSA_TEAM_SIZE template param.
 // ============================================================================
 
 // ============================================================================
@@ -118,6 +117,31 @@ void dense_to_sparse_prob_combine(
 // ============================================================================
 
 
+
+// Switch on LSA team size (multiples of 4, up to 72 for NVL72/MNNVL).
+// Instantiates templates with LSA_TEAM_SIZE, sizing register-file arrays exactly.
+#define HYBRIDEP_SWITCH_LSA_TEAM_SIZE(lsa_val, ...) \
+    do { switch (lsa_val) { \
+        case  4: { constexpr int LSA_TEAM_SIZE =  4; __VA_ARGS__; } break; \
+        case  8: { constexpr int LSA_TEAM_SIZE =  8; __VA_ARGS__; } break; \
+        case 12: { constexpr int LSA_TEAM_SIZE = 12; __VA_ARGS__; } break; \
+        case 16: { constexpr int LSA_TEAM_SIZE = 16; __VA_ARGS__; } break; \
+        case 20: { constexpr int LSA_TEAM_SIZE = 20; __VA_ARGS__; } break; \
+        case 24: { constexpr int LSA_TEAM_SIZE = 24; __VA_ARGS__; } break; \
+        case 28: { constexpr int LSA_TEAM_SIZE = 28; __VA_ARGS__; } break; \
+        case 32: { constexpr int LSA_TEAM_SIZE = 32; __VA_ARGS__; } break; \
+        case 36: { constexpr int LSA_TEAM_SIZE = 36; __VA_ARGS__; } break; \
+        case 40: { constexpr int LSA_TEAM_SIZE = 40; __VA_ARGS__; } break; \
+        case 44: { constexpr int LSA_TEAM_SIZE = 44; __VA_ARGS__; } break; \
+        case 48: { constexpr int LSA_TEAM_SIZE = 48; __VA_ARGS__; } break; \
+        case 52: { constexpr int LSA_TEAM_SIZE = 52; __VA_ARGS__; } break; \
+        case 56: { constexpr int LSA_TEAM_SIZE = 56; __VA_ARGS__; } break; \
+        case 60: { constexpr int LSA_TEAM_SIZE = 60; __VA_ARGS__; } break; \
+        case 64: { constexpr int LSA_TEAM_SIZE = 64; __VA_ARGS__; } break; \
+        case 68: { constexpr int LSA_TEAM_SIZE = 68; __VA_ARGS__; } break; \
+        case 72: { constexpr int LSA_TEAM_SIZE = 72; __VA_ARGS__; } break; \
+        default: assert(false && "Unsupported LSA team size (must be multiple of 4, max 72)"); \
+    } } while(0)
 
 // Switch on number of nodes (up to NUM_MAX_RDMA_PEERS from configs.cuh)
 #define HYBRIDEP_SWITCH_NUM_NODES(num_nodes_val, ...) \

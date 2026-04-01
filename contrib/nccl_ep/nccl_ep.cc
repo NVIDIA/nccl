@@ -1758,9 +1758,6 @@ ncclResult_t ncclEpCreateHandle(
             ep_group->comm,
             stream));
 
-        // Sync before preprocessing (ncclAllGather is async)
-        CUDA_CHECK(cudaStreamSynchronize(stream));
-
              // ===== Step 3: Run metadata_preprocessing =====
              // Computes exact buffer positions via parallel prefix-sum:
              //   - sparse_to_dense_map: token→rank→buffer_position mapping

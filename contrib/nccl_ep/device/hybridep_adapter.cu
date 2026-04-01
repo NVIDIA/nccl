@@ -329,7 +329,8 @@ void call_metadata_preprocessing(
     }
 
     HYBRIDEP_SWITCH_NUM_NODES(num_nodes, {
-            using HybridEPType = ::hybrid_ep::hybrid_ep<MAX_SUPPORTED_TOKENS_PER_RANK, NUM_NODES>;
+        HYBRIDEP_SWITCH_LSA_TEAM_SIZE(num_ranks_per_node, {
+            using HybridEPType = ::hybrid_ep::hybrid_ep<MAX_SUPPORTED_TOKENS_PER_RANK, NUM_NODES, LSA_TEAM_SIZE>;
             HybridEPType::template metadata_preprocessing<
                 HYBRIDEP_NUM_THREADS_PER_BLOCK_PREPROCESSING, HYBRIDEP_NUM_BLOCKS_PREPROCESSING>(
                 global_routing_map,
@@ -349,6 +350,7 @@ void call_metadata_preprocessing(
                 stream
             );
         });
+    });
 }
 
 size_t get_preprocessing_scan_tmp_size(int num_ranks_per_node) {
@@ -434,7 +436,8 @@ void dispatch_impl(
     cudaStream_t stream
 ) {
     HYBRIDEP_SWITCH_DATATYPE(use_fp8, {
-            HYBRIDEP_SWITCH_NUM_NODES(num_nodes, {
+        HYBRIDEP_SWITCH_NUM_NODES(num_nodes, {
+            HYBRIDEP_SWITCH_LSA_TEAM_SIZE(params.num_ranks_per_node, {
                 // TMA requires prob buffer (experts_per_node * sizeof(float)) to be 16B aligned
                 // Check alignment at runtime now that experts_per_rank is dynamic
                 const int experts_per_node = params.experts_per_rank * params.num_ranks_per_node;
@@ -442,8 +445,9 @@ void dispatch_impl(
                        "experts_per_node must be multiple of 4 for TMA alignment");
 
                 using HybridEPType = ::hybrid_ep::hybrid_ep<
-                    MAX_SUPPORTED_TOKENS_PER_RANK,  // MAX_NUM_OF_TOKENS_PER_RANK - use fixed max for template
-                    NUM_NODES>;
+                    MAX_SUPPORTED_TOKENS_PER_RANK,
+                    NUM_NODES,
+                    LSA_TEAM_SIZE>;
 
                 auto kp = build_dispatch_param<TOKEN_DATA_TYPE>(params);
 
@@ -455,6 +459,7 @@ void dispatch_impl(
                     HYBRIDEP_DISPATCH_NUM_OF_BLOCKS,
                     FORWARD_DISPATCH>(kp, stream);
             });
+        });
     });
 }
 
@@ -558,33 +563,36 @@ void combine_impl(
     using TOKEN_DATA_TYPE = uint16_t;
 
         HYBRIDEP_SWITCH_NUM_NODES(num_nodes, {
-            // TMA requires prob buffer (experts_per_node * sizeof(float)) to be 16B aligned
-            const int experts_per_node = params.experts_per_rank * params.num_ranks_per_node;
-            assert((experts_per_node * sizeof(float)) % 16 == 0 &&
-                   "experts_per_node must be multiple of 4 for TMA alignment");
+            HYBRIDEP_SWITCH_LSA_TEAM_SIZE(params.num_ranks_per_node, {
+                // TMA requires prob buffer (experts_per_node * sizeof(float)) to be 16B aligned
+                const int experts_per_node = params.experts_per_rank * params.num_ranks_per_node;
+                assert((experts_per_node * sizeof(float)) % 16 == 0 &&
+                       "experts_per_node must be multiple of 4 for TMA alignment");
 
-            using HybridEPType = ::hybrid_ep::hybrid_ep<
-                MAX_SUPPORTED_TOKENS_PER_RANK,  // MAX_NUM_OF_TOKENS_PER_RANK - use fixed max for template
-                NUM_NODES>;
+                using HybridEPType = ::hybrid_ep::hybrid_ep<
+                    MAX_SUPPORTED_TOKENS_PER_RANK,
+                    NUM_NODES,
+                    LSA_TEAM_SIZE>;
 
-            auto kp = build_combine_param(params);
+                auto kp = build_combine_param(params);
 
-            // Select config based on NUM_NODES (single-node: 12 stages/2 pipelines, multi-node: 5 stages/1 pipeline)
-            constexpr int num_stages_g2s = (NUM_NODES == 1)
-                ? HYBRIDEP_COMBINE_SINGLENODE_NUM_OF_STAGES_G2S
-                : HYBRIDEP_COMBINE_MULTINODE_NUM_OF_STAGES_G2S;
-            constexpr int num_stages_s2g = (NUM_NODES == 1)
-                ? HYBRIDEP_COMBINE_SINGLENODE_NUM_OF_STAGES_S2G
-                : HYBRIDEP_COMBINE_MULTINODE_NUM_OF_STAGES_S2G;
+                // Select config based on NUM_NODES (single-node: 12 stages/2 pipelines, multi-node: 5 stages/1 pipeline)
+                constexpr int num_stages_g2s = (NUM_NODES == 1)
+                    ? HYBRIDEP_COMBINE_SINGLENODE_NUM_OF_STAGES_G2S
+                    : HYBRIDEP_COMBINE_MULTINODE_NUM_OF_STAGES_G2S;
+                constexpr int num_stages_s2g = (NUM_NODES == 1)
+                    ? HYBRIDEP_COMBINE_SINGLENODE_NUM_OF_STAGES_S2G
+                    : HYBRIDEP_COMBINE_MULTINODE_NUM_OF_STAGES_S2G;
 
-            HybridEPType::template combine<
-                num_stages_g2s,
-                num_stages_s2g,
-                HT_OF_NUM_TOKENS_PER_CHUNK,
-                HYBRIDEP_COMBINE_NUM_OF_TOKENS_PER_GROUP,
-                HYBRIDEP_COMBINE_NUM_OF_BLOCKS,
-                HYBRIDEP_COMBINE_NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
-                BACKWARD_COMBINE>(kp, stream);
+                HybridEPType::template combine<
+                    num_stages_g2s,
+                    num_stages_s2g,
+                    HT_OF_NUM_TOKENS_PER_CHUNK,
+                    HYBRIDEP_COMBINE_NUM_OF_TOKENS_PER_GROUP,
+                    HYBRIDEP_COMBINE_NUM_OF_BLOCKS,
+                    HYBRIDEP_COMBINE_NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
+                    BACKWARD_COMBINE>(kp, stream);
+            });
         });
 }
 

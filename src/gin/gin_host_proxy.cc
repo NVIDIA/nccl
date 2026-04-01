@@ -587,8 +587,8 @@ static ncclResult_t ncclGinProxyProgress(void *ginCtx) {
         if (ret) ctx->hasError = ret;
         NCCLCHECK(ret);
       }
-      if (ginBackend->ginProgress) ginBackend->ginProgress(ctx->ginCtx);
     }
+    if (ginBackend->ginProgress) ginBackend->ginProgress(ctx->ginCtx);
   }
 
   return ncclSuccess;

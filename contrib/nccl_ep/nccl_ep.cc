@@ -57,9 +57,6 @@ static void tensor_free(ncclEpGroup_t group, ncclNDTensor_t t);
 } while(0)
 #endif
 
-// Constants for low-latency mode
-#define NUM_GPUS_PER_NODE_LOW_LATENCY 8
-
 // Helper function to convert ncclDataType_t to cudaDataType_t
 static cudaDataType_t ncclDataTypeToCudaDataType(ncclDataType_t nccl_type) {
     switch (nccl_type) {
@@ -161,8 +158,9 @@ struct ncclEpGroup {
 
     void* ep_workspace;       // Device workspace for EP operations
     int cuda_device_id;        // CUDA device ID
-    int rdma_ranks;           // RDMA ranks (nRanks / NUM_MAX_NVL_PEERS)
-    int rdma_rank;            // RDMA rank (rank / NUM_MAX_NVL_PEERS)
+    int lsa_team_size;        // LSA team size: ncclTeamLsa(comm).nRanks
+    int rdma_ranks;           // RDMA ranks (nRanks / lsa_team_size)
+    int rdma_rank;            // RDMA rank (rank / lsa_team_size)
     void* rdma_buffer;
     ncclEpGroupConfig_t config;         // Stored configuration
 
@@ -213,9 +211,9 @@ struct ncclEpGroup {
     ncclEpAllocFn_t alloc_fn;
     ncclEpFreeFn_t free_fn;
 
-    // NVL
-    int local_nvl_rank;
-    int nvl_rank_count;
+    // LSA (NVLink / MNNVL)
+    int local_lsa_rank;
+    int lsa_rank_count;
 
     // NCCL device API
     size_t num_nccl_comms;
@@ -278,7 +276,7 @@ struct ncclEpGroup {
         void* host_ptr_block = nullptr;        // Single cudaHostAlloc for all pointer arrays
 
         // Config
-        int num_nvl_ranks;
+        int lsa_team_size;
         bool initialized;
         bool internode_initialized;
     } ht_buffers;
@@ -302,8 +300,8 @@ struct ncclEpGroup {
         num_sms_ht(0),
         alloc_fn(nullptr),
         free_fn(nullptr),
-        local_nvl_rank(0),
-        nvl_rank_count(0),
+        local_lsa_rank(0),
+        lsa_rank_count(0),
         num_nccl_comms(0),
         nccl_comms{},
         nccl_dev_comms(nullptr),
@@ -371,27 +369,27 @@ static ncclResult_t init_hybridep_intranode(ncclEpGroup_t ep_group,
     int nRanks = ep_group->nRanks;
     int nNodes = ep_group->nNodes;
     int rank = ep_group->rank;
-    int n_ranks_per_node = nRanks / nNodes;
-    int local_nvl_rank = rank % n_ranks_per_node;
+    int n_ranks_per_node = ep_group->lsa_team_size;
+    int local_lsa_rank = rank % n_ranks_per_node;
     int hidden = ep_group->hidden;
     int num_local_experts = ep_group->num_local_experts;
     int max_recv_tokens = ep_group->max_recv_tokens;
 
-    // Set group-level NVL info
-    ep_group->local_nvl_rank = local_nvl_rank;
-    ep_group->nvl_rank_count = n_ranks_per_node;
-    ep_group->ht_buffers.num_nvl_ranks = n_ranks_per_node;
+    // Set group-level LSA info
+    ep_group->local_lsa_rank = local_lsa_rank;
+    ep_group->lsa_rank_count = n_ranks_per_node;
+    ep_group->ht_buffers.lsa_team_size = n_ranks_per_node;
     ep_group->ht_buffers.initialized = false;
 
     // Enable P2P access
     for (int i = 0; i < n_ranks_per_node; i++) {
-        if (i == local_nvl_rank) continue;
+        if (i == local_lsa_rank) continue;
         int can_p2p = 0;
-        CUDA_CHECK(cudaDeviceCanAccessPeer(&can_p2p, local_nvl_rank, i));
+        CUDA_CHECK(cudaDeviceCanAccessPeer(&can_p2p, local_lsa_rank, i));
         if (can_p2p) {
             cudaError_t err = cudaDeviceEnablePeerAccess(i, 0);
             if (err != cudaSuccess && err != cudaErrorPeerAccessAlreadyEnabled) {
-                fprintf(stderr, "HT: Failed to enable P2P from GPU %d to GPU %d\n", local_nvl_rank, i);
+                fprintf(stderr, "HT: Failed to enable P2P from GPU %d to GPU %d\n", local_lsa_rank, i);
             }
         }
     }
@@ -451,7 +449,7 @@ static ncclResult_t init_hybridep_intranode(ncclEpGroup_t ep_group,
     ep_group->ht_buffers.combine_expert_input_prob_buffer_ptrs = reinterpret_cast<float**>(hptr);
 
     // Merged completion flags (rank 0: dispatch + combine in single allocation)
-    if (local_nvl_rank == 0) {
+    if (local_lsa_rank == 0) {
         uint32_t* completion_flags_base;
         CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&completion_flags_base), 2 * sizeof(uint32_t)));
         CUDA_CHECK(cudaMemsetAsync(completion_flags_base, 0, 2 * sizeof(uint32_t), stream));
@@ -476,7 +474,7 @@ static ncclResult_t init_hybridep_intranode(ncclEpGroup_t ep_group,
     memset(local_handles, 0, sizeof(local_handles));
 
     CUDA_CHECK(cudaIpcGetMemHandle(&local_handles[0], ep_group->ht_buffers.ipc_mega_buffer));
-    if (local_nvl_rank == 0) {
+    if (local_lsa_rank == 0) {
         CUDA_CHECK(cudaIpcGetMemHandle(&local_handles[1], ep_group->ht_buffers.intra_node_write_completion_flags));
     }
 
@@ -507,7 +505,7 @@ static ncclResult_t init_hybridep_intranode(ncclEpGroup_t ep_group,
 
     // Single loop: open 1 mega-buffer IPC handle per peer, derive 4 pointers via offsets
     for (int i = 0; i < n_ranks_per_node; i++) {
-        if (i == local_nvl_rank) {
+        if (i == local_lsa_rank) {
             ep_group->ht_buffers.dispatch_expert_output_token_buffer_ptrs[i] =
                 ep_group->ht_buffers.expert_output_token;
             ep_group->ht_buffers.dispatch_expert_output_prob_buffer_ptrs[i] =
@@ -538,7 +536,7 @@ static ncclResult_t init_hybridep_intranode(ncclEpGroup_t ep_group,
     }
 
     // Merged completion flags (non-rank-0 opens single IPC handle from node-local rank 0)
-    if (local_nvl_rank != 0) {
+    if (local_lsa_rank != 0) {
         int node_local_rank0_global = node_id * n_ranks_per_node;
         cudaIpcMemHandle_t rank0_handle;
         memcpy(&rank0_handle, all_handles_buf[1].get() + node_local_rank0_global * CUDA_IPC_HANDLE_SIZE, CUDA_IPC_HANDLE_SIZE);
@@ -558,19 +556,19 @@ static ncclResult_t init_hybridep_intranode(ncclEpGroup_t ep_group,
 static ncclResult_t destroy_hybridep_intranode(ncclEpGroup_t ep_group) {
     if (!ep_group->ht_buffers.initialized) return ncclSuccess;
 
-    int local_nvl_rank = ep_group->local_nvl_rank;
-    int n_ranks_per_node = ep_group->ht_buffers.num_nvl_ranks;
+    int local_lsa_rank = ep_group->local_lsa_rank;
+    int n_ranks_per_node = ep_group->ht_buffers.lsa_team_size;
 
     // Close IPC handles: 1 mega-buffer handle per peer + 1 completion flag handle
     for (int i = 0; i < n_ranks_per_node; i++) {
-        if (i != local_nvl_rank && ep_group->ht_buffers.peer_ipc_base_ptrs &&
+        if (i != local_lsa_rank && ep_group->ht_buffers.peer_ipc_base_ptrs &&
             ep_group->ht_buffers.peer_ipc_base_ptrs[i]) {
             cudaIpcCloseMemHandle(ep_group->ht_buffers.peer_ipc_base_ptrs[i]);
         }
     }
 
     // Close completion flag IPC handle (non-rank-0)
-    if (local_nvl_rank != 0) {
+    if (local_lsa_rank != 0) {
         if (ep_group->ht_buffers.intra_node_write_completion_flags) {
             cudaIpcCloseMemHandle(ep_group->ht_buffers.intra_node_write_completion_flags);
         }
@@ -594,7 +592,7 @@ static ncclResult_t destroy_hybridep_intranode(ncclEpGroup_t ep_group) {
     }
 
     // Free merged completion flags (rank 0 only; base pointer covers both dispatch and combine)
-    if (local_nvl_rank == 0) {
+    if (local_lsa_rank == 0) {
         if (ep_group->ht_buffers.intra_node_write_completion_flags) {
             cudaFree(ep_group->ht_buffers.intra_node_write_completion_flags);
         }
@@ -662,12 +660,12 @@ static ncclResult_t init_hybridep_internode(ncclEpGroup_t ep_group,
     int nRanks = ep_group->nRanks;
     int rank = ep_group->rank;
     int n_ranks_per_node = nRanks / nNodes;
-    int local_nvl_rank = rank % n_ranks_per_node;
+    int local_lsa_rank = rank % n_ranks_per_node;
 
     // Set group-level NVL info
-    ep_group->local_nvl_rank = local_nvl_rank;
-    ep_group->nvl_rank_count = n_ranks_per_node;
-    ep_group->ht_buffers.num_nvl_ranks = n_ranks_per_node;
+    ep_group->local_lsa_rank = local_lsa_rank;
+    ep_group->lsa_rank_count = n_ranks_per_node;
+    ep_group->ht_buffers.lsa_team_size = n_ranks_per_node;
     ep_group->ht_buffers.internode_initialized = false;
 
     if (nNodes <= 1) {
@@ -785,7 +783,7 @@ static ncclResult_t init_hybridep_internode(ncclEpGroup_t ep_group,
     // =========================================================================
     // Phase 2: main_comm collective -- create split communicator
     // =========================================================================
-    int color = local_nvl_rank;
+    int color = local_lsa_rank;
     int key = ep_group->rdma_rank;
     NCCLCHECK(ncclCommSplit(ep_group->comm, color, key, &ep_group->gin_config.split_comm, nullptr));
 
@@ -938,8 +936,13 @@ ncclResult_t ncclEpCreateGroup(
     assert(!(in_config->algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT &&
              in_config->max_tokens_per_rank > MAX_SUPPORTED_TOKENS_PER_RANK) &&
              "ncclEpCreateGroup: HT max_tokens_per_rank exceeds build-time MAX_SUPPORTED_TOKENS_PER_RANK");
+    // Query LSA team size: number of ranks reachable via NVLink/LSA from this rank.
+    ncclTeam lsa_team = ncclTeamLsa(comm);
+    const int lsa_team_size = lsa_team.nRanks;
+
     if (hybridep_mode) {
-        assert((nRanks % NUM_MAX_NVL_PEERS) == 0 && "ncclEpCreateGroup: HT requires num_ranks divisible by 8");
+        assert((nRanks % lsa_team_size) == 0 &&
+               "ncclEpCreateGroup: HT requires nRanks divisible by lsa_team_size");
     }
 
     // Allocate EP group structure
@@ -989,9 +992,10 @@ ncclResult_t ncclEpCreateGroup(
         ep_group->config.num_qp_per_rank = 24;
     }
 
-    // Calculate and store RDMA rank
-    ep_group->rdma_ranks = std::max(1, ep_group->nRanks / NUM_MAX_NVL_PEERS);
-    ep_group->rdma_rank = ep_group->rank / NUM_MAX_NVL_PEERS;
+    // Store LSA team size and derive RDMA rank grouping
+    ep_group->lsa_team_size = lsa_team_size;
+    ep_group->rdma_ranks = std::max(1, ep_group->nRanks / lsa_team_size);
+    ep_group->rdma_rank = ep_group->rank / lsa_team_size;
     ep_group->rdma_buffer = nullptr;
 
     CUDA_CHECK(cudaSetDevice(ep_group->cuda_device_id));
@@ -1034,7 +1038,7 @@ ncclResult_t ncclEpCreateGroup(
         nccl_dev_comms_host[0] = ncclDevComm_t{};
         ep_group->num_dispatch_signals = ep_group->num_local_experts * ep_group->nRanks;
         int num_total_signals = ep_group->num_dispatch_signals;
-        int max_barrier_sessions = (NUM_GPUS_PER_NODE_LOW_LATENCY * ep_group->config.num_qp_per_rank);
+        int max_barrier_sessions = (ep_group->lsa_team_size * ep_group->config.num_qp_per_rank);
 
         ncclCommProperties_t props = NCCL_COMM_PROPERTIES_INITIALIZER;
         NCCLCHECK(ncclCommQueryProperties(ep_group->comm, &props));
@@ -1541,7 +1545,7 @@ ncclResult_t ncclEpCreateHandle(
         const int nRanks = ep_group->nRanks;
         const int num_experts = ep_group->config.num_experts;
         const int max_tokens = ep_group->config.max_tokens_per_rank;
-        const int n_ranks_per_node = ep_group->nvl_rank_count;
+        const int n_ranks_per_node = ep_group->lsa_rank_count;
         const int nNodes = ep_group->nNodes;
         const int experts_per_rank = ep_group->num_local_experts;
 
@@ -1719,7 +1723,7 @@ ncclResult_t ncclEpCreateHandle(
             per_expert_counts_device,
             handle->hybridep.preprocessing_scan_tmp,
             ep_group->rdma_rank,
-            ep_group->local_nvl_rank,
+            ep_group->local_lsa_rank,
             handle->num_tokens,
             ep_group->hidden,
             nNodes,
@@ -1952,7 +1956,7 @@ ncclResult_t ncclEpDispatch(
 
         // HT dispatch kernel uses TMA for token/prob/scaling-factor payloads.
         // Keep these constraints at API-entry to fail fast on unsupported shapes.
-        const int experts_per_node = group->num_local_experts * group->nvl_rank_count;
+        const int experts_per_node = group->num_local_experts * group->lsa_rank_count;
         assert((experts_per_node * static_cast<int>(sizeof(float))) % 16 == 0 &&
                "HT dispatch requires experts_per_node to be multiple of 4 (16B prob TMA alignment)");
 
@@ -2016,7 +2020,7 @@ ncclResult_t ncclEpDispatch(
         nccl_ep::hybridep::DispatchParams params;
         params.hidden_dim = group->hidden;
         params.experts_per_rank = group->num_local_experts;
-        params.num_ranks_per_node = group->nvl_rank_count;
+        params.num_ranks_per_node = group->lsa_rank_count;
         params.attn_input_token = token_ptr;
         params.attn_input_prob = forward_dispatch ? dense_prob : nullptr;
         params.attn_input_scaling_factor = use_fp8 ? static_cast<const float*>(scales_ptr) : nullptr;
@@ -2028,7 +2032,7 @@ ncclResult_t ncclEpDispatch(
         params.attn_to_rdma_map = handle->hybridep.attn_to_rdma_map;
         params.sparse_to_dense_map = handle->hybridep.sparse_to_dense_map;
         group->ht_buffers.host_dispatch_expected_rdma += 1;
-        group->ht_buffers.host_dispatch_expected_intra += group->nvl_rank_count;
+        group->ht_buffers.host_dispatch_expected_intra += group->lsa_rank_count;
         params.expected_rdma_flag_value = is_single_node ? 0 : group->ht_buffers.host_dispatch_expected_rdma;
         params.rdma_inter_node_group_flags = is_single_node ? nullptr : group->ht_buffers.rdma_inter_node_group_flags;
         params.expected_intra_node_flag_value = group->ht_buffers.host_dispatch_expected_intra;
@@ -2045,7 +2049,7 @@ ncclResult_t ncclEpDispatch(
         // All buffers are part of one large registered window
         // Calculate bytes_per_entry for batched staging
         size_t bytes_per_token_entry = group->hidden * sizeof(uint16_t);  // token data
-        size_t bytes_per_prob_entry = (group->num_local_experts * group->nvl_rank_count) * sizeof(float);  // prob data
+        size_t bytes_per_prob_entry = (group->num_local_experts * group->lsa_rank_count) * sizeof(float);  // prob data
         size_t bytes_per_sf_entry = (group->hidden / 128) * sizeof(float);  // scaling factor (FP8)
         size_t bytes_per_entry = bytes_per_token_entry + bytes_per_prob_entry + bytes_per_sf_entry;
 
@@ -2062,7 +2066,7 @@ ncclResult_t ncclEpDispatch(
             .signals_tail_base = is_single_node ? 0 : static_cast<unsigned>(group->gin_config.signals_tail_base),
             .num_max_rdma_chunked_send_tokens = is_single_node ? 0 : group->gin_config.num_max_rdma_chunked_send_tokens,
         };
-        params.local_rank = group->local_nvl_rank;
+        params.local_rank = group->local_lsa_rank;
         params.node_rank = group->rdma_rank;
         params.num_tokens_per_rank = handle->num_tokens;
 
@@ -2085,7 +2089,7 @@ ncclResult_t ncclEpDispatch(
             size_t copy_size = static_cast<size_t>(recv_x->sizes[0]) * recv_x->sizes[1] * ncclTypeSize(recv_x->datatype);
 
             CUDA_CHECK(cudaMemcpyAsync(recv_x->data,
-                group->ht_buffers.dispatch_expert_output_token_buffer_ptrs[group->local_nvl_rank],
+                group->ht_buffers.dispatch_expert_output_token_buffer_ptrs[group->local_lsa_rank],
                 copy_size,
                 cudaMemcpyDeviceToDevice,
                 stream));
@@ -2103,10 +2107,10 @@ ncclResult_t ncclEpDispatch(
             assert(recv_topk_weights->sizes[0] == recv_topk_idx->sizes[0]);
 
             int num_recv_tokens = static_cast<int>(recv_topk_weights->sizes[0]);
-            int experts_per_node = group->num_local_experts * group->nvl_rank_count;
+            int experts_per_node = group->num_local_experts * group->lsa_rank_count;
 
             nccl_ep::hybridep::dense_to_sparse_prob(
-                group->ht_buffers.dispatch_expert_output_prob_buffer_ptrs[group->local_nvl_rank],
+                group->ht_buffers.dispatch_expert_output_prob_buffer_ptrs[group->local_lsa_rank],
                 handle->hybridep.local_expert_routing_map,
                 static_cast<float*>(recv_topk_weights->data),
                 static_cast<int64_t*>(recv_topk_idx->data),
@@ -2114,7 +2118,7 @@ ncclResult_t ncclEpDispatch(
                 handle->num_topk,
                 group->num_local_experts,
                 experts_per_node,
-                group->local_nvl_rank,
+                group->local_lsa_rank,
                 stream);
              } else {
                  // Both outputs must be provided together or neither
@@ -2130,7 +2134,7 @@ ncclResult_t ncclEpDispatch(
                 size_t copy_size = static_cast<size_t>(recv_scales->sizes[0]) * recv_scales->sizes[1] * ncclTypeSize(recv_scales->datatype);
 
                 CUDA_CHECK(cudaMemcpyAsync(recv_scales->data,
-                    group->ht_buffers.dispatch_expert_output_scaling_factor_buffer_ptrs[group->local_nvl_rank],
+                    group->ht_buffers.dispatch_expert_output_scaling_factor_buffer_ptrs[group->local_lsa_rank],
                     copy_size,
                     cudaMemcpyDeviceToDevice,
                     stream));
@@ -2351,12 +2355,12 @@ ncclResult_t ncclEpCombine(
         /* ===== Convert sparse topk_weights to dense prob for backward combine ===== */
         // For backward combine, convert sparse input weights to dense format for HT kernel
         if (backward_combine) {
-            int experts_per_node = group->num_local_experts * group->nvl_rank_count;
+            int experts_per_node = group->num_local_experts * group->lsa_rank_count;
             size_t dense_prob_size = static_cast<size_t>(num_tokens) * experts_per_node * sizeof(float);
 
             // Zero-initialize the dense prob buffer before scattering
             CUDA_CHECK(cudaMemsetAsync(
-                group->ht_buffers.combine_expert_input_prob_buffer_ptrs[group->local_nvl_rank],
+                group->ht_buffers.combine_expert_input_prob_buffer_ptrs[group->local_lsa_rank],
                 0, dense_prob_size, stream));
 
             // Convert sparse [num_tokens, topk] to dense [num_tokens, experts_per_node]
@@ -2364,12 +2368,12 @@ ncclResult_t ncclEpCombine(
             nccl_ep::hybridep::sparse_to_dense_prob_combine(
                 static_cast<const float*>(topk_weights->data),
                 handle->hybridep.local_expert_routing_map,
-                group->ht_buffers.combine_expert_input_prob_buffer_ptrs[group->local_nvl_rank],
+                group->ht_buffers.combine_expert_input_prob_buffer_ptrs[group->local_lsa_rank],
                 num_tokens,
                 num_topk,
                 group->num_local_experts, // experts_per_rank
                 experts_per_node,
-                group->local_nvl_rank,
+                group->local_lsa_rank,
                 stream);
         }
 
@@ -2390,7 +2394,7 @@ ncclResult_t ncclEpCombine(
         nccl_ep::hybridep::CombineParams params;
         params.hidden_dim = group->hidden;
         params.experts_per_rank = group->num_local_experts;
-        params.num_ranks_per_node = group->nvl_rank_count;
+        params.num_ranks_per_node = group->lsa_rank_count;
         // Use HOST pointer arrays - these get copied into the kernel param struct for fast __grid_constant__ access
         params.expert_input_token_ptrs = group->ht_buffers.combine_expert_input_token_buffer_ptrs;
         params.expert_input_prob_ptrs = backward_combine ? group->ht_buffers.combine_expert_input_prob_buffer_ptrs : nullptr;
@@ -2405,7 +2409,7 @@ ncclResult_t ncclEpCombine(
         params.attn_to_rdma_map = handle->hybridep.attn_to_rdma_map;
         params.local_expert_routing_map = handle->hybridep.local_expert_routing_map;
         group->ht_buffers.host_combine_expected_rdma += 1;
-        group->ht_buffers.host_combine_expected_intra += group->nvl_rank_count;
+        group->ht_buffers.host_combine_expected_intra += group->lsa_rank_count;
         params.combine_expected_rdma_flag_value = is_single_node ? 0 : group->ht_buffers.host_combine_expected_rdma;
         params.combine_rdma_inter_node_group_flags = is_single_node ? nullptr : group->ht_buffers.combine_rdma_inter_node_group_flags;
         params.combine_expected_intra_node_flag_value = group->ht_buffers.host_combine_expected_intra;
@@ -2425,7 +2429,7 @@ ncclResult_t ncclEpCombine(
             .rdma_intra_node_red_prob_offset = is_single_node ? 0 : group->gin_config.rdma_intra_node_red_prob_offset,
             .combine_rdma_inter_node_group_prob_offset = is_single_node ? 0 : group->gin_config.combine_rdma_inter_node_group_prob_offset,
         };
-        params.local_rank = group->local_nvl_rank;
+        params.local_rank = group->local_lsa_rank;
         params.node_rank = group->rdma_rank;
         params.num_tokens_per_rank = num_combined_tokens;
         params.num_recv_tokens = num_tokens;

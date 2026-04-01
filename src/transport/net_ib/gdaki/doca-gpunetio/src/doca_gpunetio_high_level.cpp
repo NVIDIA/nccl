@@ -108,7 +108,7 @@ static doca_error_t create_gpu_umem(struct doca_gpu *gpu_dev, struct ibv_pd *ibp
                                     enum doca_gpu_verbs_mem_reg_type mreg_type, uint32_t umem_sz,
                                     void *umem_ptr, struct doca_verbs_umem **umem) {
     doca_error_t status;
-    int dmabuf_fd;
+    int dmabuf_fd = DOCA_VERBS_DMABUF_INVALID_FD;
     struct ibv_context *ibctx = ibpd->context;
 
     if (mreg_type == DOCA_GPUNETIO_VERBS_MEM_REG_TYPE_DEFAULT) {

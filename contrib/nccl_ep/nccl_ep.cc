@@ -367,7 +367,6 @@ static ncclResult_t init_hybridep_intranode(ncclEpGroup_t ep_group,
 {
     ncclComm_t comm = ep_group->comm;
     int nRanks = ep_group->nRanks;
-    int nNodes = ep_group->nNodes;
     int rank = ep_group->rank;
     int n_ranks_per_node = ep_group->lsa_team_size;
     int local_lsa_rank = rank % n_ranks_per_node;
@@ -657,7 +656,6 @@ static ncclResult_t init_hybridep_internode(ncclEpGroup_t ep_group,
     }
 
     int nNodes = ep_group->nNodes;
-    int nRanks = ep_group->nRanks;
     int rank = ep_group->rank;
     // lsa_team_size already set in ncclEpCreateGroup via ncclTeamLsa(comm).nRanks
     int n_ranks_per_node = ep_group->lsa_team_size;

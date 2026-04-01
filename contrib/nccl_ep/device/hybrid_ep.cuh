@@ -786,7 +786,7 @@ static size_t calculate_combine_smem_layout_size(
   return total_size;
 }
 // Data structure for kernel parameter for dispatch kernel.
-template<typename TOKEN_DATA_TYPE>
+template<typename TOKEN_DATA_TYPE, int LSA_TEAM_SIZE>
 struct dispatch_kernel_param_t{
   int hidden_dim;
   int experts_per_rank;
@@ -799,9 +799,9 @@ struct dispatch_kernel_param_t{
   // NOTE: The source pointer arrays are allocated with cudaHostAllocMapped on the host side.
   // Device dereferencing of host-mapped pointer tables is very slow.
   // Keep a fixed-size array here and copy pointers on the host into this param struct.
-  TOKEN_DATA_TYPE* expert_output_token[MAX_RANKS_PER_NODE];
-  float* expert_output_prob[MAX_RANKS_PER_NODE]; // Only valid in forward dispatch.
-  float* expert_output_scaling_factor[MAX_RANKS_PER_NODE]; // Only valid for FP8 token type.
+  TOKEN_DATA_TYPE* expert_output_token[LSA_TEAM_SIZE];
+  float* expert_output_prob[LSA_TEAM_SIZE]; // Only valid in forward dispatch.
+  float* expert_output_scaling_factor[LSA_TEAM_SIZE]; // Only valid for FP8 token type.
   // Internal temp buffers. These buffers are local buffers.
   uint64_t* rdma_inter_node_group_flags; // For RDMA Atomic flags.
   uint32_t* intra_node_write_completion_flags; // For intra-node S2G write completion notification.
@@ -833,6 +833,7 @@ struct dispatch_kernel_param_t{
 };
 
 // Data structure for kernel parameter for combine kernel.
+template<int LSA_TEAM_SIZE>
 struct combine_kernel_param_t{
   int hidden_dim;
   int experts_per_rank;
@@ -841,8 +842,8 @@ struct combine_kernel_param_t{
   // NOTE: The source pointer arrays are allocated with cudaHostAllocMapped on the host side.
   // Device dereferencing of host-mapped pointer tables is very slow.
   // Keep a fixed-size array here and copy pointers on the host into this param struct.
-  uint16_t* expert_input_token[MAX_RANKS_PER_NODE];
-  float* expert_input_prob[MAX_RANKS_PER_NODE];
+  uint16_t* expert_input_token[LSA_TEAM_SIZE];
+  float* expert_input_prob[LSA_TEAM_SIZE];
   // Output buffers. These buffers are local buffers.
   uint16_t* attn_output_token;
   float* attn_output_prob;
@@ -1679,7 +1680,8 @@ template<typename INTRA_NODE_RED_GROUP,
          int NUM_LSA_DOMAINS,
          int NUM_OF_BLOCKS,
          int NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
-         bool BACKWARD_COMBINE>
+         bool BACKWARD_COMBINE,
+         int LSA_TEAM_SIZE>
 __forceinline__ __device__ void intra_node_red_warp_group_device_function(const int node_rank,
                                                                  const int num_of_tokens_per_rank,
                                                                  const int num_of_ranks_per_node,
@@ -2913,7 +2915,8 @@ template<typename SMEM_TYPE,
          int NUM_LSA_DOMAINS,
          int NUM_OF_BLOCKS,
          int NUM_OF_TOKENS_PER_GROUP,
-         bool BACKWARD_COMBINE>
+         bool BACKWARD_COMBINE,
+         int LSA_TEAM_SIZE>
 __forceinline__ __device__ void inter_node_red_warp_group_device_function(const int node_rank,
                                                                  const int num_of_tokens_per_rank,
                                                                  const int num_of_ranks_per_node,
@@ -3645,9 +3648,10 @@ template<typename TOKEN_DATA_TYPE,
          int NUM_LSA_DOMAINS,
          int NUM_OF_BLOCKS,
          bool FORWARD_DISPATCH,
-         int NUM_PIPELINES>
+         int NUM_PIPELINES,
+         int LSA_TEAM_SIZE>
 __launch_bounds__(INTER_NODE_GROUP::size() + INTRA_NODE_G2S_GROUP::size() + INTRA_NODE_S2G_GROUP::size(), 1)
-__global__ void dispatch_kernel(const __grid_constant__ dispatch_kernel_param_t<TOKEN_DATA_TYPE> param)
+__global__ void dispatch_kernel(const __grid_constant__ dispatch_kernel_param_t<TOKEN_DATA_TYPE, LSA_TEAM_SIZE> param)
 {
   if constexpr (NUM_LSA_DOMAINS != 1) {
     static_assert(INTER_NODE_GROUP::size() % 32 == 0 && INTER_NODE_GROUP::size() <= 64,
@@ -3797,13 +3801,14 @@ template<// This type represent intra-node reduction warp group.
          // Number of fully in-flight S2G in intra-node reduction warp group.
          int NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
          // Whether the combine kernel is used in backward process. If so, need to transfer the prob for each token as well.
-         bool BACKWARD_COMBINE>
+         bool BACKWARD_COMBINE,
+         int LSA_TEAM_SIZE>
 // Each CUDA block of combine kernel has 5 warp groups and has the following layout:
 // 1. intra-node reduction warp group(4 warps, only valid for multinode scenario). 2. inter-node reduction warp group(4 warps, 1 pipeline for multinode scenario, 2 pipeline otherwise).
 // 3. intra-node G2S warp group(1 warp, only valid for multinode scenario). 4. inter-node G2S warp group(1 warp for multinode scenario, 2 warps otherwise). 5. inter-node N2N rdma warp group(1 warp, only valid for multinode scenario).
 // Total 6(single-node) or 11(multi-node) warps per CUDA block/SM.
 __launch_bounds__(INTRA_NODE_RED_GROUP::size() + INTER_NODE_RED_GROUP::size() + INTRA_NODE_G2S_GROUP::size() + INTER_NODE_G2S_GROUP::size() + INTER_NODE_RDMA_GROUP::size(), 1)
-__global__ void combine_kernel(const __grid_constant__ combine_kernel_param_t param)
+__global__ void combine_kernel(const __grid_constant__ combine_kernel_param_t<LSA_TEAM_SIZE> param)
 {
   // Compile-time check (only enforce for multi-node layout).
   if constexpr (NUM_LSA_DOMAINS != 1) {
@@ -3902,14 +3907,14 @@ __global__ void combine_kernel(const __grid_constant__ combine_kernel_param_t pa
     // Intra-node reduction warp group.
       intra_node_red_warp_group_device_function
       <INTRA_NODE_RED_GROUP, cur_smem_t, NUM_OF_STAGES_G2S, NUM_OF_STAGES_S2G, NUM_OF_TOKENS_PER_CHUNK, MAX_NUM_OF_TOKENS_PER_RANK,
-      NUM_LSA_DOMAINS, NUM_OF_BLOCKS, NUM_OF_ADDITIONAL_IN_FLIGHT_S2G, BACKWARD_COMBINE>
+      NUM_LSA_DOMAINS, NUM_OF_BLOCKS, NUM_OF_ADDITIONAL_IN_FLIGHT_S2G, BACKWARD_COMBINE, LSA_TEAM_SIZE>
       (param.node_rank, param.num_of_tokens_per_rank, param.num_of_ranks_per_node, param.rdma_to_attn_map, param.rdma_intra_node_red_token, param.rdma_intra_node_red_prob, smem_buffer_ptr, param.hidden_dim, param.experts_per_rank);
     }
   }else if (threadIdx_x_int < INTRA_NODE_RED_GROUP::size() + INTER_NODE_RED_GROUP::size()) {
     // Inter-node reduction warp group.
     inter_node_red_warp_group_device_function
     <cur_smem_t, INTER_NODE_RED_GROUP, NUM_OF_DATA_PIPELINE_PER_BLOCK, NUM_OF_STAGES_G2S, NUM_OF_STAGES_S2G, NUM_OF_TOKENS_PER_CHUNK,
-    NUM_LSA_DOMAINS, NUM_OF_BLOCKS, NUM_OF_TOKENS_PER_GROUP, BACKWARD_COMBINE>
+    NUM_LSA_DOMAINS, NUM_OF_BLOCKS, NUM_OF_TOKENS_PER_GROUP, BACKWARD_COMBINE, LSA_TEAM_SIZE>
     (param.node_rank, param.num_of_tokens_per_rank, param.num_of_ranks_per_node, param.rdma_to_attn_map, param.attn_to_rdma_map, param.attn_output_token, param.attn_output_prob, smem_buffer_ptr, param.hidden_dim, param.experts_per_rank);
   }else if(threadIdx_x_int < INTRA_NODE_RED_GROUP::size() + INTER_NODE_RED_GROUP::size() + INTRA_NODE_G2S_GROUP::size()){
     // Intra-node G2S warp group.
@@ -3972,11 +3977,12 @@ static __device__ __forceinline__ bool bitmap_range_has_set_bit(
   return (bitmap_row[last_byte] & last_mask) != 0;
 }
 
+template<int LSA_TEAM_SIZE>
 static __device__ __forceinline__ uint8_t bitmap_row_to_rank_mask(
     const uint8_t* bitmap_row, int num_of_ranks_per_node, int experts_per_rank) {
   uint8_t rank_mask = 0;
   #pragma unroll
-  for (int rank = 0; rank < MAX_RANKS_PER_NODE; rank++) {
+  for (int rank = 0; rank < LSA_TEAM_SIZE; rank++) {
     if (rank < num_of_ranks_per_node) {
       const int bit_begin = rank * experts_per_rank;
       if (bitmap_range_has_set_bit(bitmap_row, bit_begin, experts_per_rank)) {
@@ -4108,7 +4114,7 @@ __global__ void scan(const uint8_t* input_routing_map,
                                 current_token_id * packed_row_bytes +
                                 node_rank * experts_per_node_packed;
     // Decode bitmap row once into compact per-token rank mask.
-    uint8_t rank_mask = bitmap_row_to_rank_mask(bitmap_row, num_of_ranks_per_node, experts_per_rank);
+    uint8_t rank_mask = bitmap_row_to_rank_mask<LSA_TEAM_SIZE>(bitmap_row, num_of_ranks_per_node, experts_per_rank);
 
     // Accumulate per-rank sums from rank_mask bits.
     #pragma unroll
@@ -4434,22 +4440,29 @@ public:
     const size_t scan_base_smem_size =
         (NUM_OF_WARPS_PER_BLOCK_SCAN * num_of_ranks_per_node * sizeof(int32_t)) +
         (num_of_ranks_per_node * sizeof(int32_t));
-    if (per_expert_token_counts != nullptr) {
-      cfg.dynamicSmemBytes = scan_base_smem_size + (experts_per_rank * sizeof(int32_t));
-      auto scan_kernel_ptr = scan<NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, NUM_LSA_DOMAINS, LSA_TEAM_SIZE, true>;
-      LAUNCH_KERNEL(&cfg, scan_kernel_ptr,
-                    input_routing_map, preprocessing_tmp, sparse_to_dense_map,
-                    rdma_to_attn_map, attn_to_rdma_map, token_rank_mask, num_of_tokens_for_experts,
-                    local_expert_routing_map, per_expert_token_counts, node_rank, local_rank,
-                    num_of_tokens_per_rank, num_of_ranks_per_node, experts_per_rank);
+    // The scan kernel uses a warp-reduction algorithm that requires LSA_TEAM_SIZE <= 32.
+    // MNNVL configurations with LSA_TEAM_SIZE > 32 are not yet supported by the scan kernel.
+    if constexpr (LSA_TEAM_SIZE <= 32) {
+      if (per_expert_token_counts != nullptr) {
+        cfg.dynamicSmemBytes = scan_base_smem_size + (experts_per_rank * sizeof(int32_t));
+        auto scan_kernel_ptr = scan<NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, NUM_LSA_DOMAINS, LSA_TEAM_SIZE, true>;
+        LAUNCH_KERNEL(&cfg, scan_kernel_ptr,
+                      input_routing_map, preprocessing_tmp, sparse_to_dense_map,
+                      rdma_to_attn_map, attn_to_rdma_map, token_rank_mask, num_of_tokens_for_experts,
+                      local_expert_routing_map, per_expert_token_counts, node_rank, local_rank,
+                      num_of_tokens_per_rank, num_of_ranks_per_node, experts_per_rank);
+      } else {
+        cfg.dynamicSmemBytes = scan_base_smem_size;
+        auto scan_kernel_ptr = scan<NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, NUM_LSA_DOMAINS, LSA_TEAM_SIZE, false>;
+        LAUNCH_KERNEL(&cfg, scan_kernel_ptr,
+                      input_routing_map, preprocessing_tmp, sparse_to_dense_map,
+                      rdma_to_attn_map, attn_to_rdma_map, token_rank_mask, num_of_tokens_for_experts,
+                      local_expert_routing_map, static_cast<int32_t*>(nullptr), node_rank, local_rank,
+                      num_of_tokens_per_rank, num_of_ranks_per_node, experts_per_rank);
+      }
     } else {
-      cfg.dynamicSmemBytes = scan_base_smem_size;
-      auto scan_kernel_ptr = scan<NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, NUM_LSA_DOMAINS, LSA_TEAM_SIZE, false>;
-      LAUNCH_KERNEL(&cfg, scan_kernel_ptr,
-                    input_routing_map, preprocessing_tmp, sparse_to_dense_map,
-                    rdma_to_attn_map, attn_to_rdma_map, token_rank_mask, num_of_tokens_for_experts,
-                    local_expert_routing_map, static_cast<int32_t*>(nullptr), node_rank, local_rank,
-                    num_of_tokens_per_rank, num_of_ranks_per_node, experts_per_rank);
+      // TODO: extend scan kernel to support MNNVL LSA team sizes > 32
+      EP_HOST_ASSERT(false && "metadata_preprocessing: scan kernel not yet implemented for LSA_TEAM_SIZE > 32 (MNNVL)");
     }
   }
 
@@ -4466,7 +4479,7 @@ public:
            int NUM_OF_BLOCKS,
            // Whether the dispatch kernel is used in forward process.
            bool FORWARD_DISPATCH>
-  static void dispatch(dispatch_kernel_param_t<TOKEN_DATA_TYPE> param, cudaStream_t stream)
+  static void dispatch(dispatch_kernel_param_t<TOKEN_DATA_TYPE, LSA_TEAM_SIZE> param, cudaStream_t stream)
   {
     constexpr bool multinode_layout = (NUM_LSA_DOMAINS != 1);
     constexpr int NUM_PIPELINES = HYBRIDEP_DISPATCH_NUM_OF_PIPELINES_PER_BLOCK;
@@ -4491,7 +4504,8 @@ public:
                                                      NUM_LSA_DOMAINS,
                                                      NUM_OF_BLOCKS,
                                                      FORWARD_DISPATCH,
-                                                     NUM_PIPELINES>;
+                                                     NUM_PIPELINES,
+                                                     LSA_TEAM_SIZE>;
 
     dispatch_config_t config;
     model_config_t model;
@@ -4517,7 +4531,7 @@ public:
 
     constexpr int BLOCK_DIM = INTER_NODE_GROUP::size() + INTRA_NODE_G2S_GROUP::size() + INTRA_NODE_S2G_GROUP::size();
 #ifdef HYBRIDEP_ENABLE_WARP_TIMING
-    using warp_timing_entry_t = typename dispatch_kernel_param_t<TOKEN_DATA_TYPE>::warp_timing_entry_t;
+    using warp_timing_entry_t = typename dispatch_kernel_param_t<TOKEN_DATA_TYPE, LSA_TEAM_SIZE>::warp_timing_entry_t;
     constexpr int WT_WARPS_PER_BLOCK = BLOCK_DIM / 32;
     constexpr int WT_TOTAL = NUM_OF_BLOCKS * WT_WARPS_PER_BLOCK;
     warp_timing_entry_t* d_wt;
@@ -4576,7 +4590,7 @@ public:
            int NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
            // Whether the combine kernel is used in backward process.
            bool BACKWARD_COMBINE>
-  static void combine(combine_kernel_param_t param, cudaStream_t stream)
+  static void combine(combine_kernel_param_t<LSA_TEAM_SIZE> param, cudaStream_t stream)
   {
     // The warp groups data type for combine kernel, must match the warp groups layout required by the combine kernel.
     constexpr bool multinode_layout = (NUM_LSA_DOMAINS != 1);
@@ -4602,7 +4616,7 @@ public:
     // The combine kernel to be launched.
     const auto combine_kernel_ptr = combine_kernel<INTRA_NODE_RED_GROUP, INTER_NODE_RED_GROUP, INTRA_NODE_G2S_GROUP, INTER_NODE_G2S_GROUP, INTER_NODE_RDMA_GROUP, NUM_OF_DATA_PIPELINE_PER_BLOCK, NUM_OF_STAGES_G2S,
                                                    NUM_OF_STAGES_S2G, NUM_OF_TOKENS_PER_GROUP, NUM_OF_TOKENS_PER_CHUNK, MAX_NUM_OF_TOKENS_PER_RANK,
-                                                  NUM_LSA_DOMAINS, NUM_OF_BLOCKS, NUM_OF_ADDITIONAL_IN_FLIGHT_S2G, BACKWARD_COMBINE>;
+                                                  NUM_LSA_DOMAINS, NUM_OF_BLOCKS, NUM_OF_ADDITIONAL_IN_FLIGHT_S2G, BACKWARD_COMBINE, LSA_TEAM_SIZE>;
 
     // Configure dynamic shared memory for the combine kernel.
     model_config_t model;

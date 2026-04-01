@@ -328,6 +328,10 @@ void call_metadata_preprocessing(
             per_expert_token_counts, 0, experts_per_rank * sizeof(int32_t), stream));
     }
 
+    // The scan kernel used in metadata_preprocessing is a warp-reduction that requires
+    // LSA_TEAM_SIZE <= 32. MNNVL configurations (> 32 GPUs per LSA domain) are not yet supported.
+    EP_HOST_ASSERT(num_ranks_per_node <= 32 && "metadata_preprocessing: LSA team size > 32 not yet supported (MNNVL TODO)");
+
     HYBRIDEP_SWITCH_NUM_LSA_DOMAINS(num_nodes, {
         HYBRIDEP_SWITCH_LSA_TEAM_SIZE(num_ranks_per_node, {
             using HybridEPType = ::hybrid_ep::hybrid_ep<MAX_SUPPORTED_TOKENS_PER_RANK, NUM_LSA_DOMAINS, LSA_TEAM_SIZE>;
@@ -362,10 +366,10 @@ size_t get_preprocessing_scan_tmp_size(int num_ranks_per_node) {
 // ============================================================================
 
 // Helper to populate dispatch_kernel_param_t from DispatchParams
-template<typename TOKEN_DATA_TYPE>
-::hybrid_ep::dispatch_kernel_param_t<TOKEN_DATA_TYPE>
+template<typename TOKEN_DATA_TYPE, int LSA_TEAM_SIZE>
+::hybrid_ep::dispatch_kernel_param_t<TOKEN_DATA_TYPE, LSA_TEAM_SIZE>
 build_dispatch_param(const DispatchParams& params) {
-    ::hybrid_ep::dispatch_kernel_param_t<TOKEN_DATA_TYPE> kp{};
+    ::hybrid_ep::dispatch_kernel_param_t<TOKEN_DATA_TYPE, LSA_TEAM_SIZE> kp{};
     // Model configuration
     kp.hidden_dim = params.hidden_dim;
     kp.experts_per_rank = params.experts_per_rank;
@@ -449,7 +453,7 @@ void dispatch_impl(
                     NUM_LSA_DOMAINS,
                     LSA_TEAM_SIZE>;
 
-                auto kp = build_dispatch_param<TOKEN_DATA_TYPE>(params);
+                auto kp = build_dispatch_param<TOKEN_DATA_TYPE, LSA_TEAM_SIZE>(params);
 
                 HybridEPType::template dispatch<
                     TOKEN_DATA_TYPE,
@@ -490,9 +494,10 @@ void call_dispatch(
 // ============================================================================
 
 // Helper to populate combine_kernel_param_t from CombineParams
-::hybrid_ep::combine_kernel_param_t
+template<int LSA_TEAM_SIZE>
+::hybrid_ep::combine_kernel_param_t<LSA_TEAM_SIZE>
 build_combine_param(const CombineParams& params) {
-    ::hybrid_ep::combine_kernel_param_t kp{};
+    ::hybrid_ep::combine_kernel_param_t<LSA_TEAM_SIZE> kp{};
 
     // Copy IPC buffer pointers from HOST arrays into embedded param struct arrays.
     // This allows fast __grid_constant__ access in the kernel (vs slow global memory indirection).
@@ -574,7 +579,7 @@ void combine_impl(
                     NUM_LSA_DOMAINS,
                     LSA_TEAM_SIZE>;
 
-                auto kp = build_combine_param(params);
+                auto kp = build_combine_param<LSA_TEAM_SIZE>(params);
 
                 // Select config based on NUM_LSA_DOMAINS (single-node: 12 stages/2 pipelines, multi-node: 5 stages/1 pipeline)
                 constexpr int num_stages_g2s = (NUM_LSA_DOMAINS == 1)

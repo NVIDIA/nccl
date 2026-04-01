@@ -894,10 +894,12 @@ static ncclResult_t ncclTopoGetNchannels(struct ncclComm* comm, int g /*local gp
     }
     // Local rank
     path = system->nodes[GPU].nodes[peer].paths[GPU]+g;
-    if (path->type == PATH_NVL) {
+    if (path->type == PATH_NVL || path->type == PATH_NVB) {
+      // NVLink-based connection (NVB uses NVLink)
       float nvlBw = ncclTopoNVLinkBw(system->nodes[GPU].nodes[g].gpu.cudaCompCap);
       *nChannels = 2*std::max(1, (int)(path->bw / nvlBw));
     } else {
+      // PCIe connection
       *nChannels = 2;
     }
   } else {

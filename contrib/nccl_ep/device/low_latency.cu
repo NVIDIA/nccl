@@ -49,8 +49,9 @@ __forceinline__ __device__ uint64_t ncclGetP2pPtr(const uint64_t& dstPtr,
     }
 
     // P2P/NVLink only works between ranks on the same node (LSA team)
-    // Use NCCL team APIs to check if dstRank is in the same LSA team
-    auto commId = expertIdx / MAX_NCCL_GIN_CTX_PER_COMM;
+    // Use NCCL team APIs to check if dstRank is in the same LSA team.
+    // Always use commId=0: single devComm with all GIN contexts (1-comm N-context design).
+    constexpr int commId = 0;
     ncclTeam lsa = ncclTeamLsa(devComms[commId]);
     ncclTeam world = ncclTeamWorld(devComms[commId]);
     if (!ncclTeamRankIsMember(lsa, world, dstRank))
@@ -142,7 +143,7 @@ __forceinline__ __device__ void sendToken(
         if (dstP2pPtr == 0) {
             if (laneId == 0) {
                 size_t expectedSrcOffset = sendOff + tokenIdx * numBytesPerMsg;
-                auto commId = dstExpertLocalIdx / MAX_NCCL_GIN_CTX_PER_COMM;
+                constexpr int commId = 0;
                 auto ctxId = dstExpertLocalIdx % MAX_NCCL_GIN_CTX_PER_COMM;
                 ncclGin net(devComms[commId], ctxId);
                 ncclTeam world = ncclTeamWorld(devComms[commId]);
@@ -230,7 +231,7 @@ __forceinline__ __device__ void sendExpertCount(
 
     if (not isRankMasked(rankMask, dstRank)) {
         if (dstP2pPtr == 0) {
-            auto commId = dstExpertLocalIdx / MAX_NCCL_GIN_CTX_PER_COMM;
+            constexpr int commId = 0;
             auto ctxId = dstExpertLocalIdx % MAX_NCCL_GIN_CTX_PER_COMM;
             auto signalId = signalsBase + dstExpertLocalIdx * numRanks + currRank;
             ncclGin net(devComms[commId], ctxId);
@@ -275,7 +276,7 @@ __forceinline__ __device__ int waitForRecvTokens(
         auto srcP2pPtr = ncclGetP2pPtr(0x01, srcOffset, currRank, srcRank, localExpertIdx, windows, devComms);
 
         if (srcP2pPtr == 0) {
-            auto commId = localExpertIdx / MAX_NCCL_GIN_CTX_PER_COMM;
+            constexpr int commId = 0;
             auto ctxId = localExpertIdx % MAX_NCCL_GIN_CTX_PER_COMM;
             ncclGin net(devComms[commId], ctxId);
             uint64_t curValue;
@@ -896,9 +897,8 @@ __forceinline__ __device__ void sendFinishFlag(
     if (not isRankMasked(rankMask, dstRank)) {
         if (dstP2pPtr == 0) {
             auto signalId = signalsBase + globalExpertIdx;
-            auto localExpertIdxFlag = localExpertIdx;
-            auto commId = localExpertIdxFlag / MAX_NCCL_GIN_CTX_PER_COMM;
-            auto ctxId = localExpertIdxFlag % MAX_NCCL_GIN_CTX_PER_COMM;
+            constexpr int commId = 0;
+            auto ctxId = localExpertIdx % MAX_NCCL_GIN_CTX_PER_COMM;
 
             ncclGin net(devComms[commId], ctxId);
             ncclTeam world = ncclTeamWorld(devComms[commId]);
@@ -943,7 +943,7 @@ __forceinline__ __device__ void waitForRecvFlag(
         if (srcP2pPtr == 0) {
             uint64_t curValue;
             auto localExpertIdxWait = responsibleExpertIdx % numLocalExperts;
-            auto commIdWait = localExpertIdxWait / MAX_NCCL_GIN_CTX_PER_COMM;
+            constexpr int commIdWait = 0;
             auto ctxIdWait = localExpertIdxWait % MAX_NCCL_GIN_CTX_PER_COMM;
             ncclGin net(devComms[commIdWait], ctxIdWait);
             do {
@@ -995,7 +995,7 @@ __forceinline__ __device__ void sendTokenViaRdma(
         (localExpertIdx * numRanks * maxTokensPerRank * numBytesPerSlot) +
         tokenIdx * numBytesPerSlot;
 
-    auto commId = localExpertIdx / MAX_NCCL_GIN_CTX_PER_COMM;
+    constexpr int commId = 0;
     auto ctxId = localExpertIdx % MAX_NCCL_GIN_CTX_PER_COMM;
     ncclGin net(devComms[commId], ctxId);
     ncclTeam world = ncclTeamWorld(devComms[commId]);

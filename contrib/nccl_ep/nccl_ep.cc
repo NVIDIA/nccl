@@ -1042,9 +1042,12 @@ ncclResult_t ncclEpCreateGroup(
         }
 
         ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
+        reqs.barrierCount = max_barrier_sessions;
         if (props.nLsaTeams > 1) {
             reqs.ginContextCount = ep_group->config.num_qp_per_rank;  // all contexts in single comm
-            reqs.ginSignalCount = num_total_signals + max_barrier_sessions;
+            // Signal layout: combine uses [0, num_total_signals), dispatch uses [num_total_signals, 2*num_total_signals)
+            reqs.ginSignalCount = 2 * num_total_signals;
+            reqs.ginForceEnable = true;
             reqs.ginConnectionType = NCCL_GIN_CONNECTION_FULL;
         }
         NCCL_CHECK_RESULT(ncclDevCommCreate(ep_group->comm, &reqs, &nccl_dev_comms_host[0]));

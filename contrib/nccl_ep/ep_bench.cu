@@ -23,6 +23,7 @@
 #include <cuda_profiler_api.h>
 #include <nvtx3/nvToolsExt.h>
 #include <nccl.h>
+#include <nccl_device.h>
 #include "nccl_ep.h"
 
 
@@ -1616,8 +1617,7 @@ int main(int argc, char* argv[]) {
             fflush(stdout);
         }
     } else {
-        // Specific to this test
-        num_recv_tokens = config.max_tokens_per_rank * num_local_experts;
+        num_recv_tokens = config.max_tokens_per_rank * nRanks;
     }
     assert(num_recv_tokens);
 

@@ -14,7 +14,6 @@
 // ============================================================================
 // Configuration constants
 // ============================================================================
-#define NUM_MAX_NVL_PEERS 8
 #define NUM_MAX_RDMA_PEERS 20
 #define NUM_WORKSPACE_BYTES (32 * 1024 * 1024)
 #define NUM_MAX_LOCAL_EXPERTS 1024
@@ -38,7 +37,7 @@
 #define LOW_LATENCY_RECV_PHASE 2
 
 // NCCL GIN Configuration
-#define NUM_GPUS_PER_NODE_LOW_LATENCY 8
+// (NUM_GPUS_PER_NODE_LOW_LATENCY removed: barrier sessions scale with runtime lsa_team_size)
 
 // Make CLion CUDA indexing work
 #ifdef __CLION_IDE__

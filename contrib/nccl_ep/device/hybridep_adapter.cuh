@@ -143,16 +143,17 @@ void dense_to_sparse_prob_combine(
         default: assert(false && "Unsupported LSA team size (must be multiple of 4, max 72)"); \
     } } while(0)
 
-// Switch on number of nodes (up to NUM_MAX_RDMA_PEERS from configs.cuh)
-#define HYBRIDEP_SWITCH_NUM_NODES(num_nodes_val, ...) \
+// Switch on number of LSA domains (RDMA peers = nRanks / lsa_team_size).
+// Each LSA domain is one NVLink/MNNVL clique; domains communicate via RDMA.
+#define HYBRIDEP_SWITCH_NUM_LSA_DOMAINS(num_lsa_domains_val, ...) \
     do { \
-        switch (num_nodes_val) { \
-            case 1:  { constexpr int NUM_NODES = 1;  __VA_ARGS__; } break; \
-            case 2:  { constexpr int NUM_NODES = 2;  __VA_ARGS__; } break; \
-            case 4:  { constexpr int NUM_NODES = 4;  __VA_ARGS__; } break; \
-            case 8:  { constexpr int NUM_NODES = 8;  __VA_ARGS__; } break; \
+        switch (num_lsa_domains_val) { \
+            case 1:  { constexpr int NUM_LSA_DOMAINS = 1;  __VA_ARGS__; } break; \
+            case 2:  { constexpr int NUM_LSA_DOMAINS = 2;  __VA_ARGS__; } break; \
+            case 4:  { constexpr int NUM_LSA_DOMAINS = 4;  __VA_ARGS__; } break; \
+            case 8:  { constexpr int NUM_LSA_DOMAINS = 8;  __VA_ARGS__; } break; \
             default: \
-                assert(false && "Unsupported node count for HT (max=" \
+                assert(false && "Unsupported LSA domain count for HT (max=" \
                        "NUM_MAX_RDMA_PEERS)"); \
         } \
     } while(0)

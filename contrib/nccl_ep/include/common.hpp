@@ -37,7 +37,6 @@
 #define LOW_LATENCY_RECV_PHASE 2
 
 // NCCL GIN Configuration
-// (NUM_GPUS_PER_NODE_LOW_LATENCY removed: barrier sessions scale with runtime lsa_team_size)
 
 // Make CLion CUDA indexing work
 #ifdef __CLION_IDE__

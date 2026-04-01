@@ -328,9 +328,9 @@ void call_metadata_preprocessing(
             per_expert_token_counts, 0, experts_per_rank * sizeof(int32_t), stream));
     }
 
-    HYBRIDEP_SWITCH_NUM_NODES(num_nodes, {
+    HYBRIDEP_SWITCH_NUM_LSA_DOMAINS(num_nodes, {
         HYBRIDEP_SWITCH_LSA_TEAM_SIZE(num_ranks_per_node, {
-            using HybridEPType = ::hybrid_ep::hybrid_ep<MAX_SUPPORTED_TOKENS_PER_RANK, NUM_NODES, LSA_TEAM_SIZE>;
+            using HybridEPType = ::hybrid_ep::hybrid_ep<MAX_SUPPORTED_TOKENS_PER_RANK, NUM_LSA_DOMAINS, LSA_TEAM_SIZE>;
             HybridEPType::template metadata_preprocessing<
                 HYBRIDEP_NUM_THREADS_PER_BLOCK_PREPROCESSING, HYBRIDEP_NUM_BLOCKS_PREPROCESSING>(
                 global_routing_map,
@@ -436,7 +436,7 @@ void dispatch_impl(
     cudaStream_t stream
 ) {
     HYBRIDEP_SWITCH_DATATYPE(use_fp8, {
-        HYBRIDEP_SWITCH_NUM_NODES(num_nodes, {
+        HYBRIDEP_SWITCH_NUM_LSA_DOMAINS(num_nodes, {
             HYBRIDEP_SWITCH_LSA_TEAM_SIZE(params.num_ranks_per_node, {
                 // TMA requires prob buffer (experts_per_node * sizeof(float)) to be 16B aligned
                 // Check alignment at runtime now that experts_per_rank is dynamic
@@ -446,7 +446,7 @@ void dispatch_impl(
 
                 using HybridEPType = ::hybrid_ep::hybrid_ep<
                     MAX_SUPPORTED_TOKENS_PER_RANK,
-                    NUM_NODES,
+                    NUM_LSA_DOMAINS,
                     LSA_TEAM_SIZE>;
 
                 auto kp = build_dispatch_param<TOKEN_DATA_TYPE>(params);
@@ -562,7 +562,7 @@ void combine_impl(
     // HT combine doesn't support FP8, only BF16
     using TOKEN_DATA_TYPE = uint16_t;
 
-        HYBRIDEP_SWITCH_NUM_NODES(num_nodes, {
+        HYBRIDEP_SWITCH_NUM_LSA_DOMAINS(num_nodes, {
             HYBRIDEP_SWITCH_LSA_TEAM_SIZE(params.num_ranks_per_node, {
                 // TMA requires prob buffer (experts_per_node * sizeof(float)) to be 16B aligned
                 const int experts_per_node = params.experts_per_rank * params.num_ranks_per_node;
@@ -571,16 +571,16 @@ void combine_impl(
 
                 using HybridEPType = ::hybrid_ep::hybrid_ep<
                     MAX_SUPPORTED_TOKENS_PER_RANK,
-                    NUM_NODES,
+                    NUM_LSA_DOMAINS,
                     LSA_TEAM_SIZE>;
 
                 auto kp = build_combine_param(params);
 
-                // Select config based on NUM_NODES (single-node: 12 stages/2 pipelines, multi-node: 5 stages/1 pipeline)
-                constexpr int num_stages_g2s = (NUM_NODES == 1)
+                // Select config based on NUM_LSA_DOMAINS (single-node: 12 stages/2 pipelines, multi-node: 5 stages/1 pipeline)
+                constexpr int num_stages_g2s = (NUM_LSA_DOMAINS == 1)
                     ? HYBRIDEP_COMBINE_SINGLENODE_NUM_OF_STAGES_G2S
                     : HYBRIDEP_COMBINE_MULTINODE_NUM_OF_STAGES_G2S;
-                constexpr int num_stages_s2g = (NUM_NODES == 1)
+                constexpr int num_stages_s2g = (NUM_LSA_DOMAINS == 1)
                     ? HYBRIDEP_COMBINE_SINGLENODE_NUM_OF_STAGES_S2G
                     : HYBRIDEP_COMBINE_MULTINODE_NUM_OF_STAGES_S2G;
 

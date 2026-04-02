@@ -24,9 +24,6 @@
 namespace hybrid_ep{
 
 
-// MAX_RANKS_PER_NODE is now the LSA_TEAM_SIZE template parameter on hybrid_ep.
-// Removed as a free-standing constant; each instantiation sizes arrays exactly.
-
 // Register head size for combine (BF16 tokens). Tail (if any) accumulates in shared memory.
 constexpr int COMBINE_REG_HEAD_HIDDEN_DIM = 4096;
 static_assert((COMBINE_REG_HEAD_HIDDEN_DIM % 2) == 0,
@@ -1292,7 +1289,8 @@ template<typename INTRA_NODE_S2G_GROUP,
          int NUM_LSA_DOMAINS,
          int NUM_OF_BLOCKS,
          bool FORWARD_DISPATCH,
-         int NUM_PIPELINES>
+         int NUM_PIPELINES,
+         int LSA_TEAM_SIZE>
 __forceinline__ __device__ void S2G_warp_group_device_function(const int local_rank,
                                                       const int node_rank,
                                                       const int num_of_tokens_per_rank,
@@ -1314,8 +1312,7 @@ __forceinline__ __device__ void S2G_warp_group_device_function(const int local_r
   constexpr int NUM_OF_ROUTING_INFO_LOAD_ITER_PER_CHUNK = NUM_OF_TOKENS_PER_CHUNK / sizeof(rdma_to_attn_map_load_t);
   constexpr int NUM_OF_TOKENS_PER_LOAD_ITER = sizeof(rdma_to_attn_map_load_t) / sizeof(bool);
 
-  constexpr int MAX_RANKS_PER_NODE = 8;
-  using sparse_to_dense_map_load_t = Copy_t<MAX_RANKS_PER_NODE * sizeof(int32_t)>;
+  using sparse_to_dense_map_load_t = Copy_t<LSA_TEAM_SIZE * sizeof(int32_t)>;
   const int NUM_OF_SPARSE_TO_DENSE_MAP_LOAD_ITER_PER_INPUT_TOKEN = (num_of_ranks_per_node * sizeof(int32_t) + sizeof(sparse_to_dense_map_load_t) - 1) / sizeof(sparse_to_dense_map_load_t);
   constexpr int NUM_OF_OUTPUT_TOKENS_PER_LOAD_ITER = sizeof(sparse_to_dense_map_load_t) / sizeof(int32_t);
 
@@ -3723,7 +3720,7 @@ __global__ void dispatch_kernel(const __grid_constant__ dispatch_kernel_param_t<
     param.gin_base_ptr, &param.mr_info, smem_buffer_ptr, param.experts_per_rank);
   } else if (threadIdx_x_int < INTER_NODE_GROUP::size() + INTRA_NODE_G2S_GROUP::size() + INTRA_NODE_S2G_GROUP::size()){
     S2G_warp_group_device_function
-    <INTRA_NODE_S2G_GROUP, TOKEN_DATA_TYPE, cur_smem_t, NUM_OF_STAGES, NUM_OF_IN_FLIGHT_S2G, NUM_OF_TOKENS_PER_CHUNK, NUM_LSA_DOMAINS, NUM_OF_BLOCKS, FORWARD_DISPATCH, NUM_PIPELINES>
+    <INTRA_NODE_S2G_GROUP, TOKEN_DATA_TYPE, cur_smem_t, NUM_OF_STAGES, NUM_OF_IN_FLIGHT_S2G, NUM_OF_TOKENS_PER_CHUNK, NUM_LSA_DOMAINS, NUM_OF_BLOCKS, FORWARD_DISPATCH, NUM_PIPELINES, LSA_TEAM_SIZE>
     (param.local_rank, param.node_rank, param.num_of_tokens_per_rank, param.num_of_ranks_per_node, param.hidden_dim, param.rdma_to_attn_map, param.sparse_to_dense_map, param.expert_output_token, param.expert_output_prob,
     param.expert_output_scaling_factor, smem_buffer_ptr, param.experts_per_rank);
   }
@@ -4022,9 +4019,6 @@ __global__ void scan(const uint8_t* input_routing_map,
   // Calculate total threads count.
   constexpr int NUM_OF_TOTAL_THREADS = NUM_THREADS_PER_BLOCK * NUM_OF_BLOCKS;
 
-  // Maximum ranks per node for compile-time sizing of per-thread arrays
-  constexpr int MAX_RANKS_PER_NODE_SCAN = LSA_TEAM_SIZE;
-
   // Calculate the number of tokens belong to each CUDA block, warp and thread.
   // We assign 1 token(row in routing map) to 1 thread.
   const int num_of_total_attn_tokens = num_of_tokens_per_rank * num_of_ranks_per_node * NUM_LSA_DOMAINS;
@@ -4044,14 +4038,14 @@ __global__ void scan(const uint8_t* input_routing_map,
 
   // For each token, calculate how many bytes need to be store to sparse_to_dense_map.
   // Use maximum value for compile-time type selection
-  constexpr int MAX_NUM_OF_BYTES_TO_STORE_FOR_EACH_TOKEN = sizeof(int32_t) * MAX_RANKS_PER_NODE_SCAN;
+  constexpr int MAX_NUM_OF_BYTES_TO_STORE_FOR_EACH_TOKEN = sizeof(int32_t) * LSA_TEAM_SIZE;
   using write_t = Copy_t<MAX_NUM_OF_BYTES_TO_STORE_FOR_EACH_TOKEN>;
   const int NUM_OF_BYTES_TO_STORE_FOR_EACH_TOKEN = sizeof(int32_t) * num_of_ranks_per_node;
   const int S2D_MAP_STORE_ITER = NUM_OF_BYTES_TO_STORE_FOR_EACH_TOKEN / sizeof(write_t);
 
   // How to convert per-rank routing info to per-node routing info.
   // Current HT constraint is max 8 ranks per node, so one lane can represent one rank.
-  static_assert(MAX_RANKS_PER_NODE_SCAN <= WARP_SIZE,
+  static_assert(LSA_TEAM_SIZE <= WARP_SIZE,
                 "scan assumes max ranks per node fits in one warp.");
 
   // Use dynamic shared memory for runtime-sized arrays
@@ -4088,7 +4082,7 @@ __global__ void scan(const uint8_t* input_routing_map,
 
   // Sum of per-rank token routing map within a thread.
   // Use MAX size for compile-time array allocation, actual size determined by runtime num_of_ranks_per_node
-  int32_t token_routing_map_sum[MAX_RANKS_PER_NODE_SCAN];
+  int32_t token_routing_map_sum[LSA_TEAM_SIZE];
   #pragma unroll
   for(int i = 0; i < num_of_ranks_per_node; i++){
     token_routing_map_sum[i] = 0;
@@ -4118,7 +4112,7 @@ __global__ void scan(const uint8_t* input_routing_map,
 
     // Accumulate per-rank sums from rank_mask bits.
     #pragma unroll
-    for(int j = 0; j < MAX_RANKS_PER_NODE_SCAN; j++){
+    for(int j = 0; j < LSA_TEAM_SIZE; j++){
       if (j < num_of_ranks_per_node) {
         token_routing_map_sum[j] += ((rank_mask >> j) & 1u);
       }
@@ -4193,7 +4187,7 @@ __global__ void scan(const uint8_t* input_routing_map,
 
   // Step 2: Each warp scan the sub-chunk assigned to them(the same sub-chunk as step 0) and produce sparse_to_dense_map, local_expert_routing_map and num_of_tokens_for_experts.
   // Use MAX size for compile-time array allocation
-  int32_t previous_token_sum[MAX_RANKS_PER_NODE_SCAN];
+  int32_t previous_token_sum[LSA_TEAM_SIZE];
 
   // Lane `lane_id` accumulates prefix for that same rank.
   int32_t lane_rank_prefix = 0;
@@ -4236,7 +4230,7 @@ __global__ void scan(const uint8_t* input_routing_map,
     // Convert the routing map to per rank routing info for current token,
     // then produce the per-rank final exclusive scan within the warp for this tile.
     // Use MAX size for compile-time array allocation
-    int32_t final_ex_scan[MAX_RANKS_PER_NODE_SCAN];
+    int32_t final_ex_scan[LSA_TEAM_SIZE];
     bool token_needed_by_local_rank = false;
     int32_t local_rank_prefix_after_scan = 0;
     bool local_rank_seen = false;

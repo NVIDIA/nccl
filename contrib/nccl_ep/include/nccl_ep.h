@@ -218,6 +218,29 @@ ncclResult_t ncclEpHandleDestroy(
     ncclEpHandle_t handle
 );
 
+// Rebind topk_idx on an existing handle without reallocating buffers.
+//
+// Use this instead of destroying and recreating the handle when only the
+// routing (topk_idx) changes between iterations.  All buffers allocated
+// by ncclEpCreateHandle are reused.
+//
+// Arguments:
+//   handle              - [IN]  Existing EP handle (from ncclEpCreateHandle)
+//   topk_idx            - [IN]  New top-k index tensor (2D, ncclInt64, contiguous)
+//   local_tensors       - [IN/OUT, optional] Same semantics as ncclEpCreateHandle
+//   num_local_tensors   - [IN]  Number of local tensors
+//   stream              - [IN]  CUDA stream
+//
+// Returns: ncclResult_t error code
+
+ncclResult_t ncclEpUpdateHandle(
+    ncclEpHandle_t handle,
+    const ncclNDTensor_t* topk_idx,
+    ncclNDTensor_t* const* local_tensors,
+    unsigned int num_local_tensors,
+    cudaStream_t stream
+);
+
 // EP dispatch configuration structure
 typedef struct {
     unsigned int round_scales;          // whether to round the scaling factors tensor into a power of 2

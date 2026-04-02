@@ -109,7 +109,7 @@ static ncclResult_t ncclGinPluginInit(struct ncclComm* comm, ginPluginLib_t* plu
 
   // Initialize RMA plugin
   if (pluginLib->ncclRmaPluginState == ncclGinPluginStateInitReady && pluginLib->ncclRma) {
-    if (pluginLib->ncclRma->init(&comm->ginContext, comm->commHash, ncclDebugLog) != ncclSuccess ||
+    if (pluginLib->ncclRma->init(&comm->rmaGinContext, comm->commHash, ncclDebugLog) != ncclSuccess ||
         pluginLib->ncclRma->devices(&ndev) != ncclSuccess || ndev <= 0) {
       pluginLib->ncclRmaPluginState = ncclGinPluginStateDisabled;
     } else {
@@ -213,6 +213,7 @@ static void initPluginLibsOnceFunc() {
 }
 
 static ncclResult_t ncclGinPluginFinalize(struct ncclComm* comm, int pluginIndex) {
+  if (ginPluginLibs[pluginIndex].ncclRma && ginPluginLibs[pluginIndex].ncclRmaPluginState == ncclGinPluginStateEnabled) NCCLCHECK(ginPluginLibs[pluginIndex].ncclRma->finalize(comm->rmaGinContext));
   if (ginPluginLibs[pluginIndex].ncclGin && ginPluginLibs[pluginIndex].ncclGinPluginState == ncclGinPluginStateEnabled) NCCLCHECK(ginPluginLibs[pluginIndex].ncclGin->finalize(comm->ginContext));
   ginPluginLibs[pluginIndex].ncclGinPluginRefCount--;
   if (pluginIndex < (pluginCount - NCCL_GIN_NUM_INTERNAL_PLUGINS)) {
@@ -252,6 +253,7 @@ ncclResult_t ncclGinInit(struct ncclComm* comm) {
 
 ncclResult_t ncclGinInitFromParent(struct ncclComm* comm, struct ncclComm* parent) {
   comm->ginContext = parent->ginContext;
+  comm->rmaGinContext = parent->rmaGinContext;
   comm->ginPluginIndex = parent->ginPluginIndex;
   return ncclSuccess;
 }

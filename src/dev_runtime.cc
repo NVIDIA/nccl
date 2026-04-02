@@ -951,6 +951,7 @@ static ncclResult_t deepCopyDevCommRequirements(
   struct ncclTeamRequirements **dstTeam;
 
   NCCLCHECK(ncclCalloc(dst, 1));
+  **dst = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
 
   // Copy the entire struct now and update linked lists later.  Because of backwards compatibility, the source may
   // actually be smaller than the type would imply.

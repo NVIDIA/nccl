@@ -172,6 +172,7 @@ inspectorResult_t inspectorGetTimeUTC(char* buffer, size_t bufferSize) {
  */
 ncclDataType_t inspectorStringToDatatype(const char* str) {
   if (strcmp(str, "ncclInt8") == 0) return ncclInt8;
+  if (strcmp(str, "ncclUint8") == 0) return ncclUint8;
   if (strcmp(str, "ncclInt32") == 0) return ncclInt32;
   if (strcmp(str, "ncclUint32") == 0) return ncclUint32;
   if (strcmp(str, "ncclInt64") == 0) return ncclInt64;

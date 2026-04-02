@@ -715,14 +715,19 @@ ncclResult_t ncclTopoAddCpu(struct ncclXmlNode* xmlCpu, struct ncclTopoSystem* s
         (familyId == 6 && modelId >= 0x55) ? NCCL_TOPO_CPU_MODEL_INTEL_SKL :
         NCCL_TOPO_CPU_MODEL_INTEL_BDW;
     } else if (cpu->cpu.vendor == NCCL_TOPO_CPU_VENDOR_AMD) {
-      int familyId, modelId;
+      int familyId;
       NCCLCHECK(xmlGetAttrInt(xmlCpu, "familyid", &familyId));
       // AMD Zen 1/2 (Naples/Rome):  CPUID Family 17h = 23
       // AMD Zen 3/4 (Milan/Genoa):  CPUID Family 19h = 25
       // AMD Zen 5   (Turin):        CPUID Family 1Ah = 26
       cpu->cpu.model =
-        (familyId >= 26) ? NCCL_TOPO_CPU_MODEL_AMD_ZEN5 :
-        (familyId >= 25) ? NCCL_TOPO_CPU_MODEL_AMD_ZEN34 :
+        // Old calculations to support injected topology
+        (familyId == 0xBF) ? NCCL_TOPO_CPU_MODEL_AMD_ZEN5 :
+        (familyId == 0xAF) ? NCCL_TOPO_CPU_MODEL_AMD_ZEN34 :
+        (familyId == 0x8F) ? NCCL_TOPO_CPU_MODEL_AMD_ZEN12 :
+        // CPUID Family
+        (familyId == 26) ? NCCL_TOPO_CPU_MODEL_AMD_ZEN5 :
+        (familyId == 25) ? NCCL_TOPO_CPU_MODEL_AMD_ZEN34 :
         NCCL_TOPO_CPU_MODEL_AMD_ZEN12;
     } else if (cpu->cpu.vendor == NCCL_TOPO_CPU_VENDOR_ZHAOXIN) {
       int familyId, modelId;

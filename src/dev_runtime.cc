@@ -94,6 +94,9 @@ ncclResult_t ncclDevrInitOnce(struct ncclComm* comm) {
   lsaSize = gcd(lsaSize, nodeSize);
   devr->lsaSize = lsaSize;
   devr->lsaSelf = comm->rank % lsaSize;
+  if (devr->lsaRankList != nullptr) {
+    free(devr->lsaRankList);
+  }
   devr->lsaRankList = (int*)malloc(devr->lsaSize*sizeof(int));
   for (int i=0; i < devr->lsaSize; i++) {
     devr->lsaRankList[i] = comm->rank + (i - devr->lsaSelf);
@@ -132,7 +135,12 @@ ncclResult_t ncclDevrFinalize(struct ncclComm* comm) {
   struct ncclDevrState* devr = &comm->devrState;
   cudaStream_t stream;
   ncclResult_t ret = ncclSuccess;
-  if (devr->bigSize == 0) return ncclSuccess;
+  if (devr->bigSize == 0) {
+    if (devr->lsaRankList != nullptr) {
+      free(devr->lsaRankList);
+    }
+    return ncclSuccess;
+  }
 
   while (!ncclIntruQueueEmpty(&devr->regTaskQueue)) {
     struct ncclDevrRegTask* task = ncclIntruQueueDequeue(&devr->regTaskQueue);

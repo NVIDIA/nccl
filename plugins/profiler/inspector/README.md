@@ -5,6 +5,7 @@ The NCCL Inspector is a plugin for the NVIDIA Collective Communications Library 
 ## Related Documentation
 
 - **[Performance Exporter](exporter/example/README.md)** - Tool for analyzing and visualizing NCCL performance data from inspector logs
+- **[Grafana Dashboard Template](grafana/README.md)** - Grafana dashboard for visualizing NCCL Inspector job performance metrics via Prometheus
 
 ## Folder Location
 

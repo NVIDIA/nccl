@@ -117,8 +117,8 @@ int main(int argc, char* argv[])
   MPICHECK(MPI_Comm_rank(MPI_COMM_WORLD, &myRank));
   MPICHECK(MPI_Comm_size(MPI_COMM_WORLD, &nRanks));
 
-  if (nRanks != 2 && nRanks != 4 && nRanks % 8 != 0) {
-    printf("Error: nRanks must be 2, 4 or multiple of 8 for this test\n");
+  if (nRanks != 2 && nRanks % 4 != 0) {
+    printf("Error: nRanks must be 2 or a multiple of 4 for this test\n");
     MPI_Finalize();
     exit(EXIT_FAILURE);
   }

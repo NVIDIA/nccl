@@ -2187,6 +2187,7 @@ static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm, int nranks, int nId
   }
 
   NCCLCHECKGOTO(ncclCalloc(&comm, 1), res, fail);
+  comm->devrState.lsaRankList = nullptr;
   NCCLCHECKGOTO(ncclCalloc(&comm->abortFlag, 1), res, fail);
   NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->abortFlagDev, 1), res, fail);
   NCCLCHECKGOTO(ncclCalloc(&comm->abortFlagRefCount, 1), res, fail);

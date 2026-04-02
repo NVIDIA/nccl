@@ -900,7 +900,6 @@ template<typename INTER_NODE_GROUP,
          int NUM_OF_STAGES,
          int NUM_OF_TOKENS_PER_CHUNK,
          int MAX_NUM_OF_TOKENS_PER_RANK,
-
          int NUM_OF_NODES,
          int NUM_OF_BLOCKS,
          bool FORWARD_DISPATCH>

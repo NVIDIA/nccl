@@ -811,11 +811,21 @@ static ncclResult_t init_hybridep_internode(ncclEpGroup_t ep_group,
     // =========================================================================
     ep_group->gin_config.num_dcomms = 1;
     ep_group->gin_config.dcomms = new ncclDevComm_t[1];
+
+   {
+        ncclCommProperties_t props = NCCL_COMM_PROPERTIES_INITIALIZER;
+        NCCL_CHECK_RESULT(ncclCommQueryProperties(ep_group->gin_config.split_comm, &props));
+        if (props.ginType == NCCL_GIN_TYPE_NONE) {
+            fprintf(stderr, "[HT GIN] Error: NCCL EP internode requires GIN, but GIN is not supported\n");
+            return ncclInvalidUsage;
+        }
+    }
+
     {
         ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
         reqs.barrierCount = MAX_BARRIER_SESSIONS;
         reqs.ginSignalCount = ep_group->gin_config.num_total_signals;
-        reqs.ginForceEnable = true;
+        reqs.ginConnectionType = NCCL_GIN_CONNECTION_FULL;
         reqs.ginContextCount = ep_group->gin_config.num_ctx_per_comm;
         NCCLCHECK(ncclDevCommCreate(ep_group->gin_config.split_comm, &reqs, &ep_group->gin_config.dcomms[0]));
     }
@@ -992,6 +1002,13 @@ ncclResult_t ncclEpCreateGroup(
     CUDA_CHECK(ep_group->alloc_fn(&ep_group->ep_workspace, NUM_WORKSPACE_BYTES));
     CUDA_CHECK(cudaMemsetAsync(ep_group->ep_workspace, 0, NUM_WORKSPACE_BYTES, stream));
 
+    ncclCommProperties_t props = NCCL_COMM_PROPERTIES_INITIALIZER;
+    NCCL_CHECK_RESULT(ncclCommQueryProperties(ep_group->comm, &props));
+    if (!props.deviceApiSupport) {
+        fprintf(stderr, "Error: NCCL EP requires NCCL Device API support, but Device API is not supported\n");
+        return ncclInvalidUsage;
+    }
+
     // Initialize HT intranode buffers (IPC handles, completion flags, etc.)
     if (hybridep_mode) {
         NCCL_CHECK_RESULT(init_hybridep_intranode(ep_group, in_config, stream));
@@ -1019,11 +1036,19 @@ ncclResult_t ncclEpCreateGroup(
         int num_total_signals = ep_group->num_dispatch_signals;
         int max_barrier_sessions = (NUM_GPUS_PER_NODE_LOW_LATENCY * ep_group->config.num_qp_per_rank);
 
+        ncclCommProperties_t props = NCCL_COMM_PROPERTIES_INITIALIZER;
+        NCCLCHECK(ncclCommQueryProperties(ep_group->comm, &props));
+        if (props.nLsaTeams > 1 && props.ginType == NCCL_GIN_TYPE_NONE) {
+            fprintf(stderr, "[LL] Error: NCCL EP requires GIN, but GIN is not supported\n");
+            return ncclInvalidUsage;
+        }
+
         ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
-        reqs.barrierCount = max_barrier_sessions;
-        reqs.ginContextCount = ep_group->config.num_qp_per_rank;  // all contexts in single comm
-        reqs.ginSignalCount = num_total_signals + max_barrier_sessions;
-        reqs.ginForceEnable = true;
+        if (props.nLsaTeams > 1) {
+            reqs.ginContextCount = ep_group->config.num_qp_per_rank;  // all contexts in single comm
+            reqs.ginSignalCount = num_total_signals + max_barrier_sessions;
+            reqs.ginConnectionType = NCCL_GIN_CONNECTION_FULL;
+        }
         NCCL_CHECK_RESULT(ncclDevCommCreate(ep_group->comm, &reqs, &nccl_dev_comms_host[0]));
 
         CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&ep_group->nccl_dev_comms),

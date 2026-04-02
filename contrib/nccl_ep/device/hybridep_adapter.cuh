@@ -150,6 +150,7 @@ void dense_to_sparse_prob_combine(
         switch (num_lsa_domains_val) { \
             case 1:  { constexpr int NUM_LSA_DOMAINS = 1;  __VA_ARGS__; } break; \
             case 2:  { constexpr int NUM_LSA_DOMAINS = 2;  __VA_ARGS__; } break; \
+            case 3:  { constexpr int NUM_LSA_DOMAINS = 3;  __VA_ARGS__; } break; \
             case 4:  { constexpr int NUM_LSA_DOMAINS = 4;  __VA_ARGS__; } break; \
             case 8:  { constexpr int NUM_LSA_DOMAINS = 8;  __VA_ARGS__; } break; \
             default: \

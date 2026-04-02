@@ -692,9 +692,12 @@ static ncclResult_t init_hybridep_internode(ncclEpGroup_t ep_group,
         return (sz + alignment - 1) & ~(alignment - 1);
     };
 
-    size_t rdma_intra_node_red_token_sz = align_size(static_cast<size_t>(ep_group->config.max_tokens_per_rank * (nNodes - 1)) * ep_group->hidden * sizeof(uint16_t), GIN_ALIGNMENT);
+    // These buffers are accessed with stride MAX_SUPPORTED_TOKENS_PER_RANK (compile-time constant
+    // used as rdma_remote_node_id * MAX_SUPPORTED_TOKENS_PER_RANK + token_offset in the kernel).
+    // They must be sized for that stride regardless of the runtime max_tokens_per_rank.
+    size_t rdma_intra_node_red_token_sz = align_size(static_cast<size_t>(MAX_SUPPORTED_TOKENS_PER_RANK * (nNodes - 1)) * ep_group->hidden * sizeof(uint16_t), GIN_ALIGNMENT);
     size_t combine_rdma_inter_node_group_token_sz = rdma_intra_node_red_token_sz;
-    size_t rdma_intra_node_red_prob_sz = align_size(static_cast<size_t>(ep_group->config.max_tokens_per_rank * (nNodes - 1)) * (ep_group->num_local_experts * n_ranks_per_node) * sizeof(float), GIN_ALIGNMENT);
+    size_t rdma_intra_node_red_prob_sz = align_size(static_cast<size_t>(MAX_SUPPORTED_TOKENS_PER_RANK * (nNodes - 1)) * (ep_group->num_local_experts * n_ranks_per_node) * sizeof(float), GIN_ALIGNMENT);
     size_t combine_rdma_inter_node_group_prob_sz = rdma_intra_node_red_prob_sz;
     size_t flags_sz = align_size(static_cast<size_t>(nNodes) * sizeof(uint64_t), GIN_ALIGNMENT);
     size_t token_staging_sz = align_size(static_cast<size_t>(ep_group->config.max_tokens_per_rank) * ep_group->hidden * sizeof(uint16_t), GIN_ALIGNMENT);

@@ -265,7 +265,7 @@ ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequir
     reqs->ginCounterCount,
     nContextsPerComm,
     reqs->ginQueueDepth,
-    0
+    reqs->ginTrafficClass != NCCL_CONFIG_UNDEF_INT ? reqs->ginTrafficClass : comm->config.trafficClass
   };
 
   for (int n = 0; n < ginState->ginCommCount; n++) {

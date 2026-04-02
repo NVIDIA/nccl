@@ -104,6 +104,7 @@ try_proxy:
 end:
   ncclNetCommConfig_t* netCommConfig = nullptr;
   NCCLCHECK(ncclCalloc(&netCommConfig, 1));
+  netCommConfig->trafficClass = NCCL_NET_TRAFFIC_CLASS_UNDEF;
   *ctx = netCommConfig;
   return ncclSuccess;
 }
@@ -315,7 +316,7 @@ ncclResult_t ncclGinIbGdakiConnect(void *ctx, void *handles[], int nranks, int r
 ncclResult_t ncclGinIbGdakiCreateContext(void* collComm, ncclGinConfig_v13_t* config, void **ginCtx, ncclNetDeviceHandle_t** devHandle) {
   struct ncclGinIbCollComm* cComm = (struct ncclGinIbCollComm*)collComm;
 
-  NCCLCHECK(ncclGinGdakiCreateContext(cComm, config->nSignals, config->nCounters, config->nContexts, config->queueDepth, ginCtx, devHandle));
+  NCCLCHECK(ncclGinGdakiCreateContext(cComm, config->nSignals, config->nCounters, config->nContexts, config->queueDepth, config->trafficClass, ginCtx, devHandle));
 
   return ncclSuccess;
 }
@@ -404,6 +405,8 @@ struct ncclGinIbProxyCtx {
 ncclResult_t ncclGinIbProxyCreateContext(void* collComm, ncclGinConfig_v13_t* config, void** ginCtx, ncclNetDeviceHandle_v11_t** devHandle) {
   ncclResult_t ret = ncclSuccess;
   struct ncclGinIbCollComm *cComm = (struct ncclGinIbCollComm *)collComm;
+  // Make sure all QP we create use the provided traffic class.
+  ncclIbSetTrafficClass(cComm->ctx, config->trafficClass);
 
   if (config->queueDepth != 0) {
     WARN("GIN_IB_PROXY does not support specifying qp depth");

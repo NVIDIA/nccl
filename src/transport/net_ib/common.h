@@ -559,6 +559,9 @@ ncclResult_t ncclIbFreeRequest(struct ncclIbRequest* r);
 
 ncclResult_t ncclIbRegMrDmaBufInternal(void* comm, void* data, size_t size, int type, uint64_t offset, int fd, uint64_t mrFlags, void** mhandle);
 
+int ncclIbGetTrafficClass(void* ctx);
+void ncclIbSetTrafficClass(void* ctx, int trafficClass);
+
 // Net IB plugin entry functions.
 ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction);
 ncclResult_t ncclIbInit(void** ctx, uint64_t commId, ncclNetCommConfig_t* config, ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction);

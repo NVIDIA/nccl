@@ -96,6 +96,7 @@ struct ncclDevCommRequirements {
   ncclGinConnectionType_t ginConnectionType;
   bool ginExclusiveContexts;
   int ginQueueDepth;
+  int ginTrafficClass;
 
   int worldGinBarrierCount;
 };
@@ -119,6 +120,7 @@ struct ncclDevCommRequirements {
     NCCL_GIN_CONNECTION_NONE,                    /* ginConnectionType */       \
     false,                                       /* ginExclusiveContexts */    \
     0,                                           /* ginQueueDepth */           \
+    NCCL_CONFIG_UNDEF_INT,                       /* ginTrafficClass */         \
     0,                                           /* worldGinBarrierCount */    \
 }
 

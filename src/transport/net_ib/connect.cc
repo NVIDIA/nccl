@@ -635,6 +635,16 @@ static ncclResult_t ncclIbSenderQpsToRts(ncclIbSendComm* comm, struct ncclIbConn
   return ncclSuccess;
 }
 
+int ncclIbGetTrafficClass(void* ctx) {
+  ncclNetCommConfig_t* config = (ncclNetCommConfig_t*)ctx;
+  if (ctx == NULL) return NCCL_NET_TRAFFIC_CLASS_UNDEF;
+  return config->trafficClass;
+}
+void ncclIbSetTrafficClass(void* ctx, int trafficClass) {
+  ncclNetCommConfig_t* config = (ncclNetCommConfig_t*)ctx;
+  if (config) config->trafficClass = trafficClass;
+}
+
 ncclResult_t ncclIbConnect(void* ctx, int dev, void* opaqueHandle, void** sendComm, ncclNetDeviceHandle_t** /*sendDevComm*/) {
   ncclResult_t ret = ncclSuccess;
   struct ncclIbHandle* handle = (struct ncclIbHandle*) opaqueHandle;
@@ -707,7 +717,7 @@ ib_recv_dev_list:
   if (stage->offset != (sizeof(ncclNetVDeviceProps_t) + sizeof(struct ncclIbDevExtraProps))) return ncclSuccess;
   stage->offset = 0;
   ncclNetVDeviceProps_t remoteVProps;
-  ncclNetCommConfig_t* config;
+  int trafficClass;
   memcpy(&remoteVProps, stage->buffer, sizeof(ncclNetVDeviceProps_t));
   memcpy(&exProps, (char *)stage->buffer + sizeof(ncclNetVDeviceProps_t), sizeof(exProps));
   comm->base.remOooRq = exProps.oooRq;
@@ -805,10 +815,10 @@ ib_recv_dev_list:
       return ncclInternalError;
     }
   }
-  config = (ncclNetCommConfig_t*)ctx;
+  trafficClass = ncclIbGetTrafficClass(ctx);
   meta.addr = (uint64_t)comm->ctsFifo;
-  meta.sl = (ncclParamIbSl() != -1) ? ncclParamIbSl() : (config && config->trafficClass != NCCL_NET_TRAFFIC_CLASS_UNDEF) ? config->trafficClass : NCCL_IB_SL_DEFAULT;
-  meta.tc = (ncclParamIbTc() != -1) ? ncclParamIbTc() : (config && config->trafficClass != NCCL_NET_TRAFFIC_CLASS_UNDEF) ? config->trafficClass : NCCL_IB_TC_DEFAULT;
+  meta.sl = (ncclParamIbSl() != -1) ? ncclParamIbSl() : (trafficClass != NCCL_NET_TRAFFIC_CLASS_UNDEF) ? trafficClass : NCCL_IB_SL_DEFAULT;
+  meta.tc = (ncclParamIbTc() != -1) ? ncclParamIbTc() : (trafficClass != NCCL_NET_TRAFFIC_CLASS_UNDEF) ? trafficClass : NCCL_IB_TC_DEFAULT;
   strncpy(meta.devName, mergedDev->devName, MAX_MERGED_DEV_NAME);
 
   stage->state = ncclIbCommStateSend;

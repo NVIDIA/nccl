@@ -367,13 +367,13 @@ static ncclResult_t gdakiCreateVerbsAh(struct gdaki_context *ctx, struct ibv_con
   ncclResult_t status = ncclSuccess;
 
   DOCACHECK(doca_verbs_ah_attr_create(ib_context, &ctx->ah));
-  DOCACHECK(doca_verbs_ah_attr_set_sl(ctx->ah, ib_sl));
-  DOCACHECK(doca_verbs_ah_attr_set_traffic_class(ctx->ah, ib_tc));
 
-  if (ctx->port_attr.link_layer == 1) {
+  if (ctx->port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
+    DOCACHECKGOTO(doca_verbs_ah_attr_set_sl(ctx->ah, ib_sl), status, destroy_verbs_ah);
     DOCACHECKGOTO(doca_verbs_ah_attr_set_addr_type(ctx->ah, DOCA_VERBS_ADDR_TYPE_IB_NO_GRH),
                   status, destroy_verbs_ah);
   } else {
+    DOCACHECKGOTO(doca_verbs_ah_attr_set_traffic_class(ctx->ah, ib_tc), status, destroy_verbs_ah);
     DOCACHECKGOTO(doca_verbs_ah_attr_set_addr_type(ctx->ah, DOCA_VERBS_ADDR_TYPE_IPv4),
                   status, destroy_verbs_ah);
   }
@@ -482,7 +482,7 @@ destroy_verbs_qp_attr:
 NCCL_PARAM(GinGdakiUseReliableDB, "GDAKI_USE_RELIABLE_DB", 0);
 
 ncclResult_t ncclGinGdakiCreateContext(void *collComm, int nSignals, int nCounters, int nContexts, int queueDepth,
-                                       void **outGinCtx, ncclNetDeviceHandle_t **outDevHandle) {
+                                       int trafficClass, void **outGinCtx, ncclNetDeviceHandle_t **outDevHandle) {
   ncclResult_t status = ncclSuccess;
 
   struct ncclGinIbCollComm *cComm = (struct ncclGinIbCollComm *)collComm;
@@ -524,8 +524,8 @@ ncclResult_t ncclGinGdakiCreateContext(void *collComm, int nSignals, int nCounte
   GdakiGlobalGPUBufferTable<uint64_t> *counters_table = new GdakiGlobalGPUBufferTable<uint64_t>();
   GdakiGlobalGPUBufferTable<uint64_t> *signals_table = new GdakiGlobalGPUBufferTable<uint64_t>();
 
-  const int ib_sl = (ncclParamIbSl() != -1) ? ncclParamIbSl() : NCCL_IB_SL_DEFAULT;
-  const int ib_tc = (ncclParamIbTc() != -1) ? ncclParamIbTc() : NCCL_IB_TC_DEFAULT;
+  const int ib_sl = (ncclParamIbSl() != -1) ? ncclParamIbSl() : (trafficClass != NCCL_NET_TRAFFIC_CLASS_UNDEF) ? trafficClass : NCCL_IB_SL_DEFAULT;
+  const int ib_tc = (ncclParamIbTc() != -1) ? ncclParamIbTc() : (trafficClass != NCCL_NET_TRAFFIC_CLASS_UNDEF) ? trafficClass : NCCL_IB_TC_DEFAULT;
   int ib_gid_index = 0;
 
   NCCLCHECK(cComm->getProperties(cComm->dev, &props));

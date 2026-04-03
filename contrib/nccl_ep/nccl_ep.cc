@@ -835,7 +835,6 @@ static ncclResult_t init_hybridep_internode(ncclEpGroup_t ep_group,
 
     {
         ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
-        reqs.barrierCount = MAX_BARRIER_SESSIONS;
         reqs.ginSignalCount = ep_group->gin_config.num_total_signals;
         reqs.ginConnectionType = NCCL_GIN_CONNECTION_FULL;
         reqs.ginContextCount = ep_group->gin_config.num_ctx_per_comm;
@@ -1058,7 +1057,6 @@ ncclResult_t ncclEpCreateGroup(
         nccl_dev_comms_host[0] = ncclDevComm_t{};
         ep_group->num_dispatch_signals = ep_group->num_local_experts * ep_group->nRanks;
         int num_total_signals = ep_group->num_dispatch_signals;
-        int max_barrier_sessions = (ep_group->lsa_team_size * ep_group->config.num_qp_per_rank);
 
         ncclCommProperties_t props = NCCL_COMM_PROPERTIES_INITIALIZER;
         NCCLCHECK(ncclCommQueryProperties(ep_group->comm, &props));
@@ -1069,7 +1067,6 @@ ncclResult_t ncclEpCreateGroup(
 
         ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
         if (props.nLsaTeams > 1) {
-            reqs.barrierCount = max_barrier_sessions;
             reqs.ginContextCount = ep_group->config.num_qp_per_rank;  // all contexts in single comm
             // Signal layout: combine uses [0, num_total_signals), dispatch uses [num_total_signals, 2*num_total_signals)
             reqs.ginSignalCount = 2 * num_total_signals;

@@ -191,7 +191,7 @@ struct ncclEpGroup {
         size_t dense_prob_offset = 0;
         size_t scaling_factor_staging_offset = 0;
 
-        // Layout: [NUM_LSA_DOMAINS-1][BATCH_SIZE * bytes_per_entry]
+        // Layout: [NUM_LSA_TEAMS-1][BATCH_SIZE * bytes_per_entry]
         // bytes_per_entry = hidden * sizeof(TOKEN_DATA_TYPE) + prob_size + sf_size
         size_t rdma_send_staging_offset = 0;
         size_t rdma_inter_node_group_packed_offset = 0;  // Packed receive buffer (token+prob+sf)

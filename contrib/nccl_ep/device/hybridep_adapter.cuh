@@ -145,14 +145,14 @@ void dense_to_sparse_prob_combine(
 
 // Switch on number of LSA domains (RDMA peers = nRanks / lsa_team_size).
 // Each LSA domain is one NVLink/MNNVL clique; domains communicate via RDMA.
-#define HYBRIDEP_SWITCH_NUM_LSA_DOMAINS(num_lsa_domains_val, ...) \
+#define HYBRIDEP_SWITCH_NUM_LSA_TEAMS(num_lsa_domains_val, ...) \
     do { \
         switch (num_lsa_domains_val) { \
-            case 1:  { constexpr int NUM_LSA_DOMAINS = 1;  __VA_ARGS__; } break; \
-            case 2:  { constexpr int NUM_LSA_DOMAINS = 2;  __VA_ARGS__; } break; \
-            case 3:  { constexpr int NUM_LSA_DOMAINS = 3;  __VA_ARGS__; } break; \
-            case 4:  { constexpr int NUM_LSA_DOMAINS = 4;  __VA_ARGS__; } break; \
-            case 8:  { constexpr int NUM_LSA_DOMAINS = 8;  __VA_ARGS__; } break; \
+            case 1:  { constexpr int NUM_LSA_TEAMS = 1;  __VA_ARGS__; } break; \
+            case 2:  { constexpr int NUM_LSA_TEAMS = 2;  __VA_ARGS__; } break; \
+            case 3:  { constexpr int NUM_LSA_TEAMS = 3;  __VA_ARGS__; } break; \
+            case 4:  { constexpr int NUM_LSA_TEAMS = 4;  __VA_ARGS__; } break; \
+            case 8:  { constexpr int NUM_LSA_TEAMS = 8;  __VA_ARGS__; } break; \
             default: \
                 assert(false && "Unsupported LSA domain count for HT (max=" \
                        "NUM_MAX_RDMA_PEERS)"); \

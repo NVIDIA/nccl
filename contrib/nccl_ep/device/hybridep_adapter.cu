@@ -328,9 +328,10 @@ void call_metadata_preprocessing(
             per_expert_token_counts, 0, experts_per_rank * sizeof(int32_t), stream));
     }
 
-    // The scan kernel used in metadata_preprocessing is a warp-reduction that requires
-    // LSA_TEAM_SIZE <= 32. MNNVL configurations (> 32 GPUs per LSA domain) are not yet supported.
-    EP_HOST_ASSERT(num_ranks_per_node <= 32 && "metadata_preprocessing: LSA team size > 32 not yet supported (MNNVL TODO)");
+    // MNNVL configurations (> 32 GPUs per LSA domain) are not yet supported: the scan
+    // kernel uses warp-reduction (LSA_TEAM_SIZE <= 32) and HYBRIDEP_SWITCH_LSA_TEAM_SIZE
+    // is only instantiated up to 32. Extend both when adding MNNVL support.
+    EP_HOST_ASSERT(num_ranks_per_node <= 32 && "metadata_preprocessing: LSA team size > 32 not yet supported (MNNVL)");
 
     HYBRIDEP_SWITCH_NUM_LSA_TEAMS(num_nodes, {
         HYBRIDEP_SWITCH_LSA_TEAM_SIZE(num_ranks_per_node, {

@@ -118,8 +118,11 @@ void dense_to_sparse_prob_combine(
 
 
 
-// Switch on LSA team size (multiples of 4, up to 72 for NVL72/MNNVL).
+// Switch on LSA team size (multiples of 4, up to 32).
 // Instantiates templates with LSA_TEAM_SIZE, sizing register-file arrays exactly.
+// MNNVL configurations (NVL72, LSA_TEAM_SIZE > 32) are not yet supported:
+// the scan kernel in metadata_preprocessing uses warp-reduction and requires
+// LSA_TEAM_SIZE <= 32. Extend this macro (and the scan kernel) when adding MNNVL support.
 #define HYBRIDEP_SWITCH_LSA_TEAM_SIZE(lsa_val, ...) \
     do { switch (lsa_val) { \
         case  4: { constexpr int LSA_TEAM_SIZE =  4; __VA_ARGS__; } break; \
@@ -130,17 +133,7 @@ void dense_to_sparse_prob_combine(
         case 24: { constexpr int LSA_TEAM_SIZE = 24; __VA_ARGS__; } break; \
         case 28: { constexpr int LSA_TEAM_SIZE = 28; __VA_ARGS__; } break; \
         case 32: { constexpr int LSA_TEAM_SIZE = 32; __VA_ARGS__; } break; \
-        case 36: { constexpr int LSA_TEAM_SIZE = 36; __VA_ARGS__; } break; \
-        case 40: { constexpr int LSA_TEAM_SIZE = 40; __VA_ARGS__; } break; \
-        case 44: { constexpr int LSA_TEAM_SIZE = 44; __VA_ARGS__; } break; \
-        case 48: { constexpr int LSA_TEAM_SIZE = 48; __VA_ARGS__; } break; \
-        case 52: { constexpr int LSA_TEAM_SIZE = 52; __VA_ARGS__; } break; \
-        case 56: { constexpr int LSA_TEAM_SIZE = 56; __VA_ARGS__; } break; \
-        case 60: { constexpr int LSA_TEAM_SIZE = 60; __VA_ARGS__; } break; \
-        case 64: { constexpr int LSA_TEAM_SIZE = 64; __VA_ARGS__; } break; \
-        case 68: { constexpr int LSA_TEAM_SIZE = 68; __VA_ARGS__; } break; \
-        case 72: { constexpr int LSA_TEAM_SIZE = 72; __VA_ARGS__; } break; \
-        default: assert(false && "Unsupported LSA team size (must be multiple of 4, max 72)"); \
+        default: assert(false && "Unsupported LSA team size (must be multiple of 4, max 32)"); \
     } } while(0)
 
 // Switch on number of LSA domains (RDMA peers = nRanks / lsa_team_size).

@@ -4434,29 +4434,22 @@ public:
     const size_t scan_base_smem_size =
         (NUM_OF_WARPS_PER_BLOCK_SCAN * num_of_ranks_per_node * sizeof(int32_t)) +
         (num_of_ranks_per_node * sizeof(int32_t));
-    // The scan kernel uses a warp-reduction algorithm that requires LSA_TEAM_SIZE <= 32.
-    // MNNVL configurations with LSA_TEAM_SIZE > 32 are not yet supported by the scan kernel.
-    if constexpr (LSA_TEAM_SIZE <= 32) {
-      if (per_expert_token_counts != nullptr) {
-        cfg.dynamicSmemBytes = scan_base_smem_size + (experts_per_rank * sizeof(int32_t));
-        auto scan_kernel_ptr = scan<NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, NUM_LSA_TEAMS, LSA_TEAM_SIZE, true>;
-        LAUNCH_KERNEL(&cfg, scan_kernel_ptr,
-                      input_routing_map, preprocessing_tmp, sparse_to_dense_map,
-                      rdma_to_attn_map, attn_to_rdma_map, token_rank_mask, num_of_tokens_for_experts,
-                      local_expert_routing_map, per_expert_token_counts, node_rank, local_rank,
-                      num_of_tokens_per_rank, num_of_ranks_per_node, experts_per_rank);
-      } else {
-        cfg.dynamicSmemBytes = scan_base_smem_size;
-        auto scan_kernel_ptr = scan<NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, NUM_LSA_TEAMS, LSA_TEAM_SIZE, false>;
-        LAUNCH_KERNEL(&cfg, scan_kernel_ptr,
-                      input_routing_map, preprocessing_tmp, sparse_to_dense_map,
-                      rdma_to_attn_map, attn_to_rdma_map, token_rank_mask, num_of_tokens_for_experts,
-                      local_expert_routing_map, static_cast<int32_t*>(nullptr), node_rank, local_rank,
-                      num_of_tokens_per_rank, num_of_ranks_per_node, experts_per_rank);
-      }
+    if (per_expert_token_counts != nullptr) {
+      cfg.dynamicSmemBytes = scan_base_smem_size + (experts_per_rank * sizeof(int32_t));
+      auto scan_kernel_ptr = scan<NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, NUM_LSA_TEAMS, LSA_TEAM_SIZE, true>;
+      LAUNCH_KERNEL(&cfg, scan_kernel_ptr,
+                    input_routing_map, preprocessing_tmp, sparse_to_dense_map,
+                    rdma_to_attn_map, attn_to_rdma_map, token_rank_mask, num_of_tokens_for_experts,
+                    local_expert_routing_map, per_expert_token_counts, node_rank, local_rank,
+                    num_of_tokens_per_rank, num_of_ranks_per_node, experts_per_rank);
     } else {
-      // TODO: extend scan kernel to support MNNVL LSA team sizes > 32
-      EP_HOST_ASSERT(false && "metadata_preprocessing: scan kernel not yet implemented for LSA_TEAM_SIZE > 32 (MNNVL)");
+      cfg.dynamicSmemBytes = scan_base_smem_size;
+      auto scan_kernel_ptr = scan<NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, NUM_LSA_TEAMS, LSA_TEAM_SIZE, false>;
+      LAUNCH_KERNEL(&cfg, scan_kernel_ptr,
+                    input_routing_map, preprocessing_tmp, sparse_to_dense_map,
+                    rdma_to_attn_map, attn_to_rdma_map, token_rank_mask, num_of_tokens_for_experts,
+                    local_expert_routing_map, static_cast<int32_t*>(nullptr), node_rank, local_rank,
+                    num_of_tokens_per_rank, num_of_ranks_per_node, experts_per_rank);
     }
   }
 

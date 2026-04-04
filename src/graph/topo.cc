@@ -1418,6 +1418,21 @@ ncclResult_t ncclTopoProcessNet(ncclXml* xml, const char* dumpXmlFile, struct nc
       NCCLCHECK(net->devices(&nDevs));
       nVirtualNics = nDevs - nPhysicalNics;
       NCCLCHECK(net->setVirtDevCount(net->netPluginIndex, nVirtualNics));
+    } else if (nVirtualNics > 0) {
+      // vNICs already created by a previous communicator. Mark merged physical
+      // NICs as keep=0 since ncclTopoMakeVNics (which normally does this) was
+      // skipped.
+      for (int v = nPhysicalNics; v < nPhysicalNics + nVirtualNics; v++) {
+        ncclNetProperties_t props;
+        NCCLCHECK(net->getProperties(v, &props));
+        for (int d = 0; d < props.vProps.ndevs; d++) {
+          ncclNetProperties_t physProps;
+          NCCLCHECK(net->getProperties(props.vProps.devs[d], &physProps));
+          struct ncclXmlNode* netNode = NULL;
+          NCCLCHECK(xmlFindTagKv(xml, "net", &netNode, "name", physProps.name));
+          if (netNode) NCCLCHECK(xmlSetAttrInt(netNode, "keep", 0));
+        }
+      }
     }
     // populate the virtual devices if any
     if (nVirtualNics > 0) {

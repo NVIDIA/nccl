@@ -280,11 +280,8 @@ void ncclShadowPoolConstruct(struct ncclShadowPool* pool) {
   pool->pages = nullptr;
 }
 
-ncclResult_t ncclShadowPoolDestruct(struct ncclShadowPool* pool) {
+ncclResult_t ncclShadowPoolDestruct(struct ncclShadowPool* pool, cudaStream_t stream) {
   if (pool->hbits != 0) {
-    cudaStream_t stream;
-    CUDACHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
-
     if (pool->count != 0) {
       for (int i=0; i < 1<<pool->hbits; i++) {
         struct ncclShadowObject* obj = pool->table[i];
@@ -315,7 +312,6 @@ ncclResult_t ncclShadowPoolDestruct(struct ncclShadowPool* pool) {
     }
 
     cudaStreamSynchronize(stream);
-    cudaStreamDestroy(stream);
     cudaMemPoolDestroy(pool->memPool);
   }
   return ncclSuccess;

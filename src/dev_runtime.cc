@@ -158,7 +158,10 @@ ncclResult_t ncclDevrFinalize(struct ncclComm* comm) {
   struct ncclDevrState* devr = &comm->devrState;
   cudaStream_t stream;
   ncclResult_t ret = ncclSuccess;
+  cudaStreamCaptureMode captureMode = cudaStreamCaptureModeRelaxed;
   if (devr->bigSize == 0) return ncclSuccess;
+
+  CUDACHECKIGNORE(cudaThreadExchangeStreamCaptureMode(&captureMode));
 
   while (!ncclIntruQueueEmpty(&devr->regTaskQueue)) {
     struct ncclDevrRegTask* task = ncclIntruQueueDequeue(&devr->regTaskQueue);
@@ -174,30 +177,29 @@ ncclResult_t ncclDevrFinalize(struct ncclComm* comm) {
     NCCLCHECKIGNORE(symWindowDestroy(comm, win->vidmem, stream), ret);
   }
   CUDACHECKIGNORE(cudaStreamSynchronize(stream));
-  CUDACHECKIGNORE(cudaStreamDestroy(stream));
 
   symTeamDestroyAll(comm);
-  { // delete windowTable
-    cudaStream_t stream;
-    if (CUDASUCCESS(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking))) {
-      struct ncclDevCommWindowTable* tableDev = devr->windowTable;
-      while (tableDev != nullptr) {
-        struct ncclDevCommWindowTable* tableHost;
-        if (ncclSuccess != ncclShadowPoolToHost(&devr->shadows, tableDev, &tableHost)) break;
-        struct ncclDevCommWindowTable* next = tableHost->next;
-        ncclShadowPoolFree(&devr->shadows, tableDev, stream);
-        tableDev = next;
-      }
-      cudaStreamSynchronize(stream);
-      cudaStreamDestroy(stream);
-    }
+
+  // delete windowTable
+  struct ncclDevCommWindowTable* tableDev;
+  tableDev = devr->windowTable;
+  while (tableDev != nullptr) {
+    struct ncclDevCommWindowTable* tableHost;
+    if (ncclSuccess != ncclShadowPoolToHost(&devr->shadows, tableDev, &tableHost)) break;
+    struct ncclDevCommWindowTable* next = tableHost->next;
+    ncclShadowPoolFree(&devr->shadows, tableDev, stream);
+    tableDev = next;
   }
+  CUDACHECKIGNORE(cudaStreamSynchronize(stream));
+
   if (devr->lsaFlatBase != nullptr) {
     CUdeviceptr flatAddr = reinterpret_cast<CUdeviceptr>(devr->lsaFlatBase);
     CUCHECKIGNORE(cuMemUnmap(flatAddr, devr->lsaSize*devr->bigSize));
     CUCHECKIGNORE(cuMemAddressFree(flatAddr, devr->lsaSize*devr->bigSize));
   }
-  ncclShadowPoolDestruct(&devr->shadows);
+  ncclShadowPoolDestruct(&devr->shadows, stream);
+  CUDACHECKIGNORE(cudaStreamDestroy(stream));
+  CUDACHECKIGNORE(cudaThreadExchangeStreamCaptureMode(&captureMode));
   ncclSpaceDestruct(&devr->bigSpace);
   free(devr->lsaRankList);
   free(devr->winSorted);
@@ -840,6 +842,9 @@ ncclResult_t ncclDevrWindowRegisterInGroup(
   int numSegments = 0;
   size_t offset = 0;
   bool hasSysmemSegment = false;
+  cudaStreamCaptureMode captureMode = cudaStreamCaptureModeRelaxed;
+
+  CUDACHECK(cudaThreadExchangeStreamCaptureMode(&captureMode));
 
   NCCLCHECKGOTO(ncclCommRegister(comm, userPtr, userSize, &localRegHandle), ret, fail);
 
@@ -899,6 +904,7 @@ ncclResult_t ncclDevrWindowRegisterInGroup(
 
   cudaStreamDestroy(stream);
   free(memHandles);
+  cudaThreadExchangeStreamCaptureMode(&captureMode);
   return ret;
 
 fail_locReg_memHandle_mem_stream_win:
@@ -917,6 +923,7 @@ fail_locReg_memHandle:
 fail_locReg:
   ncclCommDeregister(comm, localRegHandle);
 fail:
+  cudaThreadExchangeStreamCaptureMode(&captureMode);
   *outWinDev = nullptr;
   return ret;
 }
@@ -1080,6 +1087,7 @@ ncclResult_t ncclDevrCommCreateInternal(
   size_t ginSignalShadowsOffset = 0;
   void* outDevCommPreserve = nullptr;
   struct ncclDevComm outDevCommTmp;
+  cudaStreamCaptureMode captureMode = cudaStreamCaptureModeRelaxed;
 
   // This function always operates on the current version of the ncclDevResourceRequirements structure, thanks
   // to the deepCopyDevCommRequirements() function, so version checks are not needed.  The data in reqs can also
@@ -1120,6 +1128,8 @@ ncclResult_t ncclDevrCommCreateInternal(
     WARN("Cannot create worldGinBarrier with NCCL_GIN_CONNECTION_RAIL.");
     return ncclInvalidArgument;
   }
+
+  CUDACHECK(cudaThreadExchangeStreamCaptureMode(&captureMode));
 
   if (ginActivated) {
     NCCLCHECKGOTO(ncclGinConnectOnce(comm), ret, fail);
@@ -1278,6 +1288,7 @@ ncclResult_t ncclDevrCommCreateInternal(
   if (outDevCommPreserve) {
     NCCLCHECKGOTO(devCompat->devCommCopyNewToOld(comm, outDevCommPreserve, outDevComm), ret, fail_stream_mem_win);
   }
+  cudaThreadExchangeStreamCaptureMode(&captureMode);
   return ret;
 
 fail_stream_mem_win:
@@ -1289,6 +1300,7 @@ fail_stream_mem:
 fail_stream:
   cudaStreamDestroy(stream);
 fail:
+  cudaThreadExchangeStreamCaptureMode(&captureMode);
   return ret;
 }
 
@@ -1343,9 +1355,11 @@ ncclResult_t ncclCommWindowDeregister(struct ncclComm* comm, struct ncclWindow_v
   ncclResult_t ret = ncclSuccess;
   int saveDev;
   cudaStream_t stream;
+  cudaStreamCaptureMode captureMode = cudaStreamCaptureModeRelaxed;
 
   if (winDev == nullptr) goto exit;
 
+  CUDACHECK(cudaThreadExchangeStreamCaptureMode(&captureMode));
   CUDACHECKGOTO(cudaGetDevice(&saveDev), ret, fail);
   CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), ret, fail);
   CUDACHECKGOTO(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), ret, fail_dev);
@@ -1356,6 +1370,7 @@ fail_dev_stream:
 fail_dev:
   cudaSetDevice(saveDev);
 fail:
+  cudaThreadExchangeStreamCaptureMode(&captureMode);
 exit:
   return ret;
 }

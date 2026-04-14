@@ -10,6 +10,7 @@
 
 #include <stdint.h>
 #include "compiler.h"
+#include "param/param.h"
 
 const char* userHomeDir();
 void setEnvFile(const char* fileName);

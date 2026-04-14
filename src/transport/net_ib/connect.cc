@@ -10,18 +10,62 @@
 #include "p2p.h"
 #include "p2p_resiliency.h"
 
-NCCL_PARAM(IbGidIndex, "IB_GID_INDEX", -1);
-NCCL_PARAM(IbRoutableFlidIbGidIndex, "IB_ROUTABLE_FLID_GID_INDEX", 1);
-NCCL_PARAM(IbRoceVersionNum, "IB_ROCE_VERSION_NUM", 2);
-NCCL_PARAM(IbTimeout, "IB_TIMEOUT", 20);
-NCCL_PARAM(IbRetryCnt, "IB_RETRY_CNT", 7);
-NCCL_PARAM(IbPkey, "IB_PKEY", 0);
+DEFINE_NCCL_PARAM(
+  ncclParamIbGidIndex, int32_t, NCCL_IB_GID_INDEX, NCCL_PARAM_VAL_AUTO,
+  NCCL_PARAM_FLAG_CACHED | NCCL_PARAM_FLAG_PUBLISHED,
+  ncclParamCombo(ncclParamBounded(0),
+                 makeOptions(makeOption("AUTO", NCCL_PARAM_VAL_AUTO, "NCCL will automatically determine the GID"),
+                             makeOption("-1", NCCL_PARAM_VAL_AUTO, "Legacy value of AUTO"))),
+  "Global ID index used in RoCE mode. If set to AUTO, NCCL will automatically "
+  "determine the GID.");
+DEFINE_NCCL_PARAM(ncclParamIbRoutableFlidIbGidIndex, int32_t, NCCL_IB_ROUTABLE_FLID_GID_INDEX, 1,
+                  NCCL_PARAM_FLAG_CACHED, NCCL_PARAM_DEFAULT, "GID index for routable FLID");
+DEFINE_NCCL_PARAM(ncclParamIbRoceVersionNum, int32_t, NCCL_IB_ROCE_VERSION_NUM, 2,
+                  NCCL_PARAM_FLAG_CACHED | NCCL_PARAM_FLAG_PUBLISHED, NCCL_PARAM_DEFAULT,
+                  "RoCE version for GID dynamically selected by NCCL when IB_GID_INDEX is unset.");
+DEFINE_NCCL_PARAM(ncclParamIbTimeout, uint8_t, NCCL_IB_TIMEOUT, 20, NCCL_PARAM_FLAG_CACHED | NCCL_PARAM_FLAG_PUBLISHED,
+                  ncclParamBounded<uint8_t>(0),
+                  "InfiniBand Verbs timeout. Computed as 4.096us * 2^timeout. Values 0-31. "
+                  "Value of 0 or >=32 results in infinite timeout value. "
+                  "For example, the default NCCL_IB_TIMEOUT=20 will set the IB verbs timeout as "
+                  "4.096 * 2^20 = 4,294,967.296us (or ~4.3s).");
+DEFINE_NCCL_PARAM(ncclParamIbRetryCnt, uint8_t, NCCL_IB_RETRY_CNT, 7,
+                  NCCL_PARAM_FLAG_CACHED | NCCL_PARAM_FLAG_PUBLISHED, ncclParamBounded<uint8_t>(0, 7),
+                  "InfiniBand retry count. Valid values 0-7.");
+DEFINE_NCCL_PARAM(ncclParamIbPkey, uint16_t, NCCL_IB_PKEY, 0, NCCL_PARAM_FLAG_CACHED, NCCL_PARAM_DEFAULT,
+                  "InfiniBand partition key");
 NCCL_PARAM(IbPkeyValue, "IB_PKEY_VALUE", -1);
-NCCL_PARAM(IbUseInline, "IB_USE_INLINE", 0);
-NCCL_PARAM(IbSl, "IB_SL", -1);
-NCCL_PARAM(IbTc, "IB_TC", -1);
-NCCL_PARAM(IbFifoTc, "IB_FIFO_TC", -1);
-NCCL_PARAM(IbEceEnable, "IB_ECE_ENABLE", 1);
+DEFINE_NCCL_PARAM(ncclParamIbUseInline, bool, NCCL_IB_USE_INLINE, false, NCCL_PARAM_FLAG_CACHED, NCCL_PARAM_DEFAULT,
+                  "Use inline data for IB sends");
+// per IB spec, SL value can be 0-15
+DEFINE_NCCL_PARAM(
+  ncclParamIbSl, int32_t, NCCL_IB_SL, NCCL_PARAM_VAL_AUTO, NCCL_PARAM_FLAG_CACHED | NCCL_PARAM_FLAG_PUBLISHED,
+  ncclParamCombo(ncclParamBounded(0, 15), makeOptions(makeOption("AUTO", NCCL_PARAM_VAL_AUTO,
+                                                                 "Use comm's Traffic Class or 0 as the Service Level"),
+                                                      makeOption("-1", NCCL_PARAM_VAL_AUTO, "Legacy value of AUTO"))),
+  "InfiniBand Service Level. "
+  "If set to AUTO, NCCL will use comm's Traffic Class or 0 as the Service Level.");
+// per IB spec, TC value can be 0-0xFF
+DEFINE_NCCL_PARAM(ncclParamIbTc, int32_t, NCCL_IB_TC, NCCL_PARAM_VAL_AUTO,
+                  NCCL_PARAM_FLAG_CACHED | NCCL_PARAM_FLAG_PUBLISHED,
+                  ncclParamCombo(ncclParamBounded(0, 0xFF),
+                                 makeOptions(makeOption("AUTO", NCCL_PARAM_VAL_AUTO, "Use comm's Traffic Class or 0"),
+                                             makeOption("-1", NCCL_PARAM_VAL_AUTO, "Legacy value of AUTO"))),
+                  "InfiniBand Traffic Class. "
+                  "If set to AUTO, NCCL will use comm's Traffic Class or 0.");
+// per IB spec, TC value can be 0-0xFF
+DEFINE_NCCL_PARAM(ncclParamIbFifoTc, int32_t, NCCL_IB_FIFO_TC, NCCL_PARAM_VAL_AUTO,
+                  NCCL_PARAM_FLAG_CACHED | NCCL_PARAM_FLAG_PUBLISHED,
+                  ncclParamCombo(ncclParamBounded(0, 0xFF),
+                                 makeOptions(makeOption("AUTO", NCCL_PARAM_VAL_AUTO, "Use sender side's NCCL_IB_TC"),
+                                             makeOption("-1", NCCL_PARAM_VAL_AUTO, "Legacy value of AUTO"))),
+                  "InfiniBand Traffic Class for control messages. "
+                  "If set to AUTO, NCCL will use sender side's Traffic Class which is controlled by "
+                  "NCCL_IB_TC.");
+DEFINE_NCCL_PARAM(ncclParamIbEceEnable, bool, NCCL_IB_ECE_ENABLE, true,
+                  NCCL_PARAM_FLAG_CACHED | NCCL_PARAM_FLAG_PUBLISHED, NCCL_PARAM_DEFAULT,
+                  "Enable querying Enhanced Connection Establishment (ECE) capabilities on IB/RoCE, "
+                  "and initialize ECE metadata to send to the remote.");
 
 extern int64_t ncclParamIbOooRq();
 
@@ -59,7 +103,10 @@ struct ncclIbHandle {
   union ibv_gid listenGids[2];
 };
 
-NCCL_PARAM(IbQpsPerConn, "IB_QPS_PER_CONNECTION", 1);
+DEFINE_NCCL_PARAM(ncclParamIbQpsPerConn, int32_t, NCCL_IB_QPS_PER_CONNECTION, 1,
+                  NCCL_PARAM_FLAG_CACHED | NCCL_PARAM_FLAG_PUBLISHED, ncclParamBounded(1, 128),
+                  "Number of IB queue pairs per connection. Useful on multi-level fabrics for "
+                  "routing entropy.");
 NCCL_PARAM(IbSubnetAwareRouting, "IB_SUBNET_AWARE_ROUTING", 0);
 NCCL_PARAM(IbSubnetPrefixLen, "IB_SUBNET_PREFIX_LEN", 24);
 
@@ -311,7 +358,7 @@ ncclResult_t ncclIbGetGidIndex(struct ibv_context* context, uint8_t portNum, str
 
   // for ROCE
   *gidIndex = ncclParamIbGidIndex();
-  if (*gidIndex >= 0) {
+  if (*gidIndex > NCCL_PARAM_VAL_AUTO) {
     return ncclSuccess;
   }
 
@@ -1028,10 +1075,10 @@ ib_recv_dev_list:
   }
   trafficClass = ncclIbGetTrafficClass(ctx);
   meta.addr = (uint64_t)comm->ctsFifo;
-  meta.sl = (ncclParamIbSl() != -1)                        ? ncclParamIbSl() :
+  meta.sl = (ncclParamIbSl() != NCCL_PARAM_VAL_AUTO)       ? ncclParamIbSl() :
             (trafficClass != NCCL_NET_TRAFFIC_CLASS_UNDEF) ? trafficClass :
                                                              NCCL_IB_SL_DEFAULT;
-  meta.tc = (envTrafficClass != -1)                        ? envTrafficClass :
+  meta.tc = (envTrafficClass != NCCL_PARAM_VAL_AUTO)       ? envTrafficClass :
             (trafficClass != NCCL_NET_TRAFFIC_CLASS_UNDEF) ? trafficClass :
                                                              NCCL_IB_TC_DEFAULT;
   meta.remSpeedBufAddr = comm->remoteSpeedMr ? (uint64_t)&comm->remoteSpeedBuf : 0;
@@ -1135,7 +1182,8 @@ ncclResult_t ncclIbConnect(void* ctx, int dev, void* opaqueHandle, void** sendCo
   return ncclIbConnectImpl(ctx, dev, opaqueHandle, sendComm, sendDevComm, ncclParamIbQpsPerConn(), ncclParamIbTc());
 }
 
-NCCL_PARAM(IbWarnRailLocal, "IB_WARN_RAIL_LOCAL", 0);
+DEFINE_NCCL_PARAM(ncclParamIbWarnRailLocal, bool, NCCL_IB_WARN_RAIL_LOCAL, false, NCCL_PARAM_FLAG_CACHED,
+                  NCCL_PARAM_DEFAULT, "Warn when using local rail for IB");
 
 ncclResult_t ncclIbCheckVProps(ncclNetVDeviceProps_t* vProps1, ncclNetVDeviceProps_t* vProps2) {
   ncclNetVDeviceProps_t outVProps = {0};
@@ -1284,7 +1332,7 @@ static ncclResult_t ncclIbReceiverQpsCreateToRts(ncclIbRecvComm* rComm, struct n
     struct ncclIbQpRtrAttr* rtrAttr = &localQp->rtrAttr;
     rtrAttr->mtu = ibDev->portAttr.active_mtu;
     rtrAttr->linkLayer = remDevInfo->link_layer;
-    rtrAttr->tc = (remDevInfo->link_layer == IBV_LINK_LAYER_ETHERNET && ncclParamIbFifoTc() != -1) ?
+    rtrAttr->tc = (remDevInfo->link_layer == IBV_LINK_LAYER_ETHERNET && ncclParamIbFifoTc() != NCCL_PARAM_VAL_AUTO) ?
                     ncclParamIbFifoTc() :
                     remMeta->tc;
     rtrAttr->sl = remMeta->sl;
@@ -1412,7 +1460,8 @@ ncclResult_t ncclIbReceiverPrePostReceiveWorkRequests(struct ncclIbRecvComm* rec
   return ncclSuccess;
 }
 
-NCCL_PARAM(IbGdrFlushDisable, "GDR_FLUSH_DISABLE", 0);
+DEFINE_NCCL_PARAM(ncclParamIbGdrFlushDisable, bool, NCCL_GDR_FLUSH_DISABLE, false, NCCL_PARAM_FLAG_CACHED,
+                  NCCL_PARAM_DEFAULT, "If set, disables GPU Direct RDMA flush");
 
 ncclResult_t ncclIbAcceptImpl(void* listenComm, void** recvComm, ncclNetDeviceHandle_t** /*recvDevComm*/,
                               int nQpsPerDev) {

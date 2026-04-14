@@ -61,11 +61,11 @@ NCCL_PARAM(GinGdakiMaxQpRdAtomic, "GIN_GDAKI_MAX_QP_RD_ATOMIC", -2);
 NCCL_PARAM(GinGdakiLAGAwareDisable, "GIN_GDAKI_LAG_AWARE_DISABLE", 0);
 NCCL_PARAM(GinErrorQuerySec, "GIN_ERROR_QUERY_SEC", 10);
 NCCL_PARAM(GinIbOooAll, "GIN_IB_OOO_OPT", 0);
-extern int64_t ncclParamIbTimeout();
-extern int64_t ncclParamIbRetryCnt();
+USE_NCCL_PARAM(ncclParamIbTimeout, uint8_t);
+USE_NCCL_PARAM(ncclParamIbRetryCnt, uint8_t);
 extern ncclResult_t ncclIbGetPkeyIndex(struct ibv_context* context, uint8_t portNum, struct ibv_port_attr* portAttr,
                                        int* pkeyIndex);
-extern int64_t ncclParamIbSl();
+USE_NCCL_PARAM(ncclParamIbSl, int32_t);
 extern int64_t ncclParamIbPciRelaxedOrdering();
 extern int64_t ncclParamIbDataDirect();
 extern int64_t ncclParamDmaBufEnable();
@@ -660,7 +660,7 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
   GdakiGlobalGPUBufferTable<uint64_t>* counters_table = new GdakiGlobalGPUBufferTable<uint64_t>();
   GdakiGlobalGPUBufferTable<uint64_t>* signals_table = new GdakiGlobalGPUBufferTable<uint64_t>();
 
-  const int ib_sl = (ncclParamIbSl() != -1)                        ? ncclParamIbSl() :
+  const int ib_sl = (ncclParamIbSl() != NCCL_PARAM_VAL_AUTO)       ? ncclParamIbSl() :
                     (trafficClass != NCCL_NET_TRAFFIC_CLASS_UNDEF) ? trafficClass :
                                                                      NCCL_IB_SL_DEFAULT;
   const int ib_tc = (trafficClass != NCCL_NET_TRAFFIC_CLASS_UNDEF) ? trafficClass : NCCL_IB_TC_DEFAULT;

@@ -45,7 +45,7 @@ static ncclResult_t ncclGinIbGdrGpuSupport(bool gdaki) {
 
 NCCL_PARAM(GinType, "GIN_TYPE", -1);
 NCCL_PARAM(GinIbTc, "GIN_IB_TC", -1);
-extern int64_t ncclParamIbTc();
+USE_NCCL_PARAM(ncclParamIbTc, int32_t);
 
 static std::mutex ncclGinIbGdakiLockMutex;
 static int ncclGinIbGdakiNDevs = -1;
@@ -223,7 +223,7 @@ ncclResult_t ncclGinIbConnect(void* ctx, void* handles[], int nranks, int rank, 
   do {
     if (cComm->sendComm == NULL) {
       NCCLCHECKGOTO(ncclIbConnectImpl(ctx, lComm->dev, handles[next], &cComm->sendComm, NULL, /*nQpsPerDev*/ 1,
-                                      ncclParamGinIbTc() != -1 ? ncclParamGinIbTc() : ncclParamIbTc()),
+                                      ncclParamGinIbTc() != NCCL_PARAM_VAL_AUTO ? ncclParamGinIbTc() : ncclParamIbTc()),
                     ret, fail);
     }
     if (cComm->recvComm == NULL) {
@@ -324,8 +324,8 @@ ncclResult_t ncclGinIbGdakiCreateContext(void* collComm, ncclGinConfig_t* config
                                          ncclNetDeviceHandle_t** devHandle) {
   struct ncclGinIbCollComm* cComm = (struct ncclGinIbCollComm*)collComm;
 
-  if (ncclParamGinIbTc() != -1) config->trafficClass = ncclParamGinIbTc();
-  else if (ncclParamIbTc() != -1) config->trafficClass = ncclParamIbTc();
+  if (ncclParamGinIbTc() != NCCL_PARAM_VAL_AUTO) config->trafficClass = ncclParamGinIbTc();
+  else if (ncclParamIbTc() != NCCL_PARAM_VAL_AUTO) config->trafficClass = ncclParamIbTc();
 
   NCCLCHECK(ncclGinGdakiCreateContext(cComm, config, ginCtx, devHandle));
 
@@ -526,7 +526,8 @@ ncclResult_t ncclRmaIbProxyCreateContext(void* collComm, ncclRmaConfig_t* config
         if (gc->fullSendComm[connectPeer] == NULL) {
           NCCLCHECKGOTO(ncclIbConnectImpl(cComm->ctx, cComm->dev, handles + NCCL_NET_HANDLE_MAXSIZE * connectPeer,
                                           &gc->fullSendComm[connectPeer], NULL, /*nQpsPerDev*/ 1,
-                                          ncclParamGinIbTc() != -1 ? ncclParamGinIbTc() : ncclParamIbTc()),
+                                          ncclParamGinIbTc() != NCCL_PARAM_VAL_AUTO ? ncclParamGinIbTc() :
+                                                                                      ncclParamIbTc()),
                         ret, end);
         }
         if (gc->fullRecvComm[acceptPeer] == NULL) {

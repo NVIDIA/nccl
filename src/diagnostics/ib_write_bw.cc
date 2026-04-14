@@ -31,7 +31,7 @@
 #include <string.h>
 #include <unistd.h>
 
-extern int64_t ncclParamIbQpsPerConn();
+USE_NCCL_PARAM(ncclParamIbQpsPerConn, int32_t);
 
 NCCL_PARAM(DiagIbBwTimeout, "DIAGNOSTICS_IB_BW_TIMEOUT", 5);
 
@@ -419,7 +419,7 @@ static double runPair(ncclComm* comm, const LocalInfo* rankInfo, int serverRank,
   const LocalInfo& local = rankInfo[comm->rank];
   int port = benchmarkPort(comm, comm->peerInfo[serverRank].nvmlDev);
   if (ncclParamIbQpsPerConn() < 1) {
-    DIAG_PRINT("NCCL DIAG [INFO] net bw: invalid qps parameter=%ld in comm 0x%lx", ncclParamIbQpsPerConn(),
+    DIAG_PRINT("NCCL DIAG [INFO] net bw: invalid qps parameter=%d in comm 0x%lx", ncclParamIbQpsPerConn(),
                (unsigned long)comm->commHash);
     return -1;
   }

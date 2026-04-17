@@ -23,6 +23,7 @@
 #define SM100_NVLINK_BW 40.1
 #define PCI_BW 12.0           // PCI Gen3 x16
 #define AMD_BW 16.0
+#define TURIN_XGMI_BW 192.0
 #define BDW_QPI_BW 6.0
 #define SKL_QPI_BW 10.0
 #define SRP_QPI_BW 22.0

@@ -100,10 +100,16 @@ static ncclResult_t regCleanup(struct ncclComm* comm, struct ncclReg* reg) {
     }
   }
   if (reg->state & NVLS_REG_COMPLETE) {
-    if (ncclNvlsDeregBuffer(comm, &reg->mcHandle, reg->regAddr, reg->dev, reg->regUCSize, reg->regMCSize) != ncclSuccess) {
-      WARN("rank %d deregister NVLS buffer %p dev %d ucsize %ld mcsize %ld failed", comm->rank, (void*)reg->regAddr, reg->dev, reg->regUCSize, reg->regMCSize);
-    }
+    // Propagate ncclNvlsDeregBuffer failure to the caller. Previously the
+    // return value was downgraded to a WARN and discarded, which combined
+    // with the CUCALL swallow inside ncclNvlsDeregBuffer meant that a
+    // failed cuMulticastUnbind never reached ncclCommDestroy's caller.
+    ncclResult_t deregRes = ncclNvlsDeregBuffer(comm, &reg->mcHandle, reg->regAddr, reg->dev, reg->regUCSize, reg->regMCSize);
     reg->regAddr = (CUdeviceptr)NULL;
+    if (deregRes != ncclSuccess) {
+      WARN("rank %d deregister NVLS buffer %p dev %d ucsize %ld mcsize %ld failed", comm->rank, (void*)reg->regAddr, reg->dev, reg->regUCSize, reg->regMCSize);
+      return deregRes;
+    }
   }
   if (reg->state & COLLNET_REG_COMPLETE) {
     if (ncclCollnetDeregBuffer(comm, reg->collnetProxyconn, reg->collnetHandle) != ncclSuccess) {

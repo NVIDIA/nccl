@@ -112,9 +112,23 @@ ncclResult_t nvlsGroupUnbind(struct ncclComm *comm, size_t size, CUmemGenericAll
 }
 
 ncclResult_t ncclNvlsDeregBuffer(struct ncclComm* comm, CUmemGenericAllocationHandle *mcHandler, CUdeviceptr ptr, int dev, size_t ucsize, size_t mcsize) {
-  // unbind can trigger RM error if buffer is freed already by users
-  // however, it is safe to ignore the error, and unbind will succeed anyway
-  CUCALL(cuMulticastUnbind(*mcHandler, dev, 0/*mcOffset*/, ucsize));
+  // Propagate cuMulticastUnbind errors instead of swallowing them. The
+  // original code used CUCALL (see src/include/cudawrap.h), which discards
+  // the CUresult. A failing unbind leaves the multicast binding live in the
+  // CUDA driver context; cuMemRelease below only decrements the MC handle
+  // refcount and does not reverse the binding, so the caller is left with
+  // driver-level state that NCCL believes was released.
+  CUresult res = CUPFN(cuMulticastUnbind(*mcHandler, dev, 0/*mcOffset*/, ucsize));
+  if (res != CUDA_SUCCESS) {
+    const char* errStr = NULL;
+    (void) pfn_cuGetErrorString(res, &errStr);
+    WARN("cuMulticastUnbind failed (rank=%d dev=%d ucsize=%zu): CUresult=%d '%s'. "
+         "Multicast binding may remain live in the CUDA driver context.",
+         comm->rank, dev, ucsize, res, errStr ? errStr : "unknown");
+    // Skip the cuMem* cleanups — they can succeed superficially while the
+    // multicast binding is still live, masking the real state.
+    return ncclUnhandledCudaError;
+  }
   CUCHECK(cuMemUnmap(ptr, mcsize));
   CUCHECK(cuMemAddressFree(ptr, mcsize));
   CUCHECK(cuMemRelease(*mcHandler));

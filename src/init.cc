@@ -274,8 +274,8 @@ static ncclResult_t commFree(ncclComm_t comm) {
 
   if (comm->symmetricSupport) {
     NCCLCHECK(ncclSymkFinalize(comm));
-    NCCLCHECK(ncclDevrFinalize(comm));
   }
+  NCCLCHECK(ncclDevrFinalize(comm));
   NCCLCHECK(ncclRasCommFini(comm));
 
   /* in commReclaim, we have guaranteed only last rank which calls ncclCommDestroy() will
@@ -2349,6 +2349,8 @@ static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm, int nranks, int nId
   }
 
   NCCLCHECKGOTO(ncclCalloc(&comm, 1), res, fail);
+  comm->devrState.lsaRankList = nullptr;
+  comm->devrState.winSorted = nullptr;
   NCCLCHECKGOTO(ncclCalloc(&comm->abortFlag, 1), res, fail);
   NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->abortFlagDev, 1), res, fail);
   NCCLCHECKGOTO(ncclCalloc(&comm->abortFlagRefCount, 1), res, fail);

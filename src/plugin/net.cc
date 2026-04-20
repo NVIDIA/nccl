@@ -214,6 +214,10 @@ static ncclResult_t ncclNetPluginAssignToComm(struct ncclComm* comm, int pluginI
     comm->ncclNet = netPluginLibs[pluginIndex].ncclNet;
     comm->ncclNetVer = netPluginLibs[pluginIndex].ncclNetVer;
     comm->netPluginIndex = pluginIndex;
+    ncclNetProperties_t props;
+    if (comm->ncclNet->getProperties(0, &props) == ncclSuccess) {
+      comm->netDeviceType = props.netDeviceType;
+    }
     netPluginLibs[pluginIndex].ncclNetPluginRefCount++;
     *isAssigned = true;
     INFO(NCCL_INIT|NCCL_NET, "Assigned NET plugin %s to comm", netPluginLibs[pluginIndex].ncclNet->name);
@@ -340,6 +344,7 @@ ncclResult_t ncclNetInitFromParent(struct ncclComm* comm, struct ncclComm* paren
   comm->netContext = parent->netContext;
   comm->collNetContext = parent->collNetContext;
   comm->ncclNet = parent->ncclNet;
+  comm->netDeviceType = parent->netDeviceType;
   comm->ncclCollNet = parent->ncclCollNet;
   comm->netPluginIndex = parent->netPluginIndex;
   if (comm->config.netName != NCCL_CONFIG_UNDEF_PTR && strcasecmp(comm->config.netName, parent->config.netName)) {

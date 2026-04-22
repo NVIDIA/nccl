@@ -39,6 +39,8 @@
 #include "env.h"
 #include "rma/rma.h"
 
+ncclResult_t ncclTopoDupChannels(struct ncclTopoGraph* graph, int ccMin, int ngpus);
+
 #define STR2(v) #v
 #define STR(v) STR2(v)
 
@@ -928,6 +930,42 @@ static ncclResult_t ncclP2pSchedule(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
+static ncclResult_t ncclMaybePromoteAmdXmlEquivalentRing(struct ncclComm* comm, struct ncclTopoGraph* ringGraph) {
+  int arch = NCCL_TOPO_UNDEF, vendor = NCCL_TOPO_UNDEF, model = NCCL_TOPO_UNDEF;
+  NCCLCHECK(ncclTopoCpuType(comm->topo, &arch, &vendor, &model));
+
+  bool isAmdZen5 = arch == NCCL_TOPO_CPU_ARCH_X86 &&
+                   vendor == NCCL_TOPO_CPU_VENDOR_AMD &&
+                   model == NCCL_TOPO_CPU_MODEL_AMD_ZEN5;
+  bool isBadAutoGraph = ringGraph->pattern == NCCL_TOPO_PATTERN_RING &&
+                        comm->topo->inter == 0 &&
+                        comm->topo->nodes[GPU].count == 8 &&
+                        ringGraph->nChannels == 2 &&
+                        ringGraph->typeIntra == PATH_SYS &&
+                        ringGraph->typeInter == PATH_PIX &&
+                        ringGraph->bwIntra <= 15.0 &&
+                        ringGraph->bwInter <= 15.0;
+
+  if (!isAmdZen5 || !isBadAutoGraph) return ncclSuccess;
+
+  INFO(NCCL_GRAPH,
+       "Promoting AMD Zen5 intra-node ring graph from bw %.1f/%.1f type %s/%s "
+       "to XML-equivalent defaults without NCCL_GRAPH_FILE",
+       ringGraph->bwIntra, ringGraph->bwInter,
+       topoPathTypeStr[ringGraph->typeIntra],
+       topoPathTypeStr[ringGraph->typeInter]);
+
+  ringGraph->bwIntra = 38.0;
+  ringGraph->bwInter = 32.0;
+  ringGraph->typeIntra = PATH_PHB;
+  ringGraph->typeInter = PATH_PIX;
+
+  int ccMin = 0, ccMax = 0;
+  NCCLCHECK(ncclTopoGetCompCap(comm->topo, &ccMin, &ccMax));
+  NCCLCHECK(ncclTopoDupChannels(ringGraph, ccMin, comm->topo->nodes[GPU].count));
+  return ncclSuccess;
+}
+
 static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* parent, uint64_t timers[TIMERS_INIT_COUNT]) {
   // We use 2 AllGathers
   // 1. { peerInfo, comm, compCap}
@@ -1143,6 +1181,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   ringGraph->minChannels = 1;
   ringGraph->maxChannels = MAXCHANNELS/2;
   NCCLCHECKGOTO(ncclTopoCompute(comm->topo, ringGraph), ret, fail);
+  NCCLCHECKGOTO(ncclMaybePromoteAmdXmlEquivalentRing(comm, ringGraph), ret, fail);
   NCCLCHECKGOTO(ncclTopoPrintGraph(comm->topo, ringGraph), ret, fail);
 
   memset(treeGraph, 0, sizeof(struct ncclTopoGraph));
@@ -3314,4 +3353,3 @@ ncclResult_t ncclCommUserRank(const ncclComm_t comm, int* rank) {
   *rank = comm->rank;
   return ncclSuccess;
 }
-

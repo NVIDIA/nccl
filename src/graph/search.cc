@@ -430,11 +430,18 @@ ncclResult_t ncclTopoCompareGraphs(struct ncclTopoSystem* system, struct ncclTop
   // 2. Try to get better bandwidth
   if (graph->nChannels*graph->bwIntra > refGraph->nChannels*refGraph->bwIntra) {
     *copy = 1;
+  } else if (graph->nChannels*graph->bwIntra < refGraph->nChannels*refGraph->bwIntra) {
     return ncclSuccess;
   }
-  if (graph->nChannels*graph->bwIntra < refGraph->nChannels*refGraph->bwIntra) return ncclSuccess;
 
-  // 3. Less hops
+  // 3. Prefer more channels at the same aggregate bandwidth.
+  if (graph->nChannels > refGraph->nChannels) {
+    *copy = 1;
+  } else if (graph->nChannels < refGraph->nChannels) {
+    return ncclSuccess;
+  }
+
+  // 4. Less hops
   if (graph->pattern == refGraph->pattern && graph->crossNic == refGraph->crossNic && graph->nHops < refGraph->nHops) *copy = 1;
   return ncclSuccess;
 }
@@ -1140,9 +1147,8 @@ search:
   if (pass == 1) {
     // First pass, we don't have a solution yet ; try other options
 
-    // Try having different channels (except when going through AMD CPUs)
-    if (tmpGraph.sameChannels == 1 &&
-        !(cpuArch == NCCL_TOPO_CPU_ARCH_X86 && cpuVendor == NCCL_TOPO_CPU_VENDOR_AMD && tmpGraph.typeIntra == PATH_SYS)) {
+    // Try having different channels before reducing bandwidth.
+    if (tmpGraph.sameChannels == 1) {
       tmpGraph.sameChannels = 0;
       goto search;
     }

@@ -280,6 +280,7 @@ Note that the total time spent waiting for a response is the product of
 Values accepted
 ^^^^^^^^^^^^^^^
 The default value used by NCCL is 20 (since 2.23; it was 18 since 2.14, and 14 before that).
+Since 2.32u1, invalid values fall back to the default value of 20.
 
 Values can be 0-31.
 
@@ -300,6 +301,7 @@ For more information, see section 12.7.38 of the InfiniBand specification Volume
 Values accepted
 ^^^^^^^^^^^^^^^
 The default value is 7. Valid values are 0-7.
+Since 2.32u1, invalid values fall back to the default value of 7.
 
 NCCL_IB_GID_INDEX
 -----------------
@@ -313,7 +315,9 @@ or vendor documentation.
 
 Values accepted
 ^^^^^^^^^^^^^^^
-The default value is -1.
+The default value is AUTO (since 2.32u1), which lets NCCL automatically determine the GID.
+-1 is a legacy alias for AUTO, retained for backward compatibility.
+Since 2.32u1, invalid values fall back to the default value of AUTO.
 
 NCCL_IB_ADDR_FAMILY
 -------------------
@@ -352,6 +356,7 @@ unset.
 Values accepted
 ^^^^^^^^^^^^^^^
 The default value is 2.
+Since 2.32u1, invalid values fall back to the default value of 2.
 
 NCCL_IB_PKEY
 ------------
@@ -371,6 +376,7 @@ or vendor documentation.
 Values accepted
 ^^^^^^^^^^^^^^^
 The default value is 0 (the first entry of the PKey table).
+Since 2.32u1, invalid values fall back to the default value of 0.
 
 NCCL_IB_PKEY_VALUE
 ------------------
@@ -403,7 +409,11 @@ or vendor documentation.
 
 Values accepted
 ^^^^^^^^^^^^^^^
-The default value is 0.
+The default value is AUTO (since 2.32u1).
+If set to AUTO, NCCL uses 0 as the Service Level unless the communicator's traffic class is configured,
+in which case it uses that value as the Service Level.
+-1 is a legacy alias for AUTO, retained for backward compatibility.
+Since 2.32u1, invalid values fall back to the default value of AUTO.
 
 NCCL_IB_TC
 ----------
@@ -416,7 +426,11 @@ or vendor documentation.
 
 Values accepted
 ^^^^^^^^^^^^^^^
-The default value is 0.
+The default value is AUTO (since 2.32u1).
+If set to AUTO, NCCL uses a traffic class of 0 unless the communicator's traffic class is configured,
+in which case it uses that value.
+-1 is a legacy alias for AUTO, retained for backward compatibility.
+Since 2.32u1, invalid values fall back to the default value of AUTO.
 
 NCCL_IB_FIFO_TC
 ---------------
@@ -431,7 +445,10 @@ avoid being delayed by the rest of the traffic.
 
 Values accepted
 ^^^^^^^^^^^^^^^
-The default value is the traffic class set by NCCL_IB_TC, which defaults to 0 if not set.
+The default value is AUTO (since 2.32u1).
+If set to AUTO, NCCL will use communicator's traffic class which is determined by NCCL_IB_TC.
+-1 is a legacy alias for AUTO, retained for backward compatibility.
+Since 2.32u1, invalid values fall back to the default value of AUTO.
 
 NCCL_IB_RETURN_ASYNC_EVENTS
 ---------------------------
@@ -1204,6 +1221,7 @@ NetworkDirect reuses this variable as the QP count per physical adapter in a con
 Values accepted
 ^^^^^^^^^^^^^^^
 Number between 1 and 128, default is 1.
+Since 2.32u1, invalid values fall back to the default value of 1.
 
 NCCL_IB_SPLIT_DATA_ON_QPS
 -------------------------
@@ -1260,6 +1278,9 @@ Enable the use of Enhanced Connection Establishment (ECE) on IB/RoCE Verbs netwo
 Values accepted
 ^^^^^^^^^^^^^^^
 Enabled (1) by default (since 2.19). Set to 0 to disable use of ECE network capabilities.
+Since 2.32u1, accepts 1/T/TRUE as enabled, 0/F/FALSE as disabled, strings are case-insensitive.
+
+Since 2.32u1, invalid values fall back to the default value of enabled (1).
 
 Note: Incorrect configuration of the ECE parameters on a system can adversely affect NCCL performance. Administrators should ensure ECE is correctly configured if it is enabled at the system level.
 

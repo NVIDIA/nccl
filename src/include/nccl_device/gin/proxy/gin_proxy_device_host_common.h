@@ -131,7 +131,7 @@ typedef enum {
   ncclGinProxyGfdQwords = 16,
 } ncclGinProxyGfdQwordIdx_t;
 
-typedef struct __attribute__((packed)) {
+typedef struct {
   ncclGinProxyQword_t qword[ncclGinProxyGfdQwords];
 } ncclGinProxyGfd_t;
 static_assert(sizeof(ncclGinProxyGfd_t) == 128,

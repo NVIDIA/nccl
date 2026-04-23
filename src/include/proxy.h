@@ -114,6 +114,7 @@ struct ncclProxyOp {
   bool incWorkCounter;
   int eActivationMask;
   void* taskEventHandle;
+  uint64_t commHash;
   int rank;
   int peer;
   ncclPid_t pid;
@@ -178,6 +179,7 @@ struct ncclProxySubArgs {
 struct ncclProxyArgs {
   struct ncclProxySubArgs subs[NCCL_PROXY_MAX_SUBS];
   proxyProgressFunc_t progress;
+  uint64_t commHash;
   int nsubs;
   int done;
   int onePPN;

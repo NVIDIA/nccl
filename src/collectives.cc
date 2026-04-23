@@ -45,6 +45,7 @@ const char* ncclDevRedOpToString(ncclDevRedOp_t op) {
 const char* ncclDatatypeToString(ncclDataType_t type) {
   switch (type) {
   case ncclInt8: return "ncclInt8";
+  case ncclUint8: return "ncclUint8";
   case ncclInt32: return "ncclInt32";
   case ncclUint32: return "ncclUint32";
   case ncclInt64: return "ncclInt64";

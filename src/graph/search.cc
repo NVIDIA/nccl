@@ -998,7 +998,7 @@ float sm100SpeedArrayInter[] = { 96.0, 86.0, 80.0, 48.0, 45.1, 42.0, 40.0, 30.0,
 #define NSPEEDSINTER_SM100 (sizeof(sm100SpeedArrayInter)/sizeof(float))
 
 ncclResult_t ncclTopoCheckCrossNicSupport(bool* supported) {
-  *supported = (ncclParamCrossNic() != 0);
+  *supported = (ncclParamCrossNic() == 1);
   return ncclSuccess;
 }
 

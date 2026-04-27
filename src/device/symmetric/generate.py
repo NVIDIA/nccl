@@ -41,14 +41,14 @@ def indent(s):
   return '\n'.join('  '+l for l in s.splitlines()) + endl
 
 class Rec(object):
-  def __init__(me, **kw):
-    me.__dict__.update(kw)
-  def __eq__(x, y):
-    return x.__dict__ == y.__dict__
-  def __hash__(me):
+  def __init__(self, **kw):
+    self.__dict__.update(kw)
+  def __eq__(self, other):
+    return self.__dict__ == other.__dict__
+  def __hash__(self):
     h = 0
-    for k in me.__dict__:
-      h += hash((k, me.__dict__[k]))
+    for k in self.__dict__:
+      h += hash((k, self.__dict__[k]))
     return h
 
 ################################################################################

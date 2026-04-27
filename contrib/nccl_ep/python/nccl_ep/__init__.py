@@ -11,6 +11,8 @@ Works immediately with LD_PRELOAD setup.
 
 from ._version import __version__
 
+_import_error = None
+
 try:
     from .nccl_wrapper import (
         HAVE_TORCH,

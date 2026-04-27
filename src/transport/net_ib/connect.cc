@@ -1042,8 +1042,10 @@ static ncclResult_t ncclIbReceiverQpsCreateToRts(ncclIbRecvComm* rComm, struct n
     // Reduce the local MTU to match the remote MTU if needed
     ibDev->portAttr.active_mtu = std::min(ibDev->portAttr.active_mtu, remDevInfo->mtu);
 
+    // Negotiate MTU: use minimum of remote MTU and local active_mtu
+    // This ensures both sender and receiver use the same MTU value
     struct ncclIbQpRtrAttr *rtrAttr = &localQp->rtrAttr;
-    rtrAttr->mtu = ibDev->portAttr.active_mtu;
+    rtrAttr->mtu = (enum ibv_mtu)std::min(remDevInfo->mtu, ibDev->portAttr.active_mtu);
     rtrAttr->linkLayer = remDevInfo->link_layer;
     rtrAttr->tc = (remDevInfo->link_layer == IBV_LINK_LAYER_ETHERNET && ncclParamIbFifoTc() != -1) ? ncclParamIbFifoTc() : remMeta->tc;
     rtrAttr->sl = remMeta->sl;

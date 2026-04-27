@@ -14,6 +14,7 @@
 
 #include "os.h"
 #include "nccl.h"
+#include "checks.h"
 #define NCCL_RAS_CLIENT // Only pull client-specific definitions from the header file below.
 #include "ras_internal.h"
 
@@ -199,7 +200,8 @@ retry:
       strcpy(hostBuf, hostName);
       strcpy(portBuf, port);
     }
-    fprintf(stderr, "Connecting to %s:%s: %s\n", hostBuf, portBuf, strerror(err));
+    { char errBuf[256];
+    fprintf(stderr, "Connecting to %s:%s: %s\n", hostBuf, portBuf, ncclStrerror(err, errBuf, sizeof(errBuf))); }
     close(sock);
     sock = -1;
   }

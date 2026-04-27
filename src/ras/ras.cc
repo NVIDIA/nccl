@@ -638,7 +638,8 @@ static void* rasThreadMain(void*) {
 
     nextWakeup = clockNano()+CLOCK_UNITS_PER_SEC;
     if (nEvents == -1 && errno != EINTR)
-      INFO(NCCL_RAS, "RAS continuing in spite of an unexpected error from poll: %s", strerror(errno));
+      { char errBuf[256];
+      INFO(NCCL_RAS, "RAS continuing in spite of an unexpected error from poll: %s", ncclStrerror(errno, errBuf, sizeof(errBuf))); }
 
     // Handle any poll-related events.
     for (int pollIdx = 0; pollIdx < nRasPfds && nEvents > 0; pollIdx++) {

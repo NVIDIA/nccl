@@ -392,7 +392,8 @@ ncclResult_t ncclTopoGetXmlFromFile(const char* xmlTopoFile, struct ncclXml* xml
   FILE* file = fopen(xmlTopoFile, "r");
   if (file == NULL) {
     if (warn) {
-      INFO(NCCL_GRAPH|NCCL_ENV, "Could not open XML topology file %s : %s", xmlTopoFile, strerror(errno));
+      char errBuf[256];
+      INFO(NCCL_GRAPH|NCCL_ENV, "Could not open XML topology file %s : %s", xmlTopoFile, ncclStrerror(errno, errBuf, sizeof(errBuf)));
     }
     return ncclSuccess;
   }
@@ -1059,7 +1060,8 @@ ncclResult_t ncclTopoXmlGraphLoadGraphs(FILE* file, struct ncclXml* xmlGraph, st
 ncclResult_t ncclTopoGetXmlGraphFromFile(const char* xmlGraphFile, struct ncclXml* xml) {
   FILE* file = fopen(xmlGraphFile, "r");
   if (file == NULL) {
-    WARN("Could not open XML graph file %s : %s", xmlGraphFile, strerror(errno));
+    char errBuf[256];
+    WARN("Could not open XML graph file %s : %s", xmlGraphFile, ncclStrerror(errno, errBuf, sizeof(errBuf)));
     return ncclSystemError;
   }
   struct xmlHandler handlers[] = { { "graphs", ncclTopoXmlGraphLoadGraphs } };

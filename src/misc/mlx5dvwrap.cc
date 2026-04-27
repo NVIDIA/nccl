@@ -38,7 +38,8 @@ ncclResult_t wrap_mlx5dv_symbols(void) {
   CHECK_NOT_NULL(container, internal_name); \
   retval = container.call; \
   if (retval == error_retval) { \
-    WARN("NET/MLX5: Call to " name " failed with error %s", strerror(errno)); \
+    char _errBuf[256]; \
+    WARN("NET/MLX5: Call to " name " failed with error %s", ncclStrerror(errno, _errBuf, sizeof(_errBuf))); \
     return ncclSystemError; \
   } \
   return ncclSuccess;
@@ -47,7 +48,8 @@ ncclResult_t wrap_mlx5dv_symbols(void) {
   CHECK_NOT_NULL(container, internal_name); \
   int ret = container.call; \
   if (ret != success_retval) { \
-    WARN("NET/MLX5: Call to " name " failed with error %s", strerror(errno)); \
+    char _errBuf[256]; \
+    WARN("NET/MLX5: Call to " name " failed with error %s", ncclStrerror(errno, _errBuf, sizeof(_errBuf))); \
     return ncclSystemError; \
   } \
   return ncclSuccess;
@@ -65,7 +67,8 @@ ncclResult_t wrap_mlx5dv_get_data_direct_sysfs_path(struct ibv_context* context,
   if (ret == 0) return ncclSuccess;
   /* ENODEV can happen if the devices is not data-direct but mlx5 is used. It's not an error*/
   if (ret == ENODEV) return ncclInvalidArgument;
-  INFO(NCCL_NET, "NET/MLX5: Call to mlx5dv_internal_get_data_direct_sysfs_path failed with error %s errno %d", strerror(ret), ret);
+  char errBuf[256];
+  INFO(NCCL_NET, "NET/MLX5: Call to mlx5dv_internal_get_data_direct_sysfs_path failed with error %s errno %d", ncclStrerror(ret, errBuf, sizeof(errBuf)), ret);
   return ncclSystemError;
 }
 

@@ -177,6 +177,7 @@ void ncclOsPollSocket(int socketDescriptor, int op) {
 extern long int ncclParamRetryCnt();
 
 ncclResult_t ncclOsSocketTryAccept(struct ncclSocket* sock) {
+  char errBuf[256];
   socklen_t socklen = sizeof(union ncclSocketAddress);
   sock->socketDescriptor = accept(sock->acceptSocketDescriptor, (struct sockaddr*)&sock->addr, &socklen);
   if (ncclOsSocketIsValid(sock)) {
@@ -187,12 +188,12 @@ ncclResult_t ncclOsSocketTryAccept(struct ncclSocket* sock) {
     /* per accept's man page, for linux sockets, the following errors might be already pending errors
      * and should be considered as EAGAIN. To avoid infinite loop in case of errors, we use the retry count*/
     if (++sock->errorRetries == ncclParamRetryCnt()) {
-      WARN("ncclOsSocketTryAccept: exceeded error retry count after %d attempts, %s", sock->errorRetries, strerror(errno));
+      WARN("ncclOsSocketTryAccept: exceeded error retry count after %d attempts, %s", sock->errorRetries, ncclStrerror(errno, errBuf, sizeof(errBuf)));
       return ncclSystemError;
     }
-    INFO(NCCL_NET|NCCL_INIT, "Call to accept returned %s, retrying", strerror(errno));
+    INFO(NCCL_NET|NCCL_INIT, "Call to accept returned %s, retrying", ncclStrerror(errno, errBuf, sizeof(errBuf)));
   } else if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
-    WARN("ncclOsSocketTryAccept: Accept failed: %s", strerror(errno));
+    WARN("ncclOsSocketTryAccept: Accept failed: %s", ncclStrerror(errno, errBuf, sizeof(errBuf)));
     return ncclSystemError;
   }
   return ncclSuccess;
@@ -262,6 +263,7 @@ cleanup:
 }
 
 static ncclResult_t socketConnectCheck(struct ncclSocket* sock, int errCode, const char funcName[]) {
+  char errBuf[256];
   char line[SOCKET_NAME_MAXLEN+1];
   if (errCode == 0) {
     sock->state = ncclSocketStateConnected;
@@ -273,12 +275,12 @@ static ncclResult_t socketConnectCheck(struct ncclSocket* sock, int errCode, con
       if (sock->errorRetries++ == ncclParamRetryCnt()) {
         sock->state = ncclSocketStateError;
         WARN("%s: connect to %s returned %s, exceeded error retry count after %d attempts",
-             funcName, ncclSocketToString(&sock->addr, line), strerror(errCode), sock->errorRetries);
+             funcName, ncclSocketToString(&sock->addr, line), ncclStrerror(errCode, errBuf, sizeof(errBuf)), sock->errorRetries);
         return ncclRemoteError;
       }
       unsigned int sleepTime = sock->errorRetries * ncclParamRetryTimeOut();
       INFO(NCCL_NET|NCCL_INIT, "%s: connect to %s returned %s, retrying (%d/%ld) after sleep for %u msec",
-           funcName, ncclSocketToString(&sock->addr, line), strerror(errCode),
+           funcName, ncclSocketToString(&sock->addr, line), ncclStrerror(errCode, errBuf, sizeof(errBuf)),
            sock->errorRetries, ncclParamRetryCnt(), sleepTime);
       std::this_thread::sleep_for(std::chrono::milliseconds(sleepTime));
     }
@@ -286,7 +288,7 @@ static ncclResult_t socketConnectCheck(struct ncclSocket* sock, int errCode, con
     sock->state = ncclSocketStateConnecting;
   } else {
     sock->state = ncclSocketStateError;
-    WARN("%s: connect to %s failed : %s", funcName, ncclSocketToString(&sock->addr, line), strerror(errCode));
+    WARN("%s: connect to %s failed : %s", funcName, ncclSocketToString(&sock->addr, line), ncclStrerror(errCode, errBuf, sizeof(errBuf)));
     return ncclSystemError;
   }
   return ncclSuccess;
@@ -299,6 +301,7 @@ ncclResult_t ncclOsSocketStartConnect(struct ncclSocket* sock) {
 }
 
 ncclResult_t ncclOsSocketPollConnect(struct ncclSocket* sock) {
+  char errBuf[256];
   struct pollfd pfd;
   int timeout = 1, ret;
   socklen_t rlen = sizeof(int);
@@ -312,7 +315,7 @@ ncclResult_t ncclOsSocketPollConnect(struct ncclSocket* sock) {
   if (ret == 0 || (ret < 0 && errno == EINTR)) {
     return ncclSuccess;
   } else if (ret < 0) {
-    WARN("ncclOsSocketPollConnect to %s failed with error %s", ncclSocketToString(&sock->addr, line), strerror(errno));
+    WARN("ncclOsSocketPollConnect to %s failed with error %s", ncclSocketToString(&sock->addr, line), ncclStrerror(errno, errBuf, sizeof(errBuf)));
     return ncclSystemError;
   }
 
@@ -322,6 +325,7 @@ ncclResult_t ncclOsSocketPollConnect(struct ncclSocket* sock) {
 }
 
 ncclResult_t ncclOsSocketProgressOpt(int op, struct ncclSocket* sock, void* ptr, int size, int* offset, int block, int* closed) {
+  char errBuf[256];
   int bytes = 0;
   *closed = 0;
   char* data = (char*)ptr;
@@ -341,7 +345,7 @@ ncclResult_t ncclOsSocketProgressOpt(int op, struct ncclSocket* sock, void* ptr,
       }
       if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
         WARN("ncclOsSocketProgressOpt: Call to %s %s failed : %s", (op == NCCL_SOCKET_RECV ? "recv from" : "send to"),
-              ncclSocketToString(&sock->addr, line), strerror(errno));
+              ncclSocketToString(&sock->addr, line), ncclStrerror(errno, errBuf, sizeof(errBuf)));
         return ncclRemoteError;
       } else {
         bytes = 0;
@@ -564,18 +568,20 @@ ncclAffinity ncclOsCpuAnd(const ncclAffinity& a, const ncclAffinity& b) {
 }
 
 ncclResult_t ncclOsGetAffinity(ncclAffinity* affinity) {
+  char errBuf[256];
   int result = sched_getaffinity(0, sizeof(ncclAffinity), affinity);
   if (result == -1) {
-    WARN("sched_getaffinity failed with error: %s", strerror(errno));
+    WARN("sched_getaffinity failed with error: %s", ncclStrerror(errno, errBuf, sizeof(errBuf)));
     return ncclSystemError;
   }
   return ncclSuccess;
 }
 
 ncclResult_t ncclOsSetAffinity(const ncclAffinity& affinity) {
+  char errBuf[256];
   int result = sched_setaffinity(0, sizeof(ncclAffinity), &affinity);
   if (result == -1) {
-    WARN("sched_setaffinity failed with error: %s", strerror(errno));
+    WARN("sched_setaffinity failed with error: %s", ncclStrerror(errno, errBuf, sizeof(errBuf)));
     return ncclSystemError;
   }
   return ncclSuccess;
@@ -630,6 +636,7 @@ void ncclOsShmHandleInit(ncclShmDescriptor shmDesc, char* shmPath, size_t shmSiz
 ncclResult_t ncclOsShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize,
                            void** shmPtr, void** devShmPtr, int refcount,
                            struct ncclShmHandleInternal** handle) {
+  char errBuf[256];
   int fd = -1;
   char* hptr = NULL;
   void* dptr = NULL;
@@ -650,10 +657,10 @@ ncclResult_t ncclOsShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize,
       fd = mkstemp(shmPath);
       if (fd < 0) {
         if (errno == EINTR) {
-          INFO(NCCL_ALL, "mkstemp: Failed to create %s, error: %s (%d) - retrying", shmPath, strerror(errno), errno);
+          INFO(NCCL_ALL, "mkstemp: Failed to create %s, error: %s (%d) - retrying", shmPath, ncclStrerror(errno, errBuf, sizeof(errBuf)), errno);
           goto retry_mkstemp;
         }
-        WARN("Error: failed to create shared memory file %s, error %s (%d)", shmPath, strerror(errno), errno);
+        WARN("Error: failed to create shared memory file %s, error %s (%d)", shmPath, ncclStrerror(errno, errBuf, sizeof(errBuf)), errno);
         ret = ncclSystemError;
         goto fail;
       }
@@ -664,10 +671,10 @@ ncclResult_t ncclOsShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize,
   retry_fallocate:
     if (fallocate(fd, 0, 0, realShmSize) != 0) {
       if (errno == EINTR) {
-        INFO(NCCL_ALL, "fallocate: Failed to extend %s to %ld bytes, error: %s (%d) - retrying", shmPath, realShmSize, strerror(errno), errno);
+        INFO(NCCL_ALL, "fallocate: Failed to extend %s to %ld bytes, error: %s (%d) - retrying", shmPath, realShmSize, ncclStrerror(errno, errBuf, sizeof(errBuf)), errno);
         goto retry_fallocate;
       }
-      WARN("Error: failed to extend %s to %ld bytes, error: %s (%d)", shmPath, realShmSize, strerror(errno), errno);
+      WARN("Error: failed to extend %s to %ld bytes, error: %s (%d)", shmPath, realShmSize, ncclStrerror(errno, errBuf, sizeof(errBuf)), errno);
       ret = ncclSystemError;
       goto fail;
     }
@@ -678,7 +685,7 @@ ncclResult_t ncclOsShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize,
 
   hptr = (char*)mmap(NULL, realShmSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   if (hptr == MAP_FAILED) {
-    WARN("Error: Could not map %s size %zu, error: %s (%d)", shmPath, realShmSize, strerror(errno), errno);
+    WARN("Error: Could not map %s size %zu, error: %s (%d)", shmPath, realShmSize, ncclStrerror(errno, errBuf, sizeof(errBuf)), errno);
     ret = ncclSystemError;
     hptr = NULL;
     goto fail;
@@ -690,7 +697,7 @@ ncclResult_t ncclOsShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize,
     int remref = ncclAtomicRefCountDecrement((int*)(hptr + shmSize));
     if (remref == 0) {
       if (unlink(shmPath) != 0) {
-        INFO(NCCL_ALLOC, "unlink shared memory %s failed, error: %s (%d)", shmPath, strerror(errno), errno);
+        INFO(NCCL_ALLOC, "unlink shared memory %s failed, error: %s (%d)", shmPath, ncclStrerror(errno, errBuf, sizeof(errBuf)), errno);
       }
     }
   }
@@ -712,7 +719,7 @@ exit:
   return ret;
 fail:
   WARN("Error while %s shared memory segment %s (size %ld), error: %s (%d)", create ? "creating" : "attaching to",
-       shmPath, shmSize, strerror(errno), errno);
+       shmPath, shmSize, ncclStrerror(errno, errBuf, sizeof(errBuf)), errno);
   if (tmphandle) {
     ncclOsShmHandleInit(fd, shmPath, shmSize, realShmSize, hptr, dptr, create, tmphandle);
     (void)ncclOsShmClose(tmphandle);
@@ -724,13 +731,14 @@ fail:
 }
 
 ncclResult_t ncclOsShmClose(struct ncclShmHandleInternal* handle) {
+  char errBuf[256];
   ncclResult_t ret = ncclSuccess;
   if (handle) {
     if (handle->shmDesc >= 0) {
       close(handle->shmDesc);
       if (handle->shmPath != NULL && handle->refcount != NULL && *handle->refcount > 0) {
         if (unlink(handle->shmPath) != 0) {
-          WARN("unlink shared memory %s failed, error: %s (%d)", handle->shmPath, strerror(errno), errno);
+          WARN("unlink shared memory %s failed, error: %s (%d)", handle->shmPath, ncclStrerror(errno, errBuf, sizeof(errBuf)), errno);
           ret = ncclSystemError;
         }
       }
@@ -740,7 +748,7 @@ ncclResult_t ncclOsShmClose(struct ncclShmHandleInternal* handle) {
     if (handle->shmPtr) {
       if (handle->devShmPtr) CUDACHECK(cudaHostUnregister(handle->shmPtr));
       if (munmap(handle->shmPtr, handle->realShmSize) != 0) {
-        WARN("munmap of shared memory %p size %ld failed, error: %s (%d)", handle->shmPtr, handle->realShmSize, strerror(errno), errno);
+        WARN("munmap of shared memory %p size %ld failed, error: %s (%d)", handle->shmPtr, handle->realShmSize, ncclStrerror(errno, errBuf, sizeof(errBuf)), errno);
         ret = ncclSystemError;
       }
     }
@@ -750,11 +758,12 @@ ncclResult_t ncclOsShmClose(struct ncclShmHandleInternal* handle) {
 }
 
 ncclResult_t ncclOsShmUnlink(struct ncclShmHandleInternal* handle) {
+  char errBuf[256];
   ncclResult_t ret = ncclSuccess;
   if (handle) {
     if (handle->shmPath != NULL && handle->refcount != NULL && *handle->refcount > 0) {
       if (unlink(handle->shmPath) != 0) {
-        WARN("unlink shared memory %s failed, error: %s (%d)", handle->shmPath, strerror(errno), errno);
+        WARN("unlink shared memory %s failed, error: %s (%d)", handle->shmPath, ncclStrerror(errno, errBuf, sizeof(errBuf)), errno);
         ret = ncclSystemError;
       }
       free(handle->shmPath);

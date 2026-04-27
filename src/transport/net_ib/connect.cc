@@ -230,7 +230,8 @@ static ncclResult_t ncclIbRoceGetVersionNum(const char* deviceName, int portNum,
 
   int fd = open(roceTypePath, O_RDONLY);
   if (fd == -1) {
-    WARN("NET/IB: open failed in ncclIbRoceGetVersionNum: %s", strerror(errno));
+    { char errBuf[256];
+    WARN("NET/IB: open failed in ncclIbRoceGetVersionNum: %s", ncclStrerror(errno, errBuf, sizeof(errBuf))); }
     return ncclSystemError;
   }
   int ret = read(fd, gidRoceVerStr, 15);
@@ -240,7 +241,8 @@ static ncclResult_t ncclIbRoceGetVersionNum(const char* deviceName, int portNum,
     // In containerized environments, read could return EINVAL if the GID index is not mapped to the
     // container sysfs. In this case return ncclSuccess and let the caller move to next GID index.
     if (errno == EINVAL) return ncclSuccess;
-    WARN("NET/IB: read failed in ncclIbRoceGetVersionNum: %s", strerror(errno));
+    { char errBuf[256];
+    WARN("NET/IB: read failed in ncclIbRoceGetVersionNum: %s", ncclStrerror(errno, errBuf, sizeof(errBuf))); }
     return ncclSystemError;
   }
 

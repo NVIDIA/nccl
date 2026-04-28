@@ -33,6 +33,8 @@
 #include "nvtx_payload_schemas.h"
 #include "utils.h"
 #include <mutex>
+#include <sstream>
+#include <string>
 #include "ce_coll.h"
 #include "nvtx.h"
 #include "os.h"
@@ -98,26 +100,35 @@ static void getEnvCtaPolicyOnce(){
     };
   } else {
     // newer way allows the user to combine the modes
-    char* str = strdup(env);
-    char* token = strtok(str, "|");
-    while (token) {
+    struct PolicyEntry { const char* name; int value; };
+    static const PolicyEntry policyTable[] = {
+      {"DEFAULT",    NCCL_CTA_POLICY_DEFAULT},
+      {"EFFICIENCY", NCCL_CTA_POLICY_EFFICIENCY},
+      {"ZERO",       NCCL_CTA_POLICY_ZERO},
+    };
+    std::istringstream stream(env);
+    std::string token;
+    while (std::getline(stream, token, '|')) {
       int tokenPolicy = NCCL_CONFIG_UNDEF_INT;
-      if (strcasecmp(token, "DEFAULT")==0) tokenPolicy = NCCL_CTA_POLICY_DEFAULT;
-      else if (strcasecmp(token, "EFFICIENCY")==0) tokenPolicy = NCCL_CTA_POLICY_EFFICIENCY;
-      else if (strcasecmp(token, "ZERO")==0) tokenPolicy = NCCL_CTA_POLICY_ZERO;
-      else INFO(NCCL_ENV, "Unknown CTA policy %s passed as environment variable. Ignoring.", token);
+      for (const auto& entry : policyTable) {
+        if (strcasecmp(token.c_str(), entry.name) == 0) {
+          tokenPolicy = entry.value;
+          break;
+        }
+      }
+      if (tokenPolicy == NCCL_CONFIG_UNDEF_INT) {
+        INFO(NCCL_ENV, "Unknown CTA policy %s passed as environment variable. Ignoring.", token.c_str());
+      }
       if (tokenPolicy != NCCL_CONFIG_UNDEF_INT) {
         if (ctaPolicyEnv == NCCL_CONFIG_UNDEF_INT) ctaPolicyEnv = tokenPolicy;
         else ctaPolicyEnv |= tokenPolicy;
       }
-      token = strtok(NULL, "|");
     }
     if (ctaPolicyEnv == NCCL_CONFIG_UNDEF_INT) {
       INFO(NCCL_ENV, "No valid CTA policies found in NCCL_CTA_POLICY=%s.", env);
     } else {
       INFO(NCCL_ENV, "Parsed environment variable NCCL_CTA_POLICY=%s to %d", env, ctaPolicyEnv);
     }
-    free(str);
   }
 }
 

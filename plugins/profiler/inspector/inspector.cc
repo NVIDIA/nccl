@@ -131,7 +131,8 @@ inspectorResult_t inspectorGetTimeUTC(char* buffer, size_t bufferSize) {
 
   uint64_t timestampUsec = inspectorGetTime();
   time_t timestampSec = timestampUsec / 1000000;  // Convert microseconds to seconds
-  struct tm* utc_tm = gmtime(&timestampSec);
+  struct tm utc_tm_buf;
+  struct tm* utc_tm = gmtime_r(&timestampSec, &utc_tm_buf);
 
   if (utc_tm) {
     // Format as ISO 8601 datetime: YYYY-MM-DDTHH:MM:SSZ

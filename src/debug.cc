@@ -12,6 +12,8 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <string>
+#include <sstream>
 #include <chrono>
 #include "param.h"
 #include <mutex>
@@ -91,57 +93,41 @@ static void ncclDebugInit() {
    * or ^INIT,COLL etc
    */
   const char* ncclDebugSubsysEnv = getEnvFunc("NCCL_DEBUG_SUBSYS");
-  if (ncclDebugSubsysEnv != NULL) {
+  if (ncclDebugSubsysEnv != nullptr) {
+    struct SubsysEntry { const char* name; uint64_t mask; };
+    static const SubsysEntry subsysTable[] = {
+      {"INIT",      NCCL_INIT},
+      {"COLL",      NCCL_COLL},
+      {"P2P",       NCCL_P2P},
+      {"SHM",       NCCL_SHM},
+      {"NET",       NCCL_NET},
+      {"GRAPH",     NCCL_GRAPH},
+      {"TUNING",    NCCL_TUNING},
+      {"ENV",       NCCL_ENV},
+      {"ALLOC",     NCCL_ALLOC},
+      {"CALL",      NCCL_CALL},
+      {"PROXY",     NCCL_PROXY},
+      {"NVLS",      NCCL_NVLS},
+      {"BOOTSTRAP", NCCL_BOOTSTRAP},
+      {"REG",       NCCL_REG},
+      {"PROFILE",   NCCL_PROFILE},
+      {"RAS",       NCCL_RAS},
+      {"DESTROY",   NCCL_DESTROY},
+      {"ALL",       NCCL_ALL},
+    };
     int invert = 0;
     if (ncclDebugSubsysEnv[0] == '^') { invert = 1; ncclDebugSubsysEnv++; }
     tempNcclDebugMask = invert ? ~0ULL : 0ULL;
-    char *ncclDebugSubsys = strdup(ncclDebugSubsysEnv);
-    char *subsys = strtok(ncclDebugSubsys, ",");
-    while (subsys != NULL) {
-      uint64_t mask = 0;
-      if (strcasecmp(subsys, "INIT") == 0) {
-        mask = NCCL_INIT;
-      } else if (strcasecmp(subsys, "COLL") == 0) {
-        mask = NCCL_COLL;
-      } else if (strcasecmp(subsys, "P2P") == 0) {
-        mask = NCCL_P2P;
-      } else if (strcasecmp(subsys, "SHM") == 0) {
-        mask = NCCL_SHM;
-      } else if (strcasecmp(subsys, "NET") == 0) {
-        mask = NCCL_NET;
-      } else if (strcasecmp(subsys, "GRAPH") == 0) {
-        mask = NCCL_GRAPH;
-      } else if (strcasecmp(subsys, "TUNING") == 0) {
-        mask = NCCL_TUNING;
-      } else if (strcasecmp(subsys, "ENV") == 0) {
-        mask = NCCL_ENV;
-      } else if (strcasecmp(subsys, "ALLOC") == 0) {
-        mask = NCCL_ALLOC;
-      } else if (strcasecmp(subsys, "CALL") == 0) {
-        mask = NCCL_CALL;
-      } else if (strcasecmp(subsys, "PROXY") == 0) {
-        mask = NCCL_PROXY;
-      } else if (strcasecmp(subsys, "NVLS") == 0) {
-        mask = NCCL_NVLS;
-      } else if (strcasecmp(subsys, "BOOTSTRAP") == 0) {
-        mask = NCCL_BOOTSTRAP;
-      } else if (strcasecmp(subsys, "REG") == 0) {
-        mask = NCCL_REG;
-      } else if (strcasecmp(subsys, "PROFILE") == 0) {
-        mask = NCCL_PROFILE;
-      } else if (strcasecmp(subsys, "RAS") == 0) {
-        mask = NCCL_RAS;
-      } else if (strcasecmp(subsys, "DESTROY") == 0) {
-        mask = NCCL_DESTROY;
-      } else if (strcasecmp(subsys, "ALL") == 0) {
-        mask = NCCL_ALL;
+    std::istringstream stream(ncclDebugSubsysEnv);
+    std::string subsys;
+    while (std::getline(stream, subsys, ',')) {
+      for (const auto& entry : subsysTable) {
+        if (strcasecmp(subsys.c_str(), entry.name) == 0) {
+          if (invert) tempNcclDebugMask &= ~entry.mask; else tempNcclDebugMask |= entry.mask;
+          break;
+        }
       }
-      if (mask) {
-        if (invert) tempNcclDebugMask &= ~mask; else tempNcclDebugMask |= mask;
-      }
-      subsys = strtok(NULL, ",");
     }
-    free(ncclDebugSubsys);
   }
 
   const char* ncclWarnSetDebugInfoEnv = getEnvFunc("NCCL_WARN_ENABLE_DEBUG_INFO");
@@ -161,32 +147,26 @@ static void ncclDebugInit() {
     int invert = 0;
     if (timestamps[0] == '^') { invert = 1; ++timestamps; }
     ncclDebugTimestampLevels = invert ? ~0U : 0U;
-    char *timestampsDup = strdup(timestamps);
-    char *level = strtok(timestampsDup, ",");
-    while (level != NULL) {
-      uint32_t mask = 0;
-      if (strcasecmp(level, "ALL") == 0) {
-        mask = ~0U;
-      } else if (strcasecmp(level, "VERSION") == 0) {
-        mask = (1<<NCCL_LOG_VERSION);
-      } else if (strcasecmp(level, "WARN") == 0) {
-        mask = (1<<NCCL_LOG_WARN);
-      } else if (strcasecmp(level, "INFO") == 0) {
-        mask = (1<<NCCL_LOG_INFO);
-      } else if (strcasecmp(level, "ABORT") == 0) {
-        mask = (1<<NCCL_LOG_ABORT);
-      } else if (strcasecmp(level, "TRACE") == 0) {
-        mask = (1<<NCCL_LOG_TRACE);
-      } else {
-        // Silently fail.
+    struct TsEntry { const char* name; uint32_t mask; };
+    static const TsEntry tsTable[] = {
+      {"ALL",     ~0U},
+      {"VERSION", (1<<NCCL_LOG_VERSION)},
+      {"WARN",    (1<<NCCL_LOG_WARN)},
+      {"INFO",    (1<<NCCL_LOG_INFO)},
+      {"ABORT",   (1<<NCCL_LOG_ABORT)},
+      {"TRACE",   (1<<NCCL_LOG_TRACE)},
+    };
+    std::istringstream stream(timestamps);
+    std::string level;
+    while (std::getline(stream, level, ',')) {
+      for (const auto& entry : tsTable) {
+        if (strcasecmp(level.c_str(), entry.name) == 0) {
+          if (invert) ncclDebugTimestampLevels &= ~entry.mask;
+          else ncclDebugTimestampLevels |= entry.mask;
+          break;
+        }
       }
-      if (mask) {
-        if (invert) ncclDebugTimestampLevels &= ~mask;
-        else ncclDebugTimestampLevels |= mask;
-      }
-      level = strtok(NULL, ",");
     }
-    free(timestampsDup);
   }
 
   // Store a copy of the timestamp format with space for the subseconds, if used.

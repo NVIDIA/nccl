@@ -40,7 +40,8 @@ ncclResult_t wrap_ibv_symbols(void) {
   CHECK_NOT_NULL(container, internal_name); \
   retval = container.call; \
   if (retval == error_retval) { \
-    WARN("Call to " name " failed with error %s", strerror(errno)); \
+    char _errBuf[256]; \
+    WARN("Call to " name " failed with error %s", ncclStrerror(errno, _errBuf, sizeof(_errBuf))); \
     return ncclSystemError; \
   } \
   return ncclSuccess;
@@ -66,7 +67,8 @@ ncclResult_t wrap_ibv_symbols(void) {
     *supported = 0; \
     return ncclSuccess; \
   } else if (ret != success_retval) { \
-    WARN("Call to " name " failed with error %s errno %d", strerror(ret), ret); \
+    char _errBuf[256]; \
+    WARN("Call to " name " failed with error %s errno %d", ncclStrerror(ret, _errBuf, sizeof(_errBuf)), ret); \
     *supported = 1; \
     return ncclSystemError; \
   } \
@@ -77,7 +79,8 @@ ncclResult_t wrap_ibv_symbols(void) {
   CHECK_NOT_NULL(container, internal_name); \
   int ret = container.call; \
   if (ret != success_retval) { \
-    WARN("Call to " name " failed with error %s errno %d", strerror(ret), ret); \
+    char _errBuf[256]; \
+    WARN("Call to " name " failed with error %s errno %d", ncclStrerror(ret, _errBuf, sizeof(_errBuf)), ret); \
     return ncclSystemError; \
   } \
   return ncclSuccess;
@@ -297,7 +300,8 @@ ncclResult_t wrap_ibv_modify_qp(struct ibv_qp* qp, struct ibv_qp_attr* attr, int
     if (attempts > 0) {
       unsigned int sleepTime = timeOut * attempts;
       ibvModifyQpLog(qp, attr->qp_state, attr, attr_mask, qpMsg, sizeof(qpMsg));
-      INFO(NCCL_NET, "Call to ibv_modify_qp failed with %d %s, %s, retrying %d/%d after %u msec of sleep", ret, strerror(ret), qpMsg, attempts, maxCnt, sleepTime);
+      char errBuf[256];
+      INFO(NCCL_NET, "Call to ibv_modify_qp failed with %d %s, %s, retrying %d/%d after %u msec of sleep", ret, ncclStrerror(ret, errBuf, sizeof(errBuf)), qpMsg, attempts, maxCnt, sleepTime);
       // sleep before retrying
       std::this_thread::sleep_for(std::chrono::milliseconds(sleepTime));
     }
@@ -306,7 +310,8 @@ ncclResult_t wrap_ibv_modify_qp(struct ibv_qp* qp, struct ibv_qp_attr* attr, int
   } while (IBV_MQP_RETRY_ERRNO_ALL(ret) && attempts < maxCnt);
   if (ret != 0) {
     ibvModifyQpLog(qp, attr->qp_state, attr, attr_mask, qpMsg, sizeof(qpMsg));
-    WARN("Call to ibv_modify_qp failed with %d %s, %s", ret, strerror(ret), qpMsg);
+    char errBuf[256];
+    WARN("Call to ibv_modify_qp failed with %d %s, %s", ret, ncclStrerror(ret, errBuf, sizeof(errBuf)), qpMsg);
     return ncclSystemError;
   }
   return ncclSuccess;

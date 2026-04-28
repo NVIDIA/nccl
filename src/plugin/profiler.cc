@@ -223,7 +223,8 @@ ncclResult_t ncclProfilerPluginInit(struct ncclComm* comm) {
     int err = ncclProfiler->init(&comm->profilerContext, comm->commHash, &ncclProfilerEventMask, comm->config.commName, comm->nNodes, comm->nRanks, comm->rank, ncclDebugLog);
     if (err) {
       ncclProfilerPluginUnload();
-      INFO(NCCL_INIT, "Profiler init failed with error '%d': %s. Continue without profiler.", err, strerror(errno));
+      { char errBuf[256];
+      INFO(NCCL_INIT, "Profiler init failed with error '%d': %s. Continue without profiler.", err, ncclStrerror(errno, errBuf, sizeof(errBuf))); }
     }
 
     printProfilerEventMask(ncclProfilerEventMask);

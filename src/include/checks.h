@@ -56,12 +56,29 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
 #define CUDACLEARERROR(cmd) cuda_clear(cmd)
 
 #include <errno.h>
+#include <string.h>
+#include <stdio.h>
+
+// Thread-safe strerror wrapper. Handles GNU vs POSIX strerror_r variants.
+static inline const char* ncclStrerror(int errnum, char* buf, size_t buflen) {
+#if (_POSIX_C_SOURCE >= 200112L) && !defined(_GNU_SOURCE)
+  // POSIX variant: int strerror_r(int, char*, size_t)
+  if (strerror_r(errnum, buf, buflen) != 0)
+    snprintf(buf, buflen, "Unknown error %d", errnum);
+  return buf;
+#else
+  // GNU variant: char* strerror_r(int, char*, size_t)
+  return strerror_r(errnum, buf, buflen);
+#endif
+}
+
 // Check system calls
 #define SYSCHECK(statement, name) do { \
   int retval; \
   SYSCHECKSYNC((statement), name, retval); \
   if (retval == -1) { \
-    WARN("Call to " name " failed: %s", strerror(errno)); \
+    char _errBuf[256]; \
+    WARN("Call to " name " failed: %s", ncclStrerror(errno, _errBuf, sizeof(_errBuf))); \
     return ncclSystemError; \
   } \
 } while (false)
@@ -69,7 +86,8 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
 #define SYSCHECKSYNC(statement, name, retval) do { \
   retval = (statement); \
   if (retval == -1 && (errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN)) { \
-    INFO(NCCL_ALL,"Call to " name " returned %s, retrying", strerror(errno)); \
+    char _errBuf[256]; \
+    INFO(NCCL_ALL,"Call to " name " returned %s, retrying", ncclStrerror(errno, _errBuf, sizeof(_errBuf))); \
   } else { \
     break; \
   } \
@@ -79,7 +97,8 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
   int retval; \
   SYSCHECKSYNC((statement), name, retval); \
   if (retval == -1) { \
-    WARN("Call to " name " failed: %s", strerror(errno)); \
+    char _errBuf[256]; \
+    WARN("Call to " name " failed: %s", ncclStrerror(errno, _errBuf, sizeof(_errBuf))); \
     RES = ncclSystemError; \
     goto label; \
   } \
@@ -89,7 +108,8 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
 #define PTHREADCHECK(statement, name) do { \
   int retval = (statement); \
   if (retval != 0) { \
-    WARN("Call to " name " failed: %s", strerror(retval)); \
+    char _errBuf[256]; \
+    WARN("Call to " name " failed: %s", ncclStrerror(retval, _errBuf, sizeof(_errBuf))); \
     return ncclSystemError; \
   } \
 } while (0)
@@ -97,7 +117,8 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
 #define PTHREADCHECKGOTO(statement, name, RES, label) do { \
   int retval = (statement); \
   if (retval != 0) { \
-    WARN("Call to " name " failed: %s", strerror(retval)); \
+    char _errBuf[256]; \
+    WARN("Call to " name " failed: %s", ncclStrerror(retval, _errBuf, sizeof(_errBuf))); \
     RES = ncclSystemError; \
     goto label; \
   } \
@@ -106,7 +127,8 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
 #define NEQCHECK(statement, value) do {   \
   if ((statement) != value) {             \
     /* Print the back trace*/             \
-    INFO(NCCL_ALL,"%s:%d -> %d (%s)", __FILE__, __LINE__, ncclSystemError, strerror(errno));    \
+    char _errBuf[256]; \
+    INFO(NCCL_ALL,"%s:%d -> %d (%s)", __FILE__, __LINE__, ncclSystemError, ncclStrerror(errno, _errBuf, sizeof(_errBuf)));    \
     return ncclSystemError;     \
   }                             \
 } while (0)
@@ -114,8 +136,9 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
 #define NEQCHECKGOTO(statement, value, RES, label) do { \
   if ((statement) != value) { \
     /* Print the back trace*/ \
+    char _errBuf[256]; \
     RES = ncclSystemError;    \
-    INFO(NCCL_ALL,"%s:%d -> %d (%s)", __FILE__, __LINE__, RES, strerror(errno));    \
+    INFO(NCCL_ALL,"%s:%d -> %d (%s)", __FILE__, __LINE__, RES, ncclStrerror(errno, _errBuf, sizeof(_errBuf)));    \
     goto label; \
   } \
 } while (0)
@@ -123,7 +146,8 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
 #define EQCHECK(statement, value) do {    \
   if ((statement) == value) {             \
     /* Print the back trace*/             \
-    INFO(NCCL_ALL,"%s:%d -> %d (%s)", __FILE__, __LINE__, ncclSystemError, strerror(errno));    \
+    char _errBuf[256]; \
+    INFO(NCCL_ALL,"%s:%d -> %d (%s)", __FILE__, __LINE__, ncclSystemError, ncclStrerror(errno, _errBuf, sizeof(_errBuf)));    \
     return ncclSystemError;     \
   }                             \
 } while (0)
@@ -131,8 +155,9 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
 #define EQCHECKGOTO(statement, value, RES, label) do { \
   if ((statement) == value) { \
     /* Print the back trace*/ \
+    char _errBuf[256]; \
     RES = ncclSystemError;    \
-    INFO(NCCL_ALL,"%s:%d -> %d (%s)", __FILE__, __LINE__, RES, strerror(errno));    \
+    INFO(NCCL_ALL,"%s:%d -> %d (%s)", __FILE__, __LINE__, RES, ncclStrerror(errno, _errBuf, sizeof(_errBuf)));    \
     goto label; \
   } \
 } while (0)

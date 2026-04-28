@@ -1710,7 +1710,8 @@ void* ncclProxyService(void* _args) {
     } while (ret < 0);
 #endif
     if (ret < 0) {
-      WARN("[Proxy Service] Poll failed: %s", strerror(errno));
+      { char errBuf[256];
+      WARN("[Proxy Service] Poll failed: %s", ncclStrerror(errno, errBuf, sizeof(errBuf))); }
       goto fail;
     }
     if (pollfds[maxProxyConnections].revents) {
@@ -1724,7 +1725,8 @@ void* ncclProxyService(void* _args) {
       if (maxnpeers < s+1) maxnpeers = s+1;
       NCCLCHECKGOTO(ncclSocketInit(&peers[s].sock), ret, fail);
       if (ncclSocketAccept(&peers[s].sock, proxyState->listenSock) != ncclSuccess) {
-        INFO(NCCL_PROXY, "[Service thread] Accept failed %s", strerror(errno));
+        { char errBuf[256];
+        INFO(NCCL_PROXY, "[Service thread] Accept failed %s", ncclStrerror(errno, errBuf, sizeof(errBuf))); }
       } else {
         NCCLCHECKGOTO(ncclSocketGetFd(&peers[s].sock, &pollfds[s].fd), ret, fail);
         pollfds[s].events = NCCL_POLLIN;
@@ -1890,7 +1892,8 @@ void* ncclProxyServiceUDS(void* _args) {
       ret = poll(pollfds, 1, 500);
     } while (ret < 0 && errno == EINTR);
     if (ret < 0) {
-      WARN("[Proxy Service UDS] Poll failed: %s", strerror(errno));
+      { char errBuf[256];
+      WARN("[Proxy Service UDS] Poll failed: %s", ncclStrerror(errno, errBuf, sizeof(errBuf))); }
       return NULL;
     }
 #elif defined(NCCL_OS_WINDOWS)

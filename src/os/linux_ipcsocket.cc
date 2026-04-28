@@ -37,7 +37,8 @@ ncclResult_t ncclIpcSocketInit(ncclIpcSocket *handle, int rank, uint64_t hash, v
   handle->fd = NCCL_INVALID_SOCKET;
   handle->socketName[0] = '\0';
   if ((fd = socket(AF_UNIX, SOCK_DGRAM, 0)) < 0) {
-    WARN("UDS: Socket creation error : %s (%d)", strerror(errno), errno);
+    { char errBuf[256];
+    WARN("UDS: Socket creation error : %s (%d)", ncclStrerror(errno, errBuf, sizeof(errBuf)), errno); }
     return ncclSystemError;
   }
 
@@ -65,7 +66,8 @@ ncclResult_t ncclIpcSocketInit(ncclIpcSocket *handle, int rank, uint64_t hash, v
     cliaddr.sun_path[0] = '\0'; // Linux abstract socket trick
   }
   if (bind(fd, (struct sockaddr *)&cliaddr, sizeof(cliaddr)) < 0) {
-    WARN("UDS: Binding to socket %s failed : %s (%d)", temp, strerror(errno), errno);
+    { char errBuf[256];
+    WARN("UDS: Binding to socket %s failed : %s (%d)", temp, ncclStrerror(errno, errBuf, sizeof(errBuf)), errno); }
     close(fd);
     return ncclSystemError;
   }
@@ -228,7 +230,8 @@ ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
   ssize_t sendResult;
   while ((sendResult = sendmsg(handle->fd, &msg, 0)) < 0) {
     if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
-      WARN("UDS: Sending data over socket %s failed : %s (%d)", temp, strerror(errno), errno);
+      { char errBuf[256];
+      WARN("UDS: Sending data over socket %s failed : %s (%d)", temp, ncclStrerror(errno, errBuf, sizeof(errBuf)), errno); }
       return ncclSystemError;
     }
     if (handle->abortFlag && COMPILER_ATOMIC_LOAD(handle->abortFlag, std::memory_order_acquire)) return ncclInternalError;

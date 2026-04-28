@@ -434,9 +434,10 @@ static bool ensureDir(char* workdir) {
     if (mkdir(workdir, mode) == 0) {
       return true; // Directory created successfully
     } else {
+      { char errBuf[256];
       INFO_INSPECTOR(
         "NCCL Inspector: failed to create dump directory %s: %s", workdir,
-        strerror(errno));
+        strerror_r(errno, errBuf, sizeof(errBuf))); }
       return false;
     }
   }
@@ -512,8 +513,9 @@ inspectorDumpThread::~inspectorDumpThread() {
           TRACE_INSPECTOR("NCCL Inspector: Cleaned up Prometheus file %s",
                           deviceFlushEntries[i].filename);
         } else {
+          { char errBuf[256];
           INFO_INSPECTOR("NCCL Inspector: Failed to cleanup Prometheus file %s: %s",
-                         deviceFlushEntries[i].filename, strerror(errno));
+                         deviceFlushEntries[i].filename, strerror_r(errno, errBuf, sizeof(errBuf))); }
         }
       }
     }

@@ -70,7 +70,8 @@ ncclResult_t wrap_ibv_set_ece(struct ibv_qp *qp, struct ibv_ece *ece, int* suppo
 static inline ncclResult_t wrap_ibv_post_send(struct ibv_qp *qp, struct ibv_send_wr *wr, struct ibv_send_wr **bad_wr) {
   int ret = qp->context->ops.post_send(qp, wr, bad_wr); /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/
   if (ret != IBV_SUCCESS) {
-    WARN("ibv_post_send() failed with error %s, Bad WR %p, First WR %p", strerror(ret), wr, *bad_wr);
+    char errBuf[256];
+    WARN("ibv_post_send() failed with error %s, Bad WR %p, First WR %p", ncclStrerror(ret, errBuf, sizeof(errBuf)), wr, *bad_wr);
     return ncclSystemError;
   }
   return ncclSuccess;
@@ -79,7 +80,8 @@ static inline ncclResult_t wrap_ibv_post_send(struct ibv_qp *qp, struct ibv_send
 static inline ncclResult_t wrap_ibv_post_recv(struct ibv_qp *qp, struct ibv_recv_wr *wr, struct ibv_recv_wr **bad_wr) {
   int ret = qp->context->ops.post_recv(qp, wr, bad_wr); /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/
   if (ret != IBV_SUCCESS) {
-    WARN("ibv_post_recv() failed with error %s", strerror(ret));
+    char errBuf[256];
+    WARN("ibv_post_recv() failed with error %s", ncclStrerror(ret, errBuf, sizeof(errBuf)));
     return ncclSystemError;
   }
   return ncclSuccess;

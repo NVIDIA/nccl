@@ -399,6 +399,7 @@ static ncclResult_t init_hybridep_intranode(ncclEpGroup_t ep_group,
             cudaError_t err = cudaDeviceEnablePeerAccess(i, 0);
             if (err != cudaSuccess && err != cudaErrorPeerAccessAlreadyEnabled) {
                 fprintf(stderr, "HT: Failed to enable P2P from GPU %d to GPU %d\n", rank_in_node, i);
+                (void)cudaGetLastError();
             }
         }
     }
@@ -574,20 +575,20 @@ static ncclResult_t destroy_hybridep_intranode(ncclEpGroup_t ep_group) {
     for (int i = 0; i < gpus_per_node; i++) {
         if (i != rank_in_node && ep_group->ht_buffers.peer_ipc_base_ptrs &&
             ep_group->ht_buffers.peer_ipc_base_ptrs[i]) {
-            cudaIpcCloseMemHandle(ep_group->ht_buffers.peer_ipc_base_ptrs[i]);
+            CUDA_CHECK_WARN(cudaIpcCloseMemHandle(ep_group->ht_buffers.peer_ipc_base_ptrs[i]));
         }
     }
 
     // Close completion flag IPC handle (non-rank_in_node-0)
     if (rank_in_node != 0) {
         if (ep_group->ht_buffers.intra_node_write_completion_flags) {
-            cudaIpcCloseMemHandle(ep_group->ht_buffers.intra_node_write_completion_flags);
+            CUDA_CHECK_WARN(cudaIpcCloseMemHandle(ep_group->ht_buffers.intra_node_write_completion_flags));
         }
     }
 
     // Free consolidated IPC mega-buffer (replaces 4 individual cudaFree calls)
     if (ep_group->ht_buffers.ipc_mega_buffer) {
-        cudaFree(ep_group->ht_buffers.ipc_mega_buffer);
+        CUDA_CHECK_WARN(cudaFree(ep_group->ht_buffers.ipc_mega_buffer));
         ep_group->ht_buffers.ipc_mega_buffer = nullptr;
         ep_group->ht_buffers.expert_output_token = nullptr;
         ep_group->ht_buffers.expert_output_prob = nullptr;
@@ -605,20 +606,20 @@ static ncclResult_t destroy_hybridep_intranode(ncclEpGroup_t ep_group) {
     // Free merged completion flags (rank_in_node 0 only; base pointer covers both dispatch and combine)
     if (rank_in_node == 0) {
         if (ep_group->ht_buffers.intra_node_write_completion_flags) {
-            cudaFree(ep_group->ht_buffers.intra_node_write_completion_flags);
+            CUDA_CHECK_WARN(cudaFree(ep_group->ht_buffers.intra_node_write_completion_flags));
         }
     }
 
     // Free consolidated host pointer block and peer IPC tracking array
     if (ep_group->ht_buffers.dispatch_expert_output_scaling_factor_buffer_ptrs) {
-        cudaFreeHost(ep_group->ht_buffers.dispatch_expert_output_scaling_factor_buffer_ptrs);
+        CUDA_CHECK_WARN(cudaFreeHost(ep_group->ht_buffers.dispatch_expert_output_scaling_factor_buffer_ptrs));
     }
     if (ep_group->ht_buffers.host_ptr_block) {
-        cudaFreeHost(ep_group->ht_buffers.host_ptr_block);
+        CUDA_CHECK_WARN(cudaFreeHost(ep_group->ht_buffers.host_ptr_block));
         ep_group->ht_buffers.host_ptr_block = nullptr;
     }
     if (ep_group->ht_buffers.peer_ipc_base_ptrs) {
-        cudaFreeHost(ep_group->ht_buffers.peer_ipc_base_ptrs);
+        CUDA_CHECK_WARN(cudaFreeHost(ep_group->ht_buffers.peer_ipc_base_ptrs));
         ep_group->ht_buffers.peer_ipc_base_ptrs = nullptr;
     }
 

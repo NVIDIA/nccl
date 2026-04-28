@@ -49,6 +49,19 @@ do { \
 } while (0)
 #endif
 
+// Log CUDA errors but continue (for cleanup paths where failure is non-fatal)
+#ifndef CUDA_CHECK_WARN
+#define CUDA_CHECK_WARN(cmd) \
+do { \
+    cudaError_t e = (cmd); \
+    if (e != cudaSuccess) { \
+        fprintf(stderr, "CUDA warning %s:%d '%s'\n", \
+                __FILE__, __LINE__, cudaGetErrorString(e)); \
+        (void)cudaGetLastError(); \
+    } \
+} while (0)
+#endif
+
 #ifndef EP_HOST_ASSERT
 #define EP_HOST_ASSERT(cond) \
 do { \

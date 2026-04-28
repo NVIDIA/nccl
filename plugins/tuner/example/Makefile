@@ -12,17 +12,17 @@ SRCDIR   ?= $(abspath ../../..)
 BUILDDIR ?= .
 NCCLDIR  := $(BUILDDIR)
 
-SRC_FILES := $(wildcard *.c)
+SRC_FILES := $(wildcard *.cc)
 DST_DIR   := $(BUILDDIR)/test/unit/plugins
 
 default: ${BUILDDIR}/$(PLUGIN_SO)
 
 build: ${BUILDDIR}/$(PLUGIN_SO)
 
-${BUILDDIR}/$(PLUGIN_SO): plugin.c
+${BUILDDIR}/$(PLUGIN_SO): plugin.cc
 	@printf "Compiling  %-35s > %s\n" $< $@
 	@mkdir -p ${BUILDDIR}
-	$(CC) -Inccl $(INC) -fPIC -shared -o $@ -Wl,-soname,$(PLUGIN_SO) $^
+	$(CXX) -Inccl $(INC) $(CXXSTD) -fPIC -shared -o $@ -Wl,-soname,$(PLUGIN_SO) $^
 
 # Test targets - delegate to test directory
 test:

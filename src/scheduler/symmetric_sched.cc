@@ -262,6 +262,7 @@ ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm, struct ncclIntruQ
   workBufPtr = argsBuf->getWorks(nMaxChannels);
   argsBuf->nMaxChannels = nMaxChannels;
   argsBuf->maxDynamicSmem = maxDynamicSmem;
+  argsBuf->allGatherRailRingChunkSize = ncclSymkAllGatherRailRingChunkSize();
 
   while (!ncclIntruQueueEmpty(symTaskQueue)) {
     struct ncclSymkDevWork devWork = {};

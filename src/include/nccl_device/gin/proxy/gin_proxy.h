@@ -22,6 +22,7 @@
 struct ncclGinCpuProxyRequest {
   int peer;
   uint32_t nextGfdIdx;
+  uint32_t lastIssuedGet;
 };
 static_assert(sizeof(ncclGinCpuProxyRequest) <= sizeof(ncclGinRequest_t),
               "ncclGinCpuProxyRequest must fit in ncclGinRequest_t");
@@ -55,7 +56,7 @@ NCCL_DEVICE_INLINE void flush(ncclGinProxyGpuCtx_t* proxyCtx, uint32_t pe, cuda:
 
 template <typename Coop>
 NCCL_DEVICE_INLINE void postGfd(Coop coop, ncclGinProxyGpuCtx_t* proxyCtx, ncclGinProxyGfd_t* gfd,
-                                uint32_t pe, uint32_t* gfdIdx = nullptr) {
+                                uint32_t pe, bool isGet = false) {
   using nccl::utility::loadConst;
   cuda::atomic_ref<uint32_t, cuda::thread_scope_system> pi(loadConst(&proxyCtx->pis)[pe]);
   cuda::atomic_ref<uint32_t, cuda::thread_scope_system> ci(loadConst(&proxyCtx->cis)[pe]);
@@ -64,9 +65,6 @@ NCCL_DEVICE_INLINE void postGfd(Coop coop, ncclGinProxyGpuCtx_t* proxyCtx, ncclG
   if (coop.thread_rank() == 0) {
     // claim a slot in the gfd queue
     uint32_t idx = pi.fetch_add(1, cuda::memory_order_relaxed);
-    if (gfdIdx != nullptr) {
-      *gfdIdx = idx;
-    }
     // wait for credits
     while (queueSize <= idx - ci.load(cuda::memory_order_relaxed)) {
     }
@@ -75,6 +73,10 @@ NCCL_DEVICE_INLINE void postGfd(Coop coop, ncclGinProxyGpuCtx_t* proxyCtx, ncclG
 #pragma unroll
     for (uint8_t i = 0; i < sizeof(ncclGinProxyGfd_t) / sizeof(uint4); i++) {
       __stwt((uint4*)&q[idx] + i, ((uint4*)gfd)[i]);
+    }
+    if (isGet) {
+      cuda::atomic_ref<uint32_t, cuda::thread_scope_device> lastIssuedGet(nccl::utility::loadConst(&proxyCtx->lastIssuedGet)[pe]);
+      nccl::utility::rollingAtomicMax(lastIssuedGet, idx + 1); // +1 so 0 means no gets posted
     }
   }
 }
@@ -182,7 +184,7 @@ NCCL_DEVICE_INLINE void get(Coop coop, ncclGinProxyGpuCtx_t* proxyCtx,
     nccl::gin::proxy::buildGfd(desc, op, /*srcVal*/0, /*hasInline*/false, remoteOff, remoteWnd,
                                localOff, localWnd, sendSize, /*counterId*/0, /*signalId*/0,
                                /*signalVal*/0, nullptr, 0);
-    nccl::gin::proxy::postGfd<Coop>(coop, proxyCtx, desc, peer);
+    nccl::gin::proxy::postGfd<Coop>(coop, proxyCtx, desc, peer, /*isGet*/true);
     bytes -= sendSize;
     remoteOff += sendSize;
     localOff += sendSize;
@@ -264,7 +266,7 @@ struct ncclGinApi_Get<NCCL_NET_DEVICE_GIN_PROXY> {
     ncclGinProxyGfd_t tmpDesc;
     ncclGinProxyGfd_t* desc = hasDescriptor ? (ncclGinProxyGfd_t*)descriptor : &tmpDesc;
     ncclGinProxyGpuCtx_t* proxyCtx = &((ncclGinProxyGpuCtx_t*)ctx.handle)[ctx.contextId];
-    nccl::gin::proxy::get<Coop>(coop, proxyCtx, peer, remoteWin, remoteOff, localWin, localOff, bytes,desc);
+    nccl::gin::proxy::get<Coop>(coop, proxyCtx, peer, remoteWin, remoteOff, localWin, localOff, bytes, desc);
   }
 };
 
@@ -279,6 +281,9 @@ struct ncclGinApi_FlushAsync<NCCL_NET_DEVICE_GIN_PROXY> {
     ncclGinCpuProxyRequest* req = reinterpret_cast<ncclGinCpuProxyRequest*>(outRequest);
     req->peer = peer;
     ncclGinProxyGpuCtx_t* proxyCtx = &((ncclGinProxyGpuCtx_t*)ctx.handle)[ctx.contextId];
+    cuda::atomic_ref<uint32_t, cuda::thread_scope_device> lastIssuedGet(loadConst(&proxyCtx->lastIssuedGet)[peer]);
+    req->lastIssuedGet = lastIssuedGet.load(cuda::memory_order_relaxed); // Must be before pi is loaded in case of concurrent gets
+
     cuda::atomic_ref<uint32_t, cuda::thread_scope_system> pi(loadConst(&proxyCtx->pis)[peer]);
     req->nextGfdIdx = pi.load(cuda::memory_order_relaxed);
   }
@@ -287,20 +292,28 @@ template <>
 struct ncclGinApi_Wait<NCCL_NET_DEVICE_GIN_PROXY> {
   NCCL_DEVICE_INLINE static void call(ncclGinCtx ctx, ncclGinRequest_t& request, bool hasDescriptor,
                                       ncclGinDescriptorSmem* descriptor, cuda::memory_order ord, uint32_t* abortFlag) {
+    using nccl::utility::loadConst;
     ncclGinCpuProxyRequest& req = reinterpret_cast<ncclGinCpuProxyRequest&>(request);
     ncclGinProxyGpuCtx_t* proxyCtx = &((ncclGinProxyGpuCtx_t*)ctx.handle)[ctx.contextId];
     nccl::gin::proxy::waitForGfdComplete(proxyCtx, req.peer, req.nextGfdIdx, cuda::memory_order_relaxed, abortFlag);
 
     // Ensure gets are visible by issuing a local flush
-    ncclGinProxyGfd_t tmpGfd;
-    ncclGinProxyGfd_t* desc = hasDescriptor ? (ncclGinProxyGfd_t*)descriptor : &tmpGfd;
-    ncclGinProxyOp_t op;
-    uint32_t flushGfdIdx;
-    nccl::gin::proxy::constructProxyOp(op, /*isGet*/false, /*isFlush*/true, /*hasInline*/false, NCCL_GIN_SIGNAL_TYPE_NONE, ncclGinSignalInc, /*hasCounter*/false);
-    nccl::gin::proxy::buildGfd(desc, op, /*srcVal*/0, /*hasInline*/false, 0, nullptr,
-                               0, nullptr, 0, 0, 0, 0, nullptr, 0);
-    nccl::gin::proxy::postGfd(ncclCoopThread(), proxyCtx, desc, ctx.rank, &flushGfdIdx);
-    nccl::gin::proxy::waitForGfdComplete(proxyCtx, ctx.rank, flushGfdIdx + 1, ord, abortFlag);
+    uint32_t* visibleGets = nccl::utility::loadConst(&proxyCtx->lastVisibleGet);
+    cuda::atomic_ref<uint32_t, cuda::thread_scope_device> lastVisibleGet(visibleGets[req.peer]);
+    uint32_t visible = lastVisibleGet.load(cuda::memory_order_relaxed);
+    if (req.lastIssuedGet > visible) {
+      ncclGinProxyGfd_t gfd;
+      ncclGinProxyOp_t op;
+      nccl::gin::proxy::constructProxyOp(op, /*isGet*/false, /*isFlush*/true, /*hasInline*/false,
+                                          NCCL_GIN_SIGNAL_TYPE_NONE, ncclGinSignalInc, /*hasCounter*/false);
+      nccl::gin::proxy::buildGfd(&gfd, op, /*srcVal*/0, /*hasInline*/false, 0, nullptr, 0, nullptr, 0, 0, 0, 0,
+                                  nullptr, 0);
+      int flushPeer = ctx.rank; // A flush GFD can be posted to any queue. We choose the local queue.
+      nccl::gin::proxy::postGfd(ncclCoopThread(), proxyCtx, &gfd, flushPeer);
+
+      nccl::gin::proxy::flush(proxyCtx, flushPeer, cuda::memory_order_relaxed, abortFlag);
+      lastVisibleGet.store(req.lastIssuedGet, ord);  // may move backward in case of concurrent flushes. That's okay.
+    }
   }
 };
 

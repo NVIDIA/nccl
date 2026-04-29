@@ -51,6 +51,9 @@ struct ginProxyHostGpuCtx {
   // inlines is registered as a memory region with the GIN plugin
   void *inlinesMhandle;
   void *inlinesGinHandle;
+
+  uint32_t *lastIssuedGet; // per-rank index of most recent get
+  uint32_t *lastVisibleGet; // per-rank index of last get for which the payload is guaranteed visible (via flush GFD)
 };
 
 struct ginProxyCtx {
@@ -521,6 +524,8 @@ static ncclResult_t ncclGinProxyCreateContext(void* collComm, ncclGinConfig_t* c
                                    queuesLength * sizeof(uint64_t), NCCL_PTR_HOST, 0,
                                    &hostGpuCtx->inlinesMhandle, &hostGpuCtx->inlinesGinHandle));
     NCCLCHECK(ncclCudaCalloc(&hostGpuCtx->pis, cComm->nRanks, NULL));
+    NCCLCHECK(ncclCudaCalloc(&hostGpuCtx->lastIssuedGet, cComm->nRanks, NULL));
+    NCCLCHECK(ncclCudaCalloc(&hostGpuCtx->lastVisibleGet, cComm->nRanks, NULL));
 
     ncclGinProxyGpuCtx_t *devGpuCtx_h = devGpuCtxArray_h + contextId;
     devGpuCtx_h->nranks = cComm->nRanks;
@@ -529,6 +534,8 @@ static ncclResult_t ncclGinProxyCreateContext(void* collComm, ncclGinConfig_t* c
     devGpuCtx_h->signals = proxyCtx->signalsDev + contextId * config->nSignals;
     devGpuCtx_h->signalOffsets = proxyCtx->signalOffsetsDev + contextId * config->nSignals;
     devGpuCtx_h->pis = hostGpuCtx->pis;
+    devGpuCtx_h->lastIssuedGet = hostGpuCtx->lastIssuedGet;
+    devGpuCtx_h->lastVisibleGet = hostGpuCtx->lastVisibleGet;
 
     // Allocate the GFD queues, CIs, counters, signals and test/wait variables on the either the CPU
     // or GPU.
@@ -584,6 +591,8 @@ static ncclResult_t ncclGinProxyDestroyContext(void *ginCtx) {
         if (hostGpuCtx->cisShadow) free(hostGpuCtx->cisShadow);
         if (hostGpuCtx->sis) free(hostGpuCtx->sis);
         if (hostGpuCtx->pis) NCCLCHECK(ncclCudaFree(hostGpuCtx->pis, NULL));
+        if (hostGpuCtx->lastIssuedGet) NCCLCHECK(ncclCudaFree(hostGpuCtx->lastIssuedGet, NULL));
+        if (hostGpuCtx->lastVisibleGet) NCCLCHECK(ncclCudaFree(hostGpuCtx->lastVisibleGet, NULL));
         if (hostGpuCtx->states) free(hostGpuCtx->states);
         if (hostGpuCtx->inlines) free(hostGpuCtx->inlines);
         if (ctx->collComm && hostGpuCtx->inlinesMhandle)

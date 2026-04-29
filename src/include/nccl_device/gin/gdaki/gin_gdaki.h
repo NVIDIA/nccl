@@ -8,6 +8,7 @@
 #ifndef _NCCL_DEVICE_GIN_GDAKI_H_
 #define _NCCL_DEVICE_GIN_GDAKI_H_
 
+#include "nccl_device/utility.h"
 #include <cstdint>
 #ifndef DOCA_VERBS_USE_CUDA_WRAPPER
 #define DOCA_VERBS_USE_CUDA_WRAPPER
@@ -27,7 +28,7 @@
 
 struct ncclGinGdakiRequest {
   int peer;
-  doca_gpu_dev_verbs_ticket_t docaTicket;
+  uint64_t sq_rsvd_index;
 };
 static_assert(sizeof(ncclGinGdakiRequest) <= sizeof(ncclGinRequest_t),
               "ncclGinGdakiRequest must fit in ncclGinRequest_t");
@@ -244,6 +245,27 @@ NCCL_DEVICE_INLINE static void putValueImpl(ncclGinCtx ctx, Coop coop, int peer,
   }
 }
 
+template <enum ncclGinResourceSharingMode resource_sharing_mode>
+NCCL_DEVICE_INLINE static bool exchangeGetSinceLastFlush(ncclGinGdakiGPUContext* gdaki, int peer, bool newValue) {
+  using nccl::utility::loadConst;
+  uint32_t* getFlags = loadConst(&gdaki->get_since_last_flush);
+  switch (resource_sharing_mode) {
+    case NCCL_GIN_RESOURCE_SHARING_THREAD: {
+      const bool hadGet = (getFlags[peer] != 0);
+      getFlags[peer] = newValue;
+      return hadGet;
+    }
+    case NCCL_GIN_RESOURCE_SHARING_CTA: {
+      cuda::atomic_ref<uint32_t, cuda::thread_scope_block> peerGetFlag(getFlags[peer]);
+      return (peerGetFlag.exchange(newValue, cuda::memory_order_relaxed) != 0);
+    }
+    default: {
+      cuda::atomic_ref<uint32_t, cuda::thread_scope_device> peerGetFlagDevice(getFlags[peer]);
+      return (peerGetFlagDevice.exchange(newValue, cuda::memory_order_relaxed) != 0);
+    }
+  }
+}
+
 template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode, typename Coop>
 NCCL_DEVICE_INLINE static void getImplMode(ncclGinCtx ctx, Coop coop, int peer,
                                            ncclGinWindow_t remoteWin, size_t remoteOff,
@@ -267,6 +289,7 @@ NCCL_DEVICE_INLINE static void getImplMode(ncclGinCtx ctx, Coop coop, int peer,
     uint32_t codeOpt = nccl::gin::gdaki::docaOptFlagsFromGinOptFlags(optFlags);
     doca_gpu_dev_verbs_get<resource_sharing_mode>(
         qp, raddr, laddr, bytes, uninitialized_daddr, &unused_out_ticket, codeOpt);
+    exchangeGetSinceLastFlush<NCCL_GIN_RESOURCE_SHARING_GPU>(gdaki, peer, /*newValue*/ true); // must be after get to avoid race with concurrent flushes
   }
   coop.sync();
 }
@@ -368,17 +391,20 @@ struct ncclGinApi_FlushAsync<NCCL_NET_DEVICE_GIN_GDAKI> {
     (void)hasDescriptor;
     (void)descriptor;
     using nccl::utility::loadConst;
+    using nccl::gin::gdaki::exchangeGetSinceLastFlush;
     ncclGinGdakiRequest* req = reinterpret_cast<ncclGinGdakiRequest*>(outRequest);
     req->peer = peer;
     ncclGinGdakiGPUContext* gdaki = &((struct ncclGinGdakiGPUContext*)ctx.handle)[ctx.contextId];
     doca_gpu_dev_verbs_qp* qp = loadConst(&gdaki->gdqp) + peer;
-    doca_gpu_dev_verbs_addr daddr;
-    daddr.addr = 0;
-    daddr.key = loadConst(&gdaki->sink_buffer_lkey);
-    doca_gpu_dev_verbs_mcst<
-        DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
-        DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>(
-        qp, daddr, &req->docaTicket);
+    if (exchangeGetSinceLastFlush<NCCL_GIN_RESOURCE_SHARING_GPU>(gdaki, peer, false)) {
+      doca_gpu_dev_verbs_addr daddr;
+      daddr.addr = 0;
+      daddr.key = loadConst(&gdaki->sink_buffer_lkey);
+      doca_gpu_dev_verbs_ticket_t mcstWqeIdx;
+      doca_gpu_dev_verbs_mcst<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU, DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>(qp, daddr, &mcstWqeIdx);
+    }
+    const uint64_t n = doca_gpu_dev_verbs_atomic_read<uint64_t, DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU>(&qp->sq_rsvd_index);
+    req->sq_rsvd_index = n;
   }
 };
 
@@ -392,14 +418,17 @@ struct ncclGinApi_Wait<NCCL_NET_DEVICE_GIN_GDAKI> {
     ncclGinGdakiRequest& req = reinterpret_cast<ncclGinGdakiRequest&>(request);
     ncclGinGdakiGPUContext* gdaki = &((struct ncclGinGdakiGPUContext*)ctx.handle)[ctx.contextId];
     doca_gpu_dev_verbs_qp* qp = loadConst(&gdaki->gdqp) + req.peer;
+    if (req.sq_rsvd_index == 0) return;
+    const doca_gpu_dev_verbs_ticket_t pollIdx =
+        static_cast<doca_gpu_dev_verbs_ticket_t>(req.sq_rsvd_index - 1u);
     if (abortFlag) {
       uint32_t steps = 0;
       int status = EBUSY;
       while (status != 0 && !testAbort(abortFlag, steps)) {
-        status = doca_gpu_dev_verbs_poll_one_cq_at(&qp->cq_sq, req.docaTicket);
+        status = doca_gpu_dev_verbs_poll_one_cq_at(&qp->cq_sq, pollIdx);
       }
     } else {
-      doca_gpu_dev_verbs_wait(qp, req.docaTicket);
+      doca_gpu_dev_verbs_wait(qp, pollIdx);
     }
   }
 };

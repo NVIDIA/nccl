@@ -199,6 +199,16 @@ NCCL_HOST_DEVICE_INLINE bool rollingLessThan(Uint a, Uint b, int nBits = 8*sizeo
   return !rollingLessEq(b, a, nBits);
 }
 
+#if NCCL_CHECK_CUDACC
+template<typename Uint, cuda::thread_scope Scope>
+NCCL_DEVICE_INLINE void rollingAtomicMax(cuda::atomic_ref<Uint, Scope> ref, Uint val) {
+  Uint current = ref.load(cuda::memory_order_relaxed);
+  while (rollingLessThan(current, val)) {
+    if (ref.compare_exchange_weak(current, val, cuda::memory_order_relaxed, cuda::memory_order_relaxed)) break;
+  }
+}
+#endif
+
 // Produce the reciprocal of x for use in idivByRcp
 NCCL_HOST_DEVICE_INLINE constexpr uint32_t idivRcp32(uint32_t x) {
   return uint32_t(-1)/x + isPow2(x);

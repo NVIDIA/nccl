@@ -344,6 +344,8 @@ struct gdaki_context {
   } sink_buffer;
   uint64_t last_error_query_time;
 
+  uint32_t *get_since_last_flush; // per-peer flag: a get was posted since the last flush, size nContexts * nranks
+
   struct ncclGinIbCollComm *collComm;
   ncclNetDeviceHandle_t *devHandle;
   int nContexts;
@@ -760,6 +762,8 @@ retry_create_qp_hl:
                              IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC),
                 status, out);
 
+  NCCLCHECKGOTO(ncclCudaCalloc(&gdaki_ctx->get_since_last_flush, ncontexts * nranks, NULL), status, out);
+
   gverbs_qps = (struct doca_gpu_verbs_qp **)calloc(nranks, sizeof(struct doca_gpu_verbs_qp *));
   for (int ctx_idx = 0; ctx_idx < ncontexts; ctx_idx++) {
     struct ncclGinGdakiGPUContext *gin_gdaki_gpu_ctx =
@@ -801,6 +805,7 @@ retry_create_qp_hl:
       gin_gdaki_gpu_ctx->signals_table.offset = buffer_start;
     }
     gin_gdaki_gpu_ctx->sink_buffer_lkey = htobe32(sink_buffer_mr->lkey);
+    gin_gdaki_gpu_ctx->get_since_last_flush = gdaki_ctx->get_since_last_flush + ctx_idx * nranks;
   }
 
   NCCLCHECKGOTO(gin_gdaki_gpu_ctx_hd_mhandle->copy_h_to_d(), status, out);
@@ -894,6 +899,7 @@ out:
     if (signals_table) delete signals_table;
 
     if (gdaki_ctx) {
+      if (gdaki_ctx->get_since_last_flush) NCCLCHECK(ncclCudaFree(gdaki_ctx->get_since_last_flush, NULL));
       memset(gdaki_ctx, 0, sizeof(*gdaki_ctx));
       free(gdaki_ctx);
     }
@@ -983,6 +989,8 @@ ncclResult_t ncclGinGdakiDestroyContext(void *ginCtx) {
     NCCLCHECK(gdaki_ctx->signals_table->deallocate());
     delete gdaki_ctx->signals_table;
   }
+
+  if (gdaki_ctx->get_since_last_flush) NCCLCHECK(ncclCudaFree(gdaki_ctx->get_since_last_flush, NULL));
 
   if (gdaki_ctx->sink_buffer.mr) NCCLCHECK(wrap_ibv_dereg_mr(gdaki_ctx->sink_buffer.mr));
   if (gdaki_ctx->sink_buffer.addr) NCCLCHECK(ncclCuMemFree(gdaki_ctx->sink_buffer.addr, nullptr));

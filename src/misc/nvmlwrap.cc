@@ -8,6 +8,7 @@
 #include "checks.h"
 #include "debug.h"
 
+#include <cstdio>
 #include <initializer_list>
 #include <memory>
 #include <mutex>
@@ -209,8 +210,24 @@ ncclResult_t ncclNvmlEnsureInitialized() {
 ncclResult_t ncclNvmlDeviceGetHandleByPciBusId(const char* pciBusId, nvmlDevice_t* device) {
   NCCLCHECK(ncclNvmlEnsureInitialized());
   std::lock_guard<std::mutex> locked(lock);
-  NVMLCHECK(nvmlDeviceGetHandleByPciBusId, pciBusId, device);
-  return ncclSuccess;
+  nvmlReturn_t res = pfn_nvmlDeviceGetHandleByPciBusId(pciBusId, device);
+  if (res == NVML_SUCCESS) return ncclSuccess;
+  if (res != NVML_ERROR_NOT_FOUND) {
+    WARN("nvmlDeviceGetHandleByPciBusId() failed: %s", pfn_nvmlErrorString(res));
+    return ncclSystemError;
+  }
+  // Tegra SoC: GPUs may share bus 0000:00:00.0, so getBusId() synthesizes
+  // unique IDs in the form "0000:BB:00.0" where BB = cudaDev+1.
+  // NVML doesn't know these synthetic IDs; map them back to cached handles.
+  int domain, bus, slot, func;
+  if (sscanf(pciBusId, "%x:%x:%x.%x", &domain, &bus, &slot, &func) == 4 &&
+      domain == 0 && slot == 0 && func == 0 &&
+      bus >= 1 && bus <= ncclNvmlDeviceCount) {
+    *device = ncclNvmlDevices[bus - 1].handle;
+    return ncclSuccess;
+  }
+  WARN("nvmlDeviceGetHandleByPciBusId() failed: %s", pfn_nvmlErrorString(res));
+  return ncclSystemError;
 }
 
 ncclResult_t ncclNvmlDeviceGetHandleByIndex(unsigned int index, nvmlDevice_t *device) {

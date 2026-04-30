@@ -901,7 +901,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     if (comm->peerInfo[i].hostHash != comm->peerInfo[rank].hostHash) nNodes++;
     if (!comm->peerInfo[i].cuMemSupport) comm->cuMemSupport = 0;
     if ((i != rank) && (comm->peerInfo[i].hostHash == comm->peerInfo[rank].hostHash) && (comm->peerInfo[i].busId == comm->peerInfo[rank].busId)) {
-      // Thor SoC: both iGPUs may share PCI bus 0; allow init to proceed.
+      // Tegra SoC: GPUs may share PCI bus 0; allow init to proceed.
       INFO(NCCL_INIT, "Same busId detected for rank %d and rank %d (busId %lx), but allowing on SoC", rank, i, comm->peerInfo[rank].busId);
     }
   }

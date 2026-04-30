@@ -161,16 +161,24 @@ ncclResult_t ncclNvmlEnsureInitialized() {
 
       res1 = pfn_nvmlDeviceGetP2PStatus(da, db, NVML_P2P_CAPS_INDEX_READ, &ncclNvmlDevicePairs[a][b].p2pStatusRead);
       if (res1 != NVML_SUCCESS) {
-        WARN("nvmlDeviceGetP2PStatus(%d,%d,NVML_P2P_CAPS_INDEX_READ) failed: %s", a, b, pfn_nvmlErrorString(res1));
-        initResult = ncclSystemError;
-        return initResult;
+        if (res1 != NVML_ERROR_NOT_SUPPORTED) {
+          WARN("nvmlDeviceGetP2PStatus(%d,%d,NVML_P2P_CAPS_INDEX_READ) failed: %s", a, b, pfn_nvmlErrorString(res1));
+          initResult = ncclSystemError;
+          return initResult;
+        }
+        INFO(NCCL_INIT, "nvmlDeviceGetP2PStatus(%d,%d,NVML_P2P_CAPS_INDEX_READ) not supported, P2P disabled", a, b);
+        ncclNvmlDevicePairs[a][b].p2pStatusRead = NVML_P2P_STATUS_NOT_SUPPORTED;
       }
 
       res1 = pfn_nvmlDeviceGetP2PStatus(da, db, NVML_P2P_CAPS_INDEX_WRITE, &ncclNvmlDevicePairs[a][b].p2pStatusWrite);
       if (res1 != NVML_SUCCESS) {
-        WARN("nvmlDeviceGetP2PStatus(%d,%d,NVML_P2P_CAPS_INDEX_READ) failed: %s", a, b, pfn_nvmlErrorString(res1));
-        initResult = ncclSystemError;
-        return initResult;
+        if (res1 != NVML_ERROR_NOT_SUPPORTED) {
+          WARN("nvmlDeviceGetP2PStatus(%d,%d,NVML_P2P_CAPS_INDEX_WRITE) failed: %s", a, b, pfn_nvmlErrorString(res1));
+          initResult = ncclSystemError;
+          return initResult;
+        }
+        INFO(NCCL_INIT, "nvmlDeviceGetP2PStatus(%d,%d,NVML_P2P_CAPS_INDEX_WRITE) not supported, P2P disabled", a, b);
+        ncclNvmlDevicePairs[a][b].p2pStatusWrite = NVML_P2P_STATUS_NOT_SUPPORTED;
       }
     }
   }

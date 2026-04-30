@@ -52,6 +52,12 @@ ncclResult_t getBusId(int cudaDev, int64_t *busId) {
   char busIdStr[] = "00000000:00:00.0";
   CUDACHECK(cudaDeviceGetPCIBusId(busIdStr, sizeof(busIdStr), cudaDev));
   NCCLCHECK(busIdToInt64(busIdStr, busId));
+  // Thor SoC: both iGPUs report 0000:00:00.0; synthesize unique IDs to avoid
+  // duplicate-GPU detection failing with ncclInvalidUsage.
+  if (*busId == 0) {
+    snprintf(busIdStr, sizeof(busIdStr), "0000:%02x:00.0", cudaDev + 1);
+    NCCLCHECK(busIdToInt64(busIdStr, busId));
+  }
   return ncclSuccess;
 }
 

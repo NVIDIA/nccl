@@ -142,7 +142,7 @@ const char *ncclSocketToString(const union ncclSocketAddress *addr, char *buf, c
    * (When not set, this will still happen in case the node's name cannot be determined.)
    */
   if (getnameinfo(saddr, sizeof(union ncclSocketAddress), host, NI_MAXHOST, service, NI_MAXSERV, flag)) goto fail;
-  sprintf(buf, "%s<%s>", host, service);
+  snprintf(buf, SOCKET_NAME_MAXLEN+1, "%s<%s>", host, service);
   return buf;
 fail:
   if (buf)

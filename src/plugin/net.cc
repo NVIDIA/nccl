@@ -269,7 +269,8 @@ static void initPluginLibsOnceFunc() {
       if((strlen(netPluginName)+1) <= MAX_STR_LEN) {
         netPluginLibs[pluginCounter].ncclNetPluginState = ncclNetPluginStateLoadReady;
         netPluginLibs[pluginCounter].ncclNetPluginRefCount = ncclParamNetPluginRefCount();
-        strcpy(netPluginLibs[pluginCounter].name, netPluginName);
+        strncpy(netPluginLibs[pluginCounter].name, netPluginName, MAX_STR_LEN-1);
+        netPluginLibs[pluginCounter].name[MAX_STR_LEN-1] = '\0';
         pluginCounter++;
       } else {
         INFO(NCCL_NET|NCCL_ENV,"NCCL_NET_PLUGIN list contains a plugin name %s longer than %d characters, ignoring it.", netPluginName, MAX_STR_LEN);
@@ -281,7 +282,9 @@ static void initPluginLibsOnceFunc() {
     // Add default net plugin
     netPluginLibs[pluginCounter].ncclNetPluginState = ncclNetPluginStateLoadReady;
     netPluginLibs[pluginCounter].ncclNetPluginRefCount = ncclParamNetPluginRefCount();
-    strcpy(netPluginLibs[pluginCounter++].name, defaultNetPlugin);
+    strncpy(netPluginLibs[pluginCounter].name, defaultNetPlugin, MAX_STR_LEN-1);
+    netPluginLibs[pluginCounter].name[MAX_STR_LEN-1] = '\0';
+    pluginCounter++;
   }
 
   // Add 2 internal ib and socket plugins

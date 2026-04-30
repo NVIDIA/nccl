@@ -25,9 +25,9 @@ int ncclCudaCompCap() {
 }
 
 ncclResult_t int64ToBusId(int64_t id, char* busId) {
-  sprintf(busId, "%04lx:%02lx:%02lx.%01lx",
-          (unsigned long)((id) >> 20), (unsigned long)((id & 0xff000) >> 12),
-          (unsigned long)((id & 0xff0) >> 4), (unsigned long)(id & 0xf));
+  snprintf(busId, NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE, "%04lx:%02lx:%02lx.%01lx",
+           (unsigned long)((id) >> 20), (unsigned long)((id & 0xff000) >> 12),
+           (unsigned long)((id & 0xff0) >> 4), (unsigned long)(id & 0xf));
   return ncclSuccess;
 }
 

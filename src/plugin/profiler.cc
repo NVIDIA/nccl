@@ -196,22 +196,22 @@ static void printProfilerEventMask(int mask) {
   if (!mask) return;
 
   char enabled[512] = {0};
-  int pos = 0;
-  if (mask & ncclProfileGroup)        pos += sprintf(enabled + pos, "Group ");
-  if (mask & ncclProfileColl)         pos += sprintf(enabled + pos, "Coll ");
-  if (mask & ncclProfileP2p)          pos += sprintf(enabled + pos, "P2p ");
-  if (mask & ncclProfileProxyOp)      pos += sprintf(enabled + pos, "ProxyOp ");
-  if (mask & ncclProfileProxyStep)    pos += sprintf(enabled + pos, "ProxyStep ");
-  if (mask & ncclProfileProxyCtrl)    pos += sprintf(enabled + pos, "ProxyCtrl ");
-  if (mask & ncclProfileKernelCh)     pos += sprintf(enabled + pos, "KernelCh ");
-  if (mask & ncclProfileNetPlugin)    pos += sprintf(enabled + pos, "NetPlugin ");
-  if (mask & ncclProfileGroupApi)     pos += sprintf(enabled + pos, "GroupApi ");
-  if (mask & ncclProfileCollApi)      pos += sprintf(enabled + pos, "CollApi ");
-  if (mask & ncclProfileP2pApi)       pos += sprintf(enabled + pos, "P2pApi ");
-  if (mask & ncclProfileKernelLaunch) pos += sprintf(enabled + pos, "KernelLaunch ");
-  if (mask & ncclProfileCeColl)       pos += sprintf(enabled + pos, "CeColl ");
-  if (mask & ncclProfileCeSync)       pos += sprintf(enabled + pos, "CeSync ");
-  if (mask & ncclProfileCeBatch)      pos += sprintf(enabled + pos, "CeBatch ");
+  size_t pos = 0;
+  if (mask & ncclProfileGroup)        pos += snprintf(enabled + pos, sizeof(enabled) - pos, "Group ");
+  if (mask & ncclProfileColl)         pos += snprintf(enabled + pos, sizeof(enabled) - pos, "Coll ");
+  if (mask & ncclProfileP2p)          pos += snprintf(enabled + pos, sizeof(enabled) - pos, "P2p ");
+  if (mask & ncclProfileProxyOp)      pos += snprintf(enabled + pos, sizeof(enabled) - pos, "ProxyOp ");
+  if (mask & ncclProfileProxyStep)    pos += snprintf(enabled + pos, sizeof(enabled) - pos, "ProxyStep ");
+  if (mask & ncclProfileProxyCtrl)    pos += snprintf(enabled + pos, sizeof(enabled) - pos, "ProxyCtrl ");
+  if (mask & ncclProfileKernelCh)     pos += snprintf(enabled + pos, sizeof(enabled) - pos, "KernelCh ");
+  if (mask & ncclProfileNetPlugin)    pos += snprintf(enabled + pos, sizeof(enabled) - pos, "NetPlugin ");
+  if (mask & ncclProfileGroupApi)     pos += snprintf(enabled + pos, sizeof(enabled) - pos, "GroupApi ");
+  if (mask & ncclProfileCollApi)      pos += snprintf(enabled + pos, sizeof(enabled) - pos, "CollApi ");
+  if (mask & ncclProfileP2pApi)       pos += snprintf(enabled + pos, sizeof(enabled) - pos, "P2pApi ");
+  if (mask & ncclProfileKernelLaunch) pos += snprintf(enabled + pos, sizeof(enabled) - pos, "KernelLaunch ");
+  if (mask & ncclProfileCeColl)       pos += snprintf(enabled + pos, sizeof(enabled) - pos, "CeColl ");
+  if (mask & ncclProfileCeSync)       pos += snprintf(enabled + pos, sizeof(enabled) - pos, "CeSync ");
+  if (mask & ncclProfileCeBatch)      pos += snprintf(enabled + pos, sizeof(enabled) - pos, "CeBatch ");
   INFO(NCCL_INIT, "Profiler event mask: 0x%x (%d) - Enabled: %s", mask, mask, enabled);
 }
 

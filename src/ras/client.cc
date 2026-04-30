@@ -196,8 +196,10 @@ retry:
     err = errno;
     if (getnameinfo(ai->ai_addr, ai->ai_addrlen, hostBuf, sizeof(hostBuf), portBuf, sizeof(portBuf),
                     NI_NUMERICHOST | NI_NUMERICSERV) != 0) {
-      strcpy(hostBuf, hostName);
-      strcpy(portBuf, port);
+      strncpy(hostBuf, hostName, sizeof(hostBuf)-1);
+      hostBuf[sizeof(hostBuf)-1] = '\0';
+      strncpy(portBuf, port, sizeof(portBuf)-1);
+      portBuf[sizeof(portBuf)-1] = '\0';
     }
     fprintf(stderr, "Connecting to %s:%s: %s\n", hostBuf, portBuf, strerror(err));
     close(sock);
@@ -217,7 +219,8 @@ retry:
   }
 
   // Exchange the RAS client handshake.
-  strcpy(msgBuf, "CLIENT PROTOCOL " STR(NCCL_RAS_CLIENT_PROTOCOL) "\n");
+  strncpy(msgBuf, "CLIENT PROTOCOL " STR(NCCL_RAS_CLIENT_PROTOCOL) "\n", sizeof(msgBuf)-1);
+  msgBuf[sizeof(msgBuf)-1] = '\0';
   if (socketWrite(sock, msgBuf, strlen(msgBuf)) != strlen(msgBuf)) {
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
       goto timeout;

@@ -218,15 +218,19 @@ static void ncclDebugInit() {
         ncclDebugTimestampFormat[i+j] = ' ';
         ncclDebugTimestampMaxSubseconds *= 10;
       }
-      strcpy(ncclDebugTimestampFormat+i+ncclDebugTimestampSubsecondDigits, tsFormat+i+replaceLen);
+      strncpy(ncclDebugTimestampFormat+i+ncclDebugTimestampSubsecondDigits, tsFormat+i+replaceLen,
+              sizeof(ncclDebugTimestampFormat)-i-ncclDebugTimestampSubsecondDigits);
+      ncclDebugTimestampFormat[sizeof(ncclDebugTimestampFormat)-1] = '\0';
       break;
     }
   }
   if (ncclDebugTimestampSubsecondsStart == -1) {
     if (strlen(tsFormat) < sizeof(ncclDebugTimestampFormat)) {
-      strcpy(ncclDebugTimestampFormat, tsFormat);
+      strncpy(ncclDebugTimestampFormat, tsFormat, sizeof(ncclDebugTimestampFormat)-1);
+      ncclDebugTimestampFormat[sizeof(ncclDebugTimestampFormat)-1] = '\0';
     } else {
-      strcpy(ncclDebugTimestampFormat, "[%F %T] ");
+      strncpy(ncclDebugTimestampFormat, "[%F %T] ", sizeof(ncclDebugTimestampFormat)-1);
+      ncclDebugTimestampFormat[sizeof(ncclDebugTimestampFormat)-1] = '\0';
     }
   }
 
@@ -357,8 +361,10 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
                  ncclDebugTimestampSubsecondDigits+1,
                  "%0*" PRIu64, ncclDebugTimestampSubsecondDigits,
                  (uint64_t)(nowNs / (1000000000L/ncclDebugTimestampMaxSubseconds)));
-        strcpy(    localTimestampFormat+ncclDebugTimestampSubsecondsStart+ncclDebugTimestampSubsecondDigits,
-               ncclDebugTimestampFormat+ncclDebugTimestampSubsecondsStart+ncclDebugTimestampSubsecondDigits);
+        strncpy(   localTimestampFormat+ncclDebugTimestampSubsecondsStart+ncclDebugTimestampSubsecondDigits,
+               ncclDebugTimestampFormat+ncclDebugTimestampSubsecondsStart+ncclDebugTimestampSubsecondDigits,
+               sizeof(localTimestampFormat)-ncclDebugTimestampSubsecondsStart-ncclDebugTimestampSubsecondDigits);
+        localTimestampFormat[sizeof(localTimestampFormat)-1] = '\0';
       }
 
       // Format the time. If it runs out of space, fall back on a simpler format.

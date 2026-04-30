@@ -301,8 +301,10 @@ static ncclResult_t xmlUnsetAttr(struct ncclXmlNode* node, const char* attrName)
   NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
   if (index == -1) return ncclSuccess;
   for (int i=index+1; i<node->nAttrs; i++) {
-    strcpy(node->attrs[i-1].key, node->attrs[i].key);
-    strcpy(node->attrs[i-1].value, node->attrs[i].value);
+    strncpy(node->attrs[i-1].key, node->attrs[i].key, MAX_STR_LEN);
+    node->attrs[i-1].key[MAX_STR_LEN] = '\0';
+    strncpy(node->attrs[i-1].value, node->attrs[i].value, MAX_STR_LEN);
+    node->attrs[i-1].value[MAX_STR_LEN] = '\0';
   }
   node->nAttrs--;
   return ncclSuccess;

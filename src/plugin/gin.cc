@@ -204,7 +204,8 @@ static void initPluginLibsOnceFunc() {
       if ((strlen(ginPluginName)+1) <= MAX_STR_LEN) {
         ginPluginLibs[pluginCounter].ncclGinPluginState = ncclGinPluginStateLoadReady;
         ginPluginLibs[pluginCounter].ncclGinPluginRefCount = ncclParamGinPluginRefCount();
-        strcpy(ginPluginLibs[pluginCounter].name, ginPluginName);
+        strncpy(ginPluginLibs[pluginCounter].name, ginPluginName, MAX_STR_LEN-1);
+        ginPluginLibs[pluginCounter].name[MAX_STR_LEN-1] = '\0';
         pluginCounter++;
       } else {
         INFO(NCCL_NET|NCCL_ENV,"NCCL_GIN_PLUGIN list contains a plugin name %s longer than %d characters, ignoring it.", ginPluginName, MAX_STR_LEN);
@@ -216,7 +217,9 @@ static void initPluginLibsOnceFunc() {
     // Add default gin plugin
     ginPluginLibs[pluginCounter].ncclGinPluginState = ncclGinPluginStateLoadReady;
     ginPluginLibs[pluginCounter].ncclGinPluginRefCount = ncclParamGinPluginRefCount();
-    strcpy(ginPluginLibs[pluginCounter++].name, defaultGinPlugin);
+    strncpy(ginPluginLibs[pluginCounter].name, defaultGinPlugin, MAX_STR_LEN-1);
+    ginPluginLibs[pluginCounter].name[MAX_STR_LEN-1] = '\0';
+    pluginCounter++;
   }
 
   // Also check if the NET plugin has GIN support

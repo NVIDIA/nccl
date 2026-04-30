@@ -288,6 +288,7 @@ struct ncclGinApi_FlushAsync<NCCL_NET_DEVICE_GIN_PROXY> {
     req->nextGfdIdx = pi.load(cuda::memory_order_relaxed);
   }
 };
+
 template <>
 struct ncclGinApi_Wait<NCCL_NET_DEVICE_GIN_PROXY> {
   NCCL_DEVICE_INLINE static void call(ncclGinCtx ctx, ncclGinRequest_t& request, bool hasDescriptor,
@@ -364,13 +365,12 @@ struct ncclGinApi_Flush<NCCL_NET_DEVICE_GIN_PROXY> {
   NCCL_DEVICE_INLINE static void call(ncclGinCtx ctx, Coop coop,
                                       bool hasDescriptor, ncclGinDescriptorSmem* descriptor,
                                       cuda::memory_order ord, uint32_t* abortFlag) {
-    (void)hasDescriptor;
-    (void)descriptor;
-    ncclGinProxyGpuCtx_t* proxyCtx = &((ncclGinProxyGpuCtx_t*)ctx.handle)[ctx.contextId];
-    // wait for all GFDs to be completed
-#pragma unroll 1
+    #pragma unroll 1
     for (int pe = coop.thread_rank(); pe < ctx.nRanks; pe += coop.size()) {
-      nccl::gin::proxy::flush(proxyCtx, pe, ord, abortFlag);
+      ncclGinRequest_t request;
+      ncclGinApi_FlushAsync<NCCL_NET_DEVICE_GIN_PROXY>::call(ctx, pe, &request, hasDescriptor, descriptor, ncclGinOptFlagsDefault);
+      // This is slightly inefficient. If there are prior gets, there will be one flush GFD per peer even though 1 suffices.
+      ncclGinApi_Wait<NCCL_NET_DEVICE_GIN_PROXY>::call(ctx, request, hasDescriptor, descriptor, ord, abortFlag);
     }
   }
 };

@@ -31,7 +31,8 @@ struct ncclGinGdakiGPUContext {
   // Local buffer we don't consume but is required for some operations.
   __be32 sink_buffer_lkey;
 
-  uint32_t *get_since_last_flush; // per-peer flag: a get was posted since the last flush
+  uint64_t *last_issued_get;  // per-peer (0 = no gets)
+  uint64_t *last_visible_get; // per-peer
 };
 
 struct ncclGinGdakiMemHandle {

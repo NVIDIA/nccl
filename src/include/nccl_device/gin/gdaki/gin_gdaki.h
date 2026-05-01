@@ -246,23 +246,29 @@ NCCL_DEVICE_INLINE static void putValueImpl(ncclGinCtx ctx, Coop coop, int peer,
 }
 
 template <enum ncclGinResourceSharingMode resource_sharing_mode>
-NCCL_DEVICE_INLINE static bool exchangeGetSinceLastFlush(ncclGinGdakiGPUContext* gdaki, int peer, bool newValue) {
-  using nccl::utility::loadConst;
-  uint32_t* getFlags = loadConst(&gdaki->get_since_last_flush);
+NCCL_DEVICE_INLINE static void atomicMaxAtIndex(uint64_t* arr, int index, uint64_t val) {
   switch (resource_sharing_mode) {
-    case NCCL_GIN_RESOURCE_SHARING_THREAD: {
-      const bool hadGet = (getFlags[peer] != 0);
-      getFlags[peer] = newValue;
-      return hadGet;
-    }
-    case NCCL_GIN_RESOURCE_SHARING_CTA: {
-      cuda::atomic_ref<uint32_t, cuda::thread_scope_block> peerGetFlag(getFlags[peer]);
-      return (peerGetFlag.exchange(newValue, cuda::memory_order_relaxed) != 0);
-    }
-    default: {
-      cuda::atomic_ref<uint32_t, cuda::thread_scope_device> peerGetFlagDevice(getFlags[peer]);
-      return (peerGetFlagDevice.exchange(newValue, cuda::memory_order_relaxed) != 0);
-    }
+    case NCCL_GIN_RESOURCE_SHARING_THREAD:
+      if (arr[index] < val) arr[index] = val;
+      break;
+    case NCCL_GIN_RESOURCE_SHARING_CTA:
+      cuda::atomic_ref<uint64_t, cuda::thread_scope_block>(arr[index]).fetch_max(val, cuda::memory_order_relaxed);
+      break;
+    default:
+      cuda::atomic_ref<uint64_t, cuda::thread_scope_device>(arr[index]).fetch_max(val, cuda::memory_order_relaxed);
+      break;
+  }
+}
+
+template <enum ncclGinResourceSharingMode resource_sharing_mode>
+NCCL_DEVICE_INLINE static uint64_t loadAtIndex(uint64_t* arr, int index) {
+  switch (resource_sharing_mode) {
+    case NCCL_GIN_RESOURCE_SHARING_THREAD:
+      return arr[index];
+    case NCCL_GIN_RESOURCE_SHARING_CTA:
+      return cuda::atomic_ref<uint64_t, cuda::thread_scope_block>(arr[index]).load(cuda::memory_order_relaxed);
+    default:
+      return cuda::atomic_ref<uint64_t, cuda::thread_scope_device>(arr[index]).load(cuda::memory_order_relaxed);
   }
 }
 
@@ -285,11 +291,11 @@ NCCL_DEVICE_INLINE static void getImplMode(ncclGinCtx ctx, Coop coop, int peer,
     laddr.addr = localOff;
     laddr.key = loadConst(&localMh->lkey);
     doca_gpu_dev_verbs_addr uninitialized_daddr{};
-    doca_gpu_dev_verbs_ticket_t unused_out_ticket;
+    doca_gpu_dev_verbs_ticket_t out_ticket;
     uint32_t codeOpt = nccl::gin::gdaki::docaOptFlagsFromGinOptFlags(optFlags);
     doca_gpu_dev_verbs_get<doca_sharing_mode>(
-        qp, raddr, laddr, bytes, uninitialized_daddr, &unused_out_ticket, codeOpt);
-    exchangeGetSinceLastFlush<gin_sharing_mode>(gdaki, peer, /*newValue*/ true); // must be after get to avoid race with concurrent flushes
+        qp, raddr, laddr, bytes, uninitialized_daddr, &out_ticket, codeOpt);
+    atomicMaxAtIndex<gin_sharing_mode>(loadConst(&gdaki->last_issued_get), peer, out_ticket + 1); // +1 so 0 means no gets; must be after get to avoid race with concurrent flushes
   }
   coop.sync();
 }
@@ -326,12 +332,18 @@ NCCL_DEVICE_INLINE static void flushAsyncImpl(ncclGinCtx ctx, int peer, ncclGinR
   req->peer = peer;
   ncclGinGdakiGPUContext* gdaki = &((struct ncclGinGdakiGPUContext*)ctx.handle)[ctx.contextId];
   doca_gpu_dev_verbs_qp* qp = loadConst(&gdaki->gdqp) + peer;
-  if (exchangeGetSinceLastFlush<gin_sharing_mode>(gdaki, peer, false)) {
+  uint64_t* lastIssuedGetArr = loadConst(&gdaki->last_issued_get);
+  uint64_t* lastVisibleGetArr = loadConst(&gdaki->last_visible_get);
+  const uint64_t lastIssuedGet = loadAtIndex<gin_sharing_mode>(lastIssuedGetArr, peer);
+  const uint64_t lastVisibleGet = loadAtIndex<gin_sharing_mode>(lastVisibleGetArr, peer);
+  if (lastIssuedGet > lastVisibleGet) {
     doca_gpu_dev_verbs_addr daddr;
     daddr.addr = 0;
     daddr.key = loadConst(&gdaki->sink_buffer_lkey);
     doca_gpu_dev_verbs_ticket_t mcstWqeIdx;
     doca_gpu_dev_verbs_mcst<doca_sharing_mode, DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>(qp, daddr, &mcstWqeIdx);
+     // Must be after mcst to avoid race with concurrent flushes
+    atomicMaxAtIndex<gin_sharing_mode>(lastVisibleGetArr, peer, lastIssuedGet);
   }
   const uint64_t n = doca_gpu_dev_verbs_atomic_read<uint64_t, doca_sharing_mode>(&qp->sq_rsvd_index);
   req->sq_rsvd_index = n;

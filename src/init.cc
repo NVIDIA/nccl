@@ -1108,6 +1108,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
 
   // Topo detection / System graph creation
   NCCLCHECKGOTO(ncclTopoGetSystem(comm, &comm->topo), ret, fail);
+  // ncclTopoGetMloPartGdrSupport must run before ncclTopoComputePaths. Path computation gates GDR paths on gpu->gpu.gdrSupport.
+  NCCLCHECKGOTO(ncclTopoGetMloPartGdrSupport(comm->topo, comm), ret, fail);
   // Compute paths between GPUs and NICs
   NCCLCHECKGOTO(ncclTopoComputePaths(comm->topo, comm), ret, fail);
   // Remove inaccessible GPUs and unused NICs

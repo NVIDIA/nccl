@@ -71,13 +71,27 @@ static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclT
         // - the remNode is a GPU and the link type is PATH_LOC, or
         // - NVB is enabled and remNode is a DEV and link type is NVLink and the path isn't too long for NVB;
         // else, discard the path.
-
         int pathMaxLength = (baseNode->type == GPU) ? 2 : 1;
         ncclTopoNode* baseDevNode = (baseNode->type == GPU) ? baseNode->gpu.parent : baseNode;
         if (node != baseDevNode && node->type == DEV && (link->type != LINK_LOC || remNode->type!=GPU) &&
             (ncclParamNvbDisable() || link->type != LINK_NVL || remNode->type != DEV || path->count > pathMaxLength)) continue;
 
-        if ((remPath->bw == 0 || remPath->count > path->count) && remPath->bw < bw) {
+        // Start with path type = link type. PATH and LINK types are supposed to match.
+        // Don't consider LINK_NET as we only care about the NIC->GPU path.
+        int newType = link->type == LINK_NET ? LINK_LOC : link->type;
+        // Differentiate between one and multiple PCI switches
+        if (node->type == PCI && remNode->type == PCI) newType = PATH_PXB;
+        // Consider a path going through the CPU as PATH_PHB
+        if (link->type == LINK_PCI && (node->type == CPU || link->remNode->type == CPU)) newType = PATH_PHB;
+        // Set 1 hop NVLink as NVB.
+        if (node->type == DEV && path->type == PATH_NVL && newType == PATH_NVL && path->count == pathMaxLength) newType = PATH_NVB;
+        newType = std::max(path->type, newType);
+
+        // Update if better path type, OR same type with higher bw, OR same type/bw with strickly fewer hops.
+        // Note: path->count +1 to account for the existing path + current candidate, see remPath->count update.
+        if (newType < remPath->type ||
+            (newType == remPath->type && remPath->bw < bw) ||
+            (newType == remPath->type && remPath->bw == bw && remPath->count > (path->count + 1))) {
           // Find reverse link
           for (int l=0; l<remNode->nlinks; l++) {
             if (remNode->links[l].remNode == node && remNode->links[l].type == link->type) {
@@ -94,18 +108,7 @@ static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclT
           for (int i=0; i<path->count; i++) remPath->list[i+1] = path->list[i];
           remPath->count = path->count + 1;
           remPath->bw = bw;
-
-          // Start with path type = link type. PATH and LINK types are supposed to match.
-          // Don't consider LINK_NET as we only care about the NIC->GPU path.
-          int type = link->type == LINK_NET ? LINK_LOC : link->type;
-          // Differentiate between one and multiple PCI switches
-          if (node->type == PCI && remNode->type == PCI) type = PATH_PXB;
-          // Consider a path going through the CPU as PATH_PHB
-          if (link->type == LINK_PCI && (node->type == CPU || link->remNode->type == CPU)) type = PATH_PHB;
-          // Set 1 hop NVLink as NVB
-          if (node->type == DEV && path->type == PATH_NVL && type == PATH_NVL && remPath->count > pathMaxLength) type = PATH_NVB;
-
-          remPath->type = std::max(path->type, type);
+          remPath->type = newType;
 
           // Add to the list for the next iteration if not already in the list
           int i;
@@ -168,23 +171,18 @@ ncclResult_t ncclTopoPrintPaths(struct ncclTopoSystem* system) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclGetLocalCpu(struct ncclTopoSystem* system, int gpu, int* retCpu) {
-  // Find the closest CPU to a GPU
-  int minHops = 0;
-  int localCpu = -1;
-  struct ncclTopoLinkList* paths = system->nodes[GPU].nodes[gpu].paths[CPU];
-  for (int c=0; c<system->nodes[CPU].count; c++) {
-    int hops = paths[c].count;
-    if (hops > 0 && (minHops == 0 || hops < minHops)) {
-      localCpu = c;
-      minHops = hops;
-    }
-  }
-  if (localCpu == -1) {
+ncclResult_t ncclGetLocalCpu(struct ncclTopoSystem* system, int gpu, int* cpu) {
+  int localCpus[NCCL_TOPO_MAX_NODES], count;
+  NCCLCHECK(ncclTopoGetLocal(system, GPU, gpu, CPU, localCpus, &count, NULL));
+  if (count == 0) {
     WARN("Error : could not find CPU close to GPU %d", gpu);
     return ncclInternalError;
   }
-  *retCpu = localCpu;
+  struct ncclTopoLinkList* paths = system->nodes[GPU].nodes[gpu].paths[CPU];
+  *cpu = localCpus[0];
+  for (int i = 1; i < count; i++) {
+    if (paths[localCpus[i]].count < paths[*cpu].count) *cpu = localCpus[i];
+  }
   return ncclSuccess;
 }
 

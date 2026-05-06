@@ -1,22 +1,27 @@
 #include "primitives.cuh"
 
 struct SMemTag {}; // Shared memory
-struct GMemTag {}; // Global memory
+struct GMemTag {}; // Streaming global memory
+struct GMemTemporalTag {}; // Cached global memory with expected temporal reuse
 struct GenMemTag {}; // Generic memory (either global or shared)
 
-// Like CUDA's __ldcs() except works for all types T and handles smem so long as
-// it is tagged accurately.
+// Memory-space aware load. GMemTag uses streaming cache policy; GMemTemporalTag
+// uses the compiler's default cached global load.
 template<typename T>
-static __device__ __forceinline__ T ldcs(GenMemTag, T *p) {
+static __device__ __forceinline__ T loadMem(GenMemTag, T *p) {
   return *p;
 }
 template<typename T>
-static __device__ __forceinline__ T ldcs(SMemTag, T *p) {
+static __device__ __forceinline__ T loadMem(SMemTag, T *p) {
   __builtin_assume(__isShared(p));
   return *p;
 }
 template<typename T>
-static __device__ __forceinline__ T ldcs(GMemTag, T *p) {
+static __device__ __forceinline__ T loadMem(GMemTemporalTag, T *p) {
+  return *p;
+}
+template<typename T>
+static __device__ __forceinline__ T loadMem(GMemTag, T *p) {
   union {
     T x;
     uint8_t u8[sizeof(T)];
@@ -36,19 +41,23 @@ static __device__ __forceinline__ T ldcs(GMemTag, T *p) {
   return x;
 }
 
-// Like CUDA's __stcs() except works for all types T and handles smem so long as
-// it is tagged accurately.
+// Memory-space aware store. GMemTag uses streaming cache policy; GMemTemporalTag
+// uses the compiler's default global store.
 template<typename T>
-static __device__ __forceinline__ void stcs(GenMemTag, T *p, T val) {
+static __device__ __forceinline__ void storeMem(GenMemTag, T *p, T val) {
   *p = val;
 }
 template<typename T>
-static __device__ __forceinline__ void stcs(SMemTag, T *p, T val) {
+static __device__ __forceinline__ void storeMem(SMemTag, T *p, T val) {
   __builtin_assume(__isShared(p));
   *p = val;
 }
 template<typename T>
-static __device__ __forceinline__ void stcs(GMemTag, T *p, T val) {
+static __device__ __forceinline__ void storeMem(GMemTemporalTag, T *p, T val) {
+  *p = val;
+}
+template<typename T>
+static __device__ __forceinline__ void storeMem(GMemTag, T *p, T val) {
   union {
     T x;
     uint8_t u8[sizeof(T)];
@@ -90,7 +99,7 @@ static __device__ __forceinline__ void loadPacks(
     #pragma unroll nPacks
     for (int p=0; p < nPacks; p++) {
       if (p < nPacks-1 || !lastEmpty) {
-        packs[p] = ldcs(mem, (Pack*)elts + packIx + p*stride);
+        packs[p] = loadMem(mem, (Pack*)elts + packIx + p*stride);
       }
     }
   } else {
@@ -103,7 +112,7 @@ static __device__ __forceinline__ void loadPacks(
       for (int pe=0; pe < nEltPerPack; pe++) {
         int e = -padElts + (packIx + p*stride)*nEltPerPack + pe;
         // if (0 <= e && e < nElts)
-        if (unsigned(e) < unsigned(nElts)) elt[pe] = ldcs(mem, elts + e);
+        if (unsigned(e) < unsigned(nElts)) elt[pe] = loadMem(mem, elts + e);
       }
       stage[p] = tmp;
     }
@@ -125,7 +134,7 @@ static __device__ __forceinline__ void storePacks(
     #pragma unroll nPacks
     for (int p=0; p < nPacks; p++) {
       if (p < nPacks-1 || !lastEmpty) {
-        stcs(mem, (Pack*)elts + packIx + p*stride, packs[p]);
+        storeMem(mem, (Pack*)elts + packIx + p*stride, packs[p]);
       }
     }
   } else {
@@ -140,7 +149,7 @@ static __device__ __forceinline__ void storePacks(
       for (int pe=0; pe < nEltPerPack; pe++) {
         int e = -padElts + (packIx + p*stride)*nEltPerPack + pe;
         // if (0 <= e && e < nElts)
-        if (unsigned(e) < unsigned(nElts)) stcs(mem, elts + e, elt[pe]);
+        if (unsigned(e) < unsigned(nElts)) storeMem(mem, elts + e, elt[pe]);
       }
     }
   }
@@ -168,7 +177,7 @@ static __device__ __forceinline__ void accumulateLoads(
       #pragma unroll UnrollData
       for (int du=0; du < UnrollData; du++) {
         if (du != UnrollData-1 || !lastPackEmpty) {
-          tmp[su][du] = ldcs(GMemTag(), srcPtr + du*stride);
+          tmp[su][du] = loadMem(GMemTag(), srcPtr + du*stride);
         }
       }
     }
@@ -195,7 +204,7 @@ static __device__ __forceinline__ void accumulateLoads(
         #pragma unroll UnrollData
         for (int du=0; du < UnrollData; du++) {
           if (du != UnrollData-1 || !lastPackEmpty) {
-            tmp[su][du] = ldcs(GMemTag(), srcPtr + du*stride);
+            tmp[su][du] = loadMem(GMemTag(), srcPtr + du*stride);
           }
         }
       }
@@ -322,14 +331,14 @@ template<typename Coop, typename DstSpace, typename GetDst,
       int eltIx = unsigned(row)%unsigned(nElts);
       DstT* dstPtr = getDst(batchIx);
       Acc acc[1];
-      if (inPlace) acc[0] = (Acc)ldcs(dstMem, dstPtr + eltIx);
+      if (inPlace) acc[0] = (Acc)loadMem(dstMem, dstPtr + eltIx);
       accumulateLoads<SrcT>(
         red, inPlace, acc, /*stride(no data unroll)=*/0, /*lastPackEmpty=*/false, nSrcs,
         [&]__device__(int srcIx)->SrcT* {
           return getSrc(batchIx, srcIx) + eltIx;
         }
       );
-      stcs(dstMem, dstPtr + eltIx, (DstT)acc[0]);
+      storeMem(dstMem, dstPtr + eltIx, (DstT)acc[0]);
     }
   }
 }
@@ -442,14 +451,14 @@ template<typename Coop, typename DstSpace, typename GetDst,
         }
         #pragma unroll
         for (int u=0; u < UnrollData; u++) {
-          stcs(dstMem, dstPtr + u*tn, (DstT)srcVal[u]);
+          storeMem(dstMem, dstPtr + u*tn, (DstT)srcVal[u]);
         }
         row += UnrollData*tn;
       } else {
         SrcT srcVal = fromPack<SrcT>(applyLoadMultimem<Red<SrcT>, sizeof(SrcT)>(
           srcRed, reinterpret_cast<uintptr_t>(srcPtr)
         ));
-        stcs(dstMem, dstPtr, (DstT)srcVal);
+        storeMem(dstMem, dstPtr, (DstT)srcVal);
         row += tn;
       }
     }
@@ -519,9 +528,9 @@ static __device__ void reduceLsa(
     comm, multimemTag);
 }
 
-template<typename Coop, typename DstT, typename SrcT, typename Transform>
+template<typename Coop, typename DstT, typename SrcSpace, typename SrcT, typename Transform>
 static __device__ void copy(
-    Coop coop, int nElts, GMemTag dstMem, DstT* dst, GMemTag srcMem, SrcT* src, Transform transformFn
+    Coop coop, int nElts, GMemTag dstMem, DstT* dst, SrcSpace srcMem, SrcT* src, Transform transformFn
   ) {
   static_assert(sizeof(DstT) <= sizeof(SrcT), "Required");
   int tn = coop.size();
@@ -535,16 +544,16 @@ static __device__ void copy(
       SrcT tmp[UnrollData];
       #pragma unroll
       for (int u=0; u < UnrollData; u++) {
-        tmp[u] = ldcs(srcMem, src + e + u*tn);
+        tmp[u] = loadMem(srcMem, src + e + u*tn);
       }
       #pragma unroll
       for (int u=0; u < UnrollData; u++) {
-        stcs(dstMem, dst + e + u*tn, (DstT)transformFn(tmp[u]));
+        storeMem(dstMem, dst + e + u*tn, (DstT)transformFn(tmp[u]));
       }
       e += UnrollData*tn;
     } else {
-      SrcT srcVal = ldcs(srcMem, src + e);
-      stcs(dstMem, dst + e, (DstT)transformFn(srcVal));
+      SrcT srcVal = loadMem(srcMem, src + e);
+      storeMem(dstMem, dst + e, (DstT)transformFn(srcVal));
       e += tn;
     }
   }
@@ -572,7 +581,7 @@ static __device__ void copy(
     #pragma unroll 1
     for (int p = t; p < nPacks; p += tn) {
       SrcPack srcPack = ((SrcPack*)(src + nPreElts))[p];
-      stcs(GMemTag(), (DstPack*)(dst + nPreElts) + p,  applyCast<SrcT, DstT>(transformFn(srcPack)));
+      storeMem(GMemTag(), (DstPack*)(dst + nPreElts) + p,  applyCast<SrcT, DstT>(transformFn(srcPack)));
     }
   } else {
     unsigned srcAlign4 = srcAlign16%4;
@@ -589,13 +598,13 @@ static __device__ void copy(
         #pragma unroll
         for (i = 0; i < nWordPerPack; i++) w[i] = __funnelshift_r(w[i], w[i+1], 8*srcAlign4);
       }
-      stcs(GMemTag(), (DstPack*)(dst + nPreElts) + p,  applyCast<SrcT, DstT>(transformFn(srcPack)));
+      storeMem(GMemTag(), (DstPack*)(dst + nPreElts) + p,  applyCast<SrcT, DstT>(transformFn(srcPack)));
     }
   }
 
   #pragma unroll 1
   for (int i = t; i < nPreElts + nSufElts; i += tn) {
     int e = i < nPreElts ? i : nElts - nSufElts + (i - nPreElts);
-    stcs(GMemTag(), dst + e, (DstT)(transformFn((src[e]))));
+    storeMem(GMemTag(), dst + e, (DstT)(transformFn((src[e]))));
   }
 }

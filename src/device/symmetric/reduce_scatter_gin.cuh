@@ -225,7 +225,7 @@ static __device__ void rsAlgoHier(ncclSymkDevWorkArgs const* args, BoolTag<multi
             /*initFn*/[&]__device__(int nChunkElts, ncclSymPtr<T> inPtr)->void {
               if (roleIsWorker) {
                 reduceLsa(coopRole, nChunkElts,
-                  /*dstMem=*/GMemTag(), /*dstAlignMin=*/16, /*dstPtr=*/accum,
+                  /*dstMem=*/GMemTemporalTag(), /*dstAlignMin=*/16, /*dstPtr=*/accum,
                   /*srcRedUc=*/red, /*srcRedMc=*/mmRed,
                   /*srcPtr=*/inPtr + world.rank*nAllElts,
                   handler.comm, multimemTag
@@ -239,7 +239,7 @@ static __device__ void rsAlgoHier(ncclSymkDevWorkArgs const* args, BoolTag<multi
                 // Make `inbox.getBufPtr()` as cheap as possible within reduction loop.
                 auto inbox_getBufPtr = inbox.make_getBufPtr(step0);
                 reduce(coopRole, red, /*inPlace=*/true, nChunkElts,
-                  /*dstMem=*/GMemTag(), /*dstAlignMin=*/16, /*dst=*/accum,
+                  /*dstMem=*/GMemTemporalTag(), /*dstAlignMin=*/16, /*dst=*/accum,
                   /*nSrcs=*/nSteps, /*srcPtrCommonMask=*/16-1, /*srcPtrMasked=*/0,
                   /*getSrc=*/[&]__device__(int s)->T* {
                     return (T*)inbox_getBufPtr(s);
@@ -255,7 +255,7 @@ static __device__ void rsAlgoHier(ncclSymkDevWorkArgs const* args, BoolTag<multi
               if (roleIsWorker) {
                 copy(coopRole, nChunkElts,
                   /*dstMem=*/GMemTag(), /*dst=*/outPtr.localPtr(),
-                  /*srcMem=*/GMemTag(), /*src=*/accum,
+                  /*srcMem=*/GMemTemporalTag(), /*src=*/accum,
                   [&]__device__(auto x) { return applyPostOp(red, x); }
                 );
                 coopRole.sync(); // prevent initFn from trampling accum

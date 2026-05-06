@@ -25,13 +25,14 @@
 
 typedef void* ncclGinWindow_t;
 
-/* Config type (same layout as ncclGinConfig_v13_t in gin_v13.h) */
+/* Config type (same layout as ncclGinConfig_v14_t in gin_v14.h) */
 typedef struct {
   int nSignals;
   int nCounters;
   int nContexts;
   int queueDepth;
   int trafficClass;
+  int backendVersion;
 } ncclGinConfig_t;
 
 /* Plugin struct (same layout as ncclGin_v14_t) so gin->name, gin->regMrSym, etc. compile. Not used at runtime on Windows.

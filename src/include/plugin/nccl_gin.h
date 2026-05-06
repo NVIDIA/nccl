@@ -31,7 +31,7 @@
 #include "gin/gin_v14.h"
 
 typedef ncclGin_v14_t ncclGin_t;
-typedef ncclGinConfig_v13_t ncclGinConfig_t;
+typedef ncclGinConfig_v14_t ncclGinConfig_t;
 typedef ncclGinProperties_v14_t ncclGinProperties_t;
 
 #define NCCL_GIN_PLUGIN_SYMBOL ncclGinPlugin_v14

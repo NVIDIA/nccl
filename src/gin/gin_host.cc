@@ -18,6 +18,11 @@
 
 NCCL_PARAM(GinEnable, "GIN_ENABLE", 1);
 
+// Backend version compatibility. Index: backend version. Value: min compatible NCCL version
+const int proxyBackendMinVersions[] = { 0, NCCL_VERSION(2,30,3), NCCL_VERSION(2,30,5) };
+const int gdakiBackendMinVersions[] = { 0, NCCL_VERSION(2,30,3), NCCL_VERSION(2,30,5) };
+const int gpiBackendMinVersions[] = { 0, NCCL_VERSION(2,30,5) };
+
 ncclResult_t ncclGetGinType(struct ncclComm* comm, ncclGinType_t* ginType) {
   if (comm == nullptr || ginType == nullptr) return ncclInternalError;
 
@@ -223,6 +228,36 @@ ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequir
   struct ncclGinStateDevComm* ginStateDevComm = NULL;
   NCCLCHECK(ncclCalloc(&ginStateDevComm, 1));
   ginStateDevComm->contextCount = nContextsTotal;
+
+  const int* backendVersionArray;
+  int nVersions;
+  switch (ginState->ginType) {
+    case NCCL_GIN_TYPE_PROXY:
+      backendVersionArray = proxyBackendMinVersions;
+      nVersions = sizeof(proxyBackendMinVersions) / sizeof(int);
+      break;
+    case NCCL_GIN_TYPE_GDAKI:
+      backendVersionArray = gdakiBackendMinVersions;
+      nVersions = sizeof(gdakiBackendMinVersions) / sizeof(int);
+      break;
+    case NCCL_GIN_TYPE_GPI:
+      backendVersionArray = gpiBackendMinVersions;
+      nVersions = sizeof(gpiBackendMinVersions) / sizeof(int);
+      break;
+    default:
+      WARN("Cannot get backend version for invalid GIN type %d", ginState->ginType);
+      return ncclInternalError;
+  }
+
+  int backendVersion = 0;
+  for (int i = 0; i < nVersions; i++) {
+    if (reqs->version >= backendVersionArray[i]) {
+      backendVersion = i;
+    } else {
+      break;
+    }
+  }
+
   ncclResult_t ret = ncclSuccess;
 
   ncclGinConfig_t ginConfig = {
@@ -230,7 +265,8 @@ ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequir
     reqs->ginCounterCount,
     nContextsPerComm,
     reqs->ginQueueDepth,
-    reqs->ginTrafficClass != NCCL_CONFIG_UNDEF_INT ? reqs->ginTrafficClass : comm->config.trafficClass
+    reqs->ginTrafficClass != NCCL_CONFIG_UNDEF_INT ? reqs->ginTrafficClass : comm->config.trafficClass,
+    backendVersion
   };
 
   for (int n = 0; n < ginState->ginCommCount; n++) {

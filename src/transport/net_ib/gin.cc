@@ -293,10 +293,10 @@ ncclResult_t ncclGinIbGdakiConnect(void *ctx, void *handles[], int nranks, int r
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinIbGdakiCreateContext(void* collComm, ncclGinConfig_v13_t* config, void **ginCtx, ncclNetDeviceHandle_t** devHandle) {
+ncclResult_t ncclGinIbGdakiCreateContext(void* collComm, ncclGinConfig_t* config, void **ginCtx, ncclNetDeviceHandle_t** devHandle) {
   struct ncclGinIbCollComm* cComm = (struct ncclGinIbCollComm*)collComm;
 
-  NCCLCHECK(ncclGinGdakiCreateContext(cComm, config->nSignals, config->nCounters, config->nContexts, config->queueDepth, config->trafficClass, ginCtx, devHandle));
+  NCCLCHECK(ncclGinGdakiCreateContext(cComm, config->nSignals, config->nCounters, config->nContexts, config->queueDepth, config->trafficClass, config->backendVersion, ginCtx, devHandle));
 
   return ncclSuccess;
 }

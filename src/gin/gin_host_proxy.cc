@@ -15,6 +15,7 @@
 #include "nccl_device/gin/proxy/gin_proxy_device_host_common.h"
 #include "compiler.h"
 #include "comm.h"
+#include "proxy_gpucontext/gpucontext.h"
 
 NCCL_PARAM(GinProxyQueueSize, "GIN_PROXY_QUEUE_SIZE", -1);
 extern int64_t ncclParamIbDataDirect();
@@ -441,8 +442,13 @@ static uint64_t isPowerOfTwo(uint64_t n) { return (n > 0) && ((n & (n - 1)) == 0
 
 static ncclResult_t ncclGinProxyCreateContext(void* collComm, ncclGinConfig_t* config,
                                        void **outGinCtx, ncclNetDeviceHandle_t **outDevHandle) {
+  if (config->backendVersion < 0 || config->backendVersion > NCCL_GIN_PROXY_GPU_CONTEXT_VERSION) {
+    WARN("Invalid GIN proxy backend version %d", config->backendVersion);
+    return ncclInternalError;
+  }
+
   struct ncclGinProxyCollComm* cComm = (struct ncclGinProxyCollComm*)collComm;
-  ncclGinProxyGpuCtx_t *devGpuCtxArray_h = nullptr;
+  void* devGpuCtxArray_h = nullptr;
 
   if (!ncclGdrCopy)
     INFO(NCCL_NET, "GIN Proxy will not be using GDRCopy");
@@ -510,7 +516,8 @@ static ncclResult_t ncclGinProxyCreateContext(void* collComm, ncclGinConfig_t* c
   }
 
   NCCLCHECK(ncclCalloc(&proxyCtx->hostGpuCtx, nContexts));
-  NCCLCHECK(ncclCalloc(&devGpuCtxArray_h, nContexts));
+  const size_t gpuCtxArraySize = nContexts * NCCL_GIN_PROXY_GPU_CONTEXT_MAX_SIZE;
+  NCCLCHECK(ncclCalloc(((char**)&devGpuCtxArray_h), gpuCtxArraySize));
   for (int contextId = 0; contextId < nContexts; contextId++) {
     struct ginProxyHostGpuCtx *hostGpuCtx = proxyCtx->hostGpuCtx + contextId;
     hostGpuCtx->contextId = contextId;
@@ -527,34 +534,35 @@ static ncclResult_t ncclGinProxyCreateContext(void* collComm, ncclGinConfig_t* c
     NCCLCHECK(ncclCudaCalloc(&hostGpuCtx->lastIssuedGet, cComm->nRanks, NULL));
     NCCLCHECK(ncclCudaCalloc(&hostGpuCtx->lastVisibleGet, cComm->nRanks, NULL));
 
-    ncclGinProxyGpuCtx_t *devGpuCtx_h = devGpuCtxArray_h + contextId;
-    devGpuCtx_h->nranks = cComm->nRanks;
-    devGpuCtx_h->queueSize = hostGpuCtx->queueSize;
-    devGpuCtx_h->counters = proxyCtx->countersDev + contextId * config->nCounters;
-    devGpuCtx_h->signals = proxyCtx->signalsDev + contextId * config->nSignals;
-    devGpuCtx_h->signalOffsets = proxyCtx->signalOffsetsDev + contextId * config->nSignals;
-    devGpuCtx_h->pis = hostGpuCtx->pis;
-    devGpuCtx_h->lastIssuedGet = hostGpuCtx->lastIssuedGet;
-    devGpuCtx_h->lastVisibleGet = hostGpuCtx->lastVisibleGet;
 
     // Allocate the GFD queues, CIs, counters, signals and test/wait variables on the either the CPU
     // or GPU.
-    NCCLCHECK(allocMemCPUAccessible(&hostGpuCtx->queues, &devGpuCtx_h->queues, queuesLength, 0, NULL,
+    uint32_t* cisDev;
+    ncclGinProxyGfd_t* queuesDev;
+    NCCLCHECK(allocMemCPUAccessible(&hostGpuCtx->queues, &queuesDev, queuesLength, 0, NULL,
                                     NULL, true /*forceHost*/));
-    NCCLCHECK(allocMemCPUAccessible(&hostGpuCtx->cis, &devGpuCtx_h->cis, cComm->nRanks,
+    NCCLCHECK(allocMemCPUAccessible(&hostGpuCtx->cis, &cisDev, cComm->nRanks,
                                     CU_MEMHOSTALLOC_WRITECOMBINED, &hostGpuCtx->cisGdrHandle, NULL));
+
+    NCCLCHECK(ncclGinProxyGpuCtx_init(config->backendVersion, devGpuCtxArray_h, contextId, cComm->nRanks, hostGpuCtx->queueSize,
+                            queuesDev, hostGpuCtx->pis, cisDev,
+                            proxyCtx->countersDev + contextId * config->nCounters,
+                            proxyCtx->signalsDev + contextId * config->nSignals,
+                            proxyCtx->signalOffsetsDev + contextId * config->nSignals,
+                            hostGpuCtx->lastIssuedGet, hostGpuCtx->lastVisibleGet));
+
   }
 
-  ncclGinProxyGpuCtx_t *devGpuCtx_d = NULL;
-  NCCLCHECK(ncclCudaCalloc(&devGpuCtx_d, nContexts, NULL));
+  void* devGpuCtxArray_d = nullptr;
+  NCCLCHECK(ncclCudaCalloc(((char**)&devGpuCtxArray_d), gpuCtxArraySize, NULL));
   // Copy the proxy's devGpuCtx to the GPU
-  NCCLCHECK(ncclCudaMemcpy(devGpuCtx_d, devGpuCtxArray_h, nContexts));
+  NCCLCHECK(ncclCudaMemcpy(devGpuCtxArray_d, devGpuCtxArray_h, gpuCtxArraySize));
 
   ncclNetDeviceHandle_t *devHandle = NULL;
   NCCLCHECK(ncclCalloc(&devHandle, 1));
   devHandle->netDeviceType = NCCL_NET_DEVICE_GIN_PROXY;
   devHandle->netDeviceVersion = NCCL_GIN_PROXY_VERSION;
-  devHandle->handle = (void *)devGpuCtx_d;
+  devHandle->handle = devGpuCtxArray_d;
   devHandle->size = 0;
   devHandle->needsProxyProgress = 1;
 

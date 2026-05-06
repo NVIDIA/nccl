@@ -15,7 +15,7 @@ typedef struct {
   int nContexts;
   int queueDepth;
   int trafficClass;
-}ncclGinConfig_v13_t;
+} ncclGinConfig_v13_t;
 
 typedef struct {
   // Name of the GIN support (mainly for logs)

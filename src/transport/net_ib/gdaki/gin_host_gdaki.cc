@@ -24,6 +24,7 @@
 
 #include "doca_gpunetio_host.h"
 #include "nccl_device/gin/gdaki/gin_gdaki_device_host_common.h"
+#include "gpucontext/gpucontext.h"
 #include "../gin.h"
 
 #define DOCACHECK(call)                 \
@@ -336,7 +337,9 @@ struct gdaki_context {
 
   GdakiGlobalGPUBufferTable<uint64_t> *counters_table;
   GdakiGlobalGPUBufferTable<uint64_t> *signals_table;
-  GdakiHostGPUMemHandle<struct ncclGinGdakiGPUContext> *gin_gdaki_gpu_ctx_hd_mhandle;
+  struct ncclGinGdakiGPUContext *gin_gdaki_gpu_ctx_host_staging; // formatted according to current version
+  GdakiHostGPUMemHandle<char> *gin_gdaki_gpu_ctx_hd_mhandle; // formatted according to backendVersion
+  int backendVersion;
   struct {
     void *addr;
     struct ibv_mr *mr;
@@ -481,8 +484,14 @@ destroy_verbs_qp_attr:
 NCCL_PARAM(GinGdakiUseReliableDB, "GDAKI_USE_RELIABLE_DB", 0);
 
 ncclResult_t ncclGinGdakiCreateContext(void *collComm, int nSignals, int nCounters, int nContexts, int queueDepth,
-                                       int trafficClass, void **outGinCtx, ncclNetDeviceHandle_t **outDevHandle) {
+                                       int trafficClass, int backendVersion, void **outGinCtx,
+                                       ncclNetDeviceHandle_t **outDevHandle) {
   ncclResult_t status = ncclSuccess;
+
+  if (backendVersion < 0 || backendVersion > NCCL_GIN_GDAKI_GPU_CONTEXT_VERSION) {
+    WARN("Invalid GIN gdaki backend version %d", backendVersion);
+    return ncclInternalError;
+  }
 
   struct ncclGinIbCollComm *cComm = (struct ncclGinIbCollComm *)collComm;
 
@@ -519,8 +528,7 @@ ncclResult_t ncclGinGdakiCreateContext(void *collComm, int nSignals, int nCounte
 
   struct doca_gpu_verbs_qp **gverbs_qps = nullptr;
 
-  GdakiHostGPUMemHandle<struct ncclGinGdakiGPUContext> *gin_gdaki_gpu_ctx_hd_mhandle =
-    new GdakiHostGPUMemHandle<struct ncclGinGdakiGPUContext>();
+  GdakiHostGPUMemHandle<char> *gin_gdaki_gpu_ctx_hd_mhandle = new GdakiHostGPUMemHandle<char>();
   GdakiGlobalGPUBufferTable<uint64_t> *counters_table = new GdakiGlobalGPUBufferTable<uint64_t>();
   GdakiGlobalGPUBufferTable<uint64_t> *signals_table = new GdakiGlobalGPUBufferTable<uint64_t>();
 
@@ -530,13 +538,18 @@ ncclResult_t ncclGinGdakiCreateContext(void *collComm, int nSignals, int nCounte
 
   NCCLCHECK(cComm->getProperties(cComm->dev, &props));
 
-  NCCLCHECKGOTO(gin_gdaki_gpu_ctx_hd_mhandle->allocate(ncontexts), status, out);
+  NCCLCHECKGOTO(gin_gdaki_gpu_ctx_hd_mhandle->allocate(ncontexts * NCCL_GIN_GDAKI_GPU_CONTEXT_MAX_SIZE),
+                status, out);
   NCCLCHECKGOTO(counters_table->allocate(num_counters * ncontexts, nranks), status, out);
   NCCLCHECKGOTO(signals_table->allocate(num_signals * ncontexts, nranks), status, out);
 
   gdaki_ctx = (struct gdaki_context *)calloc(1, sizeof(*gdaki_ctx));
   EQCHECKGOTO(gdaki_ctx, nullptr, status, out);
   gdaki_ctx->needCompanion = needCompanion;
+
+  gdaki_ctx->gin_gdaki_gpu_ctx_host_staging =
+    (struct ncclGinGdakiGPUContext *)calloc(ncontexts, sizeof(struct ncclGinGdakiGPUContext));
+  EQCHECKGOTO(gdaki_ctx->gin_gdaki_gpu_ctx_host_staging, nullptr, status, out);
 
   devHandle = (ncclNetDeviceHandle_t *)calloc(1, sizeof(*devHandle));
   EQCHECKGOTO(devHandle, nullptr, status, out);
@@ -769,7 +782,7 @@ retry_create_qp_hl:
   gverbs_qps = (struct doca_gpu_verbs_qp **)calloc(nranks, sizeof(struct doca_gpu_verbs_qp *));
   for (int ctx_idx = 0; ctx_idx < ncontexts; ctx_idx++) {
     struct ncclGinGdakiGPUContext *gin_gdaki_gpu_ctx =
-      &gin_gdaki_gpu_ctx_hd_mhandle->host_buf[ctx_idx];
+      &gdaki_ctx->gin_gdaki_gpu_ctx_host_staging[ctx_idx];
 
     unsigned int buffer_start;
     for (int qp_idx = 0; qp_idx < nranks; qp_idx++) {
@@ -809,6 +822,15 @@ retry_create_qp_hl:
     gin_gdaki_gpu_ctx->sink_buffer_lkey = htobe32(sink_buffer_mr->lkey);
     gin_gdaki_gpu_ctx->last_issued_get = gdaki_ctx->last_issued_get + ctx_idx * nranks;
     gin_gdaki_gpu_ctx->last_visible_get = gdaki_ctx->last_visible_get + ctx_idx * nranks;
+
+    NCCLCHECKGOTO(ncclGinGdakiGPUContext_init(backendVersion, gin_gdaki_gpu_ctx_hd_mhandle->host_buf, ctx_idx,
+                                              gin_gdaki_gpu_ctx->gdqp, gin_gdaki_gpu_ctx->companion_gdqp,
+                                              gin_gdaki_gpu_ctx->counters_table,
+                                              gin_gdaki_gpu_ctx->signals_table,
+                                              gin_gdaki_gpu_ctx->sink_buffer_lkey,
+                                              gin_gdaki_gpu_ctx->last_issued_get,
+                                              gin_gdaki_gpu_ctx->last_visible_get),
+                  status, out);
   }
 
   NCCLCHECKGOTO(gin_gdaki_gpu_ctx_hd_mhandle->copy_h_to_d(), status, out);
@@ -822,6 +844,7 @@ retry_create_qp_hl:
   gdaki_ctx->counters_table = counters_table;
   gdaki_ctx->signals_table = signals_table;
   gdaki_ctx->gin_gdaki_gpu_ctx_hd_mhandle = gin_gdaki_gpu_ctx_hd_mhandle;
+  gdaki_ctx->backendVersion = backendVersion;
   gdaki_ctx->sink_buffer.addr = sink_buffer;
   gdaki_ctx->sink_buffer.mr = sink_buffer_mr;
   gdaki_ctx->sink_buffer.mhandle = sink_buffer_mhandle;
@@ -836,10 +859,10 @@ out:
   if (status != ncclSuccess) {
     if (gdaki_ctx) {
       // Clean up any allocated GPU memory
-      if (gdaki_ctx->gin_gdaki_gpu_ctx_hd_mhandle) {
+      if (gdaki_ctx->gin_gdaki_gpu_ctx_host_staging) {
         for (int ctx_idx = 0; ctx_idx < ncontexts; ctx_idx++) {
           struct ncclGinGdakiGPUContext *gin_gdaki_gpu_ctx =
-            &gdaki_ctx->gin_gdaki_gpu_ctx_hd_mhandle->host_buf[ctx_idx];
+            &gdaki_ctx->gin_gdaki_gpu_ctx_host_staging[ctx_idx];
           if (gin_gdaki_gpu_ctx->gdqp) {
             for (int qp_idx = 0; qp_idx < nranks; qp_idx++) {
               gverbs_qps[qp_idx] = gdaki_ctx->gqps[(ctx_idx * nranks) + qp_idx]->qp_gverbs;
@@ -897,6 +920,7 @@ out:
     if (sink_buffer_mr) wrap_ibv_dereg_mr(sink_buffer_mr);
     if (sink_buffer) ncclCuMemFree(sink_buffer, nullptr);
 
+    if (gdaki_ctx->gin_gdaki_gpu_ctx_host_staging) free(gdaki_ctx->gin_gdaki_gpu_ctx_host_staging);
     if (gin_gdaki_gpu_ctx_hd_mhandle) delete gin_gdaki_gpu_ctx_hd_mhandle;
     if (counters_table) delete counters_table;
     if (signals_table) delete signals_table;
@@ -934,11 +958,11 @@ ncclResult_t ncclGinGdakiDestroyContext(void *ginCtx) {
     nqps_per_rank * (nranks + 1);  // +1 for the local rank.
                                    // The last group is the responder of the local rank.
 
-  if (gdaki_ctx->gin_gdaki_gpu_ctx_hd_mhandle) {
+  if (gdaki_ctx->gin_gdaki_gpu_ctx_host_staging) {
     struct doca_gpu_verbs_qp **gverbs_qps = (struct doca_gpu_verbs_qp **)calloc(nranks, sizeof(struct doca_gpu_verbs_qp *));
     for (int ctx_idx = 0; ctx_idx < ncontexts; ctx_idx++) {
       struct ncclGinGdakiGPUContext *gin_gdaki_gpu_ctx =
-        &gdaki_ctx->gin_gdaki_gpu_ctx_hd_mhandle->host_buf[ctx_idx];
+        &gdaki_ctx->gin_gdaki_gpu_ctx_host_staging[ctx_idx];
       if (gin_gdaki_gpu_ctx->gdqp) {
         for (int qp_idx = 0; qp_idx < nranks; qp_idx++) {
           gverbs_qps[qp_idx] = gdaki_ctx->gqps[(ctx_idx * nranks) + qp_idx]->qp_gverbs;
@@ -955,8 +979,13 @@ ncclResult_t ncclGinGdakiDestroyContext(void *ginCtx) {
       }
     }
     free(gverbs_qps);
+    free(gdaki_ctx->gin_gdaki_gpu_ctx_host_staging);
+    gdaki_ctx->gin_gdaki_gpu_ctx_host_staging = nullptr;
+  }
+  if (gdaki_ctx->gin_gdaki_gpu_ctx_hd_mhandle) {
     NCCLCHECK(gdaki_ctx->gin_gdaki_gpu_ctx_hd_mhandle->deallocate());
     delete gdaki_ctx->gin_gdaki_gpu_ctx_hd_mhandle;
+    gdaki_ctx->gin_gdaki_gpu_ctx_hd_mhandle = nullptr;
   }
 
   if (needCompanion) {

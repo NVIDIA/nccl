@@ -342,11 +342,13 @@ NCCL_DEVICE_INLINE static void flushAsyncImpl(ncclGinCtx ctx, int peer, ncclGinR
     daddr.key = loadConst(&gdaki->sink_buffer_lkey);
     doca_gpu_dev_verbs_ticket_t mcstWqeIdx;
     doca_gpu_dev_verbs_mcst<doca_sharing_mode, DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>(qp, daddr, &mcstWqeIdx);
+    req->sq_rsvd_index = mcstWqeIdx + 1;
      // Must be after mcst to avoid race with concurrent flushes
-    atomicMaxAtIndex<gin_sharing_mode>(lastVisibleGetArr, peer, lastIssuedGet);
+    atomicMaxAtIndex<gin_sharing_mode>(lastVisibleGetArr, peer, mcstWqeIdx + 1);
+  } else {
+    const uint64_t n = doca_gpu_dev_verbs_atomic_read<uint64_t, doca_sharing_mode>(&qp->sq_rsvd_index);
+    req->sq_rsvd_index = n;
   }
-  const uint64_t n = doca_gpu_dev_verbs_atomic_read<uint64_t, doca_sharing_mode>(&qp->sq_rsvd_index);
-  req->sq_rsvd_index = n;
 }
 
 template <enum doca_gpu_dev_verbs_resource_sharing_mode doca_sharing_mode>

@@ -357,7 +357,7 @@ struct ncclProxyState {
   struct ncclSocket* peerSocks;
   struct ncclProxyOps* proxyOps;
   void** sharedDevMems;
-  int peerArraySize;  // Size of peerSocks/proxyOps/sharedDevMems arrays (nRanks for cross-clique, tpNLocalRanks otherwise)
+  int peerArraySize;  // Size of peerSocks/proxyOps/sharedDevMems arrays (tpNRanks for cross-clique, tpNLocalRanks otherwise)
   struct ncclIpcSocket peerIpcSock; // cuMEM API support (UDS)
   uint64_t *peerAddressesUDS; // cuMem API support (UDS)
 

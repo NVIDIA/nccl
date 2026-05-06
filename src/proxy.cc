@@ -1004,7 +1004,7 @@ ncclResult_t ncclProxyStart(struct ncclComm* comm) {
   struct ncclProxyOps* proxyOps = comm->proxyState->proxyOps;
   if (proxyOps == NULL) return ncclSuccess;
   TIME_START(1);
-  // Use peerArraySize which tracks actual allocated size (may be nRanks for cross-clique)
+  // Use peerArraySize which tracks actual allocated size.
   int peerArraySize = comm->proxyState->peerArraySize;
   for (int r = 0; r < peerArraySize; r++) {
     struct ncclProxyOps* ops = proxyOps + r;
@@ -1131,7 +1131,15 @@ ncclResult_t ncclProxyConnect(struct ncclComm* comm, int transport, int send, in
   struct ncclSocket* sock;
   int ready;
   struct ncclProxyState* sharedProxyState = comm->proxyState;
+  if (proxyRank < 0 || proxyRank >= comm->nRanks) {
+    WARN("ncclProxyConnect: proxyRank %d out of bounds [0, %d)", proxyRank, comm->nRanks);
+    return ncclInternalError;
+  }
   int tpProxyRank = comm->topParentRanks[proxyRank];
+  if (tpProxyRank < 0 || tpProxyRank >= comm->sharedRes->tpNRanks) {
+    WARN("ncclProxyConnect: tpRank %d out of bounds [0, %d) for rank %d", tpProxyRank, comm->sharedRes->tpNRanks, proxyRank);
+    return ncclInternalError;
+  }
 
   proxyConn->sameProcess = ((comm->peerInfo[proxyRank].hostHash == comm->peerInfo[comm->rank].hostHash) &&
                             (comm->peerInfo[proxyRank].pidHash == comm->peerInfo[comm->rank].pidHash)) ? 1 : 0;
@@ -1140,7 +1148,7 @@ ncclResult_t ncclProxyConnect(struct ncclComm* comm, int transport, int send, in
   proxyConn->tpRank = tpProxyRank;
   proxyConn->rank = proxyRank;
   if (sharedProxyState->peerSocks == NULL) {
-    int peerArraySize = comm->p2pCrossClique ? comm->nRanks : comm->sharedRes->tpNLocalRanks;
+    int peerArraySize = comm->p2pCrossClique ? comm->sharedRes->tpNRanks : comm->sharedRes->tpNLocalRanks;
     sharedProxyState->peerArraySize = peerArraySize;
     NCCLCHECK(ncclCalloc(&sharedProxyState->peerSocks, peerArraySize));
     NCCLCHECK(ncclCalloc(&sharedProxyState->proxyOps, peerArraySize));
@@ -1151,6 +1159,11 @@ ncclResult_t ncclProxyConnect(struct ncclComm* comm, int transport, int send, in
   }
 
   int peerIndex = comm->p2pCrossClique ? proxyConn->tpRank : comm->sharedRes->tpRankToLocalRank[proxyConn->tpRank];
+  if (peerIndex < 0 || peerIndex >= sharedProxyState->peerArraySize) {
+    WARN("ncclProxyConnect: peerIndex %d out of bounds [0, %d) for rank %d tpRank %d p2pCrossClique %d",
+         peerIndex, sharedProxyState->peerArraySize, proxyRank, proxyConn->tpRank, comm->p2pCrossClique);
+    return ncclInternalError;
+  }
   proxyConn->tpLocalRank = peerIndex;
   sock = sharedProxyState->peerSocks + peerIndex;
   NCCLCHECK(ncclSocketReady(sock, &ready));

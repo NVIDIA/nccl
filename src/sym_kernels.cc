@@ -99,8 +99,7 @@ constexpr uint32_t kernelMask_Tma = 1<<ncclSymkKernelId_AllGather_TmaST |
                                     1<<ncclSymkKernelId_AllReduce_RSxTmaLD_AGxTmaST |
                                     1<<ncclSymkKernelId_ReduceScatter_TmaLD;
 
-constexpr uint32_t kernelMask_DynamicSmem = (kernelMask_Gin & kernelMask_RS) |
-                                            kernelMask_Tma;
+constexpr uint32_t kernelMask_DynamicSmem = kernelMask_Tma;
 
 int ncclSymkLLKernelMask() {
   return kernelMask_LL;
@@ -145,7 +144,23 @@ static uint32_t kernelMask_user() {
 
 NCCL_PARAM(SymCTAs, "SYM_CTAS", 0)
 NCCL_PARAM(SymGinKernelsEnable, "SYM_GIN_KERNELS_ENABLE", 1)
+NCCL_PARAM(SymRsGinChunkSize, "SYM_RS_GIN_CHUNK_SIZE", 64<<10)
 NCCL_PARAM(SymTmaEnable, "SYM_TMA_ENABLE", 0)
+
+static constexpr size_t ncclSymkRsGinDefaultChunkBytes = 64<<10;
+static constexpr size_t ncclSymkRsGinMinChunkBytes = 128;
+static constexpr size_t ncclSymkRsGinMaxChunkBytes = size_t(1)<<30;
+
+static size_t ncclSymkRsGinChunkBytes() {
+  int64_t param = ncclParamSymRsGinChunkSize();
+  size_t chunkBytes = param > 0 ? (size_t)param : ncclSymkRsGinDefaultChunkBytes;
+  chunkBytes = std::max(ncclSymkRsGinMinChunkBytes, std::min(chunkBytes, ncclSymkRsGinMaxChunkBytes));
+  return pow2Down(chunkBytes);
+}
+
+static uint32_t ncclSymkRsGinAccumBytesPerBlock() {
+  return (uint32_t)alignUp(2*ncclSymkRsGinChunkBytes(), 128);
+}
 
 static double softmin(double x, double ceiling, double softness) {
   // looks like a smooth version of: min(x, ceiling)
@@ -310,11 +325,11 @@ static void queryModel_gin(struct ncclComm* comm, ncclSymkKernelId k, size_t nBy
       bool ldmc = k == ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC;
       nMaxBlocks = std::min(nMaxBlocks, symk->maxGinInboxBlocks);
       nMaxBlocks = std::min(nMaxBlocks, calcSatBlocks_ReduceScatter_RailA2A(comm, ldmc));
-      constexpr int chunkSize = 64<<10;
+      size_t chunkSize = ncclSymkRsGinChunkBytes();
       double smBw = getSmBw_ReduceScatter_RailA2A(comm, ldmc);
       double smMul, lsaMul, ginMul;
       getBusMul_ReduceScatter_RailA2A(comm, ldmc, &smMul, &lsaMul, &ginMul);
-      *nBlocks = divUp(nBytes, chunkSize);
+      *nBlocks = (int)divUp(nBytes, chunkSize);
       // max against nMinBlocks last since we may have nMaxBlocks < nMinBlocks
       *nBlocks = std::max(nMinBlocks, std::min(nMaxBlocks, *nBlocks));
       double effBw = (*nBlocks)*(smBw/smMul);
@@ -322,7 +337,7 @@ static void queryModel_gin(struct ncclComm* comm, ncclSymkKernelId k, size_t nBy
       effBw = std::min(effBw, ginBw/ginMul);
       double time = nBytes/effBw;
       // Delayed by LSA processing of first chunk.
-      time += std::min<size_t>(nBytes, chunkSize*(*nBlocks))*(lsaMul/lsaBw + ginMul/ginBw);
+      time += std::min(nBytes, chunkSize*(size_t)(*nBlocks))*(lsaMul/lsaBw + ginMul/ginBw);
       // Delay by GIN latency of first chunk.
       time += ginLat;
       *timeUs = (/*usec/sec=*/1.e6)*time;
@@ -450,6 +465,7 @@ ncclResult_t ncclSymkInitOnce(struct ncclComm* comm) {
 
     struct ncclDevResourceRequirements ginInboxRailReq = {};
     struct ncclDevResourceRequirements ginOutboxReq = {};
+    struct ncclDevResourceRequirements rsGinAccumReq = {};
     struct ncclDevResourceRequirements railSignalReq = {};
     if (ncclParamSymGinKernelsEnable() && ncclTeamLsa(comm).nRanks < comm->nRanks) {
       int maxBlocks;
@@ -461,6 +477,13 @@ ncclResult_t ncclSymkInitOnce(struct ncclComm* comm) {
       if (ncclParamSymCTAs() >= 1) maxBlocks = ncclParamSymCTAs();
       maxBlocks = std::min(maxBlocks, ncclSymkMaxBlocks);
       symk->maxGinInboxBlocks = maxBlocks;
+      symk->kcomm.rsGinAccumBytesPerBlock = ncclSymkRsGinAccumBytesPerBlock();
+
+      rsGinAccumReq.bufferSize = (size_t)maxBlocks * symk->kcomm.rsGinAccumBytesPerBlock;
+      rsGinAccumReq.bufferAlign = 128;
+      rsGinAccumReq.outBufferHandle = &symk->kcomm.rsGinAccumBuf;
+      rsGinAccumReq.next = reqs.resourceRequirementsList;
+      reqs.resourceRequirementsList = &rsGinAccumReq;
 
       ncclGinInboxA2ACreateRequirement(
         ncclTeamRail(comm), maxBlocks, log2Up(bufSize),

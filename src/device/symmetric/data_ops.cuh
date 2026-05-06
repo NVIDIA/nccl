@@ -521,6 +521,37 @@ static __device__ void reduceLsa(
 
 template<typename Coop, typename DstT, typename SrcT, typename Transform>
 static __device__ void copy(
+    Coop coop, int nElts, GMemTag dstMem, DstT* dst, GMemTag srcMem, SrcT* src, Transform transformFn
+  ) {
+  static_assert(sizeof(DstT) <= sizeof(SrcT), "Required");
+  int tn = coop.size();
+  int t = coop.thread_rank();
+
+  #pragma unroll 1
+  for (int e = t; e < nElts; ) {
+    constexpr int UnrollData = 8;
+    int lane = unsigned(t)%32;
+    if ((0 <= e-lane) && (e-lane + 31 + 1 + (UnrollData-1)*tn <= nElts)) {
+      SrcT tmp[UnrollData];
+      #pragma unroll
+      for (int u=0; u < UnrollData; u++) {
+        tmp[u] = ldcs(srcMem, src + e + u*tn);
+      }
+      #pragma unroll
+      for (int u=0; u < UnrollData; u++) {
+        stcs(dstMem, dst + e + u*tn, (DstT)transformFn(tmp[u]));
+      }
+      e += UnrollData*tn;
+    } else {
+      SrcT srcVal = ldcs(srcMem, src + e);
+      stcs(dstMem, dst + e, (DstT)transformFn(srcVal));
+      e += tn;
+    }
+  }
+}
+
+template<typename Coop, typename DstT, typename SrcT, typename Transform>
+static __device__ void copy(
     Coop coop, int nElts, GMemTag dstMem, DstT* dst, SMemTag srcMem, SrcT* src, Transform transformFn
   ) {
   static_assert(sizeof(DstT) <= sizeof(SrcT), "Required");

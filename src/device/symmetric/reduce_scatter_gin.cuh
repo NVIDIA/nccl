@@ -70,13 +70,13 @@ static __device__ void rsAlgoHier(ncclSymkDevWorkArgs const* args, BoolTag<multi
     {cta, handler.comm, ncclTeamTagLsa(), blockIdx.x, multimem};
   lsaBar.sync(cta, cuda::memory_order_acquire);
 
-  int maxChunkElts = args->maxDynamicSmem/sizeof(AccT);
+  AccT* accum = (AccT*)((char*)ncclGetResourceBufferLocalPointer(handler.comm, handler.rsGinAccumBuf) +
+                         size_t(blockIdx.x)*handler.rsGinAccumBytesPerBlock);
+  int maxChunkEltsCap = handler.rsGinAccumBytesPerBlock/sizeof(AccT);
 
   handler.template forEachWorkNoFusion<T>(
     [&]__device__(size_t nElts, size_t nAllElts, ncclSymPtr<T> input, ncclSymPtr<T> output) {
-      AccT* accum;
-      ncclSymkSmemPartition(&accum, maxChunkElts);
-
+      int maxChunkElts = maxChunkEltsCap;
       int chunkBytes_log2 = log2Up(nElts) + log2Up(sizeof(T));
 
       // Chunk size should not be larger than what host dictates and 1/2 of
@@ -225,7 +225,7 @@ static __device__ void rsAlgoHier(ncclSymkDevWorkArgs const* args, BoolTag<multi
             /*initFn*/[&]__device__(int nChunkElts, ncclSymPtr<T> inPtr)->void {
               if (roleIsWorker) {
                 reduceLsa(coopRole, nChunkElts,
-                  /*dstMem=*/SMemTag(), /*dstAlignMin=*/16, /*dstPtr=*/accum,
+                  /*dstMem=*/GMemTag(), /*dstAlignMin=*/16, /*dstPtr=*/accum,
                   /*srcRedUc=*/red, /*srcRedMc=*/mmRed,
                   /*srcPtr=*/inPtr + world.rank*nAllElts,
                   handler.comm, multimemTag
@@ -239,7 +239,7 @@ static __device__ void rsAlgoHier(ncclSymkDevWorkArgs const* args, BoolTag<multi
                 // Make `inbox.getBufPtr()` as cheap as possible within reduction loop.
                 auto inbox_getBufPtr = inbox.make_getBufPtr(step0);
                 reduce(coopRole, red, /*inPlace=*/true, nChunkElts,
-                  /*dstMem=*/SMemTag(), /*dstAlignMin=*/16, /*dst=*/accum,
+                  /*dstMem=*/GMemTag(), /*dstAlignMin=*/16, /*dst=*/accum,
                   /*nSrcs=*/nSteps, /*srcPtrCommonMask=*/16-1, /*srcPtrMasked=*/0,
                   /*getSrc=*/[&]__device__(int s)->T* {
                     return (T*)inbox_getBufPtr(s);
@@ -255,7 +255,7 @@ static __device__ void rsAlgoHier(ncclSymkDevWorkArgs const* args, BoolTag<multi
               if (roleIsWorker) {
                 copy(coopRole, nChunkElts,
                   /*dstMem=*/GMemTag(), /*dst=*/outPtr.localPtr(),
-                  /*srcMem=*/SMemTag(), /*src=*/accum,
+                  /*srcMem=*/GMemTag(), /*src=*/accum,
                   [&]__device__(auto x) { return applyPostOp(red, x); }
                 );
                 coopRole.sync(); // prevent initFn from trampling accum

@@ -90,6 +90,8 @@ struct ncclSymkArgsHandler {
   ncclGinInboxA2AHandle const& ginInboxRail;
   ncclGinCounter_t ginCounterPerBlock;
   ncclGinSyncHandle const& ginSyncHandle;
+  ncclDevResourceHandle rsGinAccumBuf;
+  uint32_t rsGinAccumBytesPerBlock;
   struct ncclSymkChannelWorkRange* channelWorkRange;
   struct ncclSymkDevWork* devWork;
   uint32_t nRanks_rcp32;
@@ -100,7 +102,9 @@ struct ncclSymkArgsHandler {
     ginOutbox(args->kcomm.ginOutbox),
     ginInboxRail(args->kcomm.ginInboxRail),
     ginCounterPerBlock(args->kcomm.ginCounterPerBlock),
-    ginSyncHandle(args->kcomm.ginSyncHandle) {
+    ginSyncHandle(args->kcomm.ginSyncHandle),
+    rsGinAccumBuf(args->kcomm.rsGinAccumBuf),
+    rsGinAccumBytesPerBlock(args->kcomm.rsGinAccumBytesPerBlock) {
     channelWorkRange = args->getWorkRange();
 
     devWork = args->getWorks(args->nMaxChannels);

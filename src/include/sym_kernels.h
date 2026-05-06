@@ -62,6 +62,8 @@ struct ncclSymkDevComm {
   ncclGinCounter_t ginCounterPerBlock;
   struct ncclGinInboxA2AHandle ginInboxRail;
   struct ncclGinSyncHandle ginSyncHandle;
+  ncclDevResourceHandle rsGinAccumBuf;
+  uint32_t rsGinAccumBytesPerBlock;
 };
 
 struct ncclSymkState {

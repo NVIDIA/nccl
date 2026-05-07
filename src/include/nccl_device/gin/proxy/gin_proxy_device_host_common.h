@@ -11,7 +11,7 @@
 #include <stddef.h>
 
 #define NCCL_GIN_PROXY_VERSION 100
-#define NCCL_GIN_PROXY_GFD_VERSION 1
+#define NCCL_GIN_PROXY_GFD_VERSION 2
 
 typedef enum {
   ncclGinProxyOpPut = 1 << 0,
@@ -98,7 +98,8 @@ typedef union {
   } __attribute__((packed)) completion;
   struct {
     uint8_t flag : 1;
-    uint8_t resv : 7;
+    uint8_t isStrongSignal : 1;
+    uint8_t resv : 6;
     uint16_t signalValLow2;
     uint32_t signalValHigh;
   } __attribute__((packed)) signalVal;

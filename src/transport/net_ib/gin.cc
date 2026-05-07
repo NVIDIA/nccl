@@ -592,7 +592,8 @@ ncclResult_t ncclRmaIbProxyIGet(void *rmaCtx, int context, uint64_t remoteOffset
 ncclResult_t ncclRmaIbProxyIPutSignal(void *rmaCtx, int context, uint64_t srcOff, void *srcMhandle,
                                       size_t size, uint64_t dstOff, void *dstMhandle, uint32_t rank,
                                       uint64_t signalOff, void *signalMhandle, uint64_t signalValue,
-                                      uint32_t signalOp, void **request) {
+                                      uint32_t signalOp, bool isStrongSignal, void **request) {
+  (void)isStrongSignal;
   if (signalOp != NCCL_NET_SIGNAL_OP_INC && signalOp != NCCL_NET_SIGNAL_OP_ADD) {
     WARN("ncclRmaIbProxyIPutSignal: Unsupported signalOp %u", signalOp);
     return ncclInvalidArgument;

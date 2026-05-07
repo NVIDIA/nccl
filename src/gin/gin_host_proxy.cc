@@ -163,6 +163,12 @@ static ncclGinProxyOp_t extractOp(ncclGinProxyGfd_t *gfd) {
   return (ncclGinProxyOp_t)gfd->qword[ncclGinProxyGfdHeaderExt].headerExt.op;
 }
 
+static bool extractIsStrongSignal(ncclGinProxyGfd_t *gfd) {
+  // Prior versions only had strong signals
+  if (gfd->qword[ncclGinProxyGfdHeader].header.version < 2) return true;
+  return gfd->qword[ncclGinProxyGfdSignalVal].signalVal.isStrongSignal != 0;
+}
+
 static int proxyGinPollGfd(struct ginProxyCtx *ctx, ginProxyHostGpuCtx *hostGpuCtx, int targetRank,
                            ncclGinProxyGfd_t *gfd, struct ginProxyGfdState **state) {
   ncclGinProxyGfd_t *q = hostGpuCtx->queues + targetRank * hostGpuCtx->queueSize;
@@ -241,7 +247,7 @@ static ncclResult_t proxyGinProcessGfd(struct ginProxyCtx *ctx,
     signalOp = mapGfdOpToSignalOp(gfd);
     NCCLCHECK(rmaBackend->iputSignal(ctx->rmaCtx, hostGpuCtx->contextId, 0, nullptr, 0, 0, nullptr,
                                   targetRank, signalOff, signalHandle, signalVal,
-                                  signalOp, &state->request));
+                                  signalOp, extractIsStrongSignal(gfd), &state->request));
     return ncclSuccess;
   }
 
@@ -307,7 +313,7 @@ static ncclResult_t proxyGinProcessGfd(struct ginProxyCtx *ctx,
                               hostGpuCtx->contextId * ctx->nSignalsPerContext) * sizeof(uint64_t);
         NCCLCHECK(rmaBackend->iputSignal(ctx->rmaCtx, hostGpuCtx->contextId, srcOff, srcHandle, size, dstOff, dstHandle,
                                       targetRank, signalOff, ctx->signalsGinHandle, signalVal,
-                                      signalOp, &state->request));
+                                      signalOp, extractIsStrongSignal(gfd), &state->request));
       }
       break;
     default:

@@ -87,7 +87,7 @@ __device__ __forceinline__ void buildGfd(ncclGinProxyGfd_t* gfd, ncclGinProxyOp_
                                          size_t dstOff, ncclGinWindow_t dstHandle, size_t size,
                                          ncclGinCounter_t counterId, ncclGinSignal_t signalId,
                                          uint64_t signalVal, ncclGinWindow_t signalWindow,
-                                         size_t signalOff) {
+                                         size_t signalOff, bool isStrongSignal = false) {
 
   for (int i = 0; i < ncclGinProxyGfdQwords; i++) {
     gfd->qword[i].flag.v = 1;
@@ -127,6 +127,7 @@ __device__ __forceinline__ void buildGfd(ncclGinProxyGfd_t* gfd, ncclGinProxyOp_
   gfd->qword[ncclGinProxyGfdCompletion].completion.signalValLow = (uint16_t)signalVal;
   gfd->qword[ncclGinProxyGfdSignalVal].signalVal.signalValLow2 = (uint16_t)(signalVal >> 16);
   gfd->qword[ncclGinProxyGfdSignalVal].signalVal.signalValHigh = (uint32_t)(signalVal >> 32);
+  gfd->qword[ncclGinProxyGfdSignalVal].signalVal.isStrongSignal = isStrongSignal ? 1 : 0;
 }
 
 __device__ __forceinline__ void constructProxyOp(ncclGinProxyOp_t& op, bool isGet, bool isFlush, bool hasInline,
@@ -234,7 +235,8 @@ NCCL_DEVICE_INLINE void put(Coop coop, ncclGinProxyGfd_t* gfd, ncclGinProxyGpuCt
     ncclGinProxyOp_t op;
     constructProxyOp(op, /*isGet*/false, /*isFlush*/false, hasInline, putSignalType, signalOp, hasCounter);
     nccl::gin::proxy::buildGfd(gfd, op, srcVal, hasInline, srcOff, srcWnd, dstOff, dstWnd, bytes,
-                              hasCounter ? counterId : 0, putSignalId, putSignalVal, nullptr, 0);
+                              hasCounter ? counterId : 0, putSignalId, putSignalVal, nullptr, 0,
+                              signal.isStrong);
     nccl::gin::proxy::postGfd<Coop>(coop, proxyCtx, gfd, peer);
   }
 
@@ -243,7 +245,8 @@ NCCL_DEVICE_INLINE void put(Coop coop, ncclGinProxyGfd_t* gfd, ncclGinProxyGpuCt
     ncclGinProxyOp_t op;
     constructProxyOp(op, /*isGet*/false, /*isFlush*/false, /*hasInline*/false, NCCL_GIN_SIGNAL_TYPE_VA, signalOp, /*hasCounter*/false);
     nccl::gin::proxy::buildGfd(gfd, op, /*srcVal*/0, /*hasInline*/false, 0, nullptr,
-                               0, nullptr, 0, 0, 0, signalVal, signal.vaSignal.signalWindow, signal.vaSignal.signalOffset);
+                               0, nullptr, 0, 0, 0, signalVal, signal.vaSignal.signalWindow, signal.vaSignal.signalOffset,
+                               signal.isStrong);
     nccl::gin::proxy::postGfd<Coop>(coop, proxyCtx, gfd, peer);
   }
 }

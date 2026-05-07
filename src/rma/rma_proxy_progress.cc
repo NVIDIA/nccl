@@ -25,7 +25,7 @@ static ncclResult_t ncclRmaProxyIssuePutSignal(
         ps->srcOff, ps->srcHandle, ps->size,
         ps->dstOff, ps->dstHandle,
         ps->targetRank, ps->signal.offset, ps->signal.signalMhandle,
-        ps->signal.val, ps->signal.op, &ps->request));
+        ps->signal.val, ps->signal.op, /*isStrongSignal*/true, &ps->request));
   }
   return ncclSuccess;
 }

@@ -35,6 +35,16 @@ static ncclResult_t ncclRma_regMrSymDmaBuf(void* collComm, void* data, size_t si
   return ncclSuccess;
 }
 
+// Drop isStrongSignal. All signals in v13 are strong signals.
+static ncclResult_t ncclRma_iputSignal(void* rmaCtx, int context, uint64_t srcOff, void* srcMhandle,
+    size_t size, uint64_t dstOff, void* dstMhandle,
+    uint32_t rank, uint64_t signalOff, void* signalMhandle,
+    uint64_t signalValue, uint32_t signalOp, bool isStrongSignal, void** request) {
+  (void)isStrongSignal;
+  return ncclRma_v13->iputSignal(rmaCtx, context, srcOff, srcMhandle, size, dstOff, dstMhandle,
+                                 rank, signalOff, signalMhandle, signalValue, signalOp, request);
+}
+
 ncclRma_t* getNcclRma_v13(void* lib) {
   ncclRma_v13 = (ncclRma_v13_t*)ncclOsDlsym(lib, "ncclRmaPlugin_v13");
   // Also try the GIN symbol, as the two should have an equal signature.
@@ -55,7 +65,7 @@ ncclRma_t* getNcclRma_v13(void* lib) {
     ncclRma.closeColl = ncclRma_v13->closeColl;
     ncclRma.closeListen = ncclRma_v13->closeListen;
     ncclRma.iput = ncclRma_v13->iput;
-    ncclRma.iputSignal = ncclRma_v13->iputSignal;
+    ncclRma.iputSignal = ncclRma_iputSignal;
     ncclRma.iget = ncclRma_v13->iget;
     ncclRma.iflush = ncclRma_v13->iflush;
     ncclRma.test = ncclRma_v13->test;

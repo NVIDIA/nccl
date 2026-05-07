@@ -49,7 +49,7 @@ typedef struct {
   ncclResult_t (*iputSignal)(void* rmaCtx, int context, uint64_t srcOff, void* srcMhandle,
       size_t size, uint64_t dstOff, void* dstMhandle,
       uint32_t rank, uint64_t signalOff, void *signalMhandle,
-      uint64_t signalValue, uint32_t signalOp, void** request);
+      uint64_t signalValue, uint32_t signalOp, bool isStrongSignal, void** request);
   ncclResult_t (*iget)(void* rmaCtx, int context, uint64_t remoteOff, void* remoteMhandle, size_t size,
       uint64_t localOff, void* localMhandle, uint32_t rank, void** request);
 

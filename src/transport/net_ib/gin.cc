@@ -252,6 +252,12 @@ ncclResult_t ncclGinIbGdakiDevices(int* ndev) {
   return ncclSuccess;
 }
 
+ncclResult_t ncclGinIbGdakiGetGinProperties(ncclGinProperties_t* ginProps) {
+  ginProps->supportsStrongSignals = true;
+  ginProps->supportsVASignals = true;
+  return ncclSuccess;
+}
+
 ncclResult_t ncclGinIbGdakiGetProperties(int dev, ncclNetProperties_t* props) {
   std::lock_guard<std::mutex> lock(ncclGinIbGdakiLockMutex);
   if (dev >= ncclGinIbGdakiNDevs) {
@@ -316,6 +322,7 @@ ncclGin_t ncclGinIbGdaki = {
   "GIN_IB_GDAKI",
   ncclGinIbGdakiInit,
   ncclGinIbGdakiDevices,
+  ncclGinIbGdakiGetGinProperties,
   ncclGinIbGdakiGetProperties,
   ncclGinIbGdakiListen,
   ncclGinIbGdakiConnect,

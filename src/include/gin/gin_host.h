@@ -38,6 +38,8 @@ struct ncclGinState {
   std::condition_variable cond;
   ncclResult_t asyncResult;
   int ginVersion;
+  bool supportsStrongSignals;
+  bool supportsVASignals;
 
   struct ncclGinStateDevComm* devComms;
   ncclGinConnectionType_t ginConnectionType;

@@ -132,6 +132,11 @@ static ncclResult_t ncclGinPluginAssignToComm(struct ncclComm* comm, int pluginI
     // should match NCCL_NET_DEVICE_GIN_* values from `enum ncclNetDeviceType`.
     comm->sharedRes->ginState.ginType = static_cast<ncclGinType_t>(props.netDeviceType);
     comm->ginPluginIndex = pluginIndex;
+
+    ncclGinProperties_t ginProperties;
+    NCCLCHECK(gin->getGinProperties(&ginProperties));
+    comm->sharedRes->ginState.supportsStrongSignals = ginProperties.supportsStrongSignals;
+    comm->sharedRes->ginState.supportsVASignals = ginProperties.supportsVASignals;
   }
   pluginLibs[pluginIndex].refCount++;
   *isAssigned = true;

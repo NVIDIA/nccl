@@ -188,6 +188,16 @@ ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequir
     struct ncclDevComm* devComm) {
   struct ncclGinState* ginState = &comm->sharedRes->ginState;
 
+  if (reqs->ginStrongSignalsRequired && !ginState->supportsStrongSignals) {
+    WARN("GIN strong signals are required, but the GIN plugin does not support them.");
+    return ncclInvalidUsage;
+  }
+
+  if (reqs->ginVaSignalsRequired && !ginState->supportsVASignals) {
+    WARN("GIN VA signals are required, but the GIN plugin does not support them.");
+    return ncclInvalidUsage;
+  }
+
   devComm->ginSignalCount = reqs->ginSignalCount;
   devComm->ginCounterCount = reqs->ginCounterCount;
   // Legacy signals default to what is specified in DevCommRequirements

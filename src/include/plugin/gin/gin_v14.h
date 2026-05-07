@@ -10,12 +10,19 @@
 #include "nccl_net.h"
 
 typedef struct {
+  bool supportsStrongSignals;
+  bool supportsVASignals;
+} ncclGinProperties_v14_t;
+
+typedef struct {
   // Name of the GIN support (mainly for logs)
   const char* name;
   // Initialize the GIN support.
   ncclResult_t (*init)(void** ctx, uint64_t commId, ncclDebugLogger_t logFunction);
   // Return the number of adapters capable of doing GIN operations.
   ncclResult_t (*devices)(int* ndev);
+  // Get the GIN properties.
+  ncclResult_t (*getGinProperties)(ncclGinProperties_v14_t* ginProps);
   // Get various device properties.
   ncclResult_t (*getProperties)(int dev, ncclNetProperties_v12_t* props);
   // Create a receiving object and provide a handle to connect to it. The

@@ -12,6 +12,12 @@
 static ncclGin_v13_t* ncclGin_v13;
 static ncclGin_t ncclGin;
 
+ncclResult_t ncclGin_getGinProperties(ncclGinProperties_t* ginProps) {
+  ginProps->supportsStrongSignals = true;
+  ginProps->supportsVASignals = false;
+  return ncclSuccess;
+}
+
 ncclGin_t* getNcclGin_v13(void* lib) {
   ncclGin_v13 = (ncclGin_v13_t*)ncclOsDlsym(lib, "ncclGinPlugin_v13");
   if (ncclGin_v13) {
@@ -19,6 +25,7 @@ ncclGin_t* getNcclGin_v13(void* lib) {
     ncclGin.name = ncclGin_v13->name;
     ncclGin.init = ncclGin_v13->init;
     ncclGin.devices = ncclGin_v13->devices;
+    ncclGin.getGinProperties = ncclGin_getGinProperties;
     ncclGin.getProperties = ncclGin_v13->getProperties;
     ncclGin.listen = ncclGin_v13->listen;
     ncclGin.connect = ncclGin_v13->connect;

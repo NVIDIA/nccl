@@ -324,6 +324,12 @@ struct ncclGinProxyListenComm {
   void* listenComm;
 };
 
+static ncclResult_t ncclGinProxyGetProperties(ncclGinProperties_t* ginProps) {
+  ginProps->supportsStrongSignals = true;
+  ginProps->supportsVASignals = true;
+  return ncclSuccess;
+}
+
 static ncclResult_t ncclGinProxyListen(void* ctx, int dev, void* handle, void** listenComm) {
   ncclResult_t ret = ncclSuccess;
   struct ncclGinProxyListenComm* lComm;
@@ -630,6 +636,7 @@ ncclGin_t ncclGinProxy {
   NULL, // Will map directly to the plugin: name
   NULL, // Will map directly to the plugin: init()
   NULL, // Will map directly to the plugin: devices()
+  ncclGinProxyGetProperties,
   NULL, // Will map directly to the plugin: getProperties()
   ncclGinProxyListen,
   ncclGinProxyConnect,

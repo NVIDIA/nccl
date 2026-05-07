@@ -974,11 +974,11 @@ __forceinline__ __device__ void N2N_warp_group_device_function(const int local_r
       int remote_node_id = remote_idx < node_rank ? remote_idx : remote_idx + 1;
       int rank_in_remote = remote_idx < node_rank ? node_rank - 1 : node_rank;
 
-      int dense_dst_offset = smem_mr_info_ptr->rdma_inter_node_group_packed_offset +
-                               rank_in_remote * smem_mr_info_ptr->max_tokens_per_dest *
-                               smem_mr_info_ptr->bytes_per_entry +
-                               static_cast<size_t>(chunk_idx * NUM_OF_TOKENS_PER_CHUNK) *
-                               smem_mr_info_ptr->bytes_per_entry;
+      size_t dense_dst_offset = smem_mr_info_ptr->rdma_inter_node_group_packed_offset +
+                                static_cast<size_t>(rank_in_remote) * smem_mr_info_ptr->max_tokens_per_dest *
+                                smem_mr_info_ptr->bytes_per_entry +
+                                static_cast<size_t>(chunk_idx * NUM_OF_TOKENS_PER_CHUNK) *
+                                smem_mr_info_ptr->bytes_per_entry;
 
       // Create a bitmask of tokens that need to be written. One word per 32 tokens.
       int32_t need_write_bitmask[NUM_OF_TOKENS_PER_CHUNK / 32];

@@ -27,6 +27,9 @@
 #define NCCL_PTR_DMABUF 0x4
 
 #define NCCL_NET_MR_FLAG_FORCE_SO (1 << 0)
+// When set, the MR will be used as a signal and will never be reset.
+// This is a hint to help optimize some calls to putSignal.
+#define NCCL_NET_MR_FLAG_SIGNAL_NEVER_RESET (1 << 1)
 #define NCCL_NET_SIGNAL_OP_INC 0x1
 #define NCCL_NET_SIGNAL_OP_ADD 0x2
 

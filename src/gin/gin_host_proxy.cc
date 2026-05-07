@@ -490,7 +490,7 @@ static ncclResult_t ncclGinProxyCreateContext(void* collComm, ncclGinConfig_t* c
                              CU_MEM_HANDLE_TYPE_NONE, signalsBufSize, NULL));
     CUDACHECK(cudaMemset(proxyCtx->signalsDev, 0, signalsBufSize));
     NCCLCHECK(ncclGinProxyRegMrSym(collComm, proxyCtx->signalsDev, signalsBufSize,
-                                   NCCL_PTR_CUDA, NCCL_NET_MR_FLAG_FORCE_SO,
+                                   NCCL_PTR_CUDA, NCCL_NET_MR_FLAG_FORCE_SO | NCCL_NET_MR_FLAG_SIGNAL_NEVER_RESET,
                                    &proxyCtx->signalsMhandle, &proxyCtx->signalsGinHandle));
   }
   proxyCtx->nSignalsPerContext = config->nSignals;

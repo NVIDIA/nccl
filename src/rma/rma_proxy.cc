@@ -110,7 +110,7 @@ static ncclResult_t ncclRmaProxyCtxAlloc(struct ncclComm* comm, ncclRma_t* rmaCo
                            CU_MEM_HANDLE_TYPE_NONE, signalsBufSize, comm->memManager));
   CUDACHECK(cudaMemset(rmaProxyCtx->signalsDev, 0, signalsBufSize));
   NCCLCHECK(ncclRmaProxyRegMrSym(rmaComm, rmaProxyCtx->rmaCollComm, rmaProxyCtx->props, rmaProxyCtx->signalsDev, signalsBufSize,
-                                 NCCL_PTR_CUDA, NCCL_NET_MR_FLAG_FORCE_SO,
+                                 NCCL_PTR_CUDA, NCCL_NET_MR_FLAG_FORCE_SO | NCCL_NET_MR_FLAG_SIGNAL_NEVER_RESET,
                                  &rmaProxyCtx->signalsMhandle));
   // Allocate the host buffer to track the expected values of the signals
   NCCLCHECK(ncclCalloc(&rmaProxyCtx->signalsHost, signalsBufSize));

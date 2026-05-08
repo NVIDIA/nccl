@@ -1390,6 +1390,7 @@ out:
   return res;
 }
 
+// clang-format off
 struct kvDict nicPathKvList[] = {
   { "LOC",  PATH_LOC },
   { "PORT", PATH_PORT },
@@ -1401,6 +1402,7 @@ struct kvDict nicPathKvList[] = {
   { "SYS",  PATH_SYS },
   { NULL, 0 }
 };
+// clang-format on
 
 
 ncclResult_t ncclTopoFindLinkWidthRec(ncclXmlNode* node, ncclXmlNode** physNetNodes, int ndevs, int* foundPhysNet, int* linkWidth) {

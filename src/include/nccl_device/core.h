@@ -113,6 +113,7 @@ struct ncclDevCommRequirements {
   bool ginVaSignalsRequired;
 };
 
+// clang-format off: maintain hand-formatted code
 #define NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER {                               \
     sizeof(ncclDevCommRequirements_t),           /* size */                    \
     NCCL_API_MAGIC,                              /* magic */                   \
@@ -137,6 +138,7 @@ struct ncclDevCommRequirements {
     true,                                        /* ginStrongSignalsRequired */ \
     true,                                        /* ginVaSignalsRequired */     \
 }
+// clang-format on
 
 struct ncclDevResourceRequirements {
   ncclDevResourceRequirements_t* next;

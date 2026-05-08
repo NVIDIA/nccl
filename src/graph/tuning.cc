@@ -140,6 +140,7 @@ static const float nvlsEfficiency[NCCL_NUM_COMPCAPS] = {
 };
 
 // Default tuner constants (positional initializers for C++17 compatibility)
+// clang-format off
 static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
   // baseLatencies
   {
@@ -205,6 +206,7 @@ static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
     {0.0, 96.0, 80.0} /* Blackwell (N1/N2/N4) */
   }
 };
+// clang-format on
 
 NCCL_PARAM(PatEnable, "PAT_ENABLE", 2);
 static int ncclPatEnable(struct ncclComm* comm) {
@@ -587,11 +589,13 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
 
 // Trees are not perfectly sticking to the model for medium sizes. Applying a static correction
 // factor is not ideal but works quite well. Powers of two, 64 B to 256MB.
+// clang-format off
 static float treeCorrectionFactor[NCCL_NUM_PROTOCOLS][24] = {
   { 1.0, 1.0, 1.0, 1.0,  .9,  .8,  .7,  .7,  .7,  .7,  .6,  .5,  .4,  .4,  .5,  .6,  .7,  .8,  .9, 1.0, 1.0, 1.0, 1.0, 1.0 },
   { 1.0, 1.0, 1.0, 1.0, 1.0,  .9,  .8,  .8,  .8,  .7,  .6,  .6,  .6,  .6,  .6,  .6,  .8,  .9,  .9,  .9,  .9, 1.0, 1.0, 1.0 },
   {  .9,  .9,  .9,  .9,  .9,  .9,  .9,  .8,  .7,  .6,  .6,  .5,  .5,  .5,  .5,  .6,  .7,  .8,  .7,  .7,  .8,  .9,  .9,  .9 }
 };
+// clang-format on
 
 ncclResult_t ncclTopoGetAlgoTime(struct ncclComm* comm, int coll, int algorithm, int protocol, size_t nBytes, int numPipeOps, float* time) {
   float bw = comm->bandwidths[coll][algorithm][protocol];

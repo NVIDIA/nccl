@@ -33,6 +33,7 @@ static const char* events = nullptr;
 static int sock = -1;
 
 static void printUsage(const char* argv0) {
+  // clang-format off
   fprintf(stderr,
           "Usage: %s [OPTION]...\n"
           "Query the state of a running NCCL job.\n"
@@ -51,11 +52,13 @@ static void printUsage(const char* argv0) {
           "  -v, --verbose       Increase the verbosity level of the RAS output\n"
           "      --help          Print this help and exit\n"
           "      --version       Print the version number and exit\n", argv0);
+  // clang-format on
 }
 
 static void parseArgs(int argc, char** argv) {
   int c;
   int optIdx = 0;
+  // clang-format off
   struct option longOpts[] = {
     {"format",  required_argument, NULL, 'f'},
     {"help",    no_argument,       NULL, 'e'},
@@ -67,6 +70,7 @@ static void parseArgs(int argc, char** argv) {
     {"version", no_argument,       NULL, 'r'},
     {0}
   };
+  // clang-format on
 
   while ((c = getopt_long(argc, argv, "f:h:m::p:t:v", longOpts, &optIdx)) != -1) {
     switch (c) {

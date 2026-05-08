@@ -1130,12 +1130,14 @@ static ncclResult_t socketRingAllGather(struct ncclSocket* nextSock, struct nccl
       NCCLCHECKGOTO(socketSendRecv(nextSock, data + sendSliceRing0 * size, size, prevSock, data + recvSliceRing0 * size, size), res, exit);
     } else {
       // Bidirectional step: Ring0 and Ring1 are used simultaneously
+      // clang-format off
       struct ncclSocketOp ops[4] = {
         {NCCL_SOCKET_SEND, nextSock, data + sendSliceRing0 * size, size, 0},  // Ring0: send to next
         {NCCL_SOCKET_RECV, prevSock, data + recvSliceRing0 * size, size, 0},  // Ring0: recv from prev
         {NCCL_SOCKET_SEND, prevSock, data + sendSliceRing1 * size, size, 0},  // Ring1: send to prev
         {NCCL_SOCKET_RECV, nextSock, data + recvSliceRing1 * size, size, 0}   // Ring1: recv from next
       };
+      // clang-format on
       NCCLCHECKGOTO(socketDoubleSendRecv(ops), res, exit);
     }
     if (step == 0) {

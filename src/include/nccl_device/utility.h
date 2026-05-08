@@ -300,6 +300,7 @@ NCCL_HOST_DEVICE_INLINE uint64_t imodFast64(uint64_t x, uint64_t y, uint64_t yrc
 // Precomputed integer reciprocoals for denominator values 1..64 inclusive.
 // Pass these to idivFast64() for fast division on the GPU.
 NCCL_DEVICE_INLINE uint64_t idivRcp64_upto64(int x) {
+  // clang-format off
   static constexpr uint64_t table[65] = {
     idivRcp64(0x01), idivRcp64(0x01), idivRcp64(0x02), idivRcp64(0x03),
     idivRcp64(0x04), idivRcp64(0x05), idivRcp64(0x06), idivRcp64(0x07),
@@ -319,6 +320,7 @@ NCCL_DEVICE_INLINE uint64_t idivRcp64_upto64(int x) {
     idivRcp64(0x3c), idivRcp64(0x3d), idivRcp64(0x3e), idivRcp64(0x3f),
     idivRcp64(0x40)
   };
+  // clang-format on
   return table[x];
 }
 #endif

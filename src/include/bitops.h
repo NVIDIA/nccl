@@ -56,7 +56,7 @@ constexpr static __host__ __device__ Int maxval(Int a, Int b, More ...more) {
     ((x) > (y) ? ROUNDUP(x, y) : ((y)/((y)/(x))))
 
 #define ALIGN_SIZE(size, align) \
-  size = ((size + (align) - 1) / (align)) * (align);
+  size = ((size + (align) - 1) / (align)) * (align)
 
 template<typename X, typename Y, typename Z = decltype(X()+Y())>
 static __host__ __device__ constexpr Z divUp(X x, Y y) {

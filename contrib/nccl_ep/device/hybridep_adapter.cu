@@ -465,7 +465,10 @@ build_dispatch_param(const DispatchParams& params) {
 
     // Pass device communicators and windows
     kp.dcomms = params.dcomms;
-    kp.nccl_window = params.nccl_window;
+    kp.token_window = params.nccl_token_window;
+    kp.prob_window = params.nccl_prob_window;
+    kp.sf_window = params.nccl_sf_window;
+    kp.dest_window = params.nccl_internal_window;
     kp.num_gin_comms = params.num_gin_comms;
     kp.num_ctx_per_comm = params.num_ctx_per_comm;
     kp.gin_base_ptr = params.gin_base_ptr;
@@ -610,7 +613,9 @@ build_combine_param(const CombineParams& params) {
 
     // Pass device communicators and windows
     kp.dcomms = params.dcomms;
-    kp.nccl_window = params.nccl_window;
+    kp.token_window = params.nccl_token_window;
+    kp.prob_window = params.nccl_prob_window;
+    kp.dest_window = params.nccl_internal_window;
     kp.num_gin_comms = params.num_gin_comms;
     kp.num_ctx_per_comm = params.num_ctx_per_comm;
     kp.gin_base_ptr = params.gin_base_ptr;

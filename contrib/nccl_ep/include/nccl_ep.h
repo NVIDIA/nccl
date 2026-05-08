@@ -129,6 +129,26 @@ ncclResult_t ncclEpTensorCreate(
     unsigned int size4 = 1
 );
 
+// Create a tensor from a registered NCCL window.
+//   The tensor stores the window handle and offset. Its local data pointer is
+//   resolved lazily when the tensor is used with an EP group.
+//   ncclEpTensorGetData returns ncclInvalidUsage until that resolution happens.
+//
+//   The window is NOT owned by the tensor; the caller must keep the window
+//   registered and valid until ncclEpTensorDestroy returns.
+ncclResult_t ncclEpTensorCreateFromWindow(
+    ncclNDTensor_t* tensor,
+    unsigned int ndim,
+    ncclDataType_t datatype,
+    ncclEpTensorTag_t tag,
+    ncclWindow_t win,
+    uint64_t win_offset,
+    unsigned int size0,
+    unsigned int size1 = 1,
+    unsigned int size2 = 1,
+    unsigned int size3 = 1,
+    unsigned int size4 = 1
+);
 
 // Destroy a tensor descriptor.
 //   Only the descriptor is freed; the underlying data buffer is the caller's responsibility.
@@ -445,6 +465,8 @@ ncclResult_t ncclEpComplete(
 );
 
 // Get the data pointer from a tensor.
+//   Window-backed tensors return ncclInvalidUsage until they have been used
+//   with an EP group and their data pointer has been resolved.
 //
 // Arguments:
 //   tensor   - [IN]   Tensor handle

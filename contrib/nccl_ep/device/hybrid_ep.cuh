@@ -851,12 +851,15 @@ struct dispatch_kernel_param_t{
   // The number of token output by attn layer on a rank/GPU.
   int num_of_tokens_per_rank;
   // NCCL GIN context
-  ncclDevComm_t* dcomms;           // Device communicators array (1 element, on device)
-  ncclWindow_t nccl_window;        // Single registered window handle (by value)
-  int num_gin_comms;               // Number of GIN communicators (1)
-  int num_ctx_per_comm;            // Number of contexts per communicator
-  void* gin_base_ptr;              // Base pointer for offset calculations
-  unsigned signals_base;           // Base signal ID
+  ncclDevComm_t* dcomms;             // Device communicators array (1 element, on device)
+  ncclWindow_t token_window;         // Source window handle for token data
+  ncclWindow_t prob_window;          // Source window handle for probability data
+  ncclWindow_t sf_window;            // Source window handle for scaling-factor data
+  ncclWindow_t dest_window;          // Destination window handle
+  int num_gin_comms;                 // Number of GIN communicators (1)
+  int num_ctx_per_comm;              // Number of contexts per communicator
+  void* gin_base_ptr;                // Base pointer for offset calculations
+  unsigned signals_base;             // Base signal ID
   // Memory Region info
   struct dispatch_memory_region_info_t mr_info;
   // Grid barrier counter for fused device_sync in dispatch tail (per-rank, not IPC-shared)
@@ -901,13 +904,15 @@ struct combine_kernel_param_t{
   // The number of token output by attn layer on a rank/GPU.
   int num_of_tokens_per_rank;
   // NCCL GIN context
-  ncclDevComm_t* dcomms;           // Device communicators array (1 element, on device)
-  ncclWindow_t nccl_window;        // Single registered window handle (by value)
-  int num_gin_comms;               // Number of GIN communicators (1)
-  int num_ctx_per_comm;            // Number of contexts per communicator
-  void* gin_base_ptr;              // Base pointer for offset calculations
-  unsigned signals_base;           // Base signal ID
-  unsigned combine_signal_offset;  // Signal offset for combine operations
+  ncclDevComm_t* dcomms;             // Device communicators array (1 element, on device)
+  ncclWindow_t token_window;         // Source window handle for token data
+  ncclWindow_t prob_window;          // Source window handle for probability data
+  ncclWindow_t dest_window;          // Destination window handle
+  int num_gin_comms;                 // Number of GIN communicators (1)
+  int num_ctx_per_comm;              // Number of contexts per communicator
+  void* gin_base_ptr;                // Base pointer for offset calculations
+  unsigned signals_base;             // Base signal ID
+  unsigned combine_signal_offset;    // Signal offset for combine operations
   // qp info and mr info
   struct combine_memory_region_info_t mr_info;
 #ifdef HYBRIDEP_ENABLE_WARP_TIMING
@@ -951,7 +956,10 @@ __forceinline__ __device__ void N2N_warp_group_device_function(const int local_r
                                                       const int num_of_ranks_per_node,
                                                       const bool *attn_to_rdma_map,
                                                       ncclDevComm_t* dcomms,
-                                                      ncclWindow_t nccl_window,
+                                                      ncclWindow_t nccl_token_window,
+                                                      ncclWindow_t nccl_prob_window,
+                                                      ncclWindow_t nccl_sf_window,
+                                                      ncclWindow_t nccl_internal_window,
                                                       int num_gin_comms,
                                                       int num_ctx_per_comm,
                                                       void* gin_base_ptr,
@@ -1041,16 +1049,16 @@ __forceinline__ __device__ void N2N_warp_group_device_function(const int local_r
         if (need_write) {
           int token_idx = chunk_base_token_idx + token_idx_in_chunk;
           net.put(rail, remote_node_id,
-                  nccl_window, dst_offset,
-                  nccl_window, smem_mr_info_ptr->attn_input_token_offset + token_idx * token_bytes,
+                  nccl_internal_window, dst_offset,
+                  nccl_token_window, smem_mr_info_ptr->attn_input_token_offset + token_idx * token_bytes,
                   token_bytes,
                   ncclGin_None{}, ncclGin_None{}, ncclCoopThread(), ncclGin_None{}, cuda::thread_scope_thread, cuda::thread_scope_device, ncclGinOptFlagsAggregateRequests);
 
           if constexpr(FORWARD_DISPATCH) {
             size_t offset = dst_offset + token_bytes;
             net.put(rail, remote_node_id,
-                    nccl_window, offset,
-                    nccl_window, smem_mr_info_ptr->attn_input_prob_offset + (token_idx * NUM_LSA_TEAMS + remote_node_id) * prob_bytes,
+                    nccl_internal_window, offset,
+                    nccl_prob_window, smem_mr_info_ptr->attn_input_prob_offset + (token_idx * NUM_LSA_TEAMS + remote_node_id) * prob_bytes,
                     prob_bytes,
                     ncclGin_None{}, ncclGin_None{}, ncclCoopThread(), ncclGin_None{}, cuda::thread_scope_thread, cuda::thread_scope_device, ncclGinOptFlagsAggregateRequests);
           }
@@ -1058,8 +1066,8 @@ __forceinline__ __device__ void N2N_warp_group_device_function(const int local_r
           if constexpr(std::is_same<TOKEN_DATA_TYPE, uint8_t>::value) {
             size_t offset = dst_offset + token_bytes + (FORWARD_DISPATCH ? prob_bytes : 0);
             net.put(rail, remote_node_id,
-                    nccl_window, offset,
-                    nccl_window, smem_mr_info_ptr->attn_input_scaling_factor_offset + (token_idx * sf_bytes),
+                    nccl_internal_window, offset,
+                    nccl_sf_window, smem_mr_info_ptr->attn_input_scaling_factor_offset + (token_idx * sf_bytes),
                     sf_bytes,
                     ncclGin_None{}, ncclGin_None{}, ncclCoopThread(), ncclGin_None{},  cuda::thread_scope_thread, cuda::thread_scope_device, ncclGinOptFlagsAggregateRequests);
           }
@@ -2090,7 +2098,9 @@ __forceinline__ __device__ void inter_node_N2N_warp_group_device_function(const 
                                                                  const int num_of_ranks_per_node,
                                                                  const bool* rdma_to_attn_map,
                                                                  ncclDevComm_t* dcomms,
-                                                                 ncclWindow_t nccl_window,
+                                                                 ncclWindow_t nccl_token_window,
+                                                                 ncclWindow_t nccl_prob_window,
+                                                                 ncclWindow_t nccl_internal_window,
                                                                  int num_gin_comms,
                                                                  int num_ctx_per_comm,
                                                                  void* gin_base_ptr,
@@ -2189,8 +2199,8 @@ __forceinline__ __device__ void inter_node_N2N_warp_group_device_function(const 
                 (rank_in_remote * MAX_NUM_OF_TOKENS_PER_RANK + batch_start_token) *
                 HIDDEN_DIM * sizeof(uint16_t);
             net.put(rail, node_id,
-                    nccl_window, token_dst_offset,
-                    nccl_window, token_src_offset,
+                    nccl_internal_window, token_dst_offset,
+                    nccl_token_window, token_src_offset,
                     batch_count * HIDDEN_DIM * sizeof(uint16_t),
                     ncclGin_None{}, ncclGin_None{}, ncclCoopThread());
 
@@ -2202,8 +2212,8 @@ __forceinline__ __device__ void inter_node_N2N_warp_group_device_function(const 
                   (rank_in_remote * MAX_NUM_OF_TOKENS_PER_RANK + batch_start_token) *
                   (experts_per_rank * num_of_ranks_per_node) * sizeof(float);
               net.put(rail, node_id,
-                      nccl_window, prob_dst_offset,
-                      nccl_window, prob_src_offset,
+                      nccl_internal_window, prob_dst_offset,
+                      nccl_prob_window, prob_src_offset,
                       batch_count * (experts_per_rank * num_of_ranks_per_node) * sizeof(float),
                       ncclGin_None{}, ncclGin_None{}, ncclCoopThread());
             }
@@ -2268,8 +2278,8 @@ __forceinline__ __device__ void inter_node_N2N_warp_group_device_function(const 
                 (rank_in_remote * MAX_NUM_OF_TOKENS_PER_RANK + batch_start_token) *
                 HIDDEN_DIM * sizeof(uint16_t);
             net.put(rail, node_id,
-                    nccl_window, token_dst_offset,
-                    nccl_window, token_src_offset,
+                    nccl_internal_window, token_dst_offset,
+                    nccl_token_window, token_src_offset,
                     batch_count * HIDDEN_DIM * sizeof(uint16_t),
                     ncclGin_None{}, ncclGin_None{}, ncclCoopThread());
 
@@ -2281,8 +2291,8 @@ __forceinline__ __device__ void inter_node_N2N_warp_group_device_function(const 
                   (rank_in_remote * MAX_NUM_OF_TOKENS_PER_RANK + batch_start_token) *
                   (experts_per_rank * num_of_ranks_per_node) * sizeof(float);
               net.put(rail, node_id,
-                      nccl_window, prob_dst_offset,
-                      nccl_window, prob_src_offset,
+                      nccl_internal_window, prob_dst_offset,
+                      nccl_prob_window, prob_src_offset,
                       batch_count * (experts_per_rank * num_of_ranks_per_node) * sizeof(float),
                       ncclGin_None{}, ncclGin_None{}, ncclCoopThread());
             }
@@ -3347,7 +3357,8 @@ __global__ void dispatch_kernel(const __grid_constant__ dispatch_kernel_param_t<
       N2N_warp_group_device_function
       <INTER_NODE_GROUP, TOKEN_DATA_TYPE, cur_smem_t, NUM_OF_STAGES, NUM_OF_TOKENS_PER_CHUNK, MAX_NUM_OF_TOKENS_PER_RANK, NUM_LSA_TEAMS, NUM_OF_BLOCKS, FORWARD_DISPATCH>
       (param.local_rank, param.node_rank, param.num_of_tokens_per_rank, param.num_of_ranks_per_node, param.attn_to_rdma_map,
-       param.dcomms, param.nccl_window, param.num_gin_comms, param.num_ctx_per_comm, param.gin_base_ptr, param.signals_base,
+       param.dcomms, param.token_window, param.prob_window, param.sf_window, param.dest_window,
+       param.num_gin_comms, param.num_ctx_per_comm, param.gin_base_ptr, param.signals_base,
        &param.mr_info, smem_buffer_ptr, param.hidden_dim, param.experts_per_rank);
     }
   } else if (threadIdx_x_int < INTER_NODE_GROUP::size() + INTRA_NODE_G2S_GROUP::size()){
@@ -3599,7 +3610,8 @@ __device__ __forceinline__ void combine_kernel_impl(
       inter_node_N2N_warp_group_device_function
       <INTER_NODE_RDMA_GROUP, cur_smem_t, NUM_OF_STAGES_S2G, NUM_OF_TOKENS_PER_CHUNK, MAX_NUM_OF_TOKENS_PER_RANK, NUM_LSA_TEAMS, NUM_OF_BLOCKS, BACKWARD_COMBINE, HIDDEN_DIM>
       (param.local_rank, param.node_rank, param.num_of_tokens_per_rank, param.num_of_ranks_per_node, param.rdma_to_attn_map,
-       param.dcomms, param.nccl_window, param.num_gin_comms, param.num_ctx_per_comm, param.gin_base_ptr, param.signals_base, param.combine_signal_offset,
+       param.dcomms, param.token_window, param.prob_window, param.dest_window,
+       param.num_gin_comms, param.num_ctx_per_comm, param.gin_base_ptr, param.signals_base, param.combine_signal_offset,
        &param.mr_info, smem_buffer_ptr, param.experts_per_rank);
     }
   }else{

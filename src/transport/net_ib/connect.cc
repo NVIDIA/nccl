@@ -169,7 +169,7 @@ static sa_family_t getGidAddrFamily(union ibv_gid* gid) {
 static bool matchGidAddrPrefix(sa_family_t af, void* prefix, int prefixlen, union ibv_gid* gid) {
   struct in_addr *base = NULL;
   struct in6_addr *base6 = NULL;
-  struct in6_addr *addr6 = NULL;;
+  struct in6_addr *addr6 = NULL;
   if (af == AF_INET) {
     base = (struct in_addr *)prefix;
   } else {

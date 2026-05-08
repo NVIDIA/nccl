@@ -287,7 +287,7 @@ static void ncclDebugLogV(ncclDebugLogLevel level, unsigned long flags,
   // WARNs come with an extra newline at the beginning.
   if (level == NCCL_LOG_WARN) {
     buffer[len++] = '\n';
-  };
+  }
 
   // Add the timestamp to the buffer if they are turned on for this level.
   if (ncclDebugTimestampLevels & (1<<level)) {

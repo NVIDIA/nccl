@@ -1310,7 +1310,7 @@ ncclResult_t ncclTopoForceMerge(struct ncclXml* xml, struct ncclTopoNetInfo* net
       goto fail;
     }
 
-    semi = strtok_r(NULL, ";", &semi_token);;
+    semi = strtok_r(NULL, ";", &semi_token);
   }
 
 exit:

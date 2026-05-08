@@ -349,7 +349,7 @@ ncclResult_t ncclIbPortRecoverySenderQpsToRts(struct ncclIbResiliency* resCtx, s
   ncclIbQp* localQp = NULL;
   ncclIbQpInfo* remQpInfo = NULL;
   for (int localQpIndex = 0; localQpIndex < nQps; localQpIndex++) {
-    int localDevIndex = localQpIndex % sendComm->base.vProps.ndevs;;
+    int localDevIndex = localQpIndex % sendComm->base.vProps.ndevs;
     ncclIbSendCommDev* sendCommDev = &sendComm->devs[localDevIndex];
     ncclIbDev* ibDev = &ncclIbDevs[sendCommDev->base.ibDevN];
     localQp = &resCtx->portRecoveryQps[localQpIndex];

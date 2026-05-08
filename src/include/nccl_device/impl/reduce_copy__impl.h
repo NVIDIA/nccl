@@ -77,7 +77,7 @@ NCCL_DEVICE_INLINE IntCount reduceCopyLoopCoreImpl(
       NVCC_PRAGMA_UNROLL(UNROLL_PACKS)
       for (int u = 0; u < UNROLL_PACKS; u++) {
         IntCount packIdx = groupLanePackIdx + u * runtimeStride;
-        acc[u] = castPack<AccEltType, PackEltType, Pack::Count>(srcPtr[packIdx]);;
+        acc[u] = castPack<AccEltType, PackEltType, Pack::Count>(srcPtr[packIdx]);
       }
 
       constexpr int srcCount = UNROLL_SOURCE;

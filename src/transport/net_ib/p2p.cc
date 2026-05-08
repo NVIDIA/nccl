@@ -347,7 +347,7 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, size_t size, int tag, void*
 }
 
 ncclResult_t ncclIbPostFifo(struct ncclIbRecvComm* comm, struct ncclIbRequest* req, int slot) {
-  ncclIbQp* ctsQp = NULL;;
+  ncclIbQp* ctsQp = NULL;
   NCCLCHECK(ncclIbRecvCommGetQpForCts(comm, req->id, &ctsQp));
 
   struct ibv_send_wr wr;

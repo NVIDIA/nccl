@@ -25,7 +25,7 @@ NCCL_PARAM(GinPluginRefCount, "GIN_PLUGIN_REF_COUNT", 0);
 int ncclGinVersion[NCCL_GIN_VERSION_COUNT] = {14, 13};
 getNcclGin_t* getNcclGin[NCCL_GIN_VERSION_COUNT] = {getNcclGin_v14, getNcclGin_v13};
 
-#define NCCL_GIN_NUM_INTERNAL_PLUGINS 1
+#define NCCL_GIN_NUM_INTERNAL_PLUGINS 2
 
 typedef enum ncclGinPluginState {
   ncclGinPluginStateDisabled        = -2,       // Plugin library failed to initialize
@@ -123,11 +123,27 @@ static ncclResult_t ncclGinPluginAssignToComm(struct ncclComm* comm, int pluginI
 
   if (pluginLibs[pluginIndex].state >= ncclGinPluginStateEnabled) {
     ncclGin_t* gin = pluginLibs[pluginIndex].ncclGin;
+    ncclNetProperties_t props;
+    NCCLCHECK(gin->getProperties(0, &props));
+
+    int64_t ginType = ncclParamGinType();
+    bool isExternal = pluginIndex < (pluginCount - NCCL_GIN_NUM_INTERNAL_PLUGINS);
+
+    if (ginType != -1 && props.netDeviceType != ginType) {
+      INFO(NCCL_INIT|NCCL_NET, "Skipping GIN plugin %s index %d type %d: NCCL_GIN_TYPE=%ld requested",
+           gin->name, pluginIndex, props.netDeviceType, ginType);
+      return ncclSuccess;
+    }
+
+    if (isExternal && props.netDeviceType == NCCL_NET_DEVICE_GIN_PROXY) {
+      INFO(NCCL_INIT|NCCL_NET, "Skipping external GIN proxy plugin %s index %d; using NCCL GIN proxy over RMA backend",
+           gin->name, pluginIndex);
+      return ncclSuccess;
+    }
+
     INFO(NCCL_INIT|NCCL_NET, "Assigned GIN plugin %s to comm", gin->name);
     comm->sharedRes->ginState.ncclGin = gin;
     comm->sharedRes->ginState.ginVersion = pluginLibs[pluginIndex].version;
-    ncclNetProperties_t props;
-    NCCLCHECK(gin->getProperties(0, &props));
     // NOTE: The following cast is valid because ncclGinType_t variant values
     // should match NCCL_NET_DEVICE_GIN_* values from `enum ncclNetDeviceType`.
     comm->sharedRes->ginState.ginType = static_cast<ncclGinType_t>(props.netDeviceType);

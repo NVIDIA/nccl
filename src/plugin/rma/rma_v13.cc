@@ -5,6 +5,7 @@
  * See LICENSE.txt for more license information
  *************************************************************************/
 
+#include "rma/rma_v13.h"
 #include "nccl_rma.h"
 #include "checks.h"
 #include "os.h"
@@ -12,6 +13,20 @@
 
 static ncclRma_v13_t* ncclRma_v13;
 static ncclRma_t ncclRma;
+
+static ncclResult_t ncclRma_init(void** ctx, uint64_t commId, ncclDebugLogger_t logFunction) {
+  NCCLCHECK(ncclRma_v13->init(ctx, commId, logFunction));
+
+  // RMA plugin must report GIN proxy type
+  ncclNetProperties_t props;
+  NCCLCHECK(ncclRma_v13->getProperties(0, &props));
+  if (props.netDeviceType != NCCL_NET_DEVICE_GIN_PROXY) {
+    WARN("RMA v13 (%s) requires GIN PROXY type, got netDeviceType %d",
+          ncclRma_v13->name, props.netDeviceType);
+    return ncclInternalError;
+  }
+  return ncclSuccess;
+}
 
 static ncclResult_t ncclRma_createContext(void* collComm, ncclRmaConfig_v14_t* config, void** rmaCtx) {
   ncclNetDeviceHandle_v11_t* devHandle;
@@ -48,11 +63,13 @@ static ncclResult_t ncclRma_iputSignal(void* rmaCtx, int context, uint64_t srcOf
 ncclRma_t* getNcclRma_v13(void* lib) {
   ncclRma_v13 = (ncclRma_v13_t*)ncclOsDlsym(lib, "ncclRmaPlugin_v13");
   // Also try the GIN symbol, as the two should have an equal signature.
-  if (ncclRma_v13 == NULL) ncclRma_v13 = (ncclRma_v13_t*)ncclOsDlsym(lib, "ncclGinPlugin_v13");
+  if (!ncclRma_v13) {
+    ncclRma_v13 = (ncclRma_v13_t*)ncclOsDlsym(lib, "ncclGinPlugin_v13");
+  }
   if (ncclRma_v13) {
     INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Loaded rma plugin %s (v13)", ncclRma_v13->name);
     ncclRma.name = ncclRma_v13->name;
-    ncclRma.init = ncclRma_v13->init;
+    ncclRma.init = ncclRma_init;
     ncclRma.devices = ncclRma_v13->devices;
     ncclRma.getProperties = ncclRma_v13->getProperties;
     ncclRma.listen = ncclRma_v13->listen;

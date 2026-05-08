@@ -237,6 +237,14 @@ ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequir
     NCCLCHECKGOTO(ginState->ncclGin->createContext(
                     ginState->ginComms[n], &ginConfig, &ginStateDevComm->ginCtx[n], &ginStateDevComm->devHandles[n]),
                   ret, end);
+    if (ginStateDevComm->ginCtx[n] == NULL || ginStateDevComm->devHandles[n] == NULL ||
+        ginStateDevComm->devHandles[n]->handle == NULL) {
+      WARN("GIN plugin %s returned invalid context for connection %d: ginCtx=%p devHandle=%p handle=%p",
+           ginState->ncclGin->name, n, ginStateDevComm->ginCtx[n], ginStateDevComm->devHandles[n],
+           ginStateDevComm->devHandles[n] ? ginStateDevComm->devHandles[n]->handle : NULL);
+      ret = ncclInternalError;
+      goto end;
+    }
     devComm->ginNetDeviceTypes[n] = ginStateDevComm->devHandles[n]->netDeviceType;
     devComm->ginHandles[n] = ginStateDevComm->devHandles[n]->handle;
     if (ginStateDevComm->devHandles[n]->needsProxyProgress) ginState->needsProxyProgress = 1;

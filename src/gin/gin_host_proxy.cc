@@ -673,6 +673,10 @@ ncclResult_t ncclGinProxyInit(struct ncclComm* comm) {
   // Use GIN proxy implementation, based on the RMA plugin and
   // GPU-host communication queues.
   rmaBackend = comm->rmaState.rmaProxyState.ncclRma;
+  if (!rmaBackend) {
+    WARN("GIN Proxy: RMA backend not found");
+    return ncclInvalidArgument;
+  }
   ncclGinProxy.name = rmaBackend->name;
   ncclGinProxy.init = rmaBackend->init;
   ncclGinProxy.devices = rmaBackend->devices;

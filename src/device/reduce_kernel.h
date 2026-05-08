@@ -86,6 +86,7 @@ struct RedOpArg<FuncMinMax<T>> {
 // of elements. These classes are intended to be specialized for specific
 // combinations of reduction function and pack size.
 
+// clang-format off: commented struct body will result in semicolon be put on a newline
 template<typename A, typename B, int EltPerPackA>
 struct Apply_Cast/*{
   static BytePack<EltPerPackA*sizeof(B)/sizeof(A)> cast(BytePack<EltPerPackA*sizeof(A)> a);
@@ -117,7 +118,7 @@ template<typename Fn, int BytePerPack>
 struct Apply_LoadMultimem/*{
   static BytePack<BytePerPack> load(Fn fn, uintptr_t addr);
 }*/;
-
+// clang-format on
 
 // Helpers for dealing with BytePack<0>'s
 template<typename A, typename B, int EltPerPack>

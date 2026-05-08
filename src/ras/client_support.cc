@@ -1800,7 +1800,7 @@ static void rasOutAppend(const char* format, ...) {
   if (nRasOutBuffer >= rasOutBufferSize)
     nRasOutBuffer = rasOutBufferSize - 1; // Should never happen, but just to be extra sure...
 exit:
-  ;
+  ; // FORMAT-OFF: prevent clang-format to move the semicolon
 }
 
 // Copies the output data from an internal buffer to a user-supplied one, including the terminating '\0'.
@@ -1827,7 +1827,7 @@ static void rasOutReset() {
     rasOutBufferSize = RAS_OUT_INCREMENT;
   }
 exit:
-  ;
+  ; // FORMAT-OFF: prevent clang-format to move the semicolon
 }
 
 

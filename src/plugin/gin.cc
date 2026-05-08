@@ -103,7 +103,7 @@ static ncclResult_t ncclGinPluginInit(struct ncclComm* comm, ginPluginLib_t* plu
   int ndev;
   // Init must be called for each new comm to set the right context
   if (pluginLib->state >= ncclGinPluginStateInitReady && pluginLib->ncclGin) {
-    if (pluginLib->ncclGin->init(&comm->ginContext, comm->commHash, ncclDebugLog) != ncclSuccess) {
+    if (!pluginLib->ncclGin->init || pluginLib->ncclGin->init(&comm->ginContext, comm->commHash, ncclDebugLog) != ncclSuccess) {
       pluginLib->state = ncclGinPluginStateDisabled;
     }
   }

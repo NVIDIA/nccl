@@ -344,7 +344,7 @@ int main(int argc, char* argv[])
   }
   else {
   // Specific to this test
-    num_recv_tokens = config.max_tokens_per_rank * num_local_experts;
+    num_recv_tokens = config.max_tokens_per_rank * nRanks;
   }
   assert(num_recv_tokens);
 

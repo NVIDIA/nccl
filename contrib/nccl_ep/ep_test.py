@@ -343,7 +343,7 @@ def main():  # noqa: C901 — intentionally kept as a single function to mirror 
     if disable_max_tokens:
         num_recv_tokens = nccl.ncclEpHandleGetNumRecvTokens(ep_handle)
     else:
-        num_recv_tokens = config.max_tokens_per_rank * num_local_experts
+        num_recv_tokens = config.max_tokens_per_rank * n_ranks
     assert num_recv_tokens > 0
 
     # -- dispatch config ----------------------------------------------------

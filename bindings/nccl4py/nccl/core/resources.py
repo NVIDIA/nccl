@@ -20,6 +20,8 @@ from nccl import bindings as _nccl_bindings
 from nccl.core.constants import WindowFlag
 from nccl.core.typing import NcclDataType, NcclInvalid
 
+_PointerBox = _nccl_bindings.PointerBox
+
 __all__ = [
     "RegisteredBufferHandle",
     "RegisteredWindowHandle",
@@ -89,7 +91,7 @@ class CommResource(ABC):
 
     @property
     def is_valid(self) -> bool:
-        """Whether the resource is still valid (not closed)."""
+        """Whether the resource has been initialized and is still valid (not closed)."""
         return not self._closed
 
 
@@ -182,14 +184,16 @@ class RegisteredWindowHandle(CommResource):
         self._buffer_ptr = buffer_ptr
         self._size = size
         self._flags = flags if flags is not None else WindowFlag.DEFAULT
-        self._handle: int | None = None
-        super().__init__(comm_ptr)
+        self._handle = _PointerBox()
+        self._closed = True
+        self._comm_ptr = comm_ptr
         self._allocate()
+        super().__init__(comm_ptr)
 
     def _allocate(self) -> None:
         """Collectively registers the window with NCCL."""
-        self._handle = _nccl_bindings.comm_window_register(
-            self._comm_ptr, self._buffer_ptr, self._size, self._flags.value
+        _nccl_bindings.comm_window_register(
+            self._comm_ptr, self._buffer_ptr, self._size, self._handle.address, self._flags.value
         )
 
     def _deallocate(self) -> None:
@@ -198,9 +202,15 @@ class RegisteredWindowHandle(CommResource):
         Deregistration is local to the rank. The caller must ensure the
         buffer is not being accessed by any NCCL operation.
         """
-        if self._handle is not None:
-            _nccl_bindings.comm_window_deregister(self._comm_ptr, self._handle)
-            self._handle = None
+        if self.handle:
+            _nccl_bindings.comm_window_deregister(self._comm_ptr, self.handle)
+            self._handle.ptr = 0
+        self._closed = True
+
+    @property
+    def is_valid(self) -> bool:
+        """Whether the resource has been initialized and is still valid (not closed)."""
+        return not self._closed and self._handle.ptr
 
     @property
     def handle(self) -> int:
@@ -210,10 +220,7 @@ class RegisteredWindowHandle(CommResource):
             RuntimeError: If the window has been deregistered or the handle
                 is invalid.
         """
-        self._check_valid()
-        if self._handle is None:
-            raise RuntimeError("Window registration handle is invalid")
-        return self._handle
+        return int(self._handle.ptr)
 
     @property
     def size(self) -> int:
@@ -247,7 +254,7 @@ class RegisteredWindowHandle(CommResource):
             RuntimeError: If the window has been closed.
         """
         self._check_valid()
-        ptr = _nccl_bindings.get_lsa_multimem_device_pointer(self._handle, offset)
+        ptr = _nccl_bindings.get_lsa_multimem_device_pointer(self.handle, offset)
         return ptr if ptr != 0 else None
 
     def get_lsa_device_pointer(self, lsa_rank: int, offset: int = 0) -> int:
@@ -267,7 +274,7 @@ class RegisteredWindowHandle(CommResource):
             RuntimeError: If the window has been closed.
         """
         self._check_valid()
-        return _nccl_bindings.get_lsa_device_pointer(self._handle, offset, lsa_rank)
+        return _nccl_bindings.get_lsa_device_pointer(self.handle, offset, lsa_rank)
 
     def get_peer_device_pointer(self, peer: int, offset: int = 0) -> int | None:
         """Returns a device pointer to a peer's window buffer by world rank.
@@ -286,13 +293,11 @@ class RegisteredWindowHandle(CommResource):
             RuntimeError: If the window has been closed.
         """
         self._check_valid()
-        ptr = _nccl_bindings.get_peer_device_pointer(self._handle, offset, peer)
+        ptr = _nccl_bindings.get_peer_device_pointer(self.handle, offset, peer)
         return ptr if ptr != 0 else None
 
     def __repr__(self) -> str:
-        if not self.is_valid:
-            return "<RegisteredWindowHandle: closed>"
-        return f"<RegisteredWindowHandle: size={self._size}, handle={self._handle:#x}, flags={self._flags}>"
+        return f"<RegisteredWindowHandle: size={self._size}, handle={self.handle:#x}, flags={self._flags}>"
 
 
 class CustomRedOp(CommResource):

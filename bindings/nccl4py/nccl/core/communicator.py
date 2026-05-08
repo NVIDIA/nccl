@@ -54,6 +54,9 @@ from nccl.core.typing import (
 )
 from nccl.core.utils import UniqueId
 
+_PointerBox = _nccl_bindings.PointerBox
+_Result = _nccl_bindings.Result
+
 
 __all__ = [
     "NCCLConfig",
@@ -838,12 +841,16 @@ class Communicator:
             ptr: Integer representing an NCCL communicator pointer (0 for a
                 null communicator). Defaults to 0.
         """
-        self._comm: int = int(ptr)
+        if isinstance(ptr, _PointerBox):
+            self._comm_box = ptr
+        else:
+            self._comm_box = _PointerBox(ptr)
         self._resources: list[CommResource] = []
         self._nranks: int | None = None
         self._device: Device | None = None
         self._rank: int | None = None
         self._comm_properties: _nccl_bindings.CommProperties | None = None
+        self._children_in_progress = []
 
     def _check_valid(self, operation: str) -> None:
         """Raises if the communicator is not initialized.
@@ -1034,11 +1041,10 @@ class Communicator:
                 for uid in unique_id
             ]
         )
-        comm_ptr = _nccl_bindings.comm_init_rank_scalable(
-            int(nranks), int(rank), int(len(unique_id)), arr, cfg_ptr
+        _nccl_bindings.comm_init_rank_scalable(
+            self._comm_box.address, int(nranks), int(rank), int(len(unique_id)), arr, cfg_ptr
         )
 
-        self._comm = comm_ptr
         self._resources = []
         self._nranks = None
         self._device = None
@@ -1087,9 +1093,11 @@ class Communicator:
         if color is None:
             color = NCCL_SPLIT_NOCOLOR
         cfg_ptr = 0 if config is None else config.ptr
-        comm_ptr = _nccl_bindings.comm_split(self._comm, int(color), int(key), cfg_ptr)
+        newcomm = type(self)()
+        self._children_in_progress.append(newcomm)
+        _nccl_bindings.comm_split(self._comm, int(color), int(key), newcomm._comm_box.address, cfg_ptr)
 
-        return type(self)(comm_ptr)
+        return newcomm
 
     def shrink(
         self,
@@ -1135,11 +1143,17 @@ class Communicator:
         self._check_valid("shrink")
         ranks_to_exclude = list(exclude_ranks) if exclude_ranks is not None else []
         cfg_ptr = 0 if config is None else config.ptr
-        comm_ptr = _nccl_bindings.comm_shrink(
-            self._comm, ranks_to_exclude, len(ranks_to_exclude), cfg_ptr, int(flag)
+        newcomm = type(self)()
+        _nccl_bindings.comm_shrink(
+            self._comm,
+            ranks_to_exclude,
+            len(ranks_to_exclude),
+            newcomm._comm_box.address,
+            cfg_ptr,
+            int(flag),
         )
 
-        return type(self)(comm_ptr)
+        return newcomm
 
     def get_unique_id(self) -> UniqueId:
         """Returns a per-communicator unique ID for use with :py:meth:`grow`.
@@ -1222,9 +1236,12 @@ class Communicator:
         uid_ptr = 0 if unique_id is None else unique_id.ptr
         rank_val = -1 if rank is None else int(rank)
         cfg_ptr = 0 if config is None else config.ptr
-        comm_ptr = _nccl_bindings.comm_grow(self._comm, int(nranks), uid_ptr, rank_val, cfg_ptr)
+        newcomm = type(self)()
+        _nccl_bindings.comm_grow(
+            self._comm, int(nranks), uid_ptr, rank_val, newcomm._comm_box.address, cfg_ptr
+        )
 
-        return type(self)(comm_ptr)
+        return newcomm
 
     def destroy(self) -> None:
         """Destroys the communicator and frees local resources.
@@ -1253,7 +1270,7 @@ class Communicator:
             return
 
         _nccl_bindings.comm_destroy(self._comm)
-        self._comm = 0
+        self._comm_box.ptr = 0
 
     def abort(self) -> None:
         """Aborts the communicator and frees resources, terminating in-flight operations.
@@ -1278,7 +1295,7 @@ class Communicator:
             return
 
         _nccl_bindings.comm_abort(self._comm)
-        self._comm = 0
+        self._comm_box.ptr = 0
 
     def finalize(self) -> None:
         """Finalizes the communicator, flushing uncompleted operations and network resources.
@@ -1353,6 +1370,10 @@ class Communicator:
         _nccl_bindings.comm_resume(self._comm)
 
     # --- Properties ---
+    @property
+    def _comm(self) -> int:
+        return int(self._comm_box.ptr)
+
     @property
     def ptr(self) -> int:
         """Raw pointer to the underlying :c:type:`ncclComm_t` structure
@@ -2215,7 +2236,8 @@ class Communicator:
         participate, and buffer size must be equal among ranks by default.
         Buffer size is automatically derived from buffer count and dtype.
         If called within a group, the handle value may not be filled until
-        ``ncclGroupEnd`` completes.
+        ``ncclGroupEnd`` completes. For non-blocking communicators, the handle
+        may remain ``0`` until :py:meth:`get_async_error` reports success.
 
         The returned :py:class:`~nccl.core.RegisteredWindowHandle` is
         tracked by the communicator and may be released explicitly via its
@@ -2247,7 +2269,14 @@ class Communicator:
         size = nccl_buf.count * nccl_buf.dtype.itemsize
 
         resource = RegisteredWindowHandle(self._comm, buffer_ptr, size, flags)
-        if resource.handle == 0:
+        if self.get_async_error() == int(_Result.Success) and resource.handle == 0:
+            # A non-blocking communicator only initializes the handle value
+            # after InProgress has changed to Success.  Until then the handle
+            # will remain NULL, but we cannot assume its invalid.
+            #
+            # But if status is Success and handle is still null, then we can
+            # simply return None.
+            resource.close()
             return None
 
         self._resources.append(resource)
@@ -2462,7 +2491,10 @@ class Communicator:
             :c:func:`ncclCommGetAsyncError`
         """
         self._check_valid("get async error")
-        return _nccl_bindings.comm_get_async_error(self._comm)
+        result = _nccl_bindings.comm_get_async_error(self._comm)
+        if result != _Result.InProgress:
+            self._children_in_progress = []
+        return result
 
     def get_mem_stat(self, stat: NcclCommMemStat) -> int:
         """Queries communicator memory statistics.

@@ -428,7 +428,7 @@ ncclResult_t ncclTopoAddNet(struct ncclXmlNode* xmlNet, struct ncclTopoSystem* s
 
 ncclResult_t ncclTopoAddGin(struct ncclXmlNode* xmlNet, struct ncclTopoSystem* system, struct ncclTopoNode* nic, int systemId) {
   int dev;
-  NCCLCHECK(xmlGetAttrInt(xmlNet, "dev", &dev));
+  NCCLCHECK(xmlGetAttrInt(xmlNet, "gin_dev", &dev));
 
   int64_t netId = NCCL_TOPO_ID(systemId, dev);
   struct ncclTopoNode* net;
@@ -471,6 +471,7 @@ ncclResult_t ncclTopoAddNic(struct ncclXmlNode* xmlNic, struct ncclTopoSystem* s
     if (strcmp(xmlNet->name, "net") != 0) continue;
     int index;
     NCCLCHECK(xmlGetAttrIndex(xmlNet, "dev", &index));
+    if (index == -1) NCCLCHECK(xmlGetAttrIndex(xmlNet, "gin_dev", &index));
     // This means that the "dev" attribute wasn't set on this net xml node. That means it should not be added to the system topology graph
     if (index == -1) continue;
 
@@ -1465,10 +1466,11 @@ static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex, int endIn
     NCCLCHECK(xmlGetAttr(netNode, "coll", &colAttr));
 
     NCCLCHECK(xmlSetAttrInt(netNode, "keep", 1));
+    const char* devAttr = netInfo->gin ? "gin_dev" : "dev";
     int dev;
-    xmlGetAttrIntDefault(netNode, "dev", &dev, -1);
+    xmlGetAttrIntDefault(netNode, devAttr, &dev, -1);
     if (dev != -1 && dev != n) INFO(NCCL_GRAPH, "TOPO/NET : Changing %s dev index from %d to %d", netInfo->name, dev, n);
-    NCCLCHECK(xmlSetAttrInt(netNode, "dev", n));
+    NCCLCHECK(xmlSetAttrInt(netNode, devAttr, n));
     NCCLCHECK(xmlInitAttrInt(netNode, "latency", props.latency));
     NCCLCHECK(xmlInitAttrInt(netNode, "speed", props.speed));
     NCCLCHECK(xmlInitAttrInt(netNode, "port", props.port));

@@ -349,11 +349,6 @@ struct gdaki_context {
   int nContexts;
 };
 
-template <typename T>
-static inline T gdaki_round_up(T x, T y) {
-  return ((x + y - 1) / y) * y;
-}
-
 static void gdakiFillExchInfo(struct gdaki_exch_info *exch_info, struct gdaki_context *gdaki_ctx,
                               struct doca_gpu_verbs_qp_hl *gqp) {
   exch_info->lid = gdaki_ctx->port_attr.lid;

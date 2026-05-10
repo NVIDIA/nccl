@@ -30,7 +30,8 @@ if not cuda_path.exists() or not cuda_path.is_dir():
 CUDA_INC = str(cuda_path / "include")
 
 ext_modules = [
-    "nccl.bindings.nccl"
+    "nccl.bindings.nccl",
+    "nccl.ep.bindings.nccl_ep",
 ]
 
 def calculate_modules(module: str):

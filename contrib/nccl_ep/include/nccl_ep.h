@@ -270,7 +270,7 @@ typedef struct {
 typedef struct ncclEpHandle* ncclEpHandle_t;
 typedef struct {
     unsigned int size;  // = sizeof(this struct); first field, never moves
-    bool use_fp8;       // enable FP8 for dispatch (default: false)
+    unsigned int use_fp8;  // enable FP8 for dispatch (0 = false, non-zero = true; default: 0)
     // HT expert-major only: per-expert zone alignment in tokens (pow2; 0/1 = no padding).
     // Padded slots are zero-filled by dispatch.
     size_t dispatch_output_per_expert_alignment;
@@ -333,7 +333,7 @@ ncclResult_t ncclEpHandleMemSize(
     ncclEpGroup_t               ep_group,
     const ncclEpHandleConfig_t* config,
     size_t*                     size_out,
-    int                         num_topk = -1
+    int                         num_topk
 );
 
 // Allocate handle buffers without performing any collective.
@@ -347,7 +347,7 @@ ncclResult_t ncclEpHandleMemSize(
 //   handle     - [OUT] Newly created handle
 //   ep_group   - [IN]  A valid EP group
 //   config     - [IN]  Handle configuration (see ncclEpHandleConfig_t). NULL = defaults.
-//   num_topk   - [IN]  Required for LL (> 0); optional for HT (default: -1)
+//   num_topk   - [IN]  Required for LL (> 0); pass -1 for HT
 //   handle_mem - [IN]  NULL = internal alloc; non-NULL = caller-owned device buffer
 //
 // Returns: ncclResult_t error code
@@ -356,8 +356,8 @@ ncclResult_t ncclEpInitHandle(
     ncclEpHandle_t*             handle,
     ncclEpGroup_t               ep_group,
     const ncclEpHandleConfig_t* config,
-    int                         num_topk   = -1,
-    ncclNDTensor_t              handle_mem = nullptr
+    int                         num_topk,
+    ncclNDTensor_t              handle_mem
 );
 
 // Per-step collective: prepare the handle for the given top-k routing decisions.
@@ -473,8 +473,14 @@ ncclResult_t ncclEpCombine(
     cudaStream_t stream
 );
 
-// Opaque config struct (reserved, must be NULL)
-typedef struct ncclEpCompleteConfig ncclEpCompleteConfig_t;
+// Reserved config struct; callers must pass NULL today. The single
+// placeholder member exists so the struct has a complete type (cybind /
+// pycparser require this), and so the typedef stays struct-form (rather
+// than pointer-form) — that way callers can spell pointer-to-const as
+// `const ncclEpCompleteConfig_t*` naturally.
+typedef struct ncclEpCompleteConfig {
+    char _reserved;
+} ncclEpCompleteConfig_t;
 
 // Continues a staged EP operation to completion.
 //   * This should be called after a prior `ncclEpDispatch()` or `ncclEpCombine()` call with `send_only` flag set.

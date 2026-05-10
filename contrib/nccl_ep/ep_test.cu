@@ -471,7 +471,7 @@ int main(int argc, char* argv[])
   ncclEpHandle_t ep_handle;
   if (use_cuda_graph) {
     printf("Rank %d: Testing ncclEpInitHandle\n", myRank);
-    NCCLCHECK(ncclEpInitHandle(&ep_handle, ep_group, nullptr, static_cast<int>(top_k)));
+    NCCLCHECK(ncclEpInitHandle(&ep_handle, ep_group, nullptr, static_cast<int>(top_k), /*handle_mem=*/nullptr));
   } else {
     printf("Rank %d: Testing ncclEpCreateHandle\n", myRank);
     NCCLCHECK(ncclEpCreateHandle(&ep_handle, ep_group, topk_idx,

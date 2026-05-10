@@ -36,6 +36,9 @@ dependencies = [
     "numpy",
     "cuda.core~=1.0",
     "cuda-pathfinder>=1.5.4,<2.0.0",
+    # typing.dataclass_transform is 3.11+; backport is needed on 3.10 for the
+    # @binding_dataclass decorator in nccl.ep.
+    'typing_extensions; python_version < "3.11"',
 ]
 
 [project.optional-dependencies]

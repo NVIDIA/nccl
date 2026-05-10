@@ -1995,7 +1995,8 @@ ncclResult_t ncclEpCreateHandle(
     assert(topk_idx != nullptr);
     assert(out_handle != nullptr);
     NCCL_CHECK_RESULT(ncclEpInitHandle(out_handle, ep_group, config,
-                                       static_cast<int>(topk_idx->sizes[1])));
+                                       static_cast<int>(topk_idx->sizes[1]),
+                                       /*handle_mem=*/nullptr));
     return ncclEpUpdateHandle(*out_handle, topk_idx, layout_info, stream);
 }
 
@@ -2964,7 +2965,7 @@ ncclResult_t ncclEpCombine(
 }
 
 ncclResult_t ncclEpComplete(
-        ncclEpHandle_t handle,
+    ncclEpHandle_t handle,
     const ncclEpCompleteConfig_t* config,
     cudaStream_t stream
 ) {

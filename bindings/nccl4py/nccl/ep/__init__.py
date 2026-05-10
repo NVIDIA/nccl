@@ -3,20 +3,63 @@
 #
 # See LICENSE.txt for more license information
 
-"""NCCL4Py EP API: Low-level access to NCCL EP operations.
+"""NCCL EP: Pythonic API for the libnccl_ep.so extension.
 
-This module provides the public Python API for NCCL EP ctypes bindings.
+The Cython bindings under :mod:`nccl.ep.bindings` are auto-generated from
+``contrib/nccl_ep/include/nccl_ep.h`` by cybind. This package provides
+hand-written Pythonic wrappers (:class:`EpGroup`, :class:`EpHandle`,
+:class:`NDTensor`) on top of those bindings.
 """
 
 import re
 
-# Runtime library discovery
 from cuda.pathfinder import DynamicLibNotFoundError, load_nvidia_dynamic_lib
 
+from nccl.ep.allocator import EpAllocConfig, ncclEpAllocFn_t, ncclEpFreeFn_t
+from nccl.ep.enums import NcclEpAlgorithm, NcclEpLayout
+from nccl.ep.group import EpGroup, EpGroupConfig
+from nccl.ep.handle import (
+    EpCombineConfig,
+    EpCombineInputs,
+    EpCombineOutputs,
+    EpDispatchConfig,
+    EpDispatchInputs,
+    EpDispatchOutputs,
+    EpHandle,
+    EpHandleConfig,
+    EpLayoutInfo,
+)
+from nccl.ep.tensor import NDTensor
+from nccl.ep.interop.torch import get_nccl_comm_from_group
+
+
+__all__ = [
+    "EpAllocConfig",
+    "EpCombineConfig",
+    "EpCombineInputs",
+    "EpCombineOutputs",
+    "EpDispatchConfig",
+    "EpDispatchInputs",
+    "EpDispatchOutputs",
+    "EpGroup",
+    "EpGroupConfig",
+    "EpHandle",
+    "EpHandleConfig",
+    "EpLayoutInfo",
+    "NDTensor",
+    "NcclEpAlgorithm",
+    "NcclEpLayout",
+    "get_nccl_comm_from_group",
+    "ncclEpAllocFn_t",
+    "ncclEpFreeFn_t",
+]
+
+
+# Runtime CUDA-major gate. libnccl_ep.so is CUDA-13-only; libnccl_ep loads
+# lazily on first call, but we want to fail import-time rather than
+# crash-time when the loaded libnccl.so is the wrong CUDA major.
 _SUPPORTED_CUDA_MAJOR = "13"
-# Match NCCL's own version banner (e.g. "NCCL version 2.30.4 compiled with
-# CUDA 13.0"). Embedded by src/init.cc and survives `strip`, unlike nvcc's
-# "Cuda compilation tools, release N.N" identification string.
+# NCCL's version banner survives `strip`, unlike nvcc's "release N.N" string.
 _NCCL_CUDA_VERSION_RE = re.compile(
     rb"NCCL version \S+ compiled with CUDA ([0-9]+)\."
 )
@@ -77,75 +120,3 @@ def _check_cuda_major() -> None:
 
 
 _check_cuda_major()
-
-from .nccl_wrapper import (
-    HAVE_TORCH,
-    NCCLLibrary,
-    _load_nccl_ep_library,
-    get_nccl_comm_from_group,
-    ncclEpAlgorithm_t,
-    ncclEpCombineConfig_t,
-    ncclEpCombineInputs_t,
-    ncclEpCombineOutputs_t,
-    ncclEpDispatchConfig_t,
-    ncclEpDispatchInputs_t,
-    ncclEpDispatchOutputs_t,
-    ncclEpGroupConfig_t,
-    ncclEpHandleConfig_t,
-    ncclEpLayout_t,
-    ncclEpLayoutInfo_t,
-    ncclNDTensor_t,
-    ncclEpAllocFn_t,
-    ncclEpFreeFn_t,
-    CUDA_SUCCESS,
-    CUDA_ERROR_MEMORY_ALLOCATION,
-)
-
-try:
-    _load_nccl_ep_library()
-except Exception as e:
-    raise ImportError(
-        "nccl.ep failed to load libnccl_ep.so. The library is searched (in "
-        "order) under the nccl4py package's nccl/ep/lib/ directory, "
-        "$CONDA_PREFIX/lib[64], the dynamic linker's default paths "
-        "(LD_LIBRARY_PATH / ld.so.cache / /lib / /usr/lib), and "
-        "$CUDA_HOME/lib[64]. Install nccl4py with libnccl_ep.so packaged in, "
-        "or place libnccl_ep.so on one of the searched paths."
-    ) from e
-
-NCCL_EP_ALGO_LOW_LATENCY = ncclEpAlgorithm_t.NCCL_EP_ALGO_LOW_LATENCY
-NCCL_EP_ALGO_HIGH_THROUGHPUT = ncclEpAlgorithm_t.NCCL_EP_ALGO_HIGH_THROUGHPUT
-
-# The following __all__ exports define the stable, public API surface of NCCL4Py EP.
-# Semantic versioning guarantees apply only to the symbols explicitly listed below.
-# All other modules, functions, and symbols are internal implementation details and are
-# subject to change without notice.
-__all__ = [
-    # Availability
-    "HAVE_TORCH",
-    # Library wrapper
-    "NCCLLibrary",
-    "get_nccl_comm_from_group",
-    # Types and enums
-    "ncclEpAlgorithm_t",
-    "ncclEpCombineConfig_t",
-    "ncclEpCombineInputs_t",
-    "ncclEpCombineOutputs_t",
-    "ncclEpDispatchConfig_t",
-    "ncclEpDispatchInputs_t",
-    "ncclEpDispatchOutputs_t",
-    "ncclEpGroupConfig_t",
-    "ncclEpHandleConfig_t",
-    "ncclEpLayout_t",
-    "ncclEpLayoutInfo_t",
-    "ncclNDTensor_t",
-    # Allocator callbacks
-    "ncclEpAllocFn_t",
-    "ncclEpFreeFn_t",
-    # CUDA status constants
-    "CUDA_SUCCESS",
-    "CUDA_ERROR_MEMORY_ALLOCATION",
-    # Algorithm constants
-    "NCCL_EP_ALGO_LOW_LATENCY",
-    "NCCL_EP_ALGO_HIGH_THROUGHPUT",
-]

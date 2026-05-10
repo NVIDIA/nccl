@@ -1,0 +1,230 @@
+# Copyright (c) 2024-2025, NVIDIA CORPORATION & AFFILIATES. ALL RIGHTS RESERVED.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# This code was automatically generated with version 1.0.0. Do not modify it directly.
+
+
+from libc.stdint cimport uint64_t
+
+
+###############################################################################
+# Types (structs, enums, ...)
+###############################################################################
+
+# enums
+ctypedef enum ncclResult_t "ncclResult_t":
+    ncclSuccess "ncclSuccess" = 0
+    ncclUnhandledCudaError "ncclUnhandledCudaError" = 1
+    ncclSystemError "ncclSystemError" = 2
+    ncclInternalError "ncclInternalError" = 3
+    ncclInvalidArgument "ncclInvalidArgument" = 4
+    ncclInvalidUsage "ncclInvalidUsage" = 5
+    ncclRemoteError "ncclRemoteError" = 6
+    ncclInProgress "ncclInProgress" = 7
+    ncclTimeout "ncclTimeout" = 8
+    ncclNumResults "ncclNumResults" = 9
+    _NCCLRESULT_T_INTERNAL_LOADING_ERROR "_NCCLRESULT_T_INTERNAL_LOADING_ERROR" = -42
+
+ctypedef enum ncclCommMemStat_t "ncclCommMemStat_t":
+    ncclStatGpuMemSuspend "ncclStatGpuMemSuspend" = 0
+    ncclStatGpuMemSuspended "ncclStatGpuMemSuspended" = 1
+    ncclStatGpuMemPersist "ncclStatGpuMemPersist" = 2
+    ncclStatGpuMemTotal "ncclStatGpuMemTotal" = 3
+
+ctypedef enum ncclRedOp_dummy_t "ncclRedOp_dummy_t":
+    ncclNumOps_dummy "ncclNumOps_dummy" = 5
+
+ctypedef enum ncclRedOp_t "ncclRedOp_t":
+    ncclSum "ncclSum" = 0
+    ncclProd "ncclProd" = 1
+    ncclMax "ncclMax" = 2
+    ncclMin "ncclMin" = 3
+    ncclAvg "ncclAvg" = 4
+    ncclNumOps "ncclNumOps" = 5
+    ncclMaxRedOp "ncclMaxRedOp" = (0x7fffffff >> (32 - (8 * sizeof(ncclRedOp_dummy_t))))
+
+ctypedef enum ncclDataType_t "ncclDataType_t":
+    ncclInt8 "ncclInt8" = 0
+    ncclChar "ncclChar" = 0
+    ncclUint8 "ncclUint8" = 1
+    ncclInt32 "ncclInt32" = 2
+    ncclInt "ncclInt" = 2
+    ncclUint32 "ncclUint32" = 3
+    ncclInt64 "ncclInt64" = 4
+    ncclUint64 "ncclUint64" = 5
+    ncclFloat16 "ncclFloat16" = 6
+    ncclHalf "ncclHalf" = 6
+    ncclFloat32 "ncclFloat32" = 7
+    ncclFloat "ncclFloat" = 7
+    ncclFloat64 "ncclFloat64" = 8
+    ncclDouble "ncclDouble" = 8
+    ncclBfloat16 "ncclBfloat16" = 9
+    ncclFloat8e4m3 "ncclFloat8e4m3" = 10
+    ncclFloat8e5m2 "ncclFloat8e5m2" = 11
+    ncclNumTypes "ncclNumTypes" = 12
+
+ctypedef enum ncclScalarResidence_t "ncclScalarResidence_t":
+    ncclScalarDevice "ncclScalarDevice" = 0
+    ncclScalarHostImmediate "ncclScalarHostImmediate" = 1
+
+ctypedef enum ncclEpAlgorithm_t "ncclEpAlgorithm_t":
+    NCCL_EP_ALGO_LOW_LATENCY "NCCL_EP_ALGO_LOW_LATENCY" = 0
+    NCCL_EP_ALGO_HIGH_THROUGHPUT "NCCL_EP_ALGO_HIGH_THROUGHPUT" = 1
+
+ctypedef enum ncclEpLayout_t "ncclEpLayout_t":
+    NCCL_EP_LAYOUT_AUTO "NCCL_EP_LAYOUT_AUTO" = 0
+    NCCL_EP_LAYOUT_EXPERT_MAJOR "NCCL_EP_LAYOUT_EXPERT_MAJOR"
+    NCCL_EP_LAYOUT_RANK_MAJOR "NCCL_EP_LAYOUT_RANK_MAJOR"
+    NCCL_EP_LAYOUT_FLAT "NCCL_EP_LAYOUT_FLAT"
+
+
+# types
+cdef extern from *:
+    """
+    #include <driver_types.h>
+    #include <library_types.h>
+    #include <cuComplex.h>
+    """
+    ctypedef void* cudaStream_t 'cudaStream_t'
+    ctypedef int cudaError_t 'cudaError_t'
+
+
+ctypedef void* ncclComm_t 'ncclComm_t'
+ctypedef void* ncclWindow_t 'ncclWindow_t'
+ctypedef void* ncclParamHandle_t 'ncclParamHandle_t'
+ctypedef void* ncclNDTensor_t 'ncclNDTensor_t'
+ctypedef void* ncclEpGroup_t 'ncclEpGroup_t'
+ctypedef void* ncclEpHandle_t 'ncclEpHandle_t'
+ctypedef struct ncclConfig_t 'ncclConfig_t':
+    size_t size
+    unsigned int magic
+    unsigned int version
+    int blocking
+    int cgaClusterSize
+    int minCTAs
+    int maxCTAs
+    char* netName
+    int splitShare
+    int trafficClass
+    char* commName
+    int collnetEnable
+    int CTAPolicy
+    int shrinkShare
+    int nvlsCTAs
+    int nChannelsPerNetPeer
+    int nvlinkCentricSched
+    int graphUsageMode
+    int numRmaCtx
+    int maxP2pPeers
+    int graphStreamOrdering
+
+ctypedef struct ncclSimInfo_t 'ncclSimInfo_t':
+    size_t size
+    unsigned int magic
+    unsigned int version
+    float estimatedTime
+
+ctypedef struct ncclWaitSignalDesc_t 'ncclWaitSignalDesc_t':
+    int opCnt
+    int peer
+    int sigIdx
+    int ctx
+
+ctypedef cudaError_t (*ncclEpAllocFn_t 'ncclEpAllocFn_t')(
+    void** ptr,
+    size_t size,
+    void* context
+)
+ctypedef cudaError_t (*ncclEpFreeFn_t 'ncclEpFreeFn_t')(
+    void* ptr,
+    void* context
+)
+ctypedef struct ncclEpHandleConfig_t 'ncclEpHandleConfig_t':
+    unsigned int size
+    unsigned int use_fp8
+    size_t dispatch_output_per_expert_alignment
+
+ctypedef struct ncclEpDispatchConfig_t 'ncclEpDispatchConfig_t':
+    unsigned int size
+    unsigned int send_only
+    unsigned int round_scales
+
+ctypedef struct ncclEpCombineConfig_t 'ncclEpCombineConfig_t':
+    unsigned int size
+    unsigned int send_only
+
+ctypedef struct ncclEpCompleteConfig_t 'ncclEpCompleteConfig_t':
+    char _reserved
+
+ctypedef struct ncclEpLayoutInfo_t 'ncclEpLayoutInfo_t':
+    unsigned int size
+    ncclNDTensor_t expert_counters
+    ncclNDTensor_t src_rank_counters
+    ncclNDTensor_t expert_offsets
+    ncclNDTensor_t recv_total_counter
+
+ctypedef struct ncclEpDispatchInputs_t 'ncclEpDispatchInputs_t':
+    unsigned int size
+    ncclNDTensor_t tokens
+    ncclNDTensor_t topk_weights
+    ncclNDTensor_t scales
+
+ctypedef struct ncclEpDispatchOutputs_t 'ncclEpDispatchOutputs_t':
+    unsigned int size
+    ncclNDTensor_t tokens
+    ncclNDTensor_t topk_weights
+    ncclNDTensor_t scales
+    ncclNDTensor_t topk_idx
+
+ctypedef struct ncclEpCombineInputs_t 'ncclEpCombineInputs_t':
+    unsigned int size
+    ncclNDTensor_t tokens
+    ncclNDTensor_t topk_weights
+
+ctypedef struct ncclEpCombineOutputs_t 'ncclEpCombineOutputs_t':
+    unsigned int size
+    ncclNDTensor_t tokens
+    ncclNDTensor_t topk_weights
+
+ctypedef struct ncclEpAllocConfig_t 'ncclEpAllocConfig_t':
+    ncclEpAllocFn_t alloc_fn
+    ncclEpFreeFn_t free_fn
+    void* context
+
+ctypedef struct ncclEpGroupConfig_t 'ncclEpGroupConfig_t':
+    unsigned int size
+    unsigned int version
+    ncclEpAlgorithm_t algorithm
+    ncclEpLayout_t layout
+    unsigned int num_experts
+    unsigned int max_send_tokens_per_rank
+    unsigned int token_size_bytes
+    unsigned long int rdma_buffer_size
+    unsigned int num_qp_per_rank
+    unsigned int num_channels
+    unsigned int max_recv_token_slots_per_rank
+    unsigned int max_num_sms
+    ncclEpAllocConfig_t alloc
+
+
+
+###############################################################################
+# Functions
+###############################################################################
+
+cdef ncclResult_t ncclEpCreateGroup(ncclEpGroup_t* ep_group, ncclComm_t comm, const ncclEpGroupConfig_t* config) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
+cdef ncclResult_t ncclEpGroupDestroy(ncclEpGroup_t ep_group) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
+cdef ncclResult_t ncclEpTensorCreate(ncclNDTensor_t* tensor, unsigned int ndim, ncclDataType_t datatype, void* data, const size_t* sizes) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
+cdef ncclResult_t ncclEpTensorCreateFromWindow(ncclNDTensor_t* tensor, unsigned int ndim, ncclDataType_t datatype, ncclWindow_t win, uint64_t win_offset, const size_t* sizes) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
+cdef ncclResult_t ncclEpTensorDestroy(ncclNDTensor_t tensor) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
+cdef ncclResult_t ncclEpCreateHandle(ncclEpHandle_t* handle, ncclEpGroup_t ep_group, ncclNDTensor_t topk_idx, const ncclEpLayoutInfo_t* layout_info, const ncclEpHandleConfig_t* config, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
+cdef ncclResult_t ncclEpHandleDestroy(ncclEpHandle_t handle) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
+cdef ncclResult_t ncclEpHandleMemSize(ncclEpGroup_t ep_group, const ncclEpHandleConfig_t* config, size_t* size_out, int num_topk) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
+cdef ncclResult_t ncclEpInitHandle(ncclEpHandle_t* handle, ncclEpGroup_t ep_group, const ncclEpHandleConfig_t* config, int num_topk, ncclNDTensor_t handle_mem) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
+cdef ncclResult_t ncclEpUpdateHandle(ncclEpHandle_t handle, ncclNDTensor_t topk_idx, const ncclEpLayoutInfo_t* layout_info, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
+cdef ncclResult_t ncclEpDispatch(ncclEpHandle_t handle, ncclNDTensor_t topk_idx, const ncclEpDispatchInputs_t* inputs, const ncclEpDispatchOutputs_t* outputs, const ncclEpLayoutInfo_t* layout_info, const ncclEpDispatchConfig_t* config, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
+cdef ncclResult_t ncclEpCombine(ncclEpHandle_t handle, const ncclEpCombineInputs_t* inputs, const ncclEpCombineOutputs_t* outputs, const ncclEpCombineConfig_t* config, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
+cdef ncclResult_t ncclEpComplete(ncclEpHandle_t handle, const ncclEpCompleteConfig_t* config, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
+cdef ncclResult_t ncclEpTensorGetData(ncclNDTensor_t tensor, void** data) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
+cdef ncclResult_t ncclEpTensorGetSizes(ncclNDTensor_t tensor, const size_t** sizes, unsigned int* ndim) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil

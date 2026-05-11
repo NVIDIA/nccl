@@ -1629,6 +1629,7 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
         netInfo.net = 0;
         netInfo.coll = 0;
         netInfo.gin = 1;
+        netInfo.rma = 0;
         netInfo.netPluginIndex = comm->ginPluginIndex;
         netInfo.dmaBufSupport = comm->dmaBufSupport;
         netInfo.getDevCount = ncclGinGetDevCount;
@@ -1657,6 +1658,7 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
         netInfo.net = 0;
         netInfo.coll = 1;
         netInfo.gin = 0;
+        netInfo.rma = 0;
         netInfo.netPluginIndex = comm->netPluginIndex;
         netInfo.maxDevsPerNic = (comm->ncclNetVer >= 12) ? NCCL_NET_MAX_DEVS_PER_NIC : NCCL_NET_MAX_DEVS_PER_NIC_V11;
         netInfo.dmaBufSupport = comm->dmaBufSupport;
@@ -1674,6 +1676,7 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
       netInfo.net = 1;
       netInfo.coll = 0;
       netInfo.gin = 0;
+      netInfo.rma = 0;
       netInfo.netPluginIndex = comm->netPluginIndex;
       netInfo.maxDevsPerNic = (comm->ncclNetVer >= 12) ? NCCL_NET_MAX_DEVS_PER_NIC : NCCL_NET_MAX_DEVS_PER_NIC_V11;
       netInfo.dmaBufSupport = comm->dmaBufSupport;

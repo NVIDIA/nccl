@@ -90,6 +90,29 @@ static ncclResult_t ncclIbGetRealPort(char* pciPath, int* realPort, int devIdx) 
   return ncclSuccess;
 }
 
+// NCCL_IB_PLANE_MAX_INDEX must be < 15 as we use int16_t for plane IDs
+// Typically 12 user-defined planes + 1 plane for undefined plane IDs
+#define NCCL_IB_PLANE_MAX_INDEX 14
+#define NCCL_IB_PLANE_VIRT_BIT (0x1 << NCCL_IB_PLANE_MAX_INDEX)
+
+static ncclResult_t ncclIbGetPlaneIndex(int devPlane, int16_t* count, int16_t* planes, int16_t* idx) {
+  int16_t p = 0;
+  while (p < *count && planes[p] != devPlane) p++;
+  if (p == *count) {
+    if (p == (NCCL_IB_PLANE_MAX_INDEX - 1)) {
+      WARN("NCCL cannot use more than %d plane IDs.", NCCL_IB_PLANE_MAX_INDEX);
+      return ncclInvalidUsage;
+    }
+    if (devPlane != NCCL_NET_ID_UNDEF && (devPlane & NCCL_IB_PLANE_VIRT_BIT)) {
+      WARN("NCCL cannot use a plane ID that is %d.", devPlane);
+      return ncclInvalidUsage;
+    }
+    planes[(*count)++] = devPlane;
+  }
+  *idx = p;
+  return ncclSuccess;
+}
+
 static int ibvWidths[] = { 1, 4, 8, 12, 2 };
 static int ibvSpeeds[] = {
   2500,  /* SDR */
@@ -191,18 +214,19 @@ ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
   ncclIbMergedDev* mDev = ncclIbMergedDevs + ncclNMergedIbDevs;
   mDev->vProps.ndevs = 0;
   mDev->speed = 0;
-  mDev->railId = NCCL_NET_ID_UNDEF;
-  mDev->planeId = NCCL_NET_ID_UNDEF;
+  mDev->railId = ncclIbDevs[props->devs[0]].railId;
+  // set the virtual bit on to avoid collision with physical planes;
+  mDev->planeId = NCCL_IB_PLANE_VIRT_BIT;
 
   for (int i = 0; i < props->ndevs; i++) {
     ncclIbDev* dev = ncclIbDevs + props->devs[i];
     if (mDev->vProps.ndevs == NCCL_IB_MAX_DEVS_PER_NIC) return ncclInvalidUsage;
     mDev->vProps.devs[mDev->vProps.ndevs++] = props->devs[i];
     mDev->speed += dev->speed;
-    if (i == 0) {
-      mDev->railId = dev->railId;
-      mDev->planeId = dev->planeId;
-    }
+    // rail ID of a fused device with different rails is undefined.
+    if (dev->railId == NCCL_NET_ID_UNDEF || mDev->railId != dev->railId) mDev->railId = NCCL_NET_ID_UNDEF;
+    mDev->planeId |= (0x1<<dev->planeIdx);
+
     // Each successive time, copy the name '+' new name
     if (mDev->vProps.ndevs > 1) {
       snprintf(mDev->devName + strlen(mDev->devName), sizeof(mDev->devName) - strlen(mDev->devName), "+%s", dev->devName);
@@ -228,7 +252,7 @@ ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
   }
 
   *d = ncclNMergedIbDevs++;
-  INFO(NCCL_NET, "NET/IB : Made virtual device [%d] name=%s speed=%d ndevs=%d", *d, mDev->devName, mDev->speed, mDev->vProps.ndevs);
+  INFO(NCCL_NET, "NET/IB : Made virtual device [%d] name=%s speed=%d ndevs=%d rail=%d plane=%d", *d, mDev->devName, mDev->speed, mDev->vProps.ndevs, mDev->railId, mDev->planeId);
   return ncclSuccess;
 }
 
@@ -429,10 +453,12 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
     }
     // sort devices to ensure a consistent order across nodes
     if (ncclParamIbDevicePciOrder()) qsort(ncclIbDevs, ncclNIbDevs, sizeof(struct ncclIbDev), ncclIbCompareDevs);
-    // Once sorted, get the realPort ID and create the virtual devices.
-    // Doing it after sorting ensures that devices will have consistent realPort ids across nodes.
+    // Once sorted, get the realPort ID, the plane index, and create the virtual devices.
+    // Doing it after sorting ensures that devices will have consistent realPort IDs and plane indexes accross ranks.
     char line[2048] = "";
+    int16_t uniquePlaneCount = 1, uniquePlaneIds[NCCL_IB_PLANE_MAX_INDEX] = {NCCL_NET_ID_UNDEF};
     for (int d = 0; d < ncclNIbDevs; d++) {
+      NCCLCHECKGOTO(ncclIbGetPlaneIndex(ncclIbDevs[d].planeId,&uniquePlaneCount,uniquePlaneIds,&ncclIbDevs[d].planeIdx),ret, fail);
       NCCLCHECKGOTO(ncclIbGetRealPort(ncclIbDevs[d].pciPath, &ncclIbDevs[d].realPort, d), ret, fail);
       snprintf(line + strlen(line), sizeof(line) - strlen(line), " [%d]%s:%d", d, ncclIbDevs[d].devName, ncclIbDevs[d].portNum);
       if (ncclIbDevs[d].railId != NCCL_NET_ID_UNDEF)

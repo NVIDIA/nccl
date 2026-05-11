@@ -566,7 +566,7 @@ static bool ncclTopoSearchCheckNet(struct ncclTopoSystem* system, struct ncclTop
   if (graph->pattern == NCCL_TOPO_PATTERN_RING && graph->crossNic == 2) {
     if (graph->nChannels & 1 && net->id != graph->inter[(graph->nChannels - 1) * 2]) return false;
   } else if (graph->crossNic == 0) {
-    if (net->net.railId != NCCL_NET_ID_UNDEF && startNet->net.railId != NCCL_NET_ID_UNDEF) {
+    if (net->net.railId != NCCL_TOPO_UNDEF && startNet->net.railId != NCCL_TOPO_UNDEF) {
       if (net->net.railId != startNet->net.railId) return false;
     } else if (ncclParamMnnvlRailPerHost() && NCCL_TOPO_ID_SYSTEM_ID(net->id) != NCCL_TOPO_ID_SYSTEM_ID(startNet->id)) {
       // Different hosts in an MNNVL system: rail are per host and identified with the PCI id.

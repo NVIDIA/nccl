@@ -412,8 +412,8 @@ ncclResult_t ncclTopoAddNet(struct ncclXmlNode* xmlNet, struct ncclTopoSystem* s
   NCCLCHECKNOWARN(xmlGetAttrIntDefault(xmlNet, "maxconn", &net->net.maxChannels, MAXCHANNELS), NCCL_GRAPH);
   NCCLCHECKNOWARN(xmlGetAttrIntDefault(xmlNet, "coll", &net->net.collSupport, 0), NCCL_GRAPH);
   int railId, planeId;
-  NCCLCHECKNOWARN(xmlGetAttrIntDefault(xmlNet, "rail", &railId, NCCL_NET_ID_UNDEF), NCCL_GRAPH);
-  NCCLCHECKNOWARN(xmlGetAttrIntDefault(xmlNet, "plane", &planeId, NCCL_NET_ID_UNDEF), NCCL_GRAPH);
+  NCCLCHECKNOWARN(xmlGetAttrIntDefault(xmlNet, "rail", &railId, NCCL_TOPO_UNDEF), NCCL_GRAPH);
+  NCCLCHECKNOWARN(xmlGetAttrIntDefault(xmlNet, "plane", &planeId, NCCL_TOPO_UNDEF), NCCL_GRAPH);
   net->net.railId = railId;
   net->net.planeId = planeId;
 
@@ -1427,8 +1427,6 @@ ncclResult_t ncclTopoMakeVNics(struct ncclXml* xml, struct ncclTopoNetInfo* netI
   NCCLCHECK(ncclCalloc(&placedDevs, physicalDevs));
   NCCLCHECK(ncclCalloc(&props, physicalDevs));
   for (int i = 0; i < physicalDevs; i++) {
-    props[i].railId = NCCL_NET_ID_UNDEF;
-    props[i].planeId = NCCL_NET_ID_UNDEF;
     NCCLCHECKGOTO(netInfo->getProperties(i, props + i), res, out);
     struct ncclXmlNode* physNetNode;
     NCCLCHECKGOTO(xmlFindTagKv(xml, "net", &physNetNode, "name", props[i].name), res, out);
@@ -1448,9 +1446,7 @@ out:
 
 static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex, int endIndex, struct ncclTopoNetInfo* netInfo, int virtualNics) {
   for (int n = startIndex; n < endIndex; n++) {
-    ncclNetProperties_t props = {0};
-    props.railId = NCCL_NET_ID_UNDEF;
-    props.planeId = NCCL_NET_ID_UNDEF;
+    ncclNetProperties_t props;
     NCCLCHECK(netInfo->getProperties(n, &props));
     struct ncclXmlNode* netNode = NULL;
     struct ncclXmlNode* parent = NULL;

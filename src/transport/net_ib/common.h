@@ -100,6 +100,7 @@ struct alignas(64) ncclIbDev {
   int dmaBufSupported;
   int16_t railId;
   int16_t planeId;
+  int16_t planeIdx;
   enum ncclIbProvider ibProvider;
   union {
     struct {

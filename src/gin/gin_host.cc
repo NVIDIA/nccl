@@ -17,6 +17,7 @@
 #include <cmath>
 
 NCCL_PARAM(GinEnable, "GIN_ENABLE", 1);
+NCCL_PARAM(DevApiJit, "DEV_API_JIT", 0);
 
 // Backend version compatibility. Index: backend version. Value: min compatible NCCL version
 const int proxyBackendMinVersions[] = { 0, NCCL_VERSION(2,30,3), NCCL_VERSION(2,30,5) };
@@ -250,11 +251,14 @@ ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequir
   }
 
   int backendVersion = 0;
-  for (int i = 0; i < nVersions; i++) {
-    if (reqs->version >= backendVersionArray[i]) {
-      backendVersion = i;
-    } else {
-      break;
+  if (ncclParamDevApiJit() == 1) {
+    // JIT: device code version is the latest version.
+    backendVersion = nVersions - 1;
+  } else {
+    // Non-JIT: device code version matches reqs->version.
+    for (int i = 0; i < nVersions; i++) {
+      if (reqs->version >= backendVersionArray[i]) backendVersion = i;
+      else break;
     }
   }
 

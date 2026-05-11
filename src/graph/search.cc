@@ -560,11 +560,15 @@ NCCL_PARAM(MnnvlRailPerHost, "MNNVL_RAIL_PER_HOST", 0);
 
 static bool ncclTopoSearchCheckNet(struct ncclTopoSystem* system, struct ncclTopoGraph* graph, struct ncclTopoNode* startNet, int n, int step) {
   struct ncclTopoNode* net = system->nodes[NET].nodes+n;
+  // always forbid connections between different networking planes (if both planes are defined).
+  if (net->net.planeId != NCCL_TOPO_UNDEF && startNet->net.planeId != NCCL_TOPO_UNDEF && net->net.planeId != startNet->net.planeId) return false;
   if (graph->pattern == NCCL_TOPO_PATTERN_TREE && net->id != startNet->id) return false; // Trees are symmetric
   if (graph->pattern == NCCL_TOPO_PATTERN_RING && graph->crossNic == 2) {
     if (graph->nChannels & 1 && net->id != graph->inter[(graph->nChannels - 1) * 2]) return false;
   } else if (graph->crossNic == 0) {
-    if (ncclParamMnnvlRailPerHost() && NCCL_TOPO_ID_SYSTEM_ID(net->id) != NCCL_TOPO_ID_SYSTEM_ID(startNet->id)) {
+    if (net->net.railId != NCCL_NET_ID_UNDEF && startNet->net.railId != NCCL_NET_ID_UNDEF) {
+      if (net->net.railId != startNet->net.railId) return false;
+    } else if (ncclParamMnnvlRailPerHost() && NCCL_TOPO_ID_SYSTEM_ID(net->id) != NCCL_TOPO_ID_SYSTEM_ID(startNet->id)) {
       // Different hosts in an MNNVL system: rail are per host and identified with the PCI id.
       if (net->net.pciId != startNet->net.pciId || net->net.port != startNet->net.port) return false;
     } else {

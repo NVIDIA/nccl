@@ -64,11 +64,10 @@ ncclEpComplete(handle, config, stream);  // LL mode only
 
 ### Python API
 
-Install nccl4py, which includes the NCCL EP Python bindings as `nccl.ep`.
+Install nccl4py, which includes the NCCL EP Python bindings as `nccl.ep`. Only CUDA 13 is supported as of now.
 
 ```bash
-$ pip install nccl4py[cu12] # for cuda 12
-$ pip install nccl4py[cu13] # for cuda 13
+$ pip install nccl4py[cu13]
 ```
 
 Import and use NCCL EP in a python application

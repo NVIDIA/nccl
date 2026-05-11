@@ -51,6 +51,4 @@ void ncclAddWorkBatchToPlan(struct ncclComm* comm, struct ncclKernelPlan* plan, 
 
 ncclResult_t ncclAddProxyOpIfNeeded(struct ncclComm* comm, struct ncclKernelPlan* plan, struct ncclProxyOp* op);
 
-ncclResult_t ncclAddProfilerProxyOpIfNeeded(struct ncclComm* comm, struct ncclKernelPlan* plan, struct ncclProxyOp* op);
-
 #endif // End include guard

@@ -377,6 +377,7 @@ static ncclResult_t commFree(ncclComm_t comm) {
   INFO(NCCL_DESTROY,"comm %p rank %d nranks %d cudaDev %d busId %lx - %s COMPLETE", comm, comm->rank, comm->nRanks, comm->cudaDev, comm->busId, abort ? "Abort" : "Destroy");
 
   commPoison(comm); // poison comm before free to avoid comm reuse.
+  NCCLCHECK(ncclProfilerThreadDestroy(comm));
   NCCLCHECK(ncclProfilerPluginFinalize(comm));
   if (sharedResRefCount == 0) {
     NCCLCHECK(ncclNetFinalize(comm));
@@ -1638,6 +1639,11 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   // Call devCommSetup before the last barrier, making sure we don't have a thread running in front and starting to
   // launch NCCL kernels before all cuda mem allocation is complete. That could cause a deadlock.
   NCCLCHECKGOTO(devCommSetup(comm), ret, fail);
+
+  // Start dedicated profiler thread after devCommSetup so that the host-pinned
+  // workStarted/workCompleted/workPhases buffers are allocated and the thread
+  // captures valid pointers. The thread is shared across comm-split communicators.
+  NCCLCHECKGOTO(ncclProfilerThreadCreate(comm, parent), ret, fail);
 
   timers[TIMER_INIT_CONNECT] = clockNano() -  timers[TIMER_INIT_CONNECT];
   /* Local intra-node barrier */

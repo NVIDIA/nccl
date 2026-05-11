@@ -8,7 +8,6 @@
 #include "param.h"
 #include "checks.h"
 #include "comm.h"
-#include "enqueue.h"
 #include "utils.h"
 #include "proxy.h"
 #include "profiler.h"
@@ -16,6 +15,9 @@
 #include "plugin.h"
 #include "compiler.h"
 #include <mutex>
+#include <thread>
+#include <condition_variable>
+#include <chrono>
 #include "os.h"
 
 extern ncclProfiler_t* getNcclProfiler_v1(void* lib);
@@ -24,6 +26,38 @@ extern ncclProfiler_t* getNcclProfiler_v3(void* lib);
 extern ncclProfiler_t* getNcclProfiler_v4(void* lib);
 extern ncclProfiler_t* getNcclProfiler_v5(void* lib);
 extern ncclProfiler_t* getNcclProfiler_v6(void* lib);
+
+struct ncclProfilerThread {
+  std::thread thread;
+  std::mutex mutex;
+  std::condition_variable cond;
+  // Signalled when iterationActive transitions to false; lets a concurrent
+  // ncclProfilerThreadDestroy wait for an in-flight progress pass to finish.
+  std::condition_variable condIterationInactive;
+  int stop;
+  int refCount;
+  volatile uint32_t* abortFlag;
+  // True while the thread is iterating `active` outside the mutex and may be
+  // calling into the plugin with op->profilerContext.
+  bool iterationActive;
+  // Posters append here under mutex; thread splices into `active` on wakeup.
+  struct ncclProfilerWorkOp* pending;
+  struct ncclProfilerWorkOp* pendingTail;
+  // Drained by the thread without holding the mutex. activeTail is maintained
+  // under mutex by every path that mutates `active` for O(1) appends.
+  struct ncclProfilerWorkOp* active;
+  struct ncclProfilerWorkOp* activeTail;
+  struct ncclMemoryStack opStack;
+  struct ncclMemoryPool opPool;
+};
+
+enum ncclProfilerThreadAction {
+  NCCL_PROFILER_THREAD_PROGRESS,
+  NCCL_PROFILER_THREAD_STOP,
+  // Stop/abort requested but ops are still queued; drain them so thread.join()
+  // doesn't wait on counters that will never advance.
+  NCCL_PROFILER_THREAD_CLEANUP_AND_STOP,
+};
 
 static std::mutex profilerMutex;
 static int profilerPluginRefCount;
@@ -628,29 +662,27 @@ ncclResult_t ncclProfilerStopProxyCtrlEvent(void* eHandle) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclProfilerStartKernelChEvent(struct ncclProxyArgs* args, int s, uint64_t start) {
+ncclResult_t ncclProfilerStartKernelChEvent(struct ncclProfilerWorkOp* op, uint64_t start) {
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
-    struct ncclProxySubArgs* sub = &args->subs[s];
-    if (sub->eActivationMask & ncclProfileKernelCh) {
+    if (op->eActivationMask & ncclProfileKernelCh) {
       ncclProfilerEventDescr_t eDescr = { };
       eDescr.type = ncclProfileKernelCh;
-      eDescr.parentObj = sub->taskEventHandle;
-      eDescr.kernelCh.channelId = sub->channelId;
+      eDescr.parentObj = op->taskEventHandle;
+      eDescr.kernelCh.channelId = op->channelId;
       eDescr.kernelCh.pTimer = start;
-      ncclProfiler->startEvent(sub->profilerContext, &sub->kernelEventHandle, &eDescr);
+      ncclProfiler->startEvent(op->profilerContext, &op->kernelEventHandle, &eDescr);
     }
   }
   return ncclSuccess;
 }
 
-ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProxyArgs* args, int s, uint64_t stop) {
+ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProfilerWorkOp* op, uint64_t stop) {
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
-    struct ncclProxySubArgs* sub = &args->subs[s];
-    if (sub->kernelEventHandle) {
+    if (op->kernelEventHandle) {
       ncclProfilerEventStateArgs_t a = { };
       a.kernelCh.pTimer = stop;
-      ncclProfiler->recordEventState(sub->kernelEventHandle, ncclProfilerKernelChStop, &a);
-      ncclProfiler->stopEvent(sub->kernelEventHandle);
+      ncclProfiler->recordEventState(op->kernelEventHandle, ncclProfilerKernelChStop, &a);
+      ncclProfiler->stopEvent(op->kernelEventHandle);
     }
   }
   return ncclSuccess;
@@ -698,27 +730,291 @@ ncclResult_t ncclProfilerAddPidToProxyOp(struct ncclProxyOp* op) {
   return ncclSuccess;
 }
 
-static std::mutex proxyProfilerConnectMutex;
-
-static ncclResult_t proxyProfilerConnect(struct ncclComm* comm, struct ncclProxyOp* op) {
-  ncclResult_t ret = ncclSuccess;
-  std::lock_guard<std::mutex> lock(proxyProfilerConnectMutex);
-  if (comm->profiler.initialized) goto exit;
-  for (int c = 0; c < MAXCHANNELS; c++) {
-    NCCLCHECKGOTO(ncclProxyConnect(comm, TRANSPORT_PROFILER, 0, comm->rank, &comm->profiler.sendProxyConn[c]), ret, exit);
-    NCCLCHECKGOTO(ncclProxyCallBlocking(comm, &comm->profiler.sendProxyConn[c], ncclProxyMsgConnect, NULL, 0, NULL, 0), ret, exit);
-    NCCLCHECKGOTO(ncclProxyConnect(comm, TRANSPORT_PROFILER, 0, comm->rank, &comm->profiler.recvProxyConn[c]), ret, exit);
-    NCCLCHECKGOTO(ncclProxyCallBlocking(comm, &comm->profiler.recvProxyConn[c], ncclProxyMsgConnect, NULL, 0, NULL, 0), ret, exit);
-  }
-  comm->profiler.initialized = true;
-exit:
-  return ret;
+// Caller must hold pt->mutex.
+static struct ncclProfilerWorkOp* profilerAllocOp(struct ncclProfilerThread* pt) {
+  return ncclMemoryPoolAlloc<struct ncclProfilerWorkOp>(&pt->opPool, &pt->opStack);
 }
 
-bool ncclProfilerNeedsProxy(struct ncclComm* comm, struct ncclProxyOp* op) {
-  bool enabled = ncclProfilerPluginLoaded() && (op->eActivationMask & ncclProfileKernelCh);
-  if (enabled && !comm->profiler.initialized) (void)proxyProfilerConnect(comm, op);
-  return enabled;
+// Caller must hold pt->mutex.
+static void profilerRecycleList(struct ncclProfilerThread* pt, struct ncclProfilerWorkOp* head) {
+  while (head) {
+    struct ncclProfilerWorkOp* next = head->next;
+    ncclMemoryPoolFree(&pt->opPool, head);
+    head = next;
+  }
+}
+
+// Runs without pt->mutex held: plugin callbacks may block, so we mustn't
+// stall posters. Completed ops are returned as a local list and recycled by
+// the caller under lock; *outNewTail receives the new tail of pt->active.
+//
+// Concurrency: caller sets pt->iterationActive=true under mutex before
+// invoking this; ncclProfilerThreadDestroy waits on condIterationInactive
+// until cleanupAndStop clears it. That ordering keeps a comm's
+// profilerContext alive across the plugin callbacks below.
+static struct ncclProfilerWorkOp* profilerProgressOps(struct ncclProfilerThread* pt,
+                                                      struct ncclProfilerWorkOp** outNewTail) {
+  struct ncclProfilerWorkOp* recycled = nullptr;
+  struct ncclProfilerWorkOp* prev = nullptr;
+  struct ncclProfilerWorkOp* op = pt->active;
+  while (op) {
+    struct ncclProfilerWorkOp* next = op->next;
+    int ch = op->channelId;
+    uint64_t wc = op->workCounter;
+    int slot = wc % MAX_PROFILER_EVENTS_PER_CHANNEL;
+
+    // Use `<=` not `==`: the device wraps around MAX_PROFILER_EVENTS_PER_CHANNEL
+    // slots, so if the host falls behind the kernel may already have overwritten
+    // this slot with a counter > wc (matches the old proxy progress check).
+    if (!op->started && wc <= op->workStarted[ch].data[slot].counter) {
+      ncclProfilerStartKernelChEvent(op, op->workStarted[ch].data[slot].timestamp);
+      op->started = true;
+    }
+    if (op->started && !op->completed && wc <= op->workCompleted[ch].data[slot].counter) {
+      ncclProfilerStopKernelChEvent(op, op->workCompleted[ch].data[slot].timestamp);
+      op->completed = true;
+    }
+    if (op->completed) {
+      if (prev) prev->next = next;
+      else pt->active = next;
+      op->next = recycled;
+      recycled = op;
+    } else {
+      prev = op;
+    }
+    op = next;
+  }
+  *outNewTail = prev;
+  return recycled;
+}
+
+// Caller must hold pt->mutex. O(1) splice via pt->activeTail.
+static inline void appendWorkToActiveQueue(struct ncclProfilerThread* pt) {
+  if (pt->pending == nullptr) return;
+  if (pt->activeTail) {
+    pt->activeTail->next = pt->pending;
+  } else {
+    pt->active = pt->pending;
+  }
+  pt->activeTail = pt->pendingTail;
+  pt->pending = nullptr;
+  pt->pendingTail = nullptr;
+}
+
+// Block until there is work or a stop/abort request. On exit, pending has
+// been folded into active and pt->iterationActive is set to true (paired
+// with cleanupAndStop) when the returned action is PROGRESS/CLEANUP_AND_STOP.
+static inline ncclProfilerThreadAction waitForAction(struct ncclProfilerThread* pt, bool* outStop) {
+  std::unique_lock<std::mutex> lock(pt->mutex);
+  bool aborted = pt->abortFlag && COMPILER_ATOMIC_LOAD(pt->abortFlag, std::memory_order_relaxed);
+  while (pt->pending == nullptr && pt->active == nullptr && !pt->stop && !aborted) {
+    pt->cond.wait(lock);
+    aborted = pt->abortFlag && COMPILER_ATOMIC_LOAD(pt->abortFlag, std::memory_order_relaxed);
+  }
+  bool stop = pt->stop;
+  *outStop = stop;
+  appendWorkToActiveQueue(pt);
+  if ((stop || aborted) && pt->active == nullptr) return NCCL_PROFILER_THREAD_STOP;
+  pt->iterationActive = true;
+  if ((stop || aborted) && pt->active != nullptr) return NCCL_PROFILER_THREAD_CLEANUP_AND_STOP;
+  return NCCL_PROFILER_THREAD_PROGRESS;
+}
+
+// Recycle completed ops, publish new active tail, and (when stopping)
+// drain ops whose kernels will never run. Clears iterationActive so
+// ncclProfilerThreadDestroy can proceed. Returns true to exit the thread.
+static inline bool cleanupAndStop(struct ncclProfilerThread* pt,
+                                  struct ncclProfilerWorkOp* recycled,
+                                  struct ncclProfilerWorkOp* newActiveTail,
+                                  bool drainStuck) {
+  std::lock_guard<std::mutex> lock(pt->mutex);
+  profilerRecycleList(pt, recycled);
+  pt->activeTail = newActiveTail;
+  if (drainStuck) {
+    struct ncclProfilerWorkOp* stuck = pt->active;
+    pt->active = nullptr;
+    pt->activeTail = nullptr;
+    profilerRecycleList(pt, stuck);
+  }
+  pt->iterationActive = false;
+  pt->condIterationInactive.notify_all();
+  return pt->active == nullptr;
+}
+
+// Exponential backoff capped at 100us; reset to 1us when active drains.
+static inline unsigned updateProgressInterval(struct ncclProfilerThread* pt, unsigned spinUs) {
+  if (pt->active == nullptr) return 1;
+  return spinUs < 100 ? spinUs * 2 : 100;
+}
+
+static void* ncclProfilerThreadFunc(void* arg) {
+  struct ncclProfilerThread* pt = (struct ncclProfilerThread*)arg;
+  // No cudaSetDevice: this thread only reads host-pinned memory.
+  INFO(NCCL_INIT, "[Profiler Thread] started");
+
+  unsigned spinUs = 1;
+  while (true) {
+    bool stop;
+    ncclProfilerThreadAction action = waitForAction(pt, &stop);
+    if (action == NCCL_PROFILER_THREAD_STOP) break;
+
+    struct ncclProfilerWorkOp* newActiveTail = nullptr;
+    struct ncclProfilerWorkOp* recycled = profilerProgressOps(pt, &newActiveTail);
+
+    bool drainStuck = (action == NCCL_PROFILER_THREAD_CLEANUP_AND_STOP);
+    bool exitNow = cleanupAndStop(pt, recycled, newActiveTail, drainStuck);
+    if (stop && exitNow) break;
+
+    if (pt->active) {
+      std::this_thread::sleep_for(std::chrono::microseconds(spinUs));
+    }
+    spinUs = updateProgressInterval(pt, spinUs);
+  }
+  return nullptr;
+}
+
+ncclResult_t ncclProfilerThreadCreate(struct ncclComm* comm, struct ncclComm* parent) {
+  if (!ncclProfilerPluginLoaded()) return ncclSuccess;
+  if (parent && parent->shareResources && parent->profiler.profilerThread) {
+    comm->profiler.profilerThread = parent->profiler.profilerThread;
+    std::lock_guard<std::mutex> lock(comm->profiler.profilerThread->mutex);
+    comm->profiler.profilerThread->refCount++;
+    return ncclSuccess;
+  }
+
+  struct ncclProfilerThread* pt = new ncclProfilerThread{};
+  pt->stop = 0;
+  pt->refCount = 1;
+  pt->abortFlag = comm->abortFlag;
+  pt->iterationActive = false;
+  pt->pending = nullptr;
+  pt->pendingTail = nullptr;
+  pt->active = nullptr;
+  pt->activeTail = nullptr;
+  ncclMemoryStackConstruct(&pt->opStack);
+  ncclMemoryPoolConstruct(&pt->opPool);
+  pt->thread = std::thread(ncclProfilerThreadFunc, pt);
+  comm->profiler.profilerThread = pt;
+  return ncclSuccess;
+}
+
+// Splice out and recycle every op referencing `ctx`; returns new list tail.
+// Caller must hold mutex.
+static struct ncclProfilerWorkOp* profilerPurgeByContext(
+    struct ncclProfilerThread* pt, struct ncclProfilerWorkOp** list, void* ctx) {
+  struct ncclProfilerWorkOp* lastKept = nullptr;
+  struct ncclProfilerWorkOp** link = list;
+  while (*link) {
+    if ((*link)->profilerContext == ctx) {
+      struct ncclProfilerWorkOp* dead = *link;
+      *link = dead->next;
+      ncclMemoryPoolFree(&pt->opPool, dead);
+    } else {
+      lastKept = *link;
+      link = &(*link)->next;
+    }
+  }
+  return lastKept;
+}
+
+ncclResult_t ncclProfilerThreadDestroy(struct ncclComm* comm) {
+  struct ncclProfilerThread* pt = comm->profiler.profilerThread;
+  if (pt == nullptr) return ncclSuccess;
+  bool shouldJoin = false;
+  {
+    std::unique_lock<std::mutex> lock(pt->mutex);
+    // Wait out any in-flight progressOps before touching the queues:
+    // ncclProfilerPluginFinalize destroys this comm's profilerContext right
+    // after we return, and the thread may be mid-callback against it.
+    while (pt->iterationActive) pt->condIterationInactive.wait(lock);
+
+    pt->pendingTail = profilerPurgeByContext(pt, &pt->pending, comm->profilerContext);
+    pt->activeTail  = profilerPurgeByContext(pt, &pt->active,  comm->profilerContext);
+
+    pt->refCount--;
+    if (pt->refCount == 0) {
+      pt->stop = 1;
+      shouldJoin = true;
+    }
+    pt->cond.notify_one();
+  }
+  if (shouldJoin) {
+    if (pt->thread.joinable()) pt->thread.join();
+    // opStack owns opPool's backing storage; destructing it frees both.
+    ncclMemoryStackDestruct(&pt->opStack);
+    delete pt;
+  }
+  comm->profiler.profilerThread = nullptr;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclProfilerPostWork(struct ncclComm* comm, int channelId, int eActivationMask, void* taskEventHandle) {
+  struct ncclProfilerThread* pt = comm->profiler.profilerThread;
+  if (pt == nullptr) return ncclSuccess;
+  if (!(eActivationMask & ncclProfileKernelCh)) return ncclSuccess;
+
+  // Bump in lock-step with the device kernel's per-work FINI increment.
+  uint64_t wc = ++comm->profiler.workCounter[channelId];
+
+  struct ncclProfilerWorkOp* op;
+  {
+    std::lock_guard<std::mutex> lock(pt->mutex);
+    op = profilerAllocOp(pt);
+    if (op == nullptr) return ncclSystemError;
+    op->channelId = channelId;
+    op->workCounter = wc;
+    op->eActivationMask = eActivationMask;
+    op->taskEventHandle = taskEventHandle;
+    op->profilerContext = comm->profilerContext;
+    op->workStarted = comm->profiler.workStarted;
+    op->workCompleted = comm->profiler.workCompleted;
+    op->kernelEventHandle = nullptr;
+    op->started = false;
+    op->completed = false;
+    op->next = nullptr;
+
+    if (pt->pendingTail) {
+      pt->pendingTail->next = op;
+    } else {
+      pt->pending = op;
+    }
+    pt->pendingTail = op;
+    pt->cond.notify_one();
+  }
+  return ncclSuccess;
+}
+
+ncclResult_t ncclProfilerPostPlanWork(struct ncclComm* comm, struct ncclKernelPlan* plan) {
+  if (!ncclProfilerPluginLoaded() || !comm->profiler.profilerThread) return ncclSuccess;
+
+  // Coll tasks know their exact [channelLo, channelHi] range.
+  struct ncclTaskColl* ct = ncclIntruQueueHead(&plan->collTaskQueue);
+  while (ct) {
+    if (ct->eActivationMask & ncclProfileKernelCh) {
+      for (int c = ct->channelLo; c <= ct->channelHi; c++) {
+        NCCLCHECK(ncclProfilerPostWork(comm, c, ct->eActivationMask, ct->eventHandle));
+      }
+    }
+    ct = ct->next;
+  }
+
+  // P2p tasks lack an explicit channel range; walk plan->channelMask and
+  // dedup so multiple p2p tasks sharing a channel only post once.
+  struct ncclTaskP2p* pt = ncclIntruQueueHead(&plan->p2pTaskQueue);
+  bool p2pPosted[MAXCHANNELS] = {};
+  while (pt) {
+    if (pt->eActivationMask & ncclProfileKernelCh) {
+      for (int c = 0; c < MAXCHANNELS; c++) {
+        if ((plan->channelMask & (1ull << c)) && !p2pPosted[c]) {
+          NCCLCHECK(ncclProfilerPostWork(comm, c, pt->eActivationMask, pt->eventHandle));
+          p2pPosted[c] = true;
+        }
+      }
+    }
+    pt = pt->next;
+  }
+
+  return ncclSuccess;
 }
 
 bool ncclProfilerPluginLoaded(void) {

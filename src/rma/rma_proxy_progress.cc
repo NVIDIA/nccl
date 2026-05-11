@@ -247,6 +247,8 @@ static ncclResult_t ncclRmaProxyPollPersistDesc(ncclRma_t *ncclRma, struct ncclR
 ncclResult_t ncclRmaProxyProgress(ncclRma_t *ncclRma, void *rmaProxyCtx) {
   struct ncclRmaProxyCtx *ctx = (struct ncclRmaProxyCtx *)rmaProxyCtx;
 
+  if (ncclRma->rmaProgress) NCCLCHECK(ncclRma->rmaProgress(ctx->rmaCtx));
+
   // Loop through each peer's queues
   for (int i = 0; i < ctx->comm->nRanks; i++) {
     // Step 1: Poll completion of InProgress Descs (non-graph)

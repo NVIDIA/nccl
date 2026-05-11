@@ -60,6 +60,8 @@ extern int ncclNMergedIbDevs;
 struct alignas(64) ncclIbMergedDev {
   ncclNetVDeviceProps_t vProps;
   int speed;
+  int16_t railId;
+  int16_t planeId;
   char devName[MAX_MERGED_DEV_NAME]; // Up to NCCL_IB_MAX_DEVS_PER_NIC * name size, and a character for each '+'
 };
 
@@ -609,4 +611,3 @@ static inline void printIbWcStatusHint(int status) {
 }
 
 #endif
-

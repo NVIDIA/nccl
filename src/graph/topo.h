@@ -121,6 +121,8 @@ struct ncclTopoNode {
       int collSupport;
       int maxChannels;
       int localGpu;
+      int16_t railId;
+      int16_t planeId;
     }net;
     struct {
       int arch;

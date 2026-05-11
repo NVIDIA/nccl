@@ -191,12 +191,18 @@ ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
   ncclIbMergedDev* mDev = ncclIbMergedDevs + ncclNMergedIbDevs;
   mDev->vProps.ndevs = 0;
   mDev->speed = 0;
+  mDev->railId = NCCL_NET_ID_UNDEF;
+  mDev->planeId = NCCL_NET_ID_UNDEF;
 
   for (int i = 0; i < props->ndevs; i++) {
     ncclIbDev* dev = ncclIbDevs + props->devs[i];
     if (mDev->vProps.ndevs == NCCL_IB_MAX_DEVS_PER_NIC) return ncclInvalidUsage;
     mDev->vProps.devs[mDev->vProps.ndevs++] = props->devs[i];
     mDev->speed += dev->speed;
+    if (i == 0) {
+      mDev->railId = dev->railId;
+      mDev->planeId = dev->planeId;
+    }
     // Each successive time, copy the name '+' new name
     if (mDev->vProps.ndevs > 1) {
       snprintf(mDev->devName + strlen(mDev->devName), sizeof(mDev->devName) - strlen(mDev->devName), "+%s", dev->devName);
@@ -511,6 +517,8 @@ ncclResult_t ncclIbGetProperties(int dev, ncclNetProperties_t* props) {
   NCCLCHECK(ncclIbGetPhysProperties(mergedDev->vProps.devs[0], props));
   props->name = mergedDev->devName;
   props->speed = mergedDev->speed;
+  props->railId = mergedDev->railId;
+  props->planeId = mergedDev->planeId;
   memcpy(&props->vProps, &mergedDev->vProps, sizeof(ncclNetVDeviceProps_t));
   return ncclSuccess;
 }

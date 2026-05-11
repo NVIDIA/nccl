@@ -124,6 +124,8 @@ ncclResult_t ncclTopoCreateNode(struct ncclTopoSystem* system, struct ncclTopoNo
     n->net.port = NCCL_TOPO_UNDEF;
     n->net.bw = 0.0;
     n->net.latency = 0.0;
+    n->net.railId = NCCL_TOPO_UNDEF;
+    n->net.planeId = NCCL_TOPO_UNDEF;
   } else if (type == DEV) {
     n->dev.dev = NCCL_TOPO_UNDEF;
     n->dev.cudaCompCap = NCCL_TOPO_UNDEF;
@@ -409,6 +411,11 @@ ncclResult_t ncclTopoAddNet(struct ncclXmlNode* xmlNet, struct ncclTopoSystem* s
   NCCLCHECKNOWARN(xmlGetAttrIntDefault(xmlNet, "gdr", &net->net.gdrSupport, 0), NCCL_GRAPH);
   NCCLCHECKNOWARN(xmlGetAttrIntDefault(xmlNet, "maxconn", &net->net.maxChannels, MAXCHANNELS), NCCL_GRAPH);
   NCCLCHECKNOWARN(xmlGetAttrIntDefault(xmlNet, "coll", &net->net.collSupport, 0), NCCL_GRAPH);
+  int railId, planeId;
+  NCCLCHECKNOWARN(xmlGetAttrIntDefault(xmlNet, "rail", &railId, NCCL_NET_ID_UNDEF), NCCL_GRAPH);
+  NCCLCHECKNOWARN(xmlGetAttrIntDefault(xmlNet, "plane", &planeId, NCCL_NET_ID_UNDEF), NCCL_GRAPH);
+  net->net.railId = railId;
+  net->net.planeId = planeId;
 
   // build the PCI id using the parent PCI link
   uint64_t hacc[2] = {1, 1};
@@ -1420,6 +1427,8 @@ ncclResult_t ncclTopoMakeVNics(struct ncclXml* xml, struct ncclTopoNetInfo* netI
   NCCLCHECK(ncclCalloc(&placedDevs, physicalDevs));
   NCCLCHECK(ncclCalloc(&props, physicalDevs));
   for (int i = 0; i < physicalDevs; i++) {
+    props[i].railId = NCCL_NET_ID_UNDEF;
+    props[i].planeId = NCCL_NET_ID_UNDEF;
     NCCLCHECKGOTO(netInfo->getProperties(i, props + i), res, out);
     struct ncclXmlNode* physNetNode;
     NCCLCHECKGOTO(xmlFindTagKv(xml, "net", &physNetNode, "name", props[i].name), res, out);
@@ -1439,7 +1448,9 @@ out:
 
 static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex, int endIndex, struct ncclTopoNetInfo* netInfo, int virtualNics) {
   for (int n = startIndex; n < endIndex; n++) {
-    ncclNetProperties_t props;
+    ncclNetProperties_t props = {0};
+    props.railId = NCCL_NET_ID_UNDEF;
+    props.planeId = NCCL_NET_ID_UNDEF;
     NCCLCHECK(netInfo->getProperties(n, &props));
     struct ncclXmlNode* netNode = NULL;
     struct ncclXmlNode* parent = NULL;
@@ -1464,6 +1475,8 @@ static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex, int endIn
     NCCLCHECK(xmlInitAttrInt(netNode, "latency", props.latency));
     NCCLCHECK(xmlInitAttrInt(netNode, "speed", props.speed));
     NCCLCHECK(xmlInitAttrInt(netNode, "port", props.port));
+    if (props.railId != NCCL_NET_ID_UNDEF) NCCLCHECK(xmlInitAttrInt(netNode, "rail", props.railId));
+    if (props.planeId != NCCL_NET_ID_UNDEF) NCCLCHECK(xmlInitAttrInt(netNode, "plane", props.planeId));
     NCCLCHECK(xmlInitAttrUint64(netNode, "guid", props.guid));
     NCCLCHECK(xmlInitAttrInt(netNode, "maxconn", props.maxComms));
     bool gdrSupport = (props.ptrSupport & NCCL_PTR_CUDA) || (netInfo->dmaBufSupport && (props.ptrSupport & NCCL_PTR_DMABUF));

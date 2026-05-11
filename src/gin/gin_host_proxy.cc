@@ -504,8 +504,13 @@ static ncclResult_t ncclGinProxyCreateContext(void* collComm, ncclGinConfig_t* c
     NCCLCHECK(ncclCuMemAlloc((void **)&proxyCtx->signalsDev, &proxyCtx->signalsCumemhandle,
                              CU_MEM_HANDLE_TYPE_NONE, signalsBufSize, NULL));
     CUDACHECK(cudaMemset(proxyCtx->signalsDev, 0, signalsBufSize));
+    uint64_t mrFlags = NCCL_NET_MR_FLAG_FORCE_SO;
+    if (config->backendVersion >= 2) {
+      // Signals were always reset in v1.
+      mrFlags |= NCCL_NET_MR_FLAG_SIGNAL_NEVER_RESET;
+    }
     NCCLCHECK(ncclGinProxyRegMrSym(collComm, proxyCtx->signalsDev, signalsBufSize,
-                                   NCCL_PTR_CUDA, NCCL_NET_MR_FLAG_FORCE_SO | NCCL_NET_MR_FLAG_SIGNAL_NEVER_RESET,
+                                   NCCL_PTR_CUDA, mrFlags,
                                    &proxyCtx->signalsMhandle, &proxyCtx->signalsGinHandle));
   }
   proxyCtx->nSignalsPerContext = config->nSignals;

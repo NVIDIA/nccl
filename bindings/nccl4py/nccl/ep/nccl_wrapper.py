@@ -1,17 +1,96 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pure Python ctypes wrapper for NCCL with EP extensions.
+"""Pure Python ctypes wrapper for NCCL EP extensions.
 
-This module provides a zero-compilation interface to NCCL EP by directly
-loading the shared library and wrapping its functions using ctypes.
+This module provides a zero-compilation interface to NCCL EP by loading the
+EP shared library and wrapping its EP functions with ctypes. Base NCCL
+operations are provided by :mod:`nccl.core`.
 """
 
 import ctypes
 import ctypes.util
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional
+from typing import Any
+
+import nccl.core as nccl
+
+_PACKAGE_NCCL_EP_LIBRARY = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "lib", "libnccl_ep.so")
+)
+
+
+def _find_nccl_ep_library() -> str:
+    """Resolve libnccl_ep.so.
+
+    Mirrors :func:`cuda.pathfinder.load_nvidia_dynamic_lib`'s search precedence,
+    with the NVIDIA pip-wheel step replaced by the nccl4py package's bundled
+    location (which is where libnccl_ep.so lives if a complete cu13 nccl4py
+    wheel was installed).
+
+    Search order:
+      1. nccl4py package path (``nccl/ep/lib/libnccl_ep.so``).
+      2. ``$CONDA_PREFIX/lib`` and ``$CONDA_PREFIX/lib64``.
+      3. Dynamic linker default search (``LD_LIBRARY_PATH``, ``ld.so.cache``,
+         standard system paths) via :func:`ctypes.util.find_library`. This also
+         covers the "already loaded into the process" case naturally.
+      4. ``$CUDA_HOME`` / ``$CUDA_PATH`` ``lib`` and ``lib64`` subdirectories.
+      5. SONAME fallback so ``ctypes.CDLL`` does a final ``dlopen`` attempt.
+    """
+    # 1. nccl4py package (replaces cuda.pathfinder's NVIDIA-pip-wheel step)
+    if os.path.exists(_PACKAGE_NCCL_EP_LIBRARY):
+        return _PACKAGE_NCCL_EP_LIBRARY
+
+    # 2. Conda environment
+    conda_prefix = os.environ.get("CONDA_PREFIX")
+    if conda_prefix:
+        for sub in ("lib", "lib64"):
+            candidate = os.path.join(conda_prefix, sub, "libnccl_ep.so")
+            if os.path.exists(candidate):
+                return candidate
+
+    # 3. Dynamic linker default search (LD_LIBRARY_PATH, ld.so.cache, /lib, ...)
+    found = ctypes.util.find_library("nccl_ep")
+    if found:
+        return found
+
+    # 4. CUDA_HOME / CUDA_PATH
+    for env_var in ("CUDA_HOME", "CUDA_PATH"):
+        root = os.environ.get(env_var)
+        if root:
+            for sub in ("lib", "lib64"):
+                candidate = os.path.join(root, sub, "libnccl_ep.so")
+                if os.path.exists(candidate):
+                    return candidate
+
+    # 5. SONAME fallback — let dlopen do its own system search; if it fails,
+    # ctypes.CDLL raises a clear OSError that the caller wraps as ImportError.
+    return "libnccl_ep.so"
+
+
+_funcs: dict[str, Any] = {}
+
+
+def _load_nccl_ep_library() -> None:
+    """Resolve, dlopen, and bind libnccl_ep.so symbols.
+
+    Called once from :mod:`nccl.ep` at import time. Populates the module-level
+    ``_funcs`` table that :class:`NCCLLibrary` instances read from.
+    """
+    global _funcs
+    lib = ctypes.CDLL(_find_nccl_ep_library())
+    bound: dict[str, Any] = {}
+    for func in NCCLLibrary.exported_functions:
+        try:
+            f = getattr(lib, func.name)
+        except AttributeError as e:
+            raise RuntimeError(f"{func.name} is not exported by libnccl_ep.so") from e
+        f.restype = func.restype
+        f.argtypes = func.argtypes
+        bound[func.name] = f
+    _funcs = bound
+
 
 # Optional torch import for communicator creation
 try:
@@ -23,15 +102,10 @@ except ImportError:
     torch = None
     dist = None
 
-if TYPE_CHECKING:
-    from typing import Type
-
 # Type Definitions
 ncclResult_t = ctypes.c_int
 ncclComm_t = ctypes.c_void_p
 cudaStream_t = ctypes.c_void_p
-buffer_type = ctypes.c_void_p
-ncclDataType_t = ctypes.c_int
 
 # EP-specific types (opaque pointers)
 ncclEpGroup_t = ctypes.c_void_p
@@ -47,45 +121,6 @@ ncclEpFreeFn_t = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p)
 # cudaError_t values
 CUDA_SUCCESS = 0
 CUDA_ERROR_MEMORY_ALLOCATION = 2
-
-
-class ncclUniqueId(ctypes.Structure):
-    _fields_ = [("internal", ctypes.c_byte * 128)]
-
-
-class ncclDataTypeEnum:
-    """NCCL data type enumerations."""
-    ncclInt8 = 0
-    ncclUint8 = 1
-    ncclInt32 = 2
-    ncclInt64 = 4
-    ncclFloat16 = 6
-    ncclFloat32 = 7
-    ncclFloat64 = 8
-    ncclBfloat16 = 9
-
-    @classmethod
-    def from_torch(cls, dtype) -> int:
-        """Convert torch.dtype to NCCL data type enum.
-
-        Note: Requires PyTorch to be installed.
-        """
-        if not HAVE_TORCH:
-            raise RuntimeError("from_torch() requires PyTorch to be installed")
-
-        dtype_map = {
-            torch.int8: cls.ncclInt8,
-            torch.uint8: cls.ncclUint8,
-            torch.int32: cls.ncclInt32,
-            torch.int64: cls.ncclInt64,
-            torch.float16: cls.ncclFloat16,
-            torch.float32: cls.ncclFloat32,
-            torch.float64: cls.ncclFloat64,
-            torch.bfloat16: cls.ncclBfloat16,
-        }
-        if dtype not in dtype_map:
-            raise ValueError(f"Unsupported dtype: {dtype}")
-        return dtype_map[dtype]
 
 
 class ncclEpTensorFlags_t:
@@ -108,6 +143,14 @@ class ncclEpAlgorithm_t:
     NCCL_EP_ALGO_HIGH_THROUGHPUT = 1
 
 
+class ncclEpLayout_t:
+    """Receive buffer layout for dispatch/combine."""
+    NCCL_EP_LAYOUT_AUTO = 0
+    NCCL_EP_LAYOUT_EXPERT_MAJOR = 1
+    NCCL_EP_LAYOUT_RANK_MAJOR = 2
+    NCCL_EP_LAYOUT_FLAT = 3
+
+
 # ncclNDTensor_t is an opaque pointer type
 ncclNDTensor_t = ctypes.c_void_p
 
@@ -116,6 +159,7 @@ class ncclEpGroupConfig_t(ctypes.Structure):
     _fields_ = [
         ("version", ctypes.c_uint),
         ("algorithm", ctypes.c_int),
+        ("layout", ctypes.c_int),
         ("num_experts", ctypes.c_uint),
         ("max_tokens_per_rank", ctypes.c_uint),
         ("token_size_bytes", ctypes.c_uint),
@@ -141,20 +185,9 @@ class Function:
 
 
 class NCCLLibrary:
-    """Pure Python wrapper for NCCL library with EP extensions."""
+    """ctypes wrapper for the NCCL EP extension library."""
 
     exported_functions = [
-        Function("ncclGetErrorString", ctypes.c_char_p, [ncclResult_t]),
-        Function("ncclGetVersion", ncclResult_t, [ctypes.POINTER(ctypes.c_int)]),
-        Function("ncclGetUniqueId", ncclResult_t, [ctypes.POINTER(ncclUniqueId)]),
-        Function("ncclCommInitRank", ncclResult_t, [
-            ctypes.POINTER(ncclComm_t), ctypes.c_int, ncclUniqueId, ctypes.c_int
-        ]),
-        Function("ncclAllReduce", ncclResult_t, [
-            buffer_type, buffer_type, ctypes.c_size_t, ncclDataType_t,
-            ctypes.c_int, ncclComm_t, cudaStream_t
-        ]),
-        # ncclEpCreateGroup with per-group allocator callbacks
         Function("ncclEpCreateGroup", ncclResult_t, [
             ctypes.POINTER(ncclEpGroup_t), ncclComm_t,
             ctypes.POINTER(ncclEpGroupConfig_t),
@@ -225,193 +258,16 @@ class NCCLLibrary:
         ]),
     ]
 
-    ep_function_names = [
-        "ncclEpCreateGroup", "ncclEpGroupDestroy",
-        "ncclEpCreateHandle", "ncclEpHandleDestroy", "ncclEpUpdateHandle",
-        "ncclEpDispatch", "ncclEpCombine", "ncclEpHandleGetNumRecvTokens",
-        "ncclEpComplete",
-        "ncclEpTensorCreate", "ncclEpTensorDestroy",
-        "ncclEpTensorGetData", "ncclEpTensorGetSizes",
-    ]
-
-    path_to_library_cache = {}
-    path_to_dict_mapping = {}
-    _nccl_base_lib = None  # Cache for base NCCL library (ctypes.CDLL object)
-    _nccl_base_lib_path = None  # Path to base NCCL library
-
-    def __init__(self, so_file=None):
-        if so_file is None:
-            so_file = self._find_nccl_library()
-
-        if so_file not in NCCLLibrary.path_to_library_cache:
-            # If loading libnccl_ep.so, first load base NCCL with RTLD_GLOBAL
-            # so that its symbols (like ncclCommCuDevice) are available
-            if 'libnccl_ep' in so_file:
-                self._load_base_nccl_library(so_file)
-
-            lib = ctypes.CDLL(so_file)
-            NCCLLibrary.path_to_library_cache[so_file] = lib
-
-        self.lib = NCCLLibrary.path_to_library_cache[so_file]
-        self.so_file = so_file
-
-        if so_file not in NCCLLibrary.path_to_dict_mapping:
-            _funcs = {}
-
-            # For EP library: get standard NCCL functions from base library,
-            # and EP functions from EP library
-            is_ep_lib = 'libnccl_ep' in so_file
-            base_lib = NCCLLibrary._nccl_base_lib if is_ep_lib else None
-
-            for func in NCCLLibrary.exported_functions:
-                is_ep_func = func.name in NCCLLibrary.ep_function_names
-
-                # Choose which library to get the function from
-                if is_ep_lib and not is_ep_func and base_lib is not None:
-                    # Standard NCCL function - get from base library
-                    target_lib = base_lib
-                else:
-                    # EP function or single library mode - get from main lib
-                    target_lib = self.lib
-
-                try:
-                    f = getattr(target_lib, func.name)
-                    f.restype = func.restype
-                    f.argtypes = func.argtypes
-                    _funcs[func.name] = f
-                except AttributeError:
-                    if not is_ep_func:
-                        raise
-            NCCLLibrary.path_to_dict_mapping[so_file] = _funcs
-
-        self._funcs = NCCLLibrary.path_to_dict_mapping[so_file]
-        self.ep_available = all(name in self._funcs for name in NCCLLibrary.ep_function_names)
-
-    def _load_base_nccl_library(self, ep_so_file):
-        """Load base NCCL library with RTLD_GLOBAL flag.
-
-        When loading libnccl_ep.so, we need to first load the base libnccl.so
-        with RTLD_GLOBAL so that its symbols (like ncclCommCuDevice) are available
-        to the EP library.
-
-        Args:
-            ep_so_file: Path to the EP library (used to find base NCCL in same dir)
-        """
-        # Only load once
-        if NCCLLibrary._nccl_base_lib is not None:
-            return
-
-        # Find base NCCL library
-        base_nccl_path = None
-
-        # Try in the same directory as the EP library
-        ep_dir = os.path.dirname(ep_so_file)
-        for candidate in ['libnccl.so.2', 'libnccl.so']:
-            candidate_path = os.path.join(ep_dir, candidate)
-            if os.path.exists(candidate_path):
-                base_nccl_path = candidate_path
-                break
-
-        # Try in NCCL_HOME if specified
-        if base_nccl_path is None:
-            nccl_home = os.environ.get('NCCL_HOME')
-            if nccl_home:
-                for candidate in ['libnccl.so.2', 'libnccl.so']:
-                    candidate_path = os.path.join(nccl_home, 'lib', candidate)
-                    if os.path.exists(candidate_path):
-                        base_nccl_path = candidate_path
-                        break
-
-        # Try system library path
-        if base_nccl_path is None:
-            try:
-                for lib_name in ['nccl.2', 'nccl']:
-                    lib = ctypes.util.find_library(lib_name)
-                    if lib:
-                        base_nccl_path = lib
-                        break
-            except:
-                pass
-
-        if base_nccl_path is None:
+    def __init__(self) -> None:
+        if not _funcs:
             raise RuntimeError(
-                f"Could not find base NCCL library (libnccl.so.2 or libnccl.so) "
-                f"to load with EP library {ep_so_file}. "
-                f"Ensure NCCL is installed and NCCL_HOME is set."
+                "libnccl_ep.so has not been loaded; ensure `import nccl.ep` completed without errors"
             )
-
-        # Load with RTLD_GLOBAL flag so symbols are available to EP library
-        try:
-            NCCLLibrary._nccl_base_lib = ctypes.CDLL(base_nccl_path, mode=ctypes.RTLD_GLOBAL)
-            NCCLLibrary._nccl_base_lib_path = base_nccl_path
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to load base NCCL library from {base_nccl_path}: {e}"
-            )
-
-    def _find_nccl_library(self):
-        """Find NCCL EP library.
-
-        Search order:
-        1. NCCL_HOME/lib/libnccl_ep.so (preferred - dedicated EP library)
-        2. NCCL_HOME/lib/libnccl.so (fallback - if EP symbols are in main library)
-        3. System library path for nccl_ep or nccl
-        """
-        # Find NCCL EP library
-        nccl_home = os.environ.get('NCCL_HOME')
-        if nccl_home:
-            # First try the dedicated EP library
-            ep_lib_path = os.path.join(nccl_home, 'lib', 'libnccl_ep.so')
-            if os.path.exists(ep_lib_path):
-                return ep_lib_path
-
-            # Fall back to main NCCL library (if EP symbols are linked in)
-            lib_path = os.path.join(nccl_home, 'lib', 'libnccl.so')
-            if os.path.exists(lib_path):
-                return lib_path
-
-        try:
-            # Try nccl_ep first (C library name)
-            lib = ctypes.util.find_library('nccl_ep')
-            if lib:
-                return lib
-            # Fall back to nccl
-            lib = ctypes.util.find_library('nccl')
-            if lib:
-                return lib
-        except:
-            pass
-
-        raise RuntimeError(
-            "Could not find NCCL library. Set NCCL_HOME or add libnccl.so to LD_LIBRARY_PATH."
-        )
-
-    def ncclGetErrorString(self, result):
-        return self._funcs["ncclGetErrorString"](result).decode("utf-8")
+        self._funcs = _funcs
 
     def NCCL_CHECK(self, result):
         if result != 0:
-            raise RuntimeError(f"NCCL error: {self.ncclGetErrorString(result)}")
-
-    def ncclGetVersion(self):
-        version = ctypes.c_int()
-        self.NCCL_CHECK(self._funcs["ncclGetVersion"](ctypes.byref(version)))
-        v = str(version.value)
-        return f"{v[0]}.{v[1:3].lstrip('0') or '0'}.{v[3:].lstrip('0') or '0'}"
-
-    def ncclGetUniqueId(self):
-        unique_id = ncclUniqueId()
-        self.NCCL_CHECK(self._funcs["ncclGetUniqueId"](ctypes.byref(unique_id)))
-        return unique_id
-
-    def ncclCommInitRank(self, world_size, unique_id, rank):
-        comm = ncclComm_t()
-        self.NCCL_CHECK(self._funcs["ncclCommInitRank"](ctypes.byref(comm), world_size, unique_id, rank))
-        return comm
-
-    def ncclAllReduce(self, sendbuff, recvbuff, count, datatype, op, comm, stream):
-        """Perform an all-reduce operation using NCCL."""
-        self.NCCL_CHECK(self._funcs["ncclAllReduce"](sendbuff, recvbuff, count, datatype, op, comm, stream))
+            raise RuntimeError(f"NCCL error: {nccl.get_error_string(result)}")
 
     def ncclEpCreateGroup(self, comm, config, alloc_fn=None, free_fn=None):
         """Create NCCL EP group for distributed EP operations.
@@ -427,9 +283,6 @@ class NCCLLibrary:
         Returns:
             ncclEpGroup_t: Opaque handle to the EP group
         """
-        if not self.ep_available:
-            raise RuntimeError("NCCL EP not available")
-
         ep_group = ncclEpGroup_t()
 
         # Convert None to NULL callbacks
@@ -437,14 +290,12 @@ class NCCLLibrary:
         free_callback = free_fn if free_fn is not None else ctypes.cast(None, ncclEpFreeFn_t)
 
         self.NCCL_CHECK(self._funcs["ncclEpCreateGroup"](
-            ctypes.byref(ep_group), comm, ctypes.byref(config),
+            ctypes.byref(ep_group), comm.ptr, ctypes.byref(config),
             alloc_callback, free_callback
         ))
         return ep_group
 
     def ncclEpGroupDestroy(self, ep_group):
-        if not self.ep_available:
-            raise RuntimeError("NCCL EP not available")
         self.NCCL_CHECK(self._funcs["ncclEpGroupDestroy"](ep_group))
 
     def ncclEpCreateHandle(self, ep_group, topk_tensor, config, stream, local_tensors=None, use_fp8=False):
@@ -489,15 +340,10 @@ class NCCLLibrary:
         return handle
 
     def ncclEpHandleDestroy(self, handle):
-        if not self.ep_available:
-            raise RuntimeError("NCCL EP not available")
         self.NCCL_CHECK(self._funcs["ncclEpHandleDestroy"](handle))
 
     def ncclEpUpdateHandle(self, handle, topk_tensor, stream, local_tensors=None):
         """Rebind topk_idx on an existing handle without reallocating buffers."""
-        if not self.ep_available:
-            raise RuntimeError("NCCL EP not available")
-
         local_tensors_ptr = None
         num_local_tensors = 0
         if local_tensors is not None and len(local_tensors) > 0:
@@ -543,12 +389,10 @@ class NCCLLibrary:
 
         Note: Internally calls ncclEpComplete (the C++ library symbol name).
         """
-        if not self.ep_available:
-            raise RuntimeError("NCCL EP not available")
         self.NCCL_CHECK(self._funcs["ncclEpComplete"](handle, None, stream))
 
 
-def get_nccl_comm_from_group(group=None, nccl_lib: Optional['NCCLLibrary'] = None) -> ncclComm_t:
+def get_nccl_comm_from_group(group=None):
     """Create NCCL communicator for the given ProcessGroup.
 
     Following vLLM's approach, we always create a new NCCL communicator rather than
@@ -557,25 +401,18 @@ def get_nccl_comm_from_group(group=None, nccl_lib: Optional['NCCLLibrary'] = Non
     Args:
         group: PyTorch distributed process group (or None for default group or MPI-only mode).
               If PyTorch is not available, this is ignored and MPI is used.
-        nccl_lib: NCCLLibrary instance for creating new communicator (required)
 
     Returns:
-        NCCL communicator pointer (ncclComm_t)
+        nccl.core.Communicator: NCCL communicator.
 
     Raises:
         RuntimeError: If NCCL communicator cannot be created
     """
-    if nccl_lib is None:
-        raise RuntimeError(
-            "Cannot create NCCL communicator without NCCLLibrary instance. "
-            "Pass nccl_lib parameter to get_nccl_comm_from_group."
-        )
-
-    return _create_nccl_comm_for_group(group, nccl_lib)
+    return _create_nccl_comm_for_group(group)
 
 
-def _create_nccl_comm_for_group(group, nccl_lib: 'NCCLLibrary') -> ncclComm_t:
-    """Create NCCL communicator using ncclCommInitRank.
+def _create_nccl_comm_for_group(group):
+    """Create NCCL communicator using nccl.core.
 
     Follows vLLM's approach of always creating a new communicator rather than
     extracting from PyTorch's ProcessGroup.
@@ -583,10 +420,9 @@ def _create_nccl_comm_for_group(group, nccl_lib: 'NCCLLibrary') -> ncclComm_t:
     Args:
         group: PyTorch distributed process group (or None for MPI-only mode).
               If PyTorch is not available, falls back to MPI mode.
-        nccl_lib: NCCLLibrary instance for NCCL API calls
 
     Returns:
-        NCCL communicator pointer (ncclComm_t)
+        nccl.core.Communicator: NCCL communicator.
     """
     # Get rank and world size
     rank = None
@@ -626,11 +462,9 @@ def _create_nccl_comm_for_group(group, nccl_lib: 'NCCLLibrary') -> ncclComm_t:
         except:
             device = 0
 
-    # Create and broadcast unique ID
-    if rank == 0:
-        unique_id = nccl_lib.ncclGetUniqueId()
-    else:
-        unique_id = ncclUniqueId()
+    # rank 0 generates a unique ID; other ranks start with an empty placeholder
+    # that gets filled in via the broadcast below.
+    unique_id = nccl.get_unique_id(empty=(rank != 0))
 
     if HAVE_TORCH and (group is not None or dist.is_initialized()):
         # PyTorch distributed mode: use PyTorch broadcast
@@ -640,11 +474,11 @@ def _create_nccl_comm_for_group(group, nccl_lib: 'NCCLLibrary') -> ncclComm_t:
         except:
             pass
 
-        # NCCL backend needs GPU tensor, gloo/mpi use CPU
+        # bytearray gives torch.frombuffer a writable buffer for in-place broadcast.
+        buf = bytearray(bytes(unique_id))
+        tensor = torch.frombuffer(buf, dtype=torch.uint8)
         if backend_name == "nccl":
-            tensor = torch.tensor(list(unique_id.internal), dtype=torch.uint8, device=device)
-        else:
-            tensor = torch.ByteTensor(list(unique_id.internal))
+            tensor = tensor.to(device)
 
         # Broadcast from appropriate source
         if group is not None:
@@ -653,10 +487,7 @@ def _create_nccl_comm_for_group(group, nccl_lib: 'NCCLLibrary') -> ncclComm_t:
         else:
             dist.broadcast(tensor, src=0)
 
-        # Convert back to ncclUniqueId
-        byte_list = tensor.cpu().tolist() if backend_name == "nccl" else tensor.tolist()
-        for i, byte in enumerate(byte_list):
-            unique_id.internal[i] = byte
+        unique_id = nccl.UniqueId.from_bytes(tensor.cpu().numpy().tobytes())
     else:
         # MPI-only mode: use file-based broadcast
         import time
@@ -667,7 +498,7 @@ def _create_nccl_comm_for_group(group, nccl_lib: 'NCCLLibrary') -> ncclComm_t:
 
         if rank == 0:
             # Write unique ID to file
-            unique_id_hex = binascii.hexlify(bytes(unique_id.internal)).decode('ascii')
+            unique_id_hex = binascii.hexlify(unique_id.as_bytes).decode('ascii')
             temp_write = temp_file + '.write'
             with open(temp_write, 'w') as f:
                 f.write(unique_id_hex)
@@ -693,9 +524,7 @@ def _create_nccl_comm_for_group(group, nccl_lib: 'NCCLLibrary') -> ncclComm_t:
             if len(unique_id_hex) != 256:
                 raise RuntimeError(f"Rank {rank}: Invalid unique ID length")
 
-            unique_id_bytes = binascii.unhexlify(unique_id_hex)
-            for i in range(128):
-                unique_id.internal[i] = unique_id_bytes[i]
+            unique_id = nccl.UniqueId.from_bytes(binascii.unhexlify(unique_id_hex))
 
         # Simple barrier using files
         barrier_file = os.path.join(os.getcwd(), f'.nccl_barrier_r{rank}.tmp')
@@ -715,10 +544,10 @@ def _create_nccl_comm_for_group(group, nccl_lib: 'NCCLLibrary') -> ncclComm_t:
     # Initialize NCCL communicator
     if HAVE_TORCH:
         with torch.cuda.device(device):
-            comm = nccl_lib.ncclCommInitRank(world_size, unique_id, rank)
+            comm = nccl.Communicator.init(world_size, rank, unique_id)
     else:
         # Without torch, just call directly (assumes CUDA device already set)
-        comm = nccl_lib.ncclCommInitRank(world_size, unique_id, rank)
+        comm = nccl.Communicator.init(world_size, rank, unique_id)
 
     # Cleanup temp files (best effort) - only in MPI mode
     if not HAVE_TORCH or (group is None and not dist.is_initialized()):

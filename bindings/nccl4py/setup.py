@@ -1,10 +1,22 @@
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 from Cython.Build import cythonize
 from setuptools import setup, Extension
+
+
+_NCCL_EP_SO = Path(__file__).parent / "nccl" / "ep" / "lib" / "libnccl_ep.so"
+if not _NCCL_EP_SO.exists():
+    print(
+        f"WARNING: {_NCCL_EP_SO} not found. The built nccl4py wheel will not "
+        "include the NCCL EP shared library, and `import nccl.ep` will fail at "
+        "runtime. Drop a CUDA 13 build of libnccl_ep.so at that path before "
+        "building the wheel.",
+        file=sys.stderr,
+    )
 
 
 # Check CUDA_HOME is set and is a valid directory

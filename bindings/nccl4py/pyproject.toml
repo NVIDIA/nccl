@@ -79,6 +79,7 @@ include = ["nccl*"]
 
 [tool.setuptools.package-data]
 "nccl.bindings" = ["cynccl.pxd"]
+"nccl.ep" = ["lib/libnccl_ep.so"]
 
 [tool.setuptools.dynamic]
 version = { attr = "nccl._version.__version__" }

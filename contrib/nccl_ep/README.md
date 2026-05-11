@@ -64,15 +64,16 @@ ncclEpComplete(handle, config, stream);  // LL mode only
 
 ### Python API
 
-Install Python bindings
+Install nccl4py, which includes the NCCL EP Python bindings as `nccl.ep`.
 
 ```bash
-$ pip install -e contrib/nccl_ep/python
+$ pip install nccl4py[cu12] # for cuda 12
+$ pip install nccl4py[cu13] # for cuda 13
 ```
 
 Import and use NCCL EP in a python application
 ```python
-from nccl_ep import NCCLLibrary, NCCL_EP_ALGO_LOW_LATENCY
+from nccl.ep import NCCLLibrary, NCCL_EP_ALGO_LOW_LATENCY
 
 nccl_lib = NCCLLibrary()
 # Use nccl_lib.ncclEpDispatch, ncclEpCombine, etc.

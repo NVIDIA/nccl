@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # See LICENSE.txt for more license information.
 
-"""Python EP test — replicates ep_test.cu using the nccl_wrapper.py API.
+"""Python EP test — replicates ep_test.cu using the nccl.ep public API.
 
 Usage:
     mpirun -np <N> python ep_test.py [OPTIONS]
@@ -20,18 +20,15 @@ Options (identical to ep_test.cu):
 
 import argparse
 import ctypes
-import os
 import random
 import struct
 import sys
 
 from mpi4py import MPI
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "python"))
-
-from nccl_ep.nccl_wrapper import (
+import nccl.core as nccl_core
+from nccl.ep import (
     NCCLLibrary,
-    ncclDataTypeEnum,
     ncclEpAlgorithm_t,
     ncclEpAllocFn_t,
     ncclEpDispatchConfig_t,
@@ -39,7 +36,6 @@ from nccl_ep.nccl_wrapper import (
     ncclEpGroupConfig_t,
     ncclEpTensorTag_t,
     ncclNDTensor_t,
-    ncclUniqueId,
 )
 
 # ---------------------------------------------------------------------------
@@ -129,33 +125,18 @@ def cuda_device_reset():
 # Tensor helpers (ncclEpTensor* not exposed as high-level wrapper methods)
 # ---------------------------------------------------------------------------
 
-# Element size in bytes for the dtypes used by this test.
-# TODO: replace with a helper from nccl4py once one is available.
-_DTYPE_BYTES = {
-    ncclDataTypeEnum.ncclInt8: 1,
-    ncclDataTypeEnum.ncclUint8: 1,
-    ncclDataTypeEnum.ncclFloat16: 2,
-    ncclDataTypeEnum.ncclBfloat16: 2,
-    ncclDataTypeEnum.ncclFloat32: 4,
-    ncclDataTypeEnum.ncclInt32: 4,
-    ncclDataTypeEnum.ncclUint32: 4,
-    ncclDataTypeEnum.ncclInt64: 8,
-    ncclDataTypeEnum.ncclUint64: 8,
-    ncclDataTypeEnum.ncclFloat64: 8,
-}
-
 
 def tensor_create(nccl, ndim, datatype, tag, *sizes):
     """cudaMalloc + ncclEpTensorCreate. Returns the tensor; data buffer is freed by tensor_destroy."""
     tensor = ncclNDTensor_t()
     padded = list(sizes) + [1] * (5 - len(sizes))
-    nbytes = _DTYPE_BYTES[datatype]
+    nbytes = datatype.itemsize
     for i in range(ndim):
         nbytes *= padded[i]
     data = cuda_malloc(nbytes)
     nccl.NCCL_CHECK(nccl._funcs["ncclEpTensorCreate"](
         ctypes.byref(tensor),
-        ctypes.c_uint(ndim), ctypes.c_int(datatype), ctypes.c_int(tag),
+        ctypes.c_uint(ndim), ctypes.c_int(int(datatype)), ctypes.c_int(tag),
         data,
         ctypes.c_uint(padded[0]), ctypes.c_uint(padded[1]),
         ctypes.c_uint(padded[2]), ctypes.c_uint(padded[3]),
@@ -292,17 +273,10 @@ def main():  # noqa: C901 — intentionally kept as a single function to mirror 
     # -- NCCL setup ---------------------------------------------------------
     nccl = NCCLLibrary()
 
-    if my_rank == 0:
-        unique_id = nccl.ncclGetUniqueId()
-    else:
-        unique_id = ncclUniqueId()
+    unique_id = nccl_core.get_unique_id() if my_rank == 0 else None
+    unique_id = mpi_comm.bcast(unique_id, root=0)
 
-    id_bytes = bytearray(unique_id.internal)
-    id_bytes = mpi_comm.bcast(id_bytes, root=0)
-    for i in range(128):
-        unique_id.internal[i] = id_bytes[i]
-
-    comm = nccl.ncclCommInitRank(n_ranks, unique_id, my_rank)
+    comm = nccl_core.Communicator.init(nranks=n_ranks, rank=my_rank, unique_id=unique_id)
 
     # -- EP group -----------------------------------------------------------
     config = ncclEpGroupConfig_t()
@@ -323,7 +297,7 @@ def main():  # noqa: C901 — intentionally kept as a single function to mirror 
 
     # -- topk_idx tensor [num_tokens, top_k] int64 --------------------------
     topk_idx = tensor_create(
-        nccl, 2, ncclDataTypeEnum.ncclInt64,
+        nccl, 2, nccl_core.INT64,
         ncclEpTensorTag_t.NCCL_EP_TENSOR_TAG_TOPK_IDX,
         num_tokens, top_k,
     )
@@ -351,7 +325,7 @@ def main():  # noqa: C901 — intentionally kept as a single function to mirror 
     handle_recv_expert_counter = None
     if disable_max_tokens:
         handle_recv_expert_counter = tensor_create(
-            nccl, 1, ncclDataTypeEnum.ncclInt32,
+            nccl, 1, nccl_core.INT32,
             ncclEpTensorTag_t.NCCL_EP_TENSOR_TAG_RECV_EXPERT_COUNTER_DEVICE,
             num_local_experts,
         )
@@ -382,26 +356,26 @@ def main():  # noqa: C901 — intentionally kept as a single function to mirror 
 
     # -- input/output tensors for dispatch ----------------------------------
     input_tokens = tensor_create(
-        nccl, 2, ncclDataTypeEnum.ncclBfloat16,
+        nccl, 2, nccl_core.BFLOAT16,
         ncclEpTensorTag_t.NCCL_EP_TENSOR_TAG_TOKENS,
         num_tokens, hidden,
     )
 
     topk_weights = tensor_create(
-        nccl, 2, ncclDataTypeEnum.ncclFloat32,
+        nccl, 2, nccl_core.FLOAT32,
         ncclEpTensorTag_t.NCCL_EP_TENSOR_TAG_TOPK_WEIGHTS,
         num_tokens, top_k,
     )
 
     if is_ll:
         output_tokens = tensor_create(
-            nccl, 3, ncclDataTypeEnum.ncclBfloat16,
+            nccl, 3, nccl_core.BFLOAT16,
             ncclEpTensorTag_t.NCCL_EP_TENSOR_TAG_TOKENS,
             num_local_experts, config.max_tokens_per_rank * n_ranks, hidden,
         )
     else:
         output_tokens = tensor_create(
-            nccl, 2, ncclDataTypeEnum.ncclBfloat16,
+            nccl, 2, nccl_core.BFLOAT16,
             ncclEpTensorTag_t.NCCL_EP_TENSOR_TAG_TOKENS,
             num_recv_tokens, hidden,
         )
@@ -409,7 +383,7 @@ def main():  # noqa: C901 — intentionally kept as a single function to mirror 
     local_tensor_recv_count = None
     if is_ll:
         local_tensor_recv_count = tensor_create(
-            nccl, 1, ncclDataTypeEnum.ncclInt32,
+            nccl, 1, nccl_core.INT32,
             ncclEpTensorTag_t.NCCL_EP_TENSOR_TAG_RECV_EXPERT_COUNTER_DEVICE,
             num_local_experts,
         )
@@ -418,12 +392,12 @@ def main():  # noqa: C901 — intentionally kept as a single function to mirror 
     output_topk_idx = None
     if not is_ll:
         output_topk_weights = tensor_create(
-            nccl, 2, ncclDataTypeEnum.ncclFloat32,
+            nccl, 2, nccl_core.FLOAT32,
             ncclEpTensorTag_t.NCCL_EP_TENSOR_TAG_TOPK_WEIGHTS,
             num_recv_tokens, top_k,
         )
         output_topk_idx = tensor_create(
-            nccl, 2, ncclDataTypeEnum.ncclInt64,
+            nccl, 2, nccl_core.INT64,
             ncclEpTensorTag_t.NCCL_EP_TENSOR_TAG_TOPK_IDX,
             num_recv_tokens, top_k,
         )
@@ -612,7 +586,7 @@ def main():  # noqa: C901 — intentionally kept as a single function to mirror 
 
     if is_ll:
         expert_outputs = tensor_create(
-            nccl, 3, ncclDataTypeEnum.ncclBfloat16,
+            nccl, 3, nccl_core.BFLOAT16,
             ncclEpTensorTag_t.NCCL_EP_TENSOR_TAG_TOKENS,
             num_local_experts, config.max_tokens_per_rank * n_ranks, hidden,
         )
@@ -627,7 +601,7 @@ def main():  # noqa: C901 — intentionally kept as a single function to mirror 
             cuda_memcpy(dst, eo_host, config.max_tokens_per_rank * hidden * 2, CUDA_MEMCPY_H2D)
     else:
         expert_outputs = tensor_create(
-            nccl, 2, ncclDataTypeEnum.ncclBfloat16,
+            nccl, 2, nccl_core.BFLOAT16,
             ncclEpTensorTag_t.NCCL_EP_TENSOR_TAG_TOKENS,
             num_recv_tokens, hidden,
         )
@@ -639,7 +613,7 @@ def main():  # noqa: C901 — intentionally kept as a single function to mirror 
         cuda_memcpy(eo_data, eo_host, num_recv_tokens * hidden * 2, CUDA_MEMCPY_H2D)
 
     combined_output = tensor_create(
-        nccl, 2, ncclDataTypeEnum.ncclBfloat16,
+        nccl, 2, nccl_core.BFLOAT16,
         ncclEpTensorTag_t.NCCL_EP_TENSOR_TAG_TOKENS,
         num_tokens, hidden,
     )
@@ -732,17 +706,17 @@ def main():  # noqa: C901 — intentionally kept as a single function to mirror 
 
         # new output tensors for second dispatch
         cached_out_tokens = tensor_create(
-            nccl, 2, ncclDataTypeEnum.ncclBfloat16,
+            nccl, 2, nccl_core.BFLOAT16,
             ncclEpTensorTag_t.NCCL_EP_TENSOR_TAG_TOKENS,
             num_recv_tokens, hidden,
         )
         cached_combined_output = tensor_create(
-            nccl, 2, ncclDataTypeEnum.ncclBfloat16,
+            nccl, 2, nccl_core.BFLOAT16,
             ncclEpTensorTag_t.NCCL_EP_TENSOR_TAG_TOKENS,
             num_tokens, hidden,
         )
         cached_combined_tw = tensor_create(
-            nccl, 2, ncclDataTypeEnum.ncclFloat32,
+            nccl, ep_group, 2, nccl_core.FLOAT32,
             ncclEpTensorTag_t.NCCL_EP_TENSOR_TAG_TOPK_WEIGHTS,
             num_tokens, top_k,
         )
@@ -753,7 +727,7 @@ def main():  # noqa: C901 — intentionally kept as a single function to mirror 
 
         # topk_weights input for combine (copy from dispatch output)
         cached_ctw_in = tensor_create(
-            nccl, 2, ncclDataTypeEnum.ncclFloat32,
+            nccl, 2, nccl_core.FLOAT32,
             ncclEpTensorTag_t.NCCL_EP_TENSOR_TAG_TOPK_WEIGHTS,
             num_recv_tokens, top_k,
         )
@@ -877,9 +851,7 @@ def main():  # noqa: C901 — intentionally kept as a single function to mirror 
     nccl.ncclEpHandleDestroy(ep_handle)
     nccl.ncclEpGroupDestroy(ep_group)
 
-    # ncclCommDestroy (not exposed in wrapper — call underlying library)
-    _nccl_base = NCCLLibrary._nccl_base_lib or nccl.lib
-    _nccl_base.ncclCommDestroy(comm)
+    comm.destroy()
 
     cuda_device_reset()
     print(f"[MPI Rank {my_rank}] Success ")

@@ -10,5 +10,7 @@ exclude Makefile
 exclude uv.lock
 global-exclude .gitignore .gitattributes
 
-# Exclude compiled/generated files
-global-exclude *.so *.cpp *.c
+# Exclude generated Cython build outputs. Keep nccl.ep shared libraries because
+# package data includes the prebuilt libnccl_ep.so.
+recursive-exclude nccl/bindings *.so
+global-exclude *.cpp *.c

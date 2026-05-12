@@ -242,6 +242,13 @@ ncclResult_t ncclNvlsInit(struct ncclComm* comm) {
   comm->nvlsSupport = 0;
   comm->nvlsChannels = 0;
 
+  if (comm->hasMultiRankNvml) {
+    if (ncclParamNvlsEnable() == 1) {
+      WARN("NCCL_NVLS_ENABLE has been set to \"1\" and communicator has multiple ranks using the same NVML device. This is not compatible with NCCL_NVLS_ENABLE=1.");
+      return ncclInvalidUsage;
+    }
+    return ncclSuccess;
+  }
   int gpuCount;
   NCCLCHECK(ncclTopoGetGpuCount(comm->topo, &gpuCount));
   if (!ncclParamNvlsEnable() || gpuCount < 2) return ncclSuccess;

@@ -78,6 +78,7 @@ extern CUmemAllocationHandleType ncclCuMemHandleType;
 /* CUDA Driver functions loaded with cuGetProcAddress for versioning */
 DECLARE_CUDA_PFN_EXTERN(cuDeviceGet, 2000);
 DECLARE_CUDA_PFN_EXTERN(cuDeviceGetAttribute, 2000);
+DECLARE_CUDA_PFN_EXTERN(cuDeviceGetUuid, 9020);
 DECLARE_CUDA_PFN_EXTERN(cuGetErrorString, 6000);
 DECLARE_CUDA_PFN_EXTERN(cuGetErrorName, 6000);
 DECLARE_CUDA_PFN_EXTERN(cuMemGetAddressRange, 3020);

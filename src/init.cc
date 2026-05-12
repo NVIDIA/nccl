@@ -699,6 +699,8 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
   info->cuMemSupport = ncclCuMemEnable();
   CUDACHECK(cudaGetDeviceProperties(&prop, comm->cudaDev));
   info->totalGlobalMem = ROUNDUP(prop.totalGlobalMem, (1ULL << 32));
+  const char* mlopartStr = strstr(prop.name, "MLOPart");
+  info->mloPart = mlopartStr ? atoi(mlopartStr + strlen("MLOPart")) : -1;
 
   // Get the device MAJOR:MINOR of /dev/shm so we can use that
   // information to decide whether we can use SHM for inter-process
@@ -713,6 +715,7 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
   info->shmDev = statbuf.st_dev;
 #endif
   info->busId = comm->busId;
+  CUCHECK(cuDeviceGetUuid((CUuuid*)&info->gpuUuid, (CUdevice)comm->cudaDev));
 
   NCCLCHECK(ncclGpuGdrSupport(comm, &info->gdrSupport));
   info->comm = comm;
@@ -973,7 +976,6 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     int localNetDeviceBw;
     int localCollNetCount;
     int isAllNvlink;
-    bool isMultiRankGpu;
   };
 
   int nChannelsOrig;
@@ -1017,6 +1019,16 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     }
     if (comm->peerInfo[i].hostHash != comm->peerInfo[rank].hostHash) nNodes++;
     if (!comm->peerInfo[i].cuMemSupport) comm->cuMemSupport = 0;
+    if (comm->peerInfo[i].mloPart != -1) comm->hasMloPart = true;
+    for (int j = 0; j < i; j++) {
+      // NVML device is agnostic to MloPart being used. With MloPart, each partition has a different GPU UUID.
+      comm->hasMultiRankNvml = (comm->peerInfo[i].hostHash == comm->peerInfo[j].hostHash) && (comm->peerInfo[i].nvmlDev == comm->peerInfo[j].nvmlDev);
+      if (!ncclParamMultiRankGpuEnable() && (comm->peerInfo[i].hostHash == comm->peerInfo[j].hostHash) &&
+          memcmp(&comm->peerInfo[i].gpuUuid, &comm->peerInfo[j].gpuUuid, sizeof(cudaUUID_t)) == 0) {
+        WARN("Multiple Ranks are using the same GPU/Partition. Set NCCL_MULTI_RANK_GPU_ENABLE=1 to enable this configuration.");
+        return ncclInvalidUsage;
+      }
+    }
     globalGinSupport &= (comm->peerInfo[i].supportedGinType == comm->sharedRes->ginState.ginType);
     globalCrossNicSupport &= comm->peerInfo[i].crossNicSupport;
     globalRmaPluginSupport &= comm->peerInfo[i].rmaPluginAvailable;
@@ -1123,23 +1135,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     comm->config.collnetEnable = 0;
   }
 
-  NCCLCHECK(ncclCheckMultiRank(comm));
-  if (comm->isMultiRankGpu) {
-    if (ncclParamNvlsEnable() == 1) {
-      WARN("Multiple ranks detected using the same GPU on this node"
-           " and NCCL_NVLS_ENABLE has been set to \"1\"."
-           " At this time multiple ranks per gpu is incompatible with"
-           " NVLS.");
-      ret = ncclInvalidUsage;
-      goto fail;
-    }
-    INFO(NCCL_INIT, "Multiple ranks on the same GPU detected and allowed. Disabling NVLS.");
-    comm->nvlsSupport = 0;
-    comm->nvlsChannels = 0;
-  } else {
-    // Determine local Nvls support
-    NCCLCHECK(ncclNvlsInit(comm));
-  }
+  NCCLCHECK(ncclNvlsInit(comm));
 
   timers[TIMER_INIT_GRAPHS] = clockNano();
   // Get rings and trees
@@ -1244,7 +1240,6 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   allGather3Data[rank].localNetDeviceCount = localNetDeviceCount;
   allGather3Data[rank].localNetDeviceBw = localNetDeviceBw;
   allGather3Data[rank].localCollNetCount = localCollNetCount;
-  allGather3Data[rank].isMultiRankGpu = comm->isMultiRankGpu;
   NCCLCHECKGOTO(ncclTopoGetMinNetBw(comm->topo, comm->rank, &allGather3Data[rank].minNetBw), ret, fail);
 
   NCCLCHECK(ncclTopoPathAllNVLink(comm->topo, &comm->isAllNvlink));
@@ -1285,9 +1280,6 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     maxLocalNetCount = std::max(maxLocalNetCount, allGather3Data[r].localNetDeviceCount);
     minLocalCollNetCount = std::min(minLocalCollNetCount, allGather3Data[r].localCollNetCount);
     maxLocalCollNetCount = std::max(maxLocalCollNetCount, allGather3Data[r].localCollNetCount);
-    if (allGather3Data[r].isMultiRankGpu) {
-      comm->isMultiRankGpu = true;
-    }
     if (!allGather3Data[r].isAllNvlink) {
       comm->isAllNvlink = 0;
     }

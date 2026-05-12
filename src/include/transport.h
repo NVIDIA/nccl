@@ -47,6 +47,7 @@ struct ncclPeerInfo {
   uint64_t pidHash;
   dev_t shmDev;
   int64_t busId;
+  cudaUUID_t gpuUuid;
   struct ncclComm* comm;
   int cudaCompCap;
   size_t totalGlobalMem;
@@ -58,6 +59,7 @@ struct ncclPeerInfo {
   bool crossNicSupport;
   bool rmaPluginAvailable;
   bool cuMemGdrSupport;
+  int mloPart; // MLOPart partition index, or -1 if not an MLOPart GPU
 };
 
 #define CONNECT_SIZE 256

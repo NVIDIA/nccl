@@ -104,6 +104,7 @@ ncclResult_t ncclTopoGetNetDevsPolicy(enum netDevsPolicy* policy, int* policyNum
 // Allows for up to 576 GPUs (e.g., NVLD144) with headroom for internal operations
 #define NCCL_TOPO_MAX_NODES 640
 ncclResult_t ncclTopoGetLocal(struct ncclTopoSystem* system, int type, int index, int resultType, int locals[NCCL_TOPO_MAX_NODES], int* localCount, int* pathType);
+ncclResult_t ncclTopoGetDevNodes(struct ncclTopoSystem* system, int64_t baseId, struct ncclTopoNode** nodes, int* nNodes);
 
 // Local (myself)
 #define PATH_LOC 0

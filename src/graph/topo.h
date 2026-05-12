@@ -15,6 +15,7 @@
 #include "os.h"
 
 #define LOC_BW 5000.0
+#define MLOPART_LOC_BW 2618.0
 #define SM60_NVLINK_BW 18.0
 #define SM70_NVLINK_BW 20.0
 #define SM80_NVLINK_BW 20.0
@@ -37,7 +38,7 @@
 // to GPU traffic consumes more PCI bandwidth.
 #define INTEL_P2P_OVERHEAD(bw) (bw*6/5)
 
-#define NCCL_TOPO_NODE_TYPES 9
+#define NCCL_TOPO_NODE_TYPES 10
 #define GPU 0
 #define PCI 1
 #define NVS 2
@@ -47,6 +48,7 @@
 #define GIN 6
 #define RMA 7
 #define DEV 8
+#define CXB 9 // C2C Cross-Bridge: shared C2C bus node for GPUs split with mlopart
 extern const char* topoNodeTypeStr[];
 
 // We want link types and path types to match as much as possible
@@ -91,6 +93,10 @@ struct ncclTopoLinkList {
 #define NCCL_TOPO_ID(systemid, localid) (((int64_t)systemid << 56) + (localid & NCCL_TOPO_ID_LOCAL_ID_MASK))
 #define NCCL_TOPO_GPU_LOCAL_RANK_SHIFT 40
 #define NCCL_TOPO_GPU_LOCAL_ID(busId, localRankOnDev) ((((uint64_t)(localRankOnDev)) << 40) | ((busId) & ((((uint64_t)1)<<40)-1)))
+#define NCCL_TOPO_MLOPART_MASK (0x3) // lower 2 bits: bit[0]=enabled, bit[1]=partition index
+#define NCCL_TOPO_MLOPART_DEV_MAX (2) // max DEV nodes per physical GPU (one per uGPU partition)
+#define NCCL_TOPO_MLOPART(mloPart) ((((int64_t)(mloPart) << 1) | 0x1) & NCCL_TOPO_MLOPART_MASK)
+#define NCCL_TOPO_MLOPART_BUSID(busId, mloPart) ((mloPart) != NCCL_TOPO_UNDEF ? ((busId) | NCCL_TOPO_MLOPART(mloPart)) : (busId))
 
 struct ncclTopoNode {
   int type;
@@ -102,13 +108,14 @@ struct ncclTopoNode {
       int rank;
       int cudaCompCap;
       int gdrSupport;
+      int mloPart; // MLOPart partition index, or NCCL_TOPO_UNDEF if not MLOPart
       struct ncclTopoNode* parent; // parent DEV node
     }gpu;
     struct {
       uint64_t device;  // Same as pci.device, a combination of vendor, device, subsystem_vendor and subsystem_device
       int dev; // NVML dev number
       int cudaCompCap;
-      int gdrSupport;
+      int nGpus; // number of GPU partitions attached to this DEV node
     }dev;
     struct {
       int dev; // Plugin dev number

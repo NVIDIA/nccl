@@ -323,6 +323,7 @@ def main():  # noqa: C901 — intentionally kept as a single function to mirror 
     # -- recv_expert_counter for handle (only when disable_max_tokens) ------
     handle_local_tensors = []
     handle_recv_expert_counter = None
+    handle_recv_total_counter = None
     if disable_max_tokens:
         handle_recv_expert_counter = tensor_create(
             nccl, 1, nccl_core.INT32,
@@ -330,6 +331,12 @@ def main():  # noqa: C901 — intentionally kept as a single function to mirror 
             num_local_experts,
         )
         handle_local_tensors.append(handle_recv_expert_counter)
+        handle_recv_total_counter = tensor_create(
+            nccl, ep_group, 1, ncclDataTypeEnum.ncclInt32,
+            ncclEpTensorTag_t.NCCL_EP_TENSOR_TAG_RECV_TOTAL_COUNTER_DEVICE,
+            None, 1,
+        )
+        handle_local_tensors.append(handle_recv_total_counter)
 
     # -- EP handle ----------------------------------------------------------
     print(f"Rank {my_rank}: Testing ncclEpCreateHandle")
@@ -340,7 +347,10 @@ def main():  # noqa: C901 — intentionally kept as a single function to mirror 
     cuda_stream_synchronize(stream)
 
     if disable_max_tokens:
-        num_recv_tokens = nccl.ncclEpHandleGetNumRecvTokens(ep_handle)
+        total_host = (ctypes.c_int32 * 1)()
+        total_data = tensor_get_data(nccl, handle_recv_total_counter)
+        cuda_memcpy(total_host, total_data, 4, CUDA_MEMCPY_D2H)
+        num_recv_tokens = int(total_host[0])
     else:
         num_recv_tokens = config.max_tokens_per_rank * num_local_experts
     assert num_recv_tokens > 0

@@ -15,6 +15,7 @@
 #include <cuda_runtime.h>
 #include <nccl.h>
 #include "nccl_device.h"
+#include "include/ep_enums.h"
 
 namespace nccl_ep {
 namespace hybridep {
@@ -86,13 +87,14 @@ void sparse_to_dense_prob_combine(
 void dense_to_sparse_prob(
     const float* dense_prob,              // [num_recv_tokens, experts_per_node] - from IPC buffer
     const bool* local_expert_routing_map, // [num_recv_tokens, experts_per_rank] - from preprocessing
-    float* recv_topk_weights,             // [num_recv_tokens, topk] - output sparse weights
-    int64_t* recv_topk_idx,               // [num_recv_tokens, topk] - output LOCAL expert indices (0-based)
+    float* recv_topk_weights,             // EM: [N]; FLAT/RM: [N, topk]
+    int64_t* recv_topk_idx,               // [num_recv_tokens, topk] - output LOCAL expert indices (0-based); nullptr under EM
     int num_recv_tokens,
     int topk,
     int experts_per_rank,
     int experts_per_node,                 // = experts_per_rank * ranks_per_node
     int local_rank,                       // rank within node
+    bool expert_major,                    // true = 1D recv_topk_weights, false = 2D
     cudaStream_t stream);
 
 // ============================================================================
@@ -247,14 +249,12 @@ void dense_to_sparse_prob_combine(
 // Preprocessing wrapper with template parameter resolution
 // ============================================================================
 
-// Helper to call metadata_preprocessing with resolved template parameters
-// Note: MAX_NUM_OF_TOKENS_PER_RANK is not used by metadata_preprocessing,
-// so we use a fixed dummy value for class instantiation.
-// Note: Caller must provide a pre-allocated scan temp buffer (see get_preprocessing_scan_tmp_size).
-// Also computes per-expert token counts for NCCL API compatibility when requested.
+// Helper to call metadata_preprocessing with resolved template parameters.
+// Caller must provide a pre-allocated scan temp buffer (see get_preprocessing_scan_tmp_size).
+// When alignment > 0, the kernel also fuses the expert-major remap pass.
 void call_metadata_preprocessing(
     const uint8_t* global_routing_map,  // Already allgathered bitmap routing map
-    int32_t* sparse_to_dense_map,       // Output: token→rank→position mapping
+    int32_t* sparse_to_dense_map,       // Output: unified S2D — flat stores token->rank->slot; expert-major stores packed (rank, slot) entries
     bool* rdma_to_attn_map,             // Output: which tokens come from RDMA
     bool* attn_to_rdma_map,             // Output: which tokens go to RDMA
     void* token_rank_mask,              // Scratch: RankMask<LSA_TEAM_SIZE> elements, sized by get_rank_mask_elem_size()
@@ -269,7 +269,16 @@ void call_metadata_preprocessing(
     int num_nodes,                      // Number of nodes (RDMA domain size)
     int num_ranks_per_node,             // Ranks per node (NVLink domain size, 1-8)
     int experts_per_rank,               // Experts per GPU
-    cudaStream_t stream);
+    int64_t* internal_offsets       = nullptr, // Expert-major: per-expert zone offsets consumed by dispatch
+    void*    padded_out_counts      = nullptr, // Expert-major: per-expert padded counts (caller tensor, nullable; int32 or int64)
+    void*    out_offsets            = nullptr, // Expert-major: per-expert offsets (caller tensor, nullable; int32 or int64)
+    size_t   alignment              = 0,       // 0 = flat (no remap); >0 = expert-major zone alignment
+    int32_t* actual_counts_out      = nullptr, // Expert-major: authoritative per-expert dispatch counts
+    int      s2d_inner_dim          = 0,       // 0 = flat (n_ranks_per_node); >0 = expert-major (top_k)
+    void*    recv_total_counter     = nullptr, // Optional scalar: total recv tokens (int32 or int64; nullable)
+    bool     out_is_int64           = true,    // Shared dtype for the 3 int output tensors above
+    int      max_recv_token_slots_per_rank = 0, // HT recv-budget; __trap on overflow.
+    cudaStream_t stream             = 0);
 
 // Returns required size in bytes for the scan temp buffer used by call_metadata_preprocessing.
 // Caller must allocate at least this many bytes and pass the pointer to call_metadata_preprocessing.
@@ -333,6 +342,13 @@ struct DispatchParams {
     const bool* rdma_to_attn_map;
     const bool* attn_to_rdma_map;
     const int32_t* sparse_to_dense_map;
+    int s2d_inner_dim;                   // Inner dim of unified S2D (num_topk in expert-major, n_ranks_per_node in flat).
+    ncclEpLayout_t layout;               // Output layout (selects kernel template specialization).
+
+    // EM zero-padding inputs for the in-kernel PAD warp (alignment==0 disables; ptrs may be null).
+    const int32_t* pad_actual_counts;
+    const int64_t* pad_expert_token_offsets;
+    int            pad_alignment;
 
     // Sync state (group-level monotonic counters, computed on host)
     uint64_t expected_rdma_flag_value;
@@ -360,7 +376,7 @@ struct DispatchParams {
 // Call dispatch kernel with runtime template parameter resolution
 void call_dispatch(
     const DispatchParams& params,
-    int max_tokens_per_rank,    // Max tokens for buffer sizing
+    int max_send_tokens_per_rank,    // Max tokens for buffer sizing
     int num_nodes,              // Number of nodes (RDMA domain size)
     bool use_fp8,               // false = BF16 (uint16_t), true = FP8 (uint8_t)
     bool forward_dispatch,      // True for forward, false for backward
@@ -393,6 +409,8 @@ struct CombineParams {
 
     // Metadata (from handle->hybridep preprocessing outputs)
     const int32_t* sparse_to_dense_map;
+    int s2d_inner_dim;                   // Inner dim of unified S2D (num_topk in expert-major, n_ranks_per_node in flat).
+    ncclEpLayout_t layout;               // Output layout (selects kernel template specialization).
     const bool* rdma_to_attn_map;
     const bool* attn_to_rdma_map;                      // For multi-node RDMA routing
     const bool* local_expert_routing_map;              // For backward gradient routing
@@ -424,7 +442,7 @@ struct CombineParams {
 // Note: HT combine doesn't support FP8, only BF16
 void call_combine(
     const CombineParams& params,
-    int max_tokens_per_rank,    // Max tokens for buffer sizing
+    int max_send_tokens_per_rank,    // Max tokens for buffer sizing
     int num_nodes,              // Number of nodes (RDMA domain size)
     bool backward_combine,      // True for backward (training), false for forward
     cudaStream_t stream);

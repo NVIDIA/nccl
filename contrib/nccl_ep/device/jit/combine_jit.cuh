@@ -46,8 +46,13 @@ template <
     int NUM_OF_BLOCKS,
     int NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
     bool BACKWARD_COMBINE,
-    int LSA_TEAM_SIZE>
+    int LSA_TEAM_SIZE,
+    ncclEpLayout_t kLayout>
 std::string combine_jit_source(int hidden_dim) {
+    const char* layout_literal =
+        (kLayout == NCCL_EP_LAYOUT_EXPERT_MAJOR)
+            ? "NCCL_EP_LAYOUT_EXPERT_MAJOR"
+            : "NCCL_EP_LAYOUT_FLAT";
     std::ostringstream src;
     src
         << "#include \"device/hybrid_ep.cuh\"\n"
@@ -79,7 +84,8 @@ std::string combine_jit_source(int hidden_dim) {
         << "      " << NUM_OF_ADDITIONAL_IN_FLIGHT_S2G << ",\n"
         << "      " << bool_literal(BACKWARD_COMBINE) << ",\n"
         << "      " << hidden_dim << ",\n"
-        << "      " << LSA_TEAM_SIZE << ">(param, smem_bytes);\n"
+        << "      " << LSA_TEAM_SIZE << ",\n"
+        << "      " << layout_literal << ">(param, smem_bytes);\n"
         << "}\n";
     return src.str();
 }
@@ -93,7 +99,8 @@ template <
     int NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
     bool BACKWARD_COMBINE,
     int NUM_LSA_TEAMS,
-    int LSA_TEAM_SIZE>
+    int LSA_TEAM_SIZE,
+    ncclEpLayout_t kLayout>
 void launch_combine(
     ::hybrid_ep::combine_kernel_param_t<LSA_TEAM_SIZE>& param,
     int dynamic_smem_bytes,
@@ -132,7 +139,8 @@ void launch_combine(
             << "_group" << NUM_OF_TOKENS_PER_GROUP
             << "_blocks" << NUM_OF_BLOCKS
             << "_extra" << NUM_OF_ADDITIONAL_IN_FLIGHT_S2G
-            << (BACKWARD_COMBINE ? "_bwd" : "_fwd");
+            << (BACKWARD_COMBINE ? "_bwd" : "_fwd")
+            << (kLayout == NCCL_EP_LAYOUT_EXPERT_MAJOR ? "_em" : "_fl");
         return name.str();
     }();
     const std::string source = combine_jit_source<
@@ -155,7 +163,8 @@ void launch_combine(
         NUM_OF_BLOCKS,
         NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
         BACKWARD_COMBINE,
-        LSA_TEAM_SIZE>(hidden_dim);
+        LSA_TEAM_SIZE,
+        kLayout>(hidden_dim);
 
     ::nccl_ep::jit::JitKernelVariant variant;
     variant.kernel_family = "ht_combine";

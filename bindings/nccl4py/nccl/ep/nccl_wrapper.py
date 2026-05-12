@@ -135,7 +135,9 @@ class ncclEpTensorTag_t:
     NCCL_EP_TENSOR_TAG_TOPK_WEIGHTS = 3
     NCCL_EP_TENSOR_TAG_SCALES = 4
     NCCL_EP_TENSOR_TAG_RECV_EXPERT_COUNTER_DEVICE = 5
-    NCCL_EP_TENSOR_TAG_TOKENS_PER_EXPERTS = 7
+    NCCL_EP_TENSOR_TAG_RECV_RANK_COUNTER_DEVICE = 6
+    NCCL_EP_TENSOR_TAG_RECV_EXPERT_OFFSETS_DEVICE = 7
+    NCCL_EP_TENSOR_TAG_RECV_TOTAL_COUNTER_DEVICE = 8
 
 
 class ncclEpAlgorithm_t:
@@ -226,9 +228,6 @@ class NCCLLibrary:
             ctypes.POINTER(ncclNDTensor_t), ctypes.c_uint,
             ctypes.c_uint, ctypes.POINTER(ncclEpCombineConfig_t), cudaStream_t
         ]),
-        Function("ncclEpHandleGetNumRecvTokens", ncclResult_t, [
-            ncclEpHandle_t, ctypes.POINTER(ctypes.c_uint)
-        ]),
         Function("ncclEpComplete", ncclResult_t, [
             ncclEpHandle_t, ctypes.c_void_p, cudaStream_t
         ]),
@@ -306,7 +305,7 @@ class NCCLLibrary:
         Args:
             ep_group: NCCL EP group handle
             topk_tensor: ncclNDTensor_t with topk indices
-            config: ncclEpHandleConfig_t configuration (reserved, should be None)
+            config: ncclEpHandleConfig_t configuration (or None for defaults)
             stream: CUDA stream
             local_tensors: Optional list of ncclNDTensor_t for local operations.
                           HT mode: accepts optional RECV_EXPERT_COUNTER tensor (1D, ncclInt32, size=num_local_experts)
@@ -365,16 +364,6 @@ class NCCLLibrary:
         self.NCCL_CHECK(self._funcs["ncclEpCombine"](
             handle, input_tensors, num_in, output_tensors, num_out,
             local_tensors, num_local, send_only, config, stream))
-
-    def ncclEpHandleGetNumRecvTokens(self, handle):
-        """Get the number of tokens this rank will receive after dispatch.
-
-        In HT mode with max_tokens_per_rank=0, returns actual count from notify_dispatch.
-        Otherwise, returns max_tokens_per_rank.
-        """
-        num_tokens = ctypes.c_uint()
-        self.NCCL_CHECK(self._funcs["ncclEpHandleGetNumRecvTokens"](handle, ctypes.byref(num_tokens)))
-        return num_tokens.value
 
     def ncclEpComplete(self, handle, config, stream):
         """Complete a staged EP operation.

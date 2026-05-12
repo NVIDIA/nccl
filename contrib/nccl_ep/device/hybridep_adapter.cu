@@ -168,20 +168,38 @@ void sparse_to_dense_prob_combine(
 // ============================================================================
 // Kernel: Convert dense prob output to sparse format
 // ============================================================================
-// Each thread handles one token, scans for non-zero experts
+// One thread per token. Output by layout:
+//   FLAT/RM: recv_topk_weights[token, k_out] zero-filled tail; recv_topk_idx parallel.
+//   EM:      recv_topk_weights[token] (single scalar; slot = (token, local_expert)); recv_topk_idx unused.
 __global__ void dense_to_sparse_prob_kernel(
     const float* __restrict__ dense_prob,              // [num_recv_tokens, experts_per_node]
     const bool* __restrict__ local_expert_routing_map, // [num_recv_tokens, experts_per_rank]
-    float* __restrict__ recv_topk_weights,             // [num_recv_tokens, topk]
-    int64_t* __restrict__ recv_topk_idx,               // [num_recv_tokens, topk]
+    float* __restrict__ recv_topk_weights,             // EM: [N]; FLAT/RM: [N, topk]
+    int64_t* __restrict__ recv_topk_idx,               // [num_recv_tokens, topk]; nullptr under EM
     int num_recv_tokens,
     int topk,
     int experts_per_rank,
     int experts_per_node,
-    int local_rank
+    int local_rank,
+    bool expert_major
 ) {
     int token = blockIdx.x * blockDim.x + threadIdx.x;
     if (token >= num_recv_tokens) return;
+
+    if (expert_major) {
+        // Each slot has at most one matching local expert (the one defining the slot).
+        // Write the single scalar weight at recv_topk_weights[token]; default 0.
+        float weight = 0.0f;
+        for (int e = 0; e < experts_per_rank; e++) {
+            if (local_expert_routing_map[token * experts_per_rank + e]) {
+                int dense_idx = token * experts_per_node + local_rank * experts_per_rank + e;
+                weight = dense_prob[dense_idx];
+                break;
+            }
+        }
+        recv_topk_weights[token] = weight;
+        return;
+    }
 
     int k_out = 0;
 
@@ -198,8 +216,10 @@ __global__ void dense_to_sparse_prob_kernel(
             int dense_idx = token * experts_per_node + local_rank * experts_per_rank + e;
             float weight = dense_prob[dense_idx];
 
-            // Write both outputs
-            recv_topk_idx[token * topk + k_out] = local_expert;
+            // Write outputs
+            if (recv_topk_idx != nullptr) {
+                recv_topk_idx[token * topk + k_out] = local_expert;
+            }
             recv_topk_weights[token * topk + k_out] = weight;
             k_out++;
         }
@@ -207,7 +227,9 @@ __global__ void dense_to_sparse_prob_kernel(
 
     // Zero-fill remaining topk slots if fewer than topk experts found
     for (; k_out < topk; k_out++) {
-        recv_topk_idx[token * topk + k_out] = -1;  // Invalid expert marker
+        if (recv_topk_idx != nullptr) {
+            recv_topk_idx[token * topk + k_out] = -1;  // Invalid expert marker
+        }
         recv_topk_weights[token * topk + k_out] = 0.0f;
     }
 }
@@ -291,6 +313,7 @@ void dense_to_sparse_prob(
     int experts_per_rank,
     int experts_per_node,
     int local_rank,
+    bool expert_major,
     cudaStream_t stream
 ) {
     int block_size = 256;
@@ -298,7 +321,8 @@ void dense_to_sparse_prob(
 
     dense_to_sparse_prob_kernel<<<grid_size, block_size, 0, stream>>>(
         dense_prob, local_expert_routing_map, recv_topk_weights, recv_topk_idx,
-        num_recv_tokens, topk, experts_per_rank, experts_per_node, local_rank);
+        num_recv_tokens, topk, experts_per_rank, experts_per_node, local_rank,
+        expert_major);
 }
 
 // ============================================================================
@@ -321,12 +345,23 @@ void call_metadata_preprocessing(
     int num_nodes,
     int num_ranks_per_node,
     int experts_per_rank,
+    int64_t* internal_offsets,
+    void*    padded_out_counts,
+    void*    out_offsets,
+    size_t alignment,
+    int32_t* actual_counts_out,
+    int s2d_inner_dim,
+    void*    recv_total_counter,
+    bool     out_is_int64,
+    int      max_recv_token_slots_per_rank,
     cudaStream_t stream
 ) {
+    if (alignment > 0 && per_expert_token_counts == nullptr) {
+        EP_HOST_ASSERT(false && "EXPERT_MAJOR remap requires per_expert_token_counts != nullptr");
+    }
+
     if (per_expert_token_counts != nullptr) {
-        // Fused scan path accumulates counts with atomicAdd.
-        CUDA_CHECK(cudaMemsetAsync(
-            per_expert_token_counts, 0, experts_per_rank * sizeof(int32_t), stream));
+        CUDA_CHECK(cudaMemsetAsync(per_expert_token_counts, 0, experts_per_rank * sizeof(int32_t), stream));
     }
 
     // MNNVL configurations (> 32 GPUs per LSA domain) are not yet supported: the scan
@@ -353,6 +388,15 @@ void call_metadata_preprocessing(
                 num_tokens_per_rank,
                 num_ranks_per_node,
                 experts_per_rank,
+                internal_offsets,
+                padded_out_counts,
+                out_offsets,
+                alignment,
+                actual_counts_out,
+                s2d_inner_dim,
+                recv_total_counter,
+                out_is_int64,
+                max_recv_token_slots_per_rank,
                 stream
             );
         });
@@ -404,6 +448,10 @@ build_dispatch_param(const DispatchParams& params) {
     kp.rdma_to_attn_map = params.rdma_to_attn_map;
     kp.attn_to_rdma_map = params.attn_to_rdma_map;
     kp.sparse_to_dense_map = params.sparse_to_dense_map;
+    kp.s2d_inner_dim = params.s2d_inner_dim;
+    kp.pad_actual_counts = params.pad_actual_counts;
+    kp.pad_expert_token_offsets = params.pad_expert_token_offsets;
+    kp.pad_alignment = params.pad_alignment;
     kp.expected_rdma_flag_value = params.expected_rdma_flag_value;
     kp.expected_intra_node_flag_value = params.expected_intra_node_flag_value;
     kp.rdma_inter_node_group_flags = params.rdma_inter_node_group_flags;
@@ -444,7 +492,7 @@ build_dispatch_param(const DispatchParams& params) {
 template<bool FORWARD_DISPATCH>
 void dispatch_impl(
     const DispatchParams& params,
-    int max_tokens_per_rank,
+    int max_send_tokens_per_rank,
     int num_nodes,
     bool use_fp8,
     cudaStream_t stream
@@ -465,13 +513,25 @@ void dispatch_impl(
 
                 auto kp = build_dispatch_param<TOKEN_DATA_TYPE, LSA_TEAM_SIZE>(params);
 
-                HybridEPType::template dispatch<
-                    TOKEN_DATA_TYPE,
-                    HYBRIDEP_DISPATCH_NUM_OF_STAGES,
-                    HYBRIDEP_DISPATCH_NUM_OF_IN_FLIGHT_S2G,
-                    HT_OF_NUM_TOKENS_PER_CHUNK,
-                    HYBRIDEP_DISPATCH_NUM_OF_BLOCKS,
-                    FORWARD_DISPATCH>(kp, stream);
+                if (params.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR) {
+                    HybridEPType::template dispatch<
+                        TOKEN_DATA_TYPE,
+                        HYBRIDEP_DISPATCH_NUM_OF_STAGES,
+                        HYBRIDEP_DISPATCH_NUM_OF_IN_FLIGHT_S2G,
+                        HT_OF_NUM_TOKENS_PER_CHUNK,
+                        HYBRIDEP_DISPATCH_NUM_OF_BLOCKS,
+                        FORWARD_DISPATCH,
+                        NCCL_EP_LAYOUT_EXPERT_MAJOR>(kp, stream);
+                } else {
+                    HybridEPType::template dispatch<
+                        TOKEN_DATA_TYPE,
+                        HYBRIDEP_DISPATCH_NUM_OF_STAGES,
+                        HYBRIDEP_DISPATCH_NUM_OF_IN_FLIGHT_S2G,
+                        HT_OF_NUM_TOKENS_PER_CHUNK,
+                        HYBRIDEP_DISPATCH_NUM_OF_BLOCKS,
+                        FORWARD_DISPATCH,
+                        NCCL_EP_LAYOUT_FLAT>(kp, stream);
+                }
             });
         });
     });
@@ -479,7 +539,7 @@ void dispatch_impl(
 
 void call_dispatch(
     const DispatchParams& params,
-    int max_tokens_per_rank,
+    int max_send_tokens_per_rank,
     int num_nodes,
     bool use_fp8,
     bool forward_dispatch,
@@ -488,12 +548,12 @@ void call_dispatch(
     // Dispatch based on forward/backward and sync mode
     if (forward_dispatch) {
         dispatch_impl<true>(
-            params, max_tokens_per_rank,
+            params, max_send_tokens_per_rank,
             num_nodes, use_fp8, stream);
 
     } else {
         dispatch_impl<false>(
-            params, max_tokens_per_rank,
+            params, max_send_tokens_per_rank,
             num_nodes, use_fp8, stream);
 
     }
@@ -533,6 +593,7 @@ build_combine_param(const CombineParams& params) {
 
     // Metadata
     kp.sparse_to_dense_map = params.sparse_to_dense_map;
+    kp.s2d_inner_dim = params.s2d_inner_dim;
     kp.rdma_to_attn_map = params.rdma_to_attn_map;
     kp.attn_to_rdma_map = params.attn_to_rdma_map;
 
@@ -571,7 +632,7 @@ build_combine_param(const CombineParams& params) {
 template<bool BACKWARD_COMBINE>
 void combine_impl(
     const CombineParams& params,
-    int max_tokens_per_rank,
+    int max_send_tokens_per_rank,
     int num_nodes,
     cudaStream_t stream
 ) {
@@ -606,34 +667,49 @@ void combine_impl(
                 NUM_LSA_TEAMS,
                 BACKWARD_COMBINE>(model);
 
-            jit::launch_combine<
-                num_stages_g2s,
-                num_stages_s2g,
-                HT_OF_NUM_TOKENS_PER_CHUNK,
-                HYBRIDEP_COMBINE_NUM_OF_TOKENS_PER_GROUP,
-                HYBRIDEP_COMBINE_NUM_OF_BLOCKS,
-                HYBRIDEP_COMBINE_NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
-                BACKWARD_COMBINE,
-                NUM_LSA_TEAMS,
-                LSA_TEAM_SIZE>(kp, smem_size, stream);
+            if (params.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR) {
+                jit::launch_combine<
+                    num_stages_g2s,
+                    num_stages_s2g,
+                    HT_OF_NUM_TOKENS_PER_CHUNK,
+                    HYBRIDEP_COMBINE_NUM_OF_TOKENS_PER_GROUP,
+                    HYBRIDEP_COMBINE_NUM_OF_BLOCKS,
+                    HYBRIDEP_COMBINE_NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
+                    BACKWARD_COMBINE,
+                    NUM_LSA_TEAMS,
+                    LSA_TEAM_SIZE,
+                    NCCL_EP_LAYOUT_EXPERT_MAJOR>(kp, smem_size, stream);
+            } else {
+                jit::launch_combine<
+                    num_stages_g2s,
+                    num_stages_s2g,
+                    HT_OF_NUM_TOKENS_PER_CHUNK,
+                    HYBRIDEP_COMBINE_NUM_OF_TOKENS_PER_GROUP,
+                    HYBRIDEP_COMBINE_NUM_OF_BLOCKS,
+                    HYBRIDEP_COMBINE_NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
+                    BACKWARD_COMBINE,
+                    NUM_LSA_TEAMS,
+                    LSA_TEAM_SIZE,
+                    NCCL_EP_LAYOUT_FLAT>(kp, smem_size, stream);
+            }
         });
     });
 }
 
 void call_combine(
     const CombineParams& params,
-    int max_tokens_per_rank,
+    int max_send_tokens_per_rank,
     int num_nodes,
     bool backward_combine,
     cudaStream_t stream
 ) {
     if (backward_combine) {
         combine_impl<true>(
-            params, max_tokens_per_rank,
+            params, max_send_tokens_per_rank,
             num_nodes, stream);
     } else {
         combine_impl<false>(
-            params, max_tokens_per_rank,
+            params, max_send_tokens_per_rank,
             num_nodes, stream);
     }
 }

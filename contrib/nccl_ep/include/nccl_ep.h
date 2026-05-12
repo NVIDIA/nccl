@@ -34,17 +34,26 @@ typedef struct {
     ncclEpLayout_t layout;
     unsigned int num_experts;            // Number of experts (required)
     // Maximum number of tokens any single rank will dispatch. Must be the same across all ranks.
-    // Each rank should be prepared to receive up to max_tokens_per_rank * num_ranks tokens.
+    // Each rank should be prepared to receive up to max_send_tokens_per_rank * num_ranks tokens.
     // REQUIRED for both LL and HT modes (must be > 0).
     // In a future release, NCCL_EP_AUTO will be supported for HT mode,
     // in which case the received token count will be determined by ncclEpCreateHandle.
-    unsigned int max_tokens_per_rank;
+    unsigned int max_send_tokens_per_rank;
     unsigned int token_size_bytes;       // Token size for buffer allocation (independent of datatype)
     unsigned long int rdma_buffer_size;  // RDMA buffer size in bytes (NCCL_EP_AUTO for auto, defaults to a sufficiently large buffer for any algorithm)
     unsigned int num_qp_per_rank;        // Number of QPs per rank (NCCL_EP_AUTO for auto)
     // Number of channels per rank (NCCL_EP_AUTO for auto).
     // In high throughput collectives, each channel occupies 2 SMs
     unsigned int num_channels;
+    // Total recv-slot budget per rank (across all source ranks).
+    //   FLAT/RM: one slot per recv token; same token from different source ranks
+    //            occupies distinct slots, but never duplicated within one source rank.
+    //   EM:      additionally covers intra-rank duplication (token → multiple local
+    //            experts) and per-expert alignment/padding to
+    //            dispatch_output_per_expert_alignment.
+    //   HT: required, must be >= max_send_tokens_per_rank.
+    //   LL: AUTO/0 → nRanks*max_send_tokens_per_rank.
+    unsigned int max_recv_token_slots_per_rank;
 } ncclEpGroupConfig_t;
 
 // Opaque type forward declaration
@@ -133,9 +142,16 @@ ncclResult_t ncclEpTensorDestroy(
     ncclNDTensor_t tensor
 );
 
+// Per-handle config (pass to ncclEpCreateHandle/InitHandle; NULL = defaults).
+struct ncclEpHandleConfig {
+    // HT expert-major only: per-expert zone alignment in tokens (pow2; 0/1 = no padding).
+    // Padded slots are zero-filled by dispatch.
+    size_t dispatch_output_per_expert_alignment;
+};
+
 // Opaque type forward declaration
 typedef struct ncclEpHandle* ncclEpHandle_t;
-typedef struct ncclEpHandleConfig* ncclEpHandleConfig_t;  // Reserved for future use
+typedef struct ncclEpHandleConfig ncclEpHandleConfig_t;
 
 // Create and initialize an EP handle.
 //   * Performs dispatch setup and (in HT mode only) metadata exchange.
@@ -146,20 +162,18 @@ typedef struct ncclEpHandleConfig* ncclEpHandleConfig_t;  // Reserved for future
 //   ep_group            - [IN]  A valid EP group
 //   topk_idx            - [IN]  Tensor holding top-K expert indices (routing information)
 //   local_tensors       - [IN/OUT, optional] Array of pointers to local tensors.
-//                         HT: accepts optional RECV_EXPERT_COUNTER tensor (1D, ncclInt32, size=num_local_experts)
-//                         with tag NCCL_EP_TENSOR_TAG_RECV_EXPERT_COUNTER_DEVICE.
-//                         Required when max_tokens_per_rank is NCCL_EP_AUTO.
+//                         Same set of tags as ncclEpUpdateHandle (see below).
+//                         Required when max_send_tokens_per_rank is NCCL_EP_AUTO.
 //                         LL mode: does not accept local tensors (num_local_tensors must be 0).
 //   num_local_tensors   - [IN]  Number of local tensors.
-//   config              - [IN]  Reserved for future options (should be set to NULL)
+//   config              - [IN]  Optional handle config (NULL uses defaults)
 //   stream              - [IN]  CUDA stream
 //   use_fp8             - [IN]  Enable FP8 for dispatch (default: false)
 //
 // Notes:
-//   - If max_tokens_per_rank in ncclEpGroupConfig_t was set to NCCL_EP_AUTO,
+//   - If max_send_tokens_per_rank in ncclEpGroupConfig_t was set to NCCL_EP_AUTO,
 //     this call may block as the host allocates memory for the actual number
 //     of received tokens.
-//   - The config argument is reserved; must be set to NULL for now.
 //
 // Returns: ncclResult_t error code
 
@@ -169,7 +183,7 @@ ncclResult_t ncclEpCreateHandle(
     ncclNDTensor_t topk_idx,
     const ncclNDTensor_t* local_tensors,
     unsigned int num_local_tensors,
-    const ncclEpHandleConfig_t* config,  // Reserved, should be set to NULL
+    const ncclEpHandleConfig_t* config,
     cudaStream_t stream,
     bool use_fp8 = false
 );
@@ -189,7 +203,7 @@ ncclResult_t ncclEpHandleDestroy(
 //
 // Arguments:
 //   ep_group  - [IN]  A valid EP group
-//   config    - [IN]  Reserved, must be NULL
+//   config    - [IN]  Optional handle config (NULL uses defaults)
 //   size_out  - [OUT] Required bytes for handle_mem
 //   num_topk  - [IN]  Required for LL (> 0); optional for HT
 //
@@ -212,7 +226,7 @@ ncclResult_t ncclEpHandleMemSize(
 // Arguments:
 //   handle     - [OUT] Newly created handle
 //   ep_group   - [IN]  A valid EP group
-//   config     - [IN]  Reserved, must be NULL
+//   config     - [IN]  Optional handle config (NULL uses defaults)
 //   num_topk   - [IN]  Required for LL (> 0); optional for HT (default: -1)
 //   use_fp8    - [IN]  Enable FP8 dispatch (default: false)
 //   handle_mem - [IN]  NULL = internal alloc; non-NULL = caller-owned device buffer
@@ -235,9 +249,13 @@ ncclResult_t ncclEpInitHandle(
 //   handle             - [IN]  Handle from ncclEpInitHandle
 //   topk_idx           - [IN]  [num_tokens, top_k] int64
 //   local_tensors      - [IN/OUT, optional] Array of pointers to local tensors.
-//                         HT: accepts optional RECV_EXPERT_COUNTER tensor (1D, ncclInt32, size=num_local_experts)
-//                         with tag NCCL_EP_TENSOR_TAG_RECV_EXPERT_COUNTER_DEVICE.
-//                         Required when max_tokens_per_rank is NCCL_EP_AUTO.
+//                         HT optional 1D outputs (ncclInt32 or ncclInt64; sizes per tag):
+//                           RECV_EXPERT_COUNTER_DEVICE [num_local_experts] — per-expert recv
+//                             counts (FLAT unpadded int32 only; EM padded). Optional.
+//                           RECV_EXPERT_OFFSETS_DEVICE [num_local_experts] — EM only,
+//                             prefix-sum of padded counts (start index per expert).
+//                           RECV_TOTAL_COUNTER_DEVICE [1] — total recv tokens
+//                             (FLAT: unpadded; EM: padded slot total).
 //                         LL mode: does not accept local tensors (num_local_tensors must be 0).
 //   num_local_tensors  - [IN]  Number of local tensors
 //   stream             - [IN]  CUDA stream
@@ -280,26 +298,41 @@ typedef struct {
 //                            factors must be supplied.
 //                            Scaling will be applied during the collective and the output tensor will be scaled.
 //                            For HT (NCCL_EP_LAYOUT_FLAT): output tensors are [N(r) x data_size] (2D),
-//                                    where N(r) = num_ranks * max_tokens_per_rank for static allocation,
-//                                    or the actual received count when max_tokens_per_rank is NCCL_EP_AUTO.
+//                                    where N(r) = num_ranks * max_send_tokens_per_rank for static allocation,
+//                                    or the actual received count when max_send_tokens_per_rank is NCCL_EP_AUTO.
 //                                    Tokens arrive as a contiguous flat sequence; no rank or expert structure.
+//                                    Optional routing outputs:
+//                                    TOPK_WEIGHTS:      [OUT] 2D [N(r) x num_topk], ncclFloat32.
+//                                    TOPK_IDX:          [OUT] 2D [N(r) x num_topk], ncclInt64.
+//                                                       (recv topk indices/weights reuse the TOPK_IDX /
+//                                                        TOPK_WEIGHTS tags in outputs.)
+//                            For HT (NCCL_EP_LAYOUT_EXPERT_MAJOR): outputs are
+//                                    [N(r) x data_size] (2D, same as FLAT). Caller derives per-expert
+//                                    slot zones from RECV_EXPERT_OFFSETS_DEVICE / RECV_EXPERT_COUNTER_DEVICE.
+//                                    Each slot is per (source_token, local_expert), so:
+//                                    TOPK_WEIGHTS:      [OUT] 1D [N(r)], ncclFloat32 — single weight per slot.
+//                                    TOPK_IDX:          not populated (slot encodes expert); omit from outputs.
 //                            For LL: the dimensions of output tensors are
 //                                    [local_experts x num_recv_tokens x data_size] (3D, expert-major).
 //                                    The dimensions of the scaling factors tensor are:
 //                                    [local_experts x num_recv_tokens x (hidden / 128)] (3D, ncclFloat32)
-//                                    where num_recv_tokens = num_ranks * max_tokens_per_rank.
+//                                    where num_recv_tokens = num_ranks * max_send_tokens_per_rank.
 //                            For LL rank-major: outputs are [num_recv_tokens x data_size] (2D),
-//                                    where num_recv_tokens = num_ranks * max_tokens_per_rank.
+//                                    where num_recv_tokens = num_ranks * max_send_tokens_per_rank.
 //                                    Additionally requires two routing output tensors:
-//                                    RECV_TOPK_IDX:     [OUT] 2D [num_recv_tokens x num_topk], ncclInt32.
-//                                        Top-k expert indices received from source ranks.
-//                                    RECV_TOPK_WEIGHTS: [OUT] 2D [num_recv_tokens x num_topk], ncclFloat32.
-//                                        Top-k weights received from source ranks.
+//                                    TOPK_IDX:          [OUT] 2D [num_recv_tokens x num_topk], ncclInt32.
+//                                        Top-k expert indices received from source ranks
+//                                        (recv topk indices reuse the TOPK_IDX tag in outputs).
+//                                    TOPK_WEIGHTS:      [OUT] 2D [num_recv_tokens x num_topk], ncclFloat32.
+//                                        Top-k weights received from source ranks
+//                                        (recv topk weights reuse the TOPK_WEIGHTS tag in outputs).
 //   num_outputs   - [IN]     Number of output tensors (equal to num_inputs plus number of scaling tensors)
 //   local_tensors - [IN,OUT] Array of pointers to preallocated tensors, with information that is local to the rank.
 //                            LL mode: accepts 1 optional local tensor:
-//                                    NUM_TOKENS_PER_EXPERTS: [OUT] a 1D tensor of unsigned int [num_experts]
-//                                    that contains the number of tokens received by each expert on this rank.
+//                                    RECV_EXPERT_COUNTER_DEVICE: [OUT] 1D ncclInt32 [num_local_experts] —
+//                                    per-expert recv tokens.
+//                            HT mode: no local tensors (num_local_tensors must be 0).
+//                            HT per-expert metadata comes from ncclEpUpdateHandle, not here.
 //   num_local_tensors - [IN] Number of local tensors.
 //   send_only     - [IN]     If true, the dispatch will only initiate data transfers and immediately
 //                            release GPU resources (without waiting for the data to be received).
@@ -345,7 +378,7 @@ typedef struct ncclEpCombineConfig ncclEpCombineConfig_t;
 //                               For HT (NCCL_EP_LAYOUT_FLAT): inputs are [N(r) x data_size] (2D),
 //                                       where N(r) is the flat received token count (same as dispatch output dim 0).
 //                               For LL: inputs are [local_experts x num_recv_tokens x data_size] (3D, expert-major),
-//                                       where num_recv_tokens = num_ranks * max_tokens_per_rank.
+//                                       where num_recv_tokens = num_ranks * max_send_tokens_per_rank.
 //                               For LL rank-major: inputs are [num_recv_tokens x data_size] (2D),
 //                                       pre-reduced across local experts by the caller before this call.
 //   num_inputs       - [IN]     Number of input tensors
@@ -409,23 +442,6 @@ ncclResult_t ncclEpComplete(
     ncclEpHandle_t handle,
     const ncclEpCompleteConfig_t* config,
     cudaStream_t stream
-);
-
-// Query the number of received tokens that will be received after a call to EP dispatch (HT mode only).
-//
-// Arguments:
-//   handle           - [IN]   A valid EP handle.
-//   num_recv_tokens  - [OUT]  Pointer to int, will be set to the actual number of tokens expected to be received on this rank
-//
-// Notes:
-//   - This API is only supported in HIGH_THROUGHPUT (HT) mode.
-//
-// Returns:
-//   ncclResult_t error code (e.g., ncclInvalidArgument if called in LL mode)
-
-ncclResult_t ncclEpHandleGetNumRecvTokens(
-    ncclEpHandle_t handle,
-    unsigned int* num_recv_tokens
 );
 
 // Get the data pointer from a tensor.

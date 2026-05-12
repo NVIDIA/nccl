@@ -390,7 +390,7 @@ Maintains state for a sequence of related MoE operations, i.e. dispatch and comb
 - Uses flat layout (`NCCL_EP_LAYOUT_FLAT`), the only layout supported by HT mode.
 - Dispatch output tokens are a contiguous flat sequence: `[N(r) x hidden]` where `N(r)` is the total number of tokens targeting this rank.
   - For static allocation: `N(r) = num_ranks * max_tokens_per_rank`
-  - For dynamic allocation (`max_tokens_per_rank = NCCL_EP_AUTO`): `N(r)` is the actual received count, queryable via `ncclEpHandleGetNumRecvTokens`
+  - For dynamic allocation (`max_tokens_per_rank = NCCL_EP_AUTO`): `N(r)` is the actual received count, written by the metadata kernel into the optional `NCCL_EP_TENSOR_TAG_RECV_TOTAL_COUNTER_DEVICE` local tensor
 - `recv_topk_idx` and `recv_topk_weights` carry per-slot routing metadata alongside the received tokens.
 - The caller uses `recv_topk_idx` to route each slot to the correct local expert(s), applies the weighted reduction using `recv_topk_weights`, and passes the pre-reduced `[N(r) x hidden]` tensor to `ncclEpCombine`.
 - Supports dynamic `max_tokens_per_rank` (set to `NCCL_EP_AUTO`)
@@ -598,27 +598,6 @@ ncclResult_t ncclEpHandleDestroy(
 );
 ```
 
-#### `ncclEpHandleGetNumRecvTokens()` (HT mode only)
-
-```c
-// Query the number of received tokens that will be received after a call to EP dispatch (HT mode only).
-//
-// Arguments:
-//   handle           - [IN]   A valid EP handle.
-//   num_recv_tokens  - [OUT]  Pointer to int, will be set to the actual number of tokens expected to be received on this rank
-//
-// Notes:
-//   - This API is only supported in HIGH_THROUGHPUT (HT) mode.
-//
-// Returns:
-//   ncclResult_t error code (e.g., ncclInvalidArgument if called in LL mode)
-
-ncclResult_t ncclEpHandleGetNumRecvTokens(
-    ncclEpHandle_t handle,
-    unsigned int* num_recv_tokens
-);
-```
-
 ### Communication Operations
 
 #### `ncclEpDispatch()`
@@ -658,8 +637,8 @@ Perform EP dispatch: send tokens to experts according to routing decisions.
 //   num_outputs   - [IN]     Number of output tensors (equal to num_inputs plus number of scaling tensors)
 //   local_tensors - [IN,OUT] Array of pointers to preallocated tensors, with information that is local to the rank.
 //                            LL mode: accepts 1 optional local tensor:
-//                                    NUM_TOKENS_PER_EXPERTS: [OUT] a 1D tensor of unsigned int [num_experts]
-//                                    that contains the number of tokens received by each expert on this rank.
+//                                    RECV_EXPERT_COUNTER_DEVICE: [OUT] a 1D tensor (ncclInt32 or ncclInt64)
+//                                    of size [num_local_experts] holding per-expert recv-token counts.
 //   num_local_tensors - [IN] Number of local tensors.
 //   send_only     - [IN]     If true, the dispatch kernel will only initiate data transfers and
 //                            release GPU resources before the data is received.
@@ -901,7 +880,12 @@ ncclEpCreateHandle(&handle, ep_group, topk_idx, local_tensors, num_local_tensors
 // num_recv_tokens is the max tokens this rank can receive (nRanks * max_tokens_per_rank).
 unsigned int num_recv_tokens;
 if (config.max_tokens_per_rank == NCCL_EP_AUTO) {
-    ncclEpHandleGetNumRecvTokens(handle, &num_recv_tokens);
+    // Pass an optional NCCL_EP_TENSOR_TAG_RECV_TOTAL_COUNTER_DEVICE int32 tensor (size 1)
+    // in `local_tensors` to ncclEpUpdateHandle; the metadata kernel writes the total recv
+    // token count into it.  Then read it back to host:
+    int32_t total_host;
+    cudaMemcpy(&total_host, recv_total_counter_data, sizeof(int32_t), cudaMemcpyDeviceToHost);
+    num_recv_tokens = static_cast<unsigned int>(total_host);
 } else {
     num_recv_tokens = config.max_tokens_per_rank * nRanks;
 }

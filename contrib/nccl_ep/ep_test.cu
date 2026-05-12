@@ -120,7 +120,10 @@ void printUsage(const char* programName, int myRank) {
         printf("  -a <ll|ht>                   Set algorithm mode (default: ll)\n");
         printf("                               ll:  Low latency mode (NCCL_EP_ALGO_LOW_LATENCY)\n");
         printf("                               ht:  High throughput mode (NCCL_EP_ALGO_HIGH_THROUGHPUT)\n");
-        printf("  -m                           Disable max_tokens_per_rank (only supported with HT mode)\n");
+        printf("  -L <fl|em>                   Layout (HT only; default: fl)\n");
+        printf("                               fl:  Flat layout (default)\n");
+        printf("                               em:  Expert-major layout (recv_topk_weights is 1D)\n");
+        printf("  -m                           Disable max_send_tokens_per_rank (only supported with HT mode)\n");
         printf("  -s <none|dispatch|combine|both>  Set send_only mode (default: none)\n");
         printf("                               none:     send_only=false for both dispatch and combine\n");
         printf("                               dispatch: send_only=true for dispatch only\n");
@@ -139,7 +142,8 @@ int main(int argc, char* argv[])
 {
   int myRank, nRanks, localRank = 0;
   ncclEpAlgorithm_t algorithm = NCCL_EP_ALGO_LOW_LATENCY; // Default to 'll' (low latency)
-  bool disable_max_tokens = false; // Flag to disable max_tokens_per_rank
+  ncclEpLayout_t ht_layout = NCCL_EP_LAYOUT_AUTO; // HT layout (resolved to FLAT by default)
+  bool disable_max_tokens = false; // Flag to disable max_send_tokens_per_rank
   bool dispatch_send_only = false; // send_only flag for dispatch
   bool combine_send_only = false;  // send_only flag for combine
   bool cached_mode = false;        // cached mode flag
@@ -161,7 +165,7 @@ int main(int argc, char* argv[])
 
   // Parse command line arguments using getopt
   int opt;
-  while ((opt = getopt(argc, argv, "a:ms:crt:d:e:h")) != -1) {
+  while ((opt = getopt(argc, argv, "a:L:ms:crt:d:e:h")) != -1) {
     switch (opt) {
       case 'a':
         if (strcmp(optarg, "ll") == 0) {
@@ -171,6 +175,20 @@ int main(int argc, char* argv[])
         } else {
           if (myRank == 0) {
             printf("Error: Invalid algorithm '%s'. Use 'll' or 'ht'\n", optarg);
+            printUsage(argv[0], myRank);
+          }
+          MPI_Finalize();
+          exit(EXIT_FAILURE);
+        }
+        break;
+      case 'L':
+        if (strcmp(optarg, "fl") == 0 || strcmp(optarg, "flat") == 0) {
+          ht_layout = NCCL_EP_LAYOUT_FLAT;
+        } else if (strcmp(optarg, "em") == 0 || strcmp(optarg, "expert-major") == 0) {
+          ht_layout = NCCL_EP_LAYOUT_EXPERT_MAJOR;
+        } else {
+          if (myRank == 0) {
+            printf("Error: Invalid layout '%s'. Use 'fl' or 'em'\n", optarg);
             printUsage(argv[0], myRank);
           }
           MPI_Finalize();
@@ -252,14 +270,14 @@ int main(int argc, char* argv[])
     }
   }
 
-  // -m (NCCL_EP_AUTO for max_tokens_per_rank) is intended for HT mode only.
+  // -m (NCCL_EP_AUTO for max_send_tokens_per_rank) is intended for HT mode only.
   // Not yet supported in the current release; code paths are kept for future use.
   if (disable_max_tokens) {
     if (myRank == 0) {
       if (algorithm != NCCL_EP_ALGO_HIGH_THROUGHPUT)
         printf("Error: -m is only applicable to HT mode (-a ht)\n");
       else
-        printf("Error: -m (NCCL_EP_AUTO for max_tokens_per_rank) is not yet supported.\n"
+        printf("Error: -m (NCCL_EP_AUTO for max_send_tokens_per_rank) is not yet supported.\n"
                "       This feature will be available in a future release for HT mode.\n");
     }
     MPI_Finalize();
@@ -322,16 +340,23 @@ int main(int argc, char* argv[])
   config.version = 1;                                    // Structure version
   config.algorithm = algorithm;                          // Algorithm type (set by command line)
   config.num_experts = num_experts;
-  // max_tokens_per_rank is the per-rank batch size (max tokens any single rank will send).
-  config.max_tokens_per_rank = disable_max_tokens ? NCCL_EP_AUTO : num_tokens;
+  // max_send_tokens_per_rank is the per-rank batch size (max tokens any single rank will send).
+  config.max_send_tokens_per_rank = disable_max_tokens ? NCCL_EP_AUTO : num_tokens;
   config.token_size_bytes = hidden * 2;                  // bfloat16
   config.rdma_buffer_size = NCCL_EP_AUTO;               // NCCL_EP_AUTO for auto configuration, internally uses the hint
   config.num_qp_per_rank = NCCL_EP_AUTO;                // Default is 24, see internode_ll.cu:181 for the minimum
   config.num_channels = NCCL_EP_AUTO;                   // Number of communication channels
+  // HT layout (FLAT default). LL ignores this knob.
+  if (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) {
+    config.layout = (ht_layout == NCCL_EP_LAYOUT_AUTO) ? NCCL_EP_LAYOUT_FLAT : ht_layout;
+    // HT requires max_recv_token_slots_per_rank > 0. Worst-case = nRanks * num_tokens (for top_k=1)
+    // or nRanks * num_tokens * top_k for EM under heavy fan-out; use the latter for safety.
+    config.max_recv_token_slots_per_rank = static_cast<unsigned int>(nRanks) * num_tokens * top_k;
+  }
 
   const char* algorithm_name = (algorithm == NCCL_EP_ALGO_LOW_LATENCY) ? "LOW_LATENCY" : "HIGH_THROUGHPUT";
   printf("Rank %d: Testing ncclEpCreateGroup with algorithm: %s%s\n", myRank, algorithm_name,
-         disable_max_tokens ? " (no max_tokens_per_rank)" : "");
+         disable_max_tokens ? " (no max_send_tokens_per_rank)" : "");
   NCCLCHECK(ncclEpCreateGroup(&ep_group, comm, &config, torchMalloc, torchFree));
 
   ncclNDTensor_t topk_idx;
@@ -368,13 +393,15 @@ int main(int argc, char* argv[])
   CUDACHECK(cudaMemcpy(topk_idx_data, topk_idx_host, num_tokens * top_k * sizeof(int64_t), cudaMemcpyHostToDevice));
 
   // Create recv_expert_counter device tensor for ncclEpCreateHandle (only when disable_max_tokens is true)
-  ncclNDTensor_t handle_local_tensors[1] = {nullptr};
+  ncclNDTensor_t handle_local_tensors[2] = {nullptr, nullptr};
   unsigned int handle_num_local_tensors = 0;
   ncclNDTensor_t handle_recv_expert_counter = nullptr;
+  ncclNDTensor_t handle_recv_total_counter = nullptr;
   if (disable_max_tokens) {
     NCCLCHECK(epMakeTensor(&handle_recv_expert_counter, 1, ncclInt32, NCCL_EP_TENSOR_TAG_RECV_EXPERT_COUNTER_DEVICE, num_local_experts));
-    handle_local_tensors[0] = handle_recv_expert_counter;
-    handle_num_local_tensors = 1;
+    handle_local_tensors[handle_num_local_tensors++] = handle_recv_expert_counter;
+    NCCLCHECK(epMakeTensor(&handle_recv_total_counter, 1, ncclInt32, NCCL_EP_TENSOR_TAG_RECV_TOTAL_COUNTER_DEVICE, 1));
+    handle_local_tensors[handle_num_local_tensors++] = handle_recv_total_counter;
   }
 
   printf("Rank %d: Testing ncclEpCreateHandle\n", myRank);
@@ -384,20 +411,31 @@ int main(int argc, char* argv[])
 
   unsigned int num_recv_tokens = 0;
   if (disable_max_tokens) {
-    NCCLCHECK(ncclEpHandleGetNumRecvTokens(ep_handle, &num_recv_tokens));
+    void* total_data = nullptr;
+    NCCLCHECK(ncclEpTensorGetData(handle_recv_total_counter, &total_data));
+    int32_t total_host = 0;
+    CUDACHECK(cudaMemcpy(&total_host, total_data, sizeof(int32_t), cudaMemcpyDeviceToHost));
+    assert(total_host >= 0);
+    num_recv_tokens = static_cast<unsigned int>(total_host);
+  }
+  else if (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) {
+    // HT recv buffer is sized by max_recv_token_slots_per_rank.
+    num_recv_tokens = config.max_recv_token_slots_per_rank;
   }
   else {
-  // Specific to this test
-    num_recv_tokens = config.max_tokens_per_rank * num_local_experts;
+    num_recv_tokens = config.max_send_tokens_per_rank * num_local_experts;
   }
   assert(num_recv_tokens);
 
   ncclEpDispatchConfig_t dispatch_config;
   dispatch_config.round_scales = 0; // Not testing this parameter atm
 
-  // Array sizes depend on algorithm: LL uses 1 input/output, HT use 3 inputs/3 outputs
+  // Array sizes depend on algorithm/layout. HT FLAT: 3 outputs (recv_x + recv_topk_weights
+  // + recv_topk_idx). HT EM: 2 outputs (recv_x + recv_topk_weights, no recv_topk_idx). LL: 1.
+  const bool ht_em = (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT &&
+                       config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
   int num_inputs = (algorithm == NCCL_EP_ALGO_LOW_LATENCY) ? 1 : 3;
-  int num_outputs = (algorithm == NCCL_EP_ALGO_LOW_LATENCY) ? 1 : 3;
+  int num_outputs = (algorithm == NCCL_EP_ALGO_LOW_LATENCY) ? 1 : (ht_em ? 2 : 3);
   int num_local_tensors = (algorithm == NCCL_EP_ALGO_LOW_LATENCY) ? 1 : 0;
 
   ncclNDTensor_t inputs[3];
@@ -417,7 +455,7 @@ int main(int argc, char* argv[])
   // outputs[0] shape depends on algorithm
   if (algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
     // LL mode: outputs[0] is [num_local_experts, max_recv_tokens * nRanks, hidden]
-    NCCLCHECK(epMakeTensor(&outputs[0], 3, ncclBfloat16, NCCL_EP_TENSOR_TAG_TOKENS, static_cast<unsigned int>(num_local_experts), config.max_tokens_per_rank * nRanks, static_cast<unsigned int>(hidden)));
+    NCCLCHECK(epMakeTensor(&outputs[0], 3, ncclBfloat16, NCCL_EP_TENSOR_TAG_TOKENS, static_cast<unsigned int>(num_local_experts), config.max_send_tokens_per_rank * nRanks, static_cast<unsigned int>(hidden)));
   } else {
     // HT mode: outputs[0] is [num_tokens, hidden]
     NCCLCHECK(epMakeTensor(&outputs[0], 2, ncclBfloat16, NCCL_EP_TENSOR_TAG_TOKENS, static_cast<unsigned int>(num_recv_tokens), static_cast<unsigned int>(hidden)));
@@ -427,10 +465,18 @@ int main(int argc, char* argv[])
     NCCLCHECK(epMakeTensor(&local_tensors[0], 1, ncclInt32, NCCL_EP_TENSOR_TAG_RECV_EXPERT_COUNTER_DEVICE, static_cast<unsigned int>(num_local_experts)));
   }
 
-  // In HT mode, outputs[1] (recv_topk_weights) and outputs[2] (recv_topk_idx) are 2D tensors [num_recv_tokens, top_k]
+  // HT outputs[1]: EM is 1D [num_recv_tokens], FLAT is 2D [num_recv_tokens, top_k].
+  // HT outputs[2] (recv_topk_idx): only allocated under FLAT.
   if (algorithm != NCCL_EP_ALGO_LOW_LATENCY) {
-    NCCLCHECK(epMakeTensor(&outputs[1], 2, ncclFloat32, NCCL_EP_TENSOR_TAG_TOPK_WEIGHTS, static_cast<unsigned int>(num_recv_tokens), static_cast<unsigned int>(top_k)));
-    NCCLCHECK(epMakeTensor(&outputs[2], 2, ncclInt64, NCCL_EP_TENSOR_TAG_TOPK_IDX, static_cast<unsigned int>(num_recv_tokens), static_cast<unsigned int>(top_k)));
+    if (ht_em) {
+      NCCLCHECK(epMakeTensor(&outputs[1], 1, ncclFloat32, NCCL_EP_TENSOR_TAG_TOPK_WEIGHTS,
+                              static_cast<unsigned int>(num_recv_tokens)));
+    } else {
+      NCCLCHECK(epMakeTensor(&outputs[1], 2, ncclFloat32, NCCL_EP_TENSOR_TAG_TOPK_WEIGHTS,
+                              static_cast<unsigned int>(num_recv_tokens), static_cast<unsigned int>(top_k)));
+      NCCLCHECK(epMakeTensor(&outputs[2], 2, ncclInt64, NCCL_EP_TENSOR_TAG_TOPK_IDX,
+                              static_cast<unsigned int>(num_recv_tokens), static_cast<unsigned int>(top_k)));
+    }
   }
 
   // Fill the first ELEMENTS_TESTED_PER_TOKEN elements of each token with a special value based on the current rank
@@ -496,12 +542,12 @@ int main(int argc, char* argv[])
   bool dispatch_check_passed = true;
 
   if (!random_mode && algorithm == NCCL_EP_ALGO_LOW_LATENCY && recv_count_host != nullptr) {
-    // LL mode: outputs[0] is [num_local_experts, config.max_tokens_per_rank * nRanks, hidden]
-    uint16_t *output_host = new uint16_t[num_local_experts * config.max_tokens_per_rank * nRanks * hidden]();
+    // LL mode: outputs[0] is [num_local_experts, config.max_send_tokens_per_rank * nRanks, hidden]
+    uint16_t *output_host = new uint16_t[num_local_experts * config.max_send_tokens_per_rank * nRanks * hidden]();
     void* output0_data;
     NCCLCHECK(ncclEpTensorGetData(outputs[0], &output0_data));
     CUDACHECK(cudaMemcpy(output_host, output0_data,
-                         num_local_experts * config.max_tokens_per_rank * nRanks * hidden * 2,
+                         num_local_experts * config.max_send_tokens_per_rank * nRanks * hidden * 2,
                          cudaMemcpyDeviceToHost));
 
     for (unsigned int e = 0; e < num_local_experts; e++) {
@@ -514,8 +560,8 @@ int main(int argc, char* argv[])
       }
 
       // Verify the first recv_count_host[e] tokens for this expert
-      for (int t = 0; t < recv_count_host[e] && t < static_cast<int>(config.max_tokens_per_rank * nRanks); t++) {
-        size_t token_offset = (e * config.max_tokens_per_rank * nRanks + t) * hidden;
+      for (int t = 0; t < recv_count_host[e] && t < static_cast<int>(config.max_send_tokens_per_rank * nRanks); t++) {
+        size_t token_offset = (e * config.max_send_tokens_per_rank * nRanks + t) * hidden;
         for (int j = 0; j < ELEMENTS_TESTED_PER_TOKEN; ++j) {
           uint16_t expected = static_cast<uint16_t>(0x1000 + recv_rank);
           uint16_t actual = output_host[token_offset + j];
@@ -575,52 +621,66 @@ int main(int argc, char* argv[])
     delete[] recv_count_host;
   }
 
-  // In HT mode, copy and verify outputs[1] (recv_topk_weights) and outputs[2] (recv_topk_idx)
+  // In HT mode, copy and verify outputs[1] (recv_topk_weights) and (FLAT only) outputs[2] (recv_topk_idx)
   if (!random_mode && algorithm != NCCL_EP_ALGO_LOW_LATENCY) {
-    // Copy recv_topk_weights (outputs[1]) - [num_recv_tokens, top_k] float32
-    float *recv_topk_weights_host = new float[num_recv_tokens * top_k]();
+    // EM: 1D [num_recv_tokens]; FLAT: 2D [num_recv_tokens, top_k].
+    const size_t weights_count = ht_em ? static_cast<size_t>(num_recv_tokens)
+                                        : static_cast<size_t>(num_recv_tokens) * top_k;
+    float *recv_topk_weights_host = new float[weights_count]();
     void* output1_data;
     NCCLCHECK(ncclEpTensorGetData(outputs[1], &output1_data));
-    CUDACHECK(cudaMemcpy(recv_topk_weights_host, output1_data, num_recv_tokens * top_k * sizeof(float), cudaMemcpyDeviceToHost));
+    CUDACHECK(cudaMemcpy(recv_topk_weights_host, output1_data,
+                         weights_count * sizeof(float), cudaMemcpyDeviceToHost));
 
-    // Copy recv_topk_idx (outputs[2]) - [num_recv_tokens, top_k] int64
-    int64_t *recv_topk_idx_host = new int64_t[num_recv_tokens * top_k]();
-    void* output2_data;
-    NCCLCHECK(ncclEpTensorGetData(outputs[2], &output2_data));
-    CUDACHECK(cudaMemcpy(recv_topk_idx_host, output2_data, num_recv_tokens * top_k * sizeof(int64_t), cudaMemcpyDeviceToHost));
+    int64_t *recv_topk_idx_host = nullptr;
+    if (!ht_em) {
+      recv_topk_idx_host = new int64_t[static_cast<size_t>(num_recv_tokens) * top_k]();
+      void* output2_data;
+      NCCLCHECK(ncclEpTensorGetData(outputs[2], &output2_data));
+      CUDACHECK(cudaMemcpy(recv_topk_idx_host, output2_data,
+                           static_cast<size_t>(num_recv_tokens) * top_k * sizeof(int64_t),
+                           cudaMemcpyDeviceToHost));
+    }
 
-    // Verify recv_topk_weights and recv_topk_idx
     bool ht_outputs_valid = true;
-    printf("Rank %d: Verifying recv_topk_weights and recv_topk_idx\n", myRank);
+    printf("Rank %d: Verifying recv_topk_weights%s\n", myRank,
+           ht_em ? " (HT+EM, 1D)" : " and recv_topk_idx (HT+FLAT, 2D)");
 
-    // Test ELEMENTS_TESTED_PER_TOKEN (or top_k if smaller) per token
     float expected_weight = 1.0f / top_k;
     int weight_errors = 0;
     int idx_errors = 0;
 
-    for (int i = 0; i < num_tokens; i++) {
-      for (int j = 0; j < top_k; j++) {
-        int offset = i * top_k + j;
-
-        // Check that recv_topk_weights equals 1.0f / top_k
-        if (recv_topk_weights_host[offset] != expected_weight) {
-          if (weight_errors < 5) {  // Limit error output
-            printf("Rank %d: recv_topk_weights[%d][%d] = %f, expected %f\n",
-                   myRank, i, j, recv_topk_weights_host[offset], expected_weight);
-          }
+    if (ht_em) {
+      // EM: each filled slot has a single weight == 1/top_k. Padded slots default to 0.
+      for (int i = 0; i < num_recv_tokens; i++) {
+        float w = recv_topk_weights_host[i];
+        if (w != 0.0f && w != expected_weight) {
+          if (weight_errors < 5)
+            printf("Rank %d: recv_topk_weights[%d] = %f, expected 0 or %f\n",
+                   myRank, i, w, expected_weight);
           weight_errors++;
           ht_outputs_valid = false;
         }
-
-        // Check that recv_topk_idx is within valid range [0, num_experts)
-        int64_t idx_val = recv_topk_idx_host[offset];
-        if (idx_val < 0 || idx_val >= static_cast<int64_t>(num_experts)) {
-          if (idx_errors < 5) {  // Limit error output
-            printf("Rank %d: recv_topk_idx[%d][%d] = %ld, expected range [0, %u)\n",
-                   myRank, i, j, static_cast<long>(idx_val), num_experts);
+      }
+    } else {
+      for (int i = 0; i < num_tokens; i++) {
+        for (int j = 0; j < top_k; j++) {
+          int offset = i * top_k + j;
+          if (recv_topk_weights_host[offset] != expected_weight) {
+            if (weight_errors < 5)
+              printf("Rank %d: recv_topk_weights[%d][%d] = %f, expected %f\n",
+                     myRank, i, j, recv_topk_weights_host[offset], expected_weight);
+            weight_errors++;
+            ht_outputs_valid = false;
           }
-          idx_errors++;
-          ht_outputs_valid = false;
+          int64_t idx_val = recv_topk_idx_host[offset];
+          if (idx_val < 0 || idx_val >= static_cast<int64_t>(num_experts)) {
+            if (idx_errors < 5)
+              printf("Rank %d: recv_topk_idx[%d][%d] = %ld, expected range [0, %u)\n",
+                     myRank, i, j, static_cast<long>(idx_val), num_experts);
+            idx_errors++;
+            ht_outputs_valid = false;
+          }
         }
       }
     }
@@ -633,7 +693,8 @@ int main(int argc, char* argv[])
     }
 
     if (ht_outputs_valid) {
-      printf("Rank %d: %s mode recv_topk_weights and recv_topk_idx verification passed\n", myRank, algorithm_name);
+      printf("Rank %d: %s mode recv_topk_weights%s verification passed\n",
+             myRank, algorithm_name, ht_em ? "" : " and recv_topk_idx");
     } else {
       dispatch_check_passed = false;
     }
@@ -657,14 +718,14 @@ int main(int argc, char* argv[])
   ncclNDTensor_t expert_outputs;
 
   if (algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
-      // LL mode: expert_outputs is 3D [num_local_experts, config.max_tokens_per_rank * nRanks, hidden]
-    NCCLCHECK(epMakeTensor(&expert_outputs, 3, ncclBfloat16, NCCL_EP_TENSOR_TAG_TOKENS, static_cast<unsigned int>(num_local_experts), static_cast<unsigned int>(config.max_tokens_per_rank * nRanks), static_cast<unsigned int>(hidden)));
+      // LL mode: expert_outputs is 3D [num_local_experts, config.max_send_tokens_per_rank * nRanks, hidden]
+    NCCLCHECK(epMakeTensor(&expert_outputs, 3, ncclBfloat16, NCCL_EP_TENSOR_TAG_TOKENS, static_cast<unsigned int>(num_local_experts), static_cast<unsigned int>(config.max_send_tokens_per_rank * nRanks), static_cast<unsigned int>(hidden)));
 
     // Fill expert outputs with multiple test values per token
     // The ith element will be (i+1)*2 for all experts
-    uint16_t *expert_outputs_host = new uint16_t[config.max_tokens_per_rank * hidden]();
+    uint16_t *expert_outputs_host = new uint16_t[config.max_send_tokens_per_rank * hidden]();
 
-    for (unsigned int t = 0; t < config.max_tokens_per_rank; ++t) {
+    for (unsigned int t = 0; t < config.max_send_tokens_per_rank; ++t) {
         for (int j = 0; j < ELEMENTS_TESTED_PER_TOKEN; ++j) {
             // Set the ith element to (i+1)*2, stored as bf16
             expert_outputs_host[t * hidden + j] = float_to_bf16(static_cast<float>((j + 1) * 2));
@@ -675,10 +736,10 @@ int main(int argc, char* argv[])
     void* expert_outputs_data;
     NCCLCHECK(ncclEpTensorGetData(expert_outputs, &expert_outputs_data));
     for (int e = 0; e < num_local_experts; ++e) {
-      size_t offset_bytes = static_cast<size_t>(e) * config.max_tokens_per_rank * hidden * nRanks * 2;
+      size_t offset_bytes = static_cast<size_t>(e) * config.max_send_tokens_per_rank * hidden * nRanks * 2;
       CUDACHECK(cudaMemcpy(static_cast<uint8_t*>(expert_outputs_data) + offset_bytes,
                            expert_outputs_host,
-                           config.max_tokens_per_rank * hidden * 2,
+                           config.max_send_tokens_per_rank * hidden * 2,
                            cudaMemcpyHostToDevice));
     }
 
@@ -726,7 +787,13 @@ int main(int argc, char* argv[])
   NCCLCHECK(ncclEpComplete(ep_handle, nullptr, s));
   CUDACHECK(cudaStreamSynchronize(s));
 
-  // Verify combine output - check ELEMENTS_TESTED_PER_TOKEN elements per token
+  // Verify combine output - check ELEMENTS_TESTED_PER_TOKEN elements per token.
+  // ncclEpCombine sums slot contributions unweighted; caller is expected to pre-weight
+  // expert_outputs. ep_test passes a CONSTANT expert_outputs, so result = N * (j+1)*2
+  // where N = slot count per home token, which varies by HT layout:
+  //   FLAT: 1 slot per token (all top_k matches collapse into one source-rank slot
+  //         in this deterministic routing).
+  //   EM:   top_k slots per token (one per (token, local_expert) pair).
   int combine_errors = 0;
   if (!random_mode) {
     uint16_t *combined_output_host = new uint16_t[num_tokens * hidden]();
@@ -734,11 +801,10 @@ int main(int argc, char* argv[])
     NCCLCHECK(ncclEpTensorGetData(combined_output, &combined_output_data));
     CUDACHECK(cudaMemcpy(combined_output_host, combined_output_data, num_tokens * hidden * 2, cudaMemcpyDeviceToHost));
 
-    // Since all experts output the same values and we use equal weights,
-    // each token should have the same values as the expert outputs: (i+1)*2
+    const int slot_count = ht_em ? top_k : 1;
     for (int i = 0; i < num_tokens; ++i) {
       for (int j = 0; j < ELEMENTS_TESTED_PER_TOKEN; ++j) {
-        uint16_t expected = float_to_bf16(static_cast<float>((j + 1) * 2));
+        uint16_t expected = float_to_bf16(static_cast<float>(slot_count * (j + 1) * 2));
         uint16_t actual = (combined_output_host[i * hidden + j]);
         if (actual != expected) {
           printf("Combine check failed! Rank %d, token %d, element %d: expected %d, got %d\n",
@@ -771,6 +837,12 @@ int main(int argc, char* argv[])
       printf("Rank %d: Error - cached mode is only supported in HT modes (not LL)\n", myRank);
       exit(EXIT_FAILURE);
     }
+    // HT+EM cached path uses backward combine which expects 2D combine_input topk_weights;
+    // dispatch outputs[1] under EM is 1D. Skip until EM combine bwd path is wired separately.
+    if (ht_em) {
+      printf("Rank %d: cached mode skipped under HT+EM (1D recv_topk_weights not yet "
+             "wired into combine bwd input)\n", myRank);
+    } else {
 
     printf("Rank %d: Testing cached mode (%s)\n", myRank, algorithm_name);
 
@@ -781,9 +853,12 @@ int main(int argc, char* argv[])
     uint16_t *first_combine_output = nullptr;
 
     if (!random_mode) {
+      // Per-layout sizes: HT+EM weights are 1D [N], no recv_topk_idx.
+      const size_t weights_count = ht_em ? static_cast<size_t>(num_recv_tokens)
+                                          : static_cast<size_t>(num_recv_tokens) * top_k;
       first_dispatch_output0 = new uint16_t[num_recv_tokens * hidden];
-      first_dispatch_output1 = new float[num_recv_tokens * top_k];
-      first_dispatch_output2 = new int64_t[num_recv_tokens * top_k];
+      first_dispatch_output1 = new float[weights_count];
+      if (!ht_em) first_dispatch_output2 = new int64_t[num_recv_tokens * top_k];
 
       void* out0_data;
       NCCLCHECK(ncclEpTensorGetData(outputs[0], &out0_data));
@@ -792,11 +867,13 @@ int main(int argc, char* argv[])
       void* out1_data;
       NCCLCHECK(ncclEpTensorGetData(outputs[1], &out1_data));
       CUDACHECK(cudaMemcpy(first_dispatch_output1, out1_data,
-                           num_recv_tokens * top_k * sizeof(float), cudaMemcpyDeviceToHost));
-      void* out2_data;
-      NCCLCHECK(ncclEpTensorGetData(outputs[2], &out2_data));
-      CUDACHECK(cudaMemcpy(first_dispatch_output2, out2_data,
-                           num_recv_tokens * top_k * sizeof(int64_t), cudaMemcpyDeviceToHost));
+                           weights_count * sizeof(float), cudaMemcpyDeviceToHost));
+      if (!ht_em) {
+        void* out2_data;
+        NCCLCHECK(ncclEpTensorGetData(outputs[2], &out2_data));
+        CUDACHECK(cudaMemcpy(first_dispatch_output2, out2_data,
+                             num_recv_tokens * top_k * sizeof(int64_t), cudaMemcpyDeviceToHost));
+      }
 
       // Save first phase combine output to host for comparison
       first_combine_output = new uint16_t[num_tokens * hidden];
@@ -833,8 +910,10 @@ int main(int argc, char* argv[])
     NCCLCHECK(ncclEpTensorGetData(cached_combine_topk_weights_input, &cached_ctwi_data));
     void* out1_data_for_copy;
     NCCLCHECK(ncclEpTensorGetData(outputs[1], &out1_data_for_copy));
+    const size_t cached_w_count = ht_em ? static_cast<size_t>(num_recv_tokens)
+                                          : static_cast<size_t>(num_recv_tokens) * top_k;
     CUDACHECK(cudaMemcpy(cached_ctwi_data, out1_data_for_copy,
-                         num_recv_tokens * top_k * sizeof(float), cudaMemcpyDeviceToDevice));
+                         cached_w_count * sizeof(float), cudaMemcpyDeviceToDevice));
 
     ncclNDTensor_t cached_combine_inputs[2];
     cached_combine_inputs[0] = expert_outputs;
@@ -944,6 +1023,7 @@ int main(int argc, char* argv[])
     epFreeTensor(cached_combine_topk_weights_input);
 
     printf("Rank %d: Cached mode - second dispatch and combine calls completed successfully\n", myRank);
+    }  // end !ht_em else branch
   }
 
   // Clean up first phase host buffer (kept for cached mode comparison in HT mode)
@@ -970,7 +1050,7 @@ int main(int argc, char* argv[])
   epFreeTensor(outputs[0]);
   if (algorithm != NCCL_EP_ALGO_LOW_LATENCY) {
     epFreeTensor(outputs[1]);
-    epFreeTensor(outputs[2]);
+    if (!ht_em) epFreeTensor(outputs[2]);
   }
   if (algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
     epFreeTensor(local_tensors[0]);

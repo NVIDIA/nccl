@@ -36,7 +36,11 @@ typedef enum {
      * Expert-major layout.
      *
      * Dispatch output:
-     *   recv_x shape: [num_local_experts, max_tokens_per_rank * num_ranks, hidden]
+     *   recv_x shape:            [num_local_experts, max_send_tokens_per_rank * num_ranks, hidden]
+     *   recv_topk_weights shape: HT: [N] (1D, one weight per slot — each slot is per
+     *                                    (source_token, local_expert), at most one match);
+     *                            LL: nullptr (not populated under EM).
+     *   recv_topk_idx:           not populated under EM (slot index encodes expert).
      *
      * Combine input is the post-expert activation in the same shape.
      * Each expert rank sends its post-expert activation back to the originating
@@ -50,9 +54,9 @@ typedef enum {
      * Rank-major layout.
      *
      * Dispatch output:
-     *   recv_x shape:            [max_tokens_per_rank * num_ranks, hidden]
-     *   recv_topk_weights shape: [max_tokens_per_rank * num_ranks, num_topk]
-     *   recv_topk_idx shape:     [max_tokens_per_rank * num_ranks, num_topk]
+     *   recv_x shape:            [max_send_tokens_per_rank * num_ranks, hidden]
+     *   recv_topk_weights shape: [max_send_tokens_per_rank * num_ranks, num_topk]
+     *   recv_topk_idx shape:     [max_send_tokens_per_rank * num_ranks, num_topk]
      *
      * Tokens arrive in rank-major order with no expert dimension.
      * The caller is responsible for running expert computation on each token
@@ -77,8 +81,8 @@ typedef enum {
      *   recv_topk_idx shape:     [N(r) x num_topk]
      *
      * where N(r) is the total number of tokens targeting this rank across all
-     * source ranks (num_ranks * max_tokens_per_rank in the static case, or the
-     * actual received count when max_tokens_per_rank is NCCL_EP_AUTO).
+     * source ranks (num_ranks * max_send_tokens_per_rank in the static case, or the
+     * actual received count when max_send_tokens_per_rank is NCCL_EP_AUTO).
      *
      * Tokens arrive as a single contiguous sequence with no rank-major or
      * expert-major structure.  The caller uses recv_topk_idx to route each
@@ -103,14 +107,21 @@ typedef enum {
     NCCL_EP_TENSOR_TAG_TOPK_WEIGHTS = 3,
     // Tensor containing scales
     NCCL_EP_TENSOR_TAG_SCALES = 4,
-    // Tensor containing tokens received per expert (device memory)
+    // Per-expert received token counts (1D, ncclInt32 or ncclInt64).
+    //   LL: unpadded counts (kernel-written atomically).
+    //   HT flat: unpadded counts.
+    //   HT expert-major: padded counts (sum equals dispatch output buffer slot count).
     NCCL_EP_TENSOR_TAG_RECV_EXPERT_COUNTER_DEVICE = 5,
-    // Tensor containing per-expert token counts
-    NCCL_EP_TENSOR_TAG_TOKENS_PER_EXPERTS = 7,
-    // LL rank-major dispatch outputs: topk indices/weights received from source ranks
-    NCCL_EP_TENSOR_TAG_RECV_TOPK_IDX     = 8,
-    NCCL_EP_TENSOR_TAG_RECV_TOPK_WEIGHTS = 9,
+    // Recv topk indices/weights reuse NCCL_EP_TENSOR_TAG_TOPK_IDX /
+    // NCCL_EP_TENSOR_TAG_TOPK_WEIGHTS in the outputs list (no separate recv tags).
     // LL rank-major dispatch local tensor: per-source-rank received token counts [nRanks], int32.
     // Analogous to RECV_EXPERT_COUNTER_DEVICE for HT/LL expert-major, but shaped by source rank.
-    NCCL_EP_TENSOR_TAG_RECV_RANK_COUNTER_DEVICE = 10,
+    NCCL_EP_TENSOR_TAG_RECV_RANK_COUNTER_DEVICE = 6,
+    // Per-expert token offsets into the received token buffer (1D, ncclInt32 or ncclInt64).
+    // HT expert-major only: prefix sum of padded per-expert counts.
+    NCCL_EP_TENSOR_TAG_RECV_EXPERT_OFFSETS_DEVICE = 7,
+    // Scalar total recv token count (1D, size 1, ncclInt32 or ncclInt64).
+    //   HT FLAT: unpadded total. HT EM: padded slot total.
+    // Optional in ncclEpUpdateHandle local tensors; written by the metadata kernel.
+    NCCL_EP_TENSOR_TAG_RECV_TOTAL_COUNTER_DEVICE = 8,
 } ncclEpTensorTag_t;

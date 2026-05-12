@@ -27,6 +27,16 @@ struct ncclGinCpuProxyRequest {
 static_assert(sizeof(ncclGinCpuProxyRequest) <= sizeof(ncclGinRequest_t),
               "ncclGinCpuProxyRequest must fit in ncclGinRequest_t");
 
+// Clang's CUDA mode skips sm_32_intrinsics.hpp; clang <= 20 has no __stwt
+// declarations.
+#if defined(__clang__) && defined(__CUDA__) && (__clang_major__ < 21)
+NCCL_DEVICE_INLINE void __stwt(uint4* addr, const uint4& val) {
+  asm("st.global.wt.v4.u32 [%0], {%1,%2,%3,%4};"
+      :: "l"(addr), "r"(val.x), "r"(val.y), "r"(val.z), "r"(val.w)
+      : "memory");
+}
+#endif
+
 namespace nccl {
 namespace gin {
 namespace proxy {
@@ -69,7 +79,10 @@ NCCL_DEVICE_INLINE void postGfd(Coop coop, ncclGinProxyGpuCtx_t* proxyCtx, ncclG
     while (queueSize <= idx - ci.load(cuda::memory_order_relaxed)) {
     }
     uint32_t gfdIdx = idx & (queueSize - 1);
-// 16 byte stores with the write-through cache hint
+    // 16-byte vector stores with the write-through cache hint. Both sides cast
+    // through (uint4*), which emits v4.b32 PTX requiring 16-byte alignment.
+    // ncclGinProxyGfd_t is declared __attribute__((packed, aligned(16))) in
+    // gin_proxy_device_host_common.h; static_asserts there enforce the contract.
 #pragma unroll
     for (uint8_t i = 0; i < sizeof(ncclGinProxyGfd_t) / sizeof(uint4); i++) {
       __stwt((uint4*)&q[gfdIdx] + i, ((uint4*)gfd)[i]);

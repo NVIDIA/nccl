@@ -132,11 +132,18 @@ typedef enum {
   ncclGinProxyGfdQwords = 16,
 } ncclGinProxyGfdQwordIdx_t;
 
-typedef struct __attribute__((packed)) {
+// aligned(16) is required because gin_proxy.h casts (uint4*)&gfd to emit
+// st.global.wt.v4.u32 / ld.local.v4.b32 PTX, which require 16-byte alignment.
+// packed is needed to preserve the no-padding guarantee the inner bitfield layouts depend on.
+typedef struct __attribute__((packed, aligned(16))) {
   ncclGinProxyQword_t qword[ncclGinProxyGfdQwords];
 } ncclGinProxyGfd_t;
 static_assert(sizeof(ncclGinProxyGfd_t) == 128,
               "sizeof(ncclGinProxyGfd_t) != 128 - Backwards compat requires ncclGinProxyGfd to be 128 bytes!");
+static_assert(alignof(ncclGinProxyGfd_t) >= 16,
+              "ncclGinProxyGfd_t must be at least 16-byte aligned: gin_proxy.h "
+              "casts to (uint4*) for v4 PTX load/store; lower alignment causes "
+              "cudaErrorMisalignedAddress.");
 
 typedef struct {
   int nranks;

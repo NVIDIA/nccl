@@ -41,11 +41,16 @@ PYTHON ?= python3
 # Include paths
 NCCL_INCLUDES := -I$(BUILDDIR)/include -I../../src/include -I../../src/include/nccl_device -I../../src/device
 CUDA_INCLUDES := -I$(CUDA_INC) -I$(CUDA_INC)/cccl
+# Empty stubs for headers clang's CUDA wrapper unconditionally includes but
+# CUDA 13 removed (e.g. texture_fetch_functions.h). NCCL device code doesn't
+# use the legacy texture/surface reference APIs, so it's OK to be empty.
+CLANG_COMPAT_INCLUDES := -Iclang_compat
 
 # Clang flags for LLVM IR generation
 COMMON_CLANG_FLAGS := -std=$(BITCODE_CXX_STD) -x cuda \
                		  --cuda-path=$(CUDA_HOME) --cuda-device-only \
                		  --cuda-gpu-arch=$(BITCODE_LIB_ARCH) \
+               		  $(CLANG_COMPAT_INCLUDES) \
                		  $(NCCL_INCLUDES) $(CUDA_INCLUDES) \
                		  -D__clang_llvm_bitcode_lib__ \
                		  -DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR) \
@@ -76,13 +81,16 @@ $(OPTIMIZED_BC): $(UNOPTIMIZED_BC)
 
 # The LLVM bc file by default forces flush subnormal to 1.
 # Removing the flag so that the subnormal handling is preserved.
+# Removing explicit function alignment because libNVVM rejects it.
 $(LLVM_IR_FILE): $(OPTIMIZED_BC)
 	@echo "Generating LLVM IR..."
 	$(LLVM_DIS) $< -o $@.tmp
 	@echo "Cleaning LLVM IR (removing nvvm-reflect-ftz)..."
 	@myVar="$$(cat $@.tmp | grep -E '!([0-9]+) = !\{[^"]*"nvvm-reflect-ftz"' | cut -d ' ' -f 1)"; \
-	awk '!/nvvm-reflect-ftz/' $@.tmp | sed "/^!llvm\.module\.flags = /s/$$myVar, //" > $@
-	@rm -f $@.tmp
+	awk '!/nvvm-reflect-ftz/' $@.tmp | sed "/^!llvm\.module\.flags = /s/$$myVar, //" > $@.tmp2
+	@echo "Cleaning LLVM IR (removing function alignment attributes)..."
+	@sed '/^define/s/ align [0-9]\+//g' $@.tmp2 > $@
+	@rm -f $@.tmp $@.tmp2
 
 $(FINAL_BC): $(LLVM_IR_FILE)
 	@mkdir -p $(LIBDIR)

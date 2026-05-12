@@ -22,7 +22,7 @@ else()
     set(BITCODE_LIB_ARCH sm_90 CACHE STRING "CUDA architecture for LLVM IR")
 endif()
 
-set(BITCODE_CXX_STD c++17 CACHE STRING "C++ standard for LLVM IR")
+set(BITCODE_CXX_STD gnu++17 CACHE STRING "C++ standard for LLVM IR")
 
 # Find required tools
 find_program(CLANG_EXECUTABLE clang REQUIRED)
@@ -43,6 +43,13 @@ set(CUDA_INCLUDES
     -I${CUDAToolkit_INCLUDE_DIRS}/cccl
 )
 
+# Empty stubs for headers clang's CUDA wrapper unconditionally includes but
+# CUDA 13 removed (e.g. texture_fetch_functions.h). NCCL device code doesn't
+# use the legacy texture/surface reference APIs, so it's OK to be empty.
+set(CLANG_COMPAT_INCLUDES
+    -I${CMAKE_CURRENT_SOURCE_DIR}/clang_compat
+)
+
 # Common clang flags used for both preprocessing and IR generation
 set(COMMON_CLANG_FLAGS
     -std=${BITCODE_CXX_STD}
@@ -50,11 +57,13 @@ set(COMMON_CLANG_FLAGS
     --cuda-path=${CUDAToolkit_ROOT_DIR}
     --cuda-device-only
     --cuda-gpu-arch=${BITCODE_LIB_ARCH}
+    ${CLANG_COMPAT_INCLUDES}
     ${NCCL_INCLUDES}
     ${CUDA_INCLUDES}
     -D__clang_llvm_bitcode_lib__
     -DCUDA_MAJOR=${CUDA_MAJOR}
     -DCUDA_MINOR=${CUDA_MINOR}
+    -D_NV_RSQRT_SPECIFIER=
 )
 
 # Clang flags for LLVM IR generation
@@ -88,7 +97,7 @@ add_custom_command(
     OUTPUT ${OPTIMIZED_BC}
     COMMAND ${OPT_EXECUTABLE}
         --passes=internalize,inline,globaldce
-        -internalize-public-api-list=nccl*
+        -internalize-public-api-list=*nccl*
         ${UNOPTIMIZED_BC} -o ${OPTIMIZED_BC}
     DEPENDS ${UNOPTIMIZED_BC}
     COMMENT "Optimizing LLVM bitcode..."
@@ -96,13 +105,17 @@ add_custom_command(
 )
 
 # Generate LLVM IR text file
+# Disassemble the *optimized* bitcode (after internalize/inline/globaldce);
+# disassembling the unoptimized one would bypass the entire optimization stage.
 add_custom_command(
     OUTPUT ${LLVM_IR_FILE}
-    COMMAND ${LLVM_DIS_EXECUTABLE} ${UNOPTIMIZED_BC} -o ${LLVM_IR_FILE}.tmp
+    COMMAND ${LLVM_DIS_EXECUTABLE} ${OPTIMIZED_BC} -o ${LLVM_IR_FILE}.tmp
     COMMAND ${CMAKE_COMMAND} -E echo "Cleaning LLVM IR (removing nvvm-reflect-ftz)..."
-    COMMAND bash -c "myVar=$$(cat ${LLVM_IR_FILE}.tmp | grep -E '!([0-9]+) = !\\{[^\"]*\"nvvm-reflect-ftz\"' | cut -d ' ' -f 1)\; awk '!/nvvm-reflect-ftz/' ${LLVM_IR_FILE}.tmp | sed \"/^!llvm\\.module\\.flags = /s/$$myVar, //\" > ${LLVM_IR_FILE}"
-    COMMAND ${CMAKE_COMMAND} -E remove ${LLVM_IR_FILE}.tmp
-    DEPENDS ${UNOPTIMIZED_BC}
+    COMMAND bash -c "myVar=$$(cat ${LLVM_IR_FILE}.tmp | grep -E '!([0-9]+) = !\\{[^\"]*\"nvvm-reflect-ftz\"' | cut -d ' ' -f 1)\; awk '!/nvvm-reflect-ftz/' ${LLVM_IR_FILE}.tmp | sed \"/^!llvm\\.module\\.flags = /s/$$myVar, //\" > ${LLVM_IR_FILE}.tmp2"
+    COMMAND ${CMAKE_COMMAND} -E echo "Cleaning LLVM IR (removing function alignment attributes)..."
+    COMMAND bash -c "sed '/^define/s/ align [0-9]\\+//g' ${LLVM_IR_FILE}.tmp2 > ${LLVM_IR_FILE}"
+    COMMAND ${CMAKE_COMMAND} -E remove ${LLVM_IR_FILE}.tmp ${LLVM_IR_FILE}.tmp2
+    DEPENDS ${OPTIMIZED_BC}
     COMMENT "Generating LLVM IR..."
     VERBATIM
 )

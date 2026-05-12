@@ -346,6 +346,10 @@ ncclResult_t ncclShadowPoolAlloc(
 
     pool->hbits = hbits = 4;
     pool->table = (struct ncclShadowObject**)malloc(sizeof(struct ncclShadowObject*)<<hbits);
+    if (pool->table == nullptr) {
+      WARN("Failed to allocate hash table for shadow pool");
+      return ncclSystemError;
+    }
     for (int i=0; i < 1<<hbits; i++) pool->table[i] = nullptr;
   }
 
@@ -353,6 +357,10 @@ ncclResult_t ncclShadowPoolAlloc(
   if (pool->count+1 > 2<<hbits) {
     struct ncclShadowObject** table0 = pool->table;
     struct ncclShadowObject** table1 = (struct ncclShadowObject**)malloc(sizeof(struct ncclShadowObject*)<<(hbits+1));
+    if (table1 == nullptr) {
+      WARN("Failed to allocate expanded hash table for shadow pool");
+      return ncclSystemError;
+    }
     pool->table = table1;
     pool->hbits = hbits+1;
     for (int i1=0; i1 < 2<<hbits; i1++) table1[i1] = nullptr;
@@ -379,6 +387,10 @@ ncclResult_t ncclShadowPoolAlloc(
       if (page == nullptr) {
         size_t pageSize = std::min<size_t>(64<<10, 64*pageObjSize);
         page = (struct ncclShadowPage*)malloc(sizeof(struct ncclShadowPage));
+        if (page == nullptr) {
+          WARN("Failed to allocate shadow pool page metadata");
+          return ncclSystemError;
+        }
         page->objSize = pageObjSize;
         page->freeMask = uint64_t(-1)>>(64 - pageSize/pageObjSize);
         page->next = pool->pages;
@@ -404,6 +416,10 @@ ncclResult_t ncclShadowPoolAlloc(
   struct ncclShadowObject* obj = (struct ncclShadowObject*)malloc(
     sizeof(struct ncclShadowObject) + /*padding=*/alignof(max_align_t)-1 + size
   );
+  if (obj == nullptr) {
+    WARN("Failed to allocate shadow pool object");
+    return ncclSystemError;
+  }
   obj->page = page;
   obj->devObj = devObj;
   obj->hostObj = alignUp((char*)(obj+1), alignof(max_align_t));

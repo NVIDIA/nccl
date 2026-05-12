@@ -18,7 +18,7 @@ from typing import Any, Protocol, TypeAlias
 
 import numpy as _np
 from cuda.core import Buffer, Device, Stream
-from cuda.core.typing import IsStreamT
+from cuda.core.typing import IsStreamType
 
 __all__ = [
     "NcclDataType",
@@ -380,4 +380,4 @@ NcclScalarSpec: TypeAlias = (
 )
 
 NcclDeviceSpec: TypeAlias = Device | int
-NcclStreamSpec: TypeAlias = Stream | IsStreamT | int
+NcclStreamSpec: TypeAlias = Stream | IsStreamType | int

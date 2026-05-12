@@ -34,7 +34,7 @@ classifiers = [
 dependencies = [
     "packaging",
     "numpy",
-    "cuda.core~=0.7",
+    "cuda.core~=1.0",
     "cuda-pathfinder>=1.5.4,<2.0.0",
 ]
 

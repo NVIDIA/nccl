@@ -1911,6 +1911,7 @@ class Communicator:
         self,
         sendbuf: NcclBufferSpec,
         recvbuf: NcclBufferSpec,
+        *,
         stream: NcclStreamSpec | None = None,
     ) -> None:
         """Gathers sendcount values from all ranks; identical copies of the result are placed in each recvbuf.

@@ -15,7 +15,7 @@ from __future__ import annotations
 import threading
 
 from cuda.core import Buffer, Device, MemoryResource, Stream
-from cuda.core.typing import DevicePointerT
+from cuda.core.typing import DevicePointerType
 
 from nccl import bindings as _nccl_bindings
 
@@ -43,7 +43,7 @@ class NcclMemoryResource(MemoryResource):
         """
         self.device = Device(device_id)
 
-    def allocate(self, size: int, stream: Stream | None = None) -> Buffer:
+    def allocate(self, size: int, *, stream: Stream | None = None) -> Buffer:
         """Allocates device memory using NCCL.
 
         Args:
@@ -59,7 +59,7 @@ class NcclMemoryResource(MemoryResource):
             buf = Buffer.from_handle(ptr=ptr, size=size, mr=self)
             return buf
 
-    def deallocate(self, ptr: DevicePointerT, size: int, stream: Stream | None = None) -> None:
+    def deallocate(self, ptr: DevicePointerType, size: int, *, stream: Stream | None = None) -> None:
         """Deallocates device memory using NCCL.
 
         Args:

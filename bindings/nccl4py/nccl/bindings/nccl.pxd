@@ -20,6 +20,9 @@ ctypedef ncclDevCommWindowTable_t DevCommWindowTable
 
 ctypedef cudaStream_t Stream
 
+cdef class PointerBox:
+    cdef public intptr_t ptr
+
 
 ###############################################################################
 # Enum
@@ -43,18 +46,18 @@ cpdef intptr_t mem_alloc(size_t size) except? 0
 cpdef mem_free(intptr_t ptr)
 cpdef int get_version() except? -1
 cpdef get_unique_id(intptr_t unique_id)
-cpdef intptr_t comm_init_rank_config(int nranks, comm_id, int rank, intptr_t config) except? 0
-cpdef intptr_t comm_init_rank(int nranks, comm_id, int rank) except? 0
+cpdef int comm_init_rank_config(intptr_t comm, int nranks, comm_id, int rank, intptr_t config) except? -1
+cpdef int comm_init_rank(intptr_t comm, int nranks, comm_id, int rank) except? -1
 cpdef object comm_init_all(int ndev, devlist)
 cpdef comm_finalize(intptr_t comm)
 cpdef comm_destroy(intptr_t comm)
 cpdef comm_abort(intptr_t comm)
 cpdef comm_revoke(intptr_t comm, int revoke_flags)
-cpdef intptr_t comm_split(intptr_t comm, int color, int key, intptr_t config) except? 0
-cpdef intptr_t comm_shrink(intptr_t comm, exclude_ranks_list, int exclude_ranks_count, intptr_t config, int shrink_flags) except? 0
+cpdef int comm_split(intptr_t comm, int color, int key, intptr_t newcomm, intptr_t config) except? -1
+cpdef int comm_shrink(intptr_t comm, exclude_ranks_list, int exclude_ranks_count, intptr_t newcomm, intptr_t config, int shrink_flags) except? -1
 cpdef comm_get_unique_id(intptr_t comm, intptr_t unique_id)
-cpdef intptr_t comm_grow(intptr_t comm, int n_ranks, intptr_t unique_id, int rank, intptr_t config) except? 0
-cpdef intptr_t comm_init_rank_scalable(int nranks, int myrank, int n_id, comm_ids, intptr_t config) except? 0
+cpdef int comm_grow(intptr_t comm, int n_ranks, intptr_t unique_id, int rank, intptr_t newcomm, intptr_t config) except? -1
+cpdef int comm_init_rank_scalable(intptr_t newcomm, int nranks, int myrank, int n_id, comm_ids, intptr_t config) except? -1
 cpdef str get_error_string(int result)
 cpdef str get_last_error(intptr_t comm)
 cpdef int comm_get_async_error(intptr_t comm) except? -1
@@ -66,7 +69,7 @@ cpdef comm_deregister(intptr_t comm, intptr_t handle)
 cpdef comm_suspend(intptr_t comm, int flags)
 cpdef comm_resume(intptr_t comm)
 cpdef uint64_t comm_mem_stats(intptr_t comm, int stat) except? -1
-cpdef intptr_t comm_window_register(intptr_t comm, intptr_t buff, size_t size, int win_flags) except? 0
+cpdef int comm_window_register(intptr_t comm, intptr_t buff, size_t size, intptr_t win, int win_flags) except? -1
 cpdef comm_window_deregister(intptr_t comm, intptr_t win)
 cpdef intptr_t win_get_user_ptr(intptr_t comm, intptr_t win) except? 0
 cpdef int red_op_create_pre_mul_sum(intptr_t scalar, int datatype, int residence, intptr_t comm) except? -1

@@ -68,6 +68,32 @@ cdef __getbuffer(object self, cpython.Py_buffer *buffer, void *ptr, int size, bi
 # POD
 ###############################################################################
 
+cdef class PointerBox:
+    """Stable storage for NCCL APIs that fill pointer outputs asynchronously."""
+
+    def __init__(self, intptr_t ptr=0):
+        self.ptr = ptr
+
+    def __int__(self):
+        return self.ptr
+
+    def __index__(self):
+        return self.ptr
+
+    def __bool__(self):
+        return self.ptr != 0
+
+    @property
+    def address(self):
+        return <intptr_t>&self.ptr
+
+    def __repr__(self):
+        return f"<PointerBox ptr={self.ptr:#x}>"
+
+    def __format__(self, format_spec):
+        return format(self.ptr, format_spec)
+
+
 cdef _get_unique_id_dtype_offsets():
     cdef ncclUniqueId pod = ncclUniqueId()
     return _numpy.dtype({
@@ -3405,22 +3431,22 @@ cpdef get_unique_id(intptr_t unique_id):
     check_status(__status__)
 
 
-cpdef intptr_t comm_init_rank_config(int nranks, comm_id, int rank, intptr_t config) except? 0:
+cpdef int comm_init_rank_config(intptr_t comm, int nranks, comm_id, int rank, intptr_t config) except? -1:
     cdef void* _comm_id_ = get_buffer_pointer(comm_id, -1, readonly=False)
-    cdef Comm comm
+    cdef int ret
     with nogil:
-        __status__ = ncclCommInitRankConfig(&comm, nranks, (<ncclUniqueId*>(_comm_id_))[0], rank, <ncclConfig_t*>config)
-    check_status(__status__)
-    return <intptr_t>comm
+        ret = <int>ncclCommInitRankConfig(<Comm*>comm, nranks, (<ncclUniqueId*>(_comm_id_))[0], rank, <ncclConfig_t*>config)
+    check_status(ret)
+    return ret
 
 
-cpdef intptr_t comm_init_rank(int nranks, comm_id, int rank) except? 0:
+cpdef int comm_init_rank(intptr_t comm, int nranks, comm_id, int rank) except? -1:
     cdef void* _comm_id_ = get_buffer_pointer(comm_id, -1, readonly=False)
-    cdef Comm comm
+    cdef int ret
     with nogil:
-        __status__ = ncclCommInitRank(&comm, nranks, (<ncclUniqueId*>(_comm_id_))[0], rank)
-    check_status(__status__)
-    return <intptr_t>comm
+        ret = <int>ncclCommInitRank(<Comm*>comm, nranks, (<ncclUniqueId*>(_comm_id_))[0], rank)
+    check_status(ret)
+    return ret
 
 
 cpdef object comm_init_all(int ndev, devlist):
@@ -3460,22 +3486,22 @@ cpdef comm_revoke(intptr_t comm, int revoke_flags):
     check_status(__status__)
 
 
-cpdef intptr_t comm_split(intptr_t comm, int color, int key, intptr_t config) except? 0:
-    cdef Comm newcomm
+cpdef int comm_split(intptr_t comm, int color, int key, intptr_t newcomm, intptr_t config) except? -1:
+    cdef int ret
     with nogil:
-        __status__ = ncclCommSplit(<Comm>comm, color, key, &newcomm, <ncclConfig_t*>config)
-    check_status(__status__)
-    return <intptr_t>newcomm
+        ret = <int>ncclCommSplit(<Comm>comm, color, key, <Comm*>newcomm, <ncclConfig_t*>config)
+    check_status(ret)
+    return ret
 
 
-cpdef intptr_t comm_shrink(intptr_t comm, exclude_ranks_list, int exclude_ranks_count, intptr_t config, int shrink_flags) except? 0:
+cpdef int comm_shrink(intptr_t comm, exclude_ranks_list, int exclude_ranks_count, intptr_t newcomm, intptr_t config, int shrink_flags) except? -1:
     cdef nullable_unique_ptr[ vector[int] ] _exclude_ranks_list_
     get_resource_ptr[int](_exclude_ranks_list_, exclude_ranks_list, <int*>NULL)
-    cdef Comm newcomm
+    cdef int ret
     with nogil:
-        __status__ = ncclCommShrink(<Comm>comm, <int*>(_exclude_ranks_list_.data()), exclude_ranks_count, &newcomm, <ncclConfig_t*>config, shrink_flags)
-    check_status(__status__)
-    return <intptr_t>newcomm
+        ret = <int>ncclCommShrink(<Comm>comm, <int*>(_exclude_ranks_list_.data()), exclude_ranks_count, <Comm*>newcomm, <ncclConfig_t*>config, shrink_flags)
+    check_status(ret)
+    return ret
 
 
 cpdef comm_get_unique_id(intptr_t comm, intptr_t unique_id):
@@ -3484,21 +3510,21 @@ cpdef comm_get_unique_id(intptr_t comm, intptr_t unique_id):
     check_status(__status__)
 
 
-cpdef intptr_t comm_grow(intptr_t comm, int n_ranks, intptr_t unique_id, int rank, intptr_t config) except? 0:
-    cdef Comm newcomm
+cpdef int comm_grow(intptr_t comm, int n_ranks, intptr_t unique_id, int rank, intptr_t newcomm, intptr_t config) except? -1:
+    cdef int ret
     with nogil:
-        __status__ = ncclCommGrow(<Comm>comm, n_ranks, <const ncclUniqueId*>unique_id, rank, &newcomm, <ncclConfig_t*>config)
-    check_status(__status__)
-    return <intptr_t>newcomm
+        ret = <int>ncclCommGrow(<Comm>comm, n_ranks, <const ncclUniqueId*>unique_id, rank, <Comm*>newcomm, <ncclConfig_t*>config)
+    check_status(ret)
+    return ret
 
 
-cpdef intptr_t comm_init_rank_scalable(int nranks, int myrank, int n_id, comm_ids, intptr_t config) except? 0:
+cpdef int comm_init_rank_scalable(intptr_t newcomm, int nranks, int myrank, int n_id, comm_ids, intptr_t config) except? -1:
     cdef void* _comm_ids_ = get_buffer_pointer(comm_ids, -1, readonly=False)
-    cdef Comm newcomm
+    cdef int ret
     with nogil:
-        __status__ = ncclCommInitRankScalable(&newcomm, nranks, myrank, n_id, <ncclUniqueId*>_comm_ids_, <ncclConfig_t*>config)
-    check_status(__status__)
-    return <intptr_t>newcomm
+        ret = <int>ncclCommInitRankScalable(<Comm*>newcomm, nranks, myrank, n_id, <ncclUniqueId*>_comm_ids_, <ncclConfig_t*>config)
+    check_status(ret)
+    return ret
 
 
 cpdef str get_error_string(int result):
@@ -3579,12 +3605,12 @@ cpdef uint64_t comm_mem_stats(intptr_t comm, int stat) except? -1:
     return value
 
 
-cpdef intptr_t comm_window_register(intptr_t comm, intptr_t buff, size_t size, int win_flags) except? 0:
-    cdef Window win
+cpdef int comm_window_register(intptr_t comm, intptr_t buff, size_t size, intptr_t win, int win_flags) except? -1:
+    cdef int ret
     with nogil:
-        __status__ = ncclCommWindowRegister(<Comm>comm, <void*>buff, size, &win, win_flags)
-    check_status(__status__)
-    return <intptr_t>win
+        ret = <int>ncclCommWindowRegister(<Comm>comm, <void*>buff, size, <Window*>win, win_flags)
+    check_status(ret)
+    return ret
 
 
 cpdef comm_window_deregister(intptr_t comm, intptr_t win):

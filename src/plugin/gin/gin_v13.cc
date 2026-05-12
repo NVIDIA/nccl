@@ -15,7 +15,7 @@ static ncclGin_t ncclGin;
 
 ncclResult_t ncclGin_getGinProperties(ncclGinProperties_t* ginProps) {
   ginProps->supportsStrongSignals = true;
-  ginProps->supportsVASignals = false;
+  ginProps->supportsVASignals = true;
   return ncclSuccess;
 }
 

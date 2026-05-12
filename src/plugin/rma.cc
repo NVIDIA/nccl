@@ -221,6 +221,7 @@ static ncclResult_t ncclRmaPluginFinalize(struct ncclComm* comm, int pluginIndex
 
 ncclResult_t ncclRmaInit(struct ncclComm* comm) {
   bool initialized = false;
+  comm->rmaPluginIndex = -1;
   std::call_once(initPluginLibsOnceFlag, initPluginLibsOnceFunc);
   std::lock_guard<std::mutex> lock(pluginMutex);
   for (int pluginIndex = 0; pluginIndex < pluginCount; pluginIndex++) {
@@ -259,7 +260,9 @@ ncclResult_t ncclRmaInitFromParent(struct ncclComm* comm, struct ncclComm* paren
 
 ncclResult_t ncclRmaFinalize(struct ncclComm* comm) {
   int pluginIndex = comm->rmaPluginIndex;
+  if (pluginIndex < 0) return ncclSuccess;
   std::lock_guard<std::mutex> lock(pluginMutex);
+  if (pluginIndex >= pluginCount) return ncclSuccess;
   NCCLCHECK(ncclRmaPluginFinalize(comm, pluginIndex));
   return ncclSuccess;
 }

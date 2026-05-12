@@ -382,6 +382,7 @@ static ncclResult_t commFree(ncclComm_t comm) {
   if (sharedResRefCount == 0) {
     NCCLCHECK(ncclNetFinalize(comm));
     NCCLCHECK(ncclGinFinalize(comm));
+    NCCLCHECK(ncclRmaFinalize(comm));
   }
   ncclCudaContextDrop(comm->context);
   free(comm);

@@ -55,7 +55,11 @@ ncclResult_t ncclGinIbGdakiInitOnce() {
   std::lock_guard<std::mutex> lock(ncclGinIbGdakiLockMutex);
   if (ncclGinIbGdakiNDevs == -1) {
     int ndevs = 0;
-    if (ncclParamGinType() != NCCL_GIN_TYPE_GDAKI) return ncclSuccess;
+    int64_t ginType = ncclParamGinType();
+    if (ginType != -1 && ginType != NCCL_GIN_TYPE_GDAKI) {
+      ncclGinIbGdakiNDevs = 0;
+      return ncclSuccess;
+    }
     for (int i = 0; i < ncclNIbDevs; i++) {
       if (ncclIbDevs[i].ibProvider == IB_PROVIDER_MLX5) {
         ncclGinIbGdakiDevIndexes[ndevs] = i;

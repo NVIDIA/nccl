@@ -296,6 +296,7 @@ ncclResult_t ncclGinIbGdakiConnect(void *ctx, void *handles[], int nranks, int r
 ncclResult_t ncclGinIbGdakiCreateContext(void* collComm, ncclGinConfig_t* config, void **ginCtx, ncclNetDeviceHandle_t** devHandle) {
   struct ncclGinIbCollComm* cComm = (struct ncclGinIbCollComm*)collComm;
 
+  // GDAKI currently doesn't support the rankStride optimization.
   NCCLCHECK(ncclGinGdakiCreateContext(cComm, config->nSignals, config->nCounters, config->nContexts, config->queueDepth, config->trafficClass, config->backendVersion, ginCtx, devHandle));
 
   return ncclSuccess;
@@ -378,11 +379,16 @@ struct ncclRmaIbProxyCtx {
   int nContexts;
 };
 
-ncclResult_t ncclRmaIbProxyCreateContext(void* collComm, ncclRmaConfig_v14_t* config, void** rmaCtx) {
+ncclResult_t ncclRmaIbProxyCreateContext(void* collComm, ncclRmaConfig_t* config, void** rmaCtx) {
   ncclResult_t ret = ncclSuccess;
   struct ncclGinIbCollComm *cComm = (struct ncclGinIbCollComm *)collComm;
   // Make sure all QP we create use the provided traffic class.
   ncclIbSetTrafficClass(cComm->ctx, config->trafficClass);
+
+  if (config->rankStride <= 0 || (cComm->nranks % config->rankStride) != 0) {
+    WARN("Rma Proxy create context: invalid rank stride %d, must be >= 0 and nranks (%d) must be a multiple of the stride", config->rankStride, cComm->nranks);
+    return ncclInternalError;
+  }
 
   int nranks;
   struct ncclRmaIbProxyCtx* rmaProxyCtx = NULL;
@@ -405,7 +411,7 @@ ncclResult_t ncclRmaIbProxyCreateContext(void* collComm, ncclRmaConfig_v14_t* co
     NCCLCHECKGOTO(ncclIbMalloc((void**)&gc->fullRecvComm, sizeof(void *) * nranks), ret, end);
     gc->rank = cComm->rank;
 
-    for (int i = 0; i < nranks; i++) {
+    for (int i = 0; i < nranks; i+=config->rankStride) {
       int connectPeer = (cComm->rank + i) % nranks;
       int acceptPeer = (cComm->rank - i + nranks) % nranks;
       do {
@@ -489,6 +495,23 @@ ncclResult_t ncclRmaIbProxyCloseColl(void* collComm) {
   return ncclSuccess;
 }
 
+static ncclResult_t ncclRmaIbProxyGetSendComm(struct ncclRmaIbProxyCtx* rmaProxyCtx, int rank, struct ncclIbSendComm** commPtr) {
+  *commPtr = (struct ncclIbSendComm*)rmaProxyCtx->fullSendComm[rank];
+  if (*commPtr == NULL) {
+    WARN("RMA: trying to send to non-connected peer %d", rank);
+    return ncclInvalidUsage;
+  }
+  return ncclSuccess;
+}
+static ncclResult_t ncclRmaIbProxyGetRecvComm(struct ncclRmaIbProxyCtx* rmaProxyCtx, int rank, struct ncclIbRecvComm** commPtr) {
+  *commPtr = (struct ncclIbRecvComm*)rmaProxyCtx->fullRecvComm[rank];
+  if (*commPtr == NULL) {
+    WARN("RMA: trying to send to non-connected peer %d", rank);
+    return ncclInvalidUsage;
+  }
+  return ncclSuccess;
+}
+
 ncclResult_t ncclRmaIbProxyIPut(void *rmaCtx, int context, uint64_t srcOff, void *srcMhandle, size_t size,
                                 uint64_t dstOff, void *dstMhandle, uint32_t rank,
                                 void **request) {
@@ -502,7 +525,8 @@ ncclResult_t ncclRmaIbProxyIPut(void *rmaCtx, int context, uint64_t srcOff, void
   uint32_t lkey = srcMrHandle->mrHandle->mrs[0]->lkey;
   uint32_t rkey = dstMrHandle->rkeys[rank];
 
-  struct ncclIbSendComm* comm = (struct ncclIbSendComm*)rmaProxyCtx->fullSendComm[rank];
+  struct ncclIbSendComm* comm;
+  NCCLCHECK(ncclRmaIbProxyGetSendComm(rmaProxyCtx, rank, &comm));
   struct ncclIbQp *qp = &comm->base.qps[0];
 
   struct ncclIbRequest* req;
@@ -549,7 +573,8 @@ ncclResult_t ncclRmaIbProxyIGet(void *rmaCtx, int context, uint64_t remoteOffset
   struct ncclRmaIbProxyMrHandle *remoteMrHandle = (struct ncclRmaIbProxyMrHandle *)remoteMhandle;
   struct ncclRmaIbProxyMrHandle *localMrHandle = (struct ncclRmaIbProxyMrHandle *)localMhandle;
 
-  struct ncclIbSendComm* comm = (struct ncclIbSendComm*)rmaProxyCtx->fullSendComm[rank];
+  struct ncclIbSendComm* comm;
+  NCCLCHECK(ncclRmaIbProxyGetSendComm(rmaProxyCtx, rank, &comm));
   struct ncclIbQp *qp = &comm->base.qps[0];
 
   struct ncclIbRequest* req;
@@ -609,7 +634,8 @@ ncclResult_t ncclRmaIbProxyIPutSignal(void *rmaCtx, int context, uint64_t srcOff
   struct ncclRmaIbProxyMrHandle *dstMrHandle = (struct ncclRmaIbProxyMrHandle *)dstMhandle;
   struct ncclRmaIbProxyMrHandle *signalMrHandle = (struct ncclRmaIbProxyMrHandle *)signalMhandle;
 
-  struct ncclIbSendComm* comm = (struct ncclIbSendComm*)rmaProxyCtx->fullSendComm[rank];
+  struct ncclIbSendComm* comm;
+  NCCLCHECK(ncclRmaIbProxyGetSendComm(rmaProxyCtx, rank, &comm));
   struct ncclIbQp *qp = &comm->base.qps[0];
   int devIndex = qp->devIndex;
 
@@ -736,8 +762,9 @@ ncclResult_t ncclRmaIbProxyTest(void* collComm, void *request, int *done) {
 
 ncclResult_t ncclRmaIbProxyIFlush(void *rmaCtx, int context, void* mhandle, uint32_t rank, void **request) {
   struct ncclRmaIbProxyCtx* rmaProxyCtx = &((struct ncclRmaIbProxyCtx*)rmaCtx)[context];
-  struct ncclIbRecvComm* comm = (struct ncclIbRecvComm*)rmaProxyCtx->fullRecvComm[rank];
   struct ncclRmaIbProxyMrHandle *rmaMrHandle = (struct ncclRmaIbProxyMrHandle *)mhandle;
+  struct ncclIbRecvComm* comm;
+  NCCLCHECK(ncclRmaIbProxyGetRecvComm(rmaProxyCtx, rank, &comm));
   struct ncclIbQp *qp = &comm->devs[0].gpuFlush.qp;
 
   struct ncclIbRequest* req;

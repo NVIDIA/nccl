@@ -12,7 +12,8 @@
 typedef struct {
   int nContexts;
   int trafficClass;
-}ncclRmaConfig_v14_t;
+  int rankStride;
+} ncclRmaConfig_v14_t;
 
 typedef struct {
   // Name of the RMA support (mainly for logs)

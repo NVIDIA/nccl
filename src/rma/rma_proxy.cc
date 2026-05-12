@@ -194,7 +194,7 @@ ncclResult_t ncclRmaProxyCreateContext(struct ncclComm *comm, void *collComm, nc
   // Get the RMA plugin interface
   ncclRma_t *rmaComm = (ncclRma_t *)comm->rmaState.rmaProxyState.ncclRma;
 
-  ncclRmaConfig_t config = { 1, comm->config.trafficClass };
+  ncclRmaConfig_t config = { 1, comm->config.trafficClass, 1 };
 
   // Allocate the RMA proxy context
   struct ncclRmaProxyCtx *rmaProxyCtx = nullptr;

@@ -460,7 +460,7 @@ static ncclResult_t ncclGinProxyCreateContext(void* collComm, ncclGinConfig_t* c
   proxyCtx->nRanks = cComm->nRanks;
   int nContexts = proxyCtx->nContexts = config->nContexts;
 
-  ncclRmaConfig_t rmaConfig = { config->nContexts, config->trafficClass };
+  ncclRmaConfig_t rmaConfig = { config->nContexts, config->trafficClass, config->rankStride };
   NCCLCHECK(rmaBackend->createContext(cComm->collComm, &rmaConfig, &proxyCtx->rmaCtx));
 
   // Sanitize the queue size

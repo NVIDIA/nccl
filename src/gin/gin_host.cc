@@ -270,7 +270,9 @@ ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequir
     nContextsPerComm,
     reqs->ginQueueDepth,
     reqs->ginTrafficClass != NCCL_CONFIG_UNDEF_INT ? reqs->ginTrafficClass : comm->config.trafficClass,
-    backendVersion
+    backendVersion,
+    reqs->ginConnectionType == NCCL_GIN_CONNECTION_RAIL &&
+      ginState->ginConnectionType == NCCL_GIN_CONNECTION_FULL ? comm->devrState.lsaSize : 1
   };
 
   for (int n = 0; n < ginState->ginCommCount; n++) {

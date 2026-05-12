@@ -422,7 +422,9 @@ ncclResult_t ncclShadowPoolFree(struct ncclShadowPool* pool, void* devObj, cudaS
   struct ncclShadowObject** pobj = &pool->table[b];
   while (true) {
     if (*pobj == nullptr) {
-      WARN("Device object does not exist in shadow pool.");
+      WARN("ncclShadowPoolFree: Device object %p not found in shadow pool (hash bucket %lu). "
+           "This may indicate a use-after-free or double-free error. Pool has %lu objects.",
+           devObj, b, pool->count);
       return ncclInternalError;
     }
     if ((*pobj)->devObj == devObj) break;

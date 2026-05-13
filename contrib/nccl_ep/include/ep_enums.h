@@ -96,32 +96,3 @@ typedef enum {
     NCCL_EP_LAYOUT_FLAT,
 } ncclEpLayout_t;
 
-// Tensor tags required to identify the type of tensors in `ncclEpDispatch` and `ncclEpCombine`
-typedef enum {
-    NCCL_EP_TENSOR_TAG_NONE = 0,
-    // Tensor containing tokens
-    NCCL_EP_TENSOR_TAG_TOKENS = 1,
-    // Tensor containing top-k expert indices
-    NCCL_EP_TENSOR_TAG_TOPK_IDX = 2,
-    // Tensor containing top-k weights
-    NCCL_EP_TENSOR_TAG_TOPK_WEIGHTS = 3,
-    // Tensor containing scales
-    NCCL_EP_TENSOR_TAG_SCALES = 4,
-    // Per-expert received token counts (1D, ncclInt32 or ncclInt64).
-    //   LL: unpadded counts (kernel-written atomically).
-    //   HT flat: unpadded counts.
-    //   HT expert-major: padded counts (sum equals dispatch output buffer slot count).
-    NCCL_EP_TENSOR_TAG_RECV_EXPERT_COUNTER_DEVICE = 5,
-    // Recv topk indices/weights reuse NCCL_EP_TENSOR_TAG_TOPK_IDX /
-    // NCCL_EP_TENSOR_TAG_TOPK_WEIGHTS in the outputs list (no separate recv tags).
-    // LL rank-major dispatch local tensor: per-source-rank received token counts [nRanks], int32.
-    // Analogous to RECV_EXPERT_COUNTER_DEVICE for HT/LL expert-major, but shaped by source rank.
-    NCCL_EP_TENSOR_TAG_RECV_RANK_COUNTER_DEVICE = 6,
-    // Per-expert token offsets into the received token buffer (1D, ncclInt32 or ncclInt64).
-    // HT expert-major only: prefix sum of padded per-expert counts.
-    NCCL_EP_TENSOR_TAG_RECV_EXPERT_OFFSETS_DEVICE = 7,
-    // Scalar total recv token count (1D, size 1, ncclInt32 or ncclInt64).
-    //   HT FLAT: unpadded total. HT EM: padded slot total.
-    // Optional in ncclEpUpdateHandle local tensors; written by the metadata kernel.
-    NCCL_EP_TENSOR_TAG_RECV_TOTAL_COUNTER_DEVICE = 8,
-} ncclEpTensorTag_t;

@@ -110,7 +110,6 @@ cudaStream_t = ctypes.c_void_p
 # EP-specific types (opaque pointers)
 ncclEpGroup_t = ctypes.c_void_p
 ncclEpHandle_t = ctypes.c_void_p
-ncclEpCombineConfig_t = ctypes.c_void_p
 
 # Allocator callback function types:
 # typedef cudaError_t (*ncclEpAllocFn_t)(void** ptr, size_t size);
@@ -121,23 +120,6 @@ ncclEpFreeFn_t = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p)
 # cudaError_t values
 CUDA_SUCCESS = 0
 CUDA_ERROR_MEMORY_ALLOCATION = 2
-
-
-class ncclEpTensorFlags_t:
-    NCCL_EP_TENSOR_FLAG_NONE = 0
-
-
-class ncclEpTensorTag_t:
-    """Tensor tags for NCCL EP operations."""
-    NCCL_EP_TENSOR_TAG_NONE = 0
-    NCCL_EP_TENSOR_TAG_TOKENS = 1
-    NCCL_EP_TENSOR_TAG_TOPK_IDX = 2
-    NCCL_EP_TENSOR_TAG_TOPK_WEIGHTS = 3
-    NCCL_EP_TENSOR_TAG_SCALES = 4
-    NCCL_EP_TENSOR_TAG_RECV_EXPERT_COUNTER_DEVICE = 5
-    NCCL_EP_TENSOR_TAG_RECV_RANK_COUNTER_DEVICE = 6
-    NCCL_EP_TENSOR_TAG_RECV_EXPERT_OFFSETS_DEVICE = 7
-    NCCL_EP_TENSOR_TAG_RECV_TOTAL_COUNTER_DEVICE = 8
 
 
 class ncclEpAlgorithm_t:
@@ -157,26 +139,96 @@ class ncclEpLayout_t:
 ncclNDTensor_t = ctypes.c_void_p
 
 
-class ncclEpGroupConfig_t(ctypes.Structure):
+# Base class for cross-boundary EP structs. The C library expects every such
+# struct to start with `size = sizeof(struct)`; this base class auto-fills it
+# in __init__ so Python callers never have to set it manually.
+class _EpStruct(ctypes.Structure):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.size = ctypes.sizeof(type(self))
+
+
+class ncclEpGroupConfig_t(_EpStruct):
     _fields_ = [
-        ("version", ctypes.c_uint),
+        ("size", ctypes.c_uint),
         ("algorithm", ctypes.c_int),
         ("layout", ctypes.c_int),
         ("num_experts", ctypes.c_uint),
-        ("max_tokens_per_rank", ctypes.c_uint),
+        ("max_send_tokens_per_rank", ctypes.c_uint),
         ("token_size_bytes", ctypes.c_uint),
         ("rdma_buffer_size", ctypes.c_ulong),
         ("num_qp_per_rank", ctypes.c_uint),
         ("num_channels", ctypes.c_uint),
+        ("max_recv_token_slots_per_rank", ctypes.c_uint),
     ]
 
 
-class ncclEpHandleConfig_t(ctypes.Structure):
-    _fields_ = [("use_fp8", ctypes.c_bool)]
+class ncclEpHandleConfig_t(_EpStruct):
+    _fields_ = [
+        ("size", ctypes.c_uint),
+        ("use_fp8", ctypes.c_bool),
+        ("dispatch_output_per_expert_alignment", ctypes.c_size_t),
+    ]
 
 
-class ncclEpDispatchConfig_t(ctypes.Structure):
-    _fields_ = [("round_scales", ctypes.c_uint)]
+class ncclEpDispatchConfig_t(_EpStruct):
+    _fields_ = [
+        ("size", ctypes.c_uint),
+        ("send_only", ctypes.c_uint),
+        ("round_scales", ctypes.c_uint),
+    ]
+
+
+class ncclEpCombineConfig_t(_EpStruct):
+    _fields_ = [
+        ("size", ctypes.c_uint),
+        ("send_only", ctypes.c_uint),
+    ]
+
+
+class ncclEpLayoutMarks_t(_EpStruct):
+    _fields_ = [
+        ("size", ctypes.c_uint),
+        ("recv_expert_counter", ncclNDTensor_t),
+        ("src_rank_counter", ncclNDTensor_t),
+        ("recv_expert_offsets", ncclNDTensor_t),
+        ("recv_total_counter", ncclNDTensor_t),
+    ]
+
+
+class ncclEpDispatchInputs_t(_EpStruct):
+    _fields_ = [
+        ("size", ctypes.c_uint),
+        ("tokens", ncclNDTensor_t),
+        ("topk_weights", ncclNDTensor_t),
+        ("scales", ncclNDTensor_t),
+    ]
+
+
+class ncclEpDispatchOutputs_t(_EpStruct):
+    _fields_ = [
+        ("size", ctypes.c_uint),
+        ("tokens", ncclNDTensor_t),
+        ("topk_weights", ncclNDTensor_t),
+        ("scales", ncclNDTensor_t),
+        ("topk_idx", ncclNDTensor_t),
+    ]
+
+
+class ncclEpCombineInputs_t(_EpStruct):
+    _fields_ = [
+        ("size", ctypes.c_uint),
+        ("tokens", ncclNDTensor_t),
+        ("topk_weights", ncclNDTensor_t),
+    ]
+
+
+class ncclEpCombineOutputs_t(_EpStruct):
+    _fields_ = [
+        ("size", ctypes.c_uint),
+        ("tokens", ncclNDTensor_t),
+        ("topk_weights", ncclNDTensor_t),
+    ]
 
 
 @dataclass
@@ -199,34 +251,32 @@ class NCCLLibrary:
         Function("ncclEpCreateHandle", ncclResult_t, [
             ctypes.POINTER(ncclEpHandle_t), ncclEpGroup_t,
             ncclNDTensor_t,  # topk_idx (opaque handle)
-            ctypes.POINTER(ncclNDTensor_t),  # local_tensors array
-            ctypes.c_uint,  # num_local_tensors
-            ctypes.POINTER(ncclEpHandleConfig_t),
+            ctypes.POINTER(ncclEpLayoutMarks_t),  # marks (NULL = none)
+            ctypes.POINTER(ncclEpHandleConfig_t),  # NULL = defaults
             cudaStream_t,
-            ctypes.c_bool  # use_fp8
         ]),
         Function("ncclEpHandleDestroy", ncclResult_t, [ncclEpHandle_t]),
         Function("ncclEpUpdateHandle", ncclResult_t, [
             ncclEpHandle_t,
             ncclNDTensor_t,  # topk_idx
-            ctypes.POINTER(ncclNDTensor_t),  # local_tensors array
-            ctypes.c_uint,  # num_local_tensors
+            ctypes.POINTER(ncclEpLayoutMarks_t),  # marks (NULL = none)
             cudaStream_t
         ]),
         Function("ncclEpDispatch", ncclResult_t, [
             ncclEpHandle_t,
-            ctypes.POINTER(ncclNDTensor_t), ctypes.c_uint,
-            ctypes.POINTER(ncclNDTensor_t), ctypes.c_uint,
-            ctypes.POINTER(ncclNDTensor_t), ctypes.c_uint,
-            ctypes.c_uint, ctypes.POINTER(ncclEpDispatchConfig_t),
+            ncclNDTensor_t,  # topk_idx (top-level arg; NULL for LL/HT-backward)
+            ctypes.POINTER(ncclEpDispatchInputs_t),
+            ctypes.POINTER(ncclEpDispatchOutputs_t),
+            ctypes.POINTER(ncclEpLayoutMarks_t),  # marks (NULL = none)
+            ctypes.POINTER(ncclEpDispatchConfig_t),  # NULL = defaults
             cudaStream_t
         ]),
         Function("ncclEpCombine", ncclResult_t, [
             ncclEpHandle_t,
-            ctypes.POINTER(ncclNDTensor_t), ctypes.c_uint,
-            ctypes.POINTER(ncclNDTensor_t), ctypes.c_uint,
-            ctypes.POINTER(ncclNDTensor_t), ctypes.c_uint,
-            ctypes.c_uint, ctypes.POINTER(ncclEpCombineConfig_t), cudaStream_t
+            ctypes.POINTER(ncclEpCombineInputs_t),
+            ctypes.POINTER(ncclEpCombineOutputs_t),
+            ctypes.POINTER(ncclEpCombineConfig_t),  # NULL = defaults
+            cudaStream_t
         ]),
         Function("ncclEpComplete", ncclResult_t, [
             ncclEpHandle_t, ctypes.c_void_p, cudaStream_t
@@ -235,7 +285,6 @@ class NCCLLibrary:
             ctypes.POINTER(ncclNDTensor_t),  # OUT tensor handle
             ctypes.c_uint,  # ndim
             ctypes.c_int,   # datatype
-            ctypes.c_int,   # tag
             ctypes.c_void_p,  # data (caller-owned device pointer; must be non-null)
             ctypes.c_uint,  # size0
             ctypes.c_uint,  # size1
@@ -297,7 +346,7 @@ class NCCLLibrary:
     def ncclEpGroupDestroy(self, ep_group):
         self.NCCL_CHECK(self._funcs["ncclEpGroupDestroy"](ep_group))
 
-    def ncclEpCreateHandle(self, ep_group, topk_tensor, config, stream, local_tensors=None, use_fp8=False):
+    def ncclEpCreateHandle(self, ep_group, topk_tensor, config, stream, marks=None):
         """Create EP handle for a specific dispatch/combine operation.
 
         This triggers the notify_dispatch phase in HT mode, computing token distribution.
@@ -305,65 +354,62 @@ class NCCLLibrary:
         Args:
             ep_group: NCCL EP group handle
             topk_tensor: ncclNDTensor_t with topk indices
-            config: ncclEpHandleConfig_t configuration (or None for defaults)
+            config: ncclEpHandleConfig_t configuration (or None for defaults).
+                    Set config.use_fp8 = True to enable FP8 dispatch.
             stream: CUDA stream
-            local_tensors: Optional list of ncclNDTensor_t for local operations.
-                          HT mode: accepts optional RECV_EXPERT_COUNTER tensor (1D, ncclInt32, size=num_local_experts)
-                          with tag RECV_EXPERT_COUNTER_DEVICE.
-                          Required when max_tokens_per_rank=NCCL_EP_AUTO (0).
-                          LL mode: does not accept local tensors (must be None or empty list).
-            use_fp8: Enable FP8 for dispatch (default: False)
+            marks: Optional ncclEpLayoutMarks_t. HT mode: set marks.recv_expert_counter
+                   when max_send_tokens_per_rank=NCCL_EP_AUTO; LL: must be None.
 
         Returns:
             ncclEpHandle_t: Handle for dispatch/combine operations
         """
         handle = ncclEpHandle_t()
         config_ptr = ctypes.byref(config) if config else None
-
-        # Prepare local_tensors array
-        if local_tensors is None or len(local_tensors) == 0:
-            local_tensors_ptr = None
-            num_local_tensors = 0
-        else:
-            # Create array of opaque tensor handles
-            tensor_arr = (ncclNDTensor_t * len(local_tensors))()
-            for i, tensor in enumerate(local_tensors):
-                tensor_arr[i] = tensor
-            local_tensors_ptr = ctypes.cast(tensor_arr, ctypes.POINTER(ncclNDTensor_t))
-            num_local_tensors = len(local_tensors)
+        marks_ptr  = ctypes.byref(marks)  if marks  else None
 
         self.NCCL_CHECK(self._funcs["ncclEpCreateHandle"](
             ctypes.byref(handle), ep_group, topk_tensor,
-            local_tensors_ptr, num_local_tensors, config_ptr, stream, use_fp8
+            marks_ptr, config_ptr, stream
         ))
         return handle
 
     def ncclEpHandleDestroy(self, handle):
         self.NCCL_CHECK(self._funcs["ncclEpHandleDestroy"](handle))
 
-    def ncclEpUpdateHandle(self, handle, topk_tensor, stream, local_tensors=None):
+    def ncclEpUpdateHandle(self, handle, topk_tensor, stream, marks=None):
         """Rebind topk_idx on an existing handle without reallocating buffers."""
-        local_tensors_ptr = None
-        num_local_tensors = 0
-        if local_tensors is not None and len(local_tensors) > 0:
-            tensor_arr = (ncclNDTensor_t * len(local_tensors))(*local_tensors)
-            local_tensors_ptr = ctypes.cast(tensor_arr, ctypes.POINTER(ncclNDTensor_t))
-            num_local_tensors = len(local_tensors)
-
+        marks_ptr = ctypes.byref(marks) if marks else None
         self.NCCL_CHECK(self._funcs["ncclEpUpdateHandle"](
-            handle, topk_tensor, local_tensors_ptr, num_local_tensors, stream
+            handle, topk_tensor, marks_ptr, stream
         ))
 
-    def ncclEpDispatch(self, handle, input_tensors, num_in, output_tensors, num_out, local_tensors, num_local, send_only, config, stream):
-        config_ptr = ctypes.byref(config) if config else None
-        self.NCCL_CHECK(self._funcs["ncclEpDispatch"](
-            handle, input_tensors, num_in, output_tensors, num_out,
-            local_tensors, num_local, send_only, config_ptr, stream))
+    def ncclEpDispatch(self, handle, topk_idx, inputs, outputs, marks, config, stream):
+        """Perform EP dispatch with named-struct args.
 
-    def ncclEpCombine(self, handle, input_tensors, num_in, output_tensors, num_out, local_tensors, num_local, send_only, config, stream):
+        Args:
+            handle: ncclEpHandle_t
+            topk_idx: ncclNDTensor_t (HT forward) or None (LL / HT backward)
+            inputs: ncclEpDispatchInputs_t
+            outputs: ncclEpDispatchOutputs_t
+            marks: ncclEpLayoutMarks_t or None
+            config: ncclEpDispatchConfig_t or None
+            stream: CUDA stream
+        """
+        config_ptr = ctypes.byref(config) if config else None
+        marks_ptr  = ctypes.byref(marks)  if marks  else None
+        topk_idx_arg = topk_idx if topk_idx is not None else ctypes.c_void_p(0)
+        self.NCCL_CHECK(self._funcs["ncclEpDispatch"](
+            handle, topk_idx_arg,
+            ctypes.byref(inputs), ctypes.byref(outputs),
+            marks_ptr, config_ptr, stream
+        ))
+
+    def ncclEpCombine(self, handle, inputs, outputs, config, stream):
+        config_ptr = ctypes.byref(config) if config else None
         self.NCCL_CHECK(self._funcs["ncclEpCombine"](
-            handle, input_tensors, num_in, output_tensors, num_out,
-            local_tensors, num_local, send_only, config, stream))
+            handle, ctypes.byref(inputs), ctypes.byref(outputs),
+            config_ptr, stream
+        ))
 
     def ncclEpComplete(self, handle, config, stream):
         """Complete a staged EP operation.

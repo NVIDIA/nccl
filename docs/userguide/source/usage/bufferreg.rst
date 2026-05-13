@@ -133,7 +133,16 @@ General Buffer Registration
 
 Since 2.23.x, NCCL supports intra-node buffer registration, which targets all peer-to-peer intra-node communications (e.g., Allgather Ring) and brings less memory pressure, better communication and computation overlap performance. Either registering buffers by `ncclCommRegister` in the beginning or applying CUDA graph can enable intra-node buffer registration for NCCL collectives and sendrecv.
 
-The user buffers can be allocated through VMM API (i.e., `cuMem*`), any VMM-based allocators (:ref:`mem_allocator`) or `ncclMemAlloc` will work. The buffers allocated through legacy cuda API (e.g., `cudaMalloc`) can also be used for registration. However, it is not safe due to the potential hang during execution and segmentation fault during failure and abort, so using legacy buffers for registration is not recommended; currently, legacy buffer registration is disabled by default, users can set `NCCL_LEGACY_CUDA_REGISTER=1` to enable it.
+The user buffers can be allocated through VMM API (i.e., `cuMem*`), any VMM-based allocators (:ref:`mem_allocator`) or `ncclMemAlloc` will work.
+The buffers allocated through legacy cuda API (e.g., `cudaMalloc`) can also be used for registration. However, it is not safe due to the potential hang during execution and segmentation fault during failure and abort, so using legacy buffers for registration is not recommended; currently, legacy buffer registration is disabled by default, users can set `NCCL_LEGACY_CUDA_REGISTER=1` to enable it.
+
+Buffer Registration, GPU Direct RDMA, and MPS with MLOPart
+----------------------------------------------------------
+
+To ensure optimal performance for scale-out communications, we recommend the usage of `ncclMemAlloc`, or alternatively `cuMemCreate` with the attribute `gpuDirectRDMACapable`.
+Failing to do so might force NCCL to use an internal staging buffer and therefore offset the gain provided by the user-buffer registration.
+
+Further, mixing buffers allocated with different allocators maybe result in undefined behavior.
 
 Buffer Registration and PXN
 ---------------------------

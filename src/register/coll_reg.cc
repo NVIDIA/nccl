@@ -11,6 +11,19 @@
 #include "register_inline.h"
 #include "graph/topo.h"
 
+NCCL_PARAM(MloPartRdmaEnable, "MLOPART_RDMA_ENABLE", 0);
+
+static ncclResult_t isMloPartBufRdmaCapable(struct ncclComm* comm, const void* ptr, bool* isRdmaCapable) {
+  if (!comm->hasMloPart) {
+    *isRdmaCapable = true;
+  } else if (!ptr) {
+    *isRdmaCapable = false;
+  } else {
+    *isRdmaCapable = ncclParamMloPartRdmaEnable();
+  }
+  return ncclSuccess;
+}
+
 static ncclResult_t registerCheckP2PConnection(struct ncclComm* comm, struct ncclConnector* conn, struct ncclTopoGraph* graph, int peer, bool* needReg) {
   if (conn->connected) {
     if (conn->conn.flags & (NCCL_P2P_READ | NCCL_P2P_WRITE)) {
@@ -68,7 +81,9 @@ ncclResult_t ncclRegisterCollNvlsBuffers(
       ncclNvlsLocalRegisterBuffer(comm, sendbuff, recvbuff, sendbuffSize, recvbuffSize, &nvlsReged, outRegBufSend, outRegBufRecv);
     }
 
-    if (nvlsReged && comm->nNodes > 1 && info->algorithm == NCCL_ALGO_NVLS) {
+    bool isRdmaCapable = false;
+    NCCLCHECK(isMloPartBufRdmaCapable(comm, info->func == ncclFuncAllGather ? info->sendbuff : info->recvbuff, &isRdmaCapable));
+    if (nvlsReged && comm->nNodes > 1 && info->algorithm == NCCL_ALGO_NVLS && isRdmaCapable) {
       if (comm->planner.persistent && ncclParamGraphRegister()) {
         if (info->func == ncclFuncAllGather) {
           ncclCollnetGraphRegisterBuffer(comm, info->sendbuff, sendbuffSize, collNetSend, &collnetReged, &sendHandle, cleanupQueue, &info->nCleanupQueueElts);
@@ -148,7 +163,9 @@ ncclResult_t ncclRegisterCollBuffers(
       ncclNvlsGraphRegisterBuffer(comm, sendbuff, recvbuff, sendbuffSize, recvbuffSize, &nvlsReged, outRegBufSend, outRegBufRecv, cleanupQueue, &info->nCleanupQueueElts);
     }
 
-    if (comm->nNodes > 1 && info->algorithm == NCCL_ALGO_NVLS) {
+    bool isRdmaCapable = false;
+    NCCLCHECK(isMloPartBufRdmaCapable(comm, info->recvbuff, &isRdmaCapable));
+    if (comm->nNodes > 1 && info->algorithm == NCCL_ALGO_NVLS && isRdmaCapable) {
       if (ncclParamLocalRegister()) {
         ncclCollnetLocalRegisterBuffer(comm, info->recvbuff, recvbuffSize, collNetSend, &collnetReged, &sendHandle);
         if (collnetReged) ncclCollnetLocalRegisterBuffer(comm, info->recvbuff, recvbuffSize, collNetRecv, &collnetReged, &recvHandle);
@@ -243,7 +260,10 @@ ncclResult_t ncclRegisterCollBuffers(
       }
 
       // register collnet buffer
-      if (info->opDev.op != ncclDevPreMulSum && info->opDev.op != ncclDevSumPostDiv && !(info->func == ncclFuncAllReduce && !comm->isOneRPN)) {
+      bool sendRdmaCapable = false, recvRdmaCapable = false;
+      NCCLCHECK(isMloPartBufRdmaCapable(comm, info->sendbuff, &sendRdmaCapable));
+      NCCLCHECK(isMloPartBufRdmaCapable(comm, info->recvbuff, &recvRdmaCapable));
+      if (info->opDev.op != ncclDevPreMulSum && info->opDev.op != ncclDevSumPostDiv && !(info->func == ncclFuncAllReduce && !comm->isOneRPN) && sendRdmaCapable && recvRdmaCapable) {
         if (comm->planner.persistent && ncclParamGraphRegister()) {
           ncclCollnetGraphRegisterBuffer(comm, info->sendbuff, sendbuffSize, collNetSend, &netSendRegFlag, &sendHandle, cleanupQueue, &info->nCleanupQueueElts);
           ncclCollnetGraphRegisterBuffer(comm, info->recvbuff, recvbuffSize, collNetRecv, &netRecvRegFlag, &recvHandle, cleanupQueue, &info->nCleanupQueueElts);
@@ -346,7 +366,10 @@ ncclResult_t ncclRegisterCollBuffers(
       // start net registration
       regBufFlag = 0;
 
-      if (!comm->useNetPXN && comm->useGdr && comm->netDeviceType != NCCL_NET_DEVICE_UNPACK && !(info->func == ncclFuncAllReduce && (info->opDev.op == ncclDevPreMulSum || info->opDev.op == ncclDevSumPostDiv))) {
+      bool sendRdmaCapable = false, recvRdmaCapable = false;
+      NCCLCHECK(isMloPartBufRdmaCapable(comm, info->sendbuff, &sendRdmaCapable));
+      NCCLCHECK(isMloPartBufRdmaCapable(comm, info->recvbuff, &recvRdmaCapable));
+      if (!comm->useNetPXN && comm->useGdr && comm->netDeviceType != NCCL_NET_DEVICE_UNPACK && !(info->func == ncclFuncAllReduce && (info->opDev.op == ncclDevPreMulSum || info->opDev.op == ncclDevSumPostDiv)) && sendRdmaCapable && recvRdmaCapable) {
         if (comm->planner.persistent && ncclParamGraphRegister()) {
           if (hasSendNetPeer) {
             ncclNetGraphRegisterBuffer(comm, info->sendbuff, sendbuffSize, sendNetConns, sendNetPeers, &regBufFlag, sendNetHandles, cleanupQueue, &info->nCleanupQueueElts);
@@ -436,7 +459,10 @@ ncclResult_t ncclRegisterCollBuffers(
       }
 
       // register collnet chain 1RPN buffer
-      if (info->algorithm == NCCL_ALGO_COLLNET_CHAIN && info->opDev.op != ncclDevPreMulSum && info->opDev.op != ncclDevSumPostDiv && comm->isOneRPN) {
+      bool sendRdmaCapable = false, recvRdmaCapable = false;
+      NCCLCHECK(isMloPartBufRdmaCapable(comm, info->sendbuff, &sendRdmaCapable));
+      NCCLCHECK(isMloPartBufRdmaCapable(comm, info->recvbuff, &recvRdmaCapable));
+      if (info->algorithm == NCCL_ALGO_COLLNET_CHAIN && info->opDev.op != ncclDevPreMulSum && info->opDev.op != ncclDevSumPostDiv && comm->isOneRPN && sendRdmaCapable && recvRdmaCapable) {
         if (comm->planner.persistent && ncclParamGraphRegister()) {
           ncclCollnetGraphRegisterBuffer(comm, info->sendbuff, sendbuffSize, collNetSend, &netSendRegFlag, &sendHandle, cleanupQueue, &info->nCleanupQueueElts);
           info->sendMhandle = sendHandle;

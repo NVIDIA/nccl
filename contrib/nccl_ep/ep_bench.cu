@@ -2447,6 +2447,7 @@ void printUsage(const char* programName, int myRank) {
         printf("  --expert-major-alignment <N>      Per-expert zone alignment in tokens (expert-major only, power of 2)\n");
         printf("  --max-recv-token-slots-per-rank <N>  Per-rank recv-slot budget (0 = auto; bench default for EM = nRanks*tokens*top_k/2)\n");
         printf("  --zcopy                 Use ncclMemAlloc buffers + windows for HT tensors that need peer access\n");
+        printf("  --max-num-sms <N>       Maximum SMs for EP kernels (0 = auto, default: 0)\n");
         printf("  --help                  Show this help message\n");
     }
 }
@@ -2474,6 +2475,7 @@ int main(int argc, char* argv[]) {
     size_t expert_major_alignment = 0;  // 0 = no padding; >1 aligns each expert zone
     unsigned int max_recv_token_slots_per_rank = UINT_MAX;  // UINT_MAX = unset -> bench auto; 0 = lib auto (worst case)
     bool zcopy = false;  // Use ncclMemAlloc + windows for HT tensors that need peer access
+    unsigned int max_num_sms = NCCL_EP_AUTO;  // 0 = auto (resolved to HYBRIDEP_MAX_NUM_SMS_PER_RANK)
     // Initialize MPI
     MPICHECK(MPI_Init(&argc, &argv));
     MPICHECK(MPI_Comm_rank(MPI_COMM_WORLD, &myRank));
@@ -2499,13 +2501,14 @@ int main(int argc, char* argv[]) {
         {"expert-major-alignment",   required_argument, 0, 'A'},
         {"max-recv-token-slots-per-rank", required_argument, 0, 'R'},
         {"zcopy",          no_argument,       0, 'z'},
+        {"max-num-sms",    required_argument, 0, 'S'},
         {"help",           no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
 
     int opt;
     int option_index = 0;
-    while ((opt = getopt_long(argc, argv, "a:L:t:d:k:e:w:i:pnfUVDMA:R:zh", long_options, &option_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "a:L:t:d:k:e:w:i:pnfUVDMA:R:zS:h", long_options, &option_index)) != -1) {
         switch (opt) {
             case 'a':
                 if (strcmp(optarg, "ll") == 0 || strcmp(optarg, "low-latency") == 0) {
@@ -2584,6 +2587,9 @@ int main(int argc, char* argv[]) {
                 break;
             case 'z':
                 zcopy = true;
+                break;
+            case 'S':
+                max_num_sms = static_cast<unsigned int>(atoi(optarg));
                 break;
             case 'h':
                 printUsage(argv[0], myRank);
@@ -2680,6 +2686,11 @@ int main(int argc, char* argv[]) {
                layout == NCCL_EP_LAYOUT_FLAT ? "flat" :
                layout == NCCL_EP_LAYOUT_RANK_MAJOR ? "rank-major" : "expert-major");
         printf("  Ranks:           %d\n", nRanks);
+        if (max_num_sms != NCCL_EP_AUTO) {
+            printf("  Max num SMs:     %u\n", max_num_sms);
+        } else {
+            printf("  Max num SMs:     auto\n");
+        }
         printf("  Tokens:          %u\n", num_tokens);
         printf("  Hidden:          %u\n", hidden);
         printf("  Top-k:           %u\n", top_k);
@@ -2760,6 +2771,7 @@ int main(int argc, char* argv[]) {
         max_recv_token_slots_per_rank = std::max(1u, est * safety);
     }
     config.max_recv_token_slots_per_rank = max_recv_token_slots_per_rank;
+    config.max_num_sms = max_num_sms;
     config.alloc.alloc_fn = cudaAllocCallback;
     config.alloc.free_fn  = cudaFreeCallback;
     config.alloc.context  = nullptr;

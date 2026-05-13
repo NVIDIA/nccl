@@ -102,6 +102,9 @@ typedef struct {
     //   HT: required, must be >= max_send_tokens_per_rank.
     //   LL: AUTO/0 → nRanks*max_send_tokens_per_rank.
     unsigned int max_recv_token_slots_per_rank;
+    // Maximum number of SMs to use for EP kernels (dispatch, combine, preprocessing).
+    // Default: NCCL_EP_AUTO — algorithm-dependent default.
+    unsigned int max_num_sms;
     // Device memory allocator; zero-init (all NULL) uses cudaMalloc/cudaFree.
     ncclEpAllocConfig_t alloc;
 } ncclEpGroupConfig_t;

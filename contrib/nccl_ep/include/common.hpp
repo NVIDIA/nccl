@@ -14,6 +14,7 @@
 // ============================================================================
 // Configuration constants
 // ============================================================================
+
 #define NUM_MAX_RDMA_PEERS 20
 #define NUM_WORKSPACE_BYTES (32 * 1024 * 1024)
 #define NUM_MAX_LOCAL_EXPERTS 1024

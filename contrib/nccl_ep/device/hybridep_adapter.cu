@@ -356,6 +356,7 @@ void call_metadata_preprocessing(
     void*    recv_total_counter,
     bool     out_is_int64,
     int      max_recv_token_slots_per_rank,
+    int      num_blocks,
     cudaStream_t stream
 ) {
     if (alignment > 0 && per_expert_token_counts == nullptr) {
@@ -371,7 +372,7 @@ void call_metadata_preprocessing(
     EP_HOST_ASSERT(num_ranks_per_node <= 32 && "metadata_preprocessing: LSA team size > 32 not yet supported (MNNVL)");
 
     constexpr int NUM_THREADS_PER_BLOCK = HYBRIDEP_NUM_THREADS_PER_BLOCK_PREPROCESSING;
-    constexpr int NUM_OF_BLOCKS = HYBRIDEP_NUM_BLOCKS_PREPROCESSING;
+    const int NUM_OF_BLOCKS = num_blocks;
     constexpr int NUM_OF_WARPS_PER_BLOCK_SCAN = NUM_THREADS_PER_BLOCK / 32;
 
     const size_t preprocessing_tmp_sz = NUM_OF_BLOCKS * num_ranks_per_node * sizeof(::hybrid_ep::tmp_state_t);
@@ -515,6 +516,7 @@ void dispatch_impl(
     int max_send_tokens_per_rank,
     int num_nodes,
     bool use_fp8,
+    int num_blocks,
     cudaStream_t stream
 ) {
     HYBRIDEP_SWITCH_DATATYPE(use_fp8, {
@@ -535,7 +537,7 @@ void dispatch_impl(
         d_config.num_of_stages           = HYBRIDEP_DISPATCH_NUM_OF_STAGES;
         d_config.num_of_in_flight_s2g    = HYBRIDEP_DISPATCH_NUM_OF_IN_FLIGHT_S2G;
         d_config.num_of_tokens_per_chunk = HT_OF_NUM_TOKENS_PER_CHUNK;
-        d_config.num_of_blocks           = HYBRIDEP_DISPATCH_NUM_OF_BLOCKS;
+        d_config.num_of_blocks           = num_blocks;
         d_config.forward_dispatch        = FORWARD_DISPATCH;
         d_config.token_data_type         = std::is_same_v<TOKEN_DATA_TYPE, uint16_t> ? 1 : 0;
         d_config.num_pipelines           = HYBRIDEP_DISPATCH_NUM_OF_PIPELINES_PER_BLOCK;
@@ -554,7 +556,7 @@ void dispatch_impl(
 #ifdef HYBRIDEP_ENABLE_WARP_TIMING
         const jit::dispatch_warp_layout_t dispatch_layout =
             jit::compute_dispatch_warp_layout(num_nodes, params.layout);
-        const int dispatch_wt_total = HYBRIDEP_DISPATCH_NUM_OF_BLOCKS * (dispatch_layout.block_dim / 32);
+        const int dispatch_wt_total = num_blocks * (dispatch_layout.block_dim / 32);
         ::hybrid_ep::dispatch_warp_timing_entry_t* d_wt = nullptr;
         CUDA_CHECK(cudaMalloc(&d_wt, dispatch_wt_total * sizeof(::hybrid_ep::dispatch_warp_timing_entry_t)));
         CUDA_CHECK(cudaMemsetAsync(d_wt, 0, dispatch_wt_total * sizeof(::hybrid_ep::dispatch_warp_timing_entry_t), stream));
@@ -565,7 +567,7 @@ void dispatch_impl(
             HYBRIDEP_DISPATCH_NUM_OF_STAGES,
             HYBRIDEP_DISPATCH_NUM_OF_IN_FLIGHT_S2G,
             HT_OF_NUM_TOKENS_PER_CHUNK,
-            HYBRIDEP_DISPATCH_NUM_OF_BLOCKS,
+            num_blocks,
             FORWARD_DISPATCH,
             num_nodes,
             params.num_ranks_per_node,
@@ -577,7 +579,7 @@ void dispatch_impl(
             stream);
 
 #ifdef HYBRIDEP_ENABLE_WARP_TIMING
-        jit::dispatch_dump_warp_timing(dispatch_layout, HYBRIDEP_DISPATCH_NUM_OF_BLOCKS, d_wt, stream);
+        jit::dispatch_dump_warp_timing(dispatch_layout, num_blocks, d_wt, stream);
         CUDA_CHECK(cudaFree(d_wt));
 #endif
     });
@@ -589,18 +591,19 @@ void call_dispatch(
     int num_nodes,
     bool use_fp8,
     bool forward_dispatch,
+    int num_blocks,
     cudaStream_t stream
 ) {
     // Dispatch based on forward/backward and sync mode
     if (forward_dispatch) {
         dispatch_impl<true>(
             params, max_send_tokens_per_rank,
-            num_nodes, use_fp8, stream);
+            num_nodes, use_fp8, num_blocks, stream);
 
     } else {
         dispatch_impl<false>(
             params, max_send_tokens_per_rank,
-            num_nodes, use_fp8, stream);
+            num_nodes, use_fp8, num_blocks, stream);
 
     }
 }
@@ -681,6 +684,7 @@ void combine_impl(
     const CombineParams& params,
     int max_send_tokens_per_rank,
     int num_nodes,
+    int num_blocks,
     cudaStream_t stream
 ) {
     // TMA requires prob buffer (experts_per_node * sizeof(float)) to be 16B aligned
@@ -717,13 +721,13 @@ void combine_impl(
 
 #ifdef HYBRIDEP_ENABLE_WARP_TIMING
     const jit::combine_warp_layout_t combine_layout = jit::compute_combine_warp_layout(num_nodes);
-    const int combine_wt_total = HYBRIDEP_COMBINE_NUM_OF_BLOCKS * (combine_layout.block_dim / 32);
+    const int combine_wt_total = num_blocks * (combine_layout.block_dim / 32);
     ::hybrid_ep::combine_warp_timing_entry_t* d_wt = nullptr;
     ::hybrid_ep::combine_block_timing_entry_t* d_bt = nullptr;
     CUDA_CHECK(cudaMalloc(&d_wt, combine_wt_total * sizeof(::hybrid_ep::combine_warp_timing_entry_t)));
-    CUDA_CHECK(cudaMalloc(&d_bt, HYBRIDEP_COMBINE_NUM_OF_BLOCKS * sizeof(::hybrid_ep::combine_block_timing_entry_t)));
+    CUDA_CHECK(cudaMalloc(&d_bt, num_blocks * sizeof(::hybrid_ep::combine_block_timing_entry_t)));
     CUDA_CHECK(cudaMemsetAsync(d_wt, 0, combine_wt_total * sizeof(::hybrid_ep::combine_warp_timing_entry_t), stream));
-    CUDA_CHECK(cudaMemsetAsync(d_bt, 0, HYBRIDEP_COMBINE_NUM_OF_BLOCKS * sizeof(::hybrid_ep::combine_block_timing_entry_t), stream));
+    CUDA_CHECK(cudaMemsetAsync(d_bt, 0, num_blocks * sizeof(::hybrid_ep::combine_block_timing_entry_t), stream));
     kp.warp_timing = d_wt;
     kp.block_timing = d_bt;
 #endif
@@ -733,7 +737,7 @@ void combine_impl(
         num_stages_s2g,
         HT_OF_NUM_TOKENS_PER_CHUNK,
         HYBRIDEP_COMBINE_NUM_OF_TOKENS_PER_GROUP,
-        HYBRIDEP_COMBINE_NUM_OF_BLOCKS,
+        num_blocks,
         HYBRIDEP_COMBINE_NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
         BACKWARD_COMBINE,
         num_nodes,
@@ -745,7 +749,7 @@ void combine_impl(
         stream);
 
 #ifdef HYBRIDEP_ENABLE_WARP_TIMING
-    jit::combine_dump_warp_timing(combine_layout, HYBRIDEP_COMBINE_NUM_OF_BLOCKS, d_wt, d_bt, stream);
+    jit::combine_dump_warp_timing(combine_layout, num_blocks, d_wt, d_bt, stream);
     CUDA_CHECK(cudaFree(d_wt));
     CUDA_CHECK(cudaFree(d_bt));
 #endif
@@ -756,16 +760,17 @@ void call_combine(
     int max_send_tokens_per_rank,
     int num_nodes,
     bool backward_combine,
+    int num_blocks,
     cudaStream_t stream
 ) {
     if (backward_combine) {
         combine_impl<true>(
             params, max_send_tokens_per_rank,
-            num_nodes, stream);
+            num_nodes, num_blocks, stream);
     } else {
         combine_impl<false>(
             params, max_send_tokens_per_rank,
-            num_nodes, stream);
+            num_nodes, num_blocks, stream);
     }
 }
 

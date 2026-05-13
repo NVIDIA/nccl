@@ -163,6 +163,7 @@ void call_metadata_preprocessing(
     void*    recv_total_counter     = nullptr, // Optional scalar: total recv tokens (int32 or int64; nullable)
     bool     out_is_int64           = true,    // Shared dtype for the 3 int output tensors above
     int      max_recv_token_slots_per_rank = 0, // HT recv-budget; __trap on overflow.
+    int      num_blocks             = 16,      // Number of SMs for the kernel grid
     cudaStream_t stream             = 0);
 
 // Returns required size in bytes for the scan temp buffer used by call_metadata_preprocessing.
@@ -268,6 +269,7 @@ void call_dispatch(
     int num_nodes,              // Number of nodes (RDMA domain size)
     bool use_fp8,               // false = BF16 (uint16_t), true = FP8 (uint8_t)
     bool forward_dispatch,      // True for forward, false for backward
+    int num_blocks,             // Number of SMs/blocks for the kernel grid
     cudaStream_t stream);
 
 // ============================================================================
@@ -335,6 +337,7 @@ void call_combine(
     int max_send_tokens_per_rank,    // Max tokens for buffer sizing
     int num_nodes,              // Number of nodes (RDMA domain size)
     bool backward_combine,      // True for backward (training), false for forward
+    int num_blocks,             // Number of SMs/blocks for the kernel grid
     cudaStream_t stream);
 
 

@@ -216,7 +216,7 @@ struct ncclEpGroup {
     int max_recv_tokens;      // Resolved per-rank IPC slot budget (= config.max_recv_token_slots_per_rank).
     int hidden;               // Hidden size (token_size_bytes / ncclTypeSize(ncclBfloat16))
     unsigned int device_sm_count; // Number of SMs on the device
-    unsigned int num_sms_ht; // Number of SMs to use for HT kernels
+    unsigned int max_num_sms; // Resolved SM count for EP kernels (from config.max_num_sms)
 
     ncclEpAllocConfig_t alloc;
 
@@ -312,7 +312,7 @@ struct ncclEpGroup {
         max_recv_tokens(0),
         hidden(0),
         device_sm_count(0),
-        num_sms_ht(0),
+        max_num_sms(0),
         alloc{},
         gpus_per_node(0),
         rank_in_node(0),
@@ -811,7 +811,7 @@ static ncclResult_t init_hybridep_internode(ncclEpGroup_t ep_group,
     }
 
     int qps_per_rank = ep_group->config.num_qp_per_rank;
-    int min_required_ctx = HYBRIDEP_DISPATCH_NUM_OF_BLOCKS * HYBRIDEP_DISPATCH_N2N_WARPS;
+    int min_required_ctx = ep_group->config.max_num_sms * HYBRIDEP_DISPATCH_N2N_WARPS;
     if (qps_per_rank == 0) qps_per_rank = min_required_ctx;
     if (qps_per_rank < min_required_ctx) {
         fprintf(stderr, "[HT GIN] Error: num_qp_per_rank(%d) must be >= %d for dedicated N2N warp contexts\n",
@@ -1014,6 +1014,38 @@ ncclResult_t ncclEpCreateGroup(
     NCCL_CHECK_RESULT(ncclCommUserRank(comm, &ep_group->rank));
     NCCL_CHECK_RESULT(ncclCommCuDevice(comm, &ep_group->cuda_device_id));
 
+    CUDA_CHECK(cudaSetDevice(ep_group->cuda_device_id));
+    cudaDeviceProp device_prop = {};
+    CUDA_CHECK(cudaGetDeviceProperties(&device_prop, ep_group->cuda_device_id));
+    ep_group->device_sm_count = device_prop.multiProcessorCount;
+    if (in_config->max_num_sms == NCCL_EP_AUTO) {
+        if (in_config->algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) {
+            ep_group->max_num_sms = HYBRIDEP_MAX_NUM_SMS_PER_RANK;
+        } else {
+            ep_group->max_num_sms = ep_group->device_sm_count;
+        }
+    } else {
+        if (in_config->max_num_sms > ep_group->device_sm_count) {
+            fprintf(stderr, "Error: NCCL EP requires max_num_sms <= device_sm_count\n");
+            return ncclInvalidUsage;
+        }
+        if (in_config->algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
+            // This reflects the current limitation of the LL backend
+            // TODO: validate that the limitation is valid and if need - relax it in a follow-up fix
+            constexpr int llMaxWarpGroupsLimit = 14;
+            const int numWarpGroups = (in_config->num_experts + (in_config->max_num_sms - 1)) / in_config->max_num_sms;
+            if (numWarpGroups > llMaxWarpGroupsLimit) {
+                const int required_sms = (in_config->num_experts + (llMaxWarpGroupsLimit - 1)) / llMaxWarpGroupsLimit;
+                fprintf(stderr, "Error: insufficient 'max_num_sms'. In Low-Latency mode, NCCL EP requires at least %d SMs\n", required_sms);
+                return ncclInvalidUsage;
+            }
+        }
+        ep_group->max_num_sms = in_config->max_num_sms;
+    }
+    // Keep config in sync with the resolved value so consumers of ep_group->config.max_num_sms
+    // (e.g. the qps_per_rank validation in init_hybridep_internode) see the real count, not NCCL_EP_AUTO.
+    ep_group->config.max_num_sms = ep_group->max_num_sms;
+
     // Determine number of nodes by gathering hostnames and counting unique ones
     constexpr size_t HOSTNAME_LEN = 256;
     std::vector<char> all_hostnames(HOSTNAME_LEN * ep_group->nRanks, 0);
@@ -1063,7 +1095,7 @@ ncclResult_t ncclEpCreateGroup(
     }
 
     if (ep_group->config.num_qp_per_rank == NCCL_EP_AUTO) {
-        ep_group->config.num_qp_per_rank = HYBRIDEP_DISPATCH_NUM_OF_BLOCKS * HYBRIDEP_DISPATCH_N2N_WARPS;
+        ep_group->config.num_qp_per_rank = ep_group->max_num_sms * HYBRIDEP_DISPATCH_N2N_WARPS;
     }
 
     // Physical node properties. rank_in_node must lie in [0, gpus_per_node)
@@ -1094,11 +1126,6 @@ ncclResult_t ncclEpCreateGroup(
     }
 
     ep_group->rdma_buffer    = nullptr;
-
-    CUDA_CHECK(cudaSetDevice(ep_group->cuda_device_id));
-    cudaDeviceProp device_prop = {};
-    CUDA_CHECK(cudaGetDeviceProperties(&device_prop, ep_group->cuda_device_id));
-    ep_group->device_sm_count = device_prop.multiProcessorCount;
 
     CUDA_CHECK(ep_group->alloc.alloc_fn(&ep_group->ep_workspace, NUM_WORKSPACE_BYTES, ep_group->alloc.context));
     CUDA_CHECK(cudaMemsetAsync(ep_group->ep_workspace, 0, NUM_WORKSPACE_BYTES, stream));
@@ -1951,6 +1978,7 @@ ncclResult_t ncclEpUpdateHandle(
         recv_total_counter,
         out_is_int64,
         static_cast<int>(ep_group->config.max_recv_token_slots_per_rank),
+        static_cast<int>(ep_group->max_num_sms),
         stream);
 
     return ncclSuccess;
@@ -2159,7 +2187,7 @@ ncclResult_t ncclEpDispatch(
                 group->nccl_wins,
                 signal_base,
                 group->ep_workspace,
-                group->device_sm_count,
+                group->max_num_sms,
                 stream
             );
         };
@@ -2418,6 +2446,7 @@ ncclResult_t ncclEpDispatch(
             group->rdma_team_size,
             use_fp8,
             forward_dispatch,
+            static_cast<int>(group->max_num_sms),
             stream
         );
 
@@ -2685,7 +2714,7 @@ ncclResult_t ncclEpCombine(
                 handle->group->nccl_wins,
                 signal_base,
                 handle->group->ep_workspace,
-                handle->group->device_sm_count,
+                handle->group->max_num_sms,
                 stream
             );
         };
@@ -2909,6 +2938,7 @@ ncclResult_t ncclEpCombine(
             group->config.max_send_tokens_per_rank, // max_send_tokens_per_rank
             group->rdma_team_size, // num_nodes (RDMA domain size)
             backward_combine, // backward mode flag
+            static_cast<int>(group->max_num_sms),
             stream
         );
 

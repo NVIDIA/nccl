@@ -121,6 +121,7 @@ ctypedef struct ncclConfig_t 'ncclConfig_t':
     int graphUsageMode
     int numRmaCtx
     int maxP2pPeers
+    int graphStreamOrdering
 
 ctypedef struct ncclSimInfo_t 'ncclSimInfo_t':
     size_t size
@@ -240,6 +241,7 @@ ctypedef struct ncclDevCommRequirements_t 'ncclDevCommRequirements_t':
     int ginTrafficClass
     int worldGinBarrierCount
     uint8_t ginStrongSignalsRequired
+    uint8_t ginVaSignalsRequired
 
 
 

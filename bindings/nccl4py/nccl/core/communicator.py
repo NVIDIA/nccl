@@ -96,6 +96,7 @@ class NCCLConfig:
         graph_usage_mode: int | None = None,
         num_rma_ctx: int | None = None,
         max_p2p_peers: int | None = None,
+        graph_stream_ordering: int | None = None,
     ) -> None:
         """Initializes NCCL configuration with custom parameters.
 
@@ -141,6 +142,12 @@ class NCCLConfig:
             max_p2p_peers: Maximum number of peers any rank will concurrently
                 communicate with using P2P (NCCL 2.30+). Positive integer.
                 NCCL default: communicator size.
+            graph_stream_ordering: Whether NCCL preserves stream-ordering
+                semantics for collectives captured into CUDA graphs. Supported
+                values: 0 (disabled) or 1 (enabled). Cannot be combined with
+                ``graph_usage_mode=2``. Also controllable via the
+                ``NCCL_GRAPH_STREAM_ORDERING`` environment variable. NCCL
+                default: 1.
 
         Raises:
             NcclInvalid: If any field has an invalid type or out-of-range
@@ -171,6 +178,7 @@ class NCCLConfig:
         self._cfg.num_rma_ctx = NCCL_UNDEF_INT
         # NCCL 2.30
         self._cfg.max_p2p_peers = NCCL_UNDEF_INT
+        self._cfg.graph_stream_ordering = NCCL_UNDEF_INT
 
         # Use setters for validation - they handle type checking and range validation
         if blocking is not None:
@@ -207,6 +215,8 @@ class NCCLConfig:
             self.num_rma_ctx = num_rma_ctx
         if max_p2p_peers is not None:
             self.max_p2p_peers = max_p2p_peers
+        if graph_stream_ordering is not None:
+            self.graph_stream_ordering = graph_stream_ordering
 
     def __repr__(self) -> str:
         parts = []
@@ -246,6 +256,8 @@ class NCCLConfig:
             parts.append(f"num_rma_ctx={self._cfg.num_rma_ctx}")
         if self._cfg.max_p2p_peers != NCCL_UNDEF_INT:
             parts.append(f"max_p2p_peers={self._cfg.max_p2p_peers}")
+        if self._cfg.graph_stream_ordering != NCCL_UNDEF_INT:
+            parts.append(f"graph_stream_ordering={self._cfg.graph_stream_ordering}")
 
         if parts:
             return f"<NCCLConfig: {', '.join(parts)}>"
@@ -464,6 +476,19 @@ class NCCLConfig:
             raise NcclInvalid(f"max_p2p_peers must be > 0, got {val}")
         self._cfg.max_p2p_peers = int(val)
 
+    @property
+    def graph_stream_ordering(self) -> int:
+        """Whether stream-ordering is preserved for graph-captured collectives: 0 or 1. Default: 1."""
+        return int(self._cfg.graph_stream_ordering)
+
+    @graph_stream_ordering.setter
+    def graph_stream_ordering(self, val: int) -> None:
+        if not isinstance(val, int):
+            raise NcclInvalid(f"graph_stream_ordering must be int, got {type(val).__name__}")
+        if val not in (0, 1):
+            raise NcclInvalid(f"graph_stream_ordering must be 0 or 1, got {val}")
+        self._cfg.graph_stream_ordering = int(val)
+
 
 @dataclass(frozen=True, slots=True)
 class WaitSignalDesc:
@@ -521,6 +546,7 @@ class NCCLDevCommRequirements:
         gin_queue_depth: int = 0,
         world_gin_barrier_count: int = 0,
         gin_strong_signals_required: bool = True,
+        gin_va_signals_required: bool = True,
     ) -> None:
         """Initializes NCCL device communicator requirements.
 
@@ -556,6 +582,9 @@ class NCCLDevCommRequirements:
                 required by kernels using this devComm. When False, using
                 GIN strong signals results in undefined behavior. Defaults
                 to True.
+            gin_va_signals_required: Whether GIN VA signals are required by
+                kernels using this devComm. When False, using GIN VA signals
+                results in undefined behavior. Defaults to True.
         """
         # Initialize the low-level binding object
         self._reqs = _nccl_bindings.DevCommRequirements()
@@ -585,6 +614,7 @@ class NCCLDevCommRequirements:
         self.gin_queue_depth = gin_queue_depth
         self.world_gin_barrier_count = world_gin_barrier_count
         self.gin_strong_signals_required = gin_strong_signals_required
+        self.gin_va_signals_required = gin_va_signals_required
 
     @property
     def lsa_multimem(self) -> bool:
@@ -725,6 +755,18 @@ class NCCLDevCommRequirements:
         self._reqs.gin_strong_signals_required = int(value)
 
     @property
+    def gin_va_signals_required(self) -> bool:
+        """Whether GIN VA signals are required by kernels using this devComm.
+
+        When False, using GIN VA signals results in undefined behavior.
+        """
+        return bool(self._reqs.gin_va_signals_required)
+
+    @gin_va_signals_required.setter
+    def gin_va_signals_required(self, value: bool) -> None:
+        self._reqs.gin_va_signals_required = int(value)
+
+    @property
     def ptr(self) -> int:
         """Raw pointer to the underlying ncclDevCommRequirements_t structure."""
         return self._reqs.ptr
@@ -764,6 +806,8 @@ class NCCLDevCommRequirements:
             parts.append(f"world_gin_barrier_count={self.world_gin_barrier_count}")
         if not self.gin_strong_signals_required:  # Default is True
             parts.append(f"gin_strong_signals_required={self.gin_strong_signals_required}")
+        if not self.gin_va_signals_required:  # Default is True
+            parts.append(f"gin_va_signals_required={self.gin_va_signals_required}")
 
         if parts:
             return f"<NCCLDevCommRequirements: {', '.join(parts)}>"

@@ -205,8 +205,8 @@ cdef class UniqueId:
 cdef _get_config_dtype_offsets():
     cdef ncclConfig_t pod = ncclConfig_t()
     return _numpy.dtype({
-        'names': ['size_', 'magic', 'version', 'blocking', 'cga_cluster_size', 'min_ctas', 'max_ctas', 'net_name', 'split_share', 'traffic_class', 'comm_name', 'collnet_enable', 'cta_policy', 'shrink_share', 'nvls_ctas', 'n_channels_per_net_peer', 'nvlink_centric_sched', 'graph_usage_mode', 'num_rma_ctx', 'max_p2p_peers'],
-        'formats': [_numpy.uint64, _numpy.uint32, _numpy.uint32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.intp, _numpy.int32, _numpy.int32, _numpy.intp, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32],
+        'names': ['size_', 'magic', 'version', 'blocking', 'cga_cluster_size', 'min_ctas', 'max_ctas', 'net_name', 'split_share', 'traffic_class', 'comm_name', 'collnet_enable', 'cta_policy', 'shrink_share', 'nvls_ctas', 'n_channels_per_net_peer', 'nvlink_centric_sched', 'graph_usage_mode', 'num_rma_ctx', 'max_p2p_peers', 'graph_stream_ordering'],
+        'formats': [_numpy.uint64, _numpy.uint32, _numpy.uint32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.intp, _numpy.int32, _numpy.int32, _numpy.intp, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32],
         'offsets': [
             (<intptr_t>&(pod.size)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.magic)) - (<intptr_t>&pod),
@@ -228,6 +228,7 @@ cdef _get_config_dtype_offsets():
             (<intptr_t>&(pod.graphUsageMode)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.numRmaCtx)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.maxP2pPeers)) - (<intptr_t>&pod),
+            (<intptr_t>&(pod.graphStreamOrdering)) - (<intptr_t>&pod),
         ],
         'itemsize': sizeof(ncclConfig_t),
     })
@@ -535,6 +536,17 @@ cdef class Config:
         if self._readonly:
             raise ValueError("This Config instance is read-only")
         self._ptr[0].maxP2pPeers = val
+
+    @property
+    def graph_stream_ordering(self):
+        """int: """
+        return self._ptr[0].graphStreamOrdering
+
+    @graph_stream_ordering.setter
+    def graph_stream_ordering(self, val):
+        if self._readonly:
+            raise ValueError("This Config instance is read-only")
+        self._ptr[0].graphStreamOrdering = val
 
     def __getstate__(self):
         raise pickle.PicklingError("Pickle not supported for Config")
@@ -2859,8 +2871,8 @@ cdef class DevComm:
 cdef _get_dev_comm_requirements_dtype_offsets():
     cdef ncclDevCommRequirements_t pod = ncclDevCommRequirements_t()
     return _numpy.dtype({
-        'names': ['size_', 'magic', 'version', 'resource_requirements_list', 'team_requirements_list', 'lsa_multimem', 'barrier_count', 'lsa_barrier_count', 'rail_gin_barrier_count', 'lsa_ll_a2a_block_count', 'lsa_ll_a2a_slot_count', 'gin_force_enable', 'gin_context_count', 'gin_signal_count', 'gin_counter_count', 'gin_connection_type', 'gin_exclusive_contexts', 'gin_queue_depth', 'gin_traffic_class', 'world_gin_barrier_count', 'gin_strong_signals_required'],
-        'formats': [_numpy.uint64, _numpy.uint32, _numpy.uint32, _numpy.intp, _numpy.intp, _numpy.uint8, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.uint8, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.uint8, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.uint8],
+        'names': ['size_', 'magic', 'version', 'resource_requirements_list', 'team_requirements_list', 'lsa_multimem', 'barrier_count', 'lsa_barrier_count', 'rail_gin_barrier_count', 'lsa_ll_a2a_block_count', 'lsa_ll_a2a_slot_count', 'gin_force_enable', 'gin_context_count', 'gin_signal_count', 'gin_counter_count', 'gin_connection_type', 'gin_exclusive_contexts', 'gin_queue_depth', 'gin_traffic_class', 'world_gin_barrier_count', 'gin_strong_signals_required', 'gin_va_signals_required'],
+        'formats': [_numpy.uint64, _numpy.uint32, _numpy.uint32, _numpy.intp, _numpy.intp, _numpy.uint8, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.uint8, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.uint8, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.uint8, _numpy.uint8],
         'offsets': [
             (<intptr_t>&(pod.size)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.magic)) - (<intptr_t>&pod),
@@ -2883,6 +2895,7 @@ cdef _get_dev_comm_requirements_dtype_offsets():
             (<intptr_t>&(pod.ginTrafficClass)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.worldGinBarrierCount)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.ginStrongSignalsRequired)) - (<intptr_t>&pod),
+            (<intptr_t>&(pod.ginVaSignalsRequired)) - (<intptr_t>&pod),
         ],
         'itemsize': sizeof(ncclDevCommRequirements_t),
     })
@@ -3187,6 +3200,17 @@ cdef class DevCommRequirements:
         if self._readonly:
             raise ValueError("This DevCommRequirements instance is read-only")
         self._ptr[0].ginStrongSignalsRequired = val
+
+    @property
+    def gin_va_signals_required(self):
+        """int: """
+        return self._ptr[0].ginVaSignalsRequired
+
+    @gin_va_signals_required.setter
+    def gin_va_signals_required(self, val):
+        if self._readonly:
+            raise ValueError("This DevCommRequirements instance is read-only")
+        self._ptr[0].ginVaSignalsRequired = val
 
     def __getstate__(self):
         raise pickle.PicklingError("Pickle not supported for DevCommRequirements")

@@ -42,6 +42,15 @@ INCFLAGS = -I. -I./include -I./device -I$(BUILDDIR)/include -I$(BUILDDIR)/includ
 NVCUFLAGS := $(NVCC_GENCODE) --extended-lambda $(INCFLAGS) --expt-relaxed-constexpr --compiler-options "-fPIC -fvisibility=hidden" -ccbin $(CXX) $(CXXSTD)
 CXXFLAGS += $(INCFLAGS) $(NCCL_EP_JIT_DEFS) -I$(CUDA_INC) -I$(CUDA_INC)/cccl -fPIC -fvisibility=default
 
+# Optional warp-level timing instrumentation (adds cudaMalloc + cudaMemcpy per kernel launch).
+# Usage: make WARP_TIMING=1
+# Define on both the device build (NVCUFLAGS) and the host JIT compiler driver
+# (CXXFLAGS), since the latter forwards the macro to JIT-compiled device code.
+ifeq ($(WARP_TIMING),1)
+NVCUFLAGS += -DHYBRIDEP_ENABLE_WARP_TIMING
+CXXFLAGS  += -DHYBRIDEP_ENABLE_WARP_TIMING
+endif
+
 # Dependency generation flags for automatic header tracking
 DEPFLAGS = -MMD -MP
 

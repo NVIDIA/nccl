@@ -80,21 +80,23 @@ static ncclResult_t ncclGinPluginLoad(ginPluginLib_t* pluginLib) {
     if (pluginLib->ncclGin) break;
   }
 
-  if (pluginLib->ncclGin == nullptr) {
-    pluginLib->state = ncclGinPluginStateLoadFailed;
-  } else {
-    pluginLib->state = ncclGinPluginStateInitReady;
-  }
+  if (pluginLib->ncclGin == nullptr) goto fail;
 
+  pluginLib->state = ncclGinPluginStateInitReady;
   INFO(NCCL_INIT|NCCL_NET, "Successfully loaded external gin plugin %s",
        (ncclPluginLibPaths[ncclPluginTypeGin] ? ncclPluginLibPaths[ncclPluginTypeGin] : pluginLib->name));
 exit:
   return ncclSuccess;
 fail:
+  INFO(NCCL_INIT|NCCL_NET, "Failed to load external gin plugin %s, dlHandle: %p, ncclGin: %p",
+         (ncclPluginLibPaths[ncclPluginTypeGin] ? ncclPluginLibPaths[ncclPluginTypeGin] : pluginLib->name),
+         pluginLib->dlHandle, pluginLib->ncclGin);
   if (pluginLib->dlHandle) {
     NCCLCHECK(ncclClosePluginLib(pluginLib->dlHandle, ncclPluginTypeGin));
   }
   pluginLib->dlHandle = nullptr;
+  pluginLib->ncclGin = nullptr;
+  pluginLib->version = 0;
   pluginLib->state = ncclGinPluginStateLoadFailed;
   goto exit;
 }

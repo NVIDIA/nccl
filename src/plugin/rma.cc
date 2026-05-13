@@ -80,21 +80,23 @@ static ncclResult_t ncclRmaPluginLoad(rmaPluginLib_t* pluginLib) {
     if (pluginLib->ncclRma) break;
   }
 
-  if (pluginLib->ncclRma == nullptr) {
-    pluginLib->state = ncclRmaPluginStateLoadFailed;
-  } else {
-    pluginLib->state = ncclRmaPluginStateInitReady;
-  }
+  if (pluginLib->ncclRma == nullptr) goto fail;
 
+  pluginLib->state = ncclRmaPluginStateInitReady;
   INFO(NCCL_INIT|NCCL_NET, "Successfully loaded external rma plugin %s",
        (ncclPluginLibPaths[ncclPluginTypeRma] ? ncclPluginLibPaths[ncclPluginTypeRma] : pluginLib->name));
 exit:
   return ncclSuccess;
 fail:
+  INFO(NCCL_INIT|NCCL_NET, "Failed to load external rma plugin %s, dlHandle: %p, ncclRma: %p",
+         (ncclPluginLibPaths[ncclPluginTypeRma] ? ncclPluginLibPaths[ncclPluginTypeRma] : pluginLib->name),
+         pluginLib->dlHandle, pluginLib->ncclRma);
   if (pluginLib->dlHandle) {
     NCCLCHECK(ncclClosePluginLib(pluginLib->dlHandle, ncclPluginTypeRma));
   }
   pluginLib->dlHandle = nullptr;
+  pluginLib->ncclRma = nullptr;
+  pluginLib->version = 0;
   pluginLib->state = ncclRmaPluginStateLoadFailed;
   goto exit;
 }

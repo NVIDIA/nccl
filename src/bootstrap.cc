@@ -272,6 +272,27 @@ struct extInfo {
 #define NET_HANDLE(h, rank)    ((h) + (rank * NCCL_NET_HANDLE_MAXSIZE))
 #define BOOTSTRAP_HANDLE(h, i) ((struct ncclBootstrapHandle*)((char*)h + i * NCCL_UNIQUE_ID_BYTES))
 
+// Bootstrap-side accept wrapper. ncclSocketAccept's default behavior
+// (retryOnBadMagic=true) loops internally on bad-magic events, which can
+// monopolize CPU and starve legitimate peer connects when a non-NCCL TCP
+// peer hits the bootstrap listen socket. We pass retryOnBadMagic=false and
+// drive the retry from here: close the rejected socket, yield 1ms, retry.
+// abortFlag is honored between iterations.
+static ncclResult_t bootstrapAccept(struct ncclSocket* sock, struct ncclSocket* listenSock,
+                                    volatile uint32_t* abortFlag) {
+  while (1) {
+    if (abortFlag != NULL && COMPILER_ATOMIC_LOAD(abortFlag, std::memory_order_acquire) != 0) {
+      return ncclInternalError;
+    }
+    NCCLCHECK(ncclSocketInit(sock));
+    NCCLCHECK(ncclSocketAccept(sock, listenSock, /*retryOnBadMagic=*/false));
+    if (sock->state != ncclSocketStateBadMagic) return ncclSuccess;
+    INFO(NCCL_INIT|NCCL_NET, "bootstrap: rejected bad-magic peer connection on listen sock, retrying accept");
+    (void)ncclSocketClose(sock);
+    usleep(1000);
+  }
+}
+
 static ncclResult_t rootSend(union ncclSocketAddress* addr, uint64_t magic, union ringConnectInfo* info) {
   ncclResult_t res = ncclSuccess;
   struct ncclSocket sock;
@@ -310,8 +331,8 @@ static void* bootstrapRoot(void* rargs) {
   /* Receive addresses from all ranks */
   do {
     struct ncclSocket sock;
-    NCCLCHECKGOTO(ncclSocketInit(&sock), res, out);
-    NCCLCHECKGOTO(ncclSocketAccept(&sock, listenSock), res, out);
+    // No abortFlag: bootstrapRoot is a detached thread without a comm.
+    NCCLCHECKGOTO(bootstrapAccept(&sock, listenSock, /*abortFlag=*/NULL), res, out);
     NCCLCHECKGOTO(socketRecv(&sock, &info, sizeof(info)), res, out);
     NCCLCHECKGOTO(ncclSocketClose(&sock), res, out);
 
@@ -604,8 +625,7 @@ static ncclResult_t netRingConnect(void* ctx, ncclNet_t* net, struct bootstrapLi
 static ncclResult_t socketRingConnect(ncclSocketAddress* addr, struct ncclSocket* sendSocket, struct ncclSocket* listenSock, struct ncclSocket* recvSocket, uint64_t magic, volatile uint32_t* abortFlag) {
   NCCLCHECK(ncclSocketInit(sendSocket, addr, magic, ncclSocketTypeBootstrap, abortFlag));
   NCCLCHECK(ncclSocketConnect(sendSocket));
-  NCCLCHECK(ncclSocketInit(recvSocket));
-  NCCLCHECK(ncclSocketAccept(recvSocket, listenSock));
+  NCCLCHECK(bootstrapAccept(recvSocket, listenSock, abortFlag));
   return ncclSuccess;
 }
 static ncclResult_t ringAllInfo(struct ncclComm* comm, struct bootstrapState* state,
@@ -781,8 +801,7 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
   // get info on my "next" rank in the bootstrap ring from root
   BOOTSTRAP_PROF_OPEN(timers[BOOTSTRAP_INIT_TIME_RECV]);
   if(curr_root >= 0){
-    NCCLCHECK(ncclSocketInit(&sock));
-    NCCLCHECK(ncclSocketAccept(&sock, &listenSockRoot));
+    NCCLCHECK(bootstrapAccept(&sock, &listenSockRoot, comm->abortFlag));
     NCCLCHECK(socketRecv(&sock, &nextPeer, sizeof(nextPeer)));
     NCCLCHECK(ncclSocketClose(&sock));
     NCCLCHECK(ncclSocketClose(&listenSockRoot));
@@ -1041,8 +1060,7 @@ static ncclResult_t socketAccept(void* commState, int peer, int tag, struct nccl
   // Then look for new connections
   while (1) {
     struct socketAckInfo ack = {0};
-    NCCLCHECKGOTO(ncclSocketInit(sock), ret, fail);
-    NCCLCHECKGOTO(ncclSocketAccept(sock, &STATE_LISTEN(state, peerSocket)), ret, fail);
+    NCCLCHECKGOTO(bootstrapAccept(sock, &STATE_LISTEN(state, peerSocket), state->abortFlag), ret, fail);
     NCCLCHECKGOTO(socketRecv(sock, &ack, sizeof(struct socketAckInfo)), ret, fail);
     // Match: tag must match, and peer must match (peer < 0 means wildcard)
     if (ack.tag == tag && (peer < 0 || ack.rank == peer)) return ncclSuccess;

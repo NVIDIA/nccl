@@ -414,6 +414,12 @@ static ncclResult_t socketFinalizeConnect(struct ncclSocket* sock) {
 }
 
 static ncclResult_t socketProgressState(struct ncclSocket* sock) {
+  // BadMagic is set by socketFinalizeAccept on magic mismatch. The reset in
+  // ncclSocketAccept's do-while only fires while that loop runs; this covers
+  // the path where a caller re-enters via ncclSocketReady with state=BadMagic.
+  if (sock->state == ncclSocketStateBadMagic) {
+    sock->state = ncclSocketStateAccepting;
+  }
   if (sock->state == ncclSocketStateAccepting) {
     NCCLCHECK(ncclOsSocketTryAccept(sock));
   }

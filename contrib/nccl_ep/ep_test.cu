@@ -392,20 +392,20 @@ int main(int argc, char* argv[])
   CUDACHECK(cudaMemcpy(topk_idx_data, topk_idx_host, num_tokens * top_k * sizeof(int64_t), cudaMemcpyHostToDevice));
 
   // Create recv-counter tensors for ncclEpCreateHandle (only when disable_max_tokens is true)
-  ncclEpLayoutMarks_t handle_marks = NCCL_EP_LAYOUT_MARKS_INIT;
+  ncclEpLayoutInfo_t handle_layout_info = NCCL_EP_LAYOUT_INFO_INIT;
   ncclNDTensor_t handle_recv_expert_counter = nullptr;
   ncclNDTensor_t handle_recv_total_counter = nullptr;
   if (disable_max_tokens) {
     NCCLCHECK(epMakeTensor(&handle_recv_expert_counter, 1, ncclInt32, num_local_experts));
-    handle_marks.recv_expert_counter = handle_recv_expert_counter;
+    handle_layout_info.expert_counters = handle_recv_expert_counter;
     NCCLCHECK(epMakeTensor(&handle_recv_total_counter, 1, ncclInt32, 1));
-    handle_marks.recv_total_counter = handle_recv_total_counter;
+    handle_layout_info.recv_total_counter = handle_recv_total_counter;
   }
 
   printf("Rank %d: Testing ncclEpCreateHandle\n", myRank);
   ncclEpHandle_t ep_handle;
   NCCLCHECK(ncclEpCreateHandle(&ep_handle, ep_group, topk_idx,
-                               disable_max_tokens ? &handle_marks : nullptr, nullptr, s));
+                               disable_max_tokens ? &handle_layout_info : nullptr, nullptr, s));
   CUDACHECK(cudaStreamSynchronize(s));
 
   unsigned int num_recv_tokens = 0;
@@ -434,9 +434,9 @@ int main(int argc, char* argv[])
   const bool ht_em = (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT &&
                        config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
 
-  ncclEpDispatchInputs_t  dispatch_inputs  = {};
+  ncclEpDispatchInputs_t  dispatch_inputs  = NCCL_EP_DISPATCH_INPUTS_INIT;
   ncclEpDispatchOutputs_t dispatch_outputs = NCCL_EP_DISPATCH_OUTPUTS_INIT;
-  ncclEpLayoutMarks_t     dispatch_marks   = {};
+  ncclEpLayoutInfo_t     dispatch_layout_info   = NCCL_EP_LAYOUT_INFO_INIT;
 
   ncclNDTensor_t input_tokens, recv_x;
   ncclNDTensor_t topk_weights = nullptr, recv_topk_weights = nullptr, recv_topk_idx = nullptr;
@@ -461,7 +461,7 @@ int main(int argc, char* argv[])
                            static_cast<unsigned int>(hidden)));
     NCCLCHECK(epMakeTensor(&ll_recv_expert_counter, 1, ncclInt32,
                            static_cast<unsigned int>(num_local_experts)));
-    dispatch_marks.recv_expert_counter = ll_recv_expert_counter;
+    dispatch_layout_info.expert_counters = ll_recv_expert_counter;
   } else {
     // HT mode: recv_x is [num_recv_tokens, hidden]
     NCCLCHECK(epMakeTensor(&recv_x, 2, ncclBfloat16,
@@ -520,7 +520,7 @@ int main(int argc, char* argv[])
   printf("Rank %d: Testing ncclEpDispatch (send_only=%s)\n", myRank, dispatch_send_only ? "true" : "false");
   NCCLCHECK(ncclEpDispatch(ep_handle, topk_idx,
                            &dispatch_inputs, &dispatch_outputs,
-                           (algorithm == NCCL_EP_ALGO_LOW_LATENCY) ? &dispatch_marks : nullptr,
+                           (algorithm == NCCL_EP_ALGO_LOW_LATENCY) ? &dispatch_layout_info : nullptr,
                            &dispatch_config, s));
 
   printf("Rank %d: Testing ncclEpComplete\n", myRank);
@@ -778,7 +778,7 @@ int main(int argc, char* argv[])
   NCCLCHECK(epMakeTensor(&combined_output, 2, ncclBfloat16, static_cast<unsigned int>(num_tokens), static_cast<unsigned int>(hidden)));
 
   // Setup combine inputs and outputs (named-struct API)
-  ncclEpCombineInputs_t  combine_inputs  = {};
+  ncclEpCombineInputs_t  combine_inputs  = NCCL_EP_COMBINE_INPUTS_INIT;
   ncclEpCombineOutputs_t combine_outputs = NCCL_EP_COMBINE_OUTPUTS_INIT;
   combine_inputs.tokens  = expert_outputs;
   combine_outputs.tokens = combined_output;

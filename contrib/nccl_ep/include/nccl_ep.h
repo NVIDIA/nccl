@@ -15,15 +15,18 @@ extern "C" {
 #endif
 
 // ============================================================================
-// ABI versioning (size-based, cuDNN / Vulkan style)
+// ABI + API versioning
 //
 // Every struct that crosses the API boundary starts with `unsigned int size`,
-// which the caller MUST set to sizeof(struct). The library validates this
-// against its own known size. A mismatch is rejected; pre-compiled callers and
-// the library currently must be from the same release.
+// which the caller MUST set to sizeof(struct). The library validates it
+// against its own sizeof and rejects mismatches (layout / ABI check).
+//
+// ncclEpGroupConfig_t additionally carries `unsigned int version`
+// (= NCCL_EP_API_VERSION) for catching feature-level incompatibilities that
+// size can't detect; the library warns on mismatch.
 //
 // Convenience macros NCCL_EP_xxx_INIT expand to compound literals that pre-fill
-// the size field. They work in declaration init, assignment, and expression
+// these fields. They work in declaration init, assignment, and expression
 // contexts:
 //
 //   ncclEpDispatchInputs_t inputs = NCCL_EP_DISPATCH_INPUTS_INIT;
@@ -39,10 +42,10 @@ extern "C" {
 //       .tokens = my_tokens,
 //   };
 //
-// FUTURE IMPROVEMENT: relax the strict equality check to allow forward compat
-// when the caller's struct is larger than the library's known size, by scanning
-// the trailing bytes; if all zero, accept silently (the caller didn't actually
-// fill any unknown fields).
+// FUTURE IMPROVEMENT: relax the strict size-equality check to allow forward
+// compat when the caller's struct is larger than the library's known size, by
+// scanning the trailing bytes; if all zero, accept silently (the caller didn't
+// actually fill any unknown fields).
 // ============================================================================
 #define NCCL_EP_API_VERSION 1
 
@@ -53,6 +56,7 @@ typedef struct ncclNDTensor* ncclNDTensor_t;
 // EP group configuration structure
 typedef struct {
     unsigned int size;                   // = sizeof(this struct); first field, never moves
+    unsigned int version;                // = NCCL_EP_API_VERSION; caller's feature-set version
     ncclEpAlgorithm_t algorithm;         // low_latency or high_throughput
     // Receive buffer layout for the dispatch and combine path.
     // Determines the shape of recv_x on dispatch output and the expected input shape for combine.
@@ -84,7 +88,9 @@ typedef struct {
     unsigned int max_recv_token_slots_per_rank;
 } ncclEpGroupConfig_t;
 
-#define NCCL_EP_GROUP_CONFIG_INIT ((ncclEpGroupConfig_t){ .size = (unsigned int)sizeof(ncclEpGroupConfig_t) })
+#define NCCL_EP_GROUP_CONFIG_INIT ((ncclEpGroupConfig_t){ \
+    .size    = (unsigned int)sizeof(ncclEpGroupConfig_t), \
+    .version = NCCL_EP_API_VERSION })
 
 // Opaque type forward declaration
 typedef struct ncclEpGroup* ncclEpGroup_t;
@@ -193,19 +199,19 @@ ncclResult_t ncclEpTensorDestroy(
 // All fields are optional (NULL = not provided).
 typedef struct {
     unsigned int   size;                // = sizeof(this struct); first field, never moves
-    ncclNDTensor_t recv_expert_counter; // 1D [num_local_experts] int32 (or int64 for HT EM)
+    ncclNDTensor_t expert_counters; // 1D [num_local_experts] int32 (or int64 for HT EM)
                                         //   HT (handle time): per-expert recv counts. Flat: unpadded int32.
                                         //                     EM: padded counts (sum equals output slot count).
                                         //   LL expert-major: per-expert received token counts (dispatch time).
-    ncclNDTensor_t src_rank_counter;    // 1D [num_ranks] int32
+    ncclNDTensor_t src_rank_counters;    // 1D [num_ranks] int32
                                         //   LL rank-major only: per-source-rank token counts (dispatch time).
     ncclNDTensor_t recv_expert_offsets; // 1D [num_local_experts] int32 or int64
                                         //   HT expert-major only: prefix sum of padded per-expert counts.
     ncclNDTensor_t recv_total_counter;  // 1D [1] int32 or int64
                                         //   HT: scalar total recv token count. Flat: unpadded. EM: padded slot total.
-} ncclEpLayoutMarks_t;
+} ncclEpLayoutInfo_t;
 
-#define NCCL_EP_LAYOUT_MARKS_INIT ((ncclEpLayoutMarks_t){ .size = (unsigned int)sizeof(ncclEpLayoutMarks_t) })
+#define NCCL_EP_LAYOUT_INFO_INIT ((ncclEpLayoutInfo_t){ .size = (unsigned int)sizeof(ncclEpLayoutInfo_t) })
 
 // Input tensors for ncclEpDispatch.
 // All fields except tokens are optional (NULL = not provided).
@@ -275,8 +281,8 @@ typedef struct {
 //   handle              - [OUT] Pointer to newly created and initialized EP handle
 //   ep_group            - [IN]  A valid EP group
 //   topk_idx            - [IN]  Tensor holding top-K expert indices (routing information)
-//   marks         - [IN/OUT, optional] Layout info (see ncclEpLayoutMarks_t). NULL = none.
-//                         HT: set recv_expert_counter when max_send_tokens_per_rank is NCCL_EP_AUTO.
+//   layout_info         - [IN/OUT, optional] Layout info (see ncclEpLayoutInfo_t). NULL = none.
+//                         HT: set expert_counters when max_send_tokens_per_rank is NCCL_EP_AUTO.
 //                         LL mode: must be NULL.
 //   config              - [IN]  Handle configuration (see ncclEpHandleConfig_t). NULL = defaults.
 //   stream              - [IN]  CUDA stream
@@ -292,7 +298,7 @@ ncclResult_t ncclEpCreateHandle(
     ncclEpHandle_t* handle,
     ncclEpGroup_t ep_group,
     ncclNDTensor_t topk_idx,
-    const ncclEpLayoutMarks_t* marks,  // NULL = none
+    const ncclEpLayoutInfo_t* layout_info,  // NULL = none
     const ncclEpHandleConfig_t* config,  // NULL = defaults
     cudaStream_t stream
 );
@@ -355,8 +361,8 @@ ncclResult_t ncclEpInitHandle(
 // Arguments:
 //   handle             - [IN]  Handle from ncclEpInitHandle
 //   topk_idx           - [IN]  [num_tokens, top_k] int64
-//   marks      - [IN/OUT, optional] Named local tensors (NULL = none provided).
-//                         HT: marks->recv_expert_counter is required when
+//   layout_info      - [IN/OUT, optional] Named local tensors (NULL = none provided).
+//                         HT: layout_info->expert_counters is required when
 //                         max_send_tokens_per_rank is NCCL_EP_AUTO.
 //                         LL mode: must be NULL.
 //   stream             - [IN]  CUDA stream
@@ -366,7 +372,7 @@ ncclResult_t ncclEpInitHandle(
 ncclResult_t ncclEpUpdateHandle(
     ncclEpHandle_t handle,
     ncclNDTensor_t topk_idx,
-    const ncclEpLayoutMarks_t* marks,  // NULL = none
+    const ncclEpLayoutInfo_t* layout_info,  // NULL = none
     cudaStream_t stream
 );
 
@@ -399,9 +405,9 @@ typedef struct {
 //                            For LL expert-major: outputs->tokens is [local_experts x num_recv_tokens x hidden] (3D).
 //                            For LL rank-major: outputs->tokens is [num_recv_tokens x hidden] (2D);
 //                                    outputs->topk_weights and outputs->topk_idx must also be provided.
-//   marks - [IN,OUT] Named local tensors (see ncclEpLayoutMarks_t). NULL = none.
-//                            LL expert-major: marks->recv_expert_counter receives per-expert token counts.
-//                            LL rank-major: marks->src_rank_counter receives per-source-rank token counts.
+//   layout_info - [IN,OUT] Named local tensors (see ncclEpLayoutInfo_t). NULL = none.
+//                            LL expert-major: layout_info->expert_counters receives per-expert token counts.
+//                            LL rank-major: layout_info->src_rank_counters receives per-source-rank token counts.
 //   config        - [IN]     Dispatch configuration (see ncclEpDispatchConfig_t). NULL = defaults.
 //   stream        - [IN]     CUDA stream. If `ncclEpDispatch()` is called on a different stream than the stream used in
 //                            `ncclEpCreateHandle()`,
@@ -415,7 +421,7 @@ ncclResult_t ncclEpDispatch(
     ncclNDTensor_t topk_idx,
     const ncclEpDispatchInputs_t* inputs,
     const ncclEpDispatchOutputs_t* outputs,
-    const ncclEpLayoutMarks_t* marks,  // NULL = none
+    const ncclEpLayoutInfo_t* layout_info,  // NULL = none
     const ncclEpDispatchConfig_t* config,   // NULL = defaults
     cudaStream_t stream
 );

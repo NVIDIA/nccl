@@ -39,7 +39,7 @@ from nccl.ep import (
     ncclEpDispatchOutputs_t,
     ncclEpFreeFn_t,
     ncclEpGroupConfig_t,
-    ncclEpLayoutMarks_t,
+    ncclEpLayoutInfo_t,
     ncclNDTensor_t,
 )
 

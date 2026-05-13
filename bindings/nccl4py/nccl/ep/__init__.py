@@ -93,7 +93,7 @@ from .nccl_wrapper import (
     ncclEpGroupConfig_t,
     ncclEpHandleConfig_t,
     ncclEpLayout_t,
-    ncclEpLayoutMarks_t,
+    ncclEpLayoutInfo_t,
     ncclNDTensor_t,
     ncclEpAllocFn_t,
     ncclEpFreeFn_t,
@@ -137,7 +137,7 @@ __all__ = [
     "ncclEpGroupConfig_t",
     "ncclEpHandleConfig_t",
     "ncclEpLayout_t",
-    "ncclEpLayoutMarks_t",
+    "ncclEpLayoutInfo_t",
     "ncclNDTensor_t",
     # Allocator callbacks
     "ncclEpAllocFn_t",

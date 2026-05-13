@@ -325,29 +325,30 @@ static void epFreeTensor(ncclNDTensor_t tensor, std::vector<void*>* nccl_mem_ptr
 }
 
 // Structure to hold all tensors needed for benchmarking.
-// dispatch_inputs/outputs/marks and combine_inputs/outputs hold the named-struct
+// dispatch_inputs/outputs/layout_info and combine_inputs/outputs hold the named-struct
 // args passed to ncclEpDispatch / ncclEpCombine. The remaining ncclNDTensor_t
 // fields are owned by the BenchmarkTensors for cleanup; some are aliased into
 // the named structs above (e.g. dispatch_inputs.tokens == input_tokens).
 struct BenchmarkTensors {
-    // Named-struct dispatch args
-    ncclEpDispatchInputs_t  dispatch_inputs;
-    ncclEpDispatchOutputs_t dispatch_outputs;
-    ncclEpLayoutMarks_t     dispatch_marks;
-    bool                    has_dispatch_marks;  // true iff dispatch_marks is populated
+    // Named-struct dispatch args (default-init via _INIT macros so the
+    // embedded `size` fields are set when BenchmarkTensors is value-initialized).
+    ncclEpDispatchInputs_t  dispatch_inputs      = NCCL_EP_DISPATCH_INPUTS_INIT;
+    ncclEpDispatchOutputs_t dispatch_outputs     = NCCL_EP_DISPATCH_OUTPUTS_INIT;
+    ncclEpLayoutInfo_t      dispatch_layout_info = NCCL_EP_LAYOUT_INFO_INIT;
+    bool                    has_dispatch_layout_info;  // true iff dispatch_layout_info is populated
     ncclNDTensor_t          dispatch_topk_idx;   // top-level arg to ncclEpDispatch (HT only)
 
     // Named-struct combine args
-    ncclEpCombineInputs_t   combine_inputs;
-    ncclEpCombineOutputs_t  combine_outputs;
+    ncclEpCombineInputs_t   combine_inputs       = NCCL_EP_COMBINE_INPUTS_INIT;
+    ncclEpCombineOutputs_t  combine_outputs      = NCCL_EP_COMBINE_OUTPUTS_INIT;
 
     // Owned tensors (for cleanup; some are aliased into the named structs)
     ncclNDTensor_t input_tokens;
     ncclNDTensor_t recv_x;
     ncclNDTensor_t recv_topk_weights;
     ncclNDTensor_t recv_topk_idx;
-    ncclNDTensor_t recv_expert_counter;          // LL expert-major
-    ncclNDTensor_t src_rank_counter;             // LL rank-major
+    ncclNDTensor_t expert_counters;          // LL expert-major
+    ncclNDTensor_t src_rank_counters;             // LL rank-major
     ncclNDTensor_t dispatch_topk_weights;
     ncclNDTensor_t expert_outputs;
     ncclNDTensor_t combined_output;
@@ -377,7 +378,7 @@ static ncclResult_t epGetTensorData(const BenchmarkTensors& tensors, ncclNDTenso
 //   tensors.topk_weights                             [num_tokens, top_k]
 //                                                    (LL combine reads via outputs.topk_weights;
 //                                                     rank-major also aliases to dispatch_inputs.topk_weights)
-//   tensors.recv_expert_counter / dispatch_marks.recv_expert_counter
+//   tensors.expert_counters / dispatch_layout_info.expert_counters
 //                                                    [num_local_experts] (LL expert-major only)
 static void setupLowLatencyTensorsSharedInputs(
     BenchmarkTensors& tensors,
@@ -391,9 +392,9 @@ static void setupLowLatencyTensorsSharedInputs(
 
     NCCLCHECK(epMakeTensor(&tensors.topk_weights, 2, ncclFloat32, num_tokens, top_k));
 
-    NCCLCHECK(epMakeTensor(&tensors.recv_expert_counter, 1, ncclInt32, num_local_experts));
-    tensors.dispatch_marks.recv_expert_counter = tensors.recv_expert_counter;
-    tensors.has_dispatch_marks = true;
+    NCCLCHECK(epMakeTensor(&tensors.expert_counters, 1, ncclInt32, num_local_experts));
+    tensors.dispatch_layout_info.expert_counters = tensors.expert_counters;
+    tensors.has_dispatch_layout_info = true;
 }
 
 // LL benchmark — NCCL_EP_LAYOUT_EXPERT_MAJOR dispatch outputs + combine input shape.
@@ -428,15 +429,15 @@ static void setupLowLatencyTensorsRankMajLayout(
 ) {
     // Rank-major uses per-source-rank counter, not the per-expert counter that
     // setupLowLatencyTensorsSharedInputs created. Replace expert_counter with
-    // src_rank_counter on the marks.
-    epFreeTensor(tensors.recv_expert_counter);
-    tensors.recv_expert_counter = nullptr;
-    tensors.dispatch_marks.recv_expert_counter = nullptr;
+    // src_rank_counter on the layout_info.
+    epFreeTensor(tensors.expert_counters);
+    tensors.expert_counters = nullptr;
+    tensors.dispatch_layout_info.expert_counters = nullptr;
 
     tensors.dispatch_inputs.topk_weights = tensors.topk_weights;  // alias
 
-    NCCLCHECK(epMakeTensor(&tensors.src_rank_counter, 1, ncclInt32, (unsigned)nRanks));
-    tensors.dispatch_marks.src_rank_counter = tensors.src_rank_counter;
+    NCCLCHECK(epMakeTensor(&tensors.src_rank_counters, 1, ncclInt32, (unsigned)nRanks));
+    tensors.dispatch_layout_info.src_rank_counters = tensors.src_rank_counters;
 
     NCCLCHECK(epMakeTensor(&tensors.recv_x, 2, ncclBfloat16,
                            (unsigned)nRanks * max_send_tokens_per_rank, hidden));
@@ -579,12 +580,12 @@ void setupHighThroughputTensors(
     }
     tensors.dispatch_outputs.topk_weights = tensors.recv_topk_weights;
 
-    // Local: recv_expert_counter — populated by upstream dispatch metadata path.
+    // Local: expert_counters — populated by upstream dispatch metadata path.
     // (HT FLAT writes unpadded int32; HT EM writes padded.)
-    NCCLCHECK(epMakeTensor(&tensors.recv_expert_counter, 1, ncclInt32,
+    NCCLCHECK(epMakeTensor(&tensors.expert_counters, 1, ncclInt32,
                            num_local_experts, 1, 1, 1, 1, no_window_opts));
-    tensors.dispatch_marks.recv_expert_counter = tensors.recv_expert_counter;
-    tensors.has_dispatch_marks = true;
+    tensors.dispatch_layout_info.expert_counters = tensors.expert_counters;
+    tensors.has_dispatch_layout_info = true;
 
     // Combine input: 2D expert outputs - same size as dispatch output (received token count)
     NCCLCHECK(epMakeTensor(&tensors.expert_outputs, 2, ncclBfloat16,
@@ -630,8 +631,8 @@ void cleanupBenchmarkTensors(BenchmarkTensors& tensors, ncclNDTensor_t topk_idx)
     epFreeTensor(tensors.recv_topk_weights, &tensors.external_data_ptrs, &tensors.tensor_data_ptrs);
     epFreeTensor(tensors.recv_topk_idx, &tensors.external_data_ptrs, &tensors.tensor_data_ptrs);
 
-    epFreeTensor(tensors.recv_expert_counter, &tensors.external_data_ptrs, &tensors.tensor_data_ptrs);
-    epFreeTensor(tensors.src_rank_counter, &tensors.external_data_ptrs, &tensors.tensor_data_ptrs);
+    epFreeTensor(tensors.expert_counters, &tensors.external_data_ptrs, &tensors.tensor_data_ptrs);
+    epFreeTensor(tensors.src_rank_counters, &tensors.external_data_ptrs, &tensors.tensor_data_ptrs);
     epFreeTensor(tensors.expert_outputs, &tensors.external_data_ptrs, &tensors.tensor_data_ptrs);
     epFreeTensor(tensors.combined_output, &tensors.external_data_ptrs, &tensors.tensor_data_ptrs);
     epFreeTensor(tensors.topk_weights, &tensors.external_data_ptrs, &tensors.tensor_data_ptrs);
@@ -926,7 +927,7 @@ static ValidationResult validateDispatchOutputLLExpertMaj(
 
     int* tokens_per_expert = new int[num_local_experts];
     void* local0_data;
-    NCCLCHECK(epGetTensorData(tensors, tensors.recv_expert_counter, &local0_data));
+    NCCLCHECK(epGetTensorData(tensors, tensors.expert_counters, &local0_data));
     CUDACHECK(cudaMemcpy(tokens_per_expert, local0_data,
                          num_local_experts * sizeof(int), cudaMemcpyDeviceToHost));
 
@@ -1016,7 +1017,7 @@ static ValidationResult validateDispatchOutputLLRankMaj(
     NCCLCHECK(epGetTensorData(tensors, tensors.recv_x, &out0_data));
     NCCLCHECK(epGetTensorData(tensors, tensors.recv_topk_weights, &out1_data));
     NCCLCHECK(epGetTensorData(tensors, tensors.recv_topk_idx, &out2_data));
-    NCCLCHECK(epGetTensorData(tensors, tensors.src_rank_counter, &local0_data));
+    NCCLCHECK(epGetTensorData(tensors, tensors.src_rank_counters, &local0_data));
     CUDACHECK(cudaMemcpy(recv_data, out0_data,    total_slots * hidden * sizeof(uint16_t), cudaMemcpyDeviceToHost));
     CUDACHECK(cudaMemcpy(recv_wgt,  out1_data,    total_slots * top_k  * sizeof(float),   cudaMemcpyDeviceToHost));
     CUDACHECK(cudaMemcpy(recv_idx,  out2_data,    total_slots * top_k  * sizeof(int32_t), cudaMemcpyDeviceToHost));
@@ -1179,7 +1180,7 @@ static void preReduceRankMajor(
     void *out1_data, *out2_data, *local0_data;
     NCCLCHECK(epGetTensorData(tensors, tensors.recv_topk_weights, &out1_data));
     NCCLCHECK(epGetTensorData(tensors, tensors.recv_topk_idx, &out2_data));
-    NCCLCHECK(epGetTensorData(tensors, tensors.src_rank_counter, &local0_data));
+    NCCLCHECK(epGetTensorData(tensors, tensors.src_rank_counters, &local0_data));
 
     float*   recv_wgt = new float  [total_slots * top_k];
     int32_t* recv_idx = new int32_t[total_slots * top_k];
@@ -2830,12 +2831,12 @@ int main(int argc, char* argv[]) {
         NCCLCHECK(epMakeTensor(&meta_offsets_tensor, 1, ncclInt64, num_local_experts));
     }
 
-    // Create handle — populate the marks struct with the optional counter / offset tensors.
-    ncclEpLayoutMarks_t handle_marks = NCCL_EP_LAYOUT_MARKS_INIT;
-    handle_marks.recv_expert_counter = recv_expert_counter_tensor;
-    handle_marks.recv_total_counter  = recv_total_counter_tensor;
-    handle_marks.recv_expert_offsets = meta_offsets_tensor;
-    const bool has_handle_marks =
+    // Create handle — populate the layout_info struct with the optional counter / offset tensors.
+    ncclEpLayoutInfo_t handle_layout_info = NCCL_EP_LAYOUT_INFO_INIT;
+    handle_layout_info.expert_counters = recv_expert_counter_tensor;
+    handle_layout_info.recv_total_counter  = recv_total_counter_tensor;
+    handle_layout_info.recv_expert_offsets = meta_offsets_tensor;
+    const bool has_handle_layout_info =
         recv_expert_counter_tensor || recv_total_counter_tensor || meta_offsets_tensor;
 
     const bool ht_expert_major = (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT &&
@@ -2862,10 +2863,10 @@ int main(int argc, char* argv[]) {
     if (user_handle_mem) {
         NCCLCHECK(ncclEpInitHandle(&ep_handle, ep_group, cfg_ptr, static_cast<int>(top_k), handle_mem_tensor));
         NCCLCHECK(ncclEpUpdateHandle(ep_handle, topk_idx,
-                                     has_handle_marks ? &handle_marks : nullptr, stream));
+                                     has_handle_layout_info ? &handle_layout_info : nullptr, stream));
     } else {
         NCCLCHECK(ncclEpCreateHandle(&ep_handle, ep_group, topk_idx,
-                                     has_handle_marks ? &handle_marks : nullptr, cfg_ptr, stream));
+                                     has_handle_layout_info ? &handle_layout_info : nullptr, cfg_ptr, stream));
     }
     CUDACHECK(cudaStreamSynchronize(stream));
     double handle_create_end = MPI_Wtime();
@@ -2921,7 +2922,7 @@ int main(int argc, char* argv[]) {
         if (myRank == 0) { printf("[DEBUG] Validation data initialized\n"); fflush(stdout); }
     }
 
-    ncclEpDispatchConfig_t dispatch_config;
+    ncclEpDispatchConfig_t dispatch_config = NCCL_EP_DISPATCH_CONFIG_INIT;
     dispatch_config.round_scales = 0;
 
     // Synchronize before benchmarking
@@ -2950,7 +2951,7 @@ int main(int argc, char* argv[]) {
     auto dispatch_fn = [&]() {
         NCCLCHECK(ncclEpDispatch(ep_handle, tensors.dispatch_topk_idx,
                                   &tensors.dispatch_inputs, &tensors.dispatch_outputs,
-                                  tensors.has_dispatch_marks ? &tensors.dispatch_marks : nullptr,
+                                  tensors.has_dispatch_layout_info ? &tensors.dispatch_layout_info : nullptr,
                                   &dispatch_config, stream));
         NCCLCHECK(ncclEpComplete(ep_handle, nullptr, stream));
     };
@@ -2987,13 +2988,13 @@ int main(int argc, char* argv[]) {
     if (profile_mode) {
         auto handle_create_fn = [&]() {
             NCCLCHECK(ncclEpHandleDestroy(ep_handle));
-            const ncclEpLayoutMarks_t* marks_ptr = has_handle_marks ? &handle_marks : nullptr;
+            const ncclEpLayoutInfo_t* layout_info_ptr = has_handle_layout_info ? &handle_layout_info : nullptr;
             if (user_handle_mem) {
                 NCCLCHECK(ncclEpInitHandle(&ep_handle, ep_group, cfg_ptr, static_cast<int>(top_k), handle_mem_tensor));
-                NCCLCHECK(ncclEpUpdateHandle(ep_handle, topk_idx, marks_ptr, stream));
+                NCCLCHECK(ncclEpUpdateHandle(ep_handle, topk_idx, layout_info_ptr, stream));
             } else {
                 NCCLCHECK(ncclEpCreateHandle(&ep_handle, ep_group, topk_idx,
-                                              marks_ptr, cfg_ptr, stream));
+                                              layout_info_ptr, cfg_ptr, stream));
             }
         };
         runNvtxProfiling(myRank, actual_iters, dispatch_fn, combine_fn, handle_create_fn, stream);

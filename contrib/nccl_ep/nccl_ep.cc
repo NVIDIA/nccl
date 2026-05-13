@@ -946,6 +946,12 @@ ncclResult_t ncclEpCreateGroup(
     int nRanks;
     assert(comm != nullptr && ncclCommCount(comm, &nRanks) == ncclSuccess && nRanks > 0);
     EP_REQUIRE_STRUCT(in_config);
+    if (in_config->version != NCCL_EP_API_VERSION) {
+        fprintf(stderr,
+                "NCCL EP WARN: ncclEpGroupConfig_t.version=%u, library API_VERSION=%u; "
+                "behavior may differ across versions.\n",
+                in_config->version, (unsigned)NCCL_EP_API_VERSION);
+    }
     assert((in_config->algorithm == NCCL_EP_ALGO_LOW_LATENCY ||
             in_config->algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) &&
            "ncclEpCreateGroup: invalid algorithm, supported: low_latency, high_throughput");
@@ -1763,12 +1769,12 @@ ncclResult_t ncclEpInitHandle(
 ncclResult_t ncclEpUpdateHandle(
     ncclEpHandle_t handle,
     ncclNDTensor_t topk_idx,
-    const ncclEpLayoutMarks_t* marks,
+    const ncclEpLayoutInfo_t* layout_info,
     cudaStream_t stream)
 {
     assert(handle != nullptr);
     assert(topk_idx != nullptr);
-    EP_REQUIRE_OPTIONAL_STRUCT(marks);
+    EP_REQUIRE_OPTIONAL_STRUCT(layout_info);
     assert(topk_idx->ndim == 2);
     assert(topk_idx->datatype == ncclInt64);
     assert(tensor_is_contiguous(topk_idx));
@@ -1782,7 +1788,7 @@ ncclResult_t ncclEpUpdateHandle(
     if (ep_group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
         assert(static_cast<int>(topk_idx->sizes[1]) == handle->num_topk &&
                "LL: num_topk mismatch between ncclEpInitHandle and ncclEpUpdateHandle");
-        assert(marks == nullptr && "LL mode does not accept local tensors in ncclEpUpdateHandle");
+        assert(layout_info == nullptr && "LL mode does not accept local tensors in ncclEpUpdateHandle");
         return ncclSuccess;
     }
     if (topk_idx->win_hdl != ncclWindow_t{}) {
@@ -1795,7 +1801,7 @@ ncclResult_t ncclEpUpdateHandle(
 
     assert(handle->num_tokens <= static_cast<int>(ep_group->config.max_send_tokens_per_rank) && "Token count exceeds HT buffer capacity");
 
-    ncclNDTensor_t recv_expert_counter = marks ? marks->recv_expert_counter : nullptr;
+    ncclNDTensor_t recv_expert_counter = layout_info ? layout_info->expert_counters : nullptr;
 
     const int num_experts = ep_group->config.num_experts;
     const int max_tokens = ep_group->config.max_send_tokens_per_rank;
@@ -1841,9 +1847,9 @@ ncclResult_t ncclEpUpdateHandle(
     // ===== Step 3: Run metadata_preprocessing =====
     const bool expert_major = (handle->group->config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
 
-    // marks->recv_expert_counter: per-expert counts (HT flat unpadded int32; EM padded int32/64).
-    // marks->recv_expert_offsets: EM-only per-expert offsets (int32/64).
-    ncclNDTensor_t recv_expert_offsets_tensor = marks ? marks->recv_expert_offsets : nullptr;
+    // layout_info->expert_counters: per-expert counts (HT flat unpadded int32; EM padded int32/64).
+    // layout_info->recv_expert_offsets: EM-only per-expert offsets (int32/64).
+    ncclNDTensor_t recv_expert_offsets_tensor = layout_info ? layout_info->recv_expert_offsets : nullptr;
     auto check_int32_or_int64 = [&](ncclNDTensor_t t, const char* name) {
         assert(t->ndim == 1 && "tensor must be 1D");
         assert((t->datatype == ncclInt32 || t->datatype == ncclInt64) && "tensor must be ncclInt32 or ncclInt64");
@@ -1862,7 +1868,7 @@ ncclResult_t ncclEpUpdateHandle(
     };
     void* padded_out_counts = nullptr;
     if (expert_major && recv_expert_counter != nullptr) {
-        check_int32_or_int64(recv_expert_counter, "recv_expert_counter");
+        check_int32_or_int64(recv_expert_counter, "expert_counters");
         padded_out_counts = recv_expert_counter->data;
         track_out_dtype(recv_expert_counter);
     }
@@ -1901,10 +1907,10 @@ ncclResult_t ncclEpUpdateHandle(
     // Dispatch (PAD warp) needs int64 offsets regardless of caller dtype → workspace slice.
     handle->hybridep.expert_token_offsets = expert_major ? ws_expert_offsets : nullptr;
 
-    // marks->recv_total_counter: scalar total recv tokens (size 1, int32/64), written by metadata.
+    // layout_info->recv_total_counter: scalar total recv tokens (size 1, int32/64), written by metadata.
     void* recv_total_counter = nullptr;
     {
-        ncclNDTensor_t recv_total_counter_tensor = marks ? marks->recv_total_counter : nullptr;
+        ncclNDTensor_t recv_total_counter_tensor = layout_info ? layout_info->recv_total_counter : nullptr;
         if (recv_total_counter_tensor != nullptr) {
             assert(recv_total_counter_tensor->ndim == 1);
             assert(recv_total_counter_tensor->sizes[0] >= 1);
@@ -1954,7 +1960,7 @@ ncclResult_t ncclEpCreateHandle(
     ncclEpHandle_t* out_handle,
     ncclEpGroup_t ep_group,
     ncclNDTensor_t topk_idx,
-    const ncclEpLayoutMarks_t* marks,
+    const ncclEpLayoutInfo_t* layout_info,
     const ncclEpHandleConfig_t* config,
     cudaStream_t stream
 ) {
@@ -1962,7 +1968,7 @@ ncclResult_t ncclEpCreateHandle(
     assert(out_handle != nullptr);
     NCCL_CHECK_RESULT(ncclEpInitHandle(out_handle, ep_group, config,
                                        static_cast<int>(topk_idx->sizes[1])));
-    return ncclEpUpdateHandle(*out_handle, topk_idx, marks, stream);
+    return ncclEpUpdateHandle(*out_handle, topk_idx, layout_info, stream);
 }
 
 ncclResult_t ncclEpHandleDestroy(
@@ -1998,13 +2004,13 @@ ncclResult_t ncclEpDispatch(
     ncclNDTensor_t topk_idx,
     const ncclEpDispatchInputs_t* inputs,
     const ncclEpDispatchOutputs_t* outputs,
-    const ncclEpLayoutMarks_t* marks,
+    const ncclEpLayoutInfo_t* layout_info,
     const ncclEpDispatchConfig_t* config,
     cudaStream_t stream
 ) {
     EP_REQUIRE_STRUCT(inputs);
     EP_REQUIRE_STRUCT(outputs);
-    EP_REQUIRE_OPTIONAL_STRUCT(marks);
+    EP_REQUIRE_OPTIONAL_STRUCT(layout_info);
     EP_REQUIRE_OPTIONAL_STRUCT(config);
     const unsigned int send_only = config ? config->send_only : 0;
         ncclEpGroup_t group = handle->group;
@@ -2039,7 +2045,7 @@ ncclResult_t ncclEpDispatch(
         ncclNDTensor_t topk_weights_in   = inputs->topk_weights;
         ncclNDTensor_t recv_topk_weights = outputs->topk_weights;
         ncclNDTensor_t recv_topk_idx     = outputs->topk_idx;
-        ncclNDTensor_t src_rank_counter = marks ? marks->src_rank_counter : nullptr;
+        ncclNDTensor_t src_rank_counter = layout_info ? layout_info->src_rank_counters : nullptr;
 
         const unsigned num_recv_tokens = static_cast<unsigned>(group->nRanks) * group->config.max_send_tokens_per_rank;
         switch (group->config.layout) {
@@ -2080,7 +2086,7 @@ ncclResult_t ncclEpDispatch(
 
         // RECV_EXPERT_COUNTER_DEVICE is required for expert-major (per-expert atomic slot allocator)
         // and must be absent for rank-major (outCnt is unused in the rank-major kernel path).
-        ncclNDTensor_t recv_count = marks ? marks->recv_expert_counter : nullptr;
+        ncclNDTensor_t recv_count = layout_info ? layout_info->expert_counters : nullptr;
         if (group->config.layout == NCCL_EP_LAYOUT_RANK_MAJOR) {
             assert(recv_count == nullptr);
         } else {

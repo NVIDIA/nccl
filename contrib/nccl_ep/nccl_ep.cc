@@ -2708,25 +2708,46 @@ ncclResult_t ncclEpCombine(
         auto num_combined_tokens = handle->num_tokens;
 
         // Top-k checks (for backward mode)
+        // Output combined_topk_weights is always 2D [num_combined_tokens, source_top_k].
+        // Input topk_weights shape MUST match the FWD recv_topk_weights shape by layout:
+        //   FLAT/RM: 2D [num_recv_tokens, source_top_k]
+        //   EM:      1D [num_recv_tokens]
+        // The scatter kernel sparse_to_dense_prob_combine_kernel scans local experts per
+        // recv slot; under EM each slot maps to exactly one local expert, so the inner
+        // stride is 1.
         int num_topk = 0;
+        int input_topk_stride = 0;
         ncclNDTensor_t topk_weights = inputs->topk_weights;
         ncclNDTensor_t combined_topk_weights = outputs->topk_weights;
 
         // Determine if this is backward mode (topk_weights provided = backward combine)
         bool backward_combine = (topk_weights != nullptr);
+        const bool expert_major_in = (group->config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
 
         if (backward_combine) {
-            num_topk = static_cast<int>(topk_weights->sizes[1]);
-            NCCLCHECK(resolveTensorWindowBinding(
-                group, topk_weights, static_cast<uint64_t>(group->gin_config.rdma_intra_node_red_prob_offset)));
-
             if (combined_topk_weights == nullptr) {
                 return ncclInvalidArgument;
             }
             assert(combined_topk_weights->ndim == 2 && tensor_is_contiguous(combined_topk_weights));
             assert(combined_topk_weights->sizes[0] == num_combined_tokens);
-            assert(combined_topk_weights->sizes[1] == num_topk);
             assert(combined_topk_weights->datatype == ncclFloat32);
+            num_topk = static_cast<int>(combined_topk_weights->sizes[1]);
+            // Input shape validation by layout — must match FWD recv_topk_weights.
+            assert(tensor_is_contiguous(topk_weights));
+            assert(topk_weights->datatype == ncclFloat32);
+            if (expert_major_in) {
+                assert(topk_weights->ndim == 1 &&
+                       "HT EM BWD combine: input topk_weights must be 1D [num_recv_tokens]");
+                input_topk_stride = 1;
+            } else {
+                assert(topk_weights->ndim == 2 &&
+                       "HT FLAT/RM BWD combine: input topk_weights must be 2D [num_recv, top_k]");
+                assert(static_cast<int>(topk_weights->sizes[1]) == num_topk &&
+                       "HT FLAT/RM BWD combine: input top_k must equal output top_k");
+                input_topk_stride = num_topk;
+            }
+            NCCLCHECK(resolveTensorWindowBinding(
+                group, topk_weights, static_cast<uint64_t>(group->gin_config.rdma_intra_node_red_prob_offset)));
             if (combined_topk_weights->win_hdl != ncclWindow_t{}) {
                 NCCLCHECK(resolveTensorWindowBinding(group, combined_topk_weights, 0));
             }
@@ -2768,14 +2789,14 @@ ncclResult_t ncclEpCombine(
                 group->ht_buffers.combine_expert_input_prob_buffer_ptrs[group->lsa_rank],
                 0, dense_prob_size, stream));
 
-            // Convert sparse [num_tokens, topk] to dense [num_tokens, experts_per_node]
-            // Uses local_expert_routing_map to determine expert positions (matches dispatch output order)
+            // Scatter sparse [num_recv, input_topk_stride] into dense [num_recv, experts_per_node]
+            // using local_expert_routing_map. Stride is 1 for EM (1D input) and top_k for FLAT/RM.
             nccl_ep::hybridep::sparse_to_dense_prob_combine(
                 static_cast<const float*>(topk_weights->data),
                 handle->hybridep.local_expert_routing_map,
                 group->ht_buffers.combine_expert_input_prob_buffer_ptrs[group->lsa_rank],
                 num_tokens,
-                num_topk,
+                input_topk_stride,
                 group->num_local_experts, // experts_per_rank
                 experts_per_node,
                 group->lsa_rank,

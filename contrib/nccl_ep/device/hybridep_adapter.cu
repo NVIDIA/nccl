@@ -15,6 +15,8 @@
 #include "hybrid_ep.cuh"
 #include "include/common.hpp"
 #include "jit/combine_jit.cuh"
+#include "jit/dispatch_jit.cuh"
+#include "jit/preprocess_jit.cuh"
 
 namespace nccl_ep {
 namespace hybridep {
@@ -371,34 +373,56 @@ void call_metadata_preprocessing(
 
     HYBRIDEP_SWITCH_NUM_LSA_TEAMS(num_nodes, {
         HYBRIDEP_SWITCH_LSA_TEAM_SIZE(num_ranks_per_node, {
-            using HybridEPType = ::hybrid_ep::hybrid_ep<MAX_SUPPORTED_TOKENS_PER_RANK, NUM_LSA_TEAMS, LSA_TEAM_SIZE>;
-            HybridEPType::template metadata_preprocessing<
-                HYBRIDEP_NUM_THREADS_PER_BLOCK_PREPROCESSING, HYBRIDEP_NUM_BLOCKS_PREPROCESSING>(
-                global_routing_map,
-                reinterpret_cast<::hybrid_ep::tmp_state_t*>(scan_tmp),
-                sparse_to_dense_map,
-                rdma_to_attn_map,
-                attn_to_rdma_map,
-                reinterpret_cast<::hybrid_ep::RankMask<LSA_TEAM_SIZE>*>(token_rank_mask),
-                num_tokens_for_experts,
-                local_expert_routing_map,
-                per_expert_token_counts,
-                node_rank,
-                local_rank,
-                num_tokens_per_rank,
-                num_ranks_per_node,
-                experts_per_rank,
-                internal_offsets,
-                padded_out_counts,
-                out_offsets,
-                alignment,
-                actual_counts_out,
-                s2d_inner_dim,
-                recv_total_counter,
-                out_is_int64,
-                max_recv_token_slots_per_rank,
-                stream
-            );
+            constexpr int NUM_THREADS_PER_BLOCK = HYBRIDEP_NUM_THREADS_PER_BLOCK_PREPROCESSING;
+            constexpr int NUM_OF_BLOCKS = HYBRIDEP_NUM_BLOCKS_PREPROCESSING;
+            constexpr int NUM_OF_WARPS_PER_BLOCK_SCAN = NUM_THREADS_PER_BLOCK / 32;
+
+            const size_t preprocessing_tmp_sz = NUM_OF_BLOCKS * num_ranks_per_node * sizeof(::hybrid_ep::tmp_state_t);
+            CUDA_CHECK(cudaMemsetAsync(scan_tmp, 0, preprocessing_tmp_sz, stream));
+
+            const size_t scan_smem_size =
+                (NUM_OF_WARPS_PER_BLOCK_SCAN * num_ranks_per_node * sizeof(int32_t)) +
+                (num_ranks_per_node * sizeof(int32_t)) +
+                (per_expert_token_counts != nullptr ? experts_per_rank * sizeof(int32_t) : 0);
+            const size_t remap_smem_size = (alignment > 0)
+                ? (static_cast<size_t>(experts_per_rank) * sizeof(int64_t) +
+                   static_cast<size_t>(NUM_OF_WARPS_PER_BLOCK_SCAN) * experts_per_rank * sizeof(int32_t))
+                : 0;
+            const int dynamic_smem_bytes = static_cast<int>(
+                scan_smem_size > remap_smem_size ? scan_smem_size : remap_smem_size);
+
+            ::hybrid_ep::scan_kernel_param_t<LSA_TEAM_SIZE> sp;
+            sp.input_routing_map = global_routing_map;
+            sp.tmp = reinterpret_cast<::hybrid_ep::tmp_state_t*>(scan_tmp);
+            sp.sparse_to_dense_map = sparse_to_dense_map;
+            sp.rdma_to_attn_map = rdma_to_attn_map;
+            sp.attn_to_rdma_map = attn_to_rdma_map;
+            sp.token_rank_mask = reinterpret_cast<::hybrid_ep::RankMask<LSA_TEAM_SIZE>*>(token_rank_mask);
+            sp.num_of_tokens_for_experts = num_tokens_for_experts;
+            sp.local_expert_routing_map = local_expert_routing_map;
+            sp.per_expert_token_counts = per_expert_token_counts;
+            sp.node_rank = node_rank;
+            sp.local_rank = local_rank;
+            sp.num_of_tokens_per_rank = num_tokens_per_rank;
+            sp.num_of_ranks_per_node = num_ranks_per_node;
+            sp.experts_per_rank = experts_per_rank;
+            sp.remap_alignment = alignment;
+            sp.remap_internal_offsets = internal_offsets;
+            sp.remap_padded_out_counts = padded_out_counts;
+            sp.remap_out_offsets = out_offsets;
+            sp.remap_actual_counts_out = actual_counts_out;
+            sp.s2d_inner_dim = s2d_inner_dim;
+            sp.recv_total_counter = recv_total_counter;
+            sp.out_is_int64 = out_is_int64;
+            sp.max_recv_token_slots_per_rank = max_recv_token_slots_per_rank;
+
+            if (per_expert_token_counts != nullptr) {
+                jit::launch_scan<NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, NUM_LSA_TEAMS, LSA_TEAM_SIZE, true>(
+                    sp, dynamic_smem_bytes, stream);
+            } else {
+                jit::launch_scan<NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, NUM_LSA_TEAMS, LSA_TEAM_SIZE, false>(
+                    sp, dynamic_smem_bytes, stream);
+            }
         });
     });
 }
@@ -509,31 +533,50 @@ void dispatch_impl(
                 assert((experts_per_node * sizeof(float)) % 16 == 0 &&
                        "experts_per_node must be multiple of 4 for TMA alignment");
 
-                using HybridEPType = ::hybrid_ep::hybrid_ep<
-                    MAX_SUPPORTED_TOKENS_PER_RANK,
-                    NUM_LSA_TEAMS,
-                    LSA_TEAM_SIZE>;
-
                 auto kp = build_dispatch_param<TOKEN_DATA_TYPE, LSA_TEAM_SIZE>(params);
 
+                // Compute dynamic SMEM size at host (was done inside hybrid_ep::dispatch).
+                ::hybrid_ep::dispatch_config_t d_config;
+                ::hybrid_ep::model_config_t   d_model;
+                d_config.num_of_stages           = HYBRIDEP_DISPATCH_NUM_OF_STAGES;
+                d_config.num_of_in_flight_s2g    = HYBRIDEP_DISPATCH_NUM_OF_IN_FLIGHT_S2G;
+                d_config.num_of_tokens_per_chunk = HT_OF_NUM_TOKENS_PER_CHUNK;
+                d_config.num_of_blocks           = HYBRIDEP_DISPATCH_NUM_OF_BLOCKS;
+                d_config.forward_dispatch        = FORWARD_DISPATCH;
+                d_config.token_data_type         = std::is_same_v<TOKEN_DATA_TYPE, uint16_t> ? 1 : 0;
+                d_config.num_pipelines           = HYBRIDEP_DISPATCH_NUM_OF_PIPELINES_PER_BLOCK;
+                d_config.stages_per_pipeline     = HYBRIDEP_DISPATCH_NUM_OF_STAGES / HYBRIDEP_DISPATCH_NUM_OF_PIPELINES_PER_BLOCK;
+                d_config.s2d_inner_dim           = kp.s2d_inner_dim;
+                d_model.hidden_dim               = kp.hidden_dim;
+                d_model.max_num_of_tokens_per_rank = MAX_SUPPORTED_TOKENS_PER_RANK;
+                d_model.num_of_experts_per_rank  = kp.experts_per_rank;
+                d_model.num_of_ranks_per_node    = kp.num_of_ranks_per_node;
+                d_model.num_of_nodes             = NUM_LSA_TEAMS;
+
                 if (params.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR) {
-                    HybridEPType::template dispatch<
-                        TOKEN_DATA_TYPE,
+                    const int smem_size = ::hybrid_ep::calculate_dispatch_smem_layout_size<NCCL_EP_LAYOUT_EXPERT_MAJOR>(d_config, d_model);
+                    jit::launch_dispatch<
                         HYBRIDEP_DISPATCH_NUM_OF_STAGES,
                         HYBRIDEP_DISPATCH_NUM_OF_IN_FLIGHT_S2G,
                         HT_OF_NUM_TOKENS_PER_CHUNK,
                         HYBRIDEP_DISPATCH_NUM_OF_BLOCKS,
                         FORWARD_DISPATCH,
-                        NCCL_EP_LAYOUT_EXPERT_MAJOR>(kp, stream);
+                        NUM_LSA_TEAMS,
+                        LSA_TEAM_SIZE,
+                        NCCL_EP_LAYOUT_EXPERT_MAJOR,
+                        TOKEN_DATA_TYPE>(kp, smem_size, stream);
                 } else {
-                    HybridEPType::template dispatch<
-                        TOKEN_DATA_TYPE,
+                    const int smem_size = ::hybrid_ep::calculate_dispatch_smem_layout_size<NCCL_EP_LAYOUT_FLAT>(d_config, d_model);
+                    jit::launch_dispatch<
                         HYBRIDEP_DISPATCH_NUM_OF_STAGES,
                         HYBRIDEP_DISPATCH_NUM_OF_IN_FLIGHT_S2G,
                         HT_OF_NUM_TOKENS_PER_CHUNK,
                         HYBRIDEP_DISPATCH_NUM_OF_BLOCKS,
                         FORWARD_DISPATCH,
-                        NCCL_EP_LAYOUT_FLAT>(kp, stream);
+                        NUM_LSA_TEAMS,
+                        LSA_TEAM_SIZE,
+                        NCCL_EP_LAYOUT_FLAT,
+                        TOKEN_DATA_TYPE>(kp, smem_size, stream);
                 }
             });
         });

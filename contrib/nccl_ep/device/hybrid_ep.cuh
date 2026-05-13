@@ -3295,9 +3295,11 @@ template<typename TOKEN_DATA_TYPE,
          bool FORWARD_DISPATCH,
          int NUM_PIPELINES,
          int LSA_TEAM_SIZE,
-         ncclEpLayout_t kLayout>
-__launch_bounds__(INTER_NODE_GROUP::size() + INTRA_NODE_G2S_GROUP::size() + INTRA_NODE_S2G_GROUP::size() + PAD_GROUP::size(), 1)
-__global__ void dispatch_kernel(const __grid_constant__ dispatch_kernel_param_t<TOKEN_DATA_TYPE, LSA_TEAM_SIZE> param)
+         ncclEpLayout_t kLayout,
+         int HIDDEN_DIM>
+__device__ __forceinline__ void dispatch_kernel_impl(
+    const dispatch_kernel_param_t<TOKEN_DATA_TYPE, LSA_TEAM_SIZE>& param,
+    uint8_t* smem_bytes)
 {
   if constexpr (NUM_LSA_TEAMS != 1) {
     static_assert(INTER_NODE_GROUP::size() % 32 == 0 && INTER_NODE_GROUP::size() <= 64,
@@ -3306,7 +3308,6 @@ __global__ void dispatch_kernel(const __grid_constant__ dispatch_kernel_param_t<
   static_assert(NUM_OF_STAGES % NUM_PIPELINES == 0, "NUM_OF_STAGES must be divisible by NUM_PIPELINES.");
   constexpr int STAGES_PER_PIPELINE = NUM_OF_STAGES / NUM_PIPELINES;
 
-  extern __shared__ uint8_t smem_bytes[];
   using cur_smem_t = dispatch_smem_layout_t;
 
   cur_smem_t smem_layout;
@@ -3321,7 +3322,7 @@ __global__ void dispatch_kernel(const __grid_constant__ dispatch_kernel_param_t<
   d_config.num_pipelines = NUM_PIPELINES;
   d_config.stages_per_pipeline = STAGES_PER_PIPELINE;
   d_config.s2d_inner_dim = param.s2d_inner_dim;
-  d_model.hidden_dim = param.hidden_dim;
+  d_model.hidden_dim = HIDDEN_DIM;
   d_model.max_num_of_tokens_per_rank = MAX_NUM_OF_TOKENS_PER_RANK;
   d_model.num_of_experts_per_rank = param.experts_per_rank;
   d_model.num_of_ranks_per_node = param.num_of_ranks_per_node;
@@ -3359,20 +3360,20 @@ __global__ void dispatch_kernel(const __grid_constant__ dispatch_kernel_param_t<
       (param.local_rank, param.node_rank, param.num_of_tokens_per_rank, param.num_of_ranks_per_node, param.attn_to_rdma_map,
        param.dcomms, param.token_window, param.prob_window, param.sf_window, param.dest_window,
        param.num_gin_comms, param.num_ctx_per_comm, param.gin_base_ptr, param.signals_base,
-       &param.mr_info, smem_buffer_ptr, param.hidden_dim, param.experts_per_rank);
+       &param.mr_info, smem_buffer_ptr, HIDDEN_DIM, param.experts_per_rank);
     }
   } else if (threadIdx_x_int < INTER_NODE_GROUP::size() + INTRA_NODE_G2S_GROUP::size()){
     G2S_warp_group_device_function
     <INTRA_NODE_G2S_GROUP, TOKEN_DATA_TYPE, cur_smem_t, NUM_OF_STAGES, NUM_OF_TOKENS_PER_CHUNK,
      MAX_NUM_OF_TOKENS_PER_RANK, NUM_LSA_TEAMS, NUM_OF_BLOCKS, FORWARD_DISPATCH, NUM_PIPELINES>
-    (param.local_rank, param.node_rank, param.num_of_tokens_per_rank, param.num_of_ranks_per_node, param.expected_rdma_flag_value, param.hidden_dim, param.rdma_to_attn_map, param.attn_input_token,
+    (param.local_rank, param.node_rank, param.num_of_tokens_per_rank, param.num_of_ranks_per_node, param.expected_rdma_flag_value, HIDDEN_DIM, param.rdma_to_attn_map, param.attn_input_token,
     param.attn_input_prob, param.attn_input_token_scaling_factor,
     param.rdma_inter_node_group_flags, param.dcomms, param.signals_base, param.num_gin_comms, param.num_ctx_per_comm,
     param.gin_base_ptr, &param.mr_info, smem_buffer_ptr, param.experts_per_rank);
   } else if (threadIdx_x_int < INTER_NODE_GROUP::size() + INTRA_NODE_G2S_GROUP::size() + INTRA_NODE_S2G_GROUP::size()){
     S2G_warp_group_device_function
     <INTRA_NODE_S2G_GROUP, TOKEN_DATA_TYPE, cur_smem_t, NUM_OF_STAGES, NUM_OF_IN_FLIGHT_S2G, NUM_OF_TOKENS_PER_CHUNK, NUM_LSA_TEAMS, NUM_OF_BLOCKS, FORWARD_DISPATCH, NUM_PIPELINES, LSA_TEAM_SIZE, kLayout>
-    (param.local_rank, param.node_rank, param.num_of_tokens_per_rank, param.num_of_ranks_per_node, param.hidden_dim, param.rdma_to_attn_map, param.sparse_to_dense_map, param.expert_output_token, param.expert_output_prob,
+    (param.local_rank, param.node_rank, param.num_of_tokens_per_rank, param.num_of_ranks_per_node, HIDDEN_DIM, param.rdma_to_attn_map, param.sparse_to_dense_map, param.expert_output_token, param.expert_output_prob,
     param.expert_output_scaling_factor, smem_buffer_ptr, param.experts_per_rank);
   } else if (PAD_GROUP::size() > 0 &&
              threadIdx_x_int < INTER_NODE_GROUP::size() + INTRA_NODE_G2S_GROUP::size() + INTRA_NODE_S2G_GROUP::size() + PAD_GROUP::size()){
@@ -3382,7 +3383,7 @@ __global__ void dispatch_kernel(const __grid_constant__ dispatch_kernel_param_t<
     PAD_warp_group_device_function<PAD_GROUP, TOKEN_DATA_TYPE>(
         param.expert_output_token[param.local_rank],
         param.pad_actual_counts, param.pad_expert_token_offsets,
-        param.experts_per_rank, param.pad_alignment, param.hidden_dim,
+        param.experts_per_rank, param.pad_alignment, HIDDEN_DIM,
         NUM_OF_BLOCKS, smem_buffer_ptr);
   }
 #ifdef HYBRIDEP_ENABLE_WARP_TIMING
@@ -3423,6 +3424,45 @@ __global__ void dispatch_kernel(const __grid_constant__ dispatch_kernel_param_t<
           atomicExch((unsigned int*)param.dispatch_grid_barrier_counter, 0u);
       }
   }
+}
+
+// Thin __global__ wrapper preserved for the AOT path. JIT path emits its own
+// extern "C" __global__ wrapper that calls dispatch_kernel_impl directly.
+template<typename TOKEN_DATA_TYPE,
+         typename INTER_NODE_GROUP,
+         typename INTRA_NODE_G2S_GROUP,
+         typename INTRA_NODE_S2G_GROUP,
+         typename PAD_GROUP,
+         int NUM_OF_STAGES,
+         int NUM_OF_IN_FLIGHT_S2G,
+         int NUM_OF_TOKENS_PER_CHUNK,
+         int MAX_NUM_OF_TOKENS_PER_RANK,
+         int NUM_LSA_TEAMS,
+         int NUM_OF_BLOCKS,
+         bool FORWARD_DISPATCH,
+         int NUM_PIPELINES,
+         int LSA_TEAM_SIZE,
+         ncclEpLayout_t kLayout>
+__launch_bounds__(INTER_NODE_GROUP::size() + INTRA_NODE_G2S_GROUP::size() + INTRA_NODE_S2G_GROUP::size() + PAD_GROUP::size(), 1)
+__global__ void dispatch_kernel(const __grid_constant__ dispatch_kernel_param_t<TOKEN_DATA_TYPE, LSA_TEAM_SIZE> param)
+{
+  extern __shared__ uint8_t smem_bytes[];
+  dispatch_kernel_impl<
+      TOKEN_DATA_TYPE,
+      INTER_NODE_GROUP,
+      INTRA_NODE_G2S_GROUP,
+      INTRA_NODE_S2G_GROUP,
+      PAD_GROUP,
+      NUM_OF_STAGES,
+      NUM_OF_IN_FLIGHT_S2G,
+      NUM_OF_TOKENS_PER_CHUNK,
+      MAX_NUM_OF_TOKENS_PER_RANK,
+      NUM_LSA_TEAMS,
+      NUM_OF_BLOCKS,
+      FORWARD_DISPATCH,
+      NUM_PIPELINES,
+      LSA_TEAM_SIZE,
+      kLayout>(param, smem_bytes);
 }
 
 template<// This type represent intra-node reduction warp group.
@@ -3700,8 +3740,7 @@ template<int NUM_THREADS_PER_BLOCK,
          int NUM_LSA_TEAMS,
          int LSA_TEAM_SIZE,
          bool ENABLE_PER_EXPERT_COUNTS>
-__launch_bounds__(NUM_THREADS_PER_BLOCK, 1)
-__global__ void scan(const uint8_t* input_routing_map,
+__device__ __forceinline__ void scan_impl(const uint8_t* input_routing_map,
                      tmp_state_t* tmp,
                      int32_t* sparse_to_dense_map,
                      bool* rdma_to_attn_map,
@@ -3725,7 +3764,8 @@ __global__ void scan(const uint8_t* input_routing_map,
                      int s2d_inner_dim,                   // 0 = flat; >0 = expert-major top_k
                      void* recv_total_counter,            // Optional scalar; nullable
                      bool out_is_int64,                   // Shared dtype for the 3 int outputs above
-                     int max_recv_token_slots_per_rank)   // HT recv-budget; __trap on overflow.
+                     int max_recv_token_slots_per_rank,   // HT recv-budget; __trap on overflow.
+                     uint8_t* smem_bytes)
 {
   static_assert(LSA_TEAM_SIZE <= EM_S2D_MAX_RANKS,
                 "em_s2d_pack rank field is 10 bits; LSA team size must fit in 1024");
@@ -3765,9 +3805,6 @@ __global__ void scan(const uint8_t* input_routing_map,
   // Current HT constraint is max 8 ranks per node, so one lane can represent one rank.
   static_assert(LSA_TEAM_SIZE <= WARP_SIZE,
                 "scan assumes max ranks per node fits in one warp.");
-
-  // Use dynamic shared memory for runtime-sized arrays
-  extern __shared__ uint8_t smem_bytes[];
 
   // Sum of per-rank routing info of all warps within the block.
   int32_t* warp_token_routing_map_sum = reinterpret_cast<int32_t*>(smem_bytes);
@@ -4269,6 +4306,77 @@ __global__ void scan(const uint8_t* input_routing_map,
     }
   }  // end Step 4 (fused remap)
 }
+
+// Thin __global__ wrapper preserved for the AOT path. JIT path emits its own
+// extern "C" __global__ wrapper that calls scan_impl directly.
+template<int NUM_THREADS_PER_BLOCK,
+         int NUM_OF_BLOCKS,
+         int NUM_LSA_TEAMS,
+         int LSA_TEAM_SIZE,
+         bool ENABLE_PER_EXPERT_COUNTS>
+__launch_bounds__(NUM_THREADS_PER_BLOCK, 1)
+__global__ void scan(const uint8_t* input_routing_map,
+                     tmp_state_t* tmp,
+                     int32_t* sparse_to_dense_map,
+                     bool* rdma_to_attn_map,
+                     bool* attn_to_rdma_map,
+                     RankMask<LSA_TEAM_SIZE>* token_rank_mask,
+                     int32_t* num_of_tokens_for_experts,
+                     bool* local_expert_routing_map,
+                     int32_t* per_expert_token_counts,
+                     const int node_rank,
+                     const int local_rank,
+                     const int num_of_tokens_per_rank,
+                     const int num_of_ranks_per_node,
+                     const int experts_per_rank,
+                     size_t remap_alignment,
+                     int64_t* remap_internal_offsets,
+                     void*   remap_padded_out_counts,
+                     void*   remap_out_offsets,
+                     int32_t* remap_actual_counts_out,
+                     int s2d_inner_dim,
+                     void* recv_total_counter,
+                     bool out_is_int64,
+                     int max_recv_token_slots_per_rank)
+{
+  extern __shared__ uint8_t smem_bytes[];
+  scan_impl<NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, NUM_LSA_TEAMS, LSA_TEAM_SIZE, ENABLE_PER_EXPERT_COUNTS>(
+      input_routing_map, tmp, sparse_to_dense_map, rdma_to_attn_map, attn_to_rdma_map,
+      token_rank_mask, num_of_tokens_for_experts, local_expert_routing_map, per_expert_token_counts,
+      node_rank, local_rank, num_of_tokens_per_rank, num_of_ranks_per_node, experts_per_rank,
+      remap_alignment, remap_internal_offsets, remap_padded_out_counts, remap_out_offsets,
+      remap_actual_counts_out, s2d_inner_dim, recv_total_counter, out_is_int64,
+      max_recv_token_slots_per_rank, smem_bytes);
+}
+
+// Parameter pack for the scan JIT entry. The launch_jit_kernel API passes a single
+// struct by address; scan_jit_entry unpacks this into the scan_impl call.
+template<int LSA_TEAM_SIZE>
+struct scan_kernel_param_t {
+    const uint8_t* input_routing_map;
+    tmp_state_t* tmp;
+    int32_t* sparse_to_dense_map;
+    bool* rdma_to_attn_map;
+    bool* attn_to_rdma_map;
+    RankMask<LSA_TEAM_SIZE>* token_rank_mask;
+    int32_t* num_of_tokens_for_experts;
+    bool* local_expert_routing_map;
+    int32_t* per_expert_token_counts;
+    int node_rank;
+    int local_rank;
+    int num_of_tokens_per_rank;
+    int num_of_ranks_per_node;
+    int experts_per_rank;
+    size_t remap_alignment;
+    int64_t* remap_internal_offsets;
+    void* remap_padded_out_counts;
+    void* remap_out_offsets;
+    int32_t* remap_actual_counts_out;
+    int s2d_inner_dim;
+    void* recv_total_counter;
+    bool out_is_int64;
+    int max_recv_token_slots_per_rank;
+};
 
 template<
         // The max num of attn tokens output by a rank/GPU. Used by combine API.

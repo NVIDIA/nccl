@@ -593,8 +593,9 @@ The default value is INIT,BOOTSTRAP,ENV.
 
 Supported subsystem names are INIT (stands for initialization), COLL (stands for collectives), P2P (stands for
 peer-to-peer), SHM (stands for shared memory), NET (stands for network), GRAPH (stands for topology detection
-and graph search), TUNING (stands for algorithm/protocol tuning), ENV (stands for environment settings), ALLOC (stands
-for memory allocations), CALL (stands for function calls), PROXY (stands for the proxy thread operations), NVLS
+and graph search), TUNING (stands for algorithm/protocol tuning), ENV (stands for environment settings),
+ALLOC (non-host memory allocations, typically device-side), ALLOC_HOST (host memory allocations),
+CALL (stands for function calls), PROXY (stands for the proxy thread operations), NVLS
 (stands for NVLink SHARP), BOOTSTRAP (stands for early initialization), REG (stands for memory registration), PROFILE
 (stands for coarse-grained profiling of initialization), RAS (stands for reliability, availability, and serviceability
 subsystem), DESTROY (stands for communicator destroy, abort, revoke, and plugin unload/close operations)

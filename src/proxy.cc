@@ -948,7 +948,7 @@ void* ncclProxyProgress(void *proxyState_) {
     ncclResult_t ret = progressOps(proxyState, state, state->active, &idle);
     if (ret != ncclSuccess) {
       COMPILER_ATOMIC_STORE(&proxyState->asyncResult, ret, std::memory_order_release);
-      INFO(NCCL_ALL,"%s:%d -> %d [Progress Thread]", __FILE__, __LINE__, ret);
+      INFO_LOC(NCCL_ALL, "-> %d [Progress Thread]", ret);
       break;
     }
     if ((lastIdle == 0 && idle == 1) || (lastIdle == 1 && idle == 0)) {
@@ -966,7 +966,7 @@ void* ncclProxyProgress(void *proxyState_) {
       if (added) { TIME_STOP(3); } else { TIME_CANCEL(3); }
       if (ret != ncclSuccess) {
         COMPILER_ATOMIC_STORE(&proxyState->asyncResult, ret, std::memory_order_release);
-        INFO(NCCL_ALL,"%s:%d -> %d [Progress Thread]", __FILE__, __LINE__, ret);
+        INFO_LOC(NCCL_ALL, "-> %d [Progress Thread]", ret);
       }
       if (added == 0) {
         std::this_thread::yield(); // No request progressed. Let others run.

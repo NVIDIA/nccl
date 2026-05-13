@@ -33,7 +33,7 @@ extern CUmemAllocationHandleType ncclCuMemHandleType;
     if( err != CUDA_SUCCESS ) {				      \
       const char *errStr;				      \
       (void) pfn_cuGetErrorString(err, &errStr);	      \
-      WARN("Cuda failure %d '%s'", err, errStr);	      \
+      WARN("Cuda failure %d '%s'", err, errStr); \
       return ncclUnhandledCudaError;			      \
     }							      \
 } while(false)
@@ -47,7 +47,7 @@ extern CUmemAllocationHandleType ncclCuMemHandleType;
     if( err != CUDA_SUCCESS ) {				      \
       const char *errStr;				      \
       (void) pfn_cuGetErrorString(err, &errStr);	      \
-      WARN("Cuda failure %d '%s'", err, errStr);	      \
+      WARN("Cuda failure %d '%s'", err, errStr); \
       res = ncclUnhandledCudaError;			      \
       goto label;					      \
     }							      \
@@ -59,14 +59,14 @@ extern CUmemAllocationHandleType ncclCuMemHandleType;
     if( err != CUDA_SUCCESS ) {						\
       const char *errStr;						\
       (void) pfn_cuGetErrorString(err, &errStr);			\
-      INFO(NCCL_ALL,"%s:%d Cuda failure %d '%s'", __FILE__, __LINE__, err, errStr); \
+      INFO_LOC(NCCL_ALL, "Cuda failure %d '%s'", err, errStr); \
     }									\
 } while(false)
 
 #define CUCHECKTHREAD(cmd, args) do {					\
     CUresult err = pfn_##cmd;						\
     if (err != CUDA_SUCCESS) {						\
-      INFO(NCCL_INIT,"%s:%d -> %d [Async thread]", __FILE__, __LINE__, err); \
+      INFO_LOC(NCCL_INIT, "-> %d [Async thread]", (int)(err)); \
       args->ret = ncclUnhandledCudaError;				\
       return args;							\
     }									\

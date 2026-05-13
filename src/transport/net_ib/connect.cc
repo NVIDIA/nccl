@@ -361,7 +361,7 @@ static ncclResult_t ncclIbCreateQpMlx5(struct ncclIbQpCreateAttr* createQpAttrs,
     dvAttr.comp_mask |= MLX5DV_QP_INIT_ATTR_MASK_QP_CREATE_FLAGS;
   }
   qp->qp = wrap_mlx5dv_create_qp(createQpAttrs->pd->context, &qpInitAttr, &dvAttr);
-  if (qp->qp == NULL) { WARN("NET/IB: %s: mlx5dv_create_qp failed to create QP: %m", __func__);  return ncclInternalError; }
+  if (qp->qp == NULL) { WARN("NET/IB: mlx5dv_create_qp failed to create QP: %m");  return ncclInternalError; }
   return ncclSuccess;
 }
 
@@ -650,13 +650,12 @@ static ncclResult_t ncclIbSenderQpsCreate(ncclIbSendComm* comm, struct ncclIbCon
 
     if (ibDev->ibProvider == IB_PROVIDER_MLX5 && ncclParamIbOooRq()) {
       if (ibDev->ar == 0) {
-        WARN("NET/IB: %s: OOO RQ is force enabled but AR is not enabled, which is required for OOO RQ (device=%s)", __func__, ibDev->devName);
+        WARN("NET/IB: OOO RQ is force enabled but AR is not enabled, which is required for OOO RQ (device=%s)", ibDev->devName);
         return ncclInternalError;
       }
       qpCreateAttrs.oooRq = (comm->base.remOooRq && comm->base.localOooRq);
       if (!qpCreateAttrs.oooRq) {
-        WARN("NET/IB: %s: OOO RQ is force enabled but not supported on both sides of the connection (device=%s, localOooRq=%d, remOooRq=%d)",
-          __func__, ibDev->devName, comm->base.localOooRq, comm->base.remOooRq);
+        WARN("NET/IB: OOO RQ is force enabled but not supported on both sides of the connection (device=%s, localOooRq=%d, remOooRq=%d)", ibDev->devName, comm->base.localOooRq, comm->base.remOooRq);
         return ncclInternalError;
       }
     }
@@ -1128,20 +1127,18 @@ static ncclResult_t ncclIbReceiverQpsCreateToRts(ncclIbRecvComm* rComm, struct n
     }
     if (ibDev->ibProvider == IB_PROVIDER_MLX5 && ncclParamIbOooRq()) {
       if (ibDev->ar == 0) {
-        WARN("NET/IB: %s: OOO RQ is force enabled but AR is not enabled, which is required for OOO RQ (device=%s)", __func__, ibDev->devName);
+        WARN("NET/IB: OOO RQ is force enabled but AR is not enabled, which is required for OOO RQ (device=%s)", ibDev->devName);
         return ncclInternalError;
       }
       qpCreateAttrs.oooRq = (rComm->base.remOooRq && rComm->base.localOooRq);
       // out-of-order recv prerequisite: oooRq is supported on both sides
       if (!qpCreateAttrs.oooRq) {
-        WARN("NET/IB: %s: OOO RQ is force enabled but not supported on both sides of the connection (device=%s, localOooRq=%d, remOooRq=%d)",
-          __func__, ibDev->devName, rComm->base.localOooRq, rComm->base.remOooRq);
+        WARN("NET/IB: OOO RQ is force enabled but not supported on both sides of the connection (device=%s, localOooRq=%d, remOooRq=%d)", ibDev->devName, rComm->base.localOooRq, rComm->base.remOooRq);
         return ncclInternalError;
       }
       // out-of-order recv prerequisite: oooRq size requirements are met
       if (ibDev->oooRqSize < qpCreateAttrs.maxRecvWorkRequest) {
-        WARN("NET/IB: %s: OOO RQ is force enabled but size %u is less than the required recv work request size %u on device:%s",
-          __func__, ibDev->oooRqSize, qpCreateAttrs.maxRecvWorkRequest, ibDev->devName);
+        WARN("NET/IB: OOO RQ is force enabled but size %u is less than the required recv work request size %u on device:%s", ibDev->oooRqSize, qpCreateAttrs.maxRecvWorkRequest, ibDev->devName);
         return ncclInternalError;
       }
     }

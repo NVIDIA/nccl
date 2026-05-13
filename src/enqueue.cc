@@ -1238,18 +1238,22 @@ static ncclResult_t uploadWork(struct ncclComm* comm, struct ncclKernelPlan* pla
     NCCLCHECK(waitWorkFifoAvailable(comm, fifoCursor + workBytes));
     plan->kernelArgs->workBuf = comm->workFifoBufDev;
     break;
-  case ncclDevWorkStorageTypePersistent:
+  case ncclDevWorkStorageTypePersistent: {
+    size_t hostAllocBytes = workBytes;
     // We rely on 16-byte alignment. Use aligned alloc when available (C++11+ or MSVC with /std:c++11+).
     // MSVC keeps __cplusplus at 199711L
     #if (__cplusplus >= 201103L) || (defined(_MSC_VER) && _MSVC_LANG >= 201103L)
-    fifoBufHost = ncclOsAlignedAlloc(16, ROUNDUP(workBytes, 16));
+    hostAllocBytes = ROUNDUP(workBytes, 16);
+    fifoBufHost = ncclOsAlignedAlloc(16, hostAllocBytes);
     #else
     static_assert(16 <= alignof(max_align_t), "We rely on 16-byte alignment.");
     fifoBufHost = malloc(workBytes);
     #endif
+    INFO_LOC(NCCL_ALLOC_HOST, "Persistent host work buf Size %zu pointer %p", hostAllocBytes, fifoBufHost);
     fifoCursor = 0;
     fifoMask = ~0u;
     break;
+  }
   default:
     return ncclInternalError;
   }
@@ -1301,6 +1305,7 @@ static ncclResult_t uploadWork(struct ncclComm* comm, struct ncclKernelPlan* pla
       NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->deviceStream, /*concurrent=*/false, &deviceStream), result, fail);
 
       CUDACHECKGOTO(cudaMallocAsync(&fifoBufDev, workBytes, comm->memPool, deviceStream), result, fail);
+      INFO_LOC(NCCL_ALLOC, "Persistent cudaMallocAsync work buf Size %zu pointer %p", workBytes, fifoBufDev);
       plan->workBufPersistent = fifoBufDev;
       plan->kernelArgs->workBuf = fifoBufDev;
 

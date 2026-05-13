@@ -273,9 +273,10 @@ static void rasThreadCleanup() {
 // Behind the scenes allocates encapsulating rasMsgMeta structure, which includes local metadata stored in front
 // of the message.
 // Must use rasMsgFree to free.
+// ncclCallocQuiet is limited to rasMsgAlloc/rasMsgRecv: routine and keep-alive traffic otherwise floods ALLOC_HOST.
 ncclResult_t rasMsgAlloc(struct rasMsg** msg, size_t msgLen) {
   struct rasMsgMeta* meta = nullptr;
-  NCCLCHECK(ncclCalloc((char**)&meta, offsetof(struct rasMsgMeta, msg) + msgLen));
+  NCCLCHECK(ncclCallocQuiet((char**)&meta, offsetof(struct rasMsgMeta, msg) + msgLen));
   *msg = &meta->msg;
   // coverity[leaked_storage:FALSE] => rasMsgFree is used to free it
   return ncclSuccess;
@@ -366,7 +367,7 @@ ncclResult_t rasMsgRecv(struct rasSocket* sock, struct rasMsg** msg, int* closed
                                  &sock->recvOffset, closed));
     if (*closed || sock->recvOffset < sizeof(sock->recvLength))
       return ncclSuccess;
-    NCCLCHECK(ncclCalloc((char**)&sock->recvMsg, sock->recvLength));
+    NCCLCHECK(ncclCallocQuiet((char**)&sock->recvMsg, sock->recvLength));
   }
   // Receive the body of the message.
   NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_RECV, &sock->sock, ((char*)sock->recvMsg)-sizeof(sock->recvLength),

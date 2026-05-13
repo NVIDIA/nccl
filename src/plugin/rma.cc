@@ -274,6 +274,6 @@ ncclResult_t ncclRmaGetDevCount(int pluginIndex, int* nPhysDevs, int* nVirtDevs)
   *nPhysDevs = pluginLibs[pluginIndex].physDevs;
   return ncclSuccess;
 fail:
-  WARN("%s: trying to access the number of devices of an uninitialized rmaPlugin[%d]", __func__, pluginIndex);
+  WARN("trying to access the number of devices of an uninitialized rmaPlugin[%d]", pluginIndex);
   return ncclInternalError;
 }

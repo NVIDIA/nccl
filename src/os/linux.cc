@@ -733,6 +733,7 @@ void ncclOsShmHandleInit(ncclShmDescriptor shmDesc, char* shmPath, size_t shmSiz
     int slen = strlen(shmPath);
     handle->shmPath = (char*)malloc(slen + 1);
     memcpy(handle->shmPath, shmPath, slen + 1);
+    INFO_LOC(NCCL_ALLOC_HOST, "SHM path string Size %d pointer %p", slen + 1, handle->shmPath);
     if (hptr) memset(hptr, 0, shmSize);
   } else {
     handle->shmPath = NULL;
@@ -783,7 +784,7 @@ ncclResult_t ncclOsShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize,
       ret = ncclSystemError;
       goto fail;
     }
-    INFO(NCCL_ALLOC, "Allocated %ld bytes of shared memory in %s", realShmSize, shmPath);
+    INFO_LOC(NCCL_ALLOC_HOST, "Allocated %ld bytes of shared memory in %s", realShmSize, shmPath);
   } else {
     SYSCHECKGOTO(fd = open(shmPath, O_RDWR, S_IRUSR | S_IWUSR), "open", ret, fail);
   }

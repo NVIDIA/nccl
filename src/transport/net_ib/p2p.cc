@@ -79,7 +79,7 @@ static ncclResult_t ncclIbPrintWr(struct ibv_send_wr* wr, char* wrStr) {
         wr->imm_data);
       break;
     default:
-      WARN("NET/IB: %s: No format specified for opcode=%d", __func__, wr->opcode);
+      WARN("NET/IB: No format specified for opcode=%d", wr->opcode);
       return ncclInternalError;
   }
   return ncclSuccess;
@@ -660,7 +660,7 @@ static inline ncclResult_t ncclIbCompletionEventProcess(struct ncclIbNetCommBase
   struct ncclIbRequest* req = NULL;
   NCCLCHECK(ncclIbRequestRetrieveFromCompletion(commBase, wc, &req));
   if (req == NULL) {
-    WARN("NET/IB: %s: %s comm could not retreive a request found for a successful completion (comm=%p, wc.wr_id=%ld, opcode=%d, qp_num=%u)", __func__, commBase->isSend ? "Send" : "Recv", commBase, wc->wr_id, wc->opcode, wc->qp_num);
+    WARN("NET/IB: %s comm could not retreive a request found for a successful completion (comm=%p, wc.wr_id=%ld, opcode=%d, qp_num=%u)", commBase->isSend ? "Send" : "Recv", commBase, wc->wr_id, wc->opcode, wc->qp_num);
     return ncclInternalError;
   }
 
@@ -672,7 +672,7 @@ static inline ncclResult_t ncclIbCompletionEventProcess(struct ncclIbNetCommBase
 
   if (commBase->isSend) {
     if (req->type != NCCL_NET_IB_REQ_SEND) {
-      WARN("NET/IB: %s: Sender expected a 'send' request but got '%s' (req=%p, comm=%p, id=%ld, wc.wr_id=%ld, wc.opcode=%s(%d), wc.qp_num=%u)", __func__, ncclIbReqTypeStr[req->type], req, commBase, req->id, wc->wr_id, ibvWcOpcodeStr(wc->opcode), wc->opcode, wc->qp_num);
+      WARN("NET/IB: Sender expected a 'send' request but got '%s' (req=%p, comm=%p, id=%ld, wc.wr_id=%ld, wc.opcode=%s(%d), wc.qp_num=%u)", ncclIbReqTypeStr[req->type], req, commBase, req->id, wc->wr_id, ibvWcOpcodeStr(wc->opcode), wc->opcode, wc->qp_num);
       return ncclInternalError;
     }
     struct ncclIbSendComm* sendComm = (struct ncclIbSendComm*)commBase;
@@ -699,7 +699,7 @@ static inline ncclResult_t ncclIbCompletionEventProcess(struct ncclIbNetCommBase
         return ncclSuccess;
       }
       if (req->type != NCCL_NET_IB_REQ_RECV && !commBase->resiliency) {
-        WARN("NET/IB: %s: Receiver expected a 'recv' request but got '%s' (req=%p, comm=%p, id=%ld, wc.wr_id=%ld, wc.status=%s(%d) wc.opcode=%s(%d), wc.qp_num=%u)", __func__, ncclIbReqTypeStr[req->type], req, req->base, req->id, wc->wr_id, ibvWcStatusStr(wc->status), wc->status, ibvWcOpcodeStr(wc->opcode), wc->opcode, wc->qp_num);
+        WARN("NET/IB: Receiver expected a 'recv' request but got '%s' (req=%p, comm=%p, id=%ld, wc.wr_id=%ld, wc.status=%s(%d) wc.opcode=%s(%d), wc.qp_num=%u)", ncclIbReqTypeStr[req->type], req, req->base, req->id, wc->wr_id, ibvWcStatusStr(wc->status), wc->status, ibvWcOpcodeStr(wc->opcode), wc->opcode, wc->qp_num);
         return ncclInternalError;
       }
       if (req->nreqs == 1) {
@@ -731,7 +731,7 @@ static inline ncclResult_t ncclIbCompletionEventProcess(struct ncclIbNetCommBase
         return ncclSuccess;
       }
     } else {
-      WARN("NET/IB: %s: Unknown completion (req=%p, comm=%p, id=%ld, devIndex=%d, req->type=%s, wc.wr_id=%ld, wc.opcode=%s(%d), wc.qp_num=%u, wc.imm_data=%d)", __func__, req, commBase, req ? req->id : -1, devIndex, ncclIbReqTypeStr[req->type], wc->wr_id, ibvWcOpcodeStr(wc->opcode), wc->opcode, wc->qp_num, be32toh(wc->imm_data));
+      WARN("NET/IB: Unknown completion (req=%p, comm=%p, id=%ld, devIndex=%d, req->type=%s, wc.wr_id=%ld, wc.opcode=%s(%d), wc.qp_num=%u, wc.imm_data=%d)", req, commBase, req ? req->id : -1, devIndex, ncclIbReqTypeStr[req->type], wc->wr_id, ibvWcOpcodeStr(wc->opcode), wc->opcode, wc->qp_num, be32toh(wc->imm_data));
       return ncclInternalError;
     }
 #ifdef NCCL_ENABLE_NET_PROFILING
@@ -781,7 +781,7 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
         struct ibv_wc *wc = wcs+w;
         if (wc->status != IBV_WC_SUCCESS) {
           if (r->base->resiliency == NULL) {
-            WARN("NET/IB: %s: Got CQE with error (devIndex=%d, req=%p, comm=%p (%s), wr_id=%lu, qp_num=%d)", __func__, i, r, r->base, r->base->isSend ? "send" : "recv", wc->wr_id, wc->qp_num);
+            WARN("NET/IB: Got CQE with error (devIndex=%d, req=%p, comm=%p (%s), wr_id=%lu, qp_num=%d)", i, r, r->base, r->base->isSend ? "send" : "recv", wc->wr_id, wc->qp_num);
             ncclIbLogCompletionWithError(r->base, wc, i);
             // If resiliency is not enabled, we cannot recover from any error.
             return ncclRemoteError;

@@ -216,7 +216,7 @@ static inline ncclResult_t ncclIbPortRecoveryContextInit(struct ncclIbResiliency
   if (!outRecoveryCtx) return ncclInternalError;
   ncclIbPortRecoveryContext* recoveryCtx = (ncclIbPortRecoveryContext*)malloc(sizeof(ncclIbPortRecoveryContext));
   if (!recoveryCtx) {
-    WARN("NET/IB: %s: Failed to allocate failure queue node (comm=%p)", __func__, resCtx->baseComm);
+    WARN("NET/IB: Failed to allocate failure queue node (comm=%p)", resCtx->baseComm);
     *outRecoveryCtx = NULL;
     return ncclInternalError;
   }
@@ -680,7 +680,7 @@ static inline ncclResult_t ncclIbPortRecoveryPostAliveMessages(struct ncclIbPort
   struct ibv_send_wr wr[NCCL_IB_RESILIENCY_PORT_RECOVERY_ALIVE_MSG_BATCH_SIZE_MAX];
   int nMsgsToPost = ncclParamIbResiliencyPortRecoveryAliveMsgSequenceSize();
   if (nMsgsToPost > NCCL_IB_RESILIENCY_PORT_RECOVERY_ALIVE_MSG_BATCH_SIZE_MAX) {
-    WARN("NET/IB: %s: Requested alive message batch size %d exceeds maximum supported %d", __func__, nMsgsToPost, NCCL_IB_RESILIENCY_PORT_RECOVERY_ALIVE_MSG_BATCH_SIZE_MAX);
+    WARN("NET/IB: Requested alive message batch size %d exceeds maximum supported %d", nMsgsToPost, NCCL_IB_RESILIENCY_PORT_RECOVERY_ALIVE_MSG_BATCH_SIZE_MAX);
     return ncclInternalError;
   }
   for (int i = 0; i < nMsgsToPost; i++) {
@@ -879,7 +879,7 @@ static inline ncclResult_t ncclIbPortRecoveryProgressAliveMessages(ncclIbPortRec
   }
   switch (progressResult) {
     case ncclIbPortRecoveryStateProgressResultGoToPrevState:
-      WARN("NET/IB: %s: Unexpected GoToPrevState result in AliveMessages state for device %d (%s comm=%p)", __func__, recoveryContext->devIndex, recoveryContext->resCtx->baseComm->isSend ? "send" : "recv", recoveryContext->resCtx->baseComm);
+      WARN("NET/IB: Unexpected GoToPrevState result in AliveMessages state for device %d (%s comm=%p)", recoveryContext->devIndex, recoveryContext->resCtx->baseComm->isSend ? "send" : "recv", recoveryContext->resCtx->baseComm);
       return ncclInternalError;
     case ncclIbPortRecoveryStateProgressResultGoToNextState:
       INFO(NCCL_NET, "NET/IB: %s: Alive messages phase completed for device %d. Moving to next phase (%s comm=%p)", __func__, recoveryContext->devIndex, recoveryContext->resCtx->baseComm->isSend ? "send" : "recv", recoveryContext->resCtx->baseComm);

@@ -292,7 +292,7 @@ void* ncclMemoryStack::allocateSpilled(struct ncclMemoryStack* me, size_t size, 
     // At this point we must need another hunk, either to fit the object
     // itself or its Unhunk proxy.
     mallocSize = nextSize;
-    INFO(NCCL_ALLOC, "%s:%d memory stack hunk malloc(%llu)", __FILE__, __LINE__, (unsigned long long)mallocSize);
+    INFO_LOC(NCCL_ALLOC_HOST, "memory stack hunk malloc(%llu)", (unsigned long long)mallocSize);
     struct Hunk *top1 = (struct Hunk*)malloc(mallocSize);
     if (top1 == nullptr) goto malloc_exhausted;
     top1->size = nextSize;
@@ -322,13 +322,13 @@ unhunked:
     me->topFrame.unhunks = proxy;
     mallocSize = size;
     proxy->obj = malloc(mallocSize);
-    INFO(NCCL_ALLOC, "%s:%d memory stack non-hunk malloc(%llu)", __FILE__, __LINE__, (unsigned long long)mallocSize);
+    INFO_LOC(NCCL_ALLOC_HOST, "memory stack non-hunk malloc(%llu)", (unsigned long long)mallocSize);
     if (proxy->obj == nullptr) goto malloc_exhausted;
     return proxy->obj;
   }
 
 malloc_exhausted:
-  WARN("%s:%d Unrecoverable error detected: malloc(size=%llu) returned null.", __FILE__, __LINE__, (unsigned long long)mallocSize);
+  WARN("Unrecoverable error detected: malloc(size=%llu) returned null.", (unsigned long long)mallocSize);
   abort();
 }
 
@@ -435,11 +435,13 @@ ncclResult_t ncclIntruAddressMapInsert_untyped(
 
   // Lazy initialization - create table on first insert
   if (map->hbits == 0) {
-    map->hbits = 4;
-    map->table = (void**)calloc((size_t)1<<map->hbits, sizeof(void*));
+    const int initHbits = 4;
+    const size_t tableEntries = (size_t)1 << initHbits;
+    map->hbits = initHbits;
+    map->table = (void**)calloc(tableEntries, sizeof(void*));
     if (map->table == nullptr) {
       map->hbits = 0; // Reset on failure
-      WARN("Intrusive address map initialization failed: calloc(%zu entries) returned null", (size_t)1<<map->hbits);
+      WARN("Intrusive address map initialization failed: calloc(%zu entries) returned null", tableEntries);
       return ncclSystemError;
     }
   }

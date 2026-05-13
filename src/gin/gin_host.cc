@@ -51,7 +51,7 @@ void* ncclGinProgress(struct ncclGinState* ginState_) {
           ncclResult_t ret = ginState->ncclGin->ginProgress(dc->ginCtx[n]);
           if (ret != ncclSuccess) {
             COMPILER_ATOMIC_STORE(&ginState->asyncResult, ret, std::memory_order_release);
-            INFO(NCCL_ALL,"%s:%d -> %d [GIN Progress Thread]", __FILE__, __LINE__, ret);
+            INFO_LOC(NCCL_ALL, "-> %d [GIN Progress Thread]", ret);
             ginState->ginProgress = -2;
             return NULL;
           }
@@ -65,7 +65,7 @@ void* ncclGinProgress(struct ncclGinState* ginState_) {
     } else if (ginState->ginProgress == 0) {
       ginState->cond.wait(lock);
     } else {
-      INFO(NCCL_ALL,"%s:%d -> [GIN Progress Thread] state unknown %d", __FILE__, __LINE__, ginState->ginProgress);
+      INFO_LOC(NCCL_ALL, "[GIN Progress Thread] state unknown %d", ginState->ginProgress);
       ginState->ginProgress = -2;
       return NULL;
     }

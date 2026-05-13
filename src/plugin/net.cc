@@ -367,7 +367,7 @@ ncclResult_t ncclNetGetDevCount(int netPluginIndex, int* nPhysDevs, int* nVirtDe
   *nVirtDevs = netPluginLibs[netPluginIndex].netVirtDevs;
   return ncclSuccess;
 fail:
-  WARN("%s: trying to access the number of devices of an uninitialized netPlugin[%d]", __func__, netPluginIndex);
+  WARN("trying to access the number of devices of an uninitialized netPlugin[%d]", netPluginIndex);
   return ncclInternalError;
 }
 
@@ -379,7 +379,7 @@ ncclResult_t ncclCollNetGetDevCount(int netPluginIndex, int* nPhysDevs, int* nVi
   *nVirtDevs = netPluginLibs[netPluginIndex].collNetVirtDevs;
   return ncclSuccess;
 fail:
-  WARN("%s: trying to access the number of devices of an uninitialized netPlugin[%d]", __func__, netPluginIndex);
+  WARN("trying to access the number of devices of an uninitialized netPlugin[%d]", netPluginIndex);
   return ncclInternalError;
 }
 
@@ -389,7 +389,7 @@ ncclResult_t ncclNetSetVirtDevCount(int netPluginIndex, int nVirtDevs) {
   netPluginLibs[netPluginIndex].netVirtDevs = nVirtDevs;
   return ncclSuccess;
 fail:
-  WARN("%s: failed to set the number of devices for netPlugin[%d] to %d", __func__, netPluginIndex,nVirtDevs);
+  WARN("failed to set the number of devices for netPlugin[%d] to %d", netPluginIndex,nVirtDevs);
   return ncclInternalError;
 }
 
@@ -399,7 +399,7 @@ ncclResult_t ncclCollNetSetVirtDevCount(int netPluginIndex, int nVirtDevs) {
   netPluginLibs[netPluginIndex].collNetVirtDevs = nVirtDevs;
   return ncclSuccess;
 fail:
-  WARN("%s: failed to set the number of devices for netPlugin[%d] to %d", __func__, netPluginIndex,nVirtDevs);
+  WARN("failed to set the number of devices for netPlugin[%d] to %d", netPluginIndex,nVirtDevs);
   return ncclInternalError;
 }
 

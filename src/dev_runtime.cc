@@ -1294,7 +1294,7 @@ ncclResult_t ncclCommWindowRegister(ncclComm_t comm, void* buff, size_t size, nc
   NCCLCHECK(PtrCheck(win, __func__, "win"));
   *win = nullptr;
   if (buff == nullptr || size <= 0) {
-    WARN("%s: invalid pointer %p / size %zu", __func__, buff, size);
+    WARN("invalid pointer %p / size %zu", buff, size);
     return ncclInvalidArgument;
   }
 

@@ -64,7 +64,8 @@ DEFINE_NCCL_PARAM(ncclParamDebugSubsys, uint64_t, NCCL_DEBUG_SUBSYS,
                     makeOption("GRAPH", NCCL_GRAPH, "Graph search and topology"),
                     makeOption("TUNING", NCCL_TUNING, "Algorithm tuning"),
                     makeOption("ENV", NCCL_ENV, "Parameter settings by config file, EnvVar or EnvPlugins (included in default)"),
-                    makeOption("ALLOC", NCCL_ALLOC, "Memory allocation"),
+                    makeOption("ALLOC", NCCL_ALLOC, "Device memory allocation"),
+                    makeOption("ALLOC_HOST", NCCL_ALLOC_HOST, "Host memory allocation"),
                     makeOption("CALL", NCCL_CALL, "API call tracing"),
                     makeOption("PROXY", NCCL_PROXY, "Proxy thread operations"),
                     makeOption("NVLS", NCCL_NVLS, "NVLink SHARP operations"),
@@ -248,11 +249,9 @@ static void ncclDebugInit() {
   COMPILER_ATOMIC_STORE(&ncclDebugLevel, tempNcclDebugLevel, std::memory_order_release);
 }
 
-/* Common logging function used by the INFO, WARN and TRACE macros
- * Also exported to the dynamically loadable Net transport modules so
- * they can share the debugging mechanisms and output files
- */
-void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *filefunc, int line, const char *fmt, ...) {
+static void ncclDebugLogV(ncclDebugLogLevel level, unsigned long flags,
+                          const char *file, const char *func, int line,
+                          const char *fmt, va_list vargs) {
   int gotLevel = COMPILER_ATOMIC_LOAD(&ncclDebugLevel, std::memory_order_acquire);
 
   if (ncclDebugNoWarn != 0 && level == NCCL_LOG_WARN) { level = NCCL_LOG_INFO; flags = ncclDebugNoWarn; }
@@ -260,10 +259,10 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
   // Save the last error (WARN) as a human readable string
   if (level == NCCL_LOG_WARN) {
     std::lock_guard<std::mutex> lock(ncclDebugMutex);
-    va_list vargs;
-    va_start(vargs, fmt);
-    (void) vsnprintf(ncclLastError, sizeof(ncclLastError), fmt, vargs);
-    va_end(vargs);
+    va_list vcopy;
+    va_copy(vcopy, vargs);
+    (void) vsnprintf(ncclLastError, sizeof(ncclLastError), fmt, vcopy);
+    va_end(vcopy);
   }
 
   if (gotLevel >= 0 && (gotLevel < level || (flags & ncclDebugMask) == 0)) {
@@ -335,9 +334,15 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
     (void)cudaGetDevice(&cudaDev);
   }
 
+  const char *fileStr = file ? file : "<unknown>";
+  const char *funcStr = func ? func : "<unknown>";
+
   // Add level specific formatting. The format string from the call site is incorporated into this prefix.
   if (level == NCCL_LOG_WARN) {
-    len += snprintf(buffer+len, sizeof(buffer)-len, "[%d] %s:%d NCCL WARN %s\n", cudaDev, filefunc, line, fmt);
+    if (func && func[0])
+      len += snprintf(buffer+len, sizeof(buffer)-len, "[%d] %s:%d (%s) NCCL WARN %s\n", cudaDev, fileStr, line, funcStr, fmt);
+    else
+      len += snprintf(buffer+len, sizeof(buffer)-len, "[%d] %s:%d NCCL WARN %s\n", cudaDev, fileStr, line, fmt);
     if (ncclWarnSetDebugInfo) COMPILER_ATOMIC_STORE(&ncclDebugLevel, static_cast<int>(NCCL_LOG_INFO), std::memory_order_release);
   } else if (level == NCCL_LOG_INFO) {
     len += snprintf(buffer+len, sizeof(buffer)-len, "[%d] NCCL INFO %s\n", cudaDev, fmt);
@@ -346,7 +351,7 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
   } else if (level == NCCL_LOG_TRACE) {
     auto delta = std::chrono::steady_clock::now() - ncclEpoch;
     double timestamp = std::chrono::duration_cast<std::chrono::duration<double>>(delta).count()*1000;
-    len += snprintf(buffer+len, sizeof(buffer)-len, "[%d] %f %s:%d NCCL TRACE %s\n", cudaDev, timestamp, filefunc, line, fmt);
+    len += snprintf(buffer+len, sizeof(buffer)-len, "[%d] %f %s:%d NCCL TRACE %s\n", cudaDev, timestamp, funcStr, line, fmt);
   } else {
     len += snprintf(buffer+len, sizeof(buffer)-len, "%s\n", fmt);
   }
@@ -359,9 +364,35 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *file
 
   // Add the message as given by the call site.
   // The call site's format string has been incorporated into `buffer` along with our prefix.
+  va_list vcopy;
+  va_copy(vcopy, vargs);
+  (void) vfprintf(ncclDebugFile, buffer, vcopy);
+  va_end(vcopy);
+}
+
+// Internal only Common logging function used by the INFO, WARN and TRACE macros
+void ncclDebugLogInternal(ncclDebugLogLevel level, unsigned long flags, const char *file, const char *func, int line,
+                     const char *fmt, ...) {
   va_list vargs;
   va_start(vargs, fmt);
-  (void) vfprintf(ncclDebugFile, buffer, vargs);
+  ncclDebugLogV(level, flags, file, func, line, fmt, vargs);
+  va_end(vargs);
+}
+
+/* Exported ABI logging function exported to the dynamically loadable Net
+ * transport modules so they can share the debugging mechanisms and output files
+ */
+void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char *filefunc, int line, const char *fmt, ...) {
+  va_list vargs;
+  va_start(vargs, fmt);
+  const char *file = nullptr;
+  const char *func = nullptr;
+  if (level == NCCL_LOG_WARN) {
+    file = filefunc;
+  } else if (level == NCCL_LOG_TRACE) {
+    func = filefunc;
+  }
+  ncclDebugLogV(level, flags, file, func, line, fmt, vargs);
   va_end(vargs);
 }
 

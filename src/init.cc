@@ -2048,6 +2048,7 @@ static ncclResult_t envConfigOverride(ncclComm_t comm) {
     int netNameLen = strlen(tmpNetName) + 1;
     comm->config.netName = (char*)malloc(netNameLen);
     memcpy((void*)comm->config.netName, tmpNetName, netNameLen);
+    INFO_LOC(NCCL_ALLOC_HOST, "netName buffer Size %d pointer %p", netNameLen, comm->config.netName);
   } else {
     comm->config.netName = NULL;
   }

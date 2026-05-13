@@ -337,7 +337,7 @@ void* ncclRmaProxyProgressThread(struct ncclRmaProxyState* rmaProxyState_) {
         ncclResult_t ret = ncclRmaProxyProgress(rmaProxyState->ncclRma, rmaProxyState->rmaProxyCtxs[n]);
         if (ret != ncclSuccess) {
           COMPILER_ATOMIC_STORE_32(&rmaProxyState->asyncResult, ret, std::memory_order_release);
-          INFO(NCCL_ALL,"%s:%d -> %d [RMA Proxy Progress Thread]", __FILE__, __LINE__, ret);
+          INFO_LOC(NCCL_ALL, "-> %d [RMA Proxy Progress Thread]", ret);
           rmaProxyState->rmaProgress = -2;
           return NULL;
         }
@@ -354,7 +354,7 @@ void* ncclRmaProxyProgressThread(struct ncclRmaProxyState* rmaProxyState_) {
     } else if (rmaProxyState->rmaProgress == 0) {
       rmaProxyState->cond.wait(lock);
     } else {
-      INFO(NCCL_ALL,"%s:%d -> [RMA Proxy Progress Thread] state unknown %d", __FILE__, __LINE__, rmaProxyState->rmaProgress);
+      INFO_LOC(NCCL_ALL, "[RMA Proxy Progress Thread] state unknown %d", rmaProxyState->rmaProgress);
       rmaProxyState->rmaProgress = -2;
       return NULL;
     }

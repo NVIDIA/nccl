@@ -80,7 +80,7 @@ void* ncclAsyncJobMain(void* arg) {
   struct ncclAsyncJob* job = (struct ncclAsyncJob*)arg;
   job->result = job->func(job);
   if (job->result != ncclSuccess) {
-    INFO(NCCL_INIT,"%s:%d -> %d [Async thread]", __FILE__, __LINE__, job->result);
+    INFO_LOC(NCCL_INIT, "-> %d [Async thread]", job->result);
   }
   COMPILER_ATOMIC_STORE(&job->state, static_cast<ncclGroupJobState_t>(ncclGroupJobDone), std::memory_order_release);
   return arg;

@@ -164,6 +164,16 @@ struct model_config_t {
   int num_of_nodes;
 };
 
+// Upper bound on LSA_TEAM_SIZE used for fixed-size pointer arrays in non-templated
+// host-side parameter structs. Must match the largest case in HYBRIDEP_SWITCH_LSA_TEAM_SIZE.
+constexpr int HYBRIDEP_MAX_LSA_TEAM_SIZE = 32;
+
+#ifdef HYBRIDEP_ENABLE_WARP_TIMING
+struct dispatch_warp_timing_entry_t { long long start_clock; long long end_clock; };
+struct combine_warp_timing_entry_t { long long work_start_clock; long long work_end_clock; };
+struct combine_block_timing_entry_t { long long head_sync_start_clock; long long head_sync_end_clock; };
+#endif
+
 // Expert-major S2D entry: int32 packed as [31:22]=rank_id (10b, <= 1024), [21:0]=slot (22b).
 // -1 = no entry.  Only used when expert-major layout is active.
 constexpr int EM_S2D_RANK_BITS  = 10;
@@ -865,8 +875,7 @@ struct dispatch_kernel_param_t{
   // Grid barrier counter for fused device_sync in dispatch tail (per-rank, not IPC-shared)
   uint32_t* dispatch_grid_barrier_counter;
 #ifdef HYBRIDEP_ENABLE_WARP_TIMING
-  struct warp_timing_entry_t { long long start_clock; long long end_clock; };
-  warp_timing_entry_t* warp_timing;
+  dispatch_warp_timing_entry_t* warp_timing;
 #endif
 };
 
@@ -916,10 +925,8 @@ struct combine_kernel_param_t{
   // qp info and mr info
   struct combine_memory_region_info_t mr_info;
 #ifdef HYBRIDEP_ENABLE_WARP_TIMING
-  struct warp_timing_entry_t { long long work_start_clock; long long work_end_clock; };
-  struct block_timing_entry_t { long long head_sync_start_clock; long long head_sync_end_clock; };
-  warp_timing_entry_t* warp_timing;
-  block_timing_entry_t* block_timing;
+  combine_warp_timing_entry_t* warp_timing;
+  combine_block_timing_entry_t* block_timing;
 #endif
 };
 

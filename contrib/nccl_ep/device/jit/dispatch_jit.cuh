@@ -28,27 +28,28 @@ inline const char* dispatch_token_data_type_literal(bool use_fp8) {
     return use_fp8 ? "uint8_t" : "uint16_t";
 }
 
-template <
-    int INTER_NODE_GROUP_WARPS,
-    int INTER_NODE_GROUP_START,
-    int INTRA_NODE_G2S_GROUP_WARPS,
-    int INTRA_NODE_G2S_GROUP_START,
-    int INTRA_NODE_S2G_GROUP_WARPS,
-    int INTRA_NODE_S2G_GROUP_START,
-    int PAD_GROUP_WARPS,
-    int PAD_GROUP_START,
-    int NUM_OF_STAGES,
-    int NUM_OF_IN_FLIGHT_S2G,
-    int NUM_OF_TOKENS_PER_CHUNK,
-    int NUM_LSA_TEAMS,
-    int NUM_OF_BLOCKS,
-    bool FORWARD_DISPATCH,
-    int NUM_PIPELINES,
-    int LSA_TEAM_SIZE,
-    ncclEpLayout_t kLayout>
-std::string dispatch_jit_source(bool use_fp8, int hidden_dim) {
+inline std::string dispatch_jit_source(
+    int inter_node_group_warps,
+    int inter_node_group_start,
+    int intra_node_g2s_group_warps,
+    int intra_node_g2s_group_start,
+    int intra_node_s2g_group_warps,
+    int intra_node_s2g_group_start,
+    int pad_group_warps,
+    int pad_group_start,
+    int num_of_stages,
+    int num_of_in_flight_s2g,
+    int num_of_tokens_per_chunk,
+    int num_lsa_teams,
+    int num_of_blocks,
+    bool forward_dispatch,
+    int num_pipelines,
+    int lsa_team_size,
+    ncclEpLayout_t layout,
+    bool use_fp8,
+    int hidden_dim) {
     const char* layout_literal =
-        (kLayout == NCCL_EP_LAYOUT_EXPERT_MAJOR)
+        (layout == NCCL_EP_LAYOUT_EXPERT_MAJOR)
             ? "NCCL_EP_LAYOUT_EXPERT_MAJOR"
             : "NCCL_EP_LAYOUT_FLAT";
     const char* token_type_literal = dispatch_token_data_type_literal(use_fp8);
@@ -57,14 +58,14 @@ std::string dispatch_jit_source(bool use_fp8, int hidden_dim) {
         << "#include \"device/hybrid_ep.cuh\"\n"
         << "\n"
         << "using TOKEN_DATA_TYPE = " << token_type_literal << ";\n"
-        << "using INTER_NODE_GROUP     = hybrid_ep::warp_group<" << INTER_NODE_GROUP_WARPS    << ", " << INTER_NODE_GROUP_START    << ">;\n"
-        << "using INTRA_NODE_G2S_GROUP = hybrid_ep::warp_group<" << INTRA_NODE_G2S_GROUP_WARPS << ", " << INTRA_NODE_G2S_GROUP_START << ">;\n"
-        << "using INTRA_NODE_S2G_GROUP = hybrid_ep::warp_group<" << INTRA_NODE_S2G_GROUP_WARPS << ", " << INTRA_NODE_S2G_GROUP_START << ">;\n"
-        << "using PAD_GROUP            = hybrid_ep::warp_group<" << PAD_GROUP_WARPS            << ", " << PAD_GROUP_START            << ">;\n"
+        << "using INTER_NODE_GROUP     = hybrid_ep::warp_group<" << inter_node_group_warps    << ", " << inter_node_group_start    << ">;\n"
+        << "using INTRA_NODE_G2S_GROUP = hybrid_ep::warp_group<" << intra_node_g2s_group_warps << ", " << intra_node_g2s_group_start << ">;\n"
+        << "using INTRA_NODE_S2G_GROUP = hybrid_ep::warp_group<" << intra_node_s2g_group_warps << ", " << intra_node_s2g_group_start << ">;\n"
+        << "using PAD_GROUP            = hybrid_ep::warp_group<" << pad_group_warps            << ", " << pad_group_start            << ">;\n"
         << "\n"
         << "extern \"C\" __launch_bounds__(INTER_NODE_GROUP::size() + INTRA_NODE_G2S_GROUP::size() + INTRA_NODE_S2G_GROUP::size() + PAD_GROUP::size(), 1)\n"
         << "__global__ void " << kDispatchJitEntryName << "(\n"
-        << "    const __grid_constant__ hybrid_ep::dispatch_kernel_param_t<TOKEN_DATA_TYPE, " << LSA_TEAM_SIZE << "> param) {\n"
+        << "    const __grid_constant__ hybrid_ep::dispatch_kernel_param_t<TOKEN_DATA_TYPE, " << lsa_team_size << "> param) {\n"
         << "  extern __shared__ uint8_t smem_bytes[];\n"
         << "  hybrid_ep::dispatch_kernel_impl<\n"
         << "      TOKEN_DATA_TYPE,\n"
@@ -72,90 +73,90 @@ std::string dispatch_jit_source(bool use_fp8, int hidden_dim) {
         << "      INTRA_NODE_G2S_GROUP,\n"
         << "      INTRA_NODE_S2G_GROUP,\n"
         << "      PAD_GROUP,\n"
-        << "      " << NUM_OF_STAGES << ",\n"
-        << "      " << NUM_OF_IN_FLIGHT_S2G << ",\n"
-        << "      " << NUM_OF_TOKENS_PER_CHUNK << ",\n"
+        << "      " << num_of_stages << ",\n"
+        << "      " << num_of_in_flight_s2g << ",\n"
+        << "      " << num_of_tokens_per_chunk << ",\n"
         << "      " << MAX_SUPPORTED_TOKENS_PER_RANK << ",\n"
-        << "      " << NUM_LSA_TEAMS << ",\n"
-        << "      " << NUM_OF_BLOCKS << ",\n"
-        << "      " << dispatch_bool_literal(FORWARD_DISPATCH) << ",\n"
-        << "      " << NUM_PIPELINES << ",\n"
-        << "      " << LSA_TEAM_SIZE << ",\n"
+        << "      " << num_lsa_teams << ",\n"
+        << "      " << num_of_blocks << ",\n"
+        << "      " << dispatch_bool_literal(forward_dispatch) << ",\n"
+        << "      " << num_pipelines << ",\n"
+        << "      " << lsa_team_size << ",\n"
         << "      " << layout_literal << ",\n"
         << "      " << hidden_dim << ">(param, smem_bytes);\n"
         << "}\n";
     return src.str();
 }
 
-template <
-    int NUM_OF_STAGES,
-    int NUM_OF_IN_FLIGHT_S2G,
-    int NUM_OF_TOKENS_PER_CHUNK,
-    int NUM_OF_BLOCKS,
-    bool FORWARD_DISPATCH,
-    int NUM_LSA_TEAMS,
-    int LSA_TEAM_SIZE,
-    ncclEpLayout_t kLayout,
-    typename TOKEN_DATA_TYPE>
-void launch_dispatch(
-    ::hybrid_ep::dispatch_kernel_param_t<TOKEN_DATA_TYPE, LSA_TEAM_SIZE>& param,
+inline void launch_dispatch(
+    int num_of_stages,
+    int num_of_in_flight_s2g,
+    int num_of_tokens_per_chunk,
+    int num_of_blocks,
+    bool forward_dispatch,
+    int num_lsa_teams,
+    int lsa_team_size,
+    ncclEpLayout_t layout,
+    bool use_fp8,
+    int hidden_dim,
+    void* param,
     int dynamic_smem_bytes,
     cudaStream_t stream) {
-    constexpr bool multinode_layout = (NUM_LSA_TEAMS != 1);
-    constexpr int NUM_PIPELINES = HYBRIDEP_DISPATCH_NUM_OF_PIPELINES_PER_BLOCK;
-    constexpr int INTER_NODE_GROUP_WARPS    = multinode_layout ? HYBRIDEP_DISPATCH_N2N_WARPS : 0;
-    constexpr int INTER_NODE_GROUP_START    = 0;
-    constexpr int INTRA_NODE_G2S_GROUP_WARPS = NUM_PIPELINES;
-    constexpr int INTRA_NODE_G2S_GROUP_START = multinode_layout ? HYBRIDEP_DISPATCH_N2N_WARPS : 0;
-    constexpr int INTRA_NODE_S2G_GROUP_WARPS = NUM_PIPELINES;
-    constexpr int INTRA_NODE_S2G_GROUP_START = multinode_layout
-        ? (HYBRIDEP_DISPATCH_N2N_WARPS + NUM_PIPELINES)
-        : NUM_PIPELINES;
-    constexpr int PAD_GROUP_WARPS = (kLayout == NCCL_EP_LAYOUT_EXPERT_MAJOR) ? 1 : 0;
-    constexpr int PAD_GROUP_START = INTRA_NODE_S2G_GROUP_START + INTRA_NODE_S2G_GROUP_WARPS;
-    constexpr int BLOCK_DIM = 32 * (
-        INTER_NODE_GROUP_WARPS +
-        INTRA_NODE_G2S_GROUP_WARPS +
-        INTRA_NODE_S2G_GROUP_WARPS +
-        PAD_GROUP_WARPS);
-    constexpr bool USE_FP8 = std::is_same_v<TOKEN_DATA_TYPE, uint8_t>;
+    const bool multinode_layout = (num_lsa_teams != 1);
+    const int num_pipelines = HYBRIDEP_DISPATCH_NUM_OF_PIPELINES_PER_BLOCK;
+    const int inter_node_group_warps    = multinode_layout ? HYBRIDEP_DISPATCH_N2N_WARPS : 0;
+    const int inter_node_group_start    = 0;
+    const int intra_node_g2s_group_warps = num_pipelines;
+    const int intra_node_g2s_group_start = multinode_layout ? HYBRIDEP_DISPATCH_N2N_WARPS : 0;
+    const int intra_node_s2g_group_warps = num_pipelines;
+    const int intra_node_s2g_group_start = multinode_layout
+        ? (HYBRIDEP_DISPATCH_N2N_WARPS + num_pipelines)
+        : num_pipelines;
+    const int pad_group_warps = (layout == NCCL_EP_LAYOUT_EXPERT_MAJOR) ? 1 : 0;
+    const int pad_group_start = intra_node_s2g_group_start + intra_node_s2g_group_warps;
+    const int block_dim = 32 * (
+        inter_node_group_warps +
+        intra_node_g2s_group_warps +
+        intra_node_s2g_group_warps +
+        pad_group_warps);
 
-    const int hidden_dim = param.hidden_dim;
     static const int variant_identity = 0;
     const std::string variant_name = [&] {
         std::ostringstream name;
         name
             << "dispatch"
-            << "_nodes" << NUM_LSA_TEAMS
-            << "_lsa" << LSA_TEAM_SIZE
+            << "_nodes" << num_lsa_teams
+            << "_lsa" << lsa_team_size
             << "_hdim" << hidden_dim
-            << "_stages" << NUM_OF_STAGES
-            << "_inflt" << NUM_OF_IN_FLIGHT_S2G
-            << "_chunk" << NUM_OF_TOKENS_PER_CHUNK
-            << "_blocks" << NUM_OF_BLOCKS
-            << (FORWARD_DISPATCH ? "_fwd" : "_bwd")
-            << (kLayout == NCCL_EP_LAYOUT_EXPERT_MAJOR ? "_em" : "_fl")
-            << (USE_FP8 ? "_fp8" : "_bf16");
+            << "_stages" << num_of_stages
+            << "_inflt" << num_of_in_flight_s2g
+            << "_chunk" << num_of_tokens_per_chunk
+            << "_blocks" << num_of_blocks
+            << (forward_dispatch ? "_fwd" : "_bwd")
+            << (layout == NCCL_EP_LAYOUT_EXPERT_MAJOR ? "_em" : "_fl")
+            << (use_fp8 ? "_fp8" : "_bf16");
         return name.str();
     }();
-    const std::string source = dispatch_jit_source<
-        INTER_NODE_GROUP_WARPS,
-        INTER_NODE_GROUP_START,
-        INTRA_NODE_G2S_GROUP_WARPS,
-        INTRA_NODE_G2S_GROUP_START,
-        INTRA_NODE_S2G_GROUP_WARPS,
-        INTRA_NODE_S2G_GROUP_START,
-        PAD_GROUP_WARPS,
-        PAD_GROUP_START,
-        NUM_OF_STAGES,
-        NUM_OF_IN_FLIGHT_S2G,
-        NUM_OF_TOKENS_PER_CHUNK,
-        NUM_LSA_TEAMS,
-        NUM_OF_BLOCKS,
-        FORWARD_DISPATCH,
-        NUM_PIPELINES,
-        LSA_TEAM_SIZE,
-        kLayout>(USE_FP8, hidden_dim);
+    const std::string source = dispatch_jit_source(
+        inter_node_group_warps,
+        inter_node_group_start,
+        intra_node_g2s_group_warps,
+        intra_node_g2s_group_start,
+        intra_node_s2g_group_warps,
+        intra_node_s2g_group_start,
+        pad_group_warps,
+        pad_group_start,
+        num_of_stages,
+        num_of_in_flight_s2g,
+        num_of_tokens_per_chunk,
+        num_lsa_teams,
+        num_of_blocks,
+        forward_dispatch,
+        num_pipelines,
+        lsa_team_size,
+        layout,
+        use_fp8,
+        hidden_dim);
 
     ::nccl_ep::jit::JitKernelVariant variant;
     variant.kernel_family = "ht_dispatch";
@@ -164,28 +165,15 @@ void launch_dispatch(
     variant.entry_name = kDispatchJitEntryName;
     variant.identity = &variant_identity;
     variant.runtime_key = static_cast<std::uint64_t>(hidden_dim);
-    variant.num_blocks = NUM_OF_BLOCKS;
-    variant.block_dim = BLOCK_DIM;
+    variant.num_blocks = num_of_blocks;
+    variant.block_dim = block_dim;
     variant.dynamic_smem_bytes = dynamic_smem_bytes;
-
-#ifdef HYBRIDEP_ENABLE_WARP_TIMING
-    using warp_timing_entry_t = typename ::hybrid_ep::dispatch_kernel_param_t<TOKEN_DATA_TYPE, LSA_TEAM_SIZE>::warp_timing_entry_t;
-    constexpr int WT_WARPS_PER_BLOCK = BLOCK_DIM / 32;
-    constexpr int WT_TOTAL = NUM_OF_BLOCKS * WT_WARPS_PER_BLOCK;
-    warp_timing_entry_t* d_wt = nullptr;
-    CUDA_CHECK(cudaMalloc(&d_wt, WT_TOTAL * sizeof(warp_timing_entry_t)));
-    CUDA_CHECK(cudaMemsetAsync(d_wt, 0, WT_TOTAL * sizeof(warp_timing_entry_t), stream));
-    param.warp_timing = d_wt;
-#endif
 
     std::string error;
     const ::nccl_ep::jit::JitKernelStatus status =
-        ::nccl_ep::jit::launch_jit_kernel(variant, &param, stream, &error);
+        ::nccl_ep::jit::launch_jit_kernel(variant, param, stream, &error);
 
     if (status != ::nccl_ep::jit::JitKernelStatus::kLaunched) {
-#ifdef HYBRIDEP_ENABLE_WARP_TIMING
-        CUDA_CHECK(cudaFree(d_wt));
-#endif
         std::fprintf(
             stderr,
             "[nccl_ep jit] fatal dispatch JIT launch failure for %s: %s%s%s\n",
@@ -195,10 +183,6 @@ void launch_dispatch(
             error.empty() ? "" : error.c_str());
         std::abort();
     }
-
-#ifdef HYBRIDEP_ENABLE_WARP_TIMING
-    CUDA_CHECK(cudaFree(d_wt));
-#endif
 }
 
 } // namespace jit

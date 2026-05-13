@@ -526,6 +526,7 @@ void dispatch_impl(
                        "experts_per_node must be multiple of 4 for TMA alignment");
 
                 auto kp = build_dispatch_param<TOKEN_DATA_TYPE, LSA_TEAM_SIZE>(params);
+                constexpr bool kUseFp8 = std::is_same_v<TOKEN_DATA_TYPE, uint8_t>;
 
                 // Compute dynamic SMEM size at host (was done inside hybrid_ep::dispatch).
                 ::hybrid_ep::dispatch_config_t d_config;
@@ -545,31 +546,41 @@ void dispatch_impl(
                 d_model.num_of_ranks_per_node    = kp.num_of_ranks_per_node;
                 d_model.num_of_nodes             = NUM_LSA_TEAMS;
 
-                if (params.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR) {
-                    const int smem_size = ::hybrid_ep::calculate_dispatch_smem_layout_size<NCCL_EP_LAYOUT_EXPERT_MAJOR>(d_config, d_model);
-                    jit::launch_dispatch<
-                        HYBRIDEP_DISPATCH_NUM_OF_STAGES,
-                        HYBRIDEP_DISPATCH_NUM_OF_IN_FLIGHT_S2G,
-                        HT_OF_NUM_TOKENS_PER_CHUNK,
-                        HYBRIDEP_DISPATCH_NUM_OF_BLOCKS,
-                        FORWARD_DISPATCH,
-                        NUM_LSA_TEAMS,
-                        LSA_TEAM_SIZE,
-                        NCCL_EP_LAYOUT_EXPERT_MAJOR,
-                        TOKEN_DATA_TYPE>(kp, smem_size, stream);
-                } else {
-                    const int smem_size = ::hybrid_ep::calculate_dispatch_smem_layout_size<NCCL_EP_LAYOUT_FLAT>(d_config, d_model);
-                    jit::launch_dispatch<
-                        HYBRIDEP_DISPATCH_NUM_OF_STAGES,
-                        HYBRIDEP_DISPATCH_NUM_OF_IN_FLIGHT_S2G,
-                        HT_OF_NUM_TOKENS_PER_CHUNK,
-                        HYBRIDEP_DISPATCH_NUM_OF_BLOCKS,
-                        FORWARD_DISPATCH,
-                        NUM_LSA_TEAMS,
-                        LSA_TEAM_SIZE,
-                        NCCL_EP_LAYOUT_FLAT,
-                        TOKEN_DATA_TYPE>(kp, smem_size, stream);
-                }
+                const int smem_size = (params.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR)
+                    ? ::hybrid_ep::calculate_dispatch_smem_layout_size<NCCL_EP_LAYOUT_EXPERT_MAJOR>(d_config, d_model)
+                    : ::hybrid_ep::calculate_dispatch_smem_layout_size<NCCL_EP_LAYOUT_FLAT>(d_config, d_model);
+
+#ifdef HYBRIDEP_ENABLE_WARP_TIMING
+                const bool dispatch_multinode = (NUM_LSA_TEAMS != 1);
+                constexpr int kDispatchNumPipelines = HYBRIDEP_DISPATCH_NUM_OF_PIPELINES_PER_BLOCK;
+                const int dispatch_inter_warps = dispatch_multinode ? HYBRIDEP_DISPATCH_N2N_WARPS : 0;
+                const int dispatch_pad_warps   = (params.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR) ? 1 : 0;
+                const int dispatch_block_dim   = 32 * (dispatch_inter_warps + 2 * kDispatchNumPipelines + dispatch_pad_warps);
+                const int dispatch_wt_total    = HYBRIDEP_DISPATCH_NUM_OF_BLOCKS * (dispatch_block_dim / 32);
+                ::hybrid_ep::dispatch_warp_timing_entry_t* d_wt = nullptr;
+                CUDA_CHECK(cudaMalloc(&d_wt, dispatch_wt_total * sizeof(::hybrid_ep::dispatch_warp_timing_entry_t)));
+                CUDA_CHECK(cudaMemsetAsync(d_wt, 0, dispatch_wt_total * sizeof(::hybrid_ep::dispatch_warp_timing_entry_t), stream));
+                kp.warp_timing = d_wt;
+#endif
+
+                jit::launch_dispatch(
+                    HYBRIDEP_DISPATCH_NUM_OF_STAGES,
+                    HYBRIDEP_DISPATCH_NUM_OF_IN_FLIGHT_S2G,
+                    HT_OF_NUM_TOKENS_PER_CHUNK,
+                    HYBRIDEP_DISPATCH_NUM_OF_BLOCKS,
+                    FORWARD_DISPATCH,
+                    NUM_LSA_TEAMS,
+                    LSA_TEAM_SIZE,
+                    params.layout,
+                    kUseFp8,
+                    kp.hidden_dim,
+                    &kp,
+                    smem_size,
+                    stream);
+
+#ifdef HYBRIDEP_ENABLE_WARP_TIMING
+                CUDA_CHECK(cudaFree(d_wt));
+#endif
             });
         });
     });
@@ -707,31 +718,40 @@ void combine_impl(
                 NUM_LSA_TEAMS,
                 BACKWARD_COMBINE>(model);
 
-            if (params.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR) {
-                jit::launch_combine<
-                    num_stages_g2s,
-                    num_stages_s2g,
-                    HT_OF_NUM_TOKENS_PER_CHUNK,
-                    HYBRIDEP_COMBINE_NUM_OF_TOKENS_PER_GROUP,
-                    HYBRIDEP_COMBINE_NUM_OF_BLOCKS,
-                    HYBRIDEP_COMBINE_NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
-                    BACKWARD_COMBINE,
-                    NUM_LSA_TEAMS,
-                    LSA_TEAM_SIZE,
-                    NCCL_EP_LAYOUT_EXPERT_MAJOR>(kp, smem_size, stream);
-            } else {
-                jit::launch_combine<
-                    num_stages_g2s,
-                    num_stages_s2g,
-                    HT_OF_NUM_TOKENS_PER_CHUNK,
-                    HYBRIDEP_COMBINE_NUM_OF_TOKENS_PER_GROUP,
-                    HYBRIDEP_COMBINE_NUM_OF_BLOCKS,
-                    HYBRIDEP_COMBINE_NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
-                    BACKWARD_COMBINE,
-                    NUM_LSA_TEAMS,
-                    LSA_TEAM_SIZE,
-                    NCCL_EP_LAYOUT_FLAT>(kp, smem_size, stream);
-            }
+#ifdef HYBRIDEP_ENABLE_WARP_TIMING
+            const jit::combine_warp_layout_t combine_layout = jit::compute_combine_warp_layout(NUM_LSA_TEAMS);
+            const int combine_wt_total = HYBRIDEP_COMBINE_NUM_OF_BLOCKS * (combine_layout.block_dim / 32);
+            ::hybrid_ep::combine_warp_timing_entry_t* d_wt = nullptr;
+            ::hybrid_ep::combine_block_timing_entry_t* d_bt = nullptr;
+            CUDA_CHECK(cudaMalloc(&d_wt, combine_wt_total * sizeof(::hybrid_ep::combine_warp_timing_entry_t)));
+            CUDA_CHECK(cudaMalloc(&d_bt, HYBRIDEP_COMBINE_NUM_OF_BLOCKS * sizeof(::hybrid_ep::combine_block_timing_entry_t)));
+            CUDA_CHECK(cudaMemsetAsync(d_wt, 0, combine_wt_total * sizeof(::hybrid_ep::combine_warp_timing_entry_t), stream));
+            CUDA_CHECK(cudaMemsetAsync(d_bt, 0, HYBRIDEP_COMBINE_NUM_OF_BLOCKS * sizeof(::hybrid_ep::combine_block_timing_entry_t), stream));
+            kp.warp_timing = d_wt;
+            kp.block_timing = d_bt;
+#endif
+
+            jit::launch_combine(
+                num_stages_g2s,
+                num_stages_s2g,
+                HT_OF_NUM_TOKENS_PER_CHUNK,
+                HYBRIDEP_COMBINE_NUM_OF_TOKENS_PER_GROUP,
+                HYBRIDEP_COMBINE_NUM_OF_BLOCKS,
+                HYBRIDEP_COMBINE_NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
+                BACKWARD_COMBINE,
+                NUM_LSA_TEAMS,
+                LSA_TEAM_SIZE,
+                params.layout,
+                kp.hidden_dim,
+                &kp,
+                smem_size,
+                stream);
+
+#ifdef HYBRIDEP_ENABLE_WARP_TIMING
+            jit::combine_dump_warp_timing(combine_layout, HYBRIDEP_COMBINE_NUM_OF_BLOCKS, d_wt, d_bt, stream);
+            CUDA_CHECK(cudaFree(d_wt));
+            CUDA_CHECK(cudaFree(d_bt));
+#endif
         });
     });
 }

@@ -1039,9 +1039,13 @@ ncclResult_t ncclEpCreateGroup(
         ep_group->config.num_qp_per_rank = HYBRIDEP_DISPATCH_NUM_OF_BLOCKS * HYBRIDEP_DISPATCH_N2N_WARPS;
     }
 
-    // Physical node properties
+    // Physical node properties. rank_in_node must lie in [0, gpus_per_node)
+    // so the peer-access loop below can skip the self-device. Using the
+    // within-comm rank (rather than the physical cuda_device_id) keeps this
+    // invariant when multiple EP comms colocate on one physical node (e.g.
+    // DP × EP mesh where ranks 4..7 form a second EP group on the same box).
     ep_group->gpus_per_node = ep_group->nRanks / ep_group->nNodes;
-    ep_group->rank_in_node  = ep_group->cuda_device_id;
+    ep_group->rank_in_node  = ep_group->rank % ep_group->gpus_per_node;
     ep_group->node_id       = ep_group->rank / ep_group->gpus_per_node;
     ep_group->lsa_team_size = lsa_team.nRanks;
     ep_group->lsa_rank = lsa_team.rank;

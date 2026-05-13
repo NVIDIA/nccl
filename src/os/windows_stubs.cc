@@ -177,4 +177,9 @@ ncclGin_t ncclGinIbProxy = {
   /* init */ ginStubInit,
 };
 
+// Windows: net_ib is excluded but gin/rma proxies still reference IbDataDirect.
+int64_t ncclParamIbDataDirect() { return 0; }
+
 #endif // NCCL_OS_WINDOWS
+
+

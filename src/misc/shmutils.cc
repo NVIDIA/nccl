@@ -67,6 +67,14 @@ ncclResult_t ncclShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize, void
     tmphandle->hMapping = NULL;
 
     if (create) {
+      #if 0  // TRT-27820: disable cudaHostAlloc-only path
+       // The original "shmPath empty && devShmPtr" path used cudaHostAlloc for
+       // same-process IPC efficiency under WDDM (avoiding the dual MapViewOfFile
+       // coherency hazard). But ncclCommInitRank (multi-process IPC) also passes
+       // an empty shmPath, and there the importer is a different process that
+       // needs a named section to attach to. Force the named-section path so
+       // both single- and multi-process collectives work; cudaHostRegister
+       // below pins the host memory for device access.
       if (shmPath[0] == '\0' && devShmPtr) {
         // Same-process anonymous allocation: use cudaHostAlloc(Portable) instead
         // of MapViewOfFile + cudaHostRegister.  Under WDDM, MapViewOfFile-backed
@@ -102,7 +110,9 @@ ncclResult_t ncclShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize, void
         tmphandle->shmPath      = NULL;
         INFO(NCCL_ALLOC, "cudaHostAlloc %zu bytes for SHM buffer hptr=%p dptr=%p", realShmSize, hptr, dptr);
         goto exit_win;
-      } else if (shmPath[0] == '\0') {
+      }
+#endif // 0 (TRT-27820 disabled cudaHostAlloc-only path)
+      if (shmPath[0] == '\0') {
         // No devShmPtr requested: fall through to named section path.
         // (This case is not expected in practice but handled for completeness.)
         //

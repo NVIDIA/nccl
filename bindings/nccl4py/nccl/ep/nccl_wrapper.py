@@ -200,7 +200,7 @@ class ncclEpLayoutInfo_t(_EpStruct):
         ("size", ctypes.c_uint),
         ("expert_counters", ncclNDTensor_t),
         ("src_rank_counters", ncclNDTensor_t),
-        ("recv_expert_offsets", ncclNDTensor_t),
+        ("expert_offsets", ncclNDTensor_t),
         ("recv_total_counter", ncclNDTensor_t),
     ]
 

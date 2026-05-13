@@ -64,7 +64,7 @@ static void tensor_free(ncclNDTensor_t t);
 #define EP_REQUIRE_STRUCT(ptr) \
     assert((ptr) != nullptr && (ptr)->size == sizeof(*(ptr)) && \
            "ABI struct size mismatch — caller and libnccl_ep.so must be from the same release")
-#define EP_REQUIRE_OPTIONAL_STRUCT(ptr) \
+#define EP_OPTIONAL_STRUCT(ptr) \
     assert(((ptr) == nullptr || (ptr)->size == sizeof(*(ptr))) && \
            "ABI struct size mismatch — caller and libnccl_ep.so must be from the same release")
 
@@ -942,10 +942,9 @@ ncclResult_t ncclEpCreateGroup(
     CUDA_CHECK(cudaStreamCreate(&stream));
     // Parameter validation
     assert(out_ep_group != nullptr);
-    assert(in_config != nullptr);
     int nRanks;
     assert(comm != nullptr && ncclCommCount(comm, &nRanks) == ncclSuccess && nRanks > 0);
-    EP_REQUIRE_STRUCT(in_config);
+    EP_REQUIRE_STRUCT(in_config);  // null-checks and size-validates in_config
     if (in_config->version != NCCL_EP_API_VERSION) {
         fprintf(stderr,
                 "NCCL EP WARN: ncclEpGroupConfig_t.version=%u, library API_VERSION=%u; "
@@ -1613,7 +1612,7 @@ ncclResult_t ncclEpHandleMemSize(
     int                         num_topk
 ) {
     assert(ep_group != nullptr && size_out != nullptr);
-    EP_REQUIRE_OPTIONAL_STRUCT(config);
+    EP_OPTIONAL_STRUCT(config);
     if (ep_group->config.algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) {
         *size_out = ht_handle_mem_size(ep_group, num_topk);
     } else if (ep_group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
@@ -1735,7 +1734,7 @@ ncclResult_t ncclEpInitHandle(
 ) {
     assert(ep_group != nullptr && out_handle != nullptr);
     assert(ep_group->comm != nullptr);
-    EP_REQUIRE_OPTIONAL_STRUCT(config);
+    EP_OPTIONAL_STRUCT(config);
     const bool use_fp8 = config && config->use_fp8;
     assert(ep_group->config.num_experts > 0);
     assert(ep_group->config.num_experts % ep_group->nRanks == 0);
@@ -1774,7 +1773,7 @@ ncclResult_t ncclEpUpdateHandle(
 {
     assert(handle != nullptr);
     assert(topk_idx != nullptr);
-    EP_REQUIRE_OPTIONAL_STRUCT(layout_info);
+    EP_OPTIONAL_STRUCT(layout_info);
     assert(topk_idx->ndim == 2);
     assert(topk_idx->datatype == ncclInt64);
     assert(tensor_is_contiguous(topk_idx));
@@ -1848,8 +1847,8 @@ ncclResult_t ncclEpUpdateHandle(
     const bool expert_major = (handle->group->config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
 
     // layout_info->expert_counters: per-expert counts (HT flat unpadded int32; EM padded int32/64).
-    // layout_info->recv_expert_offsets: EM-only per-expert offsets (int32/64).
-    ncclNDTensor_t recv_expert_offsets_tensor = layout_info ? layout_info->recv_expert_offsets : nullptr;
+    // layout_info->expert_offsets: EM-only per-expert offsets (int32/64).
+    ncclNDTensor_t recv_expert_offsets_tensor = layout_info ? layout_info->expert_offsets : nullptr;
     auto check_int32_or_int64 = [&](ncclNDTensor_t t, const char* name) {
         assert(t->ndim == 1 && "tensor must be 1D");
         assert((t->datatype == ncclInt32 || t->datatype == ncclInt64) && "tensor must be ncclInt32 or ncclInt64");
@@ -1874,7 +1873,7 @@ ncclResult_t ncclEpUpdateHandle(
     }
     void* out_offsets = nullptr;
     if (expert_major && recv_expert_offsets_tensor != nullptr) {
-        check_int32_or_int64(recv_expert_offsets_tensor, "recv_expert_offsets");
+        check_int32_or_int64(recv_expert_offsets_tensor, "expert_offsets");
         out_offsets = recv_expert_offsets_tensor->data;
         track_out_dtype(recv_expert_offsets_tensor);
     }
@@ -2010,8 +2009,8 @@ ncclResult_t ncclEpDispatch(
 ) {
     EP_REQUIRE_STRUCT(inputs);
     EP_REQUIRE_STRUCT(outputs);
-    EP_REQUIRE_OPTIONAL_STRUCT(layout_info);
-    EP_REQUIRE_OPTIONAL_STRUCT(config);
+    EP_OPTIONAL_STRUCT(layout_info);
+    EP_OPTIONAL_STRUCT(config);
     const unsigned int send_only = config ? config->send_only : 0;
         ncclEpGroup_t group = handle->group;
 
@@ -2528,7 +2527,7 @@ ncclResult_t ncclEpCombine(
 ) {
     EP_REQUIRE_STRUCT(inputs);
     EP_REQUIRE_STRUCT(outputs);
-    EP_REQUIRE_OPTIONAL_STRUCT(config);
+    EP_OPTIONAL_STRUCT(config);
     const unsigned int send_only = config ? config->send_only : 0;
     if (handle->group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
         // Find and validate input tensors

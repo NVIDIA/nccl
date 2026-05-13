@@ -2835,7 +2835,7 @@ int main(int argc, char* argv[]) {
     ncclEpLayoutInfo_t handle_layout_info = NCCL_EP_LAYOUT_INFO_INIT;
     handle_layout_info.expert_counters = recv_expert_counter_tensor;
     handle_layout_info.recv_total_counter  = recv_total_counter_tensor;
-    handle_layout_info.recv_expert_offsets = meta_offsets_tensor;
+    handle_layout_info.expert_offsets = meta_offsets_tensor;
     const bool has_handle_layout_info =
         recv_expert_counter_tensor || recv_total_counter_tensor || meta_offsets_tensor;
 

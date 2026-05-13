@@ -205,7 +205,7 @@ typedef struct {
                                         //   LL expert-major: per-expert received token counts (dispatch time).
     ncclNDTensor_t src_rank_counters;    // 1D [num_ranks] int32
                                         //   LL rank-major only: per-source-rank token counts (dispatch time).
-    ncclNDTensor_t recv_expert_offsets; // 1D [num_local_experts] int32 or int64
+    ncclNDTensor_t expert_offsets; // 1D [num_local_experts] int32 or int64
                                         //   HT expert-major only: prefix sum of padded per-expert counts.
     ncclNDTensor_t recv_total_counter;  // 1D [1] int32 or int64
                                         //   HT: scalar total recv token count. Flat: unpadded. EM: padded slot total.

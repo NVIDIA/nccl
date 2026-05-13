@@ -356,7 +356,6 @@ static ncclResult_t socketFinalizeAccept(struct ncclSocket* sock) {
       INFO(NCCL_NET|NCCL_INIT, "socketFinalizeAccept from %s: socket magic mismatch (peer 0x%016llx != expected 0x%016llx), discarding peer connection",
         ncclSocketToString(&sock->addr, line), (unsigned long long)magic, (unsigned long long)sock->magic);
       ncclOsSocketResetAccept(sock);
-      sock->state = ncclSocketStateBadMagic;
       return ncclSuccess;
     }
   }
@@ -444,6 +443,7 @@ ncclResult_t ncclSocketReady(struct ncclSocket* sock, int *running) {
   *running = (sock->state == ncclSocketStateReady) ? 1 : 0;
   if (*running == 0) {
     NCCLCHECK(socketProgressState(sock));
+    if (sock->state == ncclSocketStateBadHandshake) sock->state = ncclSocketStateAccepting;
     *running = (sock->state == ncclSocketStateReady) ? 1 : 0;
   }
   return ncclSuccess;
@@ -496,7 +496,7 @@ ncclResult_t ncclSocketConnect(struct ncclSocket* sock) {
   }
 }
 
-ncclResult_t ncclSocketAccept(struct ncclSocket* sock, struct ncclSocket* listenSock, bool retryOnBadMagic) {
+ncclResult_t ncclSocketAccept(struct ncclSocket* sock, struct ncclSocket* listenSock, bool retry) {
   ncclResult_t ret = ncclSuccess;
 
   if (listenSock == NULL || sock == NULL) {
@@ -522,8 +522,10 @@ ncclResult_t ncclSocketAccept(struct ncclSocket* sock, struct ncclSocket* listen
 
   do {
     NCCLCHECKGOTO(socketProgressState(sock), ret, exit);
-    if (sock->state == ncclSocketStateBadMagic && retryOnBadMagic) {
+    if (sock->state == ncclSocketStateBadHandshake) {
+      // Most likely some issue with magic.  We will retry from the beginning, unless the caller requested not to.
       sock->state = ncclSocketStateAccepting;
+      if (!retry) break;
     }
   } while (sock->asyncFlag == 0 &&
       (sock->abortFlag == NULL || COMPILER_ATOMIC_LOAD(sock->abortFlag, std::memory_order_acquire) == 0) &&
@@ -536,7 +538,6 @@ ncclResult_t ncclSocketAccept(struct ncclSocket* sock, struct ncclSocket* listen
     case ncclSocketStateAccepting:
     case ncclSocketStateAccepted:
     case ncclSocketStateReady:
-    case ncclSocketStateBadMagic:
       ret = ncclSuccess;
       break;
     case ncclSocketStateError:

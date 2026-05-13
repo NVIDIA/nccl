@@ -243,7 +243,7 @@ void ncclOsSocketResetAccept(struct ncclSocket* sock) {
   // Close the accepted peer and return to listening for another connection (see socketFinalizeAccept logging).
   (void)close(sock->socketDescriptor);
   sock->socketDescriptor = NCCL_INVALID_SOCKET;
-  sock->state = ncclSocketStateAccepting;
+  sock->state = ncclSocketStateBadHandshake;
   sock->finalizeCounter = 0;
 }
 

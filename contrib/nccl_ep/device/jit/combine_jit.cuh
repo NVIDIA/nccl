@@ -94,7 +94,7 @@ inline std::string combine_jit_source(
         << "\n"
         << "extern \"C\" __launch_bounds__(INTRA_NODE_RED_GROUP::size() + INTER_NODE_RED_GROUP::size() + INTRA_NODE_G2S_GROUP::size() + INTER_NODE_G2S_GROUP::size() + INTER_NODE_RDMA_GROUP::size(), 1)\n"
         << "__global__ void " << kCombineJitEntryName << "(\n"
-        << "    const __grid_constant__ hybrid_ep::combine_kernel_param_t<" << lsa_team_size << "> param) {\n"
+        << "    const __grid_constant__ hybrid_ep::combine_kernel_param_t param) {\n"
         << "  extern __shared__ uint8_t smem_bytes[];\n"
         << "  hybrid_ep::combine_kernel_impl<\n"
         << "      INTRA_NODE_RED_GROUP,\n"

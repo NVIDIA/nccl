@@ -42,20 +42,6 @@ INCFLAGS = -I. -I./include -I./device -I$(BUILDDIR)/include -I$(BUILDDIR)/includ
 NVCUFLAGS := $(NVCC_GENCODE) --extended-lambda $(INCFLAGS) --expt-relaxed-constexpr --compiler-options "-fPIC -fvisibility=hidden" -ccbin $(CXX) $(CXXSTD)
 CXXFLAGS += $(INCFLAGS) $(NCCL_EP_JIT_DEFS) -I$(CUDA_INC) -I$(CUDA_INC)/cccl -fPIC -fvisibility=default
 
-# Configurable LSA team size range for compile-time instantiation.
-# Restricting the range reduces build time during development.  Example:
-#   make _NCCL_EP_LSA_TEAM_SIZE_MIN=8 _NCCL_EP_LSA_TEAM_SIZE_MAX=8
-_NCCL_EP_LSA_TEAM_SIZE_MIN ?= 4
-_NCCL_EP_LSA_TEAM_SIZE_MAX ?= 32
-NVCUFLAGS += -D_NCCL_EP_LSA_TEAM_SIZE_MIN=$(_NCCL_EP_LSA_TEAM_SIZE_MIN)
-NVCUFLAGS += -D_NCCL_EP_LSA_TEAM_SIZE_MAX=$(_NCCL_EP_LSA_TEAM_SIZE_MAX)
-
-# Configurable NUM_LSA_TEAMS list for compile-time instantiation.
-# Restricting the list reduces build time during development.  Example:
-#   make _NCCL_EP_NUM_LSA_TEAMS_LIST="1 2" MPI=1 -j8
-_NCCL_EP_NUM_LSA_TEAMS_LIST ?= 1 2 3 4 8
-NVCUFLAGS += $(foreach N,$(_NCCL_EP_NUM_LSA_TEAMS_LIST),-D_NCCL_EP_NUM_LSA_TEAMS_$(N)=1)
-
 # Dependency generation flags for automatic header tracking
 DEPFLAGS = -MMD -MP
 

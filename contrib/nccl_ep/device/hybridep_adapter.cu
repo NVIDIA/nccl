@@ -367,8 +367,7 @@ void call_metadata_preprocessing(
     }
 
     // MNNVL configurations (> 32 GPUs per LSA domain) are not yet supported: the scan
-    // kernel uses warp-reduction (LSA_TEAM_SIZE <= 32) and HYBRIDEP_SWITCH_LSA_TEAM_SIZE
-    // is only instantiated up to 32. Extend both when adding MNNVL support.
+    // kernel uses warp-reduction (LSA_TEAM_SIZE <= 32). Extend when adding MNNVL support.
     EP_HOST_ASSERT(num_ranks_per_node <= 32 && "metadata_preprocessing: LSA team size > 32 not yet supported (MNNVL)");
 
     constexpr int NUM_THREADS_PER_BLOCK = HYBRIDEP_NUM_THREADS_PER_BLOCK_PREPROCESSING;
@@ -424,11 +423,13 @@ size_t get_preprocessing_scan_tmp_size(int num_ranks_per_node) {
 }
 
 size_t get_rank_mask_elem_size(int lsa_team_size) {
-    size_t result = 0;
-    HYBRIDEP_SWITCH_LSA_TEAM_SIZE(lsa_team_size, {
-        result = sizeof(::hybrid_ep::RankMask<LSA_TEAM_SIZE>);
-    });
-    return result;
+    // RankMask<N> picks the smallest unsigned int type that holds N bits.
+    if (lsa_team_size <= 8)  return sizeof(uint8_t);
+    if (lsa_team_size <= 16) return sizeof(uint16_t);
+    if (lsa_team_size <= 32) return sizeof(uint32_t);
+    if (lsa_team_size <= 64) return sizeof(uint64_t);
+    assert(false && "lsa_team_size > 64 is not supported");
+    return 0;
 }
 
 // ============================================================================
@@ -436,10 +437,10 @@ size_t get_rank_mask_elem_size(int lsa_team_size) {
 // ============================================================================
 
 // Helper to populate dispatch_kernel_param_t from DispatchParams
-template<typename TOKEN_DATA_TYPE, int LSA_TEAM_SIZE>
-::hybrid_ep::dispatch_kernel_param_t<TOKEN_DATA_TYPE, LSA_TEAM_SIZE>
+template<typename TOKEN_DATA_TYPE>
+::hybrid_ep::dispatch_kernel_param_t<TOKEN_DATA_TYPE>
 build_dispatch_param(const DispatchParams& params) {
-    ::hybrid_ep::dispatch_kernel_param_t<TOKEN_DATA_TYPE, LSA_TEAM_SIZE> kp{};
+    ::hybrid_ep::dispatch_kernel_param_t<TOKEN_DATA_TYPE> kp{};
     // Model configuration
     kp.hidden_dim = params.hidden_dim;
     kp.experts_per_rank = params.experts_per_rank;
@@ -517,72 +518,70 @@ void dispatch_impl(
     cudaStream_t stream
 ) {
     HYBRIDEP_SWITCH_DATATYPE(use_fp8, {
-        HYBRIDEP_SWITCH_NUM_LSA_TEAMS(num_nodes, {
-            HYBRIDEP_SWITCH_LSA_TEAM_SIZE(params.num_ranks_per_node, {
-                // TMA requires prob buffer (experts_per_node * sizeof(float)) to be 16B aligned
-                // Check alignment at runtime now that experts_per_rank is dynamic
-                const int experts_per_node = params.experts_per_rank * params.num_ranks_per_node;
-                assert((experts_per_node * sizeof(float)) % 16 == 0 &&
-                       "experts_per_node must be multiple of 4 for TMA alignment");
+        // TMA requires prob buffer (experts_per_node * sizeof(float)) to be 16B aligned
+        // Check alignment at runtime now that experts_per_rank is dynamic
+        const int experts_per_node = params.experts_per_rank * params.num_ranks_per_node;
+        assert((experts_per_node * sizeof(float)) % 16 == 0 &&
+               "experts_per_node must be multiple of 4 for TMA alignment");
+        assert(params.num_ranks_per_node <= ::hybrid_ep::HYBRIDEP_MAX_LSA_TEAM_SIZE &&
+               "num_ranks_per_node exceeds HYBRIDEP_MAX_LSA_TEAM_SIZE");
 
-                auto kp = build_dispatch_param<TOKEN_DATA_TYPE, LSA_TEAM_SIZE>(params);
-                constexpr bool kUseFp8 = std::is_same_v<TOKEN_DATA_TYPE, uint8_t>;
+        auto kp = build_dispatch_param<TOKEN_DATA_TYPE>(params);
+        constexpr bool kUseFp8 = std::is_same_v<TOKEN_DATA_TYPE, uint8_t>;
 
-                // Compute dynamic SMEM size at host (was done inside hybrid_ep::dispatch).
-                ::hybrid_ep::dispatch_config_t d_config;
-                ::hybrid_ep::model_config_t   d_model;
-                d_config.num_of_stages           = HYBRIDEP_DISPATCH_NUM_OF_STAGES;
-                d_config.num_of_in_flight_s2g    = HYBRIDEP_DISPATCH_NUM_OF_IN_FLIGHT_S2G;
-                d_config.num_of_tokens_per_chunk = HT_OF_NUM_TOKENS_PER_CHUNK;
-                d_config.num_of_blocks           = HYBRIDEP_DISPATCH_NUM_OF_BLOCKS;
-                d_config.forward_dispatch        = FORWARD_DISPATCH;
-                d_config.token_data_type         = std::is_same_v<TOKEN_DATA_TYPE, uint16_t> ? 1 : 0;
-                d_config.num_pipelines           = HYBRIDEP_DISPATCH_NUM_OF_PIPELINES_PER_BLOCK;
-                d_config.stages_per_pipeline     = HYBRIDEP_DISPATCH_NUM_OF_STAGES / HYBRIDEP_DISPATCH_NUM_OF_PIPELINES_PER_BLOCK;
-                d_config.s2d_inner_dim           = kp.s2d_inner_dim;
-                d_model.hidden_dim               = kp.hidden_dim;
-                d_model.max_num_of_tokens_per_rank = MAX_SUPPORTED_TOKENS_PER_RANK;
-                d_model.num_of_experts_per_rank  = kp.experts_per_rank;
-                d_model.num_of_ranks_per_node    = kp.num_of_ranks_per_node;
-                d_model.num_of_nodes             = NUM_LSA_TEAMS;
+        // Compute dynamic SMEM size at host (was done inside hybrid_ep::dispatch).
+        ::hybrid_ep::dispatch_config_t d_config;
+        ::hybrid_ep::model_config_t   d_model;
+        d_config.num_of_stages           = HYBRIDEP_DISPATCH_NUM_OF_STAGES;
+        d_config.num_of_in_flight_s2g    = HYBRIDEP_DISPATCH_NUM_OF_IN_FLIGHT_S2G;
+        d_config.num_of_tokens_per_chunk = HT_OF_NUM_TOKENS_PER_CHUNK;
+        d_config.num_of_blocks           = HYBRIDEP_DISPATCH_NUM_OF_BLOCKS;
+        d_config.forward_dispatch        = FORWARD_DISPATCH;
+        d_config.token_data_type         = std::is_same_v<TOKEN_DATA_TYPE, uint16_t> ? 1 : 0;
+        d_config.num_pipelines           = HYBRIDEP_DISPATCH_NUM_OF_PIPELINES_PER_BLOCK;
+        d_config.stages_per_pipeline     = HYBRIDEP_DISPATCH_NUM_OF_STAGES / HYBRIDEP_DISPATCH_NUM_OF_PIPELINES_PER_BLOCK;
+        d_config.s2d_inner_dim           = kp.s2d_inner_dim;
+        d_model.hidden_dim               = kp.hidden_dim;
+        d_model.max_num_of_tokens_per_rank = MAX_SUPPORTED_TOKENS_PER_RANK;
+        d_model.num_of_experts_per_rank  = kp.experts_per_rank;
+        d_model.num_of_ranks_per_node    = kp.num_of_ranks_per_node;
+        d_model.num_of_nodes             = num_nodes;
 
-                const int smem_size = (params.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR)
-                    ? ::hybrid_ep::calculate_dispatch_smem_layout_size<NCCL_EP_LAYOUT_EXPERT_MAJOR>(d_config, d_model)
-                    : ::hybrid_ep::calculate_dispatch_smem_layout_size<NCCL_EP_LAYOUT_FLAT>(d_config, d_model);
-
-#ifdef HYBRIDEP_ENABLE_WARP_TIMING
-                const bool dispatch_multinode = (NUM_LSA_TEAMS != 1);
-                constexpr int kDispatchNumPipelines = HYBRIDEP_DISPATCH_NUM_OF_PIPELINES_PER_BLOCK;
-                const int dispatch_inter_warps = dispatch_multinode ? HYBRIDEP_DISPATCH_N2N_WARPS : 0;
-                const int dispatch_pad_warps   = (params.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR) ? 1 : 0;
-                const int dispatch_block_dim   = 32 * (dispatch_inter_warps + 2 * kDispatchNumPipelines + dispatch_pad_warps);
-                const int dispatch_wt_total    = HYBRIDEP_DISPATCH_NUM_OF_BLOCKS * (dispatch_block_dim / 32);
-                ::hybrid_ep::dispatch_warp_timing_entry_t* d_wt = nullptr;
-                CUDA_CHECK(cudaMalloc(&d_wt, dispatch_wt_total * sizeof(::hybrid_ep::dispatch_warp_timing_entry_t)));
-                CUDA_CHECK(cudaMemsetAsync(d_wt, 0, dispatch_wt_total * sizeof(::hybrid_ep::dispatch_warp_timing_entry_t), stream));
-                kp.warp_timing = d_wt;
-#endif
-
-                jit::launch_dispatch(
-                    HYBRIDEP_DISPATCH_NUM_OF_STAGES,
-                    HYBRIDEP_DISPATCH_NUM_OF_IN_FLIGHT_S2G,
-                    HT_OF_NUM_TOKENS_PER_CHUNK,
-                    HYBRIDEP_DISPATCH_NUM_OF_BLOCKS,
-                    FORWARD_DISPATCH,
-                    NUM_LSA_TEAMS,
-                    LSA_TEAM_SIZE,
-                    params.layout,
-                    kUseFp8,
-                    kp.hidden_dim,
-                    &kp,
-                    smem_size,
-                    stream);
+        const int smem_size = (params.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR)
+            ? ::hybrid_ep::calculate_dispatch_smem_layout_size<NCCL_EP_LAYOUT_EXPERT_MAJOR>(d_config, d_model)
+            : ::hybrid_ep::calculate_dispatch_smem_layout_size<NCCL_EP_LAYOUT_FLAT>(d_config, d_model);
 
 #ifdef HYBRIDEP_ENABLE_WARP_TIMING
-                CUDA_CHECK(cudaFree(d_wt));
+        const bool dispatch_multinode = (num_nodes != 1);
+        constexpr int kDispatchNumPipelines = HYBRIDEP_DISPATCH_NUM_OF_PIPELINES_PER_BLOCK;
+        const int dispatch_inter_warps = dispatch_multinode ? HYBRIDEP_DISPATCH_N2N_WARPS : 0;
+        const int dispatch_pad_warps   = (params.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR) ? 1 : 0;
+        const int dispatch_block_dim   = 32 * (dispatch_inter_warps + 2 * kDispatchNumPipelines + dispatch_pad_warps);
+        const int dispatch_wt_total    = HYBRIDEP_DISPATCH_NUM_OF_BLOCKS * (dispatch_block_dim / 32);
+        ::hybrid_ep::dispatch_warp_timing_entry_t* d_wt = nullptr;
+        CUDA_CHECK(cudaMalloc(&d_wt, dispatch_wt_total * sizeof(::hybrid_ep::dispatch_warp_timing_entry_t)));
+        CUDA_CHECK(cudaMemsetAsync(d_wt, 0, dispatch_wt_total * sizeof(::hybrid_ep::dispatch_warp_timing_entry_t), stream));
+        kp.warp_timing = d_wt;
 #endif
-            });
-        });
+
+        jit::launch_dispatch(
+            HYBRIDEP_DISPATCH_NUM_OF_STAGES,
+            HYBRIDEP_DISPATCH_NUM_OF_IN_FLIGHT_S2G,
+            HT_OF_NUM_TOKENS_PER_CHUNK,
+            HYBRIDEP_DISPATCH_NUM_OF_BLOCKS,
+            FORWARD_DISPATCH,
+            num_nodes,
+            params.num_ranks_per_node,
+            params.layout,
+            kUseFp8,
+            kp.hidden_dim,
+            &kp,
+            smem_size,
+            stream);
+
+#ifdef HYBRIDEP_ENABLE_WARP_TIMING
+        CUDA_CHECK(cudaFree(d_wt));
+#endif
     });
 }
 
@@ -613,10 +612,9 @@ void call_dispatch(
 // ============================================================================
 
 // Helper to populate combine_kernel_param_t from CombineParams
-template<int LSA_TEAM_SIZE>
-::hybrid_ep::combine_kernel_param_t<LSA_TEAM_SIZE>
+::hybrid_ep::combine_kernel_param_t
 build_combine_param(const CombineParams& params) {
-    ::hybrid_ep::combine_kernel_param_t<LSA_TEAM_SIZE> kp{};
+    ::hybrid_ep::combine_kernel_param_t kp{};
 
     // Copy IPC buffer pointers from HOST arrays into embedded param struct arrays.
     // This allows fast __grid_constant__ access in the kernel (vs slow global memory indirection).
@@ -687,73 +685,72 @@ void combine_impl(
     int num_nodes,
     cudaStream_t stream
 ) {
-    HYBRIDEP_SWITCH_NUM_LSA_TEAMS(num_nodes, {
-        HYBRIDEP_SWITCH_LSA_TEAM_SIZE(params.num_ranks_per_node, {
-            // TMA requires prob buffer (experts_per_node * sizeof(float)) to be 16B aligned
-            const int experts_per_node = params.experts_per_rank * params.num_ranks_per_node;
-            assert((experts_per_node * sizeof(float)) % 16 == 0 &&
-                   "experts_per_node must be multiple of 4 for TMA alignment");
+    // TMA requires prob buffer (experts_per_node * sizeof(float)) to be 16B aligned
+    const int experts_per_node = params.experts_per_rank * params.num_ranks_per_node;
+    assert((experts_per_node * sizeof(float)) % 16 == 0 &&
+           "experts_per_node must be multiple of 4 for TMA alignment");
+    assert(params.num_ranks_per_node <= ::hybrid_ep::HYBRIDEP_MAX_LSA_TEAM_SIZE &&
+           "num_ranks_per_node exceeds HYBRIDEP_MAX_LSA_TEAM_SIZE");
 
-            auto kp = build_combine_param<LSA_TEAM_SIZE>(params);
+    auto kp = build_combine_param(params);
 
-            // Select config based on NUM_LSA_TEAMS (single-node: 12 stages/2 pipelines, multi-node: 5 stages/1 pipeline)
-            constexpr int num_stages_g2s = (NUM_LSA_TEAMS == 1)
-                ? HYBRIDEP_COMBINE_SINGLENODE_NUM_OF_STAGES_G2S
-                : HYBRIDEP_COMBINE_MULTINODE_NUM_OF_STAGES_G2S;
-            constexpr int num_stages_s2g = (NUM_LSA_TEAMS == 1)
-                ? HYBRIDEP_COMBINE_SINGLENODE_NUM_OF_STAGES_S2G
-                : HYBRIDEP_COMBINE_MULTINODE_NUM_OF_STAGES_S2G;
+    // Select config based on num_nodes (single-node: 12 stages/2 pipelines, multi-node: 5 stages/1 pipeline)
+    const int num_stages_g2s = (num_nodes == 1)
+        ? HYBRIDEP_COMBINE_SINGLENODE_NUM_OF_STAGES_G2S
+        : HYBRIDEP_COMBINE_MULTINODE_NUM_OF_STAGES_G2S;
+    const int num_stages_s2g = (num_nodes == 1)
+        ? HYBRIDEP_COMBINE_SINGLENODE_NUM_OF_STAGES_S2G
+        : HYBRIDEP_COMBINE_MULTINODE_NUM_OF_STAGES_S2G;
 
-            ::hybrid_ep::model_config_t model;
-            model.hidden_dim = kp.hidden_dim;
-            model.max_num_of_tokens_per_rank = MAX_SUPPORTED_TOKENS_PER_RANK;
-            model.num_of_experts_per_rank = kp.experts_per_rank;
-            model.num_of_ranks_per_node = kp.num_of_ranks_per_node;
-            model.num_of_nodes = NUM_LSA_TEAMS;
-            const int smem_size = ::hybrid_ep::calculate_combine_smem_layout_size<
-                num_stages_g2s,
-                num_stages_s2g,
-                HT_OF_NUM_TOKENS_PER_CHUNK,
-                MAX_SUPPORTED_TOKENS_PER_RANK,
-                NUM_LSA_TEAMS,
-                BACKWARD_COMBINE>(model);
-
-#ifdef HYBRIDEP_ENABLE_WARP_TIMING
-            const jit::combine_warp_layout_t combine_layout = jit::compute_combine_warp_layout(NUM_LSA_TEAMS);
-            const int combine_wt_total = HYBRIDEP_COMBINE_NUM_OF_BLOCKS * (combine_layout.block_dim / 32);
-            ::hybrid_ep::combine_warp_timing_entry_t* d_wt = nullptr;
-            ::hybrid_ep::combine_block_timing_entry_t* d_bt = nullptr;
-            CUDA_CHECK(cudaMalloc(&d_wt, combine_wt_total * sizeof(::hybrid_ep::combine_warp_timing_entry_t)));
-            CUDA_CHECK(cudaMalloc(&d_bt, HYBRIDEP_COMBINE_NUM_OF_BLOCKS * sizeof(::hybrid_ep::combine_block_timing_entry_t)));
-            CUDA_CHECK(cudaMemsetAsync(d_wt, 0, combine_wt_total * sizeof(::hybrid_ep::combine_warp_timing_entry_t), stream));
-            CUDA_CHECK(cudaMemsetAsync(d_bt, 0, HYBRIDEP_COMBINE_NUM_OF_BLOCKS * sizeof(::hybrid_ep::combine_block_timing_entry_t), stream));
-            kp.warp_timing = d_wt;
-            kp.block_timing = d_bt;
-#endif
-
-            jit::launch_combine(
-                num_stages_g2s,
-                num_stages_s2g,
-                HT_OF_NUM_TOKENS_PER_CHUNK,
-                HYBRIDEP_COMBINE_NUM_OF_TOKENS_PER_GROUP,
-                HYBRIDEP_COMBINE_NUM_OF_BLOCKS,
-                HYBRIDEP_COMBINE_NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
-                BACKWARD_COMBINE,
-                NUM_LSA_TEAMS,
-                LSA_TEAM_SIZE,
-                params.layout,
-                kp.hidden_dim,
-                &kp,
-                smem_size,
-                stream);
+    ::hybrid_ep::model_config_t model;
+    model.hidden_dim = kp.hidden_dim;
+    model.max_num_of_tokens_per_rank = MAX_SUPPORTED_TOKENS_PER_RANK;
+    model.num_of_experts_per_rank = kp.experts_per_rank;
+    model.num_of_ranks_per_node = kp.num_of_ranks_per_node;
+    model.num_of_nodes = num_nodes;
+    const int smem_size = ::hybrid_ep::calculate_combine_smem_layout_size(
+        num_stages_g2s,
+        num_stages_s2g,
+        HT_OF_NUM_TOKENS_PER_CHUNK,
+        MAX_SUPPORTED_TOKENS_PER_RANK,
+        num_nodes,
+        BACKWARD_COMBINE,
+        model);
 
 #ifdef HYBRIDEP_ENABLE_WARP_TIMING
-            jit::combine_dump_warp_timing(combine_layout, HYBRIDEP_COMBINE_NUM_OF_BLOCKS, d_wt, d_bt, stream);
-            CUDA_CHECK(cudaFree(d_wt));
-            CUDA_CHECK(cudaFree(d_bt));
+    const jit::combine_warp_layout_t combine_layout = jit::compute_combine_warp_layout(num_nodes);
+    const int combine_wt_total = HYBRIDEP_COMBINE_NUM_OF_BLOCKS * (combine_layout.block_dim / 32);
+    ::hybrid_ep::combine_warp_timing_entry_t* d_wt = nullptr;
+    ::hybrid_ep::combine_block_timing_entry_t* d_bt = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_wt, combine_wt_total * sizeof(::hybrid_ep::combine_warp_timing_entry_t)));
+    CUDA_CHECK(cudaMalloc(&d_bt, HYBRIDEP_COMBINE_NUM_OF_BLOCKS * sizeof(::hybrid_ep::combine_block_timing_entry_t)));
+    CUDA_CHECK(cudaMemsetAsync(d_wt, 0, combine_wt_total * sizeof(::hybrid_ep::combine_warp_timing_entry_t), stream));
+    CUDA_CHECK(cudaMemsetAsync(d_bt, 0, HYBRIDEP_COMBINE_NUM_OF_BLOCKS * sizeof(::hybrid_ep::combine_block_timing_entry_t), stream));
+    kp.warp_timing = d_wt;
+    kp.block_timing = d_bt;
 #endif
-        });
-    });
+
+    jit::launch_combine(
+        num_stages_g2s,
+        num_stages_s2g,
+        HT_OF_NUM_TOKENS_PER_CHUNK,
+        HYBRIDEP_COMBINE_NUM_OF_TOKENS_PER_GROUP,
+        HYBRIDEP_COMBINE_NUM_OF_BLOCKS,
+        HYBRIDEP_COMBINE_NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
+        BACKWARD_COMBINE,
+        num_nodes,
+        params.num_ranks_per_node,
+        params.layout,
+        kp.hidden_dim,
+        &kp,
+        smem_size,
+        stream);
+
+#ifdef HYBRIDEP_ENABLE_WARP_TIMING
+    jit::combine_dump_warp_timing(combine_layout, HYBRIDEP_COMBINE_NUM_OF_BLOCKS, d_wt, d_bt, stream);
+    CUDA_CHECK(cudaFree(d_wt));
+    CUDA_CHECK(cudaFree(d_bt));
+#endif
 }
 
 void call_combine(

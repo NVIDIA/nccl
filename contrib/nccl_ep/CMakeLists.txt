@@ -56,16 +56,6 @@ set_target_properties(nccl_ep_shared PROPERTIES
     INSTALL_RPATH "$ORIGIN"
 )
 
-# Configurable LSA team size range for compile-time instantiation.
-# Restricting the range reduces build time during development.  Example:
-#   cmake ... -D_NCCL_EP_LSA_TEAM_SIZE_MIN=8 -D_NCCL_EP_LSA_TEAM_SIZE_MAX=8
-set(_NCCL_EP_LSA_TEAM_SIZE_MIN "4" CACHE STRING
-    "Minimum LSA team size to compile (must be multiple of 4, min 4)")
-set(_NCCL_EP_LSA_TEAM_SIZE_MAX "32" CACHE STRING
-    "Maximum LSA team size to compile (must be multiple of 4, max 32)")
-set(_NCCL_EP_NUM_LSA_TEAMS_LIST "1;2;3;4;8" CACHE STRING
-    "List of NUM_LSA_TEAMS values to compile (subset of 1 2 3 4 8)")
-
 set(NCCL_EP_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -85,8 +75,6 @@ foreach(t IN LISTS NCCL_EP_TARGETS)
         $<$<COMPILE_LANGUAGE:CUDA>:--compiler-options=-fvisibility=hidden>
     )
     target_compile_definitions(${t} PRIVATE
-        _NCCL_EP_LSA_TEAM_SIZE_MIN=${_NCCL_EP_LSA_TEAM_SIZE_MIN}
-        _NCCL_EP_LSA_TEAM_SIZE_MAX=${_NCCL_EP_LSA_TEAM_SIZE_MAX}
         NCCL_EP_JIT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
         NCCL_EP_JIT_BUILD_INCLUDE_DIR="${CMAKE_BINARY_DIR}/include"
         NCCL_EP_JIT_CUDA_INCLUDE_DIR="${CUDAToolkit_INCLUDE_DIRS}")
@@ -97,12 +85,6 @@ foreach(t IN LISTS NCCL_EP_TARGETS)
     endif()
     target_include_directories(${t} PUBLIC ${NCCL_EP_INCLUDE_DIRS})
     target_link_libraries(${t} PUBLIC nccl ${CUDAToolkit_LIBRARIES})
-endforeach()
-
-foreach(N IN LISTS _NCCL_EP_NUM_LSA_TEAMS_LIST)
-    foreach(t IN LISTS NCCL_EP_TARGETS)
-        target_compile_definitions(${t} PRIVATE _NCCL_EP_NUM_LSA_TEAMS_${N}=1)
-    endforeach()
 endforeach()
 
 # Copy headers to build/include (runs at configure)

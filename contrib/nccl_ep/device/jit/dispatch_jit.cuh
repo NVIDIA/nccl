@@ -65,7 +65,7 @@ inline std::string dispatch_jit_source(
         << "\n"
         << "extern \"C\" __launch_bounds__(INTER_NODE_GROUP::size() + INTRA_NODE_G2S_GROUP::size() + INTRA_NODE_S2G_GROUP::size() + PAD_GROUP::size(), 1)\n"
         << "__global__ void " << kDispatchJitEntryName << "(\n"
-        << "    const __grid_constant__ hybrid_ep::dispatch_kernel_param_t<TOKEN_DATA_TYPE, " << lsa_team_size << "> param) {\n"
+        << "    const __grid_constant__ hybrid_ep::dispatch_kernel_param_t<TOKEN_DATA_TYPE> param) {\n"
         << "  extern __shared__ uint8_t smem_bytes[];\n"
         << "  hybrid_ep::dispatch_kernel_impl<\n"
         << "      TOKEN_DATA_TYPE,\n"

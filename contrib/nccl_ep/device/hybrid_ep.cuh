@@ -164,8 +164,8 @@ struct model_config_t {
   int num_of_nodes;
 };
 
-// Upper bound on LSA_TEAM_SIZE used for fixed-size pointer arrays in non-templated
-// host-side parameter structs. Must match the largest case in HYBRIDEP_SWITCH_LSA_TEAM_SIZE.
+// Upper bound on LSA_TEAM_SIZE used to size fixed-size pointer arrays in the
+// host-side parameter structs.  Asserted at the call sites.
 constexpr int HYBRIDEP_MAX_LSA_TEAM_SIZE = 32;
 
 #ifdef HYBRIDEP_ENABLE_WARP_TIMING
@@ -724,13 +724,13 @@ __device__ combine_smem_layout_t create_combine_smem_layout(
 
 }
 
-template<int NUM_OF_STAGES_G2S,
-         int NUM_OF_STAGES_S2G,
-         int NUM_OF_TOKENS_PER_CHUNK,
-         int MAX_NUM_OF_TOKENS_PER_RANK,
-         int NUM_LSA_TEAMS,
-         bool BACKWARD_COMBINE>
 static size_t calculate_combine_smem_layout_size(
+  int num_of_stages_g2s,
+  int num_of_stages_s2g,
+  int num_of_tokens_per_chunk,
+  int max_num_of_tokens_per_rank,
+  int num_lsa_teams,
+  bool backward_combine,
   const model_config_t& model)
 {
   // Dynamically computes the size required for combine shared memory layout,
@@ -739,85 +739,85 @@ static size_t calculate_combine_smem_layout_size(
 
   // Compute max number of chunks per rank
   const int hidden_dim = model.hidden_dim;
-  const int max_num_of_chunks_per_rank = (MAX_NUM_OF_TOKENS_PER_RANK +
-                                          NUM_OF_TOKENS_PER_CHUNK - 1) /
-                                         NUM_OF_TOKENS_PER_CHUNK;
-  constexpr bool multinode = (NUM_LSA_TEAMS > 1);
+  const int max_num_of_chunks_per_rank = (max_num_of_tokens_per_rank +
+                                          num_of_tokens_per_chunk - 1) /
+                                         num_of_tokens_per_chunk;
+  const bool multinode = (num_lsa_teams > 1);
 
   // Token buffers (128B aligned for TMA)
   // intra_node_token_* buffers (multi-node only)
-  if constexpr (multinode) {
+  if (multinode) {
   total_size = (total_size + 127) & ~127;
-    total_size += NUM_OF_STAGES_G2S * hidden_dim * sizeof(uint16_t);
+    total_size += num_of_stages_g2s * hidden_dim * sizeof(uint16_t);
 
   total_size = (total_size + 127) & ~127;
-    total_size += NUM_OF_STAGES_S2G * hidden_dim * sizeof(uint16_t);
+    total_size += num_of_stages_s2g * hidden_dim * sizeof(uint16_t);
   }
 
   // inter_node_token_G2S_buffer
   total_size = (total_size + 127) & ~127;
-  total_size += NUM_OF_STAGES_G2S * hidden_dim * sizeof(uint16_t);
+  total_size += num_of_stages_g2s * hidden_dim * sizeof(uint16_t);
 
   // inter_node_token_S2G_buffer
   total_size = (total_size + 127) & ~127;
-  total_size += NUM_OF_STAGES_S2G * hidden_dim * sizeof(uint16_t);
+  total_size += num_of_stages_s2g * hidden_dim * sizeof(uint16_t);
 
   // Prob buffers (16B aligned, only if backward_combine)
-  if constexpr (BACKWARD_COMBINE) {
-    if constexpr (multinode) {
+  if (backward_combine) {
+    if (multinode) {
     // intra_node_prob_G2S_buffer
     total_size = (total_size + 15) & ~15;
-      total_size += NUM_OF_STAGES_G2S * model.num_of_experts_per_rank *
+      total_size += num_of_stages_g2s * model.num_of_experts_per_rank *
                  model.num_of_ranks_per_node * sizeof(float);
 
     // intra_node_prob_S2G_buffer
     total_size = (total_size + 15) & ~15;
-      total_size += NUM_OF_STAGES_S2G * model.num_of_experts_per_rank *
+      total_size += num_of_stages_s2g * model.num_of_experts_per_rank *
                  model.num_of_ranks_per_node * sizeof(float);
     }
 
     // inter_node_prob_G2S_buffer
     total_size = (total_size + 15) & ~15;
-    total_size += NUM_OF_STAGES_G2S * model.num_of_experts_per_rank *
+    total_size += num_of_stages_g2s * model.num_of_experts_per_rank *
                  model.num_of_ranks_per_node * sizeof(float);
 
     // inter_node_prob_S2G_buffer
     total_size = (total_size + 15) & ~15;
-    total_size += NUM_OF_STAGES_S2G * model.num_of_experts_per_rank *
-                 model.num_of_ranks_per_node * NUM_LSA_TEAMS * sizeof(float);
+    total_size += num_of_stages_s2g * model.num_of_experts_per_rank *
+                 model.num_of_ranks_per_node * num_lsa_teams * sizeof(float);
   }
 
   // Mbarrier buffers (8B aligned)
   // intra_node_mbarrier_G2S_buffer [stages][2] (multi-node only)
-  if constexpr (multinode) {
+  if (multinode) {
   total_size = (total_size + 7) & ~7;
-    total_size += NUM_OF_STAGES_G2S * 2 * sizeof(uint64_t);
+    total_size += num_of_stages_g2s * 2 * sizeof(uint64_t);
   }
 
   // inter_node_mbarrier_G2S_buffer [stages][2]
   total_size = (total_size + 7) & ~7;
-  total_size += NUM_OF_STAGES_G2S * 2 * sizeof(uint64_t);
+  total_size += num_of_stages_g2s * 2 * sizeof(uint64_t);
 
   // intra_node_to_rdma_mbarrier_buffer [(nodes-1)][chunks] (only if multi-node)
-  if constexpr (multinode) {
+  if (multinode) {
     total_size = (total_size + 7) & ~7;
-    total_size += (NUM_LSA_TEAMS - 1) * max_num_of_chunks_per_rank * sizeof(uint64_t);
+    total_size += (num_lsa_teams - 1) * max_num_of_chunks_per_rank * sizeof(uint64_t);
   }
 
   // combine_memory_region_info [(nodes-1)] (align 8B, only if multi-node)
-  if constexpr (multinode) {
+  if (multinode) {
     total_size = (total_size + 7) & ~7;
-    total_size += (NUM_LSA_TEAMS - 1) * sizeof(combine_memory_region_info_t);
+    total_size += (num_lsa_teams - 1) * sizeof(combine_memory_region_info_t);
   }
 
   // Flag buffers (no special alignment needed)
-  if constexpr (multinode) {
-    total_size += NUM_OF_STAGES_G2S * sizeof(bool);
+  if (multinode) {
+    total_size += num_of_stages_g2s * sizeof(bool);
   }
-  total_size += NUM_OF_STAGES_G2S * sizeof(bool);
+  total_size += num_of_stages_g2s * sizeof(bool);
 
   // Streaming overlap fields (multi-node only, 4B aligned)
-  if constexpr (multinode) {
+  if (multinode) {
     total_size = (total_size + 3) & ~3;
     total_size += sizeof(uint32_t);  // rdma_streaming_counter
   }
@@ -825,7 +825,7 @@ static size_t calculate_combine_smem_layout_size(
   return total_size;
 }
 // Data structure for kernel parameter for dispatch kernel.
-template<typename TOKEN_DATA_TYPE, int LSA_TEAM_SIZE>
+template<typename TOKEN_DATA_TYPE>
 struct dispatch_kernel_param_t{
   int hidden_dim;
   int experts_per_rank;
@@ -838,9 +838,11 @@ struct dispatch_kernel_param_t{
   // NOTE: The source pointer arrays are allocated with cudaHostAllocMapped on the host side.
   // Device dereferencing of host-mapped pointer tables is very slow.
   // Keep a fixed-size array here and copy pointers on the host into this param struct.
-  TOKEN_DATA_TYPE* expert_output_token[LSA_TEAM_SIZE];
-  float* expert_output_prob[LSA_TEAM_SIZE]; // Only valid in forward dispatch.
-  float* expert_output_scaling_factor[LSA_TEAM_SIZE]; // Only valid for FP8 token type.
+  // Arrays are oversized to HYBRIDEP_MAX_LSA_TEAM_SIZE so the struct is non-templated on LSA_TEAM_SIZE;
+  // kernels only read the first num_of_ranks_per_node entries.
+  TOKEN_DATA_TYPE* expert_output_token[HYBRIDEP_MAX_LSA_TEAM_SIZE];
+  float* expert_output_prob[HYBRIDEP_MAX_LSA_TEAM_SIZE]; // Only valid in forward dispatch.
+  float* expert_output_scaling_factor[HYBRIDEP_MAX_LSA_TEAM_SIZE]; // Only valid for FP8 token type.
   // Internal temp buffers. These buffers are local buffers.
   uint64_t* rdma_inter_node_group_flags; // For RDMA Atomic flags.
   uint32_t* intra_node_write_completion_flags; // For intra-node S2G write completion notification.
@@ -880,7 +882,6 @@ struct dispatch_kernel_param_t{
 };
 
 // Data structure for kernel parameter for combine kernel.
-template<int LSA_TEAM_SIZE>
 struct combine_kernel_param_t{
   int hidden_dim;
   int experts_per_rank;
@@ -889,8 +890,10 @@ struct combine_kernel_param_t{
   // NOTE: The source pointer arrays are allocated with cudaHostAllocMapped on the host side.
   // Device dereferencing of host-mapped pointer tables is very slow.
   // Keep a fixed-size array here and copy pointers on the host into this param struct.
-  uint16_t* expert_input_token[LSA_TEAM_SIZE];
-  float* expert_input_prob[LSA_TEAM_SIZE];
+  // Arrays are oversized to HYBRIDEP_MAX_LSA_TEAM_SIZE so the struct is non-templated on LSA_TEAM_SIZE;
+  // kernels only read the first num_of_ranks_per_node entries.
+  uint16_t* expert_input_token[HYBRIDEP_MAX_LSA_TEAM_SIZE];
+  float* expert_input_prob[HYBRIDEP_MAX_LSA_TEAM_SIZE];
   // Output buffers. These buffers are local buffers.
   uint16_t* attn_output_token;
   float* attn_output_prob;
@@ -3305,7 +3308,7 @@ template<typename TOKEN_DATA_TYPE,
          ncclEpLayout_t kLayout,
          int HIDDEN_DIM>
 __device__ __forceinline__ void dispatch_kernel_impl(
-    const dispatch_kernel_param_t<TOKEN_DATA_TYPE, LSA_TEAM_SIZE>& param,
+    const dispatch_kernel_param_t<TOKEN_DATA_TYPE>& param,
     uint8_t* smem_bytes)
 {
   if constexpr (NUM_LSA_TEAMS != 1) {
@@ -3470,7 +3473,7 @@ template<// This type represent intra-node reduction warp group.
 // 3. intra-node G2S warp group(1 warp, only valid for multinode scenario). 4. inter-node G2S warp group(1 warp for multinode scenario, 2 warps otherwise). 5. inter-node N2N rdma warp group(1 warp, only valid for multinode scenario).
 // Total 6(single-node) or 11(multi-node) warps per CUDA block/SM.
 __device__ __forceinline__ void combine_kernel_impl(
-  const combine_kernel_param_t<LSA_TEAM_SIZE>& param,
+  const combine_kernel_param_t& param,
   uint8_t* smem_bytes)
 {
   // Compile-time check (only enforce for multi-node layout).

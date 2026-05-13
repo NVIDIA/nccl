@@ -68,7 +68,7 @@ ncclRma_t* getNcclRma_v13(void* lib) {
     ncclRma_v13 = (ncclRma_v13_t*)ncclOsDlsym(lib, "ncclGinPlugin_v13");
   }
   if (ncclRma_v13) {
-    INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Loaded rma plugin %s (v13)", ncclRma_v13->name);
+    INFO(NCCL_INIT|NCCL_NET, "RMA/Plugin: Loaded rma plugin %s (v13)", ncclRma_v13->name);
     ncclRma.name = ncclRma_v13->name;
     ncclRma.init = ncclRma_init;
     ncclRma.devices = ncclRma_v13->devices;

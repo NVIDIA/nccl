@@ -53,7 +53,7 @@ static std::once_flag initPluginLibsOnceFlag;
 
 static ncclResult_t ncclRmaPluginUnload(rmaPluginLib_t* pluginLib) {
   if (pluginLib->dlHandle && pluginLib->refCount == 0) {
-    INFO(NCCL_DESTROY|NCCL_NET, "Unloading plugin %s", pluginLib->name);
+    INFO(NCCL_DESTROY|NCCL_NET, "RMA/Plugin: Unloading plugin %s", pluginLib->name);
     NCCLCHECK(ncclClosePluginLib(pluginLib->dlHandle, ncclPluginTypeRma));
 
     // Reset fields but preserve name, to be reused when reloading
@@ -83,12 +83,12 @@ static ncclResult_t ncclRmaPluginLoad(rmaPluginLib_t* pluginLib) {
   if (pluginLib->ncclRma == nullptr) goto fail;
 
   pluginLib->state = ncclRmaPluginStateInitReady;
-  INFO(NCCL_INIT|NCCL_NET, "Successfully loaded external rma plugin %s",
+  INFO(NCCL_INIT|NCCL_NET, "RMA/Plugin: Successfully loaded external rma plugin %s",
        (ncclPluginLibPaths[ncclPluginTypeRma] ? ncclPluginLibPaths[ncclPluginTypeRma] : pluginLib->name));
 exit:
   return ncclSuccess;
 fail:
-  INFO(NCCL_INIT|NCCL_NET, "Failed to load external rma plugin %s, dlHandle: %p, ncclRma: %p",
+  INFO(NCCL_INIT|NCCL_NET, "RMA/Plugin: Failed to load external rma plugin %s, dlHandle: %p, ncclRma: %p",
          (ncclPluginLibPaths[ncclPluginTypeRma] ? ncclPluginLibPaths[ncclPluginTypeRma] : pluginLib->name),
          pluginLib->dlHandle, pluginLib->ncclRma);
   if (pluginLib->dlHandle) {
@@ -124,7 +124,7 @@ static ncclResult_t ncclRmaPluginAssignToComm(struct ncclComm* comm, int pluginI
   *isAssigned = false;
 
   if (pluginLibs[pluginIndex].state >= ncclRmaPluginStateEnabled) {
-    INFO(NCCL_INIT|NCCL_NET, "Assigned RMA plugin %s to comm", pluginLibs[pluginIndex].ncclRma->name);
+    INFO(NCCL_INIT|NCCL_NET, "RMA/Plugin: Assigned RMA plugin %s to comm", pluginLibs[pluginIndex].ncclRma->name);
     comm->rmaState.rmaProxyState.ncclRma = pluginLibs[pluginIndex].ncclRma;
     comm->rmaState.rmaProxyState.rmaVersion = pluginLibs[pluginIndex].version;
     comm->rmaPluginIndex = pluginIndex;
@@ -139,14 +139,14 @@ static ncclResult_t ncclRmaPluginDisableOtherExternal(int pluginIndex) {
   if (pluginIndex >= (pluginCount - NCCL_RMA_NUM_INTERNAL_PLUGINS)) return ncclSuccess;
   char names[MAX_STR_LEN*(NCCL_RMA_MAX_PLUGINS - NCCL_RMA_NUM_INTERNAL_PLUGINS)] = { 0 };
   for (int i = 0; i < (pluginCount - NCCL_RMA_NUM_INTERNAL_PLUGINS); i++) {
-    if (i != pluginIndex) {
+    if (i != pluginIndex && pluginLibs[i].state >= ncclRmaPluginStateEnabled) {
       // Append all disabled plugin names to a string
       snprintf(names+strlen(names), sizeof(names)-strlen(names), (strlen(names) == 0) ? "%s" : ", %s", pluginLibs[i].name);
       pluginLibs[i].state = ncclRmaPluginStateDisabled;
     }
   }
   if(strlen(names) > 0) {
-    INFO(NCCL_INIT|NCCL_NET, "Disabling external plugins: %s", names);
+    INFO(NCCL_INIT|NCCL_NET, "RMA/Plugin: Disabling external plugins: %s", names);
   }
   return ncclSuccess;
 }

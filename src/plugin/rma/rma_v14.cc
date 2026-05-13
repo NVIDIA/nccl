@@ -14,7 +14,7 @@ static ncclRma_v14_t* ncclRma_v14;
 ncclRma_t* getNcclRma_v14(void* lib) {
   ncclRma_v14 = (ncclRma_v14_t*)dlsym(lib, "ncclRmaPlugin_v14");
   if (ncclRma_v14) {
-    INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Loaded rma plugin %s (v14)", ncclRma_v14->name);
+    INFO(NCCL_INIT|NCCL_NET, "RMA/Plugin: Loaded rma plugin %s (v14)", ncclRma_v14->name);
     return ncclRma_v14;
   }
   return nullptr;

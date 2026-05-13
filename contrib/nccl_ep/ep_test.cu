@@ -336,8 +336,7 @@ int main(int argc, char* argv[])
   NCCLCHECK(ncclCommInitRank(&comm, nRanks, id, myRank));
 
   ncclEpGroup_t ep_group;
-  ncclEpGroupConfig_t config = {};
-  config.version = 1;                                    // Structure version
+  ncclEpGroupConfig_t config = NCCL_EP_GROUP_CONFIG_INIT;
   config.algorithm = algorithm;                          // Algorithm type (set by command line)
   config.num_experts = num_experts;
   // max_send_tokens_per_rank is the per-rank batch size (max tokens any single rank will send).
@@ -393,7 +392,7 @@ int main(int argc, char* argv[])
   CUDACHECK(cudaMemcpy(topk_idx_data, topk_idx_host, num_tokens * top_k * sizeof(int64_t), cudaMemcpyHostToDevice));
 
   // Create recv-counter tensors for ncclEpCreateHandle (only when disable_max_tokens is true)
-  ncclEpLayoutMarks_t handle_marks = {};
+  ncclEpLayoutMarks_t handle_marks = NCCL_EP_LAYOUT_MARKS_INIT;
   ncclNDTensor_t handle_recv_expert_counter = nullptr;
   ncclNDTensor_t handle_recv_total_counter = nullptr;
   if (disable_max_tokens) {
@@ -427,7 +426,7 @@ int main(int argc, char* argv[])
   }
   assert(num_recv_tokens);
 
-  ncclEpDispatchConfig_t dispatch_config = {};
+  ncclEpDispatchConfig_t dispatch_config = NCCL_EP_DISPATCH_CONFIG_INIT;
   dispatch_config.round_scales = 0; // Not testing this parameter atm
 
   // Build named-struct dispatch arguments. HT FLAT also populates topk_weights/topk_idx
@@ -436,7 +435,7 @@ int main(int argc, char* argv[])
                        config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
 
   ncclEpDispatchInputs_t  dispatch_inputs  = {};
-  ncclEpDispatchOutputs_t dispatch_outputs = {};
+  ncclEpDispatchOutputs_t dispatch_outputs = NCCL_EP_DISPATCH_OUTPUTS_INIT;
   ncclEpLayoutMarks_t     dispatch_marks   = {};
 
   ncclNDTensor_t input_tokens, recv_x;
@@ -780,7 +779,7 @@ int main(int argc, char* argv[])
 
   // Setup combine inputs and outputs (named-struct API)
   ncclEpCombineInputs_t  combine_inputs  = {};
-  ncclEpCombineOutputs_t combine_outputs = {};
+  ncclEpCombineOutputs_t combine_outputs = NCCL_EP_COMBINE_OUTPUTS_INIT;
   combine_inputs.tokens  = expert_outputs;
   combine_outputs.tokens = combined_output;
   // LL expert-major reads per-token routing weights from outputs.topk_weights
@@ -789,7 +788,7 @@ int main(int argc, char* argv[])
     combine_outputs.topk_weights = topk_weights;
   }
 
-  ncclEpCombineConfig_t combine_config = {};
+  ncclEpCombineConfig_t combine_config = NCCL_EP_COMBINE_CONFIG_INIT;
   combine_config.send_only = combine_send_only ? 1 : 0;
 
   printf("Rank %d: Testing ncclEpCombine (send_only=%s)\n", myRank, combine_send_only ? "true" : "false");
@@ -898,7 +897,7 @@ int main(int argc, char* argv[])
     ncclNDTensor_t cached_recv_x;
     NCCLCHECK(epMakeTensor(&cached_recv_x, 2, ncclBfloat16,
                            static_cast<unsigned int>(num_recv_tokens), static_cast<unsigned int>(hidden)));
-    ncclEpDispatchOutputs_t cached_dispatch_outputs = {};
+    ncclEpDispatchOutputs_t cached_dispatch_outputs = NCCL_EP_DISPATCH_OUTPUTS_INIT;
     cached_dispatch_outputs.tokens = cached_recv_x;
 
     // Allocate new output tensors for second phase combine
@@ -908,7 +907,7 @@ int main(int argc, char* argv[])
     ncclNDTensor_t cached_combined_topk_weights;
     NCCLCHECK(epMakeTensor(&cached_combined_topk_weights, 2, ncclFloat32,
                            static_cast<unsigned int>(num_tokens), static_cast<unsigned int>(top_k)));
-    ncclEpCombineOutputs_t cached_combine_outputs = {};
+    ncclEpCombineOutputs_t cached_combine_outputs = NCCL_EP_COMBINE_OUTPUTS_INIT;
     cached_combine_outputs.tokens       = cached_combined_output;
     cached_combine_outputs.topk_weights = cached_combined_topk_weights;
 
@@ -926,7 +925,7 @@ int main(int argc, char* argv[])
     CUDACHECK(cudaMemcpy(cached_ctwi_data, out1_data_for_copy,
                          cached_w_count * sizeof(float), cudaMemcpyDeviceToDevice));
 
-    ncclEpCombineInputs_t cached_combine_inputs = {};
+    ncclEpCombineInputs_t cached_combine_inputs = NCCL_EP_COMBINE_INPUTS_INIT;
     cached_combine_inputs.tokens       = expert_outputs;
     cached_combine_inputs.topk_weights = cached_combine_topk_weights_input;
 

@@ -14,13 +14,45 @@
 extern "C" {
 #endif
 
+// ============================================================================
+// ABI versioning (size-based, cuDNN / Vulkan style)
+//
+// Every struct that crosses the API boundary starts with `unsigned int size`,
+// which the caller MUST set to sizeof(struct). The library validates this
+// against its own known size. A mismatch is rejected; pre-compiled callers and
+// the library currently must be from the same release.
+//
+// Convenience macros NCCL_EP_xxx_INIT expand to compound literals that pre-fill
+// the size field. They work in declaration init, assignment, and expression
+// contexts:
+//
+//   ncclEpDispatchInputs_t inputs = NCCL_EP_DISPATCH_INPUTS_INIT;
+//   inputs.tokens = my_tokens;
+//
+//   // also valid as a post-declaration assignment / reset:
+//   inputs = NCCL_EP_DISPATCH_INPUTS_INIT;
+//
+// To set additional fields inline, write the compound literal directly:
+//
+//   inputs = (ncclEpDispatchInputs_t){
+//       .size   = sizeof(ncclEpDispatchInputs_t),
+//       .tokens = my_tokens,
+//   };
+//
+// FUTURE IMPROVEMENT: relax the strict equality check to allow forward compat
+// when the caller's struct is larger than the library's known size, by scanning
+// the trailing bytes; if all zero, accept silently (the caller didn't actually
+// fill any unknown fields).
+// ============================================================================
+#define NCCL_EP_API_VERSION 1
+
 // Opaque N-dimensional tensor handle used to describe various user inputs
 // (i.e., tokens, top-k indices, weights, scales, etc.)
 typedef struct ncclNDTensor* ncclNDTensor_t;
 
 // EP group configuration structure
 typedef struct {
-    unsigned int version;                // Structure version (set to 1.0.0)
+    unsigned int size;                   // = sizeof(this struct); first field, never moves
     ncclEpAlgorithm_t algorithm;         // low_latency or high_throughput
     // Receive buffer layout for the dispatch and combine path.
     // Determines the shape of recv_x on dispatch output and the expected input shape for combine.
@@ -51,6 +83,8 @@ typedef struct {
     //   LL: AUTO/0 → nRanks*max_send_tokens_per_rank.
     unsigned int max_recv_token_slots_per_rank;
 } ncclEpGroupConfig_t;
+
+#define NCCL_EP_GROUP_CONFIG_INIT ((ncclEpGroupConfig_t){ .size = (unsigned int)sizeof(ncclEpGroupConfig_t) })
 
 // Opaque type forward declaration
 typedef struct ncclEpGroup* ncclEpGroup_t;
@@ -158,6 +192,7 @@ ncclResult_t ncclEpTensorDestroy(
 // Layout info passed to ncclEpCreateHandle / ncclEpUpdateHandle and ncclEpDispatch.
 // All fields are optional (NULL = not provided).
 typedef struct {
+    unsigned int   size;                // = sizeof(this struct); first field, never moves
     ncclNDTensor_t recv_expert_counter; // 1D [num_local_experts] int32 (or int64 for HT EM)
                                         //   HT (handle time): per-expert recv counts. Flat: unpadded int32.
                                         //                     EM: padded counts (sum equals output slot count).
@@ -170,9 +205,12 @@ typedef struct {
                                         //   HT: scalar total recv token count. Flat: unpadded. EM: padded slot total.
 } ncclEpLayoutMarks_t;
 
+#define NCCL_EP_LAYOUT_MARKS_INIT ((ncclEpLayoutMarks_t){ .size = (unsigned int)sizeof(ncclEpLayoutMarks_t) })
+
 // Input tensors for ncclEpDispatch.
 // All fields except tokens are optional (NULL = not provided).
 typedef struct {
+    unsigned int   size;         // = sizeof(this struct); first field, never moves
     ncclNDTensor_t tokens;       // required; 2D [num_tokens, hidden]
     ncclNDTensor_t topk_weights; // optional; 2D [num_tokens, top_k], ncclFloat32
                                  //   LL rank-major: per-token routing weights
@@ -180,40 +218,54 @@ typedef struct {
     ncclNDTensor_t scales;       // optional; HT FP8 only; 2D [num_tokens, hidden/128], ncclFloat32
 } ncclEpDispatchInputs_t;
 
+#define NCCL_EP_DISPATCH_INPUTS_INIT ((ncclEpDispatchInputs_t){ .size = (unsigned int)sizeof(ncclEpDispatchInputs_t) })
+
 // Output tensors for ncclEpDispatch.
 // All fields except tokens are optional (NULL = not provided).
 typedef struct {
+    unsigned int   size;         // = sizeof(this struct); first field, never moves
     ncclNDTensor_t tokens;       // required; received tokens
     ncclNDTensor_t topk_weights; // optional; LL rank-major or HT: received top-k weights
     ncclNDTensor_t scales;       // optional; FP8 only; received per-token scaling factors
     ncclNDTensor_t topk_idx;     // optional; LL rank-major or HT: received top-k expert indices
 } ncclEpDispatchOutputs_t;
 
+#define NCCL_EP_DISPATCH_OUTPUTS_INIT ((ncclEpDispatchOutputs_t){ .size = (unsigned int)sizeof(ncclEpDispatchOutputs_t) })
+
 // Input tensors for ncclEpCombine.
 // All fields except tokens are optional (NULL = not provided).
 typedef struct {
+    unsigned int   size;         // = sizeof(this struct); first field, never moves
     ncclNDTensor_t tokens;       // required; post-expert activation tensor
     ncclNDTensor_t topk_weights; // optional; HT backward combine only:
                                  //   2D [num_recv_tokens, top_k], ncclFloat32
 } ncclEpCombineInputs_t;
 
+#define NCCL_EP_COMBINE_INPUTS_INIT ((ncclEpCombineInputs_t){ .size = (unsigned int)sizeof(ncclEpCombineInputs_t) })
+
 // Output tensors for ncclEpCombine.
 // All fields except tokens are optional (NULL = not provided).
 typedef struct {
+    unsigned int   size;         // = sizeof(this struct); first field, never moves
     ncclNDTensor_t tokens;       // required; combined output in original token order
     ncclNDTensor_t topk_weights; // optional; 2D [num_tokens, top_k], ncclFloat32
                                  //   LL expert-major: per-token routing weights applied on receive side
                                  //   HT backward: combined routing weights output
 } ncclEpCombineOutputs_t;
 
+#define NCCL_EP_COMBINE_OUTPUTS_INIT ((ncclEpCombineOutputs_t){ .size = (unsigned int)sizeof(ncclEpCombineOutputs_t) })
+
 // Opaque type forward declaration
 typedef struct ncclEpHandle* ncclEpHandle_t;
 typedef struct {
-    bool use_fp8;  // enable FP8 for dispatch (default: false)
+    unsigned int size;  // = sizeof(this struct); first field, never moves
+    bool use_fp8;       // enable FP8 for dispatch (default: false)
     // HT expert-major only: per-expert zone alignment in tokens (pow2; 0/1 = no padding).
     // Padded slots are zero-filled by dispatch.
     size_t dispatch_output_per_expert_alignment;
 } ncclEpHandleConfig_t;
+
+#define NCCL_EP_HANDLE_CONFIG_INIT ((ncclEpHandleConfig_t){ .size = (unsigned int)sizeof(ncclEpHandleConfig_t) })
 
 // Create and initialize an EP handle.
 //   * Performs dispatch setup and (in HT mode only) metadata exchange.
@@ -320,10 +372,13 @@ ncclResult_t ncclEpUpdateHandle(
 
 // EP dispatch configuration structure
 typedef struct {
+    unsigned int size;         // = sizeof(this struct); first field, never moves
     unsigned int send_only;    // if non-zero, only initiate transfers; requires ncclEpComplete() afterward
                                //   supported for LL mode only; output tensors must still be preallocated
     unsigned int round_scales; // whether to round the scaling factors tensor into a power of 2
 } ncclEpDispatchConfig_t;
+
+#define NCCL_EP_DISPATCH_CONFIG_INIT ((ncclEpDispatchConfig_t){ .size = (unsigned int)sizeof(ncclEpDispatchConfig_t) })
 
 // Perform EP dispatch
 //   * Sends tokens and metadata to the experts according to routing decisions.
@@ -366,9 +421,12 @@ ncclResult_t ncclEpDispatch(
 );
 
 typedef struct {
+    unsigned int size;         // = sizeof(this struct); first field, never moves
     unsigned int send_only;    // if non-zero, only initiate transfers; requires ncclEpComplete() afterward
                                //   supported for LL mode only; output tensors must still be preallocated
 } ncclEpCombineConfig_t;
+
+#define NCCL_EP_COMBINE_CONFIG_INIT ((ncclEpCombineConfig_t){ .size = (unsigned int)sizeof(ncclEpCombineConfig_t) })
 
 // Perform EP combine
 //   * Gathers outputs from experts and returns them to their source in original token order.

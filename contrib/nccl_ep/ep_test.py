@@ -285,7 +285,6 @@ def main():  # noqa: C901 — intentionally kept as a single function to mirror 
 
     # -- EP group -----------------------------------------------------------
     config = ncclEpGroupConfig_t()
-    config.version = 1
     config.algorithm = algorithm
     config.num_experts = num_experts
     config.max_send_tokens_per_rank = NCCL_EP_AUTO if disable_max_tokens else num_tokens

@@ -2726,8 +2726,7 @@ int main(int argc, char* argv[]) {
     // Create EP group
     if (myRank == 0) { printf("[DEBUG] Creating EP group...\n"); fflush(stdout); }
     ncclEpGroup_t ep_group;
-    ncclEpGroupConfig_t config;
-    config.version = 1;
+    ncclEpGroupConfig_t config = NCCL_EP_GROUP_CONFIG_INIT;
     config.algorithm = algorithm;
     config.layout = layout;
     config.num_experts = num_experts;
@@ -2832,7 +2831,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Create handle — populate the marks struct with the optional counter / offset tensors.
-    ncclEpLayoutMarks_t handle_marks = {};
+    ncclEpLayoutMarks_t handle_marks = NCCL_EP_LAYOUT_MARKS_INIT;
     handle_marks.recv_expert_counter = recv_expert_counter_tensor;
     handle_marks.recv_total_counter  = recv_total_counter_tensor;
     handle_marks.recv_expert_offsets = meta_offsets_tensor;
@@ -2841,7 +2840,7 @@ int main(int argc, char* argv[]) {
 
     const bool ht_expert_major = (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT &&
                                   config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
-    ncclEpHandleConfig_t handle_cfg = {};
+    ncclEpHandleConfig_t handle_cfg = NCCL_EP_HANDLE_CONFIG_INIT;
     handle_cfg.dispatch_output_per_expert_alignment = expert_major_alignment;
     handle_cfg.use_fp8 = use_fp8;
     const bool need_cfg = use_fp8 || (ht_expert_major && expert_major_alignment > 0);
@@ -2947,7 +2946,7 @@ int main(int argc, char* argv[]) {
 
     if (myRank == 0) { printf("[DEBUG] Starting benchmark...\n"); fflush(stdout); }
 
-    ncclEpCombineConfig_t combine_config = {};
+    ncclEpCombineConfig_t combine_config = NCCL_EP_COMBINE_CONFIG_INIT;
     auto dispatch_fn = [&]() {
         NCCLCHECK(ncclEpDispatch(ep_handle, tensors.dispatch_topk_idx,
                                   &tensors.dispatch_inputs, &tensors.dispatch_outputs,

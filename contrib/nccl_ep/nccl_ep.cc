@@ -56,6 +56,18 @@ static void tensor_free(ncclNDTensor_t t);
 } while(0)
 #endif
 
+// Size-based ABI versioning: every cross-boundary struct starts with a `size`
+// field set by the caller to sizeof(struct). The library checks that against
+// its own known size; any mismatch means caller and library are from different
+// releases. Strict equality for now — see nccl_ep.h for the planned future
+// relaxation (all-zero-trailing-bytes escape hatch).
+#define EP_REQUIRE_STRUCT(ptr) \
+    assert((ptr) != nullptr && (ptr)->size == sizeof(*(ptr)) && \
+           "ABI struct size mismatch — caller and libnccl_ep.so must be from the same release")
+#define EP_REQUIRE_OPTIONAL_STRUCT(ptr) \
+    assert(((ptr) == nullptr || (ptr)->size == sizeof(*(ptr))) && \
+           "ABI struct size mismatch — caller and libnccl_ep.so must be from the same release")
+
 // Helper function to convert ncclDataType_t to cudaDataType_t
 static cudaDataType_t ncclDataTypeToCudaDataType(ncclDataType_t nccl_type) {
     switch (nccl_type) {
@@ -933,7 +945,7 @@ ncclResult_t ncclEpCreateGroup(
     assert(in_config != nullptr);
     int nRanks;
     assert(comm != nullptr && ncclCommCount(comm, &nRanks) == ncclSuccess && nRanks > 0);
-    assert(in_config->version == 1 && "ncclEpCreateGroup: invalid config version (expected 1)");
+    EP_REQUIRE_STRUCT(in_config);
     assert((in_config->algorithm == NCCL_EP_ALGO_LOW_LATENCY ||
             in_config->algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) &&
            "ncclEpCreateGroup: invalid algorithm, supported: low_latency, high_throughput");
@@ -1595,6 +1607,7 @@ ncclResult_t ncclEpHandleMemSize(
     int                         num_topk
 ) {
     assert(ep_group != nullptr && size_out != nullptr);
+    EP_REQUIRE_OPTIONAL_STRUCT(config);
     if (ep_group->config.algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) {
         *size_out = ht_handle_mem_size(ep_group, num_topk);
     } else if (ep_group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
@@ -1716,6 +1729,7 @@ ncclResult_t ncclEpInitHandle(
 ) {
     assert(ep_group != nullptr && out_handle != nullptr);
     assert(ep_group->comm != nullptr);
+    EP_REQUIRE_OPTIONAL_STRUCT(config);
     const bool use_fp8 = config && config->use_fp8;
     assert(ep_group->config.num_experts > 0);
     assert(ep_group->config.num_experts % ep_group->nRanks == 0);
@@ -1754,6 +1768,7 @@ ncclResult_t ncclEpUpdateHandle(
 {
     assert(handle != nullptr);
     assert(topk_idx != nullptr);
+    EP_REQUIRE_OPTIONAL_STRUCT(marks);
     assert(topk_idx->ndim == 2);
     assert(topk_idx->datatype == ncclInt64);
     assert(tensor_is_contiguous(topk_idx));
@@ -1987,6 +2002,10 @@ ncclResult_t ncclEpDispatch(
     const ncclEpDispatchConfig_t* config,
     cudaStream_t stream
 ) {
+    EP_REQUIRE_STRUCT(inputs);
+    EP_REQUIRE_STRUCT(outputs);
+    EP_REQUIRE_OPTIONAL_STRUCT(marks);
+    EP_REQUIRE_OPTIONAL_STRUCT(config);
     const unsigned int send_only = config ? config->send_only : 0;
         ncclEpGroup_t group = handle->group;
 
@@ -2501,6 +2520,9 @@ ncclResult_t ncclEpCombine(
     const ncclEpCombineConfig_t* config,
     cudaStream_t stream
 ) {
+    EP_REQUIRE_STRUCT(inputs);
+    EP_REQUIRE_STRUCT(outputs);
+    EP_REQUIRE_OPTIONAL_STRUCT(config);
     const unsigned int send_only = config ? config->send_only : 0;
     if (handle->group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
         // Find and validate input tensors

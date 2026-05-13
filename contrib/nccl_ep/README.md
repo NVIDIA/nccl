@@ -841,8 +841,7 @@ unsigned int top_k = 8;
 unsigned int hidden = 4096;
 
 // Configure for High Throughput mode
-ncclEpGroupConfig_t config;
-config.version = 1;
+ncclEpGroupConfig_t config = NCCL_EP_GROUP_CONFIG_INIT;
 config.algorithm = NCCL_EP_ALGO_HIGH_THROUGHPUT;
 config.num_experts = 256;
 config.max_tokens_per_rank = 4;  // Or NCCL_EP_AUTO for dynamic sizing
@@ -1002,8 +1001,7 @@ unsigned int hidden = 4096;
 unsigned int num_local_experts = config.num_experts / nRanks;
 
 // Configure for Low Latency mode
-ncclEpGroupConfig_t config;
-config.version = 1;
+ncclEpGroupConfig_t config = NCCL_EP_GROUP_CONFIG_INIT;
 config.algorithm = NCCL_EP_ALGO_LOW_LATENCY;
 config.num_experts = 256;
 config.max_tokens_per_rank = 128;  // Must be set for LL mode

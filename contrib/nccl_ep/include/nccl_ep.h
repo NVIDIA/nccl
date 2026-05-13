@@ -53,6 +53,22 @@ extern "C" {
 // (i.e., tokens, top-k indices, weights, scales, etc.)
 typedef struct ncclNDTensor* ncclNDTensor_t;
 
+// Allocator and free function pointer types.
+// context is the value stored in ncclEpAllocConfig_t::context and is forwarded unchanged
+// on every call.
+typedef cudaError_t (*ncclEpAllocFn_t)(void** ptr, size_t size, void* context);
+typedef cudaError_t (*ncclEpFreeFn_t)(void* ptr, void* context);
+
+// Device memory allocator configuration embedded in ncclEpGroupConfig_t.
+typedef struct {
+    // Optional custom device memory allocator (NULL for default cudaMalloc).
+    ncclEpAllocFn_t alloc_fn;
+    // Optional custom device memory free function (NULL for default cudaFree).
+    ncclEpFreeFn_t free_fn;
+    // Opaque pointer forwarded verbatim to every alloc_fn/free_fn call.
+    void* context;
+} ncclEpAllocConfig_t;
+
 // EP group configuration structure
 typedef struct {
     unsigned int size;                   // = sizeof(this struct); first field, never moves
@@ -86,6 +102,8 @@ typedef struct {
     //   HT: required, must be >= max_send_tokens_per_rank.
     //   LL: AUTO/0 → nRanks*max_send_tokens_per_rank.
     unsigned int max_recv_token_slots_per_rank;
+    // Device memory allocator; zero-init (all NULL) uses cudaMalloc/cudaFree.
+    ncclEpAllocConfig_t alloc;
 } ncclEpGroupConfig_t;
 
 #define NCCL_EP_GROUP_CONFIG_INIT ((ncclEpGroupConfig_t){ \
@@ -95,19 +113,13 @@ typedef struct {
 // Opaque type forward declaration
 typedef struct ncclEpGroup* ncclEpGroup_t;
 
-// Allocator and free function pointer types (matching cudaMalloc/cudaFree signatures)
-typedef cudaError_t (*ncclEpAllocFn_t)(void** ptr, size_t size);
-typedef cudaError_t (*ncclEpFreeFn_t)(void* ptr);
-
 // Create an EP group from an NCCL communicator
 //   This call is collective and must be invoked by all ranks in the group.
 //
 // Arguments:
 //   ep_group   - [OUT] Pointer to newly created EP group
 //   comm       - [IN]  Existing NCCL communicator
-//   config     - [IN]  Pointer to EP configuration structure
-//   alloc_fn   - [IN]  Optional custom allocator function (NULL for default cudaMalloc)
-//   free_fn    - [IN]  Optional custom free function (NULL for default cudaFree)
+//   config     - [IN]  Pointer to EP configuration structure.
 //
 // Returns:
 //   ncclResult_t error code
@@ -115,9 +127,7 @@ typedef cudaError_t (*ncclEpFreeFn_t)(void* ptr);
 ncclResult_t ncclEpCreateGroup(
     ncclEpGroup_t* ep_group,
     ncclComm_t comm,
-    const ncclEpGroupConfig_t* config,
-    ncclEpAllocFn_t alloc_fn = nullptr,
-    ncclEpFreeFn_t free_fn = nullptr
+    const ncclEpGroupConfig_t* config
 );
 
 // Destroy an EP group and release associated resources.
@@ -143,11 +153,11 @@ ncclResult_t ncclEpGroupDestroy(
 //   Recommended teardown order: ncclEpTensorDestroy(t) first, then free the buffer.
 //
 // Arguments:
-//   tensor       - [OUT] Pointer to newly created tensor
-//   ndim         - [IN]  Number of dimensions (1..5)
-//   datatype     - [IN]  Data type
-//   data         - [IN]  Non-null device pointer to the tensor's storage
-//   size0..size4 - [IN]  Dimension sizes
+//   tensor   - [OUT] Pointer to newly created tensor
+//   ndim     - [IN]  Number of dimensions
+//   datatype - [IN]  Data type
+//   data     - [IN]  Non-null device pointer to the tensor's storage
+//   sizes    - [IN]  Array of ndim dimension sizes
 //
 // Returns: ncclResult_t error code
 
@@ -156,11 +166,7 @@ ncclResult_t ncclEpTensorCreate(
     unsigned int ndim,
     ncclDataType_t datatype,
     void* data,
-    unsigned int size0,
-    unsigned int size1 = 1,
-    unsigned int size2 = 1,
-    unsigned int size3 = 1,
-    unsigned int size4 = 1
+    const size_t* sizes
 );
 
 // Create a tensor from a registered NCCL window.
@@ -176,11 +182,7 @@ ncclResult_t ncclEpTensorCreateFromWindow(
     ncclDataType_t datatype,
     ncclWindow_t win,
     uint64_t win_offset,
-    unsigned int size0,
-    unsigned int size1 = 1,
-    unsigned int size2 = 1,
-    unsigned int size3 = 1,
-    unsigned int size4 = 1
+    const size_t* sizes
 );
 
 // Destroy a tensor descriptor.
@@ -520,7 +522,7 @@ ncclResult_t ncclEpTensorGetData(
 
 ncclResult_t ncclEpTensorGetSizes(
     ncclNDTensor_t tensor,
-    const unsigned int** sizes,
+    const size_t** sizes,
     unsigned int* ndim
 );
 

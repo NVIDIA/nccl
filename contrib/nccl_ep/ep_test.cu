@@ -16,11 +16,11 @@
 #include <getopt.h>
 
 // Custom allocator wrappers (can be replaced with custom memory pool)
-static cudaError_t torchMalloc(void** ptr, size_t size) {
+static cudaError_t torchMalloc(void** ptr, size_t size, void* /*context*/) {
     return cudaMalloc(ptr, size);
 }
 
-static cudaError_t torchFree(void* ptr) {
+static cudaError_t torchFree(void* ptr, void* /*context*/) {
     return cudaFree(ptr);
 }
 
@@ -40,13 +40,14 @@ static ncclResult_t epMakeTensor(ncclNDTensor_t* tensor, unsigned int ndim,
                                  ncclDataType_t dt,
                                  unsigned int s0, unsigned int s1 = 1, unsigned int s2 = 1,
                                  unsigned int s3 = 1, unsigned int s4 = 1) {
-    unsigned int dims[5] = {s0, s1, s2, s3, s4};
+    size_t dims[5] = {s0, s1, s2, s3, s4};
     size_t total = 1;
     for (unsigned int i = 0; i < ndim; i++) total *= dims[i];
     void* data = nullptr;
     cudaError_t e = cudaMalloc(&data, total * epDtypeBytes(dt));
     if (e != cudaSuccess) return ncclSystemError;
-    return ncclEpTensorCreate(tensor, ndim, dt, data, s0, s1, s2, s3, s4);
+
+    return ncclEpTensorCreate(tensor, ndim, dt, data, dims);
 }
 
 // Inverse of epMakeTensor: destroy the descriptor first, then cudaFree the backing buffer.
@@ -352,11 +353,14 @@ int main(int argc, char* argv[])
     // or nRanks * num_tokens * top_k for EM under heavy fan-out; use the latter for safety.
     config.max_recv_token_slots_per_rank = static_cast<unsigned int>(nRanks) * num_tokens * top_k;
   }
+  config.alloc.alloc_fn = torchMalloc;
+  config.alloc.free_fn  = torchFree;
+  config.alloc.context  = nullptr;
 
   const char* algorithm_name = (algorithm == NCCL_EP_ALGO_LOW_LATENCY) ? "LOW_LATENCY" : "HIGH_THROUGHPUT";
   printf("Rank %d: Testing ncclEpCreateGroup with algorithm: %s%s\n", myRank, algorithm_name,
          disable_max_tokens ? " (no max_send_tokens_per_rank)" : "");
-  NCCLCHECK(ncclEpCreateGroup(&ep_group, comm, &config, torchMalloc, torchFree));
+  NCCLCHECK(ncclEpCreateGroup(&ep_group, comm, &config));
 
   ncclNDTensor_t topk_idx;
   NCCLCHECK(epMakeTensor(&topk_idx, 2, ncclInt64, static_cast<unsigned int>(num_tokens), static_cast<unsigned int>(top_k)));

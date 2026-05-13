@@ -502,11 +502,11 @@ ncclResult_t ncclEpGroupDestroy(
 //   of `data` and must keep it valid until ncclEpTensorDestroy returns.
 //
 // Arguments:
-//   tensor       - [OUT] Pointer to the newly created tensor
-//   ndim         - [IN]  Number of dimensions (1..5)
-//   datatype     - [IN]  Data type
-//   data         - [IN]  Non-null device pointer to the tensor's storage
-//   size0..size4 - [IN]  Dimension sizes
+//   tensor   - [OUT] Pointer to the newly created tensor
+//   ndim     - [IN]  Number of dimensions
+//   datatype - [IN]  Data type
+//   data     - [IN]  Non-null device pointer to the tensor's storage
+//   sizes    - [IN]  Array of ndim dimension sizes
 //
 // Returns: ncclResult_t error code
 
@@ -515,11 +515,7 @@ ncclResult_t ncclEpTensorCreate(
     unsigned int ndim,
     ncclDataType_t datatype,
     void* data,
-    unsigned int size0,
-    unsigned int size1 = 1,
-    unsigned int size2 = 1,
-    unsigned int size3 = 1,
-    unsigned int size4 = 1
+    const size_t* sizes
 );
 ```
 
@@ -781,12 +777,12 @@ static ncclResult_t make_tensor(ncclNDTensor_t* t, unsigned int ndim,
                                 ncclDataType_t dt,
                                 unsigned int s0, unsigned int s1 = 1, unsigned int s2 = 1,
                                 unsigned int s3 = 1, unsigned int s4 = 1) {
-    unsigned int dims[5] = {s0, s1, s2, s3, s4};
+    size_t dims[5] = {s0, s1, s2, s3, s4};
     size_t total = dtype_bytes(dt);
     for (unsigned int i = 0; i < ndim; i++) total *= dims[i];
     void* data = nullptr;
     cudaMalloc(&data, total);
-    return ncclEpTensorCreate(t, ndim, dt, data, s0, s1, s2, s3, s4);
+    return ncclEpTensorCreate(t, ndim, dt, data, dims);
 }
 
 // Inverse: destroy the descriptor first, then free the backing buffer

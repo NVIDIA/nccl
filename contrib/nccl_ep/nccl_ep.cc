@@ -29,8 +29,8 @@
 struct ncclNDTensor {
     unsigned int version;
     unsigned int ndim;
-    unsigned int* sizes;
-    unsigned int* strides;
+    size_t* sizes;
+    size_t* strides;
     ncclDataType_t datatype;
     void* data;
     ncclWindow_t win_hdl;
@@ -218,9 +218,7 @@ struct ncclEpGroup {
     unsigned int device_sm_count; // Number of SMs on the device
     unsigned int num_sms_ht; // Number of SMs to use for HT kernels
 
-    // Custom allocator function pointers
-    ncclEpAllocFn_t alloc_fn;
-    ncclEpFreeFn_t free_fn;
+    ncclEpAllocConfig_t alloc;
 
     // Physical node properties (CUDA device assignment, IPC between co-located GPUs)
     int gpus_per_node;    // Physical GPUs per node (nRanks / nNodes)
@@ -315,8 +313,7 @@ struct ncclEpGroup {
         hidden(0),
         device_sm_count(0),
         num_sms_ht(0),
-        alloc_fn(nullptr),
-        free_fn(nullptr),
+        alloc{},
         gpus_per_node(0),
         rank_in_node(0),
         node_id(0),
@@ -518,7 +515,7 @@ static ncclResult_t init_hybridep_intranode(ncclEpGroup_t ep_group,
     // Dispatch grid barrier counter (local to each rank, NOT IPC-shared)
     {
         uint32_t* grid_barrier_base;
-        CUDA_CHECK(ep_group->alloc_fn(reinterpret_cast<void**>(&grid_barrier_base), sizeof(uint32_t)));
+        CUDA_CHECK(ep_group->alloc.alloc_fn(reinterpret_cast<void**>(&grid_barrier_base), sizeof(uint32_t), ep_group->alloc.context));
         CUDA_CHECK(cudaMemsetAsync(grid_barrier_base, 0, sizeof(uint32_t), stream));
         ep_group->ht_buffers.dispatch_grid_barrier_counter = grid_barrier_base;
     }
@@ -615,11 +612,11 @@ static ncclResult_t destroy_hybridep_intranode(ncclEpGroup_t ep_group) {
         ep_group->ht_buffers.expert_input_prob = nullptr;
     }
     if (ep_group->ht_buffers.expert_output_scaling_factor) {
-        ep_group->free_fn(ep_group->ht_buffers.expert_output_scaling_factor);
+        ep_group->alloc.free_fn(ep_group->ht_buffers.expert_output_scaling_factor, ep_group->alloc.context);
     }
     // Free dispatch grid barrier counter
     if (ep_group->ht_buffers.dispatch_grid_barrier_counter) {
-        ep_group->free_fn(ep_group->ht_buffers.dispatch_grid_barrier_counter);
+        ep_group->alloc.free_fn(ep_group->ht_buffers.dispatch_grid_barrier_counter, ep_group->alloc.context);
     }
 
     // Free merged completion flags local allocation
@@ -931,12 +928,17 @@ static ncclResult_t destroy_hybridep_internode(ncclEpGroup_t ep_group){
     return ncclSuccess;
 }
 
+static cudaError_t default_alloc_fn(void** ptr, size_t size, void* /*context*/) {
+    return cudaMalloc(ptr, size);
+}
+static cudaError_t default_free_fn(void* ptr, void* /*context*/) {
+    return cudaFree(ptr);
+}
+
 ncclResult_t ncclEpCreateGroup(
     ncclEpGroup_t* out_ep_group,
     ncclComm_t comm,
-    const ncclEpGroupConfig_t* in_config,
-    ncclEpAllocFn_t alloc_fn,
-    ncclEpFreeFn_t free_fn
+    const ncclEpGroupConfig_t* in_config
 ) {
     cudaStream_t stream;
     CUDA_CHECK(cudaStreamCreate(&stream));
@@ -994,10 +996,19 @@ ncclResult_t ncclEpCreateGroup(
     ep_group->config.layout = effective_layout;
     EP_HOST_ASSERT(ep_group->config.layout != NCCL_EP_LAYOUT_AUTO &&
                    "ncclEpCreateGroup: layout was not resolved from AUTO");
-    // C-style cast required: cudaMalloc/cudaFree are overloaded and reinterpret_cast
-    // cannot disambiguate overloaded functions.
-    ep_group->alloc_fn = alloc_fn ? alloc_fn : (ncclEpAllocFn_t)cudaMalloc;
-    ep_group->free_fn = free_fn ? free_fn : (ncclEpFreeFn_t)cudaFree;
+
+
+    ep_group->alloc.alloc_fn = default_alloc_fn;
+    ep_group->alloc.free_fn  = default_free_fn;
+    if (in_config->alloc.alloc_fn || in_config->alloc.free_fn) {
+        if (!(in_config->alloc.alloc_fn && in_config->alloc.free_fn)) {
+            fprintf(stderr, "NCCL EP: Failed to create group: Both alloc and free callbacks must be provided\n");
+            return ncclInvalidUsage;
+        }
+        ep_group->alloc.alloc_fn = in_config->alloc.alloc_fn;
+        ep_group->alloc.free_fn  = in_config->alloc.free_fn;
+        ep_group->alloc.context  = in_config->alloc.context;
+    }
 
     NCCL_CHECK_RESULT(ncclCommCount(comm, &ep_group->nRanks));
     NCCL_CHECK_RESULT(ncclCommUserRank(comm, &ep_group->rank));
@@ -1089,7 +1100,7 @@ ncclResult_t ncclEpCreateGroup(
     CUDA_CHECK(cudaGetDeviceProperties(&device_prop, ep_group->cuda_device_id));
     ep_group->device_sm_count = device_prop.multiProcessorCount;
 
-    CUDA_CHECK(ep_group->alloc_fn(&ep_group->ep_workspace, NUM_WORKSPACE_BYTES));
+    CUDA_CHECK(ep_group->alloc.alloc_fn(&ep_group->ep_workspace, NUM_WORKSPACE_BYTES, ep_group->alloc.context));
     CUDA_CHECK(cudaMemsetAsync(ep_group->ep_workspace, 0, NUM_WORKSPACE_BYTES, stream));
 
     ncclCommProperties_t props = NCCL_COMM_PROPERTIES_INITIALIZER;
@@ -1195,7 +1206,7 @@ ncclResult_t ncclEpGroupDestroy(
     }
     // Clean up workspace memory
     if (ep_group->ep_workspace != nullptr) {
-        CUDA_CHECK(ep_group->free_fn(ep_group->ep_workspace));
+        CUDA_CHECK(ep_group->alloc.free_fn(ep_group->ep_workspace, ep_group->alloc.context));
     }
 
     // Clean up RDMA resources (single-comm path: 1 window, 1 devcomm on ep_group->comm)
@@ -1245,19 +1256,16 @@ static ncclResult_t ncclEpTensorCreateInternal(
     unsigned int ndim,
     ncclDataType_t datatype,
     void* data,
-    unsigned int size0,
-    unsigned int size1,
-    unsigned int size2,
-    unsigned int size3,
-    unsigned int size4,
     ncclWindow_t win,
-    uint64_t win_offset
-) {
-    assert(tensor != nullptr);
-    assert(data != nullptr || win != ncclWindow_t{});
-    assert(ndim > 0 && ndim <= 5);
-
-    unsigned int dim_sizes[] = {size0, size1, size2, size3, size4};
+    uint64_t win_offset,
+    const size_t* sizes)
+{
+    if (tensor == nullptr || sizes == nullptr) {
+        return ncclInvalidUsage;
+    }
+    if (data == nullptr && win == ncclWindow_t{}) {
+        return ncclInvalidUsage;
+    }
 
     struct ncclNDTensor* t = new struct ncclNDTensor();
     t->version = 1;
@@ -1267,11 +1275,11 @@ static ncclResult_t ncclEpTensorCreateInternal(
     t->win_hdl = win;
     t->win_offset = win_offset;
 
-    t->sizes = new unsigned int[ndim];
-    t->strides = new unsigned int[ndim];
+    t->sizes = new size_t[ndim];
+    t->strides = new size_t[ndim];
 
     for (unsigned int i = 0; i < ndim; i++) {
-        t->sizes[i] = dim_sizes[i];
+        t->sizes[i] = sizes[i];
         t->strides[i] = 1;
     }
 
@@ -1284,16 +1292,11 @@ ncclResult_t ncclEpTensorCreate(
     unsigned int ndim,
     ncclDataType_t datatype,
     void* data,
-    unsigned int size0,
-    unsigned int size1,
-    unsigned int size2,
-    unsigned int size3,
-    unsigned int size4
-) {
+    const size_t* sizes)
+{
     return ncclEpTensorCreateInternal(
         tensor, ndim, datatype, data,
-        size0, size1, size2, size3, size4,
-        ncclWindow_t{}, 0);
+        ncclWindow_t{}, 0, sizes);
 }
 
 ncclResult_t ncclEpTensorCreateFromWindow(
@@ -1302,20 +1305,14 @@ ncclResult_t ncclEpTensorCreateFromWindow(
     ncclDataType_t datatype,
     ncclWindow_t win,
     uint64_t win_offset,
-    unsigned int size0,
-    unsigned int size1,
-    unsigned int size2,
-    unsigned int size3,
-    unsigned int size4
-) {
+    const size_t* sizes)
+{
     if (tensor == nullptr || win == ncclWindow_t{}) {
         return ncclInvalidArgument;
     }
-
     return ncclEpTensorCreateInternal(
         tensor, ndim, datatype, nullptr,
-        size0, size1, size2, size3, size4,
-        win, win_offset);
+        win, win_offset, sizes);
 }
 
 ncclResult_t ncclEpTensorDestroy(
@@ -1343,7 +1340,7 @@ ncclResult_t ncclEpTensorGetData(
 
 ncclResult_t ncclEpTensorGetSizes(
     ncclNDTensor_t tensor,
-    const unsigned int** sizes,
+    const size_t** sizes,
     unsigned int* ndim
 ) {
     assert(tensor != nullptr);
@@ -1636,27 +1633,31 @@ static ncclResult_t ll_init_handle(ncclEpHandle_t handle, ncclEpGroup_t ep_group
 
     if (handle_mem != nullptr) {
         assert(handle_mem->ndim == 1 && handle_mem->datatype == ncclUint8);
-        assert(static_cast<size_t>(handle_mem->sizes[0]) >= ll_handle_mem_size(ep_group, num_topk) &&
+        assert(handle_mem->sizes[0] >= ll_handle_mem_size(ep_group, num_topk) &&
                "handle_mem too small; use ncclEpHandleMemSize to query required size");
         handle->ll.handle_mem = handle_mem->data;
         handle->ll.owns_handle_mem = false;
     } else {
-        CUDA_CHECK(ep_group->alloc_fn(&handle->ll.handle_mem, ll_handle_mem_size(ep_group, num_topk)));
+        CUDA_CHECK(ep_group->alloc.alloc_fn(&handle->ll.handle_mem, ll_handle_mem_size(ep_group, num_topk), ep_group->alloc.context));
         handle->ll.owns_handle_mem = true;
     }
     char* base = static_cast<char*>(handle->ll.handle_mem);
 
     const size_t recv_src_count = static_cast<size_t>(ep_group->nRanks) *
         (1 + static_cast<size_t>(num_topk + 1) * ep_group->config.max_send_tokens_per_rank);
-    ncclEpTensorCreate(&handle->ll.expert_recv_source_indices, 1, ncclInt32, base,
-        static_cast<unsigned int>(recv_src_count));
+    { 
+        size_t sz[] = {recv_src_count};
+        NCCLCHECK(ncclEpTensorCreate(&handle->ll.expert_recv_source_indices, 1, ncclInt32, base, sz));
+    }
 
-    auto align256 = [](size_t s) -> size_t { return (s + 255) & ~size_t(255); };
-    const size_t recv_src_bytes = align256(recv_src_count * sizeof(int32_t));
-    ncclEpTensorCreate(&handle->ll.expert_dispatch_layout, 2, ncclInt64,
-        base + recv_src_bytes,
-        static_cast<unsigned int>(ep_group->num_local_experts),
-        static_cast<unsigned int>(ep_group->nRanks));
+    {
+        auto align256 = [](size_t s) -> size_t { return (s + 255) & ~size_t(255); };
+        const size_t recv_src_bytes = align256(recv_src_count * sizeof(int32_t));
+        size_t sz[] = {static_cast<size_t>(ep_group->num_local_experts),
+                       static_cast<size_t>(ep_group->nRanks)};
+        NCCLCHECK(ncclEpTensorCreate(&handle->ll.expert_dispatch_layout, 2, ncclInt64,
+                   base + recv_src_bytes, sz));
+    }
     handle->num_topk = num_topk;
     handle->ll.layout = layout;
     return ncclSuccess;
@@ -1672,7 +1673,7 @@ static ncclResult_t ht_init_handle(ncclEpHandle_t handle, ncclEpGroup_t ep_group
 
     if (handle_mem != nullptr) {
         assert(handle_mem->ndim == 1 && handle_mem->datatype == ncclUint8);
-        assert(static_cast<size_t>(handle_mem->sizes[0]) >= L.total &&
+        assert(handle_mem->sizes[0] >= L.total &&
                "handle_mem too small; use ncclEpHandleMemSize to query required size");
         if (handle_mem->win_hdl != ncclWindow_t{}) {
             NCCLCHECK(resolveTensorWindowBinding(ep_group, handle_mem, 0));
@@ -1680,7 +1681,7 @@ static ncclResult_t ht_init_handle(ncclEpHandle_t handle, ncclEpGroup_t ep_group
         handle->hybridep.preprocessing_block = handle_mem->data;
         handle->hybridep.owns_handle_mem = false;
     } else {
-        CUDA_CHECK(ep_group->alloc_fn(&handle->hybridep.preprocessing_block, L.total));
+        CUDA_CHECK(ep_group->alloc.alloc_fn(&handle->hybridep.preprocessing_block, L.total, ep_group->alloc.context));
         handle->hybridep.owns_handle_mem = true;
     }
     handle->hybridep.preprocessing_zero_region_size = L.zero_region;
@@ -1852,7 +1853,7 @@ ncclResult_t ncclEpUpdateHandle(
     auto check_int32_or_int64 = [&](ncclNDTensor_t t, const char* name) {
         assert(t->ndim == 1 && "tensor must be 1D");
         assert((t->datatype == ncclInt32 || t->datatype == ncclInt64) && "tensor must be ncclInt32 or ncclInt64");
-        assert(t->sizes[0] >= static_cast<unsigned int>(ep_group->num_local_experts) &&
+        assert(t->sizes[0] >= static_cast<size_t>(ep_group->num_local_experts) &&
                "tensor size must be >= num_local_experts");
         assert(t->data != nullptr && "tensor data must not be null");
         (void)name;
@@ -1980,13 +1981,13 @@ ncclResult_t ncclEpHandleDestroy(
         tensor_free(handle->ll.expert_recv_source_indices);
         tensor_free(handle->ll.expert_dispatch_layout);
         if (handle->ll.owns_handle_mem && handle->ll.handle_mem) {
-            handle->group->free_fn(handle->ll.handle_mem);
+            handle->group->alloc.free_fn(handle->ll.handle_mem, handle->group->alloc.context);
             handle->ll.handle_mem = nullptr;
         }
     } else if (handle->group->config.algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) {
         if (handle->hybridep.owns_handle_mem) {
             if (handle->hybridep.preprocessing_block) {
-                handle->group->free_fn(handle->hybridep.preprocessing_block);
+                handle->group->alloc.free_fn(handle->hybridep.preprocessing_block, handle->group->alloc.context);
                 handle->hybridep.preprocessing_block = nullptr;
             }
         }

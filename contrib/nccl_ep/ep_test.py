@@ -134,18 +134,17 @@ def cuda_device_reset():
 def tensor_create(nccl, ndim, datatype, *sizes):
     """cudaMalloc + ncclEpTensorCreate. Returns the tensor; data buffer is freed by tensor_destroy."""
     tensor = ncclNDTensor_t()
-    padded = list(sizes) + [1] * (5 - len(sizes))
     nbytes = datatype.itemsize
     for i in range(ndim):
-        nbytes *= padded[i]
+        nbytes *= sizes[i]
     data = cuda_malloc(nbytes)
+    SizesArray = ctypes.c_size_t * ndim
+    sizes_arr = SizesArray(*sizes)
     nccl.NCCL_CHECK(nccl._funcs["ncclEpTensorCreate"](
         ctypes.byref(tensor),
         ctypes.c_uint(ndim), ctypes.c_int(int(datatype)),
         data,
-        ctypes.c_uint(padded[0]), ctypes.c_uint(padded[1]),
-        ctypes.c_uint(padded[2]), ctypes.c_uint(padded[3]),
-        ctypes.c_uint(padded[4]),
+        sizes_arr,
     ))
     return tensor
 

@@ -186,11 +186,11 @@ static void getHostName(char* hostname, int maxlen) {
 }
 
 // CUDA allocator callbacks for ncclEpCreateGroup
-static cudaError_t cudaAllocCallback(void** ptr, size_t size) {
+static cudaError_t cudaAllocCallback(void** ptr, size_t size, void* /*context*/) {
     return cudaMalloc(ptr, size);
 }
 
-static cudaError_t cudaFreeCallback(void* ptr) {
+static cudaError_t cudaFreeCallback(void* ptr, void* /*context*/) {
     return cudaFree(ptr);
 }
 
@@ -226,7 +226,7 @@ static ncclResult_t epMakeTensor(ncclNDTensor_t* tensor, unsigned int ndim,
                                  unsigned int s0, unsigned int s1 = 1, unsigned int s2 = 1,
                                  unsigned int s3 = 1, unsigned int s4 = 1,
                                  const EpTensorAllocOptions* opts = nullptr) {
-    unsigned int dims[5] = {s0, s1, s2, s3, s4};
+    size_t dims[5] = {s0, s1, s2, s3, s4};
     size_t total = 1;
     for (unsigned int i = 0; i < ndim; i++) total *= dims[i];
     const size_t bytes = total * epDtypeBytes(dt);
@@ -273,7 +273,7 @@ static ncclResult_t epMakeTensor(ncclNDTensor_t* tensor, unsigned int ndim,
         }
 
         r = ncclEpTensorCreateFromWindow(
-            tensor, ndim, dt, win, 0, s0, s1, s2, s3, s4);
+            tensor, ndim, dt, win, 0, dims);
         if (r != ncclSuccess) {
             ncclCommWindowDeregister(opts->window_comm, win);
             free_data();
@@ -285,7 +285,7 @@ static ncclResult_t epMakeTensor(ncclNDTensor_t* tensor, unsigned int ndim,
         return ncclSuccess;
     }
 
-    ncclResult_t r = ncclEpTensorCreate(tensor, ndim, dt, data, s0, s1, s2, s3, s4);
+    ncclResult_t r = ncclEpTensorCreate(tensor, ndim, dt, data, dims);
     if (r != ncclSuccess) {
         free_data();
         return r;
@@ -907,7 +907,7 @@ static ValidationResult validateDispatchOutputLLExpertMaj(
     ErrorReporter rep;
     int64_t* src_topk = new int64_t[num_tokens * top_k];
 
-    const unsigned int* out0_sizes; unsigned int out0_ndim;
+    const size_t* out0_sizes; unsigned int out0_ndim;
     NCCLCHECK(ncclEpTensorGetSizes(dispatch_outputs.tokens, &out0_sizes, &out0_ndim));
     unsigned int max_tpe = out0_sizes[1];
     size_t total_size = static_cast<size_t>(num_local_experts) * max_tpe * hidden;
@@ -996,9 +996,9 @@ static ValidationResult validateDispatchOutputLLRankMaj(
     int errors_printed = 0;
 
     // Get output tensor sizes: outputs[0] is [nRanks * max_tpr, hidden]
-    const unsigned int* out0_sizes; unsigned int out0_ndim;
+    const size_t* out0_sizes; unsigned int out0_ndim;
     NCCLCHECK(ncclEpTensorGetSizes(dispatch_outputs.tokens, &out0_sizes, &out0_ndim));
-    const unsigned int max_tpr = out0_sizes[0] / (unsigned)nRanks;
+    const size_t max_tpr = out0_sizes[0] / nRanks;
     const size_t total_slots   = (size_t)nRanks * max_tpr;
 
     // Copy recv_x, recv_topk_weights, recv_topk_idx, recv_rank_counter to host
@@ -1168,7 +1168,7 @@ static void preReduceRankMajor(
     unsigned int top_k,
     int nRanks
 ) {
-    const unsigned int* out0_sizes; unsigned int out0_ndim;
+    const size_t* out0_sizes; unsigned int out0_ndim;
     NCCLCHECK(ncclEpTensorGetSizes(dispatch_outputs.tokens, &out0_sizes, &out0_ndim));
     const unsigned int max_tpr  = out0_sizes[0] / (unsigned)nRanks;
     const unsigned int hidden   = out0_sizes[1];
@@ -1234,7 +1234,7 @@ static ValidationResult validateDispatchOutputHTRankMaj(
     int errors_printed = 0;
     int64_t* src_topk = new int64_t[num_tokens * top_k];
 
-    const unsigned int* out0_sizes; unsigned int out0_ndim;
+    const size_t* out0_sizes; unsigned int out0_ndim;
     NCCLCHECK(ncclEpTensorGetSizes(dispatch_outputs.tokens, &out0_sizes, &out0_ndim));
     unsigned int buf_rows = out0_sizes[0];
     size_t recv_size = static_cast<size_t>(buf_rows) * hidden;
@@ -1356,7 +1356,7 @@ static ValidationResult validateDispatchOutputHTExpertMaj(
     ErrorReporter rep;
     int64_t* src_topk = new int64_t[num_tokens * top_k];
 
-    const unsigned int* out0_sizes; unsigned int out0_ndim;
+    const size_t* out0_sizes; unsigned int out0_ndim;
     NCCLCHECK(ncclEpTensorGetSizes(dispatch_outputs.tokens, &out0_sizes, &out0_ndim));
     unsigned int buf_rows = out0_sizes[0];
     size_t recv_size = static_cast<size_t>(buf_rows) * hidden;
@@ -2760,12 +2760,15 @@ int main(int argc, char* argv[]) {
         max_recv_token_slots_per_rank = std::max(1u, est * safety);
     }
     config.max_recv_token_slots_per_rank = max_recv_token_slots_per_rank;
+    config.alloc.alloc_fn = cudaAllocCallback;
+    config.alloc.free_fn  = cudaFreeCallback;
+    config.alloc.context  = nullptr;
 
     printf("Rank %d: Testing ncclEpCreateGroup with algorithm: %s\n", myRank,
            (algorithm == NCCL_EP_ALGO_LOW_LATENCY) ? "LOW_LATENCY" : "HIGH_THROUGHPUT");
     MPICHECK(MPI_Barrier(MPI_COMM_WORLD));
     double group_create_start = MPI_Wtime();
-    NCCLCHECK(ncclEpCreateGroup(&ep_group, comm, &config, cudaAllocCallback, cudaFreeCallback));
+    NCCLCHECK(ncclEpCreateGroup(&ep_group, comm, &config));
     double group_create_end = MPI_Wtime();
     double group_create_ms = (group_create_end - group_create_start) * 1000.0;
     printf("Rank %d: ncclEpCreateGroup took %.2f ms\n", myRank, group_create_ms);
@@ -3137,21 +3140,21 @@ int main(int argc, char* argv[]) {
 
                 if (!is_ll_mode) {
                     // HT: 2D [num_recv_tokens, hidden]
-                    const unsigned int* eo_sizes; unsigned int eo_ndim;
+                    const size_t* eo_sizes; unsigned int eo_ndim;
                     NCCLCHECK(ncclEpTensorGetSizes(combine_inputs.tokens, &eo_sizes, &eo_ndim));
-                    size_t data_size = static_cast<size_t>(eo_sizes[0]) * eo_sizes[1] * sizeof(uint16_t);
+                    size_t data_size = eo_sizes[0] * eo_sizes[1] * sizeof(uint16_t);
                     CUDACHECK(cudaMemcpy(eo_data, output0_data, data_size, cudaMemcpyDeviceToDevice));
                 } else if (config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR) {
                     // LL expert-major: 3D [num_local_experts, max_tokens_per_expert, hidden]
-                    const unsigned int* out0_sizes; unsigned int out0_ndim;
+                    const size_t* out0_sizes; unsigned int out0_ndim;
                     NCCLCHECK(ncclEpTensorGetSizes(dispatch_outputs.tokens, &out0_sizes, &out0_ndim));
-                    size_t data_size = static_cast<size_t>(out0_sizes[0]) * out0_sizes[1] * out0_sizes[2] * sizeof(uint16_t);
+                    size_t data_size = out0_sizes[0] * out0_sizes[1] * out0_sizes[2] * sizeof(uint16_t);
                     CUDACHECK(cudaMemcpy(eo_data, output0_data, data_size, cudaMemcpyDeviceToDevice));
                 } else {
                     // LL rank-major: copy then apply per-rank weight sums before combine
-                    const unsigned int* out0_sizes; unsigned int out0_ndim;
+                    const size_t* out0_sizes; unsigned int out0_ndim;
                     NCCLCHECK(ncclEpTensorGetSizes(dispatch_outputs.tokens, &out0_sizes, &out0_ndim));
-                    size_t data_size = static_cast<size_t>(out0_sizes[0]) * out0_sizes[1] * sizeof(uint16_t);
+                    size_t data_size = out0_sizes[0] * out0_sizes[1] * sizeof(uint16_t);
                     CUDACHECK(cudaMemcpy(eo_data, output0_data, data_size, cudaMemcpyDeviceToDevice));
                     preReduceRankMajor(alloc, dispatch_outputs, dispatch_layout_info,
                                        combine_inputs, top_k, nRanks);

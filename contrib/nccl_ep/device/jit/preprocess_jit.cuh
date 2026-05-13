@@ -24,29 +24,29 @@ constexpr const char* kScanJitEntryName = "nccl_ep_jit_ht_scan_kernel";
 
 inline const char* scan_bool_literal(bool value) { return value ? "true" : "false"; }
 
-template <
-    int NUM_THREADS_PER_BLOCK,
-    int NUM_OF_BLOCKS,
-    int NUM_LSA_TEAMS,
-    int LSA_TEAM_SIZE,
-    bool ENABLE_PER_EXPERT_COUNTS>
-std::string scan_jit_source() {
+inline std::string scan_jit_source(
+    int num_threads_per_block,
+    int num_of_blocks,
+    int num_lsa_teams,
+    int lsa_team_size,
+    bool enable_per_expert_counts) {
     std::ostringstream src;
     src
         << "#include \"device/hybrid_ep.cuh\"\n"
         << "\n"
-        << "extern \"C\" __launch_bounds__(" << NUM_THREADS_PER_BLOCK << ", 1)\n"
+        << "extern \"C\" __launch_bounds__(" << num_threads_per_block << ", 1)\n"
         << "__global__ void " << kScanJitEntryName << "(\n"
-        << "    const __grid_constant__ hybrid_ep::scan_kernel_param_t<" << LSA_TEAM_SIZE << "> p) {\n"
+        << "    const __grid_constant__ hybrid_ep::scan_kernel_param_t p) {\n"
         << "  extern __shared__ uint8_t smem_bytes[];\n"
         << "  hybrid_ep::scan_impl<\n"
-        << "      " << NUM_THREADS_PER_BLOCK << ",\n"
-        << "      " << NUM_OF_BLOCKS << ",\n"
-        << "      " << NUM_LSA_TEAMS << ",\n"
-        << "      " << LSA_TEAM_SIZE << ",\n"
-        << "      " << scan_bool_literal(ENABLE_PER_EXPERT_COUNTS) << ">(\n"
+        << "      " << num_threads_per_block << ",\n"
+        << "      " << num_of_blocks << ",\n"
+        << "      " << num_lsa_teams << ",\n"
+        << "      " << lsa_team_size << ",\n"
+        << "      " << scan_bool_literal(enable_per_expert_counts) << ">(\n"
         << "      p.input_routing_map, p.tmp, p.sparse_to_dense_map, p.rdma_to_attn_map, p.attn_to_rdma_map,\n"
-        << "      p.token_rank_mask, p.num_of_tokens_for_experts, p.local_expert_routing_map, p.per_expert_token_counts,\n"
+        << "      reinterpret_cast<hybrid_ep::RankMask<" << lsa_team_size << ">*>(p.token_rank_mask),\n"
+        << "      p.num_of_tokens_for_experts, p.local_expert_routing_map, p.per_expert_token_counts,\n"
         << "      p.node_rank, p.local_rank, p.num_of_tokens_per_rank, p.num_of_ranks_per_node, p.experts_per_rank,\n"
         << "      p.remap_alignment, p.remap_internal_offsets, p.remap_padded_out_counts, p.remap_out_offsets,\n"
         << "      p.remap_actual_counts_out, p.s2d_inner_dim, p.recv_total_counter, p.out_is_int64,\n"
@@ -55,14 +55,13 @@ std::string scan_jit_source() {
     return src.str();
 }
 
-template <
-    int NUM_THREADS_PER_BLOCK,
-    int NUM_OF_BLOCKS,
-    int NUM_LSA_TEAMS,
-    int LSA_TEAM_SIZE,
-    bool ENABLE_PER_EXPERT_COUNTS>
-void launch_scan(
-    ::hybrid_ep::scan_kernel_param_t<LSA_TEAM_SIZE>& param,
+inline void launch_scan(
+    int num_threads_per_block,
+    int num_of_blocks,
+    int num_lsa_teams,
+    int lsa_team_size,
+    bool enable_per_expert_counts,
+    ::hybrid_ep::scan_kernel_param_t& param,
     int dynamic_smem_bytes,
     cudaStream_t stream) {
     static const int variant_identity = 0;
@@ -70,19 +69,15 @@ void launch_scan(
         std::ostringstream name;
         name
             << "scan"
-            << "_nodes" << NUM_LSA_TEAMS
-            << "_lsa" << LSA_TEAM_SIZE
-            << "_threads" << NUM_THREADS_PER_BLOCK
-            << "_blocks" << NUM_OF_BLOCKS
-            << (ENABLE_PER_EXPERT_COUNTS ? "_pec" : "_nopec");
+            << "_nodes" << num_lsa_teams
+            << "_lsa" << lsa_team_size
+            << "_threads" << num_threads_per_block
+            << "_blocks" << num_of_blocks
+            << (enable_per_expert_counts ? "_pec" : "_nopec");
         return name.str();
     }();
-    const std::string source = scan_jit_source<
-        NUM_THREADS_PER_BLOCK,
-        NUM_OF_BLOCKS,
-        NUM_LSA_TEAMS,
-        LSA_TEAM_SIZE,
-        ENABLE_PER_EXPERT_COUNTS>();
+    const std::string source = scan_jit_source(
+        num_threads_per_block, num_of_blocks, num_lsa_teams, lsa_team_size, enable_per_expert_counts);
 
     ::nccl_ep::jit::JitKernelVariant variant;
     variant.kernel_family = "ht_scan";
@@ -91,8 +86,8 @@ void launch_scan(
     variant.entry_name = kScanJitEntryName;
     variant.identity = &variant_identity;
     variant.runtime_key = 0;
-    variant.num_blocks = NUM_OF_BLOCKS;
-    variant.block_dim = NUM_THREADS_PER_BLOCK;
+    variant.num_blocks = num_of_blocks;
+    variant.block_dim = num_threads_per_block;
     variant.dynamic_smem_bytes = dynamic_smem_bytes;
 
     std::string error;

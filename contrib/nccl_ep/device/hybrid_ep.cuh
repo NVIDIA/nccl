@@ -4268,16 +4268,17 @@ __device__ __forceinline__ void scan_impl(const uint8_t* input_routing_map,
   }  // end Step 4 (fused remap)
 }
 
-// Parameter pack for the scan JIT entry. The launch_jit_kernel API passes a single
-// struct by address; scan_jit_entry unpacks this into the scan_impl call.
-template<int LSA_TEAM_SIZE>
+// Parameter pack for the scan JIT entry. Non-templated so the host can build it
+// once without knowing LSA_TEAM_SIZE at compile time; the JIT-emitted wrapper
+// reinterpret_casts token_rank_mask to RankMask<LSA_TEAM_SIZE>* before calling
+// scan_impl.
 struct scan_kernel_param_t {
     const uint8_t* input_routing_map;
     tmp_state_t* tmp;
     int32_t* sparse_to_dense_map;
     bool* rdma_to_attn_map;
     bool* attn_to_rdma_map;
-    RankMask<LSA_TEAM_SIZE>* token_rank_mask;
+    void* token_rank_mask;
     int32_t* num_of_tokens_for_experts;
     bool* local_expert_routing_map;
     int32_t* per_expert_token_counts;

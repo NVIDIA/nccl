@@ -371,60 +371,52 @@ void call_metadata_preprocessing(
     // is only instantiated up to 32. Extend both when adding MNNVL support.
     EP_HOST_ASSERT(num_ranks_per_node <= 32 && "metadata_preprocessing: LSA team size > 32 not yet supported (MNNVL)");
 
-    HYBRIDEP_SWITCH_NUM_LSA_TEAMS(num_nodes, {
-        HYBRIDEP_SWITCH_LSA_TEAM_SIZE(num_ranks_per_node, {
-            constexpr int NUM_THREADS_PER_BLOCK = HYBRIDEP_NUM_THREADS_PER_BLOCK_PREPROCESSING;
-            constexpr int NUM_OF_BLOCKS = HYBRIDEP_NUM_BLOCKS_PREPROCESSING;
-            constexpr int NUM_OF_WARPS_PER_BLOCK_SCAN = NUM_THREADS_PER_BLOCK / 32;
+    constexpr int NUM_THREADS_PER_BLOCK = HYBRIDEP_NUM_THREADS_PER_BLOCK_PREPROCESSING;
+    constexpr int NUM_OF_BLOCKS = HYBRIDEP_NUM_BLOCKS_PREPROCESSING;
+    constexpr int NUM_OF_WARPS_PER_BLOCK_SCAN = NUM_THREADS_PER_BLOCK / 32;
 
-            const size_t preprocessing_tmp_sz = NUM_OF_BLOCKS * num_ranks_per_node * sizeof(::hybrid_ep::tmp_state_t);
-            CUDA_CHECK(cudaMemsetAsync(scan_tmp, 0, preprocessing_tmp_sz, stream));
+    const size_t preprocessing_tmp_sz = NUM_OF_BLOCKS * num_ranks_per_node * sizeof(::hybrid_ep::tmp_state_t);
+    CUDA_CHECK(cudaMemsetAsync(scan_tmp, 0, preprocessing_tmp_sz, stream));
 
-            const size_t scan_smem_size =
-                (NUM_OF_WARPS_PER_BLOCK_SCAN * num_ranks_per_node * sizeof(int32_t)) +
-                (num_ranks_per_node * sizeof(int32_t)) +
-                (per_expert_token_counts != nullptr ? experts_per_rank * sizeof(int32_t) : 0);
-            const size_t remap_smem_size = (alignment > 0)
-                ? (static_cast<size_t>(experts_per_rank) * sizeof(int64_t) +
-                   static_cast<size_t>(NUM_OF_WARPS_PER_BLOCK_SCAN) * experts_per_rank * sizeof(int32_t))
-                : 0;
-            const int dynamic_smem_bytes = static_cast<int>(
-                scan_smem_size > remap_smem_size ? scan_smem_size : remap_smem_size);
+    const size_t scan_smem_size =
+        (NUM_OF_WARPS_PER_BLOCK_SCAN * num_ranks_per_node * sizeof(int32_t)) +
+        (num_ranks_per_node * sizeof(int32_t)) +
+        (per_expert_token_counts != nullptr ? experts_per_rank * sizeof(int32_t) : 0);
+    const size_t remap_smem_size = (alignment > 0)
+        ? (static_cast<size_t>(experts_per_rank) * sizeof(int64_t) +
+           static_cast<size_t>(NUM_OF_WARPS_PER_BLOCK_SCAN) * experts_per_rank * sizeof(int32_t))
+        : 0;
+    const int dynamic_smem_bytes = static_cast<int>(
+        scan_smem_size > remap_smem_size ? scan_smem_size : remap_smem_size);
 
-            ::hybrid_ep::scan_kernel_param_t<LSA_TEAM_SIZE> sp;
-            sp.input_routing_map = global_routing_map;
-            sp.tmp = reinterpret_cast<::hybrid_ep::tmp_state_t*>(scan_tmp);
-            sp.sparse_to_dense_map = sparse_to_dense_map;
-            sp.rdma_to_attn_map = rdma_to_attn_map;
-            sp.attn_to_rdma_map = attn_to_rdma_map;
-            sp.token_rank_mask = reinterpret_cast<::hybrid_ep::RankMask<LSA_TEAM_SIZE>*>(token_rank_mask);
-            sp.num_of_tokens_for_experts = num_tokens_for_experts;
-            sp.local_expert_routing_map = local_expert_routing_map;
-            sp.per_expert_token_counts = per_expert_token_counts;
-            sp.node_rank = node_rank;
-            sp.local_rank = local_rank;
-            sp.num_of_tokens_per_rank = num_tokens_per_rank;
-            sp.num_of_ranks_per_node = num_ranks_per_node;
-            sp.experts_per_rank = experts_per_rank;
-            sp.remap_alignment = alignment;
-            sp.remap_internal_offsets = internal_offsets;
-            sp.remap_padded_out_counts = padded_out_counts;
-            sp.remap_out_offsets = out_offsets;
-            sp.remap_actual_counts_out = actual_counts_out;
-            sp.s2d_inner_dim = s2d_inner_dim;
-            sp.recv_total_counter = recv_total_counter;
-            sp.out_is_int64 = out_is_int64;
-            sp.max_recv_token_slots_per_rank = max_recv_token_slots_per_rank;
+    ::hybrid_ep::scan_kernel_param_t sp;
+    sp.input_routing_map = global_routing_map;
+    sp.tmp = reinterpret_cast<::hybrid_ep::tmp_state_t*>(scan_tmp);
+    sp.sparse_to_dense_map = sparse_to_dense_map;
+    sp.rdma_to_attn_map = rdma_to_attn_map;
+    sp.attn_to_rdma_map = attn_to_rdma_map;
+    sp.token_rank_mask = token_rank_mask;
+    sp.num_of_tokens_for_experts = num_tokens_for_experts;
+    sp.local_expert_routing_map = local_expert_routing_map;
+    sp.per_expert_token_counts = per_expert_token_counts;
+    sp.node_rank = node_rank;
+    sp.local_rank = local_rank;
+    sp.num_of_tokens_per_rank = num_tokens_per_rank;
+    sp.num_of_ranks_per_node = num_ranks_per_node;
+    sp.experts_per_rank = experts_per_rank;
+    sp.remap_alignment = alignment;
+    sp.remap_internal_offsets = internal_offsets;
+    sp.remap_padded_out_counts = padded_out_counts;
+    sp.remap_out_offsets = out_offsets;
+    sp.remap_actual_counts_out = actual_counts_out;
+    sp.s2d_inner_dim = s2d_inner_dim;
+    sp.recv_total_counter = recv_total_counter;
+    sp.out_is_int64 = out_is_int64;
+    sp.max_recv_token_slots_per_rank = max_recv_token_slots_per_rank;
 
-            if (per_expert_token_counts != nullptr) {
-                jit::launch_scan<NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, NUM_LSA_TEAMS, LSA_TEAM_SIZE, true>(
-                    sp, dynamic_smem_bytes, stream);
-            } else {
-                jit::launch_scan<NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, NUM_LSA_TEAMS, LSA_TEAM_SIZE, false>(
-                    sp, dynamic_smem_bytes, stream);
-            }
-        });
-    });
+    jit::launch_scan(
+        NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, num_nodes, num_ranks_per_node,
+        per_expert_token_counts != nullptr, sp, dynamic_smem_bytes, stream);
 }
 
 size_t get_preprocessing_scan_tmp_size(int num_ranks_per_node) {

@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace nccl_ep {
 namespace hybridep {
@@ -26,6 +27,41 @@ inline const char* dispatch_bool_literal(bool value) { return value ? "true" : "
 
 inline const char* dispatch_token_data_type_literal(bool use_fp8) {
     return use_fp8 ? "uint8_t" : "uint16_t";
+}
+
+struct dispatch_warp_layout_t {
+    int inter_node_group_warps;
+    int inter_node_group_start;
+    int intra_node_g2s_group_warps;
+    int intra_node_g2s_group_start;
+    int intra_node_s2g_group_warps;
+    int intra_node_s2g_group_start;
+    int pad_group_warps;
+    int pad_group_start;
+    int num_pipelines;
+    int block_dim;
+};
+
+inline dispatch_warp_layout_t compute_dispatch_warp_layout(int num_lsa_teams, ncclEpLayout_t layout) {
+    const bool multinode_layout = (num_lsa_teams != 1);
+    dispatch_warp_layout_t L{};
+    L.num_pipelines = HYBRIDEP_DISPATCH_NUM_OF_PIPELINES_PER_BLOCK;
+    L.inter_node_group_warps    = multinode_layout ? HYBRIDEP_DISPATCH_N2N_WARPS : 0;
+    L.inter_node_group_start    = 0;
+    L.intra_node_g2s_group_warps = L.num_pipelines;
+    L.intra_node_g2s_group_start = multinode_layout ? HYBRIDEP_DISPATCH_N2N_WARPS : 0;
+    L.intra_node_s2g_group_warps = L.num_pipelines;
+    L.intra_node_s2g_group_start = multinode_layout
+        ? (HYBRIDEP_DISPATCH_N2N_WARPS + L.num_pipelines)
+        : L.num_pipelines;
+    L.pad_group_warps = (layout == NCCL_EP_LAYOUT_EXPERT_MAJOR) ? 1 : 0;
+    L.pad_group_start = L.intra_node_s2g_group_start + L.intra_node_s2g_group_warps;
+    L.block_dim = 32 * (
+        L.inter_node_group_warps +
+        L.intra_node_g2s_group_warps +
+        L.intra_node_s2g_group_warps +
+        L.pad_group_warps);
+    return L;
 }
 
 inline std::string dispatch_jit_source(
@@ -102,23 +138,7 @@ inline void launch_dispatch(
     void* param,
     int dynamic_smem_bytes,
     cudaStream_t stream) {
-    const bool multinode_layout = (num_lsa_teams != 1);
-    const int num_pipelines = HYBRIDEP_DISPATCH_NUM_OF_PIPELINES_PER_BLOCK;
-    const int inter_node_group_warps    = multinode_layout ? HYBRIDEP_DISPATCH_N2N_WARPS : 0;
-    const int inter_node_group_start    = 0;
-    const int intra_node_g2s_group_warps = num_pipelines;
-    const int intra_node_g2s_group_start = multinode_layout ? HYBRIDEP_DISPATCH_N2N_WARPS : 0;
-    const int intra_node_s2g_group_warps = num_pipelines;
-    const int intra_node_s2g_group_start = multinode_layout
-        ? (HYBRIDEP_DISPATCH_N2N_WARPS + num_pipelines)
-        : num_pipelines;
-    const int pad_group_warps = (layout == NCCL_EP_LAYOUT_EXPERT_MAJOR) ? 1 : 0;
-    const int pad_group_start = intra_node_s2g_group_start + intra_node_s2g_group_warps;
-    const int block_dim = 32 * (
-        inter_node_group_warps +
-        intra_node_g2s_group_warps +
-        intra_node_s2g_group_warps +
-        pad_group_warps);
+    const dispatch_warp_layout_t L = compute_dispatch_warp_layout(num_lsa_teams, layout);
 
     static const int variant_identity = 0;
     const std::string variant_name = [&] {
@@ -138,21 +158,21 @@ inline void launch_dispatch(
         return name.str();
     }();
     const std::string source = dispatch_jit_source(
-        inter_node_group_warps,
-        inter_node_group_start,
-        intra_node_g2s_group_warps,
-        intra_node_g2s_group_start,
-        intra_node_s2g_group_warps,
-        intra_node_s2g_group_start,
-        pad_group_warps,
-        pad_group_start,
+        L.inter_node_group_warps,
+        L.inter_node_group_start,
+        L.intra_node_g2s_group_warps,
+        L.intra_node_g2s_group_start,
+        L.intra_node_s2g_group_warps,
+        L.intra_node_s2g_group_start,
+        L.pad_group_warps,
+        L.pad_group_start,
         num_of_stages,
         num_of_in_flight_s2g,
         num_of_tokens_per_chunk,
         num_lsa_teams,
         num_of_blocks,
         forward_dispatch,
-        num_pipelines,
+        L.num_pipelines,
         lsa_team_size,
         layout,
         use_fp8,
@@ -166,7 +186,7 @@ inline void launch_dispatch(
     variant.identity = &variant_identity;
     variant.runtime_key = static_cast<std::uint64_t>(hidden_dim);
     variant.num_blocks = num_of_blocks;
-    variant.block_dim = block_dim;
+    variant.block_dim = L.block_dim;
     variant.dynamic_smem_bytes = dynamic_smem_bytes;
 
     std::string error;
@@ -184,6 +204,72 @@ inline void launch_dispatch(
         std::abort();
     }
 }
+
+#ifdef HYBRIDEP_ENABLE_WARP_TIMING
+inline void dispatch_dump_warp_timing(
+    const dispatch_warp_layout_t& L,
+    int num_of_blocks,
+    ::hybrid_ep::dispatch_warp_timing_entry_t* d_wt,
+    cudaStream_t stream) {
+    const int wt_warps_per_block = L.block_dim / 32;
+    const int wt_total = num_of_blocks * wt_warps_per_block;
+    char* pmix_rank_str = std::getenv("PMIX_RANK");
+    int pmix_rank = pmix_rank_str ? std::atoi(pmix_rank_str) : -1;
+    static int iter_count = 0;
+    iter_count++;
+    if (pmix_rank != 0 || iter_count != 40) return;
+
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    std::vector<::hybrid_ep::dispatch_warp_timing_entry_t> h_wt(wt_total);
+    CUDA_CHECK(cudaMemcpy(h_wt.data(), d_wt, wt_total * sizeof(::hybrid_ep::dispatch_warp_timing_entry_t), cudaMemcpyDeviceToHost));
+    int _wt_clock_khz;
+    CUDA_CHECK(cudaDeviceGetAttribute(&_wt_clock_khz, cudaDevAttrClockRate, 0));
+    auto _wt_us = [&](long long cycles) { return (double)cycles * 1000.0 / _wt_clock_khz; };
+    auto _wt_print_group = [&](const char* name, int warp_start, int warp_count) {
+        if (warp_count == 0) return;
+        long long mn = LLONG_MAX, mx = 0, sum = 0;
+        int n = 0;
+        for (int b = 0; b < num_of_blocks; b++) {
+            for (int w = warp_start; w < warp_start + warp_count; w++) {
+                long long d = h_wt[b * wt_warps_per_block + w].end_clock -
+                              h_wt[b * wt_warps_per_block + w].start_clock;
+                if (d < mn) mn = d;
+                if (d > mx) mx = d;
+                sum += d;
+                n++;
+            }
+        }
+        std::printf("  %-9s (%d warp%s x %d blocks):  min=%8.2f us  max=%8.2f us  avg=%8.2f us\n",
+                    name, warp_count, warp_count > 1 ? "s" : " ", num_of_blocks,
+                    _wt_us(mn), _wt_us(mx), _wt_us(sum / n));
+    };
+    auto _wt_print_block_span = [&]() {
+        long long mn = LLONG_MAX, mx = 0, sum = 0;
+        for (int b = 0; b < num_of_blocks; b++) {
+            long long blk_start = LLONG_MAX;
+            long long blk_end = 0;
+            for (int w = 0; w < wt_warps_per_block; w++) {
+                const auto& e = h_wt[b * wt_warps_per_block + w];
+                if (e.start_clock < blk_start) blk_start = e.start_clock;
+                if (e.end_clock > blk_end) blk_end = e.end_clock;
+            }
+            long long d = blk_end - blk_start;
+            if (d < mn) mn = d;
+            if (d > mx) mx = d;
+            sum += d;
+        }
+        std::printf("[DISPATCH BLOCK SPAN TIMING] (%d blocks):  min=%8.2f us  max=%8.2f us  avg=%8.2f us\n",
+                    num_of_blocks, _wt_us(mn), _wt_us(mx), _wt_us(sum / num_of_blocks));
+    };
+    std::printf("[DISPATCH WORK WARP TIMING] (%d blocks, %d warps/block, %d pipelines, clock=%d kHz)\n",
+                num_of_blocks, wt_warps_per_block, L.num_pipelines, _wt_clock_khz);
+    _wt_print_group("INTER_N2N", L.inter_node_group_start, L.inter_node_group_warps);
+    _wt_print_group("INTRA_G2S", L.intra_node_g2s_group_start, L.intra_node_g2s_group_warps);
+    _wt_print_group("INTRA_S2G", L.intra_node_s2g_group_start, L.intra_node_s2g_group_warps);
+    _wt_print_group("PAD",       L.pad_group_start,           L.pad_group_warps);
+    _wt_print_block_span();
+}
+#endif
 
 } // namespace jit
 } // namespace hybridep

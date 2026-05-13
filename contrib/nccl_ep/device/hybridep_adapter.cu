@@ -552,12 +552,9 @@ void dispatch_impl(
             : ::hybrid_ep::calculate_dispatch_smem_layout_size<NCCL_EP_LAYOUT_FLAT>(d_config, d_model);
 
 #ifdef HYBRIDEP_ENABLE_WARP_TIMING
-        const bool dispatch_multinode = (num_nodes != 1);
-        constexpr int kDispatchNumPipelines = HYBRIDEP_DISPATCH_NUM_OF_PIPELINES_PER_BLOCK;
-        const int dispatch_inter_warps = dispatch_multinode ? HYBRIDEP_DISPATCH_N2N_WARPS : 0;
-        const int dispatch_pad_warps   = (params.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR) ? 1 : 0;
-        const int dispatch_block_dim   = 32 * (dispatch_inter_warps + 2 * kDispatchNumPipelines + dispatch_pad_warps);
-        const int dispatch_wt_total    = HYBRIDEP_DISPATCH_NUM_OF_BLOCKS * (dispatch_block_dim / 32);
+        const jit::dispatch_warp_layout_t dispatch_layout =
+            jit::compute_dispatch_warp_layout(num_nodes, params.layout);
+        const int dispatch_wt_total = HYBRIDEP_DISPATCH_NUM_OF_BLOCKS * (dispatch_layout.block_dim / 32);
         ::hybrid_ep::dispatch_warp_timing_entry_t* d_wt = nullptr;
         CUDA_CHECK(cudaMalloc(&d_wt, dispatch_wt_total * sizeof(::hybrid_ep::dispatch_warp_timing_entry_t)));
         CUDA_CHECK(cudaMemsetAsync(d_wt, 0, dispatch_wt_total * sizeof(::hybrid_ep::dispatch_warp_timing_entry_t), stream));
@@ -580,6 +577,7 @@ void dispatch_impl(
             stream);
 
 #ifdef HYBRIDEP_ENABLE_WARP_TIMING
+        jit::dispatch_dump_warp_timing(dispatch_layout, HYBRIDEP_DISPATCH_NUM_OF_BLOCKS, d_wt, stream);
         CUDA_CHECK(cudaFree(d_wt));
 #endif
     });

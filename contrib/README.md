@@ -14,7 +14,7 @@ team, and falls outside the NCCL release quality standards.
 - Provide new collective algorithms, higher-level communication APIs, tools,
   or reference implementations
 
-Changes to NCCL core (anything under `src/`) should follow the standard 
+Changes to NCCL core (anything under `src/`) should follow the standard
 contribution process described in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Current contributions

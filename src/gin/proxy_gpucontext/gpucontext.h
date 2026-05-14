@@ -3,7 +3,7 @@
 #include <algorithm>
 #include "alloc.h"
 
-constexpr size_t NCCL_GIN_PROXY_GPU_CONTEXT_MAX_SIZE = std::max({sizeof(ncclGinProxyGpuCtx_v1_t), 
+constexpr size_t NCCL_GIN_PROXY_GPU_CONTEXT_MAX_SIZE = std::max({sizeof(ncclGinProxyGpuCtx_v1_t),
                                                                sizeof(ncclGinProxyGpuCtx_t)});
 
 const int NCCL_GIN_PROXY_GPU_CONTEXT_VERSION = 2;

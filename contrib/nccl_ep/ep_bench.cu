@@ -1798,7 +1798,7 @@ PairedBenchResult runPairedBenchmark(
     }
 
     // Start CUPTI kernel timer
-    ktimer.start();    
+    ktimer.start();
 
     // Run paired benchmark with individual timing
     // Events are recorded immediately after kernel launch (before sync) to measure GPU time only
@@ -3010,7 +3010,7 @@ int main(int argc, char* argv[]) {
     MPICHECK(MPI_Barrier(MPI_COMM_WORLD));
     PairedBenchResult paired_result = runPairedBenchmark(
         dispatch_fn, combine_fn, actual_warmup, actual_iters,
-        dispatch_data_bytes, combine_data_bytes, 
+        dispatch_data_bytes, combine_data_bytes,
         ktimer,
         stream);
 
@@ -3052,7 +3052,7 @@ int main(int argc, char* argv[]) {
 
     // Print results and summary based on algorithm mode
     if (algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
-        printLowLatencyResults(myRank, nRanks, 
+        printLowLatencyResults(myRank, nRanks,
                               dispatch_result, combine_result, combined_result,
                               ktimer,
                               ll_bytes);

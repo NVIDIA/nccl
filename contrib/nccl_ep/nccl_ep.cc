@@ -1645,7 +1645,7 @@ static ncclResult_t ll_init_handle(ncclEpHandle_t handle, ncclEpGroup_t ep_group
 
     const size_t recv_src_count = static_cast<size_t>(ep_group->nRanks) *
         (1 + static_cast<size_t>(num_topk + 1) * ep_group->config.max_send_tokens_per_rank);
-    { 
+    {
         size_t sz[] = {recv_src_count};
         NCCLCHECK(ncclEpTensorCreate(&handle->ll.expert_recv_source_indices, 1, ncclInt32, base, sz));
     }

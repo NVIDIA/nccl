@@ -1522,7 +1522,7 @@ ncclResult_t ncclOsGetPciDeviceClass(nvmlDevice_t device, char* deviceClass, siz
 
 ncclResult_t ncclOsGetPciDeviceParent(nvmlDevice_t device, char** parentBusId) {
   *parentBusId = NULL;
-  
+
   // Get PCI bus ID from NVML device
   nvmlPciInfo_t pciInfo;
   ncclResult_t ret = ncclNvmlDeviceGetPciInfo(device, &pciInfo);

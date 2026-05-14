@@ -198,7 +198,7 @@ __device__  static inline void gpi_gpu_channel_post_gfd_tma(gpi_gpu_channel_t *c
   TmaCopy(dst, (const void*)gfd, size);
   TmaWait();
 }
-#else 
+#else
 #define gpi_gpu_channel_post_gfd_tma gpi_gpu_channel_post_gfd_thread
 #endif
 /**
@@ -320,7 +320,7 @@ NCCL_DEVICE_INLINE static void putImplMode(ncclGinCtx ctx, Coop coop, int peer, 
                                       uint64_t signalOpArg, bool hasCounter,
                                       ncclGinCounter_t counterId, bool hasDescriptor,
                                       ncclGinDescriptorSmem* descriptor,
-                                      cuda::thread_scope required, cuda::thread_scope given, 
+                                      cuda::thread_scope required, cuda::thread_scope given,
                                       uint32_t optFlags) {
     using nccl::utility::loadConst;
     coop.sync();
@@ -405,7 +405,7 @@ NCCL_DEVICE_INLINE static void putImplMode(ncclGinCtx ctx, Coop coop, int peer, 
                                       ncclGinSignalDescriptor signal, ncclGinSignalOp_t signalOp,
                                       uint64_t signalOpArg, bool hasDescriptor,
                                       ncclGinDescriptorSmem* descriptor,
-                                      cuda::thread_scope required, cuda::thread_scope given, 
+                                      cuda::thread_scope required, cuda::thread_scope given,
                                       uint32_t optFlags) {
 
     coop.sync();
@@ -472,14 +472,14 @@ NCCL_DEVICE_INLINE static void putImplMode(ncclGinCtx ctx, Coop coop, int peer, 
 
 
   template <enum gpi_resource_sharing_mode resource_sharing_mode, typename Coop>
-  NCCL_DEVICE_INLINE static void flushImplMode(ncclGinCtx ctx, Coop coop, 
+  NCCL_DEVICE_INLINE static void flushImplMode(ncclGinCtx ctx, Coop coop,
                                       bool hasDescriptor, ncclGinDescriptorSmem* descriptor,
                                       cuda::memory_order ord, uint32_t* abortFlag) {
     using nccl::utility::loadConst;
     using nccl::utility::testAbort;
     uint64_t gfd_local[GPI_GFD_SEG_MAX];
     gpi_gfd_t *gfd =  (gpi_gfd_t *) gfd_local;
-    gpi_gpu_channel_t *gpi_ctx = gpi_gpu_channel_get_ptr(ctx); 
+    gpi_gpu_channel_t *gpi_ctx = gpi_gpu_channel_get_ptr(ctx);
     uint64_t * flush_tickets_ctx = gpi_flush_tickets_get_ptr(gpi_ctx);
     int16_t flush_counter_idx = (int16_t)(((uint64_t*)loadConst(&gpi_ctx->gpu_signal_ptr_) - (uint64_t*)loadConst(&gpi_ctx->gpu_counter_ptr_)) / sizeof(uint64_t))-ctx.nRanks;
     if (abortFlag) {
@@ -503,7 +503,7 @@ NCCL_DEVICE_INLINE static void putImplMode(ncclGinCtx ctx, Coop coop, int peer, 
         gpi_gpu_channel_post_gfd<resource_sharing_mode, GPI_POST_MODE_THREAD>(gpi_ctx, gfd, 0);
         while (GPI_READ_ONCE((gpi_ctx->gpu_counter_ptr_[flush_counter_peer_idx].value)) <= ticket_value) continue;
       }
-    }  
+    }
     cuda::atomic_thread_fence(ord, cuda::thread_scope_system);
 
   }
@@ -522,7 +522,7 @@ struct ncclGinApi_Put<NCCL_NET_DEVICE_GIN_GPI> {
                                       uint64_t signalOpArg, bool hasCounter,
                                       ncclGinCounter_t counterId, bool hasDescriptor,
                                       ncclGinDescriptorSmem* descriptor,
-                                      cuda::thread_scope required, cuda::thread_scope given, 
+                                      cuda::thread_scope required, cuda::thread_scope given,
                                       uint32_t optFlags = ncclGinOptFlagsDefault) {
   switch ((ncclGinResourceSharingMode)ctx.resourceSharingMode) {
     case NCCL_GIN_RESOURCE_SHARING_THREAD:
@@ -546,7 +546,7 @@ struct ncclGinApi_Put<NCCL_NET_DEVICE_GIN_GPI> {
 
 
 
-  
+
   template <>
   struct ncclGinApi_PutValue<NCCL_NET_DEVICE_GIN_GPI> {
     template <typename Coop, typename T>
@@ -555,7 +555,7 @@ struct ncclGinApi_Put<NCCL_NET_DEVICE_GIN_GPI> {
                                         ncclGinSignalDescriptor signal, ncclGinSignalOp_t signalOp,
                                         uint64_t signalOpArg, bool hasDescriptor,
                                         ncclGinDescriptorSmem* descriptor,
-                                        cuda::thread_scope required, cuda::thread_scope given, 
+                                        cuda::thread_scope required, cuda::thread_scope given,
                                         uint32_t optFlags = ncclGinOptFlagsDefault) {
     switch ((ncclGinResourceSharingMode)ctx.resourceSharingMode) {
       case NCCL_GIN_RESOURCE_SHARING_THREAD:
@@ -576,7 +576,7 @@ struct ncclGinApi_Put<NCCL_NET_DEVICE_GIN_GPI> {
     }
   }
   };
-  
+
 template <>
 struct ncclGinApi_ResetCounter<NCCL_NET_DEVICE_GIN_GPI> {
   NCCL_DEVICE_INLINE static void call(ncclGinCtx ctx, ncclGinCounter_t counterId) {
@@ -653,7 +653,7 @@ struct ncclGinApi_GetSignalPtr<NCCL_NET_DEVICE_GIN_GPI> {
 template <>
 struct ncclGinApi_Flush<NCCL_NET_DEVICE_GIN_GPI> {
   template <typename Coop>
-  NCCL_DEVICE_INLINE static void call(ncclGinCtx ctx, Coop coop, 
+  NCCL_DEVICE_INLINE static void call(ncclGinCtx ctx, Coop coop,
                                       bool hasDescriptor, ncclGinDescriptorSmem* descriptor,
                                       cuda::memory_order ord, uint32_t* abortFlag) {
     switch ((ncclGinResourceSharingMode)ctx.resourceSharingMode) {
@@ -679,14 +679,14 @@ struct ncclGinApi_Get<NCCL_NET_DEVICE_GIN_GPI> {
                                       ncclGinWindow_t localWin, size_t localOff, size_t bytes,
                                       bool hasDescriptor, ncclGinDescriptorSmem* descriptor,
                                       uint32_t optFlags = ncclGinOptFlagsDefault) {
-    
+
     using nccl::utility::loadConst;
     coop.sync();
     if (coop.thread_rank() == 0) {
       gpi_gpu_channel_t *gpi_ctx = nccl::gin::gpi::gpi_gpu_channel_get_ptr(ctx);
       uint64_t gfd_local[GPI_GFD_SEG_MAX];
       gpi_gfd_t *gfd = hasDescriptor ? (gpi_gfd_t *) descriptor : (gpi_gfd_t *) gfd_local;
-    
+
       uint16_t  gpiSrcHandle = (uint16_t)((uint64_t)localWin);
       uint16_t  gpiDstHandle = (uint16_t)((uint64_t)remoteWin);
       nccl::gin::gpi::gpi_gpu_build_data_transfer_gfd(gfd, GPI_GFD_DATA_OP_READ, 0, bytes, peer, gpiSrcHandle, localOff, gpiDstHandle, remoteOff, 0, 0, 0);
@@ -705,12 +705,12 @@ struct ncclGinApi_Get<NCCL_NET_DEVICE_GIN_GPI> {
     }
     coop.sync();
  }
-}; 
+};
 
 
 template <>
 struct ncclGinApi_FlushAsync<NCCL_NET_DEVICE_GIN_GPI> {
-  NCCL_DEVICE_INLINE static void call(ncclGinCtx ctx, int peer, ncclGinRequest_t* outRequest, 
+  NCCL_DEVICE_INLINE static void call(ncclGinCtx ctx, int peer, ncclGinRequest_t* outRequest,
                                       bool hasDescriptor, ncclGinDescriptorSmem* descriptor,
                                       uint32_t optFlags) {
     using nccl::utility::loadConst;
@@ -736,7 +736,7 @@ struct ncclGinApi_FlushAsync<NCCL_NET_DEVICE_GIN_GPI> {
         nccl::gin::gpi::gpi_gpu_channel_post_gfd<GPI_RESOURCE_SHARING_MODE_GPU, GPI_POST_MODE_THREAD>(gpi_ctx, gfd, optFlags);
         break;
     }
-    
+
   }
 };
 
@@ -751,11 +751,11 @@ struct ncclGinApi_Wait<NCCL_NET_DEVICE_GIN_GPI> {
     if (abortFlag) {
       uint32_t steps = 0;
       while ((GPI_READ_ONCE(req.flushCounterPtr[0]) <= req.waitValue) && !testAbort(abortFlag, steps)) {}
-      
+
     } else {
       while (GPI_READ_ONCE(req.flushCounterPtr[0]) <= req.waitValue) {}
-    }                                    
-   
+    }
+
     cuda::atomic_thread_fence(ord, cuda::thread_scope_system);
 
   }

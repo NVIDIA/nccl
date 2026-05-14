@@ -47,7 +47,7 @@ to read.
    globally visible; the barrier's acquire ensures incoming data is visible
    after the wait.
 
-**Trade-off:** The barrier cost grows with rank count.  
+**Trade-off:** The barrier cost grows with rank count.
 
 ---
 

@@ -371,6 +371,15 @@ static inline ncclResult_t ncclIbCommBaseGetQpByIndex(struct ncclIbNetCommBase* 
   return ncclSuccess;
 }
 
+// Each request is transferred over all devices, and depending on the
+// "splitDataOnQps" configuration parameter, a request may be transferred over
+// a single QP per device or on all QPs of each device.
+static inline int ncclIbCommBaseGetNqpsPerRequest(struct ncclIbNetCommBase* baseComm) {
+  assert(baseComm->nDataQps != -1);
+  assert(baseComm->nqps != -1);
+  return (baseComm->splitDataOnQps == 1) ? baseComm->nqps : baseComm->nDataQps;
+}
+
 // The function selects the QP to be used for the request. The QP selected
 // based on the request ID and also based on the provided QP index. A request
 // can be posted on multiple QPs. For example, if a request is posted on 4
@@ -380,7 +389,8 @@ static inline ncclResult_t ncclIbCommBaseGetQpByIndex(struct ncclIbNetCommBase* 
 // outQpIndex argument with the index of the selected QP. Note that the
 // outQpIndex is the index of the QP in the base::qps[] array.
 static inline ncclResult_t ncclIbCommBaseGetQpForRequest(struct ncclIbNetCommBase* baseComm, const uint64_t id, const uint8_t qpIndex, ncclIbQp** outQp, int* outQpIndex) {
-  *outQpIndex = (id + qpIndex) % baseComm->nqps;
+  int nQps = ncclIbCommBaseGetNqpsPerRequest(baseComm);
+  *outQpIndex = (id * nQps + qpIndex) % baseComm->nqps;
   *outQp = baseComm->activeQps[*outQpIndex];
   assert(*outQp != NULL);
   return ncclSuccess;
@@ -405,14 +415,6 @@ static inline ncclResult_t ncclIbCommBaseGetQpByQpNum(struct ncclIbNetCommBase* 
   return ncclInternalError;
 }
 
-// Each request is transfered over all devices, and depending on the
-// "splitDataOnQps" configuration parameter, a request may be transffered over
-// a single QP per device or on all QPs of each device.
-static inline int ncclIbCommBaseGetNqpsPerRequest(struct ncclIbNetCommBase* baseComm) {
-  assert(baseComm->nDataQps != -1);
-  assert(baseComm->nqps != -1);
-  return (baseComm->splitDataOnQps == 1) ? baseComm->nqps : baseComm->nDataQps;
-}
 
 static inline ncclResult_t ncclIbPostRecvWorkRequest(struct ibv_qp* qp, struct ibv_recv_wr* wr) {
   struct ibv_recv_wr* bad_wr;

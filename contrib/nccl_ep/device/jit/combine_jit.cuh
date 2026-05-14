@@ -136,7 +136,9 @@ inline void launch_combine(
     cudaStream_t stream) {
     const combine_warp_layout_t L = compute_combine_warp_layout(num_lsa_teams);
 
-    static const int variant_identity = 0;
+    static const int fwd_variant_identity = 0;
+    static const int bwd_variant_identity = 0;
+    const int& variant_identity = backward_combine ? bwd_variant_identity : fwd_variant_identity;
     const std::string variant_name = [&] {
         std::ostringstream name;
         name

@@ -140,7 +140,9 @@ inline void launch_dispatch(
     cudaStream_t stream) {
     const dispatch_warp_layout_t L = compute_dispatch_warp_layout(num_lsa_teams, layout);
 
-    static const int variant_identity = 0;
+    static const int fwd_variant_identity = 0;
+    static const int bwd_variant_identity = 0;
+    const int& variant_identity = forward_dispatch ? fwd_variant_identity : bwd_variant_identity;
     const std::string variant_name = [&] {
         std::ostringstream name;
         name

@@ -220,6 +220,11 @@ struct ncclEpGroup {
 
     ncclEpAllocConfig_t alloc;
 
+    // Active-mask buffer for FT support (LL only)
+    int* mask_buffer = nullptr;        // Device: int[nRanks], null if !enable_mask
+    int* async_error_flag = nullptr;   // Host-pinned: 0 = ok, 1 = timeout occurred
+    uint64_t timeout_cycles = NUM_TIMEOUT_CYCLES; // GPU clock cycles for wait-loop timeout
+
     // Physical node properties (CUDA device assignment, IPC between co-located GPUs)
     int gpus_per_node;    // Physical GPUs per node (nRanks / nNodes)
     int rank_in_node;     // Per-node CUDA device ordinal (= cuda_device_id)
@@ -231,6 +236,7 @@ struct ncclEpGroup {
     ncclDevComm_t* nccl_dev_comms;
     ncclWindow_t* nccl_wins;
     int num_dispatch_signals;
+    unsigned clean_barrier_signal_base;
 
     // HT buffers for intranode communication
     struct {
@@ -322,6 +328,7 @@ struct ncclEpGroup {
         nccl_dev_comms(nullptr),
         nccl_wins(nullptr),
         num_dispatch_signals(0),
+        clean_barrier_signal_base(0),
         ht_buffers{} {}
 };
 
@@ -1098,6 +1105,44 @@ ncclResult_t ncclEpCreateGroup(
         ep_group->config.num_qp_per_rank = ep_group->max_num_sms * HYBRIDEP_DISPATCH_N2N_WARPS;
     }
 
+    // Resolve timeout_cycles: env var > config field > compile-time default
+    {
+        int dev;
+        cudaDeviceProp prop;
+        CUDA_CHECK(cudaGetDevice(&dev));
+        CUDA_CHECK(cudaGetDeviceProperties(&prop, dev));
+        uint64_t clock_khz = static_cast<uint64_t>(prop.clockRate);
+
+        uint64_t resolved = NUM_TIMEOUT_CYCLES;
+        const char* source = "compile-time default";
+        const char* env_val = getenv("NCCL_EP_TIMEOUT_MS");
+
+        if (env_val != nullptr) {
+            uint64_t ms = strtoull(env_val, nullptr, 10);
+            if (ms > 0) {
+                resolved = clock_khz * 1000ULL * ms / 1000ULL;
+                source = "NCCL_EP_TIMEOUT_MS env var";
+                if (ep_group->config.timeout_ns != 0 && ep_group->rank == 0)
+                    fprintf(stderr, "NCCL EP: NCCL_EP_TIMEOUT_MS=%lu overrides config.timeout_ns=%lu\n",
+                            (unsigned long)ms, (unsigned long)ep_group->config.timeout_ns);
+            }
+        } else if (ep_group->config.timeout_ns != 0) {
+            resolved = clock_khz * 1000ULL *
+                       (ep_group->config.timeout_ns / 1000000ULL) / 1000ULL;
+            source = "config.timeout_ns";
+        }
+
+        ep_group->timeout_cycles = resolved;
+        if (ep_group->rank == 0) {
+            uint64_t timeout_ms = resolved / (clock_khz * 1000ULL / 1000ULL);
+            fprintf(stderr, "NCCL EP: using timeout=%llums (env=%s, config.timeout_ns=%llu, source=%s)\n",
+                    (unsigned long long)timeout_ms,
+                    env_val ? env_val : "unset",
+                    (unsigned long long)ep_group->config.timeout_ns,
+                    source);
+        }
+    }
+
     // Physical node properties. rank_in_node must lie in [0, gpus_per_node)
     // so the peer-access loop below can skip the self-device. Using the
     // within-comm rank (rather than the physical cuda_device_id) keeps this
@@ -1162,6 +1207,7 @@ ncclResult_t ncclEpCreateGroup(
         nccl_dev_comms_host[0] = ncclDevComm_t{};
         ep_group->num_dispatch_signals = ep_group->num_local_experts * ep_group->nRanks;
         int num_total_signals = ep_group->num_dispatch_signals;
+        ep_group->clean_barrier_signal_base = 2 * num_total_signals;
 
         ncclCommProperties_t props = NCCL_COMM_PROPERTIES_INITIALIZER;
         NCCLCHECK(ncclCommQueryProperties(ep_group->comm, &props));
@@ -1173,10 +1219,11 @@ ncclResult_t ncclEpCreateGroup(
         ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
         if (props.nLsaTeams > 1) {
             reqs.ginContextCount = ep_group->config.num_qp_per_rank;  // all contexts in single comm
-            // Signal layout: combine uses [0, num_total_signals), dispatch uses [num_total_signals, 2*num_total_signals)
-            reqs.ginSignalCount = 2 * num_total_signals;
+            // Signal layout: combine [0, N), dispatch [N, 2N), clean barrier [2N]
+            reqs.ginSignalCount = 2 * num_total_signals + 1;
             reqs.ginForceEnable = true;
             reqs.ginConnectionType = NCCL_GIN_CONNECTION_FULL;
+            reqs.worldGinBarrierCount = 1;
         }
         NCCL_CHECK_RESULT(ncclDevCommCreate(ep_group->comm, &reqs, &nccl_dev_comms_host[0]));
 
@@ -1207,6 +1254,19 @@ ncclResult_t ncclEpCreateGroup(
         CUDA_CHECK(cudaDeviceSynchronize());
     }
 
+    // Allocate mask buffer and async error flag for active-mask support
+    if (ep_group->config.enable_mask && ep_group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
+        size_t mask_bytes = ep_group->nRanks * sizeof(int);
+        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&ep_group->mask_buffer), mask_bytes));
+        // Initialize all ranks as active (1 = active, 0 = masked/failed)
+        std::vector<int> all_active(ep_group->nRanks, 1);
+        CUDA_CHECK(cudaMemcpyAsync(ep_group->mask_buffer, all_active.data(),
+                                   mask_bytes, cudaMemcpyHostToDevice, stream));
+        CUDA_CHECK(cudaHostAlloc(reinterpret_cast<void**>(&ep_group->async_error_flag),
+                                 sizeof(int), cudaHostAllocMapped));
+        *ep_group->async_error_flag = 0;
+    }
+
     CUDA_CHECK(cudaStreamSynchronize(stream));
     CUDA_CHECK(cudaStreamDestroy(stream));
     return ncclSuccess;
@@ -1231,6 +1291,16 @@ ncclResult_t ncclEpGroupDestroy(
         ep_group->ht_buffers.internode_initialized) {
         destroy_hybridep_internode(ep_group);
     }
+    // Clean up mask buffer and async error flag
+    if (ep_group->mask_buffer != nullptr) {
+        CUDA_CHECK(cudaFree(ep_group->mask_buffer));
+        ep_group->mask_buffer = nullptr;
+    }
+    if (ep_group->async_error_flag != nullptr) {
+        CUDA_CHECK(cudaFreeHost(ep_group->async_error_flag));
+        ep_group->async_error_flag = nullptr;
+    }
+
     // Clean up workspace memory
     if (ep_group->ep_workspace != nullptr) {
         CUDA_CHECK(ep_group->alloc.free_fn(ep_group->ep_workspace, ep_group->alloc.context));
@@ -2189,6 +2259,9 @@ ncclResult_t ncclEpDispatch(
                 signal_base,
                 group->ep_workspace,
                 group->max_num_sms,
+                group->mask_buffer,
+                group->async_error_flag,
+                group->timeout_cycles,
                 stream
             );
         };
@@ -2716,6 +2789,9 @@ ncclResult_t ncclEpCombine(
                 signal_base,
                 handle->group->ep_workspace,
                 handle->group->max_num_sms,
+                handle->group->mask_buffer,
+                handle->group->async_error_flag,
+                handle->group->timeout_cycles,
                 stream
             );
         };
@@ -2980,3 +3056,90 @@ ncclResult_t ncclEpComplete(
         return ncclSuccess;
     }
 
+ncclResult_t ncclEpMaskQuery(
+    ncclEpGroup_t ep_group,
+    int* mask_status,
+    cudaStream_t stream
+) {
+    EP_HOST_ASSERT(ep_group != nullptr);
+    EP_HOST_ASSERT(ep_group->mask_buffer != nullptr && "ncclEpMaskQuery: enable_mask must be true");
+    EP_HOST_ASSERT(mask_status != nullptr);
+    CUDA_CHECK(cudaMemcpyAsync(mask_status, ep_group->mask_buffer,
+                               ep_group->nRanks * sizeof(int),
+                               cudaMemcpyDeviceToDevice, stream));
+    return ncclSuccess;
+}
+
+ncclResult_t ncclEpMaskUpdate(
+    ncclEpGroup_t ep_group,
+    const int* mask,
+    cudaStream_t stream
+) {
+    EP_HOST_ASSERT(ep_group != nullptr);
+    EP_HOST_ASSERT(ep_group->mask_buffer != nullptr && "ncclEpMaskUpdate: enable_mask must be true");
+    EP_HOST_ASSERT(mask != nullptr);
+    CUDA_CHECK(cudaMemcpyAsync(ep_group->mask_buffer, mask,
+                               ep_group->nRanks * sizeof(int),
+                               cudaMemcpyHostToDevice, stream));
+    return ncclSuccess;
+}
+
+ncclResult_t ncclEpMaskClean(
+    ncclEpGroup_t ep_group,
+    cudaStream_t stream
+) {
+    EP_HOST_ASSERT(ep_group != nullptr);
+    EP_HOST_ASSERT(ep_group->mask_buffer != nullptr && "ncclEpMaskClean: enable_mask must be true");
+    EP_HOST_ASSERT(ep_group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY);
+
+    // Reset internal RDMA recv-count/flag counters for both double-buffer slots
+    // via a GPU kernel that includes a cross-rank barrier, then clear the mask.
+    nccl_ep::LowLatencyLayout layout(ep_group->rdma_buffer,
+                                      ep_group->config.max_send_tokens_per_rank,
+                                      ep_group->hidden,
+                                      ep_group->nRanks,
+                                      ep_group->config.num_experts,
+                                      MAX_NUM_TOPK,
+                                      ep_group->config.layout);
+    auto clean_0 = layout.buffers[0].clean_meta();
+    auto clean_1 = layout.buffers[1].clean_meta();
+
+    nccl_ep::internode_ll::clean_low_latency_buffer(
+        clean_0.first, clean_0.second,
+        clean_1.first, clean_1.second,
+        ep_group->mask_buffer,
+        layout.sync_buffer, layout.sync_buffer_offset,
+        ep_group->nccl_dev_comms,
+        ep_group->nccl_wins,
+        ep_group->clean_barrier_signal_base,
+        ep_group->timeout_cycles,
+        stream);
+
+    // Reset all ranks to active (1 = active)
+    std::vector<int> all_active(ep_group->nRanks, 1);
+    CUDA_CHECK(cudaMemcpyAsync(ep_group->mask_buffer, all_active.data(),
+                               ep_group->nRanks * sizeof(int),
+                               cudaMemcpyHostToDevice, stream));
+
+    return ncclSuccess;
+}
+
+ncclResult_t ncclEpGetAsyncError(
+    ncclEpGroup_t ep_group,
+    int* error_out
+) {
+    EP_HOST_ASSERT(ep_group != nullptr);
+    EP_HOST_ASSERT(ep_group->async_error_flag != nullptr && "ncclEpGetAsyncError: enable_mask must be true");
+    EP_HOST_ASSERT(error_out != nullptr);
+    *error_out = __atomic_load_n(ep_group->async_error_flag, __ATOMIC_ACQUIRE);
+    return ncclSuccess;
+}
+
+ncclResult_t ncclEpErrorClear(
+    ncclEpGroup_t ep_group
+) {
+    EP_HOST_ASSERT(ep_group != nullptr);
+    EP_HOST_ASSERT(ep_group->async_error_flag != nullptr && "ncclEpErrorClear: enable_mask must be true");
+    __atomic_store_n(ep_group->async_error_flag, 0, __ATOMIC_RELEASE);
+    return ncclSuccess;
+}

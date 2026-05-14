@@ -107,6 +107,17 @@ typedef struct {
     unsigned int max_num_sms;
     // Device memory allocator; zero-init (all NULL) uses cudaMalloc/cudaFree.
     ncclEpAllocConfig_t alloc;
+    // Enable active-mask support for fault tolerance (LL mode only).
+    // When enabled, a per-rank mask buffer is allocated. If a remote rank times out
+    // during dispatch or combine, it is automatically masked (skipped) rather than
+    // causing a GPU trap. The mask can be queried, updated, and cleared via the
+    // ncclEpMaskQuery / ncclEpMaskUpdate / ncclEpMaskClean APIs.
+    // A host-visible error flag is also set on timeout, pollable via ncclEpGetAsyncError().
+    bool enable_mask;
+    // Timeout for GPU-side wait loops, in nanoseconds. 0 = use default (~100 s).
+    // Can be overridden by the NCCL_EP_TIMEOUT_MS environment variable.
+    // Setting too low risks false positives (slow ranks marked as failed).
+    uint64_t timeout_ns;
 } ncclEpGroupConfig_t;
 
 #define NCCL_EP_GROUP_CONFIG_INIT ((ncclEpGroupConfig_t){ \
@@ -535,6 +546,92 @@ ncclResult_t ncclEpTensorGetSizes(
     unsigned int* ndim
 );
 
+
+// Query the active-mask status of all ranks.
+//   Copies the mask buffer to a user-provided device tensor.
+//   Requires enable_mask=true in the group config.
+//
+// Arguments:
+//   ep_group     - [IN]  EP group with masking enabled
+//   mask_status  - [OUT] Device pointer to int[nRanks]. 1 = active, 0 = masked (failed).
+//   stream       - [IN]  CUDA stream
+//
+// Returns: ncclResult_t error code
+
+ncclResult_t ncclEpMaskQuery(
+    ncclEpGroup_t ep_group,
+    int* mask_status,
+    cudaStream_t stream
+);
+
+// Set the mask for all ranks at once.
+//   Requires enable_mask=true in the group config.
+//
+// Arguments:
+//   ep_group   - [IN] EP group with masking enabled
+//   mask       - [IN] Host pointer to int[nRanks]. 1 = active, 0 = masked (failed).
+//   stream     - [IN] CUDA stream
+//
+// Returns: ncclResult_t error code
+
+ncclResult_t ncclEpMaskUpdate(
+    ncclEpGroup_t ep_group,
+    const int* mask,
+    cudaStream_t stream
+);
+
+// Reset masks and RDMA buffers so previously masked ranks can re-join.
+//   Collective: all surviving ranks must call simultaneously.
+//   Resets RDMA buffers via a cross-rank barrier and sets all masks to active.
+//   Does NOT reset the async error flag — call ncclEpErrorClear() separately.
+//   Note: this API is for re-admitting a delayed rank within the same
+//   communicator. Rank replacement requires a new communicator (e.g.,
+//   ncclCommGrow) and a new EP group.
+//   Requires enable_mask=true in the group config.
+//
+// Arguments:
+//   ep_group - [IN] EP group with masking enabled
+//   stream   - [IN] CUDA stream
+//
+// Returns: ncclResult_t error code
+
+ncclResult_t ncclEpMaskClean(
+    ncclEpGroup_t ep_group,
+    cudaStream_t stream
+);
+
+// Poll for asynchronous errors (e.g., rank timeout).
+//   Lightweight host-side check — reads a pinned CPU flag, no GPU sync required.
+//   The flag is set by the kernel when a timeout masks a rank; clear it
+//   explicitly via ncclEpErrorClear().
+//   Requires enable_mask=true in the group config.
+//
+// Arguments:
+//   ep_group  - [IN]  EP group with masking enabled
+//   error_out - [OUT] 0 = no error, 1 = timeout occurred (one or more ranks masked)
+//
+// Returns: ncclResult_t error code
+
+ncclResult_t ncclEpGetAsyncError(
+    ncclEpGroup_t ep_group,
+    int* error_out
+);
+
+// Clear the async error flag.
+//   Lightweight host-side reset — writes zero to the pinned CPU flag.
+//   Use after detecting an error (via ncclEpGetAsyncError) to re-arm the flag
+//   for detecting new failures. Should be called after ncclEpMaskClean (full
+//   recovery) or standalone when surviving ranks continue in degraded mode.
+//   Requires enable_mask=true in the group config.
+//
+// Arguments:
+//   ep_group - [IN] EP group with masking enabled
+//
+// Returns: ncclResult_t error code
+
+ncclResult_t ncclEpErrorClear(
+    ncclEpGroup_t ep_group
+);
 
 #ifdef __cplusplus
 }

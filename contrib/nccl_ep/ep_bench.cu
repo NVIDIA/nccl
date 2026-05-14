@@ -2448,6 +2448,7 @@ void printUsage(const char* programName, int myRank) {
         printf("  --max-recv-token-slots-per-rank <N>  Per-rank recv-slot budget (0 = auto; bench default for EM = nRanks*tokens*top_k/2)\n");
         printf("  --zcopy                 Use ncclMemAlloc buffers + windows for HT tensors that need peer access\n");
         printf("  --max-num-sms <N>       Maximum SMs for EP kernels (0 = auto, default: 0)\n");
+        printf("  --mask-test             Simulate rank failures and test active-mask (LL only, implies --validate)\n");
         printf("  --help                  Show this help message\n");
     }
 }
@@ -2476,6 +2477,7 @@ int main(int argc, char* argv[]) {
     unsigned int max_recv_token_slots_per_rank = UINT_MAX;  // UINT_MAX = unset -> bench auto; 0 = lib auto (worst case)
     bool zcopy = false;  // Use ncclMemAlloc + windows for HT tensors that need peer access
     unsigned int max_num_sms = NCCL_EP_AUTO;  // 0 = auto (resolved to HYBRIDEP_MAX_NUM_SMS_PER_RANK)
+    bool mask_test = false;       // Simulate rank failures and test active-mask (LL only)
     // Initialize MPI
     MPICHECK(MPI_Init(&argc, &argv));
     MPICHECK(MPI_Comm_rank(MPI_COMM_WORLD, &myRank));
@@ -2502,13 +2504,14 @@ int main(int argc, char* argv[]) {
         {"max-recv-token-slots-per-rank", required_argument, 0, 'R'},
         {"zcopy",          no_argument,       0, 'z'},
         {"max-num-sms",    required_argument, 0, 'S'},
+        {"mask-test",      no_argument,       0, 'T'},
         {"help",           no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
 
     int opt;
     int option_index = 0;
-    while ((opt = getopt_long(argc, argv, "a:L:t:d:k:e:w:i:pnfUVDMA:R:zS:h", long_options, &option_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "a:L:t:d:k:e:w:i:pnfUVDMA:R:zS:Th", long_options, &option_index)) != -1) {
         switch (opt) {
             case 'a':
                 if (strcmp(optarg, "ll") == 0 || strcmp(optarg, "low-latency") == 0) {
@@ -2591,6 +2594,10 @@ int main(int argc, char* argv[]) {
             case 'S':
                 max_num_sms = static_cast<unsigned int>(atoi(optarg));
                 break;
+            case 'T':
+                mask_test = true;
+                validate_data = true;
+                break;
             case 'h':
                 printUsage(argv[0], myRank);
                 MPI_Finalize();
@@ -2621,6 +2628,20 @@ int main(int argc, char* argv[]) {
         }
         MPI_Finalize();
         return 1;
+    }
+
+    // --mask-test is only supported for LL mode and requires at least 4 ranks
+    if (mask_test) {
+        if (algorithm != NCCL_EP_ALGO_LOW_LATENCY) {
+            if (myRank == 0) printf("Error: --mask-test is only supported for LL mode\n");
+            MPI_Finalize();
+            return 1;
+        }
+        if (nRanks < 4) {
+            if (myRank == 0) printf("Error: --mask-test requires at least 4 ranks (simulates failures on ranks 1 and 3)\n");
+            MPI_Finalize();
+            return 1;
+        }
     }
 
     // --dynamic-tokens (NCCL_EP_AUTO for max_send_tokens_per_rank) is intended for HT mode only.
@@ -2775,9 +2796,11 @@ int main(int argc, char* argv[]) {
     config.alloc.alloc_fn = cudaAllocCallback;
     config.alloc.free_fn  = cudaFreeCallback;
     config.alloc.context  = nullptr;
+    config.enable_mask = mask_test;
 
-    printf("Rank %d: Testing ncclEpCreateGroup with algorithm: %s\n", myRank,
-           (algorithm == NCCL_EP_ALGO_LOW_LATENCY) ? "LOW_LATENCY" : "HIGH_THROUGHPUT");
+    printf("Rank %d: Testing ncclEpCreateGroup with algorithm: %s%s\n", myRank,
+           (algorithm == NCCL_EP_ALGO_LOW_LATENCY) ? "LOW_LATENCY" : "HIGH_THROUGHPUT",
+           mask_test ? " (mask-test mode)" : "");
     MPICHECK(MPI_Barrier(MPI_COMM_WORLD));
     double group_create_start = MPI_Wtime();
     NCCLCHECK(ncclEpCreateGroup(&ep_group, comm, &config));
@@ -3234,6 +3257,159 @@ int main(int argc, char* argv[]) {
     }
     delete[] dispatch_meta_counts_host;
     delete[] dispatch_meta_offsets_host;
+
+    // ==================== Active-Mask Test ====================
+    // Simulates rank failures during dispatch/combine and verifies that the
+    // kernel's timeout mechanism correctly masks failed ranks.
+    if (mask_test) {
+        MPICHECK(MPI_Barrier(MPI_COMM_WORLD));
+        if (myRank == 0) { printf("\n=== Active-Mask Test ===\n"); fflush(stdout); }
+
+        // Ranks designated to fail at each phase
+        const int dispatch_fail_rank = 1;
+        const int combine_fail_rank = 3;
+
+        // Re-initialize validation data
+        initializeValidationData(alloc, dispatch_inputs, topk_weights,
+                                 num_tokens, hidden, top_k, myRank, !is_ll_mode);
+
+        // --- Phase 1: Dispatch with rank 1 failing ---
+        if (myRank == dispatch_fail_rank) {
+            printf("Rank %d: simulating failure (skipping dispatch)\n", myRank);
+            fflush(stdout);
+        } else {
+            dispatch_fn();
+            CUDACHECK(cudaStreamSynchronize(stream));
+        }
+
+        // Surviving ranks wait; failed rank also reaches barrier via MPI
+        MPICHECK(MPI_Barrier(MPI_COMM_WORLD));
+
+        // Poll async error first (lightweight, no GPU sync), then query mask for details
+        if (myRank != dispatch_fail_rank) {
+            int async_err = 0;
+            NCCLCHECK(ncclEpGetAsyncError(ep_group, &async_err));
+            printf("Rank %d: async error after dispatch: %d (%s)\n",
+                   myRank, async_err, async_err ? "PASSED" : "FAILED");
+            fflush(stdout);
+
+            // Error detected -- query mask to find which ranks failed
+            int* mask_status_d;
+            CUDACHECK(cudaMalloc(reinterpret_cast<void**>(&mask_status_d), nRanks * sizeof(int)));
+            NCCLCHECK(ncclEpMaskQuery(ep_group, mask_status_d, stream));
+            CUDACHECK(cudaStreamSynchronize(stream));
+
+            int* mask_status_h = new int[nRanks];
+            CUDACHECK(cudaMemcpy(mask_status_h, mask_status_d, nRanks * sizeof(int), cudaMemcpyDeviceToHost));
+
+            printf("Rank %d: mask after dispatch = [", myRank);
+            for (int r = 0; r < nRanks; r++) printf("%d%s", mask_status_h[r], r < nRanks-1 ? "," : "");
+            printf("]\n");
+
+            // 0 = masked/failed, 1 = active
+            bool dispatch_mask_ok = (mask_status_h[dispatch_fail_rank] == 0);
+            printf("Rank %d: dispatch mask check: %s (rank %d mask=%d)\n",
+                   myRank, dispatch_mask_ok ? "PASSED" : "FAILED",
+                   dispatch_fail_rank, mask_status_h[dispatch_fail_rank]);
+            fflush(stdout);
+
+            delete[] mask_status_h;
+            CUDACHECK(cudaFree(mask_status_d));
+        }
+
+        // --- Phase 2: Combine with rank 3 failing ---
+        // Copy dispatch output to combine input (passthrough)
+        if (myRank != dispatch_fail_rank && myRank != combine_fail_rank) {
+            void* eo_data;
+            void* output0_data;
+            NCCLCHECK(epGetTensorData(alloc, combine_inputs.tokens, &eo_data));
+            NCCLCHECK(epGetTensorData(alloc, dispatch_outputs.tokens, &output0_data));
+            const size_t* out0_sizes;
+            unsigned int out0_ndim;
+            NCCLCHECK(ncclEpTensorGetSizes(dispatch_outputs.tokens, &out0_sizes, &out0_ndim));
+            size_t data_size = out0_sizes[0] * out0_sizes[1] * out0_sizes[2] * sizeof(uint16_t);
+            CUDACHECK(cudaMemcpy(eo_data, output0_data, data_size, cudaMemcpyDeviceToDevice));
+        }
+
+        if (myRank == dispatch_fail_rank || myRank == combine_fail_rank) {
+            printf("Rank %d: simulating failure (skipping combine)\n", myRank);
+            fflush(stdout);
+        } else {
+            combine_fn();
+            CUDACHECK(cudaStreamSynchronize(stream));
+        }
+
+        MPICHECK(MPI_Barrier(MPI_COMM_WORLD));
+
+        // Poll async error first, then query mask for details
+        if (myRank != dispatch_fail_rank && myRank != combine_fail_rank) {
+            int async_err = 0;
+            NCCLCHECK(ncclEpGetAsyncError(ep_group, &async_err));
+            printf("Rank %d: async error after combine: %d (%s)\n",
+                   myRank, async_err, async_err ? "PASSED" : "FAILED");
+            fflush(stdout);
+
+            // Error detected -- query mask to find which ranks failed
+            int* mask_status_d;
+            CUDACHECK(cudaMalloc(reinterpret_cast<void**>(&mask_status_d), nRanks * sizeof(int)));
+            NCCLCHECK(ncclEpMaskQuery(ep_group, mask_status_d, stream));
+            CUDACHECK(cudaStreamSynchronize(stream));
+
+            int* mask_status_h = new int[nRanks];
+            CUDACHECK(cudaMemcpy(mask_status_h, mask_status_d, nRanks * sizeof(int), cudaMemcpyDeviceToHost));
+
+            printf("Rank %d: mask after combine = [", myRank);
+            for (int r = 0; r < nRanks; r++) printf("%d%s", mask_status_h[r], r < nRanks-1 ? "," : "");
+            printf("]\n");
+
+            // 0 = masked/failed, 1 = active
+            bool combine_mask_ok = (mask_status_h[dispatch_fail_rank] == 0) &&
+                                   (mask_status_h[combine_fail_rank] == 0);
+            printf("Rank %d: combine mask check: %s (rank %d=%d, rank %d=%d)\n",
+                   myRank, combine_mask_ok ? "PASSED" : "FAILED",
+                   dispatch_fail_rank, mask_status_h[dispatch_fail_rank],
+                   combine_fail_rank, mask_status_h[combine_fail_rank]);
+            fflush(stdout);
+
+            delete[] mask_status_h;
+            CUDACHECK(cudaFree(mask_status_d));
+        }
+
+        // --- Phase 3: Clean mask buffer and verify ---
+        if (myRank != dispatch_fail_rank && myRank != combine_fail_rank) {
+            NCCLCHECK(ncclEpMaskClean(ep_group, stream));
+            NCCLCHECK(ncclEpErrorClear(ep_group));
+            CUDACHECK(cudaStreamSynchronize(stream));
+
+            int* mask_status_d;
+            CUDACHECK(cudaMalloc(reinterpret_cast<void**>(&mask_status_d), nRanks * sizeof(int)));
+            NCCLCHECK(ncclEpMaskQuery(ep_group, mask_status_d, stream));
+            CUDACHECK(cudaStreamSynchronize(stream));
+
+            int* mask_status_h = new int[nRanks];
+            CUDACHECK(cudaMemcpy(mask_status_h, mask_status_d, nRanks * sizeof(int), cudaMemcpyDeviceToHost));
+
+            // After clean, all ranks should be active (1)
+            bool clean_ok = true;
+            for (int r = 0; r < nRanks; r++) {
+                if (mask_status_h[r] != 1) { clean_ok = false; break; }
+            }
+            printf("Rank %d: mask clean check: %s\n", myRank, clean_ok ? "PASSED" : "FAILED");
+
+            // Verify async error flag is cleared after ncclEpErrorClear
+            int async_err = 0;
+            NCCLCHECK(ncclEpGetAsyncError(ep_group, &async_err));
+            printf("Rank %d: async error after clean: %d (%s)\n",
+                   myRank, async_err, async_err == 0 ? "PASSED" : "FAILED");
+            fflush(stdout);
+
+            delete[] mask_status_h;
+            CUDACHECK(cudaFree(mask_status_d));
+        }
+
+        MPICHECK(MPI_Barrier(MPI_COMM_WORLD));
+        if (myRank == 0) { printf("=== Active-Mask Test Complete ===\n"); fflush(stdout); }
+    }
 
     // Cleanup (order matters: tensors -> handle -> group -> comm)
     cleanupBenchmarkTensors(alloc, dispatch_inputs, dispatch_outputs, dispatch_layout_info,

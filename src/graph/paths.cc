@@ -490,7 +490,6 @@ const char* ncclTopoGdrModeStr[ncclTopoGdrModeNum] = {"Disabled", "Default", "PC
 
 // On C2C platforms use GDRDMA on NICs which are connected to the CPUs
 NCCL_PARAM(NetGdrC2c, "NET_GDR_C2C", 1);
-NCCL_PARAM(NetGdrMloPart, "NET_GDR_MLOPART", 0);
 
 ncclResult_t ncclTopoCheckGdr(struct ncclTopoSystem* system, int rank, int64_t netId, int read,
                               enum ncclTopoGdrMode* gdrMode) {
@@ -511,7 +510,6 @@ ncclResult_t ncclTopoCheckGdr(struct ncclTopoSystem* system, int rank, int64_t n
   // Check that both the NIC and GPUs support it
   if (net->net.gdrSupport == 0) return ncclSuccess;
   if (gpu->gpu.gdrSupport == 0) return ncclSuccess;
-  if (gpu->gpu.mloPart != NCCL_TOPO_UNDEF && !ncclParamNetGdrMloPart()) return ncclSuccess;
 
   if (read) {
     // For reads (sends) only enable under certain conditions
@@ -535,7 +533,12 @@ ncclResult_t ncclTopoCheckGdr(struct ncclTopoSystem* system, int rank, int64_t n
   }
 
   // Check if we are close enough that it makes sense to enable GDR
-  int netGdrLevel = ncclParamNetGdrC2c() ? PATH_P2C : PATH_PXB;
+  int netGdrLevel = PATH_PXB;
+  if (ncclParamNetGdrC2c()) {
+    // MloPart over C2C requires cuMem GDR support with CUDA 13.4+ (must be available communicator wide)
+    bool gdrSupport = system->cuMemGdrSupport && system->minDriverVersion >= 13040;
+    if (gpu->gpu.mloPart == NCCL_TOPO_UNDEF || gdrSupport) netGdrLevel = PATH_P2C;
+  }
   NCCLCHECK(ncclGetLevel(&ncclTopoUserGdrLevel, NULL, "NCCL_NET_GDR_LEVEL"));
   if (ncclTopoUserGdrLevel != -2) netGdrLevel = ncclTopoUserGdrLevel;
   int distance = gpu->paths[NET][n].type;

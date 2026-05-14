@@ -57,8 +57,8 @@ extern char ncclLastError[];
 #define INFO(FLAGS, ...) \
     do{ \
         int level = COMPILER_ATOMIC_LOAD(&ncclDebugLevel, std::memory_order_acquire); \
-        if((level >= NCCL_LOG_INFO && ((FLAGS) & ncclDebugMask)) || (level < 0)) \
-            ncclDebugLog(NCCL_LOG_INFO, (FLAGS), __func__, __LINE__, __VA_ARGS__); \
+        if((level >= NCCL_LOG_INFO && ((unsigned long)(FLAGS) & ncclDebugMask)) || (level < 0)) \
+            ncclDebugLogInternal(NCCL_LOG_INFO, (unsigned long)(FLAGS), nullptr, nullptr, 0, __VA_ARGS__); \
     } while(0)
 
 #define INFO_LOC_FN(FLAGS, file, line, fn, fmt, ...) \
@@ -78,8 +78,8 @@ extern char ncclLastError[];
 #define TRACE(FLAGS, ...) \
     do { \
         int level = COMPILER_ATOMIC_LOAD(&ncclDebugLevel, std::memory_order_acquire); \
-        if ((level >= NCCL_LOG_TRACE && ((FLAGS) & ncclDebugMask)) || (level < 0)) { \
-            ncclDebugLog(NCCL_LOG_TRACE, (FLAGS), __func__, __LINE__, __VA_ARGS__); \
+        if ((level >= NCCL_LOG_TRACE && ((unsigned long)(FLAGS) & ncclDebugMask)) || (level < 0)) { \
+            ncclDebugLogInternal(NCCL_LOG_TRACE, (unsigned long)(FLAGS), nullptr, __func__, __LINE__, __VA_ARGS__); \
         } \
     } while (0)
 #define TRACE_LOC_FN(FLAGS, file, line, fn, fmt, ...) \

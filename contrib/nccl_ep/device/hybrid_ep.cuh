@@ -4110,171 +4110,172 @@ __device__ __forceinline__ void scan_impl(const uint8_t* input_routing_map,
 
   // ── Step 4 (fused remap): expert-major S2D rewrite ────────────────────────
   // Only active when remap_alignment > 0 (expert-major mode).
-  // Blocks 0..num_ranks-1 each handle one dest rank; blocks >= num_ranks skip.
+  // Each block strides over dest ranks so num_of_ranks_per_node > gridDim.x is covered.
   // Runs after Steps 0-3 in the same kernel, saving a kernel launch.
-  if (remap_alignment > 0 && static_cast<int>(blockIdx.x) < num_of_ranks_per_node) {
-    __syncthreads();  // ensure Step 2 smem is done before we repurpose it
+  if (remap_alignment > 0) {
+    for (int dest = static_cast<int>(blockIdx.x); dest < num_of_ranks_per_node; dest += gridDim.x) {
+      __syncthreads();  // ensure Step 2 (or previous dest iter) smem is done before we repurpose it
 
-    const int dest    = static_cast<int>(blockIdx.x);
-    const int epr     = experts_per_rank;
-    const int remap_nwarps  = blockDim.x / 32;
-    const int remap_warp_id = static_cast<int>(threadIdx.x) / 32;
-    const int remap_lane    = static_cast<int>(threadIdx.x) % 32;
-    const int total_global = num_of_total_attn_tokens;
-    const int num_exp_packed = (NUM_LSA_TEAMS * LSA_TEAM_SIZE * epr + 7) / 8;
+      const int epr     = experts_per_rank;
+      const int remap_nwarps  = blockDim.x / 32;
+      const int remap_warp_id = static_cast<int>(threadIdx.x) / 32;
+      const int remap_lane    = static_cast<int>(threadIdx.x) % 32;
+      const int total_global = num_of_total_attn_tokens;
+      const int num_exp_packed = (NUM_LSA_TEAMS * LSA_TEAM_SIZE * epr + 7) / 8;
 
-    // Repurpose smem for remap: s_offsets[epr] + warp_ws[nwarps*epr]
-    int64_t* s_offsets = reinterpret_cast<int64_t*>(smem_bytes);
-    int32_t* warp_ws   = reinterpret_cast<int32_t*>(smem_bytes + epr * sizeof(int64_t));
+      // Repurpose smem for remap: s_offsets[epr] + warp_ws[nwarps*epr]
+      int64_t* s_offsets = reinterpret_cast<int64_t*>(smem_bytes);
+      int32_t* warp_ws   = reinterpret_cast<int32_t*>(smem_bytes + epr * sizeof(int64_t));
 
-    // dest is an intra-node rank; add the node's expert offset for multi-node.
-    const int expert_base = (node_rank * num_of_ranks_per_node + dest) * epr;
+      // dest is an intra-node rank; add the node's expert offset for multi-node.
+      const int expert_base = (node_rank * num_of_ranks_per_node + dest) * epr;
 
-    // ── Tile-based coalesced prefix scan + zone offset computation ─────
-    // Warp-stride access: adjacent lanes read adjacent rows for coalesced 256B transactions.
-    const int W         = (total_global + remap_nwarps - 1) / remap_nwarps;
-    const int w_start   = remap_warp_id * W;
-    const int w_end     = min(w_start + W, total_global);
-    const int num_tiles = (W + 31) / 32;
+      // ── Tile-based coalesced prefix scan + zone offset computation ─────
+      // Warp-stride access: adjacent lanes read adjacent rows for coalesced 256B transactions.
+      const int W         = (total_global + remap_nwarps - 1) / remap_nwarps;
+      const int w_start   = remap_warp_id * W;
+      const int w_end     = min(w_start + W, total_global);
+      const int num_tiles = (W + 31) / 32;
 
-    // ── Counting pass: tile-based warp reductions ────────────────────────
-    int mc[HYBRIDEP_MAX_LOCAL_EXPERTS_PER_RANK] = {};
-    for (int tile = 0; tile < num_tiles; tile++) {
-      const int tok = w_start + tile * 32 + remap_lane;
-      const bool valid = (tok < w_end);
+      // ── Counting pass: tile-based warp reductions ────────────────────────
+      int mc[HYBRIDEP_MAX_LOCAL_EXPERTS_PER_RANK] = {};
+      for (int tile = 0; tile < num_tiles; tile++) {
+        const int tok = w_start + tile * 32 + remap_lane;
+        const bool valid = (tok < w_end);
 
-      // Early skip: check cached rank mask before touching the routing map.
-      const bool any_hit = valid && ((token_rank_mask[tok] >> dest) & 1);
+        // Early skip: check cached rank mask before touching the routing map.
+        const bool any_hit = valid && ((token_rank_mask[tok] >> dest) & 1);
 
-      if (any_hit) {
-        const uint8_t* row = input_routing_map + static_cast<size_t>(tok) * num_exp_packed;
-        for (int k = 0; k < epr; k++) {
-          const int ge = expert_base + k;
-          if ((row[ge >> 3] >> (ge & 7)) & 1) {
-            mc[k]++;
+        if (any_hit) {
+          const uint8_t* row = input_routing_map + static_cast<size_t>(tok) * num_exp_packed;
+          for (int k = 0; k < epr; k++) {
+            const int ge = expert_base + k;
+            if ((row[ge >> 3] >> (ge & 7)) & 1) {
+              mc[k]++;
+            }
           }
         }
       }
-    }
 
-    // Warp-level inclusive prefix scan; repurpose mc to exclusive prefix.
-    for (int k = 0; k < epr; k++) {
-      int v = mc[k];
-      for (int off = 1; off < 32; off <<= 1) {
-        int n = __shfl_up_sync(0xffffffff, v, off);
-        if (remap_lane >= off) v += n;
-      }
-      int _wt = __shfl_sync(0xffffffff, v, 31);
-      if (remap_lane == 0) warp_ws[remap_warp_id * epr + k] = _wt;
-      int _ep = __shfl_up_sync(0xffffffff, v, 1);
-      mc[k] = (remap_lane == 0) ? 0 : _ep;
-    }
-    __syncthreads();
-
-    // Thread 0: inter-warp exclusive prefix scan + zone offset computation.
-    if (threadIdx.x == 0) {
-      int running[HYBRIDEP_MAX_LOCAL_EXPERTS_PER_RANK] = {};
-      for (int w = 0; w < remap_nwarps; w++) {
-        for (int k = 0; k < epr; k++) {
-          const int cnt = warp_ws[w * epr + k];
-          warp_ws[w * epr + k] = running[k];
-          running[k] += cnt;
-        }
-      }
-      int64_t off = 0;
+      // Warp-level inclusive prefix scan; repurpose mc to exclusive prefix.
       for (int k = 0; k < epr; k++) {
-        s_offsets[k] = off;
-        const int64_t c = static_cast<int64_t>(running[k]);
-        const int64_t padded = (remap_alignment > 1)
-            ? (c == 0 ? static_cast<int64_t>(remap_alignment)
-                      : ((c + static_cast<int64_t>(remap_alignment) - 1) /
-                          static_cast<int64_t>(remap_alignment)) * static_cast<int64_t>(remap_alignment))
-            : c;
-        if (dest == local_rank) {
-          if (remap_padded_out_counts) {
-            if (out_is_int64) static_cast<int64_t*>(remap_padded_out_counts)[k] = padded;
-            else                           static_cast<int32_t*>(remap_padded_out_counts)[k] = static_cast<int32_t>(padded);
-          }
-          if (remap_out_offsets) {
-            if (out_is_int64) static_cast<int64_t*>(remap_out_offsets)[k] = off;
-            else                            static_cast<int32_t*>(remap_out_offsets)[k] = static_cast<int32_t>(off);
-          }
-          if (remap_internal_offsets)  remap_internal_offsets[k]  = off;
-          if (remap_actual_counts_out) remap_actual_counts_out[k] = static_cast<int32_t>(c);
+        int v = mc[k];
+        for (int off = 1; off < 32; off <<= 1) {
+          int n = __shfl_up_sync(0xffffffff, v, off);
+          if (remap_lane >= off) v += n;
         }
-        off += padded;
+        int _wt = __shfl_sync(0xffffffff, v, 31);
+        if (remap_lane == 0) warp_ws[remap_warp_id * epr + k] = _wt;
+        int _ep = __shfl_up_sync(0xffffffff, v, 1);
+        mc[k] = (remap_lane == 0) ? 0 : _ep;
       }
-      // TODO(Phuong): EM recv overflow currently aborts; future overflow policy will add drop-tokens (cap off at budget, record drop count).
-      if (dest == local_rank && off > static_cast<int64_t>(max_recv_token_slots_per_rank)) {
-        printf("ncclEpUpdateHandle: HT EM actual recv slots %lld > "
-               "max_recv_token_slots_per_rank %d on (node %d local %d); "
-               "increase ncclEpGroupConfig_t::max_recv_token_slots_per_rank\n",
-               static_cast<long long>(off), max_recv_token_slots_per_rank,
-               node_rank, local_rank);
-        __trap();
-      }
-      if (dest == local_rank && num_of_tokens_for_experts)
-        *num_of_tokens_for_experts = static_cast<int32_t>(off);
-      // Mirror padding-inclusive total to user-visible RECV_TOTAL_COUNTER_DEVICE.
-      if (dest == local_rank && recv_total_counter) {
-        if (out_is_int64) *static_cast<int64_t*>(recv_total_counter) = off;
-        else              *static_cast<int32_t*>(recv_total_counter) = static_cast<int32_t>(off);
-      }
-    }
-    __syncthreads();
+      __syncthreads();
 
-    // Each lane: absolute starting slot.
-    int cur_expert_slot[HYBRIDEP_MAX_LOCAL_EXPERTS_PER_RANK];
-    for (int k = 0; k < epr; k++)
-      cur_expert_slot[k] = static_cast<int>(s_offsets[k])
-                          + warp_ws[remap_warp_id * epr + k] + mc[k];
-
-    // ── em_slot assignment → write to em_s2d auxiliary map ──────────────
-    // packed_idx = lex rank of (dest, k) in local-node bit window: popcount(preceding dests) +
-    // popcount(per-dest slice below k). Each rank writes entries for its own source local rank.
-    const int local_node_bit_base = node_rank * num_of_ranks_per_node * epr;
-    const int dest_bit_base       = local_node_bit_base + dest * epr;
-    for (int tile = 0; tile < num_tiles; tile++) {
-      const int tok = w_start + tile * 32 + remap_lane;
-      const bool valid = (tok < w_end);
-      const bool any_hit = valid && ((token_rank_mask[tok] >> dest) & 1);
-
-      if (any_hit) {
-        const uint8_t* row = input_routing_map + static_cast<size_t>(tok) * num_exp_packed;
-
-        const int source_global_rank = tok / num_of_tokens_per_rank;
-        const int source_node = source_global_rank / num_of_ranks_per_node;
-        const int source_local_rank = source_global_rank % num_of_ranks_per_node;
-        const int local_token_id = tok % num_of_tokens_per_rank;
-        const bool is_our_send_token = (source_local_rank == local_rank);
-
-        const int send_idx = source_node * num_of_tokens_per_rank + local_token_id;
-
-        // Bits of all preceding intra-node dests for this token.  Constant
-        // across the k loop, so popcount once.
-        const int prior_count = is_our_send_token
-            ? popcount_bit_range(row, local_node_bit_base, dest_bit_base)
-            : 0;
-        // Per-dest k-bit slice (≤ HYBRIDEP_MAX_LOCAL_EXPERTS_PER_RANK=64 bits).
-        const uint64_t dest_slice = extract_bits64(row, dest_bit_base, epr);
-
+      // Thread 0: inter-warp exclusive prefix scan + zone offset computation.
+      if (threadIdx.x == 0) {
+        int running[HYBRIDEP_MAX_LOCAL_EXPERTS_PER_RANK] = {};
+        for (int w = 0; w < remap_nwarps; w++) {
+          for (int k = 0; k < epr; k++) {
+            const int cnt = warp_ws[w * epr + k];
+            warp_ws[w * epr + k] = running[k];
+            running[k] += cnt;
+          }
+        }
+        int64_t off = 0;
         for (int k = 0; k < epr; k++) {
-          if ((dest_slice >> k) & 1ull) {
-            const int em_slot = cur_expert_slot[k]++;
-            // EM per-slot routing_map: each slot is one (token,expert); exactly one column true per row
-            // (other columns stay false via zero_region memset).
-            if (dest == local_rank) {
-              local_expert_routing_map[em_slot * epr + k] = true;
+          s_offsets[k] = off;
+          const int64_t c = static_cast<int64_t>(running[k]);
+          const int64_t padded = (remap_alignment > 1)
+              ? (c == 0 ? static_cast<int64_t>(remap_alignment)
+                        : ((c + static_cast<int64_t>(remap_alignment) - 1) /
+                            static_cast<int64_t>(remap_alignment)) * static_cast<int64_t>(remap_alignment))
+              : c;
+          if (dest == local_rank) {
+            if (remap_padded_out_counts) {
+              if (out_is_int64) static_cast<int64_t*>(remap_padded_out_counts)[k] = padded;
+              else                           static_cast<int32_t*>(remap_padded_out_counts)[k] = static_cast<int32_t>(padded);
             }
-            if (is_our_send_token) {
-              const uint64_t below_mask = (k == 0) ? 0ull : ((1ull << k) - 1ull);
-              const int packed_idx = prior_count + __popcll(dest_slice & below_mask);
-              sparse_to_dense_map[send_idx * s2d_inner_dim + packed_idx] = em_s2d_pack(dest, em_slot);
+            if (remap_out_offsets) {
+              if (out_is_int64) static_cast<int64_t*>(remap_out_offsets)[k] = off;
+              else                            static_cast<int32_t*>(remap_out_offsets)[k] = static_cast<int32_t>(off);
+            }
+            if (remap_internal_offsets)  remap_internal_offsets[k]  = off;
+            if (remap_actual_counts_out) remap_actual_counts_out[k] = static_cast<int32_t>(c);
+          }
+          off += padded;
+        }
+        // TODO(Phuong): EM recv overflow currently aborts; future overflow policy will add drop-tokens (cap off at budget, record drop count).
+        if (dest == local_rank && off > static_cast<int64_t>(max_recv_token_slots_per_rank)) {
+          printf("ncclEpUpdateHandle: HT EM actual recv slots %lld > "
+                 "max_recv_token_slots_per_rank %d on (node %d local %d); "
+                 "increase ncclEpGroupConfig_t::max_recv_token_slots_per_rank\n",
+                 static_cast<long long>(off), max_recv_token_slots_per_rank,
+                 node_rank, local_rank);
+          __trap();
+        }
+        if (dest == local_rank && num_of_tokens_for_experts)
+          *num_of_tokens_for_experts = static_cast<int32_t>(off);
+        // Mirror padding-inclusive total to user-visible RECV_TOTAL_COUNTER_DEVICE.
+        if (dest == local_rank && recv_total_counter) {
+          if (out_is_int64) *static_cast<int64_t*>(recv_total_counter) = off;
+          else              *static_cast<int32_t*>(recv_total_counter) = static_cast<int32_t>(off);
+        }
+      }
+      __syncthreads();
+
+      // Each lane: absolute starting slot.
+      int cur_expert_slot[HYBRIDEP_MAX_LOCAL_EXPERTS_PER_RANK];
+      for (int k = 0; k < epr; k++)
+        cur_expert_slot[k] = static_cast<int>(s_offsets[k])
+                            + warp_ws[remap_warp_id * epr + k] + mc[k];
+
+      // ── em_slot assignment → write to em_s2d auxiliary map ──────────────
+      // packed_idx = lex rank of (dest, k) in local-node bit window: popcount(preceding dests) +
+      // popcount(per-dest slice below k). Each rank writes entries for its own source local rank.
+      const int local_node_bit_base = node_rank * num_of_ranks_per_node * epr;
+      const int dest_bit_base       = local_node_bit_base + dest * epr;
+      for (int tile = 0; tile < num_tiles; tile++) {
+        const int tok = w_start + tile * 32 + remap_lane;
+        const bool valid = (tok < w_end);
+        const bool any_hit = valid && ((token_rank_mask[tok] >> dest) & 1);
+
+        if (any_hit) {
+          const uint8_t* row = input_routing_map + static_cast<size_t>(tok) * num_exp_packed;
+
+          const int source_global_rank = tok / num_of_tokens_per_rank;
+          const int source_node = source_global_rank / num_of_ranks_per_node;
+          const int source_local_rank = source_global_rank % num_of_ranks_per_node;
+          const int local_token_id = tok % num_of_tokens_per_rank;
+          const bool is_our_send_token = (source_local_rank == local_rank);
+
+          const int send_idx = source_node * num_of_tokens_per_rank + local_token_id;
+
+          // Bits of all preceding intra-node dests for this token.  Constant
+          // across the k loop, so popcount once.
+          const int prior_count = is_our_send_token
+              ? popcount_bit_range(row, local_node_bit_base, dest_bit_base)
+              : 0;
+          // Per-dest k-bit slice (≤ HYBRIDEP_MAX_LOCAL_EXPERTS_PER_RANK=64 bits).
+          const uint64_t dest_slice = extract_bits64(row, dest_bit_base, epr);
+
+          for (int k = 0; k < epr; k++) {
+            if ((dest_slice >> k) & 1ull) {
+              const int em_slot = cur_expert_slot[k]++;
+              // EM per-slot routing_map: each slot is one (token,expert); exactly one column true per row
+              // (other columns stay false via zero_region memset).
+              if (dest == local_rank) {
+                local_expert_routing_map[em_slot * epr + k] = true;
+              }
+              if (is_our_send_token) {
+                const uint64_t below_mask = (k == 0) ? 0ull : ((1ull << k) - 1ull);
+                const int packed_idx = prior_count + __popcll(dest_slice & below_mask);
+                sparse_to_dense_map[send_idx * s2d_inner_dim + packed_idx] = em_s2d_pack(dest, em_slot);
+              }
             }
           }
         }
       }
-    }
+    }  // end dest loop
   }  // end Step 4 (fused remap)
 }
 

@@ -25,6 +25,32 @@ struct ncclBarrierSession_C {
     ncclBarrierSession<ncclCoopAny> bar;
 };
 
+/* Session struct size getters
+ *
+ * Used by the Python device API to allocate session storage with the correct
+ * size via llvm.alloca, without duplicating the C++ struct layout in Python.
+ */
+NCCL_IR_EXTERN_C __device__ size_t ncclLsaBarrierSession_C_size();
+NCCL_IR_EXTERN_C __device__ size_t ncclGinBarrierSession_C_size();
+NCCL_IR_EXTERN_C __device__ size_t ncclBarrierSession_C_size();
+
+/* ncclDevComm field accessors
+ *
+ * ncclDevComm is a public C struct, but its full layout (~200 bytes with
+ * embedded arrays and structs) is not mirrored in Python. The Python device
+ * layer reads its public fields through these accessor functions.
+ */
+NCCL_IR_EXTERN_C __device__ int                  ncclDevComm_Rank(ncclDevComm const* comm);
+NCCL_IR_EXTERN_C __device__ int                  ncclDevComm_NRanks(ncclDevComm const* comm);
+NCCL_IR_EXTERN_C __device__ int                  ncclDevComm_LsaRank(ncclDevComm const* comm);
+NCCL_IR_EXTERN_C __device__ int                  ncclDevComm_LsaSize(ncclDevComm const* comm);
+NCCL_IR_EXTERN_C __device__ ncclLsaBarrierHandle ncclDevComm_LsaBarrier(ncclDevComm const* comm);
+NCCL_IR_EXTERN_C __device__ ncclGinBarrierHandle ncclDevComm_RailGinBarrier(ncclDevComm const* comm);
+NCCL_IR_EXTERN_C __device__ ncclLsaBarrierHandle ncclDevComm_HybridLsaBarrier(ncclDevComm const* comm);
+NCCL_IR_EXTERN_C __device__ ncclGinBarrierHandle ncclDevComm_HybridRailGinBarrier(ncclDevComm const* comm);
+NCCL_IR_EXTERN_C __device__ ncclGinBarrierHandle ncclDevComm_WorldGinBarrier(ncclDevComm const* comm);
+NCCL_IR_EXTERN_C __device__ ncclMultimemHandle   ncclDevComm_LsaMultimem(ncclDevComm const* comm);
+
 /* Peer pointer API */
 NCCL_IR_EXTERN_C __device__ void* ncclGetPeerPointerTeam(ncclWindow_t w, size_t offset, ncclTeam tm, int peer);
 

@@ -14,6 +14,23 @@
 #include <new>
 
 #if NCCL_CHECK_CUDACC
+/* Session size getters */
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE size_t ncclLsaBarrierSession_C_size() { return sizeof(ncclLsaBarrierSession_C); }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE size_t ncclGinBarrierSession_C_size() { return sizeof(ncclGinBarrierSession_C); }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE size_t ncclBarrierSession_C_size()    { return sizeof(ncclBarrierSession_C); }
+
+/* ncclDevComm field accessors */
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE int                  ncclDevComm_Rank(ncclDevComm const* comm)                 { return comm->rank; }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE int                  ncclDevComm_NRanks(ncclDevComm const* comm)               { return comm->nRanks; }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE int                  ncclDevComm_LsaRank(ncclDevComm const* comm)              { return comm->lsaRank; }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE int                  ncclDevComm_LsaSize(ncclDevComm const* comm)              { return comm->lsaSize; }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE ncclLsaBarrierHandle ncclDevComm_LsaBarrier(ncclDevComm const* comm)            { return comm->lsaBarrier; }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE ncclGinBarrierHandle ncclDevComm_RailGinBarrier(ncclDevComm const* comm)        { return comm->railGinBarrier; }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE ncclLsaBarrierHandle ncclDevComm_HybridLsaBarrier(ncclDevComm const* comm)      { return comm->hybridLsaBarrier; }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE ncclGinBarrierHandle ncclDevComm_HybridRailGinBarrier(ncclDevComm const* comm)  { return comm->hybridRailGinBarrier; }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE ncclGinBarrierHandle ncclDevComm_WorldGinBarrier(ncclDevComm const* comm)       { return comm->worldGinBarrier; }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE ncclMultimemHandle   ncclDevComm_LsaMultimem(ncclDevComm const* comm)           { return comm->lsaMultimem; }
+
 NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void* ncclGetPeerPointerTeam(ncclWindow_t w, size_t offset, ncclTeam tm, int peer) {
     return ncclGetPeerPointer(w, offset, tm, peer);
 }

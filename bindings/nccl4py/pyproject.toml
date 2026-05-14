@@ -35,7 +35,7 @@ dependencies = [
     "packaging",
     "numpy",
     "cuda.core~=0.7",
-    "cuda-pathfinder~=1.1",
+    "cuda-pathfinder>=1.5.4,<2.0.0",
 ]
 
 [project.optional-dependencies]
@@ -46,6 +46,12 @@ cu12 = [
 cu13 = [
     "nvidia-nccl-cu13",
     "cuda-bindings~=13.0",
+]
+cute-cu12 = [
+    "nvidia-cutlass-dsl~=4.5",
+]
+cute-cu13 = [
+    "nvidia-cutlass-dsl[cu13]~=4.5",
 ]
 
 [dependency-groups]

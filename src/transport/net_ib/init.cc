@@ -354,12 +354,13 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
               ncclIbDevs[ncclNIbDevs].portAttr = portAttr;
               ncclIbDevs[ncclNIbDevs].portNum = port_num;
               ncclIbDevs[ncclNIbDevs].link = portAttr.link_layer;
+#if IBV_HAS_ACTIVE_SPEED_EX
               if (portAttr.active_speed_ex) {
                 // A non-zero active_speed_ex indicates XDR rate (0x100) or higher
                 ncclIbDevs[ncclNIbDevs].speed = ncclIbSpeed(portAttr.active_speed_ex) * ncclIbWidth(portAttr.active_width);
-              } else {
+              } else
+#endif
                 ncclIbDevs[ncclNIbDevs].speed = ncclIbSpeed(portAttr.active_speed) * ncclIbWidth(portAttr.active_width);
-              }
               ncclIbDevs[ncclNIbDevs].context = context;
               ncclIbDevs[ncclNIbDevs].pdRefs = 0;
               ncclIbDevs[ncclNIbDevs].pd = NULL;

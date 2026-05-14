@@ -616,7 +616,6 @@ static ncclResult_t symMemoryObtain(
   mem->next = devr->memHead;
   devr->memHead = mem;
 
-leave:
   *outMem = mem;
   free(globalSegmentInfo);
   return ret;

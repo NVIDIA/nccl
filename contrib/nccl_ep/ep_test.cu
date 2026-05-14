@@ -114,6 +114,60 @@ static void getHostName(char* hostname, int maxlen) {
 }
 
 
+// Allocate and fill the combine-side tensors. expert_outputs is the per-rank
+// MoE expert output (combine input); combined_output is the per-token reduction
+// (combine output). Shapes diverge by algorithm: LL is 3D [num_local_experts,
+// max_send_tokens_per_rank * nRanks, hidden]; HT is 2D [num_recv_tokens, hidden].
+// The first elements_tested_per_token slots of each token are seeded with
+// float_to_bf16((j+1)*2) so combine validation can recompute the weighted sum.
+static void epSetupCombineTensors(
+    ncclEpAlgorithm_t algorithm,
+    unsigned int num_local_experts,
+    unsigned int num_recv_tokens,
+    unsigned int max_send_tokens_per_rank,
+    int nRanks,
+    unsigned int hidden,
+    unsigned int num_tokens,
+    int elements_tested_per_token,
+    ncclNDTensor_t* expert_outputs,
+    ncclNDTensor_t* combined_output) {
+  if (algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
+    NCCLCHECK(epMakeTensor(expert_outputs, 3, ncclBfloat16,
+                           num_local_experts,
+                           static_cast<unsigned int>(max_send_tokens_per_rank * nRanks),
+                           hidden));
+    uint16_t *host = new uint16_t[max_send_tokens_per_rank * hidden]();
+    for (unsigned int t = 0; t < max_send_tokens_per_rank; ++t) {
+      for (int j = 0; j < elements_tested_per_token; ++j) {
+        host[t * hidden + j] = float_to_bf16(static_cast<float>((j + 1) * 2));
+      }
+    }
+    void* data;
+    NCCLCHECK(ncclEpTensorGetData(*expert_outputs, &data));
+    for (unsigned int e = 0; e < num_local_experts; ++e) {
+      size_t offset_bytes = static_cast<size_t>(e) * max_send_tokens_per_rank * hidden * nRanks * 2;
+      CUDACHECK(cudaMemcpy(static_cast<uint8_t*>(data) + offset_bytes,
+                           host, max_send_tokens_per_rank * hidden * 2,
+                           cudaMemcpyHostToDevice));
+    }
+    delete[] host;
+  } else {
+    NCCLCHECK(epMakeTensor(expert_outputs, 2, ncclBfloat16, num_recv_tokens, hidden));
+    uint16_t *host = new uint16_t[num_recv_tokens * hidden]();
+    for (unsigned int t = 0; t < num_recv_tokens; ++t) {
+      for (int j = 0; j < elements_tested_per_token; ++j) {
+        host[t * hidden + j] = float_to_bf16(static_cast<float>((j + 1) * 2));
+      }
+    }
+    void* data;
+    NCCLCHECK(ncclEpTensorGetData(*expert_outputs, &data));
+    CUDACHECK(cudaMemcpy(data, host, num_recv_tokens * hidden * 2, cudaMemcpyHostToDevice));
+    delete[] host;
+  }
+
+  NCCLCHECK(epMakeTensor(combined_output, 2, ncclBfloat16, num_tokens, hidden));
+}
+
 void printUsage(const char* programName, int myRank) {
     if (myRank == 0) {
         printf("Usage: %s [OPTIONS]\n", programName);
@@ -132,6 +186,7 @@ void printUsage(const char* programName, int myRank) {
         printf("                               both:     send_only=true for both dispatch and combine\n");
         printf("  -c                           Enable cached mode (default: disabled, only supported for HT)\n");
         printf("  -r                           Enable random mode (random topk_idx, skip correctness checks)\n");
+        printf("  -g                           Capture dispatch+combine into a single CUDA Graph (CreateHandle excluded)\n");
         printf("  -t <num>                     Set number of tokens (default: 50)\n");
         printf("  -d <num>                     Set hidden dimension size (default: 7168)\n");
         printf("  -e <num>                     Set total number of experts (default: top_k * nRanks)\n");
@@ -149,6 +204,7 @@ int main(int argc, char* argv[])
   bool combine_send_only = false;  // send_only flag for combine
   bool cached_mode = false;        // cached mode flag
   bool random_mode = false;        // random mode flag (random topk_idx, skip checks)
+  bool use_cuda_graph = false;     // capture dispatch and combine into a single CUDA Graph
   unsigned int num_tokens = 50; // number of tokens (default)
   unsigned int hidden = 7168;      // hidden dimension size (default)
   unsigned int num_experts = 0;    // 0 = auto (top_k * nRanks)
@@ -166,7 +222,7 @@ int main(int argc, char* argv[])
 
   // Parse command line arguments using getopt
   int opt;
-  while ((opt = getopt(argc, argv, "a:L:ms:crt:d:e:h")) != -1) {
+  while ((opt = getopt(argc, argv, "a:L:ms:crgt:d:e:h")) != -1) {
     switch (opt) {
       case 'a':
         if (strcmp(optarg, "ll") == 0) {
@@ -226,6 +282,9 @@ int main(int argc, char* argv[])
         break;
       case 'r':
         random_mode = true;
+        break;
+      case 'g':
+        use_cuda_graph = true;
         break;
       case 't':
         num_tokens = static_cast<unsigned int>(atoi(optarg));
@@ -406,11 +465,19 @@ int main(int argc, char* argv[])
     handle_layout_info.recv_total_counter = handle_recv_total_counter;
   }
 
-  printf("Rank %d: Testing ncclEpCreateHandle\n", myRank);
+  // Non-graph mode tests CreateHandle (combined Init+Update). Graph mode tests
+  // the Init+Update split, where InitHandle stays outside the capture (host-side
+  // allocation only) and UpdateHandle is recorded inside the captured region.
   ncclEpHandle_t ep_handle;
-  NCCLCHECK(ncclEpCreateHandle(&ep_handle, ep_group, topk_idx,
-                               disable_max_tokens ? &handle_layout_info : nullptr, nullptr, s));
-  CUDACHECK(cudaStreamSynchronize(s));
+  if (use_cuda_graph) {
+    printf("Rank %d: Testing ncclEpInitHandle\n", myRank);
+    NCCLCHECK(ncclEpInitHandle(&ep_handle, ep_group, nullptr, static_cast<int>(top_k)));
+  } else {
+    printf("Rank %d: Testing ncclEpCreateHandle\n", myRank);
+    NCCLCHECK(ncclEpCreateHandle(&ep_handle, ep_group, topk_idx,
+                                 disable_max_tokens ? &handle_layout_info : nullptr, nullptr, s));
+    CUDACHECK(cudaStreamSynchronize(s));
+  }
 
   unsigned int num_recv_tokens = 0;
   if (disable_max_tokens) {
@@ -519,7 +586,41 @@ int main(int argc, char* argv[])
   // Host buffer for first phase dispatch output (kept for cached mode comparison in HT mode)
   uint16_t *first_dispatch_output0_host = nullptr;
 
+  // Combine-side tensors are allocated above the dispatch call so the entire
+  // dispatch+combine sequence can optionally be recorded into a single CUDA Graph.
+  // Combine inputs do not depend on dispatch outputs in either LL or HT mode.
+  ncclNDTensor_t expert_outputs, combined_output;
+  epSetupCombineTensors(algorithm, num_local_experts, num_recv_tokens,
+                        config.max_send_tokens_per_rank, nRanks, hidden, num_tokens,
+                        ELEMENTS_TESTED_PER_TOKEN, &expert_outputs, &combined_output);
+
+  // Setup combine inputs and outputs (named-struct API)
+  ncclEpCombineInputs_t  combine_inputs  = NCCL_EP_COMBINE_INPUTS_INIT;
+  ncclEpCombineOutputs_t combine_outputs = NCCL_EP_COMBINE_OUTPUTS_INIT;
+  combine_inputs.tokens  = expert_outputs;
+  combine_outputs.tokens = combined_output;
+  // LL expert-major reads per-token routing weights from outputs.topk_weights
+  // (used as receive-side scaling, not a write target). See nccl_ep.h.
+  if (algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
+    combine_outputs.topk_weights = topk_weights;
+  }
+
+  ncclEpCombineConfig_t combine_config = NCCL_EP_COMBINE_CONFIG_INIT;
+  combine_config.send_only = combine_send_only ? 1 : 0;
+
   dispatch_config.send_only = dispatch_send_only ? 1 : 0;
+
+  // Single graph spans dispatch + combine when -g is set.
+  cudaGraph_t graph = nullptr;
+  cudaGraphExec_t graph_exec = nullptr;
+
+  if (use_cuda_graph) {
+    printf("Rank %d: [CUDA Graph: begin capture]\n", myRank);
+    CUDACHECK(cudaStreamBeginCapture(s, cudaStreamCaptureModeRelaxed));
+    printf("Rank %d: Testing ncclEpUpdateHandle\n", myRank);
+    NCCLCHECK(ncclEpUpdateHandle(ep_handle, topk_idx,
+                                 disable_max_tokens ? &handle_layout_info : nullptr, s));
+  }
 
   printf("Rank %d: Testing ncclEpDispatch (send_only=%s)\n", myRank, dispatch_send_only ? "true" : "false");
   NCCLCHECK(ncclEpDispatch(ep_handle, topk_idx,
@@ -529,6 +630,19 @@ int main(int argc, char* argv[])
 
   printf("Rank %d: Testing ncclEpComplete\n", myRank);
   NCCLCHECK(ncclEpComplete(ep_handle, nullptr, s));
+
+  printf("Rank %d: Testing %s Combine flow\n", myRank, algorithm_name);
+
+  printf("Rank %d: Testing ncclEpCombine (send_only=%s)\n", myRank, combine_send_only ? "true" : "false");
+  NCCLCHECK(ncclEpCombine(ep_handle, &combine_inputs, &combine_outputs, &combine_config, s));
+
+  NCCLCHECK(ncclEpComplete(ep_handle, nullptr, s));
+  if (use_cuda_graph) {
+    printf("Rank %d: [CUDA Graph: end capture, instantiate, launch]\n", myRank);
+    CUDACHECK(cudaStreamEndCapture(s, &graph));
+    CUDACHECK(cudaGraphInstantiate(&graph_exec, graph, NULL, NULL, 0));
+    CUDACHECK(cudaGraphLaunch(graph_exec, s));
+  }
   CUDACHECK(cudaStreamSynchronize(s));
   // Read recv_count tensor to use for validation
   // LL mode: allocated and copied from device ll_recv_expert_counter
@@ -727,80 +841,6 @@ int main(int argc, char* argv[])
     exit(EXIT_FAILURE);
   }
 
-  printf("Rank %d: Testing %s Combine flow\n", myRank, algorithm_name);
-
-  // Create tensors for combine
-  ncclNDTensor_t expert_outputs;
-
-  if (algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
-      // LL mode: expert_outputs is 3D [num_local_experts, config.max_send_tokens_per_rank * nRanks, hidden]
-    NCCLCHECK(epMakeTensor(&expert_outputs, 3, ncclBfloat16, static_cast<unsigned int>(num_local_experts), static_cast<unsigned int>(config.max_send_tokens_per_rank * nRanks), static_cast<unsigned int>(hidden)));
-
-    // Fill expert outputs with multiple test values per token
-    // The ith element will be (i+1)*2 for all experts
-    uint16_t *expert_outputs_host = new uint16_t[config.max_send_tokens_per_rank * hidden]();
-
-    for (unsigned int t = 0; t < config.max_send_tokens_per_rank; ++t) {
-        for (int j = 0; j < ELEMENTS_TESTED_PER_TOKEN; ++j) {
-            // Set the ith element to (i+1)*2, stored as bf16
-            expert_outputs_host[t * hidden + j] = float_to_bf16(static_cast<float>((j + 1) * 2));
-        }
-    }
-
-    // Copy the same buffer to each expert's slice
-    void* expert_outputs_data;
-    NCCLCHECK(ncclEpTensorGetData(expert_outputs, &expert_outputs_data));
-    for (int e = 0; e < num_local_experts; ++e) {
-      size_t offset_bytes = static_cast<size_t>(e) * config.max_send_tokens_per_rank * hidden * nRanks * 2;
-      CUDACHECK(cudaMemcpy(static_cast<uint8_t*>(expert_outputs_data) + offset_bytes,
-                           expert_outputs_host,
-                           config.max_send_tokens_per_rank * hidden * 2,
-                           cudaMemcpyHostToDevice));
-    }
-
-    delete[] expert_outputs_host;
-  } else {
-    // HT mode: expert_outputs is 2D [num_recv_tokens, hidden]
-    NCCLCHECK(epMakeTensor(&expert_outputs, 2, ncclBfloat16, num_recv_tokens, static_cast<unsigned int>(hidden)));
-
-    // Fill expert outputs with test values
-    // The ith element will be (i+1)*2
-    uint16_t *expert_outputs_host = new uint16_t[num_recv_tokens * hidden]();
-    for (unsigned int t = 0; t < num_recv_tokens; ++t) {
-      for (int j = 0; j < ELEMENTS_TESTED_PER_TOKEN; ++j) {
-        expert_outputs_host[t * hidden + j] = float_to_bf16(static_cast<float>((j + 1) * 2));
-      }
-    }
-    void* expert_outputs_data;
-    NCCLCHECK(ncclEpTensorGetData(expert_outputs, &expert_outputs_data));
-    CUDACHECK(cudaMemcpy(expert_outputs_data, expert_outputs_host, num_recv_tokens * hidden * 2, cudaMemcpyHostToDevice));
-    delete[] expert_outputs_host;
-  }
-
-  // Create combined output tensor
-  ncclNDTensor_t combined_output;
-  NCCLCHECK(epMakeTensor(&combined_output, 2, ncclBfloat16, static_cast<unsigned int>(num_tokens), static_cast<unsigned int>(hidden)));
-
-  // Setup combine inputs and outputs (named-struct API)
-  ncclEpCombineInputs_t  combine_inputs  = NCCL_EP_COMBINE_INPUTS_INIT;
-  ncclEpCombineOutputs_t combine_outputs = NCCL_EP_COMBINE_OUTPUTS_INIT;
-  combine_inputs.tokens  = expert_outputs;
-  combine_outputs.tokens = combined_output;
-  // LL expert-major reads per-token routing weights from outputs.topk_weights
-  // (used as receive-side scaling, not a write target). See nccl_ep.h.
-  if (algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
-    combine_outputs.topk_weights = topk_weights;
-  }
-
-  ncclEpCombineConfig_t combine_config = NCCL_EP_COMBINE_CONFIG_INIT;
-  combine_config.send_only = combine_send_only ? 1 : 0;
-
-  printf("Rank %d: Testing ncclEpCombine (send_only=%s)\n", myRank, combine_send_only ? "true" : "false");
-  NCCLCHECK(ncclEpCombine(ep_handle, &combine_inputs, &combine_outputs, &combine_config, s));
-
-  NCCLCHECK(ncclEpComplete(ep_handle, nullptr, s));
-  CUDACHECK(cudaStreamSynchronize(s));
-
   // Verify combine output - check ELEMENTS_TESTED_PER_TOKEN elements per token.
   // ncclEpCombine sums slot contributions unweighted; caller is expected to pre-weight
   // expert_outputs. ep_test passes a CONSTANT expert_outputs, so result = N * (j+1)*2
@@ -841,6 +881,11 @@ int main(int argc, char* argv[])
     printf("Rank %d: Combine verification FAILED with %d errors\n", myRank, combine_errors);
     printf("Rank %d: Exiting test due to combine failure\n", myRank);
     exit(EXIT_FAILURE);
+  }
+
+  if (use_cuda_graph) {
+    CUDACHECK(cudaGraphExecDestroy(graph_exec));
+    CUDACHECK(cudaGraphDestroy(graph));
   }
 
   // Cached mode test: repeat dispatch and combine calls with the same inputs but new outputs

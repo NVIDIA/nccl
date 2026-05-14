@@ -74,12 +74,6 @@ typedef struct {
     unsigned int size;                   // = sizeof(this struct); first field, never moves
     unsigned int version;                // = NCCL_EP_API_VERSION; caller's feature-set version
     ncclEpAlgorithm_t algorithm;         // low_latency or high_throughput
-    // Receive buffer layout for the dispatch and combine path.
-    // Determines the shape of recv_x on dispatch output and the expected input shape for combine.
-    // Default (NCCL_EP_LAYOUT_AUTO / zero-init): auto-selected based on algorithm
-    //   (EXPERT_MAJOR for LL, FLAT for HT).
-    // HT mode only supports NCCL_EP_LAYOUT_FLAT.
-    ncclEpLayout_t layout;
     unsigned int num_experts;            // Number of experts (required)
     // Maximum number of tokens any single rank will dispatch. Must be the same across all ranks.
     // Each rank should be prepared to receive up to max_send_tokens_per_rank * num_ranks tokens.
@@ -285,6 +279,12 @@ typedef struct {
 typedef struct ncclEpHandle* ncclEpHandle_t;
 typedef struct {
     unsigned int size;  // = sizeof(this struct); first field, never moves
+    // Receive buffer layout for the dispatch and combine path.
+    // Determines the shape of recv_x on dispatch output and the expected input shape for combine.
+    // Default (NCCL_EP_LAYOUT_AUTO / zero-init): auto-selected based on the group's algorithm
+    //   (EXPERT_MAJOR for LL, FLAT for HT).
+    // HT mode supports NCCL_EP_LAYOUT_FLAT and NCCL_EP_LAYOUT_EXPERT_MAJOR.
+    ncclEpLayout_t layout;
     unsigned int use_fp8;  // enable FP8 for dispatch (0 = false, non-zero = true; default: 0)
     // HT expert-major only: per-expert zone alignment in tokens (pow2; 0/1 = no padding).
     // Padded slots are zero-filled by dispatch.

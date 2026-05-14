@@ -405,9 +405,7 @@ int main(int argc, char* argv[])
   config.rdma_buffer_size = NCCL_EP_AUTO;               // NCCL_EP_AUTO for auto configuration, internally uses the hint
   config.num_qp_per_rank = NCCL_EP_AUTO;                // Default is 24, see internode_ll.cu:181 for the minimum
   config.num_channels = NCCL_EP_AUTO;                   // Number of communication channels
-  // HT layout (FLAT default). LL ignores this knob.
   if (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) {
-    config.layout = (ht_layout == NCCL_EP_LAYOUT_AUTO) ? NCCL_EP_LAYOUT_FLAT : ht_layout;
     // HT requires max_recv_token_slots_per_rank > 0. Worst-case = nRanks * num_tokens (for top_k=1)
     // or nRanks * num_tokens * top_k for EM under heavy fan-out; use the latter for safety.
     config.max_recv_token_slots_per_rank = static_cast<unsigned int>(nRanks) * num_tokens * top_k;
@@ -469,13 +467,17 @@ int main(int argc, char* argv[])
   // the Init+Update split, where InitHandle stays outside the capture (host-side
   // allocation only) and UpdateHandle is recorded inside the captured region.
   ncclEpHandle_t ep_handle;
+  ncclEpHandleConfig_t handle_config = NCCL_EP_HANDLE_CONFIG_INIT;
+  if (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) {
+    handle_config.layout = (ht_layout == NCCL_EP_LAYOUT_AUTO) ? NCCL_EP_LAYOUT_FLAT : ht_layout;
+  }
   if (use_cuda_graph) {
     printf("Rank %d: Testing ncclEpInitHandle\n", myRank);
-    NCCLCHECK(ncclEpInitHandle(&ep_handle, ep_group, nullptr, static_cast<int>(top_k), /*handle_mem=*/nullptr));
+    NCCLCHECK(ncclEpInitHandle(&ep_handle, ep_group, &handle_config, static_cast<int>(top_k), /*handle_mem=*/nullptr));
   } else {
     printf("Rank %d: Testing ncclEpCreateHandle\n", myRank);
     NCCLCHECK(ncclEpCreateHandle(&ep_handle, ep_group, topk_idx,
-                                 disable_max_tokens ? &handle_layout_info : nullptr, nullptr, s));
+                                 disable_max_tokens ? &handle_layout_info : nullptr, &handle_config, s));
     CUDACHECK(cudaStreamSynchronize(s));
   }
 
@@ -503,7 +505,7 @@ int main(int argc, char* argv[])
   // Build named-struct dispatch arguments. HT FLAT also populates topk_weights/topk_idx
   // outputs; HT EM populates only topk_weights (1D). LL allocates only tokens.
   const bool ht_em = (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT &&
-                       config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
+                       handle_config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
 
   ncclEpDispatchInputs_t  dispatch_inputs  = NCCL_EP_DISPATCH_INPUTS_INIT;
   ncclEpDispatchOutputs_t dispatch_outputs = NCCL_EP_DISPATCH_OUTPUTS_INIT;

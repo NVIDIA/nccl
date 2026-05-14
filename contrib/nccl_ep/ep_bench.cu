@@ -2763,7 +2763,6 @@ int main(int argc, char* argv[]) {
     ncclEpGroup_t ep_group;
     ncclEpGroupConfig_t config = NCCL_EP_GROUP_CONFIG_INIT;
     config.algorithm = algorithm;
-    config.layout = layout;
     config.num_experts = num_experts;
     // max_send_tokens_per_rank is the per-rank batch size (max tokens any single rank will send).
     config.max_send_tokens_per_rank = dynamic_tokens ? NCCL_EP_AUTO : num_tokens;
@@ -2855,7 +2854,7 @@ int main(int argc, char* argv[]) {
     int64_t* dispatch_meta_counts_host  = nullptr;
     int64_t* dispatch_meta_offsets_host = nullptr;
     const bool ht_em = (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT &&
-                        config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
+                        layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
     const bool need_dispatch_meta = ht_em && validate_data;
 
     ncclNDTensor_t recv_expert_counter_tensor = nullptr;
@@ -2880,11 +2879,15 @@ int main(int argc, char* argv[]) {
         recv_expert_counter_tensor || recv_total_counter_tensor || meta_offsets_tensor;
 
     const bool ht_expert_major = (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT &&
-                                  config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
+                                  layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
     ncclEpHandleConfig_t handle_cfg = NCCL_EP_HANDLE_CONFIG_INIT;
+    handle_cfg.layout = layout;
     handle_cfg.dispatch_output_per_expert_alignment = expert_major_alignment;
     handle_cfg.use_fp8 = use_fp8;
-    const bool need_cfg = use_fp8 || (ht_expert_major && expert_major_alignment > 0);
+    // Pass the config whenever layout, use_fp8, or EM-alignment is non-default.
+    const bool need_cfg = layout != NCCL_EP_LAYOUT_AUTO ||
+                          use_fp8 ||
+                          (ht_expert_major && expert_major_alignment > 0);
     const ncclEpHandleConfig_t* cfg_ptr = need_cfg ? &handle_cfg : nullptr;
 
     // Optional caller-owned buffer (--user-handle-mem)
@@ -2964,7 +2967,7 @@ int main(int argc, char* argv[]) {
                                topk_weights,
                                num_tokens, hidden, top_k,
                                num_local_experts, config.max_send_tokens_per_rank,
-                               nRanks, config.layout);
+                               nRanks, layout);
     } else {
         setupHighThroughputTensors(comm, alloc,
                                    dispatch_inputs, dispatch_outputs, dispatch_layout_info,
@@ -2972,7 +2975,7 @@ int main(int argc, char* argv[]) {
                                    combine_inputs, combine_outputs,
                                    topk_weights,
                                    num_tokens, hidden, top_k,
-                                   num_local_experts, num_recv_tokens, config.layout, zcopy);
+                                   num_local_experts, num_recv_tokens, layout, zcopy);
     }
     if (myRank == 0) { printf("[DEBUG] Tensors set up\n"); fflush(stdout); }
 
@@ -3150,7 +3153,7 @@ int main(int argc, char* argv[]) {
             alloc, dispatch_outputs, dispatch_layout_info,
             num_tokens, hidden, top_k, num_experts, num_local_experts, myRank, nRanks,
             !is_ll_mode,
-            config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR,
+            layout == NCCL_EP_LAYOUT_EXPERT_MAJOR,
             expert_major_alignment,
             dispatch_meta_counts_host,
             dispatch_meta_offsets_host);
@@ -3170,7 +3173,7 @@ int main(int argc, char* argv[]) {
                     NCCLCHECK(ncclEpTensorGetSizes(combine_inputs.tokens, &eo_sizes, &eo_ndim));
                     size_t data_size = eo_sizes[0] * eo_sizes[1] * sizeof(uint16_t);
                     CUDACHECK(cudaMemcpy(eo_data, output0_data, data_size, cudaMemcpyDeviceToDevice));
-                } else if (config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR) {
+                } else if (layout == NCCL_EP_LAYOUT_EXPERT_MAJOR) {
                     // LL expert-major: 3D [num_local_experts, max_tokens_per_expert, hidden]
                     const size_t* out0_sizes; unsigned int out0_ndim;
                     NCCLCHECK(ncclEpTensorGetSizes(dispatch_outputs.tokens, &out0_sizes, &out0_ndim));
@@ -3200,7 +3203,7 @@ int main(int argc, char* argv[]) {
                 alloc, combine_outputs, topk_weights,
                 num_tokens, hidden, top_k, num_experts, myRank, nRanks,
                 !is_ll_mode, topk_idx_host,
-                config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
+                layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
         }
 
         // Print validation results (rank 0 only to avoid clutter)

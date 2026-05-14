@@ -13,7 +13,7 @@ from nccl.core.typing import NcclInvalid
 from nccl.ep import bindings as _ep_bindings
 from nccl.ep._binding_helpers import binding_dataclass
 from nccl.ep.allocator import EpAllocConfig
-from nccl.ep.enums import NcclEpAlgorithm, NcclEpLayout
+from nccl.ep.enums import NcclEpAlgorithm
 
 if TYPE_CHECKING:
     from nccl.core import Communicator
@@ -44,8 +44,6 @@ class EpGroupConfig:
             even in HT mode.
         max_token_bytes: Token payload size in bytes (independent of
             datatype). Required.
-        layout: Receive-buffer layout. ``AUTO`` (default) picks
-            ``EXPERT_MAJOR`` for LL and ``FLAT`` for HT.
         rdma_buffer_size: RDMA buffer size in bytes. 0 selects a default
             sized for any algorithm.
         num_qp_per_rank: Number of QPs per rank. 0 selects auto.
@@ -80,7 +78,6 @@ class EpGroupConfig:
     num_experts: int = 0
     max_send_tokens_per_rank: int = 0
     max_token_bytes: int = 0
-    layout: NcclEpLayout = NcclEpLayout.AUTO
     rdma_buffer_size: int = 0
     num_qp_per_rank: int = 0
     num_channels: int = 0

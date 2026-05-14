@@ -18,6 +18,7 @@ from nccl.core.typing import NcclInvalid, NcclStreamSpec
 
 from nccl.ep import bindings as _ep_bindings
 from nccl.ep._binding_helpers import binding_dataclass
+from nccl.ep.enums import NcclEpLayout
 
 if TYPE_CHECKING:
     from nccl.ep.group import EpGroup
@@ -49,6 +50,8 @@ class EpHandleConfig:
     equivalent to passing ``NULL`` for the C ``config`` argument.
 
     Attributes:
+        layout: Receive-buffer layout. ``AUTO`` (default) picks
+            ``EXPERT_MAJOR`` for LL and ``FLAT`` for HT.
         use_fp8: Enable FP8 dispatch (default ``False``).
         dispatch_output_per_expert_alignment: HT expert-major only.
             Per-expert zone alignment in tokens (must be a power of 2;
@@ -59,6 +62,7 @@ class EpHandleConfig:
         ``contrib/nccl_ep/include/nccl_ep.h``
     """
 
+    layout: NcclEpLayout = NcclEpLayout.AUTO
     use_fp8: bool = False
     dispatch_output_per_expert_alignment: int = 0
 

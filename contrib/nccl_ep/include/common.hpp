@@ -354,8 +354,16 @@ struct LowLatencyLayout {
     }
 };
 
-inline unsigned long int get_low_latency_rdma_size_hint(int num_max_dispatch_tokens_per_rank, size_t max_token_bytes, int num_ranks, int num_experts, ncclEpLayout_t layout) {
-    auto num_bytes = LowLatencyLayout(nullptr, num_max_dispatch_tokens_per_rank, max_token_bytes, num_ranks, num_experts, MAX_NUM_TOPK, layout).total_bytes;
+// Layout-agnostic: sizes for the worst case across all LL layouts so the caller
+// can allocate the RDMA buffer at group time without knowing the per-handle layout.
+// EM and RM differ only in the per-topk router entry (2B vs 8B), so the gap is
+// small relative to the token payload.
+inline unsigned long int get_low_latency_rdma_size_hint(int num_max_dispatch_tokens_per_rank, size_t max_token_bytes, int num_ranks, int num_experts) {
+    auto bytes_for = [&](ncclEpLayout_t layout) {
+        return LowLatencyLayout(nullptr, num_max_dispatch_tokens_per_rank, max_token_bytes, num_ranks, num_experts, MAX_NUM_TOPK, layout).total_bytes;
+    };
+    auto num_bytes = std::max(bytes_for(NCCL_EP_LAYOUT_EXPERT_MAJOR),
+                              bytes_for(NCCL_EP_LAYOUT_RANK_MAJOR));
     return ((num_bytes + NUM_BUFFER_ALIGNMENT_BYTES) / NUM_BUFFER_ALIGNMENT_BYTES) * NUM_BUFFER_ALIGNMENT_BYTES;
 }
 

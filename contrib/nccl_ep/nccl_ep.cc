@@ -963,18 +963,6 @@ ncclResult_t ncclEpCreateGroup(
     assert((in_config->algorithm == NCCL_EP_ALGO_LOW_LATENCY ||
             in_config->algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) &&
            "ncclEpCreateGroup: invalid algorithm, supported: low_latency, high_throughput");
-    const ncclEpLayout_t effective_layout =
-        (in_config->layout != NCCL_EP_LAYOUT_AUTO) ? in_config->layout :
-        (in_config->algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) ? NCCL_EP_LAYOUT_FLAT :
-                                                                  NCCL_EP_LAYOUT_EXPERT_MAJOR;
-    EP_HOST_ASSERT(!(in_config->algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT &&
-                     effective_layout != NCCL_EP_LAYOUT_FLAT &&
-                     effective_layout != NCCL_EP_LAYOUT_EXPERT_MAJOR) &&
-                   "ncclEpCreateGroup: HT mode supports flat and expert-major layouts");
-    EP_HOST_ASSERT(!(in_config->algorithm == NCCL_EP_ALGO_LOW_LATENCY &&
-                     effective_layout != NCCL_EP_LAYOUT_EXPERT_MAJOR &&
-                     effective_layout != NCCL_EP_LAYOUT_RANK_MAJOR) &&
-                   "ncclEpCreateGroup: LL mode supports only expert-major and rank-major layouts");
 
     bool low_latency_mode = (in_config->algorithm == NCCL_EP_ALGO_LOW_LATENCY);
     bool hybridep_mode = (in_config->algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT);
@@ -1000,10 +988,6 @@ ncclResult_t ncclEpCreateGroup(
     // Store configuration
     ep_group->comm = comm;
     ep_group->config = *in_config;
-    ep_group->config.layout = effective_layout;
-    EP_HOST_ASSERT(ep_group->config.layout != NCCL_EP_LAYOUT_AUTO &&
-                   "ncclEpCreateGroup: layout was not resolved from AUTO");
-
 
     ep_group->alloc.alloc_fn = default_alloc_fn;
     ep_group->alloc.free_fn  = default_free_fn;
@@ -1098,7 +1082,7 @@ ncclResult_t ncclEpCreateGroup(
     }
 
     if (ep_group->config.rdma_buffer_size == NCCL_EP_AUTO && ep_group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
-        ep_group->config.rdma_buffer_size = nccl_ep::get_low_latency_rdma_size_hint(ep_group->config.max_send_tokens_per_rank, ep_group->config.max_token_bytes, ep_group->nRanks, ep_group->config.num_experts, ep_group->config.layout);
+        ep_group->config.rdma_buffer_size = nccl_ep::get_low_latency_rdma_size_hint(ep_group->config.max_send_tokens_per_rank, ep_group->config.max_token_bytes, ep_group->nRanks, ep_group->config.num_experts);
     }
 
     if (ep_group->config.num_qp_per_rank == NCCL_EP_AUTO) {
@@ -1449,6 +1433,7 @@ ncclResult_t ncclEpTensorGetSizes(
 struct ncclEpHandle {
     ncclEpGroup_t group;
 
+    ncclEpLayout_t layout;
     bool use_fp8;
 
     // tensor that is owned by the user, do not free this tensor!
@@ -1605,6 +1590,8 @@ struct ncclEpHandle {
 
     ncclEpHandle()
         : group(nullptr),
+          layout(NCCL_EP_LAYOUT_AUTO),
+          use_fp8(false),
           topk_idx(nullptr),
           num_tokens(0),
           num_topk(0),
@@ -1631,6 +1618,12 @@ static bool is_internode_available(ncclEpGroup_t ep_group) {
     return ep_group->rdma_team_size > 1;
 }
 
+
+static ncclEpLayout_t resolve_layout(ncclEpAlgorithm_t algo, ncclEpLayout_t in) {
+    if (in != NCCL_EP_LAYOUT_AUTO) return in;
+    return (algo == NCCL_EP_ALGO_HIGH_THROUGHPUT) ? NCCL_EP_LAYOUT_FLAT
+                                                  : NCCL_EP_LAYOUT_EXPERT_MAJOR;
+}
 
 static void tensor_free(ncclNDTensor_t t) {
     if (t == nullptr) return;
@@ -1661,7 +1654,7 @@ struct HtBlockLayout {
     size_t sz_s2d, sz_rank_mask, sz_scan_tmp, sz_prob;
     size_t zero_region, no_memset_region, total;
 
-    static HtBlockLayout compute(ncclEpGroup_t ep_group, int num_topk = 0) {
+    static HtBlockLayout compute(ncclEpGroup_t ep_group, ncclEpLayout_t layout, int num_topk = 0) {
         auto align256 = [](size_t s) -> size_t { return (s + 255) & ~size_t(255); };
         const int nRanks           = ep_group->nRanks;
         const int num_experts      = ep_group->config.num_experts;
@@ -1671,7 +1664,7 @@ struct HtBlockLayout {
         const int experts_per_rank = ep_group->num_local_experts;
         const int padded_max_tokens  = ((max_tokens + 15) / 16) * 16;
         const int num_experts_packed = (num_experts + 7) / 8;
-        const bool has_expert_major = (ep_group->config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
+        const bool has_expert_major = (layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
 
         HtBlockLayout L = {};
         L.sz_routing   = align256(static_cast<size_t>(nRanks * max_tokens) * num_experts_packed);
@@ -1695,8 +1688,8 @@ struct HtBlockLayout {
     }
 };
 
-static size_t ht_handle_mem_size(ncclEpGroup_t ep_group, int num_topk) {
-    return HtBlockLayout::compute(ep_group, num_topk).total;
+static size_t ht_handle_mem_size(ncclEpGroup_t ep_group, ncclEpLayout_t layout, int num_topk) {
+    return HtBlockLayout::compute(ep_group, layout, num_topk).total;
 }
 
 ncclResult_t ncclEpHandleMemSize(
@@ -1708,7 +1701,10 @@ ncclResult_t ncclEpHandleMemSize(
     assert(ep_group != nullptr && size_out != nullptr);
     EP_OPTIONAL_STRUCT(config);
     if (ep_group->config.algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) {
-        *size_out = ht_handle_mem_size(ep_group, num_topk);
+        const ncclEpLayout_t layout = resolve_layout(
+            ep_group->config.algorithm,
+            config ? config->layout : NCCL_EP_LAYOUT_AUTO);
+        *size_out = ht_handle_mem_size(ep_group, layout, num_topk);
     } else if (ep_group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
         assert(num_topk > 0 && "LL mode requires num_topk > 0 for ncclEpHandleMemSize");
         *size_out = ll_handle_mem_size(ep_group, num_topk);
@@ -1725,7 +1721,7 @@ static ncclResult_t ll_init_handle(ncclEpHandle_t handle, ncclEpGroup_t ep_group
 
     auto layout = nccl_ep::LowLatencyLayout(
         ep_group->rdma_buffer, ep_group->config.max_send_tokens_per_rank,
-        ep_group->config.max_token_bytes, ep_group->nRanks, ep_group->config.num_experts, num_topk, handle->group->config.layout);
+        ep_group->config.max_token_bytes, ep_group->nRanks, ep_group->config.num_experts, num_topk, handle->layout);
     assert(layout.total_bytes <= ep_group->config.rdma_buffer_size);
 
     if (handle_mem != nullptr) {
@@ -1766,7 +1762,7 @@ static ncclResult_t ht_init_handle(ncclEpHandle_t handle, ncclEpGroup_t ep_group
       assert(num_topk != 0 && "HT mode requires num_topk > 0");
       handle->num_topk = num_topk;
     }
-    const auto L = HtBlockLayout::compute(ep_group, num_topk);
+    const auto L = HtBlockLayout::compute(ep_group, handle->layout, num_topk);
 
     if (handle_mem != nullptr) {
         assert(handle_mem->ndim == 1 && handle_mem->datatype == ncclUint8);
@@ -1834,12 +1830,23 @@ ncclResult_t ncclEpInitHandle(
     assert(ep_group->comm != nullptr);
     EP_OPTIONAL_STRUCT(config);
     const bool use_fp8 = config && config->use_fp8;
+    const ncclEpLayout_t layout = resolve_layout(
+        ep_group->config.algorithm,
+        config ? config->layout : NCCL_EP_LAYOUT_AUTO);
+    EP_HOST_ASSERT(!(ep_group->config.algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT &&
+                     layout != NCCL_EP_LAYOUT_FLAT &&
+                     layout != NCCL_EP_LAYOUT_EXPERT_MAJOR) &&
+                   "ncclEpInitHandle: HT mode supports flat and expert-major layouts");
+    EP_HOST_ASSERT(!(ep_group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY &&
+                     layout != NCCL_EP_LAYOUT_EXPERT_MAJOR &&
+                     layout != NCCL_EP_LAYOUT_RANK_MAJOR) &&
+                   "ncclEpInitHandle: LL mode supports only expert-major and rank-major layouts");
     assert(ep_group->config.num_experts > 0);
     assert(ep_group->config.num_experts % ep_group->nRanks == 0);
 
     // Validate EM padding alignment up-front (pow2 required) before any allocation.
     const bool is_ht_em = ep_group->config.algorithm != NCCL_EP_ALGO_LOW_LATENCY &&
-                          ep_group->config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR;
+                          layout == NCCL_EP_LAYOUT_EXPERT_MAJOR;
     const size_t em_align = (is_ht_em && config && config->dispatch_output_per_expert_alignment > 1)
                             ? config->dispatch_output_per_expert_alignment : 1;
     assert((em_align & (em_align - 1)) == 0 && "dispatch_output_per_expert_alignment must be a power of two");
@@ -1847,6 +1854,7 @@ ncclResult_t ncclEpInitHandle(
     *out_handle = new ncclEpHandle();
     ncclEpHandle_t handle = *out_handle;
     handle->group = ep_group;
+    handle->layout = layout;
     handle->use_fp8 = use_fp8;
 
     ncclResult_t res;
@@ -1942,7 +1950,7 @@ ncclResult_t ncclEpUpdateHandle(
         stream));
 
     // ===== Step 3: Run metadata_preprocessing =====
-    const bool expert_major = (handle->group->config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
+    const bool expert_major = (handle->layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
 
     // layout_info->expert_counters: per-expert counts (HT flat unpadded int32; EM padded int32/64).
     // layout_info->expert_offsets: EM-only per-expert offsets (int32/64).
@@ -2146,7 +2154,7 @@ ncclResult_t ncclEpDispatch(
         ncclNDTensor_t src_rank_counter = layout_info ? layout_info->src_rank_counters : nullptr;
 
         const unsigned num_recv_tokens = static_cast<unsigned>(group->nRanks) * group->config.max_send_tokens_per_rank;
-        switch (group->config.layout) {
+        switch (handle->layout) {
             case NCCL_EP_LAYOUT_RANK_MAJOR:
                 assert(recv_x->ndim == 2);
                 assert(recv_x->sizes[0] == num_recv_tokens);
@@ -2193,7 +2201,7 @@ ncclResult_t ncclEpDispatch(
         // RECV_EXPERT_COUNTER_DEVICE is required for expert-major (per-expert atomic slot allocator)
         // and must be absent for rank-major (outCnt is unused in the rank-major kernel path).
         ncclNDTensor_t recv_count = layout_info ? layout_info->expert_counters : nullptr;
-        if (group->config.layout == NCCL_EP_LAYOUT_RANK_MAJOR) {
+        if (handle->layout == NCCL_EP_LAYOUT_RANK_MAJOR) {
             assert(recv_count == nullptr);
         } else {
             assert(recv_count != nullptr);
@@ -2258,7 +2266,7 @@ ncclResult_t ncclEpDispatch(
                 use_fp8,
                 round_scale,
                 use_ue8m0,
-                group->config.layout,
+                handle->layout,
                 phases,
                 group->num_nccl_comms,
                 group->nccl_dev_comms,
@@ -2286,7 +2294,7 @@ ncclResult_t ncclEpDispatch(
 
         bool is_single_node = !is_internode_available(group);
 
-        const bool expert_major = (handle->group->config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
+        const bool expert_major = (handle->layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
 
         ncclNDTensor_t topk_idx = handle->topk_idx;
         ncclNDTensor_t x = inputs->tokens;
@@ -2470,7 +2478,7 @@ ncclResult_t ncclEpDispatch(
         params.attn_to_rdma_map = handle->hybridep.attn_to_rdma_map;
         params.sparse_to_dense_map = handle->hybridep.sparse_to_dense_map;
         params.s2d_inner_dim = expert_major ? handle->num_topk : group->lsa_team_size;
-        params.layout = group->config.layout;
+        params.layout = handle->layout;
         // s2d_inner_dim must pair with layout (mismatch → OOB in combine reduction).
         assert((params.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR)
                    ? (params.s2d_inner_dim == handle->num_topk)
@@ -2582,7 +2590,7 @@ ncclResult_t ncclEpDispatch(
             if (recv_topk_weights->win_hdl != ncclWindow_t{}) {
                 NCCLCHECK(resolveTensorWindowBinding(group, recv_topk_weights, 0));
             }
-            const bool em = (group->config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
+            const bool em = (handle->layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
             if (em) {
                 if (recv_topk_idx != nullptr) {
                     return ncclInvalidArgument;
@@ -2682,7 +2690,7 @@ ncclResult_t ncclEpCombine(
         // topk_weights: expert-major requires it in outputs; rank-major does not
         // (weights are applied by the caller in preReduceRankMajor before ncclEpCombine).
         ncclNDTensor_t topk_weights;
-        if (handle->group->config.layout == NCCL_EP_LAYOUT_RANK_MAJOR) {
+        if (handle->layout == NCCL_EP_LAYOUT_RANK_MAJOR) {
             topk_weights = nullptr;
         } else {
             topk_weights = outputs->topk_weights;
@@ -2699,7 +2707,7 @@ ncclResult_t ncclEpCombine(
         assert(tensor_is_contiguous(x));
         assert(x->datatype == ncclBfloat16);
         int hidden;
-        switch (handle->group->config.layout) {
+        switch (handle->layout) {
             case NCCL_EP_LAYOUT_RANK_MAJOR:
                 assert(x->ndim == 2);
                 assert(x->sizes[0] == static_cast<unsigned>(num_ranks) * num_max_dispatch_tokens_per_rank);
@@ -2797,7 +2805,7 @@ ncclResult_t ncclEpCombine(
                 handle->group->rank,
                 handle->group->nRanks,
                 use_fp8,
-                handle->group->config.layout,
+                handle->layout,
                 phases,
                 zero_copy,
                 handle->group->num_nccl_comms,
@@ -2865,7 +2873,7 @@ ncclResult_t ncclEpCombine(
 
         // Determine if this is backward mode (topk_weights provided = backward combine)
         bool backward_combine = (topk_weights != nullptr);
-        const bool expert_major_in = (group->config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
+        const bool expert_major_in = (handle->layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
 
         if (backward_combine) {
             if (combined_topk_weights == nullptr) {
@@ -2983,9 +2991,9 @@ ncclResult_t ncclEpCombine(
         params.combine_rdma_inter_node_group_token = is_single_node ? nullptr : group->ht_buffers.combine_rdma_inter_node_group_token;
         params.combine_rdma_inter_node_group_prob = (!is_single_node && backward_combine) ? group->ht_buffers.combine_rdma_inter_node_group_prob : nullptr;
         params.sparse_to_dense_map = handle->hybridep.sparse_to_dense_map;
-        const bool expert_major = (group->config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
+        const bool expert_major = (handle->layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
         params.s2d_inner_dim = expert_major ? handle->num_topk : group->lsa_team_size;
-        params.layout = group->config.layout;
+        params.layout = handle->layout;
         assert((params.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR)
                    ? (params.s2d_inner_dim == handle->num_topk)
                    : (params.s2d_inner_dim == group->lsa_team_size));
@@ -3111,13 +3119,18 @@ ncclResult_t ncclEpMaskClean(
 
     // Reset internal RDMA recv-count/flag counters for both double-buffer slots
     // via a GPU kernel that includes a cross-rank barrier, then clear the mask.
+    // Layout is per-handle, but ncclEpMaskClean operates at group level and
+    // only touches the layout-independent signaling buffers (clean_meta) plus
+    // the sync_buffer used as a cross-rank barrier. Use the LL default layout
+    // so all ranks compute the same sync_buffer offset within the (worst-case
+    // sized) rdma_buffer.
     nccl_ep::LowLatencyLayout layout(ep_group->rdma_buffer,
                                       ep_group->config.max_send_tokens_per_rank,
                                       ep_group->config.max_token_bytes,
                                       ep_group->nRanks,
                                       ep_group->config.num_experts,
                                       MAX_NUM_TOPK,
-                                      ep_group->config.layout);
+                                      NCCL_EP_LAYOUT_EXPERT_MAJOR);
     auto clean_0 = layout.buffers[0].clean_meta();
     auto clean_1 = layout.buffers[1].clean_meta();
 

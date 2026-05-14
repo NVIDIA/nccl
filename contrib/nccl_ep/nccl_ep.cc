@@ -2662,6 +2662,14 @@ ncclResult_t ncclEpCombine(
     EP_REQUIRE_STRUCT(outputs);
     EP_OPTIONAL_STRUCT(config);
     const unsigned int send_only = config ? config->send_only : 0;
+
+    // Lazy num_tokens for callers that skip UpdateHandle (e.g. handle relocation between prepare and combine).
+    if (handle->num_tokens == 0) {
+        ncclNDTensor_t lazy_combined = outputs->tokens;
+        assert(lazy_combined != nullptr);
+        handle->num_tokens = static_cast<int>(lazy_combined->sizes[0]);
+    }
+
     if (handle->group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
         // Find and validate input tensors
         ncclNDTensor_t x = inputs->tokens;

@@ -6,7 +6,6 @@
 
 from libc.stdint cimport intptr_t, uint64_t, uintptr_t
 
-import ctypes.util
 import os
 import threading
 
@@ -82,12 +81,7 @@ def _resolve_library_path() -> str:
             if os.path.exists(candidate):
                 return candidate
 
-    # 3. Dynamic linker default search (LD_LIBRARY_PATH, ld.so.cache, /lib, ...)
-    found = ctypes.util.find_library("nccl_ep")
-    if found:
-        return found
-
-    # 4. CUDA_HOME / CUDA_PATH lib[64]
+    # 3. CUDA_HOME / CUDA_PATH lib[64]
     for env_var in ("CUDA_HOME", "CUDA_PATH"):
         root = os.environ.get(env_var)
         if root:
@@ -96,8 +90,9 @@ def _resolve_library_path() -> str:
                 if os.path.exists(candidate):
                     return candidate
 
-    # 5. SONAME fallback — let dlopen perform its own search; if it fails,
-    # the caller surfaces a clear error.
+    # 4. SONAME fallback — let dlopen perform its own search across
+    # LD_LIBRARY_PATH, /etc/ld.so.cache, and /lib, /usr/lib, /lib64,
+    # /usr/lib64. If it fails the caller surfaces a clear error.
     return "libnccl_ep.so"
 
 

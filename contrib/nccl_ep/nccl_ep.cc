@@ -2423,15 +2423,35 @@ ncclResult_t ncclEpDispatch(
 
         const unsigned int max_recv_tokens = static_cast<unsigned int>(handle->group->max_recv_tokens);
 
+        // Pick the staging→user copy size based on stream-capture state:
+        //   - Capturing (CUDA Graph): copy the full caller-allocated bound
+        //     (max_recv_tokens). No host sync, so the call records cleanly.
+        //     The caller must size recv_x (and recv_scales) >= max_recv_tokens.
+        //   - Not capturing: blocking D2H readback of the actual recv-token
+        //     total and copy only that many rows, keeping bandwidth cost
+        //     proportional to real traffic.
+        cudaStreamCaptureStatus capture_status = cudaStreamCaptureStatusNone;
+        CUDA_CHECK(cudaStreamIsCapturing(stream, &capture_status));
+        const bool is_capturing = (capture_status == cudaStreamCaptureStatusActive);
+        unsigned int actual_recv_tokens = 0;
+        if (!is_capturing) {
+            CUDA_CHECK(cudaMemcpy(&actual_recv_tokens,
+                                  handle->hybridep.num_tokens_for_experts,
+                                  sizeof(actual_recv_tokens),
+                                  cudaMemcpyDeviceToHost));
+            assert(actual_recv_tokens <= max_recv_tokens);
+        }
+        const unsigned int recv_copy_rows = is_capturing ? max_recv_tokens : actual_recv_tokens;
+
         /* ===== Copy intranode staging → caller outputs ===== */
         // External-window outputs are written directly by the kernel; regular tensors
         // need a D2D copy from the shared intranode staging buffers.
         assert(recv_x->ndim == 2 && tensor_is_contiguous(recv_x));
         if (!recv_x_uses_external_window) {
-            if (recv_x->sizes[0] < max_recv_tokens) {
+            if (recv_x->sizes[0] < recv_copy_rows) {
                 return ncclInvalidArgument;
             }
-            size_t copy_size = static_cast<size_t>(max_recv_tokens) * recv_x->sizes[1] * ncclTypeSize(recv_x->datatype);
+            size_t copy_size = static_cast<size_t>(recv_copy_rows) * recv_x->sizes[1] * ncclTypeSize(recv_x->datatype);
             CUDA_CHECK(cudaMemcpyAsync(recv_x->data,
                 group->ht_buffers.dispatch_expert_output_token_buffer_ptrs[group->lsa_rank],
                 copy_size,
@@ -2504,10 +2524,10 @@ ncclResult_t ncclEpDispatch(
         if (use_fp8) {
             assert(recv_scales->ndim == 2 && tensor_is_contiguous(recv_scales));
             if (!recv_scales_uses_external_window) {
-                if (recv_scales->sizes[0] < max_recv_tokens) {
+                if (recv_scales->sizes[0] < recv_copy_rows) {
                     return ncclInvalidArgument;
                 }
-                size_t copy_size = static_cast<size_t>(max_recv_tokens) * recv_scales->sizes[1] * ncclTypeSize(recv_scales->datatype);
+                size_t copy_size = static_cast<size_t>(recv_copy_rows) * recv_scales->sizes[1] * ncclTypeSize(recv_scales->datatype);
                 CUDA_CHECK(cudaMemcpyAsync(recv_scales->data,
                     group->ht_buffers.dispatch_expert_output_scaling_factor_buffer_ptrs[group->lsa_rank],
                     copy_size,

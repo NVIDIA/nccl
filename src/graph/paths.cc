@@ -438,6 +438,7 @@ const char* ncclTopoGdrModeStr[ncclTopoGdrModeNum] = { "Disabled", "Default", "P
 
 // On C2C platforms use GDRDMA on NICs which are connected to the CPUs
 NCCL_PARAM(NetGdrC2c, "NET_GDR_C2C", 1);
+NCCL_PARAM(NetGdrMloPart, "NET_GDR_MLOPART", 0);
 
 ncclResult_t ncclTopoCheckGdr(struct ncclTopoSystem* system, int rank, int64_t netId, int read, enum ncclTopoGdrMode* gdrMode) {
   *gdrMode = ncclTopoGdrModeDisable;
@@ -457,6 +458,7 @@ ncclResult_t ncclTopoCheckGdr(struct ncclTopoSystem* system, int rank, int64_t n
   // Check that both the NIC and GPUs support it
   if (net->net.gdrSupport == 0) return ncclSuccess;
   if (gpu->gpu.gdrSupport == 0) return ncclSuccess;
+  if (gpu->gpu.mloPart != NCCL_TOPO_UNDEF && !ncclParamNetGdrMloPart()) return ncclSuccess;
 
   if (read) { // For reads (sends) only enable under certain conditions
     int gdrReadParam = ncclParamNetGdrRead();

@@ -700,7 +700,7 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
   CUDACHECK(cudaGetDeviceProperties(&prop, comm->cudaDev));
   info->totalGlobalMem = ROUNDUP(prop.totalGlobalMem, (1ULL << 32));
   const char* mlopartStr = strstr(prop.name, "MLOPart");
-  info->mloPart = mlopartStr ? atoi(mlopartStr + strlen("MLOPart")) : -1;
+  info->mloPart = mlopartStr ? atoi(mlopartStr + strlen("MLOPart")) : NCCL_TOPO_UNDEF;
 
   // Get the device MAJOR:MINOR of /dev/shm so we can use that
   // information to decide whether we can use SHM for inter-process
@@ -1108,8 +1108,6 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
 
   // Topo detection / System graph creation
   NCCLCHECKGOTO(ncclTopoGetSystem(comm, &comm->topo), ret, fail);
-  // ncclTopoGetMloPartGdrSupport must run before ncclTopoComputePaths. Path computation gates GDR paths on gpu->gpu.gdrSupport.
-  NCCLCHECKGOTO(ncclTopoGetMloPartGdrSupport(comm->topo, comm), ret, fail);
   // Compute paths between GPUs and NICs
   NCCLCHECKGOTO(ncclTopoComputePaths(comm->topo, comm), ret, fail);
   // Remove inaccessible GPUs and unused NICs

@@ -2059,18 +2059,6 @@ ncclResult_t ncclTopoCpuType(struct ncclTopoSystem* system, int* arch, int* vend
   return ncclSuccess;
 }
 
-NCCL_PARAM(TopoMloPartGdr, "MLOPART_GDR_ENABLE", 0);
-
-ncclResult_t ncclTopoGetMloPartGdrSupport(struct ncclTopoSystem* system, struct ncclComm* comm) {
-  for (int g = 0; g < system->nodes[GPU].count; g++) {
-    struct ncclTopoNode* gpu = &system->nodes[GPU].nodes[g];
-    if (gpu->gpu.mloPart == NCCL_TOPO_UNDEF) continue;
-    if (ncclParamTopoMloPartGdr()) continue;
-    gpu->gpu.gdrSupport = 0;
-  }
-  return ncclSuccess;
-}
-
 NCCL_PARAM(IgnoreCpuAffinity, "IGNORE_CPU_AFFINITY", 0);
 
 ncclResult_t ncclTopoGetCpuAffinity(struct ncclTopoSystem* system, int rank, ncclAffinity* affinity) {

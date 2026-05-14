@@ -232,15 +232,12 @@ ranks *n* of all remote LSA teams).
 Segment Types
 -------------
 
-The ``SegmentType`` template parameter of :cpp:func:`ncclGin::put` describes the physical memory composition
+The ``SegmentType`` template parameter of :cpp:func:`ncclGin::put` and :cpp:func:`ncclGin::get` describes the physical memory composition
 of the source and destination virtual addresses.  Three tag types are defined:
 
 * ``ncclGin_SegmentDevice`` (default) — the virtual addresses only contain cuMem segments of type ``CU_MEM_LOCATION_TYPE_DEVICE``.
 * ``ncclGin_SegmentHostNuma`` — the virtual addresses only contain cuMem segments of type ``CU_MEM_LOCATION_TYPE_HOST_NUMA``.
 * ``ncclGin_SegmentMixed`` — the virtual addresses contain a mix of ``CU_MEM_LOCATION_TYPE_DEVICE`` and ``CU_MEM_LOCATION_TYPE_HOST_NUMA`` segments.
-
-``ncclGin_SegmentHostNuma`` and ``ncclGin_SegmentMixed`` must be specified explicitly when the buffers contain
-host-backed memory; the default ``ncclGin_SegmentDevice`` is only valid for device-only memory.
 
 Host-Accessible Device Pointer Functions
 ----------------------------------------

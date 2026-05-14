@@ -48,17 +48,46 @@ ncclGin
       *bufType* specifies the physical memory composition of the source and destination buffers (see
       :ref:`devapi_segment_types`); it defaults to ``ncclGin_SegmentDevice``.
 
-      The visibility of the signal on the destination peer implies the visibility of the put data it is attached to *and all
-      the preceding puts to the same peer, provided that they were issued using the same GIN context*.
+      The visibility of the signal on the destination peer implies the visibility of the put data it is
+      attached to. Depending on the signal type, the visibility of the signal may also imply the visibility
+      of all the preceding puts to the same peer on the same context.
 
       The API also defines an alternative, "convenience" variant of this method that uses ``ncclSymPtr`` types to specify the
       buffers and expects size to be conveyed in terms of the number of elements instead of the byte count.  There are also
       two ``putValue`` variants that take a single element at a time (no greater than eight bytes), passed by value.
 
+   .. cpp:function:: void get(ncclTeam team, int peer, ncclWindow_t remoteWnd, size_t remoteOffset, ncclWindow_t localWnd, \
+      size_t localOffset, size_t bytes, Coop coop = ncclCoopThread{}, DescriptorSmem descriptor = ncclGin_None{}, \
+      uint32_t optFlags = ncclGinOptFlagsDefault, SegmentType bufType = ncclGin_SegmentDevice{})
+
+      Schedules a device-initiated, one-sided data transfer operation from a remote buffer to a local buffer
+      (available since NCCL 2.30.3).
+
+      *peer* is a rank within *team* (see :ref:`devapi_teams`); it may refer to the local rank (a loopback).  The remote
+      and local buffers are each specified using the window (*remoteWnd*, *localWnd*) and a byte-based offset (*remoteOffset*,
+      *localOffset*).  *bytes* specifies the data transfer count in bytes. If GIN is initialized with connection
+      type :c:macro:`NCCL_GIN_CONNECTION_RAIL`, *peer* must be within the same rail team as the local rank.
+      *bufType* specifies the physical memory composition of the source and destination buffers (see
+      :ref:`devapi_segment_types`); it defaults to ``ncclGin_SegmentDevice``.
+
    .. cpp:function:: void flush(Coop coop, cuda::memory_order ord = cuda::memory_order_acquire)
 
-      Ensures that all the pending transfer operations scheduled by any threads of *coop* are locally consumed, meaning that
-      their source buffers are safe to reuse.  Makes no claims regarding the completion status on the remote peer(s).
+      Ensures that all the pending transfer operations scheduled by any threads of *coop* are locally consumed. For put
+      operations, this means that the source buffers are safe to reuse; this makes no claims regarding the completion
+      status on the remote peer(s). For get operations, this means that the data is visible to the local rank.
+
+   .. cpp:function:: void flushAsync(ncclTeam team, uint32_t peer, ncclGinRequest_t* request, Coop coop = ncclCoopThread{}, \
+        uint32_t optFlags = ncclGinOptFlagsDefault, DescriptorSmem descriptor = ncclGin_None{})
+
+      Initiates a non-blocking flush operation for one peer (see :cpp:func:`ncclGin::flush`). *peer* is a rank within *team*
+      (see :ref:`devapi_teams`). *request* is supplied by the caller and initialized by ``flushAsync``.
+      The caller may use *request* to determine when the flush is complete (see :cpp:func:`ncclGin::wait`).
+      Available since NCCL 2.30.3.
+
+   .. cpp:function:: void wait(ncclGinRequest_t& request, Coop coop = ncclCoopThread{}, DescriptorSmem descriptor = ncclGin_None{}, \
+        cuda::memory_order ord = cuda::memory_order_acquire)
+
+      Blocks until *request* is complete. Available since NCCL 2.30.3.
 
 .. _devapi_signals:
 
@@ -70,38 +99,102 @@ Signals and Counters
    Signals are used to trigger actions on remote peers, most commonly on the completion of a :cpp:func:`ncclGin::put` operation.  They each
    have a 64-bit integer value associated with them that can be manipulated atomically.
 
-.. cpp:struct:: ncclGin_SignalAdd
+   Since NCCL 2.30.5, there are two types of signals: *strong* and *weak*. Strong signals imply the visibility of all the
+   preceding puts to the same peer on the same context. Weak signals imply only the visibility of the put data the signal is
+   attached to.
+
+.. cpp:struct:: ncclGin_StrongSignalInc
+
+   .. cpp:member:: ncclGinSignal_t signal
+
+.. cpp:struct:: ncclGin_StrongSignalAdd
 
    .. cpp:member:: ncclGinSignal_t signal
    .. cpp:member:: uint64_t value
 
-.. cpp:struct:: ncclGin_SignalInc
+.. cpp:struct:: ncclGin_WeakSignalInc
 
    .. cpp:member:: ncclGinSignal_t signal
 
+.. cpp:struct:: ncclGin_WeakSignalAdd
+
+   .. cpp:member:: ncclGinSignal_t signal
+   .. cpp:member:: uint64_t value
+
 These objects can be passed as the *remoteAction* arguments of methods such as :cpp:func:`ncclGin::put` and :cpp:func:`ncclGin::signal` to describe the
 actions to perform on the peer on receipt -- in this case, increase the value of a *signal* specified by
-index. ``ncclGin_SignalInc{signalIdx}`` is functionally equivalent to ``ncclGin_SignalAdd{signalIdx, 1}``; however, it
+index. ``SignalInc{signalIdx}`` is functionally equivalent to ``SignalAdd{signalIdx, 1}``; however, it
 may not be mixed with other signal-modifying operations without an intervening signal reset (see below).  Signal values
 use "rolling" comparison logic to ensure that an unsigned overflow maintains the property of ``x < x + 1``.
 
-.. cpp:struct:: ncclGin_VASignalInc
+.. cpp:struct:: ncclGin_StrongVASignalInc
 
    .. cpp:member:: ncclWindow_t signalWindow
    .. cpp:member:: size_t signalOffset
 
-.. cpp:struct:: ncclGin_VASignalAdd
+.. cpp:struct:: ncclGin_StrongVASignalAdd
+
+   .. cpp:member:: ncclWindow_t signalWindow
+   .. cpp:member:: size_t signalOffset
+   .. cpp:member:: uint64_t value
+
+.. cpp:struct:: ncclGin_WeakVASignalInc
+
+   .. cpp:member:: ncclWindow_t signalWindow
+   .. cpp:member:: size_t signalOffset
+
+.. cpp:struct:: ncclGin_WeakVASignalAdd
 
    .. cpp:member:: ncclWindow_t signalWindow
    .. cpp:member:: size_t signalOffset
    .. cpp:member:: uint64_t value
 
 These objects represent "VA signals": signals that are located at an arbitrary VA (window and offset pair) instead
-of a pre-allocated signal index. Like the ``ncclGin_SignalInc`` and ``ncclGinSignalAdd`` objects,
-these objects  can be passed as the *remoteAction* arguments of methods such as :cpp:func:`ncclGin::put`
+of a pre-allocated signal index. Like the ``ncclGin_StrongSignalInc`` and ``ncclGin_StrongSignalAdd`` objects,
+these objects can be passed as the *remoteAction* arguments of methods such as :cpp:func:`ncclGin::put`
 and :cpp:func:`ncclGin::signal` to increment a signal on the peer. To use a VA signal, the window must be
 registered with flags :c:macro:`NCCL_WIN_COLL_STRICT_ORDERING`. When an address is used as a signal, all reads
 and writes to the address must be issued via GIN (i.e., a ``RemoteAction`` or GIN signal method).
+
+.. cpp:struct:: ncclGin_VASignalInc
+
+   .. deprecated:: 2.30.5
+
+      Prefer :cpp:struct:`ncclGin_StrongVASignalInc` or :cpp:struct:`ncclGin_WeakVASignalInc` instead.
+
+   .. cpp:member:: ncclWindow_t signalWindow
+   .. cpp:member:: size_t signalOffset
+
+.. cpp:struct:: ncclGin_VASignalAdd
+
+   .. deprecated:: 2.30.5
+
+      Prefer :cpp:struct:`ncclGin_StrongVASignalAdd` or :cpp:struct:`ncclGin_WeakVASignalAdd` instead.
+
+   .. cpp:member:: ncclWindow_t signalWindow
+   .. cpp:member:: size_t signalOffset
+   .. cpp:member:: uint64_t value
+
+.. cpp:struct:: ncclGin_SignalInc
+
+   .. deprecated:: 2.30.5
+
+      Prefer :cpp:struct:`ncclGin_StrongSignalInc` or :cpp:struct:`ncclGin_WeakSignalInc` instead.
+
+   .. cpp:member:: ncclGinSignal_t signal
+
+.. cpp:struct:: ncclGin_SignalAdd
+
+   .. deprecated:: 2.30.5
+
+      Prefer :cpp:struct:`ncclGin_StrongSignalAdd` or :cpp:struct:`ncclGin_WeakSignalAdd` instead.
+
+   .. cpp:member:: ncclGinSignal_t signal
+   .. cpp:member:: uint64_t value
+
+Since NCCL 2.30.5, these signal types are deprecated in favor of explicitly strong and weak signal objects.
+The strength of these signals is determined by the value of :c:member:`ginStrongSignalsRequired`
+when creating the device communicator.
 
 **Signal methods of ncclGin:**
 

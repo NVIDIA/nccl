@@ -240,7 +240,7 @@ typedef struct {
     ncclNDTensor_t tokens;       // required; 2D [num_tokens, hidden]
     ncclNDTensor_t topk_weights; // optional; 2D [num_tokens, top_k], ncclFloat32
                                  //   LL rank-major: per-token routing weights
-                                 //   HT forward: routing weights (with topk_idx top-level arg)
+                                 //   HT forward: routing weights (topk_idx taken from handle)
     ncclNDTensor_t scales;       // optional; HT FP8 only; 2D [num_tokens, hidden/128], ncclFloat32
 } ncclEpDispatchInputs_t;
 
@@ -411,10 +411,9 @@ typedef struct {
 //   * This call is collective and must be invoked by all ranks in the group.
 //
 // Arguments:
-//   handle        - [IN,OUT] EP handle
-//   topk_idx      - [IN]     Top-k expert index tensor used by HT mode for forward dispatch.
-//                            Pass NULL for LL mode (routing is encoded in the handle) and for HT backward dispatch.
-//                            HT: 2D [num_tokens, top_k] int64.
+//   handle        - [IN,OUT] EP handle. The handle's topk_idx (set via ncclEpUpdateHandle / ncclEpCreateHandle)
+//                            is used by HT forward dispatch. For HT backward dispatch or LL mode,
+//                            set topk_idx to NULL when calling ncclEpUpdateHandle.
 //   inputs        - [IN]     Named input tensors (see ncclEpDispatchInputs_t).
 //                            inputs->tokens is required; other fields are optional.
 //   outputs       - [IN,OUT] Named preallocated output tensors (see ncclEpDispatchOutputs_t).
@@ -438,7 +437,6 @@ typedef struct {
 
 ncclResult_t ncclEpDispatch(
     ncclEpHandle_t handle,
-    ncclNDTensor_t topk_idx,
     const ncclEpDispatchInputs_t* inputs,
     const ncclEpDispatchOutputs_t* outputs,
     const ncclEpLayoutInfo_t* layout_info,  // NULL = none

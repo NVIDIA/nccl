@@ -520,7 +520,7 @@ int main(int argc, char* argv[])
   NCCLCHECK(epMakeTensor(&topk_weights, 2, ncclFloat32,
                          static_cast<unsigned int>(num_tokens), static_cast<unsigned int>(top_k)));
   if (algorithm != NCCL_EP_ALGO_LOW_LATENCY) {
-    // HT: topk_weights is a dispatch input; topk_idx is the top-level arg to ncclEpDispatch.
+    // HT: topk_weights is a dispatch input; topk_idx is taken from the handle.
     dispatch_inputs.topk_weights = topk_weights;
   }
 
@@ -623,7 +623,7 @@ int main(int argc, char* argv[])
   }
 
   printf("Rank %d: Testing ncclEpDispatch (send_only=%s)\n", myRank, dispatch_send_only ? "true" : "false");
-  NCCLCHECK(ncclEpDispatch(ep_handle, topk_idx,
+  NCCLCHECK(ncclEpDispatch(ep_handle,
                            &dispatch_inputs, &dispatch_outputs,
                            (algorithm == NCCL_EP_ALGO_LOW_LATENCY) ? &dispatch_layout_info : nullptr,
                            &dispatch_config, s));
@@ -980,7 +980,7 @@ int main(int argc, char* argv[])
 
     printf("Rank %d: Testing cached mode - second ncclEpDispatch call (send_only=%s)\n",
            myRank, dispatch_send_only ? "true" : "false");
-    NCCLCHECK(ncclEpDispatch(ep_handle, topk_idx, &dispatch_inputs, &cached_dispatch_outputs,
+    NCCLCHECK(ncclEpDispatch(ep_handle, &dispatch_inputs, &cached_dispatch_outputs,
                              nullptr, &dispatch_config, s));
 
     printf("Rank %d: Testing cached mode - second ncclEpComplete (dispatch)\n", myRank);

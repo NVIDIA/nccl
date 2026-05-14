@@ -2099,7 +2099,6 @@ ncclResult_t ncclEpHandleDestroy(
 
 ncclResult_t ncclEpDispatch(
     ncclEpHandle_t handle,
-    ncclNDTensor_t topk_idx,
     const ncclEpDispatchInputs_t* inputs,
     const ncclEpDispatchOutputs_t* outputs,
     const ncclEpLayoutInfo_t* layout_info,
@@ -2289,6 +2288,7 @@ ncclResult_t ncclEpDispatch(
 
         const bool expert_major = (handle->group->config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
 
+        ncclNDTensor_t topk_idx = handle->topk_idx;
         ncclNDTensor_t x = inputs->tokens;
         ncclNDTensor_t topk_weights = inputs->topk_weights;
         ncclNDTensor_t scales = inputs->scales;

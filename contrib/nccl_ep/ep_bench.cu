@@ -429,7 +429,7 @@ static void setupLowLatencyTensorsRankMajLayout(
 
 // LL benchmark — full tensor graph for ncclEpDispatch / ncclEpCombine.
 //
-// topk_idx is unused on the LL path (signature matches setupHighThroughputTensors).
+// topk_idx is read from handle on the LL path (signature matches setupHighThroughputTensors).
 void setupLowLatencyTensors(
     ncclEpDispatchInputs_t&  dispatch_inputs,
     ncclEpDispatchOutputs_t& dispatch_outputs,
@@ -438,7 +438,6 @@ void setupLowLatencyTensors(
     ncclEpCombineInputs_t&   combine_inputs,
     ncclEpCombineOutputs_t&  combine_outputs,
     ncclNDTensor_t&          topk_weights,
-    ncclNDTensor_t&          topk_idx,
     unsigned int num_tokens,
     unsigned int hidden,
     unsigned int top_k,
@@ -447,7 +446,6 @@ void setupLowLatencyTensors(
     int nRanks,
     ncclEpLayout_t layout
 ) {
-    (void)topk_idx;
 
     setupLowLatencyTensorsSharedInputs(dispatch_inputs, dispatch_layout_info,
                                        has_dispatch_layout_info, topk_weights,
@@ -488,11 +486,9 @@ void setupHighThroughputTensors(
     ncclEpDispatchOutputs_t& dispatch_outputs,
     ncclEpLayoutInfo_t&      dispatch_layout_info,
     bool&                    has_dispatch_layout_info,
-    ncclNDTensor_t&          dispatch_topk_idx,
     ncclEpCombineInputs_t&   combine_inputs,
     ncclEpCombineOutputs_t&  combine_outputs,
     ncclNDTensor_t&          topk_weights,
-    ncclNDTensor_t&          topk_idx,
     unsigned int num_tokens,
     unsigned int hidden,
     unsigned int top_k,
@@ -542,9 +538,6 @@ void setupHighThroughputTensors(
                              num_tokens * top_k * sizeof(float), cudaMemcpyHostToDevice));
         delete[] topk_weights_host;
     }
-
-    // topk_idx is passed as a top-level arg to ncclEpDispatch, not packed into inputs.
-    dispatch_topk_idx = topk_idx;
 
     // Dispatch output: 2D [num_recv_tokens, hidden]
     NCCLCHECK(epMakeTensor(&dispatch_outputs.tokens, 2, ncclBfloat16,
@@ -2952,15 +2945,13 @@ int main(int argc, char* argv[]) {
     // inside the named-struct fields (dispatch_inputs/outputs/layout_info /
     // combine_inputs/outputs); setup writes directly there and validation /
     // cleanup reads from there. `topk_weights` is a side handle aliased into
-    // different struct fields per layout; `dispatch_topk_idx` is the top-level
-    // arg to ncclEpDispatch. The `alloc` state tracks zero-copy bookkeeping
+    // different struct fields per layout. The `alloc` state tracks zero-copy bookkeeping
     // (NCCL window registrations, ncclMemAlloc'd pointers).
     BenchmarkAllocState     alloc;
     ncclEpDispatchInputs_t  dispatch_inputs          = NCCL_EP_DISPATCH_INPUTS_INIT;
     ncclEpDispatchOutputs_t dispatch_outputs         = NCCL_EP_DISPATCH_OUTPUTS_INIT;
     ncclEpLayoutInfo_t      dispatch_layout_info     = NCCL_EP_LAYOUT_INFO_INIT;
     bool                    has_dispatch_layout_info = false;
-    ncclNDTensor_t          dispatch_topk_idx        = nullptr;
     ncclEpCombineInputs_t   combine_inputs           = NCCL_EP_COMBINE_INPUTS_INIT;
     ncclEpCombineOutputs_t  combine_outputs          = NCCL_EP_COMBINE_OUTPUTS_INIT;
     ncclNDTensor_t          topk_weights             = nullptr;
@@ -2970,16 +2961,16 @@ int main(int argc, char* argv[]) {
     if (is_ll_mode) {
         setupLowLatencyTensors(dispatch_inputs, dispatch_outputs, dispatch_layout_info,
                                has_dispatch_layout_info, combine_inputs, combine_outputs,
-                               topk_weights, topk_idx,
+                               topk_weights,
                                num_tokens, hidden, top_k,
                                num_local_experts, config.max_send_tokens_per_rank,
                                nRanks, config.layout);
     } else {
         setupHighThroughputTensors(comm, alloc,
                                    dispatch_inputs, dispatch_outputs, dispatch_layout_info,
-                                   has_dispatch_layout_info, dispatch_topk_idx,
+                                   has_dispatch_layout_info,
                                    combine_inputs, combine_outputs,
-                                   topk_weights, topk_idx,
+                                   topk_weights,
                                    num_tokens, hidden, top_k,
                                    num_local_experts, num_recv_tokens, config.layout, zcopy);
     }
@@ -3020,7 +3011,7 @@ int main(int argc, char* argv[]) {
 
     ncclEpCombineConfig_t combine_config = NCCL_EP_COMBINE_CONFIG_INIT;
     auto dispatch_fn = [&]() {
-        NCCLCHECK(ncclEpDispatch(ep_handle, dispatch_topk_idx,
+        NCCLCHECK(ncclEpDispatch(ep_handle,
                                   &dispatch_inputs, &dispatch_outputs,
                                   has_dispatch_layout_info ? &dispatch_layout_info : nullptr,
                                   &dispatch_config, stream));

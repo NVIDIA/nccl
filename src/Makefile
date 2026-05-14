@@ -1,5 +1,6 @@
 #
 # SPDX-FileCopyrightText: Copyright (c) 2015-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#                                   (c) 2026      Barcelona Supercomputing Center
 # SPDX-License-Identifier: Apache-2.0
 #
 # See LICENSE.txt for more license information
@@ -10,6 +11,19 @@ include ../makefiles/version.mk
 ##### src files
 INCEXPORTS  := nccl.h nccl_device.h \
 	$(patsubst include/%,%,$(wildcard include/nccl_device/*.h include/nccl_device/*/*.h include/nccl_device/*/*/*.h))
+
+# NOTE: Make sure that platform supports IBV extension(s), do not assume it.
+ifneq ($(RDMA_CORE), 0)
+TEST_FILE = temp__file.c
+IBV_HAS_ACTIVE_SPEED_EX := $(shell printf "#include <infiniband/verbs.h>\nint main(void) { struct ibv_port_attr a; a.active_speed_ex = 0; return 0; }" > $(TEST_FILE); \
+	if $(CC) -c $(TEST_FILE) -o /dev/null > /dev/null 2>&1; then echo 1; else echo 0; fi; \
+	rm -f $(TEST_FILE))
+else
+# Stubs do have support for it.
+IBV_HAS_ACTIVE_SPEED_EX := 1
+endif
+CFLAGS += -DIBV_HAS_ACTIVE_SPEED_EX=$(IBV_HAS_ACTIVE_SPEED_EX)
+CXXFLAGS += -DIBV_HAS_ACTIVE_SPEED_EX=$(IBV_HAS_ACTIVE_SPEED_EX)
 
 # On Linux use real net_socket and net_ib; on Windows use stubs (avoid multiple definition)
 TRANSPORT_CC = $(wildcard transport/*.cc)

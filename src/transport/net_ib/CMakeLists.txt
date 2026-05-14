@@ -1,3 +1,26 @@
+# NOTE: Make sure that platform supports IBV extension(s), do not assume it.
+if(RDMA_CORE)
+    include(CheckCSourceCompiles)
+
+    check_c_source_compiles("
+    #include <infiniband/verbs.h>
+    int main(void) {
+        struct ibv_port_attr a;
+        a.active_speed_ex = 0;
+        return 0;
+    }
+    " IBV_HAS_ACTIVE_SPEED_EX)
+else()
+    # Stubs do have support for it.
+    set(IBV_HAS_ACTIVE_SPEED_EX ON)
+endif ()
+if(IBV_HAS_ACTIVE_SPEED_EX)
+    add_compile_definitions(IBV_HAS_ACTIVE_SPEED_EX=1)
+else()
+    add_compile_definitions(IBV_HAS_ACTIVE_SPEED_EX=0)
+endif()
+
+
 # Transport sources
 set(NET_IB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/common.cc

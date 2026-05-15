@@ -659,6 +659,8 @@ __device__ __forceinline__ void scan_impl(const uint8_t* input_routing_map,
 {
   static_assert(LSA_TEAM_SIZE <= EM_S2D_MAX_RANKS,
                 "em_s2d_pack rank field is 10 bits; LSA team size must fit in 1024");
+  static_assert(LSA_TEAM_SIZE <= NUM_THREADS_PER_BLOCK,
+                "scan_impl requires one block thread per LSA rank to initialize warp prefixes");
 
   constexpr int NUM_OF_WARPS_PER_BLOCK = NUM_THREADS_PER_BLOCK / WARP_SIZE;
   constexpr int NUM_OF_TOTAL_THREADS = NUM_THREADS_PER_BLOCK * NUM_OF_BLOCKS;

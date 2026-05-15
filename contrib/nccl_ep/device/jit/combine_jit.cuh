@@ -133,8 +133,8 @@ inline void launch_combine(
     int lsa_team_size,
     ncclEpLayout_t layout,
     int hidden_dim,
-    void* param,
-    size_t param_size,
+    void* param, // ptr to the packed kernel arguments buffer
+    size_t param_size, // size of packed kernel arguments buffer
     int dynamic_smem_bytes,
     cudaStream_t stream) {
     const combine_warp_layout_t L = compute_combine_warp_layout(num_lsa_teams);

@@ -153,7 +153,7 @@ void call_metadata_preprocessing(
     int local_rank,                     // Rank within node (0 to num_ranks_per_node-1)
     int num_tokens_per_rank,            // Actual tokens per rank this iteration (runtime)
     int num_nodes,                      // Number of nodes (RDMA domain size)
-    int num_ranks_per_node,             // Ranks per node (NVLink domain size, 1-8)
+    int num_ranks_per_node,             // Ranks per node (NVLink domain size)
     int experts_per_rank,               // Experts per GPU
     bool     expert_major           = false,   // true = expert-major layout (gates fused remap)
     int64_t* internal_offsets       = nullptr, // Expert-major: per-expert zone offsets consumed by dispatch
@@ -215,7 +215,7 @@ struct DispatchParams {
     // User inputs
     int hidden_dim;             // Model hidden dimension
     int experts_per_rank;       // Experts per GPU
-    int num_ranks_per_node;     // Ranks per node (NVLink domain size, 1-8)
+    int num_ranks_per_node;     // Ranks per node (NVLink domain size)
     const void* attn_input_token;
     const float* attn_input_prob;            // Forward dispatch only
     const float* attn_input_scaling_factor;  // FP8 only
@@ -285,7 +285,7 @@ struct CombineParams {
     // These pointers are copied into the kernel param struct for fast __grid_constant__ access.
     int hidden_dim;             // Model hidden dimension
     int experts_per_rank;       // Experts per GPU
-    int num_ranks_per_node;     // Ranks per node (NVLink domain size, 1-8)
+    int num_ranks_per_node;     // Ranks per node (NVLink domain size)
     uint16_t* const* expert_input_token_ptrs;    // HOST array[num_ranks_per_node], BF16 only
     float* const* expert_input_prob_ptrs;        // HOST array, backward only
 

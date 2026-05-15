@@ -479,6 +479,8 @@ CUresult launch_function(
     void* kernel_param,
     std::size_t kernel_param_size,
     cudaStream_t stream) {
+    // A zero size means kernel_param points to one fixed-size kernel argument.
+    // Non-zero size means kernel_param points to a byte buffer with all kernel arguments.
     if (kernel_param_size == 0) {
         void* kernel_args[] = {kernel_param};
         return cuLaunchKernel(
@@ -491,6 +493,8 @@ CUresult launch_function(
             nullptr);
     }
 
+    // This buffer already has the arguments laid out in the order the JIT kernel
+    // expects, so pass CUDA the buffer pointer and its size.
     void* extra[] = {
         CU_LAUNCH_PARAM_BUFFER_POINTER, kernel_param,
         CU_LAUNCH_PARAM_BUFFER_SIZE, &kernel_param_size,
@@ -891,6 +895,7 @@ JitKernelStatus launch_jit_kernel(
         variant, fast_key, paths, key, cubin, log_prefix, kernel_param, kernel_param_size, stream, error);
 }
 
+// This overload is for kernels that don't need to pass kernel arguments.
 JitKernelStatus launch_jit_kernel(
     const JitKernelVariant& variant,
     void* kernel_param,

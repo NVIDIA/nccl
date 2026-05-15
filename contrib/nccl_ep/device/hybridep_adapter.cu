@@ -18,6 +18,8 @@
 #include "jit/dispatch_jit.cuh"
 #include "jit/preprocess_jit.cuh"
 
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -427,6 +429,31 @@ size_t get_rank_mask_elem_size(int lsa_team_size) {
     return ((lsa_team_size + 63) / 64) * sizeof(uint64_t);
 }
 
+int get_device_max_dynamic_smem() {
+    int device = 0;
+    int max_smem = 0;
+    CUDA_CHECK(cudaGetDevice(&device));
+    CUDA_CHECK(cudaDeviceGetAttribute(&max_smem, cudaDevAttrMaxSharedMemoryPerBlockOptin, device));
+    return max_smem;
+}
+
+void check_dispatch_smem_limit(
+    const ::hybrid_ep::dispatch_config_t& config,
+    size_t smem_size) {
+    const int max_smem = get_device_max_dynamic_smem();
+    if (smem_size <= static_cast<size_t>(max_smem)) return;
+
+    std::fprintf(
+        stderr,
+        "[nccl_ep] dispatch dynamic shared memory exceeds device limit: requested=%zu bytes, "
+        "limit=%d bytes. Tune dispatch stages/pipelines; current stages=%d, pipelines=%d.\n",
+        smem_size,
+        max_smem,
+        config.num_of_stages,
+        config.num_pipelines);
+    std::abort();
+}
+
 // ============================================================================
 // Dispatch wrapper implementation
 // ============================================================================
@@ -566,6 +593,7 @@ void dispatch_impl(
         const int smem_size = (params.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR)
             ? ::hybrid_ep::calculate_dispatch_smem_layout_size<NCCL_EP_LAYOUT_EXPERT_MAJOR>(d_config, d_model)
             : ::hybrid_ep::calculate_dispatch_smem_layout_size<NCCL_EP_LAYOUT_FLAT>(d_config, d_model);
+        check_dispatch_smem_limit(d_config, smem_size);
 
 #ifdef HYBRIDEP_ENABLE_WARP_TIMING
         const jit::dispatch_warp_layout_t dispatch_layout =

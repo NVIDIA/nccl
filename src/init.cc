@@ -826,10 +826,7 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
   }
 
   NCCLCHECK(ncclTopoCheckCrossNicSupport(&info->crossNicSupport));
-  int cuMemGdrSupport;
-  CUCHECK(cuDeviceGetAttribute(&cuMemGdrSupport, CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WITH_CUDA_VMM_SUPPORTED,
-                               comm->cudaDev));
-  info->cuMemGdrSupport = (cuMemGdrSupport == 1);
+  NCCLCHECK(ncclCuMemGdrSupport(comm->cudaDev, &info->cuMemGdrSupport));
   info->supportedGinTypeBitMask = 0;
   for (int i = 0; i < comm->sharedRes->ginState.numActiveBackends; i++) {
     info->supportedGinTypeBitMask |= BIT(comm->sharedRes->ginState.backends[i].ginType);
@@ -1076,7 +1073,6 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   uint64_t globalGinTypeBitMask = UINT64_MAX;
   bool globalCrossNicSupport = true;
   bool globalRmaPluginSupport = true;
-  bool globalCuMemGdrSupport = true;
   bool isOneLsaTeams = false;
 
   int localNetDeviceCount = 0;
@@ -1098,6 +1094,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   COMPILER_ATOMIC_STORE(&comm->peerInfoValid, true, std::memory_order_release);
 
   comm->cuMemSupport = 1;
+  comm->cuMemGdrSupport = 1;
   comm->gpuCftSupport = comm->peerInfo[0].gpuCftSupport;
   comm->minDriverVersion = comm->peerInfo[0].cudaDriverVersion;
   comm->contiguousRanksPerHost = 0;
@@ -1152,7 +1149,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     globalGinTypeBitMask &= comm->peerInfo[i].supportedGinTypeBitMask;
     globalCrossNicSupport &= comm->peerInfo[i].crossNicSupport;
     globalRmaPluginSupport &= comm->peerInfo[i].rmaPluginAvailable;
-    globalCuMemGdrSupport &= comm->peerInfo[i].cuMemGdrSupport;
+    comm->cuMemGdrSupport &= comm->peerInfo[i].cuMemGdrSupport;
     comm->minDriverVersion = std::min(comm->peerInfo[i].cudaDriverVersion, comm->minDriverVersion);
   }
   // AllGather1 - end
@@ -1765,7 +1762,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
 
   NCCLCHECKGOTO(ncclTopoPathAllDirectNVLink(comm->topo, &comm->isAllDirectNvlink), ret, fail);
   comm->globalGinSupport = NCCL_GIN_CONNECTION_NONE;
-  if (globalGinTypeBitMask && globalCuMemGdrSupport && !comm->hasMloPart) {
+  if (globalGinTypeBitMask && comm->cuMemGdrSupport && !comm->hasMloPart) {
     NCCLCHECKGOTO(ncclGinSetDefaultBackend(comm, globalGinTypeBitMask), ret, fail);
     if (globalCrossNicSupport) {
       comm->globalGinSupport = NCCL_GIN_CONNECTION_FULL;
@@ -1773,7 +1770,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
       comm->globalGinSupport = NCCL_GIN_CONNECTION_RAIL;
     }
   }
-  comm->globalRmaProxySupport = globalRmaPluginSupport && globalCrossNicSupport && globalCuMemGdrSupport;
+  comm->globalRmaProxySupport = globalRmaPluginSupport && globalCrossNicSupport && comm->cuMemGdrSupport;
   isOneLsaTeams = ncclDevrIsOneLsaTeam(comm);
   comm->symmetricSupport = comm->isAllCudaP2p && ncclParamWinEnable() && ncclCuMemEnable() &&
                            (comm->globalGinSupport != NCCL_GIN_CONNECTION_NONE || isOneLsaTeams);
@@ -1783,7 +1780,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     INFO(NCCL_INIT,
          "symmetricSupport %d, cuMemEnable %d, globalGinSupport %d, cuMemGdrSupport %d, contiguousRanksPerHost %d, "
          "crossNicSupport %d",
-         comm->symmetricSupport, ncclCuMemEnable(), comm->globalGinSupport, globalCuMemGdrSupport,
+         comm->symmetricSupport, ncclCuMemEnable(), comm->globalGinSupport, comm->cuMemGdrSupport,
          comm->contiguousRanksPerHost, globalCrossNicSupport);
   }
 

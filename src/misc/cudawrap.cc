@@ -50,6 +50,18 @@ int ncclCuMemEnable() {
   return param >= 0 ? param : (param == -2 && ncclCuMemSupported);
 }
 
+ncclResult_t ncclCuMemGdrSupport(int cudaDev, bool* support) {
+  *support = false;
+  if (ncclCuMemEnable()) {
+    CUdevice cuDev;
+    CUCHECK(cuDeviceGet(&cuDev, cudaDev));
+    int cuMemGdrSupport;
+    CUCHECK(cuDeviceGetAttribute(&cuMemGdrSupport, CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WITH_CUDA_VMM_SUPPORTED, cuDev));
+    *support = (cuMemGdrSupport == 1);
+  }
+  return ncclSuccess;
+}
+
 static int ncclCumemHostEnable = -1;
 int ncclCuMemHostEnable() {
   if (ncclCumemHostEnable != -1) return ncclCumemHostEnable;

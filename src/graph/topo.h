@@ -177,6 +177,9 @@ struct ncclTopoSystem {
   float maxBw;
   float totalBw;
   int inter;
+  // mirrors the comm's values
+  bool cuMemGdrSupport;  // global cuMem GDR support
+  int minDriverVersion;  // min CUDA driver version across ranks
 };
 
 ncclResult_t ncclTopoGetNode(struct ncclTopoSystem* system, struct ncclTopoNode** node, int type, uint64_t id);

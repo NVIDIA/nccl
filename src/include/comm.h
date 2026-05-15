@@ -619,6 +619,7 @@ struct ncclComm {
   int cudaArch; // matches __CUDA_ARCH__ of device
   int maxSharedMemOptin; // cudaDevAttrMaxSharedMemoryPerBlockOptin for cudaDev
   int minDriverVersion; // min CUDA driver version
+  bool cuMemGdrSupport;  // global cuMem GDR support
 
   int cpuArch;   // architecture - As defined in src/include/graph.h, e.g. x86/arm/ppc/mixed
   int cpuVendor; // vendor - As defined in src/include/graph.h

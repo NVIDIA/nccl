@@ -229,6 +229,8 @@ inline ncclResult_t ncclCudaDriverVersion(int* driver) {
   return ncclSuccess;
 }
 
+ncclResult_t ncclCuMemGdrSupport(int cudaDev, bool* support);
+
 ncclResult_t ncclCuStreamBatchMemOp(cudaStream_t stream, unsigned int numOps, CUstreamBatchMemOpParams* batchParams);
 
 #endif

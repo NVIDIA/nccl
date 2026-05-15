@@ -18,6 +18,9 @@
 #include "jit/dispatch_jit.cuh"
 #include "jit/preprocess_jit.cuh"
 
+#include <cstring>
+#include <vector>
+
 namespace nccl_ep {
 namespace hybridep {
 
@@ -428,11 +431,11 @@ size_t get_rank_mask_elem_size(int lsa_team_size) {
 // Dispatch wrapper implementation
 // ============================================================================
 
-// Helper to populate dispatch_kernel_param_t from DispatchParams
+// Helper to populate the fixed-size dispatch parameter fields from DispatchParams.
 template<typename TOKEN_DATA_TYPE>
-::hybrid_ep::dispatch_kernel_param_t<TOKEN_DATA_TYPE>
-build_dispatch_param(const DispatchParams& params) {
-    ::hybrid_ep::dispatch_kernel_param_t<TOKEN_DATA_TYPE> kp{};
+::hybrid_ep::dispatch_kernel_param_base_t<TOKEN_DATA_TYPE>
+build_dispatch_param_base(const DispatchParams& params) {
+    ::hybrid_ep::dispatch_kernel_param_base_t<TOKEN_DATA_TYPE> kp{};
     // Model configuration
     kp.hidden_dim = params.hidden_dim;
     kp.experts_per_rank = params.experts_per_rank;
@@ -441,17 +444,6 @@ build_dispatch_param(const DispatchParams& params) {
     kp.attn_input_token = reinterpret_cast<const TOKEN_DATA_TYPE*>(params.attn_input_token);
     kp.attn_input_prob = params.attn_input_prob;
     kp.attn_input_token_scaling_factor = params.attn_input_scaling_factor;
-
-    // Copy IPC buffer pointers from HOST arrays into embedded param struct arrays.
-    // This allows fast __grid_constant__ access in the kernel (vs slow global memory indirection).
-    for (int i = 0; i < params.num_ranks_per_node; i++) {
-        kp.expert_output_token[i] =
-            reinterpret_cast<TOKEN_DATA_TYPE*>(params.expert_output_token_ptrs[i]);
-        kp.expert_output_prob[i] = params.expert_output_prob_ptrs ?
-            params.expert_output_prob_ptrs[i] : nullptr;
-        kp.expert_output_scaling_factor[i] = params.expert_output_scaling_factor_ptrs ?
-            params.expert_output_scaling_factor_ptrs[i] : nullptr;
-    }
 
     // Metadata and sync flags
     kp.rdma_to_attn_map = params.rdma_to_attn_map;
@@ -500,6 +492,35 @@ build_dispatch_param(const DispatchParams& params) {
     return kp;
 }
 
+template<typename TOKEN_DATA_TYPE>
+std::vector<uint8_t> build_dispatch_arg_buffer(
+    const ::hybrid_ep::dispatch_kernel_param_base_t<TOKEN_DATA_TYPE>& kp,
+    const DispatchParams& params) {
+    using ParamBase = ::hybrid_ep::dispatch_kernel_param_base_t<TOKEN_DATA_TYPE>;
+    static_assert(sizeof(ParamBase) % alignof(void*) == 0);
+
+    const size_t base_size = sizeof(ParamBase);
+    const size_t token_offset = base_size;
+    const size_t prob_offset = token_offset + params.num_ranks_per_node * sizeof(TOKEN_DATA_TYPE*);
+    const size_t sf_offset = prob_offset + params.num_ranks_per_node * sizeof(float*);
+    const size_t total_size = sf_offset + params.num_ranks_per_node * sizeof(float*);
+
+    std::vector<uint8_t> arg(total_size);
+    std::memcpy(arg.data(), &kp, sizeof(kp));
+
+    auto* token_ptrs = reinterpret_cast<TOKEN_DATA_TYPE**>(arg.data() + token_offset);
+    auto* prob_ptrs = reinterpret_cast<float**>(arg.data() + prob_offset);
+    auto* sf_ptrs = reinterpret_cast<float**>(arg.data() + sf_offset);
+    for (int i = 0; i < params.num_ranks_per_node; i++) {
+        token_ptrs[i] = reinterpret_cast<TOKEN_DATA_TYPE*>(params.expert_output_token_ptrs[i]);
+        prob_ptrs[i] = params.expert_output_prob_ptrs ? params.expert_output_prob_ptrs[i] : nullptr;
+        sf_ptrs[i] = params.expert_output_scaling_factor_ptrs ?
+            params.expert_output_scaling_factor_ptrs[i] : nullptr;
+    }
+
+    return arg;
+}
+
 // Template dispatch launcher for forward/backward and sync modes
 template<bool FORWARD_DISPATCH>
 void dispatch_impl(
@@ -516,14 +537,12 @@ void dispatch_impl(
         const int experts_per_node = params.experts_per_rank * params.num_ranks_per_node;
         assert((experts_per_node * sizeof(float)) % 16 == 0 &&
                "experts_per_node must be multiple of 4 for TMA alignment");
-        assert(params.num_ranks_per_node <= ::hybrid_ep::HYBRIDEP_MAX_LSA_TEAM_SIZE &&
-               "num_ranks_per_node exceeds HYBRIDEP_MAX_LSA_TEAM_SIZE");
         // 16B cp.async.bulk alignment for the S2D map fetch; matters when s2d_inner_dim < 4.
         assert((static_cast<int64_t>(params.num_tokens_per_rank) * params.s2d_inner_dim) % 4 == 0 &&
                "Dispatch S2D cp.async.bulk: num_tokens_per_rank * s2d_inner_dim must be a "
                "multiple of 4 (flat layout with lsa_team_size <= 3 requires even num_tokens_per_rank)");
 
-        auto kp = build_dispatch_param<TOKEN_DATA_TYPE>(params);
+        auto kp = build_dispatch_param_base<TOKEN_DATA_TYPE>(params);
         constexpr bool kUseFp8 = std::is_same_v<TOKEN_DATA_TYPE, uint8_t>;
 
         // Compute dynamic SMEM size at host (was done inside hybrid_ep::dispatch).
@@ -558,6 +577,7 @@ void dispatch_impl(
         kp.warp_timing = d_wt;
 #endif
 
+        std::vector<uint8_t> kernel_arg = build_dispatch_arg_buffer(kp, params);
         jit::launch_dispatch(
             HYBRIDEP_DISPATCH_NUM_OF_STAGES,
             HYBRIDEP_DISPATCH_NUM_OF_IN_FLIGHT_S2G,
@@ -569,7 +589,8 @@ void dispatch_impl(
             params.layout,
             kUseFp8,
             kp.hidden_dim,
-            &kp,
+            kernel_arg.data(),
+            kernel_arg.size(),
             smem_size,
             stream);
 
@@ -607,19 +628,10 @@ void call_dispatch(
 // Combine wrapper implementation
 // ============================================================================
 
-// Helper to populate combine_kernel_param_t from CombineParams
-::hybrid_ep::combine_kernel_param_t
-build_combine_param(const CombineParams& params) {
-    ::hybrid_ep::combine_kernel_param_t kp{};
-
-    // Copy IPC buffer pointers from HOST arrays into embedded param struct arrays.
-    // This allows fast __grid_constant__ access in the kernel (vs slow global memory indirection).
-    for (int i = 0; i < params.num_ranks_per_node; i++) {
-        kp.expert_input_token[i] = params.expert_input_token_ptrs[i];
-        kp.expert_input_prob[i] = params.expert_input_prob_ptrs ?
-            params.expert_input_prob_ptrs[i] : nullptr;
-    }
-
+// Helper to populate the fixed-size combine parameter fields from CombineParams.
+::hybrid_ep::combine_kernel_param_base_t
+build_combine_param_base(const CombineParams& params) {
+    ::hybrid_ep::combine_kernel_param_base_t kp{};
     // Model configuration
     kp.hidden_dim = params.hidden_dim;
     kp.experts_per_rank = params.experts_per_rank;
@@ -672,6 +684,30 @@ build_combine_param(const CombineParams& params) {
     return kp;
 }
 
+std::vector<uint8_t> build_combine_arg_buffer(
+    const ::hybrid_ep::combine_kernel_param_base_t& kp,
+    const CombineParams& params) {
+    using ParamBase = ::hybrid_ep::combine_kernel_param_base_t;
+    static_assert(sizeof(ParamBase) % alignof(void*) == 0);
+
+    const size_t base_size = sizeof(ParamBase);
+    const size_t token_offset = base_size;
+    const size_t prob_offset = token_offset + params.num_ranks_per_node * sizeof(uint16_t*);
+    const size_t total_size = prob_offset + params.num_ranks_per_node * sizeof(float*);
+
+    std::vector<uint8_t> arg(total_size);
+    std::memcpy(arg.data(), &kp, sizeof(kp));
+
+    auto* token_ptrs = reinterpret_cast<uint16_t**>(arg.data() + token_offset);
+    auto* prob_ptrs = reinterpret_cast<float**>(arg.data() + prob_offset);
+    for (int i = 0; i < params.num_ranks_per_node; i++) {
+        token_ptrs[i] = params.expert_input_token_ptrs[i];
+        prob_ptrs[i] = params.expert_input_prob_ptrs ? params.expert_input_prob_ptrs[i] : nullptr;
+    }
+
+    return arg;
+}
+
 
 // Template combine launcher for forward/backward
 template<bool BACKWARD_COMBINE>
@@ -686,10 +722,8 @@ void combine_impl(
     const int experts_per_node = params.experts_per_rank * params.num_ranks_per_node;
     assert((experts_per_node * sizeof(float)) % 16 == 0 &&
            "experts_per_node must be multiple of 4 for TMA alignment");
-    assert(params.num_ranks_per_node <= ::hybrid_ep::HYBRIDEP_MAX_LSA_TEAM_SIZE &&
-           "num_ranks_per_node exceeds HYBRIDEP_MAX_LSA_TEAM_SIZE");
 
-    auto kp = build_combine_param(params);
+    auto kp = build_combine_param_base(params);
 
     // Select config based on num_nodes (single-node: 12 stages/2 pipelines, multi-node: 5 stages/1 pipeline)
     const int num_stages_g2s = (num_nodes == 1)
@@ -727,6 +761,7 @@ void combine_impl(
     kp.block_timing = d_bt;
 #endif
 
+    std::vector<uint8_t> kernel_arg = build_combine_arg_buffer(kp, params);
     jit::launch_combine(
         num_stages_g2s,
         num_stages_s2g,
@@ -739,7 +774,8 @@ void combine_impl(
         params.num_ranks_per_node,
         params.layout,
         kp.hidden_dim,
-        &kp,
+        kernel_arg.data(),
+        kernel_arg.size(),
         smem_size,
         stream);
 

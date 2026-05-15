@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
+#include <functional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -94,7 +95,8 @@ inline std::string combine_jit_source(
         << "\n"
         << "extern \"C\" __launch_bounds__(INTRA_NODE_RED_GROUP::size() + INTER_NODE_RED_GROUP::size() + INTRA_NODE_G2S_GROUP::size() + INTER_NODE_G2S_GROUP::size() + INTER_NODE_RDMA_GROUP::size(), 1)\n"
         << "__global__ void " << kCombineJitEntryName << "(\n"
-        << "    const __grid_constant__ hybrid_ep::combine_kernel_param_t param) {\n"
+        << "    const __grid_constant__ hybrid_ep::combine_kernel_param_t<"
+        << lsa_team_size << "> param) {\n"
         << "  extern __shared__ uint8_t smem_bytes[];\n"
         << "  hybrid_ep::combine_kernel_impl<\n"
         << "      INTRA_NODE_RED_GROUP,\n"
@@ -132,6 +134,7 @@ inline void launch_combine(
     ncclEpLayout_t layout,
     int hidden_dim,
     void* param,
+    size_t param_size,
     int dynamic_smem_bytes,
     cudaStream_t stream) {
     const combine_warp_layout_t L = compute_combine_warp_layout(num_lsa_teams);
@@ -176,14 +179,14 @@ inline void launch_combine(
     variant.source = source;
     variant.entry_name = kCombineJitEntryName;
     variant.identity = &variant_identity;
-    variant.runtime_key = static_cast<std::uint64_t>(hidden_dim);
+    variant.runtime_key = static_cast<std::uint64_t>(std::hash<std::string>{}(variant_name));
     variant.num_blocks = num_of_blocks;
     variant.block_dim = L.block_dim;
     variant.dynamic_smem_bytes = dynamic_smem_bytes;
 
     std::string error;
     const ::nccl_ep::jit::JitKernelStatus status =
-        ::nccl_ep::jit::launch_jit_kernel(variant, param, stream, &error);
+        ::nccl_ep::jit::launch_jit_kernel(variant, param, param_size, stream, &error);
 
     if (status != ::nccl_ep::jit::JitKernelStatus::kLaunched) {
         std::fprintf(

@@ -153,10 +153,6 @@ struct model_config_t {
   int num_of_nodes;
 };
 
-// Upper bound on LSA_TEAM_SIZE used to size fixed-size pointer arrays in the
-// host-side parameter structs.  Asserted at the call sites.
-constexpr int HYBRIDEP_MAX_LSA_TEAM_SIZE = 32;
-
 #ifdef HYBRIDEP_ENABLE_WARP_TIMING
 struct dispatch_warp_timing_entry_t { long long start_clock; long long end_clock; };
 struct combine_warp_timing_entry_t { long long work_start_clock; long long work_end_clock; };
@@ -813,9 +809,10 @@ static size_t calculate_combine_smem_layout_size(
 
   return total_size;
 }
-// Data structure for kernel parameter for dispatch kernel.
+// Fixed-size part of dispatch kernel parameters. Peer pointer arrays are appended
+// by dispatch_kernel_param_t<..., LSA_TEAM_SIZE> for JIT-specialized kernels.
 template<typename TOKEN_DATA_TYPE>
-struct dispatch_kernel_param_t{
+struct dispatch_kernel_param_base_t {
   int hidden_dim;
   int experts_per_rank;
   int num_of_ranks_per_node;
@@ -823,15 +820,6 @@ struct dispatch_kernel_param_t{
   const TOKEN_DATA_TYPE* attn_input_token;
   const float* attn_input_prob; // Needed by expert layer, so only valid in forward dispatch.
   const float* attn_input_token_scaling_factor; // If input token is FP8 dtype, we need scaling factor for tokens.
-  // Output buffers. These buffers are both local and remote buffers.
-  // NOTE: The source pointer arrays are allocated with cudaHostAllocMapped on the host side.
-  // Device dereferencing of host-mapped pointer tables is very slow.
-  // Keep a fixed-size array here and copy pointers on the host into this param struct.
-  // Arrays are oversized to HYBRIDEP_MAX_LSA_TEAM_SIZE so the struct is non-templated on LSA_TEAM_SIZE;
-  // kernels only read the first num_of_ranks_per_node entries.
-  TOKEN_DATA_TYPE* expert_output_token[HYBRIDEP_MAX_LSA_TEAM_SIZE];
-  float* expert_output_prob[HYBRIDEP_MAX_LSA_TEAM_SIZE]; // Only valid in forward dispatch.
-  float* expert_output_scaling_factor[HYBRIDEP_MAX_LSA_TEAM_SIZE]; // Only valid for FP8 token type.
   // Internal temp buffers. These buffers are local buffers.
   uint64_t* rdma_inter_node_group_flags; // For RDMA Atomic flags.
   uint32_t* intra_node_write_completion_flags; // For intra-node S2G write completion notification.
@@ -870,19 +858,22 @@ struct dispatch_kernel_param_t{
 #endif
 };
 
-// Data structure for kernel parameter for combine kernel.
-struct combine_kernel_param_t{
+// Data structure for JIT dispatch kernel parameters.
+template<typename TOKEN_DATA_TYPE, int LSA_TEAM_SIZE>
+struct dispatch_kernel_param_t : dispatch_kernel_param_base_t<TOKEN_DATA_TYPE> {
+  // Output buffers. These buffers are both local and remote buffers.
+  // Keep embedded arrays here to avoid device-side pointer-table indirection.
+  TOKEN_DATA_TYPE* expert_output_token[LSA_TEAM_SIZE];
+  float* expert_output_prob[LSA_TEAM_SIZE]; // Only valid in forward dispatch.
+  float* expert_output_scaling_factor[LSA_TEAM_SIZE]; // Only valid for FP8 token type.
+};
+
+// Fixed-size part of combine kernel parameters. Peer pointer arrays are appended
+// by combine_kernel_param_t<LSA_TEAM_SIZE> for JIT-specialized kernels.
+struct combine_kernel_param_base_t {
   int hidden_dim;
   int experts_per_rank;
   int num_of_ranks_per_node;
-  // Input buffers. These buffers are both local and remote buffers.
-  // NOTE: The source pointer arrays are allocated with cudaHostAllocMapped on the host side.
-  // Device dereferencing of host-mapped pointer tables is very slow.
-  // Keep a fixed-size array here and copy pointers on the host into this param struct.
-  // Arrays are oversized to HYBRIDEP_MAX_LSA_TEAM_SIZE so the struct is non-templated on LSA_TEAM_SIZE;
-  // kernels only read the first num_of_ranks_per_node entries.
-  uint16_t* expert_input_token[HYBRIDEP_MAX_LSA_TEAM_SIZE];
-  float* expert_input_prob[HYBRIDEP_MAX_LSA_TEAM_SIZE];
   // Output buffers. These buffers are local buffers.
   uint16_t* attn_output_token;
   float* attn_output_prob;
@@ -920,6 +911,15 @@ struct combine_kernel_param_t{
   combine_warp_timing_entry_t* warp_timing;
   combine_block_timing_entry_t* block_timing;
 #endif
+};
+
+// Data structure for JIT combine kernel parameters.
+template<int LSA_TEAM_SIZE>
+struct combine_kernel_param_t : combine_kernel_param_base_t {
+  // Input buffers. These buffers are both local and remote buffers.
+  // Keep embedded arrays here to avoid device-side pointer-table indirection.
+  uint16_t* expert_input_token[LSA_TEAM_SIZE];
+  float* expert_input_prob[LSA_TEAM_SIZE];
 };
 
 // Each CUDA block has sixteen named barriers numbered 0..15.
@@ -3304,7 +3304,7 @@ template<typename TOKEN_DATA_TYPE,
          ncclEpLayout_t kLayout,
          int HIDDEN_DIM>
 __device__ __forceinline__ void dispatch_kernel_impl(
-    const dispatch_kernel_param_t<TOKEN_DATA_TYPE>& param,
+    const dispatch_kernel_param_t<TOKEN_DATA_TYPE, LSA_TEAM_SIZE>& param,
     uint8_t* smem_bytes)
 {
   if constexpr (NUM_LSA_TEAMS != 1) {
@@ -3469,7 +3469,7 @@ template<// This type represent intra-node reduction warp group.
 // 3. intra-node G2S warp group(1 warp, only valid for multinode scenario). 4. inter-node G2S warp group(1 warp for multinode scenario, 2 warps otherwise). 5. inter-node N2N rdma warp group(1 warp, only valid for multinode scenario).
 // Total 6(single-node) or 11(multi-node) warps per CUDA block/SM.
 __device__ __forceinline__ void combine_kernel_impl(
-  const combine_kernel_param_t& param,
+  const combine_kernel_param_t<LSA_TEAM_SIZE>& param,
   uint8_t* smem_bytes)
 {
   // Compile-time check (only enforce for multi-node layout).

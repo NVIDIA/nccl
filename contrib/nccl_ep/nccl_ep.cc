@@ -3105,7 +3105,7 @@ ncclResult_t ncclEpMaskClean(
     // via a GPU kernel that includes a cross-rank barrier, then clear the mask.
     nccl_ep::LowLatencyLayout layout(ep_group->rdma_buffer,
                                       ep_group->config.max_send_tokens_per_rank,
-                                      ep_group->hidden,
+                                      ep_group->config.max_token_bytes,
                                       ep_group->nRanks,
                                       ep_group->config.num_experts,
                                       MAX_NUM_TOPK,

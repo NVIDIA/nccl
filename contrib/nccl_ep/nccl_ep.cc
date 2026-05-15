@@ -1108,10 +1108,10 @@ ncclResult_t ncclEpCreateGroup(
     // Resolve timeout_cycles: env var > config field > compile-time default
     {
         int dev;
-        cudaDeviceProp prop;
+        int clock_khz_int;
         CUDA_CHECK(cudaGetDevice(&dev));
-        CUDA_CHECK(cudaGetDeviceProperties(&prop, dev));
-        uint64_t clock_khz = static_cast<uint64_t>(prop.clockRate);
+        CUDA_CHECK(cudaDeviceGetAttribute(&clock_khz_int, cudaDevAttrClockRate, dev));
+        uint64_t clock_khz = static_cast<uint64_t>(clock_khz_int);
 
         uint64_t resolved = NUM_TIMEOUT_CYCLES;
         const char* source = "compile-time default";

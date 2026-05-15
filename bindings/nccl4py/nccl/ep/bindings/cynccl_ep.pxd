@@ -199,7 +199,7 @@ ctypedef struct ncclEpGroupConfig_t 'ncclEpGroupConfig_t':
     ncclEpLayout_t layout
     unsigned int num_experts
     unsigned int max_send_tokens_per_rank
-    unsigned int token_size_bytes
+    unsigned int max_token_bytes
     unsigned long int rdma_buffer_size
     unsigned int num_qp_per_rank
     unsigned int num_channels

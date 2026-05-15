@@ -150,7 +150,6 @@ void call_metadata_preprocessing(
     int node_rank,                      // This node's rank (0 to num_nodes-1)
     int local_rank,                     // Rank within node (0 to num_ranks_per_node-1)
     int num_tokens_per_rank,            // Actual tokens per rank this iteration (runtime)
-    int hidden_dim,                     // Model hidden dimension
     int num_nodes,                      // Number of nodes (RDMA domain size)
     int num_ranks_per_node,             // Ranks per node (NVLink domain size, 1-8)
     int experts_per_rank,               // Experts per GPU

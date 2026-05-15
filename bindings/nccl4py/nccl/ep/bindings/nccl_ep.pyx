@@ -1585,7 +1585,7 @@ cdef class EpCombineConfig:
 cdef _get_ep_group_config_dtype_offsets():
     cdef ncclEpGroupConfig_t pod = ncclEpGroupConfig_t()
     return _numpy.dtype({
-        'names': ['size_', 'version', 'algorithm', 'layout', 'num_experts', 'max_send_tokens_per_rank', 'token_size_bytes', 'rdma_buffer_size', 'num_qp_per_rank', 'num_channels', 'max_recv_token_slots_per_rank', 'max_num_sms', 'alloc'],
+        'names': ['size_', 'version', 'algorithm', 'layout', 'num_experts', 'max_send_tokens_per_rank', 'max_token_bytes', 'rdma_buffer_size', 'num_qp_per_rank', 'num_channels', 'max_recv_token_slots_per_rank', 'max_num_sms', 'alloc'],
         'formats': [_numpy.uint32, _numpy.uint32, _numpy.int32, _numpy.int32, _numpy.uint32, _numpy.uint32, _numpy.uint32, _numpy.dtype(('V', sizeof(unsigned long int))), _numpy.uint32, _numpy.uint32, _numpy.uint32, _numpy.uint32, ep_alloc_config_dtype],
         'offsets': [
             (<intptr_t>&(pod.size)) - (<intptr_t>&pod),
@@ -1594,7 +1594,7 @@ cdef _get_ep_group_config_dtype_offsets():
             (<intptr_t>&(pod.layout)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.num_experts)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.max_send_tokens_per_rank)) - (<intptr_t>&pod),
-            (<intptr_t>&(pod.token_size_bytes)) - (<intptr_t>&pod),
+            (<intptr_t>&(pod.max_token_bytes)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.rdma_buffer_size)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.num_qp_per_rank)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.num_channels)) - (<intptr_t>&pod),
@@ -1754,15 +1754,15 @@ cdef class EpGroupConfig:
         self._ptr[0].max_send_tokens_per_rank = val
 
     @property
-    def token_size_bytes(self):
+    def max_token_bytes(self):
         """int: """
-        return self._ptr[0].token_size_bytes
+        return self._ptr[0].max_token_bytes
 
-    @token_size_bytes.setter
-    def token_size_bytes(self, val):
+    @max_token_bytes.setter
+    def max_token_bytes(self, val):
         if self._readonly:
             raise ValueError("This EpGroupConfig instance is read-only")
-        self._ptr[0].token_size_bytes = val
+        self._ptr[0].max_token_bytes = val
 
     @property
     def rdma_buffer_size(self):

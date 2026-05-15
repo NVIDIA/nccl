@@ -2775,7 +2775,7 @@ int main(int argc, char* argv[]) {
     // max_send_tokens_per_rank is the per-rank batch size (max tokens any single rank will send).
     config.max_send_tokens_per_rank = dynamic_tokens ? NCCL_EP_AUTO : num_tokens;
 
-    config.token_size_bytes = hidden * 2;  // bfloat16
+    config.max_token_bytes = hidden * 2;  // bfloat16 worst case
     // Use NCCL_EP_AUTO for buffer sizes (required for dynamic tokens with larger batches)
     // For LL mode with disable_nvlink: NCCL_P2P_DISABLE env var handles NCCL GIN P2P
     config.rdma_buffer_size = NCCL_EP_AUTO;

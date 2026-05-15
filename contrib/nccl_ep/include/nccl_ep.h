@@ -87,7 +87,11 @@ typedef struct {
     // In a future release, NCCL_EP_AUTO will be supported for HT mode,
     // in which case the received token count will be determined by ncclEpCreateHandle.
     unsigned int max_send_tokens_per_rank;
-    unsigned int token_size_bytes;       // Token size for buffer allocation (independent of datatype)
+    // Upper bound on per-token bytes, covering both dispatch and combine.
+    // The group sizes all token buffers from this; per-call sizes flow through
+    // the input tensors' sizes/datatype and may be smaller. Independent of
+    // element type — purely byte-oriented.
+    unsigned int max_token_bytes;
     unsigned long int rdma_buffer_size;  // RDMA buffer size in bytes (NCCL_EP_AUTO for auto, defaults to a sufficiently large buffer for any algorithm)
     unsigned int num_qp_per_rank;        // Number of QPs per rank (NCCL_EP_AUTO for auto)
     // Number of channels per rank (NCCL_EP_AUTO for auto).

@@ -401,7 +401,7 @@ int main(int argc, char* argv[])
   config.num_experts = num_experts;
   // max_send_tokens_per_rank is the per-rank batch size (max tokens any single rank will send).
   config.max_send_tokens_per_rank = disable_max_tokens ? NCCL_EP_AUTO : num_tokens;
-  config.token_size_bytes = hidden * 2;                  // bfloat16
+  config.max_token_bytes = hidden * 2;                   // bfloat16
   config.rdma_buffer_size = NCCL_EP_AUTO;               // NCCL_EP_AUTO for auto configuration, internally uses the hint
   config.num_qp_per_rank = NCCL_EP_AUTO;                // Default is 24, see internode_ll.cu:181 for the minimum
   config.num_channels = NCCL_EP_AUTO;                   // Number of communication channels

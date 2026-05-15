@@ -258,7 +258,7 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
         num_experts=num_experts,
         max_send_tokens_per_rank=num_tokens,
         max_recv_token_slots_per_rank=num_tokens * n_ranks,
-        token_size_bytes=hidden * 2,  # bfloat16
+        max_token_bytes=hidden * 2,  # bfloat16
         alloc=EpAllocConfig(alloc_fn=_ALLOC_FN_ADDR, free_fn=_FREE_FN_ADDR),
     )
 

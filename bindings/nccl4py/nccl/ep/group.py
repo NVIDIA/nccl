@@ -42,7 +42,7 @@ class EpGroupConfig:
         max_send_tokens_per_rank: Maximum tokens any single rank will
             dispatch. Must be > 0; ``NCCL_EP_AUTO`` is not yet supported
             even in HT mode.
-        token_size_bytes: Token payload size in bytes (independent of
+        max_token_bytes: Token payload size in bytes (independent of
             datatype). Required.
         layout: Receive-buffer layout. ``AUTO`` (default) picks
             ``EXPERT_MAJOR`` for LL and ``FLAT`` for HT.
@@ -69,7 +69,7 @@ class EpGroupConfig:
     algorithm: NcclEpAlgorithm = NcclEpAlgorithm.LOW_LATENCY
     num_experts: int = 0
     max_send_tokens_per_rank: int = 0
-    token_size_bytes: int = 0
+    max_token_bytes: int = 0
     layout: NcclEpLayout = NcclEpLayout.AUTO
     rdma_buffer_size: int = 0
     num_qp_per_rank: int = 0

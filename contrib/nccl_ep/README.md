@@ -381,7 +381,7 @@ typedef struct {
     ncclEpLayout_t layout;                      // recv-buffer layout (AUTO selects per algorithm)
     unsigned int num_experts;                   // Total experts across all ranks
     unsigned int max_send_tokens_per_rank;      // Max tokens any single rank dispatches
-    unsigned int token_size_bytes;              // Maximum token size
+    unsigned int max_token_bytes;               // Maximum token size
     unsigned long int rdma_buffer_size;         // RDMA buffer size (0=auto)
     unsigned int num_qp_per_rank;               // Queue pairs per rank (0=auto)
     unsigned int num_channels;                  // Channels per rank (0=auto)
@@ -811,7 +811,7 @@ config.algorithm = NCCL_EP_ALGO_HIGH_THROUGHPUT;
 config.num_experts = 256;
 config.max_send_tokens_per_rank = 4;
 config.max_recv_token_slots_per_rank = nRanks * config.max_send_tokens_per_rank;
-config.token_size_bytes = hidden * 2;  // bfloat16
+config.max_token_bytes = hidden * 2;  // bfloat16
 config.rdma_buffer_size = NCCL_EP_AUTO;     // Auto-size
 config.num_qp_per_rank = NCCL_EP_AUTO;      // Auto-size
 config.num_channels = NCCL_EP_AUTO;         // Auto-size
@@ -921,7 +921,7 @@ ncclEpGroupConfig_t config = NCCL_EP_GROUP_CONFIG_INIT;
 config.algorithm = NCCL_EP_ALGO_LOW_LATENCY;
 config.num_experts = 256;
 config.max_send_tokens_per_rank = 128;  // Required for LL mode
-config.token_size_bytes = hidden * 2;   // bfloat16
+config.max_token_bytes = hidden * 2;    // bfloat16
 config.rdma_buffer_size = NCCL_EP_AUTO; // Auto-size
 config.num_qp_per_rank = NCCL_EP_AUTO;  // Auto-size (or specify for LL)
 config.num_channels = NCCL_EP_AUTO;     // Auto-size

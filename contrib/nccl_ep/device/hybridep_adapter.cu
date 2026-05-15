@@ -343,7 +343,6 @@ void call_metadata_preprocessing(
     int node_rank,
     int local_rank,
     int num_tokens_per_rank,
-    int hidden_dim,
     int num_nodes,
     int num_ranks_per_node,
     int experts_per_rank,

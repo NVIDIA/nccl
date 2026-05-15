@@ -214,7 +214,6 @@ struct ncclEpGroup {
 
     int num_local_experts;    // Number of local experts (num_experts / comm->nRanks)
     int max_recv_tokens;      // Resolved per-rank IPC slot budget (= config.max_recv_token_slots_per_rank).
-    int hidden;               // Hidden size (token_size_bytes / ncclTypeSize(ncclBfloat16))
     unsigned int device_sm_count; // Number of SMs on the device
     unsigned int max_num_sms; // Resolved SM count for EP kernels (from config.max_num_sms)
 
@@ -316,7 +315,6 @@ struct ncclEpGroup {
         config{},
         num_local_experts(0),
         max_recv_tokens(0),
-        hidden(0),
         device_sm_count(0),
         max_num_sms(0),
         alloc{},
@@ -431,7 +429,7 @@ static ncclResult_t init_hybridep_intranode(ncclEpGroup_t ep_group,
     int lsa_ranks = ep_group->lsa_team_size;
     int lsa_rank = ep_group->lsa_rank;
     ncclTeam lsa_team = ncclTeamLsa(comm);
-    int hidden = ep_group->hidden;
+    size_t max_token_bytes = ep_group->config.max_token_bytes;
     int num_local_experts = ep_group->num_local_experts;
     int max_recv_tokens = ep_group->max_recv_tokens;
 
@@ -465,11 +463,11 @@ static ncclResult_t init_hybridep_intranode(ncclEpGroup_t ep_group,
     // Expert-prob buffers are sized by HT inner-domain cardinality (LSA team size).
     auto align_ipc = [](size_t s) -> size_t { return (s + 255) & ~size_t(255); };
 
-    // max_recv_tokens is already the resolved per-rank slot budget × nRanks (see ncclEpCreateGroup).
+    // max_recv_tokens is the resolved per-rank slot budget (see ncclEpCreateGroup).
     size_t max_output_slots = static_cast<size_t>(max_recv_tokens);
-    size_t expert_output_token_sz = max_output_slots * hidden * sizeof(uint16_t);
+    size_t expert_output_token_sz = max_output_slots * max_token_bytes;
     size_t expert_output_prob_sz = max_output_slots * num_local_experts * lsa_ranks * sizeof(float);
-    size_t expert_input_token_sz = max_output_slots * hidden * sizeof(uint16_t);
+    size_t expert_input_token_sz = max_output_slots * max_token_bytes;
     size_t expert_input_prob_sz = max_output_slots * num_local_experts * lsa_ranks * sizeof(float);
 
     size_t dispatch_token_aligned = align_ipc(expert_output_token_sz);
@@ -709,18 +707,20 @@ static ncclResult_t init_hybridep_internode(ncclEpGroup_t ep_group,
     // These buffers are accessed with stride MAX_SUPPORTED_TOKENS_PER_RANK (compile-time constant
     // used as rdma_remote_node_id * MAX_SUPPORTED_TOKENS_PER_RANK + token_offset in the kernel).
     // They must be sized for that stride regardless of the runtime max_send_tokens_per_rank.
-    size_t rdma_intra_node_red_token_sz = align_size(static_cast<size_t>(MAX_SUPPORTED_TOKENS_PER_RANK * (rdma_team_size - 1)) * ep_group->hidden * sizeof(uint16_t), GIN_ALIGNMENT);
+    size_t rdma_intra_node_red_token_sz = align_size(static_cast<size_t>(MAX_SUPPORTED_TOKENS_PER_RANK * (rdma_team_size - 1)) * ep_group->config.max_token_bytes, GIN_ALIGNMENT);
     size_t combine_rdma_inter_node_group_token_sz = rdma_intra_node_red_token_sz;
     size_t rdma_intra_node_red_prob_sz = align_size(static_cast<size_t>(MAX_SUPPORTED_TOKENS_PER_RANK * (rdma_team_size - 1)) * (ep_group->num_local_experts * lsa_team_size) * sizeof(float), GIN_ALIGNMENT);
     size_t combine_rdma_inter_node_group_prob_sz = rdma_intra_node_red_prob_sz;
     size_t flags_sz = align_size(static_cast<size_t>(rdma_team_size) * sizeof(uint64_t), GIN_ALIGNMENT);
-    size_t token_staging_sz = align_size(static_cast<size_t>(ep_group->config.max_send_tokens_per_rank) * ep_group->hidden * sizeof(uint16_t), GIN_ALIGNMENT);
+    size_t token_staging_sz = align_size(static_cast<size_t>(ep_group->config.max_send_tokens_per_rank) * ep_group->config.max_token_bytes, GIN_ALIGNMENT);
     size_t dense_prob_sz = align_size(static_cast<size_t>(ep_group->config.max_send_tokens_per_rank) * ep_group->config.num_experts * sizeof(float), GIN_ALIGNMENT);
     size_t scaling_factor_staging_sz = align_size(static_cast<size_t>(ep_group->config.max_send_tokens_per_rank) * sizeof(float), GIN_ALIGNMENT);
 
-    size_t bytes_per_token_entry = ep_group->hidden * sizeof(uint16_t);
+    size_t bytes_per_token_entry = ep_group->config.max_token_bytes;
     size_t bytes_per_prob_entry = (ep_group->num_local_experts * lsa_team_size) * sizeof(float);
-    size_t bytes_per_sf_entry = (ep_group->hidden / 128) * sizeof(float);
+    // FP8 scale-factor entry: per-128-bf16-element scale. Internal to the bf16->fp8 quantizer
+    // (max_token_bytes / sizeof(bf16) / 128 = max_token_bytes / 256 floats).
+    size_t bytes_per_sf_entry = (ep_group->config.max_token_bytes / 256) * sizeof(float);
     size_t bytes_per_entry = bytes_per_token_entry + bytes_per_prob_entry + bytes_per_sf_entry;
     size_t rdma_send_staging_sz = align_size(static_cast<size_t>(rdma_team_size - 1) * ep_group->config.max_send_tokens_per_rank * bytes_per_entry, GIN_ALIGNMENT);
     size_t rdma_recv_packed_sz = align_size(static_cast<size_t>(rdma_team_size - 1) * ep_group->config.max_send_tokens_per_rank * bytes_per_entry, GIN_ALIGNMENT);
@@ -979,7 +979,7 @@ ncclResult_t ncclEpCreateGroup(
     bool low_latency_mode = (in_config->algorithm == NCCL_EP_ALGO_LOW_LATENCY);
     bool hybridep_mode = (in_config->algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT);
     assert(in_config->num_experts > 0 && "ncclEpCreateGroup: num_experts must be greater than 0");
-    assert(in_config->token_size_bytes > 0 && "ncclEpCreateGroup: token_size_bytes must be greater than 0");
+    assert(in_config->max_token_bytes > 0 && "ncclEpCreateGroup: max_token_bytes must be greater than 0");
     assert(!(in_config->algorithm == NCCL_EP_ALGO_LOW_LATENCY && in_config->max_send_tokens_per_rank == 0) &&
             "ncclEpCreateGroup: max_send_tokens_per_rank must be greater than 0 for low latency mode");
     assert(!(in_config->algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT && in_config->max_send_tokens_per_rank == 0) &&
@@ -1078,7 +1078,6 @@ ncclResult_t ncclEpCreateGroup(
             ep_group->nRanks * ep_group->config.max_send_tokens_per_rank;
     }
     ep_group->max_recv_tokens = static_cast<int>(ep_group->config.max_recv_token_slots_per_rank);
-    ep_group->hidden = ep_group->config.token_size_bytes / ncclTypeSize(ncclBfloat16);
 
     // Collective: all ranks must agree on the resolved budget (IPC buffers are sized from it).
     {
@@ -1092,13 +1091,14 @@ ncclResult_t ncclEpCreateGroup(
         }
     }
 
+
     // Apply default values for auto-configured fields (when set to NCCL_EP_AUTO)
     if (ep_group->config.num_channels == NCCL_EP_AUTO) {
         ep_group->config.num_channels = 10;
     }
 
     if (ep_group->config.rdma_buffer_size == NCCL_EP_AUTO && ep_group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
-        ep_group->config.rdma_buffer_size = nccl_ep::get_low_latency_rdma_size_hint(ep_group->config.max_send_tokens_per_rank, ep_group->hidden, ep_group->nRanks, ep_group->config.num_experts, ep_group->config.layout);
+        ep_group->config.rdma_buffer_size = nccl_ep::get_low_latency_rdma_size_hint(ep_group->config.max_send_tokens_per_rank, ep_group->config.max_token_bytes, ep_group->nRanks, ep_group->config.num_experts, ep_group->config.layout);
     }
 
     if (ep_group->config.num_qp_per_rank == NCCL_EP_AUTO) {
@@ -1725,7 +1725,7 @@ static ncclResult_t ll_init_handle(ncclEpHandle_t handle, ncclEpGroup_t ep_group
 
     auto layout = nccl_ep::LowLatencyLayout(
         ep_group->rdma_buffer, ep_group->config.max_send_tokens_per_rank,
-        ep_group->hidden, ep_group->nRanks, ep_group->config.num_experts, num_topk, handle->group->config.layout);
+        ep_group->config.max_token_bytes, ep_group->nRanks, ep_group->config.num_experts, num_topk, handle->group->config.layout);
     assert(layout.total_bytes <= ep_group->config.rdma_buffer_size);
 
     if (handle_mem != nullptr) {
@@ -2032,7 +2032,6 @@ ncclResult_t ncclEpUpdateHandle(
         ep_group->rdma_rank,
         ep_group->lsa_rank,
         handle->num_tokens,
-        ep_group->hidden,
         nNodes,
         n_ranks_per_node,
         experts_per_rank,
@@ -2131,7 +2130,8 @@ ncclResult_t ncclEpDispatch(
         assert(x->sizes[0] <= group->config.max_send_tokens_per_rank);
         assert(x->sizes[1] % sizeof(int4) == 0);
         assert(x->sizes[1] % 128 == 0);
-        assert(x->sizes[1] * ncclTypeSize(x->datatype) == group->config.token_size_bytes);
+        assert(x->sizes[1] * ncclTypeSize(x->datatype) <= group->config.max_token_bytes);
+        const int hidden = static_cast<int>(x->sizes[1]);
 
         // Find and validate output tensors
         ncclNDTensor_t recv_x = outputs->tokens;
@@ -2151,7 +2151,7 @@ ncclResult_t ncclEpDispatch(
             case NCCL_EP_LAYOUT_RANK_MAJOR:
                 assert(recv_x->ndim == 2);
                 assert(recv_x->sizes[0] == num_recv_tokens);
-                assert(recv_x->sizes[1] == group->hidden);
+                assert(recv_x->sizes[1] == static_cast<unsigned>(hidden));
                 assert(topk_weights_in   != nullptr);
                 assert(recv_topk_weights != nullptr);
                 assert(recv_topk_idx     != nullptr);
@@ -2164,7 +2164,7 @@ ncclResult_t ncclEpDispatch(
                 assert(recv_x->ndim == 3);
                 assert(recv_x->sizes[0] == group->num_local_experts);
                 assert(recv_x->sizes[1] == num_recv_tokens);
-                assert(recv_x->sizes[2] == group->hidden);
+                assert(recv_x->sizes[2] == static_cast<unsigned>(hidden));
                 assert(topk_weights_in   == nullptr);
                 assert(recv_topk_weights == nullptr);
                 assert(recv_topk_idx     == nullptr);
@@ -2174,13 +2174,21 @@ ncclResult_t ncclEpDispatch(
 
         if (scales != nullptr) {
             constexpr int scale_block_size = 128;
-            assert(group->hidden % 512 == 0);
+            assert(hidden % 512 == 0);
             assert(scales->ndim == 3);
             assert(tensor_is_contiguous(scales));
             assert(scales->datatype == ncclFloat32);
             assert(scales->sizes[0] == group->num_local_experts);
             assert(scales->sizes[1] == group->config.max_send_tokens_per_rank * group->nRanks);
-            assert(scales->sizes[2] == group->hidden / scale_block_size);
+            assert(scales->sizes[2] == static_cast<unsigned>(hidden / scale_block_size));
+            // FP8 quantizer footprint (per-token payload + scale-factor bytes) must fit
+            // the buffer slot sized by max_token_bytes. Implied by the bf16 input bound
+            // above (fp8 < bf16), but asserted directly so a future relaxation of the
+            // input-datatype constraint doesn't silently corrupt the buffer slot stride.
+            const size_t fp8_payload_bytes =
+                static_cast<size_t>(hidden) + (hidden / scale_block_size) * sizeof(float);
+            EP_HOST_ASSERT(fp8_payload_bytes <= group->config.max_token_bytes &&
+                           "FP8 dispatch bytes exceed max_token_bytes");
         }
 
         // RECV_EXPERT_COUNTER_DEVICE is required for expert-major (per-expert atomic slot allocator)
@@ -2242,7 +2250,7 @@ ncclResult_t ncclEpDispatch(
                 nullptr, /*recv_send_sizes=*/
                 nullptr, /*recv_send_offsets=*/
                 handle->num_tokens,
-                group->hidden,
+                hidden,
                 group->config.max_send_tokens_per_rank,
                 handle->num_topk,
                 group->config.num_experts,
@@ -2291,8 +2299,9 @@ ncclResult_t ncclEpDispatch(
         assert(x->ndim == 2 && tensor_is_contiguous(x));
         assert(x->sizes[0] == handle->num_tokens);
         assert(x->sizes[0] <= group->config.max_send_tokens_per_rank);
-        assert(x->sizes[1] == group->hidden &&
-               "HT dispatch token hidden size must match group configuration");
+        assert(x->sizes[1] * ncclTypeSize(x->datatype) <= group->config.max_token_bytes &&
+               "HT dispatch token bytes must not exceed group's max_token_bytes");
+        const int hidden = static_cast<int>(x->sizes[1]);
         NCCLCHECK(resolveTensorWindowBinding(
             group, x, static_cast<uint64_t>(group->gin_config.token_staging_offset)));
 
@@ -2342,14 +2351,14 @@ ncclResult_t ncclEpDispatch(
                "HT dispatch requires experts_per_node to be multiple of 4 (16B prob TMA alignment)");
 
         const size_t token_bytes_per_token =
-            static_cast<size_t>(group->hidden) * ncclTypeSize(x->datatype);
+            static_cast<size_t>(hidden) * ncclTypeSize(x->datatype);
         assert((token_bytes_per_token % 16) == 0 &&
                "HT dispatch requires token bytes per token to be 16B aligned for TMA");
 
         if (use_fp8) {
-            assert((group->hidden % 128) == 0 &&
+            assert((hidden % 128) == 0 &&
                    "HT dispatch FP8 requires hidden_dim multiple of 128");
-            assert((((group->hidden / 128) * static_cast<int>(sizeof(float))) % 16) == 0 &&
+            assert((((hidden / 128) * static_cast<int>(sizeof(float))) % 16) == 0 &&
                    "HT dispatch FP8 requires scaling-factor bytes per token to be 16B aligned");
         }
 
@@ -2425,7 +2434,7 @@ ncclResult_t ncclEpDispatch(
         //   - Metadata: sparse_to_dense_map, rdma_to_attn_map, attn_to_rdma_map
         //   - Sync flags: expected_*_flag_value, intra_node_write_completion_flags
         nccl_ep::hybridep::DispatchParams params;
-        params.hidden_dim = group->hidden;
+        params.hidden_dim = hidden;
         params.experts_per_rank = group->num_local_experts;
         params.num_ranks_per_node = group->lsa_team_size;
         params.attn_input_token = token_ptr;
@@ -2491,9 +2500,9 @@ ncclResult_t ncclEpDispatch(
         // Use offsets relative to gin_base_ptr
         // All buffers are part of one large registered window
         // Calculate bytes_per_entry for batched staging
-        size_t bytes_per_token_entry = group->hidden * sizeof(uint16_t);  // token data
+        size_t bytes_per_token_entry = group->config.max_token_bytes;  // token data
         size_t bytes_per_prob_entry = (group->num_local_experts * group->lsa_team_size) * sizeof(float);  // prob data
-        size_t bytes_per_sf_entry = (group->hidden / 128) * sizeof(float);  // scaling factor (FP8)
+        size_t bytes_per_sf_entry = (group->config.max_token_bytes / 256) * sizeof(float);  // FP8 scaling factor
         size_t bytes_per_entry = bytes_per_token_entry + bytes_per_prob_entry + bytes_per_sf_entry;
 
         params.mr_info = {
@@ -2895,7 +2904,7 @@ ncclResult_t ncclEpCombine(
         // Expert MLP output needs to be in IPC buffer so other ranks can read it
         const bool combine_x_uses_external_window = tensorUsesExternalWindow(group, x);
         if (!combine_x_uses_external_window) {
-            size_t token_copy_size = static_cast<size_t>(num_tokens) * hidden * sizeof(uint16_t); // BF16 = uint16_t
+            size_t token_copy_size = static_cast<size_t>(num_tokens) * hidden * ncclTypeSize(x->datatype);
             CUDA_CHECK(cudaMemcpyAsync(
                 group->ht_buffers.expert_input_token,
                 x->data,
@@ -2944,7 +2953,7 @@ ncclResult_t ncclEpCombine(
         //   - Metadata: sparse_to_dense_map, rdma_to_attn_map, attn_to_rdma_map, local_expert_routing_map
         //   - Sync flags: combine_expected_*_flag_value, combine_intra_node_write_completion_flags
         nccl_ep::hybridep::CombineParams params;
-        params.hidden_dim = group->hidden;
+        params.hidden_dim = hidden;
         params.experts_per_rank = group->num_local_experts;
         params.num_ranks_per_node = group->lsa_team_size;
         // Use HOST pointer arrays - these get copied into the kernel param struct for fast __grid_constant__ access

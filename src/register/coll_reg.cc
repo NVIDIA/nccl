@@ -11,16 +11,28 @@
 #include "register_inline.h"
 #include "graph/topo.h"
 
-NCCL_PARAM(MloPartRdmaEnable, "MLOPART_RDMA_ENABLE", 0);
-
 static ncclResult_t isMloPartBufRdmaCapable(struct ncclComm* comm, const void* ptr, bool* isRdmaCapable) {
   if (!comm->hasMloPart) {
     *isRdmaCapable = true;
-  } else if (!ptr) {
-    *isRdmaCapable = false;
   } else {
-    *isRdmaCapable = ncclParamMloPartRdmaEnable();
+    *isRdmaCapable = false;
+    if (!ptr) goto exit;
+    // Registration decision must be global, using communicator-wide guarantees.
+    // MloPart: all GPUs must have cuMemGdrSupport 13.4+ for C2C platforms
+    if (comm->cpuArch == NCCL_TOPO_CPU_ARCH_ARM || comm->cpuArch == NCCL_TOPO_CPU_ARCH_MIXED) {
+      if (comm->cuMemGdrSupport && comm->minDriverVersion >= 13040) {
+        CUmemGenericAllocationHandle handle;
+        CUmemAllocationProp prop = {};
+        if (CUPFN(cuMemRetainAllocationHandle(&handle, (void*)ptr)) != CUDA_SUCCESS) return ncclSuccess;
+        if (CUPFN(cuMemGetAllocationPropertiesFromHandle(&prop, handle)) == CUDA_SUCCESS)
+          *isRdmaCapable = prop.allocFlags.gpuDirectRDMACapable;
+        CUCHECK(cuMemRelease(handle));
+      }
+    } else {
+      *isRdmaCapable = true;
+    }
   }
+exit:
   return ncclSuccess;
 }
 

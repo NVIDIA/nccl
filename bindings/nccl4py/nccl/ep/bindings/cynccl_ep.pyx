@@ -51,8 +51,8 @@ cdef ncclResult_t ncclEpUpdateHandle(ncclEpHandle_t handle, ncclNDTensor_t topk_
     return _nccl_ep._ncclEpUpdateHandle(handle, topk_idx, layout_info, stream)
 
 
-cdef ncclResult_t ncclEpDispatch(ncclEpHandle_t handle, ncclNDTensor_t topk_idx, const ncclEpDispatchInputs_t* inputs, const ncclEpDispatchOutputs_t* outputs, const ncclEpLayoutInfo_t* layout_info, const ncclEpDispatchConfig_t* config, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
-    return _nccl_ep._ncclEpDispatch(handle, topk_idx, inputs, outputs, layout_info, config, stream)
+cdef ncclResult_t ncclEpDispatch(ncclEpHandle_t handle, const ncclEpDispatchInputs_t* inputs, const ncclEpDispatchOutputs_t* outputs, const ncclEpLayoutInfo_t* layout_info, const ncclEpDispatchConfig_t* config, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
+    return _nccl_ep._ncclEpDispatch(handle, inputs, outputs, layout_info, config, stream)
 
 
 cdef ncclResult_t ncclEpCombine(ncclEpHandle_t handle, const ncclEpCombineInputs_t* inputs, const ncclEpCombineOutputs_t* outputs, const ncclEpCombineConfig_t* config, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:

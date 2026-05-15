@@ -1585,8 +1585,8 @@ cdef class EpCombineConfig:
 cdef _get_ep_group_config_dtype_offsets():
     cdef ncclEpGroupConfig_t pod = ncclEpGroupConfig_t()
     return _numpy.dtype({
-        'names': ['size_', 'version', 'algorithm', 'layout', 'num_experts', 'max_send_tokens_per_rank', 'max_token_bytes', 'rdma_buffer_size', 'num_qp_per_rank', 'num_channels', 'max_recv_token_slots_per_rank', 'max_num_sms', 'alloc'],
-        'formats': [_numpy.uint32, _numpy.uint32, _numpy.int32, _numpy.int32, _numpy.uint32, _numpy.uint32, _numpy.uint32, _numpy.dtype(('V', sizeof(unsigned long int))), _numpy.uint32, _numpy.uint32, _numpy.uint32, _numpy.uint32, ep_alloc_config_dtype],
+        'names': ['size_', 'version', 'algorithm', 'layout', 'num_experts', 'max_send_tokens_per_rank', 'max_token_bytes', 'rdma_buffer_size', 'num_qp_per_rank', 'num_channels', 'max_recv_token_slots_per_rank', 'max_num_sms', 'alloc', 'enable_mask', 'timeout_ns'],
+        'formats': [_numpy.uint32, _numpy.uint32, _numpy.int32, _numpy.int32, _numpy.uint32, _numpy.uint32, _numpy.uint32, _numpy.dtype(('V', sizeof(unsigned long int))), _numpy.uint32, _numpy.uint32, _numpy.uint32, _numpy.uint32, ep_alloc_config_dtype, _numpy.uint32, _numpy.uint64],
         'offsets': [
             (<intptr_t>&(pod.size)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.version)) - (<intptr_t>&pod),
@@ -1601,6 +1601,8 @@ cdef _get_ep_group_config_dtype_offsets():
             (<intptr_t>&(pod.max_recv_token_slots_per_rank)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.max_num_sms)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.alloc)) - (<intptr_t>&pod),
+            (<intptr_t>&(pod.enable_mask)) - (<intptr_t>&pod),
+            (<intptr_t>&(pod.timeout_ns)) - (<intptr_t>&pod),
         ],
         'itemsize': sizeof(ncclEpGroupConfig_t),
     })
@@ -1818,6 +1820,28 @@ cdef class EpGroupConfig:
         if self._readonly:
             raise ValueError("This EpGroupConfig instance is read-only")
         self._ptr[0].max_num_sms = val
+
+    @property
+    def enable_mask(self):
+        """int: """
+        return self._ptr[0].enable_mask
+
+    @enable_mask.setter
+    def enable_mask(self, val):
+        if self._readonly:
+            raise ValueError("This EpGroupConfig instance is read-only")
+        self._ptr[0].enable_mask = val
+
+    @property
+    def timeout_ns(self):
+        """int: """
+        return self._ptr[0].timeout_ns
+
+    @timeout_ns.setter
+    def timeout_ns(self, val):
+        if self._readonly:
+            raise ValueError("This EpGroupConfig instance is read-only")
+        self._ptr[0].timeout_ns = val
 
     def __getstate__(self):
         raise pickle.PicklingError("Pickle not supported for EpGroupConfig")
@@ -2054,9 +2078,9 @@ cpdef ep_update_handle(intptr_t handle, intptr_t topk_idx, intptr_t layout_info,
     check_status(__status__)
 
 
-cpdef ep_dispatch(intptr_t handle, intptr_t topk_idx, intptr_t inputs, intptr_t outputs, intptr_t layout_info, intptr_t config, intptr_t stream):
+cpdef ep_dispatch(intptr_t handle, intptr_t inputs, intptr_t outputs, intptr_t layout_info, intptr_t config, intptr_t stream):
     with nogil:
-        __status__ = ncclEpDispatch(<EpHandle>handle, <NDTensor>topk_idx, <const ncclEpDispatchInputs_t*>inputs, <const ncclEpDispatchOutputs_t*>outputs, <const ncclEpLayoutInfo_t*>layout_info, <const ncclEpDispatchConfig_t*>config, <Stream>stream)
+        __status__ = ncclEpDispatch(<EpHandle>handle, <const ncclEpDispatchInputs_t*>inputs, <const ncclEpDispatchOutputs_t*>outputs, <const ncclEpLayoutInfo_t*>layout_info, <const ncclEpDispatchConfig_t*>config, <Stream>stream)
     check_status(__status__)
 
 

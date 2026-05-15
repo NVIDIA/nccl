@@ -56,7 +56,7 @@ cpdef ep_handle_destroy(intptr_t handle)
 cpdef size_t ep_handle_mem_size(intptr_t ep_group, intptr_t config, int num_topk) except? -1
 cpdef intptr_t ep_init_handle(intptr_t ep_group, intptr_t config, int num_topk, intptr_t handle_mem) except? 0
 cpdef ep_update_handle(intptr_t handle, intptr_t topk_idx, intptr_t layout_info, intptr_t stream)
-cpdef ep_dispatch(intptr_t handle, intptr_t topk_idx, intptr_t inputs, intptr_t outputs, intptr_t layout_info, intptr_t config, intptr_t stream)
+cpdef ep_dispatch(intptr_t handle, intptr_t inputs, intptr_t outputs, intptr_t layout_info, intptr_t config, intptr_t stream)
 cpdef ep_combine(intptr_t handle, intptr_t inputs, intptr_t outputs, intptr_t config, intptr_t stream)
 cpdef ep_complete(intptr_t handle, intptr_t config, intptr_t stream)
 cpdef intptr_t ep_tensor_get_data(intptr_t tensor) except? 0

@@ -339,12 +339,15 @@ class EpHandle:
         inputs: EpDispatchInputs,
         outputs: EpDispatchOutputs,
         *,
-        topk_idx: NDTensor | None = None,
         layout_info: EpLayoutInfo | None = None,
         config: EpDispatchConfig | None = None,
         stream: NcclStreamSpec,
     ) -> None:
         """Dispatch tokens to the experts indicated by this handle's top-k routing.
+
+        Routing is fully encoded in the handle (set at
+        :meth:`create` / :meth:`update` time via ``topk_idx``), so no
+        ``topk_idx`` argument is taken here.
 
         Args:
             inputs: Input tensor bundle (:class:`EpDispatchInputs`).
@@ -353,10 +356,6 @@ class EpHandle:
                 (:class:`EpDispatchOutputs`). ``outputs.tokens`` is
                 required; per-layout shape rules in ``nccl_ep.h``.
             stream: CUDA stream for the launch.
-            topk_idx: HT mode forward dispatch only — top-k expert index
-                tensor (2D ``[num_tokens, top_k]`` int64). Pass ``None``
-                for LL mode (routing is encoded in the handle) and for
-                HT backward dispatch.
             layout_info: Optional :class:`EpLayoutInfo`. LL expert-major
                 writes ``expert_counters``; LL rank-major writes
                 ``src_rank_counters``.
@@ -373,7 +372,6 @@ class EpHandle:
         config_b = _materialize(config)
         _ep_bindings.nccl_ep.ep_dispatch(
             self._ptr,
-            topk_idx.ptr if topk_idx is not None else 0,
             _ptr_of(inputs_b),
             _ptr_of(outputs_b),
             _ptr_of(layout_b),

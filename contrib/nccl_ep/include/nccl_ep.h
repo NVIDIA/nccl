@@ -117,7 +117,7 @@ typedef struct {
     // causing a GPU trap. The mask can be queried, updated, and cleared via the
     // ncclEpMaskQuery / ncclEpMaskUpdate / ncclEpMaskClean APIs.
     // A host-visible error flag is also set on timeout, pollable via ncclEpGetAsyncError().
-    bool enable_mask;
+    unsigned int enable_mask;
     // Timeout for GPU-side wait loops, in nanoseconds. 0 = use default (~100 s).
     // Can be overridden by the NCCL_EP_TIMEOUT_MS environment variable.
     // Setting too low risks false positives (slow ranks marked as failed).

@@ -429,14 +429,14 @@ cdef ncclResult_t _ncclEpUpdateHandle(ncclEpHandle_t handle, ncclNDTensor_t topk
         handle, topk_idx, layout_info, stream)
 
 
-cdef ncclResult_t _ncclEpDispatch(ncclEpHandle_t handle, ncclNDTensor_t topk_idx, const ncclEpDispatchInputs_t* inputs, const ncclEpDispatchOutputs_t* outputs, const ncclEpLayoutInfo_t* layout_info, const ncclEpDispatchConfig_t* config, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
+cdef ncclResult_t _ncclEpDispatch(ncclEpHandle_t handle, const ncclEpDispatchInputs_t* inputs, const ncclEpDispatchOutputs_t* outputs, const ncclEpLayoutInfo_t* layout_info, const ncclEpDispatchConfig_t* config, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
     global __ncclEpDispatch
     _check_or_init_nccl_ep()
     if __ncclEpDispatch == NULL:
         with gil:
             raise FunctionNotFoundError("function ncclEpDispatch is not found")
-    return (<ncclResult_t (*)(ncclEpHandle_t, ncclNDTensor_t, const ncclEpDispatchInputs_t*, const ncclEpDispatchOutputs_t*, const ncclEpLayoutInfo_t*, const ncclEpDispatchConfig_t*, cudaStream_t) noexcept nogil>__ncclEpDispatch)(
-        handle, topk_idx, inputs, outputs, layout_info, config, stream)
+    return (<ncclResult_t (*)(ncclEpHandle_t, const ncclEpDispatchInputs_t*, const ncclEpDispatchOutputs_t*, const ncclEpLayoutInfo_t*, const ncclEpDispatchConfig_t*, cudaStream_t) noexcept nogil>__ncclEpDispatch)(
+        handle, inputs, outputs, layout_info, config, stream)
 
 
 cdef ncclResult_t _ncclEpCombine(ncclEpHandle_t handle, const ncclEpCombineInputs_t* inputs, const ncclEpCombineOutputs_t* outputs, const ncclEpCombineConfig_t* config, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:

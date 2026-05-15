@@ -60,6 +60,16 @@ class EpGroupConfig:
         version: ABI version. Defaults to ``NCCL_EP_API_VERSION``.
         alloc: Device allocator hooks. Default
             :class:`EpAllocConfig` selects ``cudaMalloc``/``cudaFree``.
+        enable_mask: Enable active-mask support for fault tolerance
+            (LL mode only). When ``True``, a per-rank mask buffer is
+            allocated; remote ranks that time out during dispatch or
+            combine are skipped rather than tripping a GPU trap, and a
+            host-visible error flag is set (pollable via the mask APIs).
+            Default: ``False``.
+        timeout_ns: GPU-side wait-loop timeout in nanoseconds. ``0``
+            selects the library default (~100 s). Setting too low risks
+            false positives. The ``NCCL_EP_TIMEOUT_MS`` env var
+            overrides this field at group creation.
 
     See Also:
         NCCL EP ``ncclEpGroupConfig_t``:
@@ -78,6 +88,8 @@ class EpGroupConfig:
     max_num_sms: int = 0
     version: int = _NCCL_EP_API_VERSION
     alloc: EpAllocConfig = field(default_factory=EpAllocConfig)
+    enable_mask: bool = False
+    timeout_ns: int = 0
 
 
 class EpGroup:

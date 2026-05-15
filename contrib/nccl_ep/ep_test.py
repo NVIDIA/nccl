@@ -361,7 +361,6 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
         dispatch_inputs = EpDispatchInputs(tokens=input_tokens.tensor)
         dispatch_outputs = EpDispatchOutputs(tokens=output_tokens.tensor)
         dispatch_layout = EpLayoutInfo(expert_counters=local_tensor_recv_count.tensor)
-        ht_topk_idx = None
     else:
         dispatch_inputs = EpDispatchInputs(
             tokens=input_tokens.tensor,
@@ -373,12 +372,10 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
             topk_idx=output_topk_idx.tensor,
         )
         dispatch_layout = None
-        ht_topk_idx = topk_idx.tensor
 
     print(f"Rank {my_rank}: Testing dispatch (send_only={bool(dispatch_send_only)})")
     ep_handle.dispatch(
         dispatch_inputs, dispatch_outputs,
-        topk_idx=ht_topk_idx,
         layout_info=dispatch_layout,
         config=dispatch_config,
         stream=stream,
@@ -615,7 +612,6 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
         ep_handle.dispatch(
             EpDispatchInputs(tokens=input_tokens.tensor),
             EpDispatchOutputs(tokens=cached_out_tokens.tensor),
-            topk_idx=topk_idx.tensor,
             config=dispatch_config,
             stream=stream,
         )

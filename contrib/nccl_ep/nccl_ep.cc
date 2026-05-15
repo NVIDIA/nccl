@@ -1539,8 +1539,8 @@ struct ncclEpHandle {
             bool* attn_to_rdma_map;
 
             // Per-token per-rank bitmask cache produced during preprocessing.
-            // dtype: RankMask<LSA_TEAM_SIZE> (uint8/16/32/64 depending on lsa_team_size)
-            // layout: [num_nodes * max_dispatch_tokens_per_rank * ranks_per_node]
+            // dtype: rank_mask_t<ceil(lsa_team_size/64)> (one uint64_t word per 64 ranks)
+            // layout: [num_nodes * max_send_tokens_per_rank * ranks_per_node]
             void* token_rank_mask;
 
              // Local expert routing map: per-expert routing for tokens in this rank's buffer.

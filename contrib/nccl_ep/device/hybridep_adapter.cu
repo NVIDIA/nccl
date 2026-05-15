@@ -367,10 +367,6 @@ void call_metadata_preprocessing(
         CUDA_CHECK(cudaMemsetAsync(per_expert_token_counts, 0, experts_per_rank * sizeof(int32_t), stream));
     }
 
-    // MNNVL configurations (> 32 GPUs per LSA domain) are not yet supported: the scan
-    // kernel uses warp-reduction (LSA_TEAM_SIZE <= 32). Extend when adding MNNVL support.
-    EP_HOST_ASSERT(num_ranks_per_node <= 32 && "metadata_preprocessing: LSA team size > 32 not yet supported (MNNVL)");
-
     constexpr int NUM_THREADS_PER_BLOCK = HYBRIDEP_NUM_THREADS_PER_BLOCK_PREPROCESSING;
     const int NUM_OF_BLOCKS = num_blocks;
     constexpr int NUM_OF_WARPS_PER_BLOCK_SCAN = NUM_THREADS_PER_BLOCK / 32;
@@ -379,7 +375,7 @@ void call_metadata_preprocessing(
     CUDA_CHECK(cudaMemsetAsync(scan_tmp, 0, preprocessing_tmp_sz, stream));
 
     const size_t scan_smem_size =
-        (NUM_OF_WARPS_PER_BLOCK_SCAN * num_ranks_per_node * sizeof(int32_t)) +
+        (2 * NUM_OF_WARPS_PER_BLOCK_SCAN * num_ranks_per_node * sizeof(int32_t)) +
         (num_ranks_per_node * sizeof(int32_t)) +
         (per_expert_token_counts != nullptr ? experts_per_rank * sizeof(int32_t) : 0);
     const size_t remap_smem_size = expert_major
@@ -425,13 +421,7 @@ size_t get_preprocessing_scan_tmp_size(int num_ranks_per_node) {
 }
 
 size_t get_rank_mask_elem_size(int lsa_team_size) {
-    // RankMask<N> picks the smallest unsigned int type that holds N bits.
-    if (lsa_team_size <= 8)  return sizeof(uint8_t);
-    if (lsa_team_size <= 16) return sizeof(uint16_t);
-    if (lsa_team_size <= 32) return sizeof(uint32_t);
-    if (lsa_team_size <= 64) return sizeof(uint64_t);
-    assert(false && "lsa_team_size > 64 is not supported");
-    return 0;
+    return ((lsa_team_size + 63) / 64) * sizeof(uint64_t);
 }
 
 // ============================================================================

@@ -144,7 +144,7 @@ void call_metadata_preprocessing(
     int32_t* sparse_to_dense_map,       // Output: unified S2D — flat stores token->rank->slot; expert-major stores packed (rank, slot) entries
     bool* rdma_to_attn_map,             // Output: which tokens come from RDMA
     bool* attn_to_rdma_map,             // Output: which tokens go to RDMA
-    void* token_rank_mask,              // Scratch: RankMask<LSA_TEAM_SIZE> elements, sized by get_rank_mask_elem_size()
+    void* token_rank_mask,              // Scratch rank masks, sized by get_rank_mask_elem_size().
     int32_t* num_tokens_for_experts,    // Output: total tokens for local experts
     bool* local_expert_routing_map,     // Output: per-expert routing for local tokens
     int32_t* per_expert_token_counts,   // Optional output: per-expert counts (nullptr to skip)
@@ -172,8 +172,8 @@ void call_metadata_preprocessing(
 // Caller must allocate at least this many bytes and pass the pointer to call_metadata_preprocessing.
 size_t get_preprocessing_scan_tmp_size(int num_ranks_per_node);
 
-// Returns sizeof(RankMask<LSA_TEAM_SIZE>) for the given lsa_team_size, computed via compile-time
-// sizeof inside the switch so it stays in sync with the type trait automatically.
+// Returns sizeof(rank_mask_t<ceil(lsa_team_size/64)>) for the given lsa_team_size.
+// Formula: ceil(lsa_team_size / 64) * sizeof(uint64_t).
 size_t get_rank_mask_elem_size(int lsa_team_size);
 
 // ============================================================================

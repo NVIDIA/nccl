@@ -101,10 +101,6 @@ class RegisteredBufferHandle(CommResource):
     :py:meth:`Communicator.register_buffer`. The registration handle can be
     released explicitly via :py:meth:`close`, or automatically when the
     owning communicator is destroyed or aborted.
-
-    See Also:
-        NCCL ncclCommRegister reference:
-        https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html#ncclcommregister
     """
 
     def __init__(self, comm_ptr: int, buffer_ptr: int, size: int):
@@ -168,10 +164,6 @@ class RegisteredWindowHandle(CommResource):
     default. Deregistration is local. The window handle can be released
     explicitly via :py:meth:`close`, or automatically when the owning
     communicator is destroyed or aborted.
-
-    See Also:
-        NCCL ncclCommWindowRegister reference:
-        https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html#ncclcommwindowregister
     """
 
     def __init__(self, comm_ptr: int, buffer_ptr: int, size: int, flags: WindowFlag | None = None):
@@ -181,7 +173,7 @@ class RegisteredWindowHandle(CommResource):
             comm_ptr: NCCL communicator raw pointer.
             buffer_ptr: Device pointer to the buffer.
             size: Size of the window in bytes.
-            flags: Window registration flags. Defaults to None
+            flags: Window registration flags. Defaults to ``None``
                 (:py:attr:`~nccl.core.WindowFlag.DEFAULT`).
 
         Raises:
@@ -249,7 +241,7 @@ class RegisteredWindowHandle(CommResource):
             offset: Byte offset within the window buffer. Defaults to 0.
 
         Returns:
-            Device pointer as int, or None if multimem is not supported.
+            Device pointer as int, or ``None`` if multimem is not supported.
 
         Raises:
             RuntimeError: If the window has been closed.
@@ -280,15 +272,15 @@ class RegisteredWindowHandle(CommResource):
     def get_peer_device_pointer(self, peer: int, offset: int = 0) -> int | None:
         """Returns a device pointer to a peer's window buffer by world rank.
 
-        If the peer is not reachable via LSA, returns None.
+        If the peer is not reachable via LSA, returns ``None``.
 
         Args:
             peer: World rank of the peer (0 to nranks - 1).
             offset: Byte offset within the window buffer. Defaults to 0.
 
         Returns:
-            Device pointer as int, or None if the peer is not reachable via
-            LSA.
+            Device pointer as int, or ``None`` if the peer is not reachable
+            via LSA.
 
         Raises:
             RuntimeError: If the window has been closed.
@@ -311,10 +303,6 @@ class CustomRedOp(CommResource):
     or weighted reductions. The operator can be released explicitly via
     :py:meth:`close`, or automatically when the owning communicator is
     destroyed or aborted.
-
-    See Also:
-        NCCL ncclRedOpCreatePreMulSum reference:
-        https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/ops.html#ncclredopcreatepremulsum
     """
 
     def __init__(
@@ -422,7 +410,7 @@ class DevCommResource(CommResource):
 
     @property
     def dev_comm(self) -> _nccl_bindings.DevComm:
-        """DevComm object wrapping ncclDevComm_t.
+        """DevComm object wrapping :c:type:`ncclDevComm_t <ncclDevComm>`.
 
         Raises:
             RuntimeError: If the device communicator has been destroyed.
@@ -434,7 +422,7 @@ class DevCommResource(CommResource):
 
     @property
     def ptr(self) -> int:
-        """Pointer to the ncclDevComm_t structure.
+        """Raw pointer to the underlying :c:type:`ncclDevComm_t <ncclDevComm>` structure.
 
         Raises:
             RuntimeError: If the device communicator has been destroyed.

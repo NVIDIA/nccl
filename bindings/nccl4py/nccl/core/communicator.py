@@ -68,12 +68,10 @@ class NCCLConfig:
 
     Provides configuration options for NCCL communicators, allowing
     fine-tuning of performance and behavior characteristics. Fields not set
-    in the constructor remain at NCCL's internal default (sentinel
-    NCCL_UNDEF_INT).
+    in the constructor remain at NCCL's internal default.
 
     See Also:
-        NCCL ncclConfig_t reference:
-        https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/types.html#ncclconfig-t
+        :c:type:`ncclConfig_t` for the description of each field.
     """
 
     def __init__(
@@ -102,7 +100,7 @@ class NCCLConfig:
 
         All parameters are optional and default to NCCL's internal defaults
         (undefined). Aborting any communicator may affect others in the same
-        family when split_share or shrink_share is enabled.
+        family when ``split_share`` or ``shrink_share`` is enabled.
 
         Args:
             blocking: Blocking (True) or non-blocking (False) communicator
@@ -266,7 +264,7 @@ class NCCLConfig:
 
     @property
     def ptr(self) -> int:
-        """Raw pointer to the underlying ncclConfig_t structure."""
+        """Raw pointer to the underlying :c:type:`ncclConfig_t` structure."""
         return int(self._cfg.ptr)
 
     # Field proxies
@@ -523,9 +521,7 @@ class NCCLDevCommRequirements:
     :py:meth:`Communicator.create_dev_comm`.
 
     See Also:
-        :py:class:`~nccl.core.DevCommResource`, and the NCCL device API
-        reference:
-        https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/device.html
+        :c:type:`ncclDevCommRequirements` for the description of each field.
     """
 
     def __init__(
@@ -768,7 +764,7 @@ class NCCLDevCommRequirements:
 
     @property
     def ptr(self) -> int:
-        """Raw pointer to the underlying ncclDevCommRequirements_t structure."""
+        """Raw pointer to the underlying :c:type:`ncclDevCommRequirements_t <ncclDevCommRequirements>` structure."""
         return self._reqs.ptr
 
     def __repr__(self) -> str:
@@ -920,24 +916,20 @@ class Communicator:
 
         Creates a communicator that connects multiple ranks. This is a
         collective operation: all ranks must call this method with the same
-        nranks and unique_id but with different rank values.
+        ``nranks`` and ``unique_id`` but with different ``rank`` values.
 
         Args:
             nranks: Total number of ranks in the communicator.
-            rank: This rank (must be between 0 and nranks - 1).
+            rank: This rank (must be between 0 and ``nranks - 1``).
             unique_id: Unique identifier(s) shared by all ranks. A sequence
-                may be passed to use ncclCommInitRankScalable.
-            config: NCCL configuration options. Defaults to None.
+                may be passed to use :c:func:`ncclCommInitRankScalable`.
+            config: NCCL configuration options. Defaults to ``None``.
 
         Returns:
             A new Communicator instance.
 
         Raises:
-            NcclInvalid: If unique_id has an invalid type.
-
-        See Also:
-            NCCL ncclCommInitRankScalable reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html#ncclcomminitrankscalable
+            NcclInvalid: If ``unique_id`` has an invalid type.
         """
         comm = cls()
         comm.initialize(nranks, rank, unique_id, config)
@@ -962,24 +954,22 @@ class Communicator:
         must be manually destroyed via :py:meth:`destroy` on each one.
 
         Args:
-            devices: Specifies which devices to initialize. None (the
+            devices: Specifies which devices to initialize. ``None`` (the
                 default) initializes all visible CUDA devices. An int
-                creates communicators for devices [0, 1, ..., devices - 1].
+                creates communicators for devices ``[0, 1, ..., devices - 1]``.
                 A sequence of ints uses the explicit device IDs. If the
-                resulting device list is empty (devices=0, an empty
+                resulting device list is empty (``devices=0``, an empty
                 sequence, or no visible devices), returns an empty list
                 without calling into NCCL.
 
         Returns:
-            List of initialized communicators, one per device. Rank i uses
-            devices[i] (or device i when devices is an int).
+            List of initialized communicators, one per device. Rank ``i``
+            uses ``devices[i]`` (or device ``i`` when ``devices`` is an
+            int).
 
         Raises:
-            TypeError: If devices is not an int, sequence of ints, or None.
-
-        See Also:
-            NCCL ncclCommInitAll reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html#ncclcomminitall
+            TypeError: If ``devices`` is not an int, sequence of ints, or
+                ``None``.
         """
         # Parse devices parameter
         if devices is None:
@@ -1021,12 +1011,12 @@ class Communicator:
 
         Args:
             nranks: Total number of ranks in the communicator.
-            rank: This rank (must be between 0 and nranks - 1).
+            rank: This rank (must be between 0 and ``nranks - 1``).
             unique_id: Unique identifier(s) shared by all ranks.
-            config: NCCL configuration options. Defaults to None.
+            config: NCCL configuration options. Defaults to ``None``.
 
         Raises:
-            NcclInvalid: If unique_id has an invalid type or this
+            NcclInvalid: If ``unique_id`` has an invalid type or this
                 communicator is already initialized.
         """
         if self._comm != 0:
@@ -1061,37 +1051,36 @@ class Communicator:
     ) -> Communicator:
         """Splits this communicator into sub-communicators based on color values.
 
-        Ranks that pass the same color value will be part of the same group.
-        If color is None or :py:data:`~nccl.core.NCCL_SPLIT_NOCOLOR`, the
-        rank will not be part of any group and receives a null communicator
-        (a :py:class:`Communicator` instance with ``ptr=0``). The key value
-        determines rank ordering; smaller key means smaller rank in the new
-        communicator. If keys are equal, the rank in the original
-        communicator determines ordering.
+        Ranks that pass the same ``color`` value will be part of the same
+        group. If ``color`` is ``None``, the rank will not be part of any
+        group and receives a null communicator (a
+        :py:class:`Communicator` instance with ``ptr=0``). The ``key``
+        value determines rank ordering; smaller ``key`` means smaller rank
+        in the new communicator. If keys are equal, the rank in the
+        original communicator determines ordering.
 
         This is a collective operation: all ranks in the communicator must
-        call this method, even ranks that pass ``color=None`` or
-        :py:data:`~nccl.core.NCCL_SPLIT_NOCOLOR`. There must be no
-        outstanding NCCL operations on the communicator to avoid deadlock.
+        call this method, even ranks that pass ``color=None``. There must
+        be no outstanding NCCL operations on the communicator to avoid
+        deadlock.
 
         Args:
-            color: Non-negative color value for grouping ranks. Pass None or
-                :py:data:`~nccl.core.NCCL_SPLIT_NOCOLOR` to exclude this
-                rank from all groups. Defaults to None.
+            color: Non-negative color value for grouping ranks. Pass
+                ``None`` to exclude this rank from all groups. Defaults to
+                ``None``.
             key: Ordering key within the color group. Defaults to 0.
-            config: Configuration for the new communicator. If None, inherits
-                the parent's configuration. Defaults to None.
+            config: Configuration for the new communicator. If ``None``,
+                inherits the parent's configuration. Defaults to ``None``.
 
         Returns:
-            New sub-communicator, or a null communicator if color is None or
-            :py:data:`~nccl.core.NCCL_SPLIT_NOCOLOR`.
+            New sub-communicator, or a null communicator if ``color`` is
+            ``None``.
 
         Raises:
             NcclInvalid: If the communicator is not initialized.
 
         See Also:
-            NCCL ncclCommSplit reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html#ncclcommsplit
+            :c:func:`ncclCommSplit`
         """
         self._check_valid("split")
 
@@ -1125,9 +1114,9 @@ class Communicator:
 
         Args:
             exclude_ranks: Ranks to exclude from the new communicator.
-                Defaults to None (no exclusions).
-            config: Configuration for the new communicator. If None, inherits
-                the parent's configuration. Defaults to None.
+                Defaults to ``None`` (no exclusions).
+            config: Configuration for the new communicator. If ``None``,
+                inherits the parent's configuration. Defaults to ``None``.
             flag: Shrink behavior. Use
                 :py:attr:`~nccl.core.CommShrinkFlag.DEFAULT` for normal
                 operation or :py:attr:`~nccl.core.CommShrinkFlag.ABORT`
@@ -1141,8 +1130,7 @@ class Communicator:
             NcclInvalid: If the communicator is not initialized.
 
         See Also:
-            NCCL ncclCommShrink reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html#ncclcommshrink
+            :c:func:`ncclCommShrink`
         """
         self._check_valid("shrink")
         ranks_to_exclude = list(exclude_ranks) if exclude_ranks is not None else []
@@ -1199,10 +1187,9 @@ class Communicator:
         This is a collective operation. All ranks (existing and new) must
         call this method. Usage by role:
 
-            - Existing root: new_comm = existing_comm.grow(nranks, uid)
-            - Existing non-root: new_comm = existing_comm.grow(nranks)
-            - New rank: new_comm = Communicator().grow(nranks, uid,
-              rank=assigned_rank)
+            - Existing root: ``new_comm = existing_comm.grow(nranks, uid)``
+            - Existing non-root: ``new_comm = existing_comm.grow(nranks)``
+            - New rank: ``new_comm = Communicator().grow(nranks, uid, rank=assigned_rank)``
 
         The UID is consumed upon successful grow and cannot be reused.
 
@@ -1212,12 +1199,12 @@ class Communicator:
             unique_id: Unique identifier from :py:meth:`get_unique_id`.
                 Existing root and new ranks must pass the
                 :py:class:`~nccl.core.UniqueId`; existing non-root must pass
-                None. Defaults to None.
+                ``None``. Defaults to ``None``.
             rank: This rank's ID in the new communicator. New ranks must
-                pass their assigned rank, which must be >= the parent
-                communicator size. Existing ranks must pass None. Defaults
-                to None.
-            config: Configuration for the new communicator. Defaults to None.
+                pass their assigned rank, which must be ``>=`` the parent
+                communicator size. Existing ranks must pass ``None``.
+                Defaults to ``None``.
+            config: Configuration for the new communicator. Defaults to ``None``.
 
         Returns:
             New :py:class:`Communicator` containing all ranks.
@@ -1257,8 +1244,7 @@ class Communicator:
         Errors during cleanup are suppressed for safety.
 
         See Also:
-            NCCL ncclCommDestroy reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html#ncclcommdestroy
+            :c:func:`ncclCommDestroy`
         """
         # Close all resources first (best-effort, ignore errors)
         self.close_all_resources()
@@ -1283,8 +1269,7 @@ class Communicator:
         see the Fault Tolerance section in the NCCL documentation.
 
         See Also:
-            :py:meth:`finalize`, and the NCCL ncclCommAbort reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html#ncclcommabort
+            :c:func:`ncclCommAbort`
         """
         # Close all resources first (best-effort, ignore errors)
         self.close_all_resources()
@@ -1309,8 +1294,7 @@ class Communicator:
         state with :py:meth:`get_async_error`.
 
         See Also:
-            NCCL ncclCommFinalize reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html#ncclcommfinalize
+            :c:func:`ncclCommFinalize`
         """
         if self._comm == 0:
             return
@@ -1371,7 +1355,9 @@ class Communicator:
     # --- Properties ---
     @property
     def ptr(self) -> int:
-        """Raw NCCL communicator pointer (0 if destroyed or null)."""
+        """Raw pointer to the underlying :c:type:`ncclComm_t` structure
+        (0 if destroyed or null).
+        """
         return self._comm
 
     @property
@@ -1385,10 +1371,6 @@ class Communicator:
 
         Raises:
             NcclInvalid: If the communicator is not initialized.
-
-        See Also:
-            NCCL ncclCommCount reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html#ncclcommcount
         """
         self._check_valid("get nranks")
         if self._nranks is None:
@@ -1399,17 +1381,12 @@ class Communicator:
     def device(self) -> Device:
         """CUDA device associated with this communicator.
 
-        Returns a cuda.core.Device providing additional functionality such
-        as to_system_device for obtaining the NVML device, device
-        properties, and synchronization. See the CUDA Python documentation:
-        https://nvidia.github.io/cuda-python/cuda-core/latest/generated/cuda.core.Device.html
+        Returns a :py:class:`cuda.core.Device` providing additional
+        functionality such as ``to_system_device`` for obtaining the NVML
+        device, device properties, and synchronization.
 
         Raises:
             NcclInvalid: If the communicator is not initialized.
-
-        See Also:
-            NCCL ncclCommCuDevice reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html#ncclcommcudevice
         """
         self._check_valid("get device")
         if self._device is None:
@@ -1422,10 +1399,6 @@ class Communicator:
 
         Raises:
             NcclInvalid: If the communicator is not initialized.
-
-        See Also:
-            NCCL ncclCommUserRank reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html#ncclcommuserrank
         """
         self._check_valid("get rank")
         if self._rank is None:
@@ -1439,9 +1412,6 @@ class Communicator:
         Raises:
             NcclInvalid: If the communicator is not initialized.
 
-        See Also:
-            NCCL ncclCommProperties_t reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/device.html#ncclcommproperties-t
         """
         self._check_valid("get cuda_dev")
         return self._get_comm_properties().cuda_dev
@@ -1455,9 +1425,6 @@ class Communicator:
         Raises:
             NcclInvalid: If the communicator is not initialized.
 
-        See Also:
-            NCCL ncclCommProperties_t reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/device.html#ncclcommproperties-t
         """
         self._check_valid("get nvml_dev")
         return self._get_comm_properties().nvml_dev
@@ -1471,9 +1438,6 @@ class Communicator:
         Raises:
             NcclInvalid: If the communicator is not initialized.
 
-        See Also:
-            NCCL ncclCommProperties_t reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/device.html#ncclcommproperties-t
         """
         self._check_valid("get device_api_support")
         return bool(self._get_comm_properties().device_api_support)
@@ -1488,9 +1452,6 @@ class Communicator:
         Raises:
             NcclInvalid: If the communicator is not initialized.
 
-        See Also:
-            NCCL ncclCommProperties_t reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/device.html#ncclcommproperties-t
         """
         self._check_valid("get multimem_support")
         return bool(self._get_comm_properties().multimem_support)
@@ -1505,9 +1466,6 @@ class Communicator:
         Raises:
             NcclInvalid: If the communicator is not initialized.
 
-        See Also:
-            NCCL ncclCommProperties_t reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/device.html#ncclcommproperties-t
         """
         self._check_valid("get gin_type")
         return NcclGinType(self._get_comm_properties().gin_type)
@@ -1519,9 +1477,6 @@ class Communicator:
         Raises:
             NcclInvalid: If the communicator is not initialized.
 
-        See Also:
-            NCCL ncclCommProperties_t reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/device.html#ncclcommproperties-t
         """
         self._check_valid("get n_lsa_teams")
         return self._get_comm_properties().n_lsa_teams
@@ -1533,27 +1488,21 @@ class Communicator:
         Raises:
             NcclInvalid: If the communicator is not initialized.
 
-        See Also:
-            NCCL ncclCommProperties_t reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/device.html#ncclcommproperties-t
         """
         self._check_valid("get host_rma_support")
         return bool(self._get_comm_properties().host_rma_support)
 
     @property
     def railed_gin_type(self) -> NcclGinType:
-        """Railed GIN type for this communicator.
+        """Railed GIN type supported by this communicator.
 
-        Reflects GIN support within each rail team. When cross-NIC is
-        disabled (NCCL_CROSS_NIC=0), gin_type may report NcclGinType.NONE
-        while railed_gin_type still reports the actual GIN type.
+        If equal to :py:attr:`NcclGinType.NONE`, a device communicator
+        cannot be created with GIN connection type
+        :py:attr:`NcclGinConnectionType.RAIL`.
 
         Raises:
             NcclInvalid: If the communicator is not initialized.
 
-        See Also:
-            NCCL ncclCommProperties_t reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/device.html#ncclcommproperties-t
         """
         self._check_valid("get railed_gin_type")
         return NcclGinType(self._get_comm_properties().railed_gin_type)
@@ -1567,7 +1516,7 @@ class Communicator:
         Args:
             sendbuf: Source buffer to send.
             peer: Destination rank ID.
-            stream: CUDA stream for the operation. Defaults to None (the
+            stream: CUDA stream for the operation. Defaults to ``None`` (the
                 default stream).
 
         Raises:
@@ -1576,8 +1525,7 @@ class Communicator:
                 initialized.
 
         See Also:
-            NCCL ncclSend reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/p2p.html#ncclsend
+            :c:func:`ncclSend`
         """
         self._check_valid("send")
         s = NcclBuffer(sendbuf)
@@ -1595,7 +1543,7 @@ class Communicator:
         Args:
             recvbuf: Destination buffer to receive into.
             peer: Source rank ID.
-            stream: CUDA stream for the operation. Defaults to None (the
+            stream: CUDA stream for the operation. Defaults to ``None`` (the
                 default stream).
 
         Raises:
@@ -1604,8 +1552,7 @@ class Communicator:
                 initialized.
 
         See Also:
-            NCCL ncclRecv reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/p2p.html#ncclrecv
+            :c:func:`ncclRecv`
         """
         self._check_valid("recv")
         r = NcclBuffer(recvbuf)
@@ -1633,14 +1580,13 @@ class Communicator:
                 specifying which peers to wait for and how many signals to
                 expect from each.
             stream: CUDA stream to enqueue the wait operation on. Defaults
-                to None (the default stream).
+                to ``None`` (the default stream).
 
         Raises:
             NcclInvalid: If the communicator is not initialized.
 
         See Also:
-            :py:meth:`signal`, :py:meth:`put_signal`,
-            :py:class:`WaitSignalDesc`
+            :c:func:`ncclWaitSignal`
         """
         self._check_valid("wait_signal")
 
@@ -1679,13 +1625,13 @@ class Communicator:
             context: Context identifier. Currently must be 0.
             flags: Reserved for future use. Currently must be 0.
             stream: CUDA stream to enqueue the signal operation on. Defaults
-                to None (the default stream).
+                to ``None`` (the default stream).
 
         Raises:
             NcclInvalid: If the communicator is not initialized.
 
         See Also:
-            :py:meth:`put_signal`
+            :c:func:`ncclSignal`
         """
         self._check_valid("signal")
 
@@ -1726,7 +1672,7 @@ class Communicator:
             context: Context identifier. Currently must be 0.
             flags: Reserved for future use. Currently must be 0.
             stream: CUDA stream to enqueue the put_signal operation on.
-                Defaults to None (the default stream).
+                Defaults to ``None`` (the default stream).
 
         Raises:
             NcclInvalid: If the communicator is not initialized, or if the
@@ -1734,7 +1680,7 @@ class Communicator:
                 different device than the communicator.
 
         See Also:
-            :py:meth:`signal`
+            :c:func:`ncclPutSignal`
         """
         self._check_valid("put_signal")
 
@@ -1765,37 +1711,14 @@ class Communicator:
         *,
         stream: NcclStreamSpec | None = None,
     ) -> None:
-        """Reduces data across all ranks and stores identical copies in each recvbuf.
+        """All-reduce variant of :py:meth:`reduce`.
 
-        Reduces ``sendcount`` elements from each rank's ``sendbuf`` using
-        the specified operation. All ranks receive the same reduced result
-        in their receive buffers after this collective completes. This is a
-        shortcut for ``reduce(sendbuf, recvbuf, op, root=None, stream=stream)``.
-
-        Both buffers must have matching data types. Element count is
-        inferred from ``sendbuf``: ``count = sendcount``. ``recvcount`` must
-        be at least ``sendcount``. In-place operation occurs when
-        ``sendbuf`` and ``recvbuf`` resolve to the same device memory
-        address.
-
-        Args:
-            sendbuf: Source buffer containing data to be reduced.
-            recvbuf: Destination buffer that will receive the reduced result.
-            op: Reduction operator (e.g. :py:data:`~nccl.core.SUM`,
-                :py:data:`~nccl.core.MAX`, :py:data:`~nccl.core.MIN`,
-                :py:data:`~nccl.core.AVG`, :py:data:`~nccl.core.PROD`, or a
-                :py:class:`~nccl.core.CustomRedOp`).
-            stream: CUDA stream for the operation. Defaults to None (the
-                default stream).
-
-        Raises:
-            NcclInvalid: If send and receive buffers have mismatched dtypes,
-                mismatched counts, are on the wrong device, are invalid
-                specifications, or the communicator is not initialized.
+        Equivalent to ``reduce(sendbuf, recvbuf, op, root=None, stream=stream)``:
+        reduces data across all ranks and stores identical copies in each
+        rank's recvbuf. See :py:meth:`reduce` for argument semantics.
 
         See Also:
-            NCCL ncclAllReduce reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/colls.html#ncclallreduce
+            :py:meth:`reduce`, :c:func:`ncclAllReduce`
         """
         self._check_valid("allreduce")
 
@@ -1809,7 +1732,7 @@ class Communicator:
         *,
         stream: NcclStreamSpec | None = None,
     ) -> None:
-        """Copies data from sendbuf on the root rank to all ranks' recvbuf.
+        """Copies data from ``sendbuf`` on the root rank to all ranks' ``recvbuf``.
 
         ``sendbuf`` is only used on the root rank and is ignored on other
         ranks.
@@ -1824,7 +1747,7 @@ class Communicator:
             sendbuf: Source buffer (only used on the root rank).
             recvbuf: Destination buffer that will receive the broadcast data.
             root: Root rank that broadcasts the data (0 to ``nranks - 1``).
-            stream: CUDA stream for the operation. Defaults to None (the
+            stream: CUDA stream for the operation. Defaults to ``None`` (the
                 default stream).
 
         Raises:
@@ -1833,8 +1756,7 @@ class Communicator:
                 specifications, or the communicator is not initialized.
 
         See Also:
-            NCCL ncclBroadcast reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/colls.html#ncclbroadcast
+            :c:func:`ncclBroadcast`
         """
         self._check_valid("broadcast")
 
@@ -1875,17 +1797,18 @@ class Communicator:
     ) -> None:
         """Reduces data from all ranks using the specified operation.
 
-        Supports two modes. In AllReduce mode (root is None) all ranks
-        receive the reduced result in recvbuf. In Reduce mode (root
-        specified) only the root rank receives the reduced result; recvbuf
-        is ignored on other ranks.
+        Supports two modes. In AllReduce mode (``root`` is ``None``) all
+        ranks receive the reduced result in ``recvbuf``. In Reduce mode
+        (``root`` specified) only the root rank receives the reduced
+        result; ``recvbuf`` is ignored on other ranks.
 
         Both buffers must have matching data types where used. Element
-        count is inferred from sendbuf: count = sendcount. In AllReduce
-        mode, all ranks must have recvcount >= sendcount; in Reduce mode,
-        only the root rank requires recvcount >= sendcount. In-place
-        operation occurs when sendbuf and recvbuf resolve to the same
-        device memory address.
+        count is inferred from ``sendbuf``: ``count = sendcount``. In
+        AllReduce mode, all ranks must have ``recvcount >= sendcount``;
+        in Reduce mode, only the root rank requires
+        ``recvcount >= sendcount``. In-place operation occurs when
+        ``sendbuf`` and ``recvbuf`` resolve to the same device memory
+        address.
 
         Args:
             sendbuf: Source buffer containing data to be reduced.
@@ -1896,9 +1819,9 @@ class Communicator:
                 :py:data:`~nccl.core.AVG`, :py:data:`~nccl.core.PROD`, or a
                 :py:class:`~nccl.core.CustomRedOp`).
             root: Root rank that receives the reduced result (0 to
-                ``nranks - 1``). If None, performs an all-reduce. Defaults
-                to None.
-            stream: CUDA stream for the operation. Defaults to None (the
+                ``nranks - 1``). If ``None``, performs an all-reduce.
+                Defaults to ``None``.
+            stream: CUDA stream for the operation. Defaults to ``None`` (the
                 default stream).
 
         Raises:
@@ -1907,10 +1830,7 @@ class Communicator:
                 specifications, or the communicator is not initialized.
 
         See Also:
-            :py:meth:`allreduce`, and the NCCL references:
-
-            - ncclAllReduce: https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/colls.html#ncclallreduce
-            - ncclReduce: https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/colls.html#ncclreduce
+            :c:func:`ncclAllReduce`, :c:func:`ncclReduce`
         """
         self._check_valid("reduce")
 
@@ -1958,33 +1878,15 @@ class Communicator:
         *,
         stream: NcclStreamSpec | None = None,
     ) -> None:
-        """Gathers sendcount values from all ranks; identical copies of the result are placed in each recvbuf.
+        """All-gather variant of :py:meth:`gather`.
 
-        All ranks receive the same concatenated result. Data from rank
-        ``i`` is placed at ``recvbuf + i * sendcount``. This is a shortcut
-        for ``gather(sendbuf, recvbuf, root=None, stream=stream)``.
-
-        Both buffers must have matching data types. Element count is
-        inferred from ``sendbuf``: ``count = sendcount``. ``recvcount`` must
-        be at least ``nranks * sendcount``. In-place operation occurs when
-        ``sendbuf`` resolves to ``recvbuf_address + rank * sendcount``.
-
-        Args:
-            sendbuf: Source buffer containing ``sendcount`` elements.
-            recvbuf: Destination buffer (size ``>= nranks * sendcount``
-                elements).
-            stream: CUDA stream for the operation. Defaults to None (the
-                default stream).
-
-        Raises:
-            NcclInvalid: If send and receive buffers have mismatched dtypes,
-                ``recvbuf`` is too small, are on the wrong device, are
-                invalid specifications, or the communicator is not
-                initialized.
+        Equivalent to ``gather(sendbuf, recvbuf, root=None, stream=stream)``:
+        gathers ``sendcount`` values from each rank and places identical
+        copies of the concatenated result in every rank's recvbuf. See
+        :py:meth:`gather` for argument semantics.
 
         See Also:
-            NCCL ncclAllGather reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/colls.html#ncclallgather
+            :py:meth:`gather`, :c:func:`ncclAllGather`
         """
         self._check_valid("allgather")
 
@@ -2001,12 +1903,13 @@ class Communicator:
         """Reduces data from all ranks and scatters the result across ranks.
 
         Each rank receives a different portion of the reduced result: rank
-        i receives the i-th block in its recvbuf.
+        ``i`` receives the i-th block in its ``recvbuf``.
 
         Both buffers must have matching data types. Element count is
-        inferred from sendbuf: count = sendcount / nranks. sendcount must
-        be >= nranks and recvcount must be >= count. In-place operation
-        occurs when recvbuf resolves to sendbuf_address + rank * count.
+        inferred from ``sendbuf``: ``count = sendcount / nranks``.
+        ``sendcount`` must be ``>= nranks`` and ``recvcount`` must be
+        ``>= count``. In-place operation occurs when ``recvbuf`` resolves
+        to ``sendbuf_address + rank * count``.
 
         Args:
             sendbuf: Source buffer (size ``>= nranks * recvcount`` elements).
@@ -2015,7 +1918,7 @@ class Communicator:
                 :py:data:`~nccl.core.MAX`, :py:data:`~nccl.core.MIN`,
                 :py:data:`~nccl.core.AVG`, :py:data:`~nccl.core.PROD`, or a
                 :py:class:`~nccl.core.CustomRedOp`).
-            stream: CUDA stream for the operation. Defaults to None (the
+            stream: CUDA stream for the operation. Defaults to ``None`` (the
                 default stream).
 
         Raises:
@@ -2025,8 +1928,7 @@ class Communicator:
                 initialized.
 
         See Also:
-            NCCL ncclReduceScatter reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/colls.html#ncclreducescatter
+            :c:func:`ncclReduceScatter`
         """
         self._check_valid("reduce_scatter")
 
@@ -2064,31 +1966,31 @@ class Communicator:
         *,
         stream: NcclStreamSpec | None = None,
     ) -> None:
-        """Each rank sends and receives count values to and from every other rank.
+        """Each rank sends and receives ``count`` values to and from every other rank.
 
-        Data sent to destination rank j is taken from sendbuf + j * count
-        and data received from source rank i is placed at
-        recvbuf + i * count.
+        Data sent to destination rank ``j`` is taken from
+        ``sendbuf + j * count`` and data received from source rank ``i`` is
+        placed at ``recvbuf + i * count``.
 
         Both buffers must have matching data types. Element count is
-        inferred from sendbuf: count = sendcount / nranks. sendcount must
-        be >= nranks and recvcount must be >= sendcount.
+        inferred from ``sendbuf``: ``count = sendcount / nranks``.
+        ``sendcount`` must be ``>= nranks`` and ``recvcount`` must be
+        ``>= sendcount``.
 
         Args:
-            sendbuf: Source buffer (size >= nranks * count elements).
-            recvbuf: Destination buffer (size >= nranks * count elements).
-            stream: CUDA stream for the operation. Defaults to None (the
+            sendbuf: Source buffer (size ``>= nranks * count`` elements).
+            recvbuf: Destination buffer (size ``>= nranks * count`` elements).
+            stream: CUDA stream for the operation. Defaults to ``None`` (the
                 default stream).
 
         Raises:
             NcclInvalid: If send and receive buffers have mismatched dtypes,
-                buffer sizes are incompatible with nranks, are on the wrong
-                device, are invalid specifications, or the communicator is
-                not initialized.
+                buffer sizes are incompatible with ``nranks``, are on the
+                wrong device, are invalid specifications, or the
+                communicator is not initialized.
 
         See Also:
-            NCCL ncclAllToAll reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/colls.html#ncclalltoall
+            :c:func:`ncclAlltoAll`
         """
         self._check_valid("alltoall")
 
@@ -2127,32 +2029,32 @@ class Communicator:
         *,
         stream: NcclStreamSpec | None = None,
     ) -> None:
-        """Gathers sendcount values from all ranks.
+        """Gathers ``sendcount`` values from all ranks.
 
-        Supports two modes. In AllGather mode (root is None) values are
-        gathered from all ranks and identical copies of the result are
-        placed in each recvbuf. In Gather mode (root specified) values are
-        gathered to the specified root rank only; recvbuf is ignored on
-        other ranks.
+        Supports two modes. In AllGather mode (``root`` is ``None``) values
+        are gathered from all ranks and identical copies of the result are
+        placed in each ``recvbuf``. In Gather mode (``root`` specified)
+        values are gathered to the specified root rank only; ``recvbuf``
+        is ignored on other ranks.
 
         Both buffers must have matching data types where used. Element
-        count is inferred from sendbuf: count = sendcount. Data from rank i
-        is placed at recvbuf + i * sendcount. AllGather mode requires
-        recvcount >= nranks * sendcount on every rank; Gather mode requires
-        it only on the root rank.
+        count is inferred from ``sendbuf``: ``count = sendcount``. Data
+        from rank ``i`` is placed at ``recvbuf + i * sendcount``. AllGather
+        mode requires ``recvcount >= nranks * sendcount`` on every rank;
+        Gather mode requires it only on the root rank.
 
-        In-place operation occurs when sendbuf resolves to
-        recvbuf_address + rank * sendcount in AllGather mode, or to
-        recvbuf_address + root * sendcount in Gather mode.
+        In-place operation occurs when ``sendbuf`` resolves to
+        ``recvbuf_address + rank * sendcount`` in AllGather mode, or to
+        ``recvbuf_address + root * sendcount`` in Gather mode.
 
         Args:
             sendbuf: Source buffer containing ``sendcount`` elements.
             recvbuf: Destination buffer (size ``>= nranks * sendcount``
                 elements). In Gather mode, only used on the root rank.
             root: Root rank that receives the gathered data (0 to
-                ``nranks - 1``). If None, performs an all-gather. Defaults
-                to None.
-            stream: CUDA stream for the operation. Defaults to None (the
+                ``nranks - 1``). If ``None``, performs an all-gather.
+                Defaults to ``None``.
+            stream: CUDA stream for the operation. Defaults to ``None`` (the
                 default stream).
 
         Raises:
@@ -2162,10 +2064,7 @@ class Communicator:
                 initialized.
 
         See Also:
-            :py:meth:`allgather`, and the NCCL references:
-
-            - ncclAllGather: https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/colls.html#ncclallgather
-            - ncclGather: https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/colls.html#ncclgather
+            :c:func:`ncclAllGather`, :c:func:`ncclGather`
         """
         self._check_valid("gather")
 
@@ -2210,33 +2109,32 @@ class Communicator:
     ) -> None:
         """Scatters data from the root rank to all ranks.
 
-        Each rank receives count elements from the root rank. On the root
-        rank, count elements from sendbuf + i * count are sent to rank i.
-        sendbuf is not used on non-root ranks.
+        Each rank receives ``count`` elements from the root rank. On the
+        root rank, ``count`` elements from ``sendbuf + i * count`` are sent
+        to rank ``i``. ``sendbuf`` is not used on non-root ranks.
 
         On the root rank, both buffers must have matching data types.
-        Element count is inferred from recvbuf: count = recvcount. The root
-        rank requires sendcount >= nranks and
-        sendcount / nranks == recvcount. In-place operation occurs when
-        recvbuf resolves to sendbuf_address + root * count.
+        Element count is inferred from ``recvbuf``: ``count = recvcount``.
+        The root rank requires ``sendcount >= nranks`` and
+        ``sendcount / nranks == recvcount``. In-place operation occurs when
+        ``recvbuf`` resolves to ``sendbuf_address + root * count``.
 
         Args:
             sendbuf: Source buffer (only used on the root rank, size
-                >= nranks * count elements).
-            recvbuf: Destination buffer with count elements.
-            root: Root rank that scatters the data (0 to nranks - 1).
-            stream: CUDA stream for the operation. Defaults to None (the
+                ``>= nranks * count`` elements).
+            recvbuf: Destination buffer with ``count`` elements.
+            root: Root rank that scatters the data (0 to ``nranks - 1``).
+            stream: CUDA stream for the operation. Defaults to ``None`` (the
                 default stream).
 
         Raises:
             NcclInvalid: If send and receive buffers have mismatched dtypes,
-                sendbuf is too small on the root rank, are on the wrong
+                ``sendbuf`` is too small on the root rank, are on the wrong
                 device, are invalid specifications, or the communicator is
                 not initialized.
 
         See Also:
-            NCCL ncclScatter reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/colls.html#ncclscatter
+            :c:func:`ncclScatter`
         """
         self._check_valid("scatter")
 
@@ -2295,9 +2193,7 @@ class Communicator:
                 communicator is not initialized.
 
         See Also:
-            :py:meth:`register_window`, and the NCCL ncclCommRegister
-            reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html#ncclcommregister
+            :c:func:`ncclCommRegister`
         """
         self._check_valid("register_buffer")
 
@@ -2328,22 +2224,20 @@ class Communicator:
 
         Args:
             buffer: Local buffer to register as a window.
-            flags: Window registration flags. Defaults to None
+            flags: Window registration flags. Defaults to ``None``
                 (:py:attr:`~nccl.core.WindowFlag.DEFAULT`).
 
         Returns:
             :py:class:`~nccl.core.RegisteredWindowHandle` for the registered
-            window, or None if NCCL returns a NULL handle (e.g. windows are
-            unsupported on this platform).
+            window, or ``None`` if NCCL returns a NULL handle (e.g. windows
+            are unsupported on this platform).
 
         Raises:
             NcclInvalid: If the buffer is on the wrong device or the
                 communicator is not initialized.
 
         See Also:
-            :py:meth:`register_buffer`, :py:meth:`put_signal`, and the NCCL
-            ncclCommWindowRegister reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html#ncclcommwindowregister
+            :c:func:`ncclCommWindowRegister`
         """
         self._check_valid("register_window")
 
@@ -2380,11 +2274,11 @@ class Communicator:
                 must contain exactly 1 element and uses host memory. An
                 ``NcclSupportedBuffer`` is treated as a device buffer with
                 exactly 1 element.
-            datatype: NCCL data type of the scalar and reduction. If None,
-                it is inferred from ``scalar``: Python ``int`` becomes
-                ``int64`` and Python ``float`` becomes ``float64`` (NumPy's
-                natural dtypes); a NumPy array uses the array's dtype; a
-                device buffer uses the buffer's dtype.
+            datatype: NCCL data type of the scalar and reduction. If
+                ``None``, it is inferred from ``scalar``: Python ``int``
+                becomes ``int64`` and Python ``float`` becomes ``float64``
+                (NumPy's natural dtypes); a NumPy array uses the array's
+                dtype; a device buffer uses the buffer's dtype.
 
         Returns:
             :py:class:`~nccl.core.CustomRedOp` for the PreMulSum operator.
@@ -2396,7 +2290,7 @@ class Communicator:
                 does not match a device buffer's dtype.
 
         See Also:
-            :py:meth:`allreduce`, :py:meth:`reduce`
+            :c:func:`ncclRedOpCreatePreMulSum`
         """
         self._check_valid("create_pre_mul_sum")
 
@@ -2489,9 +2383,9 @@ class Communicator:
 
         Args:
             requirements: Configuration for device communicator resource
-                allocation. If None, a default
+                allocation. If ``None``, a default
                 :py:class:`~nccl.core.NCCLDevCommRequirements` is used.
-                Defaults to None.
+                Defaults to ``None``.
 
         Returns:
             :py:class:`~nccl.core.DevCommResource` for the device
@@ -2501,8 +2395,7 @@ class Communicator:
             NcclInvalid: If the communicator is not initialized.
 
         See Also:
-            NCCL device API reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/device.html
+            :c:func:`ncclDevCommCreate`
         """
         self._check_valid("create_dev_comm")
 
@@ -2566,9 +2459,7 @@ class Communicator:
             NcclInvalid: If the communicator is not initialized.
 
         See Also:
-            :py:meth:`get_last_error`, and the NCCL ncclCommGetAsyncError
-            reference:
-            https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html#ncclcommgetasyncerror
+            :c:func:`ncclCommGetAsyncError`
         """
         self._check_valid("get async error")
         return _nccl_bindings.comm_get_async_error(self._comm)

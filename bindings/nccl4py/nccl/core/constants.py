@@ -40,10 +40,8 @@ NCCL_MAGIC: int = 0xCAFEBEEF
 
 # CTA (Cooperative Thread Array) Policy flags
 class CTAPolicy(IntFlag):
-    """NCCL performance policy for CTA scheduling.
-
-    Policies can be combined with the bitwise OR operator so that NCCL can
-    use different scheduling in different cases.
+    """NCCL performance policy for CTA scheduling, used by
+    :py:attr:`NCCLConfig.cta_policy`.
     """
 
     DEFAULT = 0x00
@@ -61,12 +59,14 @@ class CTAPolicy(IntFlag):
 
 # Communicator shrink flags
 class CommShrinkFlag(IntEnum):
-    """Flags for ncclCommShrink behavior."""
+    """Behavior flag for :py:meth:`Communicator.shrink`."""
 
     DEFAULT = 0x00
-    """Shrink the parent communicator."""
+    """Shrink the parent communicator normally; outstanding NCCL operations
+    must already be quiesced."""
     ABORT = 0x01
-    """First terminate ongoing parent operations, then shrink the parent communicator."""
+    """First terminate ongoing parent operations, then shrink. No resources
+    are shared with the parent."""
 
     # Backward-compat aliases.
     Default = 0x00
@@ -75,10 +75,11 @@ class CommShrinkFlag(IntEnum):
 
 # Communicator suspend flags
 class CommSuspendFlag(IntFlag):
-    """Flags for ncclCommSuspend behavior."""
+    """Behavior flag for :py:meth:`Communicator.suspend`."""
 
     MEM = 0x01
-    """Suspend memory (release dynamic GPU memory allocations)."""
+    """Suspend memory by releasing dynamic GPU memory allocations held by
+    the communicator."""
 
     # Backward-compat alias.
     Mem = 0x01
@@ -86,7 +87,9 @@ class CommSuspendFlag(IntFlag):
 
 # Window registration flags
 class WindowFlag(IntFlag):
-    """Flags for window registration."""
+    """Window registration behavior flags for
+    :py:meth:`Communicator.register_window`.
+    """
 
     DEFAULT = 0x00
     """Default window registration."""

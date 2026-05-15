@@ -111,7 +111,7 @@ def empty(
 
     Args:
         shape: Shape of the array.
-        dtype: Data type specifier. Defaults to float.
+        dtype: Data type specifier. Defaults to ``float``.
         order: Memory layout. 'C' for row-major (C-style), 'F' for
             column-major (Fortran-style). Defaults to 'C'.
 

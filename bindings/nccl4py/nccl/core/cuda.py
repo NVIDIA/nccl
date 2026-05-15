@@ -45,8 +45,8 @@ def get_cuda_device(device: NcclDeviceSpec | None = None) -> Device:
     """Resolves a device specification to a cuda.core.Device.
 
     Args:
-        device: A Device instance, an integer device ID, or None to use the
-            current device.
+        device: A Device instance, an integer device ID, or ``None`` to use
+            the current device.
 
     Returns:
         Resolved cuda.core.Device.
@@ -63,8 +63,8 @@ def get_device_id(device: NcclDeviceSpec | None = None) -> int:
     """Resolves a device specification to its CUDA device ID.
 
     Args:
-        device: A Device instance, an integer device ID, or None to use the
-            current device.
+        device: A Device instance, an integer device ID, or ``None`` to use
+            the current device.
 
     Returns:
         CUDA device ID.
@@ -82,8 +82,8 @@ def get_cuda_stream(
 
     Args:
         stream: A Stream instance, an integer stream handle, an object
-            implementing __cuda_stream__, or None to use the device's default
-            stream.
+            implementing __cuda_stream__, or ``None`` to use the device's
+            default stream.
         device: Device used to resolve the default stream or wrap a foreign
             stream object. Only consulted when needed. Defaults to the
             current device.
@@ -108,8 +108,8 @@ def get_stream_ptr(stream: NcclStreamSpec | None = None) -> int:
 
     Args:
         stream: A Stream instance, an integer stream handle, an object
-            implementing __cuda_stream__, or None to use the default stream
-            (handle 0).
+            implementing __cuda_stream__, or ``None`` to use the default
+            stream (handle 0).
 
     Returns:
         Raw CUDA stream handle as int. Returns 0 for the default stream.

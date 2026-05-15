@@ -10,7 +10,7 @@ efficient batching and overlapping of communication operations. Group calls allo
 multiple collective operations to be launched together with better performance and
 the ability to simulate operations for performance analysis.
 
-See more details at: https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/groups.html
+See :ref:`group-calls` for more details.
 """
 
 from __future__ import annotations
@@ -61,10 +61,6 @@ def group_start() -> None:
     All NCCL operations called after this will be batched together and
     executed when :py:func:`group_end` is called. This can improve performance
     by allowing NCCL to optimize the operation sequence.
-
-    See Also:
-        :py:func:`group`, and the NCCL ncclGroupStart reference:
-        https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/group.html#ncclgroupstart
     """
     return _nccl_bindings.group_start()
 
@@ -75,10 +71,6 @@ def group_end() -> None:
     Executes all operations that were queued since the last
     :py:func:`group_start`. Must be called to actually perform the batched
     operations.
-
-    See Also:
-        :py:func:`group`, and the NCCL ncclGroupEnd reference:
-        https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/group.html#ncclgroupend
     """
     return _nccl_bindings.group_end()
 
@@ -91,12 +83,8 @@ def group_simulate_end(sim_info: GroupSimInfo | None) -> None:
     :py:attr:`GroupSimInfo.estimated_time`.
 
     Args:
-        sim_info: Simulation info object to store estimated time, or None to
-            discard the result.
-
-    See Also:
-        NCCL ncclGroupSimulateEnd reference:
-        https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/group.html#ncclgroupsimulateend
+        sim_info: Simulation info object to store estimated time, or
+            ``None`` to discard the result.
     """
     if sim_info is None:
         return _nccl_bindings.group_simulate_end(None)

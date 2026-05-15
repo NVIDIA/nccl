@@ -79,8 +79,19 @@ class UniqueId:
     A UniqueId is used to coordinate communicator initialization across
     multiple ranks. All ranks must use the same UniqueId to form a
     communicator. Typically one rank generates the UniqueId via
-    :py:func:`get_unique_id` and broadcasts it (e.g. via MPI) to all other
-    ranks, where it is reconstructed with :py:meth:`from_bytes`.
+    :py:func:`get_unique_id` and broadcasts it to all other ranks. Three
+    serialization paths are supported:
+
+    * **Bytes**: ``bytes(uid)`` (or :py:attr:`as_bytes`) on the producer,
+      :py:meth:`from_bytes` on receivers. The bytes of unique ID can be
+      transmitted through any byte-oriented channel — a TCP socket, a
+      shared filesystem, etc.
+    * **NumPy**: :py:attr:`as_ndarray` returns an in-place view of the
+      underlying buffer, suitable for NumPy-aware buffer transports such
+      as ``mpi4py.MPI.Comm.Bcast`` (uppercase ``B``).
+    * **Pickle**: instances are picklable directly, so higher level
+      object broadcast helpers like ``mpi4py.MPI.Comm.bcast`` (lowercase
+      ``b``) work out of the box.
     """
 
     def __init__(self) -> None:
@@ -120,7 +131,7 @@ class UniqueId:
 
     @property
     def ptr(self) -> int:
-        """Pointer to the internal NCCL unique ID structure."""
+        """Raw pointer to the underlying NCCL unique ID structure."""
         return self._internal.ptr
 
     @property

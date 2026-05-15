@@ -10,16 +10,15 @@
 
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
-# documentation root, use os.path.abspath to make it absolute, like shown here.
-#
-# import os
-# import sys
-# sys.path.insert(0, os.path.abspath('..'))
+# documentation root, resolve it to an absolute path as shown here.
 import sphinx_rtd_theme
 import sphinx
 import re
 import subprocess
-import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path('../../bindings/nccl4py').resolve()))
 
 # -- Project information -----------------------------------------------------
 
@@ -45,12 +44,23 @@ release = str(version_long)
 # ones.
 extensions = [
     'sphinx.ext.autodoc',
+    'sphinx.ext.intersphinx',
     'sphinx.ext.mathjax',
     'sphinx.ext.napoleon',
     'sphinx.ext.ifconfig',
     'sphinx.ext.extlinks',
     'sphinx_rtd_theme',
 ]
+
+# Intersphinx mapping. cuda.core symbols (Buffer, Device, Stream,
+# cuda.core.typing.IsStreamType) appear in nccl4py type annotations but
+# cuda.core is mocked in autodoc_mock_imports, so they have no entry in
+# our local Python domain. The intersphinx inventory provides those
+# entries so python_use_unqualified_type_names can resolve them and
+# render short names (`Buffer` instead of `cuda.core.Buffer`).
+intersphinx_mapping = {
+    'cuda-core': ('https://nvidia.github.io/cuda-python/cuda-core/latest/', None),
+}
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -76,12 +86,70 @@ language = 'en-US'
 # This pattern also affects html_static_path and html_extra_path .
 exclude_patterns = [u'_build', 'Thumbs.db', '.DS_Store', '**.ipynb_checkpoints']
 
-# Suppress duplicate C declaration warnings (rank/nRanks appear in multiple structs)
+# Suppress duplicate C declaration warnings (rank/nRanks appear in multiple
+# structs in the C API). autodoc warnings (mocked-object, import-failure)
+# are intentionally NOT suppressed: they signal that a Python symbol cannot
+# be introspected, which usually means a missing dependency or a broken
+# install -- both worth surfacing during the build.
 suppress_warnings = ['c.duplicated']
 
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = 'sphinx'
 highlight_language = 'c++'
+
+# -- Autodoc / Napoleon configuration ----------------------------------------
+# Used by the nccl4py (Python) API reference. The C-side rst pages remain
+# hand-written with .. c:function:: directives.
+
+autodoc_mock_imports = [
+    'cupy',
+    'torch',
+    'cuda',
+    'numpy',
+    'packaging',
+    'nccl.bindings',
+]
+
+# Default options applied to every autodoc directive unless overridden.
+# Members are opt-in: rst pages add `:members:` explicitly on classes whose
+# methods/properties should be documented inline. The Communicator class
+# documents each method as its own section instead, so it deliberately omits
+# `:members:`.
+autodoc_default_options = {
+    'undoc-members': False,
+    'show-inheritance': True,
+    'member-order': 'bysource',
+}
+
+# Render type hints from the signature, not as a separate field.
+autodoc_typehints = 'signature'
+
+# Drop fully-qualified module prefixes from type-hint rendering. Without
+# this, return types like `list[Communicator]` are rendered as
+# `list[nccl.core.communicator.Communicator]` and `tuple[..., NcclDataType,
+# ...]` becomes `tuple[..., nccl.core.typing.NcclDataType, ...]`. With it,
+# Sphinx resolves the short name against the documented Python domain.
+# Note: types from mocked modules (cuda.core, cuda.core.typing) still
+# render fully-qualified because they have no Python-domain entry to
+# resolve against.
+python_use_unqualified_type_names = True
+
+# Napoleon: Google-style docstrings (NumPy-style is disabled).
+napoleon_google_docstring = True
+napoleon_numpy_docstring = False
+napoleon_include_init_with_doc = False
+napoleon_include_private_with_doc = False
+napoleon_include_special_with_doc = False
+napoleon_use_admonition_for_notes = False
+napoleon_use_admonition_for_examples = False
+napoleon_use_admonition_for_references = False
+napoleon_use_ivar = False
+napoleon_use_param = True
+napoleon_use_rtype = False
+# Disabled so dataclass-style classes (e.g. WaitSignalDesc) don't render a
+# redundant `Type: int` block under each Attributes entry. The constructor
+# signature already shows the same type info.
+napoleon_attr_annotations = False
 
 
 # -- Options for HTML output -------------------------------------------------

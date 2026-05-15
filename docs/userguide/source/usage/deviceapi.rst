@@ -342,7 +342,7 @@ collective using GIN.
       gin.put(ncclTeamWorld(devComm), r,
           recvwin, recvoffset + devComm.rank * size,
           sendwin, sendoffset + r * size,
-          size, ncclGin_SignalInc{signalIndex});
+          size, ncclGin_WeakSignalInc{signalIndex});
     }
 
     // Wait only on the CTA whose blockIdx.x (signalIndex) accumulates all puts to this rank.
@@ -373,17 +373,18 @@ before :c:func:`bar.sync` at kernel entry. The :cpp:class:`ncclGinBarrierSession
 uses ``ncclTeamTagWorld()`` and ``blockIdx.x``. The barrier ensures all ranks are ready before the AlltoAll exchange (:c:func:`bar.sync`
 at kernel entry).
 
-Unlike AllReduce-style kernels, for AlltoAll the per-thread index only needs to be unique :emphasis:`within this rank`. That index
+Unlike AllReduce-style kernels, for AlltoAll the per-thread index only needs to be unique *within this rank*. That index
 then selects the destination peer. The main data transfer is performed using the one-sided :c:func:`put`, launched in parallel on all
 participating threads with one :c:func:`put` per destination peer. The loop is needed whenever the communicator size
 exceeds the number of threads that take part in the loop (here, ``threadIdx.x + blockIdx.x * blockDim.x`` stepping by
 ``blockDim.x * gridDim.x``). :c:func:`put` takes the usual arguments: destination rank, destination and source windows and
-offsets, transfer size, and optional actions. This example passes ``ncclGin_SignalInc{signalIndex}`` as :emphasis:`remoteAction` so the
-destination rank increments its local signal once the payload is settled.
+offsets, transfer size, and optional actions. This example passes ``ncclGin_WeakSignalInc{signalIndex}`` as *remoteAction* so the
+destination rank receives one completion increment once the payload is settled. The receiver waits for the count of completed
+incoming puts for that signal slot.
 
 Each CTA uses ``signalIndex = blockIdx.x`` on its outgoing :cpp:func:`ncclGin::put` operations. On the destination rank, each
 peer's :cpp:func:`ncclGin::put` contributes one increment to the signal slot indexed by that sender CTA's ``blockIdx.x``. All CTAs
-participate in issuing :cpp:func:`ncclGin::put`, but only the :emphasis:`receiving CTA`, a single thread block on this rank, must
+participate in issuing :cpp:func:`ncclGin::put`, but only the *receiving CTA*, a single thread block on this rank, must
 observe completion for that rank's signal slot. The kernel sets ``receivingCta = (devComm.rank % nthreads) / blockDim.x`` so
 that exactly that thread block runs :c:func:`waitSignal` for ``signalIndex == receivingCta``. Every other CTA skips
 :c:func:`waitSignal` and only issues :cpp:func:`ncclGin::put` and later :c:func:`flush`.

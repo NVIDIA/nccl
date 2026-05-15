@@ -99,13 +99,13 @@ __global__ void HybridAlltoAllKernel(ncclWindow_t sendwin, size_t sendoffset,
     gin.put(world, r,
         recvwin, recvoffset + world.rank * size,
         sendwin, sendoffset + r * size,
-        size, ncclGin_SignalInc{signalIndex});
+        size, ncclGin_WeakSignalInc{signalIndex});
   }
   for (int r = startLsa + lsaSize + tid; r < world.nRanks; r += nthreads) {
     gin.put(world, r,
         recvwin, recvoffset + world.rank * size,
         sendwin, sendoffset + r * size,
-        size, ncclGin_SignalInc{signalIndex});
+        size, ncclGin_WeakSignalInc{signalIndex});
   }
 
   // Local ranks: LSA ranks (single loop for clarity).

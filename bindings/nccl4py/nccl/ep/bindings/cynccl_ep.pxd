@@ -26,24 +26,6 @@ ctypedef enum ncclResult_t "ncclResult_t":
     ncclNumResults "ncclNumResults" = 9
     _NCCLRESULT_T_INTERNAL_LOADING_ERROR "_NCCLRESULT_T_INTERNAL_LOADING_ERROR" = -42
 
-ctypedef enum ncclCommMemStat_t "ncclCommMemStat_t":
-    ncclStatGpuMemSuspend "ncclStatGpuMemSuspend" = 0
-    ncclStatGpuMemSuspended "ncclStatGpuMemSuspended" = 1
-    ncclStatGpuMemPersist "ncclStatGpuMemPersist" = 2
-    ncclStatGpuMemTotal "ncclStatGpuMemTotal" = 3
-
-ctypedef enum ncclRedOp_dummy_t "ncclRedOp_dummy_t":
-    ncclNumOps_dummy "ncclNumOps_dummy" = 5
-
-ctypedef enum ncclRedOp_t "ncclRedOp_t":
-    ncclSum "ncclSum" = 0
-    ncclProd "ncclProd" = 1
-    ncclMax "ncclMax" = 2
-    ncclMin "ncclMin" = 3
-    ncclAvg "ncclAvg" = 4
-    ncclNumOps "ncclNumOps" = 5
-    ncclMaxRedOp "ncclMaxRedOp" = (0x7fffffff >> (32 - (8 * sizeof(ncclRedOp_dummy_t))))
-
 ctypedef enum ncclDataType_t "ncclDataType_t":
     ncclInt8 "ncclInt8" = 0
     ncclChar "ncclChar" = 0
@@ -63,10 +45,6 @@ ctypedef enum ncclDataType_t "ncclDataType_t":
     ncclFloat8e4m3 "ncclFloat8e4m3" = 10
     ncclFloat8e5m2 "ncclFloat8e5m2" = 11
     ncclNumTypes "ncclNumTypes" = 12
-
-ctypedef enum ncclScalarResidence_t "ncclScalarResidence_t":
-    ncclScalarDevice "ncclScalarDevice" = 0
-    ncclScalarHostImmediate "ncclScalarHostImmediate" = 1
 
 ctypedef enum ncclEpAlgorithm_t "ncclEpAlgorithm_t":
     NCCL_EP_ALGO_LOW_LATENCY "NCCL_EP_ALGO_LOW_LATENCY" = 0
@@ -92,45 +70,9 @@ cdef extern from *:
 
 ctypedef void* ncclComm_t 'ncclComm_t'
 ctypedef void* ncclWindow_t 'ncclWindow_t'
-ctypedef void* ncclParamHandle_t 'ncclParamHandle_t'
 ctypedef void* ncclNDTensor_t 'ncclNDTensor_t'
 ctypedef void* ncclEpGroup_t 'ncclEpGroup_t'
 ctypedef void* ncclEpHandle_t 'ncclEpHandle_t'
-ctypedef struct ncclConfig_t 'ncclConfig_t':
-    size_t size
-    unsigned int magic
-    unsigned int version
-    int blocking
-    int cgaClusterSize
-    int minCTAs
-    int maxCTAs
-    char* netName
-    int splitShare
-    int trafficClass
-    char* commName
-    int collnetEnable
-    int CTAPolicy
-    int shrinkShare
-    int nvlsCTAs
-    int nChannelsPerNetPeer
-    int nvlinkCentricSched
-    int graphUsageMode
-    int numRmaCtx
-    int maxP2pPeers
-    int graphStreamOrdering
-
-ctypedef struct ncclSimInfo_t 'ncclSimInfo_t':
-    size_t size
-    unsigned int magic
-    unsigned int version
-    float estimatedTime
-
-ctypedef struct ncclWaitSignalDesc_t 'ncclWaitSignalDesc_t':
-    int opCnt
-    int peer
-    int sigIdx
-    int ctx
-
 ctypedef cudaError_t (*ncclEpAllocFn_t 'ncclEpAllocFn_t')(
     void** ptr,
     size_t size,

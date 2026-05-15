@@ -285,7 +285,7 @@ class EpHandle:
         # outlives the C call (binding __dealloc__ frees the struct).
         layout_b = _materialize(layout_info)
         config_b = _materialize(config)
-        ptr = _ep_bindings.nccl_ep.ep_create_handle(
+        ptr = _ep_bindings.nccl_ep.create_handle(
             ep_group.ptr,
             topk_idx.ptr,
             _ptr_of(layout_b),
@@ -327,7 +327,7 @@ class EpHandle:
         """
         self._check_valid("update")
         layout_b = _materialize(layout_info)
-        _ep_bindings.nccl_ep.ep_update_handle(
+        _ep_bindings.nccl_ep.update_handle(
             self._ptr,
             topk_idx.ptr,
             _ptr_of(layout_b),
@@ -370,7 +370,7 @@ class EpHandle:
         outputs_b = _materialize(outputs)
         layout_b = _materialize(layout_info)
         config_b = _materialize(config)
-        _ep_bindings.nccl_ep.ep_dispatch(
+        _ep_bindings.nccl_ep.dispatch(
             self._ptr,
             _ptr_of(inputs_b),
             _ptr_of(outputs_b),
@@ -410,7 +410,7 @@ class EpHandle:
         inputs_b = _materialize(inputs)
         outputs_b = _materialize(outputs)
         config_b = _materialize(config)
-        _ep_bindings.nccl_ep.ep_combine(
+        _ep_bindings.nccl_ep.combine(
             self._ptr,
             _ptr_of(inputs_b),
             _ptr_of(outputs_b),
@@ -437,12 +437,12 @@ class EpHandle:
             :meth:`dispatch`, :meth:`combine`.
         """
         self._check_valid("complete")
-        _ep_bindings.nccl_ep.ep_complete(self._ptr, config, get_stream_ptr(stream))
+        _ep_bindings.nccl_ep.complete(self._ptr, config, get_stream_ptr(stream))
 
     def destroy(self) -> None:
         """Release the handle. Subsequent operations on this object are invalid."""
         if self._ptr:
-            _ep_bindings.nccl_ep.ep_handle_destroy(self._ptr)
+            _ep_bindings.nccl_ep.handle_destroy(self._ptr)
             self._ptr = 0
 
     def __repr__(self) -> str:

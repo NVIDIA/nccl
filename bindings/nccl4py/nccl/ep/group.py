@@ -120,7 +120,7 @@ class EpGroup:
             :meth:`destroy`.
         """
         binding = config.to_binding()  # type: ignore[attr-defined]
-        ptr = _ep_bindings.nccl_ep.ep_create_group(comm.ptr, binding.ptr)
+        ptr = _ep_bindings.nccl_ep.create_group(comm.ptr, binding.ptr)
         return cls(ptr)
 
     def _check_valid(self, operation: str) -> None:
@@ -138,7 +138,7 @@ class EpGroup:
     def destroy(self) -> None:
         """Release the group. Subsequent operations on this object are invalid."""
         if self._ptr:
-            _ep_bindings.nccl_ep.ep_group_destroy(self._ptr)
+            _ep_bindings.nccl_ep.group_destroy(self._ptr)
             self._ptr = 0
 
     def __repr__(self) -> str:

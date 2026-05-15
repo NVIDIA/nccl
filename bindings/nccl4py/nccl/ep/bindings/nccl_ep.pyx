@@ -1907,33 +1907,6 @@ class Result(_IntEnum):
     Timeout = ncclTimeout
     NumResults = ncclNumResults
 
-class CommMemStat(_IntEnum):
-    """
-    See `ncclCommMemStat_t`.
-    """
-    StatGpuMemSuspend = ncclStatGpuMemSuspend
-    StatGpuMemSuspended = ncclStatGpuMemSuspended
-    StatGpuMemPersist = ncclStatGpuMemPersist
-    StatGpuMemTotal = ncclStatGpuMemTotal
-
-class RedOp_dummy(_IntEnum):
-    """
-    See `ncclRedOp_dummy_t`.
-    """
-    NumOps_dummy = ncclNumOps_dummy
-
-class RedOp(_IntEnum):
-    """
-    See `ncclRedOp_t`.
-    """
-    Sum = ncclSum
-    Prod = ncclProd
-    Max = ncclMax
-    Min = ncclMin
-    Avg = ncclAvg
-    NumOps = ncclNumOps
-    MaxRedOp = ncclMaxRedOp
-
 class DataType(_IntEnum):
     """
     See `ncclDataType_t`.
@@ -1956,13 +1929,6 @@ class DataType(_IntEnum):
     Float8e4m3 = ncclFloat8e4m3
     Float8e5m2 = ncclFloat8e5m2
     NumTypes = ncclNumTypes
-
-class ScalarResidence(_IntEnum):
-    """
-    See `ncclScalarResidence_t`.
-    """
-    ScalarDevice = ncclScalarDevice
-    ScalarHostImmediate = ncclScalarHostImmediate
 
 class EpAlgorithm(_IntEnum):
     """
@@ -2006,7 +1972,7 @@ cpdef inline check_status(int status):
 # Wrapper functions
 ###############################################################################
 
-cpdef intptr_t ep_create_group(intptr_t comm, intptr_t config) except? 0:
+cpdef intptr_t create_group(intptr_t comm, intptr_t config) except? 0:
     cdef EpGroup ep_group
     with nogil:
         __status__ = ncclEpCreateGroup(&ep_group, <Comm>comm, <const ncclEpGroupConfig_t*>config)
@@ -2014,13 +1980,13 @@ cpdef intptr_t ep_create_group(intptr_t comm, intptr_t config) except? 0:
     return <intptr_t>ep_group
 
 
-cpdef ep_group_destroy(intptr_t ep_group):
+cpdef group_destroy(intptr_t ep_group):
     with nogil:
         __status__ = ncclEpGroupDestroy(<EpGroup>ep_group)
     check_status(__status__)
 
 
-cpdef intptr_t ep_tensor_create(unsigned int ndim, int datatype, intptr_t data, intptr_t sizes) except? 0:
+cpdef intptr_t tensor_create(unsigned int ndim, int datatype, intptr_t data, intptr_t sizes) except? 0:
     cdef NDTensor tensor
     with nogil:
         __status__ = ncclEpTensorCreate(&tensor, ndim, <_DataType>datatype, <void*>data, <const size_t*>sizes)
@@ -2028,7 +1994,7 @@ cpdef intptr_t ep_tensor_create(unsigned int ndim, int datatype, intptr_t data, 
     return <intptr_t>tensor
 
 
-cpdef intptr_t ep_tensor_create_from_window(unsigned int ndim, int datatype, intptr_t win, uint64_t win_offset, intptr_t sizes) except? 0:
+cpdef intptr_t tensor_create_from_window(unsigned int ndim, int datatype, intptr_t win, uint64_t win_offset, intptr_t sizes) except? 0:
     cdef NDTensor tensor
     with nogil:
         __status__ = ncclEpTensorCreateFromWindow(&tensor, ndim, <_DataType>datatype, <Window>win, win_offset, <const size_t*>sizes)
@@ -2036,13 +2002,13 @@ cpdef intptr_t ep_tensor_create_from_window(unsigned int ndim, int datatype, int
     return <intptr_t>tensor
 
 
-cpdef ep_tensor_destroy(intptr_t tensor):
+cpdef tensor_destroy(intptr_t tensor):
     with nogil:
         __status__ = ncclEpTensorDestroy(<NDTensor>tensor)
     check_status(__status__)
 
 
-cpdef intptr_t ep_create_handle(intptr_t ep_group, intptr_t topk_idx, intptr_t layout_info, intptr_t config, intptr_t stream) except? 0:
+cpdef intptr_t create_handle(intptr_t ep_group, intptr_t topk_idx, intptr_t layout_info, intptr_t config, intptr_t stream) except? 0:
     cdef EpHandle handle
     with nogil:
         __status__ = ncclEpCreateHandle(&handle, <EpGroup>ep_group, <NDTensor>topk_idx, <const ncclEpLayoutInfo_t*>layout_info, <const ncclEpHandleConfig_t*>config, <Stream>stream)
@@ -2050,13 +2016,13 @@ cpdef intptr_t ep_create_handle(intptr_t ep_group, intptr_t topk_idx, intptr_t l
     return <intptr_t>handle
 
 
-cpdef ep_handle_destroy(intptr_t handle):
+cpdef handle_destroy(intptr_t handle):
     with nogil:
         __status__ = ncclEpHandleDestroy(<EpHandle>handle)
     check_status(__status__)
 
 
-cpdef size_t ep_handle_mem_size(intptr_t ep_group, intptr_t config, int num_topk) except? -1:
+cpdef size_t handle_mem_size(intptr_t ep_group, intptr_t config, int num_topk) except? -1:
     cdef size_t size_out
     with nogil:
         __status__ = ncclEpHandleMemSize(<EpGroup>ep_group, <const ncclEpHandleConfig_t*>config, &size_out, num_topk)
@@ -2064,7 +2030,7 @@ cpdef size_t ep_handle_mem_size(intptr_t ep_group, intptr_t config, int num_topk
     return size_out
 
 
-cpdef intptr_t ep_init_handle(intptr_t ep_group, intptr_t config, int num_topk, intptr_t handle_mem) except? 0:
+cpdef intptr_t init_handle(intptr_t ep_group, intptr_t config, int num_topk, intptr_t handle_mem) except? 0:
     cdef EpHandle handle
     with nogil:
         __status__ = ncclEpInitHandle(&handle, <EpGroup>ep_group, <const ncclEpHandleConfig_t*>config, num_topk, <NDTensor>handle_mem)
@@ -2072,31 +2038,31 @@ cpdef intptr_t ep_init_handle(intptr_t ep_group, intptr_t config, int num_topk, 
     return <intptr_t>handle
 
 
-cpdef ep_update_handle(intptr_t handle, intptr_t topk_idx, intptr_t layout_info, intptr_t stream):
+cpdef update_handle(intptr_t handle, intptr_t topk_idx, intptr_t layout_info, intptr_t stream):
     with nogil:
         __status__ = ncclEpUpdateHandle(<EpHandle>handle, <NDTensor>topk_idx, <const ncclEpLayoutInfo_t*>layout_info, <Stream>stream)
     check_status(__status__)
 
 
-cpdef ep_dispatch(intptr_t handle, intptr_t inputs, intptr_t outputs, intptr_t layout_info, intptr_t config, intptr_t stream):
+cpdef dispatch(intptr_t handle, intptr_t inputs, intptr_t outputs, intptr_t layout_info, intptr_t config, intptr_t stream):
     with nogil:
         __status__ = ncclEpDispatch(<EpHandle>handle, <const ncclEpDispatchInputs_t*>inputs, <const ncclEpDispatchOutputs_t*>outputs, <const ncclEpLayoutInfo_t*>layout_info, <const ncclEpDispatchConfig_t*>config, <Stream>stream)
     check_status(__status__)
 
 
-cpdef ep_combine(intptr_t handle, intptr_t inputs, intptr_t outputs, intptr_t config, intptr_t stream):
+cpdef combine(intptr_t handle, intptr_t inputs, intptr_t outputs, intptr_t config, intptr_t stream):
     with nogil:
         __status__ = ncclEpCombine(<EpHandle>handle, <const ncclEpCombineInputs_t*>inputs, <const ncclEpCombineOutputs_t*>outputs, <const ncclEpCombineConfig_t*>config, <Stream>stream)
     check_status(__status__)
 
 
-cpdef ep_complete(intptr_t handle, intptr_t config, intptr_t stream):
+cpdef complete(intptr_t handle, intptr_t config, intptr_t stream):
     with nogil:
         __status__ = ncclEpComplete(<EpHandle>handle, <const ncclEpCompleteConfig_t*>config, <Stream>stream)
     check_status(__status__)
 
 
-cpdef intptr_t ep_tensor_get_data(intptr_t tensor) except? 0:
+cpdef intptr_t tensor_get_data(intptr_t tensor) except? 0:
     cdef void* data
     with nogil:
         __status__ = ncclEpTensorGetData(<NDTensor>tensor, &data)
@@ -2104,7 +2070,7 @@ cpdef intptr_t ep_tensor_get_data(intptr_t tensor) except? 0:
     return <intptr_t>data
 
 
-cpdef ep_tensor_get_sizes(intptr_t tensor, intptr_t sizes, intptr_t ndim):
+cpdef tensor_get_sizes(intptr_t tensor, intptr_t sizes, intptr_t ndim):
     with nogil:
         __status__ = ncclEpTensorGetSizes(<NDTensor>tensor, <const size_t**>sizes, <unsigned int*>ndim)
     check_status(__status__)

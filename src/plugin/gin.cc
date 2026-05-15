@@ -25,7 +25,7 @@ NCCL_PARAM(GinPluginRefCount, "GIN_PLUGIN_REF_COUNT", 0);
 int ncclGinVersion[NCCL_GIN_VERSION_COUNT] = {14, 13};
 getNcclGin_t* getNcclGin[NCCL_GIN_VERSION_COUNT] = {getNcclGin_v14, getNcclGin_v13};
 
-#define NCCL_GIN_NUM_INTERNAL_PLUGINS 2
+#define NCCL_GIN_NUM_INTERNAL_PLUGINS 3
 
 typedef enum ncclGinPluginState {
   ncclGinPluginStateDisabled        = -2,       // Plugin library failed to initialize

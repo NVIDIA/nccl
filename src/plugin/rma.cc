@@ -25,7 +25,7 @@ NCCL_PARAM(RmaPluginRefCount, "RMA_PLUGIN_REF_COUNT", 0);
 int ncclRmaVersion[NCCL_RMA_VERSION_COUNT] = {14, 13};
 getNcclRma_t* getNcclRma[NCCL_RMA_VERSION_COUNT] = {getNcclRma_v14, getNcclRma_v13};
 
-#define NCCL_RMA_NUM_INTERNAL_PLUGINS 1
+#define NCCL_RMA_NUM_INTERNAL_PLUGINS 3
 
 typedef enum ncclRmaPluginState {
   ncclRmaPluginStateDisabled        = -2,       // Plugin library failed to initialize

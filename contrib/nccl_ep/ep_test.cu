@@ -198,7 +198,7 @@ int main(int argc, char* argv[])
 {
   int myRank, nRanks, localRank = 0;
   ncclEpAlgorithm_t algorithm = NCCL_EP_ALGO_LOW_LATENCY; // Default to 'll' (low latency)
-  ncclEpLayout_t ht_layout = NCCL_EP_LAYOUT_AUTO; // HT layout (resolved to FLAT by default)
+  ncclEpLayout_t ht_layout = NCCL_EP_LAYOUT_FLAT; // HT layout (overridable via -L)
   bool disable_max_tokens = false; // Flag to disable max_dispatch_tokens_per_rank
   bool dispatch_send_only = false; // send_only flag for dispatch
   bool combine_send_only = false;  // send_only flag for combine
@@ -468,9 +468,9 @@ int main(int argc, char* argv[])
   // allocation only) and UpdateHandle is recorded inside the captured region.
   ncclEpHandle_t ep_handle;
   ncclEpHandleConfig_t handle_config = NCCL_EP_HANDLE_CONFIG_INIT;
-  if (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) {
-    handle_config.layout = (ht_layout == NCCL_EP_LAYOUT_AUTO) ? NCCL_EP_LAYOUT_FLAT : ht_layout;
-  }
+  handle_config.layout = (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT)
+                         ? ht_layout
+                         : NCCL_EP_LAYOUT_EXPERT_MAJOR;
   if (use_cuda_graph) {
     printf("Rank %d: Testing ncclEpInitHandle\n", myRank);
     NCCLCHECK(ncclEpInitHandle(&ep_handle, ep_group, &handle_config, static_cast<int>(top_k), /*handle_mem=*/nullptr));

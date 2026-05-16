@@ -27,10 +27,15 @@ typedef enum {
  */
 typedef enum {
     /**
-     * Auto-select layout based on algorithm (zero-init default).
-     * ncclEpCreateGroup resolves this to EXPERT_MAJOR for LL and FLAT for HT.
+     * Sentinel for "layout not set" (zero-init default).
+     *
+     * Callers must override this with one of the layout values below before
+     * passing the config to ncclEpInitHandle / ncclEpHandleMemSize; the
+     * library does not auto-resolve based on algorithm. Leaving the field at
+     * NCCL_EP_LAYOUT_UNSET is a programmer error and trips an assertion at
+     * handle-init time.
      */
-    NCCL_EP_LAYOUT_AUTO = NCCL_EP_AUTO,
+    NCCL_EP_LAYOUT_UNSET = NCCL_EP_AUTO,
 
     /**
      * Expert-major layout.
@@ -90,8 +95,7 @@ typedef enum {
      * the weighted reduction before passing pre-reduced outputs to
      * ncclEpCombine.
      *
-     * This is the only layout supported by HT mode and the default when
-     * NCCL_EP_LAYOUT_AUTO is used with NCCL_EP_ALGO_HIGH_THROUGHPUT.
+     * This is the only layout supported by HT mode.
      */
     NCCL_EP_LAYOUT_FLAT,
 } ncclEpLayout_t;

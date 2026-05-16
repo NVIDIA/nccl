@@ -1590,7 +1590,7 @@ struct ncclEpHandle {
 
     ncclEpHandle()
         : group(nullptr),
-          layout(NCCL_EP_LAYOUT_AUTO),
+          layout(NCCL_EP_LAYOUT_UNSET),
           use_fp8(false),
           topk_idx(nullptr),
           num_tokens(0),
@@ -1618,12 +1618,6 @@ static bool is_internode_available(ncclEpGroup_t ep_group) {
     return ep_group->rdma_team_size > 1;
 }
 
-
-static ncclEpLayout_t resolve_layout(ncclEpAlgorithm_t algo, ncclEpLayout_t in) {
-    if (in != NCCL_EP_LAYOUT_AUTO) return in;
-    return (algo == NCCL_EP_ALGO_HIGH_THROUGHPUT) ? NCCL_EP_LAYOUT_FLAT
-                                                  : NCCL_EP_LAYOUT_EXPERT_MAJOR;
-}
 
 static void tensor_free(ncclNDTensor_t t) {
     if (t == nullptr) return;
@@ -1699,12 +1693,11 @@ ncclResult_t ncclEpHandleMemSize(
     int                         num_topk
 ) {
     assert(ep_group != nullptr && size_out != nullptr);
-    EP_OPTIONAL_STRUCT(config);
+    EP_REQUIRE_STRUCT(config);
+    EP_HOST_ASSERT(config->layout != NCCL_EP_LAYOUT_UNSET &&
+                   "ncclEpHandleMemSize: handle_config.layout must be set explicitly");
     if (ep_group->config.algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) {
-        const ncclEpLayout_t layout = resolve_layout(
-            ep_group->config.algorithm,
-            config ? config->layout : NCCL_EP_LAYOUT_AUTO);
-        *size_out = ht_handle_mem_size(ep_group, layout, num_topk);
+        *size_out = ht_handle_mem_size(ep_group, config->layout, num_topk);
     } else if (ep_group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
         assert(num_topk > 0 && "LL mode requires num_topk > 0 for ncclEpHandleMemSize");
         *size_out = ll_handle_mem_size(ep_group, num_topk);
@@ -1828,11 +1821,11 @@ ncclResult_t ncclEpInitHandle(
 ) {
     assert(ep_group != nullptr && out_handle != nullptr);
     assert(ep_group->comm != nullptr);
-    EP_OPTIONAL_STRUCT(config);
-    const bool use_fp8 = config && config->use_fp8;
-    const ncclEpLayout_t layout = resolve_layout(
-        ep_group->config.algorithm,
-        config ? config->layout : NCCL_EP_LAYOUT_AUTO);
+    EP_REQUIRE_STRUCT(config);
+    const bool use_fp8 = config->use_fp8;
+    const ncclEpLayout_t layout = config->layout;
+    EP_HOST_ASSERT(layout != NCCL_EP_LAYOUT_UNSET &&
+                   "ncclEpInitHandle: handle_config.layout must be set explicitly");
     EP_HOST_ASSERT(!(ep_group->config.algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT &&
                      layout != NCCL_EP_LAYOUT_FLAT &&
                      layout != NCCL_EP_LAYOUT_EXPERT_MAJOR) &&
@@ -1847,7 +1840,7 @@ ncclResult_t ncclEpInitHandle(
     // Validate EM padding alignment up-front (pow2 required) before any allocation.
     const bool is_ht_em = ep_group->config.algorithm != NCCL_EP_ALGO_LOW_LATENCY &&
                           layout == NCCL_EP_LAYOUT_EXPERT_MAJOR;
-    const size_t em_align = (is_ht_em && config && config->dispatch_output_per_expert_alignment > 1)
+    const size_t em_align = (is_ht_em && config->dispatch_output_per_expert_alignment > 1)
                             ? config->dispatch_output_per_expert_alignment : 1;
     assert((em_align & (em_align - 1)) == 0 && "dispatch_output_per_expert_alignment must be a power of two");
 

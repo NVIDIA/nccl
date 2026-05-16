@@ -50,8 +50,10 @@ class EpHandleConfig:
     equivalent to passing ``NULL`` for the C ``config`` argument.
 
     Attributes:
-        layout: Receive-buffer layout. ``AUTO`` (default) picks
-            ``EXPERT_MAJOR`` for LL and ``FLAT`` for HT.
+        layout: Receive-buffer layout. Required — leaving it at the
+            zero-init sentinel ``UNSET`` is a programmer error.
+            HT mode supports ``FLAT`` and ``EXPERT_MAJOR``; LL mode
+            supports ``EXPERT_MAJOR`` and ``RANK_MAJOR``.
         use_fp8: Enable FP8 dispatch (default ``False``).
         dispatch_output_per_expert_alignment: HT expert-major only.
             Per-expert zone alignment in tokens (must be a power of 2;
@@ -62,7 +64,7 @@ class EpHandleConfig:
         ``contrib/nccl_ep/include/nccl_ep.h``
     """
 
-    layout: NcclEpLayout = NcclEpLayout.AUTO
+    layout: NcclEpLayout = NcclEpLayout.UNSET
     use_fp8: bool = False
     dispatch_output_per_expert_alignment: int = 0
 

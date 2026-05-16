@@ -275,9 +275,9 @@ typedef struct {
     unsigned int size;  // = sizeof(this struct); first field, never moves
     // Receive buffer layout for the dispatch and combine path.
     // Determines the shape of recv_x on dispatch output and the expected input shape for combine.
-    // Default (NCCL_EP_LAYOUT_AUTO / zero-init): auto-selected based on the group's algorithm
-    //   (EXPERT_MAJOR for LL, FLAT for HT).
+    // Required: leaving it at the zero-init value (NCCL_EP_LAYOUT_UNSET) is a programmer error.
     // HT mode supports NCCL_EP_LAYOUT_FLAT and NCCL_EP_LAYOUT_EXPERT_MAJOR.
+    // LL mode supports NCCL_EP_LAYOUT_EXPERT_MAJOR and NCCL_EP_LAYOUT_RANK_MAJOR.
     ncclEpLayout_t layout;
     unsigned int use_fp8;  // enable FP8 for dispatch (0 = false, non-zero = true; default: 0)
     // HT expert-major only: per-expert zone alignment in tokens (pow2; 0/1 = no padding).

@@ -144,9 +144,9 @@ names the struct and the **Field** column names the field within it.
 
 #### HT mode (same data type)
 
-HT mode uses the **flat layout** (`NCCL_EP_LAYOUT_FLAT`): dispatch output is a contiguous 2D sequence of
-N(r) received tokens with no rank-major or expert-major structure.
-This is the only layout supported by HT mode and is selected automatically when `NCCL_EP_LAYOUT_AUTO` is used.
+HT mode supports `NCCL_EP_LAYOUT_FLAT` and `NCCL_EP_LAYOUT_EXPERT_MAJOR`.
+With `NCCL_EP_LAYOUT_FLAT`, dispatch output is a contiguous 2D sequence of N(r) received tokens with no rank-major or expert-major structure.
+With `NCCL_EP_LAYOUT_EXPERT_MAJOR`, dispatch output is grouped by local expert, optionally padded via `dispatch_output_per_expert_alignment`.
 
 **Handle creation**
 
@@ -398,7 +398,7 @@ Maintains state for a sequence of related MoE operations, i.e. dispatch and comb
 ## Algorithm-related configurations
 
 **High Throughput (HT)**:
-- Uses flat layout (`NCCL_EP_LAYOUT_FLAT`), the only layout supported by HT mode.
+- Uses flat layout (`NCCL_EP_LAYOUT_FLAT`).
 - Dispatch output tokens are a contiguous flat sequence: `[N(r) x hidden]` where `N(r)` is the total number of tokens targeting this rank.
   - Static allocation: `N(r) = num_ranks * max_dispatch_tokens_per_rank`.
   - Dynamic allocation (`max_dispatch_tokens_per_rank = NCCL_EP_AUTO`): `N(r)` is the actual received count, written by the metadata kernel into the optional `ncclEpLayoutInfo_t.recv_total_counter` scalar tensor.

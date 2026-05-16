@@ -36,9 +36,10 @@ class NcclEpLayout(IntEnum):
     tensors and the expected shape of combine input tensors.
     """
 
-    AUTO = 0
-    """Auto-select based on algorithm: ``EXPERT_MAJOR`` for LL,
-    ``FLAT`` for HT (the only HT-supported layout)."""
+    UNSET = 0
+    """Zero-init sentinel — must be overridden before passing the config to
+    :py:meth:`EpHandle.create`. The library does not auto-resolve; leaving
+    this value triggers an assertion at handle-init time."""
 
     EXPERT_MAJOR = 1
     """LL only. ``recv_x`` shape:

@@ -36,7 +36,7 @@ typedef enum {
      * Expert-major layout.
      *
      * Dispatch output:
-     *   recv_x shape:            [num_local_experts, max_send_tokens_per_rank * num_ranks, hidden]
+     *   recv_x shape:            [num_local_experts, max_dispatch_tokens_per_rank * num_ranks, hidden]
      *   recv_topk_weights shape: HT: [N] (1D, one weight per slot — each slot is per
      *                                    (source_token, local_expert), at most one match);
      *                            LL: nullptr (not populated under EM).
@@ -54,9 +54,9 @@ typedef enum {
      * Rank-major layout.
      *
      * Dispatch output:
-     *   recv_x shape:            [max_send_tokens_per_rank * num_ranks, hidden]
-     *   recv_topk_weights shape: [max_send_tokens_per_rank * num_ranks, num_topk]
-     *   recv_topk_idx shape:     [max_send_tokens_per_rank * num_ranks, num_topk]
+     *   recv_x shape:            [max_dispatch_tokens_per_rank * num_ranks, hidden]
+     *   recv_topk_weights shape: [max_dispatch_tokens_per_rank * num_ranks, num_topk]
+     *   recv_topk_idx shape:     [max_dispatch_tokens_per_rank * num_ranks, num_topk]
      *
      * Tokens arrive in rank-major order with no expert dimension.
      * The caller is responsible for running expert computation on each token
@@ -81,8 +81,8 @@ typedef enum {
      *   recv_topk_idx shape:     [N(r) x num_topk]
      *
      * where N(r) is the total number of tokens targeting this rank across all
-     * source ranks (num_ranks * max_send_tokens_per_rank in the static case, or the
-     * actual received count when max_send_tokens_per_rank is NCCL_EP_AUTO).
+     * source ranks (num_ranks * max_dispatch_tokens_per_rank in the static case, or the
+     * actual received count when max_dispatch_tokens_per_rank is NCCL_EP_AUTO).
      *
      * Tokens arrive as a single contiguous sequence with no rank-major or
      * expert-major structure.  The caller uses recv_topk_idx to route each

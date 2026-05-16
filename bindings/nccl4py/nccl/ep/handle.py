@@ -280,7 +280,7 @@ class EpHandle:
                 :class:`cuda.core.Stream`, an integer stream handle, or
                 any object exposing ``__cuda_stream__``.
             layout_info: Optional :class:`EpLayoutInfo`. HT: set
-                ``expert_counters`` when ``max_send_tokens_per_rank`` is
+                ``expert_counters`` when ``max_dispatch_tokens_per_rank`` is
                 ``NCCL_EP_AUTO``. LL mode: must be ``None``.
             config: Optional :class:`EpHandleConfig`. ``None`` forwards
                 NULL (use library defaults).
@@ -323,7 +323,7 @@ class EpHandle:
             topk_idx: New top-k indices tensor for the upcoming dispatch.
             stream: CUDA stream for the launch.
             layout_info: Optional :class:`EpLayoutInfo`. HT: set
-                ``expert_counters`` when ``max_send_tokens_per_rank`` is
+                ``expert_counters`` when ``max_dispatch_tokens_per_rank`` is
                 ``NCCL_EP_AUTO``. LL mode: must be ``None``.
 
         See Also:

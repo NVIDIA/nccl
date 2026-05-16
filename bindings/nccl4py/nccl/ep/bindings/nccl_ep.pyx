@@ -1585,20 +1585,20 @@ cdef class EpCombineConfig:
 cdef _get_ep_group_config_dtype_offsets():
     cdef ncclEpGroupConfig_t pod = ncclEpGroupConfig_t()
     return _numpy.dtype({
-        'names': ['size_', 'version', 'algorithm', 'layout', 'num_experts', 'max_send_tokens_per_rank', 'max_token_bytes', 'rdma_buffer_size', 'num_qp_per_rank', 'num_channels', 'max_recv_token_slots_per_rank', 'max_num_sms', 'alloc', 'enable_mask', 'timeout_ns'],
-        'formats': [_numpy.uint32, _numpy.uint32, _numpy.int32, _numpy.int32, _numpy.uint32, _numpy.uint32, _numpy.uint32, _numpy.dtype(('V', sizeof(unsigned long int))), _numpy.uint32, _numpy.uint32, _numpy.uint32, _numpy.uint32, ep_alloc_config_dtype, _numpy.uint32, _numpy.uint64],
+        'names': ['size_', 'version', 'algorithm', 'layout', 'num_experts', 'max_dispatch_tokens_per_rank', 'max_recv_tokens_per_rank', 'max_token_bytes', 'rdma_buffer_size', 'num_qp_per_rank', 'num_channels', 'max_num_sms', 'alloc', 'enable_mask', 'timeout_ns'],
+        'formats': [_numpy.uint32, _numpy.uint32, _numpy.int32, _numpy.int32, _numpy.uint32, _numpy.uint32, _numpy.uint32, _numpy.uint32, _numpy.dtype(('V', sizeof(unsigned long int))), _numpy.uint32, _numpy.uint32, _numpy.uint32, ep_alloc_config_dtype, _numpy.uint32, _numpy.uint64],
         'offsets': [
             (<intptr_t>&(pod.size)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.version)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.algorithm)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.layout)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.num_experts)) - (<intptr_t>&pod),
-            (<intptr_t>&(pod.max_send_tokens_per_rank)) - (<intptr_t>&pod),
+            (<intptr_t>&(pod.max_dispatch_tokens_per_rank)) - (<intptr_t>&pod),
+            (<intptr_t>&(pod.max_recv_tokens_per_rank)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.max_token_bytes)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.rdma_buffer_size)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.num_qp_per_rank)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.num_channels)) - (<intptr_t>&pod),
-            (<intptr_t>&(pod.max_recv_token_slots_per_rank)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.max_num_sms)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.alloc)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.enable_mask)) - (<intptr_t>&pod),
@@ -1745,15 +1745,26 @@ cdef class EpGroupConfig:
         self._ptr[0].num_experts = val
 
     @property
-    def max_send_tokens_per_rank(self):
+    def max_dispatch_tokens_per_rank(self):
         """int: """
-        return self._ptr[0].max_send_tokens_per_rank
+        return self._ptr[0].max_dispatch_tokens_per_rank
 
-    @max_send_tokens_per_rank.setter
-    def max_send_tokens_per_rank(self, val):
+    @max_dispatch_tokens_per_rank.setter
+    def max_dispatch_tokens_per_rank(self, val):
         if self._readonly:
             raise ValueError("This EpGroupConfig instance is read-only")
-        self._ptr[0].max_send_tokens_per_rank = val
+        self._ptr[0].max_dispatch_tokens_per_rank = val
+
+    @property
+    def max_recv_tokens_per_rank(self):
+        """int: """
+        return self._ptr[0].max_recv_tokens_per_rank
+
+    @max_recv_tokens_per_rank.setter
+    def max_recv_tokens_per_rank(self, val):
+        if self._readonly:
+            raise ValueError("This EpGroupConfig instance is read-only")
+        self._ptr[0].max_recv_tokens_per_rank = val
 
     @property
     def max_token_bytes(self):
@@ -1798,17 +1809,6 @@ cdef class EpGroupConfig:
         if self._readonly:
             raise ValueError("This EpGroupConfig instance is read-only")
         self._ptr[0].num_channels = val
-
-    @property
-    def max_recv_token_slots_per_rank(self):
-        """int: """
-        return self._ptr[0].max_recv_token_slots_per_rank
-
-    @max_recv_token_slots_per_rank.setter
-    def max_recv_token_slots_per_rank(self, val):
-        if self._readonly:
-            raise ValueError("This EpGroupConfig instance is read-only")
-        self._ptr[0].max_recv_token_slots_per_rank = val
 
     @property
     def max_num_sms(self):

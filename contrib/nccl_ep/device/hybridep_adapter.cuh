@@ -161,7 +161,7 @@ void call_metadata_preprocessing(
     int      s2d_inner_dim          = 0,       // 0 = flat (n_ranks_per_node); >0 = expert-major (top_k)
     void*    recv_total_counter     = nullptr, // Optional scalar: total recv tokens (int32 or int64; nullable)
     bool     out_is_int64           = true,    // Shared dtype for the 3 int output tensors above
-    int      max_recv_token_slots_per_rank = 0, // HT recv-budget; __trap on overflow.
+    int      max_recv_tokens_per_rank = 0, // HT recv-budget; __trap on overflow.
     int      num_blocks             = 16,      // Number of SMs for the kernel grid
     cudaStream_t stream             = 0);
 
@@ -264,7 +264,7 @@ struct DispatchParams {
 // Call dispatch kernel with runtime template parameter resolution
 void call_dispatch(
     const DispatchParams& params,
-    int max_send_tokens_per_rank,    // Max tokens for buffer sizing
+    int max_dispatch_tokens_per_rank,    // Max tokens for buffer sizing
     int num_nodes,              // Number of nodes (RDMA domain size)
     bool use_fp8,               // false = BF16 (uint16_t), true = FP8 (uint8_t)
     bool forward_dispatch,      // True for forward, false for backward
@@ -333,7 +333,7 @@ struct CombineParams {
 // Note: HT combine doesn't support FP8, only BF16
 void call_combine(
     const CombineParams& params,
-    int max_send_tokens_per_rank,    // Max tokens for buffer sizing
+    int max_dispatch_tokens_per_rank,    // Max tokens for buffer sizing
     int num_nodes,              // Number of nodes (RDMA domain size)
     bool backward_combine,      // True for backward (training), false for forward
     int num_blocks,             // Number of SMs/blocks for the kernel grid

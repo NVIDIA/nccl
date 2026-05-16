@@ -10,7 +10,7 @@ Usage:
 
 Options (identical to ep_test.cu):
     -a {ll,ht}                          Algorithm mode (default: ll)
-    -m                                   Disable max_send_tokens_per_rank (HT only, not yet supported)
+    -m                                   Disable max_dispatch_tokens_per_rank (HT only, not yet supported)
     -s {none,dispatch,combine,both}      Send-only mode (default: none)
     -c                                   Enable cached mode (HT only)
     -r                                   Enable random mode
@@ -170,7 +170,7 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
 
     parser = argparse.ArgumentParser(description="EP Test (Python)")
     parser.add_argument("-a", choices=["ll", "ht"], default="ll", help="Algorithm mode")
-    parser.add_argument("-m", action="store_true", help="Disable max_send_tokens_per_rank (HT only)")
+    parser.add_argument("-m", action="store_true", help="Disable max_dispatch_tokens_per_rank (HT only)")
     parser.add_argument("-s", choices=["none", "dispatch", "combine", "both"], default="none",
                         help="Send-only mode")
     parser.add_argument("-c", action="store_true", help="Enable cached mode (HT only)")
@@ -198,7 +198,7 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
             if algorithm != nccl_ep.NcclEpAlgorithm.HIGH_THROUGHPUT:
                 print("Error: -m is only applicable to HT mode (-a ht)")
             else:
-                print("Error: -m (NCCL_EP_AUTO for max_send_tokens_per_rank) is not yet supported.\n"
+                print("Error: -m (NCCL_EP_AUTO for max_dispatch_tokens_per_rank) is not yet supported.\n"
                       "       This feature will be available in a future release for HT mode.")
         sys.exit(1)
 
@@ -233,20 +233,20 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
     comm = nccl_core.Communicator.init(nranks=n_ranks, rank=my_rank, unique_id=unique_id)
 
     # -- EP group -----------------------------------------------------------
-    # max_recv_token_slots_per_rank is required for HT (assertion fires on 0);
-    # LL auto-derives nRanks * max_send_tokens_per_rank when left at 0, but we
+    # max_recv_tokens_per_rank is required for HT (assertion fires on 0);
+    # LL auto-derives nRanks * max_dispatch_tokens_per_rank when left at 0, but we
     # set it explicitly to keep both paths consistent.
     config = nccl_ep.EpGroupConfig(
         algorithm=algorithm,
         num_experts=num_experts,
-        max_send_tokens_per_rank=num_tokens,
-        max_recv_token_slots_per_rank=num_tokens * n_ranks,
+        max_dispatch_tokens_per_rank=num_tokens,
+        max_recv_tokens_per_rank=num_tokens * n_ranks,
         max_token_bytes=hidden * 2,  # bfloat16
         alloc=nccl_ep.EpAllocConfig(alloc_fn=_ALLOC_FN_ADDR, free_fn=_FREE_FN_ADDR),
     )
 
     algorithm_name = "LOW_LATENCY" if algorithm == nccl_ep.NcclEpAlgorithm.LOW_LATENCY else "HIGH_THROUGHPUT"
-    extra = " (no max_send_tokens_per_rank)" if disable_max_tokens else ""
+    extra = " (no max_dispatch_tokens_per_rank)" if disable_max_tokens else ""
     print(f"Rank {my_rank}: Testing ncclEpCreateGroup with algorithm: {algorithm_name}{extra}")
 
     ep_group = nccl_ep.EpGroup.create(comm, config)
@@ -301,7 +301,7 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
         stream.sync()
         num_recv_tokens = int(total_host[0])
     else:
-        num_recv_tokens = config.max_send_tokens_per_rank * num_local_experts
+        num_recv_tokens = config.max_dispatch_tokens_per_rank * num_local_experts
     assert num_recv_tokens > 0
 
     dispatch_config = nccl_ep.EpDispatchConfig(send_only=dispatch_send_only, round_scales=0)
@@ -315,7 +315,7 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
     if is_ll:
         output_tokens = make_tensor(
             3, nccl_core.BFLOAT16,
-            num_local_experts, config.max_send_tokens_per_rank * n_ranks, hidden,
+            num_local_experts, config.max_dispatch_tokens_per_rank * n_ranks, hidden,
         )
     else:
         output_tokens = make_tensor(2, nccl_core.BFLOAT16, num_recv_tokens, hidden)
@@ -386,12 +386,12 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
     dispatch_check_passed = True
 
     if not random_mode and is_ll and recv_count_host is not None:
-        total_elems = num_local_experts * config.max_send_tokens_per_rank * n_ranks * hidden
+        total_elems = num_local_experts * config.max_dispatch_tokens_per_rank * n_ranks * hidden
         output_host = np.empty(total_elems, dtype=np.uint16)
         d2h(output_host, output_tokens.dev_ptr, stream)
         stream.sync()
 
-        max_t = config.max_send_tokens_per_rank * n_ranks
+        max_t = config.max_dispatch_tokens_per_rank * n_ranks
         for e in range(num_local_experts):
             if recv_count_host[e] != num_tokens:
                 print(f"Recv_count check failed! Rank {my_rank}, expert {e}: "
@@ -489,13 +489,13 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
     if is_ll:
         expert_outputs = make_tensor(
             3, nccl_core.BFLOAT16,
-            num_local_experts, config.max_send_tokens_per_rank * n_ranks, hidden,
+            num_local_experts, config.max_dispatch_tokens_per_rank * n_ranks, hidden,
         )
-        eo_host = np.zeros(config.max_send_tokens_per_rank * hidden, dtype=np.uint16)
-        for t in range(config.max_send_tokens_per_rank):
+        eo_host = np.zeros(config.max_dispatch_tokens_per_rank * hidden, dtype=np.uint16)
+        for t in range(config.max_dispatch_tokens_per_rank):
             for j in range(ELEMENTS_TESTED_PER_TOKEN):
                 eo_host[t * hidden + j] = float_to_bf16(float((j + 1) * 2))
-        stride_bytes = config.max_send_tokens_per_rank * hidden * n_ranks * 2
+        stride_bytes = config.max_dispatch_tokens_per_rank * hidden * n_ranks * 2
         for e in range(num_local_experts):
             h2d(expert_outputs.dev_ptr + e * stride_bytes, eo_host, stream)
     else:

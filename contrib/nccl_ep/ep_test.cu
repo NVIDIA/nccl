@@ -117,14 +117,14 @@ static void getHostName(char* hostname, int maxlen) {
 // Allocate and fill the combine-side tensors. expert_outputs is the per-rank
 // MoE expert output (combine input); combined_output is the per-token reduction
 // (combine output). Shapes diverge by algorithm: LL is 3D [num_local_experts,
-// max_send_tokens_per_rank * nRanks, hidden]; HT is 2D [num_recv_tokens, hidden].
+// max_dispatch_tokens_per_rank * nRanks, hidden]; HT is 2D [num_recv_tokens, hidden].
 // The first elements_tested_per_token slots of each token are seeded with
 // float_to_bf16((j+1)*2) so combine validation can recompute the weighted sum.
 static void epSetupCombineTensors(
     ncclEpAlgorithm_t algorithm,
     unsigned int num_local_experts,
     unsigned int num_recv_tokens,
-    unsigned int max_send_tokens_per_rank,
+    unsigned int max_dispatch_tokens_per_rank,
     int nRanks,
     unsigned int hidden,
     unsigned int num_tokens,
@@ -134,10 +134,10 @@ static void epSetupCombineTensors(
   if (algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
     NCCLCHECK(epMakeTensor(expert_outputs, 3, ncclBfloat16,
                            num_local_experts,
-                           static_cast<unsigned int>(max_send_tokens_per_rank * nRanks),
+                           static_cast<unsigned int>(max_dispatch_tokens_per_rank * nRanks),
                            hidden));
-    uint16_t *host = new uint16_t[max_send_tokens_per_rank * hidden]();
-    for (unsigned int t = 0; t < max_send_tokens_per_rank; ++t) {
+    uint16_t *host = new uint16_t[max_dispatch_tokens_per_rank * hidden]();
+    for (unsigned int t = 0; t < max_dispatch_tokens_per_rank; ++t) {
       for (int j = 0; j < elements_tested_per_token; ++j) {
         host[t * hidden + j] = float_to_bf16(static_cast<float>((j + 1) * 2));
       }
@@ -145,9 +145,9 @@ static void epSetupCombineTensors(
     void* data;
     NCCLCHECK(ncclEpTensorGetData(*expert_outputs, &data));
     for (unsigned int e = 0; e < num_local_experts; ++e) {
-      size_t offset_bytes = static_cast<size_t>(e) * max_send_tokens_per_rank * hidden * nRanks * 2;
+      size_t offset_bytes = static_cast<size_t>(e) * max_dispatch_tokens_per_rank * hidden * nRanks * 2;
       CUDACHECK(cudaMemcpy(static_cast<uint8_t*>(data) + offset_bytes,
-                           host, max_send_tokens_per_rank * hidden * 2,
+                           host, max_dispatch_tokens_per_rank * hidden * 2,
                            cudaMemcpyHostToDevice));
     }
     delete[] host;
@@ -178,7 +178,7 @@ void printUsage(const char* programName, int myRank) {
         printf("  -L <fl|em>                   Layout (HT only; default: fl)\n");
         printf("                               fl:  Flat layout (default)\n");
         printf("                               em:  Expert-major layout (recv_topk_weights is 1D)\n");
-        printf("  -m                           Disable max_send_tokens_per_rank (only supported with HT mode)\n");
+        printf("  -m                           Disable max_dispatch_tokens_per_rank (only supported with HT mode)\n");
         printf("  -s <none|dispatch|combine|both>  Set send_only mode (default: none)\n");
         printf("                               none:     send_only=false for both dispatch and combine\n");
         printf("                               dispatch: send_only=true for dispatch only\n");
@@ -199,7 +199,7 @@ int main(int argc, char* argv[])
   int myRank, nRanks, localRank = 0;
   ncclEpAlgorithm_t algorithm = NCCL_EP_ALGO_LOW_LATENCY; // Default to 'll' (low latency)
   ncclEpLayout_t ht_layout = NCCL_EP_LAYOUT_AUTO; // HT layout (resolved to FLAT by default)
-  bool disable_max_tokens = false; // Flag to disable max_send_tokens_per_rank
+  bool disable_max_tokens = false; // Flag to disable max_dispatch_tokens_per_rank
   bool dispatch_send_only = false; // send_only flag for dispatch
   bool combine_send_only = false;  // send_only flag for combine
   bool cached_mode = false;        // cached mode flag
@@ -330,14 +330,14 @@ int main(int argc, char* argv[])
     }
   }
 
-  // -m (NCCL_EP_AUTO for max_send_tokens_per_rank) is intended for HT mode only.
+  // -m (NCCL_EP_AUTO for max_dispatch_tokens_per_rank) is intended for HT mode only.
   // Not yet supported in the current release; code paths are kept for future use.
   if (disable_max_tokens) {
     if (myRank == 0) {
       if (algorithm != NCCL_EP_ALGO_HIGH_THROUGHPUT)
         printf("Error: -m is only applicable to HT mode (-a ht)\n");
       else
-        printf("Error: -m (NCCL_EP_AUTO for max_send_tokens_per_rank) is not yet supported.\n"
+        printf("Error: -m (NCCL_EP_AUTO for max_dispatch_tokens_per_rank) is not yet supported.\n"
                "       This feature will be available in a future release for HT mode.\n");
     }
     MPI_Finalize();
@@ -399,16 +399,16 @@ int main(int argc, char* argv[])
   ncclEpGroupConfig_t config = NCCL_EP_GROUP_CONFIG_INIT;
   config.algorithm = algorithm;                          // Algorithm type (set by command line)
   config.num_experts = num_experts;
-  // max_send_tokens_per_rank is the per-rank batch size (max tokens any single rank will send).
-  config.max_send_tokens_per_rank = disable_max_tokens ? NCCL_EP_AUTO : num_tokens;
+  // max_dispatch_tokens_per_rank is the per-rank batch size (max tokens any single rank will send).
+  config.max_dispatch_tokens_per_rank = disable_max_tokens ? NCCL_EP_AUTO : num_tokens;
   config.max_token_bytes = hidden * 2;                   // bfloat16
   config.rdma_buffer_size = NCCL_EP_AUTO;               // NCCL_EP_AUTO for auto configuration, internally uses the hint
   config.num_qp_per_rank = NCCL_EP_AUTO;                // Default is 24, see internode_ll.cu:181 for the minimum
   config.num_channels = NCCL_EP_AUTO;                   // Number of communication channels
   if (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) {
-    // HT requires max_recv_token_slots_per_rank > 0. Worst-case = nRanks * num_tokens (for top_k=1)
+    // HT requires max_recv_tokens_per_rank > 0. Worst-case = nRanks * num_tokens (for top_k=1)
     // or nRanks * num_tokens * top_k for EM under heavy fan-out; use the latter for safety.
-    config.max_recv_token_slots_per_rank = static_cast<unsigned int>(nRanks) * num_tokens * top_k;
+    config.max_recv_tokens_per_rank = static_cast<unsigned int>(nRanks) * num_tokens * top_k;
   }
   config.alloc.alloc_fn = torchMalloc;
   config.alloc.free_fn  = torchFree;
@@ -416,7 +416,7 @@ int main(int argc, char* argv[])
 
   const char* algorithm_name = (algorithm == NCCL_EP_ALGO_LOW_LATENCY) ? "LOW_LATENCY" : "HIGH_THROUGHPUT";
   printf("Rank %d: Testing ncclEpCreateGroup with algorithm: %s%s\n", myRank, algorithm_name,
-         disable_max_tokens ? " (no max_send_tokens_per_rank)" : "");
+         disable_max_tokens ? " (no max_dispatch_tokens_per_rank)" : "");
   NCCLCHECK(ncclEpCreateGroup(&ep_group, comm, &config));
 
   ncclNDTensor_t topk_idx;
@@ -491,11 +491,11 @@ int main(int argc, char* argv[])
     num_recv_tokens = static_cast<unsigned int>(total_host);
   }
   else if (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) {
-    // HT recv buffer is sized by max_recv_token_slots_per_rank.
-    num_recv_tokens = config.max_recv_token_slots_per_rank;
+    // HT recv buffer is sized by max_recv_tokens_per_rank.
+    num_recv_tokens = config.max_recv_tokens_per_rank;
   }
   else {
-    num_recv_tokens = config.max_send_tokens_per_rank * num_local_experts;
+    num_recv_tokens = config.max_dispatch_tokens_per_rank * num_local_experts;
   }
   assert(num_recv_tokens);
 
@@ -530,7 +530,7 @@ int main(int argc, char* argv[])
     // LL mode: recv_x is [num_local_experts, max_recv_tokens * nRanks, hidden]
     NCCLCHECK(epMakeTensor(&recv_x, 3, ncclBfloat16,
                            static_cast<unsigned int>(num_local_experts),
-                           config.max_send_tokens_per_rank * nRanks,
+                           config.max_dispatch_tokens_per_rank * nRanks,
                            static_cast<unsigned int>(hidden)));
     NCCLCHECK(epMakeTensor(&ll_recv_expert_counter, 1, ncclInt32,
                            static_cast<unsigned int>(num_local_experts)));
@@ -593,7 +593,7 @@ int main(int argc, char* argv[])
   // Combine inputs do not depend on dispatch outputs in either LL or HT mode.
   ncclNDTensor_t expert_outputs, combined_output;
   epSetupCombineTensors(algorithm, num_local_experts, num_recv_tokens,
-                        config.max_send_tokens_per_rank, nRanks, hidden, num_tokens,
+                        config.max_dispatch_tokens_per_rank, nRanks, hidden, num_tokens,
                         ELEMENTS_TESTED_PER_TOKEN, &expert_outputs, &combined_output);
 
   // Setup combine inputs and outputs (named-struct API)
@@ -673,12 +673,12 @@ int main(int argc, char* argv[])
   bool dispatch_check_passed = true;
 
   if (!random_mode && algorithm == NCCL_EP_ALGO_LOW_LATENCY && recv_count_host != nullptr) {
-    // LL mode: recv_x is [num_local_experts, config.max_send_tokens_per_rank * nRanks, hidden]
-    uint16_t *output_host = new uint16_t[num_local_experts * config.max_send_tokens_per_rank * nRanks * hidden]();
+    // LL mode: recv_x is [num_local_experts, config.max_dispatch_tokens_per_rank * nRanks, hidden]
+    uint16_t *output_host = new uint16_t[num_local_experts * config.max_dispatch_tokens_per_rank * nRanks * hidden]();
     void* output0_data;
     NCCLCHECK(ncclEpTensorGetData(recv_x, &output0_data));
     CUDACHECK(cudaMemcpy(output_host, output0_data,
-                         num_local_experts * config.max_send_tokens_per_rank * nRanks * hidden * 2,
+                         num_local_experts * config.max_dispatch_tokens_per_rank * nRanks * hidden * 2,
                          cudaMemcpyDeviceToHost));
 
     for (unsigned int e = 0; e < num_local_experts; e++) {
@@ -691,8 +691,8 @@ int main(int argc, char* argv[])
       }
 
       // Verify the first recv_count_host[e] tokens for this expert
-      for (int t = 0; t < recv_count_host[e] && t < static_cast<int>(config.max_send_tokens_per_rank * nRanks); t++) {
-        size_t token_offset = (e * config.max_send_tokens_per_rank * nRanks + t) * hidden;
+      for (int t = 0; t < recv_count_host[e] && t < static_cast<int>(config.max_dispatch_tokens_per_rank * nRanks); t++) {
+        size_t token_offset = (e * config.max_dispatch_tokens_per_rank * nRanks + t) * hidden;
         for (int j = 0; j < ELEMENTS_TESTED_PER_TOKEN; ++j) {
           uint16_t expected = static_cast<uint16_t>(0x1000 + recv_rank);
           uint16_t actual = output_host[token_offset + j];

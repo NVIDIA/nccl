@@ -76,11 +76,14 @@ typedef struct {
     ncclEpAlgorithm_t algorithm;         // low_latency or high_throughput
     unsigned int num_experts;            // Number of experts (required)
     // Maximum number of tokens any single rank will dispatch. Must be the same across all ranks.
-    // Each rank should be prepared to receive up to max_send_tokens_per_rank * num_ranks tokens.
     // REQUIRED for both LL and HT modes (must be > 0).
-    // In a future release, NCCL_EP_AUTO will be supported for HT mode,
-    // in which case the received token count will be determined by ncclEpCreateHandle.
-    unsigned int max_send_tokens_per_rank;
+    unsigned int max_dispatch_tokens_per_rank;
+    // Maximum number of tokens any single rank will receive.
+    //   HT: required, must be >= max_dispatch_tokens_per_rank. If you use the
+    //   Expert-Major layout, this size must account for the possibility of
+    //   duplicating a token to multiple local experts.
+    //   LL: AUTO/0 → nRanks * max_dispatch_tokens_per_rank.
+    unsigned int max_recv_tokens_per_rank;
     // Upper bound on per-token bytes, covering both dispatch and combine.
     // The group sizes all token buffers from this; per-call sizes flow through
     // the input tensors' sizes/datatype and may be smaller. Independent of
@@ -91,15 +94,6 @@ typedef struct {
     // Number of channels per rank (NCCL_EP_AUTO for auto).
     // In high throughput collectives, each channel occupies 2 SMs
     unsigned int num_channels;
-    // Total recv-slot budget per rank (across all source ranks).
-    //   FLAT/RM: one slot per recv token; same token from different source ranks
-    //            occupies distinct slots, but never duplicated within one source rank.
-    //   EM:      additionally covers intra-rank duplication (token → multiple local
-    //            experts) and per-expert alignment/padding to
-    //            dispatch_output_per_expert_alignment.
-    //   HT: required, must be >= max_send_tokens_per_rank.
-    //   LL: AUTO/0 → nRanks*max_send_tokens_per_rank.
-    unsigned int max_recv_token_slots_per_rank;
     // Maximum number of SMs to use for EP kernels (dispatch, combine, preprocessing).
     // Default: NCCL_EP_AUTO — algorithm-dependent default.
     unsigned int max_num_sms;
@@ -302,13 +296,13 @@ typedef struct {
 //   ep_group            - [IN]  A valid EP group
 //   topk_idx            - [IN]  Tensor holding top-K expert indices (routing information)
 //   layout_info         - [IN/OUT, optional] Layout info (see ncclEpLayoutInfo_t). NULL = none.
-//                         HT: set expert_counters when max_send_tokens_per_rank is NCCL_EP_AUTO.
+//                         HT: set expert_counters when max_dispatch_tokens_per_rank is NCCL_EP_AUTO.
 //                         LL mode: must be NULL.
 //   config              - [IN]  Handle configuration (see ncclEpHandleConfig_t). NULL = defaults.
 //   stream              - [IN]  CUDA stream
 //
 // Notes:
-//   - If max_send_tokens_per_rank in ncclEpGroupConfig_t was set to NCCL_EP_AUTO,
+//   - If max_dispatch_tokens_per_rank in ncclEpGroupConfig_t was set to NCCL_EP_AUTO,
 //     this call may block as the host allocates memory for the actual number
 //     of received tokens.
 //
@@ -383,7 +377,7 @@ ncclResult_t ncclEpInitHandle(
 //   topk_idx           - [IN]  [num_tokens, top_k] int64
 //   layout_info      - [IN/OUT, optional] Named local tensors (NULL = none provided).
 //                         HT: layout_info->expert_counters is required when
-//                         max_send_tokens_per_rank is NCCL_EP_AUTO.
+//                         max_dispatch_tokens_per_rank is NCCL_EP_AUTO.
 //                         LL mode: must be NULL.
 //   stream             - [IN]  CUDA stream
 //
@@ -419,8 +413,8 @@ typedef struct {
 //   outputs       - [IN,OUT] Named preallocated output tensors (see ncclEpDispatchOutputs_t).
 //                            outputs->tokens is required; other fields are optional.
 //                            For HT (NCCL_EP_LAYOUT_FLAT): outputs->tokens is [N(r) x hidden] (2D),
-//                                    where N(r) = num_ranks * max_send_tokens_per_rank for static allocation,
-//                                    or the actual received count when max_send_tokens_per_rank is NCCL_EP_AUTO.
+//                                    where N(r) = num_ranks * max_dispatch_tokens_per_rank for static allocation,
+//                                    or the actual received count when max_dispatch_tokens_per_rank is NCCL_EP_AUTO.
 //                            For LL expert-major: outputs->tokens is [local_experts x num_recv_tokens x hidden] (3D).
 //                            For LL rank-major: outputs->tokens is [num_recv_tokens x hidden] (2D);
 //                                    outputs->topk_weights and outputs->topk_idx must also be provided.

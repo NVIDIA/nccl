@@ -354,7 +354,7 @@ void call_metadata_preprocessing(
     int s2d_inner_dim,
     void*    recv_total_counter,
     bool     out_is_int64,
-    int      max_recv_token_slots_per_rank,
+    int      max_recv_tokens_per_rank,
     int      num_blocks,
     cudaStream_t stream
 ) {
@@ -411,7 +411,7 @@ void call_metadata_preprocessing(
     sp.s2d_inner_dim = s2d_inner_dim;
     sp.recv_total_counter = recv_total_counter;
     sp.out_is_int64 = out_is_int64;
-    sp.max_recv_token_slots_per_rank = max_recv_token_slots_per_rank;
+    sp.max_recv_tokens_per_rank = max_recv_tokens_per_rank;
 
     jit::launch_scan(
         NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, num_nodes, num_ranks_per_node,
@@ -512,7 +512,7 @@ build_dispatch_param(const DispatchParams& params) {
 template<bool FORWARD_DISPATCH>
 void dispatch_impl(
     const DispatchParams& params,
-    int max_send_tokens_per_rank,
+    int max_dispatch_tokens_per_rank,
     int num_nodes,
     bool use_fp8,
     int num_blocks,
@@ -586,7 +586,7 @@ void dispatch_impl(
 
 void call_dispatch(
     const DispatchParams& params,
-    int max_send_tokens_per_rank,
+    int max_dispatch_tokens_per_rank,
     int num_nodes,
     bool use_fp8,
     bool forward_dispatch,
@@ -596,12 +596,12 @@ void call_dispatch(
     // Dispatch based on forward/backward and sync mode
     if (forward_dispatch) {
         dispatch_impl<true>(
-            params, max_send_tokens_per_rank,
+            params, max_dispatch_tokens_per_rank,
             num_nodes, use_fp8, num_blocks, stream);
 
     } else {
         dispatch_impl<false>(
-            params, max_send_tokens_per_rank,
+            params, max_dispatch_tokens_per_rank,
             num_nodes, use_fp8, num_blocks, stream);
 
     }
@@ -681,7 +681,7 @@ build_combine_param(const CombineParams& params) {
 template<bool BACKWARD_COMBINE>
 void combine_impl(
     const CombineParams& params,
-    int max_send_tokens_per_rank,
+    int max_dispatch_tokens_per_rank,
     int num_nodes,
     int num_blocks,
     cudaStream_t stream
@@ -756,7 +756,7 @@ void combine_impl(
 
 void call_combine(
     const CombineParams& params,
-    int max_send_tokens_per_rank,
+    int max_dispatch_tokens_per_rank,
     int num_nodes,
     bool backward_combine,
     int num_blocks,
@@ -764,11 +764,11 @@ void call_combine(
 ) {
     if (backward_combine) {
         combine_impl<true>(
-            params, max_send_tokens_per_rank,
+            params, max_dispatch_tokens_per_rank,
             num_nodes, num_blocks, stream);
     } else {
         combine_impl<false>(
-            params, max_send_tokens_per_rank,
+            params, max_dispatch_tokens_per_rank,
             num_nodes, num_blocks, stream);
     }
 }

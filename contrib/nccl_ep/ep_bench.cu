@@ -376,16 +376,16 @@ static void setupLowLatencyTensorsExpertMajLayout(
     ncclEpCombineInputs_t&   combine_inputs,
     unsigned int hidden,
     unsigned int num_local_experts,
-    unsigned int max_send_tokens_per_rank,
+    unsigned int max_dispatch_tokens_per_rank,
     int nRanks
 ) {
     // expert_counters already populated by setupLowLatencyTensorsSharedInputs.
 
     NCCLCHECK(epMakeTensor(&dispatch_outputs.tokens, 3, ncclBfloat16, num_local_experts,
-                           (unsigned)nRanks * max_send_tokens_per_rank, hidden));
+                           (unsigned)nRanks * max_dispatch_tokens_per_rank, hidden));
 
     NCCLCHECK(epMakeTensor(&combine_inputs.tokens, 3, ncclBfloat16, num_local_experts,
-                           (unsigned)nRanks * max_send_tokens_per_rank, hidden));
+                           (unsigned)nRanks * max_dispatch_tokens_per_rank, hidden));
 }
 
 // LL benchmark — NCCL_EP_LAYOUT_RANK_MAJOR dispatch outputs + combine input shape.
@@ -401,7 +401,7 @@ static void setupLowLatencyTensorsRankMajLayout(
     unsigned int hidden,
     unsigned int top_k,
     unsigned int num_local_experts,
-    unsigned int max_send_tokens_per_rank,
+    unsigned int max_dispatch_tokens_per_rank,
     int nRanks
 ) {
     // Rank-major uses per-source-rank counter, not the per-expert counter that
@@ -415,16 +415,16 @@ static void setupLowLatencyTensorsRankMajLayout(
     NCCLCHECK(epMakeTensor(&dispatch_layout_info.src_rank_counters, 1, ncclInt32, (unsigned)nRanks));
 
     NCCLCHECK(epMakeTensor(&dispatch_outputs.tokens, 2, ncclBfloat16,
-                           (unsigned)nRanks * max_send_tokens_per_rank, hidden));
+                           (unsigned)nRanks * max_dispatch_tokens_per_rank, hidden));
 
     NCCLCHECK(epMakeTensor(&dispatch_outputs.topk_weights, 2, ncclFloat32,
-                           (unsigned)nRanks * max_send_tokens_per_rank, top_k));
+                           (unsigned)nRanks * max_dispatch_tokens_per_rank, top_k));
 
     NCCLCHECK(epMakeTensor(&dispatch_outputs.topk_idx, 2, ncclInt32,
-                           (unsigned)nRanks * max_send_tokens_per_rank, top_k));
+                           (unsigned)nRanks * max_dispatch_tokens_per_rank, top_k));
 
     NCCLCHECK(epMakeTensor(&combine_inputs.tokens, 2, ncclBfloat16,
-                           (unsigned)nRanks * max_send_tokens_per_rank, hidden));
+                           (unsigned)nRanks * max_dispatch_tokens_per_rank, hidden));
 }
 
 // LL benchmark — full tensor graph for ncclEpDispatch / ncclEpCombine.
@@ -442,7 +442,7 @@ void setupLowLatencyTensors(
     unsigned int hidden,
     unsigned int top_k,
     unsigned int num_local_experts,
-    unsigned int max_send_tokens_per_rank,
+    unsigned int max_dispatch_tokens_per_rank,
     int nRanks,
     ncclEpLayout_t layout
 ) {
@@ -455,14 +455,14 @@ void setupLowLatencyTensors(
         case NCCL_EP_LAYOUT_EXPERT_MAJOR:
             setupLowLatencyTensorsExpertMajLayout(dispatch_outputs, combine_inputs,
                                                   hidden, num_local_experts,
-                                                  max_send_tokens_per_rank, nRanks);
+                                                  max_dispatch_tokens_per_rank, nRanks);
             break;
         case NCCL_EP_LAYOUT_RANK_MAJOR:
             setupLowLatencyTensorsRankMajLayout(dispatch_inputs, dispatch_outputs,
                                                 dispatch_layout_info, combine_inputs,
                                                 topk_weights,
                                                 hidden, top_k, num_local_experts,
-                                                max_send_tokens_per_rank, nRanks);
+                                                max_dispatch_tokens_per_rank, nRanks);
             break;
         default:
             fprintf(stderr, "setupLowLatencyTensors: unsupported layout %d\n", (int)layout);
@@ -967,7 +967,7 @@ static ValidationResult validateDispatchOutputLLExpertMaj(
 }
 
 // ==================== LL rank-major dispatch validation ====================
-// Output: 2D [nRanks*max_send_tokens_per_rank, hidden], one slot per received token packed by source rank.
+// Output: 2D [nRanks*max_dispatch_tokens_per_rank, hidden], one slot per received token packed by source rank.
 // outputs[1] = recv_topk_weights [nRanks*max_tpr, top_k]: all top-k weights from the source token.
 // outputs[2] = recv_topk_idx     [nRanks*max_tpr, top_k]: local expert index on myRank, or -1.
 // Slots within each rank's block are contiguous from index 0; first invalid slot ends the block.
@@ -2467,7 +2467,7 @@ int main(int argc, char* argv[]) {
     bool dispatch_only = false;  // Skip combine run and validation (use with --validate)
     bool dynamic_tokens = false;  // Enable dynamic token allocation (HT only, for random topk)
     size_t expert_major_alignment = 0;  // 0 = no padding; >1 aligns each expert zone
-    unsigned int max_recv_token_slots_per_rank = UINT_MAX;  // UINT_MAX = unset -> bench auto; 0 = lib auto (worst case)
+    unsigned int max_recv_tokens_per_rank = UINT_MAX;  // UINT_MAX = unset -> bench auto; 0 = lib auto (worst case)
     bool zcopy = false;  // Use ncclMemAlloc + windows for HT tensors that need peer access
     unsigned int max_num_sms = NCCL_EP_AUTO;  // 0 = auto (resolved to HYBRIDEP_MAX_NUM_SMS_PER_RANK)
     bool mask_test = false;       // Simulate rank failures and test active-mask (LL only)
@@ -2579,7 +2579,7 @@ int main(int argc, char* argv[]) {
                 expert_major_alignment = static_cast<size_t>(atoi(optarg));
                 break;
             case 'R':
-                max_recv_token_slots_per_rank = static_cast<unsigned int>(atoi(optarg));
+                max_recv_tokens_per_rank = static_cast<unsigned int>(atoi(optarg));
                 break;
             case 'z':
                 zcopy = true;
@@ -2637,14 +2637,14 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // --dynamic-tokens (NCCL_EP_AUTO for max_send_tokens_per_rank) is intended for HT mode only.
+    // --dynamic-tokens (NCCL_EP_AUTO for max_dispatch_tokens_per_rank) is intended for HT mode only.
     // Not yet supported in the current release; code paths are kept for future use.
     if (dynamic_tokens) {
         if (myRank == 0) {
             if (algorithm != NCCL_EP_ALGO_HIGH_THROUGHPUT)
                 printf("Error: --dynamic-tokens is only applicable to HT mode (--algorithm ht)\n");
             else
-                printf("Error: --dynamic-tokens (NCCL_EP_AUTO for max_send_tokens_per_rank) is not yet supported.\n"
+                printf("Error: --dynamic-tokens (NCCL_EP_AUTO for max_dispatch_tokens_per_rank) is not yet supported.\n"
                        "       This feature will be available in a future release for HT mode.\n");
         }
         MPI_Finalize();
@@ -2764,8 +2764,8 @@ int main(int argc, char* argv[]) {
     ncclEpGroupConfig_t config = NCCL_EP_GROUP_CONFIG_INIT;
     config.algorithm = algorithm;
     config.num_experts = num_experts;
-    // max_send_tokens_per_rank is the per-rank batch size (max tokens any single rank will send).
-    config.max_send_tokens_per_rank = dynamic_tokens ? NCCL_EP_AUTO : num_tokens;
+    // max_dispatch_tokens_per_rank is the per-rank batch size (max tokens any single rank will send).
+    config.max_dispatch_tokens_per_rank = dynamic_tokens ? NCCL_EP_AUTO : num_tokens;
 
     config.max_token_bytes = hidden * 2;  // bfloat16 worst case
     // Use NCCL_EP_AUTO for buffer sizes (required for dynamic tokens with larger batches)
@@ -2775,15 +2775,15 @@ int main(int argc, char* argv[]) {
     config.num_qp_per_rank = (algorithm == NCCL_EP_ALGO_LOW_LATENCY) ? num_local_experts : NCCL_EP_AUTO;
     config.num_channels = NCCL_EP_AUTO;
     // Uniform-routing estimate: per-rank recv ≈ num_tokens*top_k (2x safety for EM dup variance).
-    if (max_recv_token_slots_per_rank == UINT_MAX) {
+    if (max_recv_tokens_per_rank == UINT_MAX) {
         const unsigned int est = std::max(1u, num_tokens * top_k *
                                               std::max(1u, num_local_experts) /
                                               std::max(1u, static_cast<unsigned int>(num_experts)) *
                                               static_cast<unsigned int>(nRanks));
         const unsigned int safety = (layout == NCCL_EP_LAYOUT_EXPERT_MAJOR) ? 2u : 1u;
-        max_recv_token_slots_per_rank = std::max(1u, est * safety);
+        max_recv_tokens_per_rank = std::max(1u, est * safety);
     }
-    config.max_recv_token_slots_per_rank = max_recv_token_slots_per_rank;
+    config.max_recv_tokens_per_rank = max_recv_tokens_per_rank;
     config.max_num_sms = max_num_sms;
     config.alloc.alloc_fn = cudaAllocCallback;
     config.alloc.free_fn  = cudaFreeCallback;
@@ -2916,8 +2916,8 @@ int main(int argc, char* argv[]) {
     double handle_create_ms = (handle_create_end - handle_create_start) * 1000.0;
     printf("Rank %d: handle creation took %.2f ms\n", myRank, handle_create_ms);
 
-    // max_send_tokens_per_rank is the per-rank dispatch count.
-    // num_recv_tokens is the max tokens this rank can receive (nRanks * max_send_tokens_per_rank).
+    // max_dispatch_tokens_per_rank is the per-rank dispatch count.
+    // num_recv_tokens is the max tokens this rank can receive (nRanks * max_dispatch_tokens_per_rank).
     unsigned int num_recv_tokens = 0;
     if (dynamic_tokens) {
         void* total_data = nullptr;
@@ -2931,8 +2931,8 @@ int main(int argc, char* argv[]) {
             fflush(stdout);
         }
     } else {
-        // num_recv_tokens = total per-rank slot budget = config.max_recv_token_slots_per_rank (resolved by lib).
-        num_recv_tokens = config.max_recv_token_slots_per_rank;
+        // num_recv_tokens = total per-rank slot budget = config.max_recv_tokens_per_rank (resolved by lib).
+        num_recv_tokens = config.max_recv_tokens_per_rank;
     }
     assert(num_recv_tokens);
 
@@ -2966,7 +2966,7 @@ int main(int argc, char* argv[]) {
                                has_dispatch_layout_info, combine_inputs, combine_outputs,
                                topk_weights,
                                num_tokens, hidden, top_k,
-                               num_local_experts, config.max_send_tokens_per_rank,
+                               num_local_experts, config.max_dispatch_tokens_per_rank,
                                nRanks, layout);
     } else {
         setupHighThroughputTensors(comm, alloc,

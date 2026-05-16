@@ -323,7 +323,7 @@ It can be used as a reference implementation when integrating NCCL EP into an ap
 | `-a <ll\|ht>` | Algorithm mode: `ll` (Low-Latency) or `ht` (High-Throughput) | `ll` |
 | `-t <num>` | Number of tokens | 50 |
 | `-d <num>` | Hidden dimension size | 7168 |
-| `-m` | Disable max_send_tokens_per_rank (HT mode only) | disabled |
+| `-m` | Disable max_dispatch_tokens_per_rank (HT mode only) | disabled |
 | `-s <mode>` | Send-only mode: `none`, `dispatch`, `combine`, `both` | `none` |
 | `-c` | Enable cached mode (HT only) | disabled |
 | `-r` | Enable random mode (random topk_idx) | disabled |
@@ -380,12 +380,12 @@ typedef struct {
     ncclEpAlgorithm_t algorithm;                // HT or LL mode
     ncclEpLayout_t layout;                      // recv-buffer layout (AUTO selects per algorithm)
     unsigned int num_experts;                   // Total experts across all ranks
-    unsigned int max_send_tokens_per_rank;      // Max tokens any single rank dispatches
+    unsigned int max_dispatch_tokens_per_rank;      // Max tokens any single rank dispatches
     unsigned int max_token_bytes;               // Maximum token size
     unsigned long int rdma_buffer_size;         // RDMA buffer size (0=auto)
     unsigned int num_qp_per_rank;               // Queue pairs per rank (0=auto)
     unsigned int num_channels;                  // Channels per rank (0=auto)
-    unsigned int max_recv_token_slots_per_rank; // Per-rank recv slot budget (0=auto, LL only)
+    unsigned int max_recv_tokens_per_rank; // Per-rank recv slot budget (0=auto, LL only)
 } ncclEpGroupConfig_t;
 
 // Use NCCL_EP_GROUP_CONFIG_INIT to pre-fill `size` and `version` correctly.
@@ -400,17 +400,17 @@ Maintains state for a sequence of related MoE operations, i.e. dispatch and comb
 **High Throughput (HT)**:
 - Uses flat layout (`NCCL_EP_LAYOUT_FLAT`), the only layout supported by HT mode.
 - Dispatch output tokens are a contiguous flat sequence: `[N(r) x hidden]` where `N(r)` is the total number of tokens targeting this rank.
-  - Static allocation: `N(r) = num_ranks * max_send_tokens_per_rank`.
-  - Dynamic allocation (`max_send_tokens_per_rank = NCCL_EP_AUTO`): `N(r)` is the actual received count, written by the metadata kernel into the optional `ncclEpLayoutInfo_t.recv_total_counter` scalar tensor.
+  - Static allocation: `N(r) = num_ranks * max_dispatch_tokens_per_rank`.
+  - Dynamic allocation (`max_dispatch_tokens_per_rank = NCCL_EP_AUTO`): `N(r)` is the actual received count, written by the metadata kernel into the optional `ncclEpLayoutInfo_t.recv_total_counter` scalar tensor.
 - `dispatch_outputs.topk_idx` and `dispatch_outputs.topk_weights` carry per-slot routing metadata alongside the received tokens.
 - The caller uses `topk_idx` to route each slot to the correct local expert(s), applies the weighted reduction using `topk_weights`, and passes the pre-reduced `[N(r) x hidden]` tensor as `combine_inputs.tokens` to `ncclEpCombine`.
-- Supports dynamic `max_send_tokens_per_rank` (set to `NCCL_EP_AUTO`)
+- Supports dynamic `max_dispatch_tokens_per_rank` (set to `NCCL_EP_AUTO`)
 
 **Low Latency (LL)**:
-- Output tokens must have 3D format: `[num_experts x max_send_tokens_per_rank x hidden]`
+- Output tokens must have 3D format: `[num_experts x max_dispatch_tokens_per_rank x hidden]`
 - Expert-major data layout for efficient expert processing
 - Supports `send_only` (in `ncclEpDispatchConfig_t` / `ncclEpCombineConfig_t`) to enable computation/communication overlapping
-- Does not support dynamic `max_send_tokens_per_rank` detection
+- Does not support dynamic `max_dispatch_tokens_per_rank` detection
 
 ## Custom Allocators
 
@@ -562,13 +562,13 @@ ncclResult_t ncclEpTensorGetSizes(ncclNDTensor_t tensor, const unsigned int** si
 //                         metadata tensors. Set `expert_counters` (1D ncclInt32/ncclInt64,
 //                         size = num_local_experts) to receive per-expert recv counts;
 //                         set `recv_total_counter` (scalar) when
-//                         max_send_tokens_per_rank is NCCL_EP_AUTO. NULL = no metadata.
+//                         max_dispatch_tokens_per_rank is NCCL_EP_AUTO. NULL = no metadata.
 //   config              - [IN]  Optional handle configuration (alignment, FP8 flag, ...);
 //                               NULL = defaults.
 //   stream              - [IN]  CUDA stream
 //
 // Notes:
-//   - If max_send_tokens_per_rank in ncclEpGroupConfig_t was set to NCCL_EP_AUTO,
+//   - If max_dispatch_tokens_per_rank in ncclEpGroupConfig_t was set to NCCL_EP_AUTO,
 //     this call may block as the host allocates memory for the actual number
 //     of received tokens.
 //
@@ -809,8 +809,8 @@ unsigned int hidden = 4096;
 ncclEpGroupConfig_t config = NCCL_EP_GROUP_CONFIG_INIT;
 config.algorithm = NCCL_EP_ALGO_HIGH_THROUGHPUT;
 config.num_experts = 256;
-config.max_send_tokens_per_rank = 4;
-config.max_recv_token_slots_per_rank = nRanks * config.max_send_tokens_per_rank;
+config.max_dispatch_tokens_per_rank = 4;
+config.max_recv_tokens_per_rank = nRanks * config.max_dispatch_tokens_per_rank;
 config.max_token_bytes = hidden * 2;  // bfloat16
 config.rdma_buffer_size = NCCL_EP_AUTO;     // Auto-size
 config.num_qp_per_rank = NCCL_EP_AUTO;      // Auto-size
@@ -838,7 +838,7 @@ ncclEpCreateHandle(&handle, ep_group, topk_idx, &handle_layout,
                    /*config=*/NULL, stream);
 
 // num_recv_tokens is the max number of tokens this rank can receive.
-unsigned int num_recv_tokens = config.max_recv_token_slots_per_rank;
+unsigned int num_recv_tokens = config.max_recv_tokens_per_rank;
 
 // === FORWARD PASS ===
 
@@ -920,7 +920,7 @@ unsigned int hidden = 4096;
 ncclEpGroupConfig_t config = NCCL_EP_GROUP_CONFIG_INIT;
 config.algorithm = NCCL_EP_ALGO_LOW_LATENCY;
 config.num_experts = 256;
-config.max_send_tokens_per_rank = 128;  // Required for LL mode
+config.max_dispatch_tokens_per_rank = 128;  // Required for LL mode
 config.max_token_bytes = hidden * 2;    // bfloat16
 config.rdma_buffer_size = NCCL_EP_AUTO; // Auto-size
 config.num_qp_per_rank = NCCL_EP_AUTO;  // Auto-size (or specify for LL)
@@ -949,10 +949,10 @@ ncclEpLayoutInfo_t      layout_info  = NCCL_EP_LAYOUT_INFO_INIT;
 // Input: tokens [B x H].
 make_tensor(&dispatch_in.tokens, 2, ncclBfloat16, num_tokens, hidden);
 
-// Output: expert-major 3D [num_local_experts, nRanks * max_send_tokens_per_rank, hidden].
+// Output: expert-major 3D [num_local_experts, nRanks * max_dispatch_tokens_per_rank, hidden].
 make_tensor(&dispatch_out.tokens, 3, ncclBfloat16,
             num_local_experts,
-            nRanks * config.max_send_tokens_per_rank,
+            nRanks * config.max_dispatch_tokens_per_rank,
             hidden);
 
 // expert_counters [num_local_experts] receives per-expert token counts.
@@ -980,7 +980,7 @@ ncclEpCombineInputs_t  combine_in  = NCCL_EP_COMBINE_INPUTS_INIT;
 ncclEpCombineOutputs_t combine_out = NCCL_EP_COMBINE_OUTPUTS_INIT;
 make_tensor(&combine_in.tokens, 3, ncclBfloat16,
             num_local_experts,
-            nRanks * config.max_send_tokens_per_rank,
+            nRanks * config.max_dispatch_tokens_per_rank,
             hidden);
 
 // Combine output: [B x H] back to original token order; per-token routing

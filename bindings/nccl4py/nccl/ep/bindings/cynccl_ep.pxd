@@ -140,12 +140,12 @@ ctypedef struct ncclEpGroupConfig_t 'ncclEpGroupConfig_t':
     ncclEpAlgorithm_t algorithm
     ncclEpLayout_t layout
     unsigned int num_experts
-    unsigned int max_send_tokens_per_rank
+    unsigned int max_dispatch_tokens_per_rank
+    unsigned int max_recv_tokens_per_rank
     unsigned int max_token_bytes
     unsigned long int rdma_buffer_size
     unsigned int num_qp_per_rank
     unsigned int num_channels
-    unsigned int max_recv_token_slots_per_rank
     unsigned int max_num_sms
     ncclEpAllocConfig_t alloc
     unsigned int enable_mask

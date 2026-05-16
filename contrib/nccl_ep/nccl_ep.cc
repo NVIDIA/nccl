@@ -213,7 +213,7 @@ struct ncclEpGroup {
     } gin_config;
 
     int num_local_experts;    // Number of local experts (num_experts / comm->nRanks)
-    int max_recv_tokens;      // Resolved per-rank IPC slot budget (= config.max_recv_token_slots_per_rank).
+    int max_recv_tokens;      // Resolved per-rank IPC slot budget (= config.max_recv_tokens_per_rank).
     unsigned int device_sm_count; // Number of SMs on the device
     unsigned int max_num_sms; // Resolved SM count for EP kernels (from config.max_num_sms)
 
@@ -706,15 +706,15 @@ static ncclResult_t init_hybridep_internode(ncclEpGroup_t ep_group,
 
     // These buffers are accessed with stride MAX_SUPPORTED_TOKENS_PER_RANK (compile-time constant
     // used as rdma_remote_node_id * MAX_SUPPORTED_TOKENS_PER_RANK + token_offset in the kernel).
-    // They must be sized for that stride regardless of the runtime max_send_tokens_per_rank.
+    // They must be sized for that stride regardless of the runtime max_dispatch_tokens_per_rank.
     size_t rdma_intra_node_red_token_sz = align_size(static_cast<size_t>(MAX_SUPPORTED_TOKENS_PER_RANK * (rdma_team_size - 1)) * ep_group->config.max_token_bytes, GIN_ALIGNMENT);
     size_t combine_rdma_inter_node_group_token_sz = rdma_intra_node_red_token_sz;
     size_t rdma_intra_node_red_prob_sz = align_size(static_cast<size_t>(MAX_SUPPORTED_TOKENS_PER_RANK * (rdma_team_size - 1)) * (ep_group->num_local_experts * lsa_team_size) * sizeof(float), GIN_ALIGNMENT);
     size_t combine_rdma_inter_node_group_prob_sz = rdma_intra_node_red_prob_sz;
     size_t flags_sz = align_size(static_cast<size_t>(rdma_team_size) * sizeof(uint64_t), GIN_ALIGNMENT);
-    size_t token_staging_sz = align_size(static_cast<size_t>(ep_group->config.max_send_tokens_per_rank) * ep_group->config.max_token_bytes, GIN_ALIGNMENT);
-    size_t dense_prob_sz = align_size(static_cast<size_t>(ep_group->config.max_send_tokens_per_rank) * ep_group->config.num_experts * sizeof(float), GIN_ALIGNMENT);
-    size_t scaling_factor_staging_sz = align_size(static_cast<size_t>(ep_group->config.max_send_tokens_per_rank) * sizeof(float), GIN_ALIGNMENT);
+    size_t token_staging_sz = align_size(static_cast<size_t>(ep_group->config.max_dispatch_tokens_per_rank) * ep_group->config.max_token_bytes, GIN_ALIGNMENT);
+    size_t dense_prob_sz = align_size(static_cast<size_t>(ep_group->config.max_dispatch_tokens_per_rank) * ep_group->config.num_experts * sizeof(float), GIN_ALIGNMENT);
+    size_t scaling_factor_staging_sz = align_size(static_cast<size_t>(ep_group->config.max_dispatch_tokens_per_rank) * sizeof(float), GIN_ALIGNMENT);
 
     size_t bytes_per_token_entry = ep_group->config.max_token_bytes;
     size_t bytes_per_prob_entry = (ep_group->num_local_experts * lsa_team_size) * sizeof(float);
@@ -722,8 +722,8 @@ static ncclResult_t init_hybridep_internode(ncclEpGroup_t ep_group,
     // (max_token_bytes / sizeof(bf16) / 128 = max_token_bytes / 256 floats).
     size_t bytes_per_sf_entry = (ep_group->config.max_token_bytes / 256) * sizeof(float);
     size_t bytes_per_entry = bytes_per_token_entry + bytes_per_prob_entry + bytes_per_sf_entry;
-    size_t rdma_send_staging_sz = align_size(static_cast<size_t>(rdma_team_size - 1) * ep_group->config.max_send_tokens_per_rank * bytes_per_entry, GIN_ALIGNMENT);
-    size_t rdma_recv_packed_sz = align_size(static_cast<size_t>(rdma_team_size - 1) * ep_group->config.max_send_tokens_per_rank * bytes_per_entry, GIN_ALIGNMENT);
+    size_t rdma_send_staging_sz = align_size(static_cast<size_t>(rdma_team_size - 1) * ep_group->config.max_dispatch_tokens_per_rank * bytes_per_entry, GIN_ALIGNMENT);
+    size_t rdma_recv_packed_sz = align_size(static_cast<size_t>(rdma_team_size - 1) * ep_group->config.max_dispatch_tokens_per_rank * bytes_per_entry, GIN_ALIGNMENT);
 
     size_t total_gin_buffer_size = 0;
     total_gin_buffer_size += rdma_intra_node_red_token_sz;
@@ -968,13 +968,13 @@ ncclResult_t ncclEpCreateGroup(
     bool hybridep_mode = (in_config->algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT);
     assert(in_config->num_experts > 0 && "ncclEpCreateGroup: num_experts must be greater than 0");
     assert(in_config->max_token_bytes > 0 && "ncclEpCreateGroup: max_token_bytes must be greater than 0");
-    assert(!(in_config->algorithm == NCCL_EP_ALGO_LOW_LATENCY && in_config->max_send_tokens_per_rank == 0) &&
-            "ncclEpCreateGroup: max_send_tokens_per_rank must be greater than 0 for low latency mode");
-    assert(!(in_config->algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT && in_config->max_send_tokens_per_rank == 0) &&
-             "ncclEpCreateGroup: max_send_tokens_per_rank must be set for HT backend");
+    assert(!(in_config->algorithm == NCCL_EP_ALGO_LOW_LATENCY && in_config->max_dispatch_tokens_per_rank == 0) &&
+            "ncclEpCreateGroup: max_dispatch_tokens_per_rank must be greater than 0 for low latency mode");
+    assert(!(in_config->algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT && in_config->max_dispatch_tokens_per_rank == 0) &&
+             "ncclEpCreateGroup: max_dispatch_tokens_per_rank must be set for HT backend");
     assert(!(in_config->algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT &&
-             in_config->max_send_tokens_per_rank > MAX_SUPPORTED_TOKENS_PER_RANK) &&
-             "ncclEpCreateGroup: HT max_send_tokens_per_rank exceeds build-time MAX_SUPPORTED_TOKENS_PER_RANK");
+             in_config->max_dispatch_tokens_per_rank > MAX_SUPPORTED_TOKENS_PER_RANK) &&
+             "ncclEpCreateGroup: HT max_dispatch_tokens_per_rank exceeds build-time MAX_SUPPORTED_TOKENS_PER_RANK");
     // Create teams: LSA and Rail
     ncclTeam lsa_team = ncclTeamLsa(comm);
     ncclTeam rail_team = ncclTeamRail(comm);
@@ -1049,29 +1049,29 @@ ncclResult_t ncclEpCreateGroup(
     ep_group->nNodes = static_cast<int>(unique_hosts.size());
 
     ep_group->num_local_experts = ep_group->config.num_experts / ep_group->nRanks;
-    // HT: caller must provide a slot budget >= max_send_tokens_per_rank (NCCL_EP_AUTO==0).
+    // HT: caller must provide a slot budget >= max_dispatch_tokens_per_rank (NCCL_EP_AUTO==0).
     EP_HOST_ASSERT(!(in_config->algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT &&
-                     ep_group->config.max_recv_token_slots_per_rank == 0) &&
-                   "ncclEpCreateGroup: HT mode requires max_recv_token_slots_per_rank > 0");
+                     ep_group->config.max_recv_tokens_per_rank == 0) &&
+                   "ncclEpCreateGroup: HT mode requires max_recv_tokens_per_rank > 0");
     EP_HOST_ASSERT(!(in_config->algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT &&
-                     ep_group->config.max_recv_token_slots_per_rank < ep_group->config.max_send_tokens_per_rank) &&
-                   "ncclEpCreateGroup: HT mode requires max_recv_token_slots_per_rank >= max_send_tokens_per_rank");
-    // LL auto-budget (nRanks * max_send_tokens_per_rank, layout-agnostic).
-    if (ep_group->config.max_recv_token_slots_per_rank == 0) {
-        ep_group->config.max_recv_token_slots_per_rank =
-            ep_group->nRanks * ep_group->config.max_send_tokens_per_rank;
+                     ep_group->config.max_recv_tokens_per_rank < ep_group->config.max_dispatch_tokens_per_rank) &&
+                   "ncclEpCreateGroup: HT mode requires max_recv_tokens_per_rank >= max_dispatch_tokens_per_rank");
+    // LL auto-budget (nRanks * max_dispatch_tokens_per_rank, layout-agnostic).
+    if (ep_group->config.max_recv_tokens_per_rank == 0) {
+        ep_group->config.max_recv_tokens_per_rank =
+            ep_group->nRanks * ep_group->config.max_dispatch_tokens_per_rank;
     }
-    ep_group->max_recv_tokens = static_cast<int>(ep_group->config.max_recv_token_slots_per_rank);
+    ep_group->max_recv_tokens = static_cast<int>(ep_group->config.max_recv_tokens_per_rank);
 
     // Collective: all ranks must agree on the resolved budget (IPC buffers are sized from it).
     {
         std::vector<unsigned int> all_budgets(ep_group->nRanks, 0);
-        all_budgets[ep_group->rank] = ep_group->config.max_recv_token_slots_per_rank;
+        all_budgets[ep_group->rank] = ep_group->config.max_recv_tokens_per_rank;
         ncclAllGatherHost(all_budgets.data(), sizeof(unsigned int),
                           ep_group->rank, ep_group->nRanks, comm, stream);
         for (int r = 1; r < ep_group->nRanks; ++r) {
             EP_HOST_ASSERT(all_budgets[r] == all_budgets[0] &&
-                           "ncclEpCreateGroup: max_recv_token_slots_per_rank must be identical across ranks");
+                           "ncclEpCreateGroup: max_recv_tokens_per_rank must be identical across ranks");
         }
     }
 
@@ -1082,7 +1082,7 @@ ncclResult_t ncclEpCreateGroup(
     }
 
     if (ep_group->config.rdma_buffer_size == NCCL_EP_AUTO && ep_group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
-        ep_group->config.rdma_buffer_size = nccl_ep::get_low_latency_rdma_size_hint(ep_group->config.max_send_tokens_per_rank, ep_group->config.max_token_bytes, ep_group->nRanks, ep_group->config.num_experts);
+        ep_group->config.rdma_buffer_size = nccl_ep::get_low_latency_rdma_size_hint(ep_group->config.max_dispatch_tokens_per_rank, ep_group->config.max_token_bytes, ep_group->nRanks, ep_group->config.num_experts);
     }
 
     if (ep_group->config.num_qp_per_rank == NCCL_EP_AUTO) {
@@ -1476,7 +1476,7 @@ struct ncclEpHandle {
              // the destination rank's expert buffer. Used by NVLink (intra-node) warps.
              // Value of -1 indicates token is not routed to that rank.
              // dtype: int32_t
-             // layout: [num_nodes * max_send_tokens_per_rank, num_ranks_per_node]
+             // layout: [num_nodes * max_dispatch_tokens_per_rank, num_ranks_per_node]
              // usage: dispatch S2G warp group, combine G2S warp group
              // lifetime: valid after metadata_preprocessing, constant within iteration
              // vs NCCL HT: no direct equivalent.
@@ -1488,7 +1488,7 @@ struct ncclEpHandle {
              // to RECEIVE from RDMA (inter-node). Indexed by [node_id, token_id].
              // Primarily used during combine to know which remote tokens to wait for.
              // dtype: bool
-             // layout: [num_nodes, max_send_tokens_per_rank_padded_to_16]
+             // layout: [num_nodes, max_dispatch_tokens_per_rank_padded_to_16]
              //        (padding to 16 required for TMA alignment)
              // usage: dispatch G2S warp (polling), combine inter-node G2S/reduction warps
              // lifetime: valid after metadata_preprocessing, constant within iteration
@@ -1501,7 +1501,7 @@ struct ncclEpHandle {
              // SENT via RDMA (inter-node) to each remote node.
              // Only allocated when num_nodes > 1.
              // dtype: bool
-             // layout: [max_send_tokens_per_rank, num_nodes - 1]
+             // layout: [max_dispatch_tokens_per_rank, num_nodes - 1]
              // usage: dispatch N2N (RDMA) warp group
              // lifetime: valid after metadata_preprocessing, constant within iteration
              // vs NCCL HT: closest equivalent to is_token_in_rank for inter-node RDMA.
@@ -1511,14 +1511,14 @@ struct ncclEpHandle {
 
             // Per-token per-rank bitmask cache produced during preprocessing.
             // dtype: RankMask<LSA_TEAM_SIZE> (uint8/16/32/64 depending on lsa_team_size)
-            // layout: [num_nodes * max_send_tokens_per_rank * ranks_per_node]
+            // layout: [num_nodes * max_dispatch_tokens_per_rank * ranks_per_node]
             void* token_rank_mask;
 
              // Local expert routing map: per-expert routing for tokens in this rank's buffer.
              // Used by subsequent expert MLP layers to route tokens to correct experts.
              // dtype: bool
              // layout: [max_recv_tokens, experts_per_rank]
-             //        where max_recv_tokens = num_ranks * max_send_tokens_per_rank
+             //        where max_recv_tokens = num_ranks * max_dispatch_tokens_per_rank
              // usage: passed to expert computation layers (not used by dispatch/combine directly)
              // lifetime: valid after metadata_preprocessing, constant within iteration
              // vs NCCL HT: similar purpose to num_tokens_per_expert but more detailed
@@ -1538,7 +1538,7 @@ struct ncclEpHandle {
 
              // Dense prob buffer: shared scratch for sparse↔dense conversions
              // dtype: float
-             // layout: [max_send_tokens_per_rank, num_experts]
+             // layout: [max_dispatch_tokens_per_rank, num_experts]
              // usage:
              //   - dispatch forward: sparse→dense input topk_weights conversion
              //   - combine backward: dense→sparse output prob conversion
@@ -1551,7 +1551,7 @@ struct ncclEpHandle {
             // Token staging buffer: pre-registered buffer to avoid GIN registration during dispatch
             // User tokens are copied here during dispatch, then this buffer is used for RDMA
             // dtype: uint16_t (bf16) or uint8_t (fp8)
-            // layout: [max_send_tokens_per_rank, hidden]
+            // layout: [max_dispatch_tokens_per_rank, hidden]
             // usage: copy user tokens → use for inter-node RDMA
             // lifetime: group-owned (allocated in Group Create, freed in Group Destroy)
             void* token_staging_buffer;  // Pointer to group-level buffer (not handle-owned)
@@ -1559,7 +1559,7 @@ struct ncclEpHandle {
             // Scaling factor staging buffer: pre-registered buffer for FP8 scaling factors
             // User scaling factors are copied here during dispatch, then this buffer is used for RDMA
             // dtype: float
-            // layout: [max_send_tokens_per_rank]
+            // layout: [max_dispatch_tokens_per_rank]
             // usage: copy user scaling factors → use for inter-node RDMA
             // lifetime: group-owned (allocated in Group Create, freed in Group Destroy)
             float* scaling_factor_staging_buffer;  // Pointer to group-level buffer (not handle-owned)
@@ -1640,7 +1640,7 @@ static size_t ll_handle_mem_size(ncclEpGroup_t ep_group, int num_topk) {
     auto align256 = [](size_t s) -> size_t { return (s + 255) & ~size_t(255); };
     const size_t local_experts = static_cast<size_t>(ep_group->num_local_experts);
     const size_t nRanks        = static_cast<size_t>(ep_group->nRanks);
-    const size_t max_tokens    = static_cast<size_t>(ep_group->config.max_send_tokens_per_rank);
+    const size_t max_tokens    = static_cast<size_t>(ep_group->config.max_dispatch_tokens_per_rank);
     // Layout: nRanks per-rank counts + nRanks * max_tokens * (num_topk+1) token entries
     size_t sz_recv_src  = align256(nRanks * (1 + static_cast<size_t>(num_topk + 1) * max_tokens) * sizeof(int32_t));
     size_t sz_dispatch  = align256(local_experts * nRanks * sizeof(int64_t));
@@ -1658,7 +1658,7 @@ struct HtBlockLayout {
         auto align256 = [](size_t s) -> size_t { return (s + 255) & ~size_t(255); };
         const int nRanks           = ep_group->nRanks;
         const int num_experts      = ep_group->config.num_experts;
-        const int max_tokens       = ep_group->config.max_send_tokens_per_rank;
+        const int max_tokens       = ep_group->config.max_dispatch_tokens_per_rank;
         const int lsa_team_size    = ep_group->lsa_team_size;
         const int rdma_team_size   = ep_group->rdma_team_size;
         const int experts_per_rank = ep_group->num_local_experts;
@@ -1716,11 +1716,11 @@ ncclResult_t ncclEpHandleMemSize(
 
 static ncclResult_t ll_init_handle(ncclEpHandle_t handle, ncclEpGroup_t ep_group, ncclNDTensor_t handle_mem, int num_topk) {
     assert(num_topk > 0 && "LL mode requires num_topk > 0 (pass top_k to ncclEpInitHandle)");
-    assert((ep_group->config.max_send_tokens_per_rank * ep_group->num_local_experts) % 4 == 0
+    assert((ep_group->config.max_dispatch_tokens_per_rank * ep_group->num_local_experts) % 4 == 0
            && "TMA requires the number of tokens to be multiple of 4");
 
     auto layout = nccl_ep::LowLatencyLayout(
-        ep_group->rdma_buffer, ep_group->config.max_send_tokens_per_rank,
+        ep_group->rdma_buffer, ep_group->config.max_dispatch_tokens_per_rank,
         ep_group->config.max_token_bytes, ep_group->nRanks, ep_group->config.num_experts, num_topk, handle->layout);
     assert(layout.total_bytes <= ep_group->config.rdma_buffer_size);
 
@@ -1737,7 +1737,7 @@ static ncclResult_t ll_init_handle(ncclEpHandle_t handle, ncclEpGroup_t ep_group
     char* base = static_cast<char*>(handle->ll.handle_mem);
 
     const size_t recv_src_count = static_cast<size_t>(ep_group->nRanks) *
-        (1 + static_cast<size_t>(num_topk + 1) * ep_group->config.max_send_tokens_per_rank);
+        (1 + static_cast<size_t>(num_topk + 1) * ep_group->config.max_dispatch_tokens_per_rank);
     {
         size_t sz[] = {recv_src_count};
         NCCLCHECK(ncclEpTensorCreate(&handle->ll.expert_recv_source_indices, 1, ncclInt32, base, sz));
@@ -1757,7 +1757,7 @@ static ncclResult_t ll_init_handle(ncclEpHandle_t handle, ncclEpGroup_t ep_group
 }
 
 static ncclResult_t ht_init_handle(ncclEpHandle_t handle, ncclEpGroup_t ep_group, ncclNDTensor_t handle_mem, int num_topk) {
-    assert(ep_group->config.max_send_tokens_per_rank > 0 && "HT requires max_send_tokens_per_rank > 0");
+    assert(ep_group->config.max_dispatch_tokens_per_rank > 0 && "HT requires max_dispatch_tokens_per_rank > 0");
     if (num_topk >= 0){
       assert(num_topk != 0 && "HT mode requires num_topk > 0");
       handle->num_topk = num_topk;
@@ -1904,12 +1904,12 @@ ncclResult_t ncclEpUpdateHandle(
     if (handle->num_topk > 0) assert(handle->num_topk == num_topk && "Given topk_idx has unmatched num_topk that ncclEpHandle was created with!");
     else handle->num_topk = num_topk;
 
-    assert(handle->num_tokens <= static_cast<int>(ep_group->config.max_send_tokens_per_rank) && "Token count exceeds HT buffer capacity");
+    assert(handle->num_tokens <= static_cast<int>(ep_group->config.max_dispatch_tokens_per_rank) && "Token count exceeds HT buffer capacity");
 
     ncclNDTensor_t recv_expert_counter = layout_info ? layout_info->expert_counters : nullptr;
 
     const int num_experts = ep_group->config.num_experts;
-    const int max_tokens = ep_group->config.max_send_tokens_per_rank;
+    const int max_tokens = ep_group->config.max_dispatch_tokens_per_rank;
     const int n_ranks_per_node = ep_group->lsa_team_size;
     const int nNodes = ep_group->rdma_team_size;
     const int experts_per_rank = ep_group->num_local_experts;
@@ -2054,7 +2054,7 @@ ncclResult_t ncclEpUpdateHandle(
         expert_major ? handle->num_topk : 0,
         recv_total_counter,
         out_is_int64,
-        static_cast<int>(ep_group->config.max_recv_token_slots_per_rank),
+        static_cast<int>(ep_group->config.max_recv_tokens_per_rank),
         static_cast<int>(ep_group->max_num_sms),
         stream);
 
@@ -2134,7 +2134,7 @@ ncclResult_t ncclEpDispatch(
         assert(tensor_is_contiguous(x));
         assert(x->datatype == ncclBfloat16);
         assert(x->sizes[0] == handle->num_tokens);
-        assert(x->sizes[0] <= group->config.max_send_tokens_per_rank);
+        assert(x->sizes[0] <= group->config.max_dispatch_tokens_per_rank);
         assert(x->sizes[1] % sizeof(int4) == 0);
         assert(x->sizes[1] % 128 == 0);
         assert(x->sizes[1] * ncclTypeSize(x->datatype) <= group->config.max_token_bytes);
@@ -2153,7 +2153,7 @@ ncclResult_t ncclEpDispatch(
         ncclNDTensor_t recv_topk_idx     = outputs->topk_idx;
         ncclNDTensor_t src_rank_counter = layout_info ? layout_info->src_rank_counters : nullptr;
 
-        const unsigned num_recv_tokens = static_cast<unsigned>(group->nRanks) * group->config.max_send_tokens_per_rank;
+        const unsigned num_recv_tokens = static_cast<unsigned>(group->nRanks) * group->config.max_dispatch_tokens_per_rank;
         switch (handle->layout) {
             case NCCL_EP_LAYOUT_RANK_MAJOR:
                 assert(recv_x->ndim == 2);
@@ -2186,7 +2186,7 @@ ncclResult_t ncclEpDispatch(
             assert(tensor_is_contiguous(scales));
             assert(scales->datatype == ncclFloat32);
             assert(scales->sizes[0] == group->num_local_experts);
-            assert(scales->sizes[1] == group->config.max_send_tokens_per_rank * group->nRanks);
+            assert(scales->sizes[1] == group->config.max_dispatch_tokens_per_rank * group->nRanks);
             assert(scales->sizes[2] == static_cast<unsigned>(hidden / scale_block_size));
             // FP8 quantizer footprint (per-token payload + scale-factor bytes) must fit
             // the buffer slot sized by max_token_bytes. Implied by the bf16 input bound
@@ -2258,7 +2258,7 @@ ncclResult_t ncclEpDispatch(
                 nullptr, /*recv_send_offsets=*/
                 handle->num_tokens,
                 hidden,
-                group->config.max_send_tokens_per_rank,
+                group->config.max_dispatch_tokens_per_rank,
                 handle->num_topk,
                 group->config.num_experts,
                 group->rank,
@@ -2306,7 +2306,7 @@ ncclResult_t ncclEpDispatch(
         }
         assert(x->ndim == 2 && tensor_is_contiguous(x));
         assert(x->sizes[0] == handle->num_tokens);
-        assert(x->sizes[0] <= group->config.max_send_tokens_per_rank);
+        assert(x->sizes[0] <= group->config.max_dispatch_tokens_per_rank);
         assert(x->sizes[1] * ncclTypeSize(x->datatype) <= group->config.max_token_bytes &&
                "HT dispatch token bytes must not exceed group's max_token_bytes");
         const int hidden = static_cast<int>(x->sizes[1]);
@@ -2521,7 +2521,7 @@ ncclResult_t ncclEpDispatch(
             .rdma_send_staging_offset = is_single_node ? 0 : group->gin_config.rdma_send_staging_offset,
             .rdma_inter_node_group_packed_offset = is_single_node ? 0 : group->gin_config.rdma_inter_node_group_packed_offset,
             .bytes_per_entry = bytes_per_entry,
-            .max_tokens_per_dest = static_cast<size_t>(group->config.max_send_tokens_per_rank),
+            .max_tokens_per_dest = static_cast<size_t>(group->config.max_dispatch_tokens_per_rank),
             // Streaming signal parameters
             .signals_tail_base = is_single_node ? 0 : static_cast<unsigned>(group->gin_config.signals_tail_base),
             .num_max_rdma_chunked_send_tokens = is_single_node ? 0 : group->gin_config.num_max_rdma_chunked_send_tokens,
@@ -2533,7 +2533,7 @@ ncclResult_t ncclEpDispatch(
         // Call dispatch kernel
         nccl_ep::hybridep::call_dispatch(
             params,
-            group->config.max_send_tokens_per_rank,
+            group->config.max_dispatch_tokens_per_rank,
             group->rdma_team_size,
             use_fp8,
             forward_dispatch,
@@ -2701,7 +2701,7 @@ ncclResult_t ncclEpCombine(
         // Extract configuration values
         const int num_experts = handle->group->config.num_experts;
         const int num_ranks = handle->group->nRanks;
-        const int num_max_dispatch_tokens_per_rank = handle->group->config.max_send_tokens_per_rank;
+        const int num_max_dispatch_tokens_per_rank = handle->group->config.max_dispatch_tokens_per_rank;
 
         // Validate input tensor x; extract hidden dimension (index differs by layout).
         assert(tensor_is_contiguous(x));
@@ -3037,7 +3037,7 @@ ncclResult_t ncclEpCombine(
         /* ===== Call combine kernel ===== */
         nccl_ep::hybridep::call_combine(
             params,
-            group->config.max_send_tokens_per_rank, // max_send_tokens_per_rank
+            group->config.max_dispatch_tokens_per_rank, // max_dispatch_tokens_per_rank
             group->rdma_team_size, // num_nodes (RDMA domain size)
             backward_combine, // backward mode flag
             static_cast<int>(group->max_num_sms),
@@ -3125,7 +3125,7 @@ ncclResult_t ncclEpMaskClean(
     // so all ranks compute the same sync_buffer offset within the (worst-case
     // sized) rdma_buffer.
     nccl_ep::LowLatencyLayout layout(ep_group->rdma_buffer,
-                                      ep_group->config.max_send_tokens_per_rank,
+                                      ep_group->config.max_dispatch_tokens_per_rank,
                                       ep_group->config.max_token_bytes,
                                       ep_group->nRanks,
                                       ep_group->config.num_experts,

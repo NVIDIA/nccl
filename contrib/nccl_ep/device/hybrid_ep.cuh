@@ -3735,7 +3735,7 @@ __device__ __forceinline__ void scan_impl(const uint8_t* input_routing_map,
                      int s2d_inner_dim,                   // 0 = flat; >0 = expert-major top_k
                      void* recv_total_counter,            // Optional scalar; nullable
                      bool out_is_int64,                   // Shared dtype for the 3 int outputs above
-                     int max_recv_token_slots_per_rank,   // HT recv-budget; __trap on overflow.
+                     int max_recv_tokens_per_rank,   // HT recv-budget; __trap on overflow.
                      uint8_t* smem_bytes)
 {
   static_assert(LSA_TEAM_SIZE <= EM_S2D_MAX_RANKS,
@@ -4036,11 +4036,11 @@ __device__ __forceinline__ void scan_impl(const uint8_t* input_routing_map,
     // The thread that processing the global last token save the final sum for current rank to num_of_tokens_for_experts.
     // Skip for expert-major: fused remap (Step 4) overwrites with padded zone total.
     if(remap_alignment == 0 && current_token_id == num_of_total_attn_tokens - 1 && local_rank_seen){
-      if (local_rank_prefix_after_scan > max_recv_token_slots_per_rank) {
+      if (local_rank_prefix_after_scan > max_recv_tokens_per_rank) {
         printf("ncclEpUpdateHandle: HT FLAT actual recv tokens %d > "
-               "max_recv_token_slots_per_rank %d on (node %d local %d); "
-               "increase ncclEpGroupConfig_t::max_recv_token_slots_per_rank\n",
-               local_rank_prefix_after_scan, max_recv_token_slots_per_rank,
+               "max_recv_tokens_per_rank %d on (node %d local %d); "
+               "increase ncclEpGroupConfig_t::max_recv_tokens_per_rank\n",
+               local_rank_prefix_after_scan, max_recv_tokens_per_rank,
                node_rank, local_rank);
         __trap();
       }
@@ -4205,11 +4205,11 @@ __device__ __forceinline__ void scan_impl(const uint8_t* input_routing_map,
           off += padded;
         }
         // TODO(Phuong): EM recv overflow currently aborts; future overflow policy will add drop-tokens (cap off at budget, record drop count).
-        if (dest == local_rank && off > static_cast<int64_t>(max_recv_token_slots_per_rank)) {
+        if (dest == local_rank && off > static_cast<int64_t>(max_recv_tokens_per_rank)) {
           printf("ncclEpUpdateHandle: HT EM actual recv slots %lld > "
-                 "max_recv_token_slots_per_rank %d on (node %d local %d); "
-                 "increase ncclEpGroupConfig_t::max_recv_token_slots_per_rank\n",
-                 static_cast<long long>(off), max_recv_token_slots_per_rank,
+                 "max_recv_tokens_per_rank %d on (node %d local %d); "
+                 "increase ncclEpGroupConfig_t::max_recv_tokens_per_rank\n",
+                 static_cast<long long>(off), max_recv_tokens_per_rank,
                  node_rank, local_rank);
           __trap();
         }
@@ -4306,7 +4306,7 @@ struct scan_kernel_param_t {
     int s2d_inner_dim;
     void* recv_total_counter;
     bool out_is_int64;
-    int max_recv_token_slots_per_rank;
+    int max_recv_tokens_per_rank;
 };
 
 } // namespace hybrid_ep

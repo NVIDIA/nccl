@@ -39,7 +39,7 @@ class EpGroupConfig:
     Attributes:
         algorithm: Dispatch/combine algorithm. Default: ``LOW_LATENCY``.
         num_experts: Total number of experts across all ranks. Required.
-        max_send_tokens_per_rank: Maximum tokens any single rank will
+        max_dispatch_tokens_per_rank: Maximum tokens any single rank will
             dispatch. Must be > 0; ``NCCL_EP_AUTO`` is not yet supported
             even in HT mode.
         max_token_bytes: Token payload size in bytes (independent of
@@ -49,9 +49,9 @@ class EpGroupConfig:
         num_qp_per_rank: Number of QPs per rank. 0 selects auto.
         num_channels: Channels per rank. 0 selects auto. In HT each
             channel occupies 2 SMs.
-        max_recv_token_slots_per_rank: Total recv-slot budget per rank.
-            HT requires > 0 and ``>= max_send_tokens_per_rank``; LL
-            with 0 auto-derives ``n_ranks * max_send_tokens_per_rank``.
+        max_recv_tokens_per_rank: Total recv-slot budget per rank.
+            HT requires > 0 and ``>= max_dispatch_tokens_per_rank``; LL
+            with 0 auto-derives ``n_ranks * max_dispatch_tokens_per_rank``.
         max_num_sms: Maximum SMs to use for EP kernels (dispatch,
             combine, preprocessing). 0 selects an algorithm-dependent
             default.
@@ -76,12 +76,12 @@ class EpGroupConfig:
 
     algorithm: NcclEpAlgorithm = NcclEpAlgorithm.LOW_LATENCY
     num_experts: int = 0
-    max_send_tokens_per_rank: int = 0
+    max_dispatch_tokens_per_rank: int = 0
+    max_recv_tokens_per_rank: int = 0
     max_token_bytes: int = 0
     rdma_buffer_size: int = 0
     num_qp_per_rank: int = 0
     num_channels: int = 0
-    max_recv_token_slots_per_rank: int = 0
     max_num_sms: int = 0
     version: int = _NCCL_EP_API_VERSION
     alloc: EpAllocConfig = field(default_factory=EpAllocConfig)

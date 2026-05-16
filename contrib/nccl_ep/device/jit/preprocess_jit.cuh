@@ -50,7 +50,7 @@ inline std::string scan_jit_source(
         << "      p.node_rank, p.local_rank, p.num_of_tokens_per_rank, p.num_of_ranks_per_node, p.experts_per_rank,\n"
         << "      p.remap_alignment, p.remap_internal_offsets, p.remap_padded_out_counts, p.remap_out_offsets,\n"
         << "      p.remap_actual_counts_out, p.s2d_inner_dim, p.recv_total_counter, p.out_is_int64,\n"
-        << "      p.max_recv_token_slots_per_rank, smem_bytes);\n"
+        << "      p.max_recv_tokens_per_rank, smem_bytes);\n"
         << "}\n";
     return src.str();
 }

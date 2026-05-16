@@ -25,7 +25,8 @@ NCCL_PARAM(GinPluginRefCount, "GIN_PLUGIN_REF_COUNT", 0);
 int ncclGinVersion[NCCL_GIN_VERSION_COUNT] = {14, 13};
 getNcclGin_t* getNcclGin[NCCL_GIN_VERSION_COUNT] = {getNcclGin_v14, getNcclGin_v13};
 
-#define NCCL_GIN_NUM_INTERNAL_PLUGINS 3
+#define NCCL_GIN_NUM_RESERVED_PLUGINS 3
+#define NCCL_GIN_NUM_INTERNAL_PLUGINS 2
 
 typedef enum ncclGinPluginState {
   ncclGinPluginStateDisabled        = -2,       // Plugin library failed to initialize
@@ -196,9 +197,10 @@ static void initPluginLibsOnceFunc() {
     // Iterate over list until the list is empty
     ginPluginName = strtok_r(envGinPluginList, ",", &savePtr);
     while(ginPluginName) {
-      // So, we can have at most( NCCL_GIN_MAX_PLUGINS - (NCCL_GIN_NUM_INTERNAL_PLUGINS)) in the NCCL_GIN_PLUGIN list
-      if (pluginCounter >= (NCCL_GIN_MAX_PLUGINS - (NCCL_GIN_NUM_INTERNAL_PLUGINS))) {
-        INFO(NCCL_NET|NCCL_ENV,"NCCL_GIN_PLUGIN list contains more than %d plugins, ignoring the rest", (NCCL_GIN_MAX_PLUGINS - (NCCL_GIN_NUM_INTERNAL_PLUGINS + 1)));
+      // So, we can have at most( NCCL_GIN_MAX_PLUGINS - (NCCL_GIN_NUM_RESERVED_PLUGINS)) in the NCCL_GIN_PLUGIN list
+
+      if (pluginCounter >= (NCCL_GIN_MAX_PLUGINS - NCCL_GIN_NUM_RESERVED_PLUGINS)) {
+        INFO(NCCL_NET|NCCL_ENV,"NCCL_GIN_PLUGIN list contains more than %d plugins, ignoring the rest", (NCCL_GIN_MAX_PLUGINS - NCCL_GIN_NUM_RESERVED_PLUGINS));
         break;
       }
       // need to leave space for the name + "\n"

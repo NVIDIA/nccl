@@ -25,7 +25,8 @@ NCCL_PARAM(RmaPluginRefCount, "RMA_PLUGIN_REF_COUNT", 0);
 int ncclRmaVersion[NCCL_RMA_VERSION_COUNT] = {14, 13};
 getNcclRma_t* getNcclRma[NCCL_RMA_VERSION_COUNT] = {getNcclRma_v14, getNcclRma_v13};
 
-#define NCCL_RMA_NUM_INTERNAL_PLUGINS 3
+#define NCCL_RMA_NUM_RESERVED_PLUGINS 3
+#define NCCL_RMA_NUM_INTERNAL_PLUGINS 1
 
 typedef enum ncclRmaPluginState {
   ncclRmaPluginStateDisabled        = -2,       // Plugin library failed to initialize
@@ -169,8 +170,8 @@ static void initPluginLibsOnceFunc() {
     // Iterate over list until the list is empty
     rmaPluginName = strtok_r(envRmaPluginList, ",", &savePtr);
     while(rmaPluginName) {
-      // So, we can have at most( NCCL_RMA_MAX_PLUGINS - (NCCL_RMA_NUM_INTERNAL_PLUGINS)) in the NCCL_RMA_PLUGIN list
-      if (pluginCounter >= (NCCL_RMA_MAX_PLUGINS - (NCCL_RMA_NUM_INTERNAL_PLUGINS))) {
+      // So, we can have at most( NCCL_RMA_MAX_PLUGINS - (NCCL_RMA_NUM_RESERVED_PLUGINS)) in the NCCL_RMA_PLUGIN list
+      if (pluginCounter >= (NCCL_RMA_MAX_PLUGINS - NCCL_RMA_NUM_RESERVED_PLUGINS)) {
         INFO(NCCL_NET|NCCL_ENV,"NCCL_RMA_PLUGIN list contains more than %d plugins, ignoring the rest", (NCCL_RMA_MAX_PLUGINS - (NCCL_RMA_NUM_INTERNAL_PLUGINS + 1)));
         break;
       }

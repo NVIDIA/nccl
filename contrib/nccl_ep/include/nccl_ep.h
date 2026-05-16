@@ -273,12 +273,6 @@ typedef struct {
 typedef struct ncclEpHandle* ncclEpHandle_t;
 typedef struct {
     unsigned int size;  // = sizeof(this struct); first field, never moves
-    // Receive buffer layout for the dispatch and combine path.
-    // Determines the shape of recv_x on dispatch output and the expected input shape for combine.
-    // Required: leaving it at the zero-init value (NCCL_EP_LAYOUT_UNSET) is a programmer error.
-    // HT mode supports NCCL_EP_LAYOUT_FLAT and NCCL_EP_LAYOUT_EXPERT_MAJOR.
-    // LL mode supports NCCL_EP_LAYOUT_EXPERT_MAJOR and NCCL_EP_LAYOUT_RANK_MAJOR.
-    ncclEpLayout_t layout;
     unsigned int use_fp8;  // enable FP8 for dispatch (0 = false, non-zero = true; default: 0)
     // HT expert-major only: per-expert zone alignment in tokens (pow2; 0/1 = no padding).
     // Padded slots are zero-filled by dispatch.
@@ -294,6 +288,8 @@ typedef struct {
 // Arguments:
 //   handle              - [OUT] Pointer to newly created and initialized EP handle
 //   ep_group            - [IN]  A valid EP group
+//   layout              - [IN]  Receive buffer layout. Required; must not be NCCL_EP_LAYOUT_UNSET.
+//                                HT supports FLAT / EXPERT_MAJOR; LL supports EXPERT_MAJOR / RANK_MAJOR.
 //   topk_idx            - [IN]  Tensor holding top-K expert indices (routing information)
 //   layout_info         - [IN/OUT, optional] Layout info (see ncclEpLayoutInfo_t). NULL = none.
 //                         HT: set expert_counters when max_dispatch_tokens_per_rank is NCCL_EP_AUTO.
@@ -311,6 +307,7 @@ typedef struct {
 ncclResult_t ncclEpCreateHandle(
     ncclEpHandle_t* handle,
     ncclEpGroup_t ep_group,
+    ncclEpLayout_t layout,
     ncclNDTensor_t topk_idx,
     const ncclEpLayoutInfo_t* layout_info,  // NULL = none
     const ncclEpHandleConfig_t* config,  // NULL = defaults
@@ -332,6 +329,7 @@ ncclResult_t ncclEpHandleDestroy(
 //
 // Arguments:
 //   ep_group  - [IN]  A valid EP group
+//   layout    - [IN]  Receive buffer layout. Required; must not be NCCL_EP_LAYOUT_UNSET.
 //   config    - [IN]  Handle configuration (see ncclEpHandleConfig_t). NULL = defaults.
 //   size_out  - [OUT] Required bytes for handle_mem
 //   num_topk  - [IN]  Required for LL (> 0); optional for HT
@@ -340,6 +338,7 @@ ncclResult_t ncclEpHandleDestroy(
 
 ncclResult_t ncclEpHandleMemSize(
     ncclEpGroup_t               ep_group,
+    ncclEpLayout_t              layout,
     const ncclEpHandleConfig_t* config,
     size_t*                     size_out,
     int                         num_topk
@@ -355,6 +354,7 @@ ncclResult_t ncclEpHandleMemSize(
 // Arguments:
 //   handle     - [OUT] Newly created handle
 //   ep_group   - [IN]  A valid EP group
+//   layout     - [IN]  Receive buffer layout. Required; must not be NCCL_EP_LAYOUT_UNSET.
 //   config     - [IN]  Handle configuration (see ncclEpHandleConfig_t). NULL = defaults.
 //   num_topk   - [IN]  Required for LL (> 0); pass -1 for HT
 //   handle_mem - [IN]  NULL = internal alloc; non-NULL = caller-owned device buffer
@@ -364,6 +364,7 @@ ncclResult_t ncclEpHandleMemSize(
 ncclResult_t ncclEpInitHandle(
     ncclEpHandle_t*             handle,
     ncclEpGroup_t               ep_group,
+    ncclEpLayout_t              layout,
     const ncclEpHandleConfig_t* config,
     int                         num_topk,
     ncclNDTensor_t              handle_mem

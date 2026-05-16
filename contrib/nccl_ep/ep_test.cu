@@ -467,17 +467,16 @@ int main(int argc, char* argv[])
   // the Init+Update split, where InitHandle stays outside the capture (host-side
   // allocation only) and UpdateHandle is recorded inside the captured region.
   ncclEpHandle_t ep_handle;
-  ncclEpHandleConfig_t handle_config = NCCL_EP_HANDLE_CONFIG_INIT;
-  handle_config.layout = (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT)
-                         ? ht_layout
-                         : NCCL_EP_LAYOUT_EXPERT_MAJOR;
+  const ncclEpLayout_t handle_layout = (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT)
+                                       ? ht_layout
+                                       : NCCL_EP_LAYOUT_EXPERT_MAJOR;
   if (use_cuda_graph) {
     printf("Rank %d: Testing ncclEpInitHandle\n", myRank);
-    NCCLCHECK(ncclEpInitHandle(&ep_handle, ep_group, &handle_config, static_cast<int>(top_k), /*handle_mem=*/nullptr));
+    NCCLCHECK(ncclEpInitHandle(&ep_handle, ep_group, handle_layout, /*config=*/nullptr, static_cast<int>(top_k), /*handle_mem=*/nullptr));
   } else {
     printf("Rank %d: Testing ncclEpCreateHandle\n", myRank);
-    NCCLCHECK(ncclEpCreateHandle(&ep_handle, ep_group, topk_idx,
-                                 disable_max_tokens ? &handle_layout_info : nullptr, &handle_config, s));
+    NCCLCHECK(ncclEpCreateHandle(&ep_handle, ep_group, handle_layout, topk_idx,
+                                 disable_max_tokens ? &handle_layout_info : nullptr, /*config=*/nullptr, s));
     CUDACHECK(cudaStreamSynchronize(s));
   }
 
@@ -505,7 +504,7 @@ int main(int argc, char* argv[])
   // Build named-struct dispatch arguments. HT FLAT also populates topk_weights/topk_idx
   // outputs; HT EM populates only topk_weights (1D). LL allocates only tokens.
   const bool ht_em = (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT &&
-                       handle_config.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
+                       handle_layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
 
   ncclEpDispatchInputs_t  dispatch_inputs  = NCCL_EP_DISPATCH_INPUTS_INIT;
   ncclEpDispatchOutputs_t dispatch_outputs = NCCL_EP_DISPATCH_OUTPUTS_INIT;

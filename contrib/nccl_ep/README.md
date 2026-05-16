@@ -55,7 +55,7 @@ ncclEpGroupDestroy(ep_group);
 // Handle management. `layout_info` is an optional ncclEpLayoutInfo_t* whose
 // fields advertise device-side metadata tensors (expert_counters,
 // src_rank_counters, expert_offsets, recv_total_counter).
-ncclEpCreateHandle(&handle, ep_group, topk_idx, layout_info, handle_cfg, stream);
+ncclEpCreateHandle(&handle, ep_group, layout, topk_idx, layout_info, handle_cfg, stream);
 ncclEpHandleDestroy(handle);
 
 // Communication operations. inputs / outputs are named-struct pointers
@@ -557,6 +557,8 @@ ncclResult_t ncclEpTensorGetSizes(ncclNDTensor_t tensor, const unsigned int** si
 // Arguments:
 //   handle              - [OUT] Pointer to newly created and initialized EP handle
 //   ep_group            - [IN]  A valid EP group
+//   layout              - [IN]  Receive buffer layout. Required; must not be NCCL_EP_LAYOUT_UNSET.
+//                                HT supports FLAT / EXPERT_MAJOR; LL supports EXPERT_MAJOR / RANK_MAJOR.
 //   topk_idx            - [IN]  Tensor holding top-K expert indices (routing information)
 //   layout_info         - [IN/OUT, optional] Named-struct pointer carrying device-side
 //                         metadata tensors. Set `expert_counters` (1D ncclInt32/ncclInt64,
@@ -577,6 +579,7 @@ ncclResult_t ncclEpTensorGetSizes(ncclNDTensor_t tensor, const unsigned int** si
 ncclResult_t ncclEpCreateHandle(
     ncclEpHandle_t* handle,
     ncclEpGroup_t ep_group,
+    ncclEpLayout_t layout,
     ncclNDTensor_t topk_idx,
     const ncclEpLayoutInfo_t* layout_info,
     const ncclEpHandleConfig_t* config,
@@ -834,7 +837,7 @@ handle_layout.expert_counters = expert_counters;
 
 // Create EP handle (can be reused for forward and backward)
 ncclEpHandle_t handle;
-ncclEpCreateHandle(&handle, ep_group, topk_idx, &handle_layout,
+ncclEpCreateHandle(&handle, ep_group, NCCL_EP_LAYOUT_FLAT, topk_idx, &handle_layout,
                    /*config=*/NULL, stream);
 
 // num_recv_tokens is the max number of tokens this rank can receive.

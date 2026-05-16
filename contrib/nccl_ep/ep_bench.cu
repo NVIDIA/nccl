@@ -2881,16 +2881,17 @@ int main(int argc, char* argv[]) {
     const bool ht_expert_major = (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT &&
                                   layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
     ncclEpHandleConfig_t handle_cfg = NCCL_EP_HANDLE_CONFIG_INIT;
-    handle_cfg.layout = layout;
     handle_cfg.dispatch_output_per_expert_alignment = expert_major_alignment;
     handle_cfg.use_fp8 = use_fp8;
-    const ncclEpHandleConfig_t* cfg_ptr = &handle_cfg;
+    // Pass config only when a non-default field is set.
+    const bool need_cfg = use_fp8 || (ht_expert_major && expert_major_alignment > 0);
+    const ncclEpHandleConfig_t* cfg_ptr = need_cfg ? &handle_cfg : nullptr;
 
     // Optional caller-owned buffer (--user-handle-mem)
     ncclNDTensor_t handle_mem_tensor = nullptr;
     if (user_handle_mem) {
         size_t handle_mem_size;
-        NCCLCHECK(ncclEpHandleMemSize(ep_group, cfg_ptr, &handle_mem_size, static_cast<int>(top_k)));
+        NCCLCHECK(ncclEpHandleMemSize(ep_group, layout, cfg_ptr, &handle_mem_size, static_cast<int>(top_k)));
         NCCLCHECK(epMakeTensor(&handle_mem_tensor, 1, ncclUint8, static_cast<unsigned int>(handle_mem_size)));
         if (myRank == 0)
             printf("Rank 0: ncclEpHandleMemSize = %zu bytes\n", handle_mem_size);
@@ -2900,11 +2901,11 @@ int main(int argc, char* argv[]) {
     MPICHECK(MPI_Barrier(MPI_COMM_WORLD));
     double handle_create_start = MPI_Wtime();
     if (user_handle_mem) {
-        NCCLCHECK(ncclEpInitHandle(&ep_handle, ep_group, cfg_ptr, static_cast<int>(top_k), handle_mem_tensor));
+        NCCLCHECK(ncclEpInitHandle(&ep_handle, ep_group, layout, cfg_ptr, static_cast<int>(top_k), handle_mem_tensor));
         NCCLCHECK(ncclEpUpdateHandle(ep_handle, topk_idx,
                                      has_handle_layout_info ? &handle_layout_info : nullptr, stream));
     } else {
-        NCCLCHECK(ncclEpCreateHandle(&ep_handle, ep_group, topk_idx,
+        NCCLCHECK(ncclEpCreateHandle(&ep_handle, ep_group, layout, topk_idx,
                                      has_handle_layout_info ? &handle_layout_info : nullptr, cfg_ptr, stream));
     }
     CUDACHECK(cudaStreamSynchronize(stream));
@@ -3051,10 +3052,10 @@ int main(int argc, char* argv[]) {
             NCCLCHECK(ncclEpHandleDestroy(ep_handle));
             const ncclEpLayoutInfo_t* layout_info_ptr = has_handle_layout_info ? &handle_layout_info : nullptr;
             if (user_handle_mem) {
-                NCCLCHECK(ncclEpInitHandle(&ep_handle, ep_group, cfg_ptr, static_cast<int>(top_k), handle_mem_tensor));
+                NCCLCHECK(ncclEpInitHandle(&ep_handle, ep_group, layout, cfg_ptr, static_cast<int>(top_k), handle_mem_tensor));
                 NCCLCHECK(ncclEpUpdateHandle(ep_handle, topk_idx, layout_info_ptr, stream));
             } else {
-                NCCLCHECK(ncclEpCreateHandle(&ep_handle, ep_group, topk_idx,
+                NCCLCHECK(ncclEpCreateHandle(&ep_handle, ep_group, layout, topk_idx,
                                               layout_info_ptr, cfg_ptr, stream));
             }
         };

@@ -1688,16 +1688,17 @@ static size_t ht_handle_mem_size(ncclEpGroup_t ep_group, ncclEpLayout_t layout, 
 
 ncclResult_t ncclEpHandleMemSize(
     ncclEpGroup_t               ep_group,
+    ncclEpLayout_t              layout,
     const ncclEpHandleConfig_t* config,
     size_t*                     size_out,
     int                         num_topk
 ) {
     assert(ep_group != nullptr && size_out != nullptr);
-    EP_REQUIRE_STRUCT(config);
-    EP_HOST_ASSERT(config->layout != NCCL_EP_LAYOUT_UNSET &&
-                   "ncclEpHandleMemSize: handle_config.layout must be set explicitly");
+    EP_OPTIONAL_STRUCT(config);
+    EP_HOST_ASSERT(layout != NCCL_EP_LAYOUT_UNSET &&
+                   "ncclEpHandleMemSize: layout must be set explicitly");
     if (ep_group->config.algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) {
-        *size_out = ht_handle_mem_size(ep_group, config->layout, num_topk);
+        *size_out = ht_handle_mem_size(ep_group, layout, num_topk);
     } else if (ep_group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
         assert(num_topk > 0 && "LL mode requires num_topk > 0 for ncclEpHandleMemSize");
         *size_out = ll_handle_mem_size(ep_group, num_topk);
@@ -1815,17 +1816,17 @@ static ncclResult_t ht_init_handle(ncclEpHandle_t handle, ncclEpGroup_t ep_group
 ncclResult_t ncclEpInitHandle(
     ncclEpHandle_t*             out_handle,
     ncclEpGroup_t               ep_group,
+    ncclEpLayout_t              layout,
     const ncclEpHandleConfig_t* config,
     int                         num_topk,
     ncclNDTensor_t              handle_mem
 ) {
     assert(ep_group != nullptr && out_handle != nullptr);
     assert(ep_group->comm != nullptr);
-    EP_REQUIRE_STRUCT(config);
-    const bool use_fp8 = config->use_fp8;
-    const ncclEpLayout_t layout = config->layout;
+    EP_OPTIONAL_STRUCT(config);
+    const bool use_fp8 = config && config->use_fp8;
     EP_HOST_ASSERT(layout != NCCL_EP_LAYOUT_UNSET &&
-                   "ncclEpInitHandle: handle_config.layout must be set explicitly");
+                   "ncclEpInitHandle: layout must be set explicitly");
     EP_HOST_ASSERT(!(ep_group->config.algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT &&
                      layout != NCCL_EP_LAYOUT_FLAT &&
                      layout != NCCL_EP_LAYOUT_EXPERT_MAJOR) &&
@@ -1840,7 +1841,7 @@ ncclResult_t ncclEpInitHandle(
     // Validate EM padding alignment up-front (pow2 required) before any allocation.
     const bool is_ht_em = ep_group->config.algorithm != NCCL_EP_ALGO_LOW_LATENCY &&
                           layout == NCCL_EP_LAYOUT_EXPERT_MAJOR;
-    const size_t em_align = (is_ht_em && config->dispatch_output_per_expert_alignment > 1)
+    const size_t em_align = (is_ht_em && config && config->dispatch_output_per_expert_alignment > 1)
                             ? config->dispatch_output_per_expert_alignment : 1;
     assert((em_align & (em_align - 1)) == 0 && "dispatch_output_per_expert_alignment must be a power of two");
 
@@ -2057,6 +2058,7 @@ ncclResult_t ncclEpUpdateHandle(
 ncclResult_t ncclEpCreateHandle(
     ncclEpHandle_t* out_handle,
     ncclEpGroup_t ep_group,
+    ncclEpLayout_t layout,
     ncclNDTensor_t topk_idx,
     const ncclEpLayoutInfo_t* layout_info,
     const ncclEpHandleConfig_t* config,
@@ -2064,7 +2066,7 @@ ncclResult_t ncclEpCreateHandle(
 ) {
     assert(topk_idx != nullptr);
     assert(out_handle != nullptr);
-    NCCL_CHECK_RESULT(ncclEpInitHandle(out_handle, ep_group, config,
+    NCCL_CHECK_RESULT(ncclEpInitHandle(out_handle, ep_group, layout, config,
                                        static_cast<int>(topk_idx->sizes[1]),
                                        /*handle_mem=*/nullptr));
     return ncclEpUpdateHandle(*out_handle, topk_idx, layout_info, stream);

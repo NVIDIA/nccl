@@ -50,10 +50,6 @@ class EpHandleConfig:
     equivalent to passing ``NULL`` for the C ``config`` argument.
 
     Attributes:
-        layout: Receive-buffer layout. Required — leaving it at the
-            zero-init sentinel ``UNSET`` is a programmer error.
-            HT mode supports ``FLAT`` and ``EXPERT_MAJOR``; LL mode
-            supports ``EXPERT_MAJOR`` and ``RANK_MAJOR``.
         use_fp8: Enable FP8 dispatch (default ``False``).
         dispatch_output_per_expert_alignment: HT expert-major only.
             Per-expert zone alignment in tokens (must be a power of 2;
@@ -64,7 +60,6 @@ class EpHandleConfig:
         ``contrib/nccl_ep/include/nccl_ep.h``
     """
 
-    layout: NcclEpLayout = NcclEpLayout.UNSET
     use_fp8: bool = False
     dispatch_output_per_expert_alignment: int = 0
 
@@ -264,6 +259,7 @@ class EpHandle:
     def create(
         cls,
         ep_group: EpGroup,
+        layout: NcclEpLayout,
         topk_idx: NDTensor,
         *,
         layout_info: EpLayoutInfo | None = None,
@@ -276,6 +272,10 @@ class EpHandle:
 
         Args:
             ep_group: An initialized :class:`EpGroup`.
+            layout: Receive-buffer layout. Required — must not be
+                :py:attr:`NcclEpLayout.UNSET`. HT supports ``FLAT`` /
+                ``EXPERT_MAJOR``; LL supports ``EXPERT_MAJOR`` /
+                ``RANK_MAJOR``.
             topk_idx: Top-k expert indices for this step
                 (shape ``[num_tokens, top_k]``, int64).
             stream: CUDA stream for the launch — accepts a
@@ -293,6 +293,7 @@ class EpHandle:
         config_b = _materialize(config)
         ptr = _ep_bindings.nccl_ep.create_handle(
             ep_group.ptr,
+            int(layout),
             topk_idx.ptr,
             _ptr_of(layout_b),
             _ptr_of(config_b),

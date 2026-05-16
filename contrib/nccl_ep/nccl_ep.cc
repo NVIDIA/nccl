@@ -126,15 +126,15 @@ static void ncclAllGatherHost(
     const size_t total_size = element_size * nRanks;
     void* d_buffer;
     CUDA_CHECK(cudaMalloc(&d_buffer, total_size));
-    CUDA_CHECK(cudaMemcpy(
+    CUDA_CHECK(cudaMemcpyAsync(
         static_cast<uint8_t*>(d_buffer) + rank * element_size,
         static_cast<uint8_t*>(host_buffer) + rank * element_size,
-        element_size, cudaMemcpyHostToDevice));
+        element_size, cudaMemcpyHostToDevice, stream));
     NCCL_CHECK_RESULT(ncclAllGather(
         static_cast<uint8_t*>(d_buffer) + rank * element_size,
         d_buffer, element_size, ncclUint8, comm, stream));
+    CUDA_CHECK(cudaMemcpyAsync(host_buffer, d_buffer, total_size, cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
-    CUDA_CHECK(cudaMemcpy(host_buffer, d_buffer, total_size, cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaFree(d_buffer));
 }
 
@@ -2555,10 +2555,14 @@ ncclResult_t ncclEpDispatch(
         const bool is_capturing = (capture_status == cudaStreamCaptureStatusActive);
         unsigned int actual_recv_tokens = 0;
         if (!is_capturing) {
-            CUDA_CHECK(cudaMemcpy(&actual_recv_tokens,
-                                  handle->hybridep.num_tokens_for_experts,
-                                  sizeof(actual_recv_tokens),
-                                  cudaMemcpyDeviceToHost));
+            // Async on `stream` + stream-sync so the readback observes the
+            // dispatch kernel's write without relying on legacy default-stream
+            // implicit cross-stream sync.
+            CUDA_CHECK(cudaMemcpyAsync(&actual_recv_tokens,
+                                       handle->hybridep.num_tokens_for_experts,
+                                       sizeof(actual_recv_tokens),
+                                       cudaMemcpyDeviceToHost, stream));
+            CUDA_CHECK(cudaStreamSynchronize(stream));
             assert(actual_recv_tokens <= max_recv_tokens);
         }
         const unsigned int recv_copy_rows = is_capturing ? max_recv_tokens : actual_recv_tokens;
@@ -3145,11 +3149,13 @@ ncclResult_t ncclEpMaskClean(
         ep_group->timeout_cycles,
         stream);
 
-    // Reset all ranks to active (1 = active)
+    // Reset all ranks to active (1 = active).
+    // Sync the stream before returning so all_active outlives the async copy.
     std::vector<int> all_active(ep_group->nRanks, 1);
     CUDA_CHECK(cudaMemcpyAsync(ep_group->mask_buffer, all_active.data(),
                                ep_group->nRanks * sizeof(int),
                                cudaMemcpyHostToDevice, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
 
     return ncclSuccess;
 }

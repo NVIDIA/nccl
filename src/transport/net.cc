@@ -374,9 +374,13 @@ static ncclResult_t recvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   NCCLCHECK(ncclProxyCallBlocking(comm, &recv->proxyConn, ncclProxyMsgSetup, &req, sizeof(req), connectInfo,
                                   sizeof(ncclNetHandle_t)));
   memcpy((uint8_t*)connectInfo + sizeof(ncclNetHandle_t), &req.useGdr, sizeof(int));
-  INFO(NCCL_INIT | NCCL_NET, "Channel %02d/%d : %d[%d] -> %d[%d] [receive] via NET/%s/%d%s%s%s", channelId, connIndex,
+  INFO(NCCL_INIT | NCCL_NET, "Channel %02d/%d : %d[%d] -> %d[%d] [receive] via NET/%s/%d%s%s%s%s", channelId, connIndex,
        peerInfo->rank, peerInfo->nvmlDev, myInfo->rank, myInfo->nvmlDev, comm->ncclNet->name, req.netDev,
-       req.useGdr ? "/GDRDMA" : "", req.useGdr == ncclTopoGdrModePci ? "(PCI)" : "", req.shared ? "/Shared" : "");
+       req.useGdr ? "/GDRDMA" : "", req.useGdr == ncclTopoGdrModePci ? "(PCI)" : "", req.shared ? "/Shared" : "",
+       !req.useGdr                        ? "" :
+       req.needFlush == ncclTopoFlushNone ? "/flush=None" :
+       req.needFlush == ncclTopoFlushC2c  ? "/flush=C2c" :
+                                            "/flush=Always");
   return ncclSuccess;
 }
 

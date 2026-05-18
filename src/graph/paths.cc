@@ -577,7 +577,10 @@ ncclResult_t ncclTopoNeedFlush(struct ncclComm* comm, int64_t netId, int netDev,
   *flush = ncclTopoFlushAlways;
   ncclNetProperties_t props;
   NCCLCHECK(comm->ncclNet->getProperties(netDev, &props));
-  if (props.forceFlush == 1 || ncclParamNetForceFlush()) return ncclSuccess;
+  if (props.forceFlush == 1 || ncclParamNetForceFlush()) {
+    TRACE(NCCL_NET, "NET/%s/%d: flush type = Always (forced)", comm->ncclNet->name, netDev);
+    return ncclSuccess;
+  }
   int g;
   struct ncclTopoSystem* system = comm->topo;
   NCCLCHECK(ncclTopoRankToIndex(system, rank, &g, /*showWarn=*/true));

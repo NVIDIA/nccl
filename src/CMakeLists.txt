@@ -99,6 +99,7 @@ set(NCCL_PRIVATE_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/device
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin
+    ${PLUGIN_NET_OBSERV_INCLUDES}
     ${CUDAToolkit_INCLUDE_DIRS}
     ${CUDAToolkit_INCLUDE_DIRS}/cccl
     ${CMAKE_BINARY_DIR}/obj/include

@@ -24,3 +24,6 @@ set(PLUGIN_SOURCES
 
 # Add plugin sources to parent scope
 set(PLUGIN_SOURCES ${PLUGIN_SOURCES} PARENT_SCOPE)
+
+# Pass net_observ include path up to parent scope
+set(PLUGIN_NET_OBSERV_INCLUDES ${PLUGIN_NET_OBSERV_INCLUDES} PARENT_SCOPE)

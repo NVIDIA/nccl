@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package ruijie_json;
+
+service Json {
+  rpc JsonSend (JsonRequest) returns (JsonReply) {}
+  rpc JsonStreamSend (stream JsonRequest) returns (stream JsonReply) {}
+}
+
+message JsonDeviceMsg {
+  string producer_name = 1;
+  string device_name = 2;
+  string device_model = 3;
+  string device_ip = 4;
+  string device_vendor = 5;
+  string device_version = 6;
+}
+
+enum JsonExtensionID {
+  EID_UNSET = 0;
+  EID_SN = 1;
+  EID_EXPERIMENTAL = 999;
+}
+
+message JsonExtension {
+  JsonExtensionID id = 1;
+  bytes msg = 2;
+}
+
+message JsonRequest {
+  JsonDeviceMsg device_info = 1;
+  uint32 json_event = 2;
+  string json_string = 3;
+  int64 timestamp = 4;
+  string sensor_path = 5;
+  repeated JsonExtension extension = 6;
+}
+
+message JsonReply {
+  sint32 ret = 1;
+}

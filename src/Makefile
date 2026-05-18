@@ -17,6 +17,14 @@ ifeq ($(NCCL_OS_LINUX), 1)
 TRANSPORT_CC := $(filter-out transport/net_socket_stub.cc transport/net_ib_stub.cc,$(TRANSPORT_CC))
 endif
 
+# Protobuf/gRPC generated files for ruijie-json proto (must be defined before LIBSRCFILES)
+RUIJIE_JSON_PB_SRC := plugin/net_observ/ruijie-json.pb.cc plugin/net_observ/ruijie-json.grpc.pb.cc
+RUIJIE_JSON_PB_HDR := include/plugin/net_observ/ruijie-json.pb.h include/plugin/net_observ/ruijie-json.grpc.pb.h
+RUIJIE_JSON_INC    := include/plugin/net_observ
+PROTOC             := protoc
+GRPC_CPP_PLUGIN    := /usr/bin/grpc_cpp_plugin
+RUIJIE_JSON_PROTO  := plugin/net_observ/ruijie-json.proto
+
 LIBSRCFILES := \
 	bootstrap.cc channel.cc collectives.cc debug.cc enqueue.cc group.cc \
 	init.cc proxy.cc transport.cc mnnvl.cc allocator.cc dev_runtime.cc sym_kernels.cc ce_coll.cc mem_manager.cc \
@@ -32,7 +40,8 @@ LIBSRCFILES := \
 	$(wildcard plugin/tuner/*.cc) \
 	$(wildcard plugin/profiler/*.cc) \
 	$(wildcard plugin/env/*.cc) \
-	$(wildcard plugin/net_observ/*.cc) \
+	$(filter-out $(RUIJIE_JSON_PB_SRC),$(wildcard plugin/net_observ/*.cc)) \
+	$(RUIJIE_JSON_PB_SRC) \
 	$(wildcard nccl_device/*.cc) \
 	$(wildcard scheduler/*.cc) \
 	$(wildcard gin/*.cc) \
@@ -86,7 +95,7 @@ LIBOBJ     := $(LIBSRCFILES:%.cc=$(OBJDIR)/%.o)
 BINOBJ     := $(BINSRCFILES:%.cc=$(OBJDIR)/%.o)
 PARAMBINOBJ     := $(PARAMBINSRCFILES:%.cc=$(OBJDIR)/%.o)
 DEPFILES   := $(LIBOBJ:%.o=%.d) $(BINOBJ:%.o=%.d) $(PARAMBINOBJ:%.o=%.d)
-LDFLAGS    += -L${CUDA_LIB} -l$(CUDARTLIB) -lpthread -lrt -ldl
+LDFLAGS    += -L${CUDA_LIB} -l$(CUDARTLIB) -lpthread -lrt -ldl -lprotobuf -lgrpc++ -lgrpc -lgpr -labsl_strings -labsl_synchronization -labsl_time -labsl_status
 INCPLUGIN  := include/plugin
 
 DEVMANIFEST := $(BUILDDIR)/obj/device/manifest
@@ -97,19 +106,40 @@ $(GIT_VERSION_FILE): ALWAYS_REBUILD
 	@mkdir -p $(dir $@)
 	@./misc/generate_git_version.py $@
 
+# Proto compilation for ruijie-json
+RUIJIE_JSON_PB_STAMP := $(OBJDIR)/.ruijie-json-proto-stamp
+
+$(RUIJIE_JSON_PB_STAMP): $(RUIJIE_JSON_PROTO)
+	@printf "Generating %-35s\n" "ruijie-json proto/grpc files"
+	mkdir -p include/plugin/net_observ
+	$(PROTOC) --proto_path=plugin/net_observ \
+		--cpp_out=plugin/net_observ \
+		--grpc_out=plugin/net_observ \
+		--plugin=protoc-gen-grpc=$(GRPC_CPP_PLUGIN) \
+		$(RUIJIE_JSON_PROTO)
+	mv plugin/net_observ/ruijie-json.pb.h include/plugin/net_observ/ruijie-json.pb.h
+	mv plugin/net_observ/ruijie-json.grpc.pb.h include/plugin/net_observ/ruijie-json.grpc.pb.h
+	@mkdir -p $(dir $@) && touch $@
+
+$(RUIJIE_JSON_PB_SRC) $(RUIJIE_JSON_PB_HDR): $(RUIJIE_JSON_PB_STAMP)
+
+$(RUIJIE_JSON_PB_SRC:%.cc=$(OBJDIR)/%.o): $(RUIJIE_JSON_PB_STAMP)
+
 # DOCA GPUNetIO definitions
 DOCA_HOME        ?= transport/net_ib/gdaki/doca-gpunetio
 DOCA_INC_INSTALL := $(INCDIR)/nccl_device/gin/gdaki/doca_gpunetio
 DOCA_OBJDIR      := $(OBJDIR)/transport/net_ib/gdaki/doca-gpunetio
 DOCA_INCLUDES    := $(DOCA_HOME)/include/doca_gpunetio_device.h $(wildcard $(DOCA_HOME)/include/common/*.h) $(wildcard $(DOCA_HOME)/include/device/*.cuh)
 DOCA_INCTARGETS  := $(DOCA_INCLUDES:$(DOCA_HOME)/include/%=$(DOCA_INC_INSTALL)/%)
-INCTARGETS       += $(DOCA_INCTARGETS)
+INCTARGETS += $(DOCA_INCTARGETS)
 DOCA_LIBSRC      := doca_verbs_qp.cpp doca_verbs_cq.cpp doca_verbs_device_attr.cpp doca_verbs_umem.cpp doca_verbs_srq.cpp doca_verbs_uar.cpp doca_gpunetio.cpp doca_gpunetio_log.cpp doca_gpunetio_high_level.cpp doca_verbs_cuda_wrapper.cpp doca_verbs_mlx5dv_wrapper.cpp doca_verbs_ibv_wrapper.cpp doca_gpunetio_gdrcopy.cpp
 DOCA_LIBOBJ      := $(DOCA_LIBSRC:%.cpp=$(DOCA_OBJDIR)/%.o)
 LIBOBJ           += $(DOCA_LIBOBJ)
 
 ##### rules
-build : lib staticlib binary
+build : proto lib staticlib binary
+
+proto : $(RUIJIE_JSON_PB_STAMP)
 
 lib : $(INCTARGETS) $(LIBDIR)/$(LIBTARGET) $(PKGDIR)/$(PKGTARGET)
 
@@ -229,8 +259,8 @@ $(PKGDIR)/%.pc : %.pc
 $(OBJDIR)/%.o : %.cc $(INCTARGETS)
 	@printf "Compiling  %-35s > %s\n" $< $@
 	mkdir -p `dirname $@`
-	$(CXX) -I. -I$(INCDIR) -I$(OBJDIR)/include $(CXXFLAGS) -Iinclude -I$(INCPLUGIN) -Iplugin/include -I$(DOCA_HOME)/include -c $< -o $@
-	@$(CXX) -I. -I$(INCDIR) -I$(OBJDIR)/include $(CXXFLAGS) -Iinclude -I$(INCPLUGIN) -Iplugin/include -I$(DOCA_HOME)/include -M $< > $(@:%.o=%.d.tmp)
+	$(CXX) -I. -I$(INCDIR) -I$(OBJDIR)/include $(CXXFLAGS) -Iinclude -I$(INCPLUGIN) -I$(RUIJIE_JSON_INC) -Iplugin/include -I$(DOCA_HOME)/include -c $< -o $@
+	@$(CXX) -I. -I$(INCDIR) -I$(OBJDIR)/include $(CXXFLAGS) -Iinclude -I$(INCPLUGIN) -I$(RUIJIE_JSON_INC) -Iplugin/include -I$(DOCA_HOME)/include -M $< > $(@:%.o=%.d.tmp)
 	@sed "0,/^.*:/s//$(subst /,\/,$@):/" $(@:%.o=%.d.tmp) > $(@:%.o=%.d)
 	@sed -e 's/.*://' -e 's/\\$$//' < $(@:%.o=%.d.tmp) | fmt -1 | \
                 sed -e 's/^ *//' -e 's/$$/:/' >> $(@:%.o=%.d)

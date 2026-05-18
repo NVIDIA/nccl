@@ -343,10 +343,22 @@ ncclResult_t ncclShadowPoolAlloc(
     props.handleTypes = cudaMemHandleTypeNone;
     props.location.type = cudaMemLocationTypeDevice;
     cudaGetDevice(&props.location.id);
-    CUDACHECK(cudaMemPoolCreate(&pool->memPool, &props));
 
+    // Failing steps first, operate on state on the stack
+    cudaMemPool_t memPool = nullptr;
+    CUDACHECK(cudaMemPoolCreate(&memPool, &props));
+
+    struct ncclShadowObject** table = (struct ncclShadowObject**)malloc(sizeof(struct ncclShadowObject*)<<4);
+    if (table == nullptr) {
+      WARN("Failed to allocate hash table for shadow pool");
+      cudaMemPoolDestroy(memPool);
+      return ncclSystemError;
+    }
+
+    // Non-failing steps last - update pool state only after all operations succeed
+    pool->memPool = memPool;
+    pool->table = table;
     pool->hbits = hbits = 4;
-    pool->table = (struct ncclShadowObject**)malloc(sizeof(struct ncclShadowObject*)<<hbits);
     for (int i=0; i < 1<<hbits; i++) pool->table[i] = nullptr;
   }
 
@@ -354,6 +366,10 @@ ncclResult_t ncclShadowPoolAlloc(
   if (pool->count+1 > 2<<hbits) {
     struct ncclShadowObject** table0 = pool->table;
     struct ncclShadowObject** table1 = (struct ncclShadowObject**)malloc(sizeof(struct ncclShadowObject*)<<(hbits+1));
+    if (table1 == nullptr) {
+      WARN("Failed to allocate expanded hash table for shadow pool");
+      return ncclSystemError;
+    }
     pool->table = table1;
     pool->hbits = hbits+1;
     for (int i1=0; i1 < 2<<hbits; i1++) table1[i1] = nullptr;
@@ -369,9 +385,18 @@ ncclResult_t ncclShadowPoolAlloc(
     free(table0);
   }
 
-  struct ncclShadowPage* page;
+  // Allocate obj early, before any device state modifications
+  struct ncclShadowObject* obj = (struct ncclShadowObject*)malloc(
+    sizeof(struct ncclShadowObject) + /*padding=*/alignof(max_align_t)-1 + size
+  );
+  if (obj == nullptr) {
+    WARN("Failed to allocate shadow pool object");
+    return ncclSystemError;
+  }
+
+  struct ncclShadowPage* page = nullptr;
   struct ncclShadowPage* newPage = nullptr;
-  void *devObj;
+  void *devObj = nullptr;
   if ((64<<10)/size >= 3) {
     int shift = std::max<int>(0, (int)log2Down(size) + 1 - 4);
     int pageObjSize = ((size + (1<<shift)-1)>>shift)<<shift;
@@ -381,15 +406,22 @@ ncclResult_t ncclShadowPoolAlloc(
       if (page == nullptr) {
         size_t pageSize = std::min<size_t>(64<<10, 64*pageObjSize);
         page = (struct ncclShadowPage*)malloc(sizeof(struct ncclShadowPage));
-        newPage = page;
+        if (page == nullptr) {
+          WARN("Failed to allocate shadow pool page metadata");
+          free(obj);
+          return ncclSystemError;
+        }
         page->objSize = pageObjSize;
         page->freeMask = uint64_t(-1)>>(64 - pageSize/pageObjSize);
+        page->next = nullptr;
         page->devObjs = nullptr;
+        newPage = page;
         CUDACHECKGOTO(cudaMallocFromPoolAsync(&page->devObjs, pageSize, pool->memPool, stream), ret, fail);
         CUDACHECKGOTO(cudaMemsetAsync(page->devObjs, 0, pageSize, stream), ret, fail);
+        newPage = nullptr;
+        // Only link page into pool after CUDA operations succeed
         page->next = pool->pages;
         pool->pages = page;
-        newPage = nullptr;
         // fall through...
       }
       if (page->objSize == pageObjSize) {
@@ -402,13 +434,9 @@ ncclResult_t ncclShadowPoolAlloc(
     }
   } else {
     page = nullptr;
-    CUDACHECK(cudaMallocFromPoolAsync(&devObj, size, pool->memPool, stream));
-    CUDACHECK(cudaMemsetAsync(devObj, 0, size, stream));
+    CUDACHECKGOTO(cudaMallocFromPoolAsync(&devObj, size, pool->memPool, stream), ret, fail);
+    CUDACHECKGOTO(cudaMemsetAsync(devObj, 0, size, stream), ret, fail);
   }
-
-  struct ncclShadowObject* obj = (struct ncclShadowObject*)malloc(
-    sizeof(struct ncclShadowObject) + /*padding=*/alignof(max_align_t)-1 + size
-  );
   obj->page = page;
   obj->devObj = devObj;
   obj->hostObj = alignUp((char*)(obj+1), alignof(max_align_t));
@@ -423,7 +451,10 @@ fail:
   if (newPage != nullptr) {
     if (newPage->devObjs != nullptr) cudaFreeAsync(newPage->devObjs, stream);
     free(newPage);
+  } else if (page == nullptr && devObj != nullptr) {
+    cudaFreeAsync(devObj, stream);
   }
+  free(obj);
   return ret;
 }
 
@@ -434,7 +465,9 @@ ncclResult_t ncclShadowPoolFree(struct ncclShadowPool* pool, void* devObj, cudaS
   struct ncclShadowObject** pobj = &pool->table[b];
   while (true) {
     if (*pobj == nullptr) {
-      WARN("Device object does not exist in shadow pool.");
+      WARN("ncclShadowPoolFree: Device object %p not found in shadow pool (hash bucket %lu). "
+         "This may indicate a use-after-free or double-free error. Pool has %d objects.",
+           devObj, b, pool->count);
       return ncclInternalError;
     }
     if ((*pobj)->devObj == devObj) break;

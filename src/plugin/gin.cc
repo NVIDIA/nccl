@@ -105,14 +105,21 @@ fail:
 
 static ncclResult_t ncclGinPluginInit(struct ncclComm* comm, ginPluginLib_t* pluginLib) {
   int ndev;
+  bool ginInitCompleted = false;
   // Init must be called for each new comm to set the right context
   if (pluginLib->state >= ncclGinPluginStateInitReady && pluginLib->ncclGin) {
     if (!pluginLib->ncclGin->init || pluginLib->ncclGin->init(&comm->ginContext, comm->commHash, ncclDebugLog) != ncclSuccess) {
       pluginLib->state = ncclGinPluginStateDisabled;
+    } else {
+      ginInitCompleted = true;
     }
   }
   if (pluginLib->state == ncclGinPluginStateInitReady && pluginLib->ncclGin) {
     if (pluginLib->ncclGin->devices(&ndev) != ncclSuccess || ndev <= 0) {
+      if (ginInitCompleted) {
+        pluginLib->ncclGin->finalize(comm->ginContext);
+        comm->ginContext = nullptr;
+      }
       pluginLib->state = ncclGinPluginStateDisabled;
     } else {
       pluginLib->physDevs = ndev;

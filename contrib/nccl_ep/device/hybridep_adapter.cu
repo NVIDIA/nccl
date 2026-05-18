@@ -526,6 +526,10 @@ void dispatch_impl(
                "experts_per_node must be multiple of 4 for TMA alignment");
         assert(params.num_ranks_per_node <= ::hybrid_ep::HYBRIDEP_MAX_LSA_TEAM_SIZE &&
                "num_ranks_per_node exceeds HYBRIDEP_MAX_LSA_TEAM_SIZE");
+        // 16B cp.async.bulk alignment for the S2D map fetch; matters when s2d_inner_dim < 4.
+        assert((static_cast<int64_t>(params.num_tokens_per_rank) * params.s2d_inner_dim) % 4 == 0 &&
+               "Dispatch S2D cp.async.bulk: num_tokens_per_rank * s2d_inner_dim must be a "
+               "multiple of 4 (flat layout with lsa_team_size <= 3 requires even num_tokens_per_rank)");
 
         auto kp = build_dispatch_param<TOKEN_DATA_TYPE>(params);
         constexpr bool kUseFp8 = std::is_same_v<TOKEN_DATA_TYPE, uint8_t>;

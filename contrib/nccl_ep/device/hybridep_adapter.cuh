@@ -22,13 +22,15 @@ namespace hybridep {
 
 // ============================================================================
 // Runtime constants (from ep_group, not hardcoded):
-//   lsa_team_size  - ncclTeamLsa(comm).nRanks  (up to 72 for MNNVL/NVL72)
+//   lsa_team_size  - ncclTeamLsa(comm).nRanks  (1..HYBRIDEP_MAX_LSA_TEAM_SIZE)
 //   rdma_team_size - ncclTeamRail(comm).nRanks
 //   num_local_experts, hidden
 //
-// Use HYBRIDEP_SWITCH_* macros to instantiate templates with runtime values.
-// LSA team size is dispatched in steps of 4 up to 72; each instantiation
-// sizes its own register-file arrays via the LSA_TEAM_SIZE template param.
+// Kernels are JIT-compiled per (lsa_team_size, num_lsa_teams, ...); templates
+// size their register/SMEM arrays exactly to the JIT lsa_team_size, so any
+// value in [1, HYBRIDEP_MAX_LSA_TEAM_SIZE] works.  The only runtime
+// precondition is the S2D cp.async.bulk alignment asserted in dispatch_impl
+// (matters when s2d_inner_dim is not a multiple of 4).
 // ============================================================================
 
 // ============================================================================

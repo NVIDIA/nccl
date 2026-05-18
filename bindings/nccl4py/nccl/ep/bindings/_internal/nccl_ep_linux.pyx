@@ -374,14 +374,14 @@ cdef ncclResult_t _ncclEpTensorDestroy(ncclNDTensor_t tensor) except?_NCCLRESULT
         tensor)
 
 
-cdef ncclResult_t _ncclEpCreateHandle(ncclEpHandle_t* handle, ncclEpGroup_t ep_group, ncclNDTensor_t topk_idx, const ncclEpLayoutInfo_t* layout_info, const ncclEpHandleConfig_t* config, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
+cdef ncclResult_t _ncclEpCreateHandle(ncclEpHandle_t* handle, ncclEpGroup_t ep_group, ncclEpLayout_t layout, ncclNDTensor_t topk_idx, const ncclEpLayoutInfo_t* layout_info, const ncclEpHandleConfig_t* config, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
     global __ncclEpCreateHandle
     _check_or_init_nccl_ep()
     if __ncclEpCreateHandle == NULL:
         with gil:
             raise FunctionNotFoundError("function ncclEpCreateHandle is not found")
-    return (<ncclResult_t (*)(ncclEpHandle_t*, ncclEpGroup_t, ncclNDTensor_t, const ncclEpLayoutInfo_t*, const ncclEpHandleConfig_t*, cudaStream_t) noexcept nogil>__ncclEpCreateHandle)(
-        handle, ep_group, topk_idx, layout_info, config, stream)
+    return (<ncclResult_t (*)(ncclEpHandle_t*, ncclEpGroup_t, ncclEpLayout_t, ncclNDTensor_t, const ncclEpLayoutInfo_t*, const ncclEpHandleConfig_t*, cudaStream_t) noexcept nogil>__ncclEpCreateHandle)(
+        handle, ep_group, layout, topk_idx, layout_info, config, stream)
 
 
 cdef ncclResult_t _ncclEpHandleDestroy(ncclEpHandle_t handle) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
@@ -394,24 +394,24 @@ cdef ncclResult_t _ncclEpHandleDestroy(ncclEpHandle_t handle) except?_NCCLRESULT
         handle)
 
 
-cdef ncclResult_t _ncclEpHandleMemSize(ncclEpGroup_t ep_group, const ncclEpHandleConfig_t* config, size_t* size_out, int num_topk) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
+cdef ncclResult_t _ncclEpHandleMemSize(ncclEpGroup_t ep_group, ncclEpLayout_t layout, const ncclEpHandleConfig_t* config, size_t* size_out, int num_topk) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
     global __ncclEpHandleMemSize
     _check_or_init_nccl_ep()
     if __ncclEpHandleMemSize == NULL:
         with gil:
             raise FunctionNotFoundError("function ncclEpHandleMemSize is not found")
-    return (<ncclResult_t (*)(ncclEpGroup_t, const ncclEpHandleConfig_t*, size_t*, int) noexcept nogil>__ncclEpHandleMemSize)(
-        ep_group, config, size_out, num_topk)
+    return (<ncclResult_t (*)(ncclEpGroup_t, ncclEpLayout_t, const ncclEpHandleConfig_t*, size_t*, int) noexcept nogil>__ncclEpHandleMemSize)(
+        ep_group, layout, config, size_out, num_topk)
 
 
-cdef ncclResult_t _ncclEpInitHandle(ncclEpHandle_t* handle, ncclEpGroup_t ep_group, const ncclEpHandleConfig_t* config, int num_topk, ncclNDTensor_t handle_mem) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
+cdef ncclResult_t _ncclEpInitHandle(ncclEpHandle_t* handle, ncclEpGroup_t ep_group, ncclEpLayout_t layout, const ncclEpHandleConfig_t* config, int num_topk, ncclNDTensor_t handle_mem) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
     global __ncclEpInitHandle
     _check_or_init_nccl_ep()
     if __ncclEpInitHandle == NULL:
         with gil:
             raise FunctionNotFoundError("function ncclEpInitHandle is not found")
-    return (<ncclResult_t (*)(ncclEpHandle_t*, ncclEpGroup_t, const ncclEpHandleConfig_t*, int, ncclNDTensor_t) noexcept nogil>__ncclEpInitHandle)(
-        handle, ep_group, config, num_topk, handle_mem)
+    return (<ncclResult_t (*)(ncclEpHandle_t*, ncclEpGroup_t, ncclEpLayout_t, const ncclEpHandleConfig_t*, int, ncclNDTensor_t) noexcept nogil>__ncclEpInitHandle)(
+        handle, ep_group, layout, config, num_topk, handle_mem)
 
 
 cdef ncclResult_t _ncclEpUpdateHandle(ncclEpHandle_t handle, ncclNDTensor_t topk_idx, const ncclEpLayoutInfo_t* layout_info, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:

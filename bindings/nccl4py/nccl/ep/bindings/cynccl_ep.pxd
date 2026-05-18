@@ -51,7 +51,7 @@ ctypedef enum ncclEpAlgorithm_t "ncclEpAlgorithm_t":
     NCCL_EP_ALGO_HIGH_THROUGHPUT "NCCL_EP_ALGO_HIGH_THROUGHPUT" = 1
 
 ctypedef enum ncclEpLayout_t "ncclEpLayout_t":
-    NCCL_EP_LAYOUT_AUTO "NCCL_EP_LAYOUT_AUTO" = 0
+    NCCL_EP_LAYOUT_UNSET "NCCL_EP_LAYOUT_UNSET" = 0
     NCCL_EP_LAYOUT_EXPERT_MAJOR "NCCL_EP_LAYOUT_EXPERT_MAJOR"
     NCCL_EP_LAYOUT_RANK_MAJOR "NCCL_EP_LAYOUT_RANK_MAJOR"
     NCCL_EP_LAYOUT_FLAT "NCCL_EP_LAYOUT_FLAT"
@@ -138,7 +138,6 @@ ctypedef struct ncclEpGroupConfig_t 'ncclEpGroupConfig_t':
     unsigned int size
     unsigned int version
     ncclEpAlgorithm_t algorithm
-    ncclEpLayout_t layout
     unsigned int num_experts
     unsigned int max_dispatch_tokens_per_rank
     unsigned int max_recv_tokens_per_rank
@@ -162,10 +161,10 @@ cdef ncclResult_t ncclEpGroupDestroy(ncclEpGroup_t ep_group) except?_NCCLRESULT_
 cdef ncclResult_t ncclEpTensorCreate(ncclNDTensor_t* tensor, unsigned int ndim, ncclDataType_t datatype, void* data, const size_t* sizes) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclEpTensorCreateFromWindow(ncclNDTensor_t* tensor, unsigned int ndim, ncclDataType_t datatype, ncclWindow_t win, uint64_t win_offset, const size_t* sizes) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclEpTensorDestroy(ncclNDTensor_t tensor) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
-cdef ncclResult_t ncclEpCreateHandle(ncclEpHandle_t* handle, ncclEpGroup_t ep_group, ncclNDTensor_t topk_idx, const ncclEpLayoutInfo_t* layout_info, const ncclEpHandleConfig_t* config, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
+cdef ncclResult_t ncclEpCreateHandle(ncclEpHandle_t* handle, ncclEpGroup_t ep_group, ncclEpLayout_t layout, ncclNDTensor_t topk_idx, const ncclEpLayoutInfo_t* layout_info, const ncclEpHandleConfig_t* config, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclEpHandleDestroy(ncclEpHandle_t handle) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
-cdef ncclResult_t ncclEpHandleMemSize(ncclEpGroup_t ep_group, const ncclEpHandleConfig_t* config, size_t* size_out, int num_topk) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
-cdef ncclResult_t ncclEpInitHandle(ncclEpHandle_t* handle, ncclEpGroup_t ep_group, const ncclEpHandleConfig_t* config, int num_topk, ncclNDTensor_t handle_mem) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
+cdef ncclResult_t ncclEpHandleMemSize(ncclEpGroup_t ep_group, ncclEpLayout_t layout, const ncclEpHandleConfig_t* config, size_t* size_out, int num_topk) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
+cdef ncclResult_t ncclEpInitHandle(ncclEpHandle_t* handle, ncclEpGroup_t ep_group, ncclEpLayout_t layout, const ncclEpHandleConfig_t* config, int num_topk, ncclNDTensor_t handle_mem) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclEpUpdateHandle(ncclEpHandle_t handle, ncclNDTensor_t topk_idx, const ncclEpLayoutInfo_t* layout_info, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclEpDispatch(ncclEpHandle_t handle, const ncclEpDispatchInputs_t* inputs, const ncclEpDispatchOutputs_t* outputs, const ncclEpLayoutInfo_t* layout_info, const ncclEpDispatchConfig_t* config, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclEpCombine(ncclEpHandle_t handle, const ncclEpCombineInputs_t* inputs, const ncclEpCombineOutputs_t* outputs, const ncclEpCombineConfig_t* config, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil

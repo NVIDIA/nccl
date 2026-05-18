@@ -1585,13 +1585,12 @@ cdef class EpCombineConfig:
 cdef _get_ep_group_config_dtype_offsets():
     cdef ncclEpGroupConfig_t pod = ncclEpGroupConfig_t()
     return _numpy.dtype({
-        'names': ['size_', 'version', 'algorithm', 'layout', 'num_experts', 'max_dispatch_tokens_per_rank', 'max_recv_tokens_per_rank', 'max_token_bytes', 'rdma_buffer_size', 'num_qp_per_rank', 'num_channels', 'max_num_sms', 'alloc', 'enable_mask', 'timeout_ns'],
-        'formats': [_numpy.uint32, _numpy.uint32, _numpy.int32, _numpy.int32, _numpy.uint32, _numpy.uint32, _numpy.uint32, _numpy.uint32, _numpy.dtype(('V', sizeof(unsigned long int))), _numpy.uint32, _numpy.uint32, _numpy.uint32, ep_alloc_config_dtype, _numpy.uint32, _numpy.uint64],
+        'names': ['size_', 'version', 'algorithm', 'num_experts', 'max_dispatch_tokens_per_rank', 'max_recv_tokens_per_rank', 'max_token_bytes', 'rdma_buffer_size', 'num_qp_per_rank', 'num_channels', 'max_num_sms', 'alloc', 'enable_mask', 'timeout_ns'],
+        'formats': [_numpy.uint32, _numpy.uint32, _numpy.int32, _numpy.uint32, _numpy.uint32, _numpy.uint32, _numpy.uint32, _numpy.dtype(('V', sizeof(unsigned long int))), _numpy.uint32, _numpy.uint32, _numpy.uint32, ep_alloc_config_dtype, _numpy.uint32, _numpy.uint64],
         'offsets': [
             (<intptr_t>&(pod.size)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.version)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.algorithm)) - (<intptr_t>&pod),
-            (<intptr_t>&(pod.layout)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.num_experts)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.max_dispatch_tokens_per_rank)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.max_recv_tokens_per_rank)) - (<intptr_t>&pod),
@@ -1721,17 +1720,6 @@ cdef class EpGroupConfig:
         if self._readonly:
             raise ValueError("This EpGroupConfig instance is read-only")
         self._ptr[0].algorithm = <ncclEpAlgorithm_t><int>val
-
-    @property
-    def layout(self):
-        """int: """
-        return <int>(self._ptr[0].layout)
-
-    @layout.setter
-    def layout(self, val):
-        if self._readonly:
-            raise ValueError("This EpGroupConfig instance is read-only")
-        self._ptr[0].layout = <ncclEpLayout_t><int>val
 
     @property
     def num_experts(self):
@@ -1941,7 +1929,7 @@ class EpLayout(_IntEnum):
     """
     See `ncclEpLayout_t`.
     """
-    AUTO = NCCL_EP_LAYOUT_AUTO
+    UNSET = NCCL_EP_LAYOUT_UNSET
     EXPERT_MAJOR = NCCL_EP_LAYOUT_EXPERT_MAJOR
     RANK_MAJOR = NCCL_EP_LAYOUT_RANK_MAJOR
     FLAT = NCCL_EP_LAYOUT_FLAT
@@ -2008,10 +1996,10 @@ cpdef tensor_destroy(intptr_t tensor):
     check_status(__status__)
 
 
-cpdef intptr_t create_handle(intptr_t ep_group, intptr_t topk_idx, intptr_t layout_info, intptr_t config, intptr_t stream) except? 0:
+cpdef intptr_t create_handle(intptr_t ep_group, int layout, intptr_t topk_idx, intptr_t layout_info, intptr_t config, intptr_t stream) except? 0:
     cdef EpHandle handle
     with nogil:
-        __status__ = ncclEpCreateHandle(&handle, <EpGroup>ep_group, <NDTensor>topk_idx, <const ncclEpLayoutInfo_t*>layout_info, <const ncclEpHandleConfig_t*>config, <Stream>stream)
+        __status__ = ncclEpCreateHandle(&handle, <EpGroup>ep_group, <_EpLayout>layout, <NDTensor>topk_idx, <const ncclEpLayoutInfo_t*>layout_info, <const ncclEpHandleConfig_t*>config, <Stream>stream)
     check_status(__status__)
     return <intptr_t>handle
 
@@ -2022,18 +2010,18 @@ cpdef handle_destroy(intptr_t handle):
     check_status(__status__)
 
 
-cpdef size_t handle_mem_size(intptr_t ep_group, intptr_t config, int num_topk) except? -1:
+cpdef size_t handle_mem_size(intptr_t ep_group, int layout, intptr_t config, int num_topk) except? -1:
     cdef size_t size_out
     with nogil:
-        __status__ = ncclEpHandleMemSize(<EpGroup>ep_group, <const ncclEpHandleConfig_t*>config, &size_out, num_topk)
+        __status__ = ncclEpHandleMemSize(<EpGroup>ep_group, <_EpLayout>layout, <const ncclEpHandleConfig_t*>config, &size_out, num_topk)
     check_status(__status__)
     return size_out
 
 
-cpdef intptr_t init_handle(intptr_t ep_group, intptr_t config, int num_topk, intptr_t handle_mem) except? 0:
+cpdef intptr_t init_handle(intptr_t ep_group, int layout, intptr_t config, int num_topk, intptr_t handle_mem) except? 0:
     cdef EpHandle handle
     with nogil:
-        __status__ = ncclEpInitHandle(&handle, <EpGroup>ep_group, <const ncclEpHandleConfig_t*>config, num_topk, <NDTensor>handle_mem)
+        __status__ = ncclEpInitHandle(&handle, <EpGroup>ep_group, <_EpLayout>layout, <const ncclEpHandleConfig_t*>config, num_topk, <NDTensor>handle_mem)
     check_status(__status__)
     return <intptr_t>handle
 

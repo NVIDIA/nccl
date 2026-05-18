@@ -43,10 +43,10 @@ cpdef group_destroy(intptr_t ep_group)
 cpdef intptr_t tensor_create(unsigned int ndim, int datatype, intptr_t data, intptr_t sizes) except? 0
 cpdef intptr_t tensor_create_from_window(unsigned int ndim, int datatype, intptr_t win, uint64_t win_offset, intptr_t sizes) except? 0
 cpdef tensor_destroy(intptr_t tensor)
-cpdef intptr_t create_handle(intptr_t ep_group, intptr_t topk_idx, intptr_t layout_info, intptr_t config, intptr_t stream) except? 0
+cpdef intptr_t create_handle(intptr_t ep_group, int layout, intptr_t topk_idx, intptr_t layout_info, intptr_t config, intptr_t stream) except? 0
 cpdef handle_destroy(intptr_t handle)
-cpdef size_t handle_mem_size(intptr_t ep_group, intptr_t config, int num_topk) except? -1
-cpdef intptr_t init_handle(intptr_t ep_group, intptr_t config, int num_topk, intptr_t handle_mem) except? 0
+cpdef size_t handle_mem_size(intptr_t ep_group, int layout, intptr_t config, int num_topk) except? -1
+cpdef intptr_t init_handle(intptr_t ep_group, int layout, intptr_t config, int num_topk, intptr_t handle_mem) except? 0
 cpdef update_handle(intptr_t handle, intptr_t topk_idx, intptr_t layout_info, intptr_t stream)
 cpdef dispatch(intptr_t handle, intptr_t inputs, intptr_t outputs, intptr_t layout_info, intptr_t config, intptr_t stream)
 cpdef combine(intptr_t handle, intptr_t inputs, intptr_t outputs, intptr_t config, intptr_t stream)

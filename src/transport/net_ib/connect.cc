@@ -284,6 +284,50 @@ static ncclResult_t ncclUpdateGidIndex(struct ibv_context* context, uint8_t port
   return ncclSuccess;
 }
 
+// Re-query the device port + GID table and update the cached gidInfo to point
+// at a currently valid GID. Required after a port flap, since the kernel may
+// re-register GIDs at a different index than at initial connect time, leaving
+// the previously-cached localGidIndex pointing at an empty slot. RoCE/Ethernet
+// only; for IB the GID layout is stable so no refresh is needed. The freshly
+// queried port_attr is also written back into ibDev->portAttr so that callers
+// reading active_mtu etc. see post-flap values.
+ncclResult_t ncclIbRefreshGidInfo(struct ncclIbDev* ibDev, struct ncclIbGidInfo* gidInfo) {
+  if (ibDev == NULL || gidInfo == NULL) return ncclInternalError;
+  if (gidInfo->link_layer != IBV_LINK_LAYER_ETHERNET) return ncclSuccess;
+
+  struct ibv_port_attr portAttr;
+  ncclResult_t res = wrap_ibv_query_port(ibDev->context, ibDev->portNum, &portAttr);
+  if (res != ncclSuccess) {
+    INFO(NCCL_NET, "NET/IB: %s: query_port failed on %s:%d, keeping cached gidIndex=%d",
+         __func__, ibDev->devName, ibDev->portNum, gidInfo->localGidIndex);
+    return ncclSuccess;
+  }
+  int newIdx = -1;
+  res = ncclIbGetGidIndex(ibDev->context, ibDev->portNum, &portAttr, &newIdx);
+  if (res != ncclSuccess || newIdx < 0) {
+    INFO(NCCL_NET, "NET/IB: %s: get_gid_index failed on %s:%d, keeping cached gidIndex=%d",
+         __func__, ibDev->devName, ibDev->portNum, gidInfo->localGidIndex);
+    return ncclSuccess;
+  }
+  union ibv_gid newGid;
+  res = wrap_ibv_query_gid(ibDev->context, ibDev->portNum, newIdx, &newGid);
+  if (res != ncclSuccess) {
+    INFO(NCCL_NET, "NET/IB: %s: query_gid(idx=%d) failed on %s:%d, keeping cached gidIndex=%d",
+         __func__, newIdx, ibDev->devName, ibDev->portNum, gidInfo->localGidIndex);
+    return ncclSuccess;
+  }
+
+  ibDev->portAttr = portAttr;
+  if (newIdx != gidInfo->localGidIndex ||
+      memcmp(&newGid, &gidInfo->localGid, sizeof(newGid)) != 0) {
+    INFO(NCCL_NET, "NET/IB: %s: refreshed GID for %s:%d: idx %d -> %d",
+         __func__, ibDev->devName, ibDev->portNum, gidInfo->localGidIndex, newIdx);
+    gidInfo->localGid = newGid;
+    gidInfo->localGidIndex = newIdx;
+  }
+  return ncclSuccess;
+}
+
 ncclResult_t ncclIbGetGidIndex(struct ibv_context *context, uint8_t portNum, struct ibv_port_attr* portAttr, int *gidIndex) {
   int gidTblLen = portAttr->gid_tbl_len;
 

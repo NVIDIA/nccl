@@ -233,9 +233,10 @@ struct DispatchParams {
     const int64_t* pad_expert_token_offsets;
     int            pad_alignment;
 
-    // Sync state (group-level monotonic counters, computed on host)
-    uint64_t expected_rdma_flag_value;
-    uint32_t expected_intra_node_flag_value;
+    // Device pointers to the expected counters; initialized at bootstrap and
+    // bumped by the dispatch kernel tail so CUDA-graph replays self-sequence.
+    uint64_t* expected_rdma_flag_value;
+    uint32_t* expected_intra_node_flag_value;
     uint64_t* rdma_inter_node_group_flags;
     uint32_t* intra_node_write_completion_flags;
     // Grid barrier counter for fused device_sync in dispatch tail
@@ -302,11 +303,14 @@ struct CombineParams {
     const bool* attn_to_rdma_map;                      // For multi-node RDMA routing
     const bool* local_expert_routing_map;              // For backward gradient routing
 
-    // Sync state (group-level monotonic counters, computed on host)
-    uint64_t combine_expected_rdma_flag_value;
-    uint32_t combine_expected_intra_node_flag_value;
+    // Device pointers to the expected counters; initialized at bootstrap and
+    // bumped by the combine kernel tail so CUDA-graph replays self-sequence.
+    uint64_t* combine_expected_rdma_flag_value;
+    uint32_t* combine_expected_intra_node_flag_value;
     uint64_t* combine_rdma_inter_node_group_flags;
     uint32_t* combine_intra_node_write_completion_flags;
+    // Per-rank grid-barrier counter that elects the last block at the combine tail.
+    uint32_t* combine_grid_barrier_counter;
 
     // GIN context (multi-node only)
     ncclDevComm_t* dcomms;              // Device communicators array

@@ -664,6 +664,7 @@ build_combine_param_base(const CombineParams& params) {
     kp.expected_intra_node_flag_value = params.combine_expected_intra_node_flag_value;
     kp.rdma_inter_node_group_flags = params.combine_rdma_inter_node_group_flags;
     kp.intra_node_write_completion_flags = params.combine_intra_node_write_completion_flags;
+    kp.combine_grid_barrier_counter = params.combine_grid_barrier_counter;
 
     // Runtime config
     kp.local_rank = params.local_rank;

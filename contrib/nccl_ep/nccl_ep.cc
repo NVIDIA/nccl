@@ -15,6 +15,7 @@
 #include <new>
 #include <optional>
 #include <set>
+#include <cstring>
 #include <string>
 #include <vector>
 #include <nccl.h>
@@ -258,13 +259,18 @@ struct ncclEpGroup {
         // Sync flags (rank 0 allocates, others IPC-map)
         uint32_t *intra_node_write_completion_flags;
         uint32_t *combine_intra_node_write_completion_flags;
-        // Grid barrier counter for fused device_sync in dispatch tail (per-rank, not IPC-shared)
-        uint32_t *dispatch_grid_barrier_counter;
-        // Host-side expected flag counters (replaces device-side update_expected_value_kernel)
-        uint64_t host_dispatch_expected_rdma = 0;
-        uint32_t host_dispatch_expected_intra = 0;
-        uint64_t host_combine_expected_rdma = 0;
-        uint32_t host_combine_expected_intra = 0;
+        // Single device-resident counter block (one alloc, one free) backing
+        // the grid-barrier counters and the per-kernel expected-flag counters.
+        // The expected counters are initialized at bootstrap and bumped in the
+        // dispatch/combine kernel tails, so the bump is captured into any
+        // enclosing CUDA graph and replays correctly.
+        void     *dev_counter_block = nullptr;
+        uint32_t *dispatch_grid_barrier_counter = nullptr;
+        uint32_t *combine_grid_barrier_counter = nullptr;
+        uint64_t *dev_dispatch_expected_rdma = nullptr;
+        uint32_t *dev_dispatch_expected_intra = nullptr;
+        uint64_t *dev_combine_expected_rdma = nullptr;
+        uint32_t *dev_combine_expected_intra = nullptr;
 
         // RDMA buffers (multi-node only)
         uint64_t *rdma_inter_node_group_flags;
@@ -502,12 +508,40 @@ static ncclResult_t init_hybridep_intranode(ncclEpGroup_t ep_group,
     ep_group->ht_buffers.intra_node_write_completion_flags = ep_group->ht_buffers.completion_flags_base;
     ep_group->ht_buffers.combine_intra_node_write_completion_flags = ep_group->ht_buffers.completion_flags_base + 1;
 
-    // Dispatch grid barrier counter (local to each rank, NOT IPC-shared)
+    // Per-rank (not IPC-shared) device counter block. Layout (offsets in bytes):
+    //   [ 0..8)  dev_dispatch_expected_rdma  (uint64_t)
+    //   [ 8..16) dev_combine_expected_rdma   (uint64_t)
+    //   [16..20) dev_dispatch_expected_intra (uint32_t)
+    //   [20..24) dev_combine_expected_intra  (uint32_t)
+    //   [24..28) dispatch_grid_barrier_counter (uint32_t)
+    //   [28..32) combine_grid_barrier_counter  (uint32_t)
     {
-        uint32_t* grid_barrier_base;
-        CUDA_CHECK(ep_group->alloc.alloc_fn(reinterpret_cast<void**>(&grid_barrier_base), sizeof(uint32_t), ep_group->alloc.context));
-        CUDA_CHECK(cudaMemsetAsync(grid_barrier_base, 0, sizeof(uint32_t), stream));
-        ep_group->ht_buffers.dispatch_grid_barrier_counter = grid_barrier_base;
+        constexpr size_t kCounterBlockBytes = 32;
+        void* block = nullptr;
+        CUDA_CHECK(ep_group->alloc.alloc_fn(&block, kCounterBlockBytes, ep_group->alloc.context));
+        ep_group->ht_buffers.dev_counter_block = block;
+        auto* base = reinterpret_cast<uint8_t*>(block);
+        ep_group->ht_buffers.dev_dispatch_expected_rdma    = reinterpret_cast<uint64_t*>(base +  0);
+        ep_group->ht_buffers.dev_combine_expected_rdma     = reinterpret_cast<uint64_t*>(base +  8);
+        ep_group->ht_buffers.dev_dispatch_expected_intra   = reinterpret_cast<uint32_t*>(base + 16);
+        ep_group->ht_buffers.dev_combine_expected_intra    = reinterpret_cast<uint32_t*>(base + 20);
+        ep_group->ht_buffers.dispatch_grid_barrier_counter = reinterpret_cast<uint32_t*>(base + 24);
+        ep_group->ht_buffers.combine_grid_barrier_counter  = reinterpret_cast<uint32_t*>(base + 28);
+
+        // Initialize the expected counters to the first-invocation value
+        // (grid-barrier counters stay at 0). Bootstrap is outside any user
+        // CUDA-graph capture, so a one-shot H2D memcpy + stream sync is safe.
+        const bool is_single_node = (ep_group->nNodes == 1);
+        const uint64_t init_rdma = is_single_node ? 0ull : 1ull;
+        const uint32_t init_intra = static_cast<uint32_t>(ep_group->lsa_team_size);
+        uint8_t host_init[kCounterBlockBytes] = {0};
+        std::memcpy(host_init +  0, &init_rdma,  sizeof(init_rdma));
+        std::memcpy(host_init +  8, &init_rdma,  sizeof(init_rdma));
+        std::memcpy(host_init + 16, &init_intra, sizeof(init_intra));
+        std::memcpy(host_init + 20, &init_intra, sizeof(init_intra));
+        CUDA_CHECK(cudaMemcpyAsync(block, host_init, kCounterBlockBytes,
+                                   cudaMemcpyHostToDevice, stream));
+        CUDA_CHECK(cudaStreamSynchronize(stream));
     }
 
     // =========================================================================
@@ -604,9 +638,16 @@ static ncclResult_t destroy_hybridep_intranode(ncclEpGroup_t ep_group) {
     if (ep_group->ht_buffers.expert_output_scaling_factor) {
         ep_group->alloc.free_fn(ep_group->ht_buffers.expert_output_scaling_factor, ep_group->alloc.context);
     }
-    // Free dispatch grid barrier counter
-    if (ep_group->ht_buffers.dispatch_grid_barrier_counter) {
-        ep_group->alloc.free_fn(ep_group->ht_buffers.dispatch_grid_barrier_counter, ep_group->alloc.context);
+    // Free the consolidated counter block (grid barriers + expected counters).
+    if (ep_group->ht_buffers.dev_counter_block) {
+        ep_group->alloc.free_fn(ep_group->ht_buffers.dev_counter_block, ep_group->alloc.context);
+        ep_group->ht_buffers.dev_counter_block = nullptr;
+        ep_group->ht_buffers.dispatch_grid_barrier_counter = nullptr;
+        ep_group->ht_buffers.combine_grid_barrier_counter = nullptr;
+        ep_group->ht_buffers.dev_dispatch_expected_rdma = nullptr;
+        ep_group->ht_buffers.dev_dispatch_expected_intra = nullptr;
+        ep_group->ht_buffers.dev_combine_expected_rdma = nullptr;
+        ep_group->ht_buffers.dev_combine_expected_intra = nullptr;
     }
 
     // Free merged completion flags local allocation
@@ -2498,11 +2539,11 @@ ncclResult_t ncclEpDispatch(
         params.pad_expert_token_offsets = expert_major ? handle->hybridep.expert_token_offsets : nullptr;
         params.pad_alignment = expert_major
             ? static_cast<int>(handle->hybridep.dispatch_output_per_expert_alignment) : 0;
-        group->ht_buffers.host_dispatch_expected_rdma += 1;
-        group->ht_buffers.host_dispatch_expected_intra += group->lsa_team_size;
-        params.expected_rdma_flag_value = is_single_node ? 0 : group->ht_buffers.host_dispatch_expected_rdma;
+        // Always pass a valid device pointer — the kernel unconditionally
+        // dereferences this even in single-node mode (the value is just unused).
+        params.expected_rdma_flag_value = group->ht_buffers.dev_dispatch_expected_rdma;
         params.rdma_inter_node_group_flags = is_single_node ? nullptr : group->ht_buffers.rdma_inter_node_group_flags;
-        params.expected_intra_node_flag_value = group->ht_buffers.host_dispatch_expected_intra;
+        params.expected_intra_node_flag_value = group->ht_buffers.dev_dispatch_expected_intra;
         params.intra_node_write_completion_flags = group->ht_buffers.intra_node_write_completion_flags;
         params.dispatch_grid_barrier_counter = group->ht_buffers.dispatch_grid_barrier_counter;
         // Pass device communicators and windows
@@ -3014,11 +3055,11 @@ ncclResult_t ncclEpCombine(
         params.rdma_to_attn_map = handle->hybridep.rdma_to_attn_map;
         params.attn_to_rdma_map = handle->hybridep.attn_to_rdma_map;
         params.local_expert_routing_map = handle->hybridep.local_expert_routing_map;
-        group->ht_buffers.host_combine_expected_rdma += 1;
-        group->ht_buffers.host_combine_expected_intra += group->lsa_team_size;
-        params.combine_expected_rdma_flag_value = is_single_node ? 0 : group->ht_buffers.host_combine_expected_rdma;
+        // Always pass a valid device pointer — see dispatch path comment.
+        params.combine_expected_rdma_flag_value = group->ht_buffers.dev_combine_expected_rdma;
         params.combine_rdma_inter_node_group_flags = is_single_node ? nullptr : group->ht_buffers.combine_rdma_inter_node_group_flags;
-        params.combine_expected_intra_node_flag_value = group->ht_buffers.host_combine_expected_intra;
+        params.combine_expected_intra_node_flag_value = group->ht_buffers.dev_combine_expected_intra;
+        params.combine_grid_barrier_counter = group->ht_buffers.combine_grid_barrier_counter;
         params.combine_intra_node_write_completion_flags = group->ht_buffers.combine_intra_node_write_completion_flags;
         const ncclWindow_t combine_token_window =
             !combine_x_uses_external_window ? x->win_hdl : group->gin_config.nccl_window;

@@ -833,8 +833,10 @@ struct dispatch_kernel_param_base_t {
   const int32_t* pad_actual_counts;       // [experts_per_rank] unpadded token counts
   const int64_t* pad_expert_token_offsets;// [experts_per_rank] zone start offsets
   int            pad_alignment;           // per-expert zone alignment in tokens (<=1 = no padding)
-  uint64_t expected_rdma_flag_value;
-  uint32_t expected_intra_node_flag_value;
+  // Device-resident expected counters. Initialized at bootstrap; bumped in
+  // this kernel's tail so CUDA-graph capture+replay self-sequences.
+  uint64_t* expected_rdma_flag_value;
+  uint32_t* expected_intra_node_flag_value;
   int local_rank;
   int node_rank;
   // The number of token output by attn layer on a rank/GPU.
@@ -889,14 +891,18 @@ struct combine_kernel_param_base_t {
   const bool* attn_to_rdma_map;
   const int32_t* sparse_to_dense_map;
   int s2d_inner_dim;               // flat: num_ranks_per_node, expert-major: num_topk
-  uint64_t expected_rdma_flag_value;
-  uint32_t expected_intra_node_flag_value;
+  // Device-resident expected counters. Initialized at bootstrap; bumped in
+  // this kernel's tail so CUDA-graph capture+replay self-sequences.
+  uint64_t* expected_rdma_flag_value;
+  uint32_t* expected_intra_node_flag_value;
   int local_rank;
   int node_rank;
   // Stride for routing-map indexing (= max_tokens_per_rank).
   int num_of_tokens_per_rank;
   // Actual token count; gates the inter_node_red TMA store.
   int num_real_tokens;
+  // Per-rank grid-barrier counter that elects the last block at the combine tail.
+  uint32_t* combine_grid_barrier_counter;
   // NCCL GIN context
   ncclDevComm_t* dcomms;             // Device communicators array (1 element, on device)
   ncclWindow_t token_window;         // Source window handle for token data
@@ -3292,18 +3298,6 @@ __forceinline__ __device__ void PAD_warp_group_device_function(
 }
 
 
-// This kernel will update expected_rdma_flag_value and expected_intra_node_flag_value in local device memory
-// by increasing the expected_rdma_flag_value by 1 and expected_intra_node_flag_value by num_of_ranks_per_node.
-template<int NUM_LSA_TEAMS>
-__launch_bounds__(1, 1)
-__global__ void update_expected_value_kernel(uint64_t* expected_rdma_flag_value, uint32_t* expected_intra_node_flag_value, const int num_of_ranks_per_node)
-{
-  if constexpr(NUM_LSA_TEAMS != 1) {
-    (*expected_rdma_flag_value) += 1;
-  }
-  (*expected_intra_node_flag_value) += num_of_ranks_per_node;
-}
-
 template<typename TOKEN_DATA_TYPE,
          typename INTER_NODE_GROUP,
          typename INTRA_NODE_G2S_GROUP,
@@ -3389,7 +3383,7 @@ __device__ __forceinline__ void dispatch_kernel_impl(
     G2S_warp_group_device_function
     <INTRA_NODE_G2S_GROUP, TOKEN_DATA_TYPE, cur_smem_t, NUM_OF_STAGES, NUM_OF_TOKENS_PER_CHUNK,
      MAX_NUM_OF_TOKENS_PER_RANK, NUM_LSA_TEAMS, NUM_OF_BLOCKS, FORWARD_DISPATCH, NUM_PIPELINES>
-    (param.local_rank, param.node_rank, param.num_of_tokens_per_rank, param.num_of_ranks_per_node, param.expected_rdma_flag_value, HIDDEN_DIM, param.rdma_to_attn_map, param.attn_input_token,
+    (param.local_rank, param.node_rank, param.num_of_tokens_per_rank, param.num_of_ranks_per_node, *param.expected_rdma_flag_value, HIDDEN_DIM, param.rdma_to_attn_map, param.attn_input_token,
     param.attn_input_prob, param.attn_input_token_scaling_factor,
     param.rdma_inter_node_group_flags, param.dcomms, param.signals_base, param.num_gin_comms, param.num_ctx_per_comm,
     param.gin_base_ptr, &param.mr_info, smem_buffer_ptr, param.experts_per_rank);
@@ -3424,6 +3418,11 @@ __device__ __forceinline__ void dispatch_kernel_impl(
   __syncthreads();
 
   if (threadIdx.x == 0) {
+      // Load the expected counter BEFORE the grid-barrier atom_add. The
+      // release on this thread's atom_add then synchronizes-with the last
+      // block's acquire, ordering this load before the last block's tail bump.
+      uint32_t expected_val = *param.expected_intra_node_flag_value;
+
       // Grid barrier: each block release-adds to publish its TMA stores (already proxy-drained
       // in S2G warp, propagated here by __syncthreads). Last block acquires peers' releases.
       uint32_t arrived = static_cast<uint32_t>(nccl_ep::atomic_add_acqrel_global(
@@ -3439,12 +3438,18 @@ __device__ __forceinline__ void dispatch_kernel_impl(
       uint32_t flag_data;
       do {
           flag_data = nccl_ep::ld_relaxed_sys_global(param.intra_node_write_completion_flags);
-      } while (flag_data != param.expected_intra_node_flag_value);
+      } while (flag_data != expected_val);
       nccl_ep::memory_fence();
 
-      // Last block resets grid counter for next invocation.
+      // Last block resets the grid counter and bumps the expected counters
+      // for the next invocation. Folding the bump here keeps CUDA-graph
+      // replays self-sequencing without a separate counter-update launch.
       if (arrived == NUM_OF_BLOCKS - 1) {
           atomicExch((unsigned int*)param.dispatch_grid_barrier_counter, 0u);
+          if constexpr (NUM_LSA_TEAMS != 1) {
+              *param.expected_rdma_flag_value += 1ull;
+          }
+          *param.expected_intra_node_flag_value += static_cast<uint32_t>(param.num_of_ranks_per_node);
       }
   }
 }
@@ -3545,9 +3550,10 @@ __device__ __forceinline__ void combine_kernel_impl(
   // Poll inter-rank flag (relaxed in loop; single fence.acq_rel.sys after orders subsequent reads).
   if (threadIdx.x == 0) {
       uint32_t flag_data;
+      uint32_t expected_val = *param.expected_intra_node_flag_value;
       do {
           flag_data = nccl_ep::ld_relaxed_sys_global(param.intra_node_write_completion_flags);
-      } while (flag_data != param.expected_intra_node_flag_value);
+      } while (flag_data != expected_val);
       nccl_ep::memory_fence();
   }
 #ifdef HYBRIDEP_ENABLE_WARP_TIMING
@@ -3626,7 +3632,7 @@ __device__ __forceinline__ void combine_kernel_impl(
     inter_node_G2S_warp_group_device_function
     <cur_smem_t, INTER_NODE_G2S_GROUP, NUM_OF_STAGES_G2S, NUM_OF_TOKENS_PER_CHUNK, MAX_NUM_OF_TOKENS_PER_RANK, NUM_LSA_TEAMS, NUM_OF_BLOCKS,
     NUM_OF_TOKENS_PER_GROUP, BACKWARD_COMBINE, HIDDEN_DIM, kLayout>
-    (param.local_rank, param.node_rank, param.num_of_tokens_per_rank, param.num_of_ranks_per_node, param.expected_rdma_flag_value, param.rdma_to_attn_map, param.attn_to_rdma_map, param.sparse_to_dense_map, param.expert_input_token, param.expert_input_prob,
+    (param.local_rank, param.node_rank, param.num_of_tokens_per_rank, param.num_of_ranks_per_node, *param.expected_rdma_flag_value, param.rdma_to_attn_map, param.attn_to_rdma_map, param.sparse_to_dense_map, param.expert_input_token, param.expert_input_prob,
     param.rdma_inter_node_group_token, param.rdma_inter_node_group_prob, param.dcomms, param.signals_base, param.combine_signal_offset, param.num_gin_comms, param.num_ctx_per_comm, param.rdma_inter_node_group_flags, smem_buffer_ptr, param.experts_per_rank);
   }else if(threadIdx_x_int < INTRA_NODE_RED_GROUP::size() + INTER_NODE_RED_GROUP::size() + INTRA_NODE_G2S_GROUP::size() + INTER_NODE_G2S_GROUP::size() + INTER_NODE_RDMA_GROUP::size()){
     // Inter-node rdma warp group.
@@ -3649,6 +3655,23 @@ __device__ __forceinline__ void combine_kernel_impl(
     param.warp_timing[_idx].work_end_clock = clock64();
   }
 #endif
+
+  // Combine tail: elect the last block via a grid barrier and bump the
+  // expected counters for the next invocation. Reads of the expected counters
+  // all happen at the kernel head, sequenced before each block's atom_add,
+  // so the bump can't be observed by any block in this kernel.
+  __syncthreads();
+  if (threadIdx.x == 0) {
+      uint32_t arrived = static_cast<uint32_t>(nccl_ep::atomic_add_acqrel_global(
+                          reinterpret_cast<const int*>(param.combine_grid_barrier_counter), 1));
+      if (arrived == NUM_OF_BLOCKS - 1) {
+          atomicExch((unsigned int*)param.combine_grid_barrier_counter, 0u);
+          if constexpr (NUM_LSA_TEAMS != 1) {
+              *param.expected_rdma_flag_value += 1ull;
+          }
+          *param.expected_intra_node_flag_value += static_cast<uint32_t>(param.num_of_ranks_per_node);
+      }
+  }
 }
 
 } // namespace hybrid_ep

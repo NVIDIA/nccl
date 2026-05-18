@@ -22,3 +22,8 @@ examples/**/allreduce
 examples/**/allreduce_ub
 examples/**/allreduce_sm
 examples/**/allreduce_device_api
+
+src/include/plugin/net_observ/ruijie-json.grpc.pb.h
+src/include/plugin/net_observ/ruijie-json.pb.h
+src/plugin/net_observ/ruijie-json.grpc.pb.cc
+src/plugin/net_observ/ruijie-json.pb.cc

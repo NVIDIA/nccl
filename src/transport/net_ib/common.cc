@@ -80,11 +80,8 @@ ncclResult_t ncclIbBaseCommInit(struct ncclIbNetCommBase* baseComm, bool isSend)
 void ncclIbSetCommRanks(void* comm, int tpRank, int tpRemoteRank) {
   if (comm) {
     struct ncclIbNetCommBase* base = (struct ncclIbNetCommBase*)comm;
-    // Sanity check: isSend should be 0 or 1 for a valid IB comm
-    if (base->isSend == 0 || base->isSend == 1) {
-      base->tpRank = tpRank;
-      base->tpRemoteRank = tpRemoteRank;
-    }
+    base->tpRank = tpRank;
+    base->tpRemoteRank = tpRemoteRank;
   }
 }
 

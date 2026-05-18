@@ -42,6 +42,9 @@ ncclResult_t ncclGetRailedGinType(struct ncclComm* comm, ncclGinType_t* ginType)
 
 void* ncclGinProgress(struct ncclGinState* ginState_) {
   struct ncclGinState* ginState = (struct ncclGinState*)ginState_;
+  if (ncclOsCpuCount(ginState->cpuAffinity)) {
+    ncclOsSetAffinity(ginState->cpuAffinity);
+  }
   while (1) {
     std::unique_lock<std::mutex> lock(ginState->mutex);
     if (ginState->ginProgress == 1) {
@@ -293,6 +296,7 @@ ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequir
   }
 
   if (ginState->needsProxyProgress && ginState->ginProgress == 0) {
+    ginState->cpuAffinity = comm->cpuAffinity;
     ginState->ginProgress = 1;
     ginState->thread = std::thread(ncclGinProgress, ginState);
     ncclSetThreadName(ginState->thread, "NCCL GIN Progress%2d", comm->cudaDev);

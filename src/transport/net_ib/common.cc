@@ -64,6 +64,8 @@ ncclResult_t ncclIbBaseCommInit(struct ncclIbNetCommBase* baseComm, bool isSend)
 
   NCCLCHECK(ncclIbResiliencyInit(baseComm, &baseComm->resiliency));
   baseComm->recvMatchingScheme = ncclParamIbReceiverSideMatchingScheme() == -2 ? BY_INDEX : ncclParamIbReceiverSideMatchingScheme();
+  baseComm->tpRank = -1;
+  baseComm->tpRemoteRank = -1;
 
   if (ncclParamIbOooRq() || (ncclParamIbResiliencyPortFailover() == 1)) {
     baseComm->recvMatchingScheme = BY_ID;
@@ -73,6 +75,17 @@ ncclResult_t ncclIbBaseCommInit(struct ncclIbNetCommBase* baseComm, bool isSend)
   }
 
   return ncclSuccess;
+}
+
+void ncclIbSetCommRanks(void* comm, int tpRank, int tpRemoteRank) {
+  if (comm) {
+    struct ncclIbNetCommBase* base = (struct ncclIbNetCommBase*)comm;
+    // Sanity check: isSend should be 0 or 1 for a valid IB comm
+    if (base->isSend == 0 || base->isSend == 1) {
+      base->tpRank = tpRank;
+      base->tpRemoteRank = tpRemoteRank;
+    }
+  }
 }
 
 ncclResult_t ncclIbRecvCommInit(struct ncclIbRecvComm* recvComm) {

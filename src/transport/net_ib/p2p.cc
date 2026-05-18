@@ -645,9 +645,10 @@ static ncclResult_t ncclIbLogCompletionWithError(struct ncclIbNetCommBase* commB
   ncclSocketGetAddr(&commBase->sock, &addr);
   ncclSocketToString(&addr, sockStr);
   char *hcaName = devBase->pd->context->device->name;
-  WARN("NET/IB: Got completion from peer %s with status=%s(%d) opcode=%s(%d) vendor_err=%u %s%s%s%s hca %s",
+  WARN("NET/IB: Got completion from peer %s with status=%s(%d) opcode=%s(%d) vendor_err=%u tpRank=%d tpRemoteRank=%d %s%s%s%s hca %s",
       sockStr, ibvWcStatusStr(wc->status), wc->status,
       ibvWcOpcodeStr(wc->opcode), wc->opcode, wc->vendor_err,
+      commBase->tpRank, commBase->tpRemoteRank,
       localGidStr ?  " localGid ":"", localGidString, remoteGidStr ? " remoteGids":"", remoteGidString, hcaName);
   return ncclSuccess;
 }

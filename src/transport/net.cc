@@ -20,6 +20,8 @@
 #include <assert.h>
 #include "register_inline.h"
 
+extern void ncclIbSetCommRanks(void* comm, int tpRank, int tpRemoteRank);
+
 static_assert(sizeof(ncclNetHandle_t) <= CONNECT_SIZE, "NET Connect info is too large");
 
 #define NCCL_NET_MAP_HOSTMEM 0
@@ -314,6 +316,7 @@ static ncclResult_t sendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   req.tpLocalRank = comm->topParentLocalRanks[comm->localRank];
   req.tpRank = comm->topParentRanks[myInfo->rank];
   req.tpRemoteRank = comm->topParentRanks[peerInfo->rank];
+  INFO(NCCL_INIT|NCCL_NET,"Channel %02d/%d : tpLocalRank=%d tpRank=%d tpRemoteRank=%d", channelId, connIndex, req.tpLocalRank, req.tpRank, req.tpRemoteRank);
   req.sameDevice = (comm->peerInfo[proxyRank].cudaDev == comm->cudaDev);
   NCCLCHECK(ncclProxyCallBlocking(comm, &send->proxyConn, ncclProxyMsgSetup, &req, sizeof(req), NULL, 0));
 
@@ -362,6 +365,7 @@ static ncclResult_t recvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   req.tpLocalRank = comm->topParentLocalRanks[comm->localRank];
   req.tpRank = comm->topParentRanks[myInfo->rank];
   req.tpRemoteRank = comm->topParentRanks[peerInfo->rank];
+  INFO(NCCL_INIT|NCCL_NET,"Channel %02d/%d : tpLocalRank=%d tpRank=%d tpRemoteRank=%d", channelId, connIndex, req.tpLocalRank, req.tpRank, req.tpRemoteRank);
   req.sameDevice = (comm->peerInfo[proxyRank].cudaDev == comm->cudaDev);
   NCCLCHECK(ncclProxyCallBlocking(comm, &recv->proxyConn, ncclProxyMsgSetup, &req, sizeof(req), connectInfo, sizeof(ncclNetHandle_t)));
   memcpy((uint8_t*)connectInfo + sizeof(ncclNetHandle_t), &req.useGdr, sizeof(int));
@@ -877,6 +881,7 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
   }
   printNetAttrs(&req->netAttr, "send connect");
   *done = 1;
+  ncclIbSetCommRanks(resources->netSendComm, resources->tpRank, resources->tpRemoteRank);
 
   if (resources->netDeviceHandle) {
     connection->netDeviceHandle = resources->netDeviceHandle;
@@ -1042,6 +1047,7 @@ static ncclResult_t recvProxyConnect(struct ncclProxyConnection* connection, str
   }
   printNetAttrs(&req->netAttr, "recv connect");
   *done = 1;
+  ncclIbSetCommRanks(resources->netRecvComm, resources->tpRank, resources->tpRemoteRank);
 
   if (resources->netDeviceHandle) {
     connection->netDeviceHandle = resources->netDeviceHandle;

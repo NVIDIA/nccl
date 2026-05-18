@@ -329,6 +329,7 @@ ncclResult_t ncclShadowPoolAlloc(
     struct ncclShadowPool* pool, size_t size, void** outDevObj, void** outHostObj,
     cudaStream_t stream
   ) {
+  ncclResult_t ret = ncclSuccess;
   if (size == 0) {
     if (outDevObj) *outDevObj = nullptr;
     if (outHostObj) *outHostObj = nullptr;
@@ -369,6 +370,7 @@ ncclResult_t ncclShadowPoolAlloc(
   }
 
   struct ncclShadowPage* page;
+  struct ncclShadowPage* newPage = nullptr;
   void *devObj;
   if ((64<<10)/size >= 3) {
     int shift = std::max<int>(0, (int)log2Down(size) + 1 - 4);
@@ -379,12 +381,15 @@ ncclResult_t ncclShadowPoolAlloc(
       if (page == nullptr) {
         size_t pageSize = std::min<size_t>(64<<10, 64*pageObjSize);
         page = (struct ncclShadowPage*)malloc(sizeof(struct ncclShadowPage));
+        newPage = page;
         page->objSize = pageObjSize;
         page->freeMask = uint64_t(-1)>>(64 - pageSize/pageObjSize);
+        page->devObjs = nullptr;
+        CUDACHECKGOTO(cudaMallocFromPoolAsync(&page->devObjs, pageSize, pool->memPool, stream), ret, fail);
+        CUDACHECKGOTO(cudaMemsetAsync(page->devObjs, 0, pageSize, stream), ret, fail);
         page->next = pool->pages;
         pool->pages = page;
-        CUDACHECK(cudaMallocFromPoolAsync(&page->devObjs, pageSize, pool->memPool, stream));
-        CUDACHECK(cudaMemsetAsync(page->devObjs, 0, pageSize, stream));
+        newPage = nullptr;
         // fall through...
       }
       if (page->objSize == pageObjSize) {
@@ -413,6 +418,13 @@ ncclResult_t ncclShadowPoolAlloc(
   if (outDevObj) *outDevObj = devObj;
   if (outHostObj) *outHostObj = obj->hostObj;
   return ncclSuccess;
+
+fail:
+  if (newPage != nullptr) {
+    if (newPage->devObjs != nullptr) cudaFreeAsync(newPage->devObjs, stream);
+    free(newPage);
+  }
+  return ret;
 }
 
 ncclResult_t ncclShadowPoolFree(struct ncclShadowPool* pool, void* devObj, cudaStream_t stream) {

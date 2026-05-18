@@ -32,6 +32,7 @@ LIBSRCFILES := \
 	$(wildcard plugin/tuner/*.cc) \
 	$(wildcard plugin/profiler/*.cc) \
 	$(wildcard plugin/env/*.cc) \
+	$(wildcard plugin/net_observ/*.cc) \
 	$(wildcard nccl_device/*.cc) \
 	$(wildcard scheduler/*.cc) \
 	$(wildcard gin/*.cc) \
@@ -228,8 +229,8 @@ $(PKGDIR)/%.pc : %.pc
 $(OBJDIR)/%.o : %.cc $(INCTARGETS)
 	@printf "Compiling  %-35s > %s\n" $< $@
 	mkdir -p `dirname $@`
-	$(CXX) -I. -I$(INCDIR) -I$(OBJDIR)/include $(CXXFLAGS) -Iinclude -I$(INCPLUGIN) -I$(DOCA_HOME)/include -c $< -o $@
-	@$(CXX) -I. -I$(INCDIR) -I$(OBJDIR)/include $(CXXFLAGS) -Iinclude -I$(INCPLUGIN) -I$(DOCA_HOME)/include -M $< > $(@:%.o=%.d.tmp)
+	$(CXX) -I. -I$(INCDIR) -I$(OBJDIR)/include $(CXXFLAGS) -Iinclude -I$(INCPLUGIN) -Iplugin/include -I$(DOCA_HOME)/include -c $< -o $@
+	@$(CXX) -I. -I$(INCDIR) -I$(OBJDIR)/include $(CXXFLAGS) -Iinclude -I$(INCPLUGIN) -Iplugin/include -I$(DOCA_HOME)/include -M $< > $(@:%.o=%.d.tmp)
 	@sed "0,/^.*:/s//$(subst /,\/,$@):/" $(@:%.o=%.d.tmp) > $(@:%.o=%.d)
 	@sed -e 's/.*://' -e 's/\\$$//' < $(@:%.o=%.d.tmp) | fmt -1 | \
                 sed -e 's/^ *//' -e 's/$$/:/' >> $(@:%.o=%.d)

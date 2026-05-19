@@ -14,7 +14,12 @@ operators.
 """
 
 from nccl._version import __version__
+from nccl._show_versions import LibraryInfo, Version, get_version, show_versions
 
 __all__ = [
     "__version__",
+    "LibraryInfo",
+    "Version",
+    "get_version",
+    "show_versions",
 ]

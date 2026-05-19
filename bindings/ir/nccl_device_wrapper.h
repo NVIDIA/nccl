@@ -144,17 +144,6 @@ NCCL_IR_EXTERN_C __device__ void ncclBarrierSessionInit(
     uint32_t index,
     bool multimem=false, ncclMultimemHandle const innerMmHandle={});
 
-NCCL_IR_EXTERN_C __device__ void ncclBarrierSessionInitAllContexts(
-    ncclBarrierSession_C* session,
-    ncclCoopAny coop,
-    ncclTeam innerTeam,
-    ncclTeam outerTeam,
-    ncclDevComm const& comm,
-    ncclLsaBarrierHandle const innerBarHandle,
-    ncclGinBarrierHandle const outerBarHandle,
-    uint32_t index,
-    bool multimem=false, ncclMultimemHandle const innerMmHandle={});
-
 NCCL_IR_EXTERN_C __device__ void ncclBarrierSessionSync(
     ncclBarrierSession_C* session,
     ncclCoopAny coop,

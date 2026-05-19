@@ -1032,7 +1032,7 @@ void ncclDevCommDump(struct ncclDevComm* devComm) {
   printf(" LSA Rank %d/%d CPC32 %d\n", devComm->lsaRank, devComm->lsaSize, devComm->lsaSize_rcp32);
   printf("\n");
   printf(" GIN\n");
-  printf("  Mode %s\n", devComm->ginIsRailed ? "Rail" : "Full");
+  printf("  Mode %s\n", devComm->ginConnectionsRailed ? "Rail" : "Full");
   printf("  Connections %d\n", devComm->ginConnectionCount);
   for (int c=0; c<devComm->ginConnectionCount; c++) {
     printf("   [%d] %d %p\n", c, devComm->ginNetDeviceTypes[c], devComm->ginHandles[c]);
@@ -1044,8 +1044,9 @@ void ncclDevCommDump(struct ncclDevComm* devComm) {
   printf("\n");
   printf(" Abort flag %p\n", devComm->abortFlag);
   printf(" LSA Barriers count %d handle %d\n", devComm->lsaBarrier.nBarriers, devComm->lsaBarrier.bufHandle);
-  printf(" Hybrid Barriers count %d LSA handle %d GIN Rail Barrier signal0 %d\n", devComm->hybridLsaBarrier.nBarriers,
-         devComm->hybridLsaBarrier.bufHandle, devComm->hybridRailGinBarrier.signal0);
+  printf(" Hybrid Barriers count %d LSA handle %d GIN Rail Barrier signal0 %d GIN World Barrier signal0 %d\n",
+         devComm->hybridLsaBarrier.nBarriers, devComm->hybridLsaBarrier.bufHandle,
+         devComm->hybridRailGinBarrier.signal0, devComm->hybridWorldGinBarrier.signal0);
   printf(" GIN Rail Barrier signal0 %d\n", devComm->railGinBarrier.signal0);
   printf(" GIN World Barrier signal0 %d\n", devComm->worldGinBarrier.signal0);
 }
@@ -1070,6 +1071,7 @@ ncclResult_t ncclDevrCommCreateInternal(
   cudaStream_t stream = nullptr;
   struct ncclDevResourceRequirements railGinBarrierReq;
   struct ncclDevResourceRequirements hybridRailGinBarrierReq;
+  struct ncclDevResourceRequirements hybridWorldGinBarrierReq;
   struct ncclDevResourceRequirements worldGinBarrierReq;
   CUmemGenericAllocationHandle memHandle = 0x0;
   struct ncclDevrMemory* mem = nullptr;
@@ -1144,7 +1146,8 @@ ncclResult_t ncclDevrCommCreateInternal(
   outDevComm->lsaRank = devr->lsaSelf;
   outDevComm->lsaSize = devr->lsaSize;
   outDevComm->lsaSize_rcp32 = idivRcp32(devr->lsaSize);
-  outDevComm->ginIsRailed = comm->sharedRes->ginState.ginConnectionType == NCCL_GIN_CONNECTION_RAIL; // false if FULL or NONE
+  outDevComm->ginConnectionsRailed = comm->sharedRes->ginState.ginConnectionType == NCCL_GIN_CONNECTION_RAIL;
+  outDevComm->ginContextsRailed = requestedConnectionType == NCCL_GIN_CONNECTION_RAIL;
   if (isInternal) outDevComm->abortFlag = comm->abortFlagDev;
 
   NCCLCHECKGOTO(symTeamObtain(comm, lsa, /*multicast=*/reqs->lsaMultimem, &tmLsa), ret, fail);
@@ -1168,7 +1171,11 @@ ncclResult_t ncclDevrCommCreateInternal(
   hybridLsaBarrierReq.next = resReqsHead;
   ncclGinBarrierCreateRequirement(comm, ncclTeamRail(comm), reqs->barrierCount, &outDevComm->hybridRailGinBarrier, &hybridRailGinBarrierReq);
   hybridRailGinBarrierReq.next = &hybridLsaBarrierReq;
-  resReqsHead = &hybridRailGinBarrierReq;
+  ncclGinBarrierCreateRequirement(comm, ncclTeamWorld(comm),
+    requestedConnectionType == NCCL_GIN_CONNECTION_RAIL ? 0 : reqs->barrierCount,
+    &outDevComm->hybridWorldGinBarrier, &hybridWorldGinBarrierReq);
+  hybridWorldGinBarrierReq.next = &hybridRailGinBarrierReq;
+  resReqsHead = &hybridWorldGinBarrierReq;
 
   ncclLsaBarrierCreateRequirement(lsa, reqs->lsaBarrierCount, &outDevComm->lsaBarrier, &lsaBarReq);
   lsaBarReq.next = resReqsHead;

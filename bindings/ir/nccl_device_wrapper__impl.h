@@ -136,20 +136,6 @@ NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void ncclBarrierSessionInit(
            innerBarHandle, outerBarHandle, index, multimem, innerMmHandle);
 }
 
-NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void ncclBarrierSessionInitAllContexts(
-    ncclBarrierSession_C* session,
-    ncclCoopAny coop,
-    ncclTeam innerTeam,
-    ncclTeam outerTeam,
-    ncclDevComm const& comm,
-    ncclLsaBarrierHandle const innerBarHandle,
-    ncclGinBarrierHandle const outerBarHandle,
-    uint32_t index,
-    bool multimem, ncclMultimemHandle const innerMmHandle) {
-    ::new (&(session->bar)) ncclBarrierSession<ncclCoopAny>(coop, innerTeam, outerTeam, ncclGinAllContexts(comm),
-           innerBarHandle, outerBarHandle, index, multimem, innerMmHandle);
-}
-
 NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void ncclBarrierSessionSync(
     ncclBarrierSession_C* session,
     ncclCoopAny coop,

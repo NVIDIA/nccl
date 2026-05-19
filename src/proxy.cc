@@ -780,10 +780,13 @@ static ncclResult_t ncclProxyGetPostedOps(struct ncclProxyState* proxyState, int
 
     if (state->active == NULL) {
       lock.lock();
-      if (pool->nextOps == -1 && !state->stop) {
+      if (pool->nextOps == -1 && state->stop.load(std::memory_order_acquire) == 0) {
         ncclProfilerStartProxyCtrlEvent(proxyState->profilerContext, &eHandle);
         ncclProfilerRecordProxyCtrlEventState(eHandle, 0, ncclProfilerProxyCtrlSleep);
-        pool->cond.wait(lock);
+        // Predicate avoids lost wakeups and guarantees we observe stop after ncclProxyProgressDestroy.
+        pool->cond.wait(lock, [&]() {
+          return pool->nextOps != -1 || state->stop.load(std::memory_order_acquire) != 0;
+        });
         ncclProfilerRecordProxyCtrlEventState(eHandle, 0, ncclProfilerProxyCtrlWakeup);
         ncclProfilerStopProxyCtrlEvent(eHandle);
       }
@@ -943,6 +946,7 @@ void* ncclProxyProgress(void *proxyState_) {
    * ncclParamProgressAppendOpFreq(). If they are equal, we will append proxy ops. This will decrease the
    * frequency of calling ncclProxyGetPostedOps() and reduce the perf impact. */
   int proxyOpAppendCounter = 0;
+  int stopv;
   do {
     int idle = 1;
     ncclResult_t ret = progressOps(proxyState, state, state->active, &idle);
@@ -973,7 +977,9 @@ void* ncclProxyProgress(void *proxyState_) {
       }
     }
     lastIdle = idle;
-  } while ((state->stop == 0 || (state->stop == 1 && state->active)) && COMPILER_ATOMIC_LOAD(proxyState->abortFlag, std::memory_order_acquire) == 0);
+    stopv = state->stop.load(std::memory_order_acquire);
+  } while ((stopv == 0 || (stopv == 1 && state->active)) &&
+           COMPILER_ATOMIC_LOAD(proxyState->abortFlag, std::memory_order_acquire) == 0);
   return NULL;
 }
 
@@ -1011,11 +1017,11 @@ ncclResult_t ncclProxyProgressDestroy(struct ncclProxyState* proxyState) {
   if (state->opsPool) {
     {
       std::lock_guard<std::mutex> lock(state->opsPool->mutex);
-      state->stop = 1;
+      state->stop.store(1, std::memory_order_release);
 #if defined(NCCL_OS_LINUX)
       state->opsPool->cond.notify_one();
 #elif defined(NCCL_OS_WINDOWS)
-      state->opsPool->cond.notify_all();
+      state->opsPool->cond.notify_one();
 #endif
     }
     state->thread.join();

@@ -18,17 +18,21 @@
 
 struct ncclGinOutboxHandle {
   ncclDevResourceHandle bufHandle;
-  ncclGinCounter_t counter0;
   uint32_t size_log2;
 };
 
 #if __cplusplus
 struct alignas(128) ncclGinOutboxState {
-  static constexpr int CursorBits = 32-5;
+  static constexpr size_t RequestBytes = sizeof(ncclGinRequest_t)*(1 << ncclGinScratchMaxBufs_log2);
   struct Unpadded {
-    uint32_t nBufs_log2:5, cursor:CursorBits;
+    // Memory to ensure the same requests aren't controlled with different contexts.
+    uint32_t ginContextId_plus_1:9;
+    uint32_t nBufs_log2:5;
+    uint32_t reserved:18;
+    uint32_t cursor;
   } unpadded;
 };
+static_assert(ncclGinOutboxState::RequestBytes % alignof(ncclGinOutboxState) == 0, "Required");
 #endif
 
 struct ncclGinInboxA2AHandle {
@@ -79,15 +83,35 @@ struct ncclGinOutboxSession_internal {
   int block;
   ncclGinOutboxState::Unpadded state;
 
+  NCCL_DEVICE_INLINE size_t getBlockStride() const {
+    return sizeof(ncclGinOutboxState) + ncclGinOutboxState::RequestBytes +
+           alignUp(1<<handle.size_log2, (int)alignof(ncclGinOutboxState));
+  }
   NCCL_DEVICE_INLINE ncclGinOutboxState* getStatePtr() const {
     char* p = (char*)ncclGetResourceBufferLocalPointer(comm, handle.bufHandle);
-    p += block*size_t((int)sizeof(ncclGinOutboxState) + alignUp(1<<handle.size_log2, (int)alignof(ncclGinOutboxState)));
+    p += block*getBlockStride();
     return (ncclGinOutboxState*)p;
   }
   NCCL_DEVICE_INLINE ncclSymPtr<ncclGinOutboxState> getStateSymPtr() const {
     ncclSymPtr<char> p = ncclGetResourceBuffer(comm, handle.bufHandle);
-    p += block*size_t((int)sizeof(ncclGinOutboxState) + alignUp(1<<handle.size_log2, (int)alignof(ncclGinOutboxState)));
+    p += block*getBlockStride();
     return (ncclSymPtr<ncclGinOutboxState>)p;
+  }
+  NCCL_DEVICE_INLINE ncclGinRequest_t* getRequestsPtr() const {
+    return (ncclGinRequest_t*)(getStatePtr() + 1);
+  }
+  NCCL_DEVICE_INLINE ncclGinRequest_t* getRequestPtr(uint32_t id, int nBufs_log2) const {
+    return getRequestsPtr() + (id & ((1<<nBufs_log2)-1));
+  }
+  NCCL_DEVICE_INLINE char* getBufsPtr() const {
+    char* p = (char*)(getStatePtr() + 1);
+    p += ncclGinOutboxState::RequestBytes;
+    return p;
+  }
+  NCCL_DEVICE_INLINE ncclSymPtr<char> getBufsSymPtr() const {
+    ncclSymPtr<char> p = (ncclSymPtr<char>)(getStateSymPtr() + 1);
+    p += ncclGinOutboxState::RequestBytes;
+    return p;
   }
 };
 #endif

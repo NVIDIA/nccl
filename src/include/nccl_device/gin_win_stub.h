@@ -39,7 +39,6 @@ using ncclGin = ncclGin_BackendMask<NCCL_GIN_BACKEND_MASK_ALL>;
 /* GIN scratch types (mirrors gin_scratch.h / gin_scratch__types.h) */
 struct ncclGinOutboxHandle {
   ncclDevResourceHandle bufHandle;
-  ncclGinCounter_t counter0;
   uint32_t size_log2;
 };
 struct ncclGinInboxA2AHandle {

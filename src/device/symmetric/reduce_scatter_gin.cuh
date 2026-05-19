@@ -43,25 +43,14 @@ static __device__ void rsAlgoHier(ncclSymkDevWorkArgs const* args, BoolTag<multi
     /*id=*/2 + stage
   };
 
-  // Construct outbox only for stage=0 when lsa peers exist.
+  // Construct outbox only for stage=0. The LSA path uses both scratch buffers and
+  // requests; the rail-only path uses only the request FIFO.
   alignas(ncclGinOutboxSession<ncclCoopWarpSpan>) char outbox_storage[sizeof(ncclGinOutboxSession<ncclCoopWarpSpan>)];
   ncclGinOutboxSession<ncclCoopWarpSpan>& outbox =
-    stage == 0 && lsa.nRanks != 1
+    stage == 0
       ? *::new(&outbox_storage) ncclGinOutboxSession<ncclCoopWarpSpan>
         {coopStage, gin, handler.ginOutbox, blockIdx.x}
       : reinterpret_cast<ncclGinOutboxSession<ncclCoopWarpSpan>&>(outbox_storage);
-
-  __shared__ int totalSends;
-  if (stage == 0 && !roleIsWorker && lsa.nRanks == 1) {
-    if (coopRole.thread_rank() == 0) {
-      totalSends = 0;
-      // When pure rail we use a counter to track sends. We could leave them untracked
-      // and end with a flush but by using a counter we can reuse same postSends code
-      // for the rail-only and hybrid (lsa!=1) cases.
-      gin.resetCounter(handler.ginCounterPerBlock + blockIdx.x);
-    }
-    coopRole.sync();
-  }
 
   ncclGinInboxA2ASession<ncclCoopCta> inbox
     {cta, gin, rail, handler.ginInboxRail, blockIdx.x};
@@ -127,6 +116,9 @@ static __device__ void rsAlgoHier(ncclSymkDevWorkArgs const* args, BoolTag<multi
         inbox.apportion(cta, /*subcoop=*/coopStage, /*subcoopIsNonTrivial=*/false, nBufs_log2);
         if (lsa.nRanks != 1) {
           outbox.apportion(coopStage, /*subcoop=*/coopRole, /*subcoopIsNonTrivial=*/roleIsWorker, nBufs_log2, /*deferSync=*/true);
+        } else {
+          assert(rail.nRanks-1 <= (1 << ncclGinScratchMaxBufs_log2));
+          outbox.apportionRequests(coopStage, log2Up(rail.nRanks-1));
         }
 
         // Generalize worker and non-worker logic with compile time BoolTag to differentiate.
@@ -135,16 +127,7 @@ static __device__ void rsAlgoHier(ncclSymkDevWorkArgs const* args, BoolTag<multi
           constexpr bool roleIsWorker = roleIsWorker_tag.value;
           skeleton(
             /*initFn*/[&]__device__(int nChunkElts, ncclSymPtr<T> inPtr)->void {
-              if (!roleIsWorker) {
-                if (coopRole.thread_rank() == 0) {
-                  // totalSends += rail.nRanks-1;
-                  #if __CUDA_ARCH__ >= 700
-                  asm volatile("red.relaxed.shared.add.s32 [%0],%1;" :: "r"((uint32_t)__cvta_generic_to_shared(&totalSends)), "r"(rail.nRanks-1) : "memory");
-                  #else
-                  __trap();
-                  #endif
-                }
-              } else {
+              if (roleIsWorker) {
                 // outbox.apportion() was told to defer sync so that we don't sync
                 // the whole stage. We sync just this warp.
                 coopRole.sync();
@@ -190,20 +173,18 @@ static __device__ void rsAlgoHier(ncclSymkDevWorkArgs const* args, BoolTag<multi
                     return nChunkElts;
                   },
                   /*getCompletion*/[&]__device__(int i, int peer) {
-                    return ncclGin_CounterInc{
-                      lsa.nRanks == 1 ? handler.ginCounterPerBlock + blockIdx.x
-                                      : outbox.getCounter(i)
-                    };
+                    return ncclGin_None{};
+                  },
+                  /*afterPost=*/[&]__device__(int i, int peer) {
+                    outbox.recordRequest(rail, peer, i);
                   }
                 );
               }
 
-              if (lsa.nRanks != 1) {
-                // We advance outbox with every iteration because it is only guaranteed
-                // to have `nSteps` buffers. If we advanced it after the step loop it
-                // would need rail.nRanks-1 buffers.
-                outbox.advance(coopStage, nSteps);
-              }
+              // The LSA path advances scratch/request slots in lockstep across
+              // worker and poster roles. The rail-only path has only the poster
+              // role and advances the request FIFO after overwriting the batch.
+              if (lsa.nRanks != 1 || !roleIsWorker) outbox.advance(coopStage, nSteps);
             },
             /*finishFn=*/nop
           );
@@ -272,13 +253,8 @@ static __device__ void rsAlgoHier(ncclSymkDevWorkArgs const* args, BoolTag<multi
   );
 
   if (stage == 0) {
-    if (lsa.nRanks == 1) {
-      if (!roleIsWorker && coopRole.thread_rank() == 0) {
-        gin.waitCounter(ncclCoopThread(), handler.ginCounterPerBlock + blockIdx.x, totalSends, 32);
-      }
-    } else {
-      outbox.template ~ncclGinOutboxSession<ncclCoopWarpSpan>();
-    }
+    if (lsa.nRanks == 1) outbox.waitRecentRequests(coopRole);
+    outbox.template ~ncclGinOutboxSession<ncclCoopWarpSpan>();
   }
 
   lsaBar.sync(cta, cuda::memory_order_relaxed);

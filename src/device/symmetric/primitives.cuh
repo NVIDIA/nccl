@@ -88,7 +88,6 @@ struct ncclSymkArgsHandler {
   ncclLLA2AHandle const& lsaLLA2A;
   ncclGinOutboxHandle const& ginOutbox;
   ncclGinInboxA2AHandle const& ginInboxRail;
-  ncclGinCounter_t ginCounterPerBlock;
   ncclGinSyncHandle const& ginSyncHandle;
   ncclDevResourceHandle rsGinAccumBuf;
   uint32_t rsGinAccumBytesPerBlock;
@@ -101,7 +100,6 @@ struct ncclSymkArgsHandler {
     lsaLLA2A(args->kcomm.lsaLLA2A),
     ginOutbox(args->kcomm.ginOutbox),
     ginInboxRail(args->kcomm.ginInboxRail),
-    ginCounterPerBlock(args->kcomm.ginCounterPerBlock),
     ginSyncHandle(args->kcomm.ginSyncHandle),
     rsGinAccumBuf(args->kcomm.rsGinAccumBuf),
     rsGinAccumBytesPerBlock(args->kcomm.rsGinAccumBytesPerBlock) {

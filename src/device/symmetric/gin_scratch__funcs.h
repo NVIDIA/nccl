@@ -19,6 +19,8 @@ NCCL_DEVICE_INLINE ncclGinOutboxSession<Coop, ginBackendMask>::ncclGinOutboxSess
   ):
   ncclGinOutboxSession_internal<Coop, ginBackendMask>{coop, gin.comm, gin, handle, (int)index} {
   this->state = this->getStatePtr()->unpadded;
+  assert(this->state.ginContextId_plus_1 == 0 || this->state.ginContextId_plus_1 == gin.contextId + 1);
+  this->state.ginContextId_plus_1 = gin.contextId + 1;
 }
 #endif
 
@@ -44,15 +46,24 @@ NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::apportion(
       #pragma unroll 1
       for (int i = subcoop.thread_rank(); i < (1<<nBufs_log2_cur); i += subcoop.size()) {
         uint32_t id = this->state.cursor + i;
-        ncclGinCounter_t ctr = this->handle.counter0 + (this->block << ncclGinScratchMaxBufs_log2);
-        ctr += id & (1<<nBufs_log2_cur)-1;
-        uint32_t val = id >> nBufs_log2_cur;
-        this->gin.waitCounter(ncclCoopThread(), ctr, val, ncclGinOutboxState::CursorBits);
-        this->gin.resetCounter(ctr);
+        if ((id >> nBufs_log2_cur) != 0) {
+          this->gin.wait(*this->getRequestPtr(id, nBufs_log2_cur), ncclCoopThread());
+        }
       }
     }
     if (!deferSync) this->coop.sync();
     this->state.nBufs_log2 = nBufs_log2_next;
+    this->state.cursor = 0;
+  }
+}
+#endif
+
+#if NCCL_CHECK_CUDACC
+template<typename Coop, unsigned ginBackendMask>
+NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::apportionRequests(Coop coop, int nReqs_log2_next) {
+  if (this->state.nBufs_log2 != nReqs_log2_next) {
+    coop.sync();
+    this->state.nBufs_log2 = nReqs_log2_next;
     this->state.cursor = 0;
   }
 }
@@ -65,10 +76,22 @@ NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::waitBufs(Sub
   #pragma unroll 1
   for (int i=subcoop.thread_rank(); i < n; i += subcoop.size()) {
     uint32_t id = this->state.cursor + i0 + i;
-    ncclGinCounter_t ctr = this->handle.counter0 + (this->block << ncclGinScratchMaxBufs_log2);
-    ctr += id & (1<<this->state.nBufs_log2)-1;
-    uint32_t val = id >> this->state.nBufs_log2;
-    this->gin.waitCounter(ncclCoopThread(), ctr, val, ncclGinOutboxState::CursorBits);
+    if ((id >> this->state.nBufs_log2) != 0) {
+      this->gin.wait(*this->getRequestPtr(id, this->state.nBufs_log2), ncclCoopThread());
+    }
+  }
+}
+#endif
+
+#if NCCL_CHECK_CUDACC
+template<typename Coop, unsigned ginBackendMask>
+template<typename SubCoop>
+NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::waitRecentRequests(SubCoop subcoop) {
+  int nReqs = min((int)this->state.cursor, 1 << this->state.nBufs_log2);
+  uint32_t id0 = this->state.cursor - nReqs;
+  #pragma unroll 1
+  for (int i=subcoop.thread_rank(); i < nReqs; i += subcoop.size()) {
+    this->gin.wait(*this->getRequestPtr(id0 + i, this->state.nBufs_log2), ncclCoopThread());
   }
 }
 #endif
@@ -78,7 +101,7 @@ template<typename Coop, unsigned ginBackendMask>
 NCCL_DEVICE_INLINE ncclSymPtr<char> ncclGinOutboxSession<Coop, ginBackendMask>::getBuf(int i) const {
   uint32_t id = this->state.cursor + i;
   int nBufs_log2 = this->state.nBufs_log2;
-  ncclSymPtr<char> bufs = (ncclSymPtr<char>)(this->getStateSymPtr() + 1);
+  ncclSymPtr<char> bufs = this->getBufsSymPtr();
   return bufs + ((id & (1<<nBufs_log2)-1) << (this->handle.size_log2 - nBufs_log2));
 }
 #endif
@@ -87,7 +110,7 @@ NCCL_DEVICE_INLINE ncclSymPtr<char> ncclGinOutboxSession<Coop, ginBackendMask>::
 template<typename Coop, unsigned ginBackendMask>
 NCCL_DEVICE_INLINE  ncclGinScratch_GetBufPtr ncclGinOutboxSession<Coop, ginBackendMask>::make_getBufPtr(int i0) const {
   ncclGinScratch_GetBufPtr ret;
-  ret.bufs = (char*)(this->getStatePtr() + 1);
+  ret.bufs = this->getBufsPtr();
   ret.nBufs_minus_1 = (1<<this->state.nBufs_log2)-1;
   ret.bufSize_log2 = this->handle.size_log2 - this->state.nBufs_log2;
   ret.cursor = this->state.cursor + i0;
@@ -97,16 +120,16 @@ NCCL_DEVICE_INLINE  ncclGinScratch_GetBufPtr ncclGinOutboxSession<Coop, ginBacke
 
 #if NCCL_CHECK_CUDACC
 template<typename Coop, unsigned ginBackendMask>
-NCCL_DEVICE_INLINE ncclGinCounter_t ncclGinOutboxSession<Coop, ginBackendMask>::getCounter(int i) const {
+NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::recordRequest(ncclTeam team, int peer, int i) {
   uint32_t id = this->state.cursor + i;
-  ncclGinCounter_t ctr = this->handle.counter0 + (this->block << ncclGinScratchMaxBufs_log2);
-  return ctr + (id & (1<<this->state.nBufs_log2)-1);
+  this->gin.flushAsync(team, peer, this->getRequestPtr(id, this->state.nBufs_log2), ncclCoopThread());
 }
 #endif
 
 #if NCCL_CHECK_CUDACC
 template<typename Coop, unsigned ginBackendMask>
-NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::advance(Coop, int n) {
+NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::advance(Coop coop, int n) {
+  coop.sync();
   this->state.cursor += n;
 }
 #endif
@@ -210,9 +233,10 @@ NCCL_DEVICE_INLINE ncclGinScratch_GetBufPtr ncclGinInboxA2ASession<Coop, ginBack
 
 #if NCCL_CHECK_CUDACC
 template<typename Coop, unsigned ginBackendMask>
-template<typename SubCoop, typename GetPtr, typename GetEltCount, typename GetCompletion>
+template<typename SubCoop, typename GetPtr, typename GetEltCount, typename GetCompletion, typename AfterPost>
 NCCL_DEVICE_INLINE void ncclGinInboxA2ASession<Coop, ginBackendMask>::postSends(
-    SubCoop subcoop, int step0, int nSteps, GetPtr getPtr, GetEltCount getEltCount, GetCompletion getCompletion
+    SubCoop subcoop, int step0, int nSteps, GetPtr getPtr, GetEltCount getEltCount, GetCompletion getCompletion,
+    AfterPost afterPost
   ) {
   #pragma unroll 1
   for (int i=subcoop.thread_rank(); i < nSteps; i += subcoop.size()) {
@@ -228,6 +252,7 @@ NCCL_DEVICE_INLINE void ncclGinInboxA2ASession<Coop, ginBackendMask>::postSends(
       /*size=*/nElts*(int)sizeof(decltype(srcPtr)::ElementType),
       ncclGin_SignalInc{this->getR2RSignal(monoStep)},
       getCompletion(i, peer));
+    afterPost(i, peer);
   }
 }
 #endif

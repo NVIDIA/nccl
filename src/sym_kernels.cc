@@ -506,8 +506,6 @@ ncclResult_t ncclSymkInitOnce(struct ncclComm* comm) {
       railSignalReq.outBufferHandle = nullptr;
       railSignalReq.ginSignalCount = railSignalCount;
       railSignalReq.outGinSignalStart = &symk->kcomm.ginSyncHandle.railSignals;
-      railSignalReq.ginCounterCount = ncclSymkMaxBlocks;
-      railSignalReq.outGinCounterStart = &symk->kcomm.ginCounterPerBlock;
       railSignalReq.next = reqs.resourceRequirementsList;
       reqs.resourceRequirementsList = &railSignalReq;
       reqs.barrierCount = ncclSymkMaxBlocks;

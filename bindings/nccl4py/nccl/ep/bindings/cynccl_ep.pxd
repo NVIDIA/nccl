@@ -84,7 +84,6 @@ ctypedef cudaError_t (*ncclEpFreeFn_t 'ncclEpFreeFn_t')(
 )
 ctypedef struct ncclEpHandleConfig_t 'ncclEpHandleConfig_t':
     unsigned int size
-    unsigned int use_fp8
     size_t dispatch_output_per_expert_alignment
 
 ctypedef struct ncclEpDispatchConfig_t 'ncclEpDispatchConfig_t':

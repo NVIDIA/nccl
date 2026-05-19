@@ -71,9 +71,10 @@ ALL_OBJ := $(HOST_OBJ) $(DEVICE_OBJ)
 DEVGLUE_OBJ := $(OBJDIR)/device_glue.o
 
 # Library version (single source of truth: include/nccl_ep.h).
-NCCL_EP_MAJOR := $(shell awk '/^#define NCCL_EP_MAJOR / {print $$3}' include/nccl_ep.h)
-NCCL_EP_MINOR := $(shell awk '/^#define NCCL_EP_MINOR / {print $$3}' include/nccl_ep.h)
-NCCL_EP_PATCH := $(shell awk '/^#define NCCL_EP_PATCH / {print $$3}' include/nccl_ep.h)
+# Use \# inside $(shell ...) so make treats the # as literal, not a comment.
+NCCL_EP_MAJOR := $(shell awk '/^\#define NCCL_EP_MAJOR / {print $$3}' include/nccl_ep.h)
+NCCL_EP_MINOR := $(shell awk '/^\#define NCCL_EP_MINOR / {print $$3}' include/nccl_ep.h)
+NCCL_EP_PATCH := $(shell awk '/^\#define NCCL_EP_PATCH / {print $$3}' include/nccl_ep.h)
 
 # Library output
 LIBNAME := libnccl_ep.a

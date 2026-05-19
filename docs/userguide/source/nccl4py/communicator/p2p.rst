@@ -30,3 +30,4 @@ put_signal
 WaitSignalDesc
 --------------
 .. autoclass:: WaitSignalDesc
+   :members:

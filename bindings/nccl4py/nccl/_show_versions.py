@@ -9,7 +9,7 @@ Public entry points are re-exported from the top-level ``nccl`` package:
 
     import nccl
     nccl.show_versions()           # print human-readable block to stdout
-    v = nccl.get_version()         # programmatic; returns a Version dataclass
+    v = nccl.get_version()         # programmatic; returns a VersionInfo dataclass
 
 For just nccl4py's own package version, use ``nccl.__version__``.
 """
@@ -26,10 +26,7 @@ from packaging.version import Version as _Version
 from nccl._version import __version__
 from nccl import bindings as _nccl_bindings
 
-__all__ = ["LibraryInfo", "Version", "get_version", "show_versions"]
-
-
-_version_cache: Version | None = None
+__all__ = ["LibraryInfo", "VersionInfo", "get_version", "show_versions"]
 
 # Banners embedded in libnccl.so / libnccl_ep.so (see src/init.cc VERSION_STRING
 # and contrib/nccl_ep/nccl_ep.cc NCCL_EP_VERSION_STRING). Used to recover the
@@ -96,20 +93,18 @@ def _extract_cuda_variant(path: Path | None, pattern: re.Pattern[bytes]) -> _Ver
 
 @dataclass(frozen=True)
 class LibraryInfo:
-    """Build- and load-time info for a single shared library.
-
-    Attributes:
-        version: Library release version (e.g. ``2.30.0``).
-        cuda_variant: CUDA toolkit major.minor the library was built with
-            (e.g. ``12.9``), or None if it could not be recovered from the
-            embedded version banner.
-        path: Absolute path of the loaded ``.so`` file, or None if the library
-            is not mapped into the process.
-    """
+    """Build- and load-time info for a single shared library."""
 
     version: _Version
+    """Library release version (e.g. ``2.30.0``)."""
+
     cuda_variant: _Version | None
+    """CUDA toolkit major.minor the library was built with (e.g. ``12.9``),
+    or None if the CUDA version could not be determined from the shared library."""
+
     path: Path | None
+    """Absolute path of the loaded ``.so`` file, or None if the library is
+    not mapped into the process."""
 
     def __str__(self) -> str:
         out = str(self.version)
@@ -121,19 +116,18 @@ class LibraryInfo:
 
 
 @dataclass(frozen=True)
-class Version:
-    """Aggregate version snapshot of the NCCL stack.
-
-    Attributes:
-        nccl4py: nccl4py package version.
-        nccl: Build/load info for ``libnccl.so``.
-        nccl_ep: Build/load info for ``libnccl_ep.so``, or None on CUDA-12
-            hosts where ``libnccl_ep.so`` cannot load.
-    """
+class VersionInfo:
+    """Aggregate version snapshot of the NCCL stack."""
 
     nccl4py: _Version
+    """nccl4py package version."""
+
     nccl: LibraryInfo
+    """Build/load info for ``libnccl.so``."""
+
     nccl_ep: LibraryInfo | None
+    """Build/load info for ``libnccl_ep.so``, or None on CUDA-12 hosts where
+    ``libnccl_ep.so`` cannot load."""
 
 
 def _nccl_library_info() -> LibraryInfo:
@@ -162,21 +156,27 @@ def _nccl_ep_library_info() -> LibraryInfo | None:
     )
 
 
-def get_version() -> Version:
-    """Return a structured snapshot of NCCL stack versions. Cached after the
-    first call."""
-    global _version_cache
-    if _version_cache is None:
-        _version_cache = Version(
-            nccl4py=_Version(__version__),
-            nccl=_nccl_library_info(),
-            nccl_ep=_nccl_ep_library_info(),
-        )
-    return _version_cache
+def get_version() -> VersionInfo:
+    """Return a structured snapshot of NCCL stack versions.
+
+    Returns:
+        :py:class:`VersionInfo` carrying nccl4py + libnccl + libnccl_ep
+        versions, build-time CUDA variants, and loaded ``.so`` paths.
+    """
+    return VersionInfo(
+        nccl4py=_Version(__version__),
+        nccl=_nccl_library_info(),
+        nccl_ep=_nccl_ep_library_info(),
+    )
 
 
 def show_versions() -> None:
-    """Print an ``INSTALLED VERSIONS`` block to stdout (pandas-style)."""
+    """Print a summary of the installed NCCL stack to stdout.
+
+    For each component, reports the release version, the CUDA toolkit it was
+    built with, and (for native libraries) the absolute path of the loaded
+    ``.so``.
+    """
     v = get_version()
     label_width = 12
     print()

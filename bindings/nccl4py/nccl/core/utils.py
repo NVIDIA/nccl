@@ -14,6 +14,17 @@ from __future__ import annotations
 import numpy as _np
 from packaging.version import Version as _Version
 
+try:
+    from warnings import deprecated
+except ImportError:
+    try:
+        from typing_extensions import deprecated
+    except ImportError:
+        def deprecated(*_args, **_kwargs):  # type: ignore[no-redef]
+            def _decorator(obj):
+                return obj
+            return _decorator
+
 from nccl._version import __version__
 from nccl import bindings as _nccl_bindings
 
@@ -61,6 +72,11 @@ Versions:
 """
 
 
+@deprecated(
+    "nccl.core.get_version is deprecated; use nccl.get_version "
+    "(full-stack including libnccl_ep) or nccl.show_versions "
+    "(human-readable) instead."
+)
 def get_version() -> Version:
     """Returns the version information for NCCL and NCCL4Py.
 

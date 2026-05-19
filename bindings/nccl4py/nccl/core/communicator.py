@@ -499,19 +499,19 @@ class WaitSignalDesc:
     :py:meth:`Communicator.wait_signal`. Each descriptor specifies which peer
     to wait for, how many signal operations to wait for, and additional
     context for the wait operation.
-
-    Attributes:
-        peer: Target peer rank to wait for signals from.
-        op_count: Number of signal operations to wait for from the peer.
-            Defaults to 1.
-        signal_index: Signal index identifier. Currently must be 0.
-        context: Context identifier. Currently must be 0.
     """
 
     peer: int
+    """Target peer rank to wait for signals from."""
+
     op_count: int = 1
+    """Number of signal operations to wait for from the peer. Defaults to 1."""
+
     signal_index: int = 0
+    """Signal index identifier. Currently must be 0. Defaults to 0."""
+
     context: int = 0
+    """Context identifier. Currently must be 0. Defaults to 0."""
 
 
 class NCCLDevCommRequirements:

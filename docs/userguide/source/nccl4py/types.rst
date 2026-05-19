@@ -93,3 +93,14 @@ of reduction collectives. User-defined operators are created via
      - :py:attr:`NcclRedOp.MIN`
    * - ``nccl.core.AVG``
      - :py:attr:`NcclRedOp.AVG`
+
+Exceptions
+==========
+
+NcclInvalid
+-----------
+
+Python-side validation exception, raised when a public API receives a
+malformed argument before it reaches NCCL itself.
+
+.. autoexception:: NcclInvalid

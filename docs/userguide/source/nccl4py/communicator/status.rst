@@ -28,3 +28,10 @@ NcclCommMemStat
 .. autoclass:: NcclCommMemStat
    :members:
    :exclude-members: GpuMemSuspend, GpuMemSuspended, GpuMemPersist, GpuMemTotal
+
+get_error_string
+================
+
+Module-level helper to render an NCCL result code as a human-readable string.
+
+.. autofunction:: get_error_string

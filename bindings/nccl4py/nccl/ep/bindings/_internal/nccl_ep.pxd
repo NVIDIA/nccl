@@ -11,6 +11,7 @@ from ..cynccl_ep cimport *
 # Wrapper functions
 ###############################################################################
 
+cdef ncclResult_t _ncclEpGetVersion(int* version) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t _ncclEpCreateGroup(ncclEpGroup_t* ep_group, ncclComm_t comm, const ncclEpGroupConfig_t* config) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t _ncclEpGroupDestroy(ncclEpGroup_t ep_group) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t _ncclEpTensorCreate(ncclNDTensor_t* tensor, unsigned int ndim, ncclDataType_t datatype, void* data, const size_t* sizes) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil

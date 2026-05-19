@@ -1948,6 +1948,14 @@ cpdef inline check_status(int status):
 # Wrapper functions
 ###############################################################################
 
+cpdef int get_version() except? -1:
+    cdef int version
+    with nogil:
+        __status__ = ncclEpGetVersion(&version)
+    check_status(__status__)
+    return version
+
+
 cpdef intptr_t create_group(intptr_t comm, intptr_t config) except? 0:
     cdef EpGroup ep_group
     with nogil:

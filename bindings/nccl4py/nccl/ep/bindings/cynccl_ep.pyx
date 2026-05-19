@@ -11,6 +11,10 @@ from ._internal cimport nccl_ep as _nccl_ep
 # Wrapper functions
 ###############################################################################
 
+cdef ncclResult_t ncclEpGetVersion(int* version) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
+    return _nccl_ep._ncclEpGetVersion(version)
+
+
 cdef ncclResult_t ncclEpCreateGroup(ncclEpGroup_t* ep_group, ncclComm_t comm, const ncclEpGroupConfig_t* config) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
     return _nccl_ep._ncclEpCreateGroup(ep_group, comm, config)
 

@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
+#include <mutex>
 #include <new>
 #include <optional>
 #include <set>
@@ -946,6 +947,29 @@ ncclResult_t ncclEpGetVersion(int* version) {
     if (version == nullptr) return ncclInvalidArgument;
     *version = NCCL_EP_VERSION_CODE;
     return ncclSuccess;
+}
+
+// Pre-process the string so that running "strings" on the lib can quickly reveal the version.
+// CUDA_MAJOR/CUDA_MINOR are injected at build time by makefiles/common.mk and by the top-level
+// CMakeLists.txt — they reflect the CUDA toolkit this library was BUILT against.
+#define NCCL_EP_STR2(v) #v
+#define NCCL_EP_STR(v) NCCL_EP_STR2(v)
+#define NCCL_EP_VERSION_STRING \
+    "NCCL EP version " NCCL_EP_STR(NCCL_EP_MAJOR) "." NCCL_EP_STR(NCCL_EP_MINOR) "." NCCL_EP_STR(NCCL_EP_PATCH) \
+    "+cuda" NCCL_EP_STR(CUDA_MAJOR) "." NCCL_EP_STR(CUDA_MINOR)
+
+static void showVersion() {
+    static std::once_flag once;
+    std::call_once(once, []() {
+        if (const char* dbg = getenv("NCCL_EP_DEBUG"); dbg != nullptr && dbg[0] != '\0') {
+            fprintf(stderr, "%s\n", NCCL_EP_VERSION_STRING);
+        }
+    });
+}
+
+// Print the version banner when libnccl_ep.so is loaded (respects NCCL_EP_DEBUG).
+__attribute__((constructor)) static void nccl_ep_lib_init() {
+    showVersion();
 }
 
 ncclResult_t ncclEpCreateGroup(

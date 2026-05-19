@@ -3426,7 +3426,7 @@ __device__ __forceinline__ void dispatch_kernel_impl(
       uint32_t flag_data;
       do {
           flag_data = nccl_ep::ld_relaxed_sys_global(param.intra_node_write_completion_flags);
-      } while (flag_data != param.expected_intra_node_flag_value);
+      } while (flag_data < param.expected_intra_node_flag_value);
       nccl_ep::memory_fence();
 
       // Last block resets grid counter for next invocation.
@@ -3534,7 +3534,7 @@ __device__ __forceinline__ void combine_kernel_impl(
       uint32_t flag_data;
       do {
           flag_data = nccl_ep::ld_relaxed_sys_global(param.intra_node_write_completion_flags);
-      } while (flag_data != param.expected_intra_node_flag_value);
+      } while (flag_data < param.expected_intra_node_flag_value);
       nccl_ep::memory_fence();
   }
 #ifdef HYBRIDEP_ENABLE_WARP_TIMING

@@ -336,9 +336,9 @@ static ncclResult_t sendProxySetup(struct ncclProxyConnection* connection, struc
   resources->useDmaBuf = resources->useGdr && proxyState->dmaBufSupport && (props.ptrSupport & NCCL_PTR_DMABUF);
   /* collective size limits*/
   resources->maxCollBytes = props.maxCollBytes;
-  if((resources->maxCollBytes <= 0) || (resources->maxCollBytes > NCCL_MAX_NET_SIZE_BYTES)) {
-    WARN("sendProxySetup: collnet plugin returned invalid value for maxCollBytes %ld \
-      [allowed range: %ld - %ld] \n", resources->maxCollBytes, 0L, NCCL_MAX_NET_SIZE_BYTES);
+  if((resources->maxCollBytes == 0) || (resources->maxCollBytes > NCCL_MAX_NET_SIZE_BYTES)) {
+    WARN("sendProxySetup: collnet plugin returned invalid value for maxCollBytes %zu \
+      [allowed range: %zu - %zu] \n", resources->maxCollBytes, (size_t)0, (size_t)NCCL_MAX_NET_SIZE_BYTES);
     return ncclInternalError;
   }
   return ncclSuccess;
@@ -445,9 +445,9 @@ static ncclResult_t recvProxySetup(struct ncclProxyConnection* connection, struc
   /* DMA-BUF support */
   resources->useDmaBuf = resources->useGdr && proxyState->dmaBufSupport && (props.ptrSupport & NCCL_PTR_DMABUF);
   resources->maxCollBytes = props.maxCollBytes;
-  if((resources->maxCollBytes <= 0) || (resources->maxCollBytes > NCCL_MAX_NET_SIZE_BYTES)) {
-    WARN("sendProxySetup: collnet plugin returned invalid value for maxCollBytes %ld \
-      [allowed range: %ld - %ld] \n", resources->maxCollBytes, 0L, NCCL_MAX_NET_SIZE_BYTES);
+  if((resources->maxCollBytes == 0) || (resources->maxCollBytes > NCCL_MAX_NET_SIZE_BYTES)) {
+    WARN("recvProxySetup: collnet plugin returned invalid value for maxCollBytes %zu \
+      [allowed range: %zu - %zu] \n", resources->maxCollBytes, (size_t)0, (size_t)NCCL_MAX_NET_SIZE_BYTES);
     return ncclInternalError;
   }
 

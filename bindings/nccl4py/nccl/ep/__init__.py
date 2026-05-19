@@ -30,7 +30,6 @@ from nccl.ep.handle import (
     EpLayoutInfo,
 )
 from nccl.ep.tensor import NDTensor
-from nccl.ep.interop.torch import get_nccl_comm_from_group
 
 
 __all__ = [
@@ -49,7 +48,6 @@ __all__ = [
     "NDTensor",
     "NcclEpAlgorithm",
     "NcclEpLayout",
-    "get_nccl_comm_from_group",
     "ncclEpAllocFn_t",
     "ncclEpFreeFn_t",
 ]

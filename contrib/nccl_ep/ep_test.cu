@@ -943,12 +943,21 @@ int main(int argc, char* argv[])
                            num_tokens * hidden * sizeof(uint16_t), cudaMemcpyDeviceToHost));
     }
 
-    // Allocate new output tensors for second phase dispatch
+    // Allocate new output tensors for second phase dispatch.
+    // HT+FL forward dispatch requires recv_topk_weights [N, top_k] and recv_topk_idx [N, top_k].
     ncclNDTensor_t cached_recv_x;
     NCCLCHECK(epMakeTensor(&cached_recv_x, 2, ncclBfloat16,
                            static_cast<unsigned int>(num_recv_tokens), static_cast<unsigned int>(hidden)));
+    ncclNDTensor_t cached_recv_topk_weights;
+    NCCLCHECK(epMakeTensor(&cached_recv_topk_weights, 2, ncclFloat32,
+                           static_cast<unsigned int>(num_recv_tokens), static_cast<unsigned int>(top_k)));
+    ncclNDTensor_t cached_recv_topk_idx;
+    NCCLCHECK(epMakeTensor(&cached_recv_topk_idx, 2, ncclInt64,
+                           static_cast<unsigned int>(num_recv_tokens), static_cast<unsigned int>(top_k)));
     ncclEpDispatchOutputs_t cached_dispatch_outputs = NCCL_EP_DISPATCH_OUTPUTS_INIT;
-    cached_dispatch_outputs.tokens = cached_recv_x;
+    cached_dispatch_outputs.tokens         = cached_recv_x;
+    cached_dispatch_outputs.topk_weights   = cached_recv_topk_weights;
+    cached_dispatch_outputs.topk_idx       = cached_recv_topk_idx;
 
     // Allocate new output tensors for second phase combine
     ncclNDTensor_t cached_combined_output;
@@ -1076,6 +1085,8 @@ int main(int argc, char* argv[])
       delete[] first_combine_output;
     }
     epFreeTensor(cached_recv_x);
+    epFreeTensor(cached_recv_topk_weights);
+    epFreeTensor(cached_recv_topk_idx);
     epFreeTensor(cached_combined_output);
     epFreeTensor(cached_combined_topk_weights);
     epFreeTensor(cached_combine_topk_weights_input);

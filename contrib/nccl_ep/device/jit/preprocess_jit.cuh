@@ -48,6 +48,7 @@ inline std::string scan_jit_source(
         << "      reinterpret_cast<hybrid_ep::RankMask<" << lsa_team_size << ">*>(p.token_rank_mask),\n"
         << "      p.num_of_tokens_for_experts, p.local_expert_routing_map, p.per_expert_token_counts,\n"
         << "      p.node_rank, p.local_rank, p.num_of_tokens_per_rank, p.num_of_ranks_per_node, p.experts_per_rank,\n"
+        << "      p.expert_major,\n"
         << "      p.remap_alignment, p.remap_internal_offsets, p.remap_padded_out_counts, p.remap_out_offsets,\n"
         << "      p.remap_actual_counts_out, p.s2d_inner_dim, p.recv_total_counter, p.out_is_int64,\n"
         << "      p.max_recv_tokens_per_rank, smem_bytes);\n"

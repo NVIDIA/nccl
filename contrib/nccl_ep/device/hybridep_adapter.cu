@@ -346,6 +346,7 @@ void call_metadata_preprocessing(
     int num_nodes,
     int num_ranks_per_node,
     int experts_per_rank,
+    bool     expert_major,
     int64_t* internal_offsets,
     void*    padded_out_counts,
     void*    out_offsets,
@@ -358,7 +359,7 @@ void call_metadata_preprocessing(
     int      num_blocks,
     cudaStream_t stream
 ) {
-    if (alignment > 0 && per_expert_token_counts == nullptr) {
+    if (expert_major && per_expert_token_counts == nullptr) {
         EP_HOST_ASSERT(false && "EXPERT_MAJOR remap requires per_expert_token_counts != nullptr");
     }
 
@@ -381,7 +382,7 @@ void call_metadata_preprocessing(
         (NUM_OF_WARPS_PER_BLOCK_SCAN * num_ranks_per_node * sizeof(int32_t)) +
         (num_ranks_per_node * sizeof(int32_t)) +
         (per_expert_token_counts != nullptr ? experts_per_rank * sizeof(int32_t) : 0);
-    const size_t remap_smem_size = (alignment > 0)
+    const size_t remap_smem_size = expert_major
         ? (static_cast<size_t>(experts_per_rank) * sizeof(int64_t) +
            static_cast<size_t>(NUM_OF_WARPS_PER_BLOCK_SCAN) * experts_per_rank * sizeof(int32_t))
         : 0;
@@ -403,6 +404,7 @@ void call_metadata_preprocessing(
     sp.num_of_tokens_per_rank = num_tokens_per_rank;
     sp.num_of_ranks_per_node = num_ranks_per_node;
     sp.experts_per_rank = experts_per_rank;
+    sp.expert_major = expert_major;
     sp.remap_alignment = alignment;
     sp.remap_internal_offsets = internal_offsets;
     sp.remap_padded_out_counts = padded_out_counts;

@@ -851,11 +851,11 @@ struct dispatch_kernel_param_t{
   const bool* attn_to_rdma_map;
   const int32_t* sparse_to_dense_map;
   int s2d_inner_dim;               // flat: num_ranks_per_node, expert-major: num_topk
-  // Expert-major zero-padding inputs consumed by the PAD warp.  alignment == 0
-  // disables the PAD warp; the count/offset pointers may be null in that case.
+  // Expert-major zero-padding inputs for the PAD warp.
+  // PAD warp is a no-op when pad_alignment <= 1; pointers may be null then.
   const int32_t* pad_actual_counts;       // [experts_per_rank] unpadded token counts
   const int64_t* pad_expert_token_offsets;// [experts_per_rank] zone start offsets
-  int            pad_alignment;           // per-expert zone alignment in tokens (0 = skip)
+  int            pad_alignment;           // per-expert zone alignment in tokens (<=1 = no padding)
   uint64_t expected_rdma_flag_value;
   uint32_t expected_intra_node_flag_value;
   int local_rank;
@@ -3235,7 +3235,8 @@ __forceinline__ __device__ void PAD_warp_group_device_function(
     const int num_blocks,
     SMEM_TYPE* smem)
 {
-    if (alignment <= 0 || local_buf == nullptr ||
+    // Caller zeroes alignment when not expert-major; alignment<=1 ⇒ no padding work.
+    if (alignment <= 1 || local_buf == nullptr ||
         actual_counts == nullptr || zone_offsets == nullptr) return;
 
     const int lane = PAD_GROUP::thread_rank();
@@ -3257,9 +3258,10 @@ __forceinline__ __device__ void PAD_warp_group_device_function(
     int my_in_flight = 0;
     for (int e = 0; e < experts_per_rank; e++) {
         int32_t count = actual_counts[e];
+        // Empty experts reserve no zone slot; never pad them.
+        if (count == 0) continue;
         int32_t rem   = count % alignment;
         int32_t pad   = rem ? (alignment - rem) : 0;
-        if (count == 0) pad = alignment;
         for (int p = 0; p < pad; p++, row_idx++) {
             if ((row_idx % global_stride) == global_id) {
                 void* dst = reinterpret_cast<void*>(
@@ -3393,8 +3395,8 @@ __device__ __forceinline__ void dispatch_kernel_impl(
     PAD_warp_group_device_function<PAD_GROUP, TOKEN_DATA_TYPE>(
         param.expert_output_token[param.local_rank],
         param.pad_actual_counts, param.pad_expert_token_offsets,
-        param.experts_per_rank, param.pad_alignment, HIDDEN_DIM,
-        NUM_OF_BLOCKS, smem_buffer_ptr);
+        param.experts_per_rank, param.pad_alignment,
+        HIDDEN_DIM, NUM_OF_BLOCKS, smem_buffer_ptr);
   }
 #ifdef HYBRIDEP_ENABLE_WARP_TIMING
   if (threadIdx.x % 32 == 0) {
@@ -3725,7 +3727,9 @@ __device__ __forceinline__ void scan_impl(const uint8_t* input_routing_map,
                      const int num_of_tokens_per_rank,
                      const int num_of_ranks_per_node,
                      const int experts_per_rank,
-                     // Fused remap parameters (nullable — nullptr = skip remap).
+                     // Layout flag (gates the fused expert-major remap pass).
+                     bool expert_major,
+                     // Fused remap parameters; only consumed when expert_major=true.
                      size_t remap_alignment,
                      int64_t* remap_internal_offsets,
                      // Padded per-expert counts/offsets (int32 or int64 per out_is_int64); nullable.
@@ -4003,7 +4007,7 @@ __device__ __forceinline__ void scan_impl(const uint8_t* input_routing_map,
         local_rank_bitmap_row = input_routing_map +
                                 current_token_id * packed_row_bytes +
                                 node_rank * experts_per_node_packed;
-        if (remap_alignment == 0) {
+        if (!expert_major) {
           local_expert_routing_map_store_base_addr =
               local_expert_routing_map + (final_ex_scan[local_rank] * experts_per_rank);
         }
@@ -4016,7 +4020,7 @@ __device__ __forceinline__ void scan_impl(const uint8_t* input_routing_map,
         if (lane_participates) {
           routed_to_expert =
               ((local_rank_bitmap_row[expert_bit / 8] >> (expert_bit % 8)) & 1u) != 0;
-          if (remap_alignment == 0) {
+          if (!expert_major) {
             local_expert_routing_map_store_base_addr[k] = routed_to_expert;
           }
         }
@@ -4035,7 +4039,7 @@ __device__ __forceinline__ void scan_impl(const uint8_t* input_routing_map,
 
     // The thread that processing the global last token save the final sum for current rank to num_of_tokens_for_experts.
     // Skip for expert-major: fused remap (Step 4) overwrites with padded zone total.
-    if(remap_alignment == 0 && current_token_id == num_of_total_attn_tokens - 1 && local_rank_seen){
+    if(!expert_major && current_token_id == num_of_total_attn_tokens - 1 && local_rank_seen){
       if (local_rank_prefix_after_scan > max_recv_tokens_per_rank) {
         printf("ncclEpUpdateHandle: HT FLAT actual recv tokens %d > "
                "max_recv_tokens_per_rank %d on (node %d local %d); "
@@ -4054,8 +4058,8 @@ __device__ __forceinline__ void scan_impl(const uint8_t* input_routing_map,
     }
 
     // Save final exclusive scan of this token back to sparse_to_dense_map (flat only).
-    // Expert-major (remap_alignment > 0): Step 4 writes packed entries to the same buffer.
-    if(remap_alignment == 0 && token_out_of_bound == 0 && current_token_local_rank == local_rank){
+    // Expert-major: Step 4 writes packed entries to the same buffer.
+    if(!expert_major && token_out_of_bound == 0 && current_token_local_rank == local_rank){
       write_t* sparse_to_dense_map_store_base_addr = reinterpret_cast<write_t*>(sparse_to_dense_map +
                                                                                 (current_token_node_rank * num_of_tokens_per_rank + current_token_local_id) * num_of_ranks_per_node);
       #pragma unroll
@@ -4109,10 +4113,10 @@ __device__ __forceinline__ void scan_impl(const uint8_t* input_routing_map,
   }
 
   // ── Step 4 (fused remap): expert-major S2D rewrite ────────────────────────
-  // Only active when remap_alignment > 0 (expert-major mode).
+  // Only active in expert-major layout.
   // Each block strides over dest ranks so num_of_ranks_per_node > gridDim.x is covered.
   // Runs after Steps 0-3 in the same kernel, saving a kernel launch.
-  if (remap_alignment > 0) {
+  if (expert_major) {
     for (int dest = static_cast<int>(blockIdx.x); dest < num_of_ranks_per_node; dest += gridDim.x) {
       __syncthreads();  // ensure Step 2 (or previous dest iter) smem is done before we repurpose it
 
@@ -4185,10 +4189,10 @@ __device__ __forceinline__ void scan_impl(const uint8_t* input_routing_map,
         for (int k = 0; k < epr; k++) {
           s_offsets[k] = off;
           const int64_t c = static_cast<int64_t>(running[k]);
-          const int64_t padded = (remap_alignment > 1)
-              ? (c == 0 ? static_cast<int64_t>(remap_alignment)
-                        : ((c + static_cast<int64_t>(remap_alignment) - 1) /
-                            static_cast<int64_t>(remap_alignment)) * static_cast<int64_t>(remap_alignment))
+          // Empty experts reserve 0 slots; PAD warp skips them.
+          const int64_t padded = (remap_alignment > 1 && c > 0)
+              ? ((c + static_cast<int64_t>(remap_alignment) - 1) /
+                  static_cast<int64_t>(remap_alignment)) * static_cast<int64_t>(remap_alignment)
               : c;
           if (dest == local_rank) {
             if (remap_padded_out_counts) {
@@ -4298,6 +4302,7 @@ struct scan_kernel_param_t {
     int num_of_tokens_per_rank;
     int num_of_ranks_per_node;
     int experts_per_rank;
+    bool expert_major;
     size_t remap_alignment;
     int64_t* remap_internal_offsets;
     void* remap_padded_out_counts;

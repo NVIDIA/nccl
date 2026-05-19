@@ -155,10 +155,11 @@ void call_metadata_preprocessing(
     int num_nodes,                      // Number of nodes (RDMA domain size)
     int num_ranks_per_node,             // Ranks per node (NVLink domain size, 1-8)
     int experts_per_rank,               // Experts per GPU
+    bool     expert_major           = false,   // true = expert-major layout (gates fused remap)
     int64_t* internal_offsets       = nullptr, // Expert-major: per-expert zone offsets consumed by dispatch
     void*    padded_out_counts      = nullptr, // Expert-major: per-expert padded counts (caller tensor, nullable; int32 or int64)
     void*    out_offsets            = nullptr, // Expert-major: per-expert offsets (caller tensor, nullable; int32 or int64)
-    size_t   alignment              = 0,       // 0 = flat (no remap); >0 = expert-major zone alignment
+    size_t   alignment              = 0,       // Per-expert zone alignment in tokens (pow2; 0/1 = no padding). Ignored when expert_major=false.
     int32_t* actual_counts_out      = nullptr, // Expert-major: authoritative per-expert dispatch counts
     int      s2d_inner_dim          = 0,       // 0 = flat (n_ranks_per_node); >0 = expert-major (top_k)
     void*    recv_total_counter     = nullptr, // Optional scalar: total recv tokens (int32 or int64; nullable)

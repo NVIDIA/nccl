@@ -2033,6 +2033,7 @@ ncclResult_t ncclEpUpdateHandle(
         nNodes,
         n_ranks_per_node,
         experts_per_rank,
+        expert_major,
         expert_major ? handle->hybridep.expert_token_offsets : nullptr,
         padded_out_counts,
         out_offsets,

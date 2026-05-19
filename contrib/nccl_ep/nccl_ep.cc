@@ -1434,7 +1434,6 @@ struct ncclEpHandle {
     ncclEpGroup_t group;
 
     ncclEpLayout_t layout;
-    bool use_fp8;
 
     // tensor that is owned by the user, do not free this tensor!
     ncclNDTensor_t topk_idx;
@@ -1591,7 +1590,6 @@ struct ncclEpHandle {
     ncclEpHandle()
         : group(nullptr),
           layout(NCCL_EP_LAYOUT_UNSET),
-          use_fp8(false),
           topk_idx(nullptr),
           num_tokens(0),
           num_topk(0),
@@ -1824,7 +1822,6 @@ ncclResult_t ncclEpInitHandle(
     assert(ep_group != nullptr && out_handle != nullptr);
     assert(ep_group->comm != nullptr);
     EP_OPTIONAL_STRUCT(config);
-    const bool use_fp8 = config && config->use_fp8;
     EP_HOST_ASSERT(layout != NCCL_EP_LAYOUT_UNSET &&
                    "ncclEpInitHandle: layout must be set explicitly");
     EP_HOST_ASSERT(!(ep_group->config.algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT &&
@@ -1849,7 +1846,6 @@ ncclResult_t ncclEpInitHandle(
     ncclEpHandle_t handle = *out_handle;
     handle->group = ep_group;
     handle->layout = layout;
-    handle->use_fp8 = use_fp8;
 
     ncclResult_t res;
     if (ep_group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {

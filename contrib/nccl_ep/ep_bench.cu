@@ -2882,9 +2882,8 @@ int main(int argc, char* argv[]) {
                                   layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
     ncclEpHandleConfig_t handle_cfg = NCCL_EP_HANDLE_CONFIG_INIT;
     handle_cfg.dispatch_output_per_expert_alignment = expert_major_alignment;
-    handle_cfg.use_fp8 = use_fp8;
     // Pass config only when a non-default field is set.
-    const bool need_cfg = use_fp8 || (ht_expert_major && expert_major_alignment > 0);
+    const bool need_cfg = (ht_expert_major && expert_major_alignment > 0);
     const ncclEpHandleConfig_t* cfg_ptr = need_cfg ? &handle_cfg : nullptr;
 
     // Optional caller-owned buffer (--user-handle-mem)

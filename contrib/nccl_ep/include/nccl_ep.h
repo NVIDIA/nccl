@@ -273,7 +273,6 @@ typedef struct {
 typedef struct ncclEpHandle* ncclEpHandle_t;
 typedef struct {
     unsigned int size;  // = sizeof(this struct); first field, never moves
-    unsigned int use_fp8;  // enable FP8 for dispatch (0 = false, non-zero = true; default: 0)
     // HT expert-major only: per-expert zone alignment in tokens (pow2; 0/1 = no padding).
     // Padded slots are zero-filled by dispatch.
     size_t dispatch_output_per_expert_alignment;

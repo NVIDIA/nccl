@@ -155,50 +155,98 @@ __forceinline__ __device__ void castAndWriteToSendBuf(
     }
 }
 
-// Send a token via RDMA or P2P
+// Send a token to one peer.
+//
+// Picks the transport per dstRank:
+//
+//   - Intra-LSA peer (P2P reachable): write directly into the peer's recvBuf
+//     using the NVLink split layout — the per-slot header is copied from this
+//     rank's local staging slot into the peer's per-srcRank header section,
+//     and the payload is cast from `inData` directly into the per-srcRank
+//     payload section. The staging slot's data half is not read on this path.
+//
+//   - Cross-LSA peer (RDMA): gin.put the full per-slot interleaved
+//     [hdr | data | scales] message from the local staging slot into the
+//     peer's recvBuf at the corresponding per-slot offset.
+//
+// Templated on `kUseFP8` so the NVLink direct path can reuse
+// `castAndWriteToSendBuf` for the quantized-vs-bf16 split.
+template <bool kUseFP8>
 __forceinline__ __device__ void sendToken(
-    const int4* sendDataInt4,
-    uint64_t recvPtr,
-    size_t expectedDstOffset,
+    // Local sources.
+    const int4* sendDataInt4,        // local staging slot base (header + RDMA-path payload).
+    const int4* srcDataInt4,         // input bf16 data for this token (NVLink-path payload source).
+    // Peer destination addressing: per-srcRank region base + slot index.
+    uint64_t srcRankRegionLocalPtr,  // sender-view pointer at peer's per-srcRank region.
+    size_t srcRankRegionOffset,      // window offset of that per-srcRank region.
+    int slotIdx,                     // slot within the per-srcRank region.
+    // Sender-side window addressing (RDMA source).
     int tokenIdx,
     size_t sendOff,
+    // Layout / sizing.
     size_t numBytesPerMsg,
+    size_t dispatch_hdr_sz,
+    size_t hiddenBytes,
+    size_t hiddenBf16Int4,
+    int maxTokensPerRank,
+    // Misc.
     int dstRank,
     int hashKey,
     int currRank,
+    bool roundScale,
     int* rankMask,
     const ncclWindow_t* windows,
     ncclDevComm* devComms,
-    int laneId,
-    size_t numInt4PerMsg) {
-    const auto dstP2pPtr = ncclGetP2pPtr(recvPtr, expectedDstOffset, currRank,
-                                         dstRank, windows, devComms);
+    int laneId) {
+    using vec_t = std::conditional_t<kUseFP8, int2, int4>;
 
-    if (not isRankMasked<true>(rankMask, dstRank)) {
-        if (dstP2pPtr == 0) {
-            if (laneId == 0) {
-                size_t expectedSrcOffset = sendOff + tokenIdx * numBytesPerMsg;
-                constexpr int commId = 0;
-                auto ctxId = getCtxId(hashKey);
-                ncclGin net(devComms[commId], ctxId);
-                ncclTeam world = ncclTeamWorld(devComms[commId]);
-                auto ncclWindow = windows[commId];
-                net.put(world,
-                        dstRank,
-                        ncclWindow,
-                        expectedDstOffset,
-                        ncclWindow,
-                        expectedSrcOffset,
-                        numBytesPerMsg,
-                        ncclGin_None{},  // no signal
-                        ncclGin_None{},  // no counter
-                        ncclCoopThread());
-            }
-        } else {
-            // NOTES: only 2 load iterations for 7K hidden with 8 unrolls
-            // Copy entire message including index from sendDataInt4 to dstP2pPtr
-            const auto* recvDataInt4 = reinterpret_cast<int4*>(dstP2pPtr);
-            UNROLLED_WARP_COPY(8, laneId, numInt4PerMsg, recvDataInt4, sendDataInt4, ld_nc_global, st_na_global);
+    const auto dstSrcRankP2pPtr = ncclGetP2pPtr(
+        srcRankRegionLocalPtr, srcRankRegionOffset, currRank, dstRank, windows, devComms);
+
+    if (isRankMasked<true>(rankMask, dstRank)) return;
+
+    if (dstSrcRankP2pPtr != 0) {
+        // ---- NVLink direct path (split layout) ----
+        const size_t hdrSectionBytes =
+            static_cast<size_t>(maxTokensPerRank) * dispatch_hdr_sz;
+        const size_t payloadBytes = numBytesPerMsg - dispatch_hdr_sz;
+        const int numHdrInt4 = static_cast<int>(dispatch_hdr_sz / sizeof(int4));
+
+        auto* dstSrcRankBase = reinterpret_cast<uint8_t*>(dstSrcRankP2pPtr);
+        auto* dstHdrSlot = dstSrcRankBase + slotIdx * dispatch_hdr_sz;
+        auto* dstPayloadSlot = dstSrcRankBase + hdrSectionBytes + slotIdx * payloadBytes;
+
+        int4* dstHdrInt4 = reinterpret_cast<int4*>(dstHdrSlot);
+        for (int i = laneId; i < numHdrInt4; i += 32) {
+            st_na_global(dstHdrInt4 + i, sendDataInt4[i]);
+        }
+
+        auto* dstDataVec = reinterpret_cast<vec_t*>(dstPayloadSlot);
+        auto* dstScales = reinterpret_cast<float*>(dstPayloadSlot + hiddenBytes);
+        castAndWriteToSendBuf<kUseFP8>(
+            srcDataInt4, dstDataVec, dstScales,
+            /*threadId=*/laneId, /*numThreads=*/32,
+            laneId, hiddenBf16Int4, roundScale);
+    } else {
+        // ---- RDMA path (interleaved layout) ----
+        if (laneId == 0) {
+            const size_t perSlotDstOffset = srcRankRegionOffset + slotIdx * numBytesPerMsg;
+            const size_t expectedSrcOffset = sendOff + tokenIdx * numBytesPerMsg;
+            constexpr int commId = 0;
+            auto ctxId = getCtxId(hashKey);
+            ncclGin net(devComms[commId], ctxId);
+            ncclTeam world = ncclTeamWorld(devComms[commId]);
+            auto ncclWindow = windows[commId];
+            net.put(world,
+                    dstRank,
+                    ncclWindow,
+                    perSlotDstOffset,
+                    ncclWindow,
+                    expectedSrcOffset,
+                    numBytesPerMsg,
+                    ncclGin_None{},  // no signal
+                    ncclGin_None{},  // no counter
+                    ncclCoopThread());
         }
     }
 }
@@ -402,7 +450,12 @@ __forceinline__ __device__ int waitForRecvTokensRelaxed(
     return numRecvTokens;
 }
 
-// Copy received token data and scales
+// Copy received token data and scales.
+// `isNvlinkSrc` selects the wire layout. When true, the sender (an intra-LSA
+// peer) used the NVLink split layout: all per-slot headers at the head of the
+// per-srcRank region followed by all per-slot payloads. When false, the sender
+// (a cross-LSA RDMA peer) used the legacy interleaved layout where each
+// per-slot message is [hdr | data | scales].
 template<bool kUseFP8, bool kUseUE8M0>
 __forceinline__ __device__ void copyRecvTokenData(
     const uint8_t* recvBufUint8,
@@ -417,16 +470,26 @@ __forceinline__ __device__ void copyRecvTokenData(
     int dispatch_hdr_sz,
     int maxTokensPerRank,
     int numRanks,
-    int laneId) {
+    int laneId,
+    bool isNvlinkSrc) {
     using scale_t = std::conditional_t<kUseUE8M0, uint8_t, float>;
     using packed_t = std::conditional_t<kUseUE8M0, uint32_t, float>;
 
-    // Copy source info
-    const auto recvBufHdrPtr = recvBufUint8 + recvIdx * numBytesPerMsg;
+    // Locate the payload (data + optional FP8 scales) for this slot.
+    const int payloadBytes = numBytesPerMsg - dispatch_hdr_sz;
+    const uint8_t* recvPayloadPtr;
+    if (isNvlinkSrc) {
+        // Split layout: payload section follows the per-srcRank header section.
+        recvPayloadPtr = recvBufUint8 + maxTokensPerRank * dispatch_hdr_sz +
+                         recvIdx * payloadBytes;
+    } else {
+        // Interleaved layout: payload sits right after the per-slot header.
+        recvPayloadPtr = recvBufUint8 + recvIdx * numBytesPerMsg + dispatch_hdr_sz;
+    }
 
     // Copy data
     // NOTES: only 2 load iterations for 7K hidden with 7 unrolls
-    const auto recvDataInt4 = reinterpret_cast<const int4*>(recvBufHdrPtr + dispatch_hdr_sz);
+    const auto recvDataInt4 = reinterpret_cast<const int4*>(recvPayloadPtr);
 
     const auto outDataInt4Ptr = outDataInt4 + tokenIdx * hiddenInt4;
     UNROLLED_WARP_COPY(7, laneId, hiddenInt4, outDataInt4Ptr, recvDataInt4, ld_nc_global, st_na_global);
@@ -554,11 +617,20 @@ __global__ __launch_bounds__(1024, 1) void dispatch(// INPUT
         const auto numWritingThreads = (numWarps - 1) * 32;
         const size_t hiddenBf16Int4 = kHidden / kNumElemsPerRead;
 
+        // Peer's recvBuf is laid out as numRanks back-to-back regions of size
+        // `maxTokensPerRank * numBytesPerMsg`. sendToken indexes within a
+        // region using the slot index and picks NVLink (split layout) or
+        // RDMA (interleaved layout) addressing internally.
+        const size_t srcRankRegionBytes =
+            static_cast<size_t>(maxTokensPerRank) * numBytesPerMsg;
+
         // Split token processing across SMs
         for (int tokenIdx = smId; tokenIdx < numTokens; tokenIdx += numSms) {
             const auto srcDataInt4 = static_cast<const int4*>(inData) + tokenIdx * hiddenBf16Int4;
 
-            // Optimized path: Get the idx of sendBuf for header, data(sendBufVec), and scale(sendBufScales)
+            // Local staging slot. Header is always written here; data is
+            // written here for the RDMA path only (NVLink writes data
+            // directly to the peer without round-tripping through sendBuf).
             auto* sendBufBase = static_cast<uint8_t*>(sendBuf) + tokenIdx * numBytesPerMsg;
             const auto sendBufVec = reinterpret_cast<vec_t*>(sendBufBase + dispatch_hdr_sz);
             const auto sendBufScales = reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(sendBufVec) + hiddenBytes);
@@ -568,12 +640,10 @@ __global__ __launch_bounds__(1024, 1) void dispatch(// INPUT
             auto dstExpertIdx = warpId < numTopk ? static_cast<int>(__ldg(inTopkIdx + tokenIdx * numTopk + warpId)) : -1;
             auto dstRank = getExpertRankIdx(dstExpertIdx, numLocalExperts);
 
-            // Write token_id and routing information
+            // Write token_id and routing information into the local staging
+            // slot. Lane 0 of warps 0..numTopk-1 contribute one rtr entry each.
             auto* sendBufHdr = reinterpret_cast<DispatchHdr<kLayout>*>(sendBufBase);
-            // Only lane0's of warps responsible for sending the token are
-            // writing the header.
             if (warpId < numTopk and laneId == 0) {
-                // Ensure that token_id is written only once.
                 if (warpId == 0) {
                     sendBufHdr->token_id = tokenIdx;
                 }
@@ -583,7 +653,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(// INPUT
                 }
             }
 
-            // Cast and write data to send buffer
+            // Cast and write data to send buffer (consumed by the RDMA path).
+            // NVLink dsts cast directly from inData instead, in the per-warp
+            // send branch below.
             castAndWriteToSendBuf<kUseFP8>(
                 srcDataInt4, sendBufVec, sendBufScales,
                 threadId, numWritingThreads, laneId, hiddenBf16Int4, roundScale);
@@ -614,15 +686,20 @@ __global__ __launch_bounds__(1024, 1) void dispatch(// INPUT
 
                     // evenly distribute sends by available channels
                     const auto ctxHash = slotIdx % numLocalExperts;
-                    // Calculate receive buffer pointer and offset
-                    const size_t recvRelOffset = currRank * maxTokensPerRank * numBytesPerMsg +
-                                                slotIdx * numBytesPerMsg;
-                    const auto recvPtr = reinterpret_cast<uint64_t>(recvBuf) + recvRelOffset;
-                    const auto sendBufInt4 = reinterpret_cast<int4*>(sendBufBase);
-                    sendToken(sendBufInt4,
-                            recvPtr, recvOff + recvRelOffset, tokenIdx,
-                            sendOff, numBytesPerMsg, dstRank, ctxHash,
-                            currRank, rankMask, windows, devComms, laneId, numInt4PerMsg);
+                    // Per-srcRank region base on the peer; sendToken picks the
+                    // NVLink (split layout, direct from `inData`) or RDMA
+                    // (interleaved, gin.put from staging) path internally.
+                    const size_t srcRankOffset = currRank * srcRankRegionBytes;
+                    const auto srcRankLocalPtr =
+                        reinterpret_cast<uint64_t>(recvBuf) + srcRankOffset;
+                    const auto sendBufInt4 = reinterpret_cast<const int4*>(sendBufBase);
+                    sendToken<kUseFP8>(
+                        sendBufInt4, srcDataInt4,
+                        srcRankLocalPtr, recvOff + srcRankOffset, slotIdx,
+                        tokenIdx, sendOff,
+                        numBytesPerMsg, dispatch_hdr_sz, hiddenBytes, hiddenBf16Int4, maxTokensPerRank,
+                        dstRank, ctxHash, currRank, roundScale,
+                        rankMask, windows, devComms, laneId);
                     if (laneId == 0) {
                         // Mark that one more token is sent to the rank
                         atomic_add_release_global(rankDone + dstRank, 1);
@@ -761,14 +838,30 @@ LOW_LATENCY_DISPATCH_RECV:
             if (outRecvRankCounter) outRecvRankCounter[srcRank] = numRecvTokens;
         }
 
+        // Pick per srcRank wire layout: NVLink (split) if the sender is an
+        // intra-LSA peer, RDMA (interleaved) otherwise. The mapping mirrors
+        // the sender-side ncclGetP2pPtr check above.
+        bool isNvlinkSrc;
+        {
+            constexpr int kCommId = 0;
+            ncclTeam lsa = ncclTeamLsa(devComms[kCommId]);
+            ncclTeam world = ncclTeamWorld(devComms[kCommId]);
+            isNvlinkSrc = ncclTeamRankIsMember(lsa, world, srcRank);
+        }
+
         if constexpr (kLayout == NCCL_EP_LAYOUT_EXPERT_MAJOR) {
             for (int i = rankLaneIdx * numWarpsPerGroup + subWarpId; i < numRecvTokens * numTopk; i += numWarpsPerGroup * numLocalExperts) {
                 int tokenIdx = i / numTopk;
                 int topkIdx = i % numTopk;
 
                 const auto recvBufUint8 = reinterpret_cast<uint8_t*>(recvBuf) + srcRank * maxTokensPerRank * numBytesPerMsg;
-                const auto recvTokenMsg = (const uint8_t*)(recvBufUint8 + tokenIdx * numBytesPerMsg);
-                const auto recvBufHdr = reinterpret_cast<const DispatchHdr<kLayout>*>(recvTokenMsg);
+                // NVLink split layout puts the per-slot header at the head of
+                // the per-srcRank region; the legacy RDMA layout has each
+                // header inline at the start of its [hdr|data|scales] message.
+                const auto recvHdrPtr = isNvlinkSrc
+                    ? (recvBufUint8 + tokenIdx * dispatch_hdr_sz)
+                    : (recvBufUint8 + tokenIdx * numBytesPerMsg);
+                const auto recvBufHdr = reinterpret_cast<const DispatchHdr<kLayout>*>(recvHdrPtr);
                 const auto slotsPerToken = numTopk + 1; // token_id + topk_idx's
                 const auto recvSrcInfo = recvSrcInfoBase + (srcRank * maxTokensPerRank + tokenIdx) * slotsPerToken;
                 const auto recvSrcTopkInfo = recvSrcInfo + 1;
@@ -814,15 +907,18 @@ LOW_LATENCY_DISPATCH_RECV:
                                 dispatch_hdr_sz,
                                 maxTokensPerRank,
                                 numRanks,
-                                laneId);
+                                laneId,
+                                isNvlinkSrc);
             }
         } else if constexpr (kLayout == NCCL_EP_LAYOUT_RANK_MAJOR) {
             // Rank-major: one output slot per received token (flat 2D index).
             // outRecvTopkIdx/Weights are written so the user can route and reduce.
             for (int i = rankLaneIdx * numWarpsPerGroup + subWarpId; i < numRecvTokens; i += numWarpsPerGroup * numLocalExperts) {
                 const auto recvBufUint8 = reinterpret_cast<uint8_t*>(recvBuf) + srcRank * maxTokensPerRank * numBytesPerMsg;
-                const auto recvTokenMsg = (const uint8_t*)(recvBufUint8 + i * numBytesPerMsg);
-                const auto recvBufHdr = reinterpret_cast<const DispatchHdr<kLayout>*>(recvTokenMsg);
+                const auto recvHdrPtr = isNvlinkSrc
+                    ? (recvBufUint8 + i * dispatch_hdr_sz)
+                    : (recvBufUint8 + i * numBytesPerMsg);
+                const auto recvBufHdr = reinterpret_cast<const DispatchHdr<kLayout>*>(recvHdrPtr);
                 const auto slotsPerToken = numTopk + 1; // token_id + topk_idx's
                 const auto recvSrcInfo = recvSrcInfoBase + (srcRank * maxTokensPerRank + i) * slotsPerToken;
                 const auto recvSrcTopkInfo = recvSrcInfo + 1;
@@ -869,7 +965,8 @@ LOW_LATENCY_DISPATCH_RECV:
                                 dispatch_hdr_sz,
                                 maxTokensPerRank,
                                 numRanks,
-                                laneId);
+                                laneId,
+                                isNvlinkSrc);
             }
         }
     }

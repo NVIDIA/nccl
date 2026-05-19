@@ -1393,7 +1393,11 @@ __forceinline__ __device__ void S2G_warp_group_device_function(const int local_r
             smem_buffer_ptr->get_s2d_map_buffer_base(pipeline_rank, sparse_to_dense_map_stage));
         uint64_t* mbar =
             smem_buffer_ptr->get_s2d_map_mbar(pipeline_rank, sparse_to_dense_map_stage);
+        // cp.async.bulk requires copy size to be a multiple of 16B. Round up; the
+        // source S2D buffer is over-allocated for max_tokens_per_rank and the smem
+        // dest stage is padded to 128B, so reading/writing the extra bytes is safe.
         uint32_t copy_bytes = (uint32_t)(current_chunk_size * s2d_inner_dim * sizeof(int32_t));
+        copy_bytes = (copy_bytes + 15u) & ~15u;
         cuda::ptx::cp_async_bulk(cuda::ptx::space_shared,
                                  cuda::ptx::space_global,
                                  smem_dst,
@@ -1467,6 +1471,7 @@ __forceinline__ __device__ void S2G_warp_group_device_function(const int local_r
             uint64_t* mbar =
                 smem_buffer_ptr->get_s2d_map_mbar(pipeline_rank, sparse_to_dense_map_stage ^ 1);
             uint32_t copy_bytes = (uint32_t)(next_chunk_size * s2d_inner_dim * sizeof(int32_t));
+            copy_bytes = (copy_bytes + 15u) & ~15u;
             cuda::ptx::cp_async_bulk(cuda::ptx::space_shared,
                                      cuda::ptx::space_global,
                                      smem_dst,

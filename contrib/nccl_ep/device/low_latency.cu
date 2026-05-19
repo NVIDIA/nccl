@@ -517,7 +517,7 @@ __forceinline__ __device__ void copyRecvTokenData(
     }
 }
 
-template <bool kUseFP8, bool kUseUE8M0, int kHidden, ncclEpLayout_t kLayout>
+template <bool kUseFP8, bool kUseUE8M0, int kHidden, ncclEpLayout_t kLayout, bool kNvlinkOnly>
 __global__ __launch_bounds__(1024, 1) void dispatch(// INPUT
                                                     const void* inData,
                                                     const int64_t* inTopkIdx,
@@ -655,10 +655,14 @@ __global__ __launch_bounds__(1024, 1) void dispatch(// INPUT
 
             // Cast and write data to send buffer (consumed by the RDMA path).
             // NVLink dsts cast directly from inData instead, in the per-warp
-            // send branch below.
-            castAndWriteToSendBuf<kUseFP8>(
-                srcDataInt4, sendBufVec, sendBufScales,
-                threadId, numWritingThreads, laneId, hiddenBf16Int4, roundScale);
+            // send branch below. When kNvlinkOnly is set, every dst is
+            // guaranteed to take the NVLink direct path so the staging-buffer
+            // payload is never read and the cast can be skipped entirely.
+            if constexpr (!kNvlinkOnly) {
+                castAndWriteToSendBuf<kUseFP8>(
+                    srcDataInt4, sendBufVec, sendBufScales,
+                    threadId, numWritingThreads, laneId, hiddenBf16Int4, roundScale);
+            }
 
 
             // Make sure that all working warps in the SM have completed the header writing.
@@ -1014,6 +1018,7 @@ void dispatch(const void* inData,
               int* rankMask,
               int* asyncErrorFlag,
               uint64_t timeoutCycles,
+              bool nvlinkOnly,
               cudaStream_t stream) {
     constexpr int kNumMaxTopK = 9;
     const int numWarpGroups = ceil_div(numExperts, numDeviceSms);
@@ -1037,13 +1042,8 @@ void dispatch(const void* inData,
         EP_HOST_ASSERT(roundScale and "UE8M0 SF requires `round_scale=True`");
 
     SETUP_LAUNCH_CONFIG(numSms, numWarps * 32, stream);
-#define DISPATCH_LAUNCH_CASE_IMPL(hidden, kLayout) { \
-auto dispatchFunc = dispatch<false, false, hidden, kLayout>; \
-if (useFp8 and not useUe8m0) \
-    dispatchFunc = dispatch<true, false, hidden, kLayout>; \
-if (useFp8 and useUe8m0) \
-    dispatchFunc = dispatch<true, true, hidden, kLayout>; \
-LAUNCH_KERNEL(&cfg, dispatchFunc, \
+#define DISPATCH_DO_LAUNCH(fp8, ue8m0, nvlinkOnlyV, hidden, kLayout) \
+LAUNCH_KERNEL(&cfg, (dispatch<fp8, ue8m0, hidden, kLayout, nvlinkOnlyV>), \
               inData, \
               inTopkIdx, \
               inTopkWeights, \
@@ -1083,7 +1083,18 @@ LAUNCH_KERNEL(&cfg, dispatchFunc, \
               devComms, \
               windows, \
               signalsBase, \
-              timeoutCycles); } break
+              timeoutCycles)
+#define DISPATCH_LAUNCH_CASE_IMPL(hidden, kLayout) { \
+    if (nvlinkOnly) { \
+        if (useFp8 and useUe8m0)      { DISPATCH_DO_LAUNCH(true,  true,  true,  hidden, kLayout); } \
+        else if (useFp8)              { DISPATCH_DO_LAUNCH(true,  false, true,  hidden, kLayout); } \
+        else                          { DISPATCH_DO_LAUNCH(false, false, true,  hidden, kLayout); } \
+    } else { \
+        if (useFp8 and useUe8m0)      { DISPATCH_DO_LAUNCH(true,  true,  false, hidden, kLayout); } \
+        else if (useFp8)              { DISPATCH_DO_LAUNCH(true,  false, false, hidden, kLayout); } \
+        else                          { DISPATCH_DO_LAUNCH(false, false, false, hidden, kLayout); } \
+    } \
+} break
 #define DISPATCH_LAUNCH_CASE_RM(hidden) DISPATCH_LAUNCH_CASE_IMPL(hidden, NCCL_EP_LAYOUT_RANK_MAJOR)
 #define DISPATCH_LAUNCH_CASE_EM(hidden) DISPATCH_LAUNCH_CASE_IMPL(hidden, NCCL_EP_LAYOUT_EXPERT_MAJOR)
     if (layout == NCCL_EP_LAYOUT_RANK_MAJOR) {
@@ -1091,6 +1102,7 @@ LAUNCH_KERNEL(&cfg, dispatchFunc, \
     } else {
         SWITCH_HIDDEN(DISPATCH_LAUNCH_CASE_EM);
     }
+#undef DISPATCH_DO_LAUNCH
 #undef DISPATCH_LAUNCH_CASE_IMPL
 #undef DISPATCH_LAUNCH_CASE_RM
 #undef DISPATCH_LAUNCH_CASE_EM

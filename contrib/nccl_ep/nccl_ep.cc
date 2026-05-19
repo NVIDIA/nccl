@@ -2269,6 +2269,7 @@ ncclResult_t ncclEpDispatch(
                 group->mask_buffer,
                 group->async_error_flag,
                 group->timeout_cycles,
+                /*nvlinkOnly=*/group->lsa_team_size == group->nRanks,
                 stream
             );
         };

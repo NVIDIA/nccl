@@ -1,13 +1,13 @@
 #
-# Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 #
-# See LICENSE.txt for license information
+# See LICENSE.txt for more license information
 #
 
 include ../../makefiles/common.mk
 # LLVM IR generation
 
-ifneq ($(EMIT_LLVM_IR), 0)
 # Source and target files
 LLVM_SRC := nccl_device_wrapper__impl.h
 BUILDDIR ?= $(abspath ../../build)
@@ -70,7 +70,7 @@ $(WRAPPER_HEADER): nccl_device_wrapper.h
 	@echo "Copying nccl_device_wrapper.h to build include..."
 	cp -f $< $@
 
-$(UNOPTIMIZED_BC): $(LLVM_SRC)
+$(UNOPTIMIZED_BC): $(LLVM_SRC) nccl_device_wrapper.h
 	@mkdir -p $(OBJDIR)
 	@echo "Generating unoptimized LLVM bitcode..."
 	$(CLANG) $(CLANG_FLAGS) $(LLVM_SRC) -o $@
@@ -106,11 +106,6 @@ llvm_ir: $(FINAL_BC) $(OPTIMIZED_BC) $(WRAPPER_HEADER)
 	@echo "  LLVM IR (Human-readable): $(LLVM_IR_FILE)"
 	@echo "  Final BC: $(FINAL_BC)"
 	@echo "  Wrapper Header: $(WRAPPER_HEADER)"
-else
-llvm_ir:
-	@echo "LLVM IR generation disabled (EMIT_LLVM_IR=0)"
-
-endif
 
 build: llvm_ir
 

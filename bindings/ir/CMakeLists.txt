@@ -1,3 +1,10 @@
+#
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# See LICENSE.txt for more license information
+#
+
 # LLVM IR generation for NCCL device APIs
 
 # Source and output configuration
@@ -87,7 +94,7 @@ add_custom_command(
     OUTPUT ${UNOPTIMIZED_BC}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${OBJDIR}
     COMMAND ${CLANG_EXECUTABLE} ${CLANG_FLAGS} ${LLVM_SRC} -o ${UNOPTIMIZED_BC}
-    DEPENDS ${LLVM_SRC}
+    DEPENDS ${LLVM_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/nccl_device_wrapper.h
     COMMENT "Generating unoptimized LLVM bitcode..."
     VERBATIM
 )
@@ -146,6 +153,6 @@ add_custom_command(TARGET llvm_ir POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E echo "  Optimized:         ${OPTIMIZED_BC}"
     COMMAND ${CMAKE_COMMAND} -E echo "  LLVM IR:           ${LLVM_IR_FILE}"
     COMMAND ${CMAKE_COMMAND} -E echo "  Final BC:          ${FINAL_BC}"
-    COMMAND ${CMAKE_COMMAND} -E echo "  Wrapper Header:    ${FINAL_BC}"
+    COMMAND ${CMAKE_COMMAND} -E echo "  Wrapper Header:    ${WRAPPER_HEADER}"
     VERBATIM
 )

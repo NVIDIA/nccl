@@ -1,7 +1,8 @@
 /*************************************************************************
- * Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
+ * See LICENSE.txt for more license information
  ************************************************************************/
 #ifndef _NCCL_DEVICE_WRAPPER__IMPL_H_
 #define _NCCL_DEVICE_WRAPPER__IMPL_H_
@@ -10,6 +11,7 @@
  * NCCL Device API force instantiation and C style APIs for LLVM IR generation
  */
 
+#include "nccl_device.h"
 #include "nccl_device_wrapper.h"
 #include <new>
 

@@ -84,12 +84,12 @@ static ncclResult_t ncclGinPluginLoad(ginPluginLib_t* pluginLib) {
   if (pluginLib->ncclGin == nullptr) goto fail;
 
   pluginLib->state = ncclGinPluginStateInitReady;
-  INFO(NCCL_INIT|NCCL_NET, "GIN/Plugin: Successfully loaded external gin plugin %s",
+  INFO(NCCL_INIT|NCCL_NET, "GIN/Plugin: Successfully loaded external plugin %s",
        (ncclPluginLibPaths[ncclPluginTypeGin] ? ncclPluginLibPaths[ncclPluginTypeGin] : pluginLib->name));
 exit:
   return ncclSuccess;
 fail:
-  INFO(NCCL_INIT|NCCL_NET, "GIN/Plugin: Failed to load external gin plugin %s, dlHandle: %p, ncclGin: %p",
+  INFO(NCCL_INIT|NCCL_NET, "GIN/Plugin: Failed to load external plugin %s, dlHandle: %p, ncclGin: %p",
          (ncclPluginLibPaths[ncclPluginTypeGin] ? ncclPluginLibPaths[ncclPluginTypeGin] : pluginLib->name),
          pluginLib->dlHandle, pluginLib->ncclGin);
   if (pluginLib->dlHandle) {
@@ -133,7 +133,7 @@ static ncclResult_t ncclGinPluginAssignToComm(struct ncclComm* comm, int pluginI
     bool isExternal = pluginIndex < (pluginCount - NCCL_GIN_NUM_INTERNAL_PLUGINS);
 
     if (ginType != -1 && props.netDeviceType != ginType) {
-      INFO(NCCL_INIT|NCCL_NET, "GIN/Plugin: Skipping GIN plugin %s index %d type %d: NCCL_GIN_TYPE=%ld requested",
+      INFO(NCCL_INIT|NCCL_NET, "GIN/Plugin: Skipping plugin %s index %d type %d: NCCL_GIN_TYPE=%ld requested",
            gin->name, pluginIndex, props.netDeviceType, ginType);
       return ncclSuccess;
     }
@@ -144,7 +144,7 @@ static ncclResult_t ncclGinPluginAssignToComm(struct ncclComm* comm, int pluginI
       return ncclSuccess;
     }
 
-    INFO(NCCL_INIT|NCCL_NET, "GIN/Plugin: Assigned GIN plugin %s type %d to comm", gin->name, props.netDeviceType);
+    INFO(NCCL_INIT|NCCL_NET, "GIN/Plugin: Assigned plugin %s type %d to comm", gin->name, props.netDeviceType);
     comm->sharedRes->ginState.ncclGin = gin;
     comm->sharedRes->ginState.ginVersion = pluginLibs[pluginIndex].version;
     // NOTE: The following cast is valid because ncclGinType_t variant values

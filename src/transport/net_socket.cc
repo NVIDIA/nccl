@@ -48,36 +48,43 @@ static ncclProfilerCallback_t ncclProfilerFunction;
 static int netRefCount;
 
 ncclResult_t ncclNetSocketInit(void** ctx, uint64_t commId, ncclNetCommConfig_t* config, ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) {
-  if (netRefCount++) return ncclSuccess;
+  std::lock_guard<std::mutex> lock(ncclNetSocketMutex);
+  ncclResult_t ret = ncclSuccess;
+  if (netRefCount) {
+    netRefCount++;
+    return ncclSuccess;
+  }
   ncclProfilerFunction = profFunction;
   if (ncclNetIfs == -1) {
-    std::lock_guard<std::mutex> lock(ncclNetSocketMutex);
-    if (ncclNetIfs == -1) {
-      char names[MAX_IF_NAME_SIZE*MAX_IFS];
-      union ncclSocketAddress addrs[MAX_IFS];
-      NCCLCHECK(ncclFindInterfaces(names, addrs, MAX_IF_NAME_SIZE, MAX_IFS, &ncclNetIfs));
-      if (ncclNetIfs <= 0) {
-        WARN("NET/Socket : no interface found");
-        return ncclInternalError;
-      } else {
-        #define MAX_LINE_LEN (2047)
-        char line[MAX_LINE_LEN+1];
-        char addrline[SOCKET_NAME_MAXLEN+1];
-        line[0] = '\0';
-        addrline[SOCKET_NAME_MAXLEN] = '\0';
-        for (int i=0; i<ncclNetIfs; i++) {
-          strcpy(ncclNetSocketDevs[i].devName, names+i*MAX_IF_NAME_SIZE);
-          memcpy(&ncclNetSocketDevs[i].addr, addrs+i, sizeof(union ncclSocketAddress));
-          NCCLCHECK(ncclNetSocketGetPciPath(ncclNetSocketDevs[i].devName, &ncclNetSocketDevs[i].pciPath));
-          snprintf(line+strlen(line), MAX_LINE_LEN-strlen(line), " [%d]%s:%s", i, names+i*MAX_IF_NAME_SIZE,
-              ncclSocketToString(&addrs[i], addrline));
-        }
-        line[MAX_LINE_LEN] = '\0';
-        INFO(NCCL_INIT|NCCL_NET,"NET/Socket : Using%s", line);
+    char names[MAX_IF_NAME_SIZE*MAX_IFS];
+    union ncclSocketAddress addrs[MAX_IFS];
+    NCCLCHECKGOTO(ncclFindInterfaces(names, addrs, MAX_IF_NAME_SIZE, MAX_IFS, &ncclNetIfs), ret, fail);
+    if (ncclNetIfs <= 0) {
+      WARN("NET/Socket : no interface found");
+      ret = ncclInternalError;
+      goto fail;
+    } else {
+      #define MAX_LINE_LEN (2047)
+      char line[MAX_LINE_LEN+1];
+      char addrline[SOCKET_NAME_MAXLEN+1];
+      line[0] = '\0';
+      addrline[SOCKET_NAME_MAXLEN] = '\0';
+      for (int i=0; i<ncclNetIfs; i++) {
+        strcpy(ncclNetSocketDevs[i].devName, names+i*MAX_IF_NAME_SIZE);
+        memcpy(&ncclNetSocketDevs[i].addr, addrs+i, sizeof(union ncclSocketAddress));
+        NCCLCHECKGOTO(ncclNetSocketGetPciPath(ncclNetSocketDevs[i].devName, &ncclNetSocketDevs[i].pciPath), ret, fail);
+        snprintf(line+strlen(line), MAX_LINE_LEN-strlen(line), " [%d]%s:%s", i, names+i*MAX_IF_NAME_SIZE,
+            ncclSocketToString(&addrs[i], addrline));
       }
+      line[MAX_LINE_LEN] = '\0';
+      INFO(NCCL_INIT|NCCL_NET,"NET/Socket : Using%s", line);
     }
   }
+  netRefCount++;
   return ncclSuccess;
+fail:
+  ncclNetIfs = -1;
+  return ret;
 }
 
 ncclResult_t ncclNetSocketDevices(int* ndev) {
@@ -770,6 +777,11 @@ ncclResult_t ncclNetSocketClose(void* opaqueComm) {
 }
 
 ncclResult_t ncclNetSocketFinalize(void* ctx) {
+  std::lock_guard<std::mutex> lock(ncclNetSocketMutex);
+  if (netRefCount == 0) {
+    WARN("NET/Socket : finalize called with zero reference count");
+    return ncclInternalError;
+  }
   netRefCount--;
   return ncclSuccess;
 }

@@ -942,6 +942,12 @@ static cudaError_t default_free_fn(void* ptr, void* /*context*/) {
     return cudaFree(ptr);
 }
 
+ncclResult_t ncclEpGetVersion(int* version) {
+    if (version == nullptr) return ncclInvalidArgument;
+    *version = NCCL_EP_VERSION_CODE;
+    return ncclSuccess;
+}
+
 ncclResult_t ncclEpCreateGroup(
     ncclEpGroup_t* out_ep_group,
     ncclComm_t comm,

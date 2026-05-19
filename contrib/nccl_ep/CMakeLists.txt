@@ -8,6 +8,14 @@ if(DEFINED CMAKE_CUDA_ARCHITECTURES)
   endforeach()
 endif()
 
+# Parse library version from include/nccl_ep.h (single source of truth).
+file(READ ${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_ep.h _NCCL_EP_HEADER_CONTENT)
+string(REGEX REPLACE ".*#define NCCL_EP_MAJOR ([0-9]+).*" "\\1" NCCL_EP_MAJOR "${_NCCL_EP_HEADER_CONTENT}")
+string(REGEX REPLACE ".*#define NCCL_EP_MINOR ([0-9]+).*" "\\1" NCCL_EP_MINOR "${_NCCL_EP_HEADER_CONTENT}")
+string(REGEX REPLACE ".*#define NCCL_EP_PATCH ([0-9]+).*" "\\1" NCCL_EP_PATCH "${_NCCL_EP_HEADER_CONTENT}")
+unset(_NCCL_EP_HEADER_CONTENT)
+message(STATUS "NCCL EP version: ${NCCL_EP_MAJOR}.${NCCL_EP_MINOR}.${NCCL_EP_PATCH}")
+
 # Source files
 set(NCCL_EP_HOST_SRC
     nccl_ep.cc
@@ -49,6 +57,15 @@ set_target_properties(nccl_ep_shared nccl_ep_static PROPERTIES
     CXX_STANDARD_REQUIRED ON
     CUDA_STANDARD 17
     CUDA_STANDARD_REQUIRED ON
+)
+
+# Version the shared library:
+#   libnccl_ep.so.MAJOR.MINOR.PATCH (actual file)
+#   libnccl_ep.so.MAJOR             (SONAME; linker symlink)
+#   libnccl_ep.so                   (unversioned symlink for build/runtime loading)
+set_target_properties(nccl_ep_shared PROPERTIES
+    VERSION   ${NCCL_EP_MAJOR}.${NCCL_EP_MINOR}.${NCCL_EP_PATCH}
+    SOVERSION ${NCCL_EP_MAJOR}
 )
 
 set_target_properties(nccl_ep_shared PROPERTIES

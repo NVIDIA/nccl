@@ -14,6 +14,17 @@
 extern "C" {
 #endif
 
+// Library release version. These are the single source of truth — the
+// build system (CMake + Makefile) parses them from this header to set the
+// shared library's VERSION/SOVERSION (libnccl_ep.so.MAJOR.MINOR.PATCH with
+// a libnccl_ep.so.MAJOR soname symlink).
+#define NCCL_EP_MAJOR 0
+#define NCCL_EP_MINOR 1
+#define NCCL_EP_PATCH 0
+
+// Packed version code: MAJOR*10000 + MINOR*100 + PATCH. Mirrors NCCL_VERSION_CODE.
+#define NCCL_EP_VERSION_CODE (NCCL_EP_MAJOR * 10000 + NCCL_EP_MINOR * 100 + NCCL_EP_PATCH)
+
 // ============================================================================
 // ABI + API versioning
 //
@@ -48,6 +59,16 @@ extern "C" {
 // actually fill any unknown fields).
 // ============================================================================
 #define NCCL_EP_API_VERSION 1
+
+// Return the NCCL_EP_VERSION_CODE of the NCCL EP library in the supplied integer.
+// This integer is coded with the MAJOR, MINOR and PATCH level of the library.
+//
+// Arguments:
+//   version - [OUT] Pointer to receive the library's NCCL_EP_VERSION_CODE value
+//
+// Returns: ncclResult_t error code
+
+ncclResult_t ncclEpGetVersion(int* version);
 
 // Opaque N-dimensional tensor handle used to describe various user inputs
 // (i.e., tokens, top-k indices, weights, scales, etc.)

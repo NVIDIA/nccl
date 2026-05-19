@@ -70,13 +70,24 @@ ALL_OBJ := $(HOST_OBJ) $(DEVICE_OBJ)
 # Device glue object
 DEVGLUE_OBJ := $(OBJDIR)/device_glue.o
 
+# Library version (single source of truth: include/nccl_ep.h).
+NCCL_EP_MAJOR := $(shell awk '/^#define NCCL_EP_MAJOR / {print $$3}' include/nccl_ep.h)
+NCCL_EP_MINOR := $(shell awk '/^#define NCCL_EP_MINOR / {print $$3}' include/nccl_ep.h)
+NCCL_EP_PATCH := $(shell awk '/^#define NCCL_EP_PATCH / {print $$3}' include/nccl_ep.h)
+
 # Library output
 LIBNAME := libnccl_ep.a
 LIBTARGET := $(LIBDIR)/$(LIBNAME)
 
-# Shared library output
-SOLIBNAME := libnccl_ep.so
-SOLIBTARGET := $(LIBDIR)/$(SOLIBNAME)
+# Shared library output:
+#   libnccl_ep.so.MAJOR.MINOR.PATCH (actual file)
+#   libnccl_ep.so.MAJOR             (SONAME; linker symlink)
+#   libnccl_ep.so                   (unversioned symlink for build/runtime loading)
+SOLIBNAME    := libnccl_ep.so
+SOLIBSONAME  := $(SOLIBNAME).$(NCCL_EP_MAJOR)
+SOLIBVERSION := $(SOLIBNAME).$(NCCL_EP_MAJOR).$(NCCL_EP_MINOR).$(NCCL_EP_PATCH)
+SOLIBTARGET  := $(LIBDIR)/$(SOLIBVERSION)
+SOLIBLINKS   := $(LIBDIR)/$(SOLIBSONAME) $(LIBDIR)/$(SOLIBNAME)
 
 # Header installation
 HEADERS := include/nccl_ep.h include/ep_enums.h include/common.hpp
@@ -85,7 +96,7 @@ HEADER_TARGETS := $(HEADERS:include/%=$(INCDIR)/%)
 # Build targets
 all: lib ep_test ep_bench
 
-lib: $(LIBTARGET) $(SOLIBTARGET) $(HEADER_TARGETS)
+lib: $(LIBTARGET) $(SOLIBTARGET) $(SOLIBLINKS) $(HEADER_TARGETS)
 
 # Compile host code
 $(OBJDIR)/%.o: %.cc
@@ -114,10 +125,17 @@ $(LIBTARGET): $(ALL_OBJ) $(DEVGLUE_OBJ)
 # Create shared library (for Python ctypes)
 # Links against libnccl.so for NCCL symbols (ncclCommCuDevice, etc.)
 # Uses rpath so the library can find libnccl.so at runtime
+# Embeds SONAME=libnccl_ep.so.MAJOR so consumers record the major-versioned name.
 $(SOLIBTARGET): $(ALL_OBJ) $(DEVGLUE_OBJ)
 	@echo "Creating shared library $@"
 	@mkdir -p $(dir $@)
-	$(NVCC) -shared $(NVCC_GENCODE) -o $@ $^ -L$(LIBDIR) -lnccl -lcuda -Xlinker -rpath -Xlinker $(LIBDIR) $(LDFLAGS)
+	$(NVCC) -shared $(NVCC_GENCODE) -Xlinker -soname=$(SOLIBSONAME) -o $@ $^ -L$(LIBDIR) -lnccl -lcuda -Xlinker -rpath -Xlinker $(LIBDIR) $(LDFLAGS)
+
+# Versioned-soname and unversioned symlinks (libnccl_ep.so.MAJOR, libnccl_ep.so).
+$(LIBDIR)/$(SOLIBSONAME): $(SOLIBTARGET)
+	@ln -sf $(SOLIBVERSION) $@
+$(LIBDIR)/$(SOLIBNAME): $(LIBDIR)/$(SOLIBSONAME)
+	@ln -sf $(SOLIBSONAME) $@
 
 # Install headers
 $(INCDIR)/%.h: include/%.h
@@ -216,4 +234,4 @@ endif
 endif
 
 clean:
-	rm -rf $(OBJDIR) $(LIBTARGET) $(SOLIBTARGET) $(HEADER_TARGETS) $(DST_DIR)
+	rm -rf $(OBJDIR) $(LIBTARGET) $(SOLIBTARGET) $(SOLIBLINKS) $(HEADER_TARGETS) $(DST_DIR)

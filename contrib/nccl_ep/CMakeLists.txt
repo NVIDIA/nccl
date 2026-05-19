@@ -84,17 +84,45 @@ set(NCCL_EP_INCLUDE_DIRS
     ${CUDAToolkit_INCLUDE_DIRS}/cccl
 )
 
+set(NCCL_EP_JIT_SOURCE_DIR "${CMAKE_BINARY_DIR}/include/nccl_ep")
+set(NCCL_EP_JIT_BUILD_INCLUDE_DIR "${CMAKE_BINARY_DIR}/include")
+set(NCCL_EP_JIT_CUDA_INCLUDE_DIR "")
+if(CUDAToolkit_INCLUDE_DIRS)
+    list(GET CUDAToolkit_INCLUDE_DIRS 0 NCCL_EP_JIT_CUDA_INCLUDE_DIR)
+endif()
+set(NCCL_EP_JIT_CONFIG_HEADER "${NCCL_EP_JIT_SOURCE_DIR}/config.h")
+set(NCCL_EP_JIT_HEADERS
+    device/hybrid_ep.cuh
+    device/device_primitives.cuh
+    device/hybridep_configs.cuh
+    device/cuda_compat_shims.cuh
+    device/scan_kernel.cuh
+    device/macros.cuh
+)
+
+file(MAKE_DIRECTORY "${NCCL_EP_JIT_SOURCE_DIR}")
+file(WRITE "${NCCL_EP_JIT_CONFIG_HEADER}"
+    "#pragma once\n"
+    "#define NCCL_EP_JIT_SOURCE_DIR \"${NCCL_EP_JIT_SOURCE_DIR}\"\n"
+    "#define NCCL_EP_JIT_BUILD_INCLUDE_DIR \"${NCCL_EP_JIT_BUILD_INCLUDE_DIR}\"\n"
+    "#define NCCL_EP_JIT_CUDA_INCLUDE_DIR \"${NCCL_EP_JIT_CUDA_INCLUDE_DIR}\"\n"
+)
+
+foreach(header IN LISTS NCCL_EP_JIT_HEADERS)
+    get_filename_component(header_dir "${header}" DIRECTORY)
+    file(MAKE_DIRECTORY "${NCCL_EP_JIT_SOURCE_DIR}/${header_dir}")
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/${header}" "${NCCL_EP_JIT_SOURCE_DIR}/${header}" COPYONLY)
+endforeach()
+
 # Allow device code to call host constexpr with --expt-relaxed-constexpr
 # Hides all symbols by default in the host compiled object files with -fvisibility=hidden
 foreach(t IN LISTS NCCL_EP_TARGETS)
     target_compile_options(${t} PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
         $<$<COMPILE_LANGUAGE:CUDA>:--compiler-options=-fvisibility=hidden>
+        $<$<COMPILE_LANGUAGE:CXX>:-include>
+        $<$<COMPILE_LANGUAGE:CXX>:${NCCL_EP_JIT_CONFIG_HEADER}>
     )
-    target_compile_definitions(${t} PRIVATE
-        NCCL_EP_JIT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
-        NCCL_EP_JIT_BUILD_INCLUDE_DIR="${CMAKE_BINARY_DIR}/include"
-        NCCL_EP_JIT_CUDA_INCLUDE_DIR="${CUDAToolkit_INCLUDE_DIRS}")
     if(TARGET CUDA::cuda_driver)
         target_link_libraries(${t} PUBLIC CUDA::cuda_driver)
     else()
@@ -108,13 +136,22 @@ endforeach()
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/include")
 configure_file(include/nccl_ep.h    "${CMAKE_BINARY_DIR}/include/nccl_ep.h"    COPYONLY)
 configure_file(include/ep_enums.h   "${CMAKE_BINARY_DIR}/include/ep_enums.h"   COPYONLY)
+configure_file(include/common.hpp   "${CMAKE_BINARY_DIR}/include/common.hpp"   COPYONLY)
 
 # Install to custom prefix
 install(FILES
     include/nccl_ep.h
     include/ep_enums.h
+    include/common.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
+
+foreach(header IN LISTS NCCL_EP_JIT_HEADERS)
+    get_filename_component(header_dir "${header}" DIRECTORY)
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/${header}"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/nccl_ep/${header_dir}"
+    )
+endforeach()
 
 install(TARGETS ${NCCL_EP_TARGETS}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

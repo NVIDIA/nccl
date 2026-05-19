@@ -53,7 +53,6 @@ std::vector<std::string> include_options(const JitCompileConfig& config) {
 
     // Include nccl_ep kernel headers and common.hpp
     add_include(config.source_dir);
-    add_include(config.source_dir / "include");
     add_include(config.source_dir / "device");
 
     // Include all NCCL device headers
@@ -61,8 +60,6 @@ std::vector<std::string> include_options(const JitCompileConfig& config) {
         add_include(config.build_include_dir);
         add_include(config.build_include_dir / "nccl_device");
     }
-
-    add_include(config.source_dir / ".." / ".." / "src" / "include");
 
     if (!config.cuda_include_dir.empty()) {
         add_include(config.cuda_include_dir);

@@ -22,11 +22,19 @@ OBJDIR := $(BUILDDIR)/obj/nccl_ep
 LIBDIR := $(BUILDDIR)/lib
 INCDIR := $(BUILDDIR)/include
 DST_DIR := $(BUILDDIR)/test/nccl_ep
+JIT_DIR := $(INCDIR)/nccl_ep
+JIT_CONFIG_HEADER := $(JIT_DIR)/config.h
 
-# NVCC JIT support is required for HybridEP combine.
-NCCL_EP_JIT_DEFS := -DNCCL_EP_JIT_SOURCE_DIR=\"$(abspath .)\" \
-                    -DNCCL_EP_JIT_BUILD_INCLUDE_DIR=\"$(abspath $(INCDIR))\" \
-                    -DNCCL_EP_JIT_CUDA_INCLUDE_DIR=\"$(abspath $(CUDA_INC))\"
+# NVCC JIT support is required for HT mode.
+NCCL_EP_JIT_HEADERS := \
+    device/hybrid_ep.cuh \
+    device/device_primitives.cuh \
+    device/hybridep_configs.cuh \
+    device/cuda_compat_shims.cuh \
+    device/scan_kernel.cuh \
+    device/macros.cuh
+NCCL_EP_JIT_HEADER_TARGETS := $(NCCL_EP_JIT_HEADERS:%=$(JIT_DIR)/%)
+NCCL_EP_JIT_DEFS := -include $(abspath $(JIT_CONFIG_HEADER))
 
 # Include paths - add current directory so common.hpp can find device/ep headers
 # Include NCCL source headers for GIN support
@@ -97,10 +105,10 @@ HEADER_TARGETS := $(HEADERS:include/%=$(INCDIR)/%)
 # Build targets
 all: lib ep_test ep_bench
 
-lib: $(LIBTARGET) $(SOLIBTARGET) $(SOLIBLINKS) $(HEADER_TARGETS)
+lib: $(LIBTARGET) $(SOLIBTARGET) $(SOLIBLINKS) $(HEADER_TARGETS) $(NCCL_EP_JIT_HEADER_TARGETS)
 
 # Compile host code
-$(OBJDIR)/%.o: %.cc
+$(OBJDIR)/%.o: %.cc $(JIT_CONFIG_HEADER)
 	@echo "Compiling $<"
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
@@ -118,7 +126,7 @@ $(DEVGLUE_OBJ): $(DEVICE_OBJ)
 	$(NVCC) $(NVCUFLAGS) -dlink $^ -o $@ $(LDFLAGS)
 
 # Create static library
-$(LIBTARGET): $(ALL_OBJ) $(DEVGLUE_OBJ)
+$(LIBTARGET): $(ALL_OBJ) $(DEVGLUE_OBJ) | $(NCCL_EP_JIT_HEADER_TARGETS)
 	@echo "Creating library $@"
 	@mkdir -p $(dir $@)
 	ar rcs $@ $^
@@ -127,7 +135,7 @@ $(LIBTARGET): $(ALL_OBJ) $(DEVGLUE_OBJ)
 # Links against libnccl.so for NCCL symbols (ncclCommCuDevice, etc.)
 # Uses rpath so the library can find libnccl.so at runtime
 # Embeds SONAME=libnccl_ep.so.MAJOR so consumers record the major-versioned name.
-$(SOLIBTARGET): $(ALL_OBJ) $(DEVGLUE_OBJ)
+$(SOLIBTARGET): $(ALL_OBJ) $(DEVGLUE_OBJ) | $(NCCL_EP_JIT_HEADER_TARGETS)
 	@echo "Creating shared library $@"
 	@mkdir -p $(dir $@)
 	$(NVCC) -shared $(NVCC_GENCODE) -Xlinker -soname=$(SOLIBSONAME) -o $@ $^ -L$(LIBDIR) -lnccl -lcuda -Xlinker -rpath -Xlinker $(LIBDIR) $(LDFLAGS)
@@ -146,6 +154,19 @@ $(INCDIR)/%.h: include/%.h
 
 $(INCDIR)/%.hpp: include/%.hpp
 	@echo "Installing $<"
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+$(JIT_CONFIG_HEADER):
+	@echo "Generating $@"
+	@mkdir -p $(dir $@)
+	@printf '%s\n' '#pragma once' > $@
+	@printf '#define NCCL_EP_JIT_SOURCE_DIR "%s"\n' "$(abspath $(JIT_DIR))" >> $@
+	@printf '#define NCCL_EP_JIT_BUILD_INCLUDE_DIR "%s"\n' "$(abspath $(INCDIR))" >> $@
+	@printf '#define NCCL_EP_JIT_CUDA_INCLUDE_DIR "%s"\n' "$(abspath $(CUDA_INC))" >> $@
+
+$(JIT_DIR)/%: %
+	@echo "Installing JIT header $<"
 	@mkdir -p $(dir $@)
 	cp $< $@
 
@@ -235,4 +256,4 @@ endif
 endif
 
 clean:
-	rm -rf $(OBJDIR) $(LIBTARGET) $(SOLIBTARGET) $(SOLIBLINKS) $(HEADER_TARGETS) $(DST_DIR)
+	rm -rf $(OBJDIR) $(LIBTARGET) $(SOLIBTARGET) $(SOLIBLINKS) $(HEADER_TARGETS) $(JIT_DIR) $(DST_DIR)

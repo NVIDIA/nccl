@@ -27,11 +27,11 @@
 #include <unistd.h>
 
 #ifndef NCCL_EP_JIT_SOURCE_DIR
-#define NCCL_EP_JIT_SOURCE_DIR "."
+#define NCCL_EP_JIT_SOURCE_DIR "/usr/include/nccl_ep"
 #endif
 
 #ifndef NCCL_EP_JIT_BUILD_INCLUDE_DIR
-#define NCCL_EP_JIT_BUILD_INCLUDE_DIR ""
+#define NCCL_EP_JIT_BUILD_INCLUDE_DIR "/usr/include"
 #endif
 
 #ifndef NCCL_EP_JIT_CUDA_INCLUDE_DIR
@@ -128,12 +128,24 @@ double elapsed_sec(std::chrono::steady_clock::time_point begin) {
 std::filesystem::path configured_source_dir() {
     std::string path = env_value("NCCL_EP_JIT_SOURCE_DIR");
     if (!path.empty()) return std::filesystem::path(path);
+
+    std::string nccl_home = env_value("NCCL_HOME");
+    if (!nccl_home.empty()) {
+        return std::filesystem::path(nccl_home) / "include" / "nccl_ep";
+    }
+
     return std::filesystem::path(NCCL_EP_JIT_SOURCE_DIR);
 }
 
 std::filesystem::path configured_build_include_dir() {
     std::string path = env_value("NCCL_EP_JIT_BUILD_INCLUDE_DIR");
     if (!path.empty()) return std::filesystem::path(path);
+
+    std::string nccl_home = env_value("NCCL_HOME");
+    if (!nccl_home.empty()) {
+        return std::filesystem::path(nccl_home) / "include";
+    }
+
     return std::filesystem::path(NCCL_EP_JIT_BUILD_INCLUDE_DIR);
 }
 
@@ -246,9 +258,7 @@ const SmEnvInfo& get_sm_env_info(int sm) {
         info.compiler_id,
     };
     append_header_tree_fingerprint(&env_parts, info.source_dir / "device");
-    append_header_tree_fingerprint(&env_parts, info.source_dir / "include");
     append_header_tree_fingerprint(&env_parts, info.build_include_dir);
-    append_header_tree_fingerprint(&env_parts, info.source_dir / ".." / ".." / "src" / "include");
     env_parts.insert(env_parts.end(), info.options.begin(), info.options.end());
     info.env_hash = fnv1a_digest(env_parts);
 

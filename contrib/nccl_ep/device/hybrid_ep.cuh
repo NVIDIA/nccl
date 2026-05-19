@@ -19,7 +19,6 @@
 #include <cuda/ptx>
 #include "nccl_device.h"
 #include "cuda_compat_shims.cuh" // Compatibility shims for CUDA 12.x
-#include "include/common.hpp"
 
 namespace hybrid_ep{
 

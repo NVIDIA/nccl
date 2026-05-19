@@ -9,6 +9,7 @@
 #include "common.h"
 #include "compiler.h"
 #include "p2p_resiliency.h"
+#include "plugin/net_observ/net_observ.h"
 
 NCCL_PARAM(IbArThreshold, "IB_AR_THRESHOLD", -2);
 int64_t ncclIbArThreshold = 8192;
@@ -783,6 +784,21 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
           if (r->base->resiliency == NULL) {
             WARN("NET/IB: %s: Got CQE with error (devIndex=%d, req=%p, comm=%p (%s), wr_id=%lu, qp_num=%d)", __func__, i, r, r->base, r->base->isSend ? "send" : "recv", wc->wr_id, wc->qp_num);
             ncclIbLogCompletionWithError(r->base, wc, i);
+
+            // Notify NetworkObserver of the IB error for faster diagnosis
+            // Get device name from the device index
+            if (r->devBases[i]) {
+              int ibDevN = r->devBases[i]->ibDevN;
+              if (ibDevN >= 0 && ibDevN < ncclNIbDevs) {
+                const char* devName = ncclIbDevs[ibDevN].devName;
+                // Get peer IP from socket address
+                char peerIpStr[SOCKET_NAME_MAXLEN] = {0};
+                ncclSocketToString(&r->base->sock.addr, peerIpStr, 0);
+                // Call NetworkObserver to handle the error directly
+                net_observ::ncclNetObservHandleIbError(devName, peerIpStr, wc->status);
+              }
+            }
+
             // If resiliency is not enabled, we cannot recover from any error.
             return ncclRemoteError;
           }

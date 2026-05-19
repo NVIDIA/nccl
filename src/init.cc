@@ -29,6 +29,8 @@
 #include "profiler.h"
 #include "mnnvl.h"
 #include <sys/stat.h>
+#include <vector>
+#include <string>
 #include "param.h"
 #include "nvtx_payload_schemas.h"
 #include "utils.h"
@@ -38,6 +40,13 @@
 #include "os.h"
 #include "env.h"
 #include "rma/rma.h"
+
+// Forward declarations for net_observ singleton (managed via env vars)
+namespace net_observ {
+int ncclNetObservInit(void);
+void ncclNetObservFinalize(void);
+void ncclNetObservUpdateRankTopology(const std::vector<std::vector<int>>& nodeRanks);
+}
 
 #define STR2(v) #v
 #define STR(v) STR2(v)
@@ -149,6 +158,9 @@ static void initOnceFunc() {
   NCCLCHECKGOTO(bootstrapNetInit(), initResult, exit);
 
   initNvtxRegisteredEnums();
+  // Initialize NetworkObserver (controlled by NCCL_NET_OBSERV_ENABLE env var)
+  net_observ::ncclNetObservInit();
+  atexit(net_observ::ncclNetObservFinalize);
 exit:;
 }
 
@@ -2415,6 +2427,28 @@ ncclResult_t ncclCommInitRank(ncclComm_t* newcomm, int nranks, ncclUniqueId comm
 
   NVTX3_RANGE_ADD_PAYLOAD(CommInitRank, NcclNvtxParamsCommInitRankSchema,
     NVTX3_PAYLOAD((*newcomm)->commHash, nranks, myrank, cudaDev));
+
+  // Update NetworkObserver with rank topology information
+  // This allows the observer to know which ranks belong to which nodes
+  if (*newcomm && (*newcomm)->nNodes > 0) {
+    struct ncclComm* comm = *newcomm;
+    std::vector<std::vector<int>> nodeRanks;
+
+    // Get ranks for each node (indexed by node ID)
+    for (int node = 0; node < comm->nNodes; node++) {
+      std::vector<int> ranks;
+      for (int rank = 0; rank < comm->nRanks; rank++) {
+        if (comm->rankToNode[rank] == node) {
+          ranks.push_back(rank);
+        }
+      }
+      nodeRanks.push_back(ranks);
+    }
+
+    if (!nodeRanks.empty()) {
+      net_observ::ncclNetObservUpdateRankTopology(nodeRanks);
+    }
+  }
 
   return ncclSuccess;
 }

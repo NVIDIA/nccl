@@ -458,21 +458,30 @@ ncclResult_t ncclRmaIbProxyDestroyContext(void* rmaCtx) {
 }
 
 ncclResult_t ncclRmaIbProxyRegMrSymDmaBuf(void* collComm, void* data, size_t size, int type, uint64_t offset, int fd, uint64_t mr_flags, void** mhandle) {
+  ncclResult_t ret = ncclSuccess;
   struct ncclGinIbCollComm *cComm = (struct ncclGinIbCollComm *)collComm;
-  struct ncclRmaIbProxyMrHandle *rmaMrHandle;
-  NCCLCHECK(ncclCalloc(&rmaMrHandle, 1));
+  struct ncclRmaIbProxyMrHandle *rmaMrHandle = NULL;
+  NCCLCHECKGOTO(ncclCalloc(&rmaMrHandle, 1), ret, fail);
 
-  NCCLCHECKNOWARN(ncclIbRegMrDmaBufInternal(cComm->recvComm, data, size, type, offset, fd, mr_flags, (void **)&rmaMrHandle->mrHandle), NCCL_NET);
+  NCCLCHECKGOTONOWARN(ncclIbRegMrDmaBufInternal(cComm->recvComm, data, size, type, offset, fd, mr_flags, (void **)&rmaMrHandle->mrHandle), ret, fail, NCCL_NET);
 
-  NCCLCHECK(ncclCalloc(&rmaMrHandle->base_vas, cComm->nranks));
-  NCCLCHECK(ncclCalloc(&rmaMrHandle->rkeys, cComm->nranks));
+  NCCLCHECKGOTO(ncclCalloc(&rmaMrHandle->base_vas, cComm->nranks), ret, fail);
+  NCCLCHECKGOTO(ncclCalloc(&rmaMrHandle->rkeys, cComm->nranks), ret, fail);
 
-  NCCLCHECK(cComm->allGather(cComm, &data, rmaMrHandle->base_vas, sizeof(uintptr_t)));
-  NCCLCHECK(cComm->allGather(cComm, &rmaMrHandle->mrHandle->mrs[0]->rkey, rmaMrHandle->rkeys, sizeof(uint32_t)));
+  NCCLCHECKGOTO(cComm->allGather(cComm, &data, rmaMrHandle->base_vas, sizeof(uintptr_t)), ret, fail);
+  NCCLCHECKGOTO(cComm->allGather(cComm, &rmaMrHandle->mrHandle->mrs[0]->rkey, rmaMrHandle->rkeys, sizeof(uint32_t)), ret, fail);
 
   *mhandle = rmaMrHandle;
 
   return ncclSuccess;
+fail:
+  if (rmaMrHandle) {
+    if (rmaMrHandle->mrHandle) ncclNetIb.deregMr(cComm->recvComm, rmaMrHandle->mrHandle);
+    free(rmaMrHandle->base_vas);
+    free(rmaMrHandle->rkeys);
+    free(rmaMrHandle);
+  }
+  return ret;
 }
 
 ncclResult_t ncclRmaIbProxyRegMrSym(void* collComm, void* data, size_t size, int type, uint64_t mr_flags, void** mhandle) {

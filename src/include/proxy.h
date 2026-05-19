@@ -223,6 +223,7 @@ struct ncclProxyOpsPool {
   volatile int nextOps;
   volatile int nextOpsEnd;
   volatile int freeOps[NCCL_MAX_LOCAL_RANKS];
+  int syncObjectsInitialized;
   std::mutex mutex;
   std::condition_variable cond;
 };

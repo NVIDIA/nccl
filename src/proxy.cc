@@ -1401,7 +1401,8 @@ static ncclResult_t proxyProgressInit(struct ncclProxyState* proxyState) {
     shmPath[0] = '\0';
 #elif defined(NCCL_OS_WINDOWS)
     char shmPath[64];
-    snprintf(shmPath, sizeof(shmPath), "Local\\nccl-shm-%d", GetCurrentProcessId());
+    snprintf(shmPath, sizeof(shmPath), "Local\\nccl-shm-%08x-%02x",
+        (unsigned)GetCurrentProcessId(), proxyState->cudaDev & 0xff);
 #endif
     NCCLCHECK(ncclShmOpen(shmPath, sizeof(shmPath), size, (void**)&pool, NULL, proxyState->tpLocalnRanks, &state->handle));
     // Init pool
@@ -1413,7 +1414,7 @@ static ncclResult_t proxyProgressInit(struct ncclProxyState* proxyState) {
       pool->ops[(r+1)*MAX_OPS_PER_PEER-1].next = -1;
     }
 
-    ncclOsSetMutexCondShared(pool->mutex, pool->cond);
+    ncclOsSetMutexCondShared(pool->mutex, pool->cond, &pool->syncObjectsInitialized);
 
     state->opsPool = pool;
 
@@ -1435,9 +1436,14 @@ static ncclResult_t proxyProgressInit(struct ncclProxyState* proxyState) {
 
 static void proxyOpsFree(struct ncclProxyState* proxyState) {
   struct ncclProxyProgressState* state = &proxyState->progressState;
+  if (state->opsPool) {
+    ncclOsUnsetMutexCondShared(state->opsPool->mutex, state->opsPool->cond, &state->opsPool->syncObjectsInitialized);
+  }
   if (ncclShmClose(state->handle) != ncclSuccess) {
     WARN("[Service thread] shm close failed");
   }
+  state->opsPool = NULL;
+  state->handle = NULL;
 }
 
 ncclResult_t ncclProxyShmUnlink(struct ncclComm* comm) {

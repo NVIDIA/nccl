@@ -34,6 +34,7 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
+#include <new>
 #include <nmmintrin.h>
 #include <cstdint>
 #include <setupapi.h>
@@ -674,8 +675,19 @@ ncclResult_t ncclSocketClose(struct ncclSocket* sock, bool wait) {
   return ncclSuccess;
 }
 
-void ncclOsSetMutexCondShared(std::mutex &mutex, std::condition_variable &cond) {
-  // Not implemented on Windows
+void ncclOsSetMutexCondShared(std::mutex &mutex, std::condition_variable &cond, int* initialized) {
+  if (initialized != NULL && *initialized) return;
+  // ncclShmOpen zeroes mapped storage; construct the C++ sync objects in place.
+  new (&mutex) std::mutex();
+  new (&cond) std::condition_variable();
+  if (initialized != NULL) *initialized = 1;
+}
+
+void ncclOsUnsetMutexCondShared(std::mutex &mutex, std::condition_variable &cond, int* initialized) {
+  if (initialized != NULL && *initialized == 0) return;
+  cond.~condition_variable();
+  mutex.~mutex();
+  if (initialized != NULL) *initialized = 0;
 }
 
 void ncclOsCpuZero(ncclAffinity& affinity) {

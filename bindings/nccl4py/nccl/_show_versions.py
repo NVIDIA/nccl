@@ -180,8 +180,8 @@ def show_versions() -> None:
     v = get_version()
     label_width = 12
     print()
-    print("INSTALLED VERSIONS")
-    print("------------------")
+    print("NCCL versions")
+    print("-------------")
     print(f"{'nccl4py':<{label_width}}: {v.nccl4py}")
     print(f"{'libnccl':<{label_width}}: {v.nccl}")
     ep = str(v.nccl_ep) if v.nccl_ep is not None else "not available (CUDA-12 host)"

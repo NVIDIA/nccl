@@ -46,6 +46,8 @@ static ncclResult_t ncclGinIbGdrGpuSupport(bool gdaki) {
 }
 
 NCCL_PARAM(GinType, "GIN_TYPE", -1);
+NCCL_PARAM(GinIbTc, "GIN_IB_TC", -1);
+extern int64_t ncclParamIbTc();
 
 static std::mutex ncclGinIbGdakiLockMutex;
 static int ncclGinIbGdakiNDevs = -1;
@@ -204,7 +206,7 @@ ncclResult_t ncclGinIbConnect(void *ctx, void *handles[], int nranks, int rank,
   do
   {
     if (cComm->sendComm == NULL) {
-      NCCLCHECK(ncclIbConnectImpl(ctx, lComm->dev, handles[next], &cComm->sendComm, NULL, /*nQpsPerDev*/ 1));
+      NCCLCHECK(ncclIbConnectImpl(ctx, lComm->dev, handles[next], &cComm->sendComm, NULL, /*nQpsPerDev*/ 1, ncclParamGinIbTc() != -1 ? ncclParamGinIbTc() : ncclParamIbTc()));
     }
     if (cComm->recvComm == NULL)
       NCCLCHECK(ncclIbAcceptImpl(lComm, &cComm->recvComm, NULL, /*nQpsPerDev*/ 1));
@@ -295,6 +297,9 @@ ncclResult_t ncclGinIbGdakiConnect(void *ctx, void *handles[], int nranks, int r
 
 ncclResult_t ncclGinIbGdakiCreateContext(void* collComm, ncclGinConfig_t* config, void **ginCtx, ncclNetDeviceHandle_t** devHandle) {
   struct ncclGinIbCollComm* cComm = (struct ncclGinIbCollComm*)collComm;
+
+  if (ncclParamGinIbTc() != -1) config->trafficClass = ncclParamGinIbTc();
+  else if (ncclParamIbTc() != -1) config->trafficClass = ncclParamIbTc();
 
   // GDAKI currently doesn't support the rankStride optimization.
   NCCLCHECK(ncclGinGdakiCreateContext(cComm, config->nSignals, config->nCounters, config->nContexts, config->queueDepth, config->trafficClass, config->backendVersion, ginCtx, devHandle));
@@ -416,7 +421,7 @@ ncclResult_t ncclRmaIbProxyCreateContext(void* collComm, ncclRmaConfig_t* config
       int acceptPeer = (cComm->rank - i + nranks) % nranks;
       do {
         if (gc->fullSendComm[connectPeer] == NULL)
-          NCCLCHECKGOTO(ncclIbConnectImpl(cComm->ctx, cComm->dev, handles+NCCL_NET_HANDLE_MAXSIZE*connectPeer, &gc->fullSendComm[connectPeer], NULL, /*nQpsPerDev*/ 1), ret, end);
+          NCCLCHECKGOTO(ncclIbConnectImpl(cComm->ctx, cComm->dev, handles+NCCL_NET_HANDLE_MAXSIZE*connectPeer, &gc->fullSendComm[connectPeer], NULL, /*nQpsPerDev*/ 1, ncclParamGinIbTc() != -1 ? ncclParamGinIbTc() : ncclParamIbTc()), ret, end);
         if (gc->fullRecvComm[acceptPeer] == NULL)
           NCCLCHECKGOTO(ncclIbAcceptImpl(lComm, &gc->fullRecvComm[acceptPeer], NULL, /*nQpsPerDev*/ 1), ret, end);
       } while ((gc->fullSendComm[connectPeer] == NULL) ||

@@ -287,8 +287,16 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
 
     # -- EP handle ----------------------------------------------------------
     print(f"Rank {my_rank}: Testing ncclEpCreateHandle")
+    # LL branch below builds a 3D recv tensor and only fills expert_counters
+    # in dispatch_layout — that's the EXPERT_MAJOR layout's signature. HT
+    # branch builds a 2D recv tensor with topk_weights/topk_idx, matching FLAT.
+    handle_layout = (
+        nccl_ep.NcclEpLayout.EXPERT_MAJOR
+        if algorithm == nccl_ep.NcclEpAlgorithm.LOW_LATENCY
+        else nccl_ep.NcclEpLayout.FLAT
+    )
     ep_handle = nccl_ep.EpHandle.create(
-        ep_group, topk_idx.tensor,
+        ep_group, handle_layout, topk_idx.tensor,
         layout_info=handle_layout_info,
         config=nccl_ep.EpHandleConfig(),
         stream=stream,

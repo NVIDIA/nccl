@@ -33,7 +33,8 @@ NCCL_EP_JIT_HEADERS := \
     device/cuda_compat_shims.cuh \
     device/scan_kernel.cuh \
     device/macros.cuh
-NCCL_EP_JIT_HEADER_TARGETS := $(NCCL_EP_JIT_HEADERS:%=$(JIT_DIR)/%)
+NCCL_EP_JIT_COMMON_HEADER := $(JIT_DIR)/common.hpp
+NCCL_EP_JIT_HEADER_TARGETS := $(NCCL_EP_JIT_HEADERS:%=$(JIT_DIR)/%) $(NCCL_EP_JIT_COMMON_HEADER)
 NCCL_EP_JIT_DEFS := -include $(abspath $(JIT_CONFIG_HEADER))
 
 # Include paths - add current directory so common.hpp can find device/ep headers
@@ -99,7 +100,7 @@ SOLIBTARGET  := $(LIBDIR)/$(SOLIBVERSION)
 SOLIBLINKS   := $(LIBDIR)/$(SOLIBSONAME) $(LIBDIR)/$(SOLIBNAME)
 
 # Header installation
-HEADERS := include/nccl_ep.h include/ep_enums.h include/common.hpp
+HEADERS := include/nccl_ep.h include/ep_enums.h
 HEADER_TARGETS := $(HEADERS:include/%=$(INCDIR)/%)
 
 # Build targets
@@ -164,6 +165,11 @@ $(JIT_CONFIG_HEADER):
 	@printf '#define NCCL_EP_JIT_SOURCE_DIR "%s"\n' "$(abspath $(JIT_DIR))" >> $@
 	@printf '#define NCCL_EP_JIT_BUILD_INCLUDE_DIR "%s"\n' "$(abspath $(INCDIR))" >> $@
 	@printf '#define NCCL_EP_JIT_CUDA_INCLUDE_DIR "%s"\n' "$(abspath $(CUDA_INC))" >> $@
+
+$(JIT_DIR)/common.hpp: include/common.hpp
+	@echo "Installing JIT header $<"
+	@mkdir -p $(dir $@)
+	cp $< $@
 
 $(JIT_DIR)/%: %
 	@echo "Installing JIT header $<"

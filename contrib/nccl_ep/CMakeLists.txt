@@ -113,6 +113,7 @@ foreach(header IN LISTS NCCL_EP_JIT_HEADERS)
     file(MAKE_DIRECTORY "${NCCL_EP_JIT_SOURCE_DIR}/${header_dir}")
     configure_file("${CMAKE_CURRENT_SOURCE_DIR}/${header}" "${NCCL_EP_JIT_SOURCE_DIR}/${header}" COPYONLY)
 endforeach()
+configure_file(include/common.hpp "${NCCL_EP_JIT_SOURCE_DIR}/common.hpp" COPYONLY)
 
 # Allow device code to call host constexpr with --expt-relaxed-constexpr
 # Hides all symbols by default in the host compiled object files with -fvisibility=hidden
@@ -136,13 +137,11 @@ endforeach()
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/include")
 configure_file(include/nccl_ep.h    "${CMAKE_BINARY_DIR}/include/nccl_ep.h"    COPYONLY)
 configure_file(include/ep_enums.h   "${CMAKE_BINARY_DIR}/include/ep_enums.h"   COPYONLY)
-configure_file(include/common.hpp   "${CMAKE_BINARY_DIR}/include/common.hpp"   COPYONLY)
 
 # Install to custom prefix
 install(FILES
     include/nccl_ep.h
     include/ep_enums.h
-    include/common.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 
@@ -152,6 +151,9 @@ foreach(header IN LISTS NCCL_EP_JIT_HEADERS)
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/nccl_ep/${header_dir}"
     )
 endforeach()
+install(FILES include/common.hpp
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/nccl_ep"
+)
 
 install(TARGETS ${NCCL_EP_TARGETS}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

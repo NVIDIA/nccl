@@ -328,7 +328,8 @@ struct CombineParams {
     // Runtime config
     int local_rank;
     int node_rank;
-    int num_tokens_per_rank;    // Original token count from dispatch
+    int num_tokens_per_rank;    // Stride for map indexing (= max_tokens_per_rank)
+    int num_real_tokens;        // Actual token count for output write gate
     int num_recv_tokens;        // Actual received tokens this rank
 };
 

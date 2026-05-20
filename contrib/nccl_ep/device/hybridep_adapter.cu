@@ -690,6 +690,7 @@ build_combine_param_base(const CombineParams& params) {
     kp.local_rank = params.local_rank;
     kp.node_rank = params.node_rank;
     kp.num_of_tokens_per_rank = params.num_tokens_per_rank;
+    kp.num_real_tokens        = params.num_real_tokens;
 
     // Pass device communicators and windows
     kp.dcomms = params.dcomms;

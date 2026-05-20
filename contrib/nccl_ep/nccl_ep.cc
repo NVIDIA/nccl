@@ -436,26 +436,6 @@ static ncclResult_t init_hybridep_intranode(ncclEpGroup_t ep_group,
 
     ep_group->ht_buffers.initialized = false;
 
-    // Enable P2P access between GPUs on the same physical node.
-    // cudaDeviceCanAccessPeer/cudaDeviceEnablePeerAccess operate on per-node device ordinals
-    // (rank_in_node, gpus_per_node) — these are node concepts, not LSA concepts.
-    // Cross-host MNNVL traffic is handled through NCCL windows; it does not
-    // need cudaDeviceEnablePeerAccess and cannot be probed with cudaDeviceCanAccessPeer since
-    // remote node device ordinals are not valid on the local node.
-    // TODO: replace this loop with a NCCL API that queries P2P capability (e.g. ncclCommQueryProperties).
-    for (int i = 0; i < gpus_per_node; i++) {
-        if (i == rank_in_node) continue;
-        int can_p2p = 0;
-        CUDA_CHECK(cudaDeviceCanAccessPeer(&can_p2p, rank_in_node, i));
-        if (can_p2p) {
-            cudaError_t err = cudaDeviceEnablePeerAccess(i, 0);
-            if (err != cudaSuccess && err != cudaErrorPeerAccessAlreadyEnabled) {
-                fprintf(stderr, "HT: Failed to enable P2P from GPU %d to GPU %d\n", rank_in_node, i);
-            }
-        }
-    }
-    CUDA_CHECK(cudaDeviceSynchronize());
-
     // =========================================================================
     // Phase 1: Allocate all buffers upfront
     // =========================================================================
@@ -1964,7 +1944,7 @@ ncclResult_t ncclEpUpdateHandle(
     NCCL_CHECK_RESULT(ncclAllGather(
         local_routing_send_ptr,
         handle->hybridep.global_routing_map,
-        static_cast<size_t>(handle->num_tokens) * num_experts_packed,
+        static_cast<size_t>(max_tokens) * num_experts_packed,
         ncclUint8,
         ep_group->comm,
         stream));
@@ -2059,7 +2039,7 @@ ncclResult_t ncclEpUpdateHandle(
         handle->hybridep.preprocessing_scan_tmp,
         ep_group->rdma_rank,
         ep_group->lsa_rank,
-        handle->num_tokens,
+        max_tokens,
         nNodes,
         n_ranks_per_node,
         experts_per_rank,
@@ -2551,7 +2531,7 @@ ncclResult_t ncclEpDispatch(
         };
         params.local_rank = group->lsa_rank;
         params.node_rank = group->rdma_rank;
-        params.num_tokens_per_rank = handle->num_tokens;
+        params.num_tokens_per_rank = group->config.max_dispatch_tokens_per_rank;
 
         // Call dispatch kernel
         nccl_ep::hybridep::call_dispatch(
@@ -3058,7 +3038,8 @@ ncclResult_t ncclEpCombine(
         };
         params.local_rank = group->lsa_rank;
         params.node_rank = group->rdma_rank;
-        params.num_tokens_per_rank = num_combined_tokens;
+        params.num_tokens_per_rank = group->config.max_dispatch_tokens_per_rank;
+        params.num_real_tokens     = num_combined_tokens;
         params.num_recv_tokens = num_tokens;
 
         /* ===== Call combine kernel ===== */

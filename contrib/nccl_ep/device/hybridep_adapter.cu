@@ -32,6 +32,7 @@ namespace hybridep {
 __global__ void convert_topk_to_routing_map_kernel(
     const int64_t* __restrict__ topk_idx,    // [num_tokens, num_topk]
     uint8_t* __restrict__ routing_bitmap,     // [num_tokens, num_experts_packed]
+    int64_t* __restrict__ cached_topk_idx,    // [num_tokens, num_topk]; nullable
     int num_tokens,
     int num_topk,
     int num_experts_packed                    // = ceil(num_experts / 8)
@@ -39,11 +40,15 @@ __global__ void convert_topk_to_routing_map_kernel(
     int token = blockIdx.x * blockDim.x + threadIdx.x;
     if (token >= num_tokens) return;
 
-    // Buffer is pre-zeroed by per-iteration memset; just OR in set bits.
     // Each thread exclusively owns its row -- no atomics needed.
+    // Zero the row before OR-ing in bits; the caller does not pre-zero.
     uint8_t* row = routing_bitmap + token * num_experts_packed;
+    for (int b = 0; b < num_experts_packed; b++) row[b] = 0;
+    const int64_t* in_row  = topk_idx + token * num_topk;
+    int64_t*       out_row = cached_topk_idx ? cached_topk_idx + token * num_topk : nullptr;
     for (int k = 0; k < num_topk; k++) {
-        int expert = static_cast<int>(topk_idx[token * num_topk + k]);
+        int64_t expert = in_row[k];
+        if (out_row) out_row[k] = expert;
         if (expert >= 0) {
             row[expert / 8] |= (1u << (expert % 8));
         }
@@ -56,6 +61,7 @@ __global__ void convert_topk_to_routing_map_kernel(
 void convert_topk_to_routing_map(
     const int64_t* topk_idx,
     uint8_t* routing_bitmap,
+    int64_t* cached_topk_idx,
     int num_tokens,
     int num_topk,
     int num_experts_packed,
@@ -65,7 +71,7 @@ void convert_topk_to_routing_map(
     int grid_size = (num_tokens + block_size - 1) / block_size;
 
     convert_topk_to_routing_map_kernel<<<grid_size, block_size, 0, stream>>>(
-        topk_idx, routing_bitmap, num_tokens, num_topk, num_experts_packed);
+        topk_idx, routing_bitmap, cached_topk_idx, num_tokens, num_topk, num_experts_packed);
 }
 
 // ============================================================================
@@ -241,17 +247,11 @@ __global__ void dense_to_sparse_prob_kernel(
     }
 }
 
-// ============================================================================
-// Kernel: Convert dense prob output to sparse format for combine output
-// ============================================================================
-// Used for combine backward pass. Converts kernel's dense output to sparse format
-// with GLOBAL expert indices (matching original dispatch input format).
-// Each thread handles one token.
+// O(top_k) lookup from cached_topk_idx; k-slot order preserves FWD input.
 __global__ void dense_to_sparse_prob_combine_kernel(
     const float* __restrict__ dense_prob,         // [num_tokens, num_experts]
-    const uint8_t* __restrict__ routing_bitmap,   // [num_tokens, ceil(num_experts / 8)]
+    const int64_t* __restrict__ cached_topk_idx,  // [num_tokens, topk]
     float* __restrict__ combined_topk_weights,    // [num_tokens, topk]
-    int64_t* __restrict__ combined_topk_idx,      // [num_tokens, topk] (optional, can be nullptr)
     int num_tokens,
     int topk,
     int num_experts
@@ -259,40 +259,19 @@ __global__ void dense_to_sparse_prob_combine_kernel(
     int token = blockIdx.x * blockDim.x + threadIdx.x;
     if (token >= num_tokens) return;
 
-    int packed_cols = (num_experts + 7) / 8;
-    int k_out = 0;
-
-    // Scan all experts in order (matches original dispatch input order)
-    for (int e = 0; e < num_experts && k_out < topk; e++) {
-        if ((routing_bitmap[token * packed_cols + e / 8] >> (e % 8)) & 1) {
-            // This expert is active for this token
-            float weight = dense_prob[token * num_experts + e];
-
-            combined_topk_weights[token * topk + k_out] = weight;
-            if (combined_topk_idx != nullptr) {
-                combined_topk_idx[token * topk + k_out] = static_cast<int64_t>(e);  // GLOBAL expert ID
-            }
-            k_out++;
-        }
-    }
-
-    // Zero-fill remaining topk slots
-    for (; k_out < topk; k_out++) {
-        combined_topk_weights[token * topk + k_out] = 0.0f;
-        if (combined_topk_idx != nullptr) {
-            combined_topk_idx[token * topk + k_out] = -1;
-        }
+    for (int k = 0; k < topk; k++) {
+        int64_t e = cached_topk_idx[token * topk + k];
+        float weight = (e >= 0 && e < num_experts)
+            ? dense_prob[token * num_experts + e]
+            : 0.0f;
+        combined_topk_weights[token * topk + k] = weight;
     }
 }
 
-// ============================================================================
-// Convert dense prob output to sparse format for combine output
-// ============================================================================
 void dense_to_sparse_prob_combine(
     const float* dense_prob,
-    const uint8_t* routing_bitmap,
+    const int64_t* cached_topk_idx,
     float* combined_topk_weights,
-    int64_t* combined_topk_idx,
     int num_tokens,
     int topk,
     int num_experts,
@@ -302,7 +281,7 @@ void dense_to_sparse_prob_combine(
     int grid_size = (num_tokens + block_size - 1) / block_size;
 
     dense_to_sparse_prob_combine_kernel<<<grid_size, block_size, 0, stream>>>(
-        dense_prob, routing_bitmap, combined_topk_weights, combined_topk_idx,
+        dense_prob, cached_topk_idx, combined_topk_weights,
         num_tokens, topk, num_experts);
 }
 

@@ -41,6 +41,7 @@ namespace hybridep {
 void convert_topk_to_routing_map(
     const int64_t* topk_idx,
     uint8_t* routing_bitmap,
+    int64_t* cached_topk_idx,  // nullable; when non-null, mirrors topk_idx in the same pass
     int num_tokens,
     int num_topk,
     int num_experts_packed,    // = ceil(num_experts / 8)
@@ -99,17 +100,11 @@ void dense_to_sparse_prob(
     bool expert_major,                    // true = 1D recv_topk_weights, false = 2D
     cudaStream_t stream);
 
-// ============================================================================
-// Kernel: Convert dense prob output to sparse format (for combine output)
-// ============================================================================
-// Used for combine backward pass output. Converts kernel's dense output back to
-// sparse format with GLOBAL expert indices (matching original dispatch input format).
-// Uses local_routing_map (original tokens → global experts) for the conversion.
+// Combine BWD output: sparse k-slot writeback keyed by FWD-input cached_topk_idx.
 void dense_to_sparse_prob_combine(
-    const float* dense_prob,              // [num_tokens, num_experts] - from kernel output
-    const uint8_t* routing_bitmap,        // [num_tokens, ceil(num_experts / 8)] - bitmap routing map
-    float* combined_topk_weights,         // [num_tokens, topk] - output sparse weights
-    int64_t* combined_topk_idx,           // [num_tokens, topk] - output GLOBAL expert indices (optional, can be nullptr)
+    const float* dense_prob,              // [num_tokens, num_experts]
+    const int64_t* cached_topk_idx,       // [num_tokens, topk]
+    float* combined_topk_weights,         // [num_tokens, topk]
     int num_tokens,
     int topk,
     int num_experts,

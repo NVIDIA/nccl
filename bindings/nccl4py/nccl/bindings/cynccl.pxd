@@ -164,7 +164,7 @@ ctypedef struct ncclResourceWindow_vidmem_t 'ncclResourceWindow_vidmem_t':
     char reserved2[8]
     uint32_t stride4G
     uint32_t mcOffset4K
-    char reserved3[40]
+    char reserved3[32]
 
 ctypedef struct ncclLsaBarrierHandle_t 'ncclLsaBarrierHandle_t':
     ncclDevResourceHandle_t bufHandle
@@ -202,6 +202,7 @@ ctypedef struct ncclDevComm_t 'ncclDevComm_t':
     ncclDevCommWindowTable_t windowTable
     ncclWindow_t resourceWindow
     ncclResourceWindow_vidmem_t resourceWindow_inlined
+    ncclGinBarrierHandle_t hybridWorldGinBarrier
     ncclMultimemHandle_t lsaMultimem
     ncclLsaBarrierHandle_t lsaBarrier
     ncclGinBarrierHandle_t railGinBarrier
@@ -212,8 +213,9 @@ ctypedef struct ncclDevComm_t 'ncclDevComm_t':
     int ginCounterCount
     uint64_t* ginSignalShadows
     uint32_t ginContextCount
-    uint8_t ginIsRailed
+    uint8_t ginConnectionsRailed
     uint8_t ginStrongLegacySignals
+    uint8_t ginContextsRailed
     uint32_t* abortFlag
     ncclLsaBarrierHandle_t hybridLsaBarrier
     ncclGinBarrierHandle_t hybridRailGinBarrier

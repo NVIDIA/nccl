@@ -1497,6 +1497,9 @@ ncclResult_t ncclTopoGetVNicParent(struct ncclXml* xml, ncclResult_t (*getProper
     } else if (strcmp((*parent)->name, "cpu") == 0) {
       // If the common parent is a CPU, we must reparent the new NIC under a made up pci device with a unique busid
       NCCLCHECK(ncclTopoMakePciParent(xml, parent, physNetNodes[0]));
+    } else if (strcmp((*parent)->name, "system") == 0) {
+      WARN("Fusing NET devices from different NUMA domains is not supported.");
+      return ncclInvalidArgument;
     }
   }
 

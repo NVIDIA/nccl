@@ -5,7 +5,7 @@
 
 """NCCL EP: Pythonic API for the libnccl_ep.so extension.
 
-The Cython bindings under :mod:`nccl.ep.bindings` are auto-generated from
+The Cython bindings under :mod:`nccl.bindings.nccl_ep` are auto-generated from
 ``contrib/nccl_ep/include/nccl_ep.h`` by cybind. This package provides
 hand-written Pythonic wrappers (:class:`EpGroup`, :class:`EpHandle`,
 :class:`NDTensor`) on top of those bindings.

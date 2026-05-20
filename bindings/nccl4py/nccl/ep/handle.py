@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 from nccl.core.cuda import get_stream_ptr
 from nccl.core.typing import NcclInvalid, NcclStreamSpec
 
-from nccl.ep import bindings as _ep_bindings
+from nccl.bindings import nccl_ep as _ep_bindings
 from nccl.ep._binding_helpers import binding_dataclass
 from nccl.ep.enums import NcclEpLayout
 
@@ -39,8 +39,8 @@ __all__ = [
 
 
 @binding_dataclass(
-    _ep_bindings.nccl_ep.EpHandleConfig,
-    size_field_dtype=_ep_bindings.nccl_ep.ep_handle_config_dtype,
+    _ep_bindings.EpHandleConfig,
+    size_field_dtype=_ep_bindings.ep_handle_config_dtype,
 )
 class EpHandleConfig:
     """Pythonic configuration for :py:meth:`EpHandle.create`.
@@ -63,8 +63,8 @@ class EpHandleConfig:
 
 
 @binding_dataclass(
-    _ep_bindings.nccl_ep.EpDispatchConfig,
-    size_field_dtype=_ep_bindings.nccl_ep.ep_dispatch_config_dtype,
+    _ep_bindings.EpDispatchConfig,
+    size_field_dtype=_ep_bindings.ep_dispatch_config_dtype,
 )
 class EpDispatchConfig:
     """Pythonic configuration for :py:meth:`EpHandle.dispatch`.
@@ -85,8 +85,8 @@ class EpDispatchConfig:
 
 
 @binding_dataclass(
-    _ep_bindings.nccl_ep.EpCombineConfig,
-    size_field_dtype=_ep_bindings.nccl_ep.ep_combine_config_dtype,
+    _ep_bindings.EpCombineConfig,
+    size_field_dtype=_ep_bindings.ep_combine_config_dtype,
 )
 class EpCombineConfig:
     """Pythonic configuration for :py:meth:`EpHandle.combine`.
@@ -102,8 +102,8 @@ class EpCombineConfig:
 
 
 @binding_dataclass(
-    _ep_bindings.nccl_ep.EpLayoutInfo,
-    size_field_dtype=_ep_bindings.nccl_ep.ep_layout_info_dtype,
+    _ep_bindings.EpLayoutInfo,
+    size_field_dtype=_ep_bindings.ep_layout_info_dtype,
 )
 class EpLayoutInfo:
     """Named local tensors carried alongside dispatch / create_handle.
@@ -134,8 +134,8 @@ class EpLayoutInfo:
 
 
 @binding_dataclass(
-    _ep_bindings.nccl_ep.EpDispatchInputs,
-    size_field_dtype=_ep_bindings.nccl_ep.ep_dispatch_inputs_dtype,
+    _ep_bindings.EpDispatchInputs,
+    size_field_dtype=_ep_bindings.ep_dispatch_inputs_dtype,
 )
 class EpDispatchInputs:
     """Input tensor bundle for :py:meth:`EpHandle.dispatch`.
@@ -156,8 +156,8 @@ class EpDispatchInputs:
 
 
 @binding_dataclass(
-    _ep_bindings.nccl_ep.EpDispatchOutputs,
-    size_field_dtype=_ep_bindings.nccl_ep.ep_dispatch_outputs_dtype,
+    _ep_bindings.EpDispatchOutputs,
+    size_field_dtype=_ep_bindings.ep_dispatch_outputs_dtype,
 )
 class EpDispatchOutputs:
     """Output tensor bundle for :py:meth:`EpHandle.dispatch`.
@@ -182,8 +182,8 @@ class EpDispatchOutputs:
 
 
 @binding_dataclass(
-    _ep_bindings.nccl_ep.EpCombineInputs,
-    size_field_dtype=_ep_bindings.nccl_ep.ep_combine_inputs_dtype,
+    _ep_bindings.EpCombineInputs,
+    size_field_dtype=_ep_bindings.ep_combine_inputs_dtype,
 )
 class EpCombineInputs:
     """Input tensor bundle for :py:meth:`EpHandle.combine`.
@@ -203,8 +203,8 @@ class EpCombineInputs:
 
 
 @binding_dataclass(
-    _ep_bindings.nccl_ep.EpCombineOutputs,
-    size_field_dtype=_ep_bindings.nccl_ep.ep_combine_outputs_dtype,
+    _ep_bindings.EpCombineOutputs,
+    size_field_dtype=_ep_bindings.ep_combine_outputs_dtype,
 )
 class EpCombineOutputs:
     """Output tensor bundle for :py:meth:`EpHandle.combine`.
@@ -289,7 +289,7 @@ class EpHandle:
         # outlives the C call (binding __dealloc__ frees the struct).
         layout_b = _materialize(layout_info)
         config_b = _materialize(config)
-        ptr = _ep_bindings.nccl_ep.create_handle(
+        ptr = _ep_bindings.create_handle(
             ep_group.ptr,
             int(layout),
             topk_idx.ptr,
@@ -332,7 +332,7 @@ class EpHandle:
         """
         self._check_valid("update")
         layout_b = _materialize(layout_info)
-        _ep_bindings.nccl_ep.update_handle(
+        _ep_bindings.update_handle(
             self._ptr,
             topk_idx.ptr,
             _ptr_of(layout_b),
@@ -375,7 +375,7 @@ class EpHandle:
         outputs_b = _materialize(outputs)
         layout_b = _materialize(layout_info)
         config_b = _materialize(config)
-        _ep_bindings.nccl_ep.dispatch(
+        _ep_bindings.dispatch(
             self._ptr,
             _ptr_of(inputs_b),
             _ptr_of(outputs_b),
@@ -415,7 +415,7 @@ class EpHandle:
         inputs_b = _materialize(inputs)
         outputs_b = _materialize(outputs)
         config_b = _materialize(config)
-        _ep_bindings.nccl_ep.combine(
+        _ep_bindings.combine(
             self._ptr,
             _ptr_of(inputs_b),
             _ptr_of(outputs_b),
@@ -442,12 +442,12 @@ class EpHandle:
             :meth:`dispatch`, :meth:`combine`.
         """
         self._check_valid("complete")
-        _ep_bindings.nccl_ep.complete(self._ptr, config, get_stream_ptr(stream))
+        _ep_bindings.complete(self._ptr, config, get_stream_ptr(stream))
 
     def destroy(self) -> None:
         """Release the handle. Subsequent operations on this object are invalid."""
         if self._ptr:
-            _ep_bindings.nccl_ep.handle_destroy(self._ptr)
+            _ep_bindings.handle_destroy(self._ptr)
             self._ptr = 0
 
     def __repr__(self) -> str:

@@ -3,7 +3,7 @@
 
 """Pure-Python enum definitions mirroring the NCCL EP C enums.
 
-Defined here (rather than re-exported from :mod:`nccl.ep.bindings.nccl_ep`)
+Defined here (rather than re-exported from :mod:`nccl.bindings.nccl_ep`)
 so the public API does not depend on cybind's enum naming conventions and
 so each member can carry a docstring describing its semantics. Values mirror
 the corresponding C enums in ``ep_enums.h``.

@@ -21,7 +21,7 @@ import numpy as _np
 from cuda.core import Device
 from cuda.core import system
 
-from nccl import bindings as _nccl_bindings
+from nccl.bindings import nccl as _nccl_bindings
 
 from nccl.core.buffer import NcclBuffer
 from nccl.core.constants import (

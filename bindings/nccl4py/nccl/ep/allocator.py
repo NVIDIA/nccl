@@ -66,7 +66,7 @@ from __future__ import annotations
 
 import ctypes
 
-from nccl.ep import bindings as _ep_bindings
+from nccl.bindings import nccl_ep as _ep_bindings
 from nccl.ep._binding_helpers import binding_dataclass
 
 
@@ -89,7 +89,7 @@ ncclEpFreeFn_t = ctypes.CFUNCTYPE(
 """C-callable type: ``cudaError_t (*)(void* ptr, void* context)``."""
 
 
-@binding_dataclass(_ep_bindings.nccl_ep.EpAllocConfig)
+@binding_dataclass(_ep_bindings.EpAllocConfig)
 class EpAllocConfig:
     """Allocator hooks for :py:attr:`EpGroupConfig.alloc`.
 

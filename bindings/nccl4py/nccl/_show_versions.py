@@ -24,7 +24,8 @@ from pathlib import Path
 from packaging.version import Version as _Version
 
 from nccl._version import __version__
-from nccl import bindings as _nccl_bindings
+from nccl.bindings import nccl as _nccl_bindings
+from nccl.bindings import nccl_ep as _ep_bindings
 
 __all__ = ["LibraryInfo", "VersionInfo", "get_version", "show_versions"]
 
@@ -140,12 +141,24 @@ def _nccl_library_info() -> LibraryInfo:
     )
 
 
-def _nccl_ep_library_info() -> LibraryInfo | None:
-    # Lazy-import inside the function so plain `import nccl` doesn't trigger
-    # nccl.ep's CUDA-major gate or its dlopen of libnccl_ep.so.
+def _nccl_ep_importable() -> bool:
+    """Probe whether ``nccl.ep`` is importable.
+
+    nccl.ep's module-init runs the CUDA-major gate and verifies libnccl_ep.so
+    is loadable. Plain ``from nccl.bindings import nccl_ep`` at module top
+    only pulls in the cython symbols; it doesn't dlopen the library or check
+    CUDA major. Extracted as a separate function so tests can monkey-patch it
+    directly instead of manipulating ``sys.modules``.
+    """
     try:
-        from nccl.ep import bindings as _ep_bindings
+        import nccl.ep  # noqa: F401
     except ImportError:
+        return False
+    return True
+
+
+def _nccl_ep_library_info() -> LibraryInfo | None:
+    if not _nccl_ep_importable():
         return None
     version = _decode_version(_ep_bindings.get_version())
     path = _resolve_so_path("libnccl_ep.so")

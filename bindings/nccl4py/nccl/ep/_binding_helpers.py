@@ -101,11 +101,11 @@ def binding_dataclass(
     Example:
         ::
 
-            from nccl.ep import bindings as _bindings
+            from nccl.bindings import nccl_ep as _bindings
 
             @binding_dataclass(
-                _bindings.nccl_ep.EpGroupConfig,
-                size_field_dtype=_bindings.nccl_ep.ep_group_config_dtype,
+                _bindings.EpGroupConfig,
+                size_field_dtype=_bindings.ep_group_config_dtype,
             )
             class EpGroupConfig:
                 algorithm: NcclEpAlgorithm = NcclEpAlgorithm.LOW_LATENCY

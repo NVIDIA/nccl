@@ -87,7 +87,7 @@ include-package-data = false
 include = ["nccl*"]
 
 [tool.setuptools.package-data]
-"nccl.bindings" = ["cynccl.pxd"]
+"nccl.bindings" = ["cynccl.pxd", "cynccl_ep.pxd"]
 "nccl.ep" = ["lib/libnccl_ep.so"]
 
 [tool.setuptools.dynamic]

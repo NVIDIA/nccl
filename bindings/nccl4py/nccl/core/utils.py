@@ -26,7 +26,7 @@ except ImportError:
             return _decorator
 
 from nccl._version import __version__
-from nccl import bindings as _nccl_bindings
+from nccl.bindings import nccl as _nccl_bindings
 
 __all__ = ["Version", "get_version", "UniqueId", "get_unique_id", "get_error_string"]
 

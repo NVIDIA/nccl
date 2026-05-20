@@ -9,7 +9,7 @@ import numpy as np
 
 from nccl.core.typing import NcclInvalid
 
-from nccl.ep import bindings as _ep_bindings
+from nccl.bindings import nccl_ep as _ep_bindings
 
 
 __all__ = ["NDTensor"]
@@ -53,7 +53,7 @@ class NDTensor:
             )
         # Pack into a contiguous size_t array; the C side reads exactly ndim entries.
         sizes_buf = np.asarray(sizes, dtype=np.uintp)
-        ptr = _ep_bindings.nccl_ep.tensor_create(
+        ptr = _ep_bindings.tensor_create(
             ndim, int(datatype), data, sizes_buf.ctypes.data,
         )
         return cls(ptr, ndim, tuple(sizes))
@@ -83,7 +83,7 @@ class NDTensor:
                 f"ndim={ndim} but {len(sizes)} sizes given"
             )
         sizes_buf = np.asarray(sizes, dtype=np.uintp)
-        ptr = _ep_bindings.nccl_ep.tensor_create_from_window(
+        ptr = _ep_bindings.tensor_create_from_window(
             ndim, int(datatype), win, win_offset, sizes_buf.ctypes.data,
         )
         return cls(ptr, ndim, tuple(sizes))
@@ -110,7 +110,7 @@ class NDTensor:
     def data(self) -> int:
         """Address of the underlying device buffer (caller-provided at create)."""
         self._check_valid("read data")
-        return _ep_bindings.nccl_ep.tensor_get_data(self._ptr)
+        return _ep_bindings.tensor_get_data(self._ptr)
 
     @property
     def sizes(self) -> tuple[int, ...]:
@@ -121,7 +121,7 @@ class NDTensor:
     def destroy(self) -> None:
         """Free the descriptor; the underlying buffer is the caller's responsibility."""
         if self._ptr:
-            _ep_bindings.nccl_ep.tensor_destroy(self._ptr)
+            _ep_bindings.tensor_destroy(self._ptr)
             self._ptr = 0
 
     def __repr__(self) -> str:

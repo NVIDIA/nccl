@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# This code was automatically generated with version 1.0.0. Do not modify it directly.
+# This code was automatically generated with version 0.1.0. Do not modify it directly.
 
 from ._internal cimport nccl_ep as _nccl_ep
 

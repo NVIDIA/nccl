@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from nccl import bindings as _nccl_bindings
+from nccl.bindings import nccl as _nccl_bindings
 
 from nccl.core.constants import WindowFlag
 from nccl.core.typing import NcclDataType, NcclInvalid

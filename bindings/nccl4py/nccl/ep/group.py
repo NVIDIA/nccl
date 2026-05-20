@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 from nccl.core.typing import NcclInvalid
 
-from nccl.ep import bindings as _ep_bindings
+from nccl.bindings import nccl_ep as _ep_bindings
 from nccl.ep._binding_helpers import binding_dataclass
 from nccl.ep.allocator import EpAllocConfig
 from nccl.ep.enums import NcclEpAlgorithm
@@ -26,8 +26,8 @@ _NCCL_EP_API_VERSION = 1
 
 
 @binding_dataclass(
-    _ep_bindings.nccl_ep.EpGroupConfig,
-    size_field_dtype=_ep_bindings.nccl_ep.ep_group_config_dtype,
+    _ep_bindings.EpGroupConfig,
+    size_field_dtype=_ep_bindings.ep_group_config_dtype,
 )
 class EpGroupConfig:
     """Pythonic configuration for :py:meth:`EpGroup.create`.
@@ -117,7 +117,7 @@ class EpGroup:
             :meth:`destroy`.
         """
         binding = config.to_binding()  # type: ignore[attr-defined]
-        ptr = _ep_bindings.nccl_ep.create_group(comm.ptr, binding.ptr)
+        ptr = _ep_bindings.create_group(comm.ptr, binding.ptr)
         return cls(ptr)
 
     def _check_valid(self, operation: str) -> None:
@@ -135,7 +135,7 @@ class EpGroup:
     def destroy(self) -> None:
         """Release the group. Subsequent operations on this object are invalid."""
         if self._ptr:
-            _ep_bindings.nccl_ep.group_destroy(self._ptr)
+            _ep_bindings.group_destroy(self._ptr)
             self._ptr = 0
 
     def __repr__(self) -> str:

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# This code was automatically generated with version 1.0.0. Do not modify it directly.
+# This code was automatically generated with version 0.1.0. Do not modify it directly.
 
 from libc.stdint cimport intptr_t, uint64_t, uintptr_t
 
@@ -59,14 +59,13 @@ cdef int get_cuda_version():
 
 # Resolved at first import via _resolve_library_path() below. Path lookup runs
 # once, then dlopen handle is cached in the lowpp nccl_ep init guard.
-_PACKAGE_LIB_RELPATH = os.path.join("lib", "libnccl_ep.so")
+_PACKAGE_LIB_RELPATH = os.path.join("ep", "lib", "libnccl_ep.so")
 
 
 def _resolve_library_path() -> str:
     # 1. nccl4py package path (replaces cuda.pathfinder's NVIDIA-pip-wheel step).
-    #    The package layout places libnccl_ep.so at nccl/ep/lib/, alongside
-    #    the bindings; this file lives in nccl/ep/bindings/_internal/, so go up
-    #    two directories to reach nccl/ep/.
+    #    libnccl_ep.so is at nccl/ep/lib/; this file lives in
+    #    nccl/bindings/_internal/, so go up two dirs to reach nccl/.
     pkg_lib = os.path.normpath(os.path.join(
         os.path.dirname(__file__), "..", "..", _PACKAGE_LIB_RELPATH
     ))

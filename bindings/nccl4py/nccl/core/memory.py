@@ -17,7 +17,7 @@ import threading
 from cuda.core import Buffer, Device, MemoryResource, Stream
 from cuda.core.typing import DevicePointerType
 
-from nccl import bindings as _nccl_bindings
+from nccl.bindings import nccl as _nccl_bindings
 
 from nccl.core.cuda import CudaDeviceContext
 

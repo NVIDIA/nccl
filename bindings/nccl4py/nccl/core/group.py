@@ -18,7 +18,7 @@ from __future__ import annotations
 import contextlib
 from typing import Generator
 
-from nccl import bindings as _nccl_bindings
+from nccl.bindings import nccl as _nccl_bindings
 
 from nccl.core.constants import NCCL_UNDEF_FLOAT
 

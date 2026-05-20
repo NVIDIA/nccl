@@ -355,6 +355,7 @@ struct alignas(32) ncclIbNetCommBase {
   struct ncclIbResiliency* resiliency;
   int tpRank;
   int tpRemoteRank;
+  int channelId;
 };
 
 struct ncclIbNetCommDevBase* ncclIbGetNetCommDevBase(ncclIbNetCommBase* base, int devIndex);
@@ -545,7 +546,7 @@ static void ncclIbDevFatalError(struct ncclIbDev* dev) {
 }
 ncclResult_t ncclIbStatsCheckFatalCount(struct ncclIbStats* stat, const char* funcName);
 
-void ncclIbSetCommRanks(void* comm, int tpRank, int tpRemoteRank);
+void ncclIbSetCommRanks(void* comm, int tpRank, int tpRemoteRank, int channelId);
 
 extern ncclProfilerCallback_t ncclProfilerFunction;
 

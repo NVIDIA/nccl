@@ -77,11 +77,14 @@ ncclResult_t ncclIbBaseCommInit(struct ncclIbNetCommBase* baseComm, bool isSend)
   return ncclSuccess;
 }
 
-void ncclIbSetCommRanks(void* comm, int tpRank, int tpRemoteRank) {
+void ncclIbSetCommRanks(void* comm, int tpRank, int tpRemoteRank, int channelId) {
   if (comm) {
     struct ncclIbNetCommBase* base = (struct ncclIbNetCommBase*)comm;
     base->tpRank = tpRank;
     base->tpRemoteRank = tpRemoteRank;
+    base->channelId = channelId;
+    INFO(NCCL_NET, "NET/IB: %s: Set comm ranks (tpRank=%d, tpRemoteRank=%d, channelId=%d)",
+         __func__, tpRank, tpRemoteRank, channelId);
   }
 }
 

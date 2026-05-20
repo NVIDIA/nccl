@@ -20,7 +20,7 @@
 #include <assert.h>
 #include "register_inline.h"
 
-extern void ncclIbSetCommRanks(void* comm, int tpRank, int tpRemoteRank);
+extern void ncclIbSetCommRanks(void* comm, int tpRank, int tpRemoteRank, int channelId);
 
 static_assert(sizeof(ncclNetHandle_t) <= CONNECT_SIZE, "NET Connect info is too large");
 
@@ -881,7 +881,7 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
   }
   printNetAttrs(&req->netAttr, "send connect");
   *done = 1;
-  ncclIbSetCommRanks(resources->netSendComm, resources->tpRank, resources->tpRemoteRank);
+  ncclIbSetCommRanks(resources->netSendComm, resources->tpRank, resources->tpRemoteRank, resources->channelId);
 
   if (resources->netDeviceHandle) {
     connection->netDeviceHandle = resources->netDeviceHandle;
@@ -1047,7 +1047,7 @@ static ncclResult_t recvProxyConnect(struct ncclProxyConnection* connection, str
   }
   printNetAttrs(&req->netAttr, "recv connect");
   *done = 1;
-  ncclIbSetCommRanks(resources->netRecvComm, resources->tpRank, resources->tpRemoteRank);
+  ncclIbSetCommRanks(resources->netRecvComm, resources->tpRank, resources->tpRemoteRank, resources->channelId);
 
   if (resources->netDeviceHandle) {
     connection->netDeviceHandle = resources->netDeviceHandle;

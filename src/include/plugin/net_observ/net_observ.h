@@ -162,10 +162,9 @@ class NetworkObserver {
 
   int start();
   void stop();
-  void confirmFromException(const std::string& errorText);
 
   // Direct IB error handling from transport layer
-  void handleIbError(const std::string& rdmaNic, const std::string& peerIp, int wcStatus);
+  void handleIbError(const std::string& rdmaNic, const std::string& peerIp, int wcStatus, int tpRank, int tpRemoteRank);
 
   // Accessors for C interface functions
   NicCounterReader& getNicReader() { return nicReader_; }
@@ -194,7 +193,9 @@ class NetworkObserver {
   std::string formatTimestamp(const std::string& timestampRaw);
   std::vector<std::string> buildFaultPath(const std::vector<std::string>& affectedPorts,
                                            const std::string& deviceModel,
-                                           const std::string& peerPort = "");
+                                           const std::string& peerPort = "",
+                                           int tpRank = -1,
+                                           int tpRemoteRank = -1);
   std::string formatCounterDelta(const std::map<std::string, int64_t>& delta);
   void emitSwitchDropAlert(const Incident& incident);
   void emitPredictiveAlert(const Incident& incident);
@@ -234,7 +235,7 @@ void ncclNetObservUpdateRankTopology(const std::vector<std::vector<int>>& nodeRa
 // rdmaNic: RDMA NIC device name (e.g., "mlx5_0")
 // peerIp: Peer node IP address (optional, can be empty)
 // wcStatus: IB work completion status code
-void ncclNetObservHandleIbError(const char* rdmaNic, const char* peerIp, int wcStatus);
+void ncclNetObservHandleIbError(const char* rdmaNic, const char* peerIp, int wcStatus, int tpRank, int tpRemoteRank);
 
 }  // namespace net_observ
 

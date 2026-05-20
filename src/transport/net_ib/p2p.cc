@@ -646,10 +646,10 @@ static ncclResult_t ncclIbLogCompletionWithError(struct ncclIbNetCommBase* commB
   ncclSocketGetAddr(&commBase->sock, &addr);
   ncclSocketToString(&addr, sockStr);
   char *hcaName = devBase->pd->context->device->name;
-  WARN("NET/IB: Got completion from peer %s with status=%s(%d) opcode=%s(%d) vendor_err=%u tpRank=%d tpRemoteRank=%d %s%s%s%s hca %s",
+  WARN("NET/IB: Got completion from peer %s with status=%s(%d) opcode=%s(%d) vendor_err=%u tpRank=%d tpRemoteRank=%d channelId=%d %s%s%s%s hca %s",
       sockStr, ibvWcStatusStr(wc->status), wc->status,
       ibvWcOpcodeStr(wc->opcode), wc->opcode, wc->vendor_err,
-      commBase->tpRank, commBase->tpRemoteRank,
+      commBase->tpRank, commBase->tpRemoteRank, commBase->channelId,
       localGidStr ?  " localGid ":"", localGidString, remoteGidStr ? " remoteGids":"", remoteGidString, hcaName);
   return ncclSuccess;
 }
@@ -794,9 +794,22 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
                 // Get peer IP from socket address
                 char peerIpStr[SOCKET_NAME_MAXLEN] = {0};
                 ncclSocketToString(&r->base->sock.addr, peerIpStr, 0);
+                // ncclSocketToString returns format like "192.168.1.17<48310>",
+                // but NetworkObserver only needs the IP address without port
+                char* portStart = strchr(peerIpStr, '<');
+                if (portStart != NULL) {
+                  *portStart = '\0';
+                }
+                INFO(NCCL_NET, "NET/IB: %s: Notifying NetworkObserver of IB error (devIndex=%d, ibDevN=%d, devName=%s, peerIp=%s, wcStatus=%d, tpRank=%d, tpRemoteRank=%d)",
+                     __func__, i, ibDevN, devName, peerIpStr, wc->status, r->base->tpRank, r->base->tpRemoteRank);
                 // Call NetworkObserver to handle the error directly
-                net_observ::ncclNetObservHandleIbError(devName, peerIpStr, wc->status);
+                net_observ::ncclNetObservHandleIbError(devName, peerIpStr, wc->status, r->base->tpRank, r->base->tpRemoteRank);
+              } else {
+                WARN("NET/IB: %s: Invalid ibDevN for NetworkObserver notification (devIndex=%d, ibDevN=%d, ncclNIbDevs=%d)",
+                     __func__, i, ibDevN, ncclNIbDevs);
               }
+            } else {
+              WARN("NET/IB: %s: devBases[%d] is NULL, cannot notify NetworkObserver", __func__, i);
             }
 
             // If resiliency is not enabled, we cannot recover from any error.

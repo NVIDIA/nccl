@@ -14,9 +14,15 @@
 #include <chrono>
 #include <ctime>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <dirent.h>
 #include <array>
 #include <memory>
+#include <fcntl.h>
+#include <errno.h>
+#include <unistd.h>
 
 #include "checks.h"
 #include "param.h"
@@ -670,107 +676,6 @@ void NetworkObserver::monitorLoop() {
   }
 }
 
-/**
- * @brief 根据NCCL异常确认告警
- * @param errorText NCCL错误文本
- *
- * 解析异常信息中的RDMA网卡和对端IP，
- * 匹配activeIncidents_中的未确认告警并升级为CONFIRMED状态
- */
-void NetworkObserver::confirmFromException(const std::string& errorText) {
-  std::string rdmaNic;
-  std::string peerIp;
-  bool isNcclIbError = false;
-
-  std::smatch match;
-
-  // Check for NCCL IB error patterns
-  const std::regex ibErrorPatterns[] = {
-    std::regex("IBV_WC_RETRY_EXC_ERR"),
-    std::regex("Got CQE with error"),
-    std::regex("Got completion.*status=IBV_WC_RETRY_EXC_ERR"),
-  };
-
-  for (const auto& pattern : ibErrorPatterns) {
-    if (std::regex_search(errorText, match, pattern)) {
-      isNcclIbError = true;
-      break;
-    }
-  }
-
-  if (!isNcclIbError) {
-    std::string ncclKeywords[] = {"NCCL", "nccl", "Distributed", "dist_backend"};
-    bool hasNcclKeyword = false;
-    for (const auto& kw : ncclKeywords) {
-      if (errorText.find(kw) != std::string::npos) {
-        hasNcclKeyword = true;
-        break;
-      }
-    }
-    if (!hasNcclKeyword) return;
-  }
-
-  if (std::regex_search(errorText, match, NCCL_HCA_PATTERN)) {
-    rdmaNic = match[1].str();
-  }
-
-  if (std::regex_search(errorText, match, NCCL_PEER_IP_PATTERN)) {
-    peerIp = match[1].str();
-  }
-
-  INFO(NCCL_NET, "NET_OBSERV: Caught NCCL exception, rdma_nic=%s, peer_ip=%s, is_ib_error=%d",
-       rdmaNic.c_str(), peerIp.c_str(), isNcclIbError);
-
-  std::unordered_map<std::string, Incident> incidentsSnapshot;
-  {
-    std::lock_guard<std::mutex> lock(incidentsMutex_);
-    incidentsSnapshot = activeIncidents_;
-  }
-
-  std::vector<Incident*> matched;
-  for (auto& entry : incidentsSnapshot) {
-    if (entry.second.confirmed) continue;
-    if (!rdmaNic.empty() && entry.second.rdmaNic == rdmaNic) {
-      matched.push_back(&entry.second);
-    } else if (rdmaNic.empty()) {
-      matched.push_back(&entry.second);
-    }
-  }
-
-  if (matched.empty() && !incidentsSnapshot.empty()) {
-    for (auto& entry : incidentsSnapshot) {
-      if (!entry.second.confirmed) matched.push_back(&entry.second);
-    }
-  }
-
-  for (auto* incident : matched) {
-    std::pair<bool, std::map<std::string, int64_t>> ret = nicReader_.checkNicRetrans(incident->rdmaNic);
-    if (!ret.second.empty()) {
-      incident->nicDelta = ret.second;
-    }
-
-    if (!peerIp.empty()) {
-      std::string peerPort = topology_->getPortByNodeAndNic(peerIp, incident->rdmaNic);
-      if (!peerPort.empty()) {
-        incident->faultPaths = buildFaultPath({incident->portName}, incident->deviceModel, peerPort);
-      } else {
-        for (const auto& pmEntry : topology_->portMapping) {
-          if (pmEntry.second.node == peerIp) {
-            incident->faultPaths = buildFaultPath({incident->portName}, incident->deviceModel, pmEntry.first);
-            break;
-          }
-        }
-      }
-    }
-
-    incident->confirmed = true;
-    incident->confirmTime = std::chrono::duration<double>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
-    incident->ncclError = errorText.substr(0, 200);
-    emitConfirmedAlert(*incident);
-  }
-}
-
 // 事件类型常量定义
 constexpr uint32_t GRPC_JSON_EVENT_SAMPLE_INGRESS_PORT_PKT_DROP = 0x00020000;
 constexpr uint32_t GRPC_JSON_EVENT_SAMPLE_LLDP_INFO = 0x10080000;
@@ -837,7 +742,7 @@ void NetworkObserver::handleSwitchDropEvent(const ruijie_json::JsonRequest& even
 
   auto affectedRanks = topology_->getRanksForPort(portName);
   std::string rdmaNic = topology_->getRdmaNicForPort(portName);
-  auto pathLines = buildFaultPath({portName}, deviceModel);
+  // auto pathLines = buildFaultPath({portName}, deviceModel);
 
   std::pair<bool, std::map<std::string, int64_t>> ret = nicReader_.checkNicRetrans(rdmaNic);
 
@@ -858,7 +763,7 @@ void NetworkObserver::handleSwitchDropEvent(const ruijie_json::JsonRequest& even
   incident.dropCount = dropCount;
   incident.timestamp = formattedTs;
   incident.affectedRanks = affectedRanks;
-  incident.faultPaths = pathLines;
+  // incident.faultPaths = pathLines;
   incident.rdmaNic = rdmaNic;
   incident.nicDelta = ret.second;
   incident.hasRetryGrowth = ret.first;
@@ -899,15 +804,6 @@ void NetworkObserver::handleSwitchDropEvent(const ruijie_json::JsonRequest& even
  * 黄色告警，表示检测到交换机丢包，正在监控NIC计数器
  */
 void NetworkObserver::emitSwitchDropAlert(const Incident& incident) {
-  std::string rankStr;
-  for (size_t i = 0; i < incident.affectedRanks.size(); i++) {
-    if (i > 0) rankStr += ", ";
-    rankStr += "Rank-" + std::to_string(incident.affectedRanks[i]);
-  }
-  std::string nicRetryStr = incident.nicDelta.empty()
-    ? "Not yet detected (monitoring...)"
-    : formatCounterDelta(incident.nicDelta);
-
   INFO(NCCL_NET, "%s%s%s", COLOR_YELLOW, COLOR_BOLD,
        "========================================================================");
   INFO(NCCL_NET, "%s%s[NETWORK_ADVISOR][WATCH] Switch Packet Drop Detected%s",
@@ -916,14 +812,8 @@ void NetworkObserver::emitSwitchDropAlert(const Incident& incident) {
        COLOR_YELLOW, COLOR_RESET);
   INFO(NCCL_NET, "  %sIncident ID:%s    %s", COLOR_CYAN, COLOR_RESET, incident.incidentTag.c_str());
   INFO(NCCL_NET, "  %sTimestamp:%s     %s", COLOR_CYAN, COLOR_RESET, incident.timestamp.c_str());
-  INFO(NCCL_NET, "  %sAffected Ranks:%s %s", COLOR_CYAN, COLOR_RESET, rankStr.c_str());
   INFO(NCCL_NET, "  %sAffected Port:%s  %s", COLOR_CYAN, COLOR_RESET, incident.portName.c_str());
   INFO(NCCL_NET, "  %sDrop Count:%s     %ld", COLOR_CYAN, COLOR_RESET, (long)incident.dropCount);
-  INFO(NCCL_NET, "  %sRDMA NIC:%s       %s", COLOR_CYAN, COLOR_RESET, incident.rdmaNic.c_str());
-  INFO(NCCL_NET, "  %sNIC Retry:%s      %s", COLOR_CYAN, COLOR_RESET, nicRetryStr.c_str());
-  for (const auto& pathLine : incident.faultPaths) {
-    INFO(NCCL_NET, "  %sFault Path:%s     %s", COLOR_CYAN, COLOR_RESET, pathLine.c_str());
-  }
   INFO(NCCL_NET, "  %sStatus:%s        %sWATCHING%s - Switch drop detected, checking NIC counters",
        COLOR_CYAN, COLOR_RESET, COLOR_YELLOW, COLOR_RESET);
   INFO(NCCL_NET, "%s%s========================================================================",
@@ -1072,6 +962,8 @@ std::string NetworkObserver::formatCounterDelta(const std::map<std::string, int6
  * @param affectedPorts 受影响的交换机端口列表
  * @param deviceModel 交换机设备型号
  * @param peerPort 对端端口（可选，来自异常上下文）
+ * @param tpRank 本地Tensor Parallel rank
+ * @param tpRemoteRank 对端Tensor Parallel rank
  * @return 故障路径描述列表
  *
  * 构建端到端路径：Rank-X -> mlx5_X -> Switch(port) -> Switch(peerPort) -> mlx5_X -> Rank-Y
@@ -1079,41 +971,77 @@ std::string NetworkObserver::formatCounterDelta(const std::map<std::string, int6
 std::vector<std::string> NetworkObserver::buildFaultPath(
     const std::vector<std::string>& affectedPorts,
     const std::string& deviceModel,
-    const std::string& peerPort) {
+    const std::string& peerPort,
+    int tpRank,
+    int tpRemoteRank) {
+  INFO(NCCL_NET, "NET/OBSERV: buildFaultPath called with %zu affectedPorts, deviceModel=%s, peerPort=%s, tpRank=%d, tpRemoteRank=%d",
+       affectedPorts.size(), deviceModel.c_str(), peerPort.c_str(), tpRank, tpRemoteRank);
+
   if (affectedPorts.empty()) {
+    INFO(NCCL_NET, "NET/OBSERV: affectedPorts is empty, returning placeholder path");
     return {deviceModel + " (" + ")"};
   }
 
   std::vector<std::string> paths;
   for (const auto& faultPort : affectedPorts) {
+    INFO(NCCL_NET, "NET/OBSERV: Processing faultPort=%s", faultPort.c_str());
+
     std::string srcNic = topology_->getRdmaNicForPort(faultPort);
     std::string srcNode = topology_->getNodeForPort(faultPort);
     auto srcRanks = topology_->getRanksForPort(faultPort);
-    if (srcRanks.empty()) continue;
+
+    INFO(NCCL_NET, "NET/OBSERV: faultPort=%s -> srcNic=%s, srcNode=%s, srcRanks.size=%zu",
+         faultPort.c_str(), srcNic.c_str(), srcNode.c_str(), srcRanks.size());
+
+    if (srcRanks.empty()) {
+      INFO(NCCL_NET, "NET/OBSERV: Skipping faultPort=%s, no ranks found", faultPort.c_str());
+      continue;
+    }
 
     std::vector<std::string> otherPorts;
     if (!peerPort.empty()) {
+      INFO(NCCL_NET, "NET/OBSERV: Using provided peerPort=%s", peerPort.c_str());
       otherPorts.push_back(peerPort);
     } else {
+      INFO(NCCL_NET, "NET/OBSERV: No peerPort provided, searching portMapping for same NIC on different nodes...");
       for (const auto& pmEntry : topology_->portMapping) {
         if (pmEntry.second.node != srcNode && pmEntry.second.rdmaNic == srcNic) {
+          INFO(NCCL_NET, "NET/OBSERV: Found matching port in portMapping: port=%s, node=%s, rdmaNic=%s",
+               pmEntry.first.c_str(), pmEntry.second.node.c_str(), pmEntry.second.rdmaNic.c_str());
           otherPorts.push_back(pmEntry.first);
         }
       }
+      INFO(NCCL_NET, "NET/OBSERV: Found %zu otherPorts from portMapping", otherPorts.size());
     }
 
     for (const auto& otherPort : otherPorts) {
-      if (otherPort == faultPort) continue;
+      if (otherPort == faultPort) {
+        INFO(NCCL_NET, "NET/OBSERV: Skipping otherPort=%s (same as faultPort)", otherPort.c_str());
+        continue;
+      }
       auto dstRanks = topology_->getRanksForPort(otherPort);
-      if (dstRanks.empty()) continue;
-      std::string srcRankStr = "Rank-" + std::to_string(srcRanks[0]) + "~" + std::to_string(srcRanks.back());
-      std::string dstRankStr = "Rank-" + std::to_string(dstRanks[0]) + "~" + std::to_string(dstRanks.back());
+      INFO(NCCL_NET, "NET/OBSERV: otherPort=%s -> dstRanks.size=%zu", otherPort.c_str(), dstRanks.size());
+      if (dstRanks.empty()) {
+        INFO(NCCL_NET, "NET/OBSERV: Skipping otherPort=%s, no ranks found", otherPort.c_str());
+        continue;
+      }
+      // Use tpRank and tpRemoteRank from transport layer for accurate rank identification
+      // If -1, fall back to topology-derived ranks
+      int srcRank = (tpRank >= 0) ? tpRank : srcRanks[0];
+      int dstRank = (tpRemoteRank >= 0) ? tpRemoteRank : dstRanks[0];
+      std::string srcRankStr = "Rank-" + std::to_string(srcRank);
+      std::string dstRankStr = "Rank-" + std::to_string(dstRank);
+      // Get destination NIC for the other port
+      std::string dstNic = topology_->getRdmaNicForPort(otherPort);
       std::string path = srcRankStr + " -> " + srcNic + " -> "
           + deviceModel + "(" + faultPort + ") -> " + deviceModel + "(" + otherPort + ") -> "
-          + srcNic + " -> " + dstRankStr;
+          + dstNic + " -> " + dstRankStr;
+      INFO(NCCL_NET, "NET/OBSERV: Built fault path: %s", path.c_str());
       paths.push_back(path);
     }
   }
+
+  INFO(NCCL_NET, "NET/OBSERV: buildFaultPath returning %zu paths", paths.size());
   return paths;
 }
 
@@ -1293,7 +1221,9 @@ std::vector<LldpNeighborInfo> NetworkObserver::parseLldpJson(const std::string& 
  * @brief 获取本机IP地址
  * @return 本机IP地址字符串，获取失败返回空字符串
  *
- * 通过读取网络接口获取本机IP，优先返回非回环地址
+ * 优先级：
+ * 1. 环境变量 NET_OBSERV_LOCAL_IP
+ * 2. 从网络接口获取（使用socket，避免DNS阻塞）
  */
 std::string NetworkObserver::getLocalIpAddress() {
   // 首先尝试从环境变量获取
@@ -1302,39 +1232,43 @@ std::string NetworkObserver::getLocalIpAddress() {
     return std::string(envIp);
   }
 
-  // 通过hostname获取
-  std::array<char, 128> hostname;
-  if (gethostname(hostname.data(), hostname.size()) == 0) {
-    struct hostent* host = gethostbyname(hostname.data());
-    if (host) {
-      struct in_addr** addr_list = reinterpret_cast<struct in_addr**>(host->h_addr_list);
-      for (int i = 0; addr_list[i] != nullptr; i++) {
-        std::string ip = inet_ntoa(*addr_list[i]);
-        // 跳过回环地址
-        if (ip != "127.0.0.1") {
-          return ip;
-        }
-      }
-    }
+  // 使用socket获取本机IP，避免DNS解析阻塞
+  int sock = socket(AF_INET, SOCK_DGRAM, 0);
+  if (sock < 0) {
+    INFO(NCCL_NET, "NET_OBSERV: Failed to create socket for IP detection");
+    return "";
   }
 
-  // 回退：尝试从网络接口获取
-  std::array<char, 256> buffer;
-  FILE* fp = popen("hostname -I 2>/dev/null | awk '{print $1}'", "r");
-  if (fp) {
-    if (fgets(buffer.data(), buffer.size(), fp) != nullptr) {
-      std::string ip = trim(std::string(buffer.data()));
-      pclose(fp);
-      if (!ip.empty()) {
-        return ip;
-      }
-    } else {
-      pclose(fp);
-    }
+  // 连接到一个公共DNS服务器（不会真正发送数据）
+  struct sockaddr_in serv;
+  memset(&serv, 0, sizeof(serv));
+  serv.sin_family = AF_INET;
+  serv.sin_addr.s_addr = inet_addr("8.8.8.8");  // Google DNS
+  serv.sin_port = htons(53);
+
+  if (connect(sock, (struct sockaddr*)&serv, sizeof(serv)) < 0) {
+    close(sock);
+    INFO(NCCL_NET, "NET_OBSERV: Failed to connect socket for IP detection");
+    return "";
   }
 
-  INFO(NCCL_NET, "NET_OBSERV: Failed to get local IP address");
-  return "";
+  struct sockaddr_in name;
+  socklen_t namelen = sizeof(name);
+  if (getsockname(sock, (struct sockaddr*)&name, &namelen) < 0) {
+    close(sock);
+    INFO(NCCL_NET, "NET_OBSERV: Failed to get socket name for IP detection");
+    return "";
+  }
+
+  std::string ip = inet_ntoa(name.sin_addr);
+  close(sock);
+
+  if (ip.empty() || ip == "0.0.0.0") {
+    INFO(NCCL_NET, "NET_OBSERV: Failed to get local IP address");
+    return "";
+  }
+
+  return ip;
 }
 
 /**
@@ -1367,10 +1301,15 @@ std::string NetworkObserver::executeCommand(const std::string& cmd) {
  *
  * 通过SSH连接到远程节点，读取/sys/class/net/<netdev>/device/infiniband获取mlx5设备名
  * 需要预先配置SSH免密登录
+ *
+ * 注意：使用BatchMode=yes防止密码提示阻塞
  */
 std::string NetworkObserver::queryRemoteRdmaNic(const std::string& remoteIp, const std::string& netdev) {
-  // 构建SSH命令
-  std::string sshCmd = "ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no " + remoteIp +
+  // 构建SSH命令，使用BatchMode防止密码提示阻塞
+  // -o BatchMode=yes: 禁止交互式密码提示
+  // -o ConnectTimeout=3: 连接超时3秒
+  // -o StrictHostKeyChecking=no: 不检查主机密钥
+  std::string sshCmd = "ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no " + remoteIp +
                        " 'ls /sys/class/net/" + netdev + "/device/infiniband/ 2>/dev/null | grep mlx5_'";
 
   std::string result = executeCommand(sshCmd);
@@ -1383,7 +1322,8 @@ std::string NetworkObserver::queryRemoteRdmaNic(const std::string& remoteIp, con
     return result.substr(pos, end - pos);
   }
 
-  INFO(NCCL_NET, "NET_OBSERV: Failed to query remote RDMA NIC from %s for %s", remoteIp.c_str(), netdev.c_str());
+  INFO(NCCL_NET, "NET_OBSERV: Failed to query remote RDMA NIC from %s for %s (SSH may not be configured)",
+       remoteIp.c_str(), netdev.c_str());
   return "";
 }
 
@@ -1396,8 +1336,10 @@ std::string NetworkObserver::queryRemoteRdmaNic(const std::string& remoteIp, con
  * 获取规则：
  * 1. 如果描述中包含"mlx5_"，直接提取mlx5_X部分
  * 2. 如果是本节点，通过本地sysfs获取mlx5_X
- * 3. 如果是远程节点，通过SSH查询获取mlx5_X
+ * 3. 如果是远程节点，通过SSH查询获取mlx5_X（需要配置免密登录）
  * 4. 其他情况返回空字符串
+ *
+ * 注意：SSH查询可能会失败，不影响主流程
  */
 std::string NetworkObserver::inferRdmaNicFromPortDesc(const std::string& portDesc, const std::string& nodeIp) {
   // 如果描述中直接包含mlx5_，直接提取
@@ -1415,7 +1357,12 @@ std::string NetworkObserver::inferRdmaNicFromPortDesc(const std::string& portDes
     
     // 判断是本节点还是远程节点
     std::string localIp = getLocalIpAddress();
-    bool isLocalNode = (nodeIp == localIp);
+    bool isLocalNode = (!localIp.empty() && nodeIp == localIp);
+    
+    // 如果nodeIp为空或无法确定本地IP，默认当作本地节点处理
+    if (nodeIp.empty() || localIp.empty()) {
+      isLocalNode = true;
+    }
     
     if (isLocalNode) {
       // 本节点：通过本地sysfs获取mlx5设备
@@ -1441,7 +1388,9 @@ std::string NetworkObserver::inferRdmaNicFromPortDesc(const std::string& portDes
       return "mlx5_0";
     } else {
       // 远程节点：通过SSH查询获取mlx5设备
-      INFO(NCCL_NET, "NET_OBSERV: Querying remote node %s for RDMA NIC of %s", nodeIp.c_str(), portDesc.c_str());
+      // 注意：这需要预先配置SSH免密登录，否则会失败
+      INFO(NCCL_NET, "NET_OBSERV: Querying remote node %s for RDMA NIC of %s (requires SSH passwordless login)",
+           nodeIp.c_str(), portDesc.c_str());
       return queryRemoteRdmaNic(nodeIp, portDesc);
     }
   }
@@ -1553,6 +1502,56 @@ void NetworkObserver::handleLldpEvent(const ruijie_json::JsonRequest& event) {
 static NetworkObserver* g_netObserver = nullptr;
 static TopologyConfig* g_netObservTopology = nullptr;
 static std::mutex g_netObservMutex;
+static int g_netObservLockFd = -1;  // File lock for single-instance per node
+
+/**
+ * @brief 尝试获取节点级别的单实例锁
+ * @return true 表示成功获取锁（应该启动），false 表示其他进程已持有锁
+ *
+ * 使用文件锁确保同一节点上只有一个 NetworkObserver 实例运行。
+ * 锁文件路径：/tmp/nccl_net_observ.lock
+ */
+static bool acquireNodeLock() {
+  const char* lockPath = "/tmp/nccl_net_observ.lock";
+  int fd = open(lockPath, O_RDWR | O_CREAT, 0666);
+  if (fd < 0) {
+    INFO(NCCL_NET, "NET_OBSERV: Failed to open lock file %s: %s", lockPath, strerror(errno));
+    return false;
+  }
+
+  struct flock fl;
+  memset(&fl, 0, sizeof(fl));
+  fl.l_type = F_WRLCK;
+  fl.l_whence = SEEK_SET;
+  fl.l_start = 0;
+  fl.l_len = 0;  // Lock entire file
+
+  if (fcntl(fd, F_SETLK, &fl) < 0) {
+    if (errno == EAGAIN || errno == EACCES) {
+      close(fd);
+      INFO(NCCL_NET, "NET_OBSERV: Another process already holds the lock, skipping init");
+      return false;
+    }
+    INFO(NCCL_NET, "NET_OBSERV: Failed to acquire lock: %s", strerror(errno));
+    close(fd);
+    return false;
+  }
+
+  g_netObservLockFd = fd;
+  INFO(NCCL_INIT|NCCL_NET, "NET_OBSERV: Acquired node-level lock (fd=%d)", fd);
+  return true;
+}
+
+/**
+ * @brief 释放节点级别的单实例锁
+ */
+static void releaseNodeLock() {
+  if (g_netObservLockFd >= 0) {
+    close(g_netObservLockFd);
+    g_netObservLockFd = -1;
+    INFO(NCCL_NET, "NET_OBSERV: Released node-level lock");
+  }
+}
 
 /**
  * @brief 读取环境变量中的整数
@@ -1577,7 +1576,13 @@ int ncclNetObservInit(void) {
 
   std::lock_guard<std::mutex> lock(g_netObservMutex);
   if (g_netObserver) {
-    return 0;  // Already initialized
+    return 0;  // Already initialized in this process
+  }
+
+  // Try to acquire node-level lock to ensure only one instance per node
+  if (!acquireNodeLock()) {
+    INFO(NCCL_NET, "NET_OBSERV: Another process on this node is already running NetworkObserver, skipping");
+    return 0;  // Another process is handling it, treat as success
   }
 
   int mode = readEnvInt("NCCL_NET_OBSERV_MODE", 0);
@@ -1655,6 +1660,7 @@ void ncclNetObservFinalize(void) {
     delete g_netObservTopology;
     g_netObservTopology = nullptr;
   }
+  releaseNodeLock();
   INFO(NCCL_INIT|NCCL_NET, "NET_OBSERV: NetworkObserver finalized");
 }
 
@@ -1729,9 +1735,9 @@ void ncclNetObservUpdateRankTopology(const std::vector<std::vector<int>>& nodeRa
  * 该函数在IB传输层检测到CQE错误时被调用，无需等待NCCL异常。
  * 相比confirmFromException的文本解析方式，这种方式更直接、更及时。
  */
-void NetworkObserver::handleIbError(const std::string& rdmaNic, const std::string& peerIp, int wcStatus) {
-  INFO(NCCL_NET, "NET_OBSERV: Direct IB error from %s, peer=%s, wc_status=%d",
-       rdmaNic.c_str(), peerIp.c_str(), wcStatus);
+void NetworkObserver::handleIbError(const std::string& rdmaNic, const std::string& peerIp, int wcStatus, int tpRank, int tpRemoteRank) {
+  INFO(NCCL_NET, "NET_OBSERV: Direct IB error from %s, peer=%s, wc_status=%d, tpRank=%d, tpRemoteRank=%d",
+       rdmaNic.c_str(), peerIp.c_str(), wcStatus, tpRank, tpRemoteRank);
 
   std::lock_guard<std::mutex> lock(incidentsMutex_);
 
@@ -1764,19 +1770,32 @@ void NetworkObserver::handleIbError(const std::string& rdmaNic, const std::strin
 
     // 如果提供了peerIp，更新故障路径
     if (!peerIp.empty()) {
+      INFO(NCCL_NET, "NET/OBSERV: Building fault path for peerIp=%s, rdmaNic=%s, localPort=%s",
+           peerIp.c_str(), incident->rdmaNic.c_str(), incident->portName.c_str());
       std::string peerPort = topology_->getPortByNodeAndNic(peerIp, incident->rdmaNic);
       if (!peerPort.empty()) {
+        INFO(NCCL_NET, "NET/OBSERV: Found peerPort via getPortByNodeAndNic: %s", peerPort.c_str());
         incident->faultPaths = buildFaultPath(
-            {incident->portName}, incident->deviceModel, peerPort);
+            {incident->portName}, incident->deviceModel, peerPort, tpRank, tpRemoteRank);
       } else {
+        INFO(NCCL_NET, "NET/OBSERV: peerPort not found via getPortByNodeAndNic, searching portMapping...");
+        bool foundInMapping = false;
         for (const auto& pmEntry : topology_->portMapping) {
           if (pmEntry.second.node == peerIp) {
+            INFO(NCCL_NET, "NET/OBSERV: Found peerIp in portMapping: port=%s, node=%s",
+                 pmEntry.first.c_str(), pmEntry.second.node.c_str());
             incident->faultPaths = buildFaultPath(
-                {incident->portName}, incident->deviceModel, pmEntry.first);
+                {incident->portName}, incident->deviceModel, pmEntry.first, tpRank, tpRemoteRank);
+            foundInMapping = true;
             break;
           }
         }
+        if (!foundInMapping) {
+          INFO(NCCL_NET, "NET/OBSERV: peerIp %s not found in portMapping, fault path unchanged", peerIp.c_str());
+        }
       }
+    } else {
+      INFO(NCCL_NET, "NET/OBSERV: peerIp is empty, skipping fault path update");
     }
 
     // 确认告警
@@ -1805,20 +1824,27 @@ void NetworkObserver::handleIbError(const std::string& rdmaNic, const std::strin
  * @param peerIp 对端节点IP地址（可选）
  * @param wcStatus IB工作完成状态码
  */
-void ncclNetObservHandleIbError(const char* rdmaNic, const char* peerIp, int wcStatus) {
+void ncclNetObservHandleIbError(const char* rdmaNic, const char* peerIp, int wcStatus, int tpRank, int tpRemoteRank) {
   if (!rdmaNic || !g_netObserver) {
+    INFO(NCCL_NET, "NET/OBSERV: %s: Skipping IB error handling (rdmaNic=%p, g_netObserver=%p)",
+         __func__, (void*)rdmaNic, (void*)g_netObserver);
     return;
   }
 
   std::string nicName(rdmaNic);
   std::string peerIpStr(peerIp ? peerIp : "");
 
+  INFO(NCCL_NET, "NET/OBSERV: %s: Handling IB error (rdmaNic=%s, peerIp=%s, wcStatus=%d, tpRank=%d, tpRemoteRank=%d)",
+       __func__, rdmaNic, peerIpStr.c_str(), wcStatus, tpRank, tpRemoteRank);
+
   std::lock_guard<std::mutex> lock(g_netObservMutex);
   if (!g_netObservTopology) {
+    INFO(NCCL_NET, "NET/OBSERV: %s: g_netObservTopology is null, skipping error handling", __func__);
     return;
   }
 
-  g_netObserver->handleIbError(nicName, peerIpStr, wcStatus);
+  g_netObserver->handleIbError(nicName, peerIpStr, wcStatus, tpRank, tpRemoteRank);
+  INFO(NCCL_NET, "NET/OBSERV: %s: IB error handled successfully", __func__);
 }
 
 }  // namespace net_observ

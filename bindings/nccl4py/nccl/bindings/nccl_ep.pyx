@@ -1868,44 +1868,6 @@ cdef class EpGroupConfig:
 # Enum
 ###############################################################################
 
-class Result(_IntEnum):
-    """
-    See `ncclResult_t`.
-    """
-    Success = ncclSuccess
-    UnhandledCudaError = ncclUnhandledCudaError
-    SystemError = ncclSystemError
-    InternalError = ncclInternalError
-    InvalidArgument = ncclInvalidArgument
-    InvalidUsage = ncclInvalidUsage
-    RemoteError = ncclRemoteError
-    InProgress = ncclInProgress
-    Timeout = ncclTimeout
-    NumResults = ncclNumResults
-
-class DataType(_IntEnum):
-    """
-    See `ncclDataType_t`.
-    """
-    Int8 = ncclInt8
-    Char = ncclChar
-    Uint8 = ncclUint8
-    Int32 = ncclInt32
-    Int = ncclInt
-    Uint32 = ncclUint32
-    Int64 = ncclInt64
-    Uint64 = ncclUint64
-    Float16 = ncclFloat16
-    Half = ncclHalf
-    Float32 = ncclFloat32
-    Float = ncclFloat
-    Float64 = ncclFloat64
-    Double = ncclDouble
-    Bfloat16 = ncclBfloat16
-    Float8e4m3 = ncclFloat8e4m3
-    Float8e5m2 = ncclFloat8e5m2
-    NumTypes = ncclNumTypes
-
 class EpAlgorithm(_IntEnum):
     """
     See `ncclEpAlgorithm_t`.
@@ -1970,18 +1932,18 @@ cpdef group_destroy(intptr_t ep_group):
     check_status(__status__)
 
 
-cpdef intptr_t tensor_create(unsigned int ndim, int datatype, intptr_t data, intptr_t sizes) except? 0:
+cpdef intptr_t tensor_create(unsigned int ndim, ncclDataType_t datatype, intptr_t data, intptr_t sizes) except? 0:
     cdef NDTensor tensor
     with nogil:
-        __status__ = ncclEpTensorCreate(&tensor, ndim, <_DataType>datatype, <void*>data, <const size_t*>sizes)
+        __status__ = ncclEpTensorCreate(&tensor, ndim, datatype, <void*>data, <const size_t*>sizes)
     check_status(__status__)
     return <intptr_t>tensor
 
 
-cpdef intptr_t tensor_create_from_window(unsigned int ndim, int datatype, intptr_t win, uint64_t win_offset, intptr_t sizes) except? 0:
+cpdef intptr_t tensor_create_from_window(unsigned int ndim, ncclDataType_t datatype, intptr_t win, uint64_t win_offset, intptr_t sizes) except? 0:
     cdef NDTensor tensor
     with nogil:
-        __status__ = ncclEpTensorCreateFromWindow(&tensor, ndim, <_DataType>datatype, <Window>win, win_offset, <const size_t*>sizes)
+        __status__ = ncclEpTensorCreateFromWindow(&tensor, ndim, datatype, <Window>win, win_offset, <const size_t*>sizes)
     check_status(__status__)
     return <intptr_t>tensor
 

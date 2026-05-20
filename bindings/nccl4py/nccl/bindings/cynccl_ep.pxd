@@ -7,45 +7,15 @@
 
 from libc.stdint cimport uint64_t
 
+from nccl.bindings.cynccl cimport ncclResult_t, ncclDataType_t, _NCCLRESULT_T_INTERNAL_LOADING_ERROR
+
+
 
 ###############################################################################
 # Types (structs, enums, ...)
 ###############################################################################
 
 # enums
-ctypedef enum ncclResult_t "ncclResult_t":
-    ncclSuccess "ncclSuccess" = 0
-    ncclUnhandledCudaError "ncclUnhandledCudaError" = 1
-    ncclSystemError "ncclSystemError" = 2
-    ncclInternalError "ncclInternalError" = 3
-    ncclInvalidArgument "ncclInvalidArgument" = 4
-    ncclInvalidUsage "ncclInvalidUsage" = 5
-    ncclRemoteError "ncclRemoteError" = 6
-    ncclInProgress "ncclInProgress" = 7
-    ncclTimeout "ncclTimeout" = 8
-    ncclNumResults "ncclNumResults" = 9
-    _NCCLRESULT_T_INTERNAL_LOADING_ERROR "_NCCLRESULT_T_INTERNAL_LOADING_ERROR" = -42
-
-ctypedef enum ncclDataType_t "ncclDataType_t":
-    ncclInt8 "ncclInt8" = 0
-    ncclChar "ncclChar" = 0
-    ncclUint8 "ncclUint8" = 1
-    ncclInt32 "ncclInt32" = 2
-    ncclInt "ncclInt" = 2
-    ncclUint32 "ncclUint32" = 3
-    ncclInt64 "ncclInt64" = 4
-    ncclUint64 "ncclUint64" = 5
-    ncclFloat16 "ncclFloat16" = 6
-    ncclHalf "ncclHalf" = 6
-    ncclFloat32 "ncclFloat32" = 7
-    ncclFloat "ncclFloat" = 7
-    ncclFloat64 "ncclFloat64" = 8
-    ncclDouble "ncclDouble" = 8
-    ncclBfloat16 "ncclBfloat16" = 9
-    ncclFloat8e4m3 "ncclFloat8e4m3" = 10
-    ncclFloat8e5m2 "ncclFloat8e5m2" = 11
-    ncclNumTypes "ncclNumTypes" = 12
-
 ctypedef enum ncclEpAlgorithm_t "ncclEpAlgorithm_t":
     NCCL_EP_ALGO_LOW_LATENCY "NCCL_EP_ALGO_LOW_LATENCY" = 0
     NCCL_EP_ALGO_HIGH_THROUGHPUT "NCCL_EP_ALGO_HIGH_THROUGHPUT" = 1

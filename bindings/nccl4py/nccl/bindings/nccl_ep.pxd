@@ -28,8 +28,6 @@ ctypedef cudaStream_t Stream
 # Enum
 ###############################################################################
 
-ctypedef ncclResult_t _Result
-ctypedef ncclDataType_t _DataType
 ctypedef ncclEpAlgorithm_t _EpAlgorithm
 ctypedef ncclEpLayout_t _EpLayout
 
@@ -41,8 +39,8 @@ ctypedef ncclEpLayout_t _EpLayout
 cpdef int get_version() except? -1
 cpdef intptr_t create_group(intptr_t comm, intptr_t config) except? 0
 cpdef group_destroy(intptr_t ep_group)
-cpdef intptr_t tensor_create(unsigned int ndim, int datatype, intptr_t data, intptr_t sizes) except? 0
-cpdef intptr_t tensor_create_from_window(unsigned int ndim, int datatype, intptr_t win, uint64_t win_offset, intptr_t sizes) except? 0
+cpdef intptr_t tensor_create(unsigned int ndim, ncclDataType_t datatype, intptr_t data, intptr_t sizes) except? 0
+cpdef intptr_t tensor_create_from_window(unsigned int ndim, ncclDataType_t datatype, intptr_t win, uint64_t win_offset, intptr_t sizes) except? 0
 cpdef tensor_destroy(intptr_t tensor)
 cpdef intptr_t create_handle(intptr_t ep_group, int layout, intptr_t topk_idx, intptr_t layout_info, intptr_t config, intptr_t stream) except? 0
 cpdef handle_destroy(intptr_t handle)

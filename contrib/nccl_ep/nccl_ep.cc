@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
@@ -27,24 +28,25 @@
 #include "device/hybridep_adapter.cuh"
 #include "device/hybridep_configs.cuh"
 
-// Internal definition of the opaque ncclNDTensor type
-struct ncclNDTensor {
-    unsigned int version;
-    unsigned int ndim;
-    size_t* sizes;
-    size_t* strides;
-    ncclDataType_t datatype;
-    void* data;
-    ncclWindow_t win_hdl;
-    uint64_t win_offset;
-};
+// NCCLCHECK macro for public API error checking
+// Undef any existing definition from internal NCCL headers to avoid using ncclDebugLog
+#ifdef NCCLCHECK
+#undef NCCLCHECK
+#endif
+#define NCCLCHECK(cmd) do {                                 \
+    ncclResult_t res = cmd;                                 \
+    if (res != ncclSuccess) {                               \
+        fprintf(stderr, "NCCL error %s:%d '%s'\n",          \
+                __FILE__, __LINE__, ncclGetErrorString(res));\
+        return res;                                          \
+    }                                                        \
+} while(0)
 
 // Forward declarations for HT functions
 static ncclResult_t init_hybridep_intranode(ncclEpGroup_t ep_group, const ncclEpGroupConfig_t* config, cudaStream_t stream);
 static ncclResult_t destroy_hybridep_intranode(ncclEpGroup_t ep_group);
 static ncclResult_t init_hybridep_internode(ncclEpGroup_t ep_group, const ncclEpGroupConfig_t* config, cudaStream_t stream);
 static ncclResult_t destroy_hybridep_internode(ncclEpGroup_t ep_group);
-static void tensor_free(ncclNDTensor_t t);
 
 // Define NCCL_CHECK_RESULT macro for NCCL error checking
 #ifndef NCCL_CHECK_RESULT
@@ -111,6 +113,165 @@ static size_t ncclTypeSize(ncclDataType_t nccl_type) {
             assert(false && "Unsupported ncclDataType_t for size query");
             return 0;
     }
+}
+
+// Dynamic NDTensor allocation
+// Dynamic allocation is used for tensors that are returned by ncclEpTensorAlloc
+// and must be released with ncclEpTensorDestroy.
+
+// Internal magic cookie for tensors returned by ncclEpTensorAlloc. Kept out
+// of the public header so callers can only spell the STATIC cookie
+// (NCCL_EP_TENSOR_MAGIC) via NCCL_EP_TENSOR_INIT.
+#define NCCL_EP_TENSOR_ALLOC_STATIC  NCCL_EP_TENSOR_MAGIC
+#define NCCL_EP_TENSOR_ALLOC_DYNAMIC 0xBEEFBEEF
+
+#define NCCL_EP_TENSOR_INIT_DYNAMIC \
+    ((ncclEpTensor_t){ \
+        .size  = (unsigned int)sizeof(ncclEpTensor_t), \
+        .magic = NCCL_EP_TENSOR_ALLOC_DYNAMIC })
+
+typedef struct ncclEpTensorInternal_s {
+    // Shadow of pub.sizes captured by ncclEpTensorAlloc; lets the library
+    // detect callers that overwrote the sizes pointer on a dynamic descriptor.
+    size_t* sizes_shadow;
+
+    // Public field exposed to the user.
+    ncclEpTensor_t pub;
+} ncclEpTensorInternal_t;
+
+// Recover the outer wrapper from a pointer to its embedded public descriptor.
+static ncclEpTensorInternal_t* _getInternalTensor(ncclEpTensor_t* tensor) {
+    return reinterpret_cast<ncclEpTensorInternal_t*>(
+        reinterpret_cast<char*>(tensor) - offsetof(ncclEpTensorInternal_t, pub));
+}
+static const ncclEpTensorInternal_t* _getInternalTensor(const ncclEpTensor_t* tensor) {
+    return reinterpret_cast<const ncclEpTensorInternal_t*>(
+        reinterpret_cast<const char*>(tensor) - offsetof(ncclEpTensorInternal_t, pub));
+}
+
+// True if the tensor's `magic` cookie marks it as properly initialised by
+// either NCCL_EP_TENSOR_INIT (static) or ncclEpTensorAlloc (dynamic).
+// For dynamic tensors, also cross-check the public `sizes` pointer against
+// the shadow captured at allocation — catches callers that overwrote the
+// descriptor's library-owned sizes array.
+static inline bool tensorIsInitialised(const ncclEpTensor_t* t) {
+    if (t == nullptr) return false;
+    if (t->magic == NCCL_EP_TENSOR_ALLOC_STATIC) return true;
+    if (t->magic == NCCL_EP_TENSOR_ALLOC_DYNAMIC) {
+        return _getInternalTensor(t)->sizes_shadow == t->sizes;
+    }
+    return false;
+}
+
+// True when the tensor advertises a storage binding — either a device pointer
+// or a window handle (offset may be 0, so we only check `win_hdl`). A tensor
+// with neither is unusable by the library.
+static inline bool tensorHasBinding(const ncclEpTensor_t* t) {
+    return t->data != nullptr || t->win_hdl != ncclWindow_t{};
+}
+
+// Combined boundary check used by tensor_ptr / tensor_required: the descriptor
+// must be initialised AND carry a storage binding.
+static inline void tensorAssertValid(const ncclEpTensor_t* t) {
+    assert(tensorIsInitialised(t) &&
+           "ncclEpTensor_t not initialised — use NCCL_EP_TENSOR_INIT or ncclEpTensorAlloc");
+    assert(tensorHasBinding(t) &&
+           "ncclEpTensor_t has no storage binding — set `.data` or (`.win_hdl` [+ `.win_offset`])");
+}
+
+// Validate that a non-null tensor pointer points at an initialised descriptor.
+// Returns the pointer unchanged when null (absent / optional field).
+// Aborts with a clear message when the caller passed garbage or a zero-filled
+// struct — catching the bug at the API boundary before any field is touched.
+static inline ncclEpTensor_t* tensor_ptr(ncclEpTensor_t* t) {
+    if (t == nullptr) return nullptr;
+    tensorAssertValid(t);
+    return t;
+}
+static inline const ncclEpTensor_t* tensor_ptr(const ncclEpTensor_t* t) {
+    if (t == nullptr) return nullptr;
+    tensorAssertValid(t);
+    return t;
+}
+
+// Same as tensor_ptr but for tensors the library knows must be present (e.g.,
+// inputs->tokens). Aborts when the pointer is null OR the cookie is wrong.
+static inline ncclEpTensor_t* tensor_required(ncclEpTensor_t* t) {
+    assert(t != nullptr && "required tensor field is NULL");
+    tensorAssertValid(t);
+    return t;
+}
+static inline const ncclEpTensor_t* tensor_required(const ncclEpTensor_t* t) {
+    assert(t != nullptr && "required tensor field is NULL");
+    tensorAssertValid(t);
+    return t;
+}
+
+// Make a temporary stack copy of `src` for short-lived library-internal use
+// (e.g. window-binding scratch). The copy carries the STATIC magic regardless
+// of `src`'s magic. The copy shares `src`'s `sizes` pointer; the caller must
+// keep `src->sizes` alive for `dst`'s lifetime.
+static inline void tensor_temp_copy(ncclEpTensor_t* dst, const ncclEpTensor_t* src) {
+    *dst = *src;
+    dst->magic = NCCL_EP_TENSOR_MAGIC;
+}
+
+// Make a permanent (library-owned) copy of `src` into `dst`. Like
+// tensor_temp_copy plus a heap-allocated `sizes` array deep-copied from
+// `src->sizes`. Reuses `dst`'s existing sizes buffer when the shape (ndim)
+// is unchanged.
+static inline void tensor_permanent_copy(ncclEpTensor_t* dst, const ncclEpTensor_t* src) {
+    size_t* sizes_buf = dst->sizes;
+    const bool shape_matches = (sizes_buf != nullptr && dst->ndim == src->ndim);
+    if (!shape_matches) {
+        delete[] sizes_buf;  // no-op on nullptr
+        sizes_buf = new size_t[src->ndim];
+    }
+    for (unsigned int i = 0; i < src->ndim; i++) {
+        sizes_buf[i] = src->sizes[i];
+    }
+    tensor_temp_copy(dst, src);
+    dst->sizes = sizes_buf;
+}
+
+ncclResult_t ncclEpTensorAlloc(
+    ncclEpTensor_t** tensor,
+    unsigned int ndim,
+    ncclDataType_t datatype,
+    const size_t* sizes,
+    const ncclEpTensorAllocConfig_t* config)
+{
+    EP_OPTIONAL_STRUCT(config);
+    if (tensor == nullptr || sizes == nullptr || ndim == 0) {
+        return ncclInvalidArgument;
+    }
+
+    ncclEpTensorInternal_t* internal = new ncclEpTensorInternal_t();
+    internal->pub = NCCL_EP_TENSOR_INIT_DYNAMIC;
+    internal->pub.ndim = ndim;
+    internal->pub.datatype = datatype;
+
+    size_t* sizes_copy = new size_t[ndim];
+    for (unsigned int i = 0; i < ndim; i++) sizes_copy[i] = sizes[i];
+    internal->pub.sizes = sizes_copy;
+    internal->sizes_shadow = sizes_copy;
+
+    *tensor = &internal->pub;
+    return ncclSuccess;
+}
+
+ncclResult_t ncclEpTensorDestroy(ncclEpTensor_t* tensor) {
+    if (tensor == nullptr) {
+        return ncclSuccess;
+    }
+    if (!tensorIsInitialised(tensor) ||
+        tensor->magic != NCCL_EP_TENSOR_ALLOC_DYNAMIC) {
+        return ncclInvalidArgument;
+    }
+    ncclEpTensorInternal_t* internal = _getInternalTensor(tensor);
+    delete[] internal->sizes_shadow;
+    delete internal;
+    return ncclSuccess;
 }
 
 // Allgather on host memory using NCCL (used once for hostname exchange).
@@ -346,7 +507,7 @@ struct ncclEpGroup {
 // their local data pointer here once a group/comm is available.
 static ncclResult_t resolveTensorWindowBinding(
     const ncclEpGroup_t ep_group,
-    ncclNDTensor_t tensor,
+    ncclEpTensor_t* tensor,
     uint64_t default_offset) {
     if (tensor == nullptr) {
         return ncclInvalidArgument;
@@ -377,11 +538,36 @@ static ncclResult_t resolveTensorWindowBinding(
     return ncclSuccess;
 }
 
+// Const-input overload: decides internally whether the tensor needs mutation
+// (win_hdl assignment or data resolution). If so, copies to local_storage,
+// resolves there, and sets *out to local_storage. Otherwise sets *out to the
+// original tensor unchanged. Call sites always get back a fully resolved pointer
+// without managing the copy themselves.
+static ncclResult_t resolveTensorWindowBinding(
+    const ncclEpGroup_t ep_group,
+    const ncclEpTensor_t* tensor,
+    ncclEpTensor_t* local_storage,
+    uint64_t default_offset,
+    const ncclEpTensor_t** out
+) {
+    const bool internode_initialized = ep_group->ht_buffers.internode_initialized;
+    const bool needs_win  = internode_initialized && tensor->win_hdl == ncclWindow_t{};
+    const bool needs_data = tensor->data == nullptr;
+    if (!needs_win && !needs_data) {
+        *out = tensor;
+        return ncclSuccess;
+    }
+    tensor_temp_copy(local_storage, tensor);
+    NCCLCHECK(resolveTensorWindowBinding(ep_group, local_storage, default_offset));
+    *out = local_storage;
+    return ncclSuccess;
+}
+
 // A tensor is on the zero-copy path when its window is user-provided,
 // not the group-owned internal GIN window.
 static bool tensorUsesExternalWindow(
     const ncclEpGroup_t ep_group,
-    const ncclNDTensor_t tensor) {
+    const ncclEpTensor_t* tensor) {
     // No window yet means a regular tensor - it may be lazily bound to the
     // internal window later, so do not classify it as external.
     if (tensor->win_hdl == ncclWindow_t{}) {
@@ -397,23 +583,18 @@ static bool tensorUsesExternalWindow(
 template <typename T>
 static ncclResult_t buildIntranodePtrArray(
     const ncclEpGroup_t group,
-    const ncclNDTensor_t tensor,
+    const ncclEpTensor_t* tensor,
     std::vector<T*>& out_ptrs) {
-    if (tensor == nullptr) {
+    if (tensor == nullptr || tensor->win_hdl == ncclWindow_t{}) {
         return ncclInvalidUsage;
     }
-
-    if (tensor->win_hdl == ncclWindow_t{}) {
-        return ncclInvalidUsage;
-    }
-    ncclResult_t result = resolveTensorWindowBinding(group, tensor, 0);
-    if (result != ncclSuccess) {
-        return result;
-    }
+    ncclEpTensor_t local;
+    const ncclEpTensor_t* resolved;
+    NCCLCHECK(resolveTensorWindowBinding(group, tensor, &local, 0, &resolved));
 
     ncclTeam lsa_team = ncclTeamLsa(group->comm);
     out_ptrs.resize(group->lsa_team_size, nullptr);
-    out_ptrs[group->lsa_rank] = static_cast<T*>(tensor->data);
+    out_ptrs[group->lsa_rank] = static_cast<T*>(resolved->data);
 
     for (int i = 0; i < group->lsa_team_size; i++) {
         if (i == group->lsa_rank) continue;
@@ -421,7 +602,7 @@ static ncclResult_t buildIntranodePtrArray(
         int peer_global = ncclTeamRankToWorld(group->comm, lsa_team, i);
         void* peer_ptr = nullptr;
         NCCL_CHECK_RESULT(ncclGetPeerDevicePointer(
-            tensor->win_hdl, tensor->win_offset, peer_global, &peer_ptr));
+            resolved->win_hdl, resolved->win_offset, peer_global, &peer_ptr));
 
         out_ptrs[i] = static_cast<T*>(peer_ptr);
     }
@@ -667,20 +848,6 @@ static ncclResult_t destroy_hybridep_intranode(ncclEpGroup_t ep_group) {
     ep_group->ht_buffers.initialized = false;
     return ncclSuccess;
 }
-
-// NCCLCHECK macro for public API error checking
-// Undef any existing definition from internal NCCL headers to avoid using ncclDebugLog
-#ifdef NCCLCHECK
-#undef NCCLCHECK
-#endif
-#define NCCLCHECK(cmd) do {                                 \
-    ncclResult_t res = cmd;                                 \
-    if (res != ncclSuccess) {                               \
-        fprintf(stderr, "NCCL error %s:%d '%s'\n",          \
-                __FILE__, __LINE__, ncclGetErrorString(res));\
-        return res;                                          \
-    }                                                        \
-} while(0)
 
 // CUDACHECK_RET macro for CUDA calls in functions returning ncclResult_t
 #ifndef CUDACHECK_RET
@@ -1401,111 +1568,13 @@ ncclResult_t ncclEpGroupDestroy(
     return ncclSuccess;
 }
 
-static ncclResult_t ncclEpTensorCreateInternal(
-    ncclNDTensor_t* tensor,
-    unsigned int ndim,
-    ncclDataType_t datatype,
-    void* data,
-    ncclWindow_t win,
-    uint64_t win_offset,
-    const size_t* sizes)
-{
-    if (tensor == nullptr || sizes == nullptr) {
-        return ncclInvalidUsage;
-    }
-    if (data == nullptr && win == ncclWindow_t{}) {
-        return ncclInvalidUsage;
-    }
-
-    struct ncclNDTensor* t = new struct ncclNDTensor();
-    t->version = 1;
-    t->ndim = ndim;
-    t->datatype = datatype;
-    t->data = data;
-    t->win_hdl = win;
-    t->win_offset = win_offset;
-
-    t->sizes = new size_t[ndim];
-    t->strides = new size_t[ndim];
-
-    for (unsigned int i = 0; i < ndim; i++) {
-        t->sizes[i] = sizes[i];
-        t->strides[i] = 1;
-    }
-
-    *tensor = t;
-    return ncclSuccess;
-}
-
-ncclResult_t ncclEpTensorCreate(
-    ncclNDTensor_t* tensor,
-    unsigned int ndim,
-    ncclDataType_t datatype,
-    void* data,
-    const size_t* sizes)
-{
-    return ncclEpTensorCreateInternal(
-        tensor, ndim, datatype, data,
-        ncclWindow_t{}, 0, sizes);
-}
-
-ncclResult_t ncclEpTensorCreateFromWindow(
-    ncclNDTensor_t* tensor,
-    unsigned int ndim,
-    ncclDataType_t datatype,
-    ncclWindow_t win,
-    uint64_t win_offset,
-    const size_t* sizes)
-{
-    if (tensor == nullptr || win == ncclWindow_t{}) {
-        return ncclInvalidArgument;
-    }
-    return ncclEpTensorCreateInternal(
-        tensor, ndim, datatype, nullptr,
-        win, win_offset, sizes);
-}
-
-ncclResult_t ncclEpTensorDestroy(
-    ncclNDTensor_t tensor
-) {
-    if (tensor == nullptr) return ncclSuccess;
-    delete[] tensor->sizes;
-    delete[] tensor->strides;
-    delete tensor;
-    return ncclSuccess;
-}
-
-ncclResult_t ncclEpTensorGetData(
-    ncclNDTensor_t tensor,
-    void** data
-) {
-    assert(tensor != nullptr);
-    assert(data != nullptr);
-    if (tensor->data == nullptr) {
-        return ncclInvalidUsage;
-    }
-    *data = tensor->data;
-    return ncclSuccess;
-}
-
-ncclResult_t ncclEpTensorGetSizes(
-    ncclNDTensor_t tensor,
-    const size_t** sizes,
-    unsigned int* ndim
-) {
-    assert(tensor != nullptr);
-    if (sizes != nullptr) *sizes = tensor->sizes;
-    if (ndim != nullptr) *ndim = tensor->ndim;
-    return ncclSuccess;
-}
-
 struct ncclEpHandle {
     ncclEpGroup_t group;
 
     ncclEpLayout_t layout;
 
     // User-owned (do not free). LL reads directly; HT uses cached hybridep.topk_idx.
-    ncclNDTensor_t topk_idx;
+    ncclEpTensor_t topk_idx;
     int num_tokens, num_topk;
 
     bool cached_mode;
@@ -1515,8 +1584,12 @@ struct ncclEpHandle {
     union {
         struct {
             // packed tensors for LL (descriptors only; data pointers reference handle_mem)
-            ncclNDTensor_t expert_recv_source_indices;
-            ncclNDTensor_t expert_dispatch_layout;
+            ncclEpTensor_t expert_recv_source_indices;
+            ncclEpTensor_t expert_dispatch_layout;
+
+            // Persistent backing storage for the per-tensor `sizes` arrays above.
+            size_t expert_recv_source_indices_sizes[1];
+            size_t expert_dispatch_layout_sizes[2];
 
             // Backing storage for the two tensors above. Layout matches ll_handle_mem_size().
             void* handle_mem;
@@ -1656,7 +1729,7 @@ struct ncclEpHandle {
     ncclEpHandle()
         : group(nullptr),
           layout(NCCL_EP_LAYOUT_UNSET),
-          topk_idx(nullptr),
+          topk_idx(NCCL_EP_TENSOR_INIT),
           num_tokens(0),
           num_topk(0),
           cached_mode(false),
@@ -1670,27 +1743,12 @@ struct ncclEpHandle {
     }
 };
 
-static bool tensor_is_contiguous(ncclNDTensor_t tensor) {
-    for (unsigned int i = 0; i < tensor->ndim; i++)
-        if (tensor->strides[i] != 1)
-            return false;
-    return true;
-}
 
 static bool is_internode_available(ncclEpGroup_t ep_group) {
     // True when there are multiple HT outer-domain nodes
     return ep_group->rdma_team_size > 1;
 }
 
-
-static void tensor_free(ncclNDTensor_t t) {
-    if (t == nullptr) return;
-    if (t->strides)
-        delete[] t->strides;
-    if (t->sizes)
-        delete[] t->sizes;
-    delete t;
-}
 
 // Returns the total buffer size (in bytes) for a LL handle_mem block.
 // Used by ncclEpHandleMemSize (public) and ncclEpInitHandle (internal).
@@ -1778,7 +1836,7 @@ ncclResult_t ncclEpHandleMemSize(
     return ncclSuccess;
 }
 
-static ncclResult_t ll_init_handle(ncclEpHandle_t handle, ncclEpGroup_t ep_group, ncclNDTensor_t handle_mem, int num_topk) {
+static ncclResult_t ll_init_handle(ncclEpHandle_t handle, ncclEpGroup_t ep_group, const ncclEpTensor_t* handle_mem, int num_topk) {
     assert(num_topk > 0 && "LL mode requires num_topk > 0 (pass top_k to ncclEpInitHandle)");
     assert((ep_group->config.max_dispatch_tokens_per_rank * ep_group->num_local_experts) % 4 == 0
            && "TMA requires the number of tokens to be multiple of 4");
@@ -1803,24 +1861,35 @@ static ncclResult_t ll_init_handle(ncclEpHandle_t handle, ncclEpGroup_t ep_group
     const size_t recv_src_count = static_cast<size_t>(ep_group->nRanks) *
         (1 + static_cast<size_t>(num_topk + 1) * ep_group->config.max_dispatch_tokens_per_rank);
     {
-        size_t sz[] = {recv_src_count};
-        NCCLCHECK(ncclEpTensorCreate(&handle->ll.expert_recv_source_indices, 1, ncclInt32, base, sz));
+        handle->ll.expert_recv_source_indices_sizes[0] = recv_src_count;
+        handle->ll.expert_recv_source_indices = (ncclEpTensor_t){
+            NCCL_EP_TENSOR_INIT_INLINE,
+            .ndim     = 1,
+            .datatype = ncclInt32,
+            .data     = base,
+            .sizes    = handle->ll.expert_recv_source_indices_sizes,
+        };
     }
 
     {
         auto align256 = [](size_t s) -> size_t { return (s + 255) & ~size_t(255); };
         const size_t recv_src_bytes = align256(recv_src_count * sizeof(int32_t));
-        size_t sz[] = {static_cast<size_t>(ep_group->num_local_experts),
-                       static_cast<size_t>(ep_group->nRanks)};
-        NCCLCHECK(ncclEpTensorCreate(&handle->ll.expert_dispatch_layout, 2, ncclInt64,
-                   base + recv_src_bytes, sz));
+        handle->ll.expert_dispatch_layout_sizes[0] = static_cast<size_t>(ep_group->num_local_experts);
+        handle->ll.expert_dispatch_layout_sizes[1] = static_cast<size_t>(ep_group->nRanks);
+        handle->ll.expert_dispatch_layout = (ncclEpTensor_t){
+            NCCL_EP_TENSOR_INIT_INLINE,
+            .ndim     = 2,
+            .datatype = ncclInt64,
+            .data     = base + recv_src_bytes,
+            .sizes    = handle->ll.expert_dispatch_layout_sizes,
+        };
     }
     handle->num_topk = num_topk;
     handle->ll.layout = layout;
     return ncclSuccess;
 }
 
-static ncclResult_t ht_init_handle(ncclEpHandle_t handle, ncclEpGroup_t ep_group, ncclNDTensor_t handle_mem, int num_topk) {
+static ncclResult_t ht_init_handle(ncclEpHandle_t handle, ncclEpGroup_t ep_group, const ncclEpTensor_t* handle_mem, int num_topk) {
     assert(ep_group->config.max_dispatch_tokens_per_rank > 0 && "HT requires max_dispatch_tokens_per_rank > 0");
     assert(num_topk > 0 && "HT mode requires num_topk > 0 (pass top_k to ncclEpInitHandle)");
     handle->num_topk = num_topk;
@@ -1830,10 +1899,10 @@ static ncclResult_t ht_init_handle(ncclEpHandle_t handle, ncclEpGroup_t ep_group
         assert(handle_mem->ndim == 1 && handle_mem->datatype == ncclUint8);
         assert(handle_mem->sizes[0] >= L.total &&
                "handle_mem too small; use ncclEpHandleMemSize to query required size");
-        if (handle_mem->win_hdl != ncclWindow_t{}) {
-            NCCLCHECK(resolveTensorWindowBinding(ep_group, handle_mem, 0));
-        }
-        handle->hybridep.preprocessing_block = handle_mem->data;
+        ncclEpTensor_t handle_mem_local;
+        const ncclEpTensor_t* resolved_handle_mem;
+        NCCLCHECK(resolveTensorWindowBinding(ep_group, handle_mem, &handle_mem_local, 0, &resolved_handle_mem));
+        handle->hybridep.preprocessing_block = resolved_handle_mem->data;
         handle->hybridep.owns_handle_mem = false;
     } else {
         CUDA_CHECK(ep_group->alloc.alloc_fn(&handle->hybridep.preprocessing_block, L.total, ep_group->alloc.context));
@@ -1894,11 +1963,12 @@ ncclResult_t ncclEpInitHandle(
     ncclEpLayout_t              layout,
     const ncclEpHandleConfig_t* config,
     int                         num_topk,
-    ncclNDTensor_t              handle_mem
+    const ncclEpTensor_t*       handle_mem
 ) {
     assert(ep_group != nullptr && out_handle != nullptr);
     assert(ep_group->comm != nullptr);
     EP_OPTIONAL_STRUCT(config);
+    handle_mem = tensor_ptr(handle_mem);  // NULL passthrough; otherwise validates magic
     EP_HOST_ASSERT(layout != NCCL_EP_LAYOUT_UNSET &&
                    "ncclEpInitHandle: layout must be set explicitly");
     EP_HOST_ASSERT(!(ep_group->config.algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT &&
@@ -1940,22 +2010,24 @@ ncclResult_t ncclEpInitHandle(
 
 ncclResult_t ncclEpUpdateHandle(
     ncclEpHandle_t handle,
-    ncclNDTensor_t topk_idx,
+    const ncclEpTensor_t* topk_idx,
     const ncclEpLayoutInfo_t* layout_info,
     cudaStream_t stream)
 {
     assert(handle != nullptr);
-    assert(topk_idx != nullptr);
+    topk_idx = tensor_required(topk_idx);
     EP_OPTIONAL_STRUCT(layout_info);
     assert(topk_idx->ndim == 2);
     assert(topk_idx->datatype == ncclInt64);
-    assert(tensor_is_contiguous(topk_idx));
 
     ncclEpGroup_t ep_group = handle->group;
     assert(ep_group != nullptr);
 
-    handle->topk_idx = topk_idx;
-    handle->num_tokens = static_cast<int>(topk_idx->sizes[0]);
+    // Take ownership of the descriptor with a library-owned tensor to
+    // ensure no dependency on the caller's descriptor.
+    tensor_permanent_copy(&handle->topk_idx, topk_idx);
+
+    handle->num_tokens = static_cast<int>(handle->topk_idx.sizes[0]);
 
     if (ep_group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
         assert(static_cast<int>(topk_idx->sizes[1]) == handle->num_topk &&
@@ -1963,8 +2035,8 @@ ncclResult_t ncclEpUpdateHandle(
         assert(layout_info == nullptr && "LL mode does not accept local tensors in ncclEpUpdateHandle");
         return ncclSuccess;
     }
-    if (topk_idx->win_hdl != ncclWindow_t{}) {
-        NCCLCHECK(resolveTensorWindowBinding(ep_group, topk_idx, 0));
+    if (handle->topk_idx.win_hdl != ncclWindow_t{}) {
+        NCCLCHECK(resolveTensorWindowBinding(ep_group, &handle->topk_idx, 0));
     }
 
     int num_topk = static_cast<int>(topk_idx->sizes[1]);
@@ -1973,7 +2045,7 @@ ncclResult_t ncclEpUpdateHandle(
 
     assert(handle->num_tokens <= static_cast<int>(ep_group->config.max_dispatch_tokens_per_rank) && "Token count exceeds HT buffer capacity");
 
-    ncclNDTensor_t recv_expert_counter = layout_info ? layout_info->expert_counters : nullptr;
+    const ncclEpTensor_t* recv_expert_counter = layout_info ? tensor_ptr(layout_info->expert_counters) : nullptr;
 
     const int num_experts = ep_group->config.num_experts;
     const int max_tokens = ep_group->config.max_dispatch_tokens_per_rank;
@@ -2001,7 +2073,7 @@ ncclResult_t ncclEpUpdateHandle(
 
     // ===== Step 1: Convert sparse topk_idx to bitmap routing map =====
     nccl_ep::hybridep::convert_topk_to_routing_map(
-        static_cast<const int64_t*>(topk_idx->data),
+        static_cast<const int64_t*>(handle->topk_idx.data),
         local_routing_send_ptr,
         handle->hybridep.topk_idx,
         handle->num_tokens,
@@ -2023,8 +2095,8 @@ ncclResult_t ncclEpUpdateHandle(
 
     // layout_info->expert_counters: per-expert counts (HT flat unpadded int32; EM padded int32/64).
     // layout_info->expert_offsets: EM-only per-expert offsets (int32/64).
-    ncclNDTensor_t recv_expert_offsets_tensor = layout_info ? layout_info->expert_offsets : nullptr;
-    auto check_int32_or_int64 = [&](ncclNDTensor_t t, const char* name) {
+    const ncclEpTensor_t* recv_expert_offsets_tensor = layout_info ? tensor_ptr(layout_info->expert_offsets) : nullptr;
+    auto check_int32_or_int64 = [&](const ncclEpTensor_t* t, const char* name) {
         assert(t->ndim == 1 && "tensor must be 1D");
         assert((t->datatype == ncclInt32 || t->datatype == ncclInt64) && "tensor must be ncclInt32 or ncclInt64");
         assert(t->sizes[0] >= static_cast<size_t>(ep_group->num_local_experts) &&
@@ -2035,7 +2107,7 @@ ncclResult_t ncclEpUpdateHandle(
     // Caller must use the same int dtype across the 3 preprocessing output tensors.
     bool out_is_int64 = true;
     bool out_dtype_set = false;
-    auto track_out_dtype = [&](ncclNDTensor_t t) {
+    auto track_out_dtype = [&](const ncclEpTensor_t* t) {
         const bool is64 = (t->datatype == ncclInt64);
         if (!out_dtype_set) { out_is_int64 = is64; out_dtype_set = true; }
         else assert(is64 == out_is_int64 && "all preprocessing int output tensors must share dtype");
@@ -2063,18 +2135,18 @@ ncclResult_t ncclEpUpdateHandle(
         assert(recv_expert_counter->datatype == ncclInt32 && "HT flat: recv_expert_counter must be ncclInt32");
         assert(recv_expert_counter->sizes[0] >= static_cast<unsigned int>(ep_group->num_local_experts) &&
             "recv_expert_counter size must be >= num_local_experts");
-        if (recv_expert_counter->win_hdl != ncclWindow_t{}) {
-            NCCLCHECK(resolveTensorWindowBinding(ep_group, recv_expert_counter, 0));
-        }
-        assert(recv_expert_counter->data != nullptr && "recv_expert_counter data must not be null");
-        per_expert_counts_device = static_cast<int32_t*>(recv_expert_counter->data);
+        ncclEpTensor_t recv_expert_counter_local;
+        const ncclEpTensor_t* resolved_recv_expert_counter;
+        NCCLCHECK(resolveTensorWindowBinding(ep_group, recv_expert_counter, &recv_expert_counter_local, 0, &resolved_recv_expert_counter));
+        assert(resolved_recv_expert_counter->data != nullptr && "recv_expert_counter data must not be null");
+        per_expert_counts_device = static_cast<int32_t*>(resolved_recv_expert_counter->data);
     }
     // hybridep.expert_token_offsets is already the handle_mem slot for EM; FLAT path never reads it.
 
     // layout_info->recv_total_counter: scalar total recv tokens (size 1, int32/64), written by metadata.
     void* recv_total_counter = nullptr;
     {
-        ncclNDTensor_t recv_total_counter_tensor = layout_info ? layout_info->recv_total_counter : nullptr;
+        const ncclEpTensor_t* recv_total_counter_tensor = layout_info ? tensor_ptr(layout_info->recv_total_counter) : nullptr;
         if (recv_total_counter_tensor != nullptr) {
             assert(recv_total_counter_tensor->ndim == 1);
             assert(recv_total_counter_tensor->sizes[0] >= 1);
@@ -2125,12 +2197,12 @@ ncclResult_t ncclEpCreateHandle(
     ncclEpHandle_t* out_handle,
     ncclEpGroup_t ep_group,
     ncclEpLayout_t layout,
-    ncclNDTensor_t topk_idx,
+    const ncclEpTensor_t* topk_idx,
     const ncclEpLayoutInfo_t* layout_info,
     const ncclEpHandleConfig_t* config,
     cudaStream_t stream
 ) {
-    assert(topk_idx != nullptr);
+    topk_idx = tensor_required(topk_idx);
     assert(out_handle != nullptr);
     NCCL_CHECK_RESULT(ncclEpInitHandle(out_handle, ep_group, layout, config,
                                        static_cast<int>(topk_idx->sizes[1]),
@@ -2145,8 +2217,6 @@ ncclResult_t ncclEpHandleDestroy(
         return ncclSuccess;
 
     if (handle->group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
-        tensor_free(handle->ll.expert_recv_source_indices);
-        tensor_free(handle->ll.expert_dispatch_layout);
         if (handle->ll.owns_handle_mem && handle->ll.handle_mem) {
             handle->group->alloc.free_fn(handle->ll.handle_mem, handle->group->alloc.context);
             handle->ll.handle_mem = nullptr;
@@ -2160,6 +2230,7 @@ ncclResult_t ncclEpHandleDestroy(
         }
     }
 
+    delete[] handle->topk_idx.sizes;
     delete handle;
     return ncclSuccess;
 }
@@ -2183,16 +2254,14 @@ ncclResult_t ncclEpDispatch(
 
     // Lazy num_tokens for callers that skip UpdateHandle (e.g. backward reusing forward's handle_mem).
     if (handle->num_tokens == 0) {
-        ncclNDTensor_t lazy_x = inputs->tokens;
-        assert(lazy_x != nullptr);
-        handle->num_tokens = static_cast<int>(lazy_x->sizes[0]);
+        const ncclEpTensor_t* t = tensor_required(inputs->tokens);
+        assert(t->ndim > 0);
+        handle->num_tokens = static_cast<int>(t->sizes[0]);
     }
 
     if (group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
-        ncclNDTensor_t x = inputs->tokens;
-        assert(x != nullptr);
+        const ncclEpTensor_t* x = tensor_required(inputs->tokens);
         assert(x->ndim == 2);
-        assert(tensor_is_contiguous(x));
         assert(x->datatype == ncclBfloat16);
         assert(x->sizes[0] == handle->num_tokens);
         assert(x->sizes[0] <= group->config.max_dispatch_tokens_per_rank);
@@ -2202,17 +2271,16 @@ ncclResult_t ncclEpDispatch(
         const int hidden = static_cast<int>(x->sizes[1]);
 
         // Find and validate output tensors
-        ncclNDTensor_t recv_x = outputs->tokens;
-        ncclNDTensor_t scales = outputs->scales;
-        assert(recv_x != nullptr);
-        assert(tensor_is_contiguous(recv_x));
+        const ncclEpTensor_t* recv_x = tensor_required(outputs->tokens);
+        const ncclEpTensor_t* scales = tensor_ptr(outputs->scales);
+        assert(recv_x->ndim > 0);
 
         // Read rank-major-specific tensors unconditionally so we can assert
         // their presence (rank-major) or absence (expert-major) in the switch below.
-        ncclNDTensor_t topk_weights_in   = inputs->topk_weights;
-        ncclNDTensor_t recv_topk_weights = outputs->topk_weights;
-        ncclNDTensor_t recv_topk_idx     = outputs->topk_idx;
-        ncclNDTensor_t src_rank_counter = layout_info ? layout_info->src_rank_counters : nullptr;
+        const ncclEpTensor_t* topk_weights_in   = tensor_ptr(inputs->topk_weights);
+        const ncclEpTensor_t* recv_topk_weights = tensor_ptr(outputs->topk_weights);
+        const ncclEpTensor_t* recv_topk_idx     = tensor_ptr(outputs->topk_idx);
+        const ncclEpTensor_t* src_rank_counter = layout_info ? tensor_ptr(layout_info->src_rank_counters) : nullptr;
 
         const unsigned num_recv_tokens = static_cast<unsigned>(group->nRanks) * group->config.max_dispatch_tokens_per_rank;
         switch (handle->layout) {
@@ -2244,7 +2312,6 @@ ncclResult_t ncclEpDispatch(
             constexpr int scale_block_size = 128;
             assert(hidden % 512 == 0);
             assert(scales->ndim == 3);
-            assert(tensor_is_contiguous(scales));
             assert(scales->datatype == ncclFloat32);
             assert(scales->sizes[0] == group->num_local_experts);
             assert(scales->sizes[1] == group->config.max_dispatch_tokens_per_rank * group->nRanks);
@@ -2261,13 +2328,12 @@ ncclResult_t ncclEpDispatch(
 
         // RECV_EXPERT_COUNTER_DEVICE is required for expert-major (per-expert atomic slot allocator)
         // and must be absent for rank-major (outCnt is unused in the rank-major kernel path).
-        ncclNDTensor_t recv_count = layout_info ? layout_info->expert_counters : nullptr;
+        const ncclEpTensor_t* recv_count = layout_info ? tensor_ptr(layout_info->expert_counters) : nullptr;
         if (handle->layout == NCCL_EP_LAYOUT_RANK_MAJOR) {
             assert(recv_count == nullptr);
         } else {
             assert(recv_count != nullptr);
             assert(recv_count->ndim == 1);
-            assert(tensor_is_contiguous(recv_count));
             assert(recv_count->datatype == ncclInt32);
             assert(recv_count->sizes[0] == group->num_local_experts);
         }
@@ -2281,12 +2347,12 @@ ncclResult_t ncclEpDispatch(
             // Prepare data pointers
             auto* recv_x_data = recv_x->data;
             auto* scales_data = scales ? scales->data : nullptr;
-            auto* expert_recv_source_indices_data = static_cast<int*>(handle->ll.expert_recv_source_indices->data);
+            auto* expert_recv_source_indices_data = static_cast<int*>(handle->ll.expert_recv_source_indices.data);
             auto* src_rank_counter_data = src_rank_counter ? static_cast<int*>(src_rank_counter->data) : nullptr;
-            auto* expert_dispatch_layout_data = static_cast<int64_t*>(handle->ll.expert_dispatch_layout->data);
+            auto* expert_dispatch_layout_data = static_cast<int64_t*>(handle->ll.expert_dispatch_layout.data);
             auto* recv_count_data = recv_count ? static_cast<int*>(recv_count->data) : nullptr;
             auto* x_data = x->data;
-            auto* topk_idx_data = static_cast<int64_t*>(handle->topk_idx->data);
+            auto* topk_idx_data = static_cast<int64_t*>(handle->topk_idx.data);
             auto* topk_weights_in_data = topk_weights_in ? static_cast<const float*>(topk_weights_in->data) : nullptr;
             auto* recv_topk_weights_data = recv_topk_weights ? static_cast<float*>(recv_topk_weights->data) : nullptr;
             auto* recv_topk_idx_data = recv_topk_idx ? static_cast<int32_t*>(recv_topk_idx->data) : nullptr;
@@ -2358,21 +2424,24 @@ ncclResult_t ncclEpDispatch(
 
         const bool expert_major = (handle->layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
 
-        ncclNDTensor_t x = inputs->tokens;
-        ncclNDTensor_t topk_weights = inputs->topk_weights;
-        ncclNDTensor_t scales = inputs->scales;
+        const ncclEpTensor_t* x = tensor_required(inputs->tokens);
+        const ncclEpTensor_t* topk_weights = tensor_ptr(inputs->topk_weights);
+        const ncclEpTensor_t* scales = tensor_ptr(inputs->scales);
+        // Local copies for tensors that need window resolution; only populated when used.
+        ncclEpTensor_t x_local, scales_local, topk_weights_local;
+        ncclEpTensor_t recv_x_local, recv_scales_local, recv_topk_weights_local, recv_topk_idx_local;
 
-        if (x == nullptr) {
+        if (x->ndim == 0) {
             return ncclInvalidArgument;
         }
-        assert(x->ndim == 2 && tensor_is_contiguous(x));
+        assert(x->ndim == 2);
         assert(x->sizes[0] == handle->num_tokens);
         assert(x->sizes[0] <= group->config.max_dispatch_tokens_per_rank);
         assert(x->sizes[1] * ncclTypeSize(x->datatype) <= group->config.max_token_bytes &&
                "HT dispatch token bytes must not exceed group's max_token_bytes");
         const int hidden = static_cast<int>(x->sizes[1]);
         NCCLCHECK(resolveTensorWindowBinding(
-            group, x, static_cast<uint64_t>(group->gin_config.token_staging_offset)));
+            group, x, &x_local, static_cast<uint64_t>(group->gin_config.token_staging_offset), &x));
 
         // For multi-node: copy user buffers to pre-registered staging buffers
         // The staging buffers were allocated and GIN-registered during Group Create
@@ -2393,7 +2462,7 @@ ncclResult_t ncclEpDispatch(
         }
         if (use_fp8) {
             NCCLCHECK(resolveTensorWindowBinding(
-                group, scales, static_cast<uint64_t>(group->gin_config.scaling_factor_staging_offset)));
+                group, scales, &scales_local, static_cast<uint64_t>(group->gin_config.scaling_factor_staging_offset), &scales));
         }
 
         // For FP8: copy user scaling factors to pre-registered staging buffer
@@ -2409,7 +2478,7 @@ ncclResult_t ncclEpDispatch(
         if (!use_fp8) {
             assert(x->datatype == ncclBfloat16);
         } else {
-            assert(scales->ndim == 2 && tensor_is_contiguous(scales));
+            assert(scales->ndim == 2);
             assert(scales->datatype == ncclFloat32);
         }
 
@@ -2432,35 +2501,31 @@ ncclResult_t ncclEpDispatch(
         }
 
         // Output tensors
-        ncclNDTensor_t recv_x = outputs->tokens;
-        ncclNDTensor_t recv_topk_weights = outputs->topk_weights;
-        ncclNDTensor_t recv_topk_idx = outputs->topk_idx;
-        ncclNDTensor_t recv_scales = nullptr;
-        if (recv_x == nullptr) {
+        const ncclEpTensor_t* recv_x = tensor_required(outputs->tokens);
+        const ncclEpTensor_t* recv_topk_weights = tensor_ptr(outputs->topk_weights);
+        const ncclEpTensor_t* recv_topk_idx = tensor_ptr(outputs->topk_idx);
+        const ncclEpTensor_t* recv_scales = nullptr;
+        if (recv_x->ndim == 0) {
             return ncclInvalidArgument;
         }
-        if (recv_x->win_hdl != ncclWindow_t{}) {
-            NCCLCHECK(resolveTensorWindowBinding(group, recv_x, 0));
-        }
+        NCCLCHECK(resolveTensorWindowBinding(group, recv_x, &recv_x_local, 0, &recv_x));
         if (use_fp8) {
-            recv_scales = outputs->scales;
+            recv_scales = tensor_ptr(outputs->scales);
             if (recv_scales == nullptr) {
                 return ncclInvalidArgument;
             }
-            if (recv_scales->win_hdl != ncclWindow_t{}) {
-                NCCLCHECK(resolveTensorWindowBinding(group, recv_scales, 0));
-            }
+            NCCLCHECK(resolveTensorWindowBinding(group, recv_scales, &recv_scales_local, 0, &recv_scales));
         }
 
         // FWD: topk_weights present (routing live). BWD: caller passes neither.
         bool forward_dispatch = (topk_weights != nullptr);
 
         if (forward_dispatch) {
-            assert(topk_weights->ndim == 2 && tensor_is_contiguous(topk_weights) && topk_weights->datatype == ncclFloat32);
+            assert(topk_weights->ndim == 2 && topk_weights->datatype == ncclFloat32);
             assert(topk_weights->sizes[0] == handle->num_tokens);
             assert(topk_weights->sizes[1] == handle->num_topk);
             NCCLCHECK(resolveTensorWindowBinding(
-                group, topk_weights, static_cast<uint64_t>(group->gin_config.dense_prob_offset)));
+                group, topk_weights, &topk_weights_local, static_cast<uint64_t>(group->gin_config.dense_prob_offset), &topk_weights));
         } else {
             if (recv_topk_weights != nullptr || recv_topk_idx != nullptr) {
                 return ncclInvalidArgument;
@@ -2621,7 +2686,7 @@ ncclResult_t ncclEpDispatch(
         /* ===== Copy intranode staging → caller outputs ===== */
         // External-window outputs are written directly by the kernel; regular tensors
         // need a D2D copy from the shared intranode staging buffers.
-        assert(recv_x->ndim == 2 && tensor_is_contiguous(recv_x));
+        assert(recv_x->ndim == 2);
         if (!recv_x_uses_external_window) {
             if (recv_x->sizes[0] < recv_copy_rows) {
                 return ncclInvalidArgument;
@@ -2642,9 +2707,7 @@ ncclResult_t ncclEpDispatch(
             if (recv_topk_weights == nullptr) {
                 return ncclInvalidArgument;
             }
-            if (recv_topk_weights->win_hdl != ncclWindow_t{}) {
-                NCCLCHECK(resolveTensorWindowBinding(group, recv_topk_weights, 0));
-            }
+            NCCLCHECK(resolveTensorWindowBinding(group, recv_topk_weights, &recv_topk_weights_local, 0, &recv_topk_weights));
             const bool em = (handle->layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
             if (em) {
                 if (recv_topk_idx != nullptr) {
@@ -2654,11 +2717,8 @@ ncclResult_t ncclEpDispatch(
                 if (recv_topk_idx == nullptr) {
                     return ncclInvalidArgument;
                 }
-                if (recv_topk_idx->win_hdl != ncclWindow_t{}) {
-                    NCCLCHECK(resolveTensorWindowBinding(group, recv_topk_idx, 0));
-                }
+                NCCLCHECK(resolveTensorWindowBinding(group, recv_topk_idx, &recv_topk_idx_local, 0, &recv_topk_idx));
             }
-            assert(tensor_is_contiguous(recv_topk_weights));
             assert(recv_topk_weights->datatype == ncclFloat32);
             if (em) {
                 assert(recv_topk_weights->ndim == 1 &&
@@ -2669,7 +2729,7 @@ ncclResult_t ncclEpDispatch(
             } else {
                 assert(recv_topk_weights->ndim == 2 &&
                        "HT FLAT recv_topk_weights must be 2D [num_recv_tokens, top_k]");
-                assert(recv_topk_idx->ndim == 2 && tensor_is_contiguous(recv_topk_idx));
+                assert(recv_topk_idx->ndim == 2);
                 assert(recv_topk_idx->datatype == ncclInt64);
                 if (recv_topk_weights->sizes[0] < max_recv_tokens ||
                     recv_topk_idx->sizes[0] < max_recv_tokens ||
@@ -2697,7 +2757,7 @@ ncclResult_t ncclEpDispatch(
 
         // FP8 scales output (async D2D, sized by caller).
         if (use_fp8) {
-            assert(recv_scales->ndim == 2 && tensor_is_contiguous(recv_scales));
+            assert(recv_scales->ndim == 2);
             if (!recv_scales_uses_external_window) {
                 if (recv_scales->sizes[0] < recv_copy_rows) {
                     return ncclInvalidArgument;
@@ -2728,27 +2788,27 @@ ncclResult_t ncclEpCombine(
 
     // Lazy num_tokens for callers that skip UpdateHandle (e.g. handle relocation between prepare and combine).
     if (handle->num_tokens == 0) {
-        ncclNDTensor_t lazy_combined = outputs->tokens;
-        assert(lazy_combined != nullptr);
+        const ncclEpTensor_t* lazy_combined = tensor_required(outputs->tokens);
+        assert(lazy_combined->ndim > 0);
         handle->num_tokens = static_cast<int>(lazy_combined->sizes[0]);
     }
 
     if (handle->group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
         // Find and validate input tensors
-        ncclNDTensor_t x = inputs->tokens;
-            assert(x != nullptr);
+        const ncclEpTensor_t* x = tensor_required(inputs->tokens);
+        assert(x->ndim > 0);
 
-        ncclNDTensor_t topk_idx = handle->topk_idx;
-        ncclNDTensor_t src_info = handle->ll.expert_recv_source_indices;
-        ncclNDTensor_t layout_range = handle->ll.expert_dispatch_layout;
+        const ncclEpTensor_t* topk_idx = &handle->topk_idx;
+        const ncclEpTensor_t* src_info = &handle->ll.expert_recv_source_indices;
+        const ncclEpTensor_t* layout_range = &handle->ll.expert_dispatch_layout;
 
         // topk_weights: expert-major requires it in outputs; rank-major does not
         // (weights are applied by the caller in preReduceRankMajor before ncclEpCombine).
-        ncclNDTensor_t topk_weights;
+        const ncclEpTensor_t* topk_weights;
         if (handle->layout == NCCL_EP_LAYOUT_RANK_MAJOR) {
             topk_weights = nullptr;
         } else {
-            topk_weights = outputs->topk_weights;
+            topk_weights = tensor_ptr(outputs->topk_weights);
             EP_HOST_ASSERT(topk_weights != nullptr &&
                            "expert-major combine requires topk_weights in outputs");
         }
@@ -2759,7 +2819,6 @@ ncclResult_t ncclEpCombine(
         const int num_max_dispatch_tokens_per_rank = handle->group->config.max_dispatch_tokens_per_rank;
 
         // Validate input tensor x; extract hidden dimension (index differs by layout).
-        assert(tensor_is_contiguous(x));
         assert(x->datatype == ncclBfloat16);
         int hidden;
         switch (handle->layout) {
@@ -2782,18 +2841,15 @@ ncclResult_t ncclEpCombine(
 
             // Validate topk_idx tensor
         assert(topk_idx->ndim == 2);
-        assert(tensor_is_contiguous(topk_idx));
         assert(topk_idx->datatype == ncclInt64);
 
             // Validate src_info tensor
         assert(src_info->ndim == 1);
-        assert(tensor_is_contiguous(src_info));
         assert(src_info->datatype == ncclInt32);
 
         // Validate topk_weights tensor (expert-major only; rank-major applies weights before combine)
         if (topk_weights != nullptr) {
             assert(topk_weights->ndim == 2);
-            assert(tensor_is_contiguous(topk_weights));
             assert(topk_weights->sizes[0] == topk_idx->sizes[0]);
             assert(topk_weights->sizes[1] == topk_idx->sizes[1]);
             assert(topk_weights->datatype == ncclFloat32);
@@ -2813,11 +2869,10 @@ ncclResult_t ncclEpCombine(
         assert(handle->ll.layout.total_bytes <= handle->group->config.rdma_buffer_size);
 
         // Find and validate output tensor
-        ncclNDTensor_t out = outputs->tokens;
+        const ncclEpTensor_t* out = tensor_required(outputs->tokens);
 
-        assert(out != nullptr);
+        assert(out->ndim > 0);
         assert(out->ndim == 2);
-        assert(tensor_is_contiguous(out));
         assert(out->sizes[0] == num_combined_tokens);
         assert(out->sizes[1] == hidden);
         assert(out->datatype == x->datatype);
@@ -2894,14 +2949,16 @@ ncclResult_t ncclEpCombine(
              //assert(is_single_node && "HT mode only supports single-node");
 
         /* ===== Inputs validation ===== */
-        ncclNDTensor_t x = inputs->tokens;
-        if (x == nullptr) {
+        const ncclEpTensor_t* x = tensor_required(inputs->tokens);
+        if (x->ndim == 0) {
             return ncclInvalidArgument;
         }
-        assert(x->ndim == 2 && tensor_is_contiguous(x));
+        assert(x->ndim == 2);
         assert(x->datatype == ncclBfloat16); // HT combine only supports BF16
+        // Local copies for tensors that need window resolution; only populated when used.
+        ncclEpTensor_t x_local, topk_weights_local, combined_topk_weights_local, combined_x_local;
         NCCLCHECK(resolveTensorWindowBinding(
-            group, x, static_cast<uint64_t>(group->gin_config.rdma_intra_node_red_token_offset)));
+            group, x, &x_local, static_cast<uint64_t>(group->gin_config.rdma_intra_node_red_token_offset), &x));
 
         // Get dimensions from input tensor
         auto num_tokens = static_cast<int>(x->sizes[0]);
@@ -2923,8 +2980,8 @@ ncclResult_t ncclEpCombine(
         // stride is 1.
         int num_topk = 0;
         int input_topk_stride = 0;
-        ncclNDTensor_t topk_weights = inputs->topk_weights;
-        ncclNDTensor_t combined_topk_weights = outputs->topk_weights;
+        const ncclEpTensor_t* topk_weights = tensor_ptr(inputs->topk_weights);
+        const ncclEpTensor_t* combined_topk_weights = tensor_ptr(outputs->topk_weights);
 
         // Determine if this is backward mode (topk_weights provided = backward combine)
         bool backward_combine = (topk_weights != nullptr);
@@ -2934,12 +2991,11 @@ ncclResult_t ncclEpCombine(
             if (combined_topk_weights == nullptr) {
                 return ncclInvalidArgument;
             }
-            assert(combined_topk_weights->ndim == 2 && tensor_is_contiguous(combined_topk_weights));
+            assert(combined_topk_weights->ndim == 2);
             assert(combined_topk_weights->sizes[0] == num_combined_tokens);
             assert(combined_topk_weights->datatype == ncclFloat32);
             num_topk = static_cast<int>(combined_topk_weights->sizes[1]);
             // Input shape validation by layout — must match FWD recv_topk_weights.
-            assert(tensor_is_contiguous(topk_weights));
             assert(topk_weights->datatype == ncclFloat32);
             if (expert_major_in) {
                 assert(topk_weights->ndim == 1 &&
@@ -2953,23 +3009,19 @@ ncclResult_t ncclEpCombine(
                 input_topk_stride = num_topk;
             }
             NCCLCHECK(resolveTensorWindowBinding(
-                group, topk_weights, static_cast<uint64_t>(group->gin_config.rdma_intra_node_red_prob_offset)));
-            if (combined_topk_weights->win_hdl != ncclWindow_t{}) {
-                NCCLCHECK(resolveTensorWindowBinding(group, combined_topk_weights, 0));
-            }
+                group, topk_weights, &topk_weights_local, static_cast<uint64_t>(group->gin_config.rdma_intra_node_red_prob_offset), &topk_weights));
+            NCCLCHECK(resolveTensorWindowBinding(group, combined_topk_weights, &combined_topk_weights_local, 0, &combined_topk_weights));
         }
 
         /* ===== Output tensors ===== */
-        ncclNDTensor_t combined_x = outputs->tokens;
-        if (combined_x == nullptr) {
+        const ncclEpTensor_t* combined_x = tensor_required(outputs->tokens);
+        if (combined_x->ndim == 0) {
             return ncclInvalidArgument;
         }
-        assert(combined_x->ndim == 2 && tensor_is_contiguous(combined_x));
+        assert(combined_x->ndim == 2);
         assert(combined_x->sizes[0] == num_combined_tokens); // Output should match original token count
         assert(combined_x->sizes[1] == hidden);              // Should match input hidden dimension
-        if (combined_x->win_hdl != ncclWindow_t{}) {
-            NCCLCHECK(resolveTensorWindowBinding(group, combined_x, 0));
-        }
+        NCCLCHECK(resolveTensorWindowBinding(group, combined_x, &combined_x_local, 0, &combined_x));
 
         /* ===== Copy input to IPC staging buffers ===== */
         // Expert MLP output needs to be in IPC buffer so other ranks can read it

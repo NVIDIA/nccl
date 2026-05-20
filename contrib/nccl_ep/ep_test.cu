@@ -35,27 +35,35 @@ static size_t epDtypeBytes(ncclDataType_t dt) {
     }
 }
 
-// cudaMalloc + ncclEpTensorCreate. The tensor wraps a buffer the test owns.
-static ncclResult_t epMakeTensor(ncclNDTensor_t* tensor, unsigned int ndim,
+// cudaMalloc the backing buffer and wrap it in a heap-allocated descriptor via
+// ncclEpTensorAlloc. epFreeTensor releases both the descriptor and the buffer.
+static ncclResult_t epMakeTensor(ncclEpTensor_t** out_tensor, unsigned int ndim,
                                  ncclDataType_t dt,
                                  unsigned int s0, unsigned int s1 = 1, unsigned int s2 = 1,
                                  unsigned int s3 = 1, unsigned int s4 = 1) {
+    if (out_tensor == nullptr) return ncclInvalidArgument;
+    *out_tensor = nullptr;
     size_t dims[5] = {s0, s1, s2, s3, s4};
     size_t total = 1;
     for (unsigned int i = 0; i < ndim; i++) total *= dims[i];
     void* data = nullptr;
     cudaError_t e = cudaMalloc(&data, total * epDtypeBytes(dt));
     if (e != cudaSuccess) return ncclSystemError;
-
-    return ncclEpTensorCreate(tensor, ndim, dt, data, dims);
+    ncclResult_t r = ncclEpTensorAlloc(out_tensor, ndim, dt, dims, /*config=*/nullptr);
+    if (r != ncclSuccess) {
+        cudaFree(data);
+        return r;
+    }
+    (*out_tensor)->data = data;
+    return ncclSuccess;
 }
 
-// Inverse of epMakeTensor: destroy the descriptor first, then cudaFree the backing buffer.
-static void epFreeTensor(ncclNDTensor_t tensor) {
-    if (tensor == nullptr) return;
-    void* data = nullptr;
-    ncclEpTensorGetData(tensor, &data);
-    ncclEpTensorDestroy(tensor);
+// Inverse of epMakeTensor: free backing buffer and release the descriptor.
+static void epFreeTensor(ncclEpTensor_t** field) {
+    if (field == nullptr || *field == nullptr) return;
+    void* data = (*field)->data;
+    ncclEpTensorDestroy(*field);
+    *field = nullptr;
     if (data) cudaFree(data);
 }
 
@@ -129,8 +137,8 @@ static void epSetupCombineTensors(
     unsigned int hidden,
     unsigned int num_tokens,
     int elements_tested_per_token,
-    ncclNDTensor_t* expert_outputs,
-    ncclNDTensor_t* combined_output) {
+    ncclEpTensor_t** expert_outputs,
+    ncclEpTensor_t** combined_output) {
   if (algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
     NCCLCHECK(epMakeTensor(expert_outputs, 3, ncclBfloat16,
                            num_local_experts,
@@ -143,7 +151,7 @@ static void epSetupCombineTensors(
       }
     }
     void* data;
-    NCCLCHECK(ncclEpTensorGetData(*expert_outputs, &data));
+    data = (*expert_outputs)->data;
     for (unsigned int e = 0; e < num_local_experts; ++e) {
       size_t offset_bytes = static_cast<size_t>(e) * max_dispatch_tokens_per_rank * hidden * nRanks * 2;
       CUDACHECK(cudaMemcpy(static_cast<uint8_t*>(data) + offset_bytes,
@@ -160,7 +168,7 @@ static void epSetupCombineTensors(
       }
     }
     void* data;
-    NCCLCHECK(ncclEpTensorGetData(*expert_outputs, &data));
+    data = (*expert_outputs)->data;
     CUDACHECK(cudaMemcpy(data, host, num_recv_tokens * hidden * 2, cudaMemcpyHostToDevice));
     delete[] host;
   }
@@ -419,7 +427,7 @@ int main(int argc, char* argv[])
          disable_max_tokens ? " (no max_dispatch_tokens_per_rank)" : "");
   NCCLCHECK(ncclEpCreateGroup(&ep_group, comm, &config));
 
-  ncclNDTensor_t topk_idx;
+  ncclEpTensor_t* topk_idx = nullptr;
   NCCLCHECK(epMakeTensor(&topk_idx, 2, ncclInt64, static_cast<unsigned int>(num_tokens), static_cast<unsigned int>(top_k)));
   int64_t *topk_idx_host = new int64_t[num_tokens * top_k];
 
@@ -449,13 +457,13 @@ int main(int argc, char* argv[])
     }
   }
   void* topk_idx_data;
-  NCCLCHECK(ncclEpTensorGetData(topk_idx, &topk_idx_data));
+  topk_idx_data = topk_idx->data;
   CUDACHECK(cudaMemcpy(topk_idx_data, topk_idx_host, num_tokens * top_k * sizeof(int64_t), cudaMemcpyHostToDevice));
 
   // Create recv-counter tensors for ncclEpCreateHandle (only when disable_max_tokens is true)
   ncclEpLayoutInfo_t handle_layout_info = NCCL_EP_LAYOUT_INFO_INIT;
-  ncclNDTensor_t handle_recv_expert_counter = nullptr;
-  ncclNDTensor_t handle_recv_total_counter = nullptr;
+  ncclEpTensor_t* handle_recv_expert_counter = nullptr;
+  ncclEpTensor_t* handle_recv_total_counter = nullptr;
   if (disable_max_tokens) {
     NCCLCHECK(epMakeTensor(&handle_recv_expert_counter, 1, ncclInt32, num_local_experts));
     handle_layout_info.expert_counters = handle_recv_expert_counter;
@@ -483,7 +491,7 @@ int main(int argc, char* argv[])
   unsigned int num_recv_tokens = 0;
   if (disable_max_tokens) {
     void* total_data = nullptr;
-    NCCLCHECK(ncclEpTensorGetData(handle_recv_total_counter, &total_data));
+    total_data = handle_recv_total_counter->data;
     int32_t total_host = 0;
     CUDACHECK(cudaMemcpy(&total_host, total_data, sizeof(int32_t), cudaMemcpyDeviceToHost));
     assert(total_host >= 0);
@@ -510,9 +518,12 @@ int main(int argc, char* argv[])
   ncclEpDispatchOutputs_t dispatch_outputs = NCCL_EP_DISPATCH_OUTPUTS_INIT;
   ncclEpLayoutInfo_t     dispatch_layout_info   = NCCL_EP_LAYOUT_INFO_INIT;
 
-  ncclNDTensor_t input_tokens, recv_x;
-  ncclNDTensor_t topk_weights = nullptr, recv_topk_weights = nullptr, recv_topk_idx = nullptr;
-  ncclNDTensor_t ll_recv_expert_counter = nullptr;
+  ncclEpTensor_t* input_tokens = nullptr;
+  ncclEpTensor_t* recv_x = nullptr;
+  ncclEpTensor_t* topk_weights = nullptr;
+  ncclEpTensor_t* recv_topk_weights = nullptr;
+  ncclEpTensor_t* recv_topk_idx = nullptr;
+  ncclEpTensor_t* ll_recv_expert_counter = nullptr;
 
   NCCLCHECK(epMakeTensor(&input_tokens, 2, ncclBfloat16,
                          static_cast<unsigned int>(num_tokens), static_cast<unsigned int>(hidden)));
@@ -568,7 +579,7 @@ int main(int argc, char* argv[])
     }
   }
   void* input0_data;
-  NCCLCHECK(ncclEpTensorGetData(input_tokens, &input0_data));
+  input0_data = input_tokens->data;
   CUDACHECK(cudaMemcpy(input0_data, input_host, num_tokens * hidden * 2, cudaMemcpyHostToDevice));
   delete[] input_host;
 
@@ -580,7 +591,7 @@ int main(int argc, char* argv[])
     }
   }
   void* topk_weights_data;
-  NCCLCHECK(ncclEpTensorGetData(topk_weights, &topk_weights_data));
+  topk_weights_data = topk_weights->data;
   CUDACHECK(cudaMemcpy(topk_weights_data, topk_weights_host, num_tokens * top_k * sizeof(float), cudaMemcpyHostToDevice));
   delete[] topk_weights_host;
 
@@ -590,7 +601,8 @@ int main(int argc, char* argv[])
   // Combine-side tensors are allocated above the dispatch call so the entire
   // dispatch+combine sequence can optionally be recorded into a single CUDA Graph.
   // Combine inputs do not depend on dispatch outputs in either LL or HT mode.
-  ncclNDTensor_t expert_outputs, combined_output;
+  ncclEpTensor_t* expert_outputs = nullptr;
+  ncclEpTensor_t* combined_output = nullptr;
   epSetupCombineTensors(algorithm, num_local_experts, num_recv_tokens,
                         config.max_dispatch_tokens_per_rank, nRanks, hidden, num_tokens,
                         ELEMENTS_TESTED_PER_TOKEN, &expert_outputs, &combined_output);
@@ -654,12 +666,12 @@ int main(int argc, char* argv[])
   if (algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
     recv_count_host = new int[num_local_experts];
     void* local_tensor0_data;
-    NCCLCHECK(ncclEpTensorGetData(ll_recv_expert_counter, &local_tensor0_data));
+    local_tensor0_data = ll_recv_expert_counter->data;
     CUDACHECK(cudaMemcpy(recv_count_host, local_tensor0_data, num_local_experts * sizeof(int), cudaMemcpyDeviceToHost));
     should_free_recv_count = true;
   } else if (disable_max_tokens && handle_recv_expert_counter != nullptr) {
     void* handle_local_tensor0_data;
-    NCCLCHECK(ncclEpTensorGetData(handle_recv_expert_counter, &handle_local_tensor0_data));
+    handle_local_tensor0_data = handle_recv_expert_counter->data;
     recv_count_host = static_cast<int*>(handle_local_tensor0_data);
   }
 
@@ -675,7 +687,7 @@ int main(int argc, char* argv[])
     // LL mode: recv_x is [num_local_experts, config.max_dispatch_tokens_per_rank * nRanks, hidden]
     uint16_t *output_host = new uint16_t[num_local_experts * config.max_dispatch_tokens_per_rank * nRanks * hidden]();
     void* output0_data;
-    NCCLCHECK(ncclEpTensorGetData(recv_x, &output0_data));
+    output0_data = recv_x->data;
     CUDACHECK(cudaMemcpy(output_host, output0_data,
                          num_local_experts * config.max_dispatch_tokens_per_rank * nRanks * hidden * 2,
                          cudaMemcpyDeviceToHost));
@@ -724,7 +736,7 @@ int main(int argc, char* argv[])
 
     uint16_t *output_host = new uint16_t[num_recv_tokens * hidden]();
     void* output0_data;
-    NCCLCHECK(ncclEpTensorGetData(recv_x, &output0_data));
+    output0_data = recv_x->data;
     CUDACHECK(cudaMemcpy(output_host, output0_data, num_recv_tokens * hidden * 2, cudaMemcpyDeviceToHost));
     int expected_count = disable_max_tokens ? num_recv_tokens : num_tokens;
     for (int i = 0; i < expected_count; ++i) {
@@ -758,7 +770,7 @@ int main(int argc, char* argv[])
                                         : static_cast<size_t>(num_recv_tokens) * top_k;
     float *recv_topk_weights_host = new float[weights_count]();
     void* output1_data;
-    NCCLCHECK(ncclEpTensorGetData(recv_topk_weights, &output1_data));
+    output1_data = recv_topk_weights->data;
     CUDACHECK(cudaMemcpy(recv_topk_weights_host, output1_data,
                          weights_count * sizeof(float), cudaMemcpyDeviceToHost));
 
@@ -766,7 +778,7 @@ int main(int argc, char* argv[])
     if (!ht_em) {
       recv_topk_idx_host = new int64_t[static_cast<size_t>(num_recv_tokens) * top_k]();
       void* output2_data;
-      NCCLCHECK(ncclEpTensorGetData(recv_topk_idx, &output2_data));
+      output2_data = recv_topk_idx->data;
       CUDACHECK(cudaMemcpy(recv_topk_idx_host, output2_data,
                            static_cast<size_t>(num_recv_tokens) * top_k * sizeof(int64_t),
                            cudaMemcpyDeviceToHost));
@@ -853,7 +865,7 @@ int main(int argc, char* argv[])
   if (!random_mode) {
     uint16_t *combined_output_host = new uint16_t[num_tokens * hidden]();
     void* combined_output_data;
-    NCCLCHECK(ncclEpTensorGetData(combined_output, &combined_output_data));
+    combined_output_data = combined_output->data;
     CUDACHECK(cudaMemcpy(combined_output_host, combined_output_data, num_tokens * hidden * 2, cudaMemcpyDeviceToHost));
 
     const int slot_count = ht_em ? top_k : 1;
@@ -921,16 +933,16 @@ int main(int argc, char* argv[])
       if (!ht_em) first_dispatch_output2 = new int64_t[num_recv_tokens * top_k];
 
       void* out0_data;
-      NCCLCHECK(ncclEpTensorGetData(recv_x, &out0_data));
+      out0_data = recv_x->data;
       CUDACHECK(cudaMemcpy(first_dispatch_output0, out0_data,
                            num_recv_tokens * hidden * sizeof(uint16_t), cudaMemcpyDeviceToHost));
       void* out1_data;
-      NCCLCHECK(ncclEpTensorGetData(recv_topk_weights, &out1_data));
+      out1_data = recv_topk_weights->data;
       CUDACHECK(cudaMemcpy(first_dispatch_output1, out1_data,
                            weights_count * sizeof(float), cudaMemcpyDeviceToHost));
       if (!ht_em) {
         void* out2_data;
-        NCCLCHECK(ncclEpTensorGetData(recv_topk_idx, &out2_data));
+        out2_data = recv_topk_idx->data;
         CUDACHECK(cudaMemcpy(first_dispatch_output2, out2_data,
                              num_recv_tokens * top_k * sizeof(int64_t), cudaMemcpyDeviceToHost));
       }
@@ -938,20 +950,20 @@ int main(int argc, char* argv[])
       // Save first phase combine output to host for comparison
       first_combine_output = new uint16_t[num_tokens * hidden];
       void* comb_out_data;
-      NCCLCHECK(ncclEpTensorGetData(combined_output, &comb_out_data));
+      comb_out_data = combined_output->data;
       CUDACHECK(cudaMemcpy(first_combine_output, comb_out_data,
                            num_tokens * hidden * sizeof(uint16_t), cudaMemcpyDeviceToHost));
     }
 
     // Allocate new output tensors for second phase dispatch.
     // HT+FL forward dispatch requires recv_topk_weights [N, top_k] and recv_topk_idx [N, top_k].
-    ncclNDTensor_t cached_recv_x;
+    ncclEpTensor_t* cached_recv_x = nullptr;
     NCCLCHECK(epMakeTensor(&cached_recv_x, 2, ncclBfloat16,
                            static_cast<unsigned int>(num_recv_tokens), static_cast<unsigned int>(hidden)));
-    ncclNDTensor_t cached_recv_topk_weights;
+    ncclEpTensor_t* cached_recv_topk_weights = nullptr;
     NCCLCHECK(epMakeTensor(&cached_recv_topk_weights, 2, ncclFloat32,
                            static_cast<unsigned int>(num_recv_tokens), static_cast<unsigned int>(top_k)));
-    ncclNDTensor_t cached_recv_topk_idx;
+    ncclEpTensor_t* cached_recv_topk_idx = nullptr;
     NCCLCHECK(epMakeTensor(&cached_recv_topk_idx, 2, ncclInt64,
                            static_cast<unsigned int>(num_recv_tokens), static_cast<unsigned int>(top_k)));
     ncclEpDispatchOutputs_t cached_dispatch_outputs = NCCL_EP_DISPATCH_OUTPUTS_INIT;
@@ -960,10 +972,10 @@ int main(int argc, char* argv[])
     cached_dispatch_outputs.topk_idx       = cached_recv_topk_idx;
 
     // Allocate new output tensors for second phase combine
-    ncclNDTensor_t cached_combined_output;
+    ncclEpTensor_t* cached_combined_output = nullptr;
     NCCLCHECK(epMakeTensor(&cached_combined_output, 2, ncclBfloat16,
                            static_cast<unsigned int>(num_tokens), static_cast<unsigned int>(hidden)));
-    ncclNDTensor_t cached_combined_topk_weights;
+    ncclEpTensor_t* cached_combined_topk_weights = nullptr;
     NCCLCHECK(epMakeTensor(&cached_combined_topk_weights, 2, ncclFloat32,
                            static_cast<unsigned int>(num_tokens), static_cast<unsigned int>(top_k)));
     ncclEpCombineOutputs_t cached_combine_outputs = NCCL_EP_COMBINE_OUTPUTS_INIT;
@@ -972,13 +984,13 @@ int main(int argc, char* argv[])
 
     // Setup combine inputs with per-received-token topk_weights from dispatch output.
     // HT backward combine expects combine_inputs.topk_weights to align with combine_inputs.tokens.
-    ncclNDTensor_t cached_combine_topk_weights_input;
+    ncclEpTensor_t* cached_combine_topk_weights_input = nullptr;
     NCCLCHECK(epMakeTensor(&cached_combine_topk_weights_input, 2, ncclFloat32,
                            static_cast<unsigned int>(num_recv_tokens), static_cast<unsigned int>(top_k)));
     void* cached_ctwi_data;
-    NCCLCHECK(ncclEpTensorGetData(cached_combine_topk_weights_input, &cached_ctwi_data));
+    cached_ctwi_data = cached_combine_topk_weights_input->data;
     void* out1_data_for_copy;
-    NCCLCHECK(ncclEpTensorGetData(recv_topk_weights, &out1_data_for_copy));
+    out1_data_for_copy = recv_topk_weights->data;
     const size_t cached_w_count = ht_em ? static_cast<size_t>(num_recv_tokens)
                                           : static_cast<size_t>(num_recv_tokens) * top_k;
     CUDACHECK(cudaMemcpy(cached_ctwi_data, out1_data_for_copy,
@@ -1013,18 +1025,18 @@ int main(int argc, char* argv[])
     if (!random_mode) {
       uint16_t *second_dispatch_output0 = new uint16_t[num_recv_tokens * hidden];
       void* cached_out0_data;
-      NCCLCHECK(ncclEpTensorGetData(cached_recv_x, &cached_out0_data));
+      cached_out0_data = cached_recv_x->data;
       CUDACHECK(cudaMemcpy(second_dispatch_output0, cached_out0_data,
                            num_recv_tokens * hidden * sizeof(uint16_t), cudaMemcpyDeviceToHost));
 
       uint16_t *second_combine_output = new uint16_t[num_tokens * hidden];
       void* cached_comb_out_data;
-      NCCLCHECK(ncclEpTensorGetData(cached_combined_output, &cached_comb_out_data));
+      cached_comb_out_data = cached_combined_output->data;
       CUDACHECK(cudaMemcpy(second_combine_output, cached_comb_out_data,
                            num_tokens * hidden * sizeof(uint16_t), cudaMemcpyDeviceToHost));
       float *second_combine_topk_weights = new float[num_tokens * top_k];
       void* cached_comb_tw_data;
-      NCCLCHECK(ncclEpTensorGetData(cached_combined_topk_weights, &cached_comb_tw_data));
+      cached_comb_tw_data = cached_combined_topk_weights->data;
       CUDACHECK(cudaMemcpy(second_combine_topk_weights, cached_comb_tw_data,
                            num_tokens * top_k * sizeof(float), cudaMemcpyDeviceToHost));
 
@@ -1084,12 +1096,12 @@ int main(int argc, char* argv[])
       delete[] first_dispatch_output2;
       delete[] first_combine_output;
     }
-    epFreeTensor(cached_recv_x);
-    epFreeTensor(cached_recv_topk_weights);
-    epFreeTensor(cached_recv_topk_idx);
-    epFreeTensor(cached_combined_output);
-    epFreeTensor(cached_combined_topk_weights);
-    epFreeTensor(cached_combine_topk_weights_input);
+    epFreeTensor(&cached_recv_x);
+    epFreeTensor(&cached_recv_topk_weights);
+    epFreeTensor(&cached_recv_topk_idx);
+    epFreeTensor(&cached_combined_output);
+    epFreeTensor(&cached_combined_topk_weights);
+    epFreeTensor(&cached_combine_topk_weights_input);
 
     printf("Rank %d: Cached mode - second dispatch and combine calls completed successfully\n", myRank);
     }  // end !ht_em else branch
@@ -1099,9 +1111,9 @@ int main(int argc, char* argv[])
   if (first_dispatch_output0_host) delete[] first_dispatch_output0_host;
 
   // Clean up combine tensors
-  epFreeTensor(expert_outputs);
-  epFreeTensor(topk_weights);
-  epFreeTensor(combined_output);
+  epFreeTensor(&expert_outputs);
+  epFreeTensor(&topk_weights);
+  epFreeTensor(&combined_output);
 
   NCCLCHECK(ncclEpHandleDestroy(ep_handle));
 
@@ -1111,18 +1123,18 @@ int main(int argc, char* argv[])
   ncclCommDestroy(comm);
 
   delete[] topk_idx_host;
-  epFreeTensor(topk_idx);
+  epFreeTensor(&topk_idx);
   if (disable_max_tokens && handle_recv_expert_counter != nullptr) {
-    epFreeTensor(handle_recv_expert_counter);
+    epFreeTensor(&handle_recv_expert_counter);
   }
-  epFreeTensor(input_tokens);
-  epFreeTensor(recv_x);
+  epFreeTensor(&input_tokens);
+  epFreeTensor(&recv_x);
   if (algorithm != NCCL_EP_ALGO_LOW_LATENCY) {
-    epFreeTensor(recv_topk_weights);
-    if (!ht_em) epFreeTensor(recv_topk_idx);
+    epFreeTensor(&recv_topk_weights);
+    if (!ht_em) epFreeTensor(&recv_topk_idx);
   }
   if (algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
-    epFreeTensor(ll_recv_expert_counter);
+    epFreeTensor(&ll_recv_expert_counter);
   }
 
   // finalizing MPI

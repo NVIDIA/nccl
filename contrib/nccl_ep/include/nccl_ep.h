@@ -70,9 +70,92 @@ extern "C" {
 
 ncclResult_t ncclEpGetVersion(int* version);
 
-// Opaque N-dimensional tensor handle used to describe various user inputs
-// (i.e., tokens, top-k indices, weights, scales, etc.)
-typedef struct ncclNDTensor* ncclNDTensor_t;
+// N-dimensional tensor descriptor — a lightweight structure
+// that can be both allocated by the user and by the NCCL EP library.
+//
+// Users can declare inline on the stack, as a struct member, or as a global/static object.
+// No heap allocation is needed for the descriptor itself.
+// In this case, the caller owns the device buffer (data pointer) or NCCL window registration,
+// and also the `sizes` array that describes the per-dimension
+// extents. Both must outlive any library call that observes this descriptor.
+//
+// Always initialise with NCCL_EP_TENSOR_INIT then fill fields directly:
+//   size_t dims[2] = { N, H };
+//   ncclEpTensor_t t = NCCL_EP_TENSOR_INIT;
+//   t.ndim = 2; t.datatype = ncclFloat16; t.data = data_ptr; t.sizes = dims;
+//
+// When all user fields are known up-front, NCCL_EP_TENSOR_INIT_INLINE provides
+// the service-field designators for in-place construction via a compound literal:
+//
+//   size_t dims[2] = { N, H };
+//   ncclEpTensor_t t = { NCCL_EP_TENSOR_INIT_INLINE,
+//                        .ndim = 2, .datatype = ncclFloat16,
+//                        .data = data_ptr, .sizes = dims };
+//
+// No explicit destruction is needed — the descriptor holds no resources.
+//
+// NOTE: for the library-allocated tensors, the caller can use ncclEpTensorAlloc.
+
+#define NCCL_EP_TENSOR_MAGIC 0xCAFECAFE
+typedef struct ncclEpTensor {
+    // NOTE: these fields for internal use only
+    unsigned int size;          // = sizeof(ncclEpTensor_t); set by NCCL_EP_TENSOR_INIT
+    unsigned int magic;         // Init cookie: NCCL_EP_TENSOR_MAGIC (user-initialised)
+                                // or an internal DYNAMIC value (ncclEpTensorAlloc).
+                                // 0 = uninitialised; the library rejects such tensors.
+
+    // Fields are set by the user
+    unsigned int ndim;          // number of dimensions
+    ncclDataType_t datatype;
+    void* data;                 // device pointer (NULL for window-backed tensors until resolved)
+    ncclWindow_t win_hdl;       // NCCL window handle (NULL for plain device-pointer tensors)
+    uint64_t win_offset;        // byte offset within win_hdl
+    size_t* sizes;              // caller-owned array of length `ndim`, per-dimension sizes
+} ncclEpTensor_t;
+
+// Static tensor initializer
+#define NCCL_EP_TENSOR_INIT_INLINE \
+    .size  = (unsigned int)sizeof(ncclEpTensor_t), \
+    .magic = NCCL_EP_TENSOR_MAGIC
+#define NCCL_EP_TENSOR_INIT ((ncclEpTensor_t){ NCCL_EP_TENSOR_INIT_INLINE })
+
+// Allocation configuration for future extensions of ncclEpTensorAlloc.
+// Callers should either pass NULL (defaults) or initialise via
+// NCCL_EP_TENSOR_ALLOC_CONFIG_INIT.
+typedef struct {
+    unsigned int size;  // = sizeof(this struct); first field, never moves
+} ncclEpTensorAllocConfig_t;
+
+#define NCCL_EP_TENSOR_ALLOC_CONFIG_INIT \
+    ((ncclEpTensorAllocConfig_t){ .size = (unsigned int)sizeof(ncclEpTensorAllocConfig_t) })
+
+// Allocate a tensor descriptor sufficient to represent the requested shape.
+//
+// Arguments:
+//   tensor   - [OUT] On success, receives a pointer to the new descriptor.
+//   ndim     - [IN]  Number of dimensions (> 0).
+//   datatype - [IN]  Element type.
+//   sizes    - [IN]  Array of `ndim` dimension sizes.
+//   config   - [IN]  Optional allocation configuration. NULL = defaults.
+//
+// Returns: ncclResult_t error code.
+ncclResult_t ncclEpTensorAlloc(
+    ncclEpTensor_t** tensor,
+    unsigned int ndim,
+    ncclDataType_t datatype,
+    const size_t* sizes,
+    const ncclEpTensorAllocConfig_t* config
+);
+
+// Release a descriptor previously returned by ncclEpTensorAlloc.
+//
+// Arguments:
+//   tensor - [IN] Pointer returned by ncclEpTensorAlloc. NULL is accepted.
+//
+// Returns: ncclResult_t error code.
+ncclResult_t ncclEpTensorDestroy(
+    ncclEpTensor_t* tensor
+);
 
 // Allocator and free function pointer types.
 // context is the value stored in ncclEpAllocConfig_t::context and is forwarded unchanged
@@ -169,123 +252,73 @@ ncclResult_t ncclEpGroupDestroy(
     ncclEpGroup_t ep_group
 );
 
-
-// Wrap a caller-provided device buffer in a tensor descriptor.
-//   The implementation guarantees that the tensor is contiguous in memory (including accordingly
-//   setting the strides to 1 for all dimensions).
-//
-//   The buffer is NOT owned by the tensor; the caller is responsible for the lifetime of `data`
-//   and must keep it valid until ncclEpTensorDestroy returns. Releasing `data` while the tensor
-//   handle is still live leaves the handle dangling — any subsequent use is undefined behavior.
-//   Recommended teardown order: ncclEpTensorDestroy(t) first, then free the buffer.
-//
-// Arguments:
-//   tensor   - [OUT] Pointer to newly created tensor
-//   ndim     - [IN]  Number of dimensions
-//   datatype - [IN]  Data type
-//   data     - [IN]  Non-null device pointer to the tensor's storage
-//   sizes    - [IN]  Array of ndim dimension sizes
-//
-// Returns: ncclResult_t error code
-
-ncclResult_t ncclEpTensorCreate(
-    ncclNDTensor_t* tensor,
-    unsigned int ndim,
-    ncclDataType_t datatype,
-    void* data,
-    const size_t* sizes
-);
-
-// Create a tensor from a registered NCCL window.
-//   The tensor stores the window handle and offset. Its local data pointer is
-//   resolved lazily when the tensor is used with an EP group.
-//   ncclEpTensorGetData returns ncclInvalidUsage until that resolution happens.
-//
-//   The window is NOT owned by the tensor; the caller must keep the window
-//   registered and valid until ncclEpTensorDestroy returns.
-ncclResult_t ncclEpTensorCreateFromWindow(
-    ncclNDTensor_t* tensor,
-    unsigned int ndim,
-    ncclDataType_t datatype,
-    ncclWindow_t win,
-    uint64_t win_offset,
-    const size_t* sizes
-);
-
-// Destroy a tensor descriptor.
-//   Only the descriptor is freed; the underlying data buffer is the caller's responsibility.
-//
-// Arguments:
-//   tensor       - [IN]  Tensor handle to destroy
-//
-// Returns: ncclResult_t error code
-
-ncclResult_t ncclEpTensorDestroy(
-    ncclNDTensor_t tensor
-);
-
 // Layout info passed to ncclEpCreateHandle / ncclEpUpdateHandle and ncclEpDispatch.
-// All fields are optional (NULL = not provided).
+// All fields are optional (NULL = not provided). Each field is a pointer to a
+// caller-owned descriptor (stack/static/struct-embedded or from ncclEpTensorAlloc).
 typedef struct {
-    unsigned int   size;                // = sizeof(this struct); first field, never moves
-    ncclNDTensor_t expert_counters; // 1D [num_local_experts] int32 (or int64 for HT EM)
-                                        //   HT (handle time): per-expert recv counts. Flat: unpadded int32.
-                                        //                     EM: padded counts (sum equals output slot count).
-                                        //   LL expert-major: per-expert received token counts (dispatch time).
-    ncclNDTensor_t src_rank_counters;    // 1D [num_ranks] int32
-                                        //   LL rank-major only: per-source-rank token counts (dispatch time).
-    ncclNDTensor_t expert_offsets; // 1D [num_local_experts] int32 or int64
-                                        //   HT expert-major only: prefix sum of padded per-expert counts.
-    ncclNDTensor_t recv_total_counter;  // 1D [1] int32 or int64
-                                        //   HT: scalar total recv token count. Flat: unpadded. EM: padded slot total.
+    unsigned int    size;                // = sizeof(this struct); first field, never moves
+    ncclEpTensor_t* expert_counters;     // 1D [num_local_experts] int32 (or int64 for HT EM)
+                                         //   HT (handle time): per-expert recv counts. Flat: unpadded int32.
+                                         //                     EM: padded counts (sum equals output slot count).
+                                         //   LL expert-major: per-expert received token counts (dispatch time).
+    ncclEpTensor_t* src_rank_counters;   // 1D [num_ranks] int32
+                                         //   LL rank-major only: per-source-rank token counts (dispatch time).
+    ncclEpTensor_t* expert_offsets;      // 1D [num_local_experts] int32 or int64
+                                         //   HT expert-major only: prefix sum of padded per-expert counts.
+    ncclEpTensor_t* recv_total_counter;  // 1D [1] int32 or int64
+                                         //   HT: scalar total recv token count. Flat: unpadded. EM: padded slot total.
 } ncclEpLayoutInfo_t;
 
 #define NCCL_EP_LAYOUT_INFO_INIT ((ncclEpLayoutInfo_t){ .size = (unsigned int)sizeof(ncclEpLayoutInfo_t) })
 
 // Input tensors for ncclEpDispatch.
-// All fields except tokens are optional (NULL = not provided).
+// All fields except tokens are optional (NULL = not provided). Each field is a
+// pointer to a caller-owned descriptor.
 typedef struct {
-    unsigned int   size;         // = sizeof(this struct); first field, never moves
-    ncclNDTensor_t tokens;       // required; 2D [num_tokens, hidden]
-    ncclNDTensor_t topk_weights; // optional; 2D [num_tokens, top_k], ncclFloat32
-                                 //   LL rank-major: per-token routing weights
-                                 //   HT forward: routing weights (topk_idx taken from handle)
-    ncclNDTensor_t scales;       // optional; HT FP8 only; 2D [num_tokens, hidden/128], ncclFloat32
+    unsigned int    size;         // = sizeof(this struct); first field, never moves
+    ncclEpTensor_t* tokens;       // required; 2D [num_tokens, hidden]
+    ncclEpTensor_t* topk_weights; // optional; 2D [num_tokens, top_k], ncclFloat32
+                                  //   LL rank-major: per-token routing weights
+                                  //   HT forward: routing weights (topk_idx taken from handle)
+    ncclEpTensor_t* scales;       // optional; HT FP8 only; 2D [num_tokens, hidden/128], ncclFloat32
 } ncclEpDispatchInputs_t;
 
 #define NCCL_EP_DISPATCH_INPUTS_INIT ((ncclEpDispatchInputs_t){ .size = (unsigned int)sizeof(ncclEpDispatchInputs_t) })
 
 // Output tensors for ncclEpDispatch.
-// All fields except tokens are optional (NULL = not provided).
+// All fields except tokens are optional (NULL = not provided). Each field is a
+// pointer to a caller-owned descriptor.
 typedef struct {
-    unsigned int   size;         // = sizeof(this struct); first field, never moves
-    ncclNDTensor_t tokens;       // required; received tokens
-    ncclNDTensor_t topk_weights; // optional; LL rank-major or HT: received top-k weights
-    ncclNDTensor_t scales;       // optional; FP8 only; received per-token scaling factors
-    ncclNDTensor_t topk_idx;     // optional; LL rank-major or HT: received top-k expert indices
+    unsigned int    size;         // = sizeof(this struct); first field, never moves
+    ncclEpTensor_t* tokens;       // required; received tokens
+    ncclEpTensor_t* topk_weights; // optional; LL rank-major or HT: received top-k weights
+    ncclEpTensor_t* scales;       // optional; FP8 only; received per-token scaling factors
+    ncclEpTensor_t* topk_idx;     // optional; LL rank-major or HT: received top-k expert indices
 } ncclEpDispatchOutputs_t;
 
 #define NCCL_EP_DISPATCH_OUTPUTS_INIT ((ncclEpDispatchOutputs_t){ .size = (unsigned int)sizeof(ncclEpDispatchOutputs_t) })
 
 // Input tensors for ncclEpCombine.
-// All fields except tokens are optional (NULL = not provided).
+// All fields except tokens are optional (NULL = not provided). Each field is a
+// pointer to a caller-owned descriptor.
 typedef struct {
-    unsigned int   size;         // = sizeof(this struct); first field, never moves
-    ncclNDTensor_t tokens;       // required; post-expert activation tensor
-    ncclNDTensor_t topk_weights; // optional; HT backward combine only:
-                                 //   2D [num_recv_tokens, top_k], ncclFloat32
+    unsigned int    size;         // = sizeof(this struct); first field, never moves
+    ncclEpTensor_t* tokens;       // required; post-expert activation tensor
+    ncclEpTensor_t* topk_weights; // optional; HT backward combine only:
+                                  //   2D [num_recv_tokens, top_k], ncclFloat32
 } ncclEpCombineInputs_t;
 
 #define NCCL_EP_COMBINE_INPUTS_INIT ((ncclEpCombineInputs_t){ .size = (unsigned int)sizeof(ncclEpCombineInputs_t) })
 
 // Output tensors for ncclEpCombine.
-// All fields except tokens are optional (NULL = not provided).
+// All fields except tokens are optional (NULL = not provided). Each field is a
+// pointer to a caller-owned descriptor.
 typedef struct {
-    unsigned int   size;         // = sizeof(this struct); first field, never moves
-    ncclNDTensor_t tokens;       // required; combined output in original token order
-    ncclNDTensor_t topk_weights; // optional; 2D [num_tokens, top_k], ncclFloat32
-                                 //   LL expert-major: per-token routing weights applied on receive side
-                                 //   HT backward: combined routing weights output
+    unsigned int    size;         // = sizeof(this struct); first field, never moves
+    ncclEpTensor_t* tokens;       // required; combined output in original token order
+    ncclEpTensor_t* topk_weights; // optional; 2D [num_tokens, top_k], ncclFloat32
+                                  //   LL expert-major: per-token routing weights applied on receive side
+                                  //   HT backward: combined routing weights output
 } ncclEpCombineOutputs_t;
 
 #define NCCL_EP_COMBINE_OUTPUTS_INIT ((ncclEpCombineOutputs_t){ .size = (unsigned int)sizeof(ncclEpCombineOutputs_t) })
@@ -328,7 +361,7 @@ ncclResult_t ncclEpCreateHandle(
     ncclEpHandle_t* handle,
     ncclEpGroup_t ep_group,
     ncclEpLayout_t layout,
-    ncclNDTensor_t topk_idx,
+    const ncclEpTensor_t* topk_idx,
     const ncclEpLayoutInfo_t* layout_info,  // NULL = none
     const ncclEpHandleConfig_t* config,  // NULL = defaults
     cudaStream_t stream
@@ -387,7 +420,7 @@ ncclResult_t ncclEpInitHandle(
     ncclEpLayout_t              layout,
     const ncclEpHandleConfig_t* config,
     int                         num_topk,
-    ncclNDTensor_t              handle_mem
+    const ncclEpTensor_t*       handle_mem  // NULL = library allocates internally
 );
 
 // Per-step collective: prepare the handle for the given top-k routing decisions.
@@ -406,7 +439,7 @@ ncclResult_t ncclEpInitHandle(
 
 ncclResult_t ncclEpUpdateHandle(
     ncclEpHandle_t handle,
-    ncclNDTensor_t topk_idx,
+    const ncclEpTensor_t* topk_idx,
     const ncclEpLayoutInfo_t* layout_info,  // NULL = none
     cudaStream_t stream
 );
@@ -531,36 +564,6 @@ ncclResult_t ncclEpComplete(
     ncclEpHandle_t handle,
     const ncclEpCompleteConfig_t* config,
     cudaStream_t stream
-);
-
-// Get the data pointer from a tensor.
-//   Window-backed tensors return ncclInvalidUsage until they have been used
-//   with an EP group and their data pointer has been resolved.
-//
-// Arguments:
-//   tensor   - [IN]   Tensor handle
-//   data     - [OUT]  Pointer to receive the data pointer
-//
-// Returns: ncclResult_t error code
-
-ncclResult_t ncclEpTensorGetData(
-    ncclNDTensor_t tensor,
-    void** data
-);
-
-// Get the sizes and number of dimensions of a tensor.
-//
-// Arguments:
-//   tensor   - [IN]   Tensor handle
-//   sizes    - [OUT]  Pointer to receive the sizes array pointer (not a copy)
-//   ndim     - [OUT]  Pointer to receive the number of dimensions
-//
-// Returns: ncclResult_t error code
-
-ncclResult_t ncclEpTensorGetSizes(
-    ncclNDTensor_t tensor,
-    const size_t** sizes,
-    unsigned int* ndim
 );
 
 

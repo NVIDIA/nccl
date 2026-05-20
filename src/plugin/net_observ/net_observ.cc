@@ -1315,35 +1315,23 @@ std::string NetworkObserver::executeCommand(const std::string& cmd) {
  */
 RdmaNicInfo NetworkObserver::queryRemoteRdmaNic(const std::string& remoteIp, const std::string& netdev) {
   RdmaNicInfo result;
-  // 构建SSH命令，使用BatchMode防止密码提示阻塞
-  // -o BatchMode=yes: 禁止交互式密码提示
-  // -o ConnectTimeout=3: 连接超时3秒
-  // -o StrictHostKeyChecking=no: 不检查主机密钥
-  std::string sshCmd = "ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no " + remoteIp +
-                       " 'mlx5_dev=$(ls /sys/class/net/" + netdev + "/device/infiniband/ 2>/dev/null | grep mlx5_); "
-                       "if [ -n \"$mlx5_dev\" ]; then "
-                       "  net_iface=$(ls /sys/class/infiniband/$mlx5_dev/device/net/ 2>/dev/null | head -1); "
-                       "  ip_addr=$(ip -o -4 addr show $net_iface 2>/dev/null | awk \"{print \\$4}\" | cut -d/ -f1); "
-                       "  echo \"$mlx5_dev $ip_addr\"; "
-                       "fi'";
 
-  std::string output = executeCommand(sshCmd);
-  output = trim(output);
-
-  if (!output.empty()) {
-    std::istringstream iss(output);
-    std::string namePart, ipPart;
-    iss >> namePart >> ipPart;
-    if (namePart.find("mlx5_") != std::string::npos) {
-      result.name = namePart;
-      result.ip = ipPart;
-    }
-  }
-
-  if (result.name.empty()) {
+  // Step 1: Get mlx5 device name from the network interface
+  std::string getMlx5Cmd = "ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no " + remoteIp +
+                           " ls /sys/class/net/" + netdev + "/device/infiniband/ 2>/dev/null | grep mlx5_ | head -1";
+  std::string mlx5Output = trim(executeCommand(getMlx5Cmd));
+  if (mlx5Output.empty()) {
     INFO(NCCL_NET, "NET/OBSERV: Failed to query remote RDMA NIC from %s for %s (SSH may not be configured)",
          remoteIp.c_str(), netdev.c_str());
+    return result;
   }
+  result.name = mlx5Output;
+
+  // Step 2: Get IP address using the netdev interface name directly
+  std::string getAddrCmd = "ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no " + remoteIp +
+                           " ip -o -4 addr show " + netdev + " 2>/dev/null | head -1 | awk '{print $4}' | cut -d/ -f1";
+  result.ip = trim(executeCommand(getAddrCmd));
+
   return result;
 }
 

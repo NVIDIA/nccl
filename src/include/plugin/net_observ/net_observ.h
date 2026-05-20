@@ -66,6 +66,7 @@ struct PortMappingInfo {
   std::string node;
   std::vector<int> ranks;
   std::string rdmaNic;
+  std::string rdmaNicIp;  // RDMA NIC IP address (e.g., "192.168.1.17")
 };
 
 struct Incident {
@@ -87,6 +88,11 @@ struct Incident {
   std::string ncclError;
 };
 
+struct RdmaNicInfo {
+  std::string name;  // e.g., "mlx5_0"
+  std::string ip;    // e.g., "192.168.1.17"
+};
+
 struct LldpNeighborInfo {
   std::string switchPort;
   std::string nodeIp;
@@ -101,6 +107,7 @@ struct LldpTopologyEntry {
   std::string switchPort;
   std::string nodeIp;
   std::string rdmaNic;
+  std::string rdmaNicIp;  // RDMA NIC IP address (e.g., "192.168.1.17")
   std::string description;
 };
 
@@ -117,6 +124,7 @@ class TopologyConfig {
   std::string getRdmaNicForPort(const std::string& portName) const;
   std::vector<std::string> getAllPorts() const;
   std::string getPortByNodeAndNic(const std::string& nodeIp, const std::string& rdmaNic) const;
+  std::string getPortByRdmaNicIp(const std::string& rdmaNicIp) const;
 
   static TopologyConfig loadFromFile(const std::string& configPath);
 };
@@ -202,7 +210,7 @@ class NetworkObserver {
   void emitConfirmedAlert(const Incident& incident);
 
   std::vector<LldpNeighborInfo> parseLldpJson(const std::string& jsonString);
-  std::string inferRdmaNicFromPortDesc(const std::string& portDesc, const std::string& nodeIp = "");
+  RdmaNicInfo inferRdmaNicFromPortDesc(const std::string& portDesc, const std::string& nodeIp = "");
   void updateTopologyFromLldp(const std::vector<LldpNeighborInfo>& lldpInfos,
                               const std::string& deviceModel);
   void printLldpTopology(const std::vector<LldpTopologyEntry>& entries);
@@ -210,7 +218,7 @@ class NetworkObserver {
   // SSH remote query helpers
   std::string getLocalIpAddress();
   std::string executeCommand(const std::string& cmd);
-  std::string queryRemoteRdmaNic(const std::string& remoteIp, const std::string& netdev);
+  RdmaNicInfo queryRemoteRdmaNic(const std::string& remoteIp, const std::string& netdev);
 };
 
 std::string extractJsonString(const std::string& json, const std::string& key);

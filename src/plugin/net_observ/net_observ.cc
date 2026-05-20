@@ -213,6 +213,13 @@ std::string TopologyConfig::getPortByNodeAndNic(const std::string& nodeIp, const
   return "";
 }
 
+std::string TopologyConfig::getPortByRdmaNicIp(const std::string& rdmaNicIp) const {
+  for (const auto& entry : portMapping) {
+    if (entry.second.rdmaNicIp == rdmaNicIp) return entry.first;
+  }
+  return "";
+}
+
 /**
  * @brief 从JSON配置文件加载拓扑配置
  * @param configPath 配置文件路径
@@ -292,6 +299,7 @@ TopologyConfig TopologyConfig::loadFromFile(const std::string& configPath) {
     PortMappingInfo info;
     info.node = extractJsonString(portObj, "node");
     info.rdmaNic = extractJsonString(portObj, "rdma_nic");
+    info.rdmaNicIp = extractJsonString(portObj, "rdma_nic_ip");
 
     // Parse ranks array
     auto ranksStart = portObj.find("\"ranks\"");
@@ -1294,44 +1302,87 @@ std::string NetworkObserver::executeCommand(const std::string& cmd) {
 }
 
 /**
- * @brief 通过SSH远程查询节点的RDMA NIC名称
+ * @brief 通过SSH远程查询节点的RDMA NIC名称和IP
  * @param remoteIp 远程节点IP地址
  * @param netdev 网卡设备名（如"ens43f0np0"）
- * @return RDMA NIC名称（如"mlx5_0"），查询失败返回空字符串
+ * @return RdmaNicInfo（name=mlx5设备名，ip=RDMA NIC IP），查询失败返回空name
  *
- * 通过SSH连接到远程节点，读取/sys/class/net/<netdev>/device/infiniband获取mlx5设备名
+ * 通过SSH连接到远程节点，读取/sys/class/net/<netdev>/device/infiniband获取mlx5设备名，
+ * 再通过ip命令获取该设备的IP地址。
  * 需要预先配置SSH免密登录
  *
  * 注意：使用BatchMode=yes防止密码提示阻塞
  */
-std::string NetworkObserver::queryRemoteRdmaNic(const std::string& remoteIp, const std::string& netdev) {
+RdmaNicInfo NetworkObserver::queryRemoteRdmaNic(const std::string& remoteIp, const std::string& netdev) {
+  RdmaNicInfo result;
   // 构建SSH命令，使用BatchMode防止密码提示阻塞
   // -o BatchMode=yes: 禁止交互式密码提示
   // -o ConnectTimeout=3: 连接超时3秒
   // -o StrictHostKeyChecking=no: 不检查主机密钥
   std::string sshCmd = "ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no " + remoteIp +
-                       " 'ls /sys/class/net/" + netdev + "/device/infiniband/ 2>/dev/null | grep mlx5_'";
+                       " 'mlx5_dev=$(ls /sys/class/net/" + netdev + "/device/infiniband/ 2>/dev/null | grep mlx5_); "
+                       "if [ -n \"$mlx5_dev\" ]; then "
+                       "  net_iface=$(ls /sys/class/infiniband/$mlx5_dev/device/net/ 2>/dev/null | head -1); "
+                       "  ip_addr=$(ip -o -4 addr show $net_iface 2>/dev/null | awk \"{print \\$4}\" | cut -d/ -f1); "
+                       "  echo \"$mlx5_dev $ip_addr\"; "
+                       "fi'";
 
-  std::string result = executeCommand(sshCmd);
+  std::string output = executeCommand(sshCmd);
+  output = trim(output);
 
-  if (!result.empty() && result.find("mlx5_") != std::string::npos) {
-    // 提取mlx5_X部分
-    size_t pos = result.find("mlx5_");
-    size_t end = pos + 5;
-    while (end < result.length() && result[end] >= '0' && result[end] <= '9') end++;
-    return result.substr(pos, end - pos);
+  if (!output.empty()) {
+    std::istringstream iss(output);
+    std::string namePart, ipPart;
+    iss >> namePart >> ipPart;
+    if (namePart.find("mlx5_") != std::string::npos) {
+      result.name = namePart;
+      result.ip = ipPart;
+    }
   }
 
-  INFO(NCCL_NET, "NET_OBSERV: Failed to query remote RDMA NIC from %s for %s (SSH may not be configured)",
-       remoteIp.c_str(), netdev.c_str());
-  return "";
+  if (result.name.empty()) {
+    INFO(NCCL_NET, "NET/OBSERV: Failed to query remote RDMA NIC from %s for %s (SSH may not be configured)",
+         remoteIp.c_str(), netdev.c_str());
+  }
+  return result;
 }
 
 /**
- * @brief 从服务器网卡描述获取RDMA NIC名称（支持本地和远程查询）
+ * @brief 从本地mlx5设备名获取对应的RDMA NIC IP地址
+ * @param mlx5Dev mlx5设备名（如"mlx5_0"）
+ * @return RDMA NIC IP地址（如"192.168.1.17"），获取失败返回空字符串
+ */
+static std::string getLocalRdmaNicIp(const std::string& mlx5Dev) {
+  std::string netDir = "/sys/class/infiniband/" + mlx5Dev + "/device/net/";
+  DIR* dir = opendir(netDir.c_str());
+  if (!dir) return "";
+  struct dirent* entry;
+  std::string netIface;
+  while ((entry = readdir(dir)) != nullptr) {
+    if (entry->d_name[0] == '.') continue;
+    netIface = entry->d_name;
+    break;
+  }
+  closedir(dir);
+  if (netIface.empty()) return "";
+
+  std::string ipCmd = "ip -o -4 addr show " + netIface + " 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1";
+  FILE* fp = popen(ipCmd.c_str(), "r");
+  if (!fp) return "";
+  char buf[64];
+  std::string ip;
+  if (fgets(buf, sizeof(buf), fp)) {
+    ip = trim(buf);
+  }
+  pclose(fp);
+  return ip;
+}
+
+/**
+ * @brief 从服务器网卡描述获取RDMA NIC名称和IP（支持本地和远程查询）
  * @param portDesc 服务器侧网卡描述（如"ens43f0np0"、"mlx5_0"）
  * @param nodeIp 节点IP地址，用于判断是本地还是远程查询
- * @return 获取到的RDMA NIC名称（如"mlx5_0"），无法获取返回空字符串
+ * @return RdmaNicInfo（name=mlx5设备名，ip=RDMA NIC IP），无法获取返回空name
  *
  * 获取规则：
  * 1. 如果描述中包含"mlx5_"，直接提取mlx5_X部分
@@ -1341,13 +1392,18 @@ std::string NetworkObserver::queryRemoteRdmaNic(const std::string& remoteIp, con
  *
  * 注意：SSH查询可能会失败，不影响主流程
  */
-std::string NetworkObserver::inferRdmaNicFromPortDesc(const std::string& portDesc, const std::string& nodeIp) {
+RdmaNicInfo NetworkObserver::inferRdmaNicFromPortDesc(const std::string& portDesc, const std::string& nodeIp) {
+  RdmaNicInfo result;
+
   // 如果描述中直接包含mlx5_，直接提取
   if (portDesc.find("mlx5_") != std::string::npos) {
     size_t pos = portDesc.find("mlx5_");
     size_t end = pos + 5;
     while (end < portDesc.length() && portDesc[end] >= '0' && portDesc[end] <= '9') end++;
-    return portDesc.substr(pos, end - pos);
+    result.name = portDesc.substr(pos, end - pos);
+    // Also fetch the IP for the local machine
+    result.ip = getLocalRdmaNicIp(result.name);
+    return result;
   }
 
   // 如果是网卡名（ens/enp/eth开头）
@@ -1371,31 +1427,34 @@ std::string NetworkObserver::inferRdmaNicFromPortDesc(const std::string& portDes
       if (dir) {
         struct dirent* entry;
         while ((entry = readdir(dir)) != nullptr) {
-          // 跳过 . 和 ..
           if (entry->d_name[0] == '.') continue;
-          // 查找 mlx5_X 格式的目录名
           std::string name(entry->d_name);
           if (name.find("mlx5_") != std::string::npos) {
+            result.name = name;
             closedir(dir);
-            return name;
+            break;
           }
         }
         closedir(dir);
       }
-      // 如果sysfs读取失败，回退到默认的mlx5_0
-      INFO(NCCL_NET, "NET_OBSERV: Failed to read IB device from sysfs for %s, fallback to mlx5_0",
-           portDesc.c_str());
-      return "mlx5_0";
+      if (result.name.empty()) {
+        // 如果sysfs读取失败，回退到默认的mlx5_0
+        INFO(NCCL_NET, "NET/OBSERV: Failed to read IB device from sysfs for %s, fallback to mlx5_0",
+             portDesc.c_str());
+        result.name = "mlx5_0";
+      }
+      // Get IP for the found mlx5 device
+      result.ip = getLocalRdmaNicIp(result.name);
+      return result;
     } else {
-      // 远程节点：通过SSH查询获取mlx5设备
-      // 注意：这需要预先配置SSH免密登录，否则会失败
-      INFO(NCCL_NET, "NET_OBSERV: Querying remote node %s for RDMA NIC of %s (requires SSH passwordless login)",
+      // 远程节点：通过SSH查询获取mlx5设备及其IP
+      INFO(NCCL_NET, "NET/OBSERV: Querying remote node %s for RDMA NIC of %s (requires SSH passwordless login)",
            nodeIp.c_str(), portDesc.c_str());
       return queryRemoteRdmaNic(nodeIp, portDesc);
     }
   }
 
-  return "";
+  return result;
 }
 
 /**
@@ -1420,7 +1479,9 @@ void NetworkObserver::updateTopologyFromLldp(const std::vector<LldpNeighborInfo>
     entry.switchPort = info.switchPort;
     entry.nodeIp = info.nodeIp;
     // 传递nodeIp以支持本地/远程查询判断
-    entry.rdmaNic = inferRdmaNicFromPortDesc(info.remotePortDesc, info.nodeIp);
+    RdmaNicInfo nicInfo = inferRdmaNicFromPortDesc(info.remotePortDesc, info.nodeIp);
+    entry.rdmaNic = nicInfo.name;
+    entry.rdmaNicIp = nicInfo.ip;
     entry.description = info.remoteSysName + " (" + info.remotePortDesc + ")";
 
     if (!entry.rdmaNic.empty()) {
@@ -1429,6 +1490,7 @@ void NetworkObserver::updateTopologyFromLldp(const std::vector<LldpNeighborInfo>
       PortMappingInfo pmInfo;
       pmInfo.node = entry.nodeIp;
       pmInfo.rdmaNic = entry.rdmaNic;
+      pmInfo.rdmaNicIp = entry.rdmaNicIp;
       topology_->portMapping[entry.switchPort] = pmInfo;
     }
   }
@@ -1729,14 +1791,14 @@ void ncclNetObservUpdateRankTopology(const std::vector<std::vector<int>>& nodeRa
 /**
  * @brief NetworkObserver成员方法：处理IB传输层错误
  * @param rdmaNic RDMA网卡设备名
- * @param peerIp 对端节点IP地址（可选）
+ * @param peerIp 对端RDMA NIC的IP地址（可选，如"192.168.1.17"）
  * @param wcStatus IB工作完成状态码
  *
  * 该函数在IB传输层检测到CQE错误时被调用，无需等待NCCL异常。
- * 相比confirmFromException的文本解析方式，这种方式更直接、更及时。
+ * peerIp是对端节点的RDMA NIC IP，用于在portMapping中通过rdmaNicIp字段查找对端交换机端口。
  */
 void NetworkObserver::handleIbError(const std::string& rdmaNic, const std::string& peerIp, int wcStatus, int tpRank, int tpRemoteRank) {
-  INFO(NCCL_NET, "NET_OBSERV: Direct IB error from %s, peer=%s, wc_status=%d, tpRank=%d, tpRemoteRank=%d",
+  INFO(NCCL_NET, "NET_OBSERV: Direct IB error from %s, peerRdmaNicIp=%s, wc_status=%d, tpRank=%d, tpRemoteRank=%d",
        rdmaNic.c_str(), peerIp.c_str(), wcStatus, tpRank, tpRemoteRank);
 
   std::lock_guard<std::mutex> lock(incidentsMutex_);
@@ -1768,34 +1830,21 @@ void NetworkObserver::handleIbError(const std::string& rdmaNic, const std::strin
       incident->nicDelta = ret.second;
     }
 
-    // 如果提供了peerIp，更新故障路径
+    // If peerIp (peer RDMA NIC IP) is provided, update fault path by matching it in portMapping
     if (!peerIp.empty()) {
-      INFO(NCCL_NET, "NET/OBSERV: Building fault path for peerIp=%s, rdmaNic=%s, localPort=%s",
+      INFO(NCCL_NET, "NET/OBSERV: Building fault path for peerRdmaNicIp=%s, rdmaNic=%s, localPort=%s",
            peerIp.c_str(), incident->rdmaNic.c_str(), incident->portName.c_str());
-      std::string peerPort = topology_->getPortByNodeAndNic(peerIp, incident->rdmaNic);
+      // Lookup peer port by RDMA NIC IP in portMapping
+      std::string peerPort = topology_->getPortByRdmaNicIp(peerIp);
       if (!peerPort.empty()) {
-        INFO(NCCL_NET, "NET/OBSERV: Found peerPort via getPortByNodeAndNic: %s", peerPort.c_str());
+        INFO(NCCL_NET, "NET/OBSERV: Found peerPort via getPortByRdmaNicIp: %s", peerPort.c_str());
         incident->faultPaths = buildFaultPath(
             {incident->portName}, incident->deviceModel, peerPort, tpRank, tpRemoteRank);
       } else {
-        INFO(NCCL_NET, "NET/OBSERV: peerPort not found via getPortByNodeAndNic, searching portMapping...");
-        bool foundInMapping = false;
-        for (const auto& pmEntry : topology_->portMapping) {
-          if (pmEntry.second.node == peerIp) {
-            INFO(NCCL_NET, "NET/OBSERV: Found peerIp in portMapping: port=%s, node=%s",
-                 pmEntry.first.c_str(), pmEntry.second.node.c_str());
-            incident->faultPaths = buildFaultPath(
-                {incident->portName}, incident->deviceModel, pmEntry.first, tpRank, tpRemoteRank);
-            foundInMapping = true;
-            break;
-          }
-        }
-        if (!foundInMapping) {
-          INFO(NCCL_NET, "NET/OBSERV: peerIp %s not found in portMapping, fault path unchanged", peerIp.c_str());
-        }
+        INFO(NCCL_NET, "NET/OBSERV: peerRdmaNicIp %s not found in portMapping, fault path unchanged", peerIp.c_str());
       }
     } else {
-      INFO(NCCL_NET, "NET/OBSERV: peerIp is empty, skipping fault path update");
+      INFO(NCCL_NET, "NET/OBSERV: peerRdmaNicIp is empty, skipping fault path update");
     }
 
     // 确认告警
@@ -1821,7 +1870,7 @@ void NetworkObserver::handleIbError(const std::string& rdmaNic, const std::strin
 /**
  * @brief C接口：处理IB传输层错误（从p2p.cc直接调用）
  * @param rdmaNic RDMA网卡设备名
- * @param peerIp 对端节点IP地址（可选）
+ * @param peerIp 对端RDMA NIC的IP地址（可选，如"192.168.1.17"）
  * @param wcStatus IB工作完成状态码
  */
 void ncclNetObservHandleIbError(const char* rdmaNic, const char* peerIp, int wcStatus, int tpRank, int tpRemoteRank) {
@@ -1834,7 +1883,7 @@ void ncclNetObservHandleIbError(const char* rdmaNic, const char* peerIp, int wcS
   std::string nicName(rdmaNic);
   std::string peerIpStr(peerIp ? peerIp : "");
 
-  INFO(NCCL_NET, "NET/OBSERV: %s: Handling IB error (rdmaNic=%s, peerIp=%s, wcStatus=%d, tpRank=%d, tpRemoteRank=%d)",
+  INFO(NCCL_NET, "NET/OBSERV: %s: Handling IB error (rdmaNic=%s, peerRdmaNicIp=%s, wcStatus=%d, tpRank=%d, tpRemoteRank=%d)",
        __func__, rdmaNic, peerIpStr.c_str(), wcStatus, tpRank, tpRemoteRank);
 
   std::lock_guard<std::mutex> lock(g_netObservMutex);

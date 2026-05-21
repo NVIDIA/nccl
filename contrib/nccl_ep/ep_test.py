@@ -94,11 +94,8 @@ def d2d(dst_ptr: int, src_ptr: int, nbytes: int, stream) -> None:
     _check_cuda(err)
 
 
-# ---------------------------------------------------------------------------
-# Device tensor helper: pairs a raw cudaMalloc allocation with its nccl_ep.Tensor.
-# Sized at create-time so the host side can compute h2d/d2h byte counts
-# without re-deriving from sizes.
-# ---------------------------------------------------------------------------
+# Mirrors ep_test.cu's low-level cudaMalloc pattern. Pythonic callers would
+# typically pass a torch tensor straight to nccl_ep.Tensor(...) instead.
 
 _DTYPE_BYTES = {
     nccl_core.INT8: 1,
@@ -116,32 +113,34 @@ _DTYPE_BYTES = {
 class DevTensor:
     """Owning pair of a cudaMalloc'd device buffer and its ``nccl_ep.Tensor``."""
 
-    def __init__(self, dev_ptr: int, nbytes: int, tensor: nccl_ep.Tensor) -> None:
-        self.dev_ptr = dev_ptr
+    def __init__(self, ndim: int, datatype, *sizes: int) -> None:
+        nbytes = _DTYPE_BYTES[datatype]
+        for s in sizes:
+            nbytes *= s
+        err, dev_ptr = cudart.cudaMalloc(nbytes)
+        _check_cuda(err)
+        self.data = int(dev_ptr)
         self.nbytes = nbytes
-        self.tensor = tensor
+        self.tensor: nccl_ep.Tensor | None = nccl_ep.Tensor(
+            self.data, dtype=int(datatype), shape=sizes,
+        )
 
     @property
     def ptr(self) -> int:
+        # binding_dataclass._coerce dispatches on .ptr, so DevTensor passes
+        # straight into DispatchInputs(tokens=...) etc.
         return self.tensor.ptr
 
     def destroy(self) -> None:
         if self.tensor is not None:
-            self.tensor.destroy()
-            self.tensor = None
-        if self.dev_ptr:
-            cudart.cudaFree(self.dev_ptr)
-            self.dev_ptr = 0
+            self.tensor = None  # release the Python-owned descriptor
+        if self.data:
+            cudart.cudaFree(self.data)
+            self.data = 0
 
 
 def make_tensor(ndim: int, datatype, *sizes: int) -> DevTensor:
-    nbytes = _DTYPE_BYTES[datatype]
-    for s in sizes:
-        nbytes *= s
-    err, dev_ptr = cudart.cudaMalloc(nbytes)
-    _check_cuda(err)
-    tensor = nccl_ep.Tensor.create(ndim, int(datatype), int(dev_ptr), *sizes)
-    return DevTensor(int(dev_ptr), nbytes, tensor)
+    return DevTensor(ndim, datatype, *sizes)
 
 
 def free_tensor(t: DevTensor | None) -> None:
@@ -271,7 +270,7 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
             for j in range(top_k):
                 topk_idx_host[i, j] = (local_experts_end + j) % num_experts
 
-    h2d(topk_idx.dev_ptr, topk_idx_host, stream)
+    h2d(topk_idx.data, topk_idx_host, stream)
 
     # -- recv_expert_counter for handle (only when disable_max_tokens) ------
     handle_recv_expert_counter: DevTensor | None = None
@@ -281,8 +280,8 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
         handle_recv_expert_counter = make_tensor(1, nccl_core.INT32, num_local_experts)
         handle_recv_total_counter = make_tensor(1, nccl_core.INT32, 1)
         handle_layout_info = nccl_ep.LayoutInfo(
-            expert_counters=handle_recv_expert_counter.tensor,
-            recv_total_counter=handle_recv_total_counter.tensor,
+            expert_counters=handle_recv_expert_counter,
+            recv_total_counter=handle_recv_total_counter,
         )
 
     # -- EP handle ----------------------------------------------------------
@@ -296,7 +295,7 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
         else nccl_ep.Layout.FLAT
     )
     ep_handle = nccl_ep.Handle.create(
-        ep_group, handle_layout, topk_idx.tensor,
+        ep_group, handle_layout, topk_idx,
         layout_info=handle_layout_info,
         config=nccl_ep.HandleConfig(),
         stream=stream,
@@ -305,7 +304,7 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
 
     if disable_max_tokens:
         total_host = np.zeros(1, dtype=np.int32)
-        d2h(total_host, handle_recv_total_counter.dev_ptr, stream)
+        d2h(total_host, handle_recv_total_counter.data, stream)
         stream.sync()
         num_recv_tokens = int(total_host[0])
     else:
@@ -341,26 +340,26 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
     # Fill input tokens: first ELEMENTS_TESTED_PER_TOKEN values = 0x1000 + my_rank
     input_host = np.zeros((num_tokens, hidden), dtype=np.uint16)
     input_host[:, :ELEMENTS_TESTED_PER_TOKEN] = 0x1000 + my_rank
-    h2d(input_tokens.dev_ptr, input_host, stream)
+    h2d(input_tokens.data, input_host, stream)
 
     # Fill topk_weights: 1.0 / top_k for every entry.
     tw_host = np.full(num_tokens * top_k, 1.0 / top_k, dtype=np.float32)
-    h2d(topk_weights.dev_ptr, tw_host, stream)
+    h2d(topk_weights.data, tw_host, stream)
 
     # Build the named-struct ABI bundles for dispatch.
     if is_ll:
-        dispatch_inputs = nccl_ep.DispatchInputs(tokens=input_tokens.tensor)
-        dispatch_outputs = nccl_ep.DispatchOutputs(tokens=output_tokens.tensor)
-        dispatch_layout = nccl_ep.LayoutInfo(expert_counters=local_tensor_recv_count.tensor)
+        dispatch_inputs = nccl_ep.DispatchInputs(tokens=input_tokens)
+        dispatch_outputs = nccl_ep.DispatchOutputs(tokens=output_tokens)
+        dispatch_layout = nccl_ep.LayoutInfo(expert_counters=local_tensor_recv_count)
     else:
         dispatch_inputs = nccl_ep.DispatchInputs(
-            tokens=input_tokens.tensor,
-            topk_weights=topk_weights.tensor,
+            tokens=input_tokens,
+            topk_weights=topk_weights,
         )
         dispatch_outputs = nccl_ep.DispatchOutputs(
-            tokens=output_tokens.tensor,
-            topk_weights=output_topk_weights.tensor,
-            topk_idx=output_topk_idx.tensor,
+            tokens=output_tokens,
+            topk_weights=output_topk_weights,
+            topk_idx=output_topk_idx,
         )
         dispatch_layout = None
 
@@ -380,11 +379,11 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
     recv_count_host: np.ndarray | None = None
     if is_ll:
         recv_count_host = np.empty(num_local_experts, dtype=np.int32)
-        d2h(recv_count_host, local_tensor_recv_count.dev_ptr, stream)
+        d2h(recv_count_host, local_tensor_recv_count.data, stream)
         stream.sync()
     elif disable_max_tokens and handle_recv_expert_counter is not None:
         recv_count_host = np.empty(num_local_experts, dtype=np.int32)
-        d2h(recv_count_host, handle_recv_expert_counter.dev_ptr, stream)
+        d2h(recv_count_host, handle_recv_expert_counter.data, stream)
         stream.sync()
 
     recv_from_expert_start = (local_experts_start + num_experts - num_local_experts) % num_experts
@@ -396,7 +395,7 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
     if not random_mode and is_ll and recv_count_host is not None:
         total_elems = num_local_experts * config.max_dispatch_tokens_per_rank * n_ranks * hidden
         output_host = np.empty(total_elems, dtype=np.uint16)
-        d2h(output_host, output_tokens.dev_ptr, stream)
+        d2h(output_host, output_tokens.data, stream)
         stream.sync()
 
         max_t = config.max_dispatch_tokens_per_rank * n_ranks
@@ -431,7 +430,7 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
                     break
 
         output_host = np.empty(num_recv_tokens * hidden, dtype=np.uint16)
-        d2h(output_host, output_tokens.dev_ptr, stream)
+        d2h(output_host, output_tokens.data, stream)
         stream.sync()
         check_count = num_recv_tokens if disable_max_tokens else num_tokens
         for i in range(check_count):
@@ -449,9 +448,9 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
     # Verify HT recv_topk_weights / recv_topk_idx.
     if not random_mode and not is_ll:
         recv_tw = np.empty(num_recv_tokens * top_k, dtype=np.float32)
-        d2h(recv_tw, output_topk_weights.dev_ptr, stream)
+        d2h(recv_tw, output_topk_weights.data, stream)
         recv_ti = np.empty(num_recv_tokens * top_k, dtype=np.int64)
-        d2h(recv_ti, output_topk_idx.dev_ptr, stream)
+        d2h(recv_ti, output_topk_idx.data, stream)
         stream.sync()
 
         # Only the first num_tokens rows are meaningful for the per-rank check.
@@ -505,26 +504,26 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
                 eo_host[t * hidden + j] = float_to_bf16(float((j + 1) * 2))
         stride_bytes = config.max_dispatch_tokens_per_rank * hidden * n_ranks * 2
         for e in range(num_local_experts):
-            h2d(expert_outputs.dev_ptr + e * stride_bytes, eo_host, stream)
+            h2d(expert_outputs.data + e * stride_bytes, eo_host, stream)
     else:
         expert_outputs = make_tensor(2, nccl_core.BFLOAT16, num_recv_tokens, hidden)
         eo_host = np.zeros(num_recv_tokens * hidden, dtype=np.uint16)
         for t in range(num_recv_tokens):
             for j in range(ELEMENTS_TESTED_PER_TOKEN):
                 eo_host[t * hidden + j] = float_to_bf16(float((j + 1) * 2))
-        h2d(expert_outputs.dev_ptr, eo_host, stream)
+        h2d(expert_outputs.data, eo_host, stream)
 
     combined_output = make_tensor(2, nccl_core.BFLOAT16, num_tokens, hidden)
 
     if is_ll:
-        combine_inputs = nccl_ep.CombineInputs(tokens=expert_outputs.tensor)
+        combine_inputs = nccl_ep.CombineInputs(tokens=expert_outputs)
         combine_outputs = nccl_ep.CombineOutputs(
-            tokens=combined_output.tensor,
-            topk_weights=topk_weights.tensor,  # per-token routing weights on receive side
+            tokens=combined_output,
+            topk_weights=topk_weights,  # per-token routing weights on receive side
         )
     else:
-        combine_inputs = nccl_ep.CombineInputs(tokens=expert_outputs.tensor)
-        combine_outputs = nccl_ep.CombineOutputs(tokens=combined_output.tensor)
+        combine_inputs = nccl_ep.CombineInputs(tokens=expert_outputs)
+        combine_outputs = nccl_ep.CombineOutputs(tokens=combined_output)
 
     print(f"Rank {my_rank}: Testing combine (send_only={bool(combine_send_only)})")
     ep_handle.combine(
@@ -541,7 +540,7 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
     combine_errors = 0
     if not random_mode:
         co_host = np.empty(num_tokens * hidden, dtype=np.uint16)
-        d2h(co_host, combined_output.dev_ptr, stream)
+        d2h(co_host, combined_output.data, stream)
         stream.sync()
         for i in range(num_tokens):
             for j in range(ELEMENTS_TESTED_PER_TOKEN):
@@ -580,10 +579,10 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
         first_d0 = first_co = None
         if not random_mode:
             first_d0 = np.empty(num_recv_tokens * hidden, dtype=np.uint16)
-            d2h(first_d0, output_tokens.dev_ptr, stream)
+            d2h(first_d0, output_tokens.data, stream)
 
             first_co = np.empty(num_tokens * hidden, dtype=np.uint16)
-            d2h(first_co, combined_output.dev_ptr, stream)
+            d2h(first_co, combined_output.data, stream)
             stream.sync()
 
         # New output tensors for the second dispatch / combine.
@@ -595,14 +594,14 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
         # topk_weights input for combine (copy from dispatch output).
         cached_ctw_in = make_tensor(2, nccl_core.FLOAT32, num_recv_tokens, top_k)
         cached_tensors.append(cached_ctw_in)
-        d2d(cached_ctw_in.dev_ptr, output_topk_weights.dev_ptr,
+        d2d(cached_ctw_in.data, output_topk_weights.data,
             num_recv_tokens * top_k * 4, stream)
 
         print(f"Rank {my_rank}: Testing cached mode - second dispatch "
               f"(send_only={bool(dispatch_send_only)})")
         ep_handle.dispatch(
-            nccl_ep.DispatchInputs(tokens=input_tokens.tensor),
-            nccl_ep.DispatchOutputs(tokens=cached_out_tokens.tensor),
+            nccl_ep.DispatchInputs(tokens=input_tokens),
+            nccl_ep.DispatchOutputs(tokens=cached_out_tokens),
             config=dispatch_config,
             stream=stream,
         )
@@ -615,12 +614,12 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
               f"(send_only={bool(combine_send_only)})")
         ep_handle.combine(
             nccl_ep.CombineInputs(
-                tokens=expert_outputs.tensor,
-                topk_weights=cached_ctw_in.tensor,
+                tokens=expert_outputs,
+                topk_weights=cached_ctw_in,
             ),
             nccl_ep.CombineOutputs(
-                tokens=cached_combined_output.tensor,
-                topk_weights=cached_combined_tw.tensor,
+                tokens=cached_combined_output,
+                topk_weights=cached_combined_tw,
             ),
             config=nccl_ep.CombineConfig(send_only=combine_send_only),
             stream=stream,
@@ -636,13 +635,13 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
 
         if not random_mode:
             sec_d0 = np.empty(num_recv_tokens * hidden, dtype=np.uint16)
-            d2h(sec_d0, cached_out_tokens.dev_ptr, stream)
+            d2h(sec_d0, cached_out_tokens.data, stream)
 
             sec_co = np.empty(num_tokens * hidden, dtype=np.uint16)
-            d2h(sec_co, cached_combined_output.dev_ptr, stream)
+            d2h(sec_co, cached_combined_output.data, stream)
 
             sec_tw = np.empty(num_tokens * top_k, dtype=np.float32)
-            d2h(sec_tw, cached_combined_tw.dev_ptr, stream)
+            d2h(sec_tw, cached_combined_tw.data, stream)
             stream.sync()
 
             d0_diff = first_d0 != sec_d0

@@ -1,12 +1,10 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""PyTorch interop helpers for nccl.ep.
+"""PyTorch interop for nccl.ep.
 
-Currently exposes :func:`get_nccl_comm_from_group`, which mirrors vLLM's
-pattern: always create a fresh NCCL communicator (rather than extracting
-one from a PyTorch ``ProcessGroup``, which is fragile across torch
-versions).
+vLLM-style helper to spin up an NCCL communicator that mirrors a torch
+``ProcessGroup``'s membership.
 """
 
 from __future__ import annotations
@@ -26,18 +24,7 @@ __all__ = ["get_nccl_comm_from_group"]
 
 
 def get_nccl_comm_from_group(group=None) -> nccl.Communicator:
-    """Create a fresh NCCL communicator that mirrors *group*'s membership.
-
-    Args:
-        group: A torch ``ProcessGroup``; ``None`` for the default group.
-
-    Returns:
-        Initialized :class:`nccl.core.Communicator`.
-
-    Raises:
-        ModuleNotFoundError: If PyTorch is not installed.
-        RuntimeError: If ``torch.distributed`` is not initialized.
-    """
+    """Fresh NCCL communicator mirroring *group*'s membership (default group if None)."""
     if not _torch_enabled:
         raise ModuleNotFoundError("PyTorch is not installed")
 

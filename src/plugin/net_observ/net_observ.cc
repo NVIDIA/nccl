@@ -750,7 +750,6 @@ void NetworkObserver::handleSwitchDropEvent(const ruijie_json::JsonRequest& even
 
   auto affectedRanks = topology_->getRanksForPort(portName);
   std::string rdmaNic = topology_->getRdmaNicForPort(portName);
-  // auto pathLines = buildFaultPath({portName}, deviceModel);
 
   std::pair<bool, std::map<std::string, int64_t>> ret = nicReader_.checkNicRetrans(rdmaNic);
 
@@ -770,8 +769,6 @@ void NetworkObserver::handleSwitchDropEvent(const ruijie_json::JsonRequest& even
   incident.deviceModel = deviceModel;
   incident.dropCount = dropCount;
   incident.timestamp = formattedTs;
-  incident.affectedRanks = affectedRanks;
-  // incident.faultPaths = pathLines;
   incident.rdmaNic = rdmaNic;
   incident.nicDelta = ret.second;
   incident.hasRetryGrowth = ret.first;
@@ -812,20 +809,20 @@ void NetworkObserver::handleSwitchDropEvent(const ruijie_json::JsonRequest& even
  * 黄色告警，表示检测到交换机丢包，正在监控NIC计数器
  */
 void NetworkObserver::emitSwitchDropAlert(const Incident& incident) {
-  INFO(NCCL_NET, "%s%s%s", COLOR_YELLOW, COLOR_BOLD,
-       "========================================================================");
-  INFO(NCCL_NET, "%s%s[NETWORK_ADVISOR][WATCH] Switch Packet Drop Detected%s",
+  WARN("%s%s========================================================================%s", COLOR_YELLOW, COLOR_BOLD,
+       COLOR_RESET);
+  WARN("%s%s[NETWORK_ADVISOR][WATCH] Switch Packet Drop Detected%s",
        COLOR_YELLOW, COLOR_BOLD, COLOR_RESET);
-  INFO(NCCL_NET, "%s%s========================================================================",
-       COLOR_YELLOW, COLOR_RESET);
-  INFO(NCCL_NET, "  %sIncident ID:%s    %s", COLOR_CYAN, COLOR_RESET, incident.incidentTag.c_str());
-  INFO(NCCL_NET, "  %sTimestamp:%s     %s", COLOR_CYAN, COLOR_RESET, incident.timestamp.c_str());
-  INFO(NCCL_NET, "  %sAffected Port:%s  %s", COLOR_CYAN, COLOR_RESET, incident.portName.c_str());
-  INFO(NCCL_NET, "  %sDrop Count:%s     %ld", COLOR_CYAN, COLOR_RESET, (long)incident.dropCount);
-  INFO(NCCL_NET, "  %sStatus:%s        %sWATCHING%s - Switch drop detected, checking NIC counters",
+  WARN("%s%s========================================================================%s",
+       COLOR_YELLOW, COLOR_BOLD, COLOR_RESET);
+  WARN("Incident ID:%s%s    %s", COLOR_CYAN, COLOR_RESET, incident.incidentTag.c_str());
+  WARN("Timestamp:%s%s     %s", COLOR_CYAN, COLOR_RESET, incident.timestamp.c_str());
+  WARN("Affected Port:%s%s  %s", COLOR_CYAN, COLOR_RESET, incident.portName.c_str());
+  WARN("Drop Count:%s%s     %ld", COLOR_CYAN, COLOR_RESET, (long)incident.dropCount);
+  WARN("Status:%s%s        %sWATCHING%s - Switch drop detected, checking NIC counters",
        COLOR_CYAN, COLOR_RESET, COLOR_YELLOW, COLOR_RESET);
-  INFO(NCCL_NET, "%s%s========================================================================",
-       COLOR_YELLOW, COLOR_RESET);
+  WARN("%s%s========================================================================%s",
+       COLOR_YELLOW, COLOR_BOLD, COLOR_RESET);
 }
 
 /**
@@ -842,38 +839,34 @@ void NetworkObserver::emitPredictiveAlert(const Incident& incident) {
     rankStr += "Rank-" + std::to_string(incident.affectedRanks[i]);
   }
 
-  INFO(NCCL_NET, "%s%s%s", COLOR_MAGENTA, COLOR_BOLD,
-       "========================================================================");
-  INFO(NCCL_NET, "%s%s[NETWORK_ADVISOR][PREDICTIVE] RDMA Retransmission Detected - Fault Path Predicted%s",
+  WARN("%s%s========================================================================%s", COLOR_MAGENTA, COLOR_BOLD,
+       COLOR_RESET);
+  WARN("%s%s[NETWORK_ADVISOR][PREDICTIVE] RDMA Retransmission Detected - Fault Path Predicted%s",
        COLOR_MAGENTA, COLOR_BOLD, COLOR_RESET);
-  INFO(NCCL_NET, "%s%s========================================================================",
-       COLOR_MAGENTA, COLOR_RESET);
-  INFO(NCCL_NET, "  %sIncident ID:%s    %s", COLOR_CYAN, COLOR_RESET, incident.incidentTag.c_str());
-  INFO(NCCL_NET, "  %sTimestamp:%s     %s", COLOR_CYAN, COLOR_RESET, incident.timestamp.c_str());
-  INFO(NCCL_NET, "  %sAffected Ranks:%s %s", COLOR_CYAN, COLOR_RESET, rankStr.c_str());
-  INFO(NCCL_NET, "  %sAffected Port:%s  %s", COLOR_CYAN, COLOR_RESET, incident.portName.c_str());
-  INFO(NCCL_NET, "  %sSwitch Drop:%s    %ld packets", COLOR_CYAN, COLOR_RESET, (long)incident.dropCount);
-  INFO(NCCL_NET, "  %sRDMA NIC:%s       %s", COLOR_CYAN, COLOR_RESET, incident.rdmaNic.c_str());
-  INFO(NCCL_NET, "  %sNIC Counter Delta:%s", COLOR_CYAN, COLOR_RESET);
+  WARN("%s%s========================================================================%s",
+       COLOR_MAGENTA, COLOR_BOLD, COLOR_RESET);
+  WARN("Incident ID:%s%s    %s", COLOR_CYAN, COLOR_RESET, incident.incidentTag.c_str());
+  WARN("Timestamp:%s%s     %s", COLOR_CYAN, COLOR_RESET, incident.timestamp.c_str());
+  WARN("Affected Port:%s%s  %s", COLOR_CYAN, COLOR_RESET, incident.portName.c_str());
+  WARN("Switch Drop:%s%s    %ld packets", COLOR_CYAN, COLOR_RESET, (long)incident.dropCount);
+  WARN("RDMA NIC:%s%s       %s", COLOR_CYAN, COLOR_RESET, incident.rdmaNic.c_str());
+  WARN("NIC Counter Delta:%s%s", COLOR_CYAN, COLOR_RESET);
   for (const auto& entry : incident.nicDelta) {
     std::string marker = (entry.first == "roce_adp_retrans") ? " <<<" : "";
-    INFO(NCCL_NET, "    %s%s:%s +%ld%s", COLOR_DIM, entry.first.c_str(), COLOR_RESET, (long)entry.second, marker.c_str());
+    WARN("    %s%s:%s +%ld%s", COLOR_DIM, entry.first.c_str(), COLOR_RESET, (long)entry.second, marker.c_str());
   }
-  for (const auto& pathLine : incident.faultPaths) {
-    INFO(NCCL_NET, "  %sPredicted Fault Path:%s %s", COLOR_CYAN, COLOR_RESET, pathLine.c_str());
-  }
-  INFO(NCCL_NET, "  %sRoot Cause:%s     [Congestion/Link Issue] Switch drop + NIC retry growth",
+  WARN("Root Cause:%s%s     [Congestion/Link Issue] Switch drop + NIC retry growth",
        COLOR_CYAN, COLOR_RESET);
-  INFO(NCCL_NET, "  %sImpact:%s         RDMA retransmission in progress, training may degrade",
+  WARN("Impact:%s%s         RDMA retransmission in progress, training may degrade",
        COLOR_CYAN, COLOR_RESET);
-  INFO(NCCL_NET, "  %sStatus:%s        %sPREDICTIVE%s - RDMA is retrying, timeout not yet reached",
+  WARN("Status:%s%s        %sPREDICTIVE%s - RDMA is retrying, timeout not yet reached",
        COLOR_CYAN, COLOR_RESET, COLOR_MAGENTA, COLOR_RESET);
-  INFO(NCCL_NET, "  %sNext Step:%s      Waiting for NCCL IBV_WC_RETRY_EXC_ERR exception",
+  WARN("Next Step:%s%s      Waiting for NCCL IBV_WC_RETRY_EXC_ERR exception",
        COLOR_CYAN, COLOR_RESET);
-  INFO(NCCL_NET, "  %sSuggestion:%s     Pre-emptive: check cable/optical module at %s",
+  WARN("Suggestion:%s%s     Pre-emptive: check cable/optical module at %s",
        COLOR_CYAN, COLOR_RESET, incident.portName.c_str());
-  INFO(NCCL_NET, "%s%s========================================================================",
-       COLOR_MAGENTA, COLOR_RESET);
+  WARN("%s%s========================================================================%s",
+       COLOR_MAGENTA, COLOR_BOLD, COLOR_RESET);
 }
 
 /**
@@ -905,42 +898,42 @@ void NetworkObserver::emitConfirmedAlert(const Incident& incident) {
     elapsedStr = elapsedBuf;
   }
 
-  INFO(NCCL_NET, "%s%s%s", COLOR_RED, COLOR_BOLD,
-       "========================================================================");
-  INFO(NCCL_NET, "%s%s[NETWORK_ADVISOR][CONFIRMED] RDMA Timeout - Fault Path Confirmed!%s",
+  WARN("%s%s========================================================================%s", COLOR_RED, COLOR_BOLD,
+       COLOR_RESET);
+  WARN("%s%s[NETWORK_ADVISOR][CONFIRMED] RDMA Timeout - Fault Path Confirmed!%s",
        COLOR_RED, COLOR_BOLD, COLOR_RESET);
-  INFO(NCCL_NET, "%s%s========================================================================",
-       COLOR_RED, COLOR_RESET);
-  INFO(NCCL_NET, "  %sIncident ID:%s    %s", COLOR_CYAN, COLOR_RESET, incident.incidentTag.c_str());
-  INFO(NCCL_NET, "  %sOriginal Time:%s  %s", COLOR_CYAN, COLOR_RESET, incident.timestamp.c_str());
-  INFO(NCCL_NET, "  %sConfirmed At:%s   %s", COLOR_CYAN, COLOR_RESET, confirmTs);
-  INFO(NCCL_NET, "  %sTime to Confirm:%s %s", COLOR_CYAN, COLOR_RESET, elapsedStr.c_str());
-  INFO(NCCL_NET, "  %sAffected Ranks:%s %s", COLOR_CYAN, COLOR_RESET, rankStr.c_str());
-  INFO(NCCL_NET, "  %sAffected Port:%s  %s", COLOR_CYAN, COLOR_RESET, incident.portName.c_str());
-  INFO(NCCL_NET, "  %sSwitch Drop:%s    %ld packets", COLOR_CYAN, COLOR_RESET, (long)incident.dropCount);
-  INFO(NCCL_NET, "  %sRDMA NIC:%s       %s", COLOR_CYAN, COLOR_RESET, incident.rdmaNic.c_str());
-  INFO(NCCL_NET, "  %sNIC Counter Delta (cumulative):%s", COLOR_CYAN, COLOR_RESET);
+  WARN("%s%s========================================================================%s",
+       COLOR_RED, COLOR_BOLD, COLOR_RESET);
+  WARN("  %sIncident ID:%s    %s", COLOR_CYAN, COLOR_RESET, incident.incidentTag.c_str());
+  WARN("  %sOriginal Time:%s  %s", COLOR_CYAN, COLOR_RESET, incident.timestamp.c_str());
+  WARN("  %sConfirmed At:%s   %s", COLOR_CYAN, COLOR_RESET, confirmTs);
+  WARN("  %sTime to Confirm:%s %s", COLOR_CYAN, COLOR_RESET, elapsedStr.c_str());
+  WARN("  %sAffected Ranks:%s %s", COLOR_CYAN, COLOR_RESET, rankStr.c_str());
+  WARN("  %sAffected Port:%s  %s", COLOR_CYAN, COLOR_RESET, incident.portName.c_str());
+  WARN("  %sSwitch Drop:%s    %ld packets", COLOR_CYAN, COLOR_RESET, (long)incident.dropCount);
+  WARN("  %sRDMA NIC:%s       %s", COLOR_CYAN, COLOR_RESET, incident.rdmaNic.c_str());
+  WARN("  %sNIC Counter Delta (cumulative):%s", COLOR_CYAN, COLOR_RESET);
   for (const auto& entry : incident.nicDelta) {
     std::string marker;
     if (entry.first == "roce_adp_retrans" || entry.first == "roce_adp_retrans_to") marker = " <<<";
-    INFO(NCCL_NET, "    %s%s:%s +%ld%s", COLOR_DIM, entry.first.c_str(), COLOR_RESET, (long)entry.second, marker.c_str());
+    WARN("    %s%s:%s +%ld%s", COLOR_DIM, entry.first.c_str(), COLOR_RESET, (long)entry.second, marker.c_str());
   }
   for (const auto& pathLine : incident.faultPaths) {
-    INFO(NCCL_NET, "  %sConfirmed Fault Path:%s %s", COLOR_CYAN, COLOR_RESET, pathLine.c_str());
+    WARN("  %sConfirmed Fault Path:%s %s", COLOR_CYAN, COLOR_RESET, pathLine.c_str());
   }
   if (!incident.ncclError.empty()) {
-    INFO(NCCL_NET, "  %sNCCL Error:%s    %s", COLOR_CYAN, COLOR_RESET, incident.ncclError.c_str());
+    WARN("  %sNCCL Error:%s    %s", COLOR_CYAN, COLOR_RESET, incident.ncclError.c_str());
   }
-  INFO(NCCL_NET, "  %sRoot Cause:%s     [Confirmed] Switch drop caused RDMA timeout on %s",
+  WARN("%sRoot Cause:%s     [Confirmed] Switch drop caused RDMA timeout on %s",
        COLOR_CYAN, COLOR_RESET, incident.rdmaNic.c_str());
-  INFO(NCCL_NET, "  %sImpact:%s         Training stalled, NCCL timeout likely",
+  WARN("%sImpact:%s         Training stalled, NCCL timeout likely",
        COLOR_CYAN, COLOR_RESET);
-  INFO(NCCL_NET, "  %sStatus:%s        %s%sCONFIRMED%s - RDMA timeout reached",
+  WARN("%sStatus:%s        %s%sCONFIRMED%s - RDMA timeout reached",
        COLOR_CYAN, COLOR_RESET, COLOR_RED, COLOR_BOLD, COLOR_RESET);
-  INFO(NCCL_NET, "  %sSuggestion:%s     Immediate action required: check %s and %s",
+  WARN("%sSuggestion:%s     Immediate action required: check %s and %s",
        COLOR_CYAN, COLOR_RESET, incident.portName.c_str(), incident.rdmaNic.c_str());
-  INFO(NCCL_NET, "%s%s========================================================================",
-       COLOR_RED, COLOR_RESET);
+  WARN("%s%s========================================================================%s",
+       COLOR_RED, COLOR_BOLD, COLOR_RESET);
 }
 
 /**
@@ -994,17 +987,15 @@ std::vector<std::string> NetworkObserver::buildFaultPath(
   for (const auto& faultPort : affectedPorts) {
     INFO(NCCL_NET, "NET/OBSERV: Processing faultPort=%s", faultPort.c_str());
 
+    // Get source NIC for the fault port
     std::string srcNic = topology_->getRdmaNicForPort(faultPort);
+    // Get fault port Node IP
     std::string srcNode = topology_->getNodeForPort(faultPort);
-    auto srcRanks = topology_->getRanksForPort(faultPort);
 
-    INFO(NCCL_NET, "NET/OBSERV: faultPort=%s -> srcNic=%s, srcNode=%s, srcRanks.size=%zu",
-         faultPort.c_str(), srcNic.c_str(), srcNode.c_str(), srcRanks.size());
+    INFO(NCCL_NET, "NET/OBSERV: faultPort=%s -> srcNic=%s, srcNode=%s",
+         faultPort.c_str(), srcNic.c_str(), srcNode.c_str());
 
-    if (srcRanks.empty()) {
-      INFO(NCCL_NET, "NET/OBSERV: Skipping faultPort=%s, no ranks found", faultPort.c_str());
-      continue;
-    }
+    std::string srcRankStr = "Rank-" + std::to_string(tpRank);
 
     std::vector<std::string> otherPorts;
     if (!peerPort.empty()) {
@@ -1027,23 +1018,20 @@ std::vector<std::string> NetworkObserver::buildFaultPath(
         INFO(NCCL_NET, "NET/OBSERV: Skipping otherPort=%s (same as faultPort)", otherPort.c_str());
         continue;
       }
-      auto dstRanks = topology_->getRanksForPort(otherPort);
-      INFO(NCCL_NET, "NET/OBSERV: otherPort=%s -> dstRanks.size=%zu", otherPort.c_str(), dstRanks.size());
-      if (dstRanks.empty()) {
-        INFO(NCCL_NET, "NET/OBSERV: Skipping otherPort=%s, no ranks found", otherPort.c_str());
-        continue;
-      }
-      // Use tpRank and tpRemoteRank from transport layer for accurate rank identification
-      // If -1, fall back to topology-derived ranks
-      int srcRank = (tpRank >= 0) ? tpRank : srcRanks[0];
-      int dstRank = (tpRemoteRank >= 0) ? tpRemoteRank : dstRanks[0];
-      std::string srcRankStr = "Rank-" + std::to_string(srcRank);
-      std::string dstRankStr = "Rank-" + std::to_string(dstRank);
+
       // Get destination NIC for the other port
       std::string dstNic = topology_->getRdmaNicForPort(otherPort);
-      std::string path = srcRankStr + " -> " + srcNic + " -> "
+      // Get other port Node IP
+      std::string dstNode = topology_->getNodeForPort(otherPort);
+      
+      INFO(NCCL_NET, "NET/OBSERV: otherPort=%s -> dstNic=%s, dstNode=%s",
+           otherPort.c_str(), dstNic.c_str(), dstNode.c_str());
+      
+      std::string dstRankStr = "Rank-" + std::to_string(tpRemoteRank);
+
+      std::string path = srcRankStr + "(" + "srcNode:" + srcNode + ")" + " -> " + srcNic + " -> "
           + deviceModel + "(" + faultPort + ") -> " + deviceModel + "(" + otherPort + ") -> "
-          + dstNic + " -> " + dstRankStr;
+          + dstNic + " -> " + dstRankStr + "(" + "dstNode:" + dstNode + ")";
       INFO(NCCL_NET, "NET/OBSERV: Built fault path: %s", path.c_str());
       paths.push_back(path);
     }
@@ -1383,17 +1371,6 @@ static std::string getLocalRdmaNicIp(const std::string& mlx5Dev) {
 RdmaNicInfo NetworkObserver::inferRdmaNicFromPortDesc(const std::string& portDesc, const std::string& nodeIp) {
   RdmaNicInfo result;
 
-  // 如果描述中直接包含mlx5_，直接提取
-  if (portDesc.find("mlx5_") != std::string::npos) {
-    size_t pos = portDesc.find("mlx5_");
-    size_t end = pos + 5;
-    while (end < portDesc.length() && portDesc[end] >= '0' && portDesc[end] <= '9') end++;
-    result.name = portDesc.substr(pos, end - pos);
-    // Also fetch the IP for the local machine
-    result.ip = getLocalRdmaNicIp(result.name);
-    return result;
-  }
-
   // 如果是网卡名（ens/enp/eth开头）
   if (portDesc.find("ens") != std::string::npos ||
       portDesc.find("enp") != std::string::npos ||
@@ -1419,7 +1396,6 @@ RdmaNicInfo NetworkObserver::inferRdmaNicFromPortDesc(const std::string& portDes
           std::string name(entry->d_name);
           if (name.find("mlx5_") != std::string::npos) {
             result.name = name;
-            closedir(dir);
             break;
           }
         }
@@ -1436,7 +1412,7 @@ RdmaNicInfo NetworkObserver::inferRdmaNicFromPortDesc(const std::string& portDes
       return result;
     } else {
       // 远程节点：通过SSH查询获取mlx5设备及其IP
-      INFO(NCCL_NET, "NET/OBSERV: Querying remote node %s for RDMA NIC of %s (requires SSH passwordless login)",
+      INFO(NCCL_NET, "NET/OBSERV: Querying remote node %s for RDMA NIC of %s",
            nodeIp.c_str(), portDesc.c_str());
       return queryRemoteRdmaNic(nodeIp, portDesc);
     }
@@ -1811,6 +1787,8 @@ void NetworkObserver::handleIbError(const std::string& rdmaNic, const std::strin
 
   // 更新并确认告警
   for (auto* incident : matched) {
+    // 更新受到影响的rank信息
+    incident->affectedRanks = {tpRank, tpRemoteRank};
     // 获取最新的NIC计数器
     std::pair<bool, std::map<std::string, int64_t>> ret =
         nicReader_.checkNicRetrans(incident->rdmaNic);

@@ -39,7 +39,7 @@ NCCL_EP_JIT_DEFS := -include $(abspath $(JIT_CONFIG_HEADER))
 
 # Include paths - add current directory so common.hpp can find device/ep headers
 # Include NCCL source headers for GIN support
-INCFLAGS = -I. -I./include -I./device -I$(BUILDDIR)/include -I$(BUILDDIR)/include/nccl_device -I../../src/include
+INCFLAGS = -I. -I./include -I./device -I$(BUILDDIR)/include -I$(BUILDDIR)/include/nccl_device
 
 # GIN (Global Input Network) support - adds multinode RDMA capabilities
 

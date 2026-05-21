@@ -79,7 +79,6 @@ set(NCCL_EP_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/device
     ${CMAKE_BINARY_DIR}/include
     ${CMAKE_BINARY_DIR}/include/nccl_device
-    ${CMAKE_SOURCE_DIR}/src/include
     ${CUDAToolkit_INCLUDE_DIRS}
     ${CUDAToolkit_INCLUDE_DIRS}/cccl
 )

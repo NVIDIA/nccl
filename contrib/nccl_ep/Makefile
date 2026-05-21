@@ -17,11 +17,22 @@ endif
 
 .PHONY: all clean lib ep_test ep_bench
 
+# Build layout:
+#   NCCL_HOME          — input: NCCL core headers + libnccl.so
+#   NCCL_EP_BUILDDIR   — output: NCCL EP artifacts
+# Defaults preserve the legacy single-tree layout: BUILDDIR controls both.
+
 BUILDDIR ?= $(abspath ../../build)
-OBJDIR := $(BUILDDIR)/obj/nccl_ep
-LIBDIR := $(BUILDDIR)/lib
-INCDIR := $(BUILDDIR)/include
-DST_DIR := $(BUILDDIR)/test/nccl_ep
+NCCL_HOME ?= $(BUILDDIR)
+NCCL_EP_BUILDDIR ?= $(BUILDDIR)
+
+NCCL_INCDIR := $(NCCL_HOME)/include
+NCCL_LIBDIR := $(NCCL_HOME)/lib
+
+OBJDIR := $(NCCL_EP_BUILDDIR)/obj/nccl_ep
+LIBDIR := $(NCCL_EP_BUILDDIR)/lib
+INCDIR := $(NCCL_EP_BUILDDIR)/include
+DST_DIR := $(NCCL_EP_BUILDDIR)/test/nccl_ep
 JIT_DIR := $(INCDIR)/nccl_ep
 JIT_CONFIG_HEADER := $(JIT_DIR)/config.h
 
@@ -38,8 +49,8 @@ NCCL_EP_JIT_HEADER_TARGETS := $(NCCL_EP_JIT_HEADERS:%=$(JIT_DIR)/%) $(NCCL_EP_JI
 NCCL_EP_JIT_DEFS := -include $(abspath $(JIT_CONFIG_HEADER))
 
 # Include paths - add current directory so common.hpp can find device/ep headers
-# Include NCCL source headers for GIN support
-INCFLAGS = -I. -I./include -I./device -I$(BUILDDIR)/include -I$(BUILDDIR)/include/nccl_device
+# Include NCCL headers from NCCL_HOME for GIN support
+INCFLAGS = -I. -I./include -I./device -I$(NCCL_INCDIR) -I$(NCCL_INCDIR)/nccl_device
 
 # GIN (Global Input Network) support - adds multinode RDMA capabilities
 
@@ -140,7 +151,7 @@ $(LIBTARGET): $(ALL_OBJ) $(DEVGLUE_OBJ) | $(NCCL_EP_JIT_HEADER_TARGETS)
 $(SOLIBTARGET): $(ALL_OBJ) $(DEVGLUE_OBJ) | $(NCCL_EP_JIT_HEADER_TARGETS)
 	@echo "Creating shared library $@"
 	@mkdir -p $(dir $@)
-	$(NVCC) -shared $(NVCC_GENCODE) -Xlinker -soname=$(SOLIBSONAME) -o $@ $^ -L$(LIBDIR) -lnccl -lcuda -Xlinker -rpath -Xlinker $(LIBDIR) $(LDFLAGS)
+	$(NVCC) -shared $(NVCC_GENCODE) -Xlinker -soname=$(SOLIBSONAME) -o $@ $^ -L$(NCCL_LIBDIR) -lnccl -lcuda -Xlinker -rpath -Xlinker $(NCCL_LIBDIR) $(LDFLAGS)
 
 # Versioned-soname and unversioned symlinks (libnccl_ep.so.MAJOR, libnccl_ep.so).
 $(LIBDIR)/$(SOLIBSONAME): $(SOLIBTARGET)
@@ -198,11 +209,11 @@ MPI_CFLAGS := -DMPI_SUPPORT -I$(MPI_HOME)/include
 MPI_LDFLAGS := -L$(MPI_HOME)/lib -lmpi
 
 EP_TEST_NVCUFLAGS := $(NVCC_GENCODE) -I$(INCDIR) $(MPI_CFLAGS) --compiler-options "-fPIC" -ccbin $(CXX) $(CXXSTD)
-EP_TEST_NVLDFLAGS := -L$(LIBDIR) -lnccl_ep -lnccl $(MPI_LDFLAGS) -lpthread -lrt -ldl -lcuda
+EP_TEST_NVLDFLAGS := -L$(LIBDIR) -lnccl_ep -L$(NCCL_LIBDIR) -lnccl $(MPI_LDFLAGS) -lpthread -lrt -ldl -lcuda
 
 # ep_bench: performance benchmark (NVTX for profiling, optional CUPTI for kernel timing)
 EP_BENCH_NVCUFLAGS := $(NVCC_GENCODE) -I$(INCDIR) $(MPI_CFLAGS) $(CUPTI_CFLAGS) --compiler-options "-fPIC" -ccbin $(CXX) $(CXXSTD)
-EP_BENCH_NVLDFLAGS := -L$(LIBDIR) -lnccl_ep -lnccl $(MPI_LDFLAGS) -lpthread -lrt -ldl -lcuda $(CUPTI_LDFLAGS)
+EP_BENCH_NVLDFLAGS := -L$(LIBDIR) -lnccl_ep -L$(NCCL_LIBDIR) -lnccl $(MPI_LDFLAGS) -lpthread -lrt -ldl -lcuda $(CUPTI_LDFLAGS)
 ep_test: lib $(DST_DIR)/ep_test
 ep_bench: lib $(DST_DIR)/ep_bench
 
@@ -231,9 +242,9 @@ MPI_CFLAGS := -DMPI_SUPPORT
 MPI_LDFLAGS := -lmpi_ibm
 
 EP_TEST_NVCUFLAGS := $(NVCC_GENCODE) -I$(INCDIR) $(MPI_CFLAGS) --compiler-options "-fPIC" -ccbin $(CXX) $(CXXSTD)
-EP_TEST_NVLDFLAGS := -L$(LIBDIR) -lnccl_ep -lnccl $(MPI_LDFLAGS) -lpthread -lrt -ldl -lcuda
+EP_TEST_NVLDFLAGS := -L$(LIBDIR) -lnccl_ep -L$(NCCL_LIBDIR) -lnccl $(MPI_LDFLAGS) -lpthread -lrt -ldl -lcuda
 EP_BENCH_NVCUFLAGS := $(NVCC_GENCODE) -I$(INCDIR) $(MPI_CFLAGS) $(CUPTI_CFLAGS) --compiler-options "-fPIC" -ccbin $(CXX) $(CXXSTD)
-EP_BENCH_NVLDFLAGS := -L$(LIBDIR) -lnccl_ep -lnccl $(MPI_LDFLAGS) -lpthread -lrt -ldl -lcuda $(CUPTI_LDFLAGS)
+EP_BENCH_NVLDFLAGS := -L$(LIBDIR) -lnccl_ep -L$(NCCL_LIBDIR) -lnccl $(MPI_LDFLAGS) -lpthread -lrt -ldl -lcuda $(CUPTI_LDFLAGS)
 ep_test: lib $(DST_DIR)/ep_test
 ep_bench: lib $(DST_DIR)/ep_bench
 

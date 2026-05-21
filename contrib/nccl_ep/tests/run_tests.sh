@@ -7,15 +7,16 @@
 # in test_common.h::exchange_uid). No MPI runtime required.
 #
 # Usage:
-#   NCCL_HOME=/path/to/nccl/build bash run_tests.sh [num_gpus]
+#   NCCL_HOME=/path/to/nccl/build NCCL_EP_BUILDDIR=/path/to/nccl_ep/build bash run_tests.sh [num_gpus]
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NCCL_HOME="${NCCL_HOME:-$(cd "${SCRIPT_DIR}/../../../build" && pwd)}"
+NCCL_EP_BUILDDIR="${NCCL_EP_BUILDDIR:-${NCCL_HOME}}"
 NUM_GPUS="${1:-$(nvidia-smi -L 2>/dev/null | wc -l)}"
 
-export LD_LIBRARY_PATH="${NCCL_HOME}/lib:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="${NCCL_EP_BUILDDIR}/lib:${NCCL_HOME}/lib:${LD_LIBRARY_PATH:-}"
 
 GTEST_ARGS="${GTEST_FILTER:+--gtest_filter=${GTEST_FILTER}}"
 OVERALL_FAIL=0
@@ -24,11 +25,11 @@ run_suite() {
     local BINARY="$1"
     local SUITE_NAME="$2"
     local MIN_GPUS="${3:-4}"
-    local TEST_BIN="${NCCL_HOME}/test/nccl_ep/${BINARY}"
+    local TEST_BIN="${NCCL_EP_BUILDDIR}/test/nccl_ep/${BINARY}"
 
     if [[ ! -x "${TEST_BIN}" ]]; then
         echo "ERROR: binary not found: ${TEST_BIN}"
-        echo "Build first:  make -C ${SCRIPT_DIR} NCCL_HOME=${NCCL_HOME}"
+        echo "Build first:  make -C ${SCRIPT_DIR} NCCL_HOME=${NCCL_HOME} NCCL_EP_BUILDDIR=${NCCL_EP_BUILDDIR}"
         return 1
     fi
 

@@ -16,6 +16,18 @@ string(REGEX REPLACE ".*#define NCCL_EP_PATCH ([0-9]+).*" "\\1" NCCL_EP_PATCH "$
 unset(_NCCL_EP_HEADER_CONTENT)
 message(STATUS "NCCL EP version: ${NCCL_EP_MAJOR}.${NCCL_EP_MINOR}.${NCCL_EP_PATCH}")
 
+# Build layout:
+#   NCCL_HOME          — input: NCCL core headers + libnccl.so
+#   NCCL_EP_BUILDDIR   — output: NCCL EP artifacts
+# Defaults preserve the legacy single-tree layout under CMAKE_BINARY_DIR.
+
+set(NCCL_HOME "${CMAKE_BINARY_DIR}" CACHE PATH "NCCL core build/install directory used by NCCL EP")
+set(NCCL_EP_BUILDDIR "${CMAKE_BINARY_DIR}" CACHE PATH "NCCL EP build output directory")
+set(NCCL_INCDIR "${NCCL_HOME}/include")
+set(NCCL_LIBDIR "${NCCL_HOME}/lib")
+set(NCCL_EP_INCDIR "${NCCL_EP_BUILDDIR}/include")
+set(NCCL_EP_LIBDIR "${NCCL_EP_BUILDDIR}/lib")
+
 # Source files
 set(NCCL_EP_HOST_SRC
     nccl_ep.cc
@@ -47,8 +59,8 @@ set(NCCL_EP_TARGETS nccl_ep_shared nccl_ep_static)
 
 set_target_properties(nccl_ep_shared nccl_ep_static PROPERTIES
     OUTPUT_NAME "nccl_ep"
-    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+    ARCHIVE_OUTPUT_DIRECTORY "${NCCL_EP_LIBDIR}"
+    LIBRARY_OUTPUT_DIRECTORY "${NCCL_EP_LIBDIR}"
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
     CUDA_ARCHITECTURES "90"
@@ -69,7 +81,7 @@ set_target_properties(nccl_ep_shared PROPERTIES
 )
 
 set_target_properties(nccl_ep_shared PROPERTIES
-    BUILD_RPATH "${CMAKE_BINARY_DIR}/lib"
+    BUILD_RPATH "${NCCL_LIBDIR}"
     INSTALL_RPATH "$ORIGIN"
 )
 
@@ -77,14 +89,14 @@ set(NCCL_EP_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/device
-    ${CMAKE_BINARY_DIR}/include
-    ${CMAKE_BINARY_DIR}/include/nccl_device
+    ${NCCL_INCDIR}
+    ${NCCL_INCDIR}/nccl_device
     ${CUDAToolkit_INCLUDE_DIRS}
     ${CUDAToolkit_INCLUDE_DIRS}/cccl
 )
 
-set(NCCL_EP_JIT_SOURCE_DIR "${CMAKE_BINARY_DIR}/include/nccl_ep")
-set(NCCL_EP_JIT_BUILD_INCLUDE_DIR "${CMAKE_BINARY_DIR}/include")
+set(NCCL_EP_JIT_SOURCE_DIR "${NCCL_EP_INCDIR}/nccl_ep")
+set(NCCL_EP_JIT_BUILD_INCLUDE_DIR "${NCCL_EP_INCDIR}")
 set(NCCL_EP_JIT_CUDA_INCLUDE_DIR "")
 if(CUDAToolkit_INCLUDE_DIRS)
     list(GET CUDAToolkit_INCLUDE_DIRS 0 NCCL_EP_JIT_CUDA_INCLUDE_DIR)
@@ -129,32 +141,34 @@ foreach(t IN LISTS NCCL_EP_TARGETS)
         target_link_libraries(${t} PUBLIC cuda)
     endif()
     target_include_directories(${t} PUBLIC ${NCCL_EP_INCLUDE_DIRS})
-    target_link_libraries(${t} PUBLIC nccl ${CUDAToolkit_LIBRARIES})
+    target_link_directories(${t} PUBLIC ${NCCL_LIBDIR})
+    target_link_libraries(${t} PUBLIC -lnccl)
+    target_link_libraries(${t} PUBLIC ${CUDAToolkit_LIBRARIES})
 endforeach()
 
-# Copy headers to build/include (runs at configure)
-file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/include")
-configure_file(include/nccl_ep.h    "${CMAKE_BINARY_DIR}/include/nccl_ep.h"    COPYONLY)
-configure_file(include/ep_enums.h   "${CMAKE_BINARY_DIR}/include/ep_enums.h"   COPYONLY)
+# Copy headers to NCCL_EP_BUILDDIR/include (runs at configure)
+file(MAKE_DIRECTORY "${NCCL_EP_INCDIR}")
+configure_file(include/nccl_ep.h    "${NCCL_EP_INCDIR}/nccl_ep.h"    COPYONLY)
+configure_file(include/ep_enums.h   "${NCCL_EP_INCDIR}/ep_enums.h"   COPYONLY)
 
-# Install to custom prefix
+# Install to NCCL_EP_BUILDDIR.
 install(FILES
     include/nccl_ep.h
     include/ep_enums.h
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    DESTINATION "${NCCL_EP_INCDIR}"
 )
 
 foreach(header IN LISTS NCCL_EP_JIT_HEADERS)
     get_filename_component(header_dir "${header}" DIRECTORY)
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/${header}"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/nccl_ep/${header_dir}"
+        DESTINATION "${NCCL_EP_INCDIR}/nccl_ep/${header_dir}"
     )
 endforeach()
 install(FILES include/common.hpp
-    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/nccl_ep"
+    DESTINATION "${NCCL_EP_INCDIR}/nccl_ep"
 )
 
 install(TARGETS ${NCCL_EP_TARGETS}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION "${NCCL_EP_LIBDIR}"
+    ARCHIVE DESTINATION "${NCCL_EP_LIBDIR}"
 )

@@ -450,6 +450,9 @@ typedef struct {
     unsigned int send_only;    // if non-zero, only initiate transfers; requires ncclEpComplete() afterward
                                //   supported for LL mode only; output tensors must still be preallocated
     unsigned int round_scales; // whether to round the scaling factors tensor into a power of 2
+    ncclEpPassDir_t pass_direction; // forward (default) or backward pass; HT-only.
+                               //   FWD requires inputs->topk_weights; BWD forbids it and forbids
+                               //   outputs->topk_weights / outputs->topk_idx.
 } ncclEpDispatchConfig_t;
 
 #define NCCL_EP_DISPATCH_CONFIG_INIT ((ncclEpDispatchConfig_t){ .size = (unsigned int)sizeof(ncclEpDispatchConfig_t) })
@@ -496,6 +499,9 @@ typedef struct {
     unsigned int size;         // = sizeof(this struct); first field, never moves
     unsigned int send_only;    // if non-zero, only initiate transfers; requires ncclEpComplete() afterward
                                //   supported for LL mode only; output tensors must still be preallocated
+    ncclEpPassDir_t pass_direction; // forward (default) or backward pass; HT-only.
+                               //   FWD forbids inputs->topk_weights; BWD requires inputs->topk_weights
+                               //   and outputs->topk_weights.
 } ncclEpCombineConfig_t;
 
 #define NCCL_EP_COMBINE_CONFIG_INIT ((ncclEpCombineConfig_t){ .size = (unsigned int)sizeof(ncclEpCombineConfig_t) })

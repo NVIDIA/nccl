@@ -2248,6 +2248,7 @@ ncclResult_t ncclEpDispatch(
     EP_OPTIONAL_STRUCT(layout_info);
     EP_OPTIONAL_STRUCT(config);
     const unsigned int send_only = config ? config->send_only : 0;
+    const ncclEpPassDir_t pass_direction = config ? config->pass_direction : NCCL_EP_FWD_PASS;
         ncclEpGroup_t group = handle->group;
 
     // Lazy num_tokens for callers that skip UpdateHandle (e.g. backward reusing forward's handle_mem).
@@ -2515,17 +2516,21 @@ ncclResult_t ncclEpDispatch(
             NCCLCHECK(resolveTensorWindowBinding(group, recv_scales, &recv_scales_local, 0, &recv_scales));
         }
 
-        // FWD: topk_weights present (routing live). BWD: caller passes neither.
-        bool forward_dispatch = (topk_weights != nullptr);
+        // Pass direction is the source of truth (default FWD via zero-init).
+        // FWD: topk_weights required (routing live). BWD: topk_weights forbidden.
+        const bool forward_dispatch = (pass_direction == NCCL_EP_FWD_PASS);
 
         if (forward_dispatch) {
+            if (topk_weights == nullptr) {
+                return ncclInvalidArgument;
+            }
             assert(topk_weights->ndim == 2 && topk_weights->datatype == ncclFloat32);
             assert(topk_weights->sizes[0] == handle->num_tokens);
             assert(topk_weights->sizes[1] == handle->num_topk);
             NCCLCHECK(resolveTensorWindowBinding(
                 group, topk_weights, &topk_weights_local, static_cast<uint64_t>(group->gin_config.dense_prob_offset), &topk_weights));
         } else {
-            if (recv_topk_weights != nullptr || recv_topk_idx != nullptr) {
+            if (topk_weights != nullptr || recv_topk_weights != nullptr || recv_topk_idx != nullptr) {
                 return ncclInvalidArgument;
             }
         }
@@ -2783,6 +2788,7 @@ ncclResult_t ncclEpCombine(
     EP_REQUIRE_STRUCT(outputs);
     EP_OPTIONAL_STRUCT(config);
     const unsigned int send_only = config ? config->send_only : 0;
+    const ncclEpPassDir_t pass_direction = config ? config->pass_direction : NCCL_EP_FWD_PASS;
 
     // Lazy num_tokens for callers that skip UpdateHandle (e.g. handle relocation between prepare and combine).
     if (handle->num_tokens == 0) {
@@ -2981,11 +2987,16 @@ ncclResult_t ncclEpCombine(
         const ncclEpTensor_t* topk_weights = tensor_ptr(inputs->topk_weights);
         const ncclEpTensor_t* combined_topk_weights = tensor_ptr(outputs->topk_weights);
 
-        // Determine if this is backward mode (topk_weights provided = backward combine)
-        bool backward_combine = (topk_weights != nullptr);
+        // Pass direction is the source of truth (default FWD via zero-init).
+        // BWD combine requires inputs->topk_weights and outputs->topk_weights;
+        // FWD combine forbids inputs->topk_weights (outputs->topk_weights is unused).
+        const bool backward_combine = (pass_direction == NCCL_EP_BWD_PASS);
         const bool expert_major_in = (handle->layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
 
         if (backward_combine) {
+            if (topk_weights == nullptr) {
+                return ncclInvalidArgument;
+            }
             if (combined_topk_weights == nullptr) {
                 return ncclInvalidArgument;
             }
@@ -3009,6 +3020,12 @@ ncclResult_t ncclEpCombine(
             NCCLCHECK(resolveTensorWindowBinding(
                 group, topk_weights, &topk_weights_local, static_cast<uint64_t>(group->gin_config.rdma_intra_node_red_prob_offset), &topk_weights));
             NCCLCHECK(resolveTensorWindowBinding(group, combined_topk_weights, &combined_topk_weights_local, 0, &combined_topk_weights));
+        } else {
+            // FWD combine: input topk_weights forbidden. outputs->topk_weights is unused
+            // by the kernel here and left to caller bookkeeping (not validated).
+            if (topk_weights != nullptr) {
+                return ncclInvalidArgument;
+            }
         }
 
         /* ===== Output tensors ===== */

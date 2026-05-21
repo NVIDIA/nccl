@@ -1011,8 +1011,11 @@ int main(int argc, char* argv[])
 
     printf("Rank %d: Testing cached mode - second ncclEpCombine call (send_only=%s)\n",
            myRank, combine_send_only ? "true" : "false");
+    // Cached combine exercises the BWD path: topk_weights provided on both sides.
+    ncclEpCombineConfig_t cached_combine_config = combine_config;
+    cached_combine_config.pass_direction = NCCL_EP_BWD_PASS;
     NCCLCHECK(ncclEpCombine(ep_handle, &cached_combine_inputs, &cached_combine_outputs,
-                            &combine_config, s));
+                            &cached_combine_config, s));
 
     printf("Rank %d: Testing cached mode - second ncclEpComplete (combine)\n", myRank);
     NCCLCHECK(ncclEpComplete(ep_handle, nullptr, s));

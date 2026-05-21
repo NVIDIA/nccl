@@ -100,3 +100,23 @@ typedef enum {
     NCCL_EP_LAYOUT_FLAT,
 } ncclEpLayout_t;
 
+/**
+ * Training pass direction for ncclEpDispatch / ncclEpCombine.
+ *
+ * Selects which side of the routing the call is participating in. FWD is the
+ * zero-init default so callers that don't set the field get forward-pass
+ * semantics.
+ *
+ *   FWD dispatch (HT): caller provides input topk_weights; routing is live.
+ *   BWD dispatch (HT): no input topk_weights; reuses cached routing state.
+ *   FWD combine  (HT): no input topk_weights; tokens only.
+ *   BWD combine  (HT): caller provides input topk_weights and receives
+ *                      combined topk_weights gradients alongside tokens.
+ *
+ * LL mode does not currently distinguish FWD/BWD and ignores this field.
+ */
+typedef enum {
+    NCCL_EP_FWD_PASS = 0,
+    NCCL_EP_BWD_PASS = 1,
+} ncclEpPassDir_t;
+

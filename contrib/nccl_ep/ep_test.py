@@ -128,12 +128,6 @@ class DevTensor:
             self.data, dtype=int(datatype), shape=sizes,
         )
 
-    @property
-    def ptr(self) -> int:
-        # binding_dataclass._coerce dispatches on .ptr, so DevTensor passes
-        # straight into DispatchInputs(tokens=...) etc.
-        return self.tensor.ptr
-
     def destroy(self) -> None:
         if self.tensor is not None:
             self.tensor = None  # release the Python-owned descriptor
@@ -283,8 +277,8 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
         handle_recv_expert_counter = make_tensor(1, nccl_core.INT32, num_local_experts)
         handle_recv_total_counter = make_tensor(1, nccl_core.INT32, 1)
         handle_layout_info = nccl_ep.LayoutInfo(
-            expert_counters=handle_recv_expert_counter,
-            recv_total_counter=handle_recv_total_counter,
+            expert_counters=handle_recv_expert_counter.tensor,
+            recv_total_counter=handle_recv_total_counter.tensor,
         )
 
     # -- EP handle ----------------------------------------------------------
@@ -298,7 +292,7 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
         else nccl_ep.Layout.FLAT
     )
     ep_handle = ep_group.create_handle(
-        handle_layout, topk_idx,
+        handle_layout, topk_idx.tensor,
         layout_info=handle_layout_info,
         config=nccl_ep.HandleConfig(),
         stream=stream,
@@ -351,18 +345,20 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
 
     # Build the named-struct ABI bundles for dispatch.
     if is_ll:
-        dispatch_inputs = nccl_ep.DispatchInputs(tokens=input_tokens)
-        dispatch_outputs = nccl_ep.DispatchOutputs(tokens=output_tokens)
-        dispatch_layout = nccl_ep.LayoutInfo(expert_counters=local_tensor_recv_count)
+        dispatch_inputs = nccl_ep.DispatchInputs(tokens=input_tokens.tensor)
+        dispatch_outputs = nccl_ep.DispatchOutputs(tokens=output_tokens.tensor)
+        dispatch_layout = nccl_ep.LayoutInfo(
+            expert_counters=local_tensor_recv_count.tensor,
+        )
     else:
         dispatch_inputs = nccl_ep.DispatchInputs(
-            tokens=input_tokens,
-            topk_weights=topk_weights,
+            tokens=input_tokens.tensor,
+            topk_weights=topk_weights.tensor,
         )
         dispatch_outputs = nccl_ep.DispatchOutputs(
-            tokens=output_tokens,
-            topk_weights=output_topk_weights,
-            topk_idx=output_topk_idx,
+            tokens=output_tokens.tensor,
+            topk_weights=output_topk_weights.tensor,
+            topk_idx=output_topk_idx.tensor,
         )
         dispatch_layout = None
 
@@ -519,14 +515,14 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
     combined_output = make_tensor(2, nccl_core.BFLOAT16, num_tokens, hidden)
 
     if is_ll:
-        combine_inputs = nccl_ep.CombineInputs(tokens=expert_outputs)
+        combine_inputs = nccl_ep.CombineInputs(tokens=expert_outputs.tensor)
         combine_outputs = nccl_ep.CombineOutputs(
-            tokens=combined_output,
-            topk_weights=topk_weights,  # per-token routing weights on receive side
+            tokens=combined_output.tensor,
+            topk_weights=topk_weights.tensor,  # per-token routing weights on receive side
         )
     else:
-        combine_inputs = nccl_ep.CombineInputs(tokens=expert_outputs)
-        combine_outputs = nccl_ep.CombineOutputs(tokens=combined_output)
+        combine_inputs = nccl_ep.CombineInputs(tokens=expert_outputs.tensor)
+        combine_outputs = nccl_ep.CombineOutputs(tokens=combined_output.tensor)
 
     print(f"Rank {my_rank}: Testing combine (send_only={bool(combine_send_only)})")
     ep_handle.combine(
@@ -603,8 +599,8 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
         print(f"Rank {my_rank}: Testing cached mode - second dispatch "
               f"(send_only={bool(dispatch_send_only)})")
         ep_handle.dispatch(
-            nccl_ep.DispatchInputs(tokens=input_tokens),
-            nccl_ep.DispatchOutputs(tokens=cached_out_tokens),
+            nccl_ep.DispatchInputs(tokens=input_tokens.tensor),
+            nccl_ep.DispatchOutputs(tokens=cached_out_tokens.tensor),
             config=dispatch_config,
             stream=stream,
         )
@@ -617,12 +613,12 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
               f"(send_only={bool(combine_send_only)})")
         ep_handle.combine(
             nccl_ep.CombineInputs(
-                tokens=expert_outputs,
-                topk_weights=cached_ctw_in,
+                tokens=expert_outputs.tensor,
+                topk_weights=cached_ctw_in.tensor,
             ),
             nccl_ep.CombineOutputs(
-                tokens=cached_combined_output,
-                topk_weights=cached_combined_tw,
+                tokens=cached_combined_output.tensor,
+                topk_weights=cached_combined_tw.tensor,
             ),
             config=nccl_ep.CombineConfig(send_only=combine_send_only),
             stream=stream,

@@ -19,8 +19,8 @@ The decorator:
    * objects with ``to_binding`` (nested ``binding_dataclass`` instances)
      → recursively materialized and ``memcpy``'d in via the binding's
      own setter
-   * objects with a ``.ptr`` integer attribute (e.g. :class:`Tensor`)
-     → ``obj.ptr`` (pointer address)
+   * :class:`nccl.ep.Tensor` → ``obj.ptr`` (pointer address). Any
+     other Tensor-shaped wrapper must hand a :class:`Tensor` itself.
 
 3. If the optional ``size_field_dtype`` argument is supplied, the
    binding's ``size_`` field is set to ``dtype.itemsize`` before any
@@ -74,8 +74,10 @@ def _coerce(val: Any) -> Any:
     to_binding = getattr(val, "to_binding", None)
     if callable(to_binding):
         return to_binding()
-    # Tensor-shaped objects: peel out the underlying pointer.
-    if not isinstance(val, (int, float, bool)) and hasattr(val, "ptr"):
+    # Tensor fields accept only nccl.ep.Tensor instances. Deferred
+    # import keeps _binding_helpers usable during nccl.ep package init.
+    from nccl.ep.tensor import Tensor
+    if isinstance(val, Tensor):
         return val.ptr
     return val
 

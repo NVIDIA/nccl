@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # See LICENSE.txt for more license information
@@ -7,45 +7,46 @@
 
 The Cython bindings under :mod:`nccl.bindings.nccl_ep` are auto-generated from
 ``contrib/nccl_ep/include/nccl_ep.h`` by cybind. This package provides
-hand-written Pythonic wrappers (:class:`EpGroup`, :class:`EpHandle`,
-:class:`NDTensor`) on top of those bindings.
+hand-written Pythonic wrappers (:class:`Group`, :class:`Handle`,
+:class:`Tensor`) on top of those bindings.
 """
 
-from nccl.ep.allocator import EpAllocConfig, ncclEpAllocFn_t, ncclEpFreeFn_t
-from nccl.ep.enums import NcclEpAlgorithm, NcclEpLayout
-from nccl.ep.group import EpGroup, EpGroupConfig
+from nccl.ep.allocator import AllocConfig, AllocFn, FreeFn
+from nccl.ep.enums import Algorithm, Layout, PassDir
+from nccl.ep.group import Group, GroupConfig
 from nccl.ep.handle import (
-    EpCombineConfig,
-    EpCombineInputs,
-    EpCombineOutputs,
-    EpDispatchConfig,
-    EpDispatchInputs,
-    EpDispatchOutputs,
-    EpHandle,
-    EpHandleConfig,
-    EpLayoutInfo,
+    CombineConfig,
+    CombineInputs,
+    CombineOutputs,
+    DispatchConfig,
+    DispatchInputs,
+    DispatchOutputs,
+    Handle,
+    HandleConfig,
+    LayoutInfo,
 )
-from nccl.ep.tensor import NDTensor
+from nccl.ep.tensor import Tensor
 
 
 __all__ = [
-    "EpAllocConfig",
-    "EpCombineConfig",
-    "EpCombineInputs",
-    "EpCombineOutputs",
-    "EpDispatchConfig",
-    "EpDispatchInputs",
-    "EpDispatchOutputs",
-    "EpGroup",
-    "EpGroupConfig",
-    "EpHandle",
-    "EpHandleConfig",
-    "EpLayoutInfo",
-    "NDTensor",
-    "NcclEpAlgorithm",
-    "NcclEpLayout",
-    "ncclEpAllocFn_t",
-    "ncclEpFreeFn_t",
+    "Algorithm",
+    "AllocConfig",
+    "AllocFn",
+    "CombineConfig",
+    "CombineInputs",
+    "CombineOutputs",
+    "DispatchConfig",
+    "DispatchInputs",
+    "DispatchOutputs",
+    "FreeFn",
+    "Group",
+    "GroupConfig",
+    "Handle",
+    "HandleConfig",
+    "Layout",
+    "LayoutInfo",
+    "PassDir",
+    "Tensor",
 ]
 
 

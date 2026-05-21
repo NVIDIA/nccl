@@ -1,7 +1,7 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""ND-tensor descriptor: ``NDTensor`` wrapping ``ncclNDTensor_t``."""
+"""Tensor descriptor: ``Tensor`` wrapping ``ncclEpTensor_t``."""
 
 from __future__ import annotations
 
@@ -12,20 +12,33 @@ from nccl.core.typing import NcclInvalid
 from nccl.bindings import nccl_ep as _ep_bindings
 
 
-__all__ = ["NDTensor"]
+__all__ = ["Tensor"]
 
 
-class NDTensor:
-    """Caller-owned device buffer wrapped as an ``ncclNDTensor_t``.
+class Tensor:
+    """Caller-owned device buffer wrapped as an ``ncclEpTensor_t``.
 
-    The descriptor does not own ``data``; the caller must keep the buffer alive
-    until :meth:`destroy` returns.
+    The descriptor (and its ``sizes`` array) are library-allocated via
+    :c:func:`ncclEpTensorAlloc`; the underlying device buffer (or NCCL
+    window registration) is caller-owned and must outlive :meth:`destroy`.
     """
 
-    def __init__(self, ptr: int, ndim: int = 0, sizes: tuple[int, ...] = ()) -> None:
-        self._ptr = ptr
+    def __init__(
+        self,
+        alloc_ptr: int,
+        ndim: int = 0,
+        sizes: tuple[int, ...] = (),
+    ) -> None:
+        self._alloc_ptr = alloc_ptr
         self._ndim = ndim
         self._sizes = sizes
+        # In-place view over the library-allocated struct (owner=self so
+        # the binding wrapper does not copy or free the memory).
+        self._view = (
+            _ep_bindings.Tensor.from_ptr(alloc_ptr, owner=self)
+            if alloc_ptr
+            else None
+        )
 
     @classmethod
     def create(
@@ -34,7 +47,7 @@ class NDTensor:
         datatype: int,
         data: int,
         *sizes: int,
-    ) -> NDTensor:
+    ) -> Tensor:
         """Wrap *data* in a tensor descriptor of shape *sizes*.
 
         ``len(sizes)`` must equal ``ndim``.
@@ -51,12 +64,13 @@ class NDTensor:
             raise ValueError(
                 f"ndim={ndim} but {len(sizes)} sizes given"
             )
-        # Pack into a contiguous size_t array; the C side reads exactly ndim entries.
         sizes_buf = np.asarray(sizes, dtype=np.uintp)
-        ptr = _ep_bindings.tensor_create(
-            ndim, int(datatype), data, sizes_buf.ctypes.data,
+        alloc_ptr = _ep_bindings.tensor_alloc(
+            ndim, int(datatype), sizes_buf.ctypes.data, 0,
         )
-        return cls(ptr, ndim, tuple(sizes))
+        obj = cls(alloc_ptr, ndim, tuple(sizes))
+        obj._view.data_ = data
+        return obj
 
     @classmethod
     def create_from_window(
@@ -66,12 +80,12 @@ class NDTensor:
         win: int,
         win_offset: int,
         *sizes: int,
-    ) -> NDTensor:
+    ) -> Tensor:
         """Wrap an offset into a registered NCCL window as a tensor descriptor.
 
-        The local data pointer is resolved lazily on first use with an
-        :class:`EpGroup`; :py:attr:`data` returns ``ncclInvalidUsage``
-        until that resolution happens.
+        The local data pointer is resolved lazily on first use with a
+        :class:`Group`; :py:attr:`data` returns 0 until that resolution
+        happens.
 
         Raises:
             ValueError: If ``ndim < 1`` or ``len(sizes) != ndim``.
@@ -83,22 +97,25 @@ class NDTensor:
                 f"ndim={ndim} but {len(sizes)} sizes given"
             )
         sizes_buf = np.asarray(sizes, dtype=np.uintp)
-        ptr = _ep_bindings.tensor_create_from_window(
-            ndim, int(datatype), win, win_offset, sizes_buf.ctypes.data,
+        alloc_ptr = _ep_bindings.tensor_alloc(
+            ndim, int(datatype), sizes_buf.ctypes.data, 0,
         )
-        return cls(ptr, ndim, tuple(sizes))
+        obj = cls(alloc_ptr, ndim, tuple(sizes))
+        obj._view.win_hdl = win
+        obj._view.win_offset = win_offset
+        return obj
 
     def _check_valid(self, operation: str) -> None:
-        if not self._ptr:
+        if not self._alloc_ptr:
             raise NcclInvalid(
-                f"Cannot {operation}: NDTensor is not initialized or has been destroyed"
+                f"Cannot {operation}: Tensor is not initialized or has been destroyed"
             )
 
     @property
     def ptr(self) -> int:
-        """Raw ``ncclNDTensor_t`` address."""
+        """Raw ``ncclEpTensor_t`` address."""
         self._check_valid("read ptr")
-        return self._ptr
+        return self._alloc_ptr
 
     @property
     def ndim(self) -> int:
@@ -108,9 +125,12 @@ class NDTensor:
 
     @property
     def data(self) -> int:
-        """Address of the underlying device buffer (caller-provided at create)."""
+        """Address of the underlying device buffer (caller-provided at create).
+
+        Returns 0 for window-backed tensors until resolved by the library.
+        """
         self._check_valid("read data")
-        return _ep_bindings.tensor_get_data(self._ptr)
+        return self._view.data_
 
     @property
     def sizes(self) -> tuple[int, ...]:
@@ -120,11 +140,12 @@ class NDTensor:
 
     def destroy(self) -> None:
         """Free the descriptor; the underlying buffer is the caller's responsibility."""
-        if self._ptr:
-            _ep_bindings.tensor_destroy(self._ptr)
-            self._ptr = 0
+        if self._alloc_ptr:
+            self._view = None
+            _ep_bindings.tensor_destroy(self._alloc_ptr)
+            self._alloc_ptr = 0
 
     def __repr__(self) -> str:
-        if self._ptr:
-            return f"<NDTensor ptr={self._ptr:#x}>"
-        return "<NDTensor destroyed>"
+        if self._alloc_ptr:
+            return f"<Tensor ptr={self._alloc_ptr:#x}>"
+        return "<Tensor destroyed>"

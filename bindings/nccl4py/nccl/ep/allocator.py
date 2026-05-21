@@ -1,7 +1,7 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""ctypes function-pointer types and ``EpAllocConfig`` wrapper for the NCCL EP allocator hooks.
+"""ctypes function-pointer types and ``AllocConfig`` wrapper for the NCCL EP allocator hooks.
 
 Match the C typedefs declared in ``nccl_ep.h``:
 
@@ -16,40 +16,39 @@ Usage
 Use either as a decorator to wrap a Python callable into a C-callable
 trampoline, extract the integer address with
 ``ctypes.cast(fn, ctypes.c_void_p).value``, then drop the addresses into
-:class:`EpAllocConfig` and attach it to :class:`EpGroupConfig.alloc`::
+:class:`AllocConfig` and attach it to :class:`GroupConfig.alloc`::
 
     import ctypes
     from cuda.bindings import runtime as cudart
     from nccl.ep import (
-        EpAllocConfig, EpGroup, EpGroupConfig,
-        ncclEpAllocFn_t, ncclEpFreeFn_t,
+        AllocConfig, AllocFn, FreeFn, Group, GroupConfig,
     )
 
-    @ncclEpAllocFn_t
+    @AllocFn
     def my_alloc(out_ptr, size, context):
         err, ptr = cudart.cudaMalloc(size)
         out_ptr[0] = ctypes.c_void_p(int(ptr))
         return int(err)
 
-    @ncclEpFreeFn_t
+    @FreeFn
     def my_free(ptr, context):
         err, = cudart.cudaFree(ptr)
         return int(err)
 
     alloc_addr = ctypes.cast(my_alloc, ctypes.c_void_p).value
     free_addr  = ctypes.cast(my_free,  ctypes.c_void_p).value
-    cfg = EpGroupConfig(
+    cfg = GroupConfig(
         ...,
-        alloc=EpAllocConfig(alloc_fn=alloc_addr, free_fn=free_addr),
+        alloc=AllocConfig(alloc_fn=alloc_addr, free_fn=free_addr),
     )
-    ep_group = EpGroup.create(comm, cfg)
+    group = Group.create(comm, cfg)
 
 Lifetime requirement
 --------------------
 
 The trampoline owns the underlying machine-code stub. ``my_alloc`` and
 ``my_free`` MUST stay alive for at least as long as the resulting
-:py:class:`EpGroup`; if either is garbage-collected while NCCL EP still
+:py:class:`Group`; if either is garbage-collected while NCCL EP still
 holds the pointer, the next call from C lands in freed memory and crashes.
 Stash them at module scope or on an object that outlives the group.
 
@@ -70,10 +69,10 @@ from nccl.bindings import nccl_ep as _ep_bindings
 from nccl.ep._binding_helpers import binding_dataclass
 
 
-__all__ = ["EpAllocConfig", "ncclEpAllocFn_t", "ncclEpFreeFn_t"]
+__all__ = ["AllocConfig", "AllocFn", "FreeFn"]
 
 
-ncclEpAllocFn_t = ctypes.CFUNCTYPE(
+AllocFn = ctypes.CFUNCTYPE(
     ctypes.c_int,
     ctypes.POINTER(ctypes.c_void_p),
     ctypes.c_size_t,
@@ -81,7 +80,7 @@ ncclEpAllocFn_t = ctypes.CFUNCTYPE(
 )
 """C-callable type: ``cudaError_t (*)(void** ptr, size_t size, void* context)``."""
 
-ncclEpFreeFn_t = ctypes.CFUNCTYPE(
+FreeFn = ctypes.CFUNCTYPE(
     ctypes.c_int,
     ctypes.c_void_p,
     ctypes.c_void_p,
@@ -89,9 +88,9 @@ ncclEpFreeFn_t = ctypes.CFUNCTYPE(
 """C-callable type: ``cudaError_t (*)(void* ptr, void* context)``."""
 
 
-@binding_dataclass(_ep_bindings.EpAllocConfig)
-class EpAllocConfig:
-    """Allocator hooks for :py:attr:`EpGroupConfig.alloc`.
+@binding_dataclass(_ep_bindings.AllocConfig)
+class AllocConfig:
+    """Allocator hooks for :py:attr:`GroupConfig.alloc`.
 
     Mirrors :c:struct:`ncclEpAllocConfig_t`. Leaving every field at 0
     selects NCCL EP's default ``cudaMalloc``/``cudaFree`` path.

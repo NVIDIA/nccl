@@ -1,12 +1,12 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Per-step EP handle (:class:`EpHandle`) and the Pythonic dataclasses
+"""Per-step EP handle (:class:`Handle`) and the Pythonic dataclasses
 that mirror the named-struct ABI used by NCCL EP's dispatch/combine
-entry points: :class:`EpHandleConfig`, :class:`EpDispatchConfig`,
-:class:`EpCombineConfig`, :class:`EpLayoutInfo`, :class:`EpDispatchInputs`,
-:class:`EpDispatchOutputs`, :class:`EpCombineInputs`,
-:class:`EpCombineOutputs`.
+entry points: :class:`HandleConfig`, :class:`DispatchConfig`,
+:class:`CombineConfig`, :class:`LayoutInfo`, :class:`DispatchInputs`,
+:class:`DispatchOutputs`, :class:`CombineInputs`,
+:class:`CombineOutputs`.
 """
 
 from __future__ import annotations
@@ -18,35 +18,35 @@ from nccl.core.typing import NcclInvalid, NcclStreamSpec
 
 from nccl.bindings import nccl_ep as _ep_bindings
 from nccl.ep._binding_helpers import binding_dataclass
-from nccl.ep.enums import NcclEpLayout
+from nccl.ep.enums import Layout, PassDir
 
 if TYPE_CHECKING:
-    from nccl.ep.group import EpGroup
-    from nccl.ep.tensor import NDTensor
+    from nccl.ep.group import Group
+    from nccl.ep.tensor import Tensor
 
 
 __all__ = [
-    "EpCombineConfig",
-    "EpCombineInputs",
-    "EpCombineOutputs",
-    "EpDispatchConfig",
-    "EpDispatchInputs",
-    "EpDispatchOutputs",
-    "EpHandle",
-    "EpHandleConfig",
-    "EpLayoutInfo",
+    "CombineConfig",
+    "CombineInputs",
+    "CombineOutputs",
+    "DispatchConfig",
+    "DispatchInputs",
+    "DispatchOutputs",
+    "Handle",
+    "HandleConfig",
+    "LayoutInfo",
 ]
 
 
 @binding_dataclass(
-    _ep_bindings.EpHandleConfig,
-    size_field_dtype=_ep_bindings.ep_handle_config_dtype,
+    _ep_bindings.HandleConfig,
+    size_field_dtype=_ep_bindings.handle_config_dtype,
 )
-class EpHandleConfig:
-    """Pythonic configuration for :py:meth:`EpHandle.create`.
+class HandleConfig:
+    """Pythonic configuration for :py:meth:`Handle.create`.
 
     Mirrors :c:struct:`ncclEpHandleConfig_t`. All fields default to 0;
-    constructing :py:class:`EpHandleConfig` without arguments is
+    constructing :py:class:`HandleConfig` without arguments is
     equivalent to passing ``NULL`` for the C ``config`` argument.
 
     Attributes:
@@ -63,49 +63,57 @@ class EpHandleConfig:
 
 
 @binding_dataclass(
-    _ep_bindings.EpDispatchConfig,
-    size_field_dtype=_ep_bindings.ep_dispatch_config_dtype,
+    _ep_bindings.DispatchConfig,
+    size_field_dtype=_ep_bindings.dispatch_config_dtype,
 )
-class EpDispatchConfig:
-    """Pythonic configuration for :py:meth:`EpHandle.dispatch`.
+class DispatchConfig:
+    """Pythonic configuration for :py:meth:`Handle.dispatch`.
 
     Mirrors :c:struct:`ncclEpDispatchConfig_t`. All fields default to 0;
-    constructing :py:class:`EpDispatchConfig` without arguments is
+    constructing :py:class:`DispatchConfig` without arguments is
     equivalent to passing ``NULL`` for the C ``config`` argument.
 
     Attributes:
         send_only: If non-zero, only initiate transfers and require a
-            subsequent :py:meth:`EpHandle.complete` call. LL mode only.
+            subsequent :py:meth:`Handle.complete` call. LL mode only.
         round_scales: If non-zero, round the scaling-factor tensor up to
             a power of 2.
+        pass_direction: Forward (default) or backward pass; HT-only.
+            ``FWD`` requires ``inputs.topk_weights``; ``BWD`` forbids it
+            and also forbids ``outputs.topk_weights`` / ``outputs.topk_idx``.
     """
 
     send_only: int = 0
     round_scales: int = 0
+    pass_direction: PassDir = PassDir.FWD
 
 
 @binding_dataclass(
-    _ep_bindings.EpCombineConfig,
-    size_field_dtype=_ep_bindings.ep_combine_config_dtype,
+    _ep_bindings.CombineConfig,
+    size_field_dtype=_ep_bindings.combine_config_dtype,
 )
-class EpCombineConfig:
-    """Pythonic configuration for :py:meth:`EpHandle.combine`.
+class CombineConfig:
+    """Pythonic configuration for :py:meth:`Handle.combine`.
 
     Mirrors :c:struct:`ncclEpCombineConfig_t`.
 
     Attributes:
         send_only: If non-zero, only initiate transfers and require a
-            subsequent :py:meth:`EpHandle.complete` call. LL mode only.
+            subsequent :py:meth:`Handle.complete` call. LL mode only.
+        pass_direction: Forward (default) or backward pass; HT-only.
+            ``FWD`` forbids ``inputs.topk_weights``; ``BWD`` requires
+            both ``inputs.topk_weights`` and ``outputs.topk_weights``.
     """
 
     send_only: int = 0
+    pass_direction: PassDir = PassDir.FWD
 
 
 @binding_dataclass(
-    _ep_bindings.EpLayoutInfo,
-    size_field_dtype=_ep_bindings.ep_layout_info_dtype,
+    _ep_bindings.LayoutInfo,
+    size_field_dtype=_ep_bindings.layout_info_dtype,
 )
-class EpLayoutInfo:
+class LayoutInfo:
     """Named local tensors carried alongside dispatch / create_handle.
 
     Mirrors :c:struct:`ncclEpLayoutInfo_t`. All fields are optional;
@@ -127,18 +135,18 @@ class EpLayoutInfo:
             received-token count.
     """
 
-    expert_counters: NDTensor | None = None
-    src_rank_counters: NDTensor | None = None
-    expert_offsets: NDTensor | None = None
-    recv_total_counter: NDTensor | None = None
+    expert_counters: Tensor | None = None
+    src_rank_counters: Tensor | None = None
+    expert_offsets: Tensor | None = None
+    recv_total_counter: Tensor | None = None
 
 
 @binding_dataclass(
-    _ep_bindings.EpDispatchInputs,
-    size_field_dtype=_ep_bindings.ep_dispatch_inputs_dtype,
+    _ep_bindings.DispatchInputs,
+    size_field_dtype=_ep_bindings.dispatch_inputs_dtype,
 )
-class EpDispatchInputs:
-    """Input tensor bundle for :py:meth:`EpHandle.dispatch`.
+class DispatchInputs:
+    """Input tensor bundle for :py:meth:`Handle.dispatch`.
 
     Mirrors :c:struct:`ncclEpDispatchInputs_t`. ``tokens`` is required;
     other fields are optional (``None`` → C-side ``NULL``).
@@ -150,17 +158,17 @@ class EpDispatchInputs:
         scales: 2D ``[num_tokens, hidden/128]`` float32. HT FP8 only.
     """
 
-    tokens: NDTensor | None = None
-    topk_weights: NDTensor | None = None
-    scales: NDTensor | None = None
+    tokens: Tensor | None = None
+    topk_weights: Tensor | None = None
+    scales: Tensor | None = None
 
 
 @binding_dataclass(
-    _ep_bindings.EpDispatchOutputs,
-    size_field_dtype=_ep_bindings.ep_dispatch_outputs_dtype,
+    _ep_bindings.DispatchOutputs,
+    size_field_dtype=_ep_bindings.dispatch_outputs_dtype,
 )
-class EpDispatchOutputs:
-    """Output tensor bundle for :py:meth:`EpHandle.dispatch`.
+class DispatchOutputs:
+    """Output tensor bundle for :py:meth:`Handle.dispatch`.
 
     Mirrors :c:struct:`ncclEpDispatchOutputs_t`. ``tokens`` is required;
     other fields are optional (``None`` → C-side ``NULL``).
@@ -175,18 +183,18 @@ class EpDispatchOutputs:
         topk_idx: LL rank-major or HT: received top-k expert indices.
     """
 
-    tokens: NDTensor | None = None
-    topk_weights: NDTensor | None = None
-    scales: NDTensor | None = None
-    topk_idx: NDTensor | None = None
+    tokens: Tensor | None = None
+    topk_weights: Tensor | None = None
+    scales: Tensor | None = None
+    topk_idx: Tensor | None = None
 
 
 @binding_dataclass(
-    _ep_bindings.EpCombineInputs,
-    size_field_dtype=_ep_bindings.ep_combine_inputs_dtype,
+    _ep_bindings.CombineInputs,
+    size_field_dtype=_ep_bindings.combine_inputs_dtype,
 )
-class EpCombineInputs:
-    """Input tensor bundle for :py:meth:`EpHandle.combine`.
+class CombineInputs:
+    """Input tensor bundle for :py:meth:`Handle.combine`.
 
     Mirrors :c:struct:`ncclEpCombineInputs_t`. ``tokens`` is required;
     other fields are optional.
@@ -198,16 +206,16 @@ class EpCombineInputs:
             backward combine only.
     """
 
-    tokens: NDTensor | None = None
-    topk_weights: NDTensor | None = None
+    tokens: Tensor | None = None
+    topk_weights: Tensor | None = None
 
 
 @binding_dataclass(
-    _ep_bindings.EpCombineOutputs,
-    size_field_dtype=_ep_bindings.ep_combine_outputs_dtype,
+    _ep_bindings.CombineOutputs,
+    size_field_dtype=_ep_bindings.combine_outputs_dtype,
 )
-class EpCombineOutputs:
-    """Output tensor bundle for :py:meth:`EpHandle.combine`.
+class CombineOutputs:
+    """Output tensor bundle for :py:meth:`Handle.combine`.
 
     Mirrors :c:struct:`ncclEpCombineOutputs_t`. ``tokens`` is required;
     other fields are optional.
@@ -222,8 +230,8 @@ class EpCombineOutputs:
             * HT backward: combined routing weights output.
     """
 
-    tokens: NDTensor | None = None
-    topk_weights: NDTensor | None = None
+    tokens: Tensor | None = None
+    topk_weights: Tensor | None = None
 
 
 def _materialize(value: object) -> object:
@@ -244,7 +252,7 @@ def _ptr_of(binding: object) -> int:
     return 0 if binding is None else binding.ptr
 
 
-class EpHandle:
+class Handle:
     """Per-step routing handle for dispatch/combine.
 
     Construct via :meth:`create`; release with :meth:`destroy`.
@@ -256,22 +264,22 @@ class EpHandle:
     @classmethod
     def create(
         cls,
-        ep_group: EpGroup,
-        layout: NcclEpLayout,
-        topk_idx: NDTensor,
+        group: Group,
+        layout: Layout,
+        topk_idx: Tensor,
         *,
-        layout_info: EpLayoutInfo | None = None,
-        config: EpHandleConfig | None = None,
+        layout_info: LayoutInfo | None = None,
+        config: HandleConfig | None = None,
         stream: NcclStreamSpec,
-    ) -> EpHandle:
+    ) -> Handle:
         """Collectively create+initialize an EP handle.
 
         HT mode performs metadata exchange as part of this call.
 
         Args:
-            ep_group: An initialized :class:`EpGroup`.
+            group: An initialized :class:`Group`.
             layout: Receive-buffer layout. Required — must not be
-                :py:attr:`NcclEpLayout.UNSET`. HT supports ``FLAT`` /
+                :py:attr:`Layout.UNSET`. HT supports ``FLAT`` /
                 ``EXPERT_MAJOR``; LL supports ``EXPERT_MAJOR`` /
                 ``RANK_MAJOR``.
             topk_idx: Top-k expert indices for this step
@@ -279,10 +287,10 @@ class EpHandle:
             stream: CUDA stream for the launch — accepts a
                 :class:`cuda.core.Stream`, an integer stream handle, or
                 any object exposing ``__cuda_stream__``.
-            layout_info: Optional :class:`EpLayoutInfo`. HT: set
+            layout_info: Optional :class:`LayoutInfo`. HT: set
                 ``expert_counters`` when ``max_dispatch_tokens_per_rank`` is
                 ``NCCL_EP_AUTO``. LL mode: must be ``None``.
-            config: Optional :class:`EpHandleConfig`. ``None`` forwards
+            config: Optional :class:`HandleConfig`. ``None`` forwards
                 NULL (use library defaults).
         """
         # Bind materialized structs to locals so their backing memory
@@ -290,7 +298,7 @@ class EpHandle:
         layout_b = _materialize(layout_info)
         config_b = _materialize(config)
         ptr = _ep_bindings.create_handle(
-            ep_group.ptr,
+            group.ptr,
             int(layout),
             topk_idx.ptr,
             _ptr_of(layout_b),
@@ -302,7 +310,7 @@ class EpHandle:
     def _check_valid(self, operation: str) -> None:
         if not self._ptr:
             raise NcclInvalid(
-                f"Cannot {operation}: EpHandle is not initialized or has been destroyed"
+                f"Cannot {operation}: Handle is not initialized or has been destroyed"
             )
 
     @property
@@ -313,9 +321,9 @@ class EpHandle:
 
     def update(
         self,
-        topk_idx: NDTensor,
+        topk_idx: Tensor,
         *,
-        layout_info: EpLayoutInfo | None = None,
+        layout_info: LayoutInfo | None = None,
         stream: NcclStreamSpec,
     ) -> None:
         """Rebind ``topk_idx`` for the next dispatch without reallocating buffers.
@@ -323,7 +331,7 @@ class EpHandle:
         Args:
             topk_idx: New top-k indices tensor for the upcoming dispatch.
             stream: CUDA stream for the launch.
-            layout_info: Optional :class:`EpLayoutInfo`. HT: set
+            layout_info: Optional :class:`LayoutInfo`. HT: set
                 ``expert_counters`` when ``max_dispatch_tokens_per_rank`` is
                 ``NCCL_EP_AUTO``. LL mode: must be ``None``.
 
@@ -341,11 +349,11 @@ class EpHandle:
 
     def dispatch(
         self,
-        inputs: EpDispatchInputs,
-        outputs: EpDispatchOutputs,
+        inputs: DispatchInputs,
+        outputs: DispatchOutputs,
         *,
-        layout_info: EpLayoutInfo | None = None,
-        config: EpDispatchConfig | None = None,
+        layout_info: LayoutInfo | None = None,
+        config: DispatchConfig | None = None,
         stream: NcclStreamSpec,
     ) -> None:
         """Dispatch tokens to the experts indicated by this handle's top-k routing.
@@ -355,16 +363,16 @@ class EpHandle:
         ``topk_idx`` argument is taken here.
 
         Args:
-            inputs: Input tensor bundle (:class:`EpDispatchInputs`).
+            inputs: Input tensor bundle (:class:`DispatchInputs`).
                 ``inputs.tokens`` is required.
             outputs: Pre-allocated output tensor bundle
-                (:class:`EpDispatchOutputs`). ``outputs.tokens`` is
+                (:class:`DispatchOutputs`). ``outputs.tokens`` is
                 required; per-layout shape rules in ``nccl_ep.h``.
             stream: CUDA stream for the launch.
-            layout_info: Optional :class:`EpLayoutInfo`. LL expert-major
+            layout_info: Optional :class:`LayoutInfo`. LL expert-major
                 writes ``expert_counters``; LL rank-major writes
                 ``src_rank_counters``.
-            config: Optional :class:`EpDispatchConfig`. ``None`` forwards
+            config: Optional :class:`DispatchConfig`. ``None`` forwards
                 NULL.
 
         See Also:
@@ -386,26 +394,26 @@ class EpHandle:
 
     def combine(
         self,
-        inputs: EpCombineInputs,
-        outputs: EpCombineOutputs,
+        inputs: CombineInputs,
+        outputs: CombineOutputs,
         *,
-        config: EpCombineConfig | None = None,
+        config: CombineConfig | None = None,
         stream: NcclStreamSpec,
     ) -> None:
         """Gather expert outputs back to each token's home rank.
 
-        Must reuse the same :class:`EpHandle` from the matching
+        Must reuse the same :class:`Handle` from the matching
         :meth:`dispatch`.
 
         Args:
-            inputs: Input tensor bundle (:class:`EpCombineInputs`).
+            inputs: Input tensor bundle (:class:`CombineInputs`).
                 ``inputs.tokens`` is required; per-layout shape rules in
                 ``nccl_ep.h``.
             outputs: Pre-allocated output tensor bundle
-                (:class:`EpCombineOutputs`). ``outputs.tokens`` is
+                (:class:`CombineOutputs`). ``outputs.tokens`` is
                 required (shape ``[num_tokens, hidden]``).
             stream: CUDA stream for the launch.
-            config: Optional :class:`EpCombineConfig`. ``None`` forwards
+            config: Optional :class:`CombineConfig`. ``None`` forwards
                 NULL.
 
         See Also:
@@ -452,5 +460,5 @@ class EpHandle:
 
     def __repr__(self) -> str:
         if self._ptr:
-            return f"<EpHandle ptr={self._ptr:#x}>"
-        return "<EpHandle destroyed>"
+            return f"<Handle ptr={self._ptr:#x}>"
+        return "<Handle destroyed>"

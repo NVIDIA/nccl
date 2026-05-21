@@ -15,11 +15,10 @@ from .cynccl_ep cimport *
 
 ctypedef ncclComm_t Comm
 ctypedef ncclWindow_t Window
-ctypedef ncclNDTensor_t NDTensor
-ctypedef ncclEpGroup_t EpGroup
-ctypedef ncclEpHandle_t EpHandle
-ctypedef ncclEpAllocFn_t EpAllocFn
-ctypedef ncclEpFreeFn_t EpFreeFn
+ctypedef ncclEpGroup_t Group
+ctypedef ncclEpHandle_t Handle
+ctypedef ncclEpAllocFn_t AllocFn
+ctypedef ncclEpFreeFn_t FreeFn
 
 ctypedef cudaStream_t Stream
 
@@ -28,8 +27,9 @@ ctypedef cudaStream_t Stream
 # Enum
 ###############################################################################
 
-ctypedef ncclEpAlgorithm_t _EpAlgorithm
-ctypedef ncclEpLayout_t _EpLayout
+ctypedef ncclEpAlgorithm_t _Algorithm
+ctypedef ncclEpLayout_t _Layout
+ctypedef ncclEpPassDir_t _PassDir
 
 
 ###############################################################################
@@ -37,11 +37,10 @@ ctypedef ncclEpLayout_t _EpLayout
 ###############################################################################
 
 cpdef int get_version() except? -1
+cpdef object tensor_alloc(unsigned int ndim, ncclDataType_t datatype, intptr_t sizes, intptr_t config)
+cpdef tensor_destroy(intptr_t tensor)
 cpdef intptr_t create_group(intptr_t comm, intptr_t config) except? 0
 cpdef group_destroy(intptr_t ep_group)
-cpdef intptr_t tensor_create(unsigned int ndim, ncclDataType_t datatype, intptr_t data, intptr_t sizes) except? 0
-cpdef intptr_t tensor_create_from_window(unsigned int ndim, ncclDataType_t datatype, intptr_t win, uint64_t win_offset, intptr_t sizes) except? 0
-cpdef tensor_destroy(intptr_t tensor)
 cpdef intptr_t create_handle(intptr_t ep_group, int layout, intptr_t topk_idx, intptr_t layout_info, intptr_t config, intptr_t stream) except? 0
 cpdef handle_destroy(intptr_t handle)
 cpdef size_t handle_mem_size(intptr_t ep_group, int layout, intptr_t config, int num_topk) except? -1
@@ -50,5 +49,3 @@ cpdef update_handle(intptr_t handle, intptr_t topk_idx, intptr_t layout_info, in
 cpdef dispatch(intptr_t handle, intptr_t inputs, intptr_t outputs, intptr_t layout_info, intptr_t config, intptr_t stream)
 cpdef combine(intptr_t handle, intptr_t inputs, intptr_t outputs, intptr_t config, intptr_t stream)
 cpdef complete(intptr_t handle, intptr_t config, intptr_t stream)
-cpdef intptr_t tensor_get_data(intptr_t tensor) except? 0
-cpdef tensor_get_sizes(intptr_t tensor, intptr_t sizes, intptr_t ndim)

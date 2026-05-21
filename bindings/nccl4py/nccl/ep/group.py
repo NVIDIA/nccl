@@ -1,7 +1,7 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""EP group lifecycle: ``EpGroup`` and its configuration ``EpGroupConfig``."""
+"""EP group lifecycle: ``Group`` and its configuration ``GroupConfig``."""
 
 from __future__ import annotations
 
@@ -12,25 +12,25 @@ from nccl.core.typing import NcclInvalid
 
 from nccl.bindings import nccl_ep as _ep_bindings
 from nccl.ep._binding_helpers import binding_dataclass
-from nccl.ep.allocator import EpAllocConfig
-from nccl.ep.enums import NcclEpAlgorithm
+from nccl.ep.allocator import AllocConfig
+from nccl.ep.enums import Algorithm
 
 if TYPE_CHECKING:
     from nccl.core import Communicator
 
 
-__all__ = ["EpGroup", "EpGroupConfig"]
+__all__ = ["Group", "GroupConfig"]
 
 
 _NCCL_EP_API_VERSION = 1
 
 
 @binding_dataclass(
-    _ep_bindings.EpGroupConfig,
-    size_field_dtype=_ep_bindings.ep_group_config_dtype,
+    _ep_bindings.GroupConfig,
+    size_field_dtype=_ep_bindings.group_config_dtype,
 )
-class EpGroupConfig:
-    """Pythonic configuration for :py:meth:`EpGroup.create`.
+class GroupConfig:
+    """Pythonic configuration for :py:meth:`Group.create`.
 
     Mirrors :c:struct:`ncclEpGroupConfig_t`. Fields left at their
     defaults (``0`` or ``LOW_LATENCY``/``AUTO``) forward as
@@ -57,7 +57,7 @@ class EpGroupConfig:
             default.
         version: ABI version. Defaults to ``NCCL_EP_API_VERSION``.
         alloc: Device allocator hooks. Default
-            :class:`EpAllocConfig` selects ``cudaMalloc``/``cudaFree``.
+            :class:`AllocConfig` selects ``cudaMalloc``/``cudaFree``.
         enable_mask: Enable active-mask support for fault tolerance
             (LL mode only). When ``True``, a per-rank mask buffer is
             allocated; remote ranks that time out during dispatch or
@@ -74,7 +74,7 @@ class EpGroupConfig:
         ``contrib/nccl_ep/include/nccl_ep.h``
     """
 
-    algorithm: NcclEpAlgorithm = NcclEpAlgorithm.LOW_LATENCY
+    algorithm: Algorithm = Algorithm.LOW_LATENCY
     num_experts: int = 0
     max_dispatch_tokens_per_rank: int = 0
     max_recv_tokens_per_rank: int = 0
@@ -84,12 +84,12 @@ class EpGroupConfig:
     num_channels: int = 0
     max_num_sms: int = 0
     version: int = _NCCL_EP_API_VERSION
-    alloc: EpAllocConfig = field(default_factory=EpAllocConfig)
+    alloc: AllocConfig = field(default_factory=AllocConfig)
     enable_mask: bool = False
     timeout_ns: int = 0
 
 
-class EpGroup:
+class Group:
     """A NCCL EP group built on top of an existing :class:`Communicator`.
 
     Construct via :meth:`create`; release with :meth:`destroy`.
@@ -102,15 +102,15 @@ class EpGroup:
     def create(
         cls,
         comm: Communicator,
-        config: EpGroupConfig,
-    ) -> EpGroup:
+        config: GroupConfig,
+    ) -> Group:
         """Collectively create an EP group across all ranks of *comm*.
 
         Args:
             comm: An initialized :class:`nccl.core.Communicator`.
-            config: Filled-in :class:`EpGroupConfig` describing the
+            config: Filled-in :class:`GroupConfig` describing the
                 group. Custom allocators live in ``config.alloc``
-                (:class:`EpAllocConfig`) — see :mod:`nccl.ep.allocator`
+                (:class:`AllocConfig`) — see :mod:`nccl.ep.allocator`
                 for usage and lifetime requirements.
 
         See Also:
@@ -123,7 +123,7 @@ class EpGroup:
     def _check_valid(self, operation: str) -> None:
         if not self._ptr:
             raise NcclInvalid(
-                f"Cannot {operation}: EpGroup is not initialized or has been destroyed"
+                f"Cannot {operation}: Group is not initialized or has been destroyed"
             )
 
     @property
@@ -140,5 +140,5 @@ class EpGroup:
 
     def __repr__(self) -> str:
         if self._ptr:
-            return f"<EpGroup ptr={self._ptr:#x}>"
-        return "<EpGroup destroyed>"
+            return f"<Group ptr={self._ptr:#x}>"
+        return "<Group destroyed>"

@@ -103,11 +103,10 @@ cdef object __symbol_lock = threading.Lock()
 cdef bint __py_nccl_ep_init = False
 
 cdef void* __ncclEpGetVersion = NULL
+cdef void* __ncclEpTensorAlloc = NULL
+cdef void* __ncclEpTensorDestroy = NULL
 cdef void* __ncclEpCreateGroup = NULL
 cdef void* __ncclEpGroupDestroy = NULL
-cdef void* __ncclEpTensorCreate = NULL
-cdef void* __ncclEpTensorCreateFromWindow = NULL
-cdef void* __ncclEpTensorDestroy = NULL
 cdef void* __ncclEpCreateHandle = NULL
 cdef void* __ncclEpHandleDestroy = NULL
 cdef void* __ncclEpHandleMemSize = NULL
@@ -116,8 +115,6 @@ cdef void* __ncclEpUpdateHandle = NULL
 cdef void* __ncclEpDispatch = NULL
 cdef void* __ncclEpCombine = NULL
 cdef void* __ncclEpComplete = NULL
-cdef void* __ncclEpTensorGetData = NULL
-cdef void* __ncclEpTensorGetSizes = NULL
 
 
 cdef void* load_library() except* with gil:
@@ -152,6 +149,20 @@ cdef int _check_or_init_nccl_ep() except -1 nogil:
                 handle = load_library()
             __ncclEpGetVersion = dlsym(handle, 'ncclEpGetVersion')
 
+        global __ncclEpTensorAlloc
+        __ncclEpTensorAlloc = dlsym(RTLD_DEFAULT, 'ncclEpTensorAlloc')
+        if __ncclEpTensorAlloc == NULL:
+            if handle == NULL:
+                handle = load_library()
+            __ncclEpTensorAlloc = dlsym(handle, 'ncclEpTensorAlloc')
+
+        global __ncclEpTensorDestroy
+        __ncclEpTensorDestroy = dlsym(RTLD_DEFAULT, 'ncclEpTensorDestroy')
+        if __ncclEpTensorDestroy == NULL:
+            if handle == NULL:
+                handle = load_library()
+            __ncclEpTensorDestroy = dlsym(handle, 'ncclEpTensorDestroy')
+
         global __ncclEpCreateGroup
         __ncclEpCreateGroup = dlsym(RTLD_DEFAULT, 'ncclEpCreateGroup')
         if __ncclEpCreateGroup == NULL:
@@ -165,27 +176,6 @@ cdef int _check_or_init_nccl_ep() except -1 nogil:
             if handle == NULL:
                 handle = load_library()
             __ncclEpGroupDestroy = dlsym(handle, 'ncclEpGroupDestroy')
-
-        global __ncclEpTensorCreate
-        __ncclEpTensorCreate = dlsym(RTLD_DEFAULT, 'ncclEpTensorCreate')
-        if __ncclEpTensorCreate == NULL:
-            if handle == NULL:
-                handle = load_library()
-            __ncclEpTensorCreate = dlsym(handle, 'ncclEpTensorCreate')
-
-        global __ncclEpTensorCreateFromWindow
-        __ncclEpTensorCreateFromWindow = dlsym(RTLD_DEFAULT, 'ncclEpTensorCreateFromWindow')
-        if __ncclEpTensorCreateFromWindow == NULL:
-            if handle == NULL:
-                handle = load_library()
-            __ncclEpTensorCreateFromWindow = dlsym(handle, 'ncclEpTensorCreateFromWindow')
-
-        global __ncclEpTensorDestroy
-        __ncclEpTensorDestroy = dlsym(RTLD_DEFAULT, 'ncclEpTensorDestroy')
-        if __ncclEpTensorDestroy == NULL:
-            if handle == NULL:
-                handle = load_library()
-            __ncclEpTensorDestroy = dlsym(handle, 'ncclEpTensorDestroy')
 
         global __ncclEpCreateHandle
         __ncclEpCreateHandle = dlsym(RTLD_DEFAULT, 'ncclEpCreateHandle')
@@ -242,20 +232,6 @@ cdef int _check_or_init_nccl_ep() except -1 nogil:
             if handle == NULL:
                 handle = load_library()
             __ncclEpComplete = dlsym(handle, 'ncclEpComplete')
-
-        global __ncclEpTensorGetData
-        __ncclEpTensorGetData = dlsym(RTLD_DEFAULT, 'ncclEpTensorGetData')
-        if __ncclEpTensorGetData == NULL:
-            if handle == NULL:
-                handle = load_library()
-            __ncclEpTensorGetData = dlsym(handle, 'ncclEpTensorGetData')
-
-        global __ncclEpTensorGetSizes
-        __ncclEpTensorGetSizes = dlsym(RTLD_DEFAULT, 'ncclEpTensorGetSizes')
-        if __ncclEpTensorGetSizes == NULL:
-            if handle == NULL:
-                handle = load_library()
-            __ncclEpTensorGetSizes = dlsym(handle, 'ncclEpTensorGetSizes')
         __py_nccl_ep_init = True
         return 0
 
@@ -274,20 +250,17 @@ cpdef dict _inspect_function_pointers():
     global __ncclEpGetVersion
     data["__ncclEpGetVersion"] = <intptr_t>__ncclEpGetVersion
 
+    global __ncclEpTensorAlloc
+    data["__ncclEpTensorAlloc"] = <intptr_t>__ncclEpTensorAlloc
+
+    global __ncclEpTensorDestroy
+    data["__ncclEpTensorDestroy"] = <intptr_t>__ncclEpTensorDestroy
+
     global __ncclEpCreateGroup
     data["__ncclEpCreateGroup"] = <intptr_t>__ncclEpCreateGroup
 
     global __ncclEpGroupDestroy
     data["__ncclEpGroupDestroy"] = <intptr_t>__ncclEpGroupDestroy
-
-    global __ncclEpTensorCreate
-    data["__ncclEpTensorCreate"] = <intptr_t>__ncclEpTensorCreate
-
-    global __ncclEpTensorCreateFromWindow
-    data["__ncclEpTensorCreateFromWindow"] = <intptr_t>__ncclEpTensorCreateFromWindow
-
-    global __ncclEpTensorDestroy
-    data["__ncclEpTensorDestroy"] = <intptr_t>__ncclEpTensorDestroy
 
     global __ncclEpCreateHandle
     data["__ncclEpCreateHandle"] = <intptr_t>__ncclEpCreateHandle
@@ -312,12 +285,6 @@ cpdef dict _inspect_function_pointers():
 
     global __ncclEpComplete
     data["__ncclEpComplete"] = <intptr_t>__ncclEpComplete
-
-    global __ncclEpTensorGetData
-    data["__ncclEpTensorGetData"] = <intptr_t>__ncclEpTensorGetData
-
-    global __ncclEpTensorGetSizes
-    data["__ncclEpTensorGetSizes"] = <intptr_t>__ncclEpTensorGetSizes
 
     func_ptrs = data
     return data
@@ -344,6 +311,26 @@ cdef ncclResult_t _ncclEpGetVersion(int* version) except?_NCCLRESULT_T_INTERNAL_
         version)
 
 
+cdef ncclResult_t _ncclEpTensorAlloc(ncclEpTensor_t** tensor, unsigned int ndim, ncclDataType_t datatype, const size_t* sizes, const ncclEpTensorAllocConfig_t* config) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
+    global __ncclEpTensorAlloc
+    _check_or_init_nccl_ep()
+    if __ncclEpTensorAlloc == NULL:
+        with gil:
+            raise FunctionNotFoundError("function ncclEpTensorAlloc is not found")
+    return (<ncclResult_t (*)(ncclEpTensor_t**, unsigned int, ncclDataType_t, const size_t*, const ncclEpTensorAllocConfig_t*) noexcept nogil>__ncclEpTensorAlloc)(
+        tensor, ndim, datatype, sizes, config)
+
+
+cdef ncclResult_t _ncclEpTensorDestroy(ncclEpTensor_t* tensor) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
+    global __ncclEpTensorDestroy
+    _check_or_init_nccl_ep()
+    if __ncclEpTensorDestroy == NULL:
+        with gil:
+            raise FunctionNotFoundError("function ncclEpTensorDestroy is not found")
+    return (<ncclResult_t (*)(ncclEpTensor_t*) noexcept nogil>__ncclEpTensorDestroy)(
+        tensor)
+
+
 cdef ncclResult_t _ncclEpCreateGroup(ncclEpGroup_t* ep_group, ncclComm_t comm, const ncclEpGroupConfig_t* config) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
     global __ncclEpCreateGroup
     _check_or_init_nccl_ep()
@@ -364,43 +351,13 @@ cdef ncclResult_t _ncclEpGroupDestroy(ncclEpGroup_t ep_group) except?_NCCLRESULT
         ep_group)
 
 
-cdef ncclResult_t _ncclEpTensorCreate(ncclNDTensor_t* tensor, unsigned int ndim, ncclDataType_t datatype, void* data, const size_t* sizes) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
-    global __ncclEpTensorCreate
-    _check_or_init_nccl_ep()
-    if __ncclEpTensorCreate == NULL:
-        with gil:
-            raise FunctionNotFoundError("function ncclEpTensorCreate is not found")
-    return (<ncclResult_t (*)(ncclNDTensor_t*, unsigned int, ncclDataType_t, void*, const size_t*) noexcept nogil>__ncclEpTensorCreate)(
-        tensor, ndim, datatype, data, sizes)
-
-
-cdef ncclResult_t _ncclEpTensorCreateFromWindow(ncclNDTensor_t* tensor, unsigned int ndim, ncclDataType_t datatype, ncclWindow_t win, uint64_t win_offset, const size_t* sizes) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
-    global __ncclEpTensorCreateFromWindow
-    _check_or_init_nccl_ep()
-    if __ncclEpTensorCreateFromWindow == NULL:
-        with gil:
-            raise FunctionNotFoundError("function ncclEpTensorCreateFromWindow is not found")
-    return (<ncclResult_t (*)(ncclNDTensor_t*, unsigned int, ncclDataType_t, ncclWindow_t, uint64_t, const size_t*) noexcept nogil>__ncclEpTensorCreateFromWindow)(
-        tensor, ndim, datatype, win, win_offset, sizes)
-
-
-cdef ncclResult_t _ncclEpTensorDestroy(ncclNDTensor_t tensor) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
-    global __ncclEpTensorDestroy
-    _check_or_init_nccl_ep()
-    if __ncclEpTensorDestroy == NULL:
-        with gil:
-            raise FunctionNotFoundError("function ncclEpTensorDestroy is not found")
-    return (<ncclResult_t (*)(ncclNDTensor_t) noexcept nogil>__ncclEpTensorDestroy)(
-        tensor)
-
-
-cdef ncclResult_t _ncclEpCreateHandle(ncclEpHandle_t* handle, ncclEpGroup_t ep_group, ncclEpLayout_t layout, ncclNDTensor_t topk_idx, const ncclEpLayoutInfo_t* layout_info, const ncclEpHandleConfig_t* config, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
+cdef ncclResult_t _ncclEpCreateHandle(ncclEpHandle_t* handle, ncclEpGroup_t ep_group, ncclEpLayout_t layout, const ncclEpTensor_t* topk_idx, const ncclEpLayoutInfo_t* layout_info, const ncclEpHandleConfig_t* config, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
     global __ncclEpCreateHandle
     _check_or_init_nccl_ep()
     if __ncclEpCreateHandle == NULL:
         with gil:
             raise FunctionNotFoundError("function ncclEpCreateHandle is not found")
-    return (<ncclResult_t (*)(ncclEpHandle_t*, ncclEpGroup_t, ncclEpLayout_t, ncclNDTensor_t, const ncclEpLayoutInfo_t*, const ncclEpHandleConfig_t*, cudaStream_t) noexcept nogil>__ncclEpCreateHandle)(
+    return (<ncclResult_t (*)(ncclEpHandle_t*, ncclEpGroup_t, ncclEpLayout_t, const ncclEpTensor_t*, const ncclEpLayoutInfo_t*, const ncclEpHandleConfig_t*, cudaStream_t) noexcept nogil>__ncclEpCreateHandle)(
         handle, ep_group, layout, topk_idx, layout_info, config, stream)
 
 
@@ -424,23 +381,23 @@ cdef ncclResult_t _ncclEpHandleMemSize(ncclEpGroup_t ep_group, ncclEpLayout_t la
         ep_group, layout, config, size_out, num_topk)
 
 
-cdef ncclResult_t _ncclEpInitHandle(ncclEpHandle_t* handle, ncclEpGroup_t ep_group, ncclEpLayout_t layout, const ncclEpHandleConfig_t* config, int num_topk, ncclNDTensor_t handle_mem) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
+cdef ncclResult_t _ncclEpInitHandle(ncclEpHandle_t* handle, ncclEpGroup_t ep_group, ncclEpLayout_t layout, const ncclEpHandleConfig_t* config, int num_topk, const ncclEpTensor_t* handle_mem) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
     global __ncclEpInitHandle
     _check_or_init_nccl_ep()
     if __ncclEpInitHandle == NULL:
         with gil:
             raise FunctionNotFoundError("function ncclEpInitHandle is not found")
-    return (<ncclResult_t (*)(ncclEpHandle_t*, ncclEpGroup_t, ncclEpLayout_t, const ncclEpHandleConfig_t*, int, ncclNDTensor_t) noexcept nogil>__ncclEpInitHandle)(
+    return (<ncclResult_t (*)(ncclEpHandle_t*, ncclEpGroup_t, ncclEpLayout_t, const ncclEpHandleConfig_t*, int, const ncclEpTensor_t*) noexcept nogil>__ncclEpInitHandle)(
         handle, ep_group, layout, config, num_topk, handle_mem)
 
 
-cdef ncclResult_t _ncclEpUpdateHandle(ncclEpHandle_t handle, ncclNDTensor_t topk_idx, const ncclEpLayoutInfo_t* layout_info, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
+cdef ncclResult_t _ncclEpUpdateHandle(ncclEpHandle_t handle, const ncclEpTensor_t* topk_idx, const ncclEpLayoutInfo_t* layout_info, cudaStream_t stream) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
     global __ncclEpUpdateHandle
     _check_or_init_nccl_ep()
     if __ncclEpUpdateHandle == NULL:
         with gil:
             raise FunctionNotFoundError("function ncclEpUpdateHandle is not found")
-    return (<ncclResult_t (*)(ncclEpHandle_t, ncclNDTensor_t, const ncclEpLayoutInfo_t*, cudaStream_t) noexcept nogil>__ncclEpUpdateHandle)(
+    return (<ncclResult_t (*)(ncclEpHandle_t, const ncclEpTensor_t*, const ncclEpLayoutInfo_t*, cudaStream_t) noexcept nogil>__ncclEpUpdateHandle)(
         handle, topk_idx, layout_info, stream)
 
 
@@ -472,23 +429,3 @@ cdef ncclResult_t _ncclEpComplete(ncclEpHandle_t handle, const ncclEpCompleteCon
             raise FunctionNotFoundError("function ncclEpComplete is not found")
     return (<ncclResult_t (*)(ncclEpHandle_t, const ncclEpCompleteConfig_t*, cudaStream_t) noexcept nogil>__ncclEpComplete)(
         handle, config, stream)
-
-
-cdef ncclResult_t _ncclEpTensorGetData(ncclNDTensor_t tensor, void** data) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
-    global __ncclEpTensorGetData
-    _check_or_init_nccl_ep()
-    if __ncclEpTensorGetData == NULL:
-        with gil:
-            raise FunctionNotFoundError("function ncclEpTensorGetData is not found")
-    return (<ncclResult_t (*)(ncclNDTensor_t, void**) noexcept nogil>__ncclEpTensorGetData)(
-        tensor, data)
-
-
-cdef ncclResult_t _ncclEpTensorGetSizes(ncclNDTensor_t tensor, const size_t** sizes, unsigned int* ndim) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
-    global __ncclEpTensorGetSizes
-    _check_or_init_nccl_ep()
-    if __ncclEpTensorGetSizes == NULL:
-        with gil:
-            raise FunctionNotFoundError("function ncclEpTensorGetSizes is not found")
-    return (<ncclResult_t (*)(ncclNDTensor_t, const size_t**, unsigned int*) noexcept nogil>__ncclEpTensorGetSizes)(
-        tensor, sizes, ndim)

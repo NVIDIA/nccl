@@ -17,7 +17,7 @@ The decorator:
    * objects with ``to_binding`` (nested ``binding_dataclass`` instances)
      → recursively materialized and ``memcpy``'d in via the binding's
      own setter
-   * objects with a ``.ptr`` integer attribute (e.g. :class:`NDTensor`)
+   * objects with a ``.ptr`` integer attribute (e.g. :class:`Tensor`)
      → ``obj.ptr`` (pointer address)
 
 3. If the optional ``size_field_dtype`` argument is supplied, the
@@ -72,7 +72,7 @@ def _coerce(val: Any) -> Any:
     to_binding = getattr(val, "to_binding", None)
     if callable(to_binding):
         return to_binding()
-    # NDTensor-shaped objects: peel out the underlying pointer.
+    # Tensor-shaped objects: peel out the underlying pointer.
     if not isinstance(val, (int, float, bool)) and hasattr(val, "ptr"):
         return val.ptr
     return val
@@ -104,14 +104,14 @@ def binding_dataclass(
             from nccl.bindings import nccl_ep as _bindings
 
             @binding_dataclass(
-                _bindings.EpGroupConfig,
-                size_field_dtype=_bindings.ep_group_config_dtype,
+                _bindings.GroupConfig,
+                size_field_dtype=_bindings.group_config_dtype,
             )
-            class EpGroupConfig:
-                algorithm: NcclEpAlgorithm = NcclEpAlgorithm.LOW_LATENCY
+            class GroupConfig:
+                algorithm: Algorithm = Algorithm.LOW_LATENCY
                 num_experts: int = 0
 
-            cfg = EpGroupConfig(num_experts=8)
+            cfg = GroupConfig(num_experts=8)
             binding = cfg.to_binding()  # type: ignore[attr-defined]
     """
     def decorator(cls: type[T]) -> type[T]:

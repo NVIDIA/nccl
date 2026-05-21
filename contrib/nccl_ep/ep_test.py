@@ -40,18 +40,18 @@ import nccl.ep as nccl_ep
 # equivalent to using the default allocator path (NCCL EP falls back to
 # cudaMalloc/cudaFree when alloc_fn is NULL), but exercise the pluggable
 # allocator hooks. The decorated functions MUST stay alive at module scope for
-# the lifetime of any nccl_ep.EpGroup that referenced them; if GC'd, NCCL EP's stored
+# the lifetime of any nccl_ep.Group that referenced them; if GC'd, NCCL EP's stored
 # function pointers become dangling.
 # ---------------------------------------------------------------------------
 
-@nccl_ep.ncclEpAllocFn_t
+@nccl_ep.AllocFn
 def _alloc_fn(out_ptr, size, _context):
     err, ptr = cudart.cudaMalloc(size)
     out_ptr[0] = ctypes.c_void_p(int(ptr))
     return int(err)
 
 
-@nccl_ep.ncclEpFreeFn_t
+@nccl_ep.FreeFn
 def _free_fn(ptr, _context):
     err, = cudart.cudaFree(ptr)
     return int(err)
@@ -95,7 +95,7 @@ def d2d(dst_ptr: int, src_ptr: int, nbytes: int, stream) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Device tensor helper: pairs a raw cudaMalloc allocation with its nccl_ep.NDTensor.
+# Device tensor helper: pairs a raw cudaMalloc allocation with its nccl_ep.Tensor.
 # Sized at create-time so the host side can compute h2d/d2h byte counts
 # without re-deriving from sizes.
 # ---------------------------------------------------------------------------
@@ -114,9 +114,9 @@ _DTYPE_BYTES = {
 
 
 class DevTensor:
-    """Owning pair of a cudaMalloc'd device buffer and its ``nccl_ep.NDTensor``."""
+    """Owning pair of a cudaMalloc'd device buffer and its ``nccl_ep.Tensor``."""
 
-    def __init__(self, dev_ptr: int, nbytes: int, tensor: nccl_ep.NDTensor) -> None:
+    def __init__(self, dev_ptr: int, nbytes: int, tensor: nccl_ep.Tensor) -> None:
         self.dev_ptr = dev_ptr
         self.nbytes = nbytes
         self.tensor = tensor
@@ -140,7 +140,7 @@ def make_tensor(ndim: int, datatype, *sizes: int) -> DevTensor:
         nbytes *= s
     err, dev_ptr = cudart.cudaMalloc(nbytes)
     _check_cuda(err)
-    tensor = nccl_ep.NDTensor.create(ndim, int(datatype), int(dev_ptr), *sizes)
+    tensor = nccl_ep.Tensor.create(ndim, int(datatype), int(dev_ptr), *sizes)
     return DevTensor(int(dev_ptr), nbytes, tensor)
 
 
@@ -179,7 +179,7 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
     parser.add_argument("-d", type=int, default=7168, help="Hidden dimension size")
     args = parser.parse_args()
 
-    algorithm = nccl_ep.NcclEpAlgorithm.LOW_LATENCY if args.a == "ll" else nccl_ep.NcclEpAlgorithm.HIGH_THROUGHPUT
+    algorithm = nccl_ep.Algorithm.LOW_LATENCY if args.a == "ll" else nccl_ep.Algorithm.HIGH_THROUGHPUT
     disable_max_tokens = args.m
     dispatch_send_only = 1 if args.s in ("dispatch", "both") else 0
     combine_send_only = 1 if args.s in ("combine", "both") else 0
@@ -195,7 +195,7 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
 
     if disable_max_tokens:
         if my_rank == 0:
-            if algorithm != nccl_ep.NcclEpAlgorithm.HIGH_THROUGHPUT:
+            if algorithm != nccl_ep.Algorithm.HIGH_THROUGHPUT:
                 print("Error: -m is only applicable to HT mode (-a ht)")
             else:
                 print("Error: -m (NCCL_EP_AUTO for max_dispatch_tokens_per_rank) is not yet supported.\n"
@@ -236,20 +236,20 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
     # max_recv_tokens_per_rank is required for HT (assertion fires on 0);
     # LL auto-derives nRanks * max_dispatch_tokens_per_rank when left at 0, but we
     # set it explicitly to keep both paths consistent.
-    config = nccl_ep.EpGroupConfig(
+    config = nccl_ep.GroupConfig(
         algorithm=algorithm,
         num_experts=num_experts,
         max_dispatch_tokens_per_rank=num_tokens,
         max_recv_tokens_per_rank=num_tokens * n_ranks,
         max_token_bytes=hidden * 2,  # bfloat16
-        alloc=nccl_ep.EpAllocConfig(alloc_fn=_ALLOC_FN_ADDR, free_fn=_FREE_FN_ADDR),
+        alloc=nccl_ep.AllocConfig(alloc_fn=_ALLOC_FN_ADDR, free_fn=_FREE_FN_ADDR),
     )
 
-    algorithm_name = "LOW_LATENCY" if algorithm == nccl_ep.NcclEpAlgorithm.LOW_LATENCY else "HIGH_THROUGHPUT"
+    algorithm_name = "LOW_LATENCY" if algorithm == nccl_ep.Algorithm.LOW_LATENCY else "HIGH_THROUGHPUT"
     extra = " (no max_dispatch_tokens_per_rank)" if disable_max_tokens else ""
     print(f"Rank {my_rank}: Testing ncclEpCreateGroup with algorithm: {algorithm_name}{extra}")
 
-    ep_group = nccl_ep.EpGroup.create(comm, config)
+    ep_group = nccl_ep.Group.create(comm, config)
 
     # -- topk_idx tensor [num_tokens, top_k] int64 --------------------------
     topk_idx = make_tensor(2, nccl_core.INT64, num_tokens, top_k)
@@ -276,11 +276,11 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
     # -- recv_expert_counter for handle (only when disable_max_tokens) ------
     handle_recv_expert_counter: DevTensor | None = None
     handle_recv_total_counter: DevTensor | None = None
-    handle_layout_info: nccl_ep.EpLayoutInfo | None = None
+    handle_layout_info: nccl_ep.LayoutInfo | None = None
     if disable_max_tokens:
         handle_recv_expert_counter = make_tensor(1, nccl_core.INT32, num_local_experts)
         handle_recv_total_counter = make_tensor(1, nccl_core.INT32, 1)
-        handle_layout_info = nccl_ep.EpLayoutInfo(
+        handle_layout_info = nccl_ep.LayoutInfo(
             expert_counters=handle_recv_expert_counter.tensor,
             recv_total_counter=handle_recv_total_counter.tensor,
         )
@@ -291,14 +291,14 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
     # in dispatch_layout — that's the EXPERT_MAJOR layout's signature. HT
     # branch builds a 2D recv tensor with topk_weights/topk_idx, matching FLAT.
     handle_layout = (
-        nccl_ep.NcclEpLayout.EXPERT_MAJOR
-        if algorithm == nccl_ep.NcclEpAlgorithm.LOW_LATENCY
-        else nccl_ep.NcclEpLayout.FLAT
+        nccl_ep.Layout.EXPERT_MAJOR
+        if algorithm == nccl_ep.Algorithm.LOW_LATENCY
+        else nccl_ep.Layout.FLAT
     )
-    ep_handle = nccl_ep.EpHandle.create(
+    ep_handle = nccl_ep.Handle.create(
         ep_group, handle_layout, topk_idx.tensor,
         layout_info=handle_layout_info,
-        config=nccl_ep.EpHandleConfig(),
+        config=nccl_ep.HandleConfig(),
         stream=stream,
     )
     stream.sync()
@@ -312,9 +312,9 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
         num_recv_tokens = config.max_dispatch_tokens_per_rank * num_local_experts
     assert num_recv_tokens > 0
 
-    dispatch_config = nccl_ep.EpDispatchConfig(send_only=dispatch_send_only, round_scales=0)
+    dispatch_config = nccl_ep.DispatchConfig(send_only=dispatch_send_only, round_scales=0)
 
-    is_ll = algorithm == nccl_ep.NcclEpAlgorithm.LOW_LATENCY
+    is_ll = algorithm == nccl_ep.Algorithm.LOW_LATENCY
 
     # -- input/output tensors for dispatch ----------------------------------
     input_tokens = make_tensor(2, nccl_core.BFLOAT16, num_tokens, hidden)
@@ -349,15 +349,15 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
 
     # Build the named-struct ABI bundles for dispatch.
     if is_ll:
-        dispatch_inputs = nccl_ep.EpDispatchInputs(tokens=input_tokens.tensor)
-        dispatch_outputs = nccl_ep.EpDispatchOutputs(tokens=output_tokens.tensor)
-        dispatch_layout = nccl_ep.EpLayoutInfo(expert_counters=local_tensor_recv_count.tensor)
+        dispatch_inputs = nccl_ep.DispatchInputs(tokens=input_tokens.tensor)
+        dispatch_outputs = nccl_ep.DispatchOutputs(tokens=output_tokens.tensor)
+        dispatch_layout = nccl_ep.LayoutInfo(expert_counters=local_tensor_recv_count.tensor)
     else:
-        dispatch_inputs = nccl_ep.EpDispatchInputs(
+        dispatch_inputs = nccl_ep.DispatchInputs(
             tokens=input_tokens.tensor,
             topk_weights=topk_weights.tensor,
         )
-        dispatch_outputs = nccl_ep.EpDispatchOutputs(
+        dispatch_outputs = nccl_ep.DispatchOutputs(
             tokens=output_tokens.tensor,
             topk_weights=output_topk_weights.tensor,
             topk_idx=output_topk_idx.tensor,
@@ -517,19 +517,19 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
     combined_output = make_tensor(2, nccl_core.BFLOAT16, num_tokens, hidden)
 
     if is_ll:
-        combine_inputs = nccl_ep.EpCombineInputs(tokens=expert_outputs.tensor)
-        combine_outputs = nccl_ep.EpCombineOutputs(
+        combine_inputs = nccl_ep.CombineInputs(tokens=expert_outputs.tensor)
+        combine_outputs = nccl_ep.CombineOutputs(
             tokens=combined_output.tensor,
             topk_weights=topk_weights.tensor,  # per-token routing weights on receive side
         )
     else:
-        combine_inputs = nccl_ep.EpCombineInputs(tokens=expert_outputs.tensor)
-        combine_outputs = nccl_ep.EpCombineOutputs(tokens=combined_output.tensor)
+        combine_inputs = nccl_ep.CombineInputs(tokens=expert_outputs.tensor)
+        combine_outputs = nccl_ep.CombineOutputs(tokens=combined_output.tensor)
 
     print(f"Rank {my_rank}: Testing combine (send_only={bool(combine_send_only)})")
     ep_handle.combine(
         combine_inputs, combine_outputs,
-        config=nccl_ep.EpCombineConfig(send_only=combine_send_only),
+        config=nccl_ep.CombineConfig(send_only=combine_send_only),
         stream=stream,
     )
 
@@ -601,8 +601,8 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
         print(f"Rank {my_rank}: Testing cached mode - second dispatch "
               f"(send_only={bool(dispatch_send_only)})")
         ep_handle.dispatch(
-            nccl_ep.EpDispatchInputs(tokens=input_tokens.tensor),
-            nccl_ep.EpDispatchOutputs(tokens=cached_out_tokens.tensor),
+            nccl_ep.DispatchInputs(tokens=input_tokens.tensor),
+            nccl_ep.DispatchOutputs(tokens=cached_out_tokens.tensor),
             config=dispatch_config,
             stream=stream,
         )
@@ -614,15 +614,15 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
         print(f"Rank {my_rank}: Testing cached mode - second combine "
               f"(send_only={bool(combine_send_only)})")
         ep_handle.combine(
-            nccl_ep.EpCombineInputs(
+            nccl_ep.CombineInputs(
                 tokens=expert_outputs.tensor,
                 topk_weights=cached_ctw_in.tensor,
             ),
-            nccl_ep.EpCombineOutputs(
+            nccl_ep.CombineOutputs(
                 tokens=cached_combined_output.tensor,
                 topk_weights=cached_combined_tw.tensor,
             ),
-            config=nccl_ep.EpCombineConfig(send_only=combine_send_only),
+            config=nccl_ep.CombineConfig(send_only=combine_send_only),
             stream=stream,
         )
 

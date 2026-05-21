@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 """Pure-Python enum definitions mirroring the NCCL EP C enums.
@@ -11,14 +11,14 @@ the corresponding C enums in ``ep_enums.h``.
 
 from enum import IntEnum
 
-__all__ = ["NcclEpAlgorithm", "NcclEpLayout"]
+__all__ = ["Algorithm", "Layout", "PassDir"]
 
 
-class NcclEpAlgorithm(IntEnum):
+class Algorithm(IntEnum):
     """EP communication algorithm, mirroring :c:type:`ncclEpAlgorithm_t`.
 
-    Set on :py:attr:`EpGroupConfig.algorithm` before calling
-    :py:meth:`EpGroup.create` to select the dispatch/combine path.
+    Set on :py:attr:`GroupConfig.algorithm` before calling
+    :py:meth:`Group.create` to select the dispatch/combine path.
     """
 
     LOW_LATENCY = 0
@@ -28,17 +28,17 @@ class NcclEpAlgorithm(IntEnum):
     """High-Throughput (HT) algorithm. Tuned for peak aggregate bandwidth."""
 
 
-class NcclEpLayout(IntEnum):
+class Layout(IntEnum):
     """Receive-buffer layout for dispatch/combine, mirroring :c:type:`ncclEpLayout_t`.
 
-    Set on :py:attr:`EpGroupConfig.layout` before calling
-    :py:meth:`EpGroup.create` to control the shape of dispatch output
+    Set on :py:attr:`GroupConfig.layout` before calling
+    :py:meth:`Group.create` to control the shape of dispatch output
     tensors and the expected shape of combine input tensors.
     """
 
     UNSET = 0
     """Zero-init sentinel — must be overridden before passing the config to
-    :py:meth:`EpHandle.create`. The library does not auto-resolve; leaving
+    :py:meth:`Handle.create`. The library does not auto-resolve; leaving
     this value triggers an assertion at handle-init time."""
 
     EXPERT_MAJOR = 1
@@ -54,3 +54,18 @@ class NcclEpLayout(IntEnum):
     FLAT = 3
     """HT only. ``recv_x`` shape: ``[N(r), hidden]`` — a single
     contiguous sequence of tokens with no rank or expert structure."""
+
+
+class PassDir(IntEnum):
+    """Pass direction for HT dispatch/combine, mirroring :c:type:`ncclEpPassDir_t`.
+
+    Set on :py:attr:`DispatchConfig.pass_direction` /
+    :py:attr:`CombineConfig.pass_direction` to select forward or
+    backward pass semantics. HT-only; LL rejects ``BWD``.
+    """
+
+    FWD = 0
+    """Forward pass (default)."""
+
+    BWD = 1
+    """Backward pass."""

@@ -3282,3 +3282,49 @@ ncclResult_t ncclEpErrorClear(
     __atomic_store_n(ep_group->async_error_flag, 0, __ATOMIC_RELEASE);
     return ncclSuccess;
 }
+// ── Test-only internal helpers (declared in nccl_ep_test_internal.h) ─────────
+// Exposed via a separate test header so library consumers cannot accidentally
+// depend on these implementation details.
+
+const int32_t* ncclEpHandle_test_getSparseToDenseMap(ncclEpHandle_t handle) {
+    return handle->hybridep.sparse_to_dense_map;
+}
+
+int ncclEpHandle_test_getNumTopk(ncclEpHandle_t handle) {
+    return handle->num_topk;
+}
+
+int ncclEpHandle_test_getMaxTokensPerRank(ncclEpHandle_t handle) {
+    return static_cast<int>(handle->group->config.max_dispatch_tokens_per_rank);
+}
+
+int ncclEpHandle_test_getNRanksPerNode(ncclEpHandle_t handle) {
+    return handle->group->lsa_team_size;
+}
+
+int ncclEpHandle_test_getExpertsPerRank(ncclEpHandle_t handle) {
+    return handle->group->num_local_experts;
+}
+
+ncclResult_t ncclEpHandle_test_getNumRecvTokens(
+    ncclEpHandle_t handle,
+    unsigned int* num_recv_tokens
+) {
+    if (handle->group->config.algorithm != NCCL_EP_ALGO_HIGH_THROUGHPUT) {
+        return ncclInvalidUsage;
+    }
+    int32_t actual_recv_tokens;
+    CUDA_CHECK(cudaMemcpy(
+        &actual_recv_tokens,
+        handle->hybridep.num_tokens_for_experts,
+        sizeof(actual_recv_tokens),
+        cudaMemcpyDeviceToHost));
+    assert(actual_recv_tokens >= 0);
+    *num_recv_tokens = static_cast<unsigned int>(actual_recv_tokens);
+    return ncclSuccess;
+}
+
+void ncclEpHandle_test_clearTopkIdx(ncclEpHandle_t handle) {
+    handle->topk_idx = nullptr;
+}
+

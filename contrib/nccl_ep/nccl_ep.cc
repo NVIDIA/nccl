@@ -615,8 +615,6 @@ static ncclResult_t init_hybridep_intranode(ncclEpGroup_t ep_group,
                                     cudaStream_t stream)
 {
     ncclComm_t comm = ep_group->comm;
-    int gpus_per_node = ep_group->gpus_per_node;
-    int rank_in_node = ep_group->rank_in_node;
     // HT topology uses NCCL team semantics (rail/lsa)
     int lsa_ranks = ep_group->lsa_team_size;
     int lsa_rank = ep_group->lsa_rank;
@@ -3325,6 +3323,6 @@ ncclResult_t ncclEpHandle_test_getNumRecvTokens(
 }
 
 void ncclEpHandle_test_clearTopkIdx(ncclEpHandle_t handle) {
-    handle->topk_idx = nullptr;
+    handle->topk_idx.data = nullptr;
 }
 

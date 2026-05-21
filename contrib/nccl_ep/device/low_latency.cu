@@ -594,7 +594,6 @@ __global__ __launch_bounds__(1024, 1) void dispatch(// INPUT
                                                      (kHidden + numScales * sizeof(float)) :
                                                      (kHidden * sizeof(nv_bfloat16)));
 
-    const size_t numInt4PerMsg = numBytesPerMsg / sizeof(int4);
     EP_DEVICE_ASSERT(numBytesPerMsg % sizeof(int4) == 0);
 
     // Rank counts
@@ -887,8 +886,8 @@ LOW_LATENCY_DISPATCH_RECV:
 
                 // Locate the output base for the local expert
                 int outDataOffset = localExpertIdx * numRanks * maxTokensPerRank;
-                const auto outDataInt4 = static_cast<int4*>((outDataBuf) +
-                                                             static_cast<size_t>(outDataOffset) * hiddenBytes);
+                const auto outDataInt4 = reinterpret_cast<int4*>(static_cast<uint8_t*>(outDataBuf) +
+                                                                  static_cast<size_t>(outDataOffset) * hiddenBytes);
                 const auto outScales = static_cast<scale_t*>(outScalesBuf) + outDataOffset * numAlignedScales;
 
                 // Locate the next available slot

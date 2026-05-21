@@ -353,7 +353,7 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
         dispatch_outputs = nccl_ep.EpDispatchOutputs(tokens=output_tokens.tensor)
         dispatch_layout = nccl_ep.EpLayoutInfo(expert_counters=local_tensor_recv_count.tensor)
     else:
-        dispatch_inputs = EpDispatchInputs(
+        dispatch_inputs = nccl_ep.EpDispatchInputs(
             tokens=input_tokens.tensor,
             topk_weights=topk_weights.tensor,
         )

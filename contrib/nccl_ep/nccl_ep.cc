@@ -2249,6 +2249,12 @@ ncclResult_t ncclEpDispatch(
     EP_OPTIONAL_STRUCT(config);
     const unsigned int send_only = config ? config->send_only : 0;
     const ncclEpPassDir_t pass_direction = config ? config->pass_direction : NCCL_EP_FWD_PASS;
+    if (pass_direction != NCCL_EP_FWD_PASS &&
+        handle->group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
+        fprintf(stderr, "ncclEpDispatch: backward pass (pass_direction=%d) is not supported in LL mode\n",
+                (int)pass_direction);
+        return ncclInvalidUsage;
+    }
         ncclEpGroup_t group = handle->group;
 
     // Lazy num_tokens for callers that skip UpdateHandle (e.g. backward reusing forward's handle_mem).
@@ -2789,6 +2795,12 @@ ncclResult_t ncclEpCombine(
     EP_OPTIONAL_STRUCT(config);
     const unsigned int send_only = config ? config->send_only : 0;
     const ncclEpPassDir_t pass_direction = config ? config->pass_direction : NCCL_EP_FWD_PASS;
+    if (pass_direction != NCCL_EP_FWD_PASS &&
+        handle->group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
+        fprintf(stderr, "ncclEpCombine: backward pass (pass_direction=%d) is not supported in LL mode\n",
+                (int)pass_direction);
+        return ncclInvalidUsage;
+    }
 
     // Lazy num_tokens for callers that skip UpdateHandle (e.g. handle relocation between prepare and combine).
     if (handle->num_tokens == 0) {

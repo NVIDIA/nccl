@@ -1082,12 +1082,12 @@ ncclResult_t ncclProxyConnect(struct ncclComm* comm, int transport, int send, in
 
   proxyConn->sameProcess = ((comm->peerInfo[proxyRank].hostHash == comm->peerInfo[comm->rank].hostHash) &&
                             (comm->peerInfo[proxyRank].pidHash == comm->peerInfo[comm->rank].pidHash)) ? 1 : 0;
-  // Keep one connection per local rank
+  // Keep one connection per top-parent rank
   proxyConn->connection = NULL;
   proxyConn->tpRank = tpProxyRank;
   proxyConn->rank = proxyRank;
   if (sharedProxyState->peerSocks == NULL) {
-    int peerArraySize = comm->p2pCrossClique ? comm->sharedRes->tpNRanks : comm->sharedRes->tpNLocalRanks;
+    int peerArraySize = comm->sharedRes->tpNRanks;
     sharedProxyState->peerArraySize = peerArraySize;
     NCCLCHECK(ncclCalloc(&sharedProxyState->peerSocks, peerArraySize));
     NCCLCHECK(ncclCalloc(&sharedProxyState->proxyOps, peerArraySize));
@@ -1097,10 +1097,10 @@ ncclResult_t ncclProxyConnect(struct ncclComm* comm, int transport, int send, in
     }
   }
 
-  int peerIndex = comm->p2pCrossClique ? proxyConn->tpRank : comm->sharedRes->tpRankToLocalRank[proxyConn->tpRank];
+  int peerIndex = proxyConn->tpRank;
   if (peerIndex < 0 || peerIndex >= sharedProxyState->peerArraySize) {
-    WARN("ncclProxyConnect: peerIndex %d out of bounds [0, %d) for rank %d tpRank %d p2pCrossClique %d",
-         peerIndex, sharedProxyState->peerArraySize, proxyRank, proxyConn->tpRank, comm->p2pCrossClique);
+    WARN("ncclProxyConnect: peerIndex %d out of bounds [0, %d) for rank %d tpRank %d",
+         peerIndex, sharedProxyState->peerArraySize, proxyRank, proxyConn->tpRank);
     return ncclInternalError;
   }
   proxyConn->tpLocalRank = peerIndex;
@@ -1142,7 +1142,7 @@ ncclResult_t ncclProxyConnect(struct ncclComm* comm, int transport, int send, in
     }
   }
   proxyConn->initialized = true;
-  INFO(NCCL_PROXY, "Connected to proxy localRank %d -> connection %p", proxyConn->tpLocalRank, proxyConn->connection);
+  INFO(NCCL_PROXY, "Connected to proxy tpRank %d -> connection %p", proxyConn->tpRank, proxyConn->connection);
   return ncclSuccess;
 }
 

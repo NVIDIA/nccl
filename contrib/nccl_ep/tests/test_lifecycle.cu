@@ -48,7 +48,7 @@ protected:
         EXPECT_EQ(cudaMemcpy(d_tok,     h_tok.data(), kNumTokens*kHidden*sizeof(nv_bfloat16), cudaMemcpyHostToDevice), cudaSuccess);
         EXPECT_EQ(cudaMemcpy(d_weights, h_w.data(),   kNumTokens*kTopK*sizeof(float),         cudaMemcpyHostToDevice), cudaSuccess);
 
-        ncclNDTensor_t t_tok, t_recv, t_out, t_w, t_recv_w, t_recv_idx;
+        ncclEpTensor_t *t_tok, *t_recv, *t_out, *t_w, *t_recv_w, *t_recv_idx;
         EXPECT_EQ(epTensorCreate(&t_tok,      2, ncclBfloat16, d_tok,      kNumTokens,    kHidden), ncclSuccess);
         EXPECT_EQ(epTensorCreate(&t_recv,     2, ncclBfloat16, d_recv,     kMaxRecvSlots, kHidden), ncclSuccess);
         EXPECT_EQ(epTensorCreate(&t_out,      2, ncclBfloat16, d_out,      kNumTokens,    kHidden), ncclSuccess);
@@ -157,7 +157,7 @@ TEST_F(LifecycleTest, CallerOwnedHandleMem) {
     void* d_handle_mem = nullptr;
     CUDA_ASSERT(cudaMalloc(&d_handle_mem, handle_mem_bytes));
 
-    ncclNDTensor_t t_handle_mem = nullptr;
+    ncclEpTensor_t* t_handle_mem = nullptr;
     NCCL_ASSERT(epTensorCreate(&t_handle_mem, 1, ncclUint8,
                                    d_handle_mem,
                                    static_cast<unsigned int>(handle_mem_bytes)));

@@ -104,7 +104,7 @@ protected:
         EXPECT_EQ(cudaMemcpy(d_tok,     h_tok.data(), kNumTokens*kHidden*sizeof(nv_bfloat16), cudaMemcpyHostToDevice), cudaSuccess);
         EXPECT_EQ(cudaMemcpy(d_weights, h_w.data(),   kNumTokens*kTopK*sizeof(float),         cudaMemcpyHostToDevice), cudaSuccess);
 
-        ncclNDTensor_t t_tok, t_recv, t_out, t_w, t_recv_w, t_recv_idx;
+        ncclEpTensor_t *t_tok, *t_recv, *t_out, *t_w, *t_recv_w, *t_recv_idx;
         EXPECT_EQ(epTensorCreate(&t_tok,  2, ncclBfloat16, d_tok,     kNumTokens,    kHidden), ncclSuccess);
         EXPECT_EQ(epTensorCreate(&t_recv, 2, ncclBfloat16, d_recv,    kMaxRecvSlots, kHidden), ncclSuccess);
         EXPECT_EQ(epTensorCreate(&t_out,  2, ncclBfloat16, d_out,     kNumTokens,    kHidden), ncclSuccess);
@@ -179,7 +179,7 @@ protected:
         EXPECT_EQ(cudaMemcpy(d_tok,     h_tok.data(), kNumTokens*kHidden*sizeof(nv_bfloat16), cudaMemcpyHostToDevice), cudaSuccess);
         EXPECT_EQ(cudaMemcpy(d_weights, h_w.data(),   kNumTokens*kTopK  *sizeof(float),       cudaMemcpyHostToDevice), cudaSuccess);
 
-        ncclNDTensor_t t_tok, t_recv, t_w, t_recv_w, t_recv_idx;
+        ncclEpTensor_t *t_tok, *t_recv, *t_w, *t_recv_w, *t_recv_idx;
         EXPECT_EQ(epTensorCreate(&t_tok,  2, ncclBfloat16, d_tok,     kNumTokens,    kHidden), ncclSuccess);
         EXPECT_EQ(epTensorCreate(&t_recv, 2, ncclBfloat16, d_recv,    kMaxRecvSlots, kHidden), ncclSuccess);
         EXPECT_EQ(epTensorCreate(&t_w,    2, ncclFloat32,  d_weights, kNumTokens,    kTopK),   ncclSuccess);
@@ -384,7 +384,7 @@ TEST_F(OutputLayoutTest, DispatchMeta) {
     CUDA_ASSERT(cudaMalloc(&d_off, E_local * sizeof(int64_t)));
     CUDA_ASSERT(cudaMalloc(&d_cnt, E_local * sizeof(int64_t)));
 
-    ncclNDTensor_t t_off, t_cnt;
+    ncclEpTensor_t *t_off, *t_cnt;
     NCCL_ASSERT(epTensorCreate(&t_off, 1, ncclInt64, d_off, E_local));
     NCCL_ASSERT(epTensorCreate(&t_cnt, 1, ncclInt64, d_cnt, E_local));
 
@@ -429,7 +429,7 @@ TEST_F(OutputLayoutTest, TotalCounterDeviceEM) {
     int64_t* d_cnt;
     CUDA_ASSERT(cudaMalloc(&d_cnt, E_local * sizeof(int64_t)));
 
-    ncclNDTensor_t t_total, t_cnt;
+    ncclEpTensor_t *t_total, *t_cnt;
     NCCL_ASSERT(epTensorCreate(&t_total, 1, ncclInt64, d_total, 1));
     NCCL_ASSERT(epTensorCreate(&t_cnt,   1, ncclInt64, d_cnt, E_local));
 
@@ -461,7 +461,7 @@ TEST_F(OutputLayoutTest, TotalCounterDeviceFLAT) {
     CUDA_ASSERT(cudaMalloc(&d_total, sizeof(int32_t)));
     CUDA_ASSERT(cudaMemset(d_total, 0, sizeof(int32_t)));
 
-    ncclNDTensor_t t_total;
+    ncclEpTensor_t* t_total;
     NCCL_ASSERT(epTensorCreate(&t_total, 1, ncclInt32, d_total, 1));
 
     ncclEpLayoutInfo_t layout = NCCL_EP_LAYOUT_INFO_INIT;
@@ -500,8 +500,8 @@ static constexpr int kTopK2 = 2;
 
 class TopK2MixedRoutingTest : public ::testing::Test {
 protected:
-    ncclNDTensor_t topk_idx2_    = nullptr;
-    ncclNDTensor_t topk_idx2_em_ = nullptr;
+    ncclEpTensor_t* topk_idx2_    = nullptr;
+    ncclEpTensor_t* topk_idx2_em_ = nullptr;
     int64_t*       d_topk2_      = nullptr;
 
     void SetUp() override {
@@ -566,7 +566,7 @@ protected:
         std::vector<float> h_w(kNumTokens * kTopK2, 1.0f);
         EXPECT_EQ(cudaMemcpy(d_weights, h_w.data(), kNumTokens*kTopK2*sizeof(float), cudaMemcpyHostToDevice), cudaSuccess);
 
-        ncclNDTensor_t t_tok, t_recv, t_w, t_recv_w, t_recv_idx;
+        ncclEpTensor_t *t_tok, *t_recv, *t_w, *t_recv_w, *t_recv_idx;
         EXPECT_EQ(epTensorCreate(&t_tok,  2, ncclBfloat16, d_tok,     kNumTokens,    kHidden), ncclSuccess);
         EXPECT_EQ(epTensorCreate(&t_recv, 2, ncclBfloat16, d_recv,    kMaxRecvSlots, kHidden), ncclSuccess);
         EXPECT_EQ(epTensorCreate(&t_w,    2, ncclFloat32,  d_weights, kNumTokens,    kTopK2),  ncclSuccess);
@@ -795,7 +795,7 @@ TEST_F(TopK2MixedRoutingTest, ExpertMajorAlignZeroPadVerified) {
     std::vector<float> h_w(kNumTokens * kTopK2, 1.0f);
     CUDA_ASSERT(cudaMemcpy(d_weights, h_w.data(), kNumTokens*kTopK2*sizeof(float), cudaMemcpyHostToDevice));
 
-    ncclNDTensor_t t_tok, t_recv, t_w, t_recv_w;
+    ncclEpTensor_t *t_tok, *t_recv, *t_w, *t_recv_w;
     NCCL_ASSERT(epTensorCreate(&t_tok,    2, ncclBfloat16, d_tok,     kNumTokens,    kHidden));
     NCCL_ASSERT(epTensorCreate(&t_recv,   2, ncclBfloat16, d_recv,    kMaxRecvSlots, kHidden));
     NCCL_ASSERT(epTensorCreate(&t_w,      2, ncclFloat32,  d_weights, kNumTokens,    kTopK2));

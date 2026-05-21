@@ -43,11 +43,11 @@ protected:
         float*       d_weights = nullptr;
         float*       d_recv_w = nullptr;
         int64_t*     d_recv_idx = nullptr;
-        ncclNDTensor_t t_tok = nullptr;
-        ncclNDTensor_t t_recv = nullptr;
-        ncclNDTensor_t t_w = nullptr;
-        ncclNDTensor_t t_recv_w = nullptr;
-        ncclNDTensor_t t_recv_idx = nullptr;
+        ncclEpTensor_t* t_tok = nullptr;
+        ncclEpTensor_t* t_recv = nullptr;
+        ncclEpTensor_t* t_w = nullptr;
+        ncclEpTensor_t* t_recv_w = nullptr;
+        ncclEpTensor_t* t_recv_idx = nullptr;
         bool expert_major = false;
 
         void free_all() {
@@ -136,7 +136,7 @@ TEST_F(HtBwdTest, CombineWithGradRankMajor) {
     CUDA_ASSERT(cudaMalloc(&d_combined_w, kNumTokens * kTopK   * sizeof(float)));
     CUDA_ASSERT(cudaMemset(d_combined_w, 0, kNumTokens * kTopK * sizeof(float)));
 
-    ncclNDTensor_t t_combined_x, t_combined_w;
+    ncclEpTensor_t *t_combined_x, *t_combined_w;
     NCCL_ASSERT(epTensorCreate(&t_combined_x, 2, ncclBfloat16, d_combined_x, kNumTokens, kHidden));
     NCCL_ASSERT(epTensorCreate(&t_combined_w, 2, ncclFloat32,  d_combined_w, kNumTokens, kTopK));
 
@@ -147,7 +147,9 @@ TEST_F(HtBwdTest, CombineWithGradRankMajor) {
     c_in_s.topk_weights   = fwd.t_recv_w;
     c_out_s.tokens        = t_combined_x;
     c_out_s.topk_weights  = t_combined_w;
-    NCCL_ASSERT(ncclEpCombine(h, &c_in_s, &c_out_s, nullptr, g_stream));
+    ncclEpCombineConfig_t ccfg = NCCL_EP_COMBINE_CONFIG_INIT;
+    ccfg.pass_direction = NCCL_EP_BWD_PASS;
+    NCCL_ASSERT(ncclEpCombine(h, &c_in_s, &c_out_s, &ccfg, g_stream));
     CUDA_ASSERT(cudaStreamSynchronize(g_stream));
 
     std::vector<float> h_combined_w(kNumTokens * kTopK);
@@ -184,7 +186,7 @@ TEST_F(HtBwdTest, CombineWithGradExpertMajor) {
     CUDA_ASSERT(cudaMalloc(&d_combined_w, kNumTokens * kTopK   * sizeof(float)));
     CUDA_ASSERT(cudaMemset(d_combined_w, 0, kNumTokens * kTopK * sizeof(float)));
 
-    ncclNDTensor_t t_combined_x, t_combined_w;
+    ncclEpTensor_t *t_combined_x, *t_combined_w;
     NCCL_ASSERT(epTensorCreate(&t_combined_x, 2, ncclBfloat16, d_combined_x, kNumTokens, kHidden));
     NCCL_ASSERT(epTensorCreate(&t_combined_w, 2, ncclFloat32,  d_combined_w, kNumTokens, kTopK));
 
@@ -194,7 +196,9 @@ TEST_F(HtBwdTest, CombineWithGradExpertMajor) {
     c_in_s.topk_weights   = fwd.t_recv_w;   // 1D for EM
     c_out_s.tokens        = t_combined_x;
     c_out_s.topk_weights  = t_combined_w;
-    NCCL_ASSERT(ncclEpCombine(h, &c_in_s, &c_out_s, nullptr, g_stream));
+    ncclEpCombineConfig_t ccfg = NCCL_EP_COMBINE_CONFIG_INIT;
+    ccfg.pass_direction = NCCL_EP_BWD_PASS;
+    NCCL_ASSERT(ncclEpCombine(h, &c_in_s, &c_out_s, &ccfg, g_stream));
     CUDA_ASSERT(cudaStreamSynchronize(g_stream));
 
     std::vector<float> h_combined_w(kNumTokens * kTopK);
@@ -245,18 +249,16 @@ TEST_F(HtBwdTest, DispatchScatterRankMajor) {
     CUDA_ASSERT(cudaMemset(d_recv2, 0, kMaxRecvSlots * kHidden * sizeof(nv_bfloat16)));
     CUDA_ASSERT(cudaMemcpy(d_tok2, h_tok2.data(), kNumTokens*kHidden*sizeof(nv_bfloat16), cudaMemcpyHostToDevice));
 
-    ncclNDTensor_t t_tok2, t_recv2;
+    ncclEpTensor_t *t_tok2, *t_recv2;
     NCCL_ASSERT(epTensorCreate(&t_tok2,  2, ncclBfloat16, d_tok2,  kNumTokens,    kHidden));
     NCCL_ASSERT(epTensorCreate(&t_recv2, 2, ncclBfloat16, d_recv2, kMaxRecvSlots, kHidden));
-
-    // Signal scatter mode: clear topk_idx so dispatch skips routing/weights.
-    ncclEpHandle_test_clearTopkIdx(h);
 
     ncclEpDispatchInputs_t  d_in_s  = NCCL_EP_DISPATCH_INPUTS_INIT;
     ncclEpDispatchOutputs_t d_out_s = NCCL_EP_DISPATCH_OUTPUTS_INIT;
     d_in_s.tokens  = t_tok2;
     d_out_s.tokens = t_recv2;
     ncclEpDispatchConfig_t dcfg = NCCL_EP_DISPATCH_CONFIG_INIT;
+    dcfg.pass_direction = NCCL_EP_BWD_PASS;
     NCCL_ASSERT(ncclEpDispatch(h, &d_in_s, &d_out_s, nullptr, &dcfg, g_stream));
     NCCL_ASSERT(ncclEpComplete(h, nullptr, g_stream));
     CUDA_ASSERT(cudaStreamSynchronize(g_stream));
@@ -310,18 +312,16 @@ TEST_F(HtBwdTest, DispatchScatterExpertMajor) {
     CUDA_ASSERT(cudaMemset(d_recv2, 0, kMaxRecvSlots * kHidden * sizeof(nv_bfloat16)));
     CUDA_ASSERT(cudaMemcpy(d_tok2, h_tok2.data(), kNumTokens*kHidden*sizeof(nv_bfloat16), cudaMemcpyHostToDevice));
 
-    ncclNDTensor_t t_tok2, t_recv2;
+    ncclEpTensor_t *t_tok2, *t_recv2;
     NCCL_ASSERT(epTensorCreate(&t_tok2,  2, ncclBfloat16, d_tok2,  kNumTokens,    kHidden));
     NCCL_ASSERT(epTensorCreate(&t_recv2, 2, ncclBfloat16, d_recv2, kMaxRecvSlots, kHidden));
-
-    // Signal scatter mode: clear topk_idx so dispatch skips routing/weights.
-    ncclEpHandle_test_clearTopkIdx(h);
 
     ncclEpDispatchInputs_t  d_in_s  = NCCL_EP_DISPATCH_INPUTS_INIT;
     ncclEpDispatchOutputs_t d_out_s = NCCL_EP_DISPATCH_OUTPUTS_INIT;
     d_in_s.tokens  = t_tok2;
     d_out_s.tokens = t_recv2;
     ncclEpDispatchConfig_t dcfg = NCCL_EP_DISPATCH_CONFIG_INIT;
+    dcfg.pass_direction = NCCL_EP_BWD_PASS;
     NCCL_ASSERT(ncclEpDispatch(h, &d_in_s, &d_out_s, nullptr, &dcfg, g_stream));
     NCCL_ASSERT(ncclEpComplete(h, nullptr, g_stream));
     CUDA_ASSERT(cudaStreamSynchronize(g_stream));
@@ -361,8 +361,8 @@ static constexpr int kTopK2 = 2;
 
 class HtBwdTopK2Test : public ::testing::Test {
 protected:
-    ncclNDTensor_t topk_idx2_    = nullptr;
-    ncclNDTensor_t topk_idx2_em_ = nullptr;
+    ncclEpTensor_t* topk_idx2_    = nullptr;
+    ncclEpTensor_t* topk_idx2_em_ = nullptr;
     int64_t*       d_topk2_      = nullptr;
 
     static float w2(int rank, int token, int k) {
@@ -430,7 +430,7 @@ TEST_F(HtBwdTopK2Test, CombineWithGradRankMajor) {
     CUDA_ASSERT(cudaMemcpy(d_tok, h_tok.data(), kNumTokens*kHidden*sizeof(nv_bfloat16), cudaMemcpyHostToDevice));
     CUDA_ASSERT(cudaMemcpy(d_weights, h_w.data(), kNumTokens*kTopK2*sizeof(float), cudaMemcpyHostToDevice));
 
-    ncclNDTensor_t t_tok, t_recv, t_w, t_recv_w, t_recv_idx;
+    ncclEpTensor_t *t_tok, *t_recv, *t_w, *t_recv_w, *t_recv_idx;
     NCCL_ASSERT(epTensorCreate(&t_tok,      2, ncclBfloat16, d_tok,      kNumTokens,    kHidden));
     NCCL_ASSERT(epTensorCreate(&t_recv,     2, ncclBfloat16, d_recv,     kMaxRecvSlots, kHidden));
     NCCL_ASSERT(epTensorCreate(&t_w,        2, ncclFloat32,  d_weights,  kNumTokens,    kTopK2));
@@ -456,7 +456,7 @@ TEST_F(HtBwdTopK2Test, CombineWithGradRankMajor) {
     CUDA_ASSERT(cudaMalloc(&d_combined_w, kNumTokens * kTopK2  * sizeof(float)));
     CUDA_ASSERT(cudaMemset(d_combined_w, 0, kNumTokens * kTopK2 * sizeof(float)));
 
-    ncclNDTensor_t t_combined_x, t_combined_w;
+    ncclEpTensor_t *t_combined_x, *t_combined_w;
     NCCL_ASSERT(epTensorCreate(&t_combined_x, 2, ncclBfloat16, d_combined_x, kNumTokens, kHidden));
     NCCL_ASSERT(epTensorCreate(&t_combined_w, 2, ncclFloat32,  d_combined_w, kNumTokens, kTopK2));
 
@@ -466,7 +466,9 @@ TEST_F(HtBwdTopK2Test, CombineWithGradRankMajor) {
     c_in_s.topk_weights  = t_recv_w;
     c_out_s.tokens       = t_combined_x;
     c_out_s.topk_weights = t_combined_w;
-    NCCL_ASSERT(ncclEpCombine(h, &c_in_s, &c_out_s, nullptr, g_stream));
+    ncclEpCombineConfig_t ccfg = NCCL_EP_COMBINE_CONFIG_INIT;
+    ccfg.pass_direction = NCCL_EP_BWD_PASS;
+    NCCL_ASSERT(ncclEpCombine(h, &c_in_s, &c_out_s, &ccfg, g_stream));
     CUDA_ASSERT(cudaStreamSynchronize(g_stream));
 
     std::vector<float> h_combined_w(kNumTokens * kTopK2);
@@ -518,7 +520,7 @@ TEST_F(HtBwdTopK2Test, CombineWithGradExpertMajor) {
     CUDA_ASSERT(cudaMemcpy(d_tok, h_tok.data(), kNumTokens*kHidden*sizeof(nv_bfloat16), cudaMemcpyHostToDevice));
     CUDA_ASSERT(cudaMemcpy(d_weights, h_w.data(), kNumTokens*kTopK2*sizeof(float), cudaMemcpyHostToDevice));
 
-    ncclNDTensor_t t_tok, t_recv, t_w, t_recv_w_1d;
+    ncclEpTensor_t *t_tok, *t_recv, *t_w, *t_recv_w_1d;
     NCCL_ASSERT(epTensorCreate(&t_tok,       2, ncclBfloat16, d_tok,       kNumTokens,    kHidden));
     NCCL_ASSERT(epTensorCreate(&t_recv,      2, ncclBfloat16, d_recv,      kMaxRecvSlots, kHidden));
     NCCL_ASSERT(epTensorCreate(&t_w,         2, ncclFloat32,  d_weights,   kNumTokens,    kTopK2));
@@ -542,7 +544,7 @@ TEST_F(HtBwdTopK2Test, CombineWithGradExpertMajor) {
     CUDA_ASSERT(cudaMalloc(&d_combined_w, kNumTokens * kTopK2  * sizeof(float)));
     CUDA_ASSERT(cudaMemset(d_combined_w, 0, kNumTokens * kTopK2 * sizeof(float)));
 
-    ncclNDTensor_t t_combined_x, t_combined_w;
+    ncclEpTensor_t *t_combined_x, *t_combined_w;
     NCCL_ASSERT(epTensorCreate(&t_combined_x, 2, ncclBfloat16, d_combined_x, kNumTokens, kHidden));
     NCCL_ASSERT(epTensorCreate(&t_combined_w, 2, ncclFloat32,  d_combined_w, kNumTokens, kTopK2));
 
@@ -552,7 +554,9 @@ TEST_F(HtBwdTopK2Test, CombineWithGradExpertMajor) {
     c_in_s.topk_weights  = t_recv_w_1d;
     c_out_s.tokens       = t_combined_x;
     c_out_s.topk_weights = t_combined_w;
-    NCCL_ASSERT(ncclEpCombine(h, &c_in_s, &c_out_s, nullptr, g_stream));
+    ncclEpCombineConfig_t ccfg = NCCL_EP_COMBINE_CONFIG_INIT;
+    ccfg.pass_direction = NCCL_EP_BWD_PASS;
+    NCCL_ASSERT(ncclEpCombine(h, &c_in_s, &c_out_s, &ccfg, g_stream));
     CUDA_ASSERT(cudaStreamSynchronize(g_stream));
 
     std::vector<float> h_combined_w(kNumTokens * kTopK2);

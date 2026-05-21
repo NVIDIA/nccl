@@ -88,5 +88,6 @@ run_suite "test_output_layout" "EP Output Layout Tests"
 run_suite "test_handle_maps"   "EP Handle Maps Tests"
 run_suite "test_lifecycle"     "EP Lifecycle Tests"
 run_suite "test_ht_bwd"        "EP HT Backward Tests"
+run_suite "test_tensor_create" "EP Tensor Create Tests"
 
 exit "${OVERALL_FAIL}"

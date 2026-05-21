@@ -29,13 +29,16 @@
 #define NCCL_ASSERT(x) ASSERT_EQ((x), ncclSuccess)
 #define CUDA_ASSERT(x) ASSERT_EQ((x), cudaSuccess)
 
-// Compat wrapper: ncclEpTensorCreate now takes const size_t* sizes instead of variadic dims.
+// Allocate a tensor descriptor and bind it to a caller-owned device buffer.
 template<typename... Dims>
 static inline ncclResult_t epTensorCreate(
-    ncclNDTensor_t* t, unsigned int ndim, ncclDataType_t dtype, void* data, Dims... dims)
+    ncclEpTensor_t** t, unsigned int ndim, ncclDataType_t dtype, void* data, Dims... dims)
 {
     const size_t sizes[] = {static_cast<size_t>(dims)...};
-    return ncclEpTensorCreate(t, ndim, dtype, data, sizes);
+    ncclResult_t r = ncclEpTensorAlloc(t, ndim, dtype, sizes, nullptr);
+    if (r != ncclSuccess) return r;
+    (*t)->data = data;
+    return ncclSuccess;
 }
 
 // ── Process-level state ───────────────────────────────────────────────────────
@@ -97,8 +100,8 @@ static void exchange_uid(ncclUniqueId* uid) {
 
 class EpTestBase : public ::testing::Test {
 protected:
-    ncclNDTensor_t topk_idx_    = nullptr;
-    ncclNDTensor_t topk_idx_em_ = nullptr;  // for expert-major group
+    ncclEpTensor_t* topk_idx_    = nullptr;
+    ncclEpTensor_t* topk_idx_em_ = nullptr;  // for expert-major group
     int64_t*       d_topk_      = nullptr;
 
     void SetUp() override {

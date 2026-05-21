@@ -81,7 +81,7 @@ help:
 	@echo "using GPU-Initiated Networking (GIN) for RMSNorm operations."
 	@echo ""
 	@echo "Requirements:"
-	@echo "  - CUDA Compute Capability 9.0 or higher (Hopper H100+)"
+	@echo "  - CUDA 12.2 or above"
 	@echo ""
 	@echo "Targets:"
 	@echo "  all       - Build the example (default)"

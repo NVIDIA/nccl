@@ -81,7 +81,7 @@ help:
 	@echo "using Multimem (LSA) for RMSNorm operations."
 	@echo ""
 	@echo "Requirements:"
-	@echo "  - CUDA 12.0 or above"
+	@echo "  - CUDA 12.2 or above"
 	@echo "  - CUDA Compute Capability 9.0 or higher (Hopper H100+)"
 	@echo "  - Multimem support (nLsaTeams == 1)"
 	@echo ""

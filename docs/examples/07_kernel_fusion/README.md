@@ -318,7 +318,7 @@ ncclCoopCta coop = ncclCoopCta();
 
 // Initialize LSA barrier session for this block
 ncclLsaBarrierSession<ncclCoopCta> bar {
-    coop, devComm, ncclTeamLsa(devComm), devComm.lsaBarrier, blockIdx.x
+    coop, devComm, ncclTeamTagLsa(), blockIdx.x
 };
 
 // Initial synchronization across all GPUs
@@ -457,13 +457,13 @@ This example demonstrates fused computation and communication using NCCL's Multi
 
 ##### Phase 1: Reduce-Scatter via Multimem
 
-Each block loads and sums from all peers using a single multimem pointer. The reduced result is stored locally only (each rank handles its own tokens). The barrier setup matches the LSA example (`01_rmsnorm_lsa`):
+Each block loads and sums from all peers using a single multimem pointer. The reduced result is stored locally only (each rank handles its own tokens). The barrier setup follows the LSA example (`01_rmsnorm_lsa`) with the multimem-enabled constructor:
 
 ```cuda
 ncclCoopCta coop = ncclCoopCta();
 
 ncclLsaBarrierSession<ncclCoopCta> bar {
-    coop, devComm, ncclTeamLsa(devComm), devComm.lsaBarrier, blockIdx.x
+    coop, devComm, ncclTeamTagLsa(), blockIdx.x, /*multimem=*/true
 };
 
 // Initial synchronization across all GPUs
@@ -481,6 +481,8 @@ float* multimem_pointer = reinterpret_cast<float*>(
 for (int i = threadIdx.x; i < hidden_dim; i += blockDim.x) {
     local_pointer[i] = multimemLoadSum(multimem_pointer + i);
 }
+
+coop.sync();
 ```
 
 **Key Multimem APIs:**

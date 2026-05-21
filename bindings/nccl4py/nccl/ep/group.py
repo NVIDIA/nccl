@@ -10,13 +10,18 @@ from typing import TYPE_CHECKING
 
 from nccl.core.typing import NcclInvalid
 
+from nccl.core.cuda import get_stream_ptr
+from nccl.core.typing import NcclStreamSpec
+
 from nccl.bindings import nccl_ep as _ep_bindings
 from nccl.ep._binding_helpers import binding_dataclass
 from nccl.ep.allocator import AllocConfig
-from nccl.ep.enums import Algorithm
+from nccl.ep.enums import Algorithm, Layout
 
 if TYPE_CHECKING:
     from nccl.core import Communicator
+    from nccl.ep.handle import Handle, HandleConfig, LayoutInfo
+    from nccl.ep.tensor import Tensor
 
 
 __all__ = ["Group", "GroupConfig"]
@@ -131,6 +136,49 @@ class Group:
         """Raw ``ncclEpGroup_t`` address."""
         self._check_valid("read ptr")
         return self._ptr
+
+    def create_handle(
+        self,
+        layout: Layout,
+        topk_idx: Tensor,
+        *,
+        layout_info: LayoutInfo | None = None,
+        config: HandleConfig | None = None,
+        stream: NcclStreamSpec,
+    ) -> Handle:
+        """Collectively create and initialize a :class:`Handle` over this group.
+
+        HT mode performs metadata exchange as part of this call.
+
+        Args:
+            layout: Receive-buffer layout. Required — must not be
+                :py:attr:`Layout.UNSET`. HT supports ``FLAT`` /
+                ``EXPERT_MAJOR``; LL supports ``EXPERT_MAJOR`` /
+                ``RANK_MAJOR``.
+            topk_idx: Top-k expert indices for this step
+                (shape ``[num_tokens, top_k]``, int64).
+            layout_info: Optional :class:`LayoutInfo`. HT: set
+                ``expert_counters`` when ``max_dispatch_tokens_per_rank``
+                is ``NCCL_EP_AUTO``. LL mode: must be ``None``.
+            config: Optional :class:`HandleConfig`; ``None`` forwards
+                NULL (library defaults).
+            stream: CUDA stream for the launch.
+        """
+        from nccl.ep.handle import Handle, _materialize, _ptr_of
+        self._check_valid("create_handle")
+        # Bind materialized structs to locals so their backing memory
+        # outlives the C call (binding __dealloc__ frees the struct).
+        layout_b = _materialize(layout_info)
+        config_b = _materialize(config)
+        ptr = _ep_bindings.create_handle(
+            self._ptr,
+            int(layout),
+            topk_idx.ptr,
+            _ptr_of(layout_b),
+            _ptr_of(config_b),
+            get_stream_ptr(stream),
+        )
+        return Handle(ptr)
 
     def destroy(self) -> None:
         """Release the group. Subsequent operations on this object are invalid."""

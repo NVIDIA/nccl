@@ -294,8 +294,8 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
         if algorithm == nccl_ep.Algorithm.LOW_LATENCY
         else nccl_ep.Layout.FLAT
     )
-    ep_handle = nccl_ep.Handle.create(
-        ep_group, handle_layout, topk_idx,
+    ep_handle = ep_group.create_handle(
+        handle_layout, topk_idx,
         layout_info=handle_layout_info,
         config=nccl_ep.HandleConfig(),
         stream=stream,

@@ -38,7 +38,7 @@ class Layout(IntEnum):
 
     UNSET = 0
     """Zero-init sentinel — must be overridden before passing the config to
-    :py:meth:`Handle.create`. The library does not auto-resolve; leaving
+    :py:meth:`Group.create_handle`. The library does not auto-resolve; leaving
     this value triggers an assertion at handle-init time."""
 
     EXPERT_MAJOR = 1

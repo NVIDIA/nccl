@@ -21,7 +21,6 @@ from nccl.ep._binding_helpers import binding_dataclass
 from nccl.ep.enums import Layout, PassDir
 
 if TYPE_CHECKING:
-    from nccl.ep.group import Group
     from nccl.ep.tensor import Tensor
 
 
@@ -43,7 +42,7 @@ __all__ = [
     size_field_dtype=_ep_bindings.handle_config_dtype,
 )
 class HandleConfig:
-    """Pythonic configuration for :py:meth:`Handle.create`.
+    """Pythonic configuration for :py:meth:`Group.create_handle`.
 
     Mirrors :c:struct:`ncclEpHandleConfig_t`. All fields default to 0;
     constructing :py:class:`HandleConfig` without arguments is
@@ -255,57 +254,11 @@ def _ptr_of(binding: object) -> int:
 class Handle:
     """Per-step routing handle for dispatch/combine.
 
-    Construct via :meth:`create`; release with :meth:`destroy`.
+    Construct via :py:meth:`Group.create_handle`; release with :meth:`destroy`.
     """
 
     def __init__(self, ptr: int) -> None:
         self._ptr = ptr
-
-    @classmethod
-    def create(
-        cls,
-        group: Group,
-        layout: Layout,
-        topk_idx: Tensor,
-        *,
-        layout_info: LayoutInfo | None = None,
-        config: HandleConfig | None = None,
-        stream: NcclStreamSpec,
-    ) -> Handle:
-        """Collectively create+initialize an EP handle.
-
-        HT mode performs metadata exchange as part of this call.
-
-        Args:
-            group: An initialized :class:`Group`.
-            layout: Receive-buffer layout. Required — must not be
-                :py:attr:`Layout.UNSET`. HT supports ``FLAT`` /
-                ``EXPERT_MAJOR``; LL supports ``EXPERT_MAJOR`` /
-                ``RANK_MAJOR``.
-            topk_idx: Top-k expert indices for this step
-                (shape ``[num_tokens, top_k]``, int64).
-            stream: CUDA stream for the launch — accepts a
-                :class:`cuda.core.Stream`, an integer stream handle, or
-                any object exposing ``__cuda_stream__``.
-            layout_info: Optional :class:`LayoutInfo`. HT: set
-                ``expert_counters`` when ``max_dispatch_tokens_per_rank`` is
-                ``NCCL_EP_AUTO``. LL mode: must be ``None``.
-            config: Optional :class:`HandleConfig`. ``None`` forwards
-                NULL (use library defaults).
-        """
-        # Bind materialized structs to locals so their backing memory
-        # outlives the C call (binding __dealloc__ frees the struct).
-        layout_b = _materialize(layout_info)
-        config_b = _materialize(config)
-        ptr = _ep_bindings.create_handle(
-            group.ptr,
-            int(layout),
-            topk_idx.ptr,
-            _ptr_of(layout_b),
-            _ptr_of(config_b),
-            get_stream_ptr(stream),
-        )
-        return cls(ptr)
 
     def _check_valid(self, operation: str) -> None:
         if not self._ptr:

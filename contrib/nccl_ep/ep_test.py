@@ -94,8 +94,11 @@ def d2d(dst_ptr: int, src_ptr: int, nbytes: int, stream) -> None:
     _check_cuda(err)
 
 
-# Mirrors ep_test.cu's low-level cudaMalloc pattern. Pythonic callers would
-# typically pass a torch tensor straight to nccl_ep.Tensor(...) instead.
+# ---------------------------------------------------------------------------
+# Device tensor helper: pairs a raw cudaMalloc allocation with its nccl_ep.NDTensor.
+# Sized at create-time so the host side can compute h2d/d2h byte counts
+# without re-deriving from sizes.
+# ---------------------------------------------------------------------------
 
 _DTYPE_BYTES = {
     nccl_core.INT8: 1,

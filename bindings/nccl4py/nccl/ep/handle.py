@@ -1,5 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# See LICENSE.txt for more license information
 
 """Per-step EP handle (:class:`Handle`) and the Pythonic dataclasses
 that mirror the named-struct ABI used by NCCL EP's dispatch/combine

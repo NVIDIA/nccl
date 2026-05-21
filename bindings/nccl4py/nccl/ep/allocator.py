@@ -1,5 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# See LICENSE.txt for more license information
 
 """ctypes function-pointer types and ``AllocConfig`` wrapper for the NCCL EP allocator hooks.
 

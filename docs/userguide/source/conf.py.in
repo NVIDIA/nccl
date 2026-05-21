@@ -60,6 +60,7 @@ extensions = [
 # render short names (`Buffer` instead of `cuda.core.Buffer`).
 intersphinx_mapping = {
     'cuda-core': ('https://nvidia.github.io/cuda-python/cuda-core/latest/', None),
+    'packaging': ('https://packaging.pypa.io/en/stable/', None),
 }
 
 # Add any paths that contain templates here, relative to this directory.

@@ -17,6 +17,7 @@
 #include "nccl.h"
 #include "nccl_common.h"
 #include "plugin/nccl_net.h"
+#include "os.h"
 #include <thread>
 #include <mutex>
 #include <condition_variable>
@@ -74,6 +75,7 @@ struct ncclGinStateDevComm {
 };
 
 struct ncclGinState {
+  ncclAffinity cpuAffinity;
   ncclGin_t* ncclGin;
   void* ginInstance;
   bool connected;

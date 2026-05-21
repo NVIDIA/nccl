@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
+#include <functional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -101,7 +102,8 @@ inline std::string dispatch_jit_source(
         << "\n"
         << "extern \"C\" __launch_bounds__(INTER_NODE_GROUP::size() + INTRA_NODE_G2S_GROUP::size() + INTRA_NODE_S2G_GROUP::size() + PAD_GROUP::size(), 1)\n"
         << "__global__ void " << kDispatchJitEntryName << "(\n"
-        << "    const __grid_constant__ hybrid_ep::dispatch_kernel_param_t<TOKEN_DATA_TYPE> param) {\n"
+        << "    const __grid_constant__ hybrid_ep::dispatch_kernel_param_t<TOKEN_DATA_TYPE, "
+        << lsa_team_size << "> param) {\n"
         << "  extern __shared__ uint8_t smem_bytes[];\n"
         << "  hybrid_ep::dispatch_kernel_impl<\n"
         << "      TOKEN_DATA_TYPE,\n"
@@ -136,6 +138,7 @@ inline void launch_dispatch(
     bool use_fp8,
     int hidden_dim,
     void* param,
+    size_t param_size,
     int dynamic_smem_bytes,
     cudaStream_t stream) {
     const dispatch_warp_layout_t L = compute_dispatch_warp_layout(num_lsa_teams, layout);
@@ -186,14 +189,14 @@ inline void launch_dispatch(
     variant.source = source;
     variant.entry_name = kDispatchJitEntryName;
     variant.identity = &variant_identity;
-    variant.runtime_key = static_cast<std::uint64_t>(hidden_dim);
+    variant.runtime_key = static_cast<std::uint64_t>(std::hash<std::string>{}(variant_name));
     variant.num_blocks = num_of_blocks;
     variant.block_dim = L.block_dim;
     variant.dynamic_smem_bytes = dynamic_smem_bytes;
 
     std::string error;
     const ::nccl_ep::jit::JitKernelStatus status =
-        ::nccl_ep::jit::launch_jit_kernel(variant, param, stream, &error);
+        ::nccl_ep::jit::launch_jit_kernel(variant, param, param_size, stream, &error);
 
     if (status != ::nccl_ep::jit::JitKernelStatus::kLaunched) {
         std::fprintf(

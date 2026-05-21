@@ -50,7 +50,6 @@ class EpHandleConfig:
     equivalent to passing ``NULL`` for the C ``config`` argument.
 
     Attributes:
-        use_fp8: Enable FP8 dispatch (default ``False``).
         dispatch_output_per_expert_alignment: HT expert-major only.
             Per-expert zone alignment in tokens (must be a power of 2;
             0/1 = no padding).
@@ -60,7 +59,6 @@ class EpHandleConfig:
         ``contrib/nccl_ep/include/nccl_ep.h``
     """
 
-    use_fp8: bool = False
     dispatch_output_per_expert_alignment: int = 0
 
 

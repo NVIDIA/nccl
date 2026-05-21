@@ -103,6 +103,7 @@ def _resolve_library_path() -> str:
 cdef object __symbol_lock = threading.Lock()
 cdef bint __py_nccl_ep_init = False
 
+cdef void* __ncclEpGetVersion = NULL
 cdef void* __ncclEpCreateGroup = NULL
 cdef void* __ncclEpGroupDestroy = NULL
 cdef void* __ncclEpTensorCreate = NULL
@@ -145,6 +146,13 @@ cdef int _check_or_init_nccl_ep() except -1 nogil:
             return 0
 
         # Load function
+        global __ncclEpGetVersion
+        __ncclEpGetVersion = dlsym(RTLD_DEFAULT, 'ncclEpGetVersion')
+        if __ncclEpGetVersion == NULL:
+            if handle == NULL:
+                handle = load_library()
+            __ncclEpGetVersion = dlsym(handle, 'ncclEpGetVersion')
+
         global __ncclEpCreateGroup
         __ncclEpCreateGroup = dlsym(RTLD_DEFAULT, 'ncclEpCreateGroup')
         if __ncclEpCreateGroup == NULL:
@@ -264,6 +272,9 @@ cpdef dict _inspect_function_pointers():
     _check_or_init_nccl_ep()
     cdef dict data = {}
 
+    global __ncclEpGetVersion
+    data["__ncclEpGetVersion"] = <intptr_t>__ncclEpGetVersion
+
     global __ncclEpCreateGroup
     data["__ncclEpCreateGroup"] = <intptr_t>__ncclEpCreateGroup
 
@@ -323,6 +334,16 @@ cpdef _inspect_function_pointer(str name):
 ###############################################################################
 # Wrapper functions
 ###############################################################################
+
+cdef ncclResult_t _ncclEpGetVersion(int* version) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
+    global __ncclEpGetVersion
+    _check_or_init_nccl_ep()
+    if __ncclEpGetVersion == NULL:
+        with gil:
+            raise FunctionNotFoundError("function ncclEpGetVersion is not found")
+    return (<ncclResult_t (*)(int*) noexcept nogil>__ncclEpGetVersion)(
+        version)
+
 
 cdef ncclResult_t _ncclEpCreateGroup(ncclEpGroup_t* ep_group, ncclComm_t comm, const ncclEpGroupConfig_t* config) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
     global __ncclEpCreateGroup

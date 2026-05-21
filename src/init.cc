@@ -619,7 +619,7 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
     INFO(NCCL_INIT, "CC %s, workFifoBytes %d", ccEnable ? "On" : "Off", comm->workFifoBytes);
   }
 
-  if (ncclGdrCopy != NULL && ncclParamGdrCopyFifoEnable() == 1) {
+  if (ncclGdrCopy != NULL && ncclParamGdrCopyFifoEnable() == 1 && comm->workFifoBytes > 0) {
     // The workFifoBuf lives in GDR mapped CUDA memory.
     NCCLCHECKGOTO(ncclGdrCudaCalloc(&comm->workFifoBuf, &comm->workFifoBufDev, comm->workFifoBytes, &comm->workFifoBufGdrHandle, comm->memManager), ret, fail);
     ncclCommPushCudaGdrFree(comm, comm->workFifoBufGdrHandle);
@@ -2210,7 +2210,7 @@ static ncclResult_t parseCommConfig(ncclComm_t comm, ncclConfig_t *config) {
       internalConfigPtr->maxP2pPeers = defaultConfig.maxP2pPeers;
     }
 
-    if (internalConfigPtr->version < NCCL_VERSION(2, 30, 4)) {
+    if (internalConfigPtr->version < NCCL_VERSION(2, 30, 5)) {
       internalConfigPtr->graphStreamOrdering = defaultConfig.graphStreamOrdering;
     }
   }

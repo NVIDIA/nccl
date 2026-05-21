@@ -1090,11 +1090,10 @@ cdef class EpCombineOutputs:
 cdef _get_ep_handle_config_dtype_offsets():
     cdef ncclEpHandleConfig_t pod = ncclEpHandleConfig_t()
     return _numpy.dtype({
-        'names': ['size_', 'use_fp8', 'dispatch_output_per_expert_alignment'],
-        'formats': [_numpy.uint32, _numpy.uint32, _numpy.uint64],
+        'names': ['size_', 'dispatch_output_per_expert_alignment'],
+        'formats': [_numpy.uint32, _numpy.uint64],
         'offsets': [
             (<intptr_t>&(pod.size)) - (<intptr_t>&pod),
-            (<intptr_t>&(pod.use_fp8)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.dispatch_output_per_expert_alignment)) - (<intptr_t>&pod),
         ],
         'itemsize': sizeof(ncclEpHandleConfig_t),
@@ -1180,17 +1179,6 @@ cdef class EpHandleConfig:
         if self._readonly:
             raise ValueError("This EpHandleConfig instance is read-only")
         self._ptr[0].size = val
-
-    @property
-    def use_fp8(self):
-        """int: """
-        return self._ptr[0].use_fp8
-
-    @use_fp8.setter
-    def use_fp8(self, val):
-        if self._readonly:
-            raise ValueError("This EpHandleConfig instance is read-only")
-        self._ptr[0].use_fp8 = val
 
     @property
     def dispatch_output_per_expert_alignment(self):
@@ -1959,6 +1947,14 @@ cpdef inline check_status(int status):
 ###############################################################################
 # Wrapper functions
 ###############################################################################
+
+cpdef int get_version() except? -1:
+    cdef int version
+    with nogil:
+        __status__ = ncclEpGetVersion(&version)
+    check_status(__status__)
+    return version
+
 
 cpdef intptr_t create_group(intptr_t comm, intptr_t config) except? 0:
     cdef EpGroup ep_group

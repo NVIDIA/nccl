@@ -451,7 +451,6 @@ ncclResult_t ncclRmaProxyConnectOnce(struct ncclComm* comm) {
 
 exit:
   if (ret == ncclSuccess) rmaProxyState->connected = true;
-else printf("Connect once return %d\n", ret);
   return ret;
 fail:
   free(allCommCounts);

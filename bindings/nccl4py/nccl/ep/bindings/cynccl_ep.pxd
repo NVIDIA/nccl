@@ -84,7 +84,6 @@ ctypedef cudaError_t (*ncclEpFreeFn_t 'ncclEpFreeFn_t')(
 )
 ctypedef struct ncclEpHandleConfig_t 'ncclEpHandleConfig_t':
     unsigned int size
-    unsigned int use_fp8
     size_t dispatch_output_per_expert_alignment
 
 ctypedef struct ncclEpDispatchConfig_t 'ncclEpDispatchConfig_t':
@@ -156,6 +155,7 @@ ctypedef struct ncclEpGroupConfig_t 'ncclEpGroupConfig_t':
 # Functions
 ###############################################################################
 
+cdef ncclResult_t ncclEpGetVersion(int* version) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclEpCreateGroup(ncclEpGroup_t* ep_group, ncclComm_t comm, const ncclEpGroupConfig_t* config) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclEpGroupDestroy(ncclEpGroup_t ep_group) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclEpTensorCreate(ncclNDTensor_t* tensor, unsigned int ndim, ncclDataType_t datatype, void* data, const size_t* sizes) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil

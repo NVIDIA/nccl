@@ -38,6 +38,7 @@ ctypedef ncclEpLayout_t _EpLayout
 # Functions
 ###############################################################################
 
+cpdef int get_version() except? -1
 cpdef intptr_t create_group(intptr_t comm, intptr_t config) except? 0
 cpdef group_destroy(intptr_t ep_group)
 cpdef intptr_t tensor_create(unsigned int ndim, int datatype, intptr_t data, intptr_t sizes) except? 0

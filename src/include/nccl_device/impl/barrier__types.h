@@ -16,13 +16,14 @@ struct ncclBarrierSession_internal {
   Coop coop;
   nccl::utility::Optional<ncclGin> gin;
   nccl::utility::Optional<ncclLsaBarrierSession<Coop>> innerLsaBar;
-  nccl::utility::Optional<ncclGinBarrierSession<Coop>> outerGinBar;
+  nccl::utility::Optional<ncclGinBarrierSession<Coop>> outerRailGinBar;
+  nccl::utility::Optional<ncclGinBarrierSession<Coop>> outerWorldGinBar;
 
-  template<typename GinInit, typename InnerInit, typename OuterInit>
+  template<typename GinInit, typename InnerInit, typename OuterInit, typename OuterWorldInit>
   NCCL_DEVICE_INLINE ncclBarrierSession_internal(
-      Coop coop, GinInit ginInit, InnerInit innerInit, OuterInit outerInit
+      Coop coop, GinInit ginInit, InnerInit innerInit, OuterInit outerInit, OuterWorldInit outerWorldInit
     ):
-    coop(coop), gin{ginInit}, innerLsaBar{innerInit}, outerGinBar{outerInit} {
+    coop(coop), gin{ginInit}, innerLsaBar{innerInit}, outerRailGinBar{outerInit}, outerWorldGinBar{outerWorldInit} {
   }
 };
 #endif

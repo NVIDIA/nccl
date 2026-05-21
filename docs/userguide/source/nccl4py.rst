@@ -13,5 +13,5 @@ Python Bindings (NCCL4Py)
    nccl4py/memory
    nccl4py/resources
    nccl4py/types
-   nccl4py/utilities
+   nccl4py/versions
    nccl4py/interop

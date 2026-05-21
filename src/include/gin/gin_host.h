@@ -11,6 +11,7 @@
 #include "allocator.h"
 #include "nccl.h"
 #include "nccl_gin.h"
+#include "os.h"
 #include "nccl_device/gin/gin_device_host_common.h"
 #include <thread>
 #include <mutex>
@@ -24,6 +25,7 @@ struct ncclGinStateDevComm {
 };
 
 struct ncclGinState {
+  ncclAffinity cpuAffinity;
   ncclGin_t* ncclGin;
   void* ginInstance;
   bool connected;

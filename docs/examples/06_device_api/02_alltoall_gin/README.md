@@ -91,7 +91,7 @@ GIN barriers enable cross-node synchronization from device code over the network
 ```
 
 ### GIN Put Operations (Device-side)
-GIN provides one-sided put operations for direct remote memory writes over the network. Each thread handles a subset of destination ranks, writing its rank's data to the appropriate location in each peer's receive buffer. The `ncclGin_SignalInc` parameter increments a signal counter, enabling asynchronous completion detection.
+GIN provides one-sided put operations for direct remote memory writes over the network. Each thread handles a subset of destination ranks, writing its rank's data to the appropriate location in each peer's receive buffer. The `ncclGin_WeakSignalInc` parameter adds a per-`put` completion increment to the destination signal, enabling the receiver to wait for the expected count of completed incoming puts.
 
 ```cpp
   const size_t size = count * sizeof(T);
@@ -99,7 +99,7 @@ GIN provides one-sided put operations for direct remote memory writes over the n
     gin.put(ncclTeamWorld(devComm), r,
         recvwin, recvoffset + devComm.rank * size,
         sendwin, sendoffset + r * size,
-        size, ncclGin_SignalInc{signalIndex});
+        size, ncclGin_WeakSignalInc{signalIndex});
   }
 ```
 

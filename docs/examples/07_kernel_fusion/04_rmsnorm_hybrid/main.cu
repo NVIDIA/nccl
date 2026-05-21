@@ -47,8 +47,8 @@
  *              (hybrid LSA/GIN) to update their window_send buffers
  *
  * Synchronization:
- *   - Signals apply only to remote peers: remote PUT (gin.put) uses ncclGin_SignalInc on the
- *     destination rank, so waitSignal counts inbound signaled PUTs from remote
+ *   - Signals apply only to remote peers: remote PUT (gin.put) uses ncclGin_WeakSignalInc to
+ *     add one completion increment on the destination rank, so waitSignal counts inbound signaled PUTs from remote
  *     (non-LSA) peers only (numRemotePeers = nRanks - lsa.nRanks per round). LSA
  *     stores do not increment this counter—an explicit LSA sub-barrier orders
  *     the LSA path.
@@ -65,7 +65,7 @@
  *     ncclGinFenceLevel::None) aligns cross-node phases. The Phase 1 reduction
  *     consumes data after remote GIN signal waits and the LSA sub-barrier.
  *   - Signal thresholds accumulate across phases (no reset); each phase adds
- *     numRemotePeers remote SignalIncs to this block's signalIndex.
+ *     numRemotePeers remote completion increments to this block's signalIndex.
  *
  * Parameters:
  *   window_send     - Window for sending data (source and final destination)
@@ -111,7 +111,7 @@ __global__ void RMSNormHybrid(ncclWindow_t window_send, ncclWindow_t window_recv
   //============================================================================
   // This block owns one token: token_idx = rank * gridDim.x + blockIdx.x.
   // Each block sends its token data to all peer GPUs using hybrid communication:
-  //   - Remote peers (outside LSA team): PUT (gin.put) with SignalInc (signals only here)
+  //   - Remote peers (outside LSA team): PUT (gin.put) with a completion signal (signals only here)
   //   - Local peers (within LSA team): direct LSA stores into window_recv (no signal)
   //
   // Receive layout (peer-major in each rank's window): for global peer p, the H*B
@@ -142,7 +142,7 @@ __global__ void RMSNormHybrid(ncclWindow_t window_send, ncclWindow_t window_recv
 
     gin.put(ncclTeamWorld(devComm), peer, window_recv, my_window_offset,
             window_send, peer_window_offset, sizeof(float) * hidden_dim,
-            ncclGin_SignalInc{signalIndex});
+            ncclGin_WeakSignalInc{signalIndex});
   }
 
   // Remote peers: PUT (peers after LSA team)
@@ -152,7 +152,7 @@ __global__ void RMSNormHybrid(ncclWindow_t window_send, ncclWindow_t window_recv
 
     gin.put(ncclTeamWorld(devComm), peer, window_recv, my_window_offset,
             window_send, peer_window_offset, sizeof(float) * hidden_dim,
-            ncclGin_SignalInc{signalIndex});
+            ncclGin_WeakSignalInc{signalIndex});
   }
 
   // Send to local peers using LSA direct writes
@@ -240,14 +240,14 @@ __global__ void RMSNormHybrid(ncclWindow_t window_send, ncclWindow_t window_recv
   for (int peer = threadIdx.x; peer < startLsa; peer += blockDim.x) {
     gin.put(ncclTeamWorld(devComm), peer, window_send, final_token_offset,
             window_recv, my_window_offset, sizeof(float) * hidden_dim,
-            ncclGin_SignalInc{signalIndex});
+            ncclGin_WeakSignalInc{signalIndex});
   }
 
   // Remote peers: PUT (peers after LSA team)
   for (int peer = startLsa + lsaSize + threadIdx.x; peer < nRanks; peer += blockDim.x) {
     gin.put(ncclTeamWorld(devComm), peer, window_send, final_token_offset,
             window_recv, my_window_offset, sizeof(float) * hidden_dim,
-            ncclGin_SignalInc{signalIndex});
+            ncclGin_WeakSignalInc{signalIndex});
   }
 
   // Send to local peers using LSA direct writes

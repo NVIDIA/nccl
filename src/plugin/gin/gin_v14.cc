@@ -14,7 +14,7 @@ static ncclGin_v14_t* ncclGin_v14;
 ncclGin_t* getNcclGin_v14(void* lib) {
   ncclGin_v14 = (ncclGin_v14_t*)dlsym(lib, "ncclGinPlugin_v14");
   if (ncclGin_v14) {
-    INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Loaded gin plugin %s (v14)", ncclGin_v14->name);
+    INFO(NCCL_INIT|NCCL_NET, "GIN/Plugin: Loaded gin plugin %s (v14)", ncclGin_v14->name);
     return ncclGin_v14;
   }
   return nullptr;

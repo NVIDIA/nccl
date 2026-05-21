@@ -1,7 +1,8 @@
 /*************************************************************************
- * Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
+ * See LICENSE.txt for more license information
  ************************************************************************/
 #ifndef _NCCL_DEVICE_WRAPPER_H_
 #define _NCCL_DEVICE_WRAPPER_H_
@@ -10,7 +11,30 @@
  * NCCL Device API C-style wrapper functions
  */
 
-#include "nccl_device.h"
+/*
+ * Declaration/type-only view of the NCCL Device API for LLVM IR users.
+ *
+ * This header intentionally excludes nccl_device/impl/xxx__funcs.h so user IR
+ * bitcode can resolve NCCL Device API implementations from libnccl_device.bc.
+ */
+#include "nccl_device/coop.h"
+#include "nccl_device/core.h"
+#include "nccl_device/ll_a2a.h"
+#include "nccl_device/lsa_barrier.h"
+#include "nccl_device/gin_barrier.h"
+#include "nccl_device/barrier.h"
+#include "nccl_device/ptr.h"
+#include "nccl_device/reduce_copy.h"
+
+#include "nccl_device/impl/core__types.h"
+#include "nccl_device/impl/comm__types.h"
+#include "nccl_device/impl/ll_a2a__types.h"
+#include "nccl_device/impl/lsa_barrier__types.h"
+#include "nccl_device/impl/gin__types.h"
+#include "nccl_device/impl/gin_barrier__types.h"
+#include "nccl_device/impl/barrier__types.h"
+#include "nccl_device/impl/ptr__types.h"
+#include "nccl_device/impl/reduce_copy__types.h"
 
 /* Struct definitions */
 struct ncclLsaBarrierSession_C {
@@ -120,17 +144,6 @@ NCCL_IR_EXTERN_C __device__ void ncclBarrierSessionInit(
     uint32_t index,
     bool multimem=false, ncclMultimemHandle const innerMmHandle={});
 
-NCCL_IR_EXTERN_C __device__ void ncclBarrierSessionInitAllContexts(
-    ncclBarrierSession_C* session,
-    ncclCoopAny coop,
-    ncclTeam innerTeam,
-    ncclTeam outerTeam,
-    ncclDevComm const& comm,
-    ncclLsaBarrierHandle const innerBarHandle,
-    ncclGinBarrierHandle const outerBarHandle,
-    uint32_t index,
-    bool multimem=false, ncclMultimemHandle const innerMmHandle={});
-
 NCCL_IR_EXTERN_C __device__ void ncclBarrierSessionSync(
     ncclBarrierSession_C* session,
     ncclCoopAny coop,
@@ -138,4 +151,3 @@ NCCL_IR_EXTERN_C __device__ void ncclBarrierSessionSync(
     ncclGinFenceLevel fence = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get);
 
 #endif // _NCCL_DEVICE_WRAPPER_H_
-

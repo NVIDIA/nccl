@@ -19,10 +19,6 @@ std::filesystem::path JitCache::root_dir() const {
     std::string cache_dir = env_value("NCCL_EP_JIT_CACHE_DIR");
     if (!cache_dir.empty()) return std::filesystem::path(cache_dir);
 
-    std::string home = env_value("HOME");
-    if (!home.empty()) {
-        return std::filesystem::path(home) / ".cache" / "nccl_ep" / "jit";
-    }
     return std::filesystem::path("/tmp") / "nccl_ep" / "jit";
 }
 

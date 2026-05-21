@@ -26,7 +26,7 @@
 #endif
 
 #if NCCL_CHECK_CUDACC
-  #if defined(NCCL_HOSTLIB_ONLY) || defined(__clang_llvm_bitcode_lib__)
+  #if defined(__clang_llvm_bitcode_lib__)
     #define NCCL_DEVICE_INLINE __device__ __attribute__((always_inline))
     #define NCCL_HOST_DEVICE_INLINE __host__ __device__ __attribute__((always_inline))
   #else

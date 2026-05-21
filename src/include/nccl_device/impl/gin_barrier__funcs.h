@@ -84,22 +84,14 @@ NCCL_DEVICE_INLINE ncclResult_t ncclGinBarrierSession_internal<Coop>::syncIntern
   uint64_t startCycle;
   ncclResult_t ret = ncclSuccess;
   this->coop.sync();
-  // For fence containing Put: drain prior outgoing puts on this context before signaling so
-  // peers, upon observing our signal, see our outgoing data already settled at their
-  // destinations. When the session was constructed from `ncclGinAllContexts(comm)` the
-  // fence iterates every GIN context; otherwise it's a one-shot flush on the bound context.
-  //
-  // Multi-context fast path: flatten the (context, peer) 2D space to 1D and assign work
-  // across the coop's threads via the idiomatic CUDA loop, using the per-peer flushAsync
-  // entry. This parallelizes flushing across both axes -- a 32-warp CTA can flush up to
-  // 32-warps' worth of (context, peer) pairs concurrently rather than serializing all
-  // contexts onto the small subset of threads `flush(coop)` would distribute peers across.
-  // The release-order argument is passed to wait(); GDAKI ignores it (DOCA already
-  // guarantees memory_order_acquire on flush completion).
-  if ((fence & ncclGinFenceLevel::Put) != ncclGinFenceLevel::None) {
+
+  // Drain outgoing puts/gets across either the bound context or every GIN context on the
+  // comm. The multi-context branch flattens (ctx, peer) to 1D and assigns one (ctx, peer)
+  // pair per thread so the flush is parallelised on both axes.
+  auto fenceFlush = [&](cuda::memory_order order) {
     if (this->fenceAllContexts) {
-      ncclTeam fenceTeam = this->net.comm.ginIsRailed ? ncclTeamRail(this->net.comm)
-                                                      : ncclTeamWorld(this->net.comm);
+      ncclTeam fenceTeam = this->net.comm.ginContextsRailed ? ncclTeamRail(this->net.comm)
+                                                            : ncclTeamWorld(this->net.comm);
       int nCtx   = (int)this->net.comm.ginContextCount;
       int nPeers = fenceTeam.nRanks;
       int total  = nCtx * nPeers;
@@ -110,77 +102,76 @@ NCCL_DEVICE_INLINE ncclResult_t ncclGinBarrierSession_internal<Coop>::syncIntern
         ncclGin scratch(this->net.comm, ctx, this->net.resourceSharingMode);
         ncclGinRequest_t req;
         scratch.flushAsync(fenceTeam, (uint32_t)peer, &req);
-        scratch.wait(req, ncclCoopThread{}, ncclGin_None{}, nccl::utility::releaseOrderOf(ord));
+        scratch.wait(req, ncclCoopThread{}, ncclGin_None{}, order);
       }
-      // Make every thread's flush completions globally observable before any thread starts
-      // signaling -- otherwise a thread could signal a peer whose put is still in flight on a
-      // sibling thread's (ctx, peer) work item.
-      this->coop.sync();
     } else {
-      this->net.flush(this->coop, nccl::utility::releaseOrderOf(ord));
+      this->net.flush(this->coop, order);
     }
-  }
-  if NCCL_IF_CONSTEXPR (EnableTimeout) {
-    startCycle = clock64();
-  }
-  #pragma unroll 1
-  for (int i=this->coop.thread_rank(); i < this->team.nRanks-1; i += this->coop.size()) {
-    // Use a rotating pattern to avoid hot spots
-    int peer = 1 + this->team.rank + i;
-    if (this->team.nRanks <= peer) peer -= this->team.nRanks;
+  };
 
-    // Initiate signal
-    this->net.signal(
+  // Signal `peer` on `net` and wait for `peer`'s reciprocal signal on the calling rank's
+  // matching slot. Returns ncclTimeout (timeout path only) if the wait exceeds budget.
+  auto signalAndWait = [&](ncclGin& net, int peer) -> ncclResult_t {
+    net.signal(
       this->team, peer, ncclGin_SignalInc{this->signal + this->team.rank}, ncclCoopThread(), ncclGin_None(),
       nccl::utility::releaseOrderOf(ord) != cuda::memory_order_relaxed
         ? cuda::thread_scope_thread
-        : cuda::thread_scope_system
-    );
-
-    // Load and update barrier state in memory. The load/store should be covered by the GIN signal latency.
-    uint32_t* shadowPtr = (uint32_t*)this->net.getSignalShadowPtr(this->signal + peer);
+        : cuda::thread_scope_system);
+    uint32_t* shadowPtr = (uint32_t*)net.getSignalShadowPtr(this->signal + peer);
     int waitVal = ++*shadowPtr;
-
     if NCCL_IF_CONSTEXPR (EnableTimeout) {
       while (true) {
-        uint64_t got = this->net.readSignal(this->signal + peer, 32, nccl::utility::acquireOrderOf(ord));
+        uint64_t got = net.readSignal(this->signal + peer, 32, nccl::utility::acquireOrderOf(ord));
         if (nccl::utility::rollingLessEq(static_cast<uint64_t>(waitVal), got, 32)) break;
-        if (clock64() - startCycle >= timeoutCycles) {
-          ret = ncclTimeout;
-          goto exit;
-        }
+        if (clock64() - startCycle >= timeoutCycles) return ncclTimeout;
       }
     } else {
-      this->net.waitSignal(ncclCoopThread(), this->signal + peer, waitVal, 32, nccl::utility::acquireOrderOf(ord));
+      net.waitSignal(ncclCoopThread(), this->signal + peer, waitVal, 32, nccl::utility::acquireOrderOf(ord));
+    }
+    return ncclSuccess;
+  };
+
+  if NCCL_IF_CONSTEXPR (EnableTimeout) {
+    startCycle = clock64();
+  }
+
+  // Signal/wait with the calling rank's own slot included on Put so self-puts get the same
+  // visibility guarantee as puts to other peers. Peer rotation `peer = (rank+1+i) % nRanks`
+  // spreads the load and visits self last (only when Put is requested).
+  int nPeerSigs = (fence & ncclGinFenceLevel::Put)
+    ? this->team.nRanks
+    : this->team.nRanks - 1;
+  if (this->fenceAllContexts) {
+    // Signal on each context, not just context 0: signals and puts on different QPs are
+    // not ordered at the receiving NIC, so a ctx-0 signal could overtake an in-flight
+    // ctx-X put. Each context has its own signal memory and shadow slot for the same
+    // signal id, so no extra slot allocation is needed.
+    int nCtx = (int)this->net.comm.ginContextCount;
+    int total = nCtx * nPeerSigs;
+    #pragma unroll 1
+    for (int i = this->coop.thread_rank(); i < total; i += this->coop.size()) {
+      // Unflatten i back into (ctx, peerStep): ctx picks the GIN context to signal on,
+      // peerStep is the index into the peer rotation (peer is computed just below).
+      int ctx = i / nPeerSigs;
+      int peerStep = i - ctx * nPeerSigs;
+      int peer = 1 + this->team.rank + peerStep;
+      if (this->team.nRanks <= peer) peer -= this->team.nRanks;
+      ncclGin scratch(this->net.comm, ctx, this->net.resourceSharingMode);
+      if ((ret = signalAndWait(scratch, peer)) != ncclSuccess) goto exit;
+    }
+  } else {
+    #pragma unroll 1
+    for (int i = this->coop.thread_rank(); i < nPeerSigs; i += this->coop.size()) {
+      int peer = 1 + this->team.rank + i;
+      if (this->team.nRanks <= peer) peer -= this->team.nRanks;
+      if ((ret = signalAndWait(this->net, peer)) != ncclSuccess) goto exit;
     }
   }
-  // For fence containing Get: drain prior outgoing gets on this context after waiting so that,
-  // on successful barrier exit, all RDMA-Read responses targeting this rank's local buffers
-  // have been DMA'd into GPU memory and are visible after the trailing coop.sync(). When the
-  // session was constructed from `ncclGinAllContexts(comm)` the fence iterates every GIN
-  // context; otherwise it's a one-shot flush. Skipped on the timeout path (control jumps
-  // directly to exit: with ret = ncclTimeout). Same multi-context flatten-and-parallelize
-  // pattern as the Put branch above; cross-thread visibility is provided by the trailing
-  // coop.sync() at the exit: label.
-  if ((fence & ncclGinFenceLevel::Get) != ncclGinFenceLevel::None) {
-    if (this->fenceAllContexts) {
-      ncclTeam fenceTeam = this->net.comm.ginIsRailed ? ncclTeamRail(this->net.comm)
-                                                      : ncclTeamWorld(this->net.comm);
-      int nCtx   = (int)this->net.comm.ginContextCount;
-      int nPeers = fenceTeam.nRanks;
-      int total  = nCtx * nPeers;
-      #pragma unroll 1
-      for (int i = this->coop.thread_rank(); i < total; i += this->coop.size()) {
-        int ctx  = i / nPeers;
-        int peer = i - ctx * nPeers;
-        ncclGin scratch(this->net.comm, ctx, this->net.resourceSharingMode);
-        ncclGinRequest_t req;
-        scratch.flushAsync(fenceTeam, (uint32_t)peer, &req);
-        scratch.wait(req, ncclCoopThread{}, ncclGin_None{}, nccl::utility::acquireOrderOf(ord));
-      }
-    } else {
-      this->net.flush(this->coop, nccl::utility::acquireOrderOf(ord));
-    }
+
+  // Post-signal flush ensures our prior gets have completed before the barrier returns.
+  // Placed after signal/wait so peers don't have to wait for our gets to complete.
+  if (fence & ncclGinFenceLevel::Get) {
+    fenceFlush(nccl::utility::acquireOrderOf(ord));
   }
   goto exit; // Silence a compiler warning.
 exit:

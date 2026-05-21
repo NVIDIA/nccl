@@ -200,6 +200,7 @@ void dispatch(const void* inData,
               int* rankMask = nullptr,
               int* asyncErrorFlag = nullptr,
               uint64_t timeoutCycles = NUM_TIMEOUT_CYCLES,
+              bool nvlinkOnly = false,
               cudaStream_t stream = 0);
 
 void combine(const void* inData,

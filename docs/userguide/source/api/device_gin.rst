@@ -23,10 +23,9 @@ ncclGin
       performance-oriented kernels should cycle among the available contexts to improve resource utilization (the number of
       available contexts is available via :c:macro:`ginContextCount`).
 
-      ``ncclGin`` always represents one specific context. To run a barrier whose fence drains every GIN context on the comm
+      ``ncclGin`` always represents one specific context. To run a barrier whose fence covers every GIN context on the comm
       (useful when operations have been sharded across multiple contexts -- e.g. multi-NIC), pass
-      ``ncclGinAllContexts(comm)`` to :cpp:func:`ncclGinBarrier` or :cpp:func:`ncclBarrier` in place of an ``ncclGin``. The
-      barrier still uses one concrete context (context 0) for the signal/wait coordination; only the fence iterates.
+      ``ncclGinAllContexts(comm)`` to :cpp:func:`ncclGinBarrier` in place of an ``ncclGin``.
 
    .. cpp:function:: void put(ncclTeam team, int peer, ncclWindow_t dstWnd, size_t dstOffset, ncclWindow_t srcWnd, \
       size_t srcOffset, size_t bytes, \
@@ -172,23 +171,16 @@ ncclGinBarrierSession
    .. cpp:function:: void sync(Coop coop, cuda::memory_order order, ncclGinFenceLevel fence = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get)
 
       Synchronizes all threads of all team members that participate in the barrier session. The *fence* argument is a
-      bit-flag enum selecting which prior network operations on the bound GIN context must be complete after the barrier
-      returns; if omitted it defaults to ``ncclGinFenceLevel::Put | ncclGinFenceLevel::Get`` so callers who do not opt in
-      explicitly get the strongest guarantee:
+      bit-flag enum selecting which prior network operations must be complete after the barrier returns; if omitted it
+      defaults to ``ncclGinFenceLevel::Put | ncclGinFenceLevel::Get`` so callers who do not opt in explicitly get the
+      strongest guarantee:
 
       * ``ncclGinFenceLevel::None`` — pure synchronization, no drain.
-      * ``ncclGinFenceLevel::Put`` — all prior puts from this rank on the bound GIN context have settled at their
-        destinations. Internally this issues a ``flush`` on the context before signaling, so peers, upon observing this
-        rank's signal, see this rank's outgoing data already present in their memory.
-      * ``ncclGinFenceLevel::Get`` — all prior gets from this rank on the bound GIN context have landed in this rank's
-        local memory. Internally this issues a ``flush`` on the context after the per-peer signal/wait loop, draining any
-        in-flight RDMA-Read responses so the local buffers used as GET destinations are populated when the barrier returns.
+      * ``ncclGinFenceLevel::Put`` — after the barrier returns, puts issued by other team members targeting the
+        calling rank prior to the barrier are visible in the calling rank's memory.
+      * ``ncclGinFenceLevel::Get`` — after the barrier returns, gets issued by the calling rank prior to the barrier have
+        landed in the calling rank's local memory.
 
       The fence values are bit flags and compose via bitwise OR. To request both ``Put`` and ``Get`` semantics, pass
-      ``ncclGinFenceLevel::Put | ncclGinFenceLevel::Get`` — both flushes will fire (one before signaling, one after waiting).
-      ``ncclGinFenceLevel::Relaxed`` is preserved as a deprecated alias for ``None`` for source-level backward compatibility;
-      new code should use ``None``.
-
-      For the hybrid :cpp:class:`ncclBarrierSession`, when ``fence != None`` the implementation runs a second intra-node LSA
-      sync after rail-GIN to propagate rail-GIN completion across rails, so ``Barrier(World, fence!=None)`` provides the same
-      world-scope guarantees as ``GinBarrier(World, fence!=None)`` on a railed setup.
+      ``ncclGinFenceLevel::Put | ncclGinFenceLevel::Get``. ``ncclGinFenceLevel::Relaxed`` is preserved as a deprecated alias
+      for ``None`` for source-level backward compatibility; new code should use ``None``.

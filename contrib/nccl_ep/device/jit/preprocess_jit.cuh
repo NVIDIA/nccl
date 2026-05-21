@@ -30,6 +30,8 @@ inline std::string scan_jit_source(
     int num_lsa_teams,
     int lsa_team_size,
     bool enable_per_expert_counts) {
+    constexpr int rank_mask_word_bits = CHAR_BIT * static_cast<int>(sizeof(uint64_t));
+    const int rank_mask_words = (lsa_team_size + rank_mask_word_bits - 1) / rank_mask_word_bits;
     std::ostringstream src;
     src
         << "#include \"device/hybrid_ep.cuh\"\n"
@@ -45,9 +47,10 @@ inline std::string scan_jit_source(
         << "      " << lsa_team_size << ",\n"
         << "      " << scan_bool_literal(enable_per_expert_counts) << ">(\n"
         << "      p.input_routing_map, p.tmp, p.sparse_to_dense_map, p.rdma_to_attn_map, p.attn_to_rdma_map,\n"
-        << "      reinterpret_cast<hybrid_ep::RankMask<" << lsa_team_size << ">*>(p.token_rank_mask),\n"
+        << "      reinterpret_cast<hybrid_ep::rank_mask_t<" << rank_mask_words << ">*>(p.token_rank_mask),\n"
         << "      p.num_of_tokens_for_experts, p.local_expert_routing_map, p.per_expert_token_counts,\n"
         << "      p.node_rank, p.local_rank, p.num_of_tokens_per_rank, p.num_of_ranks_per_node, p.experts_per_rank,\n"
+        << "      p.expert_major,\n"
         << "      p.remap_alignment, p.remap_internal_offsets, p.remap_padded_out_counts, p.remap_out_offsets,\n"
         << "      p.remap_actual_counts_out, p.s2d_inner_dim, p.recv_total_counter, p.out_is_int64,\n"
         << "      p.max_recv_tokens_per_rank, smem_bytes);\n"

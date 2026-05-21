@@ -37,7 +37,7 @@ ctypedef ncclEpPassDir_t _PassDir
 ###############################################################################
 
 cpdef int get_version() except? -1
-cpdef object tensor_alloc(unsigned int ndim, ncclDataType_t datatype, intptr_t sizes, intptr_t config)
+cpdef tensor_alloc(intptr_t tensor, unsigned int ndim, ncclDataType_t datatype, intptr_t sizes, intptr_t config)
 cpdef tensor_destroy(intptr_t tensor)
 cpdef intptr_t create_group(intptr_t comm, intptr_t config) except? 0
 cpdef group_destroy(intptr_t ep_group)

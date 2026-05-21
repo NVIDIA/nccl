@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import numbers
+
 import numpy as np
 
 from nccl.core.typing import NcclDataType, NcclInvalid
@@ -67,7 +69,7 @@ class Tensor:
         dtype: NcclDataType | int | None = None,
         shape: tuple[int, ...] | None = None,
     ) -> None:
-        if isinstance(buffer, int) and not isinstance(buffer, bool):
+        if isinstance(buffer, numbers.Integral) and not isinstance(buffer, bool):
             if dtype is None or shape is None:
                 raise ValueError(
                     "Raw integer pointer requires `dtype` and `shape` kwargs"
@@ -130,5 +132,5 @@ class Tensor:
     def __repr__(self) -> str:
         return (
             f"<Tensor sizes={self._sizes} dtype={self._datatype.name} "
-            f"data={self._ep_t.data_:#x}>"
+            f"data={self.data:#x}>"
         )

@@ -19,10 +19,10 @@ from nccl.bindings import nccl_ep as _ep_bindings
 from nccl.ep._binding_helpers import binding_dataclass
 from nccl.ep.allocator import AllocConfig
 from nccl.ep.enums import Algorithm, Layout
+from nccl.ep.handle import Handle, HandleConfig, LayoutInfo, _materialize, _ptr_of
 
 if TYPE_CHECKING:
     from nccl.core import Communicator
-    from nccl.ep.handle import Handle, HandleConfig, LayoutInfo
     from nccl.ep.tensor import Tensor
 
 
@@ -166,7 +166,6 @@ class Group:
                 NULL (library defaults).
             stream: CUDA stream for the launch.
         """
-        from nccl.ep.handle import Handle, _materialize, _ptr_of
         self._check_valid("create_handle")
         # Bind materialized structs to locals so their backing memory
         # outlives the C call (binding __dealloc__ frees the struct).

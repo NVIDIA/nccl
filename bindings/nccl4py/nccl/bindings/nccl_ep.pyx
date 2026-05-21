@@ -2296,12 +2296,10 @@ cpdef int get_version() except? -1:
     return version
 
 
-cpdef object tensor_alloc(unsigned int ndim, ncclDataType_t datatype, intptr_t sizes, intptr_t config):
-    cdef ncclEpTensor_t* tensor
+cpdef tensor_alloc(intptr_t tensor, unsigned int ndim, ncclDataType_t datatype, intptr_t sizes, intptr_t config):
     with nogil:
-        __status__ = ncclEpTensorAlloc(&tensor, ndim, datatype, <const size_t*>sizes, <const ncclEpTensorAllocConfig_t*>config)
+        __status__ = ncclEpTensorAlloc(<ncclEpTensor_t**>tensor, ndim, datatype, <const size_t*>sizes, <const ncclEpTensorAllocConfig_t*>config)
     check_status(__status__)
-    return <intptr_t>tensor
 
 
 cpdef tensor_destroy(intptr_t tensor):

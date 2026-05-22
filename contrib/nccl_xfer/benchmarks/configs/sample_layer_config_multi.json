@@ -1,0 +1,18 @@
+{
+    "num_layers": 4,
+    "default_tensors": [
+        {
+            "name": "attention",
+            "dims": [256, 4096, 4096],
+            "tp_shard_dim": 1,
+            "_comment": "Attention tensor: TP shards on dim1, no EP sharding (replicated across experts)"
+        },
+        {
+            "name": "moe",
+            "dims": [256, 4096, 7168],
+            "tp_shard_dim": 1,
+            "ep_shard_dim": 0,
+            "_comment": "FFN-MOE tensor: TP shards on dim1, EP shards on dim0"
+        }
+    ]
+}

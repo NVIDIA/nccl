@@ -23,6 +23,7 @@ contribution process described in [CONTRIBUTING.md](../CONTRIBUTING.md).
 |-----------|-------------|
 | [`custom_algos/`](custom_algos/) | Reference custom collective kernels built on the NCCL Device API |
 | [`nccl_ep/`](nccl_ep/) | NCCL Expert Parallelism (EP) API for MoE communication (dispatch/combine primitives) |
+| [`nccl_xfer/`](nccl_xfer/) | NCCL Cross-group Transfer (Xfer) API for RL communication (reshard primitives) |
 
 ## Upstreaming to contrib/
 

@@ -144,10 +144,10 @@ static uint32_t kernelMask_user() {
 
 NCCL_PARAM(SymCTAs, "SYM_CTAS", 0)
 NCCL_PARAM(SymGinKernelsEnable, "SYM_GIN_KERNELS_ENABLE", 1)
-NCCL_PARAM(SymRsGinChunkSize, "SYM_RS_GIN_CHUNK_SIZE", 64<<10)
+NCCL_PARAM(SymRsGinChunkSize, "SYM_RS_GIN_CHUNK_SIZE", -1)
 NCCL_PARAM(SymTmaEnable, "SYM_TMA_ENABLE", 0)
 
-static constexpr size_t ncclSymkRsGinDefaultChunkBytes = 64<<10;
+static constexpr size_t ncclSymkRsGinDefaultChunkBytes = 128<<10;
 static constexpr size_t ncclSymkRsGinMinChunkBytes = 128;
 static constexpr size_t ncclSymkRsGinMaxChunkBytes = size_t(1)<<30;
 

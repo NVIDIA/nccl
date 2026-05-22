@@ -986,7 +986,7 @@ static ValidationResult validateDispatchOutputLLExpertMaj(
 }
 
 // ==================== LL rank-major dispatch validation ====================
-// Output: 2D [nRanks*max_dispatch_tokens_per_rank, hidden], one slot per received token packed by source rank.
+// Output: 3D [nRanks, max_dispatch_tokens_per_rank, hidden], one slot per received token packed by source rank.
 // outputs[1] = recv_topk_weights [nRanks*max_tpr, top_k]: all top-k weights from the source token.
 // outputs[2] = recv_topk_idx     [nRanks*max_tpr, top_k]: local expert index on myRank, or -1.
 // Slots within each rank's block are contiguous from index 0; first invalid slot ends the block.

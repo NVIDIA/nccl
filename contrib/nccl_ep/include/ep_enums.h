@@ -59,7 +59,7 @@ typedef enum {
      * Rank-major layout.
      *
      * Dispatch output:
-     *   recv_x shape:            [max_dispatch_tokens_per_rank * num_ranks, hidden]
+     *   recv_x shape:            [num_ranks, max_dispatch_tokens_per_rank, hidden]
      *   recv_topk_weights shape: [max_dispatch_tokens_per_rank * num_ranks, num_topk]
      *   recv_topk_idx shape:     [max_dispatch_tokens_per_rank * num_ranks, num_topk]
      *
@@ -119,4 +119,3 @@ typedef enum {
     NCCL_EP_FWD_PASS = 0,
     NCCL_EP_BWD_PASS = 1,
 } ncclEpPassDir_t;
-

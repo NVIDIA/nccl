@@ -2376,7 +2376,7 @@ ncclResult_t ncclEpDispatch(
             auto* recv_topk_idx_data = recv_topk_idx ? static_cast<int32_t*>(recv_topk_idx->data) : nullptr;
 
             const bool use_fp8 = (scales != nullptr);
-            const bool round_scale = config->round_scales;
+            const bool round_scale = config ? config->round_scales : false;
             const bool use_ue8m0 = false;
 
             nccl_ep::internode_ll::dispatch(

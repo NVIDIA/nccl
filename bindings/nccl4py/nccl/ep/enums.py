@@ -50,7 +50,7 @@ class Layout(IntEnum):
 
     RANK_MAJOR = 2
     """LL only. ``recv_x`` shape:
-    ``[max_tokens_per_rank * num_ranks, hidden]``. Caller pre-reduces
+    ``[num_ranks, max_tokens_per_rank, hidden]``. Caller pre-reduces
     across local experts before combine."""
 
     FLAT = 3

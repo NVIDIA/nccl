@@ -630,6 +630,8 @@ Perform EP dispatch: send tokens to experts according to routing decisions.
 //                            other fields (topk_weights, topk_idx, scales) are optional and
 //                            depend on algorithm/layout. For HT, outputs are 2D [N(r), data_size].
 //                            For LL expert-major, outputs are 3D [num_local_experts, N(r), data_size].
+//                            For LL rank-major,   outputs->tokens is 3D
+//                            [num_ranks, max_dispatch_tokens_per_rank, data_size].
 //                            If FP8 conversion is requested, `outputs->scales` must be supplied.
 //   layout_info   - [IN,OUT, optional] Named-struct pointer for device-side metadata tensors.
 //                            LL mode: optional `expert_counters` (1D ncclInt32 / ncclInt64,
@@ -668,7 +670,8 @@ Perform EP combine: gather expert outputs and return in original token order.
 //   handle           - [IN,OUT] EP handle that was used for `ncclEpDispatch()` operation.
 //   inputs           - [IN]     Named preallocated input tensors. `inputs->tokens` is required;
 //                               LL expert-major: 3D [num_local_experts, N(r), data_size].
-//                               HT / LL rank-major: 2D [N(r), data_size].
+//                               LL rank-major:   3D [num_ranks, max_dispatch_tokens_per_rank, data_size].
+//                               HT:              2D [N(r), data_size].
 //                               Backward combine: also set `inputs->topk_weights`
 //                               [N(r), top_k] (HT only).
 //   outputs          - [IN,OUT] Named preallocated output tensors. `outputs->tokens` is required;

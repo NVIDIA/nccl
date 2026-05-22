@@ -429,8 +429,8 @@ static void setupLowLatencyTensorsRankMajLayout(
 
     NCCLCHECK(epMakeTensor(&dispatch_layout_info.src_rank_counters, 1, ncclInt32, (unsigned)nRanks));
 
-    NCCLCHECK(epMakeTensor(&dispatch_outputs.tokens, 2, ncclBfloat16,
-                           (unsigned)nRanks * max_dispatch_tokens_per_rank, hidden));
+    NCCLCHECK(epMakeTensor(&dispatch_outputs.tokens, 3, ncclBfloat16,
+                           (unsigned)nRanks, max_dispatch_tokens_per_rank, hidden));
 
     NCCLCHECK(epMakeTensor(&dispatch_outputs.topk_weights, 2, ncclFloat32,
                            (unsigned)nRanks * max_dispatch_tokens_per_rank, top_k));
@@ -438,8 +438,8 @@ static void setupLowLatencyTensorsRankMajLayout(
     NCCLCHECK(epMakeTensor(&dispatch_outputs.topk_idx, 2, ncclInt32,
                            (unsigned)nRanks * max_dispatch_tokens_per_rank, top_k));
 
-    NCCLCHECK(epMakeTensor(&combine_inputs.tokens, 2, ncclBfloat16,
-                           (unsigned)nRanks * max_dispatch_tokens_per_rank, hidden));
+    NCCLCHECK(epMakeTensor(&combine_inputs.tokens, 3, ncclBfloat16,
+                           (unsigned)nRanks, max_dispatch_tokens_per_rank, hidden));
 }
 
 // LL benchmark — full tensor graph for ncclEpDispatch / ncclEpCombine.
@@ -1008,10 +1008,10 @@ static ValidationResult validateDispatchOutputLLRankMaj(
     const int max_errors_to_print = 10;
     int errors_printed = 0;
 
-    // Get output tensor sizes: outputs[0] is [nRanks * max_tpr, hidden]
+    // Output tensor sizes: tokens is 3D [nRanks, max_tpr, hidden] in LL rank-major.
     const size_t* out0_sizes = dispatch_outputs.tokens->sizes;
-    const size_t max_tpr = out0_sizes[0] / nRanks;
-    const size_t total_slots   = (size_t)nRanks * max_tpr;
+    const size_t max_tpr     = out0_sizes[1];
+    const size_t total_slots = out0_sizes[0] * max_tpr;
 
     // Copy recv_x, recv_topk_weights, recv_topk_idx, recv_rank_counter to host
     uint16_t* recv_data = new uint16_t[total_slots * hidden];
@@ -1181,10 +1181,11 @@ static void preReduceRankMajor(
     unsigned int top_k,
     int nRanks
 ) {
+    // tokens is 3D [nRanks, max_tpr, hidden] in LL rank-major.
     const size_t* out0_sizes = dispatch_outputs.tokens->sizes;
-    const unsigned int max_tpr  = out0_sizes[0] / (unsigned)nRanks;
-    const unsigned int hidden   = out0_sizes[1];
-    const unsigned int total_slots = out0_sizes[0];
+    const unsigned int max_tpr     = out0_sizes[1];
+    const unsigned int hidden      = out0_sizes[2];
+    const unsigned int total_slots = out0_sizes[0] * max_tpr;
 
     void *out1_data, *out2_data, *local0_data;
     NCCLCHECK(epGetTensorData(alloc, dispatch_outputs.topk_weights, &out1_data));
@@ -3280,9 +3281,10 @@ int main(int argc, char* argv[]) {
                     size_t data_size = out0_sizes[0] * out0_sizes[1] * out0_sizes[2] * sizeof(uint16_t);
                     CUDACHECK(cudaMemcpy(eo_data, output0_data, data_size, cudaMemcpyDeviceToDevice));
                 } else {
-                    // LL rank-major: copy then apply per-rank weight sums before combine
+                    // LL rank-major: 3D [nRanks, max_tpr, hidden] — copy then apply
+                    // per-rank weight sums before combine (kernel uses weight=1).
                     const size_t* out0_sizes = dispatch_outputs.tokens->sizes;
-                    size_t data_size = out0_sizes[0] * out0_sizes[1] * sizeof(uint16_t);
+                    size_t data_size = out0_sizes[0] * out0_sizes[1] * out0_sizes[2] * sizeof(uint16_t);
                     CUDACHECK(cudaMemcpy(eo_data, output0_data, data_size, cudaMemcpyDeviceToDevice));
                     preReduceRankMajor(alloc, dispatch_outputs, dispatch_layout_info,
                                        combine_inputs, top_k, nRanks);

@@ -506,7 +506,9 @@ typedef struct {
 //                                    where N(r) = num_ranks * max_dispatch_tokens_per_rank for static allocation,
 //                                    or the actual received count when max_dispatch_tokens_per_rank is NCCL_EP_AUTO.
 //                            For LL expert-major: outputs->tokens is [local_experts x num_recv_tokens x hidden] (3D).
-//                            For LL rank-major: outputs->tokens is [num_recv_tokens x hidden] (2D);
+//                            For LL rank-major: outputs->tokens is
+//                                    [num_ranks x max_dispatch_tokens_per_rank x hidden] (3D) — the
+//                                    per-rank, per-slot structure is explicit in the descriptor;
 //                                    outputs->topk_weights and outputs->topk_idx must also be provided.
 //   layout_info - [IN,OUT] Named local tensors (see ncclEpLayoutInfo_t). NULL = none.
 //                            LL expert-major: layout_info->expert_counters receives per-expert token counts.
@@ -552,7 +554,9 @@ typedef struct {
 //                               inputs->tokens is required; other fields are optional.
 //                               For HT (NCCL_EP_LAYOUT_FLAT): inputs->tokens is [N(r) x hidden] (2D).
 //                               For LL expert-major: inputs->tokens is [local_experts x num_recv_tokens x hidden] (3D).
-//                               For LL rank-major: inputs->tokens is [num_recv_tokens x hidden] (2D),
+//                               For LL rank-major: inputs->tokens is
+//                                       [num_ranks x max_dispatch_tokens_per_rank x hidden] (3D) — the
+//                                       per-rank, per-slot structure is explicit in the descriptor;
 //                                       pre-reduced across local experts by the caller before this call.
 //                               HT backward: inputs->topk_weights must also be provided.
 //   outputs          - [IN,OUT] Named preallocated output tensors (see ncclEpCombineOutputs_t).

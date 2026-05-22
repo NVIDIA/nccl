@@ -2300,9 +2300,12 @@ ncclResult_t ncclEpDispatch(
         const unsigned num_recv_tokens = static_cast<unsigned>(group->nRanks) * group->config.max_dispatch_tokens_per_rank;
         switch (handle->layout) {
             case NCCL_EP_LAYOUT_RANK_MAJOR:
-                assert(recv_x->ndim == 2);
-                assert(recv_x->sizes[0] == num_recv_tokens);
-                assert(recv_x->sizes[1] == static_cast<unsigned>(hidden));
+                // Rank-major output is 3D so the per-rank, per-slot structure is
+                // explicit in the descriptor — the caller must acknowledge it.
+                assert(recv_x->ndim == 3);
+                assert(recv_x->sizes[0] == static_cast<unsigned>(group->nRanks));
+                assert(recv_x->sizes[1] == group->config.max_dispatch_tokens_per_rank);
+                assert(recv_x->sizes[2] == static_cast<unsigned>(hidden));
                 assert(topk_weights_in   != nullptr);
                 assert(recv_topk_weights != nullptr);
                 assert(recv_topk_idx     != nullptr);
@@ -2849,11 +2852,14 @@ ncclResult_t ncclEpCombine(
         int hidden;
         switch (handle->layout) {
             case NCCL_EP_LAYOUT_RANK_MAJOR:
-                assert(x->ndim == 2);
-                assert(x->sizes[0] == static_cast<unsigned>(num_ranks) * num_max_dispatch_tokens_per_rank);
-                assert(x->sizes[1] % sizeof(int4) == 0);
-                assert(x->sizes[1] % 128 == 0);
-                hidden = static_cast<int>(x->sizes[1]);
+                // Rank-major input is 3D so the per-rank, per-slot structure is
+                // explicit in the descriptor — the caller must acknowledge it.
+                assert(x->ndim == 3);
+                assert(x->sizes[0] == static_cast<unsigned>(num_ranks));
+                assert(x->sizes[1] == static_cast<unsigned>(num_max_dispatch_tokens_per_rank));
+                assert(x->sizes[2] % sizeof(int4) == 0);
+                assert(x->sizes[2] % 128 == 0);
+                hidden = static_cast<int>(x->sizes[2]);
                 break;
             default:
                 assert(x->ndim == 3);

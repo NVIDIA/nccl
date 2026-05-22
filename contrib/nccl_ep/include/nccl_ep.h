@@ -576,21 +576,27 @@ ncclResult_t ncclEpCombine(
     cudaStream_t stream
 );
 
-// Reserved config struct; callers must pass NULL today. The single
-// placeholder member exists so the struct has a complete type (cybind /
-// pycparser require this), and so the typedef stays struct-form (rather
-// than pointer-form) — that way callers can spell pointer-to-const as
-// `const ncclEpCompleteConfig_t*` naturally.
+// Reserved config struct for future options. Callers may pass NULL (defaults)
+// or initialise via NCCL_EP_COMPLETE_CONFIG_INIT. The size/magic header fields
+// follow the same ABI/initialisation rules as the other public structs and
+// also give the type complete shape (cybind / pycparser require this), so the
+// typedef stays struct-form rather than pointer-form — callers can spell
+// pointer-to-const as `const ncclEpCompleteConfig_t*` naturally.
 typedef struct ncclEpCompleteConfig {
-    char _reserved;
+    unsigned int size;  // = sizeof(this struct); first field, never moves
+    unsigned int magic; // = NCCL_EP_MAGIC; second field, never moves
 } ncclEpCompleteConfig_t;
+
+#define NCCL_EP_COMPLETE_CONFIG_INIT ((ncclEpCompleteConfig_t){ \
+    .size  = (unsigned int)sizeof(ncclEpCompleteConfig_t), \
+    .magic = NCCL_EP_MAGIC })
 
 // Continues a staged EP operation to completion.
 //   * This should be called after a prior `ncclEpDispatch()` or `ncclEpCombine()` call with `send_only` flag set.
 //
 // Arguments:
 //   handle     - [IN,OUT] EP handle used in the preceding staged operation
-//   config     - [IN]     Reserved for future options (must be NULL).
+//   config     - [IN]     Completion configuration (see ncclEpCompleteConfig_t). NULL = defaults.
 //   stream     - [IN]     CUDA stream
 //
 // Notes:

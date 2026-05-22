@@ -3214,6 +3214,7 @@ ncclResult_t ncclEpComplete(
     const ncclEpCompleteConfig_t* config,
     cudaStream_t stream
 ) {
+    EP_OPTIONAL_STRUCT(config);
     if (handle->group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
         if (handle->ll.continue_fn) {
                 handle->ll.continue_fn(LOW_LATENCY_RECV_PHASE);
@@ -3221,9 +3222,9 @@ ncclResult_t ncclEpComplete(
         }
     } else if (handle->group->config.algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) {
         // HT mode - no continue needed (synchronous)
-        }
-        return ncclSuccess;
     }
+    return ncclSuccess;
+}
 
 ncclResult_t ncclEpMaskQuery(
     ncclEpGroup_t ep_group,

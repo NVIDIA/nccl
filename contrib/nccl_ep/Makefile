@@ -217,7 +217,7 @@ EP_BENCH_NVLDFLAGS := -L$(LIBDIR) -lnccl_ep -L$(NCCL_LIBDIR) -lnccl $(MPI_LDFLAG
 ep_test: lib $(DST_DIR)/ep_test
 ep_bench: lib $(DST_DIR)/ep_bench
 
-$(DST_DIR)/ep_test.o: ep_test.cu
+$(DST_DIR)/ep_test.o: ep_test.cu $(HEADER_TARGETS)
 	@printf "Compiling  %-35s > %s\n" $< $@
 	@mkdir -p $(DST_DIR)
 	$(NVCC) -o $@ $(EP_TEST_NVCUFLAGS) -c $<
@@ -227,7 +227,7 @@ $(DST_DIR)/ep_test: $(DST_DIR)/ep_test.o $(SOLIBTARGET)
 	@mkdir -p $(DST_DIR)
 	$(NVCC) -o $@ $(EP_TEST_NVCUFLAGS) $< $(EP_TEST_NVLDFLAGS)
 
-$(DST_DIR)/ep_bench.o: ep_bench.cu
+$(DST_DIR)/ep_bench.o: ep_bench.cu $(HEADER_TARGETS)
 	@printf "Compiling  %-35s > %s\n" $< $@
 	@mkdir -p $(DST_DIR)
 	$(NVCC) -o $@ $(EP_BENCH_NVCUFLAGS) -c $<
@@ -248,7 +248,7 @@ EP_BENCH_NVLDFLAGS := -L$(LIBDIR) -lnccl_ep -L$(NCCL_LIBDIR) -lnccl $(MPI_LDFLAG
 ep_test: lib $(DST_DIR)/ep_test
 ep_bench: lib $(DST_DIR)/ep_bench
 
-$(DST_DIR)/ep_test.o: ep_test.cu
+$(DST_DIR)/ep_test.o: ep_test.cu $(HEADER_TARGETS)
 	@printf "Compiling  %-35s > %s\n" $< $@
 	@mkdir -p $(DST_DIR)
 	$(NVCC) -o $@ $(EP_TEST_NVCUFLAGS) -c $<
@@ -258,7 +258,7 @@ $(DST_DIR)/ep_test: $(DST_DIR)/ep_test.o $(SOLIBTARGET)
 	@mkdir -p $(DST_DIR)
 	$(NVCC) -o $@ $(EP_TEST_NVCUFLAGS) $< $(EP_TEST_NVLDFLAGS)
 
-$(DST_DIR)/ep_bench.o: ep_bench.cu
+$(DST_DIR)/ep_bench.o: ep_bench.cu $(HEADER_TARGETS)
 	@printf "Compiling  %-35s > %s\n" $< $@
 	@mkdir -p $(DST_DIR)
 	$(NVCC) -o $@ $(EP_BENCH_NVCUFLAGS) -c $<

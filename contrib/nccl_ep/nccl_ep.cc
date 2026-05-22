@@ -65,12 +65,22 @@ static ncclResult_t destroy_hybridep_internode(ncclEpGroup_t ep_group);
 // its own known size; any mismatch means caller and library are from different
 // releases. Strict equality for now — see nccl_ep.h for the planned future
 // relaxation (all-zero-trailing-bytes escape hatch).
-#define EP_REQUIRE_STRUCT(ptr) \
+// Immediately after `size` there is a `magic` field pre-filled by NCCL_EP_*_INIT
+// to catch unininitialized structures.
+#define EP_REQUIRE_STRUCT(ptr) do { \
     assert((ptr) != nullptr && (ptr)->size == sizeof(*(ptr)) && \
-           "ABI struct size mismatch — caller and libnccl_ep.so must be from the same release")
-#define EP_OPTIONAL_STRUCT(ptr) \
+           "ABI struct size mismatch — caller and libnccl_ep.so must be from the same release"); \
+    assert((ptr)->magic == NCCL_EP_MAGIC && \
+           "struct magic mismatch — pointer is uninitialised or not an NCCL EP struct " \
+           "(initialise with the corresponding NCCL_EP_*_INIT macro)"); \
+} while (0)
+#define EP_OPTIONAL_STRUCT(ptr) do { \
     assert(((ptr) == nullptr || (ptr)->size == sizeof(*(ptr))) && \
-           "ABI struct size mismatch — caller and libnccl_ep.so must be from the same release")
+           "ABI struct size mismatch — caller and libnccl_ep.so must be from the same release"); \
+    assert(((ptr) == nullptr || (ptr)->magic == NCCL_EP_MAGIC) && \
+           "struct magic mismatch — pointer is uninitialised or not an NCCL EP struct " \
+           "(initialise with the corresponding NCCL_EP_*_INIT macro)"); \
+} while (0)
 
 // Helper function to convert ncclDataType_t to cudaDataType_t
 static cudaDataType_t ncclDataTypeToCudaDataType(ncclDataType_t nccl_type) {

@@ -266,7 +266,7 @@ template<typename Coop, typename DstSpace, typename GetDst,
        /*2*/tn*(int)sizeof(SrcPack) <= nBatch*nElts*(int)sizeof(SrcT))
   )) {
     int nPacks = getWorstPackCount(nElts, nEltPerPack);
-    constexpr int UnrollData = 4;
+    constexpr int UnrollData = 8;
     constexpr int nPackPerBlob = UnrollData*32; // A blob is a whole warp's worth of unrolled packs
     int nBlobs = unsigned(nPacks)/nPackPerBlob;
     #pragma unroll 1
@@ -381,7 +381,7 @@ template<typename Coop, typename DstSpace, typename GetDst,
   // Handle source elements as packs if there is enough for every thread to have one.
   if (sizeof(SrcT) == sizeof(SrcPack) || tn*(int)sizeof(SrcPack) <= nBatch*nElts*(int)sizeof(SrcT)) {
     int nPacks = getWorstPackCount(nElts, nEltPerPack);
-    constexpr int UnrollData = 4;
+    constexpr int UnrollData = 8;
     constexpr int nPackPerBlob = UnrollData*32; // A blob is a whole warp's worth of unrolled packs
     int nBlobs = unsigned(nPacks)/nPackPerBlob;
     #pragma unroll 1
@@ -437,7 +437,7 @@ template<typename Coop, typename DstSpace, typename GetDst,
       int eltIx = unsigned(row)%unsigned(nElts);
       DstT* dstPtr = getDst(batchIx) + eltIx;
       SrcT* srcPtr = getSrc(batchIx) + eltIx;
-      constexpr int UnrollData = 4;
+      constexpr int UnrollData = 8;
       // Test if the whole warp can be unrolled within the same run of elts
       // by testing if both lane 0 and 31 are in our run.
       int lane = unsigned(t)%32;

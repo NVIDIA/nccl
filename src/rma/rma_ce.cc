@@ -175,8 +175,9 @@ static ncclResult_t ncclRmaCePutLaunchPersist(struct ncclComm* comm,
 
     size_t bytes = task->count * ncclTypeSize(task->datatype);
 
-    // Graph: wait for receiver's ack, then reset ack flag
-    {
+    // Graph: wait for receiver's ack, then reset ack flag.
+    // Ack handshake is only required for put with signals.
+    if (task->signalMode != NCCL_SIGNAL_NONE) {
       CUdeviceptr ackAddr = (CUdeviceptr)&ceCtx->graphAckDev[task->peer];
       CUstreamBatchMemOpParams ackOps[2] = {};
       ackOps[0].waitValue.operation = CU_STREAM_MEM_OP_WAIT_VALUE_64;

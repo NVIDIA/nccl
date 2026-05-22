@@ -224,7 +224,6 @@ ncclResult_t ncclP2pAllocateShareableBuffer(size_t size, int refcount, ncclIpcDe
     // cuMem API support
     CUmemGenericAllocationHandle handle;
     NCCLCHECK(ncclCuMemAlloc(ptr, &handle, type, size, manager, memtype));
-    NCCLCHECK(ncclCudaMemset((uint8_t*)*ptr, 0, size));
     if (manager != nullptr && peerRank >= 0 && memtype != ncclMemPersist) {
       NCCLCHECK(ncclDynMemMarkExportToPeer(manager, *ptr, peerRank));
     }

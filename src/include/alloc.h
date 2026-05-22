@@ -517,22 +517,6 @@ finish:
 }
 
 template <typename T>
-ncclResult_t ncclCudaMemset(T* dst, int value, size_t nelem) {
-  ncclResult_t result = ncclSuccess;
-  cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
-  CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
-  // Need a side stream so as not to interfere with graph capture.
-  cudaStream_t stream;
-  CUDACHECKGOTO(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), result, finish);
-  CUDACHECKGOTO(cudaMemsetAsync((void*)dst, value, nelem * ncclSizeOfT<T>(), stream), result, finish);
-  CUDACHECKGOTO(cudaStreamSynchronize(stream), result, finish);
-  CUDACHECKGOTO(cudaStreamDestroy(stream), result, finish);
-finish:
-  CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
-  return result;
-}
-
-template <typename T>
 ncclResult_t ncclCudaMemcpyAsync(T* dst, T* src, size_t nelem, cudaStream_t stream) {
   ncclResult_t result = ncclSuccess;
   cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;

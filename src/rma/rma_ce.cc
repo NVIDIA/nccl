@@ -163,8 +163,11 @@ static ncclResult_t ncclRmaCePutLaunchPersist(struct ncclComm* comm,
   struct ncclRmaCeCtx* ceCtx = (struct ncclRmaCeCtx*)comm->rmaState.rmaCeState.rmaCeCtxs[ctx];
 
   // Reusable per-task batch params
-  struct ncclCeBatchOpsParams ceParams = {};
-  NCCLCHECKGOTO(ncclCeInitBatchOpsParams(&ceParams, 2), ret, fail);
+  // signal and data operations can not be in the same batch as batched mem copy does not guarantee order of execution
+  struct ncclCeBatchOpsParams dataParams = {};
+  struct ncclCeBatchOpsParams signalParams = {};
+  NCCLCHECKGOTO(ncclCeInitBatchOpsParams(&dataParams, 1), ret, fail);
+  NCCLCHECKGOTO(ncclCeInitBatchOpsParams(&signalParams, 1), ret, fail);
 
   for (int i = 0; i < nRmaTasksCe; i++) {
     struct ncclTaskRma* task = ncclIntruQueueHead(&plan->rmaTaskQueueCe);
@@ -191,7 +194,8 @@ static ncclResult_t ncclRmaCePutLaunchPersist(struct ncclComm* comm,
       NCCLCHECKGOTO(ncclCuStreamBatchMemOp(stream, 2, ackOps), ret, fail);
     }
 
-    ceParams.numOps = 0;
+    dataParams.numOps = 0;
+    signalParams.numOps = 0;
 
     // Data movement
     if (bytes > 0) {
@@ -202,10 +206,10 @@ static ncclResult_t ncclRmaCePutLaunchPersist(struct ncclComm* comm,
         ret = ncclInvalidArgument;
         goto fail;
       }
-      ceParams.srcs[ceParams.numOps]  = const_cast<void*>(task->srcBuff);
-      ceParams.dsts[ceParams.numOps]  = peerBuff;
-      ceParams.sizes[ceParams.numOps] = bytes;
-      ceParams.numOps++;
+      dataParams.srcs[dataParams.numOps]  = const_cast<void*>(task->srcBuff);
+      dataParams.dsts[dataParams.numOps]  = peerBuff;
+      dataParams.sizes[dataParams.numOps] = bytes;
+      dataParams.numOps++;
     }
 
     // Graph: write signal=1 to peer's graphSignalsDev (separate from non-graph signals)
@@ -213,20 +217,22 @@ static ncclResult_t ncclRmaCePutLaunchPersist(struct ncclComm* comm,
       size_t rankSlot = comm->rank * sizeof(uint64_t);
       void* peerGraphSignal;
       NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, ceCtx->signalsWin, ceCtx->graphSignalOffset + rankSlot, peerLsaRank, &peerGraphSignal), ret, fail);
-      ceParams.srcs[ceParams.numOps]  = ceCtx->signalConstOneDev;
-      ceParams.dsts[ceParams.numOps]  = peerGraphSignal;
-      ceParams.sizes[ceParams.numOps] = sizeof(uint64_t);
-      ceParams.numOps++;
+      signalParams.srcs[signalParams.numOps]  = ceCtx->signalConstOneDev;
+      signalParams.dsts[signalParams.numOps]  = peerGraphSignal;
+      signalParams.sizes[signalParams.numOps] = sizeof(uint64_t);
+      signalParams.numOps++;
     }
 
-    NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &ceParams, stream), ret, fail);
+    NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &dataParams, stream), ret, fail);
+    NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &signalParams, stream), ret, fail);
 
     // Free the task after processing
     ncclMemoryPoolFree(&comm->memPool_ncclTaskRma, task);
   }
 
 exit:
-  ncclCeFreeBatchOpsParams(&ceParams);
+  ncclCeFreeBatchOpsParams(&dataParams);
+  ncclCeFreeBatchOpsParams(&signalParams);
   return ret;
 fail:
   goto exit;
@@ -240,74 +246,91 @@ static ncclResult_t ncclRmaCePutLaunchNonPersist(struct ncclComm* comm,
   int ctx = plan->rmaArgs->ctx;
   struct ncclRmaCeCtx* ceCtx = (struct ncclRmaCeCtx*)comm->rmaState.rmaCeState.rmaCeCtxs[ctx];
 
-  // Function-scope buffers. signalOpSeqsDev has comm->nRanks staging slots,
-  // so each CE memcpy batch chunk handles at most that many tasks/signals.
-  struct ncclCeBatchOpsParams ceParams = {};
+  // signal and data operations can not be in the same batch as batched mem copy does not guarantee order of execution
+  // we can not have signal operations to the same physical address in the same batch as batched mem copy does not guarantee order of execution
+  struct ncclIntruQueue<struct ncclTaskRma, &ncclTaskRma::next>* peerTaskQueues = nullptr;
+  int* activePeers = nullptr;
+  struct ncclCeBatchOpsParams dataParams = {};
+  struct ncclCeBatchOpsParams signalParams = {};
   CUstreamBatchMemOpParams* seqStageOps = nullptr;
-  int signalStageCapacity = comm->nRanks;
-  int nTasksDone = 0;
+  struct ncclTaskRma* currentTask = nullptr;
+  int nActivePeers = 0;
 
   if (nRmaTasksCe == 0) goto exit;
 
-  NCCLCHECKGOTO(ncclCeInitBatchOpsParams(&ceParams, 2 * signalStageCapacity), ret, fail);
-  NCCLCHECKGOTO(ncclCalloc(&seqStageOps, signalStageCapacity), ret, fail);
+  NCCLCHECKGOTO(ncclCalloc(&peerTaskQueues, comm->nRanks), ret, fail);
+  NCCLCHECKGOTO(ncclCalloc(&activePeers, comm->nRanks), ret, fail);
+  NCCLCHECKGOTO(ncclCeInitBatchOpsParams(&dataParams, comm->nRanks), ret, fail);
+  NCCLCHECKGOTO(ncclCeInitBatchOpsParams(&signalParams, comm->nRanks), ret, fail);
+  NCCLCHECKGOTO(ncclCalloc(&seqStageOps, comm->nRanks), ret, fail);
 
-  while (nTasksDone < nRmaTasksCe) {
+  for (int i = 0; i < nRmaTasksCe; i++) {
+    struct ncclTaskRma* task = ncclIntruQueueDequeue(&plan->rmaTaskQueueCe);
+    int peer = task->peer;
+    if (ncclIntruQueueEmpty(&peerTaskQueues[peer])) {
+      activePeers[nActivePeers++] = peer;
+    }
+    ncclIntruQueueEnqueue(&peerTaskQueues[peer], task);
+  }
+
+  while (nActivePeers > 0) {
+    int nNextActivePeers = 0;
     int nSeqStageOps = 0;
-    int nChunkTasks = 0;
-    ceParams.numOps = 0;
+    dataParams.numOps = 0;
+    signalParams.numOps = 0;
 
-    // Iterate over the tasks and stage the signals in chunks of signalStageCapacity
-    // To avoid overwritting the signal values in the same slot
-    while (nTasksDone < nRmaTasksCe && nChunkTasks < signalStageCapacity) {
-      struct ncclTaskRma* task = ncclIntruQueueHead(&plan->rmaTaskQueueCe);
-      ncclIntruQueueDequeue(&plan->rmaTaskQueueCe);
+    for (int i = 0; i < nActivePeers; i++) {
+      int peer = activePeers[i];
+      currentTask = ncclIntruQueueDequeue(&peerTaskQueues[peer]);
 
       int peerLsaRank;
-      NCCLCHECKGOTO(ncclDevrWorldToLsaRank(comm, task->peer, &peerLsaRank), ret, fail);
+      NCCLCHECKGOTO(ncclDevrWorldToLsaRank(comm, currentTask->peer, &peerLsaRank), ret, fail);
 
-      size_t bytes = task->count * ncclTypeSize(task->datatype);
+      size_t bytes = currentTask->count * ncclTypeSize(currentTask->datatype);
 
       // Data movement
       if (bytes > 0) {
         void* peerBuff;
-        NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, task->peerWinHost, task->peerWinOffset, peerLsaRank, &peerBuff), ret, fail);
+        NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, currentTask->peerWinHost, currentTask->peerWinOffset, peerLsaRank, &peerBuff), ret, fail);
         if (peerBuff == NULL) {
           WARN("RMA CE: peerBuff is NULL after ncclDevrGetLsaRankPtr");
           ret = ncclInvalidArgument;
           goto fail;
         }
-        ceParams.srcs[ceParams.numOps]  = const_cast<void*>(task->srcBuff);
-        ceParams.dsts[ceParams.numOps]  = peerBuff;
-        ceParams.sizes[ceParams.numOps] = bytes;
-        ceParams.numOps++;
+        dataParams.srcs[dataParams.numOps]  = const_cast<void*>(currentTask->srcBuff);
+        dataParams.dsts[dataParams.numOps]  = peerBuff;
+        dataParams.sizes[dataParams.numOps] = bytes;
+        dataParams.numOps++;
       }
 
       // Non-graph: write incrementing sequence to peer's signalsDev.
-      // Stage each signal in an ordinal slot, so duplicate
-      // peers in the same launch keep distinct sequence values.
-      if (task->signalMode != NCCL_SIGNAL_NONE) {
+      // Each batch has at most one task per peer, so each signal batch has at
+      // most one write to a given peer signal slot.
+      if (currentTask->signalMode != NCCL_SIGNAL_NONE) {
         size_t rankSlot = comm->rank * sizeof(uint64_t);
         void* peerSignal;
         NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, ceCtx->signalsWin, ceCtx->signalOffset + rankSlot, peerLsaRank, &peerSignal), ret, fail);
-        ceCtx->signalOpSeqs[task->peer]++;
+        ceCtx->signalOpSeqs[peer]++;
 
         seqStageOps[nSeqStageOps].writeValue.operation = CU_STREAM_MEM_OP_WRITE_VALUE_64;
         seqStageOps[nSeqStageOps].writeValue.address   = (CUdeviceptr)&ceCtx->signalOpSeqsDev[nSeqStageOps];
-        seqStageOps[nSeqStageOps].writeValue.value64   = ceCtx->signalOpSeqs[task->peer];
+        seqStageOps[nSeqStageOps].writeValue.value64   = ceCtx->signalOpSeqs[peer];
         seqStageOps[nSeqStageOps].writeValue.flags     = CU_STREAM_WRITE_VALUE_DEFAULT;
 
-        ceParams.srcs[ceParams.numOps]  = &ceCtx->signalOpSeqsDev[nSeqStageOps];
-        ceParams.dsts[ceParams.numOps]  = peerSignal;
-        ceParams.sizes[ceParams.numOps] = sizeof(uint64_t);
-        ceParams.numOps++;
+        signalParams.srcs[signalParams.numOps]  = &ceCtx->signalOpSeqsDev[nSeqStageOps];
+        signalParams.dsts[signalParams.numOps]  = peerSignal;
+        signalParams.sizes[signalParams.numOps] = sizeof(uint64_t);
+        signalParams.numOps++;
 
         nSeqStageOps++;
       }
 
-      ncclMemoryPoolFree(&comm->memPool_ncclTaskRma, task);
-      nChunkTasks++;
-      nTasksDone++;
+      ncclMemoryPoolFree(&comm->memPool_ncclTaskRma, currentTask);
+      currentTask = nullptr;
+
+      if (!ncclIntruQueueEmpty(&peerTaskQueues[peer])) {
+        activePeers[nNextActivePeers++] = peer;
+      }
     }
 
     // Issue batches in stream order. Staging writes must precede the memcpy
@@ -315,11 +338,25 @@ static ncclResult_t ncclRmaCePutLaunchNonPersist(struct ncclComm* comm,
     if (nSeqStageOps > 0) {
       NCCLCHECKGOTO(ncclCuStreamBatchMemOp(stream, nSeqStageOps, seqStageOps), ret, fail);
     }
-    NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &ceParams, stream), ret, fail);
+    NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &dataParams, stream), ret, fail);
+    NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &signalParams, stream), ret, fail);
+    nActivePeers = nNextActivePeers;
   }
 
 exit:
-  ncclCeFreeBatchOpsParams(&ceParams);
+  if (currentTask != nullptr) ncclMemoryPoolFree(&comm->memPool_ncclTaskRma, currentTask);
+  if (peerTaskQueues != nullptr) {
+    for (int peer = 0; peer < comm->nRanks; peer++) {
+      while (!ncclIntruQueueEmpty(&peerTaskQueues[peer])) {
+        struct ncclTaskRma* task = ncclIntruQueueDequeue(&peerTaskQueues[peer]);
+        ncclMemoryPoolFree(&comm->memPool_ncclTaskRma, task);
+      }
+    }
+  }
+  ncclCeFreeBatchOpsParams(&dataParams);
+  ncclCeFreeBatchOpsParams(&signalParams);
+  free(peerTaskQueues);
+  free(activePeers);
   free(seqStageOps);
   return ret;
 fail:

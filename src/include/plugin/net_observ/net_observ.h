@@ -193,6 +193,7 @@ class NetworkObserver {
   NicCounterReader nicReader_;
   std::unordered_map<std::string, Incident> activeIncidents_;
   std::mutex incidentsMutex_;
+  bool lldpHandled_;
 
   void monitorLoop();
   void handleEvent(const ruijie_json::JsonRequest& event);

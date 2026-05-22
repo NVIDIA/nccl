@@ -594,7 +594,8 @@ NetworkObserver::NetworkObserver(TopologyConfig* topology, int rank, double poll
   , rank_(rank)
   , pollInterval_(pollInterval)
   , stopRequested_(false)
-  , incidentId_(0) {
+  , incidentId_(0)
+  , lldpHandled_(false) {
 }
 
 /**
@@ -700,7 +701,10 @@ void NetworkObserver::handleEvent(const ruijie_json::JsonRequest& event) {
   uint32_t eventId = event.json_event();
 
   if (eventId == GRPC_JSON_EVENT_SAMPLE_LLDP_INFO) {
-    handleLldpEvent(event);
+    if (!lldpHandled_) {
+      handleLldpEvent(event);
+      lldpHandled_ = true;
+    }
   } else if (eventId == GRPC_JSON_EVENT_SAMPLE_INGRESS_PORT_PKT_DROP) {
     handleSwitchDropEvent(event);
   } else {
@@ -898,41 +902,41 @@ void NetworkObserver::emitConfirmedAlert(const Incident& incident) {
     elapsedStr = elapsedBuf;
   }
 
-  WARN("%s%s========================================================================%s", COLOR_RED, COLOR_BOLD,
+  fprintf(stderr, "%s%s========================================================================%s\n", COLOR_RED, COLOR_BOLD,
        COLOR_RESET);
-  WARN("%s%s[NETWORK_ADVISOR][CONFIRMED] RDMA Timeout - Fault Path Confirmed!%s",
+  fprintf(stderr, "%s%s[NETWORK_ADVISOR][CONFIRMED] RDMA Timeout - Fault Path Confirmed!%s\n",
        COLOR_RED, COLOR_BOLD, COLOR_RESET);
-  WARN("%s%s========================================================================%s",
+  fprintf(stderr, "%s%s========================================================================%s\n",
        COLOR_RED, COLOR_BOLD, COLOR_RESET);
-  WARN("  %sIncident ID:%s    %s", COLOR_CYAN, COLOR_RESET, incident.incidentTag.c_str());
-  WARN("  %sOriginal Time:%s  %s", COLOR_CYAN, COLOR_RESET, incident.timestamp.c_str());
-  WARN("  %sConfirmed At:%s   %s", COLOR_CYAN, COLOR_RESET, confirmTs);
-  WARN("  %sTime to Confirm:%s %s", COLOR_CYAN, COLOR_RESET, elapsedStr.c_str());
-  WARN("  %sAffected Ranks:%s %s", COLOR_CYAN, COLOR_RESET, rankStr.c_str());
-  WARN("  %sAffected Port:%s  %s", COLOR_CYAN, COLOR_RESET, incident.portName.c_str());
-  WARN("  %sSwitch Drop:%s    %ld packets", COLOR_CYAN, COLOR_RESET, (long)incident.dropCount);
-  WARN("  %sRDMA NIC:%s       %s", COLOR_CYAN, COLOR_RESET, incident.rdmaNic.c_str());
-  WARN("  %sNIC Counter Delta (cumulative):%s", COLOR_CYAN, COLOR_RESET);
+  fprintf(stderr, "  %sIncident ID:%s    %s\n", COLOR_CYAN, COLOR_RESET, incident.incidentTag.c_str());
+  fprintf(stderr, "  %sOriginal Time:%s  %s\n", COLOR_CYAN, COLOR_RESET, incident.timestamp.c_str());
+  fprintf(stderr, "  %sConfirmed At:%s   %s\n", COLOR_CYAN, COLOR_RESET, confirmTs);
+  fprintf(stderr, "  %sTime to Confirm:%s %s\n", COLOR_CYAN, COLOR_RESET, elapsedStr.c_str());
+  fprintf(stderr, "  %sAffected Ranks:%s %s\n", COLOR_CYAN, COLOR_RESET, rankStr.c_str());
+  fprintf(stderr, "  %sAffected Port:%s  %s\n", COLOR_CYAN, COLOR_RESET, incident.portName.c_str());
+  fprintf(stderr, "  %sSwitch Drop:%s    %ld packets\n", COLOR_CYAN, COLOR_RESET, (long)incident.dropCount);
+  fprintf(stderr, "  %sRDMA NIC:%s       %s\n", COLOR_CYAN, COLOR_RESET, incident.rdmaNic.c_str());
+  fprintf(stderr, "  %sNIC Counter Delta (cumulative):%s\n", COLOR_CYAN, COLOR_RESET);
   for (const auto& entry : incident.nicDelta) {
     std::string marker;
     if (entry.first == "roce_adp_retrans" || entry.first == "roce_adp_retrans_to") marker = " <<<";
-    WARN("    %s%s:%s +%ld%s", COLOR_DIM, entry.first.c_str(), COLOR_RESET, (long)entry.second, marker.c_str());
+    fprintf(stderr, "    %s%s:%s +%ld%s\n", COLOR_DIM, entry.first.c_str(), COLOR_RESET, (long)entry.second, marker.c_str());
   }
   for (const auto& pathLine : incident.faultPaths) {
-    WARN("  %sConfirmed Fault Path:%s %s", COLOR_CYAN, COLOR_RESET, pathLine.c_str());
+    fprintf(stderr, "  %sConfirmed Fault Path:%s %s\n", COLOR_CYAN, COLOR_RESET, pathLine.c_str());
   }
   if (!incident.ncclError.empty()) {
-    WARN("  %sNCCL Error:%s    %s", COLOR_CYAN, COLOR_RESET, incident.ncclError.c_str());
+    fprintf(stderr, "  %sNCCL Error:%s    %s\n", COLOR_CYAN, COLOR_RESET, incident.ncclError.c_str());
   }
-  WARN("%sRoot Cause:%s     [Confirmed] Switch drop caused RDMA timeout on %s",
+  fprintf(stderr, "  %sRoot Cause:%s     [Confirmed] Switch drop caused RDMA timeout on %s\n",
        COLOR_CYAN, COLOR_RESET, incident.rdmaNic.c_str());
-  WARN("%sImpact:%s         Training stalled, NCCL timeout likely",
+  fprintf(stderr, "  %sImpact:%s         Training stalled, NCCL timeout likely\n",
        COLOR_CYAN, COLOR_RESET);
-  WARN("%sStatus:%s        %s%sCONFIRMED%s - RDMA timeout reached",
+  fprintf(stderr, "  %sStatus:%s        %s%sCONFIRMED%s - RDMA timeout reached\n",
        COLOR_CYAN, COLOR_RESET, COLOR_RED, COLOR_BOLD, COLOR_RESET);
-  WARN("%sSuggestion:%s     Immediate action required: check %s and %s",
+  fprintf(stderr, "  %sSuggestion:%s     Immediate action required: check %s and %s\n",
        COLOR_CYAN, COLOR_RESET, incident.portName.c_str(), incident.rdmaNic.c_str());
-  WARN("%s%s========================================================================%s",
+  fprintf(stderr, "%s%s========================================================================%s\n",
        COLOR_RED, COLOR_BOLD, COLOR_RESET);
 }
 
@@ -1460,7 +1464,7 @@ void NetworkObserver::updateTopologyFromLldp(const std::vector<LldpNeighborInfo>
   }
 
   if (!entries.empty()) {
-    INFO(NCCL_INIT|NCCL_NET, "NET_OBSERV: Updated topology from LLDP with %zu entries", entries.size());
+    fprintf(stdout, "NET_OBSERV: Updated topology from LLDP with %zu entries\n", entries.size());
     printLldpTopology(entries);
   }
 }
@@ -1517,8 +1521,8 @@ void NetworkObserver::handleLldpEvent(const ruijie_json::JsonRequest& event) {
     return;
   }
 
-  INFO(NCCL_INIT|NCCL_NET, "NET_OBSERV: Received LLDP event (0x%08x) from %s, %zu neighbors",
-       GRPC_JSON_EVENT_SAMPLE_LLDP_INFO, deviceModel.c_str(), lldpInfos.size());
+  fprintf(stdout, "NET_OBSERV: Received LLDP event (0x%08x) from %s, %zu neighbors\n",
+          GRPC_JSON_EVENT_SAMPLE_LLDP_INFO, deviceModel.c_str(), lldpInfos.size());
 
   updateTopologyFromLldp(lldpInfos, deviceModel);
 }

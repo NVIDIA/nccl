@@ -873,6 +873,34 @@ void NetworkObserver::emitPredictiveAlert(const Incident& incident) {
        COLOR_MAGENTA, COLOR_BOLD, COLOR_RESET);
 }
 
+static void writeAlertToLogFile(const std::string& logFilePath, const std::string& message) {
+  if (logFilePath.empty()) return;
+
+  int fd = open(logFilePath.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+  if (fd < 0) {
+    return;
+  }
+
+  struct flock fl;
+  memset(&fl, 0, sizeof(fl));
+  fl.l_type = F_WRLCK;
+  fl.l_whence = SEEK_SET;
+  fl.l_start = 0;
+  fl.l_len = 0;
+
+  if (fcntl(fd, F_SETLKW, &fl) == -1) {
+    close(fd);
+    return;
+  }
+
+  ssize_t written = write(fd, message.c_str(), message.length());
+  (void)written;
+
+  fl.l_type = F_UNLCK;
+  fcntl(fd, F_SETLK, &fl);
+  close(fd);
+}
+
 /**
  * @brief 输出已确认告警（CONFIRMED级别）
  * @param incident 告警事件对象
@@ -901,6 +929,36 @@ void NetworkObserver::emitConfirmedAlert(const Incident& incident) {
     snprintf(elapsedBuf, sizeof(elapsedBuf), "%.1fs", elapsed);
     elapsedStr = elapsedBuf;
   }
+
+  std::ostringstream oss;
+  oss << "========================================================================\n";
+  oss << "[NETWORK_ADVISOR][CONFIRMED] RDMA Timeout - Fault Path Confirmed!\n";
+  oss << "========================================================================\n";
+  oss << "  Incident ID:    " << incident.incidentTag << "\n";
+  oss << "  Original Time:  " << incident.timestamp << "\n";
+  oss << "  Confirmed At:   " << confirmTs << "\n";
+  oss << "  Time to Confirm: " << elapsedStr << "\n";
+  oss << "  Affected Ranks: " << rankStr << "\n";
+  oss << "  Affected Port:  " << incident.portName << "\n";
+  oss << "  Switch Drop:    " << (long)incident.dropCount << " packets\n";
+  oss << "  RDMA NIC:       " << incident.rdmaNic << "\n";
+  oss << "  NIC Counter Delta (cumulative):\n";
+  for (const auto& entry : incident.nicDelta) {
+    std::string marker;
+    if (entry.first == "roce_adp_retrans" || entry.first == "roce_adp_retrans_to") marker = " <<<";
+    oss << "    " << entry.first << ": +" << (long)entry.second << marker << "\n";
+  }
+  for (const auto& pathLine : incident.faultPaths) {
+    oss << "  Confirmed Fault Path: " << pathLine << "\n";
+  }
+  if (!incident.ncclError.empty()) {
+    oss << "  NCCL Error:    " << incident.ncclError << "\n";
+  }
+  oss << "  Root Cause:     [Confirmed] Switch drop caused RDMA timeout on " << incident.rdmaNic << "\n";
+  oss << "  Impact:         Training stalled, NCCL timeout likely\n";
+  oss << "  Status:        CONFIRMED - RDMA timeout reached\n";
+  oss << "  Suggestion:     Immediate action required: check " << incident.portName << " and " << incident.rdmaNic << "\n";
+  oss << "========================================================================\n\n";
 
   fprintf(stderr, "%s%s========================================================================%s\n", COLOR_RED, COLOR_BOLD,
        COLOR_RESET);
@@ -938,6 +996,8 @@ void NetworkObserver::emitConfirmedAlert(const Incident& incident) {
        COLOR_CYAN, COLOR_RESET, incident.portName.c_str(), incident.rdmaNic.c_str());
   fprintf(stderr, "%s%s========================================================================%s\n",
        COLOR_RED, COLOR_BOLD, COLOR_RESET);
+
+  writeAlertToLogFile("/tmp/net_observ.log", oss.str());
 }
 
 /**

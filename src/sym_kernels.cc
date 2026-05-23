@@ -241,7 +241,7 @@ static double getSmBw_ReduceScatter_RailA2A(struct ncclComm* comm, bool ldmc) {
   // debug logging (from getRequirements_gin()) and nctas is the number of ctas
   // that appear to saturate bandwidth.
   if (100 <= comm->minCompCap) {
-    return ldmc ? 2.25e9 : 5.0e9;
+    return ldmc ? 8.44e9 : 26.6e9;
   } else {
     return ldmc ? 9.85e9 : 14.5e9;
   }

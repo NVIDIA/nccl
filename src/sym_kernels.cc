@@ -243,7 +243,7 @@ static double getSmBw_ReduceScatter_RailA2A(struct ncclComm* comm, bool ldmc) {
   if (100 <= comm->minCompCap) {
     return ldmc ? 8.44e9 : 26.6e9;
   } else {
-    return ldmc ? 9.85e9 : 14.5e9;
+    return ldmc ? 4.22e9 : 13.7e9;
   }
 }
 

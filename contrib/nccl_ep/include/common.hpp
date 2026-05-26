@@ -201,6 +201,8 @@ void dispatch(const void* inData,
               int* asyncErrorFlag = nullptr,
               uint64_t timeoutCycles = NUM_TIMEOUT_CYCLES,
               bool nvlinkOnly = false,
+              ncclWindow_t recvDataWindow = ncclWindow_t{},
+              size_t recvDataOffset = 0,
               cudaStream_t stream = 0);
 
 void combine(const void* inData,

@@ -2361,6 +2361,21 @@ ncclResult_t ncclEpDispatch(
         const auto next_clean_meta = next_buffer.clean_meta();
 
         unsigned signal_base = group->num_dispatch_signals;
+        // Zero-copy dispatch output: when the user supplied a window for the
+        // output token tensor and we are on the rank-major / nvlinkOnly / bf16
+        // path, sender writes payload directly into the user's recv_x buffer
+        // (via P2P peer pointer) and the receiver skips the staging→recv_x copy.
+        const bool nvlink_only = (group->lsa_team_size == group->nRanks);
+        const bool use_fp8_outer = (scales != nullptr);
+        const bool zero_copy_recv_x =
+            nvlink_only &&
+            handle->layout == NCCL_EP_LAYOUT_RANK_MAJOR &&
+            !use_fp8_outer &&
+            recv_x->win_hdl != ncclWindow_t{};
+        const ncclWindow_t recv_data_window =
+            zero_copy_recv_x ? recv_x->win_hdl : ncclWindow_t{};
+        const size_t recv_data_offset =
+            zero_copy_recv_x ? static_cast<size_t>(recv_x->win_offset) : 0;
         auto dispatch_fn = [=](int phases) {
             // Prepare data pointers
             auto* recv_x_data = recv_x->data;
@@ -2422,7 +2437,9 @@ ncclResult_t ncclEpDispatch(
                 group->mask_buffer,
                 group->async_error_flag,
                 group->timeout_cycles,
-                /*nvlinkOnly=*/group->lsa_team_size == group->nRanks,
+                /*nvlinkOnly=*/nvlink_only,
+                recv_data_window,
+                recv_data_offset,
                 stream
             );
         };

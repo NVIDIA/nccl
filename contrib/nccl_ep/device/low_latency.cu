@@ -171,7 +171,17 @@ __forceinline__ __device__ void castAndWriteToSendBuf(
 //
 // Templated on `kUseFP8` so the NVLink direct path can reuse
 // `castAndWriteToSendBuf` for the quantized-vs-bf16 split.
-template <bool kUseFP8>
+//
+// `kNvlinkOnly` mirrors the dispatch kernel's compile-time gate: when true,
+// every dst is intra-LSA and the zero-copy output redirect (below) is the
+// only mode that can fire. When false, the redirect is compiled out.
+//
+// Zero-copy output (kNvlinkOnly + bf16 only): when `recvDataWindow != {}`,
+// the NVLink direct path redirects the payload destination from the peer's
+// staging recvBuf payload slot to the peer's user-provided recv_x tensor at
+// slot (currRank * maxTokensPerRank + slotIdx). Headers still flow through
+// the staging buffer.
+template <bool kUseFP8, bool kNvlinkOnly>
 __forceinline__ __device__ void sendToken(
     // Local sources.
     const int4* sendDataInt4,        // local staging slot base (header + RDMA-path payload).
@@ -197,6 +207,10 @@ __forceinline__ __device__ void sendToken(
     int* rankMask,
     const ncclWindow_t* windows,
     ncclDevComm* devComms,
+    // Zero-copy output: when recvDataWindow != {}, payload writes (NVLink path)
+    // target peer's recv_x window instead of peer's staging payload slot.
+    ncclWindow_t recvDataWindow,
+    size_t recvDataOffset,
     int laneId) {
     using vec_t = std::conditional_t<kUseFP8, int2, int4>;
 
@@ -221,8 +235,21 @@ __forceinline__ __device__ void sendToken(
             st_na_global(dstHdrInt4 + i, sendDataInt4[i]);
         }
 
-        auto* dstDataVec = reinterpret_cast<vec_t*>(dstPayloadSlot);
-        auto* dstScales = reinterpret_cast<float*>(dstPayloadSlot + hiddenBytes);
+        // Zero-copy output: redirect payload to peer's recv_x at the receiver's
+        // flat slot (currRank * maxTokensPerRank + slotIdx). Only viable on the
+        // kNvlinkOnly + bf16 path; compiled out otherwise.
+        void* payloadDst = dstPayloadSlot;
+        if constexpr (kNvlinkOnly && !kUseFP8) {
+            if (recvDataWindow != ncclWindow_t{}) {
+                const size_t recvSlot =
+                    static_cast<size_t>(currRank) * maxTokensPerRank + slotIdx;
+                payloadDst = ncclGetPeerPointer(
+                    recvDataWindow, recvDataOffset + recvSlot * hiddenBytes, dstRank);
+            }
+        }
+        auto* dstDataVec = reinterpret_cast<vec_t*>(payloadDst);
+        auto* dstScales = reinterpret_cast<float*>(
+            reinterpret_cast<uint8_t*>(payloadDst) + hiddenBytes);
         castAndWriteToSendBuf<kUseFP8>(
             srcDataInt4, dstDataVec, dstScales,
             /*threadId=*/laneId, /*numThreads=*/32,
@@ -561,7 +588,12 @@ __global__ __launch_bounds__(1024, 1) void dispatch(// INPUT
                                                     ncclDevComm* devComms,
                                                     const ncclWindow_t* windows,
                                                     unsigned signalsBase,
-                                                    uint64_t timeoutCycles) {
+                                                    uint64_t timeoutCycles,
+                                                    // Zero-copy dispatch output (rank-major + nvlinkOnly + bf16):
+                                                    // when recvDataWindow != {}, sender writes payload directly
+                                                    // to peer's recv_x and receiver skips the payload copy.
+                                                    ncclWindow_t recvDataWindow,
+                                                    size_t recvDataOffset) {
     const auto smId = static_cast<int>(blockIdx.x);
     const auto threadId = static_cast<int>(threadIdx.x);
     const auto warpId = threadId / 32, laneId = get_lane_id();
@@ -696,13 +728,14 @@ __global__ __launch_bounds__(1024, 1) void dispatch(// INPUT
                     const auto srcRankLocalPtr =
                         reinterpret_cast<uint64_t>(recvBuf) + srcRankOffset;
                     const auto sendBufInt4 = reinterpret_cast<const int4*>(sendBufBase);
-                    sendToken<kUseFP8>(
+                    sendToken<kUseFP8, kNvlinkOnly>(
                         sendBufInt4, srcDataInt4,
                         srcRankLocalPtr, recvOff + srcRankOffset, slotIdx,
                         tokenIdx, sendOff,
                         numBytesPerMsg, dispatch_hdr_sz, hiddenBytes, hiddenBf16Int4, maxTokensPerRank,
                         dstRank, ctxHash, currRank, roundScale,
-                        rankMask, windows, devComms, laneId);
+                        rankMask, windows, devComms,
+                        recvDataWindow, recvDataOffset, laneId);
                     if (laneId == 0) {
                         // Mark that one more token is sent to the rank
                         atomic_add_release_global(rankDone + dstRank, 1);
@@ -959,17 +992,27 @@ LOW_LATENCY_DISPATCH_RECV:
                         recvSrcTopkInfo[1] = j_eff;
                     }
                 }
-                copyRecvTokenData<kUseFP8, kUseUE8M0>(
-                                recvBufUint8, i,         // Location in the receive buffer
-                                slot,                    // Location in the output data
-                                outDataInt4,             // Output data
-                                outScales,               // Output scales
-                                hiddenInt4, hiddenBytes, numScales, numBytesPerMsg,
-                                dispatch_hdr_sz,
-                                maxTokensPerRank,
-                                numRanks,
-                                laneId,
-                                isNvlinkSrc);
+                // Zero-copy: under kNvlinkOnly + bf16, the sender's NVLink path
+                // already wrote the payload directly into outDataBuf when the
+                // user supplied recvDataWindow. Skip the staging→outDataBuf copy
+                // in that case; all other paths still need it.
+                bool skipPayloadCopy = false;
+                if constexpr (kNvlinkOnly && !kUseFP8) {
+                    skipPayloadCopy = (recvDataWindow != ncclWindow_t{});
+                }
+                if (!skipPayloadCopy) {
+                    copyRecvTokenData<kUseFP8, kUseUE8M0>(
+                                    recvBufUint8, i,         // Location in the receive buffer
+                                    slot,                    // Location in the output data
+                                    outDataInt4,             // Output data
+                                    outScales,               // Output scales
+                                    hiddenInt4, hiddenBytes, numScales, numBytesPerMsg,
+                                    dispatch_hdr_sz,
+                                    maxTokensPerRank,
+                                    numRanks,
+                                    laneId,
+                                    isNvlinkSrc);
+                }
             }
         }
     }
@@ -1018,6 +1061,8 @@ void dispatch(const void* inData,
               int* asyncErrorFlag,
               uint64_t timeoutCycles,
               bool nvlinkOnly,
+              ncclWindow_t recvDataWindow,
+              size_t recvDataOffset,
               cudaStream_t stream) {
     constexpr int kNumMaxTopK = 9;
     const int numWarpGroups = ceil_div(numExperts, numDeviceSms);
@@ -1082,7 +1127,9 @@ LAUNCH_KERNEL(&cfg, (dispatch<fp8, ue8m0, hidden, kLayout, nvlinkOnlyV>), \
               devComms, \
               windows, \
               signalsBase, \
-              timeoutCycles)
+              timeoutCycles, \
+              recvDataWindow, \
+              recvDataOffset)
 #define DISPATCH_LAUNCH_CASE_IMPL(hidden, kLayout) { \
     if (nvlinkOnly) { \
         if (useFp8 and useUe8m0)      { DISPATCH_DO_LAUNCH(true,  true,  true,  hidden, kLayout); } \

@@ -19,12 +19,7 @@ group_end
 ---------
 .. autofunction:: group_end
 
-group_simulate_end
-------------------
-.. autofunction:: group_simulate_end
-
 GroupSimInfo
 ------------
 .. autoclass:: GroupSimInfo
    :members:
-   :exclude-members: ptr

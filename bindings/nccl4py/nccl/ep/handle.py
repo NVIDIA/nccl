@@ -18,9 +18,10 @@ from typing import TYPE_CHECKING
 from nccl.core.cuda import get_stream_ptr
 from nccl.core.typing import NcclInvalid, NcclStreamSpec
 
+
+from nccl._binding_helpers import binding_dataclass
 from nccl.bindings import nccl_ep as _ep_bindings
-from nccl.ep._binding_helpers import binding_dataclass
-from nccl.ep.enums import Layout, PassDir
+from nccl.ep.enums import PassDir
 
 if TYPE_CHECKING:
     from nccl.ep.tensor import Tensor
@@ -39,10 +40,7 @@ __all__ = [
 ]
 
 
-@binding_dataclass(
-    _ep_bindings.HandleConfig,
-    size_field_dtype=_ep_bindings.handle_config_dtype,
-)
+@binding_dataclass(_ep_bindings.HandleConfig)
 class HandleConfig:
     """Pythonic configuration for :py:meth:`Group.create_handle`.
 
@@ -63,10 +61,7 @@ class HandleConfig:
     dispatch_output_per_expert_alignment: int = 0
 
 
-@binding_dataclass(
-    _ep_bindings.DispatchConfig,
-    size_field_dtype=_ep_bindings.dispatch_config_dtype,
-)
+@binding_dataclass(_ep_bindings.DispatchConfig)
 class DispatchConfig:
     """Pythonic configuration for :py:meth:`Handle.dispatch`.
 
@@ -89,10 +84,7 @@ class DispatchConfig:
     pass_direction: PassDir = PassDir.FWD
 
 
-@binding_dataclass(
-    _ep_bindings.CombineConfig,
-    size_field_dtype=_ep_bindings.combine_config_dtype,
-)
+@binding_dataclass(_ep_bindings.CombineConfig)
 class CombineConfig:
     """Pythonic configuration for :py:meth:`Handle.combine`.
 
@@ -110,10 +102,7 @@ class CombineConfig:
     pass_direction: PassDir = PassDir.FWD
 
 
-@binding_dataclass(
-    _ep_bindings.LayoutInfo,
-    size_field_dtype=_ep_bindings.layout_info_dtype,
-)
+@binding_dataclass(_ep_bindings.LayoutInfo)
 class LayoutInfo:
     """Named local tensors carried alongside dispatch / create_handle.
 
@@ -142,10 +131,7 @@ class LayoutInfo:
     recv_total_counter: Tensor | None = None
 
 
-@binding_dataclass(
-    _ep_bindings.DispatchInputs,
-    size_field_dtype=_ep_bindings.dispatch_inputs_dtype,
-)
+@binding_dataclass(_ep_bindings.DispatchInputs)
 class DispatchInputs:
     """Input tensor bundle for :py:meth:`Handle.dispatch`.
 
@@ -164,10 +150,7 @@ class DispatchInputs:
     scales: Tensor | None = None
 
 
-@binding_dataclass(
-    _ep_bindings.DispatchOutputs,
-    size_field_dtype=_ep_bindings.dispatch_outputs_dtype,
-)
+@binding_dataclass(_ep_bindings.DispatchOutputs)
 class DispatchOutputs:
     """Output tensor bundle for :py:meth:`Handle.dispatch`.
 
@@ -190,10 +173,7 @@ class DispatchOutputs:
     topk_idx: Tensor | None = None
 
 
-@binding_dataclass(
-    _ep_bindings.CombineInputs,
-    size_field_dtype=_ep_bindings.combine_inputs_dtype,
-)
+@binding_dataclass(_ep_bindings.CombineInputs)
 class CombineInputs:
     """Input tensor bundle for :py:meth:`Handle.combine`.
 
@@ -211,10 +191,7 @@ class CombineInputs:
     topk_weights: Tensor | None = None
 
 
-@binding_dataclass(
-    _ep_bindings.CombineOutputs,
-    size_field_dtype=_ep_bindings.combine_outputs_dtype,
-)
+@binding_dataclass(_ep_bindings.CombineOutputs)
 class CombineOutputs:
     """Output tensor bundle for :py:meth:`Handle.combine`.
 
@@ -233,24 +210,6 @@ class CombineOutputs:
 
     tokens: Tensor | None = None
     topk_weights: Tensor | None = None
-
-
-def _materialize(value: object) -> object:
-    """Materialize a Pythonic struct dataclass into its binding instance.
-
-    Returns ``None`` for a ``None`` input. The returned object owns the
-    underlying C struct memory; callers MUST keep it alive across the C
-    call (otherwise its ``__dealloc__`` frees the struct and the C side
-    reads from freed memory).
-    """
-    if value is None:
-        return None
-    return value.to_binding()  # type: ignore[attr-defined]
-
-
-def _ptr_of(binding: object) -> int:
-    """Underlying C struct address from a materialized binding, or 0 for None."""
-    return 0 if binding is None else binding.ptr
 
 
 class Handle:
@@ -294,11 +253,10 @@ class Handle:
             :meth:`dispatch`.
         """
         self._check_valid("update")
-        layout_b = _materialize(layout_info)
         _ep_bindings.update_handle(
             self._ptr,
             topk_idx.ptr,
-            _ptr_of(layout_b),
+            layout_info._lowpp.ptr if layout_info is not None else 0,  # type: ignore[attr-defined]
             get_stream_ptr(stream),
         )
 
@@ -334,16 +292,12 @@ class Handle:
             :meth:`combine`, :meth:`complete`.
         """
         self._check_valid("dispatch")
-        inputs_b = _materialize(inputs)
-        outputs_b = _materialize(outputs)
-        layout_b = _materialize(layout_info)
-        config_b = _materialize(config)
         _ep_bindings.dispatch(
             self._ptr,
-            _ptr_of(inputs_b),
-            _ptr_of(outputs_b),
-            _ptr_of(layout_b),
-            _ptr_of(config_b),
+            inputs._lowpp.ptr,  # type: ignore[attr-defined]
+            outputs._lowpp.ptr,  # type: ignore[attr-defined]
+            layout_info._lowpp.ptr if layout_info is not None else 0,  # type: ignore[attr-defined]
+            config._lowpp.ptr if config is not None else 0,  # type: ignore[attr-defined]
             get_stream_ptr(stream),
         )
 
@@ -375,14 +329,11 @@ class Handle:
             :meth:`dispatch`, :meth:`complete`.
         """
         self._check_valid("combine")
-        inputs_b = _materialize(inputs)
-        outputs_b = _materialize(outputs)
-        config_b = _materialize(config)
         _ep_bindings.combine(
             self._ptr,
-            _ptr_of(inputs_b),
-            _ptr_of(outputs_b),
-            _ptr_of(config_b),
+            inputs._lowpp.ptr,  # type: ignore[attr-defined]
+            outputs._lowpp.ptr,  # type: ignore[attr-defined]
+            config._lowpp.ptr if config is not None else 0,  # type: ignore[attr-defined]
             get_stream_ptr(stream),
         )
 

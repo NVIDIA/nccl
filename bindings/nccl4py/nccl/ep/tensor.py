@@ -35,7 +35,7 @@ def _resolve_buffer(buffer) -> tuple[int, tuple[int, ...], NcclDataType]:
     except (ImportError, ModuleNotFoundError):
         pass
 
-    from cuda.core.utils import StridedMemoryView, args_viewable_as_strided_memory
+    from cuda.core.utils import args_viewable_as_strided_memory
 
     @args_viewable_as_strided_memory((0,))
     def _view(buf, stream_ptr):

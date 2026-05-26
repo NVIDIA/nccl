@@ -89,7 +89,6 @@ __all__ = [
     "group",
     "group_start",
     "group_end",
-    "group_simulate_end",
     "GroupSimInfo",
     # Utilities
     "Version",

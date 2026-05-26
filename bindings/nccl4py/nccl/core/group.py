@@ -16,43 +16,23 @@ See :ref:`group-calls` for more details.
 from __future__ import annotations
 
 import contextlib
-from typing import Generator
+from dataclasses import dataclass
+from typing import Generator, Literal, overload
 
 from nccl.bindings import nccl as _nccl_bindings
 
-from nccl.core.constants import NCCL_UNDEF_FLOAT
-
-__all__ = ["GroupSimInfo", "group_start", "group_end", "group_simulate_end", "group"]
+__all__ = ["GroupSimInfo", "group_start", "group_end", "group"]
 
 
+@dataclass(frozen=True)
 class GroupSimInfo:
-    """Information for NCCL group operation simulation.
+    """Result of an NCCL group simulation.
 
-    Holds simulation information that can be used to estimate the performance
-    of group operations without actually executing them. Pass an instance to
-    group_simulate_end and read estimated_time after the call.
+    Returned by :py:func:`group_end` when called with ``simulate=True``.
     """
 
-    def __init__(self) -> None:
-        """Initializes group simulation info with default values."""
-        self._sim_info = _nccl_bindings.SimInfo()
-
-        # Apply NCCL_SIM_INFO_INITIALIZER defaults
-        self._sim_info.size_ = int(_nccl_bindings.sim_info_dtype.itemsize)
-        self._sim_info.magic = 0x74685283  # NCCL protocol magic number for ncclSimInfo_t validation
-        self._sim_info.version = _nccl_bindings.get_version()
-        self._sim_info.estimated_time = NCCL_UNDEF_FLOAT
-
-    @property
-    def ptr(self) -> int:
-        """Raw NCCL simulation info pointer."""
-        return int(self._sim_info.ptr)
-
-    # Field proxies
-    @property
-    def estimated_time(self) -> float:
-        """Estimated execution time for the group operations, in seconds."""
-        return self._sim_info.estimated_time
+    estimated_time: float
+    """Estimated execution time for the simulated group operations, in seconds."""
 
 
 def group_start() -> None:
@@ -65,30 +45,35 @@ def group_start() -> None:
     return _nccl_bindings.group_start()
 
 
-def group_end() -> None:
+@overload
+def group_end(*, simulate: Literal[False] = False) -> None: ...
+@overload
+def group_end(*, simulate: Literal[True]) -> GroupSimInfo: ...
+@overload
+def group_end(*, simulate: bool) -> GroupSimInfo | None: ...
+def group_end(*, simulate: bool = False) -> GroupSimInfo | None:
     """Ends a group of NCCL operations.
 
-    Executes all operations that were queued since the last
-    :py:func:`group_start`. Must be called to actually perform the batched
-    operations.
-    """
-    return _nccl_bindings.group_end()
-
-
-def group_simulate_end(sim_info: GroupSimInfo | None) -> None:
-    """Simulates the end of a group of NCCL operations.
-
-    Estimates the execution time of the queued operations without actually
-    executing them. The estimated time is stored in
-    :py:attr:`GroupSimInfo.estimated_time`.
+    By default, executes all operations queued since the last
+    :py:func:`group_start`. When ``simulate=True``, the queued operations
+    are simulated instead of executed, and the estimated execution time is
+    returned in a :py:class:`GroupSimInfo`.
 
     Args:
-        sim_info: Simulation info object to store estimated time, or
-            ``None`` to discard the result.
+        simulate: When True, simulates the group instead of executing it
+            and returns a :py:class:`GroupSimInfo` carrying the estimated
+            time. Defaults to False.
+
+    Returns:
+        ``None`` when ``simulate=False``; a :py:class:`GroupSimInfo` with
+        the simulation result when ``simulate=True``.
     """
-    if sim_info is None:
-        return _nccl_bindings.group_simulate_end(None)
-    return _nccl_bindings.group_simulate_end(sim_info.ptr)
+    if not simulate:
+        _nccl_bindings.group_end()
+        return None
+
+    sim_info = _nccl_bindings.group_simulate_end()
+    return GroupSimInfo(estimated_time=sim_info.estimated_time)
 
 
 @contextlib.contextmanager
@@ -98,6 +83,10 @@ def group() -> Generator[None, None, None]:
     Automatically calls :py:func:`group_start` on entry and
     :py:func:`group_end` on exit, ensuring proper cleanup even if an
     exception occurs.
+
+    Simulation mode is not supported here. To simulate, call
+    :py:func:`group_start` and :py:func:`group_end` directly and pass
+    ``simulate=True`` to :py:func:`group_end`.
     """
     group_start()
     try:

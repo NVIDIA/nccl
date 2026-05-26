@@ -20,10 +20,13 @@ except ImportError:
     try:
         from typing_extensions import deprecated
     except ImportError:
+
         def deprecated(*_args, **_kwargs):  # type: ignore[no-redef]
             def _decorator(obj):
                 return obj
+
             return _decorator
+
 
 from nccl._version import __version__
 from nccl.bindings import nccl as _nccl_bindings
@@ -113,25 +116,29 @@ class UniqueId:
       ``b``) work out of the box.
     """
 
-    def __init__(self) -> None:
-        """Initializes an empty UniqueId.
+    def __init__(self, _internal: _nccl_bindings.UniqueId | None = None) -> None:
+        """Initializes a UniqueId.
 
         Use :py:func:`get_unique_id` to generate a valid unique ID for
         communicator initialization.
         """
-        self._internal: _nccl_bindings.UniqueId = _nccl_bindings.UniqueId()
+        if _internal is None:
+            _internal = _nccl_bindings.UniqueId()
+        self._internal: _nccl_bindings.UniqueId = _internal
 
     def __repr__(self) -> str:
-        # Show first 8 and last 8 bytes in hex
-        bytes_data = self.as_bytes
-        if len(bytes_data) <= 32:
-            hex_str = bytes_data.hex()
-        else:
-            hex_str = bytes_data[:8].hex() + "..." + bytes_data[-8:].hex()
-        return f"<UniqueId: {hex_str}>"
+        # ncclUniqueId is 128 bytes; show first 8 and last 8 in hex.
+        b = self.as_bytes
+        return f"<UniqueId: {b[:8].hex()}...{b[-8:].hex()}>"
 
     def __bytes__(self) -> bytes:
         return bytes(self._internal)
+
+    def __getstate__(self) -> bytes:
+        return bytes(self)
+
+    def __setstate__(self, state: bytes) -> None:
+        self._internal = _nccl_bindings.UniqueId.from_buffer(state)
 
     @staticmethod
     def from_bytes(b: bytes | bytearray | memoryview) -> UniqueId:
@@ -144,9 +151,7 @@ class UniqueId:
         Returns:
             Reconstructed :py:class:`UniqueId`.
         """
-        uid = UniqueId.__new__(UniqueId)
-        uid._internal = _nccl_bindings.UniqueId.from_buffer(b)
-        return uid
+        return UniqueId(_nccl_bindings.UniqueId.from_buffer(b))
 
     @property
     def ptr(self) -> int:
@@ -181,11 +186,9 @@ def get_unique_id(empty: bool = False) -> UniqueId:
     Returns:
         A new :py:class:`UniqueId` to be shared across ranks.
     """
-    uid = UniqueId()
     if empty:
-        return uid
-    _nccl_bindings.get_unique_id(uid.ptr)
-    return uid
+        return UniqueId()
+    return UniqueId(_nccl_bindings.get_unique_id())
 
 
 def get_error_string(nccl_result: _nccl_bindings.Result | int) -> str:

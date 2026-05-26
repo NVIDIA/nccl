@@ -68,7 +68,7 @@ from __future__ import annotations
 import ctypes
 
 from nccl.bindings import nccl_ep as _ep_bindings
-from nccl.ep._binding_helpers import binding_dataclass
+from nccl._binding_helpers import binding_dataclass
 
 
 __all__ = ["AllocConfig", "AllocFn", "FreeFn"]

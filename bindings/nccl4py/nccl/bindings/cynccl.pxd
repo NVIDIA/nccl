@@ -91,12 +91,19 @@ cdef extern from *:
 
 
 ctypedef uint32_t ncclDevResourceHandle_t 'ncclDevResourceHandle_t'
+
 ctypedef uint32_t ncclGinSignal_t 'ncclGinSignal_t'
+
 ctypedef uint32_t ncclGinCounter_t 'ncclGinCounter_t'
+
 ctypedef void* ncclComm_t 'ncclComm_t'
+
 ctypedef void* ncclWindow_t 'ncclWindow_t'
+
 ctypedef void* ncclParamHandle_t 'ncclParamHandle_t'
+
 ctypedef void* ncclDevCommWindowTable_t 'ncclDevCommWindowTable_t'
+
 ctypedef struct ncclUniqueId 'ncclUniqueId':
     char internal[128]
 
@@ -244,7 +251,6 @@ ctypedef struct ncclDevCommRequirements_t 'ncclDevCommRequirements_t':
     int worldGinBarrierCount
     uint8_t ginStrongSignalsRequired
     uint8_t ginVaSignalsRequired
-
 
 
 ###############################################################################

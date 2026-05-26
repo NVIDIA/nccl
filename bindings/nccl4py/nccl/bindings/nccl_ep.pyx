@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# This code was automatically generated with version 0.1.0. Do not modify it directly.
+# This code was automatically generated with version 0.0.1. Do not modify it directly.
 
 cimport cython  # NOQA
 from libc.stdint cimport uint64_t
@@ -21,7 +21,6 @@ cimport cpython.memoryview
 cimport cpython
 from libc.string cimport memcmp, memcpy
 import numpy as _numpy
-import pickle
 
 
 cdef __from_data(data, dtype_name, expected_dtype, lowpp_type):
@@ -90,7 +89,7 @@ cdef _get_tensor_dtype_offsets():
 tensor_dtype = _get_tensor_dtype_offsets()
 
 cdef class Tensor:
-    """Empty-initialize an instance of `ncclEpTensor_t`.
+    """Initialize an instance of `ncclEpTensor_t` using configured defaults.
 
 
     .. seealso:: `ncclEpTensor_t`
@@ -108,6 +107,9 @@ cdef class Tensor:
         self._owner = None
         self._owned = True
         self._readonly = False
+
+        self._ptr[0].size = sizeof(ncclEpTensor_t)
+        self._ptr[0].magic = 0xCAFECAFE
 
     def __dealloc__(self):
         cdef ncclEpTensor_t *ptr
@@ -145,8 +147,6 @@ cdef class Tensor:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclEpTensor_t *>malloc(sizeof(ncclEpTensor_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating Tensor")
@@ -245,9 +245,6 @@ cdef class Tensor:
             raise ValueError("This Tensor instance is read-only")
         self._ptr[0].sizes = <size_t*><intptr_t>val
 
-    def __getstate__(self):
-        raise pickle.PicklingError("Pickle not supported for Tensor")
-
     @staticmethod
     def from_buffer(buffer):
         """Create an Tensor instance with the memory from the given buffer."""
@@ -292,10 +289,11 @@ cdef class Tensor:
 cdef _get_tensor_alloc_config_dtype_offsets():
     cdef ncclEpTensorAllocConfig_t pod = ncclEpTensorAllocConfig_t()
     return _numpy.dtype({
-        'names': ['size_'],
-        'formats': [_numpy.uint32],
+        'names': ['size_', 'magic'],
+        'formats': [_numpy.uint32, _numpy.uint32],
         'offsets': [
             (<intptr_t>&(pod.size)) - (<intptr_t>&pod),
+            (<intptr_t>&(pod.magic)) - (<intptr_t>&pod),
         ],
         'itemsize': sizeof(ncclEpTensorAllocConfig_t),
     })
@@ -303,7 +301,7 @@ cdef _get_tensor_alloc_config_dtype_offsets():
 tensor_alloc_config_dtype = _get_tensor_alloc_config_dtype_offsets()
 
 cdef class TensorAllocConfig:
-    """Empty-initialize an instance of `ncclEpTensorAllocConfig_t`.
+    """Initialize an instance of `ncclEpTensorAllocConfig_t` using configured defaults.
 
 
     .. seealso:: `ncclEpTensorAllocConfig_t`
@@ -321,6 +319,9 @@ cdef class TensorAllocConfig:
         self._owner = None
         self._owned = True
         self._readonly = False
+
+        self._ptr[0].size = sizeof(ncclEpTensorAllocConfig_t)
+        self._ptr[0].magic = 0xC00FFFEE
 
     def __dealloc__(self):
         cdef ncclEpTensorAllocConfig_t *ptr
@@ -358,8 +359,6 @@ cdef class TensorAllocConfig:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclEpTensorAllocConfig_t *>malloc(sizeof(ncclEpTensorAllocConfig_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating TensorAllocConfig")
@@ -381,17 +380,16 @@ cdef class TensorAllocConfig:
             raise ValueError("This TensorAllocConfig instance is read-only")
         self._ptr[0].size = val
 
-    def __getstate__(self):
-        return cpython.PyBytes_FromStringAndSize(<char *><void *>self._ptr, sizeof(ncclEpTensorAllocConfig_t))
+    @property
+    def magic(self):
+        """int: """
+        return self._ptr[0].magic
 
-    def __setstate__(self, state):
-        if not isinstance(state, bytes):
-            raise TypeError(f"Invalid state type for TensorAllocConfig, expected bytes, got {type(state).__name__}")
-        if len(state) != sizeof(ncclEpTensorAllocConfig_t):
-            raise ValueError(f"Invalid state length for TensorAllocConfig, expected sizeof(ncclEpTensorAllocConfig_t), got {len(state)}")
-        cdef char *state_ptr = cpython.PyBytes_AsString(state)
-        self._ptr = <ncclEpTensorAllocConfig_t *>malloc(sizeof(ncclEpTensorAllocConfig_t))
-        memcpy(<void *>self._ptr, <void *>state_ptr, sizeof(ncclEpTensorAllocConfig_t))
+    @magic.setter
+    def magic(self, val):
+        if self._readonly:
+            raise ValueError("This TensorAllocConfig instance is read-only")
+        self._ptr[0].magic = val
 
     @staticmethod
     def from_buffer(buffer):
@@ -505,8 +503,6 @@ cdef class AllocConfig:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclEpAllocConfig_t *>malloc(sizeof(ncclEpAllocConfig_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating AllocConfig")
@@ -547,9 +543,6 @@ cdef class AllocConfig:
         if self._readonly:
             raise ValueError("This AllocConfig instance is read-only")
         self._ptr[0].context = <void *><intptr_t>val
-
-    def __getstate__(self):
-        raise pickle.PicklingError("Pickle not supported for AllocConfig")
 
     @staticmethod
     def from_buffer(buffer):
@@ -595,10 +588,11 @@ cdef class AllocConfig:
 cdef _get_handle_config_dtype_offsets():
     cdef ncclEpHandleConfig_t pod = ncclEpHandleConfig_t()
     return _numpy.dtype({
-        'names': ['size_', 'dispatch_output_per_expert_alignment'],
-        'formats': [_numpy.uint32, _numpy.uint64],
+        'names': ['size_', 'magic', 'dispatch_output_per_expert_alignment'],
+        'formats': [_numpy.uint32, _numpy.uint32, _numpy.uint64],
         'offsets': [
             (<intptr_t>&(pod.size)) - (<intptr_t>&pod),
+            (<intptr_t>&(pod.magic)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.dispatch_output_per_expert_alignment)) - (<intptr_t>&pod),
         ],
         'itemsize': sizeof(ncclEpHandleConfig_t),
@@ -607,7 +601,7 @@ cdef _get_handle_config_dtype_offsets():
 handle_config_dtype = _get_handle_config_dtype_offsets()
 
 cdef class HandleConfig:
-    """Empty-initialize an instance of `ncclEpHandleConfig_t`.
+    """Initialize an instance of `ncclEpHandleConfig_t` using configured defaults.
 
 
     .. seealso:: `ncclEpHandleConfig_t`
@@ -625,6 +619,9 @@ cdef class HandleConfig:
         self._owner = None
         self._owned = True
         self._readonly = False
+
+        self._ptr[0].size = sizeof(ncclEpHandleConfig_t)
+        self._ptr[0].magic = 0xC00FFFEE
 
     def __dealloc__(self):
         cdef ncclEpHandleConfig_t *ptr
@@ -662,8 +659,6 @@ cdef class HandleConfig:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclEpHandleConfig_t *>malloc(sizeof(ncclEpHandleConfig_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating HandleConfig")
@@ -686,6 +681,17 @@ cdef class HandleConfig:
         self._ptr[0].size = val
 
     @property
+    def magic(self):
+        """int: """
+        return self._ptr[0].magic
+
+    @magic.setter
+    def magic(self, val):
+        if self._readonly:
+            raise ValueError("This HandleConfig instance is read-only")
+        self._ptr[0].magic = val
+
+    @property
     def dispatch_output_per_expert_alignment(self):
         """int: """
         return self._ptr[0].dispatch_output_per_expert_alignment
@@ -695,18 +701,6 @@ cdef class HandleConfig:
         if self._readonly:
             raise ValueError("This HandleConfig instance is read-only")
         self._ptr[0].dispatch_output_per_expert_alignment = val
-
-    def __getstate__(self):
-        return cpython.PyBytes_FromStringAndSize(<char *><void *>self._ptr, sizeof(ncclEpHandleConfig_t))
-
-    def __setstate__(self, state):
-        if not isinstance(state, bytes):
-            raise TypeError(f"Invalid state type for HandleConfig, expected bytes, got {type(state).__name__}")
-        if len(state) != sizeof(ncclEpHandleConfig_t):
-            raise ValueError(f"Invalid state length for HandleConfig, expected sizeof(ncclEpHandleConfig_t), got {len(state)}")
-        cdef char *state_ptr = cpython.PyBytes_AsString(state)
-        self._ptr = <ncclEpHandleConfig_t *>malloc(sizeof(ncclEpHandleConfig_t))
-        memcpy(<void *>self._ptr, <void *>state_ptr, sizeof(ncclEpHandleConfig_t))
 
     @staticmethod
     def from_buffer(buffer):
@@ -752,10 +746,11 @@ cdef class HandleConfig:
 cdef _get_dispatch_config_dtype_offsets():
     cdef ncclEpDispatchConfig_t pod = ncclEpDispatchConfig_t()
     return _numpy.dtype({
-        'names': ['size_', 'send_only', 'round_scales', 'pass_direction'],
-        'formats': [_numpy.uint32, _numpy.uint32, _numpy.uint32, _numpy.int32],
+        'names': ['size_', 'magic', 'send_only', 'round_scales', 'pass_direction'],
+        'formats': [_numpy.uint32, _numpy.uint32, _numpy.uint32, _numpy.uint32, _numpy.int32],
         'offsets': [
             (<intptr_t>&(pod.size)) - (<intptr_t>&pod),
+            (<intptr_t>&(pod.magic)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.send_only)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.round_scales)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.pass_direction)) - (<intptr_t>&pod),
@@ -766,7 +761,7 @@ cdef _get_dispatch_config_dtype_offsets():
 dispatch_config_dtype = _get_dispatch_config_dtype_offsets()
 
 cdef class DispatchConfig:
-    """Empty-initialize an instance of `ncclEpDispatchConfig_t`.
+    """Initialize an instance of `ncclEpDispatchConfig_t` using configured defaults.
 
 
     .. seealso:: `ncclEpDispatchConfig_t`
@@ -784,6 +779,9 @@ cdef class DispatchConfig:
         self._owner = None
         self._owned = True
         self._readonly = False
+
+        self._ptr[0].size = sizeof(ncclEpDispatchConfig_t)
+        self._ptr[0].magic = 0xC00FFFEE
 
     def __dealloc__(self):
         cdef ncclEpDispatchConfig_t *ptr
@@ -821,8 +819,6 @@ cdef class DispatchConfig:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclEpDispatchConfig_t *>malloc(sizeof(ncclEpDispatchConfig_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating DispatchConfig")
@@ -843,6 +839,17 @@ cdef class DispatchConfig:
         if self._readonly:
             raise ValueError("This DispatchConfig instance is read-only")
         self._ptr[0].size = val
+
+    @property
+    def magic(self):
+        """int: """
+        return self._ptr[0].magic
+
+    @magic.setter
+    def magic(self, val):
+        if self._readonly:
+            raise ValueError("This DispatchConfig instance is read-only")
+        self._ptr[0].magic = val
 
     @property
     def send_only(self):
@@ -876,9 +883,6 @@ cdef class DispatchConfig:
         if self._readonly:
             raise ValueError("This DispatchConfig instance is read-only")
         self._ptr[0].pass_direction = <ncclEpPassDir_t><int>val
-
-    def __getstate__(self):
-        raise pickle.PicklingError("Pickle not supported for DispatchConfig")
 
     @staticmethod
     def from_buffer(buffer):
@@ -924,10 +928,11 @@ cdef class DispatchConfig:
 cdef _get_combine_config_dtype_offsets():
     cdef ncclEpCombineConfig_t pod = ncclEpCombineConfig_t()
     return _numpy.dtype({
-        'names': ['size_', 'send_only', 'pass_direction'],
-        'formats': [_numpy.uint32, _numpy.uint32, _numpy.int32],
+        'names': ['size_', 'magic', 'send_only', 'pass_direction'],
+        'formats': [_numpy.uint32, _numpy.uint32, _numpy.uint32, _numpy.int32],
         'offsets': [
             (<intptr_t>&(pod.size)) - (<intptr_t>&pod),
+            (<intptr_t>&(pod.magic)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.send_only)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.pass_direction)) - (<intptr_t>&pod),
         ],
@@ -937,7 +942,7 @@ cdef _get_combine_config_dtype_offsets():
 combine_config_dtype = _get_combine_config_dtype_offsets()
 
 cdef class CombineConfig:
-    """Empty-initialize an instance of `ncclEpCombineConfig_t`.
+    """Initialize an instance of `ncclEpCombineConfig_t` using configured defaults.
 
 
     .. seealso:: `ncclEpCombineConfig_t`
@@ -955,6 +960,9 @@ cdef class CombineConfig:
         self._owner = None
         self._owned = True
         self._readonly = False
+
+        self._ptr[0].size = sizeof(ncclEpCombineConfig_t)
+        self._ptr[0].magic = 0xC00FFFEE
 
     def __dealloc__(self):
         cdef ncclEpCombineConfig_t *ptr
@@ -992,8 +1000,6 @@ cdef class CombineConfig:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclEpCombineConfig_t *>malloc(sizeof(ncclEpCombineConfig_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating CombineConfig")
@@ -1016,6 +1022,17 @@ cdef class CombineConfig:
         self._ptr[0].size = val
 
     @property
+    def magic(self):
+        """int: """
+        return self._ptr[0].magic
+
+    @magic.setter
+    def magic(self, val):
+        if self._readonly:
+            raise ValueError("This CombineConfig instance is read-only")
+        self._ptr[0].magic = val
+
+    @property
     def send_only(self):
         """int: """
         return self._ptr[0].send_only
@@ -1036,9 +1053,6 @@ cdef class CombineConfig:
         if self._readonly:
             raise ValueError("This CombineConfig instance is read-only")
         self._ptr[0].pass_direction = <ncclEpPassDir_t><int>val
-
-    def __getstate__(self):
-        raise pickle.PicklingError("Pickle not supported for CombineConfig")
 
     @staticmethod
     def from_buffer(buffer):
@@ -1081,13 +1095,160 @@ cdef class CombineConfig:
         return obj
 
 
+cdef _get_complete_config_dtype_offsets():
+    cdef ncclEpCompleteConfig_t pod = ncclEpCompleteConfig_t()
+    return _numpy.dtype({
+        'names': ['size_', 'magic'],
+        'formats': [_numpy.uint32, _numpy.uint32],
+        'offsets': [
+            (<intptr_t>&(pod.size)) - (<intptr_t>&pod),
+            (<intptr_t>&(pod.magic)) - (<intptr_t>&pod),
+        ],
+        'itemsize': sizeof(ncclEpCompleteConfig_t),
+    })
+
+complete_config_dtype = _get_complete_config_dtype_offsets()
+
+cdef class CompleteConfig:
+    """Initialize an instance of `ncclEpCompleteConfig_t` using configured defaults.
+
+
+    .. seealso:: `ncclEpCompleteConfig_t`
+    """
+    cdef:
+        ncclEpCompleteConfig_t *_ptr
+        object _owner
+        bint _owned
+        bint _readonly
+
+    def __init__(self):
+        self._ptr = <ncclEpCompleteConfig_t *>calloc(1, sizeof(ncclEpCompleteConfig_t))
+        if self._ptr == NULL:
+            raise MemoryError("Error allocating CompleteConfig")
+        self._owner = None
+        self._owned = True
+        self._readonly = False
+
+        self._ptr[0].size = sizeof(ncclEpCompleteConfig_t)
+        self._ptr[0].magic = 0xC00FFFEE
+
+    def __dealloc__(self):
+        cdef ncclEpCompleteConfig_t *ptr
+        if self._owned and self._ptr != NULL:
+            ptr = self._ptr
+            self._ptr = NULL
+            free(ptr)
+
+    def __repr__(self):
+        return f"<{__name__}.CompleteConfig object at {hex(id(self))}>"
+
+    @property
+    def ptr(self):
+        """Get the pointer address to the data as Python :class:`int`."""
+        return <intptr_t>(self._ptr)
+
+    cdef intptr_t _get_ptr(self):
+        return <intptr_t>(self._ptr)
+
+    def __int__(self):
+        return <intptr_t>(self._ptr)
+
+    def __eq__(self, other):
+        cdef CompleteConfig other_
+        if not isinstance(other, CompleteConfig):
+            return False
+        other_ = other
+        return (memcmp(<void *><intptr_t>(self._ptr), <void *><intptr_t>(other_._ptr), sizeof(ncclEpCompleteConfig_t)) == 0)
+
+    def __getbuffer__(self, Py_buffer *buffer, int flags):
+        __getbuffer(self, buffer, <void *>self._ptr, sizeof(ncclEpCompleteConfig_t), self._readonly)
+
+    def __releasebuffer__(self, Py_buffer *buffer):
+        pass
+
+    def __setitem__(self, key, val):
+        if key == 0 and isinstance(val, _numpy.ndarray):
+            self._ptr = <ncclEpCompleteConfig_t *>malloc(sizeof(ncclEpCompleteConfig_t))
+            if self._ptr == NULL:
+                raise MemoryError("Error allocating CompleteConfig")
+            memcpy(<void*>self._ptr, <void*><intptr_t>val.ctypes.data, sizeof(ncclEpCompleteConfig_t))
+            self._owner = None
+            self._owned = True
+            self._readonly = not val.flags.writeable
+        else:
+            setattr(self, key, val)
+
+    @property
+    def size_(self):
+        """int: """
+        return self._ptr[0].size
+
+    @size_.setter
+    def size_(self, val):
+        if self._readonly:
+            raise ValueError("This CompleteConfig instance is read-only")
+        self._ptr[0].size = val
+
+    @property
+    def magic(self):
+        """int: """
+        return self._ptr[0].magic
+
+    @magic.setter
+    def magic(self, val):
+        if self._readonly:
+            raise ValueError("This CompleteConfig instance is read-only")
+        self._ptr[0].magic = val
+
+    @staticmethod
+    def from_buffer(buffer):
+        """Create an CompleteConfig instance with the memory from the given buffer."""
+        return __from_buffer(buffer, sizeof(ncclEpCompleteConfig_t), CompleteConfig)
+
+    @staticmethod
+    def from_data(data):
+        """Create an CompleteConfig instance wrapping the given NumPy array.
+
+        Args:
+            data (_numpy.ndarray): a single-element array of dtype `complete_config_dtype` holding the data.
+        """
+        return __from_data(data, "complete_config_dtype", complete_config_dtype, CompleteConfig)
+
+    @staticmethod
+    def from_ptr(intptr_t ptr, bint readonly=False, object owner=None):
+        """Create an CompleteConfig instance wrapping the given pointer.
+
+        Args:
+            ptr (intptr_t): pointer address as Python :class:`int` to the data.
+            owner (object): The Python object that owns the pointer. If not provided, data will be copied.
+            readonly (bool): whether the data is read-only (to the user). default is `False`.
+        """
+        if ptr == 0:
+            raise ValueError("ptr must not be null (0)")
+        cdef CompleteConfig obj = CompleteConfig.__new__(CompleteConfig)
+        if owner is None:
+            obj._ptr = <ncclEpCompleteConfig_t *>malloc(sizeof(ncclEpCompleteConfig_t))
+            if obj._ptr == NULL:
+                raise MemoryError("Error allocating CompleteConfig")
+            memcpy(<void*>(obj._ptr), <void*>ptr, sizeof(ncclEpCompleteConfig_t))
+            obj._owner = None
+            obj._owned = True
+        else:
+            obj._ptr = <ncclEpCompleteConfig_t *>ptr
+            obj._owner = owner
+            obj._owned = False
+        obj._readonly = readonly
+        return obj
+
+
 cdef _get_layout_info_dtype_offsets():
     cdef ncclEpLayoutInfo_t pod = ncclEpLayoutInfo_t()
     return _numpy.dtype({
-        'names': ['size_', 'expert_counters', 'src_rank_counters', 'expert_offsets', 'recv_total_counter'],
-        'formats': [_numpy.uint32, _numpy.intp, _numpy.intp, _numpy.intp, _numpy.intp],
+        'names': ['size_', 'magic', 'expert_counters', 'src_rank_counters', 'expert_offsets', 'recv_total_counter'],
+        'formats': [_numpy.uint32, _numpy.uint32, _numpy.intp, _numpy.intp, _numpy.intp, _numpy.intp],
         'offsets': [
             (<intptr_t>&(pod.size)) - (<intptr_t>&pod),
+            (<intptr_t>&(pod.magic)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.expert_counters)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.src_rank_counters)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.expert_offsets)) - (<intptr_t>&pod),
@@ -1099,7 +1260,7 @@ cdef _get_layout_info_dtype_offsets():
 layout_info_dtype = _get_layout_info_dtype_offsets()
 
 cdef class LayoutInfo:
-    """Empty-initialize an instance of `ncclEpLayoutInfo_t`.
+    """Initialize an instance of `ncclEpLayoutInfo_t` using configured defaults.
 
 
     .. seealso:: `ncclEpLayoutInfo_t`
@@ -1117,6 +1278,9 @@ cdef class LayoutInfo:
         self._owner = None
         self._owned = True
         self._readonly = False
+
+        self._ptr[0].size = sizeof(ncclEpLayoutInfo_t)
+        self._ptr[0].magic = 0xC00FFFEE
 
     def __dealloc__(self):
         cdef ncclEpLayoutInfo_t *ptr
@@ -1154,8 +1318,6 @@ cdef class LayoutInfo:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclEpLayoutInfo_t *>malloc(sizeof(ncclEpLayoutInfo_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating LayoutInfo")
@@ -1176,6 +1338,17 @@ cdef class LayoutInfo:
         if self._readonly:
             raise ValueError("This LayoutInfo instance is read-only")
         self._ptr[0].size = val
+
+    @property
+    def magic(self):
+        """int: """
+        return self._ptr[0].magic
+
+    @magic.setter
+    def magic(self, val):
+        if self._readonly:
+            raise ValueError("This LayoutInfo instance is read-only")
+        self._ptr[0].magic = val
 
     @property
     def expert_counters(self):
@@ -1221,9 +1394,6 @@ cdef class LayoutInfo:
             raise ValueError("This LayoutInfo instance is read-only")
         self._ptr[0].recv_total_counter = <ncclEpTensor_t*><intptr_t>val
 
-    def __getstate__(self):
-        raise pickle.PicklingError("Pickle not supported for LayoutInfo")
-
     @staticmethod
     def from_buffer(buffer):
         """Create an LayoutInfo instance with the memory from the given buffer."""
@@ -1268,10 +1438,11 @@ cdef class LayoutInfo:
 cdef _get_dispatch_inputs_dtype_offsets():
     cdef ncclEpDispatchInputs_t pod = ncclEpDispatchInputs_t()
     return _numpy.dtype({
-        'names': ['size_', 'tokens', 'topk_weights', 'scales'],
-        'formats': [_numpy.uint32, _numpy.intp, _numpy.intp, _numpy.intp],
+        'names': ['size_', 'magic', 'tokens', 'topk_weights', 'scales'],
+        'formats': [_numpy.uint32, _numpy.uint32, _numpy.intp, _numpy.intp, _numpy.intp],
         'offsets': [
             (<intptr_t>&(pod.size)) - (<intptr_t>&pod),
+            (<intptr_t>&(pod.magic)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.tokens)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.topk_weights)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.scales)) - (<intptr_t>&pod),
@@ -1282,7 +1453,7 @@ cdef _get_dispatch_inputs_dtype_offsets():
 dispatch_inputs_dtype = _get_dispatch_inputs_dtype_offsets()
 
 cdef class DispatchInputs:
-    """Empty-initialize an instance of `ncclEpDispatchInputs_t`.
+    """Initialize an instance of `ncclEpDispatchInputs_t` using configured defaults.
 
 
     .. seealso:: `ncclEpDispatchInputs_t`
@@ -1300,6 +1471,9 @@ cdef class DispatchInputs:
         self._owner = None
         self._owned = True
         self._readonly = False
+
+        self._ptr[0].size = sizeof(ncclEpDispatchInputs_t)
+        self._ptr[0].magic = 0xC00FFFEE
 
     def __dealloc__(self):
         cdef ncclEpDispatchInputs_t *ptr
@@ -1337,8 +1511,6 @@ cdef class DispatchInputs:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclEpDispatchInputs_t *>malloc(sizeof(ncclEpDispatchInputs_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating DispatchInputs")
@@ -1359,6 +1531,17 @@ cdef class DispatchInputs:
         if self._readonly:
             raise ValueError("This DispatchInputs instance is read-only")
         self._ptr[0].size = val
+
+    @property
+    def magic(self):
+        """int: """
+        return self._ptr[0].magic
+
+    @magic.setter
+    def magic(self, val):
+        if self._readonly:
+            raise ValueError("This DispatchInputs instance is read-only")
+        self._ptr[0].magic = val
 
     @property
     def tokens(self):
@@ -1392,9 +1575,6 @@ cdef class DispatchInputs:
         if self._readonly:
             raise ValueError("This DispatchInputs instance is read-only")
         self._ptr[0].scales = <ncclEpTensor_t*><intptr_t>val
-
-    def __getstate__(self):
-        raise pickle.PicklingError("Pickle not supported for DispatchInputs")
 
     @staticmethod
     def from_buffer(buffer):
@@ -1440,10 +1620,11 @@ cdef class DispatchInputs:
 cdef _get_dispatch_outputs_dtype_offsets():
     cdef ncclEpDispatchOutputs_t pod = ncclEpDispatchOutputs_t()
     return _numpy.dtype({
-        'names': ['size_', 'tokens', 'topk_weights', 'scales', 'topk_idx'],
-        'formats': [_numpy.uint32, _numpy.intp, _numpy.intp, _numpy.intp, _numpy.intp],
+        'names': ['size_', 'magic', 'tokens', 'topk_weights', 'scales', 'topk_idx'],
+        'formats': [_numpy.uint32, _numpy.uint32, _numpy.intp, _numpy.intp, _numpy.intp, _numpy.intp],
         'offsets': [
             (<intptr_t>&(pod.size)) - (<intptr_t>&pod),
+            (<intptr_t>&(pod.magic)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.tokens)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.topk_weights)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.scales)) - (<intptr_t>&pod),
@@ -1455,7 +1636,7 @@ cdef _get_dispatch_outputs_dtype_offsets():
 dispatch_outputs_dtype = _get_dispatch_outputs_dtype_offsets()
 
 cdef class DispatchOutputs:
-    """Empty-initialize an instance of `ncclEpDispatchOutputs_t`.
+    """Initialize an instance of `ncclEpDispatchOutputs_t` using configured defaults.
 
 
     .. seealso:: `ncclEpDispatchOutputs_t`
@@ -1473,6 +1654,9 @@ cdef class DispatchOutputs:
         self._owner = None
         self._owned = True
         self._readonly = False
+
+        self._ptr[0].size = sizeof(ncclEpDispatchOutputs_t)
+        self._ptr[0].magic = 0xC00FFFEE
 
     def __dealloc__(self):
         cdef ncclEpDispatchOutputs_t *ptr
@@ -1510,8 +1694,6 @@ cdef class DispatchOutputs:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclEpDispatchOutputs_t *>malloc(sizeof(ncclEpDispatchOutputs_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating DispatchOutputs")
@@ -1532,6 +1714,17 @@ cdef class DispatchOutputs:
         if self._readonly:
             raise ValueError("This DispatchOutputs instance is read-only")
         self._ptr[0].size = val
+
+    @property
+    def magic(self):
+        """int: """
+        return self._ptr[0].magic
+
+    @magic.setter
+    def magic(self, val):
+        if self._readonly:
+            raise ValueError("This DispatchOutputs instance is read-only")
+        self._ptr[0].magic = val
 
     @property
     def tokens(self):
@@ -1577,9 +1770,6 @@ cdef class DispatchOutputs:
             raise ValueError("This DispatchOutputs instance is read-only")
         self._ptr[0].topk_idx = <ncclEpTensor_t*><intptr_t>val
 
-    def __getstate__(self):
-        raise pickle.PicklingError("Pickle not supported for DispatchOutputs")
-
     @staticmethod
     def from_buffer(buffer):
         """Create an DispatchOutputs instance with the memory from the given buffer."""
@@ -1624,10 +1814,11 @@ cdef class DispatchOutputs:
 cdef _get_combine_inputs_dtype_offsets():
     cdef ncclEpCombineInputs_t pod = ncclEpCombineInputs_t()
     return _numpy.dtype({
-        'names': ['size_', 'tokens', 'topk_weights'],
-        'formats': [_numpy.uint32, _numpy.intp, _numpy.intp],
+        'names': ['size_', 'magic', 'tokens', 'topk_weights'],
+        'formats': [_numpy.uint32, _numpy.uint32, _numpy.intp, _numpy.intp],
         'offsets': [
             (<intptr_t>&(pod.size)) - (<intptr_t>&pod),
+            (<intptr_t>&(pod.magic)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.tokens)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.topk_weights)) - (<intptr_t>&pod),
         ],
@@ -1637,7 +1828,7 @@ cdef _get_combine_inputs_dtype_offsets():
 combine_inputs_dtype = _get_combine_inputs_dtype_offsets()
 
 cdef class CombineInputs:
-    """Empty-initialize an instance of `ncclEpCombineInputs_t`.
+    """Initialize an instance of `ncclEpCombineInputs_t` using configured defaults.
 
 
     .. seealso:: `ncclEpCombineInputs_t`
@@ -1655,6 +1846,9 @@ cdef class CombineInputs:
         self._owner = None
         self._owned = True
         self._readonly = False
+
+        self._ptr[0].size = sizeof(ncclEpCombineInputs_t)
+        self._ptr[0].magic = 0xC00FFFEE
 
     def __dealloc__(self):
         cdef ncclEpCombineInputs_t *ptr
@@ -1692,8 +1886,6 @@ cdef class CombineInputs:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclEpCombineInputs_t *>malloc(sizeof(ncclEpCombineInputs_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating CombineInputs")
@@ -1716,6 +1908,17 @@ cdef class CombineInputs:
         self._ptr[0].size = val
 
     @property
+    def magic(self):
+        """int: """
+        return self._ptr[0].magic
+
+    @magic.setter
+    def magic(self, val):
+        if self._readonly:
+            raise ValueError("This CombineInputs instance is read-only")
+        self._ptr[0].magic = val
+
+    @property
     def tokens(self):
         """int: """
         return <intptr_t>(self._ptr[0].tokens)
@@ -1736,9 +1939,6 @@ cdef class CombineInputs:
         if self._readonly:
             raise ValueError("This CombineInputs instance is read-only")
         self._ptr[0].topk_weights = <ncclEpTensor_t*><intptr_t>val
-
-    def __getstate__(self):
-        raise pickle.PicklingError("Pickle not supported for CombineInputs")
 
     @staticmethod
     def from_buffer(buffer):
@@ -1784,10 +1984,11 @@ cdef class CombineInputs:
 cdef _get_combine_outputs_dtype_offsets():
     cdef ncclEpCombineOutputs_t pod = ncclEpCombineOutputs_t()
     return _numpy.dtype({
-        'names': ['size_', 'tokens', 'topk_weights'],
-        'formats': [_numpy.uint32, _numpy.intp, _numpy.intp],
+        'names': ['size_', 'magic', 'tokens', 'topk_weights'],
+        'formats': [_numpy.uint32, _numpy.uint32, _numpy.intp, _numpy.intp],
         'offsets': [
             (<intptr_t>&(pod.size)) - (<intptr_t>&pod),
+            (<intptr_t>&(pod.magic)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.tokens)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.topk_weights)) - (<intptr_t>&pod),
         ],
@@ -1797,7 +1998,7 @@ cdef _get_combine_outputs_dtype_offsets():
 combine_outputs_dtype = _get_combine_outputs_dtype_offsets()
 
 cdef class CombineOutputs:
-    """Empty-initialize an instance of `ncclEpCombineOutputs_t`.
+    """Initialize an instance of `ncclEpCombineOutputs_t` using configured defaults.
 
 
     .. seealso:: `ncclEpCombineOutputs_t`
@@ -1815,6 +2016,9 @@ cdef class CombineOutputs:
         self._owner = None
         self._owned = True
         self._readonly = False
+
+        self._ptr[0].size = sizeof(ncclEpCombineOutputs_t)
+        self._ptr[0].magic = 0xC00FFFEE
 
     def __dealloc__(self):
         cdef ncclEpCombineOutputs_t *ptr
@@ -1852,8 +2056,6 @@ cdef class CombineOutputs:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclEpCombineOutputs_t *>malloc(sizeof(ncclEpCombineOutputs_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating CombineOutputs")
@@ -1876,6 +2078,17 @@ cdef class CombineOutputs:
         self._ptr[0].size = val
 
     @property
+    def magic(self):
+        """int: """
+        return self._ptr[0].magic
+
+    @magic.setter
+    def magic(self, val):
+        if self._readonly:
+            raise ValueError("This CombineOutputs instance is read-only")
+        self._ptr[0].magic = val
+
+    @property
     def tokens(self):
         """int: """
         return <intptr_t>(self._ptr[0].tokens)
@@ -1896,9 +2109,6 @@ cdef class CombineOutputs:
         if self._readonly:
             raise ValueError("This CombineOutputs instance is read-only")
         self._ptr[0].topk_weights = <ncclEpTensor_t*><intptr_t>val
-
-    def __getstate__(self):
-        raise pickle.PicklingError("Pickle not supported for CombineOutputs")
 
     @staticmethod
     def from_buffer(buffer):
@@ -1944,10 +2154,11 @@ cdef class CombineOutputs:
 cdef _get_group_config_dtype_offsets():
     cdef ncclEpGroupConfig_t pod = ncclEpGroupConfig_t()
     return _numpy.dtype({
-        'names': ['size_', 'version', 'algorithm', 'num_experts', 'max_dispatch_tokens_per_rank', 'max_recv_tokens_per_rank', 'max_token_bytes', 'rdma_buffer_size', 'num_qp_per_rank', 'num_channels', 'max_num_sms', 'alloc', 'enable_mask', 'timeout_ns'],
-        'formats': [_numpy.uint32, _numpy.uint32, _numpy.int32, _numpy.uint32, _numpy.uint32, _numpy.uint32, _numpy.uint32, _numpy.dtype(('V', sizeof(unsigned long int))), _numpy.uint32, _numpy.uint32, _numpy.uint32, alloc_config_dtype, _numpy.uint32, _numpy.uint64],
+        'names': ['size_', 'magic', 'version', 'algorithm', 'num_experts', 'max_dispatch_tokens_per_rank', 'max_recv_tokens_per_rank', 'max_token_bytes', 'rdma_buffer_size', 'num_qp_per_rank', 'num_channels', 'max_num_sms', 'alloc', 'enable_mask', 'timeout_ns'],
+        'formats': [_numpy.uint32, _numpy.uint32, _numpy.uint32, _numpy.int32, _numpy.uint32, _numpy.uint32, _numpy.uint32, _numpy.uint32, _numpy.dtype(('V', sizeof(unsigned long int))), _numpy.uint32, _numpy.uint32, _numpy.uint32, alloc_config_dtype, _numpy.uint32, _numpy.uint64],
         'offsets': [
             (<intptr_t>&(pod.size)) - (<intptr_t>&pod),
+            (<intptr_t>&(pod.magic)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.version)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.algorithm)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.num_experts)) - (<intptr_t>&pod),
@@ -1968,7 +2179,7 @@ cdef _get_group_config_dtype_offsets():
 group_config_dtype = _get_group_config_dtype_offsets()
 
 cdef class GroupConfig:
-    """Empty-initialize an instance of `ncclEpGroupConfig_t`.
+    """Initialize an instance of `ncclEpGroupConfig_t` using configured defaults.
 
 
     .. seealso:: `ncclEpGroupConfig_t`
@@ -1986,6 +2197,10 @@ cdef class GroupConfig:
         self._owner = None
         self._owned = True
         self._readonly = False
+
+        self._ptr[0].size = sizeof(ncclEpGroupConfig_t)
+        self._ptr[0].magic = 0xC00FFFEE
+        self._ptr[0].version = 1
 
     def __dealloc__(self):
         cdef ncclEpGroupConfig_t *ptr
@@ -2023,8 +2238,6 @@ cdef class GroupConfig:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclEpGroupConfig_t *>malloc(sizeof(ncclEpGroupConfig_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating GroupConfig")
@@ -2057,6 +2270,17 @@ cdef class GroupConfig:
         if self._readonly:
             raise ValueError("This GroupConfig instance is read-only")
         self._ptr[0].size = val
+
+    @property
+    def magic(self):
+        """int: """
+        return self._ptr[0].magic
+
+    @magic.setter
+    def magic(self, val):
+        if self._readonly:
+            raise ValueError("This GroupConfig instance is read-only")
+        self._ptr[0].magic = val
 
     @property
     def version(self):
@@ -2190,9 +2414,6 @@ cdef class GroupConfig:
             raise ValueError("This GroupConfig instance is read-only")
         self._ptr[0].timeout_ns = val
 
-    def __getstate__(self):
-        raise pickle.PicklingError("Pickle not supported for GroupConfig")
-
     @staticmethod
     def from_buffer(buffer):
         """Create an GroupConfig instance with the memory from the given buffer."""
@@ -2232,7 +2453,6 @@ cdef class GroupConfig:
             obj._owned = False
         obj._readonly = readonly
         return obj
-
 
 
 ###############################################################################

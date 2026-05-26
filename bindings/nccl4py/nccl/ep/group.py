@@ -10,16 +10,17 @@ from __future__ import annotations
 from dataclasses import field
 from typing import TYPE_CHECKING
 
+from nccl._binding_helpers import binding_dataclass
+
 from nccl.core.typing import NcclInvalid
 
 from nccl.core.cuda import get_stream_ptr
 from nccl.core.typing import NcclStreamSpec
 
 from nccl.bindings import nccl_ep as _ep_bindings
-from nccl.ep._binding_helpers import binding_dataclass
 from nccl.ep.allocator import AllocConfig
 from nccl.ep.enums import Algorithm, Layout
-from nccl.ep.handle import Handle, HandleConfig, LayoutInfo, _materialize, _ptr_of
+from nccl.ep.handle import Handle, HandleConfig, LayoutInfo
 
 if TYPE_CHECKING:
     from nccl.core import Communicator
@@ -29,13 +30,7 @@ if TYPE_CHECKING:
 __all__ = ["Group", "GroupConfig"]
 
 
-_NCCL_EP_API_VERSION = 1
-
-
-@binding_dataclass(
-    _ep_bindings.GroupConfig,
-    size_field_dtype=_ep_bindings.group_config_dtype,
-)
+@binding_dataclass(_ep_bindings.GroupConfig)
 class GroupConfig:
     """Pythonic configuration for :py:meth:`Group.create`.
 
@@ -62,7 +57,6 @@ class GroupConfig:
         max_num_sms: Maximum SMs to use for EP kernels (dispatch,
             combine, preprocessing). 0 selects an algorithm-dependent
             default.
-        version: ABI version. Defaults to ``NCCL_EP_API_VERSION``.
         alloc: Device allocator hooks. Default
             :class:`AllocConfig` selects ``cudaMalloc``/``cudaFree``.
         enable_mask: Enable active-mask support for fault tolerance
@@ -90,7 +84,6 @@ class GroupConfig:
     num_qp_per_rank: int = 0
     num_channels: int = 0
     max_num_sms: int = 0
-    version: int = _NCCL_EP_API_VERSION
     alloc: AllocConfig = field(default_factory=AllocConfig)
     enable_mask: bool = False
     timeout_ns: int = 0
@@ -123,8 +116,7 @@ class Group:
         See Also:
             :meth:`destroy`.
         """
-        binding = config.to_binding()  # type: ignore[attr-defined]
-        ptr = _ep_bindings.create_group(comm.ptr, binding.ptr)
+        ptr = _ep_bindings.create_group(comm.ptr, config._lowpp.ptr)  # type: ignore[attr-defined]
         return cls(ptr)
 
     def _check_valid(self, operation: str) -> None:
@@ -167,16 +159,12 @@ class Group:
             stream: CUDA stream for the launch.
         """
         self._check_valid("create_handle")
-        # Bind materialized structs to locals so their backing memory
-        # outlives the C call (binding __dealloc__ frees the struct).
-        layout_b = _materialize(layout_info)
-        config_b = _materialize(config)
         ptr = _ep_bindings.create_handle(
             self._ptr,
             int(layout),
             topk_idx.ptr,
-            _ptr_of(layout_b),
-            _ptr_of(config_b),
+            layout_info._lowpp.ptr if layout_info is not None else 0,  # type: ignore[attr-defined]
+            config._lowpp.ptr if config is not None else 0,  # type: ignore[attr-defined]
             get_stream_ptr(stream),
         )
         return Handle(ptr)

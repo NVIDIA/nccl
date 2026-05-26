@@ -59,7 +59,9 @@ class NcclMemoryResource(MemoryResource):
             buf = Buffer.from_handle(ptr=ptr, size=size, mr=self)
             return buf
 
-    def deallocate(self, ptr: DevicePointerType, size: int, *, stream: Stream | None = None) -> None:
+    def deallocate(
+        self, ptr: DevicePointerType, size: int, *, stream: Stream | None = None
+    ) -> None:
         """Deallocates device memory using NCCL.
 
         Args:

@@ -13,7 +13,7 @@ registration, custom reduction operators, and resource management.
 """
 
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import field
 from typing import Any, Sequence
 
 import numpy as _np
@@ -23,11 +23,10 @@ from cuda.core import system
 
 from nccl.bindings import nccl as _nccl_bindings
 
+from nccl._binding_helpers import binding_dataclass
 from nccl.core.buffer import NcclBuffer
 from nccl.core.constants import (
     NCCL_SPLIT_NOCOLOR,
-    NCCL_UNDEF_INT,
-    NCCL_MAGIC,
     CTAPolicy,
     CommShrinkFlag,
     CommSuspendFlag,
@@ -66,432 +65,75 @@ __all__ = [
 ]
 
 
+@binding_dataclass(_nccl_bindings.Config)
 class NCCLConfig:
     """NCCL configuration for communicator initialization.
 
     Provides configuration options for NCCL communicators, allowing
     fine-tuning of performance and behavior characteristics. Fields not set
-    in the constructor remain at NCCL's internal default.
+    in the constructor remain at NCCL's internal default; values are
+    validated by the C library when the config is consumed.
 
     See Also:
         :c:type:`ncclConfig_t` for the description of each field.
     """
 
-    def __init__(
-        self,
-        *,
-        blocking: bool | None = None,
-        cga_cluster_size: int | None = None,
-        min_ctas: int | None = None,
-        max_ctas: int | None = None,
-        net_name: str | None = None,
-        split_share: bool | None = None,
-        traffic_class: int | None = None,
-        comm_name: str | None = None,
-        collnet_enable: bool | None = None,
-        cta_policy: CTAPolicy | None = None,
-        shrink_share: bool | None = None,
-        nvls_ctas: int | None = None,
-        n_channels_per_net_peer: int | None = None,
-        nvlink_centric_sched: bool | None = None,
-        graph_usage_mode: int | None = None,
-        num_rma_ctx: int | None = None,
-        max_p2p_peers: int | None = None,
-        graph_stream_ordering: int | None = None,
-    ) -> None:
-        """Initializes NCCL configuration with custom parameters.
+    blocking: bool | None = None
+    """Blocking (True) or non-blocking (False) communicator behavior. If unset, NCCL uses True."""
 
-        All parameters are optional and default to NCCL's internal defaults
-        (undefined). Aborting any communicator may affect others in the same
-        family when ``split_share`` or ``shrink_share`` is enabled.
+    cga_cluster_size: int | None = None
+    """Cooperative Group Array (CGA) size for kernels (0-8). If unset, NCCL uses 4 for sm90+, 0 otherwise."""
 
-        Args:
-            blocking: Blocking (True) or non-blocking (False) communicator
-                behavior. NCCL default: True.
-            cga_cluster_size: Cooperative Group Array (CGA) size for kernels
-                (0-8). NCCL default: 4 for sm90+, 0 otherwise.
-            min_ctas: Minimum number of CTAs per kernel; positive integer up
-                to 32. NCCL default: 1.
-            max_ctas: Maximum number of CTAs per kernel; positive integer up
-                to 32. NCCL default: 32.
-            net_name: Network module name (e.g. 'IB', 'Socket').
-                Case-insensitive. NCCL default: auto-selected.
-            split_share: Share resources with the child communicator during
-                split. NCCL default: False.
-            traffic_class: Traffic class (TC) for network operations
-                (>= 0). Network-specific meaning.
-            comm_name: User-defined communicator name for logging and
-                profiling.
-            collnet_enable: Enable (True) or disable (False) IB SHARP.
-                NCCL default: False.
-            cta_policy: CTA scheduling policy. NCCL default:
-                CTAPolicy.DEFAULT.
-            shrink_share: Share resources with the child communicator during
-                shrink. NCCL default: False.
-            nvls_ctas: Total number of CTAs for NVLS kernels (positive
-                integer). NCCL default: auto-determined.
-            n_channels_per_net_peer: Number of network channels for pairwise
-                communication. Positive integer, rounded up to power of 2.
-                NCCL default: AlltoAll-optimized value.
-            nvlink_centric_sched: Enable NVLink-centric scheduling. NCCL
-                default: False.
-            graph_usage_mode: Graph usage mode (NCCL 2.29+). Supported
-                values: 0 (no graphs), 1 (one graph), 2 (multiple graphs or
-                mix of graph and non-graph). NCCL default: 2.
-            num_rma_ctx: Number of RMA contexts (NCCL 2.29+). Positive
-                integer. NCCL default: 1.
-            max_p2p_peers: Maximum number of peers any rank will concurrently
-                communicate with using P2P (NCCL 2.30+). Positive integer.
-                NCCL default: communicator size.
-            graph_stream_ordering: Whether NCCL preserves stream-ordering
-                semantics for collectives captured into CUDA graphs. Supported
-                values: 0 (disabled) or 1 (enabled). Cannot be combined with
-                ``graph_usage_mode=2``. Also controllable via the
-                ``NCCL_GRAPH_STREAM_ORDERING`` environment variable. NCCL
-                default: 1.
+    min_ctas: int | None = None
+    """Minimum number of CTAs per kernel; positive integer up to 32. If unset, NCCL uses 1."""
 
-        Raises:
-            NcclInvalid: If any field has an invalid type or out-of-range
-                value.
-        """
-        self._cfg: _nccl_bindings.Config = _nccl_bindings.Config()
+    max_ctas: int | None = None
+    """Maximum number of CTAs per kernel; positive integer up to 32. If unset, NCCL uses 32."""
 
-        # Apply NCCL_CONFIG_INITIALIZER defaults
-        self._cfg.size_ = int(_nccl_bindings.config_dtype.itemsize)
-        self._cfg.magic = NCCL_MAGIC  # NCCL protocol magic number for ncclConfig_t validation
-        self._cfg.version = _nccl_bindings.get_version()
+    net_name: str | None = None
+    """Network module name (e.g. 'IB', 'Socket'). Case-insensitive. If unset, NCCL auto-selects."""
 
-        # Initialize all fields to undef
-        self._cfg.blocking = NCCL_UNDEF_INT
-        self._cfg.cga_cluster_size = NCCL_UNDEF_INT
-        self._cfg.min_ctas = NCCL_UNDEF_INT
-        self._cfg.max_ctas = NCCL_UNDEF_INT
-        self._cfg.split_share = NCCL_UNDEF_INT
-        self._cfg.traffic_class = NCCL_UNDEF_INT
-        self._cfg.collnet_enable = NCCL_UNDEF_INT
-        self._cfg.cta_policy = NCCL_UNDEF_INT
-        self._cfg.shrink_share = NCCL_UNDEF_INT
-        self._cfg.nvls_ctas = NCCL_UNDEF_INT
-        self._cfg.n_channels_per_net_peer = NCCL_UNDEF_INT
-        self._cfg.nvlink_centric_sched = NCCL_UNDEF_INT
-        # NCCL 2.29
-        self._cfg.graph_usage_mode = NCCL_UNDEF_INT
-        self._cfg.num_rma_ctx = NCCL_UNDEF_INT
-        # NCCL 2.30
-        self._cfg.max_p2p_peers = NCCL_UNDEF_INT
-        self._cfg.graph_stream_ordering = NCCL_UNDEF_INT
+    split_share: bool | None = None
+    """Share resources with the child communicator during split. If unset, NCCL uses False."""
 
-        # Use setters for validation - they handle type checking and range validation
-        if blocking is not None:
-            self.blocking = blocking
-        if cga_cluster_size is not None:
-            self.cga_cluster_size = cga_cluster_size
-        if min_ctas is not None:
-            self.min_ctas = min_ctas
-        if max_ctas is not None:
-            self.max_ctas = max_ctas
-        if net_name is not None:
-            self.net_name = net_name
-        if split_share is not None:
-            self.split_share = split_share
-        if traffic_class is not None:
-            self.traffic_class = traffic_class
-        if comm_name is not None:
-            self.comm_name = comm_name
-        if collnet_enable is not None:
-            self.collnet_enable = collnet_enable
-        if cta_policy is not None:
-            self.cta_policy = cta_policy
-        if shrink_share is not None:
-            self.shrink_share = shrink_share
-        if nvls_ctas is not None:
-            self.nvls_ctas = nvls_ctas
-        if n_channels_per_net_peer is not None:
-            self.n_channels_per_net_peer = n_channels_per_net_peer
-        if nvlink_centric_sched is not None:
-            self.nvlink_centric_sched = nvlink_centric_sched
-        if graph_usage_mode is not None:
-            self.graph_usage_mode = graph_usage_mode
-        if num_rma_ctx is not None:
-            self.num_rma_ctx = num_rma_ctx
-        if max_p2p_peers is not None:
-            self.max_p2p_peers = max_p2p_peers
-        if graph_stream_ordering is not None:
-            self.graph_stream_ordering = graph_stream_ordering
+    traffic_class: int | None = None
+    """Traffic class (TC) for network operations (>= 0). Network-specific meaning."""
 
-    def __repr__(self) -> str:
-        parts = []
+    comm_name: str | None = None
+    """User-defined communicator name for logging and profiling."""
 
-        # Check each field and include if not undefined
-        if self._cfg.blocking != NCCL_UNDEF_INT:
-            parts.append(f"blocking={bool(self._cfg.blocking)}")
-        if self._cfg.cga_cluster_size != NCCL_UNDEF_INT:
-            parts.append(f"cga_cluster_size={self._cfg.cga_cluster_size}")
-        if self._cfg.min_ctas != NCCL_UNDEF_INT:
-            parts.append(f"min_ctas={self._cfg.min_ctas}")
-        if self._cfg.max_ctas != NCCL_UNDEF_INT:
-            parts.append(f"max_ctas={self._cfg.max_ctas}")
-        if hasattr(self._cfg, "net_name") and self._cfg.net_name:
-            parts.append(f"net_name='{self._cfg.net_name}'")
-        if self._cfg.split_share != NCCL_UNDEF_INT:
-            parts.append(f"split_share={bool(self._cfg.split_share)}")
-        if self._cfg.traffic_class != NCCL_UNDEF_INT:
-            parts.append(f"traffic_class={self._cfg.traffic_class}")
-        if hasattr(self._cfg, "comm_name") and self._cfg.comm_name:
-            parts.append(f"comm_name='{self._cfg.comm_name}'")
-        if self._cfg.collnet_enable != NCCL_UNDEF_INT:
-            parts.append(f"collnet_enable={bool(self._cfg.collnet_enable)}")
-        if self._cfg.cta_policy != NCCL_UNDEF_INT:
-            parts.append(f"cta_policy={CTAPolicy(self._cfg.cta_policy).name}")
-        if self._cfg.shrink_share != NCCL_UNDEF_INT:
-            parts.append(f"shrink_share={bool(self._cfg.shrink_share)}")
-        if self._cfg.nvls_ctas != NCCL_UNDEF_INT:
-            parts.append(f"nvls_ctas={self._cfg.nvls_ctas}")
-        if self._cfg.n_channels_per_net_peer != NCCL_UNDEF_INT:
-            parts.append(f"n_channels_per_net_peer={self._cfg.n_channels_per_net_peer}")
-        if self._cfg.nvlink_centric_sched != NCCL_UNDEF_INT:
-            parts.append(f"nvlink_centric_sched={bool(self._cfg.nvlink_centric_sched)}")
-        if self._cfg.graph_usage_mode != NCCL_UNDEF_INT:
-            parts.append(f"graph_usage_mode={self._cfg.graph_usage_mode}")
-        if self._cfg.num_rma_ctx != NCCL_UNDEF_INT:
-            parts.append(f"num_rma_ctx={self._cfg.num_rma_ctx}")
-        if self._cfg.max_p2p_peers != NCCL_UNDEF_INT:
-            parts.append(f"max_p2p_peers={self._cfg.max_p2p_peers}")
-        if self._cfg.graph_stream_ordering != NCCL_UNDEF_INT:
-            parts.append(f"graph_stream_ordering={self._cfg.graph_stream_ordering}")
+    collnet_enable: bool | None = None
+    """Enable (True) or disable (False) IB SHARP. If unset, NCCL uses False."""
 
-        if parts:
-            return f"<NCCLConfig: {', '.join(parts)}>"
-        else:
-            return "<NCCLConfig: all defaults>"
+    cta_policy: CTAPolicy | None = None
+    """CTA scheduling policy. If unset, NCCL uses CTAPolicy.DEFAULT."""
 
-    @property
-    def ptr(self) -> int:
-        """Raw pointer to the underlying :c:type:`ncclConfig_t` structure."""
-        return int(self._cfg.ptr)
+    shrink_share: bool | None = None
+    """Share resources with the child communicator during shrink. If unset, NCCL uses False."""
 
-    # Field proxies
+    nvls_ctas: int | None = None
+    """Total number of CTAs for NVLS kernels (positive integer). If unset, NCCL auto-determines."""
 
-    @property
-    def blocking(self) -> bool:
-        """Blocking (True) or non-blocking (False) communicator behavior. Default: True."""
-        return bool(self._cfg.blocking)
+    n_channels_per_net_peer: int | None = None
+    """Number of network channels for pairwise communication. Positive integer, rounded up to power of 2. If unset, NCCL uses an AlltoAll-optimized value."""
 
-    @blocking.setter
-    def blocking(self, val: bool) -> None:
-        if not isinstance(val, bool):
-            raise NcclInvalid(f"blocking must be bool, got {type(val).__name__}")
-        self._cfg.blocking = int(val)
+    nvlink_centric_sched: bool | None = None
+    """Enable NVLink-centric scheduling. If unset, NCCL uses False."""
 
-    @property
-    def cga_cluster_size(self) -> int:
-        """CGA cluster size (0-8). Default: 4 for sm90+, 0 otherwise."""
-        return self._cfg.cga_cluster_size
+    graph_usage_mode: int | None = None
+    """Graph usage mode (NCCL 2.29+). Supported values are 0 (no graphs), 1 (one graph), 2 (multiple graphs or mix of graph and non-graph). If unset, NCCL uses 2."""
 
-    @cga_cluster_size.setter
-    def cga_cluster_size(self, val: int) -> None:
-        if not isinstance(val, int):
-            raise NcclInvalid(f"cga_cluster_size must be int, got {type(val).__name__}")
-        if not (0 <= val <= 8):
-            raise NcclInvalid(f"cga_cluster_size must be between 0 and 8, got {val}")
-        self._cfg.cga_cluster_size = val
+    num_rma_ctx: int | None = None
+    """Number of RMA contexts (NCCL 2.29+). Positive integer. If unset, NCCL uses 1."""
 
-    @property
-    def min_ctas(self) -> int:
-        """Minimum number of CTAs per kernel; positive integer up to 32. Default: 1."""
-        return self._cfg.min_ctas
+    max_p2p_peers: int | None = None
+    """Maximum number of peers any rank will concurrently communicate with using P2P (NCCL 2.30+). Positive integer. If unset, NCCL uses the communicator size."""
 
-    @min_ctas.setter
-    def min_ctas(self, val: int) -> None:
-        if not isinstance(val, int):
-            raise NcclInvalid(f"min_ctas must be int, got {type(val).__name__}")
-        if not (0 < val <= 32):
-            raise NcclInvalid(f"min_ctas must be a positive integer up to 32, got {val}")
-        self._cfg.min_ctas = val
-
-    @property
-    def max_ctas(self) -> int:
-        """Maximum number of CTAs per kernel; positive integer up to 32. Default: 32."""
-        return self._cfg.max_ctas
-
-    @max_ctas.setter
-    def max_ctas(self, val: int) -> None:
-        if not isinstance(val, int):
-            raise NcclInvalid(f"max_ctas must be int, got {type(val).__name__}")
-        if not (0 < val <= 32):
-            raise NcclInvalid(f"max_ctas must be a positive integer up to 32, got {val}")
-        self._cfg.max_ctas = val
-
-    @property
-    def net_name(self) -> str:
-        """Network module name (e.g. 'IB', 'Socket'). Default: auto-selected."""
-        return self._cfg.net_name
-
-    @net_name.setter
-    def net_name(self, val: str) -> None:
-        if not isinstance(val, str):
-            raise NcclInvalid(f"net_name must be str, got {type(val).__name__}")
-        self._cfg.net_name = val
-
-    @property
-    def split_share(self) -> bool:
-        """Share resources with the child communicator during split. Default: False."""
-        return bool(self._cfg.split_share)
-
-    @split_share.setter
-    def split_share(self, val: bool) -> None:
-        if not isinstance(val, bool):
-            raise NcclInvalid(f"split_share must be bool, got {type(val).__name__}")
-        self._cfg.split_share = int(val)
-
-    @property
-    def traffic_class(self) -> int:
-        """Traffic class for network operations (>= 0). Network-specific meaning."""
-        return self._cfg.traffic_class
-
-    @traffic_class.setter
-    def traffic_class(self, val: int) -> None:
-        if not isinstance(val, int):
-            raise NcclInvalid(f"traffic_class must be int, got {type(val).__name__}")
-        if val < 0:
-            raise NcclInvalid(f"traffic_class must be >= 0, got {val}")
-        self._cfg.traffic_class = val
-
-    @property
-    def comm_name(self) -> str:
-        """User-defined communicator name for logging and profiling."""
-        return self._cfg.comm_name
-
-    @comm_name.setter
-    def comm_name(self, val: str) -> None:
-        if not isinstance(val, str):
-            raise NcclInvalid(f"comm_name must be str, got {type(val).__name__}")
-        self._cfg.comm_name = val
-
-    @property
-    def collnet_enable(self) -> bool:
-        """Enable IB SHARP. Default: False."""
-        return bool(self._cfg.collnet_enable)
-
-    @collnet_enable.setter
-    def collnet_enable(self, val: bool) -> None:
-        if not isinstance(val, bool):
-            raise NcclInvalid(f"collnet_enable must be bool, got {type(val).__name__}")
-        self._cfg.collnet_enable = int(val)
-
-    @property
-    def cta_policy(self) -> CTAPolicy:
-        """CTA scheduling policy. Default: CTAPolicy.DEFAULT."""
-        return CTAPolicy(self._cfg.cta_policy)
-
-    @cta_policy.setter
-    def cta_policy(self, val: int | CTAPolicy) -> None:
-        if not isinstance(val, (int, CTAPolicy)):
-            raise NcclInvalid(f"cta_policy must be int or CTAPolicy, got {type(val).__name__}")
-        self._cfg.cta_policy = int(val)
-
-    @property
-    def shrink_share(self) -> bool:
-        """Share resources with the child communicator during shrink. Default: False."""
-        return bool(self._cfg.shrink_share)
-
-    @shrink_share.setter
-    def shrink_share(self, val: bool) -> None:
-        if not isinstance(val, bool):
-            raise NcclInvalid(f"shrink_share must be bool, got {type(val).__name__}")
-        self._cfg.shrink_share = int(val)
-
-    @property
-    def nvls_ctas(self) -> int:
-        """Total number of CTAs for NVLS kernels (positive integer). Default: auto-determined."""
-        return self._cfg.nvls_ctas
-
-    @nvls_ctas.setter
-    def nvls_ctas(self, val: int) -> None:
-        if not isinstance(val, int):
-            raise NcclInvalid(f"nvls_ctas must be int, got {type(val).__name__}")
-        if val <= 0:
-            raise NcclInvalid(f"nvls_ctas must be a positive integer, got {val}")
-        self._cfg.nvls_ctas = val
-
-    @property
-    def n_channels_per_net_peer(self) -> int:
-        """Number of network channels for pairwise communication. Positive integer, rounded up to power of 2."""
-        return self._cfg.n_channels_per_net_peer
-
-    @n_channels_per_net_peer.setter
-    def n_channels_per_net_peer(self, val: int) -> None:
-        if not isinstance(val, int):
-            raise NcclInvalid(f"n_channels_per_net_peer must be int, got {type(val).__name__}")
-        if val <= 0:
-            raise NcclInvalid(f"n_channels_per_net_peer must be a positive integer, got {val}")
-        self._cfg.n_channels_per_net_peer = val
-
-    @property
-    def nvlink_centric_sched(self) -> bool:
-        """Enable NVLink-centric scheduling. Default: False."""
-        return bool(self._cfg.nvlink_centric_sched)
-
-    @nvlink_centric_sched.setter
-    def nvlink_centric_sched(self, val: bool) -> None:
-        if not isinstance(val, bool):
-            raise NcclInvalid(f"nvlink_centric_sched must be bool, got {type(val).__name__}")
-        self._cfg.nvlink_centric_sched = int(val)
-
-    @property
-    def graph_usage_mode(self) -> int:
-        """Graph usage mode: 0 (no graphs), 1 (one graph), 2 (multiple/mixed). Default: 2."""
-        return int(self._cfg.graph_usage_mode)
-
-    @graph_usage_mode.setter
-    def graph_usage_mode(self, val: int) -> None:
-        if not isinstance(val, int):
-            raise NcclInvalid(f"graph_usage_mode must be int, got {type(val).__name__}")
-        if val not in (0, 1, 2):
-            raise NcclInvalid(f"graph_usage_mode must be one of 0, 1, 2; got {val}")
-        self._cfg.graph_usage_mode = int(val)
-
-    @property
-    def num_rma_ctx(self) -> int:
-        """Number of RMA contexts. Default: 1."""
-        return int(self._cfg.num_rma_ctx)
-
-    @num_rma_ctx.setter
-    def num_rma_ctx(self, val: int) -> None:
-        if not isinstance(val, int):
-            raise NcclInvalid(f"num_rma_ctx must be int, got {type(val).__name__}")
-        if val <= 0:
-            raise NcclInvalid(f"num_rma_ctx must be > 0, got {val}")
-        self._cfg.num_rma_ctx = int(val)
-
-    @property
-    def max_p2p_peers(self) -> int:
-        """Maximum number of P2P peers. Default: communicator size."""
-        return int(self._cfg.max_p2p_peers)
-
-    @max_p2p_peers.setter
-    def max_p2p_peers(self, val: int) -> None:
-        if not isinstance(val, int):
-            raise NcclInvalid(f"max_p2p_peers must be int, got {type(val).__name__}")
-        if val <= 0:
-            raise NcclInvalid(f"max_p2p_peers must be > 0, got {val}")
-        self._cfg.max_p2p_peers = int(val)
-
-    @property
-    def graph_stream_ordering(self) -> int:
-        """Whether stream-ordering is preserved for graph-captured collectives: 0 or 1. Default: 1."""
-        return int(self._cfg.graph_stream_ordering)
-
-    @graph_stream_ordering.setter
-    def graph_stream_ordering(self, val: int) -> None:
-        if not isinstance(val, int):
-            raise NcclInvalid(f"graph_stream_ordering must be int, got {type(val).__name__}")
-        if val not in (0, 1):
-            raise NcclInvalid(f"graph_stream_ordering must be 0 or 1, got {val}")
-        self._cfg.graph_stream_ordering = int(val)
+    graph_stream_ordering: int | None = None
+    """Whether NCCL preserves stream-ordering semantics for collectives captured into CUDA graphs. Supported values are 0 (disabled) or 1 (enabled). Cannot be combined with ``graph_usage_mode=2``. Also controllable via the ``NCCL_GRAPH_STREAM_ORDERING`` environment variable. If unset, NCCL uses 1."""
 
 
-@dataclass(frozen=True, slots=True)
+@binding_dataclass(_nccl_bindings.WaitSignalDesc, kw_only=False, frozen=True)
 class WaitSignalDesc:
     """Descriptor for a wait-signal operation.
 
@@ -504,313 +146,79 @@ class WaitSignalDesc:
     peer: int
     """Target peer rank to wait for signals from."""
 
-    op_count: int = 1
+    op_count: int = field(default=1, metadata={"lowpp": "op_cnt"})
     """Number of signal operations to wait for from the peer. Defaults to 1."""
 
-    signal_index: int = 0
+    signal_index: int = field(default=0, metadata={"lowpp": "sig_idx"})
     """Signal index identifier. Currently must be 0. Defaults to 0."""
 
-    context: int = 0
+    context: int = field(default=0, metadata={"lowpp": "ctx"})
     """Context identifier. Currently must be 0. Defaults to 0."""
 
 
+@binding_dataclass(_nccl_bindings.DevCommRequirements)
 class NCCLDevCommRequirements:
     """NCCL device communicator requirements configuration.
 
     Provides configuration for device communicator creation, allowing
     fine-tuning of resource allocation and device-side communication
-    behavior. Fields can be set during initialization or modified via
-    properties before being passed to
-    :py:meth:`Communicator.create_dev_comm`.
+    behavior. Fields not set in the constructor remain at NCCL's internal
+    default; values are validated by the C library when the requirements
+    are consumed by :py:meth:`Communicator.create_dev_comm`.
 
     See Also:
         :c:type:`ncclDevCommRequirements` for the description of each field.
     """
 
-    def __init__(
-        self,
-        *,
-        lsa_multimem: bool = False,
-        barrier_count: int = 0,
-        lsa_barrier_count: int = 0,
-        rail_gin_barrier_count: int = 0,
-        lsa_ll_a2a_block_count: int = 0,
-        lsa_ll_a2a_slot_count: int = 0,
-        gin_force_enable: bool = False,
-        gin_context_count: int = 4,
-        gin_signal_count: int = 0,
-        gin_counter_count: int = 0,
-        gin_connection_type: NcclGinConnectionType = NcclGinConnectionType.NONE,
-        gin_exclusive_contexts: bool = False,
-        gin_queue_depth: int = 0,
-        world_gin_barrier_count: int = 0,
-        gin_strong_signals_required: bool = True,
-        gin_va_signals_required: bool = True,
-    ) -> None:
-        """Initializes NCCL device communicator requirements.
+    lsa_multimem: bool | None = None
+    """Enable multimem on the LSA team. If unset, NCCL uses False."""
 
-        All parameters are optional and default to values from
-        NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER.
+    barrier_count: int | None = None
+    """Number of barriers required. If unset, NCCL uses 0."""
 
-        Args:
-            lsa_multimem: Enable multimem on the LSA team. Defaults to False.
-            barrier_count: Number of barriers required. Defaults to 0.
-            lsa_barrier_count: Number of LSA barriers. Defaults to 0.
-            rail_gin_barrier_count: Number of railed GIN barriers. Defaults
-                to 0.
-            lsa_ll_a2a_block_count: LSA low-latency all-to-all block count.
-                Defaults to 0.
-            lsa_ll_a2a_slot_count: LSA low-latency all-to-all slot count.
-                Defaults to 0.
-            gin_force_enable: Force-enable GPU Interconnect Network. Defaults
-                to False.
-            gin_context_count: Number of GIN contexts (hint; actual count may
-                differ). Defaults to 4.
-            gin_signal_count: Number of GIN signals (guaranteed to start at
-                id=0). Defaults to 0.
-            gin_counter_count: Number of GIN counters (guaranteed to start at
-                id=0). Defaults to 0.
-            gin_connection_type: GIN connection type. Defaults to
-                NcclGinConnectionType.NONE.
-            gin_exclusive_contexts: Use exclusive GIN contexts. Defaults to
-                False.
-            gin_queue_depth: GIN queue depth. Defaults to 0.
-            world_gin_barrier_count: Number of world GIN barriers. Defaults
-                to 0.
-            gin_strong_signals_required: Whether GIN strong signals are
-                required by kernels using this devComm. When False, using
-                GIN strong signals results in undefined behavior. Defaults
-                to True.
-            gin_va_signals_required: Whether GIN VA signals are required by
-                kernels using this devComm. When False, using GIN VA signals
-                results in undefined behavior. Defaults to True.
-        """
-        # Initialize the low-level binding object
-        self._reqs = _nccl_bindings.DevCommRequirements()
+    lsa_barrier_count: int | None = None
+    """Number of LSA barriers. If unset, NCCL uses 0."""
 
-        # Initialize required fields from NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER
-        self._reqs.size_ = int(_nccl_bindings.dev_comm_requirements_dtype.itemsize)
-        self._reqs.magic = NCCL_MAGIC
-        self._reqs.version = _nccl_bindings.get_version()
+    rail_gin_barrier_count: int | None = None
+    """Number of railed GIN barriers. If unset, NCCL uses 0."""
 
-        # Set list pointers to 0 (not exposed in Python API for now)
-        self._reqs.resource_requirements_list = 0
-        self._reqs.team_requirements_list = 0
+    lsa_ll_a2a_block_count: int | None = None
+    """LSA low-latency all-to-all block count. If unset, NCCL uses 0."""
 
-        # Assign all user values through setters (which handle bool->int and enum validation)
-        self.lsa_multimem = lsa_multimem
-        self.barrier_count = barrier_count
-        self.lsa_barrier_count = lsa_barrier_count
-        self.rail_gin_barrier_count = rail_gin_barrier_count
-        self.lsa_ll_a2a_block_count = lsa_ll_a2a_block_count
-        self.lsa_ll_a2a_slot_count = lsa_ll_a2a_slot_count
-        self.gin_force_enable = gin_force_enable
-        self.gin_context_count = gin_context_count
-        self.gin_signal_count = gin_signal_count
-        self.gin_counter_count = gin_counter_count
-        self.gin_connection_type = gin_connection_type
-        self.gin_exclusive_contexts = gin_exclusive_contexts
-        self.gin_queue_depth = gin_queue_depth
-        self.world_gin_barrier_count = world_gin_barrier_count
-        self.gin_strong_signals_required = gin_strong_signals_required
-        self.gin_va_signals_required = gin_va_signals_required
+    lsa_ll_a2a_slot_count: int | None = None
+    """LSA low-latency all-to-all slot count. If unset, NCCL uses 0."""
 
-    @property
-    def lsa_multimem(self) -> bool:
-        """Enable multimem on the LSA team."""
-        return bool(self._reqs.lsa_multimem)
+    gin_force_enable: bool | None = None
+    """Force-enable GPU Interconnect Network. If unset, NCCL uses False."""
 
-    @lsa_multimem.setter
-    def lsa_multimem(self, value: bool) -> None:
-        self._reqs.lsa_multimem = int(value)
+    gin_context_count: int | None = None
+    """Number of GIN contexts (hint; actual count may differ). If unset, NCCL uses 4."""
 
-    @property
-    def barrier_count(self) -> int:
-        """Number of barriers required."""
-        return self._reqs.barrier_count
+    gin_signal_count: int | None = None
+    """Number of GIN signals (guaranteed to start at id=0). If unset, NCCL uses 0."""
 
-    @barrier_count.setter
-    def barrier_count(self, value: int) -> None:
-        self._reqs.barrier_count = value
+    gin_counter_count: int | None = None
+    """Number of GIN counters (guaranteed to start at id=0). If unset, NCCL uses 0."""
 
-    @property
-    def lsa_barrier_count(self) -> int:
-        """Number of LSA barriers."""
-        return self._reqs.lsa_barrier_count
+    gin_connection_type: NcclGinConnectionType | None = None
+    """GIN connection type. If unset, NCCL uses NcclGinConnectionType.NONE."""
 
-    @lsa_barrier_count.setter
-    def lsa_barrier_count(self, value: int) -> None:
-        self._reqs.lsa_barrier_count = value
+    gin_exclusive_contexts: bool | None = None
+    """Use exclusive GIN contexts. If unset, NCCL uses False."""
 
-    @property
-    def rail_gin_barrier_count(self) -> int:
-        """Number of railed GIN barriers."""
-        return self._reqs.rail_gin_barrier_count
+    gin_queue_depth: int | None = None
+    """GIN queue depth. If unset, NCCL uses 0."""
 
-    @rail_gin_barrier_count.setter
-    def rail_gin_barrier_count(self, value: int) -> None:
-        self._reqs.rail_gin_barrier_count = value
+    world_gin_barrier_count: int | None = None
+    """Number of world GIN barriers. If unset, NCCL uses 0."""
 
-    @property
-    def lsa_ll_a2a_block_count(self) -> int:
-        """LSA low-latency all-to-all block count."""
-        return self._reqs.lsa_ll_a2a_block_count
+    gin_strong_signals_required: bool | None = None
+    """Whether GIN strong signals are required by kernels using this devComm.
+    When False, using GIN strong signals results in undefined behavior. If unset, NCCL uses True."""
 
-    @lsa_ll_a2a_block_count.setter
-    def lsa_ll_a2a_block_count(self, value: int) -> None:
-        self._reqs.lsa_ll_a2a_block_count = value
-
-    @property
-    def lsa_ll_a2a_slot_count(self) -> int:
-        """LSA low-latency all-to-all slot count."""
-        return self._reqs.lsa_ll_a2a_slot_count
-
-    @lsa_ll_a2a_slot_count.setter
-    def lsa_ll_a2a_slot_count(self, value: int) -> None:
-        self._reqs.lsa_ll_a2a_slot_count = value
-
-    @property
-    def gin_force_enable(self) -> bool:
-        """Force-enable GPU Interconnect Network."""
-        return bool(self._reqs.gin_force_enable)
-
-    @gin_force_enable.setter
-    def gin_force_enable(self, value: bool) -> None:
-        self._reqs.gin_force_enable = int(value)
-
-    @property
-    def gin_context_count(self) -> int:
-        """Number of GIN contexts (hint; actual count may differ)."""
-        return self._reqs.gin_context_count
-
-    @gin_context_count.setter
-    def gin_context_count(self, value: int) -> None:
-        self._reqs.gin_context_count = value
-
-    @property
-    def gin_signal_count(self) -> int:
-        """Number of GIN signals (guaranteed to start at id=0)."""
-        return self._reqs.gin_signal_count
-
-    @gin_signal_count.setter
-    def gin_signal_count(self, value: int) -> None:
-        self._reqs.gin_signal_count = value
-
-    @property
-    def gin_counter_count(self) -> int:
-        """Number of GIN counters (guaranteed to start at id=0)."""
-        return self._reqs.gin_counter_count
-
-    @gin_counter_count.setter
-    def gin_counter_count(self, value: int) -> None:
-        self._reqs.gin_counter_count = value
-
-    @property
-    def gin_connection_type(self) -> NcclGinConnectionType:
-        """GIN connection type."""
-        return NcclGinConnectionType(self._reqs.gin_connection_type)
-
-    @gin_connection_type.setter
-    def gin_connection_type(self, value: NcclGinConnectionType | int) -> None:
-        self._reqs.gin_connection_type = NcclGinConnectionType(value)
-
-    @property
-    def gin_exclusive_contexts(self) -> bool:
-        """Use exclusive GIN contexts."""
-        return bool(self._reqs.gin_exclusive_contexts)
-
-    @gin_exclusive_contexts.setter
-    def gin_exclusive_contexts(self, value: bool) -> None:
-        self._reqs.gin_exclusive_contexts = int(value)
-
-    @property
-    def gin_queue_depth(self) -> int:
-        """GIN queue depth."""
-        return self._reqs.gin_queue_depth
-
-    @gin_queue_depth.setter
-    def gin_queue_depth(self, value: int) -> None:
-        self._reqs.gin_queue_depth = value
-
-    @property
-    def world_gin_barrier_count(self) -> int:
-        """Number of world GIN barriers."""
-        return self._reqs.world_gin_barrier_count
-
-    @world_gin_barrier_count.setter
-    def world_gin_barrier_count(self, value: int) -> None:
-        self._reqs.world_gin_barrier_count = value
-
-    @property
-    def gin_strong_signals_required(self) -> bool:
-        """Whether GIN strong signals are required by kernels using this devComm.
-
-        When False, using GIN strong signals results in undefined behavior.
-        """
-        return bool(self._reqs.gin_strong_signals_required)
-
-    @gin_strong_signals_required.setter
-    def gin_strong_signals_required(self, value: bool) -> None:
-        self._reqs.gin_strong_signals_required = int(value)
-
-    @property
-    def gin_va_signals_required(self) -> bool:
-        """Whether GIN VA signals are required by kernels using this devComm.
-
-        When False, using GIN VA signals results in undefined behavior.
-        """
-        return bool(self._reqs.gin_va_signals_required)
-
-    @gin_va_signals_required.setter
-    def gin_va_signals_required(self, value: bool) -> None:
-        self._reqs.gin_va_signals_required = int(value)
-
-    @property
-    def ptr(self) -> int:
-        """Raw pointer to the underlying :c:type:`ncclDevCommRequirements_t <ncclDevCommRequirements>` structure."""
-        return self._reqs.ptr
-
-    def __repr__(self) -> str:
-        parts = []
-
-        # Show non-default values for brevity (field order matches struct)
-        # Defaults from NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER
-        if self.lsa_multimem:
-            parts.append(f"lsa_multimem={self.lsa_multimem}")
-        if self.barrier_count != 0:
-            parts.append(f"barrier_count={self.barrier_count}")
-        if self.lsa_barrier_count != 0:
-            parts.append(f"lsa_barrier_count={self.lsa_barrier_count}")
-        if self.rail_gin_barrier_count != 0:
-            parts.append(f"rail_gin_barrier_count={self.rail_gin_barrier_count}")
-        if self.lsa_ll_a2a_block_count != 0:
-            parts.append(f"lsa_ll_a2a_block_count={self.lsa_ll_a2a_block_count}")
-        if self.lsa_ll_a2a_slot_count != 0:
-            parts.append(f"lsa_ll_a2a_slot_count={self.lsa_ll_a2a_slot_count}")
-        if self.gin_force_enable:
-            parts.append(f"gin_force_enable={self.gin_force_enable}")
-        if self.gin_context_count != 4:  # Default is 4, not 0
-            parts.append(f"gin_context_count={self.gin_context_count}")
-        if self.gin_signal_count != 0:
-            parts.append(f"gin_signal_count={self.gin_signal_count}")
-        if self.gin_counter_count != 0:
-            parts.append(f"gin_counter_count={self.gin_counter_count}")
-        if self.gin_connection_type != NcclGinConnectionType.NONE:
-            parts.append(f"gin_connection_type={self.gin_connection_type}")
-        if self.gin_exclusive_contexts:
-            parts.append(f"gin_exclusive_contexts={self.gin_exclusive_contexts}")
-        if self.gin_queue_depth != 0:
-            parts.append(f"gin_queue_depth={self.gin_queue_depth}")
-        if self.world_gin_barrier_count != 0:
-            parts.append(f"world_gin_barrier_count={self.world_gin_barrier_count}")
-        if not self.gin_strong_signals_required:  # Default is True
-            parts.append(f"gin_strong_signals_required={self.gin_strong_signals_required}")
-        if not self.gin_va_signals_required:  # Default is True
-            parts.append(f"gin_va_signals_required={self.gin_va_signals_required}")
-
-        if parts:
-            return f"<NCCLDevCommRequirements: {', '.join(parts)}>"
-        return "<NCCLDevCommRequirements: all defaults>"
+    gin_va_signals_required: bool | None = None
+    """Whether GIN VA signals are required by kernels using this devComm.
+    When False, using GIN VA signals results in undefined behavior. If unset, NCCL uses True."""
 
 
 class Communicator:
@@ -894,12 +302,7 @@ class Communicator:
         """
         self._check_valid("query properties")
         if self._comm_properties is None:
-            self._comm_properties = _nccl_bindings.CommProperties()
-            # Initialize with magic number, size, and version (like NCCL_COMM_PROPERTIES_INITIALIZER)
-            self._comm_properties.size_ = int(_nccl_bindings.comm_properties_dtype.itemsize)
-            self._comm_properties.magic = NCCL_MAGIC
-            self._comm_properties.version = _nccl_bindings.get_version()
-            _nccl_bindings.comm_query_properties(self._comm, self._comm_properties.ptr)
+            self._comm_properties = _nccl_bindings.comm_query_properties(self._comm)
         return self._comm_properties
 
     def __repr__(self) -> str:
@@ -1029,20 +432,15 @@ class Communicator:
         if self._comm != 0:
             raise NcclInvalid("Communicator is already initialized")
 
-        cfg_ptr = 0 if config is None else config.ptr
+        cfg_ptr = 0 if config is None else config._lowpp.ptr  # type: ignore[attr-defined]
         if isinstance(unique_id, UniqueId):
             unique_id = (unique_id,)
         elif not isinstance(unique_id, (list, tuple)):
             raise NcclInvalid("unique_id must be a UniqueId or a sequence of UniqueIds")
 
-        arr = _np.concatenate(
-            [
-                _np.frombuffer(uid._internal, dtype=_nccl_bindings.unique_id_dtype)
-                for uid in unique_id
-            ]
-        )
+        commIds = bytearray().join(bytes(uid) for uid in unique_id)
         _nccl_bindings.comm_init_rank_scalable(
-            self._comm_box.address, int(nranks), int(rank), int(len(unique_id)), arr, cfg_ptr
+            self._comm_box.address, int(nranks), int(rank), int(len(unique_id)), commIds, cfg_ptr
         )
 
         self._resources = []
@@ -1092,10 +490,12 @@ class Communicator:
 
         if color is None:
             color = NCCL_SPLIT_NOCOLOR
-        cfg_ptr = 0 if config is None else config.ptr
+        cfg_ptr = 0 if config is None else config._lowpp.ptr  # type: ignore[attr-defined]
         newcomm = type(self)()
         self._children_in_progress.append(newcomm)
-        _nccl_bindings.comm_split(self._comm, int(color), int(key), newcomm._comm_box.address, cfg_ptr)
+        _nccl_bindings.comm_split(
+            self._comm, int(color), int(key), newcomm._comm_box.address, cfg_ptr
+        )
 
         return newcomm
 
@@ -1142,7 +542,7 @@ class Communicator:
         """
         self._check_valid("shrink")
         ranks_to_exclude = list(exclude_ranks) if exclude_ranks is not None else []
-        cfg_ptr = 0 if config is None else config.ptr
+        cfg_ptr = 0 if config is None else config._lowpp.ptr  # type: ignore[attr-defined]
         newcomm = type(self)()
         _nccl_bindings.comm_shrink(
             self._comm,
@@ -1175,9 +575,7 @@ class Communicator:
             NcclInvalid: If the communicator is not initialized.
         """
         self._check_valid("get_unique_id")
-        uid = UniqueId()
-        _nccl_bindings.comm_get_unique_id(self._comm, uid.ptr)
-        return uid
+        return UniqueId(_nccl_bindings.comm_get_unique_id(self._comm))
 
     def grow(
         self,
@@ -1235,7 +633,7 @@ class Communicator:
 
         uid_ptr = 0 if unique_id is None else unique_id.ptr
         rank_val = -1 if rank is None else int(rank)
-        cfg_ptr = 0 if config is None else config.ptr
+        cfg_ptr = 0 if config is None else config._lowpp.ptr  # type: ignore[attr-defined]
         newcomm = type(self)()
         _nccl_bindings.comm_grow(
             self._comm, int(nranks), uid_ptr, rank_val, newcomm._comm_box.address, cfg_ptr
@@ -1614,16 +1012,8 @@ class Communicator:
         if isinstance(descs, WaitSignalDesc):
             descs = (descs,)
 
-        nr_descs = len(descs)
-        arr = _np.empty(nr_descs, dtype=_nccl_bindings.wait_signal_desc_dtype)
-        for idx, desc in enumerate(descs):
-            arr[idx]["op_cnt"] = desc.op_count
-            arr[idx]["peer"] = desc.peer
-            arr[idx]["sig_idx"] = desc.signal_index
-            arr[idx]["ctx"] = desc.context
-        ptr = 0 if nr_descs == 0 else int(arr.ctypes.data)
-
-        _nccl_bindings.wait_signal(nr_descs, ptr, int(self._comm), get_stream_ptr(stream))
+        buf = bytearray().join(bytes(d._lowpp) for d in descs)  # type: ignore[attr-defined]
+        _nccl_bindings.wait_signal(len(descs), buf, int(self._comm), get_stream_ptr(stream))
 
     def signal(
         self,
@@ -2432,7 +1822,7 @@ class Communicator:
         if requirements is None:
             requirements = NCCLDevCommRequirements()
 
-        resource = DevCommResource(self._comm, requirements.ptr)
+        resource = DevCommResource(self._comm, requirements._lowpp.ptr)  # type: ignore[attr-defined]
         self._resources.append(resource)
         return resource
 

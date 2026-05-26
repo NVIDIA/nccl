@@ -20,7 +20,6 @@ cimport cpython.memoryview
 cimport cpython
 from libc.string cimport memcmp, memcpy
 import numpy as _numpy
-import pickle
 
 
 cdef __from_data(data, dtype_name, expected_dtype, lowpp_type):
@@ -163,8 +162,6 @@ cdef class UniqueId:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclUniqueId *>malloc(sizeof(ncclUniqueId))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating UniqueId")
@@ -174,18 +171,6 @@ cdef class UniqueId:
             self._readonly = not val.flags.writeable
         else:
             setattr(self, key, val)
-
-    def __getstate__(self):
-        return cpython.PyBytes_FromStringAndSize(<char *><void *>self._ptr, sizeof(ncclUniqueId))
-
-    def __setstate__(self, state):
-        if not isinstance(state, bytes):
-            raise TypeError(f"Invalid state type for UniqueId, expected bytes, got {type(state).__name__}")
-        if len(state) != sizeof(ncclUniqueId):
-            raise ValueError(f"Invalid state length for UniqueId, expected sizeof(ncclUniqueId), got {len(state)}")
-        cdef char *state_ptr = cpython.PyBytes_AsString(state)
-        self._ptr = <ncclUniqueId *>malloc(sizeof(ncclUniqueId))
-        memcpy(<void *>self._ptr, <void *>state_ptr, sizeof(ncclUniqueId))
 
     @staticmethod
     def from_buffer(buffer):
@@ -262,7 +247,7 @@ cdef _get_config_dtype_offsets():
 config_dtype = _get_config_dtype_offsets()
 
 cdef class Config:
-    """Empty-initialize an instance of `ncclConfig_t`.
+    """Initialize an instance of `ncclConfig_t` using configured defaults.
 
 
     .. seealso:: `ncclConfig_t`
@@ -282,6 +267,26 @@ cdef class Config:
         self._owned = True
         self._readonly = False
         self._refs = {}
+
+        self._ptr[0].size = sizeof(ncclConfig_t)
+        self._ptr[0].magic = 0xcafebeef
+        self._ptr[0].version = 23006
+        self._ptr[0].blocking = -2147483648
+        self._ptr[0].cgaClusterSize = -2147483648
+        self._ptr[0].minCTAs = -2147483648
+        self._ptr[0].maxCTAs = -2147483648
+        self._ptr[0].splitShare = -2147483648
+        self._ptr[0].trafficClass = -2147483648
+        self._ptr[0].collnetEnable = -2147483648
+        self._ptr[0].CTAPolicy = -2147483648
+        self._ptr[0].shrinkShare = -2147483648
+        self._ptr[0].nvlsCTAs = -2147483648
+        self._ptr[0].nChannelsPerNetPeer = -2147483648
+        self._ptr[0].nvlinkCentricSched = -2147483648
+        self._ptr[0].graphUsageMode = -2147483648
+        self._ptr[0].numRmaCtx = -2147483648
+        self._ptr[0].maxP2pPeers = -2147483648
+        self._ptr[0].graphStreamOrdering = -2147483648
 
     def __dealloc__(self):
         cdef ncclConfig_t *ptr
@@ -319,8 +324,6 @@ cdef class Config:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclConfig_t *>malloc(sizeof(ncclConfig_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating Config")
@@ -574,9 +577,6 @@ cdef class Config:
             raise ValueError("This Config instance is read-only")
         self._ptr[0].graphStreamOrdering = val
 
-    def __getstate__(self):
-        raise pickle.PicklingError("Pickle not supported for Config")
-
     @staticmethod
     def from_buffer(buffer):
         """Create an Config instance with the memory from the given buffer."""
@@ -636,7 +636,7 @@ cdef _get_sim_info_dtype_offsets():
 sim_info_dtype = _get_sim_info_dtype_offsets()
 
 cdef class SimInfo:
-    """Empty-initialize an instance of `ncclSimInfo_t`.
+    """Initialize an instance of `ncclSimInfo_t` using configured defaults.
 
 
     .. seealso:: `ncclSimInfo_t`
@@ -654,6 +654,11 @@ cdef class SimInfo:
         self._owner = None
         self._owned = True
         self._readonly = False
+
+        self._ptr[0].size = sizeof(ncclSimInfo_t)
+        self._ptr[0].magic = 0x74685283
+        self._ptr[0].version = 23006
+        self._ptr[0].estimatedTime = -1.0
 
     def __dealloc__(self):
         cdef ncclSimInfo_t *ptr
@@ -691,8 +696,6 @@ cdef class SimInfo:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclSimInfo_t *>malloc(sizeof(ncclSimInfo_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating SimInfo")
@@ -746,18 +749,6 @@ cdef class SimInfo:
         if self._readonly:
             raise ValueError("This SimInfo instance is read-only")
         self._ptr[0].estimatedTime = val
-
-    def __getstate__(self):
-        return cpython.PyBytes_FromStringAndSize(<char *><void *>self._ptr, sizeof(ncclSimInfo_t))
-
-    def __setstate__(self, state):
-        if not isinstance(state, bytes):
-            raise TypeError(f"Invalid state type for SimInfo, expected bytes, got {type(state).__name__}")
-        if len(state) != sizeof(ncclSimInfo_t):
-            raise ValueError(f"Invalid state length for SimInfo, expected sizeof(ncclSimInfo_t), got {len(state)}")
-        cdef char *state_ptr = cpython.PyBytes_AsString(state)
-        self._ptr = <ncclSimInfo_t *>malloc(sizeof(ncclSimInfo_t))
-        memcpy(<void *>self._ptr, <void *>state_ptr, sizeof(ncclSimInfo_t))
 
     @staticmethod
     def from_buffer(buffer):
@@ -872,8 +863,6 @@ cdef class WaitSignalDesc:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclWaitSignalDesc_t *>malloc(sizeof(ncclWaitSignalDesc_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating WaitSignalDesc")
@@ -927,18 +916,6 @@ cdef class WaitSignalDesc:
         if self._readonly:
             raise ValueError("This WaitSignalDesc instance is read-only")
         self._ptr[0].ctx = val
-
-    def __getstate__(self):
-        return cpython.PyBytes_FromStringAndSize(<char *><void *>self._ptr, sizeof(ncclWaitSignalDesc_t))
-
-    def __setstate__(self, state):
-        if not isinstance(state, bytes):
-            raise TypeError(f"Invalid state type for WaitSignalDesc, expected bytes, got {type(state).__name__}")
-        if len(state) != sizeof(ncclWaitSignalDesc_t):
-            raise ValueError(f"Invalid state length for WaitSignalDesc, expected sizeof(ncclWaitSignalDesc_t), got {len(state)}")
-        cdef char *state_ptr = cpython.PyBytes_AsString(state)
-        self._ptr = <ncclWaitSignalDesc_t *>malloc(sizeof(ncclWaitSignalDesc_t))
-        memcpy(<void *>self._ptr, <void *>state_ptr, sizeof(ncclWaitSignalDesc_t))
 
     @staticmethod
     def from_buffer(buffer):
@@ -1007,7 +984,7 @@ cdef _get_comm_properties_dtype_offsets():
 comm_properties_dtype = _get_comm_properties_dtype_offsets()
 
 cdef class CommProperties:
-    """Empty-initialize an instance of `ncclCommProperties_t`.
+    """Initialize an instance of `ncclCommProperties_t` using configured defaults.
 
 
     .. seealso:: `ncclCommProperties_t`
@@ -1025,6 +1002,10 @@ cdef class CommProperties:
         self._owner = None
         self._owned = True
         self._readonly = False
+
+        self._ptr[0].size = sizeof(ncclCommProperties_t)
+        self._ptr[0].magic = 0xcafebeef
+        self._ptr[0].version = 23006
 
     def __dealloc__(self):
         cdef ncclCommProperties_t *ptr
@@ -1062,8 +1043,6 @@ cdef class CommProperties:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclCommProperties_t *>malloc(sizeof(ncclCommProperties_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating CommProperties")
@@ -1217,9 +1196,6 @@ cdef class CommProperties:
             raise ValueError("This CommProperties instance is read-only")
         self._ptr[0].railedGinType = <ncclGinType_t><int>val
 
-    def __getstate__(self):
-        raise pickle.PicklingError("Pickle not supported for CommProperties")
-
     @staticmethod
     def from_buffer(buffer):
         """Create an CommProperties instance with the memory from the given buffer."""
@@ -1337,8 +1313,6 @@ cdef class DevResourceRequirements:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclDevResourceRequirements_t *>malloc(sizeof(ncclDevResourceRequirements_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating DevResourceRequirements")
@@ -1436,9 +1410,6 @@ cdef class DevResourceRequirements:
         if self._readonly:
             raise ValueError("This DevResourceRequirements instance is read-only")
         self._ptr[0].outGinCounterStart = <ncclGinCounter_t*><intptr_t>val
-
-    def __getstate__(self):
-        raise pickle.PicklingError("Pickle not supported for DevResourceRequirements")
 
     @staticmethod
     def from_buffer(buffer):
@@ -1552,8 +1523,6 @@ cdef class Team:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclTeam_t *>malloc(sizeof(ncclTeam_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating Team")
@@ -1596,18 +1565,6 @@ cdef class Team:
         if self._readonly:
             raise ValueError("This Team instance is read-only")
         self._ptr[0].stride = val
-
-    def __getstate__(self):
-        return cpython.PyBytes_FromStringAndSize(<char *><void *>self._ptr, sizeof(ncclTeam_t))
-
-    def __setstate__(self, state):
-        if not isinstance(state, bytes):
-            raise TypeError(f"Invalid state type for Team, expected bytes, got {type(state).__name__}")
-        if len(state) != sizeof(ncclTeam_t):
-            raise ValueError(f"Invalid state length for Team, expected sizeof(ncclTeam_t), got {len(state)}")
-        cdef char *state_ptr = cpython.PyBytes_AsString(state)
-        self._ptr = <ncclTeam_t *>malloc(sizeof(ncclTeam_t))
-        memcpy(<void *>self._ptr, <void *>state_ptr, sizeof(ncclTeam_t))
 
     @staticmethod
     def from_buffer(buffer):
@@ -1719,8 +1676,6 @@ cdef class MultimemHandle:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclMultimemHandle_t *>malloc(sizeof(ncclMultimemHandle_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating MultimemHandle")
@@ -1741,9 +1696,6 @@ cdef class MultimemHandle:
         if self._readonly:
             raise ValueError("This MultimemHandle instance is read-only")
         self._ptr[0].mcBasePtr = <void *><intptr_t>val
-
-    def __getstate__(self):
-        raise pickle.PicklingError("Pickle not supported for MultimemHandle")
 
     @staticmethod
     def from_buffer(buffer):
@@ -1862,8 +1814,6 @@ cdef class ResourceWindow_vidmem:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclResourceWindow_vidmem_t *>malloc(sizeof(ncclResourceWindow_vidmem_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating ResourceWindow_vidmem")
@@ -1912,9 +1862,6 @@ cdef class ResourceWindow_vidmem:
         if self._readonly:
             raise ValueError("This ResourceWindow_vidmem instance is read-only")
         self._ptr[0].mcOffset4K = val
-
-    def __getstate__(self):
-        raise pickle.PicklingError("Pickle not supported for ResourceWindow_vidmem")
 
     @staticmethod
     def from_buffer(buffer):
@@ -2028,8 +1975,6 @@ cdef class GinBarrierHandle:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclGinBarrierHandle_t *>malloc(sizeof(ncclGinBarrierHandle_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating GinBarrierHandle")
@@ -2061,9 +2006,6 @@ cdef class GinBarrierHandle:
         if self._readonly:
             raise ValueError("This GinBarrierHandle instance is read-only")
         self._ptr[0].unused = <ncclDevResourceHandle_t><uint32_t>val
-
-    def __getstate__(self):
-        raise pickle.PicklingError("Pickle not supported for GinBarrierHandle")
 
     @staticmethod
     def from_buffer(buffer):
@@ -2176,8 +2118,6 @@ cdef class LsaBarrierHandle:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclLsaBarrierHandle_t *>malloc(sizeof(ncclLsaBarrierHandle_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating LsaBarrierHandle")
@@ -2209,9 +2149,6 @@ cdef class LsaBarrierHandle:
         if self._readonly:
             raise ValueError("This LsaBarrierHandle instance is read-only")
         self._ptr[0].nBarriers = val
-
-    def __getstate__(self):
-        raise pickle.PicklingError("Pickle not supported for LsaBarrierHandle")
 
     @staticmethod
     def from_buffer(buffer):
@@ -2326,8 +2263,6 @@ cdef class TeamRequirements:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclTeamRequirements_t *>malloc(sizeof(ncclTeamRequirements_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating TeamRequirements")
@@ -2382,9 +2317,6 @@ cdef class TeamRequirements:
         if self._readonly:
             raise ValueError("This TeamRequirements instance is read-only")
         self._ptr[0].outMultimemHandle = <ncclMultimemHandle_t*><intptr_t>val
-
-    def __getstate__(self):
-        raise pickle.PicklingError("Pickle not supported for TeamRequirements")
 
     @staticmethod
     def from_buffer(buffer):
@@ -2524,8 +2456,6 @@ cdef class DevComm:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclDevComm_t *>malloc(sizeof(ncclDevComm_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating DevComm")
@@ -2875,9 +2805,6 @@ cdef class DevComm:
             raise ValueError("This DevComm instance is read-only")
         self._ptr[0].abortFlag = <uint32_t*><intptr_t>val
 
-    def __getstate__(self):
-        raise pickle.PicklingError("Pickle not supported for DevComm")
-
     @staticmethod
     def from_buffer(buffer):
         """Create an DevComm instance with the memory from the given buffer."""
@@ -2954,7 +2881,7 @@ cdef _get_dev_comm_requirements_dtype_offsets():
 dev_comm_requirements_dtype = _get_dev_comm_requirements_dtype_offsets()
 
 cdef class DevCommRequirements:
-    """Empty-initialize an instance of `ncclDevCommRequirements_t`.
+    """Initialize an instance of `ncclDevCommRequirements_t` using configured defaults.
 
 
     .. seealso:: `ncclDevCommRequirements_t`
@@ -2972,6 +2899,15 @@ cdef class DevCommRequirements:
         self._owner = None
         self._owned = True
         self._readonly = False
+
+        self._ptr[0].size = sizeof(ncclDevCommRequirements_t)
+        self._ptr[0].magic = 0xcafebeef
+        self._ptr[0].version = 23006
+        self._ptr[0].ginContextCount = 4
+        self._ptr[0].ginConnectionType = NCCL_GIN_CONNECTION_NONE
+        self._ptr[0].ginTrafficClass = -2147483648
+        self._ptr[0].ginStrongSignalsRequired = 1
+        self._ptr[0].ginVaSignalsRequired = 1
 
     def __dealloc__(self):
         cdef ncclDevCommRequirements_t *ptr
@@ -3009,8 +2945,6 @@ cdef class DevCommRequirements:
 
     def __setitem__(self, key, val):
         if key == 0 and isinstance(val, _numpy.ndarray):
-            if self._ptr != NULL and self._owned:
-                free(self._ptr)
             self._ptr = <ncclDevCommRequirements_t *>malloc(sizeof(ncclDevCommRequirements_t))
             if self._ptr == NULL:
                 raise MemoryError("Error allocating DevCommRequirements")
@@ -3263,9 +3197,6 @@ cdef class DevCommRequirements:
             raise ValueError("This DevCommRequirements instance is read-only")
         self._ptr[0].ginVaSignalsRequired = val
 
-    def __getstate__(self):
-        raise pickle.PicklingError("Pickle not supported for DevCommRequirements")
-
     @staticmethod
     def from_buffer(buffer):
         """Create an DevCommRequirements instance with the memory from the given buffer."""
@@ -3305,7 +3236,6 @@ cdef class DevCommRequirements:
             obj._owned = False
         obj._readonly = readonly
         return obj
-
 
 
 ###############################################################################
@@ -3450,10 +3380,13 @@ cpdef int get_version() except? -1:
     return version
 
 
-cpdef get_unique_id(intptr_t unique_id):
+cpdef object get_unique_id():
+    cdef UniqueId unique_id_py = UniqueId()
+    cdef ncclUniqueId *unique_id = <ncclUniqueId *><intptr_t>(unique_id_py._get_ptr())
     with nogil:
-        __status__ = ncclGetUniqueId(<ncclUniqueId*>unique_id)
+        __status__ = ncclGetUniqueId(unique_id)
     check_status(__status__)
+    return unique_id_py
 
 
 cpdef int comm_init_rank_config(intptr_t comm, int nranks, comm_id, int rank, intptr_t config) except? -1:
@@ -3529,10 +3462,13 @@ cpdef int comm_shrink(intptr_t comm, exclude_ranks_list, int exclude_ranks_count
     return ret
 
 
-cpdef comm_get_unique_id(intptr_t comm, intptr_t unique_id):
+cpdef object comm_get_unique_id(intptr_t comm):
+    cdef UniqueId unique_id_py = UniqueId()
+    cdef ncclUniqueId *unique_id = <ncclUniqueId *><intptr_t>(unique_id_py._get_ptr())
     with nogil:
-        __status__ = ncclCommGetUniqueId(<Comm>comm, <ncclUniqueId*>unique_id)
+        __status__ = ncclCommGetUniqueId(<Comm>comm, unique_id)
     check_status(__status__)
+    return unique_id_py
 
 
 cpdef int comm_grow(intptr_t comm, int n_ranks, intptr_t unique_id, int rank, intptr_t newcomm, intptr_t config) except? -1:
@@ -3744,9 +3680,10 @@ cpdef signal(int peer, int sig_idx, int ctx, unsigned int flags, intptr_t comm, 
     check_status(__status__)
 
 
-cpdef wait_signal(int n_desc, intptr_t signal_descs, intptr_t comm, intptr_t stream):
+cpdef wait_signal(int n_desc, signal_descs, intptr_t comm, intptr_t stream):
+    cdef void* _signal_descs_ = get_buffer_pointer(signal_descs, -1, readonly=False)
     with nogil:
-        __status__ = ncclWaitSignal(n_desc, <ncclWaitSignalDesc_t*>signal_descs, <Comm>comm, <Stream>stream)
+        __status__ = ncclWaitSignal(n_desc, <ncclWaitSignalDesc_t*>_signal_descs_, <Comm>comm, <Stream>stream)
     check_status(__status__)
 
 
@@ -3762,22 +3699,31 @@ cpdef group_end():
     check_status(__status__)
 
 
-cpdef group_simulate_end(intptr_t sim_info):
+cpdef object group_simulate_end():
+    cdef SimInfo sim_info_py = SimInfo()
+    cdef ncclSimInfo_t *sim_info = <ncclSimInfo_t *><intptr_t>(sim_info_py._get_ptr())
     with nogil:
-        __status__ = ncclGroupSimulateEnd(<ncclSimInfo_t*>sim_info)
+        __status__ = ncclGroupSimulateEnd(sim_info)
     check_status(__status__)
+    return sim_info_py
 
 
-cpdef comm_query_properties(intptr_t comm, intptr_t props):
+cpdef object comm_query_properties(intptr_t comm):
+    cdef CommProperties props_py = CommProperties()
+    cdef ncclCommProperties_t *props = <ncclCommProperties_t *><intptr_t>(props_py._get_ptr())
     with nogil:
-        __status__ = ncclCommQueryProperties(<Comm>comm, <ncclCommProperties_t*>props)
+        __status__ = ncclCommQueryProperties(<Comm>comm, props)
     check_status(__status__)
+    return props_py
 
 
-cpdef dev_comm_create(intptr_t comm, intptr_t reqs, intptr_t out_dev_comm):
+cpdef object dev_comm_create(intptr_t comm, intptr_t reqs):
+    cdef DevComm out_dev_comm_py = DevComm()
+    cdef ncclDevComm_t *out_dev_comm = <ncclDevComm_t *><intptr_t>(out_dev_comm_py._get_ptr())
     with nogil:
-        __status__ = ncclDevCommCreate(<Comm>comm, <const ncclDevCommRequirements_t*>reqs, <ncclDevComm_t*>out_dev_comm)
+        __status__ = ncclDevCommCreate(<Comm>comm, <const ncclDevCommRequirements_t*>reqs, out_dev_comm)
     check_status(__status__)
+    return out_dev_comm_py
 
 
 cpdef dev_comm_destroy(intptr_t comm, intptr_t dev_comm):

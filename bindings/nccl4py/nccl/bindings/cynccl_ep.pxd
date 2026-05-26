@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# This code was automatically generated with version 0.1.0. Do not modify it directly.
+# This code was automatically generated with version 0.0.1. Do not modify it directly.
 
 
 from libc.stdint cimport uint64_t
@@ -43,38 +43,49 @@ cdef extern from *:
 
 
 ctypedef void* ncclComm_t 'ncclComm_t'
+
 ctypedef void* ncclWindow_t 'ncclWindow_t'
+
 ctypedef void* ncclEpGroup_t 'ncclEpGroup_t'
+
 ctypedef void* ncclEpHandle_t 'ncclEpHandle_t'
+
 ctypedef struct ncclEpTensorAllocConfig_t 'ncclEpTensorAllocConfig_t':
     unsigned int size
+    unsigned int magic
 
 ctypedef cudaError_t (*ncclEpAllocFn_t 'ncclEpAllocFn_t')(
     void** ptr,
     size_t size,
     void* context
 )
+
 ctypedef cudaError_t (*ncclEpFreeFn_t 'ncclEpFreeFn_t')(
     void* ptr,
     void* context
 )
+
 ctypedef struct ncclEpHandleConfig_t 'ncclEpHandleConfig_t':
     unsigned int size
+    unsigned int magic
     size_t dispatch_output_per_expert_alignment
 
 ctypedef struct ncclEpDispatchConfig_t 'ncclEpDispatchConfig_t':
     unsigned int size
+    unsigned int magic
     unsigned int send_only
     unsigned int round_scales
     ncclEpPassDir_t pass_direction
 
 ctypedef struct ncclEpCombineConfig_t 'ncclEpCombineConfig_t':
     unsigned int size
+    unsigned int magic
     unsigned int send_only
     ncclEpPassDir_t pass_direction
 
 ctypedef struct ncclEpCompleteConfig_t 'ncclEpCompleteConfig_t':
-    char _reserved
+    unsigned int size
+    unsigned int magic
 
 ctypedef struct ncclEpTensor_t 'ncclEpTensor_t':
     unsigned int size
@@ -93,6 +104,7 @@ ctypedef struct ncclEpAllocConfig_t 'ncclEpAllocConfig_t':
 
 ctypedef struct ncclEpLayoutInfo_t 'ncclEpLayoutInfo_t':
     unsigned int size
+    unsigned int magic
     ncclEpTensor_t* expert_counters
     ncclEpTensor_t* src_rank_counters
     ncclEpTensor_t* expert_offsets
@@ -100,12 +112,14 @@ ctypedef struct ncclEpLayoutInfo_t 'ncclEpLayoutInfo_t':
 
 ctypedef struct ncclEpDispatchInputs_t 'ncclEpDispatchInputs_t':
     unsigned int size
+    unsigned int magic
     ncclEpTensor_t* tokens
     ncclEpTensor_t* topk_weights
     ncclEpTensor_t* scales
 
 ctypedef struct ncclEpDispatchOutputs_t 'ncclEpDispatchOutputs_t':
     unsigned int size
+    unsigned int magic
     ncclEpTensor_t* tokens
     ncclEpTensor_t* topk_weights
     ncclEpTensor_t* scales
@@ -113,16 +127,19 @@ ctypedef struct ncclEpDispatchOutputs_t 'ncclEpDispatchOutputs_t':
 
 ctypedef struct ncclEpCombineInputs_t 'ncclEpCombineInputs_t':
     unsigned int size
+    unsigned int magic
     ncclEpTensor_t* tokens
     ncclEpTensor_t* topk_weights
 
 ctypedef struct ncclEpCombineOutputs_t 'ncclEpCombineOutputs_t':
     unsigned int size
+    unsigned int magic
     ncclEpTensor_t* tokens
     ncclEpTensor_t* topk_weights
 
 ctypedef struct ncclEpGroupConfig_t 'ncclEpGroupConfig_t':
     unsigned int size
+    unsigned int magic
     unsigned int version
     ncclEpAlgorithm_t algorithm
     unsigned int num_experts
@@ -136,7 +153,6 @@ ctypedef struct ncclEpGroupConfig_t 'ncclEpGroupConfig_t':
     ncclEpAllocConfig_t alloc
     unsigned int enable_mask
     uint64_t timeout_ns
-
 
 
 ###############################################################################

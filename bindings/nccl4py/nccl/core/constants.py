@@ -13,8 +13,6 @@ from nccl.core.typing.
 from enum import IntEnum, IntFlag
 
 __all__ = [
-    "NCCL_UNDEF_INT",
-    "NCCL_UNDEF_FLOAT",
     "NCCL_SPLIT_NOCOLOR",
     "CTAPolicy",
     "CommShrinkFlag",
@@ -22,20 +20,9 @@ __all__ = [
     "WindowFlag",
 ]
 
-# NCCL sentinel values for undefined config fields
-NCCL_UNDEF_INT: int = -2147483648  # INT_MIN
-"""NCCL sentinel value for undefined integer configuration fields."""
-
-NCCL_UNDEF_FLOAT: float = -1.0
-"""NCCL sentinel value for undefined float fields."""
-
 # Communicator split constants
 NCCL_SPLIT_NOCOLOR: int = -1
 """Color value for ncclCommSplit to indicate the rank will not be part of any group."""
-
-# NCCL magic number
-NCCL_MAGIC: int = 0xCAFEBEEF
-"""Magic number for NCCL configuration structs (used for ABI validation)."""
 
 
 # CTA (Cooperative Thread Array) Policy flags

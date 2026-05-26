@@ -402,10 +402,7 @@ class DevCommResource(CommResource):
 
     def _allocate(self) -> None:
         """Creates the device communicator via ncclDevCommCreate."""
-        # Allocate DevComm struct first
-        self._dev_comm = _nccl_bindings.DevComm()
-        # Pass pointer to dev_comm_create to initialize it
-        _nccl_bindings.dev_comm_create(self._comm_ptr, self._requirements_ptr, self._dev_comm.ptr)
+        self._dev_comm = _nccl_bindings.dev_comm_create(self._comm_ptr, self._requirements_ptr)
 
     def _deallocate(self) -> None:
         """Destroys the device communicator via ncclDevCommDestroy."""

@@ -27,16 +27,21 @@ typedef enum {
  */
 typedef enum {
     /**
-     * Auto-select layout based on algorithm (zero-init default).
-     * ncclEpCreateGroup resolves this to EXPERT_MAJOR for LL and FLAT for HT.
+     * Sentinel for "layout not set" (zero-init default).
+     *
+     * Callers must override this with one of the layout values below before
+     * passing the config to ncclEpInitHandle / ncclEpHandleMemSize; the
+     * library does not auto-resolve based on algorithm. Leaving the field at
+     * NCCL_EP_LAYOUT_UNSET is a programmer error and trips an assertion at
+     * handle-init time.
      */
-    NCCL_EP_LAYOUT_AUTO = NCCL_EP_AUTO,
+    NCCL_EP_LAYOUT_UNSET = NCCL_EP_AUTO,
 
     /**
      * Expert-major layout.
      *
      * Dispatch output:
-     *   recv_x shape:            [num_local_experts, max_send_tokens_per_rank * num_ranks, hidden]
+     *   recv_x shape:            [num_local_experts, max_dispatch_tokens_per_rank * num_ranks, hidden]
      *   recv_topk_weights shape: HT: [N] (1D, one weight per slot — each slot is per
      *                                    (source_token, local_expert), at most one match);
      *                            LL: nullptr (not populated under EM).
@@ -54,9 +59,9 @@ typedef enum {
      * Rank-major layout.
      *
      * Dispatch output:
-     *   recv_x shape:            [max_send_tokens_per_rank * num_ranks, hidden]
-     *   recv_topk_weights shape: [max_send_tokens_per_rank * num_ranks, num_topk]
-     *   recv_topk_idx shape:     [max_send_tokens_per_rank * num_ranks, num_topk]
+     *   recv_x shape:            [num_ranks, max_dispatch_tokens_per_rank, hidden]
+     *   recv_topk_weights shape: [max_dispatch_tokens_per_rank * num_ranks, num_topk]
+     *   recv_topk_idx shape:     [max_dispatch_tokens_per_rank * num_ranks, num_topk]
      *
      * Tokens arrive in rank-major order with no expert dimension.
      * The caller is responsible for running expert computation on each token
@@ -81,8 +86,8 @@ typedef enum {
      *   recv_topk_idx shape:     [N(r) x num_topk]
      *
      * where N(r) is the total number of tokens targeting this rank across all
-     * source ranks (num_ranks * max_send_tokens_per_rank in the static case, or the
-     * actual received count when max_send_tokens_per_rank is NCCL_EP_AUTO).
+     * source ranks (num_ranks * max_dispatch_tokens_per_rank in the static case, or the
+     * actual received count when max_dispatch_tokens_per_rank is NCCL_EP_AUTO).
      *
      * Tokens arrive as a single contiguous sequence with no rank-major or
      * expert-major structure.  The caller uses recv_topk_idx to route each
@@ -90,9 +95,27 @@ typedef enum {
      * the weighted reduction before passing pre-reduced outputs to
      * ncclEpCombine.
      *
-     * This is the only layout supported by HT mode and the default when
-     * NCCL_EP_LAYOUT_AUTO is used with NCCL_EP_ALGO_HIGH_THROUGHPUT.
+     * This is the only layout supported by HT mode.
      */
     NCCL_EP_LAYOUT_FLAT,
 } ncclEpLayout_t;
 
+/**
+ * Training pass direction for ncclEpDispatch / ncclEpCombine.
+ *
+ * Selects which side of the routing the call is participating in. FWD is the
+ * zero-init default so callers that don't set the field get forward-pass
+ * semantics.
+ *
+ *   FWD dispatch (HT): caller provides input topk_weights; routing is live.
+ *   BWD dispatch (HT): no input topk_weights; reuses cached routing state.
+ *   FWD combine  (HT): no input topk_weights; tokens only.
+ *   BWD combine  (HT): caller provides input topk_weights and receives
+ *                      combined topk_weights gradients alongside tokens.
+ *
+ * LL mode does not currently distinguish FWD/BWD and ignores this field.
+ */
+typedef enum {
+    NCCL_EP_FWD_PASS = 0,
+    NCCL_EP_BWD_PASS = 1,
+} ncclEpPassDir_t;

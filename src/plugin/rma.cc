@@ -25,6 +25,7 @@ NCCL_PARAM(RmaPluginRefCount, "RMA_PLUGIN_REF_COUNT", 0);
 int ncclRmaVersion[NCCL_RMA_VERSION_COUNT] = {14, 13};
 getNcclRma_t* getNcclRma[NCCL_RMA_VERSION_COUNT] = {getNcclRma_v14, getNcclRma_v13};
 
+#define NCCL_RMA_NUM_RESERVED_PLUGINS 3
 #define NCCL_RMA_NUM_INTERNAL_PLUGINS 1
 
 typedef enum ncclRmaPluginState {
@@ -53,7 +54,7 @@ static std::once_flag initPluginLibsOnceFlag;
 
 static ncclResult_t ncclRmaPluginUnload(rmaPluginLib_t* pluginLib) {
   if (pluginLib->dlHandle && pluginLib->refCount == 0) {
-    INFO(NCCL_DESTROY|NCCL_NET, "Unloading plugin %s", pluginLib->name);
+    INFO(NCCL_DESTROY|NCCL_NET, "RMA/Plugin: Unloading plugin %s", pluginLib->name);
     NCCLCHECK(ncclClosePluginLib(pluginLib->dlHandle, ncclPluginTypeRma));
 
     // Reset fields but preserve name, to be reused when reloading
@@ -80,21 +81,23 @@ static ncclResult_t ncclRmaPluginLoad(rmaPluginLib_t* pluginLib) {
     if (pluginLib->ncclRma) break;
   }
 
-  if (pluginLib->ncclRma == nullptr) {
-    pluginLib->state = ncclRmaPluginStateLoadFailed;
-  } else {
-    pluginLib->state = ncclRmaPluginStateInitReady;
-  }
+  if (pluginLib->ncclRma == nullptr) goto fail;
 
-  INFO(NCCL_INIT|NCCL_NET, "Successfully loaded external rma plugin %s",
+  pluginLib->state = ncclRmaPluginStateInitReady;
+  INFO(NCCL_INIT|NCCL_NET, "RMA/Plugin: Successfully loaded external plugin %s",
        (ncclPluginLibPaths[ncclPluginTypeRma] ? ncclPluginLibPaths[ncclPluginTypeRma] : pluginLib->name));
 exit:
   return ncclSuccess;
 fail:
+  INFO(NCCL_INIT|NCCL_NET, "RMA/Plugin: Failed to load external plugin %s, dlHandle: %p, ncclRma: %p",
+         (ncclPluginLibPaths[ncclPluginTypeRma] ? ncclPluginLibPaths[ncclPluginTypeRma] : pluginLib->name),
+         pluginLib->dlHandle, pluginLib->ncclRma);
   if (pluginLib->dlHandle) {
     NCCLCHECK(ncclClosePluginLib(pluginLib->dlHandle, ncclPluginTypeRma));
   }
   pluginLib->dlHandle = nullptr;
+  pluginLib->ncclRma = nullptr;
+  pluginLib->version = 0;
   pluginLib->state = ncclRmaPluginStateLoadFailed;
   goto exit;
 }
@@ -122,7 +125,7 @@ static ncclResult_t ncclRmaPluginAssignToComm(struct ncclComm* comm, int pluginI
   *isAssigned = false;
 
   if (pluginLibs[pluginIndex].state >= ncclRmaPluginStateEnabled) {
-    INFO(NCCL_INIT|NCCL_NET, "Assigned RMA plugin %s to comm", pluginLibs[pluginIndex].ncclRma->name);
+    INFO(NCCL_INIT|NCCL_NET, "RMA/Plugin: Assigned plugin %s to comm", pluginLibs[pluginIndex].ncclRma->name);
     comm->rmaState.rmaProxyState.ncclRma = pluginLibs[pluginIndex].ncclRma;
     comm->rmaState.rmaProxyState.rmaVersion = pluginLibs[pluginIndex].version;
     comm->rmaPluginIndex = pluginIndex;
@@ -137,14 +140,14 @@ static ncclResult_t ncclRmaPluginDisableOtherExternal(int pluginIndex) {
   if (pluginIndex >= (pluginCount - NCCL_RMA_NUM_INTERNAL_PLUGINS)) return ncclSuccess;
   char names[MAX_STR_LEN*(NCCL_RMA_MAX_PLUGINS - NCCL_RMA_NUM_INTERNAL_PLUGINS)] = { 0 };
   for (int i = 0; i < (pluginCount - NCCL_RMA_NUM_INTERNAL_PLUGINS); i++) {
-    if (i != pluginIndex) {
+    if (i != pluginIndex && pluginLibs[i].state >= ncclRmaPluginStateEnabled) {
       // Append all disabled plugin names to a string
       snprintf(names+strlen(names), sizeof(names)-strlen(names), (strlen(names) == 0) ? "%s" : ", %s", pluginLibs[i].name);
       pluginLibs[i].state = ncclRmaPluginStateDisabled;
     }
   }
   if(strlen(names) > 0) {
-    INFO(NCCL_INIT|NCCL_NET, "Disabling external plugins: %s", names);
+    INFO(NCCL_INIT|NCCL_NET, "RMA/Plugin: Disabling external plugins: %s", names);
   }
   return ncclSuccess;
 }
@@ -167,9 +170,9 @@ static void initPluginLibsOnceFunc() {
     // Iterate over list until the list is empty
     rmaPluginName = strtok_r(envRmaPluginList, ",", &savePtr);
     while(rmaPluginName) {
-      // So, we can have at most( NCCL_RMA_MAX_PLUGINS - (NCCL_RMA_NUM_INTERNAL_PLUGINS)) in the NCCL_RMA_PLUGIN list
-      if (pluginCounter >= (NCCL_RMA_MAX_PLUGINS - (NCCL_RMA_NUM_INTERNAL_PLUGINS))) {
-        INFO(NCCL_NET|NCCL_ENV,"NCCL_RMA_PLUGIN list contains more than %d plugins, ignoring the rest", (NCCL_RMA_MAX_PLUGINS - (NCCL_RMA_NUM_INTERNAL_PLUGINS + 1)));
+      // So, we can have at most( NCCL_RMA_MAX_PLUGINS - (NCCL_RMA_NUM_RESERVED_PLUGINS)) in the NCCL_RMA_PLUGIN list
+      if (pluginCounter >= (NCCL_RMA_MAX_PLUGINS - NCCL_RMA_NUM_RESERVED_PLUGINS)) {
+        INFO(NCCL_NET|NCCL_ENV,"NCCL_RMA_PLUGIN list contains more than %d plugins, ignoring the rest", (NCCL_RMA_MAX_PLUGINS - NCCL_RMA_NUM_RESERVED_PLUGINS));
         break;
       }
       // need to leave space for the name + "\n"
@@ -248,7 +251,7 @@ ncclResult_t ncclRmaInit(struct ncclComm* comm) {
   if (initialized) {
     NCCLCHECK(ncclGinProxyInit(comm));
   }
-  if (!initialized) INFO(NCCL_INIT|NCCL_NET, "Failed to initialize any RMA plugin");
+  if (!initialized) INFO(NCCL_INIT|NCCL_NET, "RMA/Plugin: Failed to initialize any plugin");
   return ncclSuccess;
 }
 

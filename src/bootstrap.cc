@@ -819,8 +819,8 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
 
   // Initialize RAS
   if (ncclParamRasEnable() == 1) {
-    // The RAS thread will take care of freeing the memory allocated below.
-    NCCLCHECK(ncclCalloc(&rasRanks, nranks));
+    // The RAS thread will take ownership after ncclRasAddRanks succeeds.
+    NCCLCHECKGOTO(ncclCalloc(&rasRanks, nranks), result, fail);
     memcpy(&rasRanks[rank].addr, &bootstrapNetIfAddr, sizeof(rasRanks[rank].addr));
     rasRanks[rank].pid = ncclOsGetPid();
     rasRanks[rank].cudaDev = comm->cudaDev;
@@ -844,8 +844,11 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
   NCCLCHECKGOTO(ncclProxyInit(comm, proxySocket, state->peerProxyAddresses, state->peerProxyAddressesUDS), result, fail);
 
   if (ncclParamRasEnable() == 1 && performRasAddRanks) {
-    if (ncclRasAddRanks(rasRanks, nranks) != ncclSuccess)
+    if (ncclRasAddRanks(rasRanks, nranks) != ncclSuccess) {
       INFO(NCCL_INIT|NCCL_RAS, "Continuing in spite of a RAS initialization error");
+    } else {
+      rasRanks = nullptr;
+    }
   }
 
   BOOTSTRAP_PROF_CLOSE(timers[BOOTSTRAP_INIT_TIME_TOTAL]);
@@ -857,6 +860,7 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
        timers[BOOTSTRAP_INIT_TIME_RING] / 1e9,
        timers[BOOTSTRAP_INIT_TIME_DELAY] / 1e9);
 exit:
+  free(rasRanks);
   return result;
 fail:
   free(proxySocket);

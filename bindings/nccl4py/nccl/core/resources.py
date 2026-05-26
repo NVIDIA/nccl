@@ -15,10 +15,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from nccl import bindings as _nccl_bindings
+from nccl.bindings import nccl as _nccl_bindings
 
 from nccl.core.constants import WindowFlag
 from nccl.core.typing import NcclDataType, NcclInvalid
+
+_PointerBox = _nccl_bindings.PointerBox
 
 __all__ = [
     "RegisteredBufferHandle",
@@ -89,7 +91,7 @@ class CommResource(ABC):
 
     @property
     def is_valid(self) -> bool:
-        """Whether the resource is still valid (not closed)."""
+        """Whether the resource has been initialized and is still valid (not closed)."""
         return not self._closed
 
 
@@ -101,10 +103,6 @@ class RegisteredBufferHandle(CommResource):
     :py:meth:`Communicator.register_buffer`. The registration handle can be
     released explicitly via :py:meth:`close`, or automatically when the
     owning communicator is destroyed or aborted.
-
-    See Also:
-        NCCL ncclCommRegister reference:
-        https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html#ncclcommregister
     """
 
     def __init__(self, comm_ptr: int, buffer_ptr: int, size: int):
@@ -168,10 +166,6 @@ class RegisteredWindowHandle(CommResource):
     default. Deregistration is local. The window handle can be released
     explicitly via :py:meth:`close`, or automatically when the owning
     communicator is destroyed or aborted.
-
-    See Also:
-        NCCL ncclCommWindowRegister reference:
-        https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html#ncclcommwindowregister
     """
 
     def __init__(self, comm_ptr: int, buffer_ptr: int, size: int, flags: WindowFlag | None = None):
@@ -181,7 +175,7 @@ class RegisteredWindowHandle(CommResource):
             comm_ptr: NCCL communicator raw pointer.
             buffer_ptr: Device pointer to the buffer.
             size: Size of the window in bytes.
-            flags: Window registration flags. Defaults to None
+            flags: Window registration flags. Defaults to ``None``
                 (:py:attr:`~nccl.core.WindowFlag.DEFAULT`).
 
         Raises:
@@ -190,14 +184,16 @@ class RegisteredWindowHandle(CommResource):
         self._buffer_ptr = buffer_ptr
         self._size = size
         self._flags = flags if flags is not None else WindowFlag.DEFAULT
-        self._handle: int | None = None
-        super().__init__(comm_ptr)
+        self._handle = _PointerBox()
+        self._closed = True
+        self._comm_ptr = comm_ptr
         self._allocate()
+        super().__init__(comm_ptr)
 
     def _allocate(self) -> None:
         """Collectively registers the window with NCCL."""
-        self._handle = _nccl_bindings.comm_window_register(
-            self._comm_ptr, self._buffer_ptr, self._size, self._flags.value
+        _nccl_bindings.comm_window_register(
+            self._comm_ptr, self._buffer_ptr, self._size, self._handle.address, self._flags.value
         )
 
     def _deallocate(self) -> None:
@@ -206,9 +202,15 @@ class RegisteredWindowHandle(CommResource):
         Deregistration is local to the rank. The caller must ensure the
         buffer is not being accessed by any NCCL operation.
         """
-        if self._handle is not None:
-            _nccl_bindings.comm_window_deregister(self._comm_ptr, self._handle)
-            self._handle = None
+        if self.handle:
+            _nccl_bindings.comm_window_deregister(self._comm_ptr, self.handle)
+            self._handle.ptr = 0
+        self._closed = True
+
+    @property
+    def is_valid(self) -> bool:
+        """Whether the resource has been initialized and is still valid (not closed)."""
+        return not self._closed and self._handle.ptr
 
     @property
     def handle(self) -> int:
@@ -218,10 +220,7 @@ class RegisteredWindowHandle(CommResource):
             RuntimeError: If the window has been deregistered or the handle
                 is invalid.
         """
-        self._check_valid()
-        if self._handle is None:
-            raise RuntimeError("Window registration handle is invalid")
-        return self._handle
+        return int(self._handle.ptr)
 
     @property
     def size(self) -> int:
@@ -249,13 +248,13 @@ class RegisteredWindowHandle(CommResource):
             offset: Byte offset within the window buffer. Defaults to 0.
 
         Returns:
-            Device pointer as int, or None if multimem is not supported.
+            Device pointer as int, or ``None`` if multimem is not supported.
 
         Raises:
             RuntimeError: If the window has been closed.
         """
         self._check_valid()
-        ptr = _nccl_bindings.get_lsa_multimem_device_pointer(self._handle, offset)
+        ptr = _nccl_bindings.get_lsa_multimem_device_pointer(self.handle, offset)
         return ptr if ptr != 0 else None
 
     def get_lsa_device_pointer(self, lsa_rank: int, offset: int = 0) -> int:
@@ -275,32 +274,30 @@ class RegisteredWindowHandle(CommResource):
             RuntimeError: If the window has been closed.
         """
         self._check_valid()
-        return _nccl_bindings.get_lsa_device_pointer(self._handle, offset, lsa_rank)
+        return _nccl_bindings.get_lsa_device_pointer(self.handle, offset, lsa_rank)
 
     def get_peer_device_pointer(self, peer: int, offset: int = 0) -> int | None:
         """Returns a device pointer to a peer's window buffer by world rank.
 
-        If the peer is not reachable via LSA, returns None.
+        If the peer is not reachable via LSA, returns ``None``.
 
         Args:
             peer: World rank of the peer (0 to nranks - 1).
             offset: Byte offset within the window buffer. Defaults to 0.
 
         Returns:
-            Device pointer as int, or None if the peer is not reachable via
-            LSA.
+            Device pointer as int, or ``None`` if the peer is not reachable
+            via LSA.
 
         Raises:
             RuntimeError: If the window has been closed.
         """
         self._check_valid()
-        ptr = _nccl_bindings.get_peer_device_pointer(self._handle, offset, peer)
+        ptr = _nccl_bindings.get_peer_device_pointer(self.handle, offset, peer)
         return ptr if ptr != 0 else None
 
     def __repr__(self) -> str:
-        if not self.is_valid:
-            return "<RegisteredWindowHandle: closed>"
-        return f"<RegisteredWindowHandle: size={self._size}, handle={self._handle:#x}, flags={self._flags}>"
+        return f"<RegisteredWindowHandle: size={self._size}, handle={self.handle:#x}, flags={self._flags}>"
 
 
 class CustomRedOp(CommResource):
@@ -311,10 +308,6 @@ class CustomRedOp(CommResource):
     or weighted reductions. The operator can be released explicitly via
     :py:meth:`close`, or automatically when the owning communicator is
     destroyed or aborted.
-
-    See Also:
-        NCCL ncclRedOpCreatePreMulSum reference:
-        https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/ops.html#ncclredopcreatepremulsum
     """
 
     def __init__(
@@ -409,10 +402,7 @@ class DevCommResource(CommResource):
 
     def _allocate(self) -> None:
         """Creates the device communicator via ncclDevCommCreate."""
-        # Allocate DevComm struct first
-        self._dev_comm = _nccl_bindings.DevComm()
-        # Pass pointer to dev_comm_create to initialize it
-        _nccl_bindings.dev_comm_create(self._comm_ptr, self._requirements_ptr, self._dev_comm.ptr)
+        self._dev_comm = _nccl_bindings.dev_comm_create(self._comm_ptr, self._requirements_ptr)
 
     def _deallocate(self) -> None:
         """Destroys the device communicator via ncclDevCommDestroy."""
@@ -422,7 +412,7 @@ class DevCommResource(CommResource):
 
     @property
     def dev_comm(self) -> _nccl_bindings.DevComm:
-        """DevComm object wrapping ncclDevComm_t.
+        """DevComm object wrapping :c:type:`ncclDevComm_t <ncclDevComm>`.
 
         Raises:
             RuntimeError: If the device communicator has been destroyed.
@@ -434,7 +424,7 @@ class DevCommResource(CommResource):
 
     @property
     def ptr(self) -> int:
-        """Pointer to the ncclDevComm_t structure.
+        """Raw pointer to the underlying :c:type:`ncclDevComm_t <ncclDevComm>` structure.
 
         Raises:
             RuntimeError: If the device communicator has been destroyed.

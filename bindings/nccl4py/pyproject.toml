@@ -34,8 +34,11 @@ classifiers = [
 dependencies = [
     "packaging",
     "numpy",
-    "cuda.core~=0.7",
+    "cuda.core~=1.0",
     "cuda-pathfinder>=1.5.4,<2.0.0",
+    # typing_extensions provides @deprecated (PEP 702) below Python 3.13, and
+    # dataclass_transform below 3.11 (for nccl.ep's @binding_dataclass).
+    'typing_extensions; python_version < "3.13"',
 ]
 
 [project.optional-dependencies]
@@ -84,7 +87,7 @@ include-package-data = false
 include = ["nccl*"]
 
 [tool.setuptools.package-data]
-"nccl.bindings" = ["cynccl.pxd"]
+"nccl.bindings" = ["cynccl.pxd", "cynccl_ep.pxd"]
 "nccl.ep" = ["lib/libnccl_ep.so"]
 
 [tool.setuptools.dynamic]

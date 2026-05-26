@@ -348,8 +348,6 @@ struct ncclProxyState {
   struct ncclSocket* listenSock;
   struct ncclIpcSocket ipcSock;
   int stop;
-  CUcontext cudaCtx;
-  std::once_flag cudaCtxOnceFlag;
   ncclResult_t asyncResult;
 
   // Used by main thread
@@ -357,7 +355,7 @@ struct ncclProxyState {
   struct ncclSocket* peerSocks;
   struct ncclProxyOps* proxyOps;
   void** sharedDevMems;
-  int peerArraySize;  // Size of peerSocks/proxyOps/sharedDevMems arrays (tpNRanks for cross-clique, tpNLocalRanks otherwise)
+  int peerArraySize;  // Size of peerSocks/proxyOps/sharedDevMems arrays (tpNRanks)
   struct ncclIpcSocket peerIpcSock; // cuMEM API support (UDS)
   uint64_t *peerAddressesUDS; // cuMem API support (UDS)
 

@@ -14,6 +14,7 @@
 // ============================================================================
 // Configuration constants
 // ============================================================================
+
 #define NUM_MAX_RDMA_PEERS 20
 #define NUM_WORKSPACE_BYTES (32 * 1024 * 1024)
 #define NUM_MAX_LOCAL_EXPERTS 1024
@@ -26,6 +27,12 @@
 #define FINISHED_SUM_TAG (MAX_SUPPORTED_TOKENS_PER_RANK * 2)
 #define HT_OF_NUM_TOKENS_PER_CHUNK 64
 
+// Timeout for GPU-side wait loops. When exceeded, the peer is masked (if active-mask
+// is enabled) or the kernel traps. Setting this too low risks false positives: a rank
+// that is merely slow may be marked as failed. Asymmetric timeouts across ranks can
+// produce inconsistent masks (rank A masks rank B, but rank B does not mask rank A).
+// Mask consistency is a framework-level concern -- the application should query the
+// mask after detecting an error and reconcile as needed (e.g., via EPLB rebalance).
 #ifndef ENABLE_FAST_DEBUG
 #define NUM_CPU_TIMEOUT_SECS 100
 #define NUM_TIMEOUT_CYCLES 200000000000ull // 200G cycles ~= 100s
@@ -143,7 +150,13 @@ size_t get_dispatch_hdr_sz(int num_topk, ncclEpLayout_t layout) {
 
 void clean_low_latency_buffer(int* clean_0, int num_clean_int_0,
                               int* clean_1, int num_clean_int_1,
-                              cudaStream_t stream);
+                              int* rankMask,
+                              int* syncBuffer, size_t syncBufferOffset,
+                              ncclDevComm* devComms,
+                              ncclWindow_t* windows,
+                              unsigned barrierSignalBase,
+                              uint64_t timeoutCycles = NUM_TIMEOUT_CYCLES,
+                              cudaStream_t stream = 0);
 
 void dispatch(const void* inData,
               const int64_t* inTopkIdx,
@@ -184,7 +197,11 @@ void dispatch(const void* inData,
               unsigned signalsBase,
               void* workspace,
               int num_device_sms,
-              cudaStream_t stream);
+              int* rankMask = nullptr,
+              int* asyncErrorFlag = nullptr,
+              uint64_t timeoutCycles = NUM_TIMEOUT_CYCLES,
+              bool nvlinkOnly = false,
+              cudaStream_t stream = 0);
 
 void combine(const void* inData,
              const int* srcInfo,
@@ -218,7 +235,10 @@ void combine(const void* inData,
              unsigned signalsBase,
              void* workspace,
              int num_device_sms,
-             cudaStream_t stream);
+             int* rankMask = nullptr,
+             int* asyncErrorFlag = nullptr,
+             uint64_t timeoutCycles = NUM_TIMEOUT_CYCLES,
+             cudaStream_t stream = 0);
 
 } // namespace internode_ll
 
@@ -255,29 +275,37 @@ struct LowLatencyBuffer {
 struct LowLatencyLayout {
     size_t total_bytes = 0;
     LowLatencyBuffer buffers[2];
+    int* sync_buffer = nullptr;
+    size_t sync_buffer_offset = 0;
 
     template <typename out_ptr_t = void*, typename count_ptr_t = uint8_t*, typename in_ptr_t = void*>
     out_ptr_t advance(const in_ptr_t& ptr, size_t count) {
         return reinterpret_cast<out_ptr_t>(reinterpret_cast<count_ptr_t>(ptr) + count);
     }
 
-    LowLatencyLayout(void* rdma_buffer, int num_max_dispatch_tokens_per_rank, int hidden, int num_ranks, int num_experts, int num_topk, ncclEpLayout_t layout) {
-        const int num_scales = hidden / 128;
-
+    LowLatencyLayout(void* rdma_buffer, int num_max_dispatch_tokens_per_rank, size_t max_token_bytes, int num_ranks, int num_experts, int num_topk, ncclEpLayout_t layout) {
         // Dispatch and combine layout:
         //  - 2 symmetric odd/even send buffer
         //  - 2 symmetric odd/even receive buffers
         //  - 2 symmetric odd/even signaling buffers
 
-        // Message sizes
-        // NOTES: you should add a control `int4` for combine messages if you want to do data transformation
-        // NOTES: `num_scales * sizeof(nv_bfloat162)` means the per-128-channel min/max
-        EP_HOST_ASSERT(num_scales * sizeof(float) <= hidden);
+        // Per-slot sizes for buffer allocation (datatype-agnostic at the API;
+        // max_token_bytes upper-bounds the per-token payload). The library's FP8
+        // path quantizes from bf16 internally, so its per-token footprint is
+        // bounded by max_token_bytes (which the caller sizes for the bf16 worst case).
+        // Combine reserves additional per-128-bf16-element scale-factor space
+        // (min/max as bf162) — an internal kernel contract of the FP8 quantizer.
+        //
+        // Per-call enforcement: ncclEpDispatch host-side asserts that the actual
+        // input tokens fit max_token_bytes (unquantized path), and that the
+        // FP8-quantized bytes fit max_token_bytes when the FP8 quantizer is engaged.
+        // So the formulas below safely upper-bound any per-call kernel stride.
+        const size_t num_scales = max_token_bytes / sizeof(nv_bfloat16) / 128;  // bf16 hidden / scale-tile size
+        size_t scale_metadata_bytes = num_scales * sizeof(nv_bfloat162);
 
         size_t disp_hdr_sz = internode_ll::get_dispatch_hdr_sz(num_topk, layout);
-        size_t num_bytes_per_dispatch_msg = disp_hdr_sz + std::max(hidden * sizeof(nv_bfloat16),
-                                                                          hidden + num_scales * sizeof(float));
-        size_t num_bytes_per_combine_msg = num_scales * sizeof(nv_bfloat162) + hidden * sizeof(nv_bfloat16);
+        size_t num_bytes_per_dispatch_msg = disp_hdr_sz + max_token_bytes;
+        size_t num_bytes_per_combine_msg = scale_metadata_bytes + max_token_bytes;
 
         // Send buffer
         size_t dispatch_send_buffer_bytes = num_max_dispatch_tokens_per_rank * num_bytes_per_dispatch_msg;
@@ -317,11 +345,26 @@ struct LowLatencyLayout {
                 num_bytes_per_combine_msg
             };
         }
+
+        // Barrier sync buffer for clean_low_latency_buffer (int[nRanks], 128-byte aligned)
+        sync_buffer_offset = total_bytes;
+        size_t sync_buffer_bytes = align<size_t>(num_ranks * sizeof(int), 128);
+        total_bytes += sync_buffer_bytes;
+        if (rdma_buffer != nullptr)
+            sync_buffer = advance<int*>(rdma_buffer, sync_buffer_offset);
     }
 };
 
-inline unsigned long int get_low_latency_rdma_size_hint(int num_max_dispatch_tokens_per_rank, int hidden, int num_ranks, int num_experts, ncclEpLayout_t layout) {
-    auto num_bytes = LowLatencyLayout(nullptr, num_max_dispatch_tokens_per_rank, hidden, num_ranks, num_experts, MAX_NUM_TOPK, layout).total_bytes;
+// Layout-agnostic: sizes for the worst case across all LL layouts so the caller
+// can allocate the RDMA buffer at group time without knowing the per-handle layout.
+// EM and RM differ only in the per-topk router entry (2B vs 8B), so the gap is
+// small relative to the token payload.
+inline unsigned long int get_low_latency_rdma_size_hint(int num_max_dispatch_tokens_per_rank, size_t max_token_bytes, int num_ranks, int num_experts) {
+    auto bytes_for = [&](ncclEpLayout_t layout) {
+        return LowLatencyLayout(nullptr, num_max_dispatch_tokens_per_rank, max_token_bytes, num_ranks, num_experts, MAX_NUM_TOPK, layout).total_bytes;
+    };
+    auto num_bytes = std::max(bytes_for(NCCL_EP_LAYOUT_EXPERT_MAJOR),
+                              bytes_for(NCCL_EP_LAYOUT_RANK_MAJOR));
     return ((num_bytes + NUM_BUFFER_ALIGNMENT_BYTES) / NUM_BUFFER_ALIGNMENT_BYTES) * NUM_BUFFER_ALIGNMENT_BYTES;
 }
 

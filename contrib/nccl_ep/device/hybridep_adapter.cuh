@@ -22,13 +22,15 @@ namespace hybridep {
 
 // ============================================================================
 // Runtime constants (from ep_group, not hardcoded):
-//   lsa_team_size  - ncclTeamLsa(comm).nRanks  (up to 72 for MNNVL/NVL72)
+//   lsa_team_size  - ncclTeamLsa(comm).nRanks  (1..HYBRIDEP_MAX_LSA_TEAM_SIZE)
 //   rdma_team_size - ncclTeamRail(comm).nRanks
 //   num_local_experts, hidden
 //
-// Use HYBRIDEP_SWITCH_* macros to instantiate templates with runtime values.
-// LSA team size is dispatched in steps of 4 up to 72; each instantiation
-// sizes its own register-file arrays via the LSA_TEAM_SIZE template param.
+// Kernels are JIT-compiled per (lsa_team_size, num_lsa_teams, ...); templates
+// size their register/SMEM arrays exactly to the JIT lsa_team_size, so any
+// value in [1, HYBRIDEP_MAX_LSA_TEAM_SIZE] works.  The only runtime
+// precondition is the S2D cp.async.bulk alignment asserted in dispatch_impl
+// (matters when s2d_inner_dim is not a multiple of 4).
 // ============================================================================
 
 // ============================================================================
@@ -39,6 +41,7 @@ namespace hybridep {
 void convert_topk_to_routing_map(
     const int64_t* topk_idx,
     uint8_t* routing_bitmap,
+    int64_t* cached_topk_idx,  // nullable; when non-null, mirrors topk_idx in the same pass
     int num_tokens,
     int num_topk,
     int num_experts_packed,    // = ceil(num_experts / 8)
@@ -97,17 +100,11 @@ void dense_to_sparse_prob(
     bool expert_major,                    // true = 1D recv_topk_weights, false = 2D
     cudaStream_t stream);
 
-// ============================================================================
-// Kernel: Convert dense prob output to sparse format (for combine output)
-// ============================================================================
-// Used for combine backward pass output. Converts kernel's dense output back to
-// sparse format with GLOBAL expert indices (matching original dispatch input format).
-// Uses local_routing_map (original tokens → global experts) for the conversion.
+// Combine BWD output: sparse k-slot writeback keyed by FWD-input cached_topk_idx.
 void dense_to_sparse_prob_combine(
-    const float* dense_prob,              // [num_tokens, num_experts] - from kernel output
-    const uint8_t* routing_bitmap,        // [num_tokens, ceil(num_experts / 8)] - bitmap routing map
-    float* combined_topk_weights,         // [num_tokens, topk] - output sparse weights
-    int64_t* combined_topk_idx,           // [num_tokens, topk] - output GLOBAL expert indices (optional, can be nullptr)
+    const float* dense_prob,              // [num_tokens, num_experts]
+    const int64_t* cached_topk_idx,       // [num_tokens, topk]
+    float* combined_topk_weights,         // [num_tokens, topk]
     int num_tokens,
     int topk,
     int num_experts,
@@ -115,125 +112,10 @@ void dense_to_sparse_prob_combine(
 
 // ============================================================================
 // Switch macros for compile-time template instantiation
-// Uses constants from configs.cuh where applicable
 // ============================================================================
 
-
-
-// Switch on LSA team size (multiples of 4, up to 32).
-// Instantiates templates with LSA_TEAM_SIZE, sizing register-file arrays exactly.
-// MNNVL configurations (NVL72, LSA_TEAM_SIZE > 32) are not yet supported:
-// the scan kernel in metadata_preprocessing uses warp-reduction and requires
-// LSA_TEAM_SIZE <= 32. Extend this macro (and the scan kernel) when adding MNNVL support.
-//
-// Compile-time filtering: set _NCCL_EP_LSA_TEAM_SIZE_MIN / _NCCL_EP_LSA_TEAM_SIZE_MAX
-// (via make _NCCL_EP_LSA_TEAM_SIZE_MIN=N or cmake -D_NCCL_EP_LSA_TEAM_SIZE_MIN=N) to
-// restrict which instantiations are compiled.  Reduces build time during development.
-// When unset, the full set (4–32, multiples of 4) is compiled.
-
-// Per-size case helpers — expand to the switch case when N is within the configured
-// [MIN, MAX] range, empty otherwise.  #if must live at file scope (not inside a macro
-// body).  MIN/MAX are always defined by the build system (Makefile/?= 4/32, CMake default 4/32).
-#if _NCCL_EP_LSA_TEAM_SIZE_MIN <=  4 && _NCCL_EP_LSA_TEAM_SIZE_MAX >=  4
-#define _NCCL_EP_LSA_CASE_4(...)  case  4: { constexpr int LSA_TEAM_SIZE =  4; __VA_ARGS__; } break;
-#else
-#define _NCCL_EP_LSA_CASE_4(...)
-#endif
-#if _NCCL_EP_LSA_TEAM_SIZE_MIN <=  8 && _NCCL_EP_LSA_TEAM_SIZE_MAX >=  8
-#define _NCCL_EP_LSA_CASE_8(...)  case  8: { constexpr int LSA_TEAM_SIZE =  8; __VA_ARGS__; } break;
-#else
-#define _NCCL_EP_LSA_CASE_8(...)
-#endif
-#if _NCCL_EP_LSA_TEAM_SIZE_MIN <= 12 && _NCCL_EP_LSA_TEAM_SIZE_MAX >= 12
-#define _NCCL_EP_LSA_CASE_12(...) case 12: { constexpr int LSA_TEAM_SIZE = 12; __VA_ARGS__; } break;
-#else
-#define _NCCL_EP_LSA_CASE_12(...)
-#endif
-#if _NCCL_EP_LSA_TEAM_SIZE_MIN <= 16 && _NCCL_EP_LSA_TEAM_SIZE_MAX >= 16
-#define _NCCL_EP_LSA_CASE_16(...) case 16: { constexpr int LSA_TEAM_SIZE = 16; __VA_ARGS__; } break;
-#else
-#define _NCCL_EP_LSA_CASE_16(...)
-#endif
-#if _NCCL_EP_LSA_TEAM_SIZE_MIN <= 20 && _NCCL_EP_LSA_TEAM_SIZE_MAX >= 20
-#define _NCCL_EP_LSA_CASE_20(...) case 20: { constexpr int LSA_TEAM_SIZE = 20; __VA_ARGS__; } break;
-#else
-#define _NCCL_EP_LSA_CASE_20(...)
-#endif
-#if _NCCL_EP_LSA_TEAM_SIZE_MIN <= 24 && _NCCL_EP_LSA_TEAM_SIZE_MAX >= 24
-#define _NCCL_EP_LSA_CASE_24(...) case 24: { constexpr int LSA_TEAM_SIZE = 24; __VA_ARGS__; } break;
-#else
-#define _NCCL_EP_LSA_CASE_24(...)
-#endif
-#if _NCCL_EP_LSA_TEAM_SIZE_MIN <= 28 && _NCCL_EP_LSA_TEAM_SIZE_MAX >= 28
-#define _NCCL_EP_LSA_CASE_28(...) case 28: { constexpr int LSA_TEAM_SIZE = 28; __VA_ARGS__; } break;
-#else
-#define _NCCL_EP_LSA_CASE_28(...)
-#endif
-#if _NCCL_EP_LSA_TEAM_SIZE_MIN <= 32 && _NCCL_EP_LSA_TEAM_SIZE_MAX >= 32
-#define _NCCL_EP_LSA_CASE_32(...) case 32: { constexpr int LSA_TEAM_SIZE = 32; __VA_ARGS__; } break;
-#else
-#define _NCCL_EP_LSA_CASE_32(...)
-#endif
-
-#define HYBRIDEP_SWITCH_LSA_TEAM_SIZE(lsa_val, ...) \
-    do { switch (lsa_val) { \
-        _NCCL_EP_LSA_CASE_4(__VA_ARGS__) \
-        _NCCL_EP_LSA_CASE_8(__VA_ARGS__) \
-        _NCCL_EP_LSA_CASE_12(__VA_ARGS__) \
-        _NCCL_EP_LSA_CASE_16(__VA_ARGS__) \
-        _NCCL_EP_LSA_CASE_20(__VA_ARGS__) \
-        _NCCL_EP_LSA_CASE_24(__VA_ARGS__) \
-        _NCCL_EP_LSA_CASE_28(__VA_ARGS__) \
-        _NCCL_EP_LSA_CASE_32(__VA_ARGS__) \
-        default: assert(false && "Unsupported LSA team size (must be multiple of 4, " \
-                        "in [_NCCL_EP_LSA_TEAM_SIZE_MIN, _NCCL_EP_LSA_TEAM_SIZE_MAX])"); \
-    } } while(0)
-
-// Switch on number of LSA domains (RDMA peers = nRanks / lsa_team_size).
-// Each LSA domain is one NVLink/MNNVL clique; domains communicate via RDMA.
-//
-// Compile-time filtering: define _NCCL_EP_NUM_LSA_TEAMS_N=1 for each N to include.
-// Set via make (e.g. _NCCL_EP_NUM_LSA_TEAMS_LIST="1 2") or cmake.
-// Undefined flags default to 0 (excluded).  Full set when unset: 1 2 3 4 8.
-#if defined(_NCCL_EP_NUM_LSA_TEAMS_1) && _NCCL_EP_NUM_LSA_TEAMS_1
-#define _NCCL_EP_NLT_CASE_1(...) case 1: { constexpr int NUM_LSA_TEAMS = 1; __VA_ARGS__; } break;
-#else
-#define _NCCL_EP_NLT_CASE_1(...)
-#endif
-#if defined(_NCCL_EP_NUM_LSA_TEAMS_2) && _NCCL_EP_NUM_LSA_TEAMS_2
-#define _NCCL_EP_NLT_CASE_2(...) case 2: { constexpr int NUM_LSA_TEAMS = 2; __VA_ARGS__; } break;
-#else
-#define _NCCL_EP_NLT_CASE_2(...)
-#endif
-#if defined(_NCCL_EP_NUM_LSA_TEAMS_3) && _NCCL_EP_NUM_LSA_TEAMS_3
-#define _NCCL_EP_NLT_CASE_3(...) case 3: { constexpr int NUM_LSA_TEAMS = 3; __VA_ARGS__; } break;
-#else
-#define _NCCL_EP_NLT_CASE_3(...)
-#endif
-#if defined(_NCCL_EP_NUM_LSA_TEAMS_4) && _NCCL_EP_NUM_LSA_TEAMS_4
-#define _NCCL_EP_NLT_CASE_4(...) case 4: { constexpr int NUM_LSA_TEAMS = 4; __VA_ARGS__; } break;
-#else
-#define _NCCL_EP_NLT_CASE_4(...)
-#endif
-#if defined(_NCCL_EP_NUM_LSA_TEAMS_8) && _NCCL_EP_NUM_LSA_TEAMS_8
-#define _NCCL_EP_NLT_CASE_8(...) case 8: { constexpr int NUM_LSA_TEAMS = 8; __VA_ARGS__; } break;
-#else
-#define _NCCL_EP_NLT_CASE_8(...)
-#endif
-
-#define HYBRIDEP_SWITCH_NUM_LSA_TEAMS(num_lsa_domains_val, ...) \
-    do { switch (num_lsa_domains_val) { \
-        _NCCL_EP_NLT_CASE_1(__VA_ARGS__) \
-        _NCCL_EP_NLT_CASE_2(__VA_ARGS__) \
-        _NCCL_EP_NLT_CASE_3(__VA_ARGS__) \
-        _NCCL_EP_NLT_CASE_4(__VA_ARGS__) \
-        _NCCL_EP_NLT_CASE_8(__VA_ARGS__) \
-        default: assert(false && "Unsupported LSA domain count (must be in " \
-                        "_NCCL_EP_NUM_LSA_TEAMS_LIST, default 1 2 3 4 8)"); \
-    } } while(0)
-
-// Switch on token data type (BF16 = uint16_t, FP8 = uint8_t)
-// use_fp8: false = BF16 (uint16_t), true = FP8 (uint8_t)
+// Switch on token data type (BF16 = uint16_t, FP8 = uint8_t).
+// LSA team size and node count are now runtime parameters (no compile-time switching).
 #define HYBRIDEP_SWITCH_DATATYPE(use_fp8, ...) \
     do { \
         if (use_fp8) { \
@@ -257,7 +139,7 @@ void call_metadata_preprocessing(
     int32_t* sparse_to_dense_map,       // Output: unified S2D — flat stores token->rank->slot; expert-major stores packed (rank, slot) entries
     bool* rdma_to_attn_map,             // Output: which tokens come from RDMA
     bool* attn_to_rdma_map,             // Output: which tokens go to RDMA
-    void* token_rank_mask,              // Scratch: RankMask<LSA_TEAM_SIZE> elements, sized by get_rank_mask_elem_size()
+    void* token_rank_mask,              // Scratch rank masks, sized by get_rank_mask_elem_size().
     int32_t* num_tokens_for_experts,    // Output: total tokens for local experts
     bool* local_expert_routing_map,     // Output: per-expert routing for local tokens
     int32_t* per_expert_token_counts,   // Optional output: per-expert counts (nullptr to skip)
@@ -265,27 +147,28 @@ void call_metadata_preprocessing(
     int node_rank,                      // This node's rank (0 to num_nodes-1)
     int local_rank,                     // Rank within node (0 to num_ranks_per_node-1)
     int num_tokens_per_rank,            // Actual tokens per rank this iteration (runtime)
-    int hidden_dim,                     // Model hidden dimension
     int num_nodes,                      // Number of nodes (RDMA domain size)
-    int num_ranks_per_node,             // Ranks per node (NVLink domain size, 1-8)
+    int num_ranks_per_node,             // Ranks per node (NVLink domain size)
     int experts_per_rank,               // Experts per GPU
+    bool     expert_major           = false,   // true = expert-major layout (gates fused remap)
     int64_t* internal_offsets       = nullptr, // Expert-major: per-expert zone offsets consumed by dispatch
     void*    padded_out_counts      = nullptr, // Expert-major: per-expert padded counts (caller tensor, nullable; int32 or int64)
     void*    out_offsets            = nullptr, // Expert-major: per-expert offsets (caller tensor, nullable; int32 or int64)
-    size_t   alignment              = 0,       // 0 = flat (no remap); >0 = expert-major zone alignment
+    size_t   alignment              = 0,       // Per-expert zone alignment in tokens (pow2; 0/1 = no padding). Ignored when expert_major=false.
     int32_t* actual_counts_out      = nullptr, // Expert-major: authoritative per-expert dispatch counts
     int      s2d_inner_dim          = 0,       // 0 = flat (n_ranks_per_node); >0 = expert-major (top_k)
     void*    recv_total_counter     = nullptr, // Optional scalar: total recv tokens (int32 or int64; nullable)
     bool     out_is_int64           = true,    // Shared dtype for the 3 int output tensors above
-    int      max_recv_token_slots_per_rank = 0, // HT recv-budget; __trap on overflow.
+    int      max_recv_tokens_per_rank = 0, // HT recv-budget; __trap on overflow.
+    int      num_blocks             = 16,      // Number of SMs for the kernel grid
     cudaStream_t stream             = 0);
 
 // Returns required size in bytes for the scan temp buffer used by call_metadata_preprocessing.
 // Caller must allocate at least this many bytes and pass the pointer to call_metadata_preprocessing.
 size_t get_preprocessing_scan_tmp_size(int num_ranks_per_node);
 
-// Returns sizeof(RankMask<LSA_TEAM_SIZE>) for the given lsa_team_size, computed via compile-time
-// sizeof inside the switch so it stays in sync with the type trait automatically.
+// Returns sizeof(rank_mask_t<ceil(lsa_team_size/64)>) for the given lsa_team_size.
+// Formula: ceil(lsa_team_size / 64) * sizeof(uint64_t).
 size_t get_rank_mask_elem_size(int lsa_team_size);
 
 // ============================================================================
@@ -327,7 +210,7 @@ struct DispatchParams {
     // User inputs
     int hidden_dim;             // Model hidden dimension
     int experts_per_rank;       // Experts per GPU
-    int num_ranks_per_node;     // Ranks per node (NVLink domain size, 1-8)
+    int num_ranks_per_node;     // Ranks per node (NVLink domain size)
     const void* attn_input_token;
     const float* attn_input_prob;            // Forward dispatch only
     const float* attn_input_scaling_factor;  // FP8 only
@@ -350,9 +233,10 @@ struct DispatchParams {
     const int64_t* pad_expert_token_offsets;
     int            pad_alignment;
 
-    // Sync state (group-level monotonic counters, computed on host)
-    uint64_t expected_rdma_flag_value;
-    uint32_t expected_intra_node_flag_value;
+    // Device pointers to the expected counters; initialized at bootstrap and
+    // bumped by the dispatch kernel tail so CUDA-graph replays self-sequence.
+    uint64_t* expected_rdma_flag_value;
+    uint32_t* expected_intra_node_flag_value;
     uint64_t* rdma_inter_node_group_flags;
     uint32_t* intra_node_write_completion_flags;
     // Grid barrier counter for fused device_sync in dispatch tail
@@ -379,10 +263,11 @@ struct DispatchParams {
 // Call dispatch kernel with runtime template parameter resolution
 void call_dispatch(
     const DispatchParams& params,
-    int max_send_tokens_per_rank,    // Max tokens for buffer sizing
+    int max_dispatch_tokens_per_rank,    // Max tokens for buffer sizing
     int num_nodes,              // Number of nodes (RDMA domain size)
     bool use_fp8,               // false = BF16 (uint16_t), true = FP8 (uint8_t)
     bool forward_dispatch,      // True for forward, false for backward
+    int num_blocks,             // Number of SMs/blocks for the kernel grid
     cudaStream_t stream);
 
 // ============================================================================
@@ -396,7 +281,7 @@ struct CombineParams {
     // These pointers are copied into the kernel param struct for fast __grid_constant__ access.
     int hidden_dim;             // Model hidden dimension
     int experts_per_rank;       // Experts per GPU
-    int num_ranks_per_node;     // Ranks per node (NVLink domain size, 1-8)
+    int num_ranks_per_node;     // Ranks per node (NVLink domain size)
     uint16_t* const* expert_input_token_ptrs;    // HOST array[num_ranks_per_node], BF16 only
     float* const* expert_input_prob_ptrs;        // HOST array, backward only
 
@@ -418,11 +303,14 @@ struct CombineParams {
     const bool* attn_to_rdma_map;                      // For multi-node RDMA routing
     const bool* local_expert_routing_map;              // For backward gradient routing
 
-    // Sync state (group-level monotonic counters, computed on host)
-    uint64_t combine_expected_rdma_flag_value;
-    uint32_t combine_expected_intra_node_flag_value;
+    // Device pointers to the expected counters; initialized at bootstrap and
+    // bumped by the combine kernel tail so CUDA-graph replays self-sequence.
+    uint64_t* combine_expected_rdma_flag_value;
+    uint32_t* combine_expected_intra_node_flag_value;
     uint64_t* combine_rdma_inter_node_group_flags;
     uint32_t* combine_intra_node_write_completion_flags;
+    // Per-rank grid-barrier counter that elects the last block at the combine tail.
+    uint32_t* combine_grid_barrier_counter;
 
     // GIN context (multi-node only)
     ncclDevComm_t* dcomms;              // Device communicators array
@@ -439,7 +327,8 @@ struct CombineParams {
     // Runtime config
     int local_rank;
     int node_rank;
-    int num_tokens_per_rank;    // Original token count from dispatch
+    int num_tokens_per_rank;    // Stride for map indexing (= max_tokens_per_rank)
+    int num_real_tokens;        // Actual token count for output write gate
     int num_recv_tokens;        // Actual received tokens this rank
 };
 
@@ -447,9 +336,10 @@ struct CombineParams {
 // Note: HT combine doesn't support FP8, only BF16
 void call_combine(
     const CombineParams& params,
-    int max_send_tokens_per_rank,    // Max tokens for buffer sizing
+    int max_dispatch_tokens_per_rank,    // Max tokens for buffer sizing
     int num_nodes,              // Number of nodes (RDMA domain size)
     bool backward_combine,      // True for backward (training), false for forward
+    int num_blocks,             // Number of SMs/blocks for the kernel grid
     cudaStream_t stream);
 
 

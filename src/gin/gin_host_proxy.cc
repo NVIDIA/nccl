@@ -646,8 +646,8 @@ static ncclResult_t ncclGinProxyProgress(void *ginCtx) {
         NCCLCHECK(ret);
       }
     }
-    if (rmaBackend->rmaProgress) rmaBackend->rmaProgress(ctx->rmaCtx);
   }
+  if (rmaBackend->rmaProgress) rmaBackend->rmaProgress(ctx->rmaCtx);
 
   return ncclSuccess;
 }

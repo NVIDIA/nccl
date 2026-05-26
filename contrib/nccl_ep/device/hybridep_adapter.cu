@@ -15,6 +15,13 @@
 #include "hybrid_ep.cuh"
 #include "include/common.hpp"
 #include "jit/combine_jit.cuh"
+#include "jit/dispatch_jit.cuh"
+#include "jit/preprocess_jit.cuh"
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <vector>
 
 namespace nccl_ep {
 namespace hybridep {
@@ -25,6 +32,7 @@ namespace hybridep {
 __global__ void convert_topk_to_routing_map_kernel(
     const int64_t* __restrict__ topk_idx,    // [num_tokens, num_topk]
     uint8_t* __restrict__ routing_bitmap,     // [num_tokens, num_experts_packed]
+    int64_t* __restrict__ cached_topk_idx,    // [num_tokens, num_topk]; nullable
     int num_tokens,
     int num_topk,
     int num_experts_packed                    // = ceil(num_experts / 8)
@@ -32,11 +40,15 @@ __global__ void convert_topk_to_routing_map_kernel(
     int token = blockIdx.x * blockDim.x + threadIdx.x;
     if (token >= num_tokens) return;
 
-    // Buffer is pre-zeroed by per-iteration memset; just OR in set bits.
     // Each thread exclusively owns its row -- no atomics needed.
+    // Zero the row before OR-ing in bits; the caller does not pre-zero.
     uint8_t* row = routing_bitmap + token * num_experts_packed;
+    for (int b = 0; b < num_experts_packed; b++) row[b] = 0;
+    const int64_t* in_row  = topk_idx + token * num_topk;
+    int64_t*       out_row = cached_topk_idx ? cached_topk_idx + token * num_topk : nullptr;
     for (int k = 0; k < num_topk; k++) {
-        int expert = static_cast<int>(topk_idx[token * num_topk + k]);
+        int64_t expert = in_row[k];
+        if (out_row) out_row[k] = expert;
         if (expert >= 0) {
             row[expert / 8] |= (1u << (expert % 8));
         }
@@ -49,6 +61,7 @@ __global__ void convert_topk_to_routing_map_kernel(
 void convert_topk_to_routing_map(
     const int64_t* topk_idx,
     uint8_t* routing_bitmap,
+    int64_t* cached_topk_idx,
     int num_tokens,
     int num_topk,
     int num_experts_packed,
@@ -58,7 +71,7 @@ void convert_topk_to_routing_map(
     int grid_size = (num_tokens + block_size - 1) / block_size;
 
     convert_topk_to_routing_map_kernel<<<grid_size, block_size, 0, stream>>>(
-        topk_idx, routing_bitmap, num_tokens, num_topk, num_experts_packed);
+        topk_idx, routing_bitmap, cached_topk_idx, num_tokens, num_topk, num_experts_packed);
 }
 
 // ============================================================================
@@ -234,17 +247,11 @@ __global__ void dense_to_sparse_prob_kernel(
     }
 }
 
-// ============================================================================
-// Kernel: Convert dense prob output to sparse format for combine output
-// ============================================================================
-// Used for combine backward pass. Converts kernel's dense output to sparse format
-// with GLOBAL expert indices (matching original dispatch input format).
-// Each thread handles one token.
+// O(top_k) lookup from cached_topk_idx; k-slot order preserves FWD input.
 __global__ void dense_to_sparse_prob_combine_kernel(
     const float* __restrict__ dense_prob,         // [num_tokens, num_experts]
-    const uint8_t* __restrict__ routing_bitmap,   // [num_tokens, ceil(num_experts / 8)]
+    const int64_t* __restrict__ cached_topk_idx,  // [num_tokens, topk]
     float* __restrict__ combined_topk_weights,    // [num_tokens, topk]
-    int64_t* __restrict__ combined_topk_idx,      // [num_tokens, topk] (optional, can be nullptr)
     int num_tokens,
     int topk,
     int num_experts
@@ -252,40 +259,19 @@ __global__ void dense_to_sparse_prob_combine_kernel(
     int token = blockIdx.x * blockDim.x + threadIdx.x;
     if (token >= num_tokens) return;
 
-    int packed_cols = (num_experts + 7) / 8;
-    int k_out = 0;
-
-    // Scan all experts in order (matches original dispatch input order)
-    for (int e = 0; e < num_experts && k_out < topk; e++) {
-        if ((routing_bitmap[token * packed_cols + e / 8] >> (e % 8)) & 1) {
-            // This expert is active for this token
-            float weight = dense_prob[token * num_experts + e];
-
-            combined_topk_weights[token * topk + k_out] = weight;
-            if (combined_topk_idx != nullptr) {
-                combined_topk_idx[token * topk + k_out] = static_cast<int64_t>(e);  // GLOBAL expert ID
-            }
-            k_out++;
-        }
-    }
-
-    // Zero-fill remaining topk slots
-    for (; k_out < topk; k_out++) {
-        combined_topk_weights[token * topk + k_out] = 0.0f;
-        if (combined_topk_idx != nullptr) {
-            combined_topk_idx[token * topk + k_out] = -1;
-        }
+    for (int k = 0; k < topk; k++) {
+        int64_t e = cached_topk_idx[token * topk + k];
+        float weight = (e >= 0 && e < num_experts)
+            ? dense_prob[token * num_experts + e]
+            : 0.0f;
+        combined_topk_weights[token * topk + k] = weight;
     }
 }
 
-// ============================================================================
-// Convert dense prob output to sparse format for combine output
-// ============================================================================
 void dense_to_sparse_prob_combine(
     const float* dense_prob,
-    const uint8_t* routing_bitmap,
+    const int64_t* cached_topk_idx,
     float* combined_topk_weights,
-    int64_t* combined_topk_idx,
     int num_tokens,
     int topk,
     int num_experts,
@@ -295,7 +281,7 @@ void dense_to_sparse_prob_combine(
     int grid_size = (num_tokens + block_size - 1) / block_size;
 
     dense_to_sparse_prob_combine_kernel<<<grid_size, block_size, 0, stream>>>(
-        dense_prob, routing_bitmap, combined_topk_weights, combined_topk_idx,
+        dense_prob, cached_topk_idx, combined_topk_weights,
         num_tokens, topk, num_experts);
 }
 
@@ -341,10 +327,10 @@ void call_metadata_preprocessing(
     int node_rank,
     int local_rank,
     int num_tokens_per_rank,
-    int hidden_dim,
     int num_nodes,
     int num_ranks_per_node,
     int experts_per_rank,
+    bool     expert_major,
     int64_t* internal_offsets,
     void*    padded_out_counts,
     void*    out_offsets,
@@ -353,10 +339,11 @@ void call_metadata_preprocessing(
     int s2d_inner_dim,
     void*    recv_total_counter,
     bool     out_is_int64,
-    int      max_recv_token_slots_per_rank,
+    int      max_recv_tokens_per_rank,
+    int      num_blocks,
     cudaStream_t stream
 ) {
-    if (alignment > 0 && per_expert_token_counts == nullptr) {
+    if (expert_major && per_expert_token_counts == nullptr) {
         EP_HOST_ASSERT(false && "EXPERT_MAJOR remap requires per_expert_token_counts != nullptr");
     }
 
@@ -364,43 +351,53 @@ void call_metadata_preprocessing(
         CUDA_CHECK(cudaMemsetAsync(per_expert_token_counts, 0, experts_per_rank * sizeof(int32_t), stream));
     }
 
-    // MNNVL configurations (> 32 GPUs per LSA domain) are not yet supported: the scan
-    // kernel uses warp-reduction (LSA_TEAM_SIZE <= 32) and HYBRIDEP_SWITCH_LSA_TEAM_SIZE
-    // is only instantiated up to 32. Extend both when adding MNNVL support.
-    EP_HOST_ASSERT(num_ranks_per_node <= 32 && "metadata_preprocessing: LSA team size > 32 not yet supported (MNNVL)");
+    constexpr int NUM_THREADS_PER_BLOCK = HYBRIDEP_NUM_THREADS_PER_BLOCK_PREPROCESSING;
+    const int NUM_OF_BLOCKS = num_blocks;
+    constexpr int NUM_OF_WARPS_PER_BLOCK_SCAN = NUM_THREADS_PER_BLOCK / 32;
 
-    HYBRIDEP_SWITCH_NUM_LSA_TEAMS(num_nodes, {
-        HYBRIDEP_SWITCH_LSA_TEAM_SIZE(num_ranks_per_node, {
-            using HybridEPType = ::hybrid_ep::hybrid_ep<MAX_SUPPORTED_TOKENS_PER_RANK, NUM_LSA_TEAMS, LSA_TEAM_SIZE>;
-            HybridEPType::template metadata_preprocessing<
-                HYBRIDEP_NUM_THREADS_PER_BLOCK_PREPROCESSING, HYBRIDEP_NUM_BLOCKS_PREPROCESSING>(
-                global_routing_map,
-                reinterpret_cast<::hybrid_ep::tmp_state_t*>(scan_tmp),
-                sparse_to_dense_map,
-                rdma_to_attn_map,
-                attn_to_rdma_map,
-                reinterpret_cast<::hybrid_ep::RankMask<LSA_TEAM_SIZE>*>(token_rank_mask),
-                num_tokens_for_experts,
-                local_expert_routing_map,
-                per_expert_token_counts,
-                node_rank,
-                local_rank,
-                num_tokens_per_rank,
-                num_ranks_per_node,
-                experts_per_rank,
-                internal_offsets,
-                padded_out_counts,
-                out_offsets,
-                alignment,
-                actual_counts_out,
-                s2d_inner_dim,
-                recv_total_counter,
-                out_is_int64,
-                max_recv_token_slots_per_rank,
-                stream
-            );
-        });
-    });
+    const size_t preprocessing_tmp_sz = NUM_OF_BLOCKS * num_ranks_per_node * sizeof(::hybrid_ep::tmp_state_t);
+    CUDA_CHECK(cudaMemsetAsync(scan_tmp, 0, preprocessing_tmp_sz, stream));
+
+    const size_t scan_smem_size =
+        (2 * NUM_OF_WARPS_PER_BLOCK_SCAN * num_ranks_per_node * sizeof(int32_t)) +
+        (num_ranks_per_node * sizeof(int32_t)) +
+        (per_expert_token_counts != nullptr ? experts_per_rank * sizeof(int32_t) : 0);
+    const size_t remap_smem_size = expert_major
+        ? (static_cast<size_t>(experts_per_rank) * sizeof(int64_t) +
+           static_cast<size_t>(NUM_OF_WARPS_PER_BLOCK_SCAN) * experts_per_rank * sizeof(int32_t))
+        : 0;
+    const int dynamic_smem_bytes = static_cast<int>(
+        scan_smem_size > remap_smem_size ? scan_smem_size : remap_smem_size);
+
+    ::hybrid_ep::scan_kernel_param_t sp;
+    sp.input_routing_map = global_routing_map;
+    sp.tmp = reinterpret_cast<::hybrid_ep::tmp_state_t*>(scan_tmp);
+    sp.sparse_to_dense_map = sparse_to_dense_map;
+    sp.rdma_to_attn_map = rdma_to_attn_map;
+    sp.attn_to_rdma_map = attn_to_rdma_map;
+    sp.token_rank_mask = token_rank_mask;
+    sp.num_of_tokens_for_experts = num_tokens_for_experts;
+    sp.local_expert_routing_map = local_expert_routing_map;
+    sp.per_expert_token_counts = per_expert_token_counts;
+    sp.node_rank = node_rank;
+    sp.local_rank = local_rank;
+    sp.num_of_tokens_per_rank = num_tokens_per_rank;
+    sp.num_of_ranks_per_node = num_ranks_per_node;
+    sp.experts_per_rank = experts_per_rank;
+    sp.expert_major = expert_major;
+    sp.remap_alignment = alignment;
+    sp.remap_internal_offsets = internal_offsets;
+    sp.remap_padded_out_counts = padded_out_counts;
+    sp.remap_out_offsets = out_offsets;
+    sp.remap_actual_counts_out = actual_counts_out;
+    sp.s2d_inner_dim = s2d_inner_dim;
+    sp.recv_total_counter = recv_total_counter;
+    sp.out_is_int64 = out_is_int64;
+    sp.max_recv_tokens_per_rank = max_recv_tokens_per_rank;
+
+    jit::launch_scan(
+        NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, num_nodes, num_ranks_per_node,
+        per_expert_token_counts != nullptr, sp, dynamic_smem_bytes, stream);
 }
 
 size_t get_preprocessing_scan_tmp_size(int num_ranks_per_node) {
@@ -408,22 +405,43 @@ size_t get_preprocessing_scan_tmp_size(int num_ranks_per_node) {
 }
 
 size_t get_rank_mask_elem_size(int lsa_team_size) {
-    size_t result = 0;
-    HYBRIDEP_SWITCH_LSA_TEAM_SIZE(lsa_team_size, {
-        result = sizeof(::hybrid_ep::RankMask<LSA_TEAM_SIZE>);
-    });
-    return result;
+    return ((lsa_team_size + 63) / 64) * sizeof(uint64_t);
+}
+
+int get_device_max_dynamic_smem() {
+    int device = 0;
+    int max_smem = 0;
+    CUDA_CHECK(cudaGetDevice(&device));
+    CUDA_CHECK(cudaDeviceGetAttribute(&max_smem, cudaDevAttrMaxSharedMemoryPerBlockOptin, device));
+    return max_smem;
+}
+
+void check_dispatch_smem_limit(
+    const ::hybrid_ep::dispatch_config_t& config,
+    size_t smem_size) {
+    const int max_smem = get_device_max_dynamic_smem();
+    if (smem_size <= static_cast<size_t>(max_smem)) return;
+
+    std::fprintf(
+        stderr,
+        "[nccl_ep] dispatch dynamic shared memory exceeds device limit: requested=%zu bytes, "
+        "limit=%d bytes. Tune dispatch stages/pipelines; current stages=%d, pipelines=%d.\n",
+        smem_size,
+        max_smem,
+        config.num_of_stages,
+        config.num_pipelines);
+    std::abort();
 }
 
 // ============================================================================
 // Dispatch wrapper implementation
 // ============================================================================
 
-// Helper to populate dispatch_kernel_param_t from DispatchParams
-template<typename TOKEN_DATA_TYPE, int LSA_TEAM_SIZE>
-::hybrid_ep::dispatch_kernel_param_t<TOKEN_DATA_TYPE, LSA_TEAM_SIZE>
-build_dispatch_param(const DispatchParams& params) {
-    ::hybrid_ep::dispatch_kernel_param_t<TOKEN_DATA_TYPE, LSA_TEAM_SIZE> kp{};
+// Helper to populate the fixed-size dispatch parameter fields from DispatchParams.
+template<typename TOKEN_DATA_TYPE>
+::hybrid_ep::dispatch_kernel_param_base_t<TOKEN_DATA_TYPE>
+build_dispatch_param_base(const DispatchParams& params) {
+    ::hybrid_ep::dispatch_kernel_param_base_t<TOKEN_DATA_TYPE> kp{};
     // Model configuration
     kp.hidden_dim = params.hidden_dim;
     kp.experts_per_rank = params.experts_per_rank;
@@ -432,17 +450,6 @@ build_dispatch_param(const DispatchParams& params) {
     kp.attn_input_token = reinterpret_cast<const TOKEN_DATA_TYPE*>(params.attn_input_token);
     kp.attn_input_prob = params.attn_input_prob;
     kp.attn_input_token_scaling_factor = params.attn_input_scaling_factor;
-
-    // Copy IPC buffer pointers from HOST arrays into embedded param struct arrays.
-    // This allows fast __grid_constant__ access in the kernel (vs slow global memory indirection).
-    for (int i = 0; i < params.num_ranks_per_node; i++) {
-        kp.expert_output_token[i] =
-            reinterpret_cast<TOKEN_DATA_TYPE*>(params.expert_output_token_ptrs[i]);
-        kp.expert_output_prob[i] = params.expert_output_prob_ptrs ?
-            params.expert_output_prob_ptrs[i] : nullptr;
-        kp.expert_output_scaling_factor[i] = params.expert_output_scaling_factor_ptrs ?
-            params.expert_output_scaling_factor_ptrs[i] : nullptr;
-    }
 
     // Metadata and sync flags
     kp.rdma_to_attn_map = params.rdma_to_attn_map;
@@ -491,73 +498,135 @@ build_dispatch_param(const DispatchParams& params) {
     return kp;
 }
 
+template<typename TOKEN_DATA_TYPE>
+std::vector<uint8_t> build_dispatch_arg_buffer(
+    const ::hybrid_ep::dispatch_kernel_param_base_t<TOKEN_DATA_TYPE>& kp,
+    const DispatchParams& params) {
+    using ParamBase = ::hybrid_ep::dispatch_kernel_param_base_t<TOKEN_DATA_TYPE>;
+    static_assert(sizeof(ParamBase) % alignof(void*) == 0);
+
+    const size_t base_size = sizeof(ParamBase);
+    const size_t token_offset = base_size;
+    const size_t prob_offset = token_offset + params.num_ranks_per_node * sizeof(TOKEN_DATA_TYPE*);
+    const size_t sf_offset = prob_offset + params.num_ranks_per_node * sizeof(float*);
+    const size_t total_size = sf_offset + params.num_ranks_per_node * sizeof(float*);
+
+    std::vector<uint8_t> arg(total_size);
+    std::memcpy(arg.data(), &kp, sizeof(kp));
+
+    auto* token_ptrs = reinterpret_cast<TOKEN_DATA_TYPE**>(arg.data() + token_offset);
+    auto* prob_ptrs = reinterpret_cast<float**>(arg.data() + prob_offset);
+    auto* sf_ptrs = reinterpret_cast<float**>(arg.data() + sf_offset);
+    for (int i = 0; i < params.num_ranks_per_node; i++) {
+        token_ptrs[i] = reinterpret_cast<TOKEN_DATA_TYPE*>(params.expert_output_token_ptrs[i]);
+        prob_ptrs[i] = params.expert_output_prob_ptrs ? params.expert_output_prob_ptrs[i] : nullptr;
+        sf_ptrs[i] = params.expert_output_scaling_factor_ptrs ?
+            params.expert_output_scaling_factor_ptrs[i] : nullptr;
+    }
+
+    return arg;
+}
+
 // Template dispatch launcher for forward/backward and sync modes
 template<bool FORWARD_DISPATCH>
 void dispatch_impl(
     const DispatchParams& params,
-    int max_send_tokens_per_rank,
+    int max_dispatch_tokens_per_rank,
     int num_nodes,
     bool use_fp8,
+    int num_blocks,
     cudaStream_t stream
 ) {
     HYBRIDEP_SWITCH_DATATYPE(use_fp8, {
-        HYBRIDEP_SWITCH_NUM_LSA_TEAMS(num_nodes, {
-            HYBRIDEP_SWITCH_LSA_TEAM_SIZE(params.num_ranks_per_node, {
-                // TMA requires prob buffer (experts_per_node * sizeof(float)) to be 16B aligned
-                // Check alignment at runtime now that experts_per_rank is dynamic
-                const int experts_per_node = params.experts_per_rank * params.num_ranks_per_node;
-                assert((experts_per_node * sizeof(float)) % 16 == 0 &&
-                       "experts_per_node must be multiple of 4 for TMA alignment");
+        // TMA requires prob buffer (experts_per_node * sizeof(float)) to be 16B aligned
+        // Check alignment at runtime now that experts_per_rank is dynamic
+        const int experts_per_node = params.experts_per_rank * params.num_ranks_per_node;
+        assert((experts_per_node * sizeof(float)) % 16 == 0 &&
+               "experts_per_node must be multiple of 4 for TMA alignment");
+        // 16B cp.async.bulk alignment for the S2D map fetch; matters when s2d_inner_dim < 4.
+        assert((static_cast<int64_t>(params.num_tokens_per_rank) * params.s2d_inner_dim) % 4 == 0 &&
+               "Dispatch S2D cp.async.bulk: num_tokens_per_rank * s2d_inner_dim must be a "
+               "multiple of 4 (flat layout with lsa_team_size <= 3 requires even num_tokens_per_rank)");
 
-                using HybridEPType = ::hybrid_ep::hybrid_ep<
-                    MAX_SUPPORTED_TOKENS_PER_RANK,
-                    NUM_LSA_TEAMS,
-                    LSA_TEAM_SIZE>;
+        auto kp = build_dispatch_param_base<TOKEN_DATA_TYPE>(params);
+        constexpr bool kUseFp8 = std::is_same_v<TOKEN_DATA_TYPE, uint8_t>;
 
-                auto kp = build_dispatch_param<TOKEN_DATA_TYPE, LSA_TEAM_SIZE>(params);
+        // Compute dynamic SMEM size at host (was done inside hybrid_ep::dispatch).
+        ::hybrid_ep::dispatch_config_t d_config;
+        ::hybrid_ep::model_config_t   d_model;
+        d_config.num_of_stages           = HYBRIDEP_DISPATCH_NUM_OF_STAGES;
+        d_config.num_of_in_flight_s2g    = HYBRIDEP_DISPATCH_NUM_OF_IN_FLIGHT_S2G;
+        d_config.num_of_tokens_per_chunk = HT_OF_NUM_TOKENS_PER_CHUNK;
+        d_config.num_of_blocks           = num_blocks;
+        d_config.forward_dispatch        = FORWARD_DISPATCH;
+        d_config.token_data_type         = std::is_same_v<TOKEN_DATA_TYPE, uint16_t> ? 1 : 0;
+        d_config.num_pipelines           = HYBRIDEP_DISPATCH_NUM_OF_PIPELINES_PER_BLOCK;
+        d_config.stages_per_pipeline     = HYBRIDEP_DISPATCH_NUM_OF_STAGES / HYBRIDEP_DISPATCH_NUM_OF_PIPELINES_PER_BLOCK;
+        d_config.s2d_inner_dim           = kp.s2d_inner_dim;
+        d_model.hidden_dim               = kp.hidden_dim;
+        d_model.max_num_of_tokens_per_rank = MAX_SUPPORTED_TOKENS_PER_RANK;
+        d_model.num_of_experts_per_rank  = kp.experts_per_rank;
+        d_model.num_of_ranks_per_node    = kp.num_of_ranks_per_node;
+        d_model.num_of_nodes             = num_nodes;
 
-                if (params.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR) {
-                    HybridEPType::template dispatch<
-                        TOKEN_DATA_TYPE,
-                        HYBRIDEP_DISPATCH_NUM_OF_STAGES,
-                        HYBRIDEP_DISPATCH_NUM_OF_IN_FLIGHT_S2G,
-                        HT_OF_NUM_TOKENS_PER_CHUNK,
-                        HYBRIDEP_DISPATCH_NUM_OF_BLOCKS,
-                        FORWARD_DISPATCH,
-                        NCCL_EP_LAYOUT_EXPERT_MAJOR>(kp, stream);
-                } else {
-                    HybridEPType::template dispatch<
-                        TOKEN_DATA_TYPE,
-                        HYBRIDEP_DISPATCH_NUM_OF_STAGES,
-                        HYBRIDEP_DISPATCH_NUM_OF_IN_FLIGHT_S2G,
-                        HT_OF_NUM_TOKENS_PER_CHUNK,
-                        HYBRIDEP_DISPATCH_NUM_OF_BLOCKS,
-                        FORWARD_DISPATCH,
-                        NCCL_EP_LAYOUT_FLAT>(kp, stream);
-                }
-            });
-        });
+        const int smem_size = (params.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR)
+            ? ::hybrid_ep::calculate_dispatch_smem_layout_size<NCCL_EP_LAYOUT_EXPERT_MAJOR>(d_config, d_model)
+            : ::hybrid_ep::calculate_dispatch_smem_layout_size<NCCL_EP_LAYOUT_FLAT>(d_config, d_model);
+        check_dispatch_smem_limit(d_config, smem_size);
+
+#ifdef HYBRIDEP_ENABLE_WARP_TIMING
+        const jit::dispatch_warp_layout_t dispatch_layout =
+            jit::compute_dispatch_warp_layout(num_nodes, params.layout);
+        const int dispatch_wt_total = num_blocks * (dispatch_layout.block_dim / 32);
+        ::hybrid_ep::dispatch_warp_timing_entry_t* d_wt = nullptr;
+        CUDA_CHECK(cudaMalloc(&d_wt, dispatch_wt_total * sizeof(::hybrid_ep::dispatch_warp_timing_entry_t)));
+        CUDA_CHECK(cudaMemsetAsync(d_wt, 0, dispatch_wt_total * sizeof(::hybrid_ep::dispatch_warp_timing_entry_t), stream));
+        kp.warp_timing = d_wt;
+#endif
+
+        std::vector<uint8_t> kernel_arg = build_dispatch_arg_buffer(kp, params);
+        jit::launch_dispatch(
+            HYBRIDEP_DISPATCH_NUM_OF_STAGES,
+            HYBRIDEP_DISPATCH_NUM_OF_IN_FLIGHT_S2G,
+            HT_OF_NUM_TOKENS_PER_CHUNK,
+            num_blocks,
+            FORWARD_DISPATCH,
+            num_nodes,
+            params.num_ranks_per_node,
+            params.layout,
+            kUseFp8,
+            kp.hidden_dim,
+            kernel_arg.data(),
+            kernel_arg.size(),
+            smem_size,
+            stream);
+
+#ifdef HYBRIDEP_ENABLE_WARP_TIMING
+        jit::dispatch_dump_warp_timing(dispatch_layout, num_blocks, d_wt, stream);
+        CUDA_CHECK(cudaFree(d_wt));
+#endif
     });
 }
 
 void call_dispatch(
     const DispatchParams& params,
-    int max_send_tokens_per_rank,
+    int max_dispatch_tokens_per_rank,
     int num_nodes,
     bool use_fp8,
     bool forward_dispatch,
+    int num_blocks,
     cudaStream_t stream
 ) {
     // Dispatch based on forward/backward and sync mode
     if (forward_dispatch) {
         dispatch_impl<true>(
-            params, max_send_tokens_per_rank,
-            num_nodes, use_fp8, stream);
+            params, max_dispatch_tokens_per_rank,
+            num_nodes, use_fp8, num_blocks, stream);
 
     } else {
         dispatch_impl<false>(
-            params, max_send_tokens_per_rank,
-            num_nodes, use_fp8, stream);
+            params, max_dispatch_tokens_per_rank,
+            num_nodes, use_fp8, num_blocks, stream);
 
     }
 }
@@ -566,20 +635,10 @@ void call_dispatch(
 // Combine wrapper implementation
 // ============================================================================
 
-// Helper to populate combine_kernel_param_t from CombineParams
-template<int LSA_TEAM_SIZE>
-::hybrid_ep::combine_kernel_param_t<LSA_TEAM_SIZE>
-build_combine_param(const CombineParams& params) {
-    ::hybrid_ep::combine_kernel_param_t<LSA_TEAM_SIZE> kp{};
-
-    // Copy IPC buffer pointers from HOST arrays into embedded param struct arrays.
-    // This allows fast __grid_constant__ access in the kernel (vs slow global memory indirection).
-    for (int i = 0; i < params.num_ranks_per_node; i++) {
-        kp.expert_input_token[i] = params.expert_input_token_ptrs[i];
-        kp.expert_input_prob[i] = params.expert_input_prob_ptrs ?
-            params.expert_input_prob_ptrs[i] : nullptr;
-    }
-
+// Helper to populate the fixed-size combine parameter fields from CombineParams.
+::hybrid_ep::combine_kernel_param_base_t
+build_combine_param_base(const CombineParams& params) {
+    ::hybrid_ep::combine_kernel_param_base_t kp{};
     // Model configuration
     kp.hidden_dim = params.hidden_dim;
     kp.experts_per_rank = params.experts_per_rank;
@@ -605,11 +664,13 @@ build_combine_param(const CombineParams& params) {
     kp.expected_intra_node_flag_value = params.combine_expected_intra_node_flag_value;
     kp.rdma_inter_node_group_flags = params.combine_rdma_inter_node_group_flags;
     kp.intra_node_write_completion_flags = params.combine_intra_node_write_completion_flags;
+    kp.combine_grid_barrier_counter = params.combine_grid_barrier_counter;
 
     // Runtime config
     kp.local_rank = params.local_rank;
     kp.node_rank = params.node_rank;
     kp.num_of_tokens_per_rank = params.num_tokens_per_rank;
+    kp.num_real_tokens        = params.num_real_tokens;
 
     // Pass device communicators and windows
     kp.dcomms = params.dcomms;
@@ -632,90 +693,124 @@ build_combine_param(const CombineParams& params) {
     return kp;
 }
 
+std::vector<uint8_t> build_combine_arg_buffer(
+    const ::hybrid_ep::combine_kernel_param_base_t& kp,
+    const CombineParams& params) {
+    using ParamBase = ::hybrid_ep::combine_kernel_param_base_t;
+    static_assert(sizeof(ParamBase) % alignof(void*) == 0);
+
+    const size_t base_size = sizeof(ParamBase);
+    const size_t token_offset = base_size;
+    const size_t prob_offset = token_offset + params.num_ranks_per_node * sizeof(uint16_t*);
+    const size_t total_size = prob_offset + params.num_ranks_per_node * sizeof(float*);
+
+    std::vector<uint8_t> arg(total_size);
+    std::memcpy(arg.data(), &kp, sizeof(kp));
+
+    auto* token_ptrs = reinterpret_cast<uint16_t**>(arg.data() + token_offset);
+    auto* prob_ptrs = reinterpret_cast<float**>(arg.data() + prob_offset);
+    for (int i = 0; i < params.num_ranks_per_node; i++) {
+        token_ptrs[i] = params.expert_input_token_ptrs[i];
+        prob_ptrs[i] = params.expert_input_prob_ptrs ? params.expert_input_prob_ptrs[i] : nullptr;
+    }
+
+    return arg;
+}
+
 
 // Template combine launcher for forward/backward
 template<bool BACKWARD_COMBINE>
 void combine_impl(
     const CombineParams& params,
-    int max_send_tokens_per_rank,
+    int max_dispatch_tokens_per_rank,
     int num_nodes,
+    int num_blocks,
     cudaStream_t stream
 ) {
-    HYBRIDEP_SWITCH_NUM_LSA_TEAMS(num_nodes, {
-        HYBRIDEP_SWITCH_LSA_TEAM_SIZE(params.num_ranks_per_node, {
-            // TMA requires prob buffer (experts_per_node * sizeof(float)) to be 16B aligned
-            const int experts_per_node = params.experts_per_rank * params.num_ranks_per_node;
-            assert((experts_per_node * sizeof(float)) % 16 == 0 &&
-                   "experts_per_node must be multiple of 4 for TMA alignment");
+    // TMA requires prob buffer (experts_per_node * sizeof(float)) to be 16B aligned
+    const int experts_per_node = params.experts_per_rank * params.num_ranks_per_node;
+    assert((experts_per_node * sizeof(float)) % 16 == 0 &&
+           "experts_per_node must be multiple of 4 for TMA alignment");
 
-            auto kp = build_combine_param<LSA_TEAM_SIZE>(params);
+    auto kp = build_combine_param_base(params);
 
-            // Select config based on NUM_LSA_TEAMS (single-node: 12 stages/2 pipelines, multi-node: 5 stages/1 pipeline)
-            constexpr int num_stages_g2s = (NUM_LSA_TEAMS == 1)
-                ? HYBRIDEP_COMBINE_SINGLENODE_NUM_OF_STAGES_G2S
-                : HYBRIDEP_COMBINE_MULTINODE_NUM_OF_STAGES_G2S;
-            constexpr int num_stages_s2g = (NUM_LSA_TEAMS == 1)
-                ? HYBRIDEP_COMBINE_SINGLENODE_NUM_OF_STAGES_S2G
-                : HYBRIDEP_COMBINE_MULTINODE_NUM_OF_STAGES_S2G;
+    // Select config based on num_nodes (single-node: 12 stages/2 pipelines, multi-node: 5 stages/1 pipeline)
+    const int num_stages_g2s = (num_nodes == 1)
+        ? HYBRIDEP_COMBINE_SINGLENODE_NUM_OF_STAGES_G2S
+        : HYBRIDEP_COMBINE_MULTINODE_NUM_OF_STAGES_G2S;
+    const int num_stages_s2g = (num_nodes == 1)
+        ? HYBRIDEP_COMBINE_SINGLENODE_NUM_OF_STAGES_S2G
+        : HYBRIDEP_COMBINE_MULTINODE_NUM_OF_STAGES_S2G;
 
-            ::hybrid_ep::model_config_t model;
-            model.hidden_dim = kp.hidden_dim;
-            model.max_num_of_tokens_per_rank = MAX_SUPPORTED_TOKENS_PER_RANK;
-            model.num_of_experts_per_rank = kp.experts_per_rank;
-            model.num_of_ranks_per_node = kp.num_of_ranks_per_node;
-            model.num_of_nodes = NUM_LSA_TEAMS;
-            const int smem_size = ::hybrid_ep::calculate_combine_smem_layout_size<
-                num_stages_g2s,
-                num_stages_s2g,
-                HT_OF_NUM_TOKENS_PER_CHUNK,
-                MAX_SUPPORTED_TOKENS_PER_RANK,
-                NUM_LSA_TEAMS,
-                BACKWARD_COMBINE>(model);
+    ::hybrid_ep::model_config_t model;
+    model.hidden_dim = kp.hidden_dim;
+    model.max_num_of_tokens_per_rank = MAX_SUPPORTED_TOKENS_PER_RANK;
+    model.num_of_experts_per_rank = kp.experts_per_rank;
+    model.num_of_ranks_per_node = kp.num_of_ranks_per_node;
+    model.num_of_nodes = num_nodes;
+    const int smem_size = ::hybrid_ep::calculate_combine_smem_layout_size(
+        num_stages_g2s,
+        num_stages_s2g,
+        HT_OF_NUM_TOKENS_PER_CHUNK,
+        MAX_SUPPORTED_TOKENS_PER_RANK,
+        num_nodes,
+        BACKWARD_COMBINE,
+        model);
 
-            if (params.layout == NCCL_EP_LAYOUT_EXPERT_MAJOR) {
-                jit::launch_combine<
-                    num_stages_g2s,
-                    num_stages_s2g,
-                    HT_OF_NUM_TOKENS_PER_CHUNK,
-                    HYBRIDEP_COMBINE_NUM_OF_TOKENS_PER_GROUP,
-                    HYBRIDEP_COMBINE_NUM_OF_BLOCKS,
-                    HYBRIDEP_COMBINE_NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
-                    BACKWARD_COMBINE,
-                    NUM_LSA_TEAMS,
-                    LSA_TEAM_SIZE,
-                    NCCL_EP_LAYOUT_EXPERT_MAJOR>(kp, smem_size, stream);
-            } else {
-                jit::launch_combine<
-                    num_stages_g2s,
-                    num_stages_s2g,
-                    HT_OF_NUM_TOKENS_PER_CHUNK,
-                    HYBRIDEP_COMBINE_NUM_OF_TOKENS_PER_GROUP,
-                    HYBRIDEP_COMBINE_NUM_OF_BLOCKS,
-                    HYBRIDEP_COMBINE_NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
-                    BACKWARD_COMBINE,
-                    NUM_LSA_TEAMS,
-                    LSA_TEAM_SIZE,
-                    NCCL_EP_LAYOUT_FLAT>(kp, smem_size, stream);
-            }
-        });
-    });
+#ifdef HYBRIDEP_ENABLE_WARP_TIMING
+    const jit::combine_warp_layout_t combine_layout = jit::compute_combine_warp_layout(num_nodes);
+    const int combine_wt_total = num_blocks * (combine_layout.block_dim / 32);
+    ::hybrid_ep::combine_warp_timing_entry_t* d_wt = nullptr;
+    ::hybrid_ep::combine_block_timing_entry_t* d_bt = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_wt, combine_wt_total * sizeof(::hybrid_ep::combine_warp_timing_entry_t)));
+    CUDA_CHECK(cudaMalloc(&d_bt, num_blocks * sizeof(::hybrid_ep::combine_block_timing_entry_t)));
+    CUDA_CHECK(cudaMemsetAsync(d_wt, 0, combine_wt_total * sizeof(::hybrid_ep::combine_warp_timing_entry_t), stream));
+    CUDA_CHECK(cudaMemsetAsync(d_bt, 0, num_blocks * sizeof(::hybrid_ep::combine_block_timing_entry_t), stream));
+    kp.warp_timing = d_wt;
+    kp.block_timing = d_bt;
+#endif
+
+    std::vector<uint8_t> kernel_arg = build_combine_arg_buffer(kp, params);
+    jit::launch_combine(
+        num_stages_g2s,
+        num_stages_s2g,
+        HT_OF_NUM_TOKENS_PER_CHUNK,
+        HYBRIDEP_COMBINE_NUM_OF_TOKENS_PER_GROUP,
+        num_blocks,
+        HYBRIDEP_COMBINE_NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
+        BACKWARD_COMBINE,
+        num_nodes,
+        params.num_ranks_per_node,
+        params.layout,
+        kp.hidden_dim,
+        kernel_arg.data(),
+        kernel_arg.size(),
+        smem_size,
+        stream);
+
+#ifdef HYBRIDEP_ENABLE_WARP_TIMING
+    jit::combine_dump_warp_timing(combine_layout, num_blocks, d_wt, d_bt, stream);
+    CUDA_CHECK(cudaFree(d_wt));
+    CUDA_CHECK(cudaFree(d_bt));
+#endif
 }
 
 void call_combine(
     const CombineParams& params,
-    int max_send_tokens_per_rank,
+    int max_dispatch_tokens_per_rank,
     int num_nodes,
     bool backward_combine,
+    int num_blocks,
     cudaStream_t stream
 ) {
     if (backward_combine) {
         combine_impl<true>(
-            params, max_send_tokens_per_rank,
-            num_nodes, stream);
+            params, max_dispatch_tokens_per_rank,
+            num_nodes, num_blocks, stream);
     } else {
         combine_impl<false>(
-            params, max_send_tokens_per_rank,
-            num_nodes, stream);
+            params, max_dispatch_tokens_per_rank,
+            num_nodes, num_blocks, stream);
     }
 }
 

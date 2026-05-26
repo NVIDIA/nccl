@@ -1515,6 +1515,9 @@ ncclResult_t ncclTopoGetVNicParent(struct ncclXml* xml, ncclResult_t (*getProper
     } else if (strcmp((*parent)->name, "cpu") == 0) {
       // If the common parent is a CPU, we must reparent the new NIC under a made up pci device with a unique busid
       NCCLCHECK(ncclTopoMakePciParent(xml, parent, physNetNodes[0]));
+    } else if (strcmp((*parent)->name, "system") == 0) {
+      WARN("Fusing NET devices from different NUMA domains is not supported.");
+      return ncclInvalidArgument;
     }
   }
 
@@ -2074,18 +2077,6 @@ ncclResult_t ncclTopoCpuType(struct ncclTopoSystem* system, int* arch, int* vend
   *arch = system->nodes[CPU].nodes[0].cpu.arch;
   *vendor = system->nodes[CPU].nodes[0].cpu.vendor;
   *model = system->nodes[CPU].nodes[0].cpu.model;
-  return ncclSuccess;
-}
-
-NCCL_PARAM(TopoMloPartGdr, "MLOPART_GDR_ENABLE", 0);
-
-ncclResult_t ncclTopoGetMloPartGdrSupport(struct ncclTopoSystem* system, struct ncclComm* comm) {
-  for (int g = 0; g < system->nodes[GPU].count; g++) {
-    struct ncclTopoNode* gpu = &system->nodes[GPU].nodes[g];
-    if (gpu->gpu.mloPart == NCCL_TOPO_UNDEF) continue;
-    if (ncclParamTopoMloPartGdr()) continue;
-    gpu->gpu.gdrSupport = 0;
-  }
   return ncclSuccess;
 }
 

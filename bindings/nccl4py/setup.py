@@ -1,6 +1,9 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# See LICENSE.txt for more license information
+
 import os
-import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -29,77 +32,51 @@ if not cuda_path.exists() or not cuda_path.is_dir():
     raise SystemExit(f"Error: CUDA_HOME does not exist or is not a directory: {CUDA_HOME}")
 CUDA_INC = str(cuda_path / "include")
 
+PACKAGE = "nccl.bindings"
+LIBNAMES = ["nccl", "nccl_ep"]
+
+
+def _ext(module: str, source: str) -> Extension:
+    return Extension(
+        module,
+        sources=[source],
+        include_dirs=[CUDA_INC],
+        language="c++",
+        extra_compile_args=["-std=c++14"],
+        libraries=["dl"],
+    )
+
+
+def libname_extensions(libname: str) -> list[Extension]:
+    """Three per-library extensions: lowpp, cy variant, _internal loader.
+
+    For libname="nccl":
+        nccl.bindings.nccl              <- nccl/bindings/nccl.pyx
+        nccl.bindings.cynccl            <- nccl/bindings/cynccl.pyx
+        nccl.bindings._internal.nccl    <- nccl/bindings/_internal/nccl_linux.pyx
+    """
+    return [
+        _ext(f"{PACKAGE}.{libname}", os.path.join(*PACKAGE.split("."), f"{libname}.pyx")),
+        _ext(f"{PACKAGE}.cy{libname}", os.path.join(*PACKAGE.split("."), f"cy{libname}.pyx")),
+        _ext(
+            f"{PACKAGE}._internal.{libname}",
+            os.path.join(*PACKAGE.split("."), "_internal", f"{libname}_linux.pyx"),
+        ),
+    ]
+
+
 ext_modules = [
-    "nccl.bindings.nccl"
+    _ext(f"{PACKAGE}._internal.utils", os.path.join(*PACKAGE.split("."), "_internal", "utils.pyx"))
 ]
-
-def calculate_modules(module: str):
-    module_parts = module.split(".")
-
-    # nccl.bindings.nccl -> nccl/bindings/nccl.pyx
-    lowpp_mod = module_parts.copy()
-    lowpp_pyx = os.path.join(*lowpp_mod[:-1], f"{lowpp_mod[-1]}.pyx")
-    lowpp_mod = ".".join(lowpp_mod)
-    lowpp_ext = Extension(
-        lowpp_mod,
-        sources=[lowpp_pyx],
-        include_dirs=[CUDA_INC],
-        language="c++",
-        extra_compile_args=["-std=c++14"],
-        libraries=["dl"],
-    )
-
-    # cy variant: nccl.bindings.nccl -> nccl/bindings/cynccl.pyx
-    cy_mod = module_parts.copy()
-    cy_mod[-1] = f"cy{cy_mod[-1]}"
-    cy_mod_pyx = os.path.join(*cy_mod[:-1], f"{cy_mod[-1]}.pyx")
-    cy_mod = ".".join(cy_mod)
-    cy_ext = Extension(
-        cy_mod,
-        sources=[cy_mod_pyx],
-        include_dirs=[CUDA_INC],
-        language="c++",
-        extra_compile_args=["-std=c++14"],
-        libraries=["dl"],
-    )
-
-    # internal variant: source is nccl_linux.pyx, but published module name is nccl.bindings._internal.nccl
-    inter_mod = module_parts.copy()
-    inter_mod.insert(-1, "_internal")
-    inter_mod_pyx = os.path.join(*inter_mod[:-1], f"{inter_mod[-1]}_linux.pyx")
-    inter_mod = ".".join(inter_mod)
-    inter_ext = Extension(
-        inter_mod,
-        sources=[inter_mod_pyx],
-        include_dirs=[CUDA_INC],
-        language="c++",
-        extra_compile_args=["-std=c++14"],
-        libraries=["dl"],
-    )
-
-    # internal variant: insert _internal and use utils.pyx
-    inter_utils_mod = module_parts.copy()
-    inter_utils_mod.insert(-1, "_internal")
-    inter_utils_mod[-1] = "utils"
-    inter_utils_mod_pyx = os.path.join(*inter_utils_mod[:-1], f"{inter_utils_mod[-1]}.pyx")
-    inter_utils_mod = ".".join(inter_utils_mod)
-    inter_utils_ext = Extension(
-        inter_utils_mod,
-        sources=[inter_utils_mod_pyx],
-        include_dirs=[CUDA_INC],
-        language="c++",
-        extra_compile_args=["-std=c++14"],
-        libraries=["dl"],
-    )
-
-    return lowpp_ext, cy_ext, inter_ext, inter_utils_ext
+for libname in LIBNAMES:
+    ext_modules.extend(libname_extensions(libname))
 
 
-# Note: the extension attributes are overwritten in build_extension()
-ext_modules = [e for ext in ext_modules for e in calculate_modules(ext)]
-
-
-compiler_directives = {"embedsignature": True, "show_performance_hints": True, "freethreading_compatible": True}
+compiler_directives = {
+    "embedsignature": True,
+    "show_performance_hints": True,
+    "freethreading_compatible": True,
+}
 
 
 setup(

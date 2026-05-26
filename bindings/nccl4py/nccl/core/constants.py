@@ -13,8 +13,6 @@ from nccl.core.typing.
 from enum import IntEnum, IntFlag
 
 __all__ = [
-    "NCCL_UNDEF_INT",
-    "NCCL_UNDEF_FLOAT",
     "NCCL_SPLIT_NOCOLOR",
     "CTAPolicy",
     "CommShrinkFlag",
@@ -22,28 +20,15 @@ __all__ = [
     "WindowFlag",
 ]
 
-# NCCL sentinel values for undefined config fields
-NCCL_UNDEF_INT: int = -2147483648  # INT_MIN
-"""NCCL sentinel value for undefined integer configuration fields."""
-
-NCCL_UNDEF_FLOAT: float = -1.0
-"""NCCL sentinel value for undefined float fields."""
-
 # Communicator split constants
 NCCL_SPLIT_NOCOLOR: int = -1
 """Color value for ncclCommSplit to indicate the rank will not be part of any group."""
 
-# NCCL magic number
-NCCL_MAGIC: int = 0xCAFEBEEF
-"""Magic number for NCCL configuration structs (used for ABI validation)."""
-
 
 # CTA (Cooperative Thread Array) Policy flags
 class CTAPolicy(IntFlag):
-    """NCCL performance policy for CTA scheduling.
-
-    Policies can be combined with the bitwise OR operator so that NCCL can
-    use different scheduling in different cases.
+    """NCCL performance policy for CTA scheduling, used by
+    :py:attr:`NCCLConfig.cta_policy`.
     """
 
     DEFAULT = 0x00
@@ -61,12 +46,14 @@ class CTAPolicy(IntFlag):
 
 # Communicator shrink flags
 class CommShrinkFlag(IntEnum):
-    """Flags for ncclCommShrink behavior."""
+    """Behavior flag for :py:meth:`Communicator.shrink`."""
 
     DEFAULT = 0x00
-    """Shrink the parent communicator."""
+    """Shrink the parent communicator normally; outstanding NCCL operations
+    must already be quiesced."""
     ABORT = 0x01
-    """First terminate ongoing parent operations, then shrink the parent communicator."""
+    """First terminate ongoing parent operations, then shrink. No resources
+    are shared with the parent."""
 
     # Backward-compat aliases.
     Default = 0x00
@@ -75,10 +62,11 @@ class CommShrinkFlag(IntEnum):
 
 # Communicator suspend flags
 class CommSuspendFlag(IntFlag):
-    """Flags for ncclCommSuspend behavior."""
+    """Behavior flag for :py:meth:`Communicator.suspend`."""
 
     MEM = 0x01
-    """Suspend memory (release dynamic GPU memory allocations)."""
+    """Suspend memory by releasing dynamic GPU memory allocations held by
+    the communicator."""
 
     # Backward-compat alias.
     Mem = 0x01
@@ -86,7 +74,9 @@ class CommSuspendFlag(IntFlag):
 
 # Window registration flags
 class WindowFlag(IntFlag):
-    """Flags for window registration."""
+    """Window registration behavior flags for
+    :py:meth:`Communicator.register_window`.
+    """
 
     DEFAULT = 0x00
     """Default window registration."""

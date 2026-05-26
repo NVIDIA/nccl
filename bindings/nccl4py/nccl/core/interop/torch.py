@@ -81,8 +81,8 @@ def _parse_device(device: torch.device | int | str | None) -> int:
     """Parses a device specification into a CUDA device index.
 
     Args:
-        device: Device specification (torch.device, int, or str), or None to
-            use the current CUDA device.
+        device: Device specification (torch.device, int, or str), or
+            ``None`` to use the current CUDA device.
 
     Returns:
         CUDA device index.
@@ -177,10 +177,10 @@ def empty(
         *size: A sequence of integers defining the shape of the output
             tensor. Can be a variable number of arguments or a single
             list/tuple.
-        dtype: Desired data type of the tensor. If None, uses
-            torch.get_default_dtype(). Defaults to None.
-        device: Device of the tensor. If None, uses the current CUDA device.
-            Defaults to None.
+        dtype: Desired data type of the tensor. If ``None``, uses
+            torch.get_default_dtype(). Defaults to ``None``.
+        device: Device of the tensor. If ``None``, uses the current CUDA
+            device. Defaults to ``None``.
         morder: Memory layout. 'C' for row-major (C-style), 'F' for
             column-major (Fortran-style). Defaults to 'C'.
 

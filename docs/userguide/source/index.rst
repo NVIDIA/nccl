@@ -11,6 +11,7 @@ Contents:
    setup
    usage
    api
+   bindings
    nccl1
    examples
    mpi

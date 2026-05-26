@@ -102,6 +102,7 @@ const int lsaSize = lsa.nRanks;              // Number of local peers
 
 ### Memory Access (Device-side)
 `ncclGetLsaPointer` allows CUDA kernels to directly access other GPUs' memory within the LSA team, while `gin.put` handles remote communication over the network. The hybrid approach uses the most efficient method for each peer type.
+Remote GIN puts use `ncclGin_WeakSignalInc` to add one completion increment per network put, and the receiving CTA waits for the count of completed remote puts. LSA stores are synchronized by the barrier instead of GIN signals.
 
 ```cpp
   const size_t size = count * sizeof(T);
@@ -109,13 +110,13 @@ const int lsaSize = lsa.nRanks;              // Number of local peers
     gin.put(world, r,
         recvwin, recvoffset + world.rank * size,
         sendwin, sendoffset + r * size,
-        size, ncclGin_SignalInc{signalIndex});
+        size, ncclGin_WeakSignalInc{signalIndex});
   }
   for (int r = startLsa + lsaSize + tid; r < world.nRanks; r += nthreads) {
     gin.put(world, r,
         recvwin, recvoffset + world.rank * size,
         sendwin, sendoffset + r * size,
-        size, ncclGin_SignalInc{signalIndex});
+        size, ncclGin_WeakSignalInc{signalIndex});
   }
   T* sendLocal = (T*)ncclGetLocalPointer(sendwin, sendoffset);
   for (size_t offset = tid; offset < count; offset += nthreads) {

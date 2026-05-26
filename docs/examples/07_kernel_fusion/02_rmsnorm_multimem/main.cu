@@ -58,7 +58,7 @@ __global__ void RMSNormMultimem(ncclWindow_t window, ncclDevComm devComm,
 
   // Initialize LSA barrier session for this block
   ncclLsaBarrierSession<ncclCoopCta> bar {
-    coop, devComm, ncclTeamLsa(devComm), devComm.lsaBarrier, blockIdx.x
+    coop, devComm, ncclTeamTagLsa(), blockIdx.x, /*multimem=*/true
   };
 
   // Initial synchronization across all GPUs
@@ -81,6 +81,8 @@ __global__ void RMSNormMultimem(ncclWindow_t window, ncclDevComm devComm,
   for (int i = threadIdx.x; i < hidden_dim; i += blockDim.x) {
     local_pointer[i] = multimemLoadSum(multimem_pointer + i);
   }
+
+  coop.sync();
 
   //============================================================================
   // Phase 2: RMS Normalization

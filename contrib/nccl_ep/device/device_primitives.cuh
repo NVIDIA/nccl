@@ -11,7 +11,7 @@
 
 #pragma once
 
-#include "include/common.hpp"
+#include "common.hpp"
 
 //==============================================================================
 // Macros

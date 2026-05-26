@@ -47,14 +47,14 @@
  *              PUT (gin.put) to update their window_send buffers
  *
  * Synchronization:
- *   - Each PUT (gin.put) uses ncclGin_SignalInc on the peer, which atomically increments that peer's
- *     local signal; waitSignal/readSignal on a rank therefore count inbound signaled PUTs
+ *   - Each PUT (gin.put) uses ncclGin_WeakSignalInc on the peer, which adds one
+ *     completion increment to that peer's local signal; waitSignal/readSignal on a rank therefore count inbound signaled PUTs
  *     from others. For outbound PUTs, gin.flush ensures this rank's pending GIN work has
  *     locally consumed its source buffers so those regions (e.g. slices of window_send /
  *     window_recv used as PUT sources) can be safely overwritten or reused.
  *   - Phase 1: gin.waitSignal waits until every peer has finished PUT of the partial
  *     contribution for token_idx (the token owned by this rank and block) into this rank's
- *     window_recv—one remote SignalInc per peer before we reduce.
+ *     window_recv—one remote completion signal per peer before we reduce.
  *   - Phase 3: the second wait is the same idea for all-gather: every peer has finished
  *     PUT of the normalized slice this block needs from them into this rank's window_send.
  *   - ncclGinBarrierSession (world team): acquire at kernel entry; release before
@@ -114,7 +114,7 @@ __global__ void RMSNormGIN(ncclWindow_t window_send, ncclWindow_t window_recv, n
   //
   // Synchronization: gin.waitSignal(signalValue + nRanks) waits until all peers have
   // finished PUT of their partial contribution for token_idx—the token this rank and
-  // block own—into this rank's window_recv (each peer's PUT carries SignalInc on this
+  // block own—into this rank's window_recv (each peer's PUT carries a completion increment on this
   // signalIndex, so the local counter rises by nRanks).
   //----------------------------------------------------------------------------
 
@@ -127,7 +127,7 @@ __global__ void RMSNormGIN(ncclWindow_t window_send, ncclWindow_t window_recv, n
     // PUT: send our token data to peer's receive window
     gin.put(ncclTeamWorld(devComm), peer, window_recv, my_window_offset,
             window_send, peer_window_offset, sizeof(float) * hidden_dim,
-            ncclGin_SignalInc{signalIndex});
+            ncclGin_WeakSignalInc{signalIndex});
   }
 
   // Wait until every peer has completed its signaled PUT delivering its contribution for
@@ -199,7 +199,7 @@ __global__ void RMSNormGIN(ncclWindow_t window_send, ncclWindow_t window_recv, n
     // PUT: send normalized data to peer's send window
     gin.put(ncclTeamWorld(devComm), peer, window_send, final_token_offset,
             window_recv, my_window_offset, sizeof(float) * hidden_dim,
-            ncclGin_SignalInc{signalIndex});
+            ncclGin_WeakSignalInc{signalIndex});
   }
 
   // Wait until every peer has completed its signaled PUT for Phase 3 all-gather: each

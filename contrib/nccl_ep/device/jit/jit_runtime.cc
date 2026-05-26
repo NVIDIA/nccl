@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -27,11 +28,11 @@
 #include <unistd.h>
 
 #ifndef NCCL_EP_JIT_SOURCE_DIR
-#define NCCL_EP_JIT_SOURCE_DIR "."
+#define NCCL_EP_JIT_SOURCE_DIR "/usr/include/nccl_ep"
 #endif
 
 #ifndef NCCL_EP_JIT_BUILD_INCLUDE_DIR
-#define NCCL_EP_JIT_BUILD_INCLUDE_DIR ""
+#define NCCL_EP_JIT_BUILD_INCLUDE_DIR "/usr/include"
 #endif
 
 #ifndef NCCL_EP_JIT_CUDA_INCLUDE_DIR
@@ -128,12 +129,24 @@ double elapsed_sec(std::chrono::steady_clock::time_point begin) {
 std::filesystem::path configured_source_dir() {
     std::string path = env_value("NCCL_EP_JIT_SOURCE_DIR");
     if (!path.empty()) return std::filesystem::path(path);
+
+    std::string nccl_home = env_value("NCCL_HOME");
+    if (!nccl_home.empty()) {
+        return std::filesystem::path(nccl_home) / "include" / "nccl_ep";
+    }
+
     return std::filesystem::path(NCCL_EP_JIT_SOURCE_DIR);
 }
 
 std::filesystem::path configured_build_include_dir() {
     std::string path = env_value("NCCL_EP_JIT_BUILD_INCLUDE_DIR");
     if (!path.empty()) return std::filesystem::path(path);
+
+    std::string nccl_home = env_value("NCCL_HOME");
+    if (!nccl_home.empty()) {
+        return std::filesystem::path(nccl_home) / "include";
+    }
+
     return std::filesystem::path(NCCL_EP_JIT_BUILD_INCLUDE_DIR);
 }
 
@@ -246,9 +259,7 @@ const SmEnvInfo& get_sm_env_info(int sm) {
         info.compiler_id,
     };
     append_header_tree_fingerprint(&env_parts, info.source_dir / "device");
-    append_header_tree_fingerprint(&env_parts, info.source_dir / "include");
     append_header_tree_fingerprint(&env_parts, info.build_include_dir);
-    append_header_tree_fingerprint(&env_parts, info.source_dir / ".." / ".." / "src" / "include");
     env_parts.insert(env_parts.end(), info.options.begin(), info.options.end());
     info.env_hash = fnv1a_digest(env_parts);
 
@@ -462,10 +473,48 @@ void erase_fast_cache(const FastCacheKey& fast_key) {
     erase_thread_fast_cache(fast_key);
 }
 
+CUresult launch_function(
+    CUfunction function,
+    const JitKernelVariant& variant,
+    void* kernel_param,
+    std::size_t kernel_param_size,
+    cudaStream_t stream) {
+    // A zero size means kernel_param points to one fixed-size kernel argument.
+    // Non-zero size means kernel_param points to a byte buffer with all kernel arguments.
+    if (kernel_param_size == 0) {
+        void* kernel_args[] = {kernel_param};
+        return cuLaunchKernel(
+            function,
+            variant.num_blocks, 1, 1,
+            variant.block_dim, 1, 1,
+            static_cast<unsigned int>(variant.dynamic_smem_bytes),
+            reinterpret_cast<CUstream>(stream),
+            kernel_args,
+            nullptr);
+    }
+
+    // This buffer already has the arguments laid out in the order the JIT kernel
+    // expects, so pass CUDA the buffer pointer and its size.
+    void* extra[] = {
+        CU_LAUNCH_PARAM_BUFFER_POINTER, kernel_param,
+        CU_LAUNCH_PARAM_BUFFER_SIZE, &kernel_param_size,
+        CU_LAUNCH_PARAM_END
+    };
+    return cuLaunchKernel(
+        function,
+        variant.num_blocks, 1, 1,
+        variant.block_dim, 1, 1,
+        static_cast<unsigned int>(variant.dynamic_smem_bytes),
+        reinterpret_cast<CUstream>(stream),
+        nullptr,
+        extra);
+}
+
 JitKernelStatus try_fast_launch(
     const FastCacheKey& fast_key,
     const JitKernelVariant& variant,
     void* kernel_param,
+    std::size_t kernel_param_size,
     cudaStream_t stream,
     std::string* error) {
     if (fast_key.identity == nullptr) {
@@ -508,15 +557,7 @@ JitKernelStatus try_fast_launch(
         update_fast_cache(fast_key, entry.function, variant.dynamic_smem_bytes);
     }
 
-    void* kernel_args[] = {kernel_param};
-    CUresult rc = cuLaunchKernel(
-        entry.function,
-        variant.num_blocks, 1, 1,
-        variant.block_dim, 1, 1,
-        static_cast<unsigned int>(variant.dynamic_smem_bytes),
-        reinterpret_cast<CUstream>(stream),
-        kernel_args,
-        nullptr);
+    CUresult rc = launch_function(entry.function, variant, kernel_param, kernel_param_size, stream);
     if (rc != CUDA_SUCCESS) {
         if (error != nullptr) *error = cu_error_string(rc);
         return JitKernelStatus::kLaunchFailed;
@@ -711,6 +752,7 @@ JitKernelStatus load_and_launch_kernel(
     const std::string& cubin,
     const std::string& log_prefix,
     void* kernel_param,
+    std::size_t kernel_param_size,
     cudaStream_t stream,
     std::string* error) {
     JitCache& cache = JitCache::instance();
@@ -746,15 +788,7 @@ JitKernelStatus load_and_launch_kernel(
 
     update_fast_cache(fast_key, function, variant.dynamic_smem_bytes);
 
-    void* kernel_args[] = {kernel_param};
-    CUresult rc = cuLaunchKernel(
-        function,
-        variant.num_blocks, 1, 1,
-        variant.block_dim, 1, 1,
-        static_cast<unsigned int>(variant.dynamic_smem_bytes),
-        reinterpret_cast<CUstream>(stream),
-        kernel_args,
-        nullptr);
+    CUresult rc = launch_function(function, variant, kernel_param, kernel_param_size, stream);
     if (rc != CUDA_SUCCESS) {
         if (error != nullptr) *error = cu_error_string(rc);
         warn_once_jit_event(
@@ -792,6 +826,7 @@ const char* jit_kernel_status_name(JitKernelStatus status) {
 JitKernelStatus launch_jit_kernel(
     const JitKernelVariant& variant,
     void* kernel_param,
+    std::size_t kernel_param_size,
     cudaStream_t stream,
     std::string* error) {
     int device = 0;
@@ -812,7 +847,8 @@ JitKernelStatus launch_jit_kernel(
     }
 
     const FastCacheKey fast_key{variant.identity, variant.runtime_key, context, device};
-    const JitKernelStatus fast_status = try_fast_launch(fast_key, variant, kernel_param, stream, error);
+    const JitKernelStatus fast_status =
+        try_fast_launch(fast_key, variant, kernel_param, kernel_param_size, stream, error);
     if (fast_status == JitKernelStatus::kLaunched ||
         fast_status == JitKernelStatus::kLaunchFailed) {
         return fast_status;
@@ -856,7 +892,16 @@ JitKernelStatus launch_jit_kernel(
     if (status != JitKernelStatus::kLaunched) return status;
 
     return load_and_launch_kernel(
-        variant, fast_key, paths, key, cubin, log_prefix, kernel_param, stream, error);
+        variant, fast_key, paths, key, cubin, log_prefix, kernel_param, kernel_param_size, stream, error);
+}
+
+// This overload is for kernels that don't need to pass kernel arguments.
+JitKernelStatus launch_jit_kernel(
+    const JitKernelVariant& variant,
+    void* kernel_param,
+    cudaStream_t stream,
+    std::string* error) {
+    return launch_jit_kernel(variant, kernel_param, 0, stream, error);
 }
 
 } // namespace jit

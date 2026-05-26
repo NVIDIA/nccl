@@ -989,8 +989,19 @@ static ncclResult_t ipcRegisterBuffer(ncclComm* comm, const void* userbuff, size
 
     for (int p = 0; p < nPeers; p++) {
       int peerRank = peerRanks[p];
+      if (peerRank < 0 || peerRank >= comm->nRanks) {
+        WARN("rank %d invalid IPC peerRank %d nRanks %d", comm->rank, peerRank, comm->nRanks);
+        ret = ncclInternalError;
+        goto fail;
+      }
       // For cross-clique P2P, use peerRank directly to avoid localRank conflicts between cliques
       peerIndex = comm->p2pCrossClique ? peerRank : comm->rankToLocalRank[peerRank];
+      if (peerIndex < 0 || peerIndex >= ipcIndexSize) {
+        WARN("rank %d invalid IPC peerIndex %d for peerRank %d ipcIndexSize %d ipcInfosSize %d p2pCrossClique %d",
+             comm->rank, peerIndex, peerRank, ipcIndexSize, regRecord->ipcInfosSize, comm->p2pCrossClique);
+        ret = ncclInternalError;
+        goto fail;
+      }
       if (regRecord->ipcInfos[peerIndex]) {
         // We already have IPC info for this peer, no need to register it, we can reuse it
         *regBufFlag = 1;

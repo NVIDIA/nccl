@@ -166,8 +166,9 @@ static ncclResult_t ncclRmaProxyCtxAllocGraph(struct ncclComm* comm, ncclRma_t* 
   // Allocate the CPU-accessible signal for graph capture and then register the memory region with the RMA plugin.
   NCCLCHECK(allocMemCPUAccessible(&rmaProxyCtx->cpuAccessSignals, &rmaProxyCtx->cpuAccessSignalsDev,
                                   comm->nRanks + 1, 0, &rmaProxyCtx->cpuAccessSignalsGdrHandle, comm->memManager));
+  int cpuAccessSignalsType = (rmaProxyCtx->cpuAccessSignalsGdrHandle != NULL) ? NCCL_PTR_CUDA : NCCL_PTR_HOST;
   NCCLCHECK(ncclRmaProxyRegMrSym(rmaComm, rmaProxyCtx->rmaCollComm, rmaProxyCtx->props, rmaProxyCtx->cpuAccessSignalsDev, signalsBufSize,
-                                 NCCL_PTR_CUDA, NCCL_NET_MR_FLAG_FORCE_SO,
+                                 cpuAccessSignalsType, NCCL_NET_MR_FLAG_FORCE_SO,
                                  &rmaProxyCtx->cpuAccessSignalsMhandle));
   // Allocate the host buffer to track the expected values of the signals
   NCCLCHECK(ncclCalloc(&rmaProxyCtx->cpuAccessSignalsHost, signalsBufSize));
@@ -451,7 +452,6 @@ ncclResult_t ncclRmaProxyConnectOnce(struct ncclComm* comm) {
 
 exit:
   if (ret == ncclSuccess) rmaProxyState->connected = true;
-else printf("Connect once return %d\n", ret);
   return ret;
 fail:
   free(allCommCounts);

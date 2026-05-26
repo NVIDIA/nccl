@@ -196,11 +196,6 @@ ifneq ($(MAX_EXT_NET_PLUGINS), 0)
 CXXFLAGS += -DNCCL_NET_MAX_PLUGINS=$(MAX_EXT_NET_PLUGINS)
 endif
 
-# Check and enable LLVM IR generation
-ifneq ($(EMIT_LLVM_IR), 0)
-  CXXFLAGS += -DEMIT_LLVM_IR=1
-endif
-
 # Git version overrides (set via command line: make NCCL_GIT_BRANCH=xxx NCCL_GIT_COMMIT_HASH=yyy)
 ifneq ($(NCCL_GIT_BRANCH),)
   CXXFLAGS += -DNCCL_GIT_BRANCH='"$(NCCL_GIT_BRANCH)"'

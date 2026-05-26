@@ -8,6 +8,7 @@
 
 #include <cuda_runtime.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -37,6 +38,13 @@ struct JitKernelVariant {
     int dynamic_smem_bytes = 0;
     int min_sm = 90;
 };
+
+JitKernelStatus launch_jit_kernel(
+    const JitKernelVariant& variant,
+    void* kernel_param,
+    std::size_t kernel_param_size,
+    cudaStream_t stream,
+    std::string* error);
 
 JitKernelStatus launch_jit_kernel(
     const JitKernelVariant& variant,

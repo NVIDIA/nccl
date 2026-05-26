@@ -43,7 +43,7 @@ struct ncclShadowPool {
 };
 
 void ncclShadowPoolConstruct(struct ncclShadowPool*);
-ncclResult_t ncclShadowPoolDestruct(struct ncclShadowPool*);
+ncclResult_t ncclShadowPoolDestruct(struct ncclShadowPool*, cudaStream_t stream);
 ncclResult_t ncclShadowPoolAlloc(struct ncclShadowPool*, size_t size, void** outDevObj, void** outHostObj, cudaStream_t stream);
 ncclResult_t ncclShadowPoolFree(struct ncclShadowPool*, void* devObj, cudaStream_t stream);
 ncclResult_t ncclShadowPoolToHost(struct ncclShadowPool*, void* devObj, void** outHostObj);

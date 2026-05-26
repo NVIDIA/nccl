@@ -318,7 +318,7 @@ ncclCoopCta coop = ncclCoopCta();
 
 // Initialize LSA barrier session for this block
 ncclLsaBarrierSession<ncclCoopCta> bar {
-    coop, devComm, ncclTeamLsa(devComm), devComm.lsaBarrier, blockIdx.x
+    coop, devComm, ncclTeamTagLsa(), blockIdx.x
 };
 
 // Initial synchronization across all GPUs
@@ -457,13 +457,13 @@ This example demonstrates fused computation and communication using NCCL's Multi
 
 ##### Phase 1: Reduce-Scatter via Multimem
 
-Each block loads and sums from all peers using a single multimem pointer. The reduced result is stored locally only (each rank handles its own tokens). The barrier setup matches the LSA example (`01_rmsnorm_lsa`):
+Each block loads and sums from all peers using a single multimem pointer. The reduced result is stored locally only (each rank handles its own tokens). The barrier setup follows the LSA example (`01_rmsnorm_lsa`) with the multimem-enabled constructor:
 
 ```cuda
 ncclCoopCta coop = ncclCoopCta();
 
 ncclLsaBarrierSession<ncclCoopCta> bar {
-    coop, devComm, ncclTeamLsa(devComm), devComm.lsaBarrier, blockIdx.x
+    coop, devComm, ncclTeamTagLsa(), blockIdx.x, /*multimem=*/true
 };
 
 // Initial synchronization across all GPUs
@@ -481,6 +481,8 @@ float* multimem_pointer = reinterpret_cast<float*>(
 for (int i = threadIdx.x; i < hidden_dim; i += blockDim.x) {
     local_pointer[i] = multimemLoadSum(multimem_pointer + i);
 }
+
+coop.sync();
 ```
 
 **Key Multimem APIs:**
@@ -583,7 +585,7 @@ for (int peer = threadIdx.x; peer < nRanks; peer += blockDim.x) {
   // PUT: send our token data to peer's receive window
   gin.put(ncclTeamWorld(devComm), peer, window_recv, my_window_offset,
           window_send, peer_window_offset, sizeof(float) * hidden_dim,
-          ncclGin_SignalInc{signalIndex});
+          ncclGin_WeakSignalInc{signalIndex});
 }
 
 // Wait until every peer has completed its signaled PUT delivering its contribution for
@@ -617,7 +619,7 @@ for (int peer = 1; peer < nRanks; peer++) {
 - `ncclGin gin { devComm, ginContext }`: Creates a GIN handle for initiating remote operations. The `ginContext` parameter selects which communication channel to use.
 - `devComm.ginContextCount`: The number of available GIN contexts. Multiple contexts allow parallel operations across different communication channels.
 - `gin.put(team, peer, dest_window, dest_offset, src_window, src_offset, size, signal)`: Initiates a one-sided **PUT** to rank `peer` in the communicator; in this example the loop includes all ranks, including self
-- `gin.waitSignal(scope, signalIndex, expectedValue)`: Waits until **this rank's** local signal reaches the threshold—i.e. enough **inbound** signaled **PUTs** from peers have completed (remote `SignalInc` bumps the **destination's** counter)
+- `gin.waitSignal(scope, signalIndex, expectedValue)`: Waits until **this rank's** local signal reaches the threshold—i.e. enough **inbound** signaled **PUTs** from peers have completed (remote `ncclGin_WeakSignalInc` adds one completion increment on the **destination's** counter)
 - `gin.flush(scope)`: Completes local consumption of pending GIN operations this context issued (e.g. safe to reuse source buffers per API semantics)
 - `gin.readSignal(signalIndex)`: Reads the current signal value to establish a baseline for waiting
 
@@ -630,9 +632,9 @@ for (int peer = 1; peer < nRanks; peer++) {
 **GIN signals (per thread block):**
 - **`signalIndex = blockIdx.x`**: Each token block uses its own signal slot so different blocks in the same kernel do not share one counter.
 - **`gin.readSignal(signalIndex)`** before Phase 1: Captures the baseline `signalValue` for this slot immediately before this block issues any **PUT** (`gin.put`) in the current launch. Later waits are expressed relative to that baseline.
-- **`ncclGin_SignalInc{signalIndex}`** on each **PUT** (`gin.put`): **Remote action** on the **peer**: their **PUT** **to you** atomically increments **this rank's** signal `signalIndex` when the transfer is ordered per the API. So **your** counter rises once per peer that issues such a **PUT** with that signal (not when **you** finish sending to them).
+- **`ncclGin_WeakSignalInc{signalIndex}`** on each **PUT** (`gin.put`): **Remote action** on the **peer**: their **PUT** **to you** adds one completion increment to **this rank's** signal `signalIndex` when the transfer is ordered per the API. So **your** counter rises once per peer that issues such a **PUT** with that signal (not when **you** finish sending to them).
 - **After Phase 1**: `gin.waitSignal(..., signalValue + nRanks)` waits until **each** peer has completed one signaled **PUT** with its partial for **`token_idx`** (this rank and block’s token) **into this rank's** `window_recv`.
-- **Phase 3**: Issues another **nRanks** outbound **PUTs** (`gin.put`) with `ncclGin_SignalInc{signalIndex}`; peers’ signals rise as they receive. The per-block signal is **not** reset. **`gin.waitSignal(..., signalValue + 2 * nRanks)`** waits until **each** peer has completed the signaled Phase 3 **PUT** into **this** rank’s `window_send` (all-gather inbound round).
+- **Phase 3**: Issues another **nRanks** outbound **PUTs** (`gin.put`) with `ncclGin_WeakSignalInc{signalIndex}`; peers’ signals rise as they receive. The per-block signal is **not** reset. **`gin.waitSignal(..., signalValue + 2 * nRanks)`** waits until **each** peer has completed the signaled Phase 3 **PUT** into **this** rank’s `window_send` (all-gather inbound round).
 - **`gin.flush`**: After each wait, completes **this rank’s** outbound GIN operations so **`window_send`** (Phase 1) and **`window_recv`** (Phase 3) regions used as **PUT sources** can be safely reused; barriers still order cross-rank phases.
 
 ##### Phase 2: RMS Normalization
@@ -672,7 +674,7 @@ for (int peer = threadIdx.x; peer < nRanks; peer += blockDim.x) {
   // PUT: send normalized data to peer's send window
   gin.put(ncclTeamWorld(devComm), peer, window_send, final_token_offset,
           window_recv, my_window_offset, sizeof(float) * hidden_dim,
-          ncclGin_SignalInc{signalIndex});
+          ncclGin_WeakSignalInc{signalIndex});
 }
 
 // Wait until every peer has completed its signaled PUT for Phase 3 all-gather into
@@ -803,7 +805,7 @@ NCCLCHECK(ncclDevCommCreate(comm, &reqs, &devComm));
 
 ##### Phase 1: Reduce-Scatter via Hybrid LSA/GIN
 
-The same block/token mapping, offsets (`token_idx`, `peer_token_idx`), and in-place reduction as the pure GIN example apply here; see that section for the layout. **Transport is split by peer kind:** **PUT** (`gin.put`) with **`SignalInc`** goes only to **remote** (non-LSA) peers. **LSA** peers get the same logical data via **stores** (no signal). **`gin.waitSignal(signalValue + numRemotePeers)`** therefore waits only until **every remote peer** has finished its signaled **PUT** with its partial for **`token_idx`** into this rank’s `window_recv`; **`gin.flush`** completes **outbound** GIN so **`window_send`** Phase 1 sources are reusable.
+The same block/token mapping, offsets (`token_idx`, `peer_token_idx`), and in-place reduction as the pure GIN example apply here; see that section for the layout. **Transport is split by peer kind:** remote (non-LSA) peers use **PUT** (`gin.put`) with `ncclGin_WeakSignalInc`, and **LSA** peers get the same logical data via **stores** (no GIN signal). **`gin.waitSignal(signalValue + numRemotePeers)`** therefore waits only until **every remote peer** has finished its signaled **PUT** with its partial for **`token_idx`** into this rank’s `window_recv`; **`gin.flush`** completes **outbound** GIN so **`window_send`** Phase 1 sources are reusable.
 
 For same-node LSA peers, **`bar.lsaBarrier().sync(coop, cuda::memory_order_acq_rel)`** then publishes this rank’s LSA stores and acquires same-node peers’ LSA stores before reduction.
 
@@ -839,7 +841,7 @@ for (int peer = threadIdx.x; peer < startLsa; peer += blockDim.x) {
 
   gin.put(ncclTeamWorld(devComm), peer, window_recv, my_window_offset,
           window_send, peer_window_offset, sizeof(float) * hidden_dim,
-          ncclGin_SignalInc{signalIndex});
+          ncclGin_WeakSignalInc{signalIndex});
 }
 
 // Remote peers: PUT (peers after LSA team)
@@ -849,7 +851,7 @@ for (int peer = startLsa + lsaSize + threadIdx.x; peer < nRanks; peer += blockDi
 
   gin.put(ncclTeamWorld(devComm), peer, window_recv, my_window_offset,
           window_send, peer_window_offset, sizeof(float) * hidden_dim,
-          ncclGin_SignalInc{signalIndex});
+          ncclGin_WeakSignalInc{signalIndex});
 }
 
 // Send to local peers using LSA direct writes
@@ -915,10 +917,10 @@ for (int peer = 1; peer < nRanks; peer++) {
 
 **Hybrid GIN signals (per thread block):**
 - **`signalIndex`** and baseline **`gin.readSignal(signalIndex)`** behave like the pure GIN example: one signal slot per `blockIdx.x`, and `signalValue` is sampled before any **PUT** (`gin.put`) in this block.
-- **Only remote PUT** (`gin.put`) uses `ncclGin_SignalInc{signalIndex}` as a **remote** action, so it increments **the destination rank's** signal when the **PUT** is ordered. **LSA copies do not** touch that counter—local peers are ordered via the LSA sub-barrier.
+- **Only remote PUT** (`gin.put`) uses `ncclGin_WeakSignalInc{signalIndex}` as a **remote** action, adding one completion increment to **the destination rank's** signal when the **PUT** is ordered. **LSA copies do not** touch that counter—local peers are ordered via the LSA sub-barrier.
 - **After Phase 1 remote GIN**: `gin.waitSignal(..., signalValue + numRemotePeers)` waits until every **remote** peer has completed one signaled **PUT** with its contribution for **`token_idx`** **into this rank's** `window_recv` (`numRemotePeers` increments only). **`gin.flush`** then reuses **`window_send`** sources used for outbound **PUTs**.
 - **After Phase 1 local LSA**: **`bar.lsaBarrier().sync(coop, cuda::memory_order_acq_rel)`** publishes and acquires **LSA** writes before reduction.
-- **Phase 3**: Another `numRemotePeers` remote **PUTs** (`gin.put`) with `SignalInc`; final **`waitSignal(..., signalValue + 2 * numRemotePeers)`** waits for the **remote** all-gather round into **`window_send`**. **`flush`** consumes Phase 3 **`window_recv`** sources used for outbound **PUTs**. LSA broadcast is fenced by **`bar.sync`**, not signals.
+- **Phase 3**: Another `numRemotePeers` remote **PUTs** (`gin.put`) with `ncclGin_WeakSignalInc`; final **`waitSignal(..., signalValue + 2 * numRemotePeers)`** waits for the **remote** all-gather round into **`window_send`**. **`flush`** consumes Phase 3 **`window_recv`** sources used for outbound **PUTs**. LSA broadcast is fenced by **`bar.sync`**, not signals.
 
 ##### Phase 2: RMS Normalization
 
@@ -953,14 +955,14 @@ my_window_offset = (blockIdx.x * hidden_dim) * sizeof(float);
 for (int peer = threadIdx.x; peer < startLsa; peer += blockDim.x) {
   gin.put(ncclTeamWorld(devComm), peer, window_send, final_token_offset,
           window_recv, my_window_offset, sizeof(float) * hidden_dim,
-          ncclGin_SignalInc{signalIndex});
+          ncclGin_WeakSignalInc{signalIndex});
 }
 
 // Remote peers: PUT (peers after LSA team)
 for (int peer = startLsa + lsaSize + threadIdx.x; peer < nRanks; peer += blockDim.x) {
   gin.put(ncclTeamWorld(devComm), peer, window_send, final_token_offset,
           window_recv, my_window_offset, sizeof(float) * hidden_dim,
-          ncclGin_SignalInc{signalIndex});
+          ncclGin_WeakSignalInc{signalIndex});
 }
 
 // Send to local peers using LSA direct writes

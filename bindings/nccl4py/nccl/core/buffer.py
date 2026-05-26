@@ -46,10 +46,6 @@ def mem_alloc(size: int, device: NcclDeviceSpec | None = None) -> Buffer:
         A CUDA buffer object backed by NCCL-managed memory. The buffer is
         allocated on the specified device; the current device is restored
         after allocation.
-
-    See Also:
-        NCCL ncclMemAlloc reference:
-        https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html#ncclmemalloc
     """
     device_id = get_device_id(device)
 
@@ -65,10 +61,6 @@ def mem_free(buf: Buffer) -> None:
 
     Args:
         buf: The buffer to free.
-
-    See Also:
-        NCCL ncclMemFree reference:
-        https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html#ncclmemfree
     """
     buf.close()
 
@@ -88,7 +80,7 @@ class NcclBuffer:
     automatically derived from buffer size and dtype; use slicing to control
     element count.
 
-    When stream is None, the special sentinel value -1 is used internally.
+    When stream is ``None``, the special sentinel value -1 is used internally.
     This sentinel is required by cuda.core's StridedMemoryView.view to
     indicate that no stream synchronization should be performed between the
     producer stream (where the buffer was created) and the consumer stream
@@ -109,7 +101,7 @@ class NcclBuffer:
 
         Args:
             buffer: Buffer specification to resolve.
-            stream: CUDA stream for synchronization. Defaults to None (no
+            stream: CUDA stream for synchronization. Defaults to ``None`` (no
                 synchronization between producer and consumer streams).
 
         Raises:

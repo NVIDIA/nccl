@@ -30,7 +30,7 @@ NCCL_DEVICE_INLINE ncclGinWindow_t getGinWindow(ncclWindow_t window, int connect
 
 NCCL_DEVICE_INLINE int teamRankToGinRank(ncclDevComm const& comm, ncclTeam team, int teamRank) {
   int worldRank = ncclTeamRankToWorld(comm, team, teamRank);
-  if (comm.ginIsRailed) {
+  if (comm.ginConnectionsRailed) {
     return utility::idivFast32(worldRank, comm.lsaSize, comm.lsaSize_rcp32);
   } else {
     return worldRank;
@@ -129,7 +129,7 @@ template<unsigned beMask>
 NCCL_DEVICE_INLINE ncclGinCtx_M<beMask> ncclGin_BackendMask<beMask>::_makeCtx() const {
   ncclGinCtx_M<beMask> ans;
   ans.backend = (ncclNetDeviceType)_ginBackend;
-  if (comm.ginIsRailed) {
+  if (comm.ginConnectionsRailed) {
     ncclTeam teamRail = ncclTeamRail(comm);
     ans.rank = teamRail.rank;
     ans.nRanks = teamRail.nRanks;
@@ -147,7 +147,7 @@ NCCL_DEVICE_INLINE ncclGinCtx ncclGin_C_makeCtx(ncclGin_C* net) {
   ncclGinCtx ans;
   ans.backendMask = net->backendMask;
   ans.backend = (ncclNetDeviceType)net->_ginBackend;
-  if (net->comm.ginIsRailed) {
+  if (net->comm.ginConnectionsRailed) {
     ncclTeam teamRail = ncclTeamRail(net->comm);
     ans.rank = teamRail.rank;
     ans.nRanks = teamRail.nRanks;

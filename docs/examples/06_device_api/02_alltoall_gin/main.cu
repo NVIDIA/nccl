@@ -92,7 +92,7 @@ __global__ void PureGinAlltoAllKernel(ncclWindow_t sendwin, size_t sendoffset,
     gin.put(ncclTeamWorld(devComm), r,
         recvwin, recvoffset + devComm.rank * size,
         sendwin, sendoffset + r * size,
-        size, ncclGin_SignalInc{signalIndex});
+        size, ncclGin_WeakSignalInc{signalIndex});
   }
 
   // Wait only on the CTA whose blockIdx.x (signalIndex) accumulates all puts to this rank.

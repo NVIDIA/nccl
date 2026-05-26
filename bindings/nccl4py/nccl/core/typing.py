@@ -14,11 +14,11 @@ interfaces for NCCL operations with comprehensive type hints.
 from __future__ import annotations
 
 from enum import IntEnum
-from typing import Any, Protocol, TypeAlias
+from typing import Any, Protocol, TypeAlias, Union
 
 import numpy as _np
 from cuda.core import Buffer, Device, Stream
-from cuda.core.typing import IsStreamT
+from cuda.core.typing import IsStreamType
 
 __all__ = [
     "NcclDataType",
@@ -123,10 +123,15 @@ class NcclRedOp(IntEnum):
     """
 
     SUM = 0
+    """Element-wise sum (``+``)."""
     PROD = 1
+    """Element-wise product (``*``)."""
     MAX = 2
+    """Element-wise maximum."""
     MIN = 3
+    """Element-wise minimum."""
     AVG = 4
+    """Sum across all ranks divided by the number of ranks."""
 
 
 class NcclGinType(IntEnum):
@@ -135,8 +140,6 @@ class NcclGinType(IntEnum):
     Reported by :py:attr:`Communicator.gin_type` and
     :py:attr:`Communicator.railed_gin_type` to indicate which device-side
     network transport, if any, is available on the communicator.
-    ``NONE`` means a device communicator cannot be created with GIN
-    resources.
     """
 
     NONE = 0
@@ -148,7 +151,9 @@ class NcclGinType(IntEnum):
     """GPUDirect Async Kernel-Initiated (GDA-KI). The kernel directly
     issues network operations to the NIC, bypassing the CPU proxy."""
     GPI = 4
-    """GPU-Initiated networking via the GPI backend."""
+    """GPU-Push Interface. GPU threads push network descriptors directly
+    to a NIC-visible MMIO queue, with no CPU involvement and no memory
+    barriers."""
 
 
 class NcclGinConnectionType(IntEnum):
@@ -179,22 +184,39 @@ class NcclDataType(IntEnum):
     """
 
     INT8 = 0
-    CHAR = 0  # alias of INT8
+    """Signed 8-bit integer."""
+    CHAR = 0
+    """Alias of :py:attr:`INT8`."""
     UINT8 = 1
+    """Unsigned 8-bit integer."""
     INT32 = 2
-    INT = 2  # alias of INT32
+    """Signed 32-bit integer."""
+    INT = 2
+    """Alias of :py:attr:`INT32`."""
     UINT32 = 3
+    """Unsigned 32-bit integer."""
     INT64 = 4
+    """Signed 64-bit integer."""
     UINT64 = 5
+    """Unsigned 64-bit integer."""
     FLOAT16 = 6
-    HALF = 6  # alias of FLOAT16
+    """IEEE half-precision floating point (2 bytes)."""
+    HALF = 6
+    """Alias of :py:attr:`FLOAT16`."""
     FLOAT32 = 7
-    FLOAT = 7  # alias of FLOAT32
+    """IEEE single-precision floating point (4 bytes)."""
+    FLOAT = 7
+    """Alias of :py:attr:`FLOAT32`."""
     FLOAT64 = 8
-    DOUBLE = 8  # alias of FLOAT64
+    """IEEE double-precision floating point (8 bytes)."""
+    DOUBLE = 8
+    """Alias of :py:attr:`FLOAT64`."""
     BFLOAT16 = 9
+    """Brain floating-point (16-bit truncated single precision; CUDA 11+)."""
     FLOAT8E4M3 = 10
+    """8-bit floating point, 4 exponent + 3 mantissa bits (CUDA >= 11.8, SM >= 90)."""
     FLOAT8E5M2 = 11
+    """8-bit floating point, 5 exponent + 2 mantissa bits (CUDA >= 11.8, SM >= 90)."""
 
     @classmethod
     def _missing_(cls, value):
@@ -368,16 +390,21 @@ class SupportsCAI(Protocol):
     def __cuda_array_interface__(self) -> dict[str, Any]: ...
 
 
-NcclSupportedBuffer: TypeAlias = Buffer | SupportsDLPack | SupportsCAI
+NcclSupportedBuffer: TypeAlias = Union[Buffer, SupportsDLPack, SupportsCAI]
 
 NcclBufferSpec: TypeAlias = NcclSupportedBuffer
+"""A buffer object accepted by NCCL operations: a :py:class:`cuda.core.Buffer`,
+an object implementing the DLPack protocol, or an object exposing
+``__cuda_array_interface__``."""
 
-NcclScalarSpec: TypeAlias = (
-    int
-    | float
-    | _np.ndarray  # NumPy array for host scalars
-    | NcclSupportedBuffer  # Device buffer (Buffer, DLPack, or CUDA Array Interface)
-)
+NcclScalarSpec: TypeAlias = Union[int, float, _np.ndarray, NcclSupportedBuffer]
+"""A scalar value: a Python ``int`` / ``float``, a one-element NumPy array,
+or a one-element device buffer in any of the forms accepted by
+:py:data:`NcclBufferSpec`."""
 
-NcclDeviceSpec: TypeAlias = Device | int
-NcclStreamSpec: TypeAlias = Stream | IsStreamT | int
+NcclDeviceSpec: TypeAlias = Union[Device, int]
+"""A CUDA device: a :py:class:`cuda.core.Device` or an integer device ID."""
+
+NcclStreamSpec: TypeAlias = Union[Stream, IsStreamType, int]
+"""A CUDA stream: a :py:class:`cuda.core.Stream`, an object implementing
+``__cuda_stream__``, or an integer stream handle."""

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# This code was automatically generated with version 2.30.0. Do not modify it directly.
+# This code was automatically generated with version 2.30.6. Do not modify it directly.
 
 from libc.stdint cimport intptr_t
 
@@ -19,6 +19,9 @@ ctypedef ncclParamHandle_t ParamHandle
 ctypedef ncclDevCommWindowTable_t DevCommWindowTable
 
 ctypedef cudaStream_t Stream
+
+cdef class PointerBox:
+    cdef public intptr_t ptr
 
 
 ###############################################################################
@@ -42,19 +45,19 @@ ctypedef ncclGinConnectionType_t _GinConnectionType
 cpdef intptr_t mem_alloc(size_t size) except? 0
 cpdef mem_free(intptr_t ptr)
 cpdef int get_version() except? -1
-cpdef get_unique_id(intptr_t unique_id)
-cpdef intptr_t comm_init_rank_config(int nranks, comm_id, int rank, intptr_t config) except? 0
-cpdef intptr_t comm_init_rank(int nranks, comm_id, int rank) except? 0
+cpdef object get_unique_id()
+cpdef int comm_init_rank_config(intptr_t comm, int nranks, comm_id, int rank, intptr_t config) except? -1
+cpdef int comm_init_rank(intptr_t comm, int nranks, comm_id, int rank) except? -1
 cpdef object comm_init_all(int ndev, devlist)
 cpdef comm_finalize(intptr_t comm)
 cpdef comm_destroy(intptr_t comm)
 cpdef comm_abort(intptr_t comm)
 cpdef comm_revoke(intptr_t comm, int revoke_flags)
-cpdef intptr_t comm_split(intptr_t comm, int color, int key, intptr_t config) except? 0
-cpdef intptr_t comm_shrink(intptr_t comm, exclude_ranks_list, int exclude_ranks_count, intptr_t config, int shrink_flags) except? 0
-cpdef comm_get_unique_id(intptr_t comm, intptr_t unique_id)
-cpdef intptr_t comm_grow(intptr_t comm, int n_ranks, intptr_t unique_id, int rank, intptr_t config) except? 0
-cpdef intptr_t comm_init_rank_scalable(int nranks, int myrank, int n_id, comm_ids, intptr_t config) except? 0
+cpdef int comm_split(intptr_t comm, int color, int key, intptr_t newcomm, intptr_t config) except? -1
+cpdef int comm_shrink(intptr_t comm, exclude_ranks_list, int exclude_ranks_count, intptr_t newcomm, intptr_t config, int shrink_flags) except? -1
+cpdef object comm_get_unique_id(intptr_t comm)
+cpdef int comm_grow(intptr_t comm, int n_ranks, intptr_t unique_id, int rank, intptr_t newcomm, intptr_t config) except? -1
+cpdef int comm_init_rank_scalable(intptr_t newcomm, int nranks, int myrank, int n_id, comm_ids, intptr_t config) except? -1
 cpdef str get_error_string(int result)
 cpdef str get_last_error(intptr_t comm)
 cpdef int comm_get_async_error(intptr_t comm) except? -1
@@ -66,7 +69,7 @@ cpdef comm_deregister(intptr_t comm, intptr_t handle)
 cpdef comm_suspend(intptr_t comm, int flags)
 cpdef comm_resume(intptr_t comm)
 cpdef uint64_t comm_mem_stats(intptr_t comm, int stat) except? -1
-cpdef intptr_t comm_window_register(intptr_t comm, intptr_t buff, size_t size, int win_flags) except? 0
+cpdef int comm_window_register(intptr_t comm, intptr_t buff, size_t size, intptr_t win, int win_flags) except? -1
 cpdef comm_window_deregister(intptr_t comm, intptr_t win)
 cpdef intptr_t win_get_user_ptr(intptr_t comm, intptr_t win) except? 0
 cpdef int red_op_create_pre_mul_sum(intptr_t scalar, int datatype, int residence, intptr_t comm) except? -1
@@ -84,12 +87,12 @@ cpdef send(intptr_t sendbuff, size_t count, int datatype, int peer, intptr_t com
 cpdef recv(intptr_t recvbuff, size_t count, int datatype, int peer, intptr_t comm, intptr_t stream)
 cpdef put_signal(intptr_t localbuff, size_t count, int datatype, int peer, intptr_t peer_win, size_t peer_win_offset, int sig_idx, int ctx, unsigned int flags, intptr_t comm, intptr_t stream)
 cpdef signal(int peer, int sig_idx, int ctx, unsigned int flags, intptr_t comm, intptr_t stream)
-cpdef wait_signal(int n_desc, intptr_t signal_descs, intptr_t comm, intptr_t stream)
+cpdef wait_signal(int n_desc, signal_descs, intptr_t comm, intptr_t stream)
 cpdef group_start()
 cpdef group_end()
-cpdef group_simulate_end(intptr_t sim_info)
-cpdef comm_query_properties(intptr_t comm, intptr_t props)
-cpdef dev_comm_create(intptr_t comm, intptr_t reqs, intptr_t out_dev_comm)
+cpdef object group_simulate_end()
+cpdef object comm_query_properties(intptr_t comm)
+cpdef object dev_comm_create(intptr_t comm, intptr_t reqs)
 cpdef dev_comm_destroy(intptr_t comm, intptr_t dev_comm)
 cpdef intptr_t get_lsa_multimem_device_pointer(intptr_t window, size_t offset) except? 0
 cpdef intptr_t get_lsa_device_pointer(intptr_t window, size_t offset, int lsa_rank) except? 0

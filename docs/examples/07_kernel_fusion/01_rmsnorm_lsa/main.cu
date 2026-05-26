@@ -56,7 +56,7 @@ __global__ void RMSNormLSA(ncclWindow_t window, ncclDevComm devComm,
 
   // Initialize LSA barrier session for this block
   ncclLsaBarrierSession<ncclCoopCta> bar {
-    coop, devComm, ncclTeamLsa(devComm), devComm.lsaBarrier, blockIdx.x
+    coop, devComm, ncclTeamTagLsa(), blockIdx.x
   };
 
   // Initial synchronization across all GPUs

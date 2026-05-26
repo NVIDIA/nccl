@@ -418,7 +418,8 @@ static void setupLowLatencyTensorsRankMajLayout(
     unsigned int top_k,
     unsigned int num_local_experts,
     unsigned int max_dispatch_tokens_per_rank,
-    int nRanks
+    int nRanks,
+    const EpTensorAllocOptions* dispatch_out_window_opts = nullptr
 ) {
     // Rank-major uses per-source-rank counter, not the per-expert counter that
     // setupLowLatencyTensorsSharedInputs created. Swap expert_counters out for
@@ -429,8 +430,12 @@ static void setupLowLatencyTensorsRankMajLayout(
 
     NCCLCHECK(epMakeTensor(&dispatch_layout_info.src_rank_counters, 1, ncclInt32, (unsigned)nRanks));
 
+    // Optionally window-back the dispatch output tokens to exercise the LL
+    // rank-major zero-copy dispatch path (sender writes payload directly to
+    // peer's recv_x via P2P; nvlinkOnly + bf16 only).
     NCCLCHECK(epMakeTensor(&dispatch_outputs.tokens, 3, ncclBfloat16,
-                           (unsigned)nRanks, max_dispatch_tokens_per_rank, hidden));
+                           (unsigned)nRanks, max_dispatch_tokens_per_rank, hidden,
+                           1, 1, dispatch_out_window_opts));
 
     NCCLCHECK(epMakeTensor(&dispatch_outputs.topk_weights, 2, ncclFloat32,
                            (unsigned)nRanks * max_dispatch_tokens_per_rank, top_k));
@@ -459,7 +464,8 @@ void setupLowLatencyTensors(
     unsigned int num_local_experts,
     unsigned int max_dispatch_tokens_per_rank,
     int nRanks,
-    ncclEpLayout_t layout
+    ncclEpLayout_t layout,
+    const EpTensorAllocOptions* dispatch_out_window_opts = nullptr
 ) {
 
     setupLowLatencyTensorsSharedInputs(dispatch_inputs, dispatch_layout_info,
@@ -477,7 +483,8 @@ void setupLowLatencyTensors(
                                                 dispatch_layout_info, combine_inputs,
                                                 topk_weights,
                                                 hidden, top_k, num_local_experts,
-                                                max_dispatch_tokens_per_rank, nRanks);
+                                                max_dispatch_tokens_per_rank, nRanks,
+                                                dispatch_out_window_opts);
             break;
         default:
             fprintf(stderr, "setupLowLatencyTensors: unsupported layout %d\n", (int)layout);
@@ -2756,9 +2763,10 @@ int main(int argc, char* argv[]) {
         }
     }
     if (zcopy &&
-        algorithm != NCCL_EP_ALGO_HIGH_THROUGHPUT) {
+        algorithm != NCCL_EP_ALGO_HIGH_THROUGHPUT &&
+        !(algorithm == NCCL_EP_ALGO_LOW_LATENCY && layout == NCCL_EP_LAYOUT_RANK_MAJOR)) {
         if (myRank == 0)
-            printf("Error: Zero-copy is only applicable to HT mode (--algorithm ht)\n");
+            printf("Error: Zero-copy is only applicable to HT mode or LL rank-major mode\n");
         MPI_Finalize();
         return 1;
     }
@@ -2821,10 +2829,16 @@ int main(int argc, char* argv[]) {
             if (expert_major_alignment > 0)
                 printf("  Align (tokens):  %zu\n", expert_major_alignment);
         }
-        printf("  Use zero-copy: %s\n",
-               (zcopy && algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT)
-                   ? "enabled (ncclMemAlloc + TensorCreateFromWindow)"
-                   : "disabled");
+        const char* zcopy_str = "disabled";
+        if (zcopy) {
+            if (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) {
+                zcopy_str = "enabled (ncclMemAlloc + TensorCreateFromWindow)";
+            } else if (algorithm == NCCL_EP_ALGO_LOW_LATENCY &&
+                       layout == NCCL_EP_LAYOUT_RANK_MAJOR) {
+                zcopy_str = "enabled (LL rank-major: recv_x window, P2P payload write)";
+            }
+        }
+        printf("  Use zero-copy: %s\n", zcopy_str);
         printf("\n");
     }
 
@@ -3064,12 +3078,23 @@ int main(int argc, char* argv[]) {
 
     if (myRank == 0) { printf("[DEBUG] Setting up tensors...\n"); fflush(stdout); }
     if (is_ll_mode) {
+        // LL rank-major zero-copy: window-back dispatch_outputs.tokens so the
+        // kernel can write payload directly into peer recv_x via P2P.
+        EpTensorAllocOptions ll_zc_opts;
+        ll_zc_opts.use_nccl_mem = true;
+        ll_zc_opts.use_window = true;
+        ll_zc_opts.window_comm = comm;
+        ll_zc_opts.registered_windows = &alloc.registered_windows;
+        ll_zc_opts.nccl_mem_ptrs = &alloc.external_data_ptrs;
+        ll_zc_opts.tensor_data_ptrs = &alloc.tensor_data_ptrs;
+        const EpTensorAllocOptions* ll_dispatch_out_opts =
+            (zcopy && layout == NCCL_EP_LAYOUT_RANK_MAJOR) ? &ll_zc_opts : nullptr;
         setupLowLatencyTensors(dispatch_inputs, dispatch_outputs, dispatch_layout_info,
                                has_dispatch_layout_info, combine_inputs, combine_outputs,
                                topk_weights,
                                num_tokens, hidden, top_k,
                                num_local_experts, config.max_dispatch_tokens_per_rank,
-                               nRanks, layout);
+                               nRanks, layout, ll_dispatch_out_opts);
     } else {
         setupHighThroughputTensors(comm, alloc,
                                    dispatch_inputs, dispatch_outputs, dispatch_layout_info,

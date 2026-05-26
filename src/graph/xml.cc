@@ -586,12 +586,16 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
 
 #if NCCL_OS_LINUX
   char* path = NULL;
+  const char* deviceClass = NULL;
   NOWARN(ncclOsGetPciPath(busId, &path), NCCL_GRAPH);
   if (path) NCCLCHECKGOTO(ncclTopoSetAttrFromSys(pciNode, path, "class", "class"), ret, exit);
 
-  ncclResult_t nvmlRet;
-  NOWARN(nvmlRet = ncclNvmlDeviceGetHandleByPciBusId(busId, &device), NCCL_GRAPH);
-  if (nvmlRet == ncclSuccess) nvmlDeviceFound = true;
+  NCCLCHECKGOTO(xmlGetAttr(pciNode, "class", &deviceClass), ret, exit);
+  if (deviceClass == NULL || deviceClass[0] == '\0' || strncmp(deviceClass, "0x03", 4) == 0) {
+    ncclResult_t nvmlRet;
+    NOWARN(nvmlRet = ncclNvmlDeviceGetHandleByPciBusId(busId, &device), NCCL_GRAPH);
+    if (nvmlRet == ncclSuccess) nvmlDeviceFound = true;
+  }
 
 #elif NCCL_OS_WINDOWS
   char* parentBusId = NULL;
@@ -611,7 +615,6 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
     if (winNvmlRet == ncclSuccess) nvmlDeviceFound = true;
   }
 #endif
-  if (!nvmlDeviceFound) TRACE(NCCL_GRAPH, "Topology detection : could not find NVML device for %s.", busId);
 
   int index;
   NCCLCHECKGOTONOWARN(xmlGetAttrIndex(pciNode, "vendor", &index), ret, exit, NCCL_GRAPH);

@@ -45,16 +45,12 @@ dependencies = [
 cu12 = [
     "nvidia-nccl-cu12",
     "cuda-bindings~=12.0",
+    "nvidia-cutlass-dsl>=4.5.2,<5.0",
 ]
 cu13 = [
     "nvidia-nccl-cu13",
     "cuda-bindings~=13.0",
-]
-cute-cu12 = [
-    "nvidia-cutlass-dsl~=4.5",
-]
-cute-cu13 = [
-    "nvidia-cutlass-dsl[cu13]~=4.5",
+    "nvidia-cutlass-dsl[cu13]>=4.5.2,<5.0",
 ]
 
 [dependency-groups]

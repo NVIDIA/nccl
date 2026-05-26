@@ -28,8 +28,8 @@ except ImportError as e:
     raise ImportError(
         "nccl.core.device.cute requires the nvidia-cutlass-dsl package. "
         "Install it via the matching extra:\n"
-        "    pip install 'nccl4py[cu12,cute-cu12]'   # for CUDA 12\n"
-        "    pip install 'nccl4py[cu13,cute-cu13]'   # for CUDA 13"
+        "    pip install 'nccl4py[cu12]'   # for CUDA 12\n"
+        "    pip install 'nccl4py[cu13]'   # for CUDA 13"
     ) from e
 
 from . import types, coop, comm, gin, barrier

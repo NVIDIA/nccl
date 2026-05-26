@@ -26,7 +26,6 @@ from nccl.bindings import nccl as _nccl_bindings
 from nccl._binding_helpers import binding_dataclass
 from nccl.core.buffer import NcclBuffer
 from nccl.core.constants import (
-    NCCL_SPLIT_NOCOLOR,
     CTAPolicy,
     CommShrinkFlag,
     CommSuspendFlag,
@@ -489,7 +488,7 @@ class Communicator:
         self._check_valid("split")
 
         if color is None:
-            color = NCCL_SPLIT_NOCOLOR
+            color = -1  # NCCL_SPLIT_NOCOLOR from nccl.h
         cfg_ptr = 0 if config is None else config._lowpp.ptr  # type: ignore[attr-defined]
         newcomm = type(self)()
         self._children_in_progress.append(newcomm)

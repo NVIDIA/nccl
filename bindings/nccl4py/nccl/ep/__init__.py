@@ -17,7 +17,7 @@ from pathlib import Path as _Path
 # Defaults for libnccl_ep.so's JIT runtime; either env var can be overridden
 # by setting it in the environment before importing nccl.ep.
 _PKG_DIR = _Path(__file__).parent
-_JIT_SOURCE_DIR = _PKG_DIR / "include" / "nccl_ep"
+_JIT_SOURCE_DIR = _PKG_DIR / "include"
 if _JIT_SOURCE_DIR.is_dir():
     _os.environ.setdefault("NCCL_EP_JIT_SOURCE_DIR", str(_JIT_SOURCE_DIR))
 

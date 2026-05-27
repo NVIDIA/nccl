@@ -1056,13 +1056,14 @@ ncclResult_t ncclGinGdakiRegMrSym(void *collComm, void *data, size_t size, int t
   __be32 rkey;
 
   struct gdaki_mem_handle *gdaki_mhandle = nullptr;
-  gdaki_mhandle = (struct gdaki_mem_handle *)calloc(1, sizeof(*gdaki_mhandle));
-  EQCHECK(gdaki_mhandle, nullptr);
-
   bool force_strict_ordering = (mr_flags & NCCL_NET_MR_FLAG_FORCE_SO);
-  NCCLCHECK(gdakiRegMr(&mr, cComm->ib.pd, data, size,
-                       IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ |
-                         IBV_ACCESS_REMOTE_ATOMIC, force_strict_ordering));
+
+  gdaki_mhandle = (struct gdaki_mem_handle *)calloc(1, sizeof(*gdaki_mhandle));
+  EQCHECKGOTO(gdaki_mhandle, nullptr, status, out);
+
+  NCCLCHECKGOTO(gdakiRegMr(&mr, cComm->ib.pd, data, size,
+                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ |
+                             IBV_ACCESS_REMOTE_ATOMIC, force_strict_ordering), status, out);
 
   rkey = htobe32(mr->rkey);
   NCCLCHECKGOTO(rkeys_hd_mhandle->allocate(cComm->nranks), status, out);
@@ -1087,6 +1088,8 @@ ncclResult_t ncclGinGdakiRegMrSym(void *collComm, void *data, size_t size, int t
 
 out:
   if (status != ncclSuccess) {
+    if (mr) wrap_ibv_dereg_mr(mr);
+    free(gdaki_mhandle);
     delete gdaki_mhandle_hd_mhandle;
     delete rkeys_hd_mhandle;
   }

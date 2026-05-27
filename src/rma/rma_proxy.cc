@@ -125,6 +125,7 @@ static ncclResult_t ncclRmaProxyCtxAlloc(struct ncclComm* comm, ncclRma_t* rmaCo
   // Sanitize and set up the lock-free circular buffer queue size
   uint64_t queueSize = ncclParamRmaProxyQueueSize();
   uint32_t maxRequests = NCCL_NET_MAX_REQUESTS * rmaProxyCtx->props.maxRecvs;
+  rmaProxyCtx->maxInflightRequests = maxRequests;
   if (queueSize == -1) {
     queueSize = maxRequests;
   }
@@ -151,6 +152,7 @@ static ncclResult_t ncclRmaProxyCtxAlloc(struct ncclComm* comm, ncclRma_t* rmaCo
   NCCLCHECK(ncclCalloc(&rmaProxyCtx->circularBuffers, circularBufLength));
   NCCLCHECK(ncclCalloc(&rmaProxyCtx->pis, comm->nRanks));
   NCCLCHECK(ncclCalloc(&rmaProxyCtx->cis, comm->nRanks));
+  NCCLCHECK(ncclCalloc(&rmaProxyCtx->inflightRequests, comm->nRanks));
 
   // Allocate per-peer InProgress queues (kept as linked list, single consumer)
   rmaProxyCtx->inProgressQueues = ncclMemoryStackAlloc<struct ncclIntruQueue<struct ncclRmaProxyDesc, &ncclRmaProxyDesc::next>>(&comm->memPermanent, comm->nRanks);
@@ -243,6 +245,7 @@ ncclResult_t ncclRmaProxyDestroyContext(ncclRma_t* rmaComm, void* rmaProxyCtx){
   // Free PI/CI arrays
   free(ctx->pis);
   free(ctx->cis);
+  free(ctx->inflightRequests);
 
   // Free InProgress queues and their Descs
   if (ctx->inProgressQueues) {

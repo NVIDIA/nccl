@@ -71,7 +71,8 @@ struct ncclRmaWaitSignalOp {
 struct ncclRmaPutSignalGroupOp {
   int nOps;
   struct ncclRmaPutSignalOp* ops;
-  int nRemaining;
+  int nIssued;
+  int nCompleted;
 };
 
 struct ncclRmaProxyDesc {
@@ -120,6 +121,10 @@ struct ncclRmaProxyCtx {
 
   // Per-rank inProgressQueues: Descs with issued network operations waiting for completion
   struct ncclIntruQueue<struct ncclRmaProxyDesc, &ncclRmaProxyDesc::next>* inProgressQueues;
+
+  // Per-target-rank request credits. Each target rank maps to one RMA send comm request pool.
+  uint32_t maxInflightRequests;
+  uint32_t* inflightRequests;
 
   // Per-rank sequence number and counters
   uint64_t* opSeqs;

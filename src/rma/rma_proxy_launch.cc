@@ -133,7 +133,8 @@ ncclResult_t ncclRmaProxyPutGroupBuildDesc(
   // Take ownership of the caller's pre-filled ops array.
   desc->putSignalGroup.nOps = nOps;
   desc->putSignalGroup.ops = *ops;
-  desc->putSignalGroup.nRemaining = nOps;
+  desc->putSignalGroup.nIssued = 0;
+  desc->putSignalGroup.nCompleted = 0;
   *ops = nullptr;
 
   // Desc-level seq + persist state: same shape as single-put, slot=rank.
@@ -363,7 +364,7 @@ static inline ncclResult_t ncclRmaProxyEnqueuePersistentDesc(
 //   PutSignalGroup, non-persist    | push to pis[comm->rank] circular buffer
 //                                  | (rides the to-self slot; proxy issues
 //                                  |  all nOps iputs in parallel and frees
-//                                  |  the desc once nRemaining hits zero)
+//                                  |  the desc once all issued ops complete)
 //   PutSignalGroup, persistent     | append to persistentQueues[comm->rank]
 //                                  | (proxy issues all nOps iputs on each
 //                                  |  graph replay; freed at graph reclaim)

@@ -1,12 +1,28 @@
 # NCCL EP Example/Library CMake Configuration
 
-if(DEFINED CMAKE_CUDA_ARCHITECTURES)
-  foreach(arch IN LISTS CMAKE_CUDA_ARCHITECTURES)
-    if(arch LESS 90)
-      message(FATAL_ERROR "NCCL_EP requires sm_90 or higher. CMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}")
+# NCCL_EP requires sm_90+. If the caller passed -DCMAKE_CUDA_ARCHITECTURES use
+# it as-is and let nvcc fail if it's below sm_90. Otherwise mirror the
+# per-CUDA-version block in the root CMakeLists.txt trimmed to Hopper+.
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES OR CMAKE_CUDA_ARCHITECTURES STREQUAL "")
+    if(CUDA_MAJOR EQUAL 11)
+        if(CUDA_MINOR LESS 8)
+            message(FATAL_ERROR "NCCL_EP requires CUDA 11.8+ for sm_90 support. Got CUDA ${CUDAToolkit_VERSION}")
+        else()
+            set(CMAKE_CUDA_ARCHITECTURES "90")
+        endif()
+    elseif(CUDA_MAJOR EQUAL 12)
+        if(CUDA_MINOR LESS 8)
+            set(CMAKE_CUDA_ARCHITECTURES "90")
+        else()
+            set(CMAKE_CUDA_ARCHITECTURES "90;100;120")
+        endif()
+    elseif(CUDA_MAJOR GREATER_EQUAL 13)
+        set(CMAKE_CUDA_ARCHITECTURES "90;100;110;120")
+    else()
+        message(FATAL_ERROR "NCCL_EP requires CUDA 11.8+ for sm_90 support. Got CUDA ${CUDAToolkit_VERSION}")
     endif()
-  endforeach()
 endif()
+message(STATUS "NCCL_EP using CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
 
 # Parse library version from include/nccl_ep.h (single source of truth).
 file(READ ${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_ep.h _NCCL_EP_HEADER_CONTENT)
@@ -63,7 +79,7 @@ set_target_properties(nccl_ep_shared nccl_ep_static PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${NCCL_EP_LIBDIR}"
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
-    CUDA_ARCHITECTURES "90"
+    CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
     POSITION_INDEPENDENT_CODE ON
     CXX_STANDARD 17
     CXX_STANDARD_REQUIRED ON

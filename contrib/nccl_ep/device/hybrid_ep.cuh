@@ -2760,57 +2760,74 @@ __forceinline__ __device__ void inter_node_G2S_warp_group_device_function(const 
             // Each valid lane computes its rank among valid entries (ascending lane_id = ascending n order).
             const int rdma_local_rank = __popc(rdma_valid_mask & ((1u << lane_id) - 1));
 
-            if (rdma_lane_active && rdma_entry_valid) {
-              const int my_abs_offset = global_offset + rdma_local_rank;
-              const int stage_idx = starting_G2S_index + (my_abs_offset % ring_len);
-              const uint32_t parity = 1u ^ ((uint32_t)(my_abs_offset / ring_len) & 1u);
+            // Issue TMAs in batches of ring_len to prevent stage collisions
+            // when rdma_valid_count > ring_len (e.g. 8-node multinode config
+            // with ring_len=4). Mirrors the local-producer batching above;
+            // without this the parity protocol cannot resolve cleanly because
+            // RED consumes stages sequentially while overflow lanes wait on
+            // parity-flipped consumer arrives that depend on RED progress.
+            int rdma_ranks_issued = 0;
+            while (rdma_ranks_issued < rdma_valid_count) {
+              const int batch_end = (rdma_ranks_issued + ring_len < rdma_valid_count)
+                                      ? rdma_ranks_issued + ring_len : rdma_valid_count;
 
-              // Wait for consumer to free this stage.
-              // When rdma_valid_count > ring_len, overflow ranks block here until RED consumes earlier stages (parity protocol).
-              while (!cuda::ptx::mbarrier_try_wait_parity(smem_buffer_ptr->get_inter_node_mbarrier_G2S_consumer(stage_idx), parity)){}
+              const bool in_batch = rdma_lane_active && rdma_entry_valid &&
+                                    rdma_local_rank >= rdma_ranks_issued &&
+                                    rdma_local_rank < batch_end;
+              if (in_batch) {
+                const int rank_in_batch = rdma_local_rank - rdma_ranks_issued;
+                const int my_abs_offset = global_offset + rank_in_batch;
+                const int stage_idx = starting_G2S_index + (my_abs_offset % ring_len);
+                const uint32_t parity = 1u ^ ((uint32_t)(my_abs_offset / ring_len) & 1u);
 
-              // Load the src token from this rdma inter-node group buffer chunk to shared memory entry.
-              uint32_t total_tx_size = 0;
-              const uint16_t* rdma_inter_node_group_token_load_addr = rdma_inter_node_group_token +
-                                                                      (rdma_buffer_tile_id * MAX_NUM_OF_TOKENS_PER_RANK +
-                                                                      i * NUM_OF_TOKENS_PER_CHUNK +
-                                                                      j * NUM_OF_TOKENS_PER_GROUP + k) * HIDDEN_DIM;
-              cuda::ptx::cp_async_bulk(cuda::ptx::space_shared,
-                                       cuda::ptx::space_global,
-                                       reinterpret_cast<void*>(smem_buffer_ptr->get_inter_node_token_G2S(stage_idx)),
-                                       reinterpret_cast<const void*>(rdma_inter_node_group_token_load_addr),
-                                       token_bytes,
-                                       smem_buffer_ptr->get_inter_node_mbarrier_G2S_producer(stage_idx));
+                // Wait for consumer to free this stage.
+                while (!cuda::ptx::mbarrier_try_wait_parity(smem_buffer_ptr->get_inter_node_mbarrier_G2S_consumer(stage_idx), parity)){}
 
-              total_tx_size += token_bytes;
-
-              if constexpr (BACKWARD_COMBINE) {
-                const float* rdma_inter_node_group_prob_load_addr = rdma_inter_node_group_prob +
-                                                                    (rdma_buffer_tile_id * MAX_NUM_OF_TOKENS_PER_RANK +
-                                                                    i * NUM_OF_TOKENS_PER_CHUNK +
-                                                                    j * NUM_OF_TOKENS_PER_GROUP + k) * (experts_per_rank * num_of_ranks_per_node);
-
+                // Load the src token from this rdma inter-node group buffer chunk to shared memory entry.
+                uint32_t total_tx_size = 0;
+                const uint16_t* rdma_inter_node_group_token_load_addr = rdma_inter_node_group_token +
+                                                                        (rdma_buffer_tile_id * MAX_NUM_OF_TOKENS_PER_RANK +
+                                                                        i * NUM_OF_TOKENS_PER_CHUNK +
+                                                                        j * NUM_OF_TOKENS_PER_GROUP + k) * HIDDEN_DIM;
                 cuda::ptx::cp_async_bulk(cuda::ptx::space_shared,
                                          cuda::ptx::space_global,
-                                         reinterpret_cast<void*>(smem_buffer_ptr->get_inter_node_prob_G2S(stage_idx)),
-                                         reinterpret_cast<const void*>(rdma_inter_node_group_prob_load_addr),
-                                         prob_bytes,
+                                         reinterpret_cast<void*>(smem_buffer_ptr->get_inter_node_token_G2S(stage_idx)),
+                                         reinterpret_cast<const void*>(rdma_inter_node_group_token_load_addr),
+                                         token_bytes,
                                          smem_buffer_ptr->get_inter_node_mbarrier_G2S_producer(stage_idx));
 
-                total_tx_size += prob_bytes;
+                total_tx_size += token_bytes;
+
+                if constexpr (BACKWARD_COMBINE) {
+                  const float* rdma_inter_node_group_prob_load_addr = rdma_inter_node_group_prob +
+                                                                      (rdma_buffer_tile_id * MAX_NUM_OF_TOKENS_PER_RANK +
+                                                                      i * NUM_OF_TOKENS_PER_CHUNK +
+                                                                      j * NUM_OF_TOKENS_PER_GROUP + k) * (experts_per_rank * num_of_ranks_per_node);
+
+                  cuda::ptx::cp_async_bulk(cuda::ptx::space_shared,
+                                           cuda::ptx::space_global,
+                                           reinterpret_cast<void*>(smem_buffer_ptr->get_inter_node_prob_G2S(stage_idx)),
+                                           reinterpret_cast<const void*>(rdma_inter_node_group_prob_load_addr),
+                                           prob_bytes,
+                                           smem_buffer_ptr->get_inter_node_mbarrier_G2S_producer(stage_idx));
+
+                  total_tx_size += prob_bytes;
+                }
+
+                // Inter-node token does not need flag since the red warp group will also read attn_to_rdma_map.
+                cuda::ptx::mbarrier_arrive_expect_tx(cuda::ptx::sem_release,
+                                                     cuda::ptx::scope_cta,
+                                                     cuda::ptx::space_shared,
+                                                     smem_buffer_ptr->get_inter_node_mbarrier_G2S_producer(stage_idx),
+                                                     total_tx_size);
               }
 
-              // Inter-node token does not need flag since the red warp group will also read attn_to_rdma_map.
-              cuda::ptx::mbarrier_arrive_expect_tx(cuda::ptx::sem_release,
-                                                   cuda::ptx::scope_cta,
-                                                   cuda::ptx::space_shared,
-                                                   smem_buffer_ptr->get_inter_node_mbarrier_G2S_producer(stage_idx),
-                                                   total_tx_size);
+              global_offset += (batch_end - rdma_ranks_issued);
+              rdma_ranks_issued = batch_end;
+              // Prevent non-in_batch lanes from racing into the next iteration
+              // before in_batch lanes finish their wait_parity + TMA + arrive.
+              __syncwarp(0xffffffff);
             }
-
-            // ALL lanes advance uniformly -- no __shfl_sync needed.
-            // rdma_valid_count is identical for all 32 lanes (from __popc of same __ballot_sync result).
-            global_offset += rdma_valid_count;
           }
           } // end if constexpr (NUM_LSA_TEAMS > 1)
         }

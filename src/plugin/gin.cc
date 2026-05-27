@@ -68,7 +68,8 @@ static ncclResult_t ncclGinPluginUnload(ginPluginLib_t* pluginLib) {
 }
 
 static ncclResult_t ncclGinPluginLoad(ginPluginLib_t* pluginLib) {
-  // Open library. NET plugin dlHandle should be already set.
+  // Entries borrowed from RMA/NET may already have a handle;
+  // after unload, reopen the same library by its saved name/path.
   if (pluginLib->dlHandle == NULL) {
     pluginLib->dlHandle = ncclOpenGinPluginLib(pluginLib->name);
     if (pluginLib->dlHandle == nullptr) goto fail;
@@ -225,7 +226,7 @@ static void initPluginLibsOnceFunc() {
   // Also check if the NET plugin has GIN support
   if ((pluginLibs[pluginCounter].dlHandle = ncclGetNetPluginLib(ncclPluginTypeGin)) != NULL) {
     pluginLibs[pluginCounter].state = ncclGinPluginStateLoadReady;
-    pluginCounter++;
+    strcpy(pluginLibs[pluginCounter++].name, ncclGetPluginLibName(ncclPluginTypeGin));
   }
 
   // Add internal ib plugin

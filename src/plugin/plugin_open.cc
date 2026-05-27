@@ -182,3 +182,7 @@ ncclResult_t ncclClosePluginLib(void* handle, enum ncclPluginType type) {
   }
   return ncclSuccess;
 }
+
+const char* ncclGetPluginLibName(enum ncclPluginType type) {
+  return libNames[type];
+}

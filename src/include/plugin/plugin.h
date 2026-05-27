@@ -30,5 +30,6 @@ void* ncclGetGinPluginLib(enum ncclPluginType type);
 ncclResult_t ncclClosePluginLib(void* handle, enum ncclPluginType type);
 
 extern char* ncclPluginLibPaths[];
+const char* ncclGetPluginLibName(enum ncclPluginType type);
 
 #endif

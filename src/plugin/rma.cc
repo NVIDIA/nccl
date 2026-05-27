@@ -68,7 +68,8 @@ static ncclResult_t ncclRmaPluginUnload(rmaPluginLib_t* pluginLib) {
 }
 
 static ncclResult_t ncclRmaPluginLoad(rmaPluginLib_t* pluginLib) {
-  // Open library. NET plugin dlHandle should be already set.
+  // Entries borrowed from GIN/NET may already have a handle;
+  // after unload, reopen the same library by its saved name/path.
   if (pluginLib->dlHandle == NULL) {
     pluginLib->dlHandle = ncclOpenRmaPluginLib(pluginLib->name);
     if (pluginLib->dlHandle == nullptr) goto fail;
@@ -197,12 +198,12 @@ static void initPluginLibsOnceFunc() {
   // check if the GIN plugin has RMA support
   if ((pluginLibs[pluginCounter].dlHandle = ncclGetGinPluginLib(ncclPluginTypeRma)) != NULL) {
     pluginLibs[pluginCounter].state = ncclRmaPluginStateLoadReady;
-    pluginCounter++;
+    strcpy(pluginLibs[pluginCounter++].name, ncclGetPluginLibName(ncclPluginTypeRma));
   }
   // Also check if the NET plugin has RMA support
   if ((pluginLibs[pluginCounter].dlHandle = ncclGetNetPluginLib(ncclPluginTypeRma)) != NULL) {
     pluginLibs[pluginCounter].state = ncclRmaPluginStateLoadReady;
-    pluginCounter++;
+    strcpy(pluginLibs[pluginCounter++].name, ncclGetPluginLibName(ncclPluginTypeRma));
   }
 
   // Add internal ib plugin

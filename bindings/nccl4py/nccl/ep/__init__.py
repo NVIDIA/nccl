@@ -14,14 +14,21 @@ hand-written Pythonic wrappers (:class:`Group`, :class:`Handle`,
 import os as _os
 from pathlib import Path as _Path
 
-# Point libnccl_ep.so's JIT runtime at the headers we ship inside this package.
+# Defaults for libnccl_ep.so's JIT runtime; either env var can be overridden
+# by setting it in the environment before importing nccl.ep.
 _PKG_DIR = _Path(__file__).parent
-_JIT_SOURCE_DIR        = _PKG_DIR / "include" / "nccl_ep"
-_JIT_BUILD_INCLUDE_DIR = _PKG_DIR / "include"
+_JIT_SOURCE_DIR = _PKG_DIR / "include" / "nccl_ep"
 if _JIT_SOURCE_DIR.is_dir():
-    _os.environ.setdefault("NCCL_EP_JIT_SOURCE_DIR",        str(_JIT_SOURCE_DIR))
-    _os.environ.setdefault("NCCL_EP_JIT_BUILD_INCLUDE_DIR", str(_JIT_BUILD_INCLUDE_DIR))
-# NCCL_EP_JIT_CUDA_INCLUDE_DIR resolves from CUDA_HOME/CUDA_PATH in C++.
+    _os.environ.setdefault("NCCL_EP_JIT_SOURCE_DIR", str(_JIT_SOURCE_DIR))
+
+# NCCL public headers (nccl.h, nccl_device/...).
+try:
+    import nvidia.nccl as _nv_nccl
+    _NCCL_INCLUDE_DIR = _Path(_nv_nccl.__path__[0]) / "include"
+    if _NCCL_INCLUDE_DIR.is_dir():
+        _os.environ.setdefault("NCCL_EP_JIT_BUILD_INCLUDE_DIR", str(_NCCL_INCLUDE_DIR))
+except ImportError:
+    pass
 
 from nccl.ep.allocator import AllocConfig, AllocFn, FreeFn
 from nccl.ep.enums import Algorithm, Layout, PassDir

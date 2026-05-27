@@ -11,6 +11,8 @@ import threading
 
 from .utils import FunctionNotFoundError, NotSupportedError
 
+from cuda.pathfinder import load_nvidia_dynamic_lib
+
 
 ###############################################################################
 # Extern
@@ -118,6 +120,11 @@ cdef void* __ncclEpComplete = NULL
 
 
 cdef void* load_library() except* with gil:
+    # libnccl_ep.so has NEEDED libnccl.so.2. Pre-load it with RTLD_GLOBAL so the
+    # SONAME is already mapped when libnccl_ep.so's NEEDED is resolved,
+    # without depending on filesystem search.
+    load_nvidia_dynamic_lib("nccl")
+
     cdef bytes path_bytes = _resolve_library_path().encode()
     cdef void* handle = dlopen(path_bytes, RTLD_NOW | RTLD_GLOBAL)
     if handle == NULL:

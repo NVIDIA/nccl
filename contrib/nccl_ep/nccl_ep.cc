@@ -912,7 +912,11 @@ static ncclResult_t init_hybridep_internode(ncclEpGroup_t ep_group,
     size_t combine_rdma_inter_node_group_token_sz = rdma_intra_node_red_token_sz;
     size_t rdma_intra_node_red_prob_sz = align_size(static_cast<size_t>(MAX_SUPPORTED_TOKENS_PER_RANK * (rdma_team_size - 1)) * (ep_group->num_local_experts * lsa_team_size) * sizeof(float), GIN_ALIGNMENT);
     size_t combine_rdma_inter_node_group_prob_sz = rdma_intra_node_red_prob_sz;
-    size_t flags_sz = align_size(static_cast<size_t>(rdma_team_size) * sizeof(uint64_t), GIN_ALIGNMENT);
+
+    int max_chunks_per_rank = (MAX_SUPPORTED_TOKENS_PER_RANK + HT_OF_NUM_TOKENS_PER_CHUNK - 1) / HT_OF_NUM_TOKENS_PER_CHUNK;
+    size_t flags_sz = align_size(
+        static_cast<size_t>(rdma_team_size - 1) * max_chunks_per_rank * sizeof(uint64_t),
+        GIN_ALIGNMENT);
     size_t token_staging_sz = align_size(static_cast<size_t>(ep_group->config.max_dispatch_tokens_per_rank) * ep_group->config.max_token_bytes, GIN_ALIGNMENT);
     size_t dense_prob_sz = align_size(static_cast<size_t>(ep_group->config.max_dispatch_tokens_per_rank) * ep_group->config.num_experts * sizeof(float), GIN_ALIGNMENT);
     size_t scaling_factor_staging_sz = align_size(static_cast<size_t>(ep_group->config.max_dispatch_tokens_per_rank) * sizeof(float), GIN_ALIGNMENT);
@@ -1030,7 +1034,6 @@ static ncclResult_t init_hybridep_internode(ncclEpGroup_t ep_group,
     ep_group->gin_config.num_comms = 1;
     ep_group->gin_config.num_ctx_per_comm = qps_per_rank;
 
-    int max_chunks_per_rank = (MAX_SUPPORTED_TOKENS_PER_RANK + HT_OF_NUM_TOKENS_PER_CHUNK - 1) / HT_OF_NUM_TOKENS_PER_CHUNK;
     int dispatch_signals = lsa_team_size * rdma_team_size * max_chunks_per_rank;
     int combine_signals = lsa_team_size * rdma_team_size * max_chunks_per_rank;
     int streaming_tail_signals = rdma_team_size * rdma_team_size * lsa_team_size * max_chunks_per_rank;

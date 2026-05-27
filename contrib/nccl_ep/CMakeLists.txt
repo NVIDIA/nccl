@@ -96,9 +96,12 @@ set_target_properties(nccl_ep_shared PROPERTIES
     SOVERSION ${NCCL_EP_MAJOR}
 )
 
+# No RUNPATH baked into the artifact (matches libnccl.so's convention).
+# BUILD_WITH_INSTALL_RPATH=TRUE ensures the build-tree binary also has no
+# embedded paths, so wheel staging that copies from the build dir is safe.
 set_target_properties(nccl_ep_shared PROPERTIES
-    BUILD_RPATH "${NCCL_LIBDIR}"
-    INSTALL_RPATH "$ORIGIN"
+    BUILD_WITH_INSTALL_RPATH TRUE
+    INSTALL_RPATH ""
 )
 
 set(NCCL_EP_INCLUDE_DIRS

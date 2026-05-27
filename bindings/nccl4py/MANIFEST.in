@@ -1,6 +1,10 @@
 # Include nccl package with all source files
 recursive-include nccl *.pyx *.pxd
 
+# Keep prebuilt nccl.ep artifacts
+recursive-include nccl/ep/lib *.so
+recursive-include nccl/ep/include *.h *.hpp *.cuh
+
 # Exclude directories not needed in sdist
 prune examples
 prune *.egg-info
@@ -10,7 +14,6 @@ exclude Makefile
 exclude uv.lock
 global-exclude .gitignore .gitattributes
 
-# Exclude generated Cython build outputs. Keep nccl.ep shared libraries because
-# package data includes the prebuilt libnccl_ep.so.
+# Exclude generated Cython build outputs in nccl/bindings/
 recursive-exclude nccl/bindings *.so
 global-exclude *.cpp *.c

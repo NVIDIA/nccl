@@ -160,12 +160,14 @@ $(LIBTARGET): $(ALL_OBJ) $(DEVGLUE_OBJ) | $(NCCL_EP_JIT_HEADER_TARGETS)
 
 # Create shared library (for Python ctypes)
 # Links against libnccl.so for NCCL symbols (ncclCommCuDevice, etc.)
-# Uses rpath so the library can find libnccl.so at runtime
+# No RUNPATH baked in: matches libnccl.so's convention. Callers resolve
+# libnccl.so.2 via LD_LIBRARY_PATH, ld.so.cache, or pre-dlopen with
+# RTLD_GLOBAL (nccl4py does the latter via cuda_pathfinder).
 # Embeds SONAME=libnccl_ep.so.MAJOR so consumers record the major-versioned name.
 $(SOLIBTARGET): $(ALL_OBJ) $(DEVGLUE_OBJ) | $(NCCL_EP_JIT_HEADER_TARGETS)
 	@echo "Creating shared library $@"
 	@mkdir -p $(dir $@)
-	$(NVCC) -shared $(NVCC_GENCODE) -Xlinker -soname=$(SOLIBSONAME) -o $@ $^ -L$(NCCL_LIBDIR) -lnccl -lcuda -Xlinker -rpath -Xlinker $(NCCL_LIBDIR) $(LDFLAGS)
+	$(NVCC) -shared $(NVCC_GENCODE) -Xlinker -soname=$(SOLIBSONAME) -o $@ $^ -L$(NCCL_LIBDIR) -lnccl -lcuda $(LDFLAGS)
 
 # Versioned-soname and unversioned symlinks (libnccl_ep.so.MAJOR, libnccl_ep.so).
 $(LIBDIR)/$(SOLIBSONAME): $(SOLIBTARGET)

@@ -11,6 +11,18 @@ hand-written Pythonic wrappers (:class:`Group`, :class:`Handle`,
 :class:`Tensor`) on top of those bindings.
 """
 
+import os as _os
+from pathlib import Path as _Path
+
+# Point libnccl_ep.so's JIT runtime at the headers we ship inside this package.
+_PKG_DIR = _Path(__file__).parent
+_JIT_SOURCE_DIR        = _PKG_DIR / "include" / "nccl_ep"
+_JIT_BUILD_INCLUDE_DIR = _PKG_DIR / "include"
+if _JIT_SOURCE_DIR.is_dir():
+    _os.environ.setdefault("NCCL_EP_JIT_SOURCE_DIR",        str(_JIT_SOURCE_DIR))
+    _os.environ.setdefault("NCCL_EP_JIT_BUILD_INCLUDE_DIR", str(_JIT_BUILD_INCLUDE_DIR))
+# NCCL_EP_JIT_CUDA_INCLUDE_DIR resolves from CUDA_HOME/CUDA_PATH in C++.
+
 from nccl.ep.allocator import AllocConfig, AllocFn, FreeFn
 from nccl.ep.enums import Algorithm, Layout, PassDir
 from nccl.ep.group import Group, GroupConfig

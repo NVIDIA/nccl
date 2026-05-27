@@ -84,7 +84,12 @@ include = ["nccl*"]
 
 [tool.setuptools.package-data]
 "nccl.bindings" = ["cynccl.pxd", "cynccl_ep.pxd"]
-"nccl.ep" = ["lib/libnccl_ep.so"]
+"nccl.ep" = [
+    "lib/libnccl_ep.so",
+    "include/*.h",
+    "include/nccl_ep/*.hpp",
+    "include/nccl_ep/device/*.cuh",
+]
 
 [tool.setuptools.dynamic]
 version = { attr = "nccl._version.__version__" }
@@ -112,6 +117,7 @@ build-verbosity = 1
 archs = ["native"]  # Fast local builds; override in CI for multi-arch
 manylinux-x86_64-image = "manylinux_2_28"
 manylinux-aarch64-image = "manylinux_2_28"
+repair-wheel-command = "auditwheel repair --exclude libnccl.so.2 --exclude libcuda.so.1 -w {dest_dir} {wheel}"
 
 [tool.uv]
 conflicts = [

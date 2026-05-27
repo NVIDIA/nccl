@@ -173,11 +173,17 @@ def instantiate(k):
   if (cudart_cond, arch_cond) == (None, None):
     form_red_ty = (
       "__global__ void {cname}(ncclSymkDevWorkArgs4K NCCL_GRID_CONSTANT const args4K) {{\n"
+      "  #if CUDART_VERSION >= 12030 && __CUDA_ARCH__ >= 900\n"
+      "    cudaGridDependencySynchronize();\n"
+      "  #endif\n"
       "  ncclSymkRun_{id}<{red}, {ty}>(&args4K.args);\n"
       "}}"
     )
     form = (
       "__global__ void {cname}(ncclSymkDevWorkArgs4K NCCL_GRID_CONSTANT const args4K) {{\n"
+      "  #if CUDART_VERSION >= 12030 && __CUDA_ARCH__ >= 900\n"
+      "    cudaGridDependencySynchronize();\n"
+      "  #endif\n"
       "  ncclSymkRun_{id}(&args4K.args);\n"
       "}}"
     )
@@ -185,6 +191,9 @@ def instantiate(k):
     form_red_ty = (
       "#if {cudart_cond}\n"
       "  __global__ void {cname}(ncclSymkDevWorkArgs4K NCCL_GRID_CONSTANT const args4K) {{\n"
+      "    #if CUDART_VERSION >= 12030 && __CUDA_ARCH__ >= 900\n"
+      "      cudaGridDependencySynchronize();\n"
+      "    #endif\n"
       "    #if {arch_cond}\n"
       "      ncclSymkRun_{id}<{red}, {ty}>(&args4K.args);\n"
       "    #endif\n"
@@ -194,6 +203,9 @@ def instantiate(k):
     form = (
       "#if {cudart_cond}\n"
       "  __global__ void {cname}(ncclSymkDevWorkArgs4K NCCL_GRID_CONSTANT const args4K) {{\n"
+      "    #if CUDART_VERSION >= 12030 && __CUDA_ARCH__ >= 900\n"
+      "      cudaGridDependencySynchronize();\n"
+      "    #endif\n"
       "    #if {arch_cond}\n"
       "      ncclSymkRun_{id}(&args4K.args);\n"
       "    #endif\n"

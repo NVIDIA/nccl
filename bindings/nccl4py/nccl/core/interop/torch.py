@@ -32,10 +32,8 @@ def _to_nccl_dtype(torch_dtype) -> NcclDataType:
     """Converts a PyTorch dtype to NcclDataType.
 
     torch.bool is mapped to UINT8 for convenience. float8_e4m3fn and
-    float8_e5m2 are supported on PyTorch 2.1+. PyTorch's same-singleton
-    aliases (``torch.half`` is ``torch.float16``, ``torch.float`` is
-    ``torch.float32``, ``torch.double`` is ``torch.float64``,
-    ``torch.long`` is ``torch.int64``) need no separate map entries.
+    float8_e5m2 are supported on PyTorch 2.1+; uint32 and uint64 on
+    PyTorch 2.3+.
 
     Args:
         torch_dtype: PyTorch data type to convert.
@@ -62,11 +60,16 @@ def _to_nccl_dtype(torch_dtype) -> NcclDataType:
         torch.uint8: NcclDataType.UINT8,
         torch.bool: NcclDataType.UINT8,  # NCCL has no bool; map to its natural byte-width.
     }
-    # PyTorch 2.1+ float8 types (optional).
+    # PyTorch 2.1+ float8 types.
     if hasattr(torch, "float8_e4m3fn"):
         _torch_to_nccl[torch.float8_e4m3fn] = NcclDataType.FLOAT8E4M3
     if hasattr(torch, "float8_e5m2"):
         _torch_to_nccl[torch.float8_e5m2] = NcclDataType.FLOAT8E5M2
+    # PyTorch 2.3+ unsigned ints.
+    if hasattr(torch, "uint32"):
+        _torch_to_nccl[torch.uint32] = NcclDataType.UINT32
+    if hasattr(torch, "uint64"):
+        _torch_to_nccl[torch.uint64] = NcclDataType.UINT64
 
     try:
         return _torch_to_nccl[torch_dtype]

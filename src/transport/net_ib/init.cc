@@ -552,9 +552,6 @@ ncclResult_t ncclIbGetPhysProperties(int dev, ncclNetProperties_t* props) {
     props->ptrSupport |= NCCL_PTR_DMABUF; // GDR support via DMA-BUF
   }
   props->forceFlush = 0;
-  if (ibDev->capsProvider.mlx5.dataDirect) {
-    props->forceFlush = 1;
-  }
   props->latency = 0; // Not set
   props->port = ibDev->portNum + ibDev->realPort;
   props->maxComms = ibDev->maxQp;

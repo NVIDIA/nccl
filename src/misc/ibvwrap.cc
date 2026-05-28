@@ -24,16 +24,15 @@ static ncclResult_t initResult;
 struct ncclIbvSymbols ibvSymbols;
 
 ncclResult_t wrap_ibv_symbols(void) {
-  std::call_once(initOnceFlag,
-               [](){ initResult = buildIbvSymbols(&ibvSymbols); });
+  std::call_once(initOnceFlag, []() { initResult = buildIbvSymbols(&ibvSymbols); });
   return initResult;
 }
 
 /* CHECK_NOT_NULL: helper macro to check for NULL symbol */
 #define CHECK_NOT_NULL(container, internal_name) \
   if (container.internal_name == NULL) { \
-     WARN("lib wrapper not initialized."); \
-     return ncclInternalError; \
+    WARN("lib wrapper not initialized."); \
+    return ncclInternalError; \
   }
 
 #define IBV_PTR_CHECK_ERRNO(container, internal_name, call, retval, error_retval, name) \
@@ -101,25 +100,25 @@ NCCL_PARAM(IbMQpRetryCnt, "IB_MQP_RETRY_CNT", 34);
 NCCL_PARAM(IbMQpRetryTimeout, "IB_MQP_RETRY_SLEEP_MSEC", 100); // in milliseconds
 NCCL_PARAM(IbQueryPortSpeed, "IB_QUERY_PORT_SPEED", 1);
 
-#define IBV_ERR_EQ(e, code)        (e == code || e == (-code))
-#define IBV_MQP_RETRY_ERRNO(e)     (IBV_ERR_EQ(e, ETIMEDOUT))
+#define IBV_ERR_EQ(e, code) (e == code || e == (-code))
+#define IBV_MQP_RETRY_ERRNO(e) (IBV_ERR_EQ(e, ETIMEDOUT))
 #define IBV_MQP_RETRY_ERRNO_ALL(e) (ncclParamIbMQpRetryAll() ? (e != 0) : IBV_MQP_RETRY_ERRNO(e))
 
 ncclResult_t wrap_ibv_fork_init() {
   IBV_INT_CHECK(ibvSymbols, ibv_internal_fork_init, ibv_internal_fork_init(), -1, "ibv_fork_init");
 }
 
-ncclResult_t wrap_ibv_get_device_list(struct ibv_device ***ret, int *num_devices) {
+ncclResult_t wrap_ibv_get_device_list(struct ibv_device*** ret, int* num_devices) {
   *ret = ibvSymbols.ibv_internal_get_device_list(num_devices);
   if (*ret == NULL) *num_devices = 0;
   return ncclSuccess;
 }
 
-ncclResult_t wrap_ibv_free_device_list(struct ibv_device **list) {
+ncclResult_t wrap_ibv_free_device_list(struct ibv_device** list) {
   IBV_PASSTHRU(ibvSymbols, ibv_internal_free_device_list, ibv_internal_free_device_list(list));
 }
 
-const char *wrap_ibv_get_device_name(struct ibv_device *device) {
+const char* wrap_ibv_get_device_name(struct ibv_device* device) {
   if (ibvSymbols.ibv_internal_get_device_name == NULL) {
     WARN("lib wrapper not initialized.");
     exit(-1);
@@ -127,62 +126,76 @@ const char *wrap_ibv_get_device_name(struct ibv_device *device) {
   return ibvSymbols.ibv_internal_get_device_name(device);
 }
 
-ncclResult_t wrap_ibv_open_device(struct ibv_context **ret, struct ibv_device *device) { /*returns 0 on success, -1 on failure*/
+ncclResult_t wrap_ibv_open_device(struct ibv_context** ret,
+                                  struct ibv_device* device) { /*returns 0 on success, -1 on failure*/
   IBV_PTR_CHECK(ibvSymbols, ibv_internal_open_device, ibv_internal_open_device(device), *ret, NULL, "ibv_open_device");
 }
 
-ncclResult_t wrap_ibv_close_device(struct ibv_context *context) { /*returns 0 on success, -1 on failure*/
+ncclResult_t wrap_ibv_close_device(struct ibv_context* context) { /*returns 0 on success, -1 on failure*/
   IBV_INT_CHECK(ibvSymbols, ibv_internal_close_device, ibv_internal_close_device(context), -1, "ibv_close_device");
 }
 
-ncclResult_t wrap_ibv_get_async_event(struct ibv_context *context, struct ibv_async_event *event) { /*returns 0 on success, and -1 on error*/
-  IBV_INT_CHECK(ibvSymbols, ibv_internal_get_async_event, ibv_internal_get_async_event(context, event), -1, "ibv_get_async_event");
+ncclResult_t wrap_ibv_get_async_event(struct ibv_context* context,
+                                      struct ibv_async_event* event) { /*returns 0 on success, and -1 on error*/
+  IBV_INT_CHECK(ibvSymbols, ibv_internal_get_async_event, ibv_internal_get_async_event(context, event), -1,
+                "ibv_get_async_event");
 }
 
-ncclResult_t wrap_ibv_ack_async_event(struct ibv_async_event *event) {
+ncclResult_t wrap_ibv_ack_async_event(struct ibv_async_event* event) {
   IBV_PASSTHRU(ibvSymbols, ibv_internal_ack_async_event, ibv_internal_ack_async_event(event));
 }
 
-ncclResult_t wrap_ibv_query_device(struct ibv_context *context, struct ibv_device_attr *device_attr) { /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/
-  IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_query_device, ibv_internal_query_device(context, device_attr), 0, "ibv_query_device");
+ncclResult_t wrap_ibv_query_device(
+  struct ibv_context* context,
+  struct ibv_device_attr*
+    device_attr) { /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/
+  IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_query_device, ibv_internal_query_device(context, device_attr), 0,
+                          "ibv_query_device");
 }
 
-ncclResult_t wrap_ibv_query_port(struct ibv_context *context, uint8_t port_num, struct ibv_port_attr *port_attr) {
+ncclResult_t wrap_ibv_query_port(struct ibv_context* context, uint8_t port_num, struct ibv_port_attr* port_attr) {
 #ifndef NCCL_BUILD_RDMA_CORE
   // First try and query the extended port attributes (e.g. active_speed_ex)
   if (ibv_query_port_ex(context, port_num, port_attr) != 0) {
     // Fall back to the original attribute API call, but zero all members first
     memset(port_attr, 0, sizeof(*port_attr));
-    IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_query_port, ibv_internal_query_port(context, port_num, port_attr), 0, "ibv_query_port");
+    IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_query_port, ibv_internal_query_port(context, port_num, port_attr),
+                            0, "ibv_query_port");
   }
 #else
   // When using system rdma-core, use the regular ibv_query_port
-  IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_query_port, ibv_internal_query_port(context, port_num, port_attr), 0, "ibv_query_port");
+  IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_query_port, ibv_internal_query_port(context, port_num, port_attr), 0,
+                          "ibv_query_port");
 #endif
   return ncclSuccess;
 }
 
-ncclResult_t wrap_ibv_query_gid(struct ibv_context *context, uint8_t port_num, int index, union ibv_gid *gid) {
-  IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_query_gid, ibv_internal_query_gid(context, port_num, index, gid), 0, "ibv_query_gid");
+ncclResult_t wrap_ibv_query_gid(struct ibv_context* context, uint8_t port_num, int index, union ibv_gid* gid) {
+  IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_query_gid, ibv_internal_query_gid(context, port_num, index, gid), 0,
+                          "ibv_query_gid");
 }
 
-ncclResult_t wrap_ibv_query_qp(struct ibv_qp *qp, struct ibv_qp_attr *attr, int attr_mask, struct ibv_qp_init_attr *init_attr) {
-  IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_query_qp, ibv_internal_query_qp(qp, attr, attr_mask, init_attr), 0, "ibv_query_qp");
+ncclResult_t wrap_ibv_query_qp(struct ibv_qp* qp, struct ibv_qp_attr* attr, int attr_mask,
+                               struct ibv_qp_init_attr* init_attr) {
+  IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_query_qp, ibv_internal_query_qp(qp, attr, attr_mask, init_attr), 0,
+                          "ibv_query_qp");
 }
 
-ncclResult_t wrap_ibv_alloc_pd(struct ibv_pd **ret, struct ibv_context *context) {
+ncclResult_t wrap_ibv_alloc_pd(struct ibv_pd** ret, struct ibv_context* context) {
   IBV_PTR_CHECK_ERRNO(ibvSymbols, ibv_internal_alloc_pd, ibv_internal_alloc_pd(context), *ret, NULL, "ibv_alloc_pd");
 }
 
-ncclResult_t wrap_ibv_dealloc_pd(struct ibv_pd *pd) { /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/
+ncclResult_t wrap_ibv_dealloc_pd(
+  struct ibv_pd* pd) { /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/
   IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_dealloc_pd, ibv_internal_dealloc_pd(pd), 0, "ibv_dealloc_pd");
 }
 
-ncclResult_t wrap_ibv_reg_mr(struct ibv_mr **ret, struct ibv_pd *pd, void *addr, size_t length, int access) {
-  IBV_PTR_CHECK_ERRNO(ibvSymbols, ibv_internal_reg_mr, ibv_internal_reg_mr(pd, addr, length, access), *ret, NULL, "ibv_reg_mr");
+ncclResult_t wrap_ibv_reg_mr(struct ibv_mr** ret, struct ibv_pd* pd, void* addr, size_t length, int access) {
+  IBV_PTR_CHECK_ERRNO(ibvSymbols, ibv_internal_reg_mr, ibv_internal_reg_mr(pd, addr, length, access), *ret, NULL,
+                      "ibv_reg_mr");
 }
 
-struct ibv_mr * wrap_direct_ibv_reg_mr(struct ibv_pd *pd, void *addr, size_t length, int access) {
+struct ibv_mr* wrap_direct_ibv_reg_mr(struct ibv_pd* pd, void* addr, size_t length, int access) {
   if (ibvSymbols.ibv_internal_reg_mr == NULL) {
     WARN("lib wrapper not initialized.");
     return NULL;
@@ -190,20 +203,26 @@ struct ibv_mr * wrap_direct_ibv_reg_mr(struct ibv_pd *pd, void *addr, size_t len
   return ibvSymbols.ibv_internal_reg_mr(pd, addr, length, access);
 }
 
-ncclResult_t wrap_ibv_reg_mr_iova2(struct ibv_mr **ret, struct ibv_pd *pd, void *addr, size_t length, uint64_t iova, int access) {
+ncclResult_t wrap_ibv_reg_mr_iova2(struct ibv_mr** ret, struct ibv_pd* pd, void* addr, size_t length, uint64_t iova,
+                                   int access) {
   if (ibvSymbols.ibv_internal_reg_mr_iova2 == NULL) {
     return ncclInternalError;
   }
   if (ret == NULL) return ncclSuccess; // Assume dummy call
-  IBV_PTR_CHECK_ERRNO(ibvSymbols, ibv_internal_reg_mr_iova2, ibv_internal_reg_mr_iova2(pd, addr, length, iova, access), *ret, NULL, "ibv_reg_mr_iova2");
+  IBV_PTR_CHECK_ERRNO(ibvSymbols, ibv_internal_reg_mr_iova2, ibv_internal_reg_mr_iova2(pd, addr, length, iova, access),
+                      *ret, NULL, "ibv_reg_mr_iova2");
 }
 
 /* DMA-BUF support */
-ncclResult_t wrap_ibv_reg_dmabuf_mr(struct ibv_mr **ret, struct ibv_pd *pd, uint64_t offset, size_t length, uint64_t iova, int fd, int access) {
-  IBV_PTR_CHECK_ERRNO(ibvSymbols, ibv_internal_reg_dmabuf_mr, ibv_internal_reg_dmabuf_mr(pd, offset, length, iova, fd, access), *ret, NULL, "ibv_reg_dmabuf_mr");
+ncclResult_t wrap_ibv_reg_dmabuf_mr(struct ibv_mr** ret, struct ibv_pd* pd, uint64_t offset, size_t length,
+                                    uint64_t iova, int fd, int access) {
+  IBV_PTR_CHECK_ERRNO(ibvSymbols, ibv_internal_reg_dmabuf_mr,
+                      ibv_internal_reg_dmabuf_mr(pd, offset, length, iova, fd, access), *ret, NULL,
+                      "ibv_reg_dmabuf_mr");
 }
 
-struct ibv_mr * wrap_direct_ibv_reg_dmabuf_mr(struct ibv_pd *pd, uint64_t offset, size_t length, uint64_t iova, int fd, int access) {
+struct ibv_mr* wrap_direct_ibv_reg_dmabuf_mr(struct ibv_pd* pd, uint64_t offset, size_t length, uint64_t iova, int fd,
+                                             int access) {
   if (ibvSymbols.ibv_internal_reg_dmabuf_mr == NULL) {
     errno = EOPNOTSUPP; // ncclIbDmaBufSupport() requires this errno being set
     return NULL;
@@ -211,43 +230,67 @@ struct ibv_mr * wrap_direct_ibv_reg_dmabuf_mr(struct ibv_pd *pd, uint64_t offset
   return ibvSymbols.ibv_internal_reg_dmabuf_mr(pd, offset, length, iova, fd, access);
 }
 
-ncclResult_t wrap_ibv_dereg_mr(struct ibv_mr *mr) { /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/
+ncclResult_t wrap_ibv_dereg_mr(
+  struct ibv_mr* mr) { /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/
   IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_dereg_mr, ibv_internal_dereg_mr(mr), 0, "ibv_dereg_mr");
 }
 
-ncclResult_t wrap_ibv_create_cq(struct ibv_cq **ret, struct ibv_context *context, int cqe, void *cq_context, struct ibv_comp_channel *channel, int comp_vector) {
-  IBV_PTR_CHECK_ERRNO(ibvSymbols, ibv_internal_create_cq, ibv_internal_create_cq(context, cqe, cq_context, channel, comp_vector), *ret, NULL, "ibv_create_cq");
+ncclResult_t wrap_ibv_create_cq(struct ibv_cq** ret, struct ibv_context* context, int cqe, void* cq_context,
+                                struct ibv_comp_channel* channel, int comp_vector) {
+  IBV_PTR_CHECK_ERRNO(ibvSymbols, ibv_internal_create_cq,
+                      ibv_internal_create_cq(context, cqe, cq_context, channel, comp_vector), *ret, NULL,
+                      "ibv_create_cq");
 }
 
-ncclResult_t wrap_ibv_destroy_cq(struct ibv_cq *cq) {
+ncclResult_t wrap_ibv_destroy_cq(struct ibv_cq* cq) {
   IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_destroy_cq, ibv_internal_destroy_cq(cq), 0, "ibv_destroy_cq");
 }
 
-ncclResult_t wrap_ibv_destroy_qp(struct ibv_qp *qp) {
+ncclResult_t wrap_ibv_destroy_qp(struct ibv_qp* qp) {
   IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_destroy_qp, ibv_internal_destroy_qp(qp), 0, "ibv_destroy_qp");
 }
 
-ncclResult_t wrap_ibv_create_qp(struct ibv_qp **ret, struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_attr) {
-  IBV_PTR_CHECK_ERRNO(ibvSymbols, ibv_internal_create_qp, ibv_internal_create_qp(pd, qp_init_attr), *ret, NULL, "ibv_create_qp");
+ncclResult_t wrap_ibv_create_qp(struct ibv_qp** ret, struct ibv_pd* pd, struct ibv_qp_init_attr* qp_init_attr) {
+  IBV_PTR_CHECK_ERRNO(ibvSymbols, ibv_internal_create_qp, ibv_internal_create_qp(pd, qp_init_attr), *ret, NULL,
+                      "ibv_create_qp");
 }
 
 static void ibvQpStateName(enum ibv_qp_state state, char* msg, const size_t len) {
   switch (state) {
-  case (IBV_QPS_RESET): snprintf(msg, len, "RESET"); break;
-  case (IBV_QPS_INIT): snprintf(msg, len, "INIT"); break;
-  case (IBV_QPS_RTR): snprintf(msg, len, "RTR"); break;
-  case (IBV_QPS_RTS): snprintf(msg, len, "RTS"); break;
-  case (IBV_QPS_SQD): snprintf(msg, len, "SQD"); break;
-  case (IBV_QPS_SQE): snprintf(msg, len, "SQE"); break;
-  case (IBV_QPS_ERR): snprintf(msg, len, "ERR"); break;
-  case (IBV_QPS_UNKNOWN): snprintf(msg, len, "UNKNOWN"); break;
-  default: snprintf(msg, len, "NOT RECOGNIZED (%d)", state); break;
+  case (IBV_QPS_RESET):
+    snprintf(msg, len, "RESET");
+    break;
+  case (IBV_QPS_INIT):
+    snprintf(msg, len, "INIT");
+    break;
+  case (IBV_QPS_RTR):
+    snprintf(msg, len, "RTR");
+    break;
+  case (IBV_QPS_RTS):
+    snprintf(msg, len, "RTS");
+    break;
+  case (IBV_QPS_SQD):
+    snprintf(msg, len, "SQD");
+    break;
+  case (IBV_QPS_SQE):
+    snprintf(msg, len, "SQE");
+    break;
+  case (IBV_QPS_ERR):
+    snprintf(msg, len, "ERR");
+    break;
+  case (IBV_QPS_UNKNOWN):
+    snprintf(msg, len, "UNKNOWN");
+    break;
+  default:
+    snprintf(msg, len, "NOT RECOGNIZED (%d)", state);
+    break;
   }
 }
 
 #define QP_ATTR(attr, userAttr, userFlag, mask) ((userFlag & mask) ? (userAttr) : (attr))
 
-static void ibvModifyQpLog(struct ibv_qp* qp, enum ibv_qp_state qpState, struct ibv_qp_attr* userAttr, int userFlag, char* msg, size_t msgLen) {
+static void ibvModifyQpLog(struct ibv_qp* qp, enum ibv_qp_state qpState, struct ibv_qp_attr* userAttr, int userFlag,
+                           char* msg, size_t msgLen) {
   ncclResult_t res;
   int portNum = -1, gidIndex = -1;
   char localGidName[INET6_ADDRSTRLEN], remoteGidName[INET6_ADDRSTRLEN];
@@ -257,26 +300,27 @@ static void ibvModifyQpLog(struct ibv_qp* qp, enum ibv_qp_state qpState, struct 
   ibvQpStateName(qp->state, currState, sizeof(currState));
   ibvQpStateName(qpState, nextState, sizeof(nextState));
   char devName[IBV_SYSFS_NAME_MAX] = "";
-  snprintf(devName, sizeof(devName), "%s", (qp->pd->context) ? wrap_ibv_get_device_name(qp->pd->context->device) : "N/A");
+  snprintf(devName, sizeof(devName), "%s",
+           (qp->pd->context) ? wrap_ibv_get_device_name(qp->pd->context->device) : "N/A");
 
   struct ibv_qp_attr attr;
   struct ibv_qp_init_attr init_attr;
   int attr_mask = IBV_QP_PORT | IBV_QP_AV;
   res = wrap_ibv_query_qp(qp, &attr, attr_mask, &init_attr);
-  struct ibv_qp_attr *qpAttr = (res == ncclSuccess) ? &attr : NULL;
+  struct ibv_qp_attr* qpAttr = (res == ncclSuccess) ? &attr : NULL;
 
   // port info, portAttr can be NULL if not given by the user and query_qp failed
-  struct ibv_qp_attr *portAttr = QP_ATTR(qpAttr, userAttr, userFlag, IBV_QP_PORT);
+  struct ibv_qp_attr* portAttr = QP_ATTR(qpAttr, userAttr, userFlag, IBV_QP_PORT);
   portNum = portAttr ? portAttr->port_num : -1;
 
   // address info, avAttr can be NULL if not given by the user and query_qp failed
-  struct ibv_qp_attr *avAttr = QP_ATTR(qpAttr, userAttr, userFlag, IBV_QP_AV);
+  struct ibv_qp_attr* avAttr = QP_ATTR(qpAttr, userAttr, userFlag, IBV_QP_AV);
   if (avAttr && avAttr->ah_attr.is_global) {
-    union ibv_gid *remoteGid = &avAttr->ah_attr.grh.dgid;
+    union ibv_gid* remoteGid = &avAttr->ah_attr.grh.dgid;
     remoteGidRes = ibvGetGidStr(remoteGid, remoteGidName, sizeof(remoteGidName));
     // we need pd->context to retrieve local GID, skip if not there
     if (!qp->pd->context) goto print;
-    gidIndex =  avAttr->ah_attr.grh.sgid_index;
+    gidIndex = avAttr->ah_attr.grh.sgid_index;
     union ibv_gid localGid;
     NCCLCHECKGOTO(wrap_ibv_query_gid(qp->pd->context, portNum, gidIndex, &localGid), res, print);
     localGidRes = ibvGetGidStr(&localGid, localGidName, sizeof(localGidName));
@@ -284,24 +328,28 @@ static void ibvModifyQpLog(struct ibv_qp* qp, enum ibv_qp_state qpState, struct 
 
 print:
   snprintf(msg, msgLen, "on dev %s:%d, curr state %s, next state %s, local GID index %d, local GID %s, remote GID %s",
-           devName, portNum, currState, nextState, gidIndex, localGidRes ? localGidName : "N/A", remoteGidRes ? remoteGidName : "N/A");
+           devName, portNum, currState, nextState, gidIndex, localGidRes ? localGidName : "N/A",
+           remoteGidRes ? remoteGidName : "N/A");
   return;
 }
 
 static void printIbModifyQpHint(int status) {
   switch (status) {
-    case ETIMEDOUT:
-      INFO(NCCL_NET, "HINT: In many cases this error occurs when NICs are not cross-rail connected.");
-      INFO(NCCL_NET, "HINT: To confirm, you can set NCCL_CROSS_NIC=0 to disable cross-rail communication.");
-      INFO(NCCL_NET, "HINT: See https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-cross-nic for more information.");
-      return;
-    case EINVAL:
-      INFO(NCCL_NET, "HINT: In many cases this error occurs when the incorrect GID index is forced by NCCL_IB_GID_INDEX");
-      INFO(NCCL_NET, "HINT: To confirm and fix the problem, you can set NCCL_IB_GID_INDEX=-1 to enable automatic detection.");
-      INFO(NCCL_NET, "HINT: See https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-ib-gid-index for more information.");
-      return;
-    default:
-      break;
+  case ETIMEDOUT:
+    INFO(NCCL_NET, "HINT: In many cases this error occurs when NICs are not cross-rail connected.");
+    INFO(NCCL_NET, "HINT: To confirm, you can set NCCL_CROSS_NIC=0 to disable cross-rail communication.");
+    INFO(NCCL_NET, "HINT: See https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-cross-nic for "
+                   "more information.");
+    return;
+  case EINVAL:
+    INFO(NCCL_NET, "HINT: In many cases this error occurs when the incorrect GID index is forced by NCCL_IB_GID_INDEX");
+    INFO(NCCL_NET,
+         "HINT: To confirm and fix the problem, you can set NCCL_IB_GID_INDEX=-1 to enable automatic detection.");
+    INFO(NCCL_NET, "HINT: See https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-ib-gid-index for "
+                   "more information.");
+    return;
+  default:
+    break;
   }
 }
 
@@ -315,7 +363,8 @@ ncclResult_t wrap_ibv_modify_qp(struct ibv_qp* qp, struct ibv_qp_attr* attr, int
     if (attempts > 0) {
       unsigned int sleepTime = timeOut * attempts;
       ibvModifyQpLog(qp, attr->qp_state, attr, attr_mask, qpMsg, sizeof(qpMsg));
-      INFO(NCCL_NET, "Call to ibv_modify_qp failed with %d %s, %s, retrying %d/%d after %u msec of sleep", ret, strerror(ret), qpMsg, attempts, maxCnt, sleepTime);
+      INFO(NCCL_NET, "Call to ibv_modify_qp failed with %d %s, %s, retrying %d/%d after %u msec of sleep", ret,
+           strerror(ret), qpMsg, attempts, maxCnt, sleepTime);
       // sleep before retrying
       std::this_thread::sleep_for(std::chrono::milliseconds(sleepTime));
     }
@@ -331,79 +380,126 @@ ncclResult_t wrap_ibv_modify_qp(struct ibv_qp* qp, struct ibv_qp_attr* attr, int
   return ncclSuccess;
 }
 
-ncclResult_t wrap_ibv_query_ece(struct ibv_qp *qp, struct ibv_ece *ece, int* supported) { /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/
-  IBV_INT_CHECK_RET_ERRNO_OPTIONAL(ibvSymbols, ibv_internal_query_ece, ibv_internal_query_ece(qp, ece), 0, "ibv_query_ece", supported);
+ncclResult_t wrap_ibv_query_ece(
+  struct ibv_qp* qp, struct ibv_ece* ece,
+  int* supported) { /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/
+  IBV_INT_CHECK_RET_ERRNO_OPTIONAL(ibvSymbols, ibv_internal_query_ece, ibv_internal_query_ece(qp, ece), 0,
+                                   "ibv_query_ece", supported);
 }
 
-ncclResult_t wrap_ibv_set_ece(struct ibv_qp *qp, struct ibv_ece *ece, int* supported) { /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/
-  IBV_INT_CHECK_RET_ERRNO_OPTIONAL(ibvSymbols, ibv_internal_set_ece, ibv_internal_set_ece(qp, ece), 0, "ibv_set_ece", supported);
+ncclResult_t wrap_ibv_set_ece(
+  struct ibv_qp* qp, struct ibv_ece* ece,
+  int* supported) { /*returns 0 on success, or the value of errno on failure (which indicates the failure reason)*/
+  IBV_INT_CHECK_RET_ERRNO_OPTIONAL(ibvSymbols, ibv_internal_set_ece, ibv_internal_set_ece(qp, ece), 0, "ibv_set_ece",
+                                   supported);
 }
 
-ncclResult_t wrap_ibv_query_port_speed(struct ibv_context *context, uint8_t port_num, uint64_t *speed) {
+ncclResult_t wrap_ibv_query_port_speed(struct ibv_context* context, uint8_t port_num, uint64_t* speed) {
   if (!ncclParamIbQueryPortSpeed() || ibvSymbols.ibv_internal_query_port_speed == NULL) {
     return ncclSystemError;
   }
-  IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_query_port_speed, ibv_internal_query_port_speed(context, port_num, speed), 0, "ibv_query_port_speed");
+  IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_query_port_speed,
+                          ibv_internal_query_port_speed(context, port_num, speed), 0, "ibv_query_port_speed");
 }
 
-ncclResult_t wrap_ibv_event_type_str(char **ret, enum ibv_event_type event) {
-  *ret = (char *) ibvSymbols.ibv_internal_event_type_str(event);
+ncclResult_t wrap_ibv_event_type_str(char** ret, enum ibv_event_type event) {
+  *ret = (char*)ibvSymbols.ibv_internal_event_type_str(event);
   return ncclSuccess;
 }
 
 // Helper function to convert IB work completion status to string
 const char* ibvWcStatusStr(enum ibv_wc_status status) {
   switch (status) {
-    case IBV_WC_SUCCESS:            return "IBV_WC_SUCCESS";
-    case IBV_WC_LOC_LEN_ERR:        return "IBV_WC_LOC_LEN_ERR";
-    case IBV_WC_LOC_QP_OP_ERR:      return "IBV_WC_LOC_QP_OP_ERR";
-    case IBV_WC_LOC_EEC_OP_ERR:     return "IBV_WC_LOC_EEC_OP_ERR";
-    case IBV_WC_LOC_PROT_ERR:       return "IBV_WC_LOC_PROT_ERR";
-    case IBV_WC_WR_FLUSH_ERR:       return "IBV_WC_WR_FLUSH_ERR";
-    case IBV_WC_MW_BIND_ERR:        return "IBV_WC_MW_BIND_ERR";
-    case IBV_WC_BAD_RESP_ERR:       return "IBV_WC_BAD_RESP_ERR";
-    case IBV_WC_LOC_ACCESS_ERR:     return "IBV_WC_LOC_ACCESS_ERR";
-    case IBV_WC_REM_INV_REQ_ERR:    return "IBV_WC_REM_INV_REQ_ERR";
-    case IBV_WC_REM_ACCESS_ERR:     return "IBV_WC_REM_ACCESS_ERR";
-    case IBV_WC_REM_OP_ERR:         return "IBV_WC_REM_OP_ERR";
-    case IBV_WC_RETRY_EXC_ERR:      return "IBV_WC_RETRY_EXC_ERR";
-    case IBV_WC_RNR_RETRY_EXC_ERR:  return "IBV_WC_RNR_RETRY_EXC_ERR";
-    case IBV_WC_LOC_RDD_VIOL_ERR:   return "IBV_WC_LOC_RDD_VIOL_ERR";
-    case IBV_WC_REM_INV_RD_REQ_ERR: return "IBV_WC_REM_INV_RD_REQ_ERR";
-    case IBV_WC_REM_ABORT_ERR:      return "IBV_WC_REM_ABORT_ERR";
-    case IBV_WC_INV_EECN_ERR:       return "IBV_WC_INV_EECN_ERR";
-    case IBV_WC_INV_EEC_STATE_ERR:  return "IBV_WC_INV_EEC_STATE_ERR";
-    case IBV_WC_FATAL_ERR:          return "IBV_WC_FATAL_ERR";
-    case IBV_WC_RESP_TIMEOUT_ERR:   return "IBV_WC_RESP_TIMEOUT_ERR";
-    case IBV_WC_GENERAL_ERR:        return "IBV_WC_GENERAL_ERR";
-    default:                        return "UNKNOWN_STATUS";
+  case IBV_WC_SUCCESS:
+    return "IBV_WC_SUCCESS";
+  case IBV_WC_LOC_LEN_ERR:
+    return "IBV_WC_LOC_LEN_ERR";
+  case IBV_WC_LOC_QP_OP_ERR:
+    return "IBV_WC_LOC_QP_OP_ERR";
+  case IBV_WC_LOC_EEC_OP_ERR:
+    return "IBV_WC_LOC_EEC_OP_ERR";
+  case IBV_WC_LOC_PROT_ERR:
+    return "IBV_WC_LOC_PROT_ERR";
+  case IBV_WC_WR_FLUSH_ERR:
+    return "IBV_WC_WR_FLUSH_ERR";
+  case IBV_WC_MW_BIND_ERR:
+    return "IBV_WC_MW_BIND_ERR";
+  case IBV_WC_BAD_RESP_ERR:
+    return "IBV_WC_BAD_RESP_ERR";
+  case IBV_WC_LOC_ACCESS_ERR:
+    return "IBV_WC_LOC_ACCESS_ERR";
+  case IBV_WC_REM_INV_REQ_ERR:
+    return "IBV_WC_REM_INV_REQ_ERR";
+  case IBV_WC_REM_ACCESS_ERR:
+    return "IBV_WC_REM_ACCESS_ERR";
+  case IBV_WC_REM_OP_ERR:
+    return "IBV_WC_REM_OP_ERR";
+  case IBV_WC_RETRY_EXC_ERR:
+    return "IBV_WC_RETRY_EXC_ERR";
+  case IBV_WC_RNR_RETRY_EXC_ERR:
+    return "IBV_WC_RNR_RETRY_EXC_ERR";
+  case IBV_WC_LOC_RDD_VIOL_ERR:
+    return "IBV_WC_LOC_RDD_VIOL_ERR";
+  case IBV_WC_REM_INV_RD_REQ_ERR:
+    return "IBV_WC_REM_INV_RD_REQ_ERR";
+  case IBV_WC_REM_ABORT_ERR:
+    return "IBV_WC_REM_ABORT_ERR";
+  case IBV_WC_INV_EECN_ERR:
+    return "IBV_WC_INV_EECN_ERR";
+  case IBV_WC_INV_EEC_STATE_ERR:
+    return "IBV_WC_INV_EEC_STATE_ERR";
+  case IBV_WC_FATAL_ERR:
+    return "IBV_WC_FATAL_ERR";
+  case IBV_WC_RESP_TIMEOUT_ERR:
+    return "IBV_WC_RESP_TIMEOUT_ERR";
+  case IBV_WC_GENERAL_ERR:
+    return "IBV_WC_GENERAL_ERR";
+  default:
+    return "UNKNOWN_STATUS";
   }
 }
 
 // Helper function to convert IB work completion opcode to string
 const char* ibvWcOpcodeStr(enum ibv_wc_opcode opcode) {
   switch (opcode) {
-    case IBV_WC_SEND:               return "IBV_WC_SEND";
-    case IBV_WC_RDMA_WRITE:         return "IBV_WC_RDMA_WRITE";
-    case IBV_WC_RDMA_READ:          return "IBV_WC_RDMA_READ";
-    case IBV_WC_COMP_SWAP:          return "IBV_WC_COMP_SWAP";
-    case IBV_WC_FETCH_ADD:          return "IBV_WC_FETCH_ADD";
-    case IBV_WC_BIND_MW:            return "IBV_WC_BIND_MW";
-    case IBV_WC_RECV:               return "IBV_WC_RECV";
-    case IBV_WC_RECV_RDMA_WITH_IMM: return "IBV_WC_RECV_RDMA_WITH_IMM";
-    default:                        return "UNKNOWN_OPCODE";
+  case IBV_WC_SEND:
+    return "IBV_WC_SEND";
+  case IBV_WC_RDMA_WRITE:
+    return "IBV_WC_RDMA_WRITE";
+  case IBV_WC_RDMA_READ:
+    return "IBV_WC_RDMA_READ";
+  case IBV_WC_COMP_SWAP:
+    return "IBV_WC_COMP_SWAP";
+  case IBV_WC_FETCH_ADD:
+    return "IBV_WC_FETCH_ADD";
+  case IBV_WC_BIND_MW:
+    return "IBV_WC_BIND_MW";
+  case IBV_WC_RECV:
+    return "IBV_WC_RECV";
+  case IBV_WC_RECV_RDMA_WITH_IMM:
+    return "IBV_WC_RECV_RDMA_WITH_IMM";
+  default:
+    return "UNKNOWN_OPCODE";
   }
 }
 
 const char* ibvWrOpcodeStr(enum ibv_wr_opcode opcode) {
   switch (opcode) {
-    case IBV_WR_RDMA_WRITE:          return "IBV_WR_RDMA_WRITE";
-    case IBV_WR_RDMA_WRITE_WITH_IMM: return "IBV_WR_RDMA_WRITE_WITH_IMM";
-    case IBV_WR_SEND:                return "IBV_WR_SEND";
-    case IBV_WR_SEND_WITH_IMM:       return "IBV_WR_SEND_WITH_IMM";
-    case IBV_WR_RDMA_READ:           return "IBV_WR_RDMA_READ";
-    case IBV_WR_ATOMIC_CMP_AND_SWP:  return "IBV_WR_ATOMIC_CMP_AND_SWP";
-    case IBV_WR_ATOMIC_FETCH_AND_ADD: return "IBV_WR_ATOMIC_FETCH_AND_ADD";
-    default:                          return "UNKNOWN_OPCODE";
+  case IBV_WR_RDMA_WRITE:
+    return "IBV_WR_RDMA_WRITE";
+  case IBV_WR_RDMA_WRITE_WITH_IMM:
+    return "IBV_WR_RDMA_WRITE_WITH_IMM";
+  case IBV_WR_SEND:
+    return "IBV_WR_SEND";
+  case IBV_WR_SEND_WITH_IMM:
+    return "IBV_WR_SEND_WITH_IMM";
+  case IBV_WR_RDMA_READ:
+    return "IBV_WR_RDMA_READ";
+  case IBV_WR_ATOMIC_CMP_AND_SWP:
+    return "IBV_WR_ATOMIC_CMP_AND_SWP";
+  case IBV_WR_ATOMIC_FETCH_AND_ADD:
+    return "IBV_WR_ATOMIC_FETCH_AND_ADD";
+  default:
+    return "UNKNOWN_OPCODE";
   }
 }

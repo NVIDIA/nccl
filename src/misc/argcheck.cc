@@ -52,8 +52,8 @@ static ncclResult_t registrationCheck(struct ncclInfo* info) {
   };
 
   ncclResult_t ret = ncclSuccess;
-  struct ncclComm *comm = info->comm;
-  struct symBufInfo *bufInfo = nullptr; // send and recv buffers
+  struct ncclComm* comm = info->comm;
+  struct symBufInfo* bufInfo = nullptr; // send and recv buffers
   struct ncclDevrWindow* sendWin = nullptr;
   struct ncclDevrWindow* recvWin = nullptr;
   struct symBufInfo cmpBufInfo[2] = {};
@@ -76,14 +76,20 @@ static ncclResult_t registrationCheck(struct ncclInfo* info) {
     bufInfo[myInfoIdx].isSymRegistered = true;
     bufInfo[myInfoIdx].bigOffset = sendWin->bigOffset;
     bufInfo[myInfoIdx].userOffset = (uintptr_t)info->sendbuff - (uintptr_t)sendWin->userPtr;
-    INFO(NCCL_COLL, "SymCheck: coll %s size %ld rank %d bigOffset %lx userOffset %lx info->sendbuff %p sendWin->userPtr %p", info->opName, size, comm->rank, bufInfo[myInfoIdx].bigOffset, bufInfo[myInfoIdx].userOffset, info->sendbuff, sendWin->userPtr);
+    INFO(NCCL_COLL,
+         "SymCheck: coll %s size %ld rank %d bigOffset %lx userOffset %lx info->sendbuff %p sendWin->userPtr %p",
+         info->opName, size, comm->rank, bufInfo[myInfoIdx].bigOffset, bufInfo[myInfoIdx].userOffset, info->sendbuff,
+         sendWin->userPtr);
   }
 
   if (recvWin && (recvWin->winFlags & NCCL_WIN_COLL_SYMMETRIC)) {
     bufInfo[myInfoIdx + 1].isSymRegistered = true;
     bufInfo[myInfoIdx + 1].bigOffset = recvWin->bigOffset;
     bufInfo[myInfoIdx + 1].userOffset = (uintptr_t)info->recvbuff - (uintptr_t)recvWin->userPtr;
-    INFO(NCCL_COLL, "SymCheck: coll %s size %ld rank %d bigOffset %lx userOffset %lx info->recvbuff %p recvWin->userPtr %p", info->opName, size, comm->rank, bufInfo[myInfoIdx + 1].bigOffset, bufInfo[myInfoIdx + 1].userOffset, info->recvbuff, recvWin->userPtr);
+    INFO(NCCL_COLL,
+         "SymCheck: coll %s size %ld rank %d bigOffset %lx userOffset %lx info->recvbuff %p recvWin->userPtr %p",
+         info->opName, size, comm->rank, bufInfo[myInfoIdx + 1].bigOffset, bufInfo[myInfoIdx + 1].userOffset,
+         info->recvbuff, recvWin->userPtr);
   }
 
   NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, bufInfo, sizeof(struct symBufInfo) * 2), ret, fail);
@@ -92,7 +98,8 @@ static ncclResult_t registrationCheck(struct ncclInfo* info) {
   cmpBufInfo[1] = bufInfo[1];
   for (int r = 1; r < comm->nRanks; r++) {
     int infoIdx = r * 2;
-    if (cmpBufInfo[0].isSymRegistered != bufInfo[infoIdx].isSymRegistered || cmpBufInfo[1].isSymRegistered != bufInfo[infoIdx + 1].isSymRegistered) {
+    if (cmpBufInfo[0].isSymRegistered != bufInfo[infoIdx].isSymRegistered ||
+        cmpBufInfo[1].isSymRegistered != bufInfo[infoIdx + 1].isSymRegistered) {
       if (comm->rank == 0) {
         WARN("Coll %s size %ld symmetric registration check failed on rank %d: sendReg %d recvReg %d mismatch with "
              "rank 0 sendReg %d recvReg %d",
@@ -103,13 +110,26 @@ static ncclResult_t registrationCheck(struct ncclInfo* info) {
       goto fail;
     }
 
-    if (cmpBufInfo[0].bigOffset != bufInfo[infoIdx].bigOffset) { sendWinMismatch = true; sendWinMismatchRank = r; }
-    if (cmpBufInfo[1].bigOffset != bufInfo[infoIdx + 1].bigOffset) { recvWinMismatch = true; recvWinMismatchRank = r; }
-    if (cmpBufInfo[0].userOffset != bufInfo[infoIdx].userOffset) { sendUserMismatch = true; sendUserMismatchRank = r; }
-    if (cmpBufInfo[1].userOffset != bufInfo[infoIdx + 1].userOffset) { recvUserMismatch = true; recvUserMismatchRank = r; }
+    if (cmpBufInfo[0].bigOffset != bufInfo[infoIdx].bigOffset) {
+      sendWinMismatch = true;
+      sendWinMismatchRank = r;
+    }
+    if (cmpBufInfo[1].bigOffset != bufInfo[infoIdx + 1].bigOffset) {
+      recvWinMismatch = true;
+      recvWinMismatchRank = r;
+    }
+    if (cmpBufInfo[0].userOffset != bufInfo[infoIdx].userOffset) {
+      sendUserMismatch = true;
+      sendUserMismatchRank = r;
+    }
+    if (cmpBufInfo[1].userOffset != bufInfo[infoIdx + 1].userOffset) {
+      recvUserMismatch = true;
+      recvUserMismatchRank = r;
+    }
   }
 
-  if (info->coll == ncclFuncAllReduce || info->coll == ncclFuncReduceScatter || info->coll == ncclFuncAlltoAll || info->coll == ncclFuncGather) {
+  if (info->coll == ncclFuncAllReduce || info->coll == ncclFuncReduceScatter || info->coll == ncclFuncAlltoAll ||
+      info->coll == ncclFuncGather) {
     if (cmpBufInfo[0].isSymRegistered) {
       if (sendWinMismatch) {
         if (comm->rank == 0) {
@@ -134,7 +154,8 @@ static ncclResult_t registrationCheck(struct ncclInfo* info) {
     }
   }
 
-  if (info->coll == ncclFuncAllGather || info->coll == ncclFuncAllReduce || info->coll == ncclFuncAlltoAll || info->coll == ncclFuncScatter) {
+  if (info->coll == ncclFuncAllGather || info->coll == ncclFuncAllReduce || info->coll == ncclFuncAlltoAll ||
+      info->coll == ncclFuncScatter) {
     if (cmpBufInfo[1].isSymRegistered) {
       if (recvWinMismatch) {
         if (comm->rank == 0) {
@@ -168,7 +189,8 @@ fail:
 
 ncclResult_t ncclArgsGlobalCheck(struct ncclArgsInfo* argsInfo) {
   struct ncclInfo* info = &argsInfo->info;
-  if (info->coll != ncclFuncSend && info->coll != ncclFuncRecv && info->coll != ncclFuncPutSignal && info->coll != ncclFuncSignal && info->coll != ncclFuncWaitSignal) {
+  if (info->coll != ncclFuncSend && info->coll != ncclFuncRecv && info->coll != ncclFuncPutSignal &&
+      info->coll != ncclFuncSignal && info->coll != ncclFuncWaitSignal) {
     // exclude one-sided and sendrecv operations
     // Check registration globally
     NCCLCHECK(registrationCheck(info));
@@ -204,8 +226,7 @@ ncclResult_t ArgsCheck(struct ncclInfo* info) {
 
   if (info->comm->checkMode != ncclCheckModeDefault) {
     if ((info->coll == ncclFuncSend || info->coll == ncclFuncRecv)) {
-      if (info->count >0)
-        NCCLCHECK(CudaPtrCheck(info->recvbuff, info->comm, "buff", info->opName));
+      if (info->count > 0) NCCLCHECK(CudaPtrCheck(info->recvbuff, info->comm, "buff", info->opName));
     } else if (info->coll == ncclFuncPutSignal || info->coll == ncclFuncSignal || info->coll == ncclFuncWaitSignal) {
       // One-sided RMA ops specify the remote destination via peerWin, not sendbuff/recvbuff,
       // so the standard CUDA pointer checks do not apply here.

@@ -35,14 +35,15 @@
 // Note: NCCL_DEFINE_PARAM is not designed to be put inside of a namespace. This can be
 // changed if there is a need.
 #define DEFINE_NCCL_PARAM(name, type, key, default, flags, parser, desc) \
-  namespace key_guards { struct guard_##key {}; }; \
+  namespace key_guards { \
+  struct guard_##key {}; \
+  }; \
   extern constexpr char name##Key[] = #key; \
   ncclParam<type> name{name##Key, default, parser, #type, flags, desc};
 
 // Usage: USE_NCCL_PARAM(name, type)
 // name and type must match the DEFINE_NCCL_PARAM.
-#define USE_NCCL_PARAM(name, type) \
-  extern ncclParam<type> name;
+#define USE_NCCL_PARAM(name, type) extern ncclParam<type> name;
 
 // ============================================================================
 // ncclParam Template
@@ -67,16 +68,15 @@ struct ncclParam : public ncclParamInterface {
 
   ~ncclParam() override = default;
 
-  ncclParam(const char* key, T defVal, ncclParamParser<T> parser = {},
-            const char* typeStr = "", uint64_t flags = NCCL_PARAM_FLAG_NONE,
-            const char* desc = "")
-    : info({ncclParamTypeIdOf<T>(), flags, typeStr, key, desc}),
-      defaultValue(defVal), value(defVal), parser(std::move(parser)) {
-      if (!this->parser) {
-        this->parser = ncclParamDefault<T>();
-      }
-      ncclParamRegistry::add(info.key, info, this);
+  ncclParam(const char* key, T defVal, ncclParamParser<T> parser = {}, const char* typeStr = "",
+            uint64_t flags = NCCL_PARAM_FLAG_NONE, const char* desc = "")
+    : info({ncclParamTypeIdOf<T>(), flags, typeStr, key, desc}), defaultValue(defVal), value(defVal),
+      parser(std::move(parser)) {
+    if (!this->parser) {
+      this->parser = ncclParamDefault<T>();
     }
+    ncclParamRegistry::add(info.key, info, this);
+  }
 
   // Prevent copy/move assignment
   ncclParam& operator=(const ncclParam&) = delete;

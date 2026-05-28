@@ -16,7 +16,8 @@
 // Forward declaration for sum reduction operator (defined in reduce_copy__types.h)
 namespace nccl {
 namespace utility {
-template<typename T> struct OpSum;
+template <typename T>
+struct OpSum;
 } // namespace utility
 } // namespace nccl
 
@@ -29,7 +30,7 @@ namespace utility {
 // EltPack<T, n>: Typed pack containing n elements of type T (T must be at least 1 byte).
 // Provides both typed element access and untyped byte access for load/store.
 
-template<typename T, int n>
+template <typename T, int n>
 struct EltPack {
   using EltType = T;  // Element type
   static constexpr int Count = n;  // Number of elements
@@ -39,12 +40,16 @@ struct EltPack {
   alignas(Alignment) char bytes[Bytes];
 
   // Element access via reinterpret_cast
-  NCCL_DEVICE_INLINE T* elts() { return reinterpret_cast<T*>(bytes); }
-  NCCL_DEVICE_INLINE const T* elts() const { return reinterpret_cast<const T*>(bytes); }
+  NCCL_DEVICE_INLINE T* elts() {
+    return reinterpret_cast<T*>(bytes);
+  }
+  NCCL_DEVICE_INLINE const T* elts() const {
+    return reinterpret_cast<const T*>(bytes);
+  }
 };
 
 // Specialization for zero-sized packs
-template<typename T>
+template <typename T>
 struct EltPack<T, 0> {
   using EltType = T;  // Element type
   static constexpr int Count = 0;
@@ -52,15 +57,17 @@ struct EltPack<T, 0> {
   static constexpr int Alignment = 1;
   static constexpr char* bytes = nullptr;
 
-  NCCL_DEVICE_INLINE T* elts() { return nullptr; }
-  NCCL_DEVICE_INLINE const T* elts() const { return nullptr; }
+  NCCL_DEVICE_INLINE T* elts() {
+    return nullptr;
+  }
+  NCCL_DEVICE_INLINE const T* elts() const {
+    return nullptr;
+  }
 };
-
-
 
 // Helper: Create EltPack for a given byte size
 // Computes the number of elements that fit in the specified byte size (element size >= 1 byte)
-template<typename T, int Bytes>
+template <typename T, int Bytes>
 using EltPackForBytes = EltPack<T, Bytes / static_cast<int>(sizeof(T))>;
 
 // ============================================================================
@@ -72,37 +79,37 @@ using EltPackForBytes = EltPack<T, Bytes / static_cast<int>(sizeof(T))>;
 // (e.g., min/max don't need wider types, but sum may benefit from wider types).
 
 // Primary template - extracts element type from reduction operator
-template<typename Red>
+template <typename Red>
 struct AccumulateType {
   using Type = typename Red::EltType;  // Default: use operator's element type
 };
 
 // Partial specialization for template template parameters (e.g., OpSum<T>)
 // For most operators, accumulation type equals element type
-template<template<typename> typename Red, typename T>
+template <template <typename> typename Red, typename T>
 struct AccumulateType<Red<T>> {
   using Type = T;  // Default: same type
 };
 
 // Specialize for sum operations that benefit from wider accumulation
-template<>
+template <>
 struct AccumulateType<OpSum<half>> {
   using Type = float;  // half accumulates into float for better precision
 };
 
 #if defined(__CUDA_BF16_TYPES_EXIST__)
-template<>
+template <>
 struct AccumulateType<OpSum<__nv_bfloat16>> {
   using Type = float;  // bfloat16 accumulates into float for better precision
 };
 #endif
 
 #if defined(__CUDA_FP8_TYPES_EXIST__)
-template<>
+template <>
 struct AccumulateType<OpSum<__nv_fp8_e4m3>> {
   using Type = half;  // fp8 accumulates into half precision (matches .acc::f16 in multimem)
 };
-template<>
+template <>
 struct AccumulateType<OpSum<__nv_fp8_e5m2>> {
   using Type = half;  // fp8 accumulates into half precision (matches .acc::f16 in multimem)
 };

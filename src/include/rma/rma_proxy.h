@@ -29,7 +29,7 @@ typedef enum {
 } ncclSignalMode_t;
 
 struct ncclRmaSignal_t {
-  void *signalMhandle;
+  void* signalMhandle;
   uint64_t offset;
   uint64_t val;
   uint32_t op;
@@ -50,9 +50,9 @@ typedef enum ncclRmaDescType_t {
 struct ncclRmaPutSignalOp {
   // Network function descriptor
   uint64_t srcOff;
-  void *srcHandle;
+  void* srcHandle;
   uint64_t dstOff;
-  void *dstHandle;
+  void* dstHandle;
   size_t size;
   int targetRank;
   ncclRmaSignal_t signal;
@@ -76,7 +76,7 @@ struct ncclRmaPutSignalGroupOp {
 };
 
 struct ncclRmaProxyDesc {
-  struct ncclRmaProxyDesc *next;
+  struct ncclRmaProxyDesc* next;
   ncclRmaDescType_t rmaDescType;
   ncclRmaDescState_t rmaDescState;
 
@@ -100,16 +100,15 @@ struct ncclRmaProxyDesc {
   // Graph capture fields
   struct ncclKernelPlan* persistPlan; // Back reference to persistent plan during clean up
   bool persistDescValid; // Persistent descriptor is valid
-
 };
 
 struct ncclRmaProxyCtx {
-  struct ncclComm *comm;
+  struct ncclComm* comm;
 
   // GIN context for the RMA proxy context
-  void *rmaCollComm;
-  void *rmaCtx;
-  //ncclNetDeviceHandle_t *devHandle;
+  void* rmaCollComm;
+  void* rmaCtx;
+  // ncclNetDeviceHandle_t *devHandle;
   ncclNetProperties_t props;
 
   //---------Non-graph descriptor queues and synchronization---------
@@ -144,8 +143,8 @@ struct ncclRmaProxyCtx {
   // - Offset [nRanks*8]: shared aggregate signal counter (8 bytes)
   // Total signal buffer size: (nRanks + 1) * 8 bytes
   CUmemGenericAllocationHandle signalsCumemhandle;
-  void *signalsMhandle;
-  uint64_t *signalsDev;
+  void* signalsMhandle;
+  uint64_t* signalsDev;
   uint64_t* signalsHost; // Host buffer to track the expected values of the signals
 
   //---------Graph descriptor queues and synchronization---------
@@ -154,20 +153,20 @@ struct ncclRmaProxyCtx {
   struct ncclIntruQueue<struct ncclRmaProxyDesc, &ncclRmaProxyDesc::next>* persistentQueues;
 
   // CPU-accessible signal is required as proxy needs to poll on the signal values
-  void *cpuAccessSignalsGdrHandle;
-  void *cpuAccessSignalsMhandle;
-  uint64_t *cpuAccessSignals;
-  uint64_t *cpuAccessSignalsDev;
+  void* cpuAccessSignalsGdrHandle;
+  void* cpuAccessSignalsMhandle;
+  uint64_t* cpuAccessSignals;
+  uint64_t* cpuAccessSignalsDev;
   uint64_t* cpuAccessSignalsHost; // Host buffer to track the expected values of the signals
 
   // Local flush buffer
   CUmemGenericAllocationHandle flushBufCumemhandle;
-  void *flushBufMhandle;
-  uint64_t *flushBufDev;
+  void* flushBufMhandle;
+  uint64_t* flushBufDev;
 };
 
 struct ncclRmaProxyState {
-  struct ncclComm *comm;
+  struct ncclComm* comm;
   ncclRma_t* ncclRma;
   int rmaVersion;
   void* rmaInstance;
@@ -199,8 +198,8 @@ ncclResult_t ncclRmaProxyConnectOnce(struct ncclComm* comm);
 ncclResult_t ncclRmaProxyFinalize(struct ncclComm* comm);
 
 // RMA Proxy context management
-ncclResult_t ncclRmaProxyCreateContext(struct ncclComm *comm, void *collComm, ncclNetProperties_t props,
-                                       void **outRmaProxyCtx, ncclNetDeviceHandle_t **outDevHandle);
+ncclResult_t ncclRmaProxyCreateContext(struct ncclComm* comm, void* collComm, ncclNetProperties_t props,
+                                       void** outRmaProxyCtx, ncclNetDeviceHandle_t** outDevHandle);
 ncclResult_t ncclRmaProxyDestroyContext(ncclRma_t* rmaComm, void* rmaProxyCtx);
 ncclResult_t ncclRmaProxyProgress(ncclRma_t* ncclRma, void* rmaProxyCtx);
 void* ncclRmaProxyProgressThread(struct ncclRmaProxyState* rmaProxyState_);
@@ -215,8 +214,7 @@ bool ncclRmaProxyCircularBufFull(struct ncclRmaProxyCtx* ctx, int peer);
 bool ncclRmaProxyCircularBufEmpty(struct ncclRmaProxyCtx* ctx, int peer);
 
 // Returns true if the queue this descriptor would enqueue into is full.
-bool ncclRmaProxyEnqueueFull(struct ncclRmaProxyCtx* ctx,
-                             const struct ncclRmaProxyDesc* desc);
+bool ncclRmaProxyEnqueueFull(struct ncclRmaProxyCtx* ctx, const struct ncclRmaProxyDesc* desc);
 
 // ============================================================================
 // Descriptor API: 4-step protocol
@@ -235,67 +233,49 @@ bool ncclRmaProxyEnqueueFull(struct ncclRmaProxyCtx* ctx,
 
 // Helper to build a single put-signal op (used by both single put and group
 // put builders).
-ncclResult_t ncclRmaProxyPutBuildOp(
-    struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
-    int ctx, bool persistent,
-    struct ncclDevrWindow* srcWin, size_t srcOff,
-    struct ncclDevrWindow* peerWin, size_t peerOff,
-    size_t size, int peer,
-    ncclSignalMode_t signalMode,
-    struct ncclRmaPutSignalOp* op);
+ncclResult_t ncclRmaProxyPutBuildOp(struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx, int ctx,
+                                    bool persistent, struct ncclDevrWindow* srcWin, size_t srcOff,
+                                    struct ncclDevrWindow* peerWin, size_t peerOff, size_t size, int peer,
+                                    ncclSignalMode_t signalMode, struct ncclRmaPutSignalOp* op);
 
 // Build a single put descriptor.
-ncclResult_t ncclRmaProxyPutBuildDesc(
-    struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
-    struct ncclKernelPlan* plan,
-    struct ncclDevrWindow* srcWinHost, size_t srcWinOffset,
-    struct ncclDevrWindow* peerWinHost, size_t peerWinOffset,
-    size_t size, int peer, int ctx,
-    ncclSignalMode_t signalMode,
-    struct ncclRmaProxyDesc* desc);
+ncclResult_t ncclRmaProxyPutBuildDesc(struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
+                                      struct ncclKernelPlan* plan, struct ncclDevrWindow* srcWinHost,
+                                      size_t srcWinOffset, struct ncclDevrWindow* peerWinHost, size_t peerWinOffset,
+                                      size_t size, int peer, int ctx, ncclSignalMode_t signalMode,
+                                      struct ncclRmaProxyDesc* desc);
 
 // Build a put-signal-group descriptor over an array of pre-filled ops.
 // Takes ownership of *ops and nulls the caller's slot on success.
-ncclResult_t ncclRmaProxyPutGroupBuildDesc(
-    struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
-    struct ncclKernelPlan* plan,
-    int nOps, struct ncclRmaPutSignalOp** ops,
-    int ctx,
-    struct ncclRmaProxyDesc* desc);
+ncclResult_t ncclRmaProxyPutGroupBuildDesc(struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
+                                           struct ncclKernelPlan* plan, int nOps, struct ncclRmaPutSignalOp** ops,
+                                           int ctx, struct ncclRmaProxyDesc* desc);
 
 // Build a wait-signal descriptor.
 // Takes ownership of caller-allocated peers/nsignals arrays.
-ncclResult_t ncclRmaProxyWaitBuildDesc(
-    struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
-    struct ncclKernelPlan* plan,
-    int npeers, int** peers, int** nsignals,
-    struct ncclRmaProxyDesc* desc);
+ncclResult_t ncclRmaProxyWaitBuildDesc(struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
+                                       struct ncclKernelPlan* plan, int npeers, int** peers, int** nsignals,
+                                       struct ncclRmaProxyDesc* desc);
 
 // Stream-batch memop param builders for put descriptors.
 int ncclRmaProxyPutStartNumOps(bool persistent);
-ncclResult_t ncclRmaProxyPutStartParams(struct ncclRmaProxyDesc* desc,
-                                        CUstreamBatchMemOpParams* params);
+ncclResult_t ncclRmaProxyPutStartParams(struct ncclRmaProxyDesc* desc, CUstreamBatchMemOpParams* params);
 int ncclRmaProxyPutDoneNumOps(bool persistent);
-ncclResult_t ncclRmaProxyPutDoneParams(struct ncclRmaProxyDesc* desc,
-                                       CUstreamBatchMemOpParams* params);
+ncclResult_t ncclRmaProxyPutDoneParams(struct ncclRmaProxyDesc* desc, CUstreamBatchMemOpParams* params);
 
 // Stream-batch memop param builders for put-signal-group descriptors.
 int ncclRmaProxyPutGroupStartNumOps(bool persistent);
-ncclResult_t ncclRmaProxyPutGroupStartParams(struct ncclRmaProxyDesc* desc,
-                                             CUstreamBatchMemOpParams* params);
+ncclResult_t ncclRmaProxyPutGroupStartParams(struct ncclRmaProxyDesc* desc, CUstreamBatchMemOpParams* params);
 int ncclRmaProxyPutGroupDoneNumOps(bool persistent);
-ncclResult_t ncclRmaProxyPutGroupDoneParams(struct ncclRmaProxyDesc* desc,
-                                            CUstreamBatchMemOpParams* params);
+ncclResult_t ncclRmaProxyPutGroupDoneParams(struct ncclRmaProxyDesc* desc, CUstreamBatchMemOpParams* params);
 
 // Stream-batch memop param builder for a wait descriptor.
 int ncclRmaProxyWaitNumStreamOps(const struct ncclRmaProxyDesc* desc);
-ncclResult_t ncclRmaProxyWaitParams(struct ncclRmaProxyCtx* rmaProxyCtx,
-                                    struct ncclRmaProxyDesc* desc,
+ncclResult_t ncclRmaProxyWaitParams(struct ncclRmaProxyCtx* rmaProxyCtx, struct ncclRmaProxyDesc* desc,
                                     CUstreamBatchMemOpParams* params);
 
 // Descriptor enqueue dispatcher.
-ncclResult_t ncclRmaProxyEnqueueDesc(struct ncclRmaProxyCtx* rmaProxyCtx,
-                                     struct ncclRmaProxyDesc** desc);
+ncclResult_t ncclRmaProxyEnqueueDesc(struct ncclRmaProxyCtx* rmaProxyCtx, struct ncclRmaProxyDesc** desc);
 
 // Descriptor destruction. Takes desc** and nulls *desc after free.
 ncclResult_t ncclRmaProxyDestroyDesc(struct ncclComm* comm, struct ncclRmaProxyDesc** desc);

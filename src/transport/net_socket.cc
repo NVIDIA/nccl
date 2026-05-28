@@ -47,33 +47,34 @@ static ncclProfilerCallback_t ncclProfilerFunction;
 // context support is added to the plugin the ref counter can be removed.
 static int netRefCount;
 
-ncclResult_t ncclNetSocketInit(void** ctx, uint64_t commId, ncclNetCommConfig_t* config, ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) {
+ncclResult_t ncclNetSocketInit(void** ctx, uint64_t commId, ncclNetCommConfig_t* config, ncclDebugLogger_t logFunction,
+                               ncclProfilerCallback_t profFunction) {
   if (netRefCount++) return ncclSuccess;
   ncclProfilerFunction = profFunction;
   if (ncclNetIfs == -1) {
     std::lock_guard<std::mutex> lock(ncclNetSocketMutex);
     if (ncclNetIfs == -1) {
-      char names[MAX_IF_NAME_SIZE*MAX_IFS];
+      char names[MAX_IF_NAME_SIZE * MAX_IFS];
       union ncclSocketAddress addrs[MAX_IFS];
       NCCLCHECK(ncclFindInterfaces(names, addrs, MAX_IF_NAME_SIZE, MAX_IFS, &ncclNetIfs));
       if (ncclNetIfs <= 0) {
         WARN("NET/Socket : no interface found");
         return ncclInternalError;
       } else {
-        #define MAX_LINE_LEN (2047)
-        char line[MAX_LINE_LEN+1];
-        char addrline[SOCKET_NAME_MAXLEN+1];
+#define MAX_LINE_LEN (2047)
+        char line[MAX_LINE_LEN + 1];
+        char addrline[SOCKET_NAME_MAXLEN + 1];
         line[0] = '\0';
         addrline[SOCKET_NAME_MAXLEN] = '\0';
-        for (int i=0; i<ncclNetIfs; i++) {
-          strcpy(ncclNetSocketDevs[i].devName, names+i*MAX_IF_NAME_SIZE);
-          memcpy(&ncclNetSocketDevs[i].addr, addrs+i, sizeof(union ncclSocketAddress));
+        for (int i = 0; i < ncclNetIfs; i++) {
+          strcpy(ncclNetSocketDevs[i].devName, names + i * MAX_IF_NAME_SIZE);
+          memcpy(&ncclNetSocketDevs[i].addr, addrs + i, sizeof(union ncclSocketAddress));
           NCCLCHECK(ncclNetSocketGetPciPath(ncclNetSocketDevs[i].devName, &ncclNetSocketDevs[i].pciPath));
-          snprintf(line+strlen(line), MAX_LINE_LEN-strlen(line), " [%d]%s:%s", i, names+i*MAX_IF_NAME_SIZE,
-              ncclSocketToString(&addrs[i], addrline));
+          snprintf(line + strlen(line), MAX_LINE_LEN - strlen(line), " [%d]%s:%s", i, names + i * MAX_IF_NAME_SIZE,
+                   ncclSocketToString(&addrs[i], addrline));
         }
         line[MAX_LINE_LEN] = '\0';
-        INFO(NCCL_INIT|NCCL_NET,"NET/Socket : Using%s", line);
+        INFO(NCCL_INIT | NCCL_NET, "NET/Socket : Using%s", line);
       }
     }
   }
@@ -89,7 +90,7 @@ static ncclResult_t ncclNetSocketGetSpeed(char* devName, int* speed) {
   ncclResult_t ret = ncclSuccess;
   *speed = 0;
 
-  #if defined(NCCL_OS_WINDOWS)
+#if defined(NCCL_OS_WINDOWS)
   // On Windows, use GetAdaptersAddresses to get network interface speed
   ULONG bufferSize = 15000;
   IP_ADAPTER_ADDRESSES* adapterAddresses = NULL;
@@ -148,7 +149,7 @@ static ncclResult_t ncclNetSocketGetSpeed(char* devName, int* speed) {
     char speedStr[] = "        ";
     int n;
     // Allow this to silently fail
-    n = read(fd, speedStr, sizeof(speedStr)-1);
+    n = read(fd, speedStr, sizeof(speedStr) - 1);
     if (n > 0) {
       *speed = strtol(speedStr, NULL, 0);
     }
@@ -174,7 +175,7 @@ ncclResult_t ncclNetSocketGetProperties(int dev, ncclNetProperties_t* props) {
   props->port = 0;
   props->maxComms = 65536;
   props->maxRecvs = 1;
-  props->netDeviceType    = NCCL_NET_DEVICE_HOST;
+  props->netDeviceType = NCCL_NET_DEVICE_HOST;
   props->netDeviceVersion = NCCL_NET_DEVICE_INVALID_VERSION;
   props->maxP2pBytes = NCCL_MAX_NET_SIZE_BYTES;
   props->maxCollBytes = MAX_COLLNET_SIZE;
@@ -286,39 +287,40 @@ struct ncclNetSocketComm {
   struct ncclNetSocketThreadResources threadResources[MAX_THREADS];
 };
 
-void* persistentSocketThread(void *args_) {
+void* persistentSocketThread(void* args_) {
   struct ncclNetSocketThreadResources* resource = (struct ncclNetSocketThreadResources*)args_;
   struct ncclNetSocketComm* comm = resource->comm;
   struct ncclNetSocketTaskQueue* myQueue = &resource->threadTaskQueue;
   int nSocksPerThread = comm->nSocks / comm->nThreads;
 #ifdef NCCL_ENABLE_NET_PROFILING
-  void* eHandle[MAX_REQUESTS*MAX_SOCKETS] = { 0 };
+  void* eHandle[MAX_REQUESTS * MAX_SOCKETS] = {0};
 #endif
   while (1) {
     int idle = 1;
     int mark = myQueue->next; // mark newest task seen
-    for (int i=0; i<myQueue->len; i+=nSocksPerThread) {
+    for (int i = 0; i < myQueue->len; i += nSocksPerThread) {
       int repeat;
       do {
         repeat = 0;
-        for (int j=0; j<nSocksPerThread; j++) {
-          struct ncclNetSocketTask* r = myQueue->tasks+i+j;
+        for (int j = 0; j < nSocksPerThread; j++) {
+          struct ncclNetSocketTask* r = myQueue->tasks + i + j;
           if (r != NULL && r->used == 1 && r->offset < r->size) {
 #ifdef NCCL_ENABLE_NET_PROFILING
-            if (!eHandle[i+j]) {
+            if (!eHandle[i + j]) {
               ncclProfilerNetSockDescr_v1_t data;
               data.type = ncclProfileSocket;
               data.sock.fd = r->sock->socketDescriptor;
               data.sock.op = r->op;
               data.sock.length = r->size;
-              ncclProfilerFunction(&eHandle[i+j], ncclProfilerNetEventStart, resource->pInfo->pHandle, NCCL_PROFILER_NET_TYPE_SOCK | 1, &data);
+              ncclProfilerFunction(&eHandle[i + j], ncclProfilerNetEventStart, resource->pInfo->pHandle,
+                                   NCCL_PROFILER_NET_TYPE_SOCK | 1, &data);
             }
 #endif
             r->result = ncclSocketProgress(r->op, r->sock, r->data, r->size, &r->offset);
             if (r->result != ncclSuccess) {
 #ifdef NCCL_ENABLE_NET_PROFILING
-              ncclProfilerFunction(&eHandle[i+j], ncclProfilerNetEventStop, NULL, 0, NULL);
-              eHandle[i+j] = NULL;
+              ncclProfilerFunction(&eHandle[i + j], ncclProfilerNetEventStop, NULL, 0, NULL);
+              eHandle[i + j] = NULL;
 #endif
               WARN("NET/Socket : socket progress error");
               return NULL;
@@ -327,8 +329,8 @@ void* persistentSocketThread(void *args_) {
             if (r->offset < r->size) repeat = 1;
 #ifdef NCCL_ENABLE_NET_PROFILING
             if (repeat == 0) {
-              ncclProfilerFunction(&eHandle[i+j], ncclProfilerNetEventStop, NULL, 0, NULL);
-              eHandle[i+j] = NULL;
+              ncclProfilerFunction(&eHandle[i + j], ncclProfilerNetEventStop, NULL, 0, NULL);
+              eHandle[i + j] = NULL;
             }
 #endif
           }
@@ -355,7 +357,7 @@ ncclResult_t ncclNetSocketGetNsockNthread(int dev, int* ns, int* nt) {
   int nSocks;
   if (nThreads == -2 || nSocksPerThread == -2) {
     // Auto-detection
-    int autoNt=0, autoNs=1; // By default, we only use the main thread and do not spawn extra threads
+    int autoNt = 0, autoNs = 1; // By default, we only use the main thread and do not spawn extra threads
     char vendorPath[PATH_MAX];
     snprintf(vendorPath, PATH_MAX, "/sys/class/net/%s/device/vendor", ncclNetSocketDevs[dev].devName);
     // Coverity is wrong.  NULL second argument to realpath() is OK by POSIX.1-2008.
@@ -381,14 +383,16 @@ ncclResult_t ncclNetSocketGetNsockNthread(int dev, int* ns, int* nt) {
       autoNt = 4;
       autoNs = 1;
     }
-end:
+  end:
     if (nThreads == -2) nThreads = autoNt;
     if (nSocksPerThread == -2) nSocksPerThread = autoNs;
   }
   nSocks = nSocksPerThread * nThreads;
   if (nSocks > MAX_SOCKETS) {
-    nSocksPerThread = MAX_SOCKETS/nThreads;
-    WARN("NET/Socket : the total number of sockets is greater than the maximum allowed, setting NCCL_NSOCKS_PERTHREAD to %d", nSocksPerThread);
+    nSocksPerThread = MAX_SOCKETS / nThreads;
+    WARN("NET/Socket : the total number of sockets is greater than the maximum allowed, setting NCCL_NSOCKS_PERTHREAD "
+         "to %d",
+         nSocksPerThread);
     nSocks = nSocksPerThread * nThreads;
   }
   *ns = nSocks;
@@ -408,13 +412,15 @@ ncclResult_t ncclNetSocketListen(void* ctx, int dev, void* opaqueHandle, void** 
     return ncclInternalError;
   }
   ncclResult_t ret = ncclSuccess;
-  struct ncclNetSocketHandle* handle = (struct ncclNetSocketHandle*) opaqueHandle;
+  struct ncclNetSocketHandle* handle = (struct ncclNetSocketHandle*)opaqueHandle;
   memset(handle, 0, sizeof(struct ncclNetSocketHandle));
   static_assert(sizeof(struct ncclNetSocketHandle) <= NCCL_NET_HANDLE_MAXSIZE, "ncclNetSocketHandle size too large");
   struct ncclNetSocketListenComm* comm;
   NCCLCHECK(ncclCalloc(&comm, 1));
   handle->magic = ncclSocketDefaultMagic();
-  NCCLCHECKGOTO(ncclSocketInit(&comm->sock, &ncclNetSocketDevs[dev].addr, handle->magic, ncclSocketTypeNetSocket, NULL, 1), ret, fail);
+  NCCLCHECKGOTO(ncclSocketInit(&comm->sock, &ncclNetSocketDevs[dev].addr, handle->magic, ncclSocketTypeNetSocket, NULL,
+                               1),
+                ret, fail);
   NCCLCHECKGOTO(ncclSocketListen(&comm->sock), ret, fail);
   NCCLCHECKGOTO(ncclSocketGetAddr(&comm->sock, &handle->connectAddr), ret, fail);
   NCCLCHECKGOTO(ncclNetSocketGetNsockNthread(dev, &comm->nSocks, &comm->nThreads), ret, fail);
@@ -431,14 +437,15 @@ fail:
 }
 
 #define SOCKET_CTRL_SIZE (sizeof(int))
-ncclResult_t ncclNetSocketConnect(void* ctx, int dev, void* opaqueHandle, void** sendComm, ncclNetDeviceHandle_t** /*sendDevComm*/) {
+ncclResult_t ncclNetSocketConnect(void* ctx, int dev, void* opaqueHandle, void** sendComm,
+                                  ncclNetDeviceHandle_t** /*sendDevComm*/) {
   if (dev < 0 || dev >= ncclNetIfs) {
     // data transfer socket is based on specified dev
     return ncclInternalError;
   }
 
   int ready;
-  struct ncclNetSocketHandle* handle = (struct ncclNetSocketHandle*) opaqueHandle;
+  struct ncclNetSocketHandle* handle = (struct ncclNetSocketHandle*)opaqueHandle;
   struct ncclNetSocketCommStage* stage = &handle->stage;
   struct ncclNetSocketComm* comm = stage->comm;
   uint8_t i = stage->iteration;
@@ -454,8 +461,8 @@ ncclResult_t ncclNetSocketConnect(void* ctx, int dev, void* opaqueHandle, void**
   comm->nThreads = handle->nThreads;
   comm->dev = dev;
   CUDACHECK(cudaGetDevice(&comm->cudaDev));
-  for (; i<comm->nSocks+1; i++) {
-    sock = (i == comm->nSocks) ? &comm->ctrlSock : comm->socks+i;
+  for (; i < comm->nSocks + 1; i++) {
+    sock = (i == comm->nSocks) ? &comm->ctrlSock : comm->socks + i;
     NCCLCHECK(ncclSocketInit(sock, &handle->connectAddr, handle->magic, ncclSocketTypeNetSocket, NULL, 1));
 
     stage->sock = sock;
@@ -463,12 +470,12 @@ ncclResult_t ncclNetSocketConnect(void* ctx, int dev, void* opaqueHandle, void**
     stage->iteration = i;
     NCCLCHECK(ncclSocketConnect(sock));
 
-socket_connect_check:
+  socket_connect_check:
     NCCLCHECK(ncclSocketReady(sock, &ready));
-    if (! ready) return ncclSuccess;
+    if (!ready) return ncclSuccess;
     stage->state = ncclNetSocketCommStateSend;
 
-socket_send:
+  socket_send:
     int done = 0;
     NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_SEND, sock, &i, sizeof(uint8_t), &done));
     if (done == 0) return ncclSuccess;
@@ -496,7 +503,7 @@ ncclResult_t ncclNetSocketAccept(void* listenComm, void** recvComm, ncclNetDevic
   rComm->nThreads = lComm->nThreads;
   rComm->dev = lComm->dev;
   CUDACHECK(cudaGetDevice(&rComm->cudaDev));
-  for (; i<rComm->nSocks+1; i++) {
+  for (; i < rComm->nSocks + 1; i++) {
     uint8_t sendSockIdx;
 
     NCCLCHECK(ncclCalloc(&sock, 1));
@@ -506,20 +513,18 @@ ncclResult_t ncclNetSocketAccept(void* listenComm, void** recvComm, ncclNetDevic
     stage->iteration = i;
     NCCLCHECK(ncclSocketAccept(sock, &lComm->sock));
 
-socket_accept_check:
+  socket_accept_check:
     NCCLCHECK(ncclSocketReady(sock, &ready));
     if (!ready) return ncclSuccess;
 
     stage->state = ncclNetSocketCommStateRecv;
-socket_recv:
+  socket_recv:
     int done = 0;
     NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_RECV, sock, &sendSockIdx, sizeof(uint8_t), &done));
     if (done == 0) return ncclSuccess;
 
-    if (sendSockIdx == rComm->nSocks)
-      rComm->ctrlSock = *sock;
-    else
-      rComm->socks[sendSockIdx] = *sock;
+    if (sendSockIdx == rComm->nSocks) rComm->ctrlSock = *sock;
+    else rComm->socks[sendSockIdx] = *sock;
     free(sock);
   }
   NCCLCHECK(ncclCalloc(&rComm->inlineData, MAX_REQUESTS * (SOCKET_CTRL_SIZE + ncclParamSocketInlineSize())));
@@ -533,9 +538,10 @@ socket_recv:
   return ncclSuccess;
 }
 
-ncclResult_t ncclNetSocketGetRequest(struct ncclNetSocketComm* comm, int op, void* data, int size, struct ncclNetSocketRequest** req) {
-  for (int i=0; i<MAX_REQUESTS; i++) {
-    struct ncclNetSocketRequest* r = comm->requests+i;
+ncclResult_t ncclNetSocketGetRequest(struct ncclNetSocketComm* comm, int op, void* data, int size,
+                                     struct ncclNetSocketRequest** req) {
+  for (int i = 0; i < MAX_REQUESTS; i++) {
+    struct ncclNetSocketRequest* r = comm->requests + i;
     if (r->used == 0) {
       r->op = op;
       r->data = data;
@@ -553,9 +559,10 @@ ncclResult_t ncclNetSocketGetRequest(struct ncclNetSocketComm* comm, int op, voi
   return ncclInternalError;
 }
 
-ncclResult_t ncclNetSocketGetTask(struct ncclNetSocketComm* comm, struct ncclProfilerInfo* pInfo, int op, void* data, int size, struct ncclNetSocketTask** req) {
+ncclResult_t ncclNetSocketGetTask(struct ncclNetSocketComm* comm, struct ncclProfilerInfo* pInfo, int op, void* data,
+                                  int size, struct ncclNetSocketTask** req) {
   int tid = comm->nextSock % comm->nThreads;
-  struct ncclNetSocketThreadResources* res = comm->threadResources+tid;
+  struct ncclNetSocketThreadResources* res = comm->threadResources + tid;
   struct ncclNetSocketTaskQueue* queue = &res->threadTaskQueue;
   // create helper threads and prepare per-thread task queue
   if (queue->tasks == NULL) {
@@ -570,9 +577,10 @@ ncclResult_t ncclNetSocketGetTask(struct ncclNetSocketComm* comm, struct ncclPro
     res->pInfo = pInfo;
 #endif
     comm->helperThread[tid] = std::thread(persistentSocketThread, res);
-    ncclSetThreadName(comm->helperThread[tid], "NCCL Sock%c%1u%2u%2u", op == NCCL_SOCKET_SEND ? 'S' : 'R', comm->dev, tid, comm->cudaDev);
+    ncclSetThreadName(comm->helperThread[tid], "NCCL Sock%c%1u%2u%2u", op == NCCL_SOCKET_SEND ? 'S' : 'R', comm->dev,
+                      tid, comm->cudaDev);
   }
-  struct ncclNetSocketTask* r = queue->tasks+queue->next;
+  struct ncclNetSocketTask* r = queue->tasks + queue->next;
   if (r->used == 0) {
     r->op = op;
     r->data = data;
@@ -584,7 +592,7 @@ ncclResult_t ncclNetSocketGetTask(struct ncclNetSocketComm* comm, struct ncclPro
     r->used = 1;
     *req = r;
     std::lock_guard<std::mutex> lock(res->threadMutex);
-    queue->next = (queue->next+1)%queue->len;
+    queue->next = (queue->next + 1) % queue->len;
     res->threadCond.notify_one();
     return ncclSuccess;
   }
@@ -593,11 +601,13 @@ ncclResult_t ncclNetSocketGetTask(struct ncclNetSocketComm* comm, struct ncclPro
 }
 
 // if the dataSize is smaller than the inline size, return the inline size; if not, return 0 to avoid the extra copy.
-static int ncclNetSocketInlineSize(int dataSize) { return (dataSize <= ncclParamSocketInlineSize()) ? dataSize : 0; }
+static int ncclNetSocketInlineSize(int dataSize) {
+  return (dataSize <= ncclParamSocketInlineSize()) ? dataSize : 0;
+}
 
 ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
   *done = 0;
-  struct ncclNetSocketRequest *r = (struct ncclNetSocketRequest*)request;
+  struct ncclNetSocketRequest* r = (struct ncclNetSocketRequest*)request;
   if (r == NULL) {
     WARN("NET/Socket : test called with NULL request");
     return ncclInternalError;
@@ -623,8 +633,10 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
         char line[SOCKET_NAME_MAXLEN + 1];
         union ncclSocketAddress addr;
         NCCLCHECK(ncclSocketGetAddr(r->ctrlSock, &addr));
-        WARN("NET/Socket : peer %s message truncated : receiving %d bytes instead of %d. If you believe your socket network is in a healthy state, "
-             "there may be a mismatch in collective sizes or environment settings (e.g. NCCL_PROTO, NCCL_ALGO) between ranks",
+        WARN("NET/Socket : peer %s message truncated : receiving %d bytes instead of %d. If you believe your socket "
+             "network is in a healthy state, "
+             "there may be a mismatch in collective sizes or environment settings (e.g. NCCL_PROTO, NCCL_ALGO) between "
+             "ranks",
              ncclSocketToString(&addr, line), senderSize, r->size);
         return ncclInvalidUsage;
       }
@@ -651,7 +663,8 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
       int taskSize = std::max((int)ncclParamSocketMinTaskSize(), DIVUP(r->size - r->offset, r->comm->nSocks));
       while (chunkOffset < r->size) {
         int chunkSize = std::min(taskSize, r->size - chunkOffset);
-        NCCLCHECK(ncclNetSocketGetTask(r->comm, &r->pInfo, r->op, (char*)(r->data) + chunkOffset, chunkSize, r->tasks + i++));
+        NCCLCHECK(ncclNetSocketGetTask(r->comm, &r->pInfo, r->op, (char*)(r->data) + chunkOffset, chunkSize,
+                                       r->tasks + i++));
         chunkOffset += chunkSize;
       }
     }
@@ -661,7 +674,7 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
     // already exchanged size
     if (r->nSubs > 0) {
       int nCompleted = 0;
-      for (int i=0; i<r->nSubs; i++) {
+      for (int i = 0; i < r->nSubs; i++) {
         struct ncclNetSocketTask* sub = r->tasks[i];
         if (sub->result != ncclSuccess) return sub->result;
         if (sub->offset == sub->size) nCompleted++;
@@ -670,7 +683,7 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
         if (size) *size = r->size;
         *done = 1;
         r->used = 0;
-        for (int i=0; i<r->nSubs; i++) {
+        for (int i = 0; i < r->nSubs; i++) {
           struct ncclNetSocketTask* sub = r->tasks[i];
           sub->used = 0;
         }
@@ -684,7 +697,8 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
         data.sock.fd = r->ctrlSock->socketDescriptor;
         data.sock.op = r->op;
         data.sock.length = r->size;
-        ncclProfilerFunction(&r->pInfo.eHandle, ncclProfilerNetEventStart, r->pInfo.pHandle, NCCL_PROFILER_NET_TYPE_SOCK | 1, &data);
+        ncclProfilerFunction(&r->pInfo.eHandle, ncclProfilerNetEventStart, r->pInfo.pHandle,
+                             NCCL_PROFILER_NET_TYPE_SOCK | 1, &data);
       }
 #endif
       if (r->offset < r->size) {
@@ -707,26 +721,31 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
 ncclResult_t ncclNetSocketRegMr(void* comm, void* data, size_t size, int type, void** mhandle) {
   return (type != NCCL_PTR_HOST) ? ncclInternalError : ncclSuccess;
 }
-ncclResult_t ncclNetSocketDeregMr(void* comm, void* mhandle) { return ncclSuccess; }
+ncclResult_t ncclNetSocketDeregMr(void* comm, void* mhandle) {
+  return ncclSuccess;
+}
 
-ncclResult_t ncclNetSocketIsend(void* sendComm, void* data, size_t size, int tag, void* mhandle, void* phandle, void** request) {
+ncclResult_t ncclNetSocketIsend(void* sendComm, void* data, size_t size, int tag, void* mhandle, void* phandle,
+                                void** request) {
   struct ncclNetSocketComm* comm = (struct ncclNetSocketComm*)sendComm;
-  NCCLCHECK(ncclNetSocketGetRequest(comm, NCCL_SOCKET_SEND, data, (int) size, (struct ncclNetSocketRequest**)request));
+  NCCLCHECK(ncclNetSocketGetRequest(comm, NCCL_SOCKET_SEND, data, (int)size, (struct ncclNetSocketRequest**)request));
 #ifdef NCCL_ENABLE_NET_PROFILING
   // NCCL core profiler callback
-  struct ncclNetSocketRequest* req = *(struct ncclNetSocketRequest **)request;
+  struct ncclNetSocketRequest* req = *(struct ncclNetSocketRequest**)request;
   req->pInfo.pHandle = phandle;
 #endif
   return ncclSuccess;
 }
 
-ncclResult_t ncclNetSocketIrecv(void* recvComm, int n, void** data, size_t* sizes, int* tags, void** mhandles, void** phandles, void** request) {
+ncclResult_t ncclNetSocketIrecv(void* recvComm, int n, void** data, size_t* sizes, int* tags, void** mhandles,
+                                void** phandles, void** request) {
   struct ncclNetSocketComm* comm = (struct ncclNetSocketComm*)recvComm;
   if (n != 1) return ncclInternalError;
-  NCCLCHECK(ncclNetSocketGetRequest(comm, NCCL_SOCKET_RECV, data[0], (int)sizes[0], (struct ncclNetSocketRequest**)request));
+  NCCLCHECK(ncclNetSocketGetRequest(comm, NCCL_SOCKET_RECV, data[0], (int)sizes[0],
+                                    (struct ncclNetSocketRequest**)request));
 #ifdef NCCL_ENABLE_NET_PROFILING
   // NCCL core profiler callback
-  struct ncclNetSocketRequest* req = *(struct ncclNetSocketRequest **)request;
+  struct ncclNetSocketRequest* req = *(struct ncclNetSocketRequest**)request;
   if (phandles) req->pInfo.pHandle = phandles[0];
 #endif
   return ncclSuccess;
@@ -751,8 +770,8 @@ ncclResult_t ncclNetSocketCloseListen(void* opaqueComm) {
 ncclResult_t ncclNetSocketClose(void* opaqueComm) {
   struct ncclNetSocketComm* comm = (struct ncclNetSocketComm*)opaqueComm;
   if (comm) {
-    for (int i=0; i<comm->nThreads; i++) {
-      struct ncclNetSocketThreadResources* res = comm->threadResources+i;
+    for (int i = 0; i < comm->nThreads; i++) {
+      struct ncclNetSocketThreadResources* res = comm->threadResources + i;
       if (comm->helperThread[i].joinable()) {
         {
           std::lock_guard<std::mutex> lock(res->threadMutex);
@@ -766,11 +785,11 @@ ncclResult_t ncclNetSocketClose(void* opaqueComm) {
     int ready;
     NCCLCHECK(ncclSocketReady(&comm->ctrlSock, &ready));
     if (ready) NCCLCHECK(ncclSocketClose(&comm->ctrlSock));
-    for (int i=0; i<comm->nSocks; i++) {
+    for (int i = 0; i < comm->nSocks; i++) {
       NCCLCHECK(ncclSocketReady(&comm->socks[i], &ready));
       if (ready) NCCLCHECK(ncclSocketClose(&comm->socks[i]));
     }
-    if(comm->inlineData) free(comm->inlineData);
+    if (comm->inlineData) free(comm->inlineData);
     delete comm;
   }
   return ncclSuccess;

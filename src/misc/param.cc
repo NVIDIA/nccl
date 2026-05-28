@@ -25,7 +25,7 @@ const char* userHomeDir() {
 }
 
 void setEnvFile(const char* fileName) {
-  FILE * file = fopen(fileName, "r");
+  FILE* file = fopen(fileName, "r");
   if (file == NULL) return;
 
   char line[4096];
@@ -33,16 +33,16 @@ void setEnvFile(const char* fileName) {
   char envValue[1024];
   while (fgets(line, (int)sizeof(line), file) != NULL) {
     size_t len = strlen(line);
-    if (len > 0 && line[len-1] == '\n') line[--len] = '\0';
-    if (len > 0 && line[len-1] == '\r') line[--len] = '\0';
+    if (len > 0 && line[len - 1] == '\n') line[--len] = '\0';
+    if (len > 0 && line[len - 1] == '\r') line[--len] = '\0';
     if (line[0] == '#') continue;
     int s = 0;
     while (line[s] != '\0' && line[s] != '=') s++;
     if (line[s] == '\0') continue;
-    strncpy(envVar, line, std::min(1023,s));
-    envVar[std::min(1023,s)] = '\0';
+    strncpy(envVar, line, std::min(1023, s));
+    envVar[std::min(1023, s)] = '\0';
     s++;
-    strncpy(envValue, line+s, 1023);
+    strncpy(envValue, line + s, 1023);
     envValue[1023] = '\0';
     ncclOsSetEnv(envVar, envValue);
   }

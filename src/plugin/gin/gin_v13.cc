@@ -20,7 +20,7 @@ ncclResult_t ncclGin_getGinProperties(ncclGinProperties_t* ginProps) {
 }
 
 static ncclResult_t ncclGin_createContext(void* collComm, ncclGinConfig_v14_t* config, void** ginCtx,
-                                                    ncclNetDeviceHandle_v11_t** devHandle) {
+                                          ncclNetDeviceHandle_v11_t** devHandle) {
   ncclGinConfig_v13_t config_v13;
   memset(&config_v13, 0, sizeof(config_v13));
   config_v13.nSignals = config->nSignals;
@@ -34,7 +34,7 @@ static ncclResult_t ncclGin_createContext(void* collComm, ncclGinConfig_v14_t* c
 ncclGin_t* getNcclGin_v13(void* lib) {
   ncclGin_v13 = (ncclGin_v13_t*)ncclOsDlsym(lib, "ncclGinPlugin_v13");
   if (ncclGin_v13) {
-    INFO(NCCL_INIT|NCCL_NET, "GIN/Plugin: Loaded gin plugin %s (v13)", ncclGin_v13->name);
+    INFO(NCCL_INIT | NCCL_NET, "GIN/Plugin: Loaded gin plugin %s (v13)", ncclGin_v13->name);
     ncclGin.name = ncclGin_v13->name;
     ncclGin.init = ncclGin_v13->init;
     ncclGin.devices = ncclGin_v13->devices;

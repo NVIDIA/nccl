@@ -24,15 +24,10 @@
 
 // Helper function to build a single put-signal op.
 // Used by ncclRmaProxyPutBuildDesc and ncclRmaProxyPutGroupBuildDesc.
-ncclResult_t ncclRmaProxyPutBuildOp(
-    struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
-    int ctx, bool persistent,
-    struct ncclDevrWindow* srcWin, size_t srcOff,
-    struct ncclDevrWindow* peerWin, size_t peerOff,
-    size_t size, int peer,
-    ncclSignalMode_t signalMode,
-    struct ncclRmaPutSignalOp* op)
-{
+ncclResult_t ncclRmaProxyPutBuildOp(struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx, int ctx,
+                                    bool persistent, struct ncclDevrWindow* srcWin, size_t srcOff,
+                                    struct ncclDevrWindow* peerWin, size_t peerOff, size_t size, int peer,
+                                    ncclSignalMode_t signalMode, struct ncclRmaPutSignalOp* op) {
   op->srcOff = srcOff;
   op->srcHandle = ncclDevrGetRmaWin(srcWin, ctx);
   op->dstOff = peerOff;
@@ -46,23 +41,18 @@ ncclResult_t ncclRmaProxyPutBuildOp(
   } else if (signalMode == NCCL_SIGNAL) {
     op->signal.op = NCCL_NET_SIGNAL_OP_ADD;
     op->signal.offset = comm->rank * sizeof(uint64_t);
-    op->signal.signalMhandle = persistent ? rmaProxyCtx->cpuAccessSignalsMhandle
-                                          : rmaProxyCtx->signalsMhandle;
+    op->signal.signalMhandle = persistent ? rmaProxyCtx->cpuAccessSignalsMhandle : rmaProxyCtx->signalsMhandle;
     op->signal.val = 1;
   }
   return ncclSuccess;
 }
 
 // Build the put descriptor
-ncclResult_t ncclRmaProxyPutBuildDesc(
-    struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
-    struct ncclKernelPlan* plan,
-    struct ncclDevrWindow* srcWinHost, size_t srcWinOffset,
-    struct ncclDevrWindow* peerWinHost, size_t peerWinOffset,
-    size_t size, int peer, int ctx,
-    ncclSignalMode_t signalMode,
-    struct ncclRmaProxyDesc* desc)
-{
+ncclResult_t ncclRmaProxyPutBuildDesc(struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
+                                      struct ncclKernelPlan* plan, struct ncclDevrWindow* srcWinHost,
+                                      size_t srcWinOffset, struct ncclDevrWindow* peerWinHost, size_t peerWinOffset,
+                                      size_t size, int peer, int ctx, ncclSignalMode_t signalMode,
+                                      struct ncclRmaProxyDesc* desc) {
   ncclResult_t ret = ncclSuccess;
   bool persistent = plan->persistent;
 
@@ -72,10 +62,9 @@ ncclResult_t ncclRmaProxyPutBuildDesc(
   desc->persistDescValid = false;
 
   // Inner-struct fields shared with the group builder.
-  NCCLCHECKGOTO(ncclRmaProxyPutBuildOp(
-      comm, rmaProxyCtx, ctx, persistent,
-      srcWinHost, srcWinOffset, peerWinHost, peerWinOffset,
-      size, peer, signalMode, &desc->putSignal), ret, fail);
+  NCCLCHECKGOTO(ncclRmaProxyPutBuildOp(comm, rmaProxyCtx, ctx, persistent, srcWinHost, srcWinOffset, peerWinHost,
+                                       peerWinOffset, size, peer, signalMode, &desc->putSignal),
+                ret, fail);
 
   // Desc-level seq + persist state: per-peer slot for single puts.
   if (!persistent) {
@@ -86,12 +75,15 @@ ncclResult_t ncclRmaProxyPutBuildDesc(
     desc->doneSeq = &rmaProxyCtx->doneSeqs[peer];
     desc->doneSeqDev = &rmaProxyCtx->doneSeqsDev[peer];
     desc->doneSeqGdrHandle = rmaProxyCtx->doneSeqsGdrHandle;
-  }
-  else {
+  } else {
     desc->opSeq = 1;
     // Allocation during graph capture, off the execution critical path
-    NCCLCHECKGOTO(allocMemCPUAccessible(&desc->readySeq, &desc->readySeqDev, 1, 0, &desc->readySeqGdrHandle, comm->memManager), ret, fail);
-    NCCLCHECKGOTO(allocMemCPUAccessible(&desc->doneSeq, &desc->doneSeqDev, 1, 0, &desc->doneSeqGdrHandle, comm->memManager), ret, fail);
+    NCCLCHECKGOTO(allocMemCPUAccessible(&desc->readySeq, &desc->readySeqDev, 1, 0, &desc->readySeqGdrHandle,
+                                        comm->memManager),
+                  ret, fail);
+    NCCLCHECKGOTO(allocMemCPUAccessible(&desc->doneSeq, &desc->doneSeqDev, 1, 0, &desc->doneSeqGdrHandle,
+                                        comm->memManager),
+                  ret, fail);
     desc->persistPlan = plan;
   }
 exit:
@@ -114,13 +106,9 @@ fail:
 
 // Build a put-signal-group descriptor over a caller-supplied array of
 // pre-filled ops (can be populated via ncclRmaProxyPutBuildOp).
-ncclResult_t ncclRmaProxyPutGroupBuildDesc(
-    struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
-    struct ncclKernelPlan* plan,
-    int nOps, struct ncclRmaPutSignalOp** ops,
-    int ctx,
-    struct ncclRmaProxyDesc* desc)
-{
+ncclResult_t ncclRmaProxyPutGroupBuildDesc(struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
+                                           struct ncclKernelPlan* plan, int nOps, struct ncclRmaPutSignalOp** ops,
+                                           int ctx, struct ncclRmaProxyDesc* desc) {
   ncclResult_t ret = ncclSuccess;
   bool persistent = plan->persistent;
   int slot = comm->rank;
@@ -146,11 +134,14 @@ ncclResult_t ncclRmaProxyPutGroupBuildDesc(
     desc->doneSeq = &rmaProxyCtx->doneSeqs[slot];
     desc->doneSeqDev = &rmaProxyCtx->doneSeqsDev[slot];
     desc->doneSeqGdrHandle = rmaProxyCtx->doneSeqsGdrHandle;
-  }
-  else {
+  } else {
     desc->opSeq = 1;
-    NCCLCHECKGOTO(allocMemCPUAccessible(&desc->readySeq, &desc->readySeqDev, 1, 0, &desc->readySeqGdrHandle, comm->memManager), ret, fail);
-    NCCLCHECKGOTO(allocMemCPUAccessible(&desc->doneSeq, &desc->doneSeqDev, 1, 0, &desc->doneSeqGdrHandle, comm->memManager), ret, fail);
+    NCCLCHECKGOTO(allocMemCPUAccessible(&desc->readySeq, &desc->readySeqDev, 1, 0, &desc->readySeqGdrHandle,
+                                        comm->memManager),
+                  ret, fail);
+    NCCLCHECKGOTO(allocMemCPUAccessible(&desc->doneSeq, &desc->doneSeqDev, 1, 0, &desc->doneSeqGdrHandle,
+                                        comm->memManager),
+                  ret, fail);
     desc->persistPlan = plan;
   }
 exit:
@@ -172,25 +163,17 @@ fail:
 }
 
 static ncclResult_t ncclRmaProxyPutDescFromTask(struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
-                          struct ncclKernelPlan* plan, struct ncclTaskRma* task, struct ncclRmaProxyDesc* desc)
-{
-  return ncclRmaProxyPutBuildDesc(
-      comm, rmaProxyCtx, plan,
-      task->srcWinHost, task->srcWinOffset,
-      task->peerWinHost, task->peerWinOffset,
-      task->count * ncclTypeSize(task->datatype),
-      task->peer, task->ctx,
-      task->signalMode,
-      desc);
+                                                struct ncclKernelPlan* plan, struct ncclTaskRma* task,
+                                                struct ncclRmaProxyDesc* desc) {
+  return ncclRmaProxyPutBuildDesc(comm, rmaProxyCtx, plan, task->srcWinHost, task->srcWinOffset, task->peerWinHost,
+                                  task->peerWinOffset, task->count * ncclTypeSize(task->datatype), task->peer,
+                                  task->ctx, task->signalMode, desc);
 }
 
 // Build a wait-signal descriptor.
-ncclResult_t ncclRmaProxyWaitBuildDesc(
-    struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
-    struct ncclKernelPlan* plan,
-    int npeers, int** peers, int** nsignals,
-    struct ncclRmaProxyDesc* desc)
-{
+ncclResult_t ncclRmaProxyWaitBuildDesc(struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
+                                       struct ncclKernelPlan* plan, int npeers, int** peers, int** nsignals,
+                                       struct ncclRmaProxyDesc* desc) {
   ncclResult_t ret = ncclSuccess;
   bool persistent = plan->persistent;
 
@@ -209,8 +192,12 @@ ncclResult_t ncclRmaProxyWaitBuildDesc(
     // If GDR is not used, we need to flush the NIC-GPU path to ensure the data is visible in vidmem
     desc->waitSignal.needFlush = (rmaProxyCtx->cpuAccessSignalsGdrHandle == NULL);
     // Allocation during graph capture, off the execution critical path
-    NCCLCHECKGOTO(allocMemCPUAccessible(&desc->readySeq, &desc->readySeqDev, 1, 0, &desc->readySeqGdrHandle, comm->memManager), ret, fail);
-    NCCLCHECKGOTO(allocMemCPUAccessible(&desc->doneSeq, &desc->doneSeqDev, 1, 0, &desc->doneSeqGdrHandle, comm->memManager), ret, fail);
+    NCCLCHECKGOTO(allocMemCPUAccessible(&desc->readySeq, &desc->readySeqDev, 1, 0, &desc->readySeqGdrHandle,
+                                        comm->memManager),
+                  ret, fail);
+    NCCLCHECKGOTO(allocMemCPUAccessible(&desc->doneSeq, &desc->doneSeqDev, 1, 0, &desc->doneSeqGdrHandle,
+                                        comm->memManager),
+                  ret, fail);
     desc->persistPlan = plan;
   }
 exit:
@@ -233,12 +220,9 @@ fail:
 
 // Build the wait descriptor from an ncclTaskRma
 static ncclResult_t ncclRmaProxyWaitDescFromTask(struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
-                          struct ncclKernelPlan* plan, struct ncclTaskRma* task, struct ncclRmaProxyDesc* desc)
-{
-  return ncclRmaProxyWaitBuildDesc(
-      comm, rmaProxyCtx, plan,
-      task->npeers, &task->peers, &task->nsignals,
-      desc);
+                                                 struct ncclKernelPlan* plan, struct ncclTaskRma* task,
+                                                 struct ncclRmaProxyDesc* desc) {
+  return ncclRmaProxyWaitBuildDesc(comm, rmaProxyCtx, plan, task->npeers, &task->peers, &task->nsignals, desc);
 }
 
 // ============================================================================
@@ -308,8 +292,7 @@ bool ncclRmaProxyCircularBufEmpty(struct ncclRmaProxyCtx* ctx, int peer) {
 //   PutSignalGroup, non-persistent  : pis[comm->rank] circular buffer full
 //   *,              persistent      : false  (linked list, unbounded)
 //   WaitSignal,     non-persistent  : false  (no queue exists)
-bool ncclRmaProxyEnqueueFull(
-    struct ncclRmaProxyCtx* ctx, const struct ncclRmaProxyDesc* desc) {
+bool ncclRmaProxyEnqueueFull(struct ncclRmaProxyCtx* ctx, const struct ncclRmaProxyDesc* desc) {
   // Persistent queues are unbounded.
   if (desc->persistPlan != nullptr) return false;
   // Non-persistent wait has no queue.
@@ -317,17 +300,21 @@ bool ncclRmaProxyEnqueueFull(
   // Non-persistent put or put-group: derive peer from the desc.
   int peer;
   switch (desc->rmaDescType) {
-    case ncclRmaDescTypePutSignal:      peer = desc->putSignal.targetRank; break;
-    case ncclRmaDescTypePutSignalGroup: peer = ctx->comm->rank;            break;
-    default:
-      WARN("ncclRmaProxyEnqueueFull: unknown desc type %d", desc->rmaDescType);
-      return false;
+  case ncclRmaDescTypePutSignal:
+    peer = desc->putSignal.targetRank;
+    break;
+  case ncclRmaDescTypePutSignalGroup:
+    peer = ctx->comm->rank;
+    break;
+  default:
+    WARN("ncclRmaProxyEnqueueFull: unknown desc type %d", desc->rmaDescType);
+    return false;
   }
   return ncclRmaProxyCircularBufFull(ctx, peer);
 }
 
-static inline ncclResult_t ncclRmaProxyEnqueueNonPersistentDesc(
-    struct ncclRmaProxyCtx* ctx, int peer, struct ncclRmaProxyDesc* desc) {
+static inline ncclResult_t ncclRmaProxyEnqueueNonPersistentDesc(struct ncclRmaProxyCtx* ctx, int peer,
+                                                                struct ncclRmaProxyDesc* desc) {
   if (desc->rmaDescType == ncclRmaDescTypeWaitSignal) {
     // Destroy the scratch desc for wait non-persistent
     return ncclRmaProxyDestroyDesc(ctx->comm, &desc);
@@ -343,8 +330,8 @@ static inline ncclResult_t ncclRmaProxyEnqueueNonPersistentDesc(
   return ncclSuccess;
 }
 
-static inline ncclResult_t ncclRmaProxyEnqueuePersistentDesc(
-    struct ncclRmaProxyCtx* ctx, int peer, struct ncclRmaProxyDesc* desc) {
+static inline ncclResult_t ncclRmaProxyEnqueuePersistentDesc(struct ncclRmaProxyCtx* ctx, int peer,
+                                                             struct ncclRmaProxyDesc* desc) {
   ncclIntruQueueEnqueue(&ctx->persistentQueues[peer], desc);
   // Transition to persistent with RELEASE to guarantee all preceding writes are visible to proxy
   COMPILER_ATOMIC_STORE(&desc->persistDescValid, true, std::memory_order_release);
@@ -375,23 +362,21 @@ static inline ncclResult_t ncclRmaProxyEnqueuePersistentDesc(
 //                                  | whose only purpose was to carry fields
 //                                  | into ncclRmaProxyWaitParams. Destroyed
 //                                  | in place.
-ncclResult_t ncclRmaProxyEnqueueDesc(
-  struct ncclRmaProxyCtx* rmaProxyCtx,
-  struct ncclRmaProxyDesc** desc) {
+ncclResult_t ncclRmaProxyEnqueueDesc(struct ncclRmaProxyCtx* rmaProxyCtx, struct ncclRmaProxyDesc** desc) {
   int peer;
   switch ((*desc)->rmaDescType) {
-    case ncclRmaDescTypePutSignal:
-      peer = (*desc)->putSignal.targetRank;
-      break;
-    case ncclRmaDescTypeWaitSignal:
-      peer = rmaProxyCtx->comm->rank;
-      break;
-    case ncclRmaDescTypePutSignalGroup:
-      peer = rmaProxyCtx->comm->rank;
-      break;
-    default:
-      WARN("ncclRmaProxyEnqueueDesc: unknown desc type %d", (*desc)->rmaDescType);
-      return ncclInternalError;
+  case ncclRmaDescTypePutSignal:
+    peer = (*desc)->putSignal.targetRank;
+    break;
+  case ncclRmaDescTypeWaitSignal:
+    peer = rmaProxyCtx->comm->rank;
+    break;
+  case ncclRmaDescTypePutSignalGroup:
+    peer = rmaProxyCtx->comm->rank;
+    break;
+  default:
+    WARN("ncclRmaProxyEnqueueDesc: unknown desc type %d", (*desc)->rmaDescType);
+    return ncclInternalError;
   }
 
   // Check if the target queue is full and yield if it is.
@@ -420,12 +405,9 @@ int ncclRmaProxyPutStartNumOps(bool persistent) {
 }
 
 // Fill the stream-batch memop param that triggers the proxy to launch the descriptor
-ncclResult_t ncclRmaProxyPutStartParams(
-    struct ncclRmaProxyDesc* desc,
-    CUstreamBatchMemOpParams* params) {
+ncclResult_t ncclRmaProxyPutStartParams(struct ncclRmaProxyDesc* desc, CUstreamBatchMemOpParams* params) {
   if (desc->rmaDescType != ncclRmaDescTypePutSignal) {
-    WARN("ncclRmaProxyPutStartParams: descriptor is not a put-signal type (%d)",
-         desc->rmaDescType);
+    WARN("ncclRmaProxyPutStartParams: descriptor is not a put-signal type (%d)", desc->rmaDescType);
     return ncclInternalError;
   }
 
@@ -442,12 +424,9 @@ int ncclRmaProxyPutDoneNumOps(bool persistent) {
 }
 
 // Fill stream-batch memop params for the proxy completion fence
-ncclResult_t ncclRmaProxyPutDoneParams(
-    struct ncclRmaProxyDesc* desc,
-    CUstreamBatchMemOpParams* params) {
+ncclResult_t ncclRmaProxyPutDoneParams(struct ncclRmaProxyDesc* desc, CUstreamBatchMemOpParams* params) {
   if (desc->rmaDescType != ncclRmaDescTypePutSignal) {
-    WARN("ncclRmaProxyPutDoneParams: descriptor is not a put-signal type (%d)",
-         desc->rmaDescType);
+    WARN("ncclRmaProxyPutDoneParams: descriptor is not a put-signal type (%d)", desc->rmaDescType);
     return ncclInternalError;
   }
 
@@ -474,12 +453,9 @@ int ncclRmaProxyPutGroupStartNumOps(bool persistent) {
 // Fill the stream-batch memop param that triggers the proxy to launch the group.
 // Bytes-equivalent to ncclRmaProxyPutStartParams, with the type guard targeting
 // PutSignalGroup. The group has one shared (readySeq, opSeq) regardless of nOps.
-ncclResult_t ncclRmaProxyPutGroupStartParams(
-    struct ncclRmaProxyDesc* desc,
-    CUstreamBatchMemOpParams* params) {
+ncclResult_t ncclRmaProxyPutGroupStartParams(struct ncclRmaProxyDesc* desc, CUstreamBatchMemOpParams* params) {
   if (desc->rmaDescType != ncclRmaDescTypePutSignalGroup) {
-    WARN("ncclRmaProxyPutGroupStartParams: descriptor is not a put-signal-group type (%d)",
-         desc->rmaDescType);
+    WARN("ncclRmaProxyPutGroupStartParams: descriptor is not a put-signal-group type (%d)", desc->rmaDescType);
     return ncclInternalError;
   }
 
@@ -498,12 +474,9 @@ int ncclRmaProxyPutGroupDoneNumOps(bool persistent) {
 // Fill stream-batch memop params for the group's completion fence.
 // Bytes-equivalent to ncclRmaProxyPutDoneParams, with the type guard targeting
 // PutSignalGroup. The wait + (optional) reset target the group's shared doneSeq.
-ncclResult_t ncclRmaProxyPutGroupDoneParams(
-    struct ncclRmaProxyDesc* desc,
-    CUstreamBatchMemOpParams* params) {
+ncclResult_t ncclRmaProxyPutGroupDoneParams(struct ncclRmaProxyDesc* desc, CUstreamBatchMemOpParams* params) {
   if (desc->rmaDescType != ncclRmaDescTypePutSignalGroup) {
-    WARN("ncclRmaProxyPutGroupDoneParams: descriptor is not a put-signal-group type (%d)",
-         desc->rmaDescType);
+    WARN("ncclRmaProxyPutGroupDoneParams: descriptor is not a put-signal-group type (%d)", desc->rmaDescType);
     return ncclInternalError;
   }
 
@@ -529,13 +502,10 @@ int ncclRmaProxyWaitNumStreamOps(const struct ncclRmaProxyDesc* desc) {
 }
 
 // Fill stream-batch memop params for a wait-signal descriptor.
-ncclResult_t ncclRmaProxyWaitParams(
-    struct ncclRmaProxyCtx* rmaProxyCtx,
-    struct ncclRmaProxyDesc* desc,
-    CUstreamBatchMemOpParams* params) {
+ncclResult_t ncclRmaProxyWaitParams(struct ncclRmaProxyCtx* rmaProxyCtx, struct ncclRmaProxyDesc* desc,
+                                    CUstreamBatchMemOpParams* params) {
   if (desc->rmaDescType != ncclRmaDescTypeWaitSignal) {
-    WARN("ncclRmaProxyWaitParams: descriptor is not a wait-signal type (%d)",
-         desc->rmaDescType);
+    WARN("ncclRmaProxyWaitParams: descriptor is not a wait-signal type (%d)", desc->rmaDescType);
     return ncclInternalError;
   }
 
@@ -589,7 +559,7 @@ ncclResult_t ncclRmaProxyPutLaunch(struct ncclComm* comm, struct ncclKernelPlan*
   bool persistent = plan->persistent;
   int ctx = plan->rmaArgs->ctx;
   int nRmaTasksProxy = plan->rmaArgs->nRmaTasksProxy;
-  struct ncclRmaProxyCtx * rmaProxyCtx = (struct ncclRmaProxyCtx *)comm->rmaState.rmaProxyState.rmaProxyCtxs[ctx];
+  struct ncclRmaProxyCtx* rmaProxyCtx = (struct ncclRmaProxyCtx*)comm->rmaState.rmaProxyState.rmaProxyCtxs[ctx];
 
   int startOps = ncclRmaProxyPutStartNumOps(persistent);
   int doneOps = ncclRmaProxyPutDoneNumOps(persistent);
@@ -610,10 +580,14 @@ ncclResult_t ncclRmaProxyPutLaunch(struct ncclComm* comm, struct ncclKernelPlan*
     NCCLCHECKGOTO(ncclCalloc(&descs[i], 1), ret, fail);
     NCCLCHECKGOTO(ncclRmaProxyPutDescFromTask(comm, rmaProxyCtx, plan, task, descs[i]), ret, fail);
     NCCLCHECKGOTO(ncclRmaProxyPutStartParams(descs[i], &batchParams[i * startOps]), ret, fail);
-    NCCLCHECKGOTO(ncclRmaProxyPutDoneParams(descs[i], &batchParams[nRmaTasksProxy * startOps + i * doneOps]), ret, fail);
+    NCCLCHECKGOTO(ncclRmaProxyPutDoneParams(descs[i], &batchParams[nRmaTasksProxy * startOps + i * doneOps]), ret,
+                  fail);
 
-    INFO(NCCL_COLL, "ncclRmaProxyPutLaunch enqueued Desc: rank=%d peer=%d ctx=%d size=%ld signalMode=%d readySeq=%lu doneSeq=%lu persistent=%d",
-      comm->rank, task->peer, ctx, task->count * ncclTypeSize(task->datatype), task->signalMode, (uint64_t)descs[i]->opSeq, (uint64_t)descs[i]->opSeq, persistent);
+    INFO(NCCL_COLL,
+         "ncclRmaProxyPutLaunch enqueued Desc: rank=%d peer=%d ctx=%d size=%ld signalMode=%d readySeq=%lu doneSeq=%lu "
+         "persistent=%d",
+         comm->rank, task->peer, ctx, task->count * ncclTypeSize(task->datatype), task->signalMode,
+         (uint64_t)descs[i]->opSeq, (uint64_t)descs[i]->opSeq, persistent);
 
     ncclMemoryPoolFree(&comm->memPool_ncclTaskRma, task);
   }
@@ -643,21 +617,14 @@ ncclResult_t ncclRmaProxyPutLaunch(struct ncclComm* comm, struct ncclKernelPlan*
       if (count == 0 && i == nRmaTasksProxy) {
         // Fast path: every desc fit in a single pass. Issue start + done
         // as one contiguous batch over the whole batchParams.
-        NCCLCHECKGOTO(ncclCuStreamBatchMemOp(stream,
-                          opsPerTask * nRmaTasksProxy,
-                          batchParams),
-                      ret, fail);
+        NCCLCHECKGOTO(ncclCuStreamBatchMemOp(stream, opsPerTask * nRmaTasksProxy, batchParams), ret, fail);
       } else {
         // Partial flush: issue start ops for [count..i) and done blocks for
         // the same range. They live in separate regions of batchParams so
         // require two cuStreamBatchMemOp calls.
-        NCCLCHECKGOTO(ncclCuStreamBatchMemOp(stream,
-                          pending * startOps,
-                          &batchParams[count * startOps]),
-                      ret, fail);
-        NCCLCHECKGOTO(ncclCuStreamBatchMemOp(stream,
-                          pending * doneOps,
-                          &batchParams[nRmaTasksProxy * startOps + count * doneOps]),
+        NCCLCHECKGOTO(ncclCuStreamBatchMemOp(stream, pending * startOps, &batchParams[count * startOps]), ret, fail);
+        NCCLCHECKGOTO(ncclCuStreamBatchMemOp(stream, pending * doneOps,
+                                             &batchParams[nRmaTasksProxy * startOps + count * doneOps]),
                       ret, fail);
       }
       count = i;
@@ -677,8 +644,6 @@ fail:
   }
   goto exit;
 }
-
-
 
 ncclResult_t ncclRmaProxyWaitLaunch(struct ncclComm* comm, struct ncclKernelPlan* plan, cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
@@ -776,7 +741,7 @@ ncclResult_t ncclRmaProxyReclaimPlan(struct ncclComm* comm, struct ncclKernelPla
     std::unique_lock<std::mutex> lock(proxyState->mutex);
     proxyState->rmaProgress = 2;
     proxyState->cond.notify_one();
-    proxyState->cond.wait(lock, [&]{ return proxyState->rmaProgress == 0; });
+    proxyState->cond.wait(lock, [&] { return proxyState->rmaProgress == 0; });
   }
 
   // Step 2: Free persistent descs on main thread

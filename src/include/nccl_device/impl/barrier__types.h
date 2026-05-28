@@ -11,7 +11,7 @@
 #include "../utility.h"
 
 #if NCCL_CHECK_CUDACC
-template<typename Coop>
+template <typename Coop>
 struct ncclBarrierSession_internal {
   Coop coop;
   nccl::utility::Optional<ncclGin> gin;
@@ -19,12 +19,10 @@ struct ncclBarrierSession_internal {
   nccl::utility::Optional<ncclGinBarrierSession<Coop>> outerRailGinBar;
   nccl::utility::Optional<ncclGinBarrierSession<Coop>> outerWorldGinBar;
 
-  template<typename GinInit, typename InnerInit, typename OuterInit, typename OuterWorldInit>
-  NCCL_DEVICE_INLINE ncclBarrierSession_internal(
-      Coop coop, GinInit ginInit, InnerInit innerInit, OuterInit outerInit, OuterWorldInit outerWorldInit
-    ):
-    coop(coop), gin{ginInit}, innerLsaBar{innerInit}, outerRailGinBar{outerInit}, outerWorldGinBar{outerWorldInit} {
-  }
+  template <typename GinInit, typename InnerInit, typename OuterInit, typename OuterWorldInit>
+  NCCL_DEVICE_INLINE ncclBarrierSession_internal(Coop coop, GinInit ginInit, InnerInit innerInit, OuterInit outerInit,
+                                                 OuterWorldInit outerWorldInit)
+    : coop(coop), gin{ginInit}, innerLsaBar{innerInit}, outerRailGinBar{outerInit}, outerWorldGinBar{outerWorldInit} {}
 };
 #endif
 

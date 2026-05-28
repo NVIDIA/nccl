@@ -94,7 +94,8 @@ typedef struct {
   //  - eHandle   : handle to event object created through startEvent
   //  - eStateArgs: optional argument used to capture event attribute updates associated with the state transition
   //  - eState    : event state transition
-  ncclResult_t (*recordEventState)(void* eHandle, ncclProfilerEventState_v2_t eState, ncclProfilerEventStateArgs_v2_t* eStateArgs);
+  ncclResult_t (*recordEventState)(void* eHandle, ncclProfilerEventState_v2_t eState,
+                                   ncclProfilerEventStateArgs_v2_t* eStateArgs);
 
   // finalize - finalize the profiler plugin
   // Input

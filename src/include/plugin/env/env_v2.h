@@ -19,7 +19,8 @@ typedef struct {
   //  - ncclPatch: NCCL patch version number
   //  - suffix: NCCL version suffix string
   //  - logFunction: NCCL debug logging function for plugin diagnostics
-  ncclResult_t (*init)(uint8_t ncclMajor, uint8_t ncclMinor, uint8_t ncclPatch, const char* suffix, ncclDebugLogger_t logFunction);
+  ncclResult_t (*init)(uint8_t ncclMajor, uint8_t ncclMinor, uint8_t ncclPatch, const char* suffix,
+                       ncclDebugLogger_t logFunction);
   // Finalize the environment plugin
   ncclResult_t (*finalize)(void);
   // Get environment variable value

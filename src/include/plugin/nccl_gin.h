@@ -14,7 +14,7 @@
 #include <stdint.h>
 
 #define NCCL_GIN_HANDLE_MAXSIZE 128
-#define MAX_GIN_SIZE (1024*1024*1024L) // Rather than send INT_MAX which is 2G-1, send a power of two.
+#define MAX_GIN_SIZE (1024 * 1024 * 1024L) // Rather than send INT_MAX which is 2G-1, send a power of two.
 
 // Max number of ncclNet objects which can live in the same process
 #ifndef NCCL_GIN_MAX_PLUGINS

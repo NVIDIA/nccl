@@ -12,7 +12,7 @@
 #include <cuda.h>
 /* Minimal types instead of nccl_device/gin/gin_device_host_common.h (GIN is Linux-only) */
 #define NCCL_GIN_MAX_CONNECTIONS 4
-typedef void *ncclGinWindow_t;
+typedef void* ncclGinWindow_t;
 #else
 #include "nccl_device/gin/gin_device_host_common.h"
 #endif

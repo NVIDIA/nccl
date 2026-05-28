@@ -25,9 +25,9 @@ struct ncclSpace {
 
 void ncclSpaceConstruct(struct ncclSpace* a);
 void ncclSpaceDestruct(struct ncclSpace* a);
-ncclResult_t ncclSpaceAlloc(struct ncclSpace* a, int64_t spaceLimit, int64_t objSize, int objAlign, int64_t* outObjOffset);
+ncclResult_t ncclSpaceAlloc(struct ncclSpace* a, int64_t spaceLimit, int64_t objSize, int objAlign,
+                            int64_t* outObjOffset);
 ncclResult_t ncclSpaceFree(struct ncclSpace* a, int64_t objOffset, int64_t objSize);
-
 
 ////////////////////////////////////////////////////////////////////////////////
 // ncclShadowPool: Allocates device-side objects, their host-side shadows, and
@@ -44,12 +44,14 @@ struct ncclShadowPool {
 
 void ncclShadowPoolConstruct(struct ncclShadowPool*);
 ncclResult_t ncclShadowPoolDestruct(struct ncclShadowPool*, cudaStream_t stream);
-ncclResult_t ncclShadowPoolAlloc(struct ncclShadowPool*, size_t size, void** outDevObj, void** outHostObj, cudaStream_t stream);
+ncclResult_t ncclShadowPoolAlloc(struct ncclShadowPool*, size_t size, void** outDevObj, void** outHostObj,
+                                 cudaStream_t stream);
 ncclResult_t ncclShadowPoolFree(struct ncclShadowPool*, void* devObj, cudaStream_t stream);
 ncclResult_t ncclShadowPoolToHost(struct ncclShadowPool*, void* devObj, void** outHostObj);
 
-template<typename T>
-static inline ncclResult_t ncclShadowPoolAlloc(struct ncclShadowPool* pool, T** outDevObj, T** outHostObj, cudaStream_t stream) {
+template <typename T>
+static inline ncclResult_t ncclShadowPoolAlloc(struct ncclShadowPool* pool, T** outDevObj, T** outHostObj,
+                                               cudaStream_t stream) {
   void* devObj;
   void* hostObj;
   ncclResult_t got = ncclShadowPoolAlloc(pool, sizeof(T), &devObj, &hostObj, stream);
@@ -58,7 +60,7 @@ static inline ncclResult_t ncclShadowPoolAlloc(struct ncclShadowPool* pool, T** 
   return got;
 }
 
-template<typename T>
+template <typename T>
 static inline ncclResult_t ncclShadowPoolToHost(struct ncclShadowPool* pool, T* devObj, T** hostObj) {
   return ncclShadowPoolToHost(pool, (void*)devObj, (void**)hostObj);
 }

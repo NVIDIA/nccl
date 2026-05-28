@@ -11,17 +11,20 @@
 
 struct ncclLsaBarrierHandle;
 
-NCCL_EXTERN_C __host__ ncclResult_t ncclLsaBarrierCreateRequirement(ncclTeam_t team, int nBarriers, ncclLsaBarrierHandle_t* outHandle, ncclDevResourceRequirements_t* outReq);
+NCCL_EXTERN_C __host__ ncclResult_t ncclLsaBarrierCreateRequirement(
+  ncclTeam_t team, int nBarriers, ncclLsaBarrierHandle_t* outHandle, ncclDevResourceRequirements_t* outReq);
 
 #if NCCL_CHECK_CUDACC
-template<typename Coop>
+template <typename Coop>
 struct ncclLsaBarrierSession_internal;
 
-template<typename Coop>
-struct ncclLsaBarrierSession: ncclLsaBarrierSession_internal<Coop> {
-  NCCL_DEVICE_INLINE ncclLsaBarrierSession(Coop, ncclDevComm const&, ncclTeam, ncclLsaBarrierHandle, uint32_t index, bool multimem=false, ncclMultimemHandle mmHandle={});
+template <typename Coop>
+struct ncclLsaBarrierSession : ncclLsaBarrierSession_internal<Coop> {
+  NCCL_DEVICE_INLINE ncclLsaBarrierSession(Coop, ncclDevComm const&, ncclTeam, ncclLsaBarrierHandle, uint32_t index,
+                                           bool multimem = false, ncclMultimemHandle mmHandle = {});
 
-  NCCL_DEVICE_INLINE ncclLsaBarrierSession(Coop, ncclDevComm const&, ncclTeamTagLsa, uint32_t index, bool multimem=false);
+  NCCL_DEVICE_INLINE ncclLsaBarrierSession(Coop, ncclDevComm const&, ncclTeamTagLsa, uint32_t index,
+                                           bool multimem = false);
 
   NCCL_DEVICE_INLINE ~ncclLsaBarrierSession();
 

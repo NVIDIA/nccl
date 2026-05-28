@@ -54,8 +54,8 @@ struct ncclDevrMemory {
 
 ncclResult_t ncclDevrPopulateSegmentSizes(struct ncclDevrMemory* mem, int numSegments);
 
-ncclResult_t ncclDevrCheckRegistrationSupport(
-    void* userPtr, size_t userSize, struct ncclComm* comm, bool hasSysmemSegment);
+ncclResult_t ncclDevrCheckRegistrationSupport(void* userPtr, size_t userSize, struct ncclComm* comm,
+                                              bool hasSysmemSegment);
 
 ncclResult_t ncclDevrValidateHandleLocationType(CUmemGenericAllocationHandle memHandle, int segment);
 
@@ -63,12 +63,11 @@ ncclResult_t ncclDevrVerifySegmentLayouts(struct ncclDevrMemory* mem, struct ncc
 
 ncclResult_t ncclDevrBuildGinSegmentInfos(struct ncclDevrMemory* mem);
 
-ncclResult_t ncclDevrAllocAndPopulateSegmentWindows(
-    struct ncclDevrState* devr, struct ncclDevrMemory* mem,
-    cudaStream_t stream, struct ncclSegmentWindow** outSegmentWindowsDev);
+ncclResult_t ncclDevrAllocAndPopulateSegmentWindows(struct ncclDevrState* devr, struct ncclDevrMemory* mem,
+                                                    cudaStream_t stream,
+                                                    struct ncclSegmentWindow** outSegmentWindowsDev);
 
-ncclResult_t ncclDevrReplaceSegmentWindowsIfNeeded(
-    struct ncclDevrState* devr, struct ncclDevrMemory* mem,
-    struct ncclWindow_vidmem* winHost, cudaStream_t stream);
+ncclResult_t ncclDevrReplaceSegmentWindowsIfNeeded(struct ncclDevrState* devr, struct ncclDevrMemory* mem,
+                                                   struct ncclWindow_vidmem* winHost, cudaStream_t stream);
 
 #endif

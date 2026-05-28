@@ -24,8 +24,7 @@ static void ibGdrSupportInitOnce() {
 ncclResult_t ncclIbGdrSupport() {
   static std::once_flag once;
   std::call_once(once, ibGdrSupportInitOnce);
-  if (!ncclIbGdrModuleLoaded)
-    return ncclSystemError;
+  if (!ncclIbGdrModuleLoaded) return ncclSystemError;
   return ncclSuccess;
 }
 
@@ -39,8 +38,7 @@ static void ibPeerMemSupportInitOnce() {
 ncclResult_t ncclIbPeerMemSupport() {
   static std::once_flag once;
   std::call_once(once, ibPeerMemSupportInitOnce);
-  if (!ncclIbPeerMemModuleLoaded)
-    return ncclSystemError;
+  if (!ncclIbPeerMemModuleLoaded) return ncclSystemError;
   return ncclSuccess;
 }
 

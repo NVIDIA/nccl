@@ -27,7 +27,7 @@ ncclDevRedOp_t symkRedOp(ncclRedOp_t redOp, ncclDevRedOp_t devRedOp) {
   return devRedOp;
 }
 
-void convertCollTaskToSymmetricTask(struct ncclComm* comm,struct ncclTaskColl* task) {
+void convertCollTaskToSymmetricTask(struct ncclComm* comm, struct ncclTaskColl* task) {
   task->opDev.op = symkRedOp(task->opHost, task->opDev.op);
   if (task->opDev.op == ncclDevSumPostDiv) {
     // LDMC uses the same accumulator type as data type. Do not re-pack the scalar.
@@ -35,33 +35,37 @@ void convertCollTaskToSymmetricTask(struct ncclComm* comm,struct ncclTaskColl* t
       return;
     }
     union {
-      __half f16; float f32; uint64_t u64;
-      void *ptr;
+      __half f16;
+      float f32;
+      uint64_t u64;
+      void* ptr;
     };
     u64 = 0;
     switch (task->datatype) {
       // 16-bit floats use float accumulator
-      case ncclFloat16:
+    case ncclFloat16:
 #if defined(__CUDA_BF16_TYPES_EXIST__)
-      case ncclBfloat16:
+    case ncclBfloat16:
 #endif
-        f32 = float(1.0/comm->nRanks);  // ncclDevSumPostDiv actually multiplies by the scalar, not divides.
-        task->opDev.scalarArg = u64;
-        return;
+      f32 = float(1.0 / comm->nRanks);  // ncclDevSumPostDiv actually multiplies by the scalar, not divides.
+      task->opDev.scalarArg = u64;
+      return;
 #if defined(__CUDA_FP8_TYPES_EXIST__)
-      case ncclFloat8e4m3:
-      case ncclFloat8e5m2:
-        f16 = __float2half(float(1.0/comm->nRanks));
-        task->opDev.scalarArg = u64;
-        return;
+    case ncclFloat8e4m3:
+    case ncclFloat8e5m2:
+      f16 = __float2half(float(1.0 / comm->nRanks));
+      task->opDev.scalarArg = u64;
+      return;
 #endif
-      default:
-        break;
-      }
+    default:
+      break;
+    }
   }
 }
 
-ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskColl* task, struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next>* symTaskQueue, struct ncclTaskColl** remainTasksHead) {
+ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskColl* task,
+                                       struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next>* symTaskQueue,
+                                       struct ncclTaskColl** remainTasksHead) {
   ncclResult_t ret = ncclSuccess;
   int fnOpTySymCount = 0;
   struct ncclTaskColl* tasksSymByFnOpTy[ncclNumFuncs * ncclNumDevRedOps * ncclNumTypes * ncclNumSymRegTypes];
@@ -86,7 +90,9 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
       NCCLCHECK(ncclDevrFindWindow(comm, task->recvbuff, &task->recvWin));
       NCCLCHECK(ncclGetSymRegType(task->sendWin, task->recvWin, &task->winRegType));
 
-      index = (((int)task->func * ncclNumDevRedOps + symkOp) * ncclNumTypes + (int)task->datatype) * ncclNumSymRegTypes + (int)task->winRegType;
+      index =
+        (((int)task->func * ncclNumDevRedOps + symkOp) * ncclNumTypes + (int)task->datatype) * ncclNumSymRegTypes +
+        (int)task->winRegType;
       if (tasksSymByFnOpTy[index] == nullptr) fnOpTySymIndices[fnOpTySymCount++] = index;
       task->next = tasksSymByFnOpTy[index];
       tasksSymByFnOpTy[index] = task;
@@ -135,9 +141,8 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
         }
         task = task->next;
       }
-      NCCLCHECK(ncclSymkPickKernel(comm, headTask->func, symkOp, headTask->datatype,
-                                   countTotal, countMax, nWorks, headTask->winRegType,
-                                   &estTimeUs, &kernelId, &nChannels, &nWarps, &forced));
+      NCCLCHECK(ncclSymkPickKernel(comm, headTask->func, symkOp, headTask->datatype, countTotal, countMax, nWorks,
+                                   headTask->winRegType, &estTimeUs, &kernelId, &nChannels, &nWarps, &forced));
       task = headTask;
       bool isLLKernel = (1 << kernelId) & ncclSymkLLKernelMask();
       bool isOneThreadMultiGpus = comm->intraRanks > 1 && !ncclParamSingleProcMemRegEnable();
@@ -159,7 +164,8 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
           if (!needFallback) {
             // First query legacy tuning
             int collNetSupport = 0;
-            int nvlsSupport = comm->nvlsSupport && (ncclNvlsSupported(task->opDev.op, headTask->datatype) || headTask->func == ncclFuncAllGather);
+            int nvlsSupport = comm->nvlsSupport && (ncclNvlsSupported(task->opDev.op, headTask->datatype) ||
+                                                    headTask->func == ncclFuncAllGather);
             NCCLCHECK(ncclGetCollNetSupport(comm, headTask, &collNetSupport));
             NOWARN(ncclGetAlgoInfo(comm, headTask, collNetSupport, nvlsSupport, 1), NCCL_COLL);
             needFallback = (headTask->protocol != NCCL_PROTO_LL);
@@ -170,7 +176,8 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
       // Override needFallback when buffers are registered but VAs contain sysmem segments.
       // The below functions return false when the window is NULL, so this covers non-reg cases as well.
       if (!needFallback) {
-        bool hasSysmemSegment = ncclDevrWindowHasSysmemSegment(headTask->sendWin) || ncclDevrWindowHasSysmemSegment(headTask->recvWin);
+        bool hasSysmemSegment =
+          ncclDevrWindowHasSysmemSegment(headTask->sendWin) || ncclDevrWindowHasSysmemSegment(headTask->recvWin);
         needFallback = hasSysmemSegment;
       }
 
@@ -217,7 +224,9 @@ exit:
   return ret;
 }
 
-ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm, struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next>* symTaskQueue, struct ncclKernelPlan* plan) {
+ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm,
+                                        struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next>* symTaskQueue,
+                                        struct ncclKernelPlan* plan) {
   struct ncclTaskColl* headTask = ncclIntruQueueHead(symTaskQueue);
   int devFuncId = headTask->devFuncId;
   struct ncclTaskColl* task = NULL;
@@ -244,7 +253,7 @@ ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm, struct ncclIntruQ
   int kernelIndex = ncclSymkGetKernelIndex(kernelId, headTask->opDev.op, headTask->datatype);
   plan->kernelFn = ncclSymkKernelList[kernelIndex];
   int maxDynamicSmem = ncclSymkKernelMaxDynamicSmem[kernelIndex];
-  plan->kernelDynSmem = (1 & ncclSymkDynamicSmemKernelMask()>>(int)kernelId) ? maxDynamicSmem : 0;
+  plan->kernelDynSmem = (1 & ncclSymkDynamicSmemKernelMask() >> (int)kernelId) ? maxDynamicSmem : 0;
   task = headTask;
   while (task != nullptr && task->devFuncId == devFuncId) {
     workCount++;
@@ -276,7 +285,7 @@ ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm, struct ncclIntruQ
     NCCLCHECKGOTO(ncclSymkMakeDevWork(comm, task, &devWork), ret, fail);
 
     cellLeft = taskCell = DIVUP(task->count, cellCount);
-    for (;curChannel < nMaxChannels;) {
+    for (; curChannel < nMaxChannels;) {
       workRangePtr[curChannel].workHi = workIndex;
       if (curChannelWork == 0) {
         if (devWork.nChannels == 0) {
@@ -354,4 +363,3 @@ fail:
   goto exit;
 }
 #endif // NCCL_SYMMETRIC_SCHED_H_
-

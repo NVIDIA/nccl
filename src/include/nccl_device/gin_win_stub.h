@@ -21,7 +21,7 @@
 #define NCCL_GIN_BACKEND_MASK_ALL 0u
 
 #if NCCL_CHECK_CUDACC
-template<unsigned backendMask>
+template <unsigned backendMask>
 struct ncclGin_BackendMask {
   ncclDevComm const& comm;
   uint32_t nConnections:8, connectionId:8, _ginBackend:8;
@@ -30,8 +30,8 @@ struct ncclGin_BackendMask {
     : comm(c), nConnections(0), connectionId(0), _ginBackend(0), contextId(0) {}
 };
 
-template<ncclNetDeviceType backend>
-using ncclGin_BackendOne = ncclGin_BackendMask<(1u<<(int)backend)>;
+template <ncclNetDeviceType backend>
+using ncclGin_BackendOne = ncclGin_BackendMask<(1u << (int)backend)>;
 
 using ncclGin = ncclGin_BackendMask<NCCL_GIN_BACKEND_MASK_ALL>;
 #endif
@@ -52,12 +52,8 @@ struct ncclGinSyncHandle {
 };
 
 NCCL_EXTERN_C __host__ ncclResult_t ncclGinOutboxCreateRequirement(
-  int nBlocks, int size_log2,
-  ncclGinOutboxHandle* outHandle, ncclDevResourceRequirements* outReq
-);
+  int nBlocks, int size_log2, ncclGinOutboxHandle* outHandle, ncclDevResourceRequirements* outReq);
 NCCL_EXTERN_C __host__ ncclResult_t ncclGinInboxA2ACreateRequirement(
-  ncclTeam peers, int nBlocks, int size_log2,
-  ncclGinInboxA2AHandle* outHandle, ncclDevResourceRequirements* outReq
-);
+  ncclTeam peers, int nBlocks, int size_log2, ncclGinInboxA2AHandle* outHandle, ncclDevResourceRequirements* outReq);
 
 #endif /* _NCCL_DEVICE_GIN_SESSION_H_ */

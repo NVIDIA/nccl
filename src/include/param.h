@@ -14,7 +14,7 @@
 const char* userHomeDir();
 void setEnvFile(const char* fileName);
 void initEnv();
-const char *ncclGetEnv(const char *name);
+const char* ncclGetEnv(const char* name);
 
 int64_t ncclLoadParam(char const* env, int64_t deftVal, int64_t uninitialized, int64_t* cache, int8_t* noCache);
 

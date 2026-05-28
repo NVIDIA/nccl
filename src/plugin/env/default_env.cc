@@ -9,7 +9,8 @@
 #include "debug.h"
 #include "nccl_env.h"
 
-static ncclResult_t ncclEnvInit(uint8_t ncclMajor, uint8_t ncclMinor, uint8_t ncclPatch, const char* suffix, ncclDebugLogger_t logFunction) {
+static ncclResult_t ncclEnvInit(uint8_t ncclMajor, uint8_t ncclMinor, uint8_t ncclPatch, const char* suffix,
+                                ncclDebugLogger_t logFunction) {
   return ncclSuccess;
 }
 

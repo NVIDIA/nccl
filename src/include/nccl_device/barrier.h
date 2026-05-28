@@ -12,36 +12,28 @@
 #include "impl/gin_barrier__types.h"
 
 #if NCCL_CHECK_CUDACC
-template<typename Coop>
+template <typename Coop>
 struct ncclBarrierSession_internal;
 
-template<typename Coop>
-struct ncclBarrierSession: ncclBarrierSession_internal<Coop> {
+template <typename Coop>
+struct ncclBarrierSession : ncclBarrierSession_internal<Coop> {
   // Full featured constructor:
-  NCCL_DEVICE_INLINE ncclBarrierSession(
-    Coop, ncclTeam innerTeam, ncclTeam outerTeam, ncclGin,
-    ncclLsaBarrierHandle innerBarHandle,
-    ncclGinBarrierHandle outerBarHandle,
-    uint32_t index,
-    bool multimem=false, ncclMultimemHandle innerMmHandle={}
-  );
+  NCCL_DEVICE_INLINE ncclBarrierSession(Coop, ncclTeam innerTeam, ncclTeam outerTeam, ncclGin,
+                                        ncclLsaBarrierHandle innerBarHandle, ncclGinBarrierHandle outerBarHandle,
+                                        uint32_t index, bool multimem = false, ncclMultimemHandle innerMmHandle = {});
   // Convenience constructors for baked in teams:
-  NCCL_DEVICE_INLINE ncclBarrierSession(
-    Coop, ncclTeamTagWorld, ncclGin, uint32_t index, bool multimem=false
-  );
-  NCCL_DEVICE_INLINE ncclBarrierSession(
-    Coop, ncclTeamTagLsa, ncclDevComm const&, uint32_t index, bool multimem=false
-  );
-  NCCL_DEVICE_INLINE ncclBarrierSession(
-    Coop, ncclTeamTagRail, ncclGin, uint32_t index
-  );
+  NCCL_DEVICE_INLINE ncclBarrierSession(Coop, ncclTeamTagWorld, ncclGin, uint32_t index, bool multimem = false);
+  NCCL_DEVICE_INLINE ncclBarrierSession(Coop, ncclTeamTagLsa, ncclDevComm const&, uint32_t index,
+                                        bool multimem = false);
+  NCCL_DEVICE_INLINE ncclBarrierSession(Coop, ncclTeamTagRail, ncclGin, uint32_t index);
 
   ncclBarrierSession(ncclBarrierSession const&) = delete; // Sessions are not copyable
 
   NCCL_DEVICE_INLINE ncclLsaBarrierSession<Coop>& lsaBarrier();
   NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>& ginBarrier();
 
-  NCCL_DEVICE_INLINE void sync(Coop, cuda::memory_order, ncclGinFenceLevel = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get);
+  NCCL_DEVICE_INLINE void sync(Coop, cuda::memory_order,
+                               ncclGinFenceLevel = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get);
   NCCL_DEVICE_INLINE ncclResult_t sync(Coop, cuda::memory_order, ncclGinFenceLevel, uint64_t timeoutCycles);
 
 private:
@@ -50,15 +42,15 @@ private:
 
 // Free-function hybrid barrier. Wraps session construct + sync + destruct.
 
-template<typename Coop>
+template <typename Coop>
 NCCL_DEVICE_INLINE void ncclBarrier(Coop, ncclTeamTagWorld, ncclGin, uint32_t index,
-    cuda::memory_order = cuda::memory_order_acq_rel,
-    ncclGinFenceLevel = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get,
-    bool multimem = false);
-template<typename Coop>
+                                    cuda::memory_order = cuda::memory_order_acq_rel,
+                                    ncclGinFenceLevel = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get,
+                                    bool multimem = false);
+template <typename Coop>
 NCCL_DEVICE_INLINE void ncclBarrier(Coop, ncclTeamTagRail, ncclGin, uint32_t index,
-    cuda::memory_order = cuda::memory_order_acq_rel,
-    ncclGinFenceLevel = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get);
+                                    cuda::memory_order = cuda::memory_order_acq_rel,
+                                    ncclGinFenceLevel = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get);
 #endif
 
 #endif // _NCCL_DEVICE_BARRIER_H_

@@ -95,10 +95,8 @@ ncclResult_t ncclMemManagerDestroy(struct ncclComm* comm) {
     }
 
     // Close shareable FD if valid (defensive cleanup for POSIX FD handle type)
-    if (!entry->isImportedFromPeer &&
-        entry->desc.local.shareableHandleValid &&
-        entry->handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR &&
-        entry->desc.local.shareableHandle.fd >= 0) {
+    if (!entry->isImportedFromPeer && entry->desc.local.shareableHandleValid &&
+        entry->handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR && entry->desc.local.shareableHandle.fd >= 0) {
       close(entry->desc.local.shareableHandle.fd);
       entry->desc.local.shareableHandle.fd = -1;
       entry->desc.local.shareableHandleValid = false;
@@ -128,18 +126,10 @@ ncclResult_t ncclMemManagerDestroy(struct ncclComm* comm) {
 }
 
 // Internal helper to create and track memory entry
-static ncclResult_t ncclMemTrackInternal(
-  struct ncclMemManager* manager,
-  void* ptr,
-  size_t size,
-  CUmemGenericAllocationHandle handle,
-  CUmemAllocationHandleType handleType,
-  ncclMemType_t memType,
-  bool isImportedFromPeer,
-  int ownerRank,
-  int ownerDev,
-  void* ownerPtr
-) {
+static ncclResult_t ncclMemTrackInternal(struct ncclMemManager* manager, void* ptr, size_t size,
+                                         CUmemGenericAllocationHandle handle, CUmemAllocationHandleType handleType,
+                                         ncclMemType_t memType, bool isImportedFromPeer, int ownerRank, int ownerDev,
+                                         void* ownerPtr) {
   if (ncclParamMemManagerDisable()) return ncclSuccess;
   if (manager == nullptr || ptr == nullptr) return ncclInternalError;
   if (!COMPILER_ATOMIC_LOAD(&manager->initialized, std::memory_order_acquire)) {
@@ -151,12 +141,10 @@ static ncclResult_t ncclMemTrackInternal(
   if (memType == ncclMemPersist) {
     if (isImportedFromPeer) {
       (void)COMPILER_ATOMIC_ADD_FETCH(&manager->totalPersistImported, size, std::memory_order_relaxed);
-      TRACE(NCCL_ALLOC, "MemManager: Track Persistent Import ptr=%p size=%zu from rank=%d",
-            ptr, size, ownerRank);
+      TRACE(NCCL_ALLOC, "MemManager: Track Persistent Import ptr=%p size=%zu from rank=%d", ptr, size, ownerRank);
     } else {
       (void)COMPILER_ATOMIC_ADD_FETCH(&manager->totalPersist, size, std::memory_order_relaxed);
-      TRACE(NCCL_ALLOC, "MemManager: Track Persistent ptr=%p size=%zu dev=%d",
-            ptr, size, manager->commCudaDev);
+      TRACE(NCCL_ALLOC, "MemManager: Track Persistent ptr=%p size=%zu dev=%d", ptr, size, manager->commCudaDev);
     }
     return ncclSuccess;
   }
@@ -210,48 +198,32 @@ static ncclResult_t ncclMemTrackInternal(
     } else if (memType == ncclMemOffload) {
       (void)COMPILER_ATOMIC_ADD_FETCH(&manager->totalOffloadImported, size, std::memory_order_relaxed);
     }
-    TRACE(NCCL_ALLOC, "MemManager: Track imported ptr=%p size=%zu type=%d from rank=%d entries=%d",
-          ptr, size, memType, ownerRank, manager->numEntries);
+    TRACE(NCCL_ALLOC, "MemManager: Track imported ptr=%p size=%zu type=%d from rank=%d entries=%d", ptr, size, memType,
+          ownerRank, manager->numEntries);
   } else {
     if (memType == ncclMemScratch) {
       (void)COMPILER_ATOMIC_ADD_FETCH(&manager->totalScratch, size, std::memory_order_relaxed);
     } else if (memType == ncclMemOffload) {
       (void)COMPILER_ATOMIC_ADD_FETCH(&manager->totalOffload, size, std::memory_order_relaxed);
     }
-    TRACE(NCCL_ALLOC, "MemManager: Track ptr=%p size=%zu type=%d dev=%d entries=%d",
-          ptr, size, memType, manager->commCudaDev, manager->numEntries);
+    TRACE(NCCL_ALLOC, "MemManager: Track ptr=%p size=%zu type=%d dev=%d entries=%d", ptr, size, memType,
+          manager->commCudaDev, manager->numEntries);
   }
 
   return ncclSuccess;
 }
 
 // Track a new allocation
-ncclResult_t ncclMemTrack(
-  struct ncclMemManager* manager,
-  void* ptr,
-  size_t size,
-  CUmemGenericAllocationHandle handle,
-  CUmemAllocationHandleType handleType,
-  ncclMemType_t memType
-) {
-  return ncclMemTrackInternal(manager, ptr, size, handle, handleType, memType,
-                              false, -1, -1, nullptr);
+ncclResult_t ncclMemTrack(struct ncclMemManager* manager, void* ptr, size_t size, CUmemGenericAllocationHandle handle,
+                          CUmemAllocationHandleType handleType, ncclMemType_t memType) {
+  return ncclMemTrackInternal(manager, ptr, size, handle, handleType, memType, false, -1, -1, nullptr);
 }
 
 // Track imported allocation from peer
-ncclResult_t ncclMemTrackImportFromPeer(
-  struct ncclMemManager* manager,
-  void* ptr,
-  size_t size,
-  CUmemGenericAllocationHandle handle,
-  CUmemAllocationHandleType handleType,
-  ncclMemType_t memType,
-  int ownerRank,
-  int ownerDev,
-  void* ownerPtr
-) {
-  return ncclMemTrackInternal(manager, ptr, size, handle, handleType, memType,
-                              true, ownerRank, ownerDev, ownerPtr);
+ncclResult_t ncclMemTrackImportFromPeer(struct ncclMemManager* manager, void* ptr, size_t size,
+                                        CUmemGenericAllocationHandle handle, CUmemAllocationHandleType handleType,
+                                        ncclMemType_t memType, int ownerRank, int ownerDev, void* ownerPtr) {
+  return ncclMemTrackInternal(manager, ptr, size, handle, handleType, memType, true, ownerRank, ownerDev, ownerPtr);
 }
 
 // Untrack allocation
@@ -294,8 +266,7 @@ ncclResult_t ncclMemUntrack(struct ncclMemManager* manager, void* ptr, size_t si
         }
 
         // Close shareable FD if valid (defensive cleanup for POSIX FD handle type)
-        if (!entry->isImportedFromPeer &&
-            entry->desc.local.shareableHandleValid &&
+        if (!entry->isImportedFromPeer && entry->desc.local.shareableHandleValid &&
             entry->handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR &&
             entry->desc.local.shareableHandle.fd >= 0) {
           close(entry->desc.local.shareableHandle.fd);
@@ -344,8 +315,7 @@ ncclResult_t ncclMemUntrack(struct ncclMemManager* manager, void* ptr, size_t si
       }
     }
 
-    TRACE(NCCL_ALLOC, "MemManager: Untrack ptr=%p size=%zu entries=%d",
-          ptr, entrySize, numEntries);
+    TRACE(NCCL_ALLOC, "MemManager: Untrack ptr=%p size=%zu entries=%d", ptr, entrySize, numEntries);
   } else {
     // Entry not found in linked list - must be persistent memory
     (void)COMPILER_ATOMIC_SUB_FETCH(&manager->totalPersist, size, std::memory_order_relaxed);
@@ -376,7 +346,8 @@ ncclResult_t ncclDynMemMarkExportToPeer(struct ncclMemManager* manager, void* pt
 
   if (entry == nullptr) {
     WARN("MemManager: Cannot mark export for ptr=%p - not found in tracked entries. "
-         "Only dynamic memory (scratch/offload) needs export tracking for suspend/resume.", ptr);
+         "Only dynamic memory (scratch/offload) needs export tracking for suspend/resume.",
+         ptr);
     return ncclInternalError;
   }
 
@@ -396,10 +367,9 @@ ncclResult_t ncclDynMemMarkExportToPeer(struct ncclMemManager* manager, void* pt
 
   if (entry->desc.local.numExportedPeers >= entry->desc.local.exportedPeersCapacity) {
     int newCapacity = entry->desc.local.exportedPeersCapacity == 0 ? NCCL_MEM_EXPORT_PEERS_INIT :
-                      entry->desc.local.exportedPeersCapacity * 2;
-    ncclResult_t ret = ncclRealloc(&entry->desc.local.exportedPeerRanks,
-                                   entry->desc.local.exportedPeersCapacity,
-                                   newCapacity);
+                                                                     entry->desc.local.exportedPeersCapacity * 2;
+    ncclResult_t ret =
+      ncclRealloc(&entry->desc.local.exportedPeerRanks, entry->desc.local.exportedPeersCapacity, newCapacity);
     if (ret != ncclSuccess) {
       WARN("MemManager: Failed to grow exportedPeerRanks array for ptr=%p", ptr);
       return ret;
@@ -410,8 +380,8 @@ ncclResult_t ncclDynMemMarkExportToPeer(struct ncclMemManager* manager, void* pt
   // Add peer to export list
   entry->desc.local.exportedPeerRanks[entry->desc.local.numExportedPeers++] = peerRank;
 
-  TRACE(NCCL_ALLOC, "MemManager: ExportToPeer ptr=%p peerRank=%d numExportedPeers=%d",
-        ptr, peerRank, entry->desc.local.numExportedPeers);
+  TRACE(NCCL_ALLOC, "MemManager: ExportToPeer ptr=%p peerRank=%d numExportedPeers=%d", ptr, peerRank,
+        entry->desc.local.numExportedPeers);
   return ncclSuccess;
 }
 
@@ -423,8 +393,7 @@ ncclResult_t ncclDynMemMarkExportToPeer(struct ncclMemManager* manager, void* pt
  * 2. Second pass: Offload local buffers to CPU and suspend physical memory
  */
 ncclResult_t ncclCommMemSuspend(struct ncclComm* comm) {
-  if (ncclParamMemManagerDisable())
-  {
+  if (ncclParamMemManagerDisable()) {
     WARN("MemManager: Suspend failed, memory manager is disabled");
     return ncclInvalidUsage;
   }
@@ -452,8 +421,8 @@ ncclResult_t ncclCommMemSuspend(struct ncclComm* comm) {
   entry = manager->entries;
   while (entry != nullptr) {
     if (entry->isImportedFromPeer && entry->state == ncclDynMemStateActive) {
-      TRACE(NCCL_ALLOC, "MemManager: Unmapping peer-imported buffer ptr=%p from rank %d",
-            entry->ptr, entry->desc.imported.ownerRank);
+      TRACE(NCCL_ALLOC, "MemManager: Unmapping peer-imported buffer ptr=%p from rank %d", entry->ptr,
+            entry->desc.imported.ownerRank);
 
       // Unmap our local mapping of the peer's memory
       CUCHECKIGNORE(cuMemUnmap((CUdeviceptr)entry->ptr, entry->size));
@@ -513,8 +482,7 @@ ncclResult_t ncclCommMemSuspend(struct ncclComm* comm) {
     }
 
     // Close the shareable FD if valid (for POSIX handles)
-    if (entry->desc.local.shareableHandleValid &&
-        entry->handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR &&
+    if (entry->desc.local.shareableHandleValid && entry->handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR &&
         entry->desc.local.shareableHandle.fd >= 0) {
       close(entry->desc.local.shareableHandle.fd);
       entry->desc.local.shareableHandle.fd = -1;
@@ -536,8 +504,11 @@ ncclResult_t ncclCommMemSuspend(struct ncclComm* comm) {
 
   manager->released = 1;
 
-  INFO(NCCL_ALLOC, "MemManager: rank %d suspended %d local + %d peer entries (scratch=%zu, offload=%zu, peerImport=%zu, cpuBackup=%zu)",
-       comm->rank, releasedCount, peerImportCount, releasedScratch, releasedOffload, releasedPeerImport, manager->cpuBackupUsage);
+  INFO(NCCL_ALLOC,
+       "MemManager: rank %d suspended %d local + %d peer entries (scratch=%zu, offload=%zu, peerImport=%zu, "
+       "cpuBackup=%zu)",
+       comm->rank, releasedCount, peerImportCount, releasedScratch, releasedOffload, releasedPeerImport,
+       manager->cpuBackupUsage);
 
   return ncclSuccess;
 
@@ -554,8 +525,7 @@ fail:
  * 3. Second pass: Re-import peer buffers using new handles
  */
 ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
-  if (ncclParamMemManagerDisable())
-  {
+  if (ncclParamMemManagerDisable()) {
     WARN("MemManager: Resume failed, memory manager is disabled");
     return ncclInvalidUsage;
   }
@@ -618,15 +588,16 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
       int peerRank = entry->desc.local.exportedPeerRanks[i];
       if (peerRank >= 0 && peerRank < comm->nRanks) {
         // Only set access for peers on the same node and same process
-        if (comm->peerInfo[peerRank].pidHash == comm->peerInfo[comm->rank].pidHash && comm->peerInfo[peerRank].hostHash == comm->peerInfo[comm->rank].hostHash){
+        if (comm->peerInfo[peerRank].pidHash == comm->peerInfo[comm->rank].pidHash &&
+            comm->peerInfo[peerRank].hostHash == comm->peerInfo[comm->rank].hostHash) {
           int peerDev = comm->peerInfo[peerRank].cudaDev;
           CUmemAccessDesc peerAccessDesc = {};
           peerAccessDesc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
           peerAccessDesc.location.id = peerDev;
           peerAccessDesc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
           CUCHECKIGNORE(cuMemSetAccess((CUdeviceptr)entry->ptr, entry->size, &peerAccessDesc, 1));
-          TRACE(NCCL_ALLOC, "MemManager: Restored peer access for ptr=%p to rank %d dev %d",
-                entry->ptr, peerRank, peerDev);
+          TRACE(NCCL_ALLOC, "MemManager: Restored peer access for ptr=%p to rank %d dev %d", entry->ptr, peerRank,
+                peerDev);
         }
       }
     }
@@ -650,8 +621,8 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
 
     entry->desc.local.shareableHandleValid = false;
     if (entry->handleType == CU_MEM_HANDLE_TYPE_FABRIC) {
-      CUresult exportRet = CUPFN(cuMemExportToShareableHandle(&entry->desc.local.shareableHandle.fabricHandle, newHandle,
-                                                               CU_MEM_HANDLE_TYPE_FABRIC, 0));
+      CUresult exportRet = CUPFN(cuMemExportToShareableHandle(&entry->desc.local.shareableHandle.fabricHandle,
+                                                              newHandle, CU_MEM_HANDLE_TYPE_FABRIC, 0));
       if (exportRet != CUDA_SUCCESS) {
         WARN("MemManager: cuMemExportToShareableHandle (FABRIC) failed for ptr=%p", entry->ptr);
         CUCHECKIGNORE(cuMemUnmap((CUdeviceptr)entry->ptr, entry->size));
@@ -667,16 +638,16 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
     restoredLocalCount++;
     restoredLocalBytes += entry->size;
 
-    TRACE(NCCL_ALLOC, "MemManager: Resumed local buffer ptr=%p size=%zu numExportedPeers=%d",
-          entry->ptr, entry->size, entry->desc.local.numExportedPeers);
+    TRACE(NCCL_ALLOC, "MemManager: Resumed local buffer ptr=%p size=%zu numExportedPeers=%d", entry->ptr, entry->size,
+          entry->desc.local.numExportedPeers);
 
     entry = entry->next;
   }
 
   // Step 2: Barrier to ensure all ranks have resumed their local memory
   if (comm->bootstrap != nullptr) {
-    INFO(NCCL_ALLOC, "MemManager: rank %d resumed %d local entries, waiting at barrier",
-         comm->rank, restoredLocalCount);
+    INFO(NCCL_ALLOC, "MemManager: rank %d resumed %d local entries, waiting at barrier", comm->rank,
+         restoredLocalCount);
     ret = bootstrapBarrier(comm->bootstrap, comm->rank, comm->nRanks, 0xBEEF);
     if (ret != ncclSuccess) {
       WARN("MemManager: Barrier failed during resume");
@@ -746,7 +717,8 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
       int idx = 0;
       entry = manager->entries;
       while (entry != nullptr && idx < localBroadcastCount) {
-        if (!entry->isImportedFromPeer && entry->desc.local.numExportedPeers > 0 && entry->state == ncclDynMemStateActive) {
+        if (!entry->isImportedFromPeer && entry->desc.local.numExportedPeers > 0 &&
+            entry->state == ncclDynMemStateActive) {
           localInfos[idx].ptr = entry->ptr;
           localInfos[idx].ownerRank = comm->rank;
           localInfos[idx].ownerDev = entry->cudaDev;
@@ -756,7 +728,8 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
           if (entry->handleType == CU_MEM_HANDLE_TYPE_FABRIC) {
             // For FABRIC: copy the exported fabric handle (can be shared directly)
             if (entry->desc.local.shareableHandleValid) {
-              memcpy(&localInfos[idx].fabricHandle, &entry->desc.local.shareableHandle.fabricHandle, sizeof(CUmemFabricHandle));
+              memcpy(&localInfos[idx].fabricHandle, &entry->desc.local.shareableHandle.fabricHandle,
+                     sizeof(CUmemFabricHandle));
             } else {
               WARN("MemManager: FABRIC handle not valid for entry ptr=%p", entry->ptr);
             }
@@ -781,15 +754,13 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
 
       // Copy local data to correct position
       if (localBroadcastCount > 0) {
-        memcpy(allInfos + offsets[comm->rank], localInfos,
-               localBroadcastCount * sizeof(ncclDynMemP2pHandleInfo));
+        memcpy(allInfos + offsets[comm->rank], localInfos, localBroadcastCount * sizeof(ncclDynMemP2pHandleInfo));
       }
 
       // Exchange using Send/Recv (send first, then receive to avoid deadlock)
       for (int r = 0; r < comm->nRanks; r++) {
         if (r != comm->rank && localBroadcastCount > 0) {
-          ret = bootstrapSend(comm->bootstrap, r, 0xFEED,
-                              localInfos,
+          ret = bootstrapSend(comm->bootstrap, r, 0xFEED, localInfos,
                               localBroadcastCount * sizeof(ncclDynMemP2pHandleInfo));
           if (ret != ncclSuccess) {
             WARN("MemManager: Send to rank %d failed - handle exchange incomplete", r);
@@ -804,8 +775,7 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
 
       for (int r = 0; r < comm->nRanks; r++) {
         if (r != comm->rank && allCounts[r] > 0) {
-          ret = bootstrapRecv(comm->bootstrap, r, 0xFEED,
-                              allInfos + offsets[r],
+          ret = bootstrapRecv(comm->bootstrap, r, 0xFEED, allInfos + offsets[r],
                               allCounts[r] * sizeof(ncclDynMemP2pHandleInfo));
           if (ret != ncclSuccess) {
             WARN("MemManager: Recv from rank %d failed - handle exchange incomplete", r);
@@ -835,8 +805,7 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
       if (allInfos != nullptr) {
         for (int i = 0; i < totalInfoCount; i++) {
           if (allInfos[i].ownerRank == entry->desc.imported.ownerRank &&
-              allInfos[i].ptr == entry->desc.imported.ownerPtr &&
-              allInfos[i].size == entry->size) {
+              allInfos[i].ptr == entry->desc.imported.ownerPtr && allInfos[i].size == entry->size) {
             matchedInfo = &allInfos[i];
             break;
           }
@@ -844,14 +813,14 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
       }
 
       if (matchedInfo == nullptr) {
-        WARN("MemManager: Could not find matching handle info for ptr=%p from rank %d",
-             entry->ptr, entry->desc.imported.ownerRank);
+        WARN("MemManager: Could not find matching handle info for ptr=%p from rank %d", entry->ptr,
+             entry->desc.imported.ownerRank);
         entry = entry->next;
         continue;
       }
 
-      TRACE(NCCL_ALLOC, "MemManager: Re-importing peer buffer ptr=%p from rank %d (owner ptr=%p)",
-            entry->ptr, entry->desc.imported.ownerRank, matchedInfo->ptr);
+      TRACE(NCCL_ALLOC, "MemManager: Re-importing peer buffer ptr=%p from rank %d (owner ptr=%p)", entry->ptr,
+            entry->desc.imported.ownerRank, matchedInfo->ptr);
 
       CUmemGenericAllocationHandle newHandle;
       CUresult curet;
@@ -871,22 +840,20 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
         int fd = -1;
 
         // The handleData contains the cuMem handle - request FD conversion
-        ret = ncclProxyClientGetFdBlocking(comm, entry->desc.imported.ownerRank,
-                                           &matchedInfo->handleData, &fd);
+        ret = ncclProxyClientGetFdBlocking(comm, entry->desc.imported.ownerRank, &matchedInfo->handleData, &fd);
         if (ret != ncclSuccess || fd < 0) {
-          WARN("MemManager: Failed to get FD from rank %d for ptr=%p",
-               entry->desc.imported.ownerRank, entry->ptr);
+          WARN("MemManager: Failed to get FD from rank %d for ptr=%p", entry->desc.imported.ownerRank, entry->ptr);
           entry = entry->next;
           continue;
         }
 
         curet = CUPFN(cuMemImportFromShareableHandle(&newHandle, (void*)(uintptr_t)fd,
-                                                CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR));
+                                                     CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR));
         close(fd);
       } else if (matchedInfo->handleType == CU_MEM_HANDLE_TYPE_FABRIC) {
         // For FABRIC: Import directly using the fabric handle
-        curet = CUPFN(cuMemImportFromShareableHandle(&newHandle, &matchedInfo->fabricHandle,
-                                                CU_MEM_HANDLE_TYPE_FABRIC));
+        curet =
+          CUPFN(cuMemImportFromShareableHandle(&newHandle, &matchedInfo->fabricHandle, CU_MEM_HANDLE_TYPE_FABRIC));
       } else {
         WARN("MemManager: Unknown handle type %d for peer import", matchedInfo->handleType);
         entry = entry->next;
@@ -894,8 +861,7 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
       }
 
       if (curet != CUDA_SUCCESS) {
-        WARN("MemManager: cuMemImportFromShareableHandle failed for ptr=%p (curet=%d)",
-             entry->ptr, curet);
+        WARN("MemManager: cuMemImportFromShareableHandle failed for ptr=%p (curet=%d)", entry->ptr, curet);
         entry = entry->next;
         continue;
       }
@@ -915,8 +881,8 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
       restoredPeerCount++;
       restoredPeerBytes += entry->size;
 
-      TRACE(NCCL_ALLOC, "MemManager: Successfully re-imported peer buffer ptr=%p from rank %d",
-            entry->ptr, entry->desc.imported.ownerRank);
+      TRACE(NCCL_ALLOC, "MemManager: Successfully re-imported peer buffer ptr=%p from rank %d", entry->ptr,
+            entry->desc.imported.ownerRank);
     }
     entry = entry->next;
   }
@@ -925,8 +891,8 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
 
   // Final barrier to ensure all ranks have completed peer import setup
   if (comm->bootstrap != nullptr) {
-    INFO(NCCL_ALLOC, "MemManager: rank %d resumed %d local + %d peer entries (%zu + %zu bytes)",
-         comm->rank, restoredLocalCount, restoredPeerCount, restoredLocalBytes, restoredPeerBytes);
+    INFO(NCCL_ALLOC, "MemManager: rank %d resumed %d local + %d peer entries (%zu + %zu bytes)", comm->rank,
+         restoredLocalCount, restoredPeerCount, restoredLocalBytes, restoredPeerBytes);
     ret = bootstrapBarrier(comm->bootstrap, comm->rank, comm->nRanks, 0xCAFE);
     if (ret != ncclSuccess) {
       // Cleanup
@@ -970,16 +936,14 @@ ncclResult_t ncclCommSuspend(ncclComm_t comm, int flags) {
   CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), ret, fail);
 
   if (flags & NCCL_SUSPEND_MEM) {
-    if (ncclParamMemManagerDisable())
-    {
+    if (ncclParamMemManagerDisable()) {
       WARN("MemManager: Suspend not supported, memory manager is disabled");
       ret = ncclInvalidUsage;
       goto fail;
     }
     // Check if manager is shared
     if (comm->memManager && comm->memManager->refCount > 1) {
-      WARN("Memory suspend not supported with split_share communicators (refCount=%d)",
-           comm->memManager->refCount);
+      WARN("Memory suspend not supported with split_share communicators (refCount=%d)", comm->memManager->refCount);
       ret = ncclInvalidUsage;
       goto fail;
     }
@@ -1014,16 +978,14 @@ ncclResult_t ncclCommResume(ncclComm_t comm) {
   NCCLCHECK(ncclGroupStartInternal());
   CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), ret, fail);
 
-  if (ncclParamMemManagerDisable())
-  {
+  if (ncclParamMemManagerDisable()) {
     WARN("MemManager: Resume not supported, memory manager is disabled");
     ret = ncclInvalidUsage;
     goto fail;
   }
   // Check if manager is shared
   if (comm->memManager && comm->memManager->refCount > 1) {
-    WARN("Memory resume not supported with split_share communicators (refCount=%d)",
-         comm->memManager->refCount);
+    WARN("Memory resume not supported with split_share communicators (refCount=%d)", comm->memManager->refCount);
     ret = ncclInvalidUsage;
     goto fail;
   }
@@ -1064,23 +1026,23 @@ ncclResult_t ncclCommMemStats(ncclComm_t comm, ncclCommMemStat_t stat, uint64_t*
 
   ncclMemManager* manager = comm->memManager;
   switch (stat) {
-    case ncclStatGpuMemTotal:
-      *value = COMPILER_ATOMIC_LOAD(&manager->totalPersist, std::memory_order_relaxed) +
-               COMPILER_ATOMIC_LOAD(&manager->totalScratch, std::memory_order_relaxed) +
-               COMPILER_ATOMIC_LOAD(&manager->totalOffload, std::memory_order_relaxed);
-      return ncclSuccess;
-    case ncclStatGpuMemPersist:
-      *value = COMPILER_ATOMIC_LOAD(&manager->totalPersist, std::memory_order_relaxed);
-      return ncclSuccess;
-    case ncclStatGpuMemSuspend:
-      *value = COMPILER_ATOMIC_LOAD(&manager->totalScratch, std::memory_order_relaxed) +
-               COMPILER_ATOMIC_LOAD(&manager->totalOffload, std::memory_order_relaxed);
-      return ncclSuccess;
-    case ncclStatGpuMemSuspended:
+  case ncclStatGpuMemTotal:
+    *value = COMPILER_ATOMIC_LOAD(&manager->totalPersist, std::memory_order_relaxed) +
+             COMPILER_ATOMIC_LOAD(&manager->totalScratch, std::memory_order_relaxed) +
+             COMPILER_ATOMIC_LOAD(&manager->totalOffload, std::memory_order_relaxed);
+    return ncclSuccess;
+  case ncclStatGpuMemPersist:
+    *value = COMPILER_ATOMIC_LOAD(&manager->totalPersist, std::memory_order_relaxed);
+    return ncclSuccess;
+  case ncclStatGpuMemSuspend:
+    *value = COMPILER_ATOMIC_LOAD(&manager->totalScratch, std::memory_order_relaxed) +
+             COMPILER_ATOMIC_LOAD(&manager->totalOffload, std::memory_order_relaxed);
+    return ncclSuccess;
+  case ncclStatGpuMemSuspended:
       // Boolean: 0=active, 1=suspended
-      *value = manager->released ? 1 : 0;
-      return ncclSuccess;
-    default:
-      return ncclInvalidArgument;
+    *value = manager->released ? 1 : 0;
+    return ncclSuccess;
+  default:
+    return ncclInvalidArgument;
   }
 }

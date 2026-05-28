@@ -27,7 +27,7 @@
 #include <windows.h>
 /* Winsock2 must be included before iphlpapi.h so IP_ADAPTER_ADDRESSES and GetAdaptersAddresses are declared */
 #pragma warning(push)
-#pragma warning(disable: 4005) /* _WINSOCKAPI_ redefinition when we already defined it to avoid winsock.h */
+#pragma warning(disable:4005) /* _WINSOCKAPI_ redefinition when we already defined it to avoid winsock.h */
 #include <winsock2.h>
 #pragma warning(pop)
 #include <ws2ipdef.h>

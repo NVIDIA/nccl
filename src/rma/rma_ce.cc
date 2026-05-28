@@ -16,7 +16,7 @@
 #include "rma/rma_ce.h"
 #include "ce_coll.h"
 
-ncclResult_t ncclRmaCeInit(struct ncclComm* comm){
+ncclResult_t ncclRmaCeInit(struct ncclComm* comm) {
   ncclResult_t ret = ncclSuccess;
   uint64_t* signalsDevBase = nullptr;
   uint64_t* ackInitHost = nullptr;
@@ -44,7 +44,9 @@ ncclResult_t ncclRmaCeInit(struct ncclComm* comm){
     ncclWindow_vidmem* signalsWinDevHost;
 
     NCCLCHECKGOTO(ncclMemAlloc((void**)&signalsDevBase, signalsBufSize), ret, fail);
-    NCCLCHECKGOTO(ncclDevrWindowRegisterInGroup(comm, signalsDevBase, signalsBufSize, NCCL_WIN_COLL_SYMMETRIC, &signalsWinDev), ret, fail);
+    NCCLCHECKGOTO(ncclDevrWindowRegisterInGroup(comm, signalsDevBase, signalsBufSize, NCCL_WIN_COLL_SYMMETRIC,
+                                                &signalsWinDev),
+                  ret, fail);
     NCCLCHECKGOTO(ncclShadowPoolToHost(&comm->devrState.shadows, signalsWinDev, &signalsWinDevHost), ret, fail);
 
     // Get the ncclDevrWindow from the winHost field
@@ -76,7 +78,6 @@ ncclResult_t ncclRmaCeInit(struct ncclComm* comm){
     // Allocate host per-rank sequence counters and device staging slots.
     NCCLCHECKGOTO(ncclCalloc(&ceCtx->signalOpSeqs, comm->nRanks), ret, fail);
     NCCLCHECKGOTO(ncclCudaCalloc(&ceCtx->signalOpSeqsDev, comm->nRanks, comm->memManager), ret, fail);
-
   }
 
   INFO(NCCL_INIT, "Rank %d: finished init RMA CE contexts, numRmaCeCtxs %d", comm->rank, comm->config.numRmaCtx);
@@ -97,7 +98,7 @@ fail:
   goto exit;
 }
 
-ncclResult_t ncclRmaCeFinalize(struct ncclComm* comm){
+ncclResult_t ncclRmaCeFinalize(struct ncclComm* comm) {
   ncclResult_t ret = ncclSuccess;
 
   // Clean up rmaCeInitTaskQueue
@@ -154,9 +155,7 @@ fail:
   goto exit;
 }
 
-static ncclResult_t ncclRmaCePutLaunchPersist(struct ncclComm* comm,
-                                              struct ncclKernelPlan* plan,
-                                              cudaStream_t stream) {
+static ncclResult_t ncclRmaCePutLaunchPersist(struct ncclComm* comm, struct ncclKernelPlan* plan, cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
   int nRmaTasksCe = plan->rmaArgs->nRmaTasksCe;
   int ctx = plan->rmaArgs->ctx;
@@ -200,14 +199,15 @@ static ncclResult_t ncclRmaCePutLaunchPersist(struct ncclComm* comm,
     // Data movement
     if (bytes > 0) {
       void* peerBuff;
-      NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, task->peerWinHost, task->peerWinOffset, peerLsaRank, &peerBuff), ret, fail);
+      NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, task->peerWinHost, task->peerWinOffset, peerLsaRank, &peerBuff), ret,
+                    fail);
       if (peerBuff == NULL) {
         WARN("RMA CE: peerBuff is NULL after ncclDevrGetLsaRankPtr");
         ret = ncclInvalidArgument;
         goto fail;
       }
-      dataParams.srcs[dataParams.numOps]  = const_cast<void*>(task->srcBuff);
-      dataParams.dsts[dataParams.numOps]  = peerBuff;
+      dataParams.srcs[dataParams.numOps] = const_cast<void*>(task->srcBuff);
+      dataParams.dsts[dataParams.numOps] = peerBuff;
       dataParams.sizes[dataParams.numOps] = bytes;
       dataParams.numOps++;
     }
@@ -216,9 +216,11 @@ static ncclResult_t ncclRmaCePutLaunchPersist(struct ncclComm* comm,
     if (task->signalMode != NCCL_SIGNAL_NONE) {
       size_t rankSlot = comm->rank * sizeof(uint64_t);
       void* peerGraphSignal;
-      NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, ceCtx->signalsWin, ceCtx->graphSignalOffset + rankSlot, peerLsaRank, &peerGraphSignal), ret, fail);
-      signalParams.srcs[signalParams.numOps]  = ceCtx->signalConstOneDev;
-      signalParams.dsts[signalParams.numOps]  = peerGraphSignal;
+      NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, ceCtx->signalsWin, ceCtx->graphSignalOffset + rankSlot, peerLsaRank,
+                                          &peerGraphSignal),
+                    ret, fail);
+      signalParams.srcs[signalParams.numOps] = ceCtx->signalConstOneDev;
+      signalParams.dsts[signalParams.numOps] = peerGraphSignal;
       signalParams.sizes[signalParams.numOps] = sizeof(uint64_t);
       signalParams.numOps++;
     }
@@ -238,9 +240,8 @@ fail:
   goto exit;
 }
 
-static ncclResult_t ncclRmaCePutLaunchNonPersist(struct ncclComm* comm,
-                                                  struct ncclKernelPlan* plan,
-                                                  cudaStream_t stream) {
+static ncclResult_t ncclRmaCePutLaunchNonPersist(struct ncclComm* comm, struct ncclKernelPlan* plan,
+                                                 cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
   int nRmaTasksCe = plan->rmaArgs->nRmaTasksCe;
   int ctx = plan->rmaArgs->ctx;
@@ -292,14 +293,16 @@ static ncclResult_t ncclRmaCePutLaunchNonPersist(struct ncclComm* comm,
       // Data movement
       if (bytes > 0) {
         void* peerBuff;
-        NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, currentTask->peerWinHost, currentTask->peerWinOffset, peerLsaRank, &peerBuff), ret, fail);
+        NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, currentTask->peerWinHost, currentTask->peerWinOffset, peerLsaRank,
+                                            &peerBuff),
+                      ret, fail);
         if (peerBuff == NULL) {
           WARN("RMA CE: peerBuff is NULL after ncclDevrGetLsaRankPtr");
           ret = ncclInvalidArgument;
           goto fail;
         }
-        dataParams.srcs[dataParams.numOps]  = const_cast<void*>(currentTask->srcBuff);
-        dataParams.dsts[dataParams.numOps]  = peerBuff;
+        dataParams.srcs[dataParams.numOps] = const_cast<void*>(currentTask->srcBuff);
+        dataParams.dsts[dataParams.numOps] = peerBuff;
         dataParams.sizes[dataParams.numOps] = bytes;
         dataParams.numOps++;
       }
@@ -310,16 +313,18 @@ static ncclResult_t ncclRmaCePutLaunchNonPersist(struct ncclComm* comm,
       if (currentTask->signalMode != NCCL_SIGNAL_NONE) {
         size_t rankSlot = comm->rank * sizeof(uint64_t);
         void* peerSignal;
-        NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, ceCtx->signalsWin, ceCtx->signalOffset + rankSlot, peerLsaRank, &peerSignal), ret, fail);
+        NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, ceCtx->signalsWin, ceCtx->signalOffset + rankSlot, peerLsaRank,
+                                            &peerSignal),
+                      ret, fail);
         ceCtx->signalOpSeqs[peer]++;
 
         seqStageOps[nSeqStageOps].writeValue.operation = CU_STREAM_MEM_OP_WRITE_VALUE_64;
-        seqStageOps[nSeqStageOps].writeValue.address   = (CUdeviceptr)&ceCtx->signalOpSeqsDev[nSeqStageOps];
-        seqStageOps[nSeqStageOps].writeValue.value64   = ceCtx->signalOpSeqs[peer];
-        seqStageOps[nSeqStageOps].writeValue.flags     = CU_STREAM_WRITE_VALUE_DEFAULT;
+        seqStageOps[nSeqStageOps].writeValue.address = (CUdeviceptr)&ceCtx->signalOpSeqsDev[nSeqStageOps];
+        seqStageOps[nSeqStageOps].writeValue.value64 = ceCtx->signalOpSeqs[peer];
+        seqStageOps[nSeqStageOps].writeValue.flags = CU_STREAM_WRITE_VALUE_DEFAULT;
 
-        signalParams.srcs[signalParams.numOps]  = &ceCtx->signalOpSeqsDev[nSeqStageOps];
-        signalParams.dsts[signalParams.numOps]  = peerSignal;
+        signalParams.srcs[signalParams.numOps] = &ceCtx->signalOpSeqsDev[nSeqStageOps];
+        signalParams.dsts[signalParams.numOps] = peerSignal;
         signalParams.sizes[signalParams.numOps] = sizeof(uint64_t);
         signalParams.numOps++;
 
@@ -376,7 +381,7 @@ ncclResult_t ncclRmaCePutLaunch(struct ncclComm* comm, struct ncclKernelPlan* pl
   return ncclRmaCePutLaunchNonPersist(comm, plan, stream);
 }
 
-ncclResult_t ncclRmaCeWaitLaunch(struct ncclComm* comm, struct ncclKernelPlan* plan, cudaStream_t stream){
+ncclResult_t ncclRmaCeWaitLaunch(struct ncclComm* comm, struct ncclKernelPlan* plan, cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
   CUstreamBatchMemOpParams* batchParams = nullptr;
   struct ncclCeBatchOpsParams ceParams = {};
@@ -419,8 +424,7 @@ ncclResult_t ncclRmaCeWaitLaunch(struct ncclComm* comm, struct ncclKernelPlan* p
         opIdx++;
       }
       NCCLCHECKGOTO(ncclCuStreamBatchMemOp(stream, opIdx, batchParams), ret, fail);
-    }
-    else {
+    } else {
       // Graph: wait-reset-ack cycle using separate graphSignalsDev (isolated from non-graph)
       NCCLCHECKGOTO(ncclCeInitBatchOpsParams(&ceParams, 1), ret, fail);
 
@@ -443,10 +447,13 @@ ncclResult_t ncclRmaCeWaitLaunch(struct ncclComm* comm, struct ncclKernelPlan* p
           NCCLCHECKGOTO(ncclCuStreamBatchMemOp(stream, 2, signalOps), ret, fail);
 
           void* peerAck;
-          NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, ceCtx->signalsWin, ceCtx->graphAckOffset + comm->rank * sizeof(uint64_t), peerLsaRank, &peerAck), ret, fail);
+          NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, ceCtx->signalsWin,
+                                              ceCtx->graphAckOffset + comm->rank * sizeof(uint64_t), peerLsaRank,
+                                              &peerAck),
+                        ret, fail);
           ceParams.numOps = 0;
-          ceParams.srcs[ceParams.numOps]  = ceCtx->signalConstOneDev;
-          ceParams.dsts[ceParams.numOps]  = peerAck;
+          ceParams.srcs[ceParams.numOps] = ceCtx->signalConstOneDev;
+          ceParams.dsts[ceParams.numOps] = peerAck;
           ceParams.sizes[ceParams.numOps] = sizeof(uint64_t);
           ceParams.numOps++;
           NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &ceParams, stream), ret, fail);

@@ -41,13 +41,15 @@ typedef struct {
   ncclResult_t (*listen)(void* ctx, int dev, void* handle, void** listenComm);
   // Create a group for GIN operations. handles have been created
   // using listen() above. rank indicates caller's rank in the collective network.
-  ncclResult_t (*connect)(void* ctx, void* handles[], int nranks, int rank,
-                          void* listenComm, void** collComm);
+  ncclResult_t (*connect)(void* ctx, void* handles[], int nranks, int rank, void* listenComm, void** collComm);
   // Create device-side GIN context. devHandle will be passed to device code.
-  ncclResult_t (*createContext)(void* collComm, ncclGinConfig_v14_t* config, void** ginCtx, ncclNetDeviceHandle_v11_t** devHandle);
+  ncclResult_t (*createContext)(void* collComm, ncclGinConfig_v14_t* config, void** ginCtx,
+                                ncclNetDeviceHandle_v11_t** devHandle);
   // Collective memory registration
-  ncclResult_t (*regMrSym)(void* collComm, void* data, size_t size, int type, uint64_t mrFlags, void** mhandle, void **ginHandle);
-  ncclResult_t (*regMrSymDmaBuf)(void* collComm, void* data, size_t size, int type, uint64_t offset, int fd, uint64_t mrFlags, void** mhandle, void **ginHandle);
+  ncclResult_t (*regMrSym)(void* collComm, void* data, size_t size, int type, uint64_t mrFlags, void** mhandle,
+                           void** ginHandle);
+  ncclResult_t (*regMrSymDmaBuf)(void* collComm, void* data, size_t size, int type, uint64_t offset, int fd,
+                                 uint64_t mrFlags, void** mhandle, void** ginHandle);
   ncclResult_t (*deregMrSym)(void* collComm, void* mhandle);
   // Close and free collective comm objects
   ncclResult_t (*destroyContext)(void* ginCtx);
@@ -58,7 +60,7 @@ typedef struct {
   ncclResult_t (*ginProgress)(void* ginCtx);
 
   // Query the last error for the GIN support. Particularly important when ginProgress is not used, to report errors.
-  ncclResult_t (*queryLastError)(void* ginCtx, bool *hasError);
+  ncclResult_t (*queryLastError)(void* ginCtx, bool* hasError);
 
   // Finalize the GIN support
   ncclResult_t (*finalize)(void* ctx);

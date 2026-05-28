@@ -2506,6 +2506,7 @@ void printUsage(const char* programName, int myRank) {
         printf("  --zcopy                 Use ncclMemAlloc buffers + windows for HT tensors that need peer access\n");
         printf("  --max-num-sms <N>       Maximum SMs for EP kernels (0 = auto, default: 0)\n");
         printf("  --mask-test             Simulate rank failures and test active-mask (LL only, implies --validate)\n");
+        printf("  --topk-idx-int32        LL only: pass ncclInt32 topk_idx instead of ncclInt64\n");
         printf("  --help                  Show this help message\n");
     }
 }
@@ -2538,6 +2539,7 @@ int main(int argc, char* argv[]) {
     bool mask_test = false;       // Simulate rank failures and test active-mask (LL only)
     bool include_uniform_less_than_max = false;
     bool include_non_uniform_tokens    = false;
+    bool topk_idx_int32 = false;  // LL only: pass ncclInt32 topk_idx instead of ncclInt64
     // Initialize MPI
     MPICHECK(MPI_Init(&argc, &argv));
     MPICHECK(MPI_Comm_rank(MPI_COMM_WORLD, &myRank));
@@ -2567,13 +2569,14 @@ int main(int argc, char* argv[]) {
         {"mask-test",      no_argument,       0, 'T'},
         {"dispatch-less-than-max-tokens", required_argument, 0, 'l'},
         {"non-uniform-tokens", no_argument, 0, 'N'},
+        {"topk-idx-int32", no_argument, 0, 'I'},
         {"help",           no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
 
     int opt;
     int option_index = 0;
-    while ((opt = getopt_long(argc, argv, "a:L:t:d:k:e:w:i:pnfUVDMA:R:zS:Tl:Nh", long_options, &option_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "a:L:t:d:k:e:w:i:pnfUVDMA:R:zS:Tl:NIh", long_options, &option_index)) != -1) {
         switch (opt) {
             case 'a':
                 if (strcmp(optarg, "ll") == 0 || strcmp(optarg, "low-latency") == 0) {
@@ -2666,6 +2669,9 @@ int main(int argc, char* argv[]) {
                 break;
             case 'N':
                 include_non_uniform_tokens = true;
+                break;
+            case 'I':
+                topk_idx_int32 = true;
                 break;
             case 'h':
                 printUsage(argv[0], myRank);
@@ -2917,9 +2923,17 @@ int main(int argc, char* argv[]) {
         fflush(stdout);
     }
 
-    // Initialize topk_idx tensor
+    // Initialize topk_idx tensor. LL accepts either ncclInt32 or
+    // ncclInt64; HT remains strict int64. --topk-idx-int32 is
+    // ignored (with a warning) outside LL mode.
+    const bool use_int32_topk = topk_idx_int32 && (algorithm == NCCL_EP_ALGO_LOW_LATENCY);
+    if (topk_idx_int32 && !use_int32_topk && myRank == 0) {
+        printf("Warning: --topk-idx-int32 only applies to LL mode; ignoring.\n");
+    }
     ncclEpTensor_t* topk_idx = nullptr;
-    NCCLCHECK(epMakeTensor(&topk_idx, 2, ncclInt64, num_tokens, top_k));
+    NCCLCHECK(epMakeTensor(&topk_idx, 2,
+                           use_int32_topk ? ncclInt32 : ncclInt64,
+                           num_tokens, top_k));
 
     // Generate topk indices
     // HT: randperm (uniform), consistent with Hybrid-EP (test_hybrid_ep.py)
@@ -2959,9 +2973,21 @@ int main(int argc, char* argv[]) {
     }
 
     {
-        void* topk_idx_data;
-        topk_idx_data = topk_idx->data;
-        CUDACHECK(cudaMemcpy(topk_idx_data, topk_idx_host, num_tokens * top_k * sizeof(int64_t), cudaMemcpyHostToDevice));
+        void* topk_idx_data = topk_idx->data;
+        if (use_int32_topk) {
+            // Narrow host int64 values to int32 before H2D copy.
+            std::vector<int32_t> topk_idx_i32_host(num_tokens * top_k);
+            for (size_t i = 0; i < num_tokens * top_k; i++) {
+                topk_idx_i32_host[i] = static_cast<int32_t>(topk_idx_host[i]);
+            }
+            CUDACHECK(cudaMemcpy(topk_idx_data, topk_idx_i32_host.data(),
+                                 num_tokens * top_k * sizeof(int32_t),
+                                 cudaMemcpyHostToDevice));
+        } else {
+            CUDACHECK(cudaMemcpy(topk_idx_data, topk_idx_host,
+                                 num_tokens * top_k * sizeof(int64_t),
+                                 cudaMemcpyHostToDevice));
+        }
     }
     // Note: topk_idx_host is kept for validation, deleted at end
 

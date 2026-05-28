@@ -2029,10 +2029,18 @@ ncclResult_t ncclEpUpdateHandle(
     topk_idx = tensor_required(topk_idx);
     EP_OPTIONAL_STRUCT(layout_info);
     assert(topk_idx->ndim == 2);
-    assert(topk_idx->datatype == ncclInt64);
 
     ncclEpGroup_t ep_group = handle->group;
     assert(ep_group != nullptr);
+
+    // LL accepts ncclInt32 or ncclInt64; HT remains strict ncclInt64.
+    if (ep_group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
+        assert((topk_idx->datatype == ncclInt32 || topk_idx->datatype == ncclInt64)
+               && "LL topk_idx must be ncclInt32 or ncclInt64");
+    } else {
+        assert(topk_idx->datatype == ncclInt64
+               && "HT topk_idx must be ncclInt64");
+    }
 
     // Take ownership of the descriptor with a library-owned tensor to
     // ensure no dependency on the caller's descriptor.
@@ -2388,7 +2396,6 @@ ncclResult_t ncclEpDispatch(
             auto* expert_dispatch_layout_data = static_cast<int64_t*>(handle->ll.expert_dispatch_layout.data);
             auto* recv_count_data = recv_count ? static_cast<int*>(recv_count->data) : nullptr;
             auto* x_data = x->data;
-            auto* topk_idx_data = static_cast<int64_t*>(handle->topk_idx.data);
             auto* topk_weights_in_data = topk_weights_in ? static_cast<const float*>(topk_weights_in->data) : nullptr;
             auto* recv_topk_weights_data = recv_topk_weights ? static_cast<float*>(recv_topk_weights->data) : nullptr;
             auto* recv_topk_idx_data = recv_topk_idx ? static_cast<int32_t*>(recv_topk_idx->data) : nullptr;
@@ -2397,54 +2404,70 @@ ncclResult_t ncclEpDispatch(
             const bool round_scale = config ? config->round_scales : false;
             const bool use_ue8m0 = false;
 
-            nccl_ep::internode_ll::dispatch(
-                x_data,
-                topk_idx_data,
-                topk_weights_in_data,
-                recv_x_data,
-                scales_data,
-                expert_recv_source_indices_data,
-                src_rank_counter_data,
-                expert_dispatch_layout_data,
-                recv_count_data,
-                recv_topk_weights_data,
-                recv_topk_idx_data,
-                buffer.dispatch_rdma_send_buffer,
-                buffer.dispatch_rdma_recv_data_buffer,
-                buffer.dispatch_rdma_recv_count_buffer,
-                (reinterpret_cast<uint64_t>(buffer.dispatch_rdma_send_buffer) - reinterpret_cast<uint64_t>(group->rdma_buffer)),
-                (reinterpret_cast<uint64_t>(buffer.dispatch_rdma_recv_data_buffer) - reinterpret_cast<uint64_t>(group->rdma_buffer)),
-                (reinterpret_cast<uint64_t>(buffer.dispatch_rdma_recv_count_buffer) - reinterpret_cast<uint64_t>(group->rdma_buffer)),
-                next_clean_meta.first,
-                next_clean_meta.second,
-                nullptr, /*recv_send_sizes=*/
-                nullptr, /*recv_send_offsets=*/
-                handle->num_tokens,
-                hidden,
-                group->config.max_dispatch_tokens_per_rank,
-                handle->num_topk,
-                group->config.num_experts,
-                group->rank,
-                group->nRanks,
-                use_fp8,
-                round_scale,
-                use_ue8m0,
-                handle->layout,
-                phases,
-                group->num_nccl_comms,
-                group->nccl_dev_comms,
-                group->nccl_wins,
-                signal_base,
-                group->ep_workspace,
-                group->max_num_sms,
-                group->mask_buffer,
-                group->async_error_flag,
-                group->timeout_cycles,
-                /*nvlinkOnly=*/nvlink_only,
-                recv_data_window,
-                recv_data_offset,
-                stream
-            );
+            // LL accepts int32 or int64 topk_idx; cached dtype picks the
+            // kernel specialisation. The generic lambda body is shared and
+            // also threads dev's zero-copy gate args (recv_data_window /
+            // recv_data_offset) through.
+            auto launch_dispatch = [&](auto* topk_idx_data) {
+                nccl_ep::internode_ll::dispatch(
+                    x_data,
+                    topk_idx_data,
+                    topk_weights_in_data,
+                    recv_x_data,
+                    scales_data,
+                    expert_recv_source_indices_data,
+                    src_rank_counter_data,
+                    expert_dispatch_layout_data,
+                    recv_count_data,
+                    recv_topk_weights_data,
+                    recv_topk_idx_data,
+                    buffer.dispatch_rdma_send_buffer,
+                    buffer.dispatch_rdma_recv_data_buffer,
+                    buffer.dispatch_rdma_recv_count_buffer,
+                    (reinterpret_cast<uint64_t>(buffer.dispatch_rdma_send_buffer) - reinterpret_cast<uint64_t>(group->rdma_buffer)),
+                    (reinterpret_cast<uint64_t>(buffer.dispatch_rdma_recv_data_buffer) - reinterpret_cast<uint64_t>(group->rdma_buffer)),
+                    (reinterpret_cast<uint64_t>(buffer.dispatch_rdma_recv_count_buffer) - reinterpret_cast<uint64_t>(group->rdma_buffer)),
+                    next_clean_meta.first,
+                    next_clean_meta.second,
+                    nullptr, /*recv_send_sizes=*/
+                    nullptr, /*recv_send_offsets=*/
+                    handle->num_tokens,
+                    hidden,
+                    group->config.max_dispatch_tokens_per_rank,
+                    handle->num_topk,
+                    group->config.num_experts,
+                    group->rank,
+                    group->nRanks,
+                    use_fp8,
+                    round_scale,
+                    use_ue8m0,
+                    handle->layout,
+                    phases,
+                    group->num_nccl_comms,
+                    group->nccl_dev_comms,
+                    group->nccl_wins,
+                    signal_base,
+                    group->ep_workspace,
+                    group->max_num_sms,
+                    group->mask_buffer,
+                    group->async_error_flag,
+                    group->timeout_cycles,
+                    /*nvlinkOnly=*/nvlink_only,
+                    recv_data_window,
+                    recv_data_offset,
+                    stream
+                );
+            };
+            switch (handle->topk_idx.datatype) {
+                case ncclInt32:
+                    launch_dispatch(static_cast<const int32_t*>(handle->topk_idx.data));
+                    break;
+                case ncclInt64:
+                    launch_dispatch(static_cast<const int64_t*>(handle->topk_idx.data));
+                    break;
+                default:
+                    assert(false && "LL topk_idx must be ncclInt32 or ncclInt64");
+            }
         };
 
         // Execute dispatch with appropriate phase flags
@@ -2891,9 +2914,11 @@ ncclResult_t ncclEpCombine(
                 break;
         }
 
-            // Validate topk_idx tensor
+            // Validate topk_idx tensor (LL: int32 or int64; dtype must
+            // match what ncclEpUpdateHandle saw).
         assert(topk_idx->ndim == 2);
-        assert(topk_idx->datatype == ncclInt64);
+        assert((topk_idx->datatype == ncclInt32 || topk_idx->datatype == ncclInt64)
+               && "LL topk_idx must be ncclInt32 or ncclInt64");
 
             // Validate src_info tensor
         assert(src_info->ndim == 1);
@@ -2935,7 +2960,6 @@ ncclResult_t ncclEpCombine(
             // Prepare data pointers
             auto* out_data = out->data;
             auto* x_data = x->data;
-            auto* topk_idx_data = static_cast<int64_t*>(topk_idx->data);
             auto* topk_weights_data = topk_weights ? static_cast<float*>(topk_weights->data) : nullptr;
             auto* src_info_data = static_cast<int*>(src_info->data);
             auto* layout_range_data = static_cast<int64_t*>(layout_range->data);
@@ -2943,44 +2967,57 @@ ncclResult_t ncclEpCombine(
             const bool use_fp8 = false;
             const bool zero_copy = false;
 
-            nccl_ep::internode_ll::combine(
-                x_data,
-                src_info_data,
-                layout_range_data,
-                topk_idx_data,
-                topk_weights_data,
-                out_data,
-                buffer.combine_rdma_send_buffer,
-                buffer.combine_rdma_recv_data_buffer,
-                buffer.combine_rdma_recv_flag_buffer,
-                (reinterpret_cast<uint64_t>(buffer.combine_rdma_send_buffer) - reinterpret_cast<uint64_t>(handle->group->rdma_buffer)),
-                (reinterpret_cast<uint64_t>(buffer.combine_rdma_recv_data_buffer) - reinterpret_cast<uint64_t>(handle->group->rdma_buffer)),
-                (reinterpret_cast<uint64_t>(buffer.combine_rdma_recv_flag_buffer) - reinterpret_cast<uint64_t>(handle->group->rdma_buffer)),
-                next_clean_meta.first,
-                next_clean_meta.second,
-                nullptr, /*recv_topk_idx=*/
-                num_combined_tokens,
-                hidden,
-                num_max_dispatch_tokens_per_rank,
-                num_topk,
-                num_experts,
-                handle->group->rank,
-                handle->group->nRanks,
-                use_fp8,
-                handle->layout,
-                phases,
-                zero_copy,
-                handle->group->num_nccl_comms,
-                handle->group->nccl_dev_comms,
-                handle->group->nccl_wins,
-                signal_base,
-                handle->group->ep_workspace,
-                handle->group->max_num_sms,
-                handle->group->mask_buffer,
-                handle->group->async_error_flag,
-                handle->group->timeout_cycles,
-                stream
-            );
+            // LL accepts int32 or int64 topk_idx; same cached dtype as dispatch.
+            auto launch_combine = [&](auto* topk_idx_data) {
+                nccl_ep::internode_ll::combine(
+                    x_data,
+                    src_info_data,
+                    layout_range_data,
+                    topk_idx_data,
+                    topk_weights_data,
+                    out_data,
+                    buffer.combine_rdma_send_buffer,
+                    buffer.combine_rdma_recv_data_buffer,
+                    buffer.combine_rdma_recv_flag_buffer,
+                    (reinterpret_cast<uint64_t>(buffer.combine_rdma_send_buffer) - reinterpret_cast<uint64_t>(handle->group->rdma_buffer)),
+                    (reinterpret_cast<uint64_t>(buffer.combine_rdma_recv_data_buffer) - reinterpret_cast<uint64_t>(handle->group->rdma_buffer)),
+                    (reinterpret_cast<uint64_t>(buffer.combine_rdma_recv_flag_buffer) - reinterpret_cast<uint64_t>(handle->group->rdma_buffer)),
+                    next_clean_meta.first,
+                    next_clean_meta.second,
+                    nullptr, /*recv_topk_idx=*/
+                    num_combined_tokens,
+                    hidden,
+                    num_max_dispatch_tokens_per_rank,
+                    num_topk,
+                    num_experts,
+                    handle->group->rank,
+                    handle->group->nRanks,
+                    use_fp8,
+                    handle->layout,
+                    phases,
+                    zero_copy,
+                    handle->group->num_nccl_comms,
+                    handle->group->nccl_dev_comms,
+                    handle->group->nccl_wins,
+                    signal_base,
+                    handle->group->ep_workspace,
+                    handle->group->max_num_sms,
+                    handle->group->mask_buffer,
+                    handle->group->async_error_flag,
+                    handle->group->timeout_cycles,
+                    stream
+                );
+            };
+            switch (topk_idx->datatype) {
+                case ncclInt32:
+                    launch_combine(static_cast<const int32_t*>(topk_idx->data));
+                    break;
+                case ncclInt64:
+                    launch_combine(static_cast<const int64_t*>(topk_idx->data));
+                    break;
+                default:
+                    assert(false && "LL topk_idx must be ncclInt32 or ncclInt64");
+            }
         };
 
         // Execute combine with appropriate phase flags

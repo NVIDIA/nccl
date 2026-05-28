@@ -158,8 +158,13 @@ void clean_low_latency_buffer(int* clean_0, int num_clean_int_0,
                               uint64_t timeoutCycles = NUM_TIMEOUT_CYCLES,
                               cudaStream_t stream = 0);
 
+// LL dispatch and combine accept either int32 or int64 topk_idx; HT path
+// (in hybridep_adapter.cu) is strict int64. The caller is responsible for
+// ensuring expert ids fit in the chosen integer width. Explicit
+// instantiations for int32_t and int64_t live in low_latency.cu.
+template <typename TopkIdxT>
 void dispatch(const void* inData,
-              const int64_t* inTopkIdx,
+              const TopkIdxT* inTopkIdx,
               const float* inTopkWeights,    // rank-major: written into dispatch message header
               void* outDataBuf,
               void* outScalesBuf,
@@ -205,10 +210,11 @@ void dispatch(const void* inData,
               size_t recvDataOffset = 0,
               cudaStream_t stream = 0);
 
+template <typename TopkIdxT>
 void combine(const void* inData,
              const int* srcInfo,
              const int64_t* layoutRange,
-             const int64_t* inTopkIdx,
+             const TopkIdxT* inTopkIdx,
              const float* topkWeights,
              void* outData,
              void* sendBuf,

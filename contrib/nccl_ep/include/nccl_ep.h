@@ -458,7 +458,9 @@ ncclResult_t ncclEpInitHandle(
 //
 // Arguments:
 //   handle             - [IN]  Handle from ncclEpInitHandle
-//   topk_idx           - [IN]  [num_tokens, top_k] int64
+//   topk_idx           - [IN]  [num_tokens, top_k]; LL accepts ncclInt32 or ncclInt64,
+//                                                   HT requires ncclInt64. Caller ensures
+//                                                   expert ids fit in the chosen width.
 //   layout_info      - [IN/OUT, optional] Named local tensors (NULL = none provided).
 //                         HT: layout_info->expert_counters is required when
 //                         max_dispatch_tokens_per_rank is NCCL_EP_AUTO.

@@ -292,9 +292,12 @@ __forceinline__ __device__ void cleanNextRecvCntBuf(
 
 // This function is very efficient and outperforms orignal expert counting
 // one (that it is replacing) even though it is more complex.
+// TopkIdxT is int32_t or int64_t. When the narrower type is used, the
+// caller is responsible for ensuring expert ids do not overflow it.
+template <typename TopkIdxT>
 __forceinline__ __device__ void
 countTokensPerRank_mask(
-    const int64_t* inTopkIdx,
+    const TopkIdxT* inTopkIdx,
     int numTokens,
     int numTopk,
     int numLocalExperts,
@@ -544,10 +547,10 @@ __forceinline__ __device__ void copyRecvTokenData(
     }
 }
 
-template <bool kUseFP8, bool kUseUE8M0, int kHidden, ncclEpLayout_t kLayout, bool kNvlinkOnly>
+template <bool kUseFP8, bool kUseUE8M0, int kHidden, ncclEpLayout_t kLayout, bool kNvlinkOnly, typename TopkIdxT>
 __global__ __launch_bounds__(1024, 1) void dispatch(// INPUT
                                                     const void* inData,
-                                                    const int64_t* inTopkIdx,
+                                                    const TopkIdxT* inTopkIdx,
                                                     const float* inTopkWeights,
                                                     int* rankMask,
                                                     int* asyncErrorFlag,
@@ -1018,8 +1021,9 @@ LOW_LATENCY_DISPATCH_RECV:
     }
 }
 
+template <typename TopkIdxT>
 void dispatch(const void* inData,
-              const int64_t* inTopkIdx,
+              const TopkIdxT* inTopkIdx,
               const float* inTopkWeights,
               void* outDataBuf,
               void* outScalesBuf,
@@ -1087,7 +1091,7 @@ void dispatch(const void* inData,
 
     SETUP_LAUNCH_CONFIG(numSms, numWarps * 32, stream);
 #define DISPATCH_DO_LAUNCH(fp8, ue8m0, nvlinkOnlyV, hidden, kLayout) \
-LAUNCH_KERNEL(&cfg, (dispatch<fp8, ue8m0, hidden, kLayout, nvlinkOnlyV>), \
+LAUNCH_KERNEL(&cfg, (dispatch<fp8, ue8m0, hidden, kLayout, nvlinkOnlyV, TopkIdxT>), \
               inData, \
               inTopkIdx, \
               inTopkWeights, \
@@ -1570,12 +1574,12 @@ __forceinline__ __device__ void processAndSendToken(
     }
 }
 
-template <bool kUseLogFMT, int kHidden, int kNumMaxTopk, int kNumMaxUnrolls, ncclEpLayout_t kLayout>
+template <bool kUseLogFMT, int kHidden, int kNumMaxTopk, int kNumMaxUnrolls, ncclEpLayout_t kLayout, typename TopkIdxT>
 __global__ __launch_bounds__(1024, 1) void combine(// INPUT
                                                    const void* inData,
                                                    const int* srcInfo,
                                                    const int64_t* layoutRange,
-                                                   const int64_t* inTopkIdx,
+                                                   const TopkIdxT* inTopkIdx,
                                                    const float* topkWeights,
                                                    int* rankMask,
                                                    int* asyncErrorFlag,
@@ -1998,10 +2002,11 @@ LOW_LATENCY_COMBINE_RECV:
 constexpr int kCombineMaxTopk = 9;
 constexpr int kCombineMaxUnrolls = 4;
 
+template <typename TopkIdxT>
 void combine(const void* inData,
              const int* srcInfo,
              const int64_t* layoutRange,
-             const int64_t* inTopkIdx,
+             const TopkIdxT* inTopkIdx,
              const float* topkWeights,
              void* outData,
              void* sendBuf,
@@ -2069,8 +2074,8 @@ void combine(const void* inData,
     SETUP_LAUNCH_CONFIG(numSms, numWarps * 32, stream);
 #define COMBINE_LAUNCH_CASE_IMPL(hidden, kLayout) { \
 if (useLogfmt) { \
-    SET_SHARED_MEMORY_FOR_TMA((combine<true, hidden, kCombineMaxTopk, kCombineMaxUnrolls, kLayout>)); \
-    LAUNCH_KERNEL(&cfg, (combine<true, hidden, kCombineMaxTopk, kCombineMaxUnrolls, kLayout>), \
+    SET_SHARED_MEMORY_FOR_TMA((combine<true, hidden, kCombineMaxTopk, kCombineMaxUnrolls, kLayout, TopkIdxT>)); \
+    LAUNCH_KERNEL(&cfg, (combine<true, hidden, kCombineMaxTopk, kCombineMaxUnrolls, kLayout, TopkIdxT>), \
                   inData, \
                   srcInfo, \
                   layoutRange, \
@@ -2106,8 +2111,8 @@ if (useLogfmt) { \
                   signalsBase, \
                   timeoutCycles); \
 } else { \
-    SET_SHARED_MEMORY_FOR_TMA((combine<false, hidden, kCombineMaxTopk, kCombineMaxUnrolls, kLayout>)); \
-    LAUNCH_KERNEL(&cfg, (combine<false, hidden, kCombineMaxTopk, kCombineMaxUnrolls, kLayout>), \
+    SET_SHARED_MEMORY_FOR_TMA((combine<false, hidden, kCombineMaxTopk, kCombineMaxUnrolls, kLayout, TopkIdxT>)); \
+    LAUNCH_KERNEL(&cfg, (combine<false, hidden, kCombineMaxTopk, kCombineMaxUnrolls, kLayout, TopkIdxT>), \
                   inData, \
                   srcInfo, \
                   layoutRange, \
@@ -2341,6 +2346,39 @@ void clean_low_latency_buffer(int* clean_0, int num_clean_int_0,
                   rankMask, syncBuffer, syncBufferOffset, devComms, windows,
                   barrierSignalBase, timeoutCycles);
 }
+
+// Explicit instantiations so the two LL specialisations link from
+// nccl_ep.cc. HT remains strict int64 (its host wrappers live in
+// hybridep_adapter.cu and are untemplated).
+template void dispatch<int32_t>(
+    const void*, const int32_t*, const float*,
+    void*, void*, int*, int*, int64_t*, int*, float*, int32_t*,
+    void*, void*, int*, size_t, size_t, size_t, int*, int, int*, int64_t*,
+    int, int, int, int, int, int, int, bool, bool, bool, ncclEpLayout_t,
+    int, int, ncclDevComm*, const ncclWindow_t*, unsigned, void*, int,
+    int*, int*, uint64_t, bool, ncclWindow_t, size_t, cudaStream_t);
+
+template void dispatch<int64_t>(
+    const void*, const int64_t*, const float*,
+    void*, void*, int*, int*, int64_t*, int*, float*, int32_t*,
+    void*, void*, int*, size_t, size_t, size_t, int*, int, int*, int64_t*,
+    int, int, int, int, int, int, int, bool, bool, bool, ncclEpLayout_t,
+    int, int, ncclDevComm*, const ncclWindow_t*, unsigned, void*, int,
+    int*, int*, uint64_t, bool, ncclWindow_t, size_t, cudaStream_t);
+
+template void combine<int32_t>(
+    const void*, const int*, const int64_t*, const int32_t*, const float*,
+    void*, void*, void*, int*, size_t, size_t, size_t, int*, int, int64_t*,
+    int, int, int, int, int, int, int, bool, ncclEpLayout_t, int, bool,
+    int, ncclDevComm*, const ncclWindow_t*, unsigned, void*, int,
+    int*, int*, uint64_t, cudaStream_t);
+
+template void combine<int64_t>(
+    const void*, const int*, const int64_t*, const int64_t*, const float*,
+    void*, void*, void*, int*, size_t, size_t, size_t, int*, int, int64_t*,
+    int, int, int, int, int, int, int, bool, ncclEpLayout_t, int, bool,
+    int, ncclDevComm*, const ncclWindow_t*, unsigned, void*, int,
+    int*, int*, uint64_t, cudaStream_t);
 
 } // namespace internode_ll
 

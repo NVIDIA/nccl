@@ -195,7 +195,8 @@ static ncclResult_t connectCollNet(struct ncclComm* comm, struct ncclTopoGraph* 
     sprintf(line, "CollNetDirect channel %d rank %d ", c, rank);
     int nDown = 0;
     for (int i=0; i<nHeads; i++) {
-      if (rank == heads[i]) { // is head
+      if (rank == heads[i]) {
+        // is head
         channel->collnetDirect.headRank = i; // Mark the index for deciding offset in the CUDA kernel
         channel->collnetDirect.out = comm->nRanks; // Set root of collnetDirect to id nranks
         int* collNetIntra = collNetGraph->intra+i*localRanks;

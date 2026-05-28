@@ -1184,7 +1184,8 @@ static bool getPcieMaxLinkWidth(DEVINST devInst, char* strValue, int maxLen) {
   while (capPtr != 0 && capPtr < 0xFC && capPtr < configSize - 16) {
     BYTE capId = configData[capPtr];
 
-    if (capId == 0x10) { // PCIe capability found
+    if (capId == 0x10) {
+      // PCIe capability found
       // Verify we have enough space to read Link Capabilities Register
       if (capPtr + 0x0F < configSize) {
         // Read Link Capabilities Register (4 bytes at offset cap_base + 0x0C)
@@ -1232,7 +1233,8 @@ static bool getPcieMaxLinkSpeed(DEVINST devInst, char* strValue, int maxLen) {
   while (capPtr != 0 && capPtr < 0xFC && capPtr < configSize - 16) {
     BYTE capId = configData[capPtr];
 
-    if (capId == 0x10) { // PCIe capability found
+    if (capId == 0x10) {
+      // PCIe capability found
       if (capPtr + 0x0F < configSize) {
         // Read Link Capabilities Register
         DWORD linkCap = *(DWORD*)(configData + capPtr + 0x0C);

@@ -351,7 +351,8 @@ bool ncclTransportCollNetSetup(struct ncclComm* comm, struct ncclTopoGraph* coll
   }
   // prepare connect handles
   NCCLCHECK(ncclCalloc(&masterConnects, nMasters));
-  if (type == collNetRecv) {  // recv side: AllGather
+  if (type == collNetRecv) {
+    // recv side: AllGather
     // all ranks must participate
     NCCLCHECKGOTO(ncclCalloc(&allConnects, nranks), ret, cleanup);
     allConnects[rank].isMaster = isMaster;
@@ -365,7 +366,8 @@ bool ncclTransportCollNetSetup(struct ncclComm* comm, struct ncclTopoGraph* coll
         c++;
       }
     }
-  } else { // send side : copy in connect info received from peer recv master
+  } else {
+    // send side : copy in connect info received from peer recv master
     if (isMaster) memcpy(masterConnects+comm->node, connect, sizeof(struct ncclConnect));
   }
   // connect

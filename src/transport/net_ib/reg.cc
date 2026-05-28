@@ -15,8 +15,10 @@ ncclResult_t ncclIbRegMrDmaBufInternal2(ncclIbNetCommDevBase* base, void* data, 
   size_t pages = ((uintptr_t)data + size - addr + pageSize-1)/pageSize;
   std::lock_guard<std::mutex> lock(ncclIbDevs[base->ibDevN].mutex);
   for (int slot=0; /*true*/; slot++) {
-    if (slot == cache->population || addr < cache->slots[slot].addr) { // didn't find in cache
-      if (cache->population == cache->capacity) { // must grow cache
+    if (slot == cache->population || addr < cache->slots[slot].addr) {
+      // didn't find in cache
+      if (cache->population == cache->capacity) {
+        // must grow cache
         cache->capacity = cache->capacity < 32 ? 32 : 2*cache->capacity;
         NCCLCHECK(ncclRealloc(&cache->slots, cache->population, cache->capacity));
       }

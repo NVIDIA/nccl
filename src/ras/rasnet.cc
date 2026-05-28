@@ -588,7 +588,8 @@ void rasSocketTerminate(struct rasSocket* sock, bool finalize, uint64_t startRet
               meta->offset = 0;
             }
             ncclIntruQueueEnqueue(&conn->sendQ, meta);
-          } else { // RAS_MSG_CONNINIT || RAS_MSG_CONNINITACK || RAS_MSG_KEEPALIVE
+          } else {
+            // RAS_MSG_CONNINIT || RAS_MSG_CONNINITACK || RAS_MSG_KEEPALIVE
             free(meta);
           }
         } // while (meta)
@@ -651,7 +652,8 @@ void rasSockEventLoop(struct rasSocket* sock, int pollIdx) {
               rasSocketTerminate(sock);
               // We may retry further down.
             }
-          } else { // sock->conn->sock != sock
+          } else {
+            // sock->conn->sock != sock
             // The connection this socket is associated with no longer considers it to be the current one.
             // This could possibly happen due to a race condition.  Simply terminate it.
             INFO(NCCL_RAS, "RAS connected with %s via a socket that's no longer current!",
@@ -659,7 +661,8 @@ void rasSockEventLoop(struct rasSocket* sock, int pollIdx) {
             rasSocketTerminate(sock);
           }
         } // if (connectSide)
-      } else { // !ready
+      } else {
+        // !ready
         if (sock->sock.state == ncclSocketStateConnecting) {
           rasPfds[sock->pfd].fd = POLL_FD_IGNORE; // Don't poll on this socket before connect().
         } else if (sock->sock.socketDescriptor == NCCL_INVALID_SOCKET) {
@@ -668,7 +671,8 @@ void rasSockEventLoop(struct rasSocket* sock, int pollIdx) {
         }
       }
     } // if (ncclSocketReady)
-  } else { // RAS_SOCK_HANDSHAKE || RAS_SOCK_READY || RAS_SOCK_TERMINATING.
+  } else {
+    // RAS_SOCK_HANDSHAKE || RAS_SOCK_READY || RAS_SOCK_TERMINATING.
     // The extra test for TERMINATING is there to take care of a race when the handling of one socket
     // results in another socket being terminated, but one that already has revents waiting from poll.
     if (sock->status != RAS_SOCK_TERMINATING && (rasPfds[pollIdx].revents & POLLOUT)) {
@@ -743,7 +747,8 @@ void rasSockEventLoop(struct rasSocket* sock, int pollIdx) {
                socketType, ncclSocketToString(&sock->sock.addr, rasLine));
           rasSocketTerminate(sock, /*finalize*/true);
           // We may retry further down.
-        } else { // !closed
+        } else {
+          // !closed
           sock->lastRecvTime = clockNano();
           if (msg) {
             (void)rasMsgHandle(msg, sock);
@@ -1265,7 +1270,8 @@ static ncclResult_t rasLinkConnAdd(struct rasLink* link, struct rasConnection* c
       if (link->direction * (peerIdx - linkConnPrev->peerIdx) > 0 ||
           link->direction * (peerIdx - linkConn->peerIdx) < 0)
         break;
-    } else { // Regular, monotonic case with the peerIdx value between two existing elements.
+    } else {
+      // Regular, monotonic case with the peerIdx value between two existing elements.
       if (link->direction * (peerIdx - linkConnPrev->peerIdx) > 0 &&
           link->direction * (peerIdx - linkConn->peerIdx) < 0)
         break;
@@ -1411,7 +1417,8 @@ static ncclResult_t rasLinkConnAddExternal(struct rasLink* link, struct rasConne
       if (link->direction * (peerIdx - linkConnPrev->peerIdx) > 0 ||
           link->direction * (peerIdx - linkConn->peerIdx) < 0)
         break;
-    } else { // Regular, monotonic case with the peerIdx value between two existing elements.
+    } else {
+      // Regular, monotonic case with the peerIdx value between two existing elements.
       if (link->direction * (peerIdx - linkConnPrev->peerIdx) > 0 &&
           link->direction * (peerIdx - linkConn->peerIdx) < 0)
         break;
@@ -1445,7 +1452,8 @@ static ncclResult_t rasLinkConnAddExternal(struct rasLink* link, struct rasConne
     } // if (i != oldLinkIdx)
     oldLinkConn->peerIdx = peerIdx;
     oldLinkConn->external = false;
-  } else { // oldLinkConn == nullptr
+  } else {
+    // oldLinkConn == nullptr
     struct rasLinkConn* linkConn;
     NCCLCHECK(ncclCalloc(&linkConn, 1));
     if (linkConnPrev) {
@@ -1503,7 +1511,8 @@ static void rasLinkConnDrop(struct rasLink* link, const struct rasConnection* co
              ncclSocketToString(&conn->addr, rasLine));
         linkConnPrev->next = linkConn->next;
         free(linkConn);
-      } else { // linkConnPrev == nullptr
+      } else {
+        // linkConnPrev == nullptr
         INFO(NCCL_RAS, "RAS link %d: dropping primary connection with %s",
              link->direction, ncclSocketToString(&conn->addr, rasLine));
         if (linkConn->next) {
@@ -1516,7 +1525,8 @@ static void rasLinkConnDrop(struct rasLink* link, const struct rasConnection* co
                  link->direction, ncclSocketToString(&link->conns->conn->addr, rasLine));
           rasLinkSanitizeFallbacks(link);
           free(linkConn);
-        } else { // linkConn->next == nullptr
+        } else {
+          // linkConn->next == nullptr
           // We prefer the primary entry to always be present, even if empty.
           linkConn->peerIdx = -1;
           linkConn->conn = nullptr;

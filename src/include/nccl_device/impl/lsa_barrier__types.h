@@ -29,9 +29,11 @@ struct ncclLsaBarrierSession_internal {
 
   NCCL_DEVICE_INLINE uint32_t* mcInbox(bool multimem) {
     uint32_t* state;
-    if (multimem) { // multicast
+    if (multimem) {
+      // multicast
       state = (uint32_t*)ncclGetResourceBufferMultimemPointer(comm, handle.bufHandle, mmHandle);
-    } else { // unicast
+    } else {
+      // unicast
       state = (uint32_t*)ncclGetResourceBufferLocalPointer(comm, handle.bufHandle);
     }
     return state + 2*handle.nBarriers + index;

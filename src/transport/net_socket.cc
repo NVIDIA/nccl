@@ -372,10 +372,12 @@ ncclResult_t ncclNetSocketGetNsockNthread(int dev, int* ns, int* nt) {
     char vendor[7];
     strncpy(vendor, "0x0000", 7);
     SYSCHECKGOTO(read(fd, vendor, 6), "read", ret, fail);
-    if (strcmp(vendor, "0x1d0f") == 0) { // AWS
+    if (strcmp(vendor, "0x1d0f") == 0) {
+      // AWS
       autoNt = 2;
       autoNs = 8;
-    } else if (strcmp(vendor, "0x1ae0") == 0) { // GCP
+    } else if (strcmp(vendor, "0x1ae0") == 0) {
+      // GCP
       autoNt = 4;
       autoNs = 1;
     }
@@ -400,7 +402,8 @@ fail:
 }
 
 ncclResult_t ncclNetSocketListen(void* ctx, int dev, void* opaqueHandle, void** listenComm) {
-  if (dev < 0 || dev >= ncclNetIfs) { // data transfer socket is based on specified dev
+  if (dev < 0 || dev >= ncclNetIfs) {
+    // data transfer socket is based on specified dev
     WARN("NET/Socket : ncclNetSocketListen dev=%d ncclNetIfs=%d", dev, ncclNetIfs);
     return ncclInternalError;
   }
@@ -429,7 +432,8 @@ fail:
 
 #define SOCKET_CTRL_SIZE (sizeof(int))
 ncclResult_t ncclNetSocketConnect(void* ctx, int dev, void* opaqueHandle, void** sendComm, ncclNetDeviceHandle_t** /*sendDevComm*/) {
-  if (dev < 0 || dev >= ncclNetIfs) { // data transfer socket is based on specified dev
+  if (dev < 0 || dev >= ncclNetIfs) {
+    // data transfer socket is based on specified dev
     return ncclInternalError;
   }
 
@@ -652,7 +656,8 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
     }
     r->nSubs = i;
   }
-  if (r->used == 2) { // already exchanged size
+  if (r->used == 2) {
+    // already exchanged size
     if (r->nSubs > 0) {
       int nCompleted = 0;
       for (int i=0; i<r->nSubs; i++) {
@@ -669,7 +674,8 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
           sub->used = 0;
         }
       }
-    } else { // progress request using main thread
+    } else {
+      // progress request using main thread
 #ifdef NCCL_ENABLE_NET_PROFILING
       if (!r->pInfo.eHandle) {
         ncclProfilerNetSockDescr_v1_t data;

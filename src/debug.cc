@@ -148,7 +148,8 @@ static void ncclDebugInit() {
   ncclDebugTimestampSubsecondsStart = -1;
   // Find where the subseconds are in the format.
   for (int i=0; tsFormat[i] != '\0'; ++i) {
-    if (tsFormat[i]=='%' && tsFormat[i+1]=='%') { // Next two chars are "%"
+    if (tsFormat[i]=='%' && tsFormat[i+1]=='%') {
+      // Next two chars are "%"
       // Skip the next character, too, and restart checking after that.
       ++i;
       continue;

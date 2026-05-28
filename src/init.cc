@@ -908,7 +908,8 @@ static ncclResult_t ncclP2pSchedule(struct ncclComm* comm) {
   // we let N = pow2Up(n) and filter out results greater-eq to n.
   // Example sequence for 16 ranks: 0, 1, 3, 6, 10, 15, 5, 12, 4, 13, 7, 2, 14, 11, 9, 8
   do {
-    if (groupDelta < nGroups) { // Filter nonsensical group deltas
+    if (groupDelta < nGroups) {
+      // Filter nonsensical group deltas
       int sendGroup = (group + groupDelta) % nGroups;
       int recvGroup = (group - groupDelta + nGroups) % nGroups;
       int sendNode = groupToNode[sendGroup];
@@ -1595,7 +1596,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
 
   INFO(NCCL_INIT, "%d coll channels, %d collnet channels, %d nvls channels, %d p2p channels, %d p2p channels per peer", comm->nChannels, comm->nChannels, comm->nvlsChannels, comm->p2pnChannels, comm->p2pnChannelsPerPeer);
 
-  if (comm->intraRank == 0) { // Load ncclParamLaunchMode
+  if (comm->intraRank == 0) {
+    // Load ncclParamLaunchMode
     const char* str = ncclGetEnv("NCCL_LAUNCH_MODE");
     enum ncclLaunchMode mode, modeOld;
     if (str && strcasecmp(str, "GROUP") == 0) {
@@ -2126,7 +2128,8 @@ static ncclResult_t envConfigOverride(ncclComm_t comm) {
 
   // read non-config env settings
   comm->checkMode = ncclCheckModeDefault;
-  if (ncclParamCheckPointers() == 1) { // @deprecated: use NCCL_CHECK_MODE instead
+  if (ncclParamCheckPointers() == 1) {
+    // @deprecated: use NCCL_CHECK_MODE instead
     comm->checkMode = ncclCheckModeDebugLocal;
   }
 

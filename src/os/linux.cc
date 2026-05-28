@@ -452,7 +452,8 @@ static bool matchSubnet(struct ifaddrs local_if, union ncclSocketAddress* remote
     struct in6_addr& remote_in6 = remote_addr.sin6_addr;
     bool same = true;
     int len = 16;  //IPv6 address is 16 unsigned char
-    for (int c = 0; c < len; c++) {  //Network byte order is big-endian
+    for (int c = 0; c < len; c++) {
+      //Network byte order is big-endian
       char c1 = local_in6.s6_addr[c] & mask_in6.s6_addr[c];
       char c2 = remote_in6.s6_addr[c] & mask_in6.s6_addr[c];
       if (c1 ^ c2) {

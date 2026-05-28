@@ -1159,7 +1159,8 @@ NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::waitSignalFollowShadow(Coop
     after64 = after64 - offset;
     this->_signalShadows[signal] = after64;
   }
-  if (ncclCoopWithinWarp(coop) && bits <= 32) { // do a single __shfl_sync instead of 2
+  if (ncclCoopWithinWarp(coop) && bits <= 32) {
+    // do a single __shfl_sync instead of 2
     uint32_t mask = uint32_t(-1)>>(32-bits);
     after64 = ncclCoopBcast(coop, (uint32_t)after64, 0, /*entrySync=*/false);
     *before = (Uint)(mask & before64);

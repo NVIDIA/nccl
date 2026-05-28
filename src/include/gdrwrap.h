@@ -300,9 +300,11 @@ static ncclResult_t allocMemCPUAccessible(T **ptr, T **devPtr, size_t nelem, int
 // Helper: Free memory allocated by allocMemCPUAccessible
 template <typename T>
 static ncclResult_t freeMemCPUAccessible(T *ptr, void *gdrHandle, struct ncclMemManager* manager) {
-  if (gdrHandle != NULL) {  // If a GDR handle exists, it was GDR memory
+  if (gdrHandle != NULL) {
+    // If a GDR handle exists, it was GDR memory
     NCCLCHECK(ncclGdrCudaFree(gdrHandle, manager));
-  } else {  // Otherwise, it was host memory (or GDR was off)
+  } else {
+    // Otherwise, it was host memory (or GDR was off)
     NCCLCHECK(ncclCuMemHostFree(ptr));
   }
   return ncclSuccess;

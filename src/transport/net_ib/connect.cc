@@ -923,12 +923,14 @@ ib_recv_dev_list:
     for (int q = 0; q < comm->base.nqps; q++) {
       // Print just the QPs for this dev
       if (comm->base.qps[q].devIndex == i) {
-        if (devInfo->link_layer == IBV_LINK_LAYER_INFINIBAND) { // IB
+        if (devInfo->link_layer == IBV_LINK_LAYER_INFINIBAND) {
+          // IB
           INFO(NCCL_NET,"NET/IB: %s: %s %d IbDev %d Port %d qp_num %d mtu %d LID %d subnet-prefix %lu  FLID %d ctsFifoRkey=0x%x ctsFifoLkey=0x%x", __func__,
                comm->base.vProps.ndevs > 2 ? "NCCL MergedDev" : "NCCL Dev",
                dev, commDev->base.ibDevN, ibDev->portNum, meta.qpInfo[q].qpn, devInfo->mtu, devInfo->lid,
                (uint64_t)devInfo->gid.global.subnet_prefix, ncclIbExtractFlid(&devInfo->gid), commDev->ctsFifoMr->rkey, commDev->ctsFifoMr->lkey);
-        } else { // RoCE
+        } else {
+          // RoCE
           INFO(NCCL_NET,"NET/IB: %s: %s %d IbDev %d Port %d qp_num %d mtu %d GID %ld (%lX/%lX) ctsFifoRkey=0x%x ctsFifoLkey=0x%x", __func__,
                comm->base.vProps.ndevs > 2 ? "NCCL MergedDev" : "NCCL Dev", dev,
                commDev->base.ibDevN, ibDev->portNum, meta.qpInfo[q].qpn, devInfo->mtu,

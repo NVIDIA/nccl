@@ -188,7 +188,8 @@ ncclResult_t ncclStrongStreamAcquire(
       struct ncclStrongStreamCapture* spare = nullptr;
       while (*pcap != nullptr) {
         cap = *pcap;
-        if (cap->graphId == graph.graphId) { // Capture node already exists.
+        if (cap->graphId == graph.graphId) {
+          // Capture node already exists.
           *workStream = cap->captureStream;
           cap->acquiredBy = localThreadId();
           return ncclSuccess;
@@ -197,9 +198,11 @@ ncclResult_t ncclStrongStreamAcquire(
           CUDACHECKGOTO(cudaStreamIsCapturing(cap->captureStream, &status), ret, do_unlock);
           if (status == cudaStreamCaptureStatusActive) {
             pcap = &cap->next; // Active capture doesn't match, on to next.
-          } else { // Capture no longer active
+          } else {
+            // Capture no longer active
             *pcap = cap->next; // Remove from current list
-            if (spare == nullptr) { // Keep one spare to reuse below.
+            if (spare == nullptr) {
+              // Keep one spare to reuse below.
               spare = cap;
             } else {
               cudaStreamDestroy(cap->captureStream);
@@ -397,7 +400,8 @@ ncclResult_t ncclStreamAdvanceToEvent(struct ncclCudaGraph g, cudaStream_t s, cu
     #endif
 
     #if CUDART_VERSION >= 12030
-    if (res == cudaErrorLossyQuery) { // CUDA is telling us the dependencies have edge annotations.
+    if (res == cudaErrorLossyQuery) {
+      // CUDA is telling us the dependencies have edge annotations.
       cudaGraphEdgeData const* edges;
       CUDACHECK(cudaStreamGetCaptureInfo_v3(tmp, &status, nullptr, nullptr, &nodes, &edges, &count));
       CUDACHECK(cudaStreamUpdateCaptureDependencies_v2(s, (cudaGraphNode_t*)nodes, edges, count, cudaStreamSetCaptureDependencies));

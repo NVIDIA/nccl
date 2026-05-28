@@ -132,7 +132,8 @@ ncclResult_t rasNetSendCollReq(const struct rasCollRequest* req, bool* pAllDone,
       (void)rasCollConnsInit(&reqMod, &reqLen, &coll->data, &coll->nData);
     else if (req->type == RAS_COLL_COMMS)
       (void)rasCollCommsInit(&reqMod, &reqLen, &coll->data, &coll->nData);
-  } else { // req->type < RAS_COLL_CONNS
+  } else {
+    // req->type < RAS_COLL_CONNS
     // Add the info to the collective message history.
     nRasCollHistory = std::min(nRasCollHistory+1, COLL_HISTORY_SIZE);
     memcpy(&rasCollHistory[rasCollHistNextIdx].rootAddr, &req->rootAddr,
@@ -992,7 +993,8 @@ static ncclResult_t rasCollCommsMerge(struct rasCollective* coll, struct rasMsg*
         newComm = (struct rasCollComms::comm*)(((char*)(newComm)) + commSize);
         collComm = (struct rasCollComms::comm*)(((char*)(collComm)) + commSize);
         collIdx++;
-      } else { // cmp > 0
+      } else {
+        // cmp > 0
         // Copy from msgComm.
         int commSize = sizeof(*msgComm) + msgComm->nRanks * sizeof(*msgComm->ranks) +
           msgComm->nMissingRanks * sizeof(struct rasCollCommsMissingRank);

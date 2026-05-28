@@ -565,7 +565,8 @@ static inline ncclResult_t ncclIbRequestRetrieveFromCompletion(struct ncclIbNetC
     TRACE(NCCL_NET, "NET/IB: %s: Retrieving a receive request (wr_id=%ld, opcode=%s, imm_data=%d, byte_len=%d)", __func__, wc->wr_id, ibvWcOpcodeStr(wc->opcode), be32toh(wc->imm_data), wc->byte_len);
     struct ncclIbRecvComm* recvComm = (struct ncclIbRecvComm*)base;
     *req = recvComm->recvReqs[be32toh(wc->imm_data) % NET_IB_MAX_REQUESTS];
-  } else if (!base->isSend && wc->opcode == IBV_WC_RDMA_READ) { // Flush request completion
+  } else if (!base->isSend && wc->opcode == IBV_WC_RDMA_READ) {
+    // Flush request completion
     NCCLCHECK(ncclIbRequestRetrieveAsIndex(base->reqs, (wc->wr_id - NCCL_IB_FLUSH_REQ_WR_ID_OFFSET), req));
   } else if (!base->isSend) {
     struct ncclIbRecvComm* recvComm = (struct ncclIbRecvComm*)base;

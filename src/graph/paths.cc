@@ -324,7 +324,8 @@ ncclResult_t ncclTopoCheckP2p(struct ncclComm* comm, struct ncclTopoSystem* syst
   int intermediateIndex = -1;
   // Set intermediate GPU rank, if routing through an intermediate GPU.
   struct ncclTopoLinkList* path = gpu1->paths[GPU]+g2;
-  if (path->count == 4) { // Intermediate goes through DEV, not GPU.
+  if (path->count == 4) {
+    // Intermediate goes through DEV, not GPU.
     // path is GPU1 - DEV1 - DEV2 - DEV3 - GPU2, so the intermediate DEV is located at path->list[1]->remNode
     struct ncclTopoNode* intermediateNode = path->list[1]->remNode;
     if (intermediateNode->type == DEV) {
@@ -460,7 +461,8 @@ ncclResult_t ncclTopoCheckGdr(struct ncclTopoSystem* system, int rank, int64_t n
   if (gpu->gpu.gdrSupport == 0) return ncclSuccess;
   if (gpu->gpu.mloPart != NCCL_TOPO_UNDEF && !ncclParamNetGdrMloPart()) return ncclSuccess;
 
-  if (read) { // For reads (sends) only enable under certain conditions
+  if (read) {
+    // For reads (sends) only enable under certain conditions
     int gdrReadParam = ncclParamNetGdrRead();
     if (gdrReadParam == 0) return ncclSuccess;
     // Disable GDR Reads pre-Ampere when we have other PCI flows

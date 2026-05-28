@@ -241,7 +241,8 @@ inline __device__ void ncclNetDeviceUnpackInner(
     iter_meta_cnt = iter_meta_cnt < PPW ? iter_meta_cnt : PPW;
 
     // TODO: this load size needs to work if not aligned, but since the two are both 16...
-    if (t < PPW * PAGE_META_SIZE / META_LOAD_SIZE && t < iter_meta_cnt) {  // avoid last iter load garbage data
+    if (t < PPW * PAGE_META_SIZE / META_LOAD_SIZE && t < iter_meta_cnt) {
+      // avoid last iter load garbage data
       load128((const uint64_t*) (g_meta + (meta_s + t)), reg.u64[0], reg.u64[1]);
 
       storeShmem128(shmemCvtPtr((uint64_t *)(s_meta + (w * PPW + t))), reg.u64[0], reg.u64[1]);
@@ -261,7 +262,8 @@ inline __device__ void ncclNetDeviceUnpackInner(
         // bulk copy data
         uint8_t align_off = (meta.src_off | meta.dst_off) % DATA_LOAD_SIZE;
         align_off = align_off & -align_off;  // keep the lowest bit
-        if (align_off == 0) {  // 0x16
+        if (align_off == 0) {
+          // 0x16
           bulkLoad<16>(t, meta.len, (char*) bounce_buf + meta.src_off, (char*) src + meta.dst_off, &reg, w, g_meta, s_meta, meta.src_off, meta.dst_off);
         } else if (align_off & 0x8) {
           bulkLoad<8>(t, meta.len, (char*) bounce_buf + meta.src_off, (char*) src + meta.dst_off, (BytePack<8>*) &reg, w, g_meta, s_meta, meta.src_off, meta.dst_off);
@@ -269,7 +271,8 @@ inline __device__ void ncclNetDeviceUnpackInner(
           bulkLoad<4>(t, meta.len, (char*) bounce_buf + meta.src_off, (char*) src + meta.dst_off, (BytePack<4>*) &reg, w, g_meta, s_meta, meta.src_off, meta.dst_off);
         } else if (align_off & 0x2) {
           bulkLoad<2>(t, meta.len, (char*) bounce_buf + meta.src_off, (char*) src + meta.dst_off, (BytePack<2>*) &reg, w, g_meta, s_meta, meta.src_off, meta.dst_off);
-        } else { // if (align_off & 0x1)
+        } else {
+          // if (align_off & 0x1)
           bulkLoad<1>(t, meta.len, (char*) bounce_buf + meta.src_off, (char*) src + meta.dst_off, (BytePack<1>*) &reg, w, g_meta, s_meta, meta.src_off, meta.dst_off);
         }
       }

@@ -413,7 +413,8 @@ NCCL_DEVICE_INLINE T loadConst(T const *p) {
     union { uint64_t part[sizeof(T)/8]; T ret; };
     for (int i=0; i < (int)sizeof(T)/8; i++) part[i] = __ldg((uint64_t const*)p + i);
     return ret;
-  } else { // alignof(T) >= 16
+  } else {
+    // alignof(T) >= 16
     union { ulonglong2 part[sizeof(T)/16]; T ret; };
     for (int i=0; i < (int)sizeof(T)/16; i++) part[i] = __ldg((ulonglong2 const*)p + i);
     return ret;

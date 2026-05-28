@@ -187,7 +187,8 @@ static void insertSegment(struct ncclSpace* a, int index, int64_t lo, int64_t hi
   while (r < a->count) {
     int64_t cur = a->cuts[r++];
     a->cuts[w++] = cur;
-    if (prev == cur) { // Repeated value is an empty segment which can be deleted.
+    if (prev == cur) {
+      // Repeated value is an empty segment which can be deleted.
       // Erase last two cuts or just one if we're at the start.
       w -= w==1 ? 1 : 2;
       // Zeros can only occur at the beginning (due to being sorted). We want to
@@ -216,9 +217,11 @@ ncclResult_t ncclSpaceAlloc(
     off = alignUp(lo, align);
     if (off + size <= hi) {
       *outOffset = off;
-      if (i == 0 || off + size == hi) { // Slow path required.
+      if (i == 0 || off + size == hi) {
+        // Slow path required.
         insertSegment(a, i, off, off+size);
-      } else { // We can just append to the end of a full segment.
+      } else {
+        // We can just append to the end of a full segment.
         a->cuts[i-1] = off + size;
       }
       return ncclSuccess;
@@ -252,7 +255,8 @@ ncclResult_t ncclSpaceFree(struct ncclSpace* a, int64_t offset, int64_t size) {
     a->cuts[i-1] = offset + size; // Bring bottom up.
   } else if (lo != offset && offset + size == hi) {
     a->cuts[i] = offset; // Bring top down.
-  } else { // Slow path.
+  } else {
+    // Slow path.
     insertSegment(a, i, offset, offset+size);
   }
   return ncclSuccess;
@@ -289,7 +293,8 @@ ncclResult_t ncclShadowPoolDestruct(struct ncclShadowPool* pool, cudaStream_t st
         while (obj != nullptr) {
           struct ncclShadowPage* page = obj->page;
           if (page != nullptr) {
-            if (page->freeMask == 0) { // Put full pages back into page list.
+            if (page->freeMask == 0) {
+              // Put full pages back into page list.
               page->freeMask = 1;
               page->next = pool->pages;
               pool->pages = page;

@@ -1109,7 +1109,8 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
       }
       if (LAST_OF_GROUP(args, s) && (sub->received < sub->posted)) {
         int buffSlot = (sub->base+sub->received)%NCCL_STEPS;
-        if (!reqFifo[group][buffSlot].turnIsSendNotRecv) { // Buffer is cleared : coll is complete
+        if (!reqFifo[group][buffSlot].turnIsSendNotRecv) {
+          // Buffer is cleared : coll is complete
           ssize_t recvBeg = calcRegionOffset(args, 1, groupStart, sub->received, 0);
           ssize_t recvEnd = calcRegionOffset(args, 1, s, sub->received, 1);
           ssize_t totalSize = recvEnd - recvBeg;

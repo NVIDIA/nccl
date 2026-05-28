@@ -656,7 +656,8 @@ ncclResult_t ncclTopoAddPci(struct ncclXmlNode* xmlPci, struct ncclTopoSystem* s
 
     for (int s=0; s<xmlPci->nSubs; s++) {
       struct ncclXmlNode* xmlSubPci = xmlPci->subs[s];
-      if (strcmp(xmlSubPci->name, "pcilink") != 0) { // PCI links will be added later
+      if (strcmp(xmlSubPci->name, "pcilink") != 0) {
+        // PCI links will be added later
         NCCLCHECK(ncclTopoAddPci(xmlSubPci, system, node, systemId, numaId));
       }
     }

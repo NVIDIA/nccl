@@ -144,7 +144,8 @@ class Primitives<
       } else if (isSendNotRecv && DirectSend) {
         if (flags & DirectWrite) {
           ptrs[index] = directBuff + dstIx + offset;
-        } else if (flags & DirectRead) {  // empty send
+        } else if (flags & DirectRead) {
+          // empty send
           ptrs[index] = nullptr;
         } else {
           ptrs[index] = connEltsFifo + (step%NCCL_STEPS)*connStepSize;
@@ -358,7 +359,8 @@ public:
             if (isSendNotRecv) {
               if (flags & DirectWrite) {
                 ptrs[index] = directBuff;
-              } else if (flags & DirectRead) {  // empty send
+              } else if (flags & DirectRead) {
+                // empty send
                 ptrs[index] = nullptr;
               } else {
                 ptrs[index] = connEltsFifo + (step%NCCL_STEPS)*connStepSize;
@@ -594,7 +596,8 @@ private:
     int peer = -1;
     flags = 0;
     index = -1;
-    if (mode == primsModeDefault) { // Connect to ranks in sendPeers/recvPeers
+    if (mode == primsModeDefault) {
+      // Connect to ranks in sendPeers/recvPeers
       // For send operations, we need an extra warp to overlap the threadfence and the copy
       this->nworkers = nthreads - (MaxSend > 0 && nthreads >= NCCL_SIMPLE_EXTRA_GROUP_IF_NTHREADS_GE ? WARP_SIZE : 0);
 
@@ -664,7 +667,8 @@ private:
           ncclShmem.groups[this->group].devicePlugin.unpack.unpackNetDeviceIndexMask = mask;
         }
       }
-    } else if (mode == primsModePatRs || mode == primsModePatAg) { // Connect to all ranks +/- 2^n
+    } else if (mode == primsModePatRs || mode == primsModePatAg) {
+      // Connect to all ranks +/- 2^n
       flags |= PatMode;
       const int roles[5] = { RoleWaitRecv, RolePostRecv, RoleWaitSend, RolePostSend, RoleInput | RoleOutput };
       if (tid < 5) flags |= roles[tid];
@@ -988,7 +992,8 @@ private:
       }
     }
     long long int localAccSize = shmem->localAccSize;
-    if (ps->sendDim < 0 && (flags & RoleOutput)) { // Destination is our own local buffer
+    if (ps->sendDim < 0 && (flags & RoleOutput)) {
+      // Destination is our own local buffer
       ncclShmem.groups[group].dsts[0] = userOutput + ps->outIx;
       if (localAccSize < ps->outIx + nelem) {
         // New data, add our own data to it.
@@ -1081,7 +1086,8 @@ private:
       ncclShmem.groups[group].dsts[0] = ((T*)peer->buff) + (step%NCCL_STEPS)*peer->connStepSize + ps->sendOffset;
     }
     long long int localAccSize = shmem->localAccSize;
-    if (ps->recvDim < 0 && (flags & RoleInput)) { // Source is our own local buffer
+    if (ps->recvDim < 0 && (flags & RoleInput)) {
+      // Source is our own local buffer
       ncclShmem.groups[group].srcs[0] = userInput + ps->inpIx;
       if (localAccSize < ps->inpIx + nelem) {
         // New data, copy to our output buffer.

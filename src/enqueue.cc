@@ -648,7 +648,8 @@ static ncclResult_t scheduleCollTasksToPlan(
         NCCLCHECK(ncclAddProxyOpIfNeeded(comm, plan, &proxyOp));
         NCCLCHECK(addProfilerProxyOpIfNeeded(comm, plan, &proxyOp));
       }
-    } else { // not task->isCollnet
+    } else {
+      // not task->isCollnet
       int trafficPerByte = ncclFuncTrafficPerByte(task->func, comm->nRanks);
       if (task->protocol == NCCL_PROTO_LL) trafficPerByte *= 4;
       size_t cellSize = divUp(divUp(MinTrafficPerChannel, (size_t)trafficPerByte), 16) * 16;
@@ -658,7 +659,8 @@ static ncclResult_t scheduleCollTasksToPlan(
       size_t trafficPerCell = cellSize*trafficPerByte;
       size_t cellsPerChannel = std::min(cells, divUp(trafficPerChannel, trafficPerCell));
       size_t cellsLo;
-      if (channelId+1 == nMaxChannels[kind]) { // On last channel everything goes to "lo"
+      if (channelId+1 == nMaxChannels[kind]) {
+        // On last channel everything goes to "lo"
         cellsLo = cells;
       } else {
         cellsLo = std::min(cells, divUp((trafficPerChannel-currentTraffic),trafficPerCell));
@@ -666,7 +668,8 @@ static ncclResult_t scheduleCollTasksToPlan(
       int nMidChannels = (cells-cellsLo)/cellsPerChannel;
       size_t cellsHi = (cells-cellsLo)%cellsPerChannel;
       int nChannels = (cellsLo!=0 ? 1 : 0) + nMidChannels + (cellsHi!=0 ? 1 : 0);
-      if (nMaxChannels[kind] < channelId + nChannels) { // Overflowed available channels
+      if (nMaxChannels[kind] < channelId + nChannels) {
+        // Overflowed available channels
         nMidChannels = nMaxChannels[kind] - channelId - 2;
         cellsPerChannel = (cells-cellsLo)/(nMidChannels+1);
         cellsHi = cellsPerChannel + (cells-cellsLo)%(nMidChannels+1);
@@ -675,7 +678,8 @@ static ncclResult_t scheduleCollTasksToPlan(
         cellsHi = cellsPerChannel;
         nMidChannels -= 1;
       }
-      if (cellsLo == 0) { // Least channel skipped. Make the next channel the new least.
+      if (cellsLo == 0) {
+        // Least channel skipped. Make the next channel the new least.
         channelId += 1;
         if (nMidChannels == 0) { cellsLo = cellsHi; cellsHi = 0; }
         else { cellsLo = cellsPerChannel; nMidChannels -= 1; }
@@ -882,7 +886,8 @@ static ncclResult_t addP2pToPlan(
   bool netRegistered[2] = {false, false};
   bool ipcRegistered[2] = {false, false};
 
-  for (int dir=0; dir < 2; dir++) { // 0=recv, 1=send
+  for (int dir=0; dir < 2; dir++) {
+    // 0=recv, 1=send
     // Assume SIMPLE protocol to start with to determine number of channels
     stepSize[dir] = comm->p2pChunkSize;
 
@@ -1370,13 +1375,15 @@ static ncclResult_t uploadProxyOps(struct ncclComm* comm, struct ncclKernelPlan*
     uint64_t oldId = op->opCount;
     // Ignoring the bottom tag bit, opCount's are zero-based within plan so
     // translate them to the tip of the comm's history.
-    if (oldId & 1) { // p2p
+    if (oldId & 1) {
+      // p2p
       // opCount is monotonic increasing within a plan's channel so just
       // remember last value to compute max.
       p2pOpBump[op->channelId] = (oldId>>1) + 1; // +1 to ensure next plan doesn't collide
       op->opCount = (comm->sharedRes->p2pOpCount[op->channelId]<<1) + oldId;
       hasp2p = 1;
-    } else { // coll
+    } else {
+      // coll
       op->opCount = (collOpCount<<1) + oldId;
     }
 
@@ -2504,7 +2511,8 @@ static ncclResult_t ncclPlannerSetCapturingGraph(struct ncclComm* comm, struct n
     planner->streamRecent = info->stream;
     struct ncclCudaStreamList* l = planner->streams;
     while (true) {
-      if (l == nullptr) { // Got to the end, this must be a new stream.
+      if (l == nullptr) {
+        // Got to the end, this must be a new stream.
         struct ncclCudaGraph graph;
         NCCLCHECK(ncclCudaGetCapturingGraph(&graph, info->stream, comm->config.graphUsageMode));
         if (planner->streams != nullptr && !ncclCudaGraphSame(planner->capturingGraph, graph)) {
@@ -2588,7 +2596,8 @@ static ncclResult_t p2pTaskAppend(
       for (int c=0; c < comm->p2pnChannelsPerPeer; c++) {
         int channelId = ncclP2pChannelForPart(comm->p2pnChannels, base, c);
         if (isSendNotRecv) {
-          if (comm->channels[channelId].peers[peer]->send[1].hasSeen == 0) { // P2P uses only 1 connector
+          if (comm->channels[channelId].peers[peer]->send[1].hasSeen == 0) {
+            // P2P uses only 1 connector
             // the send/recv connector is shared among split shared comms. We need to set hasSeen to
             // 1 in order to avoid duplicate connection setup if user group sendrecv ops with split
             // shared comms together.
@@ -2598,7 +2607,8 @@ static ncclResult_t p2pTaskAppend(
             ncclGroupCommPreconnect(comm);
           }
         } else {
-          if (comm->channels[channelId].peers[peer]->recv[1].hasSeen == 0) { // P2P uses only 1 connector
+          if (comm->channels[channelId].peers[peer]->recv[1].hasSeen == 0) {
+            // P2P uses only 1 connector
             comm->channels[channelId].peers[peer]->recv[1].hasSeen = 1;
             comm->channels[channelId].peers[peer]->recv[1].p2pOnly = 1;
             comm->connectRecv[peer] |= (1ULL<<channelId);

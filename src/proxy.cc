@@ -613,14 +613,16 @@ ncclResult_t ncclProxySaveOp(struct ncclComm* comm, struct ncclProxyOp* op, bool
   case ncclPatternTreeUp:
   case ncclPatternTreeDown:
   case ncclPatternTreeUpDown: {
-      if (op->pattern != ncclPatternTreeDown) { // Tree up
+      if (op->pattern != ncclPatternTreeDown) {
+        // Tree up
         struct ncclTree* tree = &channel->tree;
         for (int i=0; i<NCCL_MAX_TREE_ARITY; i++) {
           NCCLCHECK(SaveProxy(comm, channel, proxyRecv, tree->down[i], op, 0, justInquire));
         }
         NCCLCHECK(SaveProxy(comm, channel, proxySend, tree->up, op, 0, justInquire));
       }
-      if (op->pattern != ncclPatternTreeUp) { // Tree down
+      if (op->pattern != ncclPatternTreeUp) {
+        // Tree down
         struct ncclTree* tree = &channel->tree;
         for (int i=0; i< NCCL_MAX_TREE_ARITY; i++) {
           NCCLCHECK(SaveProxy(comm, channel, proxySend, tree->down[i], op, 0, justInquire));
@@ -1774,7 +1776,8 @@ void* ncclProxyService(void* _args) {
         } else if (closed) {
           INFO(NCCL_DESTROY|NCCL_NET|NCCL_PROXY, "[Service thread] Connection closed by localRank %d", peer->tpLocalRank);
           closeConn = 1;
-        } else if (res == ncclSuccess) { // We received something from the sock
+        } else if (res == ncclSuccess) {
+          // We received something from the sock
           if (type == ncclProxyMsgStop) {
             stop = PROXY_STOP;
             closeConn = 1;

@@ -473,7 +473,8 @@ static ncclResult_t rasMsgHandleConnInit(const struct rasMsg* msg, struct rasSoc
         rasSocketTerminate(conn->sock);
       }
     }
-  } else { // conn == nullptr
+  } else {
+    // conn == nullptr
     NCCLCHECK(getNewConnEntry(&conn));
     memcpy(&conn->addr, &msg->connInit.listeningAddr, sizeof(conn->addr));
   }

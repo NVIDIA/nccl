@@ -817,7 +817,8 @@ static ncclResult_t p2pSendProxyProgress(struct ncclProxyState* proxyState, stru
     for (int s=0; s<args->nsubs; s++) {
       struct ncclProxySubArgs* sub = args->subs+s;
       struct p2pShmProxyInfo* resources = (struct p2pShmProxyInfo*) (sub->connection->transportResources);
-      if (p != NCCL_PROTO_SIMPLE) { // Only Simple uses cudaMemcpy
+      if (p != NCCL_PROTO_SIMPLE) {
+        // Only Simple uses cudaMemcpy
           resources->step = sub->base + sub->nsteps;
           args->done++;
           continue;

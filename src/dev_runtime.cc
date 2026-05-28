@@ -315,7 +315,8 @@ static ncclResult_t symMemoryMapLsaTeam(struct ncclComm* comm, struct ncclDevrMe
 
   NCCLCHECKGOTO(bootstrapIntraNodeAllGather(comm->bootstrap, devr->lsaRankList, devr->lsaSelf, devr->lsaSize, messages, sizeof(symLsaMessage) * maxSegments), ret, fail);
 
-  if (devr->lsaFlatBase == nullptr) { // Create on first need.
+  if (devr->lsaFlatBase == nullptr) {
+    // Create on first need.
     CUdeviceptr addr;
     CUCHECKGOTO(cuMemAddressReserve(&addr, devr->lsaSize*devr->bigSize, NCCL_MAX_PAGE_SIZE, 0, 0), ret, fail);
     devr->lsaFlatBase = reinterpret_cast<void*>(addr);
@@ -434,7 +435,8 @@ static ncclResult_t symTeamObtain(
         NCCLCHECKGOTO(symBindTeamMemory(comm, t, mem), ret, fail_mcHandle_mcAddr_unmap_mems);
       }
 
-      if (false) { // Error labels:
+      if (false) {
+        // Error labels:
       fail_mcHandle_mcAddr_unmap_mems:
         for (struct ncclDevrMemory* mem = devr->memHead; mem != nullptr; mem = mem->next) {
           symUnbindTeamMemory(comm, t, mem);
@@ -687,7 +689,8 @@ static void symMemoryDestroy(
 static ncclResult_t symWindowTableInitOnce(struct ncclComm* comm, cudaStream_t stream) {
   struct ncclDevrState* devr = &comm->devrState;
   struct ncclDevCommWindowTable* tableDev = devr->windowTable;
-  if (tableDev == nullptr) { // Create on first need.
+  if (tableDev == nullptr) {
+    // Create on first need.
     NCCLCHECK(ncclShadowPoolAlloc<ncclDevCommWindowTable>(&devr->shadows, &tableDev, nullptr, stream));
     devr->windowTable = tableDev;
   }

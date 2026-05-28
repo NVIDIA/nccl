@@ -112,7 +112,8 @@ static __device__ void rsAlgoHier(ncclSymkDevWorkArgs const* args, BoolTag<multi
         }
       };
 
-      if (stage == 0) { // !!! Pipeline Stage 0 !!!
+      if (stage == 0) {
+        // !!! Pipeline Stage 0 !!!
         inbox.apportion(cta, /*subcoop=*/coopStage, /*subcoopIsNonTrivial=*/false, nBufs_log2);
         if (lsa.nRanks != 1) {
           outbox.apportion(coopStage, /*subcoop=*/coopRole, /*subcoopIsNonTrivial=*/roleIsWorker, nBufs_log2, /*deferSync=*/true);
@@ -140,7 +141,8 @@ static __device__ void rsAlgoHier(ncclSymkDevWorkArgs const* args, BoolTag<multi
                 return dstWorld*nAllElts;
               };
 
-              if (lsa.nRanks != 1) { // No need to process data when we can send from input buf.
+              if (lsa.nRanks != 1) {
+                // No need to process data when we can send from input buf.
                 if (roleIsWorker) {
                   // Wait for outbox bufs to free up. Since outbox advances with each call of this
                   // function we always index starting at 0.
@@ -194,7 +196,8 @@ static __device__ void rsAlgoHier(ncclSymkDevWorkArgs const* args, BoolTag<multi
         if (!roleIsWorker) stage0_impl(BoolTag</*roleIsWorker=*/false>());
         else stage0_impl(BoolTag</*roleIsWorker=*/true>());
 
-      } else { // !!! Pipeline Stage 1 !!!
+      } else {
+        // !!! Pipeline Stage 1 !!!
 
         // Generalize worker and non-worker logic with compile time BoolTag to differentiate.
         auto stage1_impl = [&]__device__(/*BoolTag<roleIsWorker>*/auto roleIsWorker_tag)->void {

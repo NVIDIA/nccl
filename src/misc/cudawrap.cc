@@ -108,7 +108,9 @@ error:
 
 #if CUDART_VERSION >= 11030
 /* CUDA Driver functions loaded with cuGetProcAddress for versioning */
+DECLARE_CUDA_PFN(cuInit, 2000);
 DECLARE_CUDA_PFN(cuDeviceGet, 2000);
+DECLARE_CUDA_PFN(cuDeviceGetCount, 2000);
 DECLARE_CUDA_PFN(cuDeviceGetAttribute, 2000);
 DECLARE_CUDA_PFN(cuDeviceGetUuid, 9020);
 DECLARE_CUDA_PFN(cuGetErrorString, 6000);
@@ -125,6 +127,8 @@ DECLARE_CUDA_PFN(cuCtxDestroy, 4000);
 DECLARE_CUDA_PFN(cuCtxGetCurrent, 4000);
 DECLARE_CUDA_PFN(cuCtxSetCurrent, 4000);
 DECLARE_CUDA_PFN(cuCtxGetDevice, 2000);
+DECLARE_CUDA_PFN(cuDevicePrimaryCtxRetain, 7000);
+DECLARE_CUDA_PFN(cuDevicePrimaryCtxRelease, 11000);
 /* cuMem API support */
 DECLARE_CUDA_PFN(cuMemAddressReserve, 10020);
 DECLARE_CUDA_PFN(cuMemAddressFree, 10020);
@@ -214,7 +218,9 @@ static ncclResult_t cudaPfnFuncLoader(void) {
 
   LOAD_SYM(cuGetErrorString, 6000, 0);
   LOAD_SYM(cuGetErrorName, 6000, 0);
+  LOAD_SYM(cuInit, 2000, 1);
   LOAD_SYM(cuDeviceGet, 2000, 0);
+  LOAD_SYM(cuDeviceGetCount, 2000, 1);
   LOAD_SYM(cuDeviceGetAttribute, 2000, 0);
   LOAD_SYM(cuDeviceGetUuid, 9020, 0);
   LOAD_SYM(cuMemGetAddressRange, 3020, 1);
@@ -223,6 +229,8 @@ static ncclResult_t cudaPfnFuncLoader(void) {
   LOAD_SYM(cuCtxGetCurrent, 4000, 1);
   LOAD_SYM(cuCtxSetCurrent, 4000, 1);
   LOAD_SYM(cuCtxGetDevice, 2000, 1);
+  LOAD_SYM(cuDevicePrimaryCtxRetain, 7000, 1);
+  LOAD_SYM(cuDevicePrimaryCtxRelease, 11000, 1);
   LOAD_SYM(cuLaunchKernel, 4000, 1);
 #if CUDA_VERSION >= 11080
   LOAD_SYM(cuLaunchKernelEx, 11060, 1);

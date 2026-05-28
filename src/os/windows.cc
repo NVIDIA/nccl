@@ -94,7 +94,9 @@ const char* ncclOsDlerror() {
 
 ncclOsLibraryHandle ncclOsDlopen(const char* path, int mode) {
   (void)mode;
-  return (ncclOsLibraryHandle)LoadLibraryA(path);
+  ncclOsLibraryHandle handle = (ncclOsLibraryHandle)LoadLibraryA(path);
+  if (handle == NULL) saveDlError();
+  return handle;
 }
 
 void ncclOsDlclose(ncclOsLibraryHandle handle) {

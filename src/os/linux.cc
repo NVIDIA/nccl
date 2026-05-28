@@ -71,7 +71,9 @@ const char* ncclOsDlerror() {
 }
 
 ncclOsLibraryHandle ncclOsDlopen(const char* path, int mode) {
-  return (ncclOsLibraryHandle)dlopen(path, (mode == NCCL_OS_DL_NOW) ? RTLD_NOW : RTLD_LAZY);
+  ncclOsLibraryHandle handle = dlopen(path, (mode == NCCL_OS_DL_NOW) ? RTLD_NOW : RTLD_LAZY);
+  if (handle == NULL) saveDlError();
+  return handle;
 }
 
 void ncclOsDlclose(ncclOsLibraryHandle handle) {

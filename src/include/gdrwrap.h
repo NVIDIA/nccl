@@ -138,6 +138,8 @@ static ncclResult_t wrap_gdr_copy_from_mapping(gdr_mh_t handle, void *h_ptr, con
   GDRCHECK(gdr_copy_from_mapping(handle, h_ptr, map_d_ptr, size));
   return ncclSuccess;
 }
+static bool ncclGdrIsInternalDmaBufBackend(void) { return false; }
+static bool ncclGdrInternalDmaBufRequired(void) { return false; }
 
 #else
 // Dynamically handle dependency on the GDR API library
@@ -208,6 +210,8 @@ ncclResult_t wrap_gdr_get_attribute(gdr_t g, gdr_attr_t attr, int *v);
 ncclResult_t wrap_gdr_is_dma_buf_mmap(gdr_t g, int *v);
 ncclResult_t wrap_gdr_copy_to_mapping(gdr_mh_t handle, void *map_d_ptr, const void *h_ptr, size_t size);
 ncclResult_t wrap_gdr_copy_from_mapping(gdr_mh_t handle, void *h_ptr, const void *map_d_ptr, size_t size);
+bool ncclGdrIsInternalDmaBufBackend(void);
+bool ncclGdrInternalDmaBufRequired(void);
 
 #endif // GDR_DIRECT
 
@@ -230,9 +234,17 @@ static gdr_t ncclGdrInit() {
   // Dynamically load the GDRAPI library symbols
   if (wrap_gdr_symbols() == ncclSuccess) {
     handle = wrap_gdr_open();
+    if (handle == NULL && ncclGdrIsInternalDmaBufBackend()) {
+      INFO(NCCL_INIT, "NCCL internal DMA-BUF mmap backend unavailable");
+    }
 
     if (handle != NULL) {
       ncclResult_t res;
+
+      if (ncclGdrIsInternalDmaBufBackend()) {
+        INFO(NCCL_INIT, "GDRCOPY enabled using NCCL internal DMA-BUF mmap backend");
+        return handle;
+      }
 
       // Query the version of libgdrapi
       NCCLCHECKGOTO(wrap_gdr_runtime_get_version(&libMajor, &libMinor), res, error);

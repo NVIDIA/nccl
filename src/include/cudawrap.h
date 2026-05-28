@@ -81,7 +81,9 @@ extern CUmemAllocationHandleType ncclCuMemHandleType;
 
 #if CUDART_VERSION >= 11030
 /* CUDA Driver functions loaded with cuGetProcAddress for versioning */
+DECLARE_CUDA_PFN_EXTERN(cuInit, 2000);
 DECLARE_CUDA_PFN_EXTERN(cuDeviceGet, 2000);
+DECLARE_CUDA_PFN_EXTERN(cuDeviceGetCount, 2000);
 DECLARE_CUDA_PFN_EXTERN(cuDeviceGetAttribute, 2000);
 DECLARE_CUDA_PFN_EXTERN(cuDeviceGetUuid, 9020);
 DECLARE_CUDA_PFN_EXTERN(cuGetErrorString, 6000);
@@ -92,6 +94,8 @@ DECLARE_CUDA_PFN_EXTERN(cuCtxDestroy, 4000);
 DECLARE_CUDA_PFN_EXTERN(cuCtxGetCurrent, 4000);
 DECLARE_CUDA_PFN_EXTERN(cuCtxSetCurrent, 4000);
 DECLARE_CUDA_PFN_EXTERN(cuCtxGetDevice, 2000);
+DECLARE_CUDA_PFN_EXTERN(cuDevicePrimaryCtxRetain, 7000);
+DECLARE_CUDA_PFN_EXTERN(cuDevicePrimaryCtxRelease, 11000);
 DECLARE_CUDA_PFN_EXTERN(cuPointerGetAttribute, 4000);
 DECLARE_CUDA_PFN_EXTERN(cuLaunchKernel, 4000);
 #if CUDART_VERSION >= 11080

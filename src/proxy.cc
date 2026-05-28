@@ -427,7 +427,7 @@ static ncclResult_t ncclProxyOpToArgs(struct ncclProxyOp* op, struct ncclProxyAr
   args->progress = op->connection->tcomm->proxyProgress;
   args->proxyAppendPtr = op->connection->proxyAppendPtr;
 exit:
-  ncclProfilerStartProxyOpEvent(subIndex, args);
+  if (args->pattern != ncclPatternProfiler) ncclProfilerStartProxyOpEvent(subIndex, args);
   return ncclSuccess;
 }
 
@@ -542,6 +542,25 @@ static ncclResult_t ncclLocalOpAppend(struct ncclComm* comm, struct ncclProxyCon
     proxyOps->count -= toSend;
   }
   TIME_STOP(0);
+  return ncclSuccess;
+}
+
+static void incWorkCounter(struct ncclComm* comm, struct ncclProxyOp* op) {
+  op->workCounter = (op->incWorkCounter) ? ++comm->profiler.workCounter[op->channelId] : comm->profiler.workCounter[op->channelId];
+}
+
+static ncclResult_t SaveProxyProfiler(struct ncclComm* comm, struct ncclProxyOp* op, bool* justInquire) {
+  struct ncclProxyConnector* proxyConn = (op->coll == ncclFuncRecv) ? &comm->profiler.recvProxyConn[op->channelId] : &comm->profiler.sendProxyConn[op->channelId];
+  if (justInquire) {
+    *justInquire = true;
+    if (!comm->planner.persistent) incWorkCounter(comm, op);
+  } else {
+    op->sendbuff = (uint8_t *)comm->profiler.workStarted;
+    op->recvbuff = (uint8_t *)comm->profiler.workCompleted;
+    // Ensure that in graph capturing the proxy workCounter is incremented to keep up with kernel workCounter
+    if (comm->planner.persistent) incWorkCounter(comm, op);
+    NCCLCHECK(ncclLocalOpAppend(comm, proxyConn, op));
+  }
   return ncclSuccess;
 }
 
@@ -701,6 +720,10 @@ ncclResult_t ncclProxySaveOp(struct ncclComm* comm, struct ncclProxyOp* op, bool
   case ncclPatternRecv: {
       if (op->root == comm->rank) return ncclSuccess;
       NCCLCHECK(SaveProxy(comm, channel, op->pattern == ncclPatternSend ? proxySend : proxyRecv, op->root, op, 1, justInquire));
+    } break;
+  case ncclPatternProfiler: {
+      if (ncclProfilerNeedsProxy(comm, op)) NCCLCHECK(SaveProxyProfiler(comm, op, justInquire));
+      else incWorkCounter(comm, op);
     } break;
   }
   return ncclSuccess;

@@ -18,33 +18,15 @@ struct ncclTaskP2p;
 struct ncclInfo;
 struct ncclComm;
 struct ncclProxyOp;
-struct ncclDevProfiler;
+struct ncclProxyConnector;
 
-struct ncclProfilerWorkOp {
-  int channelId;
-  uint64_t workCounter;
-  int eActivationMask;
-  void* taskEventHandle;
-  void* profilerContext;
-  void* kernelEventHandle;
-  // Captured per-op so a profiler thread shared across comm-split children
-  // polls the correct (originating comm) buffers.
-  struct ncclDevProfiler* workStarted;
-  struct ncclDevProfiler* workCompleted;
-  bool started;
-  bool completed;
-  struct ncclProfilerWorkOp* next;
-};
-
-struct ncclProfilerThread;
-
-// Per-comm profiler state polled by the dedicated profiler thread.
-struct ncclProfilerCommState {
+struct ncclProfilerProxy {
+  bool initialized;
   struct ncclDevProfiler* workStarted/*[MAXCHANNELS]*/;
   struct ncclDevProfiler* workCompleted/*[MAXCHANNELS]*/;
-  uint64_t workCounter[MAXCHANNELS];
-  // Shared with comm-split children when shareResources is set.
-  struct ncclProfilerThread* profilerThread;
+  uint64_t workCounter[MAXCHANNELS]; // host work counter
+  struct ncclProxyConnector sendProxyConn[MAXCHANNELS];
+  struct ncclProxyConnector recvProxyConn[MAXCHANNELS];
 };
 
 enum groupApiState {
@@ -111,8 +93,8 @@ ncclResult_t ncclProfilerStartProxyCtrlEvent(void* profilerContext, void** eHand
 ncclResult_t ncclProfilerStopProxyCtrlEvent(void* eHandle);
 
 // Kernel Channel Start/Stop Event Wrappers
-ncclResult_t ncclProfilerStartKernelChEvent(struct ncclProfilerWorkOp* op, uint64_t start);
-ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProfilerWorkOp* op, uint64_t stop);
+ncclResult_t ncclProfilerStartKernelChEvent(struct ncclProxyArgs* args, int s, uint64_t start);
+ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProxyArgs* args, int s, uint64_t stop);
 
 // Record Event Wrappers
 ncclResult_t ncclProfilerRecordProxyOpEventState(int sub, struct ncclProxyArgs* args, ncclProfilerEventState_t eState);
@@ -121,16 +103,8 @@ ncclResult_t ncclProfilerRecordProxyCtrlEventState(void*eHandle, int appended, n
 
 // Profiler utility functions
 ncclResult_t ncclProfilerAddPidToProxyOp(struct ncclProxyOp* op);
+bool ncclProfilerNeedsProxy(struct ncclComm* comm, struct ncclProxyOp* op);
 bool ncclProfilerPluginLoaded(void);
-
-// Dedicated profiler thread API
-ncclResult_t ncclProfilerThreadCreate(struct ncclComm* comm, struct ncclComm* parent);
-ncclResult_t ncclProfilerThreadDestroy(struct ncclComm* comm);
-ncclResult_t ncclProfilerPostWork(struct ncclComm* comm, int channelId, int eActivationMask, void* taskEventHandle);
-// Post one ncclProfilerPostWork per (task, channel) for every KernelCh-enabled
-// task in plan. Called from hostStreamPlanCallback so the host workCounter
-// stays in lock-step with the device on every (graph-captured) replay.
-ncclResult_t ncclProfilerPostPlanWork(struct ncclComm* comm, struct ncclKernelPlan* plan);
 
 // Profiler callback for network plugin
 ncclResult_t ncclProfilerCallback(void** eHandle, int type, void* pHandle, int64_t pluginId, void* extData);

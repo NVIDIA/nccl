@@ -229,9 +229,6 @@ struct ncclTaskColl {
   void* collApiEventHandle;
   void* eventHandle;
   uint8_t nChannels;
-  // Inclusive channel range this task ran on; mirrors devWork->channelLo/Hi.
-  uint8_t channelLo;
-  uint8_t channelHi;
 };
 
 
@@ -331,9 +328,6 @@ struct ncclKernelPlan {
   size_t kernelArgsSize;
   uint64_t channelMask; // bitset of which channels are present
   bool hasProxyOps; // does any channel have a non-empty proxyOpQueue
-  // Any task with ncclProfileKernelCh; gates the captured hostStreamPlanCallback
-  // for graph-captured pure NVL/SHM plans (where hasProxyOps is false).
-  bool hasProfilerOps;
   int threadPerBlock;
 
   int collOpCount; // Number of collectives in this plan.
@@ -758,7 +752,7 @@ struct ncclComm {
   // Profiler plugin
   void* profilerContext;
   uint64_t seqNumber[NCCL_NUM_FUNCTIONS];
-  struct ncclProfilerCommState profiler;
+  struct ncclProfilerProxy profiler;
 
   // RMA state
   struct ncclRmaState rmaState;

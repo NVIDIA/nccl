@@ -12,11 +12,12 @@
 #include "timer.h"
 #include "transport.h"
 
-struct ncclTransport* ncclTransports[NTRANSPORTS] = {
+struct ncclTransport* ncclTransports[NTRANSPORTS+1] = {
   &p2pTransport,
   &shmTransport,
   &netTransport,
   &collNetTransport,
+  &profilerTransport // Not really used for transport, only to create proxy ops polling on profiler counters.
 };
 
 template <int type>

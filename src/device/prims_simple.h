@@ -499,7 +499,8 @@ private:
       *connStepPtr = step; // Return credits in case we rounded up.
     }
     if (flags & RoleWaitRecv) {
-      if ((flags & PatMode) == 0) ncclShmem.groups[group].recvConns[index] = conn; // WaitRecv role saves since that's who needs it in setDataPtrs()
+      // WaitRecv role saves since that's who needs it in setDataPtrs()
+      if ((flags & PatMode) == 0) ncclShmem.groups[group].recvConns[index] = conn;
       flags |= (conn->flags & NCCL_NVLS_MIN_POLL) ? NvlsMinPolling : 0;
       connStepPtr = conn->tail;
       connStepCache = loadStepValue(connStepPtr);
@@ -548,7 +549,8 @@ private:
       connEltsFifo = (T*)conn->buffs[NCCL_PROTO_SIMPLE];
     }
     if (flags & RoleWaitSend) {
-      if ((flags & PatMode) == 0) ncclShmem.groups[group].sendConns[index] = conn; // WaitSend role saves since that's who needs it in setDataPtrs()
+      // WaitSend role saves since that's who needs it in setDataPtrs()
+      if ((flags & PatMode) == 0) ncclShmem.groups[group].sendConns[index] = conn;
       flags |= (conn->flags & NCCL_NVLS_MIN_POLL) ? NvlsMinPolling : 0;
       connStepPtr = conn->head;
       connStepCache = loadStepValue(connStepPtr);
@@ -605,7 +607,8 @@ private:
       this->fan = Fan(nrecv, nsend);
 
       constexpr int ThreadPerSync =
-        MaxSend >= 16 || MaxRecv >= 16 ? 32 : // NVLS may have an arity > 8. In that case increase the size of the groups
+        // NVLS may have an arity > 8. In that case increase the size of the groups
+        MaxSend >= 16 || MaxRecv >= 16 ? 32 :
         MaxSend >= 8 || MaxRecv >= 8 ? 16 :
         8; // Allows for all roles (WaitRecv/WaitSend/PostRecv/PostSend) within a single warp
       static_assert(MaxSend <= ThreadPerSync && MaxRecv <= ThreadPerSync, "Not enough threads to cover all peers");
@@ -744,7 +747,8 @@ private:
     if (Direct && ipcReg) {
       bool recvProvider = (flags & RoleWaitRecv) && (flags & DirectWrite);
       bool sendAcceptor = (flags & RoleWaitSend) && (flags & DirectWrite);
-      bool sendProvider = (flags & RoleWaitSend) && (flags & DirectRead); // sender provides direct buffer (to be fetched)
+      // sender provides direct buffer (to be fetched)
+      bool sendProvider = (flags & RoleWaitSend) && (flags & DirectRead);
       bool recvAcceptor = (flags & RoleWaitRecv) && (flags & DirectRead); // receiver accepts direct buffer
       if (recvProvider) {
         int spins = 0;

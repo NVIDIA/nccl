@@ -270,7 +270,8 @@ NCCL_DEVICE_INLINE IntCount reduceCopyLoopCore(
     if (nSrc >= 4 && nSrc % 4 == 0) {
       constexpr int UNROLL_DIV4 = UNROLL_PACKS / 4;
       if NCCL_IF_CONSTEXPR (UNROLL_DIV4 > 0) {
-        constexpr int UNROLL_DIV4_SAFE = (UNROLL_DIV4 > 0) ? UNROLL_DIV4 : 1;  // only needed for dead-code instantiation
+        // only needed for dead-code instantiation
+        constexpr int UNROLL_DIV4_SAFE = (UNROLL_DIV4 > 0) ? UNROLL_DIV4 : 1;
         return reduceCopyLoopCoreImpl<UNROLL_DIV4_SAFE, /*nSrc=*/4, T, Pack, RedOp, IntCount, Coop, srcMultimem, dstMultimem,
                                SrcLambda, DstLambda, CHECK_BOUNDS, /*singleSrc=*/false>(
             coop, srcLambda, nSrc, dstLambda, nDst, redOp, totalPacks, basePackIdx);

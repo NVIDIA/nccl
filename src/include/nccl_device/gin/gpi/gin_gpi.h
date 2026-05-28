@@ -488,7 +488,8 @@ NCCL_DEVICE_INLINE static void putImplMode(ncclGinCtx ctx, Coop coop, int peer, 
       for (int peer = coop.thread_rank(); peer < ctx.nRanks; peer += coop.size()) {
         uint16_t flush_counter_peer_idx = (uint16_t)(peer + flush_counter_idx);
         uint64_t *ticket_peer = &flush_tickets_ctx[peer];
-        uint64_t ticket_value = gpi_atomic_add<uint64_t, resource_sharing_mode>(ticket_peer, (uint64_t)1);  //GPI_READ_ONCE(ticket_peer);
+        //GPI_READ_ONCE(ticket_peer);
+        uint64_t ticket_value = gpi_atomic_add<uint64_t, resource_sharing_mode>(ticket_peer, (uint64_t)1);
         gpi_gpu_build_pe_flush_gfd(gfd, GPI_GFD_DATA_OP_WITH_COUNTER_COUNTED | GPI_GFD_DATA_OP_WITH_COUNTER_WRITEBACK,peer, flush_counter_peer_idx);
         gpi_gpu_channel_post_gfd<resource_sharing_mode, GPI_POST_MODE_THREAD>(gpi_ctx, gfd, 0);
         while ((GPI_READ_ONCE((gpi_ctx->gpu_counter_ptr_[flush_counter_peer_idx].value)) <= ticket_value) && !testAbort(abortFlag, steps)) {}
@@ -498,7 +499,8 @@ NCCL_DEVICE_INLINE static void putImplMode(ncclGinCtx ctx, Coop coop, int peer, 
       for (int peer = coop.thread_rank(); peer < ctx.nRanks; peer += coop.size()) {
         uint16_t flush_counter_peer_idx = (uint16_t)(peer + flush_counter_idx);
         uint64_t *ticket_peer = &flush_tickets_ctx[peer];
-        uint64_t ticket_value = gpi_atomic_add<uint64_t, resource_sharing_mode>(ticket_peer, (uint64_t)1);  //GPI_READ_ONCE(ticket_peer);
+        //GPI_READ_ONCE(ticket_peer);
+        uint64_t ticket_value = gpi_atomic_add<uint64_t, resource_sharing_mode>(ticket_peer, (uint64_t)1);
         gpi_gpu_build_pe_flush_gfd(gfd, GPI_GFD_DATA_OP_WITH_COUNTER_COUNTED | GPI_GFD_DATA_OP_WITH_COUNTER_WRITEBACK,peer, flush_counter_peer_idx);
         gpi_gpu_channel_post_gfd<resource_sharing_mode, GPI_POST_MODE_THREAD>(gpi_ctx, gfd, 0);
         while (GPI_READ_ONCE((gpi_ctx->gpu_counter_ptr_[flush_counter_peer_idx].value)) <= ticket_value) continue;
@@ -721,7 +723,8 @@ struct ncclGinApi_FlushAsync<NCCL_NET_DEVICE_GIN_GPI> {
     uint64_t * flush_tickets_ctx = nccl::gin::gpi::gpi_flush_tickets_get_ptr(gpi_ctx);
     int16_t flush_counter_idx = (int16_t)(((uint64_t*)loadConst(&gpi_ctx->gpu_signal_ptr_) - (uint64_t*)loadConst(&gpi_ctx->gpu_counter_ptr_)) / sizeof(uint64_t)) -ctx.nRanks;
     uint16_t flush_counter_peer_idx = (uint16_t)(peer + flush_counter_idx);
-    uint64_t flush_ticket_value = nccl::gin::gpi::gpi_atomic_add<uint64_t, GPI_RESOURCE_SHARING_MODE_GPU>(&flush_tickets_ctx[peer], (uint64_t)1);  //GPI_READ_ONCE(ticket_peer);
+    //GPI_READ_ONCE(ticket_peer);
+    uint64_t flush_ticket_value = nccl::gin::gpi::gpi_atomic_add<uint64_t, GPI_RESOURCE_SHARING_MODE_GPU>(&flush_tickets_ctx[peer], (uint64_t)1);
     req->flushCounterPtr =  (uint64_t*)(loadConst(&gpi_ctx->gpu_counter_ptr_) + flush_counter_peer_idx);
     req->waitValue = flush_ticket_value;
     nccl::gin::gpi::gpi_gpu_build_pe_flush_gfd(gfd, GPI_GFD_DATA_OP_WITH_COUNTER_COUNTED | GPI_GFD_DATA_OP_WITH_COUNTER_WRITEBACK,peer, flush_counter_peer_idx);

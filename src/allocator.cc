@@ -122,7 +122,8 @@ ncclResult_t  ncclMemFree(void *ptr) {
   CUCHECKGOTO(cuPointerGetAttribute((void*)&ptrDev, CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL, (CUdeviceptr)ptr), ret, fail);
   CUDACHECKGOTO(cudaSetDevice((int)ptrDev), ret, fail);
   if (ncclCuMemEnable()) {
-    NCCLCHECKGOTO(ncclCuMemFree(ptr, nullptr), ret, fail); // User facing API, memManager does not need to track user memory. Same as ncclMemAlloc
+    // User facing API, memManager does not need to track user memory. Same as ncclMemAlloc
+    NCCLCHECKGOTO(ncclCuMemFree(ptr, nullptr), ret, fail);
     goto exit;
   }
 

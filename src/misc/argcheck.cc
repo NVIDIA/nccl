@@ -143,7 +143,8 @@ fail:
 
 ncclResult_t ncclArgsGlobalCheck(struct ncclArgsInfo* argsInfo) {
   struct ncclInfo* info = &argsInfo->info;
-  if (info->coll != ncclFuncSend && info->coll != ncclFuncRecv && info->coll != ncclFuncPutSignal && info->coll != ncclFuncSignal && info->coll != ncclFuncWaitSignal) { // exclude one-sided and sendrecv operations
+  if (info->coll != ncclFuncSend && info->coll != ncclFuncRecv && info->coll != ncclFuncPutSignal && info->coll != ncclFuncSignal && info->coll != ncclFuncWaitSignal) {
+    // exclude one-sided and sendrecv operations
     // Check registration globally
     NCCLCHECK(registrationCheck(info));
   }

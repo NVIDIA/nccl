@@ -226,7 +226,8 @@ inline __device__ void ncclNetDeviceUnpackInner(
   // Currently, even/odd groups perform send/recv separately. We don't really need space for send side.
   // Total size is N page per warp * 16 B per page * 20 WARPS max = 320 * N bytes, N == WARP_SHM_PAGE_CNT
   static_assert(ncclShmemScratchWarpSize() >= WARP_SHM_SIZE, "Each warp must have enough scratch space");
-  s_meta = (loadMeta*) ncclScratchForWarp(tidInBlock / WARP_SIZE); // (loadMeta*) (ncclShmem.devicePlugin.unpack.meta + shm_off);
+  // (loadMeta*) (ncclShmem.devicePlugin.unpack.meta + shm_off);
+  s_meta = (loadMeta*) ncclScratchForWarp(tidInBlock / WARP_SIZE);
 
   load64gpu(g_meta_struct->cnt + head, meta_cnt);
 

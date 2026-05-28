@@ -387,7 +387,8 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
               // A non-zero active_speed_ex indicates XDR rate (0x100) or higher
               uint64_t querySpeed = 0;
               if (wrap_ibv_query_port_speed(context, port_num, &querySpeed) == ncclSuccess) {
-                ncclIbDevs[ncclNIbDevs].speed = querySpeed * 100; // ibv_query_port_speed returns speed in granularity of 100 Mbps
+                // ibv_query_port_speed returns speed in granularity of 100 Mbps
+                ncclIbDevs[ncclNIbDevs].speed = querySpeed * 100;
               } else {
                 int portSpeed = portAttr.active_speed_ex ? portAttr.active_speed_ex : portAttr.active_speed;
                 ncclIbDevs[ncclNIbDevs].speed = ncclIbSpeed(portSpeed) * ncclIbWidth(portAttr.active_width);

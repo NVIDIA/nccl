@@ -295,7 +295,8 @@ NCCL_DEVICE_INLINE static void getImplMode(ncclGinCtx ctx, Coop coop, int peer,
     uint32_t codeOpt = nccl::gin::gdaki::docaOptFlagsFromGinOptFlags(optFlags);
     doca_gpu_dev_verbs_get<doca_sharing_mode>(
         qp, raddr, laddr, bytes, uninitialized_daddr, &out_ticket, codeOpt);
-    atomicMaxAtIndex<gin_sharing_mode>(loadConst(&gdaki->last_issued_get), peer, out_ticket + 1); // +1 so 0 means no gets; must be after get to avoid race with concurrent flushes
+    // +1 so 0 means no gets; must be after get to avoid race with concurrent flushes
+    atomicMaxAtIndex<gin_sharing_mode>(loadConst(&gdaki->last_issued_get), peer, out_ticket + 1);
   }
   coop.sync();
 }

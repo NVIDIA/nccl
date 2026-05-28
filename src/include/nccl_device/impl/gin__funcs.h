@@ -517,7 +517,8 @@ NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::put(
           struct ncclSegmentWindow const& dstSegmentWindow = dstWin->ginMultiSegmentWins[dstSeg];
           struct ncclSegmentWindow const& srcSegmentWindow = srcWin->ginMultiSegmentWins[srcSeg];
           if (!doneSysmemFence && srcSegmentWindow.memType == CU_MEM_LOCATION_TYPE_HOST_NUMA) {
-            localRequiredRelease = cuda::thread_scope_system; // for safety, escalate to system regardless of what the user requested
+            // for safety, escalate to system regardless of what the user requested
+            localRequiredRelease = cuda::thread_scope_system;
             doneSysmemFence = true;
           }
           const size_t srcRemaining = srcSegmentWindow.segmentSize - srcSegOffset;

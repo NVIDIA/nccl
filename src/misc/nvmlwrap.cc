@@ -126,7 +126,8 @@ ncclResult_t ncclNvmlEnsureInitialized() {
   #if NCCL_NVML_DIRECT
     bool have_v2 = true;
   #else
-    bool have_v2 = pfn_nvmlInit_v2 != nullptr; // if this compare is done in the NCCL_NVML_DIRECT=1 case then GCC warns about it never being null
+    // if this compare is done in the NCCL_NVML_DIRECT=1 case then GCC warns about it never being null
+    bool have_v2 = pfn_nvmlInit_v2 != nullptr;
   #endif
   nvmlReturn_t res1 = (have_v2 ? pfn_nvmlInit_v2 : pfn_nvmlInit)();
   if (res1 != NVML_SUCCESS) {

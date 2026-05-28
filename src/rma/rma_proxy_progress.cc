@@ -101,7 +101,8 @@ static ncclResult_t ncclRmaProxyPollNonPersistCompletion(ncclRma_t *ncclRma, str
       ctx->comm->rank, peer, head->rmaDescType, head->opSeq);
 
     // Update the doneSeq with RELEASE to ensure GPU sees it
-    COMPILER_ATOMIC_STORE(head->doneSeq, head->opSeq, std::memory_order_release); // sync with the custreamWait acquire semantic
+    // sync with the custreamWait acquire semantic
+    COMPILER_ATOMIC_STORE(head->doneSeq, head->opSeq, std::memory_order_release);
     // Dequeue and free the completed Desc
     ncclIntruQueueDequeue(&ctx->inProgressQueues[peer]);
     NCCLCHECK(ncclRmaProxyDestroyDesc(ctx->comm, &head));

@@ -300,7 +300,8 @@ struct ncclGinApi_FlushAsync<NCCL_NET_DEVICE_GIN_PROXY> {
     req->peer = peer;
     ncclGinProxyGpuCtx_t* proxyCtx = &((ncclGinProxyGpuCtx_t*)ctx.handle)[ctx.contextId];
     cuda::atomic_ref<uint32_t, cuda::thread_scope_device> lastIssuedGet(loadConst(&proxyCtx->lastIssuedGet)[peer]);
-    req->lastIssuedGet = lastIssuedGet.load(cuda::memory_order_acquire); // Must be before pi is loaded in case of concurrent gets
+    // Must be before pi is loaded in case of concurrent gets
+    req->lastIssuedGet = lastIssuedGet.load(cuda::memory_order_acquire);
 
     cuda::atomic_ref<uint32_t, cuda::thread_scope_system> pi(loadConst(&proxyCtx->pis)[peer]);
     req->nextGfdIdx = pi.load(cuda::memory_order_relaxed);
@@ -331,7 +332,8 @@ struct ncclGinApi_Wait<NCCL_NET_DEVICE_GIN_PROXY> {
       nccl::gin::proxy::postGfd(ncclCoopThread(), proxyCtx, &gfd, flushPeer);
 
       nccl::gin::proxy::flush(proxyCtx, flushPeer, ord, abortFlag);
-      lastVisibleGet.store(req.lastIssuedGet, cuda::memory_order_relaxed);  // may move backward in case of concurrent flushes. That's okay.
+      // may move backward in case of concurrent flushes. That's okay.
+      lastVisibleGet.store(req.lastIssuedGet, cuda::memory_order_relaxed);
     }
   }
 };

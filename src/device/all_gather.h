@@ -135,7 +135,8 @@ struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_PAT, NCCL_PROTO_SIMPLE
       while (1) {
         struct ncclPatStep* ps = shmem->patSteps+(step%NCCL_SHMEM_PAT_STEPS);
         cuda::atomic_ref<int, cuda::thread_scope_block> poll(ps->flags);
-        while (poll.load(cuda::memory_order_acquire) != 0) pollCount++; // Wait for workers to be done with step 'step-NCCL_SHMEM_PAT_STEPS'
+        // Wait for workers to be done with step 'step-NCCL_SHMEM_PAT_STEPS'
+        while (poll.load(cuda::memory_order_acquire) != 0) pollCount++;
         patAlgo.getNextOp(ps);
         int last = ps->last;
         step++;

@@ -775,7 +775,7 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
       }
       TIME_START(3);
       NCCLCHECK(wrap_ibv_poll_cq(r->devBases[i]->cq, 4, wcs, &wrDone));
-      if (wrDone == 0) { TIME_CANCEL(3); } else { TIME_STOP(3); }
+      if (wrDone == 0) TIME_CANCEL(3); else TIME_STOP(3);
       if (wrDone == 0) continue;
       totalWrDone += wrDone;
       for (int w=0; w<wrDone; w++) {

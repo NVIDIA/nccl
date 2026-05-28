@@ -113,12 +113,12 @@ void* ncclIbAsyncThreadMain(void* args) {
   struct ncclIbDev* dev = (struct ncclIbDev*)args;
   while (1) {
     struct ibv_async_event event;
-    if (ncclSuccess != wrap_ibv_get_async_event(dev->context, &event)) { break; }
+    if (ncclSuccess != wrap_ibv_get_async_event(dev->context, &event)) break;
     char *str;
     struct ibv_cq* cq = event.element.cq;    // only valid if CQ error
     struct ibv_qp* qp = event.element.qp;    // only valid if QP error
     struct ibv_srq* srq = event.element.srq; // only valid if SRQ error
-    if (ncclSuccess != wrap_ibv_event_type_str(&str, event.event_type)) { break; }
+    if (ncclSuccess != wrap_ibv_event_type_str(&str, event.event_type)) break;
     switch (event.event_type) {
     case IBV_EVENT_DEVICE_FATAL:
       // the above is device fatal error
@@ -184,7 +184,7 @@ void* ncclIbAsyncThreadMain(void* args) {
       break;
     }
     // acknowledgment needs to happen last to avoid user-after-free
-    if (ncclSuccess != wrap_ibv_ack_async_event(&event)) { break; }
+    if (ncclSuccess != wrap_ibv_ack_async_event(&event)) break;
   }
   return NULL;
 }

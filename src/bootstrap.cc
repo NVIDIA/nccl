@@ -566,10 +566,11 @@ static ncclResult_t netGetDevice(int rank, struct ncclComm* comm, int* dev) {
           devId++;
         }
         if (devOOB == -1) {
-          if (!searchNot)
+          if (!searchNot) {
             WARN("no device found matching %s%s, verify NCCL_OOB_NET_IFNAME", searchExact ? "exactly " : "", userIfEnv);
-          else
+          } else {
             WARN("no device found after excluding %s%s, verify NCCL_OOB_NET_IFNAME", searchExact ? "exactly " : "", userIfEnv);
+          }
           return ncclInvalidArgument;
         }
       } else {
@@ -740,7 +741,10 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
     }
   }
   int curr_root = rootIdFromRank(rank, nranks, nHandles, offset);
-  if(curr_root >= 0) NCCLCHECK(createListenSocket(comm, BOOTSTRAP_HANDLE(handles, curr_root)->magic, &listenSockRoot, &info.listenRootAddress, ncclSocketTypeBootstrap));
+  if (curr_root >= 0) {
+    NCCLCHECK(createListenSocket(comm, BOOTSTRAP_HANDLE(handles, curr_root)->magic, &listenSockRoot,
+                                 &info.listenRootAddress, ncclSocketTypeBootstrap));
+  }
   BOOTSTRAP_PROF_CLOSE(timers[BOOTSTRAP_INIT_TIME_CREATE]);
 
   // stagger connection times to avoid an overload of the root
@@ -903,8 +907,9 @@ ncclResult_t bootstrapSplit(uint64_t magic, struct ncclComm* comm, struct ncclCo
   NCCLCHECK(createListenSocket(comm, comm->magic, &STATE_LISTEN(state, peerSocket), &peerSocketAddress, ncclSocketTypeBootstrap));
 
   if (ncclParamRasEnable() == 1) {
-    if (ncclRasCommInit(comm, nullptr) != ncclSuccess)
+    if (ncclRasCommInit(comm, nullptr) != ncclSuccess) {
       INFO(NCCL_INIT|NCCL_RAS, "Continuing in spite of a RAS initialization error");
+    }
   }
 
   // Get addr from next rank using the parent's connections
@@ -1233,7 +1238,9 @@ static ncclResult_t bootstrapP2PBroadcast(void* commState, int* ranks, int rank,
   if (nranks == 1) return ncclSuccess;
   if (rank == root) {
     for (int i = 0; i < nranks; i++) {
-      if (i != root) NCCLCHECK(bootstrapSend(commState, ranks ? ranks[i] : i, /*tag=*/ranks ? ranks[i] : i, bcastData, size));
+      if (i != root) {
+        NCCLCHECK(bootstrapSend(commState, ranks ? ranks[i] : i, /*tag=*/ranks ? ranks[i] : i, bcastData, size));
+      }
     }
   } else {
     NCCLCHECK(bootstrapRecv(commState, ranks ? ranks[root] : root, /*tag=*/ranks ? ranks[rank] : rank, bcastData, size));

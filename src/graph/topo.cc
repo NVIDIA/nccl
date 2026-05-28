@@ -1539,7 +1539,9 @@ ncclResult_t ncclTopoMakeVNics(struct ncclXml* xml, struct ncclTopoNetInfo* netI
     TRACE(NCCL_GRAPH, "Found physical ncclNet node %d %s", i,  props[i].name);
   }
 
-  if (netInfo->forceMerge) NCCLCHECKGOTO(ncclTopoForceMerge(xml, netInfo, placedDevs, props, physNetNodes, physicalDevs), res, out);
+  if (netInfo->forceMerge) {
+    NCCLCHECKGOTO(ncclTopoForceMerge(xml, netInfo, placedDevs, props, physNetNodes, physicalDevs), res, out);
+  }
   NCCLCHECKGOTO(ncclTopoAutoMerge(xml, netInfo, placedDevs, props, physNetNodes, physicalDevs), res, out);
 
 out:
@@ -1571,7 +1573,9 @@ static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex, int endIn
     NCCLCHECK(xmlSetAttrInt(netNode, "keep", 1));
     int dev;
     xmlGetAttrIntDefault(netNode, "dev", &dev, -1);
-    if (dev != -1 && dev != n) INFO(NCCL_GRAPH, "TOPO/NET : Changing %s dev index from %d to %d", netInfo->name, dev, n);
+    if (dev != -1 && dev != n) {
+      INFO(NCCL_GRAPH, "TOPO/NET : Changing %s dev index from %d to %d", netInfo->name, dev, n);
+    }
     NCCLCHECK(xmlSetAttrInt(netNode, "dev", n));
     NCCLCHECK(xmlInitAttrInt(netNode, "latency", props.latency));
     NCCLCHECK(xmlInitAttrInt(netNode, "speed", props.speed));
@@ -1937,10 +1941,11 @@ static void getNetDevsPolicyOnce() {
         netDevsPolicyNum = envNum;
       }
     }
-    if (netDevsPolicy == NETDEVS_POLICY_UNDEF)
+    if (netDevsPolicy == NETDEVS_POLICY_UNDEF) {
       INFO(NCCL_ENV, "Unable to recognize NCCL_NETDEVS_POLICY=%s, using NCCL_NETDEVS_POLICY_AUTO instead.", envStr);
-    else
+    } else {
       INFO(NCCL_ENV, "NCCL_NETDEVS_POLICY set by environment to %s", envStr);
+    }
   }
   if (netDevsPolicy == NETDEVS_POLICY_UNDEF) netDevsPolicy = NETDEVS_POLICY_AUTO;
 }
@@ -2084,12 +2089,13 @@ ncclResult_t ncclTopoGetCpuAffinity(struct ncclTopoSystem* system, int rank, ncc
 
   // Get the final affinity
   ncclAffinity finalMask;
-  if (ncclParamIgnoreCpuAffinity())
+  if (ncclParamIgnoreCpuAffinity()) {
     // Ignore the CPU affinity set and use the GPU one instead
     finalMask = cpuMask;
-  else
+  } else {
     // Use a subset of the GPU affinity set
     finalMask = ncclOsCpuAnd(mask, cpuMask);
+  }
 
   memcpy(affinity, &finalMask, sizeof(ncclAffinity));
 

@@ -231,8 +231,14 @@ ncclResult_t ncclOsSocketSetFlags(struct ncclSocket* sock) {
   // setsockopt should not fail even if the sizes are too large, do not change the default if unset by the user (=-1)
   rcvBuf = ncclParamSocketMaxRecvBuff();
   sndBuf = ncclParamSocketMaxSendBuff();
-  if (sndBuf > 0) SYSCHECKGOTO(setsockopt(sock->socketDescriptor, SOL_SOCKET, SO_SNDBUF, (char*)&sndBuf, sizeof(int)), "setsockopt SO_SNDBUF", ret, fail);
-  if (rcvBuf > 0) SYSCHECKGOTO(setsockopt(sock->socketDescriptor, SOL_SOCKET, SO_RCVBUF, (char*)&rcvBuf, sizeof(int)), "setsockopt SO_RCVBUF", ret, fail);
+  if (sndBuf > 0) {
+    SYSCHECKGOTO(setsockopt(sock->socketDescriptor, SOL_SOCKET, SO_SNDBUF, (char*)&sndBuf, sizeof(int)),
+                 "setsockopt SO_SNDBUF", ret, fail);
+  }
+  if (rcvBuf > 0) {
+    SYSCHECKGOTO(setsockopt(sock->socketDescriptor, SOL_SOCKET, SO_RCVBUF, (char*)&rcvBuf, sizeof(int)),
+                 "setsockopt SO_RCVBUF", ret, fail);
+  }
 exit:
   return ret;
 fail:
@@ -336,8 +342,13 @@ ncclResult_t ncclOsSocketProgressOpt(int op, struct ncclSocket* sock, void* ptr,
   char line[SOCKET_NAME_MAXLEN+1];
   if (sock->asyncFlag || sock->abortFlag) block = 0;
   do {
-    if (op == NCCL_SOCKET_RECV) bytes = recv(sock->socketDescriptor, data+(*offset), size-(*offset), block ? 0 : MSG_DONTWAIT);
-    if (op == NCCL_SOCKET_SEND) bytes = send(sock->socketDescriptor, data+(*offset), size-(*offset), block ? MSG_NOSIGNAL : MSG_DONTWAIT | MSG_NOSIGNAL);
+    if (op == NCCL_SOCKET_RECV) {
+      bytes = recv(sock->socketDescriptor, data + (*offset), size - (*offset), block ? 0 : MSG_DONTWAIT);
+    }
+    if (op == NCCL_SOCKET_SEND) {
+      bytes = send(sock->socketDescriptor, data + (*offset), size - (*offset),
+                   block ? MSG_NOSIGNAL : MSG_DONTWAIT | MSG_NOSIGNAL);
+    }
     if (op == NCCL_SOCKET_RECV && bytes == 0) {
       *closed = 1;
       return ncclSuccess;

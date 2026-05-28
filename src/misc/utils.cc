@@ -41,7 +41,9 @@ ncclResult_t busIdToInt64(const char* busId, int64_t* id) {
         (c >= 'A' && c <= 'F') ||
         (c >= 'a' && c <= 'f')) {
       hexStr[hexOffset++] = busId[i];
-    } else break;
+    } else {
+      break;
+    }
   }
   hexStr[hexOffset] = '\0';
   *id = strtol(hexStr, NULL, 16);

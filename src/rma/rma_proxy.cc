@@ -279,8 +279,9 @@ ncclResult_t ncclRmaProxyDestroyContext(ncclRma_t* rmaComm, void* rmaProxyCtx){
   if (ctx->doneSeqs) NCCLCHECK(freeMemCPUAccessible(ctx->doneSeqs, ctx->doneSeqsGdrHandle, ctx->comm->memManager));
 
   // Free signals
-  if (rmaComm && ctx->rmaCollComm && ctx->signalsMhandle)
+  if (rmaComm && ctx->rmaCollComm && ctx->signalsMhandle) {
     NCCLCHECK(rmaComm->deregMrSym(ctx->rmaCollComm, ctx->signalsMhandle));
+  }
   if (ctx->signalsDev) NCCLCHECK(ncclCudaFree(ctx->signalsDev, ctx->comm->memManager));
 
   // Free flush buffer
@@ -289,9 +290,12 @@ ncclResult_t ncclRmaProxyDestroyContext(ncclRma_t* rmaComm, void* rmaProxyCtx){
   if (ctx->flushBufDev) ncclCudaFree(ctx->flushBufDev, ctx->comm->memManager);
 
   // Free CPU-accessible signals
-  if (rmaComm && ctx->rmaCollComm && ctx->cpuAccessSignalsMhandle)
+  if (rmaComm && ctx->rmaCollComm && ctx->cpuAccessSignalsMhandle) {
     rmaComm->deregMrSym(ctx->rmaCollComm, ctx->cpuAccessSignalsMhandle);
-  if (ctx->cpuAccessSignals) freeMemCPUAccessible(ctx->cpuAccessSignals, ctx->cpuAccessSignalsGdrHandle, ctx->comm->memManager);
+  }
+  if (ctx->cpuAccessSignals) {
+    freeMemCPUAccessible(ctx->cpuAccessSignals, ctx->cpuAccessSignalsGdrHandle, ctx->comm->memManager);
+  }
 
   // Free host signals buffers
   free(ctx->signalsHost);

@@ -324,8 +324,9 @@ static ncclResult_t commFree(ncclComm_t comm) {
   if (comm->bootstrap)
     NCCLCHECK(bootstrapClose(comm->bootstrap));
 
-  for (int channel=0; channel<MAXCHANNELS; channel++)
+  for (int channel = 0; channel < MAXCHANNELS; channel++) {
     NCCLCHECK(freeChannel(comm->channels+channel, comm->nRanks, 1, comm->localRanks, comm));
+  }
 
   // GIN may use proxy. We need to finalize it before destroying the proxy.
   NCCLCHECK(ncclGinHostFinalize(comm));
@@ -401,7 +402,9 @@ NCCL_PARAM(DmaBufEnable, "DMABUF_ENABLE", 1);
 
 // Detect DMA-BUF support
 static ncclResult_t dmaBufSupported(struct ncclComm* comm) {
-  if (ncclParamDmaBufEnable() == 0 || comm->ncclNet->regMrDmaBuf == NULL || ncclCudaLibraryInit() != ncclSuccess) return ncclInternalError;
+  if (ncclParamDmaBufEnable() == 0 || comm->ncclNet->regMrDmaBuf == NULL || ncclCudaLibraryInit() != ncclSuccess) {
+    return ncclInternalError;
+  }
 #if CUDA_VERSION >= 11070
   int flag = 0;
   CUdevice dev;
@@ -748,7 +751,9 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
              platformInfo.hostId, platformInfo.peerType, platformInfo.moduleId);
         // Use a hash of the Rack serial number to partition the NVLD clique
         info->fabricInfo.cliqueId = getHash(platformInfo.chassisSerialNumber, sizeof(platformInfo.chassisSerialNumber));
-      } else if (ncclParamMNNVLCliqueId() != -1) info->fabricInfo.cliqueId = ncclParamMNNVLCliqueId();
+      } else if (ncclParamMNNVLCliqueId() != -1) {
+        info->fabricInfo.cliqueId = ncclParamMNNVLCliqueId();
+      }
       INFO(NCCL_INIT, "MNNVL busId 0x%lx fabric UUID %lx.%lx cliqueId 0x%x state %d healthMask 0x%x",
            info->busId,
            uuid0, uuid1,
@@ -1423,7 +1428,9 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   if (comm->nChannels < nChannelsOrig) {
     // We started duplicating channels during Preset(), so we need to move the
     // duplicated channels since we have removed some.
-    for (int i=0; i<comm->nChannels; i++) memcpy(comm->channels+comm->nChannels+i, comm->channels+nChannelsOrig+i, sizeof(struct ncclChannel));
+    for (int i = 0; i < comm->nChannels; i++) {
+      memcpy(comm->channels + comm->nChannels + i, comm->channels + nChannelsOrig + i, sizeof(struct ncclChannel));
+    }
   }
 
   // Determine CollNet support after all-gather now that we know nNodes and each node localRanks
@@ -1647,7 +1654,9 @@ exit:
   /* If split resource is shared, we are not able to unlink the proxy ops pool here since the child comm can
    * attach the proxy ops pool of parent at any time; otherwise, unlink it here to make sure the pool will be
    * properly cleaned up. */
-  if (comm->sharedRes->owner == comm && !comm->shareResources && ret == ncclSuccess && !ncclCuMemEnable()) ncclProxyShmUnlink(comm);
+  if (comm->sharedRes->owner == comm && !comm->shareResources && ret == ncclSuccess && !ncclCuMemEnable()) {
+    ncclProxyShmUnlink(comm);
+  }
   free(allTopoRanks);
   free(nodesTreePatterns);
   free(nodesFirstRank);
@@ -1929,8 +1938,9 @@ static ncclResult_t envConfigOverride(ncclComm_t comm) {
 
   cgaClusterSizeEnv = ncclParamCGAClusterSize();
   if (0 <= cgaClusterSizeEnv && cgaClusterSizeEnv <= NCCL_MAX_CGA_CLUSTER_SIZE) {
-    if (comm->config.cgaClusterSize != NCCL_CONFIG_UNDEF_INT)
+    if (comm->config.cgaClusterSize != NCCL_CONFIG_UNDEF_INT) {
       INFO(NCCL_ENV, "Comm config cgaClusterSize reset to NCCL_MAX_CGA_CLUSTER_SIZE=%d", cgaClusterSizeEnv);
+    }
     comm->config.cgaClusterSize = cgaClusterSizeEnv;
   } else if (cgaClusterSizeEnv > NCCL_MAX_CGA_CLUSTER_SIZE) {
     INFO(NCCL_ENV, "NCCL_CGA_CLUSTER_SIZE value %d is too big. Limiting value to %d.", cgaClusterSizeEnv, NCCL_MAX_CGA_CLUSTER_SIZE);
@@ -1939,22 +1949,24 @@ static ncclResult_t envConfigOverride(ncclComm_t comm) {
 
   minCTAsEnv = ncclParamMinCTAs();
   if (minCTAsEnv != NCCL_CONFIG_UNDEF_INT) {
-    if (minCTAsEnv <= 0)
+    if (minCTAsEnv <= 0) {
       INFO(NCCL_ENV, "NCCL_MIN_CTAS %d is too low, leaving it set at %d", minCTAsEnv, comm->config.minCTAs);
-    else {
-      if (comm->config.minCTAs != NCCL_CONFIG_UNDEF_INT)
+    } else {
+      if (comm->config.minCTAs != NCCL_CONFIG_UNDEF_INT) {
         INFO(NCCL_ENV, "Comm config minCTAs reset to NCCL_MIN_CTAS=%d", minCTAsEnv);
+      }
       comm->config.minCTAs = minCTAsEnv;
     }
   }
 
   maxCTAsEnv = ncclParamMaxCTAs();
   if (maxCTAsEnv != NCCL_CONFIG_UNDEF_INT) {
-    if (maxCTAsEnv <= 0)
+    if (maxCTAsEnv <= 0) {
       INFO(NCCL_ENV, "NCCL_MAX_CTAS %d is too low, leaving it set at %d", maxCTAsEnv, comm->config.maxCTAs);
-    else {
-      if (comm->config.maxCTAs != NCCL_CONFIG_UNDEF_INT)
+    } else {
+      if (comm->config.maxCTAs != NCCL_CONFIG_UNDEF_INT) {
         INFO(NCCL_ENV, "Comm config maxCTAs reset to NCCL_MAX_CTAS=%d", maxCTAsEnv);
+      }
       comm->config.maxCTAs = maxCTAsEnv;
     }
   }
@@ -1962,22 +1974,24 @@ static ncclResult_t envConfigOverride(ncclComm_t comm) {
   /* override configuration with env variable. */
   nChannelsPerNetPeerEnv = ncclParamNChannelsPerNetPeer();
   if (nChannelsPerNetPeerEnv != NCCL_CONFIG_UNDEF_INT) {
-    if (nChannelsPerNetPeerEnv <= 0)
+    if (nChannelsPerNetPeerEnv <= 0) {
       INFO(NCCL_ENV, "NCCL_NCHANNELS_PER_NET_PEER %d is too low, leaving it set at %d", nChannelsPerNetPeerEnv, comm->config.nChannelsPerNetPeer);
-    else {
-      if (comm->config.nChannelsPerNetPeer != NCCL_CONFIG_UNDEF_INT)
+    } else {
+      if (comm->config.nChannelsPerNetPeer != NCCL_CONFIG_UNDEF_INT) {
         INFO(NCCL_ENV, "Comm config nChannelsPerNetPeer reset to NCCL_NCHANNELS_PER_NET_PEER=%d", nChannelsPerNetPeerEnv);
+      }
       comm->config.nChannelsPerNetPeer = nChannelsPerNetPeerEnv;
     }
   }
 
   nvlinkUtilCentricSchedEnableEnv = ncclParamNvlinkUtilCentricSchedEnable();
   if (nvlinkUtilCentricSchedEnableEnv != NCCL_CONFIG_UNDEF_INT) {
-    if (nvlinkUtilCentricSchedEnableEnv != 0 && nvlinkUtilCentricSchedEnableEnv != 1)
+    if (nvlinkUtilCentricSchedEnableEnv != 0 && nvlinkUtilCentricSchedEnableEnv != 1) {
       INFO(NCCL_ENV, "NCCL_NVLINK_UTIL_CENTRIC_SCHED_ENABLE %d is not valid, leaving it set at %d", nvlinkUtilCentricSchedEnableEnv, comm->config.nvlinkCentricSched);
-    else {
-      if (comm->config.nvlinkCentricSched != NCCL_CONFIG_UNDEF_INT)
+    } else {
+      if (comm->config.nvlinkCentricSched != NCCL_CONFIG_UNDEF_INT) {
         INFO(NCCL_ENV, "Comm config nvlinkCentricSched reset to NCCL_NVLINK_UTIL_CENTRIC_SCHED_ENABLE=%d", nvlinkUtilCentricSchedEnableEnv);
+      }
       comm->config.nvlinkCentricSched = nvlinkUtilCentricSchedEnableEnv;
     }
   }
@@ -2007,22 +2021,24 @@ static ncclResult_t envConfigOverride(ncclComm_t comm) {
 
   maxP2pPeersEnv = ncclParamMaxP2pPeers();
   if (maxP2pPeersEnv != NCCL_CONFIG_UNDEF_INT) {
-    if (maxP2pPeersEnv <= 0)
+    if (maxP2pPeersEnv <= 0) {
       INFO(NCCL_ENV, "NCCL_MAX_P2P_PEERS %d is too low, leaving it set at %d", maxP2pPeersEnv, comm->config.maxP2pPeers);
-    else {
-      if (comm->config.maxP2pPeers != NCCL_CONFIG_UNDEF_INT)
+    } else {
+      if (comm->config.maxP2pPeers != NCCL_CONFIG_UNDEF_INT) {
         INFO(NCCL_ENV, "Comm config maxP2pPeers reset to NCCL_MAX_P2P_PEERS=%d", maxP2pPeersEnv);
+      }
       comm->config.maxP2pPeers = maxP2pPeersEnv;
     }
   }
 
   graphStreamOrderingEnv = ncclParamGraphStreamOrdering();
   if (graphStreamOrderingEnv != NCCL_CONFIG_UNDEF_INT) {
-    if (graphStreamOrderingEnv != 0 && graphStreamOrderingEnv != 1)
+    if (graphStreamOrderingEnv != 0 && graphStreamOrderingEnv != 1) {
       INFO(NCCL_ENV, "NCCL_GRAPH_STREAM_ORDERING %d is not valid, leaving it set at %d", graphStreamOrderingEnv, comm->config.graphStreamOrdering);
-    else {
-      if (comm->config.graphStreamOrdering != NCCL_CONFIG_UNDEF_INT)
+    } else {
+      if (comm->config.graphStreamOrdering != NCCL_CONFIG_UNDEF_INT) {
         INFO(NCCL_ENV, "Comm config graphStreamOrdering reset to NCCL_GRAPH_STREAM_ORDERING=%d", graphStreamOrderingEnv);
+      }
       comm->config.graphStreamOrdering = graphStreamOrderingEnv;
     }
   }
@@ -2031,8 +2047,9 @@ static ncclResult_t envConfigOverride(ncclComm_t comm) {
   if (envNetName)
     tmpNetName = envNetName;
   if (tmpNetName != NULL) {
-    if (comm->config.netName != NCCL_CONFIG_UNDEF_PTR)
+    if (comm->config.netName != NCCL_CONFIG_UNDEF_PTR) {
       INFO(NCCL_ENV, "Comm config netName reset to NCCL_NET=%s", tmpNetName);
+    }
     int netNameLen = strlen(tmpNetName) + 1;
     comm->config.netName = (char*)malloc(netNameLen);
     memcpy((void*)comm->config.netName, tmpNetName, netNameLen);
@@ -2043,14 +2060,16 @@ static ncclResult_t envConfigOverride(ncclComm_t comm) {
 
   splitShareEnv = ncclParamCommSplitShareResources();
   if (splitShareEnv != NCCL_CONFIG_UNDEF_INT) {
-    if (comm->config.splitShare != NCCL_CONFIG_UNDEF_INT)
+    if (comm->config.splitShare != NCCL_CONFIG_UNDEF_INT) {
       INFO(NCCL_ENV, "Comm config splitShare reset to NCCL_COMM_SPLIT_SHARE_RESOURCES=%d", splitShareEnv);
+    }
     comm->config.splitShare = splitShareEnv;
   }
   shrinkShareEnv = ncclParamCommShrinkShareResources();
   if (shrinkShareEnv != NCCL_CONFIG_UNDEF_INT) {
-    if (comm->config.shrinkShare != NCCL_CONFIG_UNDEF_INT)
+    if (comm->config.shrinkShare != NCCL_CONFIG_UNDEF_INT) {
       INFO(NCCL_ENV, "Comm config shrinkShare reset to NCCL_COMM_SHRINK_SHARE_RESOURCES=%d", shrinkShareEnv);
+    }
     comm->config.shrinkShare = shrinkShareEnv;
   }
 
@@ -2060,8 +2079,9 @@ static ncclResult_t envConfigOverride(ncclComm_t comm) {
   if (collnetEnableEnv != NULL) {
     int collnetEnableInt = (int)strtol(collnetEnableEnv, NULL, 0);
     if (collnetEnableInt != NCCL_CONFIG_UNDEF_INT) {
-      if (comm->config.collnetEnable != NCCL_CONFIG_UNDEF_INT)
+      if (comm->config.collnetEnable != NCCL_CONFIG_UNDEF_INT) {
         INFO(NCCL_ENV, "Comm config collnetEnable reset to NCCL_COLLNET_ENABLE=%d", collnetEnableInt);
+      }
       comm->config.collnetEnable = collnetEnableInt;
       INFO(NCCL_ENV, "NCCL_COLLNET_ENABLE set by environment to %d.", collnetEnableInt);
     }
@@ -2070,15 +2090,17 @@ static ncclResult_t envConfigOverride(ncclComm_t comm) {
   static std::once_flag onceEnvCtaPolicy;
   std::call_once(onceEnvCtaPolicy, getEnvCtaPolicyOnce);
   if (ctaPolicyEnv != NCCL_CONFIG_UNDEF_INT) {
-    if (comm->config.CTAPolicy != NCCL_CONFIG_UNDEF_INT)
+    if (comm->config.CTAPolicy != NCCL_CONFIG_UNDEF_INT) {
       INFO(NCCL_ENV, "Comm config CTAPolicy reset to NCCL_CTA_POLICY=%d", ctaPolicyEnv);
+    }
     comm->config.CTAPolicy = ctaPolicyEnv;
   }
 
   nvlsCTAsEnv = ncclParamNvlsChannels();
   if (nvlsCTAsEnv != NCCL_CONFIG_UNDEF_INT) {
-    if (comm->config.nvlsCTAs != NCCL_CONFIG_UNDEF_INT)
+    if (comm->config.nvlsCTAs != NCCL_CONFIG_UNDEF_INT) {
       INFO(NCCL_ENV, "Comm config nvlsCTAs reset to NCCL_NVLS_NCHANNELS=%d", nvlsCTAsEnv);
+    }
     comm->config.nvlsCTAs = nvlsCTAsEnv;
   }
 
@@ -2737,8 +2759,9 @@ static ncclResult_t commReclaim(struct ncclAsyncJob* job_) {
           struct ncclCommFinalizeAsyncJob job;
           job.comm = curIntraComm;
           /* every comm aborts, commDestroySync should not be blocked. */
-          if ((ret = commDestroySync((struct ncclAsyncJob*) &job)) != ncclSuccess)
+          if ((ret = commDestroySync((struct ncclAsyncJob*)&job)) != ncclSuccess) {
             WARN("commReclaim: comm %p (rank = %d) in commDestroySync, error %d", curIntraComm, curRank, ret);
+          }
         }
       }
 
@@ -3063,7 +3086,10 @@ exit:
   (void)ncclGroupErrCheck(res);
   NCCLCHECK(ncclGroupEndInternal());
 
-  if (newcomm && *newcomm) NVTX3_RANGE_ADD_PAYLOAD(CommShrink, NcclNvtxParamsCommShrinkSchema, NVTX3_PAYLOAD(comm->commHash, comm->nRanks, comm->rank, comm->cudaDev, excludeRanksCount));
+  if (newcomm && *newcomm) {
+    NVTX3_RANGE_ADD_PAYLOAD(CommShrink, NcclNvtxParamsCommShrinkSchema,
+                            NVTX3_PAYLOAD(comm->commHash, comm->nRanks, comm->rank, comm->cudaDev, excludeRanksCount));
+  }
 
   return res;
 }
@@ -3261,8 +3287,9 @@ exit:
   (void)ncclGroupErrCheck(res);
   NCCLCHECK(ncclGroupEndInternal());
 
-  if (newcomm && *newcomm)
+  if (newcomm && *newcomm) {
     NVTX3_RANGE_ADD_PAYLOAD(CommSplit, NcclNvtxParamsCommSplitSchema, NVTX3_PAYLOAD((*newcomm)->commHash, comm->commHash, comm->nRanks, comm->rank, comm->cudaDev, color, key));
+  }
 
   return res;
 }
@@ -3297,13 +3324,17 @@ ncclResult_t ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t *asyncError) {
   NCCLCHECK(PtrCheck(asyncError, "ncclGetAsyncError", "asyncError"));
 
   *asyncError = COMPILER_ATOMIC_LOAD(&comm->asyncResult, std::memory_order_acquire);
-  if (*asyncError == ncclSuccess && comm->proxyState) *asyncError = COMPILER_ATOMIC_LOAD(&comm->proxyState->asyncResult, std::memory_order_acquire);
+  if (*asyncError == ncclSuccess && comm->proxyState) {
+    *asyncError = COMPILER_ATOMIC_LOAD(&comm->proxyState->asyncResult, std::memory_order_acquire);
+  }
 
   /* Check gin status */
   if (*asyncError == ncclSuccess && comm->sharedRes && comm->sharedRes->ginState.connected) {
     struct ncclGinState* ginState = &comm->sharedRes->ginState;
     // Gin progress thread status
-    if (ginState->needsProxyProgress) *asyncError = COMPILER_ATOMIC_LOAD(&comm->sharedRes->ginState.asyncResult, std::memory_order_acquire);
+    if (ginState->needsProxyProgress) {
+      *asyncError = COMPILER_ATOMIC_LOAD(&comm->sharedRes->ginState.asyncResult, std::memory_order_acquire);
+    }
     // Gin side errors, also works when we have no GIN progress thread.
     if (*asyncError == ncclSuccess) {
       bool ginError;

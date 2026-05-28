@@ -589,8 +589,9 @@ static ncclResult_t ncclGinProxyDestroyContext(void *ginCtx) {
 
   // Free counters
   if (ctx) {
-    if (ctx->counters || ctx->countersGdrHandle)
+    if (ctx->counters || ctx->countersGdrHandle) {
       NCCLCHECK(freeMemCPUAccessible(ctx->counters, ctx->countersGdrHandle, NULL));
+    }
 
     // Free signals
     if (ctx->collComm && ctx->signalsMhandle)
@@ -608,11 +609,13 @@ static ncclResult_t ncclGinProxyDestroyContext(void *ginCtx) {
         if (hostGpuCtx->lastVisibleGet) NCCLCHECK(ncclCudaFree(hostGpuCtx->lastVisibleGet, NULL));
         if (hostGpuCtx->states) free(hostGpuCtx->states);
         if (hostGpuCtx->inlines) free(hostGpuCtx->inlines);
-        if (ctx->collComm && hostGpuCtx->inlinesMhandle)
+        if (ctx->collComm && hostGpuCtx->inlinesMhandle) {
           rmaBackend->deregMrSym(ctx->collComm, hostGpuCtx->inlinesMhandle);
+        }
         if (hostGpuCtx->queues) NCCLCHECK(freeMemCPUAccessible(hostGpuCtx->queues, NULL, NULL));
-        if (hostGpuCtx->cis || hostGpuCtx->cisGdrHandle)
+        if (hostGpuCtx->cis || hostGpuCtx->cisGdrHandle) {
           NCCLCHECK(freeMemCPUAccessible(hostGpuCtx->cis, hostGpuCtx->cisGdrHandle, NULL));
+        }
       }
       free(ctx->hostGpuCtx);
     }
@@ -655,8 +658,9 @@ static ncclResult_t ncclGinProxyProgress(void *ginCtx) {
 static ncclResult_t ncclGinProxyQueryLastError(void *ginCtx, bool *hasError) {
   struct ginProxyCtx *ctx = (struct ginProxyCtx *)ginCtx;
   *hasError = ctx->hasError;
-  if (ctx->hasError == ncclSuccess && rmaBackend->queryLastError)
+  if (ctx->hasError == ncclSuccess && rmaBackend->queryLastError) {
     NCCLCHECK(rmaBackend->queryLastError(ctx->rmaCtx, hasError));
+  }
   return ncclSuccess;
 }
 

@@ -250,7 +250,9 @@ static void initPluginLibsOnceFunc() {
 }
 
 static ncclResult_t ncclGinPluginFinalize(struct ncclComm* comm, int pluginIndex) {
-  if (pluginLibs[pluginIndex].ncclGin && pluginLibs[pluginIndex].state == ncclGinPluginStateEnabled) NCCLCHECK(pluginLibs[pluginIndex].ncclGin->finalize(comm->ginContext));
+  if (pluginLibs[pluginIndex].ncclGin && pluginLibs[pluginIndex].state == ncclGinPluginStateEnabled) {
+    NCCLCHECK(pluginLibs[pluginIndex].ncclGin->finalize(comm->ginContext));
+  }
   pluginLibs[pluginIndex].refCount--;
   if (pluginIndex < (pluginCount - NCCL_GIN_NUM_INTERNAL_PLUGINS)) {
     NCCLCHECK(ncclGinPluginUnload(&pluginLibs[pluginIndex]));

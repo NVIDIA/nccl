@@ -360,8 +360,10 @@ static int getNCCLStatus() {
         perror("read socket");
       return 1;
     }
-    if (bytes == 0) // EOF
+    if (bytes == 0) {
+      // EOF
       break;
+    }
     if (fwrite(msgBuf, 1, bytes, stdout) != bytes) {
       fprintf(stderr, "fwrite to stdout failed!\n");
       return 1;

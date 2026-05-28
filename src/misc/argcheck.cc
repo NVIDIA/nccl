@@ -93,7 +93,12 @@ static ncclResult_t registrationCheck(struct ncclInfo* info) {
   for (int r = 1; r < comm->nRanks; r++) {
     int infoIdx = r * 2;
     if (cmpBufInfo[0].isSymRegistered != bufInfo[infoIdx].isSymRegistered || cmpBufInfo[1].isSymRegistered != bufInfo[infoIdx + 1].isSymRegistered) {
-      if (comm->rank == 0) WARN("Coll %s size %ld symmetric registration check failed on rank %d: sendReg %d recvReg %d mismatch with rank 0 sendReg %d recvReg %d", info->opName, size, r, bufInfo[infoIdx].isSymRegistered, bufInfo[infoIdx + 1].isSymRegistered, cmpBufInfo[0].isSymRegistered, cmpBufInfo[1].isSymRegistered);
+      if (comm->rank == 0) {
+        WARN("Coll %s size %ld symmetric registration check failed on rank %d: sendReg %d recvReg %d mismatch with "
+             "rank 0 sendReg %d recvReg %d",
+             info->opName, size, r, bufInfo[infoIdx].isSymRegistered, bufInfo[infoIdx + 1].isSymRegistered,
+             cmpBufInfo[0].isSymRegistered, cmpBufInfo[1].isSymRegistered);
+      }
       ret = ncclInvalidArgument;
       goto fail;
     }
@@ -107,12 +112,22 @@ static ncclResult_t registrationCheck(struct ncclInfo* info) {
   if (info->coll == ncclFuncAllReduce || info->coll == ncclFuncReduceScatter || info->coll == ncclFuncAlltoAll || info->coll == ncclFuncGather) {
     if (cmpBufInfo[0].isSymRegistered) {
       if (sendWinMismatch) {
-        if (comm->rank == 0) WARN("Coll %s size %ld symmetric registration check failed on rank %d: send buffer window (0x%lx) mismatch with rank 0 (0x%lx)", info->opName, size, sendWinMismatchRank, bufInfo[sendWinMismatchRank * 2].bigOffset, cmpBufInfo[0].bigOffset);
+        if (comm->rank == 0) {
+          WARN("Coll %s size %ld symmetric registration check failed on rank %d: send buffer window (0x%lx) mismatch "
+               "with rank 0 (0x%lx)",
+               info->opName, size, sendWinMismatchRank, bufInfo[sendWinMismatchRank * 2].bigOffset,
+               cmpBufInfo[0].bigOffset);
+        }
         ret = ncclInvalidArgument;
         goto fail;
       }
       if (sendUserMismatch) {
-        if (comm->rank == 0) WARN("Coll %s size %ld symmetric registration check failed on rank %d: send buffer user offset (0x%lx) mismatch with rank 0 (0x%lx)", info->opName, size, sendUserMismatchRank, bufInfo[sendUserMismatchRank * 2].userOffset, cmpBufInfo[0].userOffset);
+        if (comm->rank == 0) {
+          WARN("Coll %s size %ld symmetric registration check failed on rank %d: send buffer user offset (0x%lx) "
+               "mismatch with rank 0 (0x%lx)",
+               info->opName, size, sendUserMismatchRank, bufInfo[sendUserMismatchRank * 2].userOffset,
+               cmpBufInfo[0].userOffset);
+        }
         ret = ncclInvalidArgument;
         goto fail;
       }
@@ -122,12 +137,22 @@ static ncclResult_t registrationCheck(struct ncclInfo* info) {
   if (info->coll == ncclFuncAllGather || info->coll == ncclFuncAllReduce || info->coll == ncclFuncAlltoAll || info->coll == ncclFuncScatter) {
     if (cmpBufInfo[1].isSymRegistered) {
       if (recvWinMismatch) {
-        if (comm->rank == 0) WARN("Coll %s size %ld symmetric registration check failed on rank %d: recv buffer window (0x%lx) mismatch with rank 0 (0x%lx)", info->opName, size, recvWinMismatchRank, bufInfo[recvWinMismatchRank * 2 + 1].bigOffset, cmpBufInfo[1].bigOffset);
+        if (comm->rank == 0) {
+          WARN("Coll %s size %ld symmetric registration check failed on rank %d: recv buffer window (0x%lx) mismatch "
+               "with rank 0 (0x%lx)",
+               info->opName, size, recvWinMismatchRank, bufInfo[recvWinMismatchRank * 2 + 1].bigOffset,
+               cmpBufInfo[1].bigOffset);
+        }
         ret = ncclInvalidArgument;
         goto fail;
       }
       if (recvUserMismatch) {
-        if (comm->rank == 0) WARN("Coll %s size %ld symmetric registration check failed on rank %d: recv buffer user offset (0x%lx) mismatch with rank 0 (0x%lx)", info->opName, size, recvUserMismatchRank, bufInfo[recvUserMismatchRank * 2 + 1].userOffset, cmpBufInfo[1].userOffset);
+        if (comm->rank == 0) {
+          WARN("Coll %s size %ld symmetric registration check failed on rank %d: recv buffer user offset (0x%lx) "
+               "mismatch with rank 0 (0x%lx)",
+               info->opName, size, recvUserMismatchRank, bufInfo[recvUserMismatchRank * 2 + 1].userOffset,
+               cmpBufInfo[1].userOffset);
+        }
         ret = ncclInvalidArgument;
         goto fail;
       }

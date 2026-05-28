@@ -370,10 +370,11 @@ ncclResult_t ncclNvmlGetCCStatus(struct ncclNvmlCCStatus *status) {
     else
       status->CCEnabled = false;
 
-    if (ccInfo.settingV12040.multiGpuMode == NVML_CC_SYSTEM_MULTIGPU_PROTECTED_PCIE)
+    if (ccInfo.settingV12040.multiGpuMode == NVML_CC_SYSTEM_MULTIGPU_PROTECTED_PCIE) {
       status->multiGpuProtectedPCIE = true;
-    else
+    } else {
       status->multiGpuProtectedPCIE = false;
+    }
     if (ccInfo.settingV12040.multiGpuMode == NVML_CC_SYSTEM_MULTIGPU_NVLE)
       status->multiGpuNVLE = true;
     else

@@ -247,8 +247,14 @@ ncclResult_t ncclOsSocketSetFlags(struct ncclSocket* sock) {
   // setsockopt should not fail even if the sizes are too large, do not change the default if unset by the user (=-1)
   rcvBuf = ncclParamSocketMaxRecvBuff();
   sndBuf = ncclParamSocketMaxSendBuff();
-  if (sndBuf > 0) SYSCHECKGOTO(setsockopt(sock->socketDescriptor, SOL_SOCKET, SO_SNDBUF, (char*)&sndBuf, sizeof(int)), "setsockopt SO_SNDBUF", ret, fail);
-  if (rcvBuf > 0) SYSCHECKGOTO(setsockopt(sock->socketDescriptor, SOL_SOCKET, SO_RCVBUF, (char*)&rcvBuf, sizeof(int)), "setsockopt SO_RCVBUF", ret, fail);
+  if (sndBuf > 0) {
+    SYSCHECKGOTO(setsockopt(sock->socketDescriptor, SOL_SOCKET, SO_SNDBUF, (char*)&sndBuf, sizeof(int)),
+                 "setsockopt SO_SNDBUF", ret, fail);
+  }
+  if (rcvBuf > 0) {
+    SYSCHECKGOTO(setsockopt(sock->socketDescriptor, SOL_SOCKET, SO_RCVBUF, (char*)&rcvBuf, sizeof(int)),
+                 "setsockopt SO_RCVBUF", ret, fail);
+  }
 exit:
   return ret;
 fail:
@@ -904,7 +910,9 @@ exit:
 fail_cuda:
   if (registered) {
     cudaError_t unregRes = cudaHostUnregister((void*)hptr);
-    if (unregRes != cudaSuccess) WARN("SHM legacy: cudaHostUnregister after setup failure failed: %s", cudaGetErrorString(unregRes));
+    if (unregRes != cudaSuccess) {
+      WARN("SHM legacy: cudaHostUnregister after setup failure failed: %s", cudaGetErrorString(unregRes));
+    }
   }
   if (captureModeSet) {
     cudaError_t modeRes = cudaThreadExchangeStreamCaptureMode(&mode);

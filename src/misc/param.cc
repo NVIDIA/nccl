@@ -82,7 +82,9 @@ int64_t ncclLoadParam(char const* env, int64_t deftVal, int64_t uninitialized, i
   // noCache is only load/stored within the mutex, no need for atomic
   if (*noCache == /*uninitialized*/ -1) ncclGetCachePolicy(env, noCache);
 
-  if (COMPILER_ATOMIC_LOAD(cache, std::memory_order_relaxed) != uninitialized) return COMPILER_ATOMIC_LOAD(cache, std::memory_order_relaxed);
+  if (COMPILER_ATOMIC_LOAD(cache, std::memory_order_relaxed) != uninitialized) {
+    return COMPILER_ATOMIC_LOAD(cache, std::memory_order_relaxed);
+  }
 
   // Read the environment variable
   const char* str = ncclGetEnv(env);

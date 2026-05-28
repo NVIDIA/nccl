@@ -39,7 +39,7 @@ std::string listOfToString(const void* ctx, const ContainerT& value) {
   auto* lc = static_cast<const listOfCtx*>(ctx);
   std::string s;
   for (const auto& elem : value) {
-    if (!s.empty()) { s += lc->delimiter; }
+    if (!s.empty()) s += lc->delimiter;
     s += elem;
   }
   return s;

@@ -215,7 +215,9 @@ static void initPluginLibsOnceFunc() {
 }
 
 static ncclResult_t ncclRmaPluginFinalize(struct ncclComm* comm, int pluginIndex) {
-  if (pluginLibs[pluginIndex].ncclRma && pluginLibs[pluginIndex].state == ncclRmaPluginStateEnabled) NCCLCHECK(pluginLibs[pluginIndex].ncclRma->finalize(comm->rmaContext));
+  if (pluginLibs[pluginIndex].ncclRma && pluginLibs[pluginIndex].state == ncclRmaPluginStateEnabled) {
+    NCCLCHECK(pluginLibs[pluginIndex].ncclRma->finalize(comm->rmaContext));
+  }
   pluginLibs[pluginIndex].refCount--;
   if (pluginIndex < (pluginCount - NCCL_RMA_NUM_INTERNAL_PLUGINS)) {
     NCCLCHECK(ncclRmaPluginUnload(&pluginLibs[pluginIndex]));

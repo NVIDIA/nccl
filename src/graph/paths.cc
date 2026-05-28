@@ -73,8 +73,10 @@ static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclT
         // else, discard the path.
         int pathMaxLength = (baseNode->type == GPU) ? 2 : 1;
         ncclTopoNode* baseDevNode = (baseNode->type == GPU) ? baseNode->gpu.parent : baseNode;
-        if (node != baseDevNode && node->type == DEV && (link->type != LINK_LOC || remNode->type!=GPU) &&
-            (ncclParamNvbDisable() || link->type != LINK_NVL || remNode->type != DEV || path->count > pathMaxLength)) continue;
+        if (node != baseDevNode && node->type == DEV && (link->type != LINK_LOC || remNode->type != GPU) &&
+            (ncclParamNvbDisable() || link->type != LINK_NVL || remNode->type != DEV || path->count > pathMaxLength)) {
+          continue;
+        }
 
         // Start with path type = link type. PATH and LINK types are supposed to match.
         // Don't consider LINK_NET as we only care about the NIC->GPU path.
@@ -299,8 +301,8 @@ ncclResult_t ncclTopoCheckP2p(struct ncclComm* comm, struct ncclTopoSystem* syst
         NCCLCHECK(ncclTopoCheckMNNVL(comm, info1, info2, &mnnvl));
         if (mnnvl < 0) {
           // Force enable CUDA P2P for cross-clique (NCCL_MNNVL_CROSS_CLIQUE=1)
-          if (p2p) { *p2p = 1; }
-          if (cudaP2p) { *cudaP2p = 1; }
+          if (p2p) *p2p = 1;
+          if (cudaP2p) *cudaP2p = 1;
           return ncclSuccess;
         }
         if (!mnnvl) return ncclSuccess;
@@ -802,11 +804,12 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclComm
               /* and (3) is on the same node as us */
               NCCL_TOPO_ID_SYSTEM_ID(peerNode->id) == NCCL_TOPO_ID_SYSTEM_ID(gpu->id) &&
               /* and (4) has either higher bw to that NIC or avoid going through the CPU (path.type is > PATH_PXN)*/
-              (peerNode->paths[NET][n].bw > gpu->paths[NET][n].bw || gpu->paths[NET][n].type > PATH_PXN))
+              (peerNode->paths[NET][n].bw > gpu->paths[NET][n].bw || gpu->paths[NET][n].type > PATH_PXN)) {
             // We can use that GPU as relay to communicate with that NIC.
             // Only enabling it in the GPU->NIC direction for now to favor
             // receiving locally and sending remotely (consistent with net.cc)
             NCCLCHECK(addInterStep(system, GPU, localGpuIndex, GPU, g, NET, n));
+          }
         }
       }
       if (gpu->paths[NET][n].type < PATH_PHB) {
@@ -959,7 +962,10 @@ ncclResult_t ncclTopoComputeP2pChannels(struct ncclComm* comm) {
     // In the case of >1 NVLD (and the user didn't set nChannelsPerNetPeer), the network is the botteneck.
     // Reduce the number of channels per host to avoid going above p2pnChannels to fit all the peers within a single round.
     INFO(NCCL_INIT, "Tuning P2P operations with maxP2pPeers = %d", comm->p2pMaxPeers);
-    while (comm->p2pnChannelsPerPeer * divUp(comm->p2pMaxPeers, NCCL_MAX_DEV_WORK_P2P_PER_BATCH) > comm->p2pnChannels && comm->p2pnChannelsPerPeer > 1) comm->p2pnChannelsPerPeer /= 2;
+    while (comm->p2pnChannelsPerPeer * divUp(comm->p2pMaxPeers, NCCL_MAX_DEV_WORK_P2P_PER_BATCH) > comm->p2pnChannels &&
+           comm->p2pnChannelsPerPeer > 1) {
+      comm->p2pnChannelsPerPeer /= 2;
+    }
   } else {
     comm->p2pnChannelsPerPeer = std::min(comm->p2pnChannels, comm->p2pnChannelsPerPeer);
   }

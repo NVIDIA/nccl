@@ -174,8 +174,9 @@ static ncclResult_t rasLinkSendCollReq(struct rasLink* link, struct rasCollectiv
       // We send collective messages through fully established and operational connections only.
       if (linkConn->conn->sock && linkConn->conn->sock->status == RAS_SOCK_READY &&
           !linkConn->conn->experiencingDelays) {
-        if (rasConnSendCollReq(linkConn->conn, req, reqLen) == ncclSuccess && coll != nullptr)
+        if (rasConnSendCollReq(linkConn->conn, req, reqLen) == ncclSuccess && coll != nullptr) {
           coll->fwdConns[coll->nFwdSent++] = linkConn->conn;
+        }
       } // linkConn->conn is fully established and operational.
       linkConn->conn->linkFlag = true;
     } // if (linkConn->conn && linkConn->conn != fromConn && !linkConn->con->linkFlag)
@@ -634,8 +635,10 @@ static ncclResult_t rasCollCommsInit(struct rasCollRequest** pReq, size_t* pReqL
     ncclCommsSorted = true;
   }
   for (int commIdx = 0; commIdx < nNcclComms; commIdx++) {
-    if (ncclComms[commIdx] == nullptr) // nullptr's are always at the end after sorting.
+    if (ncclComms[commIdx] == nullptr) {
+      // nullptr's are always at the end after sorting.
       break;
+    }
     if (!COMPILER_ATOMIC_LOAD(&ncclComms[commIdx]->peerInfoValid, std::memory_order_acquire)) {
       // Critical data is not yet initialized -- ignore the communicator.
       continue;
@@ -722,8 +725,9 @@ static ncclResult_t rasCollCommsInit(struct rasCollRequest** pReq, size_t* pReqL
       memcpy(rank->collOpCounts, ncclComm->seqNumber, sizeof(rank->collOpCounts));
       rank->status.initState = ncclComm->initState;
       rank->status.asyncError = COMPILER_ATOMIC_LOAD(&ncclComm->asyncResult, std::memory_order_acquire);
-      if (rank->status.asyncError == ncclSuccess && ncclComm->proxyState)
+      if (rank->status.asyncError == ncclSuccess && ncclComm->proxyState) {
         rank->status.asyncError = COMPILER_ATOMIC_LOAD(&ncclComm->proxyState->asyncResult, std::memory_order_acquire);
+      }
       rank->status.finalizeCalled = (ncclComm->finalizeCalled != 0);
       rank->status.destroyFlag = (ncclComm->destroyFlag != 0);
       rank->status.abortFlag = (COMPILER_ATOMIC_LOAD(ncclComm->abortFlag, std::memory_order_acquire) != 0);
@@ -858,10 +862,11 @@ static ncclResult_t rasCollCommsMerge(struct rasCollective* coll, struct rasMsg*
         break;
       }
 
-      if (collIdx < collData->nComms && msgIdx < msgData->nComms)
+      if (collIdx < collData->nComms && msgIdx < msgData->nComms) {
         cmp = rasCommIdCompare(&collComm->commId, &msgComm->commId);
-      else
+      } else {
         cmp = (collIdx < collData->nComms ? -1 : 1);
+      }
 
       if (cmp == 0 && collComm->commNRanks != msgComm->commNRanks) {
         INFO(NCCL_RAS, "RAS encountered inconsistent communicator data: size %d != %d -- "

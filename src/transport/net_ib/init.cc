@@ -287,7 +287,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
   ncclProfilerFunction = profFunction;
   if (ncclParamIbDisable()) return ncclInternalError;
   static int shownIbHcaEnv = 0;
-  if(wrap_ibv_symbols() != ncclSuccess) { return ncclInternalError; }
+  if(wrap_ibv_symbols() != ncclSuccess) return ncclInternalError;
   if(wrap_mlx5dv_symbols() != ncclSuccess) { INFO(NCCL_NET, "NET/IB : Failed to open mlx5dv symbols. Advance features like CX-8 Direct-NIC will be disabled."); }
 
   if (ncclNIbDevs == -1) {
@@ -350,11 +350,15 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
               continue;
             }
             if (portAttr.state != IBV_PORT_ACTIVE) continue;
-            if (portAttr.link_layer != IBV_LINK_LAYER_INFINIBAND && portAttr.link_layer != IBV_LINK_LAYER_ETHERNET) continue;
+            if (portAttr.link_layer != IBV_LINK_LAYER_INFINIBAND && portAttr.link_layer != IBV_LINK_LAYER_ETHERNET) {
+              continue;
+            }
 
             // check against user specified HCAs/ports
             int userIfId = -1;
-            if (!(matchIfList(devices[d]->name, port_num, userIfs, nUserIfs, searchExact, &userIfId) ^ searchNot)) continue;
+            if (!(matchIfList(devices[d]->name, port_num, userIfs, nUserIfs, searchExact, &userIfId) ^ searchNot)) {
+              continue;
+            }
 
             // check for mlx5 data direct support only once for a each device
             if (devCount == -1) {
@@ -463,12 +467,14 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
       NCCLCHECKGOTO(ncclIbGetPlaneIndex(ncclIbDevs[d].planeId,&uniquePlaneCount,uniquePlaneIds,&ncclIbDevs[d].planeIdx),ret, fail);
       NCCLCHECKGOTO(ncclIbGetRealPort(ncclIbDevs[d].pciPath, &ncclIbDevs[d].realPort, d), ret, fail);
       snprintf(line + strlen(line), sizeof(line) - strlen(line), " [%d]%s:%d", d, ncclIbDevs[d].devName, ncclIbDevs[d].portNum);
-      if (ncclIbDevs[d].railId != NCCL_NET_ID_UNDEF)
+      if (ncclIbDevs[d].railId != NCCL_NET_ID_UNDEF) {
         snprintf(line + strlen(line), sizeof(line) - strlen(line), ":%d", ncclIbDevs[d].railId);
-      else if (ncclIbDevs[d].planeId != NCCL_NET_ID_UNDEF)
+      } else if (ncclIbDevs[d].planeId != NCCL_NET_ID_UNDEF) {
         snprintf(line + strlen(line), sizeof(line) - strlen(line), ":");
-      if (ncclIbDevs[d].planeId != NCCL_NET_ID_UNDEF)
+      }
+      if (ncclIbDevs[d].planeId != NCCL_NET_ID_UNDEF) {
         snprintf(line + strlen(line), sizeof(line) - strlen(line), ":%d", ncclIbDevs[d].planeId);
+      }
       snprintf(line + strlen(line), sizeof(line) - strlen(line), "/%s", NCCL_IB_LLSTR(ncclIbDevs[d].link));
       // Add this plain physical device to the list of virtual devices (after sorting)
       int vDev;

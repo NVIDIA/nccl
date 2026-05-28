@@ -286,7 +286,9 @@ ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm, struct ncclIntruQ
           // the last segment of the task
           assert(devWork.nChannels > 0);
           // if the remaining cell is less than 1024 bytes, we can fuse the last channel
-          if ((remainCell - cellLeft) * NCCL_SYM_KERNEL_CELL_SIZE <= (1 << 10) || ncclIntruQueueEmpty(symTaskQueue)) devWork.nChannels++;
+          if ((remainCell - cellLeft) * NCCL_SYM_KERNEL_CELL_SIZE <= (1 << 10) || ncclIntruQueueEmpty(symTaskQueue)) {
+            devWork.nChannels++;
+          }
         } else {
           // middle segment of the task
           devWork.nChannels++;

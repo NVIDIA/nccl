@@ -167,7 +167,10 @@ static ncclResult_t ncclNetPluginInit(struct ncclComm* comm, netPluginLib_t* plu
   if (pluginLib->ncclNetPluginState >= ncclNetPluginStateInitReady && pluginLib->ncclNet) {
     ncclNetCommConfig_t commConfig = {};
     commConfig.trafficClass = comm->config.trafficClass == NCCL_CONFIG_UNDEF_INT ? NCCL_NET_TRAFFIC_CLASS_UNDEF : comm->config.trafficClass;
-    if (pluginLib->ncclNet->init(&comm->netContext, comm->commHash, &commConfig, ncclDebugLog, ncclProfilerCallback) != ncclSuccess) goto fail;
+    if (pluginLib->ncclNet->init(&comm->netContext, comm->commHash, &commConfig, ncclDebugLog, ncclProfilerCallback) !=
+        ncclSuccess) {
+      goto fail;
+    }
     initCompleted = true;
   }
   // Detection of the devices is only done when the plugin is being initialized the first time
@@ -181,12 +184,15 @@ static ncclResult_t ncclNetPluginInit(struct ncclComm* comm, netPluginLib_t* plu
 
   // Init must be called for each new comm to set the right context
   if (pluginLib->ncclCollNetPluginState >= ncclNetPluginStateInitReady && pluginLib->ncclCollNet) {
-    if (pluginLib->ncclCollNet->init(&comm->collNetContext, comm->commHash, ncclDebugLog) != ncclSuccess) pluginLib->ncclCollNetPluginState = ncclNetPluginStateDisabled;
+    if (pluginLib->ncclCollNet->init(&comm->collNetContext, comm->commHash, ncclDebugLog) != ncclSuccess) {
+      pluginLib->ncclCollNetPluginState = ncclNetPluginStateDisabled;
+    }
   }
   // Detection of the devices is only done when the plugin is being initialized the first time
   if (pluginLib->ncclCollNetPluginState == ncclNetPluginStateInitReady && pluginLib->ncclCollNet) {
-    if (pluginLib->ncclCollNet->devices(&ndev) != ncclSuccess || ndev <= 0) pluginLib->ncclCollNetPluginState = ncclNetPluginStateDisabled;
-    else {
+    if (pluginLib->ncclCollNet->devices(&ndev) != ncclSuccess || ndev <= 0) {
+      pluginLib->ncclCollNetPluginState = ncclNetPluginStateDisabled;
+    } else {
       pluginLib->collNetPhysDevs = ndev;
       pluginLib->collNetVirtDevs = NCCL_UNDEF_DEV_COUNT;
       pluginLib->ncclCollNetPluginState = ncclNetPluginStateEnabled;
@@ -295,7 +301,10 @@ static void initPluginLibsOnceFunc() {
 
 static ncclResult_t ncclNetPluginFinalize(struct ncclComm* comm, int pluginIndex) {
   NCCLCHECK(netPluginLibs[pluginIndex].ncclNet->finalize(comm->netContext));
-  if (netPluginLibs[pluginIndex].ncclCollNet && netPluginLibs[pluginIndex].ncclCollNetPluginState == ncclNetPluginStateEnabled) NCCLCHECK(netPluginLibs[pluginIndex].ncclCollNet->finalize(comm->collNetContext));
+  if (netPluginLibs[pluginIndex].ncclCollNet &&
+      netPluginLibs[pluginIndex].ncclCollNetPluginState == ncclNetPluginStateEnabled) {
+    NCCLCHECK(netPluginLibs[pluginIndex].ncclCollNet->finalize(comm->collNetContext));
+  }
   netPluginLibs[pluginIndex].ncclNetPluginRefCount--;
   if (pluginIndex < (pluginCount - NCCL_NET_NUM_INTERNAL_PLUGINS)) {
     NCCLCHECK(ncclNetPluginUnload(&netPluginLibs[pluginIndex]));
@@ -447,8 +456,9 @@ ncclResult_t ncclGpuGdrSupport(struct ncclComm* comm, int* gdrSupport) {
         goto cleanup2;
       }
 
-      if (sComm == NULL)
+      if (sComm == NULL) {
         NCCLCHECKGOTONOWARN(comm->ncclNet->connect(comm->netContext, dev, &handle, &sComm, NULL), ret, cleanup2, NCCL_NET);
+      }
 
       if (rComm == NULL)
         NCCLCHECKGOTONOWARN(comm->ncclNet->accept(lComm, &rComm, NULL), ret, cleanup2, NCCL_NET);

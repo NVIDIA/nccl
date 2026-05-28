@@ -340,11 +340,14 @@ static void ncclDebugLogV(ncclDebugLogLevel level, unsigned long flags,
 
   // Add level specific formatting. The format string from the call site is incorporated into this prefix.
   if (level == NCCL_LOG_WARN) {
-    if (func && func[0])
+    if (func && func[0]) {
       len += snprintf(buffer+len, sizeof(buffer)-len, "[%d] %s:%d (%s) NCCL WARN %s\n", cudaDev, fileStr, line, funcStr, fmt);
-    else
+    } else {
       len += snprintf(buffer+len, sizeof(buffer)-len, "[%d] %s:%d NCCL WARN %s\n", cudaDev, fileStr, line, fmt);
-    if (ncclWarnSetDebugInfo) COMPILER_ATOMIC_STORE(&ncclDebugLevel, static_cast<int>(NCCL_LOG_INFO), std::memory_order_release);
+    }
+    if (ncclWarnSetDebugInfo) {
+      COMPILER_ATOMIC_STORE(&ncclDebugLevel, static_cast<int>(NCCL_LOG_INFO), std::memory_order_release);
+    }
   } else if (level == NCCL_LOG_INFO) {
     len += snprintf(buffer+len, sizeof(buffer)-len, "[%d] NCCL INFO %s\n", cudaDev, fmt);
   } else if (level == NCCL_LOG_TRACE && flags == NCCL_CALL) {

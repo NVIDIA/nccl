@@ -759,8 +759,9 @@ void rasSockEventLoop(struct rasSocket* sock, int pollIdx) {
               break;
           }
           if (sock->conn) {
-            if (sock->conn->sock == sock && (sock->conn->startRetryTime || sock->conn->experiencingDelays))
+            if (sock->conn->sock == sock && (sock->conn->startRetryTime || sock->conn->experiencingDelays)) {
               rasConnResume(sock->conn);
+            }
           }
         } // !closed
       } while (msg);
@@ -1520,9 +1521,10 @@ static void rasLinkConnDrop(struct rasLink* link, const struct rasConnection* co
           // Ensure that the conn becoming the primary is not marked as external (we don't want to lose it if
           // the remote peer loses interest in it).
           link->conns->external = false;
-          if (link->conns->conn)
+          if (link->conns->conn) {
             INFO(NCCL_RAS, "RAS link %d: former fallback connection 1 with %s is the new primary",
                  link->direction, ncclSocketToString(&link->conns->conn->addr, rasLine));
+          }
           rasLinkSanitizeFallbacks(link);
           free(linkConn);
         } else {

@@ -920,7 +920,7 @@ fail_locReg_memHandle_mem:
   symMemoryDestroy(comm, mem);
 fail_locReg_memHandle:
   for (int idx = 0; idx < numSegments; idx++) {
-    if (memHandles[idx] != 0x0ULL) { CUCHECKIGNORE(cuMemRelease(memHandles[idx])); }
+    if (memHandles[idx] != 0x0ULL) CUCHECKIGNORE(cuMemRelease(memHandles[idx]));
   }
   free(memHandles);
 fail_locReg:
@@ -1298,7 +1298,7 @@ fail_stream_mem_win:
   symWindowDestroy(comm, win->vidmem, stream);
   cudaStreamSynchronize(stream);
 fail_stream_mem:
-  if (memHandle != 0x0) { CUCHECKIGNORE(cuMemRelease(memHandle)); }
+  if (memHandle != 0x0) CUCHECKIGNORE(cuMemRelease(memHandle));
   symMemoryDestroy(comm, mem);
 fail_stream:
   cudaStreamDestroy(stream);

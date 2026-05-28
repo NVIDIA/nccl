@@ -227,8 +227,10 @@ static ncclResult_t rasPeersUpdate(struct rasPeerInfo* rankPeers, int* nRankPeer
         if (cmp == 0)
           break;
       }
-      if (cmp > 0) // No more rasPeer entries -- rankPeer will go at the end.
+      if (cmp > 0) {
+        // No more rasPeer entries -- rankPeer will go at the end.
         newNRasPeers++;
+      }
     }
   }
 
@@ -326,8 +328,9 @@ static ncclResult_t rasPeersUpdate(struct rasPeerInfo* rankPeers, int* nRankPeer
         }
         // If this is the first time this function is run, myPeerIdx will need to be set.  It's more work in that
         // case as we need to compare the addresses of each peer until we find one.
-        if (myPeerIdx == -1 && memcmp(&newRasPeer->addr, &rasNetListeningSocket.addr, sizeof(newRasPeer->addr)) == 0)
+        if (myPeerIdx == -1 && memcmp(&newRasPeer->addr, &rasNetListeningSocket.addr, sizeof(newRasPeer->addr)) == 0) {
           newMyPeerIdx = newPeerIdx;
+        }
         rankPeerIdx++;
       }
     } else {
@@ -595,11 +598,12 @@ ncclResult_t rasMsgHandlePeersUpdate(struct rasMsg* msg, struct rasSocket* sock)
       NCCLCHECKGOTO(rasPeersUpdate(msg->peersUpdate.peers, &msg->peersUpdate.nPeers), ret, fail);
     else
       msg->peersUpdate.nPeers = 0;
-    if (nDeadPeers > 0)
+    if (nDeadPeers > 0) {
       NCCLCHECKGOTO(rasDeadPeersUpdate((union ncclSocketAddress*)(((char*)msg)+deadPeersOffset),
                                        &msg->peersUpdate.nDeadPeers), ret, fail);
-    else
+    } else {
       msg->peersUpdate.nDeadPeers = 0;
+    }
 
     INFO(NCCL_RAS, "RAS finished local processing of peersUpdate "
          "(new nRasPeers %d, nRasDeadPeers %d, nPeers %d, nDeadPeers %d)",
@@ -784,9 +788,9 @@ int rasLinkCalculatePeer(const struct rasLink* link, int peerIdx, bool isFallbac
 
     if (rasPeerIsDead(&rasPeers[newPeerIdx].addr)) {
       newPeerIdx = (newPeerIdx + nRasPeers + link->direction) % nRasPeers;
-    }
-    else
+    } else {
       break;
+    }
   } while (newPeerIdx != myPeerIdx);
 
   return (newPeerIdx != myPeerIdx ? newPeerIdx : -1);
@@ -958,8 +962,10 @@ static int rasRanksCompare(const void* e1, const void* e2) {
   const struct rasRankInit* r2 = (const struct rasRankInit*)e2;
   int cmp = ncclSocketsCompare(&r1->addr, &r2->addr);
   if (cmp == 0) {
-    if (r1->addr.sa.sa_family == 0) // Bail out in case of empty addresses...
+    if (r1->addr.sa.sa_family == 0) {
+      // Bail out in case of empty addresses...
       return 0;
+    }
     if (r1->pid != r2->pid) {
       // Should never happen.
       INFO(NCCL_RAS, "RAS ranks discrepancy for same address %s: r1->pid %d, r2->pid %d -- internal error?",
@@ -984,10 +990,12 @@ int ncclSocketsCompare(const void* p1, const void* p2) {
   // AF_INET (2) is less than AF_INET6 (10).
   int family = a1->sa.sa_family;
   if (family != a2->sa.sa_family) {
-    if (family > 0 && a2->sa.sa_family > 0)
+    if (family > 0 && a2->sa.sa_family > 0) {
       return (family < a2->sa.sa_family ? -1 : 1);
-    else // Put empty addresses at the end (not that it matters...).
+    } else {
+      // Put empty addresses at the end (not that it matters...).
       return (family > 0 ? -1 : 1);
+    }
   }
 
   int cmp;
@@ -1017,12 +1025,13 @@ bool ncclSocketsSameNode(const union ncclSocketAddress* a1, const union ncclSock
   if (family != a2->sa.sa_family)
     return false;
 
-  if (family == AF_INET)
+  if (family == AF_INET) {
     return (memcmp(&a1->sin.sin_addr, &a2->sin.sin_addr, sizeof(a1->sin.sin_addr)) == 0);
-  else if (family == AF_INET6)
+  } else if (family == AF_INET6) {
     return (memcmp(&a1->sin6.sin6_addr, &a2->sin6.sin6_addr, sizeof(a1->sin6.sin6_addr)) == 0);
-  else
+  } else {
     return true; // Two empty addresses are equal...
+  }
 }
 
 // Debug output routine: dumps the rasPeers array.

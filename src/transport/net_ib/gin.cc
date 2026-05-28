@@ -126,15 +126,17 @@ static ncclResult_t ncclGinIbAllGather(struct ncclGinIbCollComm *cComm, void *sr
     while (srequest == NULL || rrequest == NULL) {
       rbuf = (void *)((uintptr_t)recvBuf + rpeer * len);
       tag = NCCL_GIN_IB_ALLGATHER_TAG;
-      if (srequest == NULL)
+      if (srequest == NULL) {
         NCCLCHECKGOTO(ncclNetIb.isend(cComm->sendComm,
                                       (void *)((uintptr_t)recvBuf + speer * len),
                                       len, tag, sMhandle, NULL, &srequest),
                       status, out);
-      if (rrequest == NULL)
+      }
+      if (rrequest == NULL) {
         NCCLCHECKGOTO(ncclNetIb.irecv(cComm->recvComm, 1, &rbuf, &len,
                                       &tag, &rMhandle, NULL, &rrequest),
                       status, out);
+      }
     }
     while (srequest || rrequest) {
       if (rrequest)
@@ -420,10 +422,12 @@ ncclResult_t ncclRmaIbProxyCreateContext(void* collComm, ncclRmaConfig_t* config
       int connectPeer = (cComm->rank + i) % nranks;
       int acceptPeer = (cComm->rank - i + nranks) % nranks;
       do {
-        if (gc->fullSendComm[connectPeer] == NULL)
+        if (gc->fullSendComm[connectPeer] == NULL) {
           NCCLCHECKGOTO(ncclIbConnectImpl(cComm->ctx, cComm->dev, handles+NCCL_NET_HANDLE_MAXSIZE*connectPeer, &gc->fullSendComm[connectPeer], NULL, /*nQpsPerDev*/ 1, ncclParamGinIbTc() != -1 ? ncclParamGinIbTc() : ncclParamIbTc()), ret, end);
-        if (gc->fullRecvComm[acceptPeer] == NULL)
+        }
+        if (gc->fullRecvComm[acceptPeer] == NULL) {
           NCCLCHECKGOTO(ncclIbAcceptImpl(lComm, &gc->fullRecvComm[acceptPeer], NULL, /*nQpsPerDev*/ 1), ret, end);
+        }
       } while ((gc->fullSendComm[connectPeer] == NULL) ||
           (gc->fullRecvComm[acceptPeer] == NULL));
       NCCLCHECKGOTO(ncclGinIbP2PBarrier(cComm), ret, end);

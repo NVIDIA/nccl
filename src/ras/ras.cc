@@ -216,8 +216,10 @@ static ncclResult_t rasLocalHandle(bool* terminate) {
   while (done < sizeof(msg)) {
     size_t nread;
     NCCLCHECK(ncclOsSocketPairRead(rasNotificationPipe[0], (char*)&msg + done, sizeof(msg) - done, &nread));
-    if (nread == 0) // EOF
+    if (nread == 0) {
+      // EOF
       return ncclSystemError;
+    }
     done += nread;
   }
 
@@ -635,8 +637,9 @@ static void* rasThreadMain(void*) {
     nEvents = poll(rasPfds, nRasPfds, timeout);
 
     nextWakeup = clockNano()+CLOCK_UNITS_PER_SEC;
-    if (nEvents == -1 && errno != EINTR)
+    if (nEvents == -1 && errno != EINTR) {
       INFO(NCCL_RAS, "RAS continuing in spite of an unexpected error from poll: %s", strerror(errno));
+    }
 
     // Handle any poll-related events.
     for (int pollIdx = 0; pollIdx < nRasPfds && nEvents > 0; pollIdx++) {

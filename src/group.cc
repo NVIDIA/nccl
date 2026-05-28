@@ -431,7 +431,9 @@ static void groupCleanup(struct ncclComm** groupCommHeadPtr, struct ncclIntruQue
           memset(&comm->planner, 0, sizeof(comm->planner));
 
           comm->planner.peers = tmp;
-          if (comm->planner.peers != NULL) memset(comm->planner.peers, 0, comm->nRanks * sizeof(comm->planner.peers[0]));
+          if (comm->planner.peers != NULL) {
+            memset(comm->planner.peers, 0, comm->nRanks * sizeof(comm->planner.peers[0]));
+          }
           comm->planner.bcast_info.minBcastPeer = INT_MAX;
           comm->planner.bcast_info.maxBcastPeer = INT_MIN;
 
@@ -717,8 +719,10 @@ static ncclResult_t groupLaunch(struct ncclAsyncJob *job_, ncclSimInfo_t* simInf
 
   while (!ncclIntruQueueEmpty(asyncJobsMain)) {
     struct ncclAsyncJob* job = ncclIntruQueueDequeue(asyncJobsMain);
-    if (!job->destroyFlag && job->comm && !job->comm->config.blocking && groupCommHeadMain[ncclGroupTaskTypeCollective] == nullptr)
+    if (!job->destroyFlag && job->comm && !job->comm->config.blocking &&
+        groupCommHeadMain[ncclGroupTaskTypeCollective] == nullptr) {
       (void) ncclCommSetAsyncError(job->comm, ret);
+    }
     if (job->destructor) job->destructor((void*)job);
   }
 

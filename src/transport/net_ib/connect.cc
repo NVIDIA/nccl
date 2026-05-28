@@ -1579,8 +1579,9 @@ ncclResult_t ncclIbCloseSend(void* sendComm) {
   if (comm) {
     NCCLCHECK(ncclSocketClose(&comm->base.sock));
 
-    for (int q = 0; q < comm->base.nqps; q++)
+    for (int q = 0; q < comm->base.nqps; q++) {
       if (comm->base.qps[q].qp != NULL) NCCLCHECK(wrap_ibv_destroy_qp(comm->base.qps[q].qp));
+    }
 
     if (comm->base.resiliency) {
       NCCLCHECK(ncclIbResiliencyClose(comm->base.resiliency));
@@ -1611,8 +1612,9 @@ ncclResult_t ncclIbCloseRecv(void* recvComm) {
   if (comm) {
     NCCLCHECK(ncclSocketClose(&comm->base.sock));
 
-    for (int q = 0; q < comm->base.nqps; q++)
+    for (int q = 0; q < comm->base.nqps; q++) {
       if (comm->base.qps[q].qp != NULL) NCCLCHECK(wrap_ibv_destroy_qp(comm->base.qps[q].qp));
+    }
 
     if (comm->base.resiliency) {
       NCCLCHECK(ncclIbResiliencyClose(comm->base.resiliency));

@@ -891,9 +891,11 @@ static ncclResult_t addP2pToPlan(
     // Assume SIMPLE protocol to start with to determine number of channels
     stepSize[dir] = comm->p2pChunkSize;
 
-    if (bytes[dir] == -1) nChannels[dir] = 0;
-    else if (bytes[dir] == 0) nChannels[dir] = 1;
-    else {
+    if (bytes[dir] == -1) {
+      nChannels[dir] = 0;
+    } else if (bytes[dir] == 0) {
+      nChannels[dir] = 1;
+    } else {
       ssize_t minPartSize = comm->nNodes > 1 ? stepSize[dir]/2 : stepSize[dir]/8;
       ssize_t maxPartSize = comm->nNodes > 1 ? stepSize[dir]   : stepSize[dir]*32;
       nChannels[dir] = std::min<int>(nChannelsMin, divUp(bytes[dir], minPartSize));
@@ -941,8 +943,10 @@ static ncclResult_t addP2pToPlan(
             int peerRank = dir ? sendRank : recvRank;
             struct ncclConnector* conn = dir ? &channelPeers[peerRank]->send[connIndex]
               : &channelPeers[peerRank]->recv[connIndex];
-              if (conn->conn.flags & NCCL_DIRECT_NIC)
-                ncclRegisterP2pNetBuffer(comm, addrs[dir], bytes[dir], conn, &regFlag, &handles[dir][part], &plan->cleanupQueue);
+            if (conn->conn.flags & NCCL_DIRECT_NIC) {
+              ncclRegisterP2pNetBuffer(comm, addrs[dir], bytes[dir], conn, &regFlag, &handles[dir][part],
+                                       &plan->cleanupQueue);
+            }
               if (!regFlag) break;
           }
           netRegistered[dir] = regFlag ? true : false;
@@ -1521,7 +1525,7 @@ namespace {
 
 static ncclResult_t getImplicitOrder(enum ncclImplicitOrder *mode, bool capturing, int driver=-1) {
   if (ncclParamLaunchOrderImplicit()) {
-    if (driver < 0) { NCCLCHECK(ncclCudaDriverVersion(&driver)); }
+    if (driver < 0) NCCLCHECK(ncclCudaDriverVersion(&driver));
     if (capturing && driver < 12090) { *mode = ncclImplicitOrderSerial; return ncclSuccess; }
     *mode = 12030 <= std::min<int>(CUDART_VERSION, driver) ? ncclImplicitOrderLaunch : ncclImplicitOrderSerial;
     return ncclSuccess;
@@ -1659,7 +1663,9 @@ ncclResult_t ncclLaunchPrepare(struct ncclComm* comm) {
       }
     }
 
-    if (!persistent && comm->sharedRes->persistentRefs) status = CUDACLEARERROR(cudaEventQuery(comm->sharedRes->hostStream.serialEvent));
+    if (!persistent && comm->sharedRes->persistentRefs) {
+      status = CUDACLEARERROR(cudaEventQuery(comm->sharedRes->hostStream.serialEvent));
+    }
     if (persistent || ncclCudaLaunchBlocking || status == cudaErrorNotReady) {
       // We have to launch host tasks to push proxy args. We are careful to only
       // do this if necessary since host tasks impose a high performance cost in CUDA.
@@ -1959,7 +1965,10 @@ static ncclResult_t updateCollCostTable(
     if (a == NCCL_ALGO_COLLNET_DIRECT && comm->maxLocalRanks > NCCL_MAX_DIRECT_ARITY+1) continue;
     // Disable CollNet Chain for more than 8 local GPUs
     if (a == NCCL_ALGO_COLLNET_CHAIN && comm->maxLocalRanks > NCCL_MAX_DIRECT_ARITY+1) continue;
-    if ((a == NCCL_ALGO_NVLS || a == NCCL_ALGO_NVLS_TREE) && (!nvlsSupport || (info->func != ncclFuncAllReduce && comm->localRanks > NCCL_MAX_NVLS_ARITY))) continue;
+    if ((a == NCCL_ALGO_NVLS || a == NCCL_ALGO_NVLS_TREE) &&
+        (!nvlsSupport || (info->func != ncclFuncAllReduce && comm->localRanks > NCCL_MAX_NVLS_ARITY))) {
+      continue;
+    }
     if (a == NCCL_ALGO_NVLS && collNetSupport != 1 && comm->nNodes > 1) continue;
     /* Tree reduceScatter doesn't support scaling yet */
     if (a == NCCL_ALGO_PAT && info->func == ncclFuncReduceScatter
@@ -2189,21 +2198,39 @@ static ncclResult_t calcCollChunking(
 
   if (info->algorithm == NCCL_ALGO_COLLNET_DIRECT) {
     // Optimize chunkSize / nSteps
-    while (nBytes / (nChannels * comm->channels[0].collnetDirect.nHeads * chunkSize) < comm->channels[0].collnetDirect.depth * 64 && chunkSize > 131072) chunkSize /= 2;
-    while (nBytes / (nChannels * comm->channels[0].collnetDirect.nHeads * chunkSize) < comm->channels[0].collnetDirect.depth * 8 && chunkSize > 65536) chunkSize /= 2;
-    while (nBytes / (nChannels * comm->channels[0].collnetDirect.nHeads * chunkSize) < comm->channels[0].collnetDirect.depth * 8 && chunkSize > 32768) chunkSize /= 2;
+    while (nBytes / (nChannels * comm->channels[0].collnetDirect.nHeads * chunkSize) <
+             comm->channels[0].collnetDirect.depth * 64 &&
+           chunkSize > 131072) {
+      chunkSize /= 2;
+    }
+    while (nBytes / (nChannels * comm->channels[0].collnetDirect.nHeads * chunkSize) <
+             comm->channels[0].collnetDirect.depth * 8 &&
+           chunkSize > 65536) {
+      chunkSize /= 2;
+    }
+    while (nBytes / (nChannels * comm->channels[0].collnetDirect.nHeads * chunkSize) <
+             comm->channels[0].collnetDirect.depth * 8 &&
+           chunkSize > 32768) {
+      chunkSize /= 2;
+    }
   } else if (info->algorithm == NCCL_ALGO_COLLNET_CHAIN) {
     stepSize = comm->buffSizes[NCCL_PROTO_SIMPLE] / NCCL_STEPS;
     chunkSize = std::min(256 * 1024, stepSize * chunkSteps);
-    while (nBytes / (nChannels * chunkSize) < comm->channels[0].collnetChain.depth * 64 && chunkSize > 131072) chunkSize /= 2;
-    while (nBytes / (nChannels * chunkSize) < comm->channels[0].collnetChain.depth * 8 && chunkSize > 65536) chunkSize /= 2;
+    while (nBytes / (nChannels * chunkSize) < comm->channels[0].collnetChain.depth * 64 && chunkSize > 131072) {
+      chunkSize /= 2;
+    }
+    while (nBytes / (nChannels * chunkSize) < comm->channels[0].collnetChain.depth * 8 && chunkSize > 65536) {
+      chunkSize /= 2;
+    }
     while (nBytes / (nChannels * chunkSize) < comm->channels[0].collnetChain.depth && chunkSize > 32768) chunkSize /= 2;
   } else if (info->algorithm == NCCL_ALGO_NVLS) {
     if ((info->regBufType & NCCL_NVLS_REG_BUFFER) && (info->func == ncclFuncAllGather || info->func == ncclFuncReduceScatter)) {
       chunkSize = comm->buffSizes[NCCL_PROTO_SIMPLE] / NCCL_STEPS;
     } else {
       int maxChunkSize = comm->nvlsChunkSize;
-      if (comm->nNodes > 1 && comm->bandwidths[ncclFuncAllReduce][NCCL_ALGO_NVLS][NCCL_PROTO_SIMPLE] < 150) maxChunkSize = 32768;
+      if (comm->nNodes > 1 && comm->bandwidths[ncclFuncAllReduce][NCCL_ALGO_NVLS][NCCL_PROTO_SIMPLE] < 150) {
+        maxChunkSize = 32768;
+      }
       if (chunkSize > maxChunkSize) chunkSize = maxChunkSize;
       // Use uint64_t so that concurrentOps*chunkSize*X does not overflow.
       // However, nChannels * comm->channels[0].nvls.nHeads should easily fit in 32 bits.
@@ -3099,7 +3126,7 @@ exit:
   NCCLCHECK(ncclGroupEndInternal());
   /* if depth is 1, ncclGroupEndInternal() will trigger group ops. The state can change
    * so we have to check state here. */
-  if (info->comm && !info->comm->config.blocking) { NCCLCHECK(ncclCommGetAsyncError(info->comm, &ret)); }
+  if (info->comm && !info->comm->config.blocking) NCCLCHECK(ncclCommGetAsyncError(info->comm, &ret));
   return ret;
 fail:
   if (info->comm && !info->comm->config.blocking) (void) ncclCommSetAsyncError(info->comm, ret);

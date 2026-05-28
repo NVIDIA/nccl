@@ -356,8 +356,9 @@ static ncclResult_t sharedListen(struct ncclProxyState* proxyState, int netDev, 
     NCCLCHECK(ncclCalloc(&resources, 1));
     collNet->resources = resources;
   }
-  if (resources->collNetComms[netDev] == NULL)
+  if (resources->collNetComms[netDev] == NULL) {
     NCCLCHECK(proxyState->ncclCollNet->listen(proxyState->collNetContext, netDev, collNetHandle, resources->collNetListenComms + netDev));
+  }
   return ncclSuccess;
 }
 
@@ -773,8 +774,9 @@ static ncclResult_t collNetIallreduce(struct ncclProxyState* proxyState, struct 
   // non-UB iallreduce, region is intermediate buffer and sendBeg/recvBeg is the corresponding offset
   // for send and recv data. The send and recv mem handle are retrieved from resources.
   NCCLCHECK(proxyState->ncclCollNet->iallreduce(resources->collNetComm, region + sendBeg, region + recvBeg, nBytes / eltSize, (ncclDataType_t)args->dtype, (ncclRedOp_t)args->redOp, sendMhandle, recvMhandle, request));
-  if (*request)
+  if (*request) {
     TRACE(NCCL_NET, "sendProxy [%ld/%d] Iallreduce posted size %ld sendBeg %ld recvBeg %ld req %p", (long)sub->transmitted, sub->nsteps, nBytes, sendBeg, recvBeg, *request);
+  }
   return ncclSuccess;
 }
 
@@ -832,8 +834,9 @@ static ncclResult_t collNetIallgather(struct ncclProxyState* proxyState, struct 
   // the global window offset of recv buffer. sendBeg and recvBeg are offset to the region
   // for intermediate data.
   NCCLCHECK(proxyState->ncclCollNet->iallgather(resources->collNetComm, region + sendBeg, 1, &recvParts, sizePerRank, allBeg, nBytes, sendMhandle, request));
-  if (*request)
+  if (*request) {
     TRACE(NCCL_NET, "sendProxy [%ld/%d] Iallgather posted sizePerRank %ld winOffset %ld recvSize %ld request %p", sub->transmitted, sub->nsteps, sizePerRank, allBeg, nBytes, *request);
+  }
   return ncclSuccess;
 }
 
@@ -885,8 +888,9 @@ static ncclResult_t collNetIreducescatter(struct ncclProxyState* proxyState, str
   sendParts.size = nBytes;
   // non-UB ireducescatter is the same as non-UB iallgather but in the reverse direction.
   NCCLCHECK(proxyState->ncclCollNet->ireducescatter(resources->collNetComm, 1, &sendParts, region + recvBeg, sizePerRank, allBeg, nBytes, (ncclDataType_t)args->dtype, (ncclRedOp_t)args->redOp, recvMhandle, request));
-  if (*request)
+  if (*request) {
     TRACE(NCCL_NET, "sendProxy [%ld/%d] Ireducescatter posted sizePerRank %ld winOffset %ld sendSize %ld request %p", sub->transmitted, sub->nsteps, sizePerRank, allBeg, nBytes, *request);
+  }
   return ncclSuccess;
 }
 
@@ -1005,7 +1009,9 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
         int done, size;
         int buffSlot = (sub->base+sub->done)%NCCL_STEPS;
         done = 1;
-        if (sub->requests[buffSlot]) NCCLCHECK(proxyState->ncclCollNet->test((void*)(sub->requests[buffSlot]), &done, &size));
+        if (sub->requests[buffSlot]) {
+          NCCLCHECK(proxyState->ncclCollNet->test((void*)(sub->requests[buffSlot]), &done, &size));
+        }
         if (done) {
           TRACE(NCCL_NET, "sendProxy [%ld/%d/%d] request %p done, size %d", (long)sub->done, group, buffSlot, sub->requests[buffSlot], size);
           sub->requests[buffSlot] = nullptr;
@@ -1660,7 +1666,10 @@ ncclResult_t ncclCollNetSetup(ncclComm_t comm, ncclComm_t parent, struct ncclTop
         const int head = comm->collNetHeads[h];
         ncclConnect connect;
         collNetSetupFail |= ncclTransportCollNetSetup(comm, collNetGraph, channel, head, head, h, collNetRecv, &connect);
-        if (!collNetSetupFail) collNetSetupFail |= ncclTransportCollNetSetup(comm, collNetGraph, channel, head, head, h, collNetSend, &connect);
+        if (!collNetSetupFail) {
+          collNetSetupFail |=
+            ncclTransportCollNetSetup(comm, collNetGraph, channel, head, head, h, collNetSend, &connect);
+        }
       }
       // Verify CollNet setup across ranks after trying the first channel
       if (c == 0) {

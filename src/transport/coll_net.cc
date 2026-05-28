@@ -531,6 +531,7 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
   resources->recvMem = (struct ncclRecvMem*)NCCL_NET_MAP_GET_POINTER(map, cpu, recvMem);
   // Don't give credits yet in shared mode.
   (resources->gdcSync ? *resources->gdcSync : resources->sendMem->head) = -NCCL_STEPS;
+  if (resources->gdcSync) wc_store_fence(); // Flush out WC write
 
   // Allocate & Register shared buffers for the Simple protocol
   int bank = resources->useGdr ? NCCL_NET_MAP_SHARED_DEVMEM : NCCL_NET_MAP_SHARED_HOSTMEM;

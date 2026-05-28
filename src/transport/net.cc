@@ -983,6 +983,7 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
 
   // Don't give credits yet in shared mode.
   (resources->gdcSync ? *resources->gdcSync : resources->sendMem->head) = (map->shared ? -NCCL_STEPS : 0);
+  if (resources->gdcSync) wc_store_fence(); // Flush out WC write
   for (int i = 0; i < NCCL_STEPS; i++) resources->recvMem->connFifo[i].size = -1;
 
   for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {

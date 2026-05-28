@@ -20,12 +20,17 @@ static int (*gdr_internal_pin_buffer)(gdr_t g, unsigned long addr, size_t size, 
 static int (*gdr_internal_pin_buffer_v2)(gdr_t g, unsigned long addr, size_t size, uint32_t flags, gdr_mh_t* handle);
 static int (*gdr_internal_unpin_buffer)(gdr_t g, gdr_mh_t handle);
 static int (*gdr_internal_get_info)(gdr_t g, gdr_mh_t handle, gdr_info_t* info);
+static int (*gdr_internal_get_info_v2)(gdr_t g, gdr_mh_t handle, gdr_info_t* info);
 static int (*gdr_internal_map)(gdr_t g, gdr_mh_t handle, void** va, size_t size);
 static int (*gdr_internal_unmap)(gdr_t g, gdr_mh_t handle, void* va, size_t size);
 static void (*gdr_internal_runtime_get_version)(int* major, int* minor);
 static void (*gdr_internal_driver_get_version)(gdr_t g, int* major, int* minor);
+static int (*gdr_internal_driver_get_version_checked)(gdr_t g, int* major, int* minor);
+static int (*gdr_internal_get_attribute)(gdr_t g, gdr_attr_t attr, int* v);
 static int (*gdr_internal_copy_to_mapping)(gdr_mh_t handle, void* map_d_ptr, const void* h_ptr, size_t size);
 static int (*gdr_internal_copy_from_mapping)(gdr_mh_t handle, void* h_ptr, const void* map_d_ptr, size_t size);
+static int gdrRuntimeMajor = 0;
+static int gdrRuntimeMinor = 0;
 
 // Used to make the GDR library calls thread safe
 std::mutex& getGdrMutex() {
@@ -81,10 +86,13 @@ static void initOnceFunc(void) {
   LOAD_SYM_OPTIONAL(gdrhandle, "gdr_pin_buffer_v2", gdr_internal_pin_buffer_v2);
   LOAD_SYM(gdrhandle, "gdr_unpin_buffer", gdr_internal_unpin_buffer);
   LOAD_SYM(gdrhandle, "gdr_get_info", gdr_internal_get_info);
+  LOAD_SYM_OPTIONAL(gdrhandle, "gdr_get_info_v2", gdr_internal_get_info_v2);
   LOAD_SYM(gdrhandle, "gdr_map", gdr_internal_map);
   LOAD_SYM(gdrhandle, "gdr_unmap", gdr_internal_unmap);
   LOAD_SYM(gdrhandle, "gdr_runtime_get_version", gdr_internal_runtime_get_version);
   LOAD_SYM(gdrhandle, "gdr_driver_get_version", gdr_internal_driver_get_version);
+  gdr_internal_driver_get_version_checked = (int (*)(gdr_t, int*, int*))tmp;
+  LOAD_SYM_OPTIONAL(gdrhandle, "gdr_get_attribute", gdr_internal_get_attribute);
   LOAD_SYM(gdrhandle, "gdr_copy_to_mapping", gdr_internal_copy_to_mapping);
   LOAD_SYM(gdrhandle, "gdr_copy_from_mapping", gdr_internal_copy_from_mapping);
 
@@ -98,12 +106,17 @@ teardown:
   gdr_internal_pin_buffer_v2 = NULL;
   gdr_internal_unpin_buffer = NULL;
   gdr_internal_get_info = NULL;
+  gdr_internal_get_info_v2 = NULL;
   gdr_internal_map = NULL;
   gdr_internal_unmap = NULL;
   gdr_internal_runtime_get_version = NULL;
   gdr_internal_driver_get_version = NULL;
+  gdr_internal_driver_get_version_checked = NULL;
+  gdr_internal_get_attribute = NULL;
   gdr_internal_copy_to_mapping = NULL;
   gdr_internal_copy_from_mapping = NULL;
+  gdrRuntimeMajor = 0;
+  gdrRuntimeMinor = 0;
 
   if (gdrhandle != NULL) ncclOsDlclose(gdrhandle);
   initResult = ncclSystemError;
@@ -198,9 +211,12 @@ ncclResult_t wrap_gdr_get_info(gdr_t g, gdr_mh_t handle, gdr_info_t* info) {
     return ncclInternalError;
   }
   int ret;
-  GDRLOCKCALL(gdr_internal_get_info(g, handle, info), ret);
+  int (*getInfo)(gdr_t, gdr_mh_t, gdr_info_t*) =
+    gdr_internal_get_info_v2 != NULL ? gdr_internal_get_info_v2 : gdr_internal_get_info;
+  GDRLOCKCALL(getInfo(g, handle, info), ret);
   if (ret != 0) {
-    WARN("gdr_get_info(handle %lx) failed: %d", handle.h, ret);
+    WARN("%s(handle %lx) failed: %d", gdr_internal_get_info_v2 != NULL ? "gdr_get_info_v2" : "gdr_get_info", handle.h,
+         ret);
     return ncclSystemError;
   }
   return ncclSuccess;
@@ -240,6 +256,8 @@ ncclResult_t wrap_gdr_runtime_get_version(int* major, int* minor) {
     return ncclInternalError;
   }
   gdr_internal_runtime_get_version(major, minor);
+  gdrRuntimeMajor = *major;
+  gdrRuntimeMinor = *minor;
   return ncclSuccess;
 }
 
@@ -248,8 +266,36 @@ ncclResult_t wrap_gdr_driver_get_version(gdr_t g, int* major, int* minor) {
     WARN("GDRCOPY lib wrapper not initialized.");
     return ncclInternalError;
   }
-  gdr_internal_driver_get_version(g, major, minor);
+  if (gdrRuntimeMajor > 2 || (gdrRuntimeMajor == 2 && gdrRuntimeMinor >= 6)) {
+    int ret;
+    GDRLOCKCALL(gdr_internal_driver_get_version_checked(g, major, minor), ret);
+    if (ret != 0) {
+      WARN("gdr_driver_get_version() failed: %d", ret);
+      return ncclSystemError;
+    }
+  } else {
+    std::lock_guard<std::mutex> lock(getGdrMutex());
+    gdr_internal_driver_get_version(g, major, minor);
+  }
   return ncclSuccess;
+}
+
+ncclResult_t wrap_gdr_get_attribute(gdr_t g, gdr_attr_t attr, int* v) {
+  if (gdr_internal_get_attribute == NULL) {
+    INFO(NCCL_INIT, "gdr_get_attribute() not available");
+    return ncclInternalError;
+  }
+  int ret;
+  GDRLOCKCALL(gdr_internal_get_attribute(g, attr, v), ret);
+  if (ret != 0) {
+    WARN("gdr_get_attribute(attr %d) failed: %d", attr, ret);
+    return ncclSystemError;
+  }
+  return ncclSuccess;
+}
+
+ncclResult_t wrap_gdr_is_dma_buf_mmap(gdr_t g, int* v) {
+  return wrap_gdr_get_attribute(g, GDR_ATTR_USING_DMA_BUF_MMAP, v);
 }
 
 ncclResult_t wrap_gdr_copy_to_mapping(gdr_mh_t handle, void* map_d_ptr, const void* h_ptr, size_t size) {

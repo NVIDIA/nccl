@@ -43,6 +43,7 @@ void convert_topk_to_routing_map(
     uint8_t* routing_bitmap,
     int64_t* cached_topk_idx,  // nullable; when non-null, mirrors topk_idx in the same pass
     int num_tokens,
+    int max_tokens,            // tail bound; rows [num_tokens, max_tokens) are zeroed
     int num_topk,
     int num_experts_packed,    // = ceil(num_experts / 8)
     cudaStream_t stream);

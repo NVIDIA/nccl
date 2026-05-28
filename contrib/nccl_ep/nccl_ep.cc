@@ -2203,11 +2203,15 @@ ncclResult_t ncclEpUpdateHandle(
         global_routing_map + (max_tokens * num_experts_packed) * ep_group->rank;
 
     // ===== Step 1: Convert sparse topk_idx to bitmap routing map =====
+    // Pass max_tokens so the kernel zeroes the tail rows in the local send slot;
+    // ncclAllGather below ships max_tokens rows and stale tail bits would otherwise
+    // be interpreted as live routing by peers.
     nccl_ep::hybridep::convert_topk_to_routing_map(
         static_cast<const int64_t*>(handle->topk_idx.data),
         local_routing_send_ptr,
         handle->hybridep.topk_idx,
         handle->num_tokens,
+        max_tokens,
         handle->num_topk,
         num_experts_packed,
         stream);

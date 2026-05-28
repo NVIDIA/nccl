@@ -686,6 +686,7 @@ struct ncclComm {
   uint8_t collNetSupportMatrix[4/*sum,prod,max,min*/][ncclNumTypes];
   int* collNetHeads;
   int collNetHeadsNum;
+  int collNetChainSupport;
   int* collNetDenseToUserRank;
   int* collNetUserToDenseRank;
   /* sharable collNet proxy progress resource. */

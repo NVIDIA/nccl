@@ -1451,7 +1451,7 @@ ncclResult_t ncclCollNetChainBufferSetup(ncclComm_t comm) {
   ncclResult_t ret = ncclSuccess;
   char line[1024];
 
-  if (comm->config.collnetEnable == 0) goto exit;
+  if (comm->config.collnetEnable == 0 || comm->collNetChainSupport == 0) goto exit;
   // Connect Collnet + chain
   for (int c = 0; c < comm->nChannels; c++) {
     struct ncclChannel* channel = comm->channels + c;
@@ -1530,6 +1530,22 @@ static ncclResult_t collNetInitRailRankMap(ncclComm_t comm) {
   return ncclSuccess;
 }
 
+// Checks if the heads used by collNetChain are either a subset of, or equal to comm->collNetHeads
+static int isCollNetChainHeadsSubset(ncclComm_t comm, struct ncclTopoGraph* collNetChainGraph) {
+  uint64_t chainHeadMask = 0, collNetHeadMask = 0;
+
+  for (int h = 0; h < comm->collNetHeadsNum; h++) {
+    collNetHeadMask |= 1ull << comm->rankToLocalRank[comm->collNetHeads[h]];
+  }
+
+  for (int c = 0; c < collNetChainGraph->nChannels; c++) {
+    int head = collNetChainGraph->intra[c * comm->localRanks];
+    chainHeadMask |= 1ull << comm->rankToLocalRank[head];
+  }
+
+  return (chainHeadMask & ~collNetHeadMask) == 0;
+}
+
 ncclResult_t ncclCollNetSetup(ncclComm_t comm, ncclComm_t parent, struct ncclTopoGraph* graphs[]) {
   ncclResult_t ret = ncclSuccess;
   int rank = comm->rank;
@@ -1543,6 +1559,8 @@ ncclResult_t ncclCollNetSetup(ncclComm_t comm, ncclComm_t parent, struct ncclTop
   struct collnetShareInfo* infos = NULL;
 
   struct ncclTopoGraph* collNetGraph;
+
+  comm->collNetChainSupport = 1;
 
   if (!comm->nvlsSupport) {
     collNetGraph = graphs[NCCL_ALGO_COLLNET_DIRECT];
@@ -1565,6 +1583,9 @@ ncclResult_t ncclCollNetSetup(ncclComm_t comm, ncclComm_t parent, struct ncclTop
     // Copy over comm->collNetHeads from comm->nvlsHeads since they are freed in different places.
     memcpy(comm->collNetHeads, comm->nvlsHeads, comm->collNetHeadsNum * sizeof(int));
   }
+
+  // CollNetChain can only use heads that will have CollNet resources set up.
+  comm->collNetChainSupport = isCollNetChainHeadsSubset(comm, graphs[NCCL_ALGO_COLLNET_CHAIN]);
 
   if (parent && parent->config.collnetEnable && parent->nNodes == comm->nNodes) {
     if (!parent->shareResources) {

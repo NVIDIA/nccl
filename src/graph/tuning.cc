@@ -477,6 +477,7 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
           (a == NCCL_ALGO_COLLNET_DIRECT ||
            a == NCCL_ALGO_COLLNET_CHAIN ||
            (a == NCCL_ALGO_NVLS && comm->nNodes > 1))) disable = 1;
+      if (comm->config.collnetEnable && a == NCCL_ALGO_COLLNET_CHAIN && comm->collNetChainSupport == 0) disable = 1;
       // Disable CollNet+Direct if not on an NVSwitch system
       if (nvsCount == 0 && a == NCCL_ALGO_COLLNET_DIRECT) disable = 1;
       if (disable) algoEnable[f*NCCL_NUM_ALGORITHMS+a] = 0;

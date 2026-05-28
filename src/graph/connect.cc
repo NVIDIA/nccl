@@ -185,7 +185,9 @@ static ncclResult_t connectCollNet(struct ncclComm* comm, struct ncclTopoGraph* 
   for (int c=0; c<collNetGraph->nChannels; c++) {
     int* collNetIntra = collNetGraph->intra+c*localRanks;
     int head = collNetIntra[0];
-    for (int h=0; h<nHeads; h++) if (heads[h] == head) head = -1;
+    for (int h=0; h<nHeads; h++) {
+      if (heads[h] == head) head = -1;
+    }
     if (head != -1) heads[nHeads++] = collNetIntra[0];
   }
   // For all channels

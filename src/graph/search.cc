@@ -327,9 +327,11 @@ ncclResult_t ncclTopoReplayGetGpu(struct ncclTopoSystem* system, struct ncclTopo
   if (graph->nChannels == 0) return ncclInternalError;
   int ngpus = system->nodes[GPU].count;
   int nextRank = graph->intra[(graph->nChannels-1)*ngpus+step+1];
-  for (int i=0; i<ngpus; i++) if (system->nodes[GPU].nodes[i].gpu.rank == nextRank) {
-    *g = i;
-    return ncclSuccess;
+  for (int i=0; i<ngpus; i++) {
+    if (system->nodes[GPU].nodes[i].gpu.rank == nextRank) {
+      *g = i;
+      return ncclSuccess;
+    }
   }
   return ncclInternalError;
 }

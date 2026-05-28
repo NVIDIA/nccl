@@ -719,7 +719,9 @@ private:
       uint64_t prevStep = step - StepPerSlice;
       volatile ssize_t* ptr = &(connFifo[prevStep%NCCL_STEPS].size);
       int spins = 0;
-      while (*ptr != -1) if (checkAbort(flags, Aborted, spins)) break;
+      while (*ptr != -1) {
+        if (checkAbort(flags, Aborted, spins)) break;
+      }
     }
 
     if (flags & NetDeviceUnpack) {
@@ -737,7 +739,9 @@ private:
       int spins = 0;
       volatile uint64_t* tail = conn->tail;
       volatile uint64_t* head = conn->head;
-      while (*tail > *head) if (checkAbort(flags, Aborted, spins)) break;
+      while (*tail > *head) {
+        if (checkAbort(flags, Aborted, spins)) break;
+      }
     }
   }
 

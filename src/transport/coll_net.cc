@@ -394,7 +394,9 @@ static ncclResult_t sharedFree(struct ncclProxyState* proxyState, struct ncclCol
   if (resources->commRefCount[netDev] == 0) {
     NCCLCHECK(proxyState->ncclCollNet->closeColl(resources->collNetComms[netDev]));
   }
-  for (int n=0; n<NCCL_MAX_NETDEVS; n++) if (resources->commRefCount[n]) return ncclSuccess;
+  for (int n=0; n<NCCL_MAX_NETDEVS; n++) {
+    if (resources->commRefCount[n]) return ncclSuccess;
+  }
   collNet->resources = NULL;
   free(resources);
   return ncclSuccess;

@@ -678,7 +678,9 @@ ncclResult_t ncclGetSystemId(struct ncclTopoSystem* system, struct ncclXmlNode* 
   NCCLCHECK(xmlGetAttr(xmlCpu, "host_hash", &hostHashStr));
   uint64_t hostHash = hostHashStr ? strtoull(hostHashStr, NULL, 16) : 0;
   int systemId;
-  for (systemId=0; systemId<system->nHosts; systemId++) if (system->hostHashes[systemId] == hostHash) break;
+  for (systemId=0; systemId<system->nHosts; systemId++) {
+    if (system->hostHashes[systemId] == hostHash) break;
+  }
   if (systemId == system->nHosts) system->hostHashes[system->nHosts++] = hostHash;
   *systemIdPtr = systemId;
   return ncclSuccess;

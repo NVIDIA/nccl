@@ -114,7 +114,9 @@ static ncclResult_t ncclTopoSetPaths(struct ncclTopoNode* baseNode, struct ncclT
 
           // Add to the list for the next iteration if not already in the list
           int i;
-          for (i=0; i<nextNodeList.count; i++) if (nextNodeList.list[i] == remNode) break;
+          for (i=0; i<nextNodeList.count; i++) {
+            if (nextNodeList.list[i] == remNode) break;
+          }
           if (i == nextNodeList.count) nextNodeList.list[nextNodeList.count++] = remNode;
         }
       }

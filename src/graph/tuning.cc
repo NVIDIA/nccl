@@ -493,27 +493,31 @@ ncclResult_t ncclTopoTuneModel(struct ncclComm* comm, int minCompCap, int maxCom
     }
   }
 
-  for (int c=0; c<NCCL_NUM_FUNCTIONS; c++) for (int a=0; a<NCCL_NUM_ALGORITHMS; a++) for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) {
-    int pEnable = protoEnable[c*NCCL_NUM_PROTOCOLS+p];
-    if (pEnable == 2 && p == NCCL_PROTO_LL128) {
-      pEnable = 1;
-      if (ncclParamLl128C2c() && minCompCap >= 90) {
-        // Enable LL128 by default only on Hopper/Blackwell for all connections up to P2C and PXN.
-        pEnable &= (graphs[a]->typeInter <= PATH_PXN);
-      } else {
-        // Enable LL128 only up to PXB. Don't enable LL128 over PxN because PxN can encapsulate PxB or P2C links.
-        pEnable &= (graphs[a]->typeInter <= PATH_PXB);
-        if (!ncclParamLl128C2c() && minCompCap >= 90) {
-          INFO(NCCL_GRAPH, "Disabling LL128 over all PxN connections (PXB and C2C). This ensures that no C2C link will be used by LL128.");
+  for (int c=0; c<NCCL_NUM_FUNCTIONS; c++) {
+    for (int a=0; a<NCCL_NUM_ALGORITHMS; a++) {
+      for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) {
+        int pEnable = protoEnable[c*NCCL_NUM_PROTOCOLS+p];
+        if (pEnable == 2 && p == NCCL_PROTO_LL128) {
+          pEnable = 1;
+          if (ncclParamLl128C2c() && minCompCap >= 90) {
+            // Enable LL128 by default only on Hopper/Blackwell for all connections up to P2C and PXN.
+            pEnable &= (graphs[a]->typeInter <= PATH_PXN);
+          } else {
+            // Enable LL128 only up to PXB. Don't enable LL128 over PxN because PxN can encapsulate PxB or P2C links.
+            pEnable &= (graphs[a]->typeInter <= PATH_PXB);
+            if (!ncclParamLl128C2c() && minCompCap >= 90) {
+              INFO(NCCL_GRAPH, "Disabling LL128 over all PxN connections (PXB and C2C). This ensures that no C2C link will be used by LL128.");
+            }
+          }
+          pEnable &= (graphs[a]->typeIntra <= PATH_NVB);
+          // Enable LL128 for interoperability between GPUs with different compcap (Hopper and above)
+          pEnable &= (minCompCap == maxCompCap || minCompCap >= 90);
+          pEnable &= !(minCompCap < 70 || (minCompCap == 90 && CUDART_VERSION == 11080 && c == ncclFuncAllReduce && a == NCCL_ALGO_RING && comm->nRanks == 2));
         }
+        if (pEnable == 0) comm->bandwidths[c][a][p] = 0;
+        if (algoEnable[c*NCCL_NUM_ALGORITHMS+a] == 0) comm->bandwidths[c][a][p] = 0;
       }
-      pEnable &= (graphs[a]->typeIntra <= PATH_NVB);
-      // Enable LL128 for interoperability between GPUs with different compcap (Hopper and above)
-      pEnable &= (minCompCap == maxCompCap || minCompCap >= 90);
-      pEnable &= !(minCompCap < 70 || (minCompCap == 90 && CUDART_VERSION == 11080 && c == ncclFuncAllReduce && a == NCCL_ALGO_RING && comm->nRanks == 2));
     }
-    if (pEnable == 0) comm->bandwidths[c][a][p] = 0;
-    if (algoEnable[c*NCCL_NUM_ALGORITHMS+a] == 0) comm->bandwidths[c][a][p] = 0;
   }
 
   if (comm->rank == 0) {

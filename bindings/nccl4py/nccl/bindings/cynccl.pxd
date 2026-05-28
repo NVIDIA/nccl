@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# This code was automatically generated with version 2.30.6. Do not modify it directly.
+# This code was automatically generated with version 2.30.4. Do not modify it directly.
 
 
 from libc.stdint cimport int64_t, uint8_t, uint32_t, uint64_t
@@ -72,7 +72,6 @@ ctypedef enum ncclGinType_t "ncclGinType_t":
     NCCL_GIN_TYPE_NONE "NCCL_GIN_TYPE_NONE" = 0
     NCCL_GIN_TYPE_PROXY "NCCL_GIN_TYPE_PROXY" = 2
     NCCL_GIN_TYPE_GDAKI "NCCL_GIN_TYPE_GDAKI" = 3
-    NCCL_GIN_TYPE_GPI "NCCL_GIN_TYPE_GPI" = 4
 
 ctypedef enum ncclGinConnectionType_t "ncclGinConnectionType_t":
     NCCL_GIN_CONNECTION_NONE "NCCL_GIN_CONNECTION_NONE" = 0
@@ -128,7 +127,6 @@ ctypedef struct ncclConfig_t 'ncclConfig_t':
     int graphUsageMode
     int numRmaCtx
     int maxP2pPeers
-    int graphStreamOrdering
 
 ctypedef struct ncclSimInfo_t 'ncclSimInfo_t':
     size_t size
@@ -171,7 +169,7 @@ ctypedef struct ncclResourceWindow_vidmem_t 'ncclResourceWindow_vidmem_t':
     char reserved2[8]
     uint32_t stride4G
     uint32_t mcOffset4K
-    char reserved3[32]
+    char reserved3[40]
 
 ctypedef struct ncclLsaBarrierHandle_t 'ncclLsaBarrierHandle_t':
     ncclDevResourceHandle_t bufHandle
@@ -209,7 +207,6 @@ ctypedef struct ncclDevComm_t 'ncclDevComm_t':
     ncclDevCommWindowTable_t windowTable
     ncclWindow_t resourceWindow
     ncclResourceWindow_vidmem_t resourceWindow_inlined
-    ncclGinBarrierHandle_t hybridWorldGinBarrier
     ncclMultimemHandle_t lsaMultimem
     ncclLsaBarrierHandle_t lsaBarrier
     ncclGinBarrierHandle_t railGinBarrier
@@ -220,9 +217,7 @@ ctypedef struct ncclDevComm_t 'ncclDevComm_t':
     int ginCounterCount
     uint64_t* ginSignalShadows
     uint32_t ginContextCount
-    uint8_t ginConnectionsRailed
-    uint8_t ginStrongLegacySignals
-    uint8_t ginContextsRailed
+    uint8_t ginIsRailed
     uint32_t* abortFlag
     ncclLsaBarrierHandle_t hybridLsaBarrier
     ncclGinBarrierHandle_t hybridRailGinBarrier
@@ -249,8 +244,6 @@ ctypedef struct ncclDevCommRequirements_t 'ncclDevCommRequirements_t':
     int ginQueueDepth
     int ginTrafficClass
     int worldGinBarrierCount
-    uint8_t ginStrongSignalsRequired
-    uint8_t ginVaSignalsRequired
 
 
 ###############################################################################

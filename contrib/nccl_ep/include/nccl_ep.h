@@ -8,7 +8,7 @@
 
 #include <cuda.h>
 #include <nccl.h>
-#include "ep_enums.h"
+#include "nccl_ep/ep_enums.h"
 
 #ifdef __cplusplus
 extern "C" {

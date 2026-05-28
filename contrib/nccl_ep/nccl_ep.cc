@@ -21,8 +21,8 @@
 #include <vector>
 #include <nccl.h>
 #include <nccl_device.h>
-#include "include/common.hpp"
-#include "include/nccl_ep.h"
+#include "nccl_ep.h"
+#include "common.hpp"
 
 // HT (High Throughput) includes
 #include "device/hybridep_adapter.cuh"

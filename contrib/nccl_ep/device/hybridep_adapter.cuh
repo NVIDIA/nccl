@@ -15,7 +15,7 @@
 #include <cuda_runtime.h>
 #include <nccl.h>
 #include "nccl_device.h"
-#include "include/ep_enums.h"
+#include "ep_enums.h"
 
 namespace nccl_ep {
 namespace hybridep {

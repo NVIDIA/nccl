@@ -318,10 +318,14 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>:
     }
 
     barrier();
-    if (SEND) for (int i=0; i < MaxSend; i++) sendStep[i] += 1;
-    if (SEND) postSend();
-    if (RECV) for (int i=0; i < MaxRecv; i++) recvStep[i] += 1;
-    if (RECV) postRecv();
+    if (SEND) {
+      for (int i=0; i < MaxSend; i++) sendStep[i] += 1;
+      postSend();
+    }
+    if (RECV) {
+      for (int i=0; i < MaxRecv; i++) recvStep[i] += 1;
+      postRecv();
+    }
   }
 
   __device__ __forceinline__ void loadRecvConn(struct ncclConnInfo* conn, int i) {

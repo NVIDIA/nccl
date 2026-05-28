@@ -141,7 +141,9 @@ ncclResult_t ncclNetCheckDeviceVersion(struct ncclComm* comm, ncclNet_t* net, in
 
   NCCLCHECK(net->getProperties(dev, &props));
   ncclNetDeviceType type = props.netDeviceType;
-  if (type) switch (type) {
+  switch (type) {
+    case NCCL_NET_DEVICE_HOST:
+      break;
     case NCCL_NET_DEVICE_UNPACK:
       if (props.netDeviceVersion == NCCL_NET_DEVICE_UNPACK_VERSION) {
         INFO(NCCL_INIT, "Using NCCL_NET_DEVICE_UNPACK net plugin version %d",

@@ -1082,7 +1082,7 @@ ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph
     graph->maxChannels = std::min(NCCL_MAX_DIRECT_ARITY + 1, system->nodes[GPU].count);
   }
 
-  if (ngpus == 1) if (graph->pattern != NCCL_TOPO_PATTERN_RING) graph->pattern = NCCL_TOPO_PATTERN_TREE;
+  if (ngpus == 1 && graph->pattern != NCCL_TOPO_PATTERN_RING) graph->pattern = NCCL_TOPO_PATTERN_TREE;
 
   if (system->inter == 0 && graph->pattern == NCCL_TOPO_PATTERN_NVLS) {
     // Force intra-node NVLS algorithm to pull evenly from all GPUs.

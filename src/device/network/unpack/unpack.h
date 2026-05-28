@@ -66,13 +66,13 @@ inline __device__ void bulkLoad<1>(const int t, const uint32_t len, char* cpy_sr
 #ifdef ALIGNED_LOAD
     load128 ((uint64_t*)(cpy_src + data_s), reg.u64[0], reg.u64[1]);
 #else
-#pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int i=0; i<16; i++) {
       reg[i] = ld_volatile_global<1>((uintptr_t)((uint8_t*)(cpy_src + data_s) + i));
     }
 #endif
 
-#pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int i=0; i<16; i++) {
       st_global<1>((uintptr_t)((uint8_t*)(cpy_dst + data_s) + i), reg[i]);
     }
@@ -86,14 +86,14 @@ inline __device__ void bulkLoad<2>(const int t, const uint32_t len, char* cpy_sr
 #ifdef ALIGNED_LOAD
     load128 ((uint64_t*)(cpy_src + data_s), reg.u64[0], reg.u64[1]);
 #else
-#pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int i=0; i<8; i++) {
       reg[i] = ld_volatile_global<2>((uintptr_t)((uint16_t*)(cpy_src + data_s) + i));
     }
 #endif
 
 
-#pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int i=0; i<8; i++) {
       st_global<2>((uintptr_t)((uint16_t*)(cpy_dst + data_s) + i), reg[i]);
     }
@@ -107,13 +107,13 @@ inline __device__ void bulkLoad<4>(const int t, const uint32_t len, char* cpy_sr
 #ifdef ALIGNED_LOAD
     load128 ((uint64_t*)(cpy_src + data_s), reg.u64[0], reg.u64[1]);
 #else
-#pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int i=0; i<4; i++) {
       reg[i] = ld_volatile_global<4>((uintptr_t)((uint32_t *)(cpy_src + data_s) + i));
     }
 #endif
 
-#pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int i=0; i<4; i++) {
       st_global<4>((uintptr_t)((uint32_t*)(cpy_dst + data_s) + i), reg[i]);
     }
@@ -127,13 +127,13 @@ inline __device__ void bulkLoad<8>(const int t, const uint32_t len, char* cpy_sr
 #ifdef ALIGNED_LOAD
     load128 ((uint64_t*)(cpy_src + data_s), reg.u64[0], reg.u64[1]);
 #else
-#pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int i=0; i<2; i++) {
       reg[i] = ld_volatile_global<8>((uintptr_t)((uint64_t*)(cpy_src + data_s) + i));
     }
 #endif
 
-#pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int i=0; i<2; i++) {
       st_global<8>((uintptr_t)((uint64_t*)(cpy_dst + data_s) + i), reg[i]);
     }

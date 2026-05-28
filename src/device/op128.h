@@ -44,7 +44,7 @@ inline __device__ void loadShmemMisaligned128(T *ptr, uint64_t &v0, uint64_t &v1
   };
   if(sizeof(T) < 4) {
     uint32_t *ptr4 = reinterpret_cast<uint32_t*>(reinterpret_cast<uintptr_t>(ptr) & -uintptr_t(4));
-    #pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for(int e=0; e < 4; e++) {
       // Produce 4 bytes of sub-register type by reading 2 4-byte
       // aligned values and shifting.
@@ -55,12 +55,12 @@ inline __device__ void loadShmemMisaligned128(T *ptr, uint64_t &v0, uint64_t &v1
     }
   }
   else if(sizeof(T) == 4) {
-    #pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for(int e=0; e < 4; e++)
       asm volatile("ld.shared.b32 %0,[%1];" : "=r"(tmp4[e]) : "l"(ptr+e) : "memory");
   }
   else /*sizeof(T)==8*/ {
-    #pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for(int e=0; e < 2; e++)
       asm volatile("ld.shared.b64 %0,[%1];" : "=l"(tmp8[e]) : "l"(ptr+e) : "memory");
   }
@@ -424,12 +424,12 @@ __device__ __forceinline__ Pack loadPack(T* ptr, int ix, int end) {
     int ndiv = (n*sizeof(T)+misalign+3)/4;
     int imax = min(Size/4 + (misalign > 0), ndiv);
     int i;
-    #pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (i=0; i < Size/4 + 1; i++) {
       if (i < imax) part[i] = down[i];
     }
     if (misalign > 0) {
-      #pragma unroll
+      NVCC_PRAGMA_UNROLL_AUTO
       for (i=0; i < Size/4; i++) {
         part[i] = __funnelshift_r(part[i], part[i+1], 8*misalign);
       }
@@ -437,7 +437,7 @@ __device__ __forceinline__ Pack loadPack(T* ptr, int ix, int end) {
     return ans;
   } else {
     union { Pack ans; BytePack<sizeof(T)> part[Size/sizeof(T)]; };
-    #pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int i=0; i < Size/sizeof(T); i++) {
       if (i < 1 || i < n) part[i] = ((BytePack<sizeof(T)>*)ptr)[i];
     }
@@ -453,7 +453,7 @@ __device__ __forceinline__ void storePack(T* ptr, int ix, int end, Pack val) {
   tmp = val;
   ptr += ix;
   int n = end - ix;
-  #pragma unroll
+  NVCC_PRAGMA_UNROLL_AUTO
   for (int i=0; i < Size/sizeof(T); i++) {
     if (i < 1 || i < n) ((BytePack<sizeof(T)>*)ptr)[i] = part[i];
   }
@@ -489,7 +489,7 @@ __device__ __forceinline__ void copyGlobalShared_WarpUnrolled(
   srcAddr += -srcMisalign + lane*16;
   dstAddr += nFrontBytes + lane*16;
   nMiddleBytes -= lane*16;
-  #pragma unroll
+  NVCC_PRAGMA_UNROLL_AUTO
   for (int u=0; u < divUp(MaxBytes, WARP_SIZE*16); u++) {
     if (nMiddleBytes <= 0) break;
     union {

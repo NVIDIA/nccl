@@ -48,7 +48,7 @@ NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::send(int peer, int elt, T data) 
   tmp = data;
   uint4* buf = (uint4*)ncclGetResourceBufferPeerPointer(this->comm, this->handle.bufHandle, this->team, peer);
   buf += this->slotsOffset + elt;
-  #pragma unroll
+  NVCC_PRAGMA_UNROLL_AUTO
   for (int u=0; u < divUp(sizeof(T), 8); u++) {
     #if __CUDA_ARCH__ >= 700
       asm volatile("st.relaxed.sys.v4.u32 [%0],{%1,%3,%2,%3};" ::
@@ -77,7 +77,7 @@ NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::bcast(int elt, T data) {
     tmp = data;
     uint4* bufmc = (uint4*)ncclGetResourceBufferMultimemPointer(this->comm, this->handle.bufHandle, this->mmHandle);
     bufmc += this->slotsOffset + elt;
-    #pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int u=0; u < divUp(sizeof(T), 8); u++) {
       #if __CUDA_ARCH__ >= 700
         asm volatile("st.relaxed.sys.v4.u32 [%0],{%1,%3,%2,%3};" ::
@@ -98,13 +98,13 @@ NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::bcast(int elt, T data) {
     tmp = data;
     int dr = 0;
     int r = this->team.rank;
-    #pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     for (; dr+8 <= this->team.nRanks; dr += 8) {
-      #pragma unroll
+      NVCC_PRAGMA_UNROLL_AUTO
       for (int ur=0; ur < 8; ur++) {
         uint4* buf = (uint4*)ncclGetResourceBufferPeerPointer(this->comm, this->handle.bufHandle, this->team, r);
         buf += this->slotsOffset + elt;
-        #pragma unroll
+        NVCC_PRAGMA_UNROLL_AUTO
         for (int u=0; u < divUp(sizeof(T),8); u++) {
           #if __CUDA_ARCH__ >= 700
             asm volatile("st.relaxed.sys.v4.u32 [%0],{%1,%3,%2,%3};" ::
@@ -124,12 +124,12 @@ NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::bcast(int elt, T data) {
         if (r == this->team.nRanks) r = 0;
       }
     }
-    #pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int ur=0; ur < 8; ur++, dr++) {
       if (dr == this->team.nRanks) break;
       uint4* buf = (uint4*)ncclGetResourceBufferPeerPointer(this->comm, this->handle.bufHandle, this->team, r);
       buf += this->slotsOffset + elt;
-      #pragma unroll
+      NVCC_PRAGMA_UNROLL_AUTO
       for (int u=0; u < divUp(sizeof(T),8); u++) {
         #if __CUDA_ARCH__ >= 700
           asm volatile("st.relaxed.sys.v4.u32 [%0],{%1,%3,%2,%3};" ::
@@ -172,13 +172,13 @@ NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::recvUnrolled(int eltStart, int e
   buf += this->slotsOffset + eltStart;
   uint32_t steps = 0;
   uint4 tmp[MaxEltCount][divUp(sizeof(T), 8)];
-  #pragma unroll 1
+  NVCC_PRAGMA_UNROLL_DISABLED
   while (!testAbort(this->comm.abortFlag, steps)) {
-    #pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int u=0; u < MaxEltCount; u++) {
       if (u < MinEltCount || u < eltCount) {
         #if __CUDA_ARCH__ >= 700
-          #pragma unroll
+          NVCC_PRAGMA_UNROLL_AUTO
           for (int v=0; v < divUp(sizeof(T), 8); v++) {
             asm volatile("ld.relaxed.sys.v4.u32 {%0,%1,%2,%3},[%4];"
               : "=r"(tmp[u][v].x), "=r"(tmp[u][v].y), "=r"(tmp[u][v].z), "=r"(tmp[u][v].w)
@@ -186,7 +186,7 @@ NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::recvUnrolled(int eltStart, int e
               : "memory");
           }
         #else // __CUDA_ARCH__ >= 700
-          #pragma unroll
+          NVCC_PRAGMA_UNROLL_AUTO
           for (int v=0; v < divUp(sizeof(T), 8); v++) {
             asm volatile("ld.volatile.v4.u32 {%0,%1,%2,%3},[%4];"
               : "=r"(tmp[u][v].x), "=r"(tmp[u][v].y), "=r"(tmp[u][v].z), "=r"(tmp[u][v].w)
@@ -197,9 +197,9 @@ NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::recvUnrolled(int eltStart, int e
       }
     }
     bool okAll = true;
-    #pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int u=0; u < MaxEltCount; u++) {
-      #pragma unroll
+      NVCC_PRAGMA_UNROLL_AUTO
       for (int v=0; v < divUp(sizeof(T), 8); v++) {
         if (u < MinEltCount || u < eltCount) {
           bool ok = tmp[u][v].y == this->epoch &&
@@ -211,11 +211,11 @@ NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::recvUnrolled(int eltStart, int e
     if (__builtin_expect(okAll, true)) break;
   }
 
-  #pragma unroll
+  NVCC_PRAGMA_UNROLL_AUTO
   for (int u=0; u < MaxEltCount; u++) {
     if (MinEltCount <= u && u == eltCount) break;
     union { T val; uint32_t u32[divUp(sizeof(T), 8)][2]; };
-    #pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int v=0; v < divUp(sizeof(T), 8); v++) {
       u32[v][0] = tmp[u][v].x;
       u32[v][1] = tmp[u][v].z;
@@ -234,13 +234,13 @@ NCCL_DEVICE_INLINE auto ncclLLA2ASession<Coop>::recvReduce(
   using Acc = decltype(eltToAcc(nccl::utility::declval<Elt>()));
   Acc acc;
   int i = 0;
-  #pragma unroll 1
+  NVCC_PRAGMA_UNROLL_DISABLED
   for (; i+Unroll <= eltCount; i += Unroll) {
     Elt got[Unroll];
     this->template recvUnrolled</*Min=*/Unroll>(eltStart + i*eltStride, Unroll, eltStride, got);
     Acc acc0 = eltToAcc(got[0]);
     acc = i==0 ? acc0 : reduce(acc, acc0);
-    #pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int j=1; j < Unroll; j++) acc = reduce(acc, eltToAcc(got[j]));
   }
   if (i < eltCount) {
@@ -248,7 +248,7 @@ NCCL_DEVICE_INLINE auto ncclLLA2ASession<Coop>::recvReduce(
     this->template recvUnrolled</*Min=*/1>(eltStart + i*eltStride, eltCount-i, eltStride, got);
     Acc acc0 = eltToAcc(got[0]);
     acc = i==0 ? acc0 : reduce(acc, acc0);
-    #pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int j=1; j < Unroll-1; j++) {
       if (i+j < eltCount) acc = reduce(acc, eltToAcc(got[j]));
     }
@@ -264,7 +264,7 @@ NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::endEpoch(Coop) {
     this->coop.sync();
     uint4* buf = (uint4*)ncclGetResourceBufferLocalPointer(this->comm, this->handle.bufHandle);
     buf += this->slotsOffset;
-    #pragma unroll 4
+    NVCC_PRAGMA_UNROLL(4)
     for (int i=this->coop.thread_rank(); i < this->handle.nSlots; i += this->coop.size()) {
       buf[i] = uint4{0, 0, 0, 0};
     }

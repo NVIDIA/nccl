@@ -833,7 +833,7 @@ NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::waitCounter(
     auto ctr = ncclGinCall<ncclGinApi_GetCounterPtr>(this->_makeCtx(), counter);
     least += ctr.offset;
     uint64_t got;
-    #pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     do got = cuda::atomic_ref<uint64_t>{*ctr.ptr}.load(ord);
     while (!nccl::utility::rollingLessEq(least, got, bits) && !testAbort(this->comm.abortFlag, steps));
   }
@@ -856,7 +856,7 @@ NCCL_DEVICE_INLINE void ncclGinWaitCounter(
     auto ctr = ncclGinCall<ncclGinApi_GetCounterPtr>(ctx, counter);
     least += ctr.offset;
     uint64_t got;
-    #pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     do got = cuda::atomic_ref<uint64_t>{*ctr.ptr}.load(ord);
     while (!nccl::utility::rollingLessEq(least, got, bits) && !testAbort(net->comm.abortFlag, steps));
   }
@@ -1070,7 +1070,7 @@ NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::waitSignal(Coop coop, ncclG
     auto sig = ncclGinCall<ncclGinApi_GetSignalPtr>(this->_makeCtx(), signal);
     least = least + sig.offset;
     uint64_t got;
-    #pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     do got = cuda::atomic_ref<uint64_t>{*sig.ptr}.load(ord);
     while (!nccl::utility::rollingLessEq(least, got, bits) && !testAbort(this->comm.abortFlag, steps));
   }
@@ -1087,7 +1087,7 @@ NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::waitSignal(Coop coop, ncclW
   if (coop.thread_rank() == 0) {
     uint64_t* ptr = (uint64_t*)ncclGetLocalPointer(signalWindow, signalOffset);
     uint64_t got;
-    #pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     do {
       got = cuda::atomic_ref<uint64_t>{*ptr}.load(ord);
     } while (!nccl::utility::rollingLessEq(least, got, bits) && !testAbort(this->comm.abortFlag, steps));
@@ -1111,7 +1111,7 @@ NCCL_DEVICE_INLINE void ncclGinWaitSignal(
     auto sig = ncclGinCall<ncclGinApi_GetSignalPtr>(ctx, signal);
     least = least + sig.offset;
     uint64_t got;
-    #pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     do got = cuda::atomic_ref<uint64_t>{*sig.ptr}.load(ord);
     while (!nccl::utility::rollingLessEq(least, got, bits) && !testAbort(net->comm.abortFlag, steps));
   }
@@ -1130,7 +1130,7 @@ NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::waitSignalMeetShadow(Coop c
     auto sig = ncclGinCall<ncclGinApi_GetSignalPtr>(this->_makeCtx(), signal);
     uint64_t least = this->_signalShadows[signal] + sig.offset;
     uint64_t got;
-    #pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     do got = cuda::atomic_ref<uint64_t>{*sig.ptr}.load(ord);
     while (!nccl::utility::rollingLessEq(least, got, bits) && !testAbort(this->comm.abortFlag, steps));
   }
@@ -1151,7 +1151,7 @@ NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::waitSignalFollowShadow(Coop
     auto sig = ncclGinCall<ncclGinApi_GetSignalPtr>(this->_makeCtx(), signal);
     uint64_t offset = sig.offset;
     uint64_t least = before64 + leastDelta + offset;
-    #pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     do after64 = cuda::atomic_ref<uint64_t>{*sig.ptr}.load(ord);
     while (!nccl::utility::rollingLessEq(least, after64, bits) && !testAbort(this->comm.abortFlag, steps));
     // Convert NIC value back to logical space for shadow

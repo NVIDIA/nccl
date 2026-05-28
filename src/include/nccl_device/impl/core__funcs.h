@@ -163,7 +163,7 @@ NCCL_DEVICE_INLINE ncclWindow_t ncclFindWindow(Coop coop, ncclDevComm const& com
   while (true) {
     bool found = false;
     int index = coalesced.thread_rank();
-    #pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     while (index < 32) {
       uintptr_t uptr = reinterpret_cast<uintptr_t>(ptr);
       ncclDevCommWindowTable::Entry e = loadConst(&t->entries[index]);

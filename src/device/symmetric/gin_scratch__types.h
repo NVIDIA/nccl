@@ -159,7 +159,7 @@ struct ncclGinInboxA2ASession_internal {
   NCCL_DEVICE_INLINE void resetSignals(SubCoop subcoop, int phaseDelta) {
     int nSigs = nPeers + (1<<ncclGinScratchMaxBufs_log2);
     ncclGinSignal_t sig0 = getSignal0(phaseDelta);
-    #pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     for (int i=subcoop.thread_rank(); i < nSigs; i += subcoop.size()) {
       this->gin.resetSignal(sig0 + i);
     }

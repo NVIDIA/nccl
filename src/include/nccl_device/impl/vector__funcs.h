@@ -49,7 +49,7 @@ NCCL_DEVICE_INLINE unsigned computeCommonAlignment(Coop coop, Lambda ptrLambda, 
   // Use efficient warp reduce
   auto lanes = ncclCoopCoalesced(coop);
   unsigned commonAlign = 0;
-  #pragma unroll 1
+  NVCC_PRAGMA_UNROLL_DISABLED
   for (int i = lanes.thread_rank(); i < nPtrs; i += lanes.size()) {
     unsigned align = getAlignment(ptrLambda(i), sizeof(Pack));
     commonAlign = 1 + min(commonAlign - 1, align - 1);
@@ -122,7 +122,7 @@ NCCL_DEVICE_INLINE bool tryLambdaAlignmentForPackSize(
 #if __CUDA_ARCH__ >= 800
     auto lanes = ncclCoopCoalesced(coop);
     unsigned allAligned = 1u;
-    #pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     for (int i = lanes.thread_rank(); i < nOthers; i += lanes.size()) {
       uintptr_t ptrOffset = reinterpret_cast<uintptr_t>(ptrLambda(i));
       intptr_t relOffset = static_cast<intptr_t>(ptrOffset) - static_cast<intptr_t>(refOffset);

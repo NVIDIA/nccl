@@ -222,9 +222,9 @@ class Primitives<
       //   } // Since we no longer unroll, new branch added here
       #if __CUDA_ARCH__ < 700
         // Above doesn't matter on older hardware.
-        #pragma unroll SlicePerChunk
+      NVCC_PRAGMA_UNROLL(SlicePerChunk)
       #else
-        #pragma unroll 1
+      NVCC_PRAGMA_UNROLL_DISABLED
       #endif
       do {
         sliceSize = sliceSize < nelem-offset ? sliceSize : nelem-offset;
@@ -303,7 +303,7 @@ class Primitives<
     // slices are all empty. Since empty slices are the uncommon case, and
     // worker perf is the limiter, perf-wise this loop is effectively unentered,
     // hence just a single branch insn.
-    #pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     while (slice < SlicePerChunk) {
       sliceSize = sliceSize < nelem-offset ? sliceSize : nelem-offset;
       { // Only workers could have Wait roles so we know the slice must be empty
@@ -338,7 +338,7 @@ public:
 
   template<int Recv, int Send, typename Fn>
   __device__ __forceinline__ void process(Fn &&fn, uint32_t sendDirectFlag = 0, uint32_t recvDirectFlag = 0) {
-    #pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     for (int slice=0; slice < SlicePerChunk; slice++) {
       if (tid < nworkers) {
         int nsend, nrecv;
@@ -431,7 +431,7 @@ private:
     int sliceSize = stepSize*StepPerSlice;
     int dataSize = max(DIVUP(peerElem, 16*SlicePerChunk)*16, sliceSize/32);  // per-peer slice size
 
-    #pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int slice=0; slice<SlicePerChunk; ++slice) {
       ssize_t realSize = max(0, min(dataSize, peerElem-offset));
       bool fenceNeeded = false;
@@ -443,7 +443,7 @@ private:
           // realSize is not accurate here; but intra-node does not rely on sizes FIFO
           waitPeer<0, DirectSend, 0, 1, 1, 0>(0, inpIx, offset, realSize);
           subBarrier();
-          #pragma unroll
+          NVCC_PRAGMA_UNROLL_AUTO
           // Loop over peers
           for (int j=0; j<fan.nsend(); j++) {
             int i = (j+shift)%fan.nsend();
@@ -465,7 +465,7 @@ private:
           // Adjust remote index with peer offset in case we are directly pulling from peer's output buffer
           waitPeer<DirectRecv, 0, 1, 0, 0, 1>(outIx+pOffset, outIx+pOffset, offset, realSize);
           subBarrier();
-          #pragma unroll
+          NVCC_PRAGMA_UNROLL_AUTO
           for (int j=0; j<fan.nrecv(); j++) {
             int i = (j+shift)%fan.nrecv();
             pOffset = i*peerOffset;

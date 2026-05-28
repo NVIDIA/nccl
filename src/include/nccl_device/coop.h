@@ -218,7 +218,7 @@ NCCL_DEVICE_INLINE T ncclCoopBcast(ncclCoopTile<nThreads>, T value, int root, bo
   constexpr int n = (sizeof(T)+4-1)/4;
   union { uint32_t u[n]; T v; };
   v = value;
-  #pragma unroll
+  NVCC_PRAGMA_UNROLL_AUTO
   for (int i=0; i < n; i++) u[i] = __shfl_sync(-1u, u[i], root, nThreads);
   return v;
 }
@@ -229,7 +229,7 @@ NCCL_DEVICE_INLINE T ncclCoopBcast(ncclCoopLanes coop, T value, int root, bool e
   constexpr int n = (sizeof(T)+4-1)/4;
   union { uint32_t u[n]; T v; };
   v = value;
-  #pragma unroll
+  NVCC_PRAGMA_UNROLL_AUTO
   for (int i=0; i < n; i++) u[i] = __shfl_sync(m, u[i], r);
   return v;
 }

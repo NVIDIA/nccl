@@ -93,7 +93,7 @@ static __device__ void rsAlgoHier(ncclSymkDevWorkArgs const* args, BoolTag<multi
         size_t loopElts = nElts;
         ncclSymPtr<T> loopInput = input;
         ncclSymPtr<T> loopOutput = output;
-        #pragma unroll 1
+        NVCC_PRAGMA_UNROLL_DISABLED
         while (loopElts != 0) {
           int nChunkElts = min(loopElts, (size_t)maxChunkElts);
           int nSteps = min(rail.nRanks-1, 1<<(nBufs_log2-1));

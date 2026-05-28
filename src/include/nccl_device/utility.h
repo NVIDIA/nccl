@@ -56,6 +56,19 @@
   #endif
 #endif
 
+// NVCC pragmas for controling loop unrolling for subsequent loop
+// trip_count must be integer constant expression (integer literal or constexpr) may optionally
+// follow.
+// 1. If trip_count is absent, the compiler try auto determine a trip count and unroll the loop.
+// 2. If trip_count evaluates to 0 or 1, the loop will not be unrolled.
+// 3. If trip_count is a non-positive integer or greater than INT_MAX, the pragma will be ignored,
+//    and a warning will be issued.
+// https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/cpp-language-extensions.html#pragma-unroll
+#define DO_PRAGMA(x) _Pragma(#x)
+#define NVCC_PRAGMA_UNROLL(trip_count) DO_PRAGMA(unroll trip_count)
+#define NVCC_PRAGMA_UNROLL_AUTO DO_PRAGMA(unroll)
+#define NVCC_PRAGMA_UNROLL_DISABLED NVCC_PRAGMA_UNROLL(1)
+
 #if __cplusplus
 #define NCCL_EXTERN_C extern "C"
 #else

@@ -294,7 +294,7 @@ struct RunWorkBatch {
       __syncthreads();
     }
 
-    #pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     for (int w=0; w < ncclShmem.nWorks; w++) {
       struct ncclDevWorkColl* work = (struct ncclDevWorkColl*)(ncclShmem.workStorage + w*ncclShmem.workSize);
       if (w != 0) {

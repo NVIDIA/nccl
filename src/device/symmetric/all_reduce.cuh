@@ -70,7 +70,7 @@ static __device__ __forceinline__ void allreduceDeep(
     } else
 #endif
     {
-      #pragma unroll
+      NVCC_PRAGMA_UNROLL_AUTO
       for (int u=0; u < UnrollPacks; u++) {
         acc0[u] = inpPacks.peerPtr(world, rank)[u*WARP_SIZE];
       }
@@ -97,12 +97,12 @@ static __device__ __forceinline__ void allreduceDeep(
         } else
 #endif
         {
-          #pragma unroll
+          NVCC_PRAGMA_UNROLL_AUTO
           for (int u=0; u < UnrollPacks; u++) {
             tmp1[u] = inpPacks.peerPtr(world, r)[u*WARP_SIZE];
           }
         }
-        #pragma unroll
+        NVCC_PRAGMA_UNROLL_AUTO
         for (int u=0; u < UnrollPacks; u++) {
 #if __CUDA_ARCH__ >= 1000
           if NCCL_IF_CONSTEXPR (EnableTma) {
@@ -117,9 +117,9 @@ static __device__ __forceinline__ void allreduceDeep(
       if (++r == nRanks) r = 0;
 
       int dr = 2;
-      #pragma unroll 2
+      NVCC_PRAGMA_UNROLL(2)
       for (int partial=0; partial <= 1; partial++) {
-        #pragma unroll 1
+        NVCC_PRAGMA_UNROLL_DISABLED
         for (int i = 0;
              partial ? i < 1 : (dr + UnrollPeers <= nRanks);
              partial ? i++ : (dr += UnrollPeers)) {
@@ -133,7 +133,7 @@ static __device__ __forceinline__ void allreduceDeep(
           }
 #endif
 
-          #pragma unroll
+          NVCC_PRAGMA_UNROLL_AUTO
           for (int ur=0; ur < UnrollPeers-partial; ur++) {
             if (partial && ur!=0 && dr+ur == nRanks) break;
 #if __CUDA_ARCH__ >= 1000
@@ -145,7 +145,7 @@ static __device__ __forceinline__ void allreduceDeep(
             } else
 #endif
             {
-              #pragma unroll UnrollPacks
+              NVCC_PRAGMA_UNROLL(UnrollPacks)
               for (int u=0; u < UnrollPacks; u++) {
                 tmp1[ur][u] = inpPacks.peerPtr(world, r)[u*WARP_SIZE];
               }
@@ -159,10 +159,10 @@ static __device__ __forceinline__ void allreduceDeep(
             tmaSize = 0;
           }
 #endif
-          #pragma unroll
+          NVCC_PRAGMA_UNROLL_AUTO
           for (int ur=0; ur < UnrollPeers-partial; ur++) {
             if (partial && ur!=0 && dr+ur == nRanks) break;
-            #pragma unroll UnrollPacks
+            NVCC_PRAGMA_UNROLL(UnrollPacks)
             for (int u=0; u < UnrollPacks; u++) {
 #if __CUDA_ARCH__ >= 1000
               if NCCL_IF_CONSTEXPR (EnableTma) {
@@ -175,7 +175,7 @@ static __device__ __forceinline__ void allreduceDeep(
         }
       }
 
-      #pragma unroll
+      NVCC_PRAGMA_UNROLL_AUTO
       for (int u=0; u < UnrollPacks; u++) {
 #if __CUDA_ARCH__ >= 1000
         if NCCL_IF_CONSTEXPR (EnableTma) {
@@ -197,13 +197,13 @@ static __device__ __forceinline__ void allreduceDeep(
 
       dr = 0;
       r = rank;
-      #pragma unroll 2
+      NVCC_PRAGMA_UNROLL(2)
       for (int partial=0; partial <= 1; partial++) {
-        #pragma unroll 1
+        NVCC_PRAGMA_UNROLL_DISABLED
         for (int i = 0;
              partial ? i < 1 : (dr + UnrollPeers <= nRanks);
              partial ? i++ : (dr += UnrollPeers)) {
-          #pragma unroll
+          NVCC_PRAGMA_UNROLL_AUTO
           for (int ur=0; ur < UnrollPeers-partial; ur++) {
             if (partial && dr == nRanks) break;
 #if __CUDA_ARCH__ >= 1000
@@ -214,7 +214,7 @@ static __device__ __forceinline__ void allreduceDeep(
             } else
 #endif
             {
-              #pragma unroll UnrollPacks
+              NVCC_PRAGMA_UNROLL(UnrollPacks)
               for (int u=0; u < UnrollPacks; u++) {
                 outPacks.peerPtr(world, r)[u*WARP_SIZE] = acc0[u];
               }
@@ -248,7 +248,7 @@ static __device__ __forceinline__ void allreduceDeep(
       } else
 #endif
       {
-        #pragma unroll
+        NVCC_PRAGMA_UNROLL_AUTO
         for (int u=0; u < UnrollPacks; u++) {
           acc0[u] = inpPacks.peerPtr(world, rank)[u*WARP_SIZE];
         }
@@ -272,7 +272,7 @@ static __device__ __forceinline__ void allreduceEnds(
   ncclSymPtr<BytePack<sizeof(T)>> inpPacks = (ncclSymPtr<BytePack<sizeof(T)>>)input;
   ncclSymPtr<BytePack<sizeof(T)>> outPacks = (ncclSymPtr<BytePack<sizeof(T)>>)output;
 
-  #pragma unroll 1
+  NVCC_PRAGMA_UNROLL_DISABLED
   for (size_t i = t; i < nPreElts+nSufElts; i += tn) {
     size_t elt = i < nPreElts ? i : nElts-nSufElts-nPreElts+i;
     BytePack<sizeof(T)> acc0 = inpPacks.peerPtr(world, rank)[elt];
@@ -283,15 +283,15 @@ static __device__ __forceinline__ void allreduceEnds(
     if (nRanks == r) r = 0;
     bool first = true;
 
-    #pragma unroll 2
+    NVCC_PRAGMA_UNROLL(2)
     for (int partial=0; partial <= 1; partial++) {
-      #pragma unroll 1
+      NVCC_PRAGMA_UNROLL_DISABLED
       for (int j = 0;
            partial ? j < 1 : (dr + UnrollPeers <= nRanks);
            partial ? j++ : (dr += UnrollPeers)) {
         if (partial && dr == nRanks) break;
 
-        #pragma unroll
+        NVCC_PRAGMA_UNROLL_AUTO
         for (int u=0; u < UnrollPeers-partial; u++) {
           if (partial && u!=0 && dr+u == nRanks) break;
           tmp[u] = inpPacks.peerPtr(world, r)[elt];
@@ -302,7 +302,7 @@ static __device__ __forceinline__ void allreduceEnds(
           first = false;
           acc1 = applyCast<T, Acc>(acc0);
         }
-        #pragma unroll
+        NVCC_PRAGMA_UNROLL_AUTO
         for (int u=0; u < UnrollPeers-partial; u++) {
           if (partial && u!=0 && dr+u == nRanks) break;
           acc1 = applyReduce(red, acc1, applyCast<T, Acc>(tmp[u]));
@@ -313,13 +313,13 @@ static __device__ __forceinline__ void allreduceEnds(
     acc0 = applyCast<Acc, T>(acc1);
     dr = 0;
     r = rank;
-    #pragma unroll 2
+    NVCC_PRAGMA_UNROLL(2)
     for (int partial=0; partial <= 1; partial++) {
-      #pragma unroll 1
+      NVCC_PRAGMA_UNROLL_DISABLED
       for (int j=0;
            partial ? j < 1 : (dr + UnrollPeers <= nRanks);
            partial ? j++ : (dr += UnrollPeers)) {
-        #pragma unroll
+        NVCC_PRAGMA_UNROLL_AUTO
         for (int u=0; u < UnrollPeers-partial; u++) {
           if (partial && dr+u == nRanks) break;
           outPacks.peerPtr(world, r)[elt] = acc0;
@@ -464,14 +464,14 @@ static __device__ void allreduceMultimem(
     cursor += (t/WARP_SIZE)*UnrollPacks*WARP_SIZE*BytePerPack;
     cursor += (t%WARP_SIZE)*BytePerPack;
     int nIters = nChunks - t/WARP_SIZE;
-    #pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     while (0 < nIters) {
       BytePack<BytePerPack> tmp[UnrollPacks];
-      #pragma unroll
+      NVCC_PRAGMA_UNROLL_AUTO
       for (int u=0; u < UnrollPacks; u++) {
         tmp[u] = applyLoadMultimem<Red, BytePerPack>(red, inputUptr + cursor + u*WARP_SIZE*BytePerPack);
       }
-      #pragma unroll
+      NVCC_PRAGMA_UNROLL_AUTO
       for (int u=0; u < UnrollPacks; u++) {
         multimem_st_global(outputUptr + cursor + u*WARP_SIZE*BytePerPack, tmp[u]);
       }
@@ -484,7 +484,7 @@ static __device__ void allreduceMultimem(
   }
 
   // Get the prefix+suffix element one at a time.
-  #pragma unroll 4
+  NVCC_PRAGMA_UNROLL(4)
   for (uintptr_t i = t*sizeof(T); i < nPreBytes + nSufBytes; i += tn*sizeof(T)) {
     uintptr_t cursor = i < nPreBytes ? i : nBytes-nSufBytes+(i-nPreBytes);
     BytePack<sizeof(T)> val = applyLoadMultimem<Red, sizeof(T)>(red, inputUptr + cursor);
@@ -556,7 +556,7 @@ __device__ __forceinline__ void ncclSymkRun_AllReduce_AGxLL_R_impl(ncclSymkDevWo
         int tn = ncclSymkMaxThreads;
 
         if (__builtin_expect(packAligned, true)) {
-          #pragma unroll 1
+          NVCC_PRAGMA_UNROLL_DISABLED
           while (0 < nPacks) {
             if (t < nPacks) {
               int nIterPacks = min(nPacks, tn);
@@ -580,7 +580,7 @@ __device__ __forceinline__ void ncclSymkRun_AllReduce_AGxLL_R_impl(ncclSymkDevWo
             nPacks -= tn;
           }
         } else {
-          #pragma unroll 1
+          NVCC_PRAGMA_UNROLL_DISABLED
           while (0 < nElts) {
             if (t*EltPerPack < nElts) {
               int nIterPacks = min(nPacks, tn);

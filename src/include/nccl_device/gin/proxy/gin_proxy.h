@@ -52,7 +52,7 @@ NCCL_DEVICE_INLINE void waitForGfdComplete(ncclGinProxyGpuCtx_t* proxyCtx, uint3
   uint32_t steps = 0;
   // The PI and CI can keep moving because of concurrent threads posting GFDs to this queue, and the CPU consuming them.
   // Therefore, to prevent overflow issues in the while statement, we need to use a special comparison function.
-#pragma unroll 1
+  NVCC_PRAGMA_UNROLL_DISABLED
   while (!rollingLessEq<uint32_t>(nextGfdIdx, ci.load(ord)) && !testAbort(abortFlag, steps)) continue;
 }
 
@@ -83,7 +83,7 @@ NCCL_DEVICE_INLINE void postGfd(Coop coop, ncclGinProxyGpuCtx_t* proxyCtx, ncclG
     // through (uint4*), which emits v4.b32 PTX requiring 16-byte alignment.
     // ncclGinProxyGfd_t is declared __attribute__((packed, aligned(16))) in
     // gin_proxy_device_host_common.h; static_asserts there enforce the contract.
-#pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (uint8_t i = 0; i < sizeof(ncclGinProxyGfd_t) / sizeof(uint4); i++) {
       __stwt((uint4*)&q[gfdIdx] + i, ((uint4*)gfd)[i]);
     }
@@ -383,7 +383,7 @@ struct ncclGinApi_Flush<NCCL_NET_DEVICE_GIN_PROXY> {
   NCCL_DEVICE_INLINE static void call(ncclGinCtx ctx, Coop coop,
                                       bool hasDescriptor, ncclGinDescriptorSmem* descriptor,
                                       cuda::memory_order ord, uint32_t* abortFlag) {
-    #pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     for (int pe = coop.thread_rank(); pe < ctx.nRanks; pe += coop.size()) {
       ncclGinRequest_t request;
       ncclGinApi_FlushAsync<NCCL_NET_DEVICE_GIN_PROXY>::call(ctx, pe, &request, hasDescriptor, descriptor, ncclGinOptFlagsDefault);

@@ -118,7 +118,7 @@ __device__ static inline uint64_t gpi_gpu_channel_get_idx(gpi_gpu_channel_t *ch,
 }
 __device__ static inline void gpi_gpu_channel_set_gfd_flag(gpi_gpu_channel_t *ch, gpi_gfd_t *gfd, uint64_t pi) {
   using nccl::utility::loadConst;
-    #pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int i = 0; i < GPI_GFD_SEG_MAX; i += 1) {
       gfd->segments[i].flag.owner = pi >> loadConst(&ch->queue_.log_depth);
     }
@@ -215,7 +215,7 @@ __device__  static inline void gpi_gpu_channel_post_gfd_tma(gpi_gpu_channel_t *c
   gpi_gpu_channel_set_gfd_flag(ch, gfd, pi);
   void * dst = (void*)&((uint8_t*)loadConst(&ch->queue_.gpu_memic_ptr))[idx*64];
   gpi_gfd_t *queue_entry = (gpi_gfd_t*)dst;
-  #pragma unroll
+  NVCC_PRAGMA_UNROLL_AUTO
   for (int i = 0; i < GPI_GFD_SEG_MAX; i += 2) {
     gpi_gfd_segment_t *segment = &gfd->segments[i];
     gpi_gfd_segment_t *queue_entry_segment = &queue_entry->segments[i];
@@ -484,7 +484,7 @@ NCCL_DEVICE_INLINE static void putImplMode(ncclGinCtx ctx, Coop coop, int peer, 
     int16_t flush_counter_idx = (int16_t)(((uint64_t*)loadConst(&gpi_ctx->gpu_signal_ptr_) - (uint64_t*)loadConst(&gpi_ctx->gpu_counter_ptr_)) / sizeof(uint64_t))-ctx.nRanks;
     if (abortFlag) {
       uint32_t steps = 0;
-      #pragma unroll 1
+      NVCC_PRAGMA_UNROLL_DISABLED
       for (int peer = coop.thread_rank(); peer < ctx.nRanks; peer += coop.size()) {
         uint16_t flush_counter_peer_idx = (uint16_t)(peer + flush_counter_idx);
         uint64_t *ticket_peer = &flush_tickets_ctx[peer];
@@ -494,7 +494,7 @@ NCCL_DEVICE_INLINE static void putImplMode(ncclGinCtx ctx, Coop coop, int peer, 
         while ((GPI_READ_ONCE((gpi_ctx->gpu_counter_ptr_[flush_counter_peer_idx].value)) <= ticket_value) && !testAbort(abortFlag, steps)) {}
       }
     }else{
-      #pragma unroll 1
+      NVCC_PRAGMA_UNROLL_DISABLED
       for (int peer = coop.thread_rank(); peer < ctx.nRanks; peer += coop.size()) {
         uint16_t flush_counter_peer_idx = (uint16_t)(peer + flush_counter_idx);
         uint64_t *ticket_peer = &flush_tickets_ctx[peer];

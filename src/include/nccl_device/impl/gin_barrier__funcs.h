@@ -95,7 +95,7 @@ NCCL_DEVICE_INLINE ncclResult_t ncclGinBarrierSession_internal<Coop>::syncIntern
       int nCtx   = (int)this->net.comm.ginContextCount;
       int nPeers = fenceTeam.nRanks;
       int total  = nCtx * nPeers;
-      #pragma unroll 1
+      NVCC_PRAGMA_UNROLL_DISABLED
       for (int i = this->coop.thread_rank(); i < total; i += this->coop.size()) {
         int ctx  = i / nPeers;
         int peer = i - ctx * nPeers;
@@ -148,7 +148,7 @@ NCCL_DEVICE_INLINE ncclResult_t ncclGinBarrierSession_internal<Coop>::syncIntern
     // signal id, so no extra slot allocation is needed.
     int nCtx = (int)this->net.comm.ginContextCount;
     int total = nCtx * nPeerSigs;
-    #pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     for (int i = this->coop.thread_rank(); i < total; i += this->coop.size()) {
       // Unflatten i back into (ctx, peerStep): ctx picks the GIN context to signal on,
       // peerStep is the index into the peer rotation (peer is computed just below).
@@ -160,7 +160,7 @@ NCCL_DEVICE_INLINE ncclResult_t ncclGinBarrierSession_internal<Coop>::syncIntern
       if ((ret = signalAndWait(scratch, peer)) != ncclSuccess) goto exit;
     }
   } else {
-    #pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     for (int i = this->coop.thread_rank(); i < nPeerSigs; i += this->coop.size()) {
       int peer = 1 + this->team.rank + i;
       if (this->team.nRanks <= peer) peer -= this->team.nRanks;

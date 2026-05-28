@@ -70,7 +70,7 @@ static __device__ void bcastDeep(
     } else
 #endif
     {
-      #pragma unroll
+      NVCC_PRAGMA_UNROLL_AUTO
       for (int u=0; u < UnrollPacks; u++) {
         tmp[u] = inpPacks[u*WARP_SIZE];
       }
@@ -84,13 +84,13 @@ static __device__ void bcastDeep(
       int dr = inPlace ? 1 : 0;
       int r = rank + dr;
       if (r == nRanks) r = 0;
-      #pragma unroll 2
+      NVCC_PRAGMA_UNROLL(2)
       for (int partial=0; partial <= 1 && !skip; partial++) {
-        #pragma unroll 1
+        NVCC_PRAGMA_UNROLL_DISABLED
         for (int i = 0;
              partial ? i < 1 : (dr + UnrollPeers <= nRanks);
              partial ? i++ : (dr += UnrollPeers)) {
-          #pragma unroll
+          NVCC_PRAGMA_UNROLL_AUTO
           for (int ur=0; ur < UnrollPeers-partial; ur++) {
             if (partial && dr == nRanks) break;
 #if __CUDA_ARCH__ >= 1000
@@ -99,7 +99,7 @@ static __device__ void bcastDeep(
             } else
 #endif
             {
-              #pragma unroll UnrollPacks
+              NVCC_PRAGMA_UNROLL(UnrollPacks)
               for (int u=0; u < UnrollPacks; u++) {
                 outPacks.lsaPtr(r)[u*WARP_SIZE] = tmp[u];
               }
@@ -130,7 +130,7 @@ static __device__ void bcastDeep(
       } else
 #endif
       {
-        #pragma unroll
+        NVCC_PRAGMA_UNROLL_AUTO
         for (int u=0; u < UnrollPacks; u++) {
           tmp[u] = inpPacks[u*WARP_SIZE];
         }
@@ -148,22 +148,22 @@ static __device__ void bcastEnds(
   int const& nRanks = handler.comm.nRanks;
   BytePack<sizeof(T)>* inpPacks = (BytePack<sizeof(T)>*)input.localPtr();
   ncclSymPtr<BytePack<sizeof(T)>> outPacks = (ncclSymPtr<BytePack<sizeof(T)>>)output;
-  #pragma unroll 1
+  NVCC_PRAGMA_UNROLL_DISABLED
   for (size_t i = t; i < nPreElts+nSufElts; i += tn) {
     size_t elt = i < nPreElts ? i : nElts-nPreElts-nSufElts+i;
     BytePack<sizeof(T)> tmp = inpPacks[elt];
     int dr = inPlace ? 1 : 0;
     int r = rank + dr;
     if (r == nRanks) r = 0;
-    #pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     for (; dr + UnrollPeers <= nRanks; dr += UnrollPeers) {
-      #pragma unroll UnrollPeers
+      NVCC_PRAGMA_UNROLL(UnrollPeers)
       for (int u=0; u < UnrollPeers; u++) {
         outPacks.lsaPtr(r)[elt] = tmp;
         if (++r == nRanks) r = 0;
       }
     }
-    #pragma unroll UnrollPeers
+    NVCC_PRAGMA_UNROLL(UnrollPeers)
     for (int u=0; u < UnrollPeers; u++) {
       if (dr+u == nRanks) break;
       outPacks.lsaPtr(r)[elt] = tmp;
@@ -339,7 +339,7 @@ static __device__ void allgather_LL_body(
   int t = threadIdx.x;
   constexpr int tn = ncclSymkMaxThreads;
 
-  #pragma unroll 1
+  NVCC_PRAGMA_UNROLL_DISABLED
   while (0 < nElts) {
     int nIterPacks = min(nPacks, tn);
     if (t < nIterPacks) {
@@ -354,11 +354,11 @@ static __device__ void allgather_LL_body(
     #if 1
       // NOTE: Unrolling speedup on eos nranks=8 size=64K: 5.7us vs 6.7us
       constexpr int Unroll = 4;
-      #pragma unroll 1
+      NVCC_PRAGMA_UNROLL_DISABLED
       for (int i = t; i < (nRanks*nIterPacks & -(Unroll*tn)); i += Unroll*tn) {
         Pack got[Unroll];
         lla2a.template recvUnrolled<Unroll, Unroll>(i, Unroll, tn, /*&*/got);
-        #pragma unroll
+        NVCC_PRAGMA_UNROLL_AUTO
         for (int u=0; u < Unroll; u++) {
           storePack<Pack>(output + peer*nStrideElts, pack*EltPerPack, nElts, got[u]);
           peer += tn_div_nPacks;
@@ -373,7 +373,7 @@ static __device__ void allgather_LL_body(
       if (n != 0) {
         Pack got[Unroll];
         lla2a.template recvUnrolled<1, Unroll>(i, n, tn, /*&*/got);
-        #pragma unroll
+        NVCC_PRAGMA_UNROLL_AUTO
         for (int u=0; u < Unroll; u++) {
           if (u != 0 && u == n) break;
           storePack(output + peer*nStrideElts, pack*EltPerPack, nElts, got[u]);
@@ -384,7 +384,7 @@ static __device__ void allgather_LL_body(
       }
     #else
       // The non-unrolled but "obviously correct" implementation for reference.
-      #pragma unroll 1
+      NVCC_PRAGMA_UNROLL_DISABLED
       for (int i = t; i < nRanks*nIterPacks; i += tn) {
         Pack got = lla2a.template recv<Pack>(i);
         storePack(output + peer*nStrideElts, pack*EltPerPack, nElts, got);

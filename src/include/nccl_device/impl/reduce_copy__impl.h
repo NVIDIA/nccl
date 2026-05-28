@@ -62,7 +62,7 @@ NCCL_DEVICE_INLINE IntCount reduceCopyLoopCoreImpl(
   if NCCL_IF_CONSTEXPR (!srcMultimem && !CHECK_BOUNDS) {
     if NCCL_IF_CONSTEXPR (SINGLE_SRC) {
       Pack* srcPtr0 = (Pack*)srcLambda(0);
-      #pragma unroll UNROLL_PACKS
+      NVCC_PRAGMA_UNROLL(UNROLL_PACKS)
       for (int u = 0; u < UNROLL_PACKS; u++) {
         IntCount packIdx = groupLanePackIdx + u * runtimeStride;
         Pack loaded = srcPtr0[packIdx];
@@ -74,26 +74,26 @@ NCCL_DEVICE_INLINE IntCount reduceCopyLoopCoreImpl(
 
       // Preseed acc[] with source 0 to avoid inner-loop branching.
       Pack* srcPtr = (Pack*)srcLambda(0);
-      #pragma unroll UNROLL_PACKS
+      NVCC_PRAGMA_UNROLL(UNROLL_PACKS)
       for (int u = 0; u < UNROLL_PACKS; u++) {
         IntCount packIdx = groupLanePackIdx + u * runtimeStride;
         acc[u] = castPack<AccEltType, PackEltType, Pack::Count>(srcPtr[packIdx]);;
       }
 
       constexpr int srcCount = UNROLL_SOURCE;
-      #pragma unroll UNROLL_SOURCE
+      NVCC_PRAGMA_UNROLL(UNROLL_SOURCE)
       for (int srcOffset = 1; srcOffset < srcCount; srcOffset++) {
         Pack* srcPtr = (Pack*)srcLambda(srcOffset);
-        #pragma unroll UNROLL_PACKS
+        NVCC_PRAGMA_UNROLL(UNROLL_PACKS)
         for (int u = 0; u < UNROLL_PACKS; u++) {
           IntCount packIdx = groupLanePackIdx + u * runtimeStride;
           loaded[srcOffset][u] = srcPtr[packIdx];
         }
       }
 
-      #pragma unroll UNROLL_PACKS
+      NVCC_PRAGMA_UNROLL(UNROLL_PACKS)
       for (int u = 0; u < UNROLL_PACKS; u++) {
-        #pragma unroll UNROLL_SOURCE
+        NVCC_PRAGMA_UNROLL(UNROLL_SOURCE)
         for (int srcOffset = 1; srcOffset < srcCount; srcOffset++) {
           AccPackType val = castPack<AccEltType, PackEltType, Pack::Count>(loaded[srcOffset][u]);
           acc[u] = reducePack(accRedOp, acc[u], val);
@@ -102,19 +102,19 @@ NCCL_DEVICE_INLINE IntCount reduceCopyLoopCoreImpl(
 
       // Remaining passes over sources.
       for (int srcBase = UNROLL_SOURCE; srcBase < nSrc; srcBase += UNROLL_SOURCE) {
-        #pragma unroll UNROLL_SOURCE
+        NVCC_PRAGMA_UNROLL(UNROLL_SOURCE)
         for (int srcOffset = 0; srcOffset < srcCount; srcOffset++) {
           Pack* srcPtr = (Pack*)srcLambda(srcBase + srcOffset);
-          #pragma unroll UNROLL_PACKS
+          NVCC_PRAGMA_UNROLL(UNROLL_PACKS)
           for (int u = 0; u < UNROLL_PACKS; u++) {
             IntCount packIdx = groupLanePackIdx + u * runtimeStride;
             loaded[srcOffset][u] = srcPtr[packIdx];
           }
         }
 
-        #pragma unroll UNROLL_PACKS
+        NVCC_PRAGMA_UNROLL(UNROLL_PACKS)
         for (int u = 0; u < UNROLL_PACKS; u++) {
-          #pragma unroll UNROLL_SOURCE
+          NVCC_PRAGMA_UNROLL(UNROLL_SOURCE)
           for (int srcOffset = 0; srcOffset < srcCount; srcOffset++) {
             AccPackType val = castPack<AccEltType, PackEltType, Pack::Count>(loaded[srcOffset][u]);
             acc[u] = reducePack(accRedOp, acc[u], val);
@@ -125,7 +125,7 @@ NCCL_DEVICE_INLINE IntCount reduceCopyLoopCoreImpl(
   } else {
     if NCCL_IF_CONSTEXPR (SINGLE_SRC) {
       Pack* srcPtr0 = (Pack*)srcLambda(0);
-      #pragma unroll UNROLL_PACKS
+      NVCC_PRAGMA_UNROLL(UNROLL_PACKS)
       for (int u = 0; u < UNROLL_PACKS; u++) {
         IntCount packIdx = groupLanePackIdx + u * runtimeStride;
         if NCCL_IF_CONSTEXPR (CHECK_BOUNDS) {
@@ -141,7 +141,7 @@ NCCL_DEVICE_INLINE IntCount reduceCopyLoopCoreImpl(
 
       // Preseed acc[] with source 0 to avoid inner-loop branching.
       Pack* srcPtr = (Pack*)srcLambda(0);
-      #pragma unroll UNROLL_PACKS
+      NVCC_PRAGMA_UNROLL(UNROLL_PACKS)
       for (int u = 0; u < UNROLL_PACKS; u++) {
         IntCount packIdx = groupLanePackIdx + u * runtimeStride;
         if NCCL_IF_CONSTEXPR (CHECK_BOUNDS) {
@@ -153,10 +153,10 @@ NCCL_DEVICE_INLINE IntCount reduceCopyLoopCoreImpl(
       }
 
       constexpr int srcCount = UNROLL_SOURCE;
-      #pragma unroll UNROLL_SOURCE
+      NVCC_PRAGMA_UNROLL(UNROLL_SOURCE)
       for (int srcOffset = 1; srcOffset < srcCount; srcOffset++) {
         Pack* srcPtr = (Pack*)srcLambda(srcOffset);
-        #pragma unroll UNROLL_PACKS
+        NVCC_PRAGMA_UNROLL(UNROLL_PACKS)
         for (int u = 0; u < UNROLL_PACKS; u++) {
           IntCount packIdx = groupLanePackIdx + u * runtimeStride;
           if NCCL_IF_CONSTEXPR (CHECK_BOUNDS) {
@@ -166,13 +166,13 @@ NCCL_DEVICE_INLINE IntCount reduceCopyLoopCoreImpl(
         }
       }
 
-      #pragma unroll UNROLL_PACKS
+      NVCC_PRAGMA_UNROLL(UNROLL_PACKS)
       for (int u = 0; u < UNROLL_PACKS; u++) {
         if NCCL_IF_CONSTEXPR (CHECK_BOUNDS) {
           IntCount packIdx = groupLanePackIdx + u * runtimeStride;
           if (packIdx >= totalPacks) break;
         }
-        #pragma unroll UNROLL_SOURCE
+        NVCC_PRAGMA_UNROLL(UNROLL_SOURCE)
         for (int srcOffset = 1; srcOffset < srcCount; srcOffset++) {
           AccPackType val = castPack<AccEltType, PackEltType, Pack::Count>(loaded[srcOffset][u]);
           acc[u] = reducePack(accRedOp, acc[u], val);
@@ -182,10 +182,10 @@ NCCL_DEVICE_INLINE IntCount reduceCopyLoopCoreImpl(
       // Finish remaining sources.
       for (int srcBase = UNROLL_SOURCE; srcBase < nSrc; srcBase += UNROLL_SOURCE) {
         Pack loaded[UNROLL_SOURCE][UNROLL_PACKS];
-        #pragma unroll UNROLL_SOURCE
+        NVCC_PRAGMA_UNROLL(UNROLL_SOURCE)
         for (int srcOffset = 0; srcOffset < srcCount; srcOffset++) {
           Pack* srcPtr = (Pack*)srcLambda(srcBase + srcOffset);
-          #pragma unroll UNROLL_PACKS
+          NVCC_PRAGMA_UNROLL(UNROLL_PACKS)
           for (int u = 0; u < UNROLL_PACKS; u++) {
             IntCount packIdx = groupLanePackIdx + u * runtimeStride;
             if NCCL_IF_CONSTEXPR (CHECK_BOUNDS) {
@@ -195,13 +195,13 @@ NCCL_DEVICE_INLINE IntCount reduceCopyLoopCoreImpl(
           }
         }
 
-        #pragma unroll UNROLL_PACKS
+        NVCC_PRAGMA_UNROLL(UNROLL_PACKS)
         for (int u = 0; u < UNROLL_PACKS; u++) {
           if NCCL_IF_CONSTEXPR (CHECK_BOUNDS) {
             IntCount packIdx = groupLanePackIdx + u * runtimeStride;
             if (packIdx >= totalPacks) break;
           }
-          #pragma unroll UNROLL_SOURCE
+          NVCC_PRAGMA_UNROLL(UNROLL_SOURCE)
           for (int srcOffset = 0; srcOffset < srcCount; srcOffset++) {
             AccPackType val = castPack<AccEltType, PackEltType, Pack::Count>(loaded[srcOffset][u]);
             acc[u] = reducePack(accRedOp, acc[u], val);
@@ -215,11 +215,11 @@ NCCL_DEVICE_INLINE IntCount reduceCopyLoopCoreImpl(
   if NCCL_IF_CONSTEXPR (!dstMultimem && !CHECK_BOUNDS) {
     // Fast path: LSA destinations, no bounds checking - optimized for performance
     // Hoist pointer calculations outside inner loop for better instruction scheduling
-    #pragma unroll 4
+    NVCC_PRAGMA_UNROLL(4)
     for (int dstIdx = 0; dstIdx < nDst; dstIdx++) {
       Pack* dstPtr = (Pack*)dstLambda(dstIdx);
       // Explicit unroll with direct memory access - compiler can better schedule instructions
-      #pragma unroll UNROLL_PACKS
+      NVCC_PRAGMA_UNROLL(UNROLL_PACKS)
       for (int u = 0; u < UNROLL_PACKS; u++) {
         IntCount packIdx = groupLanePackIdx + u * runtimeStride;
         Pack result = castPack<PackEltType, AccEltType, Pack::Count>(acc[u]);
@@ -228,10 +228,10 @@ NCCL_DEVICE_INLINE IntCount reduceCopyLoopCoreImpl(
     }
   } else {
     // General path: handles multimem and bounds checking
-    #pragma unroll 4
+    NVCC_PRAGMA_UNROLL(4)
     for (int dstIdx = 0; dstIdx < nDst; dstIdx++) {
       Pack* dstPtr = (Pack*)dstLambda(dstIdx);
-      #pragma unroll UNROLL_PACKS
+      NVCC_PRAGMA_UNROLL(UNROLL_PACKS)
       for (int u = 0; u < UNROLL_PACKS; u++) {
         IntCount packIdx = groupLanePackIdx + u * runtimeStride;
         if NCCL_IF_CONSTEXPR (CHECK_BOUNDS) {

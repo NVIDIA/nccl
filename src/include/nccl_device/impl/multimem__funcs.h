@@ -80,7 +80,7 @@ NCCL_DEVICE_INLINE EltPack<double, 2> load<EltPack<double, 2>, true, OpSum<doubl
 
     // Load 2 separate f64 values (no vector instruction available)
     // Use unrolled loop calling the 1-element version
-    #pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int i = 0; i < 2; i++) {
       EltPack<double, 1> loaded = load<EltPack<double, 1>, true, OpSum<double>>(
           reinterpret_cast<const EltPack<double, 1>*>(base_addr + i * sizeof(double)));
@@ -191,7 +191,7 @@ NCCL_DEVICE_INLINE EltPack<half, 8> load<EltPack<half, 8>, true, OpSum<half>>(co
       half elts[8];
     } packed{{raw[0], raw[1], raw[2], raw[3]}};
     half* out = result.elts();
-    #pragma unroll 8
+    NVCC_PRAGMA_UNROLL(8)
     for (int i = 0; i < 8; i++) out[i] = packed.elts[i];
     return result;
   }
@@ -258,7 +258,7 @@ NCCL_DEVICE_INLINE EltPack<__nv_bfloat16, 8> load<EltPack<__nv_bfloat16, 8>, tru
       __nv_bfloat16 elts[8];
     } packed{{raw[0], raw[1], raw[2], raw[3]}};
     __nv_bfloat16* out = result.elts();
-    #pragma unroll 8
+    NVCC_PRAGMA_UNROLL(8)
     for (int i = 0; i < 8; i++) out[i] = packed.elts[i];
     return result;
   }
@@ -294,7 +294,7 @@ NCCL_DEVICE_INLINE EltPack<__nv_fp8_e4m3, 4> load<EltPack<__nv_fp8_e4m3, 4>, tru
       __nv_fp8_e4m3 elts[4];
     } packed{raw};
     __nv_fp8_e4m3* out = result.elts();
-    #pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int i = 0; i < 4; i++) out[i] = packed.elts[i];
     return result;
     #else
@@ -382,7 +382,7 @@ NCCL_DEVICE_INLINE EltPack<__nv_fp8_e4m3, 16> load<EltPack<__nv_fp8_e4m3, 16>, t
       __nv_fp8_e4m3 elts[16];
     } packed{{raw[0], raw[1], raw[2], raw[3]}};
     __nv_fp8_e4m3* out = result.elts();
-    #pragma unroll 16
+    NVCC_PRAGMA_UNROLL(16)
     for (int i = 0; i < 16; i++) out[i] = packed.elts[i];
     return result;
     #else
@@ -415,7 +415,7 @@ NCCL_DEVICE_INLINE EltPack<__nv_fp8_e5m2, 4> load<EltPack<__nv_fp8_e5m2, 4>, tru
       __nv_fp8_e5m2 elts[4];
     } packed{raw};
     __nv_fp8_e5m2* out = result.elts();
-    #pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int i = 0; i < 4; i++) out[i] = packed.elts[i];
     return result;
     #else
@@ -502,7 +502,7 @@ NCCL_DEVICE_INLINE EltPack<__nv_fp8_e5m2, 16> load<EltPack<__nv_fp8_e5m2, 16>, t
       __nv_fp8_e5m2 elts[16];
     } packed{{raw[0], raw[1], raw[2], raw[3]}};
     __nv_fp8_e5m2* out = result.elts();
-    #pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int i = 0; i < 16; i++) out[i] = packed.elts[i];
     return result;
     #else
@@ -535,7 +535,7 @@ NCCL_DEVICE_INLINE EltPack<int32_t, 4> load<EltPack<int32_t, 4>, true, OpSum<int
 
     // Load 4 separate s32 values (no vector instruction available)
     // Use unrolled loop calling the 1-element version
-    #pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int i = 0; i < 4; i++) {
       EltPack<int32_t, 1> loaded = load<EltPack<int32_t, 1>, true, OpSum<int32_t>>(
           reinterpret_cast<const EltPack<int32_t, 1>*>(base_addr + i * sizeof(int32_t)));
@@ -567,7 +567,7 @@ NCCL_DEVICE_INLINE EltPack<uint32_t, 4> load<EltPack<uint32_t, 4>, true, OpSum<u
 
     // Load 4 separate u32 values (no vector instruction available)
     // Use unrolled loop calling the 1-element version
-    #pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int i = 0; i < 4; i++) {
       EltPack<uint32_t, 1> loaded = load<EltPack<uint32_t, 1>, true, OpSum<uint32_t>>(
           reinterpret_cast<const EltPack<uint32_t, 1>*>(base_addr + i * sizeof(uint32_t)));
@@ -600,7 +600,7 @@ NCCL_DEVICE_INLINE EltPack<int64_t, 2> load<EltPack<int64_t, 2>, true, OpSum<int
 
     // Load 2 separate u64 values (no vector instruction available)
     // Use unrolled loop calling the 1-element version
-    #pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int i = 0; i < 2; i++) {
       EltPack<int64_t, 1> loaded = load<EltPack<int64_t, 1>, true, OpSum<int64_t>>(
           reinterpret_cast<const EltPack<int64_t, 1>*>(base_addr + i * sizeof(int64_t)));
@@ -632,7 +632,7 @@ NCCL_DEVICE_INLINE EltPack<uint64_t, 2> load<EltPack<uint64_t, 2>, true, OpSum<u
 
     // Load 2 separate u64 values (no vector instruction available)
     // Use unrolled loop calling the 1-element version
-    #pragma unroll
+    NVCC_PRAGMA_UNROLL_AUTO
     for (int i = 0; i < 2; i++) {
       EltPack<uint64_t, 1> loaded = load<EltPack<uint64_t, 1>, true, OpSum<uint64_t>>(
           reinterpret_cast<const EltPack<uint64_t, 1>*>(base_addr + i * sizeof(uint64_t)));

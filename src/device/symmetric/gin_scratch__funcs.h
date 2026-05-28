@@ -43,7 +43,7 @@ NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::apportion(
   int nBufs_log2_cur = this->state.nBufs_log2;
   if (nBufs_log2_cur != nBufs_log2_next) {
     if (subcoopIsNonTrivial) {
-      #pragma unroll 1
+      NVCC_PRAGMA_UNROLL_DISABLED
       for (int i = subcoop.thread_rank(); i < (1<<nBufs_log2_cur); i += subcoop.size()) {
         uint32_t id = this->state.cursor + i;
         if ((id >> nBufs_log2_cur) != 0) {
@@ -73,7 +73,7 @@ NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::apportionReq
 template<typename Coop, unsigned ginBackendMask>
 template<typename SubCoop>
 NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::waitBufs(SubCoop subcoop, int i0, int n) {
-  #pragma unroll 1
+  NVCC_PRAGMA_UNROLL_DISABLED
   for (int i=subcoop.thread_rank(); i < n; i += subcoop.size()) {
     uint32_t id = this->state.cursor + i0 + i;
     if ((id >> this->state.nBufs_log2) != 0) {
@@ -89,7 +89,7 @@ template<typename SubCoop>
 NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::waitRecentRequests(SubCoop subcoop) {
   int nReqs = min((int)this->state.cursor, 1 << this->state.nBufs_log2);
   uint32_t id0 = this->state.cursor - nReqs;
-  #pragma unroll 1
+  NVCC_PRAGMA_UNROLL_DISABLED
   for (int i=subcoop.thread_rank(); i < nReqs; i += subcoop.size()) {
     this->gin.wait(*this->getRequestPtr(id0 + i, this->state.nBufs_log2), ncclCoopThread());
   }
@@ -177,7 +177,7 @@ NCCL_DEVICE_INLINE void ncclGinInboxA2ASession<Coop, ginBackendMask>::apportion(
       int nBufs = 1<<nBufs_log2_next;
       uint32_t nBufs_div_nPeers, nBufs_mod_nPeers;
       idivmodFast32(&nBufs_div_nPeers, &nBufs_mod_nPeers, nBufs, nPeers, this->handle.nPeers_rcp32);
-      #pragma unroll 1
+      NVCC_PRAGMA_UNROLL_DISABLED
       for (int step = subcoop.thread_rank(); step < min(nPeers, nBufs); step += subcoop.size()) {
         int credits = nBufs_div_nPeers + (step < (int)nBufs_mod_nPeers ? 1 : 0);
         this->sendC2S(/*phaseDelta=*/+1, step, /*step_lt_nPeers=*/true, credits);
@@ -238,7 +238,7 @@ NCCL_DEVICE_INLINE void ncclGinInboxA2ASession<Coop, ginBackendMask>::postSends(
     SubCoop subcoop, int step0, int nSteps, GetPtr getPtr, GetEltCount getEltCount, GetCompletion getCompletion,
     AfterPost afterPost
   ) {
-  #pragma unroll 1
+  NVCC_PRAGMA_UNROLL_DISABLED
   for (int i=subcoop.thread_rank(); i < nSteps; i += subcoop.size()) {
     int step = step0 + i;
     uint32_t monoStep = this->state.monoStep + step;
@@ -263,7 +263,7 @@ template<typename SubCoop>
 NCCL_DEVICE_INLINE void ncclGinInboxA2ASession<Coop, ginBackendMask>::waitRecvs(
     SubCoop subcoop, int step0, int nSteps
   ) {
-  #pragma unroll 1
+  NVCC_PRAGMA_UNROLL_DISABLED
   for (int i=subcoop.thread_rank(); i < nSteps; i += subcoop.size()) {
     this->waitR2R(this->state.monoStep + step0 + i);
   }
@@ -278,7 +278,7 @@ NCCL_DEVICE_INLINE void ncclGinInboxA2ASession<Coop, ginBackendMask>::finishRecv
   ) {
   int nBufs_log2 = this->state.nBufs_log2_plus_1 - 1;
   int nBufs_mod_nPeers = imodFast32(1<<nBufs_log2, this->nPeers, this->handle.nPeers_rcp32);
-  #pragma unroll 1
+  NVCC_PRAGMA_UNROLL_DISABLED
   for (int i=subcoop.thread_rank(); i < nSteps; i += subcoop.size()) {
     // Determine next step that will alias the buffer of this step.
     int step = step0 + i; // guaranteed: step < nPeers

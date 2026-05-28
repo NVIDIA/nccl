@@ -158,7 +158,7 @@ struct ncclSymkArgsHandler {
 
     getWorkRange<T>(blockIdx.x, workLo, indexLo, workHi, indexHi);
 
-    #pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     for (int w = workLo; w <= workHi; w++) {
       struct ncclSymkDevWork const& dw = devWork[w];
       size_t const& nAllElts = dw.nElts;
@@ -202,7 +202,7 @@ struct ncclSymkArgsHandler {
 
       getWorkRange<T>(blockIdx.x, workLo, indexLo, workHi, indexHi);
 
-      #pragma unroll 1
+      NVCC_PRAGMA_UNROLL_DISABLED
       for (int w = workLo; w <= workHi; w++) {
         struct ncclSymkDevWork const& dw = devWork[w];
         size_t const& nAllElts = dw.nElts;
@@ -315,7 +315,7 @@ static __device__ void bcastMultimem(
     cursor += (t/WARP_SIZE)*UnrollPacks*WARP_SIZE*BytePerPack;
     cursor += (t%WARP_SIZE)*BytePerPack;
     int nIters = nChunks - t/WARP_SIZE;
-    #pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     while (0 < nIters) {
 #if __CUDA_ARCH__ >= 1000
       if NCCL_IF_CONSTEXPR (EnableTma) {
@@ -324,11 +324,11 @@ static __device__ void bcastMultimem(
 #endif
       {
         BytePack<BytePerPack> tmp[UnrollPacks];
-        #pragma unroll
+        NVCC_PRAGMA_UNROLL_AUTO
         for (int u=0; u < UnrollPacks; u++) {
           tmp[u] = *reinterpret_cast<BytePack<BytePerPack>*>(inputUptr + cursor + u*WARP_SIZE*BytePerPack);
         }
-        #pragma unroll
+        NVCC_PRAGMA_UNROLL_AUTO
         for (int u=0; u < UnrollPacks; u++) {
           multimem_st_global(outputUptr + cursor + u*WARP_SIZE*BytePerPack, tmp[u]);
         }
@@ -342,7 +342,7 @@ static __device__ void bcastMultimem(
   }
 
   // Get the prefix+suffix element one at a time.
-  #pragma unroll 4
+  NVCC_PRAGMA_UNROLL(4)
   for (uintptr_t i = t*sizeof(T); i < nPreBytes + nSufBytes; i += tn*sizeof(T)) {
     uintptr_t cursor = i < nPreBytes ? i : nBytes-nSufBytes+(i-nPreBytes);
     BytePack<sizeof(T)> val = *reinterpret_cast<BytePack<sizeof(T)>*>(inputUptr + cursor);

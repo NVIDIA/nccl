@@ -202,14 +202,14 @@ NCCL_EXTERN_C __host__ ncclResult_t ncclGetPeerDevicePointer(ncclWindow_t window
 NCCL_IR_EXTERN_C NCCL_HOST_DEVICE_INLINE ncclTeam ncclTeamWorld(ncclDevComm const&);
 #endif
 #ifndef __clang_llvm_bitcode_lib__
-NCCL_EXTERN_C __host__ ncclTeam_t ncclTeamWorld(ncclComm_t);
+NCCL_EXTERN_C __host__ ncclTeam_t ncclTeamWorld(ncclComm_t comm);
 #endif
 
 #if __cplusplus
 NCCL_IR_EXTERN_C NCCL_HOST_DEVICE_INLINE ncclTeam ncclTeamLsa(ncclDevComm const&);
 #endif
 #ifndef __clang_llvm_bitcode_lib__
-NCCL_EXTERN_C __host__ ncclTeam_t ncclTeamLsa(ncclComm_t);
+NCCL_EXTERN_C __host__ ncclTeam_t ncclTeamLsa(ncclComm_t comm);
 #endif
 
 NCCL_EXTERN_C NCCL_HOST_DEVICE_INLINE bool ncclTeamRankIsMember(ncclTeam_t a, ncclTeam_t b, int bPeer);
@@ -219,14 +219,14 @@ NCCL_EXTERN_C NCCL_HOST_DEVICE_INLINE int ncclTeamRankToTeam(ncclTeam_t a, ncclT
 NCCL_IR_EXTERN_C NCCL_HOST_DEVICE_INLINE int ncclTeamRankToWorld(ncclDevComm const&, ncclTeam, int rank);
 #endif
 #ifndef __clang_llvm_bitcode_lib__
-NCCL_EXTERN_C __host__ int ncclTeamRankToWorld(ncclComm_t, ncclTeam_t, int rank);
+NCCL_EXTERN_C __host__ int ncclTeamRankToWorld(ncclComm_t comm, ncclTeam_t team, int rank);
 #endif
 
 #if __cplusplus
 NCCL_IR_EXTERN_C NCCL_HOST_DEVICE_INLINE int ncclTeamRankToLsa(ncclDevComm const&, ncclTeam, int rank);
 #endif
 #ifndef __clang_llvm_bitcode_lib__
-NCCL_EXTERN_C __host__ int ncclTeamRankToLsa(ncclComm_t, ncclTeam_t, int rank);
+NCCL_EXTERN_C __host__ int ncclTeamRankToLsa(ncclComm_t comm, ncclTeam_t team, int rank);
 #endif
 
 NCCL_EXTERN_C NCCL_HOST_DEVICE_INLINE ncclTeam_t ncclTeamInnerFactor(ncclTeam_t parent, int innerSize);
@@ -243,11 +243,11 @@ NCCL_EXTERN_C NCCL_HOST_DEVICE_INLINE int ncclTeamRankInDifference(ncclTeam_t pa
 NCCL_IR_EXTERN_C NCCL_HOST_DEVICE_INLINE ncclTeam ncclTeamRail(ncclDevComm const&);
 #endif
 #ifndef __clang_llvm_bitcode_lib__
-NCCL_EXTERN_C __host__ ncclTeam_t ncclTeamRail(ncclComm_t);
+NCCL_EXTERN_C __host__ ncclTeam_t ncclTeamRail(ncclComm_t comm);
 #endif
 
 // Get offset of resource buffer within `comm.resourceWindow`.
-NCCL_EXTERN_C NCCL_HOST_DEVICE_INLINE size_t ncclGetResourceBufferOffset(ncclDevResourceHandle_t);
+NCCL_EXTERN_C NCCL_HOST_DEVICE_INLINE size_t ncclGetResourceBufferOffset(ncclDevResourceHandle_t h);
 
 #if NCCL_CHECK_CUDACC
 NCCL_DEVICE_INLINE ncclSymPtr<char> ncclGetResourceBuffer(ncclDevComm const&, ncclDevResourceHandle);

@@ -16,7 +16,7 @@
 
 struct ncclGinBarrierHandle;
 
-NCCL_EXTERN_C __host__ ncclResult_t ncclGinBarrierCreateRequirement(ncclComm_t, ncclTeam_t, int nBarriers, ncclGinBarrierHandle_t* outHandle, ncclDevResourceRequirements_t* outReq);
+NCCL_EXTERN_C __host__ ncclResult_t ncclGinBarrierCreateRequirement(ncclComm_t comm, ncclTeam_t team, int nBarriers, ncclGinBarrierHandle_t* outHandle, ncclDevResourceRequirements_t* outReq);
 
 #if NCCL_CHECK_CUDACC
 // Bit-flag enum: Put and Get (and any future flags) are independent bits that compose via

@@ -2885,6 +2885,10 @@ int main(int argc, char* argv[]) {
            (algorithm == NCCL_EP_ALGO_LOW_LATENCY) ? "LOW_LATENCY" : "HIGH_THROUGHPUT",
            mask_test ? " (mask-test mode)" : "");
     MPICHECK(MPI_Barrier(MPI_COMM_WORLD));
+    // Baseline GPU memory before any EP allocations (group buffer, handle mem,
+    // staging tensors). Compared against a post-combine snapshot below.
+    size_t gpu_mem_free_pre = 0, gpu_mem_total = 0;
+    CUDACHECK(cudaMemGetInfo(&gpu_mem_free_pre, &gpu_mem_total));
     double group_create_start = MPI_Wtime();
     NCCLCHECK(ncclEpCreateGroup(&ep_group, comm, &config));
     double group_create_end = MPI_Wtime();
@@ -3145,6 +3149,16 @@ int main(int argc, char* argv[]) {
         ktimer,
         stream);
 
+    // Post-combine GPU memory snapshot. By this point the EP group has been
+    // created, the handle has been initialized (and the rdma_buffer grown to
+    // fit the active layout, if needed), and dispatch+combine have run. The
+    // delta vs gpu_mem_free_pre reflects total EP-induced device allocations
+    // (mostly rdma_buffer + handle mem + bench-time tensors).
+    size_t gpu_mem_free_post = 0;
+    {
+        size_t total_ignored = 0;
+        CUDACHECK(cudaMemGetInfo(&gpu_mem_free_post, &total_ignored));
+    }
 
     // Extract individual results for printing
     BenchResult dispatch_result = paired_result.dispatch;
@@ -3219,6 +3233,21 @@ int main(int argc, char* argv[]) {
             printf("Handle creation:     avg=%.2f ms, min=%.2f ms, max=%.2f ms\n",
                    global_handle_avg, global_handle_min, global_handle_max);
         }
+    }
+
+    // GPU memory usage (rank 0 snapshot; same device, identical layout across ranks).
+    // Captured before group creation and right after the paired dispatch+combine.
+    if (myRank == 0) {
+        const double MB = 1024.0 * 1024.0;
+        const size_t used_pre  = gpu_mem_total  - gpu_mem_free_pre;
+        const size_t used_post = gpu_mem_total  - gpu_mem_free_post;
+        const long long delta  = static_cast<long long>(used_post) -
+                                 static_cast<long long>(used_pre);
+        printf("\n=== GPU Memory (rank 0) ===\n");
+        printf("Total device memory: %.2f MB\n", gpu_mem_total / MB);
+        printf("Used pre-create:     %.2f MB\n", used_pre  / MB);
+        printf("Used post-combine:   %.2f MB\n", used_post / MB);
+        printf("EP-induced delta:    %+.2f MB\n", delta / MB);
     }
 
     // ==================== Data Validation ====================

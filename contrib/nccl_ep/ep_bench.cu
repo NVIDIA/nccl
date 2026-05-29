@@ -1232,6 +1232,7 @@ static void preReduceRankMajor(
 // Output: 2D [nRanks*max_tokens_per_rank, hidden]; row valid iff any recv_topk_idx[k] >= 0.
 // FIXME: ncclEpHandleGetNumRecvTokens returns buffer max, not actual count — scan recv_topk_idx as workaround.
 static ValidationResult validateDispatchOutputHTRankMaj(
+    const BenchmarkAllocState&     alloc,
     const ncclEpDispatchOutputs_t& dispatch_outputs,
     unsigned int max_tokens_per_rank,
     const unsigned int*            num_tokens_per_rank,
@@ -1253,14 +1254,14 @@ static ValidationResult validateDispatchOutputHTRankMaj(
     size_t recv_size = static_cast<size_t>(buf_rows) * hidden;
     uint16_t* recv_data = new uint16_t[recv_size];
     void* output0_data;
-    output0_data = dispatch_outputs.tokens->data;
+    NCCLCHECK(epGetTensorData(alloc, dispatch_outputs.tokens, &output0_data));
     CUDACHECK(cudaMemcpy(recv_data, output0_data,
                          recv_size * sizeof(uint16_t), cudaMemcpyDeviceToHost));
 
     bool* valid_slot = new bool[buf_rows]();
     int64_t* recv_topk_idx = new int64_t[static_cast<size_t>(buf_rows) * top_k];
     void* output2_data;
-    output2_data = dispatch_outputs.topk_idx->data;
+    NCCLCHECK(epGetTensorData(alloc, dispatch_outputs.topk_idx, &output2_data));
     CUDACHECK(cudaMemcpy(recv_topk_idx, output2_data,
                          static_cast<size_t>(buf_rows) * top_k * sizeof(int64_t),
                          cudaMemcpyDeviceToHost));
@@ -1355,6 +1356,7 @@ static ValidationResult validateDispatchOutputHTRankMaj(
 // Output: 2D [budget, hidden] split into per-expert zones (meta_expert_offsets[e], counts_padded[e]).
 // Phase A: pad slots (decode rank=128) must be all-zero. Phase B: dup tokens across zones byte-identical.
 static ValidationResult validateDispatchOutputHTExpertMaj(
+    const BenchmarkAllocState&     alloc,
     const ncclEpDispatchOutputs_t& dispatch_outputs,
     unsigned int max_tokens_per_rank,
     const unsigned int*            num_tokens_per_rank,
@@ -1376,7 +1378,7 @@ static ValidationResult validateDispatchOutputHTExpertMaj(
     size_t recv_size = static_cast<size_t>(buf_rows) * hidden;
     uint16_t* recv_data = new uint16_t[recv_size];
     void* output0_data;
-    output0_data = dispatch_outputs.tokens->data;
+    NCCLCHECK(epGetTensorData(alloc, dispatch_outputs.tokens, &output0_data));
     CUDACHECK(cudaMemcpy(recv_data, output0_data,
                          recv_size * sizeof(uint16_t), cudaMemcpyDeviceToHost));
 
@@ -1486,18 +1488,17 @@ ValidationResult validateDispatchOutput(
     const int64_t* meta_expert_counts_padded = nullptr,
     const int64_t* meta_expert_offsets       = nullptr
 ) {
-    (void)alloc;  // HT path uses ncclEpTensorGetData directly
     (void)expert_major_alignment;
     if (is_ht_mode) {
         // EM requires both meta arrays; fall back to RM scan if missing.
         if (is_expert_major && meta_expert_offsets != nullptr && meta_expert_counts_padded != nullptr) {
-            return validateDispatchOutputHTExpertMaj(dispatch_outputs,
+            return validateDispatchOutputHTExpertMaj(alloc, dispatch_outputs,
                                                      max_tokens_per_rank, num_tokens_per_rank,
                                                      hidden, top_k,
                                                      num_experts, num_local_experts, myRank, nRanks,
                                                      meta_expert_counts_padded, meta_expert_offsets);
         }
-        return validateDispatchOutputHTRankMaj(dispatch_outputs,
+        return validateDispatchOutputHTRankMaj(alloc, dispatch_outputs,
                                                max_tokens_per_rank, num_tokens_per_rank,
                                                hidden, top_k,
                                                num_experts, num_local_experts, myRank, nRanks);

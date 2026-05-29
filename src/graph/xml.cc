@@ -674,7 +674,7 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
           NCCLCHECKGOTO(xmlSetAttr(pciNode, "link_speed", speeds[linkGen]), ret, exit);
         }
       } else {
-        NCCLCHECKGOTO(xmlSetAttr(pciNode, "link_speed", "16.0 GT/s"), ret, exit);
+        NCCLCHECKGOTO(xmlSetAttr(pciNode, "link_speed", "16.0 GT/s PCIe"), ret, exit);
       }
     }
 #if NCCL_OS_LINUX
@@ -695,7 +695,7 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
 #if NCCL_OS_LINUX
       NCCLCHECKGOTO(xmlSetAttr(pciNode, "link_speed", ""), ret, exit);
 #elif NCCL_OS_WINDOWS
-      NCCLCHECKGOTO(xmlSetAttr(pciNode, "link_speed", "16.0 GT/s"), ret, exit);
+      NCCLCHECKGOTO(xmlSetAttr(pciNode, "link_speed", "16.0 GT/s PCIe"), ret, exit);
 #endif
     }
   }

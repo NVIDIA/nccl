@@ -1478,7 +1478,7 @@ ncclResult_t ncclOsGetPciDeviceClassByBusId(const char* busId, char* deviceClass
         if (compatIds[i] == 'C' && compatIds[i + 1] == 'C' && compatIds[i + 2] == '_') {
           if (i + 9 < dataSize && strlen(&compatIds[i]) >= 9) {
             char classStr[16];
-            snprintf(classStr, sizeof(classStr), "0x%.2s", &compatIds[i + 3]);
+            snprintf(classStr, sizeof(classStr), "0x%.6s", &compatIds[i + 3]);
             snprintf(deviceClass, maxLen, "%s", classStr);
             INFO(NCCL_INIT, "ncclOsGetPciDeviceClassByBusId: Extracted class %s for %s", deviceClass, busId);
             RegCloseKey(hKey);
@@ -1495,20 +1495,20 @@ ncclResult_t ncclOsGetPciDeviceClassByBusId(const char* busId, char* deviceClass
   const char* classCode = strstr(devInfo.hwId, "CC_");
   if (classCode != NULL && strlen(classCode) >= 9) {
     char classStr[16];
-    snprintf(classStr, sizeof(classStr), "0x%.2s", classCode + 3);
+    snprintf(classStr, sizeof(classStr), "0x%.6s", classCode + 3);
     snprintf(deviceClass, maxLen, "%s", classStr);
     INFO(NCCL_INIT, "ncclOsGetPciDeviceClassByBusId: Extracted class %s for %s", deviceClass, busId);
     return ncclSuccess;
   }
 
   // If still no class, try to infer from vendor/device ID
-  // NVIDIA GPUs (VEN_10DE) -> class 0x03 (display)
-  // Mellanox switches (VEN_15B3) -> class 0x06 (bridge) for DEV_1979 and similar
+  // NVIDIA GPUs (VEN_10DE) -> class 0x030000 (display)
+  // Mellanox switches (VEN_15B3) -> class 0x060400 (bridge) for DEV_1979 and similar
   if (strstr(devInfo.deviceInstanceId, "VEN_10DE") != NULL) {
-    snprintf(deviceClass, maxLen, "0x03");
+    snprintf(deviceClass, maxLen, "0x030000");
   } else if (strstr(devInfo.deviceInstanceId, "VEN_15B3") != NULL &&
              strstr(devInfo.deviceInstanceId, "DEV_1979") != NULL) {
-    snprintf(deviceClass, maxLen, "0x06");
+    snprintf(deviceClass, maxLen, "0x060400");
   } else {
     deviceClass[0] = '\0';
   }

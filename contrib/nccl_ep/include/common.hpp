@@ -312,7 +312,7 @@ struct LowLatencyLayout {
         size_t num_bytes_per_dispatch_msg = disp_hdr_sz + max_token_bytes;
         size_t num_bytes_per_combine_msg = scale_metadata_bytes + max_token_bytes;
 
-        // Send buffer
+        // Per-op send and recv sizes.
         // Combine send buffer holds one slot per outbound message produced on
         // the sender side: expert-major fans tokens out per expert (num_experts
         // slots), while rank-major fans them out per destination rank
@@ -322,19 +322,34 @@ struct LowLatencyLayout {
             ? static_cast<size_t>(num_ranks)
             : static_cast<size_t>(num_experts);
         size_t dispatch_send_buffer_bytes = num_max_dispatch_tokens_per_rank * num_bytes_per_dispatch_msg;
-        size_t combine_send_buffer_bytes = combine_send_slots * num_max_dispatch_tokens_per_rank * num_bytes_per_combine_msg;
-        size_t send_buffer_bytes = std::max(dispatch_send_buffer_bytes, combine_send_buffer_bytes);
-        EP_HOST_ASSERT(send_buffer_bytes % sizeof(int4) == 0);
-        total_bytes += send_buffer_bytes * 2;
+        size_t combine_send_buffer_bytes  = combine_send_slots * num_max_dispatch_tokens_per_rank * num_bytes_per_combine_msg;
 
         // Symmetric receive buffers: the RDMA wire is always rank-major regardless of user-facing layout.
         size_t dispatch_recv_data_buffer_bytes =
             static_cast<size_t>(num_ranks) * static_cast<size_t>(num_max_dispatch_tokens_per_rank) * num_bytes_per_dispatch_msg;
         size_t combine_recv_buffer_bytes =
             static_cast<size_t>(num_max_dispatch_tokens_per_rank) * num_bytes_per_combine_msg * static_cast<size_t>(num_topk);
-        size_t recv_buffer_bytes = std::max(dispatch_recv_data_buffer_bytes, combine_recv_buffer_bytes);
-        EP_HOST_ASSERT(recv_buffer_bytes % sizeof(int4) == 0);
-        total_bytes += recv_buffer_bytes * 2;
+
+        // All four buffers feed vectorized int4 loads/stores; their starts (and
+        // therefore their sizes, since they share slots) must be 16-byte aligned.
+        EP_HOST_ASSERT(dispatch_send_buffer_bytes      % sizeof(int4) == 0);
+        EP_HOST_ASSERT(dispatch_recv_data_buffer_bytes % sizeof(int4) == 0);
+        EP_HOST_ASSERT(combine_send_buffer_bytes       % sizeof(int4) == 0);
+        EP_HOST_ASSERT(combine_recv_buffer_bytes       % sizeof(int4) == 0);
+
+        // Dispatch and combine never run concurrently and don't carry state in
+        // their recv buffers across the boundary (each kernel copies received
+        // payloads out to user tensors before exit). So one shared slot can
+        // hold either op's (send + recv) pair, sized to the worst case.
+        // Inside a slot:
+        //   - send_buffer always starts at slot_base.
+        //   - dispatch_recv starts at slot_base + dispatch_send_buffer_bytes.
+        //   - combine_recv  starts at slot_base + combine_send_buffer_bytes.
+        // Two slots for double-buffering.
+        size_t dispatch_combo_bytes = dispatch_send_buffer_bytes + dispatch_recv_data_buffer_bytes;
+        size_t combine_combo_bytes  = combine_send_buffer_bytes  + combine_recv_buffer_bytes;
+        size_t slot_bytes           = std::max(dispatch_combo_bytes, combine_combo_bytes);
+        total_bytes += slot_bytes * 2;
 
         // Symmetric signaling buffers
         size_t dispatch_recv_count_buffer_bytes = num_experts * sizeof(int);
@@ -347,18 +362,17 @@ struct LowLatencyLayout {
         // by adding these offsets to the group's current rdma_buffer base.
 
         for (int i = 0; i < 2; ++ i) {
-            const size_t send_off  = signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * i;
-            const size_t recv_off  = signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * 2 + recv_buffer_bytes * i;
+            const size_t slot_base = signaling_buffer_bytes_aligned * 2 + slot_bytes * i;
             const size_t count_off = signaling_buffer_bytes_aligned * i;
             buffers[i] = LowLatencyBuffer{
                 .num_clean_int                              = static_cast<int>(signaling_buffer_bytes / sizeof(int)),
-                .dispatch_rdma_send_buffer_offset           = send_off,
-                .dispatch_rdma_recv_data_buffer_offset      = recv_off,
+                .dispatch_rdma_send_buffer_offset           = slot_base,
+                .dispatch_rdma_recv_data_buffer_offset      = slot_base + dispatch_send_buffer_bytes,
                 .dispatch_rdma_recv_count_buffer_offset     = count_off,
-                .combine_rdma_send_buffer_offset            = send_off,
-                .combine_rdma_recv_data_buffer_offset       = recv_off,
+                .combine_rdma_send_buffer_offset            = slot_base,
+                .combine_rdma_recv_data_buffer_offset       = slot_base + combine_send_buffer_bytes,
                 .combine_rdma_recv_flag_buffer_offset       = count_off,
-                .combine_rdma_send_buffer_data_start_offset = send_off,
+                .combine_rdma_send_buffer_data_start_offset = slot_base,
                 .num_bytes_per_combine_msg                  = num_bytes_per_combine_msg,
             };
         }

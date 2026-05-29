@@ -50,8 +50,8 @@ NCCL_DEVICE_INLINE void waitForGfdComplete(ncclGinProxyGpuCtx_t* proxyCtx, uint3
   using nccl::utility::testAbort;
   cuda::atomic_ref<uint32_t, cuda::thread_scope_system> ci(loadConst(&proxyCtx->cis)[pe]);
   uint32_t steps = 0;
-  // The PI and CI can keep moving because of concurrent threads posting GFDs to this queue, and the CPU consuming them.
-  // Therefore, to prevent overflow issues in the while statement, we need to use a special comparison function.
+  // The PI and CI can keep moving because of concurrent threads posting GFDs to this queue, and the CPU consuming
+  // them. Therefore, to prevent overflow issues in the while statement, we need to use a special comparison function.
   NVCC_PRAGMA_UNROLL_DISABLED
   while (!rollingLessEq<uint32_t>(nextGfdIdx, ci.load(ord)) && !testAbort(abortFlag, steps)) continue;
 }
@@ -389,7 +389,8 @@ struct ncclGinApi_Flush<NCCL_NET_DEVICE_GIN_PROXY> {
     for (int pe = coop.thread_rank(); pe < ctx.nRanks; pe += coop.size()) {
       ncclGinRequest_t request;
       ncclGinApi_FlushAsync<NCCL_NET_DEVICE_GIN_PROXY>::call(ctx, pe, &request, hasDescriptor, descriptor, ncclGinOptFlagsDefault);
-      // This is slightly inefficient. If there are prior gets, there will be one flush GFD per peer even though 1 suffices.
+      // This is slightly inefficient. If there are prior gets, there will be one flush GFD per peer even though 1
+      // suffices.
       ncclGinApi_Wait<NCCL_NET_DEVICE_GIN_PROXY>::call(ctx, request, hasDescriptor, descriptor, ord, abortFlag);
     }
   }

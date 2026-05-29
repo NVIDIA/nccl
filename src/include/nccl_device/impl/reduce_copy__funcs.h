@@ -802,7 +802,8 @@ NCCL_DEVICE_INLINE void ncclLsaReduceLsaCopy(
   // C++11 - C++17 considers this a template invalid cannot have a valid specialation.
   // By making this a dependent static_assert, there may exists an overload of always_false that is true, it is valid.
   // "The validity of a template checked prior to any instantiation."
-  // C++20+ may make an exception for static_assert for this exact situation. https://eel.is/c++draft/temp.res#general-6
+  // C++20+ may make an exception for static_assert for this exact situation.
+  // https://eel.is/c++draft/temp.res#general-6
   static_assert(nccl::utility::always_false<T>::value,
      "NCCL device API reduce/Copy functions require device side lambdas, please use '--extended-lambda' as compilation flag to enable that API.");
 }

@@ -563,7 +563,8 @@ struct ncclComm {
   bool directMode; // if any process manages more than one local rank
   int cuMemSupport;
 
-  uint64_t magic; // Magic number for all network communication. Not a security key -- only goal is to detect mismatches.
+  uint64_t magic; // Magic number for all network communication. Not a security key -- only goal is to detect
+                  // mismatches.
 
   uint64_t commHash;
   int rank;    // my rank in the communicator

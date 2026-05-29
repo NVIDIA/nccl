@@ -840,7 +840,8 @@ ib_connect_check:
   comm->base.localOooRq = exProps.oooRq;
   memcpy((char *)stage->buffer + sizeof(ncclNetVDeviceProps_t), &exProps, sizeof(struct ncclIbDevExtraProps));
 
-// In the case of mismatched nDevs, we will make sure that both sides of a logical connection have the same number of RC qps
+// In the case of mismatched nDevs, we will make sure that both sides of a logical connection have the same number
+// of RC qps
 ib_send_dev_list:
   NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_SEND, &comm->base.sock, stage->buffer, sizeof(ncclNetVDeviceProps_t) + sizeof(struct ncclIbDevExtraProps), &stage->offset));
   if (stage->offset != (sizeof(ncclNetVDeviceProps_t) + sizeof(struct ncclIbDevExtraProps))) return ncclSuccess;
@@ -1064,7 +1065,8 @@ ncclResult_t ncclIbCheckVProps(ncclNetVDeviceProps_t* vProps1, ncclNetVDevicePro
     }
   }
 
-  // In the case that at least one side has a fused NIC but there are no matching physical NICs, we should check if the user wants this
+  // In the case that at least one side has a fused NIC but there are no matching physical NICs, we should check if
+  // the user wants this
   if (ncclParamIbWarnRailLocal() && outVProps.ndevs < maxVProps->ndevs) {
     char local[128];
     int cursor = 1;
@@ -1343,7 +1345,8 @@ ib_accept_check:
   stage->state = ncclIbCommStateRecvDevList;
   stage->offset = 0;
 
-// In the case of mismatched nDevs, we will make sure that both sides of a logical connection have the same number of RC qps
+// In the case of mismatched nDevs, we will make sure that both sides of a logical connection have the same number
+// of RC qps
 ib_recv_dev_list:
   NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_RECV, &rComm->base.sock, stage->buffer, sizeof(ncclNetVDeviceProps_t) + sizeof(struct ncclIbDevExtraProps), &stage->offset));
   if (stage->offset != (sizeof(ncclNetVDeviceProps_t) + sizeof(struct ncclIbDevExtraProps))) return ncclSuccess;

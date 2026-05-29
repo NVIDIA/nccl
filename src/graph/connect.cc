@@ -395,8 +395,8 @@ ncclResult_t ncclTopoPostset(struct ncclComm* comm, int* firstRanks, int* treePa
   NCCLCHECKGOTO(ncclCalloc(&nvlsHeads, nNodes*MAXCHANNELS), ret, fail);
 
   // Alternate rings to avoid crossing rails.
-  // CrossNic values could be not the same on all nodes as it depends on the number of net devs and the NVLink bandwidth.
-  // Therefore, it's only done if the rank obtained a solution with crossNic=2.
+  // CrossNic values could be not the same on all nodes as it depends on the number of net devs and the NVLink
+  // bandwidth. Therefore, it's only done if the rank obtained a solution with crossNic=2.
   for (int r = 0; r < comm->nRanks; r++) {
     if (allTopoRanks[r]->crossNicRing == 2 && (nChannels % 2) == 0 && (comm->rankToNode[r] % 2) == 1) {
       // Exchange rings

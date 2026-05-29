@@ -283,18 +283,20 @@ NCCL_DEVICE_INLINE IntCount reduceCopyLoopCore(
     // if (nSrc >= 3 && nSrc % 3 == 0) {
     //   constexpr int UNROLL_DIV3 = UNROLL_PACKS / 3;
     //   if NCCL_IF_CONSTEXPR (UNROLL_DIV3 > 0) {
-    //     constexpr int UNROLL_DIV3_SAFE = (UNROLL_DIV3 > 0) ? UNROLL_DIV3 : 1;  // only needed for dead-code instantiation
-    //     return reduceCopyLoopCoreImpl<UNROLL_DIV3_SAFE, /*nSrc=*/3, T, Pack, RedOp, IntCount, Coop, srcMultimem, dstMultimem,
-    //                            SrcLambda, DstLambda, CHECK_BOUNDS, /*singleSrc=*/false>(
+    //     constexpr int UNROLL_DIV3_SAFE = (UNROLL_DIV3 > 0) ? UNROLL_DIV3 : 1;  // only needed for dead-code
+    //                                                                            // instantiation
+    //     return reduceCopyLoopCoreImpl<UNROLL_DIV3_SAFE, /*nSrc=*/3, T, Pack, RedOp, IntCount, Coop, srcMultimem,
+    //                                   dstMultimem, SrcLambda, DstLambda, CHECK_BOUNDS, /*singleSrc=*/false>(
     //         coop, srcLambda, nSrc, dstLambda, nDst, redOp, totalPacks, basePackIdx);
     //   }
     // }
     // if (nSrc >= 2 && nSrc % 2 == 0) {
     //   constexpr int UNROLL_DIV2 = UNROLL_PACKS / 2;
     //   if NCCL_IF_CONSTEXPR (UNROLL_DIV2 > 0) {
-    //     constexpr int UNROLL_DIV2_SAFE = (UNROLL_DIV2 > 0) ? UNROLL_DIV2 : 1;  // only needed for dead-code instantiation
-    //     return reduceCopyLoopCoreImpl<UNROLL_DIV2_SAFE, /*nSrc=*/2, T, Pack, RedOp, IntCount, Coop, srcMultimem, dstMultimem,
-    //                            SrcLambda, DstLambda, CHECK_BOUNDS, /*singleSrc=*/false>(
+    //     constexpr int UNROLL_DIV2_SAFE = (UNROLL_DIV2 > 0) ? UNROLL_DIV2 : 1;  // only needed for dead-code
+    //                                                                            // instantiation
+    //     return reduceCopyLoopCoreImpl<UNROLL_DIV2_SAFE, /*nSrc=*/2, T, Pack, RedOp, IntCount, Coop, srcMultimem,
+    //                                   dstMultimem, SrcLambda, DstLambda, CHECK_BOUNDS, /*singleSrc=*/false>(
     //         coop, srcLambda, nSrc, dstLambda, nDst, redOp, totalPacks, basePackIdx);
     //   }
     // }
@@ -451,7 +453,8 @@ NCCL_DEVICE_INLINE void reduceCopy(
     processedElts = alignOffset;
   }
 
-  // Step 2: Process aligned bulk - match all_reduce.cuh strategy: check relative alignment and try pack sizes sequentially
+  // Step 2: Process aligned bulk - match all_reduce.cuh strategy: check relative alignment and try pack sizes
+  // sequentially
   IntCount remainingElts = count - processedElts;
   if (remainingElts == 0) {
     return;

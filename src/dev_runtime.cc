@@ -1400,7 +1400,8 @@ bool ncclDevrWindowHasSysmemSegment(struct ncclDevrWindow* win) {
   return win != NULL && win->memory->globalHasSysmemSegment;
 }
 
-// Returns ncclInvalidUsage if the compiled version is greater than the runtime version and NCCL_ENABLE_VERSION_CHECK=0 is not set
+// Returns ncclInvalidUsage if the compiled version is greater than the runtime version
+// and NCCL_ENABLE_VERSION_CHECK=0 is not set
 static ncclResult_t getNcclVersionCompat(int compiledVersion, struct ncclDevCommCompat** devCompatPtr) {
   *devCompatPtr = nullptr;
 

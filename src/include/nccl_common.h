@@ -9,7 +9,8 @@
 #define NCCL_DEBUG_H_
 
 #ifdef NCCL_OS_LINUX
-  // Workaround for libstdc++ trying to force public visibility of std:: symbols.  We don't want to do that in libnccl.so.
+  // Workaround for libstdc++ trying to force public visibility of std:: symbols.  We don't want to do that in
+  // libnccl.so.
   #include <bits/c++config.h>
   #undef _GLIBCXX_VISIBILITY
   #define _GLIBCXX_VISIBILITY(V)

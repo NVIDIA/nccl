@@ -76,7 +76,8 @@ typedef enum nvmlReturn_enum
 
 typedef struct nvmlPciInfo_st
 {
-    char busIdLegacy[NVML_DEVICE_PCI_BUS_ID_BUFFER_V2_SIZE]; //!< The legacy tuple domain:bus:device.function PCI identifier (&amp; NULL terminator)
+    char busIdLegacy[NVML_DEVICE_PCI_BUS_ID_BUFFER_V2_SIZE]; //!< The legacy tuple domain:bus:device.function PCI
+                                                             //!< identifier (&amp; NULL terminator)
     unsigned int domain;             //!< The PCI domain on which the device's bus resides, 0 to 0xffffffff
     unsigned int bus;                //!< The bus on which the device resides, 0 to 0xff
     unsigned int device;             //!< The device's id on the bus, 0 to 31
@@ -85,7 +86,8 @@ typedef struct nvmlPciInfo_st
     // Added in NVML 2.285 API
     unsigned int pciSubSystemId;     //!< The 32-bit Sub System Device ID
 
-    char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE]; //!< The tuple domain:bus:device.function PCI identifier (&amp; NULL terminator)
+    char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE]; //!< The tuple domain:bus:device.function PCI identifier (&amp;
+                                                    //!< NULL terminator)
 } nvmlPciInfo_t;
 
 typedef struct
@@ -101,7 +103,8 @@ typedef struct
     unsigned int baseClass;          //!< The 8-bit PCI base class code
     unsigned int subClass;           //!< The 8-bit PCI sub class code
 
-    char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE]; //!< The tuple domain:bus:device.function PCI identifier (&amp; NULL terminator)
+    char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE]; //!< The tuple domain:bus:device.function PCI identifier (&amp;
+                                                    //!< NULL terminator)
 } nvmlPciInfoExt_v1_t;
 
 typedef nvmlPciInfoExt_v1_t  nvmlPciInfoExt_t;
@@ -195,12 +198,16 @@ typedef union nvmlValue_st
  */
 typedef struct nvmlFieldValue_st
 {
-    unsigned int fieldId;       //!< ID of the NVML field to retrieve. This must be set before any call that uses this struct. See the constants starting with NVML_FI_ above.
-    unsigned int scopeId;       //!< Scope ID can represent data used by NVML depending on fieldId's context. For example, for NVLink throughput counter data, scopeId can represent linkId.
+    unsigned int fieldId;       //!< ID of the NVML field to retrieve. This must be set before any call that uses
+                                //!< this struct. See the constants starting with NVML_FI_ above.
+    unsigned int scopeId;       //!< Scope ID can represent data used by NVML depending on fieldId's context. For
+                                //!< example, for NVLink throughput counter data, scopeId can represent linkId.
     long long timestamp;        //!< CPU Timestamp of this value in microseconds since 1970
-    long long latencyUsec;      //!< How long this field value took to update (in usec) within NVML. This may be averaged across several fields that are serviced by the same driver call.
+    long long latencyUsec;      //!< How long this field value took to update (in usec) within NVML. This may be
+                                //!< averaged across several fields that are serviced by the same driver call.
     nvmlValueType_t valueType;  //!< Type of the value stored in value
-    nvmlReturn_t nvmlReturn;    //!< Return code for retrieving this value. This must be checked before looking at value, as value is undefined if nvmlReturn != NVML_SUCCESS
+    nvmlReturn_t nvmlReturn;    //!< Return code for retrieving this value. This must be checked before looking at
+                                //!< value, as value is undefined if nvmlReturn != NVML_SUCCESS
     nvmlValue_t value;          //!< Value for this field. This is only valid if nvmlReturn == NVML_SUCCESS
 } nvmlFieldValue_t;
 
@@ -216,7 +223,8 @@ typedef unsigned char nvmlGpuFabricState_t;
 
 typedef struct {
     unsigned char        clusterUuid[NVML_GPU_FABRIC_UUID_LEN]; //!< Uuid of the cluster to which this GPU belongs
-    nvmlReturn_t         status;                                //!< Error status, if any. Must be checked only if state returns "complete".
+    nvmlReturn_t         status;                                //!< Error status, if any. Must be checked only if
+                                                                //!< state returns "complete".
     unsigned int         cliqueId;                              //!< ID of the fabric clique to which this GPU belongs
     nvmlGpuFabricState_t state;                                 //!< Current state of GPU registration process
 } nvmlGpuFabricInfo_t;
@@ -255,9 +263,11 @@ typedef struct {
 * \ref nvmlGpuFabricInfo_t.
 */
 typedef struct {
-    unsigned int         version;                               //!< Structure version identifier (set to \ref nvmlGpuFabricInfo_v2)
+    unsigned int         version;                               //!< Structure version identifier (set to
+                                                                //!< \ref nvmlGpuFabricInfo_v2)
     unsigned char        clusterUuid[NVML_GPU_FABRIC_UUID_LEN]; //!< Uuid of the cluster to which this GPU belongs
-    nvmlReturn_t         status;                                //!< Error status, if any. Must be checked only if state returns "complete".
+    nvmlReturn_t         status;                                //!< Error status, if any. Must be checked only if
+                                                                //!< state returns "complete".
     unsigned int         cliqueId;                              //!< ID of the fabric clique to which this GPU belongs
     nvmlGpuFabricState_t state;                                 //!< Current state of GPU registration process
     unsigned int         healthMask;                            //!< GPU Fabric health Status Mask
@@ -276,10 +286,14 @@ typedef nvmlGpuFabricInfo_v2_t nvmlGpuFabricInfoV_t;
 typedef struct
 {
     unsigned int version;                       //!< the API version number
-    unsigned char ibGuid[16];                   //!< Infiniband GUID reported by platform (for Blackwell, ibGuid is 8 bytes so indices 8-15 are zero)
-    unsigned char chassisSerialNumber[16];      //!< Serial number of the chassis containing this GPU (for Blackwell it is 13 bytes so indices 13-15 are zero)
-    unsigned char slotNumber;                   //!< The slot number in the chassis containing this GPU (includes switches)
-    unsigned char trayIndex;                    //!< The tray index within the compute slots in the chassis containing this GPU (does not include switches)
+    unsigned char ibGuid[16];                   //!< Infiniband GUID reported by platform (for Blackwell, ibGuid is 8
+                                                //!< bytes so indices 8-15 are zero)
+    unsigned char chassisSerialNumber[16];      //!< Serial number of the chassis containing this GPU (for Blackwell
+                                                //!< it is 13 bytes so indices 13-15 are zero)
+    unsigned char slotNumber;                   //!< The slot number in the chassis containing this GPU (includes
+                                                //!< switches)
+    unsigned char trayIndex;                    //!< The tray index within the compute slots in the chassis containing
+                                                //!< this GPU (does not include switches)
     unsigned char hostId;                       //!< Index of the node within the slot containing this GPU
     unsigned char peerType;                     //!< Platform indicated NVLink-peer type (e.g. switch present or not)
     unsigned char moduleId;                     //!< ID of this GPU within the node

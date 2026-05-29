@@ -304,7 +304,10 @@ ncclResult_t ncclSocketGetAddrFromString(union ncclSocketAddress* ua, const char
     strncpy(ip_str, ip_port_pair+1, global_scope ? i-1 : j-1);
     strncpy(port_str, ip_port_pair+i+2, len-i-1);
     int port = atoi(port_str);
-    if (!global_scope) strncpy(if_name, ip_port_pair+j+1, i-j-1); // If not global scope, we need the intf name
+    if (!global_scope) {
+      // If not global scope, we need the intf name
+      strncpy(if_name, ip_port_pair+j+1, i-j-1);
+    }
 
     struct sockaddr_in6& sin6 = ua->sin6;
     sin6.sin6_family = AF_INET6;                       // IPv6
@@ -589,7 +592,8 @@ ncclResult_t ncclSocketInit(struct ncclSocket* sock, const union ncclSocketAddre
       goto exit;
     }
     sock->salen = (family == AF_INET) ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
-    // in case of error, we close the descriptor before returning as it's unclear if the caller has to use ncclSocketClose for cleanup
+    // in case of error, we close the descriptor before returning as it's unclear if the caller has to
+    // use ncclSocketClose for cleanup
     NCCLCHECKGOTO(ncclOsSocketResetFd(sock), ret, fail);
   } else {
     memset(&sock->addr, 0, sizeof(union ncclSocketAddress));

@@ -127,7 +127,8 @@ ncclResult_t ncclTopoGetDevNodes(struct ncclTopoSystem* system, int64_t baseId, 
 // Connection between a GPU and a NIC using the C2C connection to the CPU and the PCIe connection to the NIC
 #define PATH_P2C 6
 
-// Connection between a GPU and a NIC using an intermediate GPU. Used to enable rail-local, aggregated network send/recv operations.
+// Connection between a GPU and a NIC using an intermediate GPU. Used to enable rail-local, aggregated network
+// send/recv operations.
 #define PATH_PXN 7
 
 // Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
@@ -149,8 +150,10 @@ extern const char* topoPathTypeStr[];
 // Init search. Needs to be done before calling ncclTopoCompute
 ncclResult_t ncclTopoSearchInit(struct ncclTopoSystem* system);
 
-#define NCCL_TOPO_PATTERN_BALANCED_TREE 1   // Spread NIC traffic between two GPUs (Tree parent + one child on first GPU, second child on second GPU)
-#define NCCL_TOPO_PATTERN_SPLIT_TREE 2      // Spread NIC traffic between two GPUs (Tree parent on first GPU, tree children on the second GPU)
+#define NCCL_TOPO_PATTERN_BALANCED_TREE 1   // Spread NIC traffic between two GPUs (Tree parent + one child on first
+                                            // GPU, second child on second GPU)
+#define NCCL_TOPO_PATTERN_SPLIT_TREE 2      // Spread NIC traffic between two GPUs (Tree parent on first GPU, tree
+                                            // children on the second GPU)
 #define NCCL_TOPO_PATTERN_TREE 3            // All NIC traffic going to/from the same GPU
 #define NCCL_TOPO_PATTERN_RING 4            // Ring
 #define NCCL_TOPO_PATTERN_NVLS 5            // NVLS+SHARP and NVLS+Tree

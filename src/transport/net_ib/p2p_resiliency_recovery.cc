@@ -39,7 +39,8 @@ std::thread ncclIbPortRecoveryAsyncThread;
 // Reference count of active resiliency contexts using port recovery
 static std::atomic<int> ncclIbPortRecoveryRefCount(0);
 
-// Flag indicating the recovery thread is active - cleared by ncclIbPortRecoveryThreadStop() to signal the async thread to exit
+// Flag indicating the recovery thread is active - cleared by ncclIbPortRecoveryThreadStop() to signal the async
+// thread to exit
 static std::atomic<bool> ncclIbPortRecoveryThreadActive(false);
 
 // Mutex protecting shared state between the async recovery thread and callers:

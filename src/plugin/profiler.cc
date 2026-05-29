@@ -457,8 +457,10 @@ ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan) {
         ncclProfiler->startEvent(plan->comm->profilerContext, &ct->eventHandle, &eDescr);
       }
     }
-    // comm->seqNumber values are updated even if the plugin is not active, since they are used by RAS as well.
-    // The test for "persistent" is a workaround for graph-captured collectives.  In their case this function may not be
+    // comm->seqNumber values are updated even if the plugin is not active, since they are used by RAS
+    // as well.
+    // The test for "persistent" is a workaround for graph-captured collectives.  In their case this
+    // function may not be
     // consistently invoked on all the ranks, which would lead to mismatched counter values and thus false-positive
     // reports from RAS.  Instead, we choose not to include graph-captured collectives in our counts.  An exception is
     // made if ncclProfileKernelCh profiler events are active, as they result in proxy events always being added, which

@@ -87,7 +87,8 @@ struct ncclRmaProxyDesc {
   };
 
   // Non graph mode, desc does not own the sequence allocations but points to the ctx's sequence allocations
-  // Graph mode, desc owns the per-descriptor sequence allocations and this needs to be freed when the desc is destroyed
+  // Graph mode, desc owns the per-descriptor sequence allocations and this needs to be freed when the desc is
+  // destroyed
   uint64_t opSeq;
   uint64_t* readySeq;
   uint64_t* readySeqDev;

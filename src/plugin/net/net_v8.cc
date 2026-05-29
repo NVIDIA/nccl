@@ -213,7 +213,8 @@ ncclNet_t* getNcclNet_v8(void* lib) {
 static ncclResult_t ncclCollNet_init(void** ctx __attribute__((unused)),
     uint64_t commId __attribute__((unused)),
     ncclDebugLogger_t logfn) {
-  // before ncclCollNet_v11 the collnet plugin was initialized only once. With ncclCollNet_v11 this is no longer the case.
+  // before ncclCollNet_v11 the collnet plugin was initialized only once. With ncclCollNet_v11 this is
+  // no longer the case.
   // The compat layer preserves the ncclCollNet_v8 behavior using a refCount to track the number of times the plugin
   // is initialized, and avoid initializing it multiple times.
   if (refCount[COLLNET_INDEX]) goto exit;

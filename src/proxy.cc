@@ -494,7 +494,8 @@ static ncclResult_t ncclLocalOpAppend(struct ncclComm* comm, struct ncclProxyCon
     op = pool->ops+opIndex;
     proxyOps->freeOp = op->next;
   } else {
-    // Read the freeOps value and wait for a value different than -1. Once not -1, read the value with acquire and reset -1
+    // Read the freeOps value and wait for a value different than -1. Once not -1, read the value with acquire and
+    // reset -1
     int freeOp = -1;
     while (freeOp == -1) {
       freeOp = COMPILER_ATOMIC_EXCHANGE(&pool->freeOps[tpLocalRank], -1, std::memory_order_acquire);
@@ -858,9 +859,9 @@ process_nextops:
     // prepend the ops freeOp[i]-freeOpEnd[i] in front of the pool->freeOps[i] op
     oldFree = COMPILER_ATOMIC_LOAD(&pool->freeOps[i], std::memory_order_acquire);
     do {
-      // Coverity gets confused by the complex code structure here.  The previous "for" loop ensures that freeOpEnd[i]
-      // is initialized so long as freeOp[i] is initialized (is not -1).  In the current loop we filter out uninitialized
-      // freeOp[i], hence ensuring that freeOpEnd[i] is also initialized.
+      // Coverity gets confused by the complex code structure here.  The previous "for" loop ensures that
+      // freeOpEnd[i] is initialized so long as freeOp[i] is initialized (is not -1).  In the current loop we filter
+      // out uninitialized freeOp[i], hence ensuring that freeOpEnd[i] is also initialized.
       // coverity[uninit_use:FALSE]
       pool->ops[freeOpEnd[i]].next = oldFree;
     } while (!COMPILER_ATOMIC_COMPARE_EXCHANGE(&pool->freeOps[i], &oldFree, newFree, /*success=*/std::memory_order_release, /*failure=*/std::memory_order_acquire));

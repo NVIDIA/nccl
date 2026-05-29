@@ -154,7 +154,8 @@ struct ncclProxyConnector {
   int tpLocalRank;
   int sameProcess;
   struct ncclProxyConnection* connection;
-  ncclResult_t (*proxyProgress)(struct ncclProxyState* proxyState, struct ncclProxyArgs*); // Copied from transport if necessary
+  ncclResult_t (*proxyProgress)(struct ncclProxyState* proxyState, struct ncclProxyArgs*); // Copied from transport if
+                                                                                           // necessary
   ncclResult_t (*proxyGinProgress)(struct ncclProxyState* proxyState);
 };
 

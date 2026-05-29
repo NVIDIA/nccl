@@ -247,7 +247,8 @@ static ncclResult_t ncclRmaCePutLaunchNonPersist(struct ncclComm* comm,
   struct ncclRmaCeCtx* ceCtx = (struct ncclRmaCeCtx*)comm->rmaState.rmaCeState.rmaCeCtxs[ctx];
 
   // signal and data operations can not be in the same batch as batched mem copy does not guarantee order of execution
-  // we can not have signal operations to the same physical address in the same batch as batched mem copy does not guarantee order of execution
+  // we can not have signal operations to the same physical address in the same batch as batched mem copy does not
+  // guarantee order of execution
   struct ncclIntruQueue<struct ncclTaskRma, &ncclTaskRma::next>* peerTaskQueues = nullptr;
   int* activePeers = nullptr;
   struct ncclCeBatchOpsParams dataParams = {};

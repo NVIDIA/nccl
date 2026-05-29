@@ -82,7 +82,8 @@ struct connectMapMem{
 
 struct connectMap {
   int shared;
-  // First 3 bits of offsets determine the mem bank. 001 is host mem, 011 is dev mem, 101 is shared host mem and 111 is shared dev mem.
+  // First 3 bits of offsets determine the mem bank. 001 is host mem, 011 is dev mem, 101 is shared host mem and 111
+  // is shared dev mem.
   struct connectMapMem mems[NCCL_NET_MAP_MEMS];
   // Offsets. 3 MSBs indicate mem bank, 111 indicates NULL.
   struct {
@@ -739,7 +740,8 @@ static ncclResult_t collNetRegIallreduce(struct ncclProxyState* proxyState, stru
   ssize_t eltSize = ncclTypeSize((ncclDataType_t)args->dtype);
   // for UB iallreduce 1RPN case, user's send and recv buffers are both directly accessed by collnet network.
   // we can just issue maximal collnet bytes by resources->maxCollBytes for each iallreduce.
-  // for multi-RPN case, we have to consider pipeline, so each time we only send groupSize * chunkSize (i.e., nBytesInOut)
+  // for multi-RPN case, we have to consider pipeline, so each time we only send groupSize * chunkSize (i.e.,
+  // nBytesInOut)
   // sub->loopOffset is data offset to the buffer for this head rank in each loop
   // winOffset is used to find actual offset from send and recv buffer for this iallreduce
   // loopSize is all bytes sent by all channels and head ranks in each loop.

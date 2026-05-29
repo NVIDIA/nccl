@@ -374,7 +374,8 @@ static void* bootstrapRoot(void* rargs) {
   BOOTSTRAP_PROF_OPEN(timers[BOOTSTRAP_INIT_ROOT_SEND]);
   // here we need to send info only to my own local process
   for (int r = 0; r < n2send; ++r) {
-    // use nrecv to periodize: if 1 root, we will send the first one to the last one, if >1 roots we will send the additional one we have received
+    // use nrecv to periodize: if 1 root, we will send the first one to the last one,
+    // if >1 roots we will send the additional one we have received
     int next = BOOTSTRAP_PID(r + 1, nrecv);
     if (memcmp(&zeroAddress, &rankAddressesRoot[r], sizeof(union ncclSocketAddress)) != 0 &&
         memcmp(&zeroInfo, &rankInfo[next], sizeof(union ringConnectInfo)) != 0) {
@@ -698,7 +699,8 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
   // Set magic: for grow existing ranks, receive from coordinator; otherwise use handle magic.
   // This is consistent with the magic created in ncclCommGetUniqueId.
   if (handles != NULL) {
-    comm->magic = state->magic = BOOTSTRAP_HANDLE(handles, 0)->magic; // state and comm magic set to the first magic ID
+    // state and comm magic set to the first magic ID
+    comm->magic = state->magic = BOOTSTRAP_HANDLE(handles, 0)->magic;
   } else if (parent != NULL) {
     comm->magic = state->magic = hashCombine(parent->magic, parent->childCount);
   } else {
@@ -792,7 +794,8 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
     NCCLCHECK(ncclSocketClose(&listenSockRoot));
   }
   if (parent && comm->isGrow && rank != parent->nRanks - 1) {
-    // Grow: Ranks 0 to N-2 use the parent bootstrap to recv connection information to the next rank. This is consistent with the bootstrapSend above.
+    // Grow: Ranks 0 to N-2 use the parent bootstrap to recv connection information to the next rank.
+    // This is consistent with the bootstrapSend above.
     NCCLCHECK(bootstrapRecv(parent->bootstrap, rank + 1, 0, &nextPeer, sizeof(nextPeer)));
   }
   BOOTSTRAP_PROF_CLOSE(timers[BOOTSTRAP_INIT_TIME_RECV]);
@@ -1122,7 +1125,8 @@ static ncclResult_t socketRingAllGather(struct ncclSocket* nextSock, struct nccl
   TRACE(NCCL_BOOTSTRAP, "bidirectional bootstrap: totalSteps=%d", totalSteps);
   BOOTSTRAP_PROF_OPEN(tFirst);
   for (int step = 0; step < totalSteps; step++) {
-    // N ranks requires (N-1)/2 steps for the double ring  algorithm. If N is even, the last step is requires a single send/recv
+    // N ranks requires (N-1)/2 steps for the double ring  algorithm.
+    // If N is even, the last step is requires a single send/recv
     bool isFinalUnidirectional = (step == totalSteps - 1) && (nranks % 2 == 0);
     // Ring0: ring from previous to next
     int sendSliceRing0 = (rank - step + nranks) % nranks;      // Send this slice to next neighbor

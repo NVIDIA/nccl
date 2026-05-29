@@ -99,7 +99,8 @@ static void* openPluginLib(enum ncclPluginType type, const char* libName) {
     INFO(subsys[type], "%s/Plugin: %s: %s", pluginNames[type], libName_, openErrStr);
   }
 
-  // libName can't be a relative or absolute path (start with '.' or contain any '/'). It can't be a library name either (start with 'lib' or end with '.so')
+  // libName can't be a relative or absolute path (start with '.' or contain any '/'). It can't be a
+  // library name either (start with 'lib' or end with '.so')
   if (libName && strlen(libName) && strchr(libName, '/') == nullptr &&
       (strncmp(libName, "lib", strlen("lib")) || strlen(libName) < strlen(".so") ||
        strncmp(libName + strlen(libName) - strlen(".so"), ".so", strlen(".so")))) {

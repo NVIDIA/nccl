@@ -142,7 +142,8 @@ void ncclAddWorkBatchToPlan(
       for (int i = 0; i < chan->wipBatch.nP2ps; i++) {
         // Do not allow the same round twice in the same batch, it would use the same connection.
         newBatch |= p2pRound == chan->wipBatch.p2pRounds[i];
-        // Make sure we only aggregate p2p operations within the same p2p group (one group is NCCL_MAX_DEV_WORK_P2P_PER_BATCH ops).
+        // Make sure we only aggregate p2p operations within the same p2p group (one group is
+        // NCCL_MAX_DEV_WORK_P2P_PER_BATCH ops).
         // This enforces uniform batching accross ranks in the communicator and prevents hangs.
         newBatch |= (p2pRound / NCCL_MAX_DEV_WORK_P2P_PER_BATCH) != (chan->wipBatch.p2pRounds[i] / NCCL_MAX_DEV_WORK_P2P_PER_BATCH);
       }
@@ -1539,9 +1540,11 @@ ncclResult_t ncclLaunchPrepare(struct ncclComm* comm) {
   struct ncclKernelPlanner* planner = &comm->planner;
   bool persistent = ncclCudaGraphValid(planner->capturingGraph);
   planner->persistent = persistent;
-  // Operations from different plans will not be batched together. A new batch will be created for each new plan that is used to schedule the ops (see ncclAddWorkBatchToPlan).
+  // Operations from different plans will not be batched together. A new batch will be created for each new plan that
+  // is used to schedule the ops (see ncclAddWorkBatchToPlan).
   // For p2p ops, we further guarantee that ops from different epochs will not be batched together (to avoid hangs).
-  // The p2pEpoch value is incremented in scheduleP2pTasksToPlan and its value is carried over from one plan to another (even if not strictly required)
+  // The p2pEpoch value is incremented in scheduleP2pTasksToPlan and its value is carried over from one plan to
+  // another (even if not strictly required)
   int nPlans = 0, p2pEpoch=0, p2pRound=0;
 
   if (planner->nTasksColl + planner->nTasksP2p + planner->nTasksBcast != 0 ||

@@ -59,7 +59,8 @@ static ncclResult_t ncclNet_connect(void* ctx, int dev, void* handle, void** sen
 }
 
 static ncclResult_t ncclNet_makeVDevice(int* d, ncclNetVDeviceProps_t* props) {
-  // Safe cast: devs[] is at the end of the struct and NCCL limits ndevs to NCCL_NET_MAX_DEVS_PER_NIC_V11 for v10 plugins.
+  // Safe cast: devs[] is at the end of the struct and NCCL limits ndevs to
+  // NCCL_NET_MAX_DEVS_PER_NIC_V11 for v10 plugins.
   return ncclNet_v10->makeVDevice(d, (ncclNetVDeviceProps_v10_t *)props);
 }
 
@@ -173,7 +174,8 @@ static ncclResult_t ncclCollNet_ireducescatter(void* collComm, int nSendParts, n
 }
 
 static ncclResult_t ncclCollNet_makeVDevice(int* d, ncclNetVDeviceProps_t* props) {
-  // Safe cast: devs[] is at the end of the struct and NCCL limits ndevs to NCCL_NET_MAX_DEVS_PER_NIC_V11 for v10 plugins.
+  // Safe cast: devs[] is at the end of the struct and NCCL limits ndevs to
+  // NCCL_NET_MAX_DEVS_PER_NIC_V11 for v10 plugins.
   return ncclCollNet_v10->makeVDevice(d, (ncclNetVDeviceProps_v10_t *)props);
 }
 
@@ -185,7 +187,8 @@ static ncclResult_t ncclCollNet_finalize(void* ctx __attribute__((unused))) {
 static ncclResult_t ncclCollNet_init(void** ctx __attribute__((unused)),
     uint64_t commId __attribute__((unused)),
     ncclDebugLogger_t logfn) {
-  // before ncclCollNet_v11 the collnet plugin was initialized only once. With ncclCollNet_v11 this is no longer the case.
+  // before ncclCollNet_v11 the collnet plugin was initialized only once. With ncclCollNet_v11 this is
+  // no longer the case.
   // The compat layer preserves the ncclCollNet_v10 behavior using a refCount to track the number of times the plugin
   // is initialized, and avoid initializing it multiple times.
   if (refCount[COLLNET_INDEX]) goto exit;

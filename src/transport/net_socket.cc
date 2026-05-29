@@ -631,7 +631,8 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
       // copy to the data buffer if we have received some inline data already
       int receivedInline = sizeOffset - SOCKET_CTRL_SIZE;
       if (receivedInline > 0) memcpy(r->data, msg + SOCKET_CTRL_SIZE, receivedInline);
-      // from the actual size, extract the remaining inline size to be received and redirect the msg buffer to the user data
+      // from the actual size, extract the remaining inline size to be received and redirect the msg buffer to the
+      // user data
       r->size = senderSize;
       msgSize = ncclNetSocketInlineSize(r->size) - receivedInline;
       msg = (uint8_t*)r->data + receivedInline;

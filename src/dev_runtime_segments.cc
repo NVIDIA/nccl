@@ -18,7 +18,8 @@ extern int64_t ncclParamElasticBufferRegister();
 ncclResult_t ncclDevrPopulateSegmentSizes(struct ncclDevrMemory* mem, int numSegments) {
   ncclResult_t ret = ncclSuccess;
 
-  // If our caller does not have a VA (for instance, in ncclDevrCommCreateInternal), there's only one segment with size = mem->size.
+  // If our caller does not have a VA (for instance, in ncclDevrCommCreateInternal),
+  // there's only one segment with size = mem->size.
   if (mem->primaryAddr == nullptr) {
     assert(numSegments == 1);
     mem->segmentSizes[0] = mem->size;

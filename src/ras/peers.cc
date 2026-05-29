@@ -827,7 +827,8 @@ ncclResult_t rasPeerDeclareDead(const union ncclSocketAddress* addr) {
   return ncclSuccess;
 }
 
-// Formats a peer description from a rasPeerInfo struct (format: "Process <pid> on node <host> managing GPU[s] <gpus>").
+// Formats a peer description from a rasPeerInfo struct (format: "Process <pid> on node <host> managing GPU[s]
+// <gpus>").
 const char* rasPeerInfoToString(const struct rasPeerInfo* peer, char* buf, size_t size) {
   char hostBuf[SOCKET_NAME_MAXLEN+1];
   char gpuBuf[1024];

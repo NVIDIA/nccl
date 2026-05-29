@@ -75,7 +75,8 @@ struct connectMap {
   int sameProcess;
   int shared;
   int cudaDev;
-  // First 3 bits of offsets determine the mem bank. 001 is host mem, 011 is dev mem, 101 is shared host mem and 111 is shared dev mem.
+  // First 3 bits of offsets determine the mem bank. 001 is host mem, 011 is dev mem, 101 is shared host mem and 111
+  // is shared dev mem.
   struct connectMapMem mems[NCCL_NET_MAP_MEMS];
   // Offsets. 3 MSBs indicate mem bank, 111 indicates NULL.
   struct {

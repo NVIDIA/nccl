@@ -870,7 +870,8 @@ NCCL_PARAM(GroupSize, "P2P_SCHEDULE_GROUP_SIZE", NCCL_MAX_DEV_WORK_P2P_PER_BATCH
 
 static ncclResult_t ncclP2pSchedule(struct ncclComm* comm) {
   struct ncclNodeRanks* nodeRanks = comm->nodeRanks;
-  // For MNNVL systems, we need to split the nodes into different groups to guarantee the proper PXN aggregation factor.
+  // For MNNVL systems, we need to split the nodes into different groups to guarantee the proper PXN
+  // aggregation factor.
   int groupSize = (comm->nNodes > 1) ? ncclParamGroupSize() : comm->maxLocalRanks;
   for (int node = 0; node < comm->nNodes; node++) {
     int localRanks = nodeRanks[node].localRanks;
@@ -2436,9 +2437,11 @@ static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm, int nranks, int nId
   job->myrank = myrank;
   job->cudaDev = cudaDev;
   snprintf(job->funcName, NCCL_COMMINIT_FUNCNAME_LEN, "%s", funcName);
-  // need to copy the commIds to allow async commInit and to avoid alignement issues when casting from ncclUNiqueId and ncclBootstrapHandle
+  // need to copy the commIds to allow async commInit and to avoid alignement issues when casting from
+  // ncclUNiqueId and ncclBootstrapHandle
   // ncclUniqueIds and ncclBootstrapHandle don't have the same alignment requirements.
-  // Therefore the array of Ids coming from the user might not be properly aligned to be cast into a ncclBootstrapHandle
+  // Therefore the array of Ids coming from the user might not be properly aligned to be cast into a
+  // ncclBootstrapHandle
   // copying into allocated memory guarantees that the memory is properly aligned for any objects, removing that issue
   NCCLCHECKGOTO(ncclCalloc(&job->commId, nId), res, fail);
   memcpy(job->commId, commId, nId * NCCL_UNIQUE_ID_BYTES);
@@ -3074,7 +3077,8 @@ ncclResult_t  ncclCommShrink(ncclComm_t comm, int* excludeRanksList, int exclude
   NVTX3_RANGE(NcclNvtxParamsCommShrink)
   ncclResult_t res = ncclSuccess;
   NCCLCHECK(ncclGroupStartInternal());
-  // Handle error mode by setting abort flags and waiting for kernels to complete and unset the flags to avoid bootstrap issues
+  // Handle error mode by setting abort flags and waiting for kernels to complete and unset the flags
+  // to avoid bootstrap issues
   if (shrinkFlags & NCCL_SHRINK_ABORT) {
     NCCLCHECKGOTO(setCommAbortFlags(comm, 1), res, exit);
     NCCLCHECKGOTO(ncclStrongStreamSynchronize(&comm->sharedRes->deviceStream), res, exit);
@@ -3144,7 +3148,8 @@ ncclResult_t ncclCommGrow(ncclComm_t comm, int nRanks, const ncclUniqueId* uniqu
       goto exit;
     }
 
-    // each grow/shrink/split has to lead to a unique comm->magic value, increment before using to be consistent with ncclCommInitChildComm
+    // each grow/shrink/split has to lead to a unique comm->magic value, increment before using to be
+    // consistent with ncclCommInitChildComm
     ++comm->childCount;
 
     // Only boundary ranks (0 and N-1) receive grow handle from coordinator

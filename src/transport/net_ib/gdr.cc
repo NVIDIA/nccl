@@ -34,7 +34,8 @@ static void ibPeerMemSupportInitOnce() {
   ncclIbPeerMemModuleLoaded = KNL_MODULE_LOADED("/sys/module/nvidia_peermem/version");
 }
 
-// Returns ncclSuccess if nvidia_peermem module is loaded. Does not check legacy implementations of nv_peer_mem (e.g. nv_mem, nv_mem_nc)
+// Returns ncclSuccess if nvidia_peermem module is loaded. Does not check legacy implementations of nv_peer_mem
+// (e.g. nv_mem, nv_mem_nc)
 ncclResult_t ncclIbPeerMemSupport() {
   static std::once_flag once;
   std::call_once(once, ibPeerMemSupportInitOnce);

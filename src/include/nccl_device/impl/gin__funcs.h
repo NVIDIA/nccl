@@ -502,7 +502,8 @@ NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::put(
             optFlags
             );
       } else {
-        // Multi-segment case. The puts are chunked to handle multiple registration entries and src/dst windows that potentially have a different number of segments
+        // Multi-segment case. The puts are chunked to handle multiple registration entries and src/dst windows that
+        // potentially have a different number of segments
         int srcSeg;
         size_t srcSegOffset;
         nccl::gin::internal::findSegmentFromWindow(srcWin, srcOffset, &srcSeg, &srcSegOffset);

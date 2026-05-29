@@ -283,7 +283,8 @@ ncclResult_t ncclGetUserP2pLevel(int* level) {
 
 // Tests two ranks for CUDA P2P connectivity.
 // *cudaP2p returns 1 if CUDA P2P between the ranks is supported.
-// *p2p returns 1 only if the distance between the ranks is no greater than NCCL_P2P_LEVEL.  The connection may go through an intermediate rank.
+// *p2p returns 1 only if the distance between the ranks is no greater than NCCL_P2P_LEVEL.
+// The connection may go through an intermediate rank.
 ncclResult_t ncclTopoCheckP2p(struct ncclComm* comm, struct ncclTopoSystem* system, int rank1, int rank2,
                               int* p2p, int *read, int* intermediateRank, int* cudaP2p) {
   int mnnvl = 0;
@@ -962,7 +963,8 @@ ncclResult_t ncclTopoComputeP2pChannels(struct ncclComm* comm) {
 
   if (comm->nNodes > 1 && comm->config.nChannelsPerNetPeer == NCCL_CONFIG_UNDEF_INT) {
     // In the case of >1 NVLD (and the user didn't set nChannelsPerNetPeer), the network is the botteneck.
-    // Reduce the number of channels per host to avoid going above p2pnChannels to fit all the peers within a single round.
+    // Reduce the number of channels per host to avoid going above p2pnChannels to fit all the peers
+    // within a single round.
     INFO(NCCL_INIT, "Tuning P2P operations with maxP2pPeers = %d", comm->p2pMaxPeers);
     while (comm->p2pnChannelsPerPeer * divUp(comm->p2pMaxPeers, NCCL_MAX_DEV_WORK_P2P_PER_BATCH) > comm->p2pnChannels &&
            comm->p2pnChannelsPerPeer > 1) {

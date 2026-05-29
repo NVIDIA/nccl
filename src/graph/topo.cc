@@ -481,7 +481,8 @@ ncclResult_t ncclTopoAddNic(struct ncclXmlNode* xmlNic, struct ncclTopoSystem* s
     if (strcmp(xmlNet->name, "net") != 0) continue;
     int index;
     NCCLCHECK(xmlGetAttrIndex(xmlNet, "dev", &index));
-    // This means that the "dev" attribute wasn't set on this net xml node. That means it should not be added to the system topology graph
+    // This means that the "dev" attribute wasn't set on this net xml node. That means it should not be added to
+    // the system topology graph
     if (index == -1) continue;
 
     // Backward compatibility: net withouh "net" attr is a net dev, net without a "gin" is not a gin dev
@@ -1007,7 +1008,8 @@ int ncclTopoCheckPix(ncclXmlNode* common, ncclXmlNode** nodes, int nNodes) {
   if (tempBusId == NULL) return 0;
   TRACE(NCCL_GRAPH, "Checking pix for busid=%s", tempBusId);
 
-  // All the nodes must have a "nic" which is a parent, and then a pci node (busid) which must be a child of the "common"
+  // All the nodes must have a "nic" which is a parent, and then a pci node (busid) which must be a child of the
+  // "common"
   for (int i = 0; i < nNodes; i++) {
     ncclXmlNode* node = nodes[i];
     if (strcmp(node->name, "net") == 0) {
@@ -1116,7 +1118,8 @@ ncclResult_t ncclTopoGetPath(ncclXmlNode** nodes, int nNodes, int* path, ncclXml
         parents[i].pop();
       }
     // Check multi-port while we still have the mismatched parents
-    // For multi-port to be true, all parents (peers) must have the busId attribute with all but the last character matching
+    // For multi-port to be true, all parents (peers) must have the busId attribute with all but the last character
+    // matching
     } else {
       int multiPort = 1;
       const char* tempBusId;
@@ -1441,11 +1444,13 @@ ncclResult_t ncclTopoFindLinkWidthRec(ncclXmlNode* node, ncclXmlNode** physNetNo
     *linkWidth = 0;
     TRACE(NCCL_GRAPH, "Did not find child net device. Returning link_width=%d totalChildLinkWidth=%d", *linkWidth, totalChildLinkWidth);
   } else if (totalChildLinkWidth == 0) {
-    // If A child NIC was found but no link_width was detected among children, assign the link_width to mine (I am the first pci node right above the physNetNode).
+    // If A child NIC was found but no link_width was detected among children, assign the link_width to mine (I am
+    // the first pci node right above the physNetNode).
     *linkWidth = myLinkWidth;
     TRACE(NCCL_GRAPH, "Found child net device for %s. Returning link_width=%d totalChildLinkWidth=%d", node->name, *linkWidth, totalChildLinkWidth);
   } else {
-  // Standard recursive accrual of link_width. The link_width is either the bottleneck of this PCI node's width or the sum of its children's width.
+  // Standard recursive accrual of link_width. The link_width is either the bottleneck of this PCI node's width or
+  // the sum of its children's width.
     *linkWidth = myLinkWidth > 0 ? std::min(myLinkWidth, totalChildLinkWidth) : totalChildLinkWidth;
     TRACE(NCCL_GRAPH, "Found child net device for %s. Returning link_width=%d totalChildLinkWidth=%d", node->name, *linkWidth, totalChildLinkWidth);
   }
@@ -1488,7 +1493,8 @@ ncclResult_t ncclTopoGetVNicParent(struct ncclXml* xml, ncclResult_t (*getProper
     NCCLCHECK(ncclTopoFindLinkWidth(*parent, physNetNodes, vProps->ndevs, &aggregateWidth));
   }
 
-  // If the common parent is a PCI switch or the CPU, we must reparent the new NIC under a made up pci device with a unique busid
+  // If the common parent is a PCI switch or the CPU, we must reparent the new NIC under a made up pci device with a
+  // unique busid
   // This adds a pci node between the physNetParent and the fused NIC.
   struct ncclXmlNode* physNetParent = *parent;
   if (*parent) {
@@ -1562,7 +1568,8 @@ static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex, int endIn
     if (virtualNics) {
       struct ncclXmlNode* net = NULL;
       NCCLCHECK(xmlFindTagKv(xml, "net", &net, "name", props.name));
-      // In the event of multithreaded use case, we need to re-discover the shared parent of the given devices for this vNIC
+      // In the event of multithreaded use case, we need to re-discover the shared parent of the given devices for
+      // this vNIC
       // Only run this if the net doesn't exist locally - this may alter the XML state
       if (net == NULL) NCCLCHECK(ncclTopoGetVNicParent(xml, netInfo->getProperties, &props.vProps, &parent));
     }

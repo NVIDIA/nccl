@@ -72,8 +72,9 @@ struct rasAuxComm {
   int nIncompleteRanks; // Number of ranks that we didn't get any response from.
 };
 
-// Auxiliary structure used when processing the rasPeerInfo data stored in the global rasPeers array.  Makes it possible
-// to extract a subset of peers (e.g., the dead ones), to sort by a different key without altering the original array,
+// Auxiliary structure used when processing the rasPeerInfo data stored in the global rasPeers array.  Makes it
+// possible to extract a subset of peers (e.g., the dead ones), to sort by a different key without altering the
+// original array,
 // and also has room for extracted temporary data such as the number of peers per node or the number of GPUs per peer.
 struct rasAuxPeerInfo {
   struct rasPeerInfo* peer; // Points to an element in rasPeers.

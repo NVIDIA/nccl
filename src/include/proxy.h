@@ -106,10 +106,13 @@ struct ncclProxyOp {
     struct ncclTaskP2p* p2p;
   } task;
 
-  // Profiler work counter increment flag. Set to 'true' if the profiler work counter for this channel needs increment.
-  // Always 'true' for collective operations. Grouped p2p operations are fused into one <send, recv> pair in the GPU kernel,
+  // Profiler work counter increment flag. Set to 'true' if the profiler work counter for this channel needs
+  // increment.
+  // Always 'true' for collective operations. Grouped p2p operations are fused into one <send, recv> pair in the GPU
+  // kernel,
   // meaning the GPU profiler code increments the work counter for the pair rather than the individual p2p. For this
-  // reason, the incWorkCounter flag is used to avoid incrementing the work counter twice in the host code. This is done
+  // reason, the incWorkCounter flag is used to avoid incrementing the work counter twice in the host code. This is
+  // done
   // by setting incWorkCounter to 'true' only for one of the p2ps in the pair during enqueue.
   bool incWorkCounter;
   int eActivationMask;
@@ -439,7 +442,8 @@ enum ncclProxyMsgType {
 // ncclPollProxyResponse(), supplying the same opId to confirm the operation has completed
 ncclResult_t ncclProxyCallAsync(struct ncclComm* comm, struct ncclProxyConnector* proxyConn, int type, void* reqBuff, int reqSize, int respSize, void* opId);
 
-// This function will internally call ncclProxyCallAsync() and spin until ncclPollProxyResponse() confirms the result is received
+// This function will internally call ncclProxyCallAsync() and spin until ncclPollProxyResponse() confirms the result
+// is received
 ncclResult_t ncclProxyCallBlocking(struct ncclComm* comm, struct ncclProxyConnector* proxyConn, int type, void* reqBuff, int reqSize, void* respBuff, int respSize);
 ncclResult_t ncclPollProxyResponse(struct ncclComm* comm, struct ncclProxyConnector* proxyConn, void* respBuff, void* opId);
 

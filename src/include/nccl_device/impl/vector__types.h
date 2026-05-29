@@ -126,18 +126,21 @@ struct MinMultimemType<half> {
 #if defined(__CUDA_BF16_TYPES_EXIST__)
 template <>
 struct MinMultimemType<__nv_bfloat16> {
-  using Type = EltPack<__nv_bfloat16, 2>;  // Minimum multimem type for bfloat16 is EltPack<__nv_bfloat16, 2> (32 bits)
+  using Type = EltPack<__nv_bfloat16, 2>;  // Minimum multimem type for bfloat16 is EltPack<__nv_bfloat16, 2>
+                                           // (32 bits)
 };
 #endif
 
 #if defined(__CUDA_FP8_TYPES_EXIST__)
 template <>
 struct MinMultimemType<__nv_fp8_e4m3> {
-  using Type = EltPack<__nv_fp8_e4m3, 4>;  // Minimum multimem type for fp8_e4m3 is EltPack<__nv_fp8_e4m3, 4> (32 bits)
+  using Type = EltPack<__nv_fp8_e4m3, 4>;  // Minimum multimem type for fp8_e4m3 is EltPack<__nv_fp8_e4m3, 4>
+                                           // (32 bits)
 };
 template <>
 struct MinMultimemType<__nv_fp8_e5m2> {
-  using Type = EltPack<__nv_fp8_e5m2, 4>;  // Minimum multimem type for fp8_e5m2 is EltPack<__nv_fp8_e5m2, 4> (32 bits)
+  using Type = EltPack<__nv_fp8_e5m2, 4>;  // Minimum multimem type for fp8_e5m2 is EltPack<__nv_fp8_e5m2, 4>
+                                           // (32 bits)
 };
 #endif
 

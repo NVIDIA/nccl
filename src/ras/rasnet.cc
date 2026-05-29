@@ -213,7 +213,8 @@ void rasConnsHandleTimeouts(int64_t now, int64_t* nextWakeup) {
             if (!ready && conn->sock->sock.state == ncclSocketStateConnecting)
               *nextWakeup = std::min(*nextWakeup, static_cast<int64_t>(conn->sock->lastSendTime+RAS_CONNECT_RETRY));
             else
-              rasPfds[conn->sock->pfd].fd = conn->sock->sock.socketDescriptor; // Enable the handling via the main loop.
+              rasPfds[conn->sock->pfd].fd = conn->sock->sock.socketDescriptor; // Enable the handling via the main
+                                                                               // loop.
           } // if (ncclSocketReady)
         } else {
           *nextWakeup = std::min(*nextWakeup, static_cast<int64_t>(conn->sock->lastSendTime+RAS_CONNECT_RETRY));
@@ -1151,7 +1152,8 @@ static void rasConnResume(struct rasConnection* conn) {
   }
 }
 
-// Checks if the primary connection is fully established and if so, purges the fallbacks (as they are no longer needed).
+// Checks if the primary connection is fully established and if so, purges the fallbacks (as they are no longer
+// needed).
 static void rasLinkSanitizeFallbacks(struct rasLink* link) {
   if (link->conns && link->conns->conn) {
     struct rasConnection* conn = link->conns->conn;

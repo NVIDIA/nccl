@@ -251,7 +251,8 @@ struct ncclGin_BackendMask {
     // For strong signals: guarantees this put AND all
     // preceding puts on this context to the same peer are settled.
     // For weak signals: only guarantees the bundled put is settled.
-    typename RemoteAction = ncclGin_None, // one of ncclGin_{None|StrongVASignal[Inc|Add]|WeakVASignal[Inc|Add],StrongSignal[Inc|Add]|WeakSignal[Inc|Add]}
+    typename RemoteAction = ncclGin_None, // one of ncclGin_{None|StrongVASignal[Inc|Add]|WeakVASignal[Inc|Add],
+                                          // StrongSignal[Inc|Add]|WeakSignal[Inc|Add]}
     // Action to take locally when source has been consumed.
     typename LocalAction = ncclGin_None, // one of ncclGin_{None|WeakCounterInc}
     // Set of threads participating in this put. Must be a subset of Coop.
@@ -281,14 +282,16 @@ struct ncclGin_BackendMask {
     // Action to take on peer when put completes.
     // For strong signals: guarantees this put AND all preceding puts on this context to the same peer are settled.
     // For weak signals: only guarantees the bundled put is settled.
-    typename RemoteAction = ncclGin_None, // one of ncclGin_{None|StrongVASignal[Inc|Add]|WeakVASignal[Inc|Add],StrongSignal[Inc|Add]|WeakSignal[Inc|Add]}
+    typename RemoteAction = ncclGin_None, // one of ncclGin_{None|StrongVASignal[Inc|Add]|WeakVASignal[Inc|Add],
+                                          // StrongSignal[Inc|Add]|WeakSignal[Inc|Add]}
     // Action to take locally when source has been consumed.
     typename LocalAction = ncclGin_None, // one of ncclGin_{None|ncclGin_WeakCounterInc}
     // Set of threads participating in this put. Must be a subset of Coop.
     typename Coop = ncclCoopThread,
     // Optional smem descriptor space to use. Either ncclGin_{None|DescriptorSmem}
     typename DescriptorSmem = ncclGin_None,
-    // One of ncclGin_{SegmentDevice|SegmentMixed|SegmentHostNuma}; use a non-Device tag when the VA contains CPU-backed (HOST_NUMA) segments
+    // One of ncclGin_{SegmentDevice|SegmentMixed|SegmentHostNuma}; use a non-Device tag when the VA contains
+    // CPU-backed (HOST_NUMA) segments
     typename SegmentType = ncclGin_SegmentDevice
   >
   NCCL_DEVICE_INLINE void put(

@@ -106,7 +106,8 @@ static ncclResult_t followPath(struct ncclTopoLinkList* path, struct ncclTopoNod
       revBw += fwBw;
     }
     // Coverity thinks that revLink could be NULL below.  However, we access it only if revBw is non-0, and the
-    // logic of the code is that revBw can become non-0 only if revLink is non-NULL (see the "if" statement right above).
+    // logic of the code is that revBw can become non-0 only if revLink is non-NULL (see the "if" statement right
+    // above).
     // coverity[var_deref_op]
     if (link->bw < fwBw || (revBw && revLink->bw < revBw)) { *steps = step; return ncclSuccess; }
     SUB_ROUND(link->bw, fwBw);
@@ -117,7 +118,8 @@ static ncclResult_t followPath(struct ncclTopoLinkList* path, struct ncclTopoNod
   return ncclSuccess;
 }
 
-// Try to go from node type1/index1 to no type2/index2. mult indicates whether we are counting the bandwidth (1) or undoing (-1).
+// Try to go from node type1/index1 to no type2/index2. mult indicates whether we are counting the
+// bandwidth (1) or undoing (-1).
 static ncclResult_t ncclTopoFollowPath(struct ncclTopoSystem* system, struct ncclTopoGraph* graph, int type1, int index1, int type2, int index2, float mult, struct ncclTopoNode** node) {
   // First handle easy cases
   *node = system->nodes[type2].nodes+index2;
@@ -511,7 +513,8 @@ static ncclResult_t ncclTopoPrefNetsChannelFirst(struct ncclTopoSystem* system, 
 //
 // The list is built the following way:
 // 1. First gather the preferred NETs for each of the GPU(s), based on the NETDEVS_POLICY and the connection.
-// 2. If the NETDEV_policy allows it, add all the other NETs satisfying typeInter but not already in the list of preferred NETs.
+// 2. If the NETDEV_policy allows it, add all the other NETs satisfying typeInter but not already in
+//    the list of preferred NETs.
 NCCL_PARAM(ScatterEnable, "MNNVL_SCATTER_NETS_ENABLE", 1);
 ncclResult_t ncclTopoSelectNets(struct ncclTopoSystem* system, int typeInter, int gpu, int nets[NCCL_TOPO_MAX_NODES], int* netCountRet) {
   ncclResult_t ret = ncclSuccess;

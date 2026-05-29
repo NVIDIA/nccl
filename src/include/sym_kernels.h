@@ -91,6 +91,7 @@ struct alignas(16) ncclSymkDevWorkArgs {
   struct ncclSymkDevComm kcomm;
   int nMaxChannels;
   int maxDynamicSmem;
+  int rsGinMaxBufsPerPeerLog2;
   // starting of channelWorkRange will be aligned to 16 bytes
   // channelWorkRange[nChannels];
   // ncclSymDevWork[nWorks];
@@ -142,6 +143,7 @@ ncclResult_t ncclGetSymRegType(struct ncclDevrWindow* sendWin, struct ncclDevrWi
 
 int ncclSymkLLKernelMask();
 int ncclSymkDynamicSmemKernelMask();
+int ncclSymkRsGinMaxBufsPerPeerLog2();
 
 constexpr int ncclSymkAllGather_RailRing_ChunkSize = 1<<20;
 #endif

@@ -12,6 +12,7 @@
 #include "transport.h"
 #include <cmath>
 #include <cfloat>
+#include <climits>
 
 constexpr char const* kernelName[] = {
   // Must align with enum ncclSymkKernelId definition in src/include/sym_kernels.h
@@ -146,6 +147,15 @@ NCCL_PARAM(SymCTAs, "SYM_CTAS", 0)
 NCCL_PARAM(SymGinKernelsEnable, "SYM_GIN_KERNELS_ENABLE", 1)
 NCCL_PARAM(SymRsGinChunkSize, "SYM_RS_GIN_CHUNK_SIZE", -1)
 NCCL_PARAM(SymTmaEnable, "SYM_TMA_ENABLE", 0)
+NCCL_PARAM(SymGinBufSize, "SYM_GIN_BUFSIZE", 0)
+NCCL_PARAM(SymRsGinMaxBufsPerPeerLog2, "SYM_RS_GIN_MAX_BUFS_PER_PEER_LOG2", -1)
+
+int ncclSymkRsGinMaxBufsPerPeerLog2() {
+  int64_t v = ncclParamSymRsGinMaxBufsPerPeerLog2();
+  if (v < 0) return ncclGinScratchMaxBufsPerPeer_log2;
+  if (v > ncclGinScratchMaxBufs_log2) return ncclGinScratchMaxBufs_log2;
+  return (int)v;
+}
 
 static constexpr size_t ncclSymkRsGinDefaultChunkBytes = 128<<10;
 static constexpr size_t ncclSymkRsGinMinChunkBytes = 128;
@@ -280,6 +290,10 @@ static void getRequirements_gin(struct ncclComm* comm, int* out_nBlocks, size_t*
     // GIN could be throttled by LSA work
     double ginBwRenorm = std::min(lsaBw/lsaMul, ginBw/ginMul)*ginMul;
     size_t bufSize = ginBwRenorm*(ginLat + smLat);
+    int64_t bufOverride = ncclParamSymGinBufSize();
+    if (bufOverride > 0) {
+      bufSize = (size_t)bufOverride;
+    }
     int nBlocks = calcSatBlocks_ReduceScatter_RailA2A(comm, ldmc);
     if (comm->rank == 0) {
       double minLsaGinEffBw = std::min(lsaBw/lsaMul, ginBw/ginMul);

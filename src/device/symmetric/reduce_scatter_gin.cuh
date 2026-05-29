@@ -80,7 +80,7 @@ static __device__ void rsAlgoHier(ncclSymkDevWorkArgs const* args, BoolTag<multi
       // per peer number or total number. This is a hard constraint imposed
       // by inbox credit logic so we enforce after the max chunk size.
       int minChunkBytes_log2 = handler.ginInboxRail.size_log2 - min(
-        log2Down(rail.nRanks-1) + ncclGinScratchMaxBufsPerPeer_log2,
+        log2Down(rail.nRanks-1) + args->rsGinMaxBufsPerPeerLog2,
         ncclGinScratchMaxBufs_log2);
       chunkBytes_log2 = max(chunkBytes_log2, minChunkBytes_log2);
 

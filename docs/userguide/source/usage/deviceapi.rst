@@ -36,6 +36,7 @@ GIN has the following requirements:
 * GPU Direct RDMA: GIN host proxy requires DMA-BUF or nvidia-peermem support. GIN GDAKI requires DMA-BUF with kernel version >= 6.1 or nvidia-peermem support
 * Network topology: Requires full NIC connectivity. Does not support topologies where NICs cannot communicate across rails. Also does not support ``NCCL_CROSS_NIC=0``.
 * Fused NICs are not supported. To use GIN on dual-port NICs, set ``NCCL_IB_MERGE_NICS=0``
+* Using GIN for buffers that are backed by multiple cuMem segments requires DMA-BUF
 
 When using host-backed buffers, the following additional limitations apply:
 

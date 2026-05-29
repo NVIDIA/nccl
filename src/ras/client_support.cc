@@ -636,7 +636,7 @@ static ncclResult_t rasClientRunInit(struct rasClient* client) {
                    totalNodes, firstNPeersGlobal, firstNGpusGlobal, nRasPeers, totalGpus);
       // clang-format on
     } else {
-    // Gather the stats on the number of processes per node.  However, that number is not a property of a peer,
+      // Gather the stats on the number of processes per node.  However, that number is not a property of a peer,
       // but of a group of peers, so calculating it is more involved.  We store the value in a temporary auxRasPeers
       // array.
       NCCLCHECKGOTO(ncclCalloc(&auxRasPeers, nRasPeers), ret, fail);
@@ -753,11 +753,11 @@ static ncclResult_t rasClientRunInit(struct rasClient* client) {
         }
       } // !consistentNGpusNode || !consistentNGpusGlobal
       // clang-format off
-    rasOutAppend("\n"
-                 "  Nodes  Processes         GPUs\n"
-                 "(total)    (total)      (total)\n"
-                 "%7d"  "  %9d"    "  %11d\n",
-                 totalNodes, nRasPeers, totalGpus);
+      rasOutAppend("\n"
+                   "  Nodes  Processes         GPUs\n"
+                   "(total)    (total)      (total)\n"
+                   "%7d"  "  %9d"    "  %11d\n",
+                   totalNodes, nRasPeers, totalGpus);
       // clang-format on
 
       if (consistentNGpusNode && consistentNGpusGlobal) {

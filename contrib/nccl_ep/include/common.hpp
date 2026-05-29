@@ -252,38 +252,43 @@ __host__ __device__ constexpr dtype_t align(dtype_t a, dtype_t b) {
     return ceil_div<dtype_t>(a, b) * b;
 }
 
+// Buffer-relative offsets into rdma_buffer. Pointers are resolved at use time
+// against the group's current rdma_buffer base, so the buffer can be
+// reallocated (e.g., grown for a larger layout) without invalidating any
+// cached layout state on live handles.
 struct LowLatencyBuffer {
     int num_clean_int = 0;
 
-    void* dispatch_rdma_send_buffer = nullptr;
-    void* dispatch_rdma_recv_data_buffer = nullptr;
-    int* dispatch_rdma_recv_count_buffer = nullptr;
+    size_t dispatch_rdma_send_buffer_offset = 0;
+    size_t dispatch_rdma_recv_data_buffer_offset = 0;
+    size_t dispatch_rdma_recv_count_buffer_offset = 0;
 
-    void* combine_rdma_send_buffer = nullptr;
-    void* combine_rdma_recv_data_buffer = nullptr;
-    int* combine_rdma_recv_flag_buffer = nullptr;
+    size_t combine_rdma_send_buffer_offset = 0;
+    size_t combine_rdma_recv_data_buffer_offset = 0;
+    size_t combine_rdma_recv_flag_buffer_offset = 0;
 
-    void* combine_rdma_send_buffer_data_start = nullptr;
+    size_t combine_rdma_send_buffer_data_start_offset = 0;
     size_t num_bytes_per_combine_msg = 0;
 
-    std::pair<int*, int> clean_meta() {
-        EP_HOST_ASSERT(dispatch_rdma_recv_count_buffer == combine_rdma_recv_flag_buffer);
-        return {dispatch_rdma_recv_count_buffer, num_clean_int};
+    // (count-buffer offset, count) for clean_low_latency_buffer. Dispatch
+    // recv-count and combine recv-flag share the same signaling slot.
+    std::pair<size_t, int> clean_meta_offset() const {
+        EP_HOST_ASSERT(dispatch_rdma_recv_count_buffer_offset == combine_rdma_recv_flag_buffer_offset);
+        return {dispatch_rdma_recv_count_buffer_offset, num_clean_int};
     }
 };
 
 struct LowLatencyLayout {
     size_t total_bytes = 0;
     LowLatencyBuffer buffers[2];
-    int* sync_buffer = nullptr;
     size_t sync_buffer_offset = 0;
 
     template <typename out_ptr_t = void*, typename count_ptr_t = uint8_t*, typename in_ptr_t = void*>
-    out_ptr_t advance(const in_ptr_t& ptr, size_t count) {
+    static out_ptr_t advance(const in_ptr_t& ptr, size_t count) {
         return reinterpret_cast<out_ptr_t>(reinterpret_cast<count_ptr_t>(ptr) + count);
     }
 
-    LowLatencyLayout(void* rdma_buffer, int num_max_dispatch_tokens_per_rank, size_t max_token_bytes, int num_ranks, int num_experts, int num_topk, ncclEpLayout_t layout) {
+    LowLatencyLayout(int num_max_dispatch_tokens_per_rank, size_t max_token_bytes, int num_ranks, int num_experts, int num_topk, ncclEpLayout_t layout) {
         // Dispatch and combine layout:
         //  - 2 symmetric odd/even send buffer
         //  - 2 symmetric odd/even receive buffers
@@ -308,8 +313,16 @@ struct LowLatencyLayout {
         size_t num_bytes_per_combine_msg = scale_metadata_bytes + max_token_bytes;
 
         // Send buffer
+        // Combine send buffer holds one slot per outbound message produced on
+        // the sender side: expert-major fans tokens out per expert (num_experts
+        // slots), while rank-major fans them out per destination rank
+        // (num_ranks slots). Sizing per layout avoids over-allocating in the
+        // rank-major case (typically num_ranks < num_experts).
+        size_t combine_send_slots = (layout == NCCL_EP_LAYOUT_RANK_MAJOR)
+            ? static_cast<size_t>(num_ranks)
+            : static_cast<size_t>(num_experts);
         size_t dispatch_send_buffer_bytes = num_max_dispatch_tokens_per_rank * num_bytes_per_dispatch_msg;
-        size_t combine_send_buffer_bytes = num_experts * num_max_dispatch_tokens_per_rank * num_bytes_per_combine_msg;
+        size_t combine_send_buffer_bytes = combine_send_slots * num_max_dispatch_tokens_per_rank * num_bytes_per_combine_msg;
         size_t send_buffer_bytes = std::max(dispatch_send_buffer_bytes, combine_send_buffer_bytes);
         EP_HOST_ASSERT(send_buffer_bytes % sizeof(int4) == 0);
         total_bytes += send_buffer_bytes * 2;
@@ -330,19 +343,23 @@ struct LowLatencyLayout {
         size_t signaling_buffer_bytes_aligned = align<size_t>(signaling_buffer_bytes, 128);
         total_bytes += signaling_buffer_bytes_aligned * 2;
 
-        // Assign pointers
+        // Assign offsets into rdma_buffer. Pointers are resolved at use time
+        // by adding these offsets to the group's current rdma_buffer base.
 
         for (int i = 0; i < 2; ++ i) {
-            buffers[i] = {
-                static_cast<int>(signaling_buffer_bytes / sizeof(int)),
-                advance(rdma_buffer, signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * i),
-                advance(rdma_buffer, signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * 2 + recv_buffer_bytes * i),
-                advance<int*>(rdma_buffer, signaling_buffer_bytes_aligned * i),
-                advance(rdma_buffer, signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * i),
-                advance(rdma_buffer, signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * 2 + recv_buffer_bytes * i),
-                advance<int*>(rdma_buffer, signaling_buffer_bytes_aligned * i),
-                advance(rdma_buffer, signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * i),
-                num_bytes_per_combine_msg
+            const size_t send_off  = signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * i;
+            const size_t recv_off  = signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * 2 + recv_buffer_bytes * i;
+            const size_t count_off = signaling_buffer_bytes_aligned * i;
+            buffers[i] = LowLatencyBuffer{
+                .num_clean_int                              = static_cast<int>(signaling_buffer_bytes / sizeof(int)),
+                .dispatch_rdma_send_buffer_offset           = send_off,
+                .dispatch_rdma_recv_data_buffer_offset      = recv_off,
+                .dispatch_rdma_recv_count_buffer_offset     = count_off,
+                .combine_rdma_send_buffer_offset            = send_off,
+                .combine_rdma_recv_data_buffer_offset       = recv_off,
+                .combine_rdma_recv_flag_buffer_offset       = count_off,
+                .combine_rdma_send_buffer_data_start_offset = send_off,
+                .num_bytes_per_combine_msg                  = num_bytes_per_combine_msg,
             };
         }
 
@@ -350,22 +367,30 @@ struct LowLatencyLayout {
         sync_buffer_offset = total_bytes;
         size_t sync_buffer_bytes = align<size_t>(num_ranks * sizeof(int), 128);
         total_bytes += sync_buffer_bytes;
-        if (rdma_buffer != nullptr)
-            sync_buffer = advance<int*>(rdma_buffer, sync_buffer_offset);
     }
 };
 
-// Layout-agnostic: sizes for the worst case across all LL layouts so the caller
-// can allocate the RDMA buffer at group time without knowing the per-handle layout.
-// EM and RM differ only in the per-topk router entry (2B vs 8B), so the gap is
-// small relative to the token payload.
+// Size for a specific LL layout, rounded up to the buffer alignment.
+inline unsigned long int get_low_latency_rdma_size_hint_for_layout(
+        int num_max_dispatch_tokens_per_rank, size_t max_token_bytes,
+        int num_ranks, int num_experts, ncclEpLayout_t layout) {
+    auto num_bytes = LowLatencyLayout(num_max_dispatch_tokens_per_rank,
+                                      max_token_bytes, num_ranks, num_experts,
+                                      MAX_NUM_TOPK, layout).total_bytes;
+    return ((num_bytes + NUM_BUFFER_ALIGNMENT_BYTES) / NUM_BUFFER_ALIGNMENT_BYTES) * NUM_BUFFER_ALIGNMENT_BYTES;
+}
+
+// Worst case across all LL layouts (upper bound on what may be needed once the
+// per-handle layout is known). Used as the upper limit for the configured
+// rdma_buffer_size; the actual allocation may start smaller and grow.
 inline unsigned long int get_low_latency_rdma_size_hint(int num_max_dispatch_tokens_per_rank, size_t max_token_bytes, int num_ranks, int num_experts) {
     auto bytes_for = [&](ncclEpLayout_t layout) {
-        return LowLatencyLayout(nullptr, num_max_dispatch_tokens_per_rank, max_token_bytes, num_ranks, num_experts, MAX_NUM_TOPK, layout).total_bytes;
+        return get_low_latency_rdma_size_hint_for_layout(
+            num_max_dispatch_tokens_per_rank, max_token_bytes,
+            num_ranks, num_experts, layout);
     };
-    auto num_bytes = std::max(bytes_for(NCCL_EP_LAYOUT_EXPERT_MAJOR),
-                              bytes_for(NCCL_EP_LAYOUT_RANK_MAJOR));
-    return ((num_bytes + NUM_BUFFER_ALIGNMENT_BYTES) / NUM_BUFFER_ALIGNMENT_BYTES) * NUM_BUFFER_ALIGNMENT_BYTES;
+    return std::max(bytes_for(NCCL_EP_LAYOUT_EXPERT_MAJOR),
+                    bytes_for(NCCL_EP_LAYOUT_RANK_MAJOR));
 }
 
 } // namespace nccl_ep

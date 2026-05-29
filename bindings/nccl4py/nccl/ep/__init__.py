@@ -21,17 +21,16 @@ from nccl.bindings import nccl_ep as _ep_bindings
 # Defaults for libnccl_ep.so's JIT runtime; either env var can be overridden
 # by setting it in the environment before importing nccl.ep.
 _PKG_DIR = _Path(__file__).parent
-_JIT_SOURCE_DIR = _PKG_DIR / "include"
-if _JIT_SOURCE_DIR.is_dir():
-    _os.environ.setdefault("NCCL_EP_JIT_SOURCE_DIR", str(_JIT_SOURCE_DIR))
+if (_PKG_DIR / "include" / "nccl_ep").is_dir():
+    _os.environ.setdefault("NCCL_EP_HOME", str(_PKG_DIR))
 
 # NCCL public headers (nccl.h, nccl_device/...).
 try:
     import nvidia.nccl as _nv_nccl
 
-    _NCCL_INCLUDE_DIR = _Path(_nv_nccl.__path__[0]) / "include"
-    if _NCCL_INCLUDE_DIR.is_dir():
-        _os.environ.setdefault("NCCL_EP_JIT_BUILD_INCLUDE_DIR", str(_NCCL_INCLUDE_DIR))
+    _NCCL_HOME = _Path(_nv_nccl.__path__[0])
+    if (_NCCL_HOME / "include").is_dir():
+        _os.environ.setdefault("NCCL_HOME", str(_NCCL_HOME))
 except ImportError:
     pass
 

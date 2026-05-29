@@ -48,6 +48,9 @@ static ncclResult_t destroy_hybridep_intranode(ncclEpGroup_t ep_group);
 static ncclResult_t init_hybridep_internode(ncclEpGroup_t ep_group, const ncclEpGroupConfig_t* config, cudaStream_t stream);
 static ncclResult_t destroy_hybridep_internode(ncclEpGroup_t ep_group);
 
+// Forward declaration for LL helper (defined alongside ll_init_handle).
+static ncclResult_t ll_resize_rdma_buffer(ncclEpGroup_t ep_group, size_t new_size);
+
 // Define NCCL_CHECK_RESULT macro for NCCL error checking
 #ifndef NCCL_CHECK_RESULT
 #define NCCL_CHECK_RESULT(cmd) do {                 \
@@ -347,12 +350,17 @@ struct ncclEpGroup {
     int rdma_team_size;       // RDMA ranks
     int rdma_rank;            // RDMA rank
     void* rdma_buffer;
-    // Bytes currently backing rdma_buffer. Starts at the rank-major-sized
-    // allocation; grows on the first ncclEpInitHandle that needs more (e.g.
-    // expert-major). May be less than config.rdma_buffer_size, which records
-    // the worst-case upper bound. Layouts on live handles store offsets only
-    // and are resolved against this base at use time, so the buffer can grow
-    // safely while handles are live.
+    // Bytes currently backing rdma_buffer. Layouts on live handles store
+    // offsets only and are resolved against this base at use time, so the
+    // buffer can grow safely while handles are live.
+    //
+    // Sizing is controlled by config.rdma_buffer_size:
+    //   - NCCL_EP_AUTO: the buffer is lazily allocated on the first LL
+    //     handle init using the actual (layout, num_topk), and grown later
+    //     if a subsequent handle needs more.
+    //   - any other positive value: the buffer is allocated at group time
+    //     to exactly that size. Handle init rejects (returns an error) any
+    //     handle whose layout does not fit; no growth is performed.
     size_t rdma_buffer_size_alloc;
     ncclEpGroupConfig_t config;         // Stored configuration
 
@@ -1322,10 +1330,7 @@ ncclResult_t ncclEpCreateGroup(
         ep_group->config.num_channels = 10;
     }
 
-    if (ep_group->config.rdma_buffer_size == NCCL_EP_AUTO && ep_group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
-        ep_group->config.rdma_buffer_size = nccl_ep::get_low_latency_rdma_size_hint(ep_group->config.max_dispatch_tokens_per_rank, ep_group->config.max_token_bytes, ep_group->nRanks, ep_group->config.num_experts);
-    }
-
+    
     if (ep_group->config.num_qp_per_rank == NCCL_EP_AUTO) {
         ep_group->config.num_qp_per_rank = ep_group->max_num_sms * HYBRIDEP_DISPATCH_N2N_WARPS;
     }
@@ -1423,33 +1428,15 @@ ncclResult_t ncclEpCreateGroup(
         // No init memset: AllGather in preprocessing overwrites every byte the kernel reads.
     }
 
-    if (ep_group->config.rdma_buffer_size > 0 && low_latency_mode) {
-        // Start with the smaller rank-major footprint. expert-major needs more
-        // combine-send slots (num_experts vs num_ranks), so ll_init_handle will
-        // grow the buffer if an EM handle is created. config.rdma_buffer_size
-        // is the worst-case upper bound and caps any growth.
-        const size_t rm_hint = nccl_ep::get_low_latency_rdma_size_hint_for_layout(
-            ep_group->config.max_dispatch_tokens_per_rank,
-            ep_group->config.max_token_bytes,
-            ep_group->nRanks,
-            ep_group->config.num_experts,
-            NCCL_EP_LAYOUT_RANK_MAJOR);
-        const size_t initial_alloc = std::min<size_t>(rm_hint, ep_group->config.rdma_buffer_size);
-
-        ncclBarrier(ep_group->comm, stream, ep_group->ep_workspace);
-        NCCL_CHECK_RESULT(ncclMemAlloc(&ep_group->rdma_buffer, initial_alloc));
-        ep_group->rdma_buffer_size_alloc = initial_alloc;
-
-        // Clean buffer (mainly for low-latency mode)
-        CUDA_CHECK(cudaMemset(ep_group->rdma_buffer, 0, ep_group->rdma_buffer_size_alloc));
-        // NCCL related setup - use ep_group->comm directly with all GIN contexts
-        // (like DeepEP: 1 comm, N contexts, no split needed)
+    if (low_latency_mode) {
         ep_group->num_nccl_comms = 0;  // no split comms created
 
         // Cleaning up any pending CUDA error
         CUDA_CHECK(cudaGetLastError());
 
-        // Create device communicator on ep_group->comm with all GIN contexts
+        // Create device communicator on ep_group->comm with all GIN contexts.
+        // This depends only on group-level parameters (num_experts, nRanks),
+        // not on the per-handle layout/num_topk, so it stays at group time.
         ncclDevComm_t* nccl_dev_comms_host = new ncclDevComm_t[1];
         nccl_dev_comms_host[0] = ncclDevComm_t{};
         ep_group->num_dispatch_signals = ep_group->num_local_experts * ep_group->nRanks;
@@ -1479,26 +1466,17 @@ ncclResult_t ncclEpCreateGroup(
         CUDA_CHECK(cudaMemcpy(ep_group->nccl_dev_comms, nccl_dev_comms_host,
                                 sizeof(ncclDevComm_t), cudaMemcpyHostToDevice));
 
-        // Register RDMA buffer with single NCCL window
-        ncclWindow_t* nccl_wins_host = new ncclWindow_t[1];
-        NCCL_CHECK_RESULT(ncclCommWindowRegister(ep_group->comm, ep_group->rdma_buffer,
-                                                    ep_group->rdma_buffer_size_alloc, &nccl_wins_host[0], 0));
-
-        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&ep_group->nccl_wins),
-                                sizeof(ncclWindow_t)));
-        CUDA_CHECK(cudaMemcpy(ep_group->nccl_wins, nccl_wins_host,
-                                sizeof(ncclWindow_t), cudaMemcpyHostToDevice));
-
-        // Cleanup host memory for NCCL windows and devcomms
-        delete[] nccl_wins_host;
-        nccl_wins_host = nullptr;
-
         delete[] nccl_dev_comms_host;
         nccl_dev_comms_host = nullptr;
 
-        ncclBarrier(ep_group->comm, stream, ep_group->ep_workspace);
-
-        CUDA_CHECK(cudaDeviceSynchronize());
+        // If the user passed an explicit rdma_buffer_size (anything other than
+        // NCCL_EP_AUTO), honor it verbatim now. ll_init_handle will then only
+        // verify the requested layout fits; growth is not performed. With
+        // NCCL_EP_AUTO, allocation is deferred until ll_init_handle so it can
+        // size the buffer with the actual (layout, num_topk).
+        if (ep_group->config.rdma_buffer_size != NCCL_EP_AUTO) {
+            NCCLCHECK(ll_resize_rdma_buffer(ep_group, ep_group->config.rdma_buffer_size));
+        }
     }
 
     // Allocate mask buffer and async error flag for active-mask support
@@ -1557,8 +1535,10 @@ ncclResult_t ncclEpGroupDestroy(
         ep_group->ht_buffers.global_routing_map = nullptr;
     }
 
-    // Clean up RDMA resources (single-comm path: 1 window, 1 devcomm on ep_group->comm)
-    if (ep_group->config.rdma_buffer_size > 0 && NCCL_EP_ALGO_LOW_LATENCY == ep_group->config.algorithm) {
+    // Clean up RDMA resources (single-comm path: 1 window, 1 devcomm on ep_group->comm).
+    // Gate on algorithm only — config.rdma_buffer_size may be NCCL_EP_AUTO
+    // (== 0) for LL groups where the buffer is sized lazily.
+    if (NCCL_EP_ALGO_LOW_LATENCY == ep_group->config.algorithm) {
         CUDA_CHECK(cudaDeviceSynchronize());
         cudaStream_t stream;
         CUDA_CHECK(cudaStreamCreate(&stream));
@@ -1566,13 +1546,18 @@ ncclResult_t ncclEpGroupDestroy(
         CUDA_CHECK(cudaStreamSynchronize(stream));
         CUDA_CHECK(cudaStreamDestroy(stream));
 
-        // Deregister single NCCL window (copy back from device, deregister on ep_group->comm)
-        ncclWindow_t win_host;
-        CUDA_CHECK(cudaMemcpy(&win_host, ep_group->nccl_wins,
-                                sizeof(ncclWindow_t), cudaMemcpyDeviceToHost));
-        NCCL_CHECK_RESULT(ncclCommWindowDeregister(ep_group->comm, win_host));
-        CUDA_CHECK(cudaFree(ep_group->nccl_wins));
-        ep_group->nccl_wins = nullptr;
+        // Deregister single NCCL window if it was ever registered. The
+        // rdma_buffer and its window are allocated lazily on the first LL
+        // handle init, so a group that was created but never had an LL
+        // handle still has nccl_wins == nullptr here.
+        if (ep_group->nccl_wins != nullptr) {
+            ncclWindow_t win_host;
+            CUDA_CHECK(cudaMemcpy(&win_host, ep_group->nccl_wins,
+                                    sizeof(ncclWindow_t), cudaMemcpyDeviceToHost));
+            NCCL_CHECK_RESULT(ncclCommWindowDeregister(ep_group->comm, win_host));
+            CUDA_CHECK(cudaFree(ep_group->nccl_wins));
+            ep_group->nccl_wins = nullptr;
+        }
 
         // Free RDMA buffer (after window deregistered)
         if (ep_group->rdma_buffer) {
@@ -1867,38 +1852,54 @@ ncclResult_t ncclEpHandleMemSize(
     return ncclSuccess;
 }
 
-// Collectively re-size rdma_buffer to `new_size`. Window is deregistered and
-// re-registered; old contents are dropped (the new buffer is zeroed). Must be
-// called by all ranks in the comm with the same new_size.
-static ncclResult_t ll_grow_rdma_buffer(ncclEpGroup_t ep_group, size_t new_size) {
+// Collectively (re-)size rdma_buffer to `new_size`. Two modes:
+//   - First allocation (rdma_buffer == nullptr): allocate, register, stash
+//     window handle in a newly-allocated device slot.
+//   - Grow (rdma_buffer != nullptr): cross-rank fence, deregister window,
+//     free, reallocate, re-register, update existing device slot.
+// In both cases the buffer is zeroed and rdma_buffer_size_alloc is updated.
+// Must be called by all ranks in the comm with the same new_size.
+static ncclResult_t ll_resize_rdma_buffer(ncclEpGroup_t ep_group, size_t new_size) {
     EP_HOST_ASSERT(new_size > ep_group->rdma_buffer_size_alloc);
-    EP_HOST_ASSERT(new_size <= ep_group->config.rdma_buffer_size);
+    // With NCCL_EP_AUTO, config.rdma_buffer_size is 0 (the AUTO sentinel) and
+    // imposes no cap. With a user-specified value, the caller (ll_init_handle)
+    // rejects layouts that don't fit before reaching here, and the group-time
+    // path passes exactly config.rdma_buffer_size.
+    EP_HOST_ASSERT(ep_group->config.rdma_buffer_size == NCCL_EP_AUTO ||
+                   new_size <= ep_group->config.rdma_buffer_size);
 
-    // Cross-rank fence before teardown: cudaDeviceSynchronize drains local
-    // work, but a remote rank may still be touching this rank's window via
-    // RDMA. ncclMemFree/ncclCommWindowDeregister/ncclMemAlloc/
-    // ncclCommWindowRegister are themselves collective, so no further
-    // barrier is needed afterward — by the time Register returns on all
-    // ranks the new window is live.
-    CUDA_CHECK(cudaDeviceSynchronize());
-    cudaStream_t stream;
-    CUDA_CHECK(cudaStreamCreate(&stream));
-    NCCL_CHECK_RESULT(ncclBarrier(ep_group->comm, stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-    CUDA_CHECK(cudaStreamDestroy(stream));
+    const bool first_alloc = (ep_group->rdma_buffer == nullptr);
 
-    ncclWindow_t win_host;
-    CUDA_CHECK(cudaMemcpy(&win_host, ep_group->nccl_wins, sizeof(ncclWindow_t), cudaMemcpyDeviceToHost));
-    NCCL_CHECK_RESULT(ncclCommWindowDeregister(ep_group->comm, win_host));
+    if (!first_alloc) {
+        // Cross-rank fence before teardown: cudaDeviceSynchronize drains
+        // local work, but a remote rank may still be touching this rank's
+        // window via RDMA. ncclMemFree/ncclCommWindowDeregister/
+        // ncclMemAlloc/ncclCommWindowRegister are themselves collective,
+        // so no further barrier is needed afterward.
+        CUDA_CHECK(cudaDeviceSynchronize());
+        cudaStream_t stream;
+        CUDA_CHECK(cudaStreamCreate(&stream));
+        NCCL_CHECK_RESULT(ncclBarrier(ep_group->comm, stream));
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        CUDA_CHECK(cudaStreamDestroy(stream));
 
-    NCCL_CHECK_RESULT(ncclMemFree(ep_group->rdma_buffer));
-    ep_group->rdma_buffer = nullptr;
+        ncclWindow_t win_host;
+        CUDA_CHECK(cudaMemcpy(&win_host, ep_group->nccl_wins, sizeof(ncclWindow_t), cudaMemcpyDeviceToHost));
+        NCCL_CHECK_RESULT(ncclCommWindowDeregister(ep_group->comm, win_host));
+        NCCL_CHECK_RESULT(ncclMemFree(ep_group->rdma_buffer));
+        ep_group->rdma_buffer = nullptr;
+    }
+
     NCCL_CHECK_RESULT(ncclMemAlloc(&ep_group->rdma_buffer, new_size));
     CUDA_CHECK(cudaMemset(ep_group->rdma_buffer, 0, new_size));
     ep_group->rdma_buffer_size_alloc = new_size;
 
+    ncclWindow_t win_host;
     NCCL_CHECK_RESULT(ncclCommWindowRegister(ep_group->comm, ep_group->rdma_buffer,
-                                              ep_group->rdma_buffer_size_alloc, &win_host, 0));
+                                              new_size, &win_host, 0));
+    if (first_alloc) {
+        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&ep_group->nccl_wins), sizeof(ncclWindow_t)));
+    }
     CUDA_CHECK(cudaMemcpy(ep_group->nccl_wins, &win_host, sizeof(ncclWindow_t), cudaMemcpyHostToDevice));
 
     return ncclSuccess;
@@ -1913,19 +1914,28 @@ static ncclResult_t ll_init_handle(ncclEpHandle_t handle, ncclEpGroup_t ep_group
         ep_group->config.max_dispatch_tokens_per_rank,
         ep_group->config.max_token_bytes, ep_group->nRanks,
         ep_group->config.num_experts, num_topk, handle->layout);
-    assert(layout.total_bytes <= ep_group->config.rdma_buffer_size);
 
-    // Grow rdma_buffer if the requested layout doesn't fit (e.g., first EM
-    // handle on a group sized for RM). Stored layouts on other live handles
-    // are pure offsets, so reallocation does not invalidate them.
+    // Ensure rdma_buffer is large enough for this handle's actual layout.
+    // - NCCL_EP_AUTO: lazily allocate (first handle) or grow (later handle
+    //   needing more, e.g. different layout or larger num_topk). Stored
+    //   layouts on other live handles are pure offsets, so reallocation
+    //   does not invalidate them.
+    // - User-specified size: the buffer was already allocated to that exact
+    //   value at group create. Reject the handle if it doesn't fit.
     if (layout.total_bytes > ep_group->rdma_buffer_size_alloc) {
-        const size_t new_size = nccl_ep::get_low_latency_rdma_size_hint_for_layout(
-            ep_group->config.max_dispatch_tokens_per_rank,
-            ep_group->config.max_token_bytes,
-            ep_group->nRanks,
-            ep_group->config.num_experts,
-            handle->layout);
-        NCCLCHECK(ll_grow_rdma_buffer(ep_group, new_size));
+        if (ep_group->config.rdma_buffer_size != NCCL_EP_AUTO) {
+            fprintf(stderr,
+                    "ncclEpInitHandle: requested layout needs %zu bytes but user-specified "
+                    "rdma_buffer_size is %zu bytes; either increase rdma_buffer_size or use "
+                    "NCCL_EP_AUTO to allow lazy sizing\n",
+                    layout.total_bytes,
+                    static_cast<size_t>(ep_group->config.rdma_buffer_size));
+            return ncclInvalidUsage;
+        }
+        const size_t new_size = ((layout.total_bytes + NUM_BUFFER_ALIGNMENT_BYTES - 1)
+                                 / NUM_BUFFER_ALIGNMENT_BYTES)
+                                * NUM_BUFFER_ALIGNMENT_BYTES;
+        NCCLCHECK(ll_resize_rdma_buffer(ep_group, new_size));
     }
     assert(layout.total_bytes <= ep_group->rdma_buffer_size_alloc);
 
@@ -3352,6 +3362,8 @@ ncclResult_t ncclEpMaskClean(
     EP_HOST_ASSERT(ep_group != nullptr);
     EP_HOST_ASSERT(ep_group->mask_buffer != nullptr && "ncclEpMaskClean: enable_mask must be true");
     EP_HOST_ASSERT(ep_group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY);
+    EP_HOST_ASSERT(ep_group->rdma_buffer != nullptr &&
+                   "ncclEpMaskClean: rdma_buffer not yet allocated; create at least one LL handle first");
 
     // Reset internal RDMA recv-count/flag counters for both double-buffer slots
     // via a GPU kernel that includes a cross-rank barrier, then clear the mask.

@@ -1039,7 +1039,7 @@ ncclResult_t ncclCommMemStats(ncclComm_t comm, ncclCommMemStat_t stat, uint64_t*
              COMPILER_ATOMIC_LOAD(&manager->totalOffload, std::memory_order_relaxed);
     return ncclSuccess;
   case ncclStatGpuMemSuspended:
-      // Boolean: 0=active, 1=suspended
+    // Boolean: 0=active, 1=suspended
     *value = manager->released ? 1 : 0;
     return ncclSuccess;
   default:

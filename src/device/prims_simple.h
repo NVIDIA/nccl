@@ -210,7 +210,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
       //     post();
       //   } // Since we no longer unroll, new branch added here
 #if __CUDA_ARCH__ < 700
-        // Above doesn't matter on older hardware.
+      // Above doesn't matter on older hardware.
       NVCC_PRAGMA_UNROLL(SlicePerChunk)
 #else
       NVCC_PRAGMA_UNROLL_DISABLED

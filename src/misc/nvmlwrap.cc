@@ -50,10 +50,10 @@ NCCL_NVML_FN(nvmlDeviceGetPciInfoExt, nvmlReturn_t, (nvmlDevice_t device, nvmlPc
 NCCL_NVML_FN(nvmlDeviceGetPcieLinkMaxSpeed, nvmlReturn_t, (nvmlDevice_t device, int* maxSpeed))
 NCCL_NVML_FN(nvmlDeviceGetCurrPcieLinkGeneration, nvmlReturn_t, (nvmlDevice_t device, unsigned int* currLinkGen))
 NCCL_NVML_FN(nvmlDeviceGetCurrPcieLinkWidth, nvmlReturn_t, (nvmlDevice_t device, unsigned int* currLinkWidth))
-  // MNNVL support
+// MNNVL support
 NCCL_NVML_FN(nvmlDeviceGetGpuFabricInfoV, nvmlReturn_t, (nvmlDevice_t device, nvmlGpuFabricInfoV_t* gpuFabricInfo))
 NCCL_NVML_FN(nvmlDeviceGetPlatformInfo, nvmlReturn_t, (nvmlDevice_t device, nvmlPlatformInfo_t* platfromInfo))
-  // CC support
+// CC support
 NCCL_NVML_FN(nvmlSystemGetConfComputeState, nvmlReturn_t, (nvmlConfComputeSystemState_t* state));
 NCCL_NVML_FN(nvmlSystemGetConfComputeSettings, nvmlReturn_t, (nvmlSystemConfComputeSettings_t* setting));
 
@@ -134,7 +134,7 @@ ncclResult_t ncclNvmlEnsureInitialized() {
 #if NCCL_NVML_DIRECT
   bool have_v2 = true;
 #else
-    // if this compare is done in the NCCL_NVML_DIRECT=1 case then GCC warns about it never being null
+  // if this compare is done in the NCCL_NVML_DIRECT=1 case then GCC warns about it never being null
   bool have_v2 = pfn_nvmlInit_v2 != nullptr;
 #endif
   nvmlReturn_t res1 = (have_v2 ? pfn_nvmlInit_v2 : pfn_nvmlInit)();

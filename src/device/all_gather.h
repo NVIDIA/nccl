@@ -25,9 +25,9 @@ __device__ __forceinline__ void runRing(int tid, int nthreads, struct ncclDevWor
   T* inputBuf = (T*)work->sendbuff;
   T* outputBuf = (T*)work->recvbuff;
 
-    // If isNetOffload == true, we only use 1 warp to drive Ring algo/network communication
-    // and the rest of warps proceed to copy src data into dst buffer in parallel when AG
-    // is not in-place.
+  // If isNetOffload == true, we only use 1 warp to drive Ring algo/network communication
+  // and the rest of warps proceed to copy src data into dst buffer in parallel when AG
+  // is not in-place.
   if (isNetOffload) {
     workNthreads = WARP_SIZE;
     chunkCount = NCCL_MAX_NET_SIZE;
@@ -36,41 +36,41 @@ __device__ __forceinline__ void runRing(int tid, int nthreads, struct ncclDevWor
   }
 
   if (tid < workNthreads) {
-      // Coverity reports that the callee treats &ring->next as an array.  However, due to the use of
-      // FanSymmetric<1>, only the first element is ever accessed, so it's fine.
-      // coverity[callee_ptr_arith:FALSE]
+    // Coverity reports that the callee treats &ring->next as an array.  However, due to the use of
+    // FanSymmetric<1>, only the first element is ever accessed, so it's fine.
+    // coverity[callee_ptr_arith:FALSE]
     Primitives<T, RedOp, FanSymmetric<1>, 1, Proto, 0, isNetOffload> prims(tid, workNthreads, &ring->prev, &ring->next,
                                                                            inputBuf, outputBuf, work->redOpArg, 0, 0, 0,
                                                                            work, NULL,
                                                                            isNetOffload ? NCCL_MAX_NET_SIZE : 0);
     for (size_t elemOffset = 0; elemOffset < partCount; elemOffset += chunkCount) {
-        /////////////// begin AllGather steps ///////////////
+      /////////////// begin AllGather steps ///////////////
       nelem = min(chunkCount, partCount - elemOffset);
       dataOffset = partOffset + elemOffset;
 
-        // step 0: push data to next GPU
+      // step 0: push data to next GPU
       rankDest = ringRanks[0];
       offset = dataOffset + rankDest * count;
 
       if ((inputBuf + dataOffset == outputBuf + offset) || isNetOffload) {
-          // In place or onePPN
+        // In place or onePPN
         prims.directSend(dataOffset, offset, nelem);
       } else {
         prims.directCopySend(dataOffset, offset, nelem);
       }
 
-        // k-2 steps: copy to next GPU
+      // k-2 steps: copy to next GPU
       for (int j = 1; j < nranks - 1; ++j) {
         rankDest = ringRanks[nranks - j];
         offset = dataOffset + rankDest * count;
         prims.directRecvCopyDirectSend(offset, offset, nelem);
       }
 
-        // Make final copy from buffer to dest.
+      // Make final copy from buffer to dest.
       rankDest = ringRanks[1];
       offset = dataOffset + rankDest * count;
 
-        // Final wait/copy.
+      // Final wait/copy.
       prims.directRecv(offset, nelem);
     }
   } else if (inputBuf != outputBuf + ringRanks[0] * count) {
@@ -80,10 +80,10 @@ __device__ __forceinline__ void runRing(int tid, int nthreads, struct ncclDevWor
                                                                          work->redOpArg, false, 1, (void**)&inputBuf, 1,
                                                                          (void**)&outputBuf, partCount);
   }
-    // we have to wait for all warps before we can proceed to the next work;
-    // otherwise, we can have contention if next work will use the outputBuf
-    // in this work. We use bar 14 to avoid conflicts with prims barrier and
-    // __syncthread().
+  // we have to wait for all warps before we can proceed to the next work;
+  // otherwise, we can have contention if next work will use the outputBuf
+  // in this work. We use bar 14 to avoid conflicts with prims barrier and
+  // __syncthread().
   if (isNetOffload) barrier_sync(14, nthreads);
 }
 } // namespace

@@ -31,9 +31,9 @@ __device__ __forceinline__ void runRing(int tid, int nthreads, struct ncclDevWor
   workNthreads = isNetOffload ? WARP_SIZE : nthreads;
 
   if (tid < workNthreads) {
-      // Coverity reports that the callee treats &ring->next as an array.  However, due to the use of
-      // FanSymmetric<1>, only the first element is ever accessed, so it's fine.
-      // coverity[callee_ptr_arith:FALSE]
+    // Coverity reports that the callee treats &ring->next as an array.  However, due to the use of
+    // FanSymmetric<1>, only the first element is ever accessed, so it's fine.
+    // coverity[callee_ptr_arith:FALSE]
     Primitives<T, RedOp, FanSymmetric<1>, 1, Proto, 0> prims(tid, workNthreads, &ring->prev, &ring->next, inputBuf,
                                                              outputBuf, work->redOpArg, 0, 0, 0, work);
 

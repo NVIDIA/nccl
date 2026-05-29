@@ -118,7 +118,7 @@ ncclResult_t ncclCudaGraphAddDestructor(struct ncclCudaGraph graph, cudaHostFn_t
 #if CUDART_VERSION >= 11030
   cudaUserObject_t object;
   CUDACHECK(cudaUserObjectCreate(&object, arg, fn, /*initialRefcount=*/1, cudaUserObjectNoDestructorSync));
-    // Hand over ownership to CUDA Graph
+  // Hand over ownership to CUDA Graph
   CUDACHECK(cudaGraphRetainUserObject(graph.graph, object, 1, cudaGraphUserObjectMove));
   return ncclSuccess;
 #else
@@ -179,14 +179,14 @@ ncclResult_t ncclStrongStreamAcquire(struct ncclCudaGraph graph, struct ncclStro
     std::unique_lock<std::mutex> lock(ss->mutex, std::defer_lock);
     if (concurrent) lock.lock();
 
-      // Look for capture in our list of active captures.
+    // Look for capture in our list of active captures.
     struct ncclStrongStreamCapture** pcap = &ss->captureHead;
     struct ncclStrongStreamCapture* cap;
     struct ncclStrongStreamCapture* spare = nullptr;
     while (*pcap != nullptr) {
       cap = *pcap;
       if (cap->graphId == graph.graphId) {
-          // Capture node already exists.
+        // Capture node already exists.
         *workStream = cap->captureStream;
         cap->acquiredBy = localThreadId();
         return ncclSuccess;
@@ -196,10 +196,10 @@ ncclResult_t ncclStrongStreamAcquire(struct ncclCudaGraph graph, struct ncclStro
         if (status == cudaStreamCaptureStatusActive) {
           pcap = &cap->next; // Active capture doesn't match, on to next.
         } else {
-            // Capture no longer active
+          // Capture no longer active
           *pcap = cap->next; // Remove from current list
           if (spare == nullptr) {
-              // Keep one spare to reuse below.
+            // Keep one spare to reuse below.
             spare = cap;
           } else {
             cudaStreamDestroy(cap->captureStream);
@@ -208,7 +208,7 @@ ncclResult_t ncclStrongStreamAcquire(struct ncclCudaGraph graph, struct ncclStro
         }
       }
     }
-      // No matching capture, need a new entry.
+    // No matching capture, need a new entry.
     cap = spare;
     if (cap == nullptr) {
       cap = (struct ncclStrongStreamCapture*)calloc(1, sizeof(struct ncclStrongStreamCapture));
@@ -216,7 +216,7 @@ ncclResult_t ncclStrongStreamAcquire(struct ncclCudaGraph graph, struct ncclStro
     }
     cap->graphId = graph.graphId;
     cap->acquiredBy = localThreadId();
-      // Push to capturing list.
+    // Push to capturing list.
     cap->next = ss->captureHead;
     ss->captureHead = cap;
 
@@ -226,7 +226,7 @@ ncclResult_t ncclStrongStreamAcquire(struct ncclCudaGraph graph, struct ncclStro
 
     *workStream = cap->captureStream;
 
-      // Bring captureStream into the graph but without any dependencies.
+    // Bring captureStream into the graph but without any dependencies.
     cudaEvent_t scratch;
     CUDACHECK(cudaEventCreateWithFlags(&scratch, cudaEventDisableTiming));
     CUDACHECK(cudaEventRecord(scratch, graph.origin));
@@ -243,7 +243,7 @@ ncclResult_t ncclStrongStreamAcquire(struct ncclCudaGraph graph, struct ncclStro
       CUDACHECK(cudaEventRecord(ss->serialEvent, ss->liveStream));
     }
     if (mixing) {
-        // First dependency is to wait on serialEvent
+      // First dependency is to wait on serialEvent
       CUDACHECK(cudaStreamWaitEvent(cap->captureStream, ss->serialEvent, cudaEventWaitExternal));
     }
   }

@@ -1157,7 +1157,7 @@ ncclResult_t ncclTopoGetPath(ncclXmlNode** nodes, int nNodes, int* path, ncclXml
       for (int i = 0; i < nNodes; i++) {
         parents[i].pop();
       }
-    // Check multi-port while we still have the mismatched parents
+      // Check multi-port while we still have the mismatched parents
       // For multi-port to be true, all parents (peers) must have the busId attribute with all but the last character
       // matching
     } else {

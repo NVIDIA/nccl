@@ -1011,7 +1011,7 @@ static inline ncclResult_t ncclIbPortRecoveryProgressAliveMessages(ncclIbPortRec
     recoveryContext->state = ncclIbPortRecoveryStateFailed;
     break;
   case ncclIbPortRecoveryStateProgressResultInProgress:
-      // Do nothing
+    // Do nothing
     break;
   }
   return ncclSuccess;
@@ -1154,7 +1154,7 @@ static inline ncclResult_t ncclIbPortRecoveryProgressAck(ncclIbPortRecoveryConte
     recoveryContext->state = ncclIbPortRecoveryStateFailed;
     break;
   case ncclIbPortRecoveryStateProgressResultInProgress:
-      // Do nothing
+    // Do nothing
     break;
   }
   return ncclSuccess;

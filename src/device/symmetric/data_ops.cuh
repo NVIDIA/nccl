@@ -259,7 +259,7 @@ template <typename Coop, typename DstSpace, typename GetDst, template <typename>
 __device__ void reduceBatch(Coop coop, bool inPlace, int nBatch, int nElts, DstSpace dstMem, unsigned dstAlignMin,
                             /*(int i)->DstT* */ GetDst getDst, Red<Acc> red, int nSrcs,
                             /*(int i, int srcIx)->SrcT* */ GetSrc getSrc,
-    // srcPtrCommonMask: All srcs must have matching values of srcPtr & srcPtrCommonMask
+                            // srcPtrCommonMask: All srcs must have matching values of srcPtr & srcPtrCommonMask
                             unsigned srcPtrCommonMask,
                             // getSrcPtrMasked: The common srcPtr & srcPtrCommonMask value shared by all srcs in group
                             /*(int i)->unsigned*/ GetSrcPtrMasked getSrcPtrMasked) {

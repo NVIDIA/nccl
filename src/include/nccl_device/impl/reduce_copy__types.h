@@ -75,10 +75,10 @@ struct OpSum<__nv_fp8_e4m3> {
   using EltType = __nv_fp8_e4m3;
   NCCL_DEVICE_INLINE __nv_fp8_e4m3 operator()(const __nv_fp8_e4m3& a, const __nv_fp8_e4m3& b) const {
 #if __CUDA_ARCH__ >= 800
-      // Use native half addition on architectures that support it
+    // Use native half addition on architectures that support it
     return __nv_fp8_e4m3(__hadd(__half(a), __half(b)));
 #else
-      // Fallback: convert to float, add, convert back
+    // Fallback: convert to float, add, convert back
     return __nv_fp8_e4m3(float(a) + float(b));
 #endif
   }
@@ -89,10 +89,10 @@ struct OpSum<__nv_fp8_e5m2> {
   using EltType = __nv_fp8_e5m2;
   NCCL_DEVICE_INLINE __nv_fp8_e5m2 operator()(const __nv_fp8_e5m2& a, const __nv_fp8_e5m2& b) const {
 #if __CUDA_ARCH__ >= 800
-      // Use native half addition on architectures that support it
+    // Use native half addition on architectures that support it
     return __nv_fp8_e5m2(__hadd(__half(a), __half(b)));
 #else
-      // Fallback: convert to float, add, convert back
+    // Fallback: convert to float, add, convert back
     return __nv_fp8_e5m2(float(a) + float(b));
 #endif
   }

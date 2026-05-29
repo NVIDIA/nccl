@@ -42,7 +42,7 @@ typedef enum nvmlNvLinkCapability_enum {
   NVML_NVLINK_CAP_SYSMEM_ATOMICS = 3,     // System memory atomics are supported
   NVML_NVLINK_CAP_SLI_BRIDGE = 4,     // SLI is supported over this link
   NVML_NVLINK_CAP_VALID = 5,     // Link is supported on this device
-    // should be last
+  // should be last
   NVML_NVLINK_CAP_COUNT
 } nvmlNvLinkCapability_t;
 
@@ -78,7 +78,7 @@ typedef struct nvmlPciInfo_st {
   unsigned int device;             //!< The device's id on the bus, 0 to 31
   unsigned int pciDeviceId;        //!< The combined 16-bit device id and 16-bit vendor id
 
-    // Added in NVML 2.285 API
+  // Added in NVML 2.285 API
   unsigned int pciSubSystemId;     //!< The 32-bit Sub System Device ID
 
   char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE]; //!< The tuple domain:bus:device.function PCI identifier (&amp;
@@ -135,7 +135,7 @@ typedef enum nvmlValueType_enum {
   NVML_VALUE_TYPE_UNSIGNED_LONG_LONG = 3,
   NVML_VALUE_TYPE_SIGNED_LONG_LONG = 4,
 
-    // Keep this last
+  // Keep this last
   NVML_VALUE_TYPE_COUNT
 } nvmlValueType_t;
 

@@ -365,13 +365,13 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
             continue;
           }
 
-            // check against user specified HCAs/ports
+          // check against user specified HCAs/ports
           int userIfId = -1;
           if (!(matchIfList(devices[d]->name, port_num, userIfs, nUserIfs, searchExact, &userIfId) ^ searchNot)) {
             continue;
           }
 
-            // check for mlx5 data direct support only once for a each device
+          // check for mlx5 data direct support only once for a each device
           if (devCount == -1) {
             devCount = 1;
             devOffset = 0;

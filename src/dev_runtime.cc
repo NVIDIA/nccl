@@ -342,7 +342,7 @@ fail:
 static ncclResult_t symBindTeamMemory(struct ncclComm* comm, struct ncclDevrTeam* tm, struct ncclDevrMemory* mem) {
   if (comm->nvlsSupport && tm->mcBasePtr != nullptr) {
 #if CUDART_VERSION >= 12010
-      // Multimem teams are currently unsupported for memory containing CPU-backed physical segments
+    // Multimem teams are currently unsupported for memory containing CPU-backed physical segments
     if (mem->globalHasSysmemSegment) {
       INFO(NCCL_NVLS, "Skipping bind multicast for maxGlobalNumSegments = %d, big=%lx, team {%d x %d}",
            mem->maxGlobalNumSegments, mem->bigOffset, tm->team.nRanks, tm->team.stride);

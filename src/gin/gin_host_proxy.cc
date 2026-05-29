@@ -299,11 +299,11 @@ static ncclResult_t proxyGinProcessGfd(struct ginProxyCtx* ctx, struct ginProxyH
   case ncclGinProxyOpPut:
     signalOp = mapGfdOpToSignalOp(gfd);
     if (signalOp == -1) {
-        // First cast from 63 bits to 64 bits and then to void * to avoid warnings
+      // First cast from 63 bits to 64 bits and then to void * to avoid warnings
       NCCLCHECK(rmaBackend->iput(ctx->rmaCtx, hostGpuCtx->contextId, srcOff, srcHandle, size, dstOff, dstHandle,
                                  targetRank, &state->request));
     } else {
-        // Reconstruct the signal value
+      // Reconstruct the signal value
       signalVal = extractSignalVal(gfd);
       uint64_t signalOff =
         (gfd->qword[ncclGinProxyGfdCompletion].completion.signalId + hostGpuCtx->contextId * ctx->nSignalsPerContext) *
@@ -314,7 +314,7 @@ static ncclResult_t proxyGinProcessGfd(struct ginProxyCtx* ctx, struct ginProxyH
     }
     break;
   default:
-      // this error should already have been checked in pollGfd
+    // this error should already have been checked in pollGfd
     assert(0);
   }
   TRACE(NCCL_NET, "GFD submitted into GIN plugin - contextId: %d, stateIdx: %lu, request: %p", hostGpuCtx->contextId,

@@ -329,7 +329,7 @@ static __device__ void allgather_LL_body(ncclSymkArgsHandler& handler, ncclLLA2A
     int peer = t / nIterPacks;
     int pack = t % nIterPacks;
 #if 1
-      // NOTE: Unrolling speedup on eos nranks=8 size=64K: 5.7us vs 6.7us
+    // NOTE: Unrolling speedup on eos nranks=8 size=64K: 5.7us vs 6.7us
     constexpr int Unroll = 4;
     NVCC_PRAGMA_UNROLL_DISABLED
     for (int i = t; i < (nRanks * nIterPacks & -(Unroll * tn)); i += Unroll * tn) {
@@ -366,7 +366,7 @@ static __device__ void allgather_LL_body(ncclSymkArgsHandler& handler, ncclLLA2A
       }
     }
 #else
-      // The non-unrolled but "obviously correct" implementation for reference.
+    // The non-unrolled but "obviously correct" implementation for reference.
     NVCC_PRAGMA_UNROLL_DISABLED
     for (int i = t; i < nRanks * nIterPacks; i += tn) {
       Pack got = lla2a.template recv<Pack>(i);

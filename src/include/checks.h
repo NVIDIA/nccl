@@ -109,7 +109,7 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
 #define NEQCHECK(statement, value) \
   do { \
     if ((statement) != value) { \
-    /* Print the back trace*/ \
+      /* Print the back trace*/ \
       INFO_LOC(NCCL_ALL, "-> %d (%s)", ncclSystemError, strerror(errno)); \
       return ncclSystemError; \
     } \
@@ -118,7 +118,7 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
 #define NEQCHECKGOTO(statement, value, RES, label) \
   do { \
     if ((statement) != value) { \
-    /* Print the back trace*/ \
+      /* Print the back trace*/ \
       RES = ncclSystemError; \
       INFO_LOC(NCCL_ALL, "-> %d (%s)", RES, strerror(errno)); \
       goto label; \
@@ -128,7 +128,7 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
 #define EQCHECK(statement, value) \
   do { \
     if ((statement) == value) { \
-    /* Print the back trace*/ \
+      /* Print the back trace*/ \
       INFO_LOC(NCCL_ALL, "-> %d (%s)", ncclSystemError, strerror(errno)); \
       return ncclSystemError; \
     } \
@@ -137,7 +137,7 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
 #define EQCHECKGOTO(statement, value, RES, label) \
   do { \
     if ((statement) == value) { \
-    /* Print the back trace*/ \
+      /* Print the back trace*/ \
       RES = ncclSystemError; \
       INFO_LOC(NCCL_ALL, "-> %d (%s)", RES, strerror(errno)); \
       goto label; \
@@ -149,7 +149,7 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
   do { \
     ncclResult_t RES = call; \
     if (RES != ncclSuccess && RES != ncclInProgress) { \
-    /* Print the back trace*/ \
+      /* Print the back trace*/ \
       if (ncclDebugNoWarn == 0) INFO_LOC(NCCL_ALL, "-> %d", RES); \
       return RES; \
     } \
@@ -159,7 +159,7 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
   do { \
     RES = call; \
     if (RES != ncclSuccess && RES != ncclInProgress) { \
-    /* Print the back trace*/ \
+      /* Print the back trace*/ \
       if (ncclDebugNoWarn == 0) INFO_LOC(NCCL_ALL, "-> %d", RES); \
       goto label; \
     } \

@@ -554,7 +554,7 @@ __host__ __device__ constexpr int ncclShmemScratchWarpSize(int cudaArch = NCCL_C
             /*LL    */ 0,
             /*LL128 */ (NCCL_LL128_SHMEM_ELEMS_PER_THREAD * WARP_SIZE) * sizeof(uint64_t),
             /*SIMPLE*/ (ncclCollUnroll(cudaArch) * WARP_SIZE + 1) * 16,
-      // NVLS needs an extra 16B to read unaligned data.
+            // NVLS needs an extra 16B to read unaligned data.
             /*NVLS  */ WARP_SIZE * (cudaArch >= 900 ? ncclNvlsUnrollBytes(cudaArch) : 0) + 16) +
           15) &
          -16; // pad to 16 bytes

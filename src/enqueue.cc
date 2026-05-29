@@ -979,7 +979,7 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
           dir ? &channelPeers[peerRank]->send[connIndex] : &channelPeers[peerRank]->recv[connIndex];
         void* regAddr = NULL;
         if (conn->conn.flags & (NCCL_P2P_WRITE | NCCL_P2P_READ)) {
-            // We require users registering buffers on both sides
+          // We require users registering buffers on both sides
           NCCLCHECKGOTO(ncclRegisterP2pIpcBuffer(comm, addrs[dir], bytes[dir], peerRank, &regFlag, &regAddr,
                                                  &plan->cleanupQueue),
                         ret, cleanup);

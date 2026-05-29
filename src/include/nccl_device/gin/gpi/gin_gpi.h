@@ -366,7 +366,7 @@ NCCL_DEVICE_INLINE static void putImplMode(ncclGinCtx ctx, Coop coop, int peer, 
           gpi_gpu_channel_post_gfd<resource_sharing_mode, GPI_POST_MODE_THREAD>(gpi_ctx, gfd, optFlags);
         }
       }
-        // build signal gfd
+      // build signal gfd
       op = GPI_GFD_DATA_OP_AMO_ADD;
       gpi_gpu_build_inline_data_transfer_gfd(gfd, op, op_flags_signal, sizeof(uint64_t), peer, (uint64_t)signalVal_,
                                              signalId_, signalOffset_, counterId_, 0, 0);
@@ -432,7 +432,7 @@ NCCL_DEVICE_INLINE static void putValueImplMode(ncclGinCtx ctx, Coop coop, int p
       } else {
         gpi_gpu_channel_post_gfd<resource_sharing_mode, GPI_POST_MODE_THREAD>(gpi_ctx, gfd, optFlags);
       }
-        // build signal gfd
+      // build signal gfd
       op = GPI_GFD_DATA_OP_AMO_ADD;
       gpi_gpu_build_inline_data_transfer_gfd(gfd, op, 0, sizeof(uint64_t), peer, (uint64_t)signalVal_, signalId_,
                                              signalOffset_, 0, 0, 0);
@@ -466,7 +466,7 @@ NCCL_DEVICE_INLINE static void flushImplMode(ncclGinCtx ctx, Coop coop, bool has
     for (int peer = coop.thread_rank(); peer < ctx.nRanks; peer += coop.size()) {
       uint16_t flush_counter_peer_idx = (uint16_t)(peer + flush_counter_idx);
       uint64_t* ticket_peer = &flush_tickets_ctx[peer];
-        // GPI_READ_ONCE(ticket_peer);
+      // GPI_READ_ONCE(ticket_peer);
       uint64_t ticket_value = gpi_atomic_add<uint64_t, resource_sharing_mode>(ticket_peer, (uint64_t)1);
       gpi_gpu_build_pe_flush_gfd(gfd, GPI_GFD_DATA_OP_WITH_COUNTER_COUNTED | GPI_GFD_DATA_OP_WITH_COUNTER_WRITEBACK,
                                  peer, flush_counter_peer_idx);
@@ -480,7 +480,7 @@ NCCL_DEVICE_INLINE static void flushImplMode(ncclGinCtx ctx, Coop coop, bool has
     for (int peer = coop.thread_rank(); peer < ctx.nRanks; peer += coop.size()) {
       uint16_t flush_counter_peer_idx = (uint16_t)(peer + flush_counter_idx);
       uint64_t* ticket_peer = &flush_tickets_ctx[peer];
-        // GPI_READ_ONCE(ticket_peer);
+      // GPI_READ_ONCE(ticket_peer);
       uint64_t ticket_value = gpi_atomic_add<uint64_t, resource_sharing_mode>(ticket_peer, (uint64_t)1);
       gpi_gpu_build_pe_flush_gfd(gfd, GPI_GFD_DATA_OP_WITH_COUNTER_COUNTED | GPI_GFD_DATA_OP_WITH_COUNTER_WRITEBACK,
                                  peer, flush_counter_peer_idx);

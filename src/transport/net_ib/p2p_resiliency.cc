@@ -214,26 +214,26 @@ static ncclResult_t ncclIbResiliencyRepostRequest(struct ncclIbRequest* request)
     struct ncclIbSendComm* sendComm = (struct ncclIbSendComm*)request->base;
     struct ncclIbRequest** sendReqs = sendComm->sendReqs[slot];
     for (int r = 0; r < request->nreqs; r++) {
-        // Clear all event counters and later on increment only the required
-        // ones based on the probing results on which QP a retransmission is
-        // required.
+      // Clear all event counters and later on increment only the required
+      // ones based on the probing results on which QP a retransmission is
+      // required.
       memset(sendReqs[r]->events, 0, sizeof(sendReqs[r]->events));
 
-        // Populate events
+      // Populate events
       int nqps = ncclIbCommBaseGetNqpsPerRequest(sendReqs[r]->base);
       int qpIndex = -1;
       ncclIbQp* qp = NULL;
       for (int i = 0; i < nqps; i++) {
-          // TODO: This code does not handle the case where a send request fails twice!
-          // If that device that is used for retransmission fails during retransmission,
-          // the logic here will retrieve the QP that was used for the first send attempt
-          // and not the QP that was used for the second send attempt! Causing
-          // probably data corruption or a hang.
+        // TODO: This code does not handle the case where a send request fails twice!
+        // If that device that is used for retransmission fails during retransmission,
+        // the logic here will retrieve the QP that was used for the first send attempt
+        // and not the QP that was used for the second send attempt! Causing
+        // probably data corruption or a hang.
         NCCLCHECK(ncclIbCommBaseGetQpForRequest(sendReqs[r]->base, sendReqs[r]->id, i, &qp, &qpIndex));
 
-          // Selective Retransmission:
-          // If the probing result shows that the data was delivered successfully on this QP,
-          // we don't need to retransmit it.
+        // Selective Retransmission:
+        // If the probing result shows that the data was delivered successfully on this QP,
+        // we don't need to retransmit it.
         if (sendResCtx->probingResults[slot][qpIndex] == true) {
           INFO(NCCL_NET,
                "NET/IB: %s: Skipping retransmission on QP index %d (req=%p, comm=%p, id=%ld, slot=%d) as it was "
@@ -246,7 +246,7 @@ static ncclResult_t ncclIbResiliencyRepostRequest(struct ncclIbRequest* request)
              "NET/IB: %s: Retransmitting reqIndex=%d on qp_num=%u (req=%p, comm=%p, id=%ld, slot=%d) as it was not "
              "delivered.",
              __func__, r, qp->qp->qp_num, sendReqs[r], sendReqs[r]->base, sendReqs[r]->id, slot);
-          // Reset the sentData for this QP since we are going to retransmit it.
+        // Reset the sentData for this QP since we are going to retransmit it.
         sendReqs[r]->send.sentData[qpIndex] = false;
         ncclIbAddEvent(sendReqs[r], qp->devIndex);
       }
@@ -302,31 +302,31 @@ static ncclResult_t ncclIbResiliencyHandleCompletionErrorReceiver(struct ncclIbR
 
   switch (request->type) {
   case NCCL_NET_IB_REQ_FLUSH:
-      // When a flush request encounters an error, it's ignored and the event
-      // counter on that device is set to zero, so the flush request could be
-      // completed on other devices if needed.
+    // When a flush request encounters an error, it's ignored and the event
+    // counter on that device is set to zero, so the flush request could be
+    // completed on other devices if needed.
     request->events[devIndex] = 0;
     INFO(NCCL_NET, "NET/IB: %s: Ignoring error on flush request (req=%p, comm=%p, id=%ld) on device index %d", __func__,
          request, request->base, request->id, devIndex);
     break;
   case NCCL_NET_IB_REQ_RECV:
-      // Assert it's a CTS message that got an error.
-      // When error occurs the CQE's opcode is not valid and cannot be read!
-      // The only valid fields are: wr_id, status, qp_num, and vendor_err.
-      // From: https://www.rdmamojo.com/2013/02/15/ibv_poll_cq/
-      // Assert the CQE belongs to a CTS and not a data transfer.
+    // Assert it's a CTS message that got an error.
+    // When error occurs the CQE's opcode is not valid and cannot be read!
+    // The only valid fields are: wr_id, status, qp_num, and vendor_err.
+    // From: https://www.rdmamojo.com/2013/02/15/ibv_poll_cq/
+    // Assert the CQE belongs to a CTS and not a data transfer.
     assert(wc->wr_id != NCCL_IB_RECV_WR_ID_DUMMY);
-      // CTS is reposted immediately
+    // CTS is reposted immediately
     NCCLCHECK(ncclIbResiliencyRepostRequest(request));
     break;
   case (NCCL_NET_IB_REQ_UNUSED):
-      // This might happen for a CTS message. Consider a case where a HW ack
-      // failed for a CTS message but before the receiver got a CQE with error
-      // because of a HW timeout, the sender already completed the data transfer
-      // and receiver completed the receive request. Note that receiver does not
-      // verify if the CTS was completed for every receive request before
-      // completing a receive request.
-      // When error occurs the CQE's opcode is not valid and cannot be read!
+    // This might happen for a CTS message. Consider a case where a HW ack
+    // failed for a CTS message but before the receiver got a CQE with error
+    // because of a HW timeout, the sender already completed the data transfer
+    // and receiver completed the receive request. Note that receiver does not
+    // verify if the CTS was completed for every receive request before
+    // completing a receive request.
+    // When error occurs the CQE's opcode is not valid and cannot be read!
     WARN(
       "NET/IB: Unrecognized request. It might be a CTS message for which the request was already completed. Continue.");
     break;

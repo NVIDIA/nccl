@@ -25,9 +25,9 @@ __device__ __forceinline__ void runRing(int tid, int nthreads, struct ncclDevWor
   int nelem;
   int chunk;
 
-    // Coverity reports that the callee treats &ring->next as an array.  However, due to the use of
-    // FanSymmetric<1>, only the first element is ever accessed, so it's fine.
-    // coverity[callee_ptr_arith:FALSE]
+  // Coverity reports that the callee treats &ring->next as an array.  However, due to the use of
+  // FanSymmetric<1>, only the first element is ever accessed, so it's fine.
+  // coverity[callee_ptr_arith:FALSE]
   Primitives<T, RedOp, FanSymmetric<1>, 1, Proto, 0> prims(tid, nthreads, &ring->prev, &ring->next, work->sendbuff,
                                                            work->recvbuff, work->redOpArg, 0, 0, 0, work);
 
@@ -39,14 +39,14 @@ __device__ __forceinline__ void runRing(int tid, int nthreads, struct ncclDevWor
 
     auto modRanks = [&] __device__(int r) -> int { return r - (r >= nranks ? nranks : 0); };
 
-      // step 0: push data to next GPU
+    // step 0: push data to next GPU
     chunk = modRanks(ringIx + nranks - 1);
     chunkOffset = chunk * chunkCount;
     offset = gridOffset + elemOffset + chunkOffset;
     nelem = (int)min(chunkCount, remCount - chunkOffset);
     prims.directSend(offset, offset, nelem);
 
-      // k-2 steps: reduce and copy to next GPU
+    // k-2 steps: reduce and copy to next GPU
     for (int j = 2; j < nranks; ++j) {
       chunk = modRanks(ringIx + nranks - j);
       chunkOffset = chunk * chunkCount;
@@ -55,15 +55,15 @@ __device__ __forceinline__ void runRing(int tid, int nthreads, struct ncclDevWor
       prims.directRecvReduceDirectSend(offset, offset, nelem);
     }
 
-      // step k-1: reduce this buffer and data, which will produce the final
-      // result that we store in this data and push to the next GPU
+    // step k-1: reduce this buffer and data, which will produce the final
+    // result that we store in this data and push to the next GPU
     chunk = ringIx + 0;
     chunkOffset = chunk * chunkCount;
     offset = gridOffset + elemOffset + chunkOffset;
     nelem = (int)min(chunkCount, remCount - chunkOffset);
     prims.directRecvReduceCopyDirectSend(offset, offset, nelem, /*postOp=*/true);
 
-      // k-2 steps: copy to next GPU
+    // k-2 steps: copy to next GPU
     for (int j = 1; j < nranks - 1; ++j) {
       chunk = modRanks(ringIx + nranks - j);
       chunkOffset = chunk * chunkCount;
@@ -72,7 +72,7 @@ __device__ __forceinline__ void runRing(int tid, int nthreads, struct ncclDevWor
       prims.directRecvCopyDirectSend(offset, offset, nelem);
     }
 
-      // Make final copy from buffer to dest.
+    // Make final copy from buffer to dest.
     chunk = modRanks(ringIx + 1);
     chunkOffset = chunk * chunkCount;
     offset = gridOffset + elemOffset + chunkOffset;
@@ -157,14 +157,14 @@ __device__ __forceinline__ void runTreeSplit(int tid, int nthreads, struct ncclD
     nthreadsSplit = nthreads / 2;
     if (nthreadsSplit >= 256) nthreadsSplit += 64;
   } else {
-      // LL & LL128
-      // Receiving from up to 3 sources is more compute intensive than sending
-      // to 3 dests. Use 70% for reduce and 30% for bcast.
+    // LL & LL128
+    // Receiving from up to 3 sources is more compute intensive than sending
+    // to 3 dests. Use 70% for reduce and 30% for bcast.
     nthreadsSplit = (nthreads * 7 / (10 * WARP_SIZE)) * WARP_SIZE;
   }
 
   if (tree->up == -1) {
-      // Reduce and broadcast. Max number of recv is 2, max number of send is 2
+    // Reduce and broadcast. Max number of recv is 2, max number of send is 2
     Primitives<T, RedOp, FanSymmetric<NCCL_MAX_TREE_ARITY_TOP>, /*Direct=*/1, Proto, 0> prims(
       tid, nthreads, tree->down, tree->down, work->sendbuff, work->recvbuff, work->redOpArg, 0, 0, 0, work);
     for (size_t elemOffset = 0; elemOffset < channelCount; elemOffset += chunkCount) {
@@ -173,7 +173,7 @@ __device__ __forceinline__ void runTreeSplit(int tid, int nthreads, struct ncclD
       prims.directRecvReduceCopyDirectSend(offset, offset, nelem, /*doPost=*/true);
     }
   } else if (tid < nthreadsSplit) {
-      /* Reduce up. Max number of recv is 3, max number of send is 1 (binary tree + local).
+    /* Reduce up. Max number of recv is 3, max number of send is 1 (binary tree + local).
      * Why Direct=1????
      * Answer: Because despite not performing any direct operations, the ctor
      * must assume Direct so that it can exchange direct pointers with remote ctors
@@ -181,9 +181,9 @@ __device__ __forceinline__ void runTreeSplit(int tid, int nthreads, struct ncclD
      * into DirectRecv and DirectSend capabilities, this ctor would have both=0,
      * but the ctor above for tree roots would be DirectRecv=0 DirectSend=1.
      */
-      // Coverity reports that the callee treats &tree->up as an array.  However, due to the use of
-      // FanAsymmetric<n, 1>, only the first element is ever accessed, so it's fine.
-      // coverity[callee_ptr_arith:FALSE]
+    // Coverity reports that the callee treats &tree->up as an array.  However, due to the use of
+    // FanAsymmetric<n, 1>, only the first element is ever accessed, so it's fine.
+    // coverity[callee_ptr_arith:FALSE]
     Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_TREE_ARITY, 1>, /*Direct=*/1, Proto, 0> prims(
       tid, nthreadsSplit, tree->down, &tree->up, work->sendbuff, work->recvbuff, work->redOpArg,
       0 * Proto::MaxGroupWidth, 0, 0, work);
@@ -201,10 +201,10 @@ __device__ __forceinline__ void runTreeSplit(int tid, int nthreads, struct ncclD
       }
     }
   } else {
-      // Broadcast down. Max number of recv is 1, max number of send is 3 (binary tree + local)
-      // Coverity reports that the callee treats &tree->up as an array.  However, due to the use of
-      // FanAsymmetric<1, n>, only the first element is ever accessed, so it's fine.
-      // coverity[callee_ptr_arith:FALSE]
+    // Broadcast down. Max number of recv is 1, max number of send is 3 (binary tree + local)
+    // Coverity reports that the callee treats &tree->up as an array.  However, due to the use of
+    // FanAsymmetric<1, n>, only the first element is ever accessed, so it's fine.
+    // coverity[callee_ptr_arith:FALSE]
     Primitives<T, RedOp, FanAsymmetric<1, NCCL_MAX_TREE_ARITY>, /*Direct=*/1, Proto, 0> prims(
       tid - nthreadsSplit, nthreads - nthreadsSplit, &tree->up, tree->down, work->sendbuff, work->recvbuff,
       work->redOpArg, 1 * Proto::MaxGroupWidth, 0, 0, work);

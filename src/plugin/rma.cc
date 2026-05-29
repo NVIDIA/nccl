@@ -103,21 +103,33 @@ fail:
 
 static ncclResult_t ncclRmaPluginInit(struct ncclComm* comm, rmaPluginLib_t* pluginLib) {
   int ndev;
+  bool initCompleted = false;
   // Init must be called for each new comm to set the right context
   if (pluginLib->state >= ncclRmaPluginStateInitReady && pluginLib->ncclRma) {
-    if (pluginLib->ncclRma->init(&comm->rmaContext, comm->commHash, ncclDebugLog) != ncclSuccess) {
-      pluginLib->state = ncclRmaPluginStateDisabled;
-    }
+    if (pluginLib->ncclRma->init(&comm->rmaContext, comm->commHash, ncclDebugLog) != ncclSuccess) goto fail;
+    initCompleted = true;
   }
+
+  // Detection of the devices is only done when the plugin is being initialized the first time
   if (pluginLib->state == ncclRmaPluginStateInitReady && pluginLib->ncclRma) {
-    if (pluginLib->ncclRma->devices(&ndev) != ncclSuccess || ndev <= 0) {
-      pluginLib->state = ncclRmaPluginStateDisabled;
-    } else {
-      pluginLib->physDevs = ndev;
-      pluginLib->state = ncclRmaPluginStateEnabled;
-    }
+    if (pluginLib->ncclRma->devices(&ndev) != ncclSuccess || ndev <= 0) goto fail;
+    pluginLib->physDevs = ndev;
   }
+
+  pluginLib->state = ncclRmaPluginStateEnabled;
+  INFO(NCCL_INIT | NCCL_NET, "RMA/Plugin: Initialized plugin %s", pluginLib->name);
+
+exit:
   return ncclSuccess;
+fail:
+  if (initCompleted) {
+    pluginLib->ncclRma->finalize(comm->rmaContext);
+    comm->rmaContext = nullptr;
+  }
+  pluginLib->physDevs = 0;
+  pluginLib->state = ncclRmaPluginStateDisabled;
+  INFO(NCCL_INIT | NCCL_NET, "RMA/Plugin: Failed to initialize plugin %s", pluginLib->name);
+  goto exit;
 }
 
 static ncclResult_t ncclRmaPluginAssignToComm(struct ncclComm* comm, int pluginIndex, bool* isAssigned) {

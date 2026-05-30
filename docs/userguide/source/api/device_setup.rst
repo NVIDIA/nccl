@@ -205,6 +205,12 @@ ncclGinType_t
 
       GPUDirect Async Kernel-Initiated (GDAKI) GIN type.
 
+   .. c:macro:: NCCL_GIN_TYPE_GPI
+
+      GPU-Push Interface (GPI) GIN type. Requires SpectrumX - see
+      SpectrumX documentation for details. Added as an experimental
+      feature in NCCL 2.30.6.
+
 ncclGinConnectionType_t
 -----------------------
 

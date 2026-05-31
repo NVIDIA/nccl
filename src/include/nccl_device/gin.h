@@ -10,7 +10,7 @@
 #include "core.h"
 #include "gin/gin_device_common.h"
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 struct ncclGinCtx; // Definition in nccl_device/gin/gin_device_host_common.h
 template <unsigned>
 struct ncclGinCtx_M; // ...
@@ -121,7 +121,7 @@ using ncclGin = ncclGin_BackendMask<NCCL_GIN_BACKEND_MASK_ALL>;
 
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 struct ncclGin_C {
   ncclDevComm const& comm;
   uint32_t nConnections:8, connectionId:8, _ginBackend:8;

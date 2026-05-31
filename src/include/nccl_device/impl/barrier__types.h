@@ -10,7 +10,7 @@
 #include "../barrier.h"
 #include "../utility.h"
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 struct ncclBarrierSession_internal {
   Coop coop;

@@ -15,7 +15,7 @@
 #include "../coop.h"
 #include <type_traits>
 
-#if NCCL_CHECK_CUDACC && defined(__CUDACC_EXTENDED_LAMBDA__)
+#if defined(__CUDACC__) && defined(__CUDACC_EXTENDED_LAMBDA__)
 
 namespace nccl {
 namespace utility {
@@ -521,6 +521,6 @@ NCCL_DEVICE_INLINE void reduceCopy(Coop coop, SrcLambda srcLambda, int nSrc, Dst
 } // namespace utility
 } // namespace nccl
 
-#endif // NCCL_CHECK_CUDACC && __CUDACC_EXTENDED_LAMBDA__
+#endif // __CUDACC__ && __CUDACC_EXTENDED_LAMBDA__
 
 #endif // _NCCL_DEVICE_REDUCE_COPY__IMPL_H_

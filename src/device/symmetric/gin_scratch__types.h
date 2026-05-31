@@ -62,7 +62,7 @@ struct alignas(128) ncclGinInboxA2AState {
 };
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 struct ncclGinScratch_GetBufPtr {
   char* bufs;
   uint32_t nBufs_minus_1, bufSize_log2;
@@ -73,7 +73,7 @@ struct ncclGinScratch_GetBufPtr {
 };
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 struct ncclGinOutboxSession_internal {
   Coop coop;
@@ -116,7 +116,7 @@ struct ncclGinOutboxSession_internal {
 };
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 struct ncclGinInboxA2ASession_internal {
   Coop coop;

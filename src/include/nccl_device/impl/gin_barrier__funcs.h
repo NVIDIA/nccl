@@ -9,7 +9,7 @@
 #define _NCCL_DEVICE_GIN_BARRIER__FUNCS_H_
 #include "gin_barrier__types.h"
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::ncclGinBarrierSession(
   Coop coop, ncclGin net, ncclTeam team, ncclGinBarrierHandle handle, uint32_t barrierIndex)
@@ -19,14 +19,14 @@ NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::ncclGinBarrierSession(
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::ncclGinBarrierSession(Coop coop, ncclGin net, ncclTeamTagRail,
                                                                       uint32_t barrierIndex)
   : ncclGinBarrierSession(coop, net, ncclTeamRail(net.comm), net.comm.railGinBarrier, barrierIndex) {}
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::ncclGinBarrierSession(Coop coop, ncclGin net, ncclTeamTagWorld,
                                                                       uint32_t barrierIndex)
@@ -36,7 +36,7 @@ NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::ncclGinBarrierSession(Coop coop,
 // All-contexts constructors: build a single-context gin (context 0) for the signal/wait
 // path, then flip the `fenceAllContexts` flag so the fence iterates every GIN context on
 // the comm.
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::ncclGinBarrierSession(
   Coop coop, ncclGinAllContexts allCtx, ncclTeam team, ncclGinBarrierHandle handle, uint32_t barrierIndex)
@@ -46,26 +46,26 @@ NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::ncclGinBarrierSession(
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::ncclGinBarrierSession(Coop coop, ncclGinAllContexts allCtx,
                                                                       ncclTeamTagRail, uint32_t barrierIndex)
   : ncclGinBarrierSession(coop, allCtx, ncclTeamRail(allCtx.comm), allCtx.comm.railGinBarrier, barrierIndex) {}
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::ncclGinBarrierSession(Coop coop, ncclGinAllContexts allCtx,
                                                                       ncclTeamTagWorld, uint32_t barrierIndex)
   : ncclGinBarrierSession(coop, allCtx, ncclTeamWorld(allCtx.comm), allCtx.comm.worldGinBarrier, barrierIndex) {}
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::~ncclGinBarrierSession() {}
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 template <bool EnableTimeout>
 NCCL_DEVICE_INLINE ncclResult_t ncclGinBarrierSession_internal<Coop>::syncInternal(
@@ -165,14 +165,14 @@ exit:
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 NCCL_DEVICE_INLINE void ncclGinBarrierSession<Coop>::sync(Coop coop, cuda::memory_order ord, ncclGinFenceLevel fence) {
   (void)(this->template syncInternal</*EnableTimeout=*/false>(coop, ord, fence, 0ULL));
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 NCCL_DEVICE_INLINE ncclResult_t ncclGinBarrierSession<Coop>::sync(Coop coop, cuda::memory_order ord,
                                                                   ncclGinFenceLevel fence, uint64_t timeoutCycles) {
@@ -181,7 +181,7 @@ NCCL_DEVICE_INLINE ncclResult_t ncclGinBarrierSession<Coop>::sync(Coop coop, cud
 #endif
 
 // Free-function GIN barrier: thin wrappers around session construct + sync + destruct.
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 NCCL_DEVICE_INLINE void ncclGinBarrier(Coop coop, ncclGin gin, ncclTeam team, ncclGinBarrierHandle handle,
                                        uint32_t index, cuda::memory_order ord, ncclGinFenceLevel fence) {

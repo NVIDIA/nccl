@@ -48,7 +48,7 @@ struct CoopStride {
   static constexpr int value = 0;
 };
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 // Specialization for warp: always 32
 template <>
 struct CoopStride<ncclCoopWarp> {

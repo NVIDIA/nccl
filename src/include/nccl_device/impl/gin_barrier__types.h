@@ -16,7 +16,7 @@ struct ncclGinBarrierHandle {
   ncclDevResourceHandle_t unused;
 };
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 struct ncclGinBarrierSession_internal {
   Coop coop;

@@ -18,7 +18,7 @@
 #include <cuda_fp8.h>
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 
 namespace nccl {
 namespace utility {
@@ -845,6 +845,6 @@ NCCL_DEVICE_INLINE EltPack<__nv_bfloat16, 2> reducePack(OpSum<__nv_bfloat16> con
 } // namespace utility
 } // namespace nccl
 
-#endif // NCCL_CHECK_CUDACC
+#endif // __CUDACC__
 
 #endif // _NCCL_DEVICE_VECTOR__FUNCS_H_

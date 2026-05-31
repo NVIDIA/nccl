@@ -257,14 +257,14 @@ NCCL_EXTERN_C __host__ ncclTeam_t ncclTeamRail(ncclComm_t comm);
 // Get offset of resource buffer within `comm.resourceWindow`.
 NCCL_EXTERN_C NCCL_HOST_DEVICE_INLINE size_t ncclGetResourceBufferOffset(ncclDevResourceHandle_t h);
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 NCCL_DEVICE_INLINE ncclSymPtr<char> ncclGetResourceBuffer(ncclDevComm const&, ncclDevResourceHandle);
 #endif
 
 ////////////////////////////////////////////////////////////////////////////////
 // Window API:
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void* ncclGetLocalPointer(ncclWindow_t w, size_t offset);
 NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void* ncclGetLsaPointer(ncclWindow_t w, size_t offset, int peer);
 NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void* ncclGetPeerPointer(ncclWindow_t w, size_t offset, int peer);
@@ -274,7 +274,7 @@ NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void* ncclGetMultimemPointer(ncclWindow_t w,
 NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void* ncclGetLsaMultimemPointer(ncclWindow_t w, size_t offset, ncclDevComm const&);
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 // Convenience for combining ncclGet***Pointer() with resource handle.
 NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void* ncclGetResourceBufferLocalPointer(ncclDevComm const&, ncclDevResourceHandle);
 NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void* ncclGetResourceBufferLsaPointer(ncclDevComm const&, ncclDevResourceHandle,

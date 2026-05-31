@@ -12,7 +12,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 // ncclGinOutboxSession:
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 NCCL_DEVICE_INLINE ncclGinOutboxSession<Coop, ginBackendMask>::ncclGinOutboxSession(
   Coop coop, ncclGin_BackendMask<ginBackendMask> const& gin, ncclGinOutboxHandle handle, uint32_t index)
@@ -23,7 +23,7 @@ NCCL_DEVICE_INLINE ncclGinOutboxSession<Coop, ginBackendMask>::ncclGinOutboxSess
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 NCCL_DEVICE_INLINE ncclGinOutboxSession<Coop, ginBackendMask>::~ncclGinOutboxSession() {
   if (this->coop.thread_rank() == 0) {
@@ -33,7 +33,7 @@ NCCL_DEVICE_INLINE ncclGinOutboxSession<Coop, ginBackendMask>::~ncclGinOutboxSes
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 template <typename SubCoop>
 NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::apportion(
@@ -56,7 +56,7 @@ NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::apportion(
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::apportionRequests(Coop coop, int nReqs_log2_next) {
   if (this->state.nBufs_log2 != nReqs_log2_next) {
@@ -67,7 +67,7 @@ NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::apportionReq
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 template <typename SubCoop>
 NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::waitBufs(SubCoop subcoop, int i0, int n) {
@@ -81,7 +81,7 @@ NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::waitBufs(Sub
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 template <typename SubCoop>
 NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::waitRecentRequests(SubCoop subcoop) {
@@ -94,7 +94,7 @@ NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::waitRecentRe
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 NCCL_DEVICE_INLINE ncclSymPtr<char> ncclGinOutboxSession<Coop, ginBackendMask>::getBuf(int i) const {
   uint32_t id = this->state.cursor + i;
@@ -104,7 +104,7 @@ NCCL_DEVICE_INLINE ncclSymPtr<char> ncclGinOutboxSession<Coop, ginBackendMask>::
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 NCCL_DEVICE_INLINE ncclGinScratch_GetBufPtr ncclGinOutboxSession<Coop, ginBackendMask>::make_getBufPtr(int i0) const {
   ncclGinScratch_GetBufPtr ret;
@@ -116,7 +116,7 @@ NCCL_DEVICE_INLINE ncclGinScratch_GetBufPtr ncclGinOutboxSession<Coop, ginBacken
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::recordRequest(ncclTeam team, int peer, int i) {
   uint32_t id = this->state.cursor + i;
@@ -124,7 +124,7 @@ NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::recordReques
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::advance(Coop coop, int n) {
   coop.sync();
@@ -135,7 +135,7 @@ NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::advance(Coop
 ////////////////////////////////////////////////////////////////////////////////
 // ncclGinInboxA2ASession:
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 NCCL_DEVICE_INLINE ncclGinInboxA2ASession<Coop, ginBackendMask>::ncclGinInboxA2ASession(
   Coop coop, ncclGin_BackendMask<ginBackendMask> const& gin, ncclTeam team, ncclGinInboxA2AHandle handle,
@@ -149,7 +149,7 @@ NCCL_DEVICE_INLINE ncclGinInboxA2ASession<Coop, ginBackendMask>::ncclGinInboxA2A
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 NCCL_DEVICE_INLINE ncclGinInboxA2ASession<Coop, ginBackendMask>::~ncclGinInboxA2ASession() {
   if (this->coop.thread_rank() == 0) {
@@ -159,7 +159,7 @@ NCCL_DEVICE_INLINE ncclGinInboxA2ASession<Coop, ginBackendMask>::~ncclGinInboxA2
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 template <typename SubCoop>
 NCCL_DEVICE_INLINE void ncclGinInboxA2ASession<Coop, ginBackendMask>::apportion(
@@ -192,28 +192,28 @@ NCCL_DEVICE_INLINE void ncclGinInboxA2ASession<Coop, ginBackendMask>::apportion(
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 NCCL_DEVICE_INLINE int ncclGinInboxA2ASession<Coop, ginBackendMask>::getSendPeer(int step, bool step_lt_nPeers) const {
   return this->getPeer(/*sendNotRecv=*/true, step, step_lt_nPeers);
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 NCCL_DEVICE_INLINE int ncclGinInboxA2ASession<Coop, ginBackendMask>::getRecvPeer(int step, bool step_lt_nPeers) const {
   return this->getPeer(/*sendNotRecv=*/false, step, step_lt_nPeers);
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 NCCL_DEVICE_INLINE ncclSymPtr<char> ncclGinInboxA2ASession<Coop, ginBackendMask>::getBuf(int step) const {
   return this->getBufSymPtr(this->state.monoStep + step);
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 NCCL_DEVICE_INLINE ncclGinScratch_GetBufPtr ncclGinInboxA2ASession<Coop, ginBackendMask>::make_getBufPtr(
   int step0) const {
@@ -227,7 +227,7 @@ NCCL_DEVICE_INLINE ncclGinScratch_GetBufPtr ncclGinInboxA2ASession<Coop, ginBack
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 template <typename SubCoop, typename GetPtr, typename GetEltCount, typename GetCompletion, typename AfterPost>
 NCCL_DEVICE_INLINE void ncclGinInboxA2ASession<Coop, ginBackendMask>::postSends(SubCoop subcoop, int step0, int nSteps,
@@ -252,7 +252,7 @@ NCCL_DEVICE_INLINE void ncclGinInboxA2ASession<Coop, ginBackendMask>::postSends(
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 template <typename SubCoop>
 NCCL_DEVICE_INLINE void ncclGinInboxA2ASession<Coop, ginBackendMask>::waitRecvs(SubCoop subcoop, int step0,
@@ -264,7 +264,7 @@ NCCL_DEVICE_INLINE void ncclGinInboxA2ASession<Coop, ginBackendMask>::waitRecvs(
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 template <typename SubCoop>
 NCCL_DEVICE_INLINE void ncclGinInboxA2ASession<Coop, ginBackendMask>::finishRecvs(SubCoop subcoop, int step0,
@@ -282,7 +282,7 @@ NCCL_DEVICE_INLINE void ncclGinInboxA2ASession<Coop, ginBackendMask>::finishRecv
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 NCCL_DEVICE_INLINE void ncclGinInboxA2ASession<Coop, ginBackendMask>::endRound(Coop coop) {
   this->state.monoRound += 1;

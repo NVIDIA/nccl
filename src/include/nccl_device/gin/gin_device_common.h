@@ -97,7 +97,7 @@ struct ncclGinSignalDescriptor {
   bool isStrong;
 };
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 
 template <ncclNetDeviceType backend>
 struct ncclGinApi_Wait {
@@ -173,7 +173,7 @@ struct ncclGinApi_Flush {
 };
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <template <ncclNetDeviceType> typename ApiFn, typename... Arg>
 NCCL_DEVICE_INLINE static decltype(auto) ncclGinCallImpl(unsigned beMask, ncclGinCtx ctx, Arg&&... arg) {
   bool singleton = (beMask & (beMask - 1)) == 0;  // Only one bit set

@@ -15,7 +15,7 @@
 #include "nccl_device_wrapper.h"
 #include <new>
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 /* Session size getters */
 NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE size_t ncclLsaBarrierSession_C_size() { return sizeof(ncclLsaBarrierSession_C); }
 NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE size_t ncclGinBarrierSession_C_size() { return sizeof(ncclGinBarrierSession_C); }
@@ -143,6 +143,6 @@ NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void ncclBarrierSessionSync(
     ncclGinFenceLevel fence) {
     session->bar.sync(coop, order, fence);
 }
-#endif
+#endif //  __CUDACC__
 
 #endif // _NCCL_DEVICE_WRAPPER__IMPL_H_

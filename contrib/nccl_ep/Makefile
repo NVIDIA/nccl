@@ -7,12 +7,26 @@
 CXXSTD := -std=c++17
 include ../../makefiles/common.mk
 
-# Check that NVCC_GENCODE does not include compute capabilities below sm_90
-# Extract all sm_XX numbers and check if any is < 90
-SM_NUMBERS := $(shell echo '$(NVCC_GENCODE)' | grep -oE 'sm_([0-9]+)' | sed 's/sm_//' | sort -u)
-HAS_SM_BELOW_90 := $(shell for sm in $(SM_NUMBERS); do if [ $$sm -lt 90 ]; then echo yes; break; fi; done)
-ifeq ($(HAS_SM_BELOW_90),yes)
-  $(error ERROR: NVCC_GENCODE for NCCL_EP must include at least sm_90 (compute capability 9.0). Found incompatible compute capability. Current value: $(NVCC_GENCODE))
+# NCCL_EP requires sm_90+. If the caller supplied NVCC_GENCODE (env or command
+# line) use it as-is and let nvcc fail if it's below sm_90. Otherwise override
+# with the following values.
+NCCL_EP_CUDA12_GENCODE   = -gencode=arch=compute_90,code=sm_90
+NCCL_EP_CUDA12_8_GENCODE = -gencode=arch=compute_100,code=sm_100 \
+                           -gencode=arch=compute_120,code=sm_120
+NCCL_EP_CUDA13_GENCODE   = -gencode=arch=compute_110,code=sm_110
+NCCL_EP_CUDA12_PTX       = -gencode=arch=compute_90,code=compute_90
+NCCL_EP_CUDA13_PTX       = -gencode=arch=compute_120,code=compute_120
+
+ifeq ($(origin NVCC_GENCODE),file)
+  ifeq ($(shell test "0$(CUDA_MAJOR)" -ge 13; echo $$?),0)
+    NVCC_GENCODE := $(NCCL_EP_CUDA12_GENCODE) $(NCCL_EP_CUDA12_8_GENCODE) $(NCCL_EP_CUDA13_GENCODE) $(NCCL_EP_CUDA13_PTX)
+  else ifeq ($(shell test "0$(CUDA_MAJOR)" -eq 12 -a "0$(CUDA_MINOR)" -ge 8; echo $$?),0)
+    NVCC_GENCODE := $(NCCL_EP_CUDA12_GENCODE) $(NCCL_EP_CUDA12_8_GENCODE) $(NCCL_EP_CUDA13_PTX)
+  else ifeq ($(shell test "0$(CUDA_MAJOR)" -eq 11 -a "0$(CUDA_MINOR)" -ge 8 -o "0$(CUDA_MAJOR)" -gt 11; echo $$?),0)
+    NVCC_GENCODE := $(NCCL_EP_CUDA12_GENCODE) $(NCCL_EP_CUDA12_PTX)
+  else
+    $(error ERROR: NCCL_EP requires CUDA 11.8+ for sm_90 support. Got CUDA $(CUDA_MAJOR).$(CUDA_MINOR))
+  endif
 endif
 
 .PHONY: all clean lib ep_test ep_bench
@@ -146,12 +160,14 @@ $(LIBTARGET): $(ALL_OBJ) $(DEVGLUE_OBJ) | $(NCCL_EP_JIT_HEADER_TARGETS)
 
 # Create shared library (for Python ctypes)
 # Links against libnccl.so for NCCL symbols (ncclCommCuDevice, etc.)
-# Uses rpath so the library can find libnccl.so at runtime
+# No RUNPATH baked in: matches libnccl.so's convention. Callers resolve
+# libnccl.so.2 via LD_LIBRARY_PATH, ld.so.cache, or pre-dlopen with
+# RTLD_GLOBAL (nccl4py does the latter via cuda_pathfinder).
 # Embeds SONAME=libnccl_ep.so.MAJOR so consumers record the major-versioned name.
 $(SOLIBTARGET): $(ALL_OBJ) $(DEVGLUE_OBJ) | $(NCCL_EP_JIT_HEADER_TARGETS)
 	@echo "Creating shared library $@"
 	@mkdir -p $(dir $@)
-	$(NVCC) -shared $(NVCC_GENCODE) -Xlinker -soname=$(SOLIBSONAME) -o $@ $^ -L$(NCCL_LIBDIR) -lnccl -lcuda -Xlinker -rpath -Xlinker $(NCCL_LIBDIR) $(LDFLAGS)
+	$(NVCC) -shared $(NVCC_GENCODE) -Xlinker -soname=$(SOLIBSONAME) -o $@ $^ -L$(NCCL_LIBDIR) -lnccl -lcuda $(LDFLAGS)
 
 # Versioned-soname and unversioned symlinks (libnccl_ep.so.MAJOR, libnccl_ep.so).
 $(LIBDIR)/$(SOLIBSONAME): $(SOLIBTARGET)

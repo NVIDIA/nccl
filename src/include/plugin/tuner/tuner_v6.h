@@ -32,7 +32,7 @@ typedef struct {
   // Input/Output:
   //   - constants: tuner constants
   ncclResult_t (*init)(void** ctx, uint64_t commId, size_t nRanks, size_t nNodes, ncclDebugLogger_t logFunction,
-                      ncclNvlDomainInfo_v6_t* nvlDomainInfo, ncclTunerConstants_v6_t* constants);
+                       ncclNvlDomainInfo_v6_t* nvlDomainInfo, ncclTunerConstants_v6_t* constants);
 
   // Gets info (algo, protocol, number of ctas and threads) for a given collective.
   // Inputs:
@@ -56,9 +56,8 @@ typedef struct {
   // Also, the plugin is allowed to not set any output, or set only the
   // algorithm and protocol, but not only the algorithm or only the protocol.
   // Unset fields will be set automatically by NCCL.
-  ncclResult_t (*getCollInfo)(void* context, ncclFunc_t collType, size_t nBytes,
-                              int numPipeOps, float** collCostTable, int numAlgo, int numProto,
-                              int regBuff, int* nChannels);
+  ncclResult_t (*getCollInfo)(void* context, ncclFunc_t collType, size_t nBytes, int numPipeOps, float** collCostTable,
+                              int numAlgo, int numProto, int regBuff, int* nChannels);
 
   // Terminates the plugin and cleans up any resources that the plugin allocated.
   // context: tuner context object
@@ -77,8 +76,8 @@ typedef struct {
   //   - chunkSize: pointer to the chunk size computed by NCCL. The plugin can
   //                read and modify this value. NCCL will clamp the result to
   //                the maximum allowed chunk size based on buffer constraints.
-  ncclResult_t (*getChunkSize)(void* context, ncclFunc_t collType, size_t nBytes,
-                               int algo, int proto, int nChannels, size_t* chunkSize);
+  ncclResult_t (*getChunkSize)(void* context, ncclFunc_t collType, size_t nBytes, int algo, int proto, int nChannels,
+                               size_t* chunkSize);
 } ncclTuner_v6_t;
 
 #endif

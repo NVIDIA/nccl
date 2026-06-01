@@ -35,7 +35,6 @@ struct ncclCommProperties_v22902 {
 static_assert(offsetof(struct ncclCommProperties_v22902, ginType) == 34);
 static_assert(sizeof(struct ncclCommProperties_v22902) == 40);
 
-
 struct ncclDevComm_v22902 {
   int rank, nRanks;
   uint32_t nRanks_rcp32;
@@ -84,7 +83,6 @@ static_assert(offsetof(struct ncclDevComm_v22902, ginCounterCount) == 188);
 static_assert(offsetof(struct ncclDevComm_v22902, ginSignalShadows) == 192);
 static_assert(sizeof(struct ncclDevComm_v22902) == 200);
 
-
 static ncclResult_t ncclCommPropertiesFilter_v22902(ncclComm_t comm, struct ncclCommProperties* props) {
   // We don't provide backwards compatibility for GIN with 2.29.2.  If a communicator needs it, we indicate that
   // the Device API is not available.
@@ -108,7 +106,9 @@ static ncclResult_t ncclDevCommRequirementsFilter_v22902(ncclComm_t comm, ncclDe
   }
   if (userRequestedGin) {
     char compiledBuf[16], runtimeBuf[16];
-    WARN("The application was compiled with too old version of NCCL. It was compiled with NCCL version %s, but is running with NCCL library version %s. Because of its use of GIN device kernels, it needs to be recompiled, preferably with the same NCCL version that it will be running with.",
+    WARN("The application was compiled with too old version of NCCL. It was compiled with NCCL version %s, but is "
+         "running with NCCL library version %s. Because of its use of GIN device kernels, it needs to be recompiled, "
+         "preferably with the same NCCL version that it will be running with.",
          ncclVersionToString(reqs->version, compiledBuf, sizeof(compiledBuf)),
          ncclVersionToString(NCCL_VERSION_CODE, runtimeBuf, sizeof(runtimeBuf)));
     return ncclInvalidUsage;
@@ -149,7 +149,8 @@ static ncclResult_t ncclDevCommCopyOldToNew_v22902(ncclComm_t comm, struct ncclD
 }
 
 struct ncclDevCommCompat ncclDevCommCompat_v22902 = {
-  NCCL_VERSION(2, 29, 2), NCCL_VERSION(2, 29, 3), // minVersion, maxVersion
+  NCCL_VERSION(2, 29, 2),
+  NCCL_VERSION(2, 29, 3), // minVersion, maxVersion
   ncclCommPropertiesFilter_v22902,                // commPropertiesFilter
   ncclDevCommRequirementsFilter_v22902,           // devCommRequirementsFilter
   ncclDevCommCopyNewToOld_v22902,                 // devCommCopyNewToOld

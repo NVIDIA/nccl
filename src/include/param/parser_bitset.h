@@ -42,8 +42,10 @@ ncclResult_t bitsetResolve(const void* ctx, const char* input, ResultT& out) {
       for (const auto& opt : bc.options) {
         if (nccl::param::utils::iequals(opt.name, token)) {
           ResultT mask = static_cast<ResultT>(opt.value);
-          if (invert) res &= ~mask; else res |= mask;
-          found = true; break;
+          if (invert) res &= ~mask;
+          else res |= mask;
+          found = true;
+          break;
         }
       }
       if (!found) return ncclInvalidArgument;
@@ -56,7 +58,9 @@ ncclResult_t bitsetResolve(const void* ctx, const char* input, ResultT& out) {
 }
 
 template <typename OptionT, typename ResultT, size_t N>
-bool bitsetValidate(const void*, const ResultT&) { return true; }
+bool bitsetValidate(const void*, const ResultT&) {
+  return true;
+}
 
 template <typename OptionT, typename ResultT, size_t N>
 std::string bitsetToString(const void* ctx, const ResultT& value) {
@@ -72,9 +76,7 @@ std::string bitsetToString(const void* ctx, const ResultT& value) {
   }
 
   // Otherwise, decompose into individual bits
-  auto isSingleBit = [](ResultT v) -> bool {
-    return v != 0 && (v & (v - 1)) == 0;
-  };
+  auto isSingleBit = [](ResultT v) -> bool { return v != 0 && (v & (v - 1)) == 0; };
   for (const auto& opt : bc.options) {
     ResultT optVal = static_cast<ResultT>(opt.value);
     if (!isSingleBit(optVal)) continue;  // skip composite aliases like MOST
@@ -98,19 +100,20 @@ std::string bitsetToString(const void* ctx, const ResultT& value) {
 // cannot do bit-wise operation.
 template <typename OptionT, typename ResultT = std::make_unsigned_t<OptionT>, size_t N>
 // template <typename ResultT, typename OptionT, size_t N>
-ncclParamParser<ResultT> ncclParamBitsetOf(ncclOptionSet<OptionT, N> options,
-                                           char delimiter = ',') {
+ncclParamParser<ResultT> ncclParamBitsetOf(ncclOptionSet<OptionT, N> options, char delimiter = ',') {
   using namespace nccl::param::parser;
-  auto ctx = std::make_shared<bitsetCtx<OptionT, N>>(
-    bitsetCtx<OptionT, N>{std::move(options), delimiter});
+  auto ctx = std::make_shared<bitsetCtx<OptionT, N>>(bitsetCtx<OptionT, N>{std::move(options), delimiter});
   std::string d = "Comma-separated list of:";
   for (const auto& opt : ctx->options) {
     d += "\n        ";
     d += opt.name;
-    if (opt.desc != nullptr) { d += " - "; d += opt.desc; }
+    if (opt.desc != nullptr) {
+      d += " - ";
+      d += opt.desc;
+    }
   }
-  return {bitsetResolve<OptionT, ResultT, N>, bitsetValidate<OptionT, ResultT, N>,
-          bitsetToString<OptionT, ResultT, N>, std::move(ctx), std::move(d)};
+  return {bitsetResolve<OptionT, ResultT, N>, bitsetValidate<OptionT, ResultT, N>, bitsetToString<OptionT, ResultT, N>,
+          std::move(ctx), std::move(d)};
 }
 
 #endif /* PARAM_PARSER_BITSET_H_INCLUDED */

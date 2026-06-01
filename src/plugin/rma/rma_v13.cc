@@ -21,8 +21,7 @@ static ncclResult_t ncclRma_init(void** ctx, uint64_t commId, ncclDebugLogger_t 
   ncclNetProperties_t props;
   NCCLCHECK(ncclRma_v13->getProperties(0, &props));
   if (props.netDeviceType != NCCL_NET_DEVICE_GIN_PROXY) {
-    WARN("RMA v13 (%s) requires GIN PROXY type, got netDeviceType %d",
-          ncclRma_v13->name, props.netDeviceType);
+    WARN("RMA v13 (%s) requires GIN PROXY type, got netDeviceType %d", ncclRma_v13->name, props.netDeviceType);
     return ncclInternalError;
   }
   return ncclSuccess;
@@ -39,26 +38,28 @@ static ncclResult_t ncclRma_createContext(void* collComm, ncclRmaConfig_v14_t* c
   return ncclSuccess;
 }
 
-static ncclResult_t ncclRma_regMrSym(void* collComm, void* data, size_t size, int type, uint64_t mrFlags, void** mhandle) {
+static ncclResult_t ncclRma_regMrSym(void* collComm, void* data, size_t size, int type, uint64_t mrFlags,
+                                     void** mhandle) {
   void* unusedGinHandle;
   NCCLCHECK(ncclRma_v13->regMrSym(collComm, data, size, type, mrFlags, mhandle, &unusedGinHandle));
   return ncclSuccess;
 }
 
-static ncclResult_t ncclRma_regMrSymDmaBuf(void* collComm, void* data, size_t size, int type, uint64_t offset, int fd, uint64_t mrFlags, void** mhandle) {
+static ncclResult_t ncclRma_regMrSymDmaBuf(void* collComm, void* data, size_t size, int type, uint64_t offset, int fd,
+                                           uint64_t mrFlags, void** mhandle) {
   void* unusedGinHandle;
   NCCLCHECK(ncclRma_v13->regMrSymDmaBuf(collComm, data, size, type, offset, fd, mrFlags, mhandle, &unusedGinHandle));
   return ncclSuccess;
 }
 
 // Drop isStrongSignal. All signals in v13 are strong signals.
-static ncclResult_t ncclRma_iputSignal(void* rmaCtx, int context, uint64_t srcOff, void* srcMhandle,
-    size_t size, uint64_t dstOff, void* dstMhandle,
-    uint32_t rank, uint64_t signalOff, void* signalMhandle,
-    uint64_t signalValue, uint32_t signalOp, bool isStrongSignal, void** request) {
+static ncclResult_t ncclRma_iputSignal(void* rmaCtx, int context, uint64_t srcOff, void* srcMhandle, size_t size,
+                                       uint64_t dstOff, void* dstMhandle, uint32_t rank, uint64_t signalOff,
+                                       void* signalMhandle, uint64_t signalValue, uint32_t signalOp,
+                                       bool isStrongSignal, void** request) {
   (void)isStrongSignal;
-  return ncclRma_v13->iputSignal(rmaCtx, context, srcOff, srcMhandle, size, dstOff, dstMhandle,
-                                 rank, signalOff, signalMhandle, signalValue, signalOp, request);
+  return ncclRma_v13->iputSignal(rmaCtx, context, srcOff, srcMhandle, size, dstOff, dstMhandle, rank, signalOff,
+                                 signalMhandle, signalValue, signalOp, request);
 }
 
 ncclRma_t* getNcclRma_v13(void* lib) {
@@ -68,7 +69,7 @@ ncclRma_t* getNcclRma_v13(void* lib) {
     ncclRma_v13 = (ncclRma_v13_t*)ncclOsDlsym(lib, "ncclGinPlugin_v13");
   }
   if (ncclRma_v13) {
-    INFO(NCCL_INIT|NCCL_NET, "RMA/Plugin: Loaded rma plugin %s (v13)", ncclRma_v13->name);
+    INFO(NCCL_INIT | NCCL_NET, "RMA/Plugin: Loaded rma plugin %s (v13)", ncclRma_v13->name);
     ncclRma.name = ncclRma_v13->name;
     ncclRma.init = ncclRma_init;
     ncclRma.devices = ncclRma_v13->devices;

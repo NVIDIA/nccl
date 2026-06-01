@@ -22,7 +22,7 @@ static int ncclCuMemSupported = 0;
 
 // Determine whether CUMEM & VMM RDMA is supported on this platform
 int ncclIsCuMemSupported() {
-#if CUDART_VERSION < 11030 || defined (NCCL_OS_WINDOWS)
+#if CUDART_VERSION < 11030 || defined(NCCL_OS_WINDOWS)
   return 0;
 #else
   CUdevice currentDev;
@@ -36,7 +36,8 @@ int ncclIsCuMemSupported() {
   if (CUPFN(cuMemCreate) == NULL) return 0;
   CUCHECKGOTO(cuDeviceGet(&currentDev, cudaDev), ret, error);
   // Query device to see if CUMEM VMM support is available
-  CUCHECKGOTO(cuDeviceGetAttribute(&flag, CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED, currentDev), ret, error);
+  CUCHECKGOTO(cuDeviceGetAttribute(&flag, CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED, currentDev), ret,
+              error);
   if (!flag) return 0;
 error:
   return (ret == ncclSuccess);
@@ -46,13 +47,12 @@ error:
 int ncclCuMemEnable() {
   // NCCL_CUMEM_ENABLE=-2 means auto-detect CUMEM support
   int param = ncclParamCuMemEnable();
-  return  param >= 0 ? param : (param == -2 && ncclCuMemSupported);
+  return param >= 0 ? param : (param == -2 && ncclCuMemSupported);
 }
 
 static int ncclCumemHostEnable = -1;
 int ncclCuMemHostEnable() {
-  if (ncclCumemHostEnable != -1)
-    return ncclCumemHostEnable;
+  if (ncclCumemHostEnable != -1) return ncclCumemHostEnable;
 #if CUDART_VERSION < 12020
   ncclCumemHostEnable = 0;
   return ncclCumemHostEnable;
@@ -63,13 +63,10 @@ int ncclCuMemHostEnable() {
   CUDACHECKGOTO(cudaDriverGetVersion(&cudaDriverVersion), ret, error);
   if (cudaDriverVersion < 12020) {
     ncclCumemHostEnable = 0;
-  }
-  else {
+  } else {
     paramValue = ncclParamCuMemHostEnable();
-    if (paramValue != -1)
-      ncclCumemHostEnable = paramValue;
-    else
-      ncclCumemHostEnable = (cudaDriverVersion >= 12060) ? 1 : 0;
+    if (paramValue != -1) ncclCumemHostEnable = paramValue;
+    else ncclCumemHostEnable = (cudaDriverVersion >= 12060) ? 1 : 0;
     if (ncclCumemHostEnable) {
       // Verify that host allocations actually work.  Docker in particular is known to disable "get_mempolicy",
       // causing such allocations to fail (this can be fixed by invoking Docker with "--cap-add SYS_NICE").
@@ -93,8 +90,8 @@ int ncclCuMemHostEnable() {
       ALIGN_SIZE(size, granularity);
       if (CUPFN(cuMemCreate(&handle, size, &prop, 0)) != CUDA_SUCCESS) {
         INFO(NCCL_INIT, "cuMem host allocations do not appear to be working; falling back to a /dev/shm/ based "
-             "implementation. This could be due to the container runtime disabling NUMA support. "
-             "To disable this warning, set NCCL_CUMEM_HOST_ENABLE=0");
+                        "implementation. This could be due to the container runtime disabling NUMA support. "
+                        "To disable this warning, set NCCL_CUMEM_HOST_ENABLE=0");
         ncclCumemHostEnable = 0;
       } else {
         CUCHECK(cuMemRelease(handle));
@@ -107,7 +104,7 @@ error:
 #endif
 }
 
-#define DECLARE_CUDA_PFN(symbol,version) PFN_##symbol##_v##version pfn_##symbol = nullptr
+#define DECLARE_CUDA_PFN(symbol, version) PFN_##symbol##_v##version pfn_##symbol = nullptr
 
 #if CUDART_VERSION >= 11030
 /* CUDA Driver functions loaded with cuGetProcAddress for versioning */
@@ -172,38 +169,47 @@ bool ncclCudaLaunchBlocking = false;
 #if CUDART_VERSION >= 11030
 
 #if CUDART_VERSION >= 13000
-#define LOAD_SYM(symbol, version, ignore) do {                           \
+#define LOAD_SYM(symbol, version, ignore) \
+  do { \
     cudaDriverEntryPointQueryResult driverStatus = cudaDriverEntryPointSymbolNotFound; \
-    res = CUDACLEARERROR(cudaGetDriverEntryPointByVersion(#symbol, (void **) (&pfn_##symbol), version, cudaEnableDefault, &driverStatus)); \
+    res = CUDACLEARERROR(cudaGetDriverEntryPointByVersion(#symbol, (void**)(&pfn_##symbol), version, \
+                                                          cudaEnableDefault, &driverStatus)); \
     if (res != cudaSuccess || driverStatus != cudaDriverEntryPointSuccess) { \
-      if (!ignore) {                                                    \
+      if (!ignore) { \
         WARN("Retrieve %s version %d failed with %d status %d", #symbol, version, res, driverStatus); \
-        return ncclSystemError; }                                       \
-    } } while(0)
+        return ncclSystemError; \
+      } \
+    } \
+  } while (0)
 #elif CUDART_VERSION >= 12000
-#define LOAD_SYM(symbol, version, ignore) do {                           \
+#define LOAD_SYM(symbol, version, ignore) \
+  do { \
     cudaDriverEntryPointQueryResult driverStatus = cudaDriverEntryPointSymbolNotFound; \
-    res = CUDACLEARERROR(cudaGetDriverEntryPoint(#symbol, (void **) (&pfn_##symbol), cudaEnableDefault, &driverStatus)); \
+    res = CUDACLEARERROR(cudaGetDriverEntryPoint(#symbol, (void**)(&pfn_##symbol), cudaEnableDefault, &driverStatus)); \
     if (res != cudaSuccess || driverStatus != cudaDriverEntryPointSuccess) { \
-      if (!ignore) {                                                    \
+      if (!ignore) { \
         WARN("Retrieve %s failed with %d status %d", #symbol, res, driverStatus); \
-        return ncclSystemError; }                                       \
-    } } while(0)
+        return ncclSystemError; \
+      } \
+    } \
+  } while (0)
 #else
-#define LOAD_SYM(symbol, version, ignore) do {                           \
-    res = CUDACLEARERROR(cudaGetDriverEntryPoint(#symbol, (void **) (&pfn_##symbol), cudaEnableDefault)); \
+#define LOAD_SYM(symbol, version, ignore) \
+  do { \
+    res = CUDACLEARERROR(cudaGetDriverEntryPoint(#symbol, (void**)(&pfn_##symbol), cudaEnableDefault)); \
     if (res != cudaSuccess) { \
-      if (!ignore) {                                                    \
-        WARN("Retrieve %s failed with %d", #symbol, res);               \
-        return ncclSystemError; }                                       \
-    } } while(0)
+      if (!ignore) { \
+        WARN("Retrieve %s failed with %d", #symbol, res); \
+        return ncclSystemError; \
+      } \
+    } \
+  } while (0)
 #endif
 
 /*
   Load the CUDA symbols
  */
 static ncclResult_t cudaPfnFuncLoader(void) {
-
   cudaError_t res;
 
   LOAD_SYM(cuGetErrorString, 6000, 0);
@@ -264,7 +270,7 @@ static ncclResult_t initResult;
 static void initOnceFunc() {
   do {
     const char* val = ncclGetEnv("CUDA_LAUNCH_BLOCKING");
-    ncclCudaLaunchBlocking = val!=nullptr && val[0]!=0 && !(val[0]=='0' && val[1]==0);
+    ncclCudaLaunchBlocking = val != nullptr && val[0] != 0 && !(val[0] == '0' && val[1] == 0);
   } while (0);
 
   ncclResult_t ret = ncclSuccess;
@@ -281,12 +287,12 @@ static void initOnceFunc() {
     goto error;
   }
 
-  #if CUDART_VERSION >= 11030
+#if CUDART_VERSION >= 11030
   if (cudaPfnFuncLoader()) {
     WARN("CUDA some PFN functions not found in the library");
     goto error;
   }
-  #endif
+#endif
 
   // Determine whether we support the cuMem APIs or not
   ncclCuMemSupported = ncclIsCuMemSupported();

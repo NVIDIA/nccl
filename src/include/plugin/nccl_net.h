@@ -19,8 +19,8 @@
 #define NCCL_NET_OPTIONAL_RECV_COMPLETION 0x1
 #define NCCL_NET_MULTI_REQUEST 0x2
 
-#define MAX_NET_SIZE (1024*1024*1024L) // Rather than send INT_MAX which is 2G-1, send a power of two.
-#define MAX_COLLNET_SIZE (512*1024*1024L) //Set for initial collent plugins when size was not dynamically queried
+#define MAX_NET_SIZE (1024 * 1024 * 1024L) // Rather than send INT_MAX which is 2G-1, send a power of two.
+#define MAX_COLLNET_SIZE (512 * 1024 * 1024L) // Set for initial collent plugins when size was not dynamically queried
 
 #define NCCL_PTR_HOST 0x1
 #define NCCL_PTR_CUDA 0x2

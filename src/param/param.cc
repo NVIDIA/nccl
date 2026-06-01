@@ -13,13 +13,11 @@
 
 #include <unordered_set>
 
-DEFINE_NCCL_PARAM(ncclParamDumpAllFlag, bool, NCCL_PARAM_DUMP_ALL, false,
-                  NCCL_PARAM_FLAG_NONE, NCCL_PARAM_DEFAULT,
+DEFINE_NCCL_PARAM(ncclParamDumpAllFlag, bool, NCCL_PARAM_DUMP_ALL, false, NCCL_PARAM_FLAG_NONE, NCCL_PARAM_DEFAULT,
                   "Print all parameters including private ones");
 
 using ncclStringSet = std::unordered_set<std::string>;
-DEFINE_NCCL_PARAM(ncclParamNoCacheStr, const char *, NCCL_NO_CACHE, nullptr,
-                  NCCL_PARAM_FLAG_CACHED, NCCL_PARAM_DEFAULT,
+DEFINE_NCCL_PARAM(ncclParamNoCacheStr, const char*, NCCL_NO_CACHE, nullptr, NCCL_PARAM_FLAG_CACHED, NCCL_PARAM_DEFAULT,
                   "Comma-separated list of param keys to disable caching (or ALL)");
 
 extern "C" bool ncclParamIsCacheDisabled(const char* key) {
@@ -46,8 +44,7 @@ extern "C" bool ncclParamIsCacheDisabled(const char* key) {
 // a single symbol instead of requiring ncclInitEnv + ncclEnvPluginGetEnv
 // to be exported.
 #include "env.h"
-extern "C" const char* ncclParamEnvPluginGet(const char* key,
-                                                                               bool env_init) {
+extern "C" const char* ncclParamEnvPluginGet(const char* key, bool env_init) {
   if (env_init) {
     // regular parameters will init env plugins before reading env
     ncclInitEnv();
@@ -57,4 +54,3 @@ extern "C" const char* ncclParamEnvPluginGet(const char* key,
     return ncclEnvPluginInitialized() ? ncclEnvPluginGetEnv(key) : std::getenv(key);
   }
 }
-

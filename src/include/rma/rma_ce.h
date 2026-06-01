@@ -16,18 +16,18 @@ struct ncclComm;
 struct ncclRmaArgs;
 
 struct ncclRmaCeInitTask {
-  struct ncclRmaCeInitTask *next;
+  struct ncclRmaCeInitTask* next;
   struct ncclComm* comm;
 };
 
 struct ncclRmaCeCtx {
-  struct ncclComm *comm;
+  struct ncclComm* comm;
 
   // Host per-rank sequence numbers for non-graph signal operations.
   uint64_t* signalOpSeqs;
   // Device staging slots for non-graph signal values. Indexed by signal op
   // within the current CE batch chunk, with capacity comm->nRanks.
-  uint64_t *signalOpSeqsDev;
+  uint64_t* signalOpSeqsDev;
   // Host buffer to track the expected values of the non-graph signals
   uint64_t* signalsHost;
 
@@ -40,19 +40,18 @@ struct ncclRmaCeCtx {
   //   [2*nRanks+2 .. 3*nRanks+1]   graph per-rank ack flags
   // Total: (3*nRanks + 2) * sizeof(uint64_t)
   struct ncclDevrWindow* signalsWin;
-  uint64_t *signalsDev;       // non-graph per-rank signals
-  uint64_t *graphSignalsDev;  // graph per-rank signals
-  uint64_t *graphAckDev;      // graph per-rank ack flags
+  uint64_t* signalsDev;       // non-graph per-rank signals
+  uint64_t* graphSignalsDev;  // graph per-rank signals
+  uint64_t* graphAckDev;      // graph per-rank ack flags
   size_t signalOffset;        // byte offset of non-graph signals
   size_t graphSignalOffset;   // byte offset of graph signals
   size_t graphAckOffset;      // byte offset of graph ack flags
 
   // Device-resident constants for graph-safe D2D signal/ack writes
-  uint64_t *signalConstDev;
-  uint64_t *signalConstOneDev;
-  uint64_t *signalConstZeroDev;
+  uint64_t* signalConstDev;
+  uint64_t* signalConstOneDev;
+  uint64_t* signalConstZeroDev;
 };
-
 
 struct ncclRmaCeState {
   bool initialized;

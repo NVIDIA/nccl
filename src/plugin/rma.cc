@@ -29,11 +29,11 @@ getNcclRma_t* getNcclRma[NCCL_RMA_VERSION_COUNT] = {getNcclRma_v14, getNcclRma_v
 #define NCCL_RMA_NUM_INTERNAL_PLUGINS 1
 
 typedef enum ncclRmaPluginState {
-  ncclRmaPluginStateDisabled        = -2,       // Plugin library failed to initialize
-  ncclRmaPluginStateLoadFailed      = -1,       // Plugin library failed to load
-  ncclRmaPluginStateLoadReady       = 0,        // Plugin library is ready to be loaded
-  ncclRmaPluginStateInitReady       = 1,        // Plugin library is loaded and ready to be initialized
-  ncclRmaPluginStateEnabled         = 2,        // Plugin library is loaded and initialized
+  ncclRmaPluginStateDisabled = -2,       // Plugin library failed to initialize
+  ncclRmaPluginStateLoadFailed = -1,       // Plugin library failed to load
+  ncclRmaPluginStateLoadReady = 0,        // Plugin library is ready to be loaded
+  ncclRmaPluginStateInitReady = 1,        // Plugin library is loaded and ready to be initialized
+  ncclRmaPluginStateEnabled = 2,        // Plugin library is loaded and initialized
 } ncclRmaPluginState_t;
 
 #define MAX_STR_LEN 255
@@ -48,13 +48,13 @@ typedef struct rmaPluginLib {
 } rmaPluginLib_t;
 
 static int pluginCount = 0;
-static rmaPluginLib_t pluginLibs[NCCL_RMA_MAX_PLUGINS] = { 0 };
+static rmaPluginLib_t pluginLibs[NCCL_RMA_MAX_PLUGINS] = {0};
 static std::mutex pluginMutex;
 static std::once_flag initPluginLibsOnceFlag;
 
 static ncclResult_t ncclRmaPluginUnload(rmaPluginLib_t* pluginLib) {
   if (pluginLib->dlHandle && pluginLib->refCount == 0) {
-    INFO(NCCL_DESTROY|NCCL_NET, "RMA/Plugin: Unloading plugin %s", pluginLib->name);
+    INFO(NCCL_DESTROY | NCCL_NET, "RMA/Plugin: Unloading plugin %s", pluginLib->name);
     NCCLCHECK(ncclClosePluginLib(pluginLib->dlHandle, ncclPluginTypeRma));
 
     // Reset fields but preserve name, to be reused when reloading
@@ -68,7 +68,8 @@ static ncclResult_t ncclRmaPluginUnload(rmaPluginLib_t* pluginLib) {
 }
 
 static ncclResult_t ncclRmaPluginLoad(rmaPluginLib_t* pluginLib) {
-  // Open library. NET plugin dlHandle should be already set.
+  // Entries borrowed from GIN/NET may already have a handle;
+  // after unload, reopen the same library by its saved name/path.
   if (pluginLib->dlHandle == NULL) {
     pluginLib->dlHandle = ncclOpenRmaPluginLib(pluginLib->name);
     if (pluginLib->dlHandle == nullptr) goto fail;
@@ -84,14 +85,14 @@ static ncclResult_t ncclRmaPluginLoad(rmaPluginLib_t* pluginLib) {
   if (pluginLib->ncclRma == nullptr) goto fail;
 
   pluginLib->state = ncclRmaPluginStateInitReady;
-  INFO(NCCL_INIT|NCCL_NET, "RMA/Plugin: Successfully loaded external plugin %s",
+  INFO(NCCL_INIT | NCCL_NET, "RMA/Plugin: Successfully loaded external plugin %s",
        (ncclPluginLibPaths[ncclPluginTypeRma] ? ncclPluginLibPaths[ncclPluginTypeRma] : pluginLib->name));
 exit:
   return ncclSuccess;
 fail:
-  INFO(NCCL_INIT|NCCL_NET, "RMA/Plugin: Failed to load external plugin %s, dlHandle: %p, ncclRma: %p",
-         (ncclPluginLibPaths[ncclPluginTypeRma] ? ncclPluginLibPaths[ncclPluginTypeRma] : pluginLib->name),
-         pluginLib->dlHandle, pluginLib->ncclRma);
+  INFO(NCCL_INIT | NCCL_NET, "RMA/Plugin: Failed to load external plugin %s, dlHandle: %p, ncclRma: %p",
+       (ncclPluginLibPaths[ncclPluginTypeRma] ? ncclPluginLibPaths[ncclPluginTypeRma] : pluginLib->name),
+       pluginLib->dlHandle, pluginLib->ncclRma);
   if (pluginLib->dlHandle) {
     NCCLCHECK(ncclClosePluginLib(pluginLib->dlHandle, ncclPluginTypeRma));
   }
@@ -125,7 +126,7 @@ static ncclResult_t ncclRmaPluginAssignToComm(struct ncclComm* comm, int pluginI
   *isAssigned = false;
 
   if (pluginLibs[pluginIndex].state >= ncclRmaPluginStateEnabled) {
-    INFO(NCCL_INIT|NCCL_NET, "RMA/Plugin: Assigned plugin %s to comm", pluginLibs[pluginIndex].ncclRma->name);
+    INFO(NCCL_INIT | NCCL_NET, "RMA/Plugin: Assigned plugin %s to comm", pluginLibs[pluginIndex].ncclRma->name);
     comm->rmaState.rmaProxyState.ncclRma = pluginLibs[pluginIndex].ncclRma;
     comm->rmaState.rmaProxyState.rmaVersion = pluginLibs[pluginIndex].version;
     comm->rmaPluginIndex = pluginIndex;
@@ -138,16 +139,17 @@ static ncclResult_t ncclRmaPluginAssignToComm(struct ncclComm* comm, int pluginI
 static ncclResult_t ncclRmaPluginDisableOtherExternal(int pluginIndex) {
   // Only if an external plugin is enabled, disable other external plugins
   if (pluginIndex >= (pluginCount - NCCL_RMA_NUM_INTERNAL_PLUGINS)) return ncclSuccess;
-  char names[MAX_STR_LEN*(NCCL_RMA_MAX_PLUGINS - NCCL_RMA_NUM_INTERNAL_PLUGINS)] = { 0 };
+  char names[MAX_STR_LEN * (NCCL_RMA_MAX_PLUGINS - NCCL_RMA_NUM_INTERNAL_PLUGINS)] = {0};
   for (int i = 0; i < (pluginCount - NCCL_RMA_NUM_INTERNAL_PLUGINS); i++) {
     if (i != pluginIndex && pluginLibs[i].state >= ncclRmaPluginStateEnabled) {
       // Append all disabled plugin names to a string
-      snprintf(names+strlen(names), sizeof(names)-strlen(names), (strlen(names) == 0) ? "%s" : ", %s", pluginLibs[i].name);
+      snprintf(names + strlen(names), sizeof(names) - strlen(names), (strlen(names) == 0) ? "%s" : ", %s",
+               pluginLibs[i].name);
       pluginLibs[i].state = ncclRmaPluginStateDisabled;
     }
   }
-  if(strlen(names) > 0) {
-    INFO(NCCL_INIT|NCCL_NET, "RMA/Plugin: Disabling external plugins: %s", names);
+  if (strlen(names) > 0) {
+    INFO(NCCL_INIT | NCCL_NET, "RMA/Plugin: Disabling external plugins: %s", names);
   }
   return ncclSuccess;
 }
@@ -163,26 +165,28 @@ static void initPluginLibsOnceFunc() {
   memset(pluginLibs, 0, NCCL_RMA_MAX_PLUGINS * sizeof(rmaPluginLib_t));
   envRmaPlugin = ncclGetEnv("NCCL_RMA_PLUGIN");
   if (envRmaPlugin) {
-    INFO(NCCL_ENV|NCCL_NET, "NCCL_RMA_PLUGIN set by environment to %s", envRmaPlugin);
-    if (strcasecmp(envRmaPlugin, "none") == 0)
-      envRmaPlugin = "";
+    INFO(NCCL_ENV | NCCL_NET, "NCCL_RMA_PLUGIN set by environment to %s", envRmaPlugin);
+    if (strcasecmp(envRmaPlugin, "none") == 0) envRmaPlugin = "";
     envRmaPluginList = strdup(envRmaPlugin);
     // Iterate over list until the list is empty
     rmaPluginName = strtok_r(envRmaPluginList, ",", &savePtr);
-    while(rmaPluginName) {
+    while (rmaPluginName) {
       // So, we can have at most( NCCL_RMA_MAX_PLUGINS - (NCCL_RMA_NUM_RESERVED_PLUGINS)) in the NCCL_RMA_PLUGIN list
       if (pluginCounter >= (NCCL_RMA_MAX_PLUGINS - NCCL_RMA_NUM_RESERVED_PLUGINS)) {
-        INFO(NCCL_NET|NCCL_ENV,"NCCL_RMA_PLUGIN list contains more than %d plugins, ignoring the rest", (NCCL_RMA_MAX_PLUGINS - NCCL_RMA_NUM_RESERVED_PLUGINS));
+        INFO(NCCL_NET | NCCL_ENV, "NCCL_RMA_PLUGIN list contains more than %d plugins, ignoring the rest",
+             (NCCL_RMA_MAX_PLUGINS - NCCL_RMA_NUM_RESERVED_PLUGINS));
         break;
       }
       // need to leave space for the name + "\n"
-      if ((strlen(rmaPluginName)+1) <= MAX_STR_LEN) {
+      if ((strlen(rmaPluginName) + 1) <= MAX_STR_LEN) {
         pluginLibs[pluginCounter].state = ncclRmaPluginStateLoadReady;
         pluginLibs[pluginCounter].refCount = ncclParamRmaPluginRefCount();
         strcpy(pluginLibs[pluginCounter].name, rmaPluginName);
         pluginCounter++;
       } else {
-        INFO(NCCL_NET|NCCL_ENV,"NCCL_RMA_PLUGIN list contains a plugin name %s longer than %d characters, ignoring it.", rmaPluginName, MAX_STR_LEN);
+        INFO(NCCL_NET | NCCL_ENV,
+             "NCCL_RMA_PLUGIN list contains a plugin name %s longer than %d characters, ignoring it.", rmaPluginName,
+             MAX_STR_LEN);
       }
       rmaPluginName = strtok_r(nullptr, ",", &savePtr);
     }
@@ -197,12 +201,12 @@ static void initPluginLibsOnceFunc() {
   // check if the GIN plugin has RMA support
   if ((pluginLibs[pluginCounter].dlHandle = ncclGetGinPluginLib(ncclPluginTypeRma)) != NULL) {
     pluginLibs[pluginCounter].state = ncclRmaPluginStateLoadReady;
-    pluginCounter++;
+    strcpy(pluginLibs[pluginCounter++].name, ncclGetPluginLibName(ncclPluginTypeRma));
   }
   // Also check if the NET plugin has RMA support
   if ((pluginLibs[pluginCounter].dlHandle = ncclGetNetPluginLib(ncclPluginTypeRma)) != NULL) {
     pluginLibs[pluginCounter].state = ncclRmaPluginStateLoadReady;
-    pluginCounter++;
+    strcpy(pluginLibs[pluginCounter++].name, ncclGetPluginLibName(ncclPluginTypeRma));
   }
 
   // Add internal ib plugin
@@ -214,7 +218,9 @@ static void initPluginLibsOnceFunc() {
 }
 
 static ncclResult_t ncclRmaPluginFinalize(struct ncclComm* comm, int pluginIndex) {
-  if (pluginLibs[pluginIndex].ncclRma && pluginLibs[pluginIndex].state == ncclRmaPluginStateEnabled) NCCLCHECK(pluginLibs[pluginIndex].ncclRma->finalize(comm->rmaContext));
+  if (pluginLibs[pluginIndex].ncclRma && pluginLibs[pluginIndex].state == ncclRmaPluginStateEnabled) {
+    NCCLCHECK(pluginLibs[pluginIndex].ncclRma->finalize(comm->rmaContext));
+  }
   pluginLibs[pluginIndex].refCount--;
   if (pluginIndex < (pluginCount - NCCL_RMA_NUM_INTERNAL_PLUGINS)) {
     NCCLCHECK(ncclRmaPluginUnload(&pluginLibs[pluginIndex]));
@@ -228,7 +234,8 @@ ncclResult_t ncclRmaInit(struct ncclComm* comm) {
   std::call_once(initPluginLibsOnceFlag, initPluginLibsOnceFunc);
   std::lock_guard<std::mutex> lock(pluginMutex);
   for (int pluginIndex = 0; pluginIndex < pluginCount; pluginIndex++) {
-    if (pluginIndex < (pluginCount - NCCL_RMA_NUM_INTERNAL_PLUGINS) && pluginLibs[pluginIndex].state == ncclRmaPluginStateLoadReady) {
+    if (pluginIndex < (pluginCount - NCCL_RMA_NUM_INTERNAL_PLUGINS) &&
+        pluginLibs[pluginIndex].state == ncclRmaPluginStateLoadReady) {
       NCCLCHECK(ncclRmaPluginLoad(&pluginLibs[pluginIndex]));
     }
     if (pluginLibs[pluginIndex].state >= ncclRmaPluginStateInitReady) {
@@ -251,7 +258,7 @@ ncclResult_t ncclRmaInit(struct ncclComm* comm) {
   if (initialized) {
     NCCLCHECK(ncclGinProxyInit(comm));
   }
-  if (!initialized) INFO(NCCL_INIT|NCCL_NET, "RMA/Plugin: Failed to initialize any plugin");
+  if (!initialized) INFO(NCCL_INIT | NCCL_NET, "RMA/Plugin: Failed to initialize any plugin");
   return ncclSuccess;
 }
 
@@ -271,8 +278,7 @@ ncclResult_t ncclRmaFinalize(struct ncclComm* comm) {
 }
 
 ncclResult_t ncclRmaGetDevCount(int pluginIndex, int* nPhysDevs, int* nVirtDevs) {
-  if (pluginLibs[pluginIndex].state != ncclRmaPluginStateEnabled ||
-     pluginLibs[pluginIndex].physDevs == 0) goto fail;
+  if (pluginLibs[pluginIndex].state != ncclRmaPluginStateEnabled || pluginLibs[pluginIndex].physDevs == 0) goto fail;
   // lock not needed as it's called within a lock already in ncclTopoGetSystem
   *nPhysDevs = pluginLibs[pluginIndex].physDevs;
   return ncclSuccess;

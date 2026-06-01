@@ -19,11 +19,11 @@
 // ncclParamParser: Runtime parser interface ncclParam depends on
 template <typename T>
 struct ncclParamParser {
-  using resolveFn_t  = ncclResult_t(*)(const void*, const char*, T&);
-  using validateFn_t = bool(*)(const void*, const T&);
-  using toStringFn_t = std::string(*)(const void*, const T&);
+  using resolveFn_t = ncclResult_t (*)(const void*, const char*, T&);
+  using validateFn_t = bool (*)(const void*, const T&);
+  using toStringFn_t = std::string (*)(const void*, const T&);
 
-  resolveFn_t  resolveFn  = nullptr;
+  resolveFn_t resolveFn = nullptr;
   validateFn_t validateFn = nullptr;
   toStringFn_t toStringFn = nullptr;
   std::shared_ptr<const void> ctx;  // owns factory state; nullptr for stateless parsers
@@ -39,12 +39,16 @@ struct ncclParamParser {
   std::string toString(const T& val) const {
     return toStringFn(ctx.get(), val);
   }
-  explicit operator bool() const { return resolveFn != nullptr; }
+  explicit operator bool() const {
+    return resolveFn != nullptr;
+  }
 };
 
 // Empty braces yield a null ncclParamParser<T>; the ncclParam constructor
 // detects this and fills from ncclParamDefault<T>().
-#define NCCL_PARAM_DEFAULT {}
+#define NCCL_PARAM_DEFAULT \
+  { \
+  }
 
 // Option Builder for enum or bitset types
 //
@@ -69,9 +73,15 @@ template <typename T, size_t N>
 struct ncclOptionSet {
   std::array<ncclOption<T>, N> options;
 
-  constexpr const ncclOption<T>* begin() const { return options.data(); }
-  constexpr const ncclOption<T>* end() const { return options.data() + N; }
-  constexpr size_t size() const { return N; }
+  constexpr const ncclOption<T>* begin() const {
+    return options.data();
+  }
+  constexpr const ncclOption<T>* end() const {
+    return options.data() + N;
+  }
+  constexpr size_t size() const {
+    return N;
+  }
 };
 
 // assert no two options share the same name.

@@ -209,15 +209,17 @@ See the description of :c:func:`ncclCommWindowRegister` and :c:func:`ncclCommWin
 Zero-CTA Optimization
 ------------------------
 
-Since NCCL version 2.28, NCCL supports zero-CTA optimization. Zero-CTA optimization aims to avoid the use of CTA for communication and to overlap communication and computation.
+NCCL supports zero-CTA optimization to avoid the use of CTA for communication and to overlap communication and computation.
 
-Current zero-CTA optimization supports using the Copy Engine (CE) to perform the communication. The following are the requirements to enable zero-CTA optimization with CE:
+Zero-CTA over NVLink with Copy Engine (CE) is supported since NCCL 2.28; zero-CTA across the network (CPU proxy inter-node and CE intra-node) is supported since NCCL 2.30.6. The following are the requirements to enable zero-CTA optimization:
 
  * CUDA driver version >= 12.5
- * Collectives run within a single NVL or MNNVL domain (does not support network, e.g., IB/ROCE)
  * The buffer is symmetrically registered with the NCCL window
  * The communicator is configured with the ``NCCL_CTA_POLICY_ZERO`` flag (please see :ref:`cta_policy_flags`)
- * Supported collectives are AlltoAll, AllGather, Scatter, and Gather
+ * Supported collectives:
+
+   * Within a single NVL or MNNVL domain: AlltoAll, AllGather, Scatter, and Gather
+   * Across the network: AlltoAll and AllGather
 
 The following example shows how to enable zero-CTA optimization:
 

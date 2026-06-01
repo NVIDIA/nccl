@@ -58,8 +58,7 @@ ncclResult_t ncclNetInit(struct ncclComm* comm) {
   // Initialize the socket transport to enumerate network interfaces.
   ncclNetCommConfig_t commConfig = {};
   commConfig.trafficClass = NCCL_NET_TRAFFIC_CLASS_UNDEF;
-  NCCLCHECK(comm->ncclNet->init(&comm->netContext, comm->commHash,
-                                 &commConfig, ncclDebugLog, NULL));
+  NCCLCHECK(comm->ncclNet->init(&comm->netContext, comm->commHash, &commConfig, ncclDebugLog, NULL));
 
   {
     std::lock_guard<std::mutex> lock(winNetInitMutex);
@@ -84,8 +83,7 @@ ncclResult_t ncclNetInitFromParent(struct ncclComm* comm, struct ncclComm* paren
 }
 
 ncclResult_t ncclNetFinalize(struct ncclComm* comm) {
-  if (comm->ncclNet && comm->netContext)
-    NCCLCHECK(comm->ncclNet->finalize(comm->netContext));
+  if (comm->ncclNet && comm->netContext) NCCLCHECK(comm->ncclNet->finalize(comm->netContext));
   return ncclSuccess;
 }
 
@@ -145,7 +143,7 @@ ncclResult_t ncclCollNetSetVirtDevCount(int netPluginIndex, int nVirtDev) {
 
 /* GIN requirement/create stubs (implemented in gin_barrier.cc and gin_scratch.cc on Linux only) */
 ncclResult_t ncclGinBarrierCreateRequirement(ncclComm_t comm, ncclTeam_t team, int nBarriers,
-                                            ncclGinBarrierHandle_t* outHandle, ncclDevResourceRequirements_t* outReq) {
+                                             ncclGinBarrierHandle_t* outHandle, ncclDevResourceRequirements_t* outReq) {
   (void)comm;
   (void)team;
   (void)nBarriers;
@@ -154,8 +152,8 @@ ncclResult_t ncclGinBarrierCreateRequirement(ncclComm_t comm, ncclTeam_t team, i
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinOutboxCreateRequirement(int nBlocks, int size_log2,
-                                            ncclGinOutboxHandle* outHandle, ncclDevResourceRequirements_t* outReq) {
+ncclResult_t ncclGinOutboxCreateRequirement(int nBlocks, int size_log2, ncclGinOutboxHandle* outHandle,
+                                            ncclDevResourceRequirements_t* outReq) {
   (void)nBlocks;
   (void)size_log2;
   (void)outHandle;
@@ -190,7 +188,8 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequirements const* reqs, struct ncclDevComm* devComm) {
+ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequirements const* reqs,
+                                 struct ncclDevComm* devComm) {
   (void)comm;
   (void)reqs;
   (void)devComm;
@@ -205,8 +204,8 @@ ncclResult_t ncclGinDevCommFree(struct ncclComm* comm, struct ncclDevComm const*
 
 ncclResult_t ncclGinRegister(struct ncclComm* comm, void* address, size_t size,
                              void* ginHostWins[NCCL_GIN_MAX_CONNECTIONS],
-                             ncclGinWindow_t ginDevWins[NCCL_GIN_MAX_CONNECTIONS], int winFlags,
-                             bool multiSegment, int memType) {
+                             ncclGinWindow_t ginDevWins[NCCL_GIN_MAX_CONNECTIONS], int winFlags, bool multiSegment,
+                             int memType) {
   (void)comm;
   (void)address;
   (void)size;
@@ -265,9 +264,8 @@ int64_t ncclParamGinEnable(void) {
 /* --------------------------------------------------------------------------
  * Profiler plugin stubs and globals
  * -------------------------------------------------------------------------- */
-thread_local ncclProfilerApiState_t ncclProfilerApiState = {
-  0, 0, ncclProfilerGroupApiStartStateReset, nullptr, nullptr, nullptr
-};
+thread_local ncclProfilerApiState_t ncclProfilerApiState = {0,       0,       ncclProfilerGroupApiStartStateReset,
+                                                            nullptr, nullptr, nullptr};
 
 int ncclProfilerEventMask = 0;
 
@@ -400,14 +398,16 @@ ncclResult_t ncclProfilerStopProxyCtrlEvent(void* eHandle) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclProfilerStartKernelChEvent(struct ncclProfilerWorkOp* op, uint64_t start) {
-  (void)op;
+ncclResult_t ncclProfilerStartKernelChEvent(struct ncclProxyArgs* args, int s, uint64_t start) {
+  (void)args;
+  (void)s;
   (void)start;
   return ncclSuccess;
 }
 
-ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProfilerWorkOp* op, uint64_t stop) {
-  (void)op;
+ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProxyArgs* args, int s, uint64_t stop) {
+  (void)args;
+  (void)s;
   (void)stop;
   return ncclSuccess;
 }
@@ -419,7 +419,8 @@ ncclResult_t ncclProfilerRecordProxyOpEventState(int sub, struct ncclProxyArgs* 
   return ncclSuccess;
 }
 
-ncclResult_t ncclProfilerRecordProxyStepEventState(int sub, struct ncclProxyArgs* args, int stepId, ncclProfilerEventState_t eState) {
+ncclResult_t ncclProfilerRecordProxyStepEventState(int sub, struct ncclProxyArgs* args, int stepId,
+                                                   ncclProfilerEventState_t eState) {
   (void)sub;
   (void)args;
   (void)stepId;
@@ -434,29 +435,10 @@ ncclResult_t ncclProfilerRecordProxyCtrlEventState(void* eHandle, int appended, 
   return ncclSuccess;
 }
 
-ncclResult_t ncclProfilerThreadCreate(struct ncclComm* comm, struct ncclComm* parent) {
+bool ncclProfilerNeedsProxy(struct ncclComm* comm, struct ncclProxyOp* op) {
   (void)comm;
-  (void)parent;
-  return ncclSuccess;
-}
-
-ncclResult_t ncclProfilerThreadDestroy(struct ncclComm* comm) {
-  (void)comm;
-  return ncclSuccess;
-}
-
-ncclResult_t ncclProfilerPostWork(struct ncclComm* comm, int channelId, int eActivationMask, void* taskEventHandle) {
-  (void)comm;
-  (void)channelId;
-  (void)eActivationMask;
-  (void)taskEventHandle;
-  return ncclSuccess;
-}
-
-ncclResult_t ncclProfilerPostPlanWork(struct ncclComm* comm, struct ncclKernelPlan* plan) {
-  (void)comm;
-  (void)plan;
-  return ncclSuccess;
+  (void)op;
+  return false;
 }
 
 /* CE profiler stubs (ncclCeCollArgs / ncclCeBatchOpsParams forward-declared in profiler.h) */
@@ -474,7 +456,8 @@ ncclResult_t ncclProfilerStopCeCollEvent(struct ncclComm* comm, struct ncclCeCol
   return ncclSuccess;
 }
 
-ncclResult_t ncclProfilerStartCeSyncEvent(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream, void** ceSyncHandle) {
+ncclResult_t ncclProfilerStartCeSyncEvent(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream,
+                                          void** ceSyncHandle) {
   (void)comm;
   (void)args;
   (void)stream;
@@ -489,7 +472,9 @@ ncclResult_t ncclProfilerStopCeSyncEvent(struct ncclComm* comm, void* ceSyncHand
   return ncclSuccess;
 }
 
-ncclResult_t ncclProfilerStartCeBatchEvent(struct ncclComm* comm, struct ncclCeCollArgs* args, struct ncclCeBatchOpsParams* params, cudaStream_t stream, void** ceBatchHandle) {
+ncclResult_t ncclProfilerStartCeBatchEvent(struct ncclComm* comm, struct ncclCeCollArgs* args,
+                                           struct ncclCeBatchOpsParams* params, cudaStream_t stream,
+                                           void** ceBatchHandle) {
   (void)comm;
   (void)args;
   (void)params;
@@ -570,6 +555,5 @@ ncclResult_t ncclRmaFinalize(struct ncclComm* comm) {
   (void)comm;
   return ncclSuccess;
 }
-
 
 #endif /* NCCL_OS_WINDOWS */

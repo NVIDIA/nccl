@@ -36,9 +36,9 @@ typedef struct {
   int backendVersion;
 } ncclGinConfig_t;
 
-/* Plugin struct (same layout as ncclGin_v14_t) so gin->name, gin->regMrSym, etc. compile. Not used at runtime on Windows.
- * When __CUDACC__ is defined we are in a .cu file: use a different struct tag (ncclGinHostPlugin) so the name "ncclGin"
- * is left for the device stub's type alias (ncclGin_BackendMask<...>), avoiding redefinition. */
+/* Plugin struct (same layout as ncclGin_v14_t) so gin->name, gin->regMrSym, etc. compile. Not used at runtime on
+ * Windows. When __CUDACC__ is defined we are in a .cu file: use a different struct tag (ncclGinHostPlugin) so the
+ * name "ncclGin" is left for the device stub's type alias (ncclGin_BackendMask<...>), avoiding redefinition. */
 #if defined(__CUDACC__)
 struct ncclGinHostPlugin {
 #else
@@ -50,9 +50,12 @@ struct ncclGin {
   ncclResult_t (*getProperties)(int dev, ncclNetProperties_t* props);
   ncclResult_t (*listen)(void* ctx, int dev, void* handle, void** listenComm);
   ncclResult_t (*connect)(void* ctx, void* handles[], int nranks, int rank, void* listenComm, void** collComm);
-  ncclResult_t (*createContext)(void* collComm, ncclGinConfig_t* config, void** ginCtx, ncclNetDeviceHandle_t** devHandle);
-  ncclResult_t (*regMrSym)(void* collComm, void* data, size_t size, int type, uint64_t mrFlags, void** mhandle, void** ginHandle);
-  ncclResult_t (*regMrSymDmaBuf)(void* collComm, void* data, size_t size, int type, uint64_t offset, int fd, uint64_t mrFlags, void** mhandle, void** ginHandle);
+  ncclResult_t (*createContext)(void* collComm, ncclGinConfig_t* config, void** ginCtx,
+                                ncclNetDeviceHandle_t** devHandle);
+  ncclResult_t (*regMrSym)(void* collComm, void* data, size_t size, int type, uint64_t mrFlags, void** mhandle,
+                           void** ginHandle);
+  ncclResult_t (*regMrSymDmaBuf)(void* collComm, void* data, size_t size, int type, uint64_t offset, int fd,
+                                 uint64_t mrFlags, void** mhandle, void** ginHandle);
   ncclResult_t (*deregMrSym)(void* collComm, void* mhandle);
   ncclResult_t (*destroyContext)(void* ginCtx);
   ncclResult_t (*closeColl)(void* collComm);
@@ -107,12 +110,13 @@ ncclResult_t ncclGetGinType(struct ncclComm* comm, ncclGinType_t* ginType);
 ncclResult_t ncclGetRailedGinType(struct ncclComm* comm, ncclGinType_t* ginType);
 ncclResult_t ncclGinConnectOnce(struct ncclComm* comm);
 ncclResult_t ncclGinHostFinalize(struct ncclComm* comm);
-ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequirements const* reqs, struct ncclDevComm* devComm);
+ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequirements const* reqs,
+                                 struct ncclDevComm* devComm);
 ncclResult_t ncclGinDevCommFree(struct ncclComm* comm, struct ncclDevComm const* devComm);
 ncclResult_t ncclGinRegister(struct ncclComm* comm, void* address, size_t size,
                              void* ginHostWins[NCCL_GIN_MAX_CONNECTIONS],
-                             ncclGinWindow_t ginDevWins[NCCL_GIN_MAX_CONNECTIONS],
-                             int winFlags, bool multiSegment, int memType);
+                             ncclGinWindow_t ginDevWins[NCCL_GIN_MAX_CONNECTIONS], int winFlags, bool multiSegment,
+                             int memType);
 ncclResult_t ncclGinDeregister(struct ncclComm* comm, void* ginHostWins[NCCL_GIN_MAX_CONNECTIONS]);
 ncclResult_t ncclGinQueryLastError(struct ncclGinState* ginState, bool* hasError);
 ncclResult_t ncclGinGetDevCount(int ginPluginIndex, int* nPhysDev, int* nVirtDev);

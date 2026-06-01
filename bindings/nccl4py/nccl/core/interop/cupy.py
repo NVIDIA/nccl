@@ -33,8 +33,7 @@ def _to_nccl_dtype(cupy_dtype) -> NcclDataType:
 
     CuPy dtypes are NumPy dtype objects, so resolution is delegated to
     :py:meth:`NcclDataType.from_numpy_dtype`. NumPy ``bool`` has no NCCL
-    equivalent and is mapped to ``UINT8``. For bfloat16, float8_e4m3fn,
-    and float8_e5m2, the optional ml-dtypes package is required.
+    equivalent and is mapped to ``UINT8``.
 
     Args:
         cupy_dtype: CuPy / NumPy data type to convert.

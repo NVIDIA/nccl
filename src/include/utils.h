@@ -35,7 +35,7 @@ ncclResult_t int64ToBusId(int64_t id, char* busId);
 ncclResult_t busIdToInt64(const char* busId, int64_t* id);
 ncclResult_t pciPathToInt64(char* path, int64_t* id);
 
-ncclResult_t getBusId(int cudaDev, int64_t *busId);
+ncclResult_t getBusId(int cudaDev, int64_t* busId);
 
 ncclResult_t getHostName(char* hostname, int maxlen, const char delim);
 uint64_t getHostHash();
@@ -58,9 +58,9 @@ static long log2i(long n) {
 }
 
 // Comparator function for qsort/bsearch to compare integers
-static int compareInts(const void *a, const void *b) {
-    int ia = *(const int*)a, ib = *(const int*)b;
-    return (ia > ib) - (ia < ib);
+static int compareInts(const void* a, const void* b) {
+  int ia = *(const int*)a, ib = *(const int*)b;
+  return (ia > ib) - (ia < ib);
 }
 
 inline uint64_t clockNano() {
@@ -109,12 +109,12 @@ static inline int gcd(int a, int b) {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-template<typename Int>
+template <typename Int>
 inline void ncclAtomicRefCountIncrement(Int* refs) {
   COMPILER_ATOMIC_FETCH_ADD(refs, static_cast<Int>(1), std::memory_order_relaxed);
 }
 
-template<typename Int>
+template <typename Int>
 inline Int ncclAtomicRefCountDecrement(Int* refs) {
   return COMPILER_ATOMIC_SUB_FETCH(refs, static_cast<Int>(1), std::memory_order_acq_rel);
 }
@@ -136,9 +136,9 @@ void ncclMemoryStackDestruct(struct ncclMemoryStack* me);
 void ncclMemoryStackPush(struct ncclMemoryStack* me);
 void ncclMemoryStackPop(struct ncclMemoryStack* me);
 void* ncclMemoryStackAlloc(struct ncclMemoryStack* me, size_t size, size_t align);
-template<typename T>
-T* ncclMemoryStackAlloc(struct ncclMemoryStack* me, size_t n=1);
-template<typename Header, typename Element>
+template <typename T>
+T* ncclMemoryStackAlloc(struct ncclMemoryStack* me, size_t n = 1);
+template <typename Header, typename Element>
 inline Header* ncclMemoryStackAllocInlineArray(struct ncclMemoryStack* me, size_t nElt);
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -153,9 +153,9 @@ struct ncclMemoryPool;
 
 // Equivalent to zero-initialization
 void ncclMemoryPoolConstruct(struct ncclMemoryPool* me);
-template<typename T>
+template <typename T>
 T* ncclMemoryPoolAlloc(struct ncclMemoryPool* me, struct ncclMemoryStack* backing);
-template<typename T>
+template <typename T>
 void ncclMemoryPoolFree(struct ncclMemoryPool* me, T* obj);
 void ncclMemoryPoolTakeAll(struct ncclMemoryPool* me, struct ncclMemoryPool* from);
 
@@ -170,28 +170,27 @@ void ncclMemoryPoolTakeAll(struct ncclMemoryPool* me, struct ncclMemoryPool* fro
  *   ncclIntruQueue<Foo, &Foo::next1> list1;
  *   ncclIntruQueue<Foo, &Foo::next2> list2;
  */
-template<typename T, T *T::*next>
+template <typename T, T* T::* next>
 struct ncclIntruQueue;
 
-template<typename T, T *T::*next>
-void ncclIntruQueueConstruct(ncclIntruQueue<T,next> *me);
-template<typename T, T *T::*next>
-bool ncclIntruQueueEmpty(ncclIntruQueue<T,next> *me);
-template<typename T, T *T::*next>
-T* ncclIntruQueueHead(ncclIntruQueue<T,next> *me);
-template<typename T, T *T::*next>
-void ncclIntruQueueEnqueue(ncclIntruQueue<T,next> *me, T *x);
-template<typename T, T *T::*next>
-void ncclIntruQueueEnqueueFront(ncclIntruQueue<T,next> *me, T *x);
-template<typename T, T *T::*next>
-T* ncclIntruQueueDequeue(ncclIntruQueue<T,next> *me);
-template<typename T, T *T::*next>
-T* ncclIntruQueueTryDequeue(ncclIntruQueue<T,next> *me);
-template<typename T, T *T::*next>
-void ncclIntruQueueTransfer(ncclIntruQueue<T,next> *dst, ncclIntruQueue<T,next> *src);
-template<typename T, T *T::*next>
-inline T* ncclIntruQueueDelete(ncclIntruQueue<T,next> *me, T *x, bool (*cmp)(T*, T*));
-
+template <typename T, T* T::* next>
+void ncclIntruQueueConstruct(ncclIntruQueue<T, next>* me);
+template <typename T, T* T::* next>
+bool ncclIntruQueueEmpty(ncclIntruQueue<T, next>* me);
+template <typename T, T* T::* next>
+T* ncclIntruQueueHead(ncclIntruQueue<T, next>* me);
+template <typename T, T* T::* next>
+void ncclIntruQueueEnqueue(ncclIntruQueue<T, next>* me, T* x);
+template <typename T, T* T::* next>
+void ncclIntruQueueEnqueueFront(ncclIntruQueue<T, next>* me, T* x);
+template <typename T, T* T::* next>
+T* ncclIntruQueueDequeue(ncclIntruQueue<T, next>* me);
+template <typename T, T* T::* next>
+T* ncclIntruQueueTryDequeue(ncclIntruQueue<T, next>* me);
+template <typename T, T* T::* next>
+void ncclIntruQueueTransfer(ncclIntruQueue<T, next>* dst, ncclIntruQueue<T, next>* src);
+template <typename T, T* T::* next>
+inline T* ncclIntruQueueDelete(ncclIntruQueue<T, next>* me, T* x, bool (*cmp)(T*, T*));
 
 ////////////////////////////////////////////////////////////////////////////////
 /* ncclThreadSignal: Couples a std::mutex and std::condition_variable together. The "mutex"
@@ -207,25 +206,25 @@ extern thread_local struct ncclThreadSignal ncclThreadSignalLocalInstance;
 
 ////////////////////////////////////////////////////////////////////////////////
 
-template<typename T, T *T::*next>
+template <typename T, T* T::* next>
 struct ncclIntruQueueMpsc;
 
-template<typename T, T *T::*next>
-void ncclIntruQueueMpscConstruct(struct ncclIntruQueueMpsc<T,next>* me);
-template<typename T, T *T::*next>
-bool ncclIntruQueueMpscEmpty(struct ncclIntruQueueMpsc<T,next>* me);
+template <typename T, T* T::* next>
+void ncclIntruQueueMpscConstruct(struct ncclIntruQueueMpsc<T, next>* me);
+template <typename T, T* T::* next>
+bool ncclIntruQueueMpscEmpty(struct ncclIntruQueueMpsc<T, next>* me);
 // Enqueue element. Returns true if queue is not abandoned. Even if queue is
 // abandoned the element enqueued, so the caller needs to make arrangements for
 // the queue to be tended.
-template<typename T, T *T::*next>
-bool ncclIntruQueueMpscEnqueue(struct ncclIntruQueueMpsc<T,next>* me, T* x);
+template <typename T, T* T::* next>
+bool ncclIntruQueueMpscEnqueue(struct ncclIntruQueueMpsc<T, next>* me, T* x);
 // Dequeue all elements at a glance. If there aren't any and `waitSome` is
 // true then this call will wait until it can return a non empty list.
-template<typename T, T *T::*next>
-T* ncclIntruQueueMpscDequeueAll(struct ncclIntruQueueMpsc<T,next>* me, bool waitSome);
+template <typename T, T* T::* next>
+T* ncclIntruQueueMpscDequeueAll(struct ncclIntruQueueMpsc<T, next>* me, bool waitSome);
 // Dequeue all elements and set queue to abandoned state.
-template<typename T, T *T::*next>
-T* ncclIntruQueueMpscAbandon(struct ncclIntruQueueMpsc<T,next>* me);
+template <typename T, T* T::* next>
+T* ncclIntruQueueMpscAbandon(struct ncclIntruQueueMpsc<T, next>* me);
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -263,7 +262,7 @@ inline void ncclMemoryStackConstruct(struct ncclMemoryStack* me) {
 }
 
 inline void* ncclMemoryStack::allocate(struct ncclMemoryStack* me, size_t size, size_t align) {
-  uintptr_t o = (me->topFrame.bumper + align-1) & ~(uintptr_t(align) - 1);
+  uintptr_t o = (me->topFrame.bumper + align - 1) & ~(uintptr_t(align) - 1);
   void* obj;
   if (COMPILER_EXPECT(o + size <= me->topFrame.end, true)) {
     me->topFrame.bumper = o + size;
@@ -275,25 +274,25 @@ inline void* ncclMemoryStack::allocate(struct ncclMemoryStack* me, size_t size, 
 }
 
 inline void* ncclMemoryStackAlloc(struct ncclMemoryStack* me, size_t size, size_t align) {
-  void *obj = ncclMemoryStack::allocate(me, size, align);
+  void* obj = ncclMemoryStack::allocate(me, size, align);
   memset(obj, 0, size);
   return obj;
 }
 
-template<typename T>
+template <typename T>
 inline T* ncclMemoryStackAlloc(struct ncclMemoryStack* me, size_t n) {
-  void *obj = ncclMemoryStack::allocate(me, n*sizeof(T), alignof(T));
-  memset(obj, 0, n*sizeof(T));
+  void* obj = ncclMemoryStack::allocate(me, n * sizeof(T), alignof(T));
+  memset(obj, 0, n * sizeof(T));
   return (T*)obj;
 }
 
-template<typename Header, typename Element>
+template <typename Header, typename Element>
 inline Header* ncclMemoryStackAllocInlineArray(struct ncclMemoryStack* me, size_t nElt) {
   size_t size = sizeof(Header);
-  size = (size + alignof(Element)-1) & -alignof(Element);
-  size += nElt*sizeof(Element);
+  size = (size + alignof(Element) - 1) & -alignof(Element);
+  size += nElt * sizeof(Element);
   size_t align = alignof(Header) < alignof(Element) ? alignof(Element) : alignof(Header);
-  void *obj = ncclMemoryStack::allocate(me, size, align);
+  void* obj = ncclMemoryStack::allocate(me, size, align);
   memset(obj, 0, size);
   return (Header*)obj;
 }
@@ -316,12 +315,11 @@ inline void ncclMemoryStackPop(struct ncclMemoryStack* me) {
   me->topFrame = *me->topFrame.below; // C++ struct assignment
 }
 
-
 ////////////////////////////////////////////////////////////////////////////////
 
 struct ncclMemoryPool {
   struct Cell {
-    Cell *next;
+    Cell* next;
   };
   struct Cell* head;
   struct Cell* tail; // meaningful only when head != nullptr
@@ -331,7 +329,7 @@ inline void ncclMemoryPoolConstruct(struct ncclMemoryPool* me) {
   me->head = nullptr;
 }
 
-template<typename T>
+template <typename T>
 inline T* ncclMemoryPoolAlloc(struct ncclMemoryPool* me, struct ncclMemoryStack* backing) {
   using Cell = ncclMemoryPool::Cell;
   Cell* cell;
@@ -348,7 +346,7 @@ inline T* ncclMemoryPoolAlloc(struct ncclMemoryPool* me, struct ncclMemoryStack*
   return reinterpret_cast<T*>(cell);
 }
 
-template<typename T>
+template <typename T>
 inline void ncclMemoryPoolFree(struct ncclMemoryPool* me, T* obj) {
   using Cell = ncclMemoryPool::Cell;
   Cell* cell = reinterpret_cast<Cell*>(obj);
@@ -368,58 +366,58 @@ inline void ncclMemoryPoolTakeAll(struct ncclMemoryPool* me, struct ncclMemoryPo
 
 ////////////////////////////////////////////////////////////////////////////////
 
-template<typename T, T *T::*next>
+template <typename T, T* T::* next>
 struct ncclIntruQueue {
   T *head, *tail;
 };
 
-template<typename T, T *T::*next>
-inline void ncclIntruQueueConstruct(ncclIntruQueue<T,next> *me) {
+template <typename T, T* T::* next>
+inline void ncclIntruQueueConstruct(ncclIntruQueue<T, next>* me) {
   me->head = nullptr;
   me->tail = nullptr;
 }
 
-template<typename T, T *T::*next>
-inline bool ncclIntruQueueEmpty(ncclIntruQueue<T,next> *me) {
+template <typename T, T* T::* next>
+inline bool ncclIntruQueueEmpty(ncclIntruQueue<T, next>* me) {
   return me->head == nullptr;
 }
 
-template<typename T, T *T::*next>
-inline T* ncclIntruQueueHead(ncclIntruQueue<T,next> *me) {
+template <typename T, T* T::* next>
+inline T* ncclIntruQueueHead(ncclIntruQueue<T, next>* me) {
   return me->head;
 }
 
-template<typename T, T *T::*next>
-inline T* ncclIntruQueueTail(ncclIntruQueue<T,next> *me) {
+template <typename T, T* T::* next>
+inline T* ncclIntruQueueTail(ncclIntruQueue<T, next>* me) {
   return me->tail;
 }
 
-template<typename T, T *T::*next>
-inline void ncclIntruQueueEnqueue(ncclIntruQueue<T,next> *me, T *x) {
+template <typename T, T* T::* next>
+inline void ncclIntruQueueEnqueue(ncclIntruQueue<T, next>* me, T* x) {
   x->*next = nullptr;
   (me->head ? me->tail->*next : me->head) = x;
   me->tail = x;
 }
 
-template<typename T, T *T::*next>
-inline void ncclIntruQueueEnqueueFront(ncclIntruQueue<T,next> *me, T *x) {
+template <typename T, T* T::* next>
+inline void ncclIntruQueueEnqueueFront(ncclIntruQueue<T, next>* me, T* x) {
   if (me->head == nullptr) me->tail = x;
   x->*next = me->head;
   me->head = x;
 }
 
-template<typename T, T *T::*next>
-inline T* ncclIntruQueueDequeue(ncclIntruQueue<T,next> *me) {
-  T *ans = me->head;
+template <typename T, T* T::* next>
+inline T* ncclIntruQueueDequeue(ncclIntruQueue<T, next>* me) {
+  T* ans = me->head;
   me->head = ans->*next;
   if (me->head == nullptr) me->tail = nullptr;
   return ans;
 }
 
-template<typename T, T *T::*next>
-inline T* ncclIntruQueueDelete(ncclIntruQueue<T,next> *me, T *x, bool (*cmp)(T*, T*)) {
-  T *prev = nullptr;
-  T *cur = me->head;
+template <typename T, T* T::* next>
+inline T* ncclIntruQueueDelete(ncclIntruQueue<T, next>* me, T* x, bool (*cmp)(T*, T*)) {
+  T* prev = nullptr;
+  T* cur = me->head;
   bool found = false;
 
   while (cur) {
@@ -432,19 +430,16 @@ inline T* ncclIntruQueueDelete(ncclIntruQueue<T,next> *me, T *x, bool (*cmp)(T*,
   }
 
   if (found) {
-    if (prev == nullptr)
-      me->head = cur->*next;
-    else
-      prev->*next = cur->*next;
-    if (cur == me->tail)
-      me->tail = prev;
+    if (prev == nullptr) me->head = cur->*next;
+    else prev->*next = cur->*next;
+    if (cur == me->tail) me->tail = prev;
   }
   return cur;
 }
 
-template<typename T, T *T::*next>
-inline T* ncclIntruQueueTryDequeue(ncclIntruQueue<T,next> *me) {
-  T *ans = me->head;
+template <typename T, T* T::* next>
+inline T* ncclIntruQueueTryDequeue(ncclIntruQueue<T, next>* me) {
+  T* ans = me->head;
   if (ans != nullptr) {
     me->head = ans->*next;
     if (me->head == nullptr) me->tail = nullptr;
@@ -452,8 +447,8 @@ inline T* ncclIntruQueueTryDequeue(ncclIntruQueue<T,next> *me) {
   return ans;
 }
 
-template<typename T, T *T::*next>
-void ncclIntruQueueTransfer(ncclIntruQueue<T,next> *dst, ncclIntruQueue<T,next> *src) {
+template <typename T, T* T::* next>
+void ncclIntruQueueTransfer(ncclIntruQueue<T, next>* dst, ncclIntruQueue<T, next>* src) {
   (dst->tail ? dst->tail->next : dst->head) = src->head;
   if (src->tail) dst->tail = src->tail;
   src->head = nullptr;
@@ -462,33 +457,34 @@ void ncclIntruQueueTransfer(ncclIntruQueue<T,next> *dst, ncclIntruQueue<T,next> 
 
 ////////////////////////////////////////////////////////////////////////////////
 
-template<typename T, T *T::*next>
+template <typename T, T* T::* next>
 struct ncclIntruQueueMpsc {
   T* head;
   uintptr_t tail;
   struct ncclThreadSignal* waiting;
 };
 
-template<typename T, T *T::*next>
-void ncclIntruQueueMpscConstruct(struct ncclIntruQueueMpsc<T,next>* me) {
+template <typename T, T* T::* next>
+void ncclIntruQueueMpscConstruct(struct ncclIntruQueueMpsc<T, next>* me) {
   me->head = nullptr;
   me->tail = 0x0;
   me->waiting = nullptr;
 }
 
-template<typename T, T *T::*next>
-bool ncclIntruQueueMpscEmpty(struct ncclIntruQueueMpsc<T,next>* me) {
+template <typename T, T* T::* next>
+bool ncclIntruQueueMpscEmpty(struct ncclIntruQueueMpsc<T, next>* me) {
   return COMPILER_ATOMIC_LOAD(&me->tail, std::memory_order_relaxed) <= 0x2;
 }
 
-template<typename T, T *T::*next>
-bool ncclIntruQueueMpscEnqueue(ncclIntruQueueMpsc<T,next>* me, T* x) {
+template <typename T, T* T::* next>
+bool ncclIntruQueueMpscEnqueue(ncclIntruQueueMpsc<T, next>* me, T* x) {
   COMPILER_ATOMIC_STORE(&(x->*next), static_cast<T*>(nullptr), std::memory_order_relaxed);
   uintptr_t utail = COMPILER_ATOMIC_EXCHANGE(&me->tail, reinterpret_cast<uintptr_t>(x), std::memory_order_acq_rel);
   T* prev = reinterpret_cast<T*>(utail);
   T** prevNext = utail <= 0x2 ? &me->head : &(prev->*next);
   COMPILER_ATOMIC_STORE(prevNext, x, std::memory_order_relaxed);
-  if (utail == 0x1) { // waiting
+  if (utail == 0x1) {
+    // waiting
     std::atomic_thread_fence(std::memory_order_acquire); // to see me->waiting
     // This lock/unlock is essential to ensure we don't race ahead of the consumer
     // and signal the cond before they begin waiting on it.
@@ -501,21 +497,23 @@ bool ncclIntruQueueMpscEnqueue(ncclIntruQueueMpsc<T,next>* me, T* x) {
   return utail != 0x2; // not abandoned
 }
 
-template<typename T, T *T::*next>
-T* ncclIntruQueueMpscDequeueAll(ncclIntruQueueMpsc<T,next>* me, bool waitSome) {
+template <typename T, T* T::* next>
+T* ncclIntruQueueMpscDequeueAll(ncclIntruQueueMpsc<T, next>* me, bool waitSome) {
   T* head = COMPILER_ATOMIC_LOAD(&me->head, std::memory_order_relaxed);
   if (head == nullptr) {
     if (!waitSome) return nullptr;
     uint64_t t0 = clockNano();
     bool sleeping = false;
     do {
-      if (clockNano()-t0 >= 10*1000) { // spin for first 10us
+      if (clockNano() - t0 >= 10 * 1000) {
+        // spin for first 10us
         struct ncclThreadSignal* waitSignal = &ncclThreadSignalLocalInstance;
         std::unique_lock<std::mutex> lock(waitSignal->mutex);
         uintptr_t expected = sleeping ? 0x1 : 0x0;
         uintptr_t desired = 0x1;
         me->waiting = waitSignal; // release done by successful compare exchange
-        if (COMPILER_ATOMIC_COMPARE_EXCHANGE(&me->tail, &expected, desired, std::memory_order_release, std::memory_order_relaxed)) {
+        if (COMPILER_ATOMIC_COMPARE_EXCHANGE(&me->tail, &expected, desired, std::memory_order_release,
+                                             std::memory_order_relaxed)) {
           sleeping = true;
           waitSignal->cond.wait(lock);
         }
@@ -527,24 +525,28 @@ T* ncclIntruQueueMpscDequeueAll(ncclIntruQueueMpsc<T,next>* me, bool waitSome) {
   COMPILER_ATOMIC_STORE(&me->head, static_cast<T*>(nullptr), std::memory_order_relaxed);
   uintptr_t utail = COMPILER_ATOMIC_EXCHANGE(&me->tail, uintptr_t(0), std::memory_order_acq_rel);
   T* tail = utail <= 0x2 ? nullptr : reinterpret_cast<T*>(utail);
-  T *x = head;
+  T* x = head;
   while (x != tail) {
-    T *x1;
+    T* x1;
     int spins = 0;
     while (true) {
       x1 = COMPILER_ATOMIC_LOAD(&(x->*next), std::memory_order_relaxed);
       if (x1 != nullptr) break;
-      if (++spins == 1024) { spins = 1024-1; std::this_thread::yield(); }
+      if (++spins == 1024) {
+        spins = 1024 - 1;
+        std::this_thread::yield();
+      }
     }
     x = x1;
   }
   return head;
 }
 
-template<typename T, T *T::*next>
-T* ncclIntruQueueMpscAbandon(ncclIntruQueueMpsc<T,next>* me) {
+template <typename T, T* T::* next>
+T* ncclIntruQueueMpscAbandon(ncclIntruQueueMpsc<T, next>* me) {
   uintptr_t expected = 0x0;
-  if (COMPILER_ATOMIC_COMPARE_EXCHANGE(&me->tail, &expected, /*desired=*/uintptr_t(0x2), std::memory_order_relaxed, std::memory_order_relaxed)) {
+  if (COMPILER_ATOMIC_COMPARE_EXCHANGE(&me->tail, &expected, /*desired=*/uintptr_t(0x2), std::memory_order_relaxed,
+                                       std::memory_order_relaxed)) {
     return nullptr;
   } else {
     int spins = 0;
@@ -552,19 +554,25 @@ T* ncclIntruQueueMpscAbandon(ncclIntruQueueMpsc<T,next>* me) {
     while (true) {
       head = COMPILER_ATOMIC_LOAD(&me->head, std::memory_order_relaxed);
       if (head != nullptr) break;
-      if (++spins == 1024) { spins = 1024-1; std::this_thread::yield(); }
+      if (++spins == 1024) {
+        spins = 1024 - 1;
+        std::this_thread::yield();
+      }
     }
     COMPILER_ATOMIC_STORE(&me->head, static_cast<T*>(nullptr), std::memory_order_relaxed);
     uintptr_t utail = COMPILER_ATOMIC_EXCHANGE(&me->tail, uintptr_t(0x2), std::memory_order_acq_rel);
     T* tail = utail <= 0x2 ? nullptr : reinterpret_cast<T*>(utail);
-    T *x = head;
+    T* x = head;
     while (x != tail) {
-      T *x1;
+      T* x1;
       spins = 0;
       while (true) {
         x1 = COMPILER_ATOMIC_LOAD(&(x->*next), std::memory_order_relaxed);
         if (x1 != nullptr) break;
-        if (++spins == 1024) { spins = 1024-1; std::this_thread::yield(); }
+        if (++spins == 1024) {
+          spins = 1024 - 1;
+          std::this_thread::yield();
+        }
       }
       x = x1;
     }
@@ -572,7 +580,8 @@ T* ncclIntruQueueMpscAbandon(ncclIntruQueueMpsc<T,next>* me) {
   }
 }
 
-ncclResult_t ncclBitsToString(uint32_t bits, uint32_t mask, const char* (*toStr)(int), char *buf, size_t bufLen, const char *wildcard);
+ncclResult_t ncclBitsToString(uint32_t bits, uint32_t mask, const char* (*toStr)(int), char* buf, size_t bufLen,
+                              const char* wildcard);
 
 ////////////////////////////////////////////////////////////////////////////////
 // Hash function for pointer types (shared by address map implementations)
@@ -631,12 +640,12 @@ struct ncclIntruAddressMap_untyped {
 };
 
 // Typed wrapper (uses composition for C compatibility)
-template<typename Obj, typename Key, Key Obj::*keyField, Obj* Obj::*nextField>
+template <typename Obj, typename Key, Key Obj::* keyField, Obj* Obj::* nextField>
 struct ncclIntruAddressMap {
   // Compile-time checks for valid usage
   static_assert(sizeof(Key) <= sizeof(uintptr_t),
-    "ncclIntruAddressMap: Key type size must be <= sizeof(uintptr_t). "
-    "Keys larger than a pointer cannot be safely converted to uintptr_t.");
+                "ncclIntruAddressMap: Key type size must be <= sizeof(uintptr_t). "
+                "Keys larger than a pointer cannot be safely converted to uintptr_t.");
 
   ncclIntruAddressMap_untyped base;
 };
@@ -644,7 +653,7 @@ struct ncclIntruAddressMap {
 // Destructor (optional - only needed if entries remain in map)
 // Note: Map auto-cleans when last entry is removed, so this is only needed
 // if abandoning a non-empty map to avoid leaking the bucket table.
-template<typename Obj, typename Key, Key Obj::*keyField, Obj* Obj::*nextField>
+template <typename Obj, typename Key, Key Obj::* keyField, Obj* Obj::* nextField>
 static inline void ncclIntruAddressMapDestruct(struct ncclIntruAddressMap<Obj, Key, keyField, nextField>* map) {
   if (map->base.table != nullptr) {
     free(map->base.table);
@@ -655,61 +664,49 @@ static inline void ncclIntruAddressMapDestruct(struct ncclIntruAddressMap<Obj, K
 }
 
 // Internal untyped function prototypes
-ncclResult_t ncclIntruAddressMapInsert_untyped(
-  struct ncclIntruAddressMap_untyped* map,
-  int keySize, int keyFieldOffset, int nextFieldOffset,
-  uintptr_t key, void* object);
+ncclResult_t ncclIntruAddressMapInsert_untyped(struct ncclIntruAddressMap_untyped* map, int keySize, int keyFieldOffset,
+                                               int nextFieldOffset, uintptr_t key, void* object);
 
-ncclResult_t ncclIntruAddressMapFind_untyped(
-  struct ncclIntruAddressMap_untyped* map,
-  int keySize, int keyFieldOffset, int nextFieldOffset,
-  uintptr_t key, void** object);
+ncclResult_t ncclIntruAddressMapFind_untyped(struct ncclIntruAddressMap_untyped* map, int keySize, int keyFieldOffset,
+                                             int nextFieldOffset, uintptr_t key, void** object);
 
-ncclResult_t ncclIntruAddressMapRemove_untyped(
-  struct ncclIntruAddressMap_untyped* map,
-  int keySize, int keyFieldOffset, int nextFieldOffset,
-  uintptr_t key);
+ncclResult_t ncclIntruAddressMapRemove_untyped(struct ncclIntruAddressMap_untyped* map, int keySize, int keyFieldOffset,
+                                               int nextFieldOffset, uintptr_t key);
 
 // Typed template implementations (type-erasing wrappers)
-template<typename Obj, typename Key, Key Obj::*keyField, Obj* Obj::*nextField>
-static inline ncclResult_t ncclIntruAddressMapInsert(
-    struct ncclIntruAddressMap<Obj, Key, keyField, nextField>* map,
-    Key key, Obj* object) {
+template <typename Obj, typename Key, Key Obj::* keyField, Obj* Obj::* nextField>
+static inline ncclResult_t ncclIntruAddressMapInsert(struct ncclIntruAddressMap<Obj, Key, keyField, nextField>* map,
+                                                     Key key, Obj* object) {
   Obj dummy;
   // Using offsetof macro would be better except it won't work with non-C types,
   // like those that involve inheritance.
   int keyFieldOffset = (char*)&(dummy.*keyField) - (char*)&dummy;
   int nextFieldOffset = (char*)&(dummy.*nextField) - (char*)&dummy;
-  return ncclIntruAddressMapInsert_untyped(
-    &map->base, (int)sizeof(Key), keyFieldOffset, nextFieldOffset,
-    reinterpret_cast<uintptr_t>(key), object);
+  return ncclIntruAddressMapInsert_untyped(&map->base, (int)sizeof(Key), keyFieldOffset, nextFieldOffset,
+                                           reinterpret_cast<uintptr_t>(key), object);
 }
 
-template<typename Obj, typename Key, Key Obj::*keyField, Obj* Obj::*nextField>
-static inline ncclResult_t ncclIntruAddressMapFind(
-    struct ncclIntruAddressMap<Obj, Key, keyField, nextField>* map,
-    Key key, Obj** object) {
+template <typename Obj, typename Key, Key Obj::* keyField, Obj* Obj::* nextField>
+static inline ncclResult_t ncclIntruAddressMapFind(struct ncclIntruAddressMap<Obj, Key, keyField, nextField>* map,
+                                                   Key key, Obj** object) {
   Obj dummy;
   int keyFieldOffset = (char*)&(dummy.*keyField) - (char*)&dummy;
   int nextFieldOffset = (char*)&(dummy.*nextField) - (char*)&dummy;
   void* tmp;
-  ncclResult_t ret = ncclIntruAddressMapFind_untyped(
-    &map->base, (int)sizeof(Key), keyFieldOffset, nextFieldOffset,
-    reinterpret_cast<uintptr_t>(key), &tmp);
+  ncclResult_t ret = ncclIntruAddressMapFind_untyped(&map->base, (int)sizeof(Key), keyFieldOffset, nextFieldOffset,
+                                                     reinterpret_cast<uintptr_t>(key), &tmp);
   *object = (Obj*)tmp;
   return ret;
 }
 
-template<typename Obj, typename Key, Key Obj::*keyField, Obj* Obj::*nextField>
-static inline ncclResult_t ncclIntruAddressMapRemove(
-    struct ncclIntruAddressMap<Obj, Key, keyField, nextField>* map,
-    Key key) {
+template <typename Obj, typename Key, Key Obj::* keyField, Obj* Obj::* nextField>
+static inline ncclResult_t ncclIntruAddressMapRemove(struct ncclIntruAddressMap<Obj, Key, keyField, nextField>* map,
+                                                     Key key) {
   Obj dummy;
   int keyFieldOffset = (char*)&(dummy.*keyField) - (char*)&dummy;
   int nextFieldOffset = (char*)&(dummy.*nextField) - (char*)&dummy;
-  return ncclIntruAddressMapRemove_untyped(
-    &map->base, (int)sizeof(Key), keyFieldOffset, nextFieldOffset,
-    reinterpret_cast<uintptr_t>(key));
+  return ncclIntruAddressMapRemove_untyped(&map->base, (int)sizeof(Key), keyFieldOffset, nextFieldOffset,
+                                           reinterpret_cast<uintptr_t>(key));
 }
 
 inline ncclResult_t ncclThreadJoin(std::thread& thread) {

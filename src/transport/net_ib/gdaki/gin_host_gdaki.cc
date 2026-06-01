@@ -27,25 +27,25 @@
 #include "gpucontext/gpucontext.h"
 #include "../gin.h"
 
-#define DOCACHECK(call)                 \
-  do {                                  \
-    doca_error_t err = call;            \
-    if (err != DOCA_SUCCESS) {          \
-      /* Print the back trace*/         \
-      WARN("DOCA failure %d", err);     \
-      return ncclSystemError;           \
-    }                                   \
+#define DOCACHECK(call) \
+  do { \
+    doca_error_t err = call; \
+    if (err != DOCA_SUCCESS) { \
+      /* Print the back trace*/ \
+      WARN("DOCA failure %d", err); \
+      return ncclSystemError; \
+    } \
   } while (0)
 
 #define DOCACHECKGOTO(call, RES, label) \
-  do {                                  \
-    doca_error_t err = call;            \
-    if (err != DOCA_SUCCESS) {          \
-      /* Print the back trace*/         \
-      WARN("DOCA failure %d", err);     \
-      RES = ncclSystemError;            \
-      goto label;                       \
-    }                                   \
+  do { \
+    doca_error_t err = call; \
+    if (err != DOCA_SUCCESS) { \
+      /* Print the back trace*/ \
+      WARN("DOCA failure %d", err); \
+      RES = ncclSystemError; \
+      goto label; \
+    } \
   } while (0)
 
 #define VERBS_TEST_DBR_SIZE (8)
@@ -60,7 +60,6 @@ extern int64_t ncclParamIbTimeout();
 extern int64_t ncclParamIbRetryCnt();
 extern int64_t ncclParamIbPkey();
 extern int64_t ncclParamIbSl();
-extern int64_t ncclParamIbTc();
 extern int64_t ncclParamIbPciRelaxedOrdering();
 extern int64_t ncclParamIbDataDirect();
 extern int64_t ncclParamDmaBufEnable();
@@ -89,8 +88,7 @@ static inline bool gdakiRelaxedOrderingEnabled() {
   return relaxedOrderingEnabled;
 }
 
-static ncclResult_t gdakiRegMrDmaBuf(struct ibv_mr **mr, struct ibv_pd *pd, void *addr,
-                                     size_t length, int access) {
+static ncclResult_t gdakiRegMrDmaBuf(struct ibv_mr** mr, struct ibv_pd* pd, void* addr, size_t length, int access) {
   int status = 0;
   int dmabuf_fd = -1;
 
@@ -103,7 +101,7 @@ static ncclResult_t gdakiRegMrDmaBuf(struct ibv_mr **mr, struct ibv_pd *pd, void
 
 #if CUDA_VERSION >= 12080
   if (ncclParamIbDataDirect()) {
-    status = pfn_cuMemGetHandleForAddressRange((void *)&dmabuf_fd, (CUdeviceptr)addr, aligned_size,
+    status = pfn_cuMemGetHandleForAddressRange((void*)&dmabuf_fd, (CUdeviceptr)addr, aligned_size,
                                                CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD,
                                                CU_MEM_RANGE_FLAG_DMA_BUF_MAPPING_TYPE_PCIE);
     if (status) {
@@ -113,8 +111,8 @@ static ncclResult_t gdakiRegMrDmaBuf(struct ibv_mr **mr, struct ibv_pd *pd, void
            status);
       goto try_legacy;
     }
-    status = wrap_mlx5dv_reg_dmabuf_mr(mr, pd, 0, aligned_size, 0, dmabuf_fd, access,
-                                       MLX5DV_REG_DMABUF_ACCESS_DATA_DIRECT);
+    status =
+      wrap_mlx5dv_reg_dmabuf_mr(mr, pd, 0, aligned_size, 0, dmabuf_fd, access, MLX5DV_REG_DMABUF_ACCESS_DATA_DIRECT);
     if (status) {
       INFO(NCCL_NET,
            "Failed to register memory with DMA-BUF and data direct, error=%d. Trying a different "
@@ -122,19 +120,16 @@ static ncclResult_t gdakiRegMrDmaBuf(struct ibv_mr **mr, struct ibv_pd *pd, void
            status);
       close(dmabuf_fd);
       dmabuf_fd = -1;
-    } else
-      goto out;
+    } else goto out;
   }
 try_legacy:
 
 #endif
 
-  CUCHECK(cuMemGetHandleForAddressRange((void *)&dmabuf_fd, (CUdeviceptr)addr, aligned_size,
+  CUCHECK(cuMemGetHandleForAddressRange((void*)&dmabuf_fd, (CUdeviceptr)addr, aligned_size,
                                         CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD, 0));
   status = wrap_ibv_reg_dmabuf_mr(mr, pd, 0, aligned_size, 0, dmabuf_fd, access);
-  if (status)
-    INFO(NCCL_NET, "Failed to register memory with DMA-BUF, error=%d. Trying a different method.",
-         status);
+  if (status) INFO(NCCL_NET, "Failed to register memory with DMA-BUF, error=%d. Trying a different method.", status);
 #else
   status = ncclInvalidUsage;
 #endif
@@ -148,12 +143,11 @@ out:
   return (ncclResult_t)status;
 }
 
-static ncclResult_t gdakiRegMr(struct ibv_mr **mr, struct ibv_pd *pd, void *addr, size_t length,
-                               int access, bool force_strict_ordering = false) {
+static ncclResult_t gdakiRegMr(struct ibv_mr** mr, struct ibv_pd* pd, void* addr, size_t length, int access,
+                               bool force_strict_ordering = false) {
   int status = 0;
 
-  if (!force_strict_ordering && gdakiRelaxedOrderingEnabled())
-    access |= IBV_ACCESS_RELAXED_ORDERING;
+  if (!force_strict_ordering && gdakiRelaxedOrderingEnabled()) access |= IBV_ACCESS_RELAXED_ORDERING;
 
   NOWARN(status = gdakiRegMrDmaBuf(mr, pd, addr, length, access), NCCL_NET);
   if (status == ncclSuccess) return ncclSuccess;
@@ -164,19 +158,19 @@ static ncclResult_t gdakiRegMr(struct ibv_mr **mr, struct ibv_pd *pd, void *addr
 
 template <typename T>
 class GdakiHostGPUMemHandle {
- private:
+private:
   CUmemGenericAllocationHandle cumemhandle;
   unsigned int num_elements;
 
- public:
-  T *host_buf;
-  T *gpu_buf;
+public:
+  T* host_buf;
+  T* gpu_buf;
 
   ncclResult_t allocate(unsigned int num_elements) {
-    this->host_buf = (T *)calloc(num_elements, sizeof(T));
+    this->host_buf = (T*)calloc(num_elements, sizeof(T));
     EQCHECK(this->host_buf, nullptr);
 
-    NCCLCHECK(ncclCuMemAlloc((void **)&this->gpu_buf, &this->cumemhandle, CU_MEM_HANDLE_TYPE_NONE,
+    NCCLCHECK(ncclCuMemAlloc((void**)&this->gpu_buf, &this->cumemhandle, CU_MEM_HANDLE_TYPE_NONE,
                              num_elements * sizeof(T), nullptr));
 
     this->num_elements = num_elements;
@@ -206,26 +200,26 @@ class GdakiHostGPUMemHandle {
     return ncclSuccess;
   }
 
-  GdakiHostGPUMemHandle() : cumemhandle(0), num_elements(0), host_buf(nullptr), gpu_buf(nullptr){};
+  GdakiHostGPUMemHandle() : cumemhandle(0), num_elements(0), host_buf(nullptr), gpu_buf(nullptr) {};
 
   ~GdakiHostGPUMemHandle() {
      // Should only be used in error cleanup path as it ignores return code
-     this->deallocate();
+    this->deallocate();
   }
 };
 
 template <typename T>
 class GdakiGlobalGPUBufferTable {
- private:
+private:
   CUmemGenericAllocationHandle cumemhandle;
   unsigned int num_elements;
   unsigned int next_unused_idx;
   unsigned int num_ranks;
   GdakiHostGPUMemHandle<__be32> rkeys_hd_mhandle;
 
- public:
-  T *gpu_ptr;
-  struct ibv_mr *mr;
+public:
+  T* gpu_ptr;
+  struct ibv_mr* mr;
 
   ncclResult_t allocate(unsigned int num_elements, unsigned int num_ranks) {
     this->num_elements = num_elements;
@@ -233,7 +227,7 @@ class GdakiGlobalGPUBufferTable {
     this->next_unused_idx = 0;
     if (num_elements == 0) return ncclSuccess;
 
-    NCCLCHECK(ncclCuMemAlloc((void **)&this->gpu_ptr, &this->cumemhandle, CU_MEM_HANDLE_TYPE_NONE,
+    NCCLCHECK(ncclCuMemAlloc((void**)&this->gpu_ptr, &this->cumemhandle, CU_MEM_HANDLE_TYPE_NONE,
                              num_elements * sizeof(T), nullptr));
     CUDACHECK(cudaMemset(this->gpu_ptr, 0, num_elements * sizeof(T)));
     NCCLCHECK(this->rkeys_hd_mhandle.allocate(num_ranks));
@@ -248,7 +242,7 @@ class GdakiGlobalGPUBufferTable {
     return ncclSuccess;
   }
 
-  ncclResult_t register_mr(struct ibv_pd *ib_pd, bool force_strict_ordering = false) {
+  ncclResult_t register_mr(struct ibv_pd* ib_pd, bool force_strict_ordering = false) {
     if (this->num_elements == 0) return ncclSuccess;
     NCCLCHECK(gdakiRegMr(&this->mr, ib_pd, this->gpu_ptr, this->num_elements * sizeof(T),
                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ |
@@ -265,7 +259,7 @@ class GdakiGlobalGPUBufferTable {
     return ncclSuccess;
   }
 
-  ncclResult_t exchange_info(struct ncclGinIbCollComm *cComm) {
+  ncclResult_t exchange_info(struct ncclGinIbCollComm* cComm) {
     if (this->num_elements == 0) return ncclSuccess;
     __be32 rkey = htobe32(this->mr->rkey);
     NCCLCHECK(cComm->allGather(cComm, &rkey, this->rkeys_hd_mhandle.host_buf, sizeof(__be32)));
@@ -273,7 +267,7 @@ class GdakiGlobalGPUBufferTable {
     return ncclSuccess;
   }
 
-  ncclResult_t allocate_elements(unsigned int num_elements, unsigned int *out_start_idx) {
+  ncclResult_t allocate_elements(unsigned int num_elements, unsigned int* out_start_idx) {
     if (this->next_unused_idx + num_elements > this->num_elements) {
       WARN("Not enough space to get elements");
       return ncclInvalidUsage;
@@ -289,22 +283,23 @@ class GdakiGlobalGPUBufferTable {
     // No op for now as we don't allow reusing elements.
   }
 
-  uint32_t *get_rkeys_d() { return this->rkeys_hd_mhandle.gpu_buf; }
+  uint32_t* get_rkeys_d() {
+    return this->rkeys_hd_mhandle.gpu_buf;
+  }
 
-  GdakiGlobalGPUBufferTable()
-    : cumemhandle(0), num_elements(0), next_unused_idx(0), gpu_ptr(nullptr), mr(nullptr) {};
+  GdakiGlobalGPUBufferTable() : cumemhandle(0), num_elements(0), next_unused_idx(0), gpu_ptr(nullptr), mr(nullptr) {};
   ~GdakiGlobalGPUBufferTable() {
      // Should only be used in error cleanup path as it ignores return codes
-     this->deregister_mr();
-     this->deallocate();
+    this->deregister_mr();
+    this->deallocate();
   }
 };
 
 struct gdaki_mem_handle {
   int type;
-  struct ibv_mr *mr;
-  GdakiHostGPUMemHandle<struct ncclGinGdakiMemHandle> *gdaki_mhandle_hd_mhandle;
-  GdakiHostGPUMemHandle<uint32_t> *rkeys_hd_mhandle;
+  struct ibv_mr* mr;
+  GdakiHostGPUMemHandle<struct ncclGinGdakiMemHandle>* gdaki_mhandle_hd_mhandle;
+  GdakiHostGPUMemHandle<uint32_t>* rkeys_hd_mhandle;
 };
 
 struct gdaki_exch_info {
@@ -317,9 +312,9 @@ struct gdaki_exch_info {
 
 struct gdaki_context {
   int cuda_id;
-  struct doca_gpu *gdev;
-  struct ibv_device *ib_dev;
-  struct doca_verbs_ah_attr *ah; /* DOCA Verbs address handle */
+  struct doca_gpu* gdev;
+  struct ibv_device* ib_dev;
+  struct doca_verbs_ah_attr* ah; /* DOCA Verbs address handle */
   struct ibv_device_attr ib_dev_attr;
   struct doca_verbs_gid gid;
 
@@ -331,32 +326,32 @@ struct gdaki_context {
   bool needCompanion;
   uint32_t qp_rq_size;
   uint32_t qp_sq_size;
-  struct doca_gpu_verbs_qp_group_hl **gqp_groups;
-  struct doca_gpu_verbs_qp_hl **gqps;
-  struct doca_gpu_verbs_qp_hl **companion_gqps;
+  struct doca_gpu_verbs_qp_group_hl** gqp_groups;
+  struct doca_gpu_verbs_qp_hl** gqps;
+  struct doca_gpu_verbs_qp_hl** companion_gqps;
 
-  GdakiGlobalGPUBufferTable<uint64_t> *counters_table;
-  GdakiGlobalGPUBufferTable<uint64_t> *signals_table;
-  struct ncclGinGdakiGPUContext *gin_gdaki_gpu_ctx_host_staging; // formatted according to current version
-  GdakiHostGPUMemHandle<char> *gin_gdaki_gpu_ctx_hd_mhandle; // formatted according to backendVersion
+  GdakiGlobalGPUBufferTable<uint64_t>* counters_table;
+  GdakiGlobalGPUBufferTable<uint64_t>* signals_table;
+  struct ncclGinGdakiGPUContext* gin_gdaki_gpu_ctx_host_staging; // formatted according to current version
+  GdakiHostGPUMemHandle<char>* gin_gdaki_gpu_ctx_hd_mhandle; // formatted according to backendVersion
   int backendVersion;
   struct {
-    void *addr;
-    struct ibv_mr *mr;
+    void* addr;
+    struct ibv_mr* mr;
     CUmemGenericAllocationHandle mhandle;
   } sink_buffer;
   uint64_t last_error_query_time;
 
-  uint64_t *last_issued_get;
-  uint64_t *last_visible_get;
+  uint64_t* last_issued_get;
+  uint64_t* last_visible_get;
 
-  struct ncclGinIbCollComm *collComm;
-  ncclNetDeviceHandle_t *devHandle;
+  struct ncclGinIbCollComm* collComm;
+  ncclNetDeviceHandle_t* devHandle;
   int nContexts;
 };
 
-static void gdakiFillExchInfo(struct gdaki_exch_info *exch_info, struct gdaki_context *gdaki_ctx,
-                              struct doca_gpu_verbs_qp_hl *gqp) {
+static void gdakiFillExchInfo(struct gdaki_exch_info* exch_info, struct gdaki_context* gdaki_ctx,
+                              struct doca_gpu_verbs_qp_hl* gqp) {
   exch_info->lid = gdaki_ctx->port_attr.lid;
   exch_info->qpn = doca_verbs_qp_get_qpn(gqp->qp);
   memcpy(exch_info->gid.raw, gdaki_ctx->rgid.raw, sizeof(union ibv_gid));
@@ -364,7 +359,7 @@ static void gdakiFillExchInfo(struct gdaki_exch_info *exch_info, struct gdaki_co
   exch_info->gid_index = gdaki_ctx->gid_index;
 }
 
-static ncclResult_t gdakiCreateVerbsAh(struct gdaki_context *ctx, struct ibv_context* ib_context, int ib_sl, int ib_tc,
+static ncclResult_t gdakiCreateVerbsAh(struct gdaki_context* ctx, struct ibv_context* ib_context, int ib_sl, int ib_tc,
                                        int ib_gid_index) {
   ncclResult_t status = ncclSuccess;
 
@@ -372,12 +367,10 @@ static ncclResult_t gdakiCreateVerbsAh(struct gdaki_context *ctx, struct ibv_con
 
   if (ctx->port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
     DOCACHECKGOTO(doca_verbs_ah_attr_set_sl(ctx->ah, ib_sl), status, destroy_verbs_ah);
-    DOCACHECKGOTO(doca_verbs_ah_attr_set_addr_type(ctx->ah, DOCA_VERBS_ADDR_TYPE_IB_NO_GRH),
-                  status, destroy_verbs_ah);
+    DOCACHECKGOTO(doca_verbs_ah_attr_set_addr_type(ctx->ah, DOCA_VERBS_ADDR_TYPE_IB_NO_GRH), status, destroy_verbs_ah);
   } else {
     DOCACHECKGOTO(doca_verbs_ah_attr_set_traffic_class(ctx->ah, ib_tc), status, destroy_verbs_ah);
-    DOCACHECKGOTO(doca_verbs_ah_attr_set_addr_type(ctx->ah, DOCA_VERBS_ADDR_TYPE_IPv4),
-                  status, destroy_verbs_ah);
+    DOCACHECKGOTO(doca_verbs_ah_attr_set_addr_type(ctx->ah, DOCA_VERBS_ADDR_TYPE_IPv4), status, destroy_verbs_ah);
   }
 
   // set_port_num?
@@ -391,85 +384,66 @@ destroy_verbs_ah:
   return status;
 }
 
-static ncclResult_t gdakiConnectQp(struct gdaki_context *ctx, struct doca_gpu_verbs_qp_hl *gqp,
-                                   struct gdaki_exch_info *exch_info) {
+static ncclResult_t gdakiConnectQp(struct gdaki_context* ctx, struct doca_gpu_verbs_qp_hl* gqp,
+                                   struct gdaki_exch_info* exch_info) {
   ncclResult_t status = ncclSuccess;
-  struct doca_verbs_qp_attr *verbs_qp_attr = nullptr;
-  int max_dest_rd_atomic = ncclParamGinGdakiMaxDestRdAtomic() > 0 ? ncclParamGinGdakiMaxDestRdAtomic() : ctx->ib_dev_attr.max_qp_rd_atom;
-  int max_qp_rd_atomic = ncclParamGinGdakiMaxQpRdAtomic() > 0 ? ncclParamGinGdakiMaxQpRdAtomic() : ctx->ib_dev_attr.max_qp_rd_atom;
+  struct doca_verbs_qp_attr* verbs_qp_attr = nullptr;
+  int max_dest_rd_atomic =
+    ncclParamGinGdakiMaxDestRdAtomic() > 0 ? ncclParamGinGdakiMaxDestRdAtomic() : ctx->ib_dev_attr.max_qp_rd_atom;
+  int max_qp_rd_atomic =
+    ncclParamGinGdakiMaxQpRdAtomic() > 0 ? ncclParamGinGdakiMaxQpRdAtomic() : ctx->ib_dev_attr.max_qp_rd_atom;
 
   DOCACHECK(doca_verbs_ah_attr_set_gid(ctx->ah, exch_info->vgid));
   DOCACHECK(doca_verbs_ah_attr_set_dlid(ctx->ah, exch_info->lid));
   DOCACHECK(doca_verbs_qp_attr_create(&verbs_qp_attr));
-  DOCACHECKGOTO(
-    doca_verbs_qp_attr_set_path_mtu(verbs_qp_attr, DOCA_VERBS_MTU_SIZE_4K_BYTES),
-    status, destroy_verbs_qp_attr);
+  DOCACHECKGOTO(doca_verbs_qp_attr_set_path_mtu(verbs_qp_attr, DOCA_VERBS_MTU_SIZE_4K_BYTES), status,
+                destroy_verbs_qp_attr);
   DOCACHECKGOTO(doca_verbs_qp_attr_set_rq_psn(verbs_qp_attr, 0), status, destroy_verbs_qp_attr);
 
   DOCACHECKGOTO(doca_verbs_qp_attr_set_sq_psn(verbs_qp_attr, 0), status, destroy_verbs_qp_attr);
-  DOCACHECKGOTO(doca_verbs_qp_attr_set_port_num(verbs_qp_attr, ctx->port_num),
-                status, destroy_verbs_qp_attr);
-  DOCACHECKGOTO(doca_verbs_qp_attr_set_ack_timeout(verbs_qp_attr, ncclParamIbTimeout()),
-                status, destroy_verbs_qp_attr);
-  DOCACHECKGOTO(doca_verbs_qp_attr_set_retry_cnt(verbs_qp_attr, ncclParamIbRetryCnt()),
-                status, destroy_verbs_qp_attr);
-  DOCACHECKGOTO(doca_verbs_qp_attr_set_rnr_retry(verbs_qp_attr, 7), status,
+  DOCACHECKGOTO(doca_verbs_qp_attr_set_port_num(verbs_qp_attr, ctx->port_num), status, destroy_verbs_qp_attr);
+  DOCACHECKGOTO(doca_verbs_qp_attr_set_ack_timeout(verbs_qp_attr, ncclParamIbTimeout()), status, destroy_verbs_qp_attr);
+  DOCACHECKGOTO(doca_verbs_qp_attr_set_retry_cnt(verbs_qp_attr, ncclParamIbRetryCnt()), status, destroy_verbs_qp_attr);
+  DOCACHECKGOTO(doca_verbs_qp_attr_set_rnr_retry(verbs_qp_attr, 7), status, destroy_verbs_qp_attr);
+  DOCACHECKGOTO(doca_verbs_qp_attr_set_min_rnr_timer(verbs_qp_attr, 12), status, destroy_verbs_qp_attr);
+  DOCACHECKGOTO(doca_verbs_qp_attr_set_next_state(verbs_qp_attr, DOCA_VERBS_QP_STATE_INIT), status,
                 destroy_verbs_qp_attr);
-  DOCACHECKGOTO(doca_verbs_qp_attr_set_min_rnr_timer(verbs_qp_attr, 12),
-                status, destroy_verbs_qp_attr);
-  DOCACHECKGOTO(
-    doca_verbs_qp_attr_set_next_state(verbs_qp_attr, DOCA_VERBS_QP_STATE_INIT),
-    status, destroy_verbs_qp_attr);
-  DOCACHECKGOTO(doca_verbs_qp_attr_set_allow_remote_write(verbs_qp_attr, 1),
-                status, destroy_verbs_qp_attr);
-  DOCACHECKGOTO(doca_verbs_qp_attr_set_allow_remote_read(verbs_qp_attr, 1),
-                status, destroy_verbs_qp_attr);
-  DOCACHECKGOTO(doca_verbs_qp_attr_set_allow_remote_atomic(
-                  verbs_qp_attr, DOCA_VERBS_QP_ATOMIC_MODE_IB_SPEC),
-                status, destroy_verbs_qp_attr);
-  DOCACHECKGOTO(doca_verbs_qp_attr_set_ah_attr(verbs_qp_attr, ctx->ah),
-                status, destroy_verbs_qp_attr);
-  DOCACHECKGOTO(doca_verbs_qp_attr_set_dest_qp_num(verbs_qp_attr, exch_info->qpn),
-                status, destroy_verbs_qp_attr);
-  DOCACHECKGOTO(doca_verbs_qp_attr_set_pkey_index(verbs_qp_attr, ncclParamIbPkey()),
+  DOCACHECKGOTO(doca_verbs_qp_attr_set_allow_remote_write(verbs_qp_attr, 1), status, destroy_verbs_qp_attr);
+  DOCACHECKGOTO(doca_verbs_qp_attr_set_allow_remote_read(verbs_qp_attr, 1), status, destroy_verbs_qp_attr);
+  DOCACHECKGOTO(doca_verbs_qp_attr_set_allow_remote_atomic(verbs_qp_attr, DOCA_VERBS_QP_ATOMIC_MODE_IB_SPEC), status,
+                destroy_verbs_qp_attr);
+  DOCACHECKGOTO(doca_verbs_qp_attr_set_ah_attr(verbs_qp_attr, ctx->ah), status, destroy_verbs_qp_attr);
+  DOCACHECKGOTO(doca_verbs_qp_attr_set_dest_qp_num(verbs_qp_attr, exch_info->qpn), status, destroy_verbs_qp_attr);
+  DOCACHECKGOTO(doca_verbs_qp_attr_set_pkey_index(verbs_qp_attr, ncclParamIbPkey()), status, destroy_verbs_qp_attr);
+
+  DOCACHECKGOTO(doca_verbs_qp_modify(gqp->qp, verbs_qp_attr,
+                                     DOCA_VERBS_QP_ATTR_NEXT_STATE | DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_WRITE |
+                                       DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_READ | DOCA_VERBS_QP_ATTR_PKEY_INDEX |
+                                       DOCA_VERBS_QP_ATTR_PORT_NUM),
                 status, destroy_verbs_qp_attr);
 
-  DOCACHECKGOTO(doca_verbs_qp_modify(
-                  gqp->qp, verbs_qp_attr,
-                  DOCA_VERBS_QP_ATTR_NEXT_STATE | DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_WRITE |
-                    DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_READ | DOCA_VERBS_QP_ATTR_PKEY_INDEX |
-                    DOCA_VERBS_QP_ATTR_PORT_NUM),
+  DOCACHECKGOTO(doca_verbs_qp_attr_set_max_dest_rd_atomic(verbs_qp_attr, max_dest_rd_atomic), status,
+                destroy_verbs_qp_attr);
+
+  DOCACHECKGOTO(doca_verbs_qp_attr_set_next_state(verbs_qp_attr, DOCA_VERBS_QP_STATE_RTR), status,
+                destroy_verbs_qp_attr);
+
+  DOCACHECKGOTO(doca_verbs_qp_modify(gqp->qp, verbs_qp_attr,
+                                     DOCA_VERBS_QP_ATTR_NEXT_STATE | DOCA_VERBS_QP_ATTR_RQ_PSN |
+                                       DOCA_VERBS_QP_ATTR_DEST_QP_NUM | DOCA_VERBS_QP_ATTR_PATH_MTU |
+                                       DOCA_VERBS_QP_ATTR_AH_ATTR | DOCA_VERBS_QP_ATTR_MIN_RNR_TIMER |
+                                       DOCA_VERBS_QP_ATTR_MAX_DEST_RD_ATOMIC),
                 status, destroy_verbs_qp_attr);
 
+  DOCACHECKGOTO(doca_verbs_qp_attr_set_max_rd_atomic(verbs_qp_attr, max_qp_rd_atomic), status, destroy_verbs_qp_attr);
 
-  DOCACHECKGOTO(
-    doca_verbs_qp_attr_set_max_dest_rd_atomic(verbs_qp_attr, max_dest_rd_atomic),
-    status, destroy_verbs_qp_attr);
+  DOCACHECKGOTO(doca_verbs_qp_attr_set_next_state(verbs_qp_attr, DOCA_VERBS_QP_STATE_RTS), status,
+                destroy_verbs_qp_attr);
 
-  DOCACHECKGOTO(
-    doca_verbs_qp_attr_set_next_state(verbs_qp_attr, DOCA_VERBS_QP_STATE_RTR),
-    status, destroy_verbs_qp_attr);
-
-  DOCACHECKGOTO(doca_verbs_qp_modify(
-                  gqp->qp, verbs_qp_attr,
-                  DOCA_VERBS_QP_ATTR_NEXT_STATE | DOCA_VERBS_QP_ATTR_RQ_PSN |
-                    DOCA_VERBS_QP_ATTR_DEST_QP_NUM | DOCA_VERBS_QP_ATTR_PATH_MTU |
-                    DOCA_VERBS_QP_ATTR_AH_ATTR | DOCA_VERBS_QP_ATTR_MIN_RNR_TIMER | DOCA_VERBS_QP_ATTR_MAX_DEST_RD_ATOMIC),
-                status, destroy_verbs_qp_attr);
-
-  DOCACHECKGOTO(
-    doca_verbs_qp_attr_set_max_rd_atomic(verbs_qp_attr, max_qp_rd_atomic),
-    status, destroy_verbs_qp_attr);
-
-  DOCACHECKGOTO(
-    doca_verbs_qp_attr_set_next_state(verbs_qp_attr, DOCA_VERBS_QP_STATE_RTS),
-    status, destroy_verbs_qp_attr);
-
-  DOCACHECKGOTO(doca_verbs_qp_modify(
-                  gqp->qp, verbs_qp_attr,
-                  DOCA_VERBS_QP_ATTR_NEXT_STATE | DOCA_VERBS_QP_ATTR_SQ_PSN |
-                    DOCA_VERBS_QP_ATTR_ACK_TIMEOUT | DOCA_VERBS_QP_ATTR_RETRY_CNT |
-                    DOCA_VERBS_QP_ATTR_RNR_RETRY | DOCA_VERBS_QP_ATTR_MAX_QP_RD_ATOMIC),
+  DOCACHECKGOTO(doca_verbs_qp_modify(gqp->qp, verbs_qp_attr,
+                                     DOCA_VERBS_QP_ATTR_NEXT_STATE | DOCA_VERBS_QP_ATTR_SQ_PSN |
+                                       DOCA_VERBS_QP_ATTR_ACK_TIMEOUT | DOCA_VERBS_QP_ATTR_RETRY_CNT |
+                                       DOCA_VERBS_QP_ATTR_RNR_RETRY | DOCA_VERBS_QP_ATTR_MAX_QP_RD_ATOMIC),
                 status, destroy_verbs_qp_attr);
 
   DOCACHECK(doca_verbs_qp_attr_destroy(verbs_qp_attr));
@@ -483,9 +457,9 @@ destroy_verbs_qp_attr:
 
 NCCL_PARAM(GinGdakiUseReliableDB, "GDAKI_USE_RELIABLE_DB", 0);
 
-ncclResult_t ncclGinGdakiCreateContext(void *collComm, int nSignals, int nCounters, int nContexts, int queueDepth,
-                                       int trafficClass, int backendVersion, void **outGinCtx,
-                                       ncclNetDeviceHandle_t **outDevHandle) {
+ncclResult_t ncclGinGdakiCreateContext(void* collComm, int nSignals, int nCounters, int nContexts, int queueDepth,
+                                       int trafficClass, int backendVersion, void** outGinCtx,
+                                       ncclNetDeviceHandle_t** outDevHandle) {
   ncclResult_t status = ncclSuccess;
 
   if (backendVersion < 0 || backendVersion > NCCL_GIN_GDAKI_GPU_CONTEXT_VERSION) {
@@ -493,7 +467,7 @@ ncclResult_t ncclGinGdakiCreateContext(void *collComm, int nSignals, int nCounte
     return ncclInternalError;
   }
 
-  struct ncclGinIbCollComm *cComm = (struct ncclGinIbCollComm *)collComm;
+  struct ncclGinIbCollComm* cComm = (struct ncclGinIbCollComm*)collComm;
 
   char pciBusId[MAX_PCI_ADDRESS_LEN];
 
@@ -505,76 +479,75 @@ ncclResult_t ncclGinGdakiCreateContext(void *collComm, int nSignals, int nCounte
   const bool needCompanion = (nCounters > 0);
   const int ncompanion_qps = needCompanion ? nqps_for_comm * 2 : 0;  // Number of companion QPs for communication
                                                                       // Double because we connect to self.
-  const int nqps =
-    nqps_per_rank * (nranks + 1);  // +1 for the local rank.
+  const int nqps = nqps_per_rank * (nranks + 1);  // +1 for the local rank.
                                    // The last group is the responder of the local rank.
 
   // TODO: Take these config parameters from the environment variables or users.
   const int num_counters = nCounters;
   const int num_signals = nSignals;
   ncclNetProperties_t props;
-  ncclNetDeviceHandle_t *devHandle = nullptr;
-  struct gdaki_context *gdaki_ctx = nullptr;
-  struct gdaki_exch_info *local_exch_info = nullptr;
-  struct gdaki_exch_info *remote_exch_info = nullptr;
+  ncclNetDeviceHandle_t* devHandle = nullptr;
+  struct gdaki_context* gdaki_ctx = nullptr;
+  struct gdaki_exch_info* local_exch_info = nullptr;
+  struct gdaki_exch_info* remote_exch_info = nullptr;
 
   struct doca_gpu_verbs_qp_init_attr_hl qp_init_attr;
 
-  uint64_t *sink_buffer = nullptr;
-  struct ibv_mr *sink_buffer_mr = nullptr;
+  uint64_t* sink_buffer = nullptr;
+  struct ibv_mr* sink_buffer_mr = nullptr;
   CUmemGenericAllocationHandle sink_buffer_mhandle;
 
   bool need_cpu_proxy = false;
 
-  struct doca_gpu_verbs_qp **gverbs_qps = nullptr;
+  struct doca_gpu_verbs_qp** gverbs_qps = nullptr;
 
-  GdakiHostGPUMemHandle<char> *gin_gdaki_gpu_ctx_hd_mhandle = new GdakiHostGPUMemHandle<char>();
-  GdakiGlobalGPUBufferTable<uint64_t> *counters_table = new GdakiGlobalGPUBufferTable<uint64_t>();
-  GdakiGlobalGPUBufferTable<uint64_t> *signals_table = new GdakiGlobalGPUBufferTable<uint64_t>();
+  GdakiHostGPUMemHandle<char>* gin_gdaki_gpu_ctx_hd_mhandle = new GdakiHostGPUMemHandle<char>();
+  GdakiGlobalGPUBufferTable<uint64_t>* counters_table = new GdakiGlobalGPUBufferTable<uint64_t>();
+  GdakiGlobalGPUBufferTable<uint64_t>* signals_table = new GdakiGlobalGPUBufferTable<uint64_t>();
 
-  const int ib_sl = (ncclParamIbSl() != -1) ? ncclParamIbSl() : (trafficClass != NCCL_NET_TRAFFIC_CLASS_UNDEF) ? trafficClass : NCCL_IB_SL_DEFAULT;
-  const int ib_tc = (ncclParamIbTc() != -1) ? ncclParamIbTc() : (trafficClass != NCCL_NET_TRAFFIC_CLASS_UNDEF) ? trafficClass : NCCL_IB_TC_DEFAULT;
+  const int ib_sl = (ncclParamIbSl() != -1)                        ? ncclParamIbSl() :
+                    (trafficClass != NCCL_NET_TRAFFIC_CLASS_UNDEF) ? trafficClass :
+                                                                     NCCL_IB_SL_DEFAULT;
+  const int ib_tc = (trafficClass != NCCL_NET_TRAFFIC_CLASS_UNDEF) ? trafficClass : NCCL_IB_TC_DEFAULT;
   int ib_gid_index = 0;
 
   NCCLCHECK(cComm->getProperties(cComm->dev, &props));
 
-  NCCLCHECKGOTO(gin_gdaki_gpu_ctx_hd_mhandle->allocate(ncontexts * NCCL_GIN_GDAKI_GPU_CONTEXT_MAX_SIZE),
-                status, out);
+  NCCLCHECKGOTO(gin_gdaki_gpu_ctx_hd_mhandle->allocate(ncontexts * NCCL_GIN_GDAKI_GPU_CONTEXT_MAX_SIZE), status, out);
   NCCLCHECKGOTO(counters_table->allocate(num_counters * ncontexts, nranks), status, out);
   NCCLCHECKGOTO(signals_table->allocate(num_signals * ncontexts, nranks), status, out);
 
-  gdaki_ctx = (struct gdaki_context *)calloc(1, sizeof(*gdaki_ctx));
+  gdaki_ctx = (struct gdaki_context*)calloc(1, sizeof(*gdaki_ctx));
   EQCHECKGOTO(gdaki_ctx, nullptr, status, out);
   gdaki_ctx->needCompanion = needCompanion;
 
   gdaki_ctx->gin_gdaki_gpu_ctx_host_staging =
-    (struct ncclGinGdakiGPUContext *)calloc(ncontexts, sizeof(struct ncclGinGdakiGPUContext));
+    (struct ncclGinGdakiGPUContext*)calloc(ncontexts, sizeof(struct ncclGinGdakiGPUContext));
   EQCHECKGOTO(gdaki_ctx->gin_gdaki_gpu_ctx_host_staging, nullptr, status, out);
 
-  devHandle = (ncclNetDeviceHandle_t *)calloc(1, sizeof(*devHandle));
+  devHandle = (ncclNetDeviceHandle_t*)calloc(1, sizeof(*devHandle));
   EQCHECKGOTO(devHandle, nullptr, status, out);
 
   if (needCompanion) {
-    gdaki_ctx->gqp_groups = (struct doca_gpu_verbs_qp_group_hl **)calloc(
-      nqps_for_comm, sizeof(*gdaki_ctx->gqp_groups));
+    gdaki_ctx->gqp_groups = (struct doca_gpu_verbs_qp_group_hl**)calloc(nqps_for_comm, sizeof(*gdaki_ctx->gqp_groups));
     EQCHECKGOTO(gdaki_ctx->gqp_groups, nullptr, status, out);
   }
 
   // Main QP
-  gdaki_ctx->gqps = (struct doca_gpu_verbs_qp_hl **)calloc(nqps, sizeof(*gdaki_ctx->gqps));
+  gdaki_ctx->gqps = (struct doca_gpu_verbs_qp_hl**)calloc(nqps, sizeof(*gdaki_ctx->gqps));
   EQCHECKGOTO(gdaki_ctx->gqps, nullptr, status, out);
 
   // Companion QP
   if (needCompanion) {
     gdaki_ctx->companion_gqps =
-      (struct doca_gpu_verbs_qp_hl **)calloc(ncompanion_qps, sizeof(*gdaki_ctx->companion_gqps));
+      (struct doca_gpu_verbs_qp_hl**)calloc(ncompanion_qps, sizeof(*gdaki_ctx->companion_gqps));
     EQCHECKGOTO(gdaki_ctx->companion_gqps, nullptr, status, out);
   }
 
-  local_exch_info = (struct gdaki_exch_info *)calloc(nranks, sizeof(*local_exch_info));
+  local_exch_info = (struct gdaki_exch_info*)calloc(nranks, sizeof(*local_exch_info));
   EQCHECKGOTO(local_exch_info, nullptr, status, out);
 
-  remote_exch_info = (struct gdaki_exch_info *)calloc(ncontexts * nranks, sizeof(*remote_exch_info));
+  remote_exch_info = (struct gdaki_exch_info*)calloc(ncontexts * nranks, sizeof(*remote_exch_info));
   EQCHECKGOTO(remote_exch_info, nullptr, status, out);
 
   CUDACHECK(cudaGetDevice(&gdaki_ctx->cuda_id));
@@ -592,15 +565,14 @@ ncclResult_t ncclGinGdakiCreateContext(void *collComm, int nSignals, int nCounte
   NCCLCHECKGOTO(signals_table->exchange_info(cComm), status, out);
 
   gdaki_ctx->port_num = 1; // assume 1 for mlx5 devices
-  NCCLCHECKGOTO(wrap_ibv_query_port(cComm->ib.context, gdaki_ctx->port_num, &gdaki_ctx->port_attr),
-                status, out);
+  NCCLCHECKGOTO(wrap_ibv_query_port(cComm->ib.context, gdaki_ctx->port_num, &gdaki_ctx->port_attr), status, out);
 
   // Get the GID index
-  NCCLCHECKGOTO(cComm->getGidIndex(cComm->ib.context, gdaki_ctx->port_num, &gdaki_ctx->port_attr, &ib_gid_index), status, out);
+  NCCLCHECKGOTO(cComm->getGidIndex(cComm->ib.context, gdaki_ctx->port_num, &gdaki_ctx->port_attr, &ib_gid_index),
+                status, out);
   gdaki_ctx->gid_index = ib_gid_index;
 
-  NCCLCHECKGOTO(wrap_ibv_query_gid(cComm->ib.context, 1, ib_gid_index, &gdaki_ctx->rgid), status,
-                out);
+  NCCLCHECKGOTO(wrap_ibv_query_gid(cComm->ib.context, 1, ib_gid_index, &gdaki_ctx->rgid), status, out);
 
   NCCLCHECKGOTO(gdakiCreateVerbsAh(gdaki_ctx, cComm->ib.context, ib_sl, ib_tc, ib_gid_index), status, out);
 
@@ -611,17 +583,15 @@ ncclResult_t ncclGinGdakiCreateContext(void *collComm, int nSignals, int nCounte
   qp_init_attr.gpu_dev = gdaki_ctx->gdev;
   qp_init_attr.ibpd = cComm->ib.pd;
   qp_init_attr.sq_nwqe = gdaki_ctx->qp_sq_size;
-  qp_init_attr.nic_handler =
-    (enum doca_gpu_dev_verbs_nic_handler)ncclParamGinGdakiNicHandler();
+  qp_init_attr.nic_handler = (enum doca_gpu_dev_verbs_nic_handler)ncclParamGinGdakiNicHandler();
   qp_init_attr.mreg_type = DOCA_GPUNETIO_VERBS_MEM_REG_TYPE_DEFAULT;
   if (ncclParamGinGdakiUseReliableDB())
     qp_init_attr.send_dbr_mode_ext = DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_HW;
-  else
-    qp_init_attr.send_dbr_mode_ext = DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_VALID_DBR;
+  else qp_init_attr.send_dbr_mode_ext = DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_VALID_DBR;
 
   for (int qp_idx = 0; qp_idx < nqps_for_comm; qp_idx++) {
     if (needCompanion) {
-retry_create_qp_group_hl:
+    retry_create_qp_group_hl:
       doca_error_t docaStatus = doca_gpu_verbs_create_qp_group_hl(&qp_init_attr, &gdaki_ctx->gqp_groups[qp_idx]);
       if (docaStatus != DOCA_SUCCESS) {
         if (qp_init_attr.send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_HW) {
@@ -629,8 +599,8 @@ retry_create_qp_group_hl:
           goto retry_create_qp_group_hl;
         }
 
-        if ((qp_init_attr.send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED)
-            && ncclParamGinGdakiUseReliableDB() == 2) {
+        if ((qp_init_attr.send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED) &&
+            ncclParamGinGdakiUseReliableDB() == 2) {
           qp_init_attr.send_dbr_mode_ext = DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_VALID_DBR;
           goto retry_create_qp_group_hl;
         }
@@ -643,17 +613,15 @@ retry_create_qp_group_hl:
       gdaki_ctx->gqps[qp_idx] = &gdaki_ctx->gqp_groups[qp_idx]->qp_main;
       gdaki_ctx->companion_gqps[qp_idx] = &gdaki_ctx->gqp_groups[qp_idx]->qp_companion;
 
-      const char *dbr_opt_str =
-        qp_init_attr.send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_HW ? "HW"
-        : qp_init_attr.send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED
-          ? "SW emulation"
-          : "disabled";
-      INFO(NCCL_NET,
-           "[%d] Created a QP group: qp_idx=%d, main_qpn=%#x, companion_qpn=%#x, reliable_db=%s",
-           rank, qp_idx, doca_verbs_qp_get_qpn(gdaki_ctx->gqps[qp_idx]->qp),
+      const char* dbr_opt_str =
+        qp_init_attr.send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_HW          ? "HW" :
+        qp_init_attr.send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED ? "SW emulation" :
+                                                                                                     "disabled";
+      INFO(NCCL_NET, "[%d] Created a QP group: qp_idx=%d, main_qpn=%#x, companion_qpn=%#x, reliable_db=%s", rank,
+           qp_idx, doca_verbs_qp_get_qpn(gdaki_ctx->gqps[qp_idx]->qp),
            doca_verbs_qp_get_qpn(gdaki_ctx->companion_gqps[qp_idx]->qp), dbr_opt_str);
     } else {
-retry_create_qp_hl:
+    retry_create_qp_hl:
       doca_error_t docaStatus = doca_gpu_verbs_create_qp_hl(&qp_init_attr, &gdaki_ctx->gqps[qp_idx]);
       if (docaStatus != DOCA_SUCCESS) {
         if (qp_init_attr.send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_HW) {
@@ -661,8 +629,8 @@ retry_create_qp_hl:
           goto retry_create_qp_hl;
         }
 
-        if ((qp_init_attr.send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED)
-            && ncclParamGinGdakiUseReliableDB() == 2) {
+        if ((qp_init_attr.send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED) &&
+            ncclParamGinGdakiUseReliableDB() == 2) {
           qp_init_attr.send_dbr_mode_ext = DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_VALID_DBR;
           goto retry_create_qp_hl;
         }
@@ -672,29 +640,24 @@ retry_create_qp_hl:
         goto out;
       }
 
-      const char *dbr_opt_str =
-        qp_init_attr.send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_HW ? "HW"
-        : qp_init_attr.send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED
-          ? "SW emulation"
-          : "disabled";
-      INFO(NCCL_NET,
-           "[%d] Created a QP: qp_idx=%d, qpn=%#x, reliable_db=%s",
-           rank, qp_idx, doca_verbs_qp_get_qpn(gdaki_ctx->gqps[qp_idx]->qp), dbr_opt_str);
+      const char* dbr_opt_str =
+        qp_init_attr.send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_HW          ? "HW" :
+        qp_init_attr.send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED ? "SW emulation" :
+                                                                                                     "disabled";
+      INFO(NCCL_NET, "[%d] Created a QP: qp_idx=%d, qpn=%#x, reliable_db=%s", rank, qp_idx,
+           doca_verbs_qp_get_qpn(gdaki_ctx->gqps[qp_idx]->qp), dbr_opt_str);
     }
   }
 
   qp_init_attr.send_dbr_mode_ext = DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_VALID_DBR;
   for (int qp_idx = nqps_for_comm; qp_idx < nqps; qp_idx++) {
-    DOCACHECKGOTO(doca_gpu_verbs_create_qp_hl(&qp_init_attr, &gdaki_ctx->gqps[qp_idx]),
-                  status, out);
+    DOCACHECKGOTO(doca_gpu_verbs_create_qp_hl(&qp_init_attr, &gdaki_ctx->gqps[qp_idx]), status, out);
     INFO(NCCL_NET, "[%d] Created a self-loop peer QP: qp_idx=%d, qpn=%#x", rank, qp_idx,
          doca_verbs_qp_get_qpn(gdaki_ctx->gqps[qp_idx]->qp));
   }
 
   for (int qp_idx = nqps_for_comm; qp_idx < ncompanion_qps; qp_idx++) {
-    DOCACHECKGOTO(
-      doca_gpu_verbs_create_qp_hl(&qp_init_attr, &gdaki_ctx->companion_gqps[qp_idx]),
-      status, out);
+    DOCACHECKGOTO(doca_gpu_verbs_create_qp_hl(&qp_init_attr, &gdaki_ctx->companion_gqps[qp_idx]), status, out);
     INFO(NCCL_NET, "[%d] Created a self-loop peer companion QP: qp_idx=%d, qpn=%#x", rank, qp_idx,
          doca_verbs_qp_get_qpn(gdaki_ctx->companion_gqps[qp_idx]->qp));
   }
@@ -707,22 +670,20 @@ retry_create_qp_hl:
     }
 
     // Exchange information with peers
-    NCCLCHECKGOTO(
-      cComm->allToAll(cComm, local_exch_info, &remote_exch_info[ctx_idx * nranks],
-                      sizeof(struct gdaki_exch_info)),
-      status, out);
+    NCCLCHECKGOTO(cComm->allToAll(cComm, local_exch_info, &remote_exch_info[ctx_idx * nranks],
+                                  sizeof(struct gdaki_exch_info)),
+                  status, out);
   }
 
   for (int rank_idx = 0; rank_idx < nranks; rank_idx++) {
     if (rank_idx == rank) continue;
     for (int ctx_idx = 0; ctx_idx < ncontexts; ctx_idx++) {
       int qp_idx = rank_idx + ctx_idx * nranks;
-      struct gdaki_exch_info *peer_info = &remote_exch_info[ctx_idx * nranks + rank_idx];
+      struct gdaki_exch_info* peer_info = &remote_exch_info[ctx_idx * nranks + rank_idx];
       NCCLCHECKGOTO(gdakiConnectQp(gdaki_ctx, gdaki_ctx->gqps[qp_idx], peer_info), status, out);
 
-      INFO(NCCL_NET,
-           "[%d] Connected main QP: qp_idx=%d, main_qpn=%#x, remote_rank=%d, remote_qpn=%#x", rank,
-           qp_idx, doca_verbs_qp_get_qpn(gdaki_ctx->gqps[qp_idx]->qp), rank_idx, peer_info->qpn);
+      INFO(NCCL_NET, "[%d] Connected main QP: qp_idx=%d, main_qpn=%#x, remote_rank=%d, remote_qpn=%#x", rank, qp_idx,
+           doca_verbs_qp_get_qpn(gdaki_ctx->gqps[qp_idx]->qp), rank_idx, peer_info->qpn);
     }
   }
 
@@ -731,9 +692,8 @@ retry_create_qp_hl:
     struct gdaki_exch_info exch_info;
     gdakiFillExchInfo(&exch_info, gdaki_ctx, gdaki_ctx->gqps[nqps_for_comm + ctx_idx]);
     NCCLCHECKGOTO(gdakiConnectQp(gdaki_ctx, gdaki_ctx->gqps[qp_idx], &exch_info), status, out);
-    INFO(NCCL_NET,
-         "[%d] Connected self-loop QP: qp_idx=%d, main_qpn=%#x, peer_qpn=%#x", rank,
-         qp_idx, doca_verbs_qp_get_qpn(gdaki_ctx->gqps[qp_idx]->qp), exch_info.qpn);
+    INFO(NCCL_NET, "[%d] Connected self-loop QP: qp_idx=%d, main_qpn=%#x, peer_qpn=%#x", rank, qp_idx,
+         doca_verbs_qp_get_qpn(gdaki_ctx->gqps[qp_idx]->qp), exch_info.qpn);
   }
 
   for (int qp_idx = 0; qp_idx < nqps_per_rank; qp_idx++) {
@@ -741,8 +701,8 @@ retry_create_qp_hl:
     struct gdaki_exch_info exch_info;
     gdakiFillExchInfo(&exch_info, gdaki_ctx, gdaki_ctx->gqps[qp_idx * nranks + rank]);
     NCCLCHECKGOTO(gdakiConnectQp(gdaki_ctx, gdaki_ctx->gqps[peer_qp_idx], &exch_info), status, out);
-    INFO(NCCL_NET, "[%d] Connected self-loop peer QP: qp_idx=%d, qpn=%#x, main_qpn=%#x", rank,
-         peer_qp_idx, doca_verbs_qp_get_qpn(gdaki_ctx->gqps[peer_qp_idx]->qp), exch_info.qpn);
+    INFO(NCCL_NET, "[%d] Connected self-loop peer QP: qp_idx=%d, qpn=%#x, main_qpn=%#x", rank, peer_qp_idx,
+         doca_verbs_qp_get_qpn(gdaki_ctx->gqps[peer_qp_idx]->qp), exch_info.qpn);
   }
 
   if (needCompanion) {
@@ -750,47 +710,41 @@ retry_create_qp_hl:
       int peer_qp_idx = nqps_for_comm + qp_idx;
       struct gdaki_exch_info exch_info;
       gdakiFillExchInfo(&exch_info, gdaki_ctx, gdaki_ctx->companion_gqps[peer_qp_idx]);
-      NCCLCHECKGOTO(gdakiConnectQp(gdaki_ctx, gdaki_ctx->companion_gqps[qp_idx], &exch_info), status,
-                    out);
-      INFO(NCCL_NET,
-           "[%d] Connected companion QP: qp_idx=%d, companion_qpn=%#x, peer_companion_qpn=%#x", rank,
-           qp_idx, doca_verbs_qp_get_qpn(gdaki_ctx->companion_gqps[qp_idx]->qp), exch_info.qpn);
+      NCCLCHECKGOTO(gdakiConnectQp(gdaki_ctx, gdaki_ctx->companion_gqps[qp_idx], &exch_info), status, out);
+      INFO(NCCL_NET, "[%d] Connected companion QP: qp_idx=%d, companion_qpn=%#x, peer_companion_qpn=%#x", rank, qp_idx,
+           doca_verbs_qp_get_qpn(gdaki_ctx->companion_gqps[qp_idx]->qp), exch_info.qpn);
 
       gdakiFillExchInfo(&exch_info, gdaki_ctx, gdaki_ctx->companion_gqps[qp_idx]);
-      NCCLCHECKGOTO(gdakiConnectQp(gdaki_ctx, gdaki_ctx->companion_gqps[peer_qp_idx], &exch_info),
-                    status, out);
+      NCCLCHECKGOTO(gdakiConnectQp(gdaki_ctx, gdaki_ctx->companion_gqps[peer_qp_idx], &exch_info), status, out);
       INFO(NCCL_NET,
            "[%d] Connected self-loop peer companion QP: qp_idx=%d, peer_companion_qpn=%#x, "
            "companion_qpn=%#x",
-           rank, peer_qp_idx, doca_verbs_qp_get_qpn(gdaki_ctx->companion_gqps[peer_qp_idx]->qp),
-           exch_info.qpn);
+           rank, peer_qp_idx, doca_verbs_qp_get_qpn(gdaki_ctx->companion_gqps[peer_qp_idx]->qp), exch_info.qpn);
     }
   }
 
-  NCCLCHECKGOTO(ncclCuMemAlloc((void **)&sink_buffer, &sink_buffer_mhandle, CU_MEM_HANDLE_TYPE_NONE,
-                               sizeof(uint64_t), nullptr),
+  NCCLCHECKGOTO(ncclCuMemAlloc((void**)&sink_buffer, &sink_buffer_mhandle, CU_MEM_HANDLE_TYPE_NONE, sizeof(uint64_t),
+                               nullptr),
                 status, out);
 
   NCCLCHECKGOTO(gdakiRegMr(&sink_buffer_mr, cComm->ib.pd, sink_buffer, sizeof(uint64_t),
-                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                             IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC),
+                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ |
+                             IBV_ACCESS_REMOTE_ATOMIC),
                 status, out);
 
   NCCLCHECKGOTO(ncclCudaCalloc(&gdaki_ctx->last_issued_get, ncontexts * nranks, NULL), status, out);
   NCCLCHECKGOTO(ncclCudaCalloc(&gdaki_ctx->last_visible_get, ncontexts * nranks, NULL), status, out);
 
-  gverbs_qps = (struct doca_gpu_verbs_qp **)calloc(nranks, sizeof(struct doca_gpu_verbs_qp *));
+  gverbs_qps = (struct doca_gpu_verbs_qp**)calloc(nranks, sizeof(struct doca_gpu_verbs_qp*));
   for (int ctx_idx = 0; ctx_idx < ncontexts; ctx_idx++) {
-    struct ncclGinGdakiGPUContext *gin_gdaki_gpu_ctx =
-      &gdaki_ctx->gin_gdaki_gpu_ctx_host_staging[ctx_idx];
+    struct ncclGinGdakiGPUContext* gin_gdaki_gpu_ctx = &gdaki_ctx->gin_gdaki_gpu_ctx_host_staging[ctx_idx];
 
     unsigned int buffer_start;
     for (int qp_idx = 0; qp_idx < nranks; qp_idx++) {
       gverbs_qps[qp_idx] = gdaki_ctx->gqps[(ctx_idx * nranks) + qp_idx]->qp_gverbs;
       need_cpu_proxy |= (gverbs_qps[qp_idx]->cpu_proxy);
     }
-    DOCACHECKGOTO(doca_gpu_verbs_export_multi_qps_dev(gdaki_ctx->gdev, gverbs_qps, nranks,
-                                                      &gin_gdaki_gpu_ctx->gdqp),
+    DOCACHECKGOTO(doca_gpu_verbs_export_multi_qps_dev(gdaki_ctx->gdev, gverbs_qps, nranks, &gin_gdaki_gpu_ctx->gdqp),
                   status, out);
 
     if (needCompanion) {
@@ -825,10 +779,8 @@ retry_create_qp_hl:
 
     NCCLCHECKGOTO(ncclGinGdakiGPUContext_init(backendVersion, gin_gdaki_gpu_ctx_hd_mhandle->host_buf, ctx_idx,
                                               gin_gdaki_gpu_ctx->gdqp, gin_gdaki_gpu_ctx->companion_gdqp,
-                                              gin_gdaki_gpu_ctx->counters_table,
-                                              gin_gdaki_gpu_ctx->signals_table,
-                                              gin_gdaki_gpu_ctx->sink_buffer_lkey,
-                                              gin_gdaki_gpu_ctx->last_issued_get,
+                                              gin_gdaki_gpu_ctx->counters_table, gin_gdaki_gpu_ctx->signals_table,
+                                              gin_gdaki_gpu_ctx->sink_buffer_lkey, gin_gdaki_gpu_ctx->last_issued_get,
                                               gin_gdaki_gpu_ctx->last_visible_get),
                   status, out);
   }
@@ -837,7 +789,7 @@ retry_create_qp_hl:
 
   devHandle->netDeviceType = NCCL_NET_DEVICE_GIN_GDAKI;
   devHandle->netDeviceVersion = NCCL_GIN_GDAKI_VERSION;
-  devHandle->handle = (void *)gin_gdaki_gpu_ctx_hd_mhandle->gpu_buf;
+  devHandle->handle = (void*)gin_gdaki_gpu_ctx_hd_mhandle->gpu_buf;
   devHandle->size = 0;
   devHandle->needsProxyProgress = need_cpu_proxy;
 
@@ -861,8 +813,7 @@ out:
       // Clean up any allocated GPU memory
       if (gdaki_ctx->gin_gdaki_gpu_ctx_host_staging) {
         for (int ctx_idx = 0; ctx_idx < ncontexts; ctx_idx++) {
-          struct ncclGinGdakiGPUContext *gin_gdaki_gpu_ctx =
-            &gdaki_ctx->gin_gdaki_gpu_ctx_host_staging[ctx_idx];
+          struct ncclGinGdakiGPUContext* gin_gdaki_gpu_ctx = &gdaki_ctx->gin_gdaki_gpu_ctx_host_staging[ctx_idx];
           if (gin_gdaki_gpu_ctx->gdqp) {
             for (int qp_idx = 0; qp_idx < nranks; qp_idx++) {
               gverbs_qps[qp_idx] = gdaki_ctx->gqps[(ctx_idx * nranks) + qp_idx]->qp_gverbs;
@@ -874,7 +825,8 @@ out:
             for (int qp_idx = 0; qp_idx < nranks; qp_idx++) {
               gverbs_qps[qp_idx] = gdaki_ctx->companion_gqps[(ctx_idx * nranks) + qp_idx]->qp_gverbs;
             }
-            doca_gpu_verbs_unexport_multi_qps_dev(gdaki_ctx->gdev, gverbs_qps, nranks, gin_gdaki_gpu_ctx->companion_gdqp);
+            doca_gpu_verbs_unexport_multi_qps_dev(gdaki_ctx->gdev, gverbs_qps, nranks,
+                                                  gin_gdaki_gpu_ctx->companion_gdqp);
             gin_gdaki_gpu_ctx->companion_gdqp = nullptr;
           }
         }
@@ -942,11 +894,11 @@ out:
   return status;
 }
 
-ncclResult_t ncclGinGdakiDestroyContext(void *ginCtx) {
+ncclResult_t ncclGinGdakiDestroyContext(void* ginCtx) {
   if (!ginCtx) return ncclInvalidArgument;
 
-  struct gdaki_context *gdaki_ctx = (struct gdaki_context *)ginCtx;
-  struct ncclGinIbCollComm *cComm = gdaki_ctx->collComm;
+  struct gdaki_context* gdaki_ctx = (struct gdaki_context*)ginCtx;
+  struct ncclGinIbCollComm* cComm = gdaki_ctx->collComm;
   const int nranks = cComm->nranks;
   const int ncontexts = gdaki_ctx->nContexts;
   const int nqps_per_rank = ncontexts;
@@ -954,15 +906,14 @@ ncclResult_t ncclGinGdakiDestroyContext(void *ginCtx) {
   const bool needCompanion = gdaki_ctx->needCompanion;
   const int ncompanion_qps = needCompanion ? nqps_for_comm * 2 : 0;  // Number of companion QPs for communication
                                                                       // Double because we connect to self.
-  const int nqps =
-    nqps_per_rank * (nranks + 1);  // +1 for the local rank.
+  const int nqps = nqps_per_rank * (nranks + 1);  // +1 for the local rank.
                                    // The last group is the responder of the local rank.
 
   if (gdaki_ctx->gin_gdaki_gpu_ctx_host_staging) {
-    struct doca_gpu_verbs_qp **gverbs_qps = (struct doca_gpu_verbs_qp **)calloc(nranks, sizeof(struct doca_gpu_verbs_qp *));
+    struct doca_gpu_verbs_qp** gverbs_qps =
+      (struct doca_gpu_verbs_qp**)calloc(nranks, sizeof(struct doca_gpu_verbs_qp*));
     for (int ctx_idx = 0; ctx_idx < ncontexts; ctx_idx++) {
-      struct ncclGinGdakiGPUContext *gin_gdaki_gpu_ctx =
-        &gdaki_ctx->gin_gdaki_gpu_ctx_host_staging[ctx_idx];
+      struct ncclGinGdakiGPUContext* gin_gdaki_gpu_ctx = &gdaki_ctx->gin_gdaki_gpu_ctx_host_staging[ctx_idx];
       if (gin_gdaki_gpu_ctx->gdqp) {
         for (int qp_idx = 0; qp_idx < nranks; qp_idx++) {
           gverbs_qps[qp_idx] = gdaki_ctx->gqps[(ctx_idx * nranks) + qp_idx]->qp_gverbs;
@@ -974,7 +925,8 @@ ncclResult_t ncclGinGdakiDestroyContext(void *ginCtx) {
         for (int qp_idx = 0; qp_idx < nranks; qp_idx++) {
           gverbs_qps[qp_idx] = gdaki_ctx->companion_gqps[(ctx_idx * nranks) + qp_idx]->qp_gverbs;
         }
-        DOCACHECK(doca_gpu_verbs_unexport_multi_qps_dev(gdaki_ctx->gdev, gverbs_qps, nranks, gin_gdaki_gpu_ctx->companion_gdqp));
+        DOCACHECK(doca_gpu_verbs_unexport_multi_qps_dev(gdaki_ctx->gdev, gverbs_qps, nranks,
+                                                        gin_gdaki_gpu_ctx->companion_gdqp));
         gin_gdaki_gpu_ctx->companion_gdqp = nullptr;
       }
     }
@@ -1044,26 +996,28 @@ ncclResult_t ncclGinGdakiDestroyContext(void *ginCtx) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinGdakiRegMrSym(void *collComm, void *data, size_t size, int type, uint64_t mr_flags, void **mhandle,
-                                  void **ginHandle) {
-  struct ncclGinIbCollComm *cComm = (struct ncclGinIbCollComm *)collComm;
+ncclResult_t ncclGinGdakiRegMrSym(void* collComm, void* data, size_t size, int type, uint64_t mr_flags, void** mhandle,
+                                  void** ginHandle) {
+  struct ncclGinIbCollComm* cComm = (struct ncclGinIbCollComm*)collComm;
   ncclResult_t status = ncclSuccess;
 
-  struct ibv_mr *mr = nullptr;
-  GdakiHostGPUMemHandle<struct ncclGinGdakiMemHandle> *gdaki_mhandle_hd_mhandle =
+  struct ibv_mr* mr = nullptr;
+  GdakiHostGPUMemHandle<struct ncclGinGdakiMemHandle>* gdaki_mhandle_hd_mhandle =
     new GdakiHostGPUMemHandle<struct ncclGinGdakiMemHandle>();
-  GdakiHostGPUMemHandle<__be32> *rkeys_hd_mhandle =
-    new GdakiHostGPUMemHandle<__be32>();
+  GdakiHostGPUMemHandle<__be32>* rkeys_hd_mhandle = new GdakiHostGPUMemHandle<__be32>();
   __be32 rkey;
 
-  struct gdaki_mem_handle *gdaki_mhandle = nullptr;
-  gdaki_mhandle = (struct gdaki_mem_handle *)calloc(1, sizeof(*gdaki_mhandle));
-  EQCHECK(gdaki_mhandle, nullptr);
-
+  struct gdaki_mem_handle* gdaki_mhandle = nullptr;
   bool force_strict_ordering = (mr_flags & NCCL_NET_MR_FLAG_FORCE_SO);
-  NCCLCHECK(gdakiRegMr(&mr, cComm->ib.pd, data, size,
-                       IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ |
-                         IBV_ACCESS_REMOTE_ATOMIC, force_strict_ordering));
+
+  gdaki_mhandle = (struct gdaki_mem_handle*)calloc(1, sizeof(*gdaki_mhandle));
+  EQCHECKGOTO(gdaki_mhandle, nullptr, status, out);
+
+  NCCLCHECKGOTO(gdakiRegMr(&mr, cComm->ib.pd, data, size,
+                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ |
+                             IBV_ACCESS_REMOTE_ATOMIC,
+                           force_strict_ordering),
+                status, out);
 
   rkey = htobe32(mr->rkey);
   NCCLCHECKGOTO(rkeys_hd_mhandle->allocate(cComm->nranks), status, out);
@@ -1080,27 +1034,29 @@ ncclResult_t ncclGinGdakiRegMrSym(void *collComm, void *data, size_t size, int t
   gdaki_mhandle->gdaki_mhandle_hd_mhandle = gdaki_mhandle_hd_mhandle;
   gdaki_mhandle->rkeys_hd_mhandle = rkeys_hd_mhandle;
 
-  INFO(NCCL_NET, "[%d] Registered MR: data=%p, size=%zu, lkey(be32)=%#x, rkey(be32)=%#x",
-       cComm->rank, data, size, htobe32(mr->lkey), htobe32(mr->rkey));
+  INFO(NCCL_NET, "[%d] Registered MR: data=%p, size=%zu, lkey(be32)=%#x, rkey(be32)=%#x", cComm->rank, data, size,
+       htobe32(mr->lkey), htobe32(mr->rkey));
 
-  *mhandle = (void *)gdaki_mhandle;
-  *ginHandle = (void *)gdaki_mhandle_hd_mhandle->gpu_buf;
+  *mhandle = (void*)gdaki_mhandle;
+  *ginHandle = (void*)gdaki_mhandle_hd_mhandle->gpu_buf;
 
 out:
   if (status != ncclSuccess) {
+    if (mr) wrap_ibv_dereg_mr(mr);
+    free(gdaki_mhandle);
     delete gdaki_mhandle_hd_mhandle;
     delete rkeys_hd_mhandle;
   }
   return status;
 }
 
-ncclResult_t ncclGinGdakiDeregMrSym(void *collComm, void *mhandle) {
-  struct ncclGinIbCollComm *cComm = (struct ncclGinIbCollComm *)collComm;
-  struct gdaki_mem_handle *gdaki_mhandle = (struct gdaki_mem_handle *)mhandle;
-  struct ibv_mr *mr = gdaki_mhandle->mr;
+ncclResult_t ncclGinGdakiDeregMrSym(void* collComm, void* mhandle) {
+  struct ncclGinIbCollComm* cComm = (struct ncclGinIbCollComm*)collComm;
+  struct gdaki_mem_handle* gdaki_mhandle = (struct gdaki_mem_handle*)mhandle;
+  struct ibv_mr* mr = gdaki_mhandle->mr;
 
-  INFO(NCCL_NET, "[%d] Unregistering MR: lkey(be32)=%#x, rkey(be32)=%#x", cComm->rank,
-       htobe32(mr->lkey), htobe32(mr->rkey));
+  INFO(NCCL_NET, "[%d] Unregistering MR: lkey(be32)=%#x, rkey(be32)=%#x", cComm->rank, htobe32(mr->lkey),
+       htobe32(mr->rkey));
 
   NCCLCHECK(wrap_ibv_dereg_mr(mr));
 
@@ -1116,8 +1072,8 @@ ncclResult_t ncclGinGdakiDeregMrSym(void *collComm, void *mhandle) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinGdakiProgress(void *ctx) {
-  struct gdaki_context *gdakiCtx = (struct gdaki_context *)ctx;
+ncclResult_t ncclGinGdakiProgress(void* ctx) {
+  struct gdaki_context* gdakiCtx = (struct gdaki_context*)ctx;
   const int ncontexts = gdakiCtx->nContexts;
   const int nranks = gdakiCtx->collComm->nranks;
   const int nqpsPerRank = ncontexts;
@@ -1128,7 +1084,7 @@ ncclResult_t ncclGinGdakiProgress(void *ctx) {
   while (has_progressed) {
     has_progressed = false;
     for (int qpIdx = 0; qpIdx < nqpsForComm; qpIdx++) {
-      struct doca_gpu_verbs_qp *qp = gdakiCtx->gqps[qpIdx]->qp_gverbs;
+      struct doca_gpu_verbs_qp* qp = gdakiCtx->gqps[qpIdx]->qp_gverbs;
       if (qp->cpu_proxy) {
         DOCACHECK(doca_gpu_verbs_cpu_proxy_progress(qp, &progressed));
         has_progressed |= progressed;
@@ -1147,8 +1103,8 @@ ncclResult_t ncclGinGdakiProgress(void *ctx) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinGdakiQueryLastError(void *ginCtx, bool *hasError) {
-  struct gdaki_context *gdakiCtx = (struct gdaki_context *)ginCtx;
+ncclResult_t ncclGinGdakiQueryLastError(void* ginCtx, bool* hasError) {
+  struct gdaki_context* gdakiCtx = (struct gdaki_context*)ginCtx;
   bool hasError_ = false;
   const int ncontexts = gdakiCtx->nContexts;
   const int nranks = gdakiCtx->collComm->nranks;
@@ -1163,7 +1119,7 @@ ncclResult_t ncclGinGdakiQueryLastError(void *ginCtx, bool *hasError) {
   gdakiCtx->last_error_query_time = now;
 
   for (int qpIdx = 0; qpIdx < nqpsForComm; qpIdx++) {
-    struct doca_gpu_verbs_qp *qp = gdakiCtx->gqps[qpIdx]->qp_gverbs;
+    struct doca_gpu_verbs_qp* qp = gdakiCtx->gqps[qpIdx]->qp_gverbs;
     struct doca_gpu_verbs_qp_error_info errorInfo;
     DOCACHECK(doca_gpu_verbs_query_last_error(qp, &errorInfo));
     hasError_ |= errorInfo.has_error;

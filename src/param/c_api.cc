@@ -37,8 +37,10 @@ static inline void ncclParamCheckFlag(uint64_t flags, const char* key) {
   if (flags & NCCL_PARAM_FLAG_UNUSED) {
     INFO(NCCL_ENV, "Warning: ENV %s is unused. Setting it has no effect.", key);
   } else if (flags & NCCL_PARAM_FLAG_DEPRECATED) {
-    INFO(NCCL_ENV, "Warning: ENV %s is deprecated. "
-         "It may be removed or become unused in future versions.", key);
+    INFO(NCCL_ENV,
+         "Warning: ENV %s is deprecated. "
+         "It may be removed or become unused in future versions.",
+         key);
   }
 
   if (!(flags & NCCL_PARAM_FLAG_PUBLISHED)) {
@@ -67,25 +69,24 @@ ncclResult_t ncclParamBind(ncclParamHandle_t* out, const char* key) {
 // Typed Getters — dispatch via typeId + getRawData()
 // ============================================================================
 
-#define NCCL_PARAM_DEFINE_TYPED_GETTER(suffix, ctype, tid)                    \
-  NCCL_API(ncclResult_t, ncclParamGet##suffix,                               \
-           ncclParamHandle_t h, ctype* out);                                  \
-  ncclResult_t ncclParamGet##suffix(ncclParamHandle_t h, ctype* out) {       \
-    if (!h || !out) return ncclInvalidArgument;                               \
-    auto* e = unwrap(h);                                                      \
-    if (e->info.typeId != (tid)) {                                            \
-      INFO(NCCL_ENV, "PARAM: type mismatch for key \"%s\"", e->info.key);    \
-      return ncclInvalidArgument;                                             \
-    }                                                                         \
-    int len = 0;                                                              \
-    return e->param->getRawData(out, sizeof(*out), &len);                     \
+#define NCCL_PARAM_DEFINE_TYPED_GETTER(suffix, ctype, tid) \
+  NCCL_API(ncclResult_t, ncclParamGet##suffix, ncclParamHandle_t h, ctype* out); \
+  ncclResult_t ncclParamGet##suffix(ncclParamHandle_t h, ctype* out) { \
+    if (!h || !out) return ncclInvalidArgument; \
+    auto* e = unwrap(h); \
+    if (e->info.typeId != (tid)) { \
+      INFO(NCCL_ENV, "PARAM: type mismatch for key \"%s\"", e->info.key); \
+      return ncclInvalidArgument; \
+    } \
+    int len = 0; \
+    return e->param->getRawData(out, sizeof(*out), &len); \
   }
 
-NCCL_PARAM_DEFINE_TYPED_GETTER(I8,  int8_t,   NCCL_PARAM_TYPE_I8)
-NCCL_PARAM_DEFINE_TYPED_GETTER(I16, int16_t,  NCCL_PARAM_TYPE_I16)
-NCCL_PARAM_DEFINE_TYPED_GETTER(I32, int32_t,  NCCL_PARAM_TYPE_I32)
-NCCL_PARAM_DEFINE_TYPED_GETTER(I64, int64_t,  NCCL_PARAM_TYPE_I64)
-NCCL_PARAM_DEFINE_TYPED_GETTER(U8,  uint8_t,  NCCL_PARAM_TYPE_U8)
+NCCL_PARAM_DEFINE_TYPED_GETTER(I8, int8_t, NCCL_PARAM_TYPE_I8)
+NCCL_PARAM_DEFINE_TYPED_GETTER(I16, int16_t, NCCL_PARAM_TYPE_I16)
+NCCL_PARAM_DEFINE_TYPED_GETTER(I32, int32_t, NCCL_PARAM_TYPE_I32)
+NCCL_PARAM_DEFINE_TYPED_GETTER(I64, int64_t, NCCL_PARAM_TYPE_I64)
+NCCL_PARAM_DEFINE_TYPED_GETTER(U8, uint8_t, NCCL_PARAM_TYPE_U8)
 NCCL_PARAM_DEFINE_TYPED_GETTER(U16, uint16_t, NCCL_PARAM_TYPE_U16)
 NCCL_PARAM_DEFINE_TYPED_GETTER(U32, uint32_t, NCCL_PARAM_TYPE_U32)
 NCCL_PARAM_DEFINE_TYPED_GETTER(U64, uint64_t, NCCL_PARAM_TYPE_U64)
@@ -176,7 +177,7 @@ ncclResult_t ncclParamGetParameter(const char* key, const char** value, int* val
 }
 
 NCCL_API(void, ncclParamDumpAll);
-void ncclParamDumpAll(){
+void ncclParamDumpAll() {
   bool showAll = ncclParamDumpAllFlag();
   printf("=== ncclParam Registry Dump ===\n");
   std::lock_guard<std::mutex> regLock(ncclParamRegistry::mutex());

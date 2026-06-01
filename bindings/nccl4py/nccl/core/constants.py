@@ -13,16 +13,11 @@ from nccl.core.typing.
 from enum import IntEnum, IntFlag
 
 __all__ = [
-    "NCCL_SPLIT_NOCOLOR",
     "CTAPolicy",
     "CommShrinkFlag",
     "CommSuspendFlag",
     "WindowFlag",
 ]
-
-# Communicator split constants
-NCCL_SPLIT_NOCOLOR: int = -1
-"""Color value for ncclCommSplit to indicate the rank will not be part of any group."""
 
 
 # CTA (Cooperative Thread Array) Policy flags

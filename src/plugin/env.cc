@@ -26,12 +26,12 @@ extern ncclEnv_v2_t ncclIntEnv_v2;
 #define EXT_ENV_PLUGIN 0
 #define INT_ENV_PLUGIN 1
 #define NUM_ENV_PLUGIN 2
-static ncclEnv_t *ncclEnvPlugins[NUM_ENV_PLUGIN] = { nullptr, &ncclIntEnv_v2 };
+static ncclEnv_t* ncclEnvPlugins[NUM_ENV_PLUGIN] = {nullptr, &ncclIntEnv_v2};
 
 enum {
-  envPluginLoadFailed  = -1,
-  envPluginLoadReady   =  0,
-  envPluginLoadSuccess =  1,
+  envPluginLoadFailed = -1,
+  envPluginLoadReady = 0,
+  envPluginLoadSuccess = 1,
 };
 static int envPluginStatus = envPluginLoadReady;
 
@@ -93,7 +93,8 @@ static bool initialized;
 ncclResult_t ncclEnvPluginInit(void) {
   initEnv();
   NCCLCHECK(ncclEnvPluginLoad());
-  ncclEnvPlugin = (envPluginLoadSuccess == envPluginStatus) ? ncclEnvPlugins[EXT_ENV_PLUGIN] : ncclEnvPlugins[INT_ENV_PLUGIN];
+  ncclEnvPlugin =
+    (envPluginLoadSuccess == envPluginStatus) ? ncclEnvPlugins[EXT_ENV_PLUGIN] : ncclEnvPlugins[INT_ENV_PLUGIN];
   NCCLCHECK(ncclEnvPlugin->init(NCCL_MAJOR, NCCL_MINOR, NCCL_PATCH, NCCL_SUFFIX, ncclDebugLog));
   atexit(ncclEnvPluginFinalize);
   COMPILER_ATOMIC_STORE(&initialized, true, std::memory_order_release);

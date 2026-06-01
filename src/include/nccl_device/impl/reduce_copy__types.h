@@ -29,14 +29,14 @@ struct OpSum {
 
 // Helper trait to create accumulator reduction operator from RedOp
 // Maps RedOp (e.g., OpSum<T>) to accumulator reduction operator (e.g., OpSum<AccEltType>)
-template<typename RedOp, typename AccEltType>
+template <typename RedOp, typename AccEltType>
 struct AccRedOp {
   // Default: keep RedOp as-is (non-templated operators).
   using Type = RedOp;
 };
 
 // Rebind RedOp<T> to RedOp<AccEltType> when possible.
-template<template<typename> typename Red, typename T, typename AccEltType>
+template <template <typename> typename Red, typename T, typename AccEltType>
 struct AccRedOp<Red<T>, AccEltType> {
   using Type = Red<AccEltType>;
 };
@@ -70,31 +70,31 @@ struct CoopStride<ncclCoopThread> {
 
 #if defined(__CUDA_FP8_TYPES_EXIST__)
 // Specialization for FP8 types - convert to half, add, convert back
-template<>
+template <>
 struct OpSum<__nv_fp8_e4m3> {
   using EltType = __nv_fp8_e4m3;
   NCCL_DEVICE_INLINE __nv_fp8_e4m3 operator()(const __nv_fp8_e4m3& a, const __nv_fp8_e4m3& b) const {
-    #if __CUDA_ARCH__ >= 800
-      // Use native half addition on architectures that support it
-      return __nv_fp8_e4m3(__hadd(__half(a), __half(b)));
-    #else
-      // Fallback: convert to float, add, convert back
-      return __nv_fp8_e4m3(float(a) + float(b));
-    #endif
+#if __CUDA_ARCH__ >= 800
+    // Use native half addition on architectures that support it
+    return __nv_fp8_e4m3(__hadd(__half(a), __half(b)));
+#else
+    // Fallback: convert to float, add, convert back
+    return __nv_fp8_e4m3(float(a) + float(b));
+#endif
   }
 };
 
-template<>
+template <>
 struct OpSum<__nv_fp8_e5m2> {
   using EltType = __nv_fp8_e5m2;
   NCCL_DEVICE_INLINE __nv_fp8_e5m2 operator()(const __nv_fp8_e5m2& a, const __nv_fp8_e5m2& b) const {
-    #if __CUDA_ARCH__ >= 800
-      // Use native half addition on architectures that support it
-      return __nv_fp8_e5m2(__hadd(__half(a), __half(b)));
-    #else
-      // Fallback: convert to float, add, convert back
-      return __nv_fp8_e5m2(float(a) + float(b));
-    #endif
+#if __CUDA_ARCH__ >= 800
+    // Use native half addition on architectures that support it
+    return __nv_fp8_e5m2(__hadd(__half(a), __half(b)));
+#else
+    // Fallback: convert to float, add, convert back
+    return __nv_fp8_e5m2(float(a) + float(b));
+#endif
   }
 };
 #endif

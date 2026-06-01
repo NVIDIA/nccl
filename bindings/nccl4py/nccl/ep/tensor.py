@@ -11,6 +11,7 @@ import numbers
 
 import numpy as np
 
+from nccl.core.resources import RegisteredWindowHandle
 from nccl.core.typing import NcclDataType, NcclInvalid
 
 from nccl.bindings import nccl_ep as _ep_bindings
@@ -60,6 +61,13 @@ class Tensor:
     and ``shape`` kwargs). The descriptor struct is Python-managed
     (cybind ``__dealloc__`` frees it on GC); the caller is responsible
     for keeping the underlying buffer alive.
+
+    Pass an optional ``window`` to mark the descriptor as window-backed
+    for NCCL EP zero-copy paths; ``window_offset`` (in bytes) must then
+    be supplied explicitly. Only the integer handle value is stamped
+    into the descriptor -- the caller must keep the
+    :py:class:`~nccl.core.RegisteredWindowHandle` alive for at least
+    as long as any EP operation referencing this descriptor.
     """
 
     def __init__(
@@ -68,6 +76,8 @@ class Tensor:
         *,
         dtype: NcclDataType | int | None = None,
         shape: tuple[int, ...] | None = None,
+        window: RegisteredWindowHandle | None = None,
+        window_offset: int | None = None,
     ) -> None:
         if isinstance(buffer, numbers.Integral) and not isinstance(buffer, bool):
             if dtype is None or shape is None:
@@ -100,6 +110,17 @@ class Tensor:
         ep_t.datatype = int(nccl_dtype)
         ep_t.data_    = int(data_ptr)
         ep_t.sizes    = int(self._sizes_buf.ctypes.data)
+        if window is not None:
+            if window_offset is None:
+                raise NcclInvalid(
+                    "`window` requires an explicit `window_offset` (in bytes)"
+                )
+            ep_t.win_hdl    = window.handle
+            ep_t.win_offset = int(window_offset)
+        elif window_offset is not None:
+            raise NcclInvalid(
+                "`window_offset` is only valid when `window` is provided"
+            )
         self._ep_t = ep_t
 
     @property

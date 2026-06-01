@@ -70,7 +70,6 @@ __all__ = [
     "MIN",
     "AVG",
     # Constants and enums
-    "NCCL_SPLIT_NOCOLOR",
     "CTAPolicy",
     "CommShrinkFlag",
     "CommSuspendFlag",

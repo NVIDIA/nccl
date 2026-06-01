@@ -2116,9 +2116,9 @@ if (useLogfmt) { \
 template <int kNumThreads>
 __forceinline__ __device__ void maskAwareBarrier(
     int threadId, int myRank, ncclDevComm& dcomm,
-    int* rankMask, int* syncBuffer, size_t syncBufferOffset,
+    int* rankMask, int* syncBuffer, const ncclWindow_t* syncWindow,
     unsigned barrierSignalBase,
-    const ncclWindow_t* windows, ncclDevComm* devComms,
+    ncclDevComm* devComms,
     uint64_t timeoutCycles) {
 
     if (isRankMasked(rankMask, myRank)) return;
@@ -2133,16 +2133,20 @@ __forceinline__ __device__ void maskAwareBarrier(
 
     int cnt = syncBuffer[myRank];
 
+    // syncBuffer is the entirety of its window — peer-slot offsets are
+    // relative to the window base, not nested inside a larger region.
+    auto syncWin = syncWindow[0];
+
     // Publish our counter to each active peer and wait for theirs.
     // NVLink (P2P) peers: direct store + load on the shared syncBuffer.
     // RDMA peers: GIN signal (0-byte put + SignalAdd) instead of putValue.
     if (threadId < nRanks && threadId != myRank) {
         int peer = threadId;
         if (!isRankMasked(rankMask, peer)) {
-            size_t peerSlotOffset = syncBufferOffset + myRank * sizeof(int);
+            size_t peerSlotOffset = myRank * sizeof(int);
             auto p2pPtr = ncclGetP2pPtr(
                 reinterpret_cast<uint64_t>(syncBuffer), peerSlotOffset,
-                myRank, peer, windows, devComms);
+                myRank, peer, syncWindow, devComms);
 
             if (p2pPtr == 0) {
                 // RDMA peer: use GIN signal
@@ -2150,10 +2154,9 @@ __forceinline__ __device__ void maskAwareBarrier(
                 auto ctxId = peer % MAX_NCCL_GIN_CTX_PER_COMM;
                 ncclGin net(devComms[commId], ctxId);
                 ncclTeam world = ncclTeamWorld(devComms[commId]);
-                auto ncclWindow = windows[commId];
                 net.put(world, peer,
-                        ncclWindow, peerSlotOffset,
-                        ncclWindow, 0,
+                        syncWin, peerSlotOffset,
+                        syncWin, 0,
                         0,
                         ncclGin_SignalAdd{barrierSignalBase, 1},
                         ncclGin_None{},
@@ -2170,10 +2173,10 @@ __forceinline__ __device__ void maskAwareBarrier(
     if (threadId < nRanks && threadId != myRank) {
         int peer = threadId;
         if (!isRankMasked(rankMask, peer)) {
-            size_t peerSlotOffset = syncBufferOffset + peer * sizeof(int);
+            size_t peerSlotOffset = peer * sizeof(int);
             auto p2pPtr = ncclGetP2pPtr(
                 reinterpret_cast<uint64_t>(syncBuffer), peerSlotOffset,
-                myRank, peer, windows, devComms);
+                myRank, peer, syncWindow, devComms);
 
             if (p2pPtr != 0) {
                 // NVLink peer: poll syncBuffer directly
@@ -2200,7 +2203,7 @@ __forceinline__ __device__ void maskAwareBarrier(
         int numExpectedSignals = 0;
         for (int r = 0; r < nRanks; r++) {
             if (r == myRank || isRankMasked(rankMask, r)) continue;
-            auto p2p = ncclGetP2pPtr(0x01, 0, myRank, r, windows, devComms);
+            auto p2p = ncclGetP2pPtr(0x01, 0, myRank, r, syncWindow, devComms);
             if (p2p == 0)
                 numExpectedSignals++;
         }
@@ -2217,7 +2220,7 @@ __forceinline__ __device__ void maskAwareBarrier(
                 printf("Warning: NCCL EP clean barrier timeout (GIN), myRank %d\n", myRank);
                 for (int r = 0; r < nRanks; r++) {
                     if (r == myRank || isRankMasked(rankMask, r)) continue;
-                    auto p2p = ncclGetP2pPtr(0x01, 0, myRank, r, windows, devComms);
+                    auto p2p = ncclGetP2pPtr(0x01, 0, myRank, r, syncWindow, devComms);
                     if (p2p == 0)
                         atomicExch(rankMask + r, 0);
                 }
@@ -2233,9 +2236,8 @@ __global__ void cleanLowLatencyBufferKernel(
     int* clean_0, int num_clean_int_0,
     int* clean_1, int num_clean_int_1,
     int* rankMask,
-    int* syncBuffer, size_t syncBufferOffset,
+    int* syncBuffer, ncclWindow_t* syncWindow,
     ncclDevComm* devComms,
-    ncclWindow_t* windows,
     unsigned barrierSignalBase,
     uint64_t timeoutCycles) {
 
@@ -2251,9 +2253,9 @@ __global__ void cleanLowLatencyBufferKernel(
                  ncclGinFenceLevel::Relaxed);
     } else {
         maskAwareBarrier<kNumThreads>(threadId, dcomm.rank, dcomm,
-                                       rankMask, syncBuffer, syncBufferOffset,
+                                       rankMask, syncBuffer, syncWindow,
                                        barrierSignalBase,
-                                       windows, devComms, timeoutCycles);
+                                       devComms, timeoutCycles);
     }
 
     // Zero out RDMA buffers
@@ -2272,18 +2274,17 @@ __global__ void cleanLowLatencyBufferKernel(
                  ncclGinFenceLevel::Relaxed);
     } else {
         maskAwareBarrier<kNumThreads>(threadId, dcomm.rank, dcomm,
-                                       rankMask, syncBuffer, syncBufferOffset,
+                                       rankMask, syncBuffer, syncWindow,
                                        barrierSignalBase,
-                                       windows, devComms, timeoutCycles);
+                                       devComms, timeoutCycles);
     }
 }
 
 void clean_low_latency_buffer(int* clean_0, int num_clean_int_0,
                               int* clean_1, int num_clean_int_1,
                               int* rankMask,
-                              int* syncBuffer, size_t syncBufferOffset,
+                              int* syncBuffer, ncclWindow_t* syncWindow,
                               ncclDevComm* devComms,
-                              ncclWindow_t* windows,
                               unsigned barrierSignalBase,
                               uint64_t timeoutCycles,
                               cudaStream_t stream) {
@@ -2291,7 +2292,7 @@ void clean_low_latency_buffer(int* clean_0, int num_clean_int_0,
     SETUP_LAUNCH_CONFIG(1, kNumThreads, stream);
     LAUNCH_KERNEL(&cfg, cleanLowLatencyBufferKernel<kNumThreads>,
                   clean_0, num_clean_int_0, clean_1, num_clean_int_1,
-                  rankMask, syncBuffer, syncBufferOffset, devComms, windows,
+                  rankMask, syncBuffer, syncWindow, devComms,
                   barrierSignalBase, timeoutCycles);
 }
 

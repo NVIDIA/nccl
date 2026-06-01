@@ -425,6 +425,10 @@ struct ncclEpGroup {
     int num_dispatch_signals;
     unsigned clean_barrier_signal_base;
 
+    // Cross-rank sync region used by clean_low_latency_buffer.
+    void*         sync_buffer = nullptr;   // device buffer, int[nRanks] aligned
+    ncclWindow_t* sync_window = nullptr;   // device ptr to the registered window handle
+
     // HT buffers for intranode communication
     struct {
         // IPC-mapped buffer pointer arrays (fixed-size, indexed by local NVL rank)
@@ -1469,6 +1473,26 @@ ncclResult_t ncclEpCreateGroup(
         delete[] nccl_dev_comms_host;
         nccl_dev_comms_host = nullptr;
 
+        if (ep_group->config.enable_mask) {
+            // Allocate the cross-rank sync buffer used by clean_low_latency_buffer.
+            // Its size depends only on nRanks (a group-level constant), so it is
+            // sized and allocated here once, in its own registered NCCL window.
+            // Keeping it out of rdma_buffer means lazy/grow reallocation of
+            // rdma_buffer doesn't have to touch it, and ncclEpMaskClean can run
+            // even before any LL handle has been created.
+            const size_t sync_buffer_bytes =
+                ((static_cast<size_t>(ep_group->nRanks) * sizeof(int) + 127) / 128) * 128;
+            NCCL_CHECK_RESULT(ncclMemAlloc(&ep_group->sync_buffer, sync_buffer_bytes));
+            CUDA_CHECK(cudaMemset(ep_group->sync_buffer, 0, sync_buffer_bytes));
+            ncclWindow_t sync_win_host;
+            NCCL_CHECK_RESULT(ncclCommWindowRegister(ep_group->comm, ep_group->sync_buffer,
+                                                    sync_buffer_bytes, &sync_win_host, 0));
+            CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&ep_group->sync_window),
+                                    sizeof(ncclWindow_t)));
+            CUDA_CHECK(cudaMemcpy(ep_group->sync_window, &sync_win_host,
+                                    sizeof(ncclWindow_t), cudaMemcpyHostToDevice));
+        }
+
         // If the user passed an explicit rdma_buffer_size (anything other than
         // NCCL_EP_AUTO), honor it verbatim now. ll_init_handle will then only
         // verify the requested layout fits; growth is not performed. With
@@ -1563,6 +1587,20 @@ ncclResult_t ncclEpGroupDestroy(
         if (ep_group->rdma_buffer) {
             NCCL_CHECK_RESULT(ncclMemFree(ep_group->rdma_buffer));
             ep_group->rdma_buffer = nullptr;
+        }
+
+        // Tear down the standalone sync buffer + its window.
+        if (ep_group->sync_window != nullptr) {
+            ncclWindow_t sync_win_host;
+            CUDA_CHECK(cudaMemcpy(&sync_win_host, ep_group->sync_window,
+                                    sizeof(ncclWindow_t), cudaMemcpyDeviceToHost));
+            NCCL_CHECK_RESULT(ncclCommWindowDeregister(ep_group->comm, sync_win_host));
+            CUDA_CHECK(cudaFree(ep_group->sync_window));
+            ep_group->sync_window = nullptr;
+        }
+        if (ep_group->sync_buffer != nullptr) {
+            NCCL_CHECK_RESULT(ncclMemFree(ep_group->sync_buffer));
+            ep_group->sync_buffer = nullptr;
         }
 
         // Destroy single NCCL device communicator (copy back from device, destroy on ep_group->comm)
@@ -3333,6 +3371,9 @@ ncclResult_t ncclEpMaskQuery(
     cudaStream_t stream
 ) {
     EP_HOST_ASSERT(ep_group != nullptr);
+    if (!ep_group->config.enable_mask) {
+        return ncclInvalidUsage;
+    }
     EP_HOST_ASSERT(ep_group->mask_buffer != nullptr && "ncclEpMaskQuery: enable_mask must be true");
     EP_HOST_ASSERT(mask_status != nullptr);
     CUDA_CHECK(cudaMemcpyAsync(mask_status, ep_group->mask_buffer,
@@ -3347,6 +3388,9 @@ ncclResult_t ncclEpMaskUpdate(
     cudaStream_t stream
 ) {
     EP_HOST_ASSERT(ep_group != nullptr);
+    if (!ep_group->config.enable_mask) {
+        return ncclInvalidUsage;
+    }
     EP_HOST_ASSERT(ep_group->mask_buffer != nullptr && "ncclEpMaskUpdate: enable_mask must be true");
     EP_HOST_ASSERT(mask != nullptr);
     CUDA_CHECK(cudaMemcpyAsync(ep_group->mask_buffer, mask,
@@ -3360,19 +3404,19 @@ ncclResult_t ncclEpMaskClean(
     cudaStream_t stream
 ) {
     EP_HOST_ASSERT(ep_group != nullptr);
+
+    if (!ep_group->config.enable_mask) {
+        return ncclInvalidUsage;
+    }
     EP_HOST_ASSERT(ep_group->mask_buffer != nullptr && "ncclEpMaskClean: enable_mask must be true");
     EP_HOST_ASSERT(ep_group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY);
     EP_HOST_ASSERT(ep_group->rdma_buffer != nullptr &&
                    "ncclEpMaskClean: rdma_buffer not yet allocated; create at least one LL handle first");
+    EP_HOST_ASSERT(ep_group->sync_buffer != nullptr && ep_group->sync_window != nullptr);
 
     // Reset internal RDMA recv-count/flag counters for both double-buffer slots
     // via a GPU kernel that includes a cross-rank barrier, then clear the mask.
-    // Layout is per-handle, but ncclEpMaskClean operates at group level and
-    // only touches the layout-independent signaling buffers (clean_meta) plus
-    // the sync_buffer used as a cross-rank barrier. Pick RANK_MAJOR (the
-    // smaller layout): the sync_buffer lies at total_bytes which must be
-    // within the current rdma_buffer allocation. RM is always allocated, so
-    // its offset is valid regardless of whether the buffer has grown for EM.
+    // Query the layout to read the clean_meta_offset values.
     nccl_ep::LowLatencyLayout layout(ep_group->config.max_dispatch_tokens_per_rank,
                                       ep_group->config.max_token_bytes,
                                       ep_group->nRanks,
@@ -3384,15 +3428,13 @@ ncclResult_t ncclEpMaskClean(
     auto clean_1 = layout.buffers[1].clean_meta_offset();
     int* clean_0_ptr = reinterpret_cast<int*>(rdma_base + clean_0.first);
     int* clean_1_ptr = reinterpret_cast<int*>(rdma_base + clean_1.first);
-    int* sync_buffer_ptr = reinterpret_cast<int*>(rdma_base + layout.sync_buffer_offset);
 
     nccl_ep::internode_ll::clean_low_latency_buffer(
         clean_0_ptr, clean_0.second,
         clean_1_ptr, clean_1.second,
         ep_group->mask_buffer,
-        sync_buffer_ptr, layout.sync_buffer_offset,
+        static_cast<int*>(ep_group->sync_buffer), ep_group->sync_window,
         ep_group->nccl_dev_comms,
-        ep_group->nccl_wins,
         ep_group->clean_barrier_signal_base,
         ep_group->timeout_cycles,
         stream);
@@ -3413,6 +3455,9 @@ ncclResult_t ncclEpGetAsyncError(
     int* error_out
 ) {
     EP_HOST_ASSERT(ep_group != nullptr);
+    if (!ep_group->config.enable_mask) {
+        return ncclInvalidUsage;
+    }
     EP_HOST_ASSERT(ep_group->async_error_flag != nullptr && "ncclEpGetAsyncError: enable_mask must be true");
     EP_HOST_ASSERT(error_out != nullptr);
     *error_out = __atomic_load_n(ep_group->async_error_flag, __ATOMIC_ACQUIRE);
@@ -3423,6 +3468,9 @@ ncclResult_t ncclEpErrorClear(
     ncclEpGroup_t ep_group
 ) {
     EP_HOST_ASSERT(ep_group != nullptr);
+    if (!ep_group->config.enable_mask) {
+        return ncclInvalidUsage;
+    }
     EP_HOST_ASSERT(ep_group->async_error_flag != nullptr && "ncclEpErrorClear: enable_mask must be true");
     __atomic_store_n(ep_group->async_error_flag, 0, __ATOMIC_RELEASE);
     return ncclSuccess;

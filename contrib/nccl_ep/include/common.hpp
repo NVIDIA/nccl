@@ -151,9 +151,8 @@ size_t get_dispatch_hdr_sz(int num_topk, ncclEpLayout_t layout) {
 void clean_low_latency_buffer(int* clean_0, int num_clean_int_0,
                               int* clean_1, int num_clean_int_1,
                               int* rankMask,
-                              int* syncBuffer, size_t syncBufferOffset,
+                              int* syncBuffer, ncclWindow_t* syncWindow,
                               ncclDevComm* devComms,
-                              ncclWindow_t* windows,
                               unsigned barrierSignalBase,
                               uint64_t timeoutCycles = NUM_TIMEOUT_CYCLES,
                               cudaStream_t stream = 0);
@@ -281,7 +280,6 @@ struct LowLatencyBuffer {
 struct LowLatencyLayout {
     size_t total_bytes = 0;
     LowLatencyBuffer buffers[2];
-    size_t sync_buffer_offset = 0;
 
     template <typename out_ptr_t = void*, typename count_ptr_t = uint8_t*, typename in_ptr_t = void*>
     static out_ptr_t advance(const in_ptr_t& ptr, size_t count) {
@@ -376,11 +374,6 @@ struct LowLatencyLayout {
                 .num_bytes_per_combine_msg                  = num_bytes_per_combine_msg,
             };
         }
-
-        // Barrier sync buffer for clean_low_latency_buffer (int[nRanks], 128-byte aligned)
-        sync_buffer_offset = total_bytes;
-        size_t sync_buffer_bytes = align<size_t>(num_ranks * sizeof(int), 128);
-        total_bytes += sync_buffer_bytes;
     }
 };
 

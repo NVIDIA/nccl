@@ -398,7 +398,13 @@ typedef struct {
                                                 //   HT: required (must be >= max_dispatch_tokens_per_rank)
                                                 //   LL: NCCL_EP_AUTO → nRanks * max_dispatch_tokens_per_rank
     unsigned int max_token_bytes;               // Upper bound on per-token bytes
-    unsigned long int rdma_buffer_size;         // RDMA buffer size (NCCL_EP_AUTO for auto)
+    unsigned long int rdma_buffer_size;         // RDMA buffer size for LL mode.
+                                                //   NCCL_EP_AUTO  → lazy: allocate on first ncclEpInitHandle, sized to that
+                                                //                  handle's actual (layout, num_topk); collective re-grow
+                                                //                  if a later handle needs more. See LL section for caveats.
+                                                //   explicit > 0  → allocate exactly that many bytes at group time;
+                                                //                  ncclEpInitHandle returns ncclInvalidUsage if a layout
+                                                //                  doesn't fit. No reallocation ever performed.
     unsigned int num_qp_per_rank;               // Queue pairs per rank (NCCL_EP_AUTO for auto)
     unsigned int num_channels;                  // Channels per rank (NCCL_EP_AUTO for auto)
     unsigned int max_num_sms;                   // SM cap for EP kernels (NCCL_EP_AUTO for auto)
@@ -426,10 +432,30 @@ Maintains state for a sequence of related MoE operations, i.e. dispatch and comb
 - Supports dynamic `max_dispatch_tokens_per_rank` (set to `NCCL_EP_AUTO`)
 
 **Low Latency (LL)**:
-- Output tokens must have 3D format: `[num_experts x max_dispatch_tokens_per_rank x hidden]`
-- Expert-major data layout for efficient expert processing
-- Supports `send_only` (in `ncclEpDispatchConfig_t` / `ncclEpCombineConfig_t`) to enable computation/communication overlapping
-- Does not support dynamic `max_dispatch_tokens_per_rank` detection
+- Supports `NCCL_EP_LAYOUT_EXPERT_MAJOR` and `NCCL_EP_LAYOUT_RANK_MAJOR` layouts.
+- Output tokens are 3D:
+  - expert-major: `[num_local_experts, N(e), hidden]`, where `N(e)` is the number of tokens routed to the specific expert `e`.
+  - rank-major:   `[num_ranks, max_dispatch_tokens_per_rank, hidden]`.
+- Supports `send_only` (in `ncclEpDispatchConfig_t` / `ncclEpCombineConfig_t`) to enable computation/communication overlapping.
+- Does not support dynamic `max_dispatch_tokens_per_rank` detection.
+
+***`rdma_buffer_size` and lazy allocation (LL only)***
+
+The group's RDMA buffer is sized by `config.rdma_buffer_size`:
+
+- **`NCCL_EP_AUTO`** (recommended for most users): the buffer is **not** allocated at `ncclEpCreateGroup` time. 
+The first `ncclEpInitHandle` allocates it sized to that handle's actual `(layout, num_topk)`.
+A later `ncclEpInitHandle` whose layout needs a larger buffer (for example, the first `EXPERT_MAJOR`
+handle on a group that previously only hosted `RANK_MAJOR` handles, or a handle with a larger `num_topk`)
+**collectively reallocates** the buffer: deregister window → free → `ncclMemAlloc` → register.
+The recorded layout offsets on every live handle are pure offsets relative to the group's `rdma_buffer` and resolve correctly against the new base at use time, so existing handles remain valid.
+
+  Two constraints follow from a reallocation:
+  1. **All ranks must call `ncclEpInitHandle` in lockstep with the same `(layout, num_topk)`**. With AUTO sizing, `ncclEpInitHandle` is a conditionally collective call.
+  2. **Reallocation drops the contents of the old RDMA buffer.** Any operation issued with `send_only = 1` that has staged data but is still awaiting its receive half via `ncclEpComplete` will lose its in-flight data. Drain all such operations before triggering a reallocation.
+  3. **CUDA graph capture bakes the RDMA base pointer into the captured kernel parameters.** `ncclEpInitHandle` (in AUTO mode) must not be called between `cudaStreamBeginCapture` and `cudaStreamEndCapture`. Any previously captured graph containing EP kernels must be destroyed and re-captured after a reallocation.
+
+- **Explicit `> 0`**: the buffer is allocated to exactly that size at `ncclEpCreateGroup` time. `ncclEpInitHandle` is purely local; it returns `ncclInvalidUsage` if the requested `(layout, num_topk)` does not fit. Use this mode if you need to avoid collective handle creation, mid-stream reallocation, or graph invalidation. Use `nccl_ep::get_low_latency_rdma_size_hint(...)` to compute a worst-case upper bound across all layouts and `num_topk ≤ MAX_NUM_TOPK`.
 
 ## Custom Allocators
 

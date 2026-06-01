@@ -204,7 +204,17 @@ typedef struct {
     // the input tensors' sizes/datatype and may be smaller. Independent of
     // element type — purely byte-oriented.
     unsigned int max_token_bytes;
-    unsigned long int rdma_buffer_size;  // RDMA buffer size in bytes (NCCL_EP_AUTO for auto, defaults to a sufficiently large buffer for any algorithm)
+    // RDMA buffer size in bytes for LL mode. Two modes:
+    //   - NCCL_EP_AUTO: the library automatically selects the internal
+    //     staging buffer size. The buffer allocation/re-allocation  may be
+    //     performed lazily in ncclEpInitHandle once all relevant sizing 
+    //     information is known.
+    //   - Explicit positive value: the library allocates exactly that
+    //     many bytes at ncclEpCreateGroup time. ncclEpInitHandle returns
+    //     ncclInvalidUsage if the requested layout doesn't fit; no
+    //     reallocation is ever performed.
+    //     (NOTE: for optimal sizing, a way to query the required size is planned for future release)
+    unsigned long int rdma_buffer_size;
     unsigned int num_qp_per_rank;        // Number of QPs per rank (NCCL_EP_AUTO for auto)
     // Number of channels per rank (NCCL_EP_AUTO for auto).
     // In high throughput collectives, each channel occupies 2 SMs
@@ -364,49 +374,6 @@ typedef struct {
     .size  = (unsigned int)sizeof(ncclEpHandleConfig_t), \
     .magic = NCCL_EP_MAGIC })
 
-// Create and initialize an EP handle.
-//   * Performs dispatch setup and (in HT mode only) metadata exchange.
-//   * This call is collective and must be invoked by all ranks in the group.
-//
-// Arguments:
-//   handle              - [OUT] Pointer to newly created and initialized EP handle
-//   ep_group            - [IN]  A valid EP group
-//   layout              - [IN]  Receive buffer layout. Required; must not be NCCL_EP_LAYOUT_UNSET.
-//                                HT supports FLAT / EXPERT_MAJOR; LL supports EXPERT_MAJOR / RANK_MAJOR.
-//   topk_idx            - [IN]  Tensor holding top-K expert indices (routing information)
-//   layout_info         - [IN/OUT, optional] Layout info (see ncclEpLayoutInfo_t). NULL = none.
-//                         HT: set expert_counters when max_dispatch_tokens_per_rank is NCCL_EP_AUTO.
-//                         LL mode: must be NULL.
-//   config              - [IN]  Handle configuration (see ncclEpHandleConfig_t). NULL = defaults.
-//   stream              - [IN]  CUDA stream
-//
-// Notes:
-//   - If max_dispatch_tokens_per_rank in ncclEpGroupConfig_t was set to NCCL_EP_AUTO,
-//     this call may block as the host allocates memory for the actual number
-//     of received tokens.
-//
-// Returns: ncclResult_t error code
-
-ncclResult_t ncclEpCreateHandle(
-    ncclEpHandle_t* handle,
-    ncclEpGroup_t ep_group,
-    ncclEpLayout_t layout,
-    const ncclEpTensor_t* topk_idx,
-    const ncclEpLayoutInfo_t* layout_info,  // NULL = none
-    const ncclEpHandleConfig_t* config,  // NULL = defaults
-    cudaStream_t stream
-);
-
-// Destroy an EP handle and release all associated resources.
-//
-// Arguments:
-//   handle         - [IN]  EP handle to destroy
-//
-// Returns: ncclResult_t error code
-
-ncclResult_t ncclEpHandleDestroy(
-    ncclEpHandle_t handle
-);
 
 // Query the device bytes required for a handle's routing buffers.
 //
@@ -427,8 +394,21 @@ ncclResult_t ncclEpHandleMemSize(
     int                         num_topk
 );
 
-// Allocate handle buffers without performing any collective.
-// Call ncclEpUpdateHandle before the first ncclEpDispatch/ncclEpCombine.
+// Create and initialize EP handle.
+// Must be called before the first ncclEpDispatch/ncclEpCombine.
+//
+// NOTE: the impact of auto-sizing of internal buffers (rdma_buffer_size == NCCL_EP_AUTO):
+// * collective behaviour: This function MAY be collective and must be called by all ranks
+//   in the group in the same order.
+// * memory allocation/re-allocation: This function may perform allocation/re-allocation
+//   if the new layout/topK requires more memory than the current allocation. All ranks
+//   must call this function in lockstep with the same (layout, num_topk).
+//   No active communication is allowed between the ranks during this operation.
+// * CUDA graph invalidation: This function must not be included in CUDA graph captures.
+//
+// Use an explicit, sufficiently large rdma_buffer_size if you need to
+// avoid collective allocation/re-allocation, mid-stream reallocation, or graph
+// invalidation.
 //
 // handle_mem == NULL:  NCCL EP allocates via alloc_fn; handle owns the memory.
 // handle_mem != NULL:  wraps caller-owned 1D ncclUint8 tensor (>= ncclEpHandleMemSize);
@@ -473,6 +453,51 @@ ncclResult_t ncclEpUpdateHandle(
     const ncclEpLayoutInfo_t* layout_info,  // NULL = none
     cudaStream_t stream
 );
+
+// Create, initialize and bind an EP handle to a given layout and routing decisions.
+// Must be called before the first ncclEpDispatch/ncclEpCombine.
+// Combines the functionality of ncclEpInitHandle and ncclEpUpdateHandle (see above)
+//
+// Arguments:
+//   handle              - [OUT] Pointer to newly created and initialized EP handle
+//   ep_group            - [IN]  A valid EP group
+//   layout              - [IN]  Receive buffer layout. Required; must not be NCCL_EP_LAYOUT_UNSET.
+//                                HT supports FLAT / EXPERT_MAJOR; LL supports EXPERT_MAJOR / RANK_MAJOR.
+//   topk_idx            - [IN]  Tensor holding top-K expert indices (routing information)
+//   layout_info         - [IN/OUT, optional] Layout info (see ncclEpLayoutInfo_t). NULL = none.
+//                         HT: set expert_counters when max_dispatch_tokens_per_rank is NCCL_EP_AUTO.
+//                         LL mode: must be NULL.
+//   config              - [IN]  Handle configuration (see ncclEpHandleConfig_t). NULL = defaults.
+//   stream              - [IN]  CUDA stream
+//
+// Notes:
+//   - If max_dispatch_tokens_per_rank in ncclEpGroupConfig_t was set to NCCL_EP_AUTO,
+//     this call may block as the host allocates memory for the actual number
+//     of received tokens.
+//
+// Returns: ncclResult_t error code
+
+ncclResult_t ncclEpCreateHandle(
+    ncclEpHandle_t* handle,
+    ncclEpGroup_t ep_group,
+    ncclEpLayout_t layout,
+    const ncclEpTensor_t* topk_idx,
+    const ncclEpLayoutInfo_t* layout_info,  // NULL = none
+    const ncclEpHandleConfig_t* config,  // NULL = defaults
+    cudaStream_t stream
+);
+
+// Destroy an EP handle and release all associated resources.
+//
+// Arguments:
+//   handle         - [IN]  EP handle to destroy
+//
+// Returns: ncclResult_t error code
+
+ncclResult_t ncclEpHandleDestroy(
+    ncclEpHandle_t handle
+);
+
 
 // EP dispatch configuration structure
 typedef struct {

@@ -969,23 +969,18 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
       nvmlPciInfo_t remoteProc = {};
       if (ncclNvmlDeviceGetNvLinkRemotePciInfo(nvmlDev, l, &remoteProc) != ncclSuccess) continue;
 
+      // Try to get the remote device type
+      nvmlIntNvLinkDeviceType_t remoteDeviceType;
+      if (ncclNvmlDeviceGetNvLinkRemoteDeviceType(nvmlDev, l, &remoteDeviceType) != ncclSuccess)
+        remoteDeviceType = NVML_NVLINK_DEVICE_TYPE_UNKNOWN;
+
       // Make a lower case copy of the bus ID for calling ncclDeviceType
       // PCI system path is in lower case.
-      // NVML may return empty or non-printable busId for non-visible
-      // remote devices (e.g. NVSwitch on Windows). Use sentinel instead.
       char* p = remoteProc.busId;
       char lowerId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE];
-      if (p[0] == '\0') {
-        strncpy(lowerId, "fffffff:ffff:ff", NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE);
-      } else {
-        for (int c = 0; c < NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE; c++) {
-          if (p[c] && !isprint((unsigned char)p[c])) {
-            strncpy(lowerId, "fffffff:ffff:ff", NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE);
-            break;
-          }
-          lowerId[c] = tolower(p[c]);
-          if (p[c] == 0) break;
-        }
+      for (int c = 0; c < NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE; c++) {
+        lowerId[c] = tolower(p[c]);
+        if (p[c] == 0) break;
       }
 
       NCCLCHECK(xmlGetSubKv(gpuNode, "nvlink", &nvlNode, "target", lowerId));
@@ -997,6 +992,16 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
         int count;
         NCCLCHECK(xmlGetAttrInt(nvlNode, "count", &count));
         NCCLCHECK(xmlSetAttrInt(nvlNode, "count", count + 1));
+      }
+
+      if (remoteDeviceType == NVML_NVLINK_DEVICE_TYPE_SWITCH) {
+        NCCLCHECK(xmlSetAttr(nvlNode, "tclass", PCI_NVSWITCH_CLASS));
+      } else if (remoteDeviceType == NVML_NVLINK_DEVICE_TYPE_GPU) {
+        NCCLCHECK(xmlSetAttr(nvlNode, "tclass", PCI_GPU_CLASS));
+      } else if (remoteDeviceType == NVML_NVLINK_DEVICE_TYPE_IBMNPU) {
+        NCCLCHECK(xmlSetAttr(nvlNode, "tclass", PCI_IBMNPU_CLASS));
+      } else {
+        TRACE(NCCL_GRAPH, "Could not get device type for NVLink target from NVML, falling back to PCI bus check");
       }
     }
   }

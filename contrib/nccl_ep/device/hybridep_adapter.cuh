@@ -161,6 +161,7 @@ void call_metadata_preprocessing(
     bool     out_is_int64           = true,    // Shared dtype for the 3 int output tensors above
     int      max_recv_tokens_per_rank = 0, // HT recv-budget; __trap on overflow.
     int      num_blocks             = 16,      // Number of SMs for the kernel grid
+    void*    scan_gscratch      = nullptr, // EM cooperative scan scratch (required when expert_major)
     cudaStream_t stream             = 0);
 
 // Returns required size in bytes for the scan temp buffer used by call_metadata_preprocessing.
@@ -170,6 +171,40 @@ size_t get_preprocessing_scan_tmp_size(int num_ranks_per_node);
 // Returns sizeof(rank_mask_t<ceil(lsa_team_size/64)>) for the given lsa_team_size.
 // Formula: ceil(lsa_team_size / 64) * sizeof(uint64_t).
 size_t get_rank_mask_elem_size(int lsa_team_size);
+
+// Cooperative EM scan over the AG'd bitmap. Produces EM-layout S2D, LERM,
+// per-expert counts/offsets in one launch. Used when expert_major=true.
+// Requires lsa_team_size <= 128 (fits in 2 x uint64 mask words) and
+// experts_per_rank to be a power of two.
+void launch_em_scan(
+    const uint8_t* input_routing_map,
+    const void*    token_rank_mask,
+    int num_mask_words,
+    int num_total_attn_tokens,
+    int num_tokens_per_rank,
+    int num_ranks_per_node,
+    int experts_per_rank,
+    int num_lsa_teams,
+    int node_rank,
+    int local_rank,
+    int s2d_inner_dim,
+    int max_recv_tokens_per_rank,
+    int em_alignment,
+    int32_t* sparse_to_dense_map,
+    bool*    local_expert_routing_map,
+    int32_t* num_tokens_for_experts,
+    int64_t* em_internal_offsets,
+    void*    em_padded_out_counts,
+    void*    em_out_offsets,
+    int32_t* em_actual_counts_out,
+    void*    recv_total_counter,
+    bool     out_is_int64,
+    int32_t* gscratch,
+    int      num_sms,
+    cudaStream_t stream);
+
+// Returns required size (bytes) for the gscratch buffer used by launch_em_scan.
+size_t get_scan_gscratch_size(int num_ranks_per_node, int experts_per_rank, int num_sms);
 
 // ============================================================================
 // Memory region info structs for GIN

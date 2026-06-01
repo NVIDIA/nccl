@@ -2207,6 +2207,8 @@ ncclResult_t ncclEpUpdateHandle(
         out_is_int64,
         static_cast<int>(ep_group->config.max_recv_tokens_per_rank),
         static_cast<int>(ep_group->max_num_sms),
+        // EM cooperative scan scratch carved from ep_workspace.
+        expert_major ? ep_group->ep_workspace : nullptr,
         stream);
 
     return ncclSuccess;

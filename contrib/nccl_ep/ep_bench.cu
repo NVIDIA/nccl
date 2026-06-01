@@ -151,6 +151,16 @@ public:
         fflush(stdout);
     }
 
+    // Sum of per-launch averages across all captured kernels (per-iter GPU time).
+    double sum_per_launch_us() const {
+        double sum = 0.0;
+        for (const auto& kv : g_kernel_stats) {
+            if (kv.second.count == 0) continue;
+            sum += static_cast<double>(kv.second.total_ns) / kv.second.count / 1000.0;
+        }
+        return sum;
+    }
+
     inline bool is_valid() { return true;}
 };
 
@@ -162,6 +172,7 @@ public:
     void stop() {}
     double get_avg_us(const char*) const { return 0.0; }
     void dump(int) const {}
+    double sum_per_launch_us() const { return 0.0; }
     inline bool is_valid() { return false;}
 };
 
@@ -1794,6 +1805,7 @@ struct PairedBenchResult {
 // This ensures dispatch and combine are always paired (required for correctness)
 // while still measuring individual performance
 PairedBenchResult runPairedBenchmark(
+    std::function<void()> update_fn,
     std::function<void()> dispatch_fn,
     std::function<void()> combine_fn,
     int num_warmup,
@@ -1807,6 +1819,7 @@ PairedBenchResult runPairedBenchmark(
     // Note: cudaStreamSynchronize between dispatch and combine is required for HT mode
     // MPI_Barrier at end of each iteration ensures all ranks stay in sync (critical for HT mode)
     for (int i = 0; i < num_warmup; i++) {
+        update_fn();
         dispatch_fn();
         CUDACHECK(cudaStreamSynchronize(stream));
         combine_fn();
@@ -1834,6 +1847,7 @@ PairedBenchResult runPairedBenchmark(
     // Events are recorded immediately after kernel launch (before sync) to measure GPU time only
     // Sync happens after event recording to not affect timing
     // MPI_Barrier at end of each iteration ensures all ranks stay in sync (critical for HT mode)
+    // update_fn() is excluded from timed iters; its cost is reported by the UpdateHandle micro-bench.
     for (int i = 0; i < num_iters; i++) {
         CUDACHECK(cudaEventRecord(dispatch_start[i], stream));
         dispatch_fn();
@@ -2295,10 +2309,6 @@ void printHighThroughputResults(
 
         double dk_total_s = global_dispatch_avg * 1e-3;  // avg total dispatch time in seconds
         double ck_total_s = global_combine_avg  * 1e-3;
-
-        printf("\n=== Summary (High Throughput %s, across %d ranks) ===\n",
-               ht_bytes.is_fp8 ? "FP8" : "BF16", nRanks);
-        printf("NOTE: total time = kernel time + memcpyD2D + misc\n");
 
         // --- BW based on total time ---
         printf("--- BW based on total time ---\n");
@@ -3166,6 +3176,11 @@ int main(int argc, char* argv[]) {
     if (myRank == 0) { printf("[DEBUG] Starting benchmark...\n"); fflush(stdout); }
 
     ncclEpCombineConfig_t combine_config = NCCL_EP_COMBINE_CONFIG_INIT;
+    const ncclEpLayoutInfo_t* update_layout_info_ptr = has_handle_layout_info ? &handle_layout_info : nullptr;
+    auto update_fn = [&]() {
+        NCCLCHECK(ncclEpUpdateHandle(ep_handle, topk_idx, update_layout_info_ptr, stream));
+    };
+
     auto dispatch_fn = [&]() {
         NCCLCHECK(ncclEpDispatch(ep_handle,
                                   &dispatch_inputs, &dispatch_outputs,
@@ -3191,7 +3206,7 @@ int main(int argc, char* argv[]) {
 
     MPICHECK(MPI_Barrier(MPI_COMM_WORLD));
     PairedBenchResult paired_result = runPairedBenchmark(
-        dispatch_fn, combine_fn, actual_warmup, actual_iters,
+        update_fn, dispatch_fn, combine_fn, actual_warmup, actual_iters,
         dispatch_data_bytes, combine_data_bytes,
         ktimer,
         stream);
@@ -3230,6 +3245,42 @@ int main(int argc, char* argv[]) {
         MPI_Reduce(&ht_bytes.rdma_send_bytes,  &global_rdma_send,  1, MPI_UNSIGNED_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
         MPI_Reduce(&ht_bytes.total_recv_bytes, &global_total_recv, 1, MPI_UNSIGNED_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
         MPI_Reduce(&ht_bytes.rdma_recv_bytes,  &global_rdma_recv,  1, MPI_UNSIGNED_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    }
+
+    if (myRank == 0 && algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) {
+        printf("\n=== Summary (High Throughput %s, across %d ranks) ===\n",
+               ht_bytes.is_fp8 ? "FP8" : "BF16", nRanks);
+        printf("NOTE: total time = kernel time + memcpyD2D + misc\n");
+    }
+
+    // UpdateHandle CUPTI micro-bench. Must run after the main bench (running
+    // it in isolation desyncs the cross-GPU notify protocol and hangs Dispatch).
+    // Save/restore g_kernel_stats so the main-bench timings survive ktimer.start().
+    {
+        auto saved_main_kernel_stats = g_kernel_stats;
+
+        const int update_warmup = actual_warmup;
+        const int update_iters = actual_iters;
+        const ncclEpLayoutInfo_t* layout_info_ptr = has_handle_layout_info ? &handle_layout_info : nullptr;
+        for (int i = 0; i < update_warmup; ++i) {
+            NCCLCHECK(ncclEpUpdateHandle(ep_handle, topk_idx, layout_info_ptr, stream));
+        }
+        CUDACHECK(cudaStreamSynchronize(stream));
+        MPICHECK(MPI_Barrier(MPI_COMM_WORLD));
+        KernelTimer ktimer_update;
+        ktimer_update.start();
+        for (int i = 0; i < update_iters; ++i) {
+            NCCLCHECK(ncclEpUpdateHandle(ep_handle, topk_idx, layout_info_ptr, stream));
+        }
+        CUDACHECK(cudaStreamSynchronize(stream));
+        ktimer_update.stop();
+        if (myRank == 0 && algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT && ktimer_update.is_valid()) {
+            printf("\n--- UpdateHandle timing ---\n");
+            printf("Update:      kernel=%.2f us\n", ktimer_update.sum_per_launch_us());
+            printf("\n");
+        }
+
+        g_kernel_stats = std::move(saved_main_kernel_stats);
     }
 
     // Print results and summary based on algorithm mode

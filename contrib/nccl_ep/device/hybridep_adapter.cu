@@ -341,10 +341,15 @@ void call_metadata_preprocessing(
     bool     out_is_int64,
     int      max_recv_tokens_per_rank,
     int      num_blocks,
+    void*    scan_gscratch,
     cudaStream_t stream
 ) {
     if (expert_major && per_expert_token_counts == nullptr) {
         EP_HOST_ASSERT(false && "EXPERT_MAJOR remap requires per_expert_token_counts != nullptr");
+    }
+    if (expert_major) {
+        EP_HOST_ASSERT(scan_gscratch != nullptr &&
+                       "EM scan requires scan_gscratch != nullptr");
     }
 
     if (per_expert_token_counts != nullptr) {
@@ -398,6 +403,38 @@ void call_metadata_preprocessing(
     jit::launch_scan(
         NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, num_nodes, num_ranks_per_node,
         per_expert_token_counts != nullptr, sp, dynamic_smem_bytes, stream);
+
+    // EM cooperative scan: produces S2D, LERM, em offsets/counts from the AG'd bitmap.
+    if (expert_major) {
+        const int num_mask_words = (num_ranks_per_node + 63) / 64;
+        const int num_total_attn_tokens = num_tokens_per_rank * num_ranks_per_node * num_nodes;
+        launch_em_scan(
+            global_routing_map,
+            token_rank_mask,
+            num_mask_words,
+            num_total_attn_tokens,
+            num_tokens_per_rank,
+            num_ranks_per_node,
+            experts_per_rank,
+            num_nodes,
+            node_rank,
+            local_rank,
+            s2d_inner_dim,
+            max_recv_tokens_per_rank,
+            static_cast<int>(alignment),
+            sparse_to_dense_map,
+            local_expert_routing_map,
+            num_tokens_for_experts,
+            internal_offsets,
+            padded_out_counts,
+            out_offsets,
+            actual_counts_out,
+            recv_total_counter,
+            out_is_int64,
+            static_cast<int32_t*>(scan_gscratch),
+            NUM_OF_BLOCKS,
+            stream);
+    }
 }
 
 size_t get_preprocessing_scan_tmp_size(int num_ranks_per_node) {
@@ -406,6 +443,331 @@ size_t get_preprocessing_scan_tmp_size(int num_ranks_per_node) {
 
 size_t get_rank_mask_elem_size(int lsa_team_size) {
     return ((lsa_team_size + 63) / 64) * sizeof(uint64_t);
+}
+
+namespace cg = cooperative_groups;
+
+static constexpr int kEmScanBlockDim = 256;
+
+// Load 64 bits at a byte offset; memcpy folds to LDG.E.64 (or split if unaligned).
+__device__ __forceinline__ uint64_t em_ld64(const uint8_t* row, int byte_off) {
+    uint64_t v;
+    memcpy(&v, row + byte_off, sizeof(v));
+    return v;
+}
+
+// Cooperative EM scan from the AG'd bitmap.
+//
+// gscratch: block_count[num_blocks][n_dle] int32. Each block writes its own
+// row, then a single grid.sync separates count from emit. Block-prefix and
+// padded offsets are recomputed locally in smem so no second sync is needed.
+//
+// Slot assignment is deterministic:
+//   em_slot = s_offsets[dle]              // padded prefix over le
+//           + s_warp_state[warp][dle]     // block_prefix + earlier-warp counts
+//           + __popc(ballot & lower_lanes) // earlier lanes in tile
+__global__ void em_scan_kernel(
+    const uint8_t* __restrict__ input_routing_map,
+    const uint64_t* __restrict__ token_rank_mask_words,
+    int num_mask_words,
+    int num_total_attn_tokens,
+    int num_tokens_per_rank,
+    int num_ranks_per_node,
+    int experts_per_rank,
+    int num_lsa_teams,
+    int node_rank,
+    int local_rank,
+    int s2d_inner_dim,
+    int max_recv_tokens_per_rank,
+    int em_alignment,
+    int32_t* __restrict__ sparse_to_dense_map,
+    bool*    __restrict__ local_expert_routing_map,
+    int32_t* __restrict__ num_tokens_for_experts,
+    int64_t* __restrict__ em_internal_offsets,
+    int32_t* __restrict__ em_padded_out_counts_i32,
+    int64_t* __restrict__ em_padded_out_counts_i64,
+    int32_t* __restrict__ em_out_offsets_i32,
+    int64_t* __restrict__ em_out_offsets_i64,
+    int32_t* __restrict__ em_actual_counts_out,
+    int32_t* __restrict__ recv_total_counter_i32,
+    int64_t* __restrict__ recv_total_counter_i64,
+    bool out_is_int64,
+    int32_t* __restrict__ gscratch)
+{
+    extern __shared__ int32_t s_smem[];
+
+    const int epr   = experts_per_rank;
+    const int nrpn  = num_ranks_per_node;
+    const int n_dle = nrpn * epr;
+    const int packed_row_bytes =
+        ((num_lsa_teams * nrpn * epr) + 7) / 8;
+
+    int32_t* g_block_count = gscratch;
+
+    const int local_per_node_bytes = ((nrpn * epr) + 7) / 8;
+    const int tid       = threadIdx.x;
+    const int lane      = tid & 31;
+    const int warp      = tid >> 5;
+    const int num_warps = blockDim.x >> 5;
+    const int B         = blockIdx.x;
+    const int N         = gridDim.x;
+    const int s_warp_stride = n_dle;
+    int32_t* s_warp_state = s_smem;
+    int32_t* s_offsets    = s_smem + num_warps * n_dle;
+
+    auto grid = cg::this_grid();
+
+    const int tpb = (num_total_attn_tokens + N - 1) / N;
+    const int bs  = B * tpb;
+    const int be  = min(bs + tpb, num_total_attn_tokens);
+    const int tpw = (be - bs + num_warps - 1) / num_warps;
+    const int ws  = bs + warp * tpw;
+    const int we  = min(ws + tpw, be);
+
+    // Phase 1: per-warp count into smem; later aggregated to block_count[B][dle].
+    for (int i = tid; i < num_warps * n_dle; i += blockDim.x) s_warp_state[i] = 0;
+    __syncthreads();
+
+    const int n_local_bits_ph1  = nrpn * epr;
+    const int n_local_words_ph1 = (n_local_bits_ph1 + 63) / 64;
+    for (int tok = ws + lane; tok < we; tok += 32) {
+        const uint64_t* mw = token_rank_mask_words + (size_t)tok * num_mask_words;
+        const uint64_t mw0 = mw[0];
+        const uint64_t mw1 = (num_mask_words >= 2) ? mw[1] : 0;
+        if (mw0 == 0 && mw1 == 0) continue;
+        const uint8_t* row = input_routing_map + (size_t)tok * packed_row_bytes
+                           + (size_t)node_rank * local_per_node_bytes;
+        for (int wi = 0; wi < n_local_words_ph1; wi++) {
+            const int word_bit_base = wi * 64;
+            const int remaining = n_local_bits_ph1 - word_bit_base;
+            const int word_bits = remaining >= 64 ? 64 : remaining;
+            uint64_t s = em_ld64(row, wi * 8);
+            if (word_bits < 64) s &= (uint64_t{1} << word_bits) - 1;
+            while (s) {
+                const int b = __ffsll(static_cast<long long>(s)) - 1;
+                atomicAdd(&s_warp_state[warp * s_warp_stride + word_bit_base + b], 1);
+                s &= s - 1;
+            }
+        }
+    }
+    __syncthreads();
+
+    for (int dle = tid; dle < n_dle; dle += blockDim.x) {
+        int sum = 0;
+        for (int w = 0; w < num_warps; w++) sum += s_warp_state[w * s_warp_stride + dle];
+        g_block_count[(size_t)B * n_dle + dle] = sum;
+    }
+
+    grid.sync();
+
+    // Phase 2 prep: per dle compute total + this block's prefix; convert
+    // s_warp_state from counts to per-warp prior offsets.
+    for (int dle = tid; dle < n_dle; dle += blockDim.x) {
+        int my_prefix = 0;
+        int total = 0;
+        for (int b = 0; b < N; b++) {
+            const int c = g_block_count[(size_t)b * n_dle + dle];
+            if (b < B) my_prefix += c;
+            total += c;
+        }
+        s_offsets[dle] = total;
+        int cum = my_prefix;
+        for (int w = 0; w < num_warps; w++) {
+            const int c = s_warp_state[w * s_warp_stride + dle];
+            s_warp_state[w * s_warp_stride + dle] = cum;
+            cum += c;
+        }
+    }
+    __syncthreads();
+
+    // Per-dest padded-prefix scan over le (warp-per-dest), in place on s_offsets.
+    // The warp handling d=local_rank in block 0 also writes EM-layout outputs.
+    {
+        const int align = (em_alignment > 1) ? em_alignment : 1;
+        for (int d = warp; d < nrpn; d += num_warps) {
+            if (lane == 0) {
+                const bool write_em = (B == 0 && d == local_rank);
+                int cum = 0;
+                for (int k = 0; k < epr; k++) {
+                    const int c = s_offsets[d * epr + k];
+                    const int padded = (align > 1 && c > 0) ? ((c + align - 1) / align) * align : c;
+                    s_offsets[d * epr + k] = cum;
+                    if (write_em) {
+                        if (em_internal_offsets) em_internal_offsets[k] = cum;
+                        if (em_actual_counts_out) em_actual_counts_out[k] = c;
+                        if (out_is_int64) {
+                            if (em_padded_out_counts_i64) em_padded_out_counts_i64[k] = (int64_t)padded;
+                            if (em_out_offsets_i64) em_out_offsets_i64[k] = (int64_t)cum;
+                        } else {
+                            if (em_padded_out_counts_i32) em_padded_out_counts_i32[k] = (int32_t)padded;
+                            if (em_out_offsets_i32) em_out_offsets_i32[k] = (int32_t)cum;
+                        }
+                    }
+                    cum += padded;
+                }
+                if (cum > max_recv_tokens_per_rank) {
+                    printf("em_scan_kernel: dest %d padded slots %d > "
+                           "max_recv_tokens_per_rank %d\n", d, cum, max_recv_tokens_per_rank);
+                    __trap();
+                }
+                if (write_em) {
+                    if (em_internal_offsets) em_internal_offsets[epr] = (int64_t)cum;
+                    if (num_tokens_for_experts) *num_tokens_for_experts = (int32_t)cum;
+                    if (out_is_int64) {
+                        if (recv_total_counter_i64) *recv_total_counter_i64 = (int64_t)cum;
+                    } else {
+                        if (recv_total_counter_i32) *recv_total_counter_i32 = (int32_t)cum;
+                    }
+                }
+            }
+        }
+    }
+    __syncthreads();
+
+    // Phase 2 emit: warp-tile bit-popcount scan over the local-node slice.
+    // Requires epr to be a power of two.
+    const int n_local_bits  = nrpn * epr;
+    const int n_local_words = (n_local_bits + 63) / 64;
+    const int num_tiles     = (we - ws + 31) / 32;
+    const int epr_l2        = __ffs(epr) - 1;
+    const int epr_mask      = epr - 1;
+    for (int tile = 0; tile < num_tiles; tile++) {
+        const int tok = ws + tile * 32 + lane;
+        const bool valid = (tok < we);
+        bool any_hit = false;
+        if (valid) {
+            const uint64_t* mw = token_rank_mask_words + (size_t)tok * num_mask_words;
+            const uint64_t mw0 = mw[0];
+            const uint64_t mw1 = (num_mask_words >= 2) ? mw[1] : 0;
+            any_hit = (mw0 != 0) || (mw1 != 0);
+        }
+
+        const uint8_t* row_local = nullptr;
+        int send_idx = 0;
+        bool is_our_send = false;
+        if (any_hit) {
+            row_local = input_routing_map + (size_t)tok * packed_row_bytes
+                      + (size_t)node_rank * local_per_node_bytes;
+            const int sgr = tok / num_tokens_per_rank;
+            const int sn  = sgr / nrpn;
+            const int slr = sgr % nrpn;
+            const int lti = tok % num_tokens_per_rank;
+            send_idx = sn * num_tokens_per_rank + lti;
+            is_our_send = (slr == local_rank);
+        }
+
+        int my_packed_idx = 0;
+
+        for (int wi = 0; wi < n_local_words; wi++) {
+            const int word_bit_base = wi * 64;
+            const int remaining = n_local_bits - word_bit_base;
+            const int word_bits = remaining >= 64 ? 64 : remaining;
+            uint64_t my_slice = 0;
+            if (any_hit) {
+                my_slice = em_ld64(row_local, wi * 8);
+                if (word_bits < 64) my_slice &= (uint64_t{1} << word_bits) - 1;
+            }
+            const uint32_t any_lo = __reduce_or_sync(0xffffffff, (uint32_t)my_slice);
+            const uint32_t any_hi = (word_bits > 32)
+                ? __reduce_or_sync(0xffffffff, (uint32_t)(my_slice >> 32)) : 0u;
+            uint64_t union_slice = ((uint64_t)any_hi << 32) | (uint64_t)any_lo;
+
+            while (union_slice) {
+                const int b = __ffsll(static_cast<long long>(union_slice)) - 1;
+                const int dle = word_bit_base + b;
+                const int d = dle >> epr_l2;
+                const int le = dle & epr_mask;
+                const bool my_hit = (my_slice >> b) & 1ull;
+                const uint32_t mask = __ballot_sync(0xffffffff, my_hit);
+                if (my_hit) {
+                    const int within = __popc(mask & ((1u << lane) - 1u));
+                    const int em_slot = s_offsets[dle] + s_warp_state[warp * s_warp_stride + dle] + within;
+                    if (d == local_rank) local_expert_routing_map[em_slot * epr + le] = true;
+                    if (is_our_send) {
+                        sparse_to_dense_map[(size_t)send_idx * s2d_inner_dim + my_packed_idx] =
+                            ::hybrid_ep::em_s2d_pack(d, em_slot);
+                        my_packed_idx++;
+                    }
+                }
+                if (lane == 0) {
+                    s_warp_state[warp * s_warp_stride + dle] += __popc(mask);
+                }
+                union_slice &= union_slice - 1;
+            }
+        }
+    }
+}
+
+void launch_em_scan(
+    const uint8_t* input_routing_map,
+    const void*    token_rank_mask,
+    int num_mask_words,
+    int num_total_attn_tokens,
+    int num_tokens_per_rank,
+    int num_ranks_per_node,
+    int experts_per_rank,
+    int num_lsa_teams,
+    int node_rank,
+    int local_rank,
+    int s2d_inner_dim,
+    int max_recv_tokens_per_rank,
+    int em_alignment,
+    int32_t* sparse_to_dense_map,
+    bool*    local_expert_routing_map,
+    int32_t* num_tokens_for_experts,
+    int64_t* em_internal_offsets,
+    void*    em_padded_out_counts,
+    void*    em_out_offsets,
+    int32_t* em_actual_counts_out,
+    void*    recv_total_counter,
+    bool     out_is_int64,
+    int32_t* gscratch,
+    int      num_sms,
+    cudaStream_t stream)
+{
+    if (num_total_attn_tokens <= 0 || num_ranks_per_node <= 0 || experts_per_rank <= 0) return;
+    assert((experts_per_rank & (experts_per_rank - 1)) == 0 && "experts_per_rank must be a power of two");
+    assert(num_mask_words >= 1 && num_mask_words <= 2 && "lsa_team_size must be <= 128");
+    assert(num_sms > 0 && "launch_em_scan requires num_sms > 0");
+    const int n_dle = num_ranks_per_node * experts_per_rank;
+
+    constexpr int kNumWarps = kEmScanBlockDim / 32;
+    const size_t smem_bytes = static_cast<size_t>(kNumWarps + 1) * n_dle * sizeof(int32_t);
+
+    SETUP_LAUNCH_CONFIG(num_sms, kEmScanBlockDim, stream);
+    cfg.dynamicSmemBytes = smem_bytes;
+    LAUNCH_KERNEL(&cfg, em_scan_kernel,
+        input_routing_map,
+        static_cast<const uint64_t*>(token_rank_mask),
+        num_mask_words,
+        num_total_attn_tokens,
+        num_tokens_per_rank,
+        num_ranks_per_node,
+        experts_per_rank,
+        num_lsa_teams,
+        node_rank,
+        local_rank,
+        s2d_inner_dim,
+        max_recv_tokens_per_rank,
+        em_alignment,
+        sparse_to_dense_map,
+        local_expert_routing_map,
+        num_tokens_for_experts,
+        em_internal_offsets,
+        out_is_int64 ? nullptr : static_cast<int32_t*>(em_padded_out_counts),
+        out_is_int64 ? static_cast<int64_t*>(em_padded_out_counts) : nullptr,
+        out_is_int64 ? nullptr : static_cast<int32_t*>(em_out_offsets),
+        out_is_int64 ? static_cast<int64_t*>(em_out_offsets) : nullptr,
+        em_actual_counts_out,
+        out_is_int64 ? nullptr : static_cast<int32_t*>(recv_total_counter),
+        out_is_int64 ? static_cast<int64_t*>(recv_total_counter) : nullptr,
+        out_is_int64,
+        gscratch);
+}
+
+size_t get_scan_gscratch_size(int num_ranks_per_node, int experts_per_rank, int num_sms) {
+    assert(num_sms > 0);
+    return static_cast<size_t>(num_sms) * num_ranks_per_node * experts_per_rank * sizeof(int32_t);
 }
 
 int get_device_max_dynamic_smem() {

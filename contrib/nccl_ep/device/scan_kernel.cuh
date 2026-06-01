@@ -682,11 +682,14 @@ __device__ __forceinline__ void scan_impl(const uint8_t* input_routing_map,
   scan_smem_t smem = scan_smem_t::from_raw(
       smem_bytes, NUM_OF_WARPS_PER_BLOCK, num_of_ranks_per_node, ENABLE_PER_EXPERT_COUNTS);
 
+  // expert_major path: produce token_rank_mask + RDMA/attn maps only.
   if constexpr (ENABLE_PER_EXPERT_COUNTS) {
-    for (int e = threadIdx.x; e < experts_per_rank; e += NUM_THREADS_PER_BLOCK) {
-      smem.expert_counts[e] = 0;
+    if (!expert_major) {
+      for (int e = threadIdx.x; e < experts_per_rank; e += NUM_THREADS_PER_BLOCK) {
+        smem.expert_counts[e] = 0;
+      }
+      __syncthreads();
     }
-    __syncthreads();
   }
 
   int block_starting_token = blockIdx.x * num_of_tokens_per_block;
@@ -702,30 +705,33 @@ __device__ __forceinline__ void scan_impl(const uint8_t* input_routing_map,
       num_of_tokens_per_rank, num_of_ranks_per_node, experts_per_rank,
       packed_row_bytes, experts_per_node_packed, node_rank, local_rank,
       rdma_to_attn_map_size_per_node);
-  reduce_warp_tally<LSA_TEAM_SIZE>(
-      token_routing_map_sum, smem, num_of_ranks_per_node, warp_id, lane_id);
-  __syncthreads();
 
-  cross_block_prefix_scan<NUM_THREADS_PER_BLOCK, NUM_OF_WARPS_PER_BLOCK>(
-      smem, tmp, num_of_ranks_per_node, blockIdx.x);
-  __syncthreads();
-
-  init_warp_rank_prefixes<NUM_OF_WARPS_PER_BLOCK>(smem, num_of_ranks_per_node);
-  __syncthreads();
-
-  assign_recv_slots<NUM_RANK_TILES, LSA_TEAM_SIZE, NUM_MASK_WORDS, ENABLE_PER_EXPERT_COUNTS>(
-      input_routing_map, sparse_to_dense_map, token_rank_mask, local_expert_routing_map,
-      smem.expert_counts, num_of_tokens_for_experts, recv_total_counter, smem,
-      thread_starting_token, num_of_tokens_per_thread, num_of_total_attn_tokens,
-      num_of_tokens_per_rank, num_of_ranks_per_node, experts_per_rank, packed_row_bytes,
-      experts_per_node_packed, node_rank, local_rank, warp_id, lane_id, expert_major,
-      out_is_int64, max_recv_tokens_per_rank);
-
-  if constexpr (ENABLE_PER_EXPERT_COUNTS) {
+  if (!expert_major) {
+    reduce_warp_tally<LSA_TEAM_SIZE>(
+        token_routing_map_sum, smem, num_of_ranks_per_node, warp_id, lane_id);
     __syncthreads();
-    for (int e = threadIdx.x; e < experts_per_rank; e += NUM_THREADS_PER_BLOCK) {
-      int32_t block_count = smem.expert_counts[e];
-      if (block_count > 0) atomicAdd(per_expert_token_counts + e, block_count);
+
+    cross_block_prefix_scan<NUM_THREADS_PER_BLOCK, NUM_OF_WARPS_PER_BLOCK>(
+        smem, tmp, num_of_ranks_per_node, blockIdx.x);
+    __syncthreads();
+
+    init_warp_rank_prefixes<NUM_OF_WARPS_PER_BLOCK>(smem, num_of_ranks_per_node);
+    __syncthreads();
+
+    assign_recv_slots<NUM_RANK_TILES, LSA_TEAM_SIZE, NUM_MASK_WORDS, ENABLE_PER_EXPERT_COUNTS>(
+        input_routing_map, sparse_to_dense_map, token_rank_mask, local_expert_routing_map,
+        smem.expert_counts, num_of_tokens_for_experts, recv_total_counter, smem,
+        thread_starting_token, num_of_tokens_per_thread, num_of_total_attn_tokens,
+        num_of_tokens_per_rank, num_of_ranks_per_node, experts_per_rank, packed_row_bytes,
+        experts_per_node_packed, node_rank, local_rank, warp_id, lane_id, expert_major,
+        out_is_int64, max_recv_tokens_per_rank);
+
+    if constexpr (ENABLE_PER_EXPERT_COUNTS) {
+      __syncthreads();
+      for (int e = threadIdx.x; e < experts_per_rank; e += NUM_THREADS_PER_BLOCK) {
+        int32_t block_count = smem.expert_counts[e];
+        if (block_count > 0) atomicAdd(per_expert_token_counts + e, block_count);
+      }
     }
   }
 
@@ -734,13 +740,10 @@ __device__ __forceinline__ void scan_impl(const uint8_t* input_routing_map,
       num_of_ranks_per_node, experts_per_rank, node_rank, local_rank,
       packed_row_bytes, experts_per_node_packed);
 
-  remap_expert_major_s2d<NUM_LSA_TEAMS, LSA_TEAM_SIZE, NUM_MASK_WORDS>(
-      input_routing_map, sparse_to_dense_map, token_rank_mask, num_of_tokens_for_experts,
-      local_expert_routing_map, expert_major, remap_alignment, remap_internal_offsets,
-      remap_padded_out_counts, remap_out_offsets, remap_actual_counts_out, s2d_inner_dim,
-      recv_total_counter, out_is_int64, max_recv_tokens_per_rank,
-      num_of_total_attn_tokens, num_of_tokens_per_rank, num_of_ranks_per_node,
-      experts_per_rank, node_rank, local_rank, smem_bytes);
+  // EM remap is handled by em_remap_from_bitmap_kernel (see hybridep_adapter.cu).
+  (void)remap_alignment; (void)remap_internal_offsets;
+  (void)remap_padded_out_counts; (void)remap_out_offsets;
+  (void)remap_actual_counts_out; (void)s2d_inner_dim;
 }
 
 // Parameter pack for the scan JIT entry. Non-templated so the host can build it

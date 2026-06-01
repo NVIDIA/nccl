@@ -62,7 +62,7 @@ def main():
     data = torch.tensor([float(rank)], dtype=torch.float32, device=device)
 
     # [NCCL4Py] AllReduce: Sum all rank values
-    nccl_comm.reduce(data, data, nccl.SUM)
+    nccl_comm.allreduce(data, data, nccl.SUM)
 
     torch.cuda.synchronize()
 

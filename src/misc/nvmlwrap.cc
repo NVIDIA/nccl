@@ -38,6 +38,8 @@ NCCL_NVML_FN(nvmlDeviceGetNvLinkState, nvmlReturn_t,
              (nvmlDevice_t device, unsigned int link, nvmlEnableState_t* isActive))
 NCCL_NVML_FN(nvmlDeviceGetNvLinkRemotePciInfo, nvmlReturn_t,
              (nvmlDevice_t device, unsigned int link, nvmlPciInfo_t* pci))
+NCCL_NVML_FN(nvmlDeviceGetNvLinkRemoteDeviceType, nvmlReturn_t,
+             (nvmlDevice_t device, unsigned int link, nvmlIntNvLinkDeviceType_t* NvLinkDeviceType))
 NCCL_NVML_FN(nvmlDeviceGetNvLinkCapability, nvmlReturn_t,
              (nvmlDevice_t device, unsigned int link, nvmlNvLinkCapability_t capability, unsigned int* capResult))
 NCCL_NVML_FN(nvmlDeviceGetCudaComputeCapability, nvmlReturn_t, (nvmlDevice_t device, int* major, int* minor))
@@ -104,6 +106,7 @@ ncclResult_t ncclNvmlEnsureInitialized() {
       {(void**)&pfn_nvmlErrorString, "nvmlErrorString"},
       {(void**)&pfn_nvmlDeviceGetNvLinkState, "nvmlDeviceGetNvLinkState"},
       {(void**)&pfn_nvmlDeviceGetNvLinkRemotePciInfo, "nvmlDeviceGetNvLinkRemotePciInfo"},
+      {(void**)&pfn_nvmlDeviceGetNvLinkRemoteDeviceType, "nvmlDeviceGetNvLinkRemoteDeviceType"},
       {(void**)&pfn_nvmlDeviceGetNvLinkCapability, "nvmlDeviceGetNvLinkCapability"},
       {(void**)&pfn_nvmlDeviceGetCudaComputeCapability, "nvmlDeviceGetCudaComputeCapability"},
       {(void**)&pfn_nvmlDeviceGetP2PStatus, "nvmlDeviceGetP2PStatus"},
@@ -258,6 +261,14 @@ ncclResult_t ncclNvmlDeviceGetNvLinkRemotePciInfo(nvmlDevice_t device, unsigned 
   NCCLCHECK(ncclNvmlEnsureInitialized());
   std::lock_guard<std::mutex> locked(lock);
   NVMLTRY(nvmlDeviceGetNvLinkRemotePciInfo, device, link, pci);
+  return ncclSuccess;
+}
+
+ncclResult_t ncclNvmlDeviceGetNvLinkRemoteDeviceType(nvmlDevice_t device, unsigned int link,
+                                                     nvmlIntNvLinkDeviceType_t* NvLinkDeviceType) {
+  NCCLCHECK(ncclNvmlEnsureInitialized());
+  std::lock_guard<std::mutex> locked(lock);
+  NVMLTRY(nvmlDeviceGetNvLinkRemoteDeviceType, device, link, NvLinkDeviceType);
   return ncclSuccess;
 }
 

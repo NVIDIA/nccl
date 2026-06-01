@@ -105,6 +105,13 @@ typedef struct {
 typedef nvmlPciInfoExt_v1_t nvmlPciInfoExt_t;
 #define nvmlPciInfoExt_v1 NVML_STRUCT_VERSION(PciInfoExt, 1)
 
+typedef enum nvmlIntNvLinkDeviceType_enum {
+  NVML_NVLINK_DEVICE_TYPE_GPU = 0x00,
+  NVML_NVLINK_DEVICE_TYPE_IBMNPU = 0x01,
+  NVML_NVLINK_DEVICE_TYPE_SWITCH = 0x02,
+  NVML_NVLINK_DEVICE_TYPE_UNKNOWN = 0xFF
+} nvmlIntNvLinkDeviceType_t;
+
 /* P2P Capability Index Status*/
 typedef enum nvmlGpuP2PStatus_enum {
   NVML_P2P_STATUS_OK = 0,
@@ -351,6 +358,8 @@ ncclResult_t ncclNvmlDeviceGetIndex(nvmlDevice_t device, unsigned* index);
 ncclResult_t ncclNvmlDeviceGetHandleByIndex(unsigned int index, nvmlDevice_t* device);
 ncclResult_t ncclNvmlDeviceGetNvLinkState(nvmlDevice_t device, unsigned int link, nvmlEnableState_t* isActive);
 ncclResult_t ncclNvmlDeviceGetNvLinkRemotePciInfo(nvmlDevice_t device, unsigned int link, nvmlPciInfo_t* pci);
+ncclResult_t ncclNvmlDeviceGetNvLinkRemoteDeviceType(nvmlDevice_t device, unsigned int link,
+                                                     nvmlIntNvLinkDeviceType_t* deviceType);
 ncclResult_t ncclNvmlDeviceGetNvLinkCapability(nvmlDevice_t device, unsigned int link,
                                                nvmlNvLinkCapability_t capability, unsigned int* capResult);
 ncclResult_t ncclNvmlDeviceGetCudaComputeCapability(nvmlDevice_t device, int* major, int* minor);

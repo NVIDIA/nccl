@@ -67,8 +67,8 @@ ncclResult_t ncclOsSocketResetFd(struct ncclSocket* sock);
 void ncclOsSocketResetAccept(struct ncclSocket* sock);
 ncclResult_t ncclOsSocketTryAccept(struct ncclSocket* sock);
 
-void ncclOsSetMutexCondShared(std::mutex &mutex, std::condition_variable &cond, int* initialized);
-void ncclOsUnsetMutexCondShared(std::mutex &mutex, std::condition_variable &cond, int* initialized);
+void ncclOsSetMutexCondShared(std::mutex& mutex, std::condition_variable& cond, int* initialized);
+void ncclOsUnsetMutexCondShared(std::mutex& mutex, std::condition_variable& cond, int* initialized);
 
 void ncclOsCpuZero(ncclAffinity& affinity);
 int ncclOsCpuCount(const ncclAffinity& affinity);

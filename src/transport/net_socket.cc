@@ -47,7 +47,8 @@ static ncclProfilerCallback_t ncclProfilerFunction;
 // context support is added to the plugin the ref counter can be removed.
 static int netRefCount;
 
-ncclResult_t ncclNetSocketInit(void** ctx, uint64_t commId, ncclNetCommConfig_t* config, ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) {
+ncclResult_t ncclNetSocketInit(void** ctx, uint64_t commId, ncclNetCommConfig_t* config, ncclDebugLogger_t logFunction,
+                               ncclProfilerCallback_t profFunction) {
   std::lock_guard<std::mutex> lock(ncclNetSocketMutex);
   ncclResult_t ret = ncclSuccess;
   if (netRefCount) {
@@ -56,7 +57,7 @@ ncclResult_t ncclNetSocketInit(void** ctx, uint64_t commId, ncclNetCommConfig_t*
   }
   ncclProfilerFunction = profFunction;
   if (ncclNetIfs == -1) {
-    char names[MAX_IF_NAME_SIZE*MAX_IFS];
+    char names[MAX_IF_NAME_SIZE * MAX_IFS];
     union ncclSocketAddress addrs[MAX_IFS];
     NCCLCHECKGOTO(ncclFindInterfaces(names, addrs, MAX_IF_NAME_SIZE, MAX_IFS, &ncclNetIfs), ret, fail);
     if (ncclNetIfs <= 0) {
@@ -64,20 +65,20 @@ ncclResult_t ncclNetSocketInit(void** ctx, uint64_t commId, ncclNetCommConfig_t*
       ret = ncclInternalError;
       goto fail;
     } else {
-      #define MAX_LINE_LEN (2047)
-      char line[MAX_LINE_LEN+1];
-      char addrline[SOCKET_NAME_MAXLEN+1];
+#define MAX_LINE_LEN (2047)
+      char line[MAX_LINE_LEN + 1];
+      char addrline[SOCKET_NAME_MAXLEN + 1];
       line[0] = '\0';
       addrline[SOCKET_NAME_MAXLEN] = '\0';
-      for (int i=0; i<ncclNetIfs; i++) {
-        strcpy(ncclNetSocketDevs[i].devName, names+i*MAX_IF_NAME_SIZE);
-        memcpy(&ncclNetSocketDevs[i].addr, addrs+i, sizeof(union ncclSocketAddress));
+      for (int i = 0; i < ncclNetIfs; i++) {
+        strcpy(ncclNetSocketDevs[i].devName, names + i * MAX_IF_NAME_SIZE);
+        memcpy(&ncclNetSocketDevs[i].addr, addrs + i, sizeof(union ncclSocketAddress));
         NCCLCHECKGOTO(ncclNetSocketGetPciPath(ncclNetSocketDevs[i].devName, &ncclNetSocketDevs[i].pciPath), ret, fail);
-        snprintf(line+strlen(line), MAX_LINE_LEN-strlen(line), " [%d]%s:%s", i, names+i*MAX_IF_NAME_SIZE,
-            ncclSocketToString(&addrs[i], addrline));
+        snprintf(line + strlen(line), MAX_LINE_LEN - strlen(line), " [%d]%s:%s", i, names + i * MAX_IF_NAME_SIZE,
+                 ncclSocketToString(&addrs[i], addrline));
       }
       line[MAX_LINE_LEN] = '\0';
-      INFO(NCCL_INIT|NCCL_NET,"NET/Socket : Using%s", line);
+      INFO(NCCL_INIT | NCCL_NET, "NET/Socket : Using%s", line);
     }
   }
   netRefCount++;

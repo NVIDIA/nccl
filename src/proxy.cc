@@ -852,9 +852,8 @@ static ncclResult_t ncclProxyGetPostedOps(struct ncclProxyState* proxyState, int
         ncclProfilerStartProxyCtrlEvent(proxyState->profilerContext, &eHandle);
         ncclProfilerRecordProxyCtrlEventState(eHandle, 0, ncclProfilerProxyCtrlSleep);
         // Predicate avoids lost wakeups and guarantees we observe stop after ncclProxyProgressDestroy.
-        pool->cond.wait(lock, [&]() {
-          return pool->nextOps != -1 || state->stop.load(std::memory_order_acquire) != 0;
-        });
+        pool->cond.wait(lock,
+                        [&]() { return pool->nextOps != -1 || state->stop.load(std::memory_order_acquire) != 0; });
         ncclProfilerRecordProxyCtrlEventState(eHandle, 0, ncclProfilerProxyCtrlWakeup);
         ncclProfilerStopProxyCtrlEvent(eHandle);
       }
@@ -1457,8 +1456,8 @@ static ncclResult_t proxyProgressInit(struct ncclProxyState* proxyState) {
     shmPath[0] = '\0';
 #elif defined(NCCL_OS_WINDOWS)
     char shmPath[64];
-    snprintf(shmPath, sizeof(shmPath), "Local\\nccl-shm-%08x-%02x",
-        (unsigned)GetCurrentProcessId(), proxyState->cudaDev & 0xff);
+    snprintf(shmPath, sizeof(shmPath), "Local\\nccl-shm-%08x-%02x", (unsigned)GetCurrentProcessId(),
+             proxyState->cudaDev & 0xff);
 #endif
     NCCLCHECK(ncclShmOpen(shmPath, sizeof(shmPath), size, (void**)&pool, NULL, proxyState->tpLocalnRanks,
                           &state->handle));

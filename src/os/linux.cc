@@ -547,7 +547,7 @@ ncclResult_t ncclSocketClose(struct ncclSocket* sock, bool wait) {
   return ncclSuccess;
 }
 
-void ncclOsSetMutexCondShared(std::mutex &mutex, std::condition_variable &cond, int* initialized) {
+void ncclOsSetMutexCondShared(std::mutex& mutex, std::condition_variable& cond, int* initialized) {
   if (initialized != NULL && *initialized) return;
   pthread_mutexattr_t mutexAttr;
   pthread_mutexattr_init(&mutexAttr);
@@ -565,7 +565,7 @@ void ncclOsSetMutexCondShared(std::mutex &mutex, std::condition_variable &cond, 
   if (initialized != NULL) *initialized = 1;
 }
 
-void ncclOsUnsetMutexCondShared(std::mutex &mutex, std::condition_variable &cond, int* initialized) {
+void ncclOsUnsetMutexCondShared(std::mutex& mutex, std::condition_variable& cond, int* initialized) {
   if (initialized != NULL && *initialized == 0) return;
   pthread_cond_destroy(cond.native_handle());
   pthread_mutex_destroy(mutex.native_handle());

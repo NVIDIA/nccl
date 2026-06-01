@@ -9,13 +9,8 @@
 #define _NCCL_DEVICE_UTILITY_H_
 
 #ifdef __CUDACC__
-#if defined(__clang_llvm_bitcode_lib__)
-#define NCCL_DEVICE_INLINE __device__ __attribute__((always_inline))
-#define NCCL_HOST_DEVICE_INLINE __host__ __device__ __attribute__((always_inline))
-#else
 #define NCCL_DEVICE_INLINE __device__ __forceinline__
 #define NCCL_HOST_DEVICE_INLINE __host__ __device__ __forceinline__
-#endif
 #else
 #ifndef __host__
 #define __host__

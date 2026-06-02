@@ -1334,7 +1334,7 @@ ncclResult_t ncclEpCreateGroup(
         ep_group->config.num_channels = 10;
     }
 
-    
+
     if (ep_group->config.num_qp_per_rank == NCCL_EP_AUTO) {
         ep_group->config.num_qp_per_rank = ep_group->max_num_sms * HYBRIDEP_DISPATCH_N2N_WARPS;
     }
@@ -2432,6 +2432,20 @@ ncclResult_t ncclEpDispatch(
                 assert(topk_weights_in   != nullptr);
                 assert(recv_topk_weights != nullptr);
                 assert(recv_topk_idx     != nullptr);
+                assert(topk_weights_in->ndim == 2);
+                assert(topk_weights_in->datatype == ncclFloat32);
+                assert(topk_weights_in->sizes[0] == static_cast<unsigned>(handle->num_tokens));
+                assert(topk_weights_in->sizes[1] == static_cast<unsigned>(handle->num_topk));
+                assert(recv_topk_weights->ndim == 3);
+                assert(recv_topk_weights->datatype == ncclFloat32);
+                assert(recv_topk_weights->sizes[0] == static_cast<unsigned>(group->nRanks));
+                assert(recv_topk_weights->sizes[1] == group->config.max_dispatch_tokens_per_rank);
+                assert(recv_topk_weights->sizes[2] == static_cast<unsigned>(handle->num_topk));
+                assert(recv_topk_idx->ndim == 3);
+                assert(recv_topk_idx->datatype == ncclInt32);
+                assert(recv_topk_idx->sizes[0] == static_cast<unsigned>(group->nRanks));
+                assert(recv_topk_idx->sizes[1] == group->config.max_dispatch_tokens_per_rank);
+                assert(recv_topk_idx->sizes[2] == static_cast<unsigned>(handle->num_topk));
                 assert(src_rank_counter != nullptr);
                 assert(src_rank_counter->ndim == 1);
                 assert(src_rank_counter->datatype == ncclInt32);
@@ -3520,4 +3534,3 @@ ncclResult_t ncclEpHandle_test_getNumRecvTokens(
 void ncclEpHandle_test_clearTopkIdx(ncclEpHandle_t handle) {
     handle->topk_idx.data = nullptr;
 }
-

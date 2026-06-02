@@ -432,11 +432,11 @@ static void setupLowLatencyTensorsRankMajLayout(
     NCCLCHECK(epMakeTensor(&dispatch_outputs.tokens, 3, ncclBfloat16,
                            (unsigned)nRanks, max_dispatch_tokens_per_rank, hidden));
 
-    NCCLCHECK(epMakeTensor(&dispatch_outputs.topk_weights, 2, ncclFloat32,
-                           (unsigned)nRanks * max_dispatch_tokens_per_rank, top_k));
+    NCCLCHECK(epMakeTensor(&dispatch_outputs.topk_weights, 3, ncclFloat32,
+                           (unsigned)nRanks, max_dispatch_tokens_per_rank, top_k));
 
-    NCCLCHECK(epMakeTensor(&dispatch_outputs.topk_idx, 2, ncclInt32,
-                           (unsigned)nRanks * max_dispatch_tokens_per_rank, top_k));
+    NCCLCHECK(epMakeTensor(&dispatch_outputs.topk_idx, 3, ncclInt32,
+                           (unsigned)nRanks, max_dispatch_tokens_per_rank, top_k));
 
     NCCLCHECK(epMakeTensor(&combine_inputs.tokens, 3, ncclBfloat16,
                            (unsigned)nRanks, max_dispatch_tokens_per_rank, hidden));
@@ -987,8 +987,8 @@ static ValidationResult validateDispatchOutputLLExpertMaj(
 
 // ==================== LL rank-major dispatch validation ====================
 // Output: 3D [nRanks, max_dispatch_tokens_per_rank, hidden], one slot per received token packed by source rank.
-// outputs[1] = recv_topk_weights [nRanks*max_tpr, top_k]: all top-k weights from the source token.
-// outputs[2] = recv_topk_idx     [nRanks*max_tpr, top_k]: local expert index on myRank, or -1.
+// outputs[1] = recv_topk_weights [nRanks, max_tpr, top_k]: all top-k weights from the source token.
+// outputs[2] = recv_topk_idx     [nRanks, max_tpr, top_k]: local expert index on myRank, or -1.
 // Slots within each rank's block are contiguous from index 0; first invalid slot ends the block.
 static ValidationResult validateDispatchOutputLLRankMaj(
     const BenchmarkAllocState&     alloc,

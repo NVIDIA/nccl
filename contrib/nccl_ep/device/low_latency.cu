@@ -914,7 +914,7 @@ LOW_LATENCY_DISPATCH_RECV:
                                 isNvlinkSrc);
             }
         } else if constexpr (kLayout == NCCL_EP_LAYOUT_RANK_MAJOR) {
-            // Rank-major: one output slot per received token (flat 2D index).
+            // Rank-major: one output slot per received token.
             // outRecvTopkIdx/Weights are written so the user can route and reduce.
             for (int i = rankLaneIdx * numWarpsPerGroup + subWarpId; i < numRecvTokens; i += numWarpsPerGroup * numLocalExperts) {
                 const auto recvBufUint8 = reinterpret_cast<uint8_t*>(recvBuf) + srcRank * maxTokensPerRank * numBytesPerMsg;
@@ -930,8 +930,8 @@ LOW_LATENCY_DISPATCH_RECV:
                 auto* outScales   = static_cast<scale_t*>(outScalesBuf);
                 const int slot = srcRank * maxTokensPerRank + i;
 
-                // Lane 0: write token_id and flat slot index.
-                // srcInfo: j=0 is the flat 2D slot index into inData (for processAndSendToken);
+                // Lane 0: write token_id and linear slot index.
+                // srcInfo: j=0 is the linear slot index into inData (for processAndSendToken);
                 // j=1 is the first topk position on this rank (j_eff), used by combine send to
                 //   compute the receive slot: (tokenIdx * numTopk + j_eff) * numBytesPerSlot.
                 // j>1 = -1 (no additional sends needed).
@@ -1693,7 +1693,7 @@ __global__ __launch_bounds__(1024, 1) void combine(// INPUT
                 }
             } else if constexpr (kLayout == NCCL_EP_LAYOUT_RANK_MAJOR) {
                 // Rank-major: one send per received slot.
-                // srcInfo[0] = flat 2D slot into inData; srcInfo[1] = j_eff (topk return index).
+                // srcInfo[0] = linear slot into inData; srcInfo[1] = j_eff (topk return index).
                 // The receive slot is (tokenIdx * numTopk + j_eff) * numBytesPerSlot, placing
                 // each expert rank's contribution into a distinct position in the recv buffer.
                 for (int i = subWarpId * numLocalExperts + rankLaneIdx; i < numRecvTokens; i += numWarpsPerGroup * numLocalExperts) {

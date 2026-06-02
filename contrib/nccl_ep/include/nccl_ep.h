@@ -225,6 +225,10 @@ typedef struct {
     // Can be overridden by the NCCL_EP_TIMEOUT_MS environment variable.
     // Setting too low risks false positives (slow ranks marked as failed).
     uint64_t timeout_ns;
+    // Bypass library-owned dispatch / combine token staging. When ON, the
+    // dispatch-output and combine-input tensors must be window-backed,
+    // else ncclInvalidArgument. AUTO (zero-init default) resolves to OFF.
+    ncclEpZeroCopyMode_t zero_copy;
 } ncclEpGroupConfig_t;
 
 #define NCCL_EP_GROUP_CONFIG_INIT ((ncclEpGroupConfig_t){ \

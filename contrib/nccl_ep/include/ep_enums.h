@@ -119,3 +119,13 @@ typedef enum {
     NCCL_EP_FWD_PASS = 0,
     NCCL_EP_BWD_PASS = 1,
 } ncclEpPassDir_t;
+
+// Zero-copy mode for dispatch / combine staging.
+//   AUTO -- library picks (today: OFF).
+//   OFF  -- always stage through library-owned buffers.
+//   ON   -- skip staging; caller's tensors must be window-backed.
+typedef enum {
+    NCCL_EP_ZERO_COPY_AUTO = NCCL_EP_AUTO,
+    NCCL_EP_ZERO_COPY_OFF,
+    NCCL_EP_ZERO_COPY_ON
+} ncclEpZeroCopyMode_t;

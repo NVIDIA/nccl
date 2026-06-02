@@ -650,9 +650,11 @@ static ncclResult_t init_hybridep_intranode(ncclEpGroup_t ep_group,
     size_t expert_input_token_sz = max_output_slots * max_token_bytes;
     size_t expert_input_prob_sz = max_output_slots * num_local_experts * lsa_ranks * sizeof(float);
 
-    size_t dispatch_token_aligned = align_ipc(expert_output_token_sz);
+    // zero_copy elides both token regions (windowed tensors required).
+    const bool zero_copy = ep_group->config.zero_copy == NCCL_EP_ZERO_COPY_ON;
+    size_t dispatch_token_aligned = zero_copy ? 0 : align_ipc(expert_output_token_sz);
     size_t dispatch_prob_aligned  = align_ipc(expert_output_prob_sz);
-    size_t combine_token_aligned  = align_ipc(expert_input_token_sz);
+    size_t combine_token_aligned  = zero_copy ? 0 : align_ipc(expert_input_token_sz);
     size_t combine_prob_aligned   = align_ipc(expert_input_prob_sz);
 
     size_t mega_sz = dispatch_token_aligned + dispatch_prob_aligned
@@ -662,14 +664,15 @@ static ncclResult_t init_hybridep_intranode(ncclEpGroup_t ep_group,
 
     uint8_t* mega_base = static_cast<uint8_t*>(ep_group->ht_buffers.ipc_mega_buffer);
     ep_group->ht_buffers.ipc_dispatch_token_offset = 0;
-    ep_group->ht_buffers.expert_output_token = mega_base;
+    ep_group->ht_buffers.expert_output_token = zero_copy ? nullptr : mega_base;
 
     ep_group->ht_buffers.ipc_dispatch_prob_offset = dispatch_token_aligned;
     ep_group->ht_buffers.expert_output_prob = reinterpret_cast<float*>(mega_base + dispatch_token_aligned);
 
     ep_group->ht_buffers.ipc_combine_token_offset = dispatch_token_aligned + dispatch_prob_aligned;
-    ep_group->ht_buffers.expert_input_token = reinterpret_cast<uint16_t*>(
-        mega_base + dispatch_token_aligned + dispatch_prob_aligned);
+    ep_group->ht_buffers.expert_input_token = zero_copy
+        ? nullptr
+        : reinterpret_cast<uint16_t*>(mega_base + dispatch_token_aligned + dispatch_prob_aligned);
 
     ep_group->ht_buffers.ipc_combine_prob_offset = dispatch_token_aligned + dispatch_prob_aligned + combine_token_aligned;
     ep_group->ht_buffers.expert_input_prob = reinterpret_cast<float*>(
@@ -774,12 +777,14 @@ static ncclResult_t init_hybridep_intranode(ncclEpGroup_t ep_group,
             NCCL_CHECK_RESULT(ncclGetPeerDevicePointer(
                 ep_group->ht_buffers.intranode_mega_window, 0, peer_global, &peer_base));
             uint8_t* pb = static_cast<uint8_t*>(peer_base);
-            ep_group->ht_buffers.dispatch_expert_output_token_buffer_ptrs[i] =
-                pb + ep_group->ht_buffers.ipc_dispatch_token_offset;
+            ep_group->ht_buffers.dispatch_expert_output_token_buffer_ptrs[i] = zero_copy
+                ? nullptr
+                : pb + ep_group->ht_buffers.ipc_dispatch_token_offset;
             ep_group->ht_buffers.dispatch_expert_output_prob_buffer_ptrs[i] =
                 reinterpret_cast<float*>(pb + ep_group->ht_buffers.ipc_dispatch_prob_offset);
-            ep_group->ht_buffers.combine_expert_input_token_buffer_ptrs[i] =
-                reinterpret_cast<uint16_t*>(pb + ep_group->ht_buffers.ipc_combine_token_offset);
+            ep_group->ht_buffers.combine_expert_input_token_buffer_ptrs[i] = zero_copy
+                ? nullptr
+                : reinterpret_cast<uint16_t*>(pb + ep_group->ht_buffers.ipc_combine_token_offset);
             ep_group->ht_buffers.combine_expert_input_prob_buffer_ptrs[i] =
                 reinterpret_cast<float*>(pb + ep_group->ht_buffers.ipc_combine_prob_offset);
         }
@@ -2636,6 +2641,12 @@ ncclResult_t ncclEpDispatch(
         // (local + same-node peers) so all writers target user buffers directly.
         std::vector<void*> dispatch_output_token_ptrs;
         const bool recv_x_uses_external_window = tensorUsesExternalWindow(group, recv_x);
+        if (group->config.zero_copy == NCCL_EP_ZERO_COPY_ON && !recv_x_uses_external_window) {
+            fprintf(stderr,
+                    "NCCL EP: zero_copy requires ncclEpDispatch outputs->tokens to be backed by a "
+                    "user-registered NCCL window (ncclCommWindowRegister)\n");
+            return ncclInvalidArgument;
+        }
         if (recv_x_uses_external_window) {
             NCCLCHECK(buildIntranodePtrArray<void>(
                 group,
@@ -2967,7 +2978,7 @@ ncclResult_t ncclEpCombine(
             auto* layout_range_data = static_cast<int64_t*>(layout_range->data);
 
             const bool use_fp8 = false;
-            const bool zero_copy = false;
+            const bool zero_copy = handle->group->config.zero_copy == NCCL_EP_ZERO_COPY_ON;
 
             // LL accepts int32 or int64 topk_idx; same cached dtype as dispatch.
             auto launch_combine = [&](auto* topk_idx_data) {
@@ -3128,6 +3139,12 @@ ncclResult_t ncclEpCombine(
         /* ===== Copy input to IPC staging buffers ===== */
         // Expert MLP output needs to be in IPC buffer so other ranks can read it
         const bool combine_x_uses_external_window = tensorUsesExternalWindow(group, x);
+        if (group->config.zero_copy == NCCL_EP_ZERO_COPY_ON && !combine_x_uses_external_window) {
+            fprintf(stderr,
+                    "NCCL EP: zero_copy requires ncclEpCombine inputs->tokens to be backed by a "
+                    "user-registered NCCL window (ncclCommWindowRegister)\n");
+            return ncclInvalidArgument;
+        }
         if (!combine_x_uses_external_window) {
             size_t token_copy_size = static_cast<size_t>(num_tokens) * hidden * ncclTypeSize(x->datatype);
             CUDA_CHECK(cudaMemcpyAsync(

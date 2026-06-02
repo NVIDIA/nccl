@@ -321,14 +321,13 @@ typedef struct {
     unsigned int    magic;        // = NCCL_EP_MAGIC; second field, never moves
     ncclEpTensor_t* tokens;       // required; received tokens
     ncclEpTensor_t* topk_weights; // optional; LL rank-major or HT: received top-k weights
+                                  //   LL rank-major: ncclFloat32 [num_ranks, max_dispatch_tokens_per_rank, top_k]
     ncclEpTensor_t* scales;       // optional; FP8 only; received per-token scaling factors
     ncclEpTensor_t* topk_idx;     // optional; LL rank-major or HT FLAT: received top-k expert indices
                                   //   Current dispatch-output semantics:
                                   //     HT FLAT: int64 [N(r), top_k], local expert indices on
-                                  //       this rank, packed in local-expert order; unused entries are -1.
-                                  //     HT EXPERT_MAJOR: not populated; the slot/expert dimension
-                                  //       identifies the local expert.
-                                  //     LL rank-major: int32 [num_ranks * max_dispatch_tokens_per_rank, top_k],
+                                  //       this rank, unused entries are -1.
+                                  //     LL rank-major: int32 [num_ranks, max_dispatch_tokens_per_rank, top_k],
                                   //       preserving source top-k order; local expert index on this
                                   //       rank, or -1 when that top-k entry is not hosted locally.
 } ncclEpDispatchOutputs_t;

@@ -3453,7 +3453,7 @@ ncclResult_t ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t* asyncError) {
   if (*asyncError == ncclSuccess && comm->sharedRes && comm->sharedRes->ginState.connected) {
     struct ncclGinState* ginState = &comm->sharedRes->ginState;
     // Gin progress thread status
-    if (ginState->needsProxyProgress) {
+    if (ginState->proxyThreadCreated) {
       *asyncError = COMPILER_ATOMIC_LOAD(&comm->sharedRes->ginState.asyncResult, std::memory_order_acquire);
     }
     // Gin side errors, also works when we have no GIN progress thread.

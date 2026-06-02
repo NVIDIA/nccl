@@ -15,7 +15,6 @@
 #include "nccl_device/gin/gin_device_host_common.h"
 #include <thread>
 #include <mutex>
-#include <condition_variable>
 
 #define NCCL_GIN_MAX_ACTIVE_BACKENDS 3
 struct ncclGinStateDevComm {
@@ -42,11 +41,10 @@ struct ncclGinState {
   ncclAffinity cpuAffinity;
   bool connected;
   bool supported;              // True if any backend is loaded on this comm.
-  int needsProxyProgress;      // Whether we need to progress GIN operations with the proxy
-  int ginProgress;             // GIN progress is enabled
+  bool proxyThreadCreated;     // Set once the GIN progress thread is spawned.
+  bool proxyThreadStopSignal;  // Signals the GIN progress thread to exit.
   std::thread thread;
   std::mutex mutex;
-  std::condition_variable cond;
   ncclResult_t asyncResult;
 
   struct ncclGinStateDevComm* devComms;

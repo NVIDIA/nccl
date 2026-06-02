@@ -20,7 +20,6 @@
 #include "os.h"
 #include <thread>
 #include <mutex>
-#include <condition_variable>
 
 #define NCCL_GIN_MAX_CONNECTIONS 4
 
@@ -97,11 +96,10 @@ struct ncclGinState {
   ncclAffinity cpuAffinity;
   bool connected;
   bool supported;
-  int needsProxyProgress;
-  int ginProgress;
+  bool proxyThreadCreated;
+  bool proxyThreadStopSignal;
   std::thread thread;
   std::mutex mutex;
-  std::condition_variable cond;
   ncclResult_t asyncResult;
   struct ncclGinStateDevComm* devComms;
   ncclGinConnectionType_t ginConnectionType;

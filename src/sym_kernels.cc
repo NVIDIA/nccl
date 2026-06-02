@@ -316,7 +316,7 @@ int ncclSymkMaxChunkElts(struct ncclComm* comm, ncclSymkKernelId kernelId, int /
   int eltSize = ncclTypeSize(ty);
   int accMult = !isReduce ? 1 : eltSize < 4 ? 2 : 1;
   int kernelIndex = ncclSymkGetKernelIndex(kernelId, red, ty);
-  return ncclSymkKernelMaxDynamicSmem[kernelIndex] / (eltSize * accMult);
+  return kernelIndex < 0 ? 0 : ncclSymkKernelMaxDynamicSmem[kernelIndex] / (eltSize * accMult);
 }
 
 /* this function fills in the devWork except nextWorkOffset */

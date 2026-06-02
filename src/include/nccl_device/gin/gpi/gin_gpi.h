@@ -209,9 +209,10 @@ __device__ static inline void gpi_gpu_channel_post_gfd_thread(gpi_gpu_channel_t*
   for (int i = 0; i < GPI_GFD_SEG_MAX; i += 2) {
     gpi_gfd_segment_t* segment = &gfd->segments[i];
     gpi_gfd_segment_t* queue_entry_segment = &queue_entry->segments[i];
-    // Manual PTX for MMIO 128-bit store
+    // Manual PTX for MMIO 128-bit store (b128 needs CUDA 12.3+ / PTX 8.3)
     uint64_t val_lo = segment[0].raw;
     uint64_t val_hi = segment[1].raw;
+#if CUDART_VERSION >= 12030
     asm volatile(R"YYY(
       .reg .b128 _v%=;
       mov.b128 _v%=, {%1, %2};
@@ -219,6 +220,10 @@ __device__ static inline void gpi_gpu_channel_post_gfd_thread(gpi_gpu_channel_t*
     )YYY" ::"l"(queue_entry_segment),
                  "l"(val_lo), "l"(val_hi)
                  : "memory");
+#else
+    asm volatile("st.relaxed.sys.global.v2.b64 [%0], {%1, %2};" ::"l"(queue_entry_segment), "l"(val_lo), "l"(val_hi)
+                 : "memory");
+#endif
   }
 }
 

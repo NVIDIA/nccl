@@ -218,8 +218,8 @@ NCCL provides three predefined ones:
 
  * ``ncclTeamWorld()`` -- the "world" team, encompassing all the ranks of a given communicator.
  * ``ncclTeamLsa()`` -- all the peers accessible from the local rank using load/store operations.
- * ``ncclTeamRail()`` -- the set of peers directly accessible from the local rank over the network, assuming that the
-   network fabric is rail-optimized (see :ref:`env_NCCL_CROSS_NIC`).
+ * ``ncclTeamRail()`` -- the set of peers that have the same rank number within their LSA team (a rail team is
+   orthogonal to an LSA team).
 
 The ``ncclTeam`` structure contains fairly self-explanatory elements ``nRanks``, ``rank``, and ``stride``. The device
 API contains functions to verify team membership, convert rank numbers between teams, etc. The world and LSA teams are

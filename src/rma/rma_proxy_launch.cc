@@ -28,9 +28,9 @@ static ncclResult_t ncclRmaProxyPutDescFromTask(struct ncclComm* comm, struct nc
 
   desc->rmaDescType = ncclRmaDescTypePutSignal;
   desc->rmaDescState = ncclRmaDescStateReady;
-  desc->putSignal.srcOff = task->srcWinOffset;
+  desc->putSignal.srcOff = ncclDevrGetRmaOffset(task->srcWinHost) + task->srcWinOffset;
   desc->putSignal.srcHandle = ncclDevrGetRmaDevWin(task->srcWinHost, task->ctx);
-  desc->putSignal.dstOff = task->peerWinOffset;
+  desc->putSignal.dstOff = ncclDevrGetRmaOffset(task->peerWinHost) + task->peerWinOffset;
   desc->putSignal.dstHandle = ncclDevrGetRmaDevWin(task->peerWinHost, task->ctx);
   desc->putSignal.size = task->count * ncclTypeSize(task->datatype);
   desc->putSignal.targetRank = task->peer;

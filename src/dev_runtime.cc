@@ -1795,6 +1795,14 @@ ncclGinWindow_t ncclDevrGetRmaDevWin(struct ncclDevrWindow* winHost, int ctx) {
   return winHost->memory->rmaDevWins[ctx];
 }
 
+// Get the byte offset of a window within the RMA registration backing memory
+size_t ncclDevrGetRmaOffset(struct ncclDevrWindow* winHost) {
+  if (winHost == nullptr || winHost->memory == nullptr) {
+    return 0;
+  }
+  return winHost->bigOffset - winHost->memory->bigOffset;
+}
+
 // Get the multicast address for a given team
 ncclResult_t ncclDevrGetLsaTeamPtrMC(struct ncclComm* comm, struct ncclDevrWindow* winHost, size_t offset, struct ncclTeam lsaTeam, void** outPtr){
   if (winHost == nullptr || outPtr == nullptr) return ncclInternalError;

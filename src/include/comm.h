@@ -543,10 +543,8 @@ struct ncclComm {
 
   ncclNet_t* ncclNet;
   void* netContext;
-  void* ginContext;
   void* rmaContext;
   int netPluginIndex;
-  int ginPluginIndex;
   int rmaPluginIndex;
   int ncclNetVer;
   ncclNetDeviceType netDeviceType;

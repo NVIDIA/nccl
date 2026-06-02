@@ -94,7 +94,6 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
   }
 
   ginState->ginConnectionType = comm->globalGinSupport;
-  ginState->ginInstance = comm->ginContext;
 
   int ndev = 0;
   NCCLCHECK(ginState->ncclGin->devices(&ndev));
@@ -164,7 +163,7 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
 
     NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, allHandles, NCCL_NET_HANDLE_MAXSIZE), ret, fail);
 
-    NCCLCHECKGOTO(ginState->ncclGin->connect(comm->ginContext, handles, nGinRanks, myGinRank, listenComm,
+    NCCLCHECKGOTO(ginState->ncclGin->connect(ginState->ginInstance, handles, nGinRanks, myGinRank, listenComm,
                                              ginState->ginComms + n),
                   ret, fail);
 

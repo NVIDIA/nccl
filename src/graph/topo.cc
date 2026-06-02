@@ -1836,7 +1836,7 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
       netInfo.coll = 0;
       netInfo.gin = 1;
       netInfo.rma = 0;
-      netInfo.netPluginIndex = comm->ginPluginIndex;
+      netInfo.netPluginIndex = comm->sharedRes->ginState.pluginIndex;
       netInfo.dmaBufSupport = comm->dmaBufSupport;
       netInfo.getDevCount = ncclGinGetDevCount;
       netInfo.name = gin->name;

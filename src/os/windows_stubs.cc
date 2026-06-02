@@ -522,12 +522,6 @@ ncclResult_t ncclGinInit(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinInitFromParent(struct ncclComm* comm, struct ncclComm* parent) {
-  (void)comm;
-  (void)parent;
-  return ncclSuccess;
-}
-
 ncclResult_t ncclGinFinalize(struct ncclComm* comm) {
   (void)comm;
   return ncclSuccess;

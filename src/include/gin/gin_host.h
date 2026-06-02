@@ -27,7 +27,8 @@ struct ncclGinStateDevComm {
 struct ncclGinState {
   ncclAffinity cpuAffinity;
   ncclGin_t* ncclGin;
-  void* ginInstance;
+  void* ginInstance;       // Plugin's per-comm opaque context.
+  int pluginIndex;         // Index into pluginLibs[].
   bool connected;
   ncclGinType_t ginType;
   int ginCommCount;

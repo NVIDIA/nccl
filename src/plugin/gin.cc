@@ -109,7 +109,7 @@ static ncclResult_t ncclGinPluginInit(struct ncclComm* comm, ginPluginLib_t* plu
   // Init must be called for each new comm to set the right context
   if (pluginLib->state >= ncclGinPluginStateInitReady && pluginLib->ncclGin) {
     if (!pluginLib->ncclGin->init ||
-        pluginLib->ncclGin->init(&comm->ginContext, comm->commHash, ncclDebugLog) != ncclSuccess) {
+        pluginLib->ncclGin->init(&comm->sharedRes->ginState.ginInstance, comm->commHash, ncclDebugLog) != ncclSuccess) {
       pluginLib->state = ncclGinPluginStateDisabled;
     } else {
       ginInitCompleted = true;
@@ -118,8 +118,8 @@ static ncclResult_t ncclGinPluginInit(struct ncclComm* comm, ginPluginLib_t* plu
   if (pluginLib->state == ncclGinPluginStateInitReady && pluginLib->ncclGin) {
     if (pluginLib->ncclGin->devices(&ndev) != ncclSuccess || ndev <= 0) {
       if (ginInitCompleted) {
-        pluginLib->ncclGin->finalize(comm->ginContext);
-        comm->ginContext = nullptr;
+        pluginLib->ncclGin->finalize(comm->sharedRes->ginState.ginInstance);
+        comm->sharedRes->ginState.ginInstance = nullptr;
       }
       pluginLib->state = ncclGinPluginStateDisabled;
     } else {
@@ -161,7 +161,7 @@ static ncclResult_t ncclGinPluginAssignToComm(struct ncclComm* comm, int pluginI
     // NOTE: The following cast is valid because ncclGinType_t variant values
     // should match NCCL_NET_DEVICE_GIN_* values from `enum ncclNetDeviceType`.
     comm->sharedRes->ginState.ginType = static_cast<ncclGinType_t>(props.netDeviceType);
-    comm->ginPluginIndex = pluginIndex;
+    comm->sharedRes->ginState.pluginIndex = pluginIndex;
 
     ncclGinProperties_t ginProperties;
     NCCLCHECK(gin->getGinProperties(&ginProperties));
@@ -257,7 +257,7 @@ static void initPluginLibsOnceFunc() {
 
 static ncclResult_t ncclGinPluginFinalize(struct ncclComm* comm, int pluginIndex) {
   if (pluginLibs[pluginIndex].ncclGin && pluginLibs[pluginIndex].state == ncclGinPluginStateEnabled) {
-    NCCLCHECK(pluginLibs[pluginIndex].ncclGin->finalize(comm->ginContext));
+    NCCLCHECK(pluginLibs[pluginIndex].ncclGin->finalize(comm->sharedRes->ginState.ginInstance));
   }
   pluginLibs[pluginIndex].refCount--;
   if (pluginIndex < (pluginCount - NCCL_GIN_NUM_INTERNAL_PLUGINS)) {
@@ -303,14 +303,8 @@ ncclResult_t ncclGinInit(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinInitFromParent(struct ncclComm* comm, struct ncclComm* parent) {
-  comm->ginContext = parent->ginContext;
-  comm->ginPluginIndex = parent->ginPluginIndex;
-  return ncclSuccess;
-}
-
 ncclResult_t ncclGinFinalize(struct ncclComm* comm) {
-  int pluginIndex = comm->ginPluginIndex;
+  int pluginIndex = comm->sharedRes->ginState.pluginIndex;
   std::lock_guard<std::mutex> lock(pluginMutex);
   NCCLCHECK(ncclGinPluginFinalize(comm, pluginIndex));
   return ncclSuccess;

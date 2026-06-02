@@ -81,6 +81,7 @@ struct ncclGinState {
   ncclAffinity cpuAffinity;
   ncclGin_t* ncclGin;
   void* ginInstance;
+  int pluginIndex;
   bool connected;
   ncclGinType_t ginType;
   int ginCommCount;
@@ -123,7 +124,6 @@ ncclResult_t ncclGinGetDevCount(int ginPluginIndex, int* nPhysDev, int* nVirtDev
 
 /* Internal GIN API (from include/gin.h); stubbed on Windows */
 ncclResult_t ncclGinInit(struct ncclComm* comm);
-ncclResult_t ncclGinInitFromParent(struct ncclComm* comm, struct ncclComm* parent);
 ncclResult_t ncclGinFinalize(struct ncclComm* comm);
 
 #endif

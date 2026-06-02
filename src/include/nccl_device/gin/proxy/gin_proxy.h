@@ -440,6 +440,14 @@ struct ncclGinApi_GetSignalPtr<NCCL_NET_DEVICE_GIN_PROXY> {
 };
 
 template <>
+struct ncclGinApi_FlushesAllPutsOnAnySignal<NCCL_NET_DEVICE_GIN_PROXY> {
+  NCCL_DEVICE_INLINE static bool call(ncclGinCtx ctx) {
+    ncclGinProxyGpuCtx_t* proxyCtx = &((ncclGinProxyGpuCtx_t*)ctx.handle)[ctx.contextId];
+    return nccl::utility::loadConst(&proxyCtx->flushesAllPutsOnAnySignal);
+  }
+};
+
+template <>
 struct ncclGinApi_ResetSignal<NCCL_NET_DEVICE_GIN_PROXY> {
   NCCL_DEVICE_INLINE static void call(ncclGinCtx ctx, ncclGinSignalDescriptor signal) {
     ncclGinProxyGpuCtx_t* proxyCtx = &((ncclGinProxyGpuCtx_t*)ctx.handle)[ctx.contextId];

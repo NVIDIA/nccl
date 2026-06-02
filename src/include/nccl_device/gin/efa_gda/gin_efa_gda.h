@@ -911,6 +911,16 @@ struct ncclGinApi_SupportsStrongSignal<NCCL_NET_DEVICE_GIN_EFA_GDA> {
   }
 };
 
+/* ── FlushesAllPutsOnAnySignal ───────────────────────────────────────────────────── */
+template <>
+struct ncclGinApi_FlushesAllPutsOnAnySignal<NCCL_NET_DEVICE_GIN_EFA_GDA> {
+  // EFA is not MLX5 and does not flush previously-received puts on an unrelated signal, so the
+  // capability is unconditionally absent.
+  NCCL_DEVICE_INLINE static bool call(ncclGinCtx) {
+    return false;
+  }
+};
+
 /* ── GetSignalPtr ─────────────────────────────────────────────────── */
 
 template <>

@@ -107,6 +107,14 @@ NCCL_DEVICE_INLINE void ncclBarrierSession<Coop>::selectBarrierAlgo(
     return;
   }
 
+  // Optimize for the auto-flush fence path.
+  if (this->outerDenseGinBar.present && this->gin.thing.flushesAllPutsOnAnySignal()) {
+    *needsLsaBarrier = this->innerLsaBar.present;
+    *needsRailGinBarrier = this->outerRailGinBar.present;
+    *needsDenseGinBarrier = false;
+    return;
+  }
+
   // If all ranks are connected via GIN, use a dense GIN barrier (=full GIN barrier) to sync all ranks.
   if (comm.ginContextStride == 1) {
     *needsLsaBarrier = false;

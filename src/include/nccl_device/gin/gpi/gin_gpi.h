@@ -697,6 +697,13 @@ struct ncclGinApi_GetSignalPtr<NCCL_NET_DEVICE_GIN_GPI> {
 };
 
 template <>
+struct ncclGinApi_FlushesAllPutsOnAnySignal<NCCL_NET_DEVICE_GIN_GPI> {
+  NCCL_DEVICE_INLINE static bool call(ncclGinCtx) {
+    return false;
+  }
+};
+
+template <>
 struct ncclGinApi_Flush<NCCL_NET_DEVICE_GIN_GPI> {
   template <typename Coop>
   NCCL_DEVICE_INLINE static void call(ncclGinCtx ctx, Coop coop, bool hasDescriptor, ncclGinDescriptorSmem* descriptor,

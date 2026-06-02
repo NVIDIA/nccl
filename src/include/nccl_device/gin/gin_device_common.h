@@ -195,6 +195,13 @@ template <ncclNetDeviceType backend>
 struct ncclGinApi_SupportsStrongSignal {
   NCCL_DEVICE_INLINE static bool call(ncclGinCtx);
 };
+
+// Reports whether the backend flushes all previously-received puts on any received signal. Dispatched
+// per backend so each backend owns the answer.
+template <ncclNetDeviceType backend>
+struct ncclGinApi_FlushesAllPutsOnAnySignal {
+  NCCL_DEVICE_INLINE static bool call(ncclGinCtx);
+};
 #endif
 
 #ifdef __CUDACC__

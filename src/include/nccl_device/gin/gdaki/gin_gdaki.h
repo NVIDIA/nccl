@@ -649,6 +649,16 @@ struct ncclGinApi_GetSignalPtr<NCCL_NET_DEVICE_GIN_GDAKI> {
 };
 
 template <>
+struct ncclGinApi_FlushesAllPutsOnAnySignal<NCCL_NET_DEVICE_GIN_GDAKI> {
+  // GDAKI runs over MLX5 NICs, which flush every previously-received put when any signal arrives, so
+  // the capability is unconditional. Returning a compile-time constant lets a GDAKI-only kernel elide
+  // the world-barrier fence path.
+  NCCL_DEVICE_INLINE static bool call(ncclGinCtx) {
+    return true;
+  }
+};
+
+template <>
 struct ncclGinApi_Flush<NCCL_NET_DEVICE_GIN_GDAKI> {
   template <typename Coop>
   NCCL_DEVICE_INLINE static void call(ncclGinCtx ctx, Coop coop, bool hasDescriptor, ncclGinDescriptorSmem* descriptor,

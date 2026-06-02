@@ -405,6 +405,9 @@ struct ncclGin_BackendMask {
   // Resets a VA signal at the given window and offset.
   NCCL_DEVICE_INLINE void resetSignal(ncclWindow_t signalWindow, size_t signalOffset) const;
 
+  // True when the backend flushes all previously-received puts on any received signal, from any peer.
+  NCCL_DEVICE_INLINE bool flushesAllPutsOnAnySignal() const;
+
   //////////////////////////////////////////////////////////////////////////////
   // internal:
 

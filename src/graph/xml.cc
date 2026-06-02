@@ -864,6 +864,13 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
             NCCLCHECK(xmlSetAttrInt(c2cNode, "count", count));
           }
         }
+#if defined(__aarch64__)
+        if (c2cNode == NULL && sm >= 100) {
+          NCCLCHECK(xmlAddNode(xml, gpuNode, "c2c", &c2cNode));
+          NCCLCHECK(xmlSetAttrInt(c2cNode, "bw", 450000));
+          NCCLCHECK(xmlSetAttrInt(c2cNode, "count", 1));
+        }
+#endif
       }
   }
 #endif

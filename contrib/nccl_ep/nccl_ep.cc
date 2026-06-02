@@ -176,7 +176,21 @@ static inline bool tensorIsInitialised(const ncclEpTensor_t* t) {
     return false;
 }
 
-// True when the tensor advertises a storage binding — either a device pointer
+// True when the tensor is zero-extent in at least one dimension. Empty tensors
+// carry no element to read or write, so the dispatch/combine kernels' per-token
+// loops degrade to no-ops and the host side has no storage to address. The
+// library treats them as a valid no-op input at the API boundary even though
+// they legitimately lack a storage binding (PyTorch/NumPy hand out
+// data_ptr() == 0 for such buffers).
+static inline bool tensorIsEmpty(const ncclEpTensor_t* t) {
+    if (t->sizes == nullptr) return false;
+    for (unsigned int i = 0; i < t->ndim; ++i) {
+        if (t->sizes[i] == 0) return true;
+    }
+    return false;
+}
+
+// True when the tensor advertises a storage binding -- either a device pointer
 // or a window handle (offset may be 0, so we only check `win_hdl`). A tensor
 // with neither is unusable by the library.
 static inline bool tensorHasBinding(const ncclEpTensor_t* t) {
@@ -184,11 +198,14 @@ static inline bool tensorHasBinding(const ncclEpTensor_t* t) {
 }
 
 // Combined boundary check used by tensor_ptr / tensor_required: the descriptor
-// must be initialised AND carry a storage binding.
+// must be initialised AND carry a storage binding. Empty tensors skip the
+// binding check because they have no element to address; the kernels handle
+// num_tokens == 0 as a no-op on the sender side and still participate in the
+// collective on the receiver side.
 static inline void tensorAssertValid(const ncclEpTensor_t* t) {
     assert(tensorIsInitialised(t) &&
            "ncclEpTensor_t not initialised — use NCCL_EP_TENSOR_INIT or ncclEpTensorAlloc");
-    assert(tensorHasBinding(t) &&
+    assert((tensorIsEmpty(t) || tensorHasBinding(t)) &&
            "ncclEpTensor_t has no storage binding — set `.data` or (`.win_hdl` [+ `.win_offset`])");
 }
 
@@ -541,6 +558,14 @@ static ncclResult_t resolveTensorWindowBinding(
     uint64_t default_offset) {
     if (tensor == nullptr) {
         return ncclInvalidArgument;
+    }
+
+    // Empty tensors have no storage to bind. Leave data == nullptr (and the
+    // window unbound) -- consumers must already treat empty tensors as
+    // no-ops at the per-element level. Without this guard, the
+    // ncclWinGetUserPtr call below would fail on a NULL win_hdl.
+    if (tensorIsEmpty(tensor)) {
+        return ncclSuccess;
     }
 
     const bool internode_initialized = ep_group->ht_buffers.internode_initialized;
@@ -1630,6 +1655,14 @@ struct ncclEpHandle {
     // User-owned (do not free). LL reads directly; HT uses cached hybridep.topk_idx.
     ncclEpTensor_t topk_idx;
     int num_tokens, num_topk;
+    // True once `num_tokens` has been authoritatively populated by
+    // `ncclEpUpdateHandle` (or `ncclEpCreateHandle` via its inner update call).
+    // Distinguishes a legitimate zero-token configuration from the
+    // "not yet bound" state -- the dispatch / combine lazy branches must not
+    // treat a real 0 as "uninitialised" and re-fetch sizes[0] from inputs,
+    // since the input tensors on zero-token ranks are empty (and now legally
+    // carry data == nullptr per tensorHasBinding's empty-tensor relaxation).
+    bool num_tokens_set;
 
     bool cached_mode;
     int num_scales;
@@ -1786,6 +1819,7 @@ struct ncclEpHandle {
           topk_idx(NCCL_EP_TENSOR_INIT),
           num_tokens(0),
           num_topk(0),
+          num_tokens_set(false),
           cached_mode(false),
           num_scales(0),
           hidden_int4(0) {
@@ -2159,6 +2193,7 @@ ncclResult_t ncclEpUpdateHandle(
     tensor_permanent_copy(&handle->topk_idx, topk_idx);
 
     handle->num_tokens = static_cast<int>(handle->topk_idx.sizes[0]);
+    handle->num_tokens_set = true;
 
     if (ep_group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
         assert(static_cast<int>(topk_idx->sizes[1]) == handle->num_topk &&
@@ -2395,10 +2430,14 @@ ncclResult_t ncclEpDispatch(
         ncclEpGroup_t group = handle->group;
 
     // Lazy num_tokens for callers that skip UpdateHandle (e.g. backward reusing forward's handle_mem).
-    if (handle->num_tokens == 0) {
+    // Guard on `num_tokens_set` -- a real zero-token configuration is valid
+    // and must not trigger a re-fetch from inputs->tokens (whose data pointer
+    // may be NULL on the zero-token rank per the empty-tensor relaxation).
+    if (!handle->num_tokens_set) {
         const ncclEpTensor_t* t = tensor_required(inputs->tokens);
         assert(t->ndim > 0);
         handle->num_tokens = static_cast<int>(t->sizes[0]);
+        handle->num_tokens_set = true;
     }
 
     if (group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
@@ -2962,10 +3001,15 @@ ncclResult_t ncclEpCombine(
     }
 
     // Lazy num_tokens for callers that skip UpdateHandle (e.g. handle relocation between prepare and combine).
-    if (handle->num_tokens == 0) {
+    // Guard on `num_tokens_set` so a legitimate zero-token configuration is
+    // preserved (the outputs->tokens descriptor for a zero-token rank may
+    // carry data == nullptr, which is now legal per tensorHasBinding's
+    // empty-tensor relaxation but would still fail the assert on dim 0).
+    if (!handle->num_tokens_set) {
         const ncclEpTensor_t* lazy_combined = tensor_required(outputs->tokens);
         assert(lazy_combined->ndim > 0);
         handle->num_tokens = static_cast<int>(lazy_combined->sizes[0]);
+        handle->num_tokens_set = true;
     }
 
     if (handle->group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {

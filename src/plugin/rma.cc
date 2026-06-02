@@ -9,6 +9,7 @@
 #include "bootstrap.h"
 #include "checks.h"
 #include "plugin.h"
+#include "plugin_cleanup.h"
 #include "nccl_rma.h"
 #include "gin/gin_host_proxy.h"
 
@@ -105,14 +106,23 @@ fail:
 
 static ncclResult_t ncclRmaPluginInit(struct ncclComm* comm, rmaPluginLib_t* pluginLib) {
   int ndev;
+  bool rmaInitCompleted = false;
   // Init must be called for each new comm to set the right context
   if (pluginLib->state >= ncclRmaPluginStateInitReady && pluginLib->ncclRma) {
     if (pluginLib->ncclRma->init(&comm->rmaContext, comm->commHash, ncclDebugLog) != ncclSuccess) {
       pluginLib->state = ncclRmaPluginStateDisabled;
+    } else {
+      rmaInitCompleted = true;
     }
   }
   if (pluginLib->state == ncclRmaPluginStateInitReady && pluginLib->ncclRma) {
     if (pluginLib->ncclRma->devices(&ndev) != ncclSuccess || ndev <= 0) {
+      if (rmaInitCompleted) {
+        ncclResult_t finalizeRet = ncclPluginFinalizeContext(pluginLib->ncclRma->finalize, &comm->rmaContext);
+        if (finalizeRet != ncclSuccess) {
+          WARN("RMA/Plugin: finalize failed during init fallback cleanup: %d", finalizeRet);
+        }
+      }
       pluginLib->state = ncclRmaPluginStateDisabled;
     } else {
       pluginLib->physDevs = ndev;

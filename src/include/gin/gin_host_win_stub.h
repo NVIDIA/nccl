@@ -70,6 +70,8 @@ typedef struct ncclGinHostPlugin ncclGin_t;
 typedef struct ncclGin ncclGin_t;
 #endif
 
+#define NCCL_GIN_MAX_ACTIVE_BACKENDS 4
+
 struct ncclGinStateDevComm {
   int contextCount;
   void* ginCtx[NCCL_GIN_MAX_CONNECTIONS];
@@ -77,27 +79,34 @@ struct ncclGinStateDevComm {
   struct ncclGinStateDevComm* next;
 };
 
-struct ncclGinState {
-  ncclAffinity cpuAffinity;
+struct ncclGinBackendState {
+  bool supported;
+  ncclGinType_t ginType;
   ncclGin_t* ncclGin;
   void* ginInstance;
   int pluginIndex;
-  bool connected;
-  ncclGinType_t ginType;
   int ginCommCount;
   void* ginComms[NCCL_GIN_MAX_CONNECTIONS];
   ncclNetProperties_t ginProps[NCCL_GIN_MAX_CONNECTIONS];
+  int ginVersion;
+  bool supportsStrongSignals;
+  bool supportsVASignals;
+};
+
+struct ncclGinState {
+  ncclAffinity cpuAffinity;
+  bool connected;
+  bool supported;
   int needsProxyProgress;
   int ginProgress;
   std::thread thread;
   std::mutex mutex;
   std::condition_variable cond;
   ncclResult_t asyncResult;
-  int ginVersion;
-  bool supportsStrongSignals;
-  bool supportsVASignals;
   struct ncclGinStateDevComm* devComms;
   ncclGinConnectionType_t ginConnectionType;
+  int numActiveBackends;
+  struct ncclGinBackendState backends[NCCL_GIN_MAX_ACTIVE_BACKENDS];
 };
 
 struct ncclComm;

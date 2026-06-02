@@ -781,7 +781,7 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
   CUCHECK(cuDeviceGetAttribute(&cuMemGdrSupport, CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WITH_CUDA_VMM_SUPPORTED,
                                comm->cudaDev));
   info->cuMemGdrSupport = (cuMemGdrSupport == 1);
-  info->supportedGinType = comm->sharedRes->ginState.ginType;
+  info->supportedGinType = comm->sharedRes->ginState.backends[0].ginType;
   info->rmaPluginAvailable = (comm->rmaState.rmaProxyState.ncclRma != nullptr);
 
   return ncclSuccess;
@@ -1015,7 +1015,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   int* pxnPeers = NULL;
   int* topParentLocalRanks = NULL;
   int p2pLevel = -1;
-  bool globalGinSupport = comm->sharedRes->ginState.ginType != NCCL_GIN_TYPE_NONE;
+  bool globalGinSupport = comm->sharedRes->ginState.backends[0].ginType != NCCL_GIN_TYPE_NONE;
   bool globalCrossNicSupport = true;
   bool globalRmaPluginSupport = true;
   bool globalCuMemGdrSupport = true;
@@ -1058,7 +1058,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
         return ncclInvalidUsage;
       }
     }
-    globalGinSupport &= (comm->peerInfo[i].supportedGinType == comm->sharedRes->ginState.ginType);
+    globalGinSupport &= (comm->peerInfo[i].supportedGinType == comm->sharedRes->ginState.backends[0].ginType);
     globalCrossNicSupport &= comm->peerInfo[i].crossNicSupport;
     globalRmaPluginSupport &= comm->peerInfo[i].rmaPluginAvailable;
     globalCuMemGdrSupport &= comm->peerInfo[i].cuMemGdrSupport;

@@ -103,13 +103,14 @@ fail:
   goto exit;
 }
 
-static ncclResult_t ncclGinPluginInit(struct ncclComm* comm, ginPluginLib_t* pluginLib) {
+static ncclResult_t ncclGinPluginInit(struct ncclComm* comm, ginPluginLib_t* pluginLib, void** outContext) {
   int ndev;
   bool ginInitCompleted = false;
   // Init must be called for each new comm to set the right context
+  *outContext = NULL;
   if (pluginLib->state >= ncclGinPluginStateInitReady && pluginLib->ncclGin) {
     if (!pluginLib->ncclGin->init ||
-        pluginLib->ncclGin->init(&comm->sharedRes->ginState.ginInstance, comm->commHash, ncclDebugLog) != ncclSuccess) {
+        pluginLib->ncclGin->init(outContext, comm->commHash, ncclDebugLog) != ncclSuccess) {
       pluginLib->state = ncclGinPluginStateDisabled;
     } else {
       ginInitCompleted = true;
@@ -118,8 +119,8 @@ static ncclResult_t ncclGinPluginInit(struct ncclComm* comm, ginPluginLib_t* plu
   if (pluginLib->state == ncclGinPluginStateInitReady && pluginLib->ncclGin) {
     if (pluginLib->ncclGin->devices(&ndev) != ncclSuccess || ndev <= 0) {
       if (ginInitCompleted) {
-        pluginLib->ncclGin->finalize(comm->sharedRes->ginState.ginInstance);
-        comm->sharedRes->ginState.ginInstance = nullptr;
+        pluginLib->ncclGin->finalize(*outContext);
+        *outContext = NULL;
       }
       pluginLib->state = ncclGinPluginStateDisabled;
     } else {
@@ -130,7 +131,8 @@ static ncclResult_t ncclGinPluginInit(struct ncclComm* comm, ginPluginLib_t* plu
   return ncclSuccess;
 }
 
-static ncclResult_t ncclGinPluginAssignToComm(struct ncclComm* comm, int pluginIndex, bool* isAssigned) {
+static ncclResult_t ncclGinPluginAssignToComm(struct ncclComm* comm, int pluginIndex, void* ginContext,
+                                              bool* isAssigned) {
   *isAssigned = false;
 
   if (pluginLibs[pluginIndex].state >= ncclGinPluginStateEnabled) {
@@ -156,17 +158,22 @@ static ncclResult_t ncclGinPluginAssignToComm(struct ncclComm* comm, int pluginI
     }
 
     INFO(NCCL_INIT | NCCL_NET, "GIN/Plugin: Assigned plugin %s type %d to comm", gin->name, props.netDeviceType);
-    comm->sharedRes->ginState.ncclGin = gin;
-    comm->sharedRes->ginState.ginVersion = pluginLibs[pluginIndex].version;
     // NOTE: The following cast is valid because ncclGinType_t variant values
     // should match NCCL_NET_DEVICE_GIN_* values from `enum ncclNetDeviceType`.
-    comm->sharedRes->ginState.ginType = static_cast<ncclGinType_t>(props.netDeviceType);
-    comm->sharedRes->ginState.pluginIndex = pluginIndex;
+    ncclGinType_t backendType = static_cast<ncclGinType_t>(props.netDeviceType);
+    struct ncclGinState* ginState = &comm->sharedRes->ginState;
+    struct ncclGinBackendState* backend = &ginState->backends[ginState->numActiveBackends++];
+    backend->ginType = backendType;
+    backend->ncclGin = gin;
+    backend->ginInstance = ginContext;
+    backend->pluginIndex = pluginIndex;
+    backend->ginVersion = pluginLibs[pluginIndex].version;
+    ginState->supported = true;
 
     ncclGinProperties_t ginProperties;
     NCCLCHECK(gin->getGinProperties(&ginProperties));
-    comm->sharedRes->ginState.supportsStrongSignals = ginProperties.supportsStrongSignals;
-    comm->sharedRes->ginState.supportsVASignals = ginProperties.supportsVASignals;
+    backend->supportsStrongSignals = ginProperties.supportsStrongSignals;
+    backend->supportsVASignals = ginProperties.supportsVASignals;
   }
   pluginLibs[pluginIndex].refCount++;
   *isAssigned = true;
@@ -255,9 +262,9 @@ static void initPluginLibsOnceFunc() {
   pluginCount = pluginCounter;
 }
 
-static ncclResult_t ncclGinPluginFinalize(struct ncclComm* comm, int pluginIndex) {
+static ncclResult_t ncclGinPluginFinalize(struct ncclComm* comm, int pluginIndex, void* ginContext) {
   if (pluginLibs[pluginIndex].ncclGin && pluginLibs[pluginIndex].state == ncclGinPluginStateEnabled) {
-    NCCLCHECK(pluginLibs[pluginIndex].ncclGin->finalize(comm->sharedRes->ginState.ginInstance));
+    NCCLCHECK(pluginLibs[pluginIndex].ncclGin->finalize(ginContext));
   }
   pluginLibs[pluginIndex].refCount--;
   if (pluginIndex < (pluginCount - NCCL_GIN_NUM_INTERNAL_PLUGINS)) {
@@ -284,17 +291,18 @@ ncclResult_t ncclGinInit(struct ncclComm* comm) {
     }
     if (pluginLibs[pluginIndex].state >= ncclGinPluginStateInitReady) {
       // plugin init must be done by all comms to setup the context, therefore we use ">="
-      NCCLCHECK(ncclGinPluginInit(comm, &pluginLibs[pluginIndex]));
+      void* ginContext = NULL;
+      NCCLCHECK(ncclGinPluginInit(comm, &pluginLibs[pluginIndex], &ginContext));
       if (pluginLibs[pluginIndex].state == ncclGinPluginStateEnabled) {
         bool isAssigned = false;
-        NCCLCHECK(ncclGinPluginAssignToComm(comm, pluginIndex, &isAssigned));
+        NCCLCHECK(ncclGinPluginAssignToComm(comm, pluginIndex, ginContext, &isAssigned));
         if (isAssigned) {
           // If one external plugin is assigned to a comm, then disable all other external plugins
           ncclGinPluginDisableOtherExternal(pluginIndex);
           initialized = true;
           break;
         } else {
-          ncclGinPluginFinalize(comm, pluginIndex);
+          ncclGinPluginFinalize(comm, pluginIndex, ginContext);
         }
       }
     }
@@ -304,9 +312,11 @@ ncclResult_t ncclGinInit(struct ncclComm* comm) {
 }
 
 ncclResult_t ncclGinFinalize(struct ncclComm* comm) {
-  int pluginIndex = comm->sharedRes->ginState.pluginIndex;
   std::lock_guard<std::mutex> lock(pluginMutex);
-  NCCLCHECK(ncclGinPluginFinalize(comm, pluginIndex));
+  struct ncclGinState* ginState = &comm->sharedRes->ginState;
+  for (int t = 0; t < ginState->numActiveBackends; t++) {
+    NCCLCHECK(ncclGinPluginFinalize(comm, ginState->backends[t].pluginIndex, ginState->backends[t].ginInstance));
+  }
   return ncclSuccess;
 }
 

@@ -17,6 +17,7 @@
 #include <mutex>
 #include <condition_variable>
 
+#define NCCL_GIN_MAX_ACTIVE_BACKENDS 3
 struct ncclGinStateDevComm {
   int contextCount;
   void* ginCtx[NCCL_GIN_MAX_CONNECTIONS];
@@ -24,28 +25,35 @@ struct ncclGinStateDevComm {
   struct ncclGinStateDevComm* next;
 };
 
-struct ncclGinState {
-  ncclAffinity cpuAffinity;
+struct ncclGinBackendState {
+  ncclGinType_t ginType;      // GIN backend type.
   ncclGin_t* ncclGin;
-  void* ginInstance;       // Plugin's per-comm opaque context.
-  int pluginIndex;         // Index into pluginLibs[].
-  bool connected;
-  ncclGinType_t ginType;
+  void* ginInstance;          // Plugin's per-comm opaque context.
+  int pluginIndex;            // Index into pluginLibs[].
   int ginCommCount;
   void* ginComms[NCCL_GIN_MAX_CONNECTIONS];
   ncclNetProperties_t ginProps[NCCL_GIN_MAX_CONNECTIONS];
-  int needsProxyProgress;  // Whether we need to progress GIN operations with the proxy
-  int ginProgress;         // GIN progress is enabled
+  int ginVersion;
+  bool supportsStrongSignals;
+  bool supportsVASignals;
+};
+
+struct ncclGinState {
+  ncclAffinity cpuAffinity;
+  bool connected;
+  bool supported;              // True if any backend is loaded on this comm.
+  int needsProxyProgress;      // Whether we need to progress GIN operations with the proxy
+  int ginProgress;             // GIN progress is enabled
   std::thread thread;
   std::mutex mutex;
   std::condition_variable cond;
   ncclResult_t asyncResult;
-  int ginVersion;
-  bool supportsStrongSignals;
-  bool supportsVASignals;
 
   struct ncclGinStateDevComm* devComms;
   ncclGinConnectionType_t ginConnectionType;
+
+  int numActiveBackends;
+  struct ncclGinBackendState backends[NCCL_GIN_MAX_ACTIVE_BACKENDS];
 };
 
 extern int64_t ncclParamGinType();

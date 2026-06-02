@@ -27,21 +27,22 @@ const int gpiBackendMinVersions[] = {0, NCCL_VERSION(2, 30, 5)};
 ncclResult_t ncclGetGinType(struct ncclComm* comm, ncclGinType_t* ginType) {
   if (comm == nullptr || ginType == nullptr) return ncclInternalError;
 
-  *ginType =
-    comm->globalGinSupport != NCCL_GIN_CONNECTION_FULL ? NCCL_GIN_TYPE_NONE : comm->sharedRes->ginState.ginType;
+  *ginType = comm->globalGinSupport != NCCL_GIN_CONNECTION_FULL ? NCCL_GIN_TYPE_NONE :
+                                                                  comm->sharedRes->ginState.backends[0].ginType;
   return ncclSuccess;
 }
 
 ncclResult_t ncclGetRailedGinType(struct ncclComm* comm, ncclGinType_t* ginType) {
   if (comm == nullptr || ginType == nullptr) return ncclInternalError;
 
-  *ginType =
-    comm->globalGinSupport == NCCL_GIN_CONNECTION_NONE ? NCCL_GIN_TYPE_NONE : comm->sharedRes->ginState.ginType;
+  *ginType = comm->globalGinSupport == NCCL_GIN_CONNECTION_NONE ? NCCL_GIN_TYPE_NONE :
+                                                                  comm->sharedRes->ginState.backends[0].ginType;
   return ncclSuccess;
 }
 
 void* ncclGinProgress(struct ncclGinState* ginState_) {
   struct ncclGinState* ginState = (struct ncclGinState*)ginState_;
+  struct ncclGinBackendState* backend = &ginState->backends[0];
   if (ncclOsCpuCount(ginState->cpuAffinity)) {
     ncclOsSetAffinity(ginState->cpuAffinity);
   }
@@ -50,8 +51,8 @@ void* ncclGinProgress(struct ncclGinState* ginState_) {
     if (ginState->ginProgress == 1) {
       struct ncclGinStateDevComm* dc = ginState->devComms;
       while (dc) {
-        for (int n = 0; n < ginState->ginCommCount; n++) {
-          ncclResult_t ret = ginState->ncclGin->ginProgress(dc->ginCtx[n]);
+        for (int n = 0; n < backend->ginCommCount; n++) {
+          ncclResult_t ret = backend->ncclGin->ginProgress(dc->ginCtx[n]);
           if (ret != ncclSuccess) {
             COMPILER_ATOMIC_STORE(&ginState->asyncResult, ret, std::memory_order_release);
             INFO_LOC(NCCL_ALL, "-> %d [GIN Progress Thread]", ret);
@@ -87,16 +88,16 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
     return ncclInternalError;
   }
 
-  // Load plugin
-  if (ginState->ncclGin == NULL) {
+  if (!ginState->supported) {
     WARN("GIN not supported.");
     return ncclInvalidUsage;
   }
+  struct ncclGinBackendState* backend = &ginState->backends[0];
 
   ginState->ginConnectionType = comm->globalGinSupport;
 
   int ndev = 0;
-  NCCLCHECK(ginState->ncclGin->devices(&ndev));
+  NCCLCHECK(backend->ncclGin->devices(&ndev));
   if (ndev <= 0) {
     WARN("No GIN-capable devices found.");
     return ncclInternalError;
@@ -117,19 +118,19 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
   int* ginCommCountHandles = NULL;
   NCCLCHECKGOTO(ncclCalloc(&ginCommCountHandles, comm->nRanks), ret, fail);
 
-  ginState->ginCommCount = nLocalGinDevs;
-  if (ginState->ginVersion < 13) {
+  backend->ginCommCount = nLocalGinDevs;
+  if (backend->ginVersion < 13) {
     // We only support one context per connection, so we better create as many connections as possible.
-    ginState->ginCommCount = NCCL_GIN_MAX_CONNECTIONS;
+    backend->ginCommCount = NCCL_GIN_MAX_CONNECTIONS;
   }
 
-  if (ncclParamGinNconnections() != -2) ginState->ginCommCount = ncclParamGinNconnections();
-  ginState->ginCommCount = std::min<int>(NCCL_GIN_MAX_CONNECTIONS, ginState->ginCommCount);
+  if (ncclParamGinNconnections() != -2) backend->ginCommCount = ncclParamGinNconnections();
+  backend->ginCommCount = std::min<int>(NCCL_GIN_MAX_CONNECTIONS, backend->ginCommCount);
 
-  ginCommCountHandles[comm->rank] = ginState->ginCommCount;
+  ginCommCountHandles[comm->rank] = backend->ginCommCount;
   NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, ginCommCountHandles, sizeof(int)), ret, fail);
   for (int r = 0; r < comm->nRanks; r++) {
-    ginState->ginCommCount = std::min(ginState->ginCommCount, ginCommCountHandles[r]);
+    backend->ginCommCount = std::min(backend->ginCommCount, ginCommCountHandles[r]);
   }
 
   NCCLCHECKGOTO(ncclCalloc(&allHandles, (size_t)comm->nRanks * NCCL_NET_HANDLE_MAXSIZE), ret, fail);
@@ -153,21 +154,21 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
     }
   }
 
-  for (int n = 0; n < ginState->ginCommCount; n++) {
+  for (int n = 0; n < backend->ginCommCount; n++) {
     void* listenComm;
-    NCCLCHECKGOTO(ginState->ncclGin->listen(ginState->ginInstance, localGinDevs[n % nLocalGinDevs],
-                                            allHandles + NCCL_NET_HANDLE_MAXSIZE * comm->rank, &listenComm),
+    NCCLCHECKGOTO(backend->ncclGin->listen(backend->ginInstance, localGinDevs[n % nLocalGinDevs],
+                                           allHandles + NCCL_NET_HANDLE_MAXSIZE * comm->rank, &listenComm),
                   ret, fail);
 
-    NCCLCHECKGOTO(ginState->ncclGin->getProperties(localGinDevs[n % nLocalGinDevs], ginState->ginProps + n), ret, fail);
+    NCCLCHECKGOTO(backend->ncclGin->getProperties(localGinDevs[n % nLocalGinDevs], backend->ginProps + n), ret, fail);
 
     NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, allHandles, NCCL_NET_HANDLE_MAXSIZE), ret, fail);
 
-    NCCLCHECKGOTO(ginState->ncclGin->connect(ginState->ginInstance, handles, nGinRanks, myGinRank, listenComm,
-                                             ginState->ginComms + n),
+    NCCLCHECKGOTO(backend->ncclGin->connect(backend->ginInstance, handles, nGinRanks, myGinRank, listenComm,
+                                            backend->ginComms + n),
                   ret, fail);
 
-    NCCLCHECKGOTO(ginState->ncclGin->closeListen(listenComm), ret, fail);
+    NCCLCHECKGOTO(backend->ncclGin->closeListen(listenComm), ret, fail);
   }
   free(handles);
   handles = NULL;
@@ -189,13 +190,14 @@ fail:
 ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequirements const* reqs,
                                  struct ncclDevComm* devComm) {
   struct ncclGinState* ginState = &comm->sharedRes->ginState;
+  struct ncclGinBackendState* backend = &ginState->backends[0];
 
-  if (reqs->ginStrongSignalsRequired && !ginState->supportsStrongSignals) {
+  if (reqs->ginStrongSignalsRequired && !backend->supportsStrongSignals) {
     WARN("GIN strong signals are required, but the GIN plugin does not support them.");
     return ncclInvalidUsage;
   }
 
-  if (reqs->ginVaSignalsRequired && !ginState->supportsVASignals) {
+  if (reqs->ginVaSignalsRequired && !backend->supportsVASignals) {
     WARN("GIN VA signals are required, but the GIN plugin does not support them.");
     return ncclInvalidUsage;
   }
@@ -207,21 +209,21 @@ ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequir
 
   // Allocate contexts
   int nContextsTotal = reqs->ginContextCount;
-  if (ginState->ginVersion < 13) {
-    nContextsTotal = ginState->ginCommCount;
+  if (backend->ginVersion < 13) {
+    nContextsTotal = backend->ginCommCount;
   }
   devComm->ginContextCount = nContextsTotal;
-  devComm->ginConnectionCount = ginState->ginCommCount;
+  devComm->ginConnectionCount = backend->ginCommCount;
 
   if (!reqs->ginExclusiveContexts) {
     // TODO: check if a shared devComm in the list could match our requirements.
   }
 
-  nContextsTotal = ROUNDUP(nContextsTotal, ginState->ginCommCount);
-  int nContextsPerComm = nContextsTotal / ginState->ginCommCount;
+  nContextsTotal = ROUNDUP(nContextsTotal, backend->ginCommCount);
+  int nContextsPerComm = nContextsTotal / backend->ginCommCount;
   INFO(NCCL_INIT,
        "devCommCreate: creating %d contexts: %d GIN connections with %d contexts each (%d contexts total requested)",
-       nContextsTotal, ginState->ginCommCount, nContextsPerComm, reqs->ginContextCount);
+       nContextsTotal, backend->ginCommCount, nContextsPerComm, reqs->ginContextCount);
 
   struct ncclGinStateDevComm* ginStateDevComm = NULL;
   NCCLCHECK(ncclCalloc(&ginStateDevComm, 1));
@@ -229,7 +231,7 @@ ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequir
 
   const int* backendVersionArray;
   int nVersions;
-  switch (ginState->ginType) {
+  switch (backend->ginType) {
   case NCCL_GIN_TYPE_PROXY:
     backendVersionArray = proxyBackendMinVersions;
     nVersions = sizeof(proxyBackendMinVersions) / sizeof(int);
@@ -243,7 +245,7 @@ ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequir
     nVersions = sizeof(gpiBackendMinVersions) / sizeof(int);
     break;
   default:
-    WARN("Cannot get backend version for invalid GIN type %d", ginState->ginType);
+    WARN("Cannot get backend version for invalid GIN type %d", backend->ginType);
     return ncclInternalError;
   }
 
@@ -273,14 +275,14 @@ ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequir
       1
   };
 
-  for (int n = 0; n < ginState->ginCommCount; n++) {
-    NCCLCHECKGOTO(ginState->ncclGin->createContext(ginState->ginComms[n], &ginConfig, &ginStateDevComm->ginCtx[n],
-                                                   &ginStateDevComm->devHandles[n]),
+  for (int n = 0; n < backend->ginCommCount; n++) {
+    NCCLCHECKGOTO(backend->ncclGin->createContext(backend->ginComms[n], &ginConfig, &ginStateDevComm->ginCtx[n],
+                                                  &ginStateDevComm->devHandles[n]),
                   ret, end);
     if (ginStateDevComm->ginCtx[n] == NULL || ginStateDevComm->devHandles[n] == NULL ||
         ginStateDevComm->devHandles[n]->handle == NULL) {
       WARN("GIN plugin %s returned invalid context for connection %d: ginCtx=%p devHandle=%p handle=%p",
-           ginState->ncclGin->name, n, ginStateDevComm->ginCtx[n], ginStateDevComm->devHandles[n],
+           backend->ncclGin->name, n, ginStateDevComm->ginCtx[n], ginStateDevComm->devHandles[n],
            ginStateDevComm->devHandles[n] ? ginStateDevComm->devHandles[n]->handle : NULL);
       ret = ncclInternalError;
       goto end;
@@ -311,8 +313,8 @@ ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequir
 
 end:
   if (ret != ncclSuccess) {
-    for (int n = 0; n < ginState->ginCommCount; n++) {
-      if (ginStateDevComm->ginCtx[n]) ginState->ncclGin->destroyContext(ginStateDevComm->ginCtx[n]);
+    for (int n = 0; n < backend->ginCommCount; n++) {
+      if (ginStateDevComm->ginCtx[n]) backend->ncclGin->destroyContext(ginStateDevComm->ginCtx[n]);
     }
     free(ginStateDevComm);
   }
@@ -322,6 +324,7 @@ end:
 ncclResult_t ncclGinDevCommFree(struct ncclComm* comm, struct ncclDevComm const* devComm) {
   // Find the resource associated with this devComm. Use the gin handle as key.
   struct ncclGinState* ginState = &comm->sharedRes->ginState;
+  struct ncclGinBackendState* backend = &ginState->backends[0];
   struct ncclGinStateDevComm *dc = ginState->devComms, *prevDc = NULL;
   while (1) {
     if (dc == NULL) {
@@ -340,8 +343,8 @@ ncclResult_t ncclGinDevCommFree(struct ncclComm* comm, struct ncclDevComm const*
   lock.unlock();
 
   // Free GIN contexts
-  for (int n = 0; n < ginState->ginCommCount; n++) {
-    NCCLCHECK(ginState->ncclGin->destroyContext(dc->ginCtx[n]));
+  for (int n = 0; n < backend->ginCommCount; n++) {
+    NCCLCHECK(backend->ncclGin->destroyContext(dc->ginCtx[n]));
   }
   free(dc);
   return ncclSuccess;
@@ -350,6 +353,7 @@ ncclResult_t ncclGinDevCommFree(struct ncclComm* comm, struct ncclDevComm const*
 ncclResult_t ncclGinHostFinalize(struct ncclComm* comm) {
   struct ncclGinState* ginState = &comm->sharedRes->ginState;
   if (!ginState->connected) return ncclSuccess;
+  struct ncclGinBackendState* backend = &ginState->backends[0];
 
   if (ginState->needsProxyProgress) {
     {
@@ -360,10 +364,10 @@ ncclResult_t ncclGinHostFinalize(struct ncclComm* comm) {
     ginState->thread.join();
   }
 
-  for (int n = 0; n < ginState->ginCommCount; n++) {
-    if (ginState->ginComms[n] != NULL) {
-      NCCLCHECK(ginState->ncclGin->closeColl(ginState->ginComms[n]));
-      ginState->ginComms[n] = NULL;
+  for (int n = 0; n < backend->ginCommCount; n++) {
+    if (backend->ginComms[n] != NULL) {
+      NCCLCHECK(backend->ncclGin->closeColl(backend->ginComms[n]));
+      backend->ginComms[n] = NULL;
     }
   }
   memset((void*)ginState, 0, sizeof(*ginState));
@@ -375,19 +379,20 @@ ncclResult_t ncclGinRegister(struct ncclComm* comm, void* address, size_t size,
                              ncclGinWindow_t ginDevWins[NCCL_GIN_MAX_CONNECTIONS], int winFlags, bool multiSegment,
                              int memType) {
   struct ncclGinState* ginState = &comm->sharedRes->ginState;
+  struct ncclGinBackendState* backend = &ginState->backends[0];
   if (multiSegment) {
     // Multi-segment GIN registration requires DMABUF support on all GIN connections
-    for (int n = 0; n < ginState->ginCommCount; n++) {
-      if (!(ginState->ginProps[n].ptrSupport & NCCL_PTR_DMABUF)) {
+    for (int n = 0; n < backend->ginCommCount; n++) {
+      if (!(backend->ginProps[n].ptrSupport & NCCL_PTR_DMABUF)) {
         WARN("Window registration of addresses that span multiple physical segments requires DMABUF support with GIN.");
         return ncclInvalidArgument;
       }
     }
   }
   int mrFlags = (winFlags & NCCL_WIN_STRICT_ORDERING) ? NCCL_NET_MR_FLAG_FORCE_SO : 0;
-  for (int n = 0; n < ginState->ginCommCount; n++) {
-    NCCLCHECK(ginState->ncclGin->regMrSym(ginState->ginComms[n], address, size, memType, mrFlags, &ginHostWins[n],
-                                          &ginDevWins[n]));
+  for (int n = 0; n < backend->ginCommCount; n++) {
+    NCCLCHECK(backend->ncclGin->regMrSym(backend->ginComms[n], address, size, memType, mrFlags, &ginHostWins[n],
+                                         &ginDevWins[n]));
     if (ginHostWins[n] == NULL) {
       WARN("rank %d - GIN Symmetric register failed: buff %p, size %ld", comm->rank, address, size);
       return ncclSystemError;
@@ -398,18 +403,20 @@ ncclResult_t ncclGinRegister(struct ncclComm* comm, void* address, size_t size,
 
 ncclResult_t ncclGinDeregister(struct ncclComm* comm, void* ginHostWins[NCCL_GIN_MAX_CONNECTIONS]) {
   struct ncclGinState* ginState = &comm->sharedRes->ginState;
-  for (int n = 0; n < ginState->ginCommCount; n++) {
-    NCCLCHECK(ginState->ncclGin->deregMrSym(ginState->ginComms[n], ginHostWins[n]));
+  struct ncclGinBackendState* backend = &ginState->backends[0];
+  for (int n = 0; n < backend->ginCommCount; n++) {
+    NCCLCHECK(backend->ncclGin->deregMrSym(backend->ginComms[n], ginHostWins[n]));
   }
   return ncclSuccess;
 }
 
 ncclResult_t ncclGinQueryLastError(struct ncclGinState* ginState, bool* hasError) {
   *hasError = false;
+  struct ncclGinBackendState* backend = &ginState->backends[0];
   struct ncclGinStateDevComm* dc = ginState->devComms;
   while (dc) {
-    for (int n = 0; n < ginState->ginCommCount; n++) {
-      NCCLCHECK(ginState->ncclGin->queryLastError(dc->ginCtx[n], hasError));
+    for (int n = 0; n < backend->ginCommCount; n++) {
+      NCCLCHECK(backend->ncclGin->queryLastError(dc->ginCtx[n], hasError));
       if (*hasError) return ncclSuccess;
     }
     dc = dc->next;

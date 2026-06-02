@@ -1830,13 +1830,14 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   {
     std::lock_guard<std::mutex> lock(netMutex);
     INFO(NCCL_GRAPH, "TOPO/NET : Importing network plugins to topology");
-    ncclGin_t* gin = comm->sharedRes->ginState.ncclGin;
+    struct ncclGinState* ginState = &comm->sharedRes->ginState;
+    ncclGin_t* gin = ginState->supported ? ginState->backends[0].ncclGin : NULL;
     if (gin) {
       netInfo.net = 0;
       netInfo.coll = 0;
       netInfo.gin = 1;
       netInfo.rma = 0;
-      netInfo.netPluginIndex = comm->sharedRes->ginState.pluginIndex;
+      netInfo.netPluginIndex = ginState->backends[0].pluginIndex;
       netInfo.dmaBufSupport = comm->dmaBufSupport;
       netInfo.getDevCount = ncclGinGetDevCount;
       netInfo.name = gin->name;

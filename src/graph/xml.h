@@ -15,13 +15,8 @@
 #include <stdlib.h>
 #include <cinttypes>
 
-// PCI device class for NVSwitch (used to identify remote NVLink targets)
 #define PCI_NVSWITCH_CLASS "0x068000"
-
-// PCI device class for GPU (used to identify remote GPU targets)
 #define PCI_GPU_CLASS "0x03"
-
-// PCI device class for IBMNPU (used to identify remote IBMNPU targets)
 #define PCI_IBMNPU_CLASS "0x068001"
 
 // A few constraints to make the implementation easy

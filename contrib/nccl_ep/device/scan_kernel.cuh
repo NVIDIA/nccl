@@ -456,301 +456,186 @@ __device__ __forceinline__ void fill_attn_to_rdma(
   }
 }
 
-template<int NUM_LSA_TEAMS, int LSA_TEAM_SIZE, int NUM_MASK_WORDS>
-__device__ __forceinline__ void remap_expert_major_s2d(
-    const uint8_t* input_routing_map,
-    int32_t* sparse_to_dense_map,
-    rank_mask_t<NUM_MASK_WORDS>* token_rank_mask,
-    int32_t* num_of_tokens_for_experts,
-    bool* local_expert_routing_map,
-    bool expert_major,
-    size_t remap_alignment,
-    int64_t* remap_internal_offsets,
-    void* remap_padded_out_counts,
-    void* remap_out_offsets,
-    int32_t* remap_actual_counts_out,
-    int s2d_inner_dim,
-    void* recv_total_counter,
-    bool out_is_int64,
-    int max_recv_tokens_per_rank,
-    int num_of_total_attn_tokens,
-    int num_of_tokens_per_rank,
-    int num_of_ranks_per_node,
-    int experts_per_rank,
-    int node_rank,
-    int local_rank,
-    uint8_t* smem_bytes)
+// Shared geometry used by both FLAT and EM scan entries.
+struct scan_geometry_t {
+  int num_of_total_attn_tokens;
+  int num_of_tokens_per_thread;
+  int num_of_tokens_per_warp;
+  int num_of_tokens_per_block;
+  int rdma_to_attn_map_size_per_node;
+  int experts_per_node_packed;
+  int packed_row_bytes;
+  int thread_starting_token;
+  int warp_id;
+  int lane_id;
+};
+
+template<int NUM_THREADS_PER_BLOCK, int NUM_OF_BLOCKS, int NUM_LSA_TEAMS>
+__device__ __forceinline__ scan_geometry_t compute_scan_geometry(
+    int num_of_tokens_per_rank, int num_of_ranks_per_node, int experts_per_rank)
 {
-  if (!expert_major) return;
+  constexpr int NUM_OF_WARPS_PER_BLOCK = NUM_THREADS_PER_BLOCK / WARP_SIZE;
+  constexpr int NUM_OF_TOTAL_THREADS = NUM_THREADS_PER_BLOCK * NUM_OF_BLOCKS;
 
-  for (int dest = static_cast<int>(blockIdx.x); dest < num_of_ranks_per_node; dest += gridDim.x) {
-    __syncthreads();
+  scan_geometry_t g;
+  g.num_of_total_attn_tokens =
+      num_of_tokens_per_rank * num_of_ranks_per_node * NUM_LSA_TEAMS;
+  g.num_of_tokens_per_thread =
+      ((g.num_of_total_attn_tokens - 1) / NUM_OF_TOTAL_THREADS) + 1;
+  g.num_of_tokens_per_warp = g.num_of_tokens_per_thread * WARP_SIZE;
+  g.num_of_tokens_per_block = g.num_of_tokens_per_warp * NUM_OF_WARPS_PER_BLOCK;
+  g.rdma_to_attn_map_size_per_node = (((num_of_tokens_per_rank - 1) / 16) + 1) * 16;
 
-    const int epr = experts_per_rank;
-    const int remap_nwarps = blockDim.x / WARP_SIZE;
-    const int remap_warp_id = static_cast<int>(threadIdx.x) / WARP_SIZE;
-    const int remap_lane = static_cast<int>(threadIdx.x) % WARP_SIZE;
-    const int num_exp_packed = (NUM_LSA_TEAMS * LSA_TEAM_SIZE * epr + 7) / 8;
+  const int experts_per_node = experts_per_rank * num_of_ranks_per_node;
+  g.experts_per_node_packed = (experts_per_node + 7) / 8;
+  g.packed_row_bytes = g.experts_per_node_packed * NUM_LSA_TEAMS;
 
-    int64_t* s_offsets = reinterpret_cast<int64_t*>(smem_bytes);
-    int32_t* warp_ws = reinterpret_cast<int32_t*>(smem_bytes + epr * sizeof(int64_t));
-
-    const int expert_base = (node_rank * num_of_ranks_per_node + dest) * epr;
-    const int W = (num_of_total_attn_tokens + remap_nwarps - 1) / remap_nwarps;
-    const int w_start = remap_warp_id * W;
-    const int w_end = min(w_start + W, num_of_total_attn_tokens);
-    const int num_tiles = (W + WARP_SIZE - 1) / WARP_SIZE;
-
-    int mc[HYBRIDEP_MAX_LOCAL_EXPERTS_PER_RANK] = {};
-    for (int tile = 0; tile < num_tiles; tile++) {
-      const int tok = w_start + tile * WARP_SIZE + remap_lane;
-      const bool valid = (tok < w_end);
-      const bool any_hit = valid && token_rank_mask[tok].test(dest);
-
-      if (any_hit) {
-        const uint8_t* row = input_routing_map + static_cast<size_t>(tok) * num_exp_packed;
-        for (int k = 0; k < epr; k++) {
-          const int ge = expert_base + k;
-          if ((row[ge >> 3] >> (ge & 7)) & 1) mc[k]++;
-        }
-      }
-    }
-
-    for (int k = 0; k < epr; k++) {
-      int v = mc[k];
-      for (int off = 1; off < WARP_SIZE; off <<= 1) {
-        int n = __shfl_up_sync(0xffffffff, v, off);
-        if (remap_lane >= off) v += n;
-      }
-      int wt = __shfl_sync(0xffffffff, v, WARP_SIZE - 1);
-      if (remap_lane == 0) warp_ws[remap_warp_id * epr + k] = wt;
-      int ep = __shfl_up_sync(0xffffffff, v, 1);
-      mc[k] = (remap_lane == 0) ? 0 : ep;
-    }
-    __syncthreads();
-
-    if (threadIdx.x == 0) {
-      int running[HYBRIDEP_MAX_LOCAL_EXPERTS_PER_RANK] = {};
-      for (int w = 0; w < remap_nwarps; w++) {
-        for (int k = 0; k < epr; k++) {
-          const int cnt = warp_ws[w * epr + k];
-          warp_ws[w * epr + k] = running[k];
-          running[k] += cnt;
-        }
-      }
-
-      int64_t off = 0;
-      for (int k = 0; k < epr; k++) {
-        s_offsets[k] = off;
-        const int64_t c = static_cast<int64_t>(running[k]);
-        const int64_t padded = (remap_alignment > 1 && c > 0)
-            ? ((c + static_cast<int64_t>(remap_alignment) - 1) /
-               static_cast<int64_t>(remap_alignment)) *
-              static_cast<int64_t>(remap_alignment)
-            : c;
-        if (dest == local_rank) {
-          if (remap_padded_out_counts) {
-            if (out_is_int64) static_cast<int64_t*>(remap_padded_out_counts)[k] = padded;
-            else static_cast<int32_t*>(remap_padded_out_counts)[k] = static_cast<int32_t>(padded);
-          }
-          if (remap_out_offsets) {
-            if (out_is_int64) static_cast<int64_t*>(remap_out_offsets)[k] = off;
-            else static_cast<int32_t*>(remap_out_offsets)[k] = static_cast<int32_t>(off);
-          }
-          if (remap_internal_offsets) remap_internal_offsets[k] = off;
-          if (remap_actual_counts_out) remap_actual_counts_out[k] = static_cast<int32_t>(c);
-        }
-        off += padded;
-      }
-
-      if (dest == local_rank && off > static_cast<int64_t>(max_recv_tokens_per_rank)) {
-        printf("ncclEpUpdateHandle: HT EM actual recv slots %lld > "
-               "max_recv_tokens_per_rank %d on (node %d local %d); "
-               "increase ncclEpGroupConfig_t::max_recv_tokens_per_rank\n",
-               static_cast<long long>(off), max_recv_tokens_per_rank,
-               node_rank, local_rank);
-        __trap();
-      }
-      if (dest == local_rank && num_of_tokens_for_experts) {
-        *num_of_tokens_for_experts = static_cast<int32_t>(off);
-      }
-      if (dest == local_rank && recv_total_counter) {
-        if (out_is_int64) *static_cast<int64_t*>(recv_total_counter) = off;
-        else *static_cast<int32_t*>(recv_total_counter) = static_cast<int32_t>(off);
-      }
-    }
-    __syncthreads();
-
-    int cur_expert_slot[HYBRIDEP_MAX_LOCAL_EXPERTS_PER_RANK];
-    for (int k = 0; k < epr; k++) {
-      cur_expert_slot[k] = static_cast<int>(s_offsets[k]) +
-                           warp_ws[remap_warp_id * epr + k] + mc[k];
-    }
-
-    const int local_node_bit_base = node_rank * num_of_ranks_per_node * epr;
-    const int dest_bit_base = local_node_bit_base + dest * epr;
-    for (int tile = 0; tile < num_tiles; tile++) {
-      const int tok = w_start + tile * WARP_SIZE + remap_lane;
-      const bool valid = (tok < w_end);
-      const bool any_hit = valid && token_rank_mask[tok].test(dest);
-
-      if (any_hit) {
-        const uint8_t* row = input_routing_map + static_cast<size_t>(tok) * num_exp_packed;
-
-        const int source_global_rank = tok / num_of_tokens_per_rank;
-        const int source_node = source_global_rank / num_of_ranks_per_node;
-        const int source_local_rank = source_global_rank % num_of_ranks_per_node;
-        const int local_token_id = tok % num_of_tokens_per_rank;
-        const bool is_our_send_token = (source_local_rank == local_rank);
-
-        const int send_idx = source_node * num_of_tokens_per_rank + local_token_id;
-        const int prior_count = is_our_send_token
-            ? popcount_bit_range(row, local_node_bit_base, dest_bit_base)
-            : 0;
-        const uint64_t dest_slice = extract_bits64(row, dest_bit_base, epr);
-
-        for (int k = 0; k < epr; k++) {
-          if ((dest_slice >> k) & 1ull) {
-            const int em_slot = cur_expert_slot[k]++;
-            if (dest == local_rank) local_expert_routing_map[em_slot * epr + k] = true;
-            if (is_our_send_token) {
-              const uint64_t below_mask = (k == 0) ? 0ull : ((1ull << k) - 1ull);
-              const int packed_idx = prior_count + __popcll(dest_slice & below_mask);
-              sparse_to_dense_map[send_idx * s2d_inner_dim + packed_idx] =
-                  em_s2d_pack(dest, em_slot);
-            }
-          }
-        }
-      }
-    }
-  }
+  const int block_starting_token = blockIdx.x * g.num_of_tokens_per_block;
+  g.warp_id = threadIdx.x / WARP_SIZE;
+  g.lane_id = threadIdx.x % WARP_SIZE;
+  const int warp_starting_token = block_starting_token + g.warp_id * g.num_of_tokens_per_warp;
+  g.thread_starting_token = warp_starting_token + g.lane_id;
+  return g;
 }
 
+// FLAT-layout scan: produces token_rank_mask, rdma/attn maps, sparse_to_dense
+// (rank-major), recv-slot prefixes, and (optionally) per-expert token counts.
 template<int NUM_THREADS_PER_BLOCK,
          int NUM_OF_BLOCKS,
          int NUM_LSA_TEAMS,
          int LSA_TEAM_SIZE,
          bool ENABLE_PER_EXPERT_COUNTS>
-__device__ __forceinline__ void scan_impl(const uint8_t* input_routing_map,
-                     tmp_state_t* tmp,
-                     int32_t* sparse_to_dense_map,
-                     bool* rdma_to_attn_map,
-                     bool* attn_to_rdma_map,
-                     rank_mask_t<(LSA_TEAM_SIZE + 63) / 64>* token_rank_mask,
-                     int32_t* num_of_tokens_for_experts,
-                     bool* local_expert_routing_map,
-                     int32_t* per_expert_token_counts,
-                     const int node_rank,
-                     const int local_rank,
-                     const int num_of_tokens_per_rank,
-                     const int num_of_ranks_per_node,
-                     const int experts_per_rank,
-                     bool expert_major,
-                     size_t remap_alignment,
-                     int64_t* remap_internal_offsets,
-                     void* remap_padded_out_counts,
-                     void* remap_out_offsets,
-                     int32_t* remap_actual_counts_out,
-                     int s2d_inner_dim,
-                     void* recv_total_counter,
-                     bool out_is_int64,
-                     int max_recv_tokens_per_rank,
-                     uint8_t* smem_bytes)
+__device__ __forceinline__ void scan_impl_flat(
+    const uint8_t* input_routing_map,
+    tmp_state_t* tmp,
+    int32_t* sparse_to_dense_map,
+    bool* rdma_to_attn_map,
+    bool* attn_to_rdma_map,
+    rank_mask_t<(LSA_TEAM_SIZE + 63) / 64>* token_rank_mask,
+    int32_t* num_of_tokens_for_experts,
+    bool* local_expert_routing_map,
+    int32_t* per_expert_token_counts,
+    const int node_rank,
+    const int local_rank,
+    const int num_of_tokens_per_rank,
+    const int num_of_ranks_per_node,
+    const int experts_per_rank,
+    void* recv_total_counter,
+    bool out_is_int64,
+    int max_recv_tokens_per_rank,
+    uint8_t* smem_bytes)
 {
   static_assert(LSA_TEAM_SIZE <= EM_S2D_MAX_RANKS,
                 "em_s2d_pack rank field is 10 bits; LSA team size must fit in 1024");
   static_assert(LSA_TEAM_SIZE <= NUM_THREADS_PER_BLOCK,
-                "scan_impl requires one block thread per LSA rank to initialize warp prefixes");
+                "scan_impl_flat requires one block thread per LSA rank to initialize warp prefixes");
 
   constexpr int NUM_OF_WARPS_PER_BLOCK = NUM_THREADS_PER_BLOCK / WARP_SIZE;
-  constexpr int NUM_OF_TOTAL_THREADS = NUM_THREADS_PER_BLOCK * NUM_OF_BLOCKS;
   constexpr int NUM_MASK_WORDS = (LSA_TEAM_SIZE + 63) / 64;
   constexpr int NUM_RANK_TILES = (LSA_TEAM_SIZE + 31) / 32;
 
-  const int num_of_total_attn_tokens =
-      num_of_tokens_per_rank * num_of_ranks_per_node * NUM_LSA_TEAMS;
-  const int num_of_tokens_per_thread =
-      ((num_of_total_attn_tokens - 1) / NUM_OF_TOTAL_THREADS) + 1;
-  const int num_of_tokens_per_warp = num_of_tokens_per_thread * WARP_SIZE;
-  const int num_of_tokens_per_block = num_of_tokens_per_warp * NUM_OF_WARPS_PER_BLOCK;
-  const int rdma_to_attn_map_size_per_node = (((num_of_tokens_per_rank - 1) / 16) + 1) * 16;
-
-  const int experts_per_node = experts_per_rank * num_of_ranks_per_node;
-  const int experts_per_node_packed = (experts_per_node + 7) / 8;
-  const int packed_row_bytes = experts_per_node_packed * NUM_LSA_TEAMS;
+  const scan_geometry_t g = compute_scan_geometry<NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, NUM_LSA_TEAMS>(
+      num_of_tokens_per_rank, num_of_ranks_per_node, experts_per_rank);
 
   scan_smem_t smem = scan_smem_t::from_raw(
       smem_bytes, NUM_OF_WARPS_PER_BLOCK, num_of_ranks_per_node, ENABLE_PER_EXPERT_COUNTS);
 
-  // expert_major path: produce token_rank_mask + RDMA/attn maps only.
   if constexpr (ENABLE_PER_EXPERT_COUNTS) {
-    if (!expert_major) {
-      for (int e = threadIdx.x; e < experts_per_rank; e += NUM_THREADS_PER_BLOCK) {
-        smem.expert_counts[e] = 0;
-      }
-      __syncthreads();
+    for (int e = threadIdx.x; e < experts_per_rank; e += NUM_THREADS_PER_BLOCK) {
+      smem.expert_counts[e] = 0;
     }
+    __syncthreads();
   }
-
-  int block_starting_token = blockIdx.x * num_of_tokens_per_block;
-  int warp_id = threadIdx.x / WARP_SIZE;
-  int lane_id = threadIdx.x % WARP_SIZE;
-  int warp_starting_token = block_starting_token + warp_id * num_of_tokens_per_warp;
-  int thread_starting_token = warp_starting_token + lane_id;
 
   int32_t token_routing_map_sum[LSA_TEAM_SIZE];
   tally_ranks<LSA_TEAM_SIZE, NUM_MASK_WORDS>(
       input_routing_map, token_rank_mask, rdma_to_attn_map, token_routing_map_sum,
-      thread_starting_token, num_of_tokens_per_thread, num_of_total_attn_tokens,
+      g.thread_starting_token, g.num_of_tokens_per_thread, g.num_of_total_attn_tokens,
       num_of_tokens_per_rank, num_of_ranks_per_node, experts_per_rank,
-      packed_row_bytes, experts_per_node_packed, node_rank, local_rank,
-      rdma_to_attn_map_size_per_node);
+      g.packed_row_bytes, g.experts_per_node_packed, node_rank, local_rank,
+      g.rdma_to_attn_map_size_per_node);
 
-  if (!expert_major) {
-    reduce_warp_tally<LSA_TEAM_SIZE>(
-        token_routing_map_sum, smem, num_of_ranks_per_node, warp_id, lane_id);
+  reduce_warp_tally<LSA_TEAM_SIZE>(
+      token_routing_map_sum, smem, num_of_ranks_per_node, g.warp_id, g.lane_id);
+  __syncthreads();
+
+  cross_block_prefix_scan<NUM_THREADS_PER_BLOCK, NUM_OF_WARPS_PER_BLOCK>(
+      smem, tmp, num_of_ranks_per_node, blockIdx.x);
+  __syncthreads();
+
+  init_warp_rank_prefixes<NUM_OF_WARPS_PER_BLOCK>(smem, num_of_ranks_per_node);
+  __syncthreads();
+
+  assign_recv_slots<NUM_RANK_TILES, LSA_TEAM_SIZE, NUM_MASK_WORDS, ENABLE_PER_EXPERT_COUNTS>(
+      input_routing_map, sparse_to_dense_map, token_rank_mask, local_expert_routing_map,
+      smem.expert_counts, num_of_tokens_for_experts, recv_total_counter, smem,
+      g.thread_starting_token, g.num_of_tokens_per_thread, g.num_of_total_attn_tokens,
+      num_of_tokens_per_rank, num_of_ranks_per_node, experts_per_rank, g.packed_row_bytes,
+      g.experts_per_node_packed, node_rank, local_rank, g.warp_id, g.lane_id,
+      /*expert_major=*/false, out_is_int64, max_recv_tokens_per_rank);
+
+  if constexpr (ENABLE_PER_EXPERT_COUNTS) {
     __syncthreads();
-
-    cross_block_prefix_scan<NUM_THREADS_PER_BLOCK, NUM_OF_WARPS_PER_BLOCK>(
-        smem, tmp, num_of_ranks_per_node, blockIdx.x);
-    __syncthreads();
-
-    init_warp_rank_prefixes<NUM_OF_WARPS_PER_BLOCK>(smem, num_of_ranks_per_node);
-    __syncthreads();
-
-    assign_recv_slots<NUM_RANK_TILES, LSA_TEAM_SIZE, NUM_MASK_WORDS, ENABLE_PER_EXPERT_COUNTS>(
-        input_routing_map, sparse_to_dense_map, token_rank_mask, local_expert_routing_map,
-        smem.expert_counts, num_of_tokens_for_experts, recv_total_counter, smem,
-        thread_starting_token, num_of_tokens_per_thread, num_of_total_attn_tokens,
-        num_of_tokens_per_rank, num_of_ranks_per_node, experts_per_rank, packed_row_bytes,
-        experts_per_node_packed, node_rank, local_rank, warp_id, lane_id, expert_major,
-        out_is_int64, max_recv_tokens_per_rank);
-
-    if constexpr (ENABLE_PER_EXPERT_COUNTS) {
-      __syncthreads();
-      for (int e = threadIdx.x; e < experts_per_rank; e += NUM_THREADS_PER_BLOCK) {
-        int32_t block_count = smem.expert_counts[e];
-        if (block_count > 0) atomicAdd(per_expert_token_counts + e, block_count);
-      }
+    for (int e = threadIdx.x; e < experts_per_rank; e += NUM_THREADS_PER_BLOCK) {
+      int32_t block_count = smem.expert_counts[e];
+      if (block_count > 0) atomicAdd(per_expert_token_counts + e, block_count);
     }
   }
 
   fill_attn_to_rdma<NUM_LSA_TEAMS, NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS>(
       input_routing_map, attn_to_rdma_map, num_of_tokens_per_rank,
       num_of_ranks_per_node, experts_per_rank, node_rank, local_rank,
-      packed_row_bytes, experts_per_node_packed);
-
-  // EM remap is handled by em_remap_from_bitmap_kernel (see hybridep_adapter.cu).
-  (void)remap_alignment; (void)remap_internal_offsets;
-  (void)remap_padded_out_counts; (void)remap_out_offsets;
-  (void)remap_actual_counts_out; (void)s2d_inner_dim;
+      g.packed_row_bytes, g.experts_per_node_packed);
 }
 
-// Parameter pack for the scan JIT entry. Non-templated so the host can build it
-// once without knowing LSA_TEAM_SIZE at compile time; the JIT-emitted wrapper
-// reinterpret_casts token_rank_mask to rank_mask_t<(LSA_TEAM_SIZE+63)/64>* before
-// calling scan_impl.
-struct scan_kernel_param_t {
+// EM-layout pre-scan: produces only what em_scan_kernel (see hybridep_adapter.cu)
+// and the rest of the EM pipeline still need from the global routing bitmap --
+// the per-token rank mask, rdma_to_attn_map (filled by tally_ranks), and
+// attn_to_rdma_map. The FLAT-only prefix scan / sparse_to_dense / per-expert
+// counts are skipped entirely.
+template<int NUM_THREADS_PER_BLOCK,
+         int NUM_OF_BLOCKS,
+         int NUM_LSA_TEAMS,
+         int LSA_TEAM_SIZE>
+__device__ __forceinline__ void scan_impl_em(
+    const uint8_t* input_routing_map,
+    bool* rdma_to_attn_map,
+    bool* attn_to_rdma_map,
+    rank_mask_t<(LSA_TEAM_SIZE + 63) / 64>* token_rank_mask,
+    const int node_rank,
+    const int local_rank,
+    const int num_of_tokens_per_rank,
+    const int num_of_ranks_per_node,
+    const int experts_per_rank)
+{
+  static_assert(LSA_TEAM_SIZE <= EM_S2D_MAX_RANKS,
+                "em_s2d_pack rank field is 10 bits; LSA team size must fit in 1024");
+
+  constexpr int NUM_MASK_WORDS = (LSA_TEAM_SIZE + 63) / 64;
+
+  const scan_geometry_t g = compute_scan_geometry<NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, NUM_LSA_TEAMS>(
+      num_of_tokens_per_rank, num_of_ranks_per_node, experts_per_rank);
+
+  int32_t token_routing_map_sum[LSA_TEAM_SIZE];
+  tally_ranks<LSA_TEAM_SIZE, NUM_MASK_WORDS>(
+      input_routing_map, token_rank_mask, rdma_to_attn_map, token_routing_map_sum,
+      g.thread_starting_token, g.num_of_tokens_per_thread, g.num_of_total_attn_tokens,
+      num_of_tokens_per_rank, num_of_ranks_per_node, experts_per_rank,
+      g.packed_row_bytes, g.experts_per_node_packed, node_rank, local_rank,
+      g.rdma_to_attn_map_size_per_node);
+  (void)token_routing_map_sum;
+
+  fill_attn_to_rdma<NUM_LSA_TEAMS, NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS>(
+      input_routing_map, attn_to_rdma_map, num_of_tokens_per_rank,
+      num_of_ranks_per_node, experts_per_rank, node_rank, local_rank,
+      g.packed_row_bytes, g.experts_per_node_packed);
+}
+
+// Parameter packs for the scan JIT entries. Non-templated so the host can build
+// them once without knowing LSA_TEAM_SIZE at compile time; the JIT-emitted
+// wrappers reinterpret_cast token_rank_mask to rank_mask_t<(LSA_TEAM_SIZE+63)/64>*
+// before calling the corresponding scan_impl.
+struct scan_flat_kernel_param_t {
     const uint8_t* input_routing_map;
     tmp_state_t* tmp;
     int32_t* sparse_to_dense_map;
@@ -765,16 +650,21 @@ struct scan_kernel_param_t {
     int num_of_tokens_per_rank;
     int num_of_ranks_per_node;
     int experts_per_rank;
-    bool expert_major;
-    size_t remap_alignment;
-    int64_t* remap_internal_offsets;
-    void* remap_padded_out_counts;
-    void* remap_out_offsets;
-    int32_t* remap_actual_counts_out;
-    int s2d_inner_dim;
     void* recv_total_counter;
     bool out_is_int64;
     int max_recv_tokens_per_rank;
+};
+
+struct scan_em_kernel_param_t {
+    const uint8_t* input_routing_map;
+    bool* rdma_to_attn_map;
+    bool* attn_to_rdma_map;
+    void* token_rank_mask;
+    int node_rank;
+    int local_rank;
+    int num_of_tokens_per_rank;
+    int num_of_ranks_per_node;
+    int experts_per_rank;
 };
 
 } // namespace hybrid_ep

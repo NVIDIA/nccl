@@ -59,6 +59,7 @@ _Result = _nccl_bindings.Result
 __all__ = [
     "NCCLConfig",
     "WaitSignalDesc",
+    "NCCLTeam",
     "NCCLDevCommRequirements",
     "Communicator",
 ]
@@ -153,6 +154,23 @@ class WaitSignalDesc:
 
     context: int = field(default=0, metadata={"lowpp": "ctx"})
     """Context identifier. Currently must be 0. Defaults to 0."""
+
+
+@binding_dataclass(_nccl_bindings.Team, kw_only=False, frozen=True)
+class NCCLTeam:
+    """A NCCL team: ``(n_ranks, rank, stride)`` view over a communicator.
+
+    Instances are produced by :py:attr:`Communicator.team_world`,
+    :py:attr:`Communicator.team_lsa`, :py:attr:`Communicator.team_rail`, or
+    constructed directly for hand-built teams. ``@binding_dataclass`` pairs
+    the value with the low-level ``Team`` POD via ``self._lowpp``, so
+    downstream APIs (e.g. ``team_requirements`` on
+    ``NCCLDevCommRequirements``) extract the POD automatically.
+    """
+
+    n_ranks: int
+    rank: int
+    stride: int
 
 
 @binding_dataclass(_nccl_bindings.DevCommRequirements)
@@ -898,6 +916,40 @@ class Communicator:
         """
         self._check_valid("get n_lsa_teams")
         return self._get_comm_properties().n_lsa_teams
+
+    @property
+    def team_world(self) -> NCCLTeam:
+        """The world team for this communicator: ``{nranks, rank, 1}``.
+
+        Raises:
+            NcclInvalid: If the communicator is not initialized.
+        """
+        self._check_valid("get team_world")
+        pod = _nccl_bindings.team_world(self.ptr)
+        return NCCLTeam(pod.n_ranks, pod.rank, pod.stride)
+
+    @property
+    def team_lsa(self) -> NCCLTeam:
+        """The LSA team for this communicator: ``{lsaSize, lsaSelf, 1}``.
+
+        Raises:
+            NcclInvalid: If the communicator is not initialized.
+        """
+        self._check_valid("get team_lsa")
+        pod = _nccl_bindings.team_lsa(self.ptr)
+        return NCCLTeam(pod.n_ranks, pod.rank, pod.stride)
+
+    @property
+    def team_rail(self) -> NCCLTeam:
+        """The rail team for this communicator:
+        ``{nranks/lsaSize, rank/lsaSize, lsaSize}``.
+
+        Raises:
+            NcclInvalid: If the communicator is not initialized.
+        """
+        self._check_valid("get team_rail")
+        pod = _nccl_bindings.team_rail(self.ptr)
+        return NCCLTeam(pod.n_ranks, pod.rank, pod.stride)
 
     @property
     def host_rma_support(self) -> bool:

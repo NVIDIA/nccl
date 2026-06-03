@@ -78,6 +78,7 @@ __all__ = [
     "NCCLConfig",
     "WaitSignalDesc",
     "NCCLDevCommRequirements",
+    "NCCLTeam",
     "Communicator",
     # Resources
     "RegisteredBufferHandle",

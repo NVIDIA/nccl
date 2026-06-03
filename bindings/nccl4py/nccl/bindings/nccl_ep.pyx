@@ -2594,3 +2594,8 @@ cpdef complete(intptr_t handle, intptr_t config, intptr_t stream):
     with nogil:
         __status__ = ncclEpComplete(<Handle>handle, <const ncclEpCompleteConfig_t*>config, <Stream>stream)
     check_status(__status__)
+
+
+cpdef object get_library_path():
+    from ._internal.nccl_ep import _inspect_loaded_library_path
+    return _inspect_loaded_library_path()

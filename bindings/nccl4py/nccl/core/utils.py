@@ -11,6 +11,8 @@ initialization, and error string utilities for NCCL operations.
 
 from __future__ import annotations
 
+from pathlib import Path as _Path
+
 import numpy as _np
 from packaging.version import Version as _Version
 
@@ -31,7 +33,15 @@ except ImportError:
 from nccl._version import __version__
 from nccl.bindings import nccl as _nccl_bindings
 
-__all__ = ["Version", "get_version", "UniqueId", "get_unique_id", "get_error_string"]
+__all__ = [
+    "Version",
+    "get_version",
+    "get_lib_version",
+    "get_lib_path",
+    "UniqueId",
+    "get_unique_id",
+    "get_error_string",
+]
 
 
 _version_cache = None
@@ -93,6 +103,31 @@ def get_version() -> Version:
     if _version_cache is None:
         _version_cache = Version(_nccl_bindings.get_version())
     return _version_cache
+
+
+def _decode_version(v: int) -> _Version:
+    """Decode an NCCL packed version integer (X*10000 + Y*100 + Z, or legacy
+    X*1000 + Y*100 + Z) into a packaging Version."""
+    if v >= 10000:
+        major = v // 10000
+        minor = (v % 10000) // 100
+        patch = v % 100
+    else:
+        major = v // 1000
+        minor = (v % 1000) // 100
+        patch = v % 100
+    return _Version(f"{major}.{minor}.{patch}")
+
+
+def get_lib_version() -> _Version:
+    """Release version of the loaded ``libnccl.so`` (e.g. ``2.30.0``)."""
+    return _decode_version(_nccl_bindings.get_version())
+
+
+def get_lib_path() -> _Path | None:
+    """Path of the loaded ``libnccl.so``, or None if it cannot be determined."""
+    raw = _nccl_bindings.get_library_path()
+    return _Path(raw) if raw else None
 
 
 class UniqueId:

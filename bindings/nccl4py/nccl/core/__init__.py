@@ -92,6 +92,8 @@ __all__ = [
     # Utilities
     "Version",
     "get_version",
+    "get_lib_version",
+    "get_lib_path",
     "UniqueId",
     "get_unique_id",
     "get_error_string",

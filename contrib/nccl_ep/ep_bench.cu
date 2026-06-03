@@ -1909,22 +1909,19 @@ PairedBenchResult runPairedBenchmark(
 // Structure to hold Low Latency byte calculation
 // Matches DeepEP test_low_latency.py methodology
 struct LowLatencyBytes {
-    size_t dispatch_bytes;  // FP8 or BF16 format per selection
+    size_t dispatch_bytes;  // BF16 format per selection
     size_t combine_bytes;   // BF16 format: hidden * 2 per selection
     unsigned int num_valid_selections;
-    bool is_fp8;  // Whether dispatch uses FP8
 };
 
-// Calculate bytes for Low Latency mode
-// Dispatch can be FP8 or BF16, combine is always BF16
+// Calculate bytes for Low Latency mode (dispatch and combine are both BF16)
 LowLatencyBytes calculateLowLatencyBytes(
     const int64_t* topk_idx_host,
     unsigned int num_tokens,
     unsigned int top_k,
-    unsigned int hidden,
-    bool use_fp8
+    unsigned int hidden
 ) {
-    LowLatencyBytes bytes = {0, 0, 0, use_fp8};
+    LowLatencyBytes bytes = {0, 0, 0};
 
     // Count valid selections (non-masked entries)
     for (unsigned int i = 0; i < num_tokens * top_k; i++) {
@@ -1933,15 +1930,11 @@ LowLatencyBytes calculateLowLatencyBytes(
         }
     }
 
-    // FP8 bytes per selection: hidden + hidden/128*4 + 16 (scale factors + metadata)
-    const size_t fp8_bytes_per_selection = hidden + (hidden / 128) * 4 + 16;
     // BF16 bytes per selection: hidden * 2
     const size_t bf16_bytes_per_selection = hidden * 2;
 
-    // Dispatch: FP8 or BF16 based on config
-    bytes.dispatch_bytes = static_cast<size_t>(bytes.num_valid_selections) *
-                           (use_fp8 ? fp8_bytes_per_selection : bf16_bytes_per_selection);
-    // Combine: always BF16
+    // Dispatch and combine are both BF16
+    bytes.dispatch_bytes = static_cast<size_t>(bytes.num_valid_selections) * bf16_bytes_per_selection;
     bytes.combine_bytes = static_cast<size_t>(bytes.num_valid_selections) * bf16_bytes_per_selection;
 
     return bytes;
@@ -1970,7 +1963,6 @@ struct HighThroughputBytes {
     unsigned int rdma_send_tokens;
     unsigned int rdma_recv_tokens;
     unsigned int total_recv_tokens;
-    bool is_fp8;
 };
 
 // Calculate all six byte metrics from topk_idx for High Throughput mode.
@@ -1993,10 +1985,9 @@ HighThroughputBytes calculateHighThroughputBytes(
     unsigned int hidden,
     int myRank,
     int nRanks,
-    bool use_fp8,
     int num_ranks_per_node
 ) {
-    HighThroughputBytes bytes = {0, 0, 0, 0, 0, 0, 0, 0, use_fp8};
+    HighThroughputBytes bytes = {0, 0, 0, 0, 0, 0, 0, 0};
 
     int num_nodes = (nRanks + num_ranks_per_node - 1) / num_ranks_per_node;
     unsigned int num_experts_per_node = static_cast<unsigned int>(num_experts / num_nodes);
@@ -2046,10 +2037,7 @@ HighThroughputBytes calculateHighThroughputBytes(
         }
     }
 
-    const size_t bf16_bytes_per_token = hidden * 2;
-    const double fp8_factor = (1.0 + 4.0 / 128.0) / 2.0;
-    const size_t bytes_per_token = use_fp8 ?
-        static_cast<size_t>(bf16_bytes_per_token * fp8_factor) : bf16_bytes_per_token;
+    const size_t bytes_per_token = hidden * 2;  // BF16
 
     bytes.total_send_bytes = bytes.total_send_tokens * bytes_per_token;
     bytes.rdma_send_bytes  = bytes.rdma_send_tokens  * bytes_per_token;
@@ -2061,7 +2049,7 @@ HighThroughputBytes calculateHighThroughputBytes(
 
 // Print benchmark results with MPI aggregation across ranks
 // Print benchmark results for Low Latency mode
-// Uses FP8 bytes for dispatch, BF16 bytes for combine (matching DeepEP test_low_latency.py)
+// Uses BF16 bytes for both dispatch and combine
 void printLowLatencyResults(
     int myRank,
     int nRanks,
@@ -2169,8 +2157,7 @@ void printLowLatencyResults(
 
         printf("\n--- Host-observed performance ---\n");
 
-        printf("Dispatch (%s):  avg=%.2f us, min=%.2f us, max=%.2f us\n",
-               ll_bytes.is_fp8 ? "FP8" : "BF16",
+        printf("Dispatch (BF16):  avg=%.2f us, min=%.2f us, max=%.2f us\n",
                global_dispatch_avg * 1000,
                global_dispatch_min * 1000,
                global_dispatch_max * 1000);
@@ -2217,9 +2204,8 @@ void printLowLatencyResults(
             printf("  NOTE: CUPTI support was not compiled.\n");
         }
 
-        printf("\nByte counts: dispatch=%.2f MB (%s), combine=%.2f MB (BF16), selections=%u\n",
+        printf("\nByte counts: dispatch=%.2f MB (BF16), combine=%.2f MB (BF16), selections=%u\n",
                ll_bytes.dispatch_bytes / 1e6,
-               ll_bytes.is_fp8 ? "FP8" : "BF16",
                ll_bytes.combine_bytes / 1e6,
                ll_bytes.num_valid_selections);
         fflush(stdout);
@@ -2300,8 +2286,7 @@ void printHighThroughputResults(
         double dk_total_s = global_dispatch_avg * 1e-3;  // avg total dispatch time in seconds
         double ck_total_s = global_combine_avg  * 1e-3;
 
-        printf("\n=== Summary (High Throughput %s, across %d ranks) ===\n",
-               ht_bytes.is_fp8 ? "FP8" : "BF16", nRanks);
+        printf("\n=== Summary (High Throughput BF16, across %d ranks) ===\n", nRanks);
         printf("NOTE: total time = kernel time + memcpyD2D + misc\n");
 
         // --- BW based on total time ---
@@ -2510,7 +2495,6 @@ void printUsage(const char* programName, int myRank) {
         printf("  --experts <num>         Total number of experts (default: 256)\n");
         printf("  --warmup <num>          Warmup iterations (default: 10)\n");
         printf("  --iters <num>           Benchmark iterations (default: 50)\n");
-        printf("  --use-fp8               Use FP8 for dispatch (default: BF16)\n");
         printf("  --user-handle-mem       Use caller-owned buffer via ncclEpInitHandle+ncclEpUpdateHandle\n");
         printf("  --profile               Enable NVTX profiling mode (use with nsys)\n");
         printf("  --disable-nvlink        Disable NVLink, force RDMA for intranode communication (LL only)\n");
@@ -2542,7 +2526,6 @@ int main(int argc, char* argv[]) {
     int num_iters = 50;
     bool profile_mode = false;  // Enable NVTX profiling with nsys
     bool disable_nvlink = false;  // Force RDMA instead of NVLink
-    bool use_fp8 = false;  // Use FP8 for dispatch (default: BF16)
     bool user_handle_mem = false;  // Use caller-owned buffer via ncclEpInitHandle+ncclEpUpdateHandle
     bool validate_data = false;  // Validate dispatch/combine correctness
     bool dispatch_only = false;  // Skip combine run and validation (use with --validate)
@@ -2571,7 +2554,6 @@ int main(int argc, char* argv[]) {
         {"iters",          required_argument, 0, 'i'},
         {"profile",        no_argument,       0, 'p'},
         {"disable-nvlink", no_argument,       0, 'n'},
-        {"use-fp8",        no_argument,       0, 'f'},
         {"user-handle-mem",no_argument,       0, 'U'},
         {"validate",       no_argument,       0, 'V'},
         {"dispatch-only",  no_argument,       0, 'D'},
@@ -2589,7 +2571,7 @@ int main(int argc, char* argv[]) {
 
     int opt;
     int option_index = 0;
-    while ((opt = getopt_long(argc, argv, "a:L:t:d:k:e:w:i:pnfUVDMA:R:zS:Tl:Nh", long_options, &option_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "a:L:t:d:k:e:w:i:pnUVDMA:R:zS:Tl:Nh", long_options, &option_index)) != -1) {
         switch (opt) {
             case 'a':
                 if (strcmp(optarg, "ll") == 0 || strcmp(optarg, "low-latency") == 0) {
@@ -2644,9 +2626,6 @@ int main(int argc, char* argv[]) {
                 break;
             case 'p':
                 profile_mode = true;
-                break;
-            case 'f':
-                use_fp8 = true;
                 break;
             case 'U':
                 user_handle_mem = true;
@@ -2825,7 +2804,7 @@ int main(int argc, char* argv[]) {
         printf("  Experts:         %u (local: %u)\n", num_experts, num_local_experts);
         printf("  Warmup iters:    %d\n", num_warmup);
         printf("  Benchmark iters: %d\n", num_iters);
-        printf("  Dispatch dtype:  %s\n", use_fp8 ? "FP8" : "BF16");
+        printf("  Dispatch dtype:  BF16\n");
         printf("  Profile mode:    %s\n", profile_mode ? "enabled" : "disabled");
         printf("  NVLink:          %s\n", disable_nvlink ? "disabled (force RDMA intranode, LL only)" : "enabled");
         printf("  Validate mode:   %s\n", validate_data ? "enabled" : "disabled");
@@ -2959,15 +2938,15 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Calculate byte metrics based on algorithm mode and FP8 setting
+    // Calculate byte metrics based on algorithm mode (BF16)
     LowLatencyBytes ll_bytes = {};
     HighThroughputBytes ht_bytes = {};
     if (algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
-        ll_bytes = calculateLowLatencyBytes(topk_idx_host, num_tokens, top_k, hidden, use_fp8);
+        ll_bytes = calculateLowLatencyBytes(topk_idx_host, num_tokens, top_k, hidden);
     } else {
         ht_bytes = calculateHighThroughputBytes(
             topk_idx_host, num_tokens, num_tokens_per_rank.data(),
-            top_k, num_experts, hidden, myRank, nRanks, use_fp8,
+            top_k, num_experts, hidden, myRank, nRanks,
             ncclTeamLsa(comm).nRanks);
     }
 
@@ -3126,7 +3105,7 @@ int main(int argc, char* argv[]) {
     // Calculate data sizes for bandwidth calculation based on algorithm mode
     size_t dispatch_data_bytes, combine_data_bytes;
     if (algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
-        // LL mode: FP8 for dispatch, BF16 for combine
+        // LL mode: BF16 for both dispatch and combine
         dispatch_data_bytes = ll_bytes.dispatch_bytes;
         combine_data_bytes = ll_bytes.combine_bytes;
     } else {

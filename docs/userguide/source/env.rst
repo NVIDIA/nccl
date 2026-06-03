@@ -723,24 +723,25 @@ NCCL_MULTI_RANK_GPU_ENABLE
 --------------------------
 (since 2.30) (experimental)
 
-By default, communicator initialization will fail if it detects that a GPU (or a partition if MloPart is enabled) is being used by
-more than one rank. The ``NCCL_MULTI_RANK_GPU_ENABLE`` variable permits this configuration.
+The ``NCCL_MULTI_RANK_GPU_ENABLE`` variable allows NCCL to run with multiple ranks using the same
+GPU device (or partition if MloPart is enabled).  Setting this variable does not in itself assign
+multiple ranks to a GPU. The application must still arrange for ranks to share a device.
 
-Note: Setting this variable does not in itself assign multiple ranks to a GPU. The application must
-still arrange for ranks to share a device.
+Each rank sharing a GPU allocates its own set of channels and associated resources. It is the
+user's responsibility to ensure that there are enough resources (SM, memory, etc) on the device to
+accommodate the need of all the ranks. Failing to do so will result in a hang in NCCL.
+With the default configuration, NCCL should be able to run up to 2 ranks per GPU. We also encourage
+the users to use ``NCCL_MAX_CTAS`` to limit the number of channels per rank to prevent resource
+exhaustion.
 
-NVLS is currently not compatible with multiple ranks using the same GPU. If
-``NCCL_NVLS_ENABLE`` is set to 1, communicator initialization will fail when multiple ranks
-per GPU are detected. If ``NCCL_NVLS_ENABLE`` is set to 2 (the default), NVLS will be silently disabled.
+Finally, NVLS is currently not compatible with multiple ranks within the same communicator using
+the same GPU. If ``NCCL_NVLS_ENABLE`` is set to 1, communicator initialization will fail when
+multiple ranks per GPU are detected. If ``NCCL_NVLS_ENABLE`` is set to 2 (the default), NVLS will
+be silently disabled.
 
-Each rank sharing a GPU allocates its own set of channels and associated resources. When many
-ranks share a device, the total number of channels across all ranks can exceed the GPU's
-available SMs and other scheduling resources. Use ``NCCL_MAX_CTAS`` to limit the number of
-channels per rank to avoid resource exhaustion.
-
-Disclaimer: This is currently an experimental feature, and is still being tuned. It is not compatible with all configurations.
-It may exhaust resources and lock NCCL.
-If erroring or hanging, NCCL may benefit from lower limits on NCCL_MAX_CTAS and NCCL_NET_GDR_LEVEL=LOC.
+Disclaimer: This is currently an experimental feature, and is still being tuned. It is not
+compatible with all configurations. It may exhaust resources and lock NCCL. If erroring or hanging,
+NCCL may benefit from lower limits on NCCL_MAX_CTAS and NCCL_NET_GDR_LEVEL=LOC.
 
 Values accepted
 ^^^^^^^^^^^^^^^

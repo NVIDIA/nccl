@@ -12,7 +12,7 @@ one GPU per MPI process.
 
 ## Overview
 
-This example shows one of the most common NCCL deployment pattern: one GPU
+This example shows one of the most common NCCL deployment patterns: one GPU
 device per process. This approach is ideal for distributed training across
 multiple nodes and provides the foundation for scalable multi-GPU applications.
 MPI is used as it provides a parallel launcher and broadcast functions. It is,
@@ -23,138 +23,43 @@ sockets. NCCL only requires that the unique ID is distributed among each
 thread/process taking part in collective communication and all threads/processes
 call some NCCL initialization function.
 
+## Runtime Requirements
+
+This example requires MPI: it is launched with `mpirun`, with one MPI process per GPU, and can run on a single node or across multiple nodes. It assigns exactly one GPU per MPI process, so multiple GPUs are expected.
+
 ## What This Example Does
 
-1. **Multi-node Support**:
-   - Determines local rank on each node automatically
-   - Maps MPI processes to GPUs on each node
-   - Uses `MPI_Comm_split_type` with `MPI_COMM_TYPE_SHARED` to assign each local
-     rank a GPU.
+1. **Multi-node Support**: Determines each process's node-local rank and assigns it the GPU with that index (device = local rank)
+2. **Communicator Creation**: Rank 0 generates and broadcasts NCCL unique ID, then each process initializes its communicator
+3. **Verification**: Displays MPI rank → NCCL rank → GPU device mapping
+4. **Cleanup**: Proper resource cleanup order with MPI synchronization
 
-2. **Communicator Creation**:
-   - Uses `ncclCommInitRank` with MPI-coordinated unique ID
-   - Rank `0` generates and broadcasts NCCL unique ID
-   - Each process joins the distributed communicator
+## Variants
 
-3. **Verification**:
-   - Displays MPI rank → NCCL rank → GPU device mapping
-   - Confirms successful initialization across all processes
-
-4. **Cleanup**:
-   - Proper resource cleanup order
-   - MPI synchronization for clean shutdown
-
-## Building and Running
-
-### Build
-```shell
-make MPI=1 [MPI_HOME=<path-to-mpi>] [NCCL_HOME=<path-to-nccl>] [CUDA_HOME=<path-to-cuda>]
-```
-
-### Run example
-```shell
-mpirun -np <num_processes> ./one_device_per_process_mpi
-```
-
-### Run with NCCL debug output
-```shell
-NCCL_DEBUG=INFO mpirun -np <num_processes> ./one_device_per_process_mpi
-```
-
-## Code Walk-through
-
-This approach:
-- Automatically handles multi-node GPU assignment
-- Uses MPI for coordination and NCCL for GPU communication
-- Supports both single-node and multi-node deployments
-
-### Unique ID Distribution
-The NCCL unique ID must be shared with all process which call `ncclCommInitRank`. We use MPI for that:
-```c
-// Rank 0 generates unique ID
-if (mpi_rank == 0) {
-    NCCLCHECK(ncclGetUniqueId(&nccl_id));
-}
-
-// Broadcast to all processes
-MPI_Bcast(&nccl_id, sizeof(ncclUniqueId), MPI_BYTE, 0, MPI_COMM_WORLD);
-```
-
-### Key Function: Multi-node GPU assignment
-```c
-// Separate function to determine the node local rank via `MPI_Comm_split_type`
-int local_rank = getLocalRank(MPI_COMM_WORLD);
-
-// Use the local rank as the GPU device number. This assumes you only start as many processes as available GPUs
-CUDACHECK(cudaSetDevice(local_rank));
-
-ncclComm_t comm;
-int mpi_rank, mpi_size; // mpi_rank & mpi_size are set during MPI initialization
-ncclUniqueId nccl_id; // nccl_id is generated and broadcasted as above
-
-// Initialize NCCL communicator across all processes
-NCCLCHECK(ncclCommInitRank(&comm, mpi_size, nccl_id, mpi_rank));
-```
+- **C**: `c/` (uses MPI + `ncclCommInitRank()`)
+  - How to run + walkthrough: `c/README.md`
+- **Python (nccl4py + mpi4py)**: `python/` (uses `mpi4py` + `nccl.Communicator.init()`)
+  - How to run + walkthrough: `python/README.md`
 
 ## Expected Output
 
-### Single Node (4 processes)
-```
-Starting NCCL communicator lifecycle example with 4 processes
-  MPI initialized - Process 0 of 4 total processes
-  Found 4 CUDA devices on this node
-  MPI rank 0 assigned to CUDA device 0
-Rank 0 generated NCCL unique ID for all processes
-  Rank 0 received NCCL unique ID
-  Rank 0 created NCCL communicator
-  MPI rank 0 → NCCL rank 0/4 on GPU device 0
-
-[Similar output for ranks 1-3]
-
-All communicators initialized successfully! Beginning cleanup...
-  Rank 0 destroyed NCCL communicator
-
-All NCCL communicators created and cleaned up properly!
-This example demonstrated the complete NCCL communicator lifecycle.
-Next steps: Try running NCCL collective operations (AllReduce, etc.)
-```
-
-### Multi-node (8 processes, 2 nodes)
-```
-Starting NCCL communicator lifecycle example with 8 processes
-  MPI initialized - Process 0 of 8 total processes
-  MPI initialized - Process 1 of 8 total processes
-  MPI initialized - Process 2 of 8 total processes
-  MPI initialized - Process 3 of 8 total processes
-  MPI initialized - Process 4 of 8 total processes
-  MPI initialized - Process 5 of 8 total processes
-  MPI initialized - Process 6 of 8 total processes
-  MPI initialized - Process 7 of 8 total processes
-...
-
-  MPI rank 0 → NCCL rank 0/8 on GPU device 0
-  MPI rank 1 → NCCL rank 1/8 on GPU device 1
-  MPI rank 2 → NCCL rank 2/8 on GPU device 2
-  MPI rank 3 → NCCL rank 3/8 on GPU device 3
-  MPI rank 4 → NCCL rank 4/8 on GPU device 0
-  MPI rank 5 → NCCL rank 5/8 on GPU device 1
-  MPI rank 6 → NCCL rank 6/8 on GPU device 2
-  MPI rank 7 → NCCL rank 7/8 on GPU device 3
-
-All NCCL communicators created and cleaned up properly!
-```
+You should see:
+- MPI process initialization (across one or more nodes)
+- GPU assignment by node-local rank (each process uses the GPU whose index equals its local rank, restarting from 0 on each node)
+- Successful communicator initialization per process
+- MPI rank → NCCL rank → GPU device mapping spanning all processes
+- Clean shutdown
 
 ## When to Use MPI Approach
 
 ### Ideal Use Cases
 - **Multi-node clusters**: Scales across multiple machines
-- **Production deployments**: Industry standard for distributed training,
-  inference, and most HPC codes
+- **Production deployments**: One-process-per-GPU is the standard pattern for distributed training, inference, and HPC; MPI is a common launcher in HPC, while ML frameworks often use their own (e.g., `torchrun`)
 - **Process isolation**: Each GPU in separate process for robustness
 - **Large scale**: Supports thousands of GPUs
 
 ### When NOT to Use
-- **Single-node testing**: Simpler approaches available
+- **Single-node testing**: Simpler approaches available (use single-process examples)
 - **No MPI available**: Some environments don't support MPI
 - **Shared memory needs**: Single-process approaches may be simpler
 
@@ -162,8 +67,8 @@ All NCCL communicators created and cleaned up properly!
 
 - **Advantages**:
   - MPI has been optimized for large parallel startup.
-  - Industry standard deployment pattern
-  - Optimal for large-scale training
+  - Well-established one-process-per-GPU deployment pattern
+  - Scales to large-scale training
 
 - **Disadvantages**:
   - MPI setup complexity
@@ -186,11 +91,9 @@ All NCCL communicators created and cleaned up properly!
 
 ## Error Handling
 
-The example uses simplified error handling with CHECK macros:
-- **CUDACHECK**: Exits immediately on CUDA errors
-- **NCCLCHECK**: Exits immediately on NCCL errors
-- **No async error checking**: Simplified for clarity
-- **No global error coordination**: Each process exits on its own errors
+This example uses simplified error checking that immediately exits on any failure, with each process
+handling its own errors independently (no global error coordination) and no asynchronous error
+checking. In production code, consider more graceful error handling and recovery mechanisms.
 
 ## Next Steps
 

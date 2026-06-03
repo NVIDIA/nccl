@@ -13,19 +13,26 @@ all: $(EXAMPLES)
 
 # Build individual examples
 $(EXAMPLES):
-	$(MAKE) -C $@
+	$(MAKE) -C $@/c
 
 # Clean all build artifacts
 clean:
 	for example in $(EXAMPLES); do \
-		$(MAKE) -C $$example clean; \
+		$(MAKE) -C $$example/c clean; \
 	done
 
 # Test all examples
 test: all
 	for example in $(EXAMPLES); do \
 		echo "Testing $$example..."; \
-		$(MAKE) -C $$example test; \
+		$(MAKE) -C $$example/c test || exit 1; \
+	done
+
+# Install all examples
+install: all
+	for example in $(EXAMPLES); do \
+		echo "Installing $$example..."; \
+		$(MAKE) -C $$example/c install || exit 1; \
 	done
 
 # Help
@@ -37,6 +44,7 @@ help:
 	@echo "  all     - Build all examples"
 	@echo "  clean   - Clean all build artifacts"
 	@echo "  test    - Test all examples"
+	@echo "  install - Install all examples"
 	@echo "  help    - Show this help"
 	@echo ""
 	@echo "Examples:"
@@ -46,9 +54,9 @@ help:
 	@echo "  04_rmsnorm_hybrid        - Hybrid LSA/GIN RMSNorm"
 	@echo ""
 	@echo "To build/run individual examples:"
-	@echo "  make -C 01_rmsnorm_lsa"
-	@echo "  make -C 02_rmsnorm_multimem"
-	@echo "  make -C 03_rmsnorm_gin"
-	@echo "  make -C 04_rmsnorm_hybrid"
+	@echo "  make -C 01_rmsnorm_lsa/c"
+	@echo "  make -C 02_rmsnorm_multimem/c"
+	@echo "  make -C 03_rmsnorm_gin/c"
+	@echo "  make -C 04_rmsnorm_hybrid/c"
 
-.PHONY: all clean test help $(EXAMPLES)
+.PHONY: all clean test install help $(EXAMPLES)

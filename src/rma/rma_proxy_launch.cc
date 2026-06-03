@@ -28,9 +28,9 @@ ncclResult_t ncclRmaProxyPutBuildOp(struct ncclComm* comm, struct ncclRmaProxyCt
                                     bool persistent, struct ncclDevrWindow* srcWin, size_t srcOff,
                                     struct ncclDevrWindow* peerWin, size_t peerOff, size_t size, int peer,
                                     ncclSignalMode_t signalMode, struct ncclRmaPutSignalOp* op) {
-  op->srcOff = srcOff;
+  op->srcOff = ncclDevrGetWinOffset(srcWin) + srcOff;
   op->srcHandle = ncclDevrGetRmaWin(srcWin, ctx);
-  op->dstOff = peerOff;
+  op->dstOff = ncclDevrGetWinOffset(peerWin) + peerOff;
   op->dstHandle = ncclDevrGetRmaWin(peerWin, ctx);
   op->size = size;
   op->targetRank = peer;

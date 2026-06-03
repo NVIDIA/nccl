@@ -116,6 +116,9 @@ ncclResult_t ncclDevrWorldToLsaRank(struct ncclComm* comm, int peerWorldRank, in
 // Get the RMA window handle for a specific context
 void* ncclDevrGetRmaWin(struct ncclDevrWindow* winHost, int ctx);
 
+// Get the byte offset of a window within its backing memory allocation.
+size_t ncclDevrGetWinOffset(struct ncclDevrWindow* winHost);
+
 // Get the multicast address for a given team
 ncclResult_t ncclDevrGetLsaTeamPtrMC(struct ncclComm* comm, struct ncclDevrWindow* winHost, size_t offset,
                                      struct ncclTeam lsaTeam, void** outPtr);

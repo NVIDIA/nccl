@@ -305,3 +305,6 @@ cdef ncclResult_t ncclDevCommDestroy(ncclComm_t comm, const ncclDevComm_t* devCo
 cdef ncclResult_t ncclGetLsaMultimemDevicePointer(ncclWindow_t window, size_t offset, void** outPtr) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclGetLsaDevicePointer(ncclWindow_t window, size_t offset, int lsaRank, void** outPtr) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclGetPeerDevicePointer(ncclWindow_t window, size_t offset, int peer, void** outPtr) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
+cdef ncclTeam_t ncclTeamWorld(ncclComm_t comm) except* nogil
+cdef ncclTeam_t ncclTeamLsa(ncclComm_t comm) except* nogil
+cdef ncclTeam_t ncclTeamRail(ncclComm_t comm) except* nogil

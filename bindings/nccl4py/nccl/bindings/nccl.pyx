@@ -3677,3 +3677,44 @@ cpdef intptr_t get_peer_device_pointer(intptr_t window, size_t offset, int peer)
         __status__ = ncclGetPeerDevicePointer(<Window>window, offset, peer, &out_ptr)
     check_status(__status__)
     return <intptr_t>out_ptr
+
+
+
+# Hand-written: SKIP_LOWPP in nccl.cybind.yaml suppresses cybind's lowpp
+# emission for ncclTeamWorld/Lsa/Rail (which would otherwise treat the
+# struct-by-value return as a status code). Each wrapper allocates a Team
+# POD and populates it directly via _get_ptr() to avoid a struct copy.
+#
+# SKIP_LOWPP also removes the cynccl/_internal cdef declarations cybind
+# would normally emit, so the C symbols are declared inline here. The
+# linker resolves them against libnccl at build time (no dlsym fallback,
+# which is fine since these are core host APIs always present alongside
+# the other ncclXxx symbols this module already links against).
+cdef extern from *:
+    ncclTeam_t ncclTeamWorld(ncclComm_t comm) nogil
+    ncclTeam_t ncclTeamLsa(ncclComm_t comm) nogil
+    ncclTeam_t ncclTeamRail(ncclComm_t comm) nogil
+
+
+cpdef object team_world(intptr_t comm):
+    cdef Team team_py = Team()
+    cdef ncclTeam_t *team = <ncclTeam_t *><intptr_t>(team_py._get_ptr())
+    with nogil:
+        team[0] = ncclTeamWorld(<Comm>comm)
+    return team_py
+
+
+cpdef object team_lsa(intptr_t comm):
+    cdef Team team_py = Team()
+    cdef ncclTeam_t *team = <ncclTeam_t *><intptr_t>(team_py._get_ptr())
+    with nogil:
+        team[0] = ncclTeamLsa(<Comm>comm)
+    return team_py
+
+
+cpdef object team_rail(intptr_t comm):
+    cdef Team team_py = Team()
+    cdef ncclTeam_t *team = <ncclTeam_t *><intptr_t>(team_py._get_ptr())
+    with nogil:
+        team[0] = ncclTeamRail(<Comm>comm)
+    return team_py

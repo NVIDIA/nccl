@@ -229,3 +229,15 @@ cdef ncclResult_t ncclGetLsaDevicePointer(ncclWindow_t window, size_t offset, in
 
 cdef ncclResult_t ncclGetPeerDevicePointer(ncclWindow_t window, size_t offset, int peer, void** outPtr) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
     return _nccl._ncclGetPeerDevicePointer(window, offset, peer, outPtr)
+
+
+cdef ncclTeam_t ncclTeamWorld(ncclComm_t comm) except* nogil:
+    return _nccl._ncclTeamWorld(comm)
+
+
+cdef ncclTeam_t ncclTeamLsa(ncclComm_t comm) except* nogil:
+    return _nccl._ncclTeamLsa(comm)
+
+
+cdef ncclTeam_t ncclTeamRail(ncclComm_t comm) except* nogil:
+    return _nccl._ncclTeamRail(comm)

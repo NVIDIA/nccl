@@ -97,3 +97,8 @@ cpdef dev_comm_destroy(intptr_t comm, intptr_t dev_comm)
 cpdef intptr_t get_lsa_multimem_device_pointer(intptr_t window, size_t offset) except? 0
 cpdef intptr_t get_lsa_device_pointer(intptr_t window, size_t offset, int lsa_rank) except? 0
 cpdef intptr_t get_peer_device_pointer(intptr_t window, size_t offset, int peer) except? 0
+
+# Hand-written: cybind cannot emit by-value struct returns.
+cpdef object team_world(intptr_t comm)
+cpdef object team_lsa(intptr_t comm)
+cpdef object team_rail(intptr_t comm)

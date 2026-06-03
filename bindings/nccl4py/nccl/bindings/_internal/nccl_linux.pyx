@@ -115,6 +115,9 @@ cdef void* __ncclDevCommDestroy = NULL
 cdef void* __ncclGetLsaMultimemDevicePointer = NULL
 cdef void* __ncclGetLsaDevicePointer = NULL
 cdef void* __ncclGetPeerDevicePointer = NULL
+cdef void* __ncclTeamWorld = NULL
+cdef void* __ncclTeamLsa = NULL
+cdef void* __ncclTeamRail = NULL
 
 
 cdef void* load_library() except* with gil:
@@ -519,6 +522,27 @@ cdef int _check_or_init_nccl() except -1 nogil:
             if handle == NULL:
                 handle = load_library()
             __ncclGetPeerDevicePointer = dlsym(handle, 'ncclGetPeerDevicePointer')
+
+        global __ncclTeamWorld
+        __ncclTeamWorld = dlsym(RTLD_DEFAULT, 'ncclTeamWorld')
+        if __ncclTeamWorld == NULL:
+            if handle == NULL:
+                handle = load_library()
+            __ncclTeamWorld = dlsym(handle, 'ncclTeamWorld')
+
+        global __ncclTeamLsa
+        __ncclTeamLsa = dlsym(RTLD_DEFAULT, 'ncclTeamLsa')
+        if __ncclTeamLsa == NULL:
+            if handle == NULL:
+                handle = load_library()
+            __ncclTeamLsa = dlsym(handle, 'ncclTeamLsa')
+
+        global __ncclTeamRail
+        __ncclTeamRail = dlsym(RTLD_DEFAULT, 'ncclTeamRail')
+        if __ncclTeamRail == NULL:
+            if handle == NULL:
+                handle = load_library()
+            __ncclTeamRail = dlsym(handle, 'ncclTeamRail')
         __py_nccl_init = True
         return 0
 
@@ -698,6 +722,15 @@ cpdef dict _inspect_function_pointers():
 
     global __ncclGetPeerDevicePointer
     data["__ncclGetPeerDevicePointer"] = <intptr_t>__ncclGetPeerDevicePointer
+
+    global __ncclTeamWorld
+    data["__ncclTeamWorld"] = <intptr_t>__ncclTeamWorld
+
+    global __ncclTeamLsa
+    data["__ncclTeamLsa"] = <intptr_t>__ncclTeamLsa
+
+    global __ncclTeamRail
+    data["__ncclTeamRail"] = <intptr_t>__ncclTeamRail
 
     func_ptrs = data
     return data
@@ -1262,3 +1295,33 @@ cdef ncclResult_t _ncclGetPeerDevicePointer(ncclWindow_t window, size_t offset, 
             raise FunctionNotFoundError("function ncclGetPeerDevicePointer is not found")
     return (<ncclResult_t (*)(ncclWindow_t, size_t, int, void**) noexcept nogil>__ncclGetPeerDevicePointer)(
         window, offset, peer, outPtr)
+
+
+cdef ncclTeam_t _ncclTeamWorld(ncclComm_t comm) except* nogil:
+    global __ncclTeamWorld
+    _check_or_init_nccl()
+    if __ncclTeamWorld == NULL:
+        with gil:
+            raise FunctionNotFoundError("function ncclTeamWorld is not found")
+    return (<ncclTeam_t (*)(ncclComm_t) noexcept nogil>__ncclTeamWorld)(
+        comm)
+
+
+cdef ncclTeam_t _ncclTeamLsa(ncclComm_t comm) except* nogil:
+    global __ncclTeamLsa
+    _check_or_init_nccl()
+    if __ncclTeamLsa == NULL:
+        with gil:
+            raise FunctionNotFoundError("function ncclTeamLsa is not found")
+    return (<ncclTeam_t (*)(ncclComm_t) noexcept nogil>__ncclTeamLsa)(
+        comm)
+
+
+cdef ncclTeam_t _ncclTeamRail(ncclComm_t comm) except* nogil:
+    global __ncclTeamRail
+    _check_or_init_nccl()
+    if __ncclTeamRail == NULL:
+        with gil:
+            raise FunctionNotFoundError("function ncclTeamRail is not found")
+    return (<ncclTeam_t (*)(ncclComm_t) noexcept nogil>__ncclTeamRail)(
+        comm)

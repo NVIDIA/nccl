@@ -357,6 +357,16 @@ static ncclResult_t epGetTensorData(const BenchmarkAllocState& alloc, const nccl
         *data = it->second;
         return ncclSuccess;
     }
+    // Empty tensor (zero-extent in some dimension) is allowed to carry a
+    // null data pointer -- a zero-byte buffer has no element to address.
+    // Hand back nullptr so callers can pass it to cudaMemset/cudaMemcpy
+    // with count=0 (both are no-ops on a NULL pointer when count is 0).
+    for (unsigned int i = 0; i < tensor->ndim; ++i) {
+        if (tensor->sizes != nullptr && tensor->sizes[i] == 0) {
+            *data = nullptr;
+            return ncclSuccess;
+        }
+    }
     return ncclInvalidUsage;
 }
 
@@ -2435,13 +2445,19 @@ void generateRandomTopkIndicesLL(
         }
     }
 
-    // Randomly mask 10 positions with -1 (simulates dropped tokens)
-    std::uniform_int_distribution<unsigned int> token_dist(0, num_tokens - 1);
-    std::uniform_int_distribution<unsigned int> topk_dist(0, top_k - 1);
-    for (int i = 0; i < 10; i++) {
-        unsigned int token_idx = token_dist(gen);
-        unsigned int k_idx = topk_dist(gen);
-        topk_idx_host[token_idx * top_k + k_idx] = -1;
+    // Randomly mask 10 positions with -1 (simulates dropped tokens).
+    // Guarded on num_tokens > 0: zero-token ranks have no slots to mask, and
+    // the distribution upper bound `num_tokens - 1` would underflow to
+    // UINT_MAX on an unsigned 0, then index out-of-bounds into the empty
+    // topk_idx_host buffer.
+    if (num_tokens > 0) {
+        std::uniform_int_distribution<unsigned int> token_dist(0, num_tokens - 1);
+        std::uniform_int_distribution<unsigned int> topk_dist(0, top_k - 1);
+        for (int i = 0; i < 10; i++) {
+            unsigned int token_idx = token_dist(gen);
+            unsigned int k_idx = topk_dist(gen);
+            topk_idx_host[token_idx * top_k + k_idx] = -1;
+        }
     }
 }
 
@@ -2459,12 +2475,18 @@ static std::vector<unsigned int> computeNonUniformTokensPerRank(
         return out;
     }
     std::mt19937 rng(seed);
-    std::uniform_int_distribution<unsigned int> dist(1u, max_tokens);
+    // Sample inclusive of 0 so the asymmetric zero-tokens path is exercised.
+    // The kernel's per-token loops degrade to no-ops at num_tokens=0 and
+    // tensorHasBinding now accepts empty tensors, so a zero-tokens rank is
+    // a valid configuration that must not regress.
+    std::uniform_int_distribution<unsigned int> dist(0u, max_tokens);
     for (int r = 0; r < nRanks; r++) {
         out[r] = dist(rng);
     }
     out[0] = max_tokens;
-    if (nRanks > 1) out[nRanks - 1] = 1u;
+    // Force at least one rank to 0 so the regression case is always exercised
+    // (the random sample alone may not hit 0 for small nRanks).
+    if (nRanks > 1) out[nRanks - 1] = 0u;
     return out;
 }
 
@@ -2796,7 +2818,7 @@ int main(int argc, char* argv[]) {
         if (include_uniform_less_than_max) {
             printf("  Sub-test:        Uniform tokens (num<max=%u)\n", num_dispatch_tokens);
         } else if (include_non_uniform_tokens) {
-            printf("  Sub-test:        Non-uniform tokens in [1, %u]\n", max_tokens_per_rank);
+            printf("  Sub-test:        Non-uniform tokens in [0, %u] (last rank forced to 0)\n", max_tokens_per_rank);
         }
         printf("  Hidden:          %u\n", hidden);
         printf("  Top-k:           %u\n", top_k);

@@ -83,7 +83,7 @@ $(OBJDIR)/gensrc: generate.py
 	  (bar='!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'; \
 	   printf "\n$${bar}\nERROR: Building NCCL requires a Python 3 installation invokable as 'python3'.\n$${bar}\n\n" 1>&2; \
 	   exit 1)) \
-	&& ./generate.py $@ "$(ONLY_FUNCS)"
+	&& NCCL_EXACT_KERNEL_NAMES="$(NCCL_EXACT_KERNEL_NAMES)" ./generate.py $@ "$(ONLY_FUNCS)"
 
 $(OBJDIR)/gensrc/symmetric: $(OBJDIR)/gensrc symmetric/generate.py
 	@mkdir -p $@

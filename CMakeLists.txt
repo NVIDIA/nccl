@@ -52,6 +52,7 @@ option(NET_PROFILER "Enable network profiler" OFF)
 option(MLX5DV "Enable MLX5DV" OFF)
 option(MAX_EXT_NET_PLUGINS "Maximum external network plugins" 0)
 option(EMIT_LLVM_IR "Generate LLVM IR for device APIs" OFF)
+option(NCCL_EXACT_KERNEL_NAMES "Use one CUDA kernel wrapper per NCCL device function" OFF)
 option(BUILD_NCCL4PY "Enable nccl4py Python bindings targets" OFF)
 option(BUILD_NCCL_EP "Build NCCL EP contrib library" OFF)
 

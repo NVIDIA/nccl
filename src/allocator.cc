@@ -11,8 +11,10 @@
 #include "nvtx.h"
 #include "utils.h"
 
-NCCL_API(ncclResult_t, ncclMemAlloc, void **ptr, size_t size);
-ncclResult_t  ncclMemAlloc(void **ptr, size_t size) {
+NCCL_PARAM(ShadowMempoolMaxSize, "SHADOW_MEMPOOL_MAX_SIZE", 1LL << 30);
+
+NCCL_API(ncclResult_t, ncclMemAlloc, void** ptr, size_t size);
+ncclResult_t ncclMemAlloc(void** ptr, size_t size) {
   NCCL_NVTX3_FUNC_RANGE;
   ncclResult_t ret = ncclSuccess;
 
@@ -39,12 +41,12 @@ ncclResult_t  ncclMemAlloc(void **ptr, size_t size) {
 #if CUDART_VERSION >= 12030
     // Query device to see if FABRIC handle support is available
     flag = 0;
-    (void) CUPFN(cuDeviceGetAttribute(&flag, CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_FABRIC_SUPPORTED, currentDev));
+    (void)CUPFN(cuDeviceGetAttribute(&flag, CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_FABRIC_SUPPORTED, currentDev));
     if (flag) requestedHandleTypes |= CU_MEM_HANDLE_TYPE_FABRIC;
 #endif
     memprop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
     memprop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
-    memprop.requestedHandleTypes = (CUmemAllocationHandleType) requestedHandleTypes;
+    memprop.requestedHandleTypes = (CUmemAllocationHandleType)requestedHandleTypes;
     memprop.location.id = currentDev;
     // Query device to see if RDMA support is available
     flag = 0;
@@ -60,7 +62,7 @@ ncclResult_t  ncclMemAlloc(void **ptr, size_t size) {
       CUresult err = CUPFN(cuMemCreate(&handle, handleSize, &memprop, 0));
       if (err == CUDA_ERROR_NOT_PERMITTED || err == CUDA_ERROR_NOT_SUPPORTED) {
         requestedHandleTypes &= ~CU_MEM_HANDLE_TYPE_FABRIC;
-        memprop.requestedHandleTypes = (CUmemAllocationHandleType) requestedHandleTypes;
+        memprop.requestedHandleTypes = (CUmemAllocationHandleType)requestedHandleTypes;
         /* Allocate the physical memory on the device */
         CUCHECK(cuMemCreate(&handle, handleSize, &memprop, 0));
       } else if (err != CUDA_SUCCESS) {
@@ -104,8 +106,8 @@ fail:
   goto exit;
 }
 
-NCCL_API(ncclResult_t, ncclMemFree, void *ptr);
-ncclResult_t  ncclMemFree(void *ptr) {
+NCCL_API(ncclResult_t, ncclMemFree, void* ptr);
+ncclResult_t ncclMemFree(void* ptr) {
   NCCL_NVTX3_FUNC_RANGE;
   ncclResult_t ret = ncclSuccess;
   int saveDevice;
@@ -120,7 +122,8 @@ ncclResult_t  ncclMemFree(void *ptr) {
   CUCHECKGOTO(cuPointerGetAttribute((void*)&ptrDev, CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL, (CUdeviceptr)ptr), ret, fail);
   CUDACHECKGOTO(cudaSetDevice((int)ptrDev), ret, fail);
   if (ncclCuMemEnable()) {
-    NCCLCHECKGOTO(ncclCuMemFree(ptr, nullptr), ret, fail); // User facing API, memManager does not need to track user memory. Same as ncclMemAlloc
+    // User facing API, memManager does not need to track user memory. Same as ncclMemAlloc
+    NCCLCHECKGOTO(ncclCuMemFree(ptr, nullptr), ret, fail);
     goto exit;
   }
 
@@ -158,16 +161,16 @@ static void insertSegment(struct ncclSpace* a, int index, int64_t lo, int64_t hi
   if (a->count + 2 > a->capacity) {
     a->capacity *= 2;
     if (a->capacity == 0) a->capacity = 16;
-    int64_t* cuts1 = (int64_t*)malloc(a->capacity*sizeof(int64_t));
-    for (int i=0; i < index; i++) cuts1[i] = a->cuts[i];
-    for (int i=index; i < a->count; i++) cuts1[i+2] = a->cuts[i];
+    int64_t* cuts1 = (int64_t*)malloc(a->capacity * sizeof(int64_t));
+    for (int i = 0; i < index; i++) cuts1[i] = a->cuts[i];
+    for (int i = index; i < a->count; i++) cuts1[i + 2] = a->cuts[i];
     free(a->cuts);
     a->cuts = cuts1;
   } else {
-    for (int i=a->count-1; index <= i; i--) a->cuts[i+2] = a->cuts[i];
+    for (int i = a->count - 1; index <= i; i--) a->cuts[i + 2] = a->cuts[i];
   }
-  a->cuts[index+0] = lo;
-  a->cuts[index+1] = hi;
+  a->cuts[index + 0] = lo;
+  a->cuts[index + 1] = hi;
   a->count += 2;
 
   // Filter pairs of adjacent repeated values from cuts[]. Since these mark
@@ -180,13 +183,14 @@ static void insertSegment(struct ncclSpace* a, int index, int64_t lo, int64_t hi
   //   [0,1,2] -> [1,2]
   //   [0,0,1,2] -> [1,2]
   int r = index, w = index; // Read and write cursors.
-  int64_t prev = r==0 ? 0 : a->cuts[r-1];
+  int64_t prev = r == 0 ? 0 : a->cuts[r - 1];
   while (r < a->count) {
     int64_t cur = a->cuts[r++];
     a->cuts[w++] = cur;
-    if (prev == cur) { // Repeated value is an empty segment which can be deleted.
+    if (prev == cur) {
+      // Repeated value is an empty segment which can be deleted.
       // Erase last two cuts or just one if we're at the start.
-      w -= w==1 ? 1 : 2;
+      w -= w == 1 ? 1 : 2;
       // Zeros can only occur at the beginning (due to being sorted). We want to
       // drop any number of zeros, but only even numbers of other repeated values.
       // So set to zero here, which will make prev=0, thus if next value is zero
@@ -199,44 +203,44 @@ static void insertSegment(struct ncclSpace* a, int index, int64_t lo, int64_t hi
   a->count = w;
 }
 
-ncclResult_t ncclSpaceAlloc(
-    struct ncclSpace* a, int64_t limit, int64_t size, int align,
-    int64_t* outOffset
-  ) {
+ncclResult_t ncclSpaceAlloc(struct ncclSpace* a, int64_t limit, int64_t size, int align, int64_t* outOffset) {
   // When allocating we try to locate the first empty segment which can hold
   // the allocation and move its lower cut upward.
-  int i = a->count%2; // First empty segment ends at cuts[i]
+  int i = a->count % 2; // First empty segment ends at cuts[i]
   size_t off;
   while (i <= a->count) {
-    size_t lo = i == 0 ? 0 : a->cuts[i-1];
+    size_t lo = i == 0 ? 0 : a->cuts[i - 1];
     size_t hi = i == a->count ? limit : a->cuts[i];
     off = alignUp(lo, align);
     if (off + size <= hi) {
       *outOffset = off;
-      if (i == 0 || off + size == hi) { // Slow path required.
-        insertSegment(a, i, off, off+size);
-      } else { // We can just append to the end of a full segment.
-        a->cuts[i-1] = off + size;
+      if (i == 0 || off + size == hi) {
+        // Slow path required.
+        insertSegment(a, i, off, off + size);
+      } else {
+        // We can just append to the end of a full segment.
+        a->cuts[i - 1] = off + size;
       }
       return ncclSuccess;
     }
     i += 2; // Next empty segment
   }
-  WARN("Allocation failed. No suitable space found to accommodate size=0x%lx within limit=0x%lx", (long)size, (long)limit);
+  WARN("Allocation failed. No suitable space found to accommodate size=0x%lx within limit=0x%lx", (long)size,
+       (long)limit);
   return ncclInternalError;
 }
 
 ncclResult_t ncclSpaceFree(struct ncclSpace* a, int64_t offset, int64_t size) {
-  if (a->count == 0 || a->cuts[a->count-1] <= offset) {
+  if (a->count == 0 || a->cuts[a->count - 1] <= offset) {
     WARN("No allocation found at offset=0x%lx", (long)offset);
     return ncclInternalError;
   }
 
   // This could be binary search, but since allocate is linear there's no point.
-  int i = 1 - a->count%2; // First full segment ends at cuts[i]
+  int i = 1 - a->count % 2; // First full segment ends at cuts[i]
   while (a->cuts[i] <= offset) i += 2;
 
-  int64_t lo = i==0 ? 0 : a->cuts[i-1];
+  int64_t lo = i == 0 ? 0 : a->cuts[i - 1];
   int64_t hi = a->cuts[i];
 
   if (offset < lo || hi < offset + size) {
@@ -246,11 +250,12 @@ ncclResult_t ncclSpaceFree(struct ncclSpace* a, int64_t offset, int64_t size) {
 
   // First try the two fast cases which just shrink a segment from one side.
   if (i != 0 && lo == offset && offset + size != hi) {
-    a->cuts[i-1] = offset + size; // Bring bottom up.
+    a->cuts[i - 1] = offset + size; // Bring bottom up.
   } else if (lo != offset && offset + size == hi) {
     a->cuts[i] = offset; // Bring top down.
-  } else { // Slow path.
-    insertSegment(a, i, offset, offset+size);
+  } else {
+    // Slow path.
+    insertSegment(a, i, offset, offset + size);
   }
   return ncclSuccess;
 }
@@ -278,18 +283,16 @@ void ncclShadowPoolConstruct(struct ncclShadowPool* pool) {
   pool->pages = nullptr;
 }
 
-ncclResult_t ncclShadowPoolDestruct(struct ncclShadowPool* pool) {
+ncclResult_t ncclShadowPoolDestruct(struct ncclShadowPool* pool, cudaStream_t stream) {
   if (pool->hbits != 0) {
-    cudaStream_t stream;
-    CUDACHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
-
     if (pool->count != 0) {
-      for (int i=0; i < 1<<pool->hbits; i++) {
+      for (int i = 0; i < 1 << pool->hbits; i++) {
         struct ncclShadowObject* obj = pool->table[i];
         while (obj != nullptr) {
           struct ncclShadowPage* page = obj->page;
           if (page != nullptr) {
-            if (page->freeMask == 0) { // Put full pages back into page list.
+            if (page->freeMask == 0) {
+              // Put full pages back into page list.
               page->freeMask = 1;
               page->next = pool->pages;
               pool->pages = page;
@@ -313,7 +316,6 @@ ncclResult_t ncclShadowPoolDestruct(struct ncclShadowPool* pool) {
     }
 
     cudaStreamSynchronize(stream);
-    cudaStreamDestroy(stream);
     cudaMemPoolDestroy(pool->memPool);
   }
   return ncclSuccess;
@@ -325,10 +327,8 @@ static void hashInsert(struct ncclShadowPool* pool, struct ncclShadowObject* obj
   pool->table[b] = obj;
 }
 
-ncclResult_t ncclShadowPoolAlloc(
-    struct ncclShadowPool* pool, size_t size, void** outDevObj, void** outHostObj,
-    cudaStream_t stream
-  ) {
+ncclResult_t ncclShadowPoolAlloc(struct ncclShadowPool* pool, size_t size, void** outDevObj, void** outHostObj,
+                                 cudaStream_t stream) {
   if (size == 0) {
     if (outDevObj) *outDevObj = nullptr;
     if (outHostObj) *outHostObj = nullptr;
@@ -342,21 +342,23 @@ ncclResult_t ncclShadowPoolAlloc(
     props.handleTypes = cudaMemHandleTypeNone;
     props.location.type = cudaMemLocationTypeDevice;
     cudaGetDevice(&props.location.id);
+    props.maxSize = (size_t)ncclParamShadowMempoolMaxSize();
     CUDACHECK(cudaMemPoolCreate(&pool->memPool, &props));
 
     pool->hbits = hbits = 4;
-    pool->table = (struct ncclShadowObject**)malloc(sizeof(struct ncclShadowObject*)<<hbits);
-    for (int i=0; i < 1<<hbits; i++) pool->table[i] = nullptr;
+    pool->table = (struct ncclShadowObject**)malloc(sizeof(struct ncclShadowObject*) << hbits);
+    for (int i = 0; i < 1 << hbits; i++) pool->table[i] = nullptr;
   }
 
   // Check for hash table size increase before inserting. Maintain 2:1 object:bucket ratio.
-  if (pool->count+1 > 2<<hbits) {
+  if (pool->count + 1 > 2 << hbits) {
     struct ncclShadowObject** table0 = pool->table;
-    struct ncclShadowObject** table1 = (struct ncclShadowObject**)malloc(sizeof(struct ncclShadowObject*)<<(hbits+1));
+    struct ncclShadowObject** table1 =
+      (struct ncclShadowObject**)malloc(sizeof(struct ncclShadowObject*) << (hbits + 1));
     pool->table = table1;
-    pool->hbits = hbits+1;
-    for (int i1=0; i1 < 2<<hbits; i1++) table1[i1] = nullptr;
-    for (int i0=0; i0 < 1<<hbits; i0++) {
+    pool->hbits = hbits + 1;
+    for (int i1 = 0; i1 < 2 << hbits; i1++) table1[i1] = nullptr;
+    for (int i0 = 0; i0 < 1 << hbits; i0++) {
       struct ncclShadowObject* obj = table0[i0];
       while (obj) {
         struct ncclShadowObject* next = obj->next;
@@ -369,18 +371,18 @@ ncclResult_t ncclShadowPoolAlloc(
   }
 
   struct ncclShadowPage* page;
-  void *devObj;
-  if ((64<<10)/size >= 3) {
+  void* devObj;
+  if ((64 << 10) / size >= 3) {
     int shift = std::max<int>(0, (int)log2Down(size) + 1 - 4);
-    int pageObjSize = ((size + (1<<shift)-1)>>shift)<<shift;
+    int pageObjSize = ((size + (1 << shift) - 1) >> shift) << shift;
     struct ncclShadowPage** pagePtr = &pool->pages;
     while (true) {
       page = *pagePtr;
       if (page == nullptr) {
-        size_t pageSize = std::min<size_t>(64<<10, 64*pageObjSize);
+        size_t pageSize = std::min<size_t>(64 << 10, 64 * pageObjSize);
         page = (struct ncclShadowPage*)malloc(sizeof(struct ncclShadowPage));
         page->objSize = pageObjSize;
-        page->freeMask = uint64_t(-1)>>(64 - pageSize/pageObjSize);
+        page->freeMask = uint64_t(-1) >> (64 - pageSize / pageObjSize);
         page->next = pool->pages;
         pool->pages = page;
         CUDACHECK(cudaMallocFromPoolAsync(&page->devObjs, pageSize, pool->memPool, stream));
@@ -389,7 +391,7 @@ ncclResult_t ncclShadowPoolAlloc(
       }
       if (page->objSize == pageObjSize) {
         int slot = popFirstOneBit(&page->freeMask);
-        devObj = (char*)page->devObjs + slot*pageObjSize;
+        devObj = (char*)page->devObjs + slot * pageObjSize;
         if (page->freeMask == 0) *pagePtr = page->next; // Remove full page from list.
         break;
       }
@@ -401,12 +403,11 @@ ncclResult_t ncclShadowPoolAlloc(
     CUDACHECK(cudaMemsetAsync(devObj, 0, size, stream));
   }
 
-  struct ncclShadowObject* obj = (struct ncclShadowObject*)malloc(
-    sizeof(struct ncclShadowObject) + /*padding=*/alignof(max_align_t)-1 + size
-  );
+  struct ncclShadowObject* obj =
+    (struct ncclShadowObject*)malloc(sizeof(struct ncclShadowObject) + /*padding=*/alignof(max_align_t) - 1 + size);
   obj->page = page;
   obj->devObj = devObj;
-  obj->hostObj = alignUp((char*)(obj+1), alignof(max_align_t));
+  obj->hostObj = alignUp((char*)(obj + 1), alignof(max_align_t));
   memset(obj->hostObj, 0, size);
   hashInsert(pool, obj);
   pool->count += 1;
@@ -435,8 +436,8 @@ ncclResult_t ncclShadowPoolFree(struct ncclShadowPool* pool, void* devObj, cudaS
       obj->page->next = pool->pages;
       pool->pages = obj->page;
     }
-    int slot = ((char*)obj->devObj - (char*)obj->page->devObjs)/obj->page->objSize;
-    obj->page->freeMask |= uint64_t(1)<<slot;
+    int slot = ((char*)obj->devObj - (char*)obj->page->devObjs) / obj->page->objSize;
+    obj->page->freeMask |= uint64_t(1) << slot;
   } else {
     CUDACHECK(cudaFreeAsync(devObj, stream));
   }

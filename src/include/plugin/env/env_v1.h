@@ -25,11 +25,11 @@ typedef struct {
   // Input
   //  - name: environment variable name
   // Output
-  //  - returns: pointer to environment variable value string, or NULL if not found. The plugin is responsible for keeping the
-  //             returned value (address) valid until it is no longer needed by NCCL. This happens when NCCL calls ``finalize``
-  //             or ``getEnv`` again on the same variable name. In any other case, modifying the variable (e.g., through
-  //             ``setenv``) is considered undefined behavior since NCCL might access the returned address after the plugin has
-  //             reset the variable.
+  //  - returns: pointer to environment variable value string, or NULL if not found. The plugin is responsible for
+  //             keeping the returned value (address) valid until it is no longer needed by NCCL. This happens when
+  //             NCCL calls ``finalize`` or ``getEnv`` again on the same variable name. In any other case, modifying
+  //             the variable (e.g., through ``setenv``) is considered undefined behavior since NCCL might access the
+  //             returned address after the plugin has reset the variable.
   const char* (*getEnv)(const char* name);
 } ncclEnv_v1_t;
 

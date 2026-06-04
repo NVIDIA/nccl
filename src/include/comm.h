@@ -8,7 +8,7 @@
 #ifndef NCCL_COMM_H_
 #define NCCL_COMM_H_
 
-//#include "transport.h"
+// #include "transport.h"
 #include "p2p.h"
 #include "collectives.h"
 #include "nccl_tuner.h"
@@ -32,10 +32,10 @@
 
 #if CUDART_VERSION < 9000
 struct cudaLaunchParams {
-  void *func;
+  void* func;
   dim3 gridDim;
   dim3 blockDim;
-  void **args;
+  void** args;
   size_t sharedMem;
   cudaStream_t stream;
 };
@@ -54,10 +54,10 @@ struct ncclSendMem {
   union {
     struct {
       uint64_t head;
-      char pad1[CACHE_LINE_SIZE-sizeof(uint64_t)];
+      char pad1[CACHE_LINE_SIZE - sizeof(uint64_t)];
       void* ptrExchange;
       uint64_t redOpArgExchange[2];
-      char pad2[CACHE_LINE_SIZE-sizeof(void*)-2*sizeof(uint64_t)];
+      char pad2[CACHE_LINE_SIZE - sizeof(void*) - 2 * sizeof(uint64_t)];
       int offsFifo[NCCL_STEPS];
     };
     char pad3[MEM_ALIGN];
@@ -68,7 +68,7 @@ struct ncclRecvMem {
   union {
     struct {
       uint64_t tail;
-      char pad1[CACHE_LINE_SIZE-sizeof(uint64_t)];
+      char pad1[CACHE_LINE_SIZE - sizeof(uint64_t)];
       struct ncclConnFifo connFifo[NCCL_STEPS];
       int flush; // For GDRCopy-based flush
     };
@@ -76,9 +76,12 @@ struct ncclRecvMem {
   };
 };
 
-enum helperThreadState {ThreadStart, ThreadStop};
+enum helperThreadState {
+  ThreadStart,
+  ThreadStop
+};
 
-#define NCCL_IPC_POOL_SIZE (2*NCCL_MAX_LOCAL_RANKS*NCCL_MAX_OPS)
+#define NCCL_IPC_POOL_SIZE (2 * NCCL_MAX_LOCAL_RANKS * NCCL_MAX_OPS)
 
 struct ncclUserRedOp {
   int freeNext; // -1=allocated, otherwise index of next free entry in array
@@ -94,24 +97,24 @@ struct ncclNodeRanks {
 struct cliqueInfo {
   int id;
   int size;
-  int *ranks;
+  int* ranks;
 };
 
 struct ncclDestructor {
   struct ncclDestructor* next;
   void* obj;
   struct ncclComm* comm;
-  ncclResult_t(*fn)(struct ncclDestructor* me);
+  ncclResult_t (*fn)(struct ncclDestructor* me);
 };
 
 struct ncclCommCallback {
   struct ncclCommCallback* next;
-  ncclResult_t(*fn)(struct ncclComm* comm, struct ncclCommCallback* cb);
+  ncclResult_t (*fn)(struct ncclComm* comm, struct ncclCommCallback* cb);
 };
 struct ncclCommEventCallback {
   struct ncclCommEventCallback* next;
   cudaEvent_t event;
-  ncclResult_t(*fn)(struct ncclComm* comm, struct ncclCommEventCallback* cb);
+  ncclResult_t (*fn)(struct ncclComm* comm, struct ncclCommEventCallback* cb);
 };
 
 struct ncclSharedResources {
@@ -180,7 +183,7 @@ struct alignas(16) ncclWorkList {
 };
 
 struct ncclCollnetHandleList {
-  struct ncclCollnetHandleList *next;
+  struct ncclCollnetHandleList* next;
   void* collnetHandle;
   size_t size;
   const void* buffer;
@@ -230,7 +233,6 @@ struct ncclTaskColl {
   void* eventHandle;
   uint8_t nChannels;
 };
-
 
 struct ncclTaskBcast {
   struct ncclTaskBcast* next;
@@ -358,14 +360,14 @@ struct ncclKernelPlan {
 
 struct ncclTaskCollSorter {
   static constexpr int UnitLog2 = 10; // 1K
-  static constexpr size_t UnitSize = 1<<UnitLog2;
+  static constexpr size_t UnitSize = 1 << UnitLog2;
   static constexpr int MaxLog2 = 30; // 1GB
-  static constexpr size_t MaxSize = 1ull<<MaxLog2;
+  static constexpr size_t MaxSize = 1ull << MaxLog2;
   // Number of bins between powers of 2. For 4 bins, the worst case out-of-order
   // relative magnitude is (5/4)-1 = 25%
   static constexpr int BitsPerPow2 = 2;
-  static constexpr int BinsPerPow2 = 1<<BitsPerPow2;
-  static constexpr int BinCount = 1 + (MaxLog2-UnitLog2)*BinsPerPow2;
+  static constexpr int BinsPerPow2 = 1 << BitsPerPow2;
+  static constexpr int BinCount = 1 + (MaxLog2 - UnitLog2) * BinsPerPow2;
 
   struct ncclTaskColl* head;
   struct ncclTaskColl* tail;
@@ -376,25 +378,23 @@ struct ncclTaskCollSorter {
   struct ncclTaskColl** bins[BinCount];
 };
 
-inline void ncclTaskCollSorterInsert(
-    struct ncclTaskCollSorter* me, struct ncclTaskColl* x, size_t size
-  ) {
+inline void ncclTaskCollSorterInsert(struct ncclTaskCollSorter* me, struct ncclTaskColl* x, size_t size) {
   constexpr int UnitLog2 = ncclTaskCollSorter::UnitLog2;
   constexpr size_t MaxSize = ncclTaskCollSorter::MaxSize;
   constexpr int BitsPerPow2 = ncclTaskCollSorter::BitsPerPow2;
   constexpr int BinCount = ncclTaskCollSorter::BinCount;
   // Value is bounded by MaxSize>>UnitLog2 which fits in uint32_t
-  int bin = u32fpEncode(static_cast<uint32_t>(std::min(MaxSize, size)>>UnitLog2), BitsPerPow2);
-  bin = BinCount-1 - bin; // descending bin
+  int bin = u32fpEncode(static_cast<uint32_t>(std::min(MaxSize, size) >> UnitLog2), BitsPerPow2);
+  bin = BinCount - 1 - bin; // descending bin
 
   if (me->bins[bin] == nullptr) {
     if (me->binEdge <= bin) {
-      me->binEdge = bin+1;
+      me->binEdge = bin + 1;
       me->bins[bin] = me->tail ? &me->tail->next : &me->head;
       me->tail = x;
     } else {
       // Find successor non-empty bin after this one.
-      int succ = bin+1;
+      int succ = bin + 1;
       while (me->bins[succ] == nullptr) succ++;
       // What was our successor's head's previous is now our head's previous.
       me->bins[bin] = me->bins[succ];
@@ -422,7 +422,7 @@ inline struct ncclTaskColl* ncclTaskCollSorterDequeueAll(struct ncclTaskCollSort
 ////////////////////////////////////////////////////////////////////////////////
 
 struct ncclCudaStreamList {
-  struct ncclCudaStreamList *next;
+  struct ncclCudaStreamList* next;
   cudaStream_t stream;
 };
 
@@ -438,7 +438,7 @@ struct ncclKernelPlanner {
     struct ncclIntruQueue<struct ncclTaskBcast, &ncclTaskBcast::next> bcastQueue;
   };
   struct ncclTaskCollSorter collSorter;
-  struct Peer* peers/*[nRanks]*/;
+  struct Peer* peers /*[nRanks]*/;
   int nTasksColl, nTasksP2p, nTasksBcast, nTasksRma;
   int nTasksP2pSend, nTasksP2pRecv;
 
@@ -465,7 +465,7 @@ struct ncclKernelPlanner {
 
   struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next> collTaskQueue;
   struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next> collCeTaskQueue;
-  struct ncclIntruQueue<struct ncclTaskRma, &ncclTaskRma::next> *rmaTaskQueues; // Per-context queue for RMA tasks
+  struct ncclIntruQueue<struct ncclTaskRma, &ncclTaskRma::next>* rmaTaskQueues; // Per-context queue for RMA tasks
   struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next> collSymTaskQueue;
   struct ncclIntruQueue<struct ncclWorkList, &ncclWorkList::next> collWorkQueue;
   struct ncclIntruQueue<struct ncclWorkList, &ncclWorkList::next> tmpCollWorkQueue;
@@ -537,14 +537,16 @@ struct ncclComm {
   struct ncclProxyConnector* gproxyConn;
   struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next> legacyRegCleanupQueue;
   bool peerInfoValid;
-  float minNetBw;
+  int minNetCount; // Minimum number of network devices local to a rank
+  float minNetBw; // Minimum bw of any network device local to a rank
 
   ncclNet_t* ncclNet;
   void* netContext;
   void* ginContext;
-  void* rmaGinContext;
+  void* rmaContext;
   int netPluginIndex;
   int ginPluginIndex;
+  int rmaPluginIndex;
   int ncclNetVer;
   ncclNetDeviceType netDeviceType;
   ncclCollNet_t* ncclCollNet;
@@ -561,7 +563,8 @@ struct ncclComm {
   bool directMode; // if any process manages more than one local rank
   int cuMemSupport;
 
-  uint64_t magic; // Magic number for all network communication. Not a security key -- only goal is to detect mismatches.
+  uint64_t magic; // Magic number for all network communication. Not a security key -- only goal is to detect
+                  // mismatches.
 
   uint64_t commHash;
   int rank;    // my rank in the communicator
@@ -590,7 +593,6 @@ struct ncclComm {
   struct ncclNodeRanks* nodeRanks;
   // MNNVL: Multi-Node NVLink
   int MNNVL; // true when MNNVL is available
-  bool isMultiRankGpu; // true when multiple ranks use the same GPU device on the same host
   struct cliqueInfo clique; // Our MNNVL clique information
   int cliqueRank; // Our rank within the MNNVL clique
 
@@ -682,9 +684,10 @@ struct ncclComm {
   int proxyRefCountOld; /* store proxy post-atomic-sub refcount */
   // Whether this communicator uses collNet
   bool isOneRPN;
-  uint8_t collNetSupportMatrix[4/*sum,prod,max,min*/][ncclNumTypes];
+  uint8_t collNetSupportMatrix[4 /*sum,prod,max,min*/][ncclNumTypes];
   int* collNetHeads;
   int collNetHeadsNum;
+  int collNetChainSupport;
   int* collNetDenseToUserRank;
   int* collNetUserToDenseRank;
   /* sharable collNet proxy progress resource. */
@@ -710,7 +713,10 @@ struct ncclComm {
   // Subset of those in groupNext list. Holds 0x1 if not needing preconnect.
   struct ncclComm* preconnectNext;
   int localPersistentRefs; // number of persistent plan-lists capturing this comm
-  struct P2pSchedulePair { int sendRank; int recvRank; } *p2pSchedule;
+  struct P2pSchedulePair {
+    int sendRank;
+    int recvRank;
+  }* p2pSchedule;
 
   struct ncclKernelPlanner planner;
   void* ringTasks; // An array of nRanks pointers used in ring sorting rooted collectives (bcast)
@@ -724,7 +730,7 @@ struct ncclComm {
 
   // user-created reduction ops
   int userRedOpCapacity, userRedOpFreeHead;
-  ncclUserRedOp *userRedOps;
+  ncclUserRedOp* userRedOps;
 
   // Queue of things for the main thread to do
   int reclaimSteps;
@@ -738,7 +744,7 @@ struct ncclComm {
   // shared structures for finalization
   int finalizeRankCnt;
   // group job to support multi-thread FT
-  struct ncclGroupJob *groupJob;
+  struct ncclGroupJob* groupJob;
 
   // Flag indicating if this communicator shares resources with parent or children
   bool shareResources;
@@ -746,7 +752,7 @@ struct ncclComm {
   // Tuning plugin
   int tunerPluginLoaded;
   ncclTuner_t* tuner;
-  void *tunerContext;
+  void* tunerContext;
 
   // Profiler plugin
   void* profilerContext;
@@ -773,6 +779,8 @@ struct ncclComm {
   int symmetricSupport;
   bool useNetPXN;
   bool useGdr;
+  bool hasMloPart; // if mlopart is used
+  bool hasMultiRankNvml; // if multiple ranks are using the NVML device
   ncclGinConnectionType_t globalGinSupport;
   bool globalRmaProxySupport;
   bool hostRmaSupport;
@@ -789,10 +797,11 @@ struct ncclComm {
 };
 
 static_assert(offsetof(struct ncclComm, startMagic) == 0, "startMagic must be the first field of ncclComm");
-static_assert(offsetof(struct ncclComm, endMagic) == sizeof(struct ncclComm) - sizeof(uint64_t), "endMagic must be the last field of ncclComm");
+static_assert(offsetof(struct ncclComm, endMagic) == sizeof(struct ncclComm) - sizeof(uint64_t),
+              "endMagic must be the last field of ncclComm");
 
 enum ncclLaunchMode {
-  ncclLaunchModeInvalid=0,
+  ncclLaunchModeInvalid = 0,
   ncclLaunchModeParallel,
   ncclLaunchModeGroup
 };
@@ -816,7 +825,7 @@ inline ncclResult_t ncclCommPollCallbacks(struct ncclComm* comm, bool waitSome) 
   return ncclSuccess;
 }
 
-inline ncclResult_t ncclCommPollEventCallbacks(struct ncclComm *comm, bool waitSome) {
+inline ncclResult_t ncclCommPollEventCallbacks(struct ncclComm* comm, bool waitSome) {
   ncclResult_t result = ncclSuccess;
   cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
   CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
@@ -847,15 +856,16 @@ inline void ncclCommIntraBarrierIn(struct ncclComm* comm, uint32_t x) {
   int phase = comm->intraBarrierPhase;
   if (comm->intraRanks == 1) {
     // Release everyone (just me).
-    comm->intraBarrierGate = (uint64_t(x)<<32) | (phase^1);
+    comm->intraBarrierGate = (uint64_t(x) << 32) | (phase ^ 1);
   } else {
     struct ncclComm* comm0 = comm->intraComm0;
-    uint64_t count = COMPILER_ATOMIC_ADD_FETCH(&comm0->intraBarrierCounter, (uint64_t(x)<<32) + 1, std::memory_order_release);
+    uint64_t count =
+      COMPILER_ATOMIC_ADD_FETCH(&comm0->intraBarrierCounter, (uint64_t(x) << 32) + 1, std::memory_order_release);
     if (uint32_t(count) == uint32_t(comm->intraRanks)) {
       // Reset.
       COMPILER_ATOMIC_STORE(&comm0->intraBarrierCounter, 0ULL, std::memory_order_relaxed);
       // Release everyone.
-      COMPILER_ATOMIC_STORE(&comm0->intraBarrierGate, (count>>32<<32) | (phase^1), std::memory_order_release);
+      COMPILER_ATOMIC_STORE(&comm0->intraBarrierGate, (count >> 32 << 32) | (phase ^ 1), std::memory_order_release);
     }
   }
 }
@@ -870,22 +880,21 @@ inline uint32_t ncclCommIntraBarrierOut(struct ncclComm* comm) {
     uint64_t t0 = clockNano();
     do {
       // Spin vigorously for first 5us.
-      if (clockNano()-t0 >= 5*1000) std::this_thread::yield();
+      if (clockNano() - t0 >= 5 * 1000) std::this_thread::yield();
       gate = COMPILER_ATOMIC_LOAD(&comm0->intraBarrierGate, std::memory_order_relaxed);
     } while ((gate & 1) != phase);
   }
   if (comm->intraRanks != 1) std::atomic_thread_fence(std::memory_order_acquire);
-  return gate>>32;
+  return gate >> 32;
 }
 
 // Scrambles the bits of non-builtin values of ncclRedOp_t according to the
 // communicator memory address. Used to catch bugs so that integer handles
 // associated with this communicator won't collide with handles of other
 // communicatrs. This function is its own inverse.
-static inline ncclRedOp_t ncclUserRedOpMangle(ncclComm *comm, ncclRedOp_t op) {
+static inline ncclRedOp_t ncclUserRedOpMangle(ncclComm* comm, ncclRedOp_t op) {
   // Preserve the built-in values.
-  if(int(op) < int(ncclNumOps))
-    return op;
+  if (int(op) < int(ncclNumOps)) return op;
   uint64_t h = reinterpret_cast<uint64_t>(comm);
   h ^= h >> 32;
   h *= 0x9e3779b97f4a7c13u; // Knuth's 64-bit magical hash constant

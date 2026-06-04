@@ -284,6 +284,8 @@ int run_example(int argc, char *argv[],
     printf("Failed to initialize backend\n");
     return 1;
   }
+  fflush(stdout);
+  fflush(stderr);
 
   // 3. Start the given example code in parallel
   if (run_parallel(ctx, ncclExample) != 0) {

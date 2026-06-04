@@ -1,16 +1,56 @@
 # NCCL EP Example/Library CMake Configuration
 
-if(DEFINED CMAKE_CUDA_ARCHITECTURES)
-  foreach(arch IN LISTS CMAKE_CUDA_ARCHITECTURES)
-    if(arch LESS 90)
-      message(FATAL_ERROR "NCCL_EP requires sm_90 or higher. CMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}")
+# NCCL_EP requires sm_90+. If the caller passed -DCMAKE_CUDA_ARCHITECTURES use
+# it as-is and let nvcc fail if it's below sm_90. Otherwise mirror the
+# per-CUDA-version block in the root CMakeLists.txt trimmed to Hopper+.
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES OR CMAKE_CUDA_ARCHITECTURES STREQUAL "")
+    if(CUDA_MAJOR EQUAL 11)
+        if(CUDA_MINOR LESS 8)
+            message(FATAL_ERROR "NCCL_EP requires CUDA 11.8+ for sm_90 support. Got CUDA ${CUDAToolkit_VERSION}")
+        else()
+            set(CMAKE_CUDA_ARCHITECTURES "90")
+        endif()
+    elseif(CUDA_MAJOR EQUAL 12)
+        if(CUDA_MINOR LESS 8)
+            set(CMAKE_CUDA_ARCHITECTURES "90")
+        else()
+            set(CMAKE_CUDA_ARCHITECTURES "90;100;120")
+        endif()
+    elseif(CUDA_MAJOR GREATER_EQUAL 13)
+        set(CMAKE_CUDA_ARCHITECTURES "90;100;110;120")
+    else()
+        message(FATAL_ERROR "NCCL_EP requires CUDA 11.8+ for sm_90 support. Got CUDA ${CUDAToolkit_VERSION}")
     endif()
-  endforeach()
 endif()
+message(STATUS "NCCL_EP using CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
+
+# Parse library version from include/nccl_ep.h (single source of truth).
+file(READ ${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_ep.h _NCCL_EP_HEADER_CONTENT)
+string(REGEX REPLACE ".*#define NCCL_EP_MAJOR ([0-9]+).*" "\\1" NCCL_EP_MAJOR "${_NCCL_EP_HEADER_CONTENT}")
+string(REGEX REPLACE ".*#define NCCL_EP_MINOR ([0-9]+).*" "\\1" NCCL_EP_MINOR "${_NCCL_EP_HEADER_CONTENT}")
+string(REGEX REPLACE ".*#define NCCL_EP_PATCH ([0-9]+).*" "\\1" NCCL_EP_PATCH "${_NCCL_EP_HEADER_CONTENT}")
+unset(_NCCL_EP_HEADER_CONTENT)
+message(STATUS "NCCL EP version: ${NCCL_EP_MAJOR}.${NCCL_EP_MINOR}.${NCCL_EP_PATCH}")
+
+# Build layout:
+#   NCCL_HOME          — input: NCCL core headers + libnccl.so
+#   NCCL_EP_BUILDDIR   — output: NCCL EP artifacts
+# Defaults preserve the legacy single-tree layout under CMAKE_BINARY_DIR.
+
+set(NCCL_HOME "${CMAKE_BINARY_DIR}" CACHE PATH "NCCL core build/install directory used by NCCL EP")
+set(NCCL_EP_BUILDDIR "${CMAKE_BINARY_DIR}" CACHE PATH "NCCL EP build output directory")
+set(NCCL_INCDIR "${NCCL_HOME}/include")
+set(NCCL_LIBDIR "${NCCL_HOME}/lib")
+set(NCCL_EP_INCDIR "${NCCL_EP_BUILDDIR}/include")
+set(NCCL_EP_LIBDIR "${NCCL_EP_BUILDDIR}/lib")
 
 # Source files
 set(NCCL_EP_HOST_SRC
     nccl_ep.cc
+    device/jit/jit_utils.cc
+    device/jit/jit_cache.cc
+    device/jit/nvcc_compiler.cc
+    device/jit/jit_runtime.cc
 )
 
 set(NCCL_EP_DEVICE_SRC
@@ -35,11 +75,11 @@ set(NCCL_EP_TARGETS nccl_ep_shared nccl_ep_static)
 
 set_target_properties(nccl_ep_shared nccl_ep_static PROPERTIES
     OUTPUT_NAME "nccl_ep"
-    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+    ARCHIVE_OUTPUT_DIRECTORY "${NCCL_EP_LIBDIR}"
+    LIBRARY_OUTPUT_DIRECTORY "${NCCL_EP_LIBDIR}"
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
-    CUDA_ARCHITECTURES "90"
+    CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
     POSITION_INDEPENDENT_CODE ON
     CXX_STANDARD 17
     CXX_STANDARD_REQUIRED ON
@@ -47,31 +87,63 @@ set_target_properties(nccl_ep_shared nccl_ep_static PROPERTIES
     CUDA_STANDARD_REQUIRED ON
 )
 
+# Version the shared library:
+#   libnccl_ep.so.MAJOR.MINOR.PATCH (actual file)
+#   libnccl_ep.so.MAJOR             (SONAME; linker symlink)
+#   libnccl_ep.so                   (unversioned symlink for build/runtime loading)
 set_target_properties(nccl_ep_shared PROPERTIES
-    BUILD_RPATH "${CMAKE_BINARY_DIR}/lib"
-    INSTALL_RPATH "$ORIGIN"
+    VERSION   ${NCCL_EP_MAJOR}.${NCCL_EP_MINOR}.${NCCL_EP_PATCH}
+    SOVERSION ${NCCL_EP_MAJOR}
 )
 
-# Configurable LSA team size range for compile-time instantiation.
-# Restricting the range reduces build time during development.  Example:
-#   cmake ... -D_NCCL_EP_LSA_TEAM_SIZE_MIN=8 -D_NCCL_EP_LSA_TEAM_SIZE_MAX=8
-set(_NCCL_EP_LSA_TEAM_SIZE_MIN "4" CACHE STRING
-    "Minimum LSA team size to compile (must be multiple of 4, min 4)")
-set(_NCCL_EP_LSA_TEAM_SIZE_MAX "32" CACHE STRING
-    "Maximum LSA team size to compile (must be multiple of 4, max 32)")
-set(_NCCL_EP_NUM_LSA_TEAMS_LIST "1;2;3;4;8" CACHE STRING
-    "List of NUM_LSA_TEAMS values to compile (subset of 1 2 3 4 8)")
+# No RUNPATH baked into the artifact (matches libnccl.so's convention).
+# BUILD_WITH_INSTALL_RPATH=TRUE ensures the build-tree binary also has no
+# embedded paths, so wheel staging that copies from the build dir is safe.
+set_target_properties(nccl_ep_shared PROPERTIES
+    BUILD_WITH_INSTALL_RPATH TRUE
+    INSTALL_RPATH ""
+)
 
 set(NCCL_EP_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/device
-    ${CMAKE_BINARY_DIR}/include
-    ${CMAKE_BINARY_DIR}/include/nccl_device
-    ${CMAKE_SOURCE_DIR}/src/include
+    ${NCCL_INCDIR}
+    ${NCCL_INCDIR}/nccl_device
     ${CUDAToolkit_INCLUDE_DIRS}
     ${CUDAToolkit_INCLUDE_DIRS}/cccl
 )
+
+set(NCCL_EP_JIT_SOURCE_DIR "${NCCL_EP_INCDIR}/nccl_ep")
+set(NCCL_EP_JIT_BUILD_INCLUDE_DIR "${NCCL_EP_INCDIR}")
+set(NCCL_EP_JIT_CUDA_INCLUDE_DIR "")
+if(CUDAToolkit_INCLUDE_DIRS)
+    list(GET CUDAToolkit_INCLUDE_DIRS 0 NCCL_EP_JIT_CUDA_INCLUDE_DIR)
+endif()
+set(NCCL_EP_JIT_CONFIG_HEADER "${NCCL_EP_JIT_SOURCE_DIR}/config.h")
+set(NCCL_EP_JIT_HEADERS
+    device/hybrid_ep.cuh
+    device/device_primitives.cuh
+    device/hybridep_configs.cuh
+    device/cuda_compat_shims.cuh
+    device/scan_kernel.cuh
+    device/macros.cuh
+)
+
+file(MAKE_DIRECTORY "${NCCL_EP_JIT_SOURCE_DIR}")
+file(WRITE "${NCCL_EP_JIT_CONFIG_HEADER}"
+    "#pragma once\n"
+    "#define NCCL_EP_JIT_SOURCE_DIR \"${NCCL_EP_JIT_SOURCE_DIR}\"\n"
+    "#define NCCL_EP_JIT_BUILD_INCLUDE_DIR \"${NCCL_EP_JIT_BUILD_INCLUDE_DIR}\"\n"
+    "#define NCCL_EP_JIT_CUDA_INCLUDE_DIR \"${NCCL_EP_JIT_CUDA_INCLUDE_DIR}\"\n"
+)
+
+foreach(header IN LISTS NCCL_EP_JIT_HEADERS)
+    get_filename_component(header_dir "${header}" DIRECTORY)
+    file(MAKE_DIRECTORY "${NCCL_EP_JIT_SOURCE_DIR}/${header_dir}")
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/${header}" "${NCCL_EP_JIT_SOURCE_DIR}/${header}" COPYONLY)
+endforeach()
+configure_file(include/common.hpp "${NCCL_EP_JIT_SOURCE_DIR}/common.hpp" COPYONLY)
 
 # Allow device code to call host constexpr with --expt-relaxed-constexpr
 # Hides all symbols by default in the host compiled object files with -fvisibility=hidden
@@ -79,31 +151,43 @@ foreach(t IN LISTS NCCL_EP_TARGETS)
     target_compile_options(${t} PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
         $<$<COMPILE_LANGUAGE:CUDA>:--compiler-options=-fvisibility=hidden>
+        $<$<COMPILE_LANGUAGE:CXX>:-include>
+        $<$<COMPILE_LANGUAGE:CXX>:${NCCL_EP_JIT_CONFIG_HEADER}>
     )
-    target_compile_definitions(${t} PRIVATE
-        _NCCL_EP_LSA_TEAM_SIZE_MIN=${_NCCL_EP_LSA_TEAM_SIZE_MIN}
-        _NCCL_EP_LSA_TEAM_SIZE_MAX=${_NCCL_EP_LSA_TEAM_SIZE_MAX})
+    if(TARGET CUDA::cuda_driver)
+        target_link_libraries(${t} PUBLIC CUDA::cuda_driver)
+    else()
+        target_link_libraries(${t} PUBLIC cuda)
+    endif()
     target_include_directories(${t} PUBLIC ${NCCL_EP_INCLUDE_DIRS})
-    target_link_libraries(${t} PUBLIC nccl ${CUDAToolkit_LIBRARIES})
+    target_link_directories(${t} PUBLIC ${NCCL_LIBDIR})
+    target_link_libraries(${t} PUBLIC -lnccl)
+    target_link_libraries(${t} PUBLIC ${CUDAToolkit_LIBRARIES})
 endforeach()
 
-foreach(N IN LISTS _NCCL_EP_NUM_LSA_TEAMS_LIST)
-    foreach(t IN LISTS NCCL_EP_TARGETS)
-        target_compile_definitions(${t} PRIVATE _NCCL_EP_NUM_LSA_TEAMS_${N}=1)
-    endforeach()
-endforeach()
+# Copy headers to NCCL_EP_BUILDDIR/include (runs at configure)
+file(MAKE_DIRECTORY "${NCCL_EP_INCDIR}")
+configure_file(include/nccl_ep.h    "${NCCL_EP_INCDIR}/nccl_ep.h"    COPYONLY)
+configure_file(include/ep_enums.h   "${NCCL_EP_INCDIR}/ep_enums.h"   COPYONLY)
 
-# Copy headers to build/include (runs at configure)
-file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/include")
-configure_file(include/nccl_ep.h "${CMAKE_BINARY_DIR}/include/nccl_ep.h" COPYONLY)
-
-# Install to custom prefix
+# Install to NCCL_EP_BUILDDIR.
 install(FILES
     include/nccl_ep.h
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    include/ep_enums.h
+    DESTINATION "${NCCL_EP_INCDIR}"
+)
+
+foreach(header IN LISTS NCCL_EP_JIT_HEADERS)
+    get_filename_component(header_dir "${header}" DIRECTORY)
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/${header}"
+        DESTINATION "${NCCL_EP_INCDIR}/nccl_ep/${header_dir}"
+    )
+endforeach()
+install(FILES include/common.hpp
+    DESTINATION "${NCCL_EP_INCDIR}/nccl_ep"
 )
 
 install(TARGETS ${NCCL_EP_TARGETS}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION "${NCCL_EP_LIBDIR}"
+    ARCHIVE DESTINATION "${NCCL_EP_LIBDIR}"
 )

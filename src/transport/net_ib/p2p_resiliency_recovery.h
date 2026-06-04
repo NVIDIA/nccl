@@ -18,10 +18,14 @@ ncclResult_t ncclIbPortRecoveryClose(struct ncclIbResiliency* resCtx);
 ncclResult_t ncclIbPortRecoveryDevInit(struct ncclIbResiliency* resCtx, int devIndex, ncclIbDev* ibDev);
 ncclResult_t ncclIbPortRecoveryDevDestroy(struct ncclIbResiliency* resCtx, int devIndex);
 
-ncclResult_t ncclIbPortRecoverySenderQpsCreate(struct ncclIbResiliency* resCtx, struct ncclIbQpInfo* localResiliencyInfo, int nQps);
-ncclResult_t ncclIbPortRecoverySenderQpsToRts(struct ncclIbResiliency* resCtx, struct ncclIbConnectionMetadata* remInfo, int nQps);
+ncclResult_t ncclIbPortRecoverySenderQpsCreate(struct ncclIbResiliency* resCtx,
+                                               struct ncclIbQpInfo* localResiliencyInfo, int nQps);
+ncclResult_t ncclIbPortRecoverySenderQpsToRts(struct ncclIbResiliency* resCtx, struct ncclIbConnectionMetadata* remInfo,
+                                              int nQps);
 
-ncclResult_t ncclIbPortRecoveryReceiverQpsCreateToRts(struct ncclIbResiliency* resCtx, struct ncclIbConnectionMetadata* remInfo, struct ncclIbQpInfo* localPortRecoveryQpsInfo, int nQps);
+ncclResult_t ncclIbPortRecoveryReceiverQpsCreateToRts(struct ncclIbResiliency* resCtx,
+                                                      struct ncclIbConnectionMetadata* remInfo,
+                                                      struct ncclIbQpInfo* localPortRecoveryQpsInfo, int nQps);
 
 ncclResult_t ncclIbPortRecoveryQpsDestroy(struct ncclIbResiliency* resCtx, int nQps);
 

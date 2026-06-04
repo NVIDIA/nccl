@@ -18,24 +18,31 @@ endif
 # Default target
 all: $(EXAMPLES)
 
-# Build individual examples
+# Build individual examples (C source lives in <example>/c/)
 $(EXAMPLES):
-	$(MAKE) -C $@
+	$(MAKE) -C $@/c
 
 # Clean all build artifacts
 clean:
 	for example in $(EXAMPLES); do \
-		$(MAKE) -C $$example clean; \
+		$(MAKE) -C $$example/c clean; \
 	done
 ifneq ($(MPI),1)
-		$(MAKE) -C 03_one_device_per_process_mpi clean
+		$(MAKE) -C 03_one_device_per_process_mpi/c clean
 endif
 
 # Test all examples
 test: all
 	for example in $(EXAMPLES); do \
 		echo "Testing $$example..."; \
-		$(MAKE) -C $$example test || exit 1; \
+		$(MAKE) -C $$example/c test || exit 1; \
+	done
+
+# Install all examples
+install: all
+	for example in $(EXAMPLES); do \
+		echo "Installing $$example..."; \
+		$(MAKE) -C $$example/c install || exit 1; \
 	done
 
 # Help
@@ -47,6 +54,7 @@ help:
 	@echo "  all     - Build all examples"
 	@echo "  clean   - Clean all build artifacts"
 	@echo "  test    - Test all examples"
+	@echo "  install - Install all examples"
 	@echo "  help    - Show this help"
 	@echo ""
 	@echo "Examples:"
@@ -55,6 +63,6 @@ help:
 	@echo "  03_one_device_per_process_mpi - Create communicators using one GPU per MPI process"
 	@echo ""
 	@echo "To build/run individual examples:"
-	@echo "  make -C 01_multiple_devices_single_process"
+	@echo "  make -C 01_multiple_devices_single_process/c"
 
-.PHONY: all clean test help $(EXAMPLES)
+.PHONY: all clean test install help $(EXAMPLES)

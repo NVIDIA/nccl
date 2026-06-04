@@ -1,0 +1,12 @@
+{
+    "num_layers": 4,
+    "default_tensors": [
+        {
+            "name": "moe",
+            "dims": [256, 4096, 7168],
+            "tp_shard_dim": 1,
+            "ep_shard_dim": 0,
+            "_comment": "FFN-MOE tensor: TP shards on dim1, EP shards on dim0"
+        }
+    ]
+}

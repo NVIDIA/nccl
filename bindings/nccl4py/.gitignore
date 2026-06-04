@@ -4,8 +4,11 @@ dist/
 *.egg-info/
 
 # Cython compiled outputs
-nccl/bindings/**/*.cpp
-nccl/bindings/**/*.so
+nccl/**/*.cpp
+nccl/**/*.so
+
+nccl/ep/lib/
+nccl/ep/include/
 
 __pycache__
 

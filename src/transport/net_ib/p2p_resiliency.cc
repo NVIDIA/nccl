@@ -21,7 +21,8 @@ extern int64_t ncclParamIbTimeout();
 #define MSEC_TO_NSEC 1000000ULL
 
 // Checks if the error indicated in the given work completion is fatal or not.
-static ncclResult_t ncclIbResiliencyCheckErrorNotFatal(struct ncclIbResiliency* resCtx, struct ibv_wc *wc, int devIndex) {
+static ncclResult_t ncclIbResiliencyCheckErrorNotFatal(struct ncclIbResiliency* resCtx, struct ibv_wc* wc,
+                                                       int devIndex) {
   int nFailedDevices = 0;
   bool fatalCompletionStatus = true;
   const char* failureReason = NULL;
@@ -33,17 +34,19 @@ static ncclResult_t ncclIbResiliencyCheckErrorNotFatal(struct ncclIbResiliency* 
   }
 
   switch (wc->status) {
-    case IBV_WC_WR_FLUSH_ERR:
-    case IBV_WC_RETRY_EXC_ERR:
-      fatalCompletionStatus = false;
-      break;
-    default:
-      WARN("NET/IB: %s: Unsupported completion status %s (%d)", __func__, ibvWcStatusStr(wc->status), wc->status);
-      break;
+  case IBV_WC_WR_FLUSH_ERR:
+  case IBV_WC_RETRY_EXC_ERR:
+    fatalCompletionStatus = false;
+    break;
+  default:
+    WARN("NET/IB: Unsupported completion status %s (%d)", ibvWcStatusStr(wc->status), wc->status);
+    break;
   }
 
   if (nFailedDevices > 1) {
-    WARN("NET/IB: %s: Fatal error. Detected %d failed devices out of %d devices on the %s communicator (comm=%p). No support for more than a single failed device.", __func__, nFailedDevices, resCtx->ndevs, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
+    WARN("NET/IB: Fatal error. Detected %d failed devices out of %d devices on the %s communicator (comm=%p). No "
+         "support for more than a single failed device.",
+         nFailedDevices, resCtx->ndevs, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
     return ncclRemoteError;
   }
 
@@ -58,7 +61,7 @@ static ncclResult_t ncclIbResiliencyCheckErrorNotFatal(struct ncclIbResiliency* 
     failureReason = "Fatal error status in work completion";
   }
 
-  WARN("NET/IB: %s: The error is fatal (%s). Cannot continue.", __func__, failureReason);
+  WARN("NET/IB: The error is fatal (%s). Cannot continue.", failureReason);
   return ncclRemoteError;
 }
 
@@ -92,26 +95,34 @@ static ncclResult_t ncclIbResiliencyReplaceQps(struct ncclIbResiliency* resCtx, 
       newDevState = resCtx->devs[newDevIndex].state.load(std::memory_order_acquire);
       if (newDevState != ncclIbResiliencyDevStateOk) {
         offset++;
-        WARN("NET/IB: %s: Cannot replace QP with qpIndex=%d because the new QP (qpIndex=%d, devIndex=%d) is not on a functional device (state=%d)", __func__, failedQpIndex, newQpIndex, newDevIndex, newDevState);
+        WARN("NET/IB: Cannot replace QP with qpIndex=%d because the new QP (qpIndex=%d, devIndex=%d) is not on a "
+             "functional device (state=%d)",
+             failedQpIndex, newQpIndex, newDevIndex, newDevState);
         continue;
       }
 
-      INFO(NCCL_NET, "NET/IB: %s: Replacing QP: qpIndex=%d (qp_num=%u, devIndex=%d) to qpIndex=%d (qp_num=%u, devIndex=%d) on %s communicator (comm=%p)", __func__, failedQpIndex, resCtx->baseComm->qps[failedQpIndex].qp->qp_num, resCtx->baseComm->qps[failedQpIndex].devIndex, newQpIndex, resCtx->baseComm->qps[newQpIndex].qp->qp_num, resCtx->baseComm->qps[newQpIndex].devIndex, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
+      INFO(NCCL_NET,
+           "NET/IB: %s: Replacing QP: qpIndex=%d (qp_num=%u, devIndex=%d) to qpIndex=%d (qp_num=%u, devIndex=%d) on %s "
+           "communicator (comm=%p)",
+           __func__, failedQpIndex, resCtx->baseComm->qps[failedQpIndex].qp->qp_num,
+           resCtx->baseComm->qps[failedQpIndex].devIndex, newQpIndex, resCtx->baseComm->qps[newQpIndex].qp->qp_num,
+           resCtx->baseComm->qps[newQpIndex].devIndex, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
       activeQps[qpIndex] = &resCtx->baseComm->qps[newQpIndex];
       replaced = true;
 
     } while (replaced == false && newQpIndex != failedQpIndex);
 
     if (!replaced) {
-      WARN("NET/IB: %s: Could not find a replacement QP for the failed QP with qpIndex=%d (devIndex=%d)", __func__, failedQpIndex, failedQp->devIndex);
+      WARN("NET/IB: Could not find a replacement QP for the failed QP with qpIndex=%d (devIndex=%d)", failedQpIndex,
+           failedQp->devIndex);
       return ncclInternalError;
     }
-
   }
   return ncclSuccess;
 }
 
-static ncclResult_t ncclIbResiliencySendRequestInit(struct ncclIbResiliencySend* sendResCtx, ncclIbRequest* request, int devIndex) {
+static ncclResult_t ncclIbResiliencySendRequestInit(struct ncclIbResiliencySend* sendResCtx, ncclIbRequest* request,
+                                                    int devIndex) {
   int slot = request->id % NET_IB_MAX_REQUESTS;
   struct ncclIbResiliencyRequestSend* failedSendRequest = &sendResCtx->failedRequests[slot];
 
@@ -121,22 +132,33 @@ static ncclResult_t ncclIbResiliencySendRequestInit(struct ncclIbResiliencySend*
       // It might be that a different send request that is part of this
       // multi-send request already got an error and is being replayed.
       // No need to initate a new tracking.
-      INFO(NCCL_NET, "NET/IB: %s: No need to add this failed request (req=%p, comm=%p, id=%ld) while another request (req=%p, comm=%p, id=%ld) is already being tracked in the same slot (slot=%d).", __func__, request, request->base, request->id, failedSendRequest->request, failedSendRequest->request->base, failedSendRequest->request->id, slot);
+      INFO(NCCL_NET,
+           "NET/IB: %s: No need to add this failed request (req=%p, comm=%p, id=%ld) while another request (req=%p, "
+           "comm=%p, id=%ld) is already being tracked in the same slot (slot=%d).",
+           __func__, request, request->base, request->id, failedSendRequest->request, failedSendRequest->request->base,
+           failedSendRequest->request->id, slot);
       return ncclSuccess;
     } else {
       // The request was already replayed and released. The CQE should be ignored.
-      INFO(NCCL_NET, "NET/IB: %s: Attempting to initiate a replay protocol but the failed request was already handled (req=%p, comm=%p, id=%ld, slot=%d, req.type=%s).", __func__, request, request->base, request->id, slot, ncclIbReqTypeStr[request->type]);
+      INFO(NCCL_NET,
+           "NET/IB: %s: Attempting to initiate a replay protocol but the failed request was already handled (req=%p, "
+           "comm=%p, id=%ld, slot=%d, req.type=%s).",
+           __func__, request, request->base, request->id, slot, ncclIbReqTypeStr[request->type]);
       return ncclSuccess;
     }
   }
 
   if (request->id + 1 <= failedSendRequest->id) {
-    WARN("NET/IB: %s: Attempting to initiate a replay using an old request (req=%p, comm=%p, id=%ld, slot=%d, failedSendRequest.id=%ld).", __func__, request, request->base, request->id, slot, failedSendRequest->id);
+    WARN("NET/IB: Attempting to initiate a replay using an old request (req=%p, comm=%p, id=%ld, slot=%d, "
+         "failedSendRequest.id=%ld).",
+         request, request->base, request->id, slot, failedSendRequest->id);
     return ncclInternalError;
   }
 
   if (request->type != NCCL_NET_IB_REQ_SEND) {
-    WARN("NET/IB: %s: Attempting to initiate a failed request using a '%s' request while expecting a 'send' request (req=%p, comm=%p, id=%ld, slot=%d, failedSendRequest.id=%ld).", __func__, ncclIbReqTypeStr[request->type], request, request->base, request->id, slot, failedSendRequest->id);
+    WARN("NET/IB: Attempting to initiate a failed request using a '%s' request while expecting a 'send' request "
+         "(req=%p, comm=%p, id=%ld, slot=%d, failedSendRequest.id=%ld).",
+         ncclIbReqTypeStr[request->type], request, request->base, request->id, slot, failedSendRequest->id);
     return ncclInternalError;
   }
 
@@ -145,21 +167,28 @@ static ncclResult_t ncclIbResiliencySendRequestInit(struct ncclIbResiliencySend*
   failedSendRequest->errorInfo.devIndex = devIndex;
   failedSendRequest->errorInfo.time = clockNano();
   failedSendRequest->failedAttempts = 0;
-  failedSendRequest->id = request->id+1;
+  failedSendRequest->id = request->id + 1;
   sendResCtx->base.outstandingRequests++;
   sendResCtx->base.inProgress = true;
-  INFO(NCCL_NET, "NET/IB: %s: Tracking a new failed send request (req=%p, comm=%p, id=%ld, slot=%d, devIndex=%d, time=%ld, total tracked requests: %d).", __func__, request, request->base, request->id, slot, devIndex, failedSendRequest->errorInfo.time, sendResCtx->base.outstandingRequests);
+  INFO(NCCL_NET,
+       "NET/IB: %s: Tracking a new failed send request (req=%p, comm=%p, id=%ld, slot=%d, devIndex=%d, time=%ld, total "
+       "tracked requests: %d).",
+       __func__, request, request->base, request->id, slot, devIndex, failedSendRequest->errorInfo.time,
+       sendResCtx->base.outstandingRequests);
   return ncclSuccess;
 }
 
-static ncclResult_t ncclIbResiliencySendRequestFree(struct ncclIbResiliencySend* sendResCtx, struct ncclIbResiliencyRequestSend* failedSendRequest) {
+static ncclResult_t ncclIbResiliencySendRequestFree(struct ncclIbResiliencySend* sendResCtx,
+                                                    struct ncclIbResiliencyRequestSend* failedSendRequest) {
   assert(failedSendRequest != NULL);
   if (failedSendRequest->request == NULL) {
     int slot = failedSendRequest - sendResCtx->failedRequests;
-    WARN("NET/IB: %s: Attempting to free a non-existent failed request (slot=%d).", __func__, slot);
+    WARN("NET/IB: Attempting to free a non-existent failed request (slot=%d).", slot);
     return ncclInternalError;
   }
-  INFO(NCCL_NET, "NET/IB: %s: Done handling failed send request (req=%p, comm=%p, id=%ld, slot=%ld).", __func__, failedSendRequest->request, failedSendRequest->request->base, failedSendRequest->request->id, failedSendRequest->request->id % NET_IB_MAX_REQUESTS);
+  INFO(NCCL_NET, "NET/IB: %s: Done handling failed send request (req=%p, comm=%p, id=%ld, slot=%ld).", __func__,
+       failedSendRequest->request, failedSendRequest->request->base, failedSendRequest->request->id,
+       failedSendRequest->request->id % NET_IB_MAX_REQUESTS);
 
   // Note that ID is not reset to allow ignoring old CQEs that might still be
   // in the CQ even after the failed send request was handled completely and
@@ -176,64 +205,75 @@ static ncclResult_t ncclIbResiliencySendRequestFree(struct ncclIbResiliencySend*
 // Function to repost a given request.
 static ncclResult_t ncclIbResiliencyRepostRequest(struct ncclIbRequest* request) {
   if (request->type == NCCL_NET_IB_REQ_UNUSED) {
-    WARN("NET/IB: %s: Attempting to repost an unused request (id=%ld).", __func__, request->id);
+    WARN("NET/IB: Attempting to repost an unused request (id=%ld).", request->id);
     return ncclInternalError;
   }
   int slot = request->id % NET_IB_MAX_REQUESTS;
   if (request->type == NCCL_NET_IB_REQ_SEND) {
-      struct ncclIbResiliencySend* sendResCtx = (struct ncclIbResiliencySend*)request->base->resiliency;
-      struct ncclIbSendComm* sendComm = (struct ncclIbSendComm*)request->base;
-      struct ncclIbRequest** sendReqs = sendComm->sendReqs[slot];
-      for (int r = 0; r < request->nreqs; r++) {
-        // Clear all event counters and later on increment only the required
-        // ones based on the probing results on which QP a retransmission is
-        // required.
-        memset(sendReqs[r]->events, 0, sizeof(sendReqs[r]->events));
+    struct ncclIbResiliencySend* sendResCtx = (struct ncclIbResiliencySend*)request->base->resiliency;
+    struct ncclIbSendComm* sendComm = (struct ncclIbSendComm*)request->base;
+    struct ncclIbRequest** sendReqs = sendComm->sendReqs[slot];
+    for (int r = 0; r < request->nreqs; r++) {
+      // Clear all event counters and later on increment only the required
+      // ones based on the probing results on which QP a retransmission is
+      // required.
+      memset(sendReqs[r]->events, 0, sizeof(sendReqs[r]->events));
 
-        // Populate events
-        int nqps = ncclIbCommBaseGetNqpsPerRequest(sendReqs[r]->base);
-        int qpIndex = -1;
-        ncclIbQp* qp = NULL;
-        for (int i = 0; i < nqps; i++) {
-          // TODO: This code does not handle the case where a send request fails twice!
-          // If that device that is used for retransmission fails during retransmission,
-          // the logic here will retrieve the QP that was used for the first send attempt
-          // and not the QP that was used for the second send attempt! Causing
-          // probably data corruption or a hang.
-          NCCLCHECK(ncclIbCommBaseGetQpForRequest(sendReqs[r]->base, sendReqs[r]->id, i, &qp, &qpIndex));
+      // Populate events
+      int nqps = ncclIbCommBaseGetNqpsPerRequest(sendReqs[r]->base);
+      int qpIndex = -1;
+      ncclIbQp* qp = NULL;
+      for (int i = 0; i < nqps; i++) {
+        // TODO: This code does not handle the case where a send request fails twice!
+        // If that device that is used for retransmission fails during retransmission,
+        // the logic here will retrieve the QP that was used for the first send attempt
+        // and not the QP that was used for the second send attempt! Causing
+        // probably data corruption or a hang.
+        NCCLCHECK(ncclIbCommBaseGetQpForRequest(sendReqs[r]->base, sendReqs[r]->id, i, &qp, &qpIndex));
 
-          // Selective Retransmission:
-          // If the probing result shows that the data was delivered successfully on this QP,
-          // we don't need to retransmit it.
-          if (sendResCtx->probingResults[slot][qpIndex] == true) {
-            INFO(NCCL_NET, "NET/IB: %s: Skipping retransmission on QP index %d (req=%p, comm=%p, id=%ld, slot=%d) as it was already delivered.", __func__, qpIndex, sendReqs[r], sendReqs[r]->base, sendReqs[r]->id, slot);
-            continue;
-          }
-
-          INFO(NCCL_NET, "NET/IB: %s: Retransmitting reqIndex=%d on qp_num=%u (req=%p, comm=%p, id=%ld, slot=%d) as it was not delivered.", __func__, r, qp->qp->qp_num, sendReqs[r], sendReqs[r]->base, sendReqs[r]->id, slot);
-          // Reset the sentData for this QP since we are going to retransmit it.
-          sendReqs[r]->send.sentData[qpIndex] = false;
-          ncclIbAddEvent(sendReqs[r], qp->devIndex);
+        // Selective Retransmission:
+        // If the probing result shows that the data was delivered successfully on this QP,
+        // we don't need to retransmit it.
+        if (sendResCtx->probingResults[slot][qpIndex] == true) {
+          INFO(NCCL_NET,
+               "NET/IB: %s: Skipping retransmission on QP index %d (req=%p, comm=%p, id=%ld, slot=%d) as it was "
+               "already delivered.",
+               __func__, qpIndex, sendReqs[r], sendReqs[r]->base, sendReqs[r]->id, slot);
+          continue;
         }
+
+        INFO(NCCL_NET,
+             "NET/IB: %s: Retransmitting reqIndex=%d on qp_num=%u (req=%p, comm=%p, id=%ld, slot=%d) as it was not "
+             "delivered.",
+             __func__, r, qp->qp->qp_num, sendReqs[r], sendReqs[r]->base, sendReqs[r]->id, slot);
+        // Reset the sentData for this QP since we are going to retransmit it.
+        sendReqs[r]->send.sentData[qpIndex] = false;
+        ncclIbAddEvent(sendReqs[r], qp->devIndex);
       }
-      INFO(NCCL_NET, "NET/IB: %s: Reposting send request (request=%p, comm=%p, id=%ld, slot=%ld, nreqs=%d)", __func__, request, request->base, request->id, request->id % NET_IB_MAX_REQUESTS, request->nreqs);
-      NCCLCHECK(ncclIbMultiSend((struct ncclIbSendComm*)request->base, slot));
+    }
+    INFO(NCCL_NET, "NET/IB: %s: Reposting send request (request=%p, comm=%p, id=%ld, slot=%ld, nreqs=%d)", __func__,
+         request, request->base, request->id, request->id % NET_IB_MAX_REQUESTS, request->nreqs);
+    NCCLCHECK(ncclIbMultiSend((struct ncclIbSendComm*)request->base, slot));
   } else if (request->type == NCCL_NET_IB_REQ_RECV) {
-    INFO(NCCL_NET, "NET/IB: %s: Reposting CTS (request=%p, comm=%p, id=%ld, slot=%ld)", __func__, request, request->base, request->id, request->id % NET_IB_MAX_REQUESTS);
+    INFO(NCCL_NET, "NET/IB: %s: Reposting CTS (request=%p, comm=%p, id=%ld, slot=%ld)", __func__, request,
+         request->base, request->id, request->id % NET_IB_MAX_REQUESTS);
     NCCLCHECK(ncclIbPostFifo((struct ncclIbRecvComm*)request->base, request, slot));
   } else {
-    WARN("NET/IB: %s: Unsupported type of request reposting (type=%d, id=%ld).", __func__, request->type, request->id);
+    WARN("NET/IB: Unsupported type of request reposting (type=%d, id=%ld).", request->type, request->id);
     return ncclInternalError;
   }
   return ncclSuccess;
 }
 
-static ncclResult_t ncclIbResiliencyHandleCompletionErrorReceiver(struct ncclIbResiliency* resCtx, struct ibv_wc* wc, int devIndex) {
-  INFO(NCCL_NET,"NET/IB: %s: Handling an error on the receiver side (comm %p)", __func__, resCtx->baseComm);
-  bool inRecvRange = (wc->wr_id >= 0 && wc->wr_id <= NET_IB_MAX_REQUESTS);
-  bool inFlushRange = (wc->wr_id >= NCCL_IB_FLUSH_REQ_WR_ID_OFFSET && wc->wr_id < (NCCL_IB_FLUSH_REQ_WR_ID_OFFSET + NET_IB_MAX_REQUESTS));
+static ncclResult_t ncclIbResiliencyHandleCompletionErrorReceiver(struct ncclIbResiliency* resCtx, struct ibv_wc* wc,
+                                                                  int devIndex) {
+  INFO(NCCL_NET, "NET/IB: %s: Handling an error on the receiver side (comm %p)", __func__, resCtx->baseComm);
+  bool inRecvRange = (wc->wr_id >= 0 && wc->wr_id < NET_IB_MAX_REQUESTS);
+  bool inFlushRange =
+    (wc->wr_id >= NCCL_IB_FLUSH_REQ_WR_ID_OFFSET && wc->wr_id < (NCCL_IB_FLUSH_REQ_WR_ID_OFFSET + NET_IB_MAX_REQUESTS));
   if (!inRecvRange && !inFlushRange && (wc->wr_id != NCCL_IB_RECV_WR_ID_DUMMY)) {
-    WARN("NET/IB: %s: Invalid wr_id (%ld). Unable to retrieve a request on the receiver side (comm=%p)", __func__, wc->wr_id, resCtx->baseComm);
+    WARN("NET/IB: Invalid wr_id (%ld). Unable to retrieve a request on the receiver side (comm=%p)", wc->wr_id,
+         resCtx->baseComm);
     return ncclInternalError;
   }
   if (wc->wr_id == NCCL_IB_RECV_WR_ID_DUMMY) {
@@ -243,7 +283,8 @@ static ncclResult_t ncclIbResiliencyHandleCompletionErrorReceiver(struct ncclIbR
     // now flushed.
     assert(wc->status == IBV_WC_WR_FLUSH_ERR);
     // In this case, there is nothing left to do.
-    INFO(NCCL_NET, "NET/IB: %s: Ignoring flush error on a QP (comm=%p, wc.wr_id=%ld, wc.status=%s(%d)).", __func__, resCtx->baseComm, wc->wr_id, ibvWcStatusStr(wc->status), wc->status);
+    INFO(NCCL_NET, "NET/IB: %s: Ignoring flush error on a QP (comm=%p, wc.wr_id=%ld, wc.status=%s(%d)).", __func__,
+         resCtx->baseComm, wc->wr_id, ibvWcStatusStr(wc->status), wc->status);
     return ncclSuccess;
   }
 
@@ -256,44 +297,48 @@ static ncclResult_t ncclIbResiliencyHandleCompletionErrorReceiver(struct ncclIbR
     request = recvComm->recvReqs[wc->wr_id];
   }
 
-  INFO(NCCL_NET, "NET/IB: %s: The receiver side request that got an error is %p (req=%p, comm=%p, id=%ld)", __func__, request, request, request->base, request->id);
+  INFO(NCCL_NET, "NET/IB: %s: The receiver side request that got an error is %p (req=%p, comm=%p, id=%ld)", __func__,
+       request, request, request->base, request->id);
 
   switch (request->type) {
-    case NCCL_NET_IB_REQ_FLUSH:
-      // When a flush request encounters an error, it's ignored and the event
-      // counter on that device is set to zero, so the flush request could be
-      // completed on other devices if needed.
-      request->events[devIndex] = 0;
-      INFO(NCCL_NET, "NET/IB: %s: Ignoring error on flush request (req=%p, comm=%p, id=%ld) on device index %d", __func__, request, request->base, request->id, devIndex);
-      break;
-    case NCCL_NET_IB_REQ_RECV:
-      // Assert it's a CTS message that got an error.
-      // When error occurs the CQE's opcode is not valid and cannot be read!
-      // The only valid fields are: wr_id, status, qp_num, and vendor_err.
-      // From: https://www.rdmamojo.com/2013/02/15/ibv_poll_cq/
-      // Assert the CQE belongs to a CTS and not a data transfer.
-      assert(wc->wr_id != NCCL_IB_RECV_WR_ID_DUMMY);
-      // CTS is reposted immediately
-      NCCLCHECK(ncclIbResiliencyRepostRequest(request));
-      break;
-    case (NCCL_NET_IB_REQ_UNUSED):
-      // This might happen for a CTS message. Consider a case where a HW ack
-      // failed for a CTS message but before the receiver got a CQE with error
-      // because of a HW timeout, the sender already completed the data transfer
-      // and receiver completed the receive request. Note that receiver does not
-      // verify if the CTS was completed for every receive request before
-      // completing a receive request.
-      // When error occurs the CQE's opcode is not valid and cannot be read!
-      WARN("NET/IB: %s: Unrecognized request. It might be a CTS message for which the request was already completed. Continue.", __func__);
-      break;
-    default:
-      WARN("NET/IB: %s: Unrecognized request type. request->type=%d", __func__, request->type);
-      return ncclInternalError;
+  case NCCL_NET_IB_REQ_FLUSH:
+    // When a flush request encounters an error, it's ignored and the event
+    // counter on that device is set to zero, so the flush request could be
+    // completed on other devices if needed.
+    request->events[devIndex] = 0;
+    INFO(NCCL_NET, "NET/IB: %s: Ignoring error on flush request (req=%p, comm=%p, id=%ld) on device index %d", __func__,
+         request, request->base, request->id, devIndex);
+    break;
+  case NCCL_NET_IB_REQ_RECV:
+    // Assert it's a CTS message that got an error.
+    // When error occurs the CQE's opcode is not valid and cannot be read!
+    // The only valid fields are: wr_id, status, qp_num, and vendor_err.
+    // From: https://www.rdmamojo.com/2013/02/15/ibv_poll_cq/
+    // Assert the CQE belongs to a CTS and not a data transfer.
+    assert(wc->wr_id != NCCL_IB_RECV_WR_ID_DUMMY);
+    // CTS is reposted immediately
+    NCCLCHECK(ncclIbResiliencyRepostRequest(request));
+    break;
+  case (NCCL_NET_IB_REQ_UNUSED):
+    // This might happen for a CTS message. Consider a case where a HW ack
+    // failed for a CTS message but before the receiver got a CQE with error
+    // because of a HW timeout, the sender already completed the data transfer
+    // and receiver completed the receive request. Note that receiver does not
+    // verify if the CTS was completed for every receive request before
+    // completing a receive request.
+    // When error occurs the CQE's opcode is not valid and cannot be read!
+    WARN(
+      "NET/IB: Unrecognized request. It might be a CTS message for which the request was already completed. Continue.");
+    break;
+  default:
+    WARN("NET/IB: Unrecognized request type. request->type=%d", request->type);
+    return ncclInternalError;
   }
   return ncclSuccess;
 }
 
-static ncclResult_t ncclIbResiliencyHandleCompletionErrorSender(struct ncclIbResiliency* resCtx, struct ibv_wc* wc, int devIndex) {
+static ncclResult_t ncclIbResiliencyHandleCompletionErrorSender(struct ncclIbResiliency* resCtx, struct ibv_wc* wc,
+                                                                int devIndex) {
   ncclResult_t res;
   ncclIbRequest* request = NULL;
 
@@ -302,14 +347,20 @@ static ncclResult_t ncclIbResiliencyHandleCompletionErrorSender(struct ncclIbRes
   request = sendComm->sendReqs[slot][0];
 
   if (request == NULL) {
-    WARN("NET/IB: %s: Encountered a stale CQE with error for slot=%ld. Slot was already handled (comm=%p, wc.wr_id=%ld, wc.status=%s(%d), wc.opcode=%s(%d)).", __func__, slot, resCtx->baseComm, wc->wr_id, ibvWcStatusStr(wc->status), wc->status, ibvWcOpcodeStr(wc->opcode), wc->opcode);
+    WARN("NET/IB: Encountered a stale CQE with error for slot=%ld. Slot was already handled (comm=%p, wc.wr_id=%ld, "
+         "wc.status=%s(%d), wc.opcode=%s(%d)).",
+         slot, resCtx->baseComm, wc->wr_id, ibvWcStatusStr(wc->status), wc->status, ibvWcOpcodeStr(wc->opcode),
+         wc->opcode);
     return ncclSuccess;
   }
 
   struct ncclIbResiliencySend* sendResCtx = (struct ncclIbResiliencySend*)resCtx;
   res = ncclIbResiliencySendRequestInit(sendResCtx, request, devIndex);
   if (res != ncclSuccess) {
-    WARN("NET/IB: %s: Failed to initialize a resiliency send request (req=%p, comm=%p, id=%ld, type=%s, wc.wr_id=%ld, wc.status=%s(%d), wc.opcode=%s(%d), slot=%ld).", __func__, request, request->base, request->id, ncclIbReqTypeStr[request->type], wc->wr_id, ibvWcStatusStr(wc->status), wc->status, ibvWcOpcodeStr(wc->opcode), wc->opcode, slot);
+    WARN("NET/IB: Failed to initialize a resiliency send request (req=%p, comm=%p, id=%ld, type=%s, wc.wr_id=%ld, "
+         "wc.status=%s(%d), wc.opcode=%s(%d), slot=%ld).",
+         request, request->base, request->id, ncclIbReqTypeStr[request->type], wc->wr_id, ibvWcStatusStr(wc->status),
+         wc->status, ibvWcOpcodeStr(wc->opcode), wc->opcode, slot);
     return res;
   }
 
@@ -322,7 +373,9 @@ static ncclResult_t ncclIbResiliencyHandleDeviceFailure(struct ncclIbResiliency*
   ncclResult_t res = ncclSuccess;
   enum ncclIbResiliencyDevState devState = resCtx->devs[devIndex].state.load(std::memory_order_acquire);
   if (devState == ncclIbResiliencyDevStateOk) {
-    WARN("NET/IB: %s: Device %d marked as failed. Initiating recovery? %s (%s comm=%p, outstandingRecovery=%d)", __func__, devIndex, resCtx->recoveryEnabled ? "Yes" : "No", resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm, resCtx->outstandingRecovery);
+    WARN("NET/IB: Device %d marked as failed. Initiating recovery? %s (%s comm=%p, outstandingRecovery=%d)", devIndex,
+         resCtx->recoveryEnabled ? "Yes" : "No", resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm,
+         resCtx->outstandingRecovery);
     resCtx->devs[devIndex].state.store(ncclIbResiliencyDevStateError, std::memory_order_release);
     NCCLCHECK(ncclIbResiliencyReplaceQps(resCtx, devIndex));
     if (resCtx->recoveryEnabled) {
@@ -334,7 +387,8 @@ static ncclResult_t ncclIbResiliencyHandleDeviceFailure(struct ncclIbResiliency*
       } else {
         for (int i = 0; i < resCtx->ndevs; i++) {
           if (i != devIndex) continue;
-          INFO(NCCL_NET, "NET/IB: %s: Marking device %d as permanently failed (%s comm=%p)", __func__, i, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
+          INFO(NCCL_NET, "NET/IB: %s: Marking device %d as permanently failed (%s comm=%p)", __func__, i,
+               resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
           resCtx->devs[i].state.store(ncclIbResiliencyDevStateErrorPermanent, std::memory_order_release);
         }
       }
@@ -352,7 +406,8 @@ static ncclResult_t ncclIbResiliencyHandleDeviceFailure(struct ncclIbResiliency*
 // After a probe is completed, handle the results of the probe. If the probe
 // shows that the request was completed successfully on all QPs, the request
 // is completed. Otherwise, the request is reposted.
-static ncclResult_t ncclIbResiliencyHandleProbeCompleted(struct ncclIbResiliencySend* sendResCtx, struct ncclIbResiliencyRequestSend* failedRequest) {
+static ncclResult_t ncclIbResiliencyHandleProbeCompleted(struct ncclIbResiliencySend* sendResCtx,
+                                                         struct ncclIbResiliencyRequestSend* failedRequest) {
   int slot = failedRequest->request->id % NET_IB_MAX_REQUESTS;
   bool missingData = false;
   for (int qpIndex = 0; qpIndex < NCCL_IB_MAX_QPS; qpIndex++) {
@@ -366,12 +421,17 @@ static ncclResult_t ncclIbResiliencyHandleProbeCompleted(struct ncclIbResiliency
       continue;
     }
     missingData = true;
-    INFO(NCCL_NET, "NET/IB: %s: Missing data from QP index %d (req=%p, slot=%d devIndex=%d)", __func__, qpIndex, failedRequest->request, slot, failedRequest->request->base->qps[qpIndex].devIndex);
+    INFO(NCCL_NET, "NET/IB: %s: Missing data from QP index %d (req=%p, slot=%d devIndex=%d)", __func__, qpIndex,
+         failedRequest->request, slot, failedRequest->request->base->qps[qpIndex].devIndex);
     break;
   }
   if (!missingData) {
     // All data was delivered to the sender and no need for retransmission.
-    INFO(NCCL_NET, "NET/IB: %s: Probing conclusion: All data was delivered for request %p (req=%p, comm=%p, id=%ld, slot=%d, nreqs=%d). Completing the request.", __func__, failedRequest->request, failedRequest->request, failedRequest->request->base, failedRequest->request->id, slot, failedRequest->request->nreqs);
+    INFO(NCCL_NET,
+         "NET/IB: %s: Probing conclusion: All data was delivered for request %p (req=%p, comm=%p, id=%ld, slot=%d, "
+         "nreqs=%d). Completing the request.",
+         __func__, failedRequest->request, failedRequest->request, failedRequest->request->base,
+         failedRequest->request->id, slot, failedRequest->request->nreqs);
     // Clear all events on the request so it could be completed towards the
     // user as well. Note that in case of a multi-send requests, all requests
     // are also cleared.
@@ -379,7 +439,8 @@ static ncclResult_t ncclIbResiliencyHandleProbeCompleted(struct ncclIbResiliency
     struct ncclIbRequest** sendReqs = sendComm->sendReqs[slot];
     for (int r = 0; r < failedRequest->request->nreqs; r++) {
       memset(sendReqs[r]->events, 0, sizeof(sendReqs[r]->events));
-      INFO(NCCL_NET, "NET/IB: %s: Clearing events on send request %p (req=%p, comm=%p, id=%ld, slot=%d, reqIdx=%d)", __func__, sendReqs[r], sendReqs[r], sendReqs[r]->base, sendReqs[r]->id, slot, r);
+      INFO(NCCL_NET, "NET/IB: %s: Clearing events on send request %p (req=%p, comm=%p, id=%ld, slot=%d, reqIdx=%d)",
+           __func__, sendReqs[r], sendReqs[r], sendReqs[r]->base, sendReqs[r]->id, slot, r);
     }
     return ncclSuccess;
   } else {
@@ -391,11 +452,13 @@ static ncclResult_t ncclIbResiliencyHandleProbeCompleted(struct ncclIbResiliency
 
 // Posts a probe (RDMA Read) operation to check the status of a send request
 // that encountered an error.
-static ncclResult_t ncclIbResiliencyProbePost(struct ncclIbResiliencySend* sendResCtx, struct ncclIbResiliencyRequestSend* failedSendRequest) {
+static ncclResult_t ncclIbResiliencyProbePost(struct ncclIbResiliencySend* sendResCtx,
+                                              struct ncclIbResiliencyRequestSend* failedSendRequest) {
   assert(failedSendRequest->state == ncclIbResiliencyRequestStatePending);
 
   if (failedSendRequest->failedAttempts > ncclParamIbResiliencyPortFailoverMaxAttempts()) {
-    WARN("NET/IB: %s: Maximum number of probing attempts (%ld) reached for request %p (id=%ld). Cannot post another probe.", __func__, ncclParamIbResiliencyPortFailoverMaxAttempts(), failedSendRequest->request, failedSendRequest->request->id);
+    WARN("NET/IB: Maximum number of probing attempts (%ld) reached for request %p (id=%ld). Cannot post another probe.",
+         ncclParamIbResiliencyPortFailoverMaxAttempts(), failedSendRequest->request, failedSendRequest->request->id);
     return ncclRemoteError;
   }
 
@@ -408,7 +471,8 @@ static ncclResult_t ncclIbResiliencyProbePost(struct ncclIbResiliencySend* sendR
     return ncclSuccess;
   }
 
-  INFO(NCCL_NET, "NET/IB: %s: Probe delay elapsed (%llu ms) for request %p, posting the probe", __func__, elapsedTime / MSEC_TO_NSEC, failedSendRequest->request);
+  INFO(NCCL_NET, "NET/IB: %s: Probe delay elapsed (%llu ms) for request %p, posting the probe", __func__,
+       elapsedTime / MSEC_TO_NSEC, failedSendRequest->request);
 
   // Iterate over devices until a functional device is found to send a probe
   int devIndex = 0;
@@ -421,7 +485,8 @@ static ncclResult_t ncclIbResiliencyProbePost(struct ncclIbResiliencySend* sendR
   }
 
   if (devIndex == sendResCtx->base.ndevs) {
-    WARN("NET/IB: %s: Could not find a functional device to post the probe for request %p (id=%ld)", __func__, failedSendRequest->request, failedSendRequest->request->id);
+    WARN("NET/IB: Could not find a functional device to post the probe for request %p (id=%ld)",
+         failedSendRequest->request, failedSendRequest->request->id);
     return ncclInternalError;
   }
 
@@ -455,7 +520,8 @@ static ncclResult_t ncclIbResiliencyProbePost(struct ncclIbResiliencySend* sendR
   probeWr.wr.rdma.remote_addr = remoteAddr;
   probeWr.wr.rdma.rkey = sendResCtx->remCmplRecordsInfo[probingQp->remDevIdx].rkey;
 
-  INFO(NCCL_NET, "NET/IB: %s: Posting probe (slot=%d, id=%ld, devIndex=%d, qp_num=%u)", __func__, slot, failedSendRequest->request->id, devIndex, probingQp->qp->qp_num);
+  INFO(NCCL_NET, "NET/IB: %s: Posting probe (slot=%d, id=%ld, devIndex=%d, qp_num=%u)", __func__, slot,
+       failedSendRequest->request->id, devIndex, probingQp->qp->qp_num);
 
   struct ibv_send_wr* bad_wr;
   NCCLCHECK(wrap_ibv_post_send(probingQp->qp, &probeWr, &bad_wr));
@@ -465,9 +531,11 @@ static ncclResult_t ncclIbResiliencyProbePost(struct ncclIbResiliencySend* sendR
   return ncclSuccess;
 }
 
-static ncclResult_t ncclIbResiliencyProbeHandleCompletionEvent(struct ncclIbResiliencySend* sendResCtx, struct ibv_wc* probeWc, int devIndex) {
-
-  INFO(NCCL_NET, "NET/IB: %s: Got probing completion (devIndex=%d, wc->status=%d, wc->opcode=%d, wc->wr_id=%ld, wc->qp_num=%u)", __func__, devIndex, probeWc->status, probeWc->opcode, probeWc->wr_id, probeWc->qp_num);
+static ncclResult_t ncclIbResiliencyProbeHandleCompletionEvent(struct ncclIbResiliencySend* sendResCtx,
+                                                               struct ibv_wc* probeWc, int devIndex) {
+  INFO(NCCL_NET,
+       "NET/IB: %s: Got probing completion (devIndex=%d, wc->status=%d, wc->opcode=%d, wc->wr_id=%ld, wc->qp_num=%u)",
+       __func__, devIndex, probeWc->status, probeWc->opcode, probeWc->wr_id, probeWc->qp_num);
 
   struct ncclIbResiliencyRequestSend* failedRequest = &sendResCtx->failedRequests[probeWc->wr_id % NET_IB_MAX_REQUESTS];
 
@@ -493,7 +561,7 @@ static ncclResult_t ncclIbResiliencyProbeHandleCompletionEvent(struct ncclIbResi
 static ncclResult_t ncclIbResiliencyProbeProgress(struct ncclIbResiliencySend* sendResCtx) {
   struct ibv_wc wcs[MAX_PROBE_WC];
   int nCompletions = 0;
-  struct ncclIbResiliencyDev *resDev = NULL;
+  struct ncclIbResiliencyDev* resDev = NULL;
   for (int devIndex = 0; devIndex < sendResCtx->base.ndevs; devIndex++) {
     resDev = &sendResCtx->base.devs[devIndex];
     // Note that even if the device failed, we still want to drain all the CQEs
@@ -525,7 +593,8 @@ ncclResult_t ncclIbResiliencyInit(struct ncclIbNetCommBase* baseComm, struct ncc
   assert(baseComm != NULL);
   assert(resCtx != NULL);
   if (ncclParamIbResiliencyPortFailover() == 0) {
-    INFO(NCCL_NET, "NET/IB: %s: Resiliency is disabled on the %s communicator (comm=%p)", __func__, baseComm->isSend ? "send" : "recv", baseComm);
+    INFO(NCCL_NET, "NET/IB: %s: Resiliency is disabled on the %s communicator (comm=%p)", __func__,
+         baseComm->isSend ? "send" : "recv", baseComm);
     *resCtx = NULL;
     return ncclSuccess;
   }
@@ -551,13 +620,16 @@ ncclResult_t ncclIbResiliencyInit(struct ncclIbNetCommBase* baseComm, struct ncc
 
   NCCLCHECK(ncclIbPortRecoveryInit(baseCtx));
   if (baseCtx->recoveryEnabled) {
-    INFO(NCCL_NET, "NET/IB: %s: Port recovery is enabled for the resiliency context on the %s communicator (comm=%p)", __func__, baseComm->isSend ? "send" : "recv", baseComm);
+    INFO(NCCL_NET, "NET/IB: %s: Port recovery is enabled for the resiliency context on the %s communicator (comm=%p)",
+         __func__, baseComm->isSend ? "send" : "recv", baseComm);
     baseCtx->outstandingRecovery = 0;
   } else {
-    INFO(NCCL_NET, "NET/IB: %s: Port recovery is disabled for the resiliency context on the %s communicator (comm=%p)", __func__, baseComm->isSend ? "send" : "recv", baseComm);
+    INFO(NCCL_NET, "NET/IB: %s: Port recovery is disabled for the resiliency context on the %s communicator (comm=%p)",
+         __func__, baseComm->isSend ? "send" : "recv", baseComm);
   }
 
-  INFO(NCCL_NET, "NET/IB: %s: Resiliency context was initialized on the %s communicator (comm=%p)", __func__, baseComm->isSend ? "send" : "recv", baseComm);
+  INFO(NCCL_NET, "NET/IB: %s: Resiliency context was initialized on the %s communicator (comm=%p)", __func__,
+       baseComm->isSend ? "send" : "recv", baseComm);
   return ncclSuccess;
 }
 
@@ -572,7 +644,8 @@ ncclResult_t ncclIbResiliencyDestroy(struct ncclIbResiliency** resCtx) {
 
 ncclResult_t ncclIbResiliencyDevInit(struct ncclIbResiliency* resCtx, uint devIndex, ncclIbDev* ibDev) {
   assert(resCtx != NULL);
-  INFO(NCCL_NET, "NET/IB: %s: Initializing resiliency context on devIndex %d for %s communicator (comm=%p)", __func__, devIndex, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
+  INFO(NCCL_NET, "NET/IB: %s: Initializing resiliency context on devIndex %d for %s communicator (comm=%p)", __func__,
+       devIndex, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
   assert(devIndex < resCtx->ndevs);
   struct ncclIbResiliencyDev* resDev = &resCtx->devs[devIndex];
   resDev->state.store(ncclIbResiliencyDevStateOk, std::memory_order_release);
@@ -582,16 +655,20 @@ ncclResult_t ncclIbResiliencyDevInit(struct ncclIbResiliency* resCtx, uint devIn
     cqSize = NET_IB_MAX_REQUESTS;
     struct ncclIbResiliencySend* sendResCtx = (struct ncclIbResiliencySend*)resCtx;
     struct ncclIbNetCommDevBase* devBase = ncclIbGetNetCommDevBase(resCtx->baseComm, devIndex);
-    NCCLCHECK(wrap_ibv_reg_mr(&resDev->probingResultMr, devBase->pd, &sendResCtx->probingResults, sizeof(sendResCtx->probingResults), IBV_ACCESS_LOCAL_WRITE));
-    INFO(NCCL_NET, "NET/IB: %s: Registered probing results memory (%p) on device %d for resiliency context (comm=%p)", __func__, &sendResCtx->probingResults, devIndex, resCtx->baseComm);
+    NCCLCHECK(wrap_ibv_reg_mr(&resDev->probingResultMr, devBase->pd, &sendResCtx->probingResults,
+                              sizeof(sendResCtx->probingResults), IBV_ACCESS_LOCAL_WRITE));
+    INFO(NCCL_NET, "NET/IB: %s: Registered probing results memory (%p) on device %d for resiliency context (comm=%p)",
+         __func__, &sendResCtx->probingResults, devIndex, resCtx->baseComm);
   } else {
     // It's not allowed to create a CQ with size 0 so set it to 1 although
     // no CQEs are expected to be generated on this CQ (on the receiver side).
     cqSize = 1;
   }
-  INFO(NCCL_NET, "NET/IB: %s: Creating probing CQ on device %d for resiliency context (%s comm=%p, cq_size=%d)", __func__, devIndex, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm, cqSize);
+  INFO(NCCL_NET, "NET/IB: %s: Creating probing CQ on device %d for resiliency context (%s comm=%p, cq_size=%d)",
+       __func__, devIndex, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm, cqSize);
   NCCLCHECK(wrap_ibv_create_cq(&resDev->probingCq, ibDev->context, cqSize, cqContext, NULL, 0));
-  INFO(NCCL_NET, "NET/IB: %s: Created probing CQ (cq=%p) on device %d for resiliency context (%s comm=%p, cq_size=%d)", __func__, resDev->probingCq, devIndex, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm, cqSize);
+  INFO(NCCL_NET, "NET/IB: %s: Created probing CQ (cq=%p) on device %d for resiliency context (%s comm=%p, cq_size=%d)",
+       __func__, resDev->probingCq, devIndex, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm, cqSize);
 
   if (resCtx->recoveryEnabled) {
     NCCLCHECK(ncclIbPortRecoveryDevInit(resCtx, devIndex, ibDev));
@@ -604,7 +681,8 @@ ncclResult_t ncclIbResiliencyDevDestroy(struct ncclIbResiliency* resCtx, uint de
   struct ncclIbResiliencyDev* resDev = &resCtx->devs[devIndex];
   if (resDev->probingCq) {
     NCCLCHECK(wrap_ibv_destroy_cq(resDev->probingCq));
-    INFO(NCCL_NET, "NET/IB: %s: Destroyed probing CQ (cq=%p) on device %d for resiliency context (comm=%p)", __func__, resDev->probingCq, devIndex, resCtx->baseComm);
+    INFO(NCCL_NET, "NET/IB: %s: Destroyed probing CQ (cq=%p) on device %d for resiliency context (comm=%p)", __func__,
+         resDev->probingCq, devIndex, resCtx->baseComm);
   }
 
   if (resCtx->recoveryEnabled) {
@@ -615,7 +693,9 @@ ncclResult_t ncclIbResiliencyDevDestroy(struct ncclIbResiliency* resCtx, uint de
     struct ncclIbResiliencySend* sendResCtx = (struct ncclIbResiliencySend*)resCtx;
     if (resDev->probingResultMr) {
       NCCLCHECK(wrap_ibv_dereg_mr(resDev->probingResultMr));
-      INFO(NCCL_NET, "NET/IB: %s: Deregistered probing results memory (%p) on device %d for resiliency context (comm=%p)", __func__, &sendResCtx->probingResults, devIndex, resCtx->baseComm);
+      INFO(NCCL_NET,
+           "NET/IB: %s: Deregistered probing results memory (%p) on device %d for resiliency context (comm=%p)",
+           __func__, &sendResCtx->probingResults, devIndex, resCtx->baseComm);
     }
   }
   return ncclSuccess;
@@ -639,7 +719,8 @@ ncclResult_t ncclIbResiliencyDataCqSizeGet(struct ncclIbResiliency* resCtx, uint
   // completions of all other requests.
   assert(resCtx->ndevs > 0);
   *cqSize = (*cqSize) * resCtx->ndevs;
-  INFO(NCCL_NET, "NET/IB: %s: CQ size should be %d on device %d for %s communicator (comm=%p)", __func__, *cqSize, devIndex, baseComm->isSend ? "send" : "recv", baseComm);
+  INFO(NCCL_NET, "NET/IB: %s: CQ size should be %d on device %d for %s communicator (comm=%p)", __func__, *cqSize,
+       devIndex, baseComm->isSend ? "send" : "recv", baseComm);
   return ncclSuccess;
 }
 
@@ -664,10 +745,14 @@ ncclResult_t ncclIbResiliencyDeviceNumSet(struct ncclIbResiliency* resCtx, int n
   assert(nRemDevs > 0);
 
   if (nLocalDevs <= 1) {
-    INFO(NCCL_NET, "NET/IB: %s: Resiliency is being enabled on a communicator (comm=%p) with a single local device. In case of failure there will be no device to fail-over to.", __func__, resCtx->baseComm);
+    INFO(NCCL_NET,
+         "NET/IB: %s: Resiliency is being enabled on a communicator (comm=%p) with a single local device. In case of "
+         "failure there will be no device to fail-over to.",
+         __func__, resCtx->baseComm);
   }
 
-  INFO(NCCL_NET, "NET/IB: %s: Resiliency context (comm=%p) is configured with %d local devices and %d remote devices", __func__, resCtx->baseComm, nLocalDevs, nRemDevs);
+  INFO(NCCL_NET, "NET/IB: %s: Resiliency context (comm=%p) is configured with %d local devices and %d remote devices",
+       __func__, resCtx->baseComm, nLocalDevs, nRemDevs);
 
   resCtx->ndevs = nLocalDevs;
   if (resCtx->baseComm->isSend) {
@@ -690,20 +775,25 @@ ncclResult_t ncclIbResiliencyDeviceNumSet(struct ncclIbResiliency* resCtx, int n
   // of devices supported.
   assert(resCtx->nProbingQps <= NCCL_IB_MAX_DEVS_PER_NIC);
   if (resCtx->nProbingQps <= 1) {
-    WARN("NET/IB: %s: Resiliency is enabled on a %s communicator (comm=%p) with a single device. This does not make sense since there is no other device to fail over to.", __func__, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
+    WARN("NET/IB: Resiliency is enabled on a %s communicator (comm=%p) with a single device. This does not make sense "
+         "since there is no other device to fail over to.",
+         resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
   }
-  INFO(NCCL_NET, "NET/IB: %s: Resiliency context (comm=%p) is configured with %d probing QPs", __func__, resCtx->baseComm, resCtx->nProbingQps);
+  INFO(NCCL_NET, "NET/IB: %s: Resiliency context (comm=%p) is configured with %d probing QPs", __func__,
+       resCtx->baseComm, resCtx->nProbingQps);
   if (resCtx->recoveryEnabled) {
     resCtx->nPortRecoveryQps = std::max(nLocalDevs, nRemDevs);
   } else {
     resCtx->nPortRecoveryQps = 0;
   }
   assert(resCtx->nPortRecoveryQps <= NCCL_IB_MAX_DEVS_PER_NIC);
-  INFO(NCCL_NET, "NET/IB: %s: Resiliency context (comm=%p) is configured with %d recovery QPs", __func__, resCtx->baseComm, resCtx->nPortRecoveryQps);
+  INFO(NCCL_NET, "NET/IB: %s: Resiliency context (comm=%p) is configured with %d recovery QPs", __func__,
+       resCtx->baseComm, resCtx->nPortRecoveryQps);
   return ncclSuccess;
 }
 
-ncclResult_t ncclIbResiliencySenderCreateQps(struct ncclIbResiliency* resCtx, struct ncclIbResiliencyInfo* localResiliencyInfo) {
+ncclResult_t ncclIbResiliencySenderCreateQps(struct ncclIbResiliency* resCtx,
+                                             struct ncclIbResiliencyInfo* localResiliencyInfo) {
   ncclIbSendComm* sendComm = (ncclIbSendComm*)resCtx->baseComm;
   void* qpContext = (void*)&sendComm->base.stats;
   struct ncclIbQpCreateAttr qpCreateAttrs;
@@ -739,7 +829,8 @@ ncclResult_t ncclIbResiliencySenderCreateQps(struct ncclIbResiliency* resCtx, st
   }
 
   if (resCtx->recoveryEnabled) {
-    NCCLCHECK(ncclIbPortRecoverySenderQpsCreate(resCtx, localResiliencyInfo->portRecoveryQpsInfo, resCtx->nPortRecoveryQps));
+    NCCLCHECK(ncclIbPortRecoverySenderQpsCreate(resCtx, localResiliencyInfo->portRecoveryQpsInfo,
+                                                resCtx->nPortRecoveryQps));
   }
 
   return ncclSuccess;
@@ -770,6 +861,7 @@ ncclResult_t ncclIbResiliencySenderQpsToRts(struct ncclIbResiliency* resCtx, str
     rtrAttr->remoteLid = remDevInfo->lid;
     rtrAttr->remoteGid = remDevInfo->gid;
     rtrAttr->localIbPort = remDevInfo->ib_port;
+    rtrAttr->localPortFlags = ibDev->portAttr.flags;
     rtrAttr->localGid = sendCommDev->base.gidInfo.localGid;
     rtrAttr->localGidIndex = sendCommDev->base.gidInfo.localGidIndex;
     NCCLCHECK(ncclIbQpRtr(localQp));
@@ -778,7 +870,9 @@ ncclResult_t ncclIbResiliencySenderQpsToRts(struct ncclIbResiliency* resCtx, str
     rtsAttr->timeout = ncclParamIbTimeout();
     rtsAttr->retryCnt = ncclParamIbRetryCnt();
     NCCLCHECK(ncclIbQpRts(localQp));
-    INFO(NCCL_NET, "NET/IB: %s: Send to RTS done on probing QP (index=%d, qp_num=%u, dest_qp_num=%u, deviceIndex=%d, comm=%p)", __func__, localQpIndex, localQp->qp->qp_num, rtrAttr->remoteQpNum, localDevIndex, resCtx->baseComm);
+    INFO(NCCL_NET,
+         "NET/IB: %s: Send to RTS done on probing QP (index=%d, qp_num=%u, dest_qp_num=%u, deviceIndex=%d, comm=%p)",
+         __func__, localQpIndex, localQp->qp->qp_num, rtrAttr->remoteQpNum, localDevIndex, resCtx->baseComm);
   }
 
   if (resCtx->recoveryEnabled) {
@@ -787,7 +881,9 @@ ncclResult_t ncclIbResiliencySenderQpsToRts(struct ncclIbResiliency* resCtx, str
   return ncclSuccess;
 }
 
-ncclResult_t ncclIbResiliencyReceiverQpsCreateToRts(struct ncclIbResiliency* resCtx, struct ncclIbConnectionMetadata* remInfo, struct ncclIbResiliencyInfo* localResiliencyInfo) {
+ncclResult_t ncclIbResiliencyReceiverQpsCreateToRts(struct ncclIbResiliency* resCtx,
+                                                    struct ncclIbConnectionMetadata* remInfo,
+                                                    struct ncclIbResiliencyInfo* localResiliencyInfo) {
   ncclIbRecvComm* recvComm = (ncclIbRecvComm*)resCtx->baseComm;
   void* qpContext = (void*)&recvComm->base.stats;
   struct ncclIbQpCreateAttr qpCreateAttrs;
@@ -833,6 +929,7 @@ ncclResult_t ncclIbResiliencyReceiverQpsCreateToRts(struct ncclIbResiliency* res
     rtrAttr->remoteLid = remDevInfo->lid;
     rtrAttr->remoteGid = remDevInfo->gid;
     rtrAttr->localIbPort = remDevInfo->ib_port;
+    rtrAttr->localPortFlags = ibDev->portAttr.flags;
     rtrAttr->localGid = recvCommDev->base.gidInfo.localGid;
     rtrAttr->localGidIndex = recvCommDev->base.gidInfo.localGidIndex;
     NCCLCHECK(ncclIbQpRtr(localQp));
@@ -841,11 +938,14 @@ ncclResult_t ncclIbResiliencyReceiverQpsCreateToRts(struct ncclIbResiliency* res
     rtsAttr->timeout = ncclParamIbTimeout();
     rtsAttr->retryCnt = ncclParamIbRetryCnt();
     NCCLCHECK(ncclIbQpRts(localQp));
-    INFO(NCCL_NET, "NET/IB: %s: Recv to RTS done on probing QP (index=%d, qp_num=%u, dest_qp_num=%u, deviceIndex=%d, comm=%p)", __func__, localQpIndex, localQp->qp->qp_num, rtrAttr->remoteQpNum, localDevIndex, resCtx->baseComm);
+    INFO(NCCL_NET,
+         "NET/IB: %s: Recv to RTS done on probing QP (index=%d, qp_num=%u, dest_qp_num=%u, deviceIndex=%d, comm=%p)",
+         __func__, localQpIndex, localQp->qp->qp_num, rtrAttr->remoteQpNum, localDevIndex, resCtx->baseComm);
   }
 
   if (resCtx->recoveryEnabled) {
-    NCCLCHECK(ncclIbPortRecoveryReceiverQpsCreateToRts(resCtx, remInfo, localResiliencyInfo->portRecoveryQpsInfo, resCtx->nPortRecoveryQps));
+    NCCLCHECK(ncclIbPortRecoveryReceiverQpsCreateToRts(resCtx, remInfo, localResiliencyInfo->portRecoveryQpsInfo,
+                                                       resCtx->nPortRecoveryQps));
   }
 
   return ncclSuccess;
@@ -853,23 +953,28 @@ ncclResult_t ncclIbResiliencyReceiverQpsCreateToRts(struct ncclIbResiliency* res
 
 ncclResult_t ncclIbResiliencyClose(struct ncclIbResiliency* resCtx) {
   if (resCtx == NULL) {
-    WARN("NET/IB: %s: Resiliency context is NULL. Nothing to destroy.", __func__);
+    WARN("NET/IB: Resiliency context is NULL. Nothing to destroy.");
     return ncclSuccess;
   }
-  INFO(NCCL_NET, "NET/IB: %s: Resiliency context close for %s communicator (comm=%p)", __func__, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
+  INFO(NCCL_NET, "NET/IB: %s: Resiliency context close for %s communicator (comm=%p)", __func__,
+       resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
 
-  INFO(NCCL_NET, "NET/IB: %s: Destroying %d probing QPs for resiliency context (%s comm=%p)", __func__, resCtx->nProbingQps, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
+  INFO(NCCL_NET, "NET/IB: %s: Destroying %d probing QPs for resiliency context (%s comm=%p)", __func__,
+       resCtx->nProbingQps, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
   for (int qpIndex = 0; qpIndex < resCtx->nProbingQps; qpIndex++) {
     struct ncclIbQp* probingQp = &resCtx->probingQps[qpIndex];
     if (probingQp->qp == NULL) {
       continue;
     }
-    INFO(NCCL_NET, "NET/IB: %s: Destroying probing QP (index=%d, qp=%p, qp_num=%u) for resiliency context (comm=%p)", __func__, qpIndex, probingQp->qp, probingQp->qp->qp_num, resCtx->baseComm);
+    INFO(NCCL_NET, "NET/IB: %s: Destroying probing QP (index=%d, qp=%p, qp_num=%u) for resiliency context (comm=%p)",
+         __func__, qpIndex, probingQp->qp, probingQp->qp->qp_num, resCtx->baseComm);
     NCCLCHECK(wrap_ibv_destroy_qp(probingQp->qp));
   }
   if (resCtx->recoveryEnabled) {
     if (resCtx->outstandingRecovery > 0) {
-      WARN("NET/IB: %s: There are still %d outstanding recovery operations on the resiliency context (comm=%p) being destroyed.", __func__, resCtx->outstandingRecovery, resCtx->baseComm);
+      WARN("NET/IB: There are still %d outstanding recovery operations on the resiliency context (comm=%p) being "
+           "destroyed.",
+           resCtx->outstandingRecovery, resCtx->baseComm);
     }
     NCCLCHECK(ncclIbPortRecoveryClose(resCtx));
     NCCLCHECK(ncclIbPortRecoveryQpsDestroy(resCtx, resCtx->nPortRecoveryQps));
@@ -877,18 +982,20 @@ ncclResult_t ncclIbResiliencyClose(struct ncclIbResiliency* resCtx) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclIbResiliencyRemoteCompletionRecordsSet(struct ncclIbResiliency* resCtx, uint32_t cmplsRecordsRkey, uint64_t cmplsRecordsAddr, uint devIndex) {
+ncclResult_t ncclIbResiliencyRemoteCompletionRecordsSet(struct ncclIbResiliency* resCtx, uint32_t cmplsRecordsRkey,
+                                                        uint64_t cmplsRecordsAddr, uint devIndex) {
   assert(resCtx != NULL);
   assert(resCtx->baseComm->isSend);
   assert(devIndex <= resCtx->nProbingQps);
   struct ncclIbResiliencySend* sendResCtx = (struct ncclIbResiliencySend*)resCtx;
   sendResCtx->remCmplRecordsInfo[devIndex].rkey = cmplsRecordsRkey;
   sendResCtx->remCmplRecordsInfo[devIndex].addr = cmplsRecordsAddr;
-  INFO(NCCL_NET, "NET/IB: %s: Set remote completion records info (comm=%p, addr=0x%lx, rkey=0x%x)", __func__, &resCtx->baseComm, cmplsRecordsAddr, cmplsRecordsRkey);
+  INFO(NCCL_NET, "NET/IB: %s: Set remote completion records info (comm=%p, addr=0x%lx, rkey=0x%x)", __func__,
+       &resCtx->baseComm, cmplsRecordsAddr, cmplsRecordsRkey);
   return ncclSuccess;
 }
 
-ncclResult_t ncclIbResiliencyRequestIsComplete(struct ncclIbRequest *request, bool *isComplete) {
+ncclResult_t ncclIbResiliencyRequestIsComplete(struct ncclIbRequest* request, bool* isComplete) {
   assert(isComplete != NULL);
 
   if (request == NULL) {
@@ -926,14 +1033,19 @@ ncclResult_t ncclIbResiliencyRequestIsComplete(struct ncclIbRequest *request, bo
   *isComplete = ((remainingEventsSum == 0) || (abs(negativeEventsSum) == remainingEventsSum));
 #ifdef ENABLE_TRACE
   if (*isComplete == 1) {
-    TRACE(NCCL_NET, "NET/IB: %s: request=%p, remainingEventsSum=%d, negativeEventsSum=%d, completed? %s", __func__, request, remainingEventsSum, negativeEventsSum, *isComplete ? "yes" : "no");
+    TRACE(NCCL_NET, "NET/IB: %s: request=%p, remainingEventsSum=%d, negativeEventsSum=%d, completed? %s", __func__,
+          request, remainingEventsSum, negativeEventsSum, *isComplete ? "yes" : "no");
   }
 #endif // ENABLE_TRACE
   return ncclSuccess;
 }
 
 ncclResult_t ncclIbResiliencyHandleCompletionError(struct ncclIbResiliency* resCtx, struct ibv_wc* wc, int devIndex) {
-  INFO(NCCL_NET, "NET/IB: %s: Got completion with error (devIndex=%d, wc->status=(%s)%d, wc->opcode=(%s)%d, wc->wr_id=%ld, wc->qp_num=%u, wc->byte_len=%d)", __func__, devIndex, ibvWcStatusStr(wc->status), wc->status, ibvWcOpcodeStr(wc->opcode), wc->opcode, wc->wr_id, wc->qp_num, wc->byte_len);
+  INFO(NCCL_NET,
+       "NET/IB: %s: Got completion with error (devIndex=%d, wc->status=(%s)%d, wc->opcode=(%s)%d, wc->wr_id=%ld, "
+       "wc->qp_num=%u, wc->byte_len=%d)",
+       __func__, devIndex, ibvWcStatusStr(wc->status), wc->status, ibvWcOpcodeStr(wc->opcode), wc->opcode, wc->wr_id,
+       wc->qp_num, wc->byte_len);
   NCCLCHECK(ncclIbResiliencyCheckErrorNotFatal(resCtx, wc, devIndex));
 
   // Before handling the request that got an error, first the device is
@@ -955,7 +1067,8 @@ static ncclResult_t ncclIbResiliencyActiveQpsRestore(struct ncclIbResiliency* re
     if (qpToRestore->devIndex != restoredDevIndex) {
       continue;
     }
-    INFO(NCCL_NET, "NET/IB: %s: Restoring QP (index=%d, qp_num=%u) on device %d (comm=%p)", __func__, qpIndex, qpToRestore->qp->qp_num, restoredDevIndex, resCtx->baseComm);
+    INFO(NCCL_NET, "NET/IB: %s: Restoring QP (index=%d, qp_num=%u) on device %d (comm=%p)", __func__, qpIndex,
+         qpToRestore->qp->qp_num, restoredDevIndex, resCtx->baseComm);
     resCtx->baseComm->activeQps[qpIndex] = qpToRestore;
   }
   return ncclSuccess;
@@ -994,16 +1107,24 @@ ncclResult_t ncclIbResiliencyProgress(struct ncclIbResiliency* resCtx) {
     // Check if recovery operations are completed.
     for (int devIndex = 0; devIndex < resCtx->ndevs; devIndex++) {
       enum ncclIbResiliencyDevState devState = resCtx->devs[devIndex].state.load(std::memory_order_acquire);
-      TRACE(NCCL_NET, "NET/IB: %s: Checking dev state for device %d: state=%d (comm=%p).", __func__, devIndex, devState, resCtx->baseComm);
+      TRACE(NCCL_NET, "NET/IB: %s: Checking dev state for device %d: state=%d (comm=%p).", __func__, devIndex, devState,
+            resCtx->baseComm);
       if (devState == ncclIbResiliencyDevStateRecovered) {
         resCtx->outstandingRecovery--;
-        INFO(NCCL_NET, "NET/IB: %s: Device %d has been recovered for resiliency context (%s comm=%p, outstandingRecovery=%d)", __func__, devIndex, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm, resCtx->outstandingRecovery);
+        INFO(NCCL_NET,
+             "NET/IB: %s: Device %d has been recovered for resiliency context (%s comm=%p, outstandingRecovery=%d)",
+             __func__, devIndex, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm,
+             resCtx->outstandingRecovery);
         ncclIbResiliencyActiveQpsRestore(resCtx, devIndex);
         resCtx->devs[devIndex].state.store(ncclIbResiliencyDevStateOk, std::memory_order_release);
       }
       if (devState == ncclIbResiliencyDevStateRecoveryFailed) {
         resCtx->outstandingRecovery--;
-        INFO(NCCL_NET, "NET/IB: %s: Device %d will not be attempted to be recovered any more (%s comm=%p, outstandingRecovery=%d).", __func__, devIndex, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm, resCtx->outstandingRecovery);
+        INFO(
+          NCCL_NET,
+          "NET/IB: %s: Device %d will not be attempted to be recovered any more (%s comm=%p, outstandingRecovery=%d).",
+          __func__, devIndex, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm,
+          resCtx->outstandingRecovery);
         resCtx->devs[devIndex].state.store(ncclIbResiliencyDevStateErrorPermanent, std::memory_order_release);
         continue;
       }
@@ -1011,7 +1132,10 @@ ncclResult_t ncclIbResiliencyProgress(struct ncclIbResiliency* resCtx) {
   }
 
   if (resCtx->outstandingRequests == 0 && resCtx->outstandingRecovery == 0) {
-    INFO(NCCL_NET, "NET/IB: %s: All resiliency operations are completed for resiliency context (%s comm=%p). Marking progress as completed.", __func__, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
+    INFO(NCCL_NET,
+         "NET/IB: %s: All resiliency operations are completed for resiliency context (%s comm=%p). Marking progress as "
+         "completed.",
+         __func__, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
     resCtx->inProgress = false;
   }
   return ncclSuccess;

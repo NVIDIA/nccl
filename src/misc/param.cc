@@ -25,7 +25,7 @@ const char* userHomeDir() {
 }
 
 void setEnvFile(const char* fileName) {
-  FILE * file = fopen(fileName, "r");
+  FILE* file = fopen(fileName, "r");
   if (file == NULL) return;
 
   char line[4096];
@@ -33,16 +33,16 @@ void setEnvFile(const char* fileName) {
   char envValue[1024];
   while (fgets(line, (int)sizeof(line), file) != NULL) {
     size_t len = strlen(line);
-    if (len > 0 && line[len-1] == '\n') line[--len] = '\0';
-    if (len > 0 && line[len-1] == '\r') line[--len] = '\0';
+    if (len > 0 && line[len - 1] == '\n') line[--len] = '\0';
+    if (len > 0 && line[len - 1] == '\r') line[--len] = '\0';
     if (line[0] == '#') continue;
     int s = 0;
     while (line[s] != '\0' && line[s] != '=') s++;
     if (line[s] == '\0') continue;
-    strncpy(envVar, line, std::min(1023,s));
-    envVar[std::min(1023,s)] = '\0';
+    strncpy(envVar, line, std::min(1023, s));
+    envVar[std::min(1023, s)] = '\0';
     s++;
-    strncpy(envValue, line+s, 1023);
+    strncpy(envValue, line + s, 1023);
     envValue[1023] = '\0';
     ncclOsSetEnv(envVar, envValue);
   }
@@ -82,7 +82,9 @@ int64_t ncclLoadParam(char const* env, int64_t deftVal, int64_t uninitialized, i
   // noCache is only load/stored within the mutex, no need for atomic
   if (*noCache == /*uninitialized*/ -1) ncclGetCachePolicy(env, noCache);
 
-  if (COMPILER_ATOMIC_LOAD(cache, std::memory_order_relaxed) != uninitialized) return COMPILER_ATOMIC_LOAD(cache, std::memory_order_relaxed);
+  if (COMPILER_ATOMIC_LOAD(cache, std::memory_order_relaxed) != uninitialized) {
+    return COMPILER_ATOMIC_LOAD(cache, std::memory_order_relaxed);
+  }
 
   // Read the environment variable
   const char* str = ncclGetEnv(env);

@@ -3,8 +3,7 @@
 #
 # See LICENSE.txt for more license information
 
-"""
-NCCL4Py Core API: Pythonic access to NCCL for multi-GPU communication.
+"""NCCL4Py Core API: Pythonic access to NCCL for multi-GPU communication.
 
 This module provides the main public API for NCCL operations.
 """
@@ -71,7 +70,6 @@ __all__ = [
     "MIN",
     "AVG",
     # Constants and enums
-    "NCCL_SPLIT_NOCOLOR",
     "CTAPolicy",
     "CommShrinkFlag",
     "CommSuspendFlag",
@@ -90,7 +88,6 @@ __all__ = [
     "group",
     "group_start",
     "group_end",
-    "group_simulate_end",
     "GroupSimInfo",
     # Utilities
     "Version",
@@ -108,7 +105,7 @@ __all__ = [
 
 
 def __getattr__(name):
-    """Lazy-load interop submodules on first access to avoid importing cupy/torch unless needed."""
+    """Lazy-loads interop submodules on first access to avoid importing cupy/torch unless needed."""
     if name == "cupy":
         import nccl.core.interop.cupy
 

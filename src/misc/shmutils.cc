@@ -12,12 +12,10 @@
 #include <stdlib.h>
 #include "compiler.h"
 
-ncclResult_t ncclShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize,
-  void** shmPtr, void** devShmPtr, int refcount,
-  ncclShmHandle_t* handle) {
+ncclResult_t ncclShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize, void** shmPtr, void** devShmPtr,
+                         int refcount, ncclShmHandle_t* handle) {
   struct ncclShmHandleInternal* internalHandle = NULL;
-  ncclResult_t ret = ncclOsShmOpen(shmPath, shmPathSize, shmSize, shmPtr, devShmPtr,
-              refcount, &internalHandle);
+  ncclResult_t ret = ncclOsShmOpen(shmPath, shmPathSize, shmSize, shmPtr, devShmPtr, refcount, &internalHandle);
   *handle = (ncclShmHandle_t)internalHandle;
   return ret;
 }
@@ -30,7 +28,8 @@ ncclResult_t ncclShmUnlink(ncclShmHandle_t handle) {
   return ncclOsShmUnlink((struct ncclShmHandleInternal*)handle);
 }
 
-ncclResult_t ncclShmemAllgather(struct ncclComm *comm, struct ncclShmemCollBuff *shmem, void *sendbuff, void *recvbuff, size_t typeSize) {
+ncclResult_t ncclShmemAllgather(struct ncclComm* comm, struct ncclShmemCollBuff* shmem, void* sendbuff, void* recvbuff,
+                                size_t typeSize) {
   ncclResult_t ret = ncclSuccess;
   int nextRound = shmem->round + 1;
   int curIndex = shmem->round % 2;
@@ -45,12 +44,14 @@ ncclResult_t ncclShmemAllgather(struct ncclComm *comm, struct ncclShmemCollBuff 
 
   memcpy((char*)shmem->ptr[curIndex] + comm->localRank * maxTypeSize, sendbuff, typeSize);
   /* reset the previous round and notify I arrive this round */
-  COMPILER_ATOMIC_STORE((int*)((char*)shmem->cnt[curIndex] + CACHE_LINE_SIZE * comm->localRank), nextRound, std::memory_order_release);
+  COMPILER_ATOMIC_STORE((int*)((char*)shmem->cnt[curIndex] + CACHE_LINE_SIZE * comm->localRank), nextRound,
+                        std::memory_order_release);
 
   do {
     done = true;
     for (int i = index; i < comm->localRanks; ++i) {
-      if (i != comm->localRank && COMPILER_ATOMIC_LOAD((int*)((char*)shmem->cnt[curIndex] + CACHE_LINE_SIZE * i), std::memory_order_acquire) < nextRound) {
+      if (i != comm->localRank && COMPILER_ATOMIC_LOAD((int*)((char*)shmem->cnt[curIndex] + CACHE_LINE_SIZE * i),
+                                                       std::memory_order_acquire) < nextRound) {
         done = false;
         index = i;
         break;

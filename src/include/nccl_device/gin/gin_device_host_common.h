@@ -14,8 +14,8 @@
 
 #define NCCL_GIN_MAX_CONNECTIONS 4
 
-typedef struct ncclGinGpuCtx *ncclGinGpuCtx_t;
-typedef void *ncclGinWindow_t;
+typedef struct ncclGinGpuCtx* ncclGinGpuCtx_t;
+typedef void* ncclGinWindow_t;
 
 typedef enum ncclGinSignalOp_t {
   ncclGinSignalInc = 0,

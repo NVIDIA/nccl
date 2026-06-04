@@ -1,0 +1,9 @@
+.highlight .hll { background-color: #ffe6cc }
+
+/* In the contents TOC, prevent nested lists from having extra vertical margins. */
+.rst-content .section ul li ul,
+.rst-content .toctree-wrapper ul li ul,
+.rst-content section ul li ul {
+    margin-top: 0;
+    margin-bottom: 0;
+}

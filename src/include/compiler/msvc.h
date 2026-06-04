@@ -14,58 +14,57 @@
 // Use standard C++ atomics via reinterpret_cast - this is safe for primitive types
 // since std::atomic<T> has the same size and alignment as T
 
-template<typename T>
+template <typename T>
 static inline T COMPILER_ATOMIC_LOAD_impl(volatile T* ptr, std::memory_order order) {
   return std::atomic_load_explicit(reinterpret_cast<volatile std::atomic<T>*>(ptr), order);
 }
 #define COMPILER_ATOMIC_LOAD(ptr, order) COMPILER_ATOMIC_LOAD_impl(ptr, order)
 
-template<typename T>
+template <typename T>
 static inline void COMPILER_ATOMIC_LOAD_DEST_impl(volatile T* ptr, T* dest, std::memory_order order) {
   *dest = std::atomic_load_explicit(reinterpret_cast<volatile std::atomic<T>*>(ptr), order);
 }
 #define COMPILER_ATOMIC_LOAD_DEST(ptr, dest, order) COMPILER_ATOMIC_LOAD_DEST_impl(ptr, dest, order)
 
-template<typename T>
+template <typename T>
 static inline void COMPILER_ATOMIC_STORE_impl(volatile T* ptr, T val, std::memory_order order) {
   std::atomic_store_explicit(reinterpret_cast<volatile std::atomic<T>*>(ptr), val, order);
 }
 #define COMPILER_ATOMIC_STORE(ptr, val, order) COMPILER_ATOMIC_STORE_impl(ptr, val, order)
 
 // Explicit 32-bit variants (same as generic but fixed type for uint32_t* pointers)
-#define COMPILER_ATOMIC_LOAD_32(ptr, order) \
-  COMPILER_ATOMIC_LOAD_impl(reinterpret_cast<volatile uint32_t*>(ptr), order)
+#define COMPILER_ATOMIC_LOAD_32(ptr, order) COMPILER_ATOMIC_LOAD_impl(reinterpret_cast<volatile uint32_t*>(ptr), order)
 #define COMPILER_ATOMIC_STORE_32(ptr, val, order) \
   COMPILER_ATOMIC_STORE_impl(reinterpret_cast<volatile uint32_t*>(ptr), static_cast<uint32_t>(val), order)
 
-template<typename T>
+template <typename T>
 static inline T COMPILER_ATOMIC_EXCHANGE_impl(volatile T* ptr, T val, std::memory_order order) {
   return std::atomic_exchange_explicit(reinterpret_cast<volatile std::atomic<T>*>(ptr), val, order);
 }
 #define COMPILER_ATOMIC_EXCHANGE(ptr, val, order) COMPILER_ATOMIC_EXCHANGE_impl(ptr, val, order)
 
-template<typename T>
-static inline bool COMPILER_ATOMIC_COMPARE_EXCHANGE_impl(volatile T* ptr, T* expected, T desired,
-    std::memory_order success_order, std::memory_order failure_order) {
-  return std::atomic_compare_exchange_strong_explicit(
-    reinterpret_cast<volatile std::atomic<T>*>(ptr), expected, desired, success_order, failure_order);
+template <typename T>
+static inline bool COMPILER_ATOMIC_COMPARE_EXCHANGE_impl(
+  volatile T* ptr, T* expected, T desired, std::memory_order success_order, std::memory_order failure_order) {
+  return std::atomic_compare_exchange_strong_explicit(reinterpret_cast<volatile std::atomic<T>*>(ptr), expected,
+                                                      desired, success_order, failure_order);
 }
 #define COMPILER_ATOMIC_COMPARE_EXCHANGE(ptr, expected, desired, success_order, failure_order) \
   COMPILER_ATOMIC_COMPARE_EXCHANGE_impl(ptr, expected, desired, success_order, failure_order)
 
-template<typename T>
+template <typename T>
 static inline T COMPILER_ATOMIC_FETCH_ADD_impl(volatile T* ptr, T val, std::memory_order order) {
   return std::atomic_fetch_add_explicit(reinterpret_cast<volatile std::atomic<T>*>(ptr), val, order);
 }
 #define COMPILER_ATOMIC_FETCH_ADD(ptr, val, order) COMPILER_ATOMIC_FETCH_ADD_impl(ptr, val, order)
 
-template<typename T>
+template <typename T>
 static inline T COMPILER_ATOMIC_ADD_FETCH_impl(volatile T* ptr, T val, std::memory_order order) {
   return std::atomic_fetch_add_explicit(reinterpret_cast<volatile std::atomic<T>*>(ptr), val, order) + val;
 }
 #define COMPILER_ATOMIC_ADD_FETCH(ptr, val, order) COMPILER_ATOMIC_ADD_FETCH_impl(ptr, val, order)
 
-template<typename T>
+template <typename T>
 static inline T COMPILER_ATOMIC_SUB_FETCH_impl(volatile T* ptr, T val, std::memory_order order) {
   return std::atomic_fetch_sub_explicit(reinterpret_cast<volatile std::atomic<T>*>(ptr), val, order) - val;
 }

@@ -49,7 +49,7 @@ NCCL_DEVICE_INLINE unsigned computeCommonAlignment(Coop coop, Lambda ptrLambda, 
   // Use efficient warp reduce
   auto lanes = ncclCoopCoalesced(coop);
   unsigned commonAlign = 0;
-  #pragma unroll 1
+  NVCC_PRAGMA_UNROLL_DISABLED
   for (int i = lanes.thread_rank(); i < nPtrs; i += lanes.size()) {
     unsigned align = getAlignment(ptrLambda(i), sizeof(Pack));
     commonAlign = 1 + min(commonAlign - 1, align - 1);
@@ -67,14 +67,11 @@ NCCL_DEVICE_INLINE unsigned computeCommonAlignment(Coop coop, Lambda ptrLambda, 
 #endif
 }
 
-
 // Helper to compute alignment for a specific pack size
 // Returns alignment offset in bytes (0 means aligned)
 template <typename T, int PackBytes, typename Coop, typename SrcLambda, typename DstLambda>
-NCCL_DEVICE_INLINE unsigned computeAlignmentForPackSize(
-    Coop coop,
-    SrcLambda srcLambda, int nSrc,
-    DstLambda dstLambda, int nDst) {
+NCCL_DEVICE_INLINE unsigned computeAlignmentForPackSize(Coop coop, SrcLambda srcLambda, int nSrc, DstLambda dstLambda,
+                                                        int nDst) {
   using Pack = EltPackForBytes<T, PackBytes>;
   unsigned srcAlign = (nSrc > 0) ? computeCommonAlignment<Pack>(coop, srcLambda, nSrc) : 0;
   unsigned dstAlign = (nDst > 0) ? computeCommonAlignment<Pack>(coop, dstLambda, nDst) : 0;
@@ -94,13 +91,9 @@ NCCL_DEVICE_INLINE unsigned computeAlignmentForPackSize(
 // Helper to try alignment for a specific pack size with lambdas
 // Matches all_reduce.cuh: checks both individual alignment and relative alignment
 template <typename T, int PackBytes, typename Coop, typename SrcLambda, typename DstLambda, typename IntCount>
-NCCL_DEVICE_INLINE bool tryLambdaAlignmentForPackSize(
-    Coop coop,
-    SrcLambda srcLambda, int nSrc,
-    DstLambda dstLambda, int nDst,
-    IntCount count,
-    IntCount& alignOffset,
-    int& maxPackBytes) {
+NCCL_DEVICE_INLINE bool tryLambdaAlignmentForPackSize(Coop coop, SrcLambda srcLambda, int nSrc, DstLambda dstLambda,
+                                                      int nDst, IntCount count, IntCount& alignOffset,
+                                                      int& maxPackBytes) {
   constexpr IntCount eltPerPack = PackBytes / sizeof(T);
 
   if (eltPerPack == 0 || count < eltPerPack) {
@@ -116,13 +109,11 @@ NCCL_DEVICE_INLINE bool tryLambdaAlignmentForPackSize(
   if (nSrc > 0 && nDst > 0) {
     uintptr_t refOffset = reinterpret_cast<uintptr_t>(srcLambda(0));
     const int nOthers = (nSrc - 1) + nDst;
-    auto ptrLambda = [&](int i) -> void* {
-      return (i < nSrc - 1) ? srcLambda(i + 1) : dstLambda(i - (nSrc - 1));
-    };
+    auto ptrLambda = [&](int i) -> void* { return (i < nSrc - 1) ? srcLambda(i + 1) : dstLambda(i - (nSrc - 1)); };
 #if __CUDA_ARCH__ >= 800
     auto lanes = ncclCoopCoalesced(coop);
     unsigned allAligned = 1u;
-    #pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     for (int i = lanes.thread_rank(); i < nOthers; i += lanes.size()) {
       uintptr_t ptrOffset = reinterpret_cast<uintptr_t>(ptrLambda(i));
       intptr_t relOffset = static_cast<intptr_t>(ptrOffset) - static_cast<intptr_t>(refOffset);
@@ -170,19 +161,18 @@ struct AlignmentResult {
 // Tries 16, 4 bytes and returns both the offset and the max pack size that works
 template <typename T, typename Coop, typename SrcLambda, typename DstLambda, typename IntCount>
 NCCL_DEVICE_INLINE AlignmentResult<IntCount> computeLambdaAlignmentOffsetWithFallback(
-    Coop coop,
-    SrcLambda srcLambda, int nSrc,
-    DstLambda dstLambda, int nDst,
-    IntCount count) {
+  Coop coop, SrcLambda srcLambda, int nSrc, DstLambda dstLambda, int nDst, IntCount count) {
   AlignmentResult<IntCount> result;
   result.alignOffset = 0;
   result.maxPackBytes = static_cast<int>(sizeof(T));  // Default to scalar if nothing works
 
   // Try each pack size from largest to smallest using explicit template instantiations
-  if (tryLambdaAlignmentForPackSize<T, 16>(coop, srcLambda, nSrc, dstLambda, nDst, count, result.alignOffset, result.maxPackBytes)) {
+  if (tryLambdaAlignmentForPackSize<T, 16>(coop, srcLambda, nSrc, dstLambda, nDst, count, result.alignOffset,
+                                           result.maxPackBytes)) {
     return result;
   }
-  if (tryLambdaAlignmentForPackSize<T, 4>(coop, srcLambda, nSrc, dstLambda, nDst, count, result.alignOffset, result.maxPackBytes)) {
+  if (tryLambdaAlignmentForPackSize<T, 4>(coop, srcLambda, nSrc, dstLambda, nDst, count, result.alignOffset,
+                                          result.maxPackBytes)) {
     return result;
   }
 
@@ -195,11 +185,8 @@ NCCL_DEVICE_INLINE AlignmentResult<IntCount> computeLambdaAlignmentOffsetWithFal
 // Helper to compute alignment for a specific pack size (template parameter)
 // Matches all_reduce.cuh: checks both individual alignment and relative alignment
 template <typename T, int PackBytes, typename IntCount>
-NCCL_DEVICE_INLINE bool tryPointerPairAlignmentForPackSize(
-    void* srcPtr,
-    void* dstPtr,
-    IntCount& alignOffset,
-    int& maxPackBytes) {
+NCCL_DEVICE_INLINE bool tryPointerPairAlignmentForPackSize(void* srcPtr, void* dstPtr, IntCount& alignOffset,
+                                                           int& maxPackBytes) {
   using Pack = EltPackForBytes<T, PackBytes>;
 
   // Check individual alignments
@@ -235,16 +222,11 @@ NCCL_DEVICE_INLINE bool tryPointerPairAlignmentForPackSize(
   return false;
 }
 
-
 // Compute alignment for two pointers with fallback to smaller pack sizes
 // Tries 16, 4 bytes and returns both the offset and the max pack size that works
 template <typename T, typename IntCount>
-NCCL_DEVICE_INLINE void computePointerPairAlignmentWithFallback(
-    void* srcPtr,
-    void* dstPtr,
-    IntCount count,
-    IntCount& alignOffset,
-    int& maxPackBytes) {
+NCCL_DEVICE_INLINE void computePointerPairAlignmentWithFallback(void* srcPtr, void* dstPtr, IntCount count,
+                                                                IntCount& alignOffset, int& maxPackBytes) {
   alignOffset = 0;
   maxPackBytes = static_cast<int>(sizeof(T));  // Default to scalar if nothing works
 
@@ -263,11 +245,8 @@ NCCL_DEVICE_INLINE void computePointerPairAlignmentWithFallback(
 
 // Helper to compute strided alignment for a specific pack size (template parameter)
 template <typename T, int PackBytes, typename IntCount>
-NCCL_DEVICE_INLINE bool tryStridedAlignmentForPackSize(
-    void* basePtr,
-    size_t displ,
-    IntCount& alignOffset,
-    int& maxPackBytes) {
+NCCL_DEVICE_INLINE bool tryStridedAlignmentForPackSize(void* basePtr, size_t displ, IntCount& alignOffset,
+                                                       int& maxPackBytes) {
   using Pack = EltPackForBytes<T, PackBytes>;
 
   // Strided offsets must preserve alignment for all chunks.
@@ -289,12 +268,7 @@ NCCL_DEVICE_INLINE bool tryStridedAlignmentForPackSize(
 // Helper to try complex strided alignment (src and dst) for a specific pack size
 template <typename T, int PackBytes, typename IntCount>
 NCCL_DEVICE_INLINE bool tryComplexStridedAlignmentForPackSize(
-    void* srcBasePtr,
-    size_t srcDispl,
-    void* dstBasePtr,
-    size_t dstDispl,
-    IntCount& alignOffset,
-    int& maxPackBytes) {
+  void* srcBasePtr, size_t srcDispl, void* dstBasePtr, size_t dstDispl, IntCount& alignOffset, int& maxPackBytes) {
   using Pack = EltPackForBytes<T, PackBytes>;
 
   // Compute alignment for source and destination strides
@@ -345,12 +319,8 @@ NCCL_DEVICE_INLINE bool tryComplexStridedAlignmentForPackSize(
 // Compute strided alignment with fallback to smaller pack sizes
 // Tries 16, 4 bytes and returns both the offset and the max pack size that works
 template <typename T, typename IntCount>
-NCCL_DEVICE_INLINE void computeStridedAlignmentWithFallback(
-    void* basePtr,
-    size_t displ,
-    IntCount count,
-    IntCount& alignOffset,
-    int& maxPackBytes) {
+NCCL_DEVICE_INLINE void computeStridedAlignmentWithFallback(void* basePtr, size_t displ, IntCount count,
+                                                            IntCount& alignOffset, int& maxPackBytes) {
   alignOffset = 0;
   maxPackBytes = static_cast<int>(sizeof(T));  // Default to scalar if nothing works
 
@@ -378,7 +348,10 @@ template <typename T, int n>
 struct PackAccess {
   union {
     EltPack<T, n> pack;
-    struct { EltPack<T, n / 2> lo; EltPack<T, n / 2> hi; };
+    struct {
+      EltPack<T, n / 2> lo;
+      EltPack<T, n / 2> hi;
+    };
   };
 };
 
@@ -386,8 +359,12 @@ template <typename T>
 struct PackAccess<T, 1> {
   union {
     EltPack<T, 1> pack;
-    struct { EltPack<T, 1> lo; };
-    struct { EltPack<T, 1> hi; };
+    struct {
+      EltPack<T, 1> lo;
+    };
+    struct {
+      EltPack<T, 1> hi;
+    };
   };
 };
 
@@ -395,14 +372,18 @@ template <typename T>
 struct PackAccess<T, 0> {
   union {
     EltPack<T, 0> pack;
-    struct { EltPack<T, 0> lo; };
-    struct { EltPack<T, 0> hi; };
+    struct {
+      EltPack<T, 0> lo;
+    };
+    struct {
+      EltPack<T, 0> hi;
+    };
   };
 };
 
 // Cast pack from element type X to element type Y
 // Works with EltPack types
-template<typename Y, typename X, int n>
+template <typename Y, typename X, int n>
 NCCL_DEVICE_INLINE EltPack<Y, n> castPack(EltPack<X, n> x) {
   static_assert((n & (n - 1)) == 0, "EltPack requires power-of-two element count");
 
@@ -419,7 +400,7 @@ NCCL_DEVICE_INLINE EltPack<Y, n> castPack(EltPack<X, n> x) {
 }
 
 // Specialization for zero-sized packs
-template<typename Y, typename X>
+template <typename Y, typename X>
 NCCL_DEVICE_INLINE EltPack<Y, 0> castPack(EltPack<X, 0> /* x */) {
   EltPack<Y, 0> result{};
   return result;
@@ -430,14 +411,14 @@ NCCL_DEVICE_INLINE EltPack<Y, 0> castPack(EltPack<X, 0> /* x */) {
 // ============================================================================
 
 // Specialization for half -> float conversion (upcast to accumulation type)
-template<>
+template <>
 NCCL_DEVICE_INLINE EltPack<float, 1> castPack(EltPack<half, 1> x) {
   EltPack<float, 1> out{};
   out.elts()[0] = __half2float(x.elts()[0]);
   return out;
 }
 
-template<>
+template <>
 NCCL_DEVICE_INLINE EltPack<float, 2> castPack(EltPack<half, 2> x) {
   union Half2PackAccess {
     EltPack<half, 2> pack;
@@ -455,14 +436,14 @@ NCCL_DEVICE_INLINE EltPack<float, 2> castPack(EltPack<half, 2> x) {
 }
 
 // Specialization for float -> half conversion (downcast from accumulation type)
-template<>
+template <>
 NCCL_DEVICE_INLINE EltPack<half, 1> castPack(EltPack<float, 1> x) {
   EltPack<half, 1> out{};
   out.elts()[0] = __float2half_rn(x.elts()[0]);  // Round to nearest
   return out;
 }
 
-template<>
+template <>
 NCCL_DEVICE_INLINE EltPack<half, 2> castPack(EltPack<float, 2> x) {
   union Half2PackAccess {
     EltPack<half, 2> pack;
@@ -476,14 +457,14 @@ NCCL_DEVICE_INLINE EltPack<half, 2> castPack(EltPack<float, 2> x) {
 #if defined(__CUDA_BF16_TYPES_EXIST__)
 
 // Specialization for __nv_bfloat16 -> float conversion (upcast to accumulation type)
-template<>
+template <>
 NCCL_DEVICE_INLINE EltPack<float, 1> castPack(EltPack<__nv_bfloat16, 1> x) {
   EltPack<float, 1> out{};
   out.elts()[0] = __bfloat162float(x.elts()[0]);
   return out;
 }
 
-template<>
+template <>
 NCCL_DEVICE_INLINE EltPack<float, 2> castPack(EltPack<__nv_bfloat16, 2> x) {
   union Bf162PackAccess {
     EltPack<__nv_bfloat16, 2> pack;
@@ -501,14 +482,14 @@ NCCL_DEVICE_INLINE EltPack<float, 2> castPack(EltPack<__nv_bfloat16, 2> x) {
 }
 
 // Specialization for float -> __nv_bfloat16 conversion (downcast from accumulation type)
-template<>
+template <>
 NCCL_DEVICE_INLINE EltPack<__nv_bfloat16, 1> castPack(EltPack<float, 1> x) {
   EltPack<__nv_bfloat16, 1> out{};
   out.elts()[0] = __float2bfloat16_rn(x.elts()[0]);  // Round to nearest
   return out;
 }
 
-template<>
+template <>
 NCCL_DEVICE_INLINE EltPack<__nv_bfloat16, 2> castPack(EltPack<float, 2> x) {
   union Bf162PackAccess {
     EltPack<__nv_bfloat16, 2> pack;
@@ -530,7 +511,7 @@ NCCL_DEVICE_INLINE EltPack<__nv_bfloat16, 2> castPack(EltPack<float, 2> x) {
 
 // Specialization for __nv_fp8_e4m3 -> half conversion (upcast to accumulation type)
 // Uses vectorized fp8x2 -> half2 when available for SIMD performance
-template<>
+template <>
 NCCL_DEVICE_INLINE EltPack<half, 1> castPack(EltPack<__nv_fp8_e4m3, 1> x) {
   union HalfRawAccess {
     __half_raw raw;
@@ -549,41 +530,41 @@ NCCL_DEVICE_INLINE EltPack<half, 1> castPack(EltPack<__nv_fp8_e4m3, 1> x) {
   return out;
 }
 
-template<>
+template <>
 NCCL_DEVICE_INLINE EltPack<half, 2> castPack(EltPack<__nv_fp8_e4m3, 2> x) {
-  #if __CUDA_ARCH__ >= 900
-    union Half2RawAccess {
-      __half2_raw raw;
-      half2 val;
-    };
-    union Half2PackAccess {
-      EltPack<half, 2> pack;
-      half2 pair;
-    };
-    union Fp8E4m3Access2 {
-      EltPack<__nv_fp8_e4m3, 2> pack;
-      __nv_fp8x2_storage_t storage2;
-    };
-    Fp8E4m3Access2 in;
-    Half2PackAccess out;
-    in.pack = x;
-    Half2RawAccess h2;
-    h2.raw = __nv_cvt_fp8x2_to_halfraw2(in.storage2, __NV_E4M3);
-    out.pair = h2.val;
-    return out.pack;
-  #else
-    PackAccess<__nv_fp8_e4m3, 2> in;
-    PackAccess<half, 2> out;
-    in.pack = x;
-    out.lo = castPack<half>(in.lo);
-    out.hi = castPack<half>(in.hi);
-    return out.pack;
-  #endif
+#if __CUDA_ARCH__ >= 900
+  union Half2RawAccess {
+    __half2_raw raw;
+    half2 val;
+  };
+  union Half2PackAccess {
+    EltPack<half, 2> pack;
+    half2 pair;
+  };
+  union Fp8E4m3Access2 {
+    EltPack<__nv_fp8_e4m3, 2> pack;
+    __nv_fp8x2_storage_t storage2;
+  };
+  Fp8E4m3Access2 in;
+  Half2PackAccess out;
+  in.pack = x;
+  Half2RawAccess h2;
+  h2.raw = __nv_cvt_fp8x2_to_halfraw2(in.storage2, __NV_E4M3);
+  out.pair = h2.val;
+  return out.pack;
+#else
+  PackAccess<__nv_fp8_e4m3, 2> in;
+  PackAccess<half, 2> out;
+  in.pack = x;
+  out.lo = castPack<half>(in.lo);
+  out.hi = castPack<half>(in.hi);
+  return out.pack;
+#endif
 }
 
 // Specialization for __nv_fp8_e5m2 -> half conversion (upcast to accumulation type)
 // Uses vectorized fp8x2 -> half2 when available for SIMD performance
-template<>
+template <>
 NCCL_DEVICE_INLINE EltPack<half, 1> castPack(EltPack<__nv_fp8_e5m2, 1> x) {
   union HalfRawAccess {
     __half_raw raw;
@@ -602,41 +583,41 @@ NCCL_DEVICE_INLINE EltPack<half, 1> castPack(EltPack<__nv_fp8_e5m2, 1> x) {
   return out;
 }
 
-template<>
+template <>
 NCCL_DEVICE_INLINE EltPack<half, 2> castPack(EltPack<__nv_fp8_e5m2, 2> x) {
-  #if __CUDA_ARCH__ >= 900
-    union Half2RawAccess {
-      __half2_raw raw;
-      half2 val;
-    };
-    union Half2PackAccess {
-      EltPack<half, 2> pack;
-      half2 pair;
-    };
-    union Fp8E5m2Access2 {
-      EltPack<__nv_fp8_e5m2, 2> pack;
-      __nv_fp8x2_storage_t storage2;
-    };
-    Fp8E5m2Access2 in;
-    Half2PackAccess out;
-    in.pack = x;
-    Half2RawAccess h2;
-    h2.raw = __nv_cvt_fp8x2_to_halfraw2(in.storage2, __NV_E5M2);
-    out.pair = h2.val;
-    return out.pack;
-  #else
-    PackAccess<__nv_fp8_e5m2, 2> in;
-    PackAccess<half, 2> out;
-    in.pack = x;
-    out.lo = castPack<half>(in.lo);
-    out.hi = castPack<half>(in.hi);
-    return out.pack;
-  #endif
+#if __CUDA_ARCH__ >= 900
+  union Half2RawAccess {
+    __half2_raw raw;
+    half2 val;
+  };
+  union Half2PackAccess {
+    EltPack<half, 2> pack;
+    half2 pair;
+  };
+  union Fp8E5m2Access2 {
+    EltPack<__nv_fp8_e5m2, 2> pack;
+    __nv_fp8x2_storage_t storage2;
+  };
+  Fp8E5m2Access2 in;
+  Half2PackAccess out;
+  in.pack = x;
+  Half2RawAccess h2;
+  h2.raw = __nv_cvt_fp8x2_to_halfraw2(in.storage2, __NV_E5M2);
+  out.pair = h2.val;
+  return out.pack;
+#else
+  PackAccess<__nv_fp8_e5m2, 2> in;
+  PackAccess<half, 2> out;
+  in.pack = x;
+  out.lo = castPack<half>(in.lo);
+  out.hi = castPack<half>(in.hi);
+  return out.pack;
+#endif
 }
 
 // Specialization for half -> __nv_fp8_e4m3 conversion (downcast from accumulation type)
 // Uses vectorized half2 -> fp8x2 when available for SIMD performance
-template<>
+template <>
 NCCL_DEVICE_INLINE EltPack<__nv_fp8_e4m3, 1> castPack(EltPack<half, 1> x) {
   union HalfRawAccess {
     __half_raw raw;
@@ -653,41 +634,41 @@ NCCL_DEVICE_INLINE EltPack<__nv_fp8_e4m3, 1> castPack(EltPack<half, 1> x) {
   return out.pack;
 }
 
-template<>
+template <>
 NCCL_DEVICE_INLINE EltPack<__nv_fp8_e4m3, 2> castPack(EltPack<half, 2> x) {
-  #if __CUDA_ARCH__ >= 900
-    union Half2RawAccess {
-      __half2_raw raw;
-      half2 val;
-    };
-    union Half2PackAccess {
-      EltPack<half, 2> pack;
-      half2 pair;
-    };
-    Half2PackAccess in;
-    union Fp8E4m3Access2 {
-      EltPack<__nv_fp8_e4m3, 2> pack;
-      __nv_fp8x2_storage_t storage2;
-    };
-    Fp8E4m3Access2 out;
-    in.pack = x;
-    Half2RawAccess h2;
-    h2.val = in.pair;
-    out.storage2 = __nv_cvt_halfraw2_to_fp8x2(h2.raw, __NV_SATFINITE, __NV_E4M3);
-    return out.pack;
-  #else
-    PackAccess<half, 2> in;
-    PackAccess<__nv_fp8_e4m3, 2> out;
-    in.pack = x;
-    out.lo = castPack<__nv_fp8_e4m3>(in.lo);
-    out.hi = castPack<__nv_fp8_e4m3>(in.hi);
-    return out.pack;
-  #endif
+#if __CUDA_ARCH__ >= 900
+  union Half2RawAccess {
+    __half2_raw raw;
+    half2 val;
+  };
+  union Half2PackAccess {
+    EltPack<half, 2> pack;
+    half2 pair;
+  };
+  Half2PackAccess in;
+  union Fp8E4m3Access2 {
+    EltPack<__nv_fp8_e4m3, 2> pack;
+    __nv_fp8x2_storage_t storage2;
+  };
+  Fp8E4m3Access2 out;
+  in.pack = x;
+  Half2RawAccess h2;
+  h2.val = in.pair;
+  out.storage2 = __nv_cvt_halfraw2_to_fp8x2(h2.raw, __NV_SATFINITE, __NV_E4M3);
+  return out.pack;
+#else
+  PackAccess<half, 2> in;
+  PackAccess<__nv_fp8_e4m3, 2> out;
+  in.pack = x;
+  out.lo = castPack<__nv_fp8_e4m3>(in.lo);
+  out.hi = castPack<__nv_fp8_e4m3>(in.hi);
+  return out.pack;
+#endif
 }
 
 // Specialization for half -> __nv_fp8_e5m2 conversion (downcast from accumulation type)
 // Uses vectorized half2 -> fp8x2 when available for SIMD performance
-template<>
+template <>
 NCCL_DEVICE_INLINE EltPack<__nv_fp8_e5m2, 1> castPack(EltPack<half, 1> x) {
   union HalfRawAccess {
     __half_raw raw;
@@ -704,36 +685,36 @@ NCCL_DEVICE_INLINE EltPack<__nv_fp8_e5m2, 1> castPack(EltPack<half, 1> x) {
   return out.pack;
 }
 
-template<>
+template <>
 NCCL_DEVICE_INLINE EltPack<__nv_fp8_e5m2, 2> castPack(EltPack<half, 2> x) {
-  #if __CUDA_ARCH__ >= 900
-    union Half2RawAccess {
-      __half2_raw raw;
-      half2 val;
-    };
-    union Half2PackAccess {
-      EltPack<half, 2> pack;
-      half2 pair;
-    };
-    Half2PackAccess in;
-    union Fp8E5m2Access2 {
-      EltPack<__nv_fp8_e5m2, 2> pack;
-      __nv_fp8x2_storage_t storage2;
-    };
-    Fp8E5m2Access2 out;
-    in.pack = x;
-    Half2RawAccess h2;
-    h2.val = in.pair;
-    out.storage2 = __nv_cvt_halfraw2_to_fp8x2(h2.raw, __NV_SATFINITE, __NV_E5M2);
-    return out.pack;
-  #else
-    PackAccess<half, 2> in;
-    PackAccess<__nv_fp8_e5m2, 2> out;
-    in.pack = x;
-    out.lo = castPack<__nv_fp8_e5m2>(in.lo);
-    out.hi = castPack<__nv_fp8_e5m2>(in.hi);
-    return out.pack;
-  #endif
+#if __CUDA_ARCH__ >= 900
+  union Half2RawAccess {
+    __half2_raw raw;
+    half2 val;
+  };
+  union Half2PackAccess {
+    EltPack<half, 2> pack;
+    half2 pair;
+  };
+  Half2PackAccess in;
+  union Fp8E5m2Access2 {
+    EltPack<__nv_fp8_e5m2, 2> pack;
+    __nv_fp8x2_storage_t storage2;
+  };
+  Fp8E5m2Access2 out;
+  in.pack = x;
+  Half2RawAccess h2;
+  h2.val = in.pair;
+  out.storage2 = __nv_cvt_halfraw2_to_fp8x2(h2.raw, __NV_SATFINITE, __NV_E5M2);
+  return out.pack;
+#else
+  PackAccess<half, 2> in;
+  PackAccess<__nv_fp8_e5m2, 2> out;
+  in.pack = x;
+  out.lo = castPack<__nv_fp8_e5m2>(in.lo);
+  out.hi = castPack<__nv_fp8_e5m2>(in.hi);
+  return out.pack;
+#endif
 }
 
 #endif
@@ -745,7 +726,7 @@ NCCL_DEVICE_INLINE EltPack<__nv_fp8_e5m2, 2> castPack(EltPack<half, 2> x) {
 // Reduce pack using reduction operator
 // Works with EltPack types
 // Operator is taken by const reference.
-template<template<typename> typename Red, typename T, int n>
+template <template <typename> typename Red, typename T, int n>
 NCCL_DEVICE_INLINE EltPack<T, n> reducePack(Red<T> const& red, EltPack<T, n> a, EltPack<T, n> b) {
   static_assert((n & (n - 1)) == 0, "EltPack requires power-of-two element count");
 
@@ -764,7 +745,7 @@ NCCL_DEVICE_INLINE EltPack<T, n> reducePack(Red<T> const& red, EltPack<T, n> a, 
 }
 
 // Specialization for zero-sized packs
-template<template<typename> typename Red, typename T>
+template <template <typename> typename Red, typename T>
 NCCL_DEVICE_INLINE EltPack<T, 0> reducePack(Red<T> const& /* red */, EltPack<T, 0> /* a */, EltPack<T, 0> /* b */) {
   EltPack<T, 0> result{};
   return result;
@@ -773,8 +754,9 @@ NCCL_DEVICE_INLINE EltPack<T, 0> reducePack(Red<T> const& /* red */, EltPack<T, 
 // Specialization for int8_t with OpSum - uses __vadd4 SIMD intrinsic for performance
 // Processes EltPack<int8_t, 4> as unsigned int chunks
 // Note: __vadd4 is only valid for sum reduction, so this specialization is OpSum-specific
-template<>
-NCCL_DEVICE_INLINE EltPack<int8_t, 4> reducePack(OpSum<int8_t> const& /* red */, EltPack<int8_t, 4> a, EltPack<int8_t, 4> b) {
+template <>
+NCCL_DEVICE_INLINE EltPack<int8_t, 4> reducePack(OpSum<int8_t> const& /* red */, EltPack<int8_t, 4> a,
+                                                 EltPack<int8_t, 4> b) {
   union Int8PackAccess4 {
     EltPack<int8_t, 4> pack;
     unsigned int word;
@@ -789,8 +771,9 @@ NCCL_DEVICE_INLINE EltPack<int8_t, 4> reducePack(OpSum<int8_t> const& /* red */,
 }
 
 // Specialization for uint8_t with OpSum - reuses int8_t implementation via union access
-template<int n>
-NCCL_DEVICE_INLINE EltPack<uint8_t, n> reducePack(OpSum<uint8_t> const& red, EltPack<uint8_t, n> a, EltPack<uint8_t, n> b) {
+template <int n>
+NCCL_DEVICE_INLINE EltPack<uint8_t, n> reducePack(OpSum<uint8_t> const& red, EltPack<uint8_t, n> a,
+                                                  EltPack<uint8_t, n> b) {
   static_assert((n & (n - 1)) == 0, "EltPack<uint8_t, n> requires power-of-two element count");
   union PackU8 {
     EltPack<uint8_t, n> u;
@@ -808,53 +791,54 @@ NCCL_DEVICE_INLINE EltPack<uint8_t, n> reducePack(OpSum<uint8_t> const& red, Elt
 
 // Specialization for half with OpSum - uses __hadd2 SIMD intrinsic for performance
 // Architecture check: __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
-template<>
+template <>
 NCCL_DEVICE_INLINE EltPack<half, 2> reducePack(OpSum<half> const& /* red */, EltPack<half, 2> a, EltPack<half, 2> b) {
-  #if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
-    union Half2PackAccess {
-      EltPack<half, 2> pack;
-      half2 pair;
-    };
-    Half2PackAccess aa;
-    Half2PackAccess bb;
-    Half2PackAccess out;
-    aa.pack = a;
-    bb.pack = b;
-    out.pair = __hadd2(aa.pair, bb.pair);
-    return out.pack;
-  #else
-    EltPack<half, 2> out{};
-    OpSum<half> red{};
-    out.elts()[0] = red(a.elts()[0], b.elts()[0]);
-    out.elts()[1] = red(a.elts()[1], b.elts()[1]);
-    return out;
-  #endif
+#if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
+  union Half2PackAccess {
+    EltPack<half, 2> pack;
+    half2 pair;
+  };
+  Half2PackAccess aa;
+  Half2PackAccess bb;
+  Half2PackAccess out;
+  aa.pack = a;
+  bb.pack = b;
+  out.pair = __hadd2(aa.pair, bb.pair);
+  return out.pack;
+#else
+  EltPack<half, 2> out{};
+  OpSum<half> red{};
+  out.elts()[0] = red(a.elts()[0], b.elts()[0]);
+  out.elts()[1] = red(a.elts()[1], b.elts()[1]);
+  return out;
+#endif
 }
 
 #if defined(__CUDA_BF16_TYPES_EXIST__)
 // Specialization for __nv_bfloat16 with OpSum - uses __hadd2 SIMD intrinsic
 // Architecture check: __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
-template<>
-NCCL_DEVICE_INLINE EltPack<__nv_bfloat16, 2> reducePack(OpSum<__nv_bfloat16> const& /* red */, EltPack<__nv_bfloat16, 2> a, EltPack<__nv_bfloat16, 2> b) {
-  #if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
-    union Bf16PackAccess2 {
-      EltPack<__nv_bfloat16, 2> pack;
-      __nv_bfloat162 pair;
-    };
-    Bf16PackAccess2 aa;
-    Bf16PackAccess2 bb;
-    Bf16PackAccess2 out;
-    aa.pack = a;
-    bb.pack = b;
-    out.pair = __hadd2(aa.pair, bb.pair);
-    return out.pack;
-  #else
-    EltPack<__nv_bfloat16, 2> out{};
-    OpSum<__nv_bfloat16> red{};
-    out.elts()[0] = red(a.elts()[0], b.elts()[0]);
-    out.elts()[1] = red(a.elts()[1], b.elts()[1]);
-    return out;
-  #endif
+template <>
+NCCL_DEVICE_INLINE EltPack<__nv_bfloat16, 2> reducePack(OpSum<__nv_bfloat16> const& /* red */,
+                                                        EltPack<__nv_bfloat16, 2> a, EltPack<__nv_bfloat16, 2> b) {
+#if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
+  union Bf16PackAccess2 {
+    EltPack<__nv_bfloat16, 2> pack;
+    __nv_bfloat162 pair;
+  };
+  Bf16PackAccess2 aa;
+  Bf16PackAccess2 bb;
+  Bf16PackAccess2 out;
+  aa.pack = a;
+  bb.pack = b;
+  out.pair = __hadd2(aa.pair, bb.pair);
+  return out.pack;
+#else
+  EltPack<__nv_bfloat16, 2> out{};
+  OpSum<__nv_bfloat16> red{};
+  out.elts()[0] = red(a.elts()[0], b.elts()[0]);
+  out.elts()[1] = red(a.elts()[1], b.elts()[1]);
+  return out;
+#endif
 }
 #endif
 
@@ -864,4 +848,3 @@ NCCL_DEVICE_INLINE EltPack<__nv_bfloat16, 2> reducePack(OpSum<__nv_bfloat16> con
 #endif // NCCL_CHECK_CUDACC
 
 #endif // _NCCL_DEVICE_VECTOR__FUNCS_H_
-

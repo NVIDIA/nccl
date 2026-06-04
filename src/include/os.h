@@ -40,11 +40,12 @@ void ncclOsAlignedFree(void* ptr);
 std::tm* ncclOsLocaltime(const time_t* timer, std::tm* buf);
 
 void ncclOsSetEnv(const char* name, const char* value);
+char* ncclOsStrSep(char** stringp, const char* delim);
 
 /* Dynamic library loading */
 typedef void* ncclOsLibraryHandle;
 #define NCCL_OS_DL_LAZY 0
-#define NCCL_OS_DL_NOW  1
+#define NCCL_OS_DL_NOW 1
 ncclOsLibraryHandle ncclOsDlopen(const char* filename);
 ncclOsLibraryHandle ncclOsDlopen(const char* path, int mode);
 void* ncclOsDlsym(ncclOsLibraryHandle handle, const char* symbol);
@@ -54,18 +55,19 @@ const char* ncclOsDlerror();
 /* Socket functions */
 bool ncclOsSocketIsValid(struct ncclSocket* sock);
 bool ncclOsSocketDescriptorIsValid(ncclSocketDescriptor sock);
-ncclResult_t ncclOsFindInterfaces(const char* prefixList, char* names, union ncclSocketAddress *addrs, int sock_family,
-  int maxIfNameSize, int maxIfs, int* found);
+ncclResult_t ncclOsFindInterfaces(const char* prefixList, char* names, union ncclSocketAddress* addrs, int sock_family,
+                                  int maxIfNameSize, int maxIfs, int* found);
 void ncclOsPollSocket(ncclSocketDescriptor sock, int op);
 ncclResult_t ncclOsSocketPollConnect(struct ncclSocket* sock);
 ncclResult_t ncclOsSocketStartConnect(struct ncclSocket* sock);
 ncclResult_t ncclOsSocketSetFlags(struct ncclSocket* sock);
-ncclResult_t ncclOsSocketProgressOpt(int op, struct ncclSocket* sock, void* ptr, int size, int* offset, int block, int* closed);
+ncclResult_t ncclOsSocketProgressOpt(int op, struct ncclSocket* sock, void* ptr, int size, int* offset, int block,
+                                     int* closed);
 ncclResult_t ncclOsSocketResetFd(struct ncclSocket* sock);
 void ncclOsSocketResetAccept(struct ncclSocket* sock);
 ncclResult_t ncclOsSocketTryAccept(struct ncclSocket* sock);
 
-void ncclOsSetMutexCondShared(std::mutex &mutex, std::condition_variable &cond);
+void ncclOsSetMutexCondShared(std::mutex& mutex, std::condition_variable& cond);
 
 void ncclOsCpuZero(ncclAffinity& affinity);
 int ncclOsCpuCount(const ncclAffinity& affinity);
@@ -75,8 +77,25 @@ ncclAffinity ncclOsCpuAnd(const ncclAffinity& a, const ncclAffinity& b);
 ncclResult_t ncclOsGetAffinity(ncclAffinity* affinity);
 ncclResult_t ncclOsSetAffinity(const ncclAffinity& affinity);
 int ncclOsGetCpu();
+
+ncclResult_t ncclOsGetNumaNodeAffinity(unsigned int numaId, char* affinityStr, size_t maxLen);
+
+ncclResult_t ncclOsGetPciDeviceClassByBusId(const char* busId, char* deviceClass, size_t maxLen);
+
+#if NCCL_OS_WINDOWS
+// Forward declare nvmlDevice_t to avoid including nvml.h
+struct nvmlDevice_st;
+typedef struct nvmlDevice_st* nvmlDevice_t;
+ncclResult_t ncclOsGetPciDeviceParent(nvmlDevice_t device, char** parentBusId);
+#endif
+
 /* Path resolution */
 char* ncclOsRealpath(const char* path, char* resolved_path);
+
+/* Topology/PCI detection functions */
+ncclResult_t ncclOsGetPciPath(const char* busId, char** path);
+ncclResult_t ncclOsTopoGetStrFromSys(const char* path, const char* fileName, char* strValue, int maxLen);
+ncclResult_t ncclOsGetBcmLinks(const char* busId, int* nlinks, char** peers);
 
 /* Shared memory functions - platform-specific implementations in os/linux.cc and os/windows.cc */
 #include <stddef.h>
@@ -103,21 +122,18 @@ struct ncclShmHandleInternal {
 };
 
 /* Initialize the shared memory handle structure */
-void ncclOsShmHandleInit(ncclShmDescriptor shmDesc, char* shmPath, size_t shmSize, size_t realShmSize,
-                         char* hptr, void* dptr, bool create,
-                         struct ncclShmHandleInternal* handle);
+void ncclOsShmHandleInit(ncclShmDescriptor shmDesc, char* shmPath, size_t shmSize, size_t realShmSize, char* hptr,
+                         void* dptr, bool create, struct ncclShmHandleInternal* handle);
 
 /* Create or open shared memory */
-ncclResult_t ncclOsShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize,
-                           void** shmPtr, void** devShmPtr, int refcount,
-                           struct ncclShmHandleInternal** handle);
+ncclResult_t ncclOsShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize, void** shmPtr, void** devShmPtr,
+                           int refcount, struct ncclShmHandleInternal** handle);
 
 /* Close and cleanup shared memory */
 ncclResult_t ncclOsShmClose(struct ncclShmHandleInternal* handle);
 
 /* Unlink shared memory (remove from system) */
 ncclResult_t ncclOsShmUnlink(struct ncclShmHandleInternal* handle);
-
 
 /* NVML */
 ncclResult_t ncclOsNvmlOpen(ncclOsLibraryHandle* handle);

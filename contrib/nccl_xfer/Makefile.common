@@ -1,0 +1,144 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# See LICENSE.txt for more license information.
+
+# ============================================================================
+# Shared configuration for the NCCL Xfer root Makefile and tests/Makefile.
+# ============================================================================
+#
+# Both Makefiles include this file; it auto-detects its own absolute location
+# so all paths (sources, headers, build dir) resolve from the project root
+# regardless of where `make` was invoked.
+#
+# Required env: NCCL_HOME
+# Optional env: CUDA_HOME, MPI_HOME, NVCC_GENCODE, DEBUG, BUILDDIR
+# ============================================================================
+
+# Project root = directory containing this Makefile.common.
+NCCLXFER_RESHARD_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+
+# ── CUDA / NVCC ────────────────────────────────────────────────────────────
+CUDA_HOME ?= /usr/local/cuda
+NVCC ?= $(CUDA_HOME)/bin/nvcc
+
+# ── Required dependency checks (skipped for `clean` / `help`) ──────────────
+NO_DEPS_GOALS := clean help tests-clean
+SKIP_DEP_CHECK := $(if $(MAKECMDGOALS),$(if $(filter-out $(NO_DEPS_GOALS),$(MAKECMDGOALS)),,1))
+
+ifeq ($(SKIP_DEP_CHECK),)
+ifndef NCCL_HOME
+$(error NCCL_HOME is not set. Set it to your NCCL build directory, e.g., /path/to/nccl/build)
+endif
+ifeq ($(wildcard $(NCCL_HOME)/include/nccl_device.h),)
+$(error NCCL_HOME=$(NCCL_HOME) does not contain include/nccl_device.h. NCCL must be built from source.)
+endif
+ifeq ($(wildcard $(NVCC)),)
+$(error NVCC not found at $(NVCC). Set CUDA_HOME correctly.)
+endif
+endif
+
+# ── MPI (benchmarks + MPI test only — library itself does not link MPI) ────
+ifdef MPI_HOME
+MPI_CFLAGS = -I$(MPI_HOME)/include
+MPI_LDFLAGS = -L$(MPI_HOME)/lib -lmpi
+else
+MPI_CFLAGS =
+MPI_LDFLAGS = -lmpi
+endif
+
+# ── Output directories (single shared build/ at the project root) ─────────
+BUILDDIR ?= $(NCCLXFER_RESHARD_ROOT)/build
+LIBDIR := $(BUILDDIR)/lib
+BINDIR := $(BUILDDIR)/bin
+OBJDIR := $(BUILDDIR)/obj
+INCDIR := $(BUILDDIR)/include
+XFER_LIBNAME := libnccl_xfer.so
+XFER_LIBTARGET := $(LIBDIR)/$(XFER_LIBNAME)
+XFER_HEADER_TARGET := $(INCDIR)/nccl_xfer.h
+
+SRCDIR := $(NCCLXFER_RESHARD_ROOT)/src
+BENCHDIR := $(NCCLXFER_RESHARD_ROOT)/benchmarks
+TESTSDIR := $(NCCLXFER_RESHARD_ROOT)/tests
+
+# ── Compiler flags ─────────────────────────────────────────────────────────
+CXXSTD := -std=c++17
+
+INCLUDES := -isystem $(NCCL_HOME)/include \
+            -isystem $(NCCL_HOME)/include/nccl_device \
+            -isystem $(CUDA_HOME)/include \
+            -I$(SRCDIR) \
+            -isystem $(NCCLXFER_RESHARD_ROOT)/third_party
+
+NVCUFLAGS := -ccbin $(CXX) \
+             $(CXXSTD) \
+             --expt-extended-lambda \
+             --expt-relaxed-constexpr \
+             -Xcompiler -fPIC \
+             -Xcompiler -Wall \
+             -DNCCL_OS_LINUX \
+             $(INCLUDES)
+
+ifndef NVCC_GENCODE
+NVCUFLAGS += -gencode=arch=compute_80,code=sm_80
+NVCUFLAGS += -gencode=arch=compute_90,code=sm_90
+NVCUFLAGS += -gencode=arch=compute_100,code=sm_100
+else
+NVCUFLAGS += $(NVCC_GENCODE)
+endif
+
+NVCUFLAGS += -O3
+NVCUFLAGS += --ptxas-options=-v
+
+ifeq ($(DEBUG),full)
+    NVCUFLAGS += -G -g -O0
+    $(info [DEBUG] Full device debugging enabled (-G -g))
+else ifeq ($(DEBUG),1)
+    NVCUFLAGS += -lineinfo -g
+    $(info [DEBUG] Line info enabled (-lineinfo -g))
+endif
+
+# ── Linker flags ───────────────────────────────────────────────────────────
+LIB_LDFLAGS := -L$(NCCL_HOME)/lib -lnccl \
+               -L$(CUDA_HOME)/lib64 -lcudart -lcuda
+XFER_LIB_LDFLAGS := $(LIB_LDFLAGS) -Xlinker -rpath -Xlinker '$$ORIGIN'
+
+# Benchmarks and tests link against libnccl_xfer.so + MPI (for bootstrap).
+# rpath '$ORIGIN/../lib' lets the binary find the .so relative to its own
+# location (build/bin → build/lib), so callers don't need to set
+# LD_LIBRARY_PATH for in-tree runs.  Notes:
+#   - We use `-Xlinker -rpath -Xlinker <path>` (not `-Xcompiler -Wl,…`)
+#     because nvcc rewrites comma-separated `-Wl,…` arguments and ends up
+#     dropping the `-Wl,` prefix on the second comma-separated piece, which
+#     g++ then sees as a bare `-Wl` flag and rejects.
+#   - $$  escapes Make → shell ($$ → $)
+#   - '…' protects $ORIGIN from shell expansion so it reaches the linker
+XFER_CLIENT_LDFLAGS := -L$(LIBDIR) -lnccl_xfer \
+                       -Xlinker -rpath -Xlinker '$$ORIGIN/../lib'
+BENCH_LDFLAGS := $(LIB_LDFLAGS) $(MPI_LDFLAGS)
+
+# ── Library sources / headers (modular) ────────────────────────────────────
+# Library sources split by translation-unit kind:
+#   LIB_CC_SRCS — host-only C++ TUs. Forwarded to the host compiler by nvcc
+#                 (extension-driven), skipping the device pipeline. No
+#                 __global__/__device__ code, no kernel launches.
+#   LIB_CU_SRCS — CUDA TUs. Contain device code (kernels, launches) and
+#                 require the full nvcc compilation pipeline.
+LIB_CC_SRCS := $(SRCDIR)/reshard_config.cc \
+               $(SRCDIR)/reshard_cache.cc \
+               $(SRCDIR)/reshard_mesh.cc \
+               $(SRCDIR)/reshard_loadbalance.cc \
+               $(SRCDIR)/reshard_prepare.cc \
+               $(SRCDIR)/reshard_transpose.cc \
+               $(SRCDIR)/reshard_init.cc
+
+LIB_CU_SRCS := $(SRCDIR)/reshard_user_window.cu
+
+LIB_SRCS := $(LIB_CC_SRCS) $(LIB_CU_SRCS)
+
+LIB_HDRS := $(SRCDIR)/nccl_xfer.h \
+            $(SRCDIR)/reshard_types.h \
+            $(SRCDIR)/reshard_limits.h \
+            $(SRCDIR)/reshard_checks.h \
+            $(SRCDIR)/reshard_log.h \
+            $(SRCDIR)/reshard_internal.h \
+            $(SRCDIR)/reshard_kernels.cuh

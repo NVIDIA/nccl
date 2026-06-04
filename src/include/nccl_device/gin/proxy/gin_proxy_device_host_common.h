@@ -11,7 +11,7 @@
 #include <stddef.h>
 
 #define NCCL_GIN_PROXY_VERSION 100
-#define NCCL_GIN_PROXY_GFD_VERSION 1
+#define NCCL_GIN_PROXY_GFD_VERSION 2
 
 typedef enum {
   ncclGinProxyOpPut = 1 << 0,
@@ -25,95 +25,94 @@ typedef enum {
   ncclGinProxyOpFlush = 1 << 7,
 } ncclGinProxyOp_t;
 
-static_assert(sizeof(void *) == sizeof(uint64_t) && sizeof(size_t) == sizeof(uint64_t),
+static_assert(sizeof(void*) == sizeof(uint64_t) && sizeof(size_t) == sizeof(uint64_t),
               "The proxy code is built on the assumption that the pointer size is 64 bits and at "
               "most 57 bits are used for the actual pointer.");
 
 typedef union {
   uint64_t raw;
   struct {
-    uint64_t v : 1;
-    uint64_t resv : 63;
+    uint64_t v:1;
+    uint64_t resv:63;
   } __attribute__((packed)) flag;
   struct {
-    uint64_t flag : 1;
-    uint64_t version : 4;
-    uint64_t resv : 2;
-    uint64_t size : 57;
+    uint64_t flag:1;
+    uint64_t version:4;
+    uint64_t resv:2;
+    uint64_t size:57;
   } __attribute__((packed)) header;
   struct {
     // the last bit is the flag, so we support 63 bit VAs
-    uint64_t flag : 1;
-    uint64_t srcOff : 63;
+    uint64_t flag:1;
+    uint64_t srcOff:63;
   } __attribute__((packed)) srcOff;
   struct {
     // the last bit is the flag, so we support 63 bit VAs
-    uint64_t flag : 1;
-    uint64_t srcHandle : 63;
+    uint64_t flag:1;
+    uint64_t srcHandle:63;
   } __attribute__((packed)) srcHandle;
   struct {
     // the last bit is the flag, so we support 63 bit VAs
-    uint64_t flag : 1;
-    uint64_t vaSignalOff : 63;
+    uint64_t flag:1;
+    uint64_t vaSignalOff:63;
   } __attribute__((packed)) vaSignalOff;
   struct {
     // the last bit is the flag, so we support 63 bit VAs
-    uint64_t flag : 1;
-    uint64_t vaSignalHandle : 63;
+    uint64_t flag:1;
+    uint64_t vaSignalHandle:63;
   } __attribute__((packed)) vaSignalHandle;
   struct {
-    uint8_t flag : 1;
-    uint8_t resv : 7;
+    uint8_t flag:1;
+    uint8_t resv:7;
     uint32_t inlineValLow;
     uint16_t inlineValLow2;
   } __attribute__((packed)) inlineLow;
   // inline supports a max of 96 bit / 12 byte values
   struct {
-    uint8_t flag : 1;
-    uint8_t resv : 7;
+    uint8_t flag:1;
+    uint8_t resv:7;
     uint16_t inlineValHigh;
     uint8_t resv1;
     uint32_t resv2;
   } __attribute__((packed)) inlineHigh;
   struct {
     // the last bit is the flag, so we support 63 bit VAs
-    uint64_t flag : 1;
-    uint64_t dstOff : 63;
+    uint64_t flag:1;
+    uint64_t dstOff:63;
   } __attribute__((packed)) dstOff;
   struct {
     // the last bit is the flag, so we support 63 bit VAs
-    uint64_t flag : 1;
-    uint64_t dstHandle : 63;
+    uint64_t flag:1;
+    uint64_t dstHandle:63;
   } __attribute__((packed)) dstHandle;
   struct {
-    uint8_t flag : 1;
+    uint8_t flag:1;
     // We need to keep the size of counterId and signalId in sync with the
     // NCCL_GIN_COUNTER_POOL_SIZE / NCCL_GIN_SIGNAL_POOL_SIZE upper limits
     // in gin_host.cc.
     // must be non-zero if WITH_COUNTER is set
-    uint32_t counterId : 23;
+    uint32_t counterId:23;
     // must be non-zero if WITH_SIGNAL_INC, WITH_SIGNAL_ADD, or WITH_SIGNAL_SET is set
-    uint32_t signalId : 24;
+    uint32_t signalId:24;
     uint16_t signalValLow;
   } __attribute__((packed)) completion;
   struct {
-    uint8_t flag : 1;
-    uint8_t resv : 7;
+    uint8_t flag:1;
+    uint8_t isStrongSignal:1;
+    uint8_t resv:6;
     uint16_t signalValLow2;
     uint32_t signalValHigh;
   } __attribute__((packed)) signalVal;
   struct {
-    uint8_t flag : 1;
-    uint8_t resv : 7;
+    uint8_t flag:1;
+    uint8_t resv:7;
     uint16_t op;
     uint8_t resv2;
     uint32_t resv3;
   } __attribute__((packed)) headerExt;
 } ncclGinProxyQword_t;
-static_assert(sizeof(ncclGinProxyQword_t) == sizeof(uint64_t),
-              "sizeof(ncclGinProxyQword_t) != sizeof(uint64_t)");
-static_assert(NCCL_GIN_PROXY_GFD_VERSION < (1 << 4),
-              "NCCL_GIN_PROXY_GFD_VERSION must be less than 2^4");
+static_assert(sizeof(ncclGinProxyQword_t) == sizeof(uint64_t), "sizeof(ncclGinProxyQword_t) != sizeof(uint64_t)");
+static_assert(NCCL_GIN_PROXY_GFD_VERSION < (1 << 4), "NCCL_GIN_PROXY_GFD_VERSION must be less than 2^4");
 
 typedef enum {
   ncclGinProxyGfdHeader = 0,
@@ -131,22 +130,32 @@ typedef enum {
   ncclGinProxyGfdQwords = 16,
 } ncclGinProxyGfdQwordIdx_t;
 
-typedef struct __attribute__((packed)) {
+// aligned(16) is required because gin_proxy.h casts (uint4*)&gfd to emit
+// st.global.wt.v4.u32 / ld.local.v4.b32 PTX, which require 16-byte alignment.
+// packed is needed to preserve the no-padding guarantee the inner bitfield layouts depend on.
+typedef struct __attribute__((packed, aligned(16))) {
   ncclGinProxyQword_t qword[ncclGinProxyGfdQwords];
 } ncclGinProxyGfd_t;
 static_assert(sizeof(ncclGinProxyGfd_t) == 128,
               "sizeof(ncclGinProxyGfd_t) != 128 - Backwards compat requires ncclGinProxyGfd to be 128 bytes!");
+static_assert(alignof(ncclGinProxyGfd_t) >= 16, "ncclGinProxyGfd_t must be at least 16-byte aligned: gin_proxy.h "
+                                                "casts to (uint4*) for v4 PTX load/store; lower alignment causes "
+                                                "cudaErrorMisalignedAddress.");
 
 typedef struct {
   int nranks;
   uint32_t queueSize;
-  ncclGinProxyGfd_t *queues;
-  uint32_t *pis;
+  ncclGinProxyGfd_t* queues;
+  uint32_t* pis;
   // The consumer indices will reside in CPU or GPU memory depending on the availability of GDR
-  uint32_t *cis;
+  uint32_t* cis;
 
-  uint64_t *counters;
-  uint64_t *signals;
+  uint64_t* counters;
+  uint64_t* signals;
+  uint64_t* signalOffsets;
+
+  uint32_t* lastIssuedGet; // per-peer index of most recent get
+  uint32_t* lastVisibleGet; // per-peer index of last get for which the payload is guaranteed visible (via flush GFD)
 } ncclGinProxyGpuCtx_t;
 
 #endif

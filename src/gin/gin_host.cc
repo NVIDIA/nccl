@@ -114,6 +114,7 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
 
   void** handles = NULL;
   char* allHandles = NULL;
+  void* listenComm = NULL;
 
   int* ginCommCountHandles = NULL;
   NCCLCHECKGOTO(ncclCalloc(&ginCommCountHandles, comm->nRanks), ret, fail);
@@ -155,7 +156,6 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
   }
 
   for (int n = 0; n < ginState->ginCommCount; n++) {
-    void* listenComm;
     NCCLCHECKGOTO(ginState->ncclGin->listen(ginState->ginInstance, localGinDevs[n % nLocalGinDevs],
                                             allHandles + NCCL_NET_HANDLE_MAXSIZE * comm->rank, &listenComm),
                   ret, fail);
@@ -169,6 +169,7 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
                   ret, fail);
 
     NCCLCHECKGOTO(ginState->ncclGin->closeListen(listenComm), ret, fail);
+    listenComm = NULL;
   }
   free(handles);
   handles = NULL;
@@ -181,9 +182,22 @@ exit:
   if (ret == ncclSuccess) ginState->connected = true;
   return ret;
 fail:
-  if (allHandles) free(allHandles);
-  if (handles) free(handles);
-  if (ginCommCountHandles) free(ginCommCountHandles);
+  if (listenComm != NULL) {
+    NCCLCHECKIGNORE(ginState->ncclGin->closeListen(listenComm), ret);
+    listenComm = NULL;
+  }
+  for (int n = 0; n < ginState->ginCommCount; n++) {
+    if (ginState->ginComms[n] != NULL) {
+      NCCLCHECKIGNORE(ginState->ncclGin->closeColl(ginState->ginComms[n]), ret);
+      ginState->ginComms[n] = NULL;
+    }
+  }
+  if (allHandles)
+    free(allHandles);
+  if (handles)
+    free(handles);
+  if (ginCommCountHandles)
+    free(ginCommCountHandles);
   goto exit;
 }
 

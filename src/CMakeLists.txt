@@ -53,6 +53,7 @@ add_subdirectory(os)
 add_subdirectory(rma)
 add_subdirectory(param)
 add_subdirectory(devcomm)
+add_subdirectory(tuning)
 
 # GIN is Linux-only (requires InfiniBand verbs)
 if(NCCL_OS_LINUX)
@@ -78,6 +79,7 @@ list(APPEND LIBSRCFILES
     ${RMA_SOURCES}
     ${PARAM_SOURCES}
     ${DEVCOMM_SOURCES}
+    ${TUNING_SOURCES}
 )
 
 # Add GIN sources only on Linux

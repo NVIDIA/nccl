@@ -11,14 +11,14 @@
 #include "device.h"
 #include "nccl.h"
 #include "scheduler.h"
+#include "tuning.h"
+#include "enqueue.h"
 #include <cuda_fp16.h>
 #if defined(__CUDA_FP8_TYPES_EXIST__)
 #include <cuda_fp8.h>
 #endif
 
 extern int64_t ncclParamSingleProcMemRegEnable();
-
-NCCL_PARAM(SymNoWinEnable, "SYM_NOWIN_ENABLE", 0);
 
 ncclDevRedOp_t symkRedOp(ncclRedOp_t redOp, ncclDevRedOp_t devRedOp) {
   if (redOp == ncclAvg) {
@@ -122,11 +122,9 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
       int nChannels = MAXCHANNELS;
       int nWarps = 0;
       int nWorks = 0;
-      float estTimeUs = 1.e18;
       size_t countTotal = 0, countMax = 0;
       struct ncclTaskColl* headTask = task;
       size_t cellCount = NCCL_SYM_KERNEL_CELL_SIZE / ncclTypeSize(headTask->datatype);
-      bool forced = false;
       ncclDevRedOp_t symkOp = symkRedOp(task->opHost, task->opDev.op);
       // For now we assume higher kernel id means a kernel for larger data size
       while (task != nullptr) {
@@ -141,47 +139,31 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
         }
         task = task->next;
       }
-      NCCLCHECK(ncclSymkPickKernel(comm, headTask->func, symkOp, headTask->datatype, countTotal, countMax, nWorks,
-                                   headTask->winRegType, &estTimeUs, &kernelId, &nChannels, &nWarps, &forced));
+      struct ncclTuningInput_t input;
+      input.comm = comm;
+      input.tuningMask = NCCL_TUNING_MASK_SYM_KERNELS;
+      input.func = headTask->func;
+      input.redOp = headTask->opHost;
+      input.devRedOp = symkOp;
+      input.datatype = headTask->datatype;
+      input.nBytes = countTotal * ncclTypeSize(headTask->datatype);
+      input.numPipeOps = 0;
+      input.count = headTask->count;
+      input.countMax = countMax;
+      input.nWorks = nWorks;
+      input.winRegType = headTask->winRegType;
+      NCCLCHECK(ncclGetCollNetSupport(comm, headTask, &input.collNetSupport));
+      NCCLCHECK(ncclGetRegBuff(comm, headTask, &input.regBuff));
+      struct ncclTuningResult_t bestTuning = NCCL_TUNING_RESULT_INIT;
+      NCCLCHECK(ncclTuningCompute(&input, &bestTuning));
+      kernelId = (ncclSymkKernelId)bestTuning.symKernelId;
+      nChannels = bestTuning.nChannels;
+      nWarps = bestTuning.nWarps;
       task = headTask;
-      bool isLLKernel = (1 << kernelId) & ncclSymkLLKernelMask();
-      bool isOneThreadMultiGpus = comm->intraRanks > 1 && !ncclParamSingleProcMemRegEnable();
-      bool needFallback = false;
-
-      // Fallback logic for symmetric LL kernels:
-      // - If both src and dst are registered, we don't fall back if a symmetric kernel is available.
-      // - Otherwise, we have to fall back to a legacy kernel if running the selected symmetric LL kernel is
-      //   not possible (if the buffers are not registered and we manage multiple GPUs).
-      // - If the user forced a symmetric kernel via NCCL_SYM_KERNEL or requested preference for using
-      //   symmetric kernels even without symmetric buffers via NCCL_SYM_NOWIN_ENABLE, we respect that.
-      // - Otherwise, we query the legacy cost model and if it selects a non-LL proto, we pick that.
-      if (headTask->winRegType == ncclSymSendRegRecvReg || headTask->algorithm == NCCL_ALGO_UNDEF) {
-        needFallback = false;
-      } else if (isLLKernel) {
-        needFallback = isOneThreadMultiGpus && headTask->winRegType == ncclSymSendNonregRecvNonreg;
-        if (!needFallback && !forced) {
-          needFallback = !ncclParamSymNoWinEnable() && headTask->winRegType == ncclSymSendNonregRecvNonreg;
-          if (!needFallback) {
-            // First query legacy tuning
-            int collNetSupport = 0;
-            int nvlsSupport = comm->nvlsSupport && (ncclNvlsSupported(task->opDev.op, headTask->datatype) ||
-                                                    headTask->func == ncclFuncAllGather);
-            NCCLCHECK(ncclGetCollNetSupport(comm, headTask, &collNetSupport));
-            NOWARN(ncclGetAlgoInfo(comm, headTask, collNetSupport, nvlsSupport, 1), NCCL_COLL);
-            needFallback = (headTask->protocol != NCCL_PROTO_LL);
-          }
-        }
-      }
-
       // Override needFallback when buffers are registered but VAs contain sysmem segments.
       // The below functions return false when the window is NULL, so this covers non-reg cases as well.
-      if (!needFallback) {
-        bool hasSysmemSegment =
-          ncclDevrWindowHasSysmemSegment(headTask->sendWin) || ncclDevrWindowHasSysmemSegment(headTask->recvWin);
-        needFallback = hasSysmemSegment;
-      }
-
-      if (kernelId == ncclSymkKernelId_Count || needFallback) {
+      if (kernelId == ncclSymkKernelId_Count || ncclDevrWindowHasSysmemSegment(headTask->sendWin) ||
+          ncclDevrWindowHasSysmemSegment(headTask->recvWin)) {
         // cannot find appropriate symmetric kernel for the tasks
         // fallback to legacy kernels
         while (task != nullptr) {
@@ -201,7 +183,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
       }
 
       // initialize symmetric objects for LL kernels
-      if (isLLKernel && headTask->winRegType == ncclSymSendNonregRecvNonreg) {
+      if (((1 << kernelId) & ncclSymkLLKernelMask()) && headTask->winRegType == ncclSymSendNonregRecvNonreg) {
         NCCLCHECK(ncclSymkInitOnce(comm));
       }
 

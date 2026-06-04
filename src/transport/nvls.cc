@@ -1083,19 +1083,19 @@ exit:
   return ncclSuccess;
 }
 
-ncclResult_t ncclNvlsRegResourcesQuery(struct ncclComm* comm, struct ncclTaskColl* info, int* recChannels) {
+ncclResult_t ncclNvlsRegResourcesQuery(struct ncclComm* comm, ncclFunc_t func, int* recChannels) {
   int factor;
   ncclResult_t ret = ncclSuccess;
   if (comm->nNodes == 1) {
-    if (info->func == ncclFuncReduceScatter) {
+    if (func == ncclFuncReduceScatter) {
       factor = (comm->compCap >= 100 ? 6 : 5) * 8;
       *recChannels =
         std::max(comm->config.minCTAs, std::min(comm->config.maxCTAs, DIVUP(factor, comm->nvlsResources->nHeads)));
-    } else if (info->func == ncclFuncAllGather) {
+    } else if (func == ncclFuncAllGather) {
       factor = 4 * 8;
       *recChannels =
         std::max(comm->config.minCTAs, std::min(comm->config.maxCTAs, DIVUP(factor, comm->nvlsResources->nHeads)));
-    } else if (info->func == ncclFuncAllReduce) {
+    } else if (func == ncclFuncAllReduce) {
       if (comm->compCap >= 100) {
         factor = 8 * 8;
       } else {
@@ -1108,15 +1108,18 @@ ncclResult_t ncclNvlsRegResourcesQuery(struct ncclComm* comm, struct ncclTaskCol
     }
   } else {
     // Further tweaks for Blackwell with NVLS registered buffers
-    if (info->func == ncclFuncReduceScatter) {
-      factor = (comm->bandwidths[ncclFuncReduceScatter][NCCL_ALGO_NVLS][NCCL_PROTO_SIMPLE] > 400 ? 7 : 6) * 8;
+    if (func == ncclFuncReduceScatter) {
+      factor =
+        (comm->tuningContext.generalBandwidths[ncclFuncReduceScatter][NCCL_ALGO_NVLS][NCCL_PROTO_SIMPLE] > 400 ? 7 :
+                                                                                                                 6) *
+        8;
       *recChannels =
         std::max(comm->config.minCTAs, std::min(comm->config.maxCTAs, DIVUP(factor, comm->nvlsResources->nHeads)));
-    } else if (info->func == ncclFuncAllGather) {
+    } else if (func == ncclFuncAllGather) {
       factor = 6 * 8;
       *recChannels =
         std::max(comm->config.minCTAs, std::min(comm->config.maxCTAs, DIVUP(factor, comm->nvlsResources->nHeads)));
-    } else if (info->func == ncclFuncAllReduce) {
+    } else if (func == ncclFuncAllReduce) {
       if (comm->compCap >= 100 && comm->minNetBw >= 96.0f) {
         factor = 10 * 8;
       } else if (comm->compCap >= 100) {
@@ -1201,7 +1204,7 @@ ncclResult_t ncclNvlsSymmetricFinalize(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclNvlsRegResourcesQuery(struct ncclComm* comm, struct ncclTaskColl* info, int* recChannels) {
+ncclResult_t ncclNvlsRegResourcesQuery(struct ncclComm* comm, ncclFunc_t func, int* recChannels) {
   *recChannels = 0;
   return ncclSuccess;
 }

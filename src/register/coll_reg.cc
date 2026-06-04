@@ -118,7 +118,7 @@ ncclResult_t ncclRegisterCollNvlsBuffers(
       *regNeedConnect = 0;
       /* tweak NVLS channels usage; for registered NVLS buffer to saturate bandwidth. */
       int recChannels;
-      NCCLCHECK(ncclNvlsRegResourcesQuery(comm, info, &recChannels));
+      NCCLCHECK(ncclNvlsRegResourcesQuery(comm, info->func, &recChannels));
       info->nMaxChannels = recChannels;
       info->regBufType |= NCCL_NVLS_REG_BUFFER;
     }

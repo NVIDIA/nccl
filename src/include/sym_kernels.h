@@ -55,6 +55,28 @@ enum ncclSymkKernelId {
   ncclSymkKernelId_Count
 };
 
+constexpr char const* ncclSymKernelStr[] = {
+  // Must align with enum ncclSymkKernelId definition in src/include/sym_kernels.h
+  "AllReduce_AGxLL_R",
+  "AllReduce_AGxLLMC_R",
+  "AllReduce_RSxTmaLD_AGxTmaST",
+  "AllReduce_RSxLD_AGxST",
+  "AllReduce_RSxLDMC_AGxSTMC",
+  "AllGather_LL",
+  "AllGather_LLMC",
+  "AllGather_TmaST",
+  "AllGather_ST",
+  "AllGather_TmaSTMC",
+  "AllGather_STMC",
+  "AllGather_RailRing_LsaSTMC",
+  "ReduceScatter_LL",
+  "ReduceScatter_TmaLD",
+  "ReduceScatter_LD",
+  "ReduceScatter_LDMC",
+  "ReduceScatter_RailA2A_LsaLD",
+  "ReduceScatter_RailA2A_LsaLDMC"
+};
+
 struct ncclSymkDevComm {
   struct ncclDevComm devComm;
   struct ncclLLA2AHandle lsaLLA2A;
@@ -127,9 +149,8 @@ ncclResult_t ncclSymkFinalize(struct ncclComm* comm);
 
 bool ncclSymkAvailable(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty,
                        size_t nElts);
-ncclResult_t ncclSymkPickKernel(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty,
-                                size_t nEltsTotal, size_t nEltsMax, int nWorks, ncclSymRegType_t winRegType,
-                                float* estTimeUs, ncclSymkKernelId* kernelId, int* nBlocks, int* nWarps, bool* forced);
+uint32_t ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty,
+                      size_t nElts);
 
 ncclResult_t ncclSymkMakeDevWork(struct ncclComm* comm, struct ncclTaskColl* task, struct ncclSymkDevWork* outDevWork);
 
@@ -145,6 +166,10 @@ ncclResult_t ncclGetSymRegType(struct ncclDevrWindow* sendWin, struct ncclDevrWi
 
 int ncclSymkLLKernelMask();
 int ncclSymkDynamicSmemKernelMask();
+int ncclSymkGinKernelMask();
+int ncclSymkAGKernelMask();
+int ncclSymkARKernelMask();
+size_t ncclSymkRsGinChunkBytes();
 
 constexpr int ncclSymkAllGather_RailRing_ChunkSize = 1 << 20;
 #endif

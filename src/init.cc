@@ -24,7 +24,6 @@
 #include "graph.h"
 #include "graph/topo.h"
 #include "argcheck.h"
-#include "tuner.h"
 #include "ras.h"
 #include "compiler.h"
 #include "profiler.h"
@@ -39,6 +38,7 @@
 #include "os.h"
 #include "env.h"
 #include "rma/rma.h"
+#include "tuning.h"
 
 #define STR2(v) #v
 #define STR(v) STR2(v)
@@ -1634,14 +1634,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
 
   TRACE(NCCL_INIT, "rank %d nranks %d - CONNECTED %d RINGS AND TREES", rank, nranks, comm->nChannels);
 
-  // Compute time models for algorithm and protocol combinations
-  NCCLCHECKGOTO(ncclTopoInitTunerConstants(comm), ret, fail);
-  NCCLCHECKGOTO(ncclTunerPluginLoad(comm), ret, fail);
-  if (comm->tuner) {
-    NCCLCHECK(comm->tuner->init(&comm->tunerContext, comm->commHash, comm->nRanks, comm->nNodes, ncclDebugLog,
-                                &comm->nvlDomainInfo, &comm->tunerConstants));
-  }
-  NCCLCHECKGOTO(ncclTopoTuneModel(comm, comm->minCompCap, comm->maxCompCap, graphs), ret, fail);
+  // Initialize tuning subsystem
+  NCCLCHECKGOTO(ncclTuningInit(comm), ret, fail);
 
   INFO(NCCL_INIT, "%d coll channels, %d collnet channels, %d nvls channels, %d p2p channels, %d p2p channels per peer",
        comm->nChannels, comm->nChannels, comm->nvlsChannels, comm->p2pnChannels, comm->p2pnChannelsPerPeer);
@@ -2771,10 +2765,7 @@ fail:
 
 static ncclResult_t commCleanup(ncclComm_t comm) {
   CUDACHECK(cudaSetDevice(comm->cudaDev));
-  if (comm->tuner != NULL) {
-    NCCLCHECK(comm->tuner->finalize(comm->tunerContext));
-    NCCLCHECK(ncclTunerPluginUnload(comm));
-  }
+  NCCLCHECK(ncclTuningFinalize(comm));
   NCCLCHECK(commFree(comm));
   return ncclSuccess;
 }

@@ -25,6 +25,7 @@
 #include "rma/rma.h"
 #include "argcheck.h"
 #include "mem_manager.h"
+#include "tuning.h"
 
 #if defined(NCCL_OS_WINDOWS)
 #include "gin/gin_host_win_stub.h"
@@ -636,11 +637,7 @@ struct ncclComm {
   int nvlDomainSize;
 
   // Tuner values
-  ncclTunerConstants_t tunerConstants;
-  ssize_t threadThresholds[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
-  float latencies[NCCL_NUM_FUNCTIONS][NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
-  float bandwidths[NCCL_NUM_FUNCTIONS][NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
-  int maxThreads[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
+  struct ncclTuningContext_t tuningContext;
 
   /* This attribute can indicate the states of communicators and return code of
    * asynchronous NCCL operations. */

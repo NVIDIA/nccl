@@ -1976,143 +1976,18 @@ ncclResult_t ncclGetCollNetSupport(struct ncclComm* comm, struct ncclTaskColl* i
   return ncclSuccess;
 }
 
-static void initCollCostTable(float** collCostTable) {
-  float (*table)[NCCL_NUM_PROTOCOLS] = (float (*)[NCCL_NUM_PROTOCOLS])collCostTable;
-  for (int a = 0; a < NCCL_NUM_ALGORITHMS; a++) {
-    for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
-      table[a][p] = NCCL_ALGO_PROTO_IGNORE;
-    }
-  }
-}
-
-// numPipeOps: number of pipelined ops. Can be greater than 1 in aggregation mode. Used to adjust latency.
-static ncclResult_t updateCollCostTable(struct ncclComm* comm, struct ncclTaskColl* info, size_t nBytes,
-                                        int collNetSupport, int nvlsSupport, int numPipeOps, float** collCostTable) {
-  float (*table)[NCCL_NUM_PROTOCOLS] = (float (*)[NCCL_NUM_PROTOCOLS])collCostTable;
-
-  if (comm->nRanks == 1) {
-    table[NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] = 0.0;
-    return ncclSuccess;
-  }
-
-  for (int a = 0; a < NCCL_NUM_ALGORITHMS; a++) {
-    if ((a == NCCL_ALGO_COLLNET_DIRECT || a == NCCL_ALGO_COLLNET_CHAIN) && collNetSupport != 1) continue;
-    // CollNetDirect is only supported for up to 8 local GPUs
-    if (a == NCCL_ALGO_COLLNET_DIRECT && comm->maxLocalRanks > NCCL_MAX_DIRECT_ARITY + 1) continue;
-    // Disable CollNet Chain for more than 8 local GPUs
-    if (a == NCCL_ALGO_COLLNET_CHAIN && comm->maxLocalRanks > NCCL_MAX_DIRECT_ARITY + 1) continue;
-    if ((a == NCCL_ALGO_NVLS || a == NCCL_ALGO_NVLS_TREE) &&
-        (!nvlsSupport || (info->func != ncclFuncAllReduce && comm->localRanks > NCCL_MAX_NVLS_ARITY))) {
-      continue;
-    }
-    if (a == NCCL_ALGO_NVLS && collNetSupport != 1 && comm->nNodes > 1) continue;
-    /* Tree reduceScatter doesn't support scaling yet */
-    if (a == NCCL_ALGO_PAT && info->func == ncclFuncReduceScatter &&
-        (info->opDev.op == ncclDevPreMulSum || info->opDev.op == ncclDevSumPostDiv))
-      continue;
-    for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
-      NCCLCHECK(ncclTopoGetAlgoTime(comm, info->func, a, p, nBytes, numPipeOps, &table[a][p]));
-      // Relegate fp8 reduction trees of sufficient depth that they incur precision loss
-      // to be least preferred.
-      if (info->datatype == ncclFloat8e4m3 || info->datatype == ncclFloat8e5m2) {
-        if (a == NCCL_ALGO_RING && comm->nRanks > 8) {
-          table[a][p] *= 1024.0; // Any factor large enough to act as a partition between lossy and non-lossy algos.
-        }
-      }
-    }
-  }
-
-  return ncclSuccess;
-}
-
-static ncclResult_t topoGetAlgoInfo(struct ncclComm* comm, struct ncclTaskColl* info, size_t nBytes,
-                                    float** collCostTable, ncclSimInfo_t* simInfo) {
-  float (*table)[NCCL_NUM_PROTOCOLS] = (float (*)[NCCL_NUM_PROTOCOLS])collCostTable;
-
-  float minTime = FLT_MAX;
-  int algorithm = info->algorithm = NCCL_ALGO_UNDEF;
-  int protocol = info->protocol = NCCL_PROTO_UNDEF;
-  for (int a = 0; a < NCCL_NUM_ALGORITHMS; a++) {
-    for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
-      if (table[a][p] == NCCL_ALGO_PROTO_IGNORE) continue;
-      if (table[a][p] >= 0.0 && table[a][p] < minTime) {
-        algorithm = a;
-        protocol = p;
-        minTime = table[a][p];
-      }
-    }
-  }
-
-  info->algorithm = algorithm;
-  info->protocol = protocol;
-  float time = minTime;
-
-  // Yes, we are first assigning and then testing if protocol is sane, but that's OK in this case.
-  // coverity[check_after_sink]
-  if (info->algorithm == NCCL_ALGO_UNDEF || info->protocol == NCCL_PROTO_UNDEF) {
-    char ncclAlgoEnvStr[1024] = "";
-    char ncclProtoEnvStr[1024] = "";
-    const char* algoEnv = ncclGetEnv("NCCL_ALGO");
-    if (algoEnv) {
-      snprintf(ncclAlgoEnvStr, 1023, " NCCL_ALGO was set to %s.", algoEnv);
-    }
-    const char* protoEnv = ncclGetEnv("NCCL_PROTO");
-    if (protoEnv) {
-      snprintf(ncclProtoEnvStr, 1023, " NCCL_PROTO was set to %s.", protoEnv);
-    }
-    WARN("No algorithm/protocol available for function %s with datatype %s.%s%s", ncclFuncToString(info->func),
-         ncclDatatypeToString(info->datatype), ncclAlgoEnvStr, ncclProtoEnvStr);
-    return (algoEnv || protoEnv) ? ncclInvalidUsage : ncclInternalError;
-  }
-  if (simInfo) simInfo->estimatedTime = time;
-  TRACE(NCCL_COLL, "%ld Bytes -> Algo %d proto %d time %f", nBytes, info->algorithm, info->protocol, time);
-
-  int nc = comm->nChannels;
-  int nt = comm->maxThreads[info->algorithm][info->protocol];
-  int threadThreshold = comm->threadThresholds[info->algorithm][info->protocol];
-  if (info->algorithm == NCCL_ALGO_COLLNET_DIRECT) {
-    // CollNet channel tuning
-    int ncSwitch = 16;
-    bool flag = true;
-    while (ncSwitch >= 1 && flag) {
-      while ((flag = nBytes < nc * nt * comm->channels[0].collnetDirect.nHeads * threadThreshold) && nc > ncSwitch) {
-        if (nc == ncSwitch + ncSwitch / 2) threadThreshold /= 2;
-        nc--;
-      }
-      ncSwitch /= 2;
-    }
-  } else if (info->algorithm == NCCL_ALGO_NVLS || info->algorithm == NCCL_ALGO_NVLS_TREE) {
-    // NVLS should not need more than 16 channels to get peak BW.
-    if (comm->nNodes > 1 && info->algorithm == NCCL_ALGO_NVLS) {
-      nc = std::min(comm->nvlsChannels, comm->nChannels);
-    } else {
-      nc = comm->nvlsChannels;
-    }
-  } else {
-    // Ring/Tree channel tuning
-    while (nBytes < nc * nt * threadThreshold) {
-      if (nc >= 2) nc--;
-      else break;
-    }
-  }
-
-  if (info->algorithm != NCCL_ALGO_NVLS && info->algorithm != NCCL_ALGO_NVLS_TREE &&
-      info->algorithm != NCCL_ALGO_COLLNET_DIRECT) {
-    while (nBytes < nc * nt * threadThreshold) {
-      if (nt % 128 == 0) nt /= 2;
-      else break;
-    }
-  }
-  if (info->protocol == NCCL_PROTO_SIMPLE) {
-    if (info->algorithm == NCCL_ALGO_RING) nt += WARP_SIZE; // Extra warp for sync
-    // More threads or sync warps needed due to split thread model
-    if (info->algorithm == NCCL_ALGO_TREE) nt += 4 * WARP_SIZE;
-  }
-  nt = nt / WARP_SIZE < 3 ? 3 * WARP_SIZE : nt;
-  if (info->algorithm == NCCL_ALGO_TREE) nt = NCCL_MAX_NTHREADS; // Tree now uses all threads always.
-  if (info->algorithm == NCCL_ALGO_PAT) nt = NCCL_MAX_NTHREADS;
-  info->nMaxChannels = nc;
-  info->nWarps = nt / WARP_SIZE;
+ncclResult_t ncclGetRegBuff(struct ncclComm* comm, struct ncclTaskColl* info, int* regBuff) {
+  struct ncclReg* regSendBuf = NULL;
+  struct ncclReg* regRecvBuf = NULL;
+  bool isSendValid, isRecvValid;
+  size_t sendbuffSize = ncclTypeSize(info->datatype) * ncclFuncSendCount(info->func, comm->nRanks, info->count);
+  size_t recvbuffSize = ncclTypeSize(info->datatype) * ncclFuncRecvCount(info->func, comm->nRanks, info->count);
+  NCCLCHECK(ncclRegFind(comm, info->sendbuff, sendbuffSize, &regSendBuf));
+  NCCLCHECK(ncclRegFind(comm, info->recvbuff, recvbuffSize, &regRecvBuf));
+  NCCLCHECK(ncclRegLocalIsValid(regSendBuf, &isSendValid));
+  NCCLCHECK(ncclRegLocalIsValid(regRecvBuf, &isRecvValid));
+  *regBuff = (regSendBuf && regRecvBuf && isSendValid && isRecvValid) ||
+             (ncclCudaGraphValid(comm->planner.capturingGraph) && ncclParamGraphRegister());
   return ncclSuccess;
 }
 
@@ -2125,57 +2000,33 @@ ncclResult_t ncclGetAlgoInfo(struct ncclComm* comm, struct ncclTaskColl* info, i
 ) {
   size_t elementSize = ncclTypeSize(info->datatype);
   size_t nBytes = elementSize * ncclFuncMaxSendRecvCount(info->func, comm->nRanks, info->count);
-  struct ncclReg* regSendBuf = NULL;
-  struct ncclReg* regRecvBuf = NULL;
-  int regBuff;
-  bool isSendValid, isRecvValid;
-  size_t sendbuffSize = elementSize * ncclFuncSendCount(info->func, comm->nRanks, info->count);
-  size_t recvbuffSize = elementSize * ncclFuncRecvCount(info->func, comm->nRanks, info->count);
   info->algorithm = NCCL_ALGO_UNDEF;
   info->protocol = NCCL_PROTO_UNDEF;
-  int nMaxChannels = 0;
-  float collCostTable[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
-  initCollCostTable((float**)collCostTable);
-  NCCLCHECK(updateCollCostTable(comm, info, nBytes, collNetSupport, nvlsSupport, numPipeOps, (float**)collCostTable));
-  if (comm->tuner != NULL) {
-    NCCLCHECK(ncclRegFind(comm, info->sendbuff, sendbuffSize, &regSendBuf));
-    NCCLCHECK(ncclRegFind(comm, info->recvbuff, recvbuffSize, &regRecvBuf));
-    NCCLCHECK(ncclRegLocalIsValid(regSendBuf, &isSendValid));
-    NCCLCHECK(ncclRegLocalIsValid(regRecvBuf, &isRecvValid));
-    regBuff = (regSendBuf && regRecvBuf && isSendValid && isRecvValid) ||
-              (ncclCudaGraphValid(comm->planner.capturingGraph) && ncclParamGraphRegister());
-    NCCLCHECK(comm->tuner->getCollInfo(comm->tunerContext, info->func, nBytes, numPipeOps, (float**)collCostTable,
-                                       NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS, regBuff, &nMaxChannels));
-    NCCLCHECK(topoGetAlgoInfo(comm, info, nBytes, (float**)collCostTable, simInfo));
-  } else {
-    NCCLCHECK(topoGetAlgoInfo(comm, info, nBytes, (float**)collCostTable, simInfo));
-    // NCCL_CTA_POLICY_EFFICIENCY requires user (non-symmetric) buffer registration (currently unsupported with MNNVL)
-    if ((comm->config.CTAPolicy & NCCL_CTA_POLICY_EFFICIENCY) && ncclGetEnv("NCCL_ALGO") == NULL &&
-        ncclGetEnv("NCCL_PROTO") == NULL && !comm->MNNVL) {
-      // make algorithm selection based on buffer registration
-      // there can be other specialized policies for algorithms and protocols pickup in the future
-      NCCLCHECK(ncclRegFind(comm, info->sendbuff, sendbuffSize, &regSendBuf));
-      NCCLCHECK(ncclRegFind(comm, info->recvbuff, recvbuffSize, &regRecvBuf));
-      NCCLCHECK(ncclRegLocalIsValid(regSendBuf, &isSendValid));
-      NCCLCHECK(ncclRegLocalIsValid(regRecvBuf, &isRecvValid));
-      regBuff = (regSendBuf && regRecvBuf && isSendValid && isRecvValid) ||
-                (ncclCudaGraphValid(comm->planner.capturingGraph) && ncclParamGraphRegister());
-      if (regBuff && (info->func == ncclFuncAllGather || info->func == ncclFuncReduceScatter)) {
-        if ((comm->nNodes > 1 && collNetSupport && nvlsSupport) || (comm->nNodes == 1 && nvlsSupport)) {
-          int recChannels;
-          NCCLCHECK(ncclNvlsRegResourcesQuery(comm, info, &recChannels));
-          if (recChannels <= info->nMaxChannels) {
-            info->algorithm = NCCL_ALGO_NVLS;
-            info->protocol = NCCL_PROTO_SIMPLE;
-            info->nMaxChannels = recChannels;
-            info->nWarps = comm->maxThreads[info->algorithm][info->protocol] / WARP_SIZE;
-          }
-        }
-      }
-    }
-  }
-
-  info->nMaxChannels = nMaxChannels == 0 ? info->nMaxChannels : nMaxChannels;
+  struct ncclTuningInput_t input;
+  input.comm = comm;
+  input.tuningMask = NCCL_TUNING_MASK_GENERAL_KERNELS;
+  input.func = info->func;
+  input.redOp = info->opHost;
+  input.devRedOp = info->opDev.op;
+  input.datatype = info->datatype;
+  input.nBytes = nBytes;
+  input.numPipeOps = numPipeOps;
+  input.collNetSupport = collNetSupport;
+  input.nvlsSupport = nvlsSupport;
+  input.count = info->count;
+  NCCLCHECK(ncclGetRegBuff(comm, info, &input.regBuff));
+  struct ncclTuningResult_t bestTuning = NCCL_TUNING_RESULT_INIT;
+  bestTuning.maxChannels = 0;
+  NCCLCHECK(ncclTuningCompute(&input, &bestTuning));
+  INFO(NCCL_TUNING, "Best tuning, algorithm, %s, protocol, %s", ncclAlgoToString(bestTuning.algo),
+       ncclProtoToString(bestTuning.proto));
+  info->algorithm = bestTuning.algo;
+  info->protocol = bestTuning.proto;
+  info->nWarps = bestTuning.nWarps;
+  // Tuner pluging override
+  if (simInfo) simInfo->estimatedTime = bestTuning.timeUs;
+  TRACE(NCCL_COLL, "%ld Bytes -> Algo %d proto %d time %f", nBytes, info->algorithm, info->protocol, bestTuning.timeUs);
+  info->nMaxChannels = bestTuning.maxChannels == 0 ? info->nMaxChannels : bestTuning.maxChannels;
   return ncclSuccess;
 }
 
@@ -2261,7 +2112,8 @@ static ncclResult_t calcCollChunking(struct ncclComm* comm, struct ncclTaskColl*
       chunkSize = comm->buffSizes[NCCL_PROTO_SIMPLE] / NCCL_STEPS;
     } else {
       int maxChunkSize = comm->nvlsChunkSize;
-      if (comm->nNodes > 1 && comm->bandwidths[ncclFuncAllReduce][NCCL_ALGO_NVLS][NCCL_PROTO_SIMPLE] < 150) {
+      if (comm->nNodes > 1 &&
+          comm->tuningContext.generalBandwidths[ncclFuncAllReduce][NCCL_ALGO_NVLS][NCCL_PROTO_SIMPLE] < 150) {
         maxChunkSize = 32768;
       }
       if (chunkSize > maxChunkSize) chunkSize = maxChunkSize;

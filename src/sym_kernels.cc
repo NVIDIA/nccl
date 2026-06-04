@@ -10,30 +10,9 @@
 #include "device.h"
 #include "nccl_device/core.h"
 #include "transport.h"
+#include "tuning.h"
 #include <cmath>
 #include <cfloat>
-
-constexpr char const* kernelName[] = {
-  // Must align with enum ncclSymkKernelId definition in src/include/sym_kernels.h
-  "AllReduce_AGxLL_R",
-  "AllReduce_AGxLLMC_R",
-  "AllReduce_RSxTmaLD_AGxTmaST",
-  "AllReduce_RSxLD_AGxST",
-  "AllReduce_RSxLDMC_AGxSTMC",
-  "AllGather_LL",
-  "AllGather_LLMC",
-  "AllGather_TmaST",
-  "AllGather_ST",
-  "AllGather_TmaSTMC",
-  "AllGather_STMC",
-  "AllGather_RailRing_LsaSTMC",
-  "ReduceScatter_LL",
-  "ReduceScatter_TmaLD",
-  "ReduceScatter_LD",
-  "ReduceScatter_LDMC",
-  "ReduceScatter_RailA2A_LsaLD",
-  "ReduceScatter_RailA2A_LsaLDMC"
-};
 
 constexpr uint32_t kernelMask_STMC =
   1 << ncclSymkKernelId_AllGather_LLMC | 1 << ncclSymkKernelId_AllGather_STMC |
@@ -90,6 +69,18 @@ int ncclSymkDynamicSmemKernelMask() {
   return kernelMask_DynamicSmem;
 };
 
+int ncclSymkGinKernelMask() {
+  return kernelMask_Gin;
+}
+
+int ncclSymkAGKernelMask() {
+  return kernelMask_AG;
+}
+
+int ncclSymkARKernelMask() {
+  return kernelMask_AR;
+}
+
 static uint32_t kernelMask_coll(ncclFunc_t coll) {
   switch (coll) {
   case ncclFuncAllGather:
@@ -103,32 +94,6 @@ static uint32_t kernelMask_coll(ncclFunc_t coll) {
   }
 }
 
-static uint32_t kernelMask_user() {
-  static uint32_t cache = -1u;
-  uint32_t got = COMPILER_ATOMIC_LOAD(&cache, std::memory_order_relaxed);
-  if (got == -1u) {
-    // TODO: Enhance this to be a pattern match. I like regex's but we also have
-    // the parseList() used by NCCL_ALGO/PROTO.
-    char const* name = ncclGetEnv("NCCL_SYM_KERNEL");
-    if (name == nullptr || strcmp(name, "^") == 0) {
-      static_assert((int)ncclSymkKernelId_Count < 32, "Use more than 32 bits");
-      got = (1 << (int)ncclSymkKernelId_Count) - 1;
-    } else {
-      got = 0;
-      for (int k = 0; k < (int)ncclSymkKernelId_Count; k++) {
-        if (strcmp(kernelName[k], name) == 0) {
-          COMPILER_ATOMIC_STORE(&cache, uint32_t(1 << k), std::memory_order_relaxed);
-          got = 1 << k;
-          break;
-        }
-      }
-    }
-    COMPILER_ATOMIC_STORE(&cache, got, std::memory_order_relaxed);
-  }
-  return got;
-}
-
-NCCL_PARAM(SymCTAs, "SYM_CTAS", 0)
 NCCL_PARAM(SymGinKernelsEnable, "SYM_GIN_KERNELS_ENABLE", 1)
 NCCL_PARAM(SymRsGinChunkSize, "SYM_RS_GIN_CHUNK_SIZE", -1)
 NCCL_PARAM(SymTmaEnable, "SYM_TMA_ENABLE", 0)
@@ -137,7 +102,7 @@ static constexpr size_t ncclSymkRsGinDefaultChunkBytes = 128 << 10;
 static constexpr size_t ncclSymkRsGinMinChunkBytes = 128;
 static constexpr size_t ncclSymkRsGinMaxChunkBytes = size_t(1) << 30;
 
-static size_t ncclSymkRsGinChunkBytes() {
+size_t ncclSymkRsGinChunkBytes() {
   int64_t param = ncclParamSymRsGinChunkSize();
   size_t chunkBytes = param > 0 ? (size_t)param : ncclSymkRsGinDefaultChunkBytes;
   chunkBytes = std::max(ncclSymkRsGinMinChunkBytes, std::min(chunkBytes, ncclSymkRsGinMaxChunkBytes));
@@ -148,122 +113,20 @@ static uint32_t ncclSymkRsGinAccumBytesPerBlock() {
   return (uint32_t)alignUp(2 * ncclSymkRsGinChunkBytes(), 128);
 }
 
-static double softmin(double x, double ceiling, double softness) {
-  // looks like a smooth version of: min(x, ceiling)
-  return ceiling - softness * std::log1p((std::exp(ceiling / softness) - 1) * std::exp(-x / softness));
-}
-
-static double softplus(double x, double softness) {
-  // looks like a smooth version of: max(0, x)
-  double z = x / softness;
-  return 100.0 <= z ? x : softness * std::log1p(std::exp(z));
-}
-
-static double model(double busBytes, double baseLat, int nSMs, double smBw, double busMultiplier, double peakBw) {
-  double bw = softmin(nSMs * smBw * busMultiplier, peakBw, smBw);
-  return baseLat + softplus(busBytes / bw - 1, 1);
-}
-
-// Given the kernel and bytes, return the minimum number of blocks to run on such that
-// perf is 99% of running at max blocks, and return the estimate runtime for that
-// block count.
-static void queryModel_gin(struct ncclComm* comm, ncclSymkKernelId k, size_t nBytes, float* timeUs, int* nBlocks);
-static void queryModel_lsa(struct ncclComm* comm, ncclSymkKernelId k, size_t nBytes, float* timeUs, int* nBlocks);
-
-static void queryModel(struct ncclComm* comm, ncclSymkKernelId k, size_t nBytes, float* timeUs, int* nBlocks) {
-  if (kernelMask_Gin >> k & 1) {
-    queryModel_gin(comm, k, nBytes, timeUs, nBlocks);
-  } else {
-    queryModel_lsa(comm, k, nBytes, timeUs, nBlocks);
-  }
-}
-
-#define NCCL_NVLINK_BW_IDX_HOPPER 0
-#define NCCL_NVLINK_BW_IDX_BLACKWELL 1
-#define NCCL_NVLINK_BW_IDX_NUM 2
-
-// NVLS max bws NCCL can achieve
-static const float nvlinkBws[NCCL_NVLINK_BW_IDX_NUM] = {
-  360.0f, // Hopper
-  720.0f, // Blackwell
-};
-
-static double getLsaBw(struct ncclComm* comm) {
-  int compCapIndex = comm->minCompCap >= 100 ? NCCL_NVLINK_BW_IDX_BLACKWELL : NCCL_NVLINK_BW_IDX_HOPPER;
-  return (/*byte/sec*/ 1.e9) * nvlinkBws[compCapIndex];
-}
-
-static double getGinLat(struct ncclComm* comm) {
-  return (/*sec/usec*/ 1.e-6) * comm->tunerConstants.hwLatencies[NCCL_HW_NET][NCCL_ALGO_RING][NCCL_PROTO_SIMPLE];
-}
-
-static double getGinBw(struct ncclComm* comm) {
-  return (/*byte/sec*/ 1.e9) * comm->minNetBw;
-}
-
-// Bus multipliers count number of times data is sent through that widget.
-static void getBusMul_ReduceScatter_RailA2A(struct ncclComm* comm, bool ldmc,
-    // Bus multipliers per bottleneck
-                                            double* out_smMul, double* out_lsaMul, double* out_ginMul) {
-  int lsaRanks = ncclTeamLsa(comm).nRanks;
-  int railRanks = ncclTeamRail(comm).nRanks;
-  // LSA
-  *out_lsaMul = std::max(
-    /*inbound*/ (ldmc ? lsaRanks : lsaRanks - 1) * railRanks,
-    /*outbound*/ (lsaRanks - 1) * railRanks);
-  // GIN
-  *out_ginMul = railRanks - 1; // inbound == outbound
-  // SM. Inbound (reads) only because it dominates outbound (writes).
-  *out_smMul =
-    /*stage 0*/ (lsaRanks == 1 ? 0 : (ldmc ? 1 : lsaRanks) * (railRanks - 1)) +
-    /*stage 1*/ (ldmc ? 1 : lsaRanks) + (railRanks - 1);
-}
-
-static double getSmBw_ReduceScatter_RailA2A(struct ncclComm* comm, bool ldmc) {
-  // Empirically calculated as effbw/nctas where effbw is reported by TUNING
-  // debug logging (from getRequirements_gin()) and nctas is the number of ctas
-  // that appear to saturate bandwidth.
-  if (100 <= comm->minCompCap) {
-    return ldmc ? 8.44e9 : 26.6e9;
-  } else {
-    return ldmc ? 4.22e9 : 13.7e9;
-  }
-}
-
-static double getSmLat_ReduceScatter_RailA2A(struct ncclComm* comm, bool ldmc) {
-  // Processing delay. Larger value means bigger network buffers.
-  return 10.e-6;
-}
-
-// Calculate saturation block count:
-static int calcSatBlocks_ReduceScatter_RailA2A(struct ncclComm* comm, bool ldmc) {
-  double lsaBw = getLsaBw(comm);
-  double ginBw = getGinBw(comm);
-  double smBw = getSmBw_ReduceScatter_RailA2A(comm, ldmc);
-  double smMul, lsaMul, ginMul;
-  getBusMul_ReduceScatter_RailA2A(comm, ldmc, &smMul, &lsaMul, &ginMul);
-  // Effective Bandwidth: EffBw = Bw/Mul
-  // Let smsEffBw = smEffBw*nBlocks
-  // Set smsEffBw = min(lsaEffBw, ginEffBw)
-  // Solve for nBlocks:
-  double minLsaGinEffBw = std::min(lsaBw / lsaMul, ginBw / ginMul);
-  return std::ceil(std::min(double(1 << 30), minLsaGinEffBw / (smBw / smMul)));
-}
-
 static void getRequirements_gin(struct ncclComm* comm, int* out_nBlocks, size_t* out_bufSize) {
   *out_nBlocks = 0;
   *out_bufSize = 0;
   for (int ldmc = 0; ldmc <= 1; ldmc++) {
-    double lsaBw = getLsaBw(comm);
-    double ginBw = getGinBw(comm);
-    double ginLat = getGinLat(comm);
-    double smLat = getSmLat_ReduceScatter_RailA2A(comm, ldmc);
+    double lsaBw = ncclTuningGetLsaBw(comm);
+    double ginBw = ncclTuningGetGinBw(comm);
+    double ginLat = ncclTuningGetGinLat(comm);
+    double smLat = ncclTuningGetSmLatReduceScatterRailA2A(comm, ldmc);
     double smMul, lsaMul, ginMul;
-    getBusMul_ReduceScatter_RailA2A(comm, ldmc, &smMul, &lsaMul, &ginMul);
+    ncclTuningGetBusMulReduceScatterRailA2A(comm, ldmc, &smMul, &lsaMul, &ginMul);
     // GIN could be throttled by LSA work
     double ginBwRenorm = std::min(lsaBw / lsaMul, ginBw / ginMul) * ginMul;
     size_t bufSize = ginBwRenorm * (ginLat + smLat);
-    int nBlocks = calcSatBlocks_ReduceScatter_RailA2A(comm, ldmc);
+    int nBlocks = ncclTuningCalcSatBlocksReduceScatterRailA2A(comm, ldmc);
     if (comm->rank == 0) {
       double minLsaGinEffBw = std::min(lsaBw / lsaMul, ginBw / ginMul);
       INFO(NCCL_TUNING, "ReduceScatter_RailA2A_Lsa%s : satblocks=%d bufsize=%d effbw=%g", ldmc ? "LDMC" : "LD", nBlocks,
@@ -274,162 +137,7 @@ static void getRequirements_gin(struct ncclComm* comm, int* out_nBlocks, size_t*
   }
 }
 
-static void queryModel_gin(struct ncclComm* comm, ncclSymkKernelId k, size_t nBytes, float* timeUs, int* nBlocks) {
-  struct ncclSymkState* symk = &comm->symkState;
-  // ncclTeam world = ncclTeamWorld(comm);
-  // ncclTeam lsa = ncclTeamLsa(comm);
-  ncclTeam rail = ncclTeamRail(comm);
-  double lsaBw = getLsaBw(comm);
-  double ginLat = getGinLat(comm);
-  double ginBw = getGinBw(comm);
-  int nMaxBlocks = std::min<int>(comm->config.maxCTAs, ncclSymkMaxBlocks);
-  if (k == ncclSymkKernelId_AllGather_RailRing_LsaSTMC) {
-    nMaxBlocks = std::min<int>(nMaxBlocks, divUp((comm->cudaArch < 1000 ? 16 : 32), comm->nvlsResources->nHeads));
-  }
-  int nMinBlocks = comm->config.minCTAs;
-  int nUserCTAs = std::min<int>(ncclSymkMaxBlocks, ncclParamSymCTAs());
-  if (nUserCTAs > 0) nMinBlocks = nMaxBlocks = nUserCTAs;
-
-  *timeUs = FLT_MAX;
-  *nBlocks = 0;
-  switch (k) {
-  case ncclSymkKernelId_AllGather_RailRing_LsaSTMC:
-    {
-      constexpr int railChunkSize = ncclSymkAllGather_RailRing_ChunkSize;
-      int requiredBlocks = DIVUP(nBytes, railChunkSize);
-      float intraBw = lsaBw;
-      float interBw = ginBw;
-      float intraTime = (float)(nBytes * comm->nRanks) / intraBw;
-      float interTime = (float)(nBytes * (rail.nRanks - 1)) / interBw;
-      uint32_t steps = DIVUP(nBytes, railChunkSize) * (rail.nRanks - 1);
-      *timeUs = steps * ginLat + std::max(intraTime, interTime);
-      *nBlocks = std::max(nMinBlocks, std::min(nMaxBlocks, requiredBlocks));
-    }
-    break;
-  case ncclSymkKernelId_ReduceScatter_RailA2A_LsaLD:
-  case ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC:
-    {
-      bool ldmc = k == ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC;
-      nMaxBlocks = std::min(nMaxBlocks, symk->maxGinInboxBlocks);
-      nMaxBlocks = std::min(nMaxBlocks, calcSatBlocks_ReduceScatter_RailA2A(comm, ldmc));
-      size_t chunkSize = ncclSymkRsGinChunkBytes();
-      double smBw = getSmBw_ReduceScatter_RailA2A(comm, ldmc);
-      double smMul, lsaMul, ginMul;
-      getBusMul_ReduceScatter_RailA2A(comm, ldmc, &smMul, &lsaMul, &ginMul);
-      *nBlocks = (int)divUp(nBytes, chunkSize);
-      // max against nMinBlocks last since we may have nMaxBlocks < nMinBlocks
-      *nBlocks = std::max(nMinBlocks, std::min(nMaxBlocks, *nBlocks));
-      double effBw = (*nBlocks) * (smBw / smMul);
-      effBw = std::min(effBw, lsaBw / lsaMul);
-      effBw = std::min(effBw, ginBw / ginMul);
-      double time = nBytes / effBw;
-      // Delayed by LSA processing of first chunk.
-      time += std::min(nBytes, chunkSize * (size_t)(*nBlocks)) * (lsaMul / lsaBw + ginMul / ginBw);
-      // Delay by GIN latency of first chunk.
-      time += ginLat;
-      *timeUs = (/*usec/sec=*/1.e6) * time;
-    }
-    break;
-  default:
-    break;
-  }
-}
-
-static void queryModel_lsa(struct ncclComm* comm, ncclSymkKernelId k, size_t nBytes, float* timeUs, int* nBlocks) {
-  constexpr double LL_BusFactor = 9; // 2X the bytes, plus some processing, plus no unrolling
-
-  int nRanks = comm->nRanks;
-  int nMaxBlocks = ncclSymkMaxBlocks;
-  int nMaxBlocksNvls = divUp((comm->cudaArch < 1000 ? 16 : 32), nRanks);
-  size_t busBytes; // max(bytes sent, bytes received)
-  double busMultiplier = 1;
-
-  switch (k) {
-  default:
-    busBytes = size_t(1) << 50;
-    break;
-
-  case ncclSymkKernelId_AllReduce_AGxLL_R:
-    busBytes = nRanks * nBytes * LL_BusFactor;
-    break;
-  case ncclSymkKernelId_AllReduce_AGxLLMC_R:
-    busBytes = nRanks * nBytes * LL_BusFactor;
-    busMultiplier = 1.1; // To beat non-MC LL
-    break;
-  case ncclSymkKernelId_AllReduce_RSxTmaLD_AGxTmaST:
-  case ncclSymkKernelId_AllReduce_RSxLD_AGxST:
-    busBytes = 2 * nBytes * (nRanks - 1) / nRanks;
-    break;
-  case ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC:
-    busBytes = nBytes / nRanks + nBytes;
-    busMultiplier = nRanks;
-    nMaxBlocks = nMaxBlocksNvls;
-    break;
-
-  case ncclSymkKernelId_AllGather_LL:
-    busBytes = nRanks * nBytes * LL_BusFactor;
-    break;
-  case ncclSymkKernelId_AllGather_LLMC:
-    busBytes = nRanks * nBytes * LL_BusFactor;
-    busMultiplier = 1.1; // To beat non-MC LL
-    break;
-  case ncclSymkKernelId_AllGather_TmaST:
-  case ncclSymkKernelId_AllGather_ST:
-    busBytes = (nRanks - 1) * nBytes;
-    break;
-  case ncclSymkKernelId_AllGather_TmaSTMC:
-  case ncclSymkKernelId_AllGather_STMC:
-    busBytes = (nRanks - 1) * nBytes; // Wrong. Should be nRanks*nBytes but we want to beat non-MC.
-    busMultiplier = 0.55 * nRanks;
-    nMaxBlocks = nMaxBlocksNvls;
-    break;
-
-  case ncclSymkKernelId_ReduceScatter_LL:
-    busBytes = nRanks * nBytes * LL_BusFactor;
-    break;
-  case ncclSymkKernelId_ReduceScatter_TmaLD:
-  case ncclSymkKernelId_ReduceScatter_LD:
-    busBytes = (nRanks - 1) * nBytes;
-    break;
-  case ncclSymkKernelId_ReduceScatter_LDMC:
-    busBytes = (nRanks - 1) * nBytes; // Wrong. Should be nRanks*nBytes but we want to beat non-MC.
-    busMultiplier = 0.55 * nRanks;
-    nMaxBlocks = nMaxBlocksNvls;
-    break;
-  }
-
-  nMaxBlocks = std::min<int>(nMaxBlocks, comm->config.maxCTAs);
-  int nMinBlocks = comm->config.minCTAs;
-
-  int nUserCTAs = std::min<int>(ncclSymkMaxBlocks, ncclParamSymCTAs());
-  if (nUserCTAs > 0) nMinBlocks = nMaxBlocks = nUserCTAs;
-
-  bool isLL = kernelMask_LL >> k & 1;
-  bool isAG = kernelMask_AG >> k & 1;
-  bool isAR = kernelMask_AR >> k & 1;
-  constexpr double GBps = (1 << 30) / 1.e6;
-  double baseLat, smBw, peakBw;
-  if (comm->cudaArch < 1000) {
-    baseLat = isLL ? 4.5 : 7.8;
-    smBw = isAR ? 65 * GBps : 44 * GBps;
-    peakBw = k == ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC ? 480 * GBps : 320 * GBps;
-  } else {
-    baseLat = isLL ? (isAG ? 8.5 : 11) : (isAR ? 19.5 : 13.0);
-    smBw = 55 * GBps;
-    peakBw = k == ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC ? 1000 * GBps : 600 * GBps;
-  }
-  *nBlocks = nMaxBlocks;
-  *timeUs = model(busBytes, baseLat, nMaxBlocks, smBw, busMultiplier, peakBw);
-  // Use least number of blocks that puts us within a tolerance of peak performance.
-  for (int bn = nMinBlocks; bn < nMaxBlocks; bn++) {
-    double time = model(busBytes, baseLat, bn, smBw, busMultiplier, peakBw);
-    if (time <= 1.025 * (*timeUs)) {
-      *nBlocks = bn;
-      *timeUs = time;
-      break;
-    }
-  }
-}
+extern int64_t ncclParamSymCTAs();
 
 ncclResult_t ncclSymkInitOnce(struct ncclComm* comm) {
   // ncclTeamLsa() below calls this internally but drops the error code so we do it here.
@@ -537,10 +245,9 @@ static bool ncclSymkImplemented(ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncc
   }
 }
 
-static uint32_t ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty,
-                             size_t nElts) {
+uint32_t ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty,
+                      size_t nElts) {
   uint32_t kmask = kernelMask_coll(coll);
-  kmask &= kernelMask_user();
 
   bool hasSTMC = comm->symkState.hasLsaMultimem;
   bool hasLDMC = false;
@@ -596,55 +303,11 @@ bool ncclSymkAvailable(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedO
   return (ncclSymkMask(comm, coll, red, ty, nElts) != 0);
 }
 
-ncclResult_t ncclSymkPickKernel(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty,
-                                size_t nEltsTotal, size_t nEltsMax, int nWorks, ncclSymRegType_t winRegType,
-                                float* estTimeUs, ncclSymkKernelId* kernelId, int* nBlocks, int* nWarps, bool* forced) {
-  uint32_t kmask = ncclSymkMask(comm, coll, red, ty, nEltsMax);
-
-  *forced = !(kernelMask_user() == (1 << (int)ncclSymkKernelId_Count) - 1);
-  // We currently don't support grouping for LL kernels.
-  if (nWorks > 1) kmask &= ~kernelMask_LL;
-
-  if (coll == ncclFuncAllReduce) {
-    if (winRegType != ncclSymSendRegRecvReg) kmask &= kernelMask_LL;
-  } else if (coll == ncclFuncAllGather) {
-    if (winRegType != ncclSymSendRegRecvReg && winRegType != ncclSymSendNonregRecvReg) kmask &= kernelMask_LL;
-    if (winRegType != ncclSymSendRegRecvReg && comm->nNodes > 1) kmask &= ~kernelMask_Gin;
-  } else if (coll == ncclFuncReduceScatter) {
-    if (winRegType != ncclSymSendRegRecvReg && winRegType != ncclSymSendRegRecvNonreg) kmask &= kernelMask_LL;
-  }
-
-  ncclSymkKernelId bestKernel = ncclSymkKernelId_Count;
-  float bestTime = 1.e30f;
-  int bestBlocks = 999;
-  size_t nBytes = nEltsTotal * ncclTypeSize(ty);
-
-  constexpr float smPenalty = .025f; // 2.5% percent increase in time per SM
-  uint32_t kmaskRemain = kmask;
-  while (kmaskRemain != 0) {
-    ncclSymkKernelId k = (ncclSymkKernelId)popFirstOneBit(&kmaskRemain);
-    float kTime;
-    int kBlocks;
-    queryModel(comm, k, nBytes, &kTime, &kBlocks);
-    if (kTime * (1.0f + smPenalty * kBlocks) < bestTime * (1.0f + smPenalty * bestBlocks)) {
-      bestKernel = k;
-      bestTime = kTime;
-      bestBlocks = kBlocks;
-    }
-  }
-
-  *kernelId = bestKernel;
-  *estTimeUs = kmask == 0 || kernelMask_user() == (1 << ncclSymkKernelId_Count) - 1 ? bestTime : 0.0f;
-  *nBlocks = bestBlocks;
-  *nWarps = 16;
-  return ncclSuccess;
-}
-
 const char* ncclSymkKernelIdToString(int kernelId) {
   if (kernelId < 0 || kernelId >= ncclSymkKernelId_Count) {
     return "Unknown";
   }
-  return kernelName[kernelId];
+  return ncclSymKernelStr[kernelId];
 }
 
 int ncclSymkMaxChunkElts(struct ncclComm* comm, ncclSymkKernelId kernelId, int /*ncclDevRedOp_t*/ red,

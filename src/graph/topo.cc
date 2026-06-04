@@ -2229,9 +2229,9 @@ ncclResult_t ncclTopoGetCompCap(struct ncclTopoSystem* system, int* ccMin, int* 
   if (system->nodes[DEV].count == 0) return ncclInternalError;
   int min, max;
   min = max = system->nodes[DEV].nodes[0].dev.cudaCompCap;
-  for (int g = 1; g < system->nodes[DEV].count; g++) {
-    min = std::min(min, system->nodes[DEV].nodes[g].dev.cudaCompCap);
-    max = std::max(max, system->nodes[DEV].nodes[g].dev.cudaCompCap);
+  for (int d = 1; d < system->nodes[DEV].count; d++) {
+    min = std::min(min, system->nodes[DEV].nodes[d].dev.cudaCompCap);
+    max = std::max(max, system->nodes[DEV].nodes[d].dev.cudaCompCap);
   }
   if (ccMin) *ccMin = min;
   if (ccMax) *ccMax = max;

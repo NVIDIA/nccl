@@ -100,7 +100,7 @@ static ncclResult_t ncclIbGetPlaneIndex(int devPlane, int16_t* count, int16_t* p
   while (p < *count && planes[p] != devPlane) p++;
   if (p == *count) {
     if (p == (NCCL_IB_PLANE_MAX_INDEX - 1)) {
-      WARN("NCCL cannot use more than %d plane IDs.", NCCL_IB_PLANE_MAX_INDEX);
+      WARN("NCCL cannot use more than %d user-defined plane IDs.", NCCL_IB_PLANE_MAX_INDEX - 2);
       return ncclInvalidUsage;
     }
     if (devPlane != NCCL_NET_ID_UNDEF && (devPlane & NCCL_IB_PLANE_VIRT_BIT)) {

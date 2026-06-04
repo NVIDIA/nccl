@@ -23,7 +23,7 @@ Window Registration Flags
  from all ranks must be equal when calling NCCL collective operations. It allows NCCL to operate
  buffer in a symmetric way and provide the best performance.
 
-.. c:macro:: NCCL_WIN_COLL_STRICT_ORDERING
+.. c:macro:: NCCL_WIN_STRICT_ORDERING
 
   Register buffer into NCCL window while ensuring strict ordering for window operations using the IB Verbs transport.
   This flag is mostly intended for buffers used for GIN VA Signals (see :ref:`devapi_signals`).

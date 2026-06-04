@@ -969,6 +969,10 @@ static ncclResult_t deepCopyDevCommRequirements(struct ncclDevCommRequirements c
     (*dstRes)->bufferSize = rr->bufferSize;
     (*dstRes)->bufferAlign = rr->bufferAlign;
     (*dstRes)->outBufferHandle = rr->outBufferHandle;
+    (*dstRes)->ginSignalCount = rr->ginSignalCount;
+    (*dstRes)->ginCounterCount = rr->ginCounterCount;
+    (*dstRes)->outGinSignalStart = rr->outGinSignalStart;
+    (*dstRes)->outGinCounterStart = rr->outGinCounterStart;
     dstRes = &(*dstRes)->next;
   }
 

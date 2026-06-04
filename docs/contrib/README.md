@@ -29,3 +29,7 @@ the official docs or source code, the official sources take precedence.
 
 * [NCCL GIN and Symmetric Memory](GIN/NCCL_Gin_and_Symmetric_Memory/NCCL_Gin_and_Symmetric_Memory.md) by Anonymous, translated from Chinese.
 
+### Architecture and Internals
+
+* [NCCL Architecture Learning Guides (bilingual: English and 中文)](architecture/learning/index.md) by tianhao909 (community contribution, not from the NCCL team). A source-oriented deep dive into communicator initialization, topology discovery and search, the performance/tuning model, transport selection, and collective execution. Based on NCCL v2.30u1 (2.30.6).
+

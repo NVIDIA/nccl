@@ -5,164 +5,69 @@
   See LICENSE.txt for more license information
 -->
 
-# NCCL Symmetric Memory AllReduce Example
+# NCCL Example: Symmetric Memory AllReduce
 
 This example demonstrates how to use NCCL's symmetric memory feature for
-optimized collective operations. Symmetric memory provides optimized performance
-by leveraging consistent memory layouts across all participating ranks, enabling
-advanced communication algorithms.
+optimized collective operations.
 
 ## Overview
 
 Symmetric memory windows provide a way to register memory buffers that benefit
-from optimized collective operations. When using `NCCL_WIN_COLL_SYMMETRIC`, all
-ranks must provide symmetric buffers, enabling optimized communication patterns
-and better performance for large-scale multi-GPU operations.
+from optimized collective algorithms. When all ranks provide symmetric buffers
+(same size, allocated with the NCCL allocator), NCCL can apply advanced
+communication optimizations for better performance.
+
+## Runtime Requirements
+
+The C variant can be built with either pthreads or MPI (and with MPI for multi-node runs), while the Python variant uses a single-process setup; symmetric-memory benefits are most natural on a single node. It is most useful with multiple GPUs, but can still run with one visible GPU.
 
 ## What This Example Does
 
-1. **Allocates memory using NCCL allocator** (`ncclMemAlloc`) which provides
-   memory compatible with symmetric windows
-2. **Registers buffers as symmetric windows** using `ncclCommWindowRegister`
-   with `NCCL_WIN_COLL_SYMMETRIC` flag
-3. **Performs AllReduce sum operation** using the symmetric memory for optimized
-   communication performance
+1. **Allocate memory** using NCCL's allocator (required for symmetric windows)
+2. **Register symmetric windows** with the communicator (collective call - all ranks participate)
+3. **Perform AllReduce** using the symmetric buffers for optimized communication
+4. **Deregister and free** windows and buffers in the correct cleanup order
 
-## Building and Running
+## Variants
 
-The advanced examples can be built using either pthread or MPI for
-parallelization. pthread is the default choice. To use MPI the user needs to set
-`MPI=1` at build time and can optionally provide a valid MPI installation under
-`MPI_HOME`.
-
-### Build
-```shell
-make [MPI=1] [MPI_HOME=<path-to-mpi>] [NCCL_HOME=<path-to-nccl>] [CUDA_HOME=<path-to-cuda>]
-```
-
-### Run when compiled for pthreads (default)
-```shell
-[NTHREADS=N] ./allreduce_sm
-```
-
-### Run when compiled for MPI
-```shell
-mpirun -np <num_processes> ./allreduce_sm
-```
-
-## Code Structure
-
-### Key Components
-
-1. **Buffer Allocation and Window Registration**:
-```c
-size_t size_bytes; // Is set to the size of the send/receive buffers
-void *d_sendbuff;
-void *d_recvbuff;
-
-// Allocate buffers using ncclMemAlloc (compatible with symmetric memory)
-NCCLCHECK(ncclMemAlloc(&d_sendbuff, size_bytes));
-NCCLCHECK(ncclMemAlloc(&d_recvbuff, size_bytes));
-
-ncclComm_t comm;
-ncclWindow_t send_win;
-ncclWindow_t recv_win;
-
-// Register buffers as symmetric windows
-NCCLCHECK(ncclCommWindowRegister(comm, d_sendbuff, size_bytes, &send_win, NCCL_WIN_COLL_SYMMETRIC));
-NCCLCHECK(ncclCommWindowRegister(comm, d_recvbuff, size_bytes, &recv_win, NCCL_WIN_COLL_SYMMETRIC));
-```
-
-2. **AllReduce Operation**:
-```c
-size_t count;  // set to number of floats to exchange
-cudaStream_t stream; // stream is set in cudaStreamCreate
-
-// Perform AllReduce with symmetric memory optimization
-NCCLCHECK(ncclAllReduce(d_sendbuff, d_recvbuff, count, ncclFloat, ncclSum,
-                        comm, stream));
-```
-
-3. **Window Deregistration and Cleanup**:
-```c
-// Deregister symmetric memory windows
-NCCLCHECK(ncclCommWindowDeregister(comm, send_win));
-NCCLCHECK(ncclCommWindowDeregister(comm, recv_win));
-
-// Free buffers allocated with ncclMemAlloc
-NCCLCHECK(ncclMemFree(d_sendbuff));
-NCCLCHECK(ncclMemFree(d_recvbuff));
-```
+- **C**: `c/` (uses `ncclMemAlloc()` + `ncclCommWindowRegister()` + `ncclAllReduce()`)
+  - How to run + walkthrough: `c/README.md`
+- **Python (nccl4py + mpi4py)**: `python/` (uses `nccl.cupy.empty()` + `comm.register_window()` + `comm.allreduce()`)
+  - How to run + walkthrough: `python/README.md`
 
 ## Expected Output
 
-### With 4 GPUs (using pthreads/MPI)
-```
-Starting AllReduce example with 4 ranks
-  Rank 0 communicator initialized using device 0
-  Rank 1 communicator initialized using device 1
-  Rank 2 communicator initialized using device 2
-  Rank 3 communicator initialized using device 3
-Symmetric Memory allocation
-  Rank 0 allocating 4.00 MB per buffer
-  Rank 1 allocating 4.00 MB per buffer
-  Rank 2 allocating 4.00 MB per buffer
-  Rank 3 allocating 4.00 MB per buffer
-  Rank 0 data initialized (value: 0)
-  Rank 1 data initialized (value: 1)
-  Rank 2 data initialized (value: 2)
-  Rank 3 data initialized (value: 3)
-Starting AllReduce with 1048576 elements (4 MB)
-AllReduce completed successfully
-Verification - Expected: 6.0, Got: 6.0
-Results verified correctly
-  Rank 0 symmetric memory windows deregistered
-  Rank 1 symmetric memory windows deregistered
-  Rank 2 symmetric memory windows deregistered
-  Rank 3 symmetric memory windows deregistered
-All resources cleaned up successfully
-Example completed - demonstrated symmetric memory lifecycle
-```
+You should see:
+
+- Communicator initialization for each rank
+- Symmetric memory allocation and window registration
+- AllReduce operation completion
+- Verification showing all ranks received the correct sum
+- Clean window deregistration and resource cleanup
 
 ## Performance Benefits of Symmetric Memory
 
-Symmetric memory registration provides several performance advantages:
+Symmetric memory registration provides several advantages:
 
-- **Optimized Communication Algorithms**: NCCL can apply advanced optimizations
+- **Optimized communication algorithms**: NCCL can apply advanced optimizations
   when all ranks have symmetric layouts
-- **Better Memory Access Patterns**: Consistent layouts enable better caching
+- **Better memory access patterns**: Consistent layouts enable better caching
   and memory access optimization
 
-For more information on the performance benefits see the [Enabling Fast
-Inference and Resilient Training with NCCL
-2.27]()https://developer.nvidia.com/blog/enabling-fast-inference-and-resilient-training-with-nccl-2-27/)
+For more information see the [Enabling Fast Inference and Resilient Training
+with NCCL 2.27](https://developer.nvidia.com/blog/enabling-fast-inference-and-resilient-training-with-nccl-2-27/)
 blog.
 
-**Important**: Buffers must be allocated using the CUDA Virtual Memory
-Management (VMM) API. NCCL provides the `ncclMemAlloc` convenience function for
-symmetric memory registration. The `NCCL_WIN_COLL_SYMMETRIC` flag requires all
-ranks to provide symmetric buffers consistently.
-
-## Key Insights
-
-- **Symmetric Memory Windows** are most beneficial for:
-  - Large-scale collective operations with consistent memory patterns
-  - Latency-sensitive kernels
-  - Applications with predictable allocation patterns
-- **ncclCommInitRank** can be used for pthread or MPI parallel case
-- **Window registration** must happen on all ranks for collective operations
-- **Memory management** is critical - always deregister windows before freeing
-  memory
+**Important**: Buffers must be allocated using the CUDA Virtual Memory Management (VMM) API.
+NCCL provides `ncclMemAlloc()` (C), and the Python example uses `nccl.cupy.empty()` to create
+NCCL-backed CuPy arrays from the same allocator family. The `NCCL_WIN_COLL_SYMMETRIC` (C) /
+`WindowFlag.CollSymmetric` (Python) flag requires all ranks to provide symmetric buffers
+consistently.
 
 ## Common Issues and Solutions
 
-1. **Window Registration Failure**: Buffers MUST be allocated with (VMM) API,
-   e.g. `ncclMemAlloc` (not `cudaMalloc`) for symmetric memory.
-2. **Allocation Error**: If `ncclMemAlloc` fails, check NCCL version (requires
-   at least v2.27) and available memory
-3. **Deregistration Order**: Always deregister windows before freeing memory or
-   destroying communicators
-4. **Symmetric Requirement**: All ranks must use `NCCL_WIN_COLL_SYMMETRIC`
-   consistently in collective operations
-5. **Memory Leaks**: Always use `ncclMemFree` for buffers allocated with
-   `ncclMemAlloc`
+1. **Window registration failure**: Buffers must be from VMM-compatible allocator (e.g., `ncclMemAlloc()`, not `cudaMalloc()`)
+2. **Allocation error**: Check NCCL version (requires 2.27+) and available memory
+3. **Deregistration order**: Always deregister windows before freeing memory
+4. **Symmetric requirement**: All ranks must use the symmetric flag consistently
+5. **Memory leaks**: Always free buffers allocated with NCCL's allocator

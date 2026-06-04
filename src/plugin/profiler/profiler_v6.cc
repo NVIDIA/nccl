@@ -21,4 +21,3 @@ ncclProfiler_t* getNcclProfiler_v6(void* lib) {
   }
   return NULL;
 }
-

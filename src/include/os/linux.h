@@ -37,4 +37,3 @@ typedef pid_t ncclPid_t;
 #define NCCL_POLLERR POLLHUP
 
 #endif
-

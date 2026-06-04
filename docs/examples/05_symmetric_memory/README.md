@@ -27,6 +27,19 @@ consistent memory layouts.
   - Collective operations executed on symmetric windows
   - Correct deregistration and cleanup
 
+### [02_allgather](02_allgather/)
+**AllGather with Symmetric Memory Windows and Copy Engine**
+- **Pattern**: Register symmetric windows and use copy engine for zero SM usage
+- **API**: `ncclCommInitRankConfig`, `ncclCommWindowRegister`,
+  `ncclCommWindowDeregister`, `ncclMemAlloc`, `ncclAllGather`
+- **Use case**: Large-scale collectives with computation overlap
+- **Key features**:
+  - NCCL config with `CTAPolicy=2` to enable copy engine
+  - Zero SM usage during collective operations
+  - Enables true overlap of communication with computation
+  - Buffers allocated via `ncclMemAlloc` for symmetric compatibility
+  - Higher peak bandwidth for large message sizes (higher latency for small messages)
+
 ## Choosing the Right Pattern
 
 *Scenario* : Large-scale training with consistent memory patterns
@@ -38,33 +51,28 @@ Symmetric windows enable NCCL to apply optimized collective protocols when all
 ranks use consistent layouts. The memory needs to be allocated through the CUDA
 Virtual Memory Management (VMM) API and registered with NCCL.
 
-```c
-// Allocate using NCCL provided convenience function and register symmetric windows
-NCCLCHECK(ncclMemAlloc(&buffer, size_bytes));
-NCCLCHECK(ncclCommWindowRegister(comm, buffer, size_bytes, &win, NCCL_WIN_COLL_SYMMETRIC));
-
-// Collective using symmetric windows
-NCCLCHECK(ncclAllReduce(buffer, buffer, count, ncclFloat, ncclSum, comm, stream));
-
-// Deregister and free
-NCCLCHECK(ncclCommWindowDeregister(comm, win));
-NCCLCHECK(ncclMemFree(buffer));
-```
-
 ## Building
 
 ### **Quick Start**
 ```shell
 # Build example by directory name
 make 01_allreduce
+make 02_allgather
 ```
 
 ### **Individual Examples**
 ```shell
 # Build and run AllReduce with symmetric windows
-cd 01_allreduce && make
+cd 01_allreduce/c && make
 ./allreduce_sm
+
+# Build and run AllGather with symmetric windows + copy engine
+cd 02_allgather/c && make
+./allgather_ce
 ```
+
+### **Python**
+See the `python/README.md` in each example directory.
 
 ## References
 - [NCCL User Guide:

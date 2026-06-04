@@ -1,12 +1,9 @@
-#
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # See LICENSE.txt for more license information
-#
 
-"""
-NCCL4Py: Python bindings for NVIDIA Collective Communications Library (NCCL).
+"""NCCL4Py: Python bindings for the NVIDIA Collective Communications Library (NCCL).
 
 NCCL4Py provides Pythonic access to NCCL for efficient multi-GPU and multi-node
 communication. It supports all NCCL collective operations, point-to-point
@@ -15,7 +12,12 @@ operators.
 """
 
 from nccl._version import __version__
+from nccl._show_versions import LibraryInfo, VersionInfo, get_version, show_versions
 
 __all__ = [
     "__version__",
+    "LibraryInfo",
+    "VersionInfo",
+    "get_version",
+    "show_versions",
 ]

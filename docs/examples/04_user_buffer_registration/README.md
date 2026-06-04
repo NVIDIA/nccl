@@ -39,19 +39,6 @@ direct access. It can accelerate collectives and greatly reduce the resource
 usage (e.g. #channel usage). Also, this is a prerequisite for advanced features
 such as symmetric memory or device API calls.
 
-```c
-// Allocate using NCCL convenience function and register buffers
-NCCLCHECK(ncclMemAlloc((void**)&d_send, size_bytes));
-NCCLCHECK(ncclCommRegister(comm, d_send, size_bytes, &send_handle));
-
-// Use in collectives
-NCCLCHECK(ncclAllReduce(d_send, d_recv, count, ncclFloat, ncclSum, comm, stream));
-
-// Deregister and free
-NCCLCHECK(ncclCommDeregister(comm, send_handle));
-NCCLCHECK(ncclMemFree(d_send));
-```
-
 ## Building
 
 ### **Quick Start**
@@ -63,9 +50,12 @@ make 01_allreduce
 ### **Individual Examples**
 ```shell
 # Build and run AllReduce with user buffer registration
-cd 01_allreduce && make
+cd 01_allreduce/c && make
 ./allreduce_ub
 ```
+
+### **Python**
+See the `python/README.md` in each example directory.
 
 ## References
 - [NCCL User Guide:

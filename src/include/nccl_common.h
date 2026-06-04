@@ -9,18 +9,19 @@
 #define NCCL_DEBUG_H_
 
 #ifdef NCCL_OS_LINUX
-  // Workaround for libstdc++ trying to force public visibility of std:: symbols.  We don't want to do that in libnccl.so.
-  #include <bits/c++config.h>
-  #undef _GLIBCXX_VISIBILITY
-  #define _GLIBCXX_VISIBILITY(V)
+  // Workaround for libstdc++ trying to force public visibility of std:: symbols.  We don't want to do that in
+  // libnccl.so.
+#include <bits/c++config.h>
+#undef _GLIBCXX_VISIBILITY
+#define _GLIBCXX_VISIBILITY(V)
 #endif
 
 #include <cstdint>
 
 // Windows compatibility: define ssize_t if not available
 #ifdef NCCL_OS_WINDOWS
-  #include <BaseTsd.h>
-  typedef SSIZE_T ssize_t;
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
 #endif
 
 typedef enum {
@@ -50,10 +51,12 @@ typedef enum {
   NCCL_PROFILE = 0x4000,
   NCCL_RAS = 0x8000,
   NCCL_DESTROY = 0x10000,
+  NCCL_ALLOC_HOST = 0x20000,
   NCCL_ALL = ~0
 } ncclDebugLogSubSys;
 
-typedef void (*ncclDebugLogger_t)(ncclDebugLogLevel level, unsigned long flags, const char *file, int line, const char *fmt, ...);
+typedef void (*ncclDebugLogger_t)(ncclDebugLogLevel level, unsigned long flags, const char* file, int line,
+                                  const char* fmt, ...);
 
 // NCCL core profiler callback for network defined events instrumentation
 enum {
@@ -63,7 +66,8 @@ enum {
   ncclProfilerNetEventUpdateAndStop,
 };
 
-typedef ncclResult_t (*ncclProfilerCallback_t)(void** eHandle, int type, void* pHandle, int64_t pluginId, void* extData);
+typedef ncclResult_t (*ncclProfilerCallback_t)(void** eHandle, int type, void* pHandle, int64_t pluginId,
+                                               void* extData);
 
 #define NCCL_NUM_FUNCTIONS 5 // Send/Recv not included for now
 typedef enum {
@@ -84,6 +88,5 @@ typedef enum {
   ncclFuncWaitSignal = 14,
   ncclNumFuncs = 15
 } ncclFunc_t;
-
 
 #endif

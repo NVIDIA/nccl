@@ -6,43 +6,53 @@
 #
 
 # NCCL Shared Memory Examples
-EXAMPLES = 01_allreduce
+EXAMPLES = 01_allreduce 02_allgather
 
 # Default target
 all: $(EXAMPLES)
 
 # Build individual examples
 $(EXAMPLES):
-	$(MAKE) -C $@
+	$(MAKE) -C $@/c
 
 # Clean all build artifacts
 clean:
 	for example in $(EXAMPLES); do \
-		$(MAKE) -C $$example clean; \
+		$(MAKE) -C $$example/c clean; \
 	done
 
 # Test all examples
 test: all
 	for example in $(EXAMPLES); do \
 		echo "Testing $$example..."; \
-		$(MAKE) -C $$example test; \
+		$(MAKE) -C $$example/c test || exit 1; \
+	done
+
+# Install all examples
+install: all
+	for example in $(EXAMPLES); do \
+		echo "Installing $$example..."; \
+		$(MAKE) -C $$example/c install || exit 1; \
 	done
 
 # Help
 help:
-	@echo "NCCL Symmetric Memeory Examples"
+	@echo "NCCL Symmetric Memory Examples"
 	@echo "==============================="
 	@echo ""
 	@echo "Targets:"
 	@echo "  all     - Build all examples"
 	@echo "  clean   - Clean all build artifacts"
 	@echo "  test    - Test all examples"
+	@echo "  install - Install all examples"
 	@echo "  help    - Show this help"
 	@echo ""
 	@echo "Examples:"
 	@echo "  01_allreduce - AllReduce collective operation"
+	@echo "  02_allgather - AllGather collective operation with Copy Engine"
 	@echo ""
 	@echo "To build/run individual examples:"
-	@echo "  make -C 01_allreduce"
+	@echo "  make -C 01_allreduce/c"
+	@echo "  make -C 02_allgather/c"
 
-.PHONY: all clean test help $(EXAMPLES)
+.PHONY: all clean test install help $(EXAMPLES)

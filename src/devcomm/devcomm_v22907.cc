@@ -66,7 +66,6 @@ static_assert(offsetof(struct ncclDevComm_v22907, ginIsRailed) == 208);
 static_assert(offsetof(struct ncclDevComm_v22907, abortFlag) == 216);
 static_assert(sizeof(struct ncclDevComm_v22907) == 224);
 
-
 static ncclResult_t ncclCommPropertiesFilter_v22907(ncclComm_t comm, struct ncclCommProperties* props) {
   // We don't provide backwards compatibility for GIN with 2.29.7.  If a communicator needs it, we indicate that
   // the Device API is not available.
@@ -78,8 +77,8 @@ static ncclResult_t ncclCommPropertiesFilter_v22907(ncclComm_t comm, struct nccl
 }
 
 static ncclResult_t ncclDevCommRequirementsFilter_v22907(ncclComm_t comm, ncclDevCommRequirements_t* reqs) {
-  bool requestedGinResources = reqs->ginSignalCount > 0 || reqs->ginCounterCount > 0 ||
-                               reqs->barrierCount > 0 || reqs->railGinBarrierCount > 0;
+  bool requestedGinResources =
+    reqs->ginSignalCount > 0 || reqs->ginCounterCount > 0 || reqs->barrierCount > 0 || reqs->railGinBarrierCount > 0;
   struct ncclDevResourceRequirements* node = reqs->resourceRequirementsList;
   while (!requestedGinResources && node != nullptr) {
     requestedGinResources = node->ginSignalCount > 0 || node->ginCounterCount > 0;
@@ -87,7 +86,9 @@ static ncclResult_t ncclDevCommRequirementsFilter_v22907(ncclComm_t comm, ncclDe
   }
   if (requestedGinResources && (reqs->ginConnectionType != NCCL_GIN_CONNECTION_NONE || reqs->ginForceEnable)) {
     char compiledBuf[16], runtimeBuf[16];
-    WARN("The application was compiled with too old version of NCCL. It was compiled with NCCL version %s, but is running with NCCL library version %s. Because of its use of GIN device kernels, it needs to be recompiled, preferably with the same NCCL version that it will be running with.",
+    WARN("The application was compiled with too old version of NCCL. It was compiled with NCCL version %s, but is "
+         "running with NCCL library version %s. Because of its use of GIN device kernels, it needs to be recompiled, "
+         "preferably with the same NCCL version that it will be running with.",
          ncclVersionToString(reqs->version, compiledBuf, sizeof(compiledBuf)),
          ncclVersionToString(NCCL_VERSION_CODE, runtimeBuf, sizeof(runtimeBuf)));
     return ncclInvalidUsage;
@@ -109,7 +110,8 @@ static ncclResult_t ncclDevCommCopyNewToOld_v22907(ncclComm_t comm, void* oldDev
 }
 
 struct ncclDevCommCompat ncclDevCommCompat_v22907 = {
-  NCCL_VERSION(2, 29, 5), NCCL_VERSION(2, 29, 7), // minVersion, maxVersion
+  NCCL_VERSION(2, 29, 5),
+  NCCL_VERSION(2, 29, 7), // minVersion, maxVersion
   ncclCommPropertiesFilter_v22907,                // commPropertiesFilter
   ncclDevCommRequirementsFilter_v22907,           // devCommRequirementsFilter
   ncclDevCommCopyNewToOld_v22907,                 // devCommCopyNewToOld

@@ -18,6 +18,8 @@
 #define NCCL_SIMPLE_ALIGNMENT (WARP_SIZE * 8LL * 16LL)
 #define NCCL_BYTES_ALIGNMENT 16
 
+int64_t ncclParamGraphStreamOrdering();
+
 ncclResult_t ncclInitKernelsForDevice(int cudaArch, int maxSharedMem, size_t* maxStackSize);
 ncclResult_t ncclEnqueueCheck(struct ncclInfo* info);
 ncclResult_t ncclLaunchPrepare(struct ncclComm* comm);
@@ -29,23 +31,23 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
 ncclResult_t ncclTasksRegAndEnqueue(struct ncclComm* comm);
 
 static inline size_t ncclFuncSendCount(ncclFunc_t func, int nRanks, size_t count) {
-  return func == ncclFuncReduceScatter ? nRanks*count : count;
+  return func == ncclFuncReduceScatter ? nRanks * count : count;
 }
 static inline size_t ncclFuncRecvCount(ncclFunc_t func, int nRanks, size_t count) {
-  return func == ncclFuncAllGather ? nRanks*count : count;
+  return func == ncclFuncAllGather ? nRanks * count : count;
 }
 static inline size_t ncclFuncMaxSendRecvCount(ncclFunc_t func, int nRanks, size_t count) {
-  return func == ncclFuncAllGather || func == ncclFuncReduceScatter ? nRanks*count : count;
+  return func == ncclFuncAllGather || func == ncclFuncReduceScatter ? nRanks * count : count;
 }
 
 ncclResult_t ncclGetCollNetSupport(struct ncclComm* comm, struct ncclTaskColl* task, int* collNetSupport);
-ncclResult_t ncclGetAlgoInfo(
-  struct ncclComm* comm, struct ncclTaskColl* task,
-  int collNetSupport, int nvlsSupport, int numPipeOps, ncclSimInfo_t* simInfo = NULL
-);
+ncclResult_t ncclGetAlgoInfo(struct ncclComm* comm, struct ncclTaskColl* task, int collNetSupport, int nvlsSupport,
+                             int numPipeOps, ncclSimInfo_t* simInfo = NULL);
 bool ncclTestBudget(struct ncclKernelPlanBudget* budget, int nWorkBatches, ssize_t nWorkBytes);
 
-void ncclAddWorkBatchToPlan(struct ncclComm* comm, struct ncclKernelPlan* plan, int channelId, enum ncclDevWorkType workType, int devFuncId, uint32_t workOffset, int p2pEpoch =-1, int p2pRound = -1, bool newBatch = false);
+void ncclAddWorkBatchToPlan(struct ncclComm* comm, struct ncclKernelPlan* plan, int channelId,
+                            enum ncclDevWorkType workType, int devFuncId, uint32_t workOffset, int p2pEpoch = -1,
+                            int p2pRound = -1, bool newBatch = false);
 
 ncclResult_t ncclAddProxyOpIfNeeded(struct ncclComm* comm, struct ncclKernelPlan* plan, struct ncclProxyOp* op);
 

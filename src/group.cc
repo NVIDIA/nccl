@@ -32,12 +32,8 @@ thread_local struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> ncc
 thread_local int ncclGroupBlocking = -1; /* default mode */
 void* ncclAsyncJobMain(void* arg);
 
-ncclResult_t ncclAsyncLaunch(
-    struct ncclAsyncJob* job,
-    ncclResult_t(*func)(struct ncclAsyncJob*),
-    void(*undo)(struct ncclAsyncJob*),
-    void(*destructor)(void*), ncclComm_t comm
-  ) {
+ncclResult_t ncclAsyncLaunch(struct ncclAsyncJob* job, ncclResult_t (*func)(struct ncclAsyncJob*),
+                             void (*undo)(struct ncclAsyncJob*), void (*destructor)(void*), ncclComm_t comm) {
   ncclResult_t ret = ncclSuccess;
 
   job->destroyFlag = comm->destroyFlag;
@@ -80,7 +76,7 @@ void* ncclAsyncJobMain(void* arg) {
   struct ncclAsyncJob* job = (struct ncclAsyncJob*)arg;
   job->result = job->func(job);
   if (job->result != ncclSuccess) {
-    INFO(NCCL_INIT,"%s:%d -> %d [Async thread]", __FILE__, __LINE__, job->result);
+    INFO_LOC(NCCL_INIT, "-> %d [Async thread]", job->result);
   }
   COMPILER_ATOMIC_STORE(&job->state, static_cast<ncclGroupJobState_t>(ncclGroupJobDone), std::memory_order_release);
   return arg;
@@ -152,39 +148,47 @@ static ncclResult_t ncclCollPreconnect(struct ncclComm* comm, bool* algoNeedConn
   for (int i = 0; i < NCCL_NUM_ALGORITHMS; ++i) {
     if (algoNeedConnect[i]) {
       switch (i) {
-        case NCCL_ALGO_RING: {
+      case NCCL_ALGO_RING:
+        {
           NCCLCHECK(ncclTransportRingConnect(comm));
           break;
         }
-        case NCCL_ALGO_TREE: {
+      case NCCL_ALGO_TREE:
+        {
           NCCLCHECK(ncclTransportTreeConnect(comm));
           break;
         }
-        case NCCL_ALGO_NVLS: {
+      case NCCL_ALGO_NVLS:
+        {
           /* If we are using NVLS_TREE algo, we must mark NVLS algo to set up
            * NVLS intra-node buffer */
           NCCLCHECK(ncclNvlsBufferSetup(comm));
           break;
         }
-        case NCCL_ALGO_NVLS_TREE: {
+      case NCCL_ALGO_NVLS_TREE:
+        {
           NCCLCHECK(ncclNvlsTreeConnect(comm));
           break;
         }
-        case NCCL_ALGO_COLLNET_CHAIN: {
+      case NCCL_ALGO_COLLNET_CHAIN:
+        {
           NCCLCHECK(ncclCollNetChainBufferSetup(comm));
           break;
         }
-        case NCCL_ALGO_COLLNET_DIRECT: {
+      case NCCL_ALGO_COLLNET_DIRECT:
+        {
           NCCLCHECK(ncclCollNetDirectBufferSetup(comm));
           break;
         }
-        case NCCL_ALGO_PAT: {
+      case NCCL_ALGO_PAT:
+        {
           NCCLCHECK(ncclTransportPatConnect(comm));
           break;
         }
         // Yes, it's a dead code.  That's fine...
         // coverity[dead_error_begin]
-        default: {
+      default:
+        {
           NCCLCHECK(ncclInternalError);
         }
       }
@@ -198,7 +202,7 @@ ncclResult_t ncclPrepareTasksAndCollPreconnectFunc(struct ncclAsyncJob* job_) {
   struct ncclComm* comm = job->comm;
   bool needConnect;
   bool algoNeedConnect[NCCL_NUM_ALGORITHMS];
-  memset(algoNeedConnect, 0, sizeof(bool)*NCCL_NUM_ALGORITHMS);
+  memset(algoNeedConnect, 0, sizeof(bool) * NCCL_NUM_ALGORITHMS);
   CUDACHECK(cudaSetDevice(comm->cudaDev));
   if (!job_->isThreadMain && ncclOsCpuCount(comm->cpuAffinity)) ncclOsSetAffinity(comm->cpuAffinity);
   NCCLCHECK(ncclPrepareTasks(comm, algoNeedConnect, &needConnect, job->simInfo));
@@ -257,17 +261,15 @@ ncclResult_t ncclCommGroupRegisterSymmetric(struct ncclAsyncJob* job_) {
 
   while (!ncclIntruQueueEmpty(&comm->devrState.regTaskQueue)) {
     struct ncclDevrRegTask* task = ncclIntruQueueDequeue(&comm->devrState.regTaskQueue);
-    NCCLCHECKGOTO(ncclDevrWindowRegisterInGroup(
-      comm, task->userPtr, task->userSize, task->winFlags, task->outWinDev),
-      ret, fail);
+    NCCLCHECKGOTO(ncclDevrWindowRegisterInGroup(comm, task->userPtr, task->userSize, task->winFlags, task->outWinDev),
+                  ret, fail);
     free(task);
   }
 
   while (!ncclIntruQueueEmpty(&comm->devrState.commCreateTaskQueue)) {
     struct ncclDevrCommCreateTask* task = ncclIntruQueueDequeue(&comm->devrState.commCreateTaskQueue);
-    NCCLCHECKGOTO(ncclDevrCommCreateInternal(
-      comm, task->reqs, task->outDevComm, /*isInternal=*/false, task->devCompat),
-      ret, fail);
+    NCCLCHECKGOTO(ncclDevrCommCreateInternal(comm, task->reqs, task->outDevComm, /*isInternal=*/false, task->devCompat),
+                  ret, fail);
     freeDevCommRequirements(task->reqs); // free additional task memory for reqs
     free(task);
   }
@@ -333,10 +335,12 @@ static ncclResult_t doLaunches(struct ncclComm* head) {
       goto failure;
     }
 
-    while (true) { // Iterate rounds of launches for clique.
+    while (true) {
+      // Iterate rounds of launches for clique.
       bool moreRounds = false;
       comm = cliqueHead;
-      do { // Iterate clique members.
+      do {
+        // Iterate clique members.
         struct ncclComm* next = comm->groupNext[ncclGroupTaskTypeCollective];
         if (useBarrier) {
           // Barrier reduction result tells us if this was the final round.
@@ -364,7 +368,8 @@ static ncclResult_t doLaunches(struct ncclComm* head) {
           if (plan != nullptr) {
             NCCLCHECKGOTO(ncclLaunchKernelAfter_NoCuda(comm, plan), result, failure);
           }
-        } else { // Final round.
+        } else {
+          // Final round.
           CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), result, failure);
           NCCLCHECKGOTO(ncclLaunchFinish(comm), result, failure);
         }
@@ -387,7 +392,9 @@ static inline void groupLocalResetJobState() {
   return;
 }
 
-static void groupCleanup(struct ncclComm** groupCommHeadPtr, struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next>* asyncJobsPtr, ncclResult_t error) {
+static void groupCleanup(struct ncclComm** groupCommHeadPtr,
+                         struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next>* asyncJobsPtr,
+                         ncclResult_t error) {
   struct ncclComm* comm;
   for (int type = 0; type < ncclGroupTaskTypeNum; ++type) {
     comm = groupCommHeadPtr[type];
@@ -428,7 +435,9 @@ static void groupCleanup(struct ncclComm** groupCommHeadPtr, struct ncclIntruQue
           memset(&comm->planner, 0, sizeof(comm->planner));
 
           comm->planner.peers = tmp;
-          if (comm->planner.peers != NULL) memset(comm->planner.peers, 0, comm->nRanks * sizeof(comm->planner.peers[0]));
+          if (comm->planner.peers != NULL) {
+            memset(comm->planner.peers, 0, comm->nRanks * sizeof(comm->planner.peers[0]));
+          }
           comm->planner.bcast_info.minBcastPeer = INT_MAX;
           comm->planner.bcast_info.maxBcastPeer = INT_MIN;
 
@@ -441,8 +450,7 @@ static void groupCleanup(struct ncclComm** groupCommHeadPtr, struct ncclIntruQue
         }
       }
 
-      if (!comm->config.blocking)
-        (void)ncclCommSetAsyncError(comm, error);
+      if (!comm->config.blocking) (void)ncclCommSetAsyncError(comm, error);
       comm = next;
     }
   }
@@ -450,8 +458,7 @@ static void groupCleanup(struct ncclComm** groupCommHeadPtr, struct ncclIntruQue
   /* reset everything */
   while (!ncclIntruQueueEmpty(asyncJobsPtr)) {
     struct ncclAsyncJob* job = ncclIntruQueueDequeue(asyncJobsPtr);
-    if (!job->destroyFlag && job->comm && !job->comm->config.blocking)
-      (void) ncclCommSetAsyncError(job->comm, error);
+    if (!job->destroyFlag && job->comm && !job->comm->config.blocking) (void)ncclCommSetAsyncError(job->comm, error);
     if (job->undo) job->undo(job);
     if (job->destructor) job->destructor((void*)job);
   }
@@ -459,7 +466,8 @@ static void groupCleanup(struct ncclComm** groupCommHeadPtr, struct ncclIntruQue
   return;
 }
 
-static ncclResult_t asyncJobLaunch(struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> *asyncJobsMain, volatile bool *groupAbortFlag) {
+static ncclResult_t asyncJobLaunch(struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next>* asyncJobsMain,
+                                   volatile bool* groupAbortFlag) {
   ncclResult_t ret = ncclSuccess;
   bool jobsDone = false;
   bool errorJobAbortFlag = false;
@@ -500,7 +508,8 @@ static ncclResult_t asyncJobLaunch(struct ncclIntruQueue<struct ncclAsyncJob, &n
           assert(state == ncclGroupJobJoined);
         }
 
-        if (!job->destroyFlag && (COMPILER_ATOMIC_LOAD(groupAbortFlag, std::memory_order_acquire) || errorJobAbortFlag == true)) {
+        if (!job->destroyFlag &&
+            (COMPILER_ATOMIC_LOAD(groupAbortFlag, std::memory_order_acquire) || errorJobAbortFlag == true)) {
           COMPILER_ATOMIC_STORE(job->abortFlag, uint32_t(1), std::memory_order_release);
           COMPILER_ATOMIC_STORE(job->abortFlagDev, uint32_t(1), std::memory_order_release);
           if (job->childAbortFlag) {
@@ -541,7 +550,9 @@ static void ncclGroupSymmetricJobFree(void* _job) {
   delete job;
 }
 
-static ncclResult_t ncclPrepareTasksAndCollPreconnect(struct ncclComm* comm, ncclSimInfo_t* simInfo, struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next>* asyncCollJobs) {
+static ncclResult_t ncclPrepareTasksAndCollPreconnect(
+  struct ncclComm* comm, ncclSimInfo_t* simInfo,
+  struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next>* asyncCollJobs) {
   if (ncclParamSingleProcMemRegEnable()) {
     struct ncclPrepareTasksAndCollPreconnectJob* job;
     NEW_NOTHROW(job, ncclPrepareTasksAndCollPreconnectJob);
@@ -584,13 +595,13 @@ static ncclResult_t ncclPrepareTasksAndCollPreconnect(struct ncclComm* comm, ncc
   return ncclSuccess;
 }
 
-static ncclResult_t groupLaunch(struct ncclAsyncJob *job_, ncclSimInfo_t* simInfo = NULL) {
+static ncclResult_t groupLaunch(struct ncclAsyncJob* job_, ncclSimInfo_t* simInfo = NULL) {
   ncclResult_t ret = ncclSuccess;
-  struct ncclGroupJob *gjob = (struct ncclGroupJob*) job_;
-  struct ncclComm **groupCommHeadMain = gjob->groupCommHead;
-  struct ncclComm *groupCommPreconnectHeadMain = gjob->groupCommPreconnectHead;
-  struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> *asyncJobsMain = &gjob->asyncJobs;
-  bool *groupAbortFlag = &gjob->abortFlag;
+  struct ncclGroupJob* gjob = (struct ncclGroupJob*)job_;
+  struct ncclComm** groupCommHeadMain = gjob->groupCommHead;
+  struct ncclComm* groupCommPreconnectHeadMain = gjob->groupCommPreconnectHead;
+  struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next>* asyncJobsMain = &gjob->asyncJobs;
+  bool* groupAbortFlag = &gjob->abortFlag;
 
   if (!simInfo && groupCommPreconnectHeadMain != nullptr) {
     struct ncclComm* comm = groupCommPreconnectHeadMain;
@@ -604,7 +615,7 @@ static ncclResult_t groupLaunch(struct ncclAsyncJob *job_, ncclSimInfo_t* simInf
       job->base.abortFlag = comm->abortFlag;
       job->base.abortFlagDev = comm->abortFlagDev;
       job->comm = comm;
-      ncclIntruQueueEnqueue(asyncJobsMain,  (struct ncclAsyncJob*)job);
+      ncclIntruQueueEnqueue(asyncJobsMain, (struct ncclAsyncJob*)job);
 
       struct ncclComm* next = comm->preconnectNext;
       comm->preconnectNext = reinterpret_cast<struct ncclComm*>(0x1);
@@ -714,8 +725,10 @@ static ncclResult_t groupLaunch(struct ncclAsyncJob *job_, ncclSimInfo_t* simInf
 
   while (!ncclIntruQueueEmpty(asyncJobsMain)) {
     struct ncclAsyncJob* job = ncclIntruQueueDequeue(asyncJobsMain);
-    if (!job->destroyFlag && job->comm && !job->comm->config.blocking && groupCommHeadMain[ncclGroupTaskTypeCollective] == nullptr)
-      (void) ncclCommSetAsyncError(job->comm, ret);
+    if (!job->destroyFlag && job->comm && !job->comm->config.blocking &&
+        groupCommHeadMain[ncclGroupTaskTypeCollective] == nullptr) {
+      (void)ncclCommSetAsyncError(job->comm, ret);
+    }
     if (job->destructor) job->destructor((void*)job);
   }
 
@@ -746,7 +759,7 @@ fail:
   goto exit;
 }
 
-static ncclResult_t groupLaunchNonBlocking(struct ncclAsyncJob *job_) {
+static ncclResult_t groupLaunchNonBlocking(struct ncclAsyncJob* job_) {
   return groupLaunch(job_ /* estimatedTime = NULL */);
 }
 

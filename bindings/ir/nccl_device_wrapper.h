@@ -17,6 +17,24 @@
  * This header intentionally excludes nccl_device/impl/xxx__funcs.h so user IR
  * bitcode can resolve NCCL Device API implementations from libnccl_device.bc.
  */
+
+/*
+ * Production's __forceinline__ (__inline__ __attribute__((always_inline))) is
+ * linkonce_odr and emits no symbol. Drop __inline__ so the device API has
+ * external linkage: the bitcode lib emits symbols that consumers resolve from
+ * libnccl_device.bc. Must precede the API includes below.
+ */
+#include "nccl_device/utility.h"
+#undef NCCL_DEVICE_INLINE
+#undef NCCL_HOST_DEVICE_INLINE
+#ifdef __CUDACC__
+#define NCCL_DEVICE_INLINE __device__ __attribute__((always_inline))
+#define NCCL_HOST_DEVICE_INLINE __host__ __device__ __attribute__((always_inline))
+#else
+#define NCCL_DEVICE_INLINE
+#define NCCL_HOST_DEVICE_INLINE inline __attribute__((always_inline))
+#endif
+
 #include "nccl_device/coop.h"
 #include "nccl_device/core.h"
 #include "nccl_device/ll_a2a.h"

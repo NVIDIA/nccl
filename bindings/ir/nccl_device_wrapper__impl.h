@@ -11,17 +11,11 @@
  * NCCL Device API force instantiation and C style APIs for LLVM IR generation
  */
 
-// __forceinline__ expands to `__inline__ __attribute__((always_inline))`; and
-// the __inline__ keyword makes it linkonce_odr (no symbol, dropped if unused). The
-// bitcode library must export every device-API function, so drop __inline__ here to
-// give them external linkage. Override is local to this TU.
-#include "nccl_device/utility.h"
-#undef NCCL_DEVICE_INLINE
-#undef NCCL_HOST_DEVICE_INLINE
-#define NCCL_DEVICE_INLINE __device__ __attribute__((always_inline))
-#define NCCL_HOST_DEVICE_INLINE __host__ __device__ __attribute__((always_inline))
-#include "nccl_device.h"
+// nccl_device_wrapper.h must come first: it installs the bitcode-build linkage override
+// (always_inline, external) that the device-API definitions in nccl_device.h
+// below are then compiled with, so the library emits real symbols.
 #include "nccl_device_wrapper.h"
+#include "nccl_device.h"
 #include <new>
 
 #ifdef __CUDACC__

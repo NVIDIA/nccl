@@ -76,8 +76,12 @@ NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>& ncclBarrierSession<Coop>::ginBar
 
 #ifdef __CUDACC__
 template <typename Coop>
-NCCL_DEVICE_INLINE void ncclBarrierSession<Coop>::selectBarrierAlgo(
-  ncclGinFenceLevel fence, bool* needsLsaBarrier, bool* needsRailGinBarrier, bool* needsDenseGinBarrier) const {
+NCCL_DEVICE_INLINE void ncclBarrierSession<Coop>::selectBarrierAlgo(ncclGinFenceLevel fence, bool* needsLsaBarrier,
+                                                                    bool* needsRailGinBarrier,
+                                                                    bool* needsDenseGinBarrier,
+                                                                    bool* needsProducerFlush) const {
+  *needsProducerFlush = false;
+
   // Barrier on TeamLsa
   if (!this->gin.present) {
     *needsLsaBarrier = this->innerLsaBar.present;
@@ -112,6 +116,7 @@ NCCL_DEVICE_INLINE void ncclBarrierSession<Coop>::selectBarrierAlgo(
     *needsLsaBarrier = this->innerLsaBar.present;
     *needsRailGinBarrier = this->outerRailGinBar.present;
     *needsDenseGinBarrier = false;
+    *needsProducerFlush = true;
     return;
   }
 
@@ -135,8 +140,12 @@ NCCL_DEVICE_INLINE void ncclBarrierSession<Coop>::selectBarrierAlgo(
 #ifdef __CUDACC__
 template <typename Coop>
 NCCL_DEVICE_INLINE void ncclBarrierSession<Coop>::sync(Coop, cuda::memory_order ord, ncclGinFenceLevel fence) {
-  bool needsLsaBarrier, needsRailGinBarrier, needsDenseGinBarrier;
-  selectBarrierAlgo(fence, &needsLsaBarrier, &needsRailGinBarrier, &needsDenseGinBarrier);
+  bool needsLsaBarrier, needsRailGinBarrier, needsDenseGinBarrier, needsProducerFlush;
+  selectBarrierAlgo(fence, &needsLsaBarrier, &needsRailGinBarrier, &needsDenseGinBarrier, &needsProducerFlush);
+  if (needsProducerFlush) {
+    // Push this rank's own puts out before the barrier so peers' auto-flush makes them visible.
+    this->gin.thing.flush(this->coop, nccl::utility::releaseOrderOf(ord));
+  }
   if (needsLsaBarrier) {
     this->innerLsaBar.thing.sync(
       this->coop, (needsRailGinBarrier || needsDenseGinBarrier) ? nccl::utility::releaseOrderOf(ord) : ord);
@@ -154,8 +163,13 @@ NCCL_DEVICE_INLINE void ncclBarrierSession<Coop>::sync(Coop, cuda::memory_order 
 template <typename Coop>
 NCCL_DEVICE_INLINE ncclResult_t ncclBarrierSession<Coop>::sync(Coop, cuda::memory_order ord, ncclGinFenceLevel fence,
                                                                uint64_t timeoutCycles) {
-  bool needsLsaBarrier, needsRailGinBarrier, needsDenseGinBarrier;
-  selectBarrierAlgo(fence, &needsLsaBarrier, &needsRailGinBarrier, &needsDenseGinBarrier);
+  bool needsLsaBarrier, needsRailGinBarrier, needsDenseGinBarrier, needsProducerFlush;
+  selectBarrierAlgo(fence, &needsLsaBarrier, &needsRailGinBarrier, &needsDenseGinBarrier, &needsProducerFlush);
+
+  if (needsProducerFlush) {
+    // Push this rank's own puts out before the barrier so peers' auto-flush makes them visible.
+    this->gin.thing.flush(this->coop, nccl::utility::releaseOrderOf(ord));
+  }
 
   ncclResult_t lsaResult = ncclSuccess, railResult = ncclSuccess, denseResult = ncclSuccess;
 

@@ -2390,6 +2390,19 @@ ncclResult_t ncclEpDispatch(
             handle->layout == NCCL_EP_LAYOUT_RANK_MAJOR &&
             !use_fp8_outer &&
             recv_x->win_hdl != ncclWindow_t{};
+        // Strict zero_copy=ON contract: all opportunistic conditions must
+        // hold, else the call is misconfigured. AUTO/OFF stay opportunistic
+        // (matches pre-enum behavior; missing windows just stage through
+        // library buffers).
+        if (group->config.zero_copy == NCCL_EP_ZERO_COPY_ON && !zero_copy_recv_x) {
+            const char* reason =
+                !nvlink_only ? "requires nvlink-only topology (lsa_team_size == nRanks)" :
+                handle->layout != NCCL_EP_LAYOUT_RANK_MAJOR ? "requires NCCL_EP_LAYOUT_RANK_MAJOR" :
+                use_fp8_outer ? "is not supported with FP8 outputs" :
+                "requires outputs->tokens to be backed by an NCCL window (ncclCommWindowRegister)";
+            fprintf(stderr, "NCCL EP: zero_copy=ON on LL dispatch %s\n", reason);
+            return ncclInvalidArgument;
+        }
         const ncclWindow_t recv_data_window =
             zero_copy_recv_x ? recv_x->win_hdl : ncclWindow_t{};
         const size_t recv_data_offset =
@@ -2978,7 +2991,15 @@ ncclResult_t ncclEpCombine(
             auto* layout_range_data = static_cast<int64_t*>(layout_range->data);
 
             const bool use_fp8 = false;
-            const bool zero_copy = handle->group->config.zero_copy == NCCL_EP_ZERO_COPY_ON;
+            // LL combine reads `inData` (x_data) directly via pointer and
+            // uses windows only to translate peer recv-buffer ptrs in
+            // ncclGetP2pPtr (library-owned staging). The kernel's zeroCopy
+            // mode is dispatch-shaped (peer P2P writes); plumbing
+            // ncclEpGroupConfig_t::zero_copy through here would silently
+            // pick the wrong send-side path on combine. Hardcoded false
+            // matches origin/master and leaves config.zero_copy as a
+            // dispatch-only switch.
+            const bool zero_copy = false;
 
             // LL accepts int32 or int64 topk_idx; same cached dtype as dispatch.
             auto launch_combine = [&](auto* topk_idx_data) {

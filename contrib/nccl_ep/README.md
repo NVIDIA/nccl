@@ -315,44 +315,6 @@ export NCCL_DEBUG=INFO        # Enable NCCL debug output
 export NCCL_DEBUG_SUBSYS=ALL  # All subsystems
 ```
 
-### `ep_test` application
-
-The `ep_test` application (`ep_test.cu`) is a comprehensive working example that demonstrates both Low-Latency and High-Throughput modes.
-It can be used as a reference implementation when integrating NCCL EP into an application.
-
-#### Command-Line Options
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `-a <ll\|ht>` | Algorithm mode: `ll` (Low-Latency) or `ht` (High-Throughput) | `ll` |
-| `-t <num>` | Number of tokens | 50 |
-| `-d <num>` | Hidden dimension size | 7168 |
-| `-m` | Disable max_dispatch_tokens_per_rank (HT mode only) | disabled |
-| `-s <mode>` | Send-only mode: `none`, `dispatch`, `combine`, `both` | `none` |
-| `-c` | Enable cached mode (HT only) | disabled |
-| `-r` | Enable random mode (random topk_idx) | disabled |
-
-#### Single-node execution
-
-```bash
-# Low-Latency mode (default)
-mpirun -np 8 ./build/test/nccl_ep/ep_test -a ll -t 128 -d 7168
-
-# High-Throughput mode
-mpirun -np 8 ./build/test/nccl_ep/ep_test -a ht -t 4096 -d 7168
-
-```
-
-#### Multi-Node Execution (MPI)
-
-```bash
-# 2 nodes, 8 GPUs per node
-mpirun -np 16 \
-  --map-by ppr:8:node \
-  -x NCCL_GIN_TYPE=3 \
-  -x LD_LIBRARY_PATH \
-  ./build/test/nccl_ep/ep_test -a ll -t 128 -d 7168
-```
 
 # Core Concepts
 

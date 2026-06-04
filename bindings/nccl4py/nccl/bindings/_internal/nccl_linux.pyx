@@ -6,6 +6,7 @@
 
 from libc.stdint cimport intptr_t, uintptr_t
 
+import os
 import threading
 
 from .utils import FunctionNotFoundError, NotSupportedError
@@ -729,20 +730,19 @@ cpdef object _inspect_loaded_library_path():
         return __nccl_loaded_so_path
 
     cdef dict ptrs = _inspect_function_pointers()
-    # Any resolved symbol maps to the same .so; anchor on a stable one.
-    cdef intptr_t addr = ptrs.get("__ncclGetVersion", 0)
-    if addr == 0:
-        for value in ptrs.values():
-            if value:
-                addr = value
-                break
+    # Any resolved symbol maps to the same .so.
+    cdef intptr_t addr = 0
+    for value in ptrs.values():
+        if value:
+            addr = value
+            break
 
     cdef Dl_info info
     if addr == 0:
         return None
     if dladdr(<void*>addr, &info) == 0 or info.dli_fname == NULL:
         return None
-    __nccl_loaded_so_path = info.dli_fname.decode()
+    __nccl_loaded_so_path = os.fsdecode(<bytes>info.dli_fname)
     return __nccl_loaded_so_path
 
 

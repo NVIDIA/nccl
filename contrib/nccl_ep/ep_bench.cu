@@ -3255,9 +3255,13 @@ int main(int argc, char* argv[]) {
 
     // UpdateHandle CUPTI micro-bench. Must run after the main bench (running
     // it in isolation desyncs the cross-GPU notify protocol and hangs Dispatch).
-    // Save/restore g_kernel_stats so the main-bench timings survive ktimer.start().
+    // Save/restore g_kernel_stats so the main-bench timings survive
+    // ktimer.start() under CUPTI; without CUPTI the save/restore is a no-op
+    // and g_kernel_stats does not exist.
     {
+#ifdef HAVE_CUPTI
         auto saved_main_kernel_stats = g_kernel_stats;
+#endif
 
         const int update_warmup = actual_warmup;
         const int update_iters = actual_iters;
@@ -3280,7 +3284,9 @@ int main(int argc, char* argv[]) {
             printf("\n");
         }
 
+#ifdef HAVE_CUPTI
         g_kernel_stats = std::move(saved_main_kernel_stats);
+#endif
     }
 
     // Print results and summary based on algorithm mode

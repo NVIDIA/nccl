@@ -153,7 +153,7 @@ These objects represent "VA signals": signals that are located at an arbitrary V
 of a pre-allocated signal index. Like the ``ncclGin_StrongSignalInc`` and ``ncclGin_StrongSignalAdd`` objects,
 these objects can be passed as the *remoteAction* arguments of methods such as :cpp:func:`ncclGin::put`
 and :cpp:func:`ncclGin::signal` to increment a signal on the peer. To use a VA signal, the window must be
-registered with flags :c:macro:`NCCL_WIN_COLL_STRICT_ORDERING`. When an address is used as a signal, all reads
+registered with flags :c:macro:`NCCL_WIN_STRICT_ORDERING`. When an address is used as a signal, all reads
 and writes to the address must be issued via GIN (i.e., a ``RemoteAction`` or GIN signal method).
 
 .. cpp:struct:: ncclGin_VASignalInc

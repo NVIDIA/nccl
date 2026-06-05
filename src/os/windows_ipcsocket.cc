@@ -30,7 +30,7 @@ struct ncclIpcMsg {
   char hdrData[PIPE_BUFFER_SIZE - sizeof(int) - sizeof(HANDLE) * 2];
 };
 
-ncclResult_t ncclIpcSocketInit(ncclIpcSocket *handle, int rank, uint64_t hash, volatile uint32_t* abortFlag) {
+ncclResult_t ncclIpcSocketInit(ncclIpcSocket* handle, int rank, uint64_t hash, volatile uint32_t* abortFlag) {
   if (handle == NULL) {
     return ncclInternalError;
   }
@@ -47,20 +47,19 @@ ncclResult_t ncclIpcSocketInit(ncclIpcSocket *handle, int rank, uint64_t hash, v
     return ncclInternalError;
   }
 
-  TRACE(NCCL_INIT|NCCL_P2P, "IPC: Creating named pipe %s", pipeName);
+  TRACE(NCCL_INIT | NCCL_P2P, "IPC: Creating named pipe %s", pipeName);
 
   // Create named pipe for receiving
-  HANDLE hPipe = CreateNamedPipeA(
-    pipeName,
-    PIPE_ACCESS_DUPLEX,       // Read/write access
-    PIPE_TYPE_MESSAGE |       // Message type pipe
-    PIPE_READMODE_MESSAGE |   // Message-read mode
-    PIPE_WAIT,                // Blocking mode
-    PIPE_UNLIMITED_INSTANCES, // Max instances
-    PIPE_BUFFER_SIZE,         // Output buffer size
-    PIPE_BUFFER_SIZE,         // Input buffer size
-    PIPE_TIMEOUT_MS,          // Client timeout
-    NULL                      // Default security
+  HANDLE hPipe = CreateNamedPipeA(pipeName,
+                                  PIPE_ACCESS_DUPLEX,       // Read/write access
+                                  PIPE_TYPE_MESSAGE |       // Message type pipe
+                                    PIPE_READMODE_MESSAGE |   // Message-read mode
+                                    PIPE_WAIT,                // Blocking mode
+                                  PIPE_UNLIMITED_INSTANCES, // Max instances
+                                  PIPE_BUFFER_SIZE,         // Output buffer size
+                                  PIPE_BUFFER_SIZE,         // Input buffer size
+                                  PIPE_TIMEOUT_MS,          // Client timeout
+                                  NULL                      // Default security
   );
 
   if (hPipe == INVALID_HANDLE_VALUE) {
@@ -73,7 +72,7 @@ ncclResult_t ncclIpcSocketInit(ncclIpcSocket *handle, int rank, uint64_t hash, v
   strncpy(handle->socketName, pipeName, NCCL_IPC_SOCKNAME_LEN);
   handle->socketName[NCCL_IPC_SOCKNAME_LEN - 1] = '\0';
 
-  TRACE(NCCL_INIT|NCCL_P2P, "IPC: Named pipe created successfully: %s (handle: %p)", pipeName, hPipe);
+  TRACE(NCCL_INIT | NCCL_P2P, "IPC: Named pipe created successfully: %s (handle: %p)", pipeName, hPipe);
   return ncclSuccess;
 }
 
@@ -86,7 +85,7 @@ ncclResult_t ncclIpcSocketGetFd(struct ncclIpcSocket* handle, int* fd) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclIpcSocketClose(ncclIpcSocket *handle) {
+ncclResult_t ncclIpcSocketClose(ncclIpcSocket* handle) {
   if (handle == NULL) {
     return ncclInternalError;
   }
@@ -99,7 +98,7 @@ ncclResult_t ncclIpcSocketClose(ncclIpcSocket *handle) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, int *recvFd) {
+ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket* handle, void* hdr, int hdrLen, int* recvFd) {
   if (handle == NULL || handle->fd == NCCL_INVALID_SOCKET) {
     WARN("IPC: Invalid socket handle");
     return ncclInvalidArgument;
@@ -110,7 +109,7 @@ ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
   DWORD bytesRead = 0;
   BOOL success = FALSE;
 
-  TRACE(NCCL_INIT|NCCL_P2P, "IPC: Waiting for connection on pipe %s", handle->socketName);
+  TRACE(NCCL_INIT | NCCL_P2P, "IPC: Waiting for connection on pipe %s", handle->socketName);
 
   // Wait for client to connect
   BOOL connected = ConnectNamedPipe(hPipe, NULL);
@@ -119,7 +118,7 @@ ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
     return ncclSystemError;
   }
 
-  TRACE(NCCL_INIT|NCCL_P2P, "IPC: Client connected, reading message");
+  TRACE(NCCL_INIT | NCCL_P2P, "IPC: Client connected, reading message");
 
   // Read message with retry logic for abort flag
   while (TRUE) {
@@ -143,7 +142,7 @@ ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
     return ncclSystemError;
   }
 
-  TRACE(NCCL_INIT|NCCL_P2P, "IPC: Read %d bytes from pipe", bytesRead);
+  TRACE(NCCL_INIT | NCCL_P2P, "IPC: Read %d bytes from pipe", bytesRead);
 
   // Copy header data if requested
   if (hdr != NULL && msg.hdrLen > 0) {
@@ -153,14 +152,13 @@ ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
   // Duplicate handle if requested
   if (recvFd != NULL && msg.handleToDup != NULL) {
     HANDLE duplicatedHandle;
-    BOOL dupSuccess = DuplicateHandle(
-      msg.sourceProcess,      // Source process
-      msg.handleToDup,        // Source handle
-      GetCurrentProcess(),    // Target process
-      &duplicatedHandle,      // Target handle
-      0,                      // Desired access (same as source)
-      FALSE,                  // Not inheritable
-      DUPLICATE_SAME_ACCESS   // Same access as source
+    BOOL dupSuccess = DuplicateHandle(msg.sourceProcess,      // Source process
+                                      msg.handleToDup,        // Source handle
+                                      GetCurrentProcess(),    // Target process
+                                      &duplicatedHandle,      // Target handle
+                                      0,                      // Desired access (same as source)
+                                      FALSE,                  // Not inheritable
+                                      DUPLICATE_SAME_ACCESS   // Same access as source
     );
 
     if (!dupSuccess) {
@@ -169,17 +167,18 @@ ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
     }
 
     *recvFd = (int)duplicatedHandle;
-    TRACE(NCCL_INIT|NCCL_P2P, "IPC: Duplicated handle %p -> %p", msg.handleToDup, duplicatedHandle);
+    TRACE(NCCL_INIT | NCCL_P2P, "IPC: Duplicated handle %p -> %p", msg.handleToDup, duplicatedHandle);
   }
 
   return ncclSuccess;
 }
 
-ncclResult_t ncclIpcSocketRecvFd(ncclIpcSocket *handle, int *fd) {
+ncclResult_t ncclIpcSocketRecvFd(ncclIpcSocket* handle, int* fd) {
   return ncclIpcSocketRecvMsg(handle, NULL, 0, fd);
 }
 
-ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, const int sendFd, int rank, uint64_t hash) {
+ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket* handle, void* hdr, int hdrLen, const int sendFd, int rank,
+                                  uint64_t hash) {
   // Construct target pipe name
   char pipeName[NCCL_IPC_SOCKNAME_LEN];
   int len = snprintf(pipeName, NCCL_IPC_SOCKNAME_LEN, NCCL_IPC_PIPENAME_STR, rank, hash);
@@ -188,20 +187,18 @@ ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
     return ncclInternalError;
   }
 
-  TRACE(NCCL_INIT|NCCL_P2P, "IPC: Connecting to pipe %s", pipeName);
+  TRACE(NCCL_INIT | NCCL_P2P, "IPC: Connecting to pipe %s", pipeName);
 
   // Connect to the named pipe with retry logic (retries indefinitely until success or abort)
   HANDLE hPipe = INVALID_HANDLE_VALUE;
 
   while (TRUE) {
-    hPipe = CreateFileA(
-      pipeName,
-      GENERIC_READ | GENERIC_WRITE,
-      0,              // No sharing
-      NULL,           // Default security
-      OPEN_EXISTING,  // Opens existing pipe
-      0,              // Default attributes
-      NULL            // No template
+    hPipe = CreateFileA(pipeName, GENERIC_READ | GENERIC_WRITE,
+                        0,              // No sharing
+                        NULL,           // Default security
+                        OPEN_EXISTING,  // Opens existing pipe
+                        0,              // Default attributes
+                        NULL            // No template
     );
 
     if (hPipe != INVALID_HANDLE_VALUE) {
@@ -221,7 +218,7 @@ ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
     }
   }
 
-  TRACE(NCCL_INIT|NCCL_P2P, "IPC: Connected to pipe %s", pipeName);
+  TRACE(NCCL_INIT | NCCL_P2P, "IPC: Connected to pipe %s", pipeName);
 
   // Set pipe to message mode
   DWORD mode = PIPE_READMODE_MESSAGE;
@@ -243,7 +240,7 @@ ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
     memcpy(msg.hdrData, hdr, copyLen);
   }
 
-  TRACE(NCCL_INIT|NCCL_P2P, "IPC: Sending message (hdrLen=%d, handle=%p)", hdrLen, msg.handleToDup);
+  TRACE(NCCL_INIT | NCCL_P2P, "IPC: Sending message (hdrLen=%d, handle=%p)", hdrLen, msg.handleToDup);
 
   // Send message
   DWORD bytesWritten = 0;
@@ -258,12 +255,12 @@ ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
   // Flush to ensure message is sent
   FlushFileBuffers(hPipe);
 
-  TRACE(NCCL_INIT|NCCL_P2P, "IPC: Message sent successfully (%d bytes)", bytesWritten);
+  TRACE(NCCL_INIT | NCCL_P2P, "IPC: Message sent successfully (%d bytes)", bytesWritten);
 
   CloseHandle(hPipe);
   return ncclSuccess;
 }
 
-ncclResult_t ncclIpcSocketSendFd(ncclIpcSocket *handle, const int sendFd, int rank, uint64_t hash) {
+ncclResult_t ncclIpcSocketSendFd(ncclIpcSocket* handle, const int sendFd, int rank, uint64_t hash) {
   return ncclIpcSocketSendMsg(handle, NULL, 0, sendFd, rank, hash);
 }

@@ -52,3 +52,6 @@
 // ============================================================================
 #define HYBRIDEP_NUM_THREADS_PER_BLOCK_PREPROCESSING 512
 #define HYBRIDEP_NUM_BLOCKS_PREPROCESSING HYBRIDEP_MAX_NUM_SMS_PER_RANK
+
+// Max local experts per rank for expert-major remap kernel register arrays (runtime-asserted).
+#define HYBRIDEP_MAX_LOCAL_EXPERTS_PER_RANK 64

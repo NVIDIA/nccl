@@ -14,19 +14,22 @@
 #include <stdint.h>
 
 #define NCCL_NET_HANDLE_MAXSIZE 128
-//Maximum value NCCL can accept for maxP2pBytes and maxCollBytes net properties
-#define NCCL_MAX_NET_SIZE_BYTES (1*1024*1024*1024*1024L)
+// Maximum value NCCL can accept for maxP2pBytes and maxCollBytes net properties
+#define NCCL_MAX_NET_SIZE_BYTES (1 * 1024 * 1024 * 1024 * 1024L)
 #define NCCL_NET_OPTIONAL_RECV_COMPLETION 0x1
 #define NCCL_NET_MULTI_REQUEST 0x2
 
-#define MAX_NET_SIZE (1024*1024*1024L) // Rather than send INT_MAX which is 2G-1, send a power of two.
-#define MAX_COLLNET_SIZE (512*1024*1024L) //Set for initial collent plugins when size was not dynamically queried
+#define MAX_NET_SIZE (1024 * 1024 * 1024L) // Rather than send INT_MAX which is 2G-1, send a power of two.
+#define MAX_COLLNET_SIZE (512 * 1024 * 1024L) // Set for initial collent plugins when size was not dynamically queried
 
 #define NCCL_PTR_HOST 0x1
 #define NCCL_PTR_CUDA 0x2
 #define NCCL_PTR_DMABUF 0x4
 
 #define NCCL_NET_MR_FLAG_FORCE_SO (1 << 0)
+// When set, the MR will be used as a signal and will never be reset.
+// This is a hint to help optimize some calls to putSignal.
+#define NCCL_NET_MR_FLAG_SIGNAL_NEVER_RESET (1 << 1)
 #define NCCL_NET_SIGNAL_OP_INC 0x1
 #define NCCL_NET_SIGNAL_OP_ADD 0x2
 

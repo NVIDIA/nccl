@@ -18,8 +18,9 @@ static ncclResult_t ncclTuner_finalize(void* ctx) {
   return ncclTuner_v4->destroy(ctx);
 }
 
-static ncclResult_t ncclTuner_init(void** context, uint64_t commId, size_t nRanks, size_t nNodes, ncclDebugLogger_t logfn,
-                                   ncclNvlDomainInfo_v5_t* nvlDomainInfo, ncclTunerConstants_t* /*constants*/) {
+static ncclResult_t ncclTuner_init(void** context, uint64_t commId, size_t nRanks, size_t nNodes,
+                                   ncclDebugLogger_t logfn, ncclNvlDomainInfo_v5_t* nvlDomainInfo,
+                                   ncclTunerConstants_t* /*constants*/) {
   NCCLCHECK(ncclTuner_v4->init(nRanks, nNodes, logfn, context));
   ncclTuner.getCollInfo = ncclTuner_v4->getCollInfo;
   ncclTuner.getChunkSize = NULL;
@@ -33,7 +34,7 @@ ncclTuner_t* getNcclTuner_v4(void* lib) {
     ncclTuner.name = ncclTuner_v4->name;
     ncclTuner.init = ncclTuner_init;
 
-    INFO(NCCL_INIT|NCCL_TUNING, "TUNER/Plugin: Using %s (v4)", ncclTuner_v4->name);
+    INFO(NCCL_INIT | NCCL_TUNING, "TUNER/Plugin: Using %s (v4)", ncclTuner_v4->name);
     return &ncclTuner;
   }
   return NULL;

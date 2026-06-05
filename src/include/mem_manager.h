@@ -26,7 +26,7 @@ extern "C" {
 #define CU_IPC_HANDLE_SIZE 64
 #endif
 typedef struct CUmemFabricHandle_st {
-    unsigned char data[CU_IPC_HANDLE_SIZE];
+  unsigned char data[CU_IPC_HANDLE_SIZE];
 } CUmemFabricHandle_v1;
 typedef CUmemFabricHandle_v1 CUmemFabricHandle;
 #endif
@@ -38,14 +38,14 @@ struct ncclComm;
 
 // Memory Type for NCCL allocations
 typedef enum {
-  ncclMemPersist  = 0,  // Persistent memory - track stats only, never release/offload
-  ncclMemScratch  = 1,  // Free without saving
-  ncclMemOffload  = 2   // Copy to CPU before free, restore on resume
+  ncclMemPersist = 0,  // Persistent memory - track stats only, never release/offload
+  ncclMemScratch = 1,  // Free without saving
+  ncclMemOffload = 2   // Copy to CPU before free, restore on resume
 } ncclMemType_t;
 
 // Memory entry state
 typedef enum {
-  ncclDynMemStateActive   = 0,  // Memory is allocated and usable
+  ncclDynMemStateActive = 0,  // Memory is allocated and usable
   ncclDynMemStateReleased = 1   // Memory has been released
 } ncclDynMemState_t;
 
@@ -56,78 +56,78 @@ typedef struct ncclDynMemLocalDesc {
   // (ncclProxyClientGetFdBlocking), so we no longer export them upfront. Only FABRIC
   // handles need upfront export since they can be shared directly via messaging.
   union {
-    int                          fd;            // For POSIX_FILE_DESCRIPTOR (unused)
-    CUmemFabricHandle            fabricHandle;  // For FABRIC
+    int fd;            // For POSIX_FILE_DESCRIPTOR (unused)
+    CUmemFabricHandle fabricHandle;  // For FABRIC
   } shareableHandle;
-  bool                           shareableHandleValid;
+  bool shareableHandleValid;
   // Peer tracking for P2P exports
-  int                            numExportedPeers;
-  int                            exportedPeersCapacity;
-  int*                           exportedPeerRanks;
+  int numExportedPeers;
+  int exportedPeersCapacity;
+  int* exportedPeerRanks;
 } ncclDynMemLocalDesc;
 
 // Imported from peer memory descriptor
 typedef struct ncclDynMemImportDesc {
-  int                            ownerRank;     // Rank that owns the original buffer
-  int                            ownerDev;      // CUDA device of the owner
-  void*                          ownerPtr;      // Owner's virtual address
+  int ownerRank;     // Rank that owns the original buffer
+  int ownerDev;      // CUDA device of the owner
+  void* ownerPtr;      // Owner's virtual address
 } ncclDynMemImportDesc;
 
 // Individual tracked memory entry (only track scratch and offload allocations)
 typedef struct ncclDynMemEntry {
-  void*                          ptr;           // GPU virtual address
-  size_t                         size;          // Allocation size
-  CUmemGenericAllocationHandle   handle;        // Physical memory handle
-  CUmemAllocationHandleType      handleType;
-  ncclMemType_t                  memType;
-  ncclDynMemState_t              state;
-  int                            cudaDev;
+  void* ptr;           // GPU virtual address
+  size_t size;          // Allocation size
+  CUmemGenericAllocationHandle handle;        // Physical memory handle
+  CUmemAllocationHandleType handleType;
+  ncclMemType_t memType;
+  ncclDynMemState_t state;
+  int cudaDev;
 
   // CPU backup for OFFLOAD type memory
-  void*                          cpuBackup;     // Host memory for offloaded data
+  void* cpuBackup;     // Host memory for offloaded data
 
   // Ownership type and type-specific data
-  bool                           isImportedFromPeer;  // true if this is a peer-imported buffer
+  bool isImportedFromPeer;  // true if this is a peer-imported buffer
   union {
-    ncclDynMemLocalDesc          local;
-    ncclDynMemImportDesc         imported;
+    ncclDynMemLocalDesc local;
+    ncclDynMemImportDesc imported;
   } desc;
 
   // Linked list pointer
-  struct ncclDynMemEntry*        next;
+  struct ncclDynMemEntry* next;
 } ncclDynMemEntry;
 
 // P2P Handle Exchange Structure
 typedef struct ncclDynMemP2pHandleInfo {
-  void*    ptr;
-  int      ownerRank;
-  int      ownerDev;
-  size_t   size;
-  int      handleType;
+  void* ptr;
+  int ownerRank;
+  int ownerDev;
+  size_t size;
+  int handleType;
   union {
-    uint64_t            handleData;
-    CUmemFabricHandle   fabricHandle;
+    uint64_t handleData;
+    CUmemFabricHandle fabricHandle;
   };
 } ncclDynMemP2pHandleInfo;
 
 // Memory manager attached to ncclComm
 typedef struct ncclMemManager {
-  ncclDynMemEntry*  entries;  // Linked list of tracked allocations, only track scratch and offload allocations
-  int               numEntries;
-  std::mutex        lock;
-  int               released;
-  int               initialized;
-  int               refCount;
+  ncclDynMemEntry* entries;  // Linked list of tracked allocations, only track scratch and offload allocations
+  int numEntries;
+  std::mutex lock;
+  int released;
+  int initialized;
+  int refCount;
 
-  size_t            totalPersist;
-  size_t            totalPersistImported;
-  size_t            totalScratch;
-  size_t            totalScratchImported;
-  size_t            totalOffload;
-  size_t            totalOffloadImported;
-  size_t            cpuBackupUsage;
+  size_t totalPersist;
+  size_t totalPersistImported;
+  size_t totalScratch;
+  size_t totalScratchImported;
+  size_t totalOffload;
+  size_t totalOffloadImported;
+  size_t cpuBackupUsage;
 
-  int               commCudaDev;
+  int commCudaDev;
 } ncclMemManager;
 
 struct ncclMemManagerTask {
@@ -142,27 +142,13 @@ ncclResult_t ncclMemManagerInit(struct ncclComm* comm);
 ncclResult_t ncclMemManagerDestroy(struct ncclComm* comm);
 
 // Track a new allocation
-ncclResult_t ncclMemTrack(
-  struct ncclMemManager* manager,
-  void* ptr,
-  size_t size,
-  CUmemGenericAllocationHandle handle,
-  CUmemAllocationHandleType handleType,
-  ncclMemType_t memType
-);
+ncclResult_t ncclMemTrack(struct ncclMemManager* manager, void* ptr, size_t size, CUmemGenericAllocationHandle handle,
+                          CUmemAllocationHandleType handleType, ncclMemType_t memType);
 
 // Track imported allocation from peer
-ncclResult_t ncclMemTrackImportFromPeer(
-  struct ncclMemManager* manager,
-  void* ptr,
-  size_t size,
-  CUmemGenericAllocationHandle handle,
-  CUmemAllocationHandleType handleType,
-  ncclMemType_t memType,
-  int ownerRank,
-  int ownerDev,
-  void* ownerPtr
-);
+ncclResult_t ncclMemTrackImportFromPeer(struct ncclMemManager* manager, void* ptr, size_t size,
+                                        CUmemGenericAllocationHandle handle, CUmemAllocationHandleType handleType,
+                                        ncclMemType_t memType, int ownerRank, int ownerDev, void* ownerPtr);
 
 // Untrack allocation
 ncclResult_t ncclMemUntrack(struct ncclMemManager* manager, void* ptr, size_t size);

@@ -13,19 +13,26 @@ all: $(EXAMPLES)
 
 # Build individual examples
 $(EXAMPLES):
-	$(MAKE) -C $@
+	$(MAKE) -C $@/c
 
 # Clean all build artifacts
 clean:
 	for example in $(EXAMPLES); do \
-		$(MAKE) -C $$example clean; \
+		$(MAKE) -C $$example/c clean; \
 	done
 
 # Test all examples
 test: all
 	for example in $(EXAMPLES); do \
 		echo "Testing $$example..."; \
-		$(MAKE) -C $$example test || exit 1; \
+		$(MAKE) -C $$example/c test || exit 1; \
+	done
+
+# Install all examples
+install: all
+	for example in $(EXAMPLES); do \
+		echo "Installing $$example..."; \
+		$(MAKE) -C $$example/c install || exit 1; \
 	done
 
 # Help
@@ -37,12 +44,13 @@ help:
 	@echo "  all     - Build all examples"
 	@echo "  clean   - Clean all build artifacts"
 	@echo "  test    - Test all examples"
+	@echo "  install - Install all examples"
 	@echo "  help    - Show this help"
 	@echo ""
 	@echo "Examples:"
 	@echo "  01_ring_pattern - Use send and receive operations to form a ring pattern"
 	@echo ""
 	@echo "To build/run individual examples:"
-	@echo "  make -C 01_ring_pattern"
+	@echo "  make -C 01_ring_pattern/c"
 
-.PHONY: all clean test $(EXAMPLES)
+.PHONY: all clean test install help $(EXAMPLES)

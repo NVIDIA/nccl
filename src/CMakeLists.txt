@@ -14,6 +14,7 @@ set(LIBSRCFILES
     allocator.cc
     sym_kernels.cc
     dev_runtime.cc
+    dev_runtime_segments.cc
     mem_manager.cc
 )
 
@@ -96,6 +97,7 @@ endif()
 
 # Include directories; add DOCA only on non-Windows (skip for Windows platform)
 set(NCCL_PRIVATE_INCLUDES
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/device
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin
@@ -130,6 +132,8 @@ if(NCCL_OS_WINDOWS)
 endif()
 
 # Copy all device header files to the destination
+# Note: The only public headers are nccl.h and nccl_device.h (and, by extension, nccl_device/*).
+# Adding any other headers to this list should be discussed widely.
 foreach(HEADER_FILE ${SRC_DEVICE_HEADERS})
     configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${HEADER_FILE} ${CMAKE_BINARY_DIR}/${HEADER_FILE} COPYONLY)
     list(APPEND DEVICE_HEADERS ${CMAKE_BINARY_DIR}/${HEADER_FILE})
@@ -291,6 +295,7 @@ target_include_directories(nccl_static
     $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
   PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/device
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin

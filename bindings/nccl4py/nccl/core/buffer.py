@@ -3,8 +3,7 @@
 #
 # See LICENSE.txt for more license information
 
-"""
-Buffer specification and memory allocation for NCCL operations.
+"""Buffer specification and memory allocation for NCCL operations.
 
 This module provides utilities for allocating NCCL-optimized device memory and
 resolving various buffer specifications (arrays, tensors, tuples) into the raw
@@ -32,29 +31,21 @@ __all__ = ["mem_alloc", "mem_free"]
 
 
 def mem_alloc(size: int, device: NcclDeviceSpec | None = None) -> Buffer:
-    """
-    Allocates GPU buffer memory using NCCL's memory allocator.
+    """Allocates GPU buffer memory using NCCL's memory allocator.
 
-    The actual allocated size may be larger than requested due to buffer granularity
-    requirements from NCCL optimizations.
+    The actual allocated size may be larger than requested due to buffer
+    granularity requirements from NCCL optimizations. The returned buffer can
+    be explicitly freed with :py:func:`mem_free` or automatically freed when
+    garbage collected.
 
     Args:
-        - size (int): Number of bytes to allocate.
-        - device (NcclDeviceSpec, optional): Target CUDA device. Defaults to current device.
+        size: Number of bytes to allocate.
+        device: Target CUDA device. Defaults to the current device.
 
     Returns:
-        ``Buffer``: A CUDA buffer object backed by NCCL-managed memory.
-
-    Notes:
-        - The returned buffer size may exceed the requested size due to alignment requirements.
-        - Buffer is allocated on the specified device, if provided; current device is restored after allocation.
-
-    Memory Lifecycle:
-        Memory can be explicitly freed using ``mem_free(buf)`` or automatically freed when
-        the Buffer object is garbage collected.
-
-    See Also:
-        https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html#ncclmemalloc
+        A CUDA buffer object backed by NCCL-managed memory. The buffer is
+        allocated on the specified device; the current device is restored
+        after allocation.
     """
     device_id = get_device_id(device)
 
@@ -63,18 +54,13 @@ def mem_alloc(size: int, device: NcclDeviceSpec | None = None) -> Buffer:
 
 
 def mem_free(buf: Buffer) -> None:
-    """
-    Frees memory allocated by ``mem_alloc()``.
+    """Frees memory allocated by :py:func:`mem_alloc`.
+
+    Explicit deallocation is optional. Memory is automatically freed when the
+    Buffer object is garbage collected.
 
     Args:
-        - buf (Buffer): The buffer to free.
-
-    Notes:
-        Explicit deallocation is optional. Memory is automatically freed when the Buffer
-        object is garbage collected.
-
-    See Also:
-        https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html#ncclmemfree
+        buf: The buffer to free.
     """
     buf.close()
 
@@ -85,48 +71,41 @@ def _resolve_buffer(buffer, stream_ptr: int | None) -> StridedMemoryView:
 
 
 class NcclBuffer:
-    """
-    Resolves user-provided buffer specifications to raw pointer, count, dtype, and device.
+    """Resolves user-provided buffer specifications to raw pointer, count, dtype, and device.
 
-    This class handles various buffer input formats and extracts the necessary metadata
-    for NCCL operations.
+    This class handles various buffer input formats and extracts the necessary
+    metadata for NCCL operations. Buffer specifications can be a CUDA Array
+    Interface or DLPack compatible object, or a ``cuda.core.Buffer`` (any
+    PyTorch tensor or CuPy array works via DLPack). Element count is
+    automatically derived from buffer size and dtype; use slicing to control
+    element count.
 
-    Buffer specifications can be:
-        - An object supporting DLPack or CUDA Array Interface
-        - A ``Buffer`` object
-        - A tuple: ``(buffer, dtype)``
-
-    Stream Handling:
-        When stream is None, the special sentinel value -1 is used internally.
-        This sentinel value (-1) is required by cuda.core's StridedMemoryView.view()
-        to indicate that no stream synchronization should be performed between the
-        producer stream (where the buffer was created) and the consumer stream
-        (where NCCL operations will use it). This avoids implicit synchronization
-        overhead when the user is managing stream dependencies manually.
-
-        When a stream is provided, its handle (typically 0 for default stream or
-        a valid stream pointer) is used for proper synchronization.
-
-    Notes:
-        - Element count is automatically derived from buffer size and dtype. Use slicing to control element count.
+    When stream is ``None``, the special sentinel value -1 is used internally.
+    This sentinel is required by cuda.core's StridedMemoryView.view to
+    indicate that no stream synchronization should be performed between the
+    producer stream (where the buffer was created) and the consumer stream
+    (where NCCL operations will use it). This avoids implicit synchronization
+    overhead when the user is managing stream dependencies manually. When a
+    stream is provided, its handle (typically 0 for the default stream or a
+    valid stream pointer) is used for proper synchronization.
 
     Attributes:
-        ptr (int): Raw device pointer address.
-        count (int): Number of elements in the buffer.
-        dtype (NcclDataType): Data type of buffer elements.
-        device_id (int): CUDA device ID where buffer resides.
+        ptr: Raw device pointer address.
+        count: Number of elements in the buffer.
+        dtype: NCCL data type of buffer elements.
+        device_id: CUDA device ID where the buffer resides.
     """
 
     def __init__(self, buffer: NcclBufferSpec, stream: NcclStreamSpec | None = None) -> None:
-        """
-        Initializes an NcclBuffer from a buffer specification.
+        """Initializes an NcclBuffer from a buffer specification.
 
         Args:
-            - buffer (NcclBufferSpec): Buffer specification to resolve.
-            - stream (NcclStreamSpec, optional): CUDA stream for synchronization. Defaults to None.
+            buffer: Buffer specification to resolve.
+            stream: CUDA stream for synchronization. Defaults to ``None`` (no
+                synchronization between producer and consumer streams).
 
         Raises:
-            - ``NcclInvalid``: If the buffer specification is invalid or malformed.
+            NcclInvalid: If the buffer specification is invalid or malformed.
         """
         self.stream_ptr = -1 if stream is None else get_stream_ptr(stream)
 
@@ -161,40 +140,20 @@ class NcclBuffer:
 
     @property
     def ptr(self) -> int:
-        """
-        Raw device pointer address.
-
-        Returns:
-            ``int``: Device memory pointer.
-        """
+        """Raw device pointer address."""
         return self._ptr
 
     @property
     def count(self) -> int:
-        """
-        Number of elements in the buffer.
-
-        Returns:
-            ``int``: Element count.
-        """
+        """Number of elements in the buffer."""
         return self._count
 
     @property
     def dtype(self) -> NcclDataType:
-        """
-        Data type of buffer elements.
-
-        Returns:
-            ``NcclDataType``: NCCL data type.
-        """
+        """NCCL data type of buffer elements."""
         return self._dtype
 
     @property
     def device_id(self) -> int:
-        """
-        CUDA device ID where buffer resides.
-
-        Returns:
-            ``int``: Device ID.
-        """
+        """CUDA device ID where the buffer resides."""
         return self._device_id

@@ -60,7 +60,7 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_submit_db_multi_qps_no
         uint64_t old_prod_indices[num_qps];
         __be64 db_vals[num_qps];
 
-#pragma unroll 2
+        NVCC_PRAGMA_UNROLL(2)
         for (unsigned int i = 0; i < num_qps; i++) {
             old_prod_indices[i] =
                 doca_gpu_dev_verbs_atomic_max<uint64_t, resource_sharing_mode, true>(
@@ -115,7 +115,7 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_submit_db_multi_qps(
         uint64_t old_prod_indices[num_qps];
         __be64 db_vals[num_qps];
 
-#pragma unroll 2
+        NVCC_PRAGMA_UNROLL(2)
         for (unsigned int i = 0; i < num_qps; i++) {
             doca_gpu_dev_verbs_lock<resource_sharing_mode>(&qps[i]->sq_lock);
             old_prod_indices[i] =
@@ -155,7 +155,7 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_submit_db_multi_qps(
             (sync_scope <= DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU) ? sync_scope
                                                                : DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU;
 
-#pragma unroll 2
+        NVCC_PRAGMA_UNROLL(2)
         for (unsigned int i = 0; i < num_qps; i++) {
             if (old_prod_indices[i] < prod_indices[i]) {
                 // In case the recovery path is triggered, the later DB ringing will cover for
@@ -198,7 +198,7 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_submit_proxy_multi_qps
     DOCA_GPUNETIO_VERBS_ASSERT(num_qps >= 2);
     doca_gpu_dev_verbs_fence_release<sync_scope>();
 
-#pragma unroll 2
+    NVCC_PRAGMA_UNROLL(2)
     for (unsigned int i = 0; i < num_qps; i++) {
         doca_gpu_dev_verbs_ring_proxy<resource_sharing_mode>(qps[i], prod_indices[i]);
     }
@@ -261,7 +261,7 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_counter(
 
     base_wqe_idx =
         doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(qp, num_chunks, code_opt);
-#pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     for (uint64_t i = 0; i < num_chunks; i++) {
         wqe_idx = base_wqe_idx + i;
         size_ = remaining_size > DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE
@@ -400,7 +400,7 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_signal_counter(
     // Put
     base_wqe_idx =
         doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(qp, num_chunks + 1, code_opt);
-#pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     for (uint64_t i = 0; i < num_chunks; i++) {
         wqe_idx = base_wqe_idx + i;
         size_ = remaining_size > DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE
@@ -543,7 +543,7 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_get_counter(
 
     base_wqe_idx =
         doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(qp, num_chunks, code_opt);
-#pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     for (uint64_t i = 0; i < num_chunks; i++) {
         wqe_idx = base_wqe_idx + i;
         size_ = remaining_size > DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE

@@ -34,18 +34,23 @@ classifiers = [
 dependencies = [
     "packaging",
     "numpy",
-    "cuda.core>=0.5.0,<1.0",
-    "cuda-pathfinder~=1.1",
+    "cuda.core~=1.0",
+    "cuda-pathfinder>=1.5.4,<2.0.0",
+    # typing_extensions provides @deprecated (PEP 702) below Python 3.13, and
+    # dataclass_transform below 3.11 (for nccl.ep's @binding_dataclass).
+    'typing_extensions; python_version < "3.13"',
 ]
 
 [project.optional-dependencies]
 cu12 = [
     "nvidia-nccl-cu12",
     "cuda-bindings~=12.0",
+    "nvidia-cutlass-dsl>=4.5.2,<5.0",
 ]
 cu13 = [
     "nvidia-nccl-cu13",
     "cuda-bindings~=13.0",
+    "nvidia-cutlass-dsl[cu13]>=4.5.2,<5.0",
 ]
 
 [dependency-groups]
@@ -78,7 +83,13 @@ include-package-data = false
 include = ["nccl*"]
 
 [tool.setuptools.package-data]
-"nccl.bindings" = ["cynccl.pxd"]
+"nccl.bindings" = ["cynccl.pxd", "cynccl_ep.pxd"]
+"nccl.ep" = [
+    "lib/libnccl_ep.so",
+    "include/*.h",
+    "include/*.hpp",
+    "include/device/*.cuh",
+]
 
 [tool.setuptools.dynamic]
 version = { attr = "nccl._version.__version__" }
@@ -106,6 +117,7 @@ build-verbosity = 1
 archs = ["native"]  # Fast local builds; override in CI for multi-arch
 manylinux-x86_64-image = "manylinux_2_28"
 manylinux-aarch64-image = "manylinux_2_28"
+repair-wheel-command = "auditwheel repair --exclude libnccl.so.2 --exclude libcuda.so.1 -w {dest_dir} {wheel}"
 
 [tool.uv]
 conflicts = [

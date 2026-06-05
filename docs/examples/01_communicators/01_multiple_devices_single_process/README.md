@@ -7,158 +7,67 @@
 
 # NCCL Example: Multiple Devices Single Process
 
-This example demonstrates how to use `ncclCommInitAll` to create NCCL
-communicators for multiple GPUs within a single process, without requiring MPI
-or threading.
+This example demonstrates the simplest NCCL communicator initialization pattern:
+**one process managing multiple GPUs**, with ranks assigned locally from 0 to \(N-1\).
 
 ## Overview
 
-The `ncclCommInitAll` function provides a simplified way to initialize NCCL
-communicators when:
+This example demonstrates how to initialize NCCL communicators for multiple GPUs within a
+single process. This is the simplest NCCL setup and is ideal for learning NCCL basics or for
+applications that want to use multiple GPUs without the complexity of multi-process coordination.
+
+`ncclCommInitAll()` / `Communicator.init_all()` provides a simplified way to create communicators
+when all of the following apply:
+
 - All GPUs are managed by a single process
 - Running on a single node
 - No multi-process coordination is needed
 
-This approach is ideal for single-node multi-GPU applications where simplicity
-is preferred over the flexibility of multi-process setups.
+This approach is ideal for single-node multi-GPU applications where simplicity is preferred over
+the flexibility of multi-process setups. For the full API comparison between `ncclCommInitAll()`
+and `ncclCommInitRank()`, see `c/README.md`.
+
+## Runtime Requirements
+
+This example is intended for single-node execution without any MPI or pthread parallelization. It is most useful with multiple GPUs, but can still run with one visible GPU.
 
 ## What This Example Does
 
-1. **Device Detection**:
-   - Queries available CUDA devices
-   - Lists device properties for each GPU
+1. Detect all available CUDA devices
+2. Create communicators for all devices
+3. Verify communicator properties (rank, size, device assignment)
+4. Clean up all resources properly
 
-2. **Communicator Creation**:
-   - Uses `ncclCommInitAll` to create all communicators in one call
-   - Automatically assigns NCCL ranks 0 through n-1
-   - No NCCL unique ID distribution needed
+## Variants
 
-3. **Verification**:
-   - Displays communicator information for each GPU
-   - Shows rank assignments and device mappings
-   - Confirms successful initialization
-
-4. **Cleanup**:
-   - Properly destroys communicators and streams
-   - Demonstrates correct resource management
-
-## Building and Running
-
-### Build
-```shell
-make [NCCL_HOME=<path-to-nccl>] [CUDA_HOME=<path-to-cuda>]
-```
-
-### Run with all available GPUs
-```shell
-./multiple_devices_single_process
-```
-
-### Run with specific GPUs
-```shell
-# Use only GPUs 0 and 1
-CUDA_VISIBLE_DEVICES=0,1 ./multiple_devices_single_process
-```
-
-### Run with NCCL debug output
-```shell
-NCCL_DEBUG=INFO ./multiple_devices_single_process
-```
-
-## Code Walk-through
-
-### Key Function: ncclCommInitAll
-For single-node collective examples we use `ncclCommInitAll` as it creates a clique of communicators in one call.
-```c
-int num_gpus; // num_gpus is set by querying the CUDA devices
-ncclComm_t* comms;
-int* devices; // devices needs to be populated with CUDA devices used
-
-// Create communicators for all devices in one call
-NCCLCHECK(ncclCommInitAll(comms, num_gpus, devices));
-```
-
-This single function call:
-- Creates `num_gpus` communicators
-- Assigns ranks 0 to (num_gpus-1)
-- Sets up internal communication paths
-- No unique ID needed
-
-### Comparison with ncclCommInitRank
-`ncclCommInitAll` is a convenience function and has the same functionality as:
-```c
-ncclUniqueId id;
-
-ncclGetUniqueId(&id);
-
-ncclGroupStart();
-for(int i = 0; i < num_gpus; i++) {
-  cudaSetDevice(i);
-  ncclCommInitRank(comms[i], num_gpus, id, devices[i]);
-}
-ncclGroupEnd();
-```
+- **C**: `c/` (uses `ncclCommInitAll()`)
+  - How to run + walkthrough: `c/README.md`
+- **Python (nccl4py)**: `python/` (uses `nccl.Communicator.init_all()`)
+  - How to run + walkthrough: `python/README.md`
 
 ## Expected Output
 
-```
-Found 4 CUDA device(s) available
+You should see:
 
-Available GPU devices:
-  GPU 0: NVIDIA A100-SXM4-40GB (CUDA Device 0)
-    Compute Capability: 8.0
-    Memory: 40.0 GB
-  GPU 1: NVIDIA A100-SXM4-40GB (CUDA Device 1)
-    Compute Capability: 8.0
-    Memory: 40.0 GB
-  GPU 2: NVIDIA A100-SXM4-40GB (CUDA Device 2)
-    Compute Capability: 8.0
-    Memory: 40.0 GB
-  GPU 3: NVIDIA A100-SXM4-40GB (CUDA Device 3)
-    Compute Capability: 8.0
-    Memory: 40.0 GB
-Using ncclCommInitAll() to create all communicators simultaneously
-All 4 NCCL communicators initialized successfully
-
-Communicator Details:
-  Communicator 0: Rank 0/4 on CUDA device 0
-  Communicator 1: Rank 1/4 on CUDA device 1
-  Communicator 2: Rank 2/4 on CUDA device 2
-  Communicator 3: Rank 3/4 on CUDA device 3
-All communicators have the expected size of 4
-
-Synchronizing all CUDA streams...
-All streams synchronized
-Destroying NCCL communicators...
-All NCCL communicators destroyed
-Destroying CUDA streams...
-All CUDA streams destroyed
-
-=============================================================
-SUCCESS: Multiple devices single process example completed!
-=============================================================
-```
+- GPU count and basic device info
+- Successful communicator initialization
+- Per-rank info printed (rank/size/device)
+- Clean shutdown
 
 ## When to Use ncclCommInitAll
 
-### Ideal Use Cases
-- **Single-node workloads**: All GPUs on one machine
-- **Simple applications**: No multi-process complexity needed
-- **Testing/Development**: Quick setup for experiments
-
-### When NOT to Use
-- **Multi-node clusters**: Need MPI for cross-node communication
-- **Process isolation**: When GPUs should be in separate processes
+- **Ideal**: single-node, single-process applications that want to use all GPUs with minimal setup
+- **Not supported**: multi-node workloads (use the MPI-based examples instead)
 
 ## Performance Considerations
 
 - **Advantages**:
-  - Lower overhead (no inter process communication)
-  - Simpler memory management
-  - Direct access to all GPUs
+  - Lower overhead than multi-process coordination
+  - Simpler memory management model
+  - Direct access to all GPUs from one process
 
 - **Disadvantages**:
-  - Limited by single process resources
+  - Limited by single-process resources
   - Cannot scale beyond one node
 
 ## Common Issues and Solutions
@@ -169,12 +78,12 @@ SUCCESS: Multiple devices single process example completed!
    - Verify no other process is using GPUs exclusively
 
 2. **Out of memory**:
-   - Single process must handle memory for all GPUs
-   - Consider using multiple processes if memory limited
+   - A single process must handle memory for all GPUs
+   - Consider using multiple processes if memory is limited
 
 ## Next Steps
 
 After understanding this example:
-1. Try the collective operation examples using `ncclCommInitAll`
-2. Compare performance with MPI-based multi-process approach
+1. Try the collective operation examples using `ncclCommInitAll()`
+2. Compare this pattern with the MPI-based multi-process approach
 3. Experiment with different GPU combinations

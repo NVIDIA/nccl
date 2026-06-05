@@ -23,14 +23,15 @@ struct ncclIpcSocket {
   volatile uint32_t* abortFlag;
 };
 
-ncclResult_t ncclIpcSocketInit(struct ncclIpcSocket *handle, int rank, uint64_t hash, volatile uint32_t* abortFlag);
-ncclResult_t ncclIpcSocketClose(struct ncclIpcSocket *handle);
+ncclResult_t ncclIpcSocketInit(struct ncclIpcSocket* handle, int rank, uint64_t hash, volatile uint32_t* abortFlag);
+ncclResult_t ncclIpcSocketClose(struct ncclIpcSocket* handle);
 ncclResult_t ncclIpcSocketGetFd(struct ncclIpcSocket* handle, int* fd);
 
-ncclResult_t ncclIpcSocketRecvFd(struct ncclIpcSocket *handle, int *fd);
-ncclResult_t ncclIpcSocketSendFd(struct ncclIpcSocket *handle, const int fd, int rank, uint64_t hash);
+ncclResult_t ncclIpcSocketRecvFd(struct ncclIpcSocket* handle, int* fd);
+ncclResult_t ncclIpcSocketSendFd(struct ncclIpcSocket* handle, const int fd, int rank, uint64_t hash);
 
-ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, const int sendFd, int rank, uint64_t hash);
-ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, int *recvFd);
+ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket* handle, void* hdr, int hdrLen, const int sendFd, int rank,
+                                  uint64_t hash);
+ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket* handle, void* hdr, int hdrLen, int* recvFd);
 
 #endif /* NCCL_IPCSOCKET_H */

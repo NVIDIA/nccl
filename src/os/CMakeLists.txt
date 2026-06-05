@@ -2,6 +2,7 @@ if(NCCL_OS_LINUX)
     set(OS_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/linux.cc
         ${CMAKE_CURRENT_SOURCE_DIR}/linux_ipcsocket.cc
+        ${CMAKE_CURRENT_SOURCE_DIR}/linux_socket_pair.cc
         PARENT_SCOPE
     )
 elseif(NCCL_OS_WINDOWS)
@@ -9,6 +10,7 @@ elseif(NCCL_OS_WINDOWS)
         ${CMAKE_CURRENT_SOURCE_DIR}/windows.cc
         ${CMAKE_CURRENT_SOURCE_DIR}/windows_stubs.cc
         ${CMAKE_CURRENT_SOURCE_DIR}/windows_ipcsocket.cc
+        ${CMAKE_CURRENT_SOURCE_DIR}/windows_socket_pair.cc
         PARENT_SCOPE
     )
 endif()

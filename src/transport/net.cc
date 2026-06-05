@@ -340,6 +340,19 @@ NCCL_PARAM(GdrCopySyncEnable, "GDRCOPY_SYNC_ENABLE", 1);
 // GDRCOPY support: FLUSH_ENABLE When enabled uses a PCI-E read to flush GDRDMA buffers
 NCCL_PARAM(GdrCopyFlushEnable, "GDRCOPY_FLUSH_ENABLE", 0);
 
+static const char* ncclTopoFlushTypeStr(enum ncclTopoFlushType flush) {
+  switch (flush) {
+  case ncclTopoFlushNone:
+    return "None";
+  case ncclTopoFlushAlways:
+    return "Always";
+  case ncclTopoFlushC2c:
+    return "C2c";
+  default:
+    return "Unknown";
+  }
+}
+
 /* Setup recv connector */
 static ncclResult_t recvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo* myInfo,
                               struct ncclPeerInfo* peerInfo, struct ncclConnect* connectInfo,
@@ -374,13 +387,16 @@ static ncclResult_t recvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   NCCLCHECK(ncclProxyCallBlocking(comm, &recv->proxyConn, ncclProxyMsgSetup, &req, sizeof(req), connectInfo,
                                   sizeof(ncclNetHandle_t)));
   memcpy((uint8_t*)connectInfo + sizeof(ncclNetHandle_t), &req.useGdr, sizeof(int));
-  INFO(NCCL_INIT | NCCL_NET, "Channel %02d/%d : %d[%d] -> %d[%d] [receive] via NET/%s/%d%s%s%s%s", channelId, connIndex,
-       peerInfo->rank, peerInfo->nvmlDev, myInfo->rank, myInfo->nvmlDev, comm->ncclNet->name, req.netDev,
+  enum ncclTopoFlushType logFlush = req.needFlush;
+  // recvProxyConnect() later clears needFlush when FORCE_PCIE maps the GDRCopy sync word on PCIe.
+  if (req.useGdr && ncclGdrCopy && recv->proxyConn.sameProcess && req.sameDevice && ncclParamGdrCopySyncEnable() &&
+      ncclGdcPinFlag(req.needFlush) == GDR_PIN_FLAG_FORCE_PCIE) {
+    logFlush = ncclTopoFlushNone;
+  }
+  INFO(NCCL_INIT | NCCL_NET, "Channel %02d/%d : %d[%d] -> %d[%d] [receive] via NET/%s/%d%s%s%s%s%s", channelId,
+       connIndex, peerInfo->rank, peerInfo->nvmlDev, myInfo->rank, myInfo->nvmlDev, comm->ncclNet->name, req.netDev,
        req.useGdr ? "/GDRDMA" : "", req.useGdr == ncclTopoGdrModePci ? "(PCI)" : "", req.shared ? "/Shared" : "",
-       !req.useGdr                        ? "" :
-       req.needFlush == ncclTopoFlushNone ? "/flush=None" :
-       req.needFlush == ncclTopoFlushC2c  ? "/flush=C2c" :
-                                            "/flush=Always");
+       req.useGdr ? "/flush=" : "", req.useGdr ? ncclTopoFlushTypeStr(logFlush) : "");
   return ncclSuccess;
 }
 

@@ -101,13 +101,16 @@ typedef enum {
      *
      * num_recv_slots is the recv-slot dimension chosen by the caller and must
      * be no smaller than the actual number of tokens this rank will receive.
-     * Two strategies:
-     *   - Static: choose a worst-case num_recv_slots (e.g.
-     *     max_recv_tokens_per_rank) to guard against routing dynamism.
-     *   - Query-then-allocate: supply ncclEpLayoutInfo_t::recv_total_counter
-     *     to ncclEpCreateHandle; the metadata kernel writes the actual recv
-     *     count there, which the caller reads (requires a GPU→CPU sync)
-     *     before sizing tokens.
+     *   - Static (the only mode supported in v0.1): choose a worst-case
+     *     num_recv_slots (e.g. max_recv_tokens_per_rank) to guard against
+     *     routing dynamism.
+     *   - Query-then-allocate (PLANNED, NOT YET SUPPORTED IN v0.1): supply
+     *     ncclEpLayoutInfo_t::recv_total_counter to either `ncclEpCreateHandle`
+     *     or `ncclEpUpdateHandle`;
+     *     the metadata kernel writes the actual recv count there, which the caller
+     *     reads (requires a GPU→CPU sync) before sizing tokens. This depends on
+     *     max_dispatch_tokens_per_rank = NCCL_EP_AUTO, which ncclEpCreateGroup
+     *     currently rejects for HT.
      *
      * Tokens arrive as a single contiguous sequence with no rank-major or
      * expert-major structure.  The caller uses recv_topk_idx to route each

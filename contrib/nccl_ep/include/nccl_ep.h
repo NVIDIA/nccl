@@ -544,16 +544,19 @@ typedef struct {
 //
 //                              For static allocations that allow CUDA Graph capturing,
 //                              `num_recv_slots` is calculated as `max_recv_tokens_per_rank`
-//                              (see ncclEpGroupConfig_t::max_recv_tokens_per_rank).
+//                              (see ncclEpGroupConfig_t::max_recv_tokens_per_rank). This is the
+//                              only allocation mode supported in v0.1.
 //
-//                              For dynamic allocations `num_recv_slots` is the actual number of tokens
-//                              this rank will receive (optionally padded for Expert-major layout).
-//                              The actual number of tokens can be obtained through layout_info argument of
-//                              `ncclEpCreateHandle` or `ncclEpUpdateHandle` calls.
-//                              For expert-major layout, the actual number of tokens is the last element of
-//                              exclusive expert offsets array (ncclEpLayoutInfo_t::expert_offsets).
-//                              For flat layout, the actual number is returned via
-//                              ncclEpLayoutInfo_t::recv_total_counter scalar tensor.
+//                              PLANNED, NOT YET SUPPORTED IN v0.1: dynamic allocation, where
+//                              `num_recv_slots` is the actual number of tokens this rank will
+//                              receive (optionally padded for Expert-major layout). The actual
+//                              number of tokens is intended to be obtained through the layout_info
+//                              argument of `ncclEpCreateHandle` / `ncclEpUpdateHandle` — for
+//                              expert-major layout, the last element of the exclusive expert
+//                              offsets array (ncclEpLayoutInfo_t::expert_offsets); for flat layout,
+//                              the ncclEpLayoutInfo_t::recv_total_counter scalar tensor. This mode
+//                              requires max_dispatch_tokens_per_rank = NCCL_EP_AUTO, which
+//                              ncclEpCreateGroup currently rejects for HT.
 //
 //                              The outputs->tokens tensor shape is [num_recv_slots, hidden].
 //

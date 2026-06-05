@@ -60,9 +60,12 @@ typedef enum {
      * Combine input shape mirrors the dispatch output (post-expert activation
      * occupies the same slots).
      *
-     * Each expert rank sends its post-expert activation back to the originating
-     * rank; the Combine kernel weights and accumulates up to num_topk per-expert contributions,
-     * returning a single weighted output token per input slot.
+     * Each expert rank sends its post-expert activation back to the originating rank.
+     *   * In HT mode, the user is expected to apply topk weights before passing the post-expert
+     *     activations to ncclEpCombine.
+     *   * In LL mode, the Combine kernel is applying the weights on the fly.
+     * For all modes, the Combine kernel performs accumulation of up to num_topk 
+     * expert contributions, returning a single output token per input slot.
      */
     NCCL_EP_LAYOUT_EXPERT_MAJOR,
 

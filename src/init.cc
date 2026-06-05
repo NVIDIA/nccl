@@ -22,6 +22,7 @@
 #include "rma.h"
 #include "enqueue.h"
 #include "graph.h"
+#include "graph/net_merge_auto.h"
 #include "graph/topo.h"
 #include "argcheck.h"
 #include "tuner.h"
@@ -962,6 +963,23 @@ static ncclResult_t ncclP2pSchedule(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
+static ncclResult_t ncclMergeAutoRebuildOfficialTopo(struct ncclComm* comm, enum ncclNetMergeView selectedView) {
+  if (comm == NULL) return ncclInvalidArgument;
+  if (comm->topo != NULL) {
+    ncclTopoFree(comm->topo);
+    comm->topo = NULL;
+  }
+
+  NCCLCHECK(ncclTopoGetSystemWithMergeView(comm, &comm->topo, NULL, selectedView));
+  NCCLCHECK(ncclTopoComputePaths(comm->topo, comm));
+  NCCLCHECK(ncclTopoTrimSystem(comm->topo, comm));
+  NCCLCHECK(ncclTopoComputePaths(comm->topo, comm));
+  NCCLCHECK(ncclTopoSearchInit(comm->topo));
+  NCCLCHECK(ncclTopoComputeCommCPU(comm));
+  NCCLCHECK(ncclTopoPrint(comm->topo));
+  return ncclSuccess;
+}
+
 static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* parent,
                                        uint64_t timers[TIMERS_INIT_COUNT]) {
   // We use 2 AllGathers
@@ -971,6 +989,11 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   int rank = comm->rank;
   int nranks = comm->nRanks;
   int nNodes = 1;
+  int mergeAutoTwoNode = 0;
+  int mergeAutoHasSelectedView = 0;
+  enum ncclNetMergeView mergeAutoOfficialView = NCCL_NET_MERGE_VIEW_MERGED_DEFAULT;
+  struct ncclMergeAutoCandidateGlobalMetric mergeAutoMetrics[NCCL_MERGE_AUTO_TOPO_COUNT];
+  struct ncclMergeAutoSelection mergeAutoSelection = {};
   ncclAffinity affinitySave = {};
   struct ncclTopoGraph* ringGraph = &comm->graphs[NCCL_ALGO_RING];
   struct ncclTopoGraph* treeGraph = &comm->graphs[NCCL_ALGO_TREE];
@@ -1066,6 +1089,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   }
   // AllGather1 - end
   timers[TIMER_INIT_ALLGATHER] = clockNano() - timers[TIMER_INIT_ALLGATHER];
+  NCCLCHECKGOTO(ncclMergeAutoCheckTwoNode(comm, NULL, &mergeAutoTwoNode), ret, fail);
 
   // Check for MNNVL support
   NCCLCHECKGOTO(ncclGetUserP2pLevel(&p2pLevel), ret, fail);
@@ -1175,8 +1199,52 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   ringGraph->pattern = NCCL_TOPO_PATTERN_RING;
   ringGraph->minChannels = 1;
   ringGraph->maxChannels = MAXCHANNELS / 2;
+  if (mergeAutoTwoNode) {
+    if (nranks <= 2) {
+      if (rank == 0) INFO(NCCL_GRAPH|NCCL_NET, "MergeAuto: skipped reason=nranks_le_2 nranks=%d", nranks);
+    } else {
+      struct ncclMergeAutoTopoCandidate mergeAutoCandidates[NCCL_MERGE_AUTO_TOPO_COUNT];
+      memset(mergeAutoCandidates, 0, sizeof(mergeAutoCandidates));
+      ret = ncclMergeAutoBuildChannelCandidates(comm, ringGraph, mergeAutoCandidates);
+      if (ret != ncclSuccess) {
+        ncclMergeAutoFreeChannelCandidates(mergeAutoCandidates);
+        goto fail;
+      }
+      ret = ncclMergeAutoSelectView(comm, mergeAutoCandidates, mergeAutoMetrics, &mergeAutoSelection);
+      if (ret != ncclSuccess) {
+        ncclMergeAutoFreeChannelCandidates(mergeAutoCandidates);
+        goto fail;
+      }
+      mergeAutoOfficialView = mergeAutoSelection.selectedView;
+      mergeAutoHasSelectedView = 1;
+      ncclMergeAutoFreeChannelCandidates(mergeAutoCandidates);
+    }
+    if (ringGraph->nChannels != 0) {
+      WARN("MergeAuto dry-run modified the formal ring graph template.");
+      ret = ncclInternalError;
+      goto fail;
+    }
+    if (mergeAutoHasSelectedView) {
+      if (rank == 0) INFO(NCCL_GRAPH|NCCL_NET, "MergeAuto: official view=%s", ncclMergeAutoViewName(mergeAutoOfficialView));
+      NCCLCHECKGOTO(ncclMergeAutoRebuildOfficialTopo(comm, mergeAutoOfficialView), ret, fail);
+      NCCLCHECKGOTO(ncclTopoGetCpuAffinity(comm->topo, comm->rank, &comm->cpuAffinity), ret, fail);
+      if (ncclOsCpuCount(comm->cpuAffinity)) {
+        NCCLCHECKGOTO(ncclOsSetAffinity(comm->cpuAffinity), ret, fail);
+      }
+    }
+  }
   NCCLCHECKGOTO(ncclTopoCompute(comm->topo, ringGraph), ret, fail);
   NCCLCHECKGOTO(ncclTopoPrintGraph(comm->topo, ringGraph), ret, fail);
+  if (mergeAutoHasSelectedView && rank == 0) {
+    INFO(NCCL_GRAPH|NCCL_NET, "MergeAuto: official graph channels=%d view=%s",
+         ringGraph->nChannels, ncclMergeAutoViewName(mergeAutoOfficialView));
+  }
+  if (mergeAutoTwoNode) {
+    NCCLCHECKGOTO(ncclMergeAutoDumpGraphChannelRings(mergeAutoHasSelectedView ? "official" : "default",
+                                                     comm->topo, ringGraph), ret, fail);
+    NCCLCHECKGOTO(ncclMergeAutoDumpGraphCrossEdgesFromComm(mergeAutoHasSelectedView ? "official" : "default",
+                                                           comm, ringGraph), ret, fail);
+  }
 
   memset(treeGraph, 0, sizeof(struct ncclTopoGraph));
   treeGraph->id = 1;

@@ -194,15 +194,46 @@ fail:
   return ncclInternalError;
 }
 
-ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
-  if (ncclParamIbMergeNics() == 0 && props->ndevs > 1) {
+ncclResult_t ncclIbFindOrMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props, bool allowMultiDevice) {
+  ncclNetVDeviceProps_t vProps = *props;
+  for (int i = 1; i < vProps.ndevs; i++) {
+    int dev = vProps.devs[i];
+    int j = i - 1;
+    while (j >= 0 && vProps.devs[j] > dev) {
+      vProps.devs[j+1] = vProps.devs[j];
+      j--;
+    }
+    vProps.devs[j+1] = dev;
+  }
+
+  if (vProps.ndevs > 1 && !allowMultiDevice) {
     INFO(NCCL_NET, "NET/IB : Skipping makeVDevice, NCCL_IB_MERGE_NICS=0");
     return ncclInvalidUsage;
   }
 
-  if (props->ndevs == 0) {
+  if (vProps.ndevs == 0) {
     WARN("NET/IB : Can't make virtual NIC with 0 devices");
     return ncclInvalidUsage;
+  }
+
+  for (int i = 0; i < vProps.ndevs; i++) {
+    if (vProps.devs[i] < 0 || vProps.devs[i] >= ncclNIbDevs) {
+      WARN("NET/IB : Cannot use physical device %d, max %d", vProps.devs[i], ncclNIbDevs);
+      return ncclInvalidUsage;
+    }
+  }
+
+  for (int i = 0; i < ncclNMergedIbDevs; i++) {
+    bool sameVProps = ncclIbMergedDevs[i].vProps.ndevs == vProps.ndevs;
+    for (int j = 0; sameVProps && j < vProps.ndevs; j++) {
+      sameVProps = ncclIbMergedDevs[i].vProps.devs[j] == vProps.devs[j];
+    }
+    if (sameVProps) {
+      *d = i;
+      TRACE(NCCL_NET, "NET/IB : Reusing virtual device [%d] name=%s ndevs=%d",
+            *d, ncclIbMergedDevs[i].devName, vProps.ndevs);
+      return ncclSuccess;
+    }
   }
 
   if (ncclNMergedIbDevs == MAX_IB_VDEVS) {
@@ -214,19 +245,19 @@ ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
   ncclIbMergedDev* mDev = ncclIbMergedDevs + ncclNMergedIbDevs;
   mDev->vProps.ndevs = 0;
   mDev->speed = 0;
-  mDev->railId = ncclIbDevs[props->devs[0]].railId;
+  mDev->railId = ncclIbDevs[vProps.devs[0]].railId;
   // Set the virtual bit on to avoid collision with physical planes when multiple planes are merged.
-  mDev->planeId = (props->ndevs > 1) ? NCCL_IB_PLANE_VIRT_BIT : ncclIbDevs[props->devs[0]].planeId;
+  mDev->planeId = (vProps.ndevs > 1) ? NCCL_IB_PLANE_VIRT_BIT : ncclIbDevs[vProps.devs[0]].planeId;
 
-  for (int i = 0; i < props->ndevs; i++) {
-    ncclIbDev* dev = ncclIbDevs + props->devs[i];
+  for (int i = 0; i < vProps.ndevs; i++) {
+    ncclIbDev* dev = ncclIbDevs + vProps.devs[i];
     if (mDev->vProps.ndevs == NCCL_IB_MAX_DEVS_PER_NIC) return ncclInvalidUsage;
-    mDev->vProps.devs[mDev->vProps.ndevs++] = props->devs[i];
+    mDev->vProps.devs[mDev->vProps.ndevs++] = vProps.devs[i];
     mDev->speed += dev->speed;
     // rail ID of a fused device with different rails is undefined.
     if (dev->railId == NCCL_NET_ID_UNDEF || mDev->railId != dev->railId) mDev->railId = NCCL_NET_ID_UNDEF;
     // Only set the bit if multiple devs are merged, otherwise keep the initial value
-    if (props->ndevs > 1) mDev->planeId |= (0x1 << dev->planeIdx);
+    if (vProps.ndevs > 1) mDev->planeId |= (0x1 << dev->planeIdx);
 
     // Each successive time, copy the name '+' new name
     if (mDev->vProps.ndevs > 1) {
@@ -239,17 +270,13 @@ ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
   }
 
   // Check link layers
-  ncclIbDev* dev0 = ncclIbDevs + props->devs[0];
-  for (int i = 1; i < props->ndevs; i++) {
-    if (props->devs[i] >= ncclNIbDevs) {
-      WARN("NET/IB : Cannot use physical device %d, max %d", props->devs[i], ncclNIbDevs);
-      return ncclInvalidUsage;
-    }
-    ncclIbDev* dev = ncclIbDevs + props->devs[i];
+  ncclIbDev* dev0 = ncclIbDevs + vProps.devs[0];
+  for (int i = 1; i < vProps.ndevs; i++) {
+    ncclIbDev* dev = ncclIbDevs + vProps.devs[i];
     if (dev->link != dev0->link) {
       WARN("NET/IB : Attempted to merge incompatible devices: [%d]%s:%d/%s and [%d]%s:%d/%s. Try selecting NICs of "
            "only one link type using NCCL_IB_HCA",
-           props->devs[0], dev0->devName, dev0->portNum, NCCL_IB_LLSTR(dev0->link), props->devs[i], dev->devName,
+           vProps.devs[0], dev0->devName, dev0->portNum, NCCL_IB_LLSTR(dev0->link), vProps.devs[i], dev->devName,
            dev->portNum, NCCL_IB_LLSTR(dev->link));
       return ncclInvalidUsage;
     }
@@ -263,7 +290,7 @@ ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
 
 ncclResult_t ncclIbMakeVDevice(int* d, ncclNetVDeviceProps_t* props) {
   std::lock_guard<std::mutex> lock(ncclIbMutex);
-  ncclResult_t res = ncclIbMakeVDeviceInternal(d, props);
+  ncclResult_t res = ncclIbFindOrMakeVDeviceInternal(d, props, ncclParamIbMergeNics() != 0);
   return res;
 }
 
@@ -507,7 +534,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
       ncclNetVDeviceProps_t vProps = {0};
       vProps.ndevs = 1;
       vProps.devs[0] = d;
-      NCCLCHECK(ncclIbMakeVDeviceInternal(&vDev, &vProps));
+      NCCLCHECK(ncclIbFindOrMakeVDeviceInternal(&vDev, &vProps, true));
     }
     char addrline[SOCKET_NAME_MAXLEN + 1];
     INFO(NCCL_INIT | NCCL_NET, "NET/IB : Using%s %s; OOB %s:%s", line, ncclIbRelaxedOrderingEnabled ? "[RO]" : "",

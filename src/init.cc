@@ -2841,8 +2841,10 @@ static ncclResult_t commReclaim(struct ncclAsyncJob* job_) {
           struct ncclCommFinalizeAsyncJob job;
           job.comm = curIntraComm;
           /* every comm aborts, commDestroySync should not be blocked. */
-          if ((ret = commDestroySync((struct ncclAsyncJob*)&job)) != ncclSuccess) {
-            WARN("commReclaim: comm %p (rank = %d) in commDestroySync, error %d", curIntraComm, curRank, ret);
+          NOWARN(ret = commDestroySync((struct ncclAsyncJob*)&job), NCCL_DESTROY);
+          if (ret != ncclSuccess) {
+            INFO(NCCL_DESTROY, "commReclaim: comm %p (rank = %d) in commDestroySync, error %d", curIntraComm, curRank,
+                 ret);
           }
         }
       }
@@ -2854,10 +2856,12 @@ static ncclResult_t commReclaim(struct ncclAsyncJob* job_) {
         curRank = curIntraComm->rank;
         nextIntraComm = nextIntraComm->intraNext;
 
-        if ((ret = commCleanup(curIntraComm)) != ncclSuccess) {
+        NOWARN(ret = commCleanup(curIntraComm), NCCL_DESTROY);
+        if (ret != ncclSuccess) {
           // We pass a freed pointer, but we don't dereference; we merely print its value, so it's OK.
           // coverity[pass_freed_arg]
-          WARN("commReclaim: cleanup comm %p rank %d failed in destroy/abort, error %d", curIntraComm, curRank, ret);
+          INFO(NCCL_DESTROY, "commReclaim: cleanup comm %p rank %d failed in destroy/abort, error %d", curIntraComm,
+               curRank, ret);
         }
       }
     }

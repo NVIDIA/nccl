@@ -192,43 +192,6 @@ weights to be passed as `combine_inputs.topk_weights` and returned via
 |           | combine_outputs    | tokens            | [B x H]    |
 |           | combine_outputs    | **topk_weights**  | [B x K]    |
 
-#### LL mode (FP16 -> FP8 conversion - NOT SUPPORTED)
-
-In the token data type conversion scenario, in LL mode the Dispatch operation
-will perform precision reduction and return lower-precision tokens via
-`dispatch_outputs.tokens`. In addition, `dispatch_outputs.scales` must be
-provided to return the scaling information.
-
-| Operation | Struct             | Field             | Dims             |
-|:---------:|:-------------------|:------------------|:----------------:|
-| Dispatch  | dispatch_inputs    | tokens            | [B x H]          |
-|           | dispatch_outputs   | tokens            | [L x R x B x H]  |
-|           | dispatch_outputs   | **scales**        | [L x R x B x S]  |
-|           | layout_info        | expert_counters   | [L]              |
-| Combine   | combine_inputs     | tokens            | [L x R x B x H]  |
-|           | combine_outputs    | tokens            | [B x H]          |
-|           | combine_outputs    | topk_weights      | [B x K]          |
-
-#### HT mode (FP16 -> FP8 conversion - NOT SUPPORTED)
-
-**Forward pass**
-
-In the HT case, scales are expected to be calculated by the user and passed
-via `dispatch_inputs.scales`. NCCL EP communicates them alongside the token
-data and returns them via `dispatch_outputs.scales`.
-
-| Operation | Struct             | Field             | Dims       |
-|:---------:|:-------------------|:------------------|:----------:|
-| Dispatch  | dispatch_inputs    | tokens            | [B x H]    |
-|           | dispatch_inputs    | topk_weights      | [B x K]    |
-|           | dispatch_inputs    | **scales**        | [B x S]    |
-|           | dispatch_outputs   | tokens            | [N(r) x H] |
-|           | dispatch_outputs   | topk_weights      | [N(r) x K] |
-|           | dispatch_outputs   | topk_idx          | [N(r) x K] |
-|           | dispatch_outputs   | **scales**        | [N(r) x S] |
-| Combine   | combine_inputs     | tokens            | [N(r) x H] |
-|           | combine_inputs     | topk_weights      | [N(r) x K] |
-|           | combine_outputs    | tokens            | [B x H]    |
 
 # Usage
 

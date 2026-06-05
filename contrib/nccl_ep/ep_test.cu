@@ -144,10 +144,12 @@ static void epSetupCombineTensors(
                            num_local_experts,
                            static_cast<unsigned int>(max_dispatch_tokens_per_rank * nRanks),
                            hidden));
-    uint16_t *host = new uint16_t[max_dispatch_tokens_per_rank * hidden]();
+    const size_t len = static_cast<size_t>(max_dispatch_tokens_per_rank) * hidden;
+    uint16_t *host = new uint16_t[len]();
     for (unsigned int t = 0; t < max_dispatch_tokens_per_rank; ++t) {
+      size_t row = static_cast<size_t>(t) * hidden;
       for (int j = 0; j < elements_tested_per_token; ++j) {
-        host[t * hidden + j] = float_to_bf16(static_cast<float>((j + 1) * 2));
+        host[row + j] = float_to_bf16(static_cast<float>((j + 1) * 2));
       }
     }
     void* data;
@@ -155,21 +157,23 @@ static void epSetupCombineTensors(
     for (unsigned int e = 0; e < num_local_experts; ++e) {
       size_t offset_bytes = static_cast<size_t>(e) * max_dispatch_tokens_per_rank * hidden * nRanks * 2;
       CUDACHECK(cudaMemcpy(static_cast<uint8_t*>(data) + offset_bytes,
-                           host, max_dispatch_tokens_per_rank * hidden * 2,
+                           host, len * 2,
                            cudaMemcpyHostToDevice));
     }
     delete[] host;
   } else {
     NCCLCHECK(epMakeTensor(expert_outputs, 2, ncclBfloat16, num_recv_tokens, hidden));
-    uint16_t *host = new uint16_t[num_recv_tokens * hidden]();
+    const size_t len = static_cast<size_t>(num_recv_tokens) * hidden;
+    uint16_t *host = new uint16_t[len]();
     for (unsigned int t = 0; t < num_recv_tokens; ++t) {
+      size_t row = static_cast<size_t>(t) * hidden;
       for (int j = 0; j < elements_tested_per_token; ++j) {
-        host[t * hidden + j] = float_to_bf16(static_cast<float>((j + 1) * 2));
+        host[row + j] = float_to_bf16(static_cast<float>((j + 1) * 2));
       }
     }
     void* data;
     data = (*expert_outputs)->data;
-    CUDACHECK(cudaMemcpy(data, host, num_recv_tokens * hidden * 2, cudaMemcpyHostToDevice));
+    CUDACHECK(cudaMemcpy(data, host, len * 2, cudaMemcpyHostToDevice));
     delete[] host;
   }
 
@@ -506,6 +510,9 @@ int main(int argc, char* argv[])
   }
   assert(num_recv_tokens);
 
+  const size_t recv_x_elems  = static_cast<size_t>(num_recv_tokens) * hidden;   // [N, hidden]
+  const size_t recv_topk_elems = static_cast<size_t>(num_recv_tokens) * top_k;    // [N, top_k]
+
   ncclEpDispatchConfig_t dispatch_config = NCCL_EP_DISPATCH_CONFIG_INIT;
   dispatch_config.round_scales = 0; // Not testing this parameter atm
 
@@ -685,11 +692,13 @@ int main(int argc, char* argv[])
 
   if (!random_mode && algorithm == NCCL_EP_ALGO_LOW_LATENCY && recv_count_host != nullptr) {
     // LL mode: recv_x is [num_local_experts, config.max_dispatch_tokens_per_rank * nRanks, hidden]
-    uint16_t *output_host = new uint16_t[num_local_experts * config.max_dispatch_tokens_per_rank * nRanks * hidden]();
+    const size_t ll_recv_elems = static_cast<size_t>(num_local_experts)
+                               * config.max_dispatch_tokens_per_rank * nRanks * hidden;
+    uint16_t *output_host = new uint16_t[ll_recv_elems]();
     void* output0_data;
     output0_data = recv_x->data;
     CUDACHECK(cudaMemcpy(output_host, output0_data,
-                         num_local_experts * config.max_dispatch_tokens_per_rank * nRanks * hidden * 2,
+                         ll_recv_elems * 2,
                          cudaMemcpyDeviceToHost));
 
     for (unsigned int e = 0; e < num_local_experts; e++) {
@@ -703,7 +712,7 @@ int main(int argc, char* argv[])
 
       // Verify the first recv_count_host[e] tokens for this expert
       for (int t = 0; t < recv_count_host[e] && t < static_cast<int>(config.max_dispatch_tokens_per_rank * nRanks); t++) {
-        size_t token_offset = (e * config.max_dispatch_tokens_per_rank * nRanks + t) * hidden;
+        size_t token_offset = (static_cast<size_t>(e) * config.max_dispatch_tokens_per_rank * nRanks + t) * hidden;
         for (int j = 0; j < ELEMENTS_TESTED_PER_TOKEN; ++j) {
           uint16_t expected = static_cast<uint16_t>(0x1000 + recv_rank);
           uint16_t actual = output_host[token_offset + j];
@@ -734,15 +743,16 @@ int main(int argc, char* argv[])
       }
     }
 
-    uint16_t *output_host = new uint16_t[num_recv_tokens * hidden]();
+    uint16_t *output_host = new uint16_t[recv_x_elems]();
     void* output0_data;
     output0_data = recv_x->data;
-    CUDACHECK(cudaMemcpy(output_host, output0_data, num_recv_tokens * hidden * 2, cudaMemcpyDeviceToHost));
+    CUDACHECK(cudaMemcpy(output_host, output0_data, recv_x_elems * 2, cudaMemcpyDeviceToHost));
     int expected_count = disable_max_tokens ? num_recv_tokens : num_tokens;
     for (int i = 0; i < expected_count; ++i) {
+      size_t row = static_cast<size_t>(i) * hidden;
       for (int j = 0; j < ELEMENTS_TESTED_PER_TOKEN; ++j) {
         uint16_t expected = static_cast<uint16_t>(0x1000 + recv_rank);
-        uint16_t actual = output_host[i * hidden + j];
+        uint16_t actual = output_host[row + j];
         if (actual != expected) {
           printf("Dispatch check failed! Rank %d, token %d, element %d: expected %d, got %d\n",
                  myRank, i, j, expected, actual);
@@ -766,8 +776,7 @@ int main(int argc, char* argv[])
   // In HT mode, copy and verify recv_topk_weights (recv_topk_weights) and (FLAT only) recv_topk_idx (recv_topk_idx)
   if (!random_mode && algorithm != NCCL_EP_ALGO_LOW_LATENCY) {
     // EM: 1D [num_recv_tokens]; FLAT: 2D [num_recv_tokens, top_k].
-    const size_t weights_count = ht_em ? static_cast<size_t>(num_recv_tokens)
-                                        : static_cast<size_t>(num_recv_tokens) * top_k;
+    const size_t weights_count = ht_em ? static_cast<size_t>(num_recv_tokens) : recv_topk_elems;
     float *recv_topk_weights_host = new float[weights_count]();
     void* output1_data;
     output1_data = recv_topk_weights->data;
@@ -776,11 +785,11 @@ int main(int argc, char* argv[])
 
     int64_t *recv_topk_idx_host = nullptr;
     if (!ht_em) {
-      recv_topk_idx_host = new int64_t[static_cast<size_t>(num_recv_tokens) * top_k]();
+      recv_topk_idx_host = new int64_t[recv_topk_elems]();
       void* output2_data;
       output2_data = recv_topk_idx->data;
       CUDACHECK(cudaMemcpy(recv_topk_idx_host, output2_data,
-                           static_cast<size_t>(num_recv_tokens) * top_k * sizeof(int64_t),
+                           recv_topk_elems * sizeof(int64_t),
                            cudaMemcpyDeviceToHost));
     }
 
@@ -794,11 +803,11 @@ int main(int argc, char* argv[])
 
     if (ht_em) {
       // EM: each filled slot has a single weight == 1/top_k. Padded slots default to 0.
-      for (int i = 0; i < num_recv_tokens; i++) {
+      for (unsigned int i = 0; i < num_recv_tokens; i++) {
         float w = recv_topk_weights_host[i];
         if (w != 0.0f && w != expected_weight) {
           if (weight_errors < 5)
-            printf("Rank %d: recv_topk_weights[%d] = %f, expected 0 or %f\n",
+            printf("Rank %d: recv_topk_weights[%u] = %f, expected 0 or %f\n",
                    myRank, i, w, expected_weight);
           weight_errors++;
           ht_outputs_valid = false;
@@ -926,16 +935,15 @@ int main(int argc, char* argv[])
 
     if (!random_mode) {
       // Per-layout sizes: HT+EM weights are 1D [N], no recv_topk_idx.
-      const size_t weights_count = ht_em ? static_cast<size_t>(num_recv_tokens)
-                                          : static_cast<size_t>(num_recv_tokens) * top_k;
-      first_dispatch_output0 = new uint16_t[num_recv_tokens * hidden];
+      const size_t weights_count = ht_em ? static_cast<size_t>(num_recv_tokens) : recv_topk_elems;
+      first_dispatch_output0 = new uint16_t[recv_x_elems];
       first_dispatch_output1 = new float[weights_count];
-      if (!ht_em) first_dispatch_output2 = new int64_t[num_recv_tokens * top_k];
+      if (!ht_em) first_dispatch_output2 = new int64_t[recv_topk_elems];
 
       void* out0_data;
       out0_data = recv_x->data;
       CUDACHECK(cudaMemcpy(first_dispatch_output0, out0_data,
-                           num_recv_tokens * hidden * sizeof(uint16_t), cudaMemcpyDeviceToHost));
+                           recv_x_elems * sizeof(uint16_t), cudaMemcpyDeviceToHost));
       void* out1_data;
       out1_data = recv_topk_weights->data;
       CUDACHECK(cudaMemcpy(first_dispatch_output1, out1_data,
@@ -944,7 +952,7 @@ int main(int argc, char* argv[])
         void* out2_data;
         out2_data = recv_topk_idx->data;
         CUDACHECK(cudaMemcpy(first_dispatch_output2, out2_data,
-                             num_recv_tokens * top_k * sizeof(int64_t), cudaMemcpyDeviceToHost));
+                             recv_topk_elems * sizeof(int64_t), cudaMemcpyDeviceToHost));
       }
 
       // Save first phase combine output to host for comparison
@@ -991,8 +999,7 @@ int main(int argc, char* argv[])
     cached_ctwi_data = cached_combine_topk_weights_input->data;
     void* out1_data_for_copy;
     out1_data_for_copy = recv_topk_weights->data;
-    const size_t cached_w_count = ht_em ? static_cast<size_t>(num_recv_tokens)
-                                          : static_cast<size_t>(num_recv_tokens) * top_k;
+    const size_t cached_w_count = ht_em ? static_cast<size_t>(num_recv_tokens) : recv_topk_elems;
     CUDACHECK(cudaMemcpy(cached_ctwi_data, out1_data_for_copy,
                          cached_w_count * sizeof(float), cudaMemcpyDeviceToDevice));
 
@@ -1026,11 +1033,11 @@ int main(int argc, char* argv[])
     int cached_combine_errors = 0;
 
     if (!random_mode) {
-      uint16_t *second_dispatch_output0 = new uint16_t[num_recv_tokens * hidden];
+      uint16_t *second_dispatch_output0 = new uint16_t[recv_x_elems];
       void* cached_out0_data;
       cached_out0_data = cached_recv_x->data;
       CUDACHECK(cudaMemcpy(second_dispatch_output0, cached_out0_data,
-                           num_recv_tokens * hidden * sizeof(uint16_t), cudaMemcpyDeviceToHost));
+                           recv_x_elems * sizeof(uint16_t), cudaMemcpyDeviceToHost));
 
       uint16_t *second_combine_output = new uint16_t[num_tokens * hidden];
       void* cached_comb_out_data;
@@ -1044,10 +1051,10 @@ int main(int argc, char* argv[])
                            num_tokens * top_k * sizeof(float), cudaMemcpyDeviceToHost));
 
       // Compare dispatch outputs between first and second phase
-      for (unsigned int i = 0; i < num_recv_tokens * hidden; ++i) {
+      for (size_t i = 0; i < recv_x_elems; ++i) {
         if (first_dispatch_output0[i] != second_dispatch_output0[i]) {
           if (cached_dispatch_errors < 5) {
-            printf("Rank %d: Cached dispatch output0 mismatch at %u: first=%u, second=%u\n",
+            printf("Rank %d: Cached dispatch output0 mismatch at %zu: first=%u, second=%u\n",
                    myRank, i, first_dispatch_output0[i], second_dispatch_output0[i]);
           }
           cached_dispatch_errors++;

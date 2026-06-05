@@ -558,10 +558,11 @@ typedef struct {
 //                              The outputs->tokens tensor shape is [num_recv_slots, hidden].
 //
 //                              For the forward pass, in addition the following tensor[s] are required:
-//                                * All layouts (expert-major and flat): 
-//                                  outputs->topk_weights tensors [num_recv_slots, num_topk]
+//                                * Expert-major layout:
+//                                  outputs->topk_weights tensor [num_recv_slots] (1D, one weight per slot)
 //                                * Flat layout:
-//                                  outputs->topk_idx tensor [num_recv_slots, num_topk]
+//                                  outputs->topk_weights tensor [num_recv_slots, num_topk]
+//                                  outputs->topk_idx     tensor [num_recv_slots, num_topk]
 //
 //                            LL mode:
 //                              The set and shapes of the output tokens vary depending on the layout.

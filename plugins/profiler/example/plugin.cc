@@ -473,9 +473,14 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
   if (eDescr->type == ncclProfileGroupApi) {
     struct groupApi* event;
     int groupApiId = __atomic_fetch_add(&ctx->groupApiPoolIndex, 1, __ATOMIC_RELAXED);
-    if ((groupApiId - __atomic_load_n(&ctx->groupApiPoolBase, __ATOMIC_RELAXED)) < groupApiPoolSize) {
+    event = &ctx->groupApiPool[groupApiId%groupApiPoolSize];
+    // Recycle the slot only if it is within the ring window AND its previous
+    // owner has fully retired it (refCount==0). The acquire load pairs with the
+    // ACQ_REL decrement in updateEvent, so out-of-order, cross-thread completion
+    // can never make us reset/reuse a slot that is still live.
+    if ((groupApiId - __atomic_load_n(&ctx->groupApiPoolBase, __ATOMIC_RELAXED)) < groupApiPoolSize &&
+        __atomic_load_n(&event->refCount, __ATOMIC_ACQUIRE) == 0) {
       // if there are available group API events grab one
-      event = &ctx->groupApiPool[groupApiId%groupApiPoolSize];
       // Make sure all child events of the picked group API event are cleared
       while (!profilerQueueEmpty(&event->collApiEvents)) {
         struct collApi *collApiEvent = profilerQueueDequeue(&event->collApiEvents);
@@ -507,9 +512,11 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
     if (eDescr->parentObj == NULL) return ncclSuccess;
     struct collApi* event;
     int collApiId = __atomic_fetch_add(&ctx->collApiPoolIndex, 1, __ATOMIC_RELAXED);
-    if ((collApiId - __atomic_load_n(&ctx->collApiPoolBase, __ATOMIC_RELAXED)) < collApiPoolSize) {
+    event = &ctx->collApiPool[collApiId%collApiPoolSize];
+    // Recycle only a fully-retired slot (refCount==0, acquire). See ncclProfileGroupApi.
+    if ((collApiId - __atomic_load_n(&ctx->collApiPoolBase, __ATOMIC_RELAXED)) < collApiPoolSize &&
+        __atomic_load_n(&event->refCount, __ATOMIC_ACQUIRE) == 0) {
       // if there are available Coll API events grab one
-      event = &ctx->collApiPool[collApiId%collApiPoolSize];
       resetTaskEvents(event, ctx);
     } else {
       // else drop this event
@@ -534,9 +541,11 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
     if (eDescr->parentObj == NULL) return ncclSuccess;
     struct p2pApi* event;
     int p2pApiId = __atomic_fetch_add(&ctx->p2pApiPoolIndex, 1, __ATOMIC_RELAXED);
-    if ((p2pApiId - __atomic_load_n(&ctx->p2pApiPoolBase, __ATOMIC_RELAXED)) < p2pApiPoolSize) {
+    event = &ctx->p2pApiPool[p2pApiId%p2pApiPoolSize];
+    // Recycle only a fully-retired slot (refCount==0, acquire). See ncclProfileGroupApi.
+    if ((p2pApiId - __atomic_load_n(&ctx->p2pApiPoolBase, __ATOMIC_RELAXED)) < p2pApiPoolSize &&
+        __atomic_load_n(&event->refCount, __ATOMIC_ACQUIRE) == 0) {
       // if there are available p2p API events grab one
-      event = &ctx->p2pApiPool[p2pApiId%p2pApiPoolSize];
       resetTaskEvents(event, ctx);
     } else {
       // else drop this event
@@ -664,7 +673,6 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
     event->base.type = ncclProfileP2p;
     event->base.rank = eDescr->rank;
     event->base.func = eDescr->p2p.func;
-    event->base.next = parent->eventHead;
     event->base.startTs = gettime() - startTime;
     event->base.parent = parent;
     event->buff = eDescr->p2p.buff;
@@ -850,13 +858,13 @@ void updateEvent(void* handle) {
   uint64_t type = *(uint64_t *)handle;
   if (type == ncclProfileGroupApi) {
     struct groupApi* event = (struct groupApi*) handle;
-    if (__atomic_sub_fetch(&event->refCount, 1, __ATOMIC_RELAXED) == 0) {
+    if (__atomic_sub_fetch(&event->refCount, 1, __ATOMIC_ACQ_REL) == 0) {
       event->stopTs = gettime() - startTime;
       __atomic_fetch_add(&event->ctx->groupApiPoolBase, 1, __ATOMIC_RELAXED);
     }
   } else if (type == ncclProfileCollApi) {
     struct collApi* event = (struct collApi*) handle;
-    if (__atomic_sub_fetch(&event->refCount, 1, __ATOMIC_RELAXED) == 0) {
+    if (__atomic_sub_fetch(&event->refCount, 1, __ATOMIC_ACQ_REL) == 0) {
       event->stopTs = gettime() - startTime;
       __atomic_fetch_add(&event->ctx->collApiPoolBase, 1, __ATOMIC_RELAXED);
     }
@@ -864,7 +872,7 @@ void updateEvent(void* handle) {
     return;
   } else if (type == ncclProfileP2pApi) {
     struct p2pApi* event = (struct p2pApi*) handle;
-    if (__atomic_sub_fetch(&event->refCount, 1, __ATOMIC_RELAXED) == 0) {
+    if (__atomic_sub_fetch(&event->refCount, 1, __ATOMIC_ACQ_REL) == 0) {
       event->stopTs = gettime() - startTime;
       __atomic_fetch_add(&event->ctx->p2pApiPoolBase, 1, __ATOMIC_RELAXED);
     }
@@ -876,7 +884,7 @@ void updateEvent(void* handle) {
     updateEvent(event->parent);
   } else if (type == ncclProfileGroup) {
     struct group* event = (struct group *)handle;
-    if (__atomic_sub_fetch(&event->refCount, 1, __ATOMIC_RELAXED) == 0) {
+    if (__atomic_sub_fetch(&event->refCount, 1, __ATOMIC_ACQ_REL) == 0) {
       event->stopTs = gettime() - startTime;
       // return group event to the pool
       __atomic_fetch_add(&event->ctx->groupPoolBase, 1, __ATOMIC_RELAXED);
@@ -884,7 +892,7 @@ void updateEvent(void* handle) {
     debugEvent(event, "GroupStop");
   } else if (type == ncclProfileColl) {
     struct collective* event = (struct collective *)handle;
-    if (__atomic_sub_fetch(&event->base.refCount, 1, __ATOMIC_RELAXED) == 0) {
+    if (__atomic_sub_fetch(&event->base.refCount, 1, __ATOMIC_ACQ_REL) == 0) {
       event->base.stopTs = gettime() - startTime;
       debugEvent(event, "CollStop");
       updateEvent(event->base.parent);
@@ -893,7 +901,7 @@ void updateEvent(void* handle) {
     debugEvent(event, "CollStop");
   } else if (type == ncclProfileP2p) {
     struct p2p* event = (struct p2p *)handle;
-    if (__atomic_sub_fetch(&event->base.refCount, 1, __ATOMIC_RELAXED) == 0) {
+    if (__atomic_sub_fetch(&event->base.refCount, 1, __ATOMIC_ACQ_REL) == 0) {
       event->base.stopTs = gettime() - startTime;
       debugEvent(event, "P2pStop");
       updateEvent(event->base.parent);

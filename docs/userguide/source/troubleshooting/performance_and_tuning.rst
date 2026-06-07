@@ -62,6 +62,16 @@ measure bandwidth and latency between nodes, as described in
 
 If ``nvbandwidth``/``nvloom`` and ``ib_write_bw`` results match the expectations for the hardware but NCCL performance is below expectations, the NCCL configuration might be suboptimal. Check :ref:`optimize_nccl_config` for the guidance on tweaking NCCL configuration.
 
+Interpreting profiler kernel names
+==================================
+
+NCCL may use representative device kernel names for multiple algorithm and
+protocol combinations to reduce the number of specialized kernels in the
+library. As a result, profilers such as Nsight Systems can show a kernel name
+with an ``LL`` suffix even when NCCL selected a different protocol for the
+collective. Use ``NCCL_DEBUG_SUBSYS=TUNING`` when the exact selected algorithm
+and protocol are needed.
+
 Multi-node NVLink (MNNVL) issues
 ================================
 

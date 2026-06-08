@@ -1758,8 +1758,12 @@ __global__ __launch_bounds__(1024, 1) void combine(// INPUT
                                 : 0;
                     if (j_eff < 0) continue; // no local expert found (shouldn't happen)
 
-                    int sndTokenOffset = slot * numBytesPerSlot;
-                    int rcvTokenOffset = (tokenIdx * numTopk + j_eff) * numBytesPerSlot;
+                    // Byte offsets scale with slot (= srcRank*maxTokensPerRank + i)
+                    // and tokenIdx*numTopk, which times numBytesPerSlot can exceed
+                    // INT_MAX — use size_t to avoid 32-bit truncation (matches the
+                    // expert-major path above).
+                    size_t sndTokenOffset = static_cast<size_t>(slot) * numBytesPerSlot;
+                    size_t rcvTokenOffset = static_cast<size_t>(tokenIdx * numTopk + j_eff) * numBytesPerSlot;
 
                     const auto srcDataInt4Ptr = static_cast<const int4*>(inData) + (int64_t)slot * hiddenBf16Int4;
                     const auto sendBufUint8   = static_cast<uint8_t*>(sendBuf) + sndTokenOffset;

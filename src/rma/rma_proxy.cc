@@ -209,7 +209,7 @@ ncclResult_t ncclRmaProxyCreateContext(struct ncclComm* comm, void* collComm, nc
   rmaProxyCtx->comm = comm;
   rmaProxyCtx->rmaCollComm = collComm;
   rmaProxyCtx->props = props;
-  NCCLCHECK(rmaComm->createContext(collComm, &config, &rmaProxyCtx->rmaCtx));
+  NCCLCHECKGOTO(rmaComm->createContext(collComm, &config, &rmaProxyCtx->rmaCtx), ret, fail);
 
   NCCLCHECKGOTO(ncclRmaProxyCtxAlloc(comm, rmaComm, rmaProxyCtx), ret, fail);
   NCCLCHECKGOTO(ncclRmaProxyCtxAllocGraph(comm, rmaComm, rmaProxyCtx), ret, fail);
@@ -226,7 +226,7 @@ ncclResult_t ncclRmaProxyDestroyContext(ncclRma_t* rmaComm, void* rmaProxyCtx) {
   if (!rmaProxyCtx) return ncclSuccess;
   struct ncclRmaProxyCtx* ctx = (struct ncclRmaProxyCtx*)rmaProxyCtx;
 
-  NCCLCHECK(rmaComm->destroyContext(ctx->rmaCtx));
+  if (ctx->rmaCtx) NCCLCHECK(rmaComm->destroyContext(ctx->rmaCtx));
 
   // Free descriptors remaining in circular buffers
   if (ctx->circularBuffers) {
@@ -399,6 +399,7 @@ ncclResult_t ncclRmaProxyConnectOnce(struct ncclComm* comm) {
   int* allCommCounts = NULL;
   void** handles = NULL;
   char* allHandles = NULL;
+  void* listenComm = NULL;
 
   // Get the min local net count from all ranks
   NCCLCHECK(ncclCalloc(&allCommCounts, comm->nRanks));
@@ -422,7 +423,6 @@ ncclResult_t ncclRmaProxyConnectOnce(struct ncclComm* comm) {
   for (int r = 0; r < comm->nRanks; r++) handles[r] = allHandles + r * NCCL_NET_HANDLE_MAXSIZE;
 
   for (int n = 0; n < rmaCommCount; n++) {
-    void* listenComm;
     NCCLCHECKGOTO(rmaProxyState->ncclRma->listen(rmaProxyState->rmaInstance, localRmaDevs[n],
                                                  allHandles + NCCL_NET_HANDLE_MAXSIZE * comm->rank, &listenComm),
                   ret, fail);
@@ -431,7 +431,9 @@ ncclResult_t ncclRmaProxyConnectOnce(struct ncclComm* comm) {
                                                   rmaProxyState->rmaComms + n),
                   ret, fail);
     NCCLCHECKGOTO(rmaProxyState->ncclRma->getProperties(localRmaDevs[n], &rmaProxyState->props[n]), ret, fail);
-    NCCLCHECKGOTO(rmaProxyState->ncclRma->closeListen(listenComm), ret, fail);
+    ncclResult_t closeRet = rmaProxyState->ncclRma->closeListen(listenComm);
+    listenComm = NULL;
+    NCCLCHECKGOTO(closeRet, ret, fail);
   }
   free(handles);
   handles = NULL;
@@ -440,7 +442,7 @@ ncclResult_t ncclRmaProxyConnectOnce(struct ncclComm* comm) {
 
   // Create virtual RMA proxy contexts
   rmaProxyState->rmaProxyCtxCount = comm->config.numRmaCtx;
-  NCCLCHECK(ncclCalloc(&rmaProxyState->rmaProxyCtxs, rmaProxyState->rmaProxyCtxCount));
+  NCCLCHECKGOTO(ncclCalloc(&rmaProxyState->rmaProxyCtxs, rmaProxyState->rmaProxyCtxCount), ret, fail);
   for (int n = 0; n < rmaProxyState->rmaProxyCtxCount; n++) {
     // Round-robin mapping to physical RMA communicator contexts
     int rmaCommIdx = n % rmaProxyState->rmaCommCount;
@@ -461,6 +463,28 @@ exit:
   if (ret == ncclSuccess) rmaProxyState->connected = true;
   return ret;
 fail:
+  if (listenComm != NULL) {
+    NCCLCHECKIGNORE(rmaProxyState->ncclRma->closeListen(listenComm), ret);
+    listenComm = NULL;
+  }
+  if (rmaProxyState->rmaProxyCtxs != NULL) {
+    for (int n = 0; n < rmaProxyState->rmaProxyCtxCount; n++) {
+      if (rmaProxyState->rmaProxyCtxs[n] != NULL) {
+        NCCLCHECKIGNORE(ncclRmaProxyDestroyContext(rmaProxyState->ncclRma, rmaProxyState->rmaProxyCtxs[n]), ret);
+        rmaProxyState->rmaProxyCtxs[n] = NULL;
+      }
+    }
+    free(rmaProxyState->rmaProxyCtxs);
+    rmaProxyState->rmaProxyCtxs = NULL;
+  }
+  rmaProxyState->rmaProxyCtxCount = 0;
+  for (int n = 0; n < rmaProxyState->rmaCommCount; n++) {
+    if (rmaProxyState->rmaComms[n] != NULL) {
+      NCCLCHECKIGNORE(rmaProxyState->ncclRma->closeColl(rmaProxyState->rmaComms[n]), ret);
+      rmaProxyState->rmaComms[n] = NULL;
+    }
+  }
+  rmaProxyState->rmaCommCount = 0;
   free(allCommCounts);
   free(allHandles);
   free(handles);

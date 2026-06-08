@@ -1081,7 +1081,7 @@ static ValidationResult validateDispatchOutputLLRankMaj(
         std::set<int> found_tokens;
 
         for (int s = 0; s < expected_slot_count; s++) {
-            unsigned int slot = (unsigned)r * max_tpr + (unsigned)s;
+            size_t slot = (size_t)r * max_tpr + (unsigned)s;
             const uint16_t* row = recv_data + slot * hidden;
             const int32_t*  idx = recv_idx  + slot * top_k;
             const float*    wgt = recv_wgt  + slot * top_k;
@@ -1203,7 +1203,7 @@ static void preReduceRankMajor(
     const size_t* out0_sizes = dispatch_outputs.tokens->sizes;
     const unsigned int max_tpr     = out0_sizes[1];
     const unsigned int hidden      = out0_sizes[2];
-    const unsigned int total_slots = out0_sizes[0] * max_tpr;
+    const size_t total_slots = out0_sizes[0] * max_tpr;
 
     void *out1_data, *out2_data, *local0_data;
     NCCLCHECK(epGetTensorData(alloc, dispatch_outputs.topk_weights, &out1_data));
@@ -1224,7 +1224,7 @@ static void preReduceRankMajor(
 
     for (int r = 0; r < nRanks; r++) {
         for (int s = 0; s < recv_cnt[r]; s++) {
-            unsigned int slot = (unsigned)r * max_tpr + (unsigned)s;
+            size_t slot = (size_t)r * max_tpr + (unsigned)s;
             // Sum weights for all top-k entries that routed to this rank (non-negative local idx)
             float weight_sum = 0.0f;
             for (unsigned int k = 0; k < top_k; k++) {

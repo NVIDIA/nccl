@@ -396,8 +396,11 @@ ncclResult_t ncclRmaIbProxyCreateContext(void* collComm, ncclRmaConfig_t* config
     NCCLCHECKGOTO(ncclIbMalloc((void**)&gc->fullSendComm, sizeof(void*) * nranks), ret, end);
     NCCLCHECKGOTO(ncclIbMalloc((void**)&gc->fullRecvComm, sizeof(void*) * nranks), ret, end);
     gc->rank = cComm->rank;
+  }
 
-    for (int i = 0; i < nranks; i += config->rankStride) {
+  for (int i = 0; i < nranks; i += config->rankStride) {
+    for (int c = 0; c < config->nContexts; c++) {
+      struct ncclRmaIbProxyCtx* gc = rmaProxyCtx + c;
       int connectPeer = (cComm->rank + i) % nranks;
       int acceptPeer = (cComm->rank - i + nranks) % nranks;
       do {

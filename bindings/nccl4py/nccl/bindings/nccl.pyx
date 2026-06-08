@@ -3677,3 +3677,8 @@ cpdef intptr_t get_peer_device_pointer(intptr_t window, size_t offset, int peer)
         __status__ = ncclGetPeerDevicePointer(<Window>window, offset, peer, &out_ptr)
     check_status(__status__)
     return <intptr_t>out_ptr
+
+
+cpdef object get_library_path():
+    from ._internal.nccl import _inspect_loaded_library_path
+    return _inspect_loaded_library_path()

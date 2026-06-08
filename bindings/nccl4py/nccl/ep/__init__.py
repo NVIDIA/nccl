@@ -14,19 +14,23 @@ hand-written Pythonic wrappers (:class:`Group`, :class:`Handle`,
 import os as _os
 from pathlib import Path as _Path
 
+from packaging.version import Version as _Version
+
+from nccl.bindings import nccl_ep as _ep_bindings
+
 # Defaults for libnccl_ep.so's JIT runtime; either env var can be overridden
 # by setting it in the environment before importing nccl.ep.
 _PKG_DIR = _Path(__file__).parent
-_JIT_SOURCE_DIR = _PKG_DIR / "include"
-if _JIT_SOURCE_DIR.is_dir():
-    _os.environ.setdefault("NCCL_EP_JIT_SOURCE_DIR", str(_JIT_SOURCE_DIR))
+if (_PKG_DIR / "include" / "nccl_ep").is_dir():
+    _os.environ.setdefault("NCCL_EP_HOME", str(_PKG_DIR))
 
 # NCCL public headers (nccl.h, nccl_device/...).
 try:
     import nvidia.nccl as _nv_nccl
-    _NCCL_INCLUDE_DIR = _Path(_nv_nccl.__path__[0]) / "include"
-    if _NCCL_INCLUDE_DIR.is_dir():
-        _os.environ.setdefault("NCCL_EP_JIT_BUILD_INCLUDE_DIR", str(_NCCL_INCLUDE_DIR))
+
+    _NCCL_HOME = _Path(_nv_nccl.__path__[0])
+    if (_NCCL_HOME / "include").is_dir():
+        _os.environ.setdefault("NCCL_HOME", str(_NCCL_HOME))
 except ImportError:
     pass
 
@@ -58,6 +62,8 @@ __all__ = [
     "DispatchInputs",
     "DispatchOutputs",
     "FreeFn",
+    "get_lib_path",
+    "get_lib_version",
     "Group",
     "GroupConfig",
     "Handle",
@@ -69,41 +75,61 @@ __all__ = [
 ]
 
 
-def _check_cuda_consistency() -> None:
-    """Verify libnccl.so and libnccl_ep.so were built with the same CUDA major.
-    """
-    from nccl._show_versions import (
-        _NCCL_BANNER,
-        _NCCL_EP_BANNER,
-        _extract_cuda_variant,
-        _resolve_so_path,
-    )
-    from nccl.bindings import nccl as _nccl_bindings
-    from nccl.bindings import nccl_ep as _ep_bindings
+def _decode_version(v: int) -> _Version:
+    """Decode NCCL_EP_VERSION_CODE (MAJOR*10000 + MINOR*100 + PATCH)."""
+    return _Version(f"{v // 10000}.{(v % 10000) // 100}.{v % 100}")
 
-    # Trigger libnccl_ep.so / libnccl.so dlopen via a cheap binding call.
-    # Bindings raise RuntimeError when dlopen fails (e.g. libnccl_ep.so absent
-    # on a CUDA-12 host). Convert to ImportError so `import nccl.ep` honors the
-    # standard contract and `try/except ImportError` callers (including
-    # _nccl_ep_importable) degrade gracefully without disturbing nccl.core.
-    # Doing this directly avoids recursing through get_version(), which would
-    # re-enter `import nccl.ep` while this module is mid-init.
+
+def get_lib_version() -> _Version:
+    """Release version of the loaded ``libnccl_ep.so`` (e.g. ``0.1.0``)."""
+    return _decode_version(_ep_bindings.get_version())
+
+
+def get_lib_path() -> _Path | None:
+    """Path of the loaded ``libnccl_ep.so``, or None if it cannot be determined."""
+    raw = _ep_bindings.get_library_path()
+    return _Path(raw) if raw else None
+
+
+def _check_cuda_consistency() -> None:
+    """Raise ImportError (nccl.ep not functional) if libnccl.so and
+    libnccl_ep.so were built against different CUDA majors."""
+    import mmap
+    import re
+
+    from nccl.bindings import nccl as _nccl_bindings
+
+    def cuda_variant(path, pattern):
+        """``+cudaA.B`` from a .so's embedded version banner, or None."""
+        if path is None:
+            return None
+        try:
+            with open(path, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+                m = pattern.search(mm)
+                if m is not None:
+                    return _Version(f"{int(m.group(1))}.{int(m.group(2))}")
+        except OSError:
+            pass
+        return None
+
+    # Resolving the paths dlopens both libraries; a dlopen RuntimeError (e.g.
+    # libnccl_ep.so absent on a CUDA-12 host) becomes ImportError so callers
+    # can `try/except ImportError`.
     try:
-        _ep_bindings.get_version()
-        _nccl_bindings.get_version()
+        nccl_path = _nccl_bindings.get_library_path()
+        ep_path = _ep_bindings.get_library_path()
     except RuntimeError as e:
         raise ImportError(str(e)) from e
 
-    nccl_path = _resolve_so_path("libnccl.so")
-    ep_path = _resolve_so_path("libnccl_ep.so")
-    nccl_cuda = _extract_cuda_variant(nccl_path, _NCCL_BANNER)
-    ep_cuda = _extract_cuda_variant(ep_path, _NCCL_EP_BANNER)
+    nccl_cuda = cuda_variant(nccl_path, re.compile(rb"NCCL version [^\+\s\x00]+\+cuda(\d+)\.(\d+)"))
+    ep_cuda = cuda_variant(ep_path, re.compile(rb"NCCL EP version [^\+\s\x00]+\+cuda(\d+)\.(\d+)"))
     if nccl_cuda is None or ep_cuda is None:
         return
 
     if nccl_cuda.major != ep_cuda.major:
         raise ImportError(
-            "CUDA major-version mismatch between NCCL libraries:\n"
+            "nccl.ep is not functional: CUDA major-version mismatch between "
+            "NCCL libraries:\n"
             f"  libnccl.so     +cuda{nccl_cuda}  ({nccl_path})\n"
             f"  libnccl_ep.so  +cuda{ep_cuda}  ({ep_path})\n"
             "Both libraries must be built with the same CUDA major. "

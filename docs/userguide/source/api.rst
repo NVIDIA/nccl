@@ -17,3 +17,4 @@ The following sections describe the NCCL methods and operations.
    api/ops
    api/flags
    api/device
+   api/param

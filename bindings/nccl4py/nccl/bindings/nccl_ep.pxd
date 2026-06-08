@@ -49,3 +49,4 @@ cpdef update_handle(intptr_t handle, intptr_t topk_idx, intptr_t layout_info, in
 cpdef dispatch(intptr_t handle, intptr_t inputs, intptr_t outputs, intptr_t layout_info, intptr_t config, intptr_t stream)
 cpdef combine(intptr_t handle, intptr_t inputs, intptr_t outputs, intptr_t config, intptr_t stream)
 cpdef complete(intptr_t handle, intptr_t config, intptr_t stream)
+cpdef object get_library_path()

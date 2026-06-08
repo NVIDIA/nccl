@@ -104,16 +104,6 @@ set_target_properties(nccl_ep_shared PROPERTIES
     INSTALL_RPATH ""
 )
 
-set(NCCL_EP_INCLUDE_DIRS
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/device
-    ${NCCL_INCDIR}
-    ${NCCL_INCDIR}/nccl_device
-    ${CUDAToolkit_INCLUDE_DIRS}
-    ${CUDAToolkit_INCLUDE_DIRS}/cccl
-)
-
 set(NCCL_EP_JIT_SOURCE_DIR "${NCCL_EP_INCDIR}/nccl_ep")
 set(NCCL_EP_JIT_BUILD_INCLUDE_DIR "${NCCL_EP_INCDIR}")
 set(NCCL_EP_JIT_CUDA_INCLUDE_DIR "")
@@ -144,6 +134,18 @@ foreach(header IN LISTS NCCL_EP_JIT_HEADERS)
     configure_file("${CMAKE_CURRENT_SOURCE_DIR}/${header}" "${NCCL_EP_JIT_SOURCE_DIR}/${header}" COPYONLY)
 endforeach()
 configure_file(include/common.hpp "${NCCL_EP_JIT_SOURCE_DIR}/common.hpp" COPYONLY)
+configure_file(include/ep_enums.h "${NCCL_EP_JIT_SOURCE_DIR}/ep_enums.h" COPYONLY)
+
+set(NCCL_EP_INCLUDE_DIRS
+    ${NCCL_EP_INCDIR}
+    ${NCCL_EP_JIT_SOURCE_DIR}
+    ${NCCL_INCDIR}
+    ${NCCL_INCDIR}/nccl_device
+    ${CUDAToolkit_INCLUDE_DIRS}
+    ${CUDAToolkit_INCLUDE_DIRS}/cccl
+)
+# In-tree sources (nccl_ep.cc, device/jit/*.hpp included from device/*.cu)
+set(NCCL_EP_SOURCE_INCDIR ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Allow device code to call host constexpr with --expt-relaxed-constexpr
 # Hides all symbols by default in the host compiled object files with -fvisibility=hidden
@@ -160,30 +162,30 @@ foreach(t IN LISTS NCCL_EP_TARGETS)
         target_link_libraries(${t} PUBLIC cuda)
     endif()
     target_include_directories(${t} PUBLIC ${NCCL_EP_INCLUDE_DIRS})
+    target_include_directories(${t} PRIVATE ${NCCL_EP_SOURCE_INCDIR})
     target_link_directories(${t} PUBLIC ${NCCL_LIBDIR})
     target_link_libraries(${t} PUBLIC -lnccl)
     target_link_libraries(${t} PUBLIC ${CUDAToolkit_LIBRARIES})
 endforeach()
 
-# Copy headers to NCCL_EP_BUILDDIR/include (runs at configure)
+# Copy public API header to NCCL_EP_BUILDDIR/include (runs at configure)
 file(MAKE_DIRECTORY "${NCCL_EP_INCDIR}")
-configure_file(include/nccl_ep.h    "${NCCL_EP_INCDIR}/nccl_ep.h"    COPYONLY)
-configure_file(include/ep_enums.h   "${NCCL_EP_INCDIR}/ep_enums.h"   COPYONLY)
+configure_file(include/nccl_ep.h "${NCCL_EP_INCDIR}/nccl_ep.h" COPYONLY)
 
 # Install to NCCL_EP_BUILDDIR.
 install(FILES
     include/nccl_ep.h
-    include/ep_enums.h
     DESTINATION "${NCCL_EP_INCDIR}"
 )
-
 foreach(header IN LISTS NCCL_EP_JIT_HEADERS)
     get_filename_component(header_dir "${header}" DIRECTORY)
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/${header}"
         DESTINATION "${NCCL_EP_INCDIR}/nccl_ep/${header_dir}"
     )
 endforeach()
-install(FILES include/common.hpp
+install(FILES
+    include/common.hpp
+    include/ep_enums.h
     DESTINATION "${NCCL_EP_INCDIR}/nccl_ep"
 )
 

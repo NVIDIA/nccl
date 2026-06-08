@@ -36,6 +36,7 @@ GIN has the following requirements:
 * GPU Direct RDMA: GIN host proxy requires DMA-BUF or nvidia-peermem support. GIN GDAKI requires DMA-BUF with kernel version >= 6.1 or nvidia-peermem support
 * Network topology: Requires full NIC connectivity. Does not support topologies where NICs cannot communicate across rails. Also does not support ``NCCL_CROSS_NIC=0``.
 * Fused NICs are not supported. To use GIN on dual-port NICs, set ``NCCL_IB_MERGE_NICS=0``
+* Using GIN for buffers that are backed by multiple cuMem segments requires DMA-BUF
 
 When using host-backed buffers, the following additional limitations apply:
 
@@ -217,8 +218,8 @@ NCCL provides three predefined ones:
 
  * ``ncclTeamWorld()`` -- the "world" team, encompassing all the ranks of a given communicator.
  * ``ncclTeamLsa()`` -- all the peers accessible from the local rank using load/store operations.
- * ``ncclTeamRail()`` -- the set of peers directly accessible from the local rank over the network, assuming that the
-   network fabric is rail-optimized (see :ref:`env_NCCL_CROSS_NIC`).
+ * ``ncclTeamRail()`` -- the set of peers that have the same rank number within their LSA team (a rail team is
+   orthogonal to an LSA team).
 
 The ``ncclTeam`` structure contains fairly self-explanatory elements ``nRanks``, ``rank``, and ``stride``. The device
 API contains functions to verify team membership, convert rank numbers between teams, etc. The world and LSA teams are
@@ -231,15 +232,12 @@ ranks *n* of all remote LSA teams).
 Segment Types
 -------------
 
-The ``SegmentType`` template parameter of :cpp:func:`ncclGin::put` describes the physical memory composition
+The ``SegmentType`` template parameter of :cpp:func:`ncclGin::put` and :cpp:func:`ncclGin::get` describes the physical memory composition
 of the source and destination virtual addresses.  Three tag types are defined:
 
 * ``ncclGin_SegmentDevice`` (default) — the virtual addresses only contain cuMem segments of type ``CU_MEM_LOCATION_TYPE_DEVICE``.
 * ``ncclGin_SegmentHostNuma`` — the virtual addresses only contain cuMem segments of type ``CU_MEM_LOCATION_TYPE_HOST_NUMA``.
 * ``ncclGin_SegmentMixed`` — the virtual addresses contain a mix of ``CU_MEM_LOCATION_TYPE_DEVICE`` and ``CU_MEM_LOCATION_TYPE_HOST_NUMA`` segments.
-
-``ncclGin_SegmentHostNuma`` and ``ncclGin_SegmentMixed`` must be specified explicitly when the buffers contain
-host-backed memory; the default ``ncclGin_SegmentDevice`` is only valid for device-only memory.
 
 Host-Accessible Device Pointer Functions
 ----------------------------------------

@@ -58,13 +58,20 @@ NCCL_EP_JIT_HEADERS := \
     device/cuda_compat_shims.cuh \
     device/scan_kernel.cuh \
     device/macros.cuh
-NCCL_EP_JIT_COMMON_HEADER := $(JIT_DIR)/common.hpp
-NCCL_EP_JIT_HEADER_TARGETS := $(NCCL_EP_JIT_HEADERS:%=$(JIT_DIR)/%) $(NCCL_EP_JIT_COMMON_HEADER)
+NCCL_EP_JIT_STAGED_HEADERS := include/common.hpp include/ep_enums.h
+NCCL_EP_JIT_STAGED_TARGETS := $(NCCL_EP_JIT_STAGED_HEADERS:include/%=$(JIT_DIR)/%)
+NCCL_EP_JIT_HEADER_TARGETS := $(NCCL_EP_JIT_HEADERS:%=$(JIT_DIR)/%) $(NCCL_EP_JIT_STAGED_TARGETS)
 NCCL_EP_JIT_DEFS := -include $(abspath $(JIT_CONFIG_HEADER))
 
-# Include paths - add current directory so common.hpp can find device/ep headers
-# Include NCCL headers from NCCL_HOME for GIN support
-INCFLAGS = -I. -I./include -I./device -I$(NCCL_INCDIR) -I$(NCCL_INCDIR)/nccl_device
+# Include paths:
+#   $(INCDIR)  — public API (nccl_ep.h)
+#   $(JIT_DIR) — staged kernel headers for build + runtime JIT (device/*.cuh, common.hpp, ep_enums.h)
+#   .          — in-tree sources with repo-root includes (device/jit/*.hpp, nccl_ep.cc)
+# Do not add -I./device for NVCC: it duplicates staged device/*.cuh (same file, two paths).
+NCCL_EP_BASE_INCFLAGS = -I$(INCDIR) -I$(JIT_DIR) -I$(NCCL_INCDIR) -I$(NCCL_INCDIR)/nccl_device
+INCFLAGS = $(NCCL_EP_BASE_INCFLAGS) -I. -I./device
+# Device .cu: staged kernels + in-tree JIT host headers; non-staged .cuh via the .cu file's directory
+NCCL_EP_DEVICE_INCFLAGS = $(NCCL_EP_BASE_INCFLAGS) -I.
 
 # GIN (Global Input Network) support - adds multinode RDMA capabilities
 
@@ -73,7 +80,7 @@ INCFLAGS = -I. -I./include -I./device -I$(NCCL_INCDIR) -I$(NCCL_INCDIR)/nccl_dev
 # Add --expt-relaxed-constexpr for std::max, std::min, etc. in device code
 # CUDA code MUST use -fvisibility=hidden for kernel registration to work correctly.
 # The ncclEp* API is in nccl_ep.cc (compiled with CXXFLAGS), so it still gets exported.
-NVCUFLAGS := $(NVCC_GENCODE) --extended-lambda $(INCFLAGS) --expt-relaxed-constexpr --compiler-options "-fPIC -fvisibility=hidden" -ccbin $(CXX) $(CXXSTD)
+NVCUFLAGS := $(NVCC_GENCODE) --extended-lambda $(NCCL_EP_DEVICE_INCFLAGS) --expt-relaxed-constexpr --compiler-options "-fPIC -fvisibility=hidden" -ccbin $(CXX) $(CXXSTD)
 CXXFLAGS += $(INCFLAGS) $(NCCL_EP_JIT_DEFS) -I$(CUDA_INC) -I$(CUDA_INC)/cccl -fPIC -fvisibility=default
 
 # Optional warp-level timing instrumentation (adds cudaMalloc + cudaMemcpy per kernel launch).
@@ -126,22 +133,21 @@ SOLIBTARGET  := $(LIBDIR)/$(SOLIBVERSION)
 SOLIBLINKS   := $(LIBDIR)/$(SOLIBSONAME) $(LIBDIR)/$(SOLIBNAME)
 
 # Header installation
-HEADERS := include/nccl_ep.h include/ep_enums.h
+HEADERS := include/nccl_ep.h
 HEADER_TARGETS := $(HEADERS:include/%=$(INCDIR)/%)
-
 # Build targets
 all: lib ep_test ep_bench
 
 lib: $(LIBTARGET) $(SOLIBTARGET) $(SOLIBLINKS) $(HEADER_TARGETS) $(NCCL_EP_JIT_HEADER_TARGETS)
 
 # Compile host code
-$(OBJDIR)/%.o: %.cc $(JIT_CONFIG_HEADER)
+$(OBJDIR)/%.o: %.cc $(JIT_CONFIG_HEADER) $(HEADER_TARGETS) $(NCCL_EP_JIT_HEADER_TARGETS)
 	@echo "Compiling $<"
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
 # Compile device code (with automatic header dependency generation)
-$(OBJDIR)/%.o: %.cu
+$(OBJDIR)/%.o: %.cu $(JIT_CONFIG_HEADER) $(HEADER_TARGETS) $(NCCL_EP_JIT_HEADER_TARGETS)
 	@echo "Compiling $<"
 	@mkdir -p $(dir $@)
 	$(NVCC) $(NVCUFLAGS) $(DEPFLAGS) -dc $< -o $@
@@ -175,13 +181,8 @@ $(LIBDIR)/$(SOLIBSONAME): $(SOLIBTARGET)
 $(LIBDIR)/$(SOLIBNAME): $(LIBDIR)/$(SOLIBSONAME)
 	@ln -sf $(SOLIBSONAME) $@
 
-# Install headers
-$(INCDIR)/%.h: include/%.h
-	@echo "Installing $<"
-	@mkdir -p $(dir $@)
-	cp $< $@
-
-$(INCDIR)/%.hpp: include/%.hpp
+# Install public API header (ep_enums.h is staged under include/nccl_ep/ only)
+$(INCDIR)/nccl_ep.h: include/nccl_ep.h
 	@echo "Installing $<"
 	@mkdir -p $(dir $@)
 	cp $< $@
@@ -194,7 +195,8 @@ $(JIT_CONFIG_HEADER):
 	@printf '#define NCCL_EP_JIT_BUILD_INCLUDE_DIR "%s"\n' "$(abspath $(INCDIR))" >> $@
 	@printf '#define NCCL_EP_JIT_CUDA_INCLUDE_DIR "%s"\n' "$(abspath $(CUDA_INC))" >> $@
 
-$(JIT_DIR)/common.hpp: include/common.hpp
+# Staged top-level headers (common.hpp, ep_enums.h) from include/
+$(JIT_DIR)/%: include/%
 	@echo "Installing JIT header $<"
 	@mkdir -p $(dir $@)
 	cp $< $@

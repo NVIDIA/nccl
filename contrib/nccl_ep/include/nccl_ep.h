@@ -19,8 +19,8 @@ extern "C" {
 // shared library's VERSION/SOVERSION (libnccl_ep.so.MAJOR.MINOR.PATCH with
 // a libnccl_ep.so.MAJOR soname symlink).
 #define NCCL_EP_MAJOR 0
-#define NCCL_EP_MINOR 0
-#define NCCL_EP_PATCH 1
+#define NCCL_EP_MINOR 1
+#define NCCL_EP_PATCH 0
 
 // Packed version code: MAJOR*10000 + MINOR*100 + PATCH. Mirrors NCCL_VERSION_CODE.
 #define NCCL_EP_VERSION_CODE (NCCL_EP_MAJOR * 10000 + NCCL_EP_MINOR * 100 + NCCL_EP_PATCH)

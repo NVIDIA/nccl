@@ -17,6 +17,7 @@
 #include "register_inline.h"
 #include "ce_coll.h"
 #include "nvtx.h"
+#include "nvtx_payload_schemas.h"
 #include "scheduler.h"
 #include "compiler.h"
 #include "rma/rma.h"
@@ -25,10 +26,66 @@
 #include <cinttypes> // PRIx64
 #include <cassert>
 #include <cfloat> // FLT_MAX
+#include <type_traits> // std::extent
 
 NCCL_PARAM(L1SharedMemoryCarveout, "L1_SHARED_MEMORY_CARVEOUT", 0);
 NCCL_PARAM(AllgathervEnable, "ALLGATHERV_ENABLE", 1);
 NCCL_PARAM(SymCeThreshold, "SYM_CE_THRESHOLD", 8 * 1024 * 1024);
+
+static const char* ncclNvtxProtoRangeName(int proto) {
+  switch (proto) {
+  case NCCL_PROTO_LL: return "NCCL Kernel Task Proto LL";
+  case NCCL_PROTO_LL128: return "NCCL Kernel Task Proto LL128";
+  case NCCL_PROTO_SIMPLE: return "NCCL Kernel Task Proto Simple";
+  default: return "NCCL Kernel Task Proto Unknown";
+  }
+}
+
+static int ncclNvtxPushKernelTaskProtoRanges(struct ncclComm* comm, struct ncclKernelPlan* plan) {
+  if (ncclParamNvtxDisable()) return 0;
+
+  constexpr uint64_t schemaId =
+      NVTX_PAYLOAD_ENTRY_TYPE_SCHEMA_ID_STATIC_START + NVTX_SID_KernelTask;
+  static const payload_schema schema{
+    NcclNvtxParamsKernelTaskSchema,
+    std::extent<decltype(NcclNvtxParamsKernelTaskSchema)>::value - 1,
+    schemaId,
+    sizeof(NcclNvtxParamsKernelTask)
+  };
+
+  int ranges = 0;
+  struct ncclTaskColl* task = ncclIntruQueueHead(&plan->collTaskQueue);
+  while (task != nullptr) {
+    const NcclNvtxParamsKernelTask payload = {
+      comm->commHash,
+      comm->rank,
+      task->count * ncclTypeSize(task->datatype),
+      task->func,
+      task->algorithm,
+      task->protocol,
+      task->datatype,
+      task->root,
+      task->nChannels
+    };
+    nvtxPayloadData_t payloadData = {};
+    nvtxEventAttributes_t attr = {};
+    attr.version = NVTX_VERSION;
+    attr.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
+    attr.messageType = NVTX_MESSAGE_TYPE_ASCII;
+    attr.message.ascii = ncclNvtxProtoRangeName(task->protocol);
+    NVTX_PAYLOAD_EVTATTR_SET_DATA(attr, &payloadData, schemaId, &payload, sizeof(payload));
+    nvtxDomainRangePushEx(nvtx3::domain::get<nccl_domain>(), &attr);
+    ranges++;
+    task = task->next;
+  }
+  return ranges;
+}
+
+static void ncclNvtxPopKernelTaskProtoRanges(int ranges) {
+  while (ranges-- > 0) {
+    nvtxDomainRangePop(nvtx3::domain::get<nccl_domain>());
+  }
+}
 
 // Returns maximum kernel stack size of all CUDA kernels
 ncclResult_t ncclInitKernelsForDevice(int cudaArch, int maxSharedMem, size_t* maxStackSize) {
@@ -1697,6 +1754,7 @@ ncclResult_t ncclLaunchPrepare(struct ncclComm* comm) {
       }
     }
 
+  int nvtxTaskProtoRanges = ncclNvtxPushKernelTaskProtoRanges(comm, plan);
     if (!persistent && comm->sharedRes->persistentRefs) {
       status = CUDACLEARERROR(cudaEventQuery(comm->sharedRes->hostStream.serialEvent));
     }
@@ -1846,6 +1904,7 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
   }
 
 do_return:
+  ncclNvtxPopKernelTaskProtoRanges(nvtxTaskProtoRanges);
   NCCLCHECK(ncclProfilerStopKernelLaunchEvent(plan));
   return ret;
 }

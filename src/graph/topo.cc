@@ -747,7 +747,9 @@ ncclResult_t ncclTopoAddCpu(struct ncclXmlNode* xmlCpu, struct ncclTopoSystem* s
       int familyId, modelId;
       NCCLCHECK(xmlGetAttrInt(xmlCpu, "familyid", &familyId));
       NCCLCHECK(xmlGetAttrInt(xmlCpu, "modelid", &modelId));
-      cpu->cpu.model = (familyId == 6 && modelId >= 0xCF) ? NCCL_TOPO_CPU_MODEL_INTEL_ERP :
+      // Granite Rapids (0xAD/0xAE) and Sierra Forest (0xAF) are newer than Emerald Rapids but carry LOWER model IDs
+      cpu->cpu.model = (familyId == 6 && (modelId >= 0xCF || modelId == 0xAD || modelId == 0xAE || modelId == 0xAF)) ?
+                         NCCL_TOPO_CPU_MODEL_INTEL_ERP :
                        (familyId == 6 && modelId >= 0x8F) ? NCCL_TOPO_CPU_MODEL_INTEL_SRP :
                        (familyId == 6 && modelId >= 0x55) ? NCCL_TOPO_CPU_MODEL_INTEL_SKL :
                                                             NCCL_TOPO_CPU_MODEL_INTEL_BDW;
@@ -762,7 +764,7 @@ ncclResult_t ncclTopoAddCpu(struct ncclXmlNode* xmlCpu, struct ncclTopoSystem* s
         (familyId == 0xBF) ? NCCL_TOPO_CPU_MODEL_AMD_ZEN5 :
         (familyId == 0xAF) ? NCCL_TOPO_CPU_MODEL_AMD_ZEN34 :
         (familyId == 0x8F) ? NCCL_TOPO_CPU_MODEL_AMD_ZEN12 :
-        // CPUID Family
+                             // CPUID Family
           (familyId == 26) ? NCCL_TOPO_CPU_MODEL_AMD_ZEN5 :
         (familyId == 25)   ? NCCL_TOPO_CPU_MODEL_AMD_ZEN34 :
                              NCCL_TOPO_CPU_MODEL_AMD_ZEN12;

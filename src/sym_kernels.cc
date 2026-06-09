@@ -12,6 +12,7 @@
 #include "transport.h"
 #include <cmath>
 #include <cfloat>
+#include <climits>
 
 constexpr char const* kernelName[] = {
   // Must align with enum ncclSymkKernelId definition in src/include/sym_kernels.h
@@ -132,6 +133,14 @@ NCCL_PARAM(SymCTAs, "SYM_CTAS", 0)
 NCCL_PARAM(SymGinKernelsEnable, "SYM_GIN_KERNELS_ENABLE", 1)
 NCCL_PARAM(SymRsGinChunkSize, "SYM_RS_GIN_CHUNK_SIZE", -1)
 NCCL_PARAM(SymTmaEnable, "SYM_TMA_ENABLE", 0)
+NCCL_PARAM(SymAllGatherRailRingChunkSize, "SYM_ALLGATHER_RAIL_RING_CHUNKSIZE", ncclSymkAllGather_RailRing_ChunkSize)
+
+int ncclSymkAllGatherRailRingChunkSize() {
+  int64_t v = ncclParamSymAllGatherRailRingChunkSize();
+  if (v <= 0) return ncclSymkAllGather_RailRing_ChunkSize;
+  if (v > INT_MAX) return INT_MAX;
+  return (int)v;
+}
 
 static constexpr size_t ncclSymkRsGinDefaultChunkBytes = 128 << 10;
 static constexpr size_t ncclSymkRsGinMinChunkBytes = 128;

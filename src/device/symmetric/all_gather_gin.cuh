@@ -15,7 +15,8 @@ __device__ __forceinline__ void ncclSymkRun_AllGather_RailRing_LsaSTMC(struct nc
   ncclSymkArgsHandler handler(args);
   ncclTeam rail = ncclTeamRail(handler.comm);
   ncclGin gin(handler.comm, (int)(blockIdx.x % handler.comm.ginContextCount));
-  constexpr int chunkSize = ncclSymkAllGather_RailRing_ChunkSize;
+  size_t chunkSize = args->allGatherRailRingChunkSize > 0 ?
+    size_t(args->allGatherRailRingChunkSize) : size_t(ncclSymkAllGather_RailRing_ChunkSize);
   ncclGinSignal_t railSignals = handler.ginSyncHandle.railSignals + blockIdx.x * rail.nRanks;
   ncclBarrierSession<ncclCoopCta> bar(cta, ncclTeamTagWorld(), gin, blockIdx.x, /*multimem=*/true);
   int nextPeer = (rail.rank + 1) % rail.nRanks;

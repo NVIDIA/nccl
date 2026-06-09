@@ -163,12 +163,14 @@ out:
 }
 
 ncclResult_t ncclGinIbP2PBarrier(struct ncclGinIbCollComm* cComm) {
+  ncclResult_t ret = ncclSuccess;
   // TODO: move allocation to init or use zero-byte allgather
-  int* dummy;
-  NCCLCHECK(ncclIbMalloc((void**)&dummy, cComm->nranks * sizeof(int)));
-  NCCLCHECK(ncclGinIbAllGather(cComm, dummy + cComm->rank, dummy, sizeof(int)));
-  free(dummy);
-  return ncclSuccess;
+  int* dummy = nullptr;
+  NCCLCHECKGOTO(ncclIbMalloc((void**)&dummy, cComm->nranks * sizeof(int)), ret, out);
+  NCCLCHECKGOTO(ncclGinIbAllGather(cComm, dummy + cComm->rank, dummy, sizeof(int)), ret, out);
+out:
+  if (dummy) free(dummy);
+  return ret;
 }
 
 ncclResult_t ncclGinIbConnect(void* ctx, void* handles[], int nranks, int rank, void* listenComm, void** collComm) {

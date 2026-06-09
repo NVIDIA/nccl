@@ -1607,9 +1607,9 @@ ncclResult_t ncclTopoMakeVNics(struct ncclXml* xml, struct ncclTopoNetInfo* netI
   ncclResult_t res = ncclSuccess;
   if (physicalDevs == 0) return ncclSuccess;
 
-  NCCLCHECK(ncclCalloc(&physNetNodes, physicalDevs));
-  NCCLCHECK(ncclCalloc(&placedDevs, physicalDevs));
-  NCCLCHECK(ncclCalloc(&props, physicalDevs));
+  NCCLCHECKGOTO(ncclCalloc(&physNetNodes, physicalDevs), res, out);
+  NCCLCHECKGOTO(ncclCalloc(&placedDevs, physicalDevs), res, out);
+  NCCLCHECKGOTO(ncclCalloc(&props, physicalDevs), res, out);
   for (int i = 0; i < physicalDevs; i++) {
     NCCLCHECKGOTO(netInfo->getProperties(i, props + i), res, out);
     struct ncclXmlNode* physNetNode;

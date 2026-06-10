@@ -389,6 +389,8 @@ struct ncclEpGroup {
     int max_recv_tokens;      // Resolved per-rank IPC slot budget (= config.max_recv_tokens_per_rank).
     unsigned int device_sm_count; // Number of SMs on the device
     unsigned int max_num_sms; // Resolved SM count for EP kernels (from config.max_num_sms)
+    bool ht_em_nvlink_dedup;     // HT EM NVLink-dedup opt-in (enables local_dup/local_reduce kernels).
+    unsigned int prolog_epilog_sms; // Resolved SM count for the prolog/epilog kernels (local_dup, local_reduce).
 
     ncclEpAllocConfig_t alloc;
 
@@ -499,6 +501,8 @@ struct ncclEpGroup {
         max_recv_tokens(0),
         device_sm_count(0),
         max_num_sms(0),
+        ht_em_nvlink_dedup(false),
+        prolog_epilog_sms(0),
         alloc{},
         gpus_per_node(0),
         rank_in_node(0),
@@ -1275,6 +1279,25 @@ ncclResult_t ncclEpCreateGroup(
     // (e.g. the qps_per_rank validation in init_hybridep_internode) see the real count, not NCCL_EP_AUTO.
     ep_group->config.max_num_sms = ep_group->max_num_sms;
 
+    // HT EM NVLink dedup opt-in (default off) and SM count for the prolog/epilog kernels.
+    // NCCL_EP_PROLOG_EPILOG_SMS: 0/unset => all device SMs.
+    ep_group->ht_em_nvlink_dedup = false;
+    if (const char* env = std::getenv("NCCL_EP_HT_EM_NVLINK_DEDUP")) {
+        if (std::atol(env) != 0) ep_group->ht_em_nvlink_dedup = true;
+    }
+    ep_group->prolog_epilog_sms = ep_group->device_sm_count;
+    if (const char* env = std::getenv("NCCL_EP_PROLOG_EPILOG_SMS")) {
+        const long v = std::atol(env);
+        if (v > 0 && v <= static_cast<long>(ep_group->device_sm_count)) {
+            ep_group->prolog_epilog_sms = static_cast<unsigned int>(v);
+        } else if (v != 0) {
+            fprintf(stderr,
+                    "Warning: NCCL_EP_PROLOG_EPILOG_SMS=%s out of range "
+                    "(expected 0..%u); keeping prolog_epilog_sms=%u\n",
+                    env, ep_group->device_sm_count, ep_group->prolog_epilog_sms);
+        }
+    }
+
     // Determine number of nodes by gathering hostnames and counting unique ones
     constexpr size_t HOSTNAME_LEN = 256;
     std::vector<char> all_hostnames(HOSTNAME_LEN * ep_group->nRanks, 0);
@@ -1736,6 +1759,13 @@ struct ncclEpHandle {
             int64_t*                  expert_token_offsets;       // [experts_per_rank] written by remap kernel
             int32_t*                  per_expert_counts_active;   // alias to authoritative counts buffer
 
+            // EM local-fanout dup-groups (allocated iff ht_em_nvlink_dedup). Written by EM
+            // scan; consumed by local_dup (post-dispatch) and local_reduce (pre-combine).
+            int32_t*                  emuf_group_buf;
+            int32_t*                  emuf_group_count;
+            int                       emuf_group_stride;
+            int                       emuf_max_groups;
+
             // Cached user topk_idx; persists across dispatch/combine.
             int64_t*                  topk_idx;
 
@@ -1788,6 +1818,9 @@ struct HtBlockLayout {
     size_t sz_topk_idx;       // cached topk_idx
     size_t sz_pec_active;     // EM only
     size_t sz_eto;            // EM only
+    size_t sz_emuf_group_buf, sz_emuf_group_count;
+    int    emuf_group_stride;   // row width actually allocated; <= experts_per_rank
+    int    emuf_max_groups;     // capacity in rows; kernel must not exceed
     size_t zero_region, no_memset_region, total;
 
     static HtBlockLayout compute(ncclEpGroup_t ep_group, ncclEpLayout_t layout, int num_topk = 0) {
@@ -1817,9 +1850,23 @@ struct HtBlockLayout {
             ? align256(static_cast<size_t>(max_tokens) * num_topk * sizeof(int64_t)) : 0;
         L.sz_pec_active = has_expert_major ? align256(static_cast<size_t>(experts_per_rank) * sizeof(int32_t)) : 0;
         L.sz_eto        = has_expert_major ? align256(static_cast<size_t>(experts_per_rank) * sizeof(int64_t)) : 0;
+        // EM local-fanout dup-groups. Bounds: num_groups <= max_recv_tokens / 2
+        // (each multi-hit group occupies >= 2 em_slots); row width <= min(num_topk, experts_per_rank).
+        const bool emuf_enabled = has_expert_major && ep_group->ht_em_nvlink_dedup;
+        const int emuf_row_width = (num_topk > 0)
+            ? std::min(num_topk, experts_per_rank) : experts_per_rank;
+        const size_t emuf_max_groups = static_cast<size_t>(ep_group->max_recv_tokens) / 2;
+        const size_t emuf_group_entries = emuf_enabled
+            ? emuf_max_groups * static_cast<size_t>(emuf_row_width)
+            : 0;
+        L.emuf_group_stride   = emuf_enabled ? emuf_row_width : 0;
+        L.emuf_max_groups     = emuf_enabled ? static_cast<int>(emuf_max_groups) : 0;
+        L.sz_emuf_group_buf   = align256(emuf_group_entries * sizeof(int32_t));
+        L.sz_emuf_group_count = emuf_enabled ? align256(sizeof(int32_t)) : 0;
         L.zero_region      = L.sz_r2a + L.sz_a2r + L.sz_ler + L.sz_ntfe;
         L.no_memset_region = L.sz_rank_mask + L.sz_scan_tmp + L.sz_prob + L.sz_topk_idx
-                           + L.sz_pec_active + L.sz_eto;
+                           + L.sz_pec_active + L.sz_eto
+                           + L.sz_emuf_group_buf + L.sz_emuf_group_count;
         L.total = L.zero_region + L.sz_s2d + L.no_memset_region;
         return L;
     }
@@ -1957,6 +2004,17 @@ static ncclResult_t ht_init_handle(ncclEpHandle_t handle, ncclEpGroup_t ep_group
     handle->hybridep.expert_token_offsets      = (L.sz_eto > 0)
         ? reinterpret_cast<int64_t*>(ptr + offset) : nullptr;
     offset += L.sz_eto;
+    if (L.sz_emuf_group_buf > 0) {
+        handle->hybridep.emuf_group_buf    = reinterpret_cast<int32_t*>(ptr + offset); offset += L.sz_emuf_group_buf;
+        handle->hybridep.emuf_group_count  = reinterpret_cast<int32_t*>(ptr + offset); offset += L.sz_emuf_group_count;
+        handle->hybridep.emuf_group_stride = L.emuf_group_stride;
+        handle->hybridep.emuf_max_groups   = L.emuf_max_groups;
+    } else {
+        handle->hybridep.emuf_group_buf    = nullptr;
+        handle->hybridep.emuf_group_count  = nullptr;
+        handle->hybridep.emuf_group_stride = 0;
+        handle->hybridep.emuf_max_groups   = 0;
+    }
     handle->hybridep.dispatch_output_per_expert_alignment = 0;
 
     if (is_internode_available(ep_group)) {
@@ -2182,6 +2240,11 @@ ncclResult_t ncclEpUpdateHandle(
         }
     }
 
+    // Zero the EM-unfused dup-group counter before scan (when allocated).
+    if (handle->hybridep.emuf_group_count != nullptr) {
+        CUDA_CHECK(cudaMemsetAsync(handle->hybridep.emuf_group_count, 0, sizeof(int32_t), stream));
+    }
+
     nccl_ep::hybridep::call_metadata_preprocessing(
         global_routing_map,
         handle->hybridep.sparse_to_dense_map,
@@ -2211,6 +2274,10 @@ ncclResult_t ncclEpUpdateHandle(
         recv_total_counter,
         out_is_int64,
         static_cast<int>(ep_group->config.max_recv_tokens_per_rank),
+        handle->hybridep.emuf_group_buf,
+        handle->hybridep.emuf_group_count,
+        handle->hybridep.emuf_group_stride,
+        handle->hybridep.emuf_max_groups,
         static_cast<int>(ep_group->max_num_sms),
         // EM cooperative scan scratch carved from ep_workspace.
         expert_major ? ep_group->ep_workspace : nullptr,
@@ -2541,6 +2608,10 @@ ncclResult_t ncclEpDispatch(
         if (use_fp8 && scales == nullptr) {
             return ncclInvalidArgument;
         }
+        // local_dup / local_reduce JIT hard-codes uint16_t token type; FP8 is unsupported.
+        if (use_fp8 && group->ht_em_nvlink_dedup) {
+            return ncclInvalidArgument;
+        }
         if (use_fp8) {
             NCCLCHECK(resolveTensorWindowBinding(
                 group, scales, &scales_local, static_cast<uint64_t>(group->gin_config.scaling_factor_staging_offset), &scales));
@@ -2736,6 +2807,11 @@ ncclResult_t ncclEpDispatch(
         params.local_rank = group->lsa_rank;
         params.node_rank = group->rdma_rank;
         params.num_tokens_per_rank = group->config.max_dispatch_tokens_per_rank;
+        // EM local-fanout: dispatch dedups S2G; receiver local_dup fills secondaries.
+        const bool em_unfused_active =
+            (handle->layout == NCCL_EP_LAYOUT_EXPERT_MAJOR) && group->ht_em_nvlink_dedup;
+        params.local_dup_num_sms = em_unfused_active
+                                   ? static_cast<int>(group->prolog_epilog_sms) : 0;
 
         // Call dispatch kernel
         nccl_ep::hybridep::call_dispatch(
@@ -2747,6 +2823,29 @@ ncclResult_t ncclEpDispatch(
             static_cast<int>(group->max_num_sms),
             stream
         );
+
+        // Fan primaries out to secondary em_slots in this rank's recv buffer.
+        if (em_unfused_active) {
+            nccl_ep::hybridep::call_local_dup(
+                /*expert_output_token=*/
+                group->ht_buffers.dispatch_expert_output_token_buffer_ptrs[group->lsa_rank],
+                /*expert_output_prob=*/
+                forward_dispatch
+                    ? group->ht_buffers.dispatch_expert_output_prob_buffer_ptrs[group->lsa_rank]
+                    : nullptr,
+                handle->hybridep.emuf_group_buf,
+                handle->hybridep.emuf_group_count,
+                handle->hybridep.emuf_group_stride,
+                group->ht_buffers.intra_node_write_completion_flags,
+                /*expected_intra_node_flag_value=*/params.expected_intra_node_flag_value,
+                /*grid_barrier_counter=*/params.dispatch_grid_barrier_counter,
+                params.hidden_dim,
+                params.experts_per_rank,
+                params.num_ranks_per_node,
+                forward_dispatch,
+                params.local_dup_num_sms,
+                stream);
+        }
 
         const unsigned int max_recv_tokens = static_cast<unsigned int>(handle->group->max_recv_tokens);
 
@@ -3281,6 +3380,29 @@ ncclResult_t ncclEpCombine(
         params.num_tokens_per_rank = group->config.max_dispatch_tokens_per_rank;
         params.num_real_tokens     = num_combined_tokens;
         params.num_recv_tokens = num_tokens;
+        params.combine_local_reduce_enabled =
+            (handle->layout == NCCL_EP_LAYOUT_EXPERT_MAJOR) && group->ht_em_nvlink_dedup;
+
+        // Pre-sum secondary em_slots into primaries before combine reads them.
+        if (params.combine_local_reduce_enabled) {
+            assert(handle->hybridep.emuf_group_buf != nullptr &&
+                   handle->hybridep.emuf_group_count != nullptr &&
+                   "unfused combine requires emuf dup-group buf from dispatch scan");
+            nccl_ep::hybridep::call_local_reduce(
+                /*expert_input_token=*/
+                params.expert_input_token_ptrs[group->lsa_rank],
+                /*expert_input_prob=*/
+                backward_combine ? params.expert_input_prob_ptrs[group->lsa_rank] : nullptr,
+                handle->hybridep.emuf_group_buf,
+                handle->hybridep.emuf_group_count,
+                handle->hybridep.emuf_group_stride,
+                params.hidden_dim,
+                params.experts_per_rank,
+                params.num_ranks_per_node,
+                backward_combine,
+                static_cast<int>(group->prolog_epilog_sms),
+                stream);
+        }
 
         /* ===== Call combine kernel ===== */
         nccl_ep::hybridep::call_combine(

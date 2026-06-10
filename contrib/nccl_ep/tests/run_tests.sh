@@ -91,4 +91,10 @@ run_suite "test_ht_bwd"        "EP HT Backward Tests"
 run_suite "test_tensor_create" "EP Tensor Create Tests"
 run_suite "test_zero_copy"     "EP Zero-Copy forced"
 
+# Re-run the EM output-layout suite with the receiver local_dup / local_reduce
+# code path enabled. Same correctness invariants must hold.
+NCCL_EP_HT_EM_NVLINK_DEDUP=1 run_suite "test_output_layout" "EP Output Layout (Local Fanout)"
+# Backward-combine path exercises the local_reduce prob-summation kernel.
+NCCL_EP_HT_EM_NVLINK_DEDUP=1 run_suite "test_ht_bwd"        "EP HT Backward (Local Fanout)"
+
 exit "${OVERALL_FAIL}"

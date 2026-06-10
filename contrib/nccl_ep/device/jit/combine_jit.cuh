@@ -282,6 +282,78 @@ inline void combine_dump_warp_timing(
 }
 #endif
 
+constexpr const char* kLocalReduceJitEntryName = "nccl_ep_jit_ht_local_reduce_kernel";
+
+constexpr int kLocalReduceBlockDim = 128;
+
+inline std::string local_reduce_jit_source(
+    int hidden_dim,
+    bool backward_combine) {
+    std::ostringstream src;
+    src
+        << "#include \"device/hybrid_ep.cuh\"\n"
+        << "\n"
+        << "using TOKEN_DATA_TYPE = uint16_t;\n"
+        << "\n"
+        << "extern \"C\" __launch_bounds__(" << kLocalReduceBlockDim << ", 1)\n"
+        << "__global__ void " << kLocalReduceJitEntryName << "(\n"
+        << "    const __grid_constant__ hybrid_ep::local_reduce_kernel_param_t<TOKEN_DATA_TYPE> p) {\n"
+        << "  hybrid_ep::local_reduce_kernel_impl<\n"
+        << "      TOKEN_DATA_TYPE,\n"
+        << "      " << hidden_dim << ",\n"
+        << "      " << kLocalReduceBlockDim << ",\n"
+        << "      " << bool_literal(backward_combine) << ">(p);\n"
+        << "}\n";
+    return src.str();
+}
+
+template<typename T>
+inline void launch_local_reduce(
+    int hidden_dim,
+    bool backward_combine,
+    int num_blocks,
+    ::hybrid_ep::local_reduce_kernel_param_t<T>& param,
+    cudaStream_t stream) {
+    static const int variant_identity = 0;
+    const std::string variant_name = [&] {
+        std::ostringstream name;
+        name
+            << "local_reduce"
+            << "_hdim" << hidden_dim
+            << (backward_combine ? "_bwd" : "_fwd");
+        return name.str();
+    }();
+    const std::string source = local_reduce_jit_source(hidden_dim, backward_combine);
+
+    ::nccl_ep::jit::JitKernelVariant variant;
+    variant.kernel_family = "ht_local_reduce";
+    variant.variant_name = variant_name;
+    variant.source = source;
+    variant.entry_name = kLocalReduceJitEntryName;
+    variant.identity = &variant_identity;
+    variant.runtime_key =
+        (static_cast<std::uint64_t>(hidden_dim) & 0xFFFFFFu) |
+        (static_cast<std::uint64_t>(backward_combine ? 1u : 0u) << 24);
+    variant.num_blocks = num_blocks;
+    variant.block_dim = kLocalReduceBlockDim;
+    variant.dynamic_smem_bytes = ::hybrid_ep::local_reduce_dynamic_smem_bytes(hidden_dim);
+
+    std::string error;
+    const ::nccl_ep::jit::JitKernelStatus status =
+        ::nccl_ep::jit::launch_jit_kernel(variant, &param, stream, &error);
+
+    if (status != ::nccl_ep::jit::JitKernelStatus::kLaunched) {
+        std::fprintf(
+            stderr,
+            "[nccl_ep jit] fatal local_reduce JIT launch failure for %s: %s%s%s\n",
+            variant_name.c_str(),
+            ::nccl_ep::jit::jit_kernel_status_name(status),
+            error.empty() ? "" : ": ",
+            error.empty() ? "" : error.c_str());
+        std::abort();
+    }
+}
+
 } // namespace jit
 } // namespace hybridep
 } // namespace nccl_ep

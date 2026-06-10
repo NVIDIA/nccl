@@ -160,6 +160,10 @@ void call_metadata_preprocessing(
     void*    recv_total_counter     = nullptr, // Optional scalar: total recv tokens (int32 or int64; nullable)
     bool     out_is_int64           = true,    // Shared dtype for the 3 int output tensors above
     int      max_recv_tokens_per_rank = 0, // HT recv-budget; __trap on overflow.
+    int32_t* emuf_group_buf         = nullptr, // Local-fanout dup-groups (nullable; EM only): [num_groups, group_stride]
+    int32_t* emuf_group_count       = nullptr, // Scalar group counter (zeroed by caller)
+    int      emuf_group_stride      = 0,       // Row width (= experts_per_rank)
+    int      emuf_max_groups        = 0,       // Row capacity; kernel __trap on overflow.
     int      num_blocks             = 16,      // Number of SMs for the kernel grid
     void*    scan_gscratch      = nullptr, // EM cooperative scan scratch (required when expert_major)
     cudaStream_t stream             = 0);
@@ -199,6 +203,10 @@ void launch_em_scan(
     int32_t* em_actual_counts_out,
     void*    recv_total_counter,
     bool     out_is_int64,
+    int32_t* emuf_group_buf,        // Local-fanout dup-groups (nullable): [num_groups, group_stride] = [primary, sec0, ..., -1]
+    int32_t* emuf_group_count,      // Scalar group counter
+    int      emuf_group_stride,     // Row width (= experts_per_rank)
+    int      emuf_max_groups,       // Row capacity; kernel __trap on overflow.
     int32_t* gscratch,
     int      num_sms,
     cudaStream_t stream);
@@ -293,6 +301,9 @@ struct DispatchParams {
     int local_rank;
     int node_rank;
     int num_tokens_per_rank;
+
+    // EM local-fanout: > 0 enables sender S2G dedup + a receiver local_dup kernel.
+    int local_dup_num_sms = 0;
 };
 
 // Call dispatch kernel with runtime template parameter resolution
@@ -365,6 +376,10 @@ struct CombineParams {
     int num_tokens_per_rank;    // Stride for map indexing (= max_tokens_per_rank)
     int num_real_tokens;        // Actual token count for output write gate
     int num_recv_tokens;        // Actual received tokens this rank
+
+    // EM unfused-combine: combine skips secondary em_slots; primaries hold the
+    // pre-reduced sum written by local_reduce.
+    bool combine_local_reduce_enabled = false;
 };
 
 // Call combine kernel with runtime template parameter resolution
@@ -377,6 +392,36 @@ void call_combine(
     int num_blocks,             // Number of SMs/blocks for the kernel grid
     cudaStream_t stream);
 
+// EM local-fanout: fill secondary em_slots from primaries after dispatch.
+void call_local_dup(
+    void*         expert_output_token,             // [recv_total, hidden]
+    float*        expert_output_prob,              // forward: [recv_total, epr * nranks_per_node]
+    const int32_t* emuf_group_buf,                 // device [num_groups, group_stride]
+    const int32_t* emuf_group_count,               // device scalar (read by kernel)
+    int           emuf_group_stride,
+    const uint32_t* intra_node_write_completion_flag,
+    uint32_t*       expected_intra_node_flag_value,
+    uint32_t*       grid_barrier_counter,
+    int           hidden_dim,
+    int           experts_per_rank,
+    int           num_of_ranks_per_node,
+    bool          forward_dispatch,
+    int           num_blocks,
+    cudaStream_t  stream);
+
+// EM local-fanout: pre-sum secondaries into primaries before combine.
+void call_local_reduce(
+    void*          expert_input_token,             // [recv_total, hidden]
+    float*         expert_input_prob,              // backward: [recv_total, epr * nranks_per_node]
+    const int32_t* emuf_group_buf,                 // device [num_groups, group_stride]
+    const int32_t* emuf_group_count,               // device scalar (read by kernel)
+    int            emuf_group_stride,              // row width (= experts_per_rank)
+    int            hidden_dim,
+    int            experts_per_rank,
+    int            num_of_ranks_per_node,
+    bool           backward_combine,
+    int            num_blocks,
+    cudaStream_t   stream);
 
 } // namespace hybridep
 } // namespace nccl_ep

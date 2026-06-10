@@ -2249,7 +2249,8 @@ void printHighThroughputResults(
     KernelTimer& ktimer,
     const HighThroughputBytes& ht_bytes,
     size_t global_total_send, size_t global_rdma_send,
-    size_t global_total_recv, size_t global_rdma_recv
+    size_t global_total_recv, size_t global_rdma_recv,
+    bool ht_em_nvlink_dedup
 ) {
     double local_dispatch_avg = dispatch_result.avg_ms;
     double local_dispatch_min = dispatch_result.min_ms;
@@ -2278,13 +2279,20 @@ void printHighThroughputResults(
 
     // Obtain kernel times from CUPTI if available
     double global_kernel_dk_us = 0.0, global_kernel_ck_us = 0.0;
+    double global_kernel_pk_us = 0.0, global_kernel_lr_us = 0.0;
     double local_dispatch_kernel_us = 0.0;
     double local_combine_kernel_us  = 0.0;
+    double local_dup_kernel_us = 0.0;
+    double local_reduce_kernel_us = 0.0;
     if (ktimer.is_valid()) {
         local_dispatch_kernel_us = ktimer.get_avg_us("dispatch_kernel");
         local_combine_kernel_us  = ktimer.get_avg_us("combine_kernel");
+        local_dup_kernel_us = ktimer.get_avg_us("local_dup_kernel");
+        local_reduce_kernel_us = ktimer.get_avg_us("local_reduce_kernel");
         MPI_Reduce(&local_dispatch_kernel_us, &global_kernel_dk_us, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
         MPI_Reduce(&local_combine_kernel_us,  &global_kernel_ck_us, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&local_dup_kernel_us, &global_kernel_pk_us, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&local_reduce_kernel_us, &global_kernel_lr_us, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
     }
 
     // Uncomment for debugging
@@ -2336,6 +2344,10 @@ void printHighThroughputResults(
         if (ktimer.is_valid()) {
             double avg_kernel_dk_us = global_kernel_dk_us / nRanks;
             double avg_kernel_ck_us = global_kernel_ck_us / nRanks;
+            double avg_kernel_pk_us = global_kernel_pk_us / nRanks;
+            double avg_kernel_lr_us = global_kernel_lr_us / nRanks;
+            const bool dispatch_unfused = ht_em_nvlink_dedup;
+            const bool combine_unfused  = ht_em_nvlink_dedup;
             double dk_s       = avg_kernel_dk_us / 1e6;
             double ck_s       = avg_kernel_ck_us / 1e6;
             printf("Dispatch:    kernel=%.2f us\n", avg_kernel_dk_us);
@@ -2343,12 +2355,18 @@ void printHighThroughputResults(
                 (avg_total_recv / 1e9) / dk_s, (avg_nvl_recv / 1e9) / dk_s, (avg_rdma_recv / 1e9) / dk_s);
             printf("             send: total_bw=%.2f  nvl_bw=%.2f  rdma_bw=%.2f GB/s\n",
                 (avg_total_send / 1e9) / dk_s, (avg_nvl_send / 1e9) / dk_s, (avg_rdma_send / 1e9) / dk_s);
+            if (dispatch_unfused) {
+                printf("LocalDup:    kernel=%.2f us\n", avg_kernel_pk_us);
+            }
 
             printf("Combine:     kernel=%.2f us\n", avg_kernel_ck_us);
             printf("             send: total_bw=%.2f  nvl_bw=%.2f  rdma_bw=%.2f GB/s\n",
                 (avg_total_recv / 1e9) / ck_s, (avg_nvl_recv / 1e9) / ck_s, (avg_rdma_recv / 1e9) / ck_s);
             printf("             recv: total_bw=%.2f  nvl_bw=%.2f  rdma_bw=%.2f GB/s\n",
                 (avg_total_send / 1e9) / ck_s, (avg_nvl_send / 1e9) / ck_s, (avg_rdma_send / 1e9) / ck_s);
+            if (combine_unfused) {
+                printf("LocalReduce: kernel=%.2f us\n", avg_kernel_lr_us);
+            }
             printf("Total (D+C): kernel=%.2f us\n", avg_kernel_dk_us + avg_kernel_ck_us);
         } else {
             printf("  NOTE: CUPTI support was not compiled.\n");
@@ -2515,6 +2533,8 @@ void printUsage(const char* programName, int myRank) {
         printf("  --max-recv-token-slots-per-rank <N>  Per-rank recv-slot budget (0 = auto; bench default for EM = nRanks*tokens*top_k/2)\n");
         printf("  --zcopy                 Use ncclMemAlloc buffers + windows for HT tensors that need peer access\n");
         printf("  --max-num-sms <N>       Maximum SMs for EP kernels (0 = auto, default: 0)\n");
+        printf("  --ht-em-nvlink-dedup    HT EM only: dedup token duplication on the receiver in a separate prolog kernel\n"
+               "                          (default: forwarding rank duplicates tokens to per-expert slots over NVLink)\n");
         printf("  --mask-test             Simulate rank failures and test active-mask (LL only, implies --validate)\n");
         printf("  --topk-idx-int32        LL only: pass ncclInt32 topk_idx instead of ncclInt64\n");
         printf("  --help                  Show this help message\n");
@@ -2546,6 +2566,9 @@ int main(int argc, char* argv[]) {
     unsigned int max_recv_tokens_per_rank = UINT_MAX;  // UINT_MAX = unset -> bench auto; 0 = lib auto (worst case)
     bool zcopy = false;  // Use ncclMemAlloc + windows for HT tensors that need peer access
     unsigned int max_num_sms = NCCL_EP_AUTO;  // 0 = auto (resolved to HYBRIDEP_MAX_NUM_SMS_PER_RANK)
+    // HT EM only: when true, dedup token duplication on the receiver in a separate prolog kernel
+    // (default: forwarding rank duplicates tokens to per-expert slots over NVLink).
+    bool ht_em_nvlink_dedup = false;
     bool mask_test = false;       // Simulate rank failures and test active-mask (LL only)
     bool include_uniform_less_than_max = false;
     bool include_non_uniform_tokens    = false;
@@ -2576,6 +2599,7 @@ int main(int argc, char* argv[]) {
         {"max-recv-token-slots-per-rank", required_argument, 0, 'R'},
         {"zcopy",          no_argument,       0, 'z'},
         {"max-num-sms",    required_argument, 0, 'S'},
+        {"ht-em-nvlink-dedup", no_argument,    0, 'F'},
         {"mask-test",      no_argument,       0, 'T'},
         {"dispatch-less-than-max-tokens", required_argument, 0, 'l'},
         {"non-uniform-tokens", no_argument, 0, 'N'},
@@ -2586,7 +2610,7 @@ int main(int argc, char* argv[]) {
 
     int opt;
     int option_index = 0;
-    while ((opt = getopt_long(argc, argv, "a:L:t:d:k:e:w:i:pnfUVDMA:R:zS:Tl:NIh", long_options, &option_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "a:L:t:d:k:e:w:i:pnfUVDMA:R:zS:FTl:NIh", long_options, &option_index)) != -1) {
         switch (opt) {
             case 'a':
                 if (strcmp(optarg, "ll") == 0 || strcmp(optarg, "low-latency") == 0) {
@@ -2669,6 +2693,9 @@ int main(int argc, char* argv[]) {
             case 'S':
                 max_num_sms = static_cast<unsigned int>(atoi(optarg));
                 break;
+            case 'F':
+                ht_em_nvlink_dedup = true;
+                break;
             case 'T':
                 mask_test = true;
                 validate_data = true;
@@ -2730,6 +2757,18 @@ int main(int argc, char* argv[]) {
         }
         MPI_Finalize();
         return 1;
+    }
+
+    // --ht-em-nvlink-dedup is only supported for HT algorithm with EM layout
+    if (ht_em_nvlink_dedup) {
+        if (algorithm != NCCL_EP_ALGO_HIGH_THROUGHPUT ||
+            layout != NCCL_EP_LAYOUT_EXPERT_MAJOR) {
+            if (myRank == 0) {
+                printf("Error: --ht-em-nvlink-dedup is only supported for HT algorithm with expert-major layout\n");
+            }
+            MPI_Finalize();
+            return 1;
+        }
     }
 
     // --mask-test is only supported for LL mode and requires at least 4 ranks
@@ -2844,6 +2883,9 @@ int main(int argc, char* argv[]) {
             printf("  Output layout:   %s\n", layout_str);
             if (expert_major_alignment > 0)
                 printf("  Align (tokens):  %zu\n", expert_major_alignment);
+            if (layout == NCCL_EP_LAYOUT_EXPERT_MAJOR) {
+                printf("  NVLink dedup:    %s\n", ht_em_nvlink_dedup ? "on" : "off");
+            }
         }
         const char* zcopy_str = "disabled";
         if (zcopy) {
@@ -2906,6 +2948,9 @@ int main(int argc, char* argv[]) {
     }
     config.max_recv_tokens_per_rank = max_recv_tokens_per_rank;
     config.max_num_sms = max_num_sms;
+    if (ht_em_nvlink_dedup) {
+        setenv("NCCL_EP_HT_EM_NVLINK_DEDUP", "1", 1);
+    }
     config.alloc.alloc_fn = cudaAllocCallback;
     config.alloc.free_fn  = cudaFreeCallback;
     config.alloc.context  = nullptr;
@@ -3300,7 +3345,8 @@ int main(int argc, char* argv[]) {
                                    ktimer,
                                    ht_bytes,
                                    global_total_send, global_rdma_send,
-                                   global_total_recv, global_rdma_recv);
+                                   global_total_recv, global_rdma_recv,
+                                   ht_em_nvlink_dedup);
     }
 
     // Aggregate group/handle creation times across ranks

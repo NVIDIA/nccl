@@ -340,6 +340,10 @@ void call_metadata_preprocessing(
     void*    recv_total_counter,
     bool     out_is_int64,
     int      max_recv_tokens_per_rank,
+    int32_t* emuf_group_buf,
+    int32_t* emuf_group_count,
+    int      emuf_group_stride,
+    int      emuf_max_groups,
     int      num_blocks,
     void*    scan_gscratch,
     cudaStream_t stream
@@ -399,6 +403,10 @@ void call_metadata_preprocessing(
             actual_counts_out,
             recv_total_counter,
             out_is_int64,
+            emuf_group_buf,
+            emuf_group_count,
+            emuf_group_stride,
+            emuf_max_groups,
             static_cast<int32_t*>(scan_gscratch),
             NUM_OF_BLOCKS,
             stream);
@@ -503,6 +511,10 @@ __global__ void em_scan_kernel(
     int32_t* __restrict__ recv_total_counter_i32,
     int64_t* __restrict__ recv_total_counter_i64,
     bool out_is_int64,
+    int32_t* __restrict__ emuf_group_buf,
+    int32_t* __restrict__ emuf_group_count,
+    int      emuf_group_stride,
+    int      emuf_max_groups,
     int32_t* __restrict__ gscratch)
 {
     extern __shared__ int32_t s_smem[];
@@ -669,6 +681,13 @@ __global__ void em_scan_kernel(
 
         int my_packed_idx = 0;
 
+        // Local-fanout dup-group tracking per lane: em_slots this token landed
+        // on for the local destination. First hit is the primary, later hits
+        // are secondaries fanned out by the local_dup kernel.
+        int primary_em_slot = -1;
+        int n_local_sec = 0;
+        int local_secondaries[HYBRIDEP_MAX_LOCAL_EXPERTS_PER_RANK];
+
         for (int wi = 0; wi < n_local_words; wi++) {
             const int word_bit_base = wi * 64;
             const int remaining = n_local_bits - word_bit_base;
@@ -693,7 +712,16 @@ __global__ void em_scan_kernel(
                 if (my_hit) {
                     const int within = __popc(mask & ((1u << lane) - 1u));
                     const int em_slot = s_offsets[dle] + s_warp_state[warp * s_warp_stride + dle] + within;
-                    if (d == local_rank) local_expert_routing_map[em_slot * epr + le] = true;
+                    if (d == local_rank) {
+                        local_expert_routing_map[em_slot * epr + le] = true;
+                        if (emuf_group_buf != nullptr) {
+                            if (primary_em_slot < 0) {
+                                primary_em_slot = em_slot;
+                            } else {
+                                local_secondaries[n_local_sec++] = em_slot;
+                            }
+                        }
+                    }
                     if (is_our_send) {
                         sparse_to_dense_map[(size_t)send_idx * s2d_inner_dim + my_packed_idx] =
                             ::hybrid_ep::em_s2d_pack(d, em_slot);
@@ -704,6 +732,20 @@ __global__ void em_scan_kernel(
                     s_warp_state[warp * s_warp_stride + dle] += __popc(mask);
                 }
                 union_slice &= union_slice - 1;
+            }
+        }
+
+        // Emit per-primary group row (one per multi-hit local recv-token).
+        if (emuf_group_buf != nullptr && n_local_sec > 0) {
+            const int grp = atomicAdd(emuf_group_count, 1);
+            if (grp >= emuf_max_groups) {
+                __trap();
+            }
+            int32_t* row = emuf_group_buf + (size_t)grp * emuf_group_stride;
+            row[0] = primary_em_slot;
+            for (int s = 0; s < n_local_sec; s++) row[1 + s] = local_secondaries[s];
+            if (1 + n_local_sec < emuf_group_stride) {
+                row[1 + n_local_sec] = -1;
             }
         }
     }
@@ -732,6 +774,10 @@ void launch_em_scan(
     int32_t* em_actual_counts_out,
     void*    recv_total_counter,
     bool     out_is_int64,
+    int32_t* emuf_group_buf,
+    int32_t* emuf_group_count,
+    int      emuf_group_stride,
+    int      emuf_max_groups,
     int32_t* gscratch,
     int      num_sms,
     cudaStream_t stream)
@@ -773,6 +819,10 @@ void launch_em_scan(
         out_is_int64 ? nullptr : static_cast<int32_t*>(recv_total_counter),
         out_is_int64 ? static_cast<int64_t*>(recv_total_counter) : nullptr,
         out_is_int64,
+        emuf_group_buf,
+        emuf_group_count,
+        emuf_group_stride,
+        emuf_max_groups,
         gscratch);
 }
 
@@ -842,6 +892,7 @@ build_dispatch_param_base(const DispatchParams& params) {
     kp.local_rank = params.local_rank;
     kp.node_rank = params.node_rank;
     kp.num_of_tokens_per_rank = params.num_tokens_per_rank;
+    kp.local_dup_enabled = (params.local_dup_num_sms > 0);
 
     // Pass device communicators and windows
     kp.dcomms = params.dcomms;
@@ -1044,6 +1095,7 @@ build_combine_param_base(const CombineParams& params) {
     kp.node_rank = params.node_rank;
     kp.num_of_tokens_per_rank = params.num_tokens_per_rank;
     kp.num_real_tokens        = params.num_real_tokens;
+    kp.combine_local_reduce_enabled = params.combine_local_reduce_enabled;
 
     // Pass device communicators and windows
     kp.dcomms = params.dcomms;
@@ -1166,6 +1218,67 @@ void combine_impl(
     CUDA_CHECK(cudaFree(d_wt));
     CUDA_CHECK(cudaFree(d_bt));
 #endif
+}
+
+void call_local_dup(
+    void* expert_output_token,
+    float* expert_output_prob,
+    const int32_t* emuf_group_buf,
+    const int32_t* emuf_group_count,
+    int emuf_group_stride,
+    const uint32_t* intra_node_write_completion_flag,
+    uint32_t* expected_intra_node_flag_value,
+    uint32_t* grid_barrier_counter,
+    int hidden_dim,
+    int experts_per_rank,
+    int num_of_ranks_per_node,
+    bool forward_dispatch,
+    int num_blocks,
+    cudaStream_t stream
+) {
+    constexpr int kPipeDepth = NCCLEP_LOCAL_DUP_PIPE_DEPTH;
+    using TOKEN_DATA_TYPE = uint16_t;
+    const int smem_bytes = ::hybrid_ep::local_dup_dynamic_smem_bytes(
+        hidden_dim, kPipeDepth, forward_dispatch,
+        experts_per_rank, num_of_ranks_per_node, sizeof(TOKEN_DATA_TYPE));
+
+    ::hybrid_ep::local_dup_kernel_param_t<TOKEN_DATA_TYPE> pp{};
+    pp.expert_output_token = reinterpret_cast<TOKEN_DATA_TYPE*>(expert_output_token);
+    pp.expert_output_prob = expert_output_prob;
+    pp.emuf_group_buf = emuf_group_buf;
+    pp.emuf_group_count = emuf_group_count;
+    pp.emuf_group_stride = emuf_group_stride;
+    pp.intra_node_write_completion_flag = intra_node_write_completion_flag;
+    pp.expected_intra_node_flag_value = expected_intra_node_flag_value;
+    pp.grid_barrier_counter = grid_barrier_counter;
+    pp.experts_per_rank = experts_per_rank;
+    pp.num_of_ranks_per_node = num_of_ranks_per_node;
+    jit::launch_local_dup<TOKEN_DATA_TYPE>(hidden_dim, kPipeDepth, forward_dispatch,
+                                           num_blocks, pp, smem_bytes, stream);
+}
+
+void call_local_reduce(
+    void* expert_input_token,
+    float* expert_input_prob,
+    const int32_t* emuf_group_buf,
+    const int32_t* emuf_group_count,
+    int emuf_group_stride,
+    int hidden_dim,
+    int experts_per_rank,
+    int num_of_ranks_per_node,
+    bool backward_combine,
+    int num_blocks,
+    cudaStream_t stream
+) {
+    ::hybrid_ep::local_reduce_kernel_param_t<uint16_t> lp{};
+    lp.expert_input_token = reinterpret_cast<uint16_t*>(expert_input_token);
+    lp.expert_input_prob = expert_input_prob;
+    lp.emuf_group_buf = emuf_group_buf;
+    lp.emuf_group_count = emuf_group_count;
+    lp.emuf_group_stride = emuf_group_stride;
+    lp.experts_per_rank = experts_per_rank;
+    lp.num_of_ranks_per_node = num_of_ranks_per_node;
+    jit::launch_local_reduce<uint16_t>(hidden_dim, backward_combine, num_blocks, lp, stream);
 }
 
 void call_combine(

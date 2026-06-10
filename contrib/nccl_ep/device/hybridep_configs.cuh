@@ -55,3 +55,16 @@
 
 // Max local experts per rank for expert-major remap kernel register arrays (runtime-asserted).
 #define HYBRIDEP_MAX_LOCAL_EXPERTS_PER_RANK 64
+
+// ============================================================================
+// EM local-fanout kernels (local_dup, local_reduce).
+// Used only when NCCL_EP_HT_EM_NVLINK_DEDUP=1.
+// ============================================================================
+#define NCCLEP_LOCAL_DUP_PIPE_DEPTH 8
+#define NCCLEP_LOCAL_REDUCE_PIPE_DEPTH 8
+#define NCCLEP_LOCAL_REDUCE_OUT_STAGES 2
+
+// local_reduce uses __shfl_sync over lanes 0..PIPE_DEPTH-1 for the cooperative
+// G2S source-list broadcast, so PIPE_DEPTH must fit in a warp.
+static_assert(NCCLEP_LOCAL_REDUCE_PIPE_DEPTH <= 32,
+              "NCCLEP_LOCAL_REDUCE_PIPE_DEPTH must be <= 32 (warp shuffle width)");

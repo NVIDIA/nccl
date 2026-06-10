@@ -276,6 +276,81 @@ inline void dispatch_dump_warp_timing(
 }
 #endif
 
+constexpr const char* kLocalDupJitEntryName = "nccl_ep_jit_ht_local_dup_kernel";
+
+inline std::string local_dup_jit_source(
+    int hidden_dim,
+    int pipe_depth,
+    bool forward_dispatch) {
+    std::ostringstream src;
+    src
+        << "#include \"device/hybrid_ep.cuh\"\n"
+        << "\n"
+        << "using TOKEN_DATA_TYPE = uint16_t;\n"
+        << "\n"
+        << "extern \"C\" __launch_bounds__(64, 1)\n"
+        << "__global__ void " << kLocalDupJitEntryName << "(\n"
+        << "    const __grid_constant__ hybrid_ep::local_dup_kernel_param_t<TOKEN_DATA_TYPE> p) {\n"
+        << "  hybrid_ep::local_dup_kernel_impl<\n"
+        << "      TOKEN_DATA_TYPE,\n"
+        << "      " << hidden_dim << ",\n"
+        << "      " << pipe_depth << ",\n"
+        << "      " << dispatch_bool_literal(forward_dispatch) << ">(p);\n"
+        << "}\n";
+    return src.str();
+}
+
+template<typename T>
+inline void launch_local_dup(
+    int hidden_dim,
+    int pipe_depth,
+    bool forward_dispatch,
+    int num_blocks,
+    ::hybrid_ep::local_dup_kernel_param_t<T>& param,
+    int dynamic_smem_bytes,
+    cudaStream_t stream) {
+    static const int variant_identity = 0;
+    const std::string variant_name = [&] {
+        std::ostringstream name;
+        name
+            << "local_dup"
+            << "_hdim" << hidden_dim
+            << "_pipe" << pipe_depth
+            << (forward_dispatch ? "_fwd" : "_bwd");
+        return name.str();
+    }();
+    const std::string source = local_dup_jit_source(hidden_dim, pipe_depth, forward_dispatch);
+
+    ::nccl_ep::jit::JitKernelVariant variant;
+    variant.kernel_family = "ht_local_dup";
+    variant.variant_name = variant_name;
+    variant.source = source;
+    variant.entry_name = kLocalDupJitEntryName;
+    variant.identity = &variant_identity;
+    variant.runtime_key =
+        (static_cast<std::uint64_t>(hidden_dim) & 0xFFFFFFu) |
+        (static_cast<std::uint64_t>(pipe_depth & 0xFFu) << 24) |
+        (static_cast<std::uint64_t>(forward_dispatch ? 1u : 0u) << 32);
+    variant.num_blocks = num_blocks;
+    variant.block_dim = 64;
+    variant.dynamic_smem_bytes = dynamic_smem_bytes;
+
+    std::string error;
+    const ::nccl_ep::jit::JitKernelStatus status =
+        ::nccl_ep::jit::launch_jit_kernel(variant, &param, stream, &error);
+
+    if (status != ::nccl_ep::jit::JitKernelStatus::kLaunched) {
+        std::fprintf(
+            stderr,
+            "[nccl_ep jit] fatal duplicate JIT launch failure for %s: %s%s%s\n",
+            variant_name.c_str(),
+            ::nccl_ep::jit::jit_kernel_status_name(status),
+            error.empty() ? "" : ": ",
+            error.empty() ? "" : error.c_str());
+        std::abort();
+    }
+}
+
 } // namespace jit
 } // namespace hybridep
 } // namespace nccl_ep

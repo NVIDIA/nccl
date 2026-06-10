@@ -209,7 +209,7 @@ ncclResult_t ncclRmaProxyCreateContext(struct ncclComm* comm, void* collComm, nc
   rmaProxyCtx->comm = comm;
   rmaProxyCtx->rmaCollComm = collComm;
   rmaProxyCtx->props = props;
-  NCCLCHECK(rmaComm->createContext(collComm, &config, &rmaProxyCtx->rmaCtx));
+  NCCLCHECKGOTO(rmaComm->createContext(collComm, &config, &rmaProxyCtx->rmaCtx), ret, fail);
 
   NCCLCHECKGOTO(ncclRmaProxyCtxAlloc(comm, rmaComm, rmaProxyCtx), ret, fail);
   NCCLCHECKGOTO(ncclRmaProxyCtxAllocGraph(comm, rmaComm, rmaProxyCtx), ret, fail);

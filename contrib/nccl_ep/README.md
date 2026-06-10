@@ -41,7 +41,6 @@ NCCL EP relies on NCCL Device API, using GIN `put`/`signal` operations for RDMA 
 
 - **Staged Execution** (LL mode only): Enable computation-communication overlap through a `send-only` flag.
 - **Automatic Tuning**: Let the API auto-tune buffer sizes, queue pairs, and channels.
-- **Type Conversion**: Automatic scaling support for different input and output data types (for a restricted set of combinations).
 
 ## Quick Start
 
@@ -193,43 +192,6 @@ weights to be passed as `combine_inputs.topk_weights` and returned via
 |           | combine_outputs    | tokens            | [B x H]    |
 |           | combine_outputs    | **topk_weights**  | [B x K]    |
 
-#### LL mode (FP16 -> FP8 conversion - NOT SUPPORTED)
-
-In the token data type conversion scenario, in LL mode the Dispatch operation
-will perform precision reduction and return lower-precision tokens via
-`dispatch_outputs.tokens`. In addition, `dispatch_outputs.scales` must be
-provided to return the scaling information.
-
-| Operation | Struct             | Field             | Dims             |
-|:---------:|:-------------------|:------------------|:----------------:|
-| Dispatch  | dispatch_inputs    | tokens            | [B x H]          |
-|           | dispatch_outputs   | tokens            | [L x R x B x H]  |
-|           | dispatch_outputs   | **scales**        | [L x R x B x S]  |
-|           | layout_info        | expert_counters   | [L]              |
-| Combine   | combine_inputs     | tokens            | [L x R x B x H]  |
-|           | combine_outputs    | tokens            | [B x H]          |
-|           | combine_outputs    | topk_weights      | [B x K]          |
-
-#### HT mode (FP16 -> FP8 conversion - NOT SUPPORTED)
-
-**Forward pass**
-
-In the HT case, scales are expected to be calculated by the user and passed
-via `dispatch_inputs.scales`. NCCL EP communicates them alongside the token
-data and returns them via `dispatch_outputs.scales`.
-
-| Operation | Struct             | Field             | Dims       |
-|:---------:|:-------------------|:------------------|:----------:|
-| Dispatch  | dispatch_inputs    | tokens            | [B x H]    |
-|           | dispatch_inputs    | topk_weights      | [B x K]    |
-|           | dispatch_inputs    | **scales**        | [B x S]    |
-|           | dispatch_outputs   | tokens            | [N(r) x H] |
-|           | dispatch_outputs   | topk_weights      | [N(r) x K] |
-|           | dispatch_outputs   | topk_idx          | [N(r) x K] |
-|           | dispatch_outputs   | **scales**        | [N(r) x S] |
-| Combine   | combine_inputs     | tokens            | [N(r) x H] |
-|           | combine_inputs     | topk_weights      | [N(r) x K] |
-|           | combine_outputs    | tokens            | [B x H]    |
 
 # Usage
 
@@ -316,44 +278,6 @@ export NCCL_DEBUG=INFO        # Enable NCCL debug output
 export NCCL_DEBUG_SUBSYS=ALL  # All subsystems
 ```
 
-### `ep_test` application
-
-The `ep_test` application (`ep_test.cu`) is a comprehensive working example that demonstrates both Low-Latency and High-Throughput modes.
-It can be used as a reference implementation when integrating NCCL EP into an application.
-
-#### Command-Line Options
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `-a <ll\|ht>` | Algorithm mode: `ll` (Low-Latency) or `ht` (High-Throughput) | `ll` |
-| `-t <num>` | Number of tokens | 50 |
-| `-d <num>` | Hidden dimension size | 7168 |
-| `-m` | Disable max_dispatch_tokens_per_rank (HT mode only) | disabled |
-| `-s <mode>` | Send-only mode: `none`, `dispatch`, `combine`, `both` | `none` |
-| `-c` | Enable cached mode (HT only) | disabled |
-| `-r` | Enable random mode (random topk_idx) | disabled |
-
-#### Single-node execution
-
-```bash
-# Low-Latency mode (default)
-mpirun -np 8 ./build/test/nccl_ep/ep_test -a ll -t 128 -d 7168
-
-# High-Throughput mode
-mpirun -np 8 ./build/test/nccl_ep/ep_test -a ht -t 4096 -d 7168
-
-```
-
-#### Multi-Node Execution (MPI)
-
-```bash
-# 2 nodes, 8 GPUs per node
-mpirun -np 16 \
-  --map-by ppr:8:node \
-  -x NCCL_GIN_TYPE=3 \
-  -x LD_LIBRARY_PATH \
-  ./build/test/nccl_ep/ep_test -a ll -t 128 -d 7168
-```
 
 # Core Concepts
 
@@ -398,7 +322,13 @@ typedef struct {
                                                 //   HT: required (must be >= max_dispatch_tokens_per_rank)
                                                 //   LL: NCCL_EP_AUTO → nRanks * max_dispatch_tokens_per_rank
     unsigned int max_token_bytes;               // Upper bound on per-token bytes
-    unsigned long int rdma_buffer_size;         // RDMA buffer size (NCCL_EP_AUTO for auto)
+    unsigned long int rdma_buffer_size;         // RDMA buffer size for LL mode.
+                                                //   NCCL_EP_AUTO  → lazy: allocate on first ncclEpInitHandle, sized to that
+                                                //                  handle's actual (layout, num_topk); collective re-grow
+                                                //                  if a later handle needs more. See LL section for caveats.
+                                                //   explicit > 0  → allocate exactly that many bytes at group time;
+                                                //                  ncclEpInitHandle returns ncclInvalidUsage if a layout
+                                                //                  doesn't fit. No reallocation ever performed.
     unsigned int num_qp_per_rank;               // Queue pairs per rank (NCCL_EP_AUTO for auto)
     unsigned int num_channels;                  // Channels per rank (NCCL_EP_AUTO for auto)
     unsigned int max_num_sms;                   // SM cap for EP kernels (NCCL_EP_AUTO for auto)
@@ -426,10 +356,30 @@ Maintains state for a sequence of related MoE operations, i.e. dispatch and comb
 - Supports dynamic `max_dispatch_tokens_per_rank` (set to `NCCL_EP_AUTO`)
 
 **Low Latency (LL)**:
-- Output tokens must have 3D format: `[num_experts x max_dispatch_tokens_per_rank x hidden]`
-- Expert-major data layout for efficient expert processing
-- Supports `send_only` (in `ncclEpDispatchConfig_t` / `ncclEpCombineConfig_t`) to enable computation/communication overlapping
-- Does not support dynamic `max_dispatch_tokens_per_rank` detection
+- Supports `NCCL_EP_LAYOUT_EXPERT_MAJOR` and `NCCL_EP_LAYOUT_RANK_MAJOR` layouts.
+- Output tokens are 3D:
+  - expert-major: `[num_local_experts, N(e), hidden]`, where `N(e)` is the number of tokens routed to the specific expert `e`.
+  - rank-major:   `[num_ranks, max_dispatch_tokens_per_rank, hidden]`.
+- Supports `send_only` (in `ncclEpDispatchConfig_t` / `ncclEpCombineConfig_t`) to enable computation/communication overlapping.
+- Does not support dynamic `max_dispatch_tokens_per_rank` detection.
+
+***`rdma_buffer_size` and lazy allocation (LL only)***
+
+The group's RDMA buffer is sized by `config.rdma_buffer_size`:
+
+- **`NCCL_EP_AUTO`** (recommended for most users): the buffer is **not** allocated at `ncclEpCreateGroup` time. 
+The first `ncclEpInitHandle` allocates it sized to that handle's actual `(layout, num_topk)`.
+A later `ncclEpInitHandle` whose layout needs a larger buffer (for example, the first `EXPERT_MAJOR`
+handle on a group that previously only hosted `RANK_MAJOR` handles, or a handle with a larger `num_topk`)
+**collectively reallocates** the buffer: deregister window → free → `ncclMemAlloc` → register.
+The recorded layout offsets on every live handle are pure offsets relative to the group's `rdma_buffer` and resolve correctly against the new base at use time, so existing handles remain valid.
+
+  Two constraints follow from a reallocation:
+  1. **All ranks must call `ncclEpInitHandle` in lockstep with the same `(layout, num_topk)`**. With AUTO sizing, `ncclEpInitHandle` is a conditionally collective call.
+  2. **Reallocation drops the contents of the old RDMA buffer.** Any operation issued with `send_only = 1` that has staged data but is still awaiting its receive half via `ncclEpComplete` will lose its in-flight data. Drain all such operations before triggering a reallocation.
+  3. **CUDA graph capture bakes the RDMA base pointer into the captured kernel parameters.** `ncclEpInitHandle` (in AUTO mode) must not be called between `cudaStreamBeginCapture` and `cudaStreamEndCapture`. Any previously captured graph containing EP kernels must be destroyed and re-captured after a reallocation.
+
+- **Explicit `> 0`**: the buffer is allocated to exactly that size at `ncclEpCreateGroup` time. `ncclEpInitHandle` is purely local; it returns `ncclInvalidUsage` if the requested `(layout, num_topk)` does not fit. Use this mode if you need to avoid collective handle creation, mid-stream reallocation, or graph invalidation. Use `nccl_ep::get_low_latency_rdma_size_hint(...)` to compute a worst-case upper bound across all layouts and `num_topk ≤ MAX_NUM_TOPK`.
 
 ## Custom Allocators
 
@@ -568,7 +518,8 @@ pointers, so callers can mix stack-, static-, and heap-allocated descriptors.
 //                         ncclInt32/ncclInt64, size = num_local_experts) to receive
 //                         per-expert recv counts; set `recv_total_counter` (scalar)
 //                         when max_dispatch_tokens_per_rank is NCCL_EP_AUTO. NULL = no metadata.
-//   config              - [IN]  Optional handle configuration (alignment, FP8 flag, ...);
+//   config              - [IN]  Optional handle configuration (e.g. expert-major
+//                               alignment via dispatch_output_per_expert_alignment);
 //                               NULL = defaults.
 //   stream              - [IN]  CUDA stream
 //
@@ -632,7 +583,6 @@ Perform EP dispatch: send tokens to experts according to routing decisions.
 //                            For LL expert-major, outputs are 3D [num_local_experts, N(r), data_size].
 //                            For LL rank-major,   outputs->tokens is 3D
 //                            [num_ranks, max_dispatch_tokens_per_rank, data_size].
-//                            If FP8 conversion is requested, `outputs->scales` must be supplied.
 //   layout_info   - [IN,OUT, optional] Named-struct pointer for device-side metadata tensors.
 //                            LL mode: optional `expert_counters` (1D ncclInt32 / ncclInt64,
 //                            size = num_local_experts) receives per-expert recv counts.
@@ -705,7 +655,7 @@ ncclResult_t ncclEpCombine(
 //
 // Arguments:
 //   handle     - [IN,OUT] EP handle used in the preceding staged operation
-//   config     - [IN]     Reserved for future options (must be NULL).
+//   config     - [IN]     Completion configuration (see ncclEpCompleteConfig_t). NULL = defaults.
 //   stream     - [IN]     CUDA stream
 //
 // Notes:
@@ -945,14 +895,25 @@ ncclEpCombine(handle, &combine_in, &combine_out, &combine_cfg, stream);
 // Reuse the same handle — routing information stays the same. Backward
 // descriptors not shown here in detail; assume `grad_*` are caller-prepared
 // ncclEpTensor_t values (either pattern works).
+//
+// IMPORTANT (HT only): the forward/backward direction is selected by the
+// `pass_direction` field in the dispatch/combine config. The default is
+// NCCL_EP_FWD_PASS, so the backward pass MUST set it to NCCL_EP_BWD_PASS.
+// This field impacts the set of required fields:
+//   - dispatch: FWD requires inputs->topk_weights and forbids it on BWD
+//     (BWD also forbids outputs->topk_weights / outputs->topk_idx);
+//   - combine:  FWD forbids inputs->topk_weights, BWD requires both
+//     inputs->topk_weights and outputs->topk_weights.
 
 ncclEpDispatchInputs_t  bwd_dispatch_in  = NCCL_EP_DISPATCH_INPUTS_INIT;
 ncclEpDispatchOutputs_t bwd_dispatch_out = NCCL_EP_DISPATCH_OUTPUTS_INIT;
 bwd_dispatch_in.tokens   = &grad_combined;     // user-supplied grad descriptor
 bwd_dispatch_out.tokens  = &grad_at_experts;   // preallocated buffer descriptor
 
+ncclEpDispatchConfig_t bwd_dispatch_cfg = NCCL_EP_DISPATCH_CONFIG_INIT;
+bwd_dispatch_cfg.pass_direction = NCCL_EP_BWD_PASS;   // toggle the selector
 ncclEpDispatch(handle, &bwd_dispatch_in, &bwd_dispatch_out,
-               &handle_layout, &dispatch_cfg, stream);
+               &handle_layout, &bwd_dispatch_cfg, stream);
 
 // Expert backward computation
 // ... compute gradients for each expert ...
@@ -965,7 +926,9 @@ bwd_combine_in.topk_weights  = &combine_topk_weights_input;
 bwd_combine_out.tokens       = &grad_tokens;
 bwd_combine_out.topk_weights = &combine_topk_weights_output;
 
-ncclEpCombine(handle, &bwd_combine_in, &bwd_combine_out, &combine_cfg, stream);
+ncclEpCombineConfig_t bwd_combine_cfg = NCCL_EP_COMBINE_CONFIG_INIT;
+bwd_combine_cfg.pass_direction = NCCL_EP_BWD_PASS;    // toggle the selector
+ncclEpCombine(handle, &bwd_combine_in, &bwd_combine_out, &bwd_combine_cfg, stream);
 
 // Cleanup
 ncclEpHandleDestroy(handle);
@@ -989,7 +952,7 @@ ncclCommDestroy(comm);
 cudaStreamDestroy(stream);
 ```
 
-## Example 2: Low Latency Mode - Forward Pass
+## Example 2: Low Latency Mode - Forward Pass (Expert-Major and Rank-Major)
 
 ```c
 #include "nccl.h"
@@ -1033,14 +996,22 @@ ncclEpTensor_t* topk_idx = nullptr;
     cudaMalloc(&topk_idx->data, num_tokens * top_k * sizeof(int64_t));
 }
 
+// Choose the LL receive-buffer layout. Both EXPERT_MAJOR and RANK_MAJOR are
+// supported in LL mode; this example branches on `layout` because the dispatch
+// output / combine input tensors and the required metadata differ between them.
+ncclEpLayout_t layout = NCCL_EP_LAYOUT_EXPERT_MAJOR;  // or NCCL_EP_LAYOUT_RANK_MAJOR
+const bool expert_major = (layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
+
 // Create EP handle. LL mode does not consume layout_info at handle-create time.
 ncclEpHandle_t handle;
-ncclEpCreateHandle(&handle, ep_group, NCCL_EP_LAYOUT_EXPERT_MAJOR, topk_idx,
+ncclEpCreateHandle(&handle, ep_group, layout, topk_idx,
                    /*layout_info=*/NULL, /*config=*/NULL, stream);
 
 // === FORWARD PASS ===
 //
-// Static (stack, in-place init): input tokens, output tokens, expert_counters.
+// Static (stack, in-place init): input tokens, output tokens, and the count
+// metadata (expert_counters for expert-major / src_rank_counters for rank-major,
+// plus the rank-major-only per-slot topk outputs and per-token input weights).
 
 // Input: tokens [B x H].
 size_t in_tokens_dims[2] = { num_tokens, hidden };
@@ -1051,10 +1022,19 @@ ncclEpTensor_t in_tokens = { NCCL_EP_TENSOR_INIT_INLINE,
                              .data = in_tokens_data,
                              .sizes = in_tokens_dims };
 
-// Output: expert-major 3D [num_local_experts, nRanks * max_dispatch_tokens_per_rank, hidden].
-size_t out_tokens_dims[3] = { num_local_experts,
-                              (size_t)nRanks * config.max_dispatch_tokens_per_rank,
-                              hidden };
+// Dispatch-output tokens are 3D in both layouts, but the leading dimension differs:
+//   expert-major: [num_local_experts, nRanks * max_dispatch_tokens_per_rank, hidden]
+//   rank-major:   [nRanks,            max_dispatch_tokens_per_rank,          hidden]
+size_t out_tokens_dims[3];
+if (expert_major) {
+    out_tokens_dims[0] = num_local_experts;
+    out_tokens_dims[1] = (size_t)nRanks * config.max_dispatch_tokens_per_rank;
+    out_tokens_dims[2] = hidden;
+} else {  // rank-major
+    out_tokens_dims[0] = (size_t)nRanks;
+    out_tokens_dims[1] = config.max_dispatch_tokens_per_rank;
+    out_tokens_dims[2] = hidden;
+}
 void*  out_tokens_data    = nullptr;
 cudaMalloc(&out_tokens_data,
            out_tokens_dims[0] * out_tokens_dims[1] * out_tokens_dims[2] * sizeof(uint16_t));
@@ -1063,21 +1043,57 @@ ncclEpTensor_t out_tokens = { NCCL_EP_TENSOR_INIT_INLINE,
                               .data = out_tokens_data,
                               .sizes = out_tokens_dims };
 
-// expert_counters [num_local_experts] receives per-expert token counts.
-size_t expert_counters_dims[1] = { num_local_experts };
-void*  expert_counters_data    = nullptr;
-cudaMalloc(&expert_counters_data, num_local_experts * sizeof(int32_t));
-ncclEpTensor_t expert_counters = { NCCL_EP_TENSOR_INIT_INLINE,
-                                   .ndim = 1, .datatype = ncclInt32,
-                                   .data = expert_counters_data,
-                                   .sizes = expert_counters_dims };
-
 ncclEpDispatchInputs_t  dispatch_in  = NCCL_EP_DISPATCH_INPUTS_INIT;
 ncclEpDispatchOutputs_t dispatch_out = NCCL_EP_DISPATCH_OUTPUTS_INIT;
 ncclEpLayoutInfo_t      layout_info  = NCCL_EP_LAYOUT_INFO_INIT;
-dispatch_in.tokens          = &in_tokens;        // static
-dispatch_out.tokens         = &out_tokens;       // static
-layout_info.expert_counters = &expert_counters;  // static
+dispatch_in.tokens  = &in_tokens;    // static; always 2D [B x H]
+dispatch_out.tokens = &out_tokens;   // static; 3D (shape chosen above)
+
+// Per-rank-or-expert count metadata: per-local-expert for expert-major,
+// per-source-rank for rank-major. Declared here so it outlives the dispatch call.
+size_t counters_dims[1] = { expert_major ? (size_t)num_local_experts : (size_t)nRanks };
+void*  counters_data    = nullptr;
+cudaMalloc(&counters_data, counters_dims[0] * sizeof(int32_t));
+ncclEpTensor_t counters = { NCCL_EP_TENSOR_INIT_INLINE,
+                            .ndim = 1, .datatype = ncclInt32,
+                            .data = counters_data, .sizes = counters_dims };
+
+// Rank-major-only dispatch extras (unused, left NULL, for expert-major).
+size_t out_w_dims[3]   = { (size_t)nRanks, config.max_dispatch_tokens_per_rank, top_k };
+size_t out_idx_dims[3] = { (size_t)nRanks, config.max_dispatch_tokens_per_rank, top_k };
+size_t in_w_dims[2]    = { num_tokens, top_k };
+void*  out_w_data = nullptr, *out_idx_data = nullptr, *in_w_data = nullptr;
+ncclEpTensor_t out_topk_weights, out_topk_idx, in_topk_weights;
+
+if (expert_major) {
+    // Expert-major: per-expert recv counts. Routing weights are applied on the
+    // receive side during combine (see combine_out.topk_weights below), so the
+    // dispatch carries no per-slot topk metadata and no input weights.
+    layout_info.expert_counters = &counters;
+} else {  // rank-major
+    // Rank-major: per-source-rank counts (note: src_rank_counters, NOT expert_counters).
+    layout_info.src_rank_counters = &counters;
+
+    // Rank-major REQUIRES dispatch to also return per-slot routing metadata, both
+    // 3D [nRanks, max_dispatch_tokens_per_rank, top_k]:
+    cudaMalloc(&out_w_data,   out_w_dims[0]   * out_w_dims[1]   * out_w_dims[2]   * sizeof(float));
+    cudaMalloc(&out_idx_data, out_idx_dims[0] * out_idx_dims[1] * out_idx_dims[2] * sizeof(int32_t));
+    out_topk_weights = (ncclEpTensor_t){ NCCL_EP_TENSOR_INIT_INLINE,
+                                         .ndim = 3, .datatype = ncclFloat32,
+                                         .data = out_w_data, .sizes = out_w_dims };
+    out_topk_idx     = (ncclEpTensor_t){ NCCL_EP_TENSOR_INIT_INLINE,
+                                         .ndim = 3, .datatype = ncclInt32,
+                                         .data = out_idx_data, .sizes = out_idx_dims };
+    dispatch_out.topk_weights = &out_topk_weights;
+    dispatch_out.topk_idx     = &out_topk_idx;
+
+    // ... and per-token routing weights on the dispatch INPUT.
+    cudaMalloc(&in_w_data, num_tokens * top_k * sizeof(float));
+    in_topk_weights = (ncclEpTensor_t){ NCCL_EP_TENSOR_INIT_INLINE,
+                                        .ndim = 2, .datatype = ncclFloat32,
+                                        .data = in_w_data, .sizes = in_w_dims };
+    dispatch_in.topk_weights = &in_topk_weights;
+}
 
 // Dispatch tokens to experts (staged execution for overlap)
 ncclEpDispatchConfig_t dispatch_cfg = NCCL_EP_DISPATCH_CONFIG_INIT;
@@ -1093,48 +1109,53 @@ ncclEpComplete(handle, /*config=*/NULL, stream);
 cudaStreamSynchronize(stream);
 
 // Expert forward computation:
-// Process out_tokens in 3D layout [experts x tokens x hidden],
-// using expert_counters to size each expert's valid range.
+//   expert-major: out_tokens is [experts x slots x hidden]; use the per-expert
+//                 counts to size each expert's valid range.
+//   rank-major:   out_tokens is [ranks x slots x hidden]; use out_topk_idx to route
+//                 each slot to its local expert(s) and the per-rank counts for valid
+//                 ranges. The rank-major combine kernel applies weight = 1, so the
+//                 caller MUST pre-reduce (apply out_topk_weights) before combine.
 
-// Combine inputs: per-expert post-processed activation, same shape as dispatch_out.tokens.
-size_t combine_in_dims[3]  = { num_local_experts,
-                               (size_t)nRanks * config.max_dispatch_tokens_per_rank,
-                               hidden };
-void*  combine_in_data     = nullptr;
+// Combine input: post-processed activation, SAME 3D shape as dispatch_out.tokens.
+void*  combine_in_data = nullptr;
 cudaMalloc(&combine_in_data,
-           combine_in_dims[0] * combine_in_dims[1] * combine_in_dims[2] * sizeof(uint16_t));
-ncclEpTensor_t combine_in_tokens = { 
+           out_tokens_dims[0] * out_tokens_dims[1] * out_tokens_dims[2] * sizeof(uint16_t));
+ncclEpTensor_t combine_in_tokens = {
     NCCL_EP_TENSOR_INIT_INLINE,
     .ndim = 3, .datatype = ncclBfloat16,
     .data = combine_in_data,
-    .sizes = combine_in_dims };
+    .sizes = out_tokens_dims };
 
-// Combine output: [B x H] back to original token order; per-token routing
-// weights drive the receive-side reduction.
-size_t combine_out_dims[2]   = { num_tokens, hidden };
-size_t combine_out_w_dims[2] = { num_tokens, top_k };
-void*  combine_out_data      = nullptr;
-void*  combine_out_w_data    = nullptr;
-cudaMalloc(&combine_out_data,   num_tokens * hidden * sizeof(uint16_t));
-cudaMalloc(&combine_out_w_data, num_tokens * top_k  * sizeof(float));
-ncclEpTensor_t combine_out_tokens  = { 
+// Combine output: [B x H] back to original token order.
+size_t combine_out_dims[2] = { num_tokens, hidden };
+void*  combine_out_data    = nullptr;
+cudaMalloc(&combine_out_data, num_tokens * hidden * sizeof(uint16_t));
+ncclEpTensor_t combine_out_tokens = {
     NCCL_EP_TENSOR_INIT_INLINE,
     .ndim = 2,
     .datatype = ncclBfloat16,
     .data = combine_out_data,
     .sizes = combine_out_dims };
-ncclEpTensor_t combine_out_weights = { 
-    NCCL_EP_TENSOR_INIT_INLINE,
-    .ndim = 2,
-    .datatype = ncclFloat32,
-    .data = combine_out_w_data,
-    .sizes = combine_out_w_dims };
 
 ncclEpCombineInputs_t  combine_in  = NCCL_EP_COMBINE_INPUTS_INIT;
 ncclEpCombineOutputs_t combine_out = NCCL_EP_COMBINE_OUTPUTS_INIT;
-combine_in.tokens         = &combine_in_tokens;
-combine_out.tokens        = &combine_out_tokens;
-combine_out.topk_weights  = &combine_out_weights;
+combine_in.tokens  = &combine_in_tokens;
+combine_out.tokens = &combine_out_tokens;
+
+// Expert-major applies the per-token routing weights on the receive side, so it
+// REQUIRES combine_out.topk_weights [B x top_k]. Rank-major already applied the
+// weights in the caller's pre-reduction, so it leaves this field NULL.
+size_t combine_out_w_dims[2] = { num_tokens, top_k };
+void*  combine_out_w_data    = nullptr;
+ncclEpTensor_t combine_out_weights;
+if (expert_major) {
+    cudaMalloc(&combine_out_w_data, num_tokens * top_k * sizeof(float));
+    combine_out_weights = (ncclEpTensor_t){ NCCL_EP_TENSOR_INIT_INLINE,
+                                            .ndim = 2, .datatype = ncclFloat32,
+                                            .data = combine_out_w_data,
+                                            .sizes = combine_out_w_dims };
+    combine_out.topk_weights = &combine_out_weights;
+}
 
 ncclEpCombineConfig_t combine_cfg = NCCL_EP_COMBINE_CONFIG_INIT;
 combine_cfg.send_only = 1;
@@ -1152,10 +1173,16 @@ ncclEpTensorDestroy(topk_idx);
 // Static descriptors: free device buffers only (descriptors and sizes are stack locals).
 cudaFree(in_tokens_data);
 cudaFree(out_tokens_data);
-cudaFree(expert_counters_data);
+cudaFree(counters_data);
 cudaFree(combine_in_data);
 cudaFree(combine_out_data);
-cudaFree(combine_out_w_data);
+if (expert_major) {
+    cudaFree(combine_out_w_data);   // expert-major receive-side weights
+} else {                            // rank-major dispatch extras
+    cudaFree(out_w_data);
+    cudaFree(out_idx_data);
+    cudaFree(in_w_data);
+}
 ncclCommDestroy(comm);
 cudaStreamDestroy(stream);
 ```

@@ -3718,3 +3718,8 @@ cpdef object team_rail(intptr_t comm):
     with nogil:
         team[0] = ncclTeamRail(<Comm>comm)
     return team_py
+
+
+cpdef object get_library_path():
+    from ._internal.nccl import _inspect_loaded_library_path
+    return _inspect_loaded_library_path()

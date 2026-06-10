@@ -1,0 +1,31 @@
+# Build context exclusions for bench/Docker/Dockerfile.ubx-nccl-ep.
+# Anything matched here is NOT shipped to the docker daemon.
+
+# VCS and CI scaffolding
+.git/
+.github/
+.gitignore
+
+# Python build artifacts
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.egg-info/
+build/
+dist/
+*.so
+*.o
+
+# Editor / OS detritus
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Local venvs / installs
+.venv/
+venv/
+env/
+
+# Plan files & local notes
+.claude/

@@ -51,19 +51,6 @@ Symmetric windows enable NCCL to apply optimized collective protocols when all
 ranks use consistent layouts. The memory needs to be allocated through the CUDA
 Virtual Memory Management (VMM) API and registered with NCCL.
 
-```c
-// Allocate using NCCL provided convenience function and register symmetric windows
-NCCLCHECK(ncclMemAlloc(&buffer, size_bytes));
-NCCLCHECK(ncclCommWindowRegister(comm, buffer, size_bytes, &win, NCCL_WIN_COLL_SYMMETRIC));
-
-// Collective using symmetric windows
-NCCLCHECK(ncclAllReduce(buffer, buffer, count, ncclFloat, ncclSum, comm, stream));
-
-// Deregister and free
-NCCLCHECK(ncclCommWindowDeregister(comm, win));
-NCCLCHECK(ncclMemFree(buffer));
-```
-
 ## Building
 
 ### **Quick Start**
@@ -76,13 +63,16 @@ make 02_allgather
 ### **Individual Examples**
 ```shell
 # Build and run AllReduce with symmetric windows
-cd 01_allreduce && make
+cd 01_allreduce/c && make
 ./allreduce_sm
 
 # Build and run AllGather with symmetric windows + copy engine
-cd 02_allgather && make
+cd 02_allgather/c && make
 ./allgather_ce
 ```
+
+### **Python**
+See the `python/README.md` in each example directory.
 
 ## References
 - [NCCL User Guide:

@@ -130,9 +130,9 @@ std::filesystem::path configured_source_dir() {
     std::string path = env_value("NCCL_EP_JIT_SOURCE_DIR");
     if (!path.empty()) return std::filesystem::path(path);
 
-    std::string nccl_home = env_value("NCCL_HOME");
-    if (!nccl_home.empty()) {
-        return std::filesystem::path(nccl_home) / "include" / "nccl_ep";
+    std::string ep_home = env_value("NCCL_EP_HOME");
+    if (!ep_home.empty()) {
+        return std::filesystem::path(ep_home) / "include" / "nccl_ep";
     }
 
     return std::filesystem::path(NCCL_EP_JIT_SOURCE_DIR);

@@ -87,8 +87,9 @@ include = ["nccl*"]
 "nccl.ep" = [
     "lib/libnccl_ep.so",
     "include/*.h",
-    "include/*.hpp",
-    "include/device/*.cuh",
+    "include/nccl_ep/*.h",
+    "include/nccl_ep/*.hpp",
+    "include/nccl_ep/device/*.cuh",
 ]
 
 [tool.setuptools.dynamic]

@@ -5,147 +5,82 @@
   See LICENSE.txt for more license information
 -->
 
-# NCCL Device API Pure GIN AlltoAll Example
+# NCCL Example: Device API AlltoAll (Pure GIN)
 
-This example demonstrates NCCL's GPU-Initiated Networking (GIN) capabilities for performing AlltoAll collective operations directly from GPU kernels using only network-based communication.
+This example demonstrates NCCL's GPU-Initiated Networking (GIN) capabilities for
+performing AlltoAll collective operations directly from GPU kernels using only
+network-based communication.
 
 ## Overview
 
-This example showcases **pure GIN communication** where all data exchange happens through the network, without any Load Store Access (LSA) optimizations. This is particularly useful for:
+Pure GIN communication sends all data through the network, without Load Store
+Access (LSA) optimizations. This is the approach for multi-node environments
+where ranks cannot use direct peer memory access, and serves as the baseline
+for understanding GIN communication patterns.
 
-- Multi-node environments where ranks cannot use LSA
-- Testing network performance without local optimizations
-- Understanding the baseline GIN communication patterns
-- Scenarios where all communication must go through the network
+## Runtime Requirements
+
+The C variant can be built with either pthreads or MPI. It can run on a single node but is especially relevant for multi-node communication. It is most useful with multiple GPUs, but can still run with one visible GPU.
 
 ## What This Example Does
 
-1. **Creates device communicators** using `ncclDevCommCreate` for GPU kernel access to NCCL operations
-2. **Registers symmetric memory windows** with `ncclCommWindowRegister` for direct peer-to-peer access
-3. **Launches GPU kernel** that performs AlltoAll operations using pure GIN for all peer communication
+1. **Create device communicators** with GIN barriers, signals, and full connectivity
+2. **Register symmetric memory windows** for GIN network access
+3. **Launch GPU kernel** that performs AlltoAll entirely on device:
+   - Synchronize with GIN barriers across all ranks
+   - Use `gin.put()` to write data to each peer's receive buffer
+   - Wait for signal-based completion of all remote puts
+   - Flush to ensure all operations are committed
+4. **Verify results** and clean up resources
 
-## Building and Running
+## Key concepts
 
-The advanced examples can be built using either pthread or MPI for parallelization. pthread is the default choice. To use MPI the user needs to set `MPI=1` at build time and can optionally provide a valid MPI installation under `MPI_HOME`.
+### Device communicator with GIN resources
+For pure GIN communication, the device communicator is configured with GIN-specific
+resources: `railGinBarrierCount` for network barriers, `ginSignalCount` for async
+completion signals, and `ginConnectionType` (e.g., `NCCL_GIN_CONNECTION_FULL`) to
+establish connectivity to all peers. Unlike LSA, no LSA barriers are needed since all
+communication goes through the network.
 
-### Build
-```bash
-make [MPI=1] [MPI_HOME=<path-to-mpi>] [NCCL_HOME=<path-to-nccl>] [CUDA_HOME=<path-to-cuda>]
-```
+### GIN barriers
+GIN barriers enable cross-node synchronization from device code over the network. Like
+LSA barriers, each thread block gets its own barrier indexed by `blockIdx.x`. The key
+difference is that GIN barriers operate over the network rather than through direct
+memory access.
 
-### Run when compiled for pthreads (default)
-```bash
-[NTHREADS=N] ./alltoall_gin
-```
+### GIN put operations
+GIN provides one-sided put operations for direct remote memory writes over the network.
+Each put increments a signal counter (`ncclGin_SignalInc`), enabling asynchronous
+completion detection without blocking.
 
-### Run when compiled for MPI
-```bash
-mpirun -np <num_processes> ./alltoall_gin
-```
+### Signal-based completion
+After issuing all puts, the kernel waits for the signal value to reach the expected count
+(indicating all remote writes have completed), then flushes to ensure operations are
+committed. This asynchronous pattern enables efficient overlapping of computation and
+communication.
 
-## Code Walk-through
+For code examples of each concept, see `c/README.md`.
 
-### Device Communicator Creation (Host-side)
-The `ncclDevComm` is the core component enabling GPU kernels to perform network communication directly. For pure GIN communication, we configure the device communicator with GIN-specific resources. The `ncclDevCommRequirements` sets `worldGinBarrierCount` for `ncclGinBarrierSession` (network-side barriers) and `ginSignalCount` for completion. Unlike LSA-based examples, there is no `lsaBarrierCount` or `ncclLsaBarrierSession`. Cross-rank ordering uses GIN barriers and signals instead.
+## Variants
 
-```cpp
-ncclDevComm devComm;
-ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
-// GIN barriers enable cross-node synchronization over the network
-reqs.worldGinBarrierCount = NCCL_DEVICE_CTA_COUNT;
-// GIN signals provide completion notifications for asynchronous operations
-reqs.ginSignalCount = NCCL_DEVICE_CTA_COUNT;
-// Enable full GIN connectivity, i.e., connect each rank to all other ranks
-reqs.ginConnectionType = NCCL_GIN_CONNECTION_FULL;
+- **C/CUDA**: `c/` (uses `ncclDevCommCreate` + GIN barriers + `gin.put()`)
+  - How to run + walkthrough: `c/README.md`
 
-// Create device communicator with pure GIN support
-NCCLCHECK(ncclDevCommCreate(comm, &reqs, &devComm));
-```
-
-### Memory Window Registration (Host-side)
-The device API requires symmetric memory windows registered using `NCCL_WIN_COLL_SYMMETRIC`. These windows enable GPU kernels to access remote memory through GIN operations. Unlike LSA which provides direct memory access, GIN windows are accessed through network put/get operations.
-
-```cpp
-ncclWindow_t send_win;
-ncclWindow_t recv_win;
-
-// Register symmetric windows for GIN network access
-NCCLCHECK(ncclCommWindowRegister(comm, d_sendbuff, size_bytes, &send_win, NCCL_WIN_COLL_SYMMETRIC));
-NCCLCHECK(ncclCommWindowRegister(comm, d_recvbuff, size_bytes, &recv_win, NCCL_WIN_COLL_SYMMETRIC));
-```
-
-### GIN Barriers (Device-side)
-GIN barriers enable cross-node synchronization from device code over the network. Each thread block uses `blockIdx.x` to select its dedicated barrier, allowing blocks to progress independently while coordinating with corresponding blocks on other nodes. The kernel constructs `ncclGinBarrierSession` with `ncclTeamTagWorld()` and calls `bar.sync` **before** the `put` loop so all ranks are ready to start the exchange.
-
-```cpp
-  int ginContext = 0;
-  unsigned int signalIndex = blockIdx.x;
-  ncclGin gin { devComm, ginContext };
-  uint64_t signalValue = gin.readSignal(signalIndex);
-
-  ncclGinBarrierSession<ncclCoopCta> bar { ncclCoopCta(), gin, ncclTeamTagWorld(), blockIdx.x };
-  bar.sync(ncclCoopCta(), cuda::memory_order_acquire, ncclGinFenceLevel::None);
-
-  int tid = threadIdx.x + blockIdx.x * blockDim.x;
-  int nthreads = blockDim.x * gridDim.x;
-```
-
-### GIN Put Operations (Device-side)
-GIN provides one-sided put operations for direct remote memory writes over the network. Each thread handles a subset of destination ranks, writing its rank's data to the appropriate location in each peer's receive buffer. The `ncclGin_WeakSignalInc` parameter adds a per-`put` completion increment to the destination signal, enabling the receiver to wait for the expected count of completed incoming puts.
-
-```cpp
-  const size_t size = count * sizeof(T);
-  for (int r = tid; r < devComm.nRanks; r += nthreads) {
-    gin.put(ncclTeamWorld(devComm), r,
-        recvwin, recvoffset + devComm.rank * size,
-        sendwin, sendoffset + r * size,
-        size, ncclGin_WeakSignalInc{signalIndex});
-  }
-```
-
-### Signal-based Completion and `flush` (Device-side)
-GIN uses signals for asynchronous completion detection of network operations. The kernel waits for the signal value to reach the expected count (initial value + number of ranks), indicating all **incoming** `put` operations targeting this rank have been accounted for on the signal.
-
-Before the kernel returns, call **`gin.flush()`** so every previously issued outgoing **`gin.put()`** is flushed. **`flush()`** does **not** by itself guarantee that remote peers have finished consuming data on their side, but it **does** ensure this rank’s **local input buffer** (the memory used as the source of the puts) is **safe to reuse**.
-
-```cpp
-  // Wait only on the CTA whose blockIdx.x (signalIndex) accumulates all puts to this rank.
-  int receivingCta = (devComm.rank % nthreads) / blockDim.x;
-  if (blockIdx.x == receivingCta)
-    gin.waitSignal(ncclCoopCta(), signalIndex, signalValue + devComm.nRanks);
-
-  gin.flush(ncclCoopCta());
-  bar.sync(ncclCoopCta(), cuda::memory_order_release, ncclGinFenceLevel::None);
-```
-
-### Receiving CTA (Device-side)
-
-`signalIndex` is `blockIdx.x`, so each `gin.put` increments the destination rank's signal for that sender CTA index. Only the CTA with `blockIdx.x == receivingCta` calls `waitSignal`; `receivingCta = (devComm.rank % nthreads) / blockDim.x` picks one waiting CTA per destination rank. The wait uses `signalValue + devComm.nRanks` because every rank, including self, sends one GIN put to this rank.
+Note: This example is C/CUDA-only as it demonstrates GPU kernel programming with the NCCL Device API.
 
 ## Expected Output
 
-```
-Starting Pure GIN AlltoAll initialization
-  Rank 0 using GPU device 0
-  Rank 1 using GPU device 1
-  Rank 0 initialized NCCL communicator for 2 total ranks
-  Rank 1 initialized NCCL communicator for 2 total ranks
-  Rank 0 initialized send data
-  Rank 1 initialized send data
-  Rank 0 created device communicator with GIN support
-  Rank 1 created device communicator with GIN support
-Starting Pure GIN AlltoAll with 1024 elements per rank (2048 total elements, 0 MB)
+You should see:
 
-=== Executing Pure GIN AlltoAll ===
-  Rank 0 completed pure GIN AlltoAll kernel
-  Rank 1 completed pure GIN AlltoAll kernel
-Pure GIN AlltoAll result: PASSED
-```
+- Device communicator creation for each rank with GIN support
+- AlltoAll kernel execution on all ranks via pure GIN
+- Verification that all ranks received the correct data
 
 ## When to Use
 
-- **Multi-node environments**: When ranks cannot use LSA
-- **Testing network performance**: Without local optimizations
+- **Multi-node environments**: When ranks cannot use LSA (direct peer memory access)
+- **Network-only communication**: Testing or benchmarking network performance
+- **Cross-node collectives**: AlltoAll and other patterns that span network boundaries
 
 ## Performance Considerations
 
@@ -156,26 +91,16 @@ Pure GIN AlltoAll result: PASSED
 
 ## Common Issues and Solutions
 
-### Issue: Deadlock at util_broadcast
-**Solution:** Ensure you're running with multiple GPUs/processes
-```bash
-NTHREADS=2 ./alltoall_gin  # For 2 GPUs
-```
-
-### Issue: CUDA out of memory
-**Solution:** Reduce the data size in the example
-
-### Issue: Network errors
-**Solution:** Ensure proper network configuration for multi-node setups
+1. **Deadlock at initialization**: Ensure you're running with multiple GPUs/processes
+2. **CUDA out of memory**: Reduce the data size in the example
+3. **Network errors**: Ensure proper network configuration for multi-node setups
+4. **Communicator does not support symmetric memory**: Select GPUs with NVLink/PCIe connectivity via `CUDA_VISIBLE_DEVICES`
 
 ## Performance Notes
 
 - These are educational examples, not optimized for performance
-- Real implementations should consider:
-  - Optimal GIN context usage for parallel operations
-  - Signal pool management for high-throughput scenarios
-  - Memory coalescing patterns for network operations
-  - Network topology-aware communication strategies
+- Real implementations should consider optimal GIN context usage, signal pool management,
+  memory coalescing, and network topology-aware strategies
 
 ## Error Handling
 

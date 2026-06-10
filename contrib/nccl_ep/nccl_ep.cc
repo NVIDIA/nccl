@@ -21,8 +21,8 @@
 #include <vector>
 #include <nccl.h>
 #include <nccl_device.h>
-#include "include/common.hpp"
-#include "include/nccl_ep.h"
+#include "nccl_ep.h"
+#include "common.hpp"
 
 // HT (High Throughput) includes
 #include "device/hybridep_adapter.cuh"
@@ -47,6 +47,9 @@ static ncclResult_t init_hybridep_intranode(ncclEpGroup_t ep_group, const ncclEp
 static ncclResult_t destroy_hybridep_intranode(ncclEpGroup_t ep_group);
 static ncclResult_t init_hybridep_internode(ncclEpGroup_t ep_group, const ncclEpGroupConfig_t* config, cudaStream_t stream);
 static ncclResult_t destroy_hybridep_internode(ncclEpGroup_t ep_group);
+
+// Forward declaration for LL helper (defined alongside ll_init_handle).
+static ncclResult_t ll_resize_rdma_buffer(ncclEpGroup_t ep_group, size_t new_size);
 
 // Define NCCL_CHECK_RESULT macro for NCCL error checking
 #ifndef NCCL_CHECK_RESULT
@@ -173,7 +176,21 @@ static inline bool tensorIsInitialised(const ncclEpTensor_t* t) {
     return false;
 }
 
-// True when the tensor advertises a storage binding — either a device pointer
+// True when the tensor is zero-extent in at least one dimension. Empty tensors
+// carry no element to read or write, so the dispatch/combine kernels' per-token
+// loops degrade to no-ops and the host side has no storage to address. The
+// library treats them as a valid no-op input at the API boundary even though
+// they legitimately lack a storage binding (PyTorch/NumPy hand out
+// data_ptr() == 0 for such buffers).
+static inline bool tensorIsEmpty(const ncclEpTensor_t* t) {
+    if (t->sizes == nullptr) return false;
+    for (unsigned int i = 0; i < t->ndim; ++i) {
+        if (t->sizes[i] == 0) return true;
+    }
+    return false;
+}
+
+// True when the tensor advertises a storage binding -- either a device pointer
 // or a window handle (offset may be 0, so we only check `win_hdl`). A tensor
 // with neither is unusable by the library.
 static inline bool tensorHasBinding(const ncclEpTensor_t* t) {
@@ -181,11 +198,14 @@ static inline bool tensorHasBinding(const ncclEpTensor_t* t) {
 }
 
 // Combined boundary check used by tensor_ptr / tensor_required: the descriptor
-// must be initialised AND carry a storage binding.
+// must be initialised AND carry a storage binding. Empty tensors skip the
+// binding check because they have no element to address; the kernels handle
+// num_tokens == 0 as a no-op on the sender side and still participate in the
+// collective on the receiver side.
 static inline void tensorAssertValid(const ncclEpTensor_t* t) {
     assert(tensorIsInitialised(t) &&
            "ncclEpTensor_t not initialised — use NCCL_EP_TENSOR_INIT or ncclEpTensorAlloc");
-    assert(tensorHasBinding(t) &&
+    assert((tensorIsEmpty(t) || tensorHasBinding(t)) &&
            "ncclEpTensor_t has no storage binding — set `.data` or (`.win_hdl` [+ `.win_offset`])");
 }
 
@@ -347,6 +367,18 @@ struct ncclEpGroup {
     int rdma_team_size;       // RDMA ranks
     int rdma_rank;            // RDMA rank
     void* rdma_buffer;
+    // Bytes currently backing rdma_buffer. Layouts on live handles store
+    // offsets only and are resolved against this base at use time, so the
+    // buffer can grow safely while handles are live.
+    //
+    // Sizing is controlled by config.rdma_buffer_size:
+    //   - NCCL_EP_AUTO: the buffer is lazily allocated on the first LL
+    //     handle init using the actual (layout, num_topk), and grown later
+    //     if a subsequent handle needs more.
+    //   - any other positive value: the buffer is allocated at group time
+    //     to exactly that size. Handle init rejects (returns an error) any
+    //     handle whose layout does not fit; no growth is performed.
+    size_t rdma_buffer_size_alloc;
     ncclEpGroupConfig_t config;         // Stored configuration
 
     struct {
@@ -411,6 +443,10 @@ struct ncclEpGroup {
     ncclWindow_t* nccl_wins;
     int num_dispatch_signals;
     unsigned clean_barrier_signal_base;
+
+    // Cross-rank sync region used by clean_low_latency_buffer.
+    void*         sync_buffer = nullptr;   // device buffer, int[nRanks] aligned
+    ncclWindow_t* sync_window = nullptr;   // device ptr to the registered window handle
 
     // HT buffers for intranode communication
     struct {
@@ -496,6 +532,7 @@ struct ncclEpGroup {
         rdma_team_size(0),
         rdma_rank(0),
         rdma_buffer(nullptr),
+        rdma_buffer_size_alloc(0),
         config{},
         num_local_experts(0),
         max_recv_tokens(0),
@@ -525,6 +562,14 @@ static ncclResult_t resolveTensorWindowBinding(
     uint64_t default_offset) {
     if (tensor == nullptr) {
         return ncclInvalidArgument;
+    }
+
+    // Empty tensors have no storage to bind. Leave data == nullptr (and the
+    // window unbound) -- consumers must already treat empty tensors as
+    // no-ops at the per-element level. Without this guard, the
+    // ncclWinGetUserPtr call below would fail on a NULL win_hdl.
+    if (tensorIsEmpty(tensor)) {
+        return ncclSuccess;
     }
 
     const bool internode_initialized = ep_group->ht_buffers.internode_initialized;
@@ -1342,9 +1387,6 @@ ncclResult_t ncclEpCreateGroup(
         ep_group->config.num_channels = 10;
     }
 
-    if (ep_group->config.rdma_buffer_size == NCCL_EP_AUTO && ep_group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
-        ep_group->config.rdma_buffer_size = nccl_ep::get_low_latency_rdma_size_hint(ep_group->config.max_dispatch_tokens_per_rank, ep_group->config.max_token_bytes, ep_group->nRanks, ep_group->config.num_experts);
-    }
 
     if (ep_group->config.num_qp_per_rank == NCCL_EP_AUTO) {
         ep_group->config.num_qp_per_rank = ep_group->max_num_sms * HYBRIDEP_DISPATCH_N2N_WARPS;
@@ -1443,21 +1485,15 @@ ncclResult_t ncclEpCreateGroup(
         // No init memset: AllGather in preprocessing overwrites every byte the kernel reads.
     }
 
-    if (ep_group->config.rdma_buffer_size > 0 && low_latency_mode) {
-        // Allocate RDMA buffer
-        ncclBarrier(ep_group->comm, stream, ep_group->ep_workspace);
-        NCCL_CHECK_RESULT(ncclMemAlloc(&ep_group->rdma_buffer, ep_group->config.rdma_buffer_size));
-
-        // Clean buffer (mainly for low-latency mode)
-        CUDA_CHECK(cudaMemset(ep_group->rdma_buffer, 0, ep_group->config.rdma_buffer_size));
-        // NCCL related setup - use ep_group->comm directly with all GIN contexts
-        // (like DeepEP: 1 comm, N contexts, no split needed)
+    if (low_latency_mode) {
         ep_group->num_nccl_comms = 0;  // no split comms created
 
         // Cleaning up any pending CUDA error
         CUDA_CHECK(cudaGetLastError());
 
-        // Create device communicator on ep_group->comm with all GIN contexts
+        // Create device communicator on ep_group->comm with all GIN contexts.
+        // This depends only on group-level parameters (num_experts, nRanks),
+        // not on the per-handle layout/num_topk, so it stays at group time.
         ncclDevComm_t* nccl_dev_comms_host = new ncclDevComm_t[1];
         nccl_dev_comms_host[0] = ncclDevComm_t{};
         ep_group->num_dispatch_signals = ep_group->num_local_experts * ep_group->nRanks;
@@ -1487,26 +1523,37 @@ ncclResult_t ncclEpCreateGroup(
         CUDA_CHECK(cudaMemcpy(ep_group->nccl_dev_comms, nccl_dev_comms_host,
                                 sizeof(ncclDevComm_t), cudaMemcpyHostToDevice));
 
-        // Register RDMA buffer with single NCCL window
-        ncclWindow_t* nccl_wins_host = new ncclWindow_t[1];
-        NCCL_CHECK_RESULT(ncclCommWindowRegister(ep_group->comm, ep_group->rdma_buffer,
-                                                    ep_group->config.rdma_buffer_size, &nccl_wins_host[0], 0));
-
-        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&ep_group->nccl_wins),
-                                sizeof(ncclWindow_t)));
-        CUDA_CHECK(cudaMemcpy(ep_group->nccl_wins, nccl_wins_host,
-                                sizeof(ncclWindow_t), cudaMemcpyHostToDevice));
-
-        // Cleanup host memory for NCCL windows and devcomms
-        delete[] nccl_wins_host;
-        nccl_wins_host = nullptr;
-
         delete[] nccl_dev_comms_host;
         nccl_dev_comms_host = nullptr;
 
-        ncclBarrier(ep_group->comm, stream, ep_group->ep_workspace);
+        if (ep_group->config.enable_mask) {
+            // Allocate the cross-rank sync buffer used by clean_low_latency_buffer.
+            // Its size depends only on nRanks (a group-level constant), so it is
+            // sized and allocated here once, in its own registered NCCL window.
+            // Keeping it out of rdma_buffer means lazy/grow reallocation of
+            // rdma_buffer doesn't have to touch it, and ncclEpMaskClean can run
+            // even before any LL handle has been created.
+            const size_t sync_buffer_bytes =
+                ((static_cast<size_t>(ep_group->nRanks) * sizeof(int) + 127) / 128) * 128;
+            NCCL_CHECK_RESULT(ncclMemAlloc(&ep_group->sync_buffer, sync_buffer_bytes));
+            CUDA_CHECK(cudaMemset(ep_group->sync_buffer, 0, sync_buffer_bytes));
+            ncclWindow_t sync_win_host;
+            NCCL_CHECK_RESULT(ncclCommWindowRegister(ep_group->comm, ep_group->sync_buffer,
+                                                    sync_buffer_bytes, &sync_win_host, 0));
+            CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&ep_group->sync_window),
+                                    sizeof(ncclWindow_t)));
+            CUDA_CHECK(cudaMemcpy(ep_group->sync_window, &sync_win_host,
+                                    sizeof(ncclWindow_t), cudaMemcpyHostToDevice));
+        }
 
-        CUDA_CHECK(cudaDeviceSynchronize());
+        // If the user passed an explicit rdma_buffer_size (anything other than
+        // NCCL_EP_AUTO), honor it verbatim now. ll_init_handle will then only
+        // verify the requested layout fits; growth is not performed. With
+        // NCCL_EP_AUTO, allocation is deferred until ll_init_handle so it can
+        // size the buffer with the actual (layout, num_topk).
+        if (ep_group->config.rdma_buffer_size != NCCL_EP_AUTO) {
+            NCCLCHECK(ll_resize_rdma_buffer(ep_group, ep_group->config.rdma_buffer_size));
+        }
     }
 
     // Allocate mask buffer and async error flag for active-mask support
@@ -1565,8 +1612,10 @@ ncclResult_t ncclEpGroupDestroy(
         ep_group->ht_buffers.global_routing_map = nullptr;
     }
 
-    // Clean up RDMA resources (single-comm path: 1 window, 1 devcomm on ep_group->comm)
-    if (ep_group->config.rdma_buffer_size > 0 && NCCL_EP_ALGO_LOW_LATENCY == ep_group->config.algorithm) {
+    // Clean up RDMA resources (single-comm path: 1 window, 1 devcomm on ep_group->comm).
+    // Gate on algorithm only — config.rdma_buffer_size may be NCCL_EP_AUTO
+    // (== 0) for LL groups where the buffer is sized lazily.
+    if (NCCL_EP_ALGO_LOW_LATENCY == ep_group->config.algorithm) {
         CUDA_CHECK(cudaDeviceSynchronize());
         cudaStream_t stream;
         CUDA_CHECK(cudaStreamCreate(&stream));
@@ -1574,18 +1623,37 @@ ncclResult_t ncclEpGroupDestroy(
         CUDA_CHECK(cudaStreamSynchronize(stream));
         CUDA_CHECK(cudaStreamDestroy(stream));
 
-        // Deregister single NCCL window (copy back from device, deregister on ep_group->comm)
-        ncclWindow_t win_host;
-        CUDA_CHECK(cudaMemcpy(&win_host, ep_group->nccl_wins,
-                                sizeof(ncclWindow_t), cudaMemcpyDeviceToHost));
-        NCCL_CHECK_RESULT(ncclCommWindowDeregister(ep_group->comm, win_host));
-        CUDA_CHECK(cudaFree(ep_group->nccl_wins));
-        ep_group->nccl_wins = nullptr;
+        // Deregister single NCCL window if it was ever registered. The
+        // rdma_buffer and its window are allocated lazily on the first LL
+        // handle init, so a group that was created but never had an LL
+        // handle still has nccl_wins == nullptr here.
+        if (ep_group->nccl_wins != nullptr) {
+            ncclWindow_t win_host;
+            CUDA_CHECK(cudaMemcpy(&win_host, ep_group->nccl_wins,
+                                    sizeof(ncclWindow_t), cudaMemcpyDeviceToHost));
+            NCCL_CHECK_RESULT(ncclCommWindowDeregister(ep_group->comm, win_host));
+            CUDA_CHECK(cudaFree(ep_group->nccl_wins));
+            ep_group->nccl_wins = nullptr;
+        }
 
         // Free RDMA buffer (after window deregistered)
         if (ep_group->rdma_buffer) {
             NCCL_CHECK_RESULT(ncclMemFree(ep_group->rdma_buffer));
             ep_group->rdma_buffer = nullptr;
+        }
+
+        // Tear down the standalone sync buffer + its window.
+        if (ep_group->sync_window != nullptr) {
+            ncclWindow_t sync_win_host;
+            CUDA_CHECK(cudaMemcpy(&sync_win_host, ep_group->sync_window,
+                                    sizeof(ncclWindow_t), cudaMemcpyDeviceToHost));
+            NCCL_CHECK_RESULT(ncclCommWindowDeregister(ep_group->comm, sync_win_host));
+            CUDA_CHECK(cudaFree(ep_group->sync_window));
+            ep_group->sync_window = nullptr;
+        }
+        if (ep_group->sync_buffer != nullptr) {
+            NCCL_CHECK_RESULT(ncclMemFree(ep_group->sync_buffer));
+            ep_group->sync_buffer = nullptr;
         }
 
         // Destroy single NCCL device communicator (copy back from device, destroy on ep_group->comm)
@@ -1615,6 +1683,14 @@ struct ncclEpHandle {
     // User-owned (do not free). LL reads directly; HT uses cached hybridep.topk_idx.
     ncclEpTensor_t topk_idx;
     int num_tokens, num_topk;
+    // True once `num_tokens` has been authoritatively populated by
+    // `ncclEpUpdateHandle` (or `ncclEpCreateHandle` via its inner update call).
+    // Distinguishes a legitimate zero-token configuration from the
+    // "not yet bound" state -- the dispatch / combine lazy branches must not
+    // treat a real 0 as "uninitialised" and re-fetch sizes[0] from inputs,
+    // since the input tensors on zero-token ranks are empty (and now legally
+    // carry data == nullptr per tensorHasBinding's empty-tensor relaxation).
+    bool num_tokens_set;
 
     bool cached_mode;
     int num_scales;
@@ -1778,6 +1854,7 @@ struct ncclEpHandle {
           topk_idx(NCCL_EP_TENSOR_INIT),
           num_tokens(0),
           num_topk(0),
+          num_tokens_set(false),
           cached_mode(false),
           num_scales(0),
           hidden_int4(0) {
@@ -1899,15 +1976,92 @@ ncclResult_t ncclEpHandleMemSize(
     return ncclSuccess;
 }
 
+// Collectively (re-)size rdma_buffer to `new_size`. Two modes:
+//   - First allocation (rdma_buffer == nullptr): allocate, register, stash
+//     window handle in a newly-allocated device slot.
+//   - Grow (rdma_buffer != nullptr): cross-rank fence, deregister window,
+//     free, reallocate, re-register, update existing device slot.
+// In both cases the buffer is zeroed and rdma_buffer_size_alloc is updated.
+// Must be called by all ranks in the comm with the same new_size.
+static ncclResult_t ll_resize_rdma_buffer(ncclEpGroup_t ep_group, size_t new_size) {
+    EP_HOST_ASSERT(new_size > ep_group->rdma_buffer_size_alloc);
+    // With NCCL_EP_AUTO, config.rdma_buffer_size is 0 (the AUTO sentinel) and
+    // imposes no cap. With a user-specified value, the caller (ll_init_handle)
+    // rejects layouts that don't fit before reaching here, and the group-time
+    // path passes exactly config.rdma_buffer_size.
+    EP_HOST_ASSERT(ep_group->config.rdma_buffer_size == NCCL_EP_AUTO ||
+                   new_size <= ep_group->config.rdma_buffer_size);
+
+    const bool first_alloc = (ep_group->rdma_buffer == nullptr);
+
+    if (!first_alloc) {
+        // Cross-rank fence before teardown: cudaDeviceSynchronize drains
+        // local work, but a remote rank may still be touching this rank's
+        // window via RDMA. ncclMemFree/ncclCommWindowDeregister/
+        // ncclMemAlloc/ncclCommWindowRegister are themselves collective,
+        // so no further barrier is needed afterward.
+        CUDA_CHECK(cudaDeviceSynchronize());
+        cudaStream_t stream;
+        CUDA_CHECK(cudaStreamCreate(&stream));
+        NCCL_CHECK_RESULT(ncclBarrier(ep_group->comm, stream));
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        CUDA_CHECK(cudaStreamDestroy(stream));
+
+        ncclWindow_t win_host;
+        CUDA_CHECK(cudaMemcpy(&win_host, ep_group->nccl_wins, sizeof(ncclWindow_t), cudaMemcpyDeviceToHost));
+        NCCL_CHECK_RESULT(ncclCommWindowDeregister(ep_group->comm, win_host));
+        NCCL_CHECK_RESULT(ncclMemFree(ep_group->rdma_buffer));
+        ep_group->rdma_buffer = nullptr;
+    }
+
+    NCCL_CHECK_RESULT(ncclMemAlloc(&ep_group->rdma_buffer, new_size));
+    CUDA_CHECK(cudaMemset(ep_group->rdma_buffer, 0, new_size));
+    ep_group->rdma_buffer_size_alloc = new_size;
+
+    ncclWindow_t win_host;
+    NCCL_CHECK_RESULT(ncclCommWindowRegister(ep_group->comm, ep_group->rdma_buffer,
+                                              new_size, &win_host, 0));
+    if (first_alloc) {
+        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&ep_group->nccl_wins), sizeof(ncclWindow_t)));
+    }
+    CUDA_CHECK(cudaMemcpy(ep_group->nccl_wins, &win_host, sizeof(ncclWindow_t), cudaMemcpyHostToDevice));
+
+    return ncclSuccess;
+}
+
 static ncclResult_t ll_init_handle(ncclEpHandle_t handle, ncclEpGroup_t ep_group, const ncclEpTensor_t* handle_mem, int num_topk) {
     assert(num_topk > 0 && "LL mode requires num_topk > 0 (pass top_k to ncclEpInitHandle)");
     assert((ep_group->config.max_dispatch_tokens_per_rank * ep_group->num_local_experts) % 4 == 0
            && "TMA requires the number of tokens to be multiple of 4");
 
     auto layout = nccl_ep::LowLatencyLayout(
-        ep_group->rdma_buffer, ep_group->config.max_dispatch_tokens_per_rank,
-        ep_group->config.max_token_bytes, ep_group->nRanks, ep_group->config.num_experts, num_topk, handle->layout);
-    assert(layout.total_bytes <= ep_group->config.rdma_buffer_size);
+        ep_group->config.max_dispatch_tokens_per_rank,
+        ep_group->config.max_token_bytes, ep_group->nRanks,
+        ep_group->config.num_experts, num_topk, handle->layout);
+
+    // Ensure rdma_buffer is large enough for this handle's actual layout.
+    // - NCCL_EP_AUTO: lazily allocate (first handle) or grow (later handle
+    //   needing more, e.g. different layout or larger num_topk). Stored
+    //   layouts on other live handles are pure offsets, so reallocation
+    //   does not invalidate them.
+    // - User-specified size: the buffer was already allocated to that exact
+    //   value at group create. Reject the handle if it doesn't fit.
+    if (layout.total_bytes > ep_group->rdma_buffer_size_alloc) {
+        if (ep_group->config.rdma_buffer_size != NCCL_EP_AUTO) {
+            fprintf(stderr,
+                    "ncclEpInitHandle: requested layout needs %zu bytes but user-specified "
+                    "rdma_buffer_size is %zu bytes; either increase rdma_buffer_size or use "
+                    "NCCL_EP_AUTO to allow lazy sizing\n",
+                    layout.total_bytes,
+                    static_cast<size_t>(ep_group->config.rdma_buffer_size));
+            return ncclInvalidUsage;
+        }
+        const size_t new_size = ((layout.total_bytes + NUM_BUFFER_ALIGNMENT_BYTES - 1)
+                                 / NUM_BUFFER_ALIGNMENT_BYTES)
+                                * NUM_BUFFER_ALIGNMENT_BYTES;
+        NCCLCHECK(ll_resize_rdma_buffer(ep_group, new_size));
+    }
+    assert(layout.total_bytes <= ep_group->rdma_buffer_size_alloc);
 
     if (handle_mem != nullptr) {
         assert(handle_mem->ndim == 1 && handle_mem->datatype == ncclUint8);
@@ -2110,6 +2264,7 @@ ncclResult_t ncclEpUpdateHandle(
     tensor_permanent_copy(&handle->topk_idx, topk_idx);
 
     handle->num_tokens = static_cast<int>(handle->topk_idx.sizes[0]);
+    handle->num_tokens_set = true;
 
     if (ep_group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
         assert(static_cast<int>(topk_idx->sizes[1]) == handle->num_topk &&
@@ -2154,11 +2309,15 @@ ncclResult_t ncclEpUpdateHandle(
         global_routing_map + (max_tokens * num_experts_packed) * ep_group->rank;
 
     // ===== Step 1: Convert sparse topk_idx to bitmap routing map =====
+    // Pass max_tokens so the kernel zeroes the tail rows in the local send slot;
+    // ncclAllGather below ships max_tokens rows and stale tail bits would otherwise
+    // be interpreted as live routing by peers.
     nccl_ep::hybridep::convert_topk_to_routing_map(
         static_cast<const int64_t*>(handle->topk_idx.data),
         local_routing_send_ptr,
         handle->hybridep.topk_idx,
         handle->num_tokens,
+        max_tokens,
         handle->num_topk,
         num_experts_packed,
         stream);
@@ -2353,10 +2512,14 @@ ncclResult_t ncclEpDispatch(
         ncclEpGroup_t group = handle->group;
 
     // Lazy num_tokens for callers that skip UpdateHandle (e.g. backward reusing forward's handle_mem).
-    if (handle->num_tokens == 0) {
+    // Guard on `num_tokens_set` -- a real zero-token configuration is valid
+    // and must not trigger a re-fetch from inputs->tokens (whose data pointer
+    // may be NULL on the zero-token rank per the empty-tensor relaxation).
+    if (!handle->num_tokens_set) {
         const ncclEpTensor_t* t = tensor_required(inputs->tokens);
         assert(t->ndim > 0);
         handle->num_tokens = static_cast<int>(t->sizes[0]);
+        handle->num_tokens_set = true;
     }
 
     if (group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
@@ -2394,6 +2557,20 @@ ncclResult_t ncclEpDispatch(
                 assert(topk_weights_in   != nullptr);
                 assert(recv_topk_weights != nullptr);
                 assert(recv_topk_idx     != nullptr);
+                assert(topk_weights_in->ndim == 2);
+                assert(topk_weights_in->datatype == ncclFloat32);
+                assert(topk_weights_in->sizes[0] == static_cast<unsigned>(handle->num_tokens));
+                assert(topk_weights_in->sizes[1] == static_cast<unsigned>(handle->num_topk));
+                assert(recv_topk_weights->ndim == 3);
+                assert(recv_topk_weights->datatype == ncclFloat32);
+                assert(recv_topk_weights->sizes[0] == static_cast<unsigned>(group->nRanks));
+                assert(recv_topk_weights->sizes[1] == group->config.max_dispatch_tokens_per_rank);
+                assert(recv_topk_weights->sizes[2] == static_cast<unsigned>(handle->num_topk));
+                assert(recv_topk_idx->ndim == 3);
+                assert(recv_topk_idx->datatype == ncclInt32);
+                assert(recv_topk_idx->sizes[0] == static_cast<unsigned>(group->nRanks));
+                assert(recv_topk_idx->sizes[1] == group->config.max_dispatch_tokens_per_rank);
+                assert(recv_topk_idx->sizes[2] == static_cast<unsigned>(handle->num_topk));
                 assert(src_rank_counter != nullptr);
                 assert(src_rank_counter->ndim == 1);
                 assert(src_rank_counter->datatype == ncclInt32);
@@ -2443,7 +2620,7 @@ ncclResult_t ncclEpDispatch(
 
         const auto& buffer = handle->ll.layout.buffers[handle->ll.buffer_idx];
         auto& next_buffer = handle->ll.layout.buffers[handle->ll.buffer_idx ^= 1];
-        const auto next_clean_meta = next_buffer.clean_meta();
+        const auto next_clean_meta = next_buffer.clean_meta_offset();
 
         unsigned signal_base = group->num_dispatch_signals;
         // Zero-copy dispatch output: when the user supplied a window for the
@@ -2475,6 +2652,11 @@ ncclResult_t ncclEpDispatch(
         const size_t recv_data_offset =
             zero_copy_recv_x ? static_cast<size_t>(recv_x->win_offset) : 0;
         auto dispatch_fn = [=](int phases) {
+            char* rdma_base = static_cast<char*>(group->rdma_buffer);
+            void* dispatch_send_ptr = rdma_base + buffer.dispatch_rdma_send_buffer_offset;
+            void* dispatch_recv_ptr = rdma_base + buffer.dispatch_rdma_recv_data_buffer_offset;
+            int*  dispatch_count_ptr = reinterpret_cast<int*>(rdma_base + buffer.dispatch_rdma_recv_count_buffer_offset);
+            int*  next_clean_ptr = reinterpret_cast<int*>(rdma_base + next_clean_meta.first);
             // Prepare data pointers
             auto* recv_x_data = recv_x->data;
             auto* scales_data = scales ? scales->data : nullptr;
@@ -2508,13 +2690,13 @@ ncclResult_t ncclEpDispatch(
                     recv_count_data,
                     recv_topk_weights_data,
                     recv_topk_idx_data,
-                    buffer.dispatch_rdma_send_buffer,
-                    buffer.dispatch_rdma_recv_data_buffer,
-                    buffer.dispatch_rdma_recv_count_buffer,
-                    (reinterpret_cast<uint64_t>(buffer.dispatch_rdma_send_buffer) - reinterpret_cast<uint64_t>(group->rdma_buffer)),
-                    (reinterpret_cast<uint64_t>(buffer.dispatch_rdma_recv_data_buffer) - reinterpret_cast<uint64_t>(group->rdma_buffer)),
-                    (reinterpret_cast<uint64_t>(buffer.dispatch_rdma_recv_count_buffer) - reinterpret_cast<uint64_t>(group->rdma_buffer)),
-                    next_clean_meta.first,
+                    dispatch_send_ptr,
+                    dispatch_recv_ptr,
+                    dispatch_count_ptr,
+                    buffer.dispatch_rdma_send_buffer_offset,
+                    buffer.dispatch_rdma_recv_data_buffer_offset,
+                    buffer.dispatch_rdma_recv_count_buffer_offset,
+                    next_clean_ptr,
                     next_clean_meta.second,
                     nullptr, /*recv_send_sizes=*/
                     nullptr, /*recv_send_offsets=*/
@@ -2984,10 +3166,15 @@ ncclResult_t ncclEpCombine(
     }
 
     // Lazy num_tokens for callers that skip UpdateHandle (e.g. handle relocation between prepare and combine).
-    if (handle->num_tokens == 0) {
+    // Guard on `num_tokens_set` so a legitimate zero-token configuration is
+    // preserved (the outputs->tokens descriptor for a zero-token rank may
+    // carry data == nullptr, which is now legal per tensorHasBinding's
+    // empty-tensor relaxation but would still fail the assert on dim 0).
+    if (!handle->num_tokens_set) {
         const ncclEpTensor_t* lazy_combined = tensor_required(outputs->tokens);
         assert(lazy_combined->ndim > 0);
         handle->num_tokens = static_cast<int>(lazy_combined->sizes[0]);
+        handle->num_tokens_set = true;
     }
 
     if (handle->group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
@@ -3065,10 +3252,10 @@ ncclResult_t ncclEpCombine(
         // Manage double-buffering
         const auto& buffer = handle->ll.layout.buffers[handle->ll.buffer_idx];
         auto& next_buffer = handle->ll.layout.buffers[handle->ll.buffer_idx ^= 1];
-        const auto next_clean_meta = next_buffer.clean_meta();
+        const auto next_clean_meta = next_buffer.clean_meta_offset();
 
         // Validate buffer layout
-        assert(handle->ll.layout.total_bytes <= handle->group->config.rdma_buffer_size);
+        assert(handle->ll.layout.total_bytes <= handle->group->rdma_buffer_size_alloc);
 
         // Find and validate output tensor
         const ncclEpTensor_t* out = tensor_required(outputs->tokens);
@@ -3082,6 +3269,11 @@ ncclResult_t ncclEpCombine(
         // Define combine lambda
         unsigned signal_base = handle->ll.buffer_idx * (handle->group->num_dispatch_signals / 2);
         auto combine_fn = [=](int phases) {
+            char* rdma_base = static_cast<char*>(handle->group->rdma_buffer);
+            void* combine_send_ptr = rdma_base + buffer.combine_rdma_send_buffer_offset;
+            void* combine_recv_ptr = rdma_base + buffer.combine_rdma_recv_data_buffer_offset;
+            int*  combine_flag_ptr = reinterpret_cast<int*>(rdma_base + buffer.combine_rdma_recv_flag_buffer_offset);
+            int*  next_clean_ptr = reinterpret_cast<int*>(rdma_base + next_clean_meta.first);
             // Prepare data pointers
             auto* out_data = out->data;
             auto* x_data = x->data;
@@ -3109,13 +3301,13 @@ ncclResult_t ncclEpCombine(
                     topk_idx_data,
                     topk_weights_data,
                     out_data,
-                    buffer.combine_rdma_send_buffer,
-                    buffer.combine_rdma_recv_data_buffer,
-                    buffer.combine_rdma_recv_flag_buffer,
-                    (reinterpret_cast<uint64_t>(buffer.combine_rdma_send_buffer) - reinterpret_cast<uint64_t>(handle->group->rdma_buffer)),
-                    (reinterpret_cast<uint64_t>(buffer.combine_rdma_recv_data_buffer) - reinterpret_cast<uint64_t>(handle->group->rdma_buffer)),
-                    (reinterpret_cast<uint64_t>(buffer.combine_rdma_recv_flag_buffer) - reinterpret_cast<uint64_t>(handle->group->rdma_buffer)),
-                    next_clean_meta.first,
+                    combine_send_ptr,
+                    combine_recv_ptr,
+                    combine_flag_ptr,
+                    buffer.combine_rdma_send_buffer_offset,
+                    buffer.combine_rdma_recv_data_buffer_offset,
+                    buffer.combine_rdma_recv_flag_buffer_offset,
+                    next_clean_ptr,
                     next_clean_meta.second,
                     nullptr, /*recv_topk_idx=*/
                     num_combined_tokens,
@@ -3457,6 +3649,9 @@ ncclResult_t ncclEpMaskQuery(
     cudaStream_t stream
 ) {
     EP_HOST_ASSERT(ep_group != nullptr);
+    if (!ep_group->config.enable_mask) {
+        return ncclInvalidUsage;
+    }
     EP_HOST_ASSERT(ep_group->mask_buffer != nullptr && "ncclEpMaskQuery: enable_mask must be true");
     EP_HOST_ASSERT(mask_status != nullptr);
     CUDA_CHECK(cudaMemcpyAsync(mask_status, ep_group->mask_buffer,
@@ -3471,6 +3666,9 @@ ncclResult_t ncclEpMaskUpdate(
     cudaStream_t stream
 ) {
     EP_HOST_ASSERT(ep_group != nullptr);
+    if (!ep_group->config.enable_mask) {
+        return ncclInvalidUsage;
+    }
     EP_HOST_ASSERT(ep_group->mask_buffer != nullptr && "ncclEpMaskUpdate: enable_mask must be true");
     EP_HOST_ASSERT(mask != nullptr);
     CUDA_CHECK(cudaMemcpyAsync(ep_group->mask_buffer, mask,
@@ -3484,33 +3682,37 @@ ncclResult_t ncclEpMaskClean(
     cudaStream_t stream
 ) {
     EP_HOST_ASSERT(ep_group != nullptr);
+
+    if (!ep_group->config.enable_mask) {
+        return ncclInvalidUsage;
+    }
     EP_HOST_ASSERT(ep_group->mask_buffer != nullptr && "ncclEpMaskClean: enable_mask must be true");
     EP_HOST_ASSERT(ep_group->config.algorithm == NCCL_EP_ALGO_LOW_LATENCY);
+    EP_HOST_ASSERT(ep_group->rdma_buffer != nullptr &&
+                   "ncclEpMaskClean: rdma_buffer not yet allocated; create at least one LL handle first");
+    EP_HOST_ASSERT(ep_group->sync_buffer != nullptr && ep_group->sync_window != nullptr);
 
     // Reset internal RDMA recv-count/flag counters for both double-buffer slots
     // via a GPU kernel that includes a cross-rank barrier, then clear the mask.
-    // Layout is per-handle, but ncclEpMaskClean operates at group level and
-    // only touches the layout-independent signaling buffers (clean_meta) plus
-    // the sync_buffer used as a cross-rank barrier. Use the LL default layout
-    // so all ranks compute the same sync_buffer offset within the (worst-case
-    // sized) rdma_buffer.
-    nccl_ep::LowLatencyLayout layout(ep_group->rdma_buffer,
-                                      ep_group->config.max_dispatch_tokens_per_rank,
+    // Query the layout to read the clean_meta_offset values.
+    nccl_ep::LowLatencyLayout layout(ep_group->config.max_dispatch_tokens_per_rank,
                                       ep_group->config.max_token_bytes,
                                       ep_group->nRanks,
                                       ep_group->config.num_experts,
                                       MAX_NUM_TOPK,
-                                      NCCL_EP_LAYOUT_EXPERT_MAJOR);
-    auto clean_0 = layout.buffers[0].clean_meta();
-    auto clean_1 = layout.buffers[1].clean_meta();
+                                      NCCL_EP_LAYOUT_RANK_MAJOR);
+    char* rdma_base = static_cast<char*>(ep_group->rdma_buffer);
+    auto clean_0 = layout.buffers[0].clean_meta_offset();
+    auto clean_1 = layout.buffers[1].clean_meta_offset();
+    int* clean_0_ptr = reinterpret_cast<int*>(rdma_base + clean_0.first);
+    int* clean_1_ptr = reinterpret_cast<int*>(rdma_base + clean_1.first);
 
     nccl_ep::internode_ll::clean_low_latency_buffer(
-        clean_0.first, clean_0.second,
-        clean_1.first, clean_1.second,
+        clean_0_ptr, clean_0.second,
+        clean_1_ptr, clean_1.second,
         ep_group->mask_buffer,
-        layout.sync_buffer, layout.sync_buffer_offset,
+        static_cast<int*>(ep_group->sync_buffer), ep_group->sync_window,
         ep_group->nccl_dev_comms,
-        ep_group->nccl_wins,
         ep_group->clean_barrier_signal_base,
         ep_group->timeout_cycles,
         stream);
@@ -3531,6 +3733,9 @@ ncclResult_t ncclEpGetAsyncError(
     int* error_out
 ) {
     EP_HOST_ASSERT(ep_group != nullptr);
+    if (!ep_group->config.enable_mask) {
+        return ncclInvalidUsage;
+    }
     EP_HOST_ASSERT(ep_group->async_error_flag != nullptr && "ncclEpGetAsyncError: enable_mask must be true");
     EP_HOST_ASSERT(error_out != nullptr);
     *error_out = __atomic_load_n(ep_group->async_error_flag, __ATOMIC_ACQUIRE);
@@ -3541,6 +3746,9 @@ ncclResult_t ncclEpErrorClear(
     ncclEpGroup_t ep_group
 ) {
     EP_HOST_ASSERT(ep_group != nullptr);
+    if (!ep_group->config.enable_mask) {
+        return ncclInvalidUsage;
+    }
     EP_HOST_ASSERT(ep_group->async_error_flag != nullptr && "ncclEpErrorClear: enable_mask must be true");
     __atomic_store_n(ep_group->async_error_flag, 0, __ATOMIC_RELEASE);
     return ncclSuccess;
@@ -3590,4 +3798,3 @@ ncclResult_t ncclEpHandle_test_getNumRecvTokens(
 void ncclEpHandle_test_clearTopkIdx(ncclEpHandle_t handle) {
     handle->topk_idx.data = nullptr;
 }
-

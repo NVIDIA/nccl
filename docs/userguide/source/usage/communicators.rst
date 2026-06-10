@@ -562,6 +562,8 @@ The *checkTimeout* function needs to be provided by users to determine what is t
 NCCL initialization; likewise, users can apply other methods to detect errors besides a timeout function. Similar methods can be applied
 to NCCL finalization as well.
 
+.. _communicators_qos:
+
 ******************
 Quality of Service
 ******************

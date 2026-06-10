@@ -21,12 +21,17 @@ performance for an individual communication pattern. For a performance
 implementation please refer to the
 [nccl-tests](https://github.com/NVIDIA/nccl-tests/) GitHub repository.
 
+Python variants are provided where `nccl4py` exposes the required host-side
+APIs. Each Python example includes `requirements-cu12.txt` and
+`requirements-cu13.txt` in its `python/` directory. Examples that depend on
+pthread-specific coordination or CUDA device-side programming remain C/CUDA-only.
+
 ## Basic Examples
-We start with the most basic NCCL operations. All examples in this section are
-self-contained, meaning you can copy-paste one file and compile it on its own.
-The only dependencies are the NCCL library itself and, in the MPI case, an MPI
-implementation. These templates tend to new users coming up to speed with NCCL
-for GPU communication.
+We start with the most basic NCCL operations. These examples are intended as
+approachable starting points for new users coming up to speed with NCCL for GPU
+communication. Each example is organized as a small directory, with C sources
+under `c/` and, where available, a Python variant under `python/`. Language-
+specific build and run instructions are documented in those directories.
 
 ### [Communicators](01_communicators/)
 
@@ -52,27 +57,16 @@ use a specific feature. For complete end-to-end templates please use the basic
 examples.
 
 Since NCCL does not include its own launcher, we have provided two popular
-bootstrap mechanisms. By default these examples will be launched as separate
-threads, one thread per GPU. Users can set `MPI=1` to build an MPI parallel
-version which can run across multiple compute nodes. Users can optionally
-provide a valid MPI installation under `MPI_HOME`.
+bootstrap mechanisms. Depending on the example, execution may use a single
+process managing multiple GPUs, one thread per GPU, or one process per GPU with
+MPI. Users can set `MPI=1` to build an MPI parallel version which can run
+across multiple compute nodes. Users can optionally provide a valid MPI
+installation under `MPI_HOME`.
 
-Each example can be run individually. By default you can run each executable via
-```
-[NTHREADS=<number of threads>] ./<example_name>
-```
-
-If `NTHREADS` is unset, the examples will use the number of visible GPUs as
-number threads. If the applications are built with `MPI` support, you can run
-each executable as
-
-```
-mpirun -np <number of MPI ranks> ./<example_name>
-```
-
-To ease the readability of these examples we have moved the bootstrap and
-broadcast part to the [common](common/) directory. Completely self-contained
-examples are provided in the sections above.
+To ease the readability of these examples we have moved shared bootstrap and
+broadcast helper code to the [common](common/) directory. Build and run commands
+for each example are documented in the corresponding category README and in each
+example's `c/README.md` or, where available, `python/README.md`.
 
 ### [User Buffer Registration](04_user_buffer_registration/)
 
@@ -111,12 +105,13 @@ communication.
 - The same prerequisites as building NCCL from source.
 - Users can optionally add `MPI_HOME` for an MPI library in a non-standard
   location.
+- Python 3 is required if you want to run the `python/` variants.
 
 ## Build Steps
 The examples can be built while building the NCCL library from source. Users can
 choose to build the examples with MPI support (`MPI=1`).
 
-```
+```shell
 git clone https://github.com/NVIDIA/nccl.git
 cd nccl
 make -j examples [MPI=1]
@@ -125,10 +120,35 @@ make -j examples [MPI=1]
 or, if NCCL has already been built, the user can optionally add a non-standard
 NCCL installation location:
 
-```
+```shell
 cd docs/examples
 make NCCL_HOME=<path-to-nccl> [MPI=1]
 ```
+
+Python examples are run from the corresponding example's `python/` directory.
+Each Python README includes exact setup and run instructions. In most cases the
+workflow is:
+
+```shell
+cd <example>/python
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-cu12.txt   # or requirements-cu13.txt
+python <example>.py
+```
+
+To install all Python dependencies at once and run any example without
+per-directory setup, use the top-level requirements file:
+
+```shell
+python -m venv .venv
+source .venv/bin/activate
+pip install -r docs/examples/requirements-cu12.txt   # or requirements-cu13.txt
+```
+
+MPI-enabled Python examples additionally require `mpi4py` (already included in
+the top-level requirements).
+
 ## Environment Variables
 
 ### Build Stage

@@ -97,4 +97,6 @@ NCCL_EP_HT_EM_NVLINK_DEDUP=1 run_suite "test_output_layout" "EP Output Layout (L
 # Backward-combine path exercises the local_reduce prob-summation kernel.
 NCCL_EP_HT_EM_NVLINK_DEDUP=1 run_suite "test_ht_bwd"        "EP HT Backward (Local Fanout)"
 
+run_suite "test_ht_stale_routing_map" "EP HT Stale Routing Map Tests"
+
 exit "${OVERALL_FAIL}"

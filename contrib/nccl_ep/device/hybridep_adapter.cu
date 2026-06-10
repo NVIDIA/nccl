@@ -12,8 +12,7 @@
 #include "nccl_device.h"
 #include "hybridep_adapter.cuh"
 #include "hybridep_configs.cuh"
-#include "hybrid_ep.cuh"
-#include "include/common.hpp"
+#include "common.hpp"
 #include "jit/combine_jit.cuh"
 #include "jit/dispatch_jit.cuh"
 #include "jit/preprocess_jit.cuh"
@@ -31,19 +30,23 @@ namespace hybridep {
 // ============================================================================
 __global__ void convert_topk_to_routing_map_kernel(
     const int64_t* __restrict__ topk_idx,    // [num_tokens, num_topk]
-    uint8_t* __restrict__ routing_bitmap,     // [num_tokens, num_experts_packed]
+    uint8_t* __restrict__ routing_bitmap,     // [max_tokens, num_experts_packed]
     int64_t* __restrict__ cached_topk_idx,    // [num_tokens, num_topk]; nullable
     int num_tokens,
+    int max_tokens,                           // tail-zero bound (>= num_tokens)
     int num_topk,
     int num_experts_packed                    // = ceil(num_experts / 8)
 ) {
     int token = blockIdx.x * blockDim.x + threadIdx.x;
-    if (token >= num_tokens) return;
+    if (token >= max_tokens) return;
 
     // Each thread exclusively owns its row -- no atomics needed.
     // Zero the row before OR-ing in bits; the caller does not pre-zero.
+    // Threads for tail rows [num_tokens, max_tokens) zero and exit, so the
+    // downstream ncclAllGather over max_tokens rows ships clean tail bytes.
     uint8_t* row = routing_bitmap + token * num_experts_packed;
     for (int b = 0; b < num_experts_packed; b++) row[b] = 0;
+    if (token >= num_tokens) return;
     const int64_t* in_row  = topk_idx + token * num_topk;
     int64_t*       out_row = cached_topk_idx ? cached_topk_idx + token * num_topk : nullptr;
     for (int k = 0; k < num_topk; k++) {
@@ -63,15 +66,16 @@ void convert_topk_to_routing_map(
     uint8_t* routing_bitmap,
     int64_t* cached_topk_idx,
     int num_tokens,
+    int max_tokens,
     int num_topk,
     int num_experts_packed,
     cudaStream_t stream
 ) {
     int block_size = 256;
-    int grid_size = (num_tokens + block_size - 1) / block_size;
+    int grid_size = (max_tokens + block_size - 1) / block_size;
 
     convert_topk_to_routing_map_kernel<<<grid_size, block_size, 0, stream>>>(
-        topk_idx, routing_bitmap, cached_topk_idx, num_tokens, num_topk, num_experts_packed);
+        topk_idx, routing_bitmap, cached_topk_idx, num_tokens, max_tokens, num_topk, num_experts_packed);
 }
 
 // ============================================================================

@@ -368,6 +368,16 @@ static ncclResult_t epGetTensorData(const BenchmarkAllocState& alloc, const nccl
         *data = it->second;
         return ncclSuccess;
     }
+    // Empty tensor (zero-extent in some dimension) is allowed to carry a
+    // null data pointer -- a zero-byte buffer has no element to address.
+    // Hand back nullptr so callers can pass it to cudaMemset/cudaMemcpy
+    // with count=0 (both are no-ops on a NULL pointer when count is 0).
+    for (unsigned int i = 0; i < tensor->ndim; ++i) {
+        if (tensor->sizes != nullptr && tensor->sizes[i] == 0) {
+            *data = nullptr;
+            return ncclSuccess;
+        }
+    }
     return ncclInvalidUsage;
 }
 
@@ -448,11 +458,11 @@ static void setupLowLatencyTensorsRankMajLayout(
                            (unsigned)nRanks, max_dispatch_tokens_per_rank, hidden,
                            1, 1, dispatch_out_window_opts));
 
-    NCCLCHECK(epMakeTensor(&dispatch_outputs.topk_weights, 2, ncclFloat32,
-                           (unsigned)nRanks * max_dispatch_tokens_per_rank, top_k));
+    NCCLCHECK(epMakeTensor(&dispatch_outputs.topk_weights, 3, ncclFloat32,
+                           (unsigned)nRanks, max_dispatch_tokens_per_rank, top_k));
 
-    NCCLCHECK(epMakeTensor(&dispatch_outputs.topk_idx, 2, ncclInt32,
-                           (unsigned)nRanks * max_dispatch_tokens_per_rank, top_k));
+    NCCLCHECK(epMakeTensor(&dispatch_outputs.topk_idx, 3, ncclInt32,
+                           (unsigned)nRanks, max_dispatch_tokens_per_rank, top_k));
 
     NCCLCHECK(epMakeTensor(&combine_inputs.tokens, 3, ncclBfloat16,
                            (unsigned)nRanks, max_dispatch_tokens_per_rank, hidden));
@@ -1005,8 +1015,8 @@ static ValidationResult validateDispatchOutputLLExpertMaj(
 
 // ==================== LL rank-major dispatch validation ====================
 // Output: 3D [nRanks, max_dispatch_tokens_per_rank, hidden], one slot per received token packed by source rank.
-// outputs[1] = recv_topk_weights [nRanks*max_tpr, top_k]: all top-k weights from the source token.
-// outputs[2] = recv_topk_idx     [nRanks*max_tpr, top_k]: local expert index on myRank, or -1.
+// outputs[1] = recv_topk_weights [nRanks, max_tpr, top_k]: all top-k weights from the source token.
+// outputs[2] = recv_topk_idx     [nRanks, max_tpr, top_k]: local expert index on myRank, or -1.
 // Slots within each rank's block are contiguous from index 0; first invalid slot ends the block.
 static ValidationResult validateDispatchOutputLLRankMaj(
     const BenchmarkAllocState&     alloc,
@@ -1250,6 +1260,7 @@ static void preReduceRankMajor(
 // Output: 2D [nRanks*max_tokens_per_rank, hidden]; row valid iff any recv_topk_idx[k] >= 0.
 // FIXME: ncclEpHandleGetNumRecvTokens returns buffer max, not actual count — scan recv_topk_idx as workaround.
 static ValidationResult validateDispatchOutputHTRankMaj(
+    const BenchmarkAllocState&     alloc,
     const ncclEpDispatchOutputs_t& dispatch_outputs,
     unsigned int max_tokens_per_rank,
     const unsigned int*            num_tokens_per_rank,
@@ -1271,14 +1282,14 @@ static ValidationResult validateDispatchOutputHTRankMaj(
     size_t recv_size = static_cast<size_t>(buf_rows) * hidden;
     uint16_t* recv_data = new uint16_t[recv_size];
     void* output0_data;
-    output0_data = dispatch_outputs.tokens->data;
+    NCCLCHECK(epGetTensorData(alloc, dispatch_outputs.tokens, &output0_data));
     CUDACHECK(cudaMemcpy(recv_data, output0_data,
                          recv_size * sizeof(uint16_t), cudaMemcpyDeviceToHost));
 
     bool* valid_slot = new bool[buf_rows]();
     int64_t* recv_topk_idx = new int64_t[static_cast<size_t>(buf_rows) * top_k];
     void* output2_data;
-    output2_data = dispatch_outputs.topk_idx->data;
+    NCCLCHECK(epGetTensorData(alloc, dispatch_outputs.topk_idx, &output2_data));
     CUDACHECK(cudaMemcpy(recv_topk_idx, output2_data,
                          static_cast<size_t>(buf_rows) * top_k * sizeof(int64_t),
                          cudaMemcpyDeviceToHost));
@@ -1373,6 +1384,7 @@ static ValidationResult validateDispatchOutputHTRankMaj(
 // Output: 2D [budget, hidden] split into per-expert zones (meta_expert_offsets[e], counts_padded[e]).
 // Phase A: pad slots (decode rank=128) must be all-zero. Phase B: dup tokens across zones byte-identical.
 static ValidationResult validateDispatchOutputHTExpertMaj(
+    const BenchmarkAllocState&     alloc,
     const ncclEpDispatchOutputs_t& dispatch_outputs,
     unsigned int max_tokens_per_rank,
     const unsigned int*            num_tokens_per_rank,
@@ -1394,7 +1406,7 @@ static ValidationResult validateDispatchOutputHTExpertMaj(
     size_t recv_size = static_cast<size_t>(buf_rows) * hidden;
     uint16_t* recv_data = new uint16_t[recv_size];
     void* output0_data;
-    output0_data = dispatch_outputs.tokens->data;
+    NCCLCHECK(epGetTensorData(alloc, dispatch_outputs.tokens, &output0_data));
     CUDACHECK(cudaMemcpy(recv_data, output0_data,
                          recv_size * sizeof(uint16_t), cudaMemcpyDeviceToHost));
 
@@ -1504,18 +1516,17 @@ ValidationResult validateDispatchOutput(
     const int64_t* meta_expert_counts_padded = nullptr,
     const int64_t* meta_expert_offsets       = nullptr
 ) {
-    (void)alloc;  // HT path uses ncclEpTensorGetData directly
     (void)expert_major_alignment;
     if (is_ht_mode) {
         // EM requires both meta arrays; fall back to RM scan if missing.
         if (is_expert_major && meta_expert_offsets != nullptr && meta_expert_counts_padded != nullptr) {
-            return validateDispatchOutputHTExpertMaj(dispatch_outputs,
+            return validateDispatchOutputHTExpertMaj(alloc, dispatch_outputs,
                                                      max_tokens_per_rank, num_tokens_per_rank,
                                                      hidden, top_k,
                                                      num_experts, num_local_experts, myRank, nRanks,
                                                      meta_expert_counts_padded, meta_expert_offsets);
         }
-        return validateDispatchOutputHTRankMaj(dispatch_outputs,
+        return validateDispatchOutputHTRankMaj(alloc, dispatch_outputs,
                                                max_tokens_per_rank, num_tokens_per_rank,
                                                hidden, top_k,
                                                num_experts, num_local_experts, myRank, nRanks);
@@ -1919,22 +1930,19 @@ PairedBenchResult runPairedBenchmark(
 // Structure to hold Low Latency byte calculation
 // Matches DeepEP test_low_latency.py methodology
 struct LowLatencyBytes {
-    size_t dispatch_bytes;  // FP8 or BF16 format per selection
+    size_t dispatch_bytes;  // BF16 format per selection
     size_t combine_bytes;   // BF16 format: hidden * 2 per selection
     unsigned int num_valid_selections;
-    bool is_fp8;  // Whether dispatch uses FP8
 };
 
-// Calculate bytes for Low Latency mode
-// Dispatch can be FP8 or BF16, combine is always BF16
+// Calculate bytes for Low Latency mode (dispatch and combine are both BF16)
 LowLatencyBytes calculateLowLatencyBytes(
     const int64_t* topk_idx_host,
     unsigned int num_tokens,
     unsigned int top_k,
-    unsigned int hidden,
-    bool use_fp8
+    unsigned int hidden
 ) {
-    LowLatencyBytes bytes = {0, 0, 0, use_fp8};
+    LowLatencyBytes bytes = {0, 0, 0};
 
     // Count valid selections (non-masked entries)
     for (unsigned int i = 0; i < num_tokens * top_k; i++) {
@@ -1943,15 +1951,11 @@ LowLatencyBytes calculateLowLatencyBytes(
         }
     }
 
-    // FP8 bytes per selection: hidden + hidden/128*4 + 16 (scale factors + metadata)
-    const size_t fp8_bytes_per_selection = hidden + (hidden / 128) * 4 + 16;
     // BF16 bytes per selection: hidden * 2
     const size_t bf16_bytes_per_selection = hidden * 2;
 
-    // Dispatch: FP8 or BF16 based on config
-    bytes.dispatch_bytes = static_cast<size_t>(bytes.num_valid_selections) *
-                           (use_fp8 ? fp8_bytes_per_selection : bf16_bytes_per_selection);
-    // Combine: always BF16
+    // Dispatch and combine are both BF16
+    bytes.dispatch_bytes = static_cast<size_t>(bytes.num_valid_selections) * bf16_bytes_per_selection;
     bytes.combine_bytes = static_cast<size_t>(bytes.num_valid_selections) * bf16_bytes_per_selection;
 
     return bytes;
@@ -1980,7 +1984,6 @@ struct HighThroughputBytes {
     unsigned int rdma_send_tokens;
     unsigned int rdma_recv_tokens;
     unsigned int total_recv_tokens;
-    bool is_fp8;
 };
 
 // Calculate all six byte metrics from topk_idx for High Throughput mode.
@@ -2003,10 +2006,9 @@ HighThroughputBytes calculateHighThroughputBytes(
     unsigned int hidden,
     int myRank,
     int nRanks,
-    bool use_fp8,
     int num_ranks_per_node
 ) {
-    HighThroughputBytes bytes = {0, 0, 0, 0, 0, 0, 0, 0, use_fp8};
+    HighThroughputBytes bytes = {0, 0, 0, 0, 0, 0, 0, 0};
 
     int num_nodes = (nRanks + num_ranks_per_node - 1) / num_ranks_per_node;
     unsigned int num_experts_per_node = static_cast<unsigned int>(num_experts / num_nodes);
@@ -2056,10 +2058,7 @@ HighThroughputBytes calculateHighThroughputBytes(
         }
     }
 
-    const size_t bf16_bytes_per_token = hidden * 2;
-    const double fp8_factor = (1.0 + 4.0 / 128.0) / 2.0;
-    const size_t bytes_per_token = use_fp8 ?
-        static_cast<size_t>(bf16_bytes_per_token * fp8_factor) : bf16_bytes_per_token;
+    const size_t bytes_per_token = hidden * 2;  // BF16
 
     bytes.total_send_bytes = bytes.total_send_tokens * bytes_per_token;
     bytes.rdma_send_bytes  = bytes.rdma_send_tokens  * bytes_per_token;
@@ -2071,7 +2070,7 @@ HighThroughputBytes calculateHighThroughputBytes(
 
 // Print benchmark results with MPI aggregation across ranks
 // Print benchmark results for Low Latency mode
-// Uses FP8 bytes for dispatch, BF16 bytes for combine (matching DeepEP test_low_latency.py)
+// Uses BF16 bytes for both dispatch and combine
 void printLowLatencyResults(
     int myRank,
     int nRanks,
@@ -2179,8 +2178,7 @@ void printLowLatencyResults(
 
         printf("\n--- Host-observed performance ---\n");
 
-        printf("Dispatch (%s):  avg=%.2f us, min=%.2f us, max=%.2f us\n",
-               ll_bytes.is_fp8 ? "FP8" : "BF16",
+        printf("Dispatch (BF16):  avg=%.2f us, min=%.2f us, max=%.2f us\n",
                global_dispatch_avg * 1000,
                global_dispatch_min * 1000,
                global_dispatch_max * 1000);
@@ -2227,9 +2225,8 @@ void printLowLatencyResults(
             printf("  NOTE: CUPTI support was not compiled.\n");
         }
 
-        printf("\nByte counts: dispatch=%.2f MB (%s), combine=%.2f MB (BF16), selections=%u\n",
+        printf("\nByte counts: dispatch=%.2f MB (BF16), combine=%.2f MB (BF16), selections=%u\n",
                ll_bytes.dispatch_bytes / 1e6,
-               ll_bytes.is_fp8 ? "FP8" : "BF16",
                ll_bytes.combine_bytes / 1e6,
                ll_bytes.num_valid_selections);
         fflush(stdout);
@@ -2317,6 +2314,9 @@ void printHighThroughputResults(
 
         double dk_total_s = global_dispatch_avg * 1e-3;  // avg total dispatch time in seconds
         double ck_total_s = global_combine_avg  * 1e-3;
+
+        printf("\n=== Summary (High Throughput BF16, across %d ranks) ===\n", nRanks);
+        printf("NOTE: total time = kernel time + memcpyD2D + misc\n");
 
         // --- BW based on total time ---
         printf("--- BW based on total time ---\n");
@@ -2469,13 +2469,19 @@ void generateRandomTopkIndicesLL(
         }
     }
 
-    // Randomly mask 10 positions with -1 (simulates dropped tokens)
-    std::uniform_int_distribution<unsigned int> token_dist(0, num_tokens - 1);
-    std::uniform_int_distribution<unsigned int> topk_dist(0, top_k - 1);
-    for (int i = 0; i < 10; i++) {
-        unsigned int token_idx = token_dist(gen);
-        unsigned int k_idx = topk_dist(gen);
-        topk_idx_host[token_idx * top_k + k_idx] = -1;
+    // Randomly mask 10 positions with -1 (simulates dropped tokens).
+    // Guarded on num_tokens > 0: zero-token ranks have no slots to mask, and
+    // the distribution upper bound `num_tokens - 1` would underflow to
+    // UINT_MAX on an unsigned 0, then index out-of-bounds into the empty
+    // topk_idx_host buffer.
+    if (num_tokens > 0) {
+        std::uniform_int_distribution<unsigned int> token_dist(0, num_tokens - 1);
+        std::uniform_int_distribution<unsigned int> topk_dist(0, top_k - 1);
+        for (int i = 0; i < 10; i++) {
+            unsigned int token_idx = token_dist(gen);
+            unsigned int k_idx = topk_dist(gen);
+            topk_idx_host[token_idx * top_k + k_idx] = -1;
+        }
     }
 }
 
@@ -2493,12 +2499,18 @@ static std::vector<unsigned int> computeNonUniformTokensPerRank(
         return out;
     }
     std::mt19937 rng(seed);
-    std::uniform_int_distribution<unsigned int> dist(1u, max_tokens);
+    // Sample inclusive of 0 so the asymmetric zero-tokens path is exercised.
+    // The kernel's per-token loops degrade to no-ops at num_tokens=0 and
+    // tensorHasBinding now accepts empty tensors, so a zero-tokens rank is
+    // a valid configuration that must not regress.
+    std::uniform_int_distribution<unsigned int> dist(0u, max_tokens);
     for (int r = 0; r < nRanks; r++) {
         out[r] = dist(rng);
     }
     out[0] = max_tokens;
-    if (nRanks > 1) out[nRanks - 1] = 1u;
+    // Force at least one rank to 0 so the regression case is always exercised
+    // (the random sample alone may not hit 0 for small nRanks).
+    if (nRanks > 1) out[nRanks - 1] = 0u;
     return out;
 }
 
@@ -2522,7 +2534,6 @@ void printUsage(const char* programName, int myRank) {
         printf("  --experts <num>         Total number of experts (default: 256)\n");
         printf("  --warmup <num>          Warmup iterations (default: 10)\n");
         printf("  --iters <num>           Benchmark iterations (default: 50)\n");
-        printf("  --use-fp8               Use FP8 for dispatch (default: BF16)\n");
         printf("  --user-handle-mem       Use caller-owned buffer via ncclEpInitHandle+ncclEpUpdateHandle\n");
         printf("  --profile               Enable NVTX profiling mode (use with nsys)\n");
         printf("  --disable-nvlink        Disable NVLink, force RDMA for intranode communication (LL only)\n");
@@ -2557,7 +2568,6 @@ int main(int argc, char* argv[]) {
     int num_iters = 50;
     bool profile_mode = false;  // Enable NVTX profiling with nsys
     bool disable_nvlink = false;  // Force RDMA instead of NVLink
-    bool use_fp8 = false;  // Use FP8 for dispatch (default: BF16)
     bool user_handle_mem = false;  // Use caller-owned buffer via ncclEpInitHandle+ncclEpUpdateHandle
     bool validate_data = false;  // Validate dispatch/combine correctness
     bool dispatch_only = false;  // Skip combine run and validation (use with --validate)
@@ -2590,7 +2600,6 @@ int main(int argc, char* argv[]) {
         {"iters",          required_argument, 0, 'i'},
         {"profile",        no_argument,       0, 'p'},
         {"disable-nvlink", no_argument,       0, 'n'},
-        {"use-fp8",        no_argument,       0, 'f'},
         {"user-handle-mem",no_argument,       0, 'U'},
         {"validate",       no_argument,       0, 'V'},
         {"dispatch-only",  no_argument,       0, 'D'},
@@ -2665,9 +2674,6 @@ int main(int argc, char* argv[]) {
                 break;
             case 'p':
                 profile_mode = true;
-                break;
-            case 'f':
-                use_fp8 = true;
                 break;
             case 'U':
                 user_handle_mem = true;
@@ -2858,14 +2864,14 @@ int main(int argc, char* argv[]) {
         if (include_uniform_less_than_max) {
             printf("  Sub-test:        Uniform tokens (num<max=%u)\n", num_dispatch_tokens);
         } else if (include_non_uniform_tokens) {
-            printf("  Sub-test:        Non-uniform tokens in [1, %u]\n", max_tokens_per_rank);
+            printf("  Sub-test:        Non-uniform tokens in [0, %u] (last rank forced to 0)\n", max_tokens_per_rank);
         }
         printf("  Hidden:          %u\n", hidden);
         printf("  Top-k:           %u\n", top_k);
         printf("  Experts:         %u (local: %u)\n", num_experts, num_local_experts);
         printf("  Warmup iters:    %d\n", num_warmup);
         printf("  Benchmark iters: %d\n", num_iters);
-        printf("  Dispatch dtype:  %s\n", use_fp8 ? "FP8" : "BF16");
+        printf("  Dispatch dtype:  BF16\n");
         printf("  Profile mode:    %s\n", profile_mode ? "enabled" : "disabled");
         printf("  NVLink:          %s\n", disable_nvlink ? "disabled (force RDMA intranode, LL only)" : "enabled");
         printf("  Validate mode:   %s\n", validate_data ? "enabled" : "disabled");
@@ -2960,6 +2966,10 @@ int main(int argc, char* argv[]) {
            (algorithm == NCCL_EP_ALGO_LOW_LATENCY) ? "LOW_LATENCY" : "HIGH_THROUGHPUT",
            mask_test ? " (mask-test mode)" : "");
     MPICHECK(MPI_Barrier(MPI_COMM_WORLD));
+    // Baseline GPU memory before any EP allocations (group buffer, handle mem,
+    // staging tensors). Compared against a post-combine snapshot below.
+    size_t gpu_mem_free_pre = 0, gpu_mem_total = 0;
+    CUDACHECK(cudaMemGetInfo(&gpu_mem_free_pre, &gpu_mem_total));
     double group_create_start = MPI_Wtime();
     NCCLCHECK(ncclEpCreateGroup(&ep_group, comm, &config));
     double group_create_end = MPI_Wtime();
@@ -3015,15 +3025,15 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Calculate byte metrics based on algorithm mode and FP8 setting
+    // Calculate byte metrics based on algorithm mode (BF16)
     LowLatencyBytes ll_bytes = {};
     HighThroughputBytes ht_bytes = {};
     if (algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
-        ll_bytes = calculateLowLatencyBytes(topk_idx_host, num_tokens, top_k, hidden, use_fp8);
+        ll_bytes = calculateLowLatencyBytes(topk_idx_host, num_tokens, top_k, hidden);
     } else {
         ht_bytes = calculateHighThroughputBytes(
             topk_idx_host, num_tokens, num_tokens_per_rank.data(),
-            top_k, num_experts, hidden, myRank, nRanks, use_fp8,
+            top_k, num_experts, hidden, myRank, nRanks,
             ncclTeamLsa(comm).nRanks);
     }
 
@@ -3205,7 +3215,7 @@ int main(int argc, char* argv[]) {
     // Calculate data sizes for bandwidth calculation based on algorithm mode
     size_t dispatch_data_bytes, combine_data_bytes;
     if (algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
-        // LL mode: FP8 for dispatch, BF16 for combine
+        // LL mode: BF16 for both dispatch and combine
         dispatch_data_bytes = ll_bytes.dispatch_bytes;
         combine_data_bytes = ll_bytes.combine_bytes;
     } else {
@@ -3256,6 +3266,16 @@ int main(int argc, char* argv[]) {
         ktimer,
         stream);
 
+    // Post-combine GPU memory snapshot. By this point the EP group has been
+    // created, the handle has been initialized (and the rdma_buffer grown to
+    // fit the active layout, if needed), and dispatch+combine have run. The
+    // delta vs gpu_mem_free_pre reflects total EP-induced device allocations
+    // (mostly rdma_buffer + handle mem + bench-time tensors).
+    size_t gpu_mem_free_post = 0;
+    {
+        size_t total_ignored = 0;
+        CUDACHECK(cudaMemGetInfo(&gpu_mem_free_post, &total_ignored));
+    }
 
     // Extract individual results for printing
     BenchResult dispatch_result = paired_result.dispatch;
@@ -3293,8 +3313,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (myRank == 0 && algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) {
-        printf("\n=== Summary (High Throughput %s, across %d ranks) ===\n",
-               ht_bytes.is_fp8 ? "FP8" : "BF16", nRanks);
+        printf("\n=== Summary (High Throughput BF16, across %d ranks) ===\n", nRanks);
         printf("NOTE: total time = kernel time + memcpyD2D + misc\n");
     }
 
@@ -3373,6 +3392,21 @@ int main(int argc, char* argv[]) {
             printf("Handle creation:     avg=%.2f ms, min=%.2f ms, max=%.2f ms\n",
                    global_handle_avg, global_handle_min, global_handle_max);
         }
+    }
+
+    // GPU memory usage (rank 0 snapshot; same device, identical layout across ranks).
+    // Captured before group creation and right after the paired dispatch+combine.
+    if (myRank == 0) {
+        const double MB = 1024.0 * 1024.0;
+        const size_t used_pre  = gpu_mem_total  - gpu_mem_free_pre;
+        const size_t used_post = gpu_mem_total  - gpu_mem_free_post;
+        const long long delta  = static_cast<long long>(used_post) -
+                                 static_cast<long long>(used_pre);
+        printf("\n=== GPU Memory (rank 0) ===\n");
+        printf("Total device memory: %.2f MB\n", gpu_mem_total / MB);
+        printf("Used pre-create:     %.2f MB\n", used_pre  / MB);
+        printf("Used post-combine:   %.2f MB\n", used_post / MB);
+        printf("EP-induced delta:    %+.2f MB\n", delta / MB);
     }
 
     // ==================== Data Validation ====================

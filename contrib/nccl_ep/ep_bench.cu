@@ -252,11 +252,25 @@ static ncclResult_t epMakeTensor(ncclEpTensor_t** out_tensor, unsigned int ndim,
     const bool use_nccl_mem = opts != nullptr && opts->use_nccl_mem;
     if (use_nccl_mem) {
         ncclResult_t r = ncclMemAlloc(&data, bytes);
-        if (r != ncclSuccess) return r;
+        if (r != ncclSuccess) {
+            printf("epMakeTensor: failed to allocate NCCL buffer\n");
+            fprintf(stderr, "ncclMemAlloc failed at %s:%d: %s — requested %zu bytes (%.2f MiB)\n",
+                            __FILE__, __LINE__,
+                            ncclGetErrorString(r),
+                            bytes, bytes / (1024.0 * 1024.0));
+            exit(EXIT_FAILURE);
+        }
         if (opts->nccl_mem_ptrs) opts->nccl_mem_ptrs->push_back(data);
     } else {
         cudaError_t e = cudaMalloc(&data, bytes);
-        if (e != cudaSuccess) return ncclSystemError;
+        if (e != cudaSuccess) {
+            printf("epMakeTensor: failed to allocate CUDA buffer\n");
+            fprintf(stderr, "cudaMalloc failed at %s:%d: %s (%s) — requested %zu bytes (%.2f MiB)\n",
+                            __FILE__, __LINE__,
+                            cudaGetErrorString(e), cudaGetErrorName(e),
+                            bytes, bytes / (1024.0 * 1024.0));
+            exit(EXIT_FAILURE);
+        }
     }
 
     auto free_data = [&]() {

@@ -88,6 +88,7 @@ ncclResult_t ncclTopoGetCpuAffinity(struct ncclTopoSystem* system, int rank, ncc
 #define NCCL_TOPO_CPU_MODEL_INTEL_SRP 3
 #define NCCL_TOPO_CPU_MODEL_INTEL_ERP 4
 #define NCCL_TOPO_CPU_MODEL_YONGFENG 1
+#define NCCL_TOPO_CPU_MODEL_AMD_TURIN 1
 ncclResult_t ncclTopoCpuType(struct ncclTopoSystem* system, int* arch, int* vendor, int* model);
 ncclResult_t ncclTopoGetGpuCount(struct ncclTopoSystem* system, int* count);
 ncclResult_t ncclTopoGetNetCount(struct ncclTopoSystem* system, int* count);

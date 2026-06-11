@@ -9,22 +9,37 @@
 #include "nccl_rma.h"
 #include "checks.h"
 #include "os.h"
+#include "plugin_cleanup.h"
 #include <string.h>
 
 static ncclRma_v13_t* ncclRma_v13;
 static ncclRma_t ncclRma;
 
 static ncclResult_t ncclRma_init(void** ctx, uint64_t commId, ncclDebugLogger_t logFunction) {
-  NCCLCHECK(ncclRma_v13->init(ctx, commId, logFunction));
+  ncclResult_t ret = ncclSuccess;
+  void* tmpCtx = nullptr;
+  *ctx = nullptr;
+  NCCLCHECK(ncclRma_v13->init(&tmpCtx, commId, logFunction));
 
   // RMA plugin must report GIN proxy type
   ncclNetProperties_t props;
-  NCCLCHECK(ncclRma_v13->getProperties(0, &props));
+  NCCLCHECKGOTO(ncclRma_v13->getProperties(0, &props), ret, fail);
   if (props.netDeviceType != NCCL_NET_DEVICE_GIN_PROXY) {
     WARN("RMA v13 (%s) requires GIN PROXY type, got netDeviceType %d", ncclRma_v13->name, props.netDeviceType);
-    return ncclInternalError;
+    ret = ncclInternalError;
+    goto fail;
   }
+  *ctx = tmpCtx;
   return ncclSuccess;
+fail:
+  if (tmpCtx) {
+    ncclResult_t finalizeRet = ncclPluginFinalizeContext(ncclRma_v13->finalize, &tmpCtx);
+    if (finalizeRet != ncclSuccess) {
+      WARN("RMA v13 (%s) finalize failed during init fallback cleanup: %d", ncclRma_v13->name, finalizeRet);
+    }
+    if (ret == ncclSuccess) ret = finalizeRet;
+  }
+  return ret;
 }
 
 static ncclResult_t ncclRma_createContext(void* collComm, ncclRmaConfig_v14_t* config, void** rmaCtx) {

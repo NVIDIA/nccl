@@ -9,6 +9,7 @@
 #include "bootstrap.h"
 #include "checks.h"
 #include "plugin.h"
+#include "plugin_cleanup.h"
 #include "nccl_net.h"
 
 #include <string.h>
@@ -165,6 +166,7 @@ ncclResult_t ncclNetCheckDeviceVersion(struct ncclComm* comm, ncclNet_t* net, in
 static ncclResult_t ncclNetPluginInit(struct ncclComm* comm, netPluginLib_t* pluginLib) {
   int ndev;
   bool initCompleted = false;
+  bool collNetInitCompleted = false;
   // Init must be called for each new comm to set the right context
   if (pluginLib->ncclNetPluginState >= ncclNetPluginStateInitReady && pluginLib->ncclNet) {
     ncclNetCommConfig_t commConfig = {};
@@ -189,11 +191,19 @@ static ncclResult_t ncclNetPluginInit(struct ncclComm* comm, netPluginLib_t* plu
   if (pluginLib->ncclCollNetPluginState >= ncclNetPluginStateInitReady && pluginLib->ncclCollNet) {
     if (pluginLib->ncclCollNet->init(&comm->collNetContext, comm->commHash, ncclDebugLog) != ncclSuccess) {
       pluginLib->ncclCollNetPluginState = ncclNetPluginStateDisabled;
+    } else {
+      collNetInitCompleted = true;
     }
   }
   // Detection of the devices is only done when the plugin is being initialized the first time
   if (pluginLib->ncclCollNetPluginState == ncclNetPluginStateInitReady && pluginLib->ncclCollNet) {
     if (pluginLib->ncclCollNet->devices(&ndev) != ncclSuccess || ndev <= 0) {
+      if (collNetInitCompleted) {
+        ncclResult_t finalizeRet = ncclPluginFinalizeContext(pluginLib->ncclCollNet->finalize, &comm->collNetContext);
+        if (finalizeRet != ncclSuccess) {
+          WARN("NET/Plugin: CollNet finalize failed during init fallback cleanup: %d", finalizeRet);
+        }
+      }
       pluginLib->ncclCollNetPluginState = ncclNetPluginStateDisabled;
     } else {
       pluginLib->collNetPhysDevs = ndev;

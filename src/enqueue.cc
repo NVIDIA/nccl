@@ -3158,6 +3158,7 @@ ncclResult_t ncclEnqueueCheck(struct ncclInfo* info) {
 
   NCCLCHECKGOTO(taskAppend(info->comm, info), ret, fail);
 
+  info->comm->opCount++;
 exit:
   if (devOld != -1) CUDACHECK(cudaSetDevice(devOld));
   ncclGroupErrCheck(ret);

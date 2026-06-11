@@ -34,17 +34,18 @@ static ncclResult_t profilerProxyProgress(struct ncclProxyState* proxyState, str
       struct ncclProxySubArgs* sub = args->subs + s;
       struct ncclDevProfiler* workStarted = (struct ncclDevProfiler*)sub->sendbuff;
       struct ncclDevProfiler* workCompleted = (struct ncclDevProfiler*)sub->recvbuff;
+      int idx = sub->base % MAX_PROFILER_EVENTS_PER_CHANNEL;
       if (sub->posted < sub->nsteps &&
-          sub->base <= workStarted[sub->channelId].data[sub->base % MAX_PROFILER_EVENTS_PER_CHANNEL].counter) {
+          sub->base <= workStarted[sub->channelId].data[idx].counter) {
         ncclProfilerStartKernelChEvent(
-          args, s, workStarted[sub->channelId].data[sub->base % MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp);
+          args, s, workStarted[sub->channelId].data[idx].timestamp);
         sub->posted = sub->nsteps;
         continue; // allow events on every channel to start
       }
-      if (sub->transmitted < sub->nsteps &&
-          sub->base <= workCompleted[sub->channelId].data[sub->base % MAX_PROFILER_EVENTS_PER_CHANNEL].counter) {
+      if (sub->posted == sub->nsteps && sub->transmitted < sub->nsteps &&
+          sub->base <= workCompleted[sub->channelId].data[idx].counter) {
         ncclProfilerStopKernelChEvent(
-          args, s, workCompleted[sub->channelId].data[sub->base % MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp);
+          args, s, workCompleted[sub->channelId].data[idx].timestamp);
         sub->transmitted = sub->nsteps;
         args->done++;
       }

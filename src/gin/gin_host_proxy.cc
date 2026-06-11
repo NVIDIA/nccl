@@ -18,6 +18,7 @@
 #include "proxy_gpucontext/gpucontext.h"
 
 NCCL_PARAM(GinProxyQueueSize, "GIN_PROXY_QUEUE_SIZE", -1);
+NCCL_PARAM(GinProxyPollBatch, "GIN_PROXY_POLL_BATCH", 1);
 extern int64_t ncclParamIbDataDirect();
 extern int64_t ncclParamDmaBufEnable();
 
@@ -616,14 +617,24 @@ static ncclResult_t ncclGinProxyDestroyContext(void* ginCtx) {
 static ncclResult_t ncclGinProxyProgress(void* ginCtx) {
   struct ginProxyCtx* ctx = (struct ginProxyCtx*)ginCtx;
 
+  // Max GFDs to drain from a rank's queue per progress tick. Draining more than
+  // one amortizes the loop's fixed per-tick cost (completion poll, rmaProgress,
+  // yield) when the queue is deep, as in expert-parallel dispatch. Default 1
+  // preserves the original single-pull behavior; values below 1 clamp to 1.
+  static int pollBatch = -1;
+  if (pollBatch < 0) {
+    int64_t v = ncclParamGinProxyPollBatch();
+    pollBatch = (v < 1) ? 1 : (int)v;
+  }
+
   for (int contextId = 0; contextId < ctx->nContexts; contextId++) {
     struct ginProxyHostGpuCtx* hostGpuCtx = ctx->hostGpuCtx + contextId;
     NCCLCHECK(proxyGinPollCompletions(ctx->collComm, ctx, hostGpuCtx));
     for (int targetRank = 0; targetRank < ctx->nRanks; targetRank++) {
-      // Poll on the GFD queue
-      ncclGinProxyGfd_t gfd;
-      struct ginProxyGfdState* state = NULL;
-      if (proxyGinPollGfd(ctx, hostGpuCtx, targetRank, &gfd, &state)) {
+      for (int p = 0; p < pollBatch; p++) {
+        ncclGinProxyGfd_t gfd;
+        struct ginProxyGfdState* state = NULL;
+        if (!proxyGinPollGfd(ctx, hostGpuCtx, targetRank, &gfd, &state)) break;
         ncclResult_t ret = proxyGinProcessGfd(ctx, hostGpuCtx, targetRank, &gfd, state);
         if (ret) ctx->hasError = ret;
         NCCLCHECK(ret);

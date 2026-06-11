@@ -308,15 +308,23 @@ struct gdaki_exch_info {
   union ibv_gid gid;
   struct doca_verbs_gid vgid;
   int gid_index;
+
+  char hostname[HOST_NAME_MAX];
+  char ib_dev_name[IBV_SYSFS_NAME_MAX];
+  int cuda_id;
+  int rank;
 };
 
 struct gdaki_context {
   int cuda_id;
   struct doca_gpu* gdev;
-  struct ibv_device* ib_dev;
   struct doca_verbs_ah_attr* ah; /* DOCA Verbs address handle */
   struct ibv_device_attr ib_dev_attr;
   struct doca_verbs_gid gid;
+
+  char hostname[HOST_NAME_MAX];
+  char ib_dev_name[IBV_SYSFS_NAME_MAX];
+  int rank;
 
   union ibv_gid rgid;
   struct ibv_port_attr port_attr;
@@ -357,6 +365,10 @@ static void gdakiFillExchInfo(struct gdaki_exch_info* exch_info, struct gdaki_co
   memcpy(exch_info->gid.raw, gdaki_ctx->rgid.raw, sizeof(union ibv_gid));
   memcpy(exch_info->vgid.raw, gdaki_ctx->rgid.raw, sizeof(union ibv_gid));
   exch_info->gid_index = gdaki_ctx->gid_index;
+  snprintf(exch_info->hostname, IBV_SYSFS_NAME_MAX, "%s", gdaki_ctx->hostname);
+  snprintf(exch_info->ib_dev_name, IBV_SYSFS_NAME_MAX, "%s", gdaki_ctx->ib_dev_name);
+  exch_info->cuda_id = gdaki_ctx->cuda_id;
+  exch_info->rank = gdaki_ctx->rank;
 }
 
 static ncclResult_t gdakiCreateVerbsAh(struct gdaki_context* ctx, struct ibv_context* ib_context, int ib_sl, int ib_tc,
@@ -451,6 +463,10 @@ static ncclResult_t gdakiConnectQp(struct gdaki_context* ctx, struct doca_gpu_ve
   return ncclSuccess;
 
 destroy_verbs_qp_attr:
+  WARN("[%d] Failed to connect GDAKI QP: local_node_name=%s local_gpu_id=%d local_nic_name=%s "
+       "remote_rank=%d remote_node_name=%s remote_gpu_id=%d remote_nic_name=%s",
+       ctx->rank, ctx->hostname, ctx->cuda_id, ctx->ib_dev_name, exch_info->rank, exch_info->hostname,
+       exch_info->cuda_id, exch_info->ib_dev_name);
   DOCACHECK(doca_verbs_qp_attr_destroy(verbs_qp_attr));
   return status;
 }
@@ -520,6 +536,7 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, int nSignals, int nCounte
   gdaki_ctx = (struct gdaki_context*)calloc(1, sizeof(*gdaki_ctx));
   EQCHECKGOTO(gdaki_ctx, nullptr, status, out);
   gdaki_ctx->needCompanion = needCompanion;
+  gdaki_ctx->rank = rank;
 
   gdaki_ctx->gin_gdaki_gpu_ctx_host_staging =
     (struct ncclGinGdakiGPUContext*)calloc(ncontexts, sizeof(struct ncclGinGdakiGPUContext));
@@ -549,6 +566,9 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, int nSignals, int nCounte
 
   remote_exch_info = (struct gdaki_exch_info*)calloc(ncontexts * nranks, sizeof(*remote_exch_info));
   EQCHECKGOTO(remote_exch_info, nullptr, status, out);
+
+  gethostname(gdaki_ctx->hostname, HOST_NAME_MAX);
+  snprintf(gdaki_ctx->ib_dev_name, IBV_SYSFS_NAME_MAX, "%s", props.name);
 
   CUDACHECK(cudaGetDevice(&gdaki_ctx->cuda_id));
   CUDACHECK(cudaDeviceGetPCIBusId(pciBusId, MAX_PCI_ADDRESS_LEN, gdaki_ctx->cuda_id));

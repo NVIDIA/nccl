@@ -70,6 +70,13 @@ extern "C" {
 #pragma GCC visibility push(hidden)
 #endif
 
+#ifdef __x86_64__
+// CUDA blobs released as part of SDK expect some globals to be small
+#define CODE_MODEL_SMALL __attribute__((model("small")))
+#else
+#define CODE_MODEL_SMALL
+#endif
+
 /* ---- Forward declare all functions referenced in globals ---- */
 
 NVTX_LINKONCE_FWDDECL_FUNCTION void NVTX_VERSIONED_IDENTIFIER(nvtxInitOnce)(void);
@@ -173,6 +180,7 @@ typedef struct nvtxGlobals_t
     NvtxFunctionPointer* functionTable_SYNC  [NVTX_CBID_SYNC_SIZE   + 1];
 } nvtxGlobals_t;
 
+CODE_MODEL_SMALL
 NVTX_LINKONCE_DEFINE_GLOBAL nvtxGlobals_t NVTX_VERSIONED_IDENTIFIER(nvtxGlobals) =
 {
     NVTX_INIT_STATE_FRESH,

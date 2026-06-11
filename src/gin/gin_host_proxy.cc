@@ -18,7 +18,7 @@
 #include "proxy_gpucontext/gpucontext.h"
 
 NCCL_PARAM(GinProxyQueueSize, "GIN_PROXY_QUEUE_SIZE", -1);
-NCCL_PARAM(GinProxyPollBatch, "GIN_PROXY_POLL_BATCH", 1);
+NCCL_PARAM(GinProxyPollBatch, "GIN_PROXY_POLL_BATCH", 32);
 extern int64_t ncclParamIbDataDirect();
 extern int64_t ncclParamDmaBufEnable();
 
@@ -79,6 +79,7 @@ struct ginProxyCtx {
   int nContexts;
   int nCountersPerContext;
   int nSignalsPerContext;
+  int pollBatch;
   void* rmaCtx; // from plugin
 };
 
@@ -456,6 +457,10 @@ static ncclResult_t ncclGinProxyCreateContext(void* collComm, ncclGinConfig_t* c
   ncclRmaConfig_t rmaConfig = {config->nContexts, config->trafficClass, config->rankStride};
   NCCLCHECK(rmaBackend->createContext(cComm->collComm, &rmaConfig, &proxyCtx->rmaCtx));
 
+  // Parse poll batch size
+  int64_t pollBatchParam = ncclParamGinProxyPollBatch();
+  proxyCtx->pollBatch = (pollBatchParam < 1) ? 1 : (int)pollBatchParam;
+
   // Sanitize the queue size
   uint64_t queueSize = ncclParamGinProxyQueueSize();
   uint32_t maxRequests = NCCL_NET_MAX_REQUESTS * cComm->props.maxRecvs;
@@ -617,21 +622,11 @@ static ncclResult_t ncclGinProxyDestroyContext(void* ginCtx) {
 static ncclResult_t ncclGinProxyProgress(void* ginCtx) {
   struct ginProxyCtx* ctx = (struct ginProxyCtx*)ginCtx;
 
-  // Max GFDs to drain from a rank's queue per progress tick. Draining more than
-  // one amortizes the loop's fixed per-tick cost (completion poll, rmaProgress,
-  // yield) when the queue is deep, as in expert-parallel dispatch. Default 1
-  // preserves the original single-pull behavior; values below 1 clamp to 1.
-  static int pollBatch = -1;
-  if (pollBatch < 0) {
-    int64_t v = ncclParamGinProxyPollBatch();
-    pollBatch = (v < 1) ? 1 : (int)v;
-  }
-
   for (int contextId = 0; contextId < ctx->nContexts; contextId++) {
     struct ginProxyHostGpuCtx* hostGpuCtx = ctx->hostGpuCtx + contextId;
     NCCLCHECK(proxyGinPollCompletions(ctx->collComm, ctx, hostGpuCtx));
     for (int targetRank = 0; targetRank < ctx->nRanks; targetRank++) {
-      for (int p = 0; p < pollBatch; p++) {
+      for (int p = 0; p < ctx->pollBatch; p++) {
         ncclGinProxyGfd_t gfd;
         struct ginProxyGfdState* state = NULL;
         if (!proxyGinPollGfd(ctx, hostGpuCtx, targetRank, &gfd, &state)) break;

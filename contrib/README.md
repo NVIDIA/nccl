@@ -25,7 +25,7 @@ contribution process described in [CONTRIBUTING.md](../CONTRIBUTING.md).
 | [`nccl_checkpoint/`](nccl_checkpoint/) | NCCL Checkpoint library for multi-node, communicator-aware checkpoint and restore |
 | [`nccl_ep/`](nccl_ep/) | NCCL Expert Parallelism (EP) API for MoE communication (dispatch/combine primitives) |
 | [`nccl_ubx/`](nccl_ubx/) | UB-X (Ultra Bandwidth — eXperimental): low-latency NVLink collectives with compute fusion (residual + RMSNorm, mxfp8 dispatch) on a symmetric allocator |
-| [`nccl_xfer/`](nccl_xfer/) | NCCL Cross-group Transfer (Xfer) API for RL communication (reshard primitives) |
+| [`nccl_m2n/`](nccl_m2n/) | NCCL Cross-group Transfer (M2N) API for RL communication (reshard primitives) |
 
 ## Upstreaming to contrib/
 

@@ -220,6 +220,126 @@ def ncclGinPut(gin_ptr, team, peer, dst_win, dst_offset, src_win, src_offset,
     )
 
 
+_raw_ncclGinPutValue = _ffi(
+    name="ncclGinPutValue",
+    params_types=[
+        _LLVMPtrType,        # ncclGin_C* gin
+        ncclTeam,            # team
+        cutlass.Int32,       # peer
+        _LLVMPtrType,        # dst window
+        cutlass.Int64,       # dst offset
+        cutlass.Int64,       # value
+        cutlass.Int64,       # size
+        cutlass.Boolean,     # is_signal
+        cutlass.Int32,       # signal_id
+        cutlass.Int32,       # signal_op
+        cutlass.Int64,       # signal_op_arg
+        ncclCoopAny,         # coop
+        cutlass.Boolean,     # is_descriptor
+        _LLVMPtrType,        # descriptor_ptr
+        cutlass.Int32,       # given_release
+        cutlass.Int32,       # required_release
+    ])
+
+def ncclGinPutValue(gin_ptr, team, peer, dst_win, dst_offset, value, size,
+                    is_signal, signal_id, signal_op, signal_op_arg, coop,
+                    is_descriptor, descriptor_ptr,
+                    given_release, required_release):
+    _raw_ncclGinPutValue(
+        _to_ptr(gin_ptr), team, cutlass.Int32(peer),
+        _to_ptr(dst_win), cutlass.Int64(dst_offset),
+        cutlass.Int64(value), cutlass.Int64(size),
+        cutlass.Boolean(is_signal), cutlass.Int32(signal_id),
+        cutlass.Int32(signal_op), cutlass.Int64(signal_op_arg),
+        _to_coop_value(coop),
+        cutlass.Boolean(is_descriptor), _to_ptr(descriptor_ptr),
+        cutlass.Int32(given_release), cutlass.Int32(required_release),
+    )
+
+
+_raw_ncclGinGet = _ffi(
+    name="ncclGinGet",
+    params_types=[
+        _LLVMPtrType,        # ncclGin_C* gin
+        ncclTeam,            # team
+        cutlass.Int32,       # peer
+        _LLVMPtrType,        # remote window
+        cutlass.Int64,       # remote offset
+        _LLVMPtrType,        # local window
+        cutlass.Int64,       # local offset
+        cutlass.Int64,       # size
+        ncclCoopAny,         # coop
+        cutlass.Boolean,     # is_descriptor
+        _LLVMPtrType,        # descriptor_ptr
+        cutlass.Int32,       # opt_flags
+    ])
+
+def ncclGinGet(gin_ptr, team, peer, remote_win, remote_offset, local_win,
+               local_offset, size, coop, is_descriptor, descriptor_ptr,
+               opt_flags):
+    _raw_ncclGinGet(
+        _to_ptr(gin_ptr), team, cutlass.Int32(peer),
+        _to_ptr(remote_win), cutlass.Int64(remote_offset),
+        _to_ptr(local_win), cutlass.Int64(local_offset),
+        cutlass.Int64(size),
+        _to_coop_value(coop),
+        cutlass.Boolean(is_descriptor), _to_ptr(descriptor_ptr),
+        cutlass.Int32(opt_flags),
+    )
+
+
+_raw_ncclGinFlush = _ffi(
+    name="ncclGinFlush",
+    params_types=[_LLVMPtrType, ncclCoopAny, cutlass.Int32])
+
+def ncclGinFlush(gin_ptr, coop, ord):
+    _raw_ncclGinFlush(
+        _to_ptr(gin_ptr), _to_coop_value(coop), cutlass.Int32(ord),
+    )
+
+
+_raw_ncclGinSignal = _ffi(
+    name="ncclGinSignal",
+    params_types=[
+        _LLVMPtrType,        # ncclGin_C* gin
+        ncclTeam,            # team
+        cutlass.Int32,       # peer
+        cutlass.Boolean,     # is_signal
+        cutlass.Int32,       # signal_id
+        cutlass.Int32,       # signal_op
+        cutlass.Int64,       # signal_op_arg
+        ncclCoopAny,         # coop
+        cutlass.Boolean,     # is_descriptor
+        _LLVMPtrType,        # descriptor_ptr
+        cutlass.Int32,       # given_release
+        cutlass.Int32,       # required_release
+    ])
+
+def ncclGinSignal(gin_ptr, team, peer, is_signal, signal_id, signal_op, signal_op_arg,
+                  coop, is_descriptor, descriptor_ptr, given_release, required_release):
+    _raw_ncclGinSignal(
+        _to_ptr(gin_ptr), team, cutlass.Int32(peer),
+        cutlass.Boolean(is_signal), cutlass.Int32(signal_id),
+        cutlass.Int32(signal_op), cutlass.Int64(signal_op_arg),
+        _to_coop_value(coop),
+        cutlass.Boolean(is_descriptor), _to_ptr(descriptor_ptr),
+        cutlass.Int32(given_release), cutlass.Int32(required_release),
+    )
+
+
+_raw_ncclGinReadSignal = _ffi(
+    name="ncclGinReadSignal",
+    params_types=[_LLVMPtrType, cutlass.Int32, cutlass.Int32, cutlass.Int32],
+    return_type=cutlass.Int64,
+)
+
+def ncclGinReadSignal(gin_ptr, signal_id, bits, ord):
+    return cutlass.Int64(_raw_ncclGinReadSignal(
+        _to_ptr(gin_ptr), cutlass.Int32(signal_id),
+        cutlass.Int32(bits), cutlass.Int32(ord),
+    ))
+
+
 _raw_ncclGinWaitSignal = _ffi(
     name="ncclGinWaitSignal",
     params_types=[

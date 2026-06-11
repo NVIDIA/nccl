@@ -567,8 +567,8 @@ ncclResult_t ncclIbPeerMemSupport();
 ncclResult_t ncclIbDmaBufSupport(int dev);
 
 void ncclIbAddEvent(struct ncclIbRequest* req, int devIndex);
-ncclResult_t ncclIbGetGidIndex(struct ibv_context* context, uint8_t portNum, struct ibv_port_attr* portAttr,
-                               int* gidIndex);
+ncclResult_t ncclIbGetGidIndex(struct ibv_context *context, uint8_t portNum, struct ibv_port_attr* portAttr, int *gidIndex);
+ncclResult_t ncclIbRefreshGidInfo(struct ncclIbDev* ibDev, struct ncclIbGidInfo* gidInfo);
 ncclResult_t ncclIbGetRequest(struct ncclIbNetCommBase* base, struct ncclIbRequest** req);
 ncclResult_t ncclIbFreeRequest(struct ncclIbRequest* r);
 

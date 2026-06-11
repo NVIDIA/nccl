@@ -962,26 +962,22 @@ static ncclResult_t deepCopyDevCommRequirements(struct ncclDevCommRequirements c
   // Copy the entire struct now and update linked lists later.  Because of backwards compatibility, the source may
   // actually be smaller than the type would imply.
   memcpy(*dst, src, src->size);
+  (*dst)->resourceRequirementsList = nullptr;
+  (*dst)->teamRequirementsList = nullptr;
 
   dstRes = &(*dst)->resourceRequirementsList;
   for (struct ncclDevResourceRequirements* rr = src->resourceRequirementsList; rr != nullptr; rr = rr->next) {
     NCCLCHECKGOTO(ncclCalloc(dstRes, 1), ret, fail);
-    (*dstRes)->bufferSize = rr->bufferSize;
-    (*dstRes)->bufferAlign = rr->bufferAlign;
-    (*dstRes)->outBufferHandle = rr->outBufferHandle;
-    (*dstRes)->ginSignalCount = rr->ginSignalCount;
-    (*dstRes)->ginCounterCount = rr->ginCounterCount;
-    (*dstRes)->outGinSignalStart = rr->outGinSignalStart;
-    (*dstRes)->outGinCounterStart = rr->outGinCounterStart;
+    memcpy(*dstRes, rr, sizeof(struct ncclDevResourceRequirements));
+    (*dstRes)->next = nullptr;
     dstRes = &(*dstRes)->next;
   }
 
   dstTeam = &(*dst)->teamRequirementsList;
   for (struct ncclTeamRequirements* tr = src->teamRequirementsList; tr != nullptr; tr = tr->next) {
     NCCLCHECKGOTO(ncclCalloc(dstTeam, 1), ret, fail);
-    (*dstTeam)->team = tr->team;
-    (*dstTeam)->multimem = tr->multimem;
-    (*dstTeam)->outMultimemHandle = tr->outMultimemHandle;
+    memcpy(*dstTeam, tr, sizeof(struct ncclTeamRequirements));
+    (*dstTeam)->next = nullptr;
     dstTeam = &(*dstTeam)->next;
   }
 

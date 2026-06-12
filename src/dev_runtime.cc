@@ -1551,7 +1551,10 @@ exit:
   cudaSetDevice(saveDev);
   return ret;
 fail:
-  free(task);
+  if (task) {
+    freeDevCommRequirements(task->reqs);
+    free(task);
+  }
   goto exit;
 }
 

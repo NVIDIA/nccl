@@ -5,8 +5,8 @@
  * See LICENSE.txt for more license information
  *************************************************************************/
 
-/// Definitions of NVTX payload types and schemas used for the NVTX
-/// instrumentation in init.cc and collectives.cc.
+/// Definitions of NVTX payload types and schemas used for NCCL NVTX
+/// instrumentation.
 
 #ifndef NVTX_PAYLOAD_SCHEMAS_H_
 #define NVTX_PAYLOAD_SCHEMAS_H_
@@ -32,6 +32,11 @@ static constexpr char const* nccl_nvtxRankStr = "Rank";
 static constexpr char const* nccl_nvtxNranksStr = "No. of ranks";
 static constexpr char const* nccl_nvtxMsgSizeStr = "Message size [bytes]";
 static constexpr char const* nccl_nvtxReductionOpStrpStr = "Reduction operation";
+static constexpr char const* nccl_nvtxCollectiveStr = "Collective";
+static constexpr char const* nccl_nvtxAlgorithmStr = "Algorithm";
+static constexpr char const* nccl_nvtxProtocolStr = "Protocol";
+static constexpr char const* nccl_nvtxDatatypeStr = "Datatype";
+static constexpr char const* nccl_nvtxChannelCountStr = "No. of channels";
 
 NCCL_NVTX_DEFINE_STRUCT_WITH_SCHEMA_ENTRIES(
   NcclNvtxParamsCommInitAll, static constexpr,
@@ -137,5 +142,19 @@ NCCL_NVTX_DEFINE_STRUCT_WITH_SCHEMA_ENTRIES(NcclNvtxParamsWaitSignal, static con
                                             NCCL_NVTX_PAYLOAD_ENTRIES((uint64_t, comm, TYPE_UINT64, nccl_nvtxCommStr),
                                                                       (int, npeers, TYPE_INT, "Number of peers"),
                                                                       (int, ctx, TYPE_INT, "Context ID")))
+
+NCCL_NVTX_DEFINE_STRUCT_WITH_SCHEMA_ENTRIES(NcclNvtxParamsKernelTask, static constexpr,
+  NCCL_NVTX_PAYLOAD_ENTRIES(
+    (uint64_t, comm, TYPE_UINT64, nccl_nvtxCommStr),
+    (int, rank, TYPE_INT, nccl_nvtxRankStr),
+    (size_t, bytes, TYPE_SIZE, nccl_nvtxMsgSizeStr),
+    (int, func, TYPE_INT, nccl_nvtxCollectiveStr),
+    (int, algorithm, TYPE_INT, nccl_nvtxAlgorithmStr),
+    (int, protocol, TYPE_INT, nccl_nvtxProtocolStr),
+    (int, datatype, TYPE_INT, nccl_nvtxDatatypeStr),
+    (int, root, TYPE_INT, "Root"),
+    (int, nChannels, TYPE_INT, nccl_nvtxChannelCountStr)
+  )
+)
 
 #endif // end include guard

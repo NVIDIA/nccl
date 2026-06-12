@@ -84,19 +84,32 @@ run_suite() {
     rm -rf "${LOG_DIR}"
 }
 
-run_suite "test_output_layout" "EP Output Layout Tests"
-run_suite "test_handle_maps"   "EP Handle Maps Tests"
-run_suite "test_lifecycle"     "EP Lifecycle Tests"
-run_suite "test_ht_bwd"        "EP HT Backward Tests"
-run_suite "test_tensor_create" "EP Tensor Create Tests"
-run_suite "test_zero_copy"     "EP Zero-Copy forced"
+# Suite list: bin|description|em_affected.
+# em_affected suites are re-run under every HT-EM mode.
+SUITES=(
+    "test_output_layout|EP Output Layout Tests|1"
+    "test_handle_maps|EP Handle Maps Tests|1"
+    "test_lifecycle|EP Lifecycle Tests|1"
+    "test_ht_bwd|EP HT Backward Tests|1"
+    "test_ht_stale_routing_map|EP HT Stale Routing Map Tests|1"
+    "test_tensor_create|EP Tensor Create Tests|0"
+    "test_zero_copy|EP Zero-Copy forced|0"
+)
 
-# Re-run the EM output-layout suite with the receiver local_dup / local_reduce
-# code path enabled. Same correctness invariants must hold.
-NCCL_EP_HT_EM_NVLINK_DEDUP=1 run_suite "test_output_layout" "EP Output Layout (Local Fanout)"
-# Backward-combine path exercises the local_reduce prob-summation kernel.
-NCCL_EP_HT_EM_NVLINK_DEDUP=1 run_suite "test_ht_bwd"        "EP HT Backward (Local Fanout)"
+for entry in "${SUITES[@]}"; do
+    IFS='|' read -r bin desc _ <<<"${entry}"
+    run_suite "${bin}" "${desc}"
+done
 
-run_suite "test_ht_stale_routing_map" "EP HT Stale Routing Map Tests"
+for mode in LOCAL_DUP NVLINK_DUP; do
+    label="$( [[ ${mode} == LOCAL_DUP ]] && echo 'Local Fanout' || echo 'NVLink Dup' )"
+    export "NCCL_EP_HT_EM_${mode}=1"
+    for entry in "${SUITES[@]}"; do
+        IFS='|' read -r bin desc em <<<"${entry}"
+        [[ ${em} == 1 ]] || continue
+        run_suite "${bin}" "${desc} (${label})"
+    done
+    unset "NCCL_EP_HT_EM_${mode}"
+done
 
 exit "${OVERALL_FAIL}"

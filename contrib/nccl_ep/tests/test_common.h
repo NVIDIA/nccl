@@ -59,7 +59,9 @@ static constexpr int kNumExperts = 8;
 static constexpr int kHidden     = 16;
 static constexpr int kTopK       = 1;
 // Per-rank recv-slot budget; sized for the worst-case test (EM + align=8 = 2 local experts * 8 slots).
-static constexpr int kMaxRecvSlots = 16;
+// Must satisfy nRanks * max_dispatch * num_topk (= 4 * kNumTokens * 2 with TopK2
+// fixtures) so HT EM em_slot-indexed staging fits under LOCAL_DUP/NVLINK_DUP modes.
+static constexpr int kMaxRecvSlots = 32;
 
 static int expert_for_token(int i) {
     return (g_rank * kNumTokens + i) % kNumExperts;

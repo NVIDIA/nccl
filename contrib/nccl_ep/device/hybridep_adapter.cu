@@ -17,6 +17,7 @@
 #include "jit/dispatch_jit.cuh"
 #include "jit/preprocess_jit.cuh"
 
+#include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -350,6 +351,10 @@ void call_metadata_preprocessing(
     int      emuf_max_groups,
     int      num_blocks,
     void*    scan_gscratch,
+    bool     em_permute,
+    int32_t* token_to_recv_slot,
+    int32_t* flat2em_slot_map,
+    int      em_top_k,
     cudaStream_t stream
 ) {
     if (expert_major && per_expert_token_counts == nullptr) {
@@ -365,26 +370,68 @@ void call_metadata_preprocessing(
     constexpr int NUM_OF_WARPS_PER_BLOCK_SCAN = NUM_THREADS_PER_BLOCK / 32;
 
     if (expert_major) {
-        // EM path: produce only the per-token rank mask + RDMA/attn maps in the
-        // scan, then run the cooperative em_scan_kernel for S2D / LERM / em offsets.
-        ::hybrid_ep::scan_em_kernel_param_t sp;
-        sp.input_routing_map = global_routing_map;
-        sp.rdma_to_attn_map = rdma_to_attn_map;
-        sp.attn_to_rdma_map = attn_to_rdma_map;
-        sp.token_rank_mask = token_rank_mask;
-        sp.node_rank = node_rank;
-        sp.local_rank = local_rank;
-        sp.num_of_tokens_per_rank = num_tokens_per_rank;
-        sp.num_of_ranks_per_node = num_ranks_per_node;
-        sp.experts_per_rank = experts_per_rank;
+        if (em_permute) {
+            // EM-permute path: run the FLAT scan to populate the unified
+            // (FLAT-shape) s2d + LERM (FLAT-shape) + token_rank_mask + RDMA/attn
+            // maps in one pass. em_scan_kernel still runs below but only for
+            // EM-only offsets / counts / alignment; its s2d and LERM writes are
+            // suppressed by passing null pointers.
+            const size_t preprocessing_tmp_sz = NUM_OF_BLOCKS * num_ranks_per_node * sizeof(::hybrid_ep::tmp_state_t);
+            CUDA_CHECK(cudaMemsetAsync(scan_tmp, 0, preprocessing_tmp_sz, stream));
 
-        jit::launch_scan_em(
-            NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, num_nodes, num_ranks_per_node,
-            sp, stream);
+            const size_t scan_smem_size =
+                (2 * NUM_OF_WARPS_PER_BLOCK_SCAN * num_ranks_per_node * sizeof(int32_t)) +
+                (num_ranks_per_node * sizeof(int32_t));
+            const int dynamic_smem_bytes = static_cast<int>(scan_smem_size);
+
+            ::hybrid_ep::scan_flat_kernel_param_t sp;
+            sp.input_routing_map = global_routing_map;
+            sp.tmp = reinterpret_cast<::hybrid_ep::tmp_state_t*>(scan_tmp);
+            sp.sparse_to_dense_map = sparse_to_dense_map;
+            sp.rdma_to_attn_map = rdma_to_attn_map;
+            sp.attn_to_rdma_map = attn_to_rdma_map;
+            sp.token_rank_mask = token_rank_mask;
+            // FLAT scan publishes raw recv count here; em_scan_kernel leaves
+            // it untouched in em-permute mode. EM-padded total lives in
+            // expert_token_offsets[experts_per_rank].
+            sp.num_of_tokens_for_experts = num_tokens_for_experts;
+            sp.local_expert_routing_map = local_expert_routing_map;
+            sp.per_expert_token_counts = nullptr; // em_scan_kernel writes authoritative per-expert counts
+            sp.node_rank = node_rank;
+            sp.local_rank = local_rank;
+            sp.num_of_tokens_per_rank = num_tokens_per_rank;
+            sp.num_of_ranks_per_node = num_ranks_per_node;
+            sp.experts_per_rank = experts_per_rank;
+            sp.recv_total_counter = recv_total_counter;
+            sp.out_is_int64 = out_is_int64;
+            sp.max_recv_tokens_per_rank = max_recv_tokens_per_rank;
+            sp.token_to_recv_slot = token_to_recv_slot;
+
+            jit::launch_scan_flat(
+                NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, num_nodes, num_ranks_per_node,
+                /*per_expert_counts=*/false, sp, dynamic_smem_bytes, stream);
+        } else {
+            // nvlink_dup / local_dup EM path: produce only the per-token rank mask + RDMA/attn
+            // maps in the scan, then let em_scan_kernel build S2D / LERM / em offsets.
+            ::hybrid_ep::scan_em_kernel_param_t sp;
+            sp.input_routing_map = global_routing_map;
+            sp.rdma_to_attn_map = rdma_to_attn_map;
+            sp.attn_to_rdma_map = attn_to_rdma_map;
+            sp.token_rank_mask = token_rank_mask;
+            sp.node_rank = node_rank;
+            sp.local_rank = local_rank;
+            sp.num_of_tokens_per_rank = num_tokens_per_rank;
+            sp.num_of_ranks_per_node = num_ranks_per_node;
+            sp.experts_per_rank = experts_per_rank;
+
+            jit::launch_scan_em(
+                NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, num_nodes, num_ranks_per_node,
+                sp, stream);
+        }
 
         const int num_mask_words = (num_ranks_per_node + 63) / 64;
         const int num_total_attn_tokens = num_tokens_per_rank * num_ranks_per_node * num_nodes;
-        launch_em_scan(
+        launch_build_em_tables(
             global_routing_map,
             token_rank_mask,
             num_mask_words,
@@ -398,9 +445,14 @@ void call_metadata_preprocessing(
             s2d_inner_dim,
             max_recv_tokens_per_rank,
             static_cast<int>(alignment),
-            sparse_to_dense_map,
-            local_expert_routing_map,
-            num_tokens_for_experts,
+            // em-permute: scan_flat_kernel already wrote the unified s2d in
+            // FLAT shape; suppress em_scan_kernel's EM-shape writes.
+            em_permute ? nullptr : sparse_to_dense_map,
+            // em-permute: scan_flat_kernel already wrote the unified FLAT LERM;
+            // suppress em_scan_kernel's EM-shape writes.
+            em_permute ? nullptr : local_expert_routing_map,
+            // em-permute: num_tokens_for_experts already holds FLAT num_recv.
+            em_permute ? nullptr : num_tokens_for_experts,
             internal_offsets,
             padded_out_counts,
             out_offsets,
@@ -413,6 +465,9 @@ void call_metadata_preprocessing(
             emuf_max_groups,
             static_cast<int32_t*>(scan_gscratch),
             NUM_OF_BLOCKS,
+            em_permute ? token_to_recv_slot : nullptr,
+            em_permute ? flat2em_slot_map : nullptr,
+            em_permute ? em_top_k : 0,
             stream);
         return;
     }
@@ -449,6 +504,7 @@ void call_metadata_preprocessing(
     sp.recv_total_counter = recv_total_counter;
     sp.out_is_int64 = out_is_int64;
     sp.max_recv_tokens_per_rank = max_recv_tokens_per_rank;
+    sp.token_to_recv_slot = nullptr;
 
     jit::launch_scan_flat(
         NUM_THREADS_PER_BLOCK, NUM_OF_BLOCKS, num_nodes, num_ranks_per_node,
@@ -470,7 +526,7 @@ size_t get_rank_mask_elem_size(int lsa_team_size) {
 
 namespace cg = cooperative_groups;
 
-static constexpr int kEmScanBlockDim = 256;
+static constexpr int kEmScanBlockDim = 1024;
 
 // Load 64 bits at a byte offset; memcpy folds to LDG.E.64 (or split if unaligned).
 __device__ __forceinline__ uint64_t em_ld64(const uint8_t* row, int byte_off) {
@@ -519,7 +575,10 @@ __global__ void em_scan_kernel(
     int32_t* __restrict__ emuf_group_count,
     int      emuf_group_stride,
     int      emuf_max_groups,
-    int32_t* __restrict__ gscratch)
+    int32_t* __restrict__ gscratch,
+    const int32_t* __restrict__ token_to_recv_slot,
+    int32_t* __restrict__ flat2em_slot_map,
+    int em_top_k)
 {
     extern __shared__ int32_t s_smem[];
 
@@ -692,6 +751,17 @@ __global__ void em_scan_kernel(
         int n_local_sec = 0;
         int local_secondaries[HYBRIDEP_MAX_LOCAL_EXPERTS_PER_RANK];
 
+        // EM-permute: per-lane counter of d==local_rank hits and recv_s lookup.
+        // Each lane handles one tok in this tile; recv_s is its FLAT slot.
+        int my_local_packed_idx = 0;
+        int my_recv_s = -1;
+        // `any_hit` (this lane has any hit) is a superset of "local rank hit";
+        // the FLAT scan only writes a non-negative slot when the local rank's
+        // bit is set, so my_recv_s = -1 here means no local-rank scatter.
+        if (flat2em_slot_map && any_hit) {
+            my_recv_s = token_to_recv_slot[tok];
+        }
+
         for (int wi = 0; wi < n_local_words; wi++) {
             const int word_bit_base = wi * 64;
             const int remaining = n_local_bits - word_bit_base;
@@ -717,7 +787,9 @@ __global__ void em_scan_kernel(
                     const int within = __popc(mask & ((1u << lane) - 1u));
                     const int em_slot = s_offsets[dle] + s_warp_state[warp * s_warp_stride + dle] + within;
                     if (d == local_rank) {
-                        local_expert_routing_map[em_slot * epr + le] = true;
+                        if (local_expert_routing_map) {
+                            local_expert_routing_map[em_slot * epr + le] = true;
+                        }
                         if (emuf_group_buf != nullptr) {
                             if (primary_em_slot < 0) {
                                 primary_em_slot = em_slot;
@@ -725,10 +797,18 @@ __global__ void em_scan_kernel(
                                 local_secondaries[n_local_sec++] = em_slot;
                             }
                         }
+                        if (flat2em_slot_map && my_recv_s >= 0 &&
+                            my_local_packed_idx < em_top_k) {
+                            flat2em_slot_map[(size_t)my_recv_s * em_top_k + my_local_packed_idx] =
+                                em_slot;
+                            my_local_packed_idx++;
+                        }
                     }
                     if (is_our_send) {
-                        sparse_to_dense_map[(size_t)send_idx * s2d_inner_dim + my_packed_idx] =
-                            ::hybrid_ep::em_s2d_pack(d, em_slot);
+                        if (sparse_to_dense_map) {
+                            sparse_to_dense_map[(size_t)send_idx * s2d_inner_dim + my_packed_idx] =
+                                ::hybrid_ep::em_s2d_pack(d, em_slot);
+                        }
                         my_packed_idx++;
                     }
                 }
@@ -736,6 +816,15 @@ __global__ void em_scan_kernel(
                     s_warp_state[warp * s_warp_stride + dle] += __popc(mask);
                 }
                 union_slice &= union_slice - 1;
+            }
+        }
+
+        // EM-permute: pad trailing slots with -1 so the copy kernel skips them.
+        // Covers (a) toks with fewer than em_top_k local-rank hits, and (b) toks
+        // with no local hit at all but a valid recv_s (rare; defensive).
+        if (flat2em_slot_map && my_recv_s >= 0) {
+            for (int k = my_local_packed_idx; k < em_top_k; k++) {
+                flat2em_slot_map[(size_t)my_recv_s * em_top_k + k] = -1;
             }
         }
 
@@ -755,7 +844,7 @@ __global__ void em_scan_kernel(
     }
 }
 
-void launch_em_scan(
+void launch_build_em_tables(
     const uint8_t* input_routing_map,
     const void*    token_rank_mask,
     int num_mask_words,
@@ -784,16 +873,27 @@ void launch_em_scan(
     int      emuf_max_groups,
     int32_t* gscratch,
     int      num_sms,
+    const int32_t* token_to_recv_slot,
+    int32_t* flat2em_slot_map,
+    int      em_top_k,
     cudaStream_t stream)
 {
     if (num_total_attn_tokens <= 0 || num_ranks_per_node <= 0 || experts_per_rank <= 0) return;
     assert((experts_per_rank & (experts_per_rank - 1)) == 0 && "experts_per_rank must be a power of two");
     assert(num_mask_words >= 1 && num_mask_words <= 2 && "lsa_team_size must be <= 128");
-    assert(num_sms > 0 && "launch_em_scan requires num_sms > 0");
+    assert(num_sms > 0 && "launch_build_em_tables requires num_sms > 0");
     const int n_dle = num_ranks_per_node * experts_per_rank;
 
     constexpr int kNumWarps = kEmScanBlockDim / 32;
     const size_t smem_bytes = static_cast<size_t>(kNumWarps + 1) * n_dle * sizeof(int32_t);
+
+    // Opt in to large dynamic smem so cooperative launch fits at high EP.
+    static thread_local size_t s_em_scan_smem_optin = 0;
+    if (smem_bytes > 48u * 1024u && smem_bytes > s_em_scan_smem_optin) {
+        CUDA_CHECK(cudaFuncSetAttribute(em_scan_kernel,
+            cudaFuncAttributeMaxDynamicSharedMemorySize, static_cast<int>(smem_bytes)));
+        s_em_scan_smem_optin = smem_bytes;
+    }
 
     SETUP_LAUNCH_CONFIG(num_sms, kEmScanBlockDim, stream);
     cfg.dynamicSmemBytes = smem_bytes;
@@ -827,7 +927,10 @@ void launch_em_scan(
         emuf_group_count,
         emuf_group_stride,
         emuf_max_groups,
-        gscratch);
+        gscratch,
+        token_to_recv_slot,
+        flat2em_slot_map,
+        em_top_k);
 }
 
 size_t get_scan_gscratch_size(int num_ranks_per_node, int experts_per_rank, int num_sms) {
@@ -1302,6 +1405,91 @@ void call_combine(
             params, max_dispatch_tokens_per_rank,
             num_nodes, num_blocks, stream);
     }
+}
+
+// Grid sizing for local-permute kernels: one block per SM. Latency is hidden
+// by in-flight loads in dup/reduce, so block-level oversubscription is moot.
+static inline unsigned int local_permute_grid(int sm_count, unsigned int prolog_epilog_sms) {
+    unsigned int grid = (prolog_epilog_sms != 0)
+        ? prolog_epilog_sms
+        : static_cast<unsigned int>(sm_count);
+    if (grid == 0) grid = 1;
+    return grid;
+}
+
+void launch_dispatch_permute(
+    void* recv_x_em,
+    float* recv_topk_weights_em,
+    const void* flat_staging,
+    const float* recv_topk_weights_flat,
+    const int32_t* flat2em_slot_map,
+    const int32_t* num_recv_tokens_dev,
+    const int64_t* expert_token_offsets,
+    const int32_t* per_expert_counts_active,
+    int top_k,
+    int experts_per_rank,
+    int row_bytes,
+    int sm_count,
+    unsigned int prolog_epilog_sms,
+    cudaStream_t stream)
+{
+    assert(experts_per_rank > 0 && experts_per_rank <= ::hybrid_ep::kLocalPermuteMaxExpertsPerRank);
+    assert(row_bytes > 0 && (row_bytes % 16) == 0);
+    assert(top_k > 0);
+    assert(sm_count > 0);
+    assert((recv_topk_weights_em == nullptr) == (recv_topk_weights_flat == nullptr));
+
+    const unsigned int grid = local_permute_grid(sm_count, prolog_epilog_sms);
+
+    ::hybrid_ep::local_permute_dup_param_t p{};
+    p.recv_x_em                = recv_x_em;
+    p.recv_topk_weights_em     = recv_topk_weights_em;
+    p.flat_staging             = flat_staging;
+    p.recv_topk_weights_flat   = recv_topk_weights_flat;
+    p.flat2em_slot_map            = flat2em_slot_map;
+    p.num_recv_tokens_dev      = num_recv_tokens_dev;
+    p.expert_token_offsets     = expert_token_offsets;
+    p.per_expert_counts_active = per_expert_counts_active;
+    p.top_k                    = top_k;
+    p.experts_per_rank         = experts_per_rank;
+    p.row_bytes                = row_bytes;
+
+    ::nccl_ep::hybridep::jit::launch_local_permute_dup(
+        static_cast<int>(grid), p, stream);
+}
+
+void launch_combine_reduce(
+    void* flat_staging,
+    const void* recv_x_em,
+    const int32_t* flat2em_slot_map,
+    const int32_t* num_recv_tokens_dev,
+    const float* em_weights_in,
+    float* flat_weights_out,
+    int top_k,
+    int row_bytes,
+    int sm_count,
+    unsigned int prolog_epilog_sms,
+    cudaStream_t stream)
+{
+    assert(row_bytes > 0 && (row_bytes % 16) == 0);
+    assert(top_k > 0);
+    assert(sm_count > 0);
+    assert((em_weights_in == nullptr) == (flat_weights_out == nullptr));
+
+    const unsigned int grid = local_permute_grid(sm_count, prolog_epilog_sms);
+
+    ::hybrid_ep::local_permute_reduce_param_t p{};
+    p.flat_staging        = flat_staging;
+    p.recv_x_em           = recv_x_em;
+    p.flat2em_slot_map       = flat2em_slot_map;
+    p.num_recv_tokens_dev = num_recv_tokens_dev;
+    p.em_weights_in       = em_weights_in;
+    p.flat_weights_out    = flat_weights_out;
+    p.top_k               = top_k;
+    p.row_bytes           = row_bytes;
+
+    ::nccl_ep::hybridep::jit::launch_local_permute_reduce(
+        top_k, row_bytes, static_cast<int>(grid), p, stream);
 }
 
 } // namespace hybridep

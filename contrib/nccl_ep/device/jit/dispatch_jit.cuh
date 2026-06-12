@@ -276,6 +276,9 @@ inline void dispatch_dump_warp_timing(
 }
 #endif
 
+// ============================================================================
+// Local dup JIT (NVLink-dedup mode): fan secondaries from primary EM slots.
+// ============================================================================
 constexpr const char* kLocalDupJitEntryName = "nccl_ep_jit_ht_local_dup_kernel";
 
 inline std::string local_dup_jit_source(
@@ -343,6 +346,106 @@ inline void launch_local_dup(
         std::fprintf(
             stderr,
             "[nccl_ep jit] fatal duplicate JIT launch failure for %s: %s%s%s\n",
+            variant_name.c_str(),
+            ::nccl_ep::jit::jit_kernel_status_name(status),
+            error.empty() ? "" : ": ",
+            error.empty() ? "" : error.c_str());
+        std::abort();
+    }
+}
+
+// Local permute (dup) JIT: scatter FLAT staging into EM zones.
+constexpr const char* kLocalPermuteDupJitEntryName = "nccl_ep_jit_local_permute_dup_kernel";
+
+// Pick HiddenVec so that hidden_int4 % (32 * HiddenVec) == 0 — eliminates the
+// dup main-loop tail. Prefer larger HiddenVec for more in-flight LDGs per lane;
+// the {8,4,2,1} ladder keeps H=7168 (hidden_int4=896) at HiddenVec=4 while
+// promoting H=2048 (hidden_int4=256) and other H % 4096 == 0 cases to 8.
+inline int pick_dup_hidden_vec(int hidden_int4) {
+    constexpr int kThreads = ::hybrid_ep::kLocalPermuteThreadsPerSlot;
+    for (int v : {8, 4, 2, 1}) {
+        if (hidden_int4 % (kThreads * v) == 0) return v;
+    }
+    return 1;
+}
+
+// 2 blocks/SM at small hidden to hide LDG latency; grid bumped 2x in caller.
+inline int pick_dup_blocks_per_sm(int hidden_int4) {
+    return (hidden_int4 <= 256) ? 2 : 1;
+}
+
+inline std::string local_permute_dup_jit_source(
+    int hidden_int4, int hidden_vec, int blocks_per_sm) {
+    std::ostringstream src;
+    src
+        << "#include \"device/hybrid_ep.cuh\"\n"
+        << "\n"
+        << "extern \"C\" __launch_bounds__("
+        << ::hybrid_ep::kLocalPermuteThreads << ", " << blocks_per_sm << ")\n"
+        << "__global__ void " << kLocalPermuteDupJitEntryName << "(\n"
+        << "    const __grid_constant__ ::hybrid_ep::local_permute_dup_param_t p) {\n"
+        << "  ::hybrid_ep::local_permute_dup<"
+        << hidden_int4 << ", " << hidden_vec << ">(\n"
+        << "      reinterpret_cast<uint8_t*>(p.recv_x_em),\n"
+        << "      p.recv_topk_weights_em,\n"
+        << "      reinterpret_cast<const uint8_t*>(p.flat_staging),\n"
+        << "      p.recv_topk_weights_flat,\n"
+        << "      p.flat2em_slot_map,\n"
+        << "      p.num_recv_tokens_dev,\n"
+        << "      p.expert_token_offsets,\n"
+        << "      p.per_expert_counts_active,\n"
+        << "      p.top_k,\n"
+        << "      p.experts_per_rank,\n"
+        << "      p.row_bytes);\n"
+        << "}\n";
+    return src.str();
+}
+
+inline void launch_local_permute_dup(
+    int num_blocks,
+    ::hybrid_ep::local_permute_dup_param_t& param,
+    cudaStream_t stream)
+{
+    static const int variant_identity = 0;
+    assert((param.row_bytes % 16) == 0);
+    const int hidden_int4    = param.row_bytes / 16;
+    const int hidden_vec     = pick_dup_hidden_vec(hidden_int4);
+    const int blocks_per_sm  = pick_dup_blocks_per_sm(hidden_int4);
+    const std::string variant_name = [&] {
+        std::ostringstream name;
+        name << "local_permute_dup_h" << hidden_int4
+             << "_v" << hidden_vec
+             << "_b" << blocks_per_sm;
+        return name.str();
+    }();
+    const std::string source =
+        local_permute_dup_jit_source(hidden_int4, hidden_vec, blocks_per_sm);
+
+    // Dynamic smem: one row of zeros for the pad warp's cp.async.bulk S2G.
+    const int row_bytes_aligned = ((param.row_bytes + 15) / 16) * 16;
+
+    ::nccl_ep::jit::JitKernelVariant variant;
+    variant.kernel_family = "local_permute_dup";
+    variant.variant_name = variant_name;
+    variant.source = source;
+    variant.entry_name = kLocalPermuteDupJitEntryName;
+    variant.identity = &variant_identity;
+    variant.runtime_key =
+        (static_cast<std::uint64_t>(hidden_int4) << 16) |
+        (static_cast<std::uint64_t>(hidden_vec)   << 8)  |
+        static_cast<std::uint64_t>(blocks_per_sm);
+    variant.num_blocks = num_blocks * blocks_per_sm;
+    variant.block_dim = ::hybrid_ep::kLocalPermuteThreads;
+    variant.dynamic_smem_bytes = row_bytes_aligned;
+
+    std::string error;
+    const ::nccl_ep::jit::JitKernelStatus status =
+        ::nccl_ep::jit::launch_jit_kernel(variant, &param, stream, &error);
+
+    if (status != ::nccl_ep::jit::JitKernelStatus::kLaunched) {
+        std::fprintf(
+            stderr,
+            "[nccl_ep jit] fatal local-permute-dup JIT launch failure for %s: %s%s%s\n",
             variant_name.c_str(),
             ::nccl_ep::jit::jit_kernel_status_name(status),
             error.empty() ? "" : ": ",

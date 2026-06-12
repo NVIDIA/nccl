@@ -9,6 +9,7 @@
 #include "device/hybrid_ep.cuh"
 #include "device/jit/jit_runtime.hpp"
 
+#include <cassert>
 #include <climits>
 #include <cstdio>
 #include <cstdint>
@@ -282,6 +283,10 @@ inline void combine_dump_warp_timing(
 }
 #endif
 
+// ============================================================================
+// Local reduce JIT (NVLink-dedup mode): cooperative reduction across local
+// EM slots that share a primary token.
+// ============================================================================
 constexpr const char* kLocalReduceJitEntryName = "nccl_ep_jit_ht_local_reduce_kernel";
 
 constexpr int kLocalReduceBlockDim = 128;
@@ -346,6 +351,93 @@ inline void launch_local_reduce(
         std::fprintf(
             stderr,
             "[nccl_ep jit] fatal local_reduce JIT launch failure for %s: %s%s%s\n",
+            variant_name.c_str(),
+            ::nccl_ep::jit::jit_kernel_status_name(status),
+            error.empty() ? "" : ": ",
+            error.empty() ? "" : error.c_str());
+        std::abort();
+    }
+}
+
+// ============================================================================
+// Local permute (reduce) JIT: gather caller's EM combine input into FLAT
+// staging by summing the top_k EM rows per FLAT slot. JIT'd per top_k so the
+// per-pair k loop unrolls into a compile-time bound.
+// ============================================================================
+constexpr const char* kLocalPermuteReduceJitEntryName = "nccl_ep_jit_local_permute_reduce_kernel";
+
+// 2 blocks/SM at small hidden; reg pressure fits without spilling. Grid bumped 2x in caller.
+inline int pick_reduce_blocks_per_sm(int hidden_int4) {
+    return (hidden_int4 <= 256) ? 2 : ::hybrid_ep::kLocalPermuteReduceBlocksPerSM;
+}
+
+inline std::string local_permute_reduce_jit_source(
+    int top_k, int hidden_int4, int blocks_per_sm) {
+    std::ostringstream src;
+    src
+        << "#include \"device/hybrid_ep.cuh\"\n"
+        << "\n"
+        << "extern \"C\" __launch_bounds__("
+        << ::hybrid_ep::kLocalPermuteReduceThreads << ", " << blocks_per_sm << ")\n"
+        << "__global__ void " << kLocalPermuteReduceJitEntryName << "(\n"
+        << "    const __grid_constant__ ::hybrid_ep::local_permute_reduce_param_t p) {\n"
+        << "  ::hybrid_ep::local_permute_reduce<"
+        << top_k << ", " << hidden_int4 << ">(\n"
+        << "      reinterpret_cast<uint8_t*>(p.flat_staging),\n"
+        << "      reinterpret_cast<const uint8_t*>(p.recv_x_em),\n"
+        << "      p.flat2em_slot_map,\n"
+        << "      p.num_recv_tokens_dev,\n"
+        << "      p.em_weights_in,\n"
+        << "      p.flat_weights_out,\n"
+        << "      p.top_k,\n"
+        << "      p.row_bytes);\n"
+        << "}\n";
+    return src.str();
+}
+
+inline void launch_local_permute_reduce(
+    int top_k,
+    int row_bytes,
+    int num_blocks,
+    ::hybrid_ep::local_permute_reduce_param_t& param,
+    cudaStream_t stream)
+{
+    static const int variant_identity = 0;
+    assert((row_bytes % 16) == 0);
+    const int hidden_int4   = row_bytes / 16;
+    const int blocks_per_sm = pick_reduce_blocks_per_sm(hidden_int4);
+    const std::string variant_name = [&] {
+        std::ostringstream name;
+        name << "local_permute_reduce_topk" << top_k
+             << "_h" << hidden_int4
+             << "_b" << blocks_per_sm;
+        return name.str();
+    }();
+    const std::string source =
+        local_permute_reduce_jit_source(top_k, hidden_int4, blocks_per_sm);
+
+    ::nccl_ep::jit::JitKernelVariant variant;
+    variant.kernel_family = "local_permute_reduce";
+    variant.variant_name = variant_name;
+    variant.source = source;
+    variant.entry_name = kLocalPermuteReduceJitEntryName;
+    variant.identity = &variant_identity;
+    variant.runtime_key =
+        (static_cast<std::uint64_t>(hidden_int4) << 32) |
+        (static_cast<std::uint64_t>(blocks_per_sm) << 16) |
+        static_cast<std::uint64_t>(top_k);
+    variant.num_blocks = num_blocks * blocks_per_sm;
+    variant.block_dim = ::hybrid_ep::kLocalPermuteReduceThreads;
+    variant.dynamic_smem_bytes = 0;
+
+    std::string error;
+    const ::nccl_ep::jit::JitKernelStatus status =
+        ::nccl_ep::jit::launch_jit_kernel(variant, &param, stream, &error);
+
+    if (status != ::nccl_ep::jit::JitKernelStatus::kLaunched) {
+        std::fprintf(
+            stderr,
+            "[nccl_ep jit] fatal local-permute-reduce JIT launch failure for %s: %s%s%s\n",
             variant_name.c_str(),
             ::nccl_ep::jit::jit_kernel_status_name(status),
             error.empty() ? "" : ": ",

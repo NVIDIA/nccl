@@ -720,6 +720,11 @@ static uint16_t floatToBf16(float f) {
     return static_cast<uint16_t>(bits >> 16);
 }
 
+// Combine-validation thresholds for the cosine-similarity discrepancy metric.
+// HT is looser to absorb reduction-order noise at high topk.
+static constexpr double kCombineLLThreshold = 1e-5;
+static constexpr double kCombineHTThreshold = 2.5e-5;
+
 // Cosine-similarity-based discrepancy metric in double precision
 // Returns 0 for perfect match, larger values for worse match
 static double calc_diff(const double* x, const double* y, size_t n) {
@@ -1600,7 +1605,7 @@ int countValidExperts(const int64_t* topk_idx_host, unsigned int token_idx, unsi
 // Validate combine output for Low Latency mode
 // DeepEP formula: check = combined / is_token_in_rank.sum()
 // LL combine applies weighted sum: combined[t] = x[t] * sum(valid weights)
-// Compared using calc_diff in double precision with threshold 1e-5
+// Compared using calc_diff in double precision against kCombineLLThreshold.
 ValidationResult validateCombineOutputLL(
     const BenchmarkAllocState&    alloc,
     const ncclEpCombineOutputs_t& combine_outputs,
@@ -1678,12 +1683,12 @@ ValidationResult validateCombineOutputLL(
 
     double diff = calc_diff(ref, actual, num_elements);
     result.max_diff = diff;
-    result.passed = (diff < 1e-5) && !has_nan;
+    result.passed = (diff < kCombineLLThreshold) && !has_nan;
 
     if (!result.passed) {
         char buf[256];
-        snprintf(buf, sizeof(buf), "LL combine: calc_diff=%.6e (threshold=1e-5)%s",
-                 diff, has_nan ? ", NaN detected" : "");
+        snprintf(buf, sizeof(buf), "LL combine: calc_diff=%.6e (threshold=%.2e)%s",
+                 diff, kCombineLLThreshold, has_nan ? ", NaN detected" : "");
         result.message = buf;
     }
 
@@ -1697,7 +1702,7 @@ ValidationResult validateCombineOutputLL(
 // Validate combine output for High Throughput mode
 // rank-major:    combined[t] = x[t] * num_unique_ranks  (one slot per dest rank)
 // Expert-major: combined[t] = x[t] * num_valid_experts (one slot per expert, S2G-driven dup)
-// Compared using calc_diff in double precision with threshold 5e-6
+// Compared using calc_diff in double precision against kCombineHTThreshold.
 ValidationResult validateCombineOutputHT(
     const BenchmarkAllocState&    alloc,
     const ncclEpCombineOutputs_t& combine_outputs,
@@ -1768,12 +1773,12 @@ ValidationResult validateCombineOutputHT(
 
     double diff = calc_diff(ref, actual, num_elements);
     result.max_diff = diff;
-    result.passed = (diff < 5e-6) && !has_nan;
+    result.passed = (diff < kCombineHTThreshold) && !has_nan;
 
     if (!result.passed) {
         char buf[256];
-        snprintf(buf, sizeof(buf), "HT combine: calc_diff=%.6e (threshold=5e-6)%s",
-                 diff, has_nan ? ", NaN detected" : "");
+        snprintf(buf, sizeof(buf), "HT combine: calc_diff=%.6e (threshold=%.2e)%s",
+                 diff, kCombineHTThreshold, has_nan ? ", NaN detected" : "");
         result.message = buf;
     }
 
@@ -2261,7 +2266,7 @@ void printHighThroughputResults(
     const HighThroughputBytes& ht_bytes,
     size_t global_total_send, size_t global_rdma_send,
     size_t global_total_recv, size_t global_rdma_recv,
-    bool ht_em_nvlink_dedup
+    bool ht_em_local_dup
 ) {
     double local_dispatch_avg = dispatch_result.avg_ms;
     double local_dispatch_min = dispatch_result.min_ms;
@@ -2291,19 +2296,28 @@ void printHighThroughputResults(
     // Obtain kernel times from CUPTI if available
     double global_kernel_dk_us = 0.0, global_kernel_ck_us = 0.0;
     double global_kernel_pk_us = 0.0, global_kernel_lr_us = 0.0;
+    double global_dispatch_epi_us = 0.0;
+    double global_combine_pro_us = 0.0;
     double local_dispatch_kernel_us = 0.0;
     double local_combine_kernel_us  = 0.0;
     double local_dup_kernel_us = 0.0;
     double local_reduce_kernel_us = 0.0;
+    double local_dispatch_epi_us   = 0.0;
+    double local_combine_pro_us = 0.0;
     if (ktimer.is_valid()) {
         local_dispatch_kernel_us = ktimer.get_avg_us("dispatch_kernel");
         local_combine_kernel_us  = ktimer.get_avg_us("combine_kernel");
         local_dup_kernel_us = ktimer.get_avg_us("local_dup_kernel");
         local_reduce_kernel_us = ktimer.get_avg_us("local_reduce_kernel");
+        // Local EM permute copy kernels (HT + EM + zero_copy != ON path); 0.0 when inactive.
+        local_dispatch_epi_us        = ktimer.get_avg_us("local_permute_dup");
+        local_combine_pro_us = ktimer.get_avg_us("local_permute_reduce");
         MPI_Reduce(&local_dispatch_kernel_us, &global_kernel_dk_us, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
         MPI_Reduce(&local_combine_kernel_us,  &global_kernel_ck_us, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
         MPI_Reduce(&local_dup_kernel_us, &global_kernel_pk_us, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
         MPI_Reduce(&local_reduce_kernel_us, &global_kernel_lr_us, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&local_dispatch_epi_us,   &global_dispatch_epi_us, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&local_combine_pro_us, &global_combine_pro_us, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
     }
 
     // Uncomment for debugging
@@ -2358,10 +2372,8 @@ void printHighThroughputResults(
         if (ktimer.is_valid()) {
             double avg_kernel_dk_us = global_kernel_dk_us / nRanks;
             double avg_kernel_ck_us = global_kernel_ck_us / nRanks;
-            double avg_kernel_pk_us = global_kernel_pk_us / nRanks;
-            double avg_kernel_lr_us = global_kernel_lr_us / nRanks;
-            const bool dispatch_unfused = ht_em_nvlink_dedup;
-            const bool combine_unfused  = ht_em_nvlink_dedup;
+            double avg_dispatch_epi_us = (global_kernel_pk_us + global_dispatch_epi_us) / nRanks;
+            double avg_combine_pro_us  = (global_kernel_lr_us + global_combine_pro_us) / nRanks;
             double dk_s       = avg_kernel_dk_us / 1e6;
             double ck_s       = avg_kernel_ck_us / 1e6;
             printf("Dispatch:    kernel=%.2f us\n", avg_kernel_dk_us);
@@ -2369,8 +2381,8 @@ void printHighThroughputResults(
                 (avg_total_recv / 1e9) / dk_s, (avg_nvl_recv / 1e9) / dk_s, (avg_rdma_recv / 1e9) / dk_s);
             printf("             send: total_bw=%.2f  nvl_bw=%.2f  rdma_bw=%.2f GB/s\n",
                 (avg_total_send / 1e9) / dk_s, (avg_nvl_send / 1e9) / dk_s, (avg_rdma_send / 1e9) / dk_s);
-            if (dispatch_unfused) {
-                printf("LocalDup:    kernel=%.2f us\n", avg_kernel_pk_us);
+            if (avg_dispatch_epi_us > 0.0) {
+                printf("DispatchEpilogue: kernel=%.2f us\n", avg_dispatch_epi_us);
             }
 
             printf("Combine:     kernel=%.2f us\n", avg_kernel_ck_us);
@@ -2378,8 +2390,8 @@ void printHighThroughputResults(
                 (avg_total_recv / 1e9) / ck_s, (avg_nvl_recv / 1e9) / ck_s, (avg_rdma_recv / 1e9) / ck_s);
             printf("             recv: total_bw=%.2f  nvl_bw=%.2f  rdma_bw=%.2f GB/s\n",
                 (avg_total_send / 1e9) / ck_s, (avg_nvl_send / 1e9) / ck_s, (avg_rdma_send / 1e9) / ck_s);
-            if (combine_unfused) {
-                printf("LocalReduce: kernel=%.2f us\n", avg_kernel_lr_us);
+            if (avg_combine_pro_us > 0.0) {
+                printf("CombinePrologue: kernel=%.2f us\n", avg_combine_pro_us);
             }
             printf("Total (D+C): kernel=%.2f us\n", avg_kernel_dk_us + avg_kernel_ck_us);
         } else {
@@ -2554,12 +2566,19 @@ void printUsage(const char* programName, int myRank) {
         printf("  --validate              Validate dispatch/combine data correctness\n");
         printf("  --dispatch-only         With --validate, run and validate dispatch only (skip combine)\n");
         printf("  --dynamic-tokens        Enable dynamic token allocation (HT only, required for random topk)\n");
-        printf("  --expert-major-alignment <N>      Per-expert zone alignment in tokens (expert-major only, power of 2)\n");
-        printf("  --max-recv-token-slots-per-rank <N>  Per-rank recv-slot budget (0 = auto; bench default for EM = nRanks*tokens*top_k/2)\n");
+        printf("  --expert-major-alignment <N>      Per-expert zone alignment in tokens (Expert-major only, power of 2)\n");
+        printf("  --max-recv-token-slots-per-rank <N>  Per-rank recv-slot budget (0 = auto; HT default: FLAT=nRanks*tokens, Expert-major=nRanks*tokens*top_k)\n");
         printf("  --zcopy                 Use ncclMemAlloc buffers + windows for HT tensors that need peer access\n");
         printf("  --max-num-sms <N>       Maximum SMs for EP kernels (0 = auto, default: 0)\n");
-        printf("  --ht-em-nvlink-dedup    HT EM only: dedup token duplication on the receiver in a separate prolog kernel\n"
-               "                          (default: forwarding rank duplicates tokens to per-expert slots over NVLink)\n");
+        printf("  --ht-em-mode <mode>     HT + Expert-major only: select the dispatch/combine code path (default: local_permute)\n"
+               "                          local_permute: tokens are delivered in the FLAT layout (single instance per rank);\n"
+               "                                         a separate permutation kernel then distributes each token to its\n"
+               "                                         eligible experts (duplicating as needed).\n"
+               "                          local_dup:     a single instance of each token is delivered to the first eligible\n"
+               "                                         expert slot; a local duplication kernel then fans it out to all\n"
+               "                                         remaining eligible experts on the same rank.\n"
+               "                          nvlink_dup:    token data is delivered to each eligible expert slot directly over\n"
+               "                                         NVLink by the forwarding GPU (no separate local fan-out kernel).\n");
         printf("  --mask-test             Simulate rank failures and test active-mask (LL only, implies --validate)\n");
         printf("  --topk-idx-int32        LL only: pass ncclInt32 topk_idx instead of ncclInt64\n");
         printf("  --help                  Show this help message\n");
@@ -2592,11 +2611,13 @@ int main(int argc, char* argv[]) {
     unsigned int max_num_sms = NCCL_EP_AUTO;  // 0 = auto (resolved to HYBRIDEP_MAX_NUM_SMS_PER_RANK)
     // HT EM only: when true, dedup token duplication on the receiver in a separate prolog kernel
     // (default: forwarding rank duplicates tokens to per-expert slots over NVLink).
-    bool ht_em_nvlink_dedup = false;
+    bool ht_em_local_dup = false;
+    unsigned int prolog_epilog_sms = NCCL_EP_AUTO;  // 0 = auto (all SMs) for local EM permute kernels
     bool mask_test = false;       // Simulate rank failures and test active-mask (LL only)
     bool include_uniform_less_than_max = false;
     bool include_non_uniform_tokens    = false;
     bool topk_idx_int32 = false;  // LL only: pass ncclInt32 topk_idx instead of ncclInt64
+    bool em_nvlink_dup = false;       // HT+EM only: force nvlink_dup path (sender duplicates per-expert over NVLink)
     // Initialize MPI
     MPICHECK(MPI_Init(&argc, &argv));
     MPICHECK(MPI_Comm_rank(MPI_COMM_WORLD, &myRank));
@@ -2622,7 +2643,8 @@ int main(int argc, char* argv[]) {
         {"max-recv-token-slots-per-rank", required_argument, 0, 'R'},
         {"zcopy",          no_argument,       0, 'z'},
         {"max-num-sms",    required_argument, 0, 'S'},
-        {"ht-em-nvlink-dedup", no_argument,    0, 'F'},
+        {"ht-em-mode",     required_argument, 0, 'm'},
+        {"prolog-epilog-sms", required_argument, 0, 'X'},
         {"mask-test",      no_argument,       0, 'T'},
         {"dispatch-less-than-max-tokens", required_argument, 0, 'l'},
         {"non-uniform-tokens", no_argument, 0, 'N'},
@@ -2633,7 +2655,7 @@ int main(int argc, char* argv[]) {
 
     int opt;
     int option_index = 0;
-    while ((opt = getopt_long(argc, argv, "a:L:t:d:k:e:w:i:pnfUVDMA:R:zS:FTl:NIh", long_options, &option_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "a:L:t:d:k:e:w:i:pnfUVDMA:R:zS:X:m:Tl:NIh", long_options, &option_index)) != -1) {
         switch (opt) {
             case 'a':
                 if (strcmp(optarg, "ll") == 0 || strcmp(optarg, "low-latency") == 0) {
@@ -2713,8 +2735,23 @@ int main(int argc, char* argv[]) {
             case 'S':
                 max_num_sms = static_cast<unsigned int>(atoi(optarg));
                 break;
-            case 'F':
-                ht_em_nvlink_dedup = true;
+            case 'm':
+                if (strcmp(optarg, "local_permute") == 0) {
+                    // default; nothing to do
+                } else if (strcmp(optarg, "local_dup") == 0) {
+                    ht_em_local_dup = true;
+                } else if (strcmp(optarg, "nvlink_dup") == 0) {
+                    em_nvlink_dup = true;
+                } else {
+                    if (myRank == 0) {
+                        printf("Error: --ht-em-mode must be one of {local_permute, local_dup, nvlink_dup}, got '%s'\n", optarg);
+                    }
+                    MPI_Finalize();
+                    return 1;
+                }
+                break;
+            case 'X':
+                prolog_epilog_sms = static_cast<unsigned int>(atoi(optarg));
                 break;
             case 'T':
                 mask_test = true;
@@ -2779,12 +2816,12 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // --ht-em-nvlink-dedup is only supported for HT algorithm with EM layout
-    if (ht_em_nvlink_dedup) {
+    // --ht-em-mode is only meaningful for HT + EM layout
+    if (ht_em_local_dup || em_nvlink_dup) {
         if (algorithm != NCCL_EP_ALGO_HIGH_THROUGHPUT ||
             layout != NCCL_EP_LAYOUT_EXPERT_MAJOR) {
             if (myRank == 0) {
-                printf("Error: --ht-em-nvlink-dedup is only supported for HT algorithm with expert-major layout\n");
+                printf("Error: --ht-em-mode is only supported for HT algorithm with expert-major layout\n");
             }
             MPI_Finalize();
             return 1;
@@ -2904,7 +2941,7 @@ int main(int argc, char* argv[]) {
             if (expert_major_alignment > 0)
                 printf("  Align (tokens):  %zu\n", expert_major_alignment);
             if (layout == NCCL_EP_LAYOUT_EXPERT_MAJOR) {
-                printf("  NVLink dedup:    %s\n", ht_em_nvlink_dedup ? "on" : "off");
+                printf("  Local dup:       %s\n", ht_em_local_dup ? "on" : "off");
             }
         }
         const char* zcopy_str = "disabled";
@@ -2927,6 +2964,11 @@ int main(int argc, char* argv[]) {
     if (disable_nvlink && algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
         setenv("NCCL_P2P_DISABLE", "1", 1);
         setenv("NCCL_SHM_DISABLE", "1", 1);
+    }
+
+    // HT+EM only: force nvlink_dup path (skip FLAT-dispatch + local-permute).
+    if (em_nvlink_dup) {
+        setenv("NCCL_EP_HT_EM_NVLINK_DUP", "1", 1);
     }
 
     // Setup CUDA
@@ -2957,19 +2999,32 @@ int main(int argc, char* argv[]) {
     // num_qp_per_rank: LL mode requires >= num_local_experts, HT mode uses auto
     config.num_qp_per_rank = (algorithm == NCCL_EP_ALGO_LOW_LATENCY) ? num_local_experts : NCCL_EP_AUTO;
     config.num_channels = NCCL_EP_AUTO;
-    // Uniform-routing estimate: per-rank recv ≈ max_tokens_per_rank*top_k (2x safety for EM dup variance).
+    // HT worst case: FLAT = nRanks*max_tokens_per_rank;
+    //                EM (any mode) = nRanks*max_tokens_per_rank*top_k.
+    // LL uses a uniform-routing estimate.
     if (max_recv_tokens_per_rank == UINT_MAX) {
-        const unsigned int est = std::max(1u, max_tokens_per_rank * top_k *
-                                              std::max(1u, num_local_experts) /
-                                              std::max(1u, static_cast<unsigned int>(num_experts)) *
-                                              static_cast<unsigned int>(nRanks));
-        const unsigned int safety = (layout == NCCL_EP_LAYOUT_EXPERT_MAJOR) ? 2u : 1u;
-        max_recv_tokens_per_rank = std::max(1u, est * safety);
+        if (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) {
+            const bool em = (layout == NCCL_EP_LAYOUT_EXPERT_MAJOR);
+            max_recv_tokens_per_rank = static_cast<unsigned int>(nRanks)
+                                     * max_tokens_per_rank
+                                     * (em ? top_k : 1u);
+        } else {
+            const unsigned int est = std::max(1u, max_tokens_per_rank * top_k *
+                                                  std::max(1u, num_local_experts) /
+                                                  std::max(1u, static_cast<unsigned int>(num_experts)) *
+                                                  static_cast<unsigned int>(nRanks));
+            max_recv_tokens_per_rank = std::max(1u, est);
+        }
     }
     config.max_recv_tokens_per_rank = max_recv_tokens_per_rank;
     config.max_num_sms = max_num_sms;
-    if (ht_em_nvlink_dedup) {
-        setenv("NCCL_EP_HT_EM_NVLINK_DEDUP", "1", 1);
+    if (ht_em_local_dup) {
+        setenv("NCCL_EP_HT_EM_LOCAL_DUP", "1", 1);
+    }
+    if (prolog_epilog_sms != NCCL_EP_AUTO) {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%u", prolog_epilog_sms);
+        setenv("NCCL_EP_PROLOG_EPILOG_SMS", buf, 1);
     }
     config.alloc.alloc_fn = cudaAllocCallback;
     config.alloc.free_fn  = cudaFreeCallback;
@@ -3379,7 +3434,7 @@ int main(int argc, char* argv[]) {
                                    ht_bytes,
                                    global_total_send, global_rdma_send,
                                    global_total_recv, global_rdma_recv,
-                                   ht_em_nvlink_dedup);
+                                   ht_em_local_dup);
     }
 
     // Aggregate group/handle creation times across ranks

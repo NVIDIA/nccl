@@ -393,6 +393,18 @@ __device__ __forceinline__ void st_na_release(const uint64_t *ptr, uint64_t val)
 }
 
 //==============================================================================
+// Store Operations - Cache Global (st.cg)
+//==============================================================================
+
+// 16B cache-global int4 store: keeps the line resident in L2 instead of being
+// force-evicted, so a downstream consumer in the same launch sees an L2 hit.
+__device__ __forceinline__ void st_cg_global(int4 *ptr, const int4 &val) {
+    asm volatile("st.global.cg.v4.u32 [%0], {%1, %2, %3, %4};"
+                 : : "l"(ptr), "r"(val.x), "r"(val.y), "r"(val.z), "r"(val.w)
+                 : "memory");
+}
+
+//==============================================================================
 // Store Operations - Non-Allocating (st.na)
 //==============================================================================
 

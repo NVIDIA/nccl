@@ -51,7 +51,8 @@ inline std::string scan_flat_jit_source(
         << "      reinterpret_cast<hybrid_ep::rank_mask_t<" << rank_mask_words << ">*>(p.token_rank_mask),\n"
         << "      p.num_of_tokens_for_experts, p.local_expert_routing_map, p.per_expert_token_counts,\n"
         << "      p.node_rank, p.local_rank, p.num_of_tokens_per_rank, p.num_of_ranks_per_node, p.experts_per_rank,\n"
-        << "      p.recv_total_counter, p.out_is_int64, p.max_recv_tokens_per_rank, smem_bytes);\n"
+        << "      p.recv_total_counter, p.out_is_int64, p.max_recv_tokens_per_rank,\n"
+        << "      p.token_to_recv_slot, smem_bytes);\n"
         << "}\n";
     return src.str();
 }

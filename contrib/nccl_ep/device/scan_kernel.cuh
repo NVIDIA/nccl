@@ -319,7 +319,8 @@ __device__ __forceinline__ void assign_recv_slots(
     int lane_id,
     bool expert_major,
     bool out_is_int64,
-    int max_recv_tokens_per_rank)
+    int max_recv_tokens_per_rank,
+    int32_t* token_to_recv_slot = nullptr)
 {
   for (int i = 0; i < num_of_tokens_per_thread; i++) {
     int current_token_id = thread_starting_token + i * WARP_SIZE;
@@ -393,6 +394,12 @@ __device__ __forceinline__ void assign_recv_slots(
         current_token_id, token_out_of_bound, token_needed_by_local_rank, local_rank_slot,
         packed_row_bytes, experts_per_node_packed, node_rank, local_rank, experts_per_rank,
         lane_id, expert_major);
+
+    // em-permute: persist per-global-token recv slot (-1 = no local-rank hit).
+    if (token_to_recv_slot != nullptr && token_out_of_bound == 0) {
+      token_to_recv_slot[current_token_id] =
+          token_needed_by_local_rank ? local_rank_slot : -1;
+    }
 
     if (!expert_major && current_token_id == num_of_total_attn_tokens - 1) {
       if (local_rank_prefix_after_scan > max_recv_tokens_per_rank) {
@@ -523,6 +530,7 @@ __device__ __forceinline__ void scan_impl_flat(
     void* recv_total_counter,
     bool out_is_int64,
     int max_recv_tokens_per_rank,
+    int32_t* token_to_recv_slot,
     uint8_t* smem_bytes)
 {
   static_assert(LSA_TEAM_SIZE <= EM_S2D_MAX_RANKS,
@@ -572,7 +580,7 @@ __device__ __forceinline__ void scan_impl_flat(
       g.thread_starting_token, g.num_of_tokens_per_thread, g.num_of_total_attn_tokens,
       num_of_tokens_per_rank, num_of_ranks_per_node, experts_per_rank, g.packed_row_bytes,
       g.experts_per_node_packed, node_rank, local_rank, g.warp_id, g.lane_id,
-      /*expert_major=*/false, out_is_int64, max_recv_tokens_per_rank);
+      /*expert_major=*/false, out_is_int64, max_recv_tokens_per_rank, token_to_recv_slot);
 
   if constexpr (ENABLE_PER_EXPERT_COUNTS) {
     __syncthreads();
@@ -653,6 +661,7 @@ struct scan_flat_kernel_param_t {
     void* recv_total_counter;
     bool out_is_int64;
     int max_recv_tokens_per_rank;
+    int32_t* token_to_recv_slot;  // em-permute scratch; null otherwise.
 };
 
 struct scan_em_kernel_param_t {

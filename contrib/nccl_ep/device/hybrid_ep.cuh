@@ -4193,6 +4193,344 @@ __device__ __forceinline__ void local_reduce_kernel_impl(
   }
 }
 
+// Local EM permute kernel (HT + EM + zero_copy != ON). Scatters FLAT staging
+// rows into per-expert EM zones with zero padding for inactive slots.
+//
+// Two concurrent warp groups in each block:
+//   - kPermuteWarps token-permute warps: load each FLAT row once into
+//     registers and scatter to its EM destinations (load-once-scatter-many,
+//     one HBM read amortized over up to top_k STGs). The int4 unroll length
+//     HiddenVec is JIT'd per HiddenInt4 (see pick_dup_hidden_vec) to trade
+//     ILP against register pressure.
+//   - kPadWarps pad-fill warps: cp.async.bulk S2G from a smem zero buffer to
+//     per-expert pad rows. TMA path doesn't compete with LDG/STG queues.
+// Disjoint output rows + disjoint memory paths => the two groups overlap.
+//
+// kLocalPermuteMaxExpertsPerRank bounds the per-warp smem active-EM list.
+constexpr int kLocalPermuteMaxExpertsPerRank = 256;
+constexpr int kLocalPermuteThreadsPerSlot = 32;
+constexpr int kLocalPermutePermuteWarps    = 8;
+constexpr int kLocalPermutePadWarps        = 1;
+constexpr int kLocalPermuteTokensPerBlock  = kLocalPermutePermuteWarps;
+constexpr int kLocalPermuteThreads =
+    kLocalPermuteThreadsPerSlot *
+    (kLocalPermutePermuteWarps + kLocalPermutePadWarps);  // 288
+// local_permute_reduce: 128 threads per slot, S slots per block. 8 slots
+// (1024 threads) puts 8 independent token loads in flight per block for
+// better HBM/L2 latency hiding; single block per SM at this size.
+constexpr int kLocalPermuteReduceSlotsPerBlock = 8;
+constexpr int kLocalPermuteReduceThreads       = 128 * kLocalPermuteReduceSlotsPerBlock;
+constexpr int kLocalPermuteReduceBlocksPerSM   = 1;
+
+struct local_permute_dup_param_t {
+    void*          recv_x_em;
+    float*         recv_topk_weights_em;
+    const void*    flat_staging;
+    const float*   recv_topk_weights_flat;
+    const int32_t* flat2em_slot_map;
+    const int32_t* num_recv_tokens_dev;
+    const int64_t* expert_token_offsets;
+    const int32_t* per_expert_counts_active;
+    int            top_k;
+    int            experts_per_rank;
+    int            row_bytes;
+};
+
+template <int HiddenInt4, int HiddenVec>
+__device__ __forceinline__ void local_permute_dup(
+    uint8_t* __restrict__ recv_x_em,
+    float* __restrict__ recv_topk_weights_em,
+    const uint8_t* __restrict__ flat_staging,
+    const float* __restrict__ recv_topk_weights_flat,
+    const int32_t* __restrict__ flat2em_slot_map,
+    const int32_t* __restrict__ num_recv_tokens_dev,
+    const int64_t* __restrict__ expert_token_offsets,
+    const int32_t* __restrict__ per_expert_counts_active,
+    int top_k,
+    int experts_per_rank,
+    int /*row_bytes*/)
+{
+    constexpr int kThreadsPerSlot = kLocalPermuteThreadsPerSlot;
+    constexpr int kHiddenVec       = HiddenVec;
+    constexpr int kPermuteWarps    = kLocalPermutePermuteWarps;
+    constexpr int kPadWarps        = kLocalPermutePadWarps;
+    // Per-warp cap on active EM slots; bounded by top_k and experts_per_rank.
+    constexpr int kMaxActivePerToken = kLocalPermuteMaxExpertsPerRank;
+
+    const int warp_id  = threadIdx.x / kThreadsPerSlot;
+    const int lane     = threadIdx.x & (kThreadsPerSlot - 1);
+    const bool is_pad  = warp_id >= kPermuteWarps;
+    const int pad_idx  = warp_id - kPermuteWarps;
+
+    const int num_recv = *num_recv_tokens_dev;
+    constexpr int row_int4 = HiddenInt4;
+    constexpr int row_bytes = HiddenInt4 * 16;
+
+    const int4* src_int4 = reinterpret_cast<const int4*>(flat_staging);
+    int4* dst_int4 = reinterpret_cast<int4*>(recv_x_em);
+
+    __shared__ int32_t s_active[kPermuteWarps][kMaxActivePerToken];
+    __shared__ int     s_count[kPermuteWarps];
+    // Source row for the pad warp's cp.async.bulk S2G.
+    extern __shared__ int4 s_zero[];
+
+    for (int j = threadIdx.x; j < row_int4; j += blockDim.x) {
+        s_zero[j] = int4{0, 0, 0, 0};
+    }
+    __syncthreads();
+
+    if (is_pad) {
+        // 32 lanes stripe pad slots across the grid; each lane issues
+        // cp.async.bulk S2G from s_zero to its assigned slots.
+        const int total_pad_lanes =
+            kThreadsPerSlot * kPadWarps * static_cast<int>(gridDim.x);
+        const int my_pad_lane =
+            (static_cast<int>(blockIdx.x) * kPadWarps + pad_idx) *
+                kThreadsPerSlot + lane;
+        // Host validates row_bytes % 16 == 0; pass it straight to cp.async.bulk.
+        assert((row_bytes & 15) == 0);
+        const bool zero_weights = (recv_topk_weights_em != nullptr);
+        for (int e = 0; e < experts_per_rank; ++e) {
+            const int64_t zone_start = expert_token_offsets[e];
+            const int64_t zone_end   = expert_token_offsets[e + 1];
+            const int32_t active     = per_expert_counts_active[e];
+            const int64_t pad_begin  = zone_start + active;
+            const int64_t pad_count  = zone_end - pad_begin;
+            for (int64_t offs = my_pad_lane; offs < pad_count; offs += total_pad_lanes) {
+                const int64_t slot = pad_begin + offs;
+                uint8_t* dst_g =
+                    recv_x_em + static_cast<size_t>(slot) * row_bytes;
+                cuda::ptx::cp_async_bulk(
+                    cuda::ptx::space_global, cuda::ptx::space_shared,
+                    dst_g,
+                    reinterpret_cast<uint8_t*>(s_zero),
+                    row_bytes);
+                if (zero_weights) {
+                    recv_topk_weights_em[slot] = 0.0f;
+                }
+            }
+        }
+        cuda::ptx::cp_async_bulk_commit_group();
+        cuda::ptx::cp_async_bulk_wait_group(cuda::ptx::n32_t<0>{});
+        nccl_ep::fence_proxy_async();
+    } else {
+        // One warp per token, grid-strided over tokens.
+        for (int blk = static_cast<int>(blockIdx.x) * kPermuteWarps;
+             blk < num_recv;
+             blk += kPermuteWarps * static_cast<int>(gridDim.x)) {
+            const int token = blk + warp_id;
+            if (token >= num_recv) continue;
+
+            // Lane 0 packs active em_slots into smem and folds in the
+            // topk-weights copy (one scalar store per slot).
+            if (lane == 0) {
+                const int32_t* slot_row =
+                    flat2em_slot_map + static_cast<size_t>(token) * top_k;
+                int c = 0;
+                const bool copy_weights = recv_topk_weights_em != nullptr &&
+                                          recv_topk_weights_flat != nullptr;
+                for (int k = 0; k < top_k; ++k) {
+                    const int32_t es = __ldg(slot_row + k);
+                    if (es < 0) continue;
+                    if (c < kMaxActivePerToken) s_active[warp_id][c] = es;
+                    if (copy_weights) {
+                        recv_topk_weights_em[es] = recv_topk_weights_flat[
+                            static_cast<size_t>(token) * top_k + k];
+                    }
+                    ++c;
+                }
+                s_count[warp_id] = c;
+            }
+            __syncwarp();
+
+            const int4* src = src_int4 + static_cast<size_t>(token) * row_int4;
+            const int cnt = s_count[warp_id];
+
+            constexpr int kStride = kThreadsPerSlot * kHiddenVec;
+            constexpr int j_main_end = (row_int4 / kStride) * kStride;
+            for (int j_base = 0; j_base < j_main_end; j_base += kStride) {
+                int4 buf[kHiddenVec];
+                #pragma unroll
+                for (int u = 0; u < kHiddenVec; ++u) {
+                    buf[u] = src[j_base + u * kThreadsPerSlot + lane];
+                }
+                for (int a = 0; a < cnt; ++a) {
+                    int4* dst = dst_int4 +
+                                static_cast<size_t>(s_active[warp_id][a]) * row_int4;
+                    #pragma unroll
+                    for (int u = 0; u < kHiddenVec; ++u) {
+                        int4* p = dst + j_base + u * kThreadsPerSlot + lane;
+                        nccl_ep::st_cg_global(p, buf[u]);
+                    }
+                }
+            }
+            if constexpr (j_main_end < row_int4) {
+                for (int j = j_main_end + lane; j < row_int4; j += kThreadsPerSlot) {
+                    const int4 v = src[j];
+                    for (int a = 0; a < cnt; ++a) {
+                        int4* dst = dst_int4 +
+                                    static_cast<size_t>(s_active[warp_id][a]) * row_int4;
+                        nccl_ep::st_cg_global(&dst[j], v);
+                    }
+                }
+            }
+            __syncwarp();
+        }
+    }
+
+    __syncthreads();  // pad TMAs must complete before block exits.
+}
+
+// Local EM reduce kernel (inverse of local_permute_dup). Sums the top_k EM
+// rows that share a FLAT recv slot and writes the bf16 result back into FLAT
+// staging.
+struct local_permute_reduce_param_t {
+    void*          flat_staging;
+    const void*    recv_x_em;
+    const int32_t* flat2em_slot_map;
+    const int32_t* num_recv_tokens_dev;
+    // Optional fused EM to FLAT weight gather. Both null on FWD (token only).
+    const float*   em_weights_in;
+    float*         flat_weights_out;
+    int            top_k;
+    int            row_bytes;
+};
+
+// Direct-load reduce: each slot's row is reduced by a 128-thread sub-warp;
+// with kSlotsPerBlock=8 a block computes 8 slots in parallel. For each int4
+// lane the sub-warp's 128 threads accumulate across top_k contributors via
+// direct cached global loads, then write the packed bf16 result back to
+// flat_staging. HiddenInt4 = row_bytes / 16 is templated so the per-thread
+// strided element loop is a compile-time bound.
+template <int MaxTopK, int HiddenInt4>
+__device__ __forceinline__ void local_permute_reduce(
+    uint8_t* __restrict__ flat_staging,
+    const uint8_t* __restrict__ recv_x_em,
+    const int32_t* __restrict__ flat2em_slot_map,
+    const int32_t* __restrict__ num_recv_tokens_dev,
+    const float* __restrict__ em_weights_in,
+    float* __restrict__ flat_weights_out,
+    int top_k,
+    int /*row_bytes*/)
+{
+    constexpr int kRowBytes = HiddenInt4 * 16;
+
+    constexpr int kThreadsPerSlot = 128;
+    constexpr int kSlotsPerBlock  = kLocalPermuteReduceSlotsPerBlock;
+    constexpr int kBlockDim       = kThreadsPerSlot * kSlotsPerBlock;
+    constexpr int kElemsPerThread = (HiddenInt4 + kThreadsPerSlot - 1) / kThreadsPerSlot;
+
+    // Per-slot packed em_slot ids in smem: only valid contributors (the rest
+    // of top_k are -1 from non-local experts). Lets the inner loop iterate
+    // n_valid instead of top_k, which is the dominant win at top_k > EPR.
+    __shared__ int32_t smem_flat2em_slot_map[kSlotsPerBlock][MaxTopK];
+    __shared__ int     s_nvalid  [kSlotsPerBlock];
+
+    const int tid           = threadIdx.x;
+    const int slot_in_block = tid / kThreadsPerSlot;
+    const int lane          = tid % kThreadsPerSlot;
+
+    const int num_recv    = *num_recv_tokens_dev;
+    const int slot_stride = kSlotsPerBlock * static_cast<int>(gridDim.x);
+
+    for (int s_base = static_cast<int>(blockIdx.x) * kSlotsPerBlock;
+         s_base < num_recv;
+         s_base += slot_stride) {
+        const int slot = s_base + slot_in_block;
+        const bool slot_valid = (slot < num_recv);
+
+        // Cooperative pack: warp 0 of each slot reads slot_row[lane] in
+        // parallel, ballots valid lanes, and packs via warp scan. Requires
+        // MaxTopK <= 32 (true for all current configs).
+        static_assert(MaxTopK <= 32, "cooperative pack assumes MaxTopK <= 32");
+        if (slot_valid && lane < 32) {
+            const int32_t* slot_row_global =
+                flat2em_slot_map + static_cast<size_t>(slot) * top_k;
+            const int32_t s = (lane < top_k) ? __ldg(slot_row_global + lane) : -1;
+            if (em_weights_in != nullptr && lane < top_k) {
+                flat_weights_out[static_cast<size_t>(slot) * top_k + lane] =
+                    (s >= 0) ? em_weights_in[s] : 0.0f;
+            }
+            const unsigned valid = __ballot_sync(0xFFFFFFFFu, s >= 0);
+            const int my_pos = __popc(valid & ((1u << lane) - 1));
+            if (s >= 0) smem_flat2em_slot_map[slot_in_block][my_pos] = s;
+            if (lane == 0) s_nvalid[slot_in_block] = __popc(valid);
+        }
+        __syncthreads();
+
+        if (slot_valid) {
+            const int n = s_nvalid[slot_in_block];
+
+            int4* dst_int4 = reinterpret_cast<int4*>(
+                flat_staging + static_cast<size_t>(slot) * kRowBytes);
+
+            // Process the per-thread hidden-dim int4 indices in groups of
+            // kHiddenVec so each iter has kHiddenVec * n LDGs in flight per
+            // thread, hiding per-LDG latency. Cap kHiddenVec at
+            // kElemsPerThread (JIT-known from HiddenInt4) so at small hidden
+            // the dead u-lanes and their float2 accumulators disappear:
+            // H=2048 -> kHiddenVec=2 (vs 4) frees 16 float regs per thread.
+            constexpr int kHiddenVec = (kElemsPerThread < 4) ? kElemsPerThread : 4;
+            for (int nn_base = 0; nn_base < kElemsPerThread; nn_base += kHiddenVec) {
+                int js[kHiddenVec];
+                bool valid_u[kHiddenVec];
+                #pragma unroll
+                for (int u = 0; u < kHiddenVec; u++) {
+                    const int nn = nn_base + u;
+                    js[u] = lane + nn * kThreadsPerSlot;
+                    valid_u[u] = (nn < kElemsPerThread) && (js[u] < HiddenInt4);
+                }
+
+                float2 acc[kHiddenVec][4];
+                #pragma unroll
+                for (int u = 0; u < kHiddenVec; u++) {
+                    #pragma unroll
+                    for (int p = 0; p < 4; p++) { acc[u][p].x = 0.0f; acc[u][p].y = 0.0f; }
+                }
+
+                for (int k = 0; k < n; k++) {
+                    const int32_t em_slot = smem_flat2em_slot_map[slot_in_block][k];
+                    const int4* src = reinterpret_cast<const int4*>(
+                        recv_x_em + static_cast<size_t>(em_slot) * kRowBytes);
+                    int4 buf[kHiddenVec];
+                    #pragma unroll
+                    for (int u = 0; u < kHiddenVec; u++) {
+                        if (valid_u[u]) buf[u] = src[js[u]];
+                    }
+                    #pragma unroll
+                    for (int u = 0; u < kHiddenVec; u++) {
+                        if (!valid_u[u]) continue;
+                        const __nv_bfloat162* bf =
+                            reinterpret_cast<const __nv_bfloat162*>(&buf[u]);
+                        #pragma unroll
+                        for (int p = 0; p < 4; p++) {
+                            float2 f = __bfloat1622float2(bf[p]);
+                            acc[u][p].x += f.x;
+                            acc[u][p].y += f.y;
+                        }
+                    }
+                }
+
+                #pragma unroll
+                for (int u = 0; u < kHiddenVec; u++) {
+                    if (!valid_u[u]) continue;
+                    int4 out;
+                    __nv_bfloat162* obf = reinterpret_cast<__nv_bfloat162*>(&out);
+                    #pragma unroll
+                    for (int p = 0; p < 4; p++) {
+                        obf[p] = __float22bfloat162_rn(acc[u][p]);
+                    }
+                    // Keep the FLAT recv row in L2 for the host-side D2D
+                    // that reads it next.
+                    nccl_ep::st_cg_global(&dst_int4[js[u]], out);
+                }
+            }
+        }
+        __syncthreads();
+    }
+}
+
+
 } // namespace hybrid_ep
 
 #include "scan_kernel.cuh"

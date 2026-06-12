@@ -37,8 +37,20 @@
 #include "../nccl_ep_test_internal.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <map>
 #include <set>
+
+// HT EM mode is resolved from env at group create time; tests must match.
+// Default (no env) = kLocalPermute → unified s2d is FLAT-shape.
+// NCCL_EP_HT_EM_NVLINK_DUP / NCCL_EP_HT_EM_LOCAL_DUP → s2d is EM-shape (packed rank/slot).
+static bool ht_em_nondefault_mode_set() {
+    auto truthy = [](const char* k) {
+        const char* v = std::getenv(k);
+        return v && *v && *v != '0';
+    };
+    return truthy("NCCL_EP_HT_EM_NVLINK_DUP") || truthy("NCCL_EP_HT_EM_LOCAL_DUP");
+}
 
 // ── Inspector class ───────────────────────────────────────────────────────────
 //
@@ -149,6 +161,14 @@ TEST_F(HandleMapsTest, S2DRankMajor) {
 // ── Test: S2D layout for expert-major ─────────────────────────────────────────
 
 TEST_F(HandleMapsTest, S2DExpertMajor) {
+    // EM-shape s2d (packed rank/slot) is only populated under the HT EM
+    // kNvlinkDup / kLocalDup modes. Default kLocalPermute writes a FLAT-shape
+    // s2d — covered by S2DExpertMajorPermute below.
+    if (!ht_em_nondefault_mode_set()) {
+        SUCCEED() << "skipped: requires NCCL_EP_HT_EM_NVLINK_DUP=1 or NCCL_EP_HT_EM_LOCAL_DUP=1";
+        return;
+    }
+
     ncclEpHandle_t h = make_handle_em(nullptr);
     ASSERT_NE(h, nullptr);
 
@@ -201,6 +221,11 @@ TEST_F(HandleMapsTest, S2DExpertMajor) {
 // invariant and is independent of the exact slot values chosen.
 //
 TEST_F(HandleMapsTest, S2DExpertMajorNoInterleave) {
+    if (!ht_em_nondefault_mode_set()) {
+        SUCCEED() << "skipped: requires NCCL_EP_HT_EM_NVLINK_DUP=1 or NCCL_EP_HT_EM_LOCAL_DUP=1";
+        return;
+    }
+
     ncclEpHandle_t h = make_handle_em(nullptr);
     ASSERT_NE(h, nullptr);
 
@@ -253,6 +278,11 @@ TEST_F(HandleMapsTest, S2DExpertMajorNoInterleave) {
 // starting at a multiple of A, and different experts' zones must not overlap.
 //
 TEST_F(HandleMapsTest, S2DExpertMajorAlignmentZones) {
+    if (!ht_em_nondefault_mode_set()) {
+        SUCCEED() << "skipped: requires NCCL_EP_HT_EM_NVLINK_DUP=1 or NCCL_EP_HT_EM_LOCAL_DUP=1";
+        return;
+    }
+
     constexpr size_t kAlign = 4;
     ncclEpHandleConfig_t cfg = NCCL_EP_HANDLE_CONFIG_INIT;
     cfg.dispatch_output_per_expert_alignment = kAlign;
@@ -297,6 +327,51 @@ TEST_F(HandleMapsTest, S2DExpertMajorAlignmentZones) {
             EXPECT_GE(zone_starts[i], zone_starts[i-1] + (int32_t)kAlign)
                 << "rank " << g_rank << " dest " << d
                 << ": zone overlap at " << zone_starts[i-1] << " and " << zone_starts[i];
+    }
+
+    NCCL_ASSERT(ncclEpHandleDestroy(h));
+}
+
+// ── Test: FLAT-shape S2D for expert-major em-permute mode ─────────────────────
+//
+// Under default kLocalPermute, the unified s2d on an EM handle has inner_dim
+// = n_ranks_per_node (FLAT shape) — written by scan_flat_kernel, consumed by
+// dispatch/combine kernels with layout=RANK_MAJOR. Structure mirrors the
+// rank-major case: s2d[t][dest] = slot, all other entries -1.
+//
+TEST_F(HandleMapsTest, S2DExpertMajorPermute) {
+    if (ht_em_nondefault_mode_set()) {
+        SUCCEED() << "skipped: FLAT-shape s2d only populated under default kLocalPermute mode";
+        return;
+    }
+
+    ncclEpHandle_t h = make_handle_em(nullptr);
+    ASSERT_NE(h, nullptr);
+
+    // EM handle but em-permute → s2d is FLAT-shaped; inspect with expert_major=false.
+    NcclEpHandleInspector insp(h, /*expert_major=*/false);
+    ASSERT_EQ(insp.rows(), kNumTokens);
+    ASSERT_EQ(insp.n_ranks(), g_nranks);
+
+    auto s2d = insp.s2d_host();
+    int dest_a, dest_b, base;
+    bool early;
+    routing_params(dest_a, dest_b, early, base);
+    const int C = insp.inner_dim();  // n_ranks
+
+    // Tokens 0,1 → dest_a; tokens 2,3 → dest_b.
+    EXPECT_EQ(s2d[0 * C + dest_a], base + 0) << "rank " << g_rank << ": tok0 dest_a";
+    EXPECT_EQ(s2d[1 * C + dest_a], base + 1) << "rank " << g_rank << ": tok1 dest_a";
+    EXPECT_EQ(s2d[2 * C + dest_b], base + 0) << "rank " << g_rank << ": tok2 dest_b";
+    EXPECT_EQ(s2d[3 * C + dest_b], base + 1) << "rank " << g_rank << ": tok3 dest_b";
+
+    for (int t = 0; t < insp.rows(); ++t) {
+        for (int d = 0; d < C; ++d) {
+            bool is_hit = ((t <= 1 && d == dest_a) || (t >= 2 && d == dest_b));
+            if (is_hit) continue;
+            EXPECT_EQ(s2d[t * C + d], -1)
+                << "rank " << g_rank << ": expected -1 at [" << t << "][" << d << "]";
+        }
     }
 
     NCCL_ASSERT(ncclEpHandleDestroy(h));

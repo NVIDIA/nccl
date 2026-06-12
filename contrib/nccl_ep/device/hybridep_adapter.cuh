@@ -167,7 +167,14 @@ void call_metadata_preprocessing(
     int      emuf_max_groups        = 0,       // Row capacity; kernel __trap on overflow.
     int      num_blocks             = 16,      // Number of SMs for the kernel grid
     void*    scan_gscratch      = nullptr, // EM cooperative scan scratch (required when expert_major)
-    cudaStream_t stream             = 0);
+    // EM-permute mode: when true, FLAT scan replaces scan_em and writes the
+    // unified (FLAT-shaped) sparse_to_dense_map + FLAT-shape LERM;
+    // em_scan_kernel produces only EM offsets / counts / em_slot table.
+    bool     em_permute                  = false,
+    int32_t* token_to_recv_slot          = nullptr,
+    int32_t* flat2em_slot_map           = nullptr,
+    int      em_top_k                    = 0,
+    cudaStream_t stream                  = 0);
 
 // Returns required size in bytes for the scan temp buffer used by call_metadata_preprocessing.
 // Caller must allocate at least this many bytes and pass the pointer to call_metadata_preprocessing.
@@ -177,11 +184,11 @@ size_t get_preprocessing_scan_tmp_size(int num_ranks_per_node);
 // Formula: ceil(lsa_team_size / 64) * sizeof(uint64_t).
 size_t get_rank_mask_elem_size(int lsa_team_size);
 
-// Cooperative EM scan over the AG'd bitmap. Produces EM-layout S2D, LERM,
-// per-expert counts/offsets in one launch. Used when expert_major=true.
-// Requires lsa_team_size <= 128 (fits in 2 x uint64 mask words) and
-// experts_per_rank to be a power of two.
-void launch_em_scan(
+// Cooperative kernel that consumes the preprocessing scan outputs (rank mask)
+// and builds the EM-layout index tables: S2D, LERM, per-expert counts/offsets,
+// em_slot. Used when expert_major=true. Requires lsa_team_size <= 128
+// (fits in 2 x uint64 mask words) and experts_per_rank to be a power of two.
+void launch_build_em_tables(
     const uint8_t* input_routing_map,
     const void*    token_rank_mask,
     int num_mask_words,
@@ -210,10 +217,49 @@ void launch_em_scan(
     int      emuf_max_groups,       // Row capacity; kernel __trap on overflow.
     int32_t* gscratch,
     int      num_sms,
+    const int32_t* token_to_recv_slot,
+    int32_t* flat2em_slot_map,
+    int      em_top_k,
     cudaStream_t stream);
 
-// Returns required size (bytes) for the gscratch buffer used by launch_em_scan.
+// Returns required size (bytes) for the gscratch buffer used by launch_build_em_tables.
 size_t get_scan_gscratch_size(int num_ranks_per_node, int experts_per_rank, int num_sms);
+
+// Scatter FLAT staging rows into EM zones using flat2em_slot_map (written by
+// em_scan_kernel during UpdateHandle); zero-fill per-expert pad rows.
+// prolog_epilog_sms=0 picks sm_count.
+void launch_dispatch_permute(
+    void* recv_x_em,
+    float* recv_topk_weights_em,
+    const void* flat_staging,
+    const float* recv_topk_weights_flat,
+    const int32_t* flat2em_slot_map,
+    const int32_t* num_recv_tokens_dev,
+    const int64_t* expert_token_offsets,
+    const int32_t* per_expert_counts_active,
+    int top_k,
+    int experts_per_rank,
+    int row_bytes,
+    int sm_count,
+    unsigned int prolog_epilog_sms,
+    cudaStream_t stream);
+
+// Inverse of launch_dispatch_permute: gather caller EM combine input into
+// FLAT staging by summing the top_k EM rows per FLAT recv slot. Optional
+// em_weights_in / flat_weights_out pair fuses a 1D EM to [num_flat, top_k]
+// FLAT weight gather (BWD combine); pass nullptr for both on FWD.
+void launch_combine_reduce(
+    void* flat_staging,
+    const void* recv_x_em,
+    const int32_t* flat2em_slot_map,
+    const int32_t* num_recv_tokens_dev,
+    const float* em_weights_in,
+    float* flat_weights_out,
+    int top_k,
+    int row_bytes,
+    int sm_count,
+    unsigned int prolog_epilog_sms,
+    cudaStream_t stream);
 
 // ============================================================================
 // Memory region info structs for GIN

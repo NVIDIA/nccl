@@ -58,7 +58,7 @@
 
 // ============================================================================
 // EM local-fanout kernels (local_dup, local_reduce).
-// Used only when NCCL_EP_HT_EM_NVLINK_DEDUP=1.
+// Used only when NCCL_EP_HT_EM_LOCAL_DUP=1.
 // ============================================================================
 #define NCCLEP_LOCAL_DUP_PIPE_DEPTH 8
 #define NCCLEP_LOCAL_REDUCE_PIPE_DEPTH 8

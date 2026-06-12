@@ -67,6 +67,12 @@ make ONLY_FUNCS="AllReduce Sum f32 RING LL128"
 def paste(sep, *args):
   return sep.join(x for x in args if x is not None)
 
+# Kernel names intentionally omit proto. The kernel body may dispatch a
+# different tuned protocol through ncclDevFuncTable, so a proto suffix would be
+# a cosmetic signal rather than the executed protocol.
+def kernel_sym(*fn):
+  return paste("_", *fn[0:4])
+
 func_pattern = sys.argv[2:3]
 if func_pattern and func_pattern[0]:
   import re
@@ -275,7 +281,7 @@ with open(os.path.join(gensrc, "host_table.cc"), "w") as f:
   # Forward declarations of kernels.
   for kfn in kernel_funcs:
     cudart, _ = required_cuda(*kfn)
-    sym = paste("_", "ncclDevKernel", *kfn)
+    sym = paste("_", "ncclDevKernel", kernel_sym(*kfn))
     if cudart != 0: out("#if CUDART_VERSION >= %d\n" % cudart)
     # __global__ below gets removed by the host compiler, which results in
     # Coverity diagnosing a specifiers inconsistency.
@@ -290,7 +296,7 @@ with open(os.path.join(gensrc, "host_table.cc"), "w") as f:
   index = 0
   for kfn in kernel_funcs:
     cudart, _ = required_cuda(*kfn)
-    sym = paste("_", "ncclDevKernel", *kfn)
+    sym = paste("_", "ncclDevKernel", kernel_sym(*kfn))
     if cudart != 0: out("#if CUDART_VERSION >= %d\n" % cudart)
     out("/*%4d*/ (void*)%s,\n" % (index, sym));
     if cudart != 0: out("#else\n" "/*%4d*/ nullptr,\n" "#endif\n" % index)
@@ -301,7 +307,7 @@ with open(os.path.join(gensrc, "host_table.cc"), "w") as f:
   out("int ncclDevKernelRequirements[] = {\n")
   for index,kfn in enumerate(kernel_funcs):
     cudart,_ = required_cuda(*kfn)
-    sym = paste("_", "ncclDevKernel", *kfn)
+    sym = paste("_", "ncclDevKernel", kernel_sym(*kfn))
     out("  %7d, /*%4d %s*/\n" % (cudart or 0, index, sym));
   out("};\n")
   out("\n")
@@ -311,7 +317,7 @@ with open(os.path.join(gensrc, "host_table.cc"), "w") as f:
   index = 0
   for fn in primary_funcs:
     kfn = best_kernel(*fn)
-    sym = paste("_", "ncclDevKernel", *kfn)
+    sym = paste("_", "ncclDevKernel", kernel_sym(*kfn))
     cudart, _ = required_cuda(*kfn)
     if cudart != 0: out("#if CUDART_VERSION >= %d\n" % cudart)
     out("/*%4d*/ (void*)%s,\n" % (index, sym))
@@ -427,7 +433,7 @@ for name in name_to_funcs.keys():
     (_, kfns) = name_to_kernels.get(name) or (None, [])
     for kfn in kfns:
       (coll, redop, ty, algo, proto) = kfn
-      sym = paste("_", coll, redop, ty, algo, proto)
+      sym = kernel_sym(*kfn)
       fn_id = primary_to_index[kfn]
       cudart, arch = required_cuda(*kfn)
       s = "DEFINE_ncclDevKernel({sym}, ncclFunc{coll}, {redop_cxx}, {ty_cxx}, NCCL_ALGO_{algo}, NCCL_PROTO_{proto}, {fn_id})\n"

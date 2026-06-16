@@ -63,8 +63,8 @@ class Gin:
         counter_id: int = 0,
         is_descriptor: bool = False,
         descriptor_ptr=0,
-        given_release: int = 0,
-        required_release: int = 3,
+        given_release: int = 3,
+        required_release: int = 1,
     ) -> None:
         """Put ``src`` to ``dst`` on ``peer`` of ``team``.
 

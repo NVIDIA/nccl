@@ -24,7 +24,6 @@ from ._structs import (
     ncclGinBarrierHandle,
     ncclMultimemHandle,
     ncclCoopAny,
-    ncclGin_C,
 )
 
 
@@ -285,13 +284,13 @@ def ncclLsaBarrierSessionSync(session_ptr, coop, order):
 _raw_ncclGinBarrierSessionInit = _ffi(
     name="ncclGinBarrierSessionInit",
     params_types=[
-        _LLVMPtrType, ncclCoopAny, ncclGin_C, ncclTeam,
+        _LLVMPtrType, ncclCoopAny, _LLVMPtrType, ncclTeam,
         ncclGinBarrierHandle, cutlass.Uint32,
     ])
 
-def ncclGinBarrierSessionInit(session_ptr, coop, gin_value, team, handle, index):
+def ncclGinBarrierSessionInit(session_ptr, coop, gin_ptr, team, handle, index):
     _raw_ncclGinBarrierSessionInit(
-        _to_ptr(session_ptr), _to_coop_value(coop), gin_value, team, handle,
+        _to_ptr(session_ptr), _to_coop_value(coop), _to_ptr(gin_ptr), team, handle,
         cutlass.Uint32(index),
     )
 
@@ -312,17 +311,17 @@ def ncclGinBarrierSessionSync(session_ptr, coop, order, fence):
 _raw_ncclBarrierSessionInit = _ffi(
     name="ncclBarrierSessionInit",
     params_types=[
-        _LLVMPtrType, ncclCoopAny, ncclTeam, ncclTeam, ncclGin_C,
+        _LLVMPtrType, ncclCoopAny, ncclTeam, ncclTeam, _LLVMPtrType,
         ncclLsaBarrierHandle, ncclGinBarrierHandle, cutlass.Uint32,
         cutlass.Boolean, ncclMultimemHandle,
     ])
 
 def ncclBarrierSessionInit(session_ptr, coop, inner_team, outer_team,
-                            gin_value, inner_handle, outer_handle, index,
+                            gin_ptr, inner_handle, outer_handle, index,
                             multimem, inner_mm_handle):
     _raw_ncclBarrierSessionInit(
         _to_ptr(session_ptr), _to_coop_value(coop), inner_team, outer_team,
-        gin_value, inner_handle, outer_handle, cutlass.Uint32(index),
+        _to_ptr(gin_ptr), inner_handle, outer_handle, cutlass.Uint32(index),
         cutlass.Boolean(multimem), inner_mm_handle,
     )
 

@@ -111,7 +111,7 @@ void ncclLsaBarrierSessionSync(ncclLsaBarrierSession_C* session, ncclCoopAny coo
 NCCL_IR_EXTERN_C __device__ void ncclGinBarrierSessionInit(
     ncclGinBarrierSession_C* session,
     ncclCoopAny coop,
-    ncclGin_C net,
+    ncclGin_C const* net,
     ncclTeam team,
     ncclGinBarrierHandle handle,
     uint32_t index);
@@ -138,7 +138,7 @@ NCCL_IR_EXTERN_C __device__ void ncclBarrierSessionInit(
     ncclCoopAny coop,
     ncclTeam innerTeam,
     ncclTeam outerTeam,
-    ncclGin_C net,
+    ncclGin_C const* net,
     ncclLsaBarrierHandle const innerBarHandle,
     ncclGinBarrierHandle const outerBarHandle,
     uint32_t index,

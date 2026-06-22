@@ -193,7 +193,7 @@ def gin_session(
     """
     storage = _alloca_session(raw.ncclGinBarrierSession_C_size())
     raw.ncclGinBarrierSessionInit(
-        storage, coop, gin.value(), team, handle, index,
+        storage, coop, gin.ptr, team, handle, index,
     )
     return GinBarrierSession(ptr=storage)
 
@@ -250,7 +250,7 @@ def hybrid_session(
     """
     storage = _alloca_session(raw.ncclBarrierSession_C_size())
     raw.ncclBarrierSessionInit(
-        storage, coop, inner_team, outer_team, gin.value(),
+        storage, coop, inner_team, outer_team, gin.ptr,
         inner_handle, outer_handle, index, multimem,
         inner_mm_handle if inner_mm_handle is not None else _zero_multimem_handle(),
     )

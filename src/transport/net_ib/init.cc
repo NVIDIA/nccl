@@ -218,6 +218,20 @@ ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
   // Set the virtual bit on to avoid collision with physical planes when multiple planes are merged.
   mDev->planeId = (props->ndevs > 1) ? NCCL_IB_PLANE_VIRT_BIT : ncclIbDevs[props->devs[0]].planeId;
 
+  // Order the sub-devices of a fused vNIC deterministically (by device name) so that every node
+  // builds the same sub-device ordering. QP-to-sub-device pairing inside a fused vNIC is positional
+  // (qpIndex % ndevs), so a stable, node-independent order is required to pair sub-devices
+  // consistently across endpoints. Without this, the sub-device order follows PCI/BDF enumeration,
+  // which is not stable across nodes for SR-IOV VFs of a multi-port/multi-plane NIC and leads to
+  // cross-plane QP pairing (mismatched GID subnets -> ibv_modify_qp 110 / degraded bandwidth).
+  for (int a = 0; a < props->ndevs - 1; a++) {
+    for (int b = 0; b < props->ndevs - 1 - a; b++) {
+      if (strcmp(ncclIbDevs[props->devs[b]].devName, ncclIbDevs[props->devs[b + 1]].devName) > 0) {
+        int tmp = props->devs[b]; props->devs[b] = props->devs[b + 1]; props->devs[b + 1] = tmp;
+      }
+    }
+  }
+
   for (int i = 0; i < props->ndevs; i++) {
     ncclIbDev* dev = ncclIbDevs + props->devs[i];
     if (mDev->vProps.ndevs == NCCL_IB_MAX_DEVS_PER_NIC) return ncclInvalidUsage;

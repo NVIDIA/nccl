@@ -13,6 +13,7 @@
 #include "checks.h"
 #include "gdrwrap.h"
 #include "nccl_device/gin/proxy/gin_proxy_device_host_common.h"
+#include "nccl_device/gin/gin_device_common.h"
 #include "compiler.h"
 #include "comm.h"
 #include "proxy_gpucontext/gpucontext.h"
@@ -171,15 +172,24 @@ static bool extractIsStrongSignal(ncclGinProxyGfd_t* gfd) {
   return gfd->qword[ncclGinProxyGfdSignalVal].signalVal.isStrongSignal != 0;
 }
 
+// True if the queue slot at sis[targetRank] holds a GFD (its header flag is set by the producer).
+static bool isGfdAvailable(struct ginProxyHostGpuCtx* hostGpuCtx, int targetRank) {
+  ncclGinProxyGfd_t* q = hostGpuCtx->queues + targetRank * hostGpuCtx->queueSize;
+  uint32_t idx = hostGpuCtx->sis[targetRank] & (hostGpuCtx->queueSize - 1);
+  ncclGinProxyQword_t header;
+  COMPILER_ATOMIC_LOAD_DEST(&q[idx].qword[ncclGinProxyGfdHeader].raw, &header.raw, std::memory_order_relaxed);
+  return header.flag.v != 0;
+}
+
 static int proxyGinPollGfd(struct ginProxyCtx* ctx, ginProxyHostGpuCtx* hostGpuCtx, int targetRank,
                            ncclGinProxyGfd_t* gfd, struct ginProxyGfdState** state) {
+  if (!isGfdAvailable(hostGpuCtx, targetRank)) {
+    return 0;
+  }
+
   ncclGinProxyGfd_t* q = hostGpuCtx->queues + targetRank * hostGpuCtx->queueSize;
   uint32_t idx = hostGpuCtx->sis[targetRank] & (hostGpuCtx->queueSize - 1);
   ncclGinProxyQword_t qword;
-  COMPILER_ATOMIC_LOAD_DEST(&q[idx].qword[ncclGinProxyGfdHeader].raw, &qword.raw, std::memory_order_relaxed);
-  if (qword.flag.v == 0) {
-    return 0;
-  }
 
   // We know for sure that the first qword is there, copy it.
   gfd->qword[ncclGinProxyGfdHeader] = q[idx].qword[ncclGinProxyGfdHeader];
@@ -234,9 +244,13 @@ static int mapGfdOpToSignalOp(ncclGinProxyGfd_t* gfd) {
 }
 
 static ncclResult_t proxyGinProcessGfd(struct ginProxyCtx* ctx, struct ginProxyHostGpuCtx* hostGpuCtx, int targetRank,
-                                       ncclGinProxyGfd_t* gfd, struct ginProxyGfdState* state) {
+                                       ncclGinProxyGfd_t* gfd, struct ginProxyGfdState* state, bool isLastInBatch) {
   int signalOp;
   uint64_t signalVal;
+  // Defer the doorbell only when this peer's next GFD is already queued (so it is guaranteed pollable next
+  // iteration and the doorbell is rung before we leave Progress) and this isn't the last op in the batch.
+  bool aggregate = isGfdAvailable(hostGpuCtx, targetRank) && !isLastInBatch;
+  uint32_t optFlags = aggregate ? ncclGinOptFlagsAggregateRequests : ncclGinOptFlagsDefault;
 
   // Handle VA Signal operations (signal-only, no PUT)
   if (extractOp(gfd) & ncclGinProxyOpVASignal) {
@@ -246,7 +260,7 @@ static ncclResult_t proxyGinProcessGfd(struct ginProxyCtx* ctx, struct ginProxyH
     signalOp = mapGfdOpToSignalOp(gfd);
     NCCLCHECK(rmaBackend->iputSignal(ctx->rmaCtx, hostGpuCtx->contextId, 0, nullptr, 0, 0, nullptr, targetRank,
                                      signalOff, signalHandle, signalVal, signalOp, extractIsStrongSignal(gfd),
-                                     /*optFlags*/ 0, &state->request));
+                                     optFlags, &state->request));
     return ncclSuccess;
   }
 
@@ -261,7 +275,7 @@ static ncclResult_t proxyGinProcessGfd(struct ginProxyCtx* ctx, struct ginProxyH
       return ncclInvalidUsage;
     }
     NCCLCHECK(rmaBackend->iget(ctx->rmaCtx, hostGpuCtx->contextId, srcOff, srcHandle, size, dstOff, dstHandle,
-                               targetRank, /*optFlags*/ 0, &state->request));
+                               targetRank, optFlags, &state->request));
     return ncclSuccess;
   }
 
@@ -303,7 +317,7 @@ static ncclResult_t proxyGinProcessGfd(struct ginProxyCtx* ctx, struct ginProxyH
     if (signalOp == -1) {
       // First cast from 63 bits to 64 bits and then to void * to avoid warnings
       NCCLCHECK(rmaBackend->iput(ctx->rmaCtx, hostGpuCtx->contextId, srcOff, srcHandle, size, dstOff, dstHandle,
-                                 targetRank, /*optFlags*/ 0, &state->request));
+                                 targetRank, optFlags, &state->request));
     } else {
       // Reconstruct the signal value
       signalVal = extractSignalVal(gfd);
@@ -312,7 +326,7 @@ static ncclResult_t proxyGinProcessGfd(struct ginProxyCtx* ctx, struct ginProxyH
         sizeof(uint64_t);
       NCCLCHECK(rmaBackend->iputSignal(ctx->rmaCtx, hostGpuCtx->contextId, srcOff, srcHandle, size, dstOff, dstHandle,
                                        targetRank, signalOff, ctx->signalsGinHandle, signalVal, signalOp,
-                                       extractIsStrongSignal(gfd), /*optFlags*/ 0, &state->request));
+                                       extractIsStrongSignal(gfd), optFlags, &state->request));
     }
     break;
   default:
@@ -630,7 +644,8 @@ static ncclResult_t ncclGinProxyProgress(void* ginCtx) {
         ncclGinProxyGfd_t gfd;
         struct ginProxyGfdState* state = NULL;
         if (!proxyGinPollGfd(ctx, hostGpuCtx, targetRank, &gfd, &state)) break;
-        ncclResult_t ret = proxyGinProcessGfd(ctx, hostGpuCtx, targetRank, &gfd, state);
+        bool isLastInBatch = (p == ctx->pollBatch - 1);
+        ncclResult_t ret = proxyGinProcessGfd(ctx, hostGpuCtx, targetRank, &gfd, state, isLastInBatch);
         if (ret) ctx->hasError = ret;
         NCCLCHECK(ret);
       }

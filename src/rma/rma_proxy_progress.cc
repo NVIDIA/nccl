@@ -21,11 +21,11 @@ static ncclResult_t ncclRmaProxyIssuePutSignal(ncclRma_t* ncclRma, struct ncclRm
                                                struct ncclRmaPutSignalOp* ps) {
   if (ps->signal.op == 0) {
     NCCLCHECK(ncclRma->iput(ctx->rmaCtx, 0, ps->srcOff, ps->srcHandle, ps->size, ps->dstOff, ps->dstHandle,
-                            ps->targetRank, &ps->request));
+                            ps->targetRank, /*optFlags*/ 0, &ps->request));
   } else {
     NCCLCHECK(ncclRma->iputSignal(ctx->rmaCtx, 0, ps->srcOff, ps->srcHandle, ps->size, ps->dstOff, ps->dstHandle,
                                   ps->targetRank, ps->signal.offset, ps->signal.signalMhandle, ps->signal.val,
-                                  ps->signal.op, /*isStrongSignal*/ true, &ps->request));
+                                  ps->signal.op, /*isStrongSignal*/ true, /*optFlags*/ 0, &ps->request));
   }
   // Defensive: RMA proxy iput/iputSignal should return a non-NULL request with inflightReqeusts checked.
   if (ps->request == nullptr) {
@@ -155,7 +155,7 @@ static ncclResult_t ncclRmaProxyFlushNicGpuPath(ncclRma_t* ncclRma, struct ncclR
   void* request = nullptr;
   size_t flushOff = (size_t)ctx->comm->rank * sizeof(uint64_t);
   NCCLCHECK(ncclRma->iput(ctx->rmaCtx, 0, flushOff, ctx->flushBufMhandle, sizeof(uint64_t), flushOff,
-                          ctx->flushBufMhandle, ctx->comm->rank, &request));
+                          ctx->flushBufMhandle, ctx->comm->rank, /*optFlags*/ 0, &request));
   int done = 0;
   while (!done) {
     NCCLCHECK(ncclRma->test(ctx->rmaCollComm, request, &done));

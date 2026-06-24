@@ -27,7 +27,7 @@ static ncclResult_t ncclRma_init(void** ctx, uint64_t commId, ncclDebugLogger_t 
   return ncclSuccess;
 }
 
-static ncclResult_t ncclRma_createContext(void* collComm, ncclRmaConfig_v14_t* config, void** rmaCtx) {
+static ncclResult_t ncclRma_createContext(void* collComm, ncclRmaConfig_v15_t* config, void** rmaCtx) {
   ncclNetDeviceHandle_v11_t* devHandle;
   ncclGinConfig_v13_t config_v13;
   memset(&config_v13, 0, sizeof(config_v13));
@@ -56,10 +56,25 @@ static ncclResult_t ncclRma_regMrSymDmaBuf(void* collComm, void* data, size_t si
 static ncclResult_t ncclRma_iputSignal(void* rmaCtx, int context, uint64_t srcOff, void* srcMhandle, size_t size,
                                        uint64_t dstOff, void* dstMhandle, uint32_t rank, uint64_t signalOff,
                                        void* signalMhandle, uint64_t signalValue, uint32_t signalOp,
-                                       bool isStrongSignal, void** request) {
+                                       bool isStrongSignal, uint32_t optFlags, void** request) {
   (void)isStrongSignal;
+  (void)optFlags;
   return ncclRma_v13->iputSignal(rmaCtx, context, srcOff, srcMhandle, size, dstOff, dstMhandle, rank, signalOff,
                                  signalMhandle, signalValue, signalOp, request);
+}
+
+static ncclResult_t ncclRma_iput(void* rmaCtx, int context, uint64_t srcOff, void* srcMhandle, size_t size,
+                                 uint64_t dstOff, void* dstMhandle, uint32_t rank, uint32_t optFlags,
+                                 void** request) {
+  (void)optFlags;
+  return ncclRma_v13->iput(rmaCtx, context, srcOff, srcMhandle, size, dstOff, dstMhandle, rank, request);
+}
+
+static ncclResult_t ncclRma_iget(void* rmaCtx, int context, uint64_t remoteOff, void* remoteMhandle, size_t size,
+                                 uint64_t localOff, void* localMhandle, uint32_t rank, uint32_t optFlags,
+                                 void** request) {
+  (void)optFlags;
+  return ncclRma_v13->iget(rmaCtx, context, remoteOff, remoteMhandle, size, localOff, localMhandle, rank, request);
 }
 
 ncclRma_t* getNcclRma_v13(void* lib) {
@@ -83,9 +98,9 @@ ncclRma_t* getNcclRma_v13(void* lib) {
     ncclRma.destroyContext = ncclRma_v13->destroyContext;
     ncclRma.closeColl = ncclRma_v13->closeColl;
     ncclRma.closeListen = ncclRma_v13->closeListen;
-    ncclRma.iput = ncclRma_v13->iput;
+    ncclRma.iput = ncclRma_iput;
     ncclRma.iputSignal = ncclRma_iputSignal;
-    ncclRma.iget = ncclRma_v13->iget;
+    ncclRma.iget = ncclRma_iget;
     ncclRma.iflush = ncclRma_v13->iflush;
     ncclRma.test = ncclRma_v13->test;
     ncclRma.rmaProgress = ncclRma_v13->ginProgress;

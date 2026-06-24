@@ -519,7 +519,9 @@ static ncclResult_t ncclRmaIbProxyGetRecvComm(struct ncclRmaIbProxyCtx* rmaProxy
 }
 
 ncclResult_t ncclRmaIbProxyIPut(void* rmaCtx, int context, uint64_t srcOff, void* srcMhandle, size_t size,
-                                uint64_t dstOff, void* dstMhandle, uint32_t rank, void** request) {
+                                uint64_t dstOff, void* dstMhandle, uint32_t rank, uint32_t optFlags,
+                                void** request) {
+  (void)optFlags;
   struct ncclRmaIbProxyCtx* rmaProxyCtx = &((struct ncclRmaIbProxyCtx*)rmaCtx)[context];
 
   struct ncclRmaIbProxyMrHandle* srcMrHandle = (struct ncclRmaIbProxyMrHandle*)srcMhandle;
@@ -571,7 +573,9 @@ ncclResult_t ncclRmaIbProxyIPut(void* rmaCtx, int context, uint64_t srcOff, void
 }
 
 ncclResult_t ncclRmaIbProxyIGet(void* rmaCtx, int context, uint64_t remoteOffset, void* remoteMhandle, size_t size,
-                                uint64_t localOffset, void* localMhandle, uint32_t rank, void** request) {
+                                uint64_t localOffset, void* localMhandle, uint32_t rank, uint32_t optFlags,
+                                void** request) {
+  (void)optFlags;
   struct ncclRmaIbProxyCtx* rmaProxyCtx = &((struct ncclRmaIbProxyCtx*)rmaCtx)[context];
 
   struct ncclRmaIbProxyMrHandle* remoteMrHandle = (struct ncclRmaIbProxyMrHandle*)remoteMhandle;
@@ -625,8 +629,9 @@ ncclResult_t ncclRmaIbProxyIGet(void* rmaCtx, int context, uint64_t remoteOffset
 ncclResult_t ncclRmaIbProxyIPutSignal(void* rmaCtx, int context, uint64_t srcOff, void* srcMhandle, size_t size,
                                       uint64_t dstOff, void* dstMhandle, uint32_t rank, uint64_t signalOff,
                                       void* signalMhandle, uint64_t signalValue, uint32_t signalOp, bool isStrongSignal,
-                                      void** request) {
+                                      uint32_t optFlags, void** request) {
   (void)isStrongSignal;
+  (void)optFlags;
   if (signalOp != NCCL_NET_SIGNAL_OP_INC && signalOp != NCCL_NET_SIGNAL_OP_ADD) {
     WARN("ncclRmaIbProxyIPutSignal: Unsupported signalOp %u", signalOp);
     return ncclInvalidArgument;

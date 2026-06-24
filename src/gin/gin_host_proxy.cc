@@ -246,7 +246,7 @@ static ncclResult_t proxyGinProcessGfd(struct ginProxyCtx* ctx, struct ginProxyH
     signalOp = mapGfdOpToSignalOp(gfd);
     NCCLCHECK(rmaBackend->iputSignal(ctx->rmaCtx, hostGpuCtx->contextId, 0, nullptr, 0, 0, nullptr, targetRank,
                                      signalOff, signalHandle, signalVal, signalOp, extractIsStrongSignal(gfd),
-                                     &state->request));
+                                     /*optFlags*/ 0, &state->request));
     return ncclSuccess;
   }
 
@@ -261,7 +261,7 @@ static ncclResult_t proxyGinProcessGfd(struct ginProxyCtx* ctx, struct ginProxyH
       return ncclInvalidUsage;
     }
     NCCLCHECK(rmaBackend->iget(ctx->rmaCtx, hostGpuCtx->contextId, srcOff, srcHandle, size, dstOff, dstHandle,
-                               targetRank, &state->request));
+                               targetRank, /*optFlags*/ 0, &state->request));
     return ncclSuccess;
   }
 
@@ -303,7 +303,7 @@ static ncclResult_t proxyGinProcessGfd(struct ginProxyCtx* ctx, struct ginProxyH
     if (signalOp == -1) {
       // First cast from 63 bits to 64 bits and then to void * to avoid warnings
       NCCLCHECK(rmaBackend->iput(ctx->rmaCtx, hostGpuCtx->contextId, srcOff, srcHandle, size, dstOff, dstHandle,
-                                 targetRank, &state->request));
+                                 targetRank, /*optFlags*/ 0, &state->request));
     } else {
       // Reconstruct the signal value
       signalVal = extractSignalVal(gfd);
@@ -312,7 +312,7 @@ static ncclResult_t proxyGinProcessGfd(struct ginProxyCtx* ctx, struct ginProxyH
         sizeof(uint64_t);
       NCCLCHECK(rmaBackend->iputSignal(ctx->rmaCtx, hostGpuCtx->contextId, srcOff, srcHandle, size, dstOff, dstHandle,
                                        targetRank, signalOff, ctx->signalsGinHandle, signalVal, signalOp,
-                                       extractIsStrongSignal(gfd), &state->request));
+                                       extractIsStrongSignal(gfd), /*optFlags*/ 0, &state->request));
     }
     break;
   default:

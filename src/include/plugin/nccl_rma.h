@@ -19,10 +19,11 @@
 #define NCCL_RMA_MAX_PLUGINS 16
 #endif
 
+#include "rma/rma_v15.h"
 #include "rma/rma_v14.h"
 #include "rma/rma_v13.h"
 
-typedef ncclRma_v14_t ncclRma_t;
-typedef ncclRmaConfig_v14_t ncclRmaConfig_t;
+typedef ncclRma_v15_t ncclRma_t;
+typedef ncclRmaConfig_v15_t ncclRmaConfig_t;
 
 #endif // end include guard

@@ -1495,9 +1495,8 @@ static ncclResult_t proxyProgressInit(struct ncclProxyState* proxyState) {
     char shmPath[sizeof("/dev/shm/nccl-XXXXXX")];
     shmPath[0] = '\0';
 #elif defined(NCCL_OS_WINDOWS)
-    char shmPath[64];
-    snprintf(shmPath, sizeof(shmPath), "Local\\nccl-shm-%08x-%02x", (unsigned)GetCurrentProcessId(),
-             proxyState->cudaDev & 0xff);
+    char shmPath[sizeof("Local\\nccl-shm-XXXXXX")];
+    shmPath[0] = '\0';
 #endif
     NCCLCHECK(ncclShmOpen(shmPath, sizeof(shmPath), size, (void**)&pool, NULL, proxyState->tpLocalnRanks,
                           &state->handle));

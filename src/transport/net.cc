@@ -317,7 +317,10 @@ static ncclResult_t sendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   req.tpLocalRank = comm->topParentLocalRanks[comm->localRank];
   req.tpRank = comm->topParentRanks[myInfo->rank];
   req.tpRemoteRank = comm->topParentRanks[peerInfo->rank];
-  req.sameDevice = (comm->peerInfo[proxyRank].cudaDev == comm->cudaDev);
+  // The recv proxy always runs on this rank (no PXN on receive yet, see above), so
+  // sameDevice must be computed against self -- not proxyRank, which may be a PXN
+  // intermediate on a different GPU and would spuriously disable recv-side GDRCopy.
+  req.sameDevice = (comm->peerInfo[myInfo->rank].cudaDev == comm->cudaDev);
   NCCLCHECK(ncclProxyCallBlocking(comm, &send->proxyConn, ncclProxyMsgSetup, &req, sizeof(req), NULL, 0));
 
   if (proxyRank == myInfo->rank) {

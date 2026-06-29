@@ -328,8 +328,17 @@ static int findConnByName(ncclGinRankInfo const* info, char const* name, int con
   return -1;
 }
 
-static ncclResult_t getPeerAffinityTarget(std::vector<std::pair<std::string, std::string>> const& entries,
-                                          char const* localName, std::string* target) {
+static std::string joinNicList(std::vector<std::string> const& names) {
+  std::string joined;
+  for (size_t i = 0; i < names.size(); i++) {
+    if (i != 0) joined += ",";
+    joined += names[i];
+  }
+  return joined;
+}
+
+static ncclResult_t getPeerAffinityTargets(std::vector<std::pair<std::string, std::string>> const& entries,
+                                           char const* localName, std::vector<std::string>* targets) {
   bool found = false;
   for (size_t i = 0; i < entries.size(); i++) {
     if (entries[i].first == localName) {
@@ -337,7 +346,7 @@ static ncclResult_t getPeerAffinityTarget(std::vector<std::pair<std::string, std
         WARN("NCCL_NIC_PEER_AFFINITY has multiple entries for NIC '%s'", localName);
         return ncclInvalidUsage;
       }
-      *target = entries[i].second;
+      NCCLCHECK(splitNicList("NCCL_NIC_PEER_AFFINITY", entries[i].second, *targets));
       found = true;
     }
   }
@@ -346,6 +355,26 @@ static ncclResult_t getPeerAffinityTarget(std::vector<std::pair<std::string, std
     return ncclInvalidUsage;
   }
   return ncclSuccess;
+}
+
+static ncclResult_t selectPeerAffinityConn(std::vector<std::pair<std::string, std::string>> const& entries,
+                                           char const* localName, ncclGinRankInfo const* peerInfo, int connCount,
+                                           int peerWorld, int* remoteConn, std::string* targetName) {
+  std::vector<std::string> targets;
+  NCCLCHECK(getPeerAffinityTargets(entries, localName, &targets));
+  for (size_t i = 0; i < targets.size(); i++) {
+    int conn = findConnByName(peerInfo, targets[i].c_str(), connCount);
+    if (conn >= 0) {
+      *remoteConn = conn;
+      *targetName = targets[i];
+      return ncclSuccess;
+    }
+  }
+  std::string targetList = joinNicList(targets);
+  WARN("NCCL_NIC_PEER_AFFINITY maps local NIC '%s' to peer NIC candidates '%s', but peer world rank %d did not select "
+       "any of them.",
+       localName, targetList.c_str(), peerWorld);
+  return ncclInvalidUsage;
 }
 
 static ncclResult_t validatePeerAffinitySelectedGinNames(
@@ -370,8 +399,8 @@ static ncclResult_t validatePeerAffinitySelectedGinNames(
       }
     }
     for (int c = 0; c < ginState->ginCommCount; c++) {
-      std::string unusedTarget;
-      NCCLCHECK(getPeerAffinityTarget(peerEntries, peerInfo->conns[c].name, &unusedTarget));
+      std::vector<std::string> unusedTargets;
+      NCCLCHECK(getPeerAffinityTargets(peerEntries, peerInfo->conns[c].name, &unusedTargets));
     }
   }
   return ncclSuccess;
@@ -421,18 +450,17 @@ static ncclResult_t buildRemoteConnByPeer(struct ncclComm* comm, int nGinRanks, 
           continue;
         }
         std::string targetName;
-        NCCLCHECK(getPeerAffinityTarget(peerEntries, ginState->localGinNames[lc], &targetName));
-        int remoteConn = findConnByName(peerInfo, targetName.c_str(), ginState->ginCommCount);
-        if (remoteConn < 0) {
-          WARN("NCCL_NIC_PEER_AFFINITY maps local NIC '%s' to peer NIC '%s', but peer world rank %d did not select it.",
-               ginState->localGinNames[lc], targetName.c_str(), peerWorld);
-          return ncclInvalidUsage;
-        }
+        int remoteConn = -1;
+        NCCLCHECK(selectPeerAffinityConn(peerEntries, ginState->localGinNames[lc], peerInfo, ginState->ginCommCount,
+                                         peerWorld, &remoteConn, &targetName));
 
         std::string reciprocalTarget;
-        NCCLCHECK(getPeerAffinityTarget(peerEntries, peerInfo->conns[remoteConn].name, &reciprocalTarget));
-        if (reciprocalTarget != ginState->localGinNames[lc]) {
-          WARN("NCCL_NIC_PEER_AFFINITY must be reciprocal: local '%s' -> peer '%s', but peer '%s' -> '%s'",
+        int reciprocalConn = -1;
+        ncclGinRankInfo* localInfo = allRankInfo + comm->rank;
+        NCCLCHECK(selectPeerAffinityConn(peerEntries, peerInfo->conns[remoteConn].name, localInfo,
+                                         ginState->ginCommCount, comm->rank, &reciprocalConn, &reciprocalTarget));
+        if (reciprocalConn != lc) {
+          WARN("NCCL_NIC_PEER_AFFINITY must be reciprocal: local '%s' -> peer '%s', but peer '%s' selects local '%s'",
                ginState->localGinNames[lc], targetName.c_str(), peerInfo->conns[remoteConn].name,
                reciprocalTarget.c_str());
           return ncclInvalidUsage;

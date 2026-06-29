@@ -17,4 +17,11 @@ ncclResult_t ncclGinFinalize(struct ncclComm* comm);
 
 extern ncclGin_t ncclGinIbGdaki;
 
+ncclResult_t ncclGinIbGdakiCreateContextGroup(void** collComms, int nComms, ncclGinConfig_t* config,
+                                              const uint8_t* remoteConnByPeer, void** ginCtxs,
+                                              ncclNetDeviceHandle_t** devHandles);
+ncclResult_t ncclGinIbGdakiRegMrSymGroup(void** collComms, int nComms, const uint8_t* remoteConnByPeer, void* data,
+                                         size_t size, int type, uint64_t mrFlags,
+                                         void** mhandles, void** ginHandles);
+
 #endif

@@ -23,6 +23,7 @@
 #include <condition_variable>
 
 #define NCCL_GIN_MAX_CONNECTIONS 4
+#define NCCL_GIN_NIC_NAME_MAX 64
 
 typedef void* ncclGinWindow_t;
 
@@ -86,6 +87,12 @@ struct ncclGinState {
   int ginCommCount;
   void* ginComms[NCCL_GIN_MAX_CONNECTIONS];
   ncclNetProperties_t ginProps[NCCL_GIN_MAX_CONNECTIONS];
+  int localGinDevs[NCCL_GIN_MAX_CONNECTIONS];
+  char localGinNames[NCCL_GIN_MAX_CONNECTIONS][NCCL_GIN_NIC_NAME_MAX];
+  uint8_t* remoteConnByPeer;
+  int ginRankCount;
+  bool gpuNicAffinityEnabled;
+  bool nicPeerAffinityEnabled;
   int needsProxyProgress;
   int ginProgress;
   std::thread thread;

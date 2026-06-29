@@ -25,12 +25,21 @@
 #include "nccl.h"
 #include "gin/gin_host.h"
 
+struct ncclGinIbCollComm;
+
 ncclResult_t ncclGinGdakiCreateContext(void* collComm, int nSignals, int nCounters, int nContexts, int queueDepth,
                                        int trafficClass, int backendVersion, void** outGinCtx,
                                        ncclNetDeviceHandle_t** outDevHandle);
+ncclResult_t ncclGinGdakiCreateContextGroup(struct ncclGinIbCollComm** collComms, int nComms, int nSignals,
+                                            int nCounters, int nContexts, int queueDepth, int trafficClass,
+                                            int backendVersion, const uint8_t* remoteConnByPeer, void** outGinCtxs,
+                                            ncclNetDeviceHandle_t** outDevHandles);
 ncclResult_t ncclGinGdakiDestroyContext(void* ginCtx);
 ncclResult_t ncclGinGdakiRegMrSym(void* collComm, void* data, size_t size, int type, uint64_t mr_flags, void** mhandle,
                                   void** ginHandle);
+ncclResult_t ncclGinGdakiRegMrSymGroup(struct ncclGinIbCollComm** collComms, int nComms,
+                                       const uint8_t* remoteConnByPeer, void* data, size_t size, int type,
+                                       uint64_t mr_flags, void** mhandles, void** ginHandles);
 ncclResult_t ncclGinGdakiDeregMrSym(void* collComm, void* mhandle);
 ncclResult_t ncclGinGdakiProgress(void* ginCtx);
 ncclResult_t ncclGinGdakiQueryLastError(void* ginCtx, bool* hasError);

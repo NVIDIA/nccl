@@ -17,6 +17,8 @@
 #include <mutex>
 #include <condition_variable>
 
+#define NCCL_GIN_NIC_NAME_MAX 64
+
 struct ncclGinStateDevComm {
   int contextCount;
   void* ginCtx[NCCL_GIN_MAX_CONNECTIONS];
@@ -33,6 +35,12 @@ struct ncclGinState {
   int ginCommCount;
   void* ginComms[NCCL_GIN_MAX_CONNECTIONS];
   ncclNetProperties_t ginProps[NCCL_GIN_MAX_CONNECTIONS];
+  int localGinDevs[NCCL_GIN_MAX_CONNECTIONS];
+  char localGinNames[NCCL_GIN_MAX_CONNECTIONS][NCCL_GIN_NIC_NAME_MAX];
+  uint8_t* remoteConnByPeer;
+  int ginRankCount;
+  bool gpuNicAffinityEnabled;
+  bool nicPeerAffinityEnabled;
   int needsProxyProgress;  // Whether we need to progress GIN operations with the proxy
   int ginProgress;         // GIN progress is enabled
   std::thread thread;

@@ -440,7 +440,7 @@ static ncclResult_t buildRemoteConnByPeer(struct ncclComm* comm, int nGinRanks, 
     NCCLCHECK(parseAffinityPairs("NCCL_NIC_PEER_AFFINITY", peerEntries));
     NCCLCHECK(validateUniqueAffinityKeys("NCCL_NIC_PEER_AFFINITY", peerEntries));
     NCCLCHECK(validatePeerAffinitySelectedGinNames(comm, ginState, nGinRanks, allRankInfo, peerEntries));
-    ginState->nicPeerAffinityEnabled = true;
+    bool hasNonIdentityRemoteConn = false;
 
     for (int peer = 0; peer < nGinRanks; peer++) {
       int peerWorld = ginRankToWorldRank(comm, ginState->ginConnectionType, peer);
@@ -472,7 +472,14 @@ static ncclResult_t buildRemoteConnByPeer(struct ncclComm* comm, int nGinRanks, 
           return ncclInvalidUsage;
         }
         ginState->remoteConnByPeer[lc * nGinRanks + peer] = remoteConn;
+        if (remoteConn != lc) hasNonIdentityRemoteConn = true;
       }
+    }
+    ginState->nicPeerAffinityEnabled = hasNonIdentityRemoteConn;
+    if (!ginState->nicPeerAffinityEnabled) {
+      INFO(NCCL_INIT | NCCL_NET,
+           "GIN affinity: NCCL_NIC_PEER_AFFINITY resolved to identity remote connections; using per-connection GDAKI "
+           "context setup");
     }
   }
 

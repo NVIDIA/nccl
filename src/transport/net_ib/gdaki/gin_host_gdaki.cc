@@ -344,6 +344,8 @@ struct gdaki_context {
 
   GdakiGlobalGPUBufferTable<uint64_t>* counters_table;
   GdakiGlobalGPUBufferTable<uint64_t>* signals_table;
+  struct ibv_mr** counters_table_mrs_by_pd;
+  struct ibv_mr** signals_table_mrs_by_pd;
   struct ncclGinGdakiGPUContext* gin_gdaki_gpu_ctx_host_staging; // formatted according to current version
   GdakiHostGPUMemHandle<char>* gin_gdaki_gpu_ctx_hd_mhandle; // formatted according to backendVersion
   int backendVersion;
@@ -360,7 +362,45 @@ struct gdaki_context {
   struct ncclGinIbCollComm* collComm;
   ncclNetDeviceHandle_t* devHandle;
   int nContexts;
+  int groupSize;
+  int groupIndex;
 };
+
+static size_t gdakiControlRkeyIndex(int nComms, int nranks, int targetConn, int pdConn, int peer) {
+  return ((size_t)targetConn * nComms + pdConn) * nranks + peer;
+}
+
+static struct ibv_mr* gdakiControlMrForPd(GdakiGlobalGPUBufferTable<uint64_t>* table, struct ibv_mr** mrs_by_pd,
+                                          int targetConn, int pdConn) {
+  if (pdConn == targetConn) return table ? table->mr : nullptr;
+  return mrs_by_pd ? mrs_by_pd[pdConn] : nullptr;
+}
+
+static void gdakiDeregisterCrossPdMrs(struct gdaki_context* gdaki_ctx) {
+  if (gdaki_ctx == nullptr) return;
+
+  if (gdaki_ctx->counters_table_mrs_by_pd) {
+    for (int pdConn = 0; pdConn < gdaki_ctx->groupSize; pdConn++) {
+      if (pdConn == gdaki_ctx->groupIndex) continue;
+      if (gdaki_ctx->counters_table_mrs_by_pd[pdConn]) {
+        (void)wrap_ibv_dereg_mr(gdaki_ctx->counters_table_mrs_by_pd[pdConn]);
+      }
+    }
+    free(gdaki_ctx->counters_table_mrs_by_pd);
+    gdaki_ctx->counters_table_mrs_by_pd = nullptr;
+  }
+
+  if (gdaki_ctx->signals_table_mrs_by_pd) {
+    for (int pdConn = 0; pdConn < gdaki_ctx->groupSize; pdConn++) {
+      if (pdConn == gdaki_ctx->groupIndex) continue;
+      if (gdaki_ctx->signals_table_mrs_by_pd[pdConn]) {
+        (void)wrap_ibv_dereg_mr(gdaki_ctx->signals_table_mrs_by_pd[pdConn]);
+      }
+    }
+    free(gdaki_ctx->signals_table_mrs_by_pd);
+    gdaki_ctx->signals_table_mrs_by_pd = nullptr;
+  }
+}
 
 static void gdakiFillExchInfo(struct gdaki_exch_info* exch_info, struct gdaki_context* gdaki_ctx,
                               struct doca_gpu_verbs_qp_hl* gqp) {
@@ -981,6 +1021,7 @@ static void gdakiCleanupPartial(struct gdaki_context** ctxs, int nComms, int nra
     }
     if (gdaki_ctx->gqp_groups) free(gdaki_ctx->gqp_groups);
 
+    gdakiDeregisterCrossPdMrs(gdaki_ctx);
     if (gdaki_ctx->counters_table) delete gdaki_ctx->counters_table;
     if (gdaki_ctx->signals_table) delete gdaki_ctx->signals_table;
     if (gdaki_ctx->gin_gdaki_gpu_ctx_hd_mhandle) delete gdaki_ctx->gin_gdaki_gpu_ctx_hd_mhandle;
@@ -1035,8 +1076,8 @@ ncclResult_t ncclGinGdakiCreateContextGroup(struct ncclGinIbCollComm** collComms
   NCCLCHECKGOTO(ncclCalloc(&local_exch_info, nranks), status, out);
   NCCLCHECKGOTO(ncclCalloc(&all_remote_exch_info, nComms * ncontexts * nranks), status, out);
   NCCLCHECKGOTO(ncclCalloc(&remapped_rkeys, nranks), status, out);
-  if (num_signals) NCCLCHECKGOTO(ncclCalloc(&all_signal_rkeys, nComms * nranks), status, out);
-  if (num_counters) NCCLCHECKGOTO(ncclCalloc(&all_counter_rkeys, nComms * nranks), status, out);
+  if (num_signals) NCCLCHECKGOTO(ncclCalloc(&all_signal_rkeys, (size_t)nComms * nComms * nranks), status, out);
+  if (num_counters) NCCLCHECKGOTO(ncclCalloc(&all_counter_rkeys, (size_t)nComms * nComms * nranks), status, out);
 
   for (int c = 0; c < nComms; c++) {
     struct ncclGinIbCollComm* cComm = collComms[c];
@@ -1067,6 +1108,8 @@ ncclResult_t ncclGinGdakiCreateContextGroup(struct ncclGinIbCollComm** collComms
     gdaki_ctx->collComm = cComm;
     gdaki_ctx->nContexts = ncontexts;
     gdaki_ctx->backendVersion = backendVersion;
+    gdaki_ctx->groupSize = nComms;
+    gdaki_ctx->groupIndex = c;
 
     gdaki_ctx->gin_gdaki_gpu_ctx_hd_mhandle = new GdakiHostGPUMemHandle<char>();
     gdaki_ctx->counters_table = new GdakiGlobalGPUBufferTable<uint64_t>();
@@ -1181,30 +1224,87 @@ ncclResult_t ncclGinGdakiCreateContextGroup(struct ncclGinIbCollComm** collComms
     }
   }
 
+  if (num_signals || num_counters) {
+    const int access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ |
+                       IBV_ACCESS_REMOTE_ATOMIC;
+    const size_t signal_bytes = (size_t)num_signals * ncontexts * sizeof(uint64_t);
+    const size_t counter_bytes = (size_t)num_counters * ncontexts * sizeof(uint64_t);
+    for (int targetConn = 0; targetConn < nComms; targetConn++) {
+      if (num_signals) {
+        NCCLCHECKGOTO(ncclCalloc(&ctxs[targetConn]->signals_table_mrs_by_pd, nComms), status, out);
+        for (int pdConn = 0; pdConn < nComms; pdConn++) {
+          if (pdConn == targetConn) continue;
+          NCCLCHECKGOTO(gdakiRegMr(&ctxs[targetConn]->signals_table_mrs_by_pd[pdConn], collComms[pdConn]->ib.pd,
+                                   ctxs[targetConn]->signals_table->gpu_ptr, signal_bytes, access, true),
+                        status, out);
+          INFO(NCCL_NET,
+               "[%d] Registered grouped signal table on peer PD: target_conn=%d pd_conn=%d rkey(be32)=%#x", rank,
+               targetConn, pdConn, htobe32(ctxs[targetConn]->signals_table_mrs_by_pd[pdConn]->rkey));
+        }
+      }
+      if (num_counters) {
+        NCCLCHECKGOTO(ncclCalloc(&ctxs[targetConn]->counters_table_mrs_by_pd, nComms), status, out);
+        for (int pdConn = 0; pdConn < nComms; pdConn++) {
+          if (pdConn == targetConn) continue;
+          NCCLCHECKGOTO(gdakiRegMr(&ctxs[targetConn]->counters_table_mrs_by_pd[pdConn], collComms[pdConn]->ib.pd,
+                                   ctxs[targetConn]->counters_table->gpu_ptr, counter_bytes, access, true),
+                        status, out);
+          INFO(NCCL_NET,
+               "[%d] Registered grouped counter table on peer PD: target_conn=%d pd_conn=%d rkey(be32)=%#x", rank,
+               targetConn, pdConn, htobe32(ctxs[targetConn]->counters_table_mrs_by_pd[pdConn]->rkey));
+        }
+      }
+    }
+  }
+
   if (num_signals) {
-    for (int c = 0; c < nComms; c++) {
-      __be32 rkey = ctxs[c]->signals_table->local_rkey();
-      NCCLCHECKGOTO(collComms[c]->allGather(collComms[c], &rkey, all_signal_rkeys + c * nranks, sizeof(__be32)),
-                    status, out);
+    for (int targetConn = 0; targetConn < nComms; targetConn++) {
+      for (int pdConn = 0; pdConn < nComms; pdConn++) {
+        struct ibv_mr* mr = gdakiControlMrForPd(ctxs[targetConn]->signals_table,
+                                                ctxs[targetConn]->signals_table_mrs_by_pd, targetConn, pdConn);
+        if (mr == nullptr) {
+          WARN("Missing grouped signal table MR: targetConn=%d pdConn=%d", targetConn, pdConn);
+          status = ncclInternalError;
+          goto out;
+        }
+        __be32 rkey = htobe32(mr->rkey);
+        NCCLCHECKGOTO(collComms[pdConn]->allGather(
+                        collComms[pdConn], &rkey,
+                        all_signal_rkeys + gdakiControlRkeyIndex(nComms, nranks, targetConn, pdConn, 0),
+                        sizeof(__be32)),
+                      status, out);
+      }
     }
     for (int c = 0; c < nComms; c++) {
       for (int peer = 0; peer < nranks; peer++) {
         int remoteConn = gdakiRemoteConn(remoteConnByPeer, nComms, nranks, c, peer);
-        remapped_rkeys[peer] = all_signal_rkeys[remoteConn * nranks + peer];
+        remapped_rkeys[peer] = all_signal_rkeys[gdakiControlRkeyIndex(nComms, nranks, c, remoteConn, peer)];
       }
       NCCLCHECKGOTO(ctxs[c]->signals_table->set_rkeys(remapped_rkeys, nranks), status, out);
     }
   }
   if (num_counters) {
-    for (int c = 0; c < nComms; c++) {
-      __be32 rkey = ctxs[c]->counters_table->local_rkey();
-      NCCLCHECKGOTO(collComms[c]->allGather(collComms[c], &rkey, all_counter_rkeys + c * nranks, sizeof(__be32)),
-                    status, out);
+    for (int targetConn = 0; targetConn < nComms; targetConn++) {
+      for (int pdConn = 0; pdConn < nComms; pdConn++) {
+        struct ibv_mr* mr = gdakiControlMrForPd(ctxs[targetConn]->counters_table,
+                                                ctxs[targetConn]->counters_table_mrs_by_pd, targetConn, pdConn);
+        if (mr == nullptr) {
+          WARN("Missing grouped counter table MR: targetConn=%d pdConn=%d", targetConn, pdConn);
+          status = ncclInternalError;
+          goto out;
+        }
+        __be32 rkey = htobe32(mr->rkey);
+        NCCLCHECKGOTO(collComms[pdConn]->allGather(
+                        collComms[pdConn], &rkey,
+                        all_counter_rkeys + gdakiControlRkeyIndex(nComms, nranks, targetConn, pdConn, 0),
+                        sizeof(__be32)),
+                      status, out);
+      }
     }
     for (int c = 0; c < nComms; c++) {
       for (int peer = 0; peer < nranks; peer++) {
         int remoteConn = gdakiRemoteConn(remoteConnByPeer, nComms, nranks, c, peer);
-        remapped_rkeys[peer] = all_counter_rkeys[remoteConn * nranks + peer];
+        remapped_rkeys[peer] = all_counter_rkeys[gdakiControlRkeyIndex(nComms, nranks, c, remoteConn, peer)];
       }
       NCCLCHECKGOTO(ctxs[c]->counters_table->set_rkeys(remapped_rkeys, nranks), status, out);
     }
@@ -1431,6 +1531,7 @@ ncclResult_t ncclGinGdakiDestroyContext(void* ginCtx) {
   if (gdaki_ctx->gqps) free(gdaki_ctx->gqps);
   if (gdaki_ctx->companion_gqps) free(gdaki_ctx->companion_gqps);
 
+  gdakiDeregisterCrossPdMrs(gdaki_ctx);
   if (gdaki_ctx->counters_table) {
     NCCLCHECK(gdaki_ctx->counters_table->deregister_mr());
     NCCLCHECK(gdaki_ctx->counters_table->deallocate());

@@ -125,7 +125,7 @@ ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
   // - nreqs > 1
   //      Send size is still sent but receiver ignores it since the sizes are
   //      written to directly to remote completion records array
-  uint32_t immData = comm->base.recvMatchingScheme == BY_ID ? (uint32_t)(reqs[0]->id % UINT32_MAX) : reqs[0]->send.size;
+  uint32_t immData = comm->base.recvMatchingScheme == BY_ID ? (uint32_t)reqs[0]->id : reqs[0]->send.size;
 
   struct ibv_send_wr* lastWr = comm->wrs + nreqs - 1;
   if (nreqs > 1 ||

@@ -48,6 +48,7 @@ class Gin:
         descriptor_ptr=0,
         given_release: int = 3,
         required_release: int = 1,
+        opt_flags: int = 0,
     ) -> None:
         """Put ``src`` to ``dst`` on ``peer`` of ``team``.
 
@@ -87,7 +88,7 @@ class Gin:
             is_signal, signal_id, signal_op, signal_op_arg,
             is_counter, counter_id, coop,
             is_descriptor, descriptor_ptr,
-            given_release, required_release,
+            given_release, required_release, opt_flags,
         )
 
     def put_value(
@@ -107,6 +108,7 @@ class Gin:
         descriptor_ptr=0,
         given_release: int = 3,
         required_release: int = 1,
+        opt_flags: int = 0,
     ) -> None:
         """Put scalar ``value`` to ``dst`` on ``peer`` of ``team``.
 
@@ -139,7 +141,7 @@ class Gin:
             self.ptr, team, peer, dst_win, dst_offset, value, size,
             is_signal, signal_id, signal_op, signal_op_arg,
             coop, is_descriptor, descriptor_ptr,
-            given_release, required_release,
+            given_release, required_release, opt_flags,
         )
 
     def get(
@@ -202,6 +204,7 @@ class Gin:
         descriptor_ptr=0,
         given_release: int = 3,
         required_release: int = 1,
+        opt_flags: int = 0,
     ) -> None:
         """Signal a GIN operation.
 
@@ -219,9 +222,10 @@ class Gin:
             required_release: release-fence flags required by the op.
         """
         raw.ncclGinSignal(
-            self.ptr, team, peer, is_signal, signal_id, signal_op, signal_op_arg,
-            coop, is_descriptor, descriptor_ptr, given_release, required_release,
-    )
+            self.ptr, team, peer, is_signal, signal_id,
+            signal_op, signal_op_arg, coop, is_descriptor, descriptor_ptr,
+            given_release, required_release, opt_flags,
+        )
 
     def read_signal(
         self,

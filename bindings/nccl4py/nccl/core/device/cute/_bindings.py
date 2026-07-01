@@ -177,8 +177,8 @@ def ncclGin_C_init(gin_ptr, backend_mask, dev_comm, context_id):
     )
 
 
-_raw_ncclGinPut = _ffi(
-    name="ncclGinPut",
+_raw_ncclGinPut_v2 = _ffi(
+    name="ncclGinPut_v2",
     params_types=[
         _LLVMPtrType,        # ncclGin_C* gin
         ncclTeam,            # team
@@ -199,13 +199,14 @@ _raw_ncclGinPut = _ffi(
         _LLVMPtrType,        # descriptor_ptr
         cutlass.Int32,       # given_release
         cutlass.Int32,       # required_release
+        cutlass.Int32,       # opt_flags
     ])
 
 def ncclGinPut(gin_ptr, team, peer, dst_win, dst_offset, src_win, src_offset,
                size, is_signal, signal_id, signal_op, signal_op_arg,
                is_counter, counter_id, coop, is_descriptor, descriptor_ptr,
-               given_release, required_release):
-    _raw_ncclGinPut(
+               given_release, required_release, opt_flags):
+    _raw_ncclGinPut_v2(
         _to_ptr(gin_ptr), team, cutlass.Int32(peer),
         _to_ptr(dst_win), cutlass.Int64(dst_offset),
         _to_ptr(src_win), cutlass.Int64(src_offset),
@@ -216,11 +217,12 @@ def ncclGinPut(gin_ptr, team, peer, dst_win, dst_offset, src_win, src_offset,
         _to_coop_value(coop),
         cutlass.Boolean(is_descriptor), _to_ptr(descriptor_ptr),
         cutlass.Int32(given_release), cutlass.Int32(required_release),
+        cutlass.Int32(opt_flags),
     )
 
 
-_raw_ncclGinPutValue = _ffi(
-    name="ncclGinPutValue",
+_raw_ncclGinPutValue_v2 = _ffi(
+    name="ncclGinPutValue_v2",
     params_types=[
         _LLVMPtrType,        # ncclGin_C* gin
         ncclTeam,            # team
@@ -238,13 +240,14 @@ _raw_ncclGinPutValue = _ffi(
         _LLVMPtrType,        # descriptor_ptr
         cutlass.Int32,       # given_release
         cutlass.Int32,       # required_release
+        cutlass.Int32,       # opt_flags
     ])
 
 def ncclGinPutValue(gin_ptr, team, peer, dst_win, dst_offset, value, size,
                     is_signal, signal_id, signal_op, signal_op_arg, coop,
                     is_descriptor, descriptor_ptr,
-                    given_release, required_release):
-    _raw_ncclGinPutValue(
+                    given_release, required_release, opt_flags):
+    _raw_ncclGinPutValue_v2(
         _to_ptr(gin_ptr), team, cutlass.Int32(peer),
         _to_ptr(dst_win), cutlass.Int64(dst_offset),
         cutlass.Int64(value), cutlass.Int64(size),
@@ -253,6 +256,7 @@ def ncclGinPutValue(gin_ptr, team, peer, dst_win, dst_offset, value, size,
         _to_coop_value(coop),
         cutlass.Boolean(is_descriptor), _to_ptr(descriptor_ptr),
         cutlass.Int32(given_release), cutlass.Int32(required_release),
+        cutlass.Int32(opt_flags),
     )
 
 
@@ -297,8 +301,8 @@ def ncclGinFlush(gin_ptr, coop, ord):
     )
 
 
-_raw_ncclGinSignal = _ffi(
-    name="ncclGinSignal",
+_raw_ncclGinSignal_v2 = _ffi(
+    name="ncclGinSignal_v2",
     params_types=[
         _LLVMPtrType,        # ncclGin_C* gin
         ncclTeam,            # team
@@ -312,17 +316,21 @@ _raw_ncclGinSignal = _ffi(
         _LLVMPtrType,        # descriptor_ptr
         cutlass.Int32,       # given_release
         cutlass.Int32,       # required_release
+        cutlass.Int32,       # opt_flags
     ])
 
-def ncclGinSignal(gin_ptr, team, peer, is_signal, signal_id, signal_op, signal_op_arg,
-                  coop, is_descriptor, descriptor_ptr, given_release, required_release):
-    _raw_ncclGinSignal(
+def ncclGinSignal(gin_ptr, team, peer, is_signal, signal_id,
+                  signal_op, signal_op_arg, coop,
+                  is_descriptor, descriptor_ptr,
+                  given_release, required_release, opt_flags):
+    _raw_ncclGinSignal_v2(
         _to_ptr(gin_ptr), team, cutlass.Int32(peer),
         cutlass.Boolean(is_signal), cutlass.Int32(signal_id),
         cutlass.Int32(signal_op), cutlass.Int64(signal_op_arg),
         _to_coop_value(coop),
         cutlass.Boolean(is_descriptor), _to_ptr(descriptor_ptr),
         cutlass.Int32(given_release), cutlass.Int32(required_release),
+        cutlass.Int32(opt_flags),
     )
 
 

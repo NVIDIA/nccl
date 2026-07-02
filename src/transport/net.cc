@@ -1964,8 +1964,8 @@ static ncclResult_t sendProxyRegBuffer(struct ncclProxyConnection* connection, s
 
 #if CUDART_VERSION >= 11070
   /* DMA-BUF support */
+  int dmabuf_fd = -1;
   if (resources->useDmaBuf) {
-    int dmabuf_fd;
     size_t dmaBufSize = info->size;
     ALIGN_SIZE(dmaBufSize, ncclOsGetPageSize());
     CUCHECKGOTO(cuMemGetHandleForAddressRange((void*)&dmabuf_fd, (CUdeviceptr)info->buffer, dmaBufSize,
@@ -1975,10 +1975,12 @@ static ncclResult_t sendProxyRegBuffer(struct ncclProxyConnection* connection, s
     NCCLCHECKGOTO(proxyState->ncclNet->regMrDmaBuf(resources->netSendComm, (void*)info->buffer, info->size,
                                                    NCCL_PTR_CUDA, 0ULL, dmabuf_fd, &handle),
                   ret, peermem);
-    (void)close(dmabuf_fd);
     needReg = false;
   }
 peermem:
+  // Close the DMA-BUF fd on every exit path: the success path above and the
+  // regMrDmaBuf-failure fallthrough that may still register via regMr below.
+  if (dmabuf_fd != -1) (void)close(dmabuf_fd);
 #endif
   if (needReg) {
     // Non-dmabuf regMr does not support multiple physical segments
@@ -2031,8 +2033,8 @@ static ncclResult_t recvProxyRegBuffer(struct ncclProxyConnection* connection, s
 
 #if CUDART_VERSION >= 11070
   /* DMA-BUF support */
+  int dmabuf_fd = -1;
   if (resources->useDmaBuf) {
-    int dmabuf_fd;
     size_t dmaBufSize = info->size;
     ALIGN_SIZE(dmaBufSize, ncclOsGetPageSize());
     CUCHECKGOTO(cuMemGetHandleForAddressRange((void*)&dmabuf_fd, (CUdeviceptr)info->buffer, dmaBufSize,
@@ -2042,10 +2044,12 @@ static ncclResult_t recvProxyRegBuffer(struct ncclProxyConnection* connection, s
     NCCLCHECKGOTO(proxyState->ncclNet->regMrDmaBuf(resources->netRecvComm, (void*)info->buffer, info->size,
                                                    NCCL_PTR_CUDA, 0ULL, dmabuf_fd, &handle),
                   ret, peermem);
-    (void)close(dmabuf_fd);
     needReg = false;
   }
 peermem:
+  // Close the DMA-BUF fd on every exit path: the success path above and the
+  // regMrDmaBuf-failure fallthrough that may still register via regMr below.
+  if (dmabuf_fd != -1) (void)close(dmabuf_fd);
 #endif
   if (needReg) {
     // Non-dmabuf regMr does not support multiple physical segments

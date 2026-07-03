@@ -445,6 +445,10 @@ static ncclResult_t buildRemoteConnByPeer(struct ncclComm* comm, int nGinRanks, 
         return ncclInternalError;
       }
       for (int lc = 0; lc < ginState->ginCommCount; lc++) {
+        if (peer == myGinRank) {
+          ginState->remoteConnByPeer[lc * nGinRanks + peer] = lc;
+          continue;
+        }
         std::string targetName;
         int remoteConn = -1;
         NCCLCHECK(selectPeerAffinityConn(peerEntries, ginState->localGinNames[lc], peerInfo, ginState->ginCommCount,

@@ -321,12 +321,6 @@ static int ginRankToWorldRank(struct ncclComm* comm, ncclGinConnectionType_t con
   return ncclTeamRankToWorld(comm, railTeam, ginRank);
 }
 
-static bool ginPeerOnSameNode(struct ncclComm* comm, int peerWorldRank) {
-  if (peerWorldRank == comm->rank) return true;
-  if (comm->rankToNode != NULL) return comm->rankToNode[peerWorldRank] == comm->node;
-  return comm->peerInfo[peerWorldRank].hostHash == comm->peerInfo[comm->rank].hostHash;
-}
-
 static int findConnByName(ncclGinRankInfo const* info, char const* name, int connCount) {
   for (int c = 0; c < connCount; c++) {
     if (strcmp(info->conns[c].name, name) == 0) return c;
@@ -451,10 +445,6 @@ static ncclResult_t buildRemoteConnByPeer(struct ncclComm* comm, int nGinRanks, 
         return ncclInternalError;
       }
       for (int lc = 0; lc < ginState->ginCommCount; lc++) {
-        if (ginPeerOnSameNode(comm, peerWorld)) {
-          ginState->remoteConnByPeer[lc * nGinRanks + peer] = lc;
-          continue;
-        }
         std::string targetName;
         int remoteConn = -1;
         NCCLCHECK(selectPeerAffinityConn(peerEntries, ginState->localGinNames[lc], peerInfo, ginState->ginCommCount,

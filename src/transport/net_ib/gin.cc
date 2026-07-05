@@ -290,9 +290,31 @@ ncclResult_t ncclGinIbGdakiCreateContext(void* collComm, ncclGinConfig_t* config
   return ncclSuccess;
 }
 
+ncclResult_t ncclGinIbGdakiCreateContextGroup(void** collComms, int nComms, ncclGinConfig_t* config,
+                                              const uint8_t* remoteConnByPeer, void** ginCtxs,
+                                              ncclNetDeviceHandle_t** devHandles) {
+  if (nComms <= 0) return ncclInvalidArgument;
+  struct ncclGinIbCollComm** cComms = (struct ncclGinIbCollComm**)collComms;
+
+  if (ncclParamGinIbTc() != -1) config->trafficClass = ncclParamGinIbTc();
+  else if (ncclParamIbTc() != -1) config->trafficClass = ncclParamIbTc();
+
+  NCCLCHECK(ncclGinGdakiCreateContextGroup(cComms, nComms, config->nSignals, config->nCounters, config->nContexts,
+                                           config->queueDepth, config->trafficClass, config->backendVersion,
+                                           remoteConnByPeer, ginCtxs, devHandles));
+  return ncclSuccess;
+}
+
 ncclResult_t ncclGinIbGdakiRegMrSym(void* collComm, void* data, size_t size, int type, uint64_t mr_flags,
                                     void** mhandle, void** ginHandle) {
   return ncclGinGdakiRegMrSym((struct ncclGinIbCollComm*)collComm, data, size, type, mr_flags, mhandle, ginHandle);
+}
+
+ncclResult_t ncclGinIbGdakiRegMrSymGroup(void** collComms, int nComms, const uint8_t* remoteConnByPeer, void* data,
+                                         size_t size, int type, uint64_t mrFlags, void** mhandles, void** ginHandles) {
+  if (nComms <= 0) return ncclInvalidArgument;
+  return ncclGinGdakiRegMrSymGroup((struct ncclGinIbCollComm**)collComms, nComms, remoteConnByPeer, data, size, type,
+                                   mrFlags, mhandles, ginHandles);
 }
 
 ncclResult_t ncclGinIbGdakiDeregMrSym(void* collComm, void* mhandle) {

@@ -286,6 +286,7 @@ ncclResult_t ncclIbFinalizeDevices(void) {
 extern int64_t ncclIbArThreshold;
 ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) {
   ncclResult_t ret = ncclSuccess;
+  struct ibv_device** devices = NULL;
   if (netRefCount++) return ret;
   ncclProfilerFunction = profFunction;
   if (ncclParamIbDisable()) return ncclInternalError;
@@ -311,7 +312,6 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
 
       // Detect IB cards
       int nIbDevs;
-      struct ibv_device** devices;
 
       // Check if user defined which IB device:port to use
       const char* userIbEnv = ncclGetEnv("NCCL_IB_HCA");
@@ -390,7 +390,8 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
                 TRACE(NCCL_NET, "NET/IB: Device %s does not support Data Direct DMA.", devices[d]->name);
               } else {
                 WARN("NET/IB: Error in mlx5dv_get_data_direct_sysfs_path with device %s", devices[d]->name);
-                return res;
+                ret = res;
+                goto fail;
               }
             }
           }
@@ -421,7 +422,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
                           ret, fail);
             if (dev == 1) {
               snprintf(ncclIbDevs[ncclNIbDevs].devName, MAXNAMESIZE, "%s_dma", devices[d]->name);
-              NCCLCHECK(ncclCalloc(&ncclIbDevs[ncclNIbDevs].pciPath, PATH_MAX));
+              NCCLCHECKGOTO(ncclCalloc(&ncclIbDevs[ncclNIbDevs].pciPath, PATH_MAX), ret, fail);
               strncpy(ncclIbDevs[ncclNIbDevs].pciPath, dataDirectDevicePath, PATH_MAX);
               ncclIbDevs[ncclNIbDevs].capsProvider.mlx5.dataDirect = 1;
             }
@@ -431,7 +432,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
             ncclIbDevs[ncclNIbDevs].mrCache.capacity = 0;
             ncclIbDevs[ncclNIbDevs].mrCache.population = 0;
             ncclIbDevs[ncclNIbDevs].mrCache.slots = NULL;
-            NCCLCHECK(ncclIbStatsInit(&ncclIbDevs[ncclNIbDevs].stats));
+            NCCLCHECKGOTO(ncclIbStatsInit(&ncclIbDevs[ncclNIbDevs].stats), ret, fail);
 
             ncclIbDevs[ncclNIbDevs].railId = (userIfId >= 0) ? userIfs[userIfId].rail : -1;
             ncclIbDevs[ncclNIbDevs].planeId = (userIfId >= 0) ? userIfs[userIfId].plane : -1;
@@ -461,9 +462,13 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
         }
       }
 
-      if (devices && (ncclSuccess != wrap_ibv_free_device_list(devices))) {
-        ret = ncclInternalError;
-        goto fail;
+      if (devices) {
+        ncclResult_t freeRes = wrap_ibv_free_device_list(devices);
+        devices = NULL;
+        if (ncclSuccess != freeRes) {
+          ret = ncclInternalError;
+          goto fail;
+        }
       }
     }
     if (ncclNIbDevs == 0) {
@@ -516,6 +521,10 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
 exit:
   return ret;
 fail:
+  if (devices) {
+    wrap_ibv_free_device_list(devices);
+    devices = NULL;
+  }
   goto exit;
 }
 

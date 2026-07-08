@@ -1858,10 +1858,7 @@ ncclResult_t ncclCommQueryProperties(ncclComm_t comm, ncclCommProperties_t* prop
     NCCLCHECK(ncclGetGinType(comm, &props->ginType));
     NCCLCHECK(ncclGetRailedGinType(comm, &props->railedGinType));
 
-    // Preferring to call ncclDevrInitOnce directly instead to calling ncclTeam* functions because
-    // we can propagate the result of ncclDevrInitOnce back to the caller.
-    NCCLCHECK(ncclDevrInitOnce(comm));
-    props->nLsaTeams = comm->devrState.nLsaTeams;
+    props->nLsaTeams = comm->nRanks / computeLsaSize(comm);
   }
 
   if (props->version >= NCCL_VERSION(2, 31, 0)) {

@@ -134,7 +134,7 @@ ncclResult_t ncclTuningComputeAllTunings(struct ncclTuningInput_t* const input,
     tuning.id = i;
     tuning.valid = 1;
 
-    if (!(input->tuningMask & (1lu << i))) {
+    if (!(input->tuningMask & (1ULL << i))) {
       tuning.valid = 0;
       continue;
     }

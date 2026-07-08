@@ -427,6 +427,8 @@ static ncclResult_t ncclProxyOpToArgs(struct ncclProxyOp* op, struct ncclProxyAr
   args->nChannels = op->nChannels;
   args->nPeers = op->nPeers;
   args->specifics = op->specifics;
+  args->idle = 0;
+  args->pollDelayUsec = 0;
   args->state = ncclProxyOpReady;
   args->progress = op->connection->tcomm->proxyProgress;
   args->proxyAppendPtr = op->connection->proxyAppendPtr;
@@ -799,7 +801,7 @@ static ncclResult_t removeOp(struct ncclProxyProgressState* state, struct ncclPr
 }
 
 static ncclResult_t progressOps(struct ncclProxyState* proxyState, struct ncclProxyProgressState* state,
-                                struct ncclProxyArgs* opStart, int* idle) {
+                                struct ncclProxyArgs* opStart, int* idle, int64_t* pollDelayUsec) {
   struct ncclProxyArgs* prevOp = NULL;
   struct ncclProxyArgs* op = opStart;
   ncclResult_t status = ncclSuccess;
@@ -811,9 +813,17 @@ static ncclResult_t progressOps(struct ncclProxyState* proxyState, struct ncclPr
     if (op->idle) {
       TIME_STOP(1);
       TIME_CANCEL(0);
+      if (*pollDelayUsec != 0) {
+        if (op->pollDelayUsec <= 0) {
+          *pollDelayUsec = 0;
+        } else if (*pollDelayUsec < 0 || op->pollDelayUsec < *pollDelayUsec) {
+          *pollDelayUsec = op->pollDelayUsec;
+        }
+      }
     } else {
       TIME_CANCEL(1);
       TIME_STOP(0);
+      *pollDelayUsec = 0;
     }
     *idle &= op->idle;
     if (op->state == ncclProxyOpNone || ret != ncclSuccess) {
@@ -977,7 +987,8 @@ void* ncclProxyProgress(void* proxyState_) {
   int proxyOpAppendCounter = 0;
   do {
     int idle = 1;
-    ncclResult_t ret = progressOps(proxyState, state, state->active, &idle);
+    int64_t pollDelayUsec = -1;
+    ncclResult_t ret = progressOps(proxyState, state, state->active, &idle, &pollDelayUsec);
     if (ret != ncclSuccess) {
       COMPILER_ATOMIC_STORE(&proxyState->asyncResult, ret, std::memory_order_release);
       INFO_LOC(NCCL_ALL, "-> %d [Progress Thread]", ret);
@@ -1002,7 +1013,11 @@ void* ncclProxyProgress(void* proxyState_) {
         INFO_LOC(NCCL_ALL, "-> %d [Progress Thread]", ret);
       }
       if (added == 0) {
-        std::this_thread::yield(); // No request progressed. Let others run.
+        if (idle && pollDelayUsec > 0) {
+          std::this_thread::sleep_for(std::chrono::microseconds(pollDelayUsec));
+        } else {
+          std::this_thread::yield(); // No request progressed. Let others run.
+        }
       }
     }
     lastIdle = idle;

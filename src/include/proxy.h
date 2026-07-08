@@ -210,6 +210,7 @@ struct ncclProxyArgs {
   int nPeers;
 
   int idle;
+  int64_t pollDelayUsec;
 
   // Element linking
   struct ncclProxyArgs* next;

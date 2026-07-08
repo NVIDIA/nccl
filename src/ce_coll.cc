@@ -187,16 +187,16 @@ bool ncclCeAvailable(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_
     TRACE(NCCL_TUNING, "Skipping CE collective: not implemented");
     return false;
   }
+  if (!comm->symmetricSupport) {
+    TRACE(NCCL_TUNING, "Skipping CE collective: symmetric support is not enabled");
+    return false;
+  }
   if (ncclDevrWindowHasSysmemSegment(sendWin) || ncclDevrWindowHasSysmemSegment(recvWin)) {
     TRACE(NCCL_TUNING, "Skipping CE collective: host-backed cuMem segments are not supported");
     return false;
   }
   if (ncclTeamLsa(comm).nRanks < comm->nRanks) {
     TRACE(NCCL_TUNING, "Skipping CE collective: not all ranks have NVLink connectivity");
-    return false;
-  }
-  if (!comm->symmetricSupport) {
-    TRACE(NCCL_TUNING, "Skipping CE collective: symmetric support is not enabled");
     return false;
   }
   if (winRegType != ncclSymSendRegRecvReg && winRegType != ncclSymSendNonregRecvReg) {
@@ -882,6 +882,10 @@ bool ncclHierCeAvailable(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRe
     TRACE(NCCL_TUNING, "Skipping hierarchical CE collective: only AllGather and AlltoAll are supported");
     return false;
   }
+  if (!comm->symmetricSupport) {
+    TRACE(NCCL_TUNING, "Skipping hierarchical CE collective: symmetric support is not enabled");
+    return false;
+  }
 
   // Must be multi-node (single-node uses the regular CE path)
   if (comm->nNodes <= 1) {
@@ -896,11 +900,6 @@ bool ncclHierCeAvailable(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRe
   // Intra-node CE scatter writes via LSA pointers
   if (ncclTeamLsa(comm).nRanks < comm->localRanks) {
     TRACE(NCCL_TUNING, "Skipping hierarchical CE collective: LSA team does not cover all local ranks");
-    return false;
-  }
-  // Need symmetric support
-  if (!comm->symmetricSupport) {
-    TRACE(NCCL_TUNING, "Skipping hierarchical CE collective: symmetric support is not enabled");
     return false;
   }
   // Need RMA proxy for inter-node puts, and the internal RMA contexts that back

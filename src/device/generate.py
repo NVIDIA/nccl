@@ -272,6 +272,15 @@ with open(os.path.join(gensrc, "host_table.cc"), "w") as f:
   out("-1};\n")
   out("\n")
 
+  # Maps a primary function id (what ncclDevFuncId() returns, i.e. the funcId
+  # seen by the device profiler hook) to a human-readable name. Indexed the same
+  # as ncclDevKernelForFunc[]; length is ncclDevFuncIdCount.
+  out("extern const char* const ncclDevFuncName[] = {\n")
+  for index, fn in enumerate(primary_funcs):
+    out('/*%4d*/ "%s",\n' % (index, paste("_", *fn)))
+  out("nullptr};\n")
+  out("\n")
+
   # Forward declarations of kernels.
   for kfn in kernel_funcs:
     cudart, _ = required_cuda(*kfn)

@@ -457,6 +457,15 @@ struct ncclKernelComm {
   // Profiler counters
   struct ncclDevProfiler* workStarted /*[MAXCHANNELS]*/;
   struct ncclDevProfiler* workCompleted /*[MAXCHANNELS]*/;
+
+  // Optional device-side profiler hook (see include/profiler_dev.h). When
+  // profilerDevHook != nullptr, profiler() calls it once per work item, in
+  // addition to and independent of the workStarted/workCompleted rings (which
+  // stay gated by each work item's profilerEnabled flag). The hook itself needs
+  // no proxy op or host callback. Typed void* to keep device.h free of the hook
+  // typedef; common.h casts it.
+  void* profilerDevHook; // ncclProfilerDevHook_t
+  void* profilerDevCtx;  // opaque device context passed to the hook
 };
 
 struct alignas(16) ncclKernelCommAndChannels {
@@ -578,6 +587,9 @@ extern int ncclDevKernelRequirements[/*ncclDevKernelCount*/];
 extern int const ncclDevFuncRowToId[];
 extern void* const ncclDevKernelForFunc[/*funcIndex*/];
 extern bool const ncclDevKernelForFuncIsSpecialized[/*funcIndex*/];
+// Human-readable name per primary func id (the funcId the profiler hook sees).
+extern int const ncclDevFuncIdCount;
+extern const char* const ncclDevFuncName[/*funcIndex*/];
 
 // Launch a one-rank reduction on stream.
 ncclResult_t ncclLaunchOneRank(void* dst, void const* src, size_t nElts, struct ncclDevRedOpFull redOp,

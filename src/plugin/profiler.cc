@@ -24,6 +24,7 @@ extern ncclProfiler_t* getNcclProfiler_v3(void* lib);
 extern ncclProfiler_t* getNcclProfiler_v4(void* lib);
 extern ncclProfiler_t* getNcclProfiler_v5(void* lib);
 extern ncclProfiler_t* getNcclProfiler_v6(void* lib);
+extern ncclProfiler_t* getNcclProfiler_v7(void* lib);
 
 static std::mutex profilerMutex;
 static int profilerPluginRefCount;
@@ -70,7 +71,10 @@ static ncclResult_t ncclProfilerPluginLoad(void) {
     profilerName = ncclPluginLibPaths[ncclPluginTypeProfiler];
   }
 
-  ncclProfiler = getNcclProfiler_v6(profilerPluginLib);
+  ncclProfiler = getNcclProfiler_v7(profilerPluginLib);
+  if (ncclProfiler == nullptr) {
+    ncclProfiler = getNcclProfiler_v6(profilerPluginLib);
+  }
   if (ncclProfiler == nullptr) {
     ncclProfiler = getNcclProfiler_v5(profilerPluginLib);
   }
@@ -257,6 +261,15 @@ ncclResult_t ncclProfilerPluginInit(struct ncclComm* comm) {
     printProfilerEventMask(ncclProfilerEventMask);
   }
   TIME_STOP_EVENT(init);
+  return ncclSuccess;
+}
+
+ncclResult_t ncclProfilerDevGetHook(int device, void** devHook, void** devCtx) {
+  if (devHook) *devHook = nullptr;
+  if (devCtx) *devCtx = nullptr;
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && ncclProfiler->getDeviceHook) {
+    NCCLCHECK(ncclProfiler->getDeviceHook(device, devHook, devCtx));
+  }
   return ncclSuccess;
 }
 

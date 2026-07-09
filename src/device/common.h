@@ -10,6 +10,7 @@
 
 #include "collectives.h"
 #include "device.h"
+#include "profiler_dev.h"
 #include "op128.h"
 #include "reduce_kernel.h"
 #include "network/unpack/unpack_defs.h"
@@ -328,22 +329,24 @@ __device__ __forceinline__ bool profilerEnabled(int workItemIdx) {
 
 __device__ __forceinline__ void profiler(int action) {
   if (threadIdx.x == 0) {
+    ncclProfilerDevHook_t hook = (ncclProfilerDevHook_t)ncclShmem.comm.profilerDevHook;
+    void* hookCtx = ncclShmem.comm.profilerDevCtx;
+    uint8_t phase = (action == START) ? NCCL_PROFILER_DEV_START : NCCL_PROFILER_DEV_STOP;
     int idx = 0;
     uint64_t wc = ncclShmem.channel.workCounter + 1;
-    if (action == START) {
-      for (; wc <= ncclShmem.channel.workCounter + ncclShmem.nWorks; wc++) {
-        if (!profilerEnabled(idx++)) continue;
-        ncclShmem.comm.workStarted[ncclShmem.channelId].data[wc % MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp =
-          globaltimer();
-        ncclShmem.comm.workStarted[ncclShmem.channelId].data[wc % MAX_PROFILER_EVENTS_PER_CHANNEL].counter = wc;
+    for (; wc <= ncclShmem.channel.workCounter + ncclShmem.nWorks; wc++) {
+      bool enabled = profilerEnabled(idx++);
+      if (hook) {
+        ncclProfilerDevEvent_t ev = {globaltimer(), wc, ncclShmem.funcId, (uint8_t)ncclShmem.channelId, phase, 0};
+        hook(&ev, hookCtx);
       }
-    } else {
-      for (; wc <= ncclShmem.channel.workCounter + ncclShmem.nWorks; wc++) {
-        if (!profilerEnabled(idx++)) continue;
-        ncclShmem.comm.workCompleted[ncclShmem.channelId].data[wc % MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp =
-          globaltimer();
-        ncclShmem.comm.workCompleted[ncclShmem.channelId].data[wc % MAX_PROFILER_EVENTS_PER_CHANNEL].counter = wc;
+      if (enabled) {
+        auto* ring = (action == START) ? ncclShmem.comm.workStarted : ncclShmem.comm.workCompleted;
+        ring[ncclShmem.channelId].data[wc % MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp = globaltimer();
+        ring[ncclShmem.channelId].data[wc % MAX_PROFILER_EVENTS_PER_CHANNEL].counter = wc;
       }
+    }
+    if (action != START) {
       ncclShmem.channel.workCounter += ncclShmem.nWorks;
       if (action == FINI)
         ((ncclKernelCommAndChannels*)ncclShmem.args.comm)->channels[ncclShmem.channelId].workCounter =

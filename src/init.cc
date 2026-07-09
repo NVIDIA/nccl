@@ -651,6 +651,9 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
   NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->profiler.workCompleted, MAXCHANNELS), ret, fail);
   tmpCommAndChans.comm.workStarted = comm->profiler.workStarted;
   tmpCommAndChans.comm.workCompleted = comm->profiler.workCompleted;
+  NCCLCHECKGOTO(ncclProfilerDevGetHook(comm->cudaDev, &comm->profiler.devHook, &comm->profiler.devCtx), ret, fail);
+  tmpCommAndChans.comm.profilerDevHook = comm->profiler.devHook;
+  tmpCommAndChans.comm.profilerDevCtx = comm->profiler.devCtx;
   ncclCommPushCudaHostFree(comm, comm->profiler.workStarted);
   ncclCommPushCudaHostFree(comm, comm->profiler.workCompleted);
 

@@ -1014,7 +1014,11 @@ void* ncclProxyProgress(void* proxyState_) {
       }
       if (added == 0) {
         if (idle && pollDelayUsec > 0) {
-          std::this_thread::sleep_for(std::chrono::microseconds(pollDelayUsec));
+          struct ncclProxyOpsPool* pool = state->opsPool;
+          std::unique_lock<std::mutex> lock(pool->mutex);
+          pool->cond.wait_for(lock, std::chrono::microseconds(pollDelayUsec), [&]() {
+            return pool->nextOps != -1 || state->stop != 0;
+          });
         } else {
           std::this_thread::yield(); // No request progressed. Let others run.
         }

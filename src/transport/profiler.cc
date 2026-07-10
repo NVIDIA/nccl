@@ -8,6 +8,9 @@
 #include "proxy.h"
 #include "profiler.h"
 #include "device.h"
+#include "param.h"
+
+NCCL_PARAM(ProfilerKernelChPollSleepUsec, "PROFILER_KERNEL_CH_POLL_SLEEP_USEC", 1);
 
 static ncclResult_t profilerProxyConnect(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState,
                                          void* reqBuff, int reqSize, void* respBuff, int respSize, int* done) {
@@ -29,6 +32,8 @@ static ncclResult_t profilerProxyProgress(struct ncclProxyState* proxyState, str
     }
     args->state = ncclProxyOpProgress;
   }
+  args->idle = 1;
+  args->pollDelayUsec = 0;
   if (args->state == ncclProxyOpProgress) {
     for (int s = 0; s < args->nsubs; s++) {
       struct ncclProxySubArgs* sub = args->subs + s;
@@ -39,6 +44,7 @@ static ncclResult_t profilerProxyProgress(struct ncclProxyState* proxyState, str
         ncclProfilerStartKernelChEvent(
           args, s, workStarted[sub->channelId].data[sub->base % MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp);
         sub->posted = sub->nsteps;
+        args->idle = 0;
         continue; // allow events on every channel to start
       }
       if (sub->transmitted < sub->nsteps &&
@@ -46,10 +52,14 @@ static ncclResult_t profilerProxyProgress(struct ncclProxyState* proxyState, str
         ncclProfilerStopKernelChEvent(
           args, s, workCompleted[sub->channelId].data[sub->base % MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp);
         sub->transmitted = sub->nsteps;
+        args->idle = 0;
         args->done++;
       }
     }
     if (args->done == args->nsubs) args->state = ncclProxyOpNone;
+    if (args->idle && args->state == ncclProxyOpProgress) {
+      args->pollDelayUsec = ncclParamProfilerKernelChPollSleepUsec();
+    }
   }
   return ncclSuccess;
 }
